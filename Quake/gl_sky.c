@@ -39,6 +39,7 @@ qboolean skyroom_drawn;
 qboolean skyroom_enabled;
 vec4_t skyroom_origin;
 vec4_t skyroom_orientation;
+static vec4_t skybox_orientation;
 
 char	skybox_name[1024]; //name of current skybox, or "" if no skybox
 qboolean externalskyloaded; // woods #fastsky2
@@ -108,6 +109,79 @@ static const int vec_to_st[6][3] =
 
 static float	skyfog; // ericw
 
+static void Sky_ClearSkyboxOrientation(void)
+{
+	skybox_orientation[0] = 0.0f;
+	skybox_orientation[1] = 0.0f;
+	skybox_orientation[2] = 0.0f;
+	skybox_orientation[3] = 0.0f;
+}
+
+static qboolean Sky_SkyboxRotates(void)
+{
+	return skybox_orientation[3] != 0.0f && !skyroom_drawing;
+}
+
+static void Sky_ParseSkyboxAxis(const char *value)
+{
+	int i;
+
+	skybox_orientation[0] = 0.0f;
+	skybox_orientation[1] = 0.0f;
+	skybox_orientation[2] = 0.0f;
+
+	for (i = 0; i < 3; i++)
+	{
+		value = COM_Parse(value);
+		if (!value)
+			break;
+		skybox_orientation[i] = (float)atof(com_token);
+	}
+}
+
+static void Sky_RotateSkyboxDir(const vec3_t dir, vec3_t out)
+{
+	vec3_t axis;
+
+	if (!Sky_SkyboxRotates())
+	{
+		VectorCopy(dir, out);
+		return;
+	}
+
+	VectorCopy(skybox_orientation, axis);
+	if (!axis[0] && !axis[1] && !axis[2])
+		axis[2] = 1.0f;
+	else
+		VectorNormalize(axis);
+
+	RotatePointAroundVector(out, axis, dir, skybox_orientation[3] * cl.time);
+}
+
+static void Sky_ExpandSkyboxBoundsForRotation(void)
+{
+	int i;
+
+	if (!Sky_SkyboxRotates())
+		return;
+
+	for (i = 0; i < 6; i++)
+	{
+		if (skymins[0][i] < skymaxs[0][i] && skymins[1][i] < skymaxs[1][i])
+			break;
+	}
+	if (i == 6)
+		return;
+
+	for (i = 0; i < 6; i++)
+	{
+		skymins[0][i] = -1;
+		skymins[1][i] = -1;
+		skymaxs[0][i] = 1;
+		skymaxs[1][i] = 1;
+	}
+}
+
 static float skywind_dist = 0.0f;
 static float skywind_yaw = 45.0f;
 static float skywind_pitch = 0.0f;
@@ -139,8 +213,8 @@ static GLint skywind_cubemap_uniform_phase = -1;
 static GLint skywind_cubemap_uniform_winddir = -1;
 static GLint skywind_cubemap_uniform_fogcolor = -1;
 static GLint skywind_cubemap_uniform_fogdensity = -1;
-static GLint skywind_cubemap_uniform_eye = -1;
 static qboolean skywind_cubemap_shader_initialized = false;
+static qboolean skywind_cubemap_sampling = false;
 static int skywind_frame_serial = -1;
 static qboolean skywind_frame_valid = false;
 static vec3_t skywind_frame_dir = {0.0f, 0.0f, 0.0f};
@@ -592,14 +666,12 @@ static qboolean Skywind_EnsureCubemapShader(void)
 {
 	static const GLchar *skywind_cubemap_vert_shader =
 		"#version 110\n"
-		"uniform vec3 uEye;\n"
 		"varying vec3 vDir;\n"
 		"void main()\n"
 		"{\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n"
 		"	gl_Position.z = gl_Position.w;\n"
-		"	vec3 world = gl_Vertex.xyz - uEye;\n"
-		"	vDir = vec3(-world.y, world.z, world.x);\n"
+		"	vDir = gl_MultiTexCoord0.xyz;\n"
 		"}\n";
 	static const GLchar *skywind_cubemap_frag_shader =
 		"#version 110\n"
@@ -645,7 +717,6 @@ static qboolean Skywind_EnsureCubemapShader(void)
 	skywind_cubemap_uniform_winddir = GL_GetUniformLocation(&skywind_cubemap_program, "uWindDir");
 	skywind_cubemap_uniform_fogcolor = GL_GetUniformLocation(&skywind_cubemap_program, "uFogColor");
 	skywind_cubemap_uniform_fogdensity = GL_GetUniformLocation(&skywind_cubemap_program, "uFogDensity");
-	skywind_cubemap_uniform_eye = GL_GetUniformLocation(&skywind_cubemap_program, "uEye");
 
 	GL_UseProgramFunc(skywind_cubemap_program);
 	if (skywind_cubemap_uniform_sampler != -1)
@@ -679,8 +750,6 @@ static qboolean Skywind_DrawSkyBox_Cubemap(const vec3_t wind_dir, float phase)
 		GL_Uniform1fFunc(skywind_cubemap_uniform_phase, phase);
 	if (skywind_cubemap_uniform_winddir != -1)
 		GL_Uniform3fFunc(skywind_cubemap_uniform_winddir, wind_dir[0], wind_dir[1], wind_dir[2]);
-	if (skywind_cubemap_uniform_eye != -1)
-		GL_Uniform3fFunc(skywind_cubemap_uniform_eye, r_origin[0], r_origin[1], r_origin[2]);
 
 	{
 		float fog_density = Fog_GetGlobalDensity();
@@ -705,6 +774,7 @@ static qboolean Skywind_DrawSkyBox_Cubemap(const vec3_t wind_dir, float phase)
 
 	skywind_apply_offsets = false;
 	skywind_shader_enabled = false;
+	skywind_cubemap_sampling = true;
 
 	for (i = 0; i < 6; ++i)
 	{
@@ -727,6 +797,7 @@ static qboolean Skywind_DrawSkyBox_Cubemap(const vec3_t wind_dir, float phase)
 		rs_skypasses++;
 	}
 
+	skywind_cubemap_sampling = false;
 	GL_UseProgramFunc(0);
 
 	return true;
@@ -1976,6 +2047,7 @@ void Sky_ClearAll (void)
 	map_skybox_name[0] = 0;
 	pending_skybox_name[0] = 0;
 	skybox_download_pending = false;
+	Sky_ClearSkyboxOrientation();
 	for (i=0; i<6; i++)
 		skybox_textures[i] = NULL;
 	solidskytexture = NULL;
@@ -2002,7 +2074,6 @@ void Sky_ResetGL (void)
 	skywind_cubemap_uniform_winddir = -1;
 	skywind_cubemap_uniform_fogcolor = -1;
 	skywind_cubemap_uniform_fogdensity = -1;
-	skywind_cubemap_uniform_eye = -1;
 
 	skywind_shader_enabled = false;
 	skywind_apply_offsets = false;
@@ -2026,6 +2097,7 @@ void Sky_NewMap (void)
 	skyfog = r_skyfog.value;
 	map_skybox_name[0] = 0;
 	skywind_value[0] = 0;
+	Sky_ClearSkyboxOrientation();
 
 	//
 	// read worldspawn (this is so ugly, and shouldn't it be done on the server?)
@@ -2060,6 +2132,10 @@ void Sky_NewMap (void)
 
 		if (!strcmp("sky", key))
 			Sky_SetMapSkybox(value);
+		else if (!strcmp("skyrotate", key))
+			skybox_orientation[3] = (float)atof(value);
+		else if (!strcmp("skyaxis", key))
+			Sky_ParseSkyboxAxis(value);
 		else if (!strcmp("skyroom", key))
 		{	//"_skyroom" "X Y Z". ideally the gamecode would do this with an entity, but people want to use the vanilla gamecode from 1996 for some reason.
 			const char *t = COM_Parse(value);
@@ -2628,7 +2704,7 @@ Sky_EmitSkyBoxVertex
 */
 void Sky_EmitSkyBoxVertex (float s, float t, int axis)
 {
-	vec3_t		v, b, dir;
+	vec3_t		v, b, dir, drawdir;
 	int			j, k;
 	float		w, h;
 	float		geom_s, geom_t;
@@ -2660,7 +2736,17 @@ void Sky_EmitSkyBoxVertex (float s, float t, int axis)
 			dir[j] = -b[-k - 1];
 		else
 			dir[j] = b[k - 1];
-		v[j] = dir[j] + r_origin[j];
+	}
+
+	Sky_RotateSkyboxDir(dir, drawdir);
+	for (j=0 ; j<3 ; j++)
+		v[j] = drawdir[j] + r_origin[j];
+
+	if (skywind_cubemap_sampling)
+	{
+		glTexCoord3f (-dir[1], dir[2], dir[0]);
+		glVertex3fv (v);
+		return;
 	}
 
 	if (skywind_apply_offsets)
@@ -2827,6 +2913,8 @@ void Sky_DrawSkyBox (void)
 {
 	vec3_t wind_dir;
 	float phase;
+
+	Sky_ExpandSkyboxBoundsForRotation();
 
 	if (Skywind_GetDirectionAndPhase(wind_dir, &phase))
 	{
