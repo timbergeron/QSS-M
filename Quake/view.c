@@ -1185,7 +1185,7 @@ void V_CalcRefdef (void)
 
 // refresh position
 	VectorCopy (ent->origin, r_refdef.vieworg);
-	r_refdef.vieworg[2] += cl.stats[STAT_VIEWHEIGHT] + height_adjustment;
+	r_refdef.vieworg[2] += cl.stats[STAT_VIEWHEIGHT];
 
 // never let it sit exactly on a node line, because a water plane can
 // dissapear when viewed with the eye exactly on it.
@@ -1197,6 +1197,12 @@ void V_CalcRefdef (void)
 	VectorCopy (cl.lerpangles, r_refdef.viewangles); // woods to lerp #smoothcam
 	V_CalcViewRoll ();
 	V_AddIdle ();
+
+	if (cl.stats[STAT_HEALTH] > 0)
+	{
+		// v_viewheight/bob only affects the view if the player is alive
+		r_refdef.vieworg[2] += height_adjustment;
+	}
 
 // offsets
 	angles[PITCH] = -ent->angles[PITCH]; // because entity pitches are actually backward
