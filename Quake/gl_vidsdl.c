@@ -724,7 +724,7 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 			draw_context = SDL_CreateWindow (caption, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
 		}
 		if (!draw_context)
-			Sys_Error ("Couldn't create window");
+			Sys_Error ("Couldn't create window: %s", SDL_GetError());
 
 		previous_display = -1;
 	}
@@ -737,7 +737,7 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 	if (VID_GetFullscreen ())
 	{
 		if (SDL_SetWindowFullscreen (draw_context, 0) != 0)
-			Sys_Error("Couldn't set fullscreen state mode");
+			Sys_Error("Couldn't set fullscreen state mode: %s", SDL_GetError());
 	}
 
 	if (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_MAXIMIZED)
@@ -762,7 +762,7 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 		const Uint32 flag = vid_desktopfullscreen.value ?
 				SDL_WINDOW_FULLSCREEN_DESKTOP : SDL_WINDOW_FULLSCREEN;
 		if (SDL_SetWindowFullscreen (draw_context, flag) != 0)
-			Sys_Error ("Couldn't set fullscreen state mode");
+			Sys_Error ("Couldn't set fullscreen state mode: %s", SDL_GetError());
 	}
 
 	SDL_ShowWindow (draw_context);
@@ -776,7 +776,7 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	if (!gl_context) {
 		gl_context = SDL_GL_CreateContext(draw_context);
 		if (!gl_context)
-			Sys_Error("Couldn't create GL context");
+			Sys_Error("Couldn't create GL context: %s", SDL_GetError());
 	}
 
 	gl_swap_control = true;
@@ -812,7 +812,7 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 		SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
 		draw_context = SDL_SetVideoMode(width, height, bpp, flags);
 		if (!draw_context)
-			Sys_Error ("Couldn't set video mode");
+			Sys_Error ("Couldn't set video mode: %s", SDL_GetError());
 	}
 
 	SDL_WM_SetCaption(caption, caption);
@@ -2072,7 +2072,7 @@ void	VID_Init (void)
 	{
 		SDL_DisplayMode mode;
 		if (SDL_GetDesktopDisplayMode(0, &mode) != 0)
-			Sys_Error("Could not get desktop display mode");
+			Sys_Error("Could not get desktop display mode: %s\n", SDL_GetError());
 
 		display_width = mode.w;
 		display_height = mode.h;
