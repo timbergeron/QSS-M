@@ -161,6 +161,9 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 	intptr_t stofs;
 	intptr_t vertofs;
 
+	if (isDedicated)
+		return;
+
 	//count how much space we're going to need.
 	for(hdr = mainhdr, numverts = 0, numindexes = 0; ; )
 	{
