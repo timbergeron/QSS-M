@@ -633,7 +633,7 @@ void S_StartSound (int entnum, int entchannel, sfx_t *sfx, vec3_t origin, float 
 			if (skip > sc->length)
 				skip = sc->length;
 			if (skip > 0)
-				skip = rand() % skip;
+				skip /= 2; /* deterministic midpoint: don't perturb the global RNG stream */
 			target_chan->pos += skip;
 			target_chan->end -= skip;
 			break;
