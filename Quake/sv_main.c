@@ -109,6 +109,7 @@ static qboolean sv_reclaiming_names;	// woods #dupnames - recursion guard
 cvar_t	sv_defaultmap = {"sv_defaultmap","start", CVAR_ARCHIVE}; // woods #mapchangeprotect (R00k) 
 cvar_t  sv_idlesleep = {"sv_idlesleep", "8", CVAR_ARCHIVE}; // woods #idlesleep (ezquake)
 cvar_t	sv_mapcrc = {"sv_mapcrc", "0", CVAR_ARCHIVE|CVAR_SERVERINFO}; // woods #mapcrc
+cvar_t	sv_nopunchangle = {"sv_nopunchangle", "0"};
 
 int				sv_protocol = PROTOCOL_RMQ;//spike -- enough maps need this now that we can probably afford incompatibility with engines that still don't support 999 (vanilla was already broken) -- PROTOCOL_FITZQUAKE; //johnfitz
 unsigned int	sv_protocol_pext1 = PEXT1_SUPPORTED_SERVER; //spike
@@ -122,6 +123,7 @@ void SV_CalcStats(client_t *client, int *statsi, float *statsf, const char **sta
 {
 	size_t i;
 	edict_t *ent = client->edict;
+	const qboolean send_punchangle = !sv_nopunchangle.value;
 	//FIXME: string stats!
 	int items;
 	eval_t *val = GetEdictFieldValue(ent, qcvm->extfields.items2);
@@ -167,9 +169,12 @@ void SV_CalcStats(client_t *client, int *statsi, float *statsf, const char **sta
 		statsi[STAT_ITEMS] = items;
 		statsf[STAT_VIEWHEIGHT] = ent->v.view_ofs[2];
 		statsf[STAT_IDEALPITCH] = ent->v.idealpitch;
-		statsf[STAT_PUNCHANGLE_X] = ent->v.punchangle[0];
-		statsf[STAT_PUNCHANGLE_Y] = ent->v.punchangle[1];
-		statsf[STAT_PUNCHANGLE_Z] = ent->v.punchangle[2];
+		if (send_punchangle)
+		{
+			statsf[STAT_PUNCHANGLE_X] = ent->v.punchangle[0];
+			statsf[STAT_PUNCHANGLE_Y] = ent->v.punchangle[1];
+			statsf[STAT_PUNCHANGLE_Z] = ent->v.punchangle[2];
+		}
 	}
 
 	if (client->protocol_pext2 & PEXT2_PREDINFO)
@@ -1658,6 +1663,7 @@ void SV_Init (void)
 	extern	cvar_t	sv_bunnyhopqw; // woods #qwbunnyhop
 	extern	cvar_t	sv_fullpitch; // woods #pqfullpitch
 	extern	cvar_t	sv_mapcrc; // woods #mapcrc
+	extern	cvar_t	sv_nopunchangle;
 
 	PM_Register();
 	Cvar_RegisterVariable (&sv_maxvelocity);
@@ -1694,6 +1700,7 @@ void SV_Init (void)
 	Cvar_SetCompletion (&sv_defaultmap, &Extralevels_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&sv_idlesleep); // woods #idlesleep
 	Cvar_RegisterVariable (&sv_mapcrc); // Map CRC handshake feature
+	Cvar_RegisterVariable (&sv_nopunchangle);
 
 	if (isDedicated)
 		sv_public.string = "1";
@@ -3123,6 +3130,7 @@ void SV_WriteClientdataToMessage (client_t *client, sizebuf_t *msg)
 	int		items;
 	eval_t	*val;
 	unsigned int		weaponmodelindex = SV_ModelIndex(PR_GetString(ent->v.weaponmodel));
+	const qboolean send_punchangle = !sv_nopunchangle.value;
 
 	if (weaponmodelindex >= client->limit_models)
 		weaponmodelindex = 0;
@@ -3154,7 +3162,7 @@ void SV_WriteClientdataToMessage (client_t *client, sizebuf_t *msg)
 
 	for (i=0 ; i<3 ; i++)
 	{
-		if (ent->v.punchangle[i])
+		if (send_punchangle && ent->v.punchangle[i])
 			bits |= (SU_PUNCH1<<i);
 		if (ent->v.velocity[i])
 			bits |= (SU_VELOCITY1<<i);
