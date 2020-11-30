@@ -24,6 +24,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "net_defs.h"
 
+extern cvar_t net_getdomainname;
+
 //ipv4 defs
 static sys_socket_t netv4_acceptsocket = INVALID_SOCKET;	// socket for fielding new connections
 static sys_socket_t netv4_controlsocket;
@@ -567,12 +569,15 @@ int WINIPv4_GetNameFromAddr (struct qsockaddr *addr, char *name)
 {
 	struct hostent *hostentry;
 
-	hostentry = gethostbyaddr ((char *)&((struct sockaddr_in *)addr)->sin_addr,
-						sizeof(struct in_addr), AF_INET);
-	if (hostentry)
+	if (net_getdomainname.value)
 	{
-		Q_strncpy (name, (char *)hostentry->h_name, NET_NAMELEN - 1);
-		return 0;
+		hostentry = gethostbyaddr ((char *)&((struct sockaddr_in *)addr)->sin_addr,
+							sizeof(struct in_addr), AF_INET);
+		if (hostentry)
+		{
+			Q_strncpy (name, (char *)hostentry->h_name, NET_NAMELEN - 1);
+			return 0;
+		}
 	}
 
 	Q_strcpy (name, WINS_AddrToString (addr, false));
