@@ -582,6 +582,35 @@ NET_Connect
 size_t hostCacheCount = 0;
 hostcache_t hostcache[HOSTCACHESIZE];
 
+/*
+===================
+NET_IsSameConnectionAddress
+===================
+*/
+static qboolean NET_IsSameConnectionAddress(const char *addressString,
+	const hostcache_t *cachedHost)
+{
+	struct qsockaddr address1;
+	struct qsockaddr address2;
+	const net_landriver_t *landriver;
+
+	if (!addressString || !*addressString || !cachedHost)
+		return false;
+	if (cachedHost->ldriver < 0 || cachedHost->ldriver >= net_numlandrivers)
+		return false;
+
+	landriver = &net_landrivers[cachedHost->ldriver];
+	if (!landriver->StringToAddr || !landriver->SetSocketPort || !landriver->AddrCompare)
+		return false;
+	if (landriver->StringToAddr(addressString, &address1) != 0)
+		return false;
+
+	address2 = cachedHost->addr;
+	landriver->SetSocketPort(&address1, 0);
+	landriver->SetSocketPort(&address2, 0);
+	return (landriver->AddrCompare(&address1, &address2) == 0);
+}
+
 qsocket_t *NET_Connect (const char *host)
 {
 	qsocket_t		*ret;
@@ -606,7 +635,8 @@ qsocket_t *NET_Connect (const char *host)
 		if (hostCacheCount)
 		{
 			for (n = 0; n < hostCacheCount; n++)
-				if (q_strcasecmp (host, hostcache[n].name) == 0)
+				if (q_strcasecmp (host, hostcache[n].name) == 0 ||
+					NET_IsSameConnectionAddress(host, &hostcache[n]))
 				{
 					host = hostcache[n].cname;
 					break;
@@ -637,7 +667,8 @@ qsocket_t *NET_Connect (const char *host)
 	{
 		for (n = 0; n < hostCacheCount; n++)
 		{
-			if (q_strcasecmp (host, hostcache[n].name) == 0)
+			if (q_strcasecmp (host, hostcache[n].name) == 0 ||
+				NET_IsSameConnectionAddress(host, &hostcache[n]))
 			{
 				host = hostcache[n].cname;
 				break;
@@ -675,7 +706,8 @@ const char *NET_ResolveCacheName(const char *host)
 
 	for (n = 0; n < hostCacheCount; n++)
 	{
-		if (q_strcasecmp(host, hostcache[n].name) == 0)
+		if (q_strcasecmp(host, hostcache[n].name) == 0 ||
+			NET_IsSameConnectionAddress(host, &hostcache[n]))
 			return hostcache[n].cname;
 	}
 
