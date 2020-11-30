@@ -66,6 +66,7 @@ int		unreliableMessagesSent		= 0;
 int		unreliableMessagesReceived	= 0;
 
 cvar_t	net_messagetimeout = {"net_messagetimeout","300",CVAR_NONE};
+cvar_t	net_connectsearch = {"net_connectsearch","1",CVAR_NONE};
 cvar_t	net_connecttimeout = {"net_connecttimeout","10",CVAR_NONE};	//this might be a little brief, but we don't have a way to protect against smurf attacks.
 cvar_t	net_connectattempts = {"net_connectattempts","3",CVAR_ARCHIVE}; // woods #connectretry
 cvar_t	hostname = {"hostname", "UNNAMED", CVAR_SERVERINFO};
@@ -615,11 +616,14 @@ qsocket_t *NET_Connect (const char *host)
 		}
 	}
 
-	slistSilent = host ? true : false;
-	NET_Slist_f ();
+	if (net_connectsearch.value || !host)
+	{
+		slistSilent = host ? true : false;
+		NET_Slist_f ();
 
-	while (slistInProgress)
-		NET_Poll();
+		while (slistInProgress)
+			NET_Poll();
+	}
 
 	if (host == NULL)
 	{
@@ -1177,6 +1181,7 @@ void NET_Init (void)
 	SZ_Alloc (&net_message, NET_MAXMESSAGE);
 
 	Cvar_RegisterVariable (&net_messagetimeout);
+	Cvar_RegisterVariable (&net_connectsearch);
 	Cvar_RegisterVariable (&net_connecttimeout);
 	Cvar_RegisterVariable (&net_connectattempts); // woods #connectretry
 	Cvar_RegisterVariable (&hostname);
@@ -1301,4 +1306,3 @@ void SchedulePollProcedure(PollProcedure *proc, double timeOffset)
 	proc->next = pp;
 	prev->next = proc;
 }
-
