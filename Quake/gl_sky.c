@@ -2821,6 +2821,8 @@ draws the old-style scrolling cloud layers
 void Sky_DrawSkyLayers (void)
 {
 	int i;
+	if (!solidskytexture || !alphaskytexture)
+		return;
 
 	if (r_skyalpha.value < 1.0)
 		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
