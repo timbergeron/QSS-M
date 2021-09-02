@@ -730,7 +730,7 @@ static texture_t *Mod_LoadMipTex(miptex_t *mt, byte *lumpend, enum srcformat *fm
 		{
 			miptex64_t *mt64 = (miptex64_t*)mt;
 			srcdata = (byte*)(mt64 + 1);	//revert to lameness
-			shift = mt64->shift;
+			shift = LittleLong (mt64->shift);
 		}
 		else
 		{
