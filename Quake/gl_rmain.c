@@ -677,7 +677,13 @@ void R_SetupGL (void)
 	#if 1	//Spike: these should be equivelent. gpus tend not to use doubles in favour of speed, so no loss there.
 	{
 		mat4_t mat;
-		Matrix4_ProjectionMatrix(r_fovx, r_fovy, NEARCLIP, gl_farclip.value, false, frustum_skew, 0, mat);
+		// reduce near clip distance at high FOV's to avoid seeing through walls
+		const float w = 1.0f / tanf(r_fovx * (float)M_PI / 360.0f);
+		const float h = 1.0f / tanf(r_fovy * (float)M_PI / 360.0f);
+		const float d = 12.f * q_min(w, h);
+		const float nearclip = CLAMP(0.5f, d, (float)NEARCLIP);
+
+		Matrix4_ProjectionMatrix(r_fovx, r_fovy, nearclip, gl_farclip.value, false, frustum_skew, 0, mat);
 		glMatrixMode(GL_PROJECTION);
 		glLoadMatrixf(mat);
 
@@ -2707,4 +2713,3 @@ void R_RenderView (void)
 					rs_dynamiclightmaps);
 	//johnfitz
 }
-
