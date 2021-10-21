@@ -818,6 +818,7 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	vid.height = VID_GetCurrentHeight();
 #endif /* !defined(USE_SDL2) */
 
+	vid.refreshrate = VID_GetCurrentRefreshRate();
 	vid.conwidth = vid.width & 0xFFFFFFF8;
 	vid.conheight = vid.conwidth * vid.height / vid.width;
 	vid.numpages = 2;

@@ -56,6 +56,7 @@ typedef struct
 	int		width;
 	int		height;
 	float		aspect;		// width / height -- < 0 is taller than wide
+	int		refreshrate;
 	int		numpages;
 	int		recalc_refdef;	// if true, recalc vid-based stuff
 	pixel_t		*conbuffer;

@@ -1163,14 +1163,27 @@ Returns false if the time is too short to run a frame
 
 qboolean Host_FilterTime (float time)
 {
-	float maxfps; //johnfitz
-
 	realtime += time;
 
 	//johnfitz -- max fps cvar
-	maxfps = CLAMP (10.f, host_maxfps.value, 5000.0); // woods higher max
-	if (host_maxfps.value>0 && !cls.timedemo && realtime - oldrealtime < 1.0/maxfps)
-		return false; // framerate is too high
+	if ((host_maxfps.value>0 || cls.state == ca_disconnected) && !cls.timedemo)
+	{
+		float maxfps;
+		if (cls.state == ca_disconnected)
+		{
+			maxfps = vid.refreshrate ? vid.refreshrate : 60.f;
+			if (host_maxfps.value>0)
+				maxfps = q_min (maxfps, host_maxfps.value);
+			maxfps = CLAMP (10.f, maxfps, 5000.0); // woods higher max
+		}
+		else
+		{
+			maxfps = CLAMP (10.f, host_maxfps.value, 5000.0); // woods higher max
+		}
+
+		if (realtime - oldrealtime < 1.0/maxfps)
+			return false; // framerate is too high
+	}
 	//johnfitz
 
 	host_frametime = realtime - oldrealtime;
