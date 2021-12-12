@@ -1707,7 +1707,11 @@ static int CL_GetDemoMessage (void)
 	VectorCopy (cl.mviewangles[0], cl.mviewangles[1]);
 	for (i = 0 ; i < 3 ; i++)
 	{
-		r = fread (&f, 4, 1, cls.demofile);
+		if (fread (&f, 4, 1, cls.demofile) != 1)
+		{
+			CL_StopPlayback();
+			return 0;
+		}
 		cl.mviewangles[0][i] = LittleFloat (f);
 	}
 
