@@ -793,8 +793,6 @@ static int ReSendMessage (qsocket_t *sock)
 	packetBuffer.sequence = BigLong(sock->sendSequence - 1);
 	Q_memcpy (packetBuffer.data, sock->sendMessage, dataLen);
 
-	sock->sendNext = false;
-
 	if (sfunc.Write (sock->socket, (byte *)&packetBuffer, packetLen, &sock->addr) == -1)
 		return -1;
 
@@ -1045,11 +1043,11 @@ void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 		if (!s->isvirtual)
 			continue;
 
+		if (s->sendNext)
+			SendMessageNext (s);
 		if (!s->canSend)
 			if ((net_time - s->lastSendTime) > 1.0)
 				ReSendMessage (s);
-		if (s->sendNext)
-			SendMessageNext (s);
 
 		if (net_time - s->lastMessageTime > ((!s->ackSequence)?net_connecttimeout.value:net_messagetimeout.value))
 		{	//timed out, kick them
