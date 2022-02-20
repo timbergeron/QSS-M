@@ -1879,7 +1879,8 @@ void SV_StartSound2 (edict_t *entity, float *origin, int channel, const char *sa
 			continue;
 		if (sound_num >= cl->limit_sounds)
 			continue;
-		if ((field_mask & (SND_LARGEENTITY|SND_LARGESOUND)) && (!cl->protocol_pext2 || sv.protocol == PROTOCOL_NETQUAKE))
+		//PROTOCOL_NETQUAKE do not support more than 256 sounds and/or 8192 entities.
+		if ((field_mask & (SND_LARGEENTITY | SND_LARGESOUND)) && (sv.protocol == PROTOCOL_NETQUAKE))
 			continue;
 
 		if (flags & CF_UNICAST && cl->edict != PROG_TO_EDICT(pr_global_struct->msg_entity))
