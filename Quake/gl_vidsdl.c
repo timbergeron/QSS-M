@@ -2045,6 +2045,9 @@ void	VID_Init (void)
 	}
 #endif
 
+	Cvar_SetValueQuick (&vid_width, (float)display_width);
+	Cvar_SetValueQuick (&vid_height, (float)display_height);
+	Cvar_SetValueQuick (&vid_refreshrate, (float)display_refreshrate);
 	Cvar_SetValueQuick (&vid_bpp, (float)display_bpp);
 
 	if (CFG_OpenConfig("config.cfg") == 0)
