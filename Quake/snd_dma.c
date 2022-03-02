@@ -806,21 +806,27 @@ S_UpdateAmbientSounds
 */
 static void S_UpdateAmbientSounds (void)
 {
-	mleaf_t		*l;
-	int		ambient_channel;
-	channel_t	*chan;
-	static float vol, levels[NUM_AMBIENTS];	//Spike: fixing ambient levels not changing at high enough framerates due to integer precison.
+	mleaf_t			*l;
+	int				ambient_channel;
+	channel_t		*chan;
+	float			vol;
+	static float	levels[NUM_AMBIENTS];
 
 // no ambients when disconnected
 	if (cls.state != ca_connected || cls.signon != SIGNONS)
 	{
+		memset (levels, 0, sizeof (levels));
 		S_SetUnderwaterIntensity(0.f); // woods #waterfx (ironwail)
 		return;
 	}
-		
+
 // calc ambient sound levels
 	if (!cl.worldmodel || cl.worldmodel->needload)
+	{
+		memset (levels, 0, sizeof (levels));
+		S_SetUnderwaterIntensity(0.f); // woods #waterfx (ironwail)
 		return;
+	}
 
 	l = Mod_PointInLeaf (listener_origin, cl.worldmodel);
 	S_SetUnderwaterIntensity(l ? S_UnderwaterIntensityForContents(l->contents) : 0.f); // woods #waterfx (ironwail)
@@ -828,6 +834,7 @@ static void S_UpdateAmbientSounds (void)
 	{
 		for (ambient_channel = 0; ambient_channel < NUM_AMBIENTS; ambient_channel++)
 			snd_channels[ambient_channel].sfx = NULL;
+		memset (levels, 0, sizeof (levels));
 		return;
 	}
 
@@ -840,24 +847,26 @@ static void S_UpdateAmbientSounds (void)
 		chan->sfx = ambient_sfx[ambient_channel];
 
 		vol = (int) (ambient_level.value * l->ambient_sound_level[ambient_channel]);
-		if (vol < 8)
-			vol = 0;
+		if (vol < 8.f)
+			vol = 0.f;
+		else if (vol > 255.f)
+			vol = 255.f;
 
 	// don't adjust volume too fast
 		if (levels[ambient_channel] < vol)
 		{
-			levels[ambient_channel] += (host_frametime * ambient_fade.value);
+			levels[ambient_channel] += host_frametime * ambient_fade.value;
 			if (levels[ambient_channel] > vol)
 				levels[ambient_channel] = vol;
 		}
-		else if (chan->master_vol > vol)
+		else if (levels[ambient_channel] > vol)
 		{
-			levels[ambient_channel] -= (host_frametime * ambient_fade.value);
+			levels[ambient_channel] -= host_frametime * ambient_fade.value;
 			if (levels[ambient_channel] < vol)
 				levels[ambient_channel] = vol;
 		}
 
-		chan->leftvol = chan->rightvol = chan->master_vol = levels[ambient_channel];
+		chan->leftvol = chan->rightvol = chan->master_vol = (int) levels[ambient_channel];
 	}
 }
 
