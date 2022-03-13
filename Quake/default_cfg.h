@@ -85,8 +85,6 @@ static const char default_cfg[] =
 "sensitivity 3\n"
 
 "viewsize 110\n"
-"scr_conscale 1.6\n"
-"scr_menuscale 1.6\n"
-"scr_sbarscale 1.6\n"
+"scr_autoscale\n"
 
 "+mlook\n";

@@ -915,6 +915,23 @@ void SCR_Conwidth_f (cvar_t *var)
 	vid.conheight = vid.conwidth * vid.height / vid.width;
 }
 
+/*
+==================
+SCR_AutoScale_f
+
+Sets UI scale cvars to an automatic value based on resolution
+==================
+*/
+void SCR_AutoScale_f (void)
+{
+	float scale = q_min (glwidth / 640.f, glheight / 480.f);
+	scale = q_max (1.f, scale);
+	Cvar_SetValueQuick (&scr_conscale, scale);
+	Cvar_SetValueQuick (&scr_menuscale, scale);
+	Cvar_SetValueQuick (&scr_sbarscale, scale);
+	Cvar_SetValueQuick (&scr_crosshairscale, scale);
+}
+
 //============================================================================
 
 /*
@@ -1055,6 +1072,8 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&cl_gun_fovscale);
 	Cvar_RegisterVariable (&cl_menucrosshair); // woods #menucrosshair
 	Cvar_RegisterVariable (&cl_pong); // woods #pong
+
+	Cmd_AddCommand ("scr_autoscale",SCR_AutoScale_f);
 
 	Cmd_AddCommand ("screenshot",SCR_ScreenShot_f);
 	Cmd_AddCommand ("sizeup",SCR_SizeUp_f);
