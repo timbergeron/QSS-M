@@ -1455,6 +1455,12 @@ void IN_MouseMotion(int dx, int dy, int wx, int wy)
 			dx = dy = 0;	//if the qc says it handled it, swallow the movement.
 		PR_SwitchQCVM(NULL);
 	}
+	if (cls.state != ca_connected || cls.signon != SIGNONS)
+	{
+		total_dx = 0;
+		total_dy = 0;
+		return;
+	}
 	total_dx += dx;
 	total_dy += dy;
 }
@@ -2363,6 +2369,13 @@ void IN_MouseMove(usercmd_t *cmd)
 		total_dy += hid_dy;
 	}
 #endif
+
+	if (cls.state != ca_connected || cls.signon != SIGNONS)
+	{
+		total_dx = 0;
+		total_dy = 0;
+		return;
+	}
 
 	sens = tan(DEG2RAD(r_refdef.basefov) * 0.5f) / tan(DEG2RAD(scr_fov.value) * 0.5f); // woods #zoom (ironwail)
 	sens *= sensitivity.value; // woods #zoom (ironwail)
