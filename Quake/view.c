@@ -280,6 +280,20 @@ float		v_blend[4];		// rgba 0.0 - 1.0
 //johnfitz -- deleted BuildGammaTable(), V_CheckGamma(), gammatable[], and ramps[][]
 
 /*
+============
+V_ResetEffects
+============
+*/
+void V_ResetEffects (void)
+{
+	cshift_empty.percent = 0;
+	memset (v_blend, 0, sizeof (v_blend));
+	v_dmg_time = 0.f;
+	v_dmg_roll = 0.f;
+	v_dmg_pitch = 0.f;
+}
+
+/*
 ===============
 V_ParseDamage
 ===============

@@ -619,6 +619,7 @@ void CL_Disconnect (void)
 	pausedprint = false;  // woods
 	cl.match_pause_time = 0; // woods
 	prediction_msg_shown = false; // woods #prednotify
+	V_ResetEffects ();
 }
 
 void CL_Disconnect_f (void)
