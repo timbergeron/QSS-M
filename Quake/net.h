@@ -34,7 +34,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define	NET_NAMELEN		128	//Spike: extended this for dtls fingerprint info etc.
 
-#define NET_MAXMESSAGE		64000	/* ericw -- was 32000 */
+#define NET_MAXMESSAGE		65535	/* ericw -- was 32000 */
 
 extern int		DEFAULTnet_hostport;
 extern int		net_hostport;
