@@ -1230,7 +1230,7 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 
 		if (recs[0].EventType == KEY_EVENT)
 		{
-			if (recs[0].Event.KeyEvent.bKeyDown == FALSE)
+			if (recs[0].Event.KeyEvent.bKeyDown == TRUE)
 			{
 				// PageUp / PageDown for scrollback
 				if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_PRIOR)
@@ -1305,6 +1305,16 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 				}
 
 				ch = recs[0].Event.KeyEvent.uChar.AsciiChar;
+				if (ch && (recs[0].Event.KeyEvent.dwControlKeyState & SHIFT_PRESSED))
+				{
+					BYTE keyboard[256] = {0};
+					WORD output = 0;
+
+					keyboard[VK_SHIFT] = 0x80;
+					if (ToAscii(recs[0].Event.KeyEvent.wVirtualKeyCode,
+						recs[0].Event.KeyEvent.wVirtualScanCode, keyboard, &output, 0) == 1)
+						ch = (char) output;
+				}
 
 				switch (ch)
 				{
