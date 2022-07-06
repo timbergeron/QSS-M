@@ -58,6 +58,7 @@ typedef struct
 	float		aspect;		// width / height -- < 0 is taller than wide
 	int		refreshrate;
 	int		numpages;
+	qboolean	resized;
 	int		recalc_refdef;	// if true, recalc vid-based stuff
 	pixel_t		*conbuffer;
 	int		conrowbytes;
@@ -88,6 +89,8 @@ void VID_SyncCvars (void);
 
 void VID_Toggle (void);
 
+void VID_OnResize (int width, int height); // github.com/andrei-drexler/ironwail (Enable resizing)
+
 void *VID_GetWindow (void);
 qboolean VID_HasMouseOrInputFocus (void);
 qboolean VID_IsMinimized (void);
@@ -102,4 +105,3 @@ SDL_Cursor *LoadCustomIBeamCursor (void); // woods #customcursor
 void VID_SetCursor(qcvm_t *vm, const char *cursorname, float hotspot[2], float cursorscale);
 
 #endif	/* __VID_DEFS_H */
-

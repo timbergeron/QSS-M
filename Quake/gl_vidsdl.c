@@ -215,6 +215,7 @@ cvar_t	vid_fsaa = {"vid_fsaa", "0", CVAR_ARCHIVE}; // QuakeSpasm -- woods remove
 cvar_t	vid_fxaa = {"vid_fxaa", "0", CVAR_ARCHIVE}; // // woods #fxaa anti-aliasing (0=off, 1=low, 2=medium, 3=high)
 static cvar_t	vid_desktopfullscreen = {"vid_desktopfullscreen", "0", CVAR_ARCHIVE}; // QuakeSpasm
 static cvar_t	vid_borderless = {"vid_borderless", "0", CVAR_ARCHIVE}; // QuakeSpasm
+cvar_t		vid_saveresize = {"vid_saveresize", "1", CVAR_ARCHIVE}; // github.com/andrei-drexler/ironwail (Enable resizing)
 extern cvar_t	scr_customcursor; // woods #customcursor (defined in gl_screen.c)
 //johnfitz
 
@@ -882,6 +883,24 @@ VID_Changed_f -- kristian -- notify us that a value has changed that requires a 
 static void VID_Changed_f (cvar_t *var)
 {
 	vid_changed = true;
+}
+
+/*
+===================
+VID_OnResize -- github.com/andrei-drexler/ironwail (Enable resizing)
+
+Called from the SDL_WINDOWEVENT_SIZE_CHANGED handler. Keep this path light:
+update the current drawable size and mark the resize for deferred handling in
+GL_BeginRendering, where we can safely persist cvars and refresh console size
+without fighting Cocoa live-resize.
+===================
+*/
+void VID_OnResize (int width, int height)
+{
+	vid.width = width;
+	vid.height = height;
+	vid.recalc_refdef = 1;
+	vid.resized = true;
 }
 
 /*
@@ -1667,6 +1686,28 @@ GL_BeginRendering -- sets values of glx, gly, glwidth, glheight
 */
 void GL_BeginRendering (int *x, int *y, int *width, int *height)
 {
+	if (vid.resized)
+	{
+		cvar_t *conscale;
+
+		vid.resized = false;
+
+		if (vid_saveresize.value && !VID_GetDesktopFullscreen() && !VID_GetFullscreen())
+		{
+			qboolean was_changed = vid_changed;
+			qboolean was_locked = vid_locked;
+			vid_locked = true;
+			Cvar_SetValueQuick (&vid_width, (float)vid.width);
+			Cvar_SetValueQuick (&vid_height, (float)vid.height);
+			vid_locked = was_locked;
+			vid_changed = was_changed;
+		}
+
+		conscale = Cvar_FindVar ("scr_conscale");
+		if (conscale && conscale->callback)
+			conscale->callback (conscale);
+	}
+
 	*x = *y = 0;
 	*width = vid.width;
 	*height = vid.height;
@@ -1993,6 +2034,7 @@ void	VID_Init (void)
 	Cvar_RegisterVariable (&vid_fxaa); // woods #fxaa
 	Cvar_RegisterVariable (&vid_desktopfullscreen); //QuakeSpasm
 	Cvar_RegisterVariable (&vid_borderless); //QuakeSpasm
+	Cvar_RegisterVariable (&vid_saveresize); // github.com/andrei-drexler/ironwail (Enable resizing)
 	for (i = 0; i < num_readvars; i++)
 	{
 		v = Cvar_FindVar(read_vars[i]);
