@@ -254,6 +254,7 @@ byte *Mod_NoVisPVS (qmodel_t *model)
 	int pvsbytes;
  
 	pvsbytes = (model->numleafs+7)>>3;
+	pvsbytes = (pvsbytes+3)&~3;
 	if (mod_novis == NULL || pvsbytes > mod_novis_capacity)
 	{
 		mod_novis_capacity = pvsbytes;
