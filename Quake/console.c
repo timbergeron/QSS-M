@@ -366,11 +366,19 @@ static void Con_Dump_f (void)
 {
 	int		l, x;
 	const char	*line;
+	const char	*relname;
 	FILE	*f;
 	char	buffer[1024];
 	char	name[MAX_OSPATH];
 
-	q_snprintf (name, sizeof(name), "%s/condump.txt", com_gamedir);
+	relname = Cmd_Argc () >= 2 ? Cmd_Argv (1) : "condump.txt";
+	if (strstr (relname, ".."))
+	{
+		Con_Printf ("Relative pathnames are not allowed.\n");
+		return;
+	}
+
+	q_snprintf (name, sizeof(name), "%s/%s", com_gamedir, relname);
 	COM_CreatePath (name);
 	f = fopen (name, "w");
 	if (!f)
@@ -415,7 +423,7 @@ static void Con_Dump_f (void)
 
 	fclose (f);
 	if (cl_contentfilter.value) // woods #contentfilter
-		Con_Printf("Dumped console text to %s/condump.txt.\n", COM_SkipPath(com_gamedir));
+		Con_Printf("Dumped console text to %s/%s.\n", COM_SkipPath(com_gamedir), relname);
 	else
 		Con_Printf("Dumped console text to %s.\n", name);
 }
