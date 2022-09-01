@@ -101,6 +101,9 @@ typedef struct
 	} customstats[MAX_CL_STATS*2];	//strings or numeric...
 	size_t numcustomstats;
 
+	char		lastsave[MAX_OSPATH]; // woods #autoload (iw)
+	qboolean	autoloading; // woods #autoload (iw)
+
 	qboolean skyroom_pos_known;
 	vec4_t skyroom_pos;
 } server_t;
