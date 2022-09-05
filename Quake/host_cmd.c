@@ -6055,6 +6055,7 @@ static void Host_Loadgame_f (void)
 	{
 		Con_Printf ("ERROR: couldn't open.\n");
 		Host_InvalidateSave(relname); // woods #autoload (iw)
+		SCR_EndLoadingPlaque ();
 		return;
 	}
 
@@ -6069,6 +6070,7 @@ static void Host_Loadgame_f (void)
 		else
 			Host_Error("Savegame is version %i, not %i", version, SAVEGAME_VERSION);
 		Host_InvalidateSave(relname);
+		SCR_EndLoadingPlaque ();
 		return;
 	}
 	data = COM_ParseStringNewline (data);
