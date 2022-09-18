@@ -777,6 +777,8 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 
 	//small violation of the spec, but it seems like noone else uses it.
 	mod->flags = LittleLong (pinheader->flags);
+	if (!strcmp(mod->name, "progs/teleport.md3"))
+		mod->flags = 0;
 
 
 	mod->type = mod_alias;
