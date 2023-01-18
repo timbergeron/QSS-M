@@ -625,8 +625,8 @@ void SCR_DrawCenterString (void) //actually do the drawing
 	do
 	{
 	// scan the width of the line
-		for (l=0 ; l<40 ; l++)
-			if (start[l] == '\n' || !start[l])
+		for (l=0 ; start[l] ; l++)
+			if (start[l] == '\n')
 				break;
 		x = (320 - l*8)/2;	//johnfitz -- 320x200 coordinate system
 		for (j=0 ; j<l ; j++, x+=8)
@@ -637,9 +637,7 @@ void SCR_DrawCenterString (void) //actually do the drawing
 		}
 
 		y += 8;
-
-		while (*start && *start != '\n')
-			start++;
+		start += l;
 
 		if (!*start)
 			break;
