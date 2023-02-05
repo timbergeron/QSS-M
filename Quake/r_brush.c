@@ -882,6 +882,8 @@ void GL_BuildBModelVertexBuffer (void)
 // build vertex array
 	varray_bytes = VERTEXSIZE * sizeof(float) * numverts;
 	varray = (float *) malloc (varray_bytes);
+	if (!varray && varray_bytes)
+		Sys_Error ("GL_BuildBModelVertexBuffer: out of memory (%u bytes)", varray_bytes);
 	varray_index = 0;
 
 	for (j=1 ; j<MAX_MODELS ; j++)
