@@ -1456,6 +1456,7 @@ double Sys_DoubleTime (void)
 
 static void safe_write(int fd, const void* buf, size_t count) // woods #arrowkeys
 {
+<<<<<<< HEAD
 	ssize_t result = write(fd, buf, count);
 	if (result == -1) {
 	}
@@ -1506,6 +1507,7 @@ static void Sys_RewriteInputLine(const char* newline, char* con_text, size_t con
 const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 {
 	// Input state is in file-scope ded_input / ded_input_len / ded_input_cursor
+	static qboolean	con_eof = false;
 	char		c;
 	fd_set		set;
 	struct timeval	timeout;
@@ -1536,11 +1538,19 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
     timeout.tv_sec = 0;
     timeout.tv_usec = 0;
 
+	if (con_eof)
+		return NULL;
+
     while (select (1, &set, NULL, NULL, &timeout))
     {
         ssize_t len = read(0, &c, 1);
         if (len != 1)
-            continue;
+        {
+			con_eof = true;
+			if (ded_input_len <= 0)
+				return NULL;
+			c = '\n';
+        }
 
         // Handle escape sequences for arrow keys, PageUp/PageDown
         if (c == 27) // ESC character
