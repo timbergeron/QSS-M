@@ -3287,7 +3287,7 @@ static void VID_MenuDraw (void)
 
 		case VID_OPT_REFRESHRATE:
 			text = "      Refresh Rate";
-			value = va("%i", (int)vid_refreshrate.value);
+			value = va("%i Hz", (int)vid_refreshrate.value);
 			break;
 
 		case VID_OPT_FULLSCREEN:
