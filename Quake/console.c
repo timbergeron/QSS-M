@@ -366,18 +366,18 @@ static void Con_Dump_f (void)
 {
 	int		l, x;
 	const char	*line;
-	const char	*relname;
 	FILE	*f;
 	char	buffer[1024];
+	char	relname[MAX_OSPATH];
 	char	name[MAX_OSPATH];
 
-	relname = Cmd_Argc () >= 2 ? Cmd_Argv (1) : "condump.txt";
+	q_strlcpy (relname, Cmd_Argc () >= 2 ? Cmd_Argv (1) : "condump.txt", sizeof (relname));
 	if (strstr (relname, ".."))
 	{
 		Con_Printf ("Relative pathnames are not allowed.\n");
 		return;
 	}
-
+	COM_AddExtension (relname, ".txt", sizeof (relname));
 	q_snprintf (name, sizeof(name), "%s/%s", com_gamedir, relname);
 	COM_CreatePath (name);
 	f = fopen (name, "w");
