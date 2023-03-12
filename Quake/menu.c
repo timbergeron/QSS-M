@@ -12453,7 +12453,7 @@ static void M_HUD_AdjustSliders(int dir)
 		break;
 
 	case HUD_SBALPHA:
-		f = scr_sbaralpha.value - dir * 0.05;
+		f = scr_sbaralpha.value + dir * 0.05;
 		if (f < 0) f = 0;
 		else if (f > 1) f = 1;
 		Cvar_SetValue("scr_sbaralpha", f);
@@ -12573,7 +12573,7 @@ void M_HUD_Draw(void)
 
 		case HUD_SBALPHA:
 			text = "   Statusbar Alpha";
-			r = (1.0 - scr_sbaralpha.value);
+			r = scr_sbaralpha.value;
 			M_DrawSlider(186, y, r, 100.0f * r, "%.0f%%");
 			break;
 
@@ -13048,7 +13048,7 @@ void M_HUD_Mousemove(int cx, int cy)
 			break;
 
 		case HUD_SBALPHA:
-			f = 1.0 - M_MouseToSliderFraction(cx - 187);
+			f = M_MouseToSliderFraction(cx - 187);
 			Cvar_SetValue("scr_sbaralpha", f);
 			break;
 
