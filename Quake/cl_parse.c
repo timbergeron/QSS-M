@@ -1391,7 +1391,7 @@ static void CL_ParseServerInfo (void)
 		SCR_BeginLoadingPlaque();
 
 	/* Clear the current DMA contents before the incoming level load stalls mixing. */
-	S_StopAllSounds (true);
+	S_StopAllSounds (true, false);
 
 //
 // wipe the client_state_t struct

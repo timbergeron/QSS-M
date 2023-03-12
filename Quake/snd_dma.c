@@ -45,7 +45,7 @@ static void S_PlayVol (void);
 static void S_SoundList (void);
 static void S_Update_ (void);
 static void GetSoundtime (void);
-void S_StopAllSounds (qboolean clear);
+void S_StopAllSounds (qboolean clear, qboolean keep_statics);
 static void S_StopAllSoundsC (void);
 void Sound_Toggle_Mute_f (void); // woods
 
@@ -335,7 +335,7 @@ void S_Init (void)
 
 	S_CodecInit ();
 
-	S_StopAllSounds (true);
+	S_StopAllSounds (true, false);
 }
 
 
@@ -657,19 +657,42 @@ void S_StopSound (int entnum, int entchannel)
 	}
 }
 
-void S_StopAllSounds (qboolean clear)
+void S_StopAllSounds (qboolean clear, qboolean keep_statics)
 {
+	int	i;
+
 	if (!sound_started)
 		return;
 
-	total_channels = MAX_DYNAMIC_CHANNELS + NUM_AMBIENTS;	// no statics
-	if (max_channels != total_channels + 64)
-	{	//shrink it if needed
-		max_channels = total_channels + 64;
-		free(snd_channels);
-		snd_channels = malloc(sizeof(channel_t) * max_channels);
+	if (!keep_statics)
+	{
+		total_channels = MAX_DYNAMIC_CHANNELS + NUM_AMBIENTS;	// no statics
+		if (max_channels != total_channels + 64)
+		{	//shrink it if needed
+			max_channels = total_channels + 64;
+			free(snd_channels);
+			snd_channels = malloc(sizeof(channel_t) * max_channels);
+		}
+		memset(snd_channels, 0, max_channels * sizeof(channel_t));
 	}
-	memset(snd_channels, 0, max_channels * sizeof(channel_t));
+	else
+	{
+		for (i = 0; i < total_channels; i++)
+		{
+			sfxcache_t *sc = NULL;
+
+			if (snd_channels[i].sfx)
+				sc = S_LoadSound (snd_channels[i].sfx);
+
+			if (i < NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS || !sc || sc->loopstart == -1)
+				memset (&snd_channels[i], 0, sizeof (channel_t));
+			else
+			{
+				snd_channels[i].pos = 0;
+				snd_channels[i].end = paintedtime + sc->length;
+			}
+		}
+	}
 
 	if (clear)
 		S_ClearBuffer ();
@@ -677,7 +700,7 @@ void S_StopAllSounds (qboolean clear)
 
 static void S_StopAllSoundsC (void)
 {
-	S_StopAllSounds (true);
+	S_StopAllSounds (true, false);
 }
 
 void S_ClearBuffer (void)
@@ -1049,7 +1072,7 @@ static void GetSoundtime (void)
 		{	// time to chop things off to avoid 32 bit limits
 			buffers = 0;
 			paintedtime = fullsamples;
-			S_StopAllSounds (true);
+			S_StopAllSounds (true, true);
 		}
 	}
 	oldsamplepos = samplepos;
@@ -1245,7 +1268,7 @@ void S_ClearPrecache (void)
 	if (!snd_initialized || !known_sfx)
 		return;
 
-	S_StopAllSounds (true);
+	S_StopAllSounds (true, false);
 
 	for (sfx = known_sfx, i = 0; i < num_sfx; i++, sfx++)
 	{

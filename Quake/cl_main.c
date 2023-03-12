@@ -570,7 +570,7 @@ void CL_Disconnect (void)
 		Key_EndChat ();	// don't get stuck in chat mode
 
 // stop sounds (especially looping!)
-	S_StopAllSounds (true);
+	S_StopAllSounds (true, false);
 	BGM_Pause ();
 
 // if running a local server, shut it down
