@@ -1251,7 +1251,7 @@ void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state)
 	}
 	if ((val = GetEdictFieldValue(ent, qcvm->extfields.modelflags)))
 		state->effects |= ((unsigned int)val->_float)<<24;
-	if (!ent->v.movetype || ent->v.movetype == MOVETYPE_STEP)
+	if (ent->v.movetype == MOVETYPE_STEP)
 		state->eflags |= EFLAGS_STEP;
 
 	state->pmovetype = 0;
