@@ -1400,7 +1400,13 @@ static void CL_ParseServerInfo (void)
 	CL_ClearState ();
 	cl.protocol_dpdownload = i;
 
-// parse protocol version number
+	if (sv.loadgame)
+		V_StopPitchDrift ();
+
+	Key_ClearStates ();
+	IN_ClearStates ();
+
+	// parse protocol version number
 	for(;;)
 	{
 		i = MSG_ReadLong ();
