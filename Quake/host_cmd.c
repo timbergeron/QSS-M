@@ -5402,6 +5402,9 @@ static void Host_Loadgame_f (void)
 	{
 		CL_EstablishConnection ("local");
 	}
+
+	if (cls.state != ca_dedicated)
+		IN_UpdateGrabs(); // QSS-M adaptation of upstream quickload input refresh
 }
 
 //============================================================================
