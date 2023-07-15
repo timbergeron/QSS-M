@@ -2252,6 +2252,8 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 				lerpdata->blend = CLAMP (0.0f, (float)(cl.time - e->lerp.state.lerpstart) / (e->lerpfinish - e->lerp.state.lerpstart), 1.0f);
 			else
 				lerpdata->blend = CLAMP (0.0f, (float)(cl.time - e->lerp.state.lerpstart) / e->lerp.state.lerptime * s, 1.0f); // woods (iw) #democontrols
+			if (lerpdata->blend == 1.0f)
+				e->lerp.state.previouspose = e->lerp.state.currentpose;
 			lerpdata->pose1 = e->lerp.state.previouspose;
 			lerpdata->pose2 = e->lerp.state.currentpose;
 		}
@@ -3156,4 +3158,3 @@ void R_DrawAliasModel_ShowTris (entity_t *e)
 
 	glPopMatrix ();
 }
-
