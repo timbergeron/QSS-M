@@ -5385,6 +5385,10 @@ static void Host_Loadgame_f (void)
 		entnum++;
 	}
 
+	// Free edicts allocated during map loading but no longer used after restoring saved game state
+	for (i = entnum; i < qcvm->num_edicts; i++)
+		ED_Free(EDICT_NUM(i));
+
 	qcvm->num_edicts = entnum;
 	qcvm->time = time;
 
