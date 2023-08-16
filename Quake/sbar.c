@@ -823,15 +823,18 @@ void Sbar_SoloScoreboard (void)
 	char	str[256];
 	int minutes, seconds, tens, units;
 	int	min, smin, cmin, ticks;
+	int	left, right;
 	int	len, ct, pl, st, mpc; // woods ct, pl
 
 	if (cl.gametype != GAME_DEATHMATCH)  // woods only in singleplayer
 	{
 		sprintf(str, "Kills: %i/%i", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
+		left = 8 + strlen(str) * 8;
 		Sbar_DrawString(8, 12, str);
 
 		sprintf(str, "Secrets: %i/%i", cl.stats[STAT_SECRETS], cl.stats[STAT_TOTALSECRETS]);
-		Sbar_DrawString(312 - strlen(str) * 8, 12, str);
+		right = 312 - strlen(str) * 8;
+		Sbar_DrawString(right, 12, str);
 	}
 
 	else // woods add various times + PL
@@ -861,7 +864,7 @@ void Sbar_SoloScoreboard (void)
 		if (cl.gametype != GAME_DEATHMATCH) // woods only in singleplayer
 		{
 			q_snprintf(str, sizeof(str), "skill %i", (int)(skill.value + 0.5));
-			Sbar_DrawString(160 - strlen(str) * 4, 12, str);
+			Sbar_DrawString((left + right) / 2 - strlen(str) * 4, 12, str);
 		}
 
 		if (cl.maxclients > 1)
@@ -880,7 +883,6 @@ void Sbar_SoloScoreboard (void)
 			else
 				q_snprintf (str, sizeof(str), "%s", cl.mapname);
 		}
-
 		len = strlen (str);
 		if (len > 40)
 			Sbar_DrawScrollString (0, 4, 320, str);
@@ -2522,8 +2524,58 @@ qboolean flash () // woods #smartstatus
 
 /*
 ==================
-Sbar_DeathmatchOverlay
+Sbar_IntermissionPicForChar
+==================
+*/
+qpic_t *Sbar_IntermissionPicForChar (char c, int color)
+{
+	if ((unsigned)(c - '0') < 10)
+		return sb_nums[color][c - '0'];
+	if (c == '/')
+		return sb_slash;
+	if (c == ':')
+		return sb_colon;
+	if (c == '-')
+		return sb_nums[color][STAT_MINUS];
+	return NULL;
+}
 
+/*
+==================
+Sbar_IntermissionTextWidth
+==================
+*/
+int Sbar_IntermissionTextWidth (const char *str, int color)
+{
+	int len = 0;
+	while (*str)
+	{
+		qpic_t *pic = Sbar_IntermissionPicForChar (*str++, color);
+		len += pic ? pic->width : 24;
+	}
+	return len;
+}
+
+/*
+==================
+Sbar_IntermissionText
+==================
+*/
+void Sbar_IntermissionText (int x, int y, const char *str, int color)
+{
+	while (*str)
+	{
+		qpic_t *pic = Sbar_IntermissionPicForChar (*str++, color);
+		if (!pic)
+			continue;
+		Draw_Pic (x, y, pic);
+		x += pic ? pic->width : 24;
+	}
+}
+
+/*
+==================
+Sbar_DeathmatchOverlay
 ==================
 */
 void Sbar_DeathmatchOverlay (void)
@@ -2805,8 +2857,11 @@ Sbar_IntermissionOverlay
 void Sbar_IntermissionOverlay (void)
 {
 	qpic_t	*pic;
-	int	dig;
-	int	num;
+	char	time[32];
+	char	secrets[32];
+	char	monsters[32];
+	int	ltime, lsecrets, lmonsters;
+	int	total;
 
 	if (cl.qcvm.extfuncs.CSQC_DrawScores && !qcvm)
 	{
@@ -2849,26 +2904,28 @@ void Sbar_IntermissionOverlay (void)
 
 	GL_SetCanvas (CANVAS_MENU); //johnfitz
 
-	pic = Draw_CachePic ("gfx/complete.lmp");
-	Draw_Pic (64, 24, pic);
+	q_snprintf (time, sizeof (time), "%d:%02d", cl.completed_time / 60, cl.completed_time % 60);
+	q_snprintf (secrets, sizeof (secrets), "%d/%2d", cl.stats[STAT_SECRETS], cl.stats[STAT_TOTALSECRETS]);
+	q_snprintf (monsters, sizeof (monsters), "%d/%2d", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
+
+	ltime = Sbar_IntermissionTextWidth (time, 0);
+	lsecrets = Sbar_IntermissionTextWidth (secrets, 0);
+	lmonsters = Sbar_IntermissionTextWidth (monsters, 0);
+
+	total = q_max (ltime, lsecrets);
+	total = q_max (lmonsters, total);
 
 	pic = Draw_CachePic ("gfx/inter.lmp");
-	Draw_Pic (0, 56, pic);
+	total += pic->width + 24;
+	total = q_min (320, total);
+	Draw_Pic (160 - total / 2, 56, pic);
 
-	dig = cl.completed_time/60;
-	Sbar_IntermissionNumber (152, 64, dig, 3, 0); //johnfitz -- was 160
-	num = cl.completed_time - dig*60;
-	Draw_Pic (224,64,sb_colon); //johnfitz -- was 234
-	Draw_Pic (240,64,sb_nums[0][num/10]); //johnfitz -- was 246
-	Draw_Pic (264,64,sb_nums[0][num%10]); //johnfitz -- was 266
+	pic = Draw_CachePic ("gfx/complete.lmp");
+	Draw_Pic (160 - pic->width / 2, 24, pic);
 
-	Sbar_IntermissionNumber (152, 104, cl.stats[STAT_SECRETS], 3, 0); //johnfitz -- was 160
-	Draw_Pic (224,104,sb_slash); //johnfitz -- was 232
-	Sbar_IntermissionNumber (240, 104, cl.stats[STAT_TOTALSECRETS], 3, 0); //johnfitz -- was 248
-
-	Sbar_IntermissionNumber (152, 144, cl.stats[STAT_MONSTERS], 3, 0); //johnfitz -- was 160
-	Draw_Pic (224,144,sb_slash); //johnfitz -- was 232
-	Sbar_IntermissionNumber (240, 144, cl.stats[STAT_TOTALMONSTERS], 3, 0); //johnfitz -- was 248
+	Sbar_IntermissionText (160 + total / 2 - ltime, 64, time, 0);
+	Sbar_IntermissionText (160 + total / 2 - lsecrets, 104, secrets, 0);
+	Sbar_IntermissionText (160 + total / 2 - lmonsters, 144, monsters, 0);
 }
 
 
