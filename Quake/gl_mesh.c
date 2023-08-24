@@ -45,15 +45,15 @@ Original code by MH from RMQEngine
 void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 {
 	int i, j;
-	int maxverts_vbo;
-	unsigned short *indexes;
+	int mark;
 	trivertx_t *verts;
+	unsigned short *indexes;
+	unsigned short *remap;
 	aliasmesh_t *desc;
 
 	// there can never be more than this number of verts and we just put them all on the hunk
-	//	front/back logic says we can never have more than numverts*2
-	maxverts_vbo = paliashdr->numverts * 2;
-	desc = (aliasmesh_t *) Hunk_Alloc (sizeof (aliasmesh_t) * maxverts_vbo);
+	// (each vertex can be used twice, once with the original UVs and once with the seam adjustment)
+	desc = (aliasmesh_t *) Hunk_Alloc (sizeof (aliasmesh_t) * paliashdr->numverts * 2);
 
 	// there will always be this number of indexes
 	indexes = (unsigned short *) Hunk_Alloc (sizeof (unsigned short) * paliashdr->numtris * 3);
@@ -63,47 +63,51 @@ void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 	paliashdr->numindexes = 0;
 	paliashdr->numverts_vbo = 0;
 
+	mark = Hunk_LowMark ();
+
+	// each pair of elements in the remap array corresponds to one source vertex
+	// each value is the final index + 1, or 0 if the corresponding vertex hasn't been emitted yet
+	remap = (unsigned short *) Hunk_Alloc (paliashdr->numverts * 2 * sizeof (remap[0]));
+
 	for (i = 0; i < paliashdr->numtris; i++)
 	{
 		for (j = 0; j < 3; j++)
 		{
-			int v;
-
 			// index into hdr->vertexes
 			unsigned short vertindex = triangles[i].vertindex[j];
 
-			// basic s/t coords
-			int s = stverts[vertindex].s;
-			int t = stverts[vertindex].t;
+			// index into remap table
+			int v = vertindex * 2;
 
-			// check for back side and adjust texcoord s
-			if (!triangles[i].facesfront && stverts[vertindex].onseam) s += paliashdr->skinwidth / 2;
+			// check for back side
+			if (!triangles[i].facesfront && stverts[vertindex].onseam)
+				v++;
 
-			// see does this vert already exist
-			for (v = 0; v < paliashdr->numverts_vbo; v++)
+			// emit new vertex if it doesn't already exist
+			if (!remap[v])
 			{
-				// it could use the same xyz but have different s and t
-				if (desc[v].vertindex == vertindex && (int) desc[v].st[0] == s && (int) desc[v].st[1] == t)
-				{
-					// exists; emit an index for it
-					indexes[paliashdr->numindexes++] = v;
+				// basic s/t coords
+				int s = stverts[vertindex].s;
+				int t = stverts[vertindex].t;
 
-					// no need to check any more
-					break;
-				}
-			}
-
-			if (v == paliashdr->numverts_vbo)
-			{
-				// doesn't exist; emit a new vert and index
-				indexes[paliashdr->numindexes++] = paliashdr->numverts_vbo;
+				// check for back side and adjust texcoord s
+				if (v & 1)
+					s += paliashdr->skinwidth / 2;
 
 				desc[paliashdr->numverts_vbo].vertindex = vertindex;
 				desc[paliashdr->numverts_vbo].st[0] = s;
-				desc[paliashdr->numverts_vbo++].st[1] = t;
+				desc[paliashdr->numverts_vbo].st[1] = t;
+
+				remap[v] = ++paliashdr->numverts_vbo;
 			}
+
+			// emit index
+			indexes[paliashdr->numindexes++] = remap[v] - 1;
 		}
 	}
+
+	// free temporary remap data before allocating persistent pose vertices
+	Hunk_FreeToLowMark (mark);
 
 	switch(paliashdr->poseverttype)
 	{
