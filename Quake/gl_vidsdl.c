@@ -1399,7 +1399,6 @@ static void GL_CheckExtensions (void)
 	{
 		Con_Warning ("OpenGL version < 2, GLSL not available\n");
 	}
-	
 	// GLSL gamma
 	//
 	if (COM_CheckParm("-noglslgamma"))
@@ -1412,6 +1411,8 @@ static void GL_CheckExtensions (void)
 	{
 		Con_Warning ("GLSL gamma not available, using hardware gamma\n");
 	}
+	// GLSL alias model rendering
+	//
     
     // woods framebuffer Objects for #fxaa
 
@@ -1512,15 +1513,25 @@ static void GL_CheckExtensions (void)
 		Con_Warning ("GLSL alias model rendering not available, using Fitz renderer\n");
 	}
 
-	// NV_depth_clamp
+	// ARB_depth_clamp
 	//
 	if (COM_CheckParm("-nodepthclamp"))
 		Con_Warning ("depth_clamp disabled at command line\n");
+	else if (GL_ParseExtensionList(gl_extensions, "GL_ARB_depth_clamp"))
+	{
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("FOUND: ARB_depth_clamp\n");
+		gl_nv_depth_clamp = true;
+	}
 	else if (GL_ParseExtensionList(gl_extensions, "GL_NV_depth_clamp"))
 	{
 		if (cls.state == ca_disconnected) // woods #supressvidmsgs
 			Con_Printf("FOUND: GL_NV_depth_clamp\n");
 		gl_nv_depth_clamp = true;
+	}
+	else
+	{
+		Con_Warning ("depth_clamp not supported\n");
 	}
 	// glGenerateMipmap for warp textures
 	if (COM_CheckParm("-nowarpmipmaps"))
