@@ -41,10 +41,7 @@ void Matrix3x4_RM_Transform4(const float* matrix, const float* vector, float* pr
 
 cvar_t	gl_lightning_alpha = {"gl_lightning_alpha","1"}; // woods #lightalpha
 
-#define NUMVERTEXNORMALS	162
-
-float	r_avertexnormals[NUMVERTEXNORMALS][3] =
-{
+const float	r_avertexnormals[NUMVERTEXNORMALS][3] = {
 #include "anorms.h"
 };
 
@@ -52,15 +49,14 @@ extern vec3_t	lightcolor; //johnfitz -- replaces "float shadelight" for lit supp
 
 // precalculated dot products for quantized angles
 #define SHADEDOT_QUANT 16
-float	r_avertexnormal_dots[SHADEDOT_QUANT][256] =
-{
+static const float	r_avertexnormal_dots[SHADEDOT_QUANT][256] = {
 #include "anorm_dots.h"
 };
 
 extern	vec3_t			lightspot;
 
-float	*shadedots = r_avertexnormal_dots[0];
-vec3_t	shadevector;
+static const float	*shadedots = r_avertexnormal_dots[0];
+static vec3_t	shadevector;
 
 float	entalpha; //johnfitz
 

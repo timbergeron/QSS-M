@@ -29,8 +29,7 @@ cvar_t r_waterwarp = {"r_waterwarp", "1", CVAR_ARCHIVE};
 int gl_warpimagesize;
 float load_subdivide_size; //johnfitz -- remember what subdivide_size value was when this map was loaded
 
-float	turbsin[] =
-{
+static const float	turbsin[] = {
 #include "gl_warp_sin.h"
 };
 

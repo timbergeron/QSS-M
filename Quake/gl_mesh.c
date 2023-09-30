@@ -134,9 +134,6 @@ void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 	}
 }
 
-#define NUMVERTEXNORMALS	 162
-extern	float	r_avertexnormals[NUMVERTEXNORMALS][3];
-
 /*
 ================
 GLMesh_LoadVertexBuffer
@@ -436,7 +433,7 @@ void GLMesh_DeleteVertexBuffers (void)
 	
 	if (!gl_vbo_able)
 		return;
-	
+
 	for (j = 1; j < MAX_MODELS; j++)
 	{
 		if (!(m = cl.model_precache[j])) break;
