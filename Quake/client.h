@@ -287,6 +287,7 @@ typedef struct
 
 
 	float		last_received_message;	// (realtime) for net trouble icon
+	float		spawntime;		// time when signon 4 was received
 
 //
 // information that is static for the entire time connected to a server

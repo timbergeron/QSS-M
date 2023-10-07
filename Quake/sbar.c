@@ -1140,7 +1140,7 @@ void Sbar_DrawInventory (void)
 		{
 			if (cl.items & (1<<(28+i)))
 			{
-				time = cl.item_gettime[28+i];
+				time = q_max (cl.item_gettime[28+i], cl.spawntime);
 				if (time && time > cl.time - 2 && flashon)
 				{	// flash frame
 					sb_updates = 0;
@@ -1394,7 +1394,7 @@ void Sbar_DrawInventory_QW (void)
 			{
 				if (cl.items & (1 << (28 + i)))
 				{
-					time = cl.item_gettime[28 + i];
+					time = q_max (cl.item_gettime[28 + i], cl.spawntime);
 					if (time && time > cl.time - 2 && flashon)
 					{	// flash frame
 						sb_updates = 0;

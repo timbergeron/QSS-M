@@ -740,6 +740,7 @@ void CL_SignonReply (void)
 		break;
 
 	case 4:
+		cl.spawntime = cl.mtime[0];
 		SCR_EndLoadingPlaque ();		// allow normal screen updates
 
 		if (cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected && !cl_ambient.value) // woods for no background sounds #stopsound
