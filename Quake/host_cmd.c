@@ -3007,11 +3007,17 @@ void SkyList_Init (void)
 		{
 			pack_t* pak;
 			int i;
+			const char prefix[] = "gfx/env/";
+			const size_t prefix_len = sizeof(prefix) - 1;
 			for (i = 0, pak = search->pack; i < pak->numfiles; i++)
 			{
-				if (SkyhasValidExtension (pak->files[i].name)) {
+				char* name = pak->files[i].name;
+				if (strlen(name) <= prefix_len || q_strncasecmp(name, prefix, prefix_len))
+					continue;
+				if (SkyhasValidExtension (name)) {
 					char skyname[32];
-					COM_StripExtension (pak->files[i].name, skyname, sizeof(skyname));
+					name += prefix_len;
+					COM_StripExtension (name, skyname, sizeof(skyname));
 					skyname[strlen(skyname) - 2] = '\0'; // remove "bk" part
 					FileList_Add (skyname, NULL, &skylist); // woods #demolistsort add arg
 				}
