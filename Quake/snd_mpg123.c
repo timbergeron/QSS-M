@@ -99,6 +99,9 @@ static qboolean S_MP3_CodecOpenStream (snd_stream_t *stream)
 		goto _fail;
 	}
 
+	if (!developer.value)
+		mpg123_param(priv->handle, MPG123_ADD_FLAGS, MPG123_QUIET, 1.);
+
 	if (mpg123_replace_reader_handle(priv->handle, mp3_read, mp3_seek, NULL) != MPG123_OK ||
 	    mpg123_open_handle(priv->handle, &stream->fh) != MPG123_OK)
 	{
