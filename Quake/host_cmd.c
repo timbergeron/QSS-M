@@ -4203,6 +4203,7 @@ static void Host_SetPos_f(void)
 {
 	int     i, numargs;
 	float   args[6];
+	vec3_t	forward, right, up;
 	
 	if (cmd_source != src_client)
 	{
@@ -4230,6 +4231,9 @@ static void Host_SetPos_f(void)
 		sv_player->v.fixangle = 1;
 
 		VectorClear(sv_player->v.velocity);
+
+		AngleVectors(sv_player->v.angles, forward, right, up);
+		S_Update(sv_player->v.origin, forward, right, up);
 
 		SV_LinkEdict(sv_player, false);
 		return;
@@ -4284,6 +4288,9 @@ static void Host_SetPos_f(void)
 		sv_player->v.fixangle = 1;
 	}
 	
+	AngleVectors(sv_player->v.angles, forward, right, up);
+	S_Update(sv_player->v.origin, forward, right, up);
+
 	SV_LinkEdict (sv_player, false);
 }
 
