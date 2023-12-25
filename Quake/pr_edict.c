@@ -404,6 +404,7 @@ const char *PR_GlobalString (int ofs)
 	static char	line[512];
 	const char	*s;
 	int		i;
+	static const int lastchari = Q_COUNTOF(line) - 2;
 	ddef_t		*def;
 	void		*val;
 
@@ -420,7 +421,11 @@ const char *PR_GlobalString (int ofs)
 	i = strlen(line);
 	for ( ; i < 20; i++)
 		strcat (line, " ");
-	strcat (line, " ");
+
+	if (i < lastchari)
+		strcat (line, " ");
+	else
+		line[lastchari] = ' ';
 
 	return line;
 }
@@ -429,6 +434,7 @@ const char *PR_GlobalStringNoContents (int ofs)
 {
 	static char	line[512];
 	int		i;
+	static const int lastchari = Q_COUNTOF(line) - 2;
 	ddef_t		*def;
 
 	def = ED_GlobalAtOfs(ofs);
@@ -440,7 +446,11 @@ const char *PR_GlobalStringNoContents (int ofs)
 	i = strlen(line);
 	for ( ; i < 20; i++)
 		strcat (line, " ");
-	strcat (line, " ");
+
+	if (i < lastchari)
+		strcat (line, " ");
+	else
+		line[lastchari] = ' ';
 
 	return line;
 }
