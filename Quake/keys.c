@@ -3154,6 +3154,16 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 	if (Sbar_HandleScoreboardKey(key, down))
 		return;
 
+	// Startup demo reels keep the classic behavior where most keys open the menu.
+	if (cls.demoplayback && cls.demoreelplayback && !cl_demoreel_playback_controls.value &&
+		down && key_dest == key_game && key != K_TAB &&
+		(consolekeys[key] || key == K_DPAD_UP || key == K_DPAD_DOWN ||
+		 key == K_DPAD_LEFT || key == K_DPAD_RIGHT))
+	{
+		M_ToggleMenu (1);
+		return;
+	}
+
 	// demo controls -- woods (iw) #democontrols
 
 	if (cls.demoplayback && key_dest == key_game)

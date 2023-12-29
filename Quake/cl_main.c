@@ -79,6 +79,7 @@ cvar_t cl_recordingdemo = {"cl_recordingdemo", "", CVAR_ROM};	//the name of the 
 cvar_t	cl_demo_format = {"cl_demo_format", "dem", CVAR_ARCHIVE};
 cvar_t	cl_demo_minframes = {"cl_demo_minframes", "0", CVAR_ARCHIVE}; // abs(value) hides shorter demos; <0 also deletes just-finished short demos
 cvar_t	cl_demoreel = {"cl_demoreel", "1", CVAR_ARCHIVE};
+cvar_t	cl_demoreel_playback_controls = {"cl_demoreel_playback_controls", "0", CVAR_ARCHIVE};
 
 cvar_t	cl_beams_polygons = {"cl_beams_polygons", "0", CVAR_ARCHIVE}; // woods #beamspoly
 cvar_t	cl_truelightning = {"cl_truelightning", "0",CVAR_ARCHIVE}; // woods for #truelight
@@ -753,6 +754,7 @@ void CL_Disconnect (void)
 	}
 
 	cls.demoplayback = cls.timedemo = false;
+	cls.demoreelplayback = false;
 	cls.demopaused = false;
 	cls.signon = 0;
 	cls.netcon = NULL;
@@ -1100,7 +1102,7 @@ Called to play the next demo in the demo loop
 */
 void CL_NextDemo (void)
 {
-	char	str[1024];
+	char	demoname[MAX_DEMONAME];
 
 	if (cls.demonum == -1)
 		return;		// don't play demos
@@ -1119,9 +1121,9 @@ void CL_NextDemo (void)
 
 	SCR_BeginLoadingPlaque ();
 
-	sprintf (str,"playdemo %s\n", cls.demos[cls.demonum]);
-	Cbuf_InsertText (str);
+	q_strlcpy (demoname, cls.demos[cls.demonum], sizeof(demoname));
 	cls.demonum++;
+	CL_PlayDemo (demoname, true);
 }
 
 /*
@@ -7857,6 +7859,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_demo_minframes);
 	Cvar_SetCompletion (&cl_demo_minframes, &CL_DemoMinFrames_Completion_f);
 	Cvar_RegisterVariable (&cl_demoreel);
+	Cvar_RegisterVariable (&cl_demoreel_playback_controls);
 
 	Cvar_RegisterVariable (&cl_beams_polygons); // woods #beamspoly
 	Cvar_RegisterVariable (&cl_truelightning); // woods for #truelight

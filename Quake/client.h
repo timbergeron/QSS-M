@@ -173,6 +173,7 @@ typedef struct
 // entering a map (and clearing client_state_t)
 	qboolean	demorecording;
 	qboolean	demoplayback;
+	qboolean	demoreelplayback;
 	qboolean	demo_had_overtime;
 	int		demo_marker_count;
 	int		demo_record_frame_count;
@@ -532,6 +533,7 @@ extern	cvar_t	cl_demo_minframes;
 extern	cvar_t	cl_shownet;
 extern	cvar_t	cl_nolerp;
 extern	cvar_t	cl_demoreel;
+extern	cvar_t	cl_demoreel_playback_controls;
 extern	cvar_t	cl_demoeyes;
 extern	cvar_t	cl_ctf_pub_modelswap;
 
@@ -610,6 +612,7 @@ void CL_Signon4 (void);
 void CL_Disconnect (void);
 void CL_Disconnect_f (void);
 void CL_NextDemo (void);
+void CL_PlayDemo (const char *name, qboolean demoreelplayback);
 
 void SV_UpdateInfo(int edict, const char *keyname, const char *value);
 

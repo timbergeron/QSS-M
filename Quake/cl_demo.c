@@ -2310,6 +2310,7 @@ void CL_StopPlayback (void)
 
 	if (!cls.demoplayback)
 	{
+		cls.demoreelplayback = false;
 #ifdef USE_ZLIB
 		CL_DZipCleanupTempDemo();
 #endif
@@ -2331,6 +2332,7 @@ void CL_StopPlayback (void)
 	CL_DZipCleanupTempDemo();
 #endif
 	cls.demoplayback = false;
+	cls.demoreelplayback = false;
 	cls.demopaused = false;
 	cls.demospeed = 1.f; // woods (iw) #democontrols
 	cls.demofile = NULL;
@@ -2845,7 +2847,7 @@ static qboolean CL_DemoResolvePlayback(const char *requested, FILE **out_file, q
 	return CL_DemoTryOpenPath(with_ext, with_ext, out_file, out_size, out_name, out_name_size);
 }
 
-static qboolean CL_StartDemoPlayback(FILE *demofile, qofs_t demo_size, const char *opened_name, qboolean restarting)
+static qboolean CL_StartDemoPlayback(FILE *demofile, qofs_t demo_size, const char *opened_name, qboolean restarting, qboolean demoreelplayback)
 {
 	cls.demofile = demofile;
 	q_strlcpy(demoplaying, opened_name, sizeof(demoplaying)); // store the resolved demo name for window title
@@ -2877,6 +2879,7 @@ static qboolean CL_StartDemoPlayback(FILE *demofile, qofs_t demo_size, const cha
 	}
 
 	cls.demoplayback = true;
+	cls.demoreelplayback = demoreelplayback;
 	cls.demopaused = false;
 	cls.demospeed = 1.f; // woods (iw) #democontrols
 	CL_ResetDemoSeekState();
@@ -2912,6 +2915,7 @@ static qboolean CL_DemoRestartPlayback(const char *requested)
 	FILE *demofile = NULL;
 	qofs_t demo_size = -1;
 	const float saved_basedemospeed = cls.basedemospeed ? cls.basedemospeed : 1.f;
+	const qboolean saved_demoreelplayback = cls.demoreelplayback;
 
 	q_strlcpy(requested_name, requested, sizeof(requested_name));
 	if (!requested_name[0])
@@ -2931,7 +2935,7 @@ static qboolean CL_DemoRestartPlayback(const char *requested)
 		return false;
 	}
 
-	if (!CL_StartDemoPlayback(demofile, demo_size, opened_name, true))
+	if (!CL_StartDemoPlayback(demofile, demo_size, opened_name, true, saved_demoreelplayback))
 		return false;
 
 	cls.basedemospeed = saved_basedemospeed;
@@ -3916,12 +3920,12 @@ void CL_JumpDemo_f(void)
 
 /*
 ====================
-CL_PlayDemo_f
+CL_PlayDemo
 
 play [demoname]
 ====================
 */
-void CL_PlayDemo_f (void)
+void CL_PlayDemo (const char *name, qboolean demoreelplayback)
 {
 	char	requested[MAX_OSPATH];
 	char	opened_name[MAX_OSPATH];
@@ -3930,22 +3934,11 @@ void CL_PlayDemo_f (void)
 	qboolean use_last_demo;
 	qboolean allow_last_fallback;
 
-	if (cmd_source != src_command)
-		return;
-
-	if (Cmd_Argc() != 2)
-	{
-		Con_Printf ("\nplaydemo <demoname> : plays a demo\n");
-		Con_Printf ("playdemo last       : plays last.dem or last.dz if present, otherwise the most recently played demo\n");
-		Con_Printf ("playdemo -l         : plays the most recently played demo\n\n"); // woods #lastdemo
-		return;
-	}
-
 // disconnect from server
 	CL_Disconnect ();
 
-	use_last_demo = !q_strcasecmp(Cmd_Argv(1), "-l");
-	allow_last_fallback = !q_strcasecmp(Cmd_Argv(1), "last");
+	use_last_demo = !q_strcasecmp(name, "-l");
+	allow_last_fallback = !q_strcasecmp(name, "last");
 
 	if (use_last_demo) // woods #lastdemo
 	{
@@ -3963,7 +3956,7 @@ void CL_PlayDemo_f (void)
 	}
 	else
 	{
-		q_strlcpy(requested, Cmd_Argv(1), sizeof(requested));
+		q_strlcpy(requested, name, sizeof(requested));
 	}
 
 	if (!FS_IsCaseSensitive()) // woods #filesystemsens
@@ -3991,8 +3984,29 @@ void CL_PlayDemo_f (void)
 		return;
 	}
 
-	if (!CL_StartDemoPlayback(demofile, demo_size, opened_name, false))
+	if (!CL_StartDemoPlayback(demofile, demo_size, opened_name, false, demoreelplayback))
 		return;
+}
+
+/*
+====================
+CL_PlayDemo_f
+====================
+*/
+void CL_PlayDemo_f (void)
+{
+	if (cmd_source != src_command)
+		return;
+
+	if (Cmd_Argc() != 2)
+	{
+		Con_Printf ("\nplaydemo <demoname> : plays a demo\n");
+		Con_Printf ("playdemo last       : plays last.dem or last.dz if present, otherwise the most recently played demo\n");
+		Con_Printf ("playdemo -l         : plays the most recently played demo\n\n"); // woods #lastdemo
+		return;
+	}
+
+	CL_PlayDemo (Cmd_Argv(1), false);
 }
 
 /*
