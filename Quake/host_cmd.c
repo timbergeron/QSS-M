@@ -4382,6 +4382,7 @@ static void Host_DoDamage(int func, edict_t* target, qboolean gib)
 	G_INT(OFS_PARM1) = EDICT_TO_PROG(sv_player);/* inflictor */
 	G_INT(OFS_PARM2) = G_INT(OFS_PARM1);        /* attacker  */
 	G_FLOAT(OFS_PARM3) = health + (gib ? 99.0f : 1.0f);
+	memset(&qcvm->globals[OFS_PARM4], 0, sizeof(float) * 3 * 4);
 
 	PR_ExecuteProgram(func);
 }
