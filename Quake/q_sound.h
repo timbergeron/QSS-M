@@ -99,6 +99,9 @@ void S_StopAllSounds(qboolean clear);
 void S_ClearBuffer (void);
 void S_Update (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up);
 void S_ExtraUpdate (void);
+void S_ClearPrecache (void);
+void S_BeginPrecaching (void);
+void S_EndPrecaching (void);
 
 void S_BlockSound (void);
 void S_UnblockSound (void);
@@ -190,4 +193,3 @@ wavinfo_t GetWavinfo (const char *name, byte *wav, int wavlength);
 void SND_InitScaletable (void);
 
 #endif	/* __QUAKE_SOUND__ */
-

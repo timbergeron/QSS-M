@@ -79,7 +79,6 @@ int		paintedtime;	// sample PAIRS
 int		s_rawend;
 portable_samplepair_t	s_rawsamples[MAX_RAW_SAMPLES];
 
-
 #define	MAX_SFX		MAX_SOUNDS
 static sfx_t	*known_sfx = NULL;	// hunk allocated [MAX_SFX]
 static int	num_sfx;
@@ -236,6 +235,19 @@ void BGM_Volume_Callback_f (cvar_t* var) // woods #usermute #mute
 		Sound_Toggle_Mute_f();
 }
 
+static void S_PrecacheAmbientSounds (void)
+{
+	if (!sound_started || nosound.value)
+	{
+		ambient_sfx[AMBIENT_WATER] = NULL;
+		ambient_sfx[AMBIENT_SKY] = NULL;
+		return;
+	}
+
+	ambient_sfx[AMBIENT_WATER] = S_PrecacheSound ("ambience/water1.wav");
+	ambient_sfx[AMBIENT_SKY] = S_PrecacheSound ("ambience/wind2.wav");
+}
+
 /*
 ================
 S_Init
@@ -319,8 +331,7 @@ void S_Init (void)
 //	if (shm->buffer)
 //		shm->buffer[4] = shm->buffer[5] = 0x7f;	// force a pop for debugging
 
-	ambient_sfx[AMBIENT_WATER] = S_PrecacheSound ("ambience/water1.wav");
-	ambient_sfx[AMBIENT_SKY] = S_PrecacheSound ("ambience/wind2.wav");
+	S_PrecacheAmbientSounds ();
 
 	S_CodecInit ();
 
@@ -349,7 +360,6 @@ void S_Shutdown (void)
 // =======================================================================
 // Load a sound
 // =======================================================================
-
 /*
 ==================
 S_FindName
@@ -798,6 +808,9 @@ static void S_UpdateAmbientSounds (void)
 		return;
 	}
 
+	if (!ambient_sfx[AMBIENT_WATER] || !ambient_sfx[AMBIENT_SKY])
+		S_PrecacheAmbientSounds ();
+
 	for (ambient_channel = 0; ambient_channel < NUM_AMBIENTS; ambient_channel++)
 	{
 		chan = &snd_channels[ambient_channel];
@@ -1226,6 +1239,23 @@ void S_LocalSound (const char *name)
 
 void S_ClearPrecache (void)
 {
+	int		i;
+	sfx_t	*sfx;
+
+	if (!snd_initialized || !known_sfx)
+		return;
+
+	S_StopAllSounds (true);
+
+	for (sfx = known_sfx, i = 0; i < num_sfx; i++, sfx++)
+	{
+		if (sfx->cache.data)
+			Cache_Free (&sfx->cache, false);
+	}
+
+	memset (known_sfx, 0, MAX_SFX * sizeof(*known_sfx));
+	num_sfx = 0;
+	memset (ambient_sfx, 0, sizeof(ambient_sfx));
 }
 
 
@@ -1237,4 +1267,3 @@ void S_BeginPrecaching (void)
 void S_EndPrecaching (void)
 {
 }
-
