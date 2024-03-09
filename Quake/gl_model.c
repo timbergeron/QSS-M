@@ -3739,7 +3739,7 @@ static void *Mod_LoadAliasFrame (void * pin, maliasframedesc_t *frame, int pvtyp
 
 	pdaliasframe = (daliasframe_t *)pin;
 
-	strcpy (frame->name, pdaliasframe->name);
+	q_strlcpy (frame->name, pdaliasframe->name, sizeof (frame->name));
 	frame->firstpose = posenum;
 	frame->numposes = 1;
 
