@@ -3934,6 +3934,29 @@ void COM_ResetGameDirectories(char *newgamedirs)
 //==============================================================================
 //johnfitz -- dynamic gamedir stuff -- modified by QuakeSpasm team.
 //==============================================================================
+
+/*
+=================
+COM_GameDirExists
+
+Checks if a gamedir exists in either the base dir or user dir
+=================
+*/
+static qboolean COM_GameDirExists (const char *game)
+{
+	if (Sys_FileType (va ("%s/%s", com_basedir, game)) == FS_ENT_DIRECTORY)
+		return true;
+	if (host_parms->userdir != host_parms->basedir &&
+		Sys_FileType (va ("%s/%s", host_parms->userdir, game)) == FS_ENT_DIRECTORY)
+		return true;
+	return false;
+}
+
+/*
+=================
+COM_Game_f
+=================
+*/
 static void COM_Game_f (void)
 {
 	if (Cmd_Argc() > 1)
@@ -3974,13 +3997,10 @@ static void COM_Game_f (void)
 				if (!q_strcasecmp(p, GAMENAME))
 					continue; //don't add id1, its not interesting enough.
 
-				if (Sys_FileType(va("%s/%s", com_basedir, p)) != FS_ENT_DIRECTORY)
+				if (!COM_GameDirExists (p))
 				{
-					if (host_parms->userdir == host_parms->basedir || (Sys_FileType(va("%s/%s", host_parms->userdir, p)) != FS_ENT_DIRECTORY))
-					{
-						Con_Printf ("No such game directory \"%s\"\n", p);
-						return;
-					}
+					Con_Printf ("No such game directory \"%s\"\n", p);
+					return;
 				}
 
 				if (*paths)
@@ -5679,6 +5699,8 @@ void COM_InitFilesystem (void) //johnfitz -- modified based on topaz's tutorial
 		{
 			if (!*p || !strcmp(p, ".") || strstr(p, "..") || *p=='/' || *p=='\\' || strstr(p, ":"))
 				Sys_Error ("gamedir should be a single directory name, not a path\n");
+			if (!COM_GameDirExists (p))
+				Sys_Error ("No such game directory \"%s\"", p);
 			com_modified = true;
 			COM_AddGameDirectory (p);
 		}
