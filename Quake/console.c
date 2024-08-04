@@ -2779,10 +2779,11 @@ static void Con_AddToTabListInternal (const char* name, const char* partial, con
 	tab_t* t, * insert;
 	char* i_bash, * i_bash2;
 	const char* i_name, * i_name2;
-	size_t	len, matchlen;
+	size_t	namelen, matchlen, typelen;
 	int		allocsize, mark;
 	const char* match = match_name ? match_name : name;
 	qboolean match_is_name = (!match_name || !strcmp(match_name, name));
+	char*	storage;
 
 	if (!Con_Match (match, partial))
 		return;
@@ -2824,23 +2825,32 @@ static void Con_AddToTabListInternal (const char* name, const char* partial, con
 	}
 
 	mark = Hunk_LowMark ();
-	len = strlen (name);
-	matchlen = match_is_name ? 0 : strlen(match);
-	allocsize = (int)(sizeof(tab_t) + len + 1 + (match_is_name ? 0 : matchlen + 1));
+	namelen = strlen(name) + 1;
+	matchlen = match_is_name ? 0 : strlen(match) + 1;
+	typelen = type ? strlen(type) + 1 : 0;
+	allocsize = (int)(sizeof(tab_t) + namelen + matchlen + typelen);
 	t = (tab_t*)Hunk_AllocName (allocsize, "tablist");
-	memcpy (t + 1, name, len + 1);
-	t->name = (const char*)(t + 1);
+	storage = (char*)(t + 1);
+	memcpy (storage, name, namelen);
+	t->name = storage;
+	storage += namelen;
 	if (match_is_name)
 	{
 		t->matchname = t->name;
 	}
 	else
 	{
-		char* stored_match = (char*)(t + 1) + len + 1;
-		memcpy(stored_match, match, matchlen + 1);
-		t->matchname = stored_match;
+		memcpy(storage, match, matchlen);
+		t->matchname = storage;
+		storage += matchlen;
 	}
-	t->type = type;
+	if (type)
+	{
+		memcpy(storage, type, typelen);
+		t->type = storage;
+	}
+	else
+		t->type = NULL;
 	t->count = 1;
 	if (param)
 	{
