@@ -1105,6 +1105,7 @@ byte *Image_LoadLMP (FILE *f, int *width, int *height, enum srcformat *fmt)
 {
 	lmpheader_t	qpic;
 	size_t		pix;
+	int			mark;
 	void		*data;
 
 	if (fread(&qpic, sizeof(qpic), 1, f) != 1) // woods
@@ -1117,15 +1118,17 @@ byte *Image_LoadLMP (FILE *f, int *width, int *height, enum srcformat *fmt)
 
 	pix = qpic.width*qpic.height;
 
-	if (com_filesize != 8+pix)
+	if (com_filesize != sizeof (qpic) + pix)
 	{
-		fclose(f);
+		fclose (f);
 		return NULL;
 	}
 
+	mark = Hunk_LowMark ();
 	data = (byte *) Hunk_Alloc(pix); //+1 to allow reading padding byte on last line
 	if (fread(data, 1, pix, f) != pix) // woods
 	{
+		Hunk_FreeToLowMark (mark);
 		fclose(f);
 		return NULL;
 	}
