@@ -1743,6 +1743,7 @@ void Sky_ClearAll (void)
 	Skywind_Clear();
 	Sky_FreeCubemap();
 	skybox_cubemap_attempted = false;
+	Cvar_SetQuick (&r_skyfog, r_skyfog.default_string);
 }
 
 void Sky_ResetGL (void)
