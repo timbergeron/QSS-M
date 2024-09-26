@@ -1,0 +1,98 @@
+name: Windows CI MSVS
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Windows / ${{ matrix.platform }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, Win32]
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set environment variables
+      shell: pwsh
+      env:
+        MATRIX_PLATFORM: ${{ matrix.platform }}
+      run: |
+        $gitrev = (git describe --always)
+        $gitbranch = (git branch --show-current)
+        if ($gitbranch -eq "master" -or $gitbranch -eq "main") {
+          $ver_suffix = "-$gitrev"
+        } else {
+          $ver_suffix = "-$gitbranch-$gitrev"
+        }
+        $platform = $env:MATRIX_PLATFORM
+        if ($platform -eq "x64") {
+          $platform_alt = "win64"
+          $platform_short = "x64"
+          $exe_name = "QSS-M-w64.exe"
+        } else {
+          $platform_alt = "win32"
+          $platform_short = "x86"
+          $exe_name = "QSS-M-w32.exe"
+        }
+        $build_artifact = "QSS-M$ver_suffix-$platform_alt"
+        "VER_SUFFIX=$ver_suffix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "BUILD_ARTIFACT=$build_artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "BUILD_DIR=$build_artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "PLATFORM_ALT=$platform_alt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "PLATFORM_SHORT=$platform_short" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "EXE_NAME=$exe_name" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "ForceImportBeforeCppTargets=$($env:GITHUB_WORKSPACE)\Windows\VisualStudio\custom_build.props" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Build
+      shell: pwsh
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $msbuild = (& "$vswhere" -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1)
+        $options = @(
+          "-property:Configuration=Release"
+          "-property:Platform=${{ matrix.platform }}"
+          "-maxcpucount"
+          "-verbosity:minimal"
+        )
+        & $msbuild Windows\VisualStudio\quakespasm.sln $options
+        if (-not $?) { throw "Build failed" }
+
+    - name: Prepare archive
+      shell: pwsh
+      run: |
+        $compiledir = "Windows\VisualStudio\Build-quakespasm-sdl2\$($env:PLATFORM_SHORT)\Release"
+        $zipdir = "artifact\$($env:BUILD_ARTIFACT)"
+        mkdir $zipdir -Force
+
+        # Output variables for debugging
+        Write-Host "Compiled directory: $compiledir"
+        Write-Host "Zip directory: $zipdir"
+        Write-Host "Executable name: $env:EXE_NAME"
+
+        # Move and rename the executable
+        $exeFile = Get-ChildItem "$compiledir\*.exe" | Select-Object -First 1
+        if ($exeFile) {
+          $targetExePath = Join-Path $zipdir $env:EXE_NAME
+          if (Test-Path $targetExePath) {
+            Remove-Item $targetExePath
+          }
+          Move-Item $exeFile.FullName $targetExePath
+        } else {
+          Write-Error "Executable file not found in $compiledir"
+        }
+
+        # Copy remaining files
+        Copy-Item "$compiledir\*.dll" $zipdir
+        Copy-Item "Quake\qssm.pak" $zipdir
+        Copy-Item "Quakespasm.html" $zipdir
+        Copy-Item "Quakespasm.txt" $zipdir
+        Copy-Item "Quakespasm-Music.txt" $zipdir
+        Copy-Item "LICENSE.txt" $zipdir
+
+    - name: Upload archive
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.BUILD_ARTIFACT }}
+        path: artifact/*
+
