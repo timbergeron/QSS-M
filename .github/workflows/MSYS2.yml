@@ -1,0 +1,74 @@
+name: Windows CI MSYS
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Build on Windows ${{ matrix.platform }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: w64
+            arch: x86_64
+            bits: 64
+          - platform: w32
+            arch: i686
+            bits: 32
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        update: true
+        install: |
+          make
+          mingw-w64-${{ matrix.arch }}-toolchain
+          mingw-w64-${{ matrix.arch }}-SDL2
+          mingw-w64-${{ matrix.arch }}-libmad
+          mingw-w64-${{ matrix.arch }}-opus
+          mingw-w64-${{ matrix.arch }}-libvorbis
+          mingw-w64-${{ matrix.arch }}-zlib
+          mingw-w64-${{ matrix.arch }}-curl
+          zip
+          git
+          dos2unix
+
+    - name: Fix Line Endings and Set Permissions
+      shell: msys2 {0}
+      run: |
+        find . -name "*.sh" -exec dos2unix {} +
+        find . -name "*.sh" -exec chmod +x {} +
+
+    - name: Verify make installation
+      shell: msys2 {0}
+      run: |
+        which make
+        make --version
+
+    - name: Build
+      shell: msys2 {0}
+      env:
+        MSYSTEM: MINGW${{ matrix.bits }}
+        MSYS2_PATH_TYPE: inherit
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+      run: |
+        set -x
+        cd "$GITHUB_WORKSPACE"
+        export PATH=/usr/bin:/mingw${{ matrix.bits }}/bin:$PATH
+        which make
+        make --version
+        echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+        echo "Current directory: $(pwd)"
+        echo "Listing files:"
+        ls -al
+        ./build-${{ matrix.platform }}.sh
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: QSS-M ${{ matrix.platform }}
+        path: Quake/QSS-M-w*.zip
