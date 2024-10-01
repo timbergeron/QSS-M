@@ -1665,6 +1665,67 @@ static qboolean CompleteProtocols(const char* partial, void* unused)
 	return true;
 }
 
+static qboolean CompleteDownload(const char* partial, void* unused) // woods
+{
+	if (Cmd_Argc() != 2)
+		return false;
+
+	Con_AddToTabList("ctf", partial, NULL, NULL); // #demolistsort add arg
+	Con_AddToTabList("ra", partial, NULL, NULL);  // #demolistsort add arg
+
+	// Most common maps
+	const char* maps[] =
+	{
+		"aerowalk.bsp",
+		"ztndm3.bsp",
+		"bravado.bsp",
+		"skull.bsp",
+		"shifter_nq.bsp",
+		"schloss.bsp",
+		"povdmm4.bsp"
+
+	};
+
+	for (int i = 0; i < sizeof(maps) / sizeof(maps[0]); ++i) {
+		char path[256];
+		snprintf(path, sizeof(path), "maps/%s", maps[i]);
+		if (!COM_FileExists(path, NULL))
+			Con_AddToTabList(maps[i], partial, NULL, NULL); // #demolistsort add arg
+	}
+
+	return true;
+}
+
+static qboolean CompleteLS(const char* partial, void* unused) // woods
+{
+	if (Cmd_Argc() != 2)
+		return false;
+
+	// Common patterns to suggest
+	const char* patterns[] = {
+		"*.pak",
+		"*.txt",
+		"*",
+		"pak1.pak",
+		"?onfig.cfg",
+		"config*",
+		"*.bsp",
+		"maps/*.bsp",
+		"sound/*.wav",
+		"models/*.mdl"
+	};
+
+	int i;
+	int num_patterns = sizeof(patterns) / sizeof(patterns[0]);
+
+	for (i = 0; i < num_patterns; ++i) {
+		if (strncmp(partial, patterns[i], strlen(partial)) == 0) 
+			Con_AddToTabList(patterns[i], partial, NULL, NULL);
+	}
+
+	return true;
+}
+
 qboolean CompleteImageList (const char* partial, void* unused); // woods
 qboolean CompleteSoundList (const char* partial, void* unused); // woods
 
@@ -1718,6 +1779,11 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "saveloc",				CompleteCurrentMap,		NULL },
 	{ "addloc",					CompleteAddLoc,			NULL },
 	{ "aliasedit",				CompleteAliasEditList,	NULL },
+	{ "download",				CompleteDownload,		NULL },
+	{ "ls",						CompleteLS,				NULL },
+	{ "dir",					CompleteLS,				NULL },
+	{ "which",					CompleteLS,				NULL },
+	{ "flocate",				CompleteLS,				NULL },
 };
 
 static const int num_arg_completion_types =
