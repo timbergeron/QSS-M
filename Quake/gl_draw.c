@@ -993,6 +993,9 @@ void Draw_ConsoleBackground (void)
 	float alpha;
 	plcolour_t conback_color;
 	const char* conback_str = scr_concolor.string;
+	float r, g, b;
+	byte* rgb_temp;
+	byte rgb[3];
 
 	// Parse the scr_conback cvar
 	conback_color = CL_PLColours_Parse(conback_str);
@@ -1046,17 +1049,23 @@ void Draw_ConsoleBackground (void)
 	}
 	else
 	{
-		byte* rgb = CL_PLColours_ToRGB(&conback_color); // Render a solid color background based on scr_conback
-		float r, g, b;
+		rgb_temp = CL_PLColours_ToRGB(&conback_color);
 
-		if (rgb)
+		if (rgb_temp) // copy the RGB values to a local array to ensure safe usage
+
 		{
+			rgb[0] = rgb_temp[0];
+			rgb[1] = rgb_temp[1];
+			rgb[2] = rgb_temp[2];
+
 			r = rgb[0] / 255.0f;
 			g = rgb[1] / 255.0f;
 			b = rgb[2] / 255.0f;
 		}
 		else
-			r = g = b = 1.0f; // Fallback to white if RGB is not available
+		{
+			r = g = b = 0.0f; // fallback to black if RGB conversion fails
+		}
 
 		// Set the color with alpha
 		glColor4f(r, g, b, alpha);
