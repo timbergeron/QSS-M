@@ -254,6 +254,33 @@ static void ClearParticles_f (cvar_t* var)
 
 /*
 ===============
+GL_Skin_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void GL_Skin_Completion_f (cvar_t* cvar, const char* partial)
+{
+	Con_AddToTabList("0x66ff00", partial, "bright green", NULL); // #demolistsort add arg
+	Con_AddToTabList("0xfff700", partial, "bright yellow", NULL); // #demolistsort add arg
+	Con_AddToTabList("0xff00cd", partial, "bright pink", NULL); // #demolistsort add arg
+
+	return;
+}
+
+/*
+===============
+Cl_Damagehue_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void Cl_Damagehue_Completion_f (cvar_t* cvar, const char* partial)
+{
+	Con_AddToTabList("0xeb580e", partial, "bright orange", NULL); // #demolistsort add arg
+	Con_AddToTabList("0xff0000", partial, "red", NULL); // #demolistsort add arg
+
+	return;
+}
+
+/*
+===============
 R_Init
 ===============
 */
@@ -291,7 +318,9 @@ void R_Init (void)
 	Cvar_RegisterVariable (&gl_playermip);
 	Cvar_RegisterVariable (&gl_nocolors);
 	Cvar_RegisterVariable (&gl_enemycolor); // woods #enemycolors
+	Cvar_SetCompletion (&gl_enemycolor, &GL_Skin_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&gl_teamcolor); // woods #enemycolors
+	Cvar_SetCompletion (&gl_teamcolor, &GL_Skin_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&gl_laserpoint); // woods #laser
 	Cvar_RegisterVariable (&gl_laserpoint_alpha); // woods #laser
 	Cvar_RegisterVariable (&trace_any); // woods #tracers
@@ -334,6 +363,7 @@ void R_Init (void)
 
 	Cvar_RegisterVariable (&cl_damagehue);   // woods #damage
 	Cvar_RegisterVariable (&cl_damagehuecolor);   // woods #damage
+	Cvar_SetCompletion (&cl_damagehuecolor, &Cl_Damagehue_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable(&cl_autodemo);   // woods #autodemo
 
 	Cvar_RegisterVariable (&gl_zfix); // QuakeSpasm z-fighting fix
