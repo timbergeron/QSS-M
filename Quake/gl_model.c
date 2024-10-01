@@ -73,6 +73,20 @@ texture_t	*r_notexture_mip2; //johnfitz -- used for non-lightmapped surfs with a
 
 /*
 ===============
+Console_Color_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void Console_Color_Completion_f(cvar_t* cvar, const char* partial)
+{
+	Con_AddToTabList("0x000000", partial, "black", NULL); // #demolistsort add arg
+	Con_AddToTabList("0x1e1e1e", partial, "dark grey", NULL); // #demolistsort add arg
+	Con_AddToTabList("0x2c190c", partial, "quake brown", NULL); // #demolistsort add arg
+
+	return;
+}
+
+/*
+===============
 Mod_Init
 ===============
 */
@@ -92,6 +106,8 @@ void Mod_Init (void)
 	Cvar_RegisterVariable (&mod_lightscale_broken);
 	Cvar_RegisterVariable (&mod_lightgrid);
 	Cvar_RegisterVariable (&scr_concolor); // woods #concolor
+	Cvar_SetCompletion (&scr_concolor, &Console_Color_Completion_f); // woods #iwtabcomplete
+
 
 	Cmd_AddCommand ("mcache", Mod_Print);
 
