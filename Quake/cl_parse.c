@@ -2750,7 +2750,6 @@ static void CL_ParseStuffText(const char *msg)
 static qboolean CL_ParseSpecialPrints(const char *printtext)
 {
 	const char *e = printtext+strlen(printtext);
-	int ct; // woods #hidepings
 	if (cl.printtype == PRINT_PINGS)
 	{
 		//players are expected to be listed in slot order.
@@ -2792,9 +2791,7 @@ static qboolean CL_ParseSpecialPrints(const char *printtext)
 		cl.printtype = PRINT_NONE;
 	}
 
-	ct = cl.time - maptime; // woods connected map time #maptime
-
-if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realtime || cls.demoplayback || ct < 8))
+if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realtime || cls.demoplayback))
 	{
 		cl.printtype = PRINT_PINGS;
 		cl.printplayer = 0;
