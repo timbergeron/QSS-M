@@ -789,11 +789,12 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 	ClearAllStates ();
 
 	if (cls.state == ca_disconnected) // woods #supressvidmsgs
-		Con_SafePrintf ("Video mode %dx%dx%d %dHz (%d-bit z-buffer, %dx FSAA) initialized\n",
+		Con_SafePrintf ("Video mode %dx%dx%d %dHz %d ppi (%d-bit z-buffer, %dx FSAA) initialized\n",
 				VID_GetCurrentWidth(),
 				VID_GetCurrentHeight(),
 				VID_GetCurrentBPP(),
 				VID_GetCurrentRefreshRate(),
+				VID_GetCurrentDPI(), // woods add pixels per inch
 				depthbits,
 				fsaa_obtained);
 
