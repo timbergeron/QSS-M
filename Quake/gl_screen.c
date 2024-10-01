@@ -803,6 +803,20 @@ void SCR_LoadPics (void)
 }
 
 /*
+===============
+Crosshair_Color_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void Crosshair_Color_Completion_f(cvar_t* cvar, const char* partial)
+{
+	Con_AddToTabList("0xffffff", partial, "white", NULL); // #demolistsort add arg
+	Con_AddToTabList("0x00d11c", partial, "bright green", NULL); // #demolistsort add arg
+	Con_AddToTabList("0xff0000", partial, "red", NULL); // #demolistsort add arg
+
+	return;
+}
+
+/*
 ==================
 SCR_Init
 ==================
@@ -825,6 +839,7 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_consize); // woods #consize (joequake)
 	Cvar_RegisterVariable (&scr_crosshairscale);
 	Cvar_RegisterVariable (&scr_crosshaircolor); // woods #crosshair
+	Cvar_SetCompletion (&scr_crosshaircolor, &Crosshair_Color_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_crosshairalpha); // woods #crosshair
 	Cvar_RegisterVariable (&scr_crosshaircshift); // woods #crosshair
 	Cvar_RegisterVariable (&scr_crosshairoutline); // woods #crosshair
