@@ -749,6 +749,22 @@ void TexMgr_NewGame (void)
 }
 
 /*
+===============
+TexMgr_Anisotropy_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void TexMgr_Anisotropy_Completion_f(cvar_t* cvar, const char* partial)
+{
+	Con_AddToTabList("1", partial, "no filtering - bilinear", NULL);
+	Con_AddToTabList("2", partial, "2x - basic clarity", NULL);
+	Con_AddToTabList("4", partial, "4x - moderate clarity", NULL);
+	Con_AddToTabList("8", partial, "8x - good balance", NULL);
+	Con_AddToTabList("16", partial, "16x - highest quality", NULL);
+
+	return;
+}
+
+/*
 ================
 TexMgr_Init
 
@@ -780,6 +796,7 @@ void TexMgr_Init (void)
 	Cvar_RegisterVariable (&r_fastturb); // woods #fastturb
 	Cvar_RegisterVariable (&gl_texture_anisotropy);
 	Cvar_SetCallback (&gl_texture_anisotropy, &TexMgr_Anisotropy_f);
+	Cvar_SetCompletion (&gl_texture_anisotropy, &TexMgr_Anisotropy_Completion_f); // woods #iwtabcomplete
 	gl_texturemode.string = glmodes[glmode_idx].name1?glmodes[glmode_idx].name1:glmodes[glmode_idx].name2;
 	Cvar_RegisterVariable (&gl_texturemode);
 	Cvar_SetCallback (&gl_texturemode, &TexMgr_TextureMode_f);
