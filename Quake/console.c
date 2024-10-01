@@ -1755,6 +1755,7 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "ping",					CompleteFileList,		&serverlist },
 	{ "open",					CompleteFileList,		&folderlist },
 	{ "music",					CompleteFileList,		&musiclist },
+	{ "printtxt",				CompleteFileList,		&textlist },
 	{ "r_showbboxes_filter",	CompleteClassnames,		NULL },
 	{ "imagelist",				CompleteImageList,		NULL },
 	{ "imagedump",				CompleteImageList,		NULL },

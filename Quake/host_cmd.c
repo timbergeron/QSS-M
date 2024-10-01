@@ -1233,6 +1233,177 @@ void MusicList_Init(void)
 	}
 }
 
+//==============================================================================
+//woods -- text list management #textlist
+//==============================================================================
+
+filelist_item_t* textlist;
+
+static void TextList_Clear(void)
+{
+	FileList_Clear(&textlist);
+}
+
+void TextList_Rebuild(void)
+{
+	TextList_Clear();
+	TextList_Init();
+}
+
+int FileHasValidExtension(const char* filename)
+{
+	size_t len = strlen(filename);
+	if (len <= 2)
+		return 0;
+
+	const char* extensions[] = { ".txt", ".cfg", ".ent", ".json", ".loc" };
+	const size_t num_extensions = sizeof(extensions) / sizeof(extensions[0]);
+
+	for (size_t i = 0; i < num_extensions; ++i)
+	{
+		size_t ext_len = strlen(extensions[i]);
+		if (len >= ext_len)
+		{
+			const char* file_ext = filename + len - ext_len;
+			if (q_strcasecmp(file_ext, extensions[i]) == 0)
+				return 1;
+		}
+	}
+	return 0;
+}
+
+
+void FileList_Recurse(const char* basePath, int depth, const char* initialBasePath)
+{
+#ifdef _WIN32
+	char currentBasePath[MAX_OSPATH], searchPath[MAX_OSPATH], fullFileName[MAX_OSPATH];
+	WIN32_FIND_DATA fdat;
+	HANDLE fhnd;
+
+	if (depth > 2)
+		return; // Only go two directories deep
+
+	// Copy basePath to currentBasePath
+	q_strlcpy(currentBasePath, basePath, sizeof(currentBasePath));
+
+	q_snprintf(searchPath, sizeof(searchPath), "%s/*", currentBasePath);
+
+	fhnd = FindFirstFile(searchPath, &fdat);
+	if (fhnd == INVALID_HANDLE_VALUE)
+		return;
+
+	do
+	{
+		if (strcmp(fdat.cFileName, ".") != 0 && strcmp(fdat.cFileName, "..") != 0)
+		{
+			if (fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			{
+				// Build the path to the new directory
+				char newBasePath[MAX_OSPATH];
+				q_snprintf(newBasePath, sizeof(newBasePath), "%s/%s", currentBasePath, fdat.cFileName);
+				// Recurse into the directory
+				FileList_Recurse(newBasePath, depth + 1, initialBasePath);
+			}
+			else if (FileHasValidExtension(fdat.cFileName))
+			{
+				// Build the full file path
+				q_snprintf(fullFileName, sizeof(fullFileName), "%s/%s", currentBasePath, fdat.cFileName);
+				// Get the path relative to initialBasePath
+				const char* relativePath = fullFileName + strlen(initialBasePath);
+				if (*relativePath == '/' || *relativePath == '\\')
+					relativePath++; // Skip the leading '/' or '\'
+				FileList_Add(relativePath, NULL, &textlist); // Add file with proper path to list
+			}
+		}
+	} while (FindNextFile(fhnd, &fdat));
+
+	FindClose(fhnd);
+#else
+	char currentBasePath[MAX_OSPATH], fullFileName[MAX_OSPATH];
+	DIR* dir_p;
+	struct dirent* dir_t;
+
+	if (depth > 2)
+		return; // Only go two directories deep
+
+	// Copy basePath to currentBasePath
+	q_strlcpy(currentBasePath, basePath, sizeof(currentBasePath));
+
+	dir_p = opendir(currentBasePath);
+	if (dir_p == NULL)
+		return;
+
+	while ((dir_t = readdir(dir_p)) != NULL)
+	{
+		if (strcmp(dir_t->d_name, ".") != 0 && strcmp(dir_t->d_name, "..") != 0)
+		{
+			// Build the path to the item
+			char itemPath[MAX_OSPATH];
+			q_snprintf(itemPath, sizeof(itemPath), "%s/%s", currentBasePath, dir_t->d_name);
+
+			// Get file info to check if it's a directory
+			struct stat st;
+			if (stat(itemPath, &st) == -1)
+				continue;
+
+			if (S_ISDIR(st.st_mode))
+			{
+				// Recurse into the directory
+				FileList_Recurse(itemPath, depth + 1, initialBasePath);
+			}
+			else if (FileHasValidExtension(dir_t->d_name))
+			{
+				// Build the full file path
+				q_snprintf(fullFileName, sizeof(fullFileName), "%s/%s", currentBasePath, dir_t->d_name);
+				// Get the path relative to initialBasePath
+				const char* relativePath = fullFileName + strlen(initialBasePath);
+				if (*relativePath == '/')
+					relativePath++; // Skip the leading '/'
+				FileList_Add(relativePath, NULL, &textlist); // Add file with proper path to list
+			}
+		}
+	}
+	closedir(dir_p);
+#endif
+}
+
+void TextList_Init(void)
+{
+	TextList_Clear();
+
+	if (!com_basedir || !com_gamedir)
+		return;
+
+	const char* initialBasePath = com_basedir; // set initialBasePath to com_basedir
+
+	char id1Path[MAX_OSPATH]; // always search the "id1" directory
+#ifdef _WIN32
+	q_snprintf(id1Path, sizeof(id1Path), "%s\\id1", com_basedir);
+#else
+	q_snprintf(id1Path, sizeof(id1Path), "%s/id1", com_basedir);
+#endif
+	FileList_Recurse(id1Path, 0, initialBasePath);
+
+	char gameDirName[MAX_OSPATH]; // extract the game directory name from com_gamedir
+	strncpy(gameDirName, com_gamedir, sizeof(gameDirName));
+	gameDirName[sizeof(gameDirName) - 1] = '\0'; // ensure null-termination
+
+	size_t len = strlen(gameDirName); 	// remove trailing path separator if present
+	if (len > 0 && (gameDirName[len - 1] == '/' || gameDirName[len - 1] == '\\'))
+		gameDirName[len - 1] = '\0';
+
+	const char* lastSep = strrchr(gameDirName, '/');
+	if (!lastSep)
+		lastSep = strrchr(gameDirName, '\\');
+	if (lastSep)
+		memmove(gameDirName, lastSep + 1, strlen(lastSep));
+
+	if (q_strcasecmp(gameDirName, "id1") != 0) // if com_gamedir is not "id1", also search com_gamedir
+	{
+		FileList_Recurse(com_gamedir, 0, initialBasePath);
+	}
+}
+
 /*
 ==================
 Host_Mods_f -- johnfitz

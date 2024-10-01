@@ -3562,6 +3562,7 @@ static void COM_Game_f (void)
 		FolderList_Rebuild (); // woods #folderlist
 		ExecList_Rebuild (); // woods #execlist
 		MusicList_Rebuild (); // woods #musiclist
+		TextList_Rebuild (); // woods #textlist
 		M_CheckMods (); // woods #modsmenu (iw)
 
 		Con_Printf("\"game\" changed to \"%s\"\n", COM_GetGameNames(true));

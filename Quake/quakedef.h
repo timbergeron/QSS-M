@@ -397,6 +397,7 @@ extern filelist_item_t  *serverlist; // woods #serverlist
 extern filelist_item_t  *bookmarkslist; // woods #bookmarksmenu
 extern filelist_item_t*	 folderlist; // woods #folderlist
 extern filelist_item_t  *musiclist; // woods #musiclist
+extern filelist_item_t  *textlist; // woods #textlist
 
 void Write_List(filelist_item_t* list, const char* list_name); // woods #bookmarksmenu #serverlist
 
@@ -439,6 +440,7 @@ void BookmarksList_Init (void); // woods #bookmarksmenu
 void FolderList_Init (void); // woods #folderlist
 void SkyList_Init (void); // woods #folderlist
 void MusicList_Init (void); // woods #musiclist
+void TextList_Init (void); // woods #textlist
 
 
 void ExtraMaps_NewGame (void);
@@ -449,6 +451,7 @@ void ServerList_Rebuild (void); // woods #serverlist
 void FolderList_Rebuild (void); // woods #folderlist
 void ExecList_Rebuild (void); // woods #execlist
 void MusicList_Rebuild (void); // woods #musiclist
+void TextList_Rebuild (void); // woods #textlist
 void FileList_Add_MapDesc (const char* levelName); // woods #mapdescriptions
 
 void M_CheckMods (void); // woods #modsmenu (iw)
