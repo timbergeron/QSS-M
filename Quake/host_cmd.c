@@ -329,7 +329,7 @@ static void Host_Maps_f (void) // prints worldspawn map description
 		int word_length = strlen(level->name);
 		int num_spaces = (max_word_length + 2) - word_length;
 		if (num_spaces < 1) num_spaces = 1;
-		snprintf(combined, sizeof(combined), "%-*s %s", word_length + num_spaces, level->name, level->data);
+		snprintf(combined, sizeof(combined), "%-*s %.50s", word_length + num_spaces, level->name, level->data);
 
 		if (filter) 
 		{
@@ -636,8 +636,8 @@ void ExecList_Init(void)
 	struct dirent* dir_t;
 #endif
 	char		filestring[MAX_OSPATH];
-	char		cfgname[32];
-	char		cfgnamedir[32];
+	char		cfgname[MAX_OSPATH];
+	char		cfgnamedir[MAX_OSPATH];
 	searchpath_t* search;
 
 	for (search = com_searchpaths; search; search = search->next)
@@ -649,7 +649,8 @@ void ExecList_Init(void)
 		{
 			do
 			{
-				strcpy(cfgname, fdat.cFileName);
+				strncpy(cfgname, fdat.cFileName, sizeof(cfgname) - 1);
+				cfgname[sizeof(cfgname) - 1] = '\0';
 				FileList_Add(cfgname, NULL, &execlist); // woods #demolistsort add arg
 			} while (FindNextFile(fhnd, &fdat));
 			FindClose(fhnd);
@@ -661,8 +662,9 @@ void ExecList_Init(void)
 		{
 			do
 			{
-				strcpy(cfgname, fdat.cFileName);
-				sprintf(cfgnamedir, "aliases/%s", cfgname);
+				strncpy(cfgname, fdat.cFileName, sizeof(cfgname) - 1);
+				cfgname[sizeof(cfgname) - 1] = '\0';
+				q_snprintf(cfgnamedir, sizeof(cfgnamedir), "aliases/%s", cfgname);
 				FileList_Add(cfgnamedir, NULL, &execlist); // woods #demolistsort add arg
 			} while (FindNextFile(fhnd, &fdat));
 			FindClose(fhnd);
@@ -675,7 +677,7 @@ void ExecList_Init(void)
 			do
 			{
 				strcpy(cfgname, fdat.cFileName);
-				sprintf(cfgnamedir, "names/%s", cfgname);
+				q_snprintf(cfgnamedir, sizeof(cfgnamedir), "names/%s", cfgname);
 				FileList_Add(cfgnamedir, NULL, &execlist); // woods #demolistsort add arg
 			} while (FindNextFile(fhnd, &fdat));
 			FindClose(fhnd);
@@ -687,8 +689,9 @@ void ExecList_Init(void)
 		{
 			do
 			{
-				strcpy(cfgname, fdat.cFileName);
-				sprintf(cfgnamedir, "backups/%s", cfgname);
+				strncpy(cfgname, fdat.cFileName, sizeof(cfgname) - 1);
+				cfgname[sizeof(cfgname) - 1] = '\0';
+				q_snprintf(cfgnamedir, sizeof(cfgnamedir), "backups/%s", cfgname);
 				FileList_Add(cfgnamedir, NULL, &execlist); // woods #demolistsort add arg
 			} while (FindNextFile(fhnd, &fdat));
 			FindClose(fhnd);
@@ -700,8 +703,9 @@ void ExecList_Init(void)
 		{
 			do
 			{
-				strcpy(cfgname, fdat.cFileName);
-				sprintf(cfgnamedir, "configs/%s", cfgname);
+				strncpy(cfgname, fdat.cFileName, sizeof(cfgname) - 1);
+				cfgname[sizeof(cfgname) - 1] = '\0';
+				q_snprintf(cfgnamedir, sizeof(cfgnamedir), "configs/%s", cfgname);
 				FileList_Add(cfgnamedir, NULL, &execlist); // woods #demolistsort add arg
 			} while (FindNextFile(fhnd, &fdat));
 			FindClose(fhnd);
@@ -716,7 +720,8 @@ void ExecList_Init(void)
 				if (q_strcasecmp(COM_FileGetExtension(dir_t->d_name), "cfg") != 0)
 					continue;
 
-				strcpy(cfgname, dir_t->d_name);
+				strncpy(cfgname, dir_t->d_name, sizeof(cfgname) - 1);
+				cfgname[sizeof(cfgname) - 1] = '\0';
 				FileList_Add(cfgname, NULL, &execlist); // woods #demolistsort add arg
 			}
 			closedir(dir_p);
@@ -733,8 +738,9 @@ void ExecList_Init(void)
 				if (q_strcasecmp(COM_FileGetExtension(dir_t->d_name), "cfg") != 0)
 					continue;
 
-				strcpy(cfgname, dir_t->d_name);
-				sprintf(cfgnamedir, "aliases/%s", cfgname);
+				strncpy(cfgname, dir_t->d_name, sizeof(cfgname) - 1);
+				cfgname[sizeof(cfgname) - 1] = '\0';
+				q_snprintf(cfgnamedir, sizeof(cfgnamedir), "aliases/%s", cfgname);
 				FileList_Add(cfgnamedir, NULL, &execlist); // woods #demolistsort add arg
 			}
 			closedir(dir_p);
@@ -750,8 +756,9 @@ void ExecList_Init(void)
 				if (q_strcasecmp(COM_FileGetExtension(dir_t->d_name), "cfg") != 0)
 					continue;
 
-				strcpy(cfgname, dir_t->d_name);
-				sprintf(cfgnamedir, "names/%s", cfgname);
+				strncpy(cfgname, dir_t->d_name, sizeof(cfgname) - 1);
+				cfgname[sizeof(cfgname) - 1] = '\0';
+				q_snprintf(cfgnamedir, sizeof(cfgnamedir), "names/%s", cfgname);
 				FileList_Add(cfgnamedir, NULL, &execlist); // woods #demolistsort add arg
 			}
 			closedir(dir_p);
@@ -766,8 +773,9 @@ void ExecList_Init(void)
 				if (q_strcasecmp(COM_FileGetExtension(dir_t->d_name), "cfg") != 0)
 					continue;
 
-				strcpy(cfgname, dir_t->d_name);
-				sprintf(cfgnamedir, "configs/%s", cfgname);
+				strncpy(cfgname, dir_t->d_name, sizeof(cfgname) - 1);
+				cfgname[sizeof(cfgname) - 1] = '\0';
+				q_snprintf(cfgnamedir, sizeof(cfgnamedir), "configs/%s", cfgname);
 				FileList_Add(cfgnamedir, NULL, &execlist); // woods #demolistsort add arg
 			}
 			closedir(dir_p);
@@ -783,8 +791,9 @@ void ExecList_Init(void)
 				if (q_strcasecmp(COM_FileGetExtension(dir_t->d_name), "cfg") != 0)
 					continue;
 
-				strcpy(cfgname, dir_t->d_name);
-				sprintf(cfgnamedir, "backups/%s", cfgname);
+				strncpy(cfgname, dir_t->d_name, sizeof(cfgname) - 1);
+				cfgname[sizeof(cfgname) - 1] = '\0';
+				q_snprintf(cfgnamedir, sizeof(cfgnamedir), "backups/%s", cfgname);
 				FileList_Add(cfgnamedir, NULL, &execlist); // woods #demolistsort add arg
 			}
 			closedir(dir_p);
@@ -1371,7 +1380,7 @@ void TextList_Init(void)
 {
 	TextList_Clear();
 
-	if (!com_basedir || !com_gamedir)
+	if (com_basedir[0] == '\0' || com_gamedir[0] == '\0')
 		return;
 
 	const char* initialBasePath = com_basedir; // set initialBasePath to com_basedir

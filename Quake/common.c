@@ -4541,7 +4541,7 @@ void Write_List(filelist_item_t* list, const char* list_name) // woods #bookmark
 	filelist_item_t* current_item = list;
 	while (current_item != NULL)
 	{
-		if (current_item->data && strlen(current_item->data) > 0)
+		if (strlen(current_item->data) > 0)
 		{
 			fprintf(log_file, "%s,%s\n", current_item->name, current_item->data);
 		}

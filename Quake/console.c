@@ -1428,18 +1428,18 @@ static qboolean CompleteBindKeys (const char* partial, void* unused) // woods #i
 
 static qboolean CompleteBoundKeys(const char* partial, void* unused)
 {
-	if (Cmd_Argc() > 2) return false;
+    if (Cmd_Argc() > 2) return false;
 
-	for (int i = 0; i < MAX_KEYS; i++)
-	{
-		char* keybindingValue = keybindings[0][i];
-		
-		if (keybindings[i] && keybindingValue) // Only process keys that have a binding
-		{
-			ProcessKeyBinding(i, partial);
-		}
-	}
-	return true;
+    for (int i = 0; i < MAX_KEYS; i++)
+    {
+        char* keybindingValue = keybindings[0][i];
+
+        if (keybindingValue && keybindingValue[0] != '\0')
+        {
+            ProcessKeyBinding(i, partial);
+        }
+    }
+    return true;
 }
 
 static qboolean CompleteUnbindKeys (const char* partial, void* unused) // woods #iwtabcomplete
