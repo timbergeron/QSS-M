@@ -1726,6 +1726,16 @@ static qboolean CompleteLS(const char* partial, void* unused) // woods
 	return true;
 }
 
+static qboolean CompleteIP(const char* partial, void* unused) // woods
+{
+	if (Cmd_Argc() != 2)
+		return false;
+	Con_AddToTabList("ext", partial, NULL, NULL); // #demolistsort add arg
+	Con_AddToTabList("local", partial, NULL, NULL); // #demolistsort add arg
+
+	return true;
+}
+
 qboolean CompleteImageList (const char* partial, void* unused); // woods
 qboolean CompleteSoundList (const char* partial, void* unused); // woods
 
@@ -1785,6 +1795,7 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "dir",					CompleteLS,				NULL },
 	{ "which",					CompleteLS,				NULL },
 	{ "flocate",				CompleteLS,				NULL },
+	{ "ip",						CompleteIP,				NULL }
 };
 
 static const int num_arg_completion_types =

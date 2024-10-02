@@ -41,6 +41,7 @@ int		DEFAULTnet_hostport = 26000;
 char		my_ipx_address[NET_NAMELEN];
 char		my_ipv4_address[NET_NAMELEN];
 char		my_ipv6_address[NET_NAMELEN];
+char        my_public_ip[NET_NAMELEN]; // woods #extip
 
 qboolean	listening = false; // woods #listens
 
@@ -76,6 +77,55 @@ int		net_driverlevel;
 
 double		net_time;
 
+static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) // woods #extip
+{
+	size_t realsize = size * nmemb;
+	char* buffer = (char*)userp;
+	size_t buffer_len = strlen(buffer);
+	size_t buffer_remaining = NET_NAMELEN - buffer_len - 1;
+
+	if (realsize > buffer_remaining) {
+		realsize = buffer_remaining;
+	}
+
+	memcpy(buffer + buffer_len, contents, realsize);
+	buffer[buffer_len + realsize] = '\0';
+
+	return realsize;
+}
+
+int GetExternalIP(void* data) // woods #extip
+{
+	CURL* curl;
+	CURLcode res;
+	char public_ip[NET_NAMELEN] = { 0 };
+
+	strncpy(my_public_ip, "UNKNOWN", sizeof(my_public_ip));
+
+	curl = curl_easy_init();
+	if (curl) {
+		curl_easy_setopt(curl, CURLOPT_URL, "http://checkip.amazonaws.com");
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)public_ip);
+		res = curl_easy_perform(curl);
+		if (res == CURLE_OK)
+		{
+			public_ip[strcspn(public_ip, "\n")] = '\0'; // Strip newline
+			strncpy(my_public_ip, public_ip, sizeof(my_public_ip) - 1);
+			my_public_ip[sizeof(my_public_ip) - 1] = '\0'; // Ensure null-termination
+			Con_DPrintf("Public IP: %s\n", my_public_ip);
+		}
+		else
+		{
+			Con_DPrintf("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		}
+		curl_easy_cleanup(curl);
+	}
+	else {
+		Con_DPrintf("curl_easy_init() failed\n");
+	}
+	return 0; // Return success
+}
 
 double SetNetTime (void)
 {
@@ -692,6 +742,51 @@ int NET_ListAddresses(qhostaddr_t *addresses, int maxaddresses)
 	return result;
 }
 
+#if defined(__APPLE__) || defined(__linux__)
+#include <ifaddrs.h>
+#include <net/if.h>
+
+int Unix_QueryAddresses(qhostaddr_t* addresses, int maxaddresses) // woods #extip
+{
+	struct ifaddrs* ifaddr, * ifa;
+	int family;
+	int count = 0;
+
+	if (getifaddrs(&ifaddr) == -1) {
+		perror("getifaddrs");
+		return 0;
+	}
+
+	for (ifa = ifaddr; ifa != NULL && count < maxaddresses; ifa = ifa->ifa_next) {
+		if (ifa->ifa_addr == NULL)
+			continue;
+
+		family = ifa->ifa_addr->sa_family;
+
+		// Skip loopback interfaces
+		if (ifa->ifa_flags & IFF_LOOPBACK)
+			continue;
+
+		// Only interested in IPv4 addresses (use AF_INET6 for IPv6)
+		if (family == AF_INET) {
+			char host[NI_MAXHOST];
+
+			if (getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in),
+				host, sizeof(host), NULL, 0, NI_NUMERICHOST) != 0) {
+				continue;
+			}
+
+			// Store the address directly into addresses[count]
+			q_strlcpy(addresses[count], host, NET_NAMELEN);
+			count++;
+		}
+	}
+
+	freeifaddrs(ifaddr);
+	return count;
+}
+#endif
+
 /*
 ==================
 NET_SendMessage
@@ -845,6 +940,63 @@ int NET_SendToAll (sizebuf_t *data, double blocktime)
 	return count;
 }
 
+void IP_f (void) // woods #extip
+{
+	int numaddresses;
+	qhostaddr_t addresses[16];
+	char buf[MAX_OSPATH];
+	int argc = Cmd_Argc();
+
+	numaddresses = NET_ListAddresses(addresses, sizeof(addresses) / sizeof(addresses[0]));
+
+	if (argc >= 2)
+	{
+		const char* arg = Cmd_Argv(1);
+
+		if (!q_strcasecmp(arg, "ext"))
+		{
+			if (SDL_SetClipboardText(my_public_ip) < 0)
+				Con_Printf("\nclipboard copy failed: %s\n\n", SDL_GetError());
+			else
+				Con_Printf("\nexternal IP copied to clipboard: ^m%s^m\n\n", my_public_ip);
+			return;
+
+		}
+		else if (!q_strcasecmp(arg, "local"))
+		{
+			if (numaddresses > 0 && addresses[0][0] != '\0')
+			{
+				strncpy(buf, addresses[0], sizeof(buf) - 1);
+				buf[sizeof(buf) - 1] = '\0';
+
+				if (SDL_SetClipboardText(buf) < 0)
+					Con_Printf("\nclipboard copy failed: %s\n\n", SDL_GetError());
+				else
+					Con_Printf("\nlocal IP copied to clipboard: ^m%s^m\n\n", buf);
+				return;
+			}
+			else
+				Con_Printf("\nno local IP addresses found\n\n");
+
+			return;
+		}
+		else
+		{
+			Con_Printf("\ninvalid argument. usage:\n");
+			Con_Printf("  ip                    - display local and external IPs\n");
+			Con_Printf("  ip ext                - copy external IP to clipboard\n");
+			Con_Printf("  ip local              - copy local IP to clipboard\n\n");
+			return;
+		}
+	}
+
+	if (numaddresses == 0 || addresses[0][0] == '\0')
+		Con_Printf("\n\nlocal:    UNKNOWN\n");
+	else
+		Con_Printf("\n\nlocal:    ^m%s^m\n", addresses[0]);
+
+	Con_Printf("external: ^m%s^m\n\n", my_public_ip);
+}
 
 //=============================================================================
 
@@ -901,6 +1053,7 @@ void NET_Init (void)
 	Cmd_AddCommand ("listen", NET_Listen_f);
 	Cmd_AddCommand ("maxplayers", MaxPlayers_f);
 	Cmd_AddCommand ("port", NET_Port_f);
+	Cmd_AddCommand ("ip", IP_f); // woods #extip
 
 	// initialize all the drivers
 	for (i = net_driverlevel = 0; net_driverlevel < net_numdrivers; net_driverlevel++)
@@ -909,6 +1062,12 @@ void NET_Init (void)
 			continue;
 		i++;
 		net_drivers[net_driverlevel].initialized = true;
+
+#if defined(__APPLE__) || defined(__linux__)
+		if (strcmp(net_drivers[net_driverlevel].name, "Datagram") == 0) // woods #extip
+			net_drivers[net_driverlevel].QueryAddresses = Unix_QueryAddresses;
+#endif
+
 		if (listening)
 			net_drivers[net_driverlevel].Listen (true);
 	}
@@ -936,6 +1095,8 @@ void NET_Init (void)
 	}
 
 	curl_global_init(CURL_GLOBAL_DEFAULT); // woods #libcurl
+
+	SDL_CreateThread(GetExternalIP, "ExternalIPThread", NULL); // woods #extip
 }
 
 /*
