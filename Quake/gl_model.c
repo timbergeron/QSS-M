@@ -3130,13 +3130,13 @@ qboolean Mod_LoadMapDescription(char* desc, size_t maxchars, const char* map)
 
 			if (is_message)
 			{
+				unsigned char* ch; // woods dequake
+				for (ch = (unsigned char*)com_token; *ch; ch++)
+					*ch = dequake[*ch];
+
 				// copy map title and clean it up a bit
 				for (j = k = 0; com_token[j] && (size_t)k + 1 < maxchars; j++)
-				{
-					unsigned char* ch; // woods dequake
-					for (ch = (unsigned char*)com_token; *ch; ch++)
-						*ch = dequake[*ch];
-					
+				{					
 					char c = com_token[j] & 0x7f;
 					if (c == '\n' || c == '\r') // replace newlines with spaces
 						c = ' ';
@@ -3153,14 +3153,29 @@ qboolean Mod_LoadMapDescription(char* desc, size_t maxchars, const char* map)
 				// remove trailing space, if any
 				if (k > 0 && desc[k - 1] == ' ')
 					--k;
-				desc[k++] = '\0';
 
-				if (strlen(desc) > MAX_DESC_LENGTH)
+				if (k < (int)maxchars)
+					desc[k] = '\0';
+				else
+					desc[maxchars - 1] = '\0';
+
+				if (strlen(desc) > (size_t)MAX_DESC_LENGTH)
 				{
-					desc[MAX_DESC_LENGTH-3] = '.';
-					desc[MAX_DESC_LENGTH-2] = '.';
-					desc[MAX_DESC_LENGTH-1] = '.';
-					desc[MAX_DESC_LENGTH] = '\0';
+					size_t trunc_len = MAX_DESC_LENGTH;
+					if (trunc_len + 1 > maxchars)
+						trunc_len = maxchars - 1;
+
+					if (trunc_len >= 3)
+					{
+						desc[trunc_len - 3] = '.';
+						desc[trunc_len - 2] = '.';
+						desc[trunc_len - 1] = '.';
+						desc[trunc_len] = '\0';
+					}
+					else
+					{
+						desc[trunc_len] = '\0'; // not enough space even for '...'
+					}
 				}
 
 				if (ret)
