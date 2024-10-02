@@ -94,14 +94,14 @@ void FileList_Add (const char *name, const char* data, filelist_item_t **list) /
 			return;
 	}
 
-	item = (filelist_item_t *) malloc(sizeof(filelist_item_t));
+	item = (filelist_item_t *) Z_Malloc(sizeof(filelist_item_t));
 	q_strlcpy (item->name, name, sizeof(item->name));
 	if (data)
 		q_strlcpy(item->data, data, sizeof(item->data)); // woods #demolistsort add arg
 
 	// insert each entry in alphabetical order
 	if (*list == NULL ||
-	    q_strcasecmp(item->name, (*list)->name) < 0) //insert at front
+		q_strnaturalcmp(item->name, (*list)->name) < 0) //insert at front
 	{
 		item->next = *list;
 		*list = item;
@@ -110,7 +110,7 @@ void FileList_Add (const char *name, const char* data, filelist_item_t **list) /
 	{
 		prev = *list;
 		cursor = (*list)->next;
-		while (cursor && (q_strcasecmp(item->name, cursor->name) > 0))
+		while (cursor && (q_strnaturalcmp(item->name, cursor->name) > 0))
 		{
 			prev = cursor;
 			cursor = cursor->next;
@@ -142,7 +142,7 @@ void FileList_Subtract (const char* name, filelist_item_t** list)
 				prev->next = cursor->next;
 			}
 
-			free(cursor);
+			Z_Free(cursor);
 			return;
 		}
 	}
@@ -155,7 +155,7 @@ static void FileList_Clear (filelist_item_t **list)
 	while (*list)
 	{
 		blah = (*list)->next;
-		free (*list);
+		Z_Free(*list);
 		*list = blah;
 	}
 }
