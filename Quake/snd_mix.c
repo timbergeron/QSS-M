@@ -535,6 +535,8 @@ void SND_InitScaletable (void)
 	int		i, j;
 	int		scale;
 
+	sfxvolume.value = SDL_clamp(sfxvolume.value, 0.0f, 1.0f); // woods
+
 	for (i = 0; i < 32; i++)
 	{
 		if (muted) // woods #mute -- adapted from Fitzquake Mark V
