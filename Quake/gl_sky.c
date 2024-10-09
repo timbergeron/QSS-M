@@ -48,6 +48,7 @@ gltexture_t	*skybox_textures[6];
 gltexture_t	*solidskytexture, *alphaskytexture;
 
 cvar_t r_fastsky = {"r_fastsky", "0", CVAR_ARCHIVE};
+cvar_t r_fastskycolor = {"r_fastskycolor", "", CVAR_ARCHIVE}; // woods #fastskycolor
 cvar_t r_sky_quality = {"r_sky_quality", "12", CVAR_NONE};
 cvar_t r_skyalpha = {"r_skyalpha", "1", CVAR_NONE};
 cvar_t r_skyfog = {"r_skyfog","0.5",CVAR_ARCHIVE};
@@ -140,9 +141,38 @@ void Sky_LoadTexture (qmodel_t *mod, texture_t *mt, enum srcformat fmt, unsigned
 	q_snprintf(texturename, sizeof(texturename), "%s:%s_front", mod->name, mt->name);
 	mt->fullbright = alphaskytexture = TexMgr_LoadImage (mod, texturename, width, height, fmt, front_data, "", (src_offset_t)front_data, TEXPREF_ALPHA);
 
-// calculate r_fastsky color based on average of all opaque foreground colors, if we can.
 	r = g = b = count = 0;
-	if (fmt == SRC_INDEXED)
+
+	const char* skycolor_str = r_fastskycolor.string;
+	plcolour_t sky_color = CL_PLColours_Parse(skycolor_str);
+	byte* rgb_temp; // temporary pointer for RGB values
+	byte rgb[3]; // local array to copy RGB values safely
+
+	int use_default = sky_color.type == 0;
+
+	if (!use_default) // If custom color is set
+	{
+		rgb_temp = CL_PLColours_ToRGB(&sky_color);
+		if (rgb_temp) // copy the RGB values to a local array for safe usage
+		{
+			rgb[0] = rgb_temp[0];
+			rgb[1] = rgb_temp[1];
+			rgb[2] = rgb_temp[2];
+
+			r = rgb[0];
+			g = rgb[1];
+			b = rgb[2];
+		}
+		else
+		{
+			r = g = b = 0.0f; // fallback to black if RGB conversion fails
+		}
+		skyflatcolor[0] = (float)r / 255.0f;
+		skyflatcolor[1] = (float)g / 255.0f;
+		skyflatcolor[2] = (float)b / 255.0f;
+	}
+// calculate r_fastsky color based on average of all opaque foreground colors, if we can.
+	else if (fmt == SRC_INDEXED)
 	{
 		for (i=0 ; i<width*height ; i++)
 		{
@@ -156,11 +186,11 @@ void Sky_LoadTexture (qmodel_t *mod, texture_t *mt, enum srcformat fmt, unsigned
 				count++;
 			}
 		}
-	}
 
-	skyflatcolor[0] = (float)r/(count*255);
-	skyflatcolor[1] = (float)g/(count*255);
-	skyflatcolor[2] = (float)b/(count*255);
+		skyflatcolor[0] = (float)r/(count*255);
+		skyflatcolor[1] = (float)g/(count*255);
+		skyflatcolor[2] = (float)b/(count*255);
+	}
 }
 
 /*
@@ -196,31 +226,62 @@ void Sky_LoadTextureQ64 (qmodel_t *mod, texture_t *mt)
 	// front layer, convert to RGBA and upload
 	p = r = g = b = count = 0;
 
-	for (i=mt->width*halfheight ; i!=0 ; i--)
+	const char* skycolor_str = r_fastskycolor.string;
+	plcolour_t sky_color = CL_PLColours_Parse(skycolor_str);
+	byte* rgb_temp; // temporary pointer for RGB values
+	byte rgb[3]; // local array to copy RGB values safely
+
+	int use_default = sky_color.type == 0;
+
+	if (!use_default)
 	{
-		rgba = &d_8to24table[*front++];
+		rgb_temp = CL_PLColours_ToRGB(&sky_color);
+		if (rgb_temp) // copy the RGB values to a local array for safe usage
+		{
+			rgb[0] = rgb_temp[0];
+			rgb[1] = rgb_temp[1];
+			rgb[2] = rgb_temp[2];
 
-		// RGB
-		front_rgba[p++] = ((byte*)rgba)[0];
-		front_rgba[p++] = ((byte*)rgba)[1];
-		front_rgba[p++] = ((byte*)rgba)[2];
-		// Alpha
-		front_rgba[p++] = 128; // this look ok to me!
+			skyflatcolor[0] = (float)rgb[0] / 255.0f;
+			skyflatcolor[1] = (float)rgb[1] / 255.0f;
+			skyflatcolor[2] = (float)rgb[2] / 255.0f;
+		}
+		else
+		{
+			skyflatcolor[0] = skyflatcolor[1] = skyflatcolor[2] = 0.0f; // fallback to black if RGB conversion fails
+		}
+	}
+	else
+	{
+		for (i = mt->width * halfheight; i != 0; i--)
+		{
+			rgba = &d_8to24table[*front++];
 
-		// Fast sky
-		r += ((byte *)rgba)[0];
-		g += ((byte *)rgba)[1];
-		b += ((byte *)rgba)[2];
-		count++;
+			// RGB
+			front_rgba[p++] = ((byte*)rgba)[0];
+			front_rgba[p++] = ((byte*)rgba)[1];
+			front_rgba[p++] = ((byte*)rgba)[2];
+			// Alpha
+			front_rgba[p++] = 128; // this look ok to me!
+
+			// Fast sky
+			r += ((byte *)rgba)[0];
+			g += ((byte *)rgba)[1];
+			b += ((byte *)rgba)[2];
+			count++;
+		}
 	}
 
 	q_snprintf(texturename, sizeof(texturename), "%s:%s_front", mod->name, mt->name);
 	mt->fullbright = alphaskytexture = TexMgr_LoadImage (mod, texturename, mt->width, halfheight, SRC_RGBA, front_rgba, "", (src_offset_t)front_rgba, TEXPREF_ALPHA);
 
-	// calculate r_fastsky color based on average of all opaque foreground colors
-	skyflatcolor[0] = (float)r/(count*255);
-	skyflatcolor[1] = (float)g/(count*255);
-	skyflatcolor[2] = (float)b/(count*255);
+	if (use_default)
+	{
+		// calculate r_fastsky color based on average of all opaque foreground colors
+		skyflatcolor[0] = (float)r/(count*255);
+		skyflatcolor[1] = (float)g/(count*255);
+		skyflatcolor[2] = (float)b/(count*255);
+	}
 }
 
 /*
@@ -525,6 +586,29 @@ static void R_SetSkyfog_f (cvar_t *var)
 }
 
 /*
+===============
+SKy_Color_Completion_f -- woods #iwtabcomplete #fastskycolor
+===============
+*/
+static void SKy_Color_Completion_f(cvar_t* cvar, const char* partial)
+{
+	Con_AddToTabList("0x465f6b", partial, "blue", NULL); // #demolistsort add arg
+	Con_AddToTabList("0x211529", partial, "purple", NULL); // #demolistsort add arg
+	Con_AddToTabList("0x000000", partial, "black", NULL); // #demolistsort add arg
+	Con_AddToTabList("0x1e1e1e", partial, "dark grey", NULL); // #demolistsort add arg
+	Con_AddToTabList("\"\"", partial, NULL, NULL); // #demolistsort add arg for literal ""
+
+	for (int i = 1; i <= 13; i++)
+	{
+		char num_str[3];
+		snprintf(num_str, sizeof(num_str), "%d", i);
+		Con_AddToTabList(num_str, partial, NULL, NULL); // #demolistsort add arg
+	}
+
+	return;
+}
+
+/*
 =============
 Sky_Init
 =============
@@ -534,6 +618,8 @@ void Sky_Init (void)
 	int		i;
 
 	Cvar_RegisterVariable (&r_fastsky);
+	Cvar_RegisterVariable (&r_fastskycolor); // woods #fastskycolor
+	Cvar_SetCompletion (&r_fastskycolor, &SKy_Color_Completion_f); // woods #iwtabcomplete #fastskycolor
 	Cvar_RegisterVariable (&r_sky_quality);
 	Cvar_RegisterVariable (&r_skyalpha);
 	Cvar_RegisterVariable (&r_skyfog);
