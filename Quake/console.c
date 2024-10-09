@@ -1361,6 +1361,9 @@ static const char* ParseCommand (void)
 
 static qboolean CompleteFileList (const char* partial, void* param) // woods #iwtabcomplete
 {
+	if (Cmd_Argc() != 2)
+		return false;
+	
 	filelist_item_t* file, ** list = (filelist_item_t**)param;
 	for (file = *list; file; file = file->next)
 		Con_AddToTabList (file->name, partial, NULL, NULL);
