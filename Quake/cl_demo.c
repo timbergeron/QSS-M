@@ -1033,6 +1033,7 @@ void CL_PlayDemo_f (void)
 
 // open the demo file
 	q_strlcpy (name, Cmd_Argv(1), sizeof(name));
+	q_strlwr (name); // woods case insensitive
 	q_strlcpy(demoplaying, Cmd_Argv(1), sizeof(demoplaying)); // store for window title
 	COM_AddExtension (name, ".dem", sizeof(name));
 
