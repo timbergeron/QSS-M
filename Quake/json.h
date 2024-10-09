@@ -62,5 +62,6 @@ const jsonentry_t	*JSON_Find (const jsonentry_t *entry, const char *name, jsonty
 const char			*JSON_FindString (const jsonentry_t *entry, const char *name);
 const double		*JSON_FindNumber (const jsonentry_t *entry, const char *name);
 const qboolean		*JSON_FindBoolean (const jsonentry_t *entry, const char *name);
+char				*JSON_EscapeString (const char* input); // woods #mapdescriptions
 
 #endif /* _JSON_H_ */

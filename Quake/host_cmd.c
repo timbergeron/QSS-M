@@ -29,6 +29,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <time.h> // woods #demolistsort
 #include <sys/stat.h> // woods #demolistsort
 #include "bgmusic.h" // woods #musiclist
+#include "json.h" // woods #mapdescriptions
 #ifndef _WIN32
 #include <dirent.h>
 #endif
@@ -259,6 +260,194 @@ void ExtraMaps_NewGame (void)
 int max_word_length = 0;
 qboolean descriptionsParsed = false;
 
+void FreeLevelList(filelist_item_t* list)
+{
+	filelist_item_t* level = list;
+	while (level)
+	{
+		filelist_item_t* next = level->next;
+		free(level);
+		level = next;
+	}
+}
+
+filelist_item_t* FindLevelInList(filelist_item_t* list, const char* name)
+{
+	filelist_item_t* level;
+	for (level = list; level; level = level->next)
+	{
+		// Add case-insensitive comparison
+		if (q_strcasecmp(level->name, name) == 0)
+			return level;
+	}
+	return NULL;
+}
+
+void InitializeMapDescJSON(void)
+{
+	char fname[MAX_OSPATH];
+	FILE* file;
+
+	q_snprintf(fname, sizeof(fname), "%s/id1/backups/mapdesc.json", com_basedir);
+
+	file = fopen(fname, "r");
+	if (file) {
+		fclose(file);
+		return;
+	}
+
+	file = fopen(fname, "w");
+	if (!file) {
+		Con_DPrintf("Failed to create mapdesc.json\n");
+		return;
+	}
+
+	fprintf(file, "[\n]\n");
+	fclose(file);
+}
+
+void SaveMapDescriptionsToJSON(filelist_item_t* extralevels)
+{
+	char fname[MAX_OSPATH];
+	FILE* file;
+
+	if (q_snprintf(fname, sizeof(fname), "%s/id1/backups/mapdesc.json", com_basedir) >= sizeof(fname)) {
+		Con_DPrintf("Path too long for buffer\n");
+		return;
+	}
+
+	file = fopen(fname, "w");
+	if (!file) {
+		Con_DPrintf("Failed to open mapdesc.json for writing\n");
+		return;
+	}
+
+	fprintf(file, "[\n"); // Start the JSON array
+
+	filelist_item_t* level;
+	qboolean first = true;
+	for (level = extralevels; level; level = level->next)
+	{
+		if (!first) // Add a comma between entries (but not before the first entry)
+			fprintf(file, ",\n");
+		first = false;
+
+		// Escape the level name and description dynamically
+		char* escaped_name = JSON_EscapeString(level->name);
+		char* escaped_description = JSON_EscapeString(level->data);
+
+		if (!escaped_name || !escaped_description) {
+			Con_DPrintf("Failed to escape JSON string\n");
+			free(escaped_name);
+			free(escaped_description);
+			fclose(file);
+			return;
+		}
+
+		fprintf(file, "  {\n");
+		fprintf(file, "    \"name\": \"%s\",\n", escaped_name);
+		fprintf(file, "    \"description\": \"%s\"\n", escaped_description);
+		fprintf(file, "  }");
+
+		free(escaped_name);
+		free(escaped_description);
+	}
+
+	fprintf(file, "\n]\n");
+	fclose(file);
+}
+
+void LoadMapDescriptionsFromJSON(filelist_item_t** extralevels_from_json)
+{
+	char fname[MAX_OSPATH];
+	FILE* file;
+	long file_size;
+	char* jsonText;
+	json_t* json;
+	filelist_item_t* last = NULL;
+
+	*extralevels_from_json = NULL;
+
+	InitializeMapDescJSON();
+
+	q_snprintf(fname, sizeof(fname), "%s/id1/backups/mapdesc.json", com_basedir);
+
+	file = fopen(fname, "rb");
+	if (!file) {
+		Con_DPrintf("Failed to open mapdesc.json\n");
+		return;
+	}
+
+	fseek(file, 0, SEEK_END);
+	file_size = ftell(file);
+	rewind(file);
+
+	if (file_size <= 0) {
+		fclose(file);
+		return;
+	}
+
+	jsonText = malloc(file_size + 1);
+	if (!jsonText) {
+		fclose(file);
+		return;
+	}
+
+	if (fread(jsonText, 1, file_size, file) != (size_t)file_size) {
+		Con_DPrintf("Failed to read entire file\n");
+		free(jsonText);
+		fclose(file);
+		return;
+	}
+
+	jsonText[file_size] = '\0';
+	fclose(file);
+
+	json = JSON_Parse(jsonText);
+	free(jsonText);
+
+	if (!json || !json->root || json->root->type != JSON_ARRAY) {
+		if (json) JSON_Free(json);
+		// If JSON is invalid, reinitialize the file
+		InitializeMapDescJSON();
+		return;
+	}
+
+	// Parse entries
+	const jsonentry_t* mapEntry;
+	for (mapEntry = json->root->firstchild; mapEntry; mapEntry = mapEntry->next)
+	{
+		const char* name = JSON_FindString(mapEntry, "name");
+		const char* description = JSON_FindString(mapEntry, "description");
+
+		if (!name || !description) continue;
+
+		filelist_item_t* item = malloc(sizeof(filelist_item_t));
+		if (!item) {
+			Con_DPrintf("Memory allocation failed\n");
+			FreeLevelList(*extralevels_from_json);
+			JSON_Free(json);
+			return;
+		}
+
+		Q_strncpy(item->name, name, MAX_QPATH - 1);
+		item->name[MAX_QPATH - 1] = '\0';
+
+		Q_strncpy(item->data, description, 49);
+		item->data[49] = '\0';
+
+		item->next = NULL;
+
+		if (!*extralevels_from_json)
+			*extralevels_from_json = item;
+		else
+			last->next = item;
+		last = item;
+	}
+
+	JSON_Free(json);
+}
+
 void UpdateMaxWordLength (const char* word)
 {
 	int word_length = strlen(word);
@@ -269,19 +458,46 @@ void UpdateMaxWordLength (const char* word)
 void ExtraMaps_ParseDescriptions (void)
 {
 	filelist_item_t* level;
+	filelist_item_t* extralevels_from_json = NULL;
 
-	for (level = extralevels; level; level = level->next) 
-		UpdateMaxWordLength(level->name);
+	LoadMapDescriptionsFromJSON(&extralevels_from_json);
 
 	for (level = extralevels; level; level = level->next)
+		UpdateMaxWordLength(level->name);
+
+	for (level = extralevels; level; level = level->next) // for each level, check if we have a cached description
 	{
-		char mapdesc[MAXDESC];
-		Mod_LoadMapDescription(mapdesc, sizeof(mapdesc), level->name);
+		filelist_item_t* json_level = FindLevelInList(extralevels_from_json, level->name);
+		if (json_level)
+		{
+			// Use cached description
+			strncpy(level->data, json_level->data, sizeof(level->data) - 1);
+			level->data[sizeof(level->data) - 1] = '\0';
+		}
+		else
+		{
+			// Load description from .bsp file
+			char mapdesc[MAXDESC];
+			Mod_LoadMapDescription(mapdesc, sizeof(mapdesc), level->name);
+			Q_strncpy(level->data, mapdesc, sizeof(level->data) - 1);
+			Con_DPrintf("cached new map description %s\n", level->name);
+			level->data[sizeof(level->data) - 1] = '\0';
 
-		FileList_Subtract(level->name, &extralevels);
-		FileList_Add(level->name, mapdesc, &extralevels);
-
+			// Add new description to the JSON list
+			filelist_item_t* new_json_level = malloc(sizeof(filelist_item_t));
+			Q_strncpy(new_json_level->name, level->name, MAX_QPATH - 1);
+			new_json_level->name[MAX_QPATH - 1] = '\0';
+			Q_strncpy(new_json_level->data, level->data, sizeof(new_json_level->data) - 1);
+			new_json_level->data[sizeof(new_json_level->data) - 1] = '\0';
+			new_json_level->next = extralevels_from_json;
+			extralevels_from_json = new_json_level;
+		}
 	}
+
+	SaveMapDescriptionsToJSON(extralevels_from_json);
+
+	FreeLevelList(extralevels_from_json);
+	extralevels_from_json = NULL;
 
 	descriptionsParsed = true;
 }
@@ -293,18 +509,9 @@ void FileList_Add_MapDesc (const char* levelName) // for a map download
 	char mapdesc[MAXDESC];
 	Mod_LoadMapDescription (mapdesc, sizeof(mapdesc), levelName);
 
-	int word_length = strlen(levelName);
-	int num_spaces = (max_word_length + 2) - word_length;
-	if (num_spaces < 1)
-		num_spaces = 1;
-
-	char* space_str = malloc ((num_spaces + 1) * sizeof(char));
-	memset (space_str, ' ', num_spaces);
-	space_str[num_spaces] = '\0';
-
 	FileList_Add (levelName, mapdesc, &extralevels);
 
-	free (space_str);
+	SaveMapDescriptionsToJSON(extralevels); // save the updated extralevels list to mapdesc.json
 }
 
 static void Host_Maps_f (void) // prints worldspawn map description

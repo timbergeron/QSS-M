@@ -310,3 +310,81 @@ const qboolean *JSON_FindBoolean (const jsonentry_t *entry, const char *name)
 	entry = JSON_Find (entry, name, JSON_BOOLEAN);
 	return entry ? &entry->boolean : NULL;
 }
+
+/*
+==================
+JSON_EscapeString -- woods #mapdescriptions
+==================
+*/
+char* JSON_EscapeString (const char* input)
+{
+	size_t input_len = strlen(input);
+	size_t max_len = input_len * 6 + 1;
+
+	// Allocate memory for the escaped string
+	char* escaped = (char*)malloc(max_len);
+	if (!escaped) {
+		return NULL;  // Memory allocation failed
+	}
+
+	size_t i = 0, j = 0;
+
+	while (input[i])
+	{
+		unsigned char c = input[i];
+
+		switch (c)
+		{
+		case '"':
+			escaped[j++] = '\\';
+			escaped[j++] = '"';
+			break;
+
+		case '\\':
+			escaped[j++] = '\\';
+			escaped[j++] = '\\';
+			break;
+
+		case '\n':
+			escaped[j++] = '\\';
+			escaped[j++] = 'n';
+			break;
+
+		case '\r':
+			escaped[j++] = '\\';
+			escaped[j++] = 'r';
+			break;
+
+		case '\t':
+			escaped[j++] = '\\';
+			escaped[j++] = 't';
+			break;
+
+		case '\b':
+			escaped[j++] = '\\';
+			escaped[j++] = 'b';
+			break;
+
+		case '\f':
+			escaped[j++] = '\\';
+			escaped[j++] = 'f';
+			break;
+
+		default:
+			if (c < 0x20 || c > 0x7E)  // Non-printable characters
+			{
+				snprintf(escaped + j, 7, "\\u%04x", c);  // Unicode escape sequence
+				j += 6;
+			}
+			else
+			{
+				escaped[j++] = c;  // Regular character
+			}
+			break;
+		}
+		i++;
+	}
+
+	escaped[j] = '\0';  // Null terminate the string
+	return escaped;
+}
