@@ -3367,6 +3367,7 @@ static void Host_Tell_f(void) // modified by woods to accept wildcards, status #
 		{
 			strncpy(name, cl.scores[i].name, 15); // copy scoreboard number player to name
 			name[15] = 0;
+			S_LocalSound("misc/talk.wav"); // woods #tell+
 		}
 	}
 
@@ -3415,6 +3416,7 @@ static void Host_Tell_f(void) // modified by woods to accept wildcards, status #
 	}
 
 	save = host_client;
+	qboolean recipient_found = false; // woods #tell+
 	for (j = 0, client = svs.clients; j < svs.maxclients; j++, client++)
 	{
 		if (!client->active || !client->spawned)
@@ -3423,9 +3425,15 @@ static void Host_Tell_f(void) // modified by woods to accept wildcards, status #
 			continue;
 		host_client = client;
 		SV_ClientPrintf("%s", text);
+		recipient_found = true; // woods #tell+
 		break;
 	}
 	host_client = save;
+
+	if (recipient_found) // woods #tell+
+		SV_ClientPrintf("\nmessage successfully sent to %s\n\n", name); // send confirmation to sender
+	else
+		SV_ClientPrintf("\nno such player named %s\n\n", name); // inform sender that recipient wasn't found
 }
 
 /*
