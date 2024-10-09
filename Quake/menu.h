@@ -89,6 +89,7 @@ void M_DrawSubpic (int x, int y, qpic_t* pic, int left, int top, int width, int 
 void M_DrawTransPic (int x, int y, qpic_t *pic);
 void M_DrawCheckbox (int x, int y, int on);
 void M_DrawTextBox(int x, int y, int width, int lines); // woods (iw) #democontrols
+void M_DrawTextBox_WithAlpha (int x, int y, int width, int lines, float alpha); // woods #centerprintbg (iw)
 
 #endif	/* _QUAKE_MENU_H */
 

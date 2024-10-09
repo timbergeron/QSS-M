@@ -105,6 +105,7 @@ extern qpic_t* sb_colon; // woods #varmatchclock
 
 //johnfitz -- new cvars
 cvar_t		scr_menuscale = {"scr_menuscale", "1", CVAR_ARCHIVE};
+cvar_t		scr_centerprintbg = {"scr_centerprintbg", "0", CVAR_ARCHIVE}; // 0 = off; 1 = text box; 2 = menu box; 3 = menu strip -- woods #centerprintbg (iw)
 cvar_t		scr_sbarscale = {"scr_sbarscale", "1", CVAR_ARCHIVE};
 cvar_t		scr_sbaralpha = {"scr_sbaralpha", "0.75", CVAR_ARCHIVE}; // woods #sbarstyles
 cvar_t		scr_sbaralphaqwammo = {"scr_sbaralphaqwammo", "1", CVAR_ARCHIVE};
@@ -191,6 +192,7 @@ char		scr_centerstring[1024];
 float		scr_centertime_start;	// for slow victory printing
 float		scr_centertime_off;
 int			scr_center_lines;
+int			scr_center_maxcols; // woods #centerprintbg (iw)
 int			scr_erase_lines;
 int			scr_erase_center;
 #define CPRINT_TYPEWRITER	(1u<<0)
@@ -429,7 +431,15 @@ void SCR_CenterPrint (const char *str) //update centerprint data
 		str+=2;
 	}
 
-	strncpy (scr_centerstring, str, sizeof(scr_centerstring)-1);
+	int cols; // woods #centerprintbg (iw)
+	q_strlcpy(scr_centerstring, str, sizeof(scr_centerstring)); // woods #centerprintbg (iw)
+	if (!scr_centerstring[0]) // woods #centerprintbg (iw)
+	{
+		scr_center_lines = 0;
+		scr_center_maxcols = 0;
+		return;
+	}
+
 	scr_centertime_off = (flags&CPRINT_PERSIST)?999999:scr_centertime.value;
 	scr_centertime_start = cl.time;
 
@@ -441,12 +451,71 @@ void SCR_CenterPrint (const char *str) //update centerprint data
 
 // count the number of lines for centering
 	scr_center_lines = 1;
+	scr_center_maxcols = 0; // woods #centerprintbg (iw)
 	str = scr_centerstring;
+	cols = 0; // woods #centerprintbg (iw)
 	while (*str)
 	{
 		if (*str == '\n')
+		{
 			scr_center_lines++;
+			scr_center_maxcols = q_max(scr_center_maxcols, cols); // woods #centerprintbg (iw)
+			cols = -1; // compensate the following ++
+		}
 		str++;
+		cols++;
+	}
+	scr_center_maxcols = q_max(scr_center_maxcols, cols);
+}
+
+static void SCR_DrawCenterStringBG(int y, float alpha) // woods #centerprintbg (iw)
+{
+	const char* str;
+	int i, len, lines, x;
+
+	if (cl.intermission || q_min(scr_center_lines, scr_center_maxcols) <= 0 || alpha <= 0.f)
+		return;
+
+	// skip leading empty lines (might be there just to reposition the text)
+	str = scr_centerstring;
+	while (*str == '\n')
+	{
+		str++;
+		y += CHARSIZE;
+	}
+
+	// skip trailing empty lines
+	len = (int)strlen(str);
+	while (len > 0 && str[len - 1] == '\n')
+		--len;
+
+	// count remaining lines
+	for (i = 0, lines = 1; i < len; i++)
+		if (str[i] == '\n')
+			lines++;
+
+	// draw the background
+	switch ((int)scr_centerprintbg.value)
+	{
+	case 1:
+		len = (scr_center_maxcols + 3) & ~1;
+		x = (320 - len * 8) / 2;
+		M_DrawTextBox_WithAlpha(x - 8, y - 12, len, lines + 1, alpha);
+		break;
+
+	case 2:
+		len = scr_center_maxcols + 2;
+		x = (320 - len * 8) / 2;
+		Draw_FillPlayer(x, y - 4, len * 8, lines * 8 + 8, CL_PLColours_Parse("0x000000"), alpha-0.5f);
+
+		break;
+
+	case 3:
+		Draw_FillPlayer(-(glwidth / 2), y - 4, glwidth, lines * 8 + 8, CL_PLColours_Parse("0x000000"), alpha - 0.2f);
+			break;
+
+	default:
+		return;
 	}
 }
 
@@ -493,6 +562,8 @@ void SCR_DrawCenterString (void) //actually do the drawing
 		y = 48;
 	if (crosshair.value)
 		y -= 8;
+
+	SCR_DrawCenterStringBG(y, alpha);
 
 	do
 	{
@@ -825,6 +896,7 @@ void SCR_Init (void)
 {
 	//johnfitz -- new cvars
 	Cvar_RegisterVariable (&scr_menuscale);
+	Cvar_RegisterVariable (&scr_centerprintbg); // woods #centerprintbg (iw)
 	Cvar_RegisterVariable (&scr_sbarscale);
 	Cvar_SetCallback (&scr_sbaralpha, SCR_Callback_refdef);
 	Cvar_RegisterVariable (&scr_sbaralpha);

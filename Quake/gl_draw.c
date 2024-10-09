@@ -1285,24 +1285,22 @@ void GL_SetCanvas (canvastype newcanvas)
 		glOrtho (0, glwidth/s, glheight/s, 0, -99999, 99999);
 		glViewport (glx, gly, glwidth, glheight);
 		break;
-	case CANVAS_MOD:       //  woods added for server join messages, flag status, etc #modprint
+	case CANVAS_MOD:       //  woods added for server join messages, flag status, etc #modprint #centerprintbg
 		s = (float)glwidth / vid.conwidth; //use console scale
 		s = CLAMP (1, scr_conscale.value, s);
-		// ericw -- doubled width to 640 to accommodate long keybindings
-		glOrtho (0, 640, 400, 0, -99999, 99999);
-		glViewport (glx + (glwidth - 320*s) / 2, gly + (glheight - 525*s) / 1.25, 640*s, 400*s);
+		glOrtho (-320, 640, 400, 0, -99999, 99999);
+		glViewport (glx + (glwidth - 960*s) / 2, gly + (glheight - 525*s) / 1.25, 960*s, 400*s);
 		break;
 	case CANVAS_HINT: // woods #qssmhints
 		s = CLAMP(1.0f, scr_conscale.value, (float)glwidth / vid.conwidth);
 		glOrtho(0.0f, 800.0f, 500.0f, 0.0f, -99999.0f, 99999.0f);
 		glViewport(glx + (glwidth - 800.0f * s) / 2.0f, gly + (glheight - 500.0f * s) / 2.0f, 800.0f * s, 500.0f * s);
 		break;
-	case CANVAS_OBSERVER:    //  woods for #observer mode
+	case CANVAS_OBSERVER:    //  woods for #observer mode #centerprintbg
 		s = (float)glwidth / vid.conwidth; //use console scale
 		s = CLAMP(1, scr_conscale.value, s);
-		// ericw -- doubled width to 640 to accommodate long keybindings
-		glOrtho (0, 640, 400, 0, -99999, 99999);
-		glViewport (glx + (glwidth - 320*s) / 2, gly + (glheight - 750*s) / (scr_conscale.value - 1) / 1.25, 640*s, 400*s);
+		glOrtho (-320, 640, 400, 0, -99999, 99999);
+		glViewport (glx + (glwidth - 960*s) / 2, gly + (glheight - 750*s) / (scr_conscale.value - 1) / 1.25, 960*s, 400*s);
 		break;
 	case CANVAS_SBAR:
 		s = CLAMP (1.0, scr_sbarscale.value, (float)glwidth / 320.0);

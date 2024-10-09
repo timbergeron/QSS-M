@@ -302,6 +302,65 @@ void M_DrawTextBox (int x, int y, int width, int lines)
 	M_DrawTransPic (cx, cy+8, p);
 }
 
+void M_DrawTextBox_WithAlpha (int x, int y, int width, int lines, float alpha) // woods #centerprintbg (iw)
+{
+	qpic_t* p;
+	int cx, cy;
+	int n;
+	float outlineThickness = 0.0f;
+	plcolour_t imageColor = CL_PLColours_Parse("0xffffff");
+
+	// draw left side
+	cx = x;
+	cy = y;
+	p = Draw_CachePic("gfx/box_tl.lmp");
+	Draw_Pic_RGBA_Outline(cx, cy, p, imageColor, alpha, outlineThickness);
+
+	p = Draw_CachePic("gfx/box_ml.lmp");
+	for (n = 0; n < lines; n++)
+	{
+		cy += 8;
+		Draw_Pic_RGBA_Outline(cx, cy, p, imageColor, alpha, outlineThickness);
+	}
+	p = Draw_CachePic("gfx/box_bl.lmp");
+	Draw_Pic_RGBA_Outline(cx, cy + 8, p, imageColor, alpha, outlineThickness);
+
+	// draw middle
+	cx += 8;
+	while (width > 0)
+	{
+		cy = y;
+		p = Draw_CachePic("gfx/box_tm.lmp");
+		Draw_Pic_RGBA_Outline(cx, cy, p, imageColor, alpha, outlineThickness);
+
+		p = Draw_CachePic("gfx/box_mm.lmp");
+		for (n = 0; n < lines; n++)
+		{
+			cy += 8;
+			if (n == 1)
+				p = Draw_CachePic("gfx/box_mm2.lmp");
+			Draw_Pic_RGBA_Outline(cx, cy, p, imageColor, alpha, outlineThickness);
+		}
+		p = Draw_CachePic("gfx/box_bm.lmp");
+		Draw_Pic_RGBA_Outline(cx, cy + 8, p, imageColor, alpha, outlineThickness);
+		width -= 2;
+		cx += 16;
+	}
+
+	// draw right side
+	cy = y;
+	p = Draw_CachePic("gfx/box_tr.lmp");
+	Draw_Pic_RGBA_Outline(cx, cy, p, imageColor, alpha, outlineThickness);
+
+	p = Draw_CachePic("gfx/box_mr.lmp");
+	for (n = 0; n < lines; n++)
+	{
+		cy += 8;
+		Draw_Pic_RGBA_Outline(cx, cy, p, imageColor, alpha, outlineThickness);
+	}
+	p = Draw_CachePic("gfx/box_br.lmp");
+	Draw_Pic_RGBA_Outline(cx, cy + 8, p, imageColor, alpha, outlineThickness);
+}
 
 void M_DrawQuakeCursor(int cx, int cy) // woods #skillmenu (iw)
 {

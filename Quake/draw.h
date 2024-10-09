@@ -44,6 +44,8 @@ byte *CL_PLColours_ToRGB(plcolour_t *c);
 extern	qpic_t		*draw_disc;	// also used on sbar
 extern	qboolean	custom_conchars; // woods (iw) #democontrols
 
+#define CHARSIZE	8 // woods #centerprintbg (iw)
+
 void Draw_Init (void);
 void Draw_Character (int x, int y, int num);
 void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha); // woods #iwtabcomplete
