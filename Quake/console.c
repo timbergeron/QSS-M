@@ -662,15 +662,23 @@ static void Con_Print (const char *txt)
 					}
 
 					char notifylist[MAXCMDLINE];
-					sprintf(notifylist, "%s", con_notifylist.string);
-					char* token = strtok(notifylist, " ");
+					snprintf(notifylist, sizeof(notifylist), "%s", con_notifylist.string);
 
-					if (strstr(txt, ": "))
-							while (token != NULL) {
-								if (Q_strcasestr(txt, token) && (strlen(strstr(txt, token)) == (strlen(token) + 1)))
-								SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
-							token = strtok(NULL, " ");
+					char* saveptr;
+					char* token = SDL_strtokr(notifylist, " ", &saveptr);
+
+					if (strstr(txt, ": ")) {
+						while (token != NULL) {
+							char* found = Q_strcasestr(txt, token);
+							if (found != NULL) {
+								// Check if the remaining string after the token is exactly one character
+								if (strlen(found) == strlen(token) + 1) {
+									SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
+								}
 							}
+							token = SDL_strtokr(NULL, " ", &saveptr);
+						}
+					}
 				}
 			}
 		}
