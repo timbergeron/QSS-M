@@ -438,9 +438,21 @@ void Sys_Printf (const char *fmt, ...)
 	q_vsnprintf (text, sizeof (text), fmt, argptr);
 	va_end(argptr);
 
-	unsigned char* ch;
-	for (ch = (unsigned char*)text; *ch; ch++)
-		*ch = dequake[*ch];
+	unsigned char* ch = (unsigned char*)text;
+	unsigned char* dst = (unsigned char*)text;
+
+	while (*ch)
+	{
+		if (*ch == '^' && *(ch + 1) != '\0' && *(ch + 1) == 'm')
+		{
+			ch += 2; // Skip over '^' and 'm'
+			continue;
+		}
+		*dst = dequake[*ch];
+		dst++;
+		ch++;
+	}
+	*dst = '\0';
 
 	printf ("%s", text);
 }
