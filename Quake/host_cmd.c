@@ -4204,7 +4204,7 @@ static void Host_SetPos_f(void)
 	int     i, numargs;
 	float   args[6];
 	vec3_t	forward, right, up;
-	
+
 	if (cmd_source != src_client)
 	{
 		Cmd_ForwardToServer ();
@@ -4275,19 +4275,19 @@ static void Host_SetPos_f(void)
 	sv_player->v.velocity[0] = 0;
 	sv_player->v.velocity[1] = 0;
 	sv_player->v.velocity[2] = 0;
-	
+
 	sv_player->v.origin[0] = args[0];
 	sv_player->v.origin[1] = args[1];
-	sv_player->v.origin[2] = args[2];;
-	
-	if (Cmd_Argc() == 6)
+	sv_player->v.origin[2] = args[2];
+
+	if (numargs == 6)
 	{
 		sv_player->v.angles[0] = args[3];
 		sv_player->v.angles[1] = args[4];
 		sv_player->v.angles[2] = args[5];
 		sv_player->v.fixangle = 1;
 	}
-	
+
 	AngleVectors(sv_player->v.angles, forward, right, up);
 	S_Update(sv_player->v.origin, forward, right, up);
 
