@@ -37,6 +37,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t	pausable;
 extern cvar_t	nomonsters; // woods #nomonsters (ironwail)
 
+// 0 = no, 1 = ask, 2 = when dead, 3 = always
+cvar_t sv_autoload = {"sv_autoload", "2", CVAR_ARCHIVE}; // woods #autoload (iw)
+
 int	current_skill;
 
 double		mpservertime;	// woods #servertime
@@ -2349,6 +2352,42 @@ static void Host_Randmap_f (void)
 
 /*
 ==================
+Host_AutoLoad -- woods #autoload (iw)
+==================
+*/
+static qboolean Host_AutoLoad(void)
+{
+	if (!sv_autoload.value || !sv.lastsave[0] || svs.maxclients != 1 || cl.intermission)
+		return false;
+
+	if (sv_autoload.value < 2.f)
+	{
+		if (!SCR_ModalMessage("Load last save? (y/n)", 0.f))
+		{
+			sv.lastsave[0] = '\0';
+			return false;
+		}
+	}
+	else if (sv_autoload.value < 3.f && sv_player->v.health > 0.f)
+		return false;
+
+	sv.autoloading = true;
+	Con_Printf("Autoloading...\n");
+	Cbuf_AddText(va("load \"%s\"\n", sv.lastsave));
+	Cbuf_Execute();
+
+	if (sv.autoloading)
+	{
+		sv.autoloading = false;
+		Con_Printf("Autoload failed!\n");
+		return false;
+	}
+
+	return true;
+}
+
+/*
+==================
 Host_Changelevel_f
 
 Goes to a new map, taking all clients along
@@ -2375,13 +2414,16 @@ static void Host_Changelevel_f (void)
 		Host_Error ("cannot find map %s", level);
 	//johnfitz*/
 
+	q_strlcpy(level, Cmd_Argv(1), sizeof(level)); // woods #autoload (iw)
+	if (!strcmp(sv.name, level) && Host_AutoLoad())
+		return;
+
 	key_dest = key_game;	// remove console or menu
 	if (cls.state != ca_dedicated)
 		IN_UpdateGrabs();	// -- S.A.
 
 	PR_SwitchQCVM(&sv.qcvm);
 	SV_SaveSpawnparms ();
-	q_strlcpy (level, Cmd_Argv(1), sizeof(level));
 	SV_SpawnServer (level);
 	PR_SwitchQCVM(NULL);
 	// also issue an error if spawn failed -- O.S.
@@ -2404,6 +2446,10 @@ static void Host_Restart_f (void)
 		return;
 	if (cmd_source != src_command)
 		return;
+
+	if (Host_AutoLoad()) // woods #autoload (iw)
+		return;
+
 	if (!sv.active)
 	{
 		if (*sv.name)
@@ -2675,6 +2721,12 @@ static void Host_SavegameComment (char *text)
 	text[SAVEGAME_COMMENT_LENGTH] = '\0';
 }
 
+static void Host_InvalidateSave(const char* relname) // woods #autoload (iw)
+{
+	if (!strcmp(sv.lastsave, relname))
+		sv.lastsave[0] = '\0';
+}
+
 /*
 ===============
 Host_Savegame_f
@@ -2682,6 +2734,8 @@ Host_Savegame_f
 */
 static void Host_Savegame_f (void)
 {
+	
+	char	relname[MAX_OSPATH]; // woods #autoload (iw)
 	char	name[MAX_OSPATH];
 	FILE	*f;
 	int	i;
@@ -2735,10 +2789,14 @@ static void Host_Savegame_f (void)
 		}
 	}
 
-	q_snprintf (name, sizeof(name), "%s/%s", com_gamedir, Cmd_Argv(1));
-	COM_AddExtension (name, ".sav", sizeof(name));
 
-	Con_Printf ("Saving game to %s...\n", name);
+	q_strlcpy(relname, Cmd_Argv(1), sizeof(relname)); // woods #autoload (iw)
+	COM_AddExtension(relname, ".sav", sizeof(relname));
+	Con_Printf("Saving game to ^m%s^m...\n", relname);
+
+	q_snprintf(name, sizeof(name), "%s/%s", com_gamedir, relname);
+
+
 	f = fopen (name, "w");
 	if (!f)
 	{
@@ -2812,6 +2870,8 @@ static void Host_Savegame_f (void)
 	fclose (f);
 	Con_Printf ("done.\n");
 	PR_SwitchQCVM(NULL);
+
+	q_strlcpy(sv.lastsave, relname, sizeof(sv.lastsave));
 }
 
 /*
@@ -2824,6 +2884,7 @@ static void Host_Loadgame_f (void)
 	static char	*start;
 	
 	char	name[MAX_OSPATH];
+	char	relname[MAX_OSPATH]; // woods #autoload (iw)
 	char	mapname[MAX_QPATH];
 	float	time, tfloat;
 	const char	*data;
@@ -2856,15 +2917,16 @@ static void Host_Loadgame_f (void)
 
 	cls.demonum = -1;		// stop demo loop in case this fails
 
-	q_snprintf (name, sizeof(name), "%s/%s", com_gamedir, Cmd_Argv(1));
-	COM_AddExtension (name, ".sav", sizeof(name));
+	q_strlcpy(relname, Cmd_Argv(1), sizeof(relname)); // woods #autoload (iw)
+	COM_AddExtension(relname, ".sav", sizeof(relname));
+	Con_Printf("Loading game from ^m%s^m...\n", relname);
 
 // we can't call SCR_BeginLoadingPlaque, because too much stack space has
 // been used.  The menu calls it before stuffing loadgame command
 //	SCR_BeginLoadingPlaque ();
 
-	Con_Printf ("Loading game from %s...\n", name);
-	
+	q_snprintf(name, sizeof(name), "%s/%s", com_gamedir, relname); // woods #autoload (iw)
+
 // avoid leaking if the previous Host_Loadgame_f failed with a Host_Error
 	if (start != NULL)
 		free (start);
@@ -2873,6 +2935,7 @@ static void Host_Loadgame_f (void)
 	if (start == NULL)
 	{
 		Con_Printf ("ERROR: couldn't open.\n");
+		Host_InvalidateSave(relname); // woods #autoload (iw)
 		return;
 	}
 
@@ -2882,7 +2945,11 @@ static void Host_Loadgame_f (void)
 	{
 		free (start);
 		start = NULL;
-		Host_Error ("Savegame is version %i, not %i", version, SAVEGAME_VERSION);
+		if (sv.autoloading) // woods #autoload (iw)
+			Con_Printf("ERROR: Savegame is version %i, not %i\n", version, SAVEGAME_VERSION);
+		else
+			Host_Error("Savegame is version %i, not %i", version, SAVEGAME_VERSION);
+		Host_InvalidateSave(relname);
 		return;
 	}
 	data = COM_ParseStringNewline (data);
@@ -3051,6 +3118,8 @@ static void Host_Loadgame_f (void)
 		svs.clients->spawn_parms[i] = spawn_parms[i];
 
 	PR_SwitchQCVM(NULL);
+
+	q_strlcpy(sv.lastsave, relname, sizeof(sv.lastsave)); // woods #autoload (iw)
 
 	if (cls.state != ca_dedicated)
 	{

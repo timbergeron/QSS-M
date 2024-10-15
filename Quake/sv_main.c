@@ -1563,6 +1563,7 @@ void SV_Init (void)
 	extern	cvar_t	sv_idealpitchscale;
 	extern	cvar_t	sv_aim;
 	extern	cvar_t	sv_altnoclip; //johnfitz
+	extern	cvar_t	sv_autoload; // woods #autoload (iw)
 	extern	cvar_t	sv_nqplayerphysics; //spike
 	extern	cvar_t	sv_public;	//spike
 	extern	cvar_t	sv_reportheartbeats;	//spike
@@ -1596,6 +1597,7 @@ void SV_Init (void)
 	Cvar_RegisterVariable (&sv_gameplayfix_setmodelrealbox);
 	Cvar_RegisterVariable (&pr_checkextension);
 	Cvar_RegisterVariable (&sv_altnoclip); //johnfitz
+	Cvar_RegisterVariable (&sv_autoload); // woods #autoload (iw)
 	Cvar_RegisterVariable (&sv_nqplayerphysics);	//spike
 	Cvar_RegisterVariable (&sv_bunnyhopqw); // woods #qwbunnyhop
 
