@@ -227,6 +227,13 @@ start:
 	}
 
 	maxdist = light->radius*light->radius;
+
+	if (!cl.worldmodel) // woods
+	{
+		Con_DPrintf("cl.worldmodel is null in R_MarkLights\n");
+		return;
+	}
+
 // mark the polygons
 	surf = cl.worldmodel->surfaces + node->firstsurface;
 	for (i=0 ; i<node->numsurfaces ; i++, surf++)
