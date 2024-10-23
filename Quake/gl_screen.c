@@ -273,6 +273,15 @@ void SCR_CenterPrint (const char *str) //update centerprint data
 		return;
 	}
 
+	char qfrunequake[18] = { 247, 247, 247, 174, 242, 245, 238, 229, 241, 245, 225, 235, 229, 174, 227, 239, 237, '\0' }; // woods -- quake font red 'www.runequake.com' #autoid
+
+	if ((strstr(str, qfrunequake)))
+	{
+		cl.modtype = 6;
+		strncpy(cl.observer, "y", sizeof(cl.observer));
+		return;
+	}
+
 // ===============================
 // woods for center print filter  -> this is #flagstatus
 // ===============================

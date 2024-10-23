@@ -46,6 +46,7 @@ int		con_buffersize; //johnfitz -- user can now override default
 qboolean 	con_forcedup;		// because no entities to refresh
 qboolean 	matchstats = false;	// woods
 qboolean 	netquakeio = false;	// woods
+qboolean	firstCheckPassed = false; // woods
 
 int		con_totallines;		// total lines in console scrollback
 int		con_backscroll;		// lines up from bottom to display
@@ -507,6 +508,25 @@ static void Con_Print (const char *txt)
 		if (cl_autodemo.value == 2) // woods, inspired by uns disconnects :(
 			if (!strcmp(txt, "Match unpaused\n") && !cls.demoplayback && !cls.demorecording)
 				Cmd_ExecuteString("record\n", src_command);
+
+		if (cl.modtype == 6) // runequake observer detection
+		{
+			if (!strcmp(txt, "Now riding "))
+				strncpy(cl.observer, "y", sizeof(cl.observer));
+
+			if (!strcmp(txt, cl_name.string)) 
+				firstCheckPassed = true;
+			else if (firstCheckPassed && !strcmp(txt, " joined the game\n"))
+			{
+				strncpy(cl.observer, "n", sizeof(cl.observer));
+				firstCheckPassed = false;  // Reset flag after the condition is met
+			}
+			else if (firstCheckPassed) // The next text was not " joined the game\n", reset the flag
+				firstCheckPassed = false;
+
+			if (q_strcasestr(txt, "]observer"))
+				strncpy(cl.observer, "y", sizeof(cl.observer));
+		}
 
 		if (strstr(txt, ": ") && cls.signon == SIGNONS && cl.maxclients > 1) // woods #like
 		{ 

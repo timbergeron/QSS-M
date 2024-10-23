@@ -389,7 +389,7 @@ typedef struct
 	char		observer[2];		// woods for ghost code to memory #observer
 	int			server;				// woods for server type detection #servertype
 	int			fps;				// woods #f_config
-	int			modtype;			// woods #modtype detect mp server mod type 5 - FTE, 4 - hybrid crx, 3 - crmod, 2 - crctf, 1 - crx
+	int			modtype;			// woods #modtype detect mp server mod type 6 - runequake, 5 - FTE, 4 - hybrid crx, 3 - crmod, 2 - crctf, 1 - crx
 	int			modetype;			// woods crx mode detection -- 1 - ctf, 2 - dm, 3 - ra, 4 - ca, 5 - airshot, 6 - wipeout, 7 - freetag
 	int			playmode;			// woods crx play mode detection -- 1 - match, 2 - ffa/normal/pug, 3 - practice
 	int			teamscore[3];		// woods #hud_diff	
