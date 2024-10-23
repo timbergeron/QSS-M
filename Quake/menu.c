@@ -6153,6 +6153,10 @@ void FetchAndSortServers (void)
 		int maxusers = atoi(NET_SlistPrintServerInfo(i, SERVER_MAX_USERS));
 		const char* map = NET_SlistPrintServerInfo(i, SERVER_MAP);
 
+		unsigned char* ch; // woods dequake
+		for (ch = (unsigned char*)serverName; *ch; ch++)
+			*ch = dequake[*ch];
+
 		if (serverName && serverName[0] != '\0') 
 		{
 			serversmenu.items = (servertitem_t*)realloc(serversmenu.items, sizeof(servertitem_t) * (actualServerCount + 1));
