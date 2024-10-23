@@ -10,8 +10,6 @@
 
 location_t	*locations, *temploc;
 
-extern	cvar_t	r_drawlocs;
-
 void TP_LocFiles_Init(void); // woods #locext
 
 void LOC_PQ_Init (void) // woods added PQ to name #pqteam
