@@ -1690,6 +1690,30 @@ void Sbar_Draw (void)
 	float w; //johnfitz
 	int armor, invuln;
 
+	qboolean mpdemo = false; // woods #obspent
+	qboolean observer = false; // woods #obspent
+	char buf[15]; // woods #obspent
+	const char* obs = NULL; // woods #obspent
+
+	if (cls.demoplayback && cl.maxclients > 1) // woods #obspent
+		mpdemo = true;
+
+	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected)) // woods #obspent
+		obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf));
+
+	if (obs) // woods #obspent
+	{
+		if (cl.modtype == 1 || cl.modtype == 4) 
+		{
+			if (strcmp(obs, "") == 0) 
+				observer = false;
+			else 
+				observer = (strcmp(obs, "off") != 0);
+		}
+		else 
+			observer = (strcmp(obs, "n") == 0);
+	}
+
 	int clampedSbar = CLAMP(1, (int)scr_sbar.value, 3); // woods
 
 	if (scr_con_current == vid.height)
@@ -1791,7 +1815,7 @@ void Sbar_Draw (void)
 		// armor
 
 		invuln = (cl.items & IT_INVULNERABILITY) != 0;
-		armor = invuln ? 666 : cl.stats[STAT_ARMOR];
+		armor = (invuln && !observer && !mpdemo) ? 666 : cl.stats[STAT_ARMOR]; // woods #obspent
 
 		if (armor > 0) // only draw if you have armor
 		{
@@ -1799,7 +1823,11 @@ void Sbar_Draw (void)
 
 			if (cl.items & IT_INVULNERABILITY)
 			{
-				Sbar_DrawNum(50, 116, 666, 3, 1);
+				if (invuln && !observer && !mpdemo) // woods #obspent
+					Sbar_DrawNum(50, 116, 666, 3, 1);
+				else
+					Sbar_DrawNum(50, 115, cl.stats[STAT_ARMOR], 3
+						, cl.stats[STAT_ARMOR] <= 25);
 				Sbar_DrawPic(18, 116, draw_disc);
 			}
 			else
@@ -1902,7 +1930,11 @@ void Sbar_Draw (void)
 				// armor
 				if (cl.items & IT_INVULNERABILITY)
 				{
-					Sbar_DrawNum (24, 0, 666, 3, 1);
+					if (!observer && !mpdemo) // woods #obspent
+						Sbar_DrawNum (24, 0, 666, 3, 1);
+					else
+						Sbar_DrawNum(24, 0, cl.stats[STAT_ARMOR], 3
+							, cl.stats[STAT_ARMOR] <= 25);
 					Sbar_DrawPic (0, 0, draw_disc);
 				}
 				else
