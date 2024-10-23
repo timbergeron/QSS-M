@@ -319,7 +319,7 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 	qboolean needevents;	//whether we want to receive events still
 
 	qboolean gamecodecursor = (key_dest == key_game && cl.qcvm.cursorforced) || (key_dest == key_menu && cls.menu_qcvm.cursorforced);
-	wantcursor = (key_dest == key_console || (key_dest == key_menu&&!bind_grab)) || gamecodecursor || !windowhasfocus;
+	wantcursor = (key_dest == key_menu&&!bind_grab) || gamecodecursor || !windowhasfocus; // woods no cursor needed in console
 	freemouse = wantcursor || gamecodecursor; // woods #mousemenu
 	needevents = (!wantcursor) || key_dest == key_game;
 
