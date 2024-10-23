@@ -1753,7 +1753,7 @@ void GL_DrawAliasShadow (entity_t *e)
 		return;
 
 	entalpha = ENTALPHA_DECODE(e->alpha);
-	if (entalpha == 0) return;
+	if (entalpha < 1) return; // woods no shadows on transparent entities
 
 	if (r_shadows_groundcheck.value && e->model->flags & EF_ROTATE) // woods #shadow
 	{
