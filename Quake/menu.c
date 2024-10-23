@@ -5916,9 +5916,15 @@ void WaitForPingThreads(SDL_Thread* thread1, SDL_Thread* thread2)
 	pingThreadsShouldExit = true; // Signal threads to exit
 
 	if (thread1)
+	{
 		SDL_WaitThread(thread1, NULL);
+		thread1 = NULL; // Set to NULL after joining
+	}
 	if (thread2)
+	{
 		SDL_WaitThread(thread2, NULL);
+		thread2 = NULL; // Set to NULL after joining
+	}
 
 	pingThreadsShouldExit = false; // Reset the exit flag
 
@@ -6307,11 +6313,14 @@ void CleanupPingThreads()
 {
 	WaitForPingThreads(serversmenu.pingThreads[0], serversmenu.pingThreads[1]);
 
-	if (!serversmenu.pingThreadRunning)
+	if (serversmenu.pingThreadRunning)
 	{
 		pingThreadsShouldExit = true;
 		if (serversmenu.pingThread)
+		{
 			SDL_WaitThread(serversmenu.pingThread, NULL);
+			serversmenu.pingThread = NULL; // Set to NULL after joining
+		}
 	}
 
 	CleanupPingMutex();
