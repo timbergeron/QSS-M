@@ -4680,3 +4680,37 @@ int LevenshteinDistance (const char* s, const char* t) // woods -- #smartquit --
 
 	return distance;
 }
+
+/*
+==================
+Determines if the current filesystem is case-sensitive -- woods #filesystemsens
+==================
+*/
+qboolean FS_IsCaseSensitive(void)
+{
+	char testfile[MAX_OSPATH];
+	char testfile_upper[MAX_OSPATH];
+	FILE* f;
+	qboolean is_case_sensitive;
+
+	q_snprintf(testfile, sizeof(testfile), ".fs_case_test");
+	q_snprintf(testfile_upper, sizeof(testfile_upper), ".FS_CASE_TEST");
+
+	// Try to create lower case test file
+	f = fopen(testfile, "wb");
+	if (!f)
+		return true; // If can't create file, assume case sensitive to be safe
+	fclose(f);
+
+	// Try to open the same file with upper case name
+	f = fopen(testfile_upper, "rb");
+	is_case_sensitive = (f == NULL);
+	if (f)
+		fclose(f);
+
+	// Clean up
+	remove(testfile);
+	remove(testfile_upper); // Clean up uppercase version if it exists
+
+	return is_case_sensitive;
+}
