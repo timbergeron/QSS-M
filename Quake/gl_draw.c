@@ -1221,6 +1221,8 @@ void Draw_GetMenuTransform(vrect_t* bounds, vrect_t* viewport)
 	viewport->height = 200 * s;
 }
 
+float canvas_scaling; // woods #autoid
+
 /*
 ================
 GL_SetCanvas -- johnfitz -- support various canvas types
@@ -1245,6 +1247,11 @@ void GL_SetCanvas (canvastype newcanvas)
 	case CANVAS_DEFAULT:
 		glOrtho (0, glwidth, glheight, 0, -99999, 99999);
 		glViewport (glx, gly, glwidth, glheight);
+		break;
+	case CANVAS_AUTOID: // woods #autoid
+		canvas_scaling = CLAMP(1.0f, scr_conscale.value - 1, (float)glwidth / vid.conwidth);
+		glOrtho(0, glwidth / canvas_scaling, glheight / canvas_scaling, 0, -99999, 99999);
+		glViewport(glx, gly, glwidth, glheight);
 		break;
 	case CANVAS_DEFAULT2: // woods
 		glOrtho(0, glwidth / 2, glheight / 2, 0, -99999, 99999);

@@ -150,6 +150,7 @@ cvar_t		scr_centertime = {"scr_centertime","2",CVAR_NONE};
 cvar_t		scr_showturtle = {"showturtle","0",CVAR_NONE};
 cvar_t		scr_showpause = {"showpause","1",CVAR_NONE};
 cvar_t		scr_printspeed = {"scr_printspeed","8",CVAR_NONE};
+cvar_t		scr_autoid = {"scr_autoid","1",CVAR_ARCHIVE}; // woods #autoid
 cvar_t		gl_triplebuffer = {"gl_triplebuffer", "1", CVAR_ARCHIVE};
 
 cvar_t		cl_gun_fovscale = {"cl_gun_fovscale","1",CVAR_ARCHIVE}; // Qrack
@@ -958,6 +959,7 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_showpause);
 	Cvar_RegisterVariable (&scr_centertime);
 	Cvar_RegisterVariable (&scr_printspeed);
+	Cvar_RegisterVariable (&scr_autoid); // woods #autoid
 	Cvar_RegisterVariable (&gl_triplebuffer);
 	Cvar_RegisterVariable (&cl_gun_fovscale);
 	Cvar_RegisterVariable (&cl_menucrosshair); // woods #menucrosshair
@@ -2950,6 +2952,292 @@ void SCR_DrawConsole (void)
 	}
 }
 
+/*
+=================
+SCR_AutoID -- woods #autoid
+Prints the name of players in your line of sight in demos, coop, and deathmatch as an observer
+=================
+*/
+
+extern float canvas_scaling;
+
+#define ISDEAD(i) (((i) >= 41) && ((i) <= 102))
+
+typedef struct player_autoid_s
+{
+	float		x, y;
+	scoreboard_t* player;
+} autoid_player_t;
+
+static	autoid_player_t	autoids[MAX_SCOREBOARDNAME];
+static	int		autoid_count;
+
+typedef struct item_vis_s {
+	vec3_t	vieworg;
+	vec3_t	forward;
+	vec3_t	right;
+	vec3_t	up;
+	vec3_t	entorg;
+	float	radius;
+	vec3_t	dir;
+	float	dist;
+} item_vis_t;
+
+void TrimTrailingSpaces(char* str)
+{
+	if (!str) return;
+	int length = strlen(str);
+
+	while (length > 0 && isspace((unsigned char)str[length - 1]))
+	{
+		str[length - 1] = '\0';  // replace trailing space with null terminator
+		length--;
+	}
+}
+
+qboolean R_CullSphere(vec3_t org, float radius)
+{
+	//four frustrum planes all point inwards in an expanding 'cone'.
+	int		i;
+	float d;
+
+	for (i = 0; i < 4; i++)
+	{
+		d = DotProduct(frustum[i].normal, org) - frustum[i].dist;
+		if (d <= -radius)
+			return true;
+	}
+	return false;
+}
+
+int qglProject(float objx, float objy, float objz, float* model, float* proj, int* view, float* winx, float* winy, float* winz) {
+	int i, j;
+	float in[4], out[4];
+
+	in[0] = objx;
+	in[1] = objy;
+	in[2] = objz;
+	in[3] = 1.0f;
+
+	// First transform by the model matrix
+	for (i = 0; i < 4; i++) {
+		out[i] = 0.0f;
+		for (j = 0; j < 4; j++)
+			out[i] += model[j * 4 + i] * in[j]; // Column-major order
+	}
+
+	// Then by the projection matrix
+	for (i = 0; i < 4; i++) {
+		in[i] = 0.0f;
+		for (j = 0; j < 4; j++)
+			in[i] += proj[j * 4 + i] * out[j]; // Column-major order
+	}
+
+	if (fabs(in[3]) < 1e-7f) // Avoid division by zero
+		return 0;
+
+	// Perspective division
+	for (i = 0; i < 3; i++)
+		in[i] /= in[3];
+
+	// Map to window coordinates
+	*winx = view[0] + (1 + in[0]) * view[2] / 2.0f;
+	*winy = view[1] + (1 + in[1]) * view[3] / 2.0f;
+	*winz = (1 + in[2]) / 2.0f;
+
+	return 1;
+}
+
+qboolean TP_IsItemVisible(item_vis_t* visitem)
+{
+	vec3_t impact, end, v;
+	int i;
+
+	TraceLine(visitem->vieworg, visitem->entorg, 0, impact); // trace from the viewer's origin to the target's position
+
+	if (VecLength2(impact, visitem->entorg) <= visitem->radius) // did trace hit the target directly within the radius
+		return true; // Target is visible
+
+	if (visitem->dist <= visitem->radius) // Check if the distance to the target is within the radius
+		return true;
+
+	vec3_t offsets[] = {
+		// { x, y, z } offsets relative to the target's origin
+		{ 0, 0, 0 },                            // Center (already checked, can be omitted)
+		{ -visitem->radius, 0, 0 },             // Left
+		{ visitem->radius, 0, 0 },              // Right
+		{ 0, 0, visitem->radius },              // Above
+		{ 0, 0, -visitem->radius / 2 },         // Below (half radius)
+		{ 0, visitem->radius, 0 },              // Forward
+		{ 0, -visitem->radius, 0 }              // Backward
+	};
+
+	int num_offsets = sizeof(offsets) / sizeof(offsets[0]);
+
+	for (i = 0; i < num_offsets; i++) // Loop through the offsets
+	{
+		VectorAdd(visitem->entorg, offsets[i], end); // Compute the end point trace by adding the offset to the target's origin
+
+		VectorSubtract(end, visitem->vieworg, v); // Compute the direction vector from the viewer to the end point
+		VectorNormalize(v);
+
+		VectorMA(end, -visitem->radius, v, end); // Adjust the end point slightly towards the viewer to account for the target's radius
+
+		TraceLine(visitem->vieworg, end, 0, impact); // Perform the trace from the viewer's origin to the adjusted end point
+
+		if (VecLength2(impact, end) <= visitem->radius) // Check if the trace hit within the target's radius
+			return true; // Target is visible
+	}
+
+	return false; // If none of the checks are successful, the item is not visible
+}
+
+qboolean TP_IsPlayerVisible(vec3_t origin)
+{
+	item_vis_t visitem;
+
+	VectorCopy(vpn, visitem.forward);
+	VectorCopy(vright, visitem.right);
+	VectorCopy(vup, visitem.up);
+	VectorCopy(r_origin, visitem.vieworg);
+
+	VectorCopy(origin, visitem.entorg);
+	visitem.entorg[2] += 27; // Adjust to player's head height
+	VectorSubtract(visitem.entorg, visitem.vieworg, visitem.dir);
+	visitem.dist = DotProduct(visitem.dir, visitem.forward);
+	visitem.radius = 25; // Player's approximate radius
+
+	return TP_IsItemVisible(&visitem);
+}
+
+void SCR_SetupAutoID(void)
+{
+	int		i, view[4];
+	float		model[16], project[16], winz;
+	vec3_t origin;
+	entity_t* state;
+	autoid_player_t* id;
+
+	autoid_count = 0;
+
+	char buf[15];
+	const char* obs;
+
+	char buf2[15];
+	const char* playmode;
+
+	//if (r_refdef.viewangles[ROLL] == 80) // dead, could rotate text?
+
+	if (!scr_autoid.value || cls.state != ca_connected || cl.intermission || qeintermission || crxintermission)
+		return;
+
+	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected) && !cls.demoplayback)
+	{
+		obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf));
+		playmode = Info_GetKey(cl.serverinfo, "playmode", buf2, sizeof(buf2));
+
+		if (cl.modtype == 1 || cl.modtype == 4) // mods with observer keys
+		{
+			if (
+				(strcmp(obs, "eyecam") != 0) && // allow in mp if an observer
+				(strcmp(obs, "chase") != 0) &&
+				(strcmp(obs, "fly") != 0) &&
+				(strcmp(obs, "walk") != 0) &&
+				(
+					(strcmp(playmode, "practice") != 0) || // allow in practice mode if value 2
+					((int)scr_autoid.value != 2)
+					) &&
+				(
+					(strcmp(playmode, "match") != 0) || // allow in pre-match if value 2
+					(cl.matchinp || (int)scr_autoid.value != 2)
+					)
+				) {
+				return;
+			}
+		}
+		else
+			if (!strcmp(cl.observer, "n")) // general observer flag for legacy mods/servers
+				return;
+	}
+
+	glGetFloatv(GL_MODELVIEW_MATRIX, model);
+	glGetFloatv(GL_PROJECTION_MATRIX, project);
+	glGetIntegerv(GL_VIEWPORT, view);
+
+	for (i = 0; i < cl.maxclients; i++)
+	{
+		state = &cl.entities[1 + i];
+
+		if (state->model == NULL)
+			continue;
+
+		if (VectorCompare(cl.entities[cl.viewentity].origin, state->origin))
+			continue;  // Skip our own entity
+
+		if (VectorCompare(cl.entities[cl.realviewentity].origin, state->origin))
+			continue;  // Skip our own entity (eyecam)
+
+		if ((!strcmp(state->model->name, "progs/player.mdl") && ISDEAD(state->frame)) || !strcmp(state->model->name, "progs/h_player.mdl"))
+			continue;
+
+		VectorCopy(state->origin, origin);
+		origin[2] += 28;
+		if (R_CullSphere(origin, 0))
+			continue;
+
+		if (!TP_IsPlayerVisible(state->origin))
+			continue;
+
+		id = &autoids[autoid_count];
+		id->player = &cl.scores[i];
+
+		if (qglProject(origin[0], origin[1], origin[2], model, project, view, &id->x, &id->y, &winz))
+			autoid_count++;
+	}
+}
+
+void SCR_DrawAutoID(void)
+{
+	int	i, x, y;
+	char formatted_name[16]; // 15 chars + null terminator
+	int name_length;
+	int y_offset = 12;
+
+	float alpha = scr_autoid.value;
+	int integer_part = (int)alpha;
+	float decimal_part = alpha - integer_part;
+
+	if (decimal_part < 0.0f || decimal_part > 1.0f)
+		decimal_part = 1.0f; // Default opacity
+
+	if (!scr_autoid.value)
+		return;
+
+	GL_SetCanvas(CANVAS_AUTOID);
+
+	for (i = 0; i < autoid_count; i++)
+	{
+		// Adjust coordinates according to the scaling factor
+		x = autoids[i].x / canvas_scaling;
+		y = (glheight - autoids[i].y) / canvas_scaling - y_offset;
+
+		if (r_refdef.viewangles[ROLL] == 80) // dead, adjust text
+		{
+			x += 26;
+			y -= y_offset;
+		}
+
+		q_snprintf(formatted_name, sizeof(formatted_name), "%.15s", autoids[i].player->name);
+
+		TrimTrailingSpaces(formatted_name);
+
+		name_length = strlen(formatted_name);
+
+		Draw_FillPlayer(x - 4 * name_length - 1, y - 1, (name_length * 8) + 2, 11, CL_PLColours_Parse("0x000000"), decimal_part);
+
+		Draw_String(x - 4 * name_length, y, formatted_name);
+	}
+}
 
 /*
 ==============================================================================
@@ -3437,6 +3725,8 @@ void SCR_UpdateScreen (void)
 
 		//FIXME: only call this when needed
 		SCR_TileClear ();
+
+		SCR_DrawAutoID(); // woods #autoid
 
 		if (!cl.intermission)
 		{

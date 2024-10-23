@@ -65,6 +65,7 @@ typedef enum {
 	CANVAS_NONE,
 	CANVAS_DEFAULT,
 	CANVAS_DEFAULT2, // woods
+	CANVAS_AUTOID, // woods #autoid
 	CANVAS_SCOREBOARD, // woods #scoreboard
 	CANVAS_CONSOLE,
 	CANVAS_MENU,
