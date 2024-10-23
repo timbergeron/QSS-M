@@ -305,6 +305,7 @@ void R_EmitWireBox(vec3_t mins, vec3_t maxs, uint32_t color); // woods #locext
 void R_EmitWirePoint(vec3_t origin, uint32_t color); // woods #locext
 void R_EmitPin(vec3_t origin, float radius, uint32_t color, int segments); // woods #locext
 extern cvar_t r_showlocs; // woods #locext
+extern cvar_t r_showlocs_y; // woods #locext
 char loc_str[64]; // woods #locext
 
 
@@ -316,7 +317,7 @@ After the loop, it highlights the nearest location (bestloc) in red.
 */
 void LOC_ShowLocs (void)
 {
-    if (r_showlocs.value != 2)
+    if (r_showlocs.value < 2)
         return;
 
     location_t* loc;
@@ -334,6 +335,57 @@ void LOC_ShowLocs (void)
 
     nqDefaultBoxColor = (nqDefaultBoxColor & 0xFFFFFF00) | ((uint8_t)(alpha * 255.0f));
 
+    VectorCopy(cl.entities[cl.viewentity].origin, player_origin);
+
+    if (r_showlocs.value >= 3)
+    {
+        // Locate the nearest location and only print text
+        for (loc = locations; loc; loc = loc->next_loc)
+        {
+            if (!nqloc) // QuakeWorld location (point)
+            {
+                vec3_t scaled_mins;
+                VectorCopy(loc->mins, scaled_mins);
+
+                // Adjust the scale of the input coordinates to match stored locations
+                for (int i = 0; i < 3; i++)
+                {
+                    scaled_mins[i] /= 8.0f;
+                }
+
+                // Calculate squared distance from player position to location point
+                VectorSubtract(player_origin, scaled_mins, diff);
+                dist = diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2];
+            }
+            else // NetQuake location (axial box)
+            {
+                // Calculate Manhattan distance from player to nearest face of the box
+                dist = fabs(loc->mins[0] - player_origin[0]) + fabs(loc->maxs[0] - player_origin[0]) +
+                    fabs(loc->mins[1] - player_origin[1]) + fabs(loc->maxs[1] - player_origin[1]) +
+                    fabs(loc->mins[2] - player_origin[2]) + fabs(loc->maxs[2] - player_origin[2]) - loc->sum;
+            }
+
+            // Track the nearest location
+            if (!bestloc || dist < bestdist)
+            {
+                bestdist = dist;
+                bestloc = loc;
+            }
+        }
+
+        // Print the name of the nearest location
+        if (bestloc)
+        {
+            strncpy(loc_str, bestloc->name, sizeof(loc_str));
+        }
+        else
+        {
+            strncpy(loc_str, "no locs", sizeof(loc_str));
+        }
+
+        return; // Skip drawing
+    }
+
     glDisable(GL_DEPTH_TEST);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     GL_PolygonOffset(OFFSET_SHOWTRIS);
@@ -341,8 +393,6 @@ void LOC_ShowLocs (void)
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND); // johnfitz -- for alpha
     glDisable(GL_ALPHA_TEST); // johnfitz -- for alpha
-
-    VectorCopy(cl.entities[cl.viewentity].origin, player_origin);
 
     for (loc = locations; loc; loc = loc->next_loc)
     {
@@ -1113,7 +1163,7 @@ void TP_DrawLocsWithWirePoints (void) // woods #locext
 
 void TP_DrawClosestLocText (void) // woods #locext
 {
-    if (!r_showlocs.value || cl.maxclients > 1 || !sv.active || cls.signon < SIGNONS)
+    if (!r_showlocs.value || cls.signon < SIGNONS)
         return;
     
     GL_SetCanvas(CANVAS_CROSSHAIR2); // Set the canvas where the string will be drawn
@@ -1121,12 +1171,17 @@ void TP_DrawClosestLocText (void) // woods #locext
     char str[64]; // woods added padding
     
     int x = 0; // X position of the string
-    int y = 30;  // Y position of the string
-    if (r_showlocs.value == 2)
+    int y = r_showlocs_y.value; // Y position of the string
+    if (r_showlocs.value >= 2)
         sprintf(str, "%s", loc_str); // Copy the name of the location to a string)
     else
         sprintf(str, "%s", closest_loc_str); // Copy the name of the location to a string)
-    Draw_String(x - (strlen(str)*4), y, str); // Draw the string, centering it horizontally
+
+    int string_width = strlen(str) * 8; // each character is 8 pixels wide
+
+    Draw_FillPlayer(x - (string_width / 2) - 2, y - 1, string_width + 4, 11, CL_PLColours_Parse("0x000000"), r_showlocs.value - 3);
+
+    Draw_String(x - (string_width / 2), y, str);
 }
 
 void TP_LocFiles_Init (void) // woods #locext
