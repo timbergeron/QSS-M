@@ -419,7 +419,7 @@ typedef struct
 } boneinfo_t;
 
 #define	VANILLA_MAXALIASVERTS	1024
-#define	MAXALIASVERTS	65536 // spike -- was 2000 //johnfitz -- was 1024
+#define	MAXALIASVERTS	0x7fff //16-bit index buffer + onseam duplication
 #define	MAXALIASFRAMES	1024  //spike -- was 256
 extern	stvert_t		stverts[MAXALIASVERTS];
 extern	mtriangle_t		*triangles;
