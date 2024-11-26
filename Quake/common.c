@@ -229,7 +229,7 @@ void Vec_Append(void** pvec, size_t element_size, const void* data, size_t count
 	if (!count)
 		return;
 	Vec_Grow(pvec, element_size, count);
-	memcpy((byte*)*pvec + VEC_HEADER(*pvec).size, data, count * element_size);
+	memcpy ((byte *)*pvec + VEC_HEADER(*pvec).size * element_size, data, count * element_size);
 	VEC_HEADER(*pvec).size += count;
 }
 
