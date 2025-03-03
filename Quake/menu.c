@@ -6249,7 +6249,7 @@ static void M_Game_AdjustSliders(int dir)
 		break;
 
 	case GAME_WEAPONBOB:
-		Cvar_SetValue("cl_bob", !cl_bob.value);
+		Cvar_SetValue("cl_bob", !cl_bob.value * 0.02);
 		break;
 
 	case GAME_DAMAGEKICK:
