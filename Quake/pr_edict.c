@@ -1408,6 +1408,144 @@ void PR_ClearProgs(qcvm_t *vm)
 	PR_SwitchQCVM(oldvm);
 }
 
+static void PR_PatchOgreSmashState (void)
+{
+/*
+	There is a common error in ogre_smash12 state which calls ai_charge() function without a parameter.
+	The issue leads to a junk distance value passed to movetogoal() function.
+	This may trigger occasional teleportation of an attacking ogre to a random location.
+
+	Disassembly of ogre_smash12() from version 1.06.
+
+	12407: STATE    5330(IMMEDIATE)58.0        7817(ogre_smash13)ogre_smash13()
+	12408: CALL0    857(ai_charge)ai_charge()
+	12409: DONE
+
+	Disassembly of ogre_smash2() with a parameter set to zero.
+
+	12351: STATE    5421(IMMEDIATE)48.0        7803(ogre_smash3)ogre_smash3()
+	12352: STORE_V  213(FALSE)0.0              4(?)
+	12353: CALL1    857(ai_charge)ai_charge()
+	12354: DONE
+
+	To fix this error, find appropriate code sequence within progs.dat,
+	STORE_V 0.0 -> CALL1 ai_charge -> DONE, and replace CALL0 with GOTO to found sequence.
+*/
+	const dfunction_t *statefunc;
+	const dfunction_t *chargefunc;
+	const dfunction_t *probefunc;
+	const dstatement_t *statement;
+	const dstatement_t *endstatement;
+	dstatement_t *patchstatement;
+	const char *chargename;
+	int entrypoint;
+	int statementcount;
+	int chargeoffset;
+	int chargeindex;
+	int firststatement;
+	int sequencecounter;
+
+	// Make sure that ogre_smash12() contains incorrect call to ai_charge()
+	statefunc = ED_FindFunction("ogre_smash12");
+	if (!statefunc)
+		return;
+
+	entrypoint = statefunc->first_statement;
+	statementcount = qcvm->progs->numstatements;
+	if (entrypoint < 0 || entrypoint + 3 >= statementcount)
+		return;
+
+	statement = &qcvm->statements[entrypoint];
+	if (statement->op != OP_STATE)
+		return;
+
+	++statement;
+	if (statement->op != OP_CALL0)
+		return;
+
+	chargeoffset = statement->a;
+	if (chargeoffset < 0 || chargeoffset >= qcvm->progs->numglobals)
+		return;
+
+	chargeindex = ((const eval_t *)(&qcvm->globals[chargeoffset]))->function;
+	if (chargeindex < 0 || chargeindex >= qcvm->progs->numfunctions)
+		return;
+
+	chargefunc = &qcvm->functions[chargeindex];
+	chargename = PR_GetString(chargefunc->s_name);
+	if (strcmp(chargename, "ai_charge") != 0)
+		return;
+
+	++statement;
+	if (statement->op != OP_DONE)
+		return;
+
+	// Incorrect ai_charge() call detected, find proper code sequence to use it as GOTO destination
+	endstatement = &qcvm->statements[statementcount - 2];
+	probefunc = ED_FindFunction("ogre_smash2");  // most probable candidate
+	firststatement = probefunc ? probefunc->first_statement + 1 : 0;
+	if (firststatement < 0 || firststatement >= statementcount - 2)
+		firststatement = 0;
+	sequencecounter = 0;
+
+	for (statement = &qcvm->statements[firststatement]; statement < endstatement; ++statement)
+	{
+		const int op = statement->op;
+
+		switch (sequencecounter)
+		{
+		case 0:
+			if ((op == OP_STORE_V || op == OP_STORE_F) && statement->b == 4)
+			{
+				const int valueoffset = statement->a;
+
+				if (valueoffset >= 0 && valueoffset < qcvm->progs->numglobals)
+				{
+					const ddef_t *adef = ED_GlobalAtOfs(valueoffset);
+
+					if (adef && adef->type == ev_float)
+					{
+						const eval_t *value = (const eval_t *)(&qcvm->globals[valueoffset]);
+
+						if (value->_float == 0.0f)
+							++sequencecounter;
+					}
+				}
+			}
+			break;
+
+		case 1:
+			if (op == OP_CALL1 && statement->a == chargeoffset)
+				++sequencecounter;
+			else
+				sequencecounter = 0;
+			break;
+
+		case 2:
+			if (op == OP_DONE)
+				++sequencecounter;
+			else
+				sequencecounter = 0;
+			break;
+
+		default:
+			Host_Error("Broken patch for ogre smash state");
+			break;
+		}
+
+		if (sequencecounter == 3)
+		{
+			// Proper code sequence found, apply patch to ogre_smash12()
+			patchstatement = &qcvm->statements[entrypoint + 1];
+			patchstatement->op = OP_GOTO;
+			patchstatement->a = statement - patchstatement - 2;  // point to start of found sequence
+
+			Con_DPrintf("Patch for incorrect ogre smash state applied\n");
+			break;
+		}
+	}
+}
+
 //makes sure extension fields are actually registered so they can be used for mappers without qc changes. eg so scale can be used.
 static void PR_MergeEngineFieldDefs (void)
 {
@@ -1641,6 +1779,7 @@ qboolean PR_LoadProgs (const char *filename, qboolean fatal, unsigned int needcr
 
 	PR_SetEngineString("");
 	PR_EnableExtensions(qcvm->globaldefs);
+	PR_PatchOgreSmashState();
 
 	return true;
 }
