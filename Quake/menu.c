@@ -1977,9 +1977,12 @@ Maps Menu (iw)
 
 typedef struct
 {
-	const char* name;
-	const char* date;
-	qboolean	active;
+        const char* name;
+        const char* date;
+        const char* map;
+        const char* players;
+        const char* duration;
+        qboolean        active;
 } mapitem_t;
 
 static struct
@@ -13342,9 +13345,12 @@ Demos Menu
 
 typedef struct
 {
-	const char* name;
-	const char* date;
-	qboolean	active;
+        const char* name;
+        const char* date;
+        const char* map;
+        const char* players;
+        const char* duration;
+        qboolean        active;
 } demoitem_t;
 	
 static struct
@@ -13360,6 +13366,132 @@ static struct
 	int*                filtered_indices;
 } demosmenu;
 
+typedef struct
+{
+        char    map[64];
+        char    players[256];
+        float   duration;
+} demoinfo_t;
+
+static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
+{
+        char path[MAX_OSPATH];
+        FILE* f;
+        q_snprintf(path, sizeof(path), "demos/%s.dem", name);
+        if (COM_FOpenFile(path, &f, NULL) < 0)
+                return false;
+
+        int ch;
+        while ((ch = fgetc(f)) != EOF && ch != '\n')
+                ;
+        if (ch == EOF)
+        {
+                fclose(f);
+                return false;
+        }
+
+        long start = ftell(f);
+        fseek(f, 0, SEEK_END);
+        long end = ftell(f);
+        long len = end - start;
+        fseek(f, start, SEEK_SET);
+        if (len <= 0)
+        {
+                fclose(f);
+                return false;
+        }
+
+        byte* data = (byte*)Q_malloc(len);
+        if (fread(data, 1, len, f) != (size_t)len)
+        {
+                free(data);
+                fclose(f);
+                return false;
+        }
+        fclose(f);
+
+        info->map[0] = '\0';
+        info->players[0] = '\0';
+        info->duration = 0;
+
+        for (long i = 0; i < len - 5; i++)
+        {
+                if (!memcmp(data + i, "maps/", 5))
+                {
+                        long j = i + 5;
+                        while (j < len && data[j] && data[j] != '/')
+                                j++;
+                        long endname = j;
+                        for (; endname < len - 4; endname++)
+                                if (!memcmp(data + endname, ".bsp", 4))
+                                        break;
+                        if (endname < len - 4)
+                        {
+                                int namelen = (int)(endname - (i + 5));
+                                if (namelen >= (int)sizeof(info->map))
+                                        namelen = sizeof(info->map) - 1;
+                                memcpy(info->map, data + i + 5, namelen);
+                                info->map[namelen] = '\0';
+                        }
+                        break;
+                }
+        }
+
+        char pnames[32][MAX_QPATH];
+        int pcount = 0;
+        for (long i = 0; i < len - 2; i++)
+        {
+                if (data[i] == svc_updatename)
+                {
+                        long pos = i + 2;
+                        long max = len - pos;
+                        int slen = 0;
+                        while (slen < max && data[pos + slen])
+                                slen++;
+                        if (slen > 0 && slen < MAX_QPATH)
+                        {
+                                char namebuf[MAX_QPATH];
+                                memcpy(namebuf, data + pos, slen);
+                                namebuf[slen] = '\0';
+                                qboolean exists = false;
+                                for (int n = 0; n < pcount; n++)
+                                        if (!strcmp(pnames[n], namebuf))
+                                        {
+                                                exists = true;
+                                                break;
+                                        }
+                                if (!exists && pcount < 32)
+                                {
+                                        q_strlcpy(pnames[pcount], namebuf, sizeof(pnames[pcount]));
+                                        pcount++;
+                                }
+                        }
+                        i = pos + slen;
+                }
+        }
+        for (int n = 0; n < pcount; n++)
+        {
+                if (n)
+                        q_strlcat(info->players, ", ", sizeof(info->players));
+                q_strlcat(info->players, pnames[n], sizeof(info->players));
+        }
+
+        for (long i = 0; i < len - 5; i++)
+        {
+                if (data[i] == svc_time)
+                {
+                        float t;
+                        memcpy(&t, data + i + 1, 4);
+                        t = LittleFloat(t);
+                        info->duration = t;
+                }
+        }
+
+        free(data);
+        return true;
+}
+
+
 
 static void M_Demos_Add (const char* name, const char* date)
 {
@@ -13367,6 +13499,19 @@ static void M_Demos_Add (const char* name, const char* date)
     tempDemo.name = name;
     tempDemo.date = date;
     tempDemo.active = false;
+    tempDemo.map = NULL;
+    tempDemo.players = NULL;
+    tempDemo.duration = NULL;
+
+    demoinfo_t info;
+    if (Parse_DemoInfo(name, &info))
+    {
+        tempDemo.map = Z_Strdup(info.map);
+        tempDemo.players = Z_Strdup(info.players);
+        char durbuf[32];
+        q_snprintf(durbuf, sizeof(durbuf), "%.1fs", info.duration);
+        tempDemo.duration = Z_Strdup(durbuf);
+    }
 
     int insertPos = demosmenu.democount;
 
@@ -13549,6 +13694,19 @@ void M_Demos_Draw (void)
             M_DrawEllipsisBar(x, y - 8, cols);
         if (demosmenu.list.scroll + demosmenu.list.viewsize < demosmenu.list.numitems)
             M_DrawEllipsisBar(x, y + demosmenu.list.viewsize * 8, cols);
+    }
+
+    if (demosmenu.list.cursor >= 0 && demosmenu.list.cursor < demosmenu.list.numitems)
+    {
+        int demo_idx = demosmenu.filtered_indices[demosmenu.list.cursor];
+        demoitem_t* di = &demosmenu.items[demo_idx];
+        int info_y = y + demosmenu.list.viewsize * 8 + 12;
+        if (di->map && di->map[0])
+            M_PrintWhite(x, info_y, va("Map: %s", di->map));
+        if (di->players && di->players[0])
+            M_PrintWhite(x, info_y + 8, va("Players: %s", di->players));
+        if (di->duration && di->duration[0])
+            M_PrintWhite(x, info_y + 16, va("Duration: %s", di->duration));
     }
 
     if (demosmenu.list.search.len > 0)
