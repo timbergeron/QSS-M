@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "q_ctype.h"
+#include "bgmusic.h"
 #include <errno.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -4006,6 +4007,7 @@ static void COM_Game_f (void)
 		if (!isDedicated)
 			Draw_ReloadTextures(true);
 		ExtraMaps_NewGame ();
+		BGM_Stop ();
 		Host_Resetdemos ();
 		DemoList_Rebuild ();
 		ParticleList_Rebuild (); // woods #particlelist
