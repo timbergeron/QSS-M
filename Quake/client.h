@@ -83,7 +83,8 @@ extern cshift_t		cshift_empty; // woods (iw) #democontrols
 #define	CSHIFT_DAMAGE	1
 #define	CSHIFT_BONUS	2
 #define	CSHIFT_POWERUP	3
-#define	NUM_CSHIFTS		4
+#define CSHIFT_DEAD     4 // woods #cdead
+#define	NUM_CSHIFTS		5 // woods #cdead
 
 #define	NAME_LENGTH	64
 

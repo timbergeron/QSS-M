@@ -2734,6 +2734,21 @@ static void CL_ParseStatNumeric(int stat, int ival, float fval)
 		Con_DWarning ("svc_updatestat: %i is invalid\n", stat);
 		return;
 	}
+
+	if (stat == STAT_HEALTH) // woods #cdead
+	{
+		if (cl.stats[STAT_HEALTH] > 0 && ival <= 0)
+		{
+			cl.cshifts[CSHIFT_DEAD].destcolor[0] = 70;
+			cl.cshifts[CSHIFT_DEAD].destcolor[1] = 0;
+			cl.cshifts[CSHIFT_DEAD].destcolor[2] = 0;
+			cl.cshifts[CSHIFT_DEAD].percent = 0;
+		}
+		else if (cl.stats[STAT_HEALTH] <= 0 && ival > 0)
+		{
+			cl.cshifts[CSHIFT_DEAD].percent = 0;
+		}
+	}
 	cl.stats[stat] = ival;
 	cl.statsf[stat] = fval;
 	if (stat == STAT_VIEWZOOM)

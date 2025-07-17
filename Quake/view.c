@@ -67,12 +67,15 @@ cvar_t	gl_cshiftpercent_contents = {"gl_cshiftpercent_contents", "100", CVAR_ARC
 cvar_t	gl_cshiftpercent_damage = {"gl_cshiftpercent_damage", "100", CVAR_ARCHIVE}; // QuakeSpasm
 cvar_t	gl_cshiftpercent_bonus = {"gl_cshiftpercent_bonus", "100", CVAR_ARCHIVE}; // QuakeSpasm
 cvar_t	gl_cshiftpercent_powerup = {"gl_cshiftpercent_powerup", "100", CVAR_ARCHIVE}; // QuakeSpasm
+cvar_t	gl_cshiftpercent_dead = {"gl_cshiftpercent_dead", "0", CVAR_ARCHIVE}; // woods #cdead
 
 cvar_t	r_viewmodel_quake = {"r_viewmodel_quake", "0", CVAR_ARCHIVE};
 
 float	v_dmg_time, v_dmg_roll, v_dmg_pitch;
 
 extern	int			in_forward, in_forward2, in_back;
+extern	qboolean	qeintermission; // woods #qeintermission #cdead
+extern	qboolean	crxintermission; // woods #crxintermission #cdead
 
 vec3_t	v_punchangles[2]; //johnfitz -- copied from cl.punchangle.  0 is current, 1 is previous value. never the same unless map just loaded
 double	v_punchangles_times[2]; //spike -- times, to avoid assumptions...
@@ -534,7 +537,8 @@ void V_CalcBlend (void)
 		&gl_cshiftpercent_contents,
 		&gl_cshiftpercent_damage,
 		&gl_cshiftpercent_bonus,
-		&gl_cshiftpercent_powerup
+		&gl_cshiftpercent_powerup,
+		&gl_cshiftpercent_dead // woods #cdead
 	};
 
 	r = 0;
@@ -548,7 +552,7 @@ void V_CalcBlend (void)
 			continue;
 
 		//johnfitz -- only apply leaf contents color shifts during intermission
-		if (cl.intermission && j != CSHIFT_CONTENTS)
+		if ((cl.intermission || qeintermission || crxintermission) && j != CSHIFT_CONTENTS) // woods #cdead
 			continue;
 		//johnfitz
 
@@ -614,6 +618,27 @@ void V_UpdateBlend (void)
 	cl.cshifts[CSHIFT_BONUS].percent -= frametime*100; // woods iw
 	if (cl.cshifts[CSHIFT_BONUS].percent <= 0)
 		cl.cshifts[CSHIFT_BONUS].percent = 0;
+
+	// handle death cshift fade-in/fade-out -- woods #cdead
+	if (cl.stats[STAT_HEALTH] <= 0)
+	{
+		if (cl.cshifts[CSHIFT_DEAD].percent < 150)
+		{
+			cl.cshifts[CSHIFT_DEAD].percent += frametime * 1500; // fade in over 0.1 seconds
+			if (cl.cshifts[CSHIFT_DEAD].percent > 150)
+				cl.cshifts[CSHIFT_DEAD].percent = 150;
+			blend_changed = true;
+		}
+	}
+	else
+	{
+		// immediately clear death cshift when alive
+		if (cl.cshifts[CSHIFT_DEAD].percent > 0)
+		{
+			cl.cshifts[CSHIFT_DEAD].percent = 0;
+			blend_changed = true;
+		}
+	}
 
 	if (blend_changed)
 		V_CalcBlend ();
@@ -1057,6 +1082,7 @@ void V_Init (void)
 	Cvar_RegisterVariable (&gl_cshiftpercent_damage); // QuakeSpasm
 	Cvar_RegisterVariable (&gl_cshiftpercent_bonus); // QuakeSpasm
 	Cvar_RegisterVariable (&gl_cshiftpercent_powerup); // QuakeSpasm
+	Cvar_RegisterVariable (&gl_cshiftpercent_dead); // woods #cdead
 
 	Cvar_RegisterVariable (&scr_ofsx);
 	Cvar_RegisterVariable (&scr_ofsy);
