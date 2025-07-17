@@ -787,6 +787,72 @@ void Draw_StringRGBA (int x, int y, const char* str, plcolour_t c, float alpha)
 }
 
 /*
+================
+Draw_StringAnimatedDots -- woods
+Draws "..." with animated opacity cycling through each dot -- woods
+================
+*/
+void Draw_StringAnimatedDots(int x, int y, const char* str)
+{
+	if (!str || strlen(str) != 3) return; // Only works for 3-character strings like "..."
+
+	static double last_time = 0;
+	static int current_dot = 0;
+	static double dot_timer = 0;
+
+	const double DOT_CYCLE_TIME = 0.7; // Time for each dot to be fully bright
+	const float MIN_ALPHA = 0.1f;
+	const float MAX_ALPHA = 1.0f;
+
+	// Update timing
+	if (realtime - last_time > DOT_CYCLE_TIME) {
+		current_dot = (current_dot + 1) % 3;
+		last_time = realtime;
+		dot_timer = 0;
+	}
+	dot_timer = realtime - last_time;
+
+	glEnable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+
+	GL_Bind(char_texture);
+	glBegin(GL_QUADS);
+
+	// Draw each dot with appropriate alpha
+	for (int i = 0; i < 3; i++) {
+		float alpha;
+
+		if (i == current_dot) {
+			// Current dot: fade in to full brightness
+			float progress = dot_timer / DOT_CYCLE_TIME;
+			alpha = MIN_ALPHA + (MAX_ALPHA - MIN_ALPHA) * progress;
+		}
+		else if (i == (current_dot + 2) % 3) {
+			// Previous dot: fade out from full brightness
+			float progress = dot_timer / DOT_CYCLE_TIME;
+			alpha = MAX_ALPHA - (MAX_ALPHA - MIN_ALPHA) * progress;
+		}
+		else {
+			// Other dots: dim
+			alpha = MIN_ALPHA;
+		}
+
+		glColor4f(1.0f, 1.0f, 1.0f, alpha);
+
+		if (str[i] != 32) // don't waste verts on spaces
+			Draw_CharacterQuad(x + i * 8, y, str[i]);
+	}
+
+	glEnd();
+
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glEnable(GL_ALPHA_TEST);
+	glDisable(GL_BLEND);
+	glColor4f(1, 1, 1, 1);
+}
+
+/*
 =============
 Draw_ScaledPicAlpha -- woods #observerhud #eyemouse
 =============

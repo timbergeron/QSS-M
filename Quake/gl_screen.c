@@ -3971,6 +3971,76 @@ void SCR_DrawAutoID(void)
 	}
 }
 
+void SCR_DrawStatusIndicators (void)
+{
+	int i, x, y;
+	const int y_offset = 12;
+
+	if (cls.state != ca_connected || cl.intermission || qeintermission || crxintermission)
+		return;
+	if (!autoid_count)
+		return;
+
+	GL_SetCanvas(CANVAS_AUTOID);
+
+	for (i = 0; i < autoid_count; ++i)
+	{
+		const char* fullname = autoids[i].player->name;
+
+		/* inline test that ignores the 0x80 red-mask bit */
+		char clean[64];  int n = 0;
+		for (const char* p = fullname; *p && n < (int)sizeof(clean) - 1; ++p)
+			clean[n++] = (char)tolower(*p & 0x7F);   /* strip bit, lower-case */
+		clean[n] = '\0';
+
+		qboolean is_typing = q_strcasestr(clean, "typing") != NULL;
+
+		/* Case sensitive AFK detection that only triggers after 15th character */
+		qboolean is_afk = false;
+		if (strlen(fullname) > 15) {
+			/* Check for both regular "AFK" and Quake-encoded "AFK" (ÁÆË) */
+			const char* afk_pos = strstr(fullname + 15, "AFK");
+			if (!afk_pos) {
+				/* Check for Quake-encoded AFK: ÁÆË (0xC1 0xC6 0xCB with possible 0x80 mask) */
+				for (const char* p = fullname + 15; p[0] && p[1] && p[2]; ++p) {
+					if ((p[0] & 0x7F) == 0x41 && /* A */
+						(p[1] & 0x7F) == 0x46 && /* F */
+						(p[2] & 0x7F) == 0x4B)   /* K */
+					{
+						afk_pos = p;
+						break;
+					}
+				}
+			}
+			is_afk = (afk_pos != NULL);
+		}
+
+		if (!is_typing && !is_afk)
+			continue;
+
+		/* projected coords prepared by SCR_SetupAutoID() */
+		x = autoids[i].x / canvas_scaling;
+		y = (glheight - autoids[i].y) / canvas_scaling - y_offset;
+
+		if (r_refdef.viewangles[ROLL] == 80) { x += 26; y -= y_offset; }
+		if (scr_autoid.value > 0)             y -= y_offset;   /* above shown name */
+
+		if (is_afk) {
+			/* Draw red "AFK" using 128 mask */
+			char afk_text[4];
+			afk_text[0] = 'A' | 128;  // Red A
+			afk_text[1] = 'F' | 128;  // Red F
+			afk_text[2] = 'K' | 128;  // Red K
+			afk_text[3] = '\0';
+			Draw_String(x - 12, y, afk_text);
+		}
+		else {
+			/* Animated typing dots */
+			Draw_StringAnimatedDots(x - 12, y, "...");
+		}
+	}
+}
+
 float last_pause_time = 0.0f; // woods #obstimers - Store pause start time
 float pause_offset = 0.0f; // woods #obstimers - Accumulated pause offset
 
