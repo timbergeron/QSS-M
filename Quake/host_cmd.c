@@ -1069,8 +1069,8 @@ void ParticleList_Init (void)
 	struct dirent* dir_t;
 #endif
 	char		filestring[MAX_OSPATH];
-	char		cfgname[32];
-	char		cfgnamedir[32];
+	char		cfgname[MAX_OSPATH];
+	char		cfgnamedir[MAX_OSPATH];
 	searchpath_t* search;
 	pack_t* pak;
 	int		i;
