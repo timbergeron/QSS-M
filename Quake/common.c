@@ -2440,23 +2440,72 @@ searchpath_t	*com_base_searchpaths;
 
 /*
 ============
-COM_Path_f
+COM_Path_f -- woods
 ============
 */
 static void COM_Path_f (void)
 {
-	searchpath_t	*s;
+	searchpath_t* s;
+	int				priority = 1;
+	int				total_paks = 0;
+	int				total_dirs = 0;
+	int				total_files = 0;
+	char			size_str[32];
+	const char* filename;
+	char			relative_path[MAX_OSPATH];  // Add this
 
-	Con_Printf ("Current search path:\n");
+	// Header
+	Con_Printf("\n");
+	Con_Printf("^mpriority type    files    size       path^m\n");
+	Con_Printf("================================================================================\n");
+
 	for (s = com_searchpaths; s; s = s->next)
 	{
 		if (s->pack)
 		{
-			Con_Printf ("%s (%i files)\n", s->pack->filename, s->pack->numfiles);
+			// PAK file entry
+			filename = COM_SkipPath(s->pack->filename);
+
+			// Create relative path showing gamedir + filename
+			const char* gamedir_name = COM_SkipPath(com_gamedir);
+			q_snprintf(relative_path, sizeof(relative_path), "%s/%s", gamedir_name, filename);
+
+			// Calculate approximate size (rough estimate)
+			float size_mb = (s->pack->numfiles * 50.0f) / (1024.0f * 1024.0f); // Rough estimate
+			if (size_mb >= 1.0f)
+				q_snprintf(size_str, sizeof(size_str), "~%.1f MB", size_mb);
+			else
+				q_snprintf(size_str, sizeof(size_str), "~%.0f KB", size_mb * 1024.0f);
+
+			Con_Printf("^m%2d^m       pak      ^m%4d^m    %-9s  %s\n",
+				priority, s->pack->numfiles, size_str, relative_path);
+
+			total_paks++;
+			total_files += s->pack->numfiles;
 		}
 		else
-			Con_Printf ("%s\n", s->filename);
+		{
+			// Directory entry - show the actual search path directory name
+			q_snprintf(relative_path, sizeof(relative_path), "%s/", s->purename);
+
+			Con_Printf("^m%2d^m       dir      ----     -         %s\n",
+				priority, relative_path);
+			total_dirs++;
+		}
+		priority++;
 	}
+
+	// Footer with totals
+	Con_Printf("\n");
+	Con_Printf("%d PAK files (%d files), %d directories, %d search paths total\n",
+		total_paks, total_files, total_dirs, priority - 1);
+
+	if (total_paks > 0 || total_dirs > 0)
+	{
+		Con_Printf("\n^msearch order:^m files are loaded from priority 1 first, then 2, etc.\n");
+		Con_Printf("files in higher priority paths override files with the same name in lower priority paths.\n");
+	}
+	Con_Printf("\n");
 }
 
 /*
