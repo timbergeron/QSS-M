@@ -68,7 +68,7 @@ cvar_t	host_timescale = {"host_timescale", "0", CVAR_NONE}; //johnfitz
 cvar_t	max_edicts = {"max_edicts", "15000", CVAR_NONE}; //johnfitz //ericw -- changed from 2048 to 8192, removed CVAR_ARCHIVE
 cvar_t	cl_nocsqc = {"cl_nocsqc", "0", CVAR_NONE};	//spike -- blocks the loading of any csqc modules
 
-cvar_t	sys_ticrate = {"sys_ticrate","0.05",CVAR_NONE}; // dedicated server
+cvar_t	sys_ticrate = {"sys_ticrate","0.05",CVAR_NOTIFY|CVAR_SERVERINFO}; // dedicated server -- woods
 cvar_t	serverprofile = {"serverprofile","0",CVAR_NONE};
 
 cvar_t	fraglimit = {"fraglimit","0",CVAR_NOTIFY|CVAR_SERVERINFO};
@@ -579,6 +579,7 @@ void Host_InitLocal (void)
 	Cvar_RegisterVariable (&devstats); //johnfitz
 
 	Cvar_RegisterVariable (&sys_ticrate);
+	Cvar_SetCallback (&sys_ticrate, Host_Callback_Notify); // woods
 	Cvar_RegisterVariable (&sys_throttle);
 	Cvar_RegisterVariable (&serverprofile);
 
