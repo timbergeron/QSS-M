@@ -29,6 +29,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t cl_maxpitch; //johnfitz -- variable pitch clamping
 extern cvar_t cl_minpitch; //johnfitz -- variable pitch clamping
 
+cvar_t	cl_iDrive = {"cl_iDrive", "1", CVAR_ARCHIVE}; // woods #idrive
+
 /*
 ===============================================================================
 
@@ -159,6 +161,7 @@ void KeyDown (kbutton_t *b)
 	if (b->state & 1)
 		return;		// still down
 	b->state |= 1 + 2;	// down + impulse down
+	b->downtime = realtime; // woods #idrive
 }
 
 void KeyUp (kbutton_t *b)
@@ -173,6 +176,7 @@ void KeyUp (kbutton_t *b)
 	{ // typed manually at the console, assume for unsticking, so clear all
 		b->down[0] = b->down[1] = 0;
 		b->state = 4;	// impulse up
+		b->uptime = realtime;
 		return;
 	}
 
@@ -211,6 +215,7 @@ void KeyUp (kbutton_t *b)
 		return;		// still up (this should not happen)
 	b->state &= ~1;		// now up
 	b->state |= 4; 		// impulse up
+	b->uptime = realtime; // woods #idrive
 }
 
 void IN_KLookDown (void) {KeyDown(&in_klook);}
@@ -483,8 +488,67 @@ void CL_BaseMove (usercmd_t *cmd, qboolean isfinal)
 	if (cls.signon != SIGNONS)
 		return;
 
+	if (cl_iDrive.value) // woods #idrive
+	{
+		float s1, s2;
 	if (in_strafe.state & 1)
 	{
+			s1 = CL_KeyState (&in_right, isfinal);
+			s2 = CL_KeyState (&in_left, isfinal);
+
+			if (s1 && s2)
+			{
+				if (in_right.downtime > in_left.downtime)
+					s2 = 0;
+				if (in_right.downtime < in_left.downtime)
+					s1 = 0;
+			}
+			cmd->sidemove += cl_sidespeed.value * s1;
+			cmd->sidemove -= cl_sidespeed.value * s2;
+		}
+		s1 = CL_KeyState (&in_moveright, isfinal);
+		s2 = CL_KeyState (&in_moveleft, isfinal);
+		if (s1 && s2)
+		{
+			if (in_moveright.downtime > in_moveleft.downtime)
+				s2 = 0;
+			if (in_moveright.downtime < in_moveleft.downtime)
+				s1 = 0;
+		}
+		cmd->sidemove += cl_sidespeed.value * s1;
+		cmd->sidemove -= cl_sidespeed.value * s2;
+		s1 = CL_KeyState (&in_up, isfinal);
+		s2 = CL_KeyState (&in_down, isfinal);
+		if (s1 && s2)
+		{
+			if (in_up.downtime > in_down.downtime)
+				s2 = 0;
+			if (in_up.downtime < in_down.downtime)
+				s1 = 0;
+		}
+
+		cmd->upmove += cl_upspeed.value * s1;
+		cmd->upmove -= cl_upspeed.value * s2;
+
+		if (!(in_klook.state & 1)) 
+		{
+			s1 = CL_KeyState (&in_forward, isfinal);
+			s2 = CL_KeyState (&in_back, isfinal);
+			if (s1 && s2)
+			{
+				if (in_forward.downtime > in_back.downtime)
+					s2 = 0;
+				if (in_forward.downtime < in_back.downtime)
+					s1 = 0;
+			}
+			cmd->forwardmove += cl_forwardspeed.value * s1;
+			cmd->forwardmove -= cl_backspeed.value * s2;
+		}
+	}
+	else
+	{
+		if (in_strafe.state & 1)
+		{
 		cmd->sidemove += cl_sidespeed.value * CL_KeyState (&in_right, isfinal);
 		cmd->sidemove -= cl_sidespeed.value * CL_KeyState (&in_left, isfinal);
 	}
@@ -499,6 +563,7 @@ void CL_BaseMove (usercmd_t *cmd, qboolean isfinal)
 	{
 		cmd->forwardmove += cl_forwardspeed.value * CL_KeyState (&in_forward, isfinal);
 		cmd->forwardmove -= cl_backspeed.value * CL_KeyState (&in_back, isfinal);
+	}
 	}
 
 //
@@ -924,6 +989,7 @@ void CL_InitInput (void)
 	Cmd_AddCommand ("-mlook", IN_MLookUp);
 
 	Cvar_RegisterVariable (&pq_lag); // JPG - synthetic lag // woods #pqlag
+	Cvar_RegisterVariable (&cl_iDrive); // woods #idrive
 
 }
 

@@ -42,7 +42,7 @@ extern cvar_t allow_download; // woods #ftehack
 
 int VID_GetCurrentDPI(void);
 
-extern cvar_t gl_overbright_models; // woods for f_config
+extern cvar_t cl_iDrive; // woods for f_config
 extern qboolean WordFilter_Check(const char* text, char* dest_buffer, size_t buffer_size); // woods #contentfilter
 
 int ogflagprecache = 0, swapflagprecache = 0, swapflagprecache2 = 0, swapflagprecache3 = 0; // woods #alternateflags
@@ -3072,7 +3072,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 				q_snprintf(lfps, sizeof(lfps), "fps %d/%s", cl.fps, host_maxfps.string);
 			
 			MSG_WriteByte(&cls.message, clc_stringcmd);
-			MSG_WriteString(&cls.message, va("say fov %s, sens %s, fshaft %s, fbmodels %s, %s", scr_fov.string, sensitivity.string, cl_truelightning.string, gl_overbright_models.string, lfps));
+			MSG_WriteString(&cls.message, va("say fov %s, sens %s, fshaft %s, iDrive %s, %s", scr_fov.string, sensitivity.string, cl_truelightning.string, cl_iDrive.string, lfps));
 			MSG_WriteByte(&cls.message, clc_stringcmd);
 			MSG_WriteString(&cls.message, va("say cross %s, vmodel %s, hud %s, particles %s", crosshair.string, r_drawviewmodel.string, hud, particles));
 			MSG_WriteByte(&cls.message, clc_stringcmd);

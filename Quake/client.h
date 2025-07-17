@@ -526,6 +526,8 @@ typedef struct
 {
 	int		down[2];		// key nums holding it down
 	int		state;			// low bit is down state
+	double	downtime;		// when KeyDown() last time called for that button -- woods #idrive
+	double	uptime;			// when KeyUp() last time called for that button -- woods #idrive
 } kbutton_t;
 
 extern	kbutton_t	in_mlook, in_klook;
