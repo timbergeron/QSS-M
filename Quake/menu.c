@@ -13338,15 +13338,275 @@ Demos Menu
 ==================
 */
 
-#define MAX_VIS_DEMOS	17
+#define MAX_VIS_DEMOS	14
 
 typedef struct
 {
-	const char* name;
-	const char* date;
-	qboolean	active;
+	char        name[64];
+	char        date[32];
+	char        map[64];
+	char        players[256];
+	char        duration[16];
+	char        filesize[16];
+	qboolean    active;
+	qboolean    parsed;
 } demoitem_t;
 	
+typedef struct
+{
+	char        map[64];
+	char        players[256];
+	float       duration;
+	float       filesize_mb;
+} demoinfo_t;
+
+static void FormatDuration(float secs, char *out, size_t outlen)
+{
+	int m = (int)(secs / 60);
+	int s = (int)(secs + 0.5f) % 60;
+	q_snprintf(out, outlen, "%d:%02d", m, s);
+}
+
+static inline int SkipCStringOffset(const byte* base, int off, int limit)
+{
+	const void* p = memchr(base + off, 0, (size_t)(limit - off));
+	return p ? (int)((const byte*)p - base) + 1 : limit;
+}
+
+static int CompareFrags(const void* a, const void* b)
+{
+	const struct { char name[MAX_QPATH]; int frags; } *pa = a, * pb = b;
+	return pb->frags - pa->frags;
+}
+
+static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
+{
+	byte* data = COM_LoadMallocFile(va("demos/%s.dem", name), NULL);
+	if (!data) return false;
+
+	int length = com_filesize;
+	if (length <= 0) { free(data); return false; }
+
+	info->map[0] = info->players[0] = '\0';
+	info->duration = 0.0f;
+	info->filesize_mb = length / (1024.0f * 1024.0f);
+
+	qboolean map_found = false;
+	int maxclients = 16;
+
+	int  player_peak_frags[32];
+	memset(player_peak_frags, 0x9D, sizeof(player_peak_frags));   /* -99 */
+	qboolean player_has_name[32] = { 0 };
+	char player_names[32][MAX_QPATH];
+	memset(player_names, 0, sizeof(player_names));
+
+	/* skip header line */
+	int off = 0;
+	while (off < length && data[off] != '\n') off++;
+	if (off < length) off++;
+
+	float last_time = 0.0f;
+	int frame_count = 0;
+
+	while (off < length - 16)
+	{
+		if (off + 4 > length) break;
+
+		int msg_len = LittleLong(*(int*)(data + off));
+		off += 4;
+
+		if (msg_len <= 0 || msg_len > 32768 || off + 12 + msg_len > length)
+			break;
+
+		off += 12;                    /* skip view angles */
+		int msg_end = off + msg_len;  /* inner loop bound */
+
+		while (off < msg_end)
+		{
+			byte cmd = data[off++];
+
+			switch (cmd)
+			{
+			case svc_print:
+			case svc_stufftext:
+				off = SkipCStringOffset(data, off, msg_end);
+				break;
+
+			case svc_serverinfo:
+			{
+				int pos = off;
+				while (pos + 4 < msg_end)
+				{
+					int proto = LittleLong(*(int*)(data + pos));
+					pos += 4;
+
+					/* skip extension blocks -------------------------- */
+					if (proto == 0x80000001 || proto == 0x80000002      // QuakeSpasm/QSS
+						|| proto == 0x31544546 || proto == 0x32455446)    // 'FTE1' / 'FTE2'
+					{
+						pos += 4;           // skip associated flags/size field
+						continue;
+					}
+
+					/* FITZQUAKE (666) carries an extra flags int */
+					if (proto == 666)
+					{
+						int fitzFlags = LittleLong(*(int*)(data + pos));
+						Con_DPrintf("\n%i", fitzFlags);
+						pos += 4;           // …you might want to store this if you care
+					}
+
+					/* now the next byte really *is* maxclients */
+					if (pos < msg_end)
+					{
+						maxclients = data[pos];
+						if (maxclients > 32) maxclients = 32;
+					}
+					break;
+				}
+
+				if (!map_found)
+				{
+					for (int i = off; i < msg_end - 5; i++)
+					{
+						if (!memcmp(data + i, "maps/", 5))
+						{
+							int j = i + 5;
+							while (j < msg_end && data[j] && data[j] != '/') j++;
+							int end = j;
+							for (; end < msg_end - 4; end++)
+								if (!memcmp(data + end, ".bsp", 4)) break;
+							if (end < msg_end - 4)
+							{
+								int nlen = end - (i + 5);
+								if (nlen >= (int)sizeof(info->map)) nlen = sizeof(info->map) - 1;
+								memcpy(info->map, data + i + 5, nlen);
+								info->map[nlen] = '\0';
+								char* ext = strstr(info->map, ".bsp");
+								if (ext) *ext = '\0';
+								map_found = true;
+								off = msg_end;           /* early skip */
+								goto msg_end_reached;
+							}
+							break;
+						}
+					}
+				}
+				off = msg_end;         /* skip rest */
+				goto msg_end_reached;
+			}
+
+			case svc_updatename:
+				if (off < msg_end)
+				{
+					int pl = data[off++];
+					if (pl >= 0 && pl < maxclients)
+					{
+						int start = off;
+						off = SkipCStringOffset(data, off, msg_end);
+						int nlen = off - start - 1;
+						if (nlen > 0 && nlen < MAX_QPATH)
+						{
+							char tmp[MAX_QPATH];
+							memcpy(tmp, data + start, nlen); tmp[nlen] = '\0';
+
+							char clean[16]; q_strlcpy(clean, tmp, sizeof(clean));
+							size_t len = strlen(clean);
+							while (len && isspace((unsigned char)clean[len - 1])) clean[--len] = '\0';
+
+							if (len && strcmp(clean, "unconnected") &&
+								strncmp(clean, "Player ", 7))
+							{
+								q_strlcpy(player_names[pl], clean, sizeof(player_names[pl]));
+								player_has_name[pl] = true;
+							}
+						}
+					}
+					else off = SkipCStringOffset(data, off, msg_end);
+				}
+				break;
+
+			case svc_updatefrags:
+				if (off + 3 <= msg_end)
+				{
+					int pl = data[off++];
+					int fr = LittleShort(*(int16_t*)(data + off));
+					off += 2;
+					if (pl >= 0 && pl < maxclients && fr > player_peak_frags[pl])
+						player_peak_frags[pl] = fr;
+				}
+				else goto msg_end_reached;
+				break;
+
+			case svc_updatecolors:
+				off += (off + 2 <= msg_end) ? 2 : 0;
+				break;
+
+			case svc_signonnum:
+				off += (off + 1 <= msg_end) ? 1 : 0;
+				break;
+
+			case svc_intermission:
+				if (map_found) goto build_result;
+				break;
+
+			default:
+				off = msg_end; /* unknown – skip rest */
+				break;
+			}
+		}
+	msg_end_reached:
+		off = msg_end;
+		if (++frame_count > 50000) break;
+	}
+
+build_result:
+{
+	/* first statement after label is “{” (a block), so declarations are legal */
+	struct { char name[MAX_QPATH]; int frags; } list[32];
+	int cnt = 0;
+
+	for (int p = 0; p < maxclients; p++)
+		if (player_has_name[p] && cnt < 32)
+		{
+			qboolean dup = false;
+			for (int i = 0; i < cnt; i++)
+				if (!strcmp(list[i].name, player_names[p]))
+				{
+					if (player_peak_frags[p] > list[i].frags)
+						list[i].frags = player_peak_frags[p];
+					dup = true;
+					break;
+				}
+			if (!dup)
+			{
+				q_strlcpy(list[cnt].name, player_names[p],
+					sizeof(list[cnt].name));
+				list[cnt].frags = player_peak_frags[p];
+				cnt++;
+			}
+		}
+
+	qsort(list, cnt, sizeof(list[0]), CompareFrags);
+
+	for (int i = 0; i < cnt; i++)
+	{
+		if (i) q_strlcat(info->players, ", ", sizeof(info->players));
+		char buf[MAX_QPATH];
+		q_snprintf(buf, sizeof(buf), "%s (%d)",
+			list[i].name, list[i].frags);
+		q_strlcat(info->players, buf, sizeof(info->players));
+	}
+
+	info->duration = last_time;
+	if (frame_count > 1000 && info->duration < 60.0f)
+		info->duration = frame_count / 40.0f;
+}
+
+free(data);
+return true;
+}
+
 static struct
 {
 	menulist_t			list;
@@ -13360,13 +13620,33 @@ static struct
 	int*                filtered_indices;
 } demosmenu;
 
+static void M_Demos_FreeItems(void)
+{
+	if (demosmenu.items)
+	{
+		Vec_Free((void**)&demosmenu.items);
+		demosmenu.items = NULL;
+	}
+	if (demosmenu.filtered_indices)
+	{
+		Vec_Free((void**)&demosmenu.filtered_indices);
+		demosmenu.filtered_indices = NULL;
+	}
+	demosmenu.democount = 0;
+}
 
 static void M_Demos_Add (const char* name, const char* date)
 {
     demoitem_t tempDemo;
-    tempDemo.name = name;
-    tempDemo.date = date;
+	
+	q_strlcpy(tempDemo.name, name, sizeof(tempDemo.name));
+	q_strlcpy(tempDemo.date, date, sizeof(tempDemo.date));
+	tempDemo.map[0] = '\0';
+	tempDemo.players[0] = '\0';
+	tempDemo.duration[0] = '\0';
+	tempDemo.filesize[0] = '\0';
     tempDemo.active = false;
+	tempDemo.parsed = false;
 
     int insertPos = demosmenu.democount;
 
@@ -13403,7 +13683,9 @@ static void M_Demos_Refilter(void)
     {
         if (demosmenu.list.search.len == 0 ||
             q_strcasestr(demosmenu.items[i].name, demosmenu.list.search.text) ||
-            q_strcasestr(demosmenu.items[i].date, demosmenu.list.search.text))
+            q_strcasestr(demosmenu.items[i].date, demosmenu.list.search.text) ||
+            q_strcasestr(demosmenu.items[i].map, demosmenu.list.search.text) ||
+            q_strcasestr(demosmenu.items[i].players, demosmenu.list.search.text))
         {
             VEC_PUSH(demosmenu.filtered_indices, i);
         }
@@ -13423,6 +13705,8 @@ static void M_Demos_Refilter(void)
 static void M_Demos_Init(void)
 {
     filelist_item_t* item;
+
+    M_Demos_FreeItems();
 
     demosmenu.list.viewsize = MAX_VIS_DEMOS;
     demosmenu.list.cursor = -1;
@@ -13551,6 +13835,148 @@ void M_Demos_Draw (void)
             M_DrawEllipsisBar(x, y + demosmenu.list.viewsize * 8, cols);
     }
 
+    if (demosmenu.list.cursor >= 0 && demosmenu.list.cursor < demosmenu.list.numitems)
+    {
+        int demo_idx = demosmenu.filtered_indices[demosmenu.list.cursor];
+        demoitem_t* di = &demosmenu.items[demo_idx];
+        
+        // Lazy parsing: only parse when item is selected for the first time
+        if (!di->parsed)
+        {
+            demoinfo_t info;
+            if (Parse_DemoInfo(di->name, &info))
+            {
+                q_strlcpy(di->map, info.map, sizeof(di->map));
+                q_strlcpy(di->players, info.players, sizeof(di->players));
+                FormatDuration(info.duration, di->duration, sizeof(di->duration));
+                q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", info.filesize_mb);
+            }
+            else
+            {
+                q_strlcpy(di->map, "unknown", sizeof(di->map));
+                q_strlcpy(di->players, "n/a", sizeof(di->players));
+                q_strlcpy(di->duration, "n/a", sizeof(di->duration));
+                q_strlcpy(di->filesize, "n/a", sizeof(di->filesize));
+            }
+            di->parsed = true;
+        }
+        int info_y = y + demosmenu.list.viewsize * 8 + 4;
+        qboolean at_bottom = (demosmenu.list.scroll + demosmenu.list.viewsize >= demosmenu.list.numitems);
+        if (!at_bottom && M_List_GetOverflow(&demosmenu.list) > 0)
+            info_y += 8;
+        
+        int current_y = info_y;
+        
+        if (di->map[0] && di->duration[0] && di->filesize[0])
+        {
+            M_Print(x, current_y, va("%s (%s) - %s", di->map, di->duration, di->filesize));
+            current_y += 8;
+        }
+        else if (di->map[0] && di->duration[0])
+        {
+            M_Print(x, current_y, va("%s (%s)", di->map, di->duration));
+            current_y += 8;
+        }
+        else if (di->map[0])
+        {
+            M_Print(x, current_y, di->map);
+            current_y += 8;
+        }
+        else if (di->duration[0])
+        {
+            M_Print(x, current_y, va("Duration: %s", di->duration));
+            current_y += 8;
+        }
+        
+        if (di->players[0])
+        {
+            // Handle player display with 40-character line wrapping
+            char players_copy[256];
+            q_strlcpy(players_copy, di->players, sizeof(players_copy));
+            
+            char* pos = players_copy;
+            char line_buffer[64];
+            int line_pos = 0;
+            qboolean first_line = true;
+            int line_count = 0;
+            
+            while (*pos)
+            {
+                // Find next comma or end of string
+                char* next_comma = strchr(pos, ',');
+                int name_len;
+                
+                if (next_comma)
+                {
+                    name_len = next_comma - pos;
+                    // Skip comma and space after it
+                    while (next_comma[1] == ' ') next_comma++;
+                }
+                else
+                {
+                    name_len = strlen(pos);
+                }
+                
+                // Check if this name fits on current line (including comma and space if there are more names)
+                int comma_space = next_comma ? 2 : 0; // ", " if there are more names
+                int needed_space = name_len + comma_space;
+                
+                if (line_pos > 0 && line_pos + needed_space > 40)
+                {
+                    // Check if we've reached the 3-line limit
+                    if (line_count >= 2) // 0, 1, 2 = 3 lines total
+                    {
+                        // Add ellipsis to indicate more players
+                        if (line_pos + 4 <= 40) // Space for " ..."
+                        {
+                            line_buffer[line_pos++] = ' ';
+                            line_buffer[line_pos++] = '.';
+                            line_buffer[line_pos++] = '.';
+                            line_buffer[line_pos++] = '.';
+                        }
+                        line_buffer[line_pos] = '\0';
+                        M_PrintWhite(x, current_y, line_buffer);
+                        break; // Stop processing more players
+                    }
+                    
+                    // Print current line and start new one
+                    line_buffer[line_pos] = '\0';
+                    M_PrintWhite(x, current_y, line_buffer); // Remove indent - all lines align to same x position
+                    if (first_line)
+                        first_line = false;
+                    current_y += 8;
+                    line_count++;
+                    line_pos = 0;
+                }
+                
+                // Copy the name
+				memcpy(line_buffer + line_pos, pos, name_len);
+                line_pos += name_len;
+                
+                // Add comma and space after name if there are more names coming
+                if (next_comma)
+                {
+                    line_buffer[line_pos++] = ',';
+                    line_buffer[line_pos++] = ' ';
+                }
+                
+                // Move to next name
+                if (next_comma)
+                    pos = next_comma + 1;
+                else
+                    break;
+            }
+            
+            // Print final line if any content (and we haven't exceeded 3 lines)
+            if (line_pos > 0 && line_count < 3)
+            {
+                line_buffer[line_pos] = '\0';
+                M_PrintWhite(x, current_y, line_buffer); // Remove indent - all lines align to same x position
+                current_y += 8;
+            }
+        }
+    }
+
     if (demosmenu.list.search.len > 0)
     {
         M_DrawTextBox(16, 180, 32, 1);
@@ -13591,6 +14017,61 @@ void M_Demos_Key(int key)
 		{
 			M_DeletePrevWord(&demosmenu.list.search);
 			M_Demos_Refilter();
+			return;
+		}
+		else if (key == K_BACKSPACE && demosmenu.list.numitems > 0)
+		{
+			// Delete the currently selected demo file
+			int demo_idx = demosmenu.filtered_indices[demosmenu.list.cursor];
+
+			// Copy demo name to local buffer BEFORE freeing memory
+			char demo_name[64];
+			q_strlcpy(demo_name, demosmenu.items[demo_idx].name, sizeof(demo_name));
+
+			char demo_path[MAX_OSPATH];
+
+			// Construct the full path to the demo file
+			q_snprintf(demo_path, sizeof(demo_path), "%s/demos/%s.dem", com_gamedir, demo_name);
+
+			// Try to delete the file
+			if (remove(demo_path) == 0)
+			{
+				// Successfully deleted file, now remove from demo list
+				FileList_Subtract(demo_name, &demolist);
+
+				// Store current cursor position
+				int old_cursor = demosmenu.list.cursor;
+
+				// Use the existing function to properly free items
+				M_Demos_FreeItems();
+
+				// Rebuild items from updated demolist
+				filelist_item_t* item;
+				for (item = demolist; item; item = item->next)
+					M_Demos_Add(item->name, item->data);
+
+				// Refilter to update the filtered_indices array
+				M_Demos_Refilter();
+
+				// Restore cursor position (adjust if necessary)
+				if (old_cursor >= demosmenu.list.numitems && demosmenu.list.numitems > 0)
+					demosmenu.list.cursor = demosmenu.list.numitems - 1;
+				else if (demosmenu.list.numitems > 0)
+					demosmenu.list.cursor = old_cursor;
+				else
+					demosmenu.list.cursor = -1;
+
+				// Play confirmation sound
+				S_LocalSound("misc/menu1.wav");
+
+				Con_Printf("demo ^m%s^m deleted\n", demo_name);
+			}
+			else
+			{
+				// Failed to delete file
+				S_LocalSound("misc/menu3.wav");
+				Con_Printf("failed to delete demo ^m%s^m\n", demo_name);
+			}
 			return;
 		}
 	}
@@ -13808,6 +14289,9 @@ void MQC_Shutdown(void)
 	if (key_dest == key_menu)
 		key_dest = key_console;
 	PR_ClearProgs(&cls.menu_qcvm);					//nuke it from orbit
+
+	// Clean up menu memory
+	M_Demos_FreeItems();
 
 	for (i = 0; i < sizeof(menucommands)/sizeof(menucommands[0]); i++)
 		if (!menucommands[i].cmd)
