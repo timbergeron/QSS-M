@@ -871,7 +871,7 @@ static void R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- wood
 
 	if (cl.time <= cl.faceanimtime && cl_damagehue.value)
 	{
-		if (cl.gametype == GAME_DEATHMATCH && e == &cl.viewent && !chase_active.value)
+		if (e == &cl.viewent && !chase_active.value)
 		{
 			if (r_coloredpowerupglow.value && gl_powerupshells.value <= 1)
 			{
@@ -890,7 +890,7 @@ static void R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- wood
 	}
 	else
 	{
-		if (cl.gametype == GAME_DEATHMATCH && e == &cl.viewent && !chase_active.value)
+		if (e == &cl.viewent && !chase_active.value)
 		{
 			if (r_coloredpowerupglow.value && gl_powerupshells.value <= 1)
 			{
@@ -1813,7 +1813,7 @@ void R_SetupAliasLighting (entity_t	*e)
 
 	if (!(cl.time <= cl.faceanimtime && cl_damagehue.value))
 	{
-		if ((cl.gametype == GAME_DEATHMATCH) && r_coloredpowerupglow.value && gl_powerupshells.value)
+		if (r_coloredpowerupglow.value && gl_powerupshells.value)
 		{
 			float alpha;
 
