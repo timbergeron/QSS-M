@@ -81,7 +81,7 @@ cvar_t  f_status = {"f_status", "on", CVAR_ARCHIVE | CVAR_USERINFO}; // woods #f
 cvar_t  cl_ambient = {"cl_ambient", "1", CVAR_ARCHIVE}; // woods #stopsound
 cvar_t  r_coloredpowerupglow = {"r_coloredpowerupglow", "1", CVAR_ARCHIVE}; // woods
 cvar_t  cl_bobbing = {"cl_bobbing", "0", CVAR_ARCHIVE}; // woods (joequake #weaponbob)
-cvar_t	cl_web_download_url = {"cl_web_download_url", "q1tools.github.io", CVAR_ARCHIVE}; // woods #webdl
+cvar_t	cl_web_download_url = {"cl_web_download_url", "q1tools/q1tools.github.io", CVAR_ARCHIVE}; // woods #webdl
 cvar_t	cl_web_download_url2 = { "cl_web_download_url2", "maps.quakeworld.nu", CVAR_ARCHIVE }; // woods #webdl
 cvar_t	cl_autovote = {"cl_autovote", "0", CVAR_ARCHIVE}; // woods #autovote
 cvar_t	cl_onload = {"cl_onload", "", CVAR_ARCHIVE}; // woods #onload
@@ -1429,6 +1429,8 @@ typedef struct
 {
 	char filename[MAX_OSPATH];
 	char url[MAX_URLPATH];
+        qboolean is_skybox;
+        char display_name[64];
 } DownloadData;
 
 qboolean web2check = false;
@@ -1445,6 +1447,100 @@ typedef struct {
 SDL_Thread* currentWebCheckThread = NULL;
 SDL_Thread* currentWeb2CheckThread = NULL;
 
+
+qboolean IsGithubRepoPath(const char* s)
+{
+	if (!s)
+		return false;
+
+	const char* first = strchr(s, '/');
+	if (!first)
+		return false;
+
+	// Now accepts both user/repo and user/repo/branch patterns
+	return true; // Must have at least 1 slash (user/repo)
+}
+
+/*
+==============================================================================
+* NormalizeGithubRepoPath
+*     Ensures GitHub repo paths have "/main" appended if they only have user/repo
+*     e.g., "q1tools/q1tools.github.io" becomes "q1tools/q1tools.github.io/main"
+==============================================================================
+*/
+static void NormalizeGithubRepoPath(const char* input, char* output, size_t output_size)
+{
+	if (!input || !output || output_size == 0)
+		return;
+
+	// Count slashes to determine if we need to append "/main"
+	int slash_count = 0;
+	for (const char* p = input; *p; ++p)
+	{
+		if (*p == '/')
+			slash_count++;
+	}
+
+	// If we have exactly 1 slash (user/repo), append "/main"
+	if (slash_count == 1)
+	{
+		q_snprintf(output, output_size, "%s/main", input);
+	}
+	else
+	{
+		// Otherwise, use as-is
+		q_strlcpy(output, input, output_size);
+	}
+}
+
+static inline const char* DL_DisplayTag(const char* base, char* buf, size_t bufsz)
+{
+	if (IsGithubRepoPath(base))
+	{
+		const char* s1 = strchr(base, '/');        /* after user/ */
+		const char* s2 = strchr(s1 + 1, '/');      /* after repo/ */
+		size_t len = s2 ? (size_t)(s2 - s1 - 1) : strlen(s1 + 1);
+		if (len >= bufsz) len = bufsz - 1;
+		memcpy(buf, s1 + 1, len);
+		buf[len] = '\0';
+		return buf;                                /* e.g. "q1tools.github.io" */
+	}
+	return base;                                   /* e.g. "maps.quakeworld.nu" */
+}
+
+/*
+==============================================================================
+*  GithubExtractUserRepo
+*     Splits "user/repo[/branch[/dir]]" into USER and REPO.
+*     Returns false if the input does not match that pattern.
+==============================================================================
+*/
+static qboolean GithubExtractUserRepo(const char *in,
+                                      char *user, size_t usz,
+                                      char *repo, size_t rsz)
+{
+    if (!IsGithubRepoPath(in))
+        return false;
+
+    /* 1st slash separates USER / REPO */
+    const char *slash1 = strchr(in, '/');
+    size_t ulen = slash1 - in;                 /* bytes before first '/' */
+
+    /* REPO ends at next slash (branch) or end of string */
+    const char *slash2 = strchr(slash1 + 1, '/');
+    size_t rlen = slash2 ? (size_t)(slash2 - slash1 - 1)
+                         : strlen(slash1 + 1);
+
+    /* sanity-check lengths and buffers */
+    if (ulen == 0 || rlen == 0 || ulen >= usz || rlen >= rsz)
+        return false;
+
+    memcpy(user, in, ulen);          user[ulen]  = '\0';
+    memcpy(repo, slash1 + 1, rlen);  repo[rlen]  = '\0';
+    return true;
+}
+
+
 int checkWebsite (void* ptr)  // ping the potential websites in advance
 {
 	ThreadData* data = (ThreadData*)ptr;
@@ -1455,6 +1551,31 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
 		return -1;
 	}
 
+	for (const char* p = data->url; *p; ++p)
+		if ((unsigned char)*p <= 32 || ((unsigned char)*p & 0x80))
+		{
+			if (data->web == 1) webcheck = false;
+			if (data->web == 2) web2check = false;
+			free(data->url);
+			free(data);
+			return 0;
+		}
+
+	/* user/repo[/branch] names may only use A-Z a-z 0-9 . _ - and / */
+	if (IsGithubRepoPath(data->url))
+	{
+		for (const char* p = data->url; *p; ++p)
+			if (!isalnum((unsigned char)*p) &&
+				*p != '/' && *p != '.' && *p != '-' && *p != '_')
+			{
+				if (data->web == 1) webcheck = false;
+				if (data->web == 2) web2check = false;
+				free(data->url);
+				free(data);
+				return 0;
+			}
+	}
+
 	CURL* curl = curl_easy_init();
 	if (curl == NULL) {
 		free(data->url);
@@ -1463,7 +1584,23 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
 	}
 
 	char fullurl[256];
-	if (!strstr(data->url, "://"))
+	char user[64], repo[64];
+	
+	// Normalize the URL to include /main if needed for GitHub repo paths
+	char normalized_url[MAX_URLPATH];
+	if (IsGithubRepoPath(data->url))
+	{
+		NormalizeGithubRepoPath(data->url, normalized_url, sizeof(normalized_url));
+		if (GithubExtractUserRepo(normalized_url, user, sizeof(user), repo, sizeof(repo)))
+		{
+			q_snprintf(fullurl, sizeof(fullurl), "https://github.com/%s/%s", user, repo);
+		}
+	}
+	else if (GithubExtractUserRepo(data->url, user, sizeof(user), repo, sizeof(repo)))
+	{
+		q_snprintf(fullurl, sizeof(fullurl), "https://github.com/%s/%s", user, repo);
+	}
+	else if (!strstr(data->url, "://"))
 		q_snprintf(fullurl, sizeof(fullurl), "https://%s/", data->url);
 	else
 		q_strlcpy(fullurl, data->url, sizeof(fullurl));
@@ -1653,6 +1790,9 @@ int Progress_Callback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl
 				progress = (int)((double)dlnow / (double)dltotal * 100.0);
 
 			char urlLimited[21];
+			if (dataFromCurl->is_skybox && dataFromCurl->display_name[0] != '\0')
+				Q_strncpy(urlLimited, dataFromCurl->display_name, 20);
+			else
 			Q_strncpy(urlLimited, dataFromCurl->url, 20);
 			urlLimited[20] = '\0';
 
@@ -1676,18 +1816,14 @@ int Progress_Callback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl
 
 			if (scr_disabled_for_loading != true)
 			{
-				static double now, oldtime, newtime;
-				newtime = Sys_DoubleTime();
-				now = newtime - oldtime;
-				Host_Frame(now);
-				oldtime = newtime;
+				SDL_PumpEvents();
 			}
 		}
 	}
 	return 0;
 }
 
-qboolean Curl_DownloadFile (const char* url, const char* filename, const char* local_path) // main curl function
+qboolean Curl_DownloadFile (const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name) // main curl function
 {
 	stop_curl_download = false;
 	cls.download.active = true;
@@ -1699,7 +1835,51 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 	char full_url[MAX_URLPATH];
 	const char* skipped_path = COM_SkipPath(filename);
 
-	if (strstr(url, "github.io") && strstr(filename, "maps")) // special case for github.io
+	
+	if (IsGithubRepoPath(url))
+	{
+		/* Normalize the URL to include /main if needed */
+		char normalized_url[MAX_URLPATH];
+		NormalizeGithubRepoPath(url, normalized_url, sizeof(normalized_url));
+		
+		/* Build the common prefix once */
+		char repo_base[MAX_URLPATH];
+		q_snprintf(repo_base, sizeof(repo_base),
+			"https://raw.githubusercontent.com/%s/", normalized_url);
+
+		/* 1.  Skyboxes -> skyboxes/<face>.(tga|png|...) */
+		if (is_skybox && !strncmp(filename, "gfx/env/", 8))
+		{
+			/* skip the "gfx/env/" part */
+			q_snprintf(full_url, sizeof(full_url),
+				"%sgfx/env/%s", repo_base, filename + 8);
+		}
+		/* 2.  Maps -> maps/<A-Z or 0-9>/<basename>.bsp */
+		else if (!strncmp(filename, "maps/", 5))
+		{
+			const char* base = COM_SkipPath(filename);   /* DM4.bsp */
+			char directory[5];
+
+			if (isdigit((unsigned char)base[0]))
+				strcpy(directory, "0-9/");
+			else {
+				directory[0] = (char)toupper((unsigned char)base[0]);
+				directory[1] = '/';
+				directory[2] = '\0';
+			}
+
+			q_snprintf(full_url, sizeof(full_url),
+				"%smaps/%s%s", repo_base, directory, base);
+		}
+		/* 3.  Everything else -> branch/<original path> */
+		else
+		{
+			q_snprintf(full_url, sizeof(full_url),
+				"%s%s", repo_base, filename);
+		}
+	}
+
+	else if (strstr(url, "github.io") && strstr(filename, "maps")) // special case for github.io
 	{
 		char directory[5];
 
@@ -1730,6 +1910,11 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 	memset(&dl_data, 0, sizeof(dl_data)); // Reset dl_data
 	Q_strncpy(dl_data.filename, filename, MAX_OSPATH);
 	Q_strncpy(dl_data.url, url, MAX_URLPATH); // the server set in cl_web_download_url
+        dl_data.is_skybox = is_skybox;
+        if (display_name)
+            Q_strncpy(dl_data.display_name, display_name, sizeof(dl_data.display_name));
+        else
+            dl_data.display_name[0] = '\0';
 	q_strlcpy(cls.download.current, filename, sizeof(cls.download.current));
 
 	CURL* curl = curl_easy_init();
@@ -1814,7 +1999,13 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 
 	}
 
-	Con_Printf("Downloaded ^m%s^m (%s) from %s\n", COM_SkipPath(filename), sizeStr, url);
+	char tagbuf[64];
+	const char* src = (display_name && display_name[0])
+		? display_name
+		: DL_DisplayTag(url, tagbuf, sizeof(tagbuf));
+
+	Con_Printf("Downloaded ^m%s^m (%s) from %s\n",
+		COM_SkipPath(filename), sizeStr, src);
 
 	return true; // File successfully downloaded
 }
@@ -1982,11 +2173,11 @@ qboolean CL_CheckDownload(const char *filename)
 	}
 
 	if (webcheck && (cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0')) // only run if server is verified
-		if (Curl_DownloadFile (cl_web_download_url.string, filename, local_path))
+                if (Curl_DownloadFile (cl_web_download_url.string, filename, local_path, false, NULL))
 			return false;
 
 	if (web2check && (cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0')) // only run if server is verified
-		if (Curl_DownloadFile (cl_web_download_url2.string, filename, local_path))
+                if (Curl_DownloadFile (cl_web_download_url2.string, filename, local_path, false, NULL))
 			return false;
 
 	// woods, if not available via web, try the server #webdl
@@ -2013,6 +2204,159 @@ qboolean CL_CheckDownload(const char *filename)
 	MSG_WriteString (&cls.message, va("download \"%s\"\n", filename));
 	return true;
 }
+
+/*
+=============================================================================
+ Sky_PeekSkyKeyFromBSP -- woods
+-----------------------------------------------------------------------------
+Looks for a worldspawn "sky" key in a map.
+Order of search
+   1. Inside the BSP's entity lump
+   2. If not found, an external entity file  maps/<mapname>.ent
+
+Returns true and puts the sky string in *outbuf  (truncated to outsz-1)
+if a key is found; otherwise returns false and leaves *outbuf empty.
+=============================================================================
+*/
+qboolean Sky_PeekSkyKeyFromBSP(const char* bspname,
+	char* outbuf,
+	size_t      outsz)
+{
+	dheader_t  hdr;
+	lump_t* ent;
+	FILE* f;
+	qboolean   ok = false;
+
+	/* ------------------ sanity ------------------ */
+	if (!outsz)
+		return false;
+	*outbuf = 0;
+
+	/* ------------------ open BSP ---------------- */
+	if (COM_FOpenFile(bspname, &f, NULL) < (int)sizeof(hdr) || !f)
+		goto try_external_ent;
+
+	/* read + validate header */
+	if (fread(&hdr, sizeof(hdr), 1, f) != 1)
+		goto close_bsp;
+
+	hdr.version = LittleLong(hdr.version);
+	if (hdr.version != BSPVERSION &&
+		hdr.version != BSP2VERSION_2PSB &&
+		hdr.version != BSP2VERSION_BSP2 &&
+		hdr.version != BSPVERSION_QUAKE64)
+		goto close_bsp;
+
+	for (int i = 1; i < (int)sizeof(hdr) / 4; i++)
+		((int*)&hdr)[i] = LittleLong(((int*)&hdr)[i]);
+
+	/* --------------- scan entity lump ---------- */
+	ent = &hdr.lumps[LUMP_ENTITIES];
+	if (ent->filelen > 0 && ent->filelen <= 32768)
+	{
+		char* buf = (char*)Z_Malloc(ent->filelen + 1);
+		fseek(f, ent->fileofs, SEEK_SET);
+		fread(buf, 1, ent->filelen, f);
+		buf[ent->filelen] = 0;
+
+		const char* p = COM_Parse(buf);
+		if (p && com_token[0] == '{')
+		{
+			while ((p = COM_Parse(p)))
+			{
+				if (com_token[0] == '}')
+					break;
+
+				char key[64];
+				if (com_token[0] == '_')
+					q_strlcpy(key, com_token + 1, sizeof(key));
+				else q_strlcpy(key, com_token, sizeof(key));
+
+				p = COM_Parse(p);
+				if (!p) break;
+
+				if (!q_strcasecmp(key, "sky") ||
+					!q_strcasecmp(key, "_sky") ||
+					!q_strcasecmp(key, "skyname") ||
+					!q_strcasecmp(key, "qlsky"))
+				{
+					q_strlcpy(outbuf, com_token, outsz);
+					ok = true;
+					break;
+				}
+			}
+		}
+		Z_Free(buf);
+	}
+
+close_bsp:
+	fclose(f);
+	if (ok)
+		return true;
+
+	/* ---------------- external .ent ------------- */
+try_external_ent:
+	{
+		char mapname[MAX_QPATH];
+		char entpath[MAX_QPATH];
+
+		/* get file name w/o path or extension */
+		q_strlcpy(mapname, COM_SkipPath(bspname), sizeof(mapname));
+		COM_StripExtension(mapname, mapname, sizeof(mapname));
+
+		q_snprintf(entpath, sizeof(entpath), "maps/%s.ent", mapname);
+
+		char* ebuf = (char*)COM_LoadMallocFile(entpath, NULL);
+		if (!ebuf)
+			return false;
+
+		const char* p = COM_Parse(ebuf);
+		while (p)
+		{
+			if (com_token[0] != '{')
+			{   /* not an entity start – skip line */
+				p = COM_Parse(p);
+				continue;
+			}
+
+			/* entity loop */
+			while ((p = COM_Parse(p)))
+			{
+				if (com_token[0] == '}')
+					break;
+
+				char key[64];
+				if (com_token[0] == '_')
+					q_strlcpy(key, com_token + 1, sizeof(key));
+				else q_strlcpy(key, com_token, sizeof(key));
+
+				p = COM_Parse(p);
+				if (!p) break;
+
+				if (!q_strcasecmp(key, "sky") ||
+					!q_strcasecmp(key, "_sky") ||
+					!q_strcasecmp(key, "skyname") ||
+					!q_strcasecmp(key, "qlsky"))
+				{
+					q_strlcpy(outbuf, com_token, outsz);
+					ok = true;
+					break;
+				}
+			}
+			if (ok) break;
+
+			/* continue with next entity */
+			p = COM_Parse(p);
+		}
+
+		free(ebuf);
+	}
+
+	return ok;
+}
+
+extern qboolean Sky_DownloadsDisabled(void);
+extern qboolean Sky_DownloadSkybox(const char* name);
 
 //download+load models and sounds as needed, once complete let the server know we're ready for the next stage.
 //returning false will trigger nops.
@@ -2053,6 +2397,28 @@ qboolean CL_CheckDownloads(void)
 				return false;
 		}
 		cl.loc_download++;
+	}
+
+	if (cl.skybox_download == 0                   /* run once              */
+		&& cl.model_name[1][0]                    /* we know the BSP path  */
+		&& COM_FileExists(cl.model_name[1], NULL)) /* BSP already here      */
+	{
+		char skyname[64] = { 0 };
+
+		if (Sky_PeekSkyKeyFromBSP(cl.model_name[1], skyname, sizeof(skyname))
+			&& skyname[0])
+		{
+			/* Only try if any face is missing; Sky_DownloadSkybox itself
+			   skips mirrors that aren't in user/repo/branch form       */
+			if (!Sky_DownloadsDisabled() && Sky_DownloadSkybox(skyname))
+			{
+				/* success – carry on */
+			}
+			/* on failure we still fall through – we tried once */
+		}
+
+		cl.skybox_download++;      /* always advance so we never loop */
+		return false;              /* block exactly like .loc stage   */
 	}
 
 	for (; cl.model_download < cl.model_count; )
@@ -2230,11 +2596,11 @@ void CL_ManualDownload_f (const char* filename)
 		q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, prefixedArg);
 
 	if (webcheck && (cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0')) // only run if server is verified
-		if (Curl_DownloadFile(cl_web_download_url.string, prefixedArg, local_path))
+                if (Curl_DownloadFile(cl_web_download_url.string, prefixedArg, local_path, false, NULL))
 			return;
 
 	if (web2check && (cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0')) // only run if server is verified
-		if (Curl_DownloadFile(cl_web_download_url2.string, prefixedArg, local_path))
+                if (Curl_DownloadFile(cl_web_download_url2.string, prefixedArg, local_path, false, NULL))
 			return;
 }
 

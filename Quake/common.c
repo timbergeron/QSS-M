@@ -2025,7 +2025,8 @@ qboolean COM_DownloadNameOkay(const char *filename)
 		strncmp(filename, "progs/", 6) && 
 		strncmp(filename, "maps/", 5) &&
 		strncmp(filename, "locs/", 5) && // woods #locdownloads
-		strncmp(filename, "models/", 7))
+		strncmp(filename, "models/", 7) &&
+		strncmp(filename, "gfx/env/", 8))        /* skybox cube faces  */
 		return false;
 	//windows paths are NOT permitted, nor are alternative data streams, nor wildcards, and double quotes are always bad(which allows for spaces)
 	if (strchr(filename, '\\') || strchr(filename, ':') || strchr(filename, '*') || strchr(filename, '?') || strchr(filename, '\"'))
@@ -2054,6 +2055,8 @@ qboolean COM_DownloadNameOkay(const char *filename)
 		//image formats (if we ever need that)
 		q_strcasecmp(filename, "tga") &&
 		q_strcasecmp(filename, "png") &&
+		q_strcasecmp(filename, "jpg") &&
+		q_strcasecmp(filename, "dds") &&
 		//misc stuff
 		q_strcasecmp(filename, "lux") &&
 		q_strcasecmp(filename, "loc") && // woods #locdownloads

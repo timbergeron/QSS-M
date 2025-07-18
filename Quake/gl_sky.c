@@ -53,6 +53,20 @@ cvar_t r_sky_quality = {"r_sky_quality", "12", CVAR_NONE};
 cvar_t r_skyalpha = {"r_skyalpha", "1", CVAR_NONE};
 cvar_t r_skyfog = {"r_skyfog","0.5",CVAR_ARCHIVE};
 cvar_t r_skyspeed = {"r_skyspeed","1",CVAR_ARCHIVE}; // woods #skyspeed
+cvar_t allow_download_sky = {"allow_download_sky", "1", CVAR_ARCHIVE}; // woods automatic skybox downloading #skydownloads
+
+qboolean Sky_DownloadSkybox(const char* name);
+extern cvar_t	cl_web_download_url;
+extern cvar_t	cl_web_download_url2;
+extern qboolean IsGithubRepoPath(const char* s);
+static char pending_skybox_name[1024];
+static qboolean skybox_download_pending = false;
+extern qboolean Curl_DownloadFile(const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name);
+extern qboolean scr_disabled_for_loading;
+
+#ifndef ARRAY_COUNT
+#define ARRAY_COUNT(arr)   (sizeof(arr) / sizeof((arr)[0]))
+#endif
 
 int		skytexorder[6] = {0,2,1,3,4,5}; //for skybox
 
@@ -348,7 +362,7 @@ Sky_LoadSkyBox
 ==================
 */
 const char	*suf[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
-void Sky_LoadSkyBox (const char *name)
+void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #skydownloads
 {
 	int		i, mark, width, height;
 	char	filename[MAX_OSPATH];
@@ -396,11 +410,9 @@ void Sky_LoadSkyBox (const char *name)
 		Hunk_FreeToLowMark (mark);
 	}
 
-	if (nonefound) // woods, verbose missing sky + limit spam
+        if (nonefound && !quiet) // woods, verbose missing sky + limit spam
 	{
-		int length = strlen(filename);
-		filename[length - 2] = '\0';
-		Con_Printf("this map uses an external sky, could't load skybox %s\n", filename);
+                Con_Printf("this map uses an external sky, could't load skybox ^m%s^m\n", name);
 	}
 
 	if (nonefound) // go back to scrolling sky if skybox is totally missing
@@ -416,6 +428,108 @@ void Sky_LoadSkyBox (const char *name)
 	}
 
 	q_strlcpy(skybox_name, name, sizeof(skybox_name));
+}
+
+void Sky_LoadSkyBox (const char *name) // woods #skydownloads
+{
+	Sky_LoadSkyBoxInternal(name, false);
+}
+
+qboolean Sky_DownloadsDisabled(void) // woods #skydownloads
+{
+	return (allow_download_sky.value == 0);
+}
+
+/*
+==============================================================================
+Sky_DownloadSkybox - woods #skydownloads
+Only downloads from mirrors that are in user/repo/branch form
+Leaves tag formatting to Curl_DownloadFile (display_name = NULL)
+==============================================================================
+*/
+qboolean Sky_DownloadSkybox(const char* name)
+{
+	if (Sky_DownloadsDisabled())
+		return false;
+
+	const char* bases[2] = {
+		cl_web_download_url.string,
+		cl_web_download_url2.string
+	};
+
+	static const char* suffixes[6] = { "rt", "bk", "lf", "ft", "up", "dn" };
+	static const char* extensions[] = { "tga", "png", "jpg", "dds" };
+
+	char remote_path[MAX_QPATH];
+	char local_path[MAX_OSPATH];
+	qboolean any_downloads = false;
+
+	// First pass: check if we need to download anything
+	for (int b = 0; b < 2; ++b)
+	{
+		if (!IsGithubRepoPath(bases[b]))
+			continue;
+
+		for (int e = 0; e < (int)ARRAY_COUNT(extensions); ++e)
+		{
+			for (int i = 0; i < 6; ++i)
+			{
+				q_snprintf(remote_path, sizeof(remote_path),
+					"gfx/env/%s%s.%s", name, suffixes[i], extensions[e]);
+
+				if (!COM_FileExists(remote_path, NULL))
+				{
+					any_downloads = true;
+					break;
+				}
+			}
+			if (any_downloads) break;
+		}
+		if (any_downloads) break;
+	}
+
+	for (int b = 0; b < 2; ++b)
+	{
+		if (!IsGithubRepoPath(bases[b]))          /* skip plain hosts       */
+			continue;
+
+		for (int e = 0; e < (int)ARRAY_COUNT(extensions); ++e)
+		{
+			for (int i = 0; i < 6; ++i)
+			{
+				q_snprintf(remote_path, sizeof(remote_path),
+					"gfx/env/%s%s.%s", name, suffixes[i], extensions[e]);
+
+				if (COM_FileExists(remote_path, NULL))
+					continue;                     /* face already present   */
+
+				q_snprintf(local_path, sizeof(local_path),
+					"%s/%s", com_gamedir, remote_path);
+
+				if (!Curl_DownloadFile(bases[b],
+					remote_path,
+					local_path,
+					/* is_skybox   */ true,
+					/* display_tag */ NULL))
+				{
+					break;                         /* try next ext/mirror   */
+				}
+			}
+		}
+	}
+
+	return false;                                  /* no mirror succeeded   */
+}
+
+static void Sky_LoadSkyBoxAuto(const char *name)
+{
+    Sky_LoadSkyBoxInternal(name, Sky_DownloadsDisabled() ? false : true); // quiet if downloads enabled, verbose if disabled
+    if (!skybox_name[0] && !Sky_DownloadsDisabled())
+    {
+        // Store the name for delayed download when connection is complete
+        q_strlcpy(pending_skybox_name, name, sizeof(pending_skybox_name));
+        skybox_download_pending = true;
+    }
 }
 
 /*
@@ -481,7 +595,7 @@ void Sky_NewMap (void)
 		q_strlcpy(value, com_token, sizeof(value));
 
 		if (!strcmp("sky", key))
-			Sky_LoadSkyBox(value);
+			Sky_LoadSkyBoxAuto(value); // woods #skydownloads
 		else if (!strcmp("skyroom", key))
 		{	//"_skyroom" "X Y Z". ideally the gamecode would do this with an entity, but people want to use the vanilla gamecode from 1996 for some reason.
 			const char *t = COM_Parse(value);
@@ -509,9 +623,9 @@ void Sky_NewMap (void)
 
 #if 1 /* also accept non-standard keys */
 		else if (!strcmp("skyname", key)) //half-life
-			Sky_LoadSkyBox(value);
+			Sky_LoadSkyBoxAuto(value); // woods #skydownloads
 		else if (!strcmp("qlsky", key)) //quake lives
-			Sky_LoadSkyBox(value);
+			Sky_LoadSkyBoxAuto(value); // woods #skydownloads
 #endif
 	}
 }
@@ -627,6 +741,7 @@ void Sky_Init (void)
 	Cvar_RegisterVariable (&r_skyfog);
 	Cvar_SetCallback (&r_skyfog, R_SetSkyfog_f);
 	Cvar_RegisterVariable (&r_skyspeed); // woods #skyspeed
+	Cvar_RegisterVariable (&allow_download_sky); // woods automatic skybox downloading #skydownloads
 
 	Cmd_AddCommand ("sky",Sky_SkyCommand_f);
 	Cmd_AddCommand ("skyroom",Sky_SkyRoomCommand_f);
