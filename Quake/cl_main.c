@@ -958,6 +958,102 @@ static void CL_RocketTrail(entity_t* ent, int type)
 	VectorCopy(ent->origin, ent->trailorg);
 }
 
+
+/* --------------------------------------------------*/
+/*    Client-side coloured player glows -- woods     */
+/* --------------------------------------------------*/
+
+/* Match dlight key (full entnum or low 8 bits — supports common forks) */
+static qboolean CPG_KeyMatch(int k, int entnum)
+{
+	return (k == entnum) || (k == (entnum & 0xFF));
+}
+
+/* Kill any active dlights tied to entnum */
+static void CPG_KillDlights(int entnum)
+{
+	for (int i = 0; i < MAX_DLIGHTS; ++i) {
+		dlight_t* dl = &cl_dlights[i];
+		if (!dl->die || dl->die <= cl.time) continue;
+		if (CPG_KeyMatch(dl->key, entnum)) {
+			dl->die = cl.time;
+			dl->radius = 0;
+		}
+	}
+}
+
+/* Retint active dlights tied to entnum (RGB 0..1) */
+static void CPG_TintDlights(int entnum, float r, float g, float b)
+{
+	for (int i = 0; i < MAX_DLIGHTS; ++i) {
+		dlight_t* dl = &cl_dlights[i];
+		if (!dl->die || dl->die <= cl.time) continue;
+		if (CPG_KeyMatch(dl->key, entnum)) {
+			dl->color[0] = r;
+			dl->color[1] = g;
+			dl->color[2] = b;
+		}
+	}
+}
+
+/*
+	Apply local-player powerup tinting.
+	Call once per frame *before* EF_DIMLIGHT dlights are spawned if possible.
+*/
+static void CL_ClientsidePowerupColor(entity_t* ent, int entnum)
+{
+	if (!r_coloredpowerupglow.value)
+		return;
+
+	const qboolean is_local = (entnum == cl.viewentity);
+
+	/* Non-local ents: only known player models */
+	if (!is_local) {
+		if (!ent->model || !ent->model->name) return;
+		if (strcmp(ent->model->name, "progs/player.mdl"))
+			return;
+	}
+
+	/* Snapshot local inventory */
+	const int items = cl.items;
+	const qboolean have_quad = (items & IT_QUAD) != 0;
+	const qboolean have_pent = (items & IT_INVULNERABILITY) != 0;
+	const qboolean have_ring = (items & IT_INVISIBILITY) != 0;
+
+	/* No powerups → no glow */
+	if (!have_quad && !have_pent && !have_ring) {
+		ent->effects &= ~(EF_DIMLIGHT | EF_RED | EF_BLUE);
+		CPG_KillDlights(entnum);
+		return;
+	}
+
+	/* Ring only → no glow */
+	if (have_ring && !have_quad && !have_pent) {
+		ent->effects &= ~(EF_DIMLIGHT | EF_RED | EF_BLUE);
+		CPG_KillDlights(entnum);
+		return;
+	}
+
+	/* Quad and/or Pent (Ring may also be present) */
+	if (!(ent->effects & EF_DIMLIGHT))
+		ent->effects |= EF_DIMLIGHT;
+
+	ent->effects &= ~(EF_RED | EF_BLUE);
+
+	if (have_quad && have_pent) {
+		ent->effects |= (EF_RED | EF_BLUE);    /* purple */
+		CPG_TintDlights(entnum, 1, 0, 1);
+	}
+	else if (have_quad) {
+		ent->effects |= EF_BLUE;               /* blue */
+		CPG_TintDlights(entnum, 0, 0, 1);
+	}
+	else { /* have_pent */
+		ent->effects |= EF_RED;                /* red */
+		CPG_TintDlights(entnum, 1, 0, 0);
+	}
+}
+
 /*
 ===============
 CL_RelinkEntities
@@ -1051,6 +1147,8 @@ void CL_RelinkEntities (void)
 		}
 
 		VectorCopy (ent->origin, oldorg);
+
+		CL_ClientsidePowerupColor(ent, i); // woods
 
 		if (CL_LerpEntity(ent, ent->origin, ent->angles, frac))
 			ent->lerpflags |= LERP_RESETMOVE;
