@@ -191,6 +191,7 @@ extern	cvar_t	gl_teamcolor; // woods #enemycolors
 extern	cvar_t	gl_laserpoint; // woods #laser
 extern	cvar_t	gl_laserpoint_alpha; // woods #laser
 extern	cvar_t	gl_powerupshells; // woods #powershell
+extern	cvar_t	gl_motion_blur; // woods #motionblur
 
 extern	cvar_t	gl_playermip;
 
@@ -500,6 +501,8 @@ void GLSLGamma_DeleteTexture (void);
 void GLSLGamma_GammaCorrect (void);
 
 void R_ScaleView_DeleteTexture (void);
+
+void R_MotionBlur_DeleteTexture (void); // woods #motionblur
 
 float GL_WaterAlphaForSurface (msurface_t *fa);
 

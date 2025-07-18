@@ -885,6 +885,7 @@ static void VID_Restart (void)
 	TexMgr_DeleteTextureObjects ();
 	GLSLGamma_DeleteTexture ();
 	R_ScaleView_DeleteTexture ();
+	R_MotionBlur_DeleteTexture (); // woods #motionblur
 	R_DeleteShaders ();
 	GL_DeleteBModelVertexBuffer ();
 	GLMesh_DeleteVertexBuffers ();
@@ -1515,6 +1516,7 @@ void	VID_Shutdown (void)
 {
 	if (vid_initialized)
 	{
+		R_MotionBlur_DeleteTexture (); // woods #motionblur
 		VID_Gamma_Shutdown (); //johnfitz
 #if defined(USE_SDL2)
 		SDL_GL_DeleteContext(gl_context);

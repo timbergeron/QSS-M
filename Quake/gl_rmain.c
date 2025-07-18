@@ -95,6 +95,7 @@ cvar_t	gl_teamcolor = { "gl_teamcolor","",CVAR_ARCHIVE}; // woods #enemycolors
 cvar_t	gl_laserpoint = {"gl_laserpoint","0", CVAR_ARCHIVE }; // woods #laser
 cvar_t	gl_laserpoint_alpha = { "gl_laserpoint_alpha",".3", CVAR_ARCHIVE }; // woods #laser
 cvar_t	gl_powerupshells = {"gl_powerupshells","1",CVAR_ARCHIVE}; // woods #powershell
+cvar_t	gl_motion_blur = {"gl_motion_blur", "0", CVAR_ARCHIVE}; // woods #motionblur
 
 //johnfitz -- new cvars
 cvar_t	r_stereo = {"r_stereo","0",CVAR_NONE};
@@ -302,6 +303,119 @@ void GLSLGamma_GammaCorrect (void)
 
 // clear cached binding
 	GL_ClearBindings ();
+}
+
+/*
+=============
+R_RenderSceneBlur -- woods - sourced from Qrack #motionblur
+
+Applies motion blur effect by overlaying the previous frame
+=============
+*/
+static GLenum sceneblur_internal_format = GL_RGB8; // or GL_RGBA8 if you add alpha
+static GLuint sceneblur_texture = 0; // woods #motionblur
+static int sceneblur_texture_width = 0, sceneblur_texture_height = 0; // woods #motionblur
+
+void R_RenderSceneBlur(float alpha)
+{
+	if (alpha <= 0.0f) return;
+
+	alpha = CLAMP(0.0f, alpha, 0.95f);
+
+	int tgt_w, tgt_h;
+
+	if (gl_texture_NPOT) {
+		tgt_w = glwidth;
+		tgt_h = glheight;
+	}
+	else {
+		tgt_w = 1; while (tgt_w < glwidth)  tgt_w <<= 1;
+		tgt_h = 1; while (tgt_h < glheight) tgt_h <<= 1;
+	}
+
+	if (!sceneblur_texture)
+		glGenTextures(1, &sceneblur_texture);
+
+	GL_DisableMultitexture();
+	glBindTexture(GL_TEXTURE_2D, sceneblur_texture);
+
+	if (sceneblur_texture_width != tgt_w ||
+		sceneblur_texture_height != tgt_h)
+	{
+		// Optional shrink heuristic: if window shrank a lot, reallocate.
+		sceneblur_texture_width = tgt_w;
+		sceneblur_texture_height = tgt_h;
+		glTexImage2D(GL_TEXTURE_2D, 0, sceneblur_internal_format,
+			tgt_w, tgt_h, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	}
+
+	float s = (float)glwidth / sceneblur_texture_width;
+	float t = (float)glheight / sceneblur_texture_height;
+
+	// Save + modify minimal state
+	GLboolean depthWas = glIsEnabled(GL_DEPTH_TEST);
+	GLboolean cullWas = glIsEnabled(GL_CULL_FACE);
+	GLboolean alphaTestWas = glIsEnabled(GL_ALPHA_TEST);
+
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_ALPHA_TEST);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glColor4f(1.f, 1.f, 1.f, alpha);
+
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+	glOrtho(0, glwidth, 0, glheight, -1, 1);
+
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+
+	glBegin(GL_QUADS);
+	glTexCoord2f(0.f, 0.f); glVertex2f(0.f, 0.f);
+	glTexCoord2f(s, 0.f); glVertex2f((GLfloat)glwidth, 0.f);
+	glTexCoord2f(s, t);   glVertex2f((GLfloat)glwidth, (GLfloat)glheight);
+	glTexCoord2f(0.f, t);   glVertex2f(0.f, (GLfloat)glheight);
+	glEnd();
+
+	// Restore
+	glPopMatrix(); // modelview
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode(GL_MODELVIEW);
+
+	glDisable(GL_BLEND);
+	if (alphaTestWas) glEnable(GL_ALPHA_TEST);
+	if (cullWas)      glEnable(GL_CULL_FACE);
+	if (depthWas)     glEnable(GL_DEPTH_TEST);
+	glColor4f(1.f, 1.f, 1.f, 1.f);
+
+	// Update history texture
+	glBindTexture(GL_TEXTURE_2D, sceneblur_texture);
+	glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, glx, gly, glwidth, glheight);
+}
+
+
+/*
+=============
+R_MotionBlur_DeleteTexture
+=============
+*/
+void R_MotionBlur_DeleteTexture (void) // woods #motionblur
+{
+	if (sceneblur_texture)
+	{
+		glDeleteTextures (1, &sceneblur_texture);
+		sceneblur_texture = 0;
+		sceneblur_texture_width = 0;
+		sceneblur_texture_height = 0;
+	}
 }
 
 /*
@@ -1986,6 +2100,11 @@ void R_RenderView (void)
 		skyroom_drawn = false;
 	}
 	//skyroom end
+
+	if (gl_motion_blur.value > 0.0f) // woods #motionblur
+	{
+		R_RenderSceneBlur(gl_motion_blur.value);
+	}
 
 	R_ScaleView ();
 
