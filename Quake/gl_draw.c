@@ -40,6 +40,7 @@ qpic_t		*pic_ovr, *pic_ins; //johnfitz -- new cursor handling
 qpic_t		*pic_nul; //johnfitz -- for missing gfx, don't crash
 
 extern cvar_t gl_load24bit_hud; // woods #24bithud
+extern cvar_t scr_conback; // woods #conback
 
 //johnfitz -- new pics
 byte pic_ovr_data[8][8] =
@@ -1096,39 +1097,152 @@ extern cvar_t scr_concolor; // woods #concolor
 
 /*
 ================
-Draw_ConsoleBackground -- johnfitz -- rewritten -- woods #concolor
+Draw_ConsoleBackground -- johnfitz -- rewritten -- woods #concolor #conback
 ================
 */
 void Draw_ConsoleBackground (void)
 {
-	qpic_t *pic;
+	static char      last_conback[MAX_QPATH] = "";
+	static qboolean  reported_missing = false;
+	static qboolean  reported_blocked = false; /* scr_conback ignored due to gl_load24bit 0 */
+
 	float alpha;
 	plcolour_t conback_color;
 	const char* conback_str = scr_concolor.string;
 	float r, g, b;
 	byte* rgb_temp;
-	byte rgb[3];
+	byte  rgb[3];
 
-	// Parse the scr_conback cvar
+	/* Parse the scr_concolor cvar. */
 	conback_color = CL_PLColours_Parse(conback_str);
 
-	// Determine if the default background image should be used
-	int use_default = (conback_color.type == 0 ||
+	/* Track scr_conback changes so we only warn once per new value. */
+	if (strcmp(last_conback, scr_conback.string) != 0) {
+		q_strlcpy(last_conback, scr_conback.string, sizeof(last_conback));
+		reported_missing = false;
+		reported_blocked = false;
+	}
+
+	/* Decide between image path vs solid fill. */
+	{
+		int use_default =
+			(conback_color.type == 0) ||
 		(conback_color.type == 2 &&
 			conback_color.rgb[0] == 0xFF &&
 			conback_color.rgb[1] == 0xFF &&
-			conback_color.rgb[2] == 0xFF));
+				conback_color.rgb[2] == 0xFF);
 
 	GL_SetCanvas (CANVAS_CONSOLE); // Ensure we're drawing on the console canvas
 
 	alpha = (con_forcedup) ? 1.0f : scr_conalpha.value;
+		if (alpha <= 0.0f)
+			return;
 
-	if (alpha <= 0.0f)
-		return; // Nothing to draw
+		if (use_default) {
+			qpic_t* pic = NULL;
 
-	if (use_default) // Use the default background image
-	{
-		pic = Draw_CachePic ("gfx/conback.lmp");
+			/* Decide whether the user override is allowed. */
+			qboolean allow_user_img = false;
+			if (scr_conback.string[0]) {
+				const char* ext = COM_FileGetExtension(scr_conback.string);
+				if (ext && !q_strcasecmp(ext, "lmp")) {
+					allow_user_img = true;        /* always allow .lmp */
+				}
+				else if (draw_load24bit) {      /* global hi‑res allowed? */
+					allow_user_img = true;
+				}
+				else if (!reported_blocked) {
+					Con_Printf("Console background ignored: gl_load24bit is 0 (only .lmp allowed).\n");
+					reported_blocked = true;
+				}
+			}
+
+			/* Try user-specified override first (if allowed & non-empty). */
+			if (allow_user_img) {
+				char path[MAX_QPATH];
+				char temp_path[MAX_QPATH];
+				char base_path[MAX_QPATH];   /* original user string */
+				char base_nopfx[MAX_QPATH];  /* ext stripped copy    */
+				static const char* ext_full[] = { ".png",".tga",".jpg",".jpeg",".dds",".pcx",".lmp" };
+				static const char* ext_lmp[] = { ".lmp" };
+				const char** extensions = draw_load24bit ? ext_full : ext_lmp;
+				int num_extensions = draw_load24bit
+					? (int)(sizeof(ext_full) / sizeof(ext_full[0]))
+					: 1;
+				int i;
+				qboolean found_file = false;
+
+				q_strlcpy(temp_path, scr_conback.string, sizeof(temp_path));
+				q_strlcpy(base_path, scr_conback.string, sizeof(base_path));
+				q_strlcpy(base_nopfx, scr_conback.string, sizeof(base_nopfx));
+
+				/* If user gave extension, try exactly that. */
+				if (COM_FileGetExtension(temp_path)) {
+					if (!Q_strncmp(temp_path, "gfx/", 4))
+						q_strlcpy(path, temp_path, sizeof(path));
+					else
+						q_snprintf(path, sizeof(path), "gfx/%s", temp_path);
+
+					if (COM_FileExists(path, NULL)) {
+						pic = Draw_TryCachePic(path, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
+						found_file = true;
+					}
+				}
+
+				/* No ext (or missing file)? Try allowed extensions. */
+				if (!pic) {
+					COM_StripExtension(base_nopfx, base_nopfx, sizeof(base_nopfx));
+					for (i = 0; i < num_extensions && !pic; i++) {
+						if (!Q_strncmp(base_nopfx, "gfx/", 4))
+							q_snprintf(path, sizeof(path), "%s%s", base_nopfx, extensions[i]);
+						else
+							q_snprintf(path, sizeof(path), "gfx/%s%s", base_nopfx, extensions[i]);
+
+						if (COM_FileExists(path, NULL)) {
+							pic = Draw_TryCachePic(path, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
+							found_file = true;
+							break;
+						}
+					}
+				}
+
+				/* Inform user once (only when we actually searched). */
+				if (!found_file && !reported_missing) {
+					char msg[1024];
+					size_t ofs = 0;
+
+					reported_missing = true; /* guard early */
+
+					ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs,
+						"Console background file not found: %s (tried: ",
+						scr_conback.string);
+
+					if (COM_FileGetExtension(base_path)) {
+						if (!Q_strncmp(base_path, "gfx/", 4))
+							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "%s", base_path);
+						else
+							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "gfx/%s", base_path);
+					}
+					else {
+						for (i = 0; i < num_extensions; i++) {
+							if (i > 0)
+								ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, ", ");
+							if (!Q_strncmp(base_nopfx, "gfx/", 4))
+								ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "%s%s", base_nopfx, extensions[i]);
+							else
+								ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "gfx/%s%s", base_nopfx, extensions[i]);
+						}
+					}
+					q_snprintf(msg + ofs, sizeof(msg) - ofs, ")\n");
+					Con_Printf("%s", msg);
+				}
+			} /* allow_user_img */
+
+			/* Fallback: behave like scr_conback "" (use gfx/conback.lmp). */
+			if (!pic) {
+				pic = Draw_CachePic("gfx/conback.lmp");
+			}
+
 		pic->width = vid.conwidth;
 		pic->height = vid.conheight;
 
@@ -1199,6 +1313,7 @@ void Draw_ConsoleBackground (void)
 		glDisable(GL_BLEND);
 		glColor4f(1, 1, 1, 1); // Reset color
 	}
+}
 }
 
 /*

@@ -55,6 +55,7 @@ cvar_t gl_load24bit_hud = {"gl_load24bit_hud", "1", CVAR_ARCHIVE}; // woods #24b
 void Cache_Flush_f (cvar_t* var); // woods #loadskins
 
 cvar_t	scr_concolor = {"scr_concolor", "", CVAR_ARCHIVE}; // woods #concolor
+cvar_t	scr_conback = {"scr_conback", "", CVAR_ARCHIVE}; // woods #conback
 
 extern cvar_t	r_fastturb; // woods #fastturb
 
@@ -107,6 +108,7 @@ void Mod_Init (void)
 	Cvar_RegisterVariable (&mod_lightgrid);
 	Cvar_RegisterVariable (&scr_concolor); // woods #concolor
 	Cvar_SetCompletion (&scr_concolor, &Console_Color_Completion_f); // woods #iwtabcomplete
+	Cvar_RegisterVariable (&scr_conback); // woods #conback
 
 
 	Cmd_AddCommand ("mcache", Mod_Print);
