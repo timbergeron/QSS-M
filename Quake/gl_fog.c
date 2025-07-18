@@ -37,6 +37,8 @@ float fog_red;
 float fog_green;
 float fog_blue;
 
+cvar_t r_fogalpha = {"r_fogalpha", "1", CVAR_ARCHIVE}; // woods #fogalpha
+
 float old_density;
 float old_red;
 float old_green;
@@ -295,6 +297,14 @@ float Fog_GetDensity (void)
 		return fog_density;
 }
 
+static float Fog_EffectiveDensity(void) // woods #fogalpha
+{
+	float d = Fog_GetDensity();
+	float scale = CLAMP(0.0f, r_fogalpha.value, 1.0f);
+	d *= scale;
+	return d;
+}
+
 /*
 =============
 Fog_SetupFrame
@@ -305,7 +315,7 @@ called at the beginning of each frame
 void Fog_SetupFrame (void)
 {
 	glFogfv(GL_FOG_COLOR, Fog_GetColor());
-	glFogf(GL_FOG_DENSITY, Fog_GetDensity() / 64.0);
+	glFogf(GL_FOG_DENSITY, Fog_EffectiveDensity() / 64.0f); // woods #fogalpha
 }
 
 /*
@@ -317,7 +327,7 @@ called before drawing stuff that should be fogged
 */
 void Fog_EnableGFog (void)
 {
-	if (Fog_GetDensity() > 0)
+	if (Fog_EffectiveDensity() > 0) // woods #fogalpha
 		glEnable(GL_FOG);
 }
 
@@ -330,7 +340,7 @@ called after drawing stuff that should be fogged
 */
 void Fog_DisableGFog (void)
 {
-	if (Fog_GetDensity() > 0)
+	if (Fog_EffectiveDensity() > 0) // woods #fogalpha
 		glDisable(GL_FOG);
 }
 
@@ -344,8 +354,7 @@ called before drawing stuff that is additive blended -- sets fog color to black
 void Fog_StartAdditive (void)
 {
 	vec3_t color = {0,0,0};
-
-	if (Fog_GetDensity() > 0)
+	if (Fog_EffectiveDensity() > 0) // woods #fogalpha
 		glFogfv(GL_FOG_COLOR, color);
 }
 
@@ -358,7 +367,7 @@ called after drawing stuff that is additive blended -- restores fog color
 */
 void Fog_StopAdditive (void)
 {
-	if (Fog_GetDensity() > 0)
+	if (Fog_EffectiveDensity() > 0) // woods #fogalpha
 		glFogfv(GL_FOG_COLOR, Fog_GetColor());
 }
 
@@ -388,8 +397,8 @@ called whenever a map is loaded
 */
 void Fog_NewMap (void)
 {
-	Fog_ParseWorldspawn (); //for global fog
-	Fog_MarkModels (); //for volumetric fog
+        Fog_ParseWorldspawn (); //for global fog
+        Fog_MarkModels (); //for volumetric fog
 }
 
 /*
@@ -418,7 +427,9 @@ called when quake initializes
 */
 void Fog_Init (void)
 {
-	Cmd_AddCommand ("fog",Fog_FogCommand_f);
+        Cmd_AddCommand ("fog",Fog_FogCommand_f);
+
+        Cvar_RegisterVariable(&r_fogalpha); // woods #fogalpha
 
 	//Cvar_RegisterVariable (&r_vfog);
 
