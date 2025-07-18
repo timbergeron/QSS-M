@@ -4011,7 +4011,7 @@ static void Host_Spawn_f (void)
 
 	MSG_WriteByte (&host_client->message, svc_signonnum);
 	MSG_WriteByte (&host_client->message, 3);
-	host_client->sendsignon = true;
+	host_client->sendsignon = PRESPAWN_FLUSH; // woods - switch to enum
 }
 
 /*
@@ -4879,7 +4879,7 @@ static void Host_Download_f(void)
 			MSG_WriteByte (&host_client->message, svc_stufftext);
 			MSG_WriteString (&host_client->message, "\nstopdownload\n");
 		}
-		host_client->sendsignon = true;	//override any keepalive issues.
+		host_client->sendsignon = PRESPAWN_FLUSH;	//override any keepalive issues. woods - switch to enum
 	}
 }
 
@@ -4983,7 +4983,7 @@ void Host_DownloadAck(client_t *client)
 		MSG_WriteByte (&host_client->message, svc_stufftext);
 		MSG_WriteString (&host_client->message, va("cl_downloadfinished %u %u \"%s\"\n", client->download.size, hash, client->download.name));
 		*client->download.name = 0;
-		host_client->sendsignon = true;	//override any keepalive issues.
+		host_client->sendsignon = PRESPAWN_FLUSH;	//override any keepalive issues. woods - switch to enum
 	}
 }
 
