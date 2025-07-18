@@ -27,12 +27,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t r_drawflat, gl_overbright_models, gl_fullbrights, r_lerpmodels, r_lerpmove; //johnfitz
 extern cvar_t scr_fov, cl_gun_fovscale; // woods #zoom (ironwail)
 extern cvar_t r_coloredpowerupglow; // woods
-extern cvar_t gl_overbright_models_alpha; // woods #obmodelslist
-extern cvar_t gl_overbright_models_list; // woods #obmodelslist
+extern cvar_t r_alias_light_desat; // woods - #desat
+extern cvar_t r_alias_light_desat_list; // woods - #desat
 extern cvar_t r_outline; // woods #obmodelslist #routline
 extern cvar_t r_nooutline_list; // woods #routline
 
-extern qboolean nameInList(const char* list, const char* name); // woods #obmodelslist #routline
+extern qboolean nameInList(const char* list, const char* name); // woods #desat #routline
 extern qboolean TP_IsPlayerVisible(vec3_t origin); // woods #routline
 extern qboolean IsOneVsOneMatch(void); // woods #routline
 void Matrix3x4_RM_Transform4(const float* matrix, const float* vector, float* product); // woods #routline
@@ -1740,36 +1740,63 @@ void R_SetupAliasLighting (entity_t	*e)
 			}
 		}
 		
+		// woods #dedat -- for models on _list:  1 = greyscale: keep brightness, no hue, 2 = white-full: force` neutral shading
+		// viewmodel handling: -1 = greyscale for all models except viewmodels, -2 = greyscale for viewmodels, white-full for all other models
+
+		if (r_alias_light_desat.value && e->model)
+		{
+			int desat_val = (int)r_alias_light_desat.value;
+			qboolean listed = nameInList(r_alias_light_desat_list.string, e->model->name);
+
+			/*  +1 / +2 → only models in list
+			 *  -1 / -2 → list OR the view-model                              */
+			if ((desat_val > 0 && listed)
+				|| (desat_val < 0 && (listed || e == &cl.viewent)))
+			{
+				int effect_type = 0;
+
+				if (desat_val > 0)                       /* +1 | +2 */
+					effect_type = desat_val;
+				else if (desat_val == -1 && e != &cl.viewent)
+					effect_type = 1;                       /* world greyscale */
+				else if (desat_val == -2)
+					effect_type = (e == &cl.viewent) ? 1   /* view-model grey */
+					: 2;   /* others white   */
+
+				if (effect_type)
+		{
+					switch (effect_type)
+			{
+					case 1: {   /* greyscale: drop hue, keep intensity */
+						float intensity = (lightcolor[0] + lightcolor[1] + lightcolor[2]) * (1.0f / 3.0f);
+						lightcolor[0] = lightcolor[1] = lightcolor[2] = intensity;
+						break;
+			}
+					case 2:      /* white full-bright */
+						lightcolor[0] = lightcolor[1] = lightcolor[2] = 255.0f;
+						break;
+		}
+				}
+			}
+		}
+
 		// minimum light value on gun (24)
 		if (e->eflags & EFLAGS_VIEWMODEL)
 		{
 			add = 72.0f - (lightcolor[0] + lightcolor[1] + lightcolor[2]);
-			if (add > 0.0f)
-			{
-				lightcolor[0] += add / 3.0f;
-				lightcolor[1] += add / 3.0f;
-				lightcolor[2] += add / 3.0f;
+				if (add > 0.0f)
+				{
+					lightcolor[0] += add / 3.0f;
+					lightcolor[1] += add / 3.0f;
+					lightcolor[2] += add / 3.0f;
+				}
 			}
 		}
 
 		// minimum light value on players (8)
 		if (e > cl.entities && e <= cl.entities + cl.maxclients)
-		{
+			{
 			add = 24.0f - (lightcolor[0] + lightcolor[1] + lightcolor[2]);
-			if (add > 0.0f)
-			{
-				lightcolor[0] += add / 3.0f;
-				lightcolor[1] += add / 3.0f;
-				lightcolor[2] += add / 3.0f;
-			}
-		}
-
-		// woods added minlight for models on list to avoid colored lighting blinding #obmodelslist
-		if (gl_overbright_models.value == 2)
-		{
-			if (e->model && (nameInList(gl_overbright_models_list.string, e->model->name)))
-			{
-				add = 2500.0f * gl_overbright_models_alpha.value - (lightcolor[0] + lightcolor[1] + lightcolor[2]);
 				if (add > 0.0f)
 				{
 					lightcolor[0] += add / 3.0f;
@@ -1778,22 +1805,6 @@ void R_SetupAliasLighting (entity_t	*e)
 				}
 			}
 		}
-
-		// woods added minlight for all models to avoid colored lighting blinding (but keep viewmodel lighting) #obmodelslist
-		if (gl_overbright_models.value == 3 && nameInList(gl_overbright_models_list.string, e->model->name))
-		{
-			if ((e->model) && (e != &cl.viewent))
-			{
-				add = 2000.0f * gl_overbright_models_alpha.value - (lightcolor[0] + lightcolor[1] + lightcolor[2]);
-				if (add > 0.0f)
-				{
-					lightcolor[0] += add / 3.0f;
-					lightcolor[1] += add / 3.0f;
-					lightcolor[2] += add / 3.0f;
-				}
-			}
-		}
-	}
 	
 	// begin woods for hue damage taken #damage
 
