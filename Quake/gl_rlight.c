@@ -25,6 +25,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 extern cvar_t r_flatlightstyles; //johnfitz
 
+extern cvar_t r_coloredpowerupglow; // woods #colorblends
+extern cvar_t gl_cshiftpercent; // woods #colorblends
+extern cvar_t r_rocketlight; // woods #colorblends
+extern cvar_t r_explosionlight; // woods #colorblends
+
 //Spike - made this a general function
 void CL_UpdateLightstyle(unsigned int idx, const char *str)
 {
@@ -108,8 +113,10 @@ void AddLightBlend (float r, float g, float b, float a2)
 	v_blend[2] = v_blend[2]*(1-a2) + b*a2;
 }
 
-void R_RenderDlight (dlight_t *light)
+void R_RenderDlight (dlight_t *light) // woods colored flashblend #colorblends
 {
+	if (r_coloredpowerupglow.value <= 0.0f)
+	{
 	int		i, j;
 	float	a;
 	vec3_t	v;
@@ -145,6 +152,124 @@ void R_RenderDlight (dlight_t *light)
 		glVertex3fv (v);
 	}
 	glEnd ();
+		return;
+	}
+
+	/* ------------------------------------------------------------------ *
+	 * Enhanced coloured / fading path (r_coloredpowerupglow > 0)
+	 * Option A: looping power-up lights skip screen blend entirely.
+	 * ------------------------------------------------------------------ */
+	{
+		/* Tunable constants (local to avoid polluting headers) */
+		const float RAD_SCALE = 0.35f;
+		const float BASE_BLEND_SCALE = 0.0003f;
+		const float ROCKET_MIN_T = 0.0f;
+		const float ROCKET_MAX_T = 0.020f;
+		const float EXPLOSION_MID_MIN_T = 0.30f;
+		const float EXPLOSION_MID_MAX_T = 0.70f;
+		const float POWERUP_FADE_T = 0.10f;   /* only for non-looping fade-outs */
+		const float POWERUP_LOOP_MAX_LIFE = 0.11f;   /* heuristic: constantly refreshed */
+		const float WHITE_EPS = 0.001f;
+
+		int   i;
+		float a;
+		vec3_t to_view;
+		float rad = light->radius * RAD_SCALE;
+
+		VectorSubtract(light->origin, r_origin, to_view);
+		float dist2 = to_view[0] * to_view[0] + to_view[1] * to_view[1] + to_view[2] * to_view[2];
+		float rad2 = rad * rad;
+
+		qboolean is_white =
+			(fabsf(light->color[0] - 1.0f) < WHITE_EPS) &&
+			(fabsf(light->color[1] - 1.0f) < WHITE_EPS) &&
+			(fabsf(light->color[2] - 1.0f) < WHITE_EPS);
+
+		if (dist2 < rad2)
+		{
+			float remaining_time = light->die - cl.time;
+			if (remaining_time < 0.0f) remaining_time = 0.0f;
+
+			/* Detect looping power-up light: short lifetime repeatedly renewed, no decay */
+			qboolean is_powerup_loop = (remaining_time < POWERUP_LOOP_MAX_LIFE && light->decay == 0);
+
+			if (!is_powerup_loop)
+			{
+				float blend_scale = gl_cshiftpercent.value * 0.01f;
+
+				/* Transient classifications (heuristic; replace with flag if available) */
+				if (remaining_time < ROCKET_MAX_T && remaining_time > ROCKET_MIN_T)
+				{
+					blend_scale *= (r_rocketlight.value * 0.01f);
+				}
+				else if (light->decay == 300 &&
+					remaining_time > EXPLOSION_MID_MIN_T &&
+					remaining_time < EXPLOSION_MID_MAX_T)
+				{
+					blend_scale *= (r_explosionlight.value * 0.01f);
+				}
+				else if (remaining_time < POWERUP_FADE_T && light->decay != 0)
+				{
+					/* Non-looping fade-out (scaled only by remaining fraction) */
+					float life_frac = remaining_time / POWERUP_FADE_T;
+					if (life_frac < 0.0f) life_frac = 0.0f;
+					if (life_frac > 1.0f) life_frac = 1.0f;
+					blend_scale *= life_frac;
+				}
+
+				float alpha = light->radius * BASE_BLEND_SCALE * blend_scale;
+				if (alpha > 1.0f) alpha = 1.0f;
+				else if (alpha < 0.0f) alpha = 0.0f;
+
+				if (!is_white)
+					AddLightBlend(light->color[0], light->color[1], light->color[2], alpha);
+				else
+					AddLightBlend(1.0f, 0.5f, 0.0f, alpha);
+
+				return; /* Only return when a screen blend was applied */
+			}
+			/* If looping power-up: fall through (no screen blend) to draw disc. */
+		}
+
+		/* Outside (or inside but skipping blend): draw projected disc */
+		float disc_r, disc_g, disc_b;
+		if (!is_white)
+		{
+			float r = light->color[0], g = light->color[1], b = light->color[2];
+			float m = r; if (g > m) m = g; if (b > m) m = b;
+			float scale = (m > 0.0f) ? (0.2f / m) : 0.2f; /* normalize brightest channel to 0.2 */
+			disc_r = r * scale;
+			disc_g = g * scale;
+			disc_b = b * scale;
+		}
+		else
+		{
+			disc_r = 0.2f; disc_g = 0.1f; disc_b = 0.0f;
+		}
+
+		glBegin(GL_TRIANGLE_FAN);
+		glColor3f(disc_r, disc_g, disc_b);
+
+		{
+			vec3_t v;
+			v[0] = light->origin[0] - vpn[0] * rad;
+			v[1] = light->origin[1] - vpn[1] * rad;
+			v[2] = light->origin[2] - vpn[2] * rad;
+			glVertex3fv(v);
+
+			glColor3f(0.f, 0.f, 0.f);
+			for (i = 16; i >= 0; --i)
+			{
+				a = (float)i / 16.0f * (float)M_PI * 2.0f;
+				float ca = cosf(a), sa = sinf(a);
+				v[0] = light->origin[0] + vright[0] * ca * rad + vup[0] * sa * rad;
+				v[1] = light->origin[1] + vright[1] * ca * rad + vup[1] * sa * rad;
+				v[2] = light->origin[2] + vright[2] * ca * rad + vup[2] * sa * rad;
+				glVertex3fv(v);
+			}
+		}
+		glEnd();
+	}
 }
 
 /*
