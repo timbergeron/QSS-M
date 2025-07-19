@@ -1791,7 +1791,6 @@ void R_SetupAliasLighting (entity_t	*e)
 					lightcolor[2] += add / 3.0f;
 				}
 			}
-		}
 
 		// minimum light value on players (8)
 		if (e > cl.entities && e <= cl.entities + cl.maxclients)
