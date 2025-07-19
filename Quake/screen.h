@@ -115,5 +115,8 @@ extern	cvar_t		scr_centerprintbg; // woods #centerprintbg (iw)
 
 extern int scr_tileclear_updates; //johnfitz
 
+void FXAA_BeginFrame(void); // woods #fxaa
+void FXAA_EndFrame(void); // woods #fxaa
+
 #endif	/* _QUAKE_SCREEN_H */
 

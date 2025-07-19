@@ -257,6 +257,7 @@ typedef void (APIENTRYP QS_PFNGLDISABLEVERTEXATTRIBARRAYPROC) (GLuint index);
 typedef GLint (APIENTRYP QS_PFNGLGETUNIFORMLOCATIONPROC) (GLuint program, const GLchar *name);
 typedef void (APIENTRYP QS_PFNGLUNIFORM1IPROC) (GLint location, GLint v0);
 typedef void (APIENTRYP QS_PFNGLUNIFORM1FPROC) (GLint location, GLfloat v0);
+typedef void (APIENTRYP QS_PFNGLUNIFORM2FPROC) (GLint location, GLfloat v0, GLfloat v1); // woods #fxaa
 typedef void (APIENTRYP QS_PFNGLUNIFORM3FPROC) (GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
 typedef void (APIENTRYP QS_PFNGLUNIFORM4FPROC) (GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
 typedef void (APIENTRYP QS_PFNGLUNIFORM4FVPROC) (GLint location, GLsizei count, const GLfloat *value);
@@ -284,14 +285,31 @@ extern QS_PFNGLDISABLEVERTEXATTRIBARRAYPROC GL_DisableVertexAttribArrayFunc;
 extern QS_PFNGLGETUNIFORMLOCATIONPROC GL_GetUniformLocationFunc;
 extern QS_PFNGLUNIFORM1IPROC GL_Uniform1iFunc;
 extern QS_PFNGLUNIFORM1FPROC GL_Uniform1fFunc;
+extern QS_PFNGLUNIFORM2FPROC GL_Uniform2fFunc; // woods #fxaa
 extern QS_PFNGLUNIFORM3FPROC GL_Uniform3fFunc;
 extern QS_PFNGLUNIFORM4FPROC GL_Uniform4fFunc;
 extern QS_PFNGLUNIFORM4FVPROC GL_Uniform4fvFunc;
 extern QS_PFNGLUNIFORM1IVPROC GL_Uniform1ivFunc; // woods #caustics
+
+// woods -- Ffamebuffer function pointers for #fxaa
+extern PFNGLGENFRAMEBUFFERSPROC GL_GenFramebuffersFunc;
+extern PFNGLBINDFRAMEBUFFERPROC GL_BindFramebufferFunc;
+extern PFNGLFRAMEBUFFERTEXTURE2DPROC GL_FramebufferTexture2DFunc;
+extern PFNGLCHECKFRAMEBUFFERSTATUSPROC GL_CheckFramebufferStatusFunc;
+extern PFNGLDELETEFRAMEBUFFERSPROC GL_DeleteFramebuffersFunc;
+extern PFNGLGENRENDERBUFFERSPROC GL_GenRenderbuffersFunc;
+extern PFNGLBINDRENDERBUFFERPROC GL_BindRenderbufferFunc;
+extern PFNGLRENDERBUFFERSTORAGEPROC GL_RenderbufferStorageFunc;
+extern PFNGLFRAMEBUFFERRENDERBUFFERPROC GL_FramebufferRenderbufferFunc;
+extern PFNGLDELETERENDERBUFFERSPROC GL_DeleteRenderbuffersFunc;
+
+extern PFNGLBLENDFUNCSEPARATEPROC GL_BlendFuncSeparateFunc; // woods #fxaa
+
 extern	qboolean	gl_glsl_able;
 extern	qboolean	gl_glsl_gamma_able;
 extern	qboolean	gl_glsl_alias_able;
 extern	qboolean	gl_glsl_water_able;
+extern	qboolean	gl_fbo_able; // woods #fxaa
 // ericw --
 
 //mipmapped warp textures

@@ -5303,10 +5303,18 @@ void SCR_UpdateScreen (void)
 		G_FLOAT(OFS_PARM0) = glwidth/s;
 		G_FLOAT(OFS_PARM1) = glheight/s;
 		G_FLOAT(OFS_PARM2) = true;
+
+		if (vid_fxaa.value > 0) // woods #fxaa
+			FXAA_BeginFrame();
+
 		if (cls.signon == SIGNONS||!cl.qcvm.extfuncs.CSQC_UpdateViewLoading)
 			PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_UpdateView);
 		else
 			PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_UpdateViewLoading);
+
+		if (vid_fxaa.value > 0) // woods #fxaa
+			FXAA_EndFrame();
+
 		PR_SwitchQCVM(NULL);
 
 		GL_Set2D ();
@@ -5325,7 +5333,13 @@ void SCR_UpdateScreen (void)
 //
 		SCR_SetUpToDrawConsole ();
 
+		if (vid_fxaa.value > 0) // woods #fxaa begin FXAA frame for 3D rendering
+			FXAA_BeginFrame();
+
 		V_RenderView ();
+
+		if (vid_fxaa.value > 0) // woods #fxaa end FXAA frame for 3D rendering
+			FXAA_EndFrame();
 
 		GL_Set2D ();
 
@@ -5400,3 +5414,582 @@ void SCR_UpdateScreen (void)
 	GL_EndRendering ();
 }
 
+//============================================================================
+//
+// FXAA IMPLEMENTATION -- woods #fxaa
+//
+//============================================================================
+
+// FXAA quality presets (copied from gl_vidsdl.c)
+typedef struct {
+    float subpix;
+    float edge;
+} fxaa_quality_t;
+
+/* 0 = off, 1-3 = presets */
+static const fxaa_quality_t fxaa_presets[4] = {
+    /* off   */ {0.00f, 0.00f},
+    /* low   */ {0.25f, 0.333f},
+    /* medium*/ {0.40f, 0.166f},   /* ← old defaults */
+    /* high  */ {0.75f, 0.063f}
+};
+
+// FXAA structures and variables
+typedef struct {
+    GLuint framebuffer;
+    GLuint color_texture;
+    GLuint depth_renderbuffer;
+    
+    /* simple 5-tap shader (low / med) */
+    GLuint program_simple;
+    GLint u_tex_simple;
+    GLint u_rcpFrame_simple;
+    GLint u_subpix;
+    GLint u_edge;
+    
+    /* FTE directional-search shader (high) */
+    GLuint program_fte;
+    GLint u_tex_fte;
+    GLint u_rcpFrame_fte;
+    
+    int width, height;
+    qboolean initialized;
+    fxaa_quality_t current; // Current quality preset
+} fxaa_t;
+
+static fxaa_t fxaa;
+
+// FXAA function declarations
+void FXAA_Init(void);
+void FXAA_Shutdown(void);
+static GLuint FXAA_CreateShader_Simple(void);
+static GLuint FXAA_CreateShader_FTE(void);
+static qboolean FXAA_CreateFramebuffer(int width, int height);
+void FXAA_VidFxaaChanged(cvar_t *v);
+
+/*
+===============
+FXAA_VidFxaaChanged
+===============
+*/
+void FXAA_VidFxaaChanged(cvar_t *v)
+{
+    /* clamp to [0‥3] so "vid_fxaa 99" doesn't explode */
+    int lvl = (int)CLAMP(0, v->value, 3);
+    if (lvl != v->value)
+        Cvar_SetValueQuick(v, (float)lvl);
+
+    /* turn resources on/off just like before */
+    // If FXAA was disabled, clean up resources
+    if (lvl == 0 && fxaa.initialized) {
+        if (fxaa.framebuffer) {
+            GL_DeleteFramebuffersFunc(1, &fxaa.framebuffer);
+            fxaa.framebuffer = 0;
+        }
+        
+        if (fxaa.color_texture) {
+            glDeleteTextures(1, &fxaa.color_texture);
+            fxaa.color_texture = 0;
+        }
+        
+        if (fxaa.depth_renderbuffer) {
+            GL_DeleteRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
+            fxaa.depth_renderbuffer = 0;
+        }
+        
+        fxaa.width = fxaa.height = 0;
+    }
+
+    /* store current preset in the fxaa struct for fast access */
+    fxaa.current = fxaa_presets[lvl];
+}
+
+/*
+===============
+FXAA_CvarClamp01
+===============
+*/
+void FXAA_CvarClamp01(cvar_t *v)
+{
+    if (v->value < 0.0f)  Cvar_SetValueQuick(v, 0.0f);
+    if (v->value > 1.0f)  Cvar_SetValueQuick(v, 1.0f);
+}
+
+/*
+===============
+FXAA_CvarChanged
+===============
+*/
+void FXAA_CvarChanged(cvar_t *v)
+{
+    // If FXAA was disabled, clean up resources
+    if (v->value <= 0.0f && fxaa.initialized) {
+        if (fxaa.framebuffer) {
+            GL_DeleteFramebuffersFunc(1, &fxaa.framebuffer);
+            fxaa.framebuffer = 0;
+        }
+        
+        if (fxaa.color_texture) {
+            glDeleteTextures(1, &fxaa.color_texture);
+            fxaa.color_texture = 0;
+        }
+        
+        if (fxaa.depth_renderbuffer) {
+            GL_DeleteRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
+            fxaa.depth_renderbuffer = 0;
+        }
+        
+        fxaa.width = fxaa.height = 0;
+    }
+}
+
+/*
+===============
+FXAA_CreateShader_Simple
+===============
+*/
+static GLuint FXAA_CreateShader_Simple(void)
+{
+    const GLchar *vertSource = 
+        "#version 110\n"
+        "void main()\n"
+        "{\n"
+        "    gl_TexCoord[0] = gl_MultiTexCoord0;\n"
+        "    gl_Position = gl_Vertex;\n"
+        "}\n";
+        
+	const GLchar* fragSource =
+		"#version 110\n"
+		"uniform sampler2D u_tex;\n"
+		"uniform vec2 u_rcpFrame;\n"
+		"uniform float u_subpix;\n"
+		"uniform float u_edge;\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+		"    vec2 pos = gl_TexCoord[0].xy;\n"
+		"    vec4 color = texture2D(u_tex, pos);\n"
+		"    \n"
+		"    // Enhanced FXAA implementation with quality parameters\n"
+		"    vec4 nw = texture2D(u_tex, pos + vec2(-1.0, -1.0) * u_rcpFrame);\n"
+		"    vec4 ne = texture2D(u_tex, pos + vec2(1.0, 1.0) * u_rcpFrame);\n"
+		"    vec4 sw = texture2D(u_tex, pos + vec2(-1.0, 1.0) * u_rcpFrame);\n"
+		"    vec4 se = texture2D(u_tex, pos + vec2(1.0, 1.0) * u_rcpFrame);\n"
+		"    \n"
+		"    vec4 m = texture2D(u_tex, pos);\n"
+		"    vec4 blur = (nw + ne + sw + se + m) * 0.2;\n"
+		"    \n"
+		"    float luma_nw = dot(nw.rgb, vec3(0.299, 0.587, 0.114));\n"
+		"    float luma_ne = dot(ne.rgb, vec3(0.299, 0.587, 0.114));\n"
+		"    float luma_sw = dot(sw.rgb, vec3(0.299, 0.587, 0.114));\n"
+		"    float luma_se = dot(se.rgb, vec3(0.299, 0.587, 0.114));\n"
+		"    float luma_m = dot(m.rgb, vec3(0.299, 0.587, 0.114));\n"
+		"    \n"
+		"    float luma_min = min(luma_m, min(min(luma_nw, luma_ne), min(luma_sw, luma_se)));\n"
+		"    float luma_max = max(luma_m, max(max(luma_nw, luma_ne), max(luma_sw, luma_se)));\n"
+		"    \n"
+		"    float contrast = luma_max - luma_min;\n"
+		"    float threshold = max(0.0833, contrast * u_edge);\n"
+		"    \n"
+		"    if (contrast < threshold)\n"
+		"        gl_FragColor = color;\n"
+		"    else\n"
+		"        gl_FragColor = mix(color, blur, u_subpix);\n"
+		"}\n";
+    
+    if (!gl_glsl_able || !GL_CreateShaderFunc)
+        return 0;
+        
+    GLuint vertShader = GL_CreateShaderFunc(GL_VERTEX_SHADER);
+    GL_ShaderSourceFunc(vertShader, 1, &vertSource, NULL);
+    GL_CompileShaderFunc(vertShader);
+    
+    GLint compiled;
+    GL_GetShaderivFunc(vertShader, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+        Con_Printf("FXAA vertex shader compilation failed\n");
+        GL_DeleteShaderFunc(vertShader);
+        return 0;
+    }
+    
+    GLuint fragShader = GL_CreateShaderFunc(GL_FRAGMENT_SHADER);
+    GL_ShaderSourceFunc(fragShader, 1, &fragSource, NULL);
+    GL_CompileShaderFunc(fragShader);
+    
+    GL_GetShaderivFunc(fragShader, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+        Con_Printf("FXAA fragment shader compilation failed\n");
+        GL_DeleteShaderFunc(vertShader);
+        GL_DeleteShaderFunc(fragShader);
+        return 0;
+    }
+    
+    GLuint program = GL_CreateProgramFunc();
+    GL_AttachShaderFunc(program, vertShader);
+    GL_AttachShaderFunc(program, fragShader);
+    GL_LinkProgramFunc(program);
+    
+    GLint linked;
+    GL_GetProgramivFunc(program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        Con_Printf("FXAA shader linking failed\n");
+        GL_DeleteShaderFunc(vertShader);
+        GL_DeleteShaderFunc(fragShader);
+        GL_DeleteProgramFunc(program);
+        return 0;
+    }
+    
+    GL_DeleteShaderFunc(vertShader);
+    GL_DeleteShaderFunc(fragShader);
+    
+    return program;
+}
+
+/*
+===============
+FXAA_CreateShader_FTE
+===============
+*/
+static GLuint FXAA_CreateShader_FTE(void)
+{
+    const GLchar *vertSource = 
+        "#version 110\n"
+        "void main()\n"
+        "{\n"
+        "    gl_TexCoord[0] = gl_MultiTexCoord0;\n"
+        "    gl_Position = gl_Vertex;\n"
+        "}\n";
+        
+    /* NOTE: uniform name matches the old code so we can reuse C-side plumbing */
+    const GLchar *fragSource =
+        "#version 110\n"
+        "uniform sampler2D u_tex;\n"
+        "uniform vec2      u_rcpFrame;\n"
+        "\n"
+        "void main(){\n"
+        "  vec3 luma = vec3(0.299,0.587,0.114);\n"
+        "  vec3 rgbNW = texture2D(u_tex, gl_TexCoord[0].xy + vec2(-1.0,-1.0)*u_rcpFrame).rgb;\n"
+        "  vec3 rgbNE = texture2D(u_tex, gl_TexCoord[0].xy + vec2( 1.0,-1.0)*u_rcpFrame).rgb;\n"
+        "  vec3 rgbSW = texture2D(u_tex, gl_TexCoord[0].xy + vec2(-1.0, 1.0)*u_rcpFrame).rgb;\n"
+        "  vec3 rgbSE = texture2D(u_tex, gl_TexCoord[0].xy + vec2( 1.0, 1.0)*u_rcpFrame).rgb;\n"
+        "  vec3 rgbM  = texture2D(u_tex, gl_TexCoord[0].xy).rgb;\n"
+        "\n"
+        "  float lumaNW=dot(rgbNW,luma), lumaNE=dot(rgbNE,luma);\n"
+        "  float lumaSW=dot(rgbSW,luma), lumaSE=dot(rgbSE,luma);\n"
+        "  float lumaM =dot(rgbM ,luma);\n"
+        "\n"
+        "  float lumaMin=min(lumaM,min(min(lumaNW,lumaNE),min(lumaSW,lumaSE)));\n"
+        "  float lumaMax=max(lumaM,max(max(lumaNW,lumaNE),max(lumaSW,lumaSE)));\n"
+        "\n"
+        "  vec2 dir;\n"
+        "  dir.x = -((lumaNW+lumaNE) - (lumaSW+lumaSE));\n"
+        "  dir.y =  ((lumaNW+lumaSW) - (lumaNE+lumaSE));\n"
+        "\n"
+        "  float FXAA_REDUCE_MUL = 1.0/8.0;\n"
+        "  float FXAA_REDUCE_MIN = 1.0/128.0;\n"
+        "  float FXAA_SPAN_MAX   = 8.0;\n"
+        "\n"
+        "  float dirReduce = max((lumaNW+lumaNE+lumaSW+lumaSE)* (0.25*FXAA_REDUCE_MUL), FXAA_REDUCE_MIN);\n"
+        "  float rcpDirMin = 1.0/(min(abs(dir.x),abs(dir.y))+dirReduce);\n"
+        "  dir = clamp(dir*rcpDirMin, vec2(-FXAA_SPAN_MAX), vec2(FXAA_SPAN_MAX))*u_rcpFrame;\n"
+        "\n"
+        "  vec3 rgbA = 0.5*(texture2D(u_tex, gl_TexCoord[0].xy + dir*(1.0/3.0-0.5)).rgb +\n"
+        "                   texture2D(u_tex, gl_TexCoord[0].xy + dir*(2.0/3.0-0.5)).rgb);\n"
+        "  vec3 rgbB = 0.25*(texture2D(u_tex, gl_TexCoord[0].xy + dir*(-0.5)).rgb +\n"
+        "                    texture2D(u_tex, gl_TexCoord[0].xy + dir*( 0.5)).rgb) + 0.5*rgbA;\n"
+        "  float lumaB = dot(rgbB,luma);\n"
+        "  gl_FragColor = vec4( ((lumaB < lumaMin)||(lumaB > lumaMax)) ? rgbA : rgbB , 1.0);\n"
+        "}\n";
+    
+    if (!gl_glsl_able || !GL_CreateShaderFunc)
+        return 0;
+        
+    GLuint vertShader = GL_CreateShaderFunc(GL_VERTEX_SHADER);
+    GL_ShaderSourceFunc(vertShader, 1, &vertSource, NULL);
+    GL_CompileShaderFunc(vertShader);
+    
+    GLint compiled;
+    GL_GetShaderivFunc(vertShader, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+        Con_Printf("FXAA FTE vertex shader compilation failed\n");
+        GL_DeleteShaderFunc(vertShader);
+        return 0;
+    }
+    
+    GLuint fragShader = GL_CreateShaderFunc(GL_FRAGMENT_SHADER);
+    GL_ShaderSourceFunc(fragShader, 1, &fragSource, NULL);
+    GL_CompileShaderFunc(fragShader);
+    
+    GL_GetShaderivFunc(fragShader, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+        Con_Printf("FXAA FTE fragment shader compilation failed\n");
+        GL_DeleteShaderFunc(vertShader);
+        GL_DeleteShaderFunc(fragShader);
+        return 0;
+    }
+    
+    GLuint program = GL_CreateProgramFunc();
+    GL_AttachShaderFunc(program, vertShader);
+    GL_AttachShaderFunc(program, fragShader);
+    GL_LinkProgramFunc(program);
+    
+    GLint linked;
+    GL_GetProgramivFunc(program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        Con_Printf("FXAA FTE shader linking failed\n");
+        GL_DeleteShaderFunc(vertShader);
+        GL_DeleteShaderFunc(fragShader);
+        GL_DeleteProgramFunc(program);
+        return 0;
+    }
+    
+    GL_DeleteShaderFunc(vertShader);
+    GL_DeleteShaderFunc(fragShader);
+    
+    return program;
+}
+
+/*
+===============
+FXAA_Init
+===============
+*/
+void FXAA_Init(void)
+{
+    if (!gl_fbo_able || !gl_glsl_able || fxaa.initialized)
+        return;
+        
+    memset(&fxaa, 0, sizeof(fxaa));
+    
+    fxaa.program_simple = FXAA_CreateShader_Simple();
+    if (!fxaa.program_simple) {
+        Con_DPrintf("FXAA: Failed to create simple shader\n");
+        return;
+    }
+    
+    fxaa.program_fte = FXAA_CreateShader_FTE();
+    if (!fxaa.program_fte) {
+        Con_Printf("FXAA: Failed to create FTE shader\n");
+        return;
+    }
+    
+    GL_UseProgramFunc(fxaa.program_simple);
+    fxaa.u_tex_simple = GL_GetUniformLocationFunc(fxaa.program_simple, "u_tex");
+    fxaa.u_rcpFrame_simple = GL_GetUniformLocationFunc(fxaa.program_simple, "u_rcpFrame");
+    fxaa.u_subpix = GL_GetUniformLocationFunc(fxaa.program_simple, "u_subpix");
+    fxaa.u_edge = GL_GetUniformLocationFunc(fxaa.program_simple, "u_edge");
+    GL_UseProgramFunc(0);
+    
+    GL_UseProgramFunc(fxaa.program_fte);
+    fxaa.u_tex_fte = GL_GetUniformLocationFunc(fxaa.program_fte, "u_tex");
+    fxaa.u_rcpFrame_fte = GL_GetUniformLocationFunc(fxaa.program_fte, "u_rcpFrame");
+    GL_UseProgramFunc(0);
+    
+    fxaa.initialized = true;
+    Con_DPrintf("FXAA initialized\n");
+    
+    // Disable MSAA if both are enabled
+    if (vid_fsaa.value > 0 && vid_fxaa.value > 0) {
+        Con_DPrintf("FXAA: Disabling MSAA (vid_fsaa) as FXAA is more efficient\n");
+        Cvar_SetQuick(&vid_fsaa, "0");
+    }
+}
+
+/*
+===============
+FXAA_Shutdown
+===============
+*/
+void FXAA_Shutdown(void)
+{
+    if (!fxaa.initialized)
+        return;
+        
+    if (fxaa.framebuffer) {
+        GL_DeleteFramebuffersFunc(1, &fxaa.framebuffer);
+        fxaa.framebuffer = 0;
+    }
+    
+    if (fxaa.color_texture) {
+        glDeleteTextures(1, &fxaa.color_texture);
+        fxaa.color_texture = 0;
+    }
+    
+    if (fxaa.depth_renderbuffer) {
+        GL_DeleteRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
+        fxaa.depth_renderbuffer = 0;
+    }
+    
+    if (fxaa.program_simple) {
+        GL_DeleteProgramFunc(fxaa.program_simple);
+        fxaa.program_simple = 0;
+    }
+    
+    if (fxaa.program_fte) {
+        GL_DeleteProgramFunc(fxaa.program_fte);
+        fxaa.program_fte = 0;
+    }
+    
+    fxaa.initialized = false;
+}
+
+/*
+===============
+FXAA_CreateFramebuffer
+===============
+*/
+static qboolean FXAA_CreateFramebuffer(int width, int height)
+{
+    if (!fxaa.initialized)
+        return false;
+        
+    // Clean up old framebuffer if size changed
+    if (fxaa.width != width || fxaa.height != height) {
+        if (fxaa.framebuffer) {
+            GL_DeleteFramebuffersFunc(1, &fxaa.framebuffer);
+            fxaa.framebuffer = 0;
+        }
+        
+        if (fxaa.color_texture) {
+            glDeleteTextures(1, &fxaa.color_texture);
+            fxaa.color_texture = 0;
+        }
+        
+        if (fxaa.depth_renderbuffer) {
+            GL_DeleteRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
+            fxaa.depth_renderbuffer = 0;
+        }
+    }
+    
+    if (!fxaa.framebuffer) {
+        // Create color texture
+        glGenTextures(1, &fxaa.color_texture);
+        glBindTexture(GL_TEXTURE_2D, fxaa.color_texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        
+        // Create depth-stencil renderbuffer (combined for outline/shell effects)
+        GL_GenRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
+        GL_BindRenderbufferFunc(GL_RENDERBUFFER, fxaa.depth_renderbuffer);
+        GL_RenderbufferStorageFunc(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+        
+        // Create framebuffer
+        GL_GenFramebuffersFunc(1, &fxaa.framebuffer);
+        GL_BindFramebufferFunc(GL_FRAMEBUFFER, fxaa.framebuffer);
+        GL_FramebufferTexture2DFunc(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fxaa.color_texture, 0);
+        GL_FramebufferRenderbufferFunc(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fxaa.depth_renderbuffer);
+        GL_FramebufferRenderbufferFunc(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, fxaa.depth_renderbuffer);
+        
+        GLenum status = GL_CheckFramebufferStatusFunc(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            Con_DPrintf("FXAA: Framebuffer incomplete (status: 0x%x) - disabling\n", status);
+            SCR_CenterPrint("FXAA unavailable (driver bug)");
+            Cvar_SetQuick(&vid_fxaa, "0");
+            GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+            return false;
+        }
+        
+        GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+        
+        fxaa.width = width;
+        fxaa.height = height;
+    }
+    
+    return true;
+}
+
+/*
+===============
+FXAA_BeginFrame
+===============
+*/
+void FXAA_BeginFrame(void)
+{
+    if (!fxaa.initialized || vid_fxaa.value <= 0 || !gl_fbo_able || !gl_glsl_able)
+        return;
+        
+    if (!FXAA_CreateFramebuffer(glwidth, glheight))
+        return;
+        
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, fxaa.framebuffer);
+    glViewport(0, 0, glwidth, glheight);
+    
+    // Clear with alpha = 0 to support transparency detection
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+}
+
+/*
+===============
+FXAA_EndFrame
+===============
+*/
+void FXAA_EndFrame(void)
+{
+    if (!fxaa.initialized || vid_fxaa.value <= 0 || !fxaa.framebuffer)
+        return;
+        
+    // Save current state
+    GLboolean wasBlend = glIsEnabled(GL_BLEND);
+    GLboolean wasAlphaTest = glIsEnabled(GL_ALPHA_TEST);
+    GLboolean wasDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean wasCullFace = glIsEnabled(GL_CULL_FACE);
+    GLboolean wasScissorTest = glIsEnabled(GL_SCISSOR_TEST);
+    GLint polygonMode[2];
+    glGetIntegerv(GL_POLYGON_MODE, polygonMode);
+        
+    // Bind back buffer
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, glwidth, glheight);
+    
+    // Clear and set up for fullscreen quad
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    
+    // Choose shader based on vid_fxaa value
+    GLuint prog = (vid_fxaa.value == 3) ? fxaa.program_fte : fxaa.program_simple;
+    GL_UseProgramFunc(prog);
+    
+    // Bind texture and set uniforms
+    GL_SelectTextureFunc(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fxaa.color_texture);
+    
+    if (prog == fxaa.program_fte) {
+        GL_Uniform1iFunc(fxaa.u_tex_fte, 0);
+        GL_Uniform2fFunc(fxaa.u_rcpFrame_fte, 1.0f / (float)glwidth, 1.0f / (float)glheight);
+    } else {
+        GL_Uniform1iFunc(fxaa.u_tex_simple, 0);
+        GL_Uniform2fFunc(fxaa.u_rcpFrame_simple, 1.0f / (float)glwidth, 1.0f / (float)glheight);
+        GL_Uniform1fFunc(fxaa.u_subpix, fxaa.current.subpix);
+        GL_Uniform1fFunc(fxaa.u_edge, fxaa.current.edge);
+    }
+
+    // Draw fullscreen quad
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(-1.0f, -1.0f);
+    glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, -1.0f);
+    glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, 1.0f);
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0f, 1.0f);
+    glEnd();
+    
+    // Cleanup
+    GL_UseProgramFunc(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    
+    // Restore state
+    if (wasDepthTest) glEnable(GL_DEPTH_TEST);
+    if (wasCullFace) glEnable(GL_CULL_FACE);
+    if (wasBlend) glEnable(GL_BLEND);
+    if (wasAlphaTest) glEnable(GL_ALPHA_TEST);
+    if (wasScissorTest) glEnable(GL_SCISSOR_TEST);
+    glPolygonMode(GL_FRONT, polygonMode[0]);
+    glPolygonMode(GL_BACK, polygonMode[1]);
+}

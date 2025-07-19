@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // r_world.c: world model rendering
 
 #include "quakedef.h"
+#include "view.h" // woods #fxaa
 
 extern cvar_t gl_fullbrights, r_drawflat, gl_overbright, r_oldskyleaf, r_showtris; //johnfitz
 cvar_t r_scenecache = {"r_scenecache",""};	//spike, an attempt to cope with abusive maps a bit better.
@@ -210,6 +211,17 @@ static void R_BeginTransparentDrawing (float entalpha)
 	{
 		glDepthMask (GL_FALSE);
 		glEnable (GL_BLEND);
+		
+		if (vid_fxaa.value > 0 && GL_BlendFuncSeparateFunc) // woods #fxaa use separate alpha blending when FXAA is enabled to preserve transparency info
+		{
+			// RGB: normal alpha blending, Alpha: copy source alpha
+			GL_BlendFuncSeparateFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+		}
+		else
+		{
+			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // Standard alpha blending
+		}
+		
 		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 		glColor4f (1,1,1,entalpha);
 	}

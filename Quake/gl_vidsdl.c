@@ -106,6 +106,9 @@ static void ClearAllStates (void);
 static void GL_Init (void);
 static void GL_SetupState (void); //johnfitz
 
+void FXAA_Init(void); // woods #fxaa
+void FXAA_Shutdown(void); // woods #fxaa
+
 #if defined(USE_SDL2) && defined(_WIN32)
 static void EnableDarkModeForSDLWindow(SDL_Window *window); // woods #darkmode
 #endif
@@ -127,6 +130,7 @@ GLint gl_max_texture_units = 0; //ericw
 qboolean gl_glsl_gamma_able = false; //ericw
 qboolean gl_glsl_alias_able = false; //ericw
 qboolean gl_glsl_water_able = false; //Spoike
+qboolean gl_fbo_able = false; // woods #fxaa FXAA framebuffer support
 int gl_stencilbits;
 GLint gl_hardware_maxsize;
 
@@ -164,10 +168,31 @@ QS_PFNGLDISABLEVERTEXATTRIBARRAYPROC GL_DisableVertexAttribArrayFunc = NULL; //e
 QS_PFNGLGETUNIFORMLOCATIONPROC GL_GetUniformLocationFunc = NULL; //ericw
 QS_PFNGLUNIFORM1IPROC GL_Uniform1iFunc = NULL; //ericw
 QS_PFNGLUNIFORM1FPROC GL_Uniform1fFunc = NULL; //ericw
+QS_PFNGLUNIFORM2FPROC GL_Uniform2fFunc = NULL; // woods #fxaa
 QS_PFNGLUNIFORM3FPROC GL_Uniform3fFunc = NULL; //ericw
 QS_PFNGLUNIFORM4FPROC GL_Uniform4fFunc = NULL; //ericw
 QS_PFNGLUNIFORM4FVPROC GL_Uniform4fvFunc = NULL; //spike (for iqms)
 QS_PFNGLUNIFORM1IVPROC GL_Uniform1ivFunc = NULL; // woods #caustics
+
+// woods #fxaa Framebuffer functions for FXAA
+PFNGLGENFRAMEBUFFERSPROC GL_GenFramebuffersFunc = NULL;
+PFNGLBINDFRAMEBUFFERPROC GL_BindFramebufferFunc = NULL;
+PFNGLFRAMEBUFFERTEXTURE2DPROC GL_FramebufferTexture2DFunc = NULL;
+PFNGLCHECKFRAMEBUFFERSTATUSPROC GL_CheckFramebufferStatusFunc = NULL;
+PFNGLDELETEFRAMEBUFFERSPROC GL_DeleteFramebuffersFunc = NULL;
+PFNGLGENRENDERBUFFERSPROC GL_GenRenderbuffersFunc = NULL;
+PFNGLBINDRENDERBUFFERPROC GL_BindRenderbufferFunc = NULL;
+PFNGLRENDERBUFFERSTORAGEPROC GL_RenderbufferStorageFunc = NULL;
+PFNGLFRAMEBUFFERRENDERBUFFERPROC GL_FramebufferRenderbufferFunc = NULL;
+PFNGLDELETERENDERBUFFERSPROC GL_DeleteRenderbuffersFunc = NULL;
+
+PFNGLBLENDFUNCSEPARATEPROC GL_BlendFuncSeparateFunc = NULL; // woods #fxaa Blend function pointer for FXAA transparency fix  
+
+// // woods #fxaa quality presets
+typedef struct {
+    float subpix;
+    float edge;
+} fxaa_quality_t;
 
 QS_PFNGLCOMPRESSEDTEXIMAGE2DPROC GL_CompressedTexImage2D = NULL;	//spike
 
@@ -183,6 +208,7 @@ static cvar_t	vid_bpp = {"vid_bpp", "16", CVAR_ARCHIVE};
 static cvar_t	vid_refreshrate = {"vid_refreshrate", "60", CVAR_ARCHIVE};
 static cvar_t	vid_vsync = {"vid_vsync", "0", CVAR_ARCHIVE};
 cvar_t	vid_fsaa = {"vid_fsaa", "0", CVAR_ARCHIVE}; // QuakeSpasm -- woods remove static
+cvar_t	vid_fxaa = {"vid_fxaa", "0", CVAR_ARCHIVE}; // // woods #fxaa anti-aliasing (0=off, 1=low, 2=medium, 3=high)
 static cvar_t	vid_desktopfullscreen = {"vid_desktopfullscreen", "0", CVAR_ARCHIVE}; // QuakeSpasm
 static cvar_t	vid_borderless = {"vid_borderless", "0", CVAR_ARCHIVE}; // QuakeSpasm
 //johnfitz
@@ -889,6 +915,7 @@ static void VID_Restart (void)
 	R_DeleteShaders ();
 	GL_DeleteBModelVertexBuffer ();
 	GLMesh_DeleteVertexBuffers ();
+	FXAA_Shutdown (); // woods #fxaa
 
 //
 // set new mode
@@ -901,6 +928,7 @@ static void VID_Restart (void)
 	GLMesh_LoadVertexBuffers ();
 	GL_SetupState ();
 	Fog_SetupState ();
+	FXAA_Init (); // woods #fxaa
 
 	//conwidth and conheight need to be recalculated
 	vid.conwidth = (scr_conwidth.value > 0) ? (int)scr_conwidth.value : (scr_conscale.value > 0) ? (int)(vid.width/scr_conscale.value) : vid.width;
@@ -1309,6 +1337,7 @@ static void GL_CheckExtensions (void)
 		GL_GetUniformLocationFunc = (QS_PFNGLGETUNIFORMLOCATIONPROC) SDL_GL_GetProcAddress("glGetUniformLocation");
 		GL_Uniform1iFunc = (QS_PFNGLUNIFORM1IPROC) SDL_GL_GetProcAddress("glUniform1i");
 		GL_Uniform1fFunc = (QS_PFNGLUNIFORM1FPROC) SDL_GL_GetProcAddress("glUniform1f");
+		GL_Uniform2fFunc = (QS_PFNGLUNIFORM2FPROC) SDL_GL_GetProcAddress("glUniform2f"); // woods #fxaa
 		GL_Uniform3fFunc = (QS_PFNGLUNIFORM3FPROC) SDL_GL_GetProcAddress("glUniform3f");
 		GL_Uniform4fFunc = (QS_PFNGLUNIFORM4FPROC) SDL_GL_GetProcAddress("glUniform4f");
 		GL_Uniform4fvFunc = (QS_PFNGLUNIFORM4FVPROC) SDL_GL_GetProcAddress("glUniform4fv");
@@ -1335,6 +1364,7 @@ static void GL_CheckExtensions (void)
 			GL_GetUniformLocationFunc &&
 			GL_Uniform1iFunc &&
 			GL_Uniform1fFunc &&
+			GL_Uniform2fFunc && // woods #fxaa
 			GL_Uniform3fFunc &&
 			GL_Uniform4fFunc &&
 			GL_Uniform4fvFunc &&
@@ -1366,6 +1396,92 @@ static void GL_CheckExtensions (void)
 	{
 		Con_Warning ("GLSL gamma not available, using hardware gamma\n");
 	}
+    
+    // woods framebuffer Objects for #fxaa
+
+    if (gl_version_major >= 3 || GL_ParseExtensionList(gl_extensions, "GL_ARB_framebuffer_object") ||
+        GL_ParseExtensionList(gl_extensions, "GL_EXT_framebuffer_object"))
+    {
+        GL_GenFramebuffersFunc = (PFNGLGENFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glGenFramebuffers");
+        if (!GL_GenFramebuffersFunc)
+            GL_GenFramebuffersFunc = (PFNGLGENFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glGenFramebuffersEXT");
+            
+        GL_BindFramebufferFunc = (PFNGLBINDFRAMEBUFFERPROC) SDL_GL_GetProcAddress("glBindFramebuffer");
+        if (!GL_BindFramebufferFunc)
+            GL_BindFramebufferFunc = (PFNGLBINDFRAMEBUFFERPROC) SDL_GL_GetProcAddress("glBindFramebufferEXT");
+            
+        GL_FramebufferTexture2DFunc = (PFNGLFRAMEBUFFERTEXTURE2DPROC) SDL_GL_GetProcAddress("glFramebufferTexture2D");
+        if (!GL_FramebufferTexture2DFunc)
+            GL_FramebufferTexture2DFunc = (PFNGLFRAMEBUFFERTEXTURE2DPROC) SDL_GL_GetProcAddress("glFramebufferTexture2DEXT");
+            
+        GL_CheckFramebufferStatusFunc = (PFNGLCHECKFRAMEBUFFERSTATUSPROC) SDL_GL_GetProcAddress("glCheckFramebufferStatus");
+        if (!GL_CheckFramebufferStatusFunc)
+            GL_CheckFramebufferStatusFunc = (PFNGLCHECKFRAMEBUFFERSTATUSPROC) SDL_GL_GetProcAddress("glCheckFramebufferStatusEXT");
+            
+        GL_DeleteFramebuffersFunc = (PFNGLDELETEFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteFramebuffers");
+        if (!GL_DeleteFramebuffersFunc)
+            GL_DeleteFramebuffersFunc = (PFNGLDELETEFRAMEBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteFramebuffersEXT");
+            
+        GL_GenRenderbuffersFunc = (PFNGLGENRENDERBUFFERSPROC) SDL_GL_GetProcAddress("glGenRenderbuffers");
+        if (!GL_GenRenderbuffersFunc)
+            GL_GenRenderbuffersFunc = (PFNGLGENRENDERBUFFERSPROC) SDL_GL_GetProcAddress("glGenRenderbuffersEXT");
+            
+        GL_BindRenderbufferFunc = (PFNGLBINDRENDERBUFFERPROC) SDL_GL_GetProcAddress("glBindRenderbuffer");
+        if (!GL_BindRenderbufferFunc)
+            GL_BindRenderbufferFunc = (PFNGLBINDRENDERBUFFERPROC) SDL_GL_GetProcAddress("glBindRenderbufferEXT");
+            
+        GL_RenderbufferStorageFunc = (PFNGLRENDERBUFFERSTORAGEPROC) SDL_GL_GetProcAddress("glRenderbufferStorage");
+        if (!GL_RenderbufferStorageFunc)
+            GL_RenderbufferStorageFunc = (PFNGLRENDERBUFFERSTORAGEPROC) SDL_GL_GetProcAddress("glRenderbufferStorageEXT");
+            
+        GL_FramebufferRenderbufferFunc = (PFNGLFRAMEBUFFERRENDERBUFFERPROC) SDL_GL_GetProcAddress("glFramebufferRenderbuffer");
+        if (!GL_FramebufferRenderbufferFunc)
+            GL_FramebufferRenderbufferFunc = (PFNGLFRAMEBUFFERRENDERBUFFERPROC) SDL_GL_GetProcAddress("glFramebufferRenderbufferEXT");
+            
+        GL_DeleteRenderbuffersFunc = (PFNGLDELETERENDERBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteRenderbuffers");
+        if (!GL_DeleteRenderbuffersFunc)
+            GL_DeleteRenderbuffersFunc = (PFNGLDELETERENDERBUFFERSPROC) SDL_GL_GetProcAddress("glDeleteRenderbuffersEXT");
+            
+        if (GL_GenFramebuffersFunc && GL_BindFramebufferFunc && GL_FramebufferTexture2DFunc &&
+            GL_CheckFramebufferStatusFunc && GL_DeleteFramebuffersFunc && GL_GenRenderbuffersFunc &&
+            GL_BindRenderbufferFunc && GL_RenderbufferStorageFunc && GL_FramebufferRenderbufferFunc &&
+            GL_DeleteRenderbuffersFunc)
+        {
+            if (cls.state == ca_disconnected) // woods #supressvidmsgs
+                Con_Printf("FOUND: Framebuffer Objects\n");
+            gl_fbo_able = true;
+        }
+        else
+        {
+            Con_Warning ("Framebuffer Objects not available\n");
+        }
+    }
+    else
+    {
+        Con_Warning ("Framebuffer Objects not supported\n");
+    }
+    
+    // glBlendFuncSeparate for FXAA transparency fix
+    if (gl_version_major >= 2 || GL_ParseExtensionList(gl_extensions, "GL_EXT_blend_func_separate"))
+    {
+        GL_BlendFuncSeparateFunc = (PFNGLBLENDFUNCSEPARATEPROC) SDL_GL_GetProcAddress("glBlendFuncSeparate");
+        if (!GL_BlendFuncSeparateFunc)
+            GL_BlendFuncSeparateFunc = (PFNGLBLENDFUNCSEPARATEPROC) SDL_GL_GetProcAddress("glBlendFuncSeparateEXT");
+            
+        if (GL_BlendFuncSeparateFunc)
+        {
+            if (cls.state == ca_disconnected) // woods #supressvidmsgs
+                Con_Printf("FOUND: glBlendFuncSeparate\n");
+        }
+        else
+        {
+            Con_Warning ("glBlendFuncSeparate not available\n");
+        }
+    }
+    else
+    {
+        Con_Warning ("glBlendFuncSeparate not supported\n");
+    }
     
     // GLSL alias model rendering
     //
@@ -1480,6 +1596,9 @@ static void GL_Init (void)
 	GLAlias_CreateShaders ();
 	GLWorld_CreateShaders ();
 	GL_ClearBufferBindings ();
+	
+	if (gl_fbo_able && gl_glsl_able) // woods #fxaa
+		FXAA_Init();
 }
 
 /*
@@ -1518,6 +1637,7 @@ void	VID_Shutdown (void)
 	{
 		R_MotionBlur_DeleteTexture (); // woods #motionblur
 		VID_Gamma_Shutdown (); //johnfitz
+		FXAA_Shutdown(); // woods #fxaa
 #if defined(USE_SDL2)
 		SDL_GL_DeleteContext(gl_context);
 		gl_context = NULL;
@@ -1798,6 +1918,7 @@ void	VID_Init (void)
 	Cvar_RegisterVariable (&vid_bpp); //johnfitz
 	Cvar_RegisterVariable (&vid_vsync); //johnfitz
 	Cvar_RegisterVariable (&vid_fsaa); //QuakeSpasm
+	Cvar_RegisterVariable (&vid_fxaa); // woods #fxaa
 	Cvar_RegisterVariable (&vid_desktopfullscreen); //QuakeSpasm
 	Cvar_RegisterVariable (&vid_borderless); //QuakeSpasm
 	for (i = 0; i < num_readvars; i++)
@@ -1817,6 +1938,8 @@ void	VID_Init (void)
 	Cvar_SetCompletion (&vid_width, VID_Width_Completion_f); // woods #iwtabcomplete
 	Cvar_SetCompletion (&vid_height, VID_Height_Completion_f); // woods #iwtabcomplete
 	Cvar_SetCompletion (&vid_refreshrate, VID_Refresh_Completion_f); // woods #iwtabcomplete
+
+	Cvar_SetCallback (&vid_fxaa, FXAA_VidFxaaChanged); // woods #fxaa
 
 	Cmd_AddCommand ("vid_unlock", VID_Unlock); //johnfitz
 	Cmd_AddCommand ("vid_restart", VID_Restart); //johnfitz
