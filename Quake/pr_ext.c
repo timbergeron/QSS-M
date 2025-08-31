@@ -2751,35 +2751,35 @@ static void PF_cvar_description(void)
 static void PF_registercvar(void)
 {
 	const char *name = G_STRING(OFS_PARM0);
-	const char *value = (qcvm->argc>1)?G_STRING(OFS_PARM0):"";
+	const char *value = (qcvm->argc>1)?G_STRING(OFS_PARM1):"";
 	Cvar_Create(name, value);
 }
 
 //temp entities + networking
 static void PF_WriteString2(void)
 {	//writes a string without the null. a poor-man's strcat.
-	const char *string = G_STRING(OFS_PARM0);
+	const char *string = G_STRING(OFS_PARM1);
 	SZ_Write (WriteDest(), string, Q_strlen(string));
 }
 static void PF_WriteFloat(void)
 {	//curiously, this was missing in vanilla.
-	MSG_WriteFloat(WriteDest(), G_FLOAT(OFS_PARM0));
+	MSG_WriteFloat(WriteDest(), G_FLOAT(OFS_PARM1));
 }
 static void PF_WriteDouble(void)
 {
-	MSG_WriteDouble(WriteDest(), G_DOUBLE(OFS_PARM0));
+	MSG_WriteDouble(WriteDest(), G_DOUBLE(OFS_PARM1));
 }
 static void PF_WriteInt(void)
 {
-	MSG_WriteDouble(WriteDest(), G_INT(OFS_PARM0));
+	MSG_WriteLong(WriteDest(), G_INT(OFS_PARM1));
 }
 static void PF_WriteInt64(void)
 {
-	MSG_WriteInt64(WriteDest(), G_INT64(OFS_PARM0));
+	MSG_WriteInt64(WriteDest(), G_INT64(OFS_PARM1));
 }
 static void PF_WriteUInt64(void)
 {
-	MSG_WriteUInt64(WriteDest(), G_UINT64(OFS_PARM0));
+	MSG_WriteUInt64(WriteDest(), G_UINT64(OFS_PARM1));
 }
 
 static void PF_sv_te_blooddp(void)
