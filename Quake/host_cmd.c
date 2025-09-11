@@ -2169,6 +2169,220 @@ static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833
 
 /*
 ==================
+Host_Resurrect_f -- woods #resurrect
+
+Bring the local player back to life exactly where they died,
+preserving inventory and giving 5 s of invulnerability.
+==================
+*/
+
+static void Host_Resurrect_f (void)
+{
+	eval_t* val;
+	int     ofs;
+
+	/*----------------------------------------------------------------
+	 * 1. Guard rails
+	 *----------------------------------------------------------------*/
+	if (cmd_source != src_client)          /* typed in host console?  */
+	{
+		Cmd_ForwardToServer();
+		return;
+	}
+	if (pr_global_struct->deathmatch)      /* no cheats in deathmatch */
+		return;
+
+	/*----------------------------------------------------------------
+	 * 2. Snapshot the current state
+	 *----------------------------------------------------------------*/
+	vec3_t death_origin, safe_origin;
+
+	float saved_weapon = sv_player->v.weapon;
+	float saved_ammo_shells = sv_player->v.ammo_shells;
+	float saved_ammo_nails = sv_player->v.ammo_nails;
+	float saved_ammo_rockets = sv_player->v.ammo_rockets;
+	float saved_ammo_cells = sv_player->v.ammo_cells;
+	int   saved_items = (int)sv_player->v.items;
+
+	VectorCopy(sv_player->v.origin, death_origin);
+
+	/*----------------------------------------------------------------
+	 * 3. Find a safe spot near the death position (TraceLine version)
+	 *----------------------------------------------------------------*/
+#define STEP_RINGS   4               /* 0, 32, 64, 96 */
+#define STEP_RADIUS  32.0f
+	static const float ring_xy[9][2] = {
+		{  0,  0}, { 1,  0}, {-1,  0}, { 0,  1},
+		{  0, -1}, { 1,  1}, {-1,  1}, { 1, -1}, {-1, -1}
+	};
+	int ring, dir, found = 0;
+
+	for (ring = 0; ring < STEP_RINGS && !found; ++ring)
+	{
+		float r = ring * STEP_RADIUS;
+
+		for (dir = 0; dir < 9 && !found; ++dir)
+		{
+			vec3_t try_xy, above, below, impact;
+
+			/* XY offset in this ring */
+			try_xy[0] = death_origin[0] + ring_xy[dir][0] * r;
+			try_xy[1] = death_origin[1] + ring_xy[dir][1] * r;
+			try_xy[2] = death_origin[2];
+
+			/* Trace 64 down from 64 up to find ground */
+			VectorCopy(try_xy, above);  above[2] += 64.0f;
+			VectorCopy(try_xy, below);  below[2] -= 64.0f;
+			TraceLine(above, below, 0.0f, impact);
+
+			/* Place the player 18 units above impact point */
+			VectorCopy(impact, safe_origin);
+			safe_origin[2] += 18.0f;
+
+			VectorCopy(safe_origin, sv_player->v.origin);
+			if (!SV_TestEntityPosition(sv_player))
+				found = 1;
+		}
+	}
+
+	if (!found)
+	{
+		/* Fallback: original position, nudged up 18 */
+		VectorCopy(death_origin, safe_origin);
+		safe_origin[2] += 18.0f;
+	}
+
+	/*----------------------------------------------------------------
+	 * 4. Play resurrection sound
+	 *----------------------------------------------------------------*/
+	SV_StartSound(sv_player, sv_player->v.origin, 0,
+		"items/protect.wav", 255, 1.0f);
+
+	/*----------------------------------------------------------------
+	 * 5. Call QC PutClientInServer to reset player state
+	 *----------------------------------------------------------------*/
+	pr_global_struct->time = qcvm->time;
+	pr_global_struct->self = EDICT_TO_PROG(sv_player);
+	PR_ExecuteProgram(pr_global_struct->PutClientInServer);
+
+	/*----------------------------------------------------------------
+	 * 6. Restore inventory, position, and health
+	 *----------------------------------------------------------------*/
+	VectorCopy(safe_origin, sv_player->v.origin);
+
+	sv_player->v.weapon = saved_weapon;
+	sv_player->v.ammo_shells = saved_ammo_shells;
+	sv_player->v.ammo_nails = saved_ammo_nails;
+	sv_player->v.ammo_rockets = saved_ammo_rockets;
+	sv_player->v.ammo_cells = saved_ammo_cells;
+	sv_player->v.items = saved_items | IT_INVULNERABILITY; /* keep pent */
+	host_client->powerup_warn_flags |= PWARN_GIVE;
+
+	sv_player->v.health = 100;
+	sv_player->v.max_health = 100;
+	sv_player->v.deadflag = DEAD_NO;
+	sv_player->v.takedamage = DAMAGE_AIM;
+	sv_player->v.movetype = MOVETYPE_WALK;
+	sv_player->v.solid = SOLID_SLIDEBOX;
+	sv_player->v.flags = (int)sv_player->v.flags | (FL_CLIENT | FL_ONGROUND);
+	sv_player->v.effects = (int)sv_player->v.effects | EF_DIMLIGHT;
+	sv_player->v.weaponframe = 0;
+
+	/*----------------------------------------------------------------
+	 * 7. Reset miscellaneous QC-only fields
+	 *----------------------------------------------------------------*/
+	static const struct { const char* name; float value; } scalars[] = {
+		{"show_hostile",     0},
+		{"air_finished",     12.0f},         /* seconds from now */
+		{"dmg",              2},
+		{"attack_finished",  0},
+	};
+	for (size_t s = 0; s < Q_COUNTOF(scalars); ++s)
+		if ((ofs = ED_FindFieldOffset(scalars[s].name)))
+			GetEdictFieldValue(sv_player, ofs)->_float =
+			(scalars[s].name[0] == 'a') ? qcvm->time + scalars[s].value
+			: scalars[s].value;
+
+	/* -----------------------------------------------------------------
+ * clear temporary power-up timers (no helper function needed)
+ * -----------------------------------------------------------------*/
+	static const char* timers[] = {
+		"super_damage_finished",
+		"radsuit_finished",
+		"invisible_finished",
+		"trif_time",
+		"trif_finished"
+	};
+
+	for (size_t k = 0; k < Q_COUNTOF(timers); ++k)
+	{
+		ofs = ED_FindFieldOffset(timers[k]);
+		if (ofs)                               /* field exists in this progs */
+		{
+			val = GetEdictFieldValue(sv_player, ofs);
+			if (val)                           /* field is addressable       */
+				val->_float = 0.0f;
+		}
+	}
+
+	/* mission-pack friendly invulnerability timers */
+	ofs = ED_FindFieldOffset("invincible_finished");
+	if (ofs && (val = GetEdictFieldValue(sv_player, ofs)))
+		val->_float = qcvm->time + 5.0f;
+
+	ofs = ED_FindFieldOffset("invincible_time");
+	if (ofs && (val = GetEdictFieldValue(sv_player, ofs)))
+		val->_float = qcvm->time + 5.0f;
+
+	/* pain cooldown reset */
+	ofs = ED_FindFieldOffset("pain_finished");
+	if (ofs && (val = GetEdictFieldValue(sv_player, ofs)))
+		val->_float = 0.0f;
+
+
+	/*----------------------------------------------------------------
+	 * 8. Fix currentammo so the HUD is correct
+	 *----------------------------------------------------------------*/
+	switch ((int)sv_player->v.weapon)
+	{
+	case IT_SHOTGUN:
+	case IT_SUPER_SHOTGUN:
+		sv_player->v.currentammo = sv_player->v.ammo_shells;  break;
+
+	case IT_NAILGUN:
+	case IT_SUPER_NAILGUN:
+	case RIT_LAVA_SUPER_NAILGUN:
+		sv_player->v.currentammo = sv_player->v.ammo_nails;   break;
+
+	case IT_GRENADE_LAUNCHER:
+	case IT_ROCKET_LAUNCHER:
+	case RIT_MULTI_GRENADE:
+	case RIT_MULTI_ROCKET:
+		sv_player->v.currentammo = sv_player->v.ammo_rockets; break;
+
+	case IT_LIGHTNING:
+	case HIT_LASER_CANNON:
+	case HIT_MJOLNIR:
+		sv_player->v.currentammo = sv_player->v.ammo_cells;   break;
+	}
+
+	/*----------------------------------------------------------------
+	 * 9. Finalise: relink, force client update, print messages
+	 *----------------------------------------------------------------*/
+	SV_LinkEdict(sv_player, false);      /* update physics box */
+	MSG_WriteByte(&host_client->message, svc_stufftext);
+	MSG_WriteString(&host_client->message, "bf\n"); /* refresh pics and icons */
+
+	if (found && ring)  /* ring > 0 means we actually moved */
+		SV_ClientPrintf("Moved to safe position (%d units)\n", ring * 32);
+
+	SV_ClientPrintf("Resurrected with 100 health and 5 seconds of invulnerability!\n");
+	SV_BroadcastPrintf("%s was resurrected\n",
+		PR_GetString(sv_player->v.netname));
+}
+
+/*
+==================
 ICMP_Ping_Host -- woods #icmp
 ==================
 */
@@ -5744,6 +5958,7 @@ void Host_InitCommands (void)
 	Cmd_AddCommand ("save", Host_Savegame_f);
 	Cmd_AddCommand_ClientCommandQC ("give", Host_Give_f);
 	Cmd_AddCommand_ClientCommandQC ("massacre", Host_Massacre_f);
+	Cmd_AddCommand_ClientCommandQC ("resurrect", Host_Resurrect_f); // woods #resurrect
 	Cmd_AddCommand_ClientCommand ("download", Host_Download_f);
 	Cmd_AddCommand_ClientCommand ("sv_startdownload", Host_StartDownload_f);
 	Cmd_AddCommand_ClientCommand ("enablecsqc", Host_EnableCSQC_f);

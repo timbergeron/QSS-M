@@ -76,6 +76,71 @@ static void World_StartSound (edict_t *entity, float *origin, int channel, const
 	}
 }
 
+/* ------------------------------------------------------------------ *
+ *  SV_CheckPowerupWarn -- woods - #resurrect #give+
+ * ------------------------------------------------------------------ */
+static void SV_CheckPowerupWarn (edict_t *ent)
+{
+	float t;
+	eval_t *val;
+	static int ofs_super_damage_finished = -1;
+	static int ofs_invincible_finished = -1;
+	static int ofs_invisible_finished = -1;
+	static float last_quad_warn = 0.0f;
+	static float last_pent_warn = 0.0f;
+	static float last_ring_warn = 0.0f;
+
+	/* Initialize field offsets on first call */
+	if (ofs_super_damage_finished == -1)
+	{
+		ofs_super_damage_finished = ED_FindFieldOffset("super_damage_finished");
+		ofs_invincible_finished = ED_FindFieldOffset("invincible_finished");
+		ofs_invisible_finished = ED_FindFieldOffset("invisible_finished");
+	}
+
+	/* Quad Damage --------------------------------------------------- */
+	if (((int)ent->v.items & IT_QUAD) &&
+	    ofs_super_damage_finished &&
+	    (val = GetEdictFieldValue(ent, ofs_super_damage_finished)) &&
+	    (t = val->_float - qcvm->time) > 0.0f && t <= 3.0f)
+	{
+		if (t > 2.9f && qcvm->time > last_quad_warn + 0.1f)        /* prevent duplicate sounds */
+		{
+			SV_StartSound (ent, NULL, 0, "items/damage2.wav",
+			               255, 1.0f);
+			last_quad_warn = qcvm->time;
+		}
+	}
+
+	/* Pent (Invulnerability) --------------------------------------- */
+	if (((int)ent->v.items & IT_INVULNERABILITY) &&
+	    ofs_invincible_finished &&
+	    (val = GetEdictFieldValue(ent, ofs_invincible_finished)) &&
+	    (t = val->_float - qcvm->time) > 0.0f && t <= 3.0f)
+	{
+		if (t > 2.9f && qcvm->time > last_pent_warn + 0.1f)
+		{
+			SV_StartSound (ent, NULL, 0, "items/protect2.wav",
+			               255, 1.0f);
+			last_pent_warn = qcvm->time;
+		}
+	}
+
+	/* Ring (Invisibility) ------------------------------------------ */
+	if (((int)ent->v.items & IT_INVISIBILITY) &&
+	    ofs_invisible_finished &&
+	    (val = GetEdictFieldValue(ent, ofs_invisible_finished)) &&
+	    (t = val->_float - qcvm->time) > 0.0f && t <= 3.0f)
+	{
+		if (t > 2.9f && qcvm->time > last_ring_warn + 0.1f)
+		{
+			SV_StartSound (ent, NULL, 0, "items/inv2.wav",
+			               255, 1.0f);
+			last_ring_warn = qcvm->time;
+		}
+	}
+}
+
 /*
 ================
 SV_CheckAllEnts
@@ -1213,6 +1278,12 @@ void SV_Physics_Client (edict_t	*ent, int num)
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->self = EDICT_TO_PROG(ent);
 	PR_ExecuteProgram (pr_global_struct->PlayerPreThink);
+
+	if (svs.clients[num-1].powerup_warn_flags & PWARN_GIVE) // woods #resurrect #give+
+	{
+		SV_CheckPowerupWarn (ent);
+		svs.clients[num-1].powerup_warn_flags &= ~PWARN_GIVE;   /* one-shot */
+	}
 
 //
 // do a move
