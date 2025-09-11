@@ -25,6 +25,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 // server.h
 
+#define PWARN_GIVE (1<<0) // woods - #resurrect #give
+
 typedef struct
 {
 	int			maxclients;
@@ -230,6 +232,7 @@ typedef struct client_s
 	} download;
 	qboolean		knowntoqc;			// putclientinserver was called
 	qboolean		csqcactive;			// its prepared to accept csqc entities.
+	int				powerup_warn_flags;	// woods - #resurrect #giveflags for powerup warning sounds
 } client_t;
 
 
