@@ -372,5 +372,8 @@ void SV_SetupSkyRoom(char *value);
 
 void SV_CheckDuplicateNames(client_t* client); // woods #dupnames
 
+void SV_ProcessTimerExecution(void); // woods #svtimer
+void SV_CleanupTimer(void); // woods #svtimer
+
 #endif	/* _QUAKE_SERVER_H */
 

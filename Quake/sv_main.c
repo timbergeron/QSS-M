@@ -1438,6 +1438,7 @@ void MSG_WriteStaticOrBaseLine(sizebuf_t *buf, int idx, entity_state_t *state, u
 
 
 static void SV_Pext_f(void);
+static void SV_SetTimer_f(void); // woods #svtimer
 
 /*
 ===============
@@ -1628,6 +1629,7 @@ void SV_Init (void)
 
 	Cmd_AddCommand_ClientCommand("pext", SV_Pext_f);
 	Cmd_AddCommand ("sv_protocol", &SV_Protocol_f); //johnfitz
+	Cmd_AddCommand ("sv_settimer", &SV_SetTimer_f);  // woods #svtimer
 
 	for (i=0 ; i<MAX_MODELS ; i++)
 		sprintf (localmodels[i], "*%i", i);
@@ -3976,3 +3978,205 @@ void SV_SpawnServer (const char *server)
 	Con_DPrintf ("Server spawned.\n");
 }
 
+//================
+// sv_timer -- woods #svtimer
+//================
+
+// Global variables for timer state
+static SDL_TimerID sv_timer_id = 0;
+static SDL_atomic_t sv_timer_count = {0};
+static char sv_timer_command[1024] = "";  // Increased buffer size
+static cmd_source_t sv_timer_source = src_command;
+static SDL_atomic_t sv_timer_execute_pending = {0};
+
+/*
+================
+SV_TimerCallback
+
+SDL2 timer callback - runs in separate thread, so we just set a flag
+================
+*/
+static Uint32 SV_TimerCallback(Uint32 interval, void* param)
+{
+	// Don't execute commands directly from timer thread - not thread safe
+	// Just set a flag to execute from main thread
+	SDL_AtomicSet(&sv_timer_execute_pending, 1);
+	
+	// For finite timers, atomically decrement and find the new value
+	int old_count = SDL_AtomicAdd(&sv_timer_count, -1);  // Returns *previous* value
+	int new_count = old_count - 1;                       // Value *after* decrement
+	
+	if (new_count == 0)             // We just executed the last repetition
+	{
+		// SDL will auto-remove the timer when we return 0
+		// Don't modify sv_timer_id from callback thread - race condition!
+		return 0;                   // Returning 0 disarms the SDL timer
+	}
+	
+	// -1 means "infinite"; we never touch it, so it stays -1 forever
+	
+	return interval; // Continue with same interval
+}
+
+/*
+================
+SV_SetTimer_f
+
+Sets up a repeating timer using SDL2
+================
+*/
+static void SV_SetTimer_f(void)
+{
+	int count;
+	float interval;
+	int i;
+	char combined_args[1024];  // Increased buffer size to match sv_timer_command
+	Uint32 interval_ms;
+	size_t cmd_len;
+
+	if (Cmd_Argc() < 4)
+	{
+		Con_Printf("Usage: %s <count> <interval> <command>\n", Cmd_Argv(0));
+		Con_Printf("  count: number of executions (-1 for infinite, 0 to disable)\n");
+		Con_Printf("  interval: time between executions in seconds\n");
+		Con_Printf("  command: command to execute (avoid quotes and semicolons)\n");
+		return;
+	}
+
+	count = atoi(Cmd_Argv(1));
+	interval = atof(Cmd_Argv(2));
+
+	// Special case: disable timer
+	if (!count && Cmd_Argc() == 3)
+	{
+		if (sv_timer_id)
+		{
+			SDL_RemoveTimer(sv_timer_id);
+			sv_timer_id = 0;
+		}
+		SDL_AtomicSet(&sv_timer_count, 0);   // Ensure non-positive to prevent dangling decrements
+		SDL_AtomicSet(&sv_timer_execute_pending, 0);
+		Con_Printf("Timer disabled\n");
+		return;
+	}
+
+	// Validate arguments
+	if (interval <= 0 || (count <= 0 && count != -1))
+	{
+		Con_Printf("Count must be positive or -1 for infinite, interval must be positive\n");
+		return;
+	}
+
+	// Remove existing timer if any
+	// Note: SDL_RemoveTimer() handles invalid/expired timer IDs gracefully
+	if (sv_timer_id)
+	{
+		SDL_RemoveTimer(sv_timer_id);
+		sv_timer_id = 0;
+	}
+
+	// Combine command arguments with length checking
+	combined_args[0] = '\0';
+	for (i = 3; i < Cmd_Argc(); i++)
+	{
+		if (i > 3)
+		{
+			if (q_strlcat(combined_args, " ", sizeof(combined_args)) >= sizeof(combined_args))
+			{
+				Con_Printf("Warning: Timer command truncated (too long)\n");
+				break;
+			}
+		}
+		if (q_strlcat(combined_args, Cmd_Argv(i), sizeof(combined_args)) >= sizeof(combined_args))
+		{
+			Con_Printf("Warning: Timer command truncated (too long)\n");
+			break;
+		}
+	}
+
+	// Check for problematic characters that could break command parsing
+	if (strchr(combined_args, ';') || strchr(combined_args, '"') || strchr(combined_args, '\n'))
+	{
+		Con_Printf("Warning: Command contains special characters (quotes, semicolons, newlines)\n");
+		Con_Printf("         that may cause unexpected parsing behavior.\n");
+	}
+
+	// Set up timer state
+	cmd_len = q_strlcpy(sv_timer_command, combined_args, sizeof(sv_timer_command));
+	if (cmd_len >= sizeof(sv_timer_command))
+	{
+		Con_Printf("Error: Timer command too long (max %d characters)\n", 
+			(int)sizeof(sv_timer_command) - 1);
+		return;
+	}
+
+	SDL_AtomicSet(&sv_timer_count, count);
+	sv_timer_source = cmd_source;
+	SDL_AtomicSet(&sv_timer_execute_pending, 0);
+	
+	// Convert to milliseconds with safer rounding
+	interval_ms = (Uint32)SDL_max(1, (int)SDL_roundf(interval * 1000.0f));
+	
+	// Start SDL timer
+	sv_timer_id = SDL_AddTimer(interval_ms, SV_TimerCallback, NULL);
+	
+	if (sv_timer_id)
+	{
+		// Prettier banner with infinity symbol for unlimited timers
+		const char *count_str = (count == -1) ? "∞" : va("%d", count);
+		Con_Printf("Timer set: %s executions of \"%s\" every %.2f seconds\n",
+			count_str, sv_timer_command, interval);
+	}
+	else
+	{
+		Con_Printf("Failed to create timer\n");
+	}
+}
+
+/*
+================
+SV_ProcessTimerExecution
+
+Call this from the main game loop to execute pending timer commands
+This ensures commands execute from the main thread, not the timer thread
+
+Timer lifecycle:
+- Main thread creates timer, sets sv_timer_id
+- Timer callback sets atomic flag, may return 0 to auto-expire
+- Main thread processes atomic flag and executes command
+- When replacing/stopping timer, main thread calls SDL_RemoveTimer() (safe even for expired timers)
+================
+*/
+void SV_ProcessTimerExecution(void)
+{
+	// Use atomic CAS to check and clear the flag atomically
+	if (SDL_AtomicCAS(&sv_timer_execute_pending, 1, 0) && sv_timer_command[0])
+	{
+		Cbuf_AddText(sv_timer_command);
+		Cbuf_AddText("\n");
+		
+		// If this was the final execution (count reached 0), clear the timer ID
+		// since SDL has already auto-removed the expired timer
+		if (SDL_AtomicGet(&sv_timer_count) == 0)
+		{
+			sv_timer_id = 0;
+		}
+	}
+}
+
+/*
+================
+SV_CleanupTimer
+
+Call this during shutdown to clean up the timer
+================
+*/
+void SV_CleanupTimer(void)
+{
+	if (sv_timer_id)
+	{
+		SDL_RemoveTimer(sv_timer_id);
+		sv_timer_id = 0;
+	}
+	SDL_AtomicSet(&sv_timer_execute_pending, 0);
+}

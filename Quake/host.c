@@ -1153,6 +1153,9 @@ void Host_ServerFrame (void)
 // run the world state
 	pr_global_struct->frametime = host_frametime;
 
+	if (sv.active) // woods #svtimer
+		SV_ProcessTimerExecution();
+
 // set the time and clear the general datagram
 	SV_ClearDatagram ();
 
@@ -1767,6 +1770,8 @@ void Host_Shutdown(void)
 
 // keep Con_Printf from trying to update the screen
 	scr_disabled_for_loading = true;
+
+	SV_CleanupTimer(); // woods #svtimer
 
 	Host_WriteConfiguration ();
 
