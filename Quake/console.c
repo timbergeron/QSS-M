@@ -35,6 +35,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 #include <errno.h> // woods
+#include <curl/curl.h> // woods #discord
+#include "json.h" // woods #discord
 
 int 		con_linewidth;
 
@@ -72,6 +74,7 @@ cvar_t		con_notifyfade = {"con_notifyfade", "1", CVAR_ARCHIVE}; // woods #confad
 cvar_t		con_notifyfadetime = {"con_notifyfadetime", "0.5", CVAR_ARCHIVE}; // woods #confade
 cvar_t		con_colmax = { "con_colmax", "0", CVAR_ARCHIVE}; // woods #consolecols
 cvar_t		con_coldirection = { "con_coldirection", "0", CVAR_ARCHIVE}; // woods #consolecols
+cvar_t		con_notifydiscord = {"con_notifydiscord", "", CVAR_ARCHIVE}; // woods #discord
 
 char		con_lastcenterstring[1024]; //johnfitz
 
@@ -103,6 +106,78 @@ extern qboolean pak0; // pak0 present  -- woods #qbday
 static Uint32 birthday_start_time = 0; // woods #qbday
 static int console_msg_since_lastchat = 0; // woods #like
 extern qboolean WordFilter_Check(const char* text, char* dest_buffer, size_t buffer_size); // woods #contentfilter
+
+// woods #discord
+typedef struct {
+    char payload[1300];
+    char url[256];
+} discord_job_t;
+
+static int DiscordThread(void *data);
+static void MakeDiscordPayload(const char *raw, char *out, size_t outsz);
+static void QSSM_DiscordNotify(const char *raw_msg);
+
+/* Redact webhook token when printing URLs to logs/errors */
+static void MaskDiscordURL(const char *url, char *out, size_t outsz)
+{
+    if (!url || !*url) { if (outsz) out[0] = 0; return; }
+    const char *needle = "/api/webhooks/";
+    const char *p = strstr(url, needle);
+    if (!p) { q_strlcpy(out, "<invalid>", outsz); return; }
+    size_t keep = (size_t)(p - url) + strlen(needle);
+    if (keep >= outsz) keep = outsz ? outsz - 1 : 0;
+    memcpy(out, url, keep);
+    if (keep < outsz) q_strlcpy(out + keep, "REDACTED", outsz - keep);
+}
+
+// URL validation for Discord webhooks
+static qboolean IsDiscordWebhookURL(const char *url)
+{
+    static const char *okprefixes[] = {
+        "https://discord.com/api/webhooks/",
+        "https://canary.discord.com/api/webhooks/",
+        "https://ptb.discord.com/api/webhooks/",
+        "https://discordapp.com/api/webhooks/", // legacy, optional
+    };
+    size_t i;
+
+    if (!url || !*url) return false;
+
+    // reject control chars / whitespace
+    for (const unsigned char *p = (const unsigned char*)url; *p; ++p)
+        if (*p <= 0x20) return false;
+
+    for (i = 0; i < sizeof(okprefixes)/sizeof(okprefixes[0]); ++i)
+        if (!Q_strncmp(url, okprefixes[i], strlen(okprefixes[i])))
+            return true;
+
+    return false;
+}
+
+static char g_last_good_discord[256] = ""; // persists between calls
+
+static void ConNotifyDiscord_Callback(cvar_t* var)
+{
+	if (!var->string[0]) {            // empty is allowed
+		g_last_good_discord[0] = 0;
+		return;
+	}
+
+	if (IsDiscordWebhookURL(var->string)) {
+		q_strlcpy(g_last_good_discord, var->string, sizeof(g_last_good_discord));
+		return;
+	}
+
+	char masked[256];
+	MaskDiscordURL(var->string, masked, sizeof(masked));
+	Con_Printf("discord: invalid webhook URL ^m%s^m (must be https://*.discord.com/api/webhooks/...)\n", masked);
+
+	// Temporarily remove callback to prevent recursion, then restore it
+	cvarcallback_t saved_callback = var->callback;
+	var->callback = NULL;
+	Cvar_SetQuick(var, g_last_good_discord); // guaranteed-valid (or empty)
+	var->callback = saved_callback;
+}
 
 /*
 ================
@@ -423,6 +498,8 @@ void Con_Init (void)
 	Cvar_RegisterVariable (&con_notifyposition); // woods #notifyposition
 	Cvar_RegisterVariable (&con_notifyfade); // woods #confade
 	Cvar_RegisterVariable (&con_notifyfadetime); // woods #confade
+	Cvar_RegisterVariable (&con_notifydiscord); // woods #discord
+	Cvar_SetCallback (&con_notifydiscord, &ConNotifyDiscord_Callback); // woods #discord
 
 
 	Cmd_AddCommand ("toggleconsole", Con_ToggleConsole_f);
@@ -888,12 +965,18 @@ static void Con_Print (const char *txt)
 					if (cl_afk.value)
 					{
 						if (Q_strcasestr(txt, afk_name)) // has my name minus AFK (afk_name is only created if cl_afk 1)
+						{
 							SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);	
+							QSSM_DiscordNotify(txt); // woods #discord
+						}
 					}
 					else
 					{ 
 						if (Q_strcasestr(txt, cl_name.string)) // has my name
+						{
 							SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
+							QSSM_DiscordNotify(txt); // woods #discord
+					}
 					}
 
 					char notifylist[MAXCMDLINE];
@@ -909,6 +992,7 @@ static void Con_Print (const char *txt)
 								// Check if the remaining string after the token is exactly one character
 								if (strlen(found) == strlen(token) + 1) {
 									SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
+									QSSM_DiscordNotify(txt); // woods #discord
 								}
 							}
 							token = SDL_strtokr(NULL, " ", &saveptr);
@@ -922,7 +1006,10 @@ static void Con_Print (const char *txt)
 	{
 		S_LocalSound("misc/talk.wav");
 		if (!VID_HasMouseOrInputFocus())
+		{
 			SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
+			QSSM_DiscordNotify(txt); // woods #discord
+		}
 	}
 
 	if (txt[0] == 1)
@@ -3143,3 +3230,85 @@ void LOG_Close (void)
 	log_fd = -1;
 }
 
+// woods #discord
+static int DiscordThread(void *data)
+{
+    discord_job_t *job = (discord_job_t*)data;
+
+    CURL *curl = curl_easy_init();
+    if (curl) {
+        struct curl_slist *hdr = NULL;
+        hdr = curl_slist_append(hdr, "Content-Type: application/json");
+
+        curl_easy_setopt(curl, CURLOPT_URL, job->url);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, job->payload);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(job->payload)); // exact body size
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 2000L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1500L); // fail fast on connect
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, "QSS-M");
+        /* keep TLS verification ON (explicit) */
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+
+        CURLcode rc = curl_easy_perform(curl);
+        if (rc != CURLE_OK) {
+            if (developer.value)
+                Con_DPrintf("discord: curl error: %s\n", curl_easy_strerror(rc));
+        } else {
+            long http_code = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+            if (http_code != 204 && http_code != 200) {
+                if (developer.value)
+                    Con_DPrintf("discord: HTTP %ld\n", http_code);
+            }
+        }
+
+        curl_slist_free_all(hdr);
+        curl_easy_cleanup(curl);
+    }
+
+	free(job);
+    return 0;
+}
+
+static void MakeDiscordPayload(const char *raw, char *out, size_t outsz)
+{
+    char clean[1024];
+    q_strlcpy(clean, raw, sizeof(clean));
+
+    for (unsigned char *ch = (unsigned char*)clean; *ch; ch++)
+        *ch = dequake[*ch];
+
+    char *esc = JSON_EscapeString(clean);
+    if (!esc) { out[0] = 0; return; }
+
+    /* Avoid accidental pings to @everyone/@here and roles */
+    q_snprintf(out, outsz,
+               "{\"content\":\"%s\",\"allowed_mentions\":{\"parse\":[]}}",
+               esc);
+    free(esc);
+}
+
+static void QSSM_DiscordNotify(const char *raw_msg)
+{
+    if (!con_notifydiscord.string[0]) return;
+    if (!IsDiscordWebhookURL(con_notifydiscord.string)) {
+        char masked[256];
+        MaskDiscordURL(con_notifydiscord.string, masked, sizeof(masked));
+        Con_Printf("discord: invalid webhook URL ^m%s^m (must be https://*.discord.com/api/webhooks/...)\n", masked);
+        return;
+    }
+
+    char payload[1300];
+    MakeDiscordPayload(raw_msg, payload, sizeof(payload));
+    if (!payload[0]) return;
+
+	discord_job_t* job = (discord_job_t*)malloc(sizeof(*job));
+    q_strlcpy(job->payload, payload, sizeof(job->payload));
+    q_strlcpy(job->url, con_notifydiscord.string, sizeof(job->url));
+
+    SDL_Thread *t = SDL_CreateThread(DiscordThread, "discord", job);
+    if (t) SDL_DetachThread(t);
+}
