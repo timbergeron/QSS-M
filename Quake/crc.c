@@ -92,3 +92,81 @@ unsigned short CRC_Block (const byte *start, size_t count)
 
 	return crc;
 }
+
+qboolean CL_MapCRC_Validate(const char *bsp, unsigned server_crc_quick, unsigned server_crc_full) // woods #mapcrc
+{
+	unsigned local_crc_quick, local_crc_full;
+	byte *map_data;
+	unsigned path_id;
+	int file_size;  // Capture file size to avoid race condition
+	double start_time, quick_time, full_time;
+
+	Con_DPrintf("*** Two-Stage Map CRC Validation ***\n");
+	Con_DPrintf("BSP file: '%s'\n", bsp);
+	Con_DPrintf("Server Quick CRC: %u (0x%08x)\n", server_crc_quick, server_crc_quick);
+	Con_DPrintf("Server Full CRC:  %u (0x%08x)\n", server_crc_full, server_crc_full);
+
+	// Use COM_LoadMallocFile to avoid memory leaks
+	map_data = COM_LoadMallocFile(bsp, &path_id);
+	if (!map_data) {
+		Con_DPrintf("ERROR: Could not load file '%s' – skipping CRC check\n", bsp);
+		return true;  // let connection proceed; user will error later
+	}
+	
+	// Capture file size immediately to avoid race condition with com_filesize global
+	file_size = com_filesize;
+	
+	Con_DPrintf("File loaded successfully using COM_LoadMallocFile (path_id: %u)\n", path_id);
+
+	start_time = Sys_DoubleTime();
+
+	// Stage 1: Quick CRC check (first 4KB) - EARLY REJECTION ONLY
+	int quick_size = (file_size > 4096) ? 4096 : file_size;
+	local_crc_quick = Com_BlockChecksum(map_data, quick_size);
+	quick_time = Sys_DoubleTime();
+
+	Con_DPrintf("\n=== STAGE 1: QUICK CRC CHECK (Early Rejection) ===\n");
+	Con_DPrintf("Quick size: %d bytes\n", quick_size);
+	Con_DPrintf("Local Quick CRC:  %u (0x%08x) [%.1fms]\n", 
+	          local_crc_quick, local_crc_quick, (quick_time - start_time) * 1000.0);
+	Con_DPrintf("Server Quick CRC: %u (0x%08x)\n", server_crc_quick, server_crc_quick);
+	Con_DPrintf("Quick Match: %s\n", (local_crc_quick == server_crc_quick) ? "YES" : "NO");
+
+	if (local_crc_quick != server_crc_quick) {
+		Con_DPrintf("Quick CRC mismatch - maps are definitely different, skipping full check\n");
+		Con_DPrintf("Map CRC mismatch: quick CRC differs (%u vs %u)\n", 
+		          local_crc_quick, server_crc_quick);
+		Con_DPrintf("=================================================\n");
+		free(map_data);  // Free memory before returning
+		return false;
+	}
+
+	Con_DPrintf("Quick CRC match - performing full check to confirm...\n");
+
+	// Stage 2: Full CRC check (always required for definitive validation)
+	local_crc_full = Com_BlockChecksum(map_data, file_size);
+	full_time = Sys_DoubleTime();
+
+	Con_DPrintf("\n=== STAGE 2: FULL CRC CHECK (Definitive) ===\n");
+	Con_DPrintf("Full size: %d bytes\n", file_size);
+	Con_DPrintf("Local Full CRC:  %u (0x%08x) [%.1fms]\n", 
+	          local_crc_full, local_crc_full, (full_time - quick_time) * 1000.0);
+	Con_DPrintf("Server Full CRC: %u (0x%08x)\n", server_crc_full, server_crc_full);
+	Con_DPrintf("Full Match: %s\n", (local_crc_full == server_crc_full) ? "YES" : "NO");
+	Con_DPrintf("Total validation time: %.1fms\n", (full_time - start_time) * 1000.0);
+
+	// Free the allocated memory
+	free(map_data);
+
+	if (local_crc_full == server_crc_full) {
+		Con_DPrintf("Full CRC match - maps are identical\n");
+		Con_DPrintf("==========================================\n");
+		return true;
+	} else {
+		Con_DPrintf("Full CRC mismatch - maps differ despite quick match (false positive avoided)\n");
+		Con_DPrintf("Map CRC mismatch: quick(%u vs %u - matched), full(%u vs %u - different)\n", 
+		          local_crc_quick, server_crc_quick, local_crc_full, server_crc_full);
+		Con_DPrintf("==========================================\n");
+		return false;
+	}
+}

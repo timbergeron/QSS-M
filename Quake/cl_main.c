@@ -102,6 +102,7 @@ extern float	host_netinterval;	//Spike
 
 extern cvar_t	allow_download; // woods #ftehack
 extern cvar_t	pq_lag; // woods
+extern cvar_t	sv_mapcrc; // woods #mapcrc
 extern qboolean	qeintermission; // woods #qeintermission
 extern qboolean	crxintermission; // woods #crxintermission
 
@@ -248,6 +249,8 @@ void CL_Disconnect (void)
 	memset(lastconnected, '\0', sizeof(lastconnected)); // woods #identify+
 	cl.matchinp = 0; // woods
 	netquakeio = false; // woods
+
+	Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "*mapmismatch", ""); // clear -- woods #mapcrc
 
 	if (cl.modtype == 1 || cl.modtype == 4)
 		Cbuf_AddText("setinfo observing off\n"); // woods
@@ -519,6 +522,55 @@ void CL_SignonReply (void)
 			cl.fullpitch = 1;
 
 		retry_counter = 0; // woods #ms
+
+		if (sv_mapcrc.value && !sv.active) // woods #mapcrc -- skip CRC validation for listen servers
+		{
+			// Validate map CRC now that we're fully connected and have complete serverinfo
+			char crc_quick_str[64], crc_full_str[64];
+			Con_DPrintf("Starting two-stage map CRC validation after full connection...\n");
+			
+			qboolean has_quick = Info_GetKey(cl.serverinfo, "*mapcrc_quick", crc_quick_str, sizeof(crc_quick_str)) && *crc_quick_str;
+			qboolean has_full = Info_GetKey(cl.serverinfo, "*mapcrc_full", crc_full_str, sizeof(crc_full_str)) && *crc_full_str;
+			
+			if (has_quick && has_full)
+			{
+				cls.map_crc_quick_server = strtoul(crc_quick_str, NULL, 10);
+				cls.map_crc_full_server = strtoul(crc_full_str, NULL, 10);
+				Con_DPrintf("Server Quick CRC: %u, Full CRC: %u\n", cls.map_crc_quick_server, cls.map_crc_full_server);
+				Con_DPrintf("Validating map: %s\n", cl.model_name[1]);
+				
+				// Validate map CRC - allow connection but track mismatch
+				if (!CL_MapCRC_Validate(cl.model_name[1], cls.map_crc_quick_server, cls.map_crc_full_server))
+				{
+					// Set userinfo flag to indicate map mismatch
+					Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "*mapmismatch", "1");
+					Con_Warning("Your map version differs from the server's version\n");
+				}
+				else
+				{
+					// Clear any previous mismatch flag
+					Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "*mapmismatch", "");
+					Con_DPrintf("Map CRC validation passed - maps match\n");
+				}
+			}
+			else
+			{
+				Con_DPrintf("Server did not provide complete CRC info (quick='%s', full='%s')\n", 
+				          has_quick ? crc_quick_str : "(missing)", 
+				          has_full ? crc_full_str : "(missing)");
+				cls.map_crc_quick_server = 0;
+				cls.map_crc_full_server = 0;
+				// Clear mismatch flag when server doesn't provide complete CRC
+				Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "*mapmismatch", "");
+			}
+		}
+		else if (sv_mapcrc.value)
+		{
+			Con_DPrintf("Skipping map CRC validation for listen server\n");
+			cls.map_crc_quick_server = 0;
+			cls.map_crc_full_server = 0;
+			Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "*mapmismatch", "");
+		}
 
 		break;
 	}
@@ -3343,6 +3395,21 @@ void SV_UpdateInfo(int edict, const char *keyname, const char *value)
 
 			if (!strcmp(keyname, "name") && infoplayer->name[0]) // woods #dupnames
 				SV_CheckDuplicateNames(infoplayer);
+
+			if (sv_mapcrc.value && !strcmp(keyname, "*mapmismatch") && !strcmp(value, "1")) // woods #mapcrc
+			{
+				// Notify all players about the map mismatch
+				client_t *notify_cl;
+				for (notify_cl = svs.clients; notify_cl < svs.clients+svs.maxclients; notify_cl++)
+				{
+					if (notify_cl->active && notify_cl != infoplayer)
+					{
+						MSG_WriteByte(&notify_cl->message, svc_print);
+						MSG_WriteString(&notify_cl->message, va("^3%s connected with a different map version\n", infoplayer->name));
+					}
+				}
+				Con_Printf("^3%s connected with a different map version\n", infoplayer->name);
+			}
 		}
 
 		if (*keyname == '_' || !sv.active)

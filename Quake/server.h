@@ -108,6 +108,9 @@ typedef struct
 
 	qboolean skyroom_pos_known;
 	vec4_t skyroom_pos;
+
+	unsigned	map_crc_quick; // woods #mapcrc - CRC of first 4KB of map file
+	unsigned	map_crc_full;// woods #mapcrc - CRC of entire map file
 } server_t;
 
 

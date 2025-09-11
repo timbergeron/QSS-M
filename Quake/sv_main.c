@@ -32,6 +32,7 @@ static char	localmodels[MAX_MODELS][8];	// inline model names for precache
 
 cvar_t	sv_defaultmap = {"sv_defaultmap","start", CVAR_ARCHIVE}; // woods #mapchangeprotect (R00k) 
 cvar_t  sv_idlesleep = {"sv_idlesleep", "8", CVAR_ARCHIVE}; // woods #idlesleep (ezquake)
+cvar_t	sv_mapcrc = {"sv_mapcrc", "0", CVAR_ARCHIVE|CVAR_SERVERINFO}; // woods #mapcrc
 
 int				sv_protocol = PROTOCOL_RMQ;//spike -- enough maps need this now that we can probably afford incompatibility with engines that still don't support 999 (vanilla was already broken) -- PROTOCOL_FITZQUAKE; //johnfitz
 unsigned int	sv_protocol_pext1 = PEXT1_SUPPORTED_SERVER; //spike
@@ -1579,6 +1580,7 @@ void SV_Init (void)
 	extern	cvar_t	sv_defaultmap;		// woods #mapchangeprotect
 	extern	cvar_t	sv_bunnyhopqw; // woods #qwbunnyhop
 	extern	cvar_t	sv_fullpitch; // woods #pqfullpitch
+	extern	cvar_t	sv_mapcrc; // woods #mapcrc
 
 	PM_Register();
 	Cvar_RegisterVariable (&sv_maxvelocity);
@@ -1614,6 +1616,7 @@ void SV_Init (void)
 	Cvar_RegisterVariable (&sv_defaultmap); // woods #mapchangeprotect
 	Cvar_SetCompletion (&sv_defaultmap, &Extralevels_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&sv_idlesleep); // woods #idlesleep
+	Cvar_RegisterVariable (&sv_mapcrc); // Map CRC handshake feature
 
 	if (isDedicated)
 		sv_public.string = "1";
@@ -3887,6 +3890,58 @@ void SV_SpawnServer (const char *server)
 	
 	sv.models[1] = qcvm->worldmodel;
 	qcvm->GetModel = SV_ModelForIndex;
+
+	if (sv_mapcrc.value) // woods #mapcrc
+	{
+		Con_DPrintf("sv_mapcrc: Starting two-stage map CRC calculation for %s\n", sv.modelname);
+
+		unsigned path_id;
+		byte* map = COM_LoadMallocFile(sv.modelname, &path_id);
+		if (map)
+		{
+			double start_time = Sys_DoubleTime();
+
+			// Quick CRC: first 4KB only
+			int quick_size = (com_filesize > 4096) ? 4096 : com_filesize;
+			sv.map_crc_quick = Com_BlockChecksum(map, quick_size);
+			double quick_time = Sys_DoubleTime();
+
+			// Full CRC: entire file
+			sv.map_crc_full = Com_BlockChecksum(map, com_filesize);
+			double full_time = Sys_DoubleTime();
+
+			// Free the allocated memory
+			free(map);
+
+			// Publish both CRCs in serverinfo
+			Info_SetKey(svs.serverinfo, sizeof(svs.serverinfo),
+				"*mapcrc_quick", va("%u", sv.map_crc_quick));
+			Info_SetKey(svs.serverinfo, sizeof(svs.serverinfo),
+				"*mapcrc_full", va("%u", sv.map_crc_full));
+
+			Con_DPrintf("=== SERVER MAP CRC CALCULATION ===\n");
+			Con_DPrintf("Map: %s (path_id: %u)\n", sv.modelname, path_id);
+			Con_DPrintf("File size: %d bytes\n", (int)com_filesize);
+			Con_DPrintf("Quick CRC (%d bytes): %u (0x%08x) [%.1fms]\n",
+				quick_size, sv.map_crc_quick, sv.map_crc_quick,
+				(quick_time - start_time) * 1000.0);
+			Con_DPrintf("Full CRC (%d bytes):  %u (0x%08x) [%.1fms]\n",
+				(int)com_filesize, sv.map_crc_full, sv.map_crc_full,
+				(full_time - quick_time) * 1000.0);
+			Con_DPrintf("Total CRC time: %.1fms\n", (full_time - start_time) * 1000.0);
+			Con_DPrintf("==================================\n");
+		}
+		else
+		{
+			sv.map_crc_quick = 0;
+			sv.map_crc_full = 0;
+			Info_SetKey(svs.serverinfo, sizeof(svs.serverinfo),
+				"*mapcrc_quick", "");
+			Info_SetKey(svs.serverinfo, sizeof(svs.serverinfo),
+				"*mapcrc_full", "");
+			Con_DPrintf("Failed to load map file for CRC: %s\n", sv.modelname);
+		}
+	}
 
 //
 // clear world interaction links

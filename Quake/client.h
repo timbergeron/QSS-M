@@ -206,6 +206,9 @@ typedef struct
 	char userinfo[8192];
 //Spike -- menuqc stuff.
 	qcvm_t menu_qcvm;
+
+	unsigned	map_crc_quick_server; // woods #mapcrc - quick CRC advertised by server
+	unsigned	map_crc_full_server; // woods #mapcrc - full CRC advertised by server
 } client_static_t;
 
 extern client_static_t	cls;
