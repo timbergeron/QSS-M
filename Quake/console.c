@@ -2494,6 +2494,7 @@ extern qboolean CompletePAKList(const char* partial, void* unused); // woods #un
 
 qboolean CompleteImageList (const char* partial, void* unused); // woods
 qboolean CompleteSoundList (const char* partial, void* unused); // woods
+qboolean CompleteGive (const char* partial, void* unused); // woods #give+
 
 typedef struct arg_completion_type_s // woods #iwtabcomplete
 {
@@ -2558,7 +2559,8 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "tell",					CompleteClients,		NULL },
 	{ "record",					CompleteRecord,			NULL },
 	{ "save",					CompleteSave,			NULL },
-	{ "load",					CompleteLoad,			NULL }
+	{ "load",					CompleteLoad,			NULL },
+	{ "give",					CompleteGive,			NULL }
 };
 
 static const int num_arg_completion_types =

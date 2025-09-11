@@ -3892,6 +3892,21 @@ void SV_SpawnServer (const char *server)
 	SV_ClearWorld ();
 
 	sv.sound_precache[0] = dummy;
+	
+	// woods #give+
+	SV_Precache_Sound("items/protect.wav"); 
+	SV_Precache_Sound("items/protect2.wav");
+	SV_Precache_Sound("items/protect3.wav");
+	SV_Precache_Sound("items/armor1.wav");
+	SV_Precache_Sound("items/damage.wav");
+	SV_Precache_Sound("items/damage2.wav");
+	SV_Precache_Sound("items/damage3.wav");
+	SV_Precache_Sound("items/inv1.wav");
+	SV_Precache_Sound("items/inv2.wav");
+	SV_Precache_Sound("items/inv3.wav");
+	SV_Precache_Sound("items/r_item1.wav");
+	SV_Precache_Sound("items/suit.wav");
+	SV_Precache_Sound("items/suit2.wav");
 	sv.model_precache[0] = dummy;
 	sv.model_precache[1] = sv.modelname;
 	if (qcvm->worldmodel->numsubmodels > MAX_MODELS)
