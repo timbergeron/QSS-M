@@ -2098,6 +2098,77 @@ static void Host_Fly_f (void)
 
 /*
 ==================
+Host_GetDamageFunction
+==================
+*/
+static int Host_GetDamageFunction(void)
+{
+	int i, total;
+
+	if (!qcvm || !qcvm->progs) // VM present?
+		return -1;
+
+	if (deathmatch.value || coop.value)
+		return -1;
+
+	total = qcvm->progs->numfunctions;
+	for (i = 0; i < total; ++i)
+	{
+		if (!strcmp(PR_GetString(qcvm->functions[i].s_name), "T_Damage"))
+			return i;
+	}
+	return -1;      /* not found */
+}
+
+static void Host_DoDamage(int func, edict_t* target, qboolean gib)
+{
+	const float health = target->v.health;
+
+	if (health <= 0.0f || target->v.takedamage <= 0.0f) // Skip corpses or invulnerable entities
+		return;
+
+	/* Parameter setup. */
+	G_INT(OFS_PARM0) = EDICT_TO_PROG(target);   /* target    */
+	G_INT(OFS_PARM1) = EDICT_TO_PROG(sv_player);/* inflictor */
+	G_INT(OFS_PARM2) = G_INT(OFS_PARM1);        /* attacker  */
+	G_FLOAT(OFS_PARM3) = health + (gib ? 99.0f : 1.0f);
+
+	PR_ExecuteProgram(func);
+}
+
+static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833c
+{
+	const qboolean gib = (Cmd_Argc() > 1);   /* any 2nd arg toggles gibs */
+	int            func;
+	size_t         i, total;
+
+	/* Forward if typed on the host console of a listen server. */
+	if (cmd_source != src_client)
+	{
+		Cmd_ForwardToServer();
+		return;
+	}
+
+	/* Abort if T_Damage() not found (unusual custom progs). */
+	if ((func = Host_GetDamageFunction()) == -1)
+		return;
+
+	total = qcvm->num_edicts;
+	for (i = 1; i < total; ++i)                /* edict 0 = world */
+	{
+		edict_t* ent = EDICT_NUM((int)i);
+		if (ent->free || !((int)ent->v.flags & FL_MONSTER))
+			continue;
+
+		Host_DoDamage(func, ent, gib);
+	}
+
+	SV_ClientPrintf("Massacred all monsters (%s)\n",
+		gib ? "gibbed" : "no gibs");
+}
+
+/*
+==================
 ICMP_Ping_Host -- woods #icmp
 ==================
 */
@@ -5184,6 +5255,7 @@ void Host_InitCommands (void)
 	Cmd_AddCommand ("load", Host_Loadgame_f);
 	Cmd_AddCommand ("save", Host_Savegame_f);
 	Cmd_AddCommand_ClientCommandQC ("give", Host_Give_f);
+	Cmd_AddCommand_ClientCommandQC ("massacre", Host_Massacre_f);
 	Cmd_AddCommand_ClientCommand ("download", Host_Download_f);
 	Cmd_AddCommand_ClientCommand ("sv_startdownload", Host_StartDownload_f);
 	Cmd_AddCommand_ClientCommand ("enablecsqc", Host_EnableCSQC_f);
