@@ -33,8 +33,8 @@ extern cvar_t r_flatlightstyles;
 extern cvar_t gl_fullbrights;
 extern cvar_t gl_overbright;
 extern cvar_t gl_overbright_models;
-extern cvar_t r_alias_light_desat; // woods - remove colored lighting from alias models #dedat
-extern cvar_t r_alias_light_desat_list; // woods #dedat
+extern cvar_t r_model_light_desat; // woods - remove colored lighting from alias models #dedat
+extern cvar_t r_model_light_desat_list; // woods #dedat
 extern cvar_t r_waterwarp;
 extern cvar_t r_oldskyleaf;
 extern cvar_t r_drawworld;
@@ -395,8 +395,8 @@ void R_Init (void)
 	Cvar_SetCallback (&gl_fullbrights, GL_Fullbrights_f);
 	Cvar_SetCallback (&gl_overbright, GL_Overbright_f);
 	Cvar_RegisterVariable (&gl_overbright_models);
-	Cvar_RegisterVariable (&r_alias_light_desat); // woods #dedat
-	Cvar_RegisterVariable (&r_alias_light_desat_list); // woods #dedat
+	Cvar_RegisterVariable (&r_model_light_desat); // woods #dedat
+	Cvar_RegisterVariable (&r_model_light_desat_list); // woods #dedat
 	Cvar_RegisterVariable (&r_lerpmodels);
 	Cvar_RegisterVariable (&r_lerpmove);
 	Cvar_RegisterVariable (&r_nolerp_list);

@@ -27,8 +27,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t r_drawflat, gl_overbright_models, gl_fullbrights, r_lerpmodels, r_lerpmove; //johnfitz
 extern cvar_t scr_fov, cl_gun_fovscale; // woods #zoom (ironwail)
 extern cvar_t r_coloredpowerupglow; // woods
-extern cvar_t r_alias_light_desat; // woods - #desat
-extern cvar_t r_alias_light_desat_list; // woods - #desat
+extern cvar_t r_model_light_desat; // woods - #desat
+extern cvar_t r_model_light_desat_list; // woods - #desat
 extern cvar_t r_outline; // woods #obmodelslist #routline
 extern cvar_t r_nooutline_list; // woods #routline
 
@@ -1743,10 +1743,10 @@ void R_SetupAliasLighting (entity_t	*e)
 		// woods #dedat -- for models on _list:  1 = greyscale: keep brightness, no hue, 2 = white-full: force` neutral shading
 		// viewmodel handling: -1 = greyscale for all models except viewmodels, -2 = greyscale for viewmodels, white-full for all other models
 
-		if (r_alias_light_desat.value && e->model)
+		if (r_model_light_desat.value && e->model)
 		{
-			int desat_val = (int)r_alias_light_desat.value;
-			qboolean listed = nameInList(r_alias_light_desat_list.string, e->model->name);
+			int desat_val = (int)r_model_light_desat.value;
+			qboolean listed = nameInList(r_model_light_desat_list.string, e->model->name);
 
 			/*  +1 / +2 → only models in list
 			 *  -1 / -2 → list OR the view-model                              */
