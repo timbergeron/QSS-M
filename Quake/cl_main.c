@@ -1005,6 +1005,9 @@ static void CL_ClientsidePowerupColor(entity_t* ent, int entnum)
 	if (!r_coloredpowerupglow.value)
 		return;
 
+	if (cl.gametype == GAME_DEATHMATCH || cl.maxclients > 1)
+		return;
+
 	const qboolean is_local = (entnum == cl.viewentity);
 
 	/* Non-local ents: only known player models */
