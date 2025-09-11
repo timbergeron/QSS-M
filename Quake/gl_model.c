@@ -42,6 +42,7 @@ static void Mod_Print (void);
 
 static cvar_t	external_ents = {"external_ents", "1", CVAR_ARCHIVE};
 static cvar_t	external_ents_dir = {"external_ents_dir", "", CVAR_ARCHIVE};
+static cvar_t   external_lits_dir = {"external_lits_dir", "", CVAR_ARCHIVE}; // woods #litdir
 cvar_t	gl_load24bit = {"gl_load24bit", "1", CVAR_ARCHIVE};
 static cvar_t	mod_ignorelmscale = {"mod_ignorelmscale", "0"};
 static cvar_t	mod_lightscale_broken = {"mod_lightscale_broken", "1"};	//match vanilla's brokenness bug with dlights and scaled textures. decoupled_lm bypasses this obviously buggy setting because zomgletmefixstuffffs
@@ -97,6 +98,7 @@ void Mod_Init (void)
 	Cvar_RegisterVariable (&external_vis);
 	Cvar_RegisterVariable (&external_ents);
 	Cvar_RegisterVariable (&external_ents_dir);
+	Cvar_RegisterVariable (&external_lits_dir); // woods #litdir
 	Cvar_RegisterVariable (&gl_load24bit);
 	Cvar_RegisterVariable (&r_replacemodels);
 	Cvar_RegisterVariable (&mod_ignorelmscale);
@@ -1152,7 +1154,36 @@ static void Mod_LoadLighting (lump_t *l)
 	COM_StripExtension(litfilename, litfilename, sizeof(litfilename));
 	q_strlcat(litfilename, ".lit", sizeof(litfilename));
 	mark = Hunk_LowMark();
-	data = gl_loadlitfiles.value?(byte*) COM_LoadHunkFile (litfilename, &path_id):NULL; // woods #loadlits
+	data = NULL;
+
+	if (gl_loadlitfiles.value >= 1) // woods #loadlits #litdir
+	{
+		char altlitfilename[MAX_OSPATH];
+		qboolean try_external = false;
+
+		// Check if we should try external lits first
+		if (gl_loadlitfiles.value >= 2 && external_lits_dir.string[0])
+		{
+			q_snprintf(altlitfilename, sizeof(altlitfilename), "maps/%s/%s",
+				external_lits_dir.string, COM_SkipPath(litfilename));
+
+			if (gl_loadlitfiles.value == 2 ||
+				(gl_loadlitfiles.value == 3 && (rand() & 1)))
+			{
+				try_external = true;
+			}
+
+			if (try_external && COM_FileExists(altlitfilename, NULL))
+			{
+				Con_DPrintf2("trying to load %s\n", altlitfilename);
+				data = (byte*)COM_LoadHunkFile(altlitfilename, &path_id);
+			}
+		}
+
+		// Load standard .lit file if no external data loaded
+		if (!data)
+			data = (byte*)COM_LoadHunkFile(litfilename, &path_id);
+	}
 	if (data)
 	{
 		// use lit file only from the same gamedir as the map
@@ -1230,27 +1261,34 @@ static void Mod_LoadLighting (lump_t *l)
 		return;
 	}
 
-	in = Q1BSPX_FindLump("LIGHTING_E5BGR9", &bspxsize);
-	if (in && (!l->filelen || (bspxsize && bspxsize == l->filelen*4)))
+	if (gl_loadlitfiles.value > 0) // woods #loadlits
 	{
-		loadmodel->lightdata = (byte *) Hunk_AllocName ( bspxsize, litfilename);
-		loadmodel->lightdatasamples = bspxsize/4;
-		memcpy(loadmodel->lightdata, in, bspxsize);
-		loadmodel->flags |= MOD_HDRLIGHTING;
-		Con_DPrintf("bspx hdr lighting loaded\n");
-		for (i = 0; i < loadmodel->lightdatasamples; i++)	//native endian...
-			((int*)loadmodel->lightdata)[i] = LittleLong(((int*)loadmodel->lightdata)[i]);
-		return;
+		in = Q1BSPX_FindLump("LIGHTING_E5BGR9", &bspxsize);
+		if (in && (!l->filelen || (bspxsize && bspxsize == l->filelen * 4)))
+		{
+			loadmodel->lightdata = (byte*)Hunk_AllocName(bspxsize, litfilename);
+			loadmodel->lightdatasamples = bspxsize / 4;
+			memcpy(loadmodel->lightdata, in, bspxsize);
+			loadmodel->flags |= MOD_HDRLIGHTING;
+			Con_DPrintf("bspx hdr lighting loaded\n");
+			for (i = 0; i < loadmodel->lightdatasamples; i++)    // native endian...
+				((int*)loadmodel->lightdata)[i] = LittleLong(((int*)loadmodel->lightdata)[i]);
+			return;
+		}
+		in = Q1BSPX_FindLump("RGBLIGHTING", &bspxsize);
+		if (in && (!l->filelen || (bspxsize && bspxsize == l->filelen * 3)))
+		{
+			loadmodel->lightdata = (byte*)Hunk_AllocName(bspxsize, litfilename);
+			loadmodel->lightdatasamples = bspxsize / 3;
+			memcpy(loadmodel->lightdata, in, bspxsize);
+			Con_DPrintf("bspx ldr lighting loaded\n");
+			return;
+		}
 	}
-	in = Q1BSPX_FindLump("RGBLIGHTING", &bspxsize);
-	if (in && (!l->filelen || (bspxsize && bspxsize == l->filelen*3)))
-	{
-		loadmodel->lightdata = (byte *) Hunk_AllocName ( bspxsize, litfilename);
-		loadmodel->lightdatasamples = bspxsize/3;
-		memcpy(loadmodel->lightdata, in, bspxsize);
-		Con_DPrintf("bspx ldr lighting loaded\n");
-		return;
+	else {
+		Con_DPrintf2("gl_loadlitfiles 0: ignoring BSPX colored lighting lumps\n");
 	}
+
 	if (l->filelen)
 	{
 		loadmodel->lightdata = (byte *) Hunk_AllocName ( l->filelen*3, litfilename);
