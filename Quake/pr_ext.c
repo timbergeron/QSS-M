@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "q_ctype.h"
+#include <curl/curl.h> // woods #uri
 
 static float PR_GetVMScale(void)
 {	//sigh, this is horrible (divides glwidth)
@@ -6465,6 +6466,460 @@ static void PF_gethostcacheindexforkey(void)
 //static void PF_getextresponse(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
 //static void PF_netaddress_resolve(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
 static void PF_uri_get(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
+
+// Async URI subsystem -- woods #uri
+
+#define URIGET_ENABLED                 1
+#define URIGET_MAX_BYTES               (1*1024*1024)
+#define URIGET_CALLBACKS_PER_FRAME     6
+#define URIGET_MAX_ACTIVE              32
+#define URIGET_INSECURE                0
+
+typedef struct uri_request_s {
+    char url[2048];
+    float id;
+    char mimetype[256];
+    char *postdata;
+    size_t postlen;
+    int use_strbuf;
+    int strbuf_id;
+    qcvm_t *target_qcvm;
+    struct uri_request_s *next;
+} uri_request_t;
+
+typedef struct uri_response_s {
+    char *data;
+    size_t size;
+    size_t capacity;
+    long http_status;
+    char content_type[256];
+
+    float id;
+    qcvm_t *target_qcvm;
+    int ok;
+    struct uri_response_s *next;
+} uri_response_t;
+
+static SDL_Thread *uri_worker_thread = NULL;
+static SDL_mutex  *uri_pending_mtx   = NULL;
+static SDL_cond   *uri_pending_cv    = NULL;
+static SDL_mutex  *uri_completed_mtx = NULL;
+
+static uri_request_t  *pending_head   = NULL;
+static uri_request_t  *pending_tail   = NULL;
+static uri_response_t *completed_head = NULL;
+static uri_response_t *completed_tail = NULL;
+
+static volatile int uri_worker_running = 0;
+static int active_uri_requests = 0;
+
+static void enqueue_request(uri_request_t *r) {
+    SDL_LockMutex(uri_pending_mtx);
+    if (!pending_tail) {
+        pending_head = pending_tail = r;
+    } else {
+        pending_tail->next = r;
+        pending_tail = r;
+    }
+    r->next = NULL;
+    SDL_CondSignal(uri_pending_cv);
+    SDL_UnlockMutex(uri_pending_mtx);
+}
+
+static uri_request_t *dequeue_request_blocking(void) {
+    uri_request_t *r = NULL;
+    SDL_LockMutex(uri_pending_mtx);
+    while (uri_worker_running && pending_head == NULL) {
+        SDL_CondWait(uri_pending_cv, uri_pending_mtx);
+    }
+    if (!uri_worker_running) {
+        SDL_UnlockMutex(uri_pending_mtx);
+        return NULL;
+    }
+    r = pending_head;
+    if (r) {
+        pending_head = r->next;
+        if (!pending_head) pending_tail = NULL;
+        r->next = NULL;
+    }
+    SDL_UnlockMutex(uri_pending_mtx);
+    return r;
+}
+
+static void enqueue_completed(uri_response_t *res) {
+    SDL_LockMutex(uri_completed_mtx);
+    if (!completed_tail) {
+        completed_head = completed_tail = res;
+    } else {
+        completed_tail->next = res;
+        completed_tail = res;
+    }
+    res->next = NULL;
+    SDL_UnlockMutex(uri_completed_mtx);
+}
+
+static uri_response_t *dequeue_completed(void) {
+    uri_response_t *r = NULL;
+    SDL_LockMutex(uri_completed_mtx);
+    r = completed_head;
+    if (r) {
+        completed_head = r->next;
+        if (!completed_head) completed_tail = NULL;
+        r->next = NULL;
+    }
+    SDL_UnlockMutex(uri_completed_mtx);
+    return r;
+}
+
+static size_t URI_WriteCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+    size_t realsize = size * nmemb;
+    uri_response_t *response = (uri_response_t *)userp;
+    if (response->size + realsize > (size_t)URIGET_MAX_BYTES) {
+        Con_Printf("URI: response exceeds URIGET_MAX_BYTES (%d bytes)\n", (int)URIGET_MAX_BYTES);
+        return 0;
+    }
+    if (response->size + realsize + 1 > response->capacity) {
+        size_t newcap = response->capacity ? response->capacity * 2 : 1024;
+        if (newcap < response->size + realsize + 1)
+            newcap = response->size + realsize + 1024;
+        char *ndata = (char *)realloc(response->data, newcap);
+        if (!ndata) {
+            Con_Printf("URI_WriteCallback: Out of memory\n");
+            return 0;
+        }
+        response->data = ndata;
+        response->capacity = newcap;
+    }
+    memcpy(response->data + response->size, contents, realsize);
+    response->size += realsize;
+    response->data[response->size] = 0;
+    return realsize;
+}
+
+static size_t URI_HeaderCallback(char *buffer, size_t size, size_t nitems, void *userdata) {
+    size_t realsize = size * nitems;
+    uri_response_t *response = (uri_response_t *)userdata;
+    if (realsize > 13 && !q_strncasecmp(buffer, "content-type:", 13)) {
+        const char *start = buffer + 13;
+        while (*start == ' ' || *start == '\t') start++;
+        size_t len = realsize - (size_t)(start - buffer);
+        if (len > 0) {
+            if (len >= sizeof(response->content_type))
+                len = sizeof(response->content_type) - 1;
+            memcpy(response->content_type, start, len);
+            response->content_type[len] = 0;
+            char *end = response->content_type + len - 1;
+            while (end >= response->content_type && (*end == '\r' || *end == '\n')) {
+                *end = 0;
+                --end;
+            }
+        }
+    }
+    return realsize;
+}
+
+static void URI_PerformCurl(const uri_request_t *req, uri_response_t *out) {
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        Con_Printf("URI_PerformCurl: Failed to initialize curl\n");
+        out->ok = 0;
+        out->http_status = 0;
+        return;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, req->url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, URI_WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, out);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, URI_HeaderCallback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, out);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 10L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 10L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+#if URIGET_INSECURE
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+#endif
+    struct curl_slist *headers = NULL;
+    if (req->mimetype[0] && req->postdata && req->postlen > 0) {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, req->postdata);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)req->postlen);
+        char ctbuf[512];
+        q_snprintf(ctbuf, sizeof(ctbuf), "Content-Type: %s", req->mimetype);
+        headers = curl_slist_append(headers, ctbuf);
+        headers = curl_slist_append(headers, "Expect:");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    }
+    CURLcode res = curl_easy_perform(curl);
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    out->http_status = code;
+    if (!out->content_type[0]) {
+        q_strlcpy(out->content_type, "application/octet-stream", sizeof(out->content_type));
+    }
+    out->ok = (res == CURLE_OK && code >= 200 && code < 300) ? 1 : 0;
+    if (headers) curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+}
+
+static int URI_Worker(void *unused) {
+    (void)unused;
+    while (uri_worker_running) {
+        uri_request_t *req = dequeue_request_blocking();
+        if (!req) continue;
+        uri_response_t *resp = (uri_response_t *)calloc(1, sizeof(uri_response_t));
+        if (!resp) {
+            Con_Printf("URI_Worker: out of memory\n");
+            SDL_LockMutex(uri_pending_mtx);
+            active_uri_requests--;
+            SDL_UnlockMutex(uri_pending_mtx);
+            if (req->postdata) free(req->postdata);
+            free(req);
+            continue;
+        }
+        resp->id = req->id;
+        resp->target_qcvm = req->target_qcvm;
+        resp->content_type[0] = 0;
+        resp->data = NULL;
+        resp->size = 0;
+        resp->capacity = 0;
+        URI_PerformCurl(req, resp);
+        if (req->postdata) free(req->postdata);
+        free(req);
+        enqueue_completed(resp);
+        SDL_LockMutex(uri_pending_mtx);
+        active_uri_requests--;
+        SDL_UnlockMutex(uri_pending_mtx);
+    }
+    return 0;
+}
+
+static void URI_DispatchToQC(uri_response_t *r) {
+    qcvm_t *old = qcvm;
+    if (r->target_qcvm && r->target_qcvm->extfuncs.URI_Get_Callback) {
+        PR_SwitchQCVM(r->target_qcvm);
+        /* fteextensions.qc: URI_Get_Callback(id, responsecode, resourcebody, resourcebytes) */
+        G_FLOAT(OFS_PARM0) = r->id;
+        /* Use HTTP status; map transport failure to a negative code (DP-style). */
+        {
+            float responsecode = (float)r->http_status;
+            if (!r->ok && r->http_status == 0 && (!r->data || r->size == 0)) {
+                responsecode = -1.0f; /* libcurl/transport failure */
+            }
+            G_FLOAT(OFS_PARM1) = responsecode;
+        }
+        /* resourcebody = full response body (NOT the content-type). */
+        G_INT  (OFS_PARM2) = PR_MakeTempString(r->data ? r->data : "");
+        /* resourcebytes = exact byte count. */
+        G_INT  (OFS_PARM3) = (int)r->size;
+        PR_ExecuteProgram(r->target_qcvm->extfuncs.URI_Get_Callback);
+        PR_SwitchQCVM(old);
+    } else {
+        Con_Printf("URI_DispatchToQC: no callback available\n");
+    }
+}
+
+void URI_Init(void) {
+    uri_pending_mtx   = SDL_CreateMutex();
+    uri_completed_mtx = SDL_CreateMutex();
+    uri_pending_cv    = SDL_CreateCond();
+    if (!uri_pending_mtx || !uri_completed_mtx || !uri_pending_cv) {
+        Con_Printf("URI_Init: SDL mutex/cond init failed\n");
+        return;
+    }
+    uri_worker_running = 1;
+    uri_worker_thread = SDL_CreateThread(URI_Worker, "uri_worker", NULL);
+    if (!uri_worker_thread) {
+        Con_Printf("URI_Init: failed to start worker thread\n");
+        uri_worker_running = 0;
+    }
+}
+
+void URI_Shutdown(void) {
+    if (uri_worker_running) {
+        SDL_LockMutex(uri_pending_mtx);
+        uri_worker_running = 0;
+        SDL_CondBroadcast(uri_pending_cv);
+        SDL_UnlockMutex(uri_pending_mtx);
+        if (uri_worker_thread) {
+            SDL_WaitThread(uri_worker_thread, NULL);
+            uri_worker_thread = NULL;
+        }
+    }
+    SDL_LockMutex(uri_pending_mtx);
+    uri_request_t *rq = pending_head;
+    while (rq) {
+        uri_request_t *n = rq->next;
+        if (rq->postdata) free(rq->postdata);
+        free(rq);
+        rq = n;
+    }
+    pending_head = pending_tail = NULL;
+    SDL_UnlockMutex(uri_pending_mtx);
+    SDL_LockMutex(uri_completed_mtx);
+    uri_response_t *rs = completed_head;
+    while (rs) {
+        uri_response_t *n = rs->next;
+        if (rs->data) free(rs->data);
+        free(rs);
+        rs = n;
+    }
+    completed_head = completed_tail = NULL;
+    SDL_UnlockMutex(uri_completed_mtx);
+    if (uri_pending_cv)  { SDL_DestroyCond(uri_pending_cv); uri_pending_cv = NULL; }
+    if (uri_pending_mtx) { SDL_DestroyMutex(uri_pending_mtx); uri_pending_mtx = NULL; }
+    if (uri_completed_mtx){ SDL_DestroyMutex(uri_completed_mtx); uri_completed_mtx = NULL; }
+}
+
+void URI_Frame(void) {
+    int budget = URIGET_CALLBACKS_PER_FRAME;
+    if (budget < 1) budget = 1;
+    for (int i = 0; i < budget; ++i) {
+        uri_response_t *r = dequeue_completed();
+        if (!r) break;
+        URI_DispatchToQC(r);
+        if (r->data) free(r->data);
+        free(r);
+    }
+}
+
+static void PF_uri_get(void) {
+    const char *url      = G_STRING(OFS_PARM0);
+    float id             = G_FLOAT(OFS_PARM1);
+    const char *mimetype = (qcvm->argc >= 3) ? G_STRING(OFS_PARM2) : "";
+    const char *postdata = (qcvm->argc >= 4) ? G_STRING(OFS_PARM3) : "";
+    int strbufid         = (qcvm->argc >= 5) ? (int)G_FLOAT(OFS_PARM4) : 0;
+    G_FLOAT(OFS_RETURN) = 0;
+#if URIGET_ENABLED
+    (void)0;
+#else
+    Con_Printf("uri_get: disabled by build-time flag\n");
+    return;
+#endif
+    if (!url || !url[0]) {
+        Con_Printf("PF_uri_get: empty URL\n");
+        return;
+    }
+    SDL_LockMutex(uri_pending_mtx);
+    if (active_uri_requests >= URIGET_MAX_ACTIVE) {
+        SDL_UnlockMutex(uri_pending_mtx);
+        Con_Printf("PF_uri_get(\"%s\",%g): too many in-flight downloads (>%d)\n",
+                   url, id, (int)URIGET_MAX_ACTIVE);
+        return;
+    }
+    active_uri_requests++;
+    SDL_UnlockMutex(uri_pending_mtx);
+    uri_request_t *req = (uri_request_t *)calloc(1, sizeof(uri_request_t));
+    if (!req) {
+        SDL_LockMutex(uri_pending_mtx);
+        active_uri_requests--;
+        SDL_UnlockMutex(uri_pending_mtx);
+        Con_Printf("PF_uri_get: out of memory\n");
+        return;
+    }
+    q_strlcpy(req->url, url, sizeof(req->url));
+    req->id = id;
+    q_strlcpy(req->mimetype, mimetype ? mimetype : "", sizeof(req->mimetype));
+    req->target_qcvm = qcvm;
+    req->use_strbuf = (strbufid != 0);
+    req->strbuf_id = strbufid;
+    if (req->mimetype[0] && postdata && postdata[0]) {
+        if (postdata[0] == '@') {
+            /* File payload mode: read body from disk to bypass QC string cap.
+               Resolve relative to game dir so QC paths like "json/..." or "data/json/..."
+               work regardless of OS current working directory. */
+            const char *rel = postdata + 1; /* after '@' */
+            char cand[MAX_OSPATH];
+            FILE *f = NULL;
+
+            /* Try as-is first (absolute or cwd-relative) */
+            f = fopen(rel, "rb");
+
+            /* Try <com_gamedir>/<rel> */
+            if (!f && com_gamedir[0]) {
+                q_snprintf(cand, sizeof(cand), "%s/%s", com_gamedir, rel);
+                f = fopen(cand, "rb");
+            }
+
+            /* Try <com_gamedir>/data/<rel> (QC often writes to data/) */
+            if (!f && com_gamedir[0]) {
+                q_snprintf(cand, sizeof(cand), "%s/data/%s", com_gamedir, rel);
+                f = fopen(cand, "rb");
+            }
+
+            /* Try id1/<rel> and id1/data/<rel> as last resorts (classic layout) */
+            if (!f) { q_snprintf(cand, sizeof(cand), "id1/%s", rel); f = fopen(cand, "rb"); }
+            if (!f) { q_snprintf(cand, sizeof(cand), "id1/data/%s", rel); f = fopen(cand, "rb"); }
+
+            if (!f) {
+                SDL_LockMutex(uri_pending_mtx);
+                active_uri_requests--;
+                SDL_UnlockMutex(uri_pending_mtx);
+                free(req);
+                Con_Printf("PF_uri_get: cannot open payload file \"%s\" (tried game-relative paths)\n", rel);
+                return;
+            }
+            if (fseek(f, 0, SEEK_END) != 0) { /* ignore */ }
+            long flen = ftell(f);
+            if (flen < 0) flen = 0;
+            rewind(f);
+            if ((size_t)flen > (size_t)URIGET_MAX_BYTES) {
+                Con_Printf("PF_uri_get: file payload exceeds URIGET_MAX_BYTES, truncating\n");
+                flen = URIGET_MAX_BYTES;
+            }
+            req->postdata = (char *)malloc((size_t)flen + 1);
+            if (!req->postdata) {
+                fclose(f);
+                SDL_LockMutex(uri_pending_mtx);
+                active_uri_requests--;
+                SDL_UnlockMutex(uri_pending_mtx);
+                free(req);
+                Con_Printf("PF_uri_get: out of memory for file POST body\n");
+                return;
+            }
+            size_t rd = fread(req->postdata, 1, (size_t)flen, f);
+            fclose(f);
+            req->postlen = rd;
+            req->postdata[rd] = 0;
+            /* Log whichever path actually succeeded (cand holds last attempt if not as-is) */
+            Con_DPrintf("PF_uri_post(file:%s,%g) bytes=%d\n",
+                        (cand[0] ? cand : rel), req->id, (int)rd);
+        } else {
+            /* Normal string payload from QC */
+            size_t len = strlen(postdata);
+            if (len > (size_t)URIGET_MAX_BYTES) {
+                Con_Printf("PF_uri_get: POST body exceeds URIGET_MAX_BYTES, truncating\n");
+                len = (size_t)URIGET_MAX_BYTES;
+            }
+            req->postdata = (char *)malloc(len + 1);
+            if (!req->postdata) {
+                SDL_LockMutex(uri_pending_mtx);
+                active_uri_requests--;
+                SDL_UnlockMutex(uri_pending_mtx);
+                free(req);
+                Con_Printf("PF_uri_get: out of memory for POST body\n");
+                return;
+            }
+            memcpy(req->postdata, postdata, len);
+            req->postdata[len] = 0;
+            req->postlen = len;
+        }
+    }
+    enqueue_request(req);
+    if (req->mimetype[0]) {
+        /* Note: file mode already logged above; keep this for normal payloads */
+        Con_DPrintf("PF_uri_post(%s,%g)\n", req->url, req->id);
+    }
+    else
+        Con_DPrintf("PF_uri_get(%s,%g)\n", req->url, req->id);
+    G_FLOAT(OFS_RETURN) = 1;
+}
 
 static const char *csqcmapentitydata;
 static void PF_cs_getentitytoken(void)

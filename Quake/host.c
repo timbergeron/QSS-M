@@ -28,6 +28,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <setjmp.h>
 #include "time.h" // woods #cfgbackup
 
+void URI_Init(void); // woods #uri
+void URI_Shutdown(void); // woods #uri
+void URI_Frame(void); // woods #uri
+
 /*
 
 A server can allways be started, even if the system started out as a client
@@ -1480,6 +1484,7 @@ void _Host_Frame (double time)
 	Cbuf_Execute ();
 
 	NET_Poll();
+	URI_Frame(); // woods #uri
 
 	if (cl.sendprespawn)
 	{
@@ -1657,6 +1662,7 @@ void Host_Init (void)
 	Mod_Init ();
 	NET_Init ();
 	SV_Init ();
+	URI_Init(); // woods #uri
 
 	LOC_PQ_Init (); // rook / woods #pqteam (added PQ to name)
 	if (cls.state != ca_dedicated)
@@ -1774,6 +1780,8 @@ void Host_Shutdown(void)
 	SV_CleanupTimer(); // woods #svtimer
 
 	Host_WriteConfiguration ();
+
+	URI_Shutdown(); // woods #uri -- shutdown async URI subsystem early to stop worker before network teardown
 
 	Host_BackupConfiguration (); // woods #cfgbackup
 
