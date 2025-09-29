@@ -6465,7 +6465,6 @@ static void PF_gethostcacheindexforkey(void)
 //static void PF_addwantedhostcachekey(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
 //static void PF_getextresponse(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
 //static void PF_netaddress_resolve(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
-static void PF_uri_get(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
 
 // Async URI subsystem -- woods #uri
 
