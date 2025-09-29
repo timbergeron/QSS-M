@@ -64,6 +64,7 @@ extern cvar_t r_drawflame; // woods #drawflame
 extern gltexture_t *playertextures[MAX_SCOREBOARD]; //johnfitz
 
 void TexturePointer_Init (void); // woods #texturepointer
+void R_Ambient_OnChange_f(cvar_t* var); // woods #rambient
 
 /*
 ====================
@@ -426,6 +427,8 @@ void R_Init (void)
 	Cvar_SetCallback (&r_lavaalpha, R_SetLavaalpha_f);
 	Cvar_SetCallback (&r_telealpha, R_SetTelealpha_f);
 	Cvar_SetCallback (&r_slimealpha, R_SetSlimealpha_f);
+	Cvar_RegisterVariable(&r_ambient); // woods #rambient
+	Cvar_SetCallback(&r_ambient, R_Ambient_OnChange_f); // woods #rambient
 
 	R_InitParticles ();
 #ifdef PSET_SCRIPT

@@ -27,6 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t gl_fullbrights, r_drawflat, gl_overbright, r_oldwater; //johnfitz
 extern cvar_t r_brokenturbbias; // to replicate a QuakeSpasm bug.
 extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
+extern cvar_t r_ambient; // woods #rambient
 
 int		gl_lightmap_format;
 int		lightmap_bytes;
@@ -1349,6 +1350,20 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 	// clear to no light
 		memset (&blocklights[0], 0, size * 3 * sizeof (unsigned int)); //johnfitz -- lit support via lordhavoc
 
+		if (!(cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected && !cls.demoplayback)) // woods #rambient
+		{
+			unsigned ambient_light = ((unsigned)CLAMP(0.0f, r_ambient.value, 255.0f)) << 8;
+
+			if (ambient_light) {
+				bl = blocklights;
+				for (i = 0; i < size; ++i) {
+					*bl++ = ambient_light;
+					*bl++ = ambient_light;
+					*bl++ = ambient_light;
+				}
+			}
+		}
+
 	// add all the lightmaps
 		if (!surf->samples)
 			;	//unlit surfaces are black... FIXME: unless lit water (could be new-qbsp + old-light)...
@@ -1797,4 +1812,51 @@ void GL_DrawBrushShadow (entity_t* e) // woods #shadow
     glDisable(GL_POLYGON_OFFSET_FILL);
 
     glPopMatrix();
+}
+
+static float    r_ambient_prev = FLT_MAX; // woods #rambient
+static qboolean r_ambient_warned = false; // woods #rambient
+
+void R_Ambient_OnChange_f(cvar_t* var) // woods #rambient
+{
+	/* Block during live online deathmatch; explain once. */
+	if (!(cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected && !cls.demoplayback))
+	{
+		if (var->value != 0.0f) {
+			if (!r_ambient_warned) {
+				Con_Printf("r_ambient is disabled during online deathmatch.\n");
+				r_ambient_warned = true;
+			}
+			/* Force back to 0 without spamming rebuilds. */
+			if (r_ambient_prev != 0.0f)
+				r_ambient_prev = 0.0f;
+			Cvar_SetValueQuick(var, 0.0f); /* may re-enter; we early-return */
+		}
+		return;
+	}
+	else
+	{
+		/* Outside DM: allow again; reset one-shot warning */
+		r_ambient_warned = false;
+	}
+
+	/* Clamp using CLAMP macro (0..255 expected by 8.8 ambient path). */
+	const float clamped = (float)CLAMP(0.0f, var->value, 255.0f);
+	if (clamped != var->value) {
+		Cvar_SetValueQuick(var, clamped);
+		return; /* let the re-invocation handle rebuild with clamped value */
+	}
+
+	/* Avoid redundant rebuilds. */
+	if (r_ambient_prev == clamped)
+		return;
+	r_ambient_prev = clamped;
+
+	/* If world isn’t ready yet (early init / between maps), skip. */
+	if (!cl.worldmodel)
+		return;
+
+	/* Rebuild all atlases so ambient is baked into lightmaps immediately. */
+	R_RebuildAllLightmaps();
+	Con_DPrintf("r_ambient changed to %.2f — rebuilt lightmaps.\n", clamped);
 }

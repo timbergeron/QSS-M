@@ -148,6 +148,7 @@ extern int ogflagprecache, swapflagprecache, swapflagprecache2, swapflagprecache
 qboolean r_drawflat_cheatsafe, r_fullbright_cheatsafe, r_lightmap_cheatsafe, r_drawworld_cheatsafe; //johnfitz
 
 cvar_t	r_scale = {"r_scale", "1", CVAR_ARCHIVE};
+cvar_t	r_ambient = {"r_ambient", "0", CVAR_ARCHIVE}; // woods #rambient
 
 void LaserSight(void);
 
