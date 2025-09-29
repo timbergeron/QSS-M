@@ -429,7 +429,16 @@ void SV_ClientThink (void)
 	DropPunchAngle ();
 
 	if (host_client->usingpmove)
+	{
+		if (!sv_player->v.fixangle) // woods update self.angles engine-side
+		{
+			VectorAdd(sv_player->v.v_angle, sv_player->v.punchangle, v_angle);
+			sv_player->v.angles[ROLL] = V_CalcRoll(sv_player->v.angles, sv_player->v.velocity) * 4;
+			sv_player->v.angles[PITCH] = -v_angle[PITCH] / 3;
+			sv_player->v.angles[YAW] = v_angle[YAW];
+		}
 		return;	//this stuff is handled on inputs. don't corrupt anything.
+	}
 
 //
 // if dead, behave differently
