@@ -3593,7 +3593,6 @@ void CL_Init (void)
 	Cmd_AddCommand_ServerCommand("crx_ignorethis", CL_ServerExtension_Ignore_f); // woods crx
 	Cmd_AddCommand_ServerCommand("ignorethis_crx", CL_ServerExtension_Ignore_f); // woods crx
 	Cmd_AddCommand_ServerCommand("init", CL_ServerExtension_Ignore_f); // woods runequake
-	Cmd_AddCommand_ServerCommand("r_ambient", CL_ServerExtension_Ignore_f); // woods crmod66 legacy
 	
 	Cmd_AddCommand_ServerCommand ("cl_serverextension_download", CL_ServerExtension_Download_f); //spike
 	Cmd_AddCommand_ServerCommand ("cl_downloadbegin", CL_Download_Begin_f); //spike
