@@ -28,9 +28,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "q_ctype.h"
 #include <curl/curl.h> // woods #uri
 
+static float g_menu_vm_scale_override = 0.0f; // woods #spinnymodel
 static float PR_GetVMScale(void)
 {	//sigh, this is horrible (divides glwidth)
 	float s;
+	if (g_menu_vm_scale_override > 0.0f) // woods #spinnymodel
+		return g_menu_vm_scale_override;
 	if (qcvm == &cls.menu_qcvm)
 	{
 		s = q_min((float)glwidth / 320.0, (float)glheight / 200.0);
@@ -53,6 +56,7 @@ static int pr_ext_warned_particleeffectnum;	//so these only spam once per map
 
 static void *PR_FindExtGlobal(int type, const char *name);
 void SV_CheckVelocity (edict_t *ent);
+extern cvar_t gl_load24bit, gl_load24bit_skins; // woods #spinnymodel
 
 typedef enum multicast_e
 {
