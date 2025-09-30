@@ -1898,6 +1898,27 @@ int SCR_DrawTeamScores(int x, int y, int l, qboolean use_demo_calculation, int* 
 	return y; // Return the updated y position
 }
 
+static void SCR_DrawPositiveDiffString(int x, int y, const char* str) // woods #goldtext
+{
+        int cx = x;
+        const char* p;
+        plcolour_t accent = Draw_GetConcharsAccentColor();
+
+        for (p = str; *p; ++p)
+        {
+                int ch = *p;
+
+                if (ch >= '0' && ch <= '9')
+                        M_DrawCharacter(cx, y, ch - 30);
+                else if (ch == ' ')
+                        M_DrawCharacter(cx, y, ch);
+                else
+                        M_DrawCharacterRGBA(cx, y, ch, accent, 1.0f);
+
+                cx += 8;
+        }
+}
+
 /*====================
 SCR_DrawTeamDifferential -- woods - draw the team differential display #capturediff #matchhud
 ====================*/
@@ -1988,7 +2009,7 @@ void SCR_DrawTeamDifferential(int y, qboolean use_demo_calculation, int redteamp
 						else
 							snprintf(num, sizeof(num), "+%-i", diff);
 
-						M_Print(120 - (strlen(num) << 3), y, num);
+					SCR_DrawPositiveDiffString(120 - (strlen(num) << 3), y, num);
 					}
 
 					else if ((atoi(tcolor) == tc2) || atoi(tcolor) == (tc2 / 17)) // bottom score [color] is the same as your color

@@ -42,6 +42,9 @@ qpic_t		*pic_nul; //johnfitz -- for missing gfx, don't crash
 extern cvar_t gl_load24bit_hud; // woods #24bithud
 extern cvar_t scr_conback; // woods #conback
 
+extern gltexture_t* char_texture; // woods #goldtext
+static const plcolour_t scr_positive_diff_default_color = { .type = 2, .rgb = { 0xF6, 0xC2, 0x2C }, .basic = 0 }; // woods #goldtext
+
 //johnfitz -- new pics
 byte pic_ovr_data[8][8] =
 {
@@ -785,6 +788,437 @@ void Draw_StringRGBA (int x, int y, const char* str, plcolour_t c, float alpha)
 	glEnable(GL_ALPHA_TEST);
 	glDisable(GL_BLEND);
 	glColor4f(1, 1, 1, 1);
+}
+
+static void Draw_BoostAccentRGB(int* r, int* g, int* b) // woods #goldtext
+{
+	int maxc = q_max(*r, q_max(*g, *b));
+	if (maxc <= 0) return;
+
+	// Tunables: tiny lift so darks don't stay muddy, and a gentle gain.
+	const float gain = 1.5f; // ~+12% brightness
+	const int   lift = 8;     // add a small floor
+
+	// Compute target brightness and derive a uniform scale factor.
+	int target = (int)(maxc * gain + 0.5f) + lift;
+	if (target > 255) target = 255;
+	if (target < maxc) target = maxc; // never dim
+
+	float f = (float)target / (float)maxc;
+	*r = q_min(255, (int)(*r * f + 0.5f));
+	*g = q_min(255, (int)(*g * f + 0.5f));
+	*b = q_min(255, (int)(*b * f + 0.5f));
+}
+
+static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #goldtext
+{
+	gltexture_t* texture = char_texture;
+	byte* data = NULL;
+	qboolean free_data = false;
+	qboolean release_hunk = false;
+	int hunk_mark = 0;
+	enum srcformat format;
+	int width, height;
+
+	if (!texture)
+		return false;
+
+	width = texture->source_width;
+	height = texture->source_height;
+	if (width <= 0 || height <= 0)
+		return false;
+
+	format = texture->source_format;
+
+	if (format == SRC_INDEXED)
+	{
+		size_t size = (size_t)width * height;
+
+		if (!size)
+			return false;
+
+		if (texture->source_file[0] && texture->source_offset)
+		{
+			FILE* f;
+
+			if (COM_FOpenFile(texture->source_file, &f, NULL) == -1 || !f)
+				return false;
+
+			data = (byte*)Q_malloc(size);
+			if (fseek(f, (long)texture->source_offset, SEEK_SET) != 0 || fread(data, 1, size, f) != size)
+			{
+				fclose(f);
+				free(data);
+				return false;
+			}
+
+			fclose(f);
+			free_data = true;
+		}
+		else if (!texture->source_file[0] && texture->source_offset)
+		{
+			data = (byte*)texture->source_offset;
+		}
+		else
+		{
+			return false;
+		}
+	}
+	else
+	{
+		int load_width = width;
+		int load_height = height;
+		enum srcformat loaded_format = format;
+		qboolean malloced = false;
+
+		hunk_mark = Hunk_LowMark();
+		release_hunk = true;
+		data = Image_LoadImage(texture->source_file, &load_width, &load_height, &loaded_format, &malloced);
+		if (!data)
+		{
+			Hunk_FreeToLowMark(hunk_mark);
+			return false;
+		}
+
+		width = load_width;
+		height = load_height;
+		format = loaded_format;
+
+		if (malloced)
+			free_data = true;
+	}
+
+	if (!data)
+	{
+		if (release_hunk)
+			Hunk_FreeToLowMark(hunk_mark);
+		return false;
+	}
+
+	{
+		int cell_width = width / 16;
+		int cell_height = height / 16;
+
+		if (cell_width <= 0 || cell_height <= 0)
+			goto cleanup;
+
+		if (format == SRC_INDEXED)
+		{
+			unsigned int counts[256];
+			unsigned int sum_r[256];
+			unsigned int sum_g[256];
+			unsigned int sum_b[256];
+			unsigned int best_count = 0;
+			int best_sat = -1;
+			int best_r = 0, best_g = 0, best_b = 0;
+			int brightest_value = 0;
+
+			memset(counts, 0, sizeof(counts));
+			memset(sum_r, 0, sizeof(sum_r));
+			memset(sum_g, 0, sizeof(sum_g));
+			memset(sum_b, 0, sizeof(sum_b));
+
+			for (int digit = 0; digit < 10; ++digit)
+			{
+				int ch_index = 18 + digit;
+				int row = ch_index >> 4;
+				int col = ch_index & 15;
+				int x0 = col * cell_width;
+				int y0 = row * cell_height;
+
+				for (int py = 0; py < cell_height; ++py)
+				{
+					int y = y0 + py;
+					if (y >= height)
+						continue;
+
+					for (int px = 0; px < cell_width; ++px)
+					{
+						int x = x0 + px;
+						byte index;
+						byte* rgba;
+						int r, g, b;
+
+						if (x >= width)
+							continue;
+
+						index = data[y * width + x];
+						if (!index)
+							continue;
+
+						rgba = (byte*)&d_8to24table_conchars[index];
+						if (!rgba[3])
+							continue;
+
+						r = rgba[0];
+						g = rgba[1];
+						b = rgba[2];
+
+						if (r <= 16 && g <= 16 && b <= 16)
+							continue;
+
+						{
+							int value = q_max(r, q_max(g, b));
+
+							if (value > brightest_value)
+								brightest_value = value;
+						}
+
+						counts[index]++;
+						sum_r[index] += (unsigned int)r;
+						sum_g[index] += (unsigned int)g;
+						sum_b[index] += (unsigned int)b;
+					}
+				}
+			}
+
+			for (int i = 0; i < 256; ++i)
+			{
+				unsigned int count = counts[i];
+
+				if (!count)
+					continue;
+
+				int r = (int)((sum_r[i] + count / 2) / count);
+				int g = (int)((sum_g[i] + count / 2) / count);
+				int b = (int)((sum_b[i] + count / 2) / count);
+				int maxc = q_max(r, q_max(g, b));
+				int minc = q_min(r, q_min(g, b));
+				int sat = maxc - minc;
+
+				if (count > best_count || (count == best_count && sat > best_sat))
+				{
+					best_count = count;
+					best_sat = sat;
+					best_r = r;
+					best_g = g;
+					best_b = b;
+				}
+			}
+
+			if (best_count > 0)
+			{
+				int best_max = q_max(best_r, q_max(best_g, best_b));
+
+				if (brightest_value > best_max && best_max > 0)
+				{
+					int scale = brightest_value;
+					int r = (best_r * scale + best_max / 2) / best_max;
+					int g = (best_g * scale + best_max / 2) / best_max;
+					int b = (best_b * scale + best_max / 2) / best_max;
+
+					if (r > 255)
+						r = 255;
+					if (g > 255)
+						g = 255;
+					if (b > 255)
+						b = 255;
+
+					best_r = r;
+					best_g = g;
+					best_b = b;
+				}
+
+				// Final gentle brightness boost
+				Draw_BoostAccentRGB(&best_r, &best_g, &best_b);
+
+				result->type = 2;
+				result->rgb[0] = (byte)best_r;
+				result->rgb[1] = (byte)best_g;
+				result->rgb[2] = (byte)best_b;
+				result->basic = 0;
+
+				if (free_data)
+					free(data);
+				if (release_hunk)
+					Hunk_FreeToLowMark(hunk_mark);
+				return true;
+			}
+		}
+		else if (format == SRC_RGBA)
+		{
+			enum { bucket_count = 16 * 16 * 16 };
+			unsigned int counts[bucket_count];
+			unsigned int sum_r[bucket_count];
+			unsigned int sum_g[bucket_count];
+			unsigned int sum_b[bucket_count];
+			unsigned int best_count = 0;
+			int best_sat = -1;
+			int best_r = 0, best_g = 0, best_b = 0;
+			int brightest_value = 0;
+
+			memset(counts, 0, sizeof(counts));
+			memset(sum_r, 0, sizeof(sum_r));
+			memset(sum_g, 0, sizeof(sum_g));
+			memset(sum_b, 0, sizeof(sum_b));
+
+			for (int digit = 0; digit < 10; ++digit)
+			{
+				int ch_index = 18 + digit;
+				int row = ch_index >> 4;
+				int col = ch_index & 15;
+				int x0 = col * cell_width;
+				int y0 = row * cell_height;
+
+				for (int py = 0; py < cell_height; ++py)
+				{
+					int y = y0 + py;
+					if (y >= height)
+						continue;
+
+					for (int px = 0; px < cell_width; ++px)
+					{
+						int x = x0 + px;
+						byte* rgba;
+						byte a;
+						int r, g, b;
+						int bucket;
+
+						if (x >= width)
+							continue;
+
+						rgba = data + ((y * width + x) << 2);
+						a = rgba[3];
+						if (!a)
+							continue;
+
+						r = rgba[0];
+						g = rgba[1];
+						b = rgba[2];
+
+						if (r <= 16 && g <= 16 && b <= 16)
+							continue;
+
+						{
+							int value = q_max(r, q_max(g, b));
+
+							if (value > brightest_value)
+								brightest_value = value;
+						}
+
+						bucket = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+						counts[bucket]++;
+						sum_r[bucket] += (unsigned int)r;
+						sum_g[bucket] += (unsigned int)g;
+						sum_b[bucket] += (unsigned int)b;
+					}
+				}
+			}
+
+			for (int i = 0; i < bucket_count; ++i)
+			{
+				unsigned int count = counts[i];
+
+				if (!count)
+					continue;
+
+				int r = (int)((sum_r[i] + count / 2) / count);
+				int g = (int)((sum_g[i] + count / 2) / count);
+				int b = (int)((sum_b[i] + count / 2) / count);
+				int maxc = q_max(r, q_max(g, b));
+				int minc = q_min(r, q_min(g, b));
+				int sat = maxc - minc;
+
+				if (count > best_count || (count == best_count && sat > best_sat))
+				{
+					best_count = count;
+					best_sat = sat;
+					best_r = r;
+					best_g = g;
+					best_b = b;
+				}
+			}
+
+			if (best_count > 0)
+			{
+				int best_max = q_max(best_r, q_max(best_g, best_b));
+
+				if (brightest_value > best_max && best_max > 0)
+				{
+					int scale = brightest_value;
+					int r = (best_r * scale + best_max / 2) / best_max;
+					int g = (best_g * scale + best_max / 2) / best_max;
+					int b = (best_b * scale + best_max / 2) / best_max;
+
+					if (r > 255)
+						r = 255;
+					if (g > 255)
+						g = 255;
+					if (b > 255)
+						b = 255;
+
+					best_r = r;
+					best_g = g;
+					best_b = b;
+				}
+
+				// Final gentle brightness boost
+				Draw_BoostAccentRGB(&best_r, &best_g, &best_b);
+
+				result->type = 2;
+				result->rgb[0] = (byte)best_r;
+				result->rgb[1] = (byte)best_g;
+				result->rgb[2] = (byte)best_b;
+				result->basic = 0;
+
+				if (free_data)
+					free(data);
+				if (release_hunk)
+					Hunk_FreeToLowMark(hunk_mark);
+				return true;
+			}
+		}
+	}
+
+cleanup:
+	if (free_data && data)
+		free(data);
+	if (release_hunk)
+		Hunk_FreeToLowMark(hunk_mark);
+
+	return false;
+}
+
+plcolour_t Draw_GetConcharsAccentColor(void) // woods #goldtext
+{
+	static plcolour_t cached_color;
+	static qboolean cached_valid = false;
+	static unsigned int cached_texnum = 0;
+	static unsigned short cached_crc = 0;
+	static unsigned int cached_width = 0;
+	static unsigned int cached_height = 0;
+	static char cached_source[MAX_QPATH];
+
+	gltexture_t* texture = char_texture;
+
+	if (!texture)
+	{
+		if (!cached_valid)
+			cached_color = scr_positive_diff_default_color;
+		return cached_color;
+	}
+
+	if (!cached_valid || cached_texnum != texture->texnum ||
+		cached_crc != texture->source_crc ||
+		cached_width != texture->source_width ||
+		cached_height != texture->source_height ||
+		strcmp(cached_source, texture->source_file))
+	{
+		plcolour_t color;
+
+		if (!Draw_ComputeConcharsAccentColor(&color))
+			color = scr_positive_diff_default_color;
+
+		cached_color = color;
+		cached_valid = true;
+		cached_texnum = texture->texnum;
+		cached_crc = texture->source_crc;
+		cached_width = texture->source_width;
+		cached_height = texture->source_height;
+		q_strlcpy(cached_source, texture->source_file, sizeof(cached_source));
+	}
+
+	return cached_color;
 }
 
 /*
