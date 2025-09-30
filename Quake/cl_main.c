@@ -33,6 +33,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include <curl/curl.h> // woods #webdl
 #include "cfgfile.h" // woods #webdl
+#include "q_ctype.h" // woods #entcopy
 
 // we need to declare some mouse variables here, because the menu system
 // references them even when on a unix system.
@@ -2928,6 +2929,32 @@ static const char* GetBspVersionString(int version)
 	}
 }
 
+static qboolean Entdump_MakeUnique(char *out, size_t outsz, const char *map_lower) // woods #entcopy
+{
+    char candidate[MAX_OSPATH], full[MAX_OSPATH];
+
+    /* 1) Try plain maps/<name>.ent */
+    if ((size_t)q_snprintf(candidate, sizeof(candidate), "maps/%s.ent", map_lower) >= sizeof(candidate))
+        return false;
+    q_snprintf(full, sizeof(full), "%s/%s", com_gamedir, candidate);
+    if (!(Sys_FileType(full) & FS_ENT_FILE)) { /* not present -> use it */
+        q_strlcpy(out, candidate, outsz);
+        return true;
+    }
+
+    /* 2) Try maps/<name> (n).ent, n = 1..99 */
+    for (int i = 1; i < 100; ++i) {
+        if ((size_t)q_snprintf(candidate, sizeof(candidate), "maps/%s(%d).ent", map_lower, i) >= sizeof(candidate))
+            return false;
+        q_snprintf(full, sizeof(full), "%s/%s", com_gamedir, candidate);
+        if (!(Sys_FileType(full) & FS_ENT_FILE)) {
+            q_strlcpy(out, candidate, outsz);
+            return true;
+        }
+    }
+    return false; /* too many duplicates */
+}
+
 /*
 ===============
 CL_Entdump_f -- woods (source: github.com/alexey-lysiuk/quakespasm-exp) #entcopy
@@ -2949,9 +2976,18 @@ void CL_Entdump_f(void)
 			return;
 		}
 
-		char entfilename[MAX_QPATH];
-		q_snprintf(entfilename, sizeof(entfilename), "%s.ent", cl.mapname);
-
+		char entfilename[MAX_OSPATH];
+		char map_lower[MAX_QPATH];
+		char full[MAX_OSPATH];
+		q_strlcpy(map_lower, cl.mapname, sizeof(map_lower));
+		for (char *p = map_lower; *p; ++p)
+			*p = q_tolower(*p);
+		if (!Entdump_MakeUnique(entfilename, sizeof(entfilename), map_lower)) {
+			Con_Printf("could not form unique .ent path\n");
+			return;
+		}
+		q_snprintf(full, sizeof(full), "%s/%s", com_gamedir, entfilename);
+		COM_CreatePath(full); /* ensure "<gamedir>/maps/" exists */
 		COM_WriteFile(entfilename, cl.worldmodel->entities, strlen(cl.worldmodel->entities));
 		Con_Printf("saved entities from maps/%s.bsp (%s) to ^m%s^m\n",
 			cl.mapname, GetBspVersionString(cl.worldmodel->bspversion), entfilename);
@@ -2979,9 +3015,18 @@ void CL_Entdump_f(void)
 			return;
 		}
 
-		char entfilename[MAX_QPATH];
-		q_snprintf(entfilename, sizeof(entfilename), "%s.ent", cleaned_mapname);
-
+		char entfilename[MAX_OSPATH];
+		char map_lower[MAX_QPATH];
+		char full[MAX_OSPATH];
+		q_strlcpy(map_lower, cleaned_mapname, sizeof(map_lower));
+		for (char *p = map_lower; *p; ++p)
+			*p = q_tolower(*p);
+		if (!Entdump_MakeUnique(entfilename, sizeof(entfilename), map_lower)) {
+			Con_Printf("could not form unique .ent path\n");
+			return;
+		}
+		q_snprintf(full, sizeof(full), "%s/%s", com_gamedir, entfilename);
+		COM_CreatePath(full);
 		COM_WriteFile(entfilename, cl.worldmodel->entities, strlen(cl.worldmodel->entities));
 		Con_Printf("saved entities from maps/%s.bsp (%s) to ^m%s^m\n",
 			cleaned_mapname, GetBspVersionString(cl.worldmodel->bspversion), entfilename);
@@ -3065,8 +3110,19 @@ void CL_Entdump_f(void)
 	// Point to the entities data in the buffer
 	char* entities_data = (char*)(buffer + entlump->fileofs);
 
-	char entfilename[MAX_QPATH];
-	q_snprintf(entfilename, sizeof(entfilename), "%s.ent", cleaned_mapname);
+	char entfilename[MAX_OSPATH];
+	char map_lower[MAX_QPATH];
+	char full[MAX_OSPATH];
+	q_strlcpy(map_lower, cleaned_mapname, sizeof(map_lower));
+	for (char *p = map_lower; *p; ++p)
+		*p = q_tolower(*p);
+	if (!Entdump_MakeUnique(entfilename, sizeof(entfilename), map_lower)) {
+		free(buffer);
+		Con_Printf("could not form unique .ent path\n");
+		return;
+	}
+	q_snprintf(full, sizeof(full), "%s/%s", com_gamedir, entfilename);
+	COM_CreatePath(full);
 
 	// Find the actual length of valid entity text
 	size_t text_length = 0;
