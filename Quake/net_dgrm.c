@@ -1905,7 +1905,7 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 		// don't answer our own query
 		//Note: this doesn't really work too well if we're multi-homed.
 		//we should probably just refuse to respond to serverinfo requests while we're scanning (chances are our server is going to die anyway).
-		if (dfunc.AddrCompare(&readaddr, &myaddr) >= 0)
+		if (dfunc.AddrCompare(&readaddr, &myaddr) == 0) // woods #localmpfix
 			continue;
 
 		// is the cache full?

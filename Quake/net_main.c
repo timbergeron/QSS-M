@@ -471,7 +471,7 @@ static void Slist_Send (void *unused)
 {
 	for (net_driverlevel = 0; net_driverlevel < net_numdrivers; net_driverlevel++)
 	{
-		if (slistScope!=SLIST_LOOP && IS_LOOP_DRIVER(net_driverlevel))
+		if (slistScope == SLIST_INTERNET && IS_LOOP_DRIVER(net_driverlevel)) // woods #localmpfix
 			continue;
 		if (net_drivers[net_driverlevel].initialized == false)
 			continue;
@@ -487,7 +487,7 @@ static void Slist_Poll (void *unused)
 {
 	for (net_driverlevel = 0; net_driverlevel < net_numdrivers; net_driverlevel++)
 	{
-		if (slistScope!=SLIST_LOOP && IS_LOOP_DRIVER(net_driverlevel))
+		if (slistScope == SLIST_INTERNET && IS_LOOP_DRIVER(net_driverlevel)) // woods #localmpfix
 			continue;
 		if (net_drivers[net_driverlevel].initialized == false)
 			continue;

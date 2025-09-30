@@ -10745,7 +10745,7 @@ void M_LanConfig_Key (int key)
 		else
 		{
 			if (lanConfig_cursor == 1)
-				M_Menu_Search_f(SLIST_LOOP);
+				M_Menu_Search_f(SLIST_LAN); // woods #localmpfix
 			else if (lanConfig_cursor == 2)
 				M_Menu_Search_f(SLIST_INTERNET);
 			else if (lanConfig_cursor == 3) // woods #historymenu
