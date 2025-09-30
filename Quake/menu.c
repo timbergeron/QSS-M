@@ -2852,12 +2852,55 @@ void M_Setup_Draw (void)
 
 	p = Draw_CachePic ("gfx/bigbox.lmp");
 	M_DrawTransPic (196, 77, p); // woods #colorbar
-	p = Draw_CachePic ("gfx/menuplyr.lmp");
 
-	setup_top = CL_PLColours_Parse(CL_PLColours_ToString(setup_top)); // woods menu color fix
-	setup_bottom = CL_PLColours_Parse(CL_PLColours_ToString(setup_bottom)); // woods menu color fix
+	// woods #spinnymodel
 
-	M_DrawTransPicTranslate (208, 85, p, setup_top, setup_bottom); // woods #colorbar
+	qpic_t* menup = Draw_CachePic("gfx/menuplyr.lmp");
+
+	// Normalize setup colors to a canonical form
+	setup_top = CL_PLColours_Parse(CL_PLColours_ToString(setup_top));
+	setup_bottom = CL_PLColours_Parse(CL_PLColours_ToString(setup_bottom));
+
+	// If RGB colours are used, provide true RGB to preview; else use legacy indices
+	if (setup_top.type == 2 || setup_bottom.type == 2)
+	{
+		PR_SetMenuPreviewRGBColors(
+			setup_top.rgb[0], setup_top.rgb[1], setup_top.rgb[2],
+			setup_bottom.rgb[0], setup_bottom.rgb[1], setup_bottom.rgb[2]);
+	}
+	else
+	{
+		int top_legacy = setup_top.basic;
+		int bot_legacy = setup_bottom.basic;
+		PR_SetMenuPreviewLegacyColors(top_legacy, bot_legacy);
+	}
+
+	// Draw spinning player model aligned to CANVAS_MENU pixels
+	int boxw = menup ? menup->width : 96;
+	int boxh = menup ? menup->height : 96;
+	vrect_t bounds, vp;
+	Draw_GetMenuTransform(&bounds, &vp);
+	// Convert menu virtual coords (640x200) to absolute pixels via viewport
+	float s = (float)vp.width / (float)bounds.width;
+	float px = vp.x + 208 * s;
+	float py = vp.y + 80 * s;
+	float pw = boxw * s;
+	float ph = boxh * s;
+	DrawSpinningModelToMenuPixels("progs/player.mdl",
+		px, py, pw, ph,
+		25.0f,
+		0.0f,
+		0, 0, 0, 0);
+
+	// Restore menu 2D canvas to keep coordinates/cursor aligned
+	GL_SetCanvas(CANVAS_MENU);
+	glDisable(GL_BLEND);
+	glEnable(GL_ALPHA_TEST);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+
+	// Clear the overrides so other draws are unaffected
+	PR_SetMenuPreviewLegacyColors(-1, -1);
+	PR_SetMenuPreviewRGBColors(-1, -1, -1, -1, -1, -1);
 
 	M_DrawCharacter (56, setup_cursor_table [setup_cursor], 12+((int)(realtime*4)&1));
 
