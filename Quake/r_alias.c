@@ -777,8 +777,15 @@ R_DrawViewmodelShell -- woods #powershell
 */
 void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* lerpdata, entity_t* e)
 {
-	if ((!r_coloredpowerupglow.value || gl_powerupshells.value > 1 || e != &cl.viewent) || !(cl.items & (IT_QUAD | IT_INVULNERABILITY)) || chase_active.value)
+	if (!r_coloredpowerupglow.value
+		|| gl_powerupshells.value <= 0.0f
+		|| gl_powerupshells.value > 1.0f
+		|| e != &cl.viewent
+		|| !(cl.items & (IT_QUAD | IT_INVULNERABILITY))
+		|| chase_active.value)
+	{
 		return;
+	}
 
 	float modelRadius;
 
@@ -811,7 +818,11 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 
 	float waveAmp = 0.0f;      // Set to 0 to disable wave animation
 	float waveFreq = 0.0f;     // Not used when waveAmp is 0
-	float shellAlpha = 0.1f;   // Shell transparency
+
+	const float kmax = 5.0f;
+	float alpha_knob = CLAMP(0.0f, gl_powerupshells_alpha.value, 1.0f);
+	float k = alpha_knob * kmax;
+	float shellAlpha = CLAMP(0.0f, 0.1f * k, 1.0f);
 
 	float shellColor[4] = { 0.0f, 0.0f, 0.0f, shellAlpha };
 
@@ -869,13 +880,22 @@ static void R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- wood
 {
 	GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
 
+	if (!r_coloredpowerupglow.value || gl_powerupshells.value <= 0.0f || e != &cl.viewent || chase_active.value)
+		return;
+
 	if (cl.time <= cl.faceanimtime && cl_damagehue.value)
 	{
 		if (e == &cl.viewent && !chase_active.value)
 		{
 			if (r_coloredpowerupglow.value && gl_powerupshells.value <= 1)
 			{
-				float shellAlpha = 1.0f * CLAMP(0, gl_powerupshells.value, 1);
+				float base = CLAMP(0.0f, gl_powerupshells.value, 1.0f);
+				const float kmax = 5.0f;
+				float alpha_knob = CLAMP(0.0f, gl_powerupshells_alpha.value, 1.0f);
+				float k = alpha_knob * kmax;
+				float shellAlpha = 1.0f - powf(1.0f - base, k);
+				if (shellAlpha <= 0.0001f)
+					return;
 				plcolour_t dhvalue = CL_PLColours_Parse(cl_damagehuecolor.string);
 				byte* dhuecolor = CL_PLColours_ToRGB(&dhvalue);
 				
@@ -894,7 +914,13 @@ static void R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- wood
 		{
 			if (r_coloredpowerupglow.value && gl_powerupshells.value <= 1)
 			{
-				float shellAlpha = 1.0f * CLAMP(0, gl_powerupshells.value, 1);
+				float base = CLAMP(0.0f, gl_powerupshells.value, 1.0f);
+				const float kmax = 5.0f;
+				float alpha_knob = CLAMP(0.0f, gl_powerupshells_alpha.value, 1.0f);
+				float k = alpha_knob * kmax;
+				float shellAlpha = 1.0f - powf(1.0f - base, k);  // saturating boost
+				if (shellAlpha <= 0.0001f)
+					return;
 
 				if ((cl.items & IT_QUAD) && (cl.items & IT_INVULNERABILITY))
 					ApplyShellEffect(glsl, 1.0f, 0.0f, 1.0f, cl.time, shellAlpha);
@@ -1825,56 +1851,79 @@ void R_SetupAliasLighting (entity_t	*e)
 	{
 		if (r_coloredpowerupglow.value && gl_powerupshells.value)
 		{
+			if (e == &cl.viewent && (cl.items & (IT_QUAD | IT_INVULNERABILITY)))
+			{
 			float alpha;
-
-			// for values over 1 for basic coloring
-			float t = (gl_powerupshells.value - 1.0f) / (2.0f - 1.0f);
-			t = CLAMP(t, 0.0f, 1.0f);
-			alpha = t * t * (3.0f - 2.0f * t);
+				float t;
 
 			if (gl_powerupshells.value <= 1.0f)
 			{
 				if (shelltexture)
 				{
 					// Original behavior for shell effect
-					alpha += 0.95f;
+						alpha = 0.95f;
 				}
 				else
 				{
-					// For non-shell texture, treat values 0-1 like we treat 1-2
-					t = gl_powerupshells.value / 1.0f;
-					t = CLAMP(t, 0.0f, 1.0f);
+						// Treat 0..1 similarly to 1..2 for non-shell
+						t = CLAMP(gl_powerupshells.value, 0.0f, 1.0f);
 					alpha = t * t * (3.0f - 2.0f * t);
 				}
 			}
-
-			if ((cl.items & IT_QUAD) && (e == &cl.viewent))
+				else
 			{
-				vec3_t targetColor = { 50.0f, 50.0f, 121.0f };
-
-				lightcolor[0] = lightcolor[0] * (1.0f - alpha) + targetColor[0] * alpha;
-				lightcolor[1] = lightcolor[1] * (1.0f - alpha) + targetColor[1] * alpha;
-				lightcolor[2] = lightcolor[2] * (1.0f - alpha) + targetColor[2] * alpha;
-			}
-
-			if (cl.items & IT_INVULNERABILITY)
-				if (e == &cl.viewent)
-				{
-					vec3_t targetColor = { 131.0f, 73.0f, 73.0f };
-
-					lightcolor[0] = lightcolor[0] * (1.0f - alpha) + targetColor[0] * alpha;
-					lightcolor[1] = lightcolor[1] * (1.0f - alpha) + targetColor[1] * alpha;
-					lightcolor[2] = lightcolor[2] * (1.0f - alpha) + targetColor[2] * alpha;
+					// Map 1..2 -> 0..1 then ease
+					t = CLAMP((gl_powerupshells.value - 1.0f) / (2.0f - 1.0f), 0.0f, 1.0f);
+					alpha = t * t * (3.0f - 2.0f * t);
 				}
 
-			if ((cl.items & (IT_QUAD | IT_INVULNERABILITY)) == (IT_QUAD | IT_INVULNERABILITY))
-				if (e == &cl.viewent)
 				{
-					vec3_t targetColor = { 211.0f, 113.0f, 194.0f };
+					const float kmax = 5.0f;
+					float alpha_knob = CLAMP(0.0f, gl_powerupshells_alpha.value, 1.0f);
+					float k = alpha_knob * kmax;
+					float a = CLAMP(alpha, 0.0f, 1.0f);
+					alpha = 1.0f - powf(1.0f - a, k);
+			}
 
-					lightcolor[0] = lightcolor[0] * (1.0f - alpha) + targetColor[0] * alpha;
-					lightcolor[1] = lightcolor[1] * (1.0f - alpha) + targetColor[1] * alpha;
-					lightcolor[2] = lightcolor[2] * (1.0f - alpha) + targetColor[2] * alpha;
+				// Pick a single tint to apply (no triple-blend)
+				vec3_t tint = { 0, 0, 0 };
+				if ((cl.items & (IT_QUAD | IT_INVULNERABILITY)) == (IT_QUAD | IT_INVULNERABILITY))
+				{
+					// both
+					tint[0] = 211.0f; tint[1] = 113.0f; tint[2] = 194.0f;
+				}
+				else if (cl.items & IT_QUAD)
+				{
+					// quad
+					tint[0] = 50.0f; tint[1] = 50.0f; tint[2] = 121.0f;
+				}
+				else
+				{
+					// invulnerability
+					tint[0] = 131.0f; tint[1] = 73.0f; tint[2] = 73.0f;
+				}
+
+				// Blend toward tint in RGB
+				lightcolor[0] = lightcolor[0] * (1.0f - alpha) + tint[0] * alpha;
+				lightcolor[1] = lightcolor[1] * (1.0f - alpha) + tint[1] * alpha;
+				lightcolor[2] = lightcolor[2] * (1.0f - alpha) + tint[2] * alpha;
+
+				// Saturation push around luma. Reuse k derived from alpha knob (k=alpha*5).
+				{
+					const float kmax = 5.0f;
+					float alpha_knob = CLAMP(0.0f, gl_powerupshells_alpha.value, 1.0f);
+					float k = alpha_knob * kmax;
+					float Y = 0.299f * lightcolor[0] + 0.587f * lightcolor[1] + 0.114f * lightcolor[2];
+					float satmul = 1.0f + (k - 1.0f);
+
+					lightcolor[0] = Y + (lightcolor[0] - Y) * satmul;
+					lightcolor[1] = Y + (lightcolor[1] - Y) * satmul;
+					lightcolor[2] = Y + (lightcolor[2] - Y) * satmul;
+
+					lightcolor[0] = CLAMP(0.0f, lightcolor[0], 255.0f);
+					lightcolor[1] = CLAMP(0.0f, lightcolor[1], 255.0f);
+					lightcolor[2] = CLAMP(0.0f, lightcolor[2], 255.0f);
+				}
 				}
 		}
 	}

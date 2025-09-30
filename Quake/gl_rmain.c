@@ -95,6 +95,7 @@ cvar_t	gl_teamcolor = { "gl_teamcolor","",CVAR_ARCHIVE}; // woods #enemycolors
 cvar_t	gl_laserpoint = {"gl_laserpoint","0", CVAR_ARCHIVE }; // woods #laser
 cvar_t	gl_laserpoint_alpha = { "gl_laserpoint_alpha",".3", CVAR_ARCHIVE }; // woods #laser
 cvar_t	gl_powerupshells = {"gl_powerupshells","1",CVAR_ARCHIVE}; // woods #powershell
+cvar_t  gl_powerupshells_alpha = {"gl_powerupshells_alpha", "0.3"}; // woods #powershell
 cvar_t	gl_motion_blur = {"gl_motion_blur", "0", CVAR_ARCHIVE}; // woods #motionblur
 
 //johnfitz -- new cvars

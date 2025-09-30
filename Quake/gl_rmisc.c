@@ -391,6 +391,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&gl_fullbrights);
 	Cvar_RegisterVariable (&gl_overbright);
 	Cvar_RegisterVariable (&gl_powerupshells); // woods #powershell
+	Cvar_RegisterVariable (&gl_powerupshells_alpha); // woods #powershell
 	Cvar_RegisterVariable (&gl_caustics); // woods #caustics
 	Cvar_RegisterVariable (&gl_motion_blur); // woods #motionblur
 	Cvar_SetCallback (&gl_fullbrights, GL_Fullbrights_f);
