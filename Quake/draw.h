@@ -62,6 +62,7 @@ void Draw_FillPlayer (int x, int y, int w, int h, plcolour_t c, float alpha); //
 void Draw_FadeScreen (void);
 void Draw_String (int x, int y, const char *str);
 void Draw_StringAnimatedDots(int x, int y, const char* str); // woods
+void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float span_px, float alpha, qboolean masked); // woods
 void Draw_StringRGBA (int x, int y, const char* str, plcolour_t c, float alpha); // woods
 void Draw_ScaledPicAlpha (int x, int y, qpic_t* pic, float scale, float alpha); // woods #observerhud #eyemouse
 qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags);

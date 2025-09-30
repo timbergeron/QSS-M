@@ -854,6 +854,174 @@ void Draw_StringAnimatedDots(int x, int y, const char* str)
 }
 
 /*
+================
+Draw_StringGradientSweep -- woods
+Unmasked: white → palette(128) red with a bright core + warm tail.
+Masked  : baseline EXACT red; sweep LIGHTENS toward white (no base alpha boost).
+================
+*/
+void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float span_px, float alpha, qboolean masked)
+{
+	if (!str || !*str) return;
+
+	const int   char_w = 8;
+	const int   len = (int)strlen(str);
+	if (!len) return;
+
+	const float total_px = (float)(len * char_w);
+	if (total_px <= 0.0f) return;
+
+	const float sweep_span = (span_px <= 0.0f) ? 1.0f : span_px;
+	const float cycle_w = total_px + sweep_span;
+	if (cycle_w <= 0.0f) return;
+
+	const float px_speed = q_max(0.0f, speed);
+	const float t = (px_speed > 0.0f) ? fmodf((float)realtime * px_speed, cycle_w) : 0.0f;
+
+	// palette[128] sample for “Quake red”
+	byte* red = (byte*)&d_8to24table[128];
+	const float red_r = red[0] / 255.0f;
+	const float red_g = red[1] / 255.0f;
+	const float red_b = red[2] / 255.0f;
+
+	const float draw_alpha = CLAMP(0.0f, alpha, 1.0f);
+
+	// Tunables (in-function “knobs”)
+	const float glow_strength_unmasked = 0.20f;   // extra pop at the center of the band (unmasked only)
+	const float alpha_boost_unmasked = 0.25f;   // alpha lift in the bright core (unmasked only)
+	const float tail_span_factor = 0.35f;   // tail length as fraction of sweep_span
+
+	const float masked_add_gain = 0.40f;   // how much additive lift the masked sweep gives
+	const float masked_tail_gain = 0.10f;   // subtle trailing lift for masked
+	const float tail_span = q_max(4.0f, sweep_span * tail_span_factor);
+
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_ALPHA_TEST);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+
+	GL_Bind(char_texture);
+	glBegin(GL_QUADS);
+
+	float px = (float)x;
+	for (int i = 0; i < len; ++i)
+	{
+		unsigned char ch = (unsigned char)str[i];
+		if (ch != 32)
+		{
+			const float cx = (float)(i * char_w + char_w * 0.5f);
+
+			// position of sweep relative to this glyph center
+			float d = cx - t;
+			if (d < 0.0f) d += cycle_w;
+
+			// inside-band mix (0..1), using smoothstep for soft edges
+			float mix = 0.0f;
+			float highlight = 0.0f; // peaked at center of sweep
+			if (d >= 0.0f && d <= sweep_span)
+			{
+				float u = CLAMP(0.0f, d / sweep_span, 1.0f);
+				// smoothstep
+				mix = u * u * (3.0f - 2.0f * u);
+
+				float centered = 1.0f - fabsf(u - 0.5f) * 2.0f; // 0 at edges, 1 at center
+				if (centered > 0.0f)
+				{
+					centered *= centered;
+					highlight = centered; // 0..1, bell-like
+				}
+			}
+
+			// trailing tail (0..1), behind the sweep head
+			float tail = 0.0f;
+			if (tail_span > 0.0f)
+			{
+				float wrap = cycle_w - d;
+				if (wrap > 0.0f && wrap <= tail_span)
+				{
+					float u = 1.0f - (wrap / tail_span);
+					u = CLAMP(0.0f, u, 1.0f);
+					tail = u * u * (3.0f - 2.0f * u);
+				}
+			}
+
+			int glyph = masked ? ((int)ch + 128) & 255 : (int)ch;
+
+			if (!masked)
+			{
+				// UNMASKED (white font): white → red, plus bright core + warm tail; alpha can lift in core.
+				float r = (1.0f - mix) + mix * red_r; // lerp(white, red, mix)
+				float g = (1.0f - mix) + mix * red_g;
+				float b = (1.0f - mix) + mix * red_b;
+
+				if (highlight > 0.0f)
+				{
+					float glow = highlight * glow_strength_unmasked;
+					r = CLAMP(0.0f, r + glow, 1.0f);
+					g = CLAMP(0.0f, g + glow * 0.5f, 1.0f);
+					b = CLAMP(0.0f, b + glow * 0.5f, 1.0f);
+				}
+
+				if (tail > 0.0f)
+				{
+					float fade = tail * 0.15f;
+					r = CLAMP(0.0f, r + fade, 1.0f);
+					g = CLAMP(0.0f, g + fade * 0.35f, 1.0f);
+					b = CLAMP(0.0f, b + fade * 0.35f, 1.0f);
+				}
+
+				float final_alpha = draw_alpha;
+				if (highlight > 0.0f)
+					final_alpha = CLAMP(0.0f, draw_alpha * (1.0f + highlight * alpha_boost_unmasked), 1.0f);
+
+				glColor4f(r, g, b, final_alpha);
+				Draw_CharacterQuad((int)px, y, (char)glyph);
+			}
+			else
+			{
+				// MASKED (red font): baseline EXACT red (no brightening), sweep LIGHTENS via small additive pass.
+
+				// Base pass: keep the original red exactly (color=white under MODULATE).
+				glColor4f(1.0f, 1.0f, 1.0f, draw_alpha);
+				Draw_CharacterQuad((int)px, y, (char)glyph);
+
+				// Additive lift only where the sweep/tail passes.
+				float add_amt = 0.0f;
+				if (highlight > 0.0f)
+					add_amt += highlight * masked_add_gain;
+				if (tail > 0.0f)
+					add_amt += tail * masked_tail_gain;
+
+				if (add_amt > 0.0f)
+				{
+					// one tiny additive pass in white to lift brightness toward white
+					glEnd(); // close current batch to safely change blend func
+
+					glBlendFunc(GL_SRC_ALPHA, GL_ONE); // additive
+					glBegin(GL_QUADS);
+					glColor4f(1.0f, 1.0f, 1.0f, CLAMP(0.0f, add_amt * draw_alpha, 1.0f));
+					Draw_CharacterQuad((int)px, y, (char)glyph);
+					glEnd();
+
+					// restore normal blending and resume batching
+					glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+					glBegin(GL_QUADS);
+				}
+			}
+		}
+		px += (float)char_w;
+	}
+
+	glEnd();
+
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glEnable(GL_ALPHA_TEST);
+	glDisable(GL_BLEND);
+	glColor4f(1, 1, 1, 1);
+}
+
+
+/*
 =============
 Draw_ScaledPicAlpha -- woods #observerhud #eyemouse
 =============

@@ -12303,7 +12303,7 @@ void M_Search_Draw (void)
 	M_DrawPic ( (320-p->width)/2, 4, p);
 	x = (320/2) - ((12*8)/2) + 4;
 	M_DrawTextBox (x-8, 32, 12, 1);
-	M_Print (x, 40, "Searching...");
+	Draw_StringGradientSweep (x, 40, "Searching...", 96.0f, 48.0f, 1.0f, true); // woods
 
 	if(slistInProgress)
 	{
