@@ -44,6 +44,7 @@ extern cvar_t scr_conback; // woods #conback
 
 extern gltexture_t* char_texture; // woods #goldtext
 static const plcolour_t scr_positive_diff_default_color = { .type = 2, .rgb = { 0xF6, 0xC2, 0x2C }, .basic = 0 }; // woods #goldtext
+static const plcolour_t scr_positive_diff_default_red = { .type = 2, .rgb = { 0xFF, 0x40, 0x40 }, .basic = 0 }; // woods #cursorcolor
 
 //johnfitz -- new pics
 byte pic_ovr_data[8][8] =
@@ -790,7 +791,7 @@ void Draw_StringRGBA (int x, int y, const char* str, plcolour_t c, float alpha)
 	glColor4f(1, 1, 1, 1);
 }
 
-static void Draw_BoostAccentRGB(int* r, int* g, int* b) // woods #goldtext
+void Draw_BoostAccentRGB(int* r, int* g, int* b) // woods #goldtext
 {
 	int maxc = q_max(*r, q_max(*g, *b));
 	if (maxc <= 0) return;
@@ -810,7 +811,283 @@ static void Draw_BoostAccentRGB(int* r, int* g, int* b) // woods #goldtext
 	*b = q_min(255, (int)(*b * f + 0.5f));
 }
 
-static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #goldtext
+static qboolean Draw_SampleIndexedConcharsColor(byte* data, int width, int height, int cell_width, int cell_height, int start_index, int count, plcolour_t* result)
+{
+	unsigned int counts[256];
+	unsigned int sum_r[256];
+	unsigned int sum_g[256];
+	unsigned int sum_b[256];
+	unsigned int best_count = 0;
+	int best_sat = -1;
+	int best_r = 0, best_g = 0, best_b = 0;
+	int brightest_value = 0;
+
+	if (!result)
+		return false;
+
+	memset(counts, 0, sizeof(counts));
+	memset(sum_r, 0, sizeof(sum_r));
+	memset(sum_g, 0, sizeof(sum_g));
+	memset(sum_b, 0, sizeof(sum_b));
+
+	for (int digit = 0; digit < count; ++digit)
+	{
+		int ch_index = start_index + digit;
+
+		if (ch_index < 0 || ch_index >= 256)
+			continue;
+
+		int row = ch_index >> 4;
+		int col = ch_index & 15;
+		int x0 = col * cell_width;
+		int y0 = row * cell_height;
+
+		for (int py = 0; py < cell_height; ++py)
+		{
+			int y = y0 + py;
+			if (y >= height)
+				continue;
+
+			for (int px = 0; px < cell_width; ++px)
+			{
+				int x = x0 + px;
+				byte index;
+				byte* rgba;
+				int r, g, b;
+
+				if (x >= width)
+					continue;
+
+				index = data[y * width + x];
+				if (!index)
+					continue;
+
+				rgba = (byte*)&d_8to24table_conchars[index];
+				if (!rgba[3])
+					continue;
+
+				r = rgba[0];
+				g = rgba[1];
+				b = rgba[2];
+
+				if (r <= 16 && g <= 16 && b <= 16)
+					continue;
+
+				{
+					int value = q_max(r, q_max(g, b));
+
+					if (value > brightest_value)
+						brightest_value = value;
+				}
+
+				counts[index]++;
+				sum_r[index] += (unsigned int)r;
+				sum_g[index] += (unsigned int)g;
+				sum_b[index] += (unsigned int)b;
+			}
+		}
+	}
+
+	for (int i = 0; i < 256; ++i)
+	{
+		unsigned int count = counts[i];
+
+		if (!count)
+			continue;
+
+		int r = (int)((sum_r[i] + count / 2) / count);
+		int g = (int)((sum_g[i] + count / 2) / count);
+		int b = (int)((sum_b[i] + count / 2) / count);
+		int maxc = q_max(r, q_max(g, b));
+		int minc = q_min(r, q_min(g, b));
+		int sat = maxc - minc;
+
+		if (count > best_count || (count == best_count && sat > best_sat))
+		{
+			best_count = count;
+			best_sat = sat;
+			best_r = r;
+			best_g = g;
+			best_b = b;
+		}
+	}
+
+	if (best_count > 0)
+	{
+		int best_max = q_max(best_r, q_max(best_g, best_b));
+
+		if (brightest_value > best_max && best_max > 0)
+		{
+			int scale = brightest_value;
+			int r = (best_r * scale + best_max / 2) / best_max;
+			int g = (best_g * scale + best_max / 2) / best_max;
+			int b = (best_b * scale + best_max / 2) / best_max;
+
+			if (r > 255)
+				r = 255;
+			if (g > 255)
+				g = 255;
+			if (b > 255)
+				b = 255;
+
+			best_r = r;
+			best_g = g;
+			best_b = b;
+		}
+
+		Draw_BoostAccentRGB(&best_r, &best_g, &best_b);
+
+		result->type = 2;
+		result->rgb[0] = (byte)best_r;
+		result->rgb[1] = (byte)best_g;
+		result->rgb[2] = (byte)best_b;
+		result->basic = 0;
+
+		return true;
+	}
+
+	return false;
+}
+
+static qboolean Draw_SampleRGBAConcharsColor(byte* data, int width, int height, int cell_width, int cell_height, int start_index, int count, plcolour_t* result)
+{
+	enum { bucket_count = 16 * 16 * 16 };
+	unsigned int counts[bucket_count];
+	unsigned int sum_r[bucket_count];
+	unsigned int sum_g[bucket_count];
+	unsigned int sum_b[bucket_count];
+	unsigned int best_count = 0;
+	int best_sat = -1;
+	int best_r = 0, best_g = 0, best_b = 0;
+	int brightest_value = 0;
+
+	if (!result)
+		return false;
+
+	memset(counts, 0, sizeof(counts));
+	memset(sum_r, 0, sizeof(sum_r));
+	memset(sum_g, 0, sizeof(sum_g));
+	memset(sum_b, 0, sizeof(sum_b));
+
+	for (int digit = 0; digit < count; ++digit)
+	{
+		int ch_index = start_index + digit;
+
+		if (ch_index < 0 || ch_index >= 256)
+			continue;
+
+		int row = ch_index >> 4;
+		int col = ch_index & 15;
+		int x0 = col * cell_width;
+		int y0 = row * cell_height;
+
+		for (int py = 0; py < cell_height; ++py)
+		{
+			int y = y0 + py;
+			if (y >= height)
+				continue;
+
+			for (int px = 0; px < cell_width; ++px)
+			{
+				int x = x0 + px;
+				byte* rgba;
+				byte a;
+				int r, g, b;
+				int bucket;
+
+				if (x >= width)
+					continue;
+
+				rgba = data + ((y * width + x) << 2);
+				a = rgba[3];
+				if (!a)
+					continue;
+
+				r = rgba[0];
+				g = rgba[1];
+				b = rgba[2];
+
+				if (r <= 16 && g <= 16 && b <= 16)
+					continue;
+
+				{
+					int value = q_max(r, q_max(g, b));
+
+					if (value > brightest_value)
+						brightest_value = value;
+				}
+
+				bucket = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+				counts[bucket]++;
+				sum_r[bucket] += (unsigned int)r;
+				sum_g[bucket] += (unsigned int)g;
+				sum_b[bucket] += (unsigned int)b;
+			}
+		}
+	}
+
+	for (int i = 0; i < bucket_count; ++i)
+	{
+		unsigned int count = counts[i];
+
+		if (!count)
+			continue;
+
+		int r = (int)((sum_r[i] + count / 2) / count);
+		int g = (int)((sum_g[i] + count / 2) / count);
+		int b = (int)((sum_b[i] + count / 2) / count);
+		int maxc = q_max(r, q_max(g, b));
+		int minc = q_min(r, q_min(g, b));
+		int sat = maxc - minc;
+
+		if (count > best_count || (count == best_count && sat > best_sat))
+		{
+			best_count = count;
+			best_sat = sat;
+			best_r = r;
+			best_g = g;
+			best_b = b;
+		}
+	}
+
+	if (best_count > 0)
+	{
+		int best_max = q_max(best_r, q_max(best_g, best_b));
+
+		if (brightest_value > best_max && best_max > 0)
+		{
+			int scale = brightest_value;
+			int r = (best_r * scale + best_max / 2) / best_max;
+			int g = (best_g * scale + best_max / 2) / best_max;
+			int b = (best_b * scale + best_max / 2) / best_max;
+
+			if (r > 255)
+				r = 255;
+			if (g > 255)
+				g = 255;
+			if (b > 255)
+				b = 255;
+
+			best_r = r;
+			best_g = g;
+			best_b = b;
+		}
+
+		Draw_BoostAccentRGB(&best_r, &best_g, &best_b);
+
+		result->type = 2;
+		result->rgb[0] = (byte)best_r;
+		result->rgb[1] = (byte)best_g;
+		result->rgb[2] = (byte)best_b;
+		result->basic = 0;
+
+		return true;
+	}
+
+	return false;
+}
+
+static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* gold, plcolour_t* red) // woods #goldtext
 {
 	gltexture_t* texture = char_texture;
 	byte* data = NULL;
@@ -898,276 +1175,38 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 	{
 		int cell_width = width / 16;
 		int cell_height = height / 16;
+		qboolean have_gold = false;
+		qboolean have_red = false;
 
 		if (cell_width <= 0 || cell_height <= 0)
 			goto cleanup;
 
 		if (format == SRC_INDEXED)
 		{
-			unsigned int counts[256];
-			unsigned int sum_r[256];
-			unsigned int sum_g[256];
-			unsigned int sum_b[256];
-			unsigned int best_count = 0;
-			int best_sat = -1;
-			int best_r = 0, best_g = 0, best_b = 0;
-			int brightest_value = 0;
-
-			memset(counts, 0, sizeof(counts));
-			memset(sum_r, 0, sizeof(sum_r));
-			memset(sum_g, 0, sizeof(sum_g));
-			memset(sum_b, 0, sizeof(sum_b));
-
-			for (int digit = 0; digit < 10; ++digit)
-			{
-				int ch_index = 18 + digit;
-				int row = ch_index >> 4;
-				int col = ch_index & 15;
-				int x0 = col * cell_width;
-				int y0 = row * cell_height;
-
-				for (int py = 0; py < cell_height; ++py)
-				{
-					int y = y0 + py;
-					if (y >= height)
-						continue;
-
-					for (int px = 0; px < cell_width; ++px)
-					{
-						int x = x0 + px;
-						byte index;
-						byte* rgba;
-						int r, g, b;
-
-						if (x >= width)
-							continue;
-
-						index = data[y * width + x];
-						if (!index)
-							continue;
-
-						rgba = (byte*)&d_8to24table_conchars[index];
-						if (!rgba[3])
-							continue;
-
-						r = rgba[0];
-						g = rgba[1];
-						b = rgba[2];
-
-						if (r <= 16 && g <= 16 && b <= 16)
-							continue;
-
-						{
-							int value = q_max(r, q_max(g, b));
-
-							if (value > brightest_value)
-								brightest_value = value;
-						}
-
-						counts[index]++;
-						sum_r[index] += (unsigned int)r;
-						sum_g[index] += (unsigned int)g;
-						sum_b[index] += (unsigned int)b;
-					}
-				}
-			}
-
-			for (int i = 0; i < 256; ++i)
-			{
-				unsigned int count = counts[i];
-
-				if (!count)
-					continue;
-
-				int r = (int)((sum_r[i] + count / 2) / count);
-				int g = (int)((sum_g[i] + count / 2) / count);
-				int b = (int)((sum_b[i] + count / 2) / count);
-				int maxc = q_max(r, q_max(g, b));
-				int minc = q_min(r, q_min(g, b));
-				int sat = maxc - minc;
-
-				if (count > best_count || (count == best_count && sat > best_sat))
-				{
-					best_count = count;
-					best_sat = sat;
-					best_r = r;
-					best_g = g;
-					best_b = b;
-				}
-			}
-
-			if (best_count > 0)
-			{
-				int best_max = q_max(best_r, q_max(best_g, best_b));
-
-				if (brightest_value > best_max && best_max > 0)
-				{
-					int scale = brightest_value;
-					int r = (best_r * scale + best_max / 2) / best_max;
-					int g = (best_g * scale + best_max / 2) / best_max;
-					int b = (best_b * scale + best_max / 2) / best_max;
-
-					if (r > 255)
-						r = 255;
-					if (g > 255)
-						g = 255;
-					if (b > 255)
-						b = 255;
-
-					best_r = r;
-					best_g = g;
-					best_b = b;
-				}
-
-				// Final gentle brightness boost
-				Draw_BoostAccentRGB(&best_r, &best_g, &best_b);
-
-				result->type = 2;
-				result->rgb[0] = (byte)best_r;
-				result->rgb[1] = (byte)best_g;
-				result->rgb[2] = (byte)best_b;
-				result->basic = 0;
-
-				if (free_data)
-					free(data);
-				if (release_hunk)
-					Hunk_FreeToLowMark(hunk_mark);
-				return true;
-			}
+			if (gold)
+				have_gold = Draw_SampleIndexedConcharsColor(data, width, height, cell_width, cell_height, 18, 10, gold);
+			if (red)
+				have_red = Draw_SampleIndexedConcharsColor(data, width, height, cell_width, cell_height, 176, 10, red);
 		}
 		else if (format == SRC_RGBA)
 		{
-			enum { bucket_count = 16 * 16 * 16 };
-			unsigned int counts[bucket_count];
-			unsigned int sum_r[bucket_count];
-			unsigned int sum_g[bucket_count];
-			unsigned int sum_b[bucket_count];
-			unsigned int best_count = 0;
-			int best_sat = -1;
-			int best_r = 0, best_g = 0, best_b = 0;
-			int brightest_value = 0;
-
-			memset(counts, 0, sizeof(counts));
-			memset(sum_r, 0, sizeof(sum_r));
-			memset(sum_g, 0, sizeof(sum_g));
-			memset(sum_b, 0, sizeof(sum_b));
-
-			for (int digit = 0; digit < 10; ++digit)
-			{
-				int ch_index = 18 + digit;
-				int row = ch_index >> 4;
-				int col = ch_index & 15;
-				int x0 = col * cell_width;
-				int y0 = row * cell_height;
-
-				for (int py = 0; py < cell_height; ++py)
-				{
-					int y = y0 + py;
-					if (y >= height)
-						continue;
-
-					for (int px = 0; px < cell_width; ++px)
-					{
-						int x = x0 + px;
-						byte* rgba;
-						byte a;
-						int r, g, b;
-						int bucket;
-
-						if (x >= width)
-							continue;
-
-						rgba = data + ((y * width + x) << 2);
-						a = rgba[3];
-						if (!a)
-							continue;
-
-						r = rgba[0];
-						g = rgba[1];
-						b = rgba[2];
-
-						if (r <= 16 && g <= 16 && b <= 16)
-							continue;
-
-						{
-							int value = q_max(r, q_max(g, b));
-
-							if (value > brightest_value)
-								brightest_value = value;
-						}
-
-						bucket = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
-						counts[bucket]++;
-						sum_r[bucket] += (unsigned int)r;
-						sum_g[bucket] += (unsigned int)g;
-						sum_b[bucket] += (unsigned int)b;
-					}
-				}
-			}
-
-			for (int i = 0; i < bucket_count; ++i)
-			{
-				unsigned int count = counts[i];
-
-				if (!count)
-					continue;
-
-				int r = (int)((sum_r[i] + count / 2) / count);
-				int g = (int)((sum_g[i] + count / 2) / count);
-				int b = (int)((sum_b[i] + count / 2) / count);
-				int maxc = q_max(r, q_max(g, b));
-				int minc = q_min(r, q_min(g, b));
-				int sat = maxc - minc;
-
-				if (count > best_count || (count == best_count && sat > best_sat))
-				{
-					best_count = count;
-					best_sat = sat;
-					best_r = r;
-					best_g = g;
-					best_b = b;
-				}
-			}
-
-			if (best_count > 0)
-			{
-				int best_max = q_max(best_r, q_max(best_g, best_b));
-
-				if (brightest_value > best_max && best_max > 0)
-				{
-					int scale = brightest_value;
-					int r = (best_r * scale + best_max / 2) / best_max;
-					int g = (best_g * scale + best_max / 2) / best_max;
-					int b = (best_b * scale + best_max / 2) / best_max;
-
-					if (r > 255)
-						r = 255;
-					if (g > 255)
-						g = 255;
-					if (b > 255)
-						b = 255;
-
-					best_r = r;
-					best_g = g;
-					best_b = b;
-				}
-
-				// Final gentle brightness boost
-				Draw_BoostAccentRGB(&best_r, &best_g, &best_b);
-
-				result->type = 2;
-				result->rgb[0] = (byte)best_r;
-				result->rgb[1] = (byte)best_g;
-				result->rgb[2] = (byte)best_b;
-				result->basic = 0;
-
-				if (free_data)
-					free(data);
-				if (release_hunk)
-					Hunk_FreeToLowMark(hunk_mark);
-				return true;
-			}
+			if (gold)
+				have_gold = Draw_SampleRGBAConcharsColor(data, width, height, cell_width, cell_height, 18, 10, gold);
+			if (red)
+				have_red = Draw_SampleRGBAConcharsColor(data, width, height, cell_width, cell_height, 176, 10, red);
 		}
+
+		if (!have_gold && gold)
+			*gold = scr_positive_diff_default_color;
+		if (!have_red && red)
+			*red = scr_positive_diff_default_red;
+
+		if (free_data)
+			free(data);
+		if (release_hunk)
+			Hunk_FreeToLowMark(hunk_mark);
+
+		return have_gold || have_red;
 	}
 
 cleanup:
@@ -1176,13 +1215,20 @@ cleanup:
 	if (release_hunk)
 		Hunk_FreeToLowMark(hunk_mark);
 
+	if (gold)
+		*gold = scr_positive_diff_default_color;
+	if (red)
+		*red = scr_positive_diff_default_red;
+
 	return false;
 }
 
-plcolour_t Draw_GetConcharsAccentColor(void) // woods #goldtext
+qboolean Draw_GetConcharsAccentColor(plcolour_t* gold, plcolour_t* red) // woods #goldtext
 {
-	static plcolour_t cached_color;
+	static plcolour_t cached_gold;
+	static plcolour_t cached_red;
 	static qboolean cached_valid = false;
+	static qboolean cached_success = false;
 	static unsigned int cached_texnum = 0;
 	static unsigned short cached_crc = 0;
 	static unsigned int cached_width = 0;
@@ -1194,33 +1240,53 @@ plcolour_t Draw_GetConcharsAccentColor(void) // woods #goldtext
 	if (!texture)
 	{
 		if (!cached_valid)
-			cached_color = scr_positive_diff_default_color;
-		return cached_color;
+		{
+			cached_gold = scr_positive_diff_default_color;
+			cached_red = scr_positive_diff_default_red;
+			cached_success = false;
+			cached_valid = true;
+			cached_texnum = 0;
+			cached_crc = 0;
+			cached_width = 0;
+			cached_height = 0;
+			cached_source[0] = '\0';
+		}
+
+		if (gold)
+			*gold = cached_gold;
+		if (red)
+			*red = cached_red;
+		return cached_success;
 	}
 
-	if (!cached_valid || cached_texnum != texture->texnum ||
-		cached_crc != texture->source_crc ||
-		cached_width != texture->source_width ||
-		cached_height != texture->source_height ||
-		strcmp(cached_source, texture->source_file))
-	{
-		plcolour_t color;
+        if (!cached_valid || cached_texnum != texture->texnum ||
+                cached_crc != texture->source_crc ||
+                cached_width != texture->source_width ||
+                cached_height != texture->source_height ||
+                strcmp(cached_source, texture->source_file))
+        {
+                plcolour_t color_gold = scr_positive_diff_default_color;
+                plcolour_t color_red = scr_positive_diff_default_red;
+                qboolean success = Draw_ComputeConcharsAccentColor(&color_gold, &color_red);
 
-		if (!Draw_ComputeConcharsAccentColor(&color))
-			color = scr_positive_diff_default_color;
+                cached_gold = color_gold;
+                cached_red = color_red;
+                cached_success = success;
+                cached_valid = true;
+                cached_texnum = texture->texnum;
+                cached_crc = texture->source_crc;
+                cached_width = texture->source_width;
+                cached_height = texture->source_height;
+                q_strlcpy(cached_source, texture->source_file, sizeof(cached_source));
+        }
 
-		cached_color = color;
-		cached_valid = true;
-		cached_texnum = texture->texnum;
-		cached_crc = texture->source_crc;
-		cached_width = texture->source_width;
-		cached_height = texture->source_height;
-		q_strlcpy(cached_source, texture->source_file, sizeof(cached_source));
-	}
+        if (gold)
+                *gold = cached_gold;
+        if (red)
+                *red = cached_red;
 
-	return cached_color;
+        return cached_success;
 }
-
 /*
 ================
 Draw_StringAnimatedDots -- woods
@@ -1509,7 +1575,7 @@ Draw_Pic -- johnfitz -- modified
 void Draw_Pic (int x, int y, qpic_t *pic)
 {
 	if (!pic) return; // woods (iw) #democontrols
-	
+
 	glpic_t			*gl;
 
 	if (scrap_dirty)
@@ -1531,6 +1597,82 @@ void Draw_Pic (int x, int y, qpic_t *pic)
 	glVertex2f (x, y+pic->height);
 	glEnd ();
 }
+
+
+void Draw_ConsoleCursorPicTinted(int x, int y, qboolean insert_mode, plcolour_t color)
+{
+	const byte* pixels;
+	int width = 8;
+	int height = insert_mode ? 9 : 8;
+	float base_r = 1.0f;
+	float base_g = 1.0f;
+	float base_b = 1.0f;
+
+	if (color.type == 2)
+	{
+		base_r = color.rgb[0] / 255.0f;
+		base_g = color.rgb[1] / 255.0f;
+		base_b = color.rgb[2] / 255.0f;
+	}
+	else if (color.type == 1)
+	{
+		const byte* pal = (const byte*)&d_8to24table[(color.basic << 4) + 8];
+
+		base_r = pal[0] / 255.0f;
+		base_g = pal[1] / 255.0f;
+		base_b = pal[2] / 255.0f;
+	}
+
+	pixels = insert_mode ? &pic_ins_data[0][0] : &pic_ovr_data[0][0];
+
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	glBegin(GL_QUADS);
+	for (int row = 0; row < height; ++row)
+	{
+		for (int col = 0; col < width; ++col)
+		{
+			byte idx = pixels[row * width + col];
+			const byte* rgba;
+			float alpha;
+			float intensity;
+			float r, g, b;
+
+			if (idx == 255)
+				continue;
+
+			rgba = (const byte*)&d_8to24table[idx];
+			if (!rgba[3])
+				continue;
+
+			alpha = rgba[3] / 255.0f;
+			intensity = q_max(rgba[0], q_max(rgba[1], rgba[2])) / 255.0f;
+			r = base_r * intensity;
+			g = base_g * intensity;
+			b = base_b * intensity;
+
+			glColor4f(r, g, b, alpha);
+
+			float px = (float)(x + col);
+			float py = (float)(y + row);
+
+			glVertex2f(px, py);
+			glVertex2f(px + 1.0f, py);
+			glVertex2f(px + 1.0f, py + 1.0f);
+			glVertex2f(px, py + 1.0f);
+		}
+	}
+	glEnd();
+
+	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+	glEnable(GL_TEXTURE_2D);
+	glEnable(GL_ALPHA_TEST);
+	glDisable(GL_BLEND);
+}
+
 
 /*
 =============

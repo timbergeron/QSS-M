@@ -59,6 +59,7 @@ void Draw_ConsoleBackground (void); //johnfitz -- removed parameter int lines
 void Draw_TileClear (int x, int y, int w, int h);
 void Draw_Fill (int x, int y, int w, int h, int c, float alpha); //johnfitz -- added alpha
 void Draw_FillPlayer (int x, int y, int w, int h, plcolour_t c, float alpha); //Spike - for richer player colours.
+void Draw_ConsoleCursorPicTinted(int x, int y, qboolean insert_mode, plcolour_t color);
 void Draw_FadeScreen (void);
 void Draw_String (int x, int y, const char *str);
 void Draw_StringAnimatedDots(int x, int y, const char* str); // woods
@@ -72,7 +73,8 @@ qpic_t *Draw_TryCachePic (const char *path, unsigned int texflags);
 void Draw_NewGame (void);
 void Draw_GetMenuTransform(vrect_t* bounds, vrect_t* viewport); // woods #mousemenu (iw)
 qboolean Draw_ReloadTextures(qboolean force);
-plcolour_t Draw_GetConcharsAccentColor(void); // woods #goldtext
+qboolean Draw_GetConcharsAccentColor(plcolour_t* gold, plcolour_t* red); // woods #goldtext
+void Draw_BoostAccentRGB(int* r, int* g, int* b); // woods #goldtext
 
 //Spike -- this is for csqc
 typedef struct

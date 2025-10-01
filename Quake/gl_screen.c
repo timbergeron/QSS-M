@@ -1902,7 +1902,9 @@ static void SCR_DrawPositiveDiffString(int x, int y, const char* str) // woods #
 {
         int cx = x;
         const char* p;
-        plcolour_t accent = Draw_GetConcharsAccentColor();
+        plcolour_t accent;
+
+        Draw_GetConcharsAccentColor(&accent, NULL);
 
         for (p = str; *p; ++p)
         {

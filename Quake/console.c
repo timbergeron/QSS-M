@@ -75,6 +75,10 @@ cvar_t		con_notifyfadetime = {"con_notifyfadetime", "0.5", CVAR_ARCHIVE}; // woo
 cvar_t		con_colmax = { "con_colmax", "0", CVAR_ARCHIVE}; // woods #consolecols
 cvar_t		con_coldirection = { "con_coldirection", "0", CVAR_ARCHIVE}; // woods #consolecols
 cvar_t		con_notifydiscord = {"con_notifydiscord", "", CVAR_ARCHIVE}; // woods #discord
+cvar_t		con_cursorcolor = {"con_cursorcolor", "1", CVAR_ARCHIVE}; // woods #cursorcolor
+static const plcolour_t con_cursorcolor_fallback_gold = { .type = 2, .rgb = { 0xF6, 0xC2, 0x2C }, .basic = 0 };
+static const plcolour_t con_cursorcolor_fallback_red  = { .type = 2, .rgb = { 0xFF, 0x40, 0x40 }, .basic = 0 };
+
 
 char		con_lastcenterstring[1024]; //johnfitz
 
@@ -116,6 +120,10 @@ typedef struct {
 static int DiscordThread(void *data);
 static void MakeDiscordPayload(const char *raw, char *out, size_t outsz);
 static void QSSM_DiscordNotify(const char *raw_msg);
+static void Con_CursorColor_Callback(cvar_t* var);
+static qboolean Con_GetCursorColor(plcolour_t* out);
+static void Con_DrawCursorCharacter(int x, int y, int ch);
+static void Con_DrawCursorPic(int x, int y, qboolean insert_mode);
 
 /* Redact webhook token when printing URLs to logs/errors */
 static void MaskDiscordURL(const char *url, char *out, size_t outsz)
@@ -499,7 +507,9 @@ void Con_Init (void)
 	Cvar_RegisterVariable (&con_notifyfade); // woods #confade
 	Cvar_RegisterVariable (&con_notifyfadetime); // woods #confade
 	Cvar_RegisterVariable (&con_notifydiscord); // woods #discord
+	Cvar_RegisterVariable (&con_cursorcolor);
 	Cvar_SetCallback (&con_notifydiscord, &ConNotifyDiscord_Callback); // woods #discord
+	Cvar_SetCallback (&con_cursorcolor, Con_CursorColor_Callback);
 
 
 	Cmd_AddCommand ("toggleconsole", Con_ToggleConsole_f);
@@ -2994,7 +3004,7 @@ void Con_DrawNotify (void)
 			text++;
 		}
 
-		Draw_Character (x<<3, v, 10 + ((int)(realtime*con_cursorspeed)&1));
+		Con_DrawCursorCharacter (x<<3, v, 10 + ((int)(realtime*con_cursorspeed)&1));
 		v += 8;
 
 		scr_tileclear_updates = 0; //johnfitz
@@ -3043,8 +3053,8 @@ void Con_DrawInput (void)
 	if (!((int)((realtime-key_blinktime)*con_cursorspeed) & 1))
 	{
 		i = key_linepos - ofs;
-		Draw_Pic ((i+1)<<3, vid.conheight - 16, key_insert ? pic_ins : pic_ovr);
-	}
+		Con_DrawCursorPic ((i+1)<<3, vid.conheight - 16, key_insert);
+        }
 }
 
 /*
@@ -3307,10 +3317,117 @@ static void QSSM_DiscordNotify(const char *raw_msg)
     MakeDiscordPayload(raw_msg, payload, sizeof(payload));
     if (!payload[0]) return;
 
-	discord_job_t* job = (discord_job_t*)malloc(sizeof(*job));
+        discord_job_t* job = (discord_job_t*)malloc(sizeof(*job));
     q_strlcpy(job->payload, payload, sizeof(job->payload));
     q_strlcpy(job->url, con_notifydiscord.string, sizeof(job->url));
 
     SDL_Thread *t = SDL_CreateThread(DiscordThread, "discord", job);
     if (t) SDL_DetachThread(t);
+}
+
+static void Con_CursorColor_Callback(cvar_t* var)
+{
+    int value = Q_rint(var->value);
+
+    if (value < 0)
+        value = 0;
+    else if (value > 3)
+        value = 3;
+
+    if ((int)var->value != value)
+        Cvar_SetValueQuick(var, (float)value);
+}
+
+static qboolean Con_GetCursorColor(plcolour_t* out)
+{
+    int setting;
+
+    if (!out)
+        return false;
+
+    setting = Q_rint(con_cursorcolor.value);
+
+    if (setting <= 1)
+        return false;
+
+    if (setting >= 2)
+    {
+        plcolour_t fallback = (setting == 2) ? con_cursorcolor_fallback_red : con_cursorcolor_fallback_gold;
+        plcolour_t gold = con_cursorcolor_fallback_gold;
+        plcolour_t red = con_cursorcolor_fallback_red;
+
+        *out = fallback;
+
+        Draw_GetConcharsAccentColor(&gold, &red);
+
+        {
+            plcolour_t candidate = (setting == 2) ? red : gold;
+
+            if (candidate.type == 2)
+            {
+                *out = candidate;
+            }
+            else if (candidate.type == 1)
+            {
+                byte* rgb = CL_PLColours_ToRGB(&candidate);
+
+                if (rgb)
+                {
+                    out->type = 2;
+                    out->rgb[0] = rgb[0];
+                    out->rgb[1] = rgb[1];
+                    out->rgb[2] = rgb[2];
+                    out->basic = 0;
+                }
+            }
+        }
+
+        if (out->type != 2)
+        {
+            *out = fallback;
+        }
+
+        {
+            int r = out->rgb[0];
+            int g = out->rgb[1];
+            int b = out->rgb[2];
+
+            Draw_BoostAccentRGB(&r, &g, &b);
+
+            out->rgb[0] = (byte)r;
+            out->rgb[1] = (byte)g;
+            out->rgb[2] = (byte)b;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+static void Con_DrawCursorCharacter(int x, int y, int ch)
+{
+    plcolour_t color;
+
+    if (Con_GetCursorColor(&color))
+        Draw_CharacterRGBA(x, y, ch, color, 1.0f);
+    else
+        Draw_Character(x, y, ch);
+}
+
+static void Con_DrawCursorPic(int x, int y, qboolean insert_mode)
+{
+    qpic_t* pic = insert_mode ? pic_ins : pic_ovr;
+    plcolour_t color;
+
+    if (!pic)
+        return;
+
+    if (Con_GetCursorColor(&color))
+    {
+        Draw_ConsoleCursorPicTinted(x, y, insert_mode, color);
+        return;
+    }
+
+    Draw_Pic(x, y, pic);
 }
