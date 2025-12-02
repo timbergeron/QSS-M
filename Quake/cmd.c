@@ -1791,7 +1791,7 @@ void Cmd_ForwardToServer (void)
 							}
 							else
 							{
-								if (cl.stats[STAT_NAILS] < 5)
+								if (cl.stats[STAT_ROCKETS] < 5)
 									dst += sprintf(dst, "%s", "I need rockets");
 								else
 									dst += sprintf(dst, "%d rockets", cl.stats[STAT_ROCKETS]);
@@ -1805,7 +1805,7 @@ void Cmd_ForwardToServer (void)
 							}
 							else
 							{
-								if (cl.stats[STAT_NAILS] < 5)
+								if (cl.stats[STAT_ROCKETS] < 5)
 									dst += sprintf(dst, "%s", "I need rockets");
 								else
 									dst += sprintf(dst, "%d rockets", cl.stats[STAT_ROCKETS]);
