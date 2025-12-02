@@ -2538,7 +2538,7 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 					{
 						Cmd_ExecuteString("record\n", src_command);
 					}
-				if (strstr(string, "welcome to CRx"))  // woods differemt cfgs per mod #modcfg
+				if (q_strcasestr(string, "Website: https://www.crxquake.com"))  // woods differemt cfgs per mod #modcfg
 				{
 					cl.modtype = 4; // woods #modtype [qecrx server check]
 					strncpy(cl.observer, "n", sizeof(cl.observer)); // woods #observer set to no on join #observerhud
