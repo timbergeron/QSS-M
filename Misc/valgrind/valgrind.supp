@@ -1,0 +1,47 @@
+{
+   libGLX_mesa_leak
+   Memcheck:Leak
+   ...
+   obj:*/libGLX_mesa.so*
+}
+{
+   libGLX_mesa_cond
+   Memcheck:Cond
+   ...
+   obj:*/libGLX_mesa.so*
+}
+{
+   libGLX_mesa_addr8
+   Memcheck:Addr8
+   ...
+   obj:*/libGLX_mesa.so*
+}
+
+{
+   libdbus_leak
+   Memcheck:Leak
+   ...
+   obj:*/libdbus-1.so*
+}
+{
+   libdbus_cond
+   Memcheck:Cond
+   ...
+   obj:*/libdbus-1.so*
+}
+{
+   libdbus_addr8
+   Memcheck:Addr8
+   ...
+   obj:*/libdbus-1.so*
+}
+
+{
+   libLLVM_globals_reachable
+   Memcheck:Leak
+   ...
+   fun:llvm::allocate_buffer*
+   fun:llvm::cl::Option::addArgument*
+   fun:llvm::mc::RegisterMCTargetOptionsFlags*
+   obj:*/libLLVM.so*
+}

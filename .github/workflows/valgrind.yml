@@ -1,0 +1,98 @@
+name: Linux Valgrind
+
+on: [push, pull_request]
+
+jobs:
+  valgrind:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        set -eux
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libsdl2-dev \
+          libmad0-dev \
+          libmpg123-dev \
+          libopus-dev \
+          libopusfile-dev \
+          libvorbis-dev \
+          libogg-dev \
+          zlib1g-dev \
+          libcurl4-openssl-dev \
+          libarchive-tools \
+          xvfb \
+          pkg-config \
+          zip \
+          valgrind \
+          wget \
+          unzip
+
+    - name: Build CRMod7 progs.dat
+      run: |
+        set -eux
+        workdir=$(mktemp -d)
+        curl -L -o "$workdir/crmod7.zip" https://github.com/quakeone/CRMod7/archive/refs/heads/master.zip
+        unzip -q "$workdir/crmod7.zip" -d "$workdir"
+        cd "$workdir"/CRMod7-*
+        curl -L -o fteqcc_linux64.zip https://www.fteqcc.org/dl/fteqcc_linux64.zip
+        unzip -q fteqcc_linux64.zip fteqcc64
+        chmod +x fteqcc64
+        ./fteqcc64 -src src
+        dest="$GITHUB_WORKSPACE/Quake/crmod7"
+        mkdir -p "$dest"
+        if [ -f src/progs.dat ]; then cp src/progs.dat "$dest/"; fi
+        if [ -f src/csprogs.dat ]; then cp src/csprogs.dat "$dest/"; fi
+        if [ -d release ]; then cp -a release/. "$dest/"; fi
+
+    - name: Fetch Quake shareware PAK
+      run: |
+        set -eux
+        mkdir -p Quake/id1
+        if [ ! -f Quake/id1/pak0.pak ]; then
+          tmpdir=$(mktemp -d)
+          url="https://github.com/Jason2Brownlee/QuakeOfficialArchive/raw/main/bin/quake106.zip"
+          wget -O "$tmpdir/quake106.zip" "$url"
+          unzip -o "$tmpdir/quake106.zip" -d "$tmpdir"
+          bsdtar -xf "$tmpdir/resource.1" -C "$tmpdir"
+          pak=$(find "$tmpdir" -iname 'pak0.pak' | head -n 1 || true)
+          if [ -z "$pak" ]; then
+            echo "pak0.pak not found in downloaded archive" >&2
+            exit 1
+          fi
+          cp "$pak" Quake/id1/pak0.pak
+        fi
+
+    - name: Build debug binary for valgrind
+      run: |
+        set -eux
+        chmod +x build-linux-valgrind.sh
+        ./build-linux-valgrind.sh
+
+    - name: Run valgrind
+      run: |
+        set -eux
+        chmod +x Misc/valgrind/run-valgrind.sh
+        ./Misc/valgrind/run-valgrind.sh
+
+    - name: Upload valgrind logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: valgrind-logs
+        path: |
+          artifacts/valgrind.log
+          artifacts/valgrind-combined.log
+          artifacts/valgrind-server-local.log
+          artifacts/server-local.log
+        if-no-files-found: warn
+
+    - name: Upload valgrind binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: quakespasm-valgrind
+        path: |
+          Quake/quakespasm-valgrind
+          QSS-M-Revision.txt
