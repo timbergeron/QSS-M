@@ -69,8 +69,8 @@ jobs:
     - name: Build debug binary for valgrind
       run: |
         set -eux
-        chmod +x build-linux-valgrind.sh
-        ./build-linux-valgrind.sh
+        chmod +x Misc/valgrind/build-linux-valgrind.sh
+        ./Misc/valgrind/build-linux-valgrind.sh
 
     - name: Run valgrind
       run: |
