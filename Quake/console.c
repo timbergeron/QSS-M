@@ -4184,9 +4184,19 @@ static void QSSM_DiscordNotify(const char *raw_msg)
     if (!payload[0]) return;
 
 	discord_job_t* job = (discord_job_t*)malloc(sizeof(*job));
+	if (!job) {
+		Con_DPrintf("discord: out of memory creating job\n");
+		return;
+	}
+
     q_strlcpy(job->payload, payload, sizeof(job->payload));
     q_strlcpy(job->url, con_notifydiscord.string, sizeof(job->url));
 
     SDL_Thread *t = SDL_CreateThread(DiscordThread, "discord", job);
-    if (t) SDL_DetachThread(t);
+	if (t)
+		SDL_DetachThread(t);
+	else {
+		Con_DPrintf("discord: failed to create thread: %s\n", SDL_GetError());
+		free(job);
+	}
 }
