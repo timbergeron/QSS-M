@@ -997,6 +997,15 @@ void Key_Console (int key)
 		}
 		break;
 
+	case 'a': // woods #consolecursor
+	case 'A':
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #conselection
+		if (keydown[K_COMMAND]) { Con_SelectAll(); return; }
+#else
+		if (keydown[K_CTRL])    { Con_SelectAll(); return; }
+#endif
+		break;
+
 	case 'c':
 	case 'C':
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #concopy
@@ -1823,6 +1832,16 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 
 	if (key < 0 || key >= MAX_KEYS)
 		return;
+
+    /* woods #conselection Swallow left+middle click ONLY while the console is active.
+       Do NOT swallow right-click (K_MOUSE2) so it can toggle the menu
+       from the console. Do NOT swallow wheel so it can be used in game. */
+    if (key_dest == key_console &&
+        (key == K_MOUSE1 || key == K_MOUSE3)) {
+        /* Do not update keydown[] here; console uses SDL_GetMouseState().
+           Returning early prevents weapon fires/uses/etc. */
+        return;
+    }
 
 	if (key == K_CTRL) // woods #saymodifier
 	{

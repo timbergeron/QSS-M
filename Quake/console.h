@@ -69,6 +69,11 @@ void Con_AddToTabList (const char* name, const char* partial, const char* type, 
 qboolean Con_Match (const char* partial, const char* str); // woods #iwtabcomplete
 void Con_LogCenterPrint (const char *str);
 
+// woods #conselection
+void Con_ForceMouseMove (void);
+void Con_SelectAll (void);
+qboolean Con_CopySelectionToClipboard (void);
+
 //
 // debuglog
 //

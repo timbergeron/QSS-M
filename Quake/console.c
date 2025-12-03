@@ -38,6 +38,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <curl/curl.h> // woods #discord
 #include "json.h" // woods #discord
 
+static SDL_Cursor *con_cursor_arrow = NULL; // woods #conselection
+static SDL_Cursor *con_cursor_ibeam = NULL; // woods #conselection
+static SDL_Cursor *con_cursor_hand  = NULL; // woods #conselection
+static SDL_Cursor *con_cursor_current = NULL; // woods #conselection
+static SDL_Cursor *con_cursor_saved = NULL; // woods #conselection
+static int         con_cursor_saved_visible = SDL_DISABLE; // woods #conselection
+
 int 		con_linewidth;
 
 float		con_cursorspeed = 4;
@@ -45,6 +52,9 @@ float		con_cursorspeed = 4;
 #define		CON_TEXTSIZE (1024 * 1024) //ericw -- was 65536. johnfitz -- new default size
 #define		CON_MINSIZE  16384 //johnfitz -- old default, now the minimum size
 #define		CON_MARGIN   1 // woods #iwtabcomplete
+#define     CHARSIZE     8 // woods #conselection
+#define     CON_SCROLL_ZONE      (CHARSIZE * 2) // woods #conselection
+#define     CON_MAX_SCROLL_SPEED 32.f // woods #conselection
 
 int		con_buffersize; //johnfitz -- user can now override default
 
@@ -91,6 +101,59 @@ int			con_notifylines_; // woods from proquake 493 #notifylines
 qboolean	con_debuglog = false;
 
 qboolean	con_initialized;
+
+
+// woods #conselection ported from ironwail
+
+typedef struct { int line; int col; } conofs_t;
+typedef struct { const char *path; conofs_t begin, end; } conlink_t;
+typedef struct { conofs_t begin, end; } conselection_t;
+
+typedef enum {
+    CT_INSIDE, //strict hit test: must be inside visible text cell
+    CT_NEAREST //selection hit test: clamp to nearest legal edge
+} contest_t;
+
+typedef enum {
+    CMS_NOTPRESSED,
+    CMS_PRESSED,
+    CMS_DRAGGING
+} conmouse_t;
+
+static conlink_t   **con_links = NULL; // sorted by end offset
+static conlink_t   *con_hotlink = NULL;
+static double       con_mouseclickdelay = 0.0;
+static int          con_mouseclicks = 0; // 1: char, 2: word, 3: line, >=4: all
+static conmouse_t   con_mousestate = CMS_NOTPRESSED;
+static conselection_t con_mouseselection;
+static conselection_t con_selection; //final (normalized) selection
+static int          con_clickx, con_clicky; //canvas coords at press
+static float        con_scrollspeed = 0.f; //autoscroll during drag
+static float        con_scrolldelta = 0.f;
+static const double DOUBLECLICK_TIME = 0.5;
+
+static void Con_SetHotLink(conlink_t* link) { con_hotlink = link; }
+static void Con_ClearSelection(void) { memset(&con_selection, 0, sizeof(con_selection)); }
+static void Con_EnterCursorMode(void);
+static void Con_LeaveCursorMode(void);
+
+
+extern qboolean keydown[256];
+extern double host_frametime;
+extern float scr_con_current;
+
+#define CON_VEC_PUSH(vec, val) do { \
+    size_t __n = *(size_t*)((vec)?((char*)(vec) - sizeof(size_t)):NULL); \
+    size_t __newn = __n + 1; \
+    size_t __bytes = sizeof(size_t) + __newn * sizeof(*(vec)); \
+    size_t *__hdr = (size_t*)realloc((vec)?((char*)(vec) - sizeof(size_t)):NULL, __bytes); \
+    if (!__hdr) Sys_Error("con vec oom"); \
+    __hdr[0] = __newn; \
+    (vec) = (void*)(&__hdr[1]); \
+    (vec)[__newn - 1] = (val); \
+} while(0)
+#define CON_VEC_SIZE(vec) ((vec)?(((size_t*)(vec))[-1]):0)
+#define CON_VEC_CLEAR(vec) do { if (vec) { free(((size_t*)(vec))-1); (vec)=NULL; } } while(0)
 
 void Char_Console2(int key); // woods #ezsay add leading space for mode 2
 void Key_Console(int key); // woods con_clear_input_on_toggle
@@ -233,12 +296,21 @@ void Con_ToggleConsole_f (void)
 			key_dest = key_game;
 		else
 			M_ToggleMenu(0); // woods, was 1, better ui not to go to menu (kilomile) 
+
+		Con_LeaveCursorMode(); // woods #conselection - leaving console -> restore (game) or set stable menu cursor
 	}
 	else
 	{
 		M_ToggleMenu(0);
 		key_dest = key_console;
+		Con_EnterCursorMode(); // woods #conselection - entering console -> save host cursor+visibility, then enable console cursor
+
+       keydown[K_MOUSE1] = keydown[K_MOUSE2] = keydown[K_MOUSE3] = false; // woods #conselection - make sure no queued mouse presses leak into the game
+       keydown[K_MWHEELUP] = keydown[K_MWHEELDOWN] = false; // woods #conselection - wheels too, if you track them as keys
 	}
+
+       Con_SetHotLink(NULL); // woods #conselection - clear hover/selection on toggle to avoid stale state
+       Con_ClearSelection();
 
 	if ((key_linepos == 1) && (cl_say.value == 2 || cl_say.value == 3)) // woods #ezsay add leading space for mode 2
 		Char_Console2(32);
@@ -273,6 +345,12 @@ static void Con_Clear_f (void)
 	if (con_text)
 		Q_memset (con_text, ' ', con_buffersize); //johnfitz -- con_buffersize replaces CON_TEXTSIZE
 	con_backscroll = 0; //johnfitz -- if console is empty, being scrolled up is confusing
+
+	// woods #conselection - also clear link/selection tables
+    for (size_t i = 0; i < CON_VEC_SIZE(con_links); ++i) free(con_links[i]);
+    CON_VEC_CLEAR(con_links);
+    Con_SetHotLink(NULL);
+    Con_ClearSelection();
 }
 
 /*
@@ -340,20 +418,506 @@ static void Con_Dump_f (void)
 
 /*
 ================
-Con_Copy_f -- woods #concopy
+Con_Copy_f -- woods #concopy #conselection
 ================
 */
 void Con_Copy_f(void)
 {
-	char *f;
+	qboolean copied = false;
+	const char* copySnd = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
 
-	Con_Dump_f();
-	f = (char*)COM_LoadHunkFile("condump.txt", NULL);
-#if defined(USE_SDL2)
-	SDL_SetClipboardText(f);
+
+	if (Con_CopySelectionToClipboard()) // Try copying the current selection first
+	{
+		copied = true;
+	}
+	else
+	{
+		Con_Dump_f(); // Fallback: dump entire console, then load file and push to clipboard
+		{
+			char* f = (char*)COM_LoadHunkFile("condump.txt", NULL);
+			if (f)
+			{
+				// SDL returns 0 on success
+				if (SDL_SetClipboardText(f) == 0)
+					copied = true;
+			}
+		}
+	}
+
+	if (copied)
+		S_LocalSound(copySnd);
+}
+
+
+// woods #conselection ported from ironwail
+
+static const char *Con_GetLine (int line)
+{
+    return con_text + (line % con_totallines) * con_linewidth;
+}
+
+static size_t Con_StrLen (int line)
+{
+    const char *text; size_t len;
+    if (line > con_current) return 0;
+    text = Con_GetLine(line); len = con_linewidth;
+    while (len > 0 && (char)(text[len - 1] & 0x7f) == ' ') len--;
+    return len;
+}
+
+static void Con_ScreenToCanvas (int x, int y, int *outx, int *outy)
+{
+    int lines = vid.conheight - (int)(scr_con_current * vid.conheight / glheight);
+    float px = (x - glx) * (float)vid.conwidth / glwidth;
+    float py = (y - gly) * (float)vid.conheight / glheight + lines;
+    *outx = (int)(px + 0.5f);
+    *outy = (int)(py + 0.5f);
+}
+
+static int Con_OfsCompare (const conofs_t *a, const conofs_t *b)
+{
+    if (a->line != b->line) return a->line - b->line;
+    return a->col - b->col;
+}
+
+static qboolean Con_OfsInRange (const conofs_t *o, const conofs_t *b, const conofs_t *e)
+{
+    return Con_OfsCompare(o,b) >= 0 && Con_OfsCompare(o,e) < 0;
+}
+
+static qboolean Con_CanvasToOffset (int x, int y, conofs_t *ofs, contest_t mode)
+{
+    qboolean ret = true;
+    /* canvas origin is bottom-left of console */
+    y = vid.conheight - y;
+    if (mode == CT_NEAREST) x += 4;
+    x >>= 3; y >>= 3;
+    x -= CON_MARGIN; y -= 2;
+    if (mode == CT_INSIDE) {
+        if (x < 0 || x >= con_linewidth) ret = false;
+        if (y < 0 || y >= con_vislines)   ret = false;
+        if (con_backscroll && y < 2)      ret = false;
+    } else {
+        if (x < 0) x = 0;
+        if (x > con_linewidth) x = con_linewidth;
+        if (y < -1) y = -1;
+        if (y > con_vislines) y = con_vislines;
+        if (y < 0) x = 0;
+        if (con_backscroll && y < 2) { x = 0; y = 1; }
+    }
+    y += con_backscroll;
+    y = con_current - y;
+    ofs->line = y; ofs->col = x;
+    return ret;
+}
+
+static qboolean Con_ScreenToOffset (int x, int y, conofs_t *ofs, contest_t mode)
+{
+    Con_ScreenToCanvas(x,y,&x,&y);
+    return Con_CanvasToOffset(x,y,ofs,mode);
+}
+
+static void Con_GetCurrentRange (conofs_t *b, conofs_t *e)
+{
+    b->line = con_current - con_totallines + 1; b->col = 0;
+    e->line = con_current + 1;                  e->col = 0;
+}
+
+static qboolean Con_IntersectRanges (conofs_t *b, conofs_t *e,
+                                     const conofs_t *sb, const conofs_t *se)
+{
+    if (Con_OfsCompare(se,b) <= 0) return false;
+    if (Con_OfsCompare(e,sb) <= 0) return false;
+    if (Con_OfsCompare(b,sb) < 0) *b = *sb;
+    if (Con_OfsCompare(se,e) < 0) *e = *se;
+    return true;
+}
+
+static conlink_t *Con_GetLinkAtOfs (const conofs_t *ofs)
+{
+    size_t lo=0, hi=CON_VEC_SIZE(con_links);
+    while (lo < hi) {
+        size_t mid = (lo+hi)/2;
+        if (Con_OfsCompare(ofs, &con_links[mid]->end) >= 0) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo == CON_VEC_SIZE(con_links)) return NULL;
+    if (Con_OfsCompare(ofs, &con_links[lo]->begin) >= 0) return con_links[lo];
+    return NULL;
+}
+
+static conlink_t *Con_GetLinkAtPixel (int x, int y)
+{
+    conofs_t ofs;
+    if (!Con_ScreenToOffset(x,y,&ofs,CT_INSIDE)) return NULL;
+    return Con_GetLinkAtOfs(&ofs);
+}
+
+/* helper: set OS cursor safely */
+static void Con_SetCursor(SDL_Cursor *cur)
+{
+    if (!cur) return;
+    if (con_cursor_current == cur) return;
+    SDL_SetCursor(cur);
+    con_cursor_current = cur;
+}
+static qboolean Con_HasSelection (void) { return Con_OfsCompare(&con_selection.begin,&con_selection.end)!=0; }
+
+/* Enter/leave routines to avoid cursor flicker between console/menu/game */
+static void Con_EnterCursorMode(void)
+{
+    /* remember host cursor & visibility, then make console cursor visible */
+    con_cursor_saved = SDL_GetCursor();
+    {
+        int vis = SDL_ShowCursor(SDL_QUERY);
+        con_cursor_saved_visible = (vis == SDL_ENABLE) ? SDL_ENABLE : SDL_DISABLE;
+    }
+    SDL_ShowCursor(SDL_ENABLE);
+    /* actual shape is set by Con_Mousemove (ibeam/hand/arrow) */
+}
+
+static void Con_LeaveCursorMode(void)
+{
+    /* If leaving to menu, force a stable visible arrow.
+       If leaving to game, restore what the host had. */
+    if (key_dest == key_menu) {
+        SDL_ShowCursor(SDL_ENABLE);
+        if (con_cursor_arrow) SDL_SetCursor(con_cursor_arrow);
+    } else {
+        if (con_cursor_saved) SDL_SetCursor(con_cursor_saved);
+        SDL_ShowCursor(con_cursor_saved_visible);
+    }
+    con_cursor_current = NULL;
+    con_cursor_saved = NULL;
+}
+
+void Con_SelectAll (void)
+{
+    Con_GetCurrentRange(&con_selection.begin,&con_selection.end);
+    while (Con_HasSelection() && Con_StrLen(con_selection.begin.line) == 0)
+        con_selection.begin.line++;
+}
+
+static qboolean Con_GetNormalizedSelection (conofs_t *b, conofs_t *e)
+{
+    conofs_t tb, te;
+    conofs_t *sb=&con_selection.begin, *se=&con_selection.end;
+    if (Con_OfsCompare(sb,se) > 0) { conofs_t *t = sb; sb = se; se = t; }
+    *b = *sb; *e = *se;
+    Con_GetCurrentRange(&tb,&te);
+    return Con_IntersectRanges(b,e,&tb,&te);
+}
+
+static int Con_TestWordBoundary (int pos, const char *text, int len)
+{
+    if (pos <= 0) return 1;
+    if (pos >= len) return -1;
+    return q_isspace(text[pos-1] & 0x7f) - q_isspace(text[pos] & 0x7f);
+}
+static int IntSign (int i) { return (i<0)?-1:(i>0)?1:0; }
+
+static void Con_ApplyMouseSelection (void)
+{
+    const char *line; int len;
+    con_selection = con_mouseselection;
+    line = Con_GetLine(con_selection.begin.line);
+    len = (int)Con_StrLen(con_selection.begin.line);
+    if (con_selection.begin.col > len) con_selection.begin.col = len;
+
+    if (con_mouseclicks == 2) {
+        int boundary = IntSign(Con_TestWordBoundary(con_selection.begin.col, line, len));
+        int dir = IntSign(Con_OfsCompare(&con_selection.end, &con_selection.begin));
+        if (boundary && boundary != dir) con_selection.begin.col += boundary;
+    }
+
+    if (Con_OfsCompare(&con_selection.begin,&con_selection.end) > 0) {
+        conofs_t t = con_selection.begin; con_selection.begin = con_selection.end; con_selection.end = t;
+    }
+
+    // If the starting point is beyond the newline, move to the beginning of the next line
+    line = Con_GetLine(con_selection.begin.line);
+    len = (int)Con_StrLen(con_selection.begin.line);
+    if (con_selection.begin.col > len) {
+        con_selection.begin.line++;
+        con_selection.begin.col = 0;
+        // Fix up the end point if necessary
+        if (Con_OfsCompare(&con_selection.begin, &con_selection.end) > 0)
+            con_selection.end = con_selection.begin;
+    }
+
+    if (con_mouseclicks <= 1) return;               /* char selection */
+    if (con_mouseclicks >= 4) { Con_SelectAll(); return; }
+    if (con_mouseclicks == 3) {                      /* line */
+        con_selection.begin.col = 0;
+        con_selection.end.col = 0;
+        con_selection.end.line = q_min(con_selection.end.line, con_current) + 1;
+        return;
+    }
+    /* word selection */
+    line = Con_GetLine(con_selection.begin.line);
+    len  = (int)Con_StrLen(con_selection.begin.line);
+    while (!Con_TestWordBoundary(con_selection.begin.col, line, len)) --con_selection.begin.col;
+    if (con_selection.end.line <= con_current) {
+        line = Con_GetLine(con_selection.end.line);
+        len  = (int)Con_StrLen(con_selection.end.line);
+        while (!Con_TestWordBoundary(con_selection.end.col, line, len)) ++con_selection.end.col;
+    }
+}
+
+static void Con_SetMouseState (conmouse_t state)
+{
+    int x,y; conofs_t pos;
+    if (con_mousestate == state) return;
+    switch (state) {
+    case CMS_PRESSED:
+        SDL_GetMouseState(&x,&y);
+        Con_ScreenToCanvas(x,y,&con_clickx,&con_clicky);
+        Con_CanvasToOffset(con_clickx,con_clicky,&pos,CT_NEAREST);
+        if (con_mouseclicks == 0 || con_mouseclickdelay >= DOUBLECLICK_TIME
+            || Con_OfsCompare(&pos,&con_mouseselection.end) != 0) con_mouseclicks = 1;
+        else con_mouseclicks++;
+        con_mouseclickdelay = 0.0;
+        con_mouseselection.begin = con_mouseselection.end = pos;
+        Con_ApplyMouseSelection();
+        break;
+    case CMS_DRAGGING:
+        Con_SetHotLink(NULL);
+        break;
+    case CMS_NOTPRESSED:
+        con_scrolldelta = 0.f; con_scrollspeed = 0.f;
+        break;
+    default: break;
+    }
+    con_mousestate = state;
+}
+
+static void Con_Mousemove (int x, int y)
+{
+    if (con_mousestate == CMS_NOTPRESSED) {
+        conofs_t ofs; qboolean inside = Con_ScreenToOffset(x,y,&ofs,CT_INSIDE);
+        Con_SetHotLink(Con_GetLinkAtPixel(x,y));
+        /* Show appropriate cursor while console is active */
+        if (key_dest == key_console) {
+            if (con_hotlink)           Con_SetCursor(con_cursor_hand);
+            else if (inside)           Con_SetCursor(con_cursor_ibeam);
+            else                       Con_SetCursor(con_cursor_arrow);
+        }
+    } else {
+        int cx, cy, delta; float frac;
+        Con_ScreenToCanvas(x,y,&cx,&cy);
+        Con_CanvasToOffset(cx,cy,&con_mouseselection.end,CT_NEAREST);
+        Con_ApplyMouseSelection();
+        if (Con_OfsCompare(&con_mouseselection.begin,&con_mouseselection.end) != 0)
+            Con_SetMouseState(CMS_DRAGGING);
+        delta = cy + con_vislines/2 - vid.conheight;
+        if (abs(delta) < con_vislines/2 - CON_SCROLL_ZONE) delta = 0;
+        else delta -= IntSign(delta) * (con_vislines/2 - CON_SCROLL_ZONE);
+        if (delta < -CON_SCROLL_ZONE) delta = -CON_SCROLL_ZONE;
+        if (delta >  CON_SCROLL_ZONE) delta =  CON_SCROLL_ZONE;
+        if (delta < 0) {
+            int moved = cy - con_clicky;
+            int scrolled = q_min(con_mouseselection.end.line - con_mouseselection.begin.line, 0) * CHARSIZE;
+            delta = q_max(delta, moved + scrolled/4);
+            if (delta > 0) delta = 0;
+        }
+        frac = (float)delta / (float)CON_SCROLL_ZONE;
+        frac *= fabsf(frac);
+        con_scrollspeed = -CON_MAX_SCROLL_SPEED * frac;
+        if (!delta) con_scrolldelta = 0.f;
+    }
+}
+
+void Con_ForceMouseMove (void)
+{
+    int x,y; SDL_GetMouseState(&x,&y); Con_Mousemove(x,y);
+}
+
+static void Con_Scroll(int lines)
+{
+    con_backscroll += lines;
+    if (con_backscroll < 0) con_backscroll = 0;
+    if (con_backscroll > con_totallines - (glheight>>3) - 1)
+        con_backscroll = con_totallines - (glheight>>3) - 1;
+}
+
+static void Con_UpdateMouseState (void)
+{
+    if (key_dest != key_console) {
+        Con_SetHotLink(NULL);
+        Con_SetMouseState(CMS_NOTPRESSED);
+        Con_ClearSelection();
+        /* Do NOT change OS cursor visibility here; menu/game own it now. */
+        Con_SetCursor(NULL); /* leave shape alone when returning to game/menu */
+        return;
+    }
+    SDL_ShowCursor(SDL_ENABLE);  /* console owns the OS cursor while open */
+
+    /* prevent clicks from leaking to the game while console is active */
+    keydown[K_MOUSE1] = keydown[K_MOUSE2] = keydown[K_MOUSE3] = false;
+    keydown[K_MWHEELUP] = keydown[K_MWHEELDOWN] = false;
+
+    Con_ForceMouseMove();
+    /* use actual SDL button state, not the global keydown[] */
+    {
+        Uint32 btns = SDL_GetMouseState(NULL, NULL);
+        qboolean left_down = (btns & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+        if (!left_down) Con_SetMouseState(CMS_NOTPRESSED);
+        else if (con_mousestate == CMS_NOTPRESSED) Con_SetMouseState(CMS_PRESSED);
+    }
+    con_mouseclickdelay += host_frametime;
+    con_scrolldelta += con_scrollspeed * host_frametime;
+    if (fabsf(con_scrolldelta) >= 1.f) {
+        int lines = (int)con_scrolldelta;
+        Con_Scroll(lines);
+        con_scrolldelta -= lines;
+    }
+}
+
+static void Con_DrawSelectionHighlight (int x, int y, int line)
+{
+    conofs_t sb,se,b,e; size_t len;
+    if (!Con_GetNormalizedSelection(&sb,&se)) return;
+    len = Con_StrLen(line);
+    b.line = line; b.col = 0;
+    e.line = line; e.col = (int)len;
+    if (e.line != se.line && e.col == (int)len) e.col++; /* highlight EOL */
+    if (e.col > con_linewidth) e.col = con_linewidth;
+    if (!Con_IntersectRanges(&b,&e,&sb,&se)) return;
+    Draw_Fill(x + b.col*CHARSIZE, y, (e.col - b.col)*CHARSIZE, CHARSIZE, 170, 0.4f);
+}
+
+/* Map Quake's 8-bit console charset (incl. gold digits) to plain UTF-8/ASCII.
+   We strip the 0x80 color bit and translate via dequake[] (same mapping used
+   by Con_Dump_f), so pasted text is readable and digits don't disappear. */
+static size_t UTF8_FromQuake(char *dst, size_t maxbytes, const char *src)
+{
+    size_t len = 0;
+    const unsigned char *s = (const unsigned char*)src;
+    if (!dst) {
+        /* length incl. NUL, same as src */
+        while (*s++) len++;
+        return len + 1;
+    }
+    while (*s && len + 1 < maxbytes) {
+        unsigned char q = (*s++) & 0x7f;  /* drop colour bit */
+        if (q == '\n' || q == '\r' || q == '\t') {
+            dst[len++] = (char)q;         /* preserve paste-friendly whitespace */
+            continue;
+        }
+        /* translate everything else via dequake (handles gold digits, quakebar, etc.) */
+        {
+            unsigned char a = dequake[q];
+            if (!a) a = ' ';              /* ensure printable */
+            dst[len++] = (char)a;
+        }
+    }
+    dst[len] = '\0';
+    return len + 1;
+}
+
+qboolean Con_CopySelectionToClipboard(void)
+{
+	conofs_t sb, se, cur, eol;
+	char* qtext = NULL, * utf8 = NULL;
+	size_t total_bytes = 0, pos = 0, maxsize;
+
+	if (!Con_GetNormalizedSelection(&sb, &se))
+		return false;
+
+	/* -------- Pass 1: compute exact byte count -------- */
+	for (cur = sb; Con_OfsCompare(&cur, &se) <= 0; cur.line++, cur.col = 0) {
+		/* sizing pass: no need to fetch line text */
+		eol.line = cur.line; eol.col = (int)Con_StrLen(cur.line);
+		if (cur.line == se.line) eol.col = q_min(eol.col, se.col);
+		size_t n = (eol.col > cur.col) ? (size_t)(eol.col - cur.col) : 0;
+		total_bytes += n;
+		if (eol.line != se.line)
+			total_bytes += 1; /* newline we insert between lines */
+	}
+
+	if (total_bytes == 0)
+		return false;
+
+	/* Optional guardrail: cap copy size (8 MiB) to avoid giant allocations */
+	static const size_t CON_COPY_MAX = (size_t)8 * 1024 * 1024;
+	if (total_bytes > CON_COPY_MAX) {
+		Con_Warning("Selection too large to copy (%lu bytes > %lu).\n",
+			(unsigned long)total_bytes, (unsigned long)CON_COPY_MAX);
+		return false;
+	}
+
+	/* -------- Pass 2: allocate once and fill -------- */
+	qtext = (char*)malloc(total_bytes + 1);
+	if (!qtext) {
+		Con_Warning("Out of memory copying selection (alloc %lu bytes).\n",
+			(unsigned long)(total_bytes + 1));
+		return false;
+	}
+
+	for (cur = sb; Con_OfsCompare(&cur, &se) <= 0; cur.line++, cur.col = 0) {
+		const char* text = Con_GetLine(cur.line);
+		eol.line = cur.line; eol.col = (int)Con_StrLen(cur.line);
+		if (cur.line == se.line) eol.col = q_min(eol.col, se.col);
+		size_t n = (eol.col > cur.col) ? (size_t)(eol.col - cur.col) : 0;
+		if (n) {
+			memcpy(qtext + pos, text + cur.col, n);
+			pos += n;
+		}
+		if (eol.line != se.line) {
+			qtext[pos++] = '\n';
+		}
+	}
+	qtext[pos] = '\0';
+
+	/* quake->utf8 (really ASCII via dequake, preserving \n/\r/\t) */
+	maxsize = UTF8_FromQuake(NULL, 0, qtext);
+	utf8 = (char*)malloc(maxsize);
+	if (!utf8) {
+		Con_Warning("Out of memory converting selection to UTF-8 (%lu bytes).\n",
+			(unsigned long)maxsize);
+		free(qtext);
+		return false;
+	}
+	UTF8_FromQuake(utf8, maxsize, qtext);
+
+	/* On Windows, normalize to CRLF to paste nicely in Notepad etc. */
+#ifdef _WIN32
+	{
+		size_t i = 0, extra = 0;
+		while (utf8[i]) {
+			if (utf8[i] == '\n' && (i == 0 || utf8[i - 1] != '\r')) extra++;
+			i++;
+		}
+		if (extra) {
+			char* crlf = (char*)malloc(i + extra + 1);
+			if (!crlf) {
+				Con_Warning("Out of memory normalizing CRLF (%lu bytes).\n",
+					(unsigned long)(i + extra + 1));
+				SDL_SetClipboardText(utf8); /* fall back with \n */
+			}
+			else {
+				size_t w = 0;
+				for (size_t r = 0; r < i; ++r) {
+					if (utf8[r] == '\n' && (r == 0 || utf8[r - 1] != '\r'))
+						crlf[w++] = '\r';
+					crlf[w++] = utf8[r];
+				}
+				crlf[w] = 0;
+				SDL_SetClipboardText(crlf);
+				free(crlf);
+			}
+		}
+		else {
+			SDL_SetClipboardText(utf8);
+		}
+	}
+#else
+	SDL_SetClipboardText(utf8);
 #endif
-	const char* soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-	S_LocalSound(soundFile); // woods add sound to screenshot
+	free(utf8);
+	free(qtext);
+	return true;
 }
 
 /*
@@ -508,6 +1072,14 @@ void Con_Init (void)
 	Cmd_AddCommand ("clear", Con_Clear_f);
 	Cmd_AddCommand ("condump", Con_Dump_f); //johnfitz
 	con_initialized = true;
+
+	// woods #conselection
+    con_cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
+    con_cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+    con_cursor_hand  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
+    con_cursor_current = NULL;
+	// woods #conselection - start hidden; Con_UpdateMouseState/EnterCursorMode enables when console is open
+    SDL_ShowCursor(SDL_DISABLE);
 }
 
 
@@ -3112,6 +3684,8 @@ void Con_DrawConsole (int lines, qboolean drawinput)
 	const char	*text;
 	const char	*ver = ENGINE_NAME_AND_VER;
 
+    Con_UpdateMouseState(); // woods #conselection - update selection/hover each frame while console is up
+
 	if (lines <= 0)
 		return;
 
@@ -3123,28 +3697,46 @@ void Con_DrawConsole (int lines, qboolean drawinput)
 
 // draw the buffer text
 	rows = (con_vislines +7)/8;
-	y = vid.conheight - rows*8;
+       y = vid.conheight - rows*CHARSIZE;
 	rows -= 2; //for input and version lines
 	sb = (con_backscroll) ? 2 : 0;
 
-	for (i = con_current - rows + 1; i <= con_current - sb; i++, y += 8)
+       for (i = con_current - rows + 1; i <= con_current - sb; i++, y += CHARSIZE)
 	{
 		j = i - con_backscroll;
 		if (j < 0)
 			j = 0;
 		text = con_text + (j % con_totallines)*con_linewidth;
+               Con_DrawSelectionHighlight (CHARSIZE, y, j); // woods #conselection
+       }
 
-		for (x = 0; x < con_linewidth; x++)
-			Draw_Character ( (x + 1)<<3, y, text[x]);
+       y = vid.conheight - (rows+2)*CHARSIZE; // +2 for input and version lines
+       for (i = con_current - rows + 1; i <= con_current - sb; i++, y += CHARSIZE)
+       {
+               conofs_t ofs;
+               j = i - con_backscroll;
+               if (j < 0)
+                       j = 0;
+               text = con_text + (j % con_totallines)*con_linewidth;
+               ofs.line = j;
+		for (x = 0; x < con_linewidth; x++) // woods #conselection
+               {
+                       char c = text[x];
+                       ofs.col = x;
+                       /* underline hot link */
+                       if (con_hotlink && Con_OfsInRange(&ofs,&con_hotlink->begin,&con_hotlink->end))
+                               Draw_Character ((x + 1)<<3, y + 2, '_' | (c & 0x80));
+                       Draw_Character ((x + 1)<<3, y, c);
+               }
 	}
 
 // draw scrollback arrows
 	if (con_backscroll)
 	{
-		y += 8; // blank line
+		y += CHARSIZE; // blank line
 		for (x = 0; x < con_linewidth; x += 4)
 			Draw_Character ((x + 1)<<3, y, '^');
-		y += 8;
+		y += CHARSIZE;
 	}
 
 // draw the input prompt, user text, and cursor
@@ -3153,7 +3745,7 @@ void Con_DrawConsole (int lines, qboolean drawinput)
 
 //draw version number in bottom right
 	for (x = 0; x < (int)strlen(ver); x++)
-		Draw_Character ((con_linewidth - strlen(ver) + x + 2)<<3, vid.conheight - 8, ver[x] /*+ 128*/); // woods iw
+		Draw_Character ((con_linewidth - strlen(ver) + x + 2)<<3, vid.conheight - CHARSIZE, ver[x] /*+ 128*/); // woods iw
 
 	Con_DrawBirthdayMessage (); // woods #qbday - show quake's birthday for 30 seconds on june 22
 }

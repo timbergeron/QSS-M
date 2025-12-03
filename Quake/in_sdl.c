@@ -470,6 +470,8 @@ cvar_t	joy_enable = { "joy_enable", "1", CVAR_ARCHIVE };
 #if defined(USE_SDL2)
 static SDL_JoystickID joy_active_instaceid = -1;
 static SDL_GameController *joy_active_controller = NULL;
+static SDL_Cursor *cursor_ibeam = NULL; // woods #consolecursor
+static SDL_Cursor *cursor_saved_nonconsole = NULL; // woods #consolecursor
 #endif
 
 static qboolean	no_mouse = false;
@@ -751,7 +753,10 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 
 	qboolean pong_active = cl_pong.value && (cl.paused || cl.match_pause_time > 0) && key_dest == key_game; // woods #pong active?
 	qboolean gamecodecursor = (key_dest == key_game && cl.qcvm.cursorforced) || (key_dest == key_menu && cls.menu_qcvm.cursorforced);
-	wantcursor = ((key_dest == key_game && CL_IsActiveObserver() && !obs_cursor_hidden) || (key_dest == key_menu&&!bind_grab)) || gamecodecursor || !windowhasfocus; // woods no cursor needed in console
+	wantcursor = (key_dest == key_console)
+	          || ((key_dest == key_game && CL_IsActiveObserver() && !obs_cursor_hidden)
+	              || (key_dest == key_menu&&!bind_grab))
+	          || gamecodecursor || !windowhasfocus;
 	
 	if (pong_active) // woods #pong
 		wantcursor = false;
@@ -761,7 +766,7 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 	if (pong_active) // woods #pong
 		freemouse = true;
 
-	needevents = (!wantcursor) || key_dest == key_game;
+	needevents = (!wantcursor) || key_dest == key_game || key_dest == key_console; // woods #conselection
 
 	if (isDedicated)
 		return;
@@ -786,7 +791,25 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 #if defined(USE_SDL2)
 	if (wantcursor)
 	{
-		VID_UpdateCursor();
+		if (key_dest == key_console) // woods #consolecursor
+		{
+			if (!cursor_ibeam) cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+			if (cursor_ibeam && SDL_GetCursor() != cursor_ibeam)
+			{
+				/* Remember what was active before we force I-beam */
+				cursor_saved_nonconsole = SDL_GetCursor();
+				SDL_SetCursor(cursor_ibeam);
+			}
+		} else 
+		{
+			/* Leaving console: put back exactly what was there before */
+			if (SDL_GetCursor() == cursor_ibeam && cursor_saved_nonconsole) 
+			{
+				SDL_SetCursor(cursor_saved_nonconsole);
+				cursor_saved_nonconsole = NULL;
+			}
+			VID_UpdateCursor(); // custom logic still wins
+		}
 		SDL_ShowCursor(SDL_ENABLE);
 	}
 	else
@@ -982,6 +1005,9 @@ void IN_StartupJoystick (void)
 		}
 	}
 #endif
+#if defined(USE_SDL2)
+	if (!cursor_ibeam) cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM); // woods #consolecursor
+#endif
 }
 
 void IN_ShutdownJoystick (void)
@@ -1067,6 +1093,10 @@ void IN_Shutdown (void)
 	Con_DPrintf("IN_Shutdown: calling IN_ReenableOSXMouseAccel\n");
 	if (originalMouseSpeed != -1)
 		IN_ReenableOSXMouseAccel();
+#endif
+#if defined(USE_SDL2)
+	if (cursor_ibeam) { SDL_FreeCursor(cursor_ibeam); cursor_ibeam = NULL; } // woods #consolecursor
+	cursor_saved_nonconsole = NULL; // pointer owned elsewhere; just drop our reference
 #endif
 }
 
