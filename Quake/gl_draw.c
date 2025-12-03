@@ -814,6 +814,8 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 {
 	gltexture_t* texture = char_texture;
 	byte* data = NULL;
+	byte* pixel_data = NULL;
+	size_t pixel_capacity = 0;
 	qboolean free_data = false;
 	qboolean release_hunk = false;
 	int hunk_mark = 0;
@@ -832,9 +834,13 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 
 	if (format == SRC_INDEXED)
 	{
-		size_t size = (size_t)width * height;
+		if (!custom_conchars)
+			return false;
 
-		if (!size)
+		size_t expected_size = (size_t)width * height;
+		size_t bytes_read = 0;
+
+		if (!expected_size)
 			return false;
 
 		if (texture->source_file[0] && texture->source_offset)
@@ -844,25 +850,55 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 			if (COM_FOpenFile(texture->source_file, &f, NULL) == -1 || !f)
 				return false;
 
-			data = (byte*)Q_malloc(size);
-			if (fseek(f, (long)texture->source_offset, SEEK_SET) != 0 || fread(data, 1, size, f) != size)
+			data = (byte*)Q_malloc(expected_size + 8);
+			if (fseek(f, (long)texture->source_offset, SEEK_SET) != 0)
 			{
 				fclose(f);
 				free(data);
 				return false;
 			}
 
+			bytes_read = fread(data, 1, expected_size + 8, f);
+
 			fclose(f);
+
+			if (bytes_read < expected_size)
+			{
+				free(data);
+				return false;
+			}
 			free_data = true;
 		}
 		else if (!texture->source_file[0] && texture->source_offset)
 		{
 			data = (byte*)texture->source_offset;
+			bytes_read = expected_size;
 		}
 		else
 		{
 			return false;
 		}
+
+		pixel_data = data;
+		pixel_capacity = bytes_read ? bytes_read : expected_size;
+
+		if (pixel_capacity >= expected_size + 8)
+		{
+			unsigned int stored_w = 0, stored_h = 0;
+			memcpy(&stored_w, pixel_data, sizeof(stored_w));
+			memcpy(&stored_h, pixel_data + sizeof(stored_w), sizeof(stored_h));
+			stored_w = LittleLong(stored_w);
+			stored_h = LittleLong(stored_h);
+
+			if (stored_w == (unsigned int)width && stored_h == (unsigned int)height)
+			{
+				pixel_data += sizeof(stored_w) + sizeof(stored_h);
+				pixel_capacity -= sizeof(stored_w) + sizeof(stored_h);
+			}
+	}
+
+		if (pixel_capacity < expected_size)
+			goto cleanup;
 	}
 	else
 	{
@@ -886,9 +922,12 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 
 		if (malloced)
 			free_data = true;
+
+		pixel_data = data;
+		pixel_capacity = (format == SRC_RGBA) ? ((size_t)width * height * 4u) : ((size_t)width * height);
 	}
 
-	if (!data)
+	if (!pixel_data)
 	{
 		if (release_hunk)
 			Hunk_FreeToLowMark(hunk_mark);
@@ -898,9 +937,17 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 	{
 		int cell_width = width / 16;
 		int cell_height = height / 16;
+		const int accent_char_index = ('0' - 30); // tinted zero glyph used for gold digits
+		int x0, y0;
 
 		if (cell_width <= 0 || cell_height <= 0)
 			goto cleanup;
+
+		if (accent_char_index < 0 || accent_char_index >= 256)
+			goto cleanup;
+
+		x0 = (accent_char_index & 15) * cell_width;
+		y0 = (accent_char_index >> 4) * cell_height;
 
 		if (format == SRC_INDEXED)
 		{
@@ -918,19 +965,13 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 			memset(sum_g, 0, sizeof(sum_g));
 			memset(sum_b, 0, sizeof(sum_b));
 
-			for (int digit = 0; digit < 10; ++digit)
-			{
-				int ch_index = 18 + digit;
-				int row = ch_index >> 4;
-				int col = ch_index & 15;
-				int x0 = col * cell_width;
-				int y0 = row * cell_height;
-
 				for (int py = 0; py < cell_height; ++py)
 				{
 					int y = y0 + py;
 					if (y >= height)
 						continue;
+
+				byte* row_ptr = pixel_data + y * width;
 
 					for (int px = 0; px < cell_width; ++px)
 					{
@@ -942,7 +983,7 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 						if (x >= width)
 							continue;
 
-						index = data[y * width + x];
+					index = row_ptr[x];
 						if (!index)
 							continue;
 
@@ -970,7 +1011,6 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 						sum_b[index] += (unsigned int)b;
 					}
 				}
-			}
 
 			for (int i = 0; i < 256; ++i)
 			{
@@ -998,6 +1038,9 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 
 			if (best_count > 0)
 			{
+				if (best_sat < 8)
+					goto cleanup;
+
 				int best_max = q_max(best_r, q_max(best_g, best_b));
 
 				if (brightest_value > best_max && best_max > 0)
@@ -1052,14 +1095,6 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 			memset(sum_g, 0, sizeof(sum_g));
 			memset(sum_b, 0, sizeof(sum_b));
 
-			for (int digit = 0; digit < 10; ++digit)
-			{
-				int ch_index = 18 + digit;
-				int row = ch_index >> 4;
-				int col = ch_index & 15;
-				int x0 = col * cell_width;
-				int y0 = row * cell_height;
-
 				for (int py = 0; py < cell_height; ++py)
 				{
 					int y = y0 + py;
@@ -1077,7 +1112,7 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 						if (x >= width)
 							continue;
 
-						rgba = data + ((y * width + x) << 2);
+					rgba = pixel_data + ((y * width + x) << 2);
 						a = rgba[3];
 						if (!a)
 							continue;
@@ -1103,7 +1138,6 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 						sum_b[bucket] += (unsigned int)b;
 					}
 				}
-			}
 
 			for (int i = 0; i < bucket_count; ++i)
 			{
@@ -1131,6 +1165,9 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 
 			if (best_count > 0)
 			{
+				if (best_sat < 8)
+					goto cleanup;
+
 				int best_max = q_max(best_r, q_max(best_g, best_b));
 
 				if (brightest_value > best_max && best_max > 0)
