@@ -2312,7 +2312,12 @@ qboolean Sky_PeekSkyKeyFromBSP(const char* bspname,
 	{
 		char* buf = (char*)Z_Malloc(ent->filelen + 1);
 		fseek(f, ent->fileofs, SEEK_SET);
-		fread(buf, 1, ent->filelen, f);
+		size_t readlen = fread(buf, 1, ent->filelen, f);
+		if (readlen != (size_t)ent->filelen)
+		{
+			Z_Free(buf);
+			goto close_bsp;
+		}
 		buf[ent->filelen] = 0;
 
 		const char* p = COM_Parse(buf);
