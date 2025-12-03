@@ -911,6 +911,7 @@ static void VID_Restart (void)
 	TexMgr_DeleteTextureObjects ();
 	GLSLGamma_DeleteTexture ();
 	R_ScaleView_DeleteTexture ();
+	R_LightningBeam_DeleteTexture (); // woods #beamspoly
 	R_MotionBlur_DeleteTexture (); // woods #motionblur
 	R_DeleteShaders ();
 	GL_DeleteBModelVertexBuffer ();

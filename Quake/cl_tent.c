@@ -33,6 +33,30 @@ static	vec3_t	playerbeam_end; // woods #truelight
 vec3_t	NULLVEC = { 0,0,0 }; // woods for #truelight
 void vectoangles(vec3_t vec, vec3_t ang); // woods for #truelight
 
+qboolean CL_BeamTrailIsLightning(const char *trailname) // woods #beamspoly
+{
+	if (!trailname)
+		return false;
+
+	return (!strcmp(trailname, "TE_LIGHTNING1") ||
+		!strcmp(trailname, "TE_LIGHTNING2") ||
+		!strcmp(trailname, "TE_LIGHTNING3") ||
+		!strcmp(trailname, "TE_LIGHTNING4"));
+}
+
+void CL_Beam_CalculatePositions(const beam_t *b, vec3_t start, vec3_t end) // woods #beamspoly
+{
+	if (!b)
+	{
+		start[0] = start[1] = start[2] = 0;
+		end[0] = end[1] = end[2] = 0;
+		return;
+	}
+
+	VectorCopy(b->start, start);
+	VectorCopy(b->end, end);
+}
+
 static sfx_t			*cl_sfx_wizhit;
 static sfx_t			*cl_sfx_knighthit;
 static sfx_t			*cl_sfx_tink1;
@@ -66,6 +90,7 @@ void CL_UpdateBeam (qmodel_t *m, const char *trailname, const char *impactname, 
 {
 	beam_t	*b;
 	int		i;
+	qboolean	isLightning = CL_BeamTrailIsLightning(trailname); // woods #beamspoly
 
 #ifdef PSET_SCRIPT
 	{
@@ -89,6 +114,7 @@ void CL_UpdateBeam (qmodel_t *m, const char *trailname, const char *impactname, 
 			b->model = m;
 			b->starttime = cl.time - 0.001; // woods (iw) #democontrols
 			b->trailname = trailname;
+			b->lightning = isLightning; // woods #beamspoly
 			b->endtime = cl.time + 0.2;
 			VectorCopy (start, b->start);
 			VectorCopy (end, b->end);
@@ -104,6 +130,7 @@ void CL_UpdateBeam (qmodel_t *m, const char *trailname, const char *impactname, 
 			b->model = m;
 			b->starttime = cl.time - 0.001; // woods (iw) #democontrols
 			b->trailname = trailname;
+			b->lightning = isLightning; // woods #beamspoly
 			b->endtime = cl.time + 0.2;
 			VectorCopy (start, b->start);
 			VectorCopy (end, b->end);
@@ -644,8 +671,23 @@ void CL_UpdateTEnts (void)
 			// end woods for truelightning
 		}
 
-		if (!PScript_ParticleTrail(b->start, b->end, PScript_FindParticleType(b->trailname), host_frametime, b->entity, NULL, &b->trailstate))
-			continue;
+		if (b->lightning) // woods #beamspoly
+		{
+			if (cl_beams_polygons.value > 0)
+			{
+				PScript_DelinkTrailstate(&b->trailstate);
+			}
+			else
+			{
+				if (!PScript_ParticleTrail(b->start, b->end, PScript_FindParticleType(b->trailname), host_frametime, b->entity, NULL, &b->trailstate))
+					continue;
+			}
+		}
+		else
+		{
+			if (!PScript_ParticleTrail(b->start, b->end, PScript_FindParticleType(b->trailname), host_frametime, b->entity, NULL, &b->trailstate))
+				continue;
+		}
 
 	// calculate pitch and yaw
 		VectorSubtract (b->end, b->start, dist);
@@ -670,24 +712,27 @@ void CL_UpdateTEnts (void)
 				pitch += 360;
 		}
 
-	// add new entities for the lightning
+		// add new entities for the lightning
 		VectorCopy (b->start, org);
 		d = VectorNormalize(dist);
-		while (d > 0)
+		if (!(cl_beams_polygons.value > 0 && b->lightning)) // woods #beamspoly
 		{
-			ent = CL_NewTempEntity ();
-			if (!ent)
-				return;
-			VectorCopy (org, ent->origin);
-			ent->model = b->model;
-			ent->angles[0] = pitch;
-			ent->angles[1] = yaw;
-			ent->angles[2] = rand()%360;
+			while (d > 0)
+			{
+				ent = CL_NewTempEntity ();
+				if (!ent)
+					return;
+				VectorCopy (org, ent->origin);
+				ent->model = b->model;
+				ent->angles[0] = pitch;
+				ent->angles[1] = yaw;
+				ent->angles[2] = rand()%360;
 
-			//johnfitz -- use j instead of using i twice, so we don't corrupt memory
-			for (j=0 ; j<3 ; j++)
-				org[j] += dist[j]*30;
-			d -= 30;
+				//johnfitz -- use j instead of using i twice, so we don't corrupt memory
+				for (j=0 ; j<3 ; j++)
+					org[j] += dist[j]*30;
+				d -= 30;
+			}
 		}
 	}
 }

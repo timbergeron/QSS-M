@@ -114,12 +114,16 @@ typedef struct
 {
 	int		entity;
 	struct qmodel_s	*model;
+	qboolean	lightning; // woods #beamspoly
 	float	starttime; // woods (iw) #democontrols
 	float	endtime;
 	vec3_t	start, end;
 	const char *trailname;
 	struct trailstate_s *trailstate;
 } beam_t;
+
+qboolean CL_BeamTrailIsLightning(const char *trailname); // woods #beamspoly
+void CL_Beam_CalculatePositions(const beam_t *b, vec3_t start, vec3_t end); // woods #beamspoly
 
 #define	MAX_MAPSTRING	2048
 #define	MAX_DEMOS		8
@@ -478,6 +482,7 @@ extern	cvar_t	m_yaw;
 extern	cvar_t	m_forward;
 extern	cvar_t	m_side;
 
+extern	cvar_t	cl_beams_polygons; // woods #beamspoly
 extern	cvar_t	cl_truelightning; // woods for truelightning #truelight
 extern	cvar_t	gl_lightning_alpha; // woods transparent lightning #lightalpha
 extern	cvar_t	cl_say; // woods #ezsay

@@ -65,6 +65,7 @@ cvar_t	cl_minpitch = {"cl_minpitch", "-90", CVAR_ARCHIVE}; //johnfitz -- variabl
 cvar_t cl_recordingdemo = {"cl_recordingdemo", "", CVAR_ROM};	//the name of the currently-recording demo.
 cvar_t	cl_demoreel = {"cl_demoreel", "0", CVAR_ARCHIVE};
 
+cvar_t	cl_beams_polygons = {"cl_beams_polygons", "0", CVAR_ARCHIVE}; // woods #beamspoly
 cvar_t	cl_truelightning = {"cl_truelightning", "0",CVAR_ARCHIVE}; // woods for #truelight
 cvar_t	cl_say = {"cl_say","0", CVAR_ARCHIVE}; // woods #ezsay
 cvar_t  cl_afk = {"cl_afk", "0", CVAR_ARCHIVE }; // woods #smartafk
@@ -3582,6 +3583,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_recordingdemo); //spike -- for mod hacks. combine with cvar_string or something
 	Cvar_RegisterVariable (&cl_demoreel);
 
+	Cvar_RegisterVariable (&cl_beams_polygons); // woods #beamspoly
 	Cvar_RegisterVariable (&cl_truelightning); // woods for #truelight
 	Cvar_RegisterVariable (&gl_lightning_alpha); // woods for lighting alpha #lightalpha
 	Cvar_RegisterVariable (&cl_say); // woods for #ezsay

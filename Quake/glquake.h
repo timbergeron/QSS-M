@@ -521,6 +521,7 @@ void GLSLGamma_DeleteTexture (void);
 void GLSLGamma_GammaCorrect (void);
 
 void R_ScaleView_DeleteTexture (void);
+void R_LightningBeam_DeleteTexture (void); // woods #beamspoly
 
 void R_MotionBlur_DeleteTexture (void); // woods #motionblur
 

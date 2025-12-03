@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "glquake.h"
+#include <math.h> // woods #beamspoly
 
 vec3_t		modelorg, r_entorigin;
 
@@ -159,6 +160,9 @@ void LaserSight(void);
 // GLSL GAMMA CORRECTION
 //
 //==============================================================================
+
+static gltexture_t *r_lightningbeam_texture = NULL; // woods #beamspoly
+static float r_lightningbeam_scroll = 0.0f; // woods #beamspoly
 
 static GLuint r_gamma_texture;
 static GLuint r_gamma_program;
@@ -1796,6 +1800,172 @@ void R_DrawTracers(void)
 }
 
 /*
+=============
+R_LightningBeam_DeleteTexture // woods #beamspoly
+=============
+*/
+void R_LightningBeam_DeleteTexture (void)
+{
+	r_lightningbeam_texture = NULL;
+}
+
+static gltexture_t *R_LightningBeam_BuiltinTexture(void)
+{
+        if (r_lightningbeam_texture)
+                return r_lightningbeam_texture;
+
+        byte data[64 * 64 * 4];
+        for (int y = 0; y < 64; y++)
+        {
+                float vf = (float)y / 63.0f;
+                float distance = (vf - 0.5f) * 2.0f;
+                float falloff = expf(-distance * distance * 4.0f);
+
+                for (int x = 0; x < 64; x++)
+                {
+                        float uf = (float)x / 63.0f;
+                        float wave = 0.5f + 0.5f * sinf((uf * 6.2831853f) + cosf(vf * 9.4247779f));
+                        float intensity = CLAMP(0.0f, falloff * (0.6f + 0.4f * wave), 1.0f);
+
+			float brightness = CLAMP(0.0f, 0.5f + intensity * 0.5f, 1.0f);
+			float r = brightness;
+			float g = brightness;
+			float b = brightness;
+                        float a = intensity;
+
+                        int idx = (y * 64 + x) * 4;
+                        data[idx + 0] = (byte)(r * 255.0f);
+                        data[idx + 1] = (byte)(g * 255.0f);
+                        data[idx + 2] = (byte)(b * 255.0f);
+                        data[idx + 3] = (byte)(a * 255.0f);
+                }
+        }
+
+        r_lightningbeam_texture = TexMgr_LoadImage (NULL, "lightning_beam_builtin", 64, 64, SRC_RGBA, data, "", (src_offset_t)data, TEXPREF_PERSIST | TEXPREF_ALPHA | TEXPREF_LINEAR);
+        return r_lightningbeam_texture;
+}
+
+static void R_Beam_DrawQuad(const vec3_t start, const vec3_t end, const vec3_t offset, float sStart, float sEnd)
+{
+        float base = floorf(sStart);
+        float s0 = sStart - base;
+        float s1 = sEnd - base;
+        glBegin(GL_TRIANGLE_STRIP);
+        glTexCoord2f(s0, 0.0f);
+        glVertex3f(start[0] + offset[0], start[1] + offset[1], start[2] + offset[2]);
+        glTexCoord2f(s0, 1.0f);
+        glVertex3f(start[0] - offset[0], start[1] - offset[1], start[2] - offset[2]);
+        glTexCoord2f(s1, 0.0f);
+        glVertex3f(end[0] + offset[0], end[1] + offset[1], end[2] + offset[2]);
+        glTexCoord2f(s1, 1.0f);
+        glVertex3f(end[0] - offset[0], end[1] - offset[1], end[2] - offset[2]);
+        glEnd();
+}
+
+static void R_DrawLightningBeamsPolygons(void)
+{
+	if (cl_beams_polygons.value <= 0)
+		return;
+	if (!r_drawentities.value)
+		return;
+
+	gltexture_t *texture = R_LightningBeam_BuiltinTexture();
+	if (!texture)
+		return;
+
+	float thickness = cl_beams_polygons.value * 0.5f;
+
+	float repeat = 0.125f;
+
+	r_lightningbeam_scroll += host_frametime * 1.0f;
+	if (r_lightningbeam_scroll > 1000.0f || r_lightningbeam_scroll < -1000.0f)
+		r_lightningbeam_scroll = 0.0f;
+
+	float scroll = r_lightningbeam_scroll - floorf(r_lightningbeam_scroll);
+
+	GL_DisableMultitexture();
+	glDisable(GL_CULL_FACE);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+	glDepthMask(GL_FALSE);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	GL_Bind(texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	float alpha = CLAMP(0.0f, gl_lightning_alpha.value, 1.0f);
+	glColor4f(1.0f, 1.0f, 1.0f, alpha);
+
+	for (int i = 0; i < MAX_BEAMS; ++i)
+	{
+		beam_t *b = &cl_beams[i];
+		if (!b->model)
+			continue;
+		if (b->endtime < cl.time)
+			continue;
+		if (!b->lightning)
+			continue;
+
+		vec3_t start, end, beamdir, up, right, offset;
+		CL_Beam_CalculatePositions(b, start, end);
+		VectorSubtract(end, start, beamdir);
+		float length = VectorNormalize(beamdir);
+		if (length <= 0.01f)
+			continue;
+
+		VectorSubtract(r_refdef.vieworg, start, up);
+		float proj = DotProduct(up, beamdir);
+		VectorMA(up, -proj, beamdir, up);
+		if (VectorNormalize(up) == 0)
+		{
+			if (fabsf(beamdir[2]) < 0.99f)
+			{
+				up[0] = 0;
+				up[1] = 0;
+				up[2] = 1;
+			}
+			else
+			{
+				up[0] = 1;
+				up[1] = 0;
+				up[2] = 0;
+			}
+			VectorMA(up, -DotProduct(up, beamdir), beamdir, up);
+			VectorNormalize(up);
+		}
+
+		CrossProduct(beamdir, up, right);
+		if (VectorNormalize(right) == 0)
+			continue;
+
+		CrossProduct(right, beamdir, up);
+		VectorNormalize(up);
+
+		float sStart = scroll;
+		float sEnd = scroll + repeat * length;
+
+		VectorScale(right, thickness, offset);
+		R_Beam_DrawQuad(start, end, offset, sStart, sEnd);
+
+		float diag = thickness * 0.70710678f;
+		VectorScale(right, diag, offset);
+		VectorMA(offset, diag, up, offset);
+		R_Beam_DrawQuad(start, end, offset, sStart + 0.33f, sEnd + 0.33f);
+
+		VectorScale(right, diag, offset);
+		VectorMA(offset, -diag, up, offset);
+		R_Beam_DrawQuad(start, end, offset, sStart + 0.66f, sEnd + 0.66f);
+	}
+
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_BLEND);
+	glEnable(GL_CULL_FACE);
+	glDepthMask(GL_TRUE);
+	glColor3f(1, 1, 1);
+}
+
+/*
 ================
 R_RenderScene
 ================
@@ -1824,6 +1994,7 @@ void R_RenderScene (void)
 	R_DrawWorld_Water (); //johnfitz -- drawn here since they might have transparency
 
 	R_DrawEntitiesOnList (true); //johnfitz -- true means this is the pass for alpha entities
+	R_DrawLightningBeamsPolygons();
 
 	R_RenderDlights (); //triangle fan dlights -- johnfitz -- moved after water
 
