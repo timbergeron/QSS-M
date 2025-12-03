@@ -12388,6 +12388,11 @@ Server List Menu
 #define PING_COOLDOWN 2.0
 #define MAX_PING_QUEUE 5
 
+// number of worker threads used for the initial server ping sweep
+#ifndef MAX_PING_THREADS
+#define MAX_PING_THREADS 4
+#endif
+
 typedef struct {
 	const char* name;
 	const char* ip;
@@ -12407,12 +12412,14 @@ static struct {
 	int prev_cursor;
 	menuticker_t ticker;
 	qboolean scrollbar_grab;
-	servertitem_t* items;
-	int servercount;
-	int slist_first;
-	int sorted;
-	SDL_Thread* pingThreads[2];
+    servertitem_t* items;
+    int* order;
+    int servercount;
+    int slist_first;
+    qboolean pingSortDirty;
+	SDL_Thread* pingThreads[MAX_PING_THREADS];
 	qboolean initialPingComplete;
+	int initialPingThreadsRemaining;
 	int pingQueue[MAX_PING_QUEUE];
 	int pingQueueSize;
 	qboolean pingThreadRunning;
@@ -12426,7 +12433,10 @@ static struct {
 static volatile qboolean pingThreadsShouldExit = false;
 SDL_mutex* pingMutex = NULL;
 
-int ICMP_Ping_Host(const char* host);
+int UDP_Ping_Host(const char* host);
+
+static int ServersMenu_ResolveIndex(int displayIndex);
+static void SortServersByPing(qboolean lockMutex);
 
 void InitializePingMutex(void)
 {
@@ -12449,28 +12459,32 @@ void PingSingleServer(int index)
 	if (index < 0 || index >= serversmenu.servercount)
 		return;
 
+	char serverAddress[256];
+	int  previousPing;
+
 	SDL_LockMutex(pingMutex);
-	const char* serverIP = COM_StripPort(serversmenu.items[index].ip);
-	int previousPing = serversmenu.items[index].ping;
+	q_strlcpy(serverAddress, serversmenu.items[index].ip, sizeof(serverAddress));
+	previousPing = serversmenu.items[index].ping;
 	serversmenu.items[index].isLoading = true;  // Set loading flag
 	SDL_UnlockMutex(pingMutex);
 
-	int ping = ICMP_Ping_Host(serverIP);
+	int ping = UDP_Ping_Host(serverAddress);
 
 	SDL_LockMutex(pingMutex);
-	if (ping >= 0) {
+	if (ping >= 0)
+	{
 		serversmenu.items[index].ping = ping;
 	}
-	else if (previousPing >= 0) {
+	else if (previousPing >= 0)
+	{
 		serversmenu.items[index].ping = previousPing;
 	}
-	else {
+	else
+	{
 		serversmenu.items[index].ping = -1;  // -1 indicates "failed"
 	}
 	serversmenu.items[index].isLoading = false;  // Clear loading flag
 	SDL_UnlockMutex(pingMutex);
-
-	free((void*)serverIP);
 }
 
 int ProcessPingQueue(void* data)
@@ -12511,31 +12525,39 @@ int PingSingleServerThread(void* data)
 
 void TriggerServerPing(int index)
 {
+	int actualIndex;
+
 	SDL_LockMutex(pingMutex);
 	qboolean canPing = serversmenu.initialPingComplete;
+	actualIndex = ServersMenu_ResolveIndex(index);
 	SDL_UnlockMutex(pingMutex);
 
-	if (!canPing)
+	if (!canPing || actualIndex < 0)
 		return;
 
-	if (index >= 0 && index < serversmenu.servercount)
+	if (actualIndex < serversmenu.servercount)
 	{
 		double currentTime = Sys_DoubleTime();
-		if (currentTime - serversmenu.items[index].lastPingTime >= PING_COOLDOWN)
+
+		if ((currentTime - serversmenu.items[actualIndex].lastPingTime) >= PING_COOLDOWN)
 		{
 			SDL_LockMutex(pingMutex);
 			if (serversmenu.pingQueueSize < MAX_PING_QUEUE)
 			{
-				serversmenu.pingQueue[serversmenu.pingQueueSize++] = index;
-				serversmenu.items[index].lastPingTime = currentTime;
+				serversmenu.pingQueue[serversmenu.pingQueueSize++] = actualIndex;
+				serversmenu.items[actualIndex].lastPingTime = currentTime;
 			}
 			if (!serversmenu.pingThreadRunning)
 			{
 				serversmenu.pingThread = SDL_CreateThread(ProcessPingQueue, "PingQueueThread", NULL);
 				if (serversmenu.pingThread == NULL)
+				{
 					Con_DPrintf("SDL_CreateThread failed: %s\n", SDL_GetError());
+				}
 				else
+				{
 					serversmenu.pingThreadRunning = true;
+				}
 			}
 			SDL_UnlockMutex(pingMutex);
 		}
@@ -12544,7 +12566,8 @@ void TriggerServerPing(int index)
 
 int PingServers(void* data)
 {
-	if (!data) {
+	if (!data)
+	{
 		Con_DPrintf("PingServers received a null pointer\n");
 		return -1; // Return an error if data is null
 	}
@@ -12558,19 +12581,20 @@ int PingServers(void* data)
 			break;
 
 		SDL_LockMutex(pingMutex);
-		if (serversmenu.items && serversmenu.items[i].ip) {
-			const char* serverIP = COM_StripPort(serversmenu.items[i].ip);
+		if (serversmenu.items && serversmenu.items[i].ip)
+		{
+			char serverAddress[256];
+			q_strlcpy(serverAddress, serversmenu.items[i].ip, sizeof(serverAddress));
 			SDL_UnlockMutex(pingMutex);
 
-			int ping = ICMP_Ping_Host(serverIP);
+			int ping = UDP_Ping_Host(serverAddress);
 
 			SDL_LockMutex(pingMutex);
 			serversmenu.items[i].ping = (ping >= 0) ? ping : -1;
 			SDL_UnlockMutex(pingMutex);
-
-			free((void*)serverIP);
 		}
-		else {
+		else
+		{
 			SDL_UnlockMutex(pingMutex);
 			Con_DPrintf("Invalid server item or IP\n");
 		}
@@ -12580,30 +12604,37 @@ int PingServers(void* data)
 
 	// Check if this is the last thread to finish
 	SDL_LockMutex(pingMutex);
-	serversmenu.initialPingComplete = true;
+	if (serversmenu.initialPingThreadsRemaining > 0)
+		serversmenu.initialPingThreadsRemaining--;
+	if (serversmenu.initialPingThreadsRemaining <= 0)
+	{
+		serversmenu.initialPingThreadsRemaining = 0;
+		serversmenu.initialPingComplete = true;
+		serversmenu.pingSortDirty = true;
+	}
 	SDL_UnlockMutex(pingMutex);
 
 	return 0;
 }
 
-void WaitForPingThreads(SDL_Thread* thread1, SDL_Thread* thread2)
+void WaitForPingThreads(void)
 {
 	pingThreadsShouldExit = true; // Signal threads to exit
 
-	if (thread1)
+	for (int i = 0; i < MAX_PING_THREADS; ++i)
 	{
-		SDL_WaitThread(thread1, NULL);
-		thread1 = NULL; // Set to NULL after joining
-	}
-	if (thread2)
-	{
-		SDL_WaitThread(thread2, NULL);
-		thread2 = NULL; // Set to NULL after joining
+		SDL_Thread* t = serversmenu.pingThreads[i];
+		if (t)
+		{
+			SDL_WaitThread(t, NULL);
+			serversmenu.pingThreads[i] = NULL; // Set to NULL after joining
+		}
 	}
 
 	pingThreadsShouldExit = false; // Reset the exit flag
 
 	SDL_LockMutex(pingMutex);
+	serversmenu.initialPingThreadsRemaining = 0;
 	serversmenu.initialPingComplete = true;
 	SDL_UnlockMutex(pingMutex);
 }
@@ -12611,32 +12642,65 @@ void WaitForPingThreads(SDL_Thread* thread1, SDL_Thread* thread2)
 void PingAllServers(void)
 {
 	int servercount = serversmenu.servercount;
-	int mid = servercount / 2;
 
-	int* range1 = (int*)malloc(2 * sizeof(int));
-	int* range2 = (int*)malloc(2 * sizeof(int));
+	for (int i = 0; i < MAX_PING_THREADS; ++i)
+		serversmenu.pingThreads[i] = NULL;
 
-	if (!range1 || !range2) {
-		Con_DPrintf("Memory allocation failed\n");
-		if (range1) free(range1);
-		if (range2) free(range2);
+	if (servercount <= 0)
+	{
+		SDL_LockMutex(pingMutex);
+		serversmenu.initialPingThreadsRemaining = 0;
+		serversmenu.initialPingComplete = true;
+		serversmenu.pingSortDirty = true;
+		SDL_UnlockMutex(pingMutex);
 		return;
 	}
 
-	range1[0] = 0;
-	range1[1] = mid;
+	int desiredThreads = MAX_PING_THREADS;
+	if (desiredThreads > servercount)
+		desiredThreads = servercount; // don't spawn more threads than servers
 
-	range2[0] = mid;
-	range2[1] = servercount;
+	int base = servercount / desiredThreads;
+	int rem  = servercount % desiredThreads;
 
-	serversmenu.pingThreads[0] = SDL_CreateThread(PingServers, "PingServersThread1", (void*)range1);
-	serversmenu.pingThreads[1] = SDL_CreateThread(PingServers, "PingServersThread2", (void*)range2);
+	int launchedThreads = 0;
+	int start = 0;
+	for (int i = 0; i < desiredThreads; ++i)
+	{
+		int count = base + (i < rem ? 1 : 0);
+		int end = start + count;
 
-	if (serversmenu.pingThreads[0] == NULL)
-		Con_DPrintf("SDL_CreateThread failed: %s\n", SDL_GetError());
+		int* range = (int*)malloc(2 * sizeof(int));
+		if (!range)
+		{
+			Con_DPrintf("Memory allocation failed\n");
+			continue;
+		}
+		range[0] = start;
+		range[1] = end;
 
-	if (serversmenu.pingThreads[1] == NULL)
-		Con_DPrintf("SDL_CreateThread failed: %s\n", SDL_GetError());
+		char namebuf[32];
+		q_snprintf(namebuf, sizeof(namebuf), "PingServersThread%d", i + 1);
+		serversmenu.pingThreads[i] = SDL_CreateThread(PingServers, namebuf, (void*)range);
+		if (serversmenu.pingThreads[i] == NULL)
+		{
+			Con_DPrintf("SDL_CreateThread failed: %s\n", SDL_GetError());
+			free(range);
+		}
+		else
+		{
+			launchedThreads++;
+		}
+
+		start = end;
+	}
+
+	SDL_LockMutex(pingMutex);
+	serversmenu.initialPingThreadsRemaining = launchedThreads;
+	serversmenu.initialPingComplete = (launchedThreads == 0);
+	if (launchedThreads == 0)
+		serversmenu.pingSortDirty = true;
+	SDL_UnlockMutex(pingMutex);
 }
 
 struct MemoryStruct
@@ -12724,18 +12788,37 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 			break;
 		}
 
-		size_t addressLength = strlen(address) + 1 /* colon */ + 6 /* max length of port number */ + 1 /* null terminator */;
-		char* addressWithPort = malloc(addressLength);
-		if (!addressWithPort) {
-			Con_DPrintf("Memory allocation for address with port failed.\n");
-			break;
-		}
-		q_snprintf(addressWithPort, addressLength, "%s:%d", address, (int)*port);
+                size_t address_len = strlen(address);
+                qboolean needs_brackets = false;
+                if (address_len > 0)
+                {
+                        const char* colon = strchr(address, ':');
+                        const char* dot = strchr(address, '.');
 
-		servertitem_t* newItem = &(*items)[*actualServerCount];
-		newItem->name = strdup(name ? name : "Unknown");
-		newItem->ip = strdup(addressWithPort);
-		free(addressWithPort);
+                        if (address[0] == '[')
+                                needs_brackets = false; // already bracketed
+                        else if (colon && (!dot || dot > colon))
+                                needs_brackets = true; // treat colon-only hosts as IPv6 literals
+                }
+
+                size_t addressLength = address_len + 1 /* colon */ + 6 /* max length of port number */ + 1 /* null terminator */;
+                if (needs_brackets)
+                        addressLength += 2; /* enclosing [] */
+
+                char* addressWithPort = malloc(addressLength);
+                if (!addressWithPort) {
+                        Con_DPrintf("Memory allocation for address with port failed.\n");
+                        break;
+                }
+                if (needs_brackets)
+                        q_snprintf(addressWithPort, addressLength, "[%s]:%d", address, (int)*port);
+                else
+                        q_snprintf(addressWithPort, addressLength, "%s:%d", address, (int)*port);
+
+                servertitem_t* newItem = &(*items)[*actualServerCount];
+                newItem->name = strdup(name ? name : "Unknown");
+                newItem->ip = strdup(addressWithPort);
+                free(addressWithPort);
 		newItem->users = numPlayers;
 		newItem->maxusers = maxPlayers ? (int)*maxPlayers : 0;
 		newItem->map = strdup(map ? map : "Unknown");
@@ -12780,17 +12863,84 @@ void CurlServerList (servertitem_t** items, int* actualServerCount)
 	curl_global_cleanup();
 }
 
-int compareServerUsers (const void* a, const void* b) 
+static int CompareServerPingByIndex(const void* a, const void* b)
 {
-	const servertitem_t* serverA = (const servertitem_t*)a;
-	const servertitem_t* serverB = (const servertitem_t*)b;
+        int indexA = *(const int*)a;
+        int indexB = *(const int*)b;
+        const servertitem_t* serverA = &serversmenu.items[indexA];
+        const servertitem_t* serverB = &serversmenu.items[indexB];
 
-	int userDifference = serverB->users - serverA->users; // First, sort by user count in descending order
-	if (userDifference != 0) 
-		return userDifference;
+        int pingA = (serverA->ping >= 0) ? serverA->ping : INT_MAX;
+        int pingB = (serverB->ping >= 0) ? serverB->ping : INT_MAX;
 
-	return q_strcasecmp(serverA->name, serverB->name);
-	return q_strcasecmp(serverA->name, serverB->name);
+        if (pingA != pingB)
+                return pingA - pingB;
+
+        int userDifference = serverB->users - serverA->users;
+        if (userDifference != 0)
+                return userDifference;
+
+        return q_strcasecmp(serverA->name, serverB->name);
+}
+
+static int ServersMenu_ResolveIndex(int displayIndex)
+{
+        if (displayIndex < 0 || displayIndex >= serversmenu.servercount)
+                return -1;
+
+        if (!serversmenu.order)
+                return displayIndex;
+
+        return serversmenu.order[displayIndex];
+}
+
+static void SortServersByPing(qboolean lockMutex)
+{
+        qboolean locked = false;
+
+        if (lockMutex && pingMutex)
+        {
+                SDL_LockMutex(pingMutex);
+                locked = true;
+        }
+
+        if (!serversmenu.items || !serversmenu.order)
+        {
+                serversmenu.pingSortDirty = false;
+                if (locked)
+                        SDL_UnlockMutex(pingMutex);
+                return;
+        }
+
+        int selectedActual = ServersMenu_ResolveIndex(serversmenu.list.cursor);
+
+        if (serversmenu.servercount >= 2)
+                qsort(serversmenu.order, serversmenu.servercount, sizeof(serversmenu.order[0]), CompareServerPingByIndex);
+
+        if (selectedActual >= 0)
+        {
+                for (int i = 0; i < serversmenu.servercount; ++i)
+                {
+                        if (serversmenu.order[i] == selectedActual)
+                        {
+                                serversmenu.list.cursor = i;
+                                break;
+                        }
+                }
+        }
+        else if (serversmenu.servercount > 0 &&
+                (serversmenu.list.cursor < 0 || serversmenu.list.cursor >= serversmenu.servercount))
+        {
+                serversmenu.list.cursor = CLAMP(0, serversmenu.list.cursor, serversmenu.servercount - 1);
+        }
+
+        if (serversmenu.list.viewsize > 0)
+                M_List_Rescroll(&serversmenu.list);
+
+        serversmenu.pingSortDirty = false;
+
+        if (locked)
+                SDL_UnlockMutex(pingMutex);
 }
 
 void RemoveDuplicateServers (servertitem_t** items, int* actualServerCount) 
@@ -12816,9 +12966,11 @@ void RemoveDuplicateServers (servertitem_t** items, int* actualServerCount)
 
 void FetchAndSortServers (void) 
 {
-	free(serversmenu.items);
-	serversmenu.items = NULL;
-	int actualServerCount = 0;
+        free(serversmenu.items);
+        serversmenu.items = NULL;
+        free(serversmenu.order);
+        serversmenu.order = NULL;
+        int actualServerCount = 0;
 
 	for (int i = 0; i < HOSTCACHESIZE; i++) // Fetch and add servers from the dp list
 	{
@@ -12854,15 +13006,24 @@ void FetchAndSortServers (void)
 
 	RemoveDuplicateServers(&serversmenu.items, &actualServerCount);
 
-	// Sorting servers based on the number of users in descending order, if more than one server is present
-	if (actualServerCount > 1)
-		qsort(serversmenu.items, actualServerCount, sizeof(servertitem_t), compareServerUsers);
+        serversmenu.servercount = actualServerCount;
+        serversmenu.list.numitems = actualServerCount;
 
-	serversmenu.servercount = actualServerCount;
-	serversmenu.list.numitems = actualServerCount;
+        if (actualServerCount > 0)
+        {
+                serversmenu.order = (int*)malloc(sizeof(int) * actualServerCount);
+                if (serversmenu.order)
+                {
+                        for (int i = 0; i < actualServerCount; ++i)
+                                serversmenu.order[i] = i;
+                }
+        }
 
-	if (serversmenu.list.cursor >= actualServerCount)
-		serversmenu.list.cursor = actualServerCount > 0 ? actualServerCount - 1 : 0;
+	serversmenu.pingSortDirty = false;
+	SortServersByPing(false);
+
+        if (serversmenu.list.cursor >= actualServerCount)
+                serversmenu.list.cursor = actualServerCount > 0 ? actualServerCount - 1 : 0;
 	if (serversmenu.slist_first > serversmenu.list.cursor)
 		serversmenu.slist_first = serversmenu.list.cursor;
 }
@@ -12880,6 +13041,7 @@ void M_Menu_ServerList_f (void)
 	serversmenu.servercount = 0;
 	serversmenu.scrollbar_grab = false;
 	serversmenu.initialPingComplete = false;
+	serversmenu.initialPingThreadsRemaining = 0;
 	serversmenu.pingQueueSize = 0;
 	serversmenu.pingThreadRunning = false;
 	pingThreadsShouldExit = false;
@@ -12904,12 +13066,15 @@ void M_ServerList_Draw (void)
 	y = 28;
 	cols = 36;
 
-	serversmenu.x = x;
-	serversmenu.y = y;
-	serversmenu.cols = cols;
+        serversmenu.x = x;
+        serversmenu.y = y;
+        serversmenu.cols = cols;
 
-	if (!keydown[K_MOUSE1])
-		serversmenu.scrollbar_grab = false;
+        if (serversmenu.pingSortDirty)
+                SortServersByPing(true);
+
+        if (!keydown[K_MOUSE1])
+                serversmenu.scrollbar_grab = false;
 
 	if (serversmenu.prev_cursor != serversmenu.list.cursor) {
 		serversmenu.prev_cursor = serversmenu.list.cursor;
@@ -12922,89 +13087,91 @@ void M_ServerList_Draw (void)
 	Draw_String(x, y - 28, "Servers");
 	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
 
-	M_List_GetVisibleRange(&serversmenu.list, &firstvis, &numvis);
-	for (i = 0; i < numvis; i++) {
-		int idx = i + firstvis;
-		qboolean selected = (idx == serversmenu.list.cursor);
+        M_List_GetVisibleRange(&serversmenu.list, &firstvis, &numvis);
+        for (i = 0; i < numvis; i++) {
+                int idx = i + firstvis;
+                qboolean selected = (idx == serversmenu.list.cursor);
+                int actualIndex = ServersMenu_ResolveIndex(idx);
 
-		servertitem_t server;
-		server.active = false;
+                if (actualIndex < 0 || actualIndex >= serversmenu.servercount)
+                        continue;
 
-		if (cls.state == ca_connected) // highlight if connected to a server in the list
-		{ 
-			if (!strcmp(lastmphost, serversmenu.items[idx].ip))
-				server.active = true;
-			else if (Valid_Domain(lastmphost))
-				server.active = !strcmp((ResolveHostname(lastmphost)), serversmenu.items[idx].ip);
-			else if (Valid_IP(lastmphost))
-				server.active = !strcmp(lastmphost, serversmenu.items[idx].ip);
-		}
-			else
-				server.active = false;
+                const servertitem_t* server = &serversmenu.items[actualIndex];
+                qboolean isActive = false;
 
-		char pingStrBuffer[8];
-		char* pingStrToPrint = pingStrBuffer;
+                if (cls.state == ca_connected) // highlight if connected to a server in the list
+                {
+                        if (!strcmp(lastmphost, server->ip))
+                                isActive = true;
+                        else if (Valid_Domain(lastmphost))
+                                isActive = !strcmp((ResolveHostname(lastmphost)), server->ip);
+                        else if (Valid_IP(lastmphost))
+                                isActive = !strcmp(lastmphost, server->ip);
+                }
 
-		if (serversmenu.items[idx].ping == -1) {
-			pingStrBuffer[0] = '\0';
-		}
-		else {
-			q_snprintf(pingStrBuffer, sizeof(pingStrBuffer), "%3i", serversmenu.items[idx].ping);
-			while (*pingStrToPrint == ' ' && *pingStrToPrint != '\0') {
-				pingStrToPrint++;
-			}
-		}
+                char pingStrBuffer[8];
+                char* pingStrToPrint = pingStrBuffer;
 
-		char linePrefixStr[32];
-		q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-16.16s  %-6.6s %2u/%2u ",
-			serversmenu.items[idx].name,
-			serversmenu.items[idx].map,
-			serversmenu.items[idx].users,
-			serversmenu.items[idx].maxusers);
+                if (server->ping == -1) {
+                        pingStrBuffer[0] = '\0';
+                }
+                else {
+                        q_snprintf(pingStrBuffer, sizeof(pingStrBuffer), "%3i", server->ping);
+                        while (*pingStrToPrint == ' ' && *pingStrToPrint != '\0') {
+                                pingStrToPrint++;
+                        }
+                }
 
-		int current_y_pos = y + i * 8;
-		int current_x_pos = x;
+                char linePrefixStr[32];
+                q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-16.16s  %-6.6s %2u/%2u ",
+                        server->name,
+                        server->map,
+                        server->users,
+                        server->maxusers);
 
-		if (server.active) {
-			M_PrintWhite(current_x_pos, current_y_pos, linePrefixStr);
-		}
-		else {
-			M_Print(current_x_pos, current_y_pos, linePrefixStr);
-		}
+                int current_y_pos = y + i * 8;
+                int current_x_pos = x;
 
-		int ping_display_x = current_x_pos + ((int)strlen(linePrefixStr) * 8);
+                if (isActive) {
+                        M_PrintWhite(current_x_pos, current_y_pos, linePrefixStr);
+                }
+                else {
+                        M_Print(current_x_pos, current_y_pos, linePrefixStr);
+                }
 
-		if (pingStrToPrint[0] != '\0') {
-			int current_ping = serversmenu.items[idx].ping;
-			if (current_ping <= 60) {
-				M_PrintWhite(ping_display_x, current_y_pos, pingStrToPrint); // Green for pings <= 60
-			}
-			else if (current_ping <= 120) {
-				M_Print2(ping_display_x, current_y_pos, pingStrToPrint); // White for pings 61-120
-			}
-			else { // Pings > 120
-				if (server.active) { // Active servers with high ping remain white
-					M_PrintWhite(ping_display_x, current_y_pos, pingStrToPrint);
-				}
-				else { // Inactive servers with high ping use default M_Print color
-					M_Print(ping_display_x, current_y_pos, pingStrToPrint);
-				}
-			}
-		}
+                int ping_display_x = current_x_pos + ((int)strlen(linePrefixStr) * 8);
 
-		if (selected)
-			M_DrawCharacter(x - 8, current_y_pos, 12 + ((int)(realtime * 4) & 1));
+                if (pingStrToPrint[0] != '\0') {
+                        int current_ping = server->ping;
+                        if (current_ping <= 60) {
+                                M_PrintWhite(ping_display_x, current_y_pos, pingStrToPrint); // Green for pings <= 60
+                        }
+                        else if (current_ping <= 120) {
+                                M_Print2(ping_display_x, current_y_pos, pingStrToPrint); // White for pings 61-120
+                        }
+                        else { // Pings > 120
+                                if (isActive) { // Active servers with high ping remain white
+                                        M_PrintWhite(ping_display_x, current_y_pos, pingStrToPrint);
+                                }
+                                else { // Inactive servers with high ping use default M_Print color
+                                        M_Print(ping_display_x, current_y_pos, pingStrToPrint);
+                                }
+                        }
+                }
 
-		char infoStr[40];
+                if (selected)
+                        M_DrawCharacter(x - 8, current_y_pos, 12 + ((int)(realtime * 4) & 1));
 
-		q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", serversmenu.items[idx].name);
-		if (selected)
-			M_PrintWhite(x, y + serversmenu.list.viewsize * 8 + 12, infoStr);
+                char infoStr[40];
 
-		q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", serversmenu.items[idx].ip);
-		if (selected)
-			M_PrintWhite(x, y + serversmenu.list.viewsize * 8 + 20, infoStr);
-	}
+                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server->name);
+                if (selected)
+                        M_PrintWhite(x, y + serversmenu.list.viewsize * 8 + 12, infoStr);
+
+                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server->ip);
+                if (selected)
+                        M_PrintWhite(x, y + serversmenu.list.viewsize * 8 + 20, infoStr);
+        }
 
 	if (M_List_GetOverflow(&serversmenu.list) > 0) {
 		M_List_DrawScrollbar(&serversmenu.list, x + cols * 8 - 8, y);
@@ -13018,12 +13185,20 @@ void M_ServerList_Draw (void)
 
 qboolean M_Servers_Match(int index, char initial)
 {
-	return q_tolower(serversmenu.items[index].name[0]) == initial;
+        int actualIndex = ServersMenu_ResolveIndex(index);
+        if (actualIndex < 0)
+                return false;
+
+        const char* name = serversmenu.items[actualIndex].name;
+        if (!name || !name[0])
+                return false;
+
+        return q_tolower(name[0]) == initial;
 }
 
 void CleanupPingThreads()
 {
-	WaitForPingThreads(serversmenu.pingThreads[0], serversmenu.pingThreads[1]);
+	WaitForPingThreads();
 
 	if (serversmenu.pingThreadRunning)
 	{
@@ -13086,18 +13261,24 @@ void M_ServerList_Key(int key)
 		M_Menu_LanConfig_f();
 		break;
 
-	case K_ENTER:
-	case K_KP_ENTER:
-	case K_ABUTTON:
-	enter:
-		m_return_state = m_state;
-		m_return_onerror = true;
-		key_dest = key_game;
-		m_state = m_none;
-		IN_UpdateGrabs();
-		Cbuf_AddText(va("connect \"%s\"\n", serversmenu.items[serversmenu.list.cursor].ip));
-		CleanupPingThreads();
-		break;
+        case K_ENTER:
+        case K_KP_ENTER:
+        case K_ABUTTON:
+        enter:
+                {
+                        int actualIndex = ServersMenu_ResolveIndex(serversmenu.list.cursor);
+                        if (actualIndex < 0 || actualIndex >= serversmenu.servercount)
+                                break;
+
+                        m_return_state = m_state;
+                        m_return_onerror = true;
+                        key_dest = key_game;
+                        m_state = m_none;
+                        IN_UpdateGrabs();
+                        Cbuf_AddText(va("connect \"%s\"\n", serversmenu.items[actualIndex].ip));
+                        CleanupPingThreads();
+                }
+                break;
 
 	case K_MOUSE1: // woods #mousemenu
 		x = m_mousex - serversmenu.x - (serversmenu.cols - 1) * 8;

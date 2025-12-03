@@ -30,9 +30,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <sys/stat.h> // woods #demolistsort
 #include "bgmusic.h" // woods #musiclist
 #include "json.h" // woods #mapdescriptions
-#ifndef _WIN32
+#ifdef _WIN32 // woods #udplist
+	#include "wsaerror.h"
+#else
 #include <dirent.h>
 #endif
+#include <ctype.h> // woods #udplist
+
+#define MAX_SERVER_ADDRESS_LEN 256 // woods #udplist
 
 extern cvar_t	pausable;
 extern cvar_t	nomonsters; // woods #nomonsters (ironwail)
@@ -2322,8 +2327,8 @@ static void Host_Resurrect_f (void)
 			val = GetEdictFieldValue(sv_player, ofs);
 			if (val)                           /* field is addressable       */
 				val->_float = 0.0f;
+					}
 		}
-	}
 
 	/* mission-pack friendly invulnerability timers */
 	ofs = ED_FindFieldOffset("invincible_finished");
@@ -2383,114 +2388,402 @@ static void Host_Resurrect_f (void)
 
 /*
 ==================
-ICMP_Ping_Host -- woods #icmp
+ParseServerAddress -- woods #udplist
 ==================
 */
+static qboolean ParseServerAddress(const char* input, char* hostbuf, size_t hostbufsize, int* portout)
+{
+	int default_port;
+	const char* portpart;
+
+	if (!input || !*input || !hostbuf || !hostbufsize || !portout)
+		return false;
+
+	default_port = (net_hostport > 0 && net_hostport <= 65535) ? net_hostport : DEFAULTnet_hostport;
+	if (default_port <= 0 || default_port > 65535)
+		default_port = 26000;
+	*portout = default_port;
+
+	if (*input == '[')
+{
+		const char* end = strchr(input, ']');
+		size_t len;
+
+		if (!end)
+			return false;
+
+		if (end <= input + 1)
+			return false;
+
+		len = (size_t)(end - (input + 1));
+		if (len + 1 > hostbufsize)
+			return false;
+
+		memcpy(hostbuf, input + 1, len);
+		hostbuf[len] = '\0';
+
+		portpart = end + 1;
+		if (*portpart == '\0')
+			return true;
+
+		if (*portpart != ':')
+			return false;
+
+		portpart++;
+		if (!*portpart)
+			return false;
+
+		for (const char* p = portpart; *p; ++p)
+			if (!isdigit((unsigned char)*p))
+				return false;
+
+		*portout = atoi(portpart);
+		if (*portout <= 0 || *portout > 65535)
+			return false;
+
+		return true;
+	}
+	else
+	{
+		int colon_count = 0;
+		const char* last_colon = NULL;
+
+		for (const char* p = input; *p; ++p)
+		{
+			if (*p == ':')
+			{
+				colon_count++;
+				last_colon = p;
+			}
+		}
+
+		if (colon_count == 1 && last_colon)
+		{
+			size_t len;
+			const char* p;
+
+			portpart = last_colon + 1;
+			if (!*portpart)
+				return false;
+
+			for (p = portpart; *p; ++p)
+				if (!isdigit((unsigned char)*p))
+					return false;
+
+			*portout = atoi(portpart);
+			if (*portout <= 0 || *portout > 65535)
+				return false;
+
+			len = (size_t)(last_colon - input);
+			if (len == 0 || len + 1 > hostbufsize)
+				return false;
+
+			memcpy(hostbuf, input, len);
+			hostbuf[len] = '\0';
+			return true;
+		}
+
+		if (colon_count > 1)
+		{
+			size_t len = strlen(input);
+			if (len + 1 > hostbufsize)
+				return false;
+
+			q_strlcpy(hostbuf, input, hostbufsize);
+			return true;
+	}
+
+		{
+			size_t len = strlen(input);
+			if (len + 1 > hostbufsize)
+				return false;
+
+			q_strlcpy(hostbuf, input, hostbufsize);
+			return true;
+		}
+		}
+	}
+
+static size_t BuildNetQuakePingQuery(unsigned char* buffer, size_t bufsize) // woods #udplist
+{
+	const char gamename[] = "QUAKE";
+	unsigned char* out = buffer;
+	size_t required = 4 /* header */ + 1 /* command */ + sizeof(gamename) /* string incl. null */ + 1 /* protocol */;
+
+	if (bufsize < required)
+		return 0;
+
+	out += 4; // leave space for the header
+	*out++ = CCREQ_SERVER_INFO;
+	memcpy(out, gamename, sizeof(gamename));
+	out += sizeof(gamename);
+	*out++ = NET_PROTOCOL_VERSION;
+
+	{
+		unsigned int header = NETFLAG_CTL | ((unsigned int)((out - buffer)) & NETFLAG_LENGTH_MASK);
+		int beheader = BigLong((int)header);
+		memcpy(buffer, &beheader, sizeof(beheader));
+	}
+
+	return (size_t)(out - buffer);
+	}
+
+typedef struct ping_query_s // woods #udplist
+{
+	const unsigned char* payload;
+	size_t payload_len;
+	const char* label;
+} ping_query_t;
+
+static int NormalizePingResult(int ping_ms) // woods #udplist
+{
+	const int normalization_bias = 14;
+
+	if (ping_ms < 0)
+		return ping_ms;
+
+	ping_ms -= normalization_bias;
+	if (ping_ms < 0)
+		ping_ms = 0;
+
+	return ping_ms;
+}
+
+static qboolean SendPingPacket(sys_socket_t sock, const struct sockaddr* addr, socklen_t addrlen, const ping_query_t* query, qboolean is_retry) // woods #udplist
+{
+	if (!query || !query->payload || query->payload_len == 0)
+		return false;
+
+	for (;;)
+{
+		if (sendto(sock, (const char*)query->payload, (int)query->payload_len, 0, addr, addrlen) != SOCKET_ERROR)
+			return true;
+
+		{
+			int err = SOCKETERRNO;
+#ifdef _WIN32
+			if (err == WSAEINTR)
+#else
+			if (err == EINTR)
+#endif
+				continue; // interrupted, retry immediately
+
+			Con_DPrintf("sendto() %s%s failed: %s\n", is_retry ? "retry " : "", query->label, socketerror(err));
+		}
+		return false;
+	}
+}
+
+/*
+==================
+Socket_Ping_Host -- woods #udplist
+==================
+*/
+static int Socket_Ping_Host(const char* host, int port)
+{
+	struct addrinfo hints;
+	struct addrinfo* res = NULL;
+	struct addrinfo* rp;
+	char portstr[16];
+	int ping_result = -1;
+	unsigned char nq_query[32];
+	size_t nq_query_len;
+	static const unsigned char qw_getinfo[] = { 0xFF, 0xFF, 0xFF, 0xFF, 'g', 'e', 't', 'i', 'n', 'f', 'o', '\n' };
+	static const unsigned char qw_status[] = { 0xFF, 0xFF, 0xFF, 0xFF, 's', 't', 'a', 't', 'u', 's', '\n' };
+	static const unsigned char dp_getchallenge[] = { 0xFF, 0xFF, 0xFF, 0xFF, 'g', 'e', 't', 'c', 'h', 'a', 'l', 'l', 'e', 'n', 'g', 'e', '\n' };
+	int ret;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_protocol = IPPROTO_UDP;
+	hints.ai_family = AF_UNSPEC;
+
+	q_snprintf(portstr, sizeof(portstr), "%d", port);
+
+	nq_query_len = BuildNetQuakePingQuery(nq_query, sizeof(nq_query));
+
+	ret = getaddrinfo(host, portstr, &hints, &res);
+	if (ret != 0)
+	{
+#ifdef _WIN32
+		Con_DPrintf("getaddrinfo failed for %s:%s (%d)\n", host, portstr, ret);
+#else
+		Con_DPrintf("getaddrinfo failed for %s:%s (%s)\n", host, portstr, gai_strerror(ret));
+#endif
+		return -1;
+	}
+
+	for (rp = res; rp; rp = rp->ai_next)
+	{
+		sys_socket_t sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (sock == INVALID_SOCKET)
+		{
+			Con_DPrintf("socket() failed: %s\n", socketerror(SOCKETERRNO));
+			continue;
+		}
+
+		{
+			const ping_query_t base_queries[] = {
+				{qw_getinfo,      sizeof(qw_getinfo),      "getinfo"},
+				{qw_status,       sizeof(qw_status),       "status"},
+				{dp_getchallenge, sizeof(dp_getchallenge), "getchallenge"},
+			};
+			ping_query_t queries[Q_COUNTOF(base_queries) + 1];
+			size_t   query_count = 0;
+			qboolean sent_any = false;
+			double   start_time = 0.0;
+			double   next_resend_time = 0.0;
+			const double resend_interval = 0.5;
+			const double max_wait_time = 1.5;
+
+			if (nq_query_len > 0)
+			{
+				queries[query_count].payload = nq_query;
+				queries[query_count].payload_len = nq_query_len;
+				queries[query_count].label = "netquake";
+				++query_count;
+			}
+
+			for (size_t i = 0; i < Q_COUNTOF(base_queries); ++i)
+				queries[query_count++] = base_queries[i];
+
+			for (size_t i = 0; i < query_count; ++i)
+	{ 
+				if (SendPingPacket(sock, rp->ai_addr, (socklen_t)rp->ai_addrlen, &queries[i], false))
+				{
+					if (!sent_any)
+					{
+						start_time = Sys_DoubleTime();
+						next_resend_time = start_time + resend_interval;
+						sent_any = true;
+					}
+				}
+			}
+
+			if (sent_any)
+			{
+				double deadline = start_time + max_wait_time; // allow a little longer for servers to answer
+
+				while (ping_result < 0)
+				{
+					double now = Sys_DoubleTime();
+					double remaining = deadline - now;
+					fd_set readfds;
+					struct timeval tv;
+					int sel;
+
+					if (remaining <= 0)
+			break;
+
+					if (now >= next_resend_time && now < deadline)
+					{
+						for (size_t i = 0; i < query_count; ++i)
+							SendPingPacket(sock, rp->ai_addr, (socklen_t)rp->ai_addrlen, &queries[i], true);
+
+						next_resend_time = now + resend_interval;
+						continue;
+					}
+
+					FD_ZERO(&readfds);
+					FD_SET(sock, &readfds);
+
+					if (remaining >= 1.0)
+					{
+						tv.tv_sec = (int)remaining;
+						tv.tv_usec = (int)((remaining - tv.tv_sec) * 1000000.0);
+		}
+					else
+					{
+						tv.tv_sec = 0;
+						tv.tv_usec = (int)(remaining * 1000000.0);
+						if (tv.tv_usec <= 0)
+							tv.tv_usec = 1000;
+	}
 
 #ifdef _WIN32
-int ICMP_Ping_Host(const char* host)
-{
-	char command[256];
-	char buffer[128];
-	snprintf(command, sizeof(command), "ping -n 1 -w 150 %s", host);
-
-	HANDLE hRead, hWrite;
-	SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
-
-	if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
-		Con_DPrintf("Failed to create pipe\n");
-		return -1;
-	}
-
-	STARTUPINFO si = { sizeof(STARTUPINFO) };
-	PROCESS_INFORMATION pi;
-	si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-	si.hStdOutput = hWrite;
-	si.hStdError = hWrite;
-	si.wShowWindow = SW_HIDE;  // Prevents a window from popping up
-
-	if (!CreateProcess(NULL, command, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-		Con_DPrintf("Failed to execute command: %s\n", command);
-		CloseHandle(hWrite);
-		CloseHandle(hRead);
-		return -1;
-	}
-
-	CloseHandle(hWrite);
-
-	// Read the output
-	DWORD bytesRead;
-	BOOL success;
-	float rtt = -1;
-	while (success = ReadFile(hRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL), success&& bytesRead > 0) {
-		buffer[bytesRead] = '\0';
-		char* rtt_start = strstr(buffer, "time=");
-		if (rtt_start != NULL) {
-			sscanf(rtt_start, "time=%f", &rtt);
-			break;
-		}
-	}
-
-	CloseHandle(hRead);
-	WaitForSingleObject(pi.hProcess, INFINITE);
-	CloseHandle(pi.hProcess);
-	CloseHandle(pi.hThread);
-
-	if (rtt >= 0) {
-		Con_DPrintf("RTT calculated: %.2f ms\n", rtt);
-		return (int)rtt;
-	}
-	else {
-		Con_DPrintf("Failed to retrieve RTT\n");
-		return -1;
-	}
-}
-#else  //  linux/macOS
-int ICMP_Ping_Host(const char* host)
-{
-	char command[256];
-	char buffer[128];
-
-#ifdef __APPLE__
-	snprintf(command, sizeof(command), "ping -c 1 -W 200 %s", host);
-#elif defined(__linux__)
-	snprintf(command, sizeof(command), "ping -c 1 -W 1 %s", host);
+					sel = selectsocket(0, &readfds, NULL, NULL, &tv);
 #else
-	snprintf(command, sizeof(command), "ping -c 1 %s", host);
+					sel = selectsocket((int)(sock + 1), &readfds, NULL, NULL, &tv);
 #endif
+					if (sel > 0 && FD_ISSET(sock, &readfds))
+					{
+						unsigned char buffer[2048];
+						struct sockaddr_storage from;
+						socklen_t fromlen = sizeof(from);
+						int received;
 
-	FILE* fp = popen(command, "r");
-	if (fp == NULL) {
-		perror("popen failed");
-		return -1;
+						for (;;)
+						{
+							received = recvfrom(sock, (char*)buffer, sizeof(buffer), 0, (struct sockaddr*)&from, &fromlen);
+							if (received >= 0)
+								break;
+
+							{
+								int err = SOCKETERRNO;
+#ifdef _WIN32
+								if (err == WSAEINTR)
+#else
+								if (err == EINTR)
+#endif
+									continue; // interrupted, try again immediately
+
+								Con_DPrintf("recvfrom() failed: %s\n", socketerror(err));
+							}
+							break;
 	}
 
-	Con_DPrintf("Executing command: %s\n", command);
+						if (received > 0)
+						{
+							double elapsed = (Sys_DoubleTime() - start_time) * 1000.0;
+							if (elapsed < 0)
+								elapsed = 0;
 
-	float rtt = -1;
-
-	while (fgets(buffer, sizeof(buffer), fp) != NULL) // Read the output line by line to find the RTT
-	{ 
-		char* rtt_start = strstr(buffer, "time=");
-		if (rtt_start != NULL) {
-			rtt_start += 5; // Move past "time=" to the number
-			rtt = strtof(rtt_start, NULL);
-			Con_DPrintf("RTT calculated: %.2f ms\n", rtt);
-			break;
-		}
-	}
-
-	int status = pclose(fp);
-	if (status == 0 && rtt != -1) {
-		Con_DPrintf("Host %s is reachable with RTT %.2f ms.\n", host, rtt);
-		return (int)rtt;
-	}
-	else {
-		Con_DPrintf("Host %s is not reachable or RTT calculation failed.\n", host);
-		return -1;
+							ping_result = NormalizePingResult((int)(elapsed + 0.5));
+							break;
 	}
 }
+					else if (sel == SOCKET_ERROR)
+					{
+						int err = SOCKETERRNO;
+#ifdef _WIN32
+						if (err == WSAEINTR)
+#else
+						if (err == EINTR)
 #endif
+							continue; // interrupted, keep waiting within the deadline
+
+						Con_DPrintf("select() failed: %s\n", socketerror(err));
+						break;
+					}
+				}
+			}
+		}
+
+		closesocket(sock);
+
+		if (ping_result >= 0)
+			break;
+	}
+
+	freeaddrinfo(res);
+	return ping_result;
+}
+
+/*
+==================
+UDP_Ping_Host -- woods #udplist
+==================
+*/
+int UDP_Ping_Host(const char* host)
+{
+	char hostbuf[MAX_SERVER_ADDRESS_LEN];
+	int port;
+
+	if (!ParseServerAddress(host, hostbuf, sizeof(hostbuf), &port))
+		return -1;
+
+	return Socket_Ping_Host(hostbuf, port);
+}
 
 /*
 ==================
@@ -2522,24 +2815,26 @@ static void Host_Ping_f (void)
 			return;
 		}
 
-		const char* host_no_port = COM_StripPort(n);
-
-		if (Valid_IP(host_no_port) || Valid_Domain(host_no_port))
 		{
-			int rtt = ICMP_Ping_Host(host_no_port);
+			char host_only[MAX_SERVER_ADDRESS_LEN];
+			int ping_port;
+
+			if (!ParseServerAddress(n, host_only, sizeof(host_only), &ping_port))
+		{
+				Con_Printf("address not valid %s\n", n);
+				return;
+			}
+
+			if (Valid_IP(host_only) || Valid_Domain(host_only))
+		{
+				int rtt = Socket_Ping_Host(host_only, ping_port);
 			if (rtt >= 0)
-			{
 				Con_Printf("%i ms\n", rtt);
-			}
 			else
-			{
-				Con_Printf("ping failed, host may not accept ICMP pings or is non-responsive\n");
-			}
-			free((void*)host_no_port);
+					Con_Printf("ping failed, server did not respond\n");
 			return;
 		}
-		else
-		{
+
 			Con_Printf("address not valid %s\n", n);
 			return;
 		}
