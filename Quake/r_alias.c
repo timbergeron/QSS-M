@@ -2150,7 +2150,7 @@ void R_DrawAliasModel (entity_t *e)
 					qboolean isSelf = sb->userinfo == cl.scores[cl.viewentity - 1].userinfo;
 
 
-					if ((isTeamColorSet || isEnemyColorSet) && !cls.demoplayback && !isSelf) // woods #enemycolors, do we run it?
+                if ((isTeamColorSet || isEnemyColorSet) && !cls.demoplayback && !isSelf && key_dest != key_menu) // woods #enemycolors, do we run it?
 					{
 						if (isTeamColorSet && !isEnemyColorSet) // team color active, enemy blank
 							t = isSamePants ? TexMgr_ColormapTexture(tex.base, team, team) : TexMgr_ColormapTexture(tex.base, sb->pants, sb->shirt);
