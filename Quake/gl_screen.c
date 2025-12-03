@@ -1539,6 +1539,10 @@ SCR_DrawMatchClock    woods (Adapted from Sbar_DrawFrags from r00k) draw match c
 #define MATCHCLOCK_REF_W 1920.0f
 #define MATCHCLOCK_REF_H 1080.0f
 
+// Track current minute-digit count (1-3) for the numeric match clock (modes 1/2)
+// Baseline alignment assumes 3 digits; other HUD elements can offset relative to this
+static int scr_matchclock_minute_digits = 3;
+
 void SCR_DrawMatchClock(void)
 {
 	char			num[22] = "empty";
@@ -1620,6 +1624,28 @@ void SCR_DrawMatchClock(void)
 			sprintf(num, " 0:%02d", cl.seconds - 128);
 
 		// now lets draw the clocks
+
+		// Always update scr_matchclock_minute_digits based on the current clock string
+		// so other HUD elements (like differentials) can align even when the clock
+		// itself is hidden or drawn in a different mode.
+		{
+			char* p_clock = num;
+			int minutes_for_digits = 0;
+
+			while (*p_clock == ' ')
+				p_clock++;
+
+			if (*p_clock >= '0' && *p_clock <= '9')
+			{
+				minutes_for_digits = (*p_clock++ - '0');
+				if (*p_clock >= '0' && *p_clock <= '9')
+					minutes_for_digits = minutes_for_digits * 10 + (*p_clock++ - '0');
+				if (*p_clock >= '0' && *p_clock <= '9')
+					minutes_for_digits = minutes_for_digits * 10 + (*p_clock++ - '0');
+			}
+
+			scr_matchclock_minute_digits = (minutes_for_digits >= 100) ? 3 : ((minutes_for_digits >= 10) ? 2 : 1);
+		}
 
 		if (!strcmp(num, "empty"))
 			return;
@@ -1919,6 +1945,103 @@ static void SCR_DrawPositiveDiffString(int x, int y, const char* str) // woods #
         }
 }
 
+static void SCR_DrawFFADifferential(void) // woods
+{
+	int player_index;
+	scoreboard_t* player;
+	int highest_score = 0;
+	int second_highest = 0;
+	int player_score = 0;
+	qboolean found_highest = false;
+	qboolean found_second = false;
+	qboolean found_player = false;
+	int leaders_at_highest = 0;
+	char diff_str[16];
+
+	if (cl.viewentity <= 0 || cl.viewentity > cl.maxclients)
+		return;
+
+	if (cl.intermission || qeintermission || crxintermission || scr_viewsize.value >= 120)
+		return;
+
+	player_index = cl.viewentity - 1;
+	player = &cl.scores[player_index];
+
+	if (!player->name[0] || player->spectator || player->frags == -99)
+		return;
+
+	Sbar_SortFrags();
+
+	if (!scoreboardlines)
+		return;
+
+	for (int i = 0; i < scoreboardlines; ++i)
+	{
+		int idx = fragsort[i];
+		scoreboard_t* entry = &cl.scores[idx];
+
+		if (!entry->name[0])
+			continue;
+
+		if (entry->spectator || entry->frags == -99)
+			continue;
+
+		if (!found_highest) {
+			highest_score = entry->frags;
+			found_highest = true;
+			leaders_at_highest = 1;
+		}
+		else {
+			if (entry->frags == highest_score) {
+				leaders_at_highest++;
+			}
+			else if (!found_second) {
+				// first score strictly below the leader = runner-up
+				second_highest = entry->frags;
+				found_second = true;
+			}
+		}
+
+		if (idx == player_index) {
+			player_score = entry->frags;
+			found_player = true;
+			// don't break; we still need to count ties and find runner-up
+		}
+	}
+
+	if (!found_highest)
+		return;
+
+	if (!found_player)
+		player_score = player->frags;
+
+	// If player is tied for the lead, show nothing
+	if (player_score == highest_score && leaders_at_highest >= 2)
+		return;
+
+	// Sole leader: show +diff vs runner-up (if any)
+	if (player_score == highest_score) {
+		if (!found_second) // no runner-up exists (e.g., only one valid player)
+			return;
+
+		GL_SetCanvas(CANVAS_TOPRIGHT4);
+		q_snprintf(diff_str, sizeof(diff_str), "+%d", player_score - second_highest);
+		{
+			int digit_adjust_px = (scr_matchclock_minute_digits - 1) * 24; // missing digits
+			SCR_DrawPositiveDiffString(120 - (strlen(diff_str) << 3) - digit_adjust_px, 11, diff_str);
+		}
+		return;
+}
+
+	// Player is behind the leader: show negative diff vs the leader
+	GL_SetCanvas(CANVAS_TOPRIGHT4);
+	q_snprintf(diff_str, sizeof(diff_str), "%d", player_score - highest_score);
+	{
+		int digit_adjust_px = (scr_matchclock_minute_digits - 1) * 24; // missing digits
+		M_Print(120 - (strlen(diff_str) << 3) - digit_adjust_px, 11, diff_str);
+	}
+}
+
 /*====================
 SCR_DrawTeamDifferential -- woods - draw the team differential display #capturediff #matchhud
 ====================*/
@@ -2009,7 +2132,7 @@ void SCR_DrawTeamDifferential(int y, qboolean use_demo_calculation, int redteamp
 						else
 							snprintf(num, sizeof(num), "+%-i", diff);
 
-					SCR_DrawPositiveDiffString(120 - (strlen(num) << 3), y, num);
+					SCR_DrawPositiveDiffString(120 - (strlen(num) << 3), 32, num);
 					}
 
 					else if ((atoi(tcolor) == tc2) || atoi(tcolor) == (tc2 / 17)) // bottom score [color] is the same as your color
@@ -2018,7 +2141,7 @@ void SCR_DrawTeamDifferential(int y, qboolean use_demo_calculation, int redteamp
 							snprintf(num, sizeof(num), "-%-i (%i)", diff, capdiff);
 						else
 							snprintf(num, sizeof(num), "-%-i", diff);
-						M_Print(120 - (strlen(num) << 3), y + 20, num);
+						M_Print(120 - (strlen(num) << 3), 32 + 20, num);
 					}				
 				}
 
@@ -2035,7 +2158,9 @@ void SCR_DrawMatchScores(void)
 	qboolean use_demo_calculation = false;
 	int teamscores;
 	char buf[10];
+	char buf2[10];
 	const char* uiplaymode;
+	const char* siplaymode;
 
 	if (scr_viewsize.value >= 130)
 		return;
@@ -2044,6 +2169,17 @@ void SCR_DrawMatchScores(void)
 	if (cls.demoplayback && cl.teamscores && (!cl.teamscores[0].colors || !cl.teamscores[1].colors)) {
 		use_demo_calculation = true;
 			}
+
+	uiplaymode = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "mode", buf, sizeof(buf)); // serverinfo
+	siplaymode = Info_GetKey(cl.serverinfo, "playmode", buf2, sizeof(buf2)); // userinfo (qecrx)
+
+	if (scr_match_hud.value && cl.gametype == GAME_DEATHMATCH)   // woods for console var off and on
+	{
+		if (!q_strcasecmp(uiplaymode, "ffa") || !q_strcasecmp(siplaymode, "ffa"))
+		{
+			SCR_DrawFFADifferential();
+		}
+	}
 
 	// Only proceed if it's a team game
 	teamscores = cl.teamgame;
@@ -2071,7 +2207,6 @@ void SCR_DrawMatchScores(void)
 	{
 		GL_SetCanvas(CANVAS_TOPRIGHT3);
 
-		uiplaymode = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "mode", buf, sizeof(buf)); // userinfo (qecrx)
 
 		if (!q_strcasecmp(uiplaymode, "ffa"))
 		return;

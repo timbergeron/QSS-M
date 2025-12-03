@@ -2286,7 +2286,7 @@ void GL_SetCanvas (canvastype newcanvas)
 	case CANVAS_TOPRIGHT4: // woods #hud_diff
 		s = ((float)glwidth / vid.conwidth); //use console scale
 		glOrtho(0, 320, 200, 0, -99999, 99999);
-		glViewport(glx + glwidth - 200 * s, (gly + glheight - 212 * s), 320 * s, 200 * s);
+		glViewport(glx + glwidth - 200 * s, (gly + glheight - 200 * s), 320 * s, 200 * s);
 		break;
 	default:
 		Sys_Error ("GL_SetCanvas: bad canvas type");
