@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // console.c
 
 #include <sys/types.h>
+#include <stdint.h> // woods #debuglogsize
 #include <time.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -1777,11 +1778,262 @@ static void Con_Print (const char *txt)
 	}
 }
 
+#if defined(_WIN32) // woods #debuglogsize
+#include <io.h>
+typedef __int64        log_off_t;
+#define q_lseek        _lseeki64
+#define q_truncate(fd, sz)  _chsize_s((fd), (sz))
+#define q_write        _write
+#define q_read         _read
+/* 64-bit stat wrappers and unlink for Windows */
+typedef struct _stat64 q_stat_t;
+#define q_fstat        _fstat64
+#define q_unlink       _unlink
+#else
+#include <unistd.h>
+typedef off_t          log_off_t;
+#define q_lseek        lseek
+#define q_truncate     ftruncate
+#define q_write        write
+#define q_read         read
+/* POSIX stat wrappers and unlink */
+typedef struct stat    q_stat_t;
+#define q_fstat        fstat
+#define q_unlink       unlink
+#endif
 
 // borrowed from uhexen2 by S.A. for new procs, LOG_Init, LOG_Close
 
-static char	logfilename[MAX_OSPATH];	// current logfile name
-static int	log_fd = -1;			// log file descriptor
+static char logfilename[MAX_OSPATH];    // current logfile name
+static int  log_fd = -1;                // log file descriptor
+static log_off_t log_cap = 0; // woods #condebug
+#define LOG_CAP_MAX_MIB   2048  /* clamp to avoid overflow: 2 GiB max */
+#define LOG_CAP_MIN_MIB   1
+static SDL_mutex *log_mutex = NULL; /* serialize log I/O */
+static const char rollover_banner[] =
+    "--- log rolled (size cap reached) ---\n";
+static const char startup_banner[] =
+    "--- log truncated at start-up (exceeded cap) ---\n";
+
+static void safe_write(int fd, const char* buf, size_t len) {
+	while (len) {
+		int n = (int)q_write(fd, buf, (unsigned int)len);
+		if (n > 0) {
+			buf += n;
+			len -= (size_t)n;
+		}
+		else if (n < 0 && errno == EINTR)
+			continue;
+		else
+			break;
+	}
+}
+
+static void LOG_Lock(void)   { if (log_mutex) SDL_LockMutex(log_mutex); }
+static void LOG_Unlock(void) { if (log_mutex) SDL_UnlockMutex(log_mutex); }
+
+/* simple helper: "-condebug [N]" where N is MiB. No N => unlimited */
+static log_off_t LOG_ParseCapFromCLI(void)
+{
+    int idx = COM_CheckParm("-condebug");
+    if (!idx)
+        return -1;   /* logging disabled */
+
+    const char *arg = NULL;
+
+    /* Accept:  -condebug 5     OR   -condebug=5   */
+    if (idx + 1 < com_argc)
+        arg = com_argv[idx + 1];
+
+    if (!arg || !q_isdigit(arg[0])) {
+        /* try "-condebug=5" */
+        const char *eq = strchr(com_argv[idx], '=');
+        if (eq)
+            arg = eq + 1;
+    }
+
+    if (!arg || !q_isdigit(arg[0]))
+        return 0; /* flag with no size or junk value => unlimited */
+
+    char *endptr = NULL;
+    long long mib = strtoll(arg, &endptr, 10);
+    if (endptr && *endptr)
+        return 0; /* not a clean number */
+
+    if (mib < LOG_CAP_MIN_MIB)
+        return 0;
+    if (mib > LOG_CAP_MAX_MIB)
+        mib = LOG_CAP_MAX_MIB;
+
+    /* use 64-bit intermediate to avoid overflow when scaling to bytes */
+    int64_t bytes = (int64_t)mib * 1024 * 1024;
+    if (bytes <= 0)
+        return 0;
+
+    return (log_off_t)bytes;
+}
+
+/* --------------------------------------------------------------------------
+ * LOG_RollTail_Locked
+ *  Keep the newest part of the file so the total stays <= log_cap.
+ *  Writes a banner at the top explaining why it rolled.
+ *  CALLER MUST HOLD LOG_Lock().
+ * -------------------------------------------------------------------------- */
+static void LOG_RollTail_Locked(const char *reason)
+{
+    if (log_fd == -1 || log_cap <= 0)
+        return;
+
+    q_stat_t st;
+    if (q_fstat(log_fd, &st) != 0)
+    { return; }
+
+    /* Calculate banner length once */
+    size_t banner_len = reason ? strlen(reason) : 0;
+
+    /* Leave ~1 KB headroom for the banner (and future writes). */
+    const log_off_t headroom = 1024;
+    /* Caps smaller than ~2 KB get truncated instead of rolling. */
+    log_off_t keep = (log_cap <= headroom + 1024) ? 0 : log_cap - headroom;
+    if (keep < 0) keep = 0;
+
+    /* Guard against tiny caps that can't fit the banner */
+    if (keep <= (log_off_t)banner_len) keep = 0;
+
+    if ((log_off_t)st.st_size <= keep)   /* already small enough */
+    { return; }
+
+    /* If keep is 0, just truncate and write banner */
+    if (keep == 0) {
+        q_lseek(log_fd, 0, SEEK_SET);
+        if (q_truncate(log_fd, 0) != 0) {
+            /* If truncate fails, try to close and reopen */
+            close(log_fd);
+#ifdef _WIN32
+            log_fd = open(logfilename, O_RDWR | O_CREAT | O_TRUNC | O_APPEND | O_BINARY, 0666);
+#else
+            log_fd = open(logfilename, O_RDWR | O_CREAT | O_TRUNC | O_APPEND, 0666);
+#endif
+            if (log_fd == -1) {
+                return; /* Give up */
+            }
+        }
+        if (reason)
+            safe_write(log_fd, reason, banner_len);
+        return;
+    }
+
+    log_off_t start = (log_off_t)st.st_size - keep;
+    if (start < 0) start = 0;
+
+    /* Chunked tail copy via temporary file to bound memory usage */
+    {
+        char tmpname[MAX_OSPATH];
+        q_snprintf(tmpname, sizeof(tmpname), "%s.tmp", logfilename);
+
+        /* Open temp file */
+#ifdef _WIN32
+        int tmp_fd = open(tmpname, O_RDWR | O_CREAT | O_TRUNC | O_BINARY, 0666);
+#else
+        int tmp_fd = open(tmpname, O_RDWR | O_CREAT | O_TRUNC, 0666);
+#endif
+        if (tmp_fd == -1)
+            goto roll_fallback;
+
+        const size_t chunk_size = (size_t)1 << 20; /* 1 MiB */
+        char *buf = (char *)malloc(chunk_size);
+        if (!buf)
+        {
+            close(tmp_fd);
+            q_unlink(tmpname);
+            goto roll_fallback;
+        }
+
+        if (q_lseek(log_fd, start, SEEK_SET) == (log_off_t)-1)
+        {
+            free(buf);
+            close(tmp_fd);
+            q_unlink(tmpname);
+            goto roll_fallback;
+        }
+
+        /* Copy desired tail into temp file */
+        {
+            log_off_t remaining = keep;
+            while (remaining > 0)
+            {
+                size_t to_read = (size_t)((remaining > (log_off_t)chunk_size) ? chunk_size : remaining);
+                int rd = (int)q_read(log_fd, buf, (unsigned int)to_read);
+                if (rd <= 0)
+                {
+                    free(buf);
+                    close(tmp_fd);
+                    q_unlink(tmpname);
+                    goto roll_fallback;
+                }
+                safe_write(tmp_fd, buf, (size_t)rd);
+                remaining -= (log_off_t)rd;
+            }
+        }
+
+        /* Truncate original and write banner + tail from temp */
+        q_lseek(log_fd, 0, SEEK_SET);
+        if (q_truncate(log_fd, 0) != 0)
+        {
+            /* If truncate fails, try to close and reopen */
+            close(log_fd);
+#ifdef _WIN32
+            log_fd = open(logfilename, O_RDWR | O_CREAT | O_TRUNC | O_APPEND | O_BINARY, 0666);
+#else
+            log_fd = open(logfilename, O_RDWR | O_CREAT | O_TRUNC | O_APPEND, 0666);
+#endif
+            if (log_fd == -1)
+            {
+                free(buf);
+                close(tmp_fd);
+                q_unlink(tmpname);
+                return; /* Give up */
+            }
+        }
+
+        if (reason)
+            safe_write(log_fd, reason, banner_len);
+
+        /* Rewind temp and stream back into original */
+        q_lseek(tmp_fd, 0, SEEK_SET);
+        for (;;)
+        {
+            int rd = (int)q_read(tmp_fd, buf, (unsigned int)chunk_size);
+            if (rd <= 0)
+                break;
+            safe_write(log_fd, buf, (size_t)rd);
+        }
+
+        free(buf);
+        close(tmp_fd);
+        q_unlink(tmpname);
+        return;
+    }
+
+roll_fallback:
+    /* Fallback: full truncate and banner only */
+    q_lseek(log_fd, 0, SEEK_SET);
+    if (q_truncate(log_fd, 0) != 0) {
+        /* If truncate fails, try to close and reopen */
+        close(log_fd);
+#ifdef _WIN32
+        log_fd = open(logfilename, O_RDWR | O_CREAT | O_TRUNC | O_APPEND | O_BINARY, 0666);
+#else
+        log_fd = open(logfilename, O_RDWR | O_CREAT | O_TRUNC | O_APPEND, 0666);
+#endif
+        if (log_fd == -1) {
+            return; /* Give up */
+        }
+    }
+    if (reason)
+        safe_write(log_fd, reason, banner_len);
+    return;
+}
 
 /*
 ================
@@ -1790,13 +2042,28 @@ Con_DebugLog
 */
 void Con_DebugLog(const char *msg)
 {
-	if (log_fd == -1)
+	if (!con_debuglog || !msg)
 		return;
 
-	ssize_t bytes_written = write(log_fd, msg, strlen(msg)); // woods
-	if (bytes_written == -1) {
-		fprintf(stderr, "Error writing to debug log: %s\n", strerror(errno));
+	size_t msg_len = strlen(msg);
+
+	LOG_Lock();
+	if (log_fd == -1) {
+		LOG_Unlock();
+		return;
+	}
+
+    if (log_cap > 0) {
+        q_stat_t st;
+        if (!q_fstat(log_fd, &st)) {
+			if ((log_off_t)st.st_size + (log_off_t)msg_len > log_cap) {
+				LOG_RollTail_Locked(rollover_banner);
+			}
+		}
 }
+
+	safe_write(log_fd, msg, msg_len);
+	LOG_Unlock();
 }
 
 
@@ -3790,13 +4057,14 @@ void Con_NotifyBox (const char *text)
 }
 
 
-void LOG_Init (quakeparms_t *parms)
+void LOG_Init (quakeparms_t *parms) // woods #debuglogsize
 {
 	time_t	inittime;
 	char	session[24];
 
-	if (!COM_CheckParm("-condebug"))
-		return;
+	log_cap = LOG_ParseCapFromCLI();
+	if (log_cap < 0)
+		return; /* no -condebug => no logging */
 
 	inittime = time (NULL);
 	strftime (session, sizeof(session), "%m/%d/%Y %H:%M:%S", localtime(&inittime));
@@ -3804,24 +4072,40 @@ void LOG_Init (quakeparms_t *parms)
 
 //	unlink (logfilename);
 
-	log_fd = open (logfilename, O_WRONLY | O_CREAT | O_APPEND, 0666); // woods append, not overwite log
+#ifdef _WIN32
+	log_fd = open (logfilename, O_RDWR | O_CREAT | O_APPEND | O_BINARY, 0666);
+#else
+	log_fd = open (logfilename, O_RDWR | O_CREAT | O_APPEND, 0666);
+#endif
 	if (log_fd == -1)
 	{
 		fprintf (stderr, "Error: Unable to create log file %s\n", logfilename);
 		return;
 	}
 
+	if (!log_mutex) log_mutex = SDL_CreateMutex();
 	con_debuglog = true;
 	Con_DebugLog (va("\nLOG started on: %s \n\n", session)); // woods add a line
 
+    if (log_cap > 0) {
+        q_stat_t st;
+        LOG_Lock();
+        if (!q_fstat(log_fd, &st) && (log_off_t)st.st_size > log_cap) {
+			LOG_RollTail_Locked(startup_banner);
+		}
+		LOG_Unlock();
+	}
 }
 
 void LOG_Close (void)
 {
 	if (log_fd == -1)
 		return;
+	LOG_Lock();
 	close (log_fd);
+	con_debuglog = false;
 	log_fd = -1;
+	LOG_Unlock();
 }
 
 // woods #discord
