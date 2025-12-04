@@ -284,7 +284,11 @@ void GLAlias_CreateShaders (void)
 		"	if (isOutlinePass == 1 && outlineWidth > 0.0)\n"
 		"	{\n"
 		"		// Add the scaled normal for outline\n"
-		"		lerpedVert = basePos + vec4(transformedNormal * outlineWidth * outlineScale, 0.0);\n"
+			"		float weightSum = BoneWeight.x + BoneWeight.y + BoneWeight.z + BoneWeight.w;\n"
+			"		if (abs(weightSum - 1.0) < 0.001)\n"
+			"			lerpedVert = basePos + vec4(-transformedNormal * outlineWidth * outlineScale, 0.0);\n"
+			"		else\n"
+			"			lerpedVert = basePos + vec4(transformedNormal * outlineWidth * outlineScale, 0.0);\n"
 		"	}\n"
 		"	else\n"
 		"	{\n"
@@ -498,6 +502,7 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 		return 0.0f;
 
 	float radius;
+	qboolean isMD5Model = false;
 	maliasframedesc_t* frame = &paliashdr->frames[e->frame];
 
 	// Calculate radius based on model format
@@ -533,29 +538,18 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 
 	case PV_IQM:
 	{
-		// Check if this is an MD5 model
+		// Calculate radius for IQM/MD5 models
 		const iqmvert_t* verts = (const iqmvert_t*)((byte*)paliashdr + paliashdr->vertexes);
 		qboolean isMD5 = true;
 
-		// Check if this is an MD5 model by examining weight sums
+		// Determine if this baked IQM vertex buffer originated from an MD5
 		for (int i = 0; i < paliashdr->numverts && isMD5; i++)
 		{
-			float weightSum = 0;
-			for (int j = 0; j < 4; j++)
-			{
-				weightSum += verts[i].weight[j];
-			}
-			// MD5 weights always sum to exactly 1.0
-			if (fabs(weightSum - 1.0f) > 0.001f)
-			{
+			float weightSum = verts[i].weight[0] + verts[i].weight[1] + verts[i].weight[2] + verts[i].weight[3];
+			if (weightSum < 0.999f || weightSum > 1.001f)
 				isMD5 = false;
 			}
-		}
 
-		if (isMD5)
-			return 0.0f; // Disable outlines for MD5 models
-
-		// For non-MD5 IQM models, calculate radius
 		float maxDist = 0.0f;
 		if (lerpdata->bonestate)
 		{
@@ -588,9 +582,27 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 					scaledVert[2] * scaledVert[2]);
 				maxDist = q_max(maxDist, dist);
 			}
+			radius = maxDist;
 		}
+		else
+		{
+			// For static models (no bone state), calculate radius from raw vertices
+			for (int i = 0; i < paliashdr->numverts; i++)
+			{
+				float scaledVert[3];
+				// Apply scale (usually 1.0 for IQM/MD5 but consistent with animated path)
+				scaledVert[0] = verts[i].xyz[0] * paliashdr->scale[0];
+				scaledVert[1] = verts[i].xyz[1] * paliashdr->scale[1];
+				scaledVert[2] = verts[i].xyz[2] * paliashdr->scale[2];
 
+				float dist = sqrt(scaledVert[0] * scaledVert[0] +
+					scaledVert[1] * scaledVert[1] +
+					scaledVert[2] * scaledVert[2]);
+				maxDist = q_max(maxDist, dist);
+			}
 		radius = maxDist;
+		}
+		isMD5Model = isMD5;
 		break;
 	}
 
@@ -623,6 +635,8 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 
 	float modelScale = 50.0f / q_max(radius, 1.0f);
 	float finalScale = modelScale / 1.5;
+	if (isMD5Model)
+		finalScale *= 0.25f; // MD5 models render larger in this space; halve outline width to match others
 	float cvarValue = CLAMP(1.0f, r_outline.value, 5.0f);
 
 	return cvarValue * finalScale;
