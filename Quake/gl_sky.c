@@ -544,6 +544,7 @@ void Sky_ClearAll (void)
 	int i;
 
 	skyroom_enabled = false;
+	externalskyloaded = false; // woods #fastsky2
 	skybox_name[0] = 0;
 	for (i=0; i<6; i++)
 		skybox_textures[i] = NULL;
@@ -1467,8 +1468,9 @@ void Sky_DrawSky (void)
 	else
 		glColor3fv (skyflatcolor);
 #ifndef SDL_THREADS_DISABLED
-	if (((skybox_name[0] || externalskyloaded) && (r_fastsky.value == 2) && RSceneCache_DrawSkySurfDepth()) ||
-		(skybox_name[0] && !r_fastsky.value && RSceneCache_DrawSkySurfDepth())) // woods -- #fastsky2
+	if (skybox_name[0] &&
+		((r_fastsky.value == 2) || !r_fastsky.value) &&
+		RSceneCache_DrawSkySurfDepth()) // woods -- #fastsky2
 	{	//we have no surfaces to process... fill all sides. its probably still faster.
 		for (i=0 ; i<6 ; i++)
 		{
