@@ -831,16 +831,52 @@ void GL_CreateSurfaceLightmap (qmodel_t *model, msurface_t *surf)
 
 // Check if triangle has a ~zero area
 // https://en.wikipedia.org/wiki/Collinearity
-static qboolean R_ArePointsColinear(const vec3_t v1, const vec3_t v2, const vec3_t v3)
+static qboolean R_ArePointsColinear(const float *v1, const float *v2, const float *v3)
 {
 	vec3_t d0, d1, cross;
 
 	VectorSubtract(v2, v1, d0);
 	VectorSubtract(v3, v2, d1);
 
+	// Prevent T-junctions by only removing vertices that are very close to their neighbors.
+	// If edges are long, we keep the vertex even if it's collinear.
+	if (DotProduct(d0, d0) > 1.0f || DotProduct(d1, d1) > 1.0f)
+		return false;
+
 	CrossProduct(d0, d1, cross);
 
-	return DotProduct(cross, cross) < EPSILON;
+	if (DotProduct(cross, cross) >= EPSILON)
+		return false;
+
+	// Check texture coordinates (indices 3, 4)
+	d0[0] = v2[3] - v1[3];
+	d0[1] = v2[4] - v1[4];
+	d0[2] = 0;
+
+	d1[0] = v3[3] - v2[3];
+	d1[1] = v3[4] - v2[4];
+	d1[2] = 0;
+
+	CrossProduct(d0, d1, cross);
+
+	if (DotProduct(cross, cross) >= EPSILON)
+		return false;
+
+	// Check lightmap coordinates (indices 5, 6)
+	d0[0] = v2[5] - v1[5];
+	d0[1] = v2[6] - v1[6];
+	d0[2] = 0;
+
+	d1[0] = v3[5] - v2[5];
+	d1[1] = v3[6] - v2[6];
+	d1[2] = 0;
+
+	CrossProduct(d0, d1, cross);
+
+	if (DotProduct(cross, cross) >= EPSILON)
+		return false;
+
+	return true;
 }
 
 static void R_RemoveColinearVertices(glpoly_t* poly, float new_verts[][VERTEXSIZE])
