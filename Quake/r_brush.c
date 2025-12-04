@@ -1456,7 +1456,7 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 	else
 	{
 	// set to full bright if no light data
-		for (i=0 ; i<size ; i++)
+		for (i=0 ; i<size * 3; i++) // woods -- fix lightmap initialization for full bright surfaces
 			blocklights[i] = 0xffff;	//don't use memset, it oversaturates FAR too much with hdr...
 	}
 
