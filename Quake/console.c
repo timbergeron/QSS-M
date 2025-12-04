@@ -86,6 +86,7 @@ cvar_t		con_notifyfadetime = {"con_notifyfadetime", "0.5", CVAR_ARCHIVE}; // woo
 cvar_t		con_colmax = { "con_colmax", "0", CVAR_ARCHIVE}; // woods #consolecols
 cvar_t		con_coldirection = { "con_coldirection", "0", CVAR_ARCHIVE}; // woods #consolecols
 cvar_t		con_notifydiscord = {"con_notifydiscord", "", CVAR_ARCHIVE}; // woods #discord
+cvar_t		con_typing = {"con_typing", "1", CVAR_ARCHIVE}; // woods #typing...
 
 char		con_lastcenterstring[1024]; //johnfitz
 
@@ -474,6 +475,37 @@ static void Con_ScreenToCanvas (int x, int y, int *outx, int *outy)
     float py = (y - gly) * (float)vid.conheight / glheight + lines;
     *outx = (int)(px + 0.5f);
     *outy = (int)(py + 0.5f);
+}
+
+static void Con_TrimTrailingSpaces(char* str) // woods #typing...
+{
+	if (!str)
+		return;
+
+	size_t len = strlen(str);
+	while (len > 0)
+	{
+		unsigned char ch = (unsigned char)str[len - 1] & 0x7F;
+		if (ch != ' ')
+			break;
+
+		str[--len] = '\0';
+	}
+}
+
+static void Con_GetShortName(const char* full_name, char* out, size_t out_size) // woods #typing...
+{
+	if (!out || out_size == 0)
+		return;
+
+	if (!full_name)
+	{
+		out[0] = '\0';
+		return;
+	}
+
+	q_snprintf(out, out_size, "%.15s", full_name);
+	Con_TrimTrailingSpaces(out);
 }
 
 static int Con_OfsCompare (const conofs_t *a, const conofs_t *b)
@@ -1064,6 +1096,7 @@ void Con_Init (void)
 	Cvar_RegisterVariable (&con_notifyfade); // woods #confade
 	Cvar_RegisterVariable (&con_notifyfadetime); // woods #confade
 	Cvar_RegisterVariable (&con_notifydiscord); // woods #discord
+	Cvar_RegisterVariable (&con_typing); // woods #typing...
 	Cvar_SetCallback (&con_notifydiscord, &ConNotifyDiscord_Callback); // woods #discord
 
 
@@ -3937,6 +3970,123 @@ static void Con_DrawBirthdayMessage (void)
 	}
 }
 
+static void Con_DrawTypingStatus(void) // woods #typing...
+{
+	scoreboard_t* typing_players[2];
+	int total_typing = 0;
+
+	if (!con_typing.value)
+		return;
+
+	if (cls.state != ca_connected || cl.maxclients <= 0)
+		return;
+
+	int local_index = cl.viewentity - 1;
+
+	for (int i = 0; i < cl.maxclients; ++i)
+	{
+		scoreboard_t* score = &cl.scores[i];
+
+		if (!score->name[0])
+			continue;
+
+		if (i == local_index && !developer.value)
+			continue;
+
+		char chatbuf[8];
+		const char* chat_value = Info_GetKey(score->userinfo, "chat", chatbuf, sizeof(chatbuf));
+		int chat_flags = (chat_value && *chat_value) ? atoi(chat_value) : 0;
+
+		if (!(chat_flags & CIF_CHAT))
+			continue;
+
+		if (total_typing < 2)
+			typing_players[total_typing] = score;
+
+		total_typing++;
+	}
+
+	if (total_typing == 0)
+		return;
+
+	char message[128];
+	char name[16] = {0};
+	char name1[16] = {0};
+	char name2[16] = {0};
+
+	if (total_typing == 1)
+	{
+		Con_GetShortName(typing_players[0]->name, name, sizeof(name));
+	}
+	else if (total_typing == 2)
+	{
+		Con_GetShortName(typing_players[0]->name, name1, sizeof(name1));
+		Con_GetShortName(typing_players[1]->name, name2, sizeof(name2));
+	}
+	else
+	{
+		q_strlcpy(message, "Several players are typing...", sizeof(message));
+	}
+
+	const int base_x = 8;
+	const int base_y = vid.conheight - 7;
+	const int dots_width = 3 * 8;
+	const int gap = 6;
+
+	float console_scale = scr_conscale.value;
+	if (console_scale <= 0.0f)
+		console_scale = 1.0f;
+
+	float target_scale = console_scale - 1.0f;
+	if (target_scale <= 0.0f)
+		target_scale = console_scale;
+
+	const float scale_factor = target_scale / console_scale;
+
+	glPushMatrix();
+	glTranslatef((float)base_x, (float)base_y, 0.0f);
+	glScalef(scale_factor, scale_factor, 1.0f);
+
+	Draw_StringAnimatedDots(0, -3, "...");
+
+	if (total_typing == 1)
+	{
+		const char* suffix = " is typing...";
+		int x = dots_width + gap;
+
+		// Name at full opacity
+		Draw_String(x, -1, name);
+		x += (int)strlen(name) * 8;
+
+		// Suffix faded
+		Draw_StringRGBA(x, -1, suffix, CL_PLColours_Parse("0xffffff"), 0.6f);
+	}
+	else if (total_typing == 2)
+	{
+		const char* sep = " & ";
+		const char* suffix = " are typing...";
+		int x = dots_width + gap;
+
+		Draw_String(x, -1, name1);
+		x += (int)strlen(name1) * 8;
+
+		Draw_StringRGBA(x, -1, sep, CL_PLColours_Parse("0xffffff"), 0.6f);
+		x += (int)strlen(sep) * 8;
+
+		Draw_String(x, -1, name2);
+		x += (int)strlen(name2) * 8;
+
+		Draw_StringRGBA(x, -1, suffix, CL_PLColours_Parse("0xffffff"), 0.6f);
+	}
+	else
+	{
+		// No player names, fade the whole message
+		Draw_StringRGBA(dots_width + gap, -1, message, CL_PLColours_Parse("0xffffff"), 0.6f);
+	}
+
+	glPopMatrix();
+}
+
 /*
 ================
 Con_DrawConsole -- johnfitz -- heavy revision
@@ -4009,6 +4159,8 @@ void Con_DrawConsole (int lines, qboolean drawinput)
 // draw the input prompt, user text, and cursor
 	if (drawinput)
 		Con_DrawInput ();
+
+	Con_DrawTypingStatus(); // woods #typing...
 
 //draw version number in bottom right
 	for (x = 0; x < (int)strlen(ver); x++)
