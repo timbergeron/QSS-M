@@ -128,6 +128,7 @@ cvar_t		scr_crosshair_x = {"scr_crosshair_x", "0", CVAR_ARCHIVE}; // woods #cros
 cvar_t		scr_crosshair_y = {"scr_crosshair_y", "0", CVAR_ARCHIVE}; // woods #crosshair
 cvar_t		scr_showfps = {"scr_showfps", "0", CVAR_ARCHIVE};
 cvar_t		scr_clock = {"scr_clock", "0", CVAR_ARCHIVE};
+cvar_t		scr_showgrenadecounter = {"scr_showgrenadecounter", "0", CVAR_ARCHIVE}; // woods #nadecount
 cvar_t		scr_ping = {"scr_ping", "1", CVAR_ARCHIVE};  // woods #scrping
 cvar_t		scr_match_hud = {"scr_match_hud", "1", CVAR_ARCHIVE};  // woods #matchhud
 cvar_t		scr_showspeed = {"scr_showspeed", "0",CVAR_ARCHIVE}; // woods #speed
@@ -167,6 +168,9 @@ cvar_t		gl_triplebuffer = {"gl_triplebuffer", "1", CVAR_ARCHIVE};
 cvar_t		cl_gun_fovscale = {"cl_gun_fovscale","1",CVAR_ARCHIVE}; // Qrack
 cvar_t		cl_menucrosshair = { "cl_menucrosshair","0",CVAR_ARCHIVE}; // woods #menucrosshair
 cvar_t		cl_pong = {"cl_pong","2",CVAR_ARCHIVE}; // woods #pong -- 0 = disabled, >0 = enabled with speed multiplier
+
+static const float GRENADE_EXPLOSION_TIME = 2.5f; // woods #nadecount
+static const float GRENADE_TIMER_WIDTH = 24.0f; // woods #nadecount
 
 extern	cvar_t	crosshair;
 extern	cvar_t	con_notifyfade; // woods #confade
@@ -985,6 +989,7 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_showfps);
 	Cvar_SetCompletion (&scr_clock, &Clock_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_clock);
+	Cvar_RegisterVariable (&scr_showgrenadecounter); // woods #nadecount
 	Cvar_RegisterVariable (&scr_ping); // woods #scrping
 	Cvar_RegisterVariable(&scr_match_hud); // woods #matchhud
 	Cvar_RegisterVariable (&scr_showspeed); // woods #speed
@@ -3063,6 +3068,255 @@ void SCR_DrawMovementKeys(void)
 		M_Print(x, y - 1, "j");
 	else if (in_up.state & 1)
 		M_Print(x, y -1, "s");
+}
+
+/*
+===============
+SCR_DrawGrenadeTimer -- woods #nadecount
+===============
+*/
+void SCR_DrawGrenadeTimer(void)
+{
+	static qboolean finish_state = false;
+	static float last_time_remaining = -1.0f;
+	static float smooth_time_frac = -1.0f;
+
+	if (cls.state != ca_connected || !scr_showgrenadecounter.value)
+	{
+		finish_state = false;
+		last_time_remaining = -1.0f;
+		smooth_time_frac = -1.0f;
+		return;
+	}
+
+	if (!sv.active)
+	{
+		finish_state = false;
+		last_time_remaining = -1.0f;
+		smooth_time_frac = -1.0f;
+		return;
+	}
+
+	float time_remaining = 0.0f;
+	qboolean should_draw = false;
+
+	qcvm_t *oldvm = qcvm;
+	qboolean switched_vm = false;
+
+	if (qcvm != &sv.qcvm)
+	{
+		PR_SwitchQCVM(&sv.qcvm);
+		switched_vm = true;
+	}
+
+	do
+	{
+		if (!qcvm)
+		{
+			finish_state = false;
+			break;
+		}
+
+		if (cl.viewentity <= 0 || cl.viewentity >= qcvm->num_edicts)
+		{
+			finish_state = false;
+			break;
+		}
+
+		edict_t *player = EDICT_NUM(cl.viewentity);
+		float best_remaining = FLT_MAX;
+
+		for (int i = 0; i < qcvm->num_edicts; ++i)
+		{
+			edict_t *ent = EDICT_NUM(i);
+
+			if (ent->free)
+				continue;
+
+			if (!ent->v.classname)
+				continue;
+
+			if (strcmp(PR_GetString(ent->v.classname), "grenade"))
+				continue;
+
+			edict_t *owner = ent->v.owner ? PROG_TO_EDICT(ent->v.owner) : NULL;
+
+			if (owner != player)
+				continue;
+
+			float remaining = !ent->v.touch ? 0.0f : (ent->v.nextthink - cl.time);
+
+			if (remaining < 0.0f || remaining >= GRENADE_EXPLOSION_TIME)
+				continue;
+
+			if (remaining < best_remaining)
+				best_remaining = remaining;
+		}
+
+		if (best_remaining == FLT_MAX)
+		{
+			finish_state = false;
+			break;
+		}
+
+		time_remaining = best_remaining;
+
+		if (time_remaining >= GRENADE_EXPLOSION_TIME || time_remaining < 0.0f)
+		{
+			finish_state = false;
+			break;
+		}
+
+		if (time_remaining > 0.2f)
+			finish_state = false;
+		else if (time_remaining < 0.02f)
+			finish_state = true;
+
+		if (finish_state)
+			time_remaining = 0.0f;
+
+		should_draw = true;
+	} while (0);
+
+	if (switched_vm)
+	{
+		PR_SwitchQCVM(NULL);
+		if (oldvm)
+			PR_SwitchQCVM(oldvm);
+	}
+
+	if (!should_draw)
+	{
+		last_time_remaining = -1.0f;
+		smooth_time_frac = -1.0f;
+		return;
+	}
+
+	if (last_time_remaining >= 0.0f)
+	{
+		const float reset_epsilon = 0.05f; // detect new grenade
+
+		if (time_remaining > last_time_remaining + reset_epsilon)
+		{
+			last_time_remaining = time_remaining; // new grenade, reset
+			smooth_time_frac = -1.0f;
+		}
+		else
+			time_remaining = q_min(time_remaining, last_time_remaining); // clamp to never increase
+	}
+
+	last_time_remaining = time_remaining;
+
+	float scale = CLAMP(1.0f, scr_sbarscale.value, (float)glwidth / 320.0f);
+	int size = q_max(1, (int)(8.0f * scale + 0.5f));
+	int half_size = size / 2;
+
+	GL_SetCanvas(CANVAS_DEFAULT);
+
+	float center_x = scr_vrect.x + (scr_vrect.width * 0.5f);
+	float center_y = scr_vrect.y + (scr_vrect.height * 0.4f);
+
+	float half_width = (GRENADE_TIMER_WIDTH * size) * 0.5f;
+	float left = center_x - half_width;
+	float right = center_x + half_width;
+	float border_thickness = 2.0f;
+
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
+
+	float inner_left = left + half_size;
+	float inner_right = right - half_size;
+	float line_thickness = q_max(1.0f, size / 2.0f);
+	float line_top = center_y - line_thickness * 0.5f;
+	float line_bottom = center_y + line_thickness * 0.5f;
+
+	// 1-pixel black border around the white meter
+	glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
+	glBegin(GL_QUADS);
+	// top border
+	glVertex2f(inner_left, line_top);
+	glVertex2f(inner_right, line_top);
+	glVertex2f(inner_right, line_top + border_thickness);
+	glVertex2f(inner_left, line_top + border_thickness);
+	// bottom border
+	glVertex2f(inner_left, line_bottom - border_thickness);
+	glVertex2f(inner_right, line_bottom - border_thickness);
+	glVertex2f(inner_right, line_bottom);
+	glVertex2f(inner_left, line_bottom);
+	// left border
+	glVertex2f(inner_left, line_top + border_thickness);
+	glVertex2f(inner_left + border_thickness, line_top + border_thickness);
+	glVertex2f(inner_left + border_thickness, line_bottom - border_thickness);
+	glVertex2f(inner_left, line_bottom - border_thickness);
+	// right border
+	glVertex2f(inner_right - border_thickness, line_top + border_thickness);
+	glVertex2f(inner_right, line_top + border_thickness);
+	glVertex2f(inner_right, line_bottom - border_thickness);
+	glVertex2f(inner_right - border_thickness, line_bottom - border_thickness);
+	glEnd();
+
+	glColor4f(1.0f, 1.0f, 1.0f, 150.0f / 255.0f);
+	glBegin(GL_QUADS);
+	glVertex2f(inner_left, line_top);
+	glVertex2f(inner_right, line_top);
+	glVertex2f(inner_right, line_bottom);
+	glVertex2f(inner_left, line_bottom);
+	glEnd();
+
+	float clamped = CLAMP(0.0f, time_remaining, GRENADE_EXPLOSION_TIME);
+	float target_frac = (GRENADE_EXPLOSION_TIME > 0.0f) ? (clamped / GRENADE_EXPLOSION_TIME) : 0.0f;
+
+	// Smooth pointer movement using host_frametime
+	if (smooth_time_frac < 0.0f)
+		smooth_time_frac = target_frac;
+	else
+	{
+		const float lerp_speed = 10.0f; // higher = snappier, lower = smoother
+		float alpha = host_frametime * lerp_speed;
+		if (alpha > 1.0f)
+			alpha = 1.0f;
+		smooth_time_frac += (target_frac - smooth_time_frac) * alpha;
+	}
+	smooth_time_frac = CLAMP(0.0f, smooth_time_frac, 1.0f);
+
+	float travel = inner_right - inner_left;
+	float pos = travel * smooth_time_frac;
+	float pointer_x = inner_left + pos;
+	float pointer_half_width = q_max(1.0f, (size / 2.0f) * 0.5f);
+	float pointer_top = center_y - half_size / 2.0f;
+	float pointer_bottom = center_y + half_size / 2.0f;
+
+	// Color ramp: green -> yellow -> red as time runs out
+	float frac_elapsed = 1.0f - smooth_time_frac; // 0=start, 1=explode
+	float r, g, b;
+	if (frac_elapsed <= 0.5f)
+	{
+		float k = frac_elapsed / 0.5f; // 0..1, green -> yellow
+		r = k;
+		g = 1.0f;
+		b = 0.0f;
+	}
+	else
+	{
+		float k = (frac_elapsed - 0.5f) / 0.5f; // 0..1, yellow -> red
+		r = 1.0f;
+		g = 1.0f - k;
+		b = 0.0f;
+	}
+
+	glColor4f(r, g, b, 1.0f);
+	glBegin(GL_QUADS);
+	glVertex2f(pointer_x - pointer_half_width, pointer_top);
+	glVertex2f(pointer_x + pointer_half_width, pointer_top);
+	glVertex2f(pointer_x + pointer_half_width, pointer_bottom);
+	glVertex2f(pointer_x - pointer_half_width, pointer_bottom);
+	glEnd();
+
+	glDisable(GL_BLEND);
+	glEnable(GL_ALPHA_TEST);
+	glEnable(GL_TEXTURE_2D);
+	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
 /*
@@ -5553,6 +5807,7 @@ void SCR_UpdateScreen (void)
 		SCR_ShowObsFrags (); // woods #observerhud
 		SCR_DrawSpeed (); // woods #speed
 		SCR_DrawMovementKeys (); // woods #movementkeys
+		SCR_DrawGrenadeTimer(); // woods #nadecount
 		TP_DrawClosestLocText (); // woods #locext
 		SCR_DrawObsTimers (); // woods #obstimers
 		SCR_Mute (); // woods #usermute
