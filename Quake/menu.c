@@ -74,6 +74,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_HUD_f (void);
 			void M_Menu_Crosshair_f (void);
 		void M_Menu_Console_f (void);
+		void M_Menu_ColorPicker_f (void);
 		void M_Menu_Extras_f (void);
 		void M_Menu_ResetConfig_f(void); // woods #resetconfig
 	void M_Menu_Mods_f(void); // woods #modsmenu (iw)
@@ -106,6 +107,7 @@ void M_Main_Draw (void);
 		void M_Sound_Draw (void);
 		void M_Game_Draw (void);
 		void M_HUD_Draw (void);
+		void M_ColorPicker_Draw (void);
 		void M_Extras_Draw (void);
 		void M_ResetConfig_Draw(void); // woods #resetconfig
 			void M_Crosshair_Draw (void);
@@ -139,6 +141,7 @@ void M_Main_Key (int key);
 		void M_Sound_Key (int key);
 		void M_Game_Key (int key);
 		void M_HUD_Key (int key);
+		void M_ColorPicker_Key (int key);
 		void M_Extras_Key (int key);
 		void M_ResetConfig_Key(int key); // woods #resetconfig
 			void M_Crosshair_Key (int key);
@@ -177,6 +180,7 @@ void M_Main_Key (int key);
 		void M_HUD_Mousemove (int cx, int cy);
 			void M_Crosshair_Mousemove (int cx, int cy);
 		void M_Console_Mousemove (int cx, int cy);
+		void M_ColorPicker_Mousemove(int cx, int cy);
 		void M_Extras_Mousemove(int cx, int cy);
 		void M_ResetConfig_Mousemove(int cx, int cy); // woods #resetconfig
 	//void M_Gamepad_Mousemove (int cx, int cy);
@@ -2611,9 +2615,11 @@ Setup Menu
 ==================
 */
 
-static int		setup_cursor = 5; // woods 4 to 5 #
+static int		setup_cursor = 6; // woods 4 to 5 #
 
-static int		setup_cursor_table[] = {40, 56, 72, 88, 112, 150}; // woods add value, change position #namemaker #colorbar
+static int		setup_cursor_table[] = {40, 56, 72, 88, 104, 128, 158}; // woods add value, change position #namemaker #colorbar
+
+static void (*colorpicker_return_fn)(void);
 
 char	namemaker_name[16]; // woods #namemaker
 qboolean namemaker_shortcut = false; // woods #namemaker
@@ -2716,7 +2722,7 @@ void M_AdjustColour(plcolour_t *tr, int dir)
 	}
 }
 
-#define	NUM_SETUP_CMDS	6 // woods 5 to 6 #namemaker
+#define	NUM_SETUP_CMDS	7 // woods 5 to 6 #namemaker
 void M_Menu_Setup_f (void)
 {
 	key_dest = key_menu;
@@ -2837,18 +2843,20 @@ void M_Setup_Draw (void)
 
 	M_Print(64, 72, "Name Maker"); // woods #namemaker
 
-	M_Print (64, 88, "Shirt -"); // woods 80 to 104 #namemaker #showcolornum
-	M_PrintWhite (126, 88, CL_PLColours_ToString (setup_top)); // woods #showcolornum
-	M_DrawColorBar_Top (64, 94, atoi(CL_PLColours_ToString (setup_top))); // woods #colorbar
-	M_Print (64, 112, "Pants -"); // woods 104 to 128 #namemaker #showcolornum
-	M_PrintWhite (126, 112, CL_PLColours_ToString (setup_bottom)); // woods #showcolornum
-	M_DrawColorBar_Bot (64, 118, atoi(CL_PLColours_ToString (setup_bottom))); // woods #colorbar
+	M_Print(64, 88, "Color Picker");
 
-	if (!rgbactive && (setup_cursor == 3 || setup_cursor == 4)) // woods
-		M_PrintRGBA (64, 170, "+shift for RGB colors", CL_PLColours_Parse ("0xffffff"), 0.6f, false); // woods
+	M_Print (64, 104, "Shirt -"); // woods 80 to 104 #namemaker #showcolornum
+	M_PrintWhite (126, 104, CL_PLColours_ToString (setup_top)); // woods #showcolornum
+	M_DrawColorBar_Top (64, 110, atoi(CL_PLColours_ToString (setup_top))); // woods #colorbar
+	M_Print (64, 128, "Pants -"); // woods 104 to 128 #namemaker #showcolornum
+	M_PrintWhite (126, 128, CL_PLColours_ToString (setup_bottom)); // woods #showcolornum
+	M_DrawColorBar_Bot (64, 134, atoi(CL_PLColours_ToString (setup_bottom))); // woods #colorbar
 
-	M_DrawTextBox (64, 142, 14, 1);  // woods 140 to 152 #namemaker
-	M_Print (72, 150, "Accept Changes"); // woods #colorbar
+	if (!rgbactive && (setup_cursor == 4 || setup_cursor == 5)) // woods
+		M_PrintRGBA (64, 178, "+shift for RGB colors", CL_PLColours_Parse ("0xffffff"), 0.6f, false); // woods
+
+	M_DrawTextBox (64, 150, 14, 1);  // woods 140 to 152 #namemaker
+	M_Print (72, 158, "Accept Changes"); // woods #colorbar
 
 	p = Draw_CachePic ("gfx/bigbox.lmp");
 	M_DrawTransPic (196, 77, p); // woods #colorbar
@@ -2953,7 +2961,7 @@ void M_Setup_Key (int k)
 		if (setup_cursor < 2)
 			return;
 		S_LocalSound ("misc/menu3.wav");
-		if (setup_cursor == 3) // 2 to 3 woods #namemaker
+		if (setup_cursor == 4) // 2 to 3 woods #namemaker
 		{
 			M_AdjustColour(&setup_top, -1);
 			q_strlcpy (lastColorSelected, CL_PLColours_ToString(setup_top), sizeof(lastColorSelected));
@@ -2964,7 +2972,7 @@ void M_Setup_Key (int k)
 					colordelta = true;
 				}
 		}
-		if (setup_cursor == 4) // 3 to 4 woods #namemaker
+		if (setup_cursor == 5) // 3 to 4 woods #namemaker
 		{
 			M_AdjustColour(&setup_bottom, -1);
 			q_strlcpy (lastColorSelected, CL_PLColours_ToString(setup_bottom), sizeof(lastColorSelected));
@@ -2980,9 +2988,9 @@ void M_Setup_Key (int k)
 	case K_RIGHTARROW:
 		if (setup_cursor < 2)
 			return;
-	forward:
+forward:
 		S_LocalSound ("misc/menu3.wav");
-		if (setup_cursor == 3) // 2 to 3 woods #namemaker
+		if (setup_cursor == 4) // 2 to 3 woods #namemaker
 		{
 			M_AdjustColour(&setup_top, +1);
 			q_strlcpy (lastColorSelected, CL_PLColours_ToString(setup_top), sizeof(lastColorSelected));
@@ -2993,7 +3001,7 @@ void M_Setup_Key (int k)
 					colordelta = true;
 				}
 		}
-		if (setup_cursor == 4) // 3 to 4 woods #namemaker
+		if (setup_cursor == 5) // 3 to 4 woods #namemaker
 		{
 			M_AdjustColour(&setup_bottom, +1);
 			q_strlcpy (lastColorSelected, CL_PLColours_ToString(setup_bottom), sizeof(lastColorSelected));
@@ -3013,8 +3021,16 @@ void M_Setup_Key (int k)
 		if (setup_cursor == 0 || setup_cursor == 1)
 			return;
 
-		if (setup_cursor == 3 || setup_cursor == 4) // inc 1 both woods #namemaker
+		if (setup_cursor == 4 || setup_cursor == 5) // inc 1 both woods #namemaker
 			goto forward;
+
+		if (setup_cursor == 3)
+		{
+			m_entersound = true;
+			colorpicker_return_fn = M_Menu_Setup_f;
+			M_Menu_ColorPicker_f();
+			break;
+		}
 
 		if (setup_cursor == 2) // woods #namemaker
 		{
@@ -3023,7 +3039,7 @@ void M_Setup_Key (int k)
 			break;
 		}
 
-		// setup_cursor == 4 (OK)
+		// setup_cursor == 6 (OK)
 		if (Q_strcmp(cl_name.string, setup_myname) != 0)
 			Cbuf_AddText ( va ("name \"%s\"\n", setup_myname) );
 		if (Q_strcmp(hostname.string, setup_hostname) != 0)
@@ -7971,6 +7987,7 @@ static enum crosshair_e
 	CROSSHAIR_TOGGLE,
 	CROSSHAIR_ALPHA,
 	CROSSHAIR_COLOR,
+	CROSSHAIR_COLOR_PICKER,
 	CROSSHAIR_OUTLINE,
 	CROSSHAIR_SCALE,
 	CROSSHAIR_X,
@@ -8156,6 +8173,9 @@ void M_DrawMenuCrosshair(int x, int y)
 	glPopAttrib();
 }
 
+static plcolour_t Tools_ColorFromRGB(byte r, byte g, byte b);
+static void Tools_SetColorFromRGB(byte r, byte g, byte b);
+
 static qboolean crosshair_rgb_active;
 static char last_crosshair_color[10];
 
@@ -8210,8 +8230,6 @@ static const char* M_Crosshair_GetItemText(int index)
 		return "Use Crosshair";
 	case CROSSHAIR_ALPHA:
 		return "Crosshair Alpha";
-	case CROSSHAIR_COLOR:
-		return "Crosshair Color";
 	case CROSSHAIR_OUTLINE:
 		return "Crosshair Outline";
 	case CROSSHAIR_SCALE:
@@ -8269,9 +8287,33 @@ static void M_Crosshair_AdjustSliders(int dir)
 		Cvar_SetValue("scr_crosshairalpha", f);
 		break;
 
-	case CROSSHAIR_COLOR:
-		M_Crosshair_AdjustColor(dir);
-		break;
+case CROSSHAIR_COLOR:
+	M_Crosshair_AdjustColor(dir);
+	break;
+case CROSSHAIR_COLOR_PICKER:
+	colorpicker_return_fn = M_Menu_Crosshair_f;
+	/* seed picker with current crosshair color */
+	{
+		plcolour_t c = CL_PLColours_Parse(scr_crosshaircolor.string);
+		byte rgb[3];
+		byte* pal;
+		if (c.type == 2)
+		{
+			rgb[0] = c.rgb[0];
+			rgb[1] = c.rgb[1];
+			rgb[2] = c.rgb[2];
+		}
+		else
+		{
+			pal = (byte*)&d_8to24table[(c.basic << 4) + 8];
+			rgb[0] = pal[0];
+			rgb[1] = pal[1];
+			rgb[2] = pal[2];
+		}
+		Tools_SetColorFromRGB(rgb[0], rgb[1], rgb[2]);
+	}
+	M_Menu_ColorPicker_f();
+	break;
 
 	case CROSSHAIR_OUTLINE:
 		Cvar_SetValue("scr_crosshairoutline", !scr_crosshairoutline.value);
@@ -8351,6 +8393,31 @@ void M_Crosshair_Draw(void)
 					value = va("%d", color.basic);
 			}
 			M_Print(178, y, value);
+			break;
+		case CROSSHAIR_COLOR_PICKER:
+			text = "    Color Picker";
+			{
+				/* rainbow swatch like the picker hue bar */
+				int swatch_x = 179;
+				int swatch_y = y + 1;
+				int swatch_w = 48;
+				int swatch_h = 6;
+
+				for (int xx = 0; xx < swatch_w; xx += 1)
+				{
+					float hue = (float)xx / (float)(swatch_w - 1);
+					byte rgb[3];
+					hsvtorgb(hue, 1.0f, 1.0f, rgb);
+					Draw_FillPlayer(swatch_x + xx, swatch_y, 1, swatch_h,
+						Tools_ColorFromRGB(rgb[0], rgb[1], rgb[2]), 1.0f);
+				}
+
+				plcolour_t border = Tools_ColorFromRGB(40, 40, 40);
+				Draw_FillPlayer(swatch_x - 1, swatch_y - 1, swatch_w + 2, 1, border, 1.0f);
+				Draw_FillPlayer(swatch_x - 1, swatch_y + swatch_h, swatch_w + 2, 1, border, 1.0f);
+				Draw_FillPlayer(swatch_x - 1, swatch_y, 1, swatch_h, border, 1.0f);
+				Draw_FillPlayer(swatch_x + swatch_w, swatch_y, 1, swatch_h, border, 1.0f);
+			}
 			break;
 
 		case CROSSHAIR_OUTLINE:
@@ -9058,6 +9125,851 @@ void M_Console_Mousemove(int cx, int cy)
 	{
 		// Update the cursor position
 		console_cursor = item;
+	}
+}
+
+#define TOOLS_BACKGROUND_TOP 16
+#define TOOLS_BACKGROUND_HEIGHT 184
+
+#define TOOLS_PICKER_WIDTH 192
+#define TOOLS_PICKER_HEIGHT 96
+#define TOOLS_SLIDER_HEIGHT 12
+#define TOOLS_SLIDER_GAP 12
+#define TOOLS_INFO_TOP_GAP 12
+#define TOOLS_HINT_GAP 8
+
+#define TOOLS_PICKER_Y 24
+#define TOOLS_SLIDER_Y (TOOLS_PICKER_Y + TOOLS_PICKER_HEIGHT + TOOLS_SLIDER_GAP)
+#define TOOLS_INFO_Y (TOOLS_SLIDER_Y + TOOLS_SLIDER_HEIGHT + TOOLS_INFO_TOP_GAP)
+#define TOOLS_HINT_Y (TOOLS_INFO_Y + Tools_TextBoxPixelHeight(1) + TOOLS_HINT_GAP)
+
+#define TOOLS_HEX_BOX_WIDTH 11
+#define TOOLS_RGB_BOX_WIDTH 17
+#define TOOLS_SWATCH_WIDTH 32
+#define TOOLS_SWATCH_GAP 8
+#define TOOLS_INFO_GAP 16
+
+#define TOOLS_SAT_STEP (1.0f / (TOOLS_PICKER_WIDTH - 1))
+#define TOOLS_VAL_STEP (1.0f / (TOOLS_PICKER_HEIGHT - 1))
+#define TOOLS_HUE_STEP (1.0f / (TOOLS_PICKER_WIDTH - 1))
+
+enum
+{
+	TOOLS_FOCUS_AREA,
+	TOOLS_FOCUS_HUE
+};
+
+static struct
+{
+	float hue;
+	float saturation;
+	float value;
+	int focus;
+	qboolean dragging_area;
+	qboolean dragging_hue;
+	qboolean initialized;
+} toolsmenu;
+static double toolsmenu_hex_flash_until;
+static double toolsmenu_rgb_flash_until;
+
+typedef struct
+{
+	qboolean attempted;
+	qboolean ready;
+	GLuint program;
+	GLint u_ring_color;
+	GLint u_fill_color;
+	GLint u_radius;
+	GLint u_ring_width;
+	GLint u_aa_width;
+} tools_circle_shader_t;
+
+static tools_circle_shader_t tools_circle_shader;
+
+static void ColorPicker_ReturnToParent(void)
+{
+	void (*return_fn)(void) = colorpicker_return_fn;
+	colorpicker_return_fn = NULL;
+
+	/* If we came from the crosshair menu, commit the current picker color to the crosshair color cvar */
+	if (return_fn == M_Menu_Crosshair_f)
+	{
+		byte rgb[3];
+		hsvtorgb(toolsmenu.hue, toolsmenu.saturation, toolsmenu.value, rgb);
+		plcolour_t c = Tools_ColorFromRGB(rgb[0], rgb[1], rgb[2]);
+		Cvar_Set("scr_crosshaircolor", CL_PLColours_ToString(c));
+		q_strlcpy(last_crosshair_color, CL_PLColours_ToString(c), sizeof(last_crosshair_color));
+	}
+
+	if (return_fn)
+		return_fn();
+	else
+		M_Menu_Options_f();
+}
+
+static float Tools_Clamp01(float value)
+{
+	if (value < 0.0f)
+		return 0.0f;
+	if (value > 1.0f)
+		return 1.0f;
+	return value;
+}
+
+static float Tools_WrapHue(float value)
+{
+	while (value < 0.0f)
+		value += 1.0f;
+	while (value >= 1.0f)
+		value -= 1.0f;
+	return value;
+}
+
+static int Tools_TextBoxPixelWidth(int width)
+{
+	return (width + 2) * 8;
+}
+
+static int Tools_TextBoxPixelHeight(int lines)
+{
+	return (lines + 2) * 8;
+}
+
+static int Tools_GetLayoutOriginX(void)
+{
+	int total_width = TOOLS_SWATCH_WIDTH + TOOLS_SWATCH_GAP + TOOLS_PICKER_WIDTH;
+	return (320 - total_width) / 2;
+}
+
+static int Tools_GetSwatchX(void)
+{
+	return Tools_GetLayoutOriginX();
+}
+
+static int Tools_GetPickerX(void)
+{
+	return Tools_GetLayoutOriginX() + TOOLS_SWATCH_WIDTH + TOOLS_SWATCH_GAP;
+}
+
+static int Tools_GetPickerY(void)
+{
+	return TOOLS_PICKER_Y;
+}
+
+static int Tools_GetSliderX(void)
+{
+	return Tools_GetPickerX();
+}
+
+static int Tools_GetSliderY(void)
+{
+	return TOOLS_SLIDER_Y;
+}
+
+static int Tools_GetHexBoxX(void)
+{
+	int hex_width = Tools_TextBoxPixelWidth(TOOLS_HEX_BOX_WIDTH);
+	int rgb_width = Tools_TextBoxPixelWidth(TOOLS_RGB_BOX_WIDTH);
+	int total_width = hex_width + TOOLS_INFO_GAP + rgb_width;
+	return (320 - total_width) / 2;
+}
+
+static int Tools_GetRgbBoxX(void)
+{
+	return Tools_GetHexBoxX()
+		+ Tools_TextBoxPixelWidth(TOOLS_HEX_BOX_WIDTH)
+		+ TOOLS_INFO_GAP;
+}
+
+static int Tools_GetInfoRowY(void)
+{
+	return TOOLS_INFO_Y;
+}
+
+static int Tools_GetHintY(void)
+{
+	return TOOLS_HINT_Y;
+}
+
+static plcolour_t Tools_ColorFromRGB(byte r, byte g, byte b)
+{
+	plcolour_t c;
+	c.type = 2;
+	c.rgb[0] = r;
+	c.rgb[1] = g;
+	c.rgb[2] = b;
+	c.basic = 0;
+	return c;
+}
+
+static qboolean Tools_PointInRect(int mx, int my, int x, int y, int w, int h)
+{
+	return (mx >= x && mx < x + w && my >= y && my < y + h);
+}
+
+static void Tools_DrawBackground(void)
+{
+	/* no background tint for color picker */
+}
+
+static qboolean Tools_MouseOverPicker(void)
+{
+	return Tools_PointInRect(m_mousex, m_mousey,
+		Tools_GetPickerX(), Tools_GetPickerY(),
+		TOOLS_PICKER_WIDTH, TOOLS_PICKER_HEIGHT);
+}
+
+static qboolean Tools_MouseOverSlider(void)
+{
+	return Tools_PointInRect(m_mousex, m_mousey,
+		Tools_GetSliderX(), Tools_GetSliderY(),
+		TOOLS_PICKER_WIDTH, TOOLS_SLIDER_HEIGHT);
+}
+
+static qboolean Tools_MouseOverHexBox(void)
+{
+	return Tools_PointInRect(m_mousex, m_mousey,
+		Tools_GetHexBoxX(), Tools_GetInfoRowY(),
+		Tools_TextBoxPixelWidth(TOOLS_HEX_BOX_WIDTH),
+		Tools_TextBoxPixelHeight(1));
+}
+
+static qboolean Tools_MouseOverRgbBox(void)
+{
+	return Tools_PointInRect(m_mousex, m_mousey,
+		Tools_GetRgbBoxX(), Tools_GetInfoRowY(),
+		Tools_TextBoxPixelWidth(TOOLS_RGB_BOX_WIDTH),
+		Tools_TextBoxPixelHeight(1));
+}
+
+static void Tools_RGBToHSV(byte r, byte g, byte b, float* h, float* s, float* v)
+{
+	float rf = r / 255.0f;
+	float gf = g / 255.0f;
+	float bf = b / 255.0f;
+	float maxc = q_max(rf, q_max(gf, bf));
+	float minc = q_min(rf, q_min(gf, bf));
+	float delta = maxc - minc;
+
+	*v = maxc;
+
+	if (delta < 0.00001f)
+	{
+		*s = 0.0f;
+		*h = 0.0f;
+		return;
+	}
+
+	if (maxc > 0.0f)
+		*s = delta / maxc;
+	else
+		*s = 0.0f;
+
+	if (rf >= maxc)
+		*h = (gf - bf) / delta;
+	else if (gf >= maxc)
+		*h = 2.0f + (bf - rf) / delta;
+	else
+		*h = 4.0f + (rf - gf) / delta;
+
+	*h /= 6.0f;
+	if (*h < 0.0f)
+		*h += 1.0f;
+}
+
+static void Tools_SetColorFromRGB(byte r, byte g, byte b)
+{
+	float h, s, v;
+	Tools_RGBToHSV(r, g, b, &h, &s, &v);
+	toolsmenu.hue = Tools_WrapHue(h);
+	toolsmenu.saturation = Tools_Clamp01(s);
+	toolsmenu.value = Tools_Clamp01(v);
+}
+
+static void Tools_EnsureInitialized(void)
+{
+	if (toolsmenu.initialized)
+		return;
+
+	Tools_SetColorFromRGB(0x66, 0x23, 0x23);
+	toolsmenu.focus = TOOLS_FOCUS_AREA;
+	toolsmenu.initialized = true;
+}
+
+static void Tools_UpdateAreaFromMouse(int mx, int my)
+{
+	float sx = (mx - Tools_GetPickerX()) / (float)(TOOLS_PICKER_WIDTH - 1);
+	float vy = 1.0f - (my - Tools_GetPickerY()) / (float)(TOOLS_PICKER_HEIGHT - 1);
+	toolsmenu.saturation = Tools_Clamp01(sx);
+	toolsmenu.value = Tools_Clamp01(vy);
+}
+
+static void Tools_UpdateHueFromMouse(int mx)
+{
+	float hue = (mx - Tools_GetSliderX()) / (float)(TOOLS_PICKER_WIDTH - 1);
+	toolsmenu.hue = Tools_Clamp01(hue);
+}
+
+static void Tools_ColorToFloat4(plcolour_t color, float alpha, float out_rgba[4])
+{
+	if (color.type == 2)
+	{
+		out_rgba[0] = color.rgb[0] / 255.0f;
+		out_rgba[1] = color.rgb[1] / 255.0f;
+		out_rgba[2] = color.rgb[2] / 255.0f;
+	}
+	else
+	{
+		byte* pal = (byte*)&d_8to24table[(color.basic << 4) + 8];
+		out_rgba[0] = pal[0] / 255.0f;
+		out_rgba[1] = pal[1] / 255.0f;
+		out_rgba[2] = pal[2] / 255.0f;
+	}
+
+	out_rgba[3] = alpha;
+}
+
+static void Tools_SetGLColour(plcolour_t color, float alpha)
+{
+	float r, g, b;
+
+	if (color.type == 2)
+	{
+		r = color.rgb[0] / 255.0f;
+		g = color.rgb[1] / 255.0f;
+		b = color.rgb[2] / 255.0f;
+	}
+	else
+	{
+		byte* pal = (byte*)&d_8to24table[(color.basic << 4) + 8];
+		r = pal[0] / 255.0f;
+		g = pal[1] / 255.0f;
+		b = pal[2] / 255.0f;
+	}
+
+	glColor4f(r, g, b, alpha);
+}
+
+static qboolean Tools_InitCircleShader(void)
+{
+	if (tools_circle_shader.attempted)
+		return tools_circle_shader.ready;
+
+	tools_circle_shader.attempted = true;
+
+	if (!gl_glsl_able || !GL_CreateShaderFunc || !GL_ShaderSourceFunc
+		|| !GL_CompileShaderFunc || !GL_GetShaderivFunc || !GL_CreateProgramFunc
+		|| !GL_AttachShaderFunc || !GL_LinkProgramFunc || !GL_GetProgramivFunc
+		|| !GL_DeleteShaderFunc || !GL_DeleteProgramFunc || !GL_UseProgramFunc
+		|| !GL_GetUniformLocationFunc || !GL_Uniform4fFunc || !GL_Uniform1fFunc)
+	{
+		return false;
+	}
+
+	const GLchar* vert_source =
+		"#version 110\n"
+		"varying vec2 v_offset;\n"
+		"void main()\n"
+		"{\n"
+		"\tgl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n"
+		"\tv_offset = gl_MultiTexCoord0.xy;\n"
+		"}\n";
+
+	const GLchar* frag_source =
+		"#version 110\n"
+		"varying vec2 v_offset;\n"
+		"uniform vec4 u_ring_color;\n"
+		"uniform vec4 u_fill_color;\n"
+		"uniform float u_radius;\n"
+		"uniform float u_ring_width;\n"
+		"uniform float u_aa_width;\n"
+		"\n"
+		"float band(float dist, float start, float end, float aa)\n"
+		"{\n"
+		"\tfloat a = smoothstep(start - aa, start + aa, dist);\n"
+		"\tfloat b = smoothstep(end - aa, end + aa, dist);\n"
+		"\treturn clamp(a - b, 0.0, 1.0);\n"
+		"}\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+		"\tfloat dist = length(v_offset);\n"
+		"\tfloat ring_start = max(u_radius - u_ring_width, 0.0);\n"
+		"\tfloat fill_radius = max(ring_start, 0.0);\n"
+		"\n"
+		"\tfloat ring_mask = band(dist, ring_start, u_radius, u_aa_width);\n"
+		"\tfloat fill_mask = clamp(1.0 - smoothstep(fill_radius - u_aa_width,\n"
+		"\t\tfill_radius + u_aa_width, dist), 0.0, 1.0);\n"
+		"\n"
+		"\tfloat total = ring_mask + fill_mask;\n"
+		"\tif (total <= 0.0)\n"
+		"\t\tdiscard;\n"
+		"\n"
+		"\tvec4 color = vec4(0.0);\n"
+		"\tcolor += u_ring_color * ring_mask;\n"
+		"\tcolor += u_fill_color * fill_mask;\n"
+		"\n"
+		"\tcolor.rgb /= max(total, 1e-5);\n"
+		"\tcolor.a = clamp(total, 0.0, 1.0);\n"
+		"\tgl_FragColor = color;\n"
+		"}\n";
+
+	GLuint vert = GL_CreateShaderFunc(GL_VERTEX_SHADER);
+	GL_ShaderSourceFunc(vert, 1, &vert_source, NULL);
+	GL_CompileShaderFunc(vert);
+
+	GLint compiled = GL_FALSE;
+	GL_GetShaderivFunc(vert, GL_COMPILE_STATUS, &compiled);
+	if (!compiled)
+	{
+		GL_DeleteShaderFunc(vert);
+		return false;
+	}
+
+	GLuint frag = GL_CreateShaderFunc(GL_FRAGMENT_SHADER);
+	GL_ShaderSourceFunc(frag, 1, &frag_source, NULL);
+	GL_CompileShaderFunc(frag);
+	GL_GetShaderivFunc(frag, GL_COMPILE_STATUS, &compiled);
+	if (!compiled)
+	{
+		GL_DeleteShaderFunc(vert);
+		GL_DeleteShaderFunc(frag);
+		return false;
+	}
+
+	GLuint program = GL_CreateProgramFunc();
+	GL_AttachShaderFunc(program, vert);
+	GL_AttachShaderFunc(program, frag);
+	GL_LinkProgramFunc(program);
+
+	GLint linked = GL_FALSE;
+	GL_GetProgramivFunc(program, GL_LINK_STATUS, &linked);
+	if (!linked)
+	{
+		GL_DeleteShaderFunc(vert);
+		GL_DeleteShaderFunc(frag);
+		GL_DeleteProgramFunc(program);
+		return false;
+	}
+
+	GL_DeleteShaderFunc(vert);
+	GL_DeleteShaderFunc(frag);
+
+	tools_circle_shader.program = program;
+	tools_circle_shader.u_ring_color = GL_GetUniformLocationFunc(program, "u_ring_color");
+	tools_circle_shader.u_fill_color = GL_GetUniformLocationFunc(program, "u_fill_color");
+	tools_circle_shader.u_radius = GL_GetUniformLocationFunc(program, "u_radius");
+	tools_circle_shader.u_ring_width = GL_GetUniformLocationFunc(program, "u_ring_width");
+	tools_circle_shader.u_aa_width = GL_GetUniformLocationFunc(program, "u_aa_width");
+
+	tools_circle_shader.ready = tools_circle_shader.u_ring_color >= 0
+		&& tools_circle_shader.u_fill_color >= 0
+		&& tools_circle_shader.u_radius >= 0
+		&& tools_circle_shader.u_ring_width >= 0
+		&& tools_circle_shader.u_aa_width >= 0;
+
+	if (!tools_circle_shader.ready)
+	{
+		GL_DeleteProgramFunc(program);
+		memset(&tools_circle_shader, 0, sizeof(tools_circle_shader));
+		tools_circle_shader.attempted = true;
+		tools_circle_shader.ready = false;
+		return false;
+	}
+
+	return true;
+}
+
+static qboolean Tools_DrawPickerMarkerWithShader(float center_x, float center_y, int radius,
+	plcolour_t ring, plcolour_t fill)
+{
+	if (!tools_circle_shader.ready && !Tools_InitCircleShader())
+		return false;
+
+	float ring_rgba[4];
+	float fill_rgba[4];
+	Tools_ColorToFloat4(ring, 1.0f, ring_rgba);
+	Tools_ColorToFloat4(fill, 1.0f, fill_rgba);
+
+	float radius_f = (float)radius;
+	float ring_width = q_max(0.5f, radius_f * 0.10f);
+	float aa_width = 0.25f;
+	float extent = radius_f + ring_width + aa_width;
+
+	glPushAttrib(GL_ENABLE_BIT | GL_LINE_BIT | GL_POINT_BIT | GL_COLOR_BUFFER_BIT | GL_HINT_BIT);
+
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_ALPHA_TEST);
+
+	GL_UseProgramFunc(tools_circle_shader.program);
+	GL_Uniform4fFunc(tools_circle_shader.u_ring_color,
+		ring_rgba[0], ring_rgba[1], ring_rgba[2], ring_rgba[3]);
+	GL_Uniform4fFunc(tools_circle_shader.u_fill_color,
+		fill_rgba[0], fill_rgba[1], fill_rgba[2], fill_rgba[3]);
+	GL_Uniform1fFunc(tools_circle_shader.u_radius, radius_f);
+	GL_Uniform1fFunc(tools_circle_shader.u_ring_width, ring_width);
+	GL_Uniform1fFunc(tools_circle_shader.u_aa_width, aa_width);
+
+	glBegin(GL_TRIANGLE_STRIP);
+
+	glTexCoord2f(-extent, -extent);
+	glVertex2f(center_x - extent, center_y - extent);
+
+	glTexCoord2f(extent, -extent);
+	glVertex2f(center_x + extent, center_y - extent);
+
+	glTexCoord2f(-extent, extent);
+	glVertex2f(center_x - extent, center_y + extent);
+
+	glTexCoord2f(extent, extent);
+	glVertex2f(center_x + extent, center_y + extent);
+
+	glEnd();
+
+	GL_UseProgramFunc(0);
+
+	glPopAttrib();
+	return true;
+}
+
+static void Tools_DrawPickerMarker(float center_x, float center_y, int radius,
+	plcolour_t ring, plcolour_t fill)
+{
+	if (radius <= 0)
+		return;
+
+	if (Tools_DrawPickerMarkerWithShader(center_x, center_y, radius, ring, fill))
+		return;
+
+	glPushAttrib(GL_ENABLE_BIT | GL_LINE_BIT | GL_POINT_BIT | GL_COLOR_BUFFER_BIT | GL_HINT_BIT);
+
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_ALPHA_TEST);
+	Tools_SetGLColour(ring, 1.0f);
+	renderCircle(center_x, center_y, (float)radius, 128, 1.0f);
+
+	float fill_size = q_max(1.0f, (float)(radius - 1) * 1.0f);
+	Tools_SetGLColour(fill, 1.0f);
+	renderSmoothDot(center_x, center_y, fill_size);
+
+	glPopAttrib();
+}
+
+static void Tools_DrawPicker(const byte current_rgb[3])
+{
+	int picker_x = Tools_GetPickerX();
+	int picker_y = Tools_GetPickerY();
+
+	for (int y = 0; y < TOOLS_PICKER_HEIGHT; y += 2)
+	{
+		float value = 1.0f - (float)y / (float)(TOOLS_PICKER_HEIGHT - 1);
+		int draw_h = q_min(2, TOOLS_PICKER_HEIGHT - y);
+
+		for (int x = 0; x < TOOLS_PICKER_WIDTH; x += 2)
+		{
+			float saturation = (float)x / (float)(TOOLS_PICKER_WIDTH - 1);
+			byte rgb[3];
+			hsvtorgb(toolsmenu.hue, saturation, value, rgb);
+
+			Draw_FillPlayer(picker_x + x,
+				picker_y + y,
+				q_min(2, TOOLS_PICKER_WIDTH - x),
+				draw_h,
+				Tools_ColorFromRGB(rgb[0], rgb[1], rgb[2]),
+				1);
+		}
+	}
+
+	int marker_x = picker_x + (int)(toolsmenu.saturation * (TOOLS_PICKER_WIDTH - 1) + 0.5f);
+	int marker_y = picker_y + (int)((1.0f - toolsmenu.value) * (TOOLS_PICKER_HEIGHT - 1) + 0.5f);
+	marker_x = q_max(picker_x, q_min(marker_x, picker_x + TOOLS_PICKER_WIDTH - 1));
+	marker_y = q_max(picker_y, q_min(marker_y, picker_y + TOOLS_PICKER_HEIGHT - 1));
+
+	int brightness = (current_rgb[0] + current_rgb[1] + current_rgb[2]) / 3;
+	plcolour_t ring = brightness > 140
+		? Tools_ColorFromRGB(0, 0, 0)
+		: Tools_ColorFromRGB(255, 255, 255);
+
+	int marker_radius = 4;
+	plcolour_t fill = Tools_ColorFromRGB(current_rgb[0], current_rgb[1], current_rgb[2]);
+	Tools_DrawPickerMarker(marker_x + 0.5f, marker_y + 0.5f, marker_radius,
+		ring, fill);
+}
+
+static void Tools_DrawHueSlider(void)
+{
+	int slider_x = Tools_GetSliderX();
+	int slider_y = Tools_GetSliderY();
+
+	for (int x = 0; x < TOOLS_PICKER_WIDTH; x += 2)
+	{
+		float hue = (float)x / (float)(TOOLS_PICKER_WIDTH - 1);
+		byte rgb[3];
+		hsvtorgb(hue, 1.0f, 1.0f, rgb);
+
+		Draw_FillPlayer(slider_x + x,
+			slider_y,
+			q_min(2, TOOLS_PICKER_WIDTH - x),
+			TOOLS_SLIDER_HEIGHT,
+			Tools_ColorFromRGB(rgb[0], rgb[1], rgb[2]),
+			1);
+	}
+
+	int hue_x = slider_x + (int)(toolsmenu.hue * (TOOLS_PICKER_WIDTH - 1) + 0.5f);
+	hue_x = q_max(slider_x, q_min(hue_x, slider_x + TOOLS_PICKER_WIDTH - 1));
+	{
+		byte hrgb[3];
+		hsvtorgb(toolsmenu.hue, 1.0f, 1.0f, hrgb);
+		plcolour_t fill = Tools_ColorFromRGB(hrgb[0], hrgb[1], hrgb[2]);
+		int brightness = (hrgb[0] + hrgb[1] + hrgb[2]) / 3;
+		plcolour_t ring = brightness > 140
+			? Tools_ColorFromRGB(0, 0, 0)
+			: Tools_ColorFromRGB(255, 255, 255);
+
+		float center_x = hue_x + 0.5f;
+		float center_y = slider_y + (TOOLS_SLIDER_HEIGHT / 2.0f);
+		Tools_DrawPickerMarker(center_x, center_y, 4, ring, fill);
+	}
+}
+
+static void Tools_DrawSwatch(const byte rgb[3])
+{
+	int swatch_x = Tools_GetSwatchX();
+	int swatch_y = Tools_GetPickerY();
+	int swatch_h = TOOLS_PICKER_HEIGHT;
+
+	Draw_FillPlayer(swatch_x, swatch_y, TOOLS_SWATCH_WIDTH, swatch_h,
+		Tools_ColorFromRGB(rgb[0], rgb[1], rgb[2]), 1);
+}
+
+static void Tools_DrawInfo(const byte rgb[3])
+{
+	char hex_line[32];
+	char rgb_line[32];
+
+	q_snprintf(hex_line, sizeof(hex_line), "HEX #%02X%02X%02X", rgb[0], rgb[1], rgb[2]);
+	q_snprintf(rgb_line, sizeof(rgb_line), "RGB %d, %d, %d", rgb[0], rgb[1], rgb[2]);
+
+	int info_y = Tools_GetInfoRowY();
+	int hex_box_x = Tools_GetHexBoxX();
+	int rgb_box_x = Tools_GetRgbBoxX();
+
+	M_DrawTextBox(hex_box_x, info_y, TOOLS_HEX_BOX_WIDTH, 1);
+	if (realtime < toolsmenu_hex_flash_until)
+		M_PrintWhite(hex_box_x + 8, info_y + 8, hex_line);
+	else
+		M_Print(hex_box_x + 8, info_y + 8, hex_line);
+
+	M_DrawTextBox(rgb_box_x, info_y, TOOLS_RGB_BOX_WIDTH, 1);
+	if (realtime < toolsmenu_rgb_flash_until)
+		M_PrintWhite(rgb_box_x + 8, info_y + 8, rgb_line);
+	else
+		M_Print(rgb_box_x + 8, info_y + 8, rgb_line);
+
+	const char* hint = "Click boxes above to copy";
+	int hint_x = (320 - (int)strlen(hint) * 8) / 2;
+	M_Print(hint_x, Tools_GetHintY(), hint);
+}
+
+static void Tools_CopyHexToClipboard(void)
+{
+	byte rgb[3];
+	hsvtorgb(toolsmenu.hue, toolsmenu.saturation, toolsmenu.value, rgb);
+	char hex_line[16];
+	q_snprintf(hex_line, sizeof(hex_line), "#%02X%02X%02X", rgb[0], rgb[1], rgb[2]);
+	SDL_SetClipboardText(hex_line);
+	toolsmenu_hex_flash_until = realtime + 1.0;
+	{
+		const char* soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
+		S_LocalSound(soundFile);
+	}
+}
+
+static void Tools_CopyRgbToClipboard(void)
+{
+	byte rgb[3];
+	hsvtorgb(toolsmenu.hue, toolsmenu.saturation, toolsmenu.value, rgb);
+	char buf[32];
+	q_snprintf(buf, sizeof(buf), "%d,%d,%d", rgb[0], rgb[1], rgb[2]);
+	SDL_SetClipboardText(buf);
+	toolsmenu_rgb_flash_until = realtime + 1.0;
+	{
+		const char* soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
+		S_LocalSound(soundFile);
+	}
+}
+
+void M_Menu_ColorPicker_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_colorpicker;
+	m_entersound = true;
+
+	if (!colorpicker_return_fn)
+		colorpicker_return_fn = M_Menu_Options_f;
+
+	Tools_EnsureInitialized();
+	/* Non-crosshair callers start from a fresh random hue */
+	if (colorpicker_return_fn != M_Menu_Crosshair_f)
+	{
+		toolsmenu.hue = (float)rand() / (float)RAND_MAX;
+		toolsmenu.saturation = 1.0f;
+		toolsmenu.value = 1.0f;
+	}
+	/* If opened from setup or other menus, keep current hue/sat/val; if opened from crosshair, it was seeded before entry */
+	toolsmenu.dragging_area = false;
+	toolsmenu.dragging_hue = false;
+	toolsmenu_hex_flash_until = 0;
+	toolsmenu_rgb_flash_until = 0;
+
+	IN_UpdateGrabs();
+}
+
+void M_ColorPicker_Draw(void)
+{
+	Tools_DrawBackground();
+
+	byte rgb[3];
+	hsvtorgb(toolsmenu.hue, toolsmenu.saturation, toolsmenu.value, rgb);
+
+	Tools_DrawSwatch(rgb);
+	Tools_DrawPicker(rgb);
+	Tools_DrawHueSlider();
+	Tools_DrawInfo(rgb);
+}
+
+void M_ColorPicker_Key(int k)
+{
+	switch (k)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		ColorPicker_ReturnToParent();
+		break;
+
+	case K_LEFTARROW:
+		if (toolsmenu.focus == TOOLS_FOCUS_AREA)
+			toolsmenu.saturation = Tools_Clamp01(toolsmenu.saturation - TOOLS_SAT_STEP);
+		else
+			toolsmenu.hue = Tools_WrapHue(toolsmenu.hue - TOOLS_HUE_STEP);
+		S_LocalSound("misc/menu3.wav");
+		break;
+
+	case K_RIGHTARROW:
+		if (toolsmenu.focus == TOOLS_FOCUS_AREA)
+			toolsmenu.saturation = Tools_Clamp01(toolsmenu.saturation + TOOLS_SAT_STEP);
+		else
+			toolsmenu.hue = Tools_WrapHue(toolsmenu.hue + TOOLS_HUE_STEP);
+		S_LocalSound("misc/menu3.wav");
+		break;
+
+	case K_MWHEELDOWN:
+		if (Tools_MouseOverPicker())
+		{
+			toolsmenu.focus = TOOLS_FOCUS_AREA;
+			toolsmenu.saturation = Tools_Clamp01(toolsmenu.saturation - TOOLS_SAT_STEP);
+			S_LocalSound("misc/menu3.wav");
+		}
+		else if (Tools_MouseOverSlider())
+		{
+			toolsmenu.focus = TOOLS_FOCUS_HUE;
+			toolsmenu.hue = Tools_WrapHue(toolsmenu.hue - TOOLS_HUE_STEP);
+			S_LocalSound("misc/menu3.wav");
+		}
+		break;
+
+	case K_MWHEELUP:
+		if (Tools_MouseOverPicker())
+		{
+			toolsmenu.focus = TOOLS_FOCUS_AREA;
+			toolsmenu.saturation = Tools_Clamp01(toolsmenu.saturation + TOOLS_SAT_STEP);
+			S_LocalSound("misc/menu3.wav");
+		}
+		else if (Tools_MouseOverSlider())
+		{
+			toolsmenu.focus = TOOLS_FOCUS_HUE;
+			toolsmenu.hue = Tools_WrapHue(toolsmenu.hue + TOOLS_HUE_STEP);
+			S_LocalSound("misc/menu3.wav");
+		}
+		break;
+
+	case K_UPARROW:
+		if (toolsmenu.focus == TOOLS_FOCUS_AREA)
+			toolsmenu.value = Tools_Clamp01(toolsmenu.value + TOOLS_VAL_STEP);
+		else
+			toolsmenu.hue = Tools_WrapHue(toolsmenu.hue + TOOLS_HUE_STEP);
+		S_LocalSound("misc/menu3.wav");
+		break;
+
+	case K_DOWNARROW:
+		if (toolsmenu.focus == TOOLS_FOCUS_AREA)
+			toolsmenu.value = Tools_Clamp01(toolsmenu.value - TOOLS_VAL_STEP);
+		else
+			toolsmenu.hue = Tools_WrapHue(toolsmenu.hue - TOOLS_HUE_STEP);
+		S_LocalSound("misc/menu3.wav");
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		Tools_CopyHexToClipboard();
+		S_LocalSound("misc/menu1.wav");
+		break;
+
+	case K_MOUSE1:
+		if (Tools_MouseOverPicker())
+		{
+			Tools_UpdateAreaFromMouse(m_mousex, m_mousey);
+			toolsmenu.dragging_area = true;
+			toolsmenu.focus = TOOLS_FOCUS_AREA;
+			S_LocalSound("misc/menu3.wav");
+		}
+		else if (Tools_MouseOverSlider())
+		{
+			Tools_UpdateHueFromMouse(m_mousex);
+			toolsmenu.dragging_hue = true;
+			toolsmenu.focus = TOOLS_FOCUS_HUE;
+			S_LocalSound("misc/menu3.wav");
+		}
+		else if (Tools_MouseOverHexBox())
+		{
+			Tools_CopyHexToClipboard();
+		}
+		else if (Tools_MouseOverRgbBox())
+			Tools_CopyRgbToClipboard();
+		break;
+	}
+}
+
+void M_ColorPicker_Mousemove(int cx, int cy)
+{
+	if (toolsmenu.dragging_area)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			toolsmenu.dragging_area = false;
+			return;
+		}
+
+		Tools_UpdateAreaFromMouse(cx, cy);
+		return;
+	}
+
+	if (toolsmenu.dragging_hue)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			toolsmenu.dragging_hue = false;
+			return;
+		}
+
+		Tools_UpdateHueFromMouse(cx);
 	}
 }
 
@@ -14447,6 +15359,7 @@ static struct
 	{"menu_hud", M_Menu_HUD_f},
 	{"menu_crosshair", M_Menu_Crosshair_f},
 	{"menu_console", M_Menu_HUD_f},
+	{"menu_colorpicker", M_Menu_ColorPicker_f},
 	{"menu_misc", M_Menu_Extras_f},
 	{"menu_config", M_Menu_ResetConfig_f},
 	{"menu_video", M_Menu_Video_f},
@@ -14735,6 +15648,10 @@ void M_Draw (void)
 		M_Mouse_Draw();
 		break;
 
+	case m_colorpicker:
+		M_ColorPicker_Draw();
+		break;
+
 	case m_extras:
 		M_Extras_Draw ();
 		break;
@@ -14894,6 +15811,10 @@ void M_Keydown (int key)
 		M_Mouse_Key(key);
 		return;
 
+	case m_colorpicker:
+		M_ColorPicker_Key(key);
+		return;
+
 	case m_extras:
 		M_Extras_Key (key);
 		return;
@@ -15046,6 +15967,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_mouse:
 		M_Mouse_Mousemove(x, y);
+		return;
+
+	case m_colorpicker:
+		M_ColorPicker_Mousemove(x, y);
 		return;
 
 	case m_video:

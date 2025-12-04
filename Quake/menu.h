@@ -44,6 +44,7 @@ enum m_state_e {
 	m_hud,
 	m_crosshair,
 	m_console,
+	m_colorpicker,
 	m_extras,
 	m_mods, // woods #modsmenu (iw)
 	m_demos, // woods #demosmenu
