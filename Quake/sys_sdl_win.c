@@ -542,9 +542,30 @@ void Sys_Image_BGRA_To_Clipboard(byte* bmbits, int width, int height, int size) 
 }
 #endif
 
-const char *Sys_ConsoleInput (void) // woods #arrowkeys
+static void Sys_RewriteInputLine(const char* newline, char* con_text, size_t con_text_size, int* textlen, int* cursor_pos, DWORD* dummy) // woods #serverhistory
 {
-	static char	con_text[256];
+	int oldlen = *textlen;
+	int oldpos = *cursor_pos;
+	size_t newlen;
+
+	for (int i = 0; i < oldpos; i++)
+		WriteFile(houtput, "\b", 1, dummy, NULL);
+	for (int i = 0; i < oldlen; i++)
+		WriteFile(houtput, " ", 1, dummy, NULL);
+	for (int i = 0; i < oldlen; i++)
+		WriteFile(houtput, "\b", 1, dummy, NULL);
+
+	newlen = q_strlcpy(con_text, newline ? newline : "", con_text_size);
+	if (newlen)
+		WriteFile(houtput, con_text, (DWORD)newlen, dummy, NULL);
+
+	*textlen = (int)newlen;
+	*cursor_pos = *textlen;
+}
+
+const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
+{
+	static char	con_text[MAXCMDLINE];
 	static int	textlen;
 	static int  cursor_pos;
 	INPUT_RECORD	recs[1024];
@@ -587,6 +608,20 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys
 					}
 					continue;
 				}
+				else if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_UP)
+				{
+					char history_line[MAXCMDLINE];
+					if (History_GetPrevious(con_text, history_line, sizeof(history_line)))
+						Sys_RewriteInputLine(history_line, con_text, sizeof(con_text), &textlen, &cursor_pos, &dummy);
+					continue;
+				}
+				else if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_DOWN)
+				{
+					char history_line[MAXCMDLINE];
+					if (History_GetNext(con_text, history_line, sizeof(history_line)))
+						Sys_RewriteInputLine(history_line, con_text, sizeof(con_text), &textlen, &cursor_pos, &dummy);
+					continue;
+				}
 
 				ch = recs[0].Event.KeyEvent.uChar.AsciiChar;
 
@@ -595,15 +630,11 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys
 				case '\r':
 					WriteFile(houtput, "\r\n", 2, &dummy, NULL);
 
-					if (textlen != 0)
-					{
 						con_text[textlen] = 0;
+					History_StoreCommand(con_text);
 						textlen = 0;
 						cursor_pos = 0; // woods #arrowkeys
 						return con_text;
-					}
-
-					break;
 
 				case '\b':
 					if (cursor_pos > 0)

@@ -1658,6 +1658,10 @@ void Host_Init (void)
 		Key_Init ();
 		Con_Init ();
 	}
+	else // woods #serverhistory
+	{
+		History_Init();
+	}
 	PR_Init ();
 	Mod_Init ();
 	NET_Init ();
@@ -1798,6 +1802,10 @@ void Host_Shutdown(void)
 		S_Shutdown ();
 		IN_Shutdown ();
 		VID_Shutdown();
+	}
+	else // woods #serverhistory
+	{
+		History_Shutdown();
 	}
 
 	LOG_Close ();

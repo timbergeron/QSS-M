@@ -38,6 +38,8 @@ double		key_blinktime; //johnfitz -- fudge cursor blinking to make it easier to 
 
 int		edit_line = 0;
 int		history_line = 0;
+static qboolean history_initialized = false; // woods #serverhistory
+static char history_saved_current[MAXCMDLINE]; // woods #serverhistory
 
 keydest_t	key_dest;
 
@@ -1557,6 +1559,12 @@ void History_Init (void)
 	int i, c;
 	FILE *hf;
 
+	if (history_initialized) // woods #serverhistory
+		return;
+
+	history_initialized = true; // woods #serverhistory
+	history_saved_current[0] = 0; // woods #serverhistory
+
 	for (i = 0; i < CMDLINES; i++)
 	{
 		key_lines[i][0] = ']';
@@ -1601,6 +1609,9 @@ void History_Shutdown (void)
 	int i;
 	FILE *hf;
 
+	if (!history_initialized) // woods #serverhistory
+		return;
+
 	hf = fopen(va("%s/%s", host_parms->userdir, HISTORY_FILE_NAME), "wt");
 	if (hf != NULL)
 	{
@@ -1610,6 +1621,20 @@ void History_Shutdown (void)
 			i = (i + 1) & (CMDLINES - 1);
 		} while (i != edit_line && !key_lines[i][1]);
 
+	workline = key_lines[edit_line];
+	workline[0] = ']';
+	q_strlcpy (workline + 1, line, MAXCMDLINE - 1);
+
+	if (strcmp(workline, key_lines[(edit_line - 1) & (CMDLINES - 1)]))
+		edit_line = (edit_line + 1) & (CMDLINES - 1);
+
+	history_line = edit_line;
+	key_lines[edit_line][0] = ']';
+	key_lines[edit_line][1] = 0;
+	key_linepos = 1;
+	history_saved_current[0] = 0;
+}
+
 		while (i != edit_line && key_lines[i][1])
 		{
 			fprintf(hf, "%s\n", key_lines[i] + 1);
@@ -1617,12 +1642,98 @@ void History_Shutdown (void)
 		}
 		fclose(hf);
 	}
+
+	history_initialized = false; // woods #serverhistory
+	history_saved_current[0] = 0; // woods #serverhistory
 }
 
 void Print_History(void) // woods #shortcuts #history
 {
 	Cmd_ExecuteString("history -a\n", src_command);
 	return;
+}
+
+void History_StoreCommand (const char *line) // woods #serverhistory
+{
+	char *workline;
+
+	if (!history_initialized)
+		return;
+
+	if (!line)
+		line = "";
+
+	if (!line[0])
+	{
+		history_line = edit_line;
+		key_lines[edit_line][0] = ']';
+		key_lines[edit_line][1] = 0;
+		key_linepos = 1;
+		history_saved_current[0] = 0;
+		return;
+}
+
+	workline = key_lines[edit_line];
+	workline[0] = ']';
+	q_strlcpy (workline + 1, line, MAXCMDLINE - 1);
+
+	if (strcmp(workline, key_lines[(edit_line - 1) & (CMDLINES - 1)]))
+		edit_line = (edit_line + 1) & (CMDLINES - 1);
+
+	history_line = edit_line;
+	key_lines[edit_line][0] = ']';
+	key_lines[edit_line][1] = 0;
+	key_linepos = 1;
+	history_saved_current[0] = 0;
+}
+
+qboolean History_GetPrevious (const char *current, char *out, size_t out_size) // woods #serverhistory
+{
+	int history_line_last;
+
+	if (!history_initialized || !out || !out_size)
+		return false;
+
+	if (history_line == edit_line)
+		q_strlcpy (history_saved_current, current ? current : "", sizeof(history_saved_current));
+
+	history_line_last = history_line;
+	do
+	{
+		history_line = (history_line - 1) & (CMDLINES - 1);
+	} while (history_line != edit_line && !key_lines[history_line][1]);
+
+	if (history_line == edit_line)
+	{
+		history_line = history_line_last;
+		return false;
+	}
+
+	q_strlcpy (out, key_lines[history_line] + 1, out_size);
+	return true;
+}
+
+qboolean History_GetNext (const char *current, char *out, size_t out_size) // woods #serverhistory
+{
+	if (!history_initialized || !out || !out_size)
+		return false;
+
+	(void)current;
+
+	if (history_line == edit_line)
+		return false;
+
+	do
+	{
+		history_line = (history_line + 1) & (CMDLINES - 1);
+	} while (history_line != edit_line && !key_lines[history_line][1]);
+
+	if (history_line == edit_line)
+		q_strlcpy (out, history_saved_current, out_size);
+	else
+		q_strlcpy (out, key_lines[history_line] + 1, out_size);
+
+	return true;
 }
 
 /*

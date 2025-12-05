@@ -478,9 +478,30 @@ static void safe_write(int fd, const void* buf, size_t count) // woods #arrowkey
 	}
 }
 
-const char *Sys_ConsoleInput (void) // woods #arrowkeys
+static void Sys_RewriteInputLine(const char* newline, char* con_text, size_t con_text_size, int* textlen, int* cursor_pos) // woods #serverhistory
 {
-	static char	con_text[256];
+	int oldlen = *textlen;
+	int oldpos = *cursor_pos;
+	size_t newlen;
+
+	for (int i = 0; i < oldpos; i++)
+		safe_write(1, "\b", 1);
+	for (int i = 0; i < oldlen; i++)
+		safe_write(1, " ", 1);
+	for (int i = 0; i < oldlen; i++)
+		safe_write(1, "\b", 1);
+
+	newlen = q_strlcpy(con_text, newline ? newline : "", con_text_size);
+	if (newlen)
+		safe_write(1, con_text, newlen);
+
+	*textlen = (int)newlen;
+	*cursor_pos = *textlen;
+}
+
+const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
+{
+	static char	con_text[MAXCMDLINE];
 	static int	textlen;
     static int cursor_pos;  // Track cursor position separately from text length
 	char		c;
@@ -554,7 +575,19 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys
                                     }
                                     continue;
                                 case 'A': // Up arrow
+								{
+									char history_line[MAXCMDLINE];
+									if (History_GetPrevious(con_text, history_line, sizeof(history_line)))
+										Sys_RewriteInputLine(history_line, con_text, sizeof(con_text), &textlen, &cursor_pos);
+									continue;
+								}
                                 case 'B': // Down arrow
+								{
+									char history_line[MAXCMDLINE];
+									if (History_GetNext(con_text, history_line, sizeof(history_line)))
+										Sys_RewriteInputLine(history_line, con_text, sizeof(con_text), &textlen, &cursor_pos);
+									continue;
+								}
                                     continue;
                             }
                         }
@@ -568,6 +601,7 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys
         {
 			safe_write(1, "\n", 1);
             con_text[textlen] = '\0';
+			History_StoreCommand(con_text);
             textlen = 0;
             cursor_pos = 0;
             return con_text;
