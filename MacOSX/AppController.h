@@ -31,7 +31,10 @@ extern NSString *FQPrefScreenModeKey;
     IBOutlet NSTextField *paramTextField;
     IBOutlet NSPopUpButton *screenModePopUp;
     IBOutlet NSButton *fullscreenCheckBox;
-    
+
+    NSTextField *launcherTitleLabel;
+    NSPopUpButton *commandOptionPopUp;
+
     NSMutableArray *screenModes;
     QuakeArguments *arguments;
 }
@@ -39,6 +42,9 @@ extern NSString *FQPrefScreenModeKey;
 - (IBAction)changeScreenMode:(id)sender;
 - (IBAction)launchQuake:(id)sender;
 - (IBAction)cancel:(id)sender;
+- (IBAction)showAboutPanel:(id)sender;
+- (IBAction)addCommandLineOption:(id)sender;
+- (IBAction)openGithub:(id)sender;
 
 - (NSArray *)screenModes;
 
