@@ -1621,20 +1621,6 @@ void History_Shutdown (void)
 			i = (i + 1) & (CMDLINES - 1);
 		} while (i != edit_line && !key_lines[i][1]);
 
-	workline = key_lines[edit_line];
-	workline[0] = ']';
-	q_strlcpy (workline + 1, line, MAXCMDLINE - 1);
-
-	if (strcmp(workline, key_lines[(edit_line - 1) & (CMDLINES - 1)]))
-		edit_line = (edit_line + 1) & (CMDLINES - 1);
-
-	history_line = edit_line;
-	key_lines[edit_line][0] = ']';
-	key_lines[edit_line][1] = 0;
-	key_linepos = 1;
-	history_saved_current[0] = 0;
-}
-
 		while (i != edit_line && key_lines[i][1])
 		{
 			fprintf(hf, "%s\n", key_lines[i] + 1);
