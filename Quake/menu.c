@@ -527,9 +527,11 @@ void M_PrintHighlight(int x, int y, const char* str, const char* search, int sea
 // TODO: smooth scrolling
 void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qboolean color) // woods #modsmenu (iw)
 {
-	int maxchars = maxwidth / 8;
+	const int charwidth = 8;
+	const int gap_len = 5;
+	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
+	int maxchars = maxwidth / charwidth;
 	int len = strlen(str);
-	int i, ofs;
 	char mask = color ? 128 : 0;
 
 	if (len <= maxchars)
@@ -541,19 +543,36 @@ void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qbo
 		return;
 	}
 
-	ofs = (int)floor(time * 4.0);
-	ofs %= len + 5;
-	if (ofs < 0)
-		ofs += len + 5;
+	if (!len)
+		return;
 
-	for (i = 0; i < maxchars; i++)
+	int total_chars = len + gap_len;
+	int cycle_pixels = total_chars * charwidth;
+	int pixel_offset = ((int)(time * scrollspeed)) % cycle_pixels;
+	if (pixel_offset < 0)
+		pixel_offset += cycle_pixels;
+
+	for (int pass = 0; pass < 2; ++pass)
 	{
-		char c = (ofs < len) ? str[ofs] : " /// "[ofs - len];
-		M_DrawCharacter(x, y, c ^ mask);
-		x += 8;
-		if (++ofs >= len + 5)
-			ofs = 0;
+		int base_x = x - pixel_offset + pass * cycle_pixels;
+		for (int pos = 0; pos < total_chars; ++pos)
+		{
+			int char_x = base_x + pos * charwidth;
+
+			if (char_x + charwidth <= x)
+				continue;
+			if (char_x >= x + maxwidth)
+				break;
+
+			int ch;
+			if (pos < len)
+				ch = (unsigned char)str[pos];
+			else
+				ch = (unsigned char)" /// "[pos - len];
+
+			M_DrawCharacter(char_x, y, ch ^ mask);
 	}
+}
 }
 
 void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str2, double time)
@@ -588,24 +607,36 @@ void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str
 		return;
 	}
 
-	// Scrolling display
-	static const char gap[] = " /// ";
-	int scroll_len = combined_len + 5;
-	int ofs = ((int)(time * 4.0)) % scroll_len;
-	if (ofs < 0)
-		ofs += scroll_len;
+	const int charwidth = 8;
+	const int gap_len = 5;
+	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
+	int total_chars = combined_len + gap_len;
+	int cycle_pixels = total_chars * charwidth;
+	int pixel_offset = cycle_pixels ? ((int)(time * scrollspeed)) % cycle_pixels : 0;
+	if (pixel_offset < 0)
+		pixel_offset += cycle_pixels;
 
-	// Draw scrolling text
-	for (int i = 0; i < maxchars; i++) {
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		int base_x = x - pixel_offset + pass * cycle_pixels;
+		for (int pos = 0; pos < total_chars; ++pos)
+		{
+			int char_x = base_x + pos * charwidth;
+
+			if (char_x + charwidth <= x)
+				continue;
+			if (char_x >= x + maxwidth)
+				break;
+
 		char c;
-		if (ofs < combined_len)
-			c = combined[ofs];
+			if (pos < combined_len)
+				c = combined[pos];
 		else
-			c = gap[ofs - combined_len];
+				c = " /// "[pos - combined_len];
 
-		M_DrawCharacter(x + (i * 8), y, c);
-		ofs = (ofs + 1) % scroll_len;
+			M_DrawCharacter(char_x, y, c);
 	}
+}
 }
 
 void M_PrintHighlightScroll2(int x, int y, int maxwidth,
@@ -695,47 +726,70 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 	}
 
 	// Scrolling display
-	int scroll_len = combined_len + 5;
-	int ofs = ((int)(time * 4.0)) % scroll_len;
-	if (ofs < 0)
-		ofs += scroll_len;
+	const int charwidth = 8;
+	const int gap_len = 5;
+	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
+	int total_chars = combined_len + gap_len;
+	int cycle_pixels = total_chars * charwidth;
+	int pixel_offset = cycle_pixels ? ((int)(time * scrollspeed)) % cycle_pixels : 0;
+	if (pixel_offset < 0)
+		pixel_offset += cycle_pixels;
 
-	for (int i = 0; i < maxchars; i++) {
-		int pos = (ofs + i) % scroll_len;
-		if (pos >= combined_len) {
-			M_DrawCharacter(x + i * 8, y, ' ' | 128);
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		int base_x = x - pixel_offset + pass * cycle_pixels;
+		for (int pos = 0; pos < total_chars; ++pos)
+		{
+			int char_x = base_x + pos * charwidth;
+
+			if (char_x + charwidth <= x)
 			continue;
-		}
+			if (char_x >= x + maxwidth)
+				break;
 
+			int drawch;
+			if (pos < combined_len)
+			{
 		char ch = combined[pos];
 		qboolean is_highlighted = false;
 		qboolean is_bronzed = false;
 
-		if (pos < name_end) {
-			if (pos < effective_len_str) {
+				if (pos < name_end)
+				{
+					if (pos < effective_len_str)
+					{
 				is_highlighted = (name_highlight_start != -1 &&
 					pos >= name_highlight_start &&
 					pos < name_highlight_end);
 				is_bronzed = !is_highlighted;
 			}
-			else {
+					else
+					{
 				is_bronzed = true;
 			}
 		}
-		else {
+				else
+				{
 			int desc_pos = pos - name_end;
 			is_highlighted = (desc_highlight_start != -1 &&
 				desc_pos >= desc_highlight_start &&
 				desc_pos < desc_highlight_end);
 		}
 
-		M_DrawCharacter(x + i * 8, y, ch | (is_highlighted ? 0 : (is_bronzed ? 128 : 0)));
+				drawch = ch | (is_highlighted ? 0 : (is_bronzed ? 128 : 0));
+	}
+			else
+			{
+				drawch = ' ' | 128; // Gap
+}
+
+			M_DrawCharacter(char_x, y, drawch);
+		}
 	}
 }
 
 void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const char* highlight, double time)
 {
-    int maxchars = maxwidth / 8;
     int len_str = strlen(str);
 
     // Copy the original string without masking
@@ -757,37 +811,47 @@ void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const c
         }
     }
 
-    int scroll_len = len_str + 5;  // Handle scrolling text, extra spaces for scrolling
-    int ofs = ((int)(time * 4.0)) % scroll_len;
-    if (ofs < 0)
-        ofs += scroll_len;
+	const int charwidth = 8;
+	const int gap_len = 5;
+	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
+	int total_chars = len_str + gap_len;
+	int cycle_pixels = total_chars * charwidth;
+	int pixel_offset = cycle_pixels ? ((int)(time * scrollspeed)) % cycle_pixels : 0;
+	if (pixel_offset < 0)
+		pixel_offset += cycle_pixels;
 
-    for (int i = 0; i < maxchars; i++)
+	for (int pass = 0; pass < 2; ++pass)
     {
-        int pos_in_str = (ofs + i) % scroll_len;
-        char ch;
-        qboolean is_highlighted = false;
+		int base_x = x - pixel_offset + pass * cycle_pixels;
+		for (int pos = 0; pos < total_chars; ++pos)
+		{
+			int char_x = base_x + pos * charwidth;
 
-        if (pos_in_str < len_str)
+			if (char_x + charwidth <= x)
+				continue;
+			if (char_x >= x + maxwidth)
+				break;
+
+			int drawch;
+			if (pos < len_str)
         {
-            ch = name_str[pos_in_str];
+				char ch = name_str[pos];
+				qboolean is_highlighted = (name_highlight_start != -1 &&
+					pos >= name_highlight_start &&
+					pos < name_highlight_end);
 
-            // Check if this character is within the highlight in the name
-            if (name_highlight_start != -1 &&
-                pos_in_str >= name_highlight_start && pos_in_str < name_highlight_end)
-            {
-                is_highlighted = true;
+				if (is_highlighted)
+					drawch = ch & 127; // Draw character in normal color (highlighted)
+				else
+					drawch = ch | 128; // Apply bronze effect for non-highlighted text
             }
-        }
         else
         {
-            ch = ' '; // Scrolling spaces after the text
+				drawch = ' ' | 128; // Gap
         }
 
-        if (is_highlighted)
-            M_DrawCharacter(x + i * 8, y, ch & 127); // Draw character in normal color (highlighted)
-        else
-            M_DrawCharacter(x + i * 8, y, ch | 128); // Apply bronze effect for non-highlighted text
+			M_DrawCharacter(char_x, y, drawch);
+		}
     }
 }
 
