@@ -618,6 +618,13 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
             continue;
         }
 
+        if (c == 21) // Ctrl-U
+        {
+            Sys_RewriteInputLine(NULL, con_text, sizeof(con_text), &textlen, &cursor_pos);
+            Con_DedicatedResetTabState();
+            continue;
+        }
+
         if (c == '\n' || c == '\r')
         {
 			safe_write(1, "\n", 1);

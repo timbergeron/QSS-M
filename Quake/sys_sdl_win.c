@@ -657,6 +657,11 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 
 				switch (ch)
 				{
+				case 21: // Ctrl-U
+					Sys_RewriteInputLine(NULL, con_text, sizeof(con_text), &textlen, &cursor_pos, &dummy);
+					Con_DedicatedResetTabState();
+					break;
+
 				case '\r':
 					WriteFile(houtput, "\r\n", 2, &dummy, NULL);
 
