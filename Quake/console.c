@@ -2470,6 +2470,7 @@ void Con_Redirect(void(*flush)(const char *))
 //johnfitz -- tab completion stuff
 //unique defs
 char key_tabpartial[MAXCMDLINE];
+static char dedicated_tab_partial[MAXCMDLINE];
 typedef struct tab_s
 {
 	const char	*name;
@@ -2480,6 +2481,88 @@ typedef struct tab_s
 	int			count; // woods #iwtabcomplete
 } tab_t;
 tab_t	*tablist;
+
+void Con_DedicatedResetTabState(void)
+{
+	dedicated_tab_partial[0] = '\0';
+}
+
+void Con_DedicatedTabComplete(char* text, size_t buf_size, int* textlen, int* cursor_pos)
+{
+	extern char key_lines[CMDLINES][MAXCMDLINE];
+	extern size_t key_linepos;
+	extern int edit_line;
+	extern char key_tabhint[MAXCMDLINE];
+	extern qboolean keydown[MAX_KEYS];
+
+	char saved_line[MAXCMDLINE];
+	char saved_tabpartial[MAXCMDLINE];
+	char saved_tabhint[MAXCMDLINE];
+	size_t saved_pos = key_linepos;
+	qboolean saved_shift = keydown[K_SHIFT];
+
+	memcpy(saved_line, key_lines[edit_line], sizeof(saved_line));
+	memcpy(saved_tabpartial, key_tabpartial, sizeof(saved_tabpartial));
+	memcpy(saved_tabhint, key_tabhint, sizeof(saved_tabhint));
+
+	key_lines[edit_line][0] = ' ';
+	key_lines[edit_line][1] = '\0';
+	q_strlcpy(key_lines[edit_line] + 1, text, MAXCMDLINE - 1);
+
+	size_t desired_pos = 1;
+	if (cursor_pos)
+	{
+		desired_pos = (size_t)(*cursor_pos + 1);
+		if (desired_pos >= MAXCMDLINE)
+			desired_pos = MAXCMDLINE - 1;
+		if (desired_pos < 1)
+			desired_pos = 1;
+	}
+	key_linepos = desired_pos;
+
+	memcpy(key_tabpartial, dedicated_tab_partial, sizeof(key_tabpartial));
+	key_tabhint[0] = '\0';
+	keydown[K_SHIFT] = false;
+
+	Con_TabComplete(TABCOMPLETE_USER);
+
+	q_strlcpy(text, key_lines[edit_line] + 1, buf_size);
+	
+	// Sanitize output to prevent display artifacts (brackets/control chars)
+	for (char* p = text; *p; p++)
+	{
+		if ((unsigned char)*p < ' ' || *p == 127 || *p == '[' || *p == ']')
+			*p = ' ';
+	}
+
+	size_t new_len = strlen(text);
+	if (textlen)
+	{
+		if (new_len > (size_t)INT_MAX)
+			new_len = INT_MAX;
+		*textlen = (int)new_len;
+	}
+
+	if (cursor_pos)
+	{
+		int new_cursor = 0;
+		if (key_linepos > 0)
+			new_cursor = (int)key_linepos - 1;
+		if (new_cursor < 0)
+			new_cursor = 0;
+		if ((size_t)new_cursor > new_len)
+			new_cursor = (int)new_len;
+		*cursor_pos = new_cursor;
+	}
+
+	memcpy(dedicated_tab_partial, key_tabpartial, sizeof(dedicated_tab_partial));
+
+	memcpy(key_lines[edit_line], saved_line, sizeof(saved_line));
+	key_linepos = saved_pos;
+	memcpy(key_tabpartial, saved_tabpartial, sizeof(saved_tabpartial));
+	memcpy(key_tabhint, saved_tabhint, sizeof(saved_tabhint));
+	keydown[K_SHIFT] = saved_shift;
+}
 
 //defs from elsewhere
 extern qboolean	keydown[256];
@@ -3516,7 +3599,10 @@ static void Con_FormatTabMatch (const tab_t* t, char* dst, size_t dstsize)
 {
 	char tinted[MAXCMDLINE];
 
-	COM_TintSubstring(t->name, bash_partial, tinted, sizeof(tinted));
+	if (cls.state == ca_dedicated)
+		q_strlcpy(tinted, t->name, sizeof(tinted));
+	else
+		COM_TintSubstring(t->name, bash_partial, tinted, sizeof(tinted));
 
 	if (!t->type)
 		q_strlcpy(dst, tinted, dstsize);
@@ -3699,7 +3785,10 @@ void Con_TabComplete (tabcomplete_t mode)
 		BuildTabList (key_tabpartial);
 
 		if (!tablist)
+		{
+			Hunk_FreeToLowMark (mark); 
 			return;
+		}
 
 		// print list if length > 1 and action is user-initiated
 		if (tablist->next != tablist && mode == TABCOMPLETE_USER)
@@ -3714,7 +3803,10 @@ void Con_TabComplete (tabcomplete_t mode)
 		BuildTabList (key_tabpartial);
 
 		if (!tablist)
+		{
+			Hunk_FreeToLowMark (mark);
 			return;
+		}
 
 		//find current match -- can't save a pointer because the list will be rebuilt each time
 		t = tablist;
@@ -3749,6 +3841,8 @@ void Con_TabComplete (tabcomplete_t mode)
 	key_linepos = c - key_lines[edit_line] + Q_strlen(match); //set new cursor position
 	if (key_linepos >= MAXCMDLINE)
 		key_linepos = MAXCMDLINE - 1;
+
+	Hunk_FreeToLowMark (mark);
 
 	match = NULL;
 	Hunk_FreeToLowMark (mark);

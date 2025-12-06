@@ -1712,6 +1712,12 @@ void Host_Init (void)
 		CL_Init ();
 		M_Init(); // woods move this up for tab complete system #iwtabcomplete
 	}
+	else // woods -- initialize lists for dedicated server argument completion
+	{
+		ExtraMaps_Init();
+		Modlist_Init();
+		ExecList_Init();
+	}
 
 	LOC_Init (); // for 2021 rerelease support.
 

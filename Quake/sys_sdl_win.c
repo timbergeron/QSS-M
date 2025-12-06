@@ -521,6 +521,28 @@ double Sys_DoubleTime (void)
 #endif
 }
 
+static void Dedicated_RedrawInputLine(const char* text, int textlen, int cursor_pos, int previous_len)
+{
+	DWORD dummy;
+	const char carriage = '\r';
+	const char space = ' ';
+
+	WriteFile(houtput, &carriage, 1, &dummy, NULL);
+	if (textlen > 0)
+		WriteFile(houtput, text, (DWORD)textlen, &dummy, NULL);
+
+	if (previous_len > textlen)
+	{
+		int diff = previous_len - textlen;
+		for (int i = 0; i < diff; ++i)
+			WriteFile(houtput, &space, 1, &dummy, NULL);
+	}
+
+	WriteFile(houtput, &carriage, 1, &dummy, NULL);
+	if (cursor_pos > 0)
+		WriteFile(houtput, text, (DWORD)cursor_pos, &dummy, NULL);
+}
+
 #if defined(_WIN32)
 void Sys_Image_BGRA_To_Clipboard(byte* bmbits, int width, int height, int size) // woods #screenshotcopy
 {
@@ -622,6 +644,14 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 						Sys_RewriteInputLine(history_line, con_text, sizeof(con_text), &textlen, &cursor_pos, &dummy);
 					continue;
 				}
+				else 				if (recs[0].Event.KeyEvent.uChar.AsciiChar == '\t')
+				{
+					con_text[textlen] = '\0'; // Ensure input is null terminated
+					int previous_len = textlen;
+					Con_DedicatedTabComplete(con_text, sizeof(con_text), &textlen, &cursor_pos);
+					Dedicated_RedrawInputLine(con_text, textlen, cursor_pos, previous_len);
+					continue;
+				}
 
 				ch = recs[0].Event.KeyEvent.uChar.AsciiChar;
 
@@ -630,11 +660,16 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 				case '\r':
 					WriteFile(houtput, "\r\n", 2, &dummy, NULL);
 
+					if (textlen != 0)
+					{
 						con_text[textlen] = 0;
-					History_StoreCommand(con_text);
 						textlen = 0;
 						cursor_pos = 0; // woods #arrowkeys
+						Con_DedicatedResetTabState();
 						return con_text;
+					}
+
+					break;
 
 				case '\b':
 					if (cursor_pos > 0)
@@ -658,6 +693,7 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 						{
 							WriteFile(houtput, " \b", 2, &dummy, NULL);  // Clear last character
 						}
+						Con_DedicatedResetTabState();
 					}
 					break;
 
@@ -688,6 +724,7 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 							textlen++;
 							cursor_pos++;
 						}
+						Con_DedicatedResetTabState();
 					}
 
 					break;

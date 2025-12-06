@@ -478,6 +478,27 @@ static void safe_write(int fd, const void* buf, size_t count) // woods #arrowkey
 	}
 }
 
+static void Dedicated_RedrawInputLine(const char* text, int textlen, int cursor_pos, int previous_len)
+{
+	const char carriage = '\r';
+	const char space = ' ';
+
+	safe_write(1, &carriage, 1);
+	if (textlen > 0)
+		safe_write(1, text, (size_t)textlen);
+
+	if (previous_len > textlen)
+	{
+		int diff = previous_len - textlen;
+		for (int i = 0; i < diff; ++i)
+			safe_write(1, &space, 1);
+	}
+
+	safe_write(1, &carriage, 1);
+	if (cursor_pos > 0)
+		safe_write(1, text, (size_t)cursor_pos);
+}
+
 static void Sys_RewriteInputLine(const char* newline, char* con_text, size_t con_text_size, int* textlen, int* cursor_pos) // woods #serverhistory
 {
 	int oldlen = *textlen;
@@ -604,7 +625,16 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 			History_StoreCommand(con_text);
             textlen = 0;
             cursor_pos = 0;
+            Con_DedicatedResetTabState();
             return con_text;
+        }
+        else if (c == '\t')
+        {
+			con_text[textlen] = '\0'; // Ensure input is null terminated
+            int previous_len = textlen;
+            Con_DedicatedTabComplete(con_text, sizeof(con_text), &textlen, &cursor_pos);
+            Dedicated_RedrawInputLine(con_text, textlen, cursor_pos, previous_len);
+            continue;
         }
         else if (c == 8 || c == 127)    // backspace or delete
         {
@@ -629,6 +659,7 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
                 {
 					safe_write(1, " \b", 2);  // Clear last character
                 }
+                Con_DedicatedResetTabState();
             }
             continue;
         }
@@ -659,6 +690,7 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
                 textlen++;
                 cursor_pos++;
             }
+            Con_DedicatedResetTabState();
         }
     }
 
