@@ -1799,6 +1799,56 @@ void R_DrawTracers(void)
 	glDisable(GL_BLEND);
 }
 
+enum
+{
+	LIGHTNING_ALPHA_SLOT_BOLT2 = 0,
+	LIGHTNING_ALPHA_SLOT_BOLT1,
+	LIGHTNING_ALPHA_SLOT_BOLT3,
+	LIGHTNING_ALPHA_SLOT_COUNT
+};
+
+static float r_lightning_alphas[LIGHTNING_ALPHA_SLOT_COUNT] = { 1.0f, 1.0f, 1.0f };
+static char r_lightning_alpha_cached_string[128] = { 0 };
+
+static int R_LightningAlphaSlotForModel(const qmodel_t *model)
+{
+	if (!model || !model->name)
+		return LIGHTNING_ALPHA_SLOT_BOLT2;
+
+	if (!strcmp(model->name, "progs/bolt.mdl"))
+		return LIGHTNING_ALPHA_SLOT_BOLT1;
+	if (!strcmp(model->name, "progs/bolt3.mdl"))
+		return LIGHTNING_ALPHA_SLOT_BOLT3;
+
+	return LIGHTNING_ALPHA_SLOT_BOLT2;
+}
+
+static void R_UpdateLightningAlphas(void)
+{
+	const char *value = gl_lightning_alpha.string ? gl_lightning_alpha.string : "";
+
+	if (!strcmp(value, r_lightning_alpha_cached_string))
+		return;
+
+	Q_strncpy(r_lightning_alpha_cached_string, value, sizeof(r_lightning_alpha_cached_string) - 1);
+	r_lightning_alpha_cached_string[sizeof(r_lightning_alpha_cached_string) - 1] = '\0';
+
+	float parsed[LIGHTNING_ALPHA_SLOT_COUNT] = { 1.0f, 1.0f, 1.0f };
+	sscanf(r_lightning_alpha_cached_string, "%f %f %f",
+		&parsed[LIGHTNING_ALPHA_SLOT_BOLT2],
+		&parsed[LIGHTNING_ALPHA_SLOT_BOLT1],
+		&parsed[LIGHTNING_ALPHA_SLOT_BOLT3]);
+
+	for (int i = 0; i < LIGHTNING_ALPHA_SLOT_COUNT; ++i)
+		r_lightning_alphas[i] = CLAMP(0.0f, parsed[i], 1.0f);
+}
+
+float R_LightningAlphaForModel(const qmodel_t *model)
+{
+	R_UpdateLightningAlphas();
+	return r_lightning_alphas[R_LightningAlphaSlotForModel(model)];
+}
+
 /*
 =============
 R_LightningBeam_DeleteTexture // woods #beamspoly
@@ -1893,8 +1943,7 @@ static void R_DrawLightningBeamsPolygons(void)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-	float alpha = CLAMP(0.0f, gl_lightning_alpha.value, 1.0f);
-	glColor4f(1.0f, 1.0f, 1.0f, alpha);
+	float cached_alpha = -1.0f;
 
 	for (int i = 0; i < MAX_BEAMS; ++i)
 	{
@@ -1905,6 +1954,13 @@ static void R_DrawLightningBeamsPolygons(void)
 			continue;
 		if (!b->lightning)
 			continue;
+
+		float alpha = R_LightningAlphaForModel(b->model);
+		if (alpha != cached_alpha)
+		{
+			glColor4f(1.0f, 1.0f, 1.0f, alpha);
+			cached_alpha = alpha;
+		}
 
 		vec3_t start, end, beamdir, up, right, offset;
 		CL_Beam_CalculatePositions(b, start, end);

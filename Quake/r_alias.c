@@ -2067,8 +2067,13 @@ void R_DrawAliasModel (entity_t *e)
 
 	// end double eyes / woods
 
-	if (!strcmp(clmodel->name, "progs/bolt2.mdl"))   // woods for lighting alpha #lightalpha
-		currententity->alpha = ENTALPHA_ENCODE(gl_lightning_alpha.value); 
+	if (!strcmp(clmodel->name, "progs/bolt.mdl") ||
+		!strcmp(clmodel->name, "progs/bolt2.mdl") ||
+		!strcmp(clmodel->name, "progs/bolt3.mdl"))   // woods for lighting alpha #lightalpha
+	{
+		float lightning_alpha = R_LightningAlphaForModel(clmodel);
+		currententity->alpha = (lightning_alpha <= 0.0f) ? ENTALPHA_ZERO : ENTALPHA_ENCODE(lightning_alpha);
+	}
 	
 	//
 	// random stuff

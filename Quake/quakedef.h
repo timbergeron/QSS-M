@@ -461,6 +461,7 @@ void FileList_Add_MapDesc (const char* levelName); // woods #mapdescriptions
 void M_CheckMods (void); // woods #modsmenu (iw)
 
 extern cvar_t	gl_lightning_alpha; // woods #lightalpha
+float R_LightningAlphaForModel(const qmodel_t* model); // woods #lightalpha
 extern cvar_t	cl_damagehue;  // woods #damage
 extern cvar_t	cl_damagehuecolor;  // woods #damage
 extern	vec3_t	NULLVEC; // woods truelighting #truelight
