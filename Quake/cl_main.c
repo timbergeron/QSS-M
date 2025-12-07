@@ -35,6 +35,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "cfgfile.h" // woods #webdl
 #include "q_ctype.h" // woods #entcopy
 
+void CL_RotateModel_OnChange(cvar_t* var); // woods #clmrotate
+void CL_RotateModel_f(void); // woods #clmrotate
+void CL_RotateModel_RebuildFromCvar(void); // woods #clmrotate
+
 // we need to declare some mouse variables here, because the menu system
 // references them even when on a unix system.
 
@@ -75,6 +79,7 @@ cvar_t  r_explosionlight = {"r_explosionlight", "0", CVAR_ARCHIVE}; // woods #ex
 cvar_t  cl_muzzleflash = {"cl_muzzleflash", "0", CVAR_ARCHIVE}; // woods #muzzleflash
 cvar_t  cl_deadbodyfilter = {"cl_deadbodyfilter", "1", CVAR_ARCHIVE}; // woods #deadbody
 cvar_t	cl_r2g = {"cl_r2g","0",CVAR_ARCHIVE}; // woods #r2g
+cvar_t	cl_rot = {"cl_rot", "", CVAR_ARCHIVE}; // woods #clmrotate
 
 cvar_t  w_switch = {"w_switch", "0", CVAR_ARCHIVE | CVAR_USERINFO}; // woods #autoweapon
 cvar_t  b_switch = {"b_switch", "0", CVAR_ARCHIVE | CVAR_USERINFO}; // woods #autoweapon
@@ -3615,6 +3620,10 @@ void CL_Init (void)
 	Cvar_SetCompletion (&cl_onload, &CL_Onload_Completion_f); // woods #onload
 	Cvar_RegisterVariable (&cl_contentfilter); // woods #contentfilter
 
+	Cvar_RegisterVariable(&cl_rot); // woods #clmrotate
+	Cvar_SetCallback(&cl_rot, CL_RotateModel_OnChange); // woods #clmrotate
+	CL_RotateModel_RebuildFromCvar(); // woods #clmrotate
+
 	WebCheckInit (); // woods -- check if the web downloads servers are live at launch (threaded) #webdl
 
 	Cmd_AddCommand ("entities", CL_PrintEntities_f);
@@ -3628,6 +3637,7 @@ void CL_Init (void)
 	Cmd_AddCommand ("viewpos", CL_Viewpos_f); //johnfitz
 
 	Cmd_AddCommand("entdump", &CL_Entdump_f); // woods #entcopy
+	Cmd_AddCommand("rotatemodel", CL_RotateModel_f); // woods #clmrotate
 
 	//spike -- serverinfo stuff
 	Cmd_AddCommand_ServerCommand ("fullserverinfo", CL_ServerExtension_FullServerinfo_f);
@@ -3645,6 +3655,7 @@ void CL_Init (void)
 	Cmd_AddCommand_ServerCommand ("wps", CL_ServerExtension_Ignore_f); //ktx/cspree weapon stats
 	Cmd_AddCommand_ServerCommand ("it", CL_ServerExtension_ItemTimer_f); //cspree item timers -- woods #obstimers
 	Cmd_AddCommand_ServerCommand ("tinfo", CL_ServerExtension_TeamInfo_f); //ktx team info -- woods #teaminfo
+	Cmd_AddCommand_ServerCommand ("pl", CL_ServerExtension_PL_f); // woods #serverpl
 	Cmd_AddCommand_ServerCommand ("exectrigger", CL_ServerExtension_Ignore_f); //spike
 	Cmd_AddCommand_ServerCommand ("csqc_progname", CL_ServerExtension_Ignore_f); //spike
 	Cmd_AddCommand_ServerCommand ("csqc_progsize", CL_ServerExtension_Ignore_f); //spike

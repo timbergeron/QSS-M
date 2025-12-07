@@ -49,6 +49,12 @@ typedef struct efrag_s
 
 //johnfitz
 
+typedef struct entity_s entity_t; // woods #clmrotate
+typedef float vec_t; // woods #clmrotate
+typedef vec_t vec3_t[3]; // woods #clmrotate
+
+qboolean CL_ApplyModelRotation(entity_t* ent, vec3_t angles, float time); // woods #clmrotate
+
 typedef struct entity_s
 {
 	qboolean				forcelink;		// model changed
@@ -85,6 +91,18 @@ typedef struct entity_s
 	byte					eflags;			//spike -- mostly a mirror of netstate, but handles tag inheritance (eww!)
 	byte					alpha;			//johnfitz -- alpha
 	byte					lerpflags;		//johnfitz -- lerping
+
+	// woods #clmrotate
+	
+	qboolean				obsend;				
+	struct qmodel_s			*rot_prev_model;	// last model we processed
+	qboolean				rot_started;		// has spun at least once
+	qboolean				rot_nonzero_seen;	// has seen net angles
+	qboolean				rot_frozen;			// rotation is locked
+	vec3_t					rot_base;			// QuakeC angles at spawn
+	vec3_t					rot_last;			// pose used last frame (for freeze)
+	vec3_t					rot_final;			// pose to reuse after freeze
+	int						rot_last_host_framecount; // host frame we last advanced on
 
 	union
 	{

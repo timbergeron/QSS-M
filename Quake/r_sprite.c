@@ -90,6 +90,11 @@ void R_DrawSpriteModel (entity_t *e)
 
 	frame = R_GetSpriteFrame (e);
 	psprite = (msprite_t *) currententity->model->cache.data;
+	
+	if (currententity->model && CL_ApplyModelRotation(currententity, currententity->angles, host_frametime)) // woods #clmrotate
+	{
+		currententity->effects &= ~EF_ROTATE; // EF_ROTATE already cleared server-side, but if mapper forgot
+	}
 
 	switch(psprite->type)
 	{

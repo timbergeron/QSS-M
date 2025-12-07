@@ -1725,6 +1725,11 @@ void R_SetupEntityTransform (entity_t *e, lerpdata_t *lerpdata)
 		VectorCopy (e->origin, lerpdata->origin);
 		VectorCopy (e->angles, lerpdata->angles);
 	}
+
+	if (e->model && CL_ApplyModelRotation(e, lerpdata->angles, host_frametime)) // woods #clmrotate
+	{
+		e->effects &= ~EF_ROTATE; // EF_ROTATE already cleared server-side, but if mapper forgot
+	}
 }
 
 /*
