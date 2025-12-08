@@ -13286,7 +13286,7 @@ Server List Menu
 ==================
 */
 
-#define MAX_VIS_SERVERS 18
+#define MAX_VIS_SERVERS 17
 #define PING_COOLDOWN 2.0
 #define MAX_PING_QUEUE 5
 
@@ -13316,6 +13316,7 @@ static struct {
 	qboolean scrollbar_grab;
     servertitem_t* items;
     int* order;
+    int* filtered_indices;
     int servercount;
     int slist_first;
     qboolean pingSortDirty;
@@ -13326,7 +13327,16 @@ static struct {
 	int pingQueueSize;
 	qboolean pingThreadRunning;
 	SDL_Thread* pingThread;
+	int sort_mode;
+	qboolean sort_descending;
 } serversmenu;
+
+enum {
+	SORT_NAME,
+	SORT_MAP,
+	SORT_USERS,
+	SORT_PING
+};
 
 //=============================================================================
 // woods servers.quakeone.com support curl+json parsing #serversmenu
@@ -13338,7 +13348,7 @@ SDL_mutex* pingMutex = NULL;
 int UDP_Ping_Host(const char* host);
 
 static int ServersMenu_ResolveIndex(int displayIndex);
-static void SortServersByPing(qboolean lockMutex);
+static void SortServers(qboolean lockMutex);
 
 void InitializePingMutex(void)
 {
@@ -13765,28 +13775,59 @@ void CurlServerList (servertitem_t** items, int* actualServerCount)
 	curl_global_cleanup();
 }
 
-static int CompareServerPingByIndex(const void* a, const void* b)
+static int CompareServers(const void* a, const void* b)
 {
         int indexA = *(const int*)a;
         int indexB = *(const int*)b;
         const servertitem_t* serverA = &serversmenu.items[indexA];
         const servertitem_t* serverB = &serversmenu.items[indexB];
+	int res = 0;
 
+	switch (serversmenu.sort_mode) {
+	case SORT_NAME:
+		res = q_strcasecmp(serverA->name, serverB->name);
+		break;
+	case SORT_MAP:
+		res = q_strcasecmp(serverA->map, serverB->map);
+		break;
+	case SORT_USERS:
+		res = serverA->users - serverB->users;
+		break;
+	case SORT_PING:
+		{
         int pingA = (serverA->ping >= 0) ? serverA->ping : INT_MAX;
         int pingB = (serverB->ping >= 0) ? serverB->ping : INT_MAX;
+			res = pingA - pingB;
+		}
+		break;
+	}
 
+	if (res == 0) {
+		if (serversmenu.sort_mode != SORT_PING) {
+			int pingA = (serverA->ping >= 0) ? serverA->ping : INT_MAX;
+			int pingB = (serverB->ping >= 0) ? serverB->ping : INT_MAX;
         if (pingA != pingB)
                 return pingA - pingB;
-
-        int userDifference = serverB->users - serverA->users;
-        if (userDifference != 0)
-                return userDifference;
-
+		}
         return q_strcasecmp(serverA->name, serverB->name);
+}
+
+	return serversmenu.sort_descending ? -res : res;
 }
 
 static int ServersMenu_ResolveIndex(int displayIndex)
 {
+	// When search is active, use filtered_indices
+	if (serversmenu.list.search.len > 0 && serversmenu.filtered_indices)
+	{
+		if (displayIndex < 0 || displayIndex >= VEC_SIZE(serversmenu.filtered_indices))
+			return -1;
+		int sortedIndex = serversmenu.filtered_indices[displayIndex];
+		if (!serversmenu.order)
+			return sortedIndex;
+		return serversmenu.order[sortedIndex];
+	}
+
         if (displayIndex < 0 || displayIndex >= serversmenu.servercount)
                 return -1;
 
@@ -13796,7 +13837,41 @@ static int ServersMenu_ResolveIndex(int displayIndex)
         return serversmenu.order[displayIndex];
 }
 
-static void SortServersByPing(qboolean lockMutex)
+static void M_ServerList_Refilter(void)
+{
+    int i;
+    VEC_CLEAR(serversmenu.filtered_indices);
+
+    for (i = 0; i < serversmenu.servercount; i++)
+    {
+        int actual_idx = serversmenu.order ? serversmenu.order[i] : i;
+        if (actual_idx < 0 || actual_idx >= serversmenu.servercount)
+            continue;
+
+        const servertitem_t* server = &serversmenu.items[actual_idx];
+        
+        if (serversmenu.list.search.len == 0 ||
+            q_strcasestr(server->name, serversmenu.list.search.text) ||
+            q_strcasestr(server->map, serversmenu.list.search.text) ||
+            q_strcasestr(server->ip, serversmenu.list.search.text))
+        {
+            VEC_PUSH(serversmenu.filtered_indices, i);
+        }
+    }
+
+    serversmenu.list.numitems = VEC_SIZE(serversmenu.filtered_indices);
+
+    if (serversmenu.list.cursor >= serversmenu.list.numitems)
+        serversmenu.list.cursor = serversmenu.list.numitems - 1;
+
+    if (serversmenu.list.cursor < 0 && serversmenu.list.numitems > 0)
+        serversmenu.list.cursor = 0;
+
+    M_List_CenterCursor(&serversmenu.list);
+}
+
+
+static void SortServers(qboolean lockMutex)
 {
         qboolean locked = false;
 
@@ -13817,7 +13892,7 @@ static void SortServersByPing(qboolean lockMutex)
         int selectedActual = ServersMenu_ResolveIndex(serversmenu.list.cursor);
 
         if (serversmenu.servercount >= 2)
-                qsort(serversmenu.order, serversmenu.servercount, sizeof(serversmenu.order[0]), CompareServerPingByIndex);
+		qsort(serversmenu.order, serversmenu.servercount, sizeof(serversmenu.order[0]), CompareServers);
 
         if (selectedActual >= 0)
         {
@@ -13922,7 +13997,7 @@ void FetchAndSortServers (void)
         }
 
 	serversmenu.pingSortDirty = false;
-	SortServersByPing(false);
+	SortServers(false);
 
         if (serversmenu.list.cursor >= actualServerCount)
                 serversmenu.list.cursor = actualServerCount > 0 ? actualServerCount - 1 : 0;
@@ -13953,6 +14028,9 @@ void M_Menu_ServerList_f (void)
 	PingAllServers();
 
 	serversmenu.list.viewsize = MAX_VIS_SERVERS;
+	memset(&serversmenu.list.search, 0, sizeof(serversmenu.list.search));
+	serversmenu.list.search.maxlen = 32;
+	VEC_CLEAR(serversmenu.filtered_indices);
 
 	M_Ticker_Init(&serversmenu.ticker);
 
@@ -13965,7 +14043,7 @@ void M_ServerList_Draw (void)
 	int firstvis, numvis;
 
 	x = 16;
-	y = 28;
+	y = 36;
 	cols = 36;
 
         serversmenu.x = x;
@@ -13973,7 +14051,7 @@ void M_ServerList_Draw (void)
         serversmenu.cols = cols;
 
         if (serversmenu.pingSortDirty)
-                SortServersByPing(true);
+                SortServers(true);
 
         if (!keydown[K_MOUSE1])
                 serversmenu.scrollbar_grab = false;
@@ -13986,8 +14064,31 @@ void M_ServerList_Draw (void)
 		M_Ticker_Update(&serversmenu.ticker);
 	}
 
-	Draw_String(x, y - 28, "Servers");
-	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
+	Draw_String(x, y - 36, "Servers");
+	M_DrawQuakeBar(x - 8, y - 24, cols + 2);
+	// Header drawing
+	int header_y = y - 16;
+	const char *hdr_name = "Name";
+	const char *hdr_map = "Map";
+	const char *hdr_users = "Plys";
+	const char *hdr_ping = "Ping";
+	
+	if (serversmenu.sort_mode == SORT_NAME) M_PrintWhite(x, header_y, hdr_name);
+	else M_Print(x, header_y, hdr_name);
+
+	if (serversmenu.sort_mode == SORT_MAP) M_PrintWhite(x + 18 * 8, header_y, hdr_map);
+	else M_Print(x + 18 * 8, header_y, hdr_map);
+	
+	if (serversmenu.sort_mode == SORT_USERS) M_PrintWhite(x + 25 * 8, header_y, hdr_users);
+	else M_Print(x + 25 * 8, header_y, hdr_users);
+	
+	if (serversmenu.sort_mode == SORT_PING) M_PrintWhite(x + 31 * 8, header_y, hdr_ping);
+	else M_Print(x + 31 * 8, header_y, hdr_ping);
+
+        // Reduce visible items when search is active to make room for search box and tooltip
+        int saved_viewsize = serversmenu.list.viewsize;
+        if (serversmenu.list.search.len > 0 && serversmenu.list.viewsize > 13)
+                serversmenu.list.viewsize = 13;
 
         M_List_GetVisibleRange(&serversmenu.list, &firstvis, &numvis);
         for (i = 0; i < numvis; i++) {
@@ -14024,17 +14125,23 @@ void M_ServerList_Draw (void)
                         }
                 }
 
+		char plysStr[16];
+		q_snprintf(plysStr, sizeof(plysStr), "%u/%u", server->users, server->maxusers);
+
                 char linePrefixStr[32];
-                q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-16.16s  %-6.6s %2u/%2u ",
+		q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-16.16s  %-6.6s %-5s ",
                         server->name,
                         server->map,
-                        server->users,
-                        server->maxusers);
+			plysStr);
 
                 int current_y_pos = y + i * 8;
                 int current_x_pos = x;
 
-                if (isActive) {
+                if (serversmenu.list.search.len > 0) {
+                        M_PrintHighlight(current_x_pos, current_y_pos, linePrefixStr,
+                                serversmenu.list.search.text, serversmenu.list.search.len);
+                }
+                else if (isActive) {
                         M_PrintWhite(current_x_pos, current_y_pos, linePrefixStr);
                 }
                 else {
@@ -14083,6 +14190,23 @@ void M_ServerList_Draw (void)
 		if (serversmenu.list.scroll + serversmenu.list.viewsize < serversmenu.list.numitems)
 			M_DrawEllipsisBar(x, y + serversmenu.list.viewsize * 8, cols);
 	}
+
+	// Restore viewsize
+	serversmenu.list.viewsize = saved_viewsize;
+
+	// Draw search box
+	if (serversmenu.list.search.len > 0)
+	{
+		M_DrawTextBox(16, 180, 32, 1);
+		M_PrintHighlight(24, 188, serversmenu.list.search.text,
+			serversmenu.list.search.text,
+			serversmenu.list.search.len);
+		int cursor_x = 24 + 8 * serversmenu.list.search.len;
+		if (serversmenu.list.numitems == 0)
+			M_DrawCharacter(cursor_x, 188, 11 ^ 128);
+		else
+			M_DrawCharacter(cursor_x, 188, 10 + ((int)(realtime * 4) & 1));
+	}
 }
 
 qboolean M_Servers_Match(int index, char initial)
@@ -14121,6 +14245,48 @@ void M_ServerList_Key(int key)
 	int x, y; // woods #mousemenu
 	int prev_cursor = serversmenu.list.cursor;
 
+	
+	// Handle Ctrl+U or Ctrl+Backspace first
+	if (keydown[K_CTRL])
+	{
+		if ((key == 'u' || key == 'U') && serversmenu.list.search.len > 0)
+		{
+			serversmenu.list.search.len = 0;
+			serversmenu.list.search.text[0] = 0;
+			M_ServerList_Refilter();
+			return;
+		}
+		else if (key == K_BACKSPACE && serversmenu.list.search.len > 0)
+		{
+			M_DeletePrevWord(&serversmenu.list.search);
+			M_ServerList_Refilter();
+			return;
+		}
+	}
+
+	// Handle search input - printable characters
+	if (key >= 32 && key < 127)
+	{
+		if (serversmenu.list.search.len < serversmenu.list.search.maxlen)
+		{
+			serversmenu.list.search.text[serversmenu.list.search.len++] = key;
+			serversmenu.list.search.text[serversmenu.list.search.len] = 0;
+			M_ServerList_Refilter();
+			return;
+		}
+	}
+
+	// Handle backspace for search
+	if (key == K_BACKSPACE)
+	{
+		if (serversmenu.list.search.len > 0)
+		{
+			serversmenu.list.search.text[--serversmenu.list.search.len] = 0;
+			M_ServerList_Refilter();
+			return;
+		}
+	}
+
 	if (serversmenu.scrollbar_grab)
 	{
 		switch (key)
@@ -14156,6 +14322,14 @@ void M_ServerList_Key(int key)
 	switch (key)
 	{
 	case K_ESCAPE:
+		if (serversmenu.list.search.len > 0)
+		{
+			serversmenu.list.search.len = 0;
+			serversmenu.list.search.text[0] = 0;
+			M_ServerList_Refilter();
+			return;
+		}
+		// Fall through to exit menu if search is already empty
 	case K_BBUTTON:
 	case K_MOUSE4: // woods #mousemenu
 	case K_MOUSE2:
@@ -14183,6 +14357,31 @@ void M_ServerList_Key(int key)
                 break;
 
 	case K_MOUSE1: // woods #mousemenu
+{
+		// Check header click
+		int hx = m_mousex - serversmenu.x;
+		int hy = m_mousey - (serversmenu.y - 16);
+		if (hy >= 0 && hy < 8) {
+			int new_sort = -1;
+			if (hx >= 0 && hx < 16 * 8) new_sort = SORT_NAME;
+			else if (hx >= 18 * 8 && hx < (18 + 6) * 8) new_sort = SORT_MAP;
+			else if (hx >= 25 * 8 && hx < (25 + 5) * 8) new_sort = SORT_USERS;
+			else if (hx >= 32 * 8 && hx < (32 + 4) * 8) new_sort = SORT_PING;
+			
+			if (new_sort != -1) {
+				if (serversmenu.sort_mode == new_sort) {
+					serversmenu.sort_descending = !serversmenu.sort_descending;
+				} else {
+					serversmenu.sort_mode = new_sort;
+                    // Default sort directions
+                    if (new_sort == SORT_USERS) serversmenu.sort_descending = true;
+                    else serversmenu.sort_descending = false;
+				}
+				SortServers(true);
+				S_LocalSound("misc/menu2.wav");
+				return;
+			}
+		}
 		x = m_mousex - serversmenu.x - (serversmenu.cols - 1) * 8;
 		y = m_mousey - serversmenu.y;
 		if (x < -8 || !M_List_UseScrollbar(&serversmenu.list, y))
@@ -14190,6 +14389,7 @@ void M_ServerList_Key(int key)
 		serversmenu.scrollbar_grab = true;
 		M_Mods_Mousemove(m_mousex, m_mousey);
 
+}
 	default:
 		break;
 	}
