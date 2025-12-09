@@ -79,6 +79,7 @@ cvar_t  r_explosionlight = {"r_explosionlight", "0", CVAR_ARCHIVE}; // woods #ex
 cvar_t  cl_muzzleflash = {"cl_muzzleflash", "0", CVAR_ARCHIVE}; // woods #muzzleflash
 cvar_t  cl_deadbodyfilter = {"cl_deadbodyfilter", "1", CVAR_ARCHIVE}; // woods #deadbody
 cvar_t	cl_r2g = {"cl_r2g","0",CVAR_ARCHIVE}; // woods #r2g
+cvar_t	cl_demoeyes = {"cl_demoeyes", "0", CVAR_ARCHIVE}; // woods #demoeyes (value = alpha, 0 = disabled)
 cvar_t	cl_rot = {"cl_rot", "", CVAR_ARCHIVE}; // woods #clmrotate
 
 cvar_t  w_switch = {"w_switch", "0", CVAR_ARCHIVE | CVAR_USERINFO}; // woods #autoweapon
@@ -1118,6 +1119,238 @@ static void CL_ClientsidePowerupColor(entity_t* ent, int entnum)
 	}
 }
 
+/* ------------------------------------------------------*/
+/*    woods #demoeyes show player model for eyes entity  */
+/* ------------------------------------------------------*/
+
+#define DEMOEYES_ANIM_FPS        10.0f
+#define DEMOEYES_SOURCE_MODEL    "progs/eyes.mdl"
+#define DEMOEYES_PLAYER_MODEL    "progs/player.mdl"
+
+/* Player model animation frames (from player.qc) */
+#define DEMOEYES_AXRUN_FIRST     0
+#define DEMOEYES_AXRUN_COUNT     6
+#define DEMOEYES_ROCKRUN_FIRST   6
+#define DEMOEYES_ROCKRUN_COUNT   6
+#define DEMOEYES_STAND_FIRST     12
+#define DEMOEYES_STAND_COUNT     5
+#define DEMOEYES_AXSTND_FIRST    17
+#define DEMOEYES_AXSTND_COUNT    12
+#define DEMOEYES_AXPAIN_FIRST    29
+#define DEMOEYES_AXPAIN_COUNT    6
+#define DEMOEYES_PAIN_FIRST      35
+#define DEMOEYES_PAIN_COUNT      6
+#define DEMOEYES_NAILATT_FIRST   103
+#define DEMOEYES_NAILATT_COUNT   2
+#define DEMOEYES_LIGHT_FIRST     105
+#define DEMOEYES_LIGHT_COUNT     2
+#define DEMOEYES_ROCKATT_FIRST   107
+#define DEMOEYES_ROCKATT_COUNT   6
+#define DEMOEYES_SHOTATT_FIRST   113
+#define DEMOEYES_SHOTATT_COUNT   6
+#define DEMOEYES_AXATT_FIRST     119
+#define DEMOEYES_AXATT_COUNT     6
+
+/* Animation state for viewentity */
+typedef enum {
+	DEMOEYES_ANIM_NONE = 0,
+	DEMOEYES_ANIM_ATTACK,
+	DEMOEYES_ANIM_PAIN
+} demoeyes_anim_type_t;
+
+static struct {
+	demoeyes_anim_type_t type;
+	double start_time;
+	int last_health;
+	int first_frame;
+	int frame_count;
+	qmodel_t *cached_player_model;
+} cl_demoeyes_state = {DEMOEYES_ANIM_NONE, 0.0, -1, 0, 0, NULL};
+
+static qmodel_t *CL_DemoEyesFindPlayerModel(void)
+{
+	if (cl_demoeyes_state.cached_player_model && 
+	    cl_demoeyes_state.cached_player_model->name[0] &&
+	    !strcmp(cl_demoeyes_state.cached_player_model->name, DEMOEYES_PLAYER_MODEL))
+		return cl_demoeyes_state.cached_player_model;
+
+	for (int i = 0; i < MAX_MODELS; ++i) {
+		qmodel_t *candidate = cl.model_precache[i];
+		if (!candidate || !candidate->name[0])
+			continue;
+		if (!strcmp(candidate->name, DEMOEYES_PLAYER_MODEL)) {
+			cl_demoeyes_state.cached_player_model = candidate;
+			return candidate;
+		}
+	}
+
+	return NULL;
+}
+
+static qboolean CL_DemoEyesIsObserving(void)
+{
+	if (cl.realviewentity < 1 || cl.realviewentity > cl.maxclients)
+		return false;
+	
+	char buf1[32], buf2[32];
+	const char *obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf1, sizeof(buf1));
+	const char *star_obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf2, sizeof(buf2));
+	
+	if (!strcmp(obs, "eyecam") || !strcmp(obs, "chase") || !strcmp(obs, "fly") || !strcmp(obs, "walk") ||
+	    !strcmp(star_obs, "eyecam") || !strcmp(star_obs, "chase") || !strcmp(star_obs, "fly") || !strcmp(star_obs, "walk"))
+		return true;
+	
+	return false;
+}
+
+static qboolean CL_DemoEyesIsAxe(qmodel_t *weapon_model)
+{
+	return (weapon_model && weapon_model->name[0] && 
+	        !strcmp(weapon_model->name, "progs/v_axe.mdl"));
+}
+
+static void CL_DemoEyesGetAttackAnim(qmodel_t *weapon_model, int *first, int *count)
+{
+	if (!weapon_model || !weapon_model->name[0]) {
+		*first = DEMOEYES_ROCKATT_FIRST;
+		*count = DEMOEYES_ROCKATT_COUNT;
+		return;
+	}
+	
+	if (!strcmp(weapon_model->name, "progs/v_axe.mdl")) {
+		*first = DEMOEYES_AXATT_FIRST; *count = DEMOEYES_AXATT_COUNT;
+	}
+	else if (!strcmp(weapon_model->name, "progs/v_shot.mdl") || 
+	         !strcmp(weapon_model->name, "progs/v_shot2.mdl")) {
+		*first = DEMOEYES_SHOTATT_FIRST; *count = DEMOEYES_SHOTATT_COUNT;
+	}
+	else if (!strcmp(weapon_model->name, "progs/v_nail.mdl") || 
+	         !strcmp(weapon_model->name, "progs/v_nail2.mdl")) {
+		*first = DEMOEYES_NAILATT_FIRST; *count = DEMOEYES_NAILATT_COUNT;
+	}
+	else if (!strcmp(weapon_model->name, "progs/v_rock.mdl") || 
+	         !strcmp(weapon_model->name, "progs/v_rock2.mdl")) {
+		*first = DEMOEYES_ROCKATT_FIRST; *count = DEMOEYES_ROCKATT_COUNT;
+	}
+	else if (!strcmp(weapon_model->name, "progs/v_light.mdl")) {
+		*first = DEMOEYES_LIGHT_FIRST; *count = DEMOEYES_LIGHT_COUNT;
+	}
+	else {
+		*first = DEMOEYES_ROCKATT_FIRST; *count = DEMOEYES_ROCKATT_COUNT;
+	}
+}
+
+static void CL_DemoEyesMaybeAnimate(entity_t *ent, int entnum)
+{
+	qmodel_t *current_model = ent->model;
+	if (!current_model || !current_model->name[0])
+		return;
+	
+	if (strcmp(current_model->name, DEMOEYES_SOURCE_MODEL) != 0)
+		return;
+	
+	const float alpha_value = cl_demoeyes.value;
+	if (alpha_value <= 0.0f)
+		return;
+	
+	if (!cls.demoplayback && !CL_DemoEyesIsObserving())
+		return;
+
+	qmodel_t *player_model = CL_DemoEyesFindPlayerModel();
+	if (!player_model)
+		return;
+
+	ent->model = player_model;
+	float clamped_alpha = (alpha_value > 1.0f) ? 1.0f : alpha_value;
+	ent->alpha = ENTALPHA_ENCODE(clamped_alpha);
+
+	double now = cl.time;
+	int cycle = (int)(now * DEMOEYES_ANIM_FPS);
+	if (cycle < 0) cycle = 0;
+	
+	/* Get weapon model for viewentity */
+	qmodel_t *weapon_model = NULL;
+	qboolean is_axe = false;
+	if (entnum == cl.viewentity) {
+		int weapon_index = cl.stats[STAT_WEAPON];
+		if (weapon_index > 0 && weapon_index < MAX_MODELS)
+			weapon_model = cl.model_precache[weapon_index];
+		is_axe = CL_DemoEyesIsAxe(weapon_model);
+		
+		/* Check for attack animation trigger */
+		if (cl.stats[STAT_WEAPONFRAME] != 0) {
+			if (cl_demoeyes_state.type != DEMOEYES_ANIM_ATTACK) {
+				cl_demoeyes_state.type = DEMOEYES_ANIM_ATTACK;
+				cl_demoeyes_state.start_time = now;
+				CL_DemoEyesGetAttackAnim(weapon_model, 
+					&cl_demoeyes_state.first_frame, &cl_demoeyes_state.frame_count);
+			}
+		}
+		
+		/* Check for pain animation trigger (health dropped by 5+) */
+		int health = cl.stats[STAT_HEALTH];
+		if (cl_demoeyes_state.last_health >= 0 && 
+		    health <= cl_demoeyes_state.last_health - 5 &&
+		    cl_demoeyes_state.type != DEMOEYES_ANIM_PAIN) {
+			cl_demoeyes_state.type = DEMOEYES_ANIM_PAIN;
+			cl_demoeyes_state.start_time = now;
+			cl_demoeyes_state.first_frame = is_axe ? DEMOEYES_AXPAIN_FIRST : DEMOEYES_PAIN_FIRST;
+			cl_demoeyes_state.frame_count = is_axe ? DEMOEYES_AXPAIN_COUNT : DEMOEYES_PAIN_COUNT;
+		}
+		cl_demoeyes_state.last_health = health;
+		
+		/* Check if current animation has finished */
+		if (cl_demoeyes_state.type != DEMOEYES_ANIM_NONE) {
+			int elapsed_frames = (int)((now - cl_demoeyes_state.start_time) * DEMOEYES_ANIM_FPS) + 1;
+			if (elapsed_frames > cl_demoeyes_state.frame_count) {
+				cl_demoeyes_state.type = DEMOEYES_ANIM_NONE;
+				cl_demoeyes_state.start_time = now;
+				
+				/* Restart attack if still firing */
+				if (cl.stats[STAT_WEAPONFRAME] != 0) {
+					cl_demoeyes_state.type = DEMOEYES_ANIM_ATTACK;
+					CL_DemoEyesGetAttackAnim(weapon_model,
+						&cl_demoeyes_state.first_frame, &cl_demoeyes_state.frame_count);
+				}
+			}
+		}
+		
+		/* Play current animation */
+		if (cl_demoeyes_state.type != DEMOEYES_ANIM_NONE) {
+			int frame_num = (int)((now - cl_demoeyes_state.start_time) * DEMOEYES_ANIM_FPS);
+			if (frame_num >= cl_demoeyes_state.frame_count)
+				frame_num = cl_demoeyes_state.frame_count - 1;
+			if (frame_num < 0) frame_num = 0;
+			ent->frame = cl_demoeyes_state.first_frame + frame_num;
+			return;
+		}
+	}
+	
+	/* Default: run/stand animation based on speed */
+	float speed = 0.0f;
+	int playernum = entnum - 1;
+	if (playernum >= 0 && playernum < cl.maxclients && 
+	    cl.scores[playernum].tinfo.time > cl.time) {
+		speed = cl.scores[playernum].tinfo.speed;
+	}
+	else {
+		vec3_t move;
+		VectorSubtract(ent->origin, ent->msg_origins[1], move);
+		speed = sqrt(move[0]*move[0] + move[1]*move[1]) / host_frametime;
+	}
+	
+	if (speed > 20.0f) {
+		int first = is_axe ? DEMOEYES_AXRUN_FIRST : DEMOEYES_ROCKRUN_FIRST;
+		int count = is_axe ? DEMOEYES_AXRUN_COUNT : DEMOEYES_ROCKRUN_COUNT;
+		ent->frame = first + (cycle % count);
+	}
+	else {
+		int first = is_axe ? DEMOEYES_AXSTND_FIRST : DEMOEYES_STAND_FIRST;
+		int count = is_axe ? DEMOEYES_AXSTND_COUNT : DEMOEYES_STAND_COUNT;
+		ent->frame = first + (cycle % count);
+	}
+}
+
 /*
 ===============
 CL_RelinkEntities
@@ -1213,6 +1446,7 @@ void CL_RelinkEntities (void)
 		VectorCopy (ent->origin, oldorg);
 
 		CL_ClientsidePowerupColor(ent, i); // woods
+		CL_DemoEyesMaybeAnimate(ent, i); // woods #demoeyes
 
 		if (CL_LerpEntity(ent, ent->origin, ent->angles, frac))
 			ent->lerpflags |= LERP_RESETMOVE;
@@ -3710,6 +3944,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_muzzleflash); // woods #muzzleflash
 	Cvar_RegisterVariable (&cl_deadbodyfilter); // woods #deadbody
 	Cvar_RegisterVariable (&cl_r2g); // woods #r2g
+	Cvar_RegisterVariable (&cl_demoeyes); // woods #demoeyes
 
 	Cvar_RegisterVariable (&w_switch); // woods #autoweapon
 	Cvar_RegisterVariable (&b_switch); // woods #autoweapon
