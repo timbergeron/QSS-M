@@ -5868,7 +5868,10 @@ void PF_cl_playerkey_internal(int player, const char *key, qboolean retfloat)
 	else if (!strcmp(key, "ping"))
 		q_snprintf(buf, sizeof(buf), "%i", cl.scores[player].ping);
 	else if (!strcmp(key, "pl"))
-		ret = NULL;	//unknown
+	{
+		Info_GetKey(cl.scores[player].userinfo, "pl", buf, sizeof(buf)); // woods #serverpl -- percentage (0..100), from scoreboard-cached
+		ret = *buf ? buf : NULL;
+	}
 	else if (!strcmp(key, "entertime"))
 		q_snprintf(buf, sizeof(buf), "%g", cl.scores[player].entertime);
 	else if (!strcmp(key, "topcolor_rgb"))
