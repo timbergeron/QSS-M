@@ -14428,6 +14428,7 @@ Mods Menu (iw)
 typedef struct
 {
 	const char* name;
+	char		description[64];
 	qboolean	active;
 } moditem_t;
 
@@ -14478,8 +14479,208 @@ static qboolean M_Mods_IsActive(const char* game)
 
 static void M_Mods_Add(const char* name)
 {
+	char check_path[MAX_OSPATH];
+	FILE *check_file;
+	qboolean has_progs = false;
+	qboolean has_pak = false;
+	
+	// Check for progs.dat
+	q_snprintf(check_path, sizeof(check_path), "%s/%s/progs.dat", com_basedir, name);
+	check_file = fopen(check_path, "rb");
+	if (check_file)
+	{
+		has_progs = true;
+		fclose(check_file);
+	}
+	
+	// Check for pak files (pak0.pak, pak1.pak, etc)
+	if (!has_progs)
+	{
+		for (int pak_num = 0; pak_num < 10 && !has_pak; pak_num++)
+		{
+			q_snprintf(check_path, sizeof(check_path), "%s/%s/pak%d.pak", com_basedir, name, pak_num);
+			check_file = fopen(check_path, "rb");
+			if (check_file)
+			{
+				has_pak = true;
+				fclose(check_file);
+			}
+		}
+	}
+	
+	// Only add if it has progs.dat or pak files
+	if (!has_progs && !has_pak)
+		return;
+	
+	
 	moditem_t mod;
 	mod.name = name;
+	
+	// Special case: Auto-detect known mods by scanning PAK files
+	{
+		char pakpath[MAX_OSPATH];
+		qboolean found_ad_signature = false;
+		qboolean found_hip_demo1 = false;
+		qboolean found_hip_demo2 = false;
+		qboolean found_hip_demo3 = false;
+		qboolean found_hip_demo4 = false;
+		qboolean found_rog_end1 = false;
+		qboolean found_rog_end2 = false;
+		qboolean found_rog_r1m1 = false;
+		qboolean found_rog_r1m2 = false;
+		qboolean found_rog_r1m3 = false;
+		qboolean found_rog_r1m4 = false;
+		qboolean found_mg_hub = false;
+		qboolean found_mg_mgend = false;
+		qboolean found_mg_mge1m1 = false;
+		qboolean found_mg_horde1 = false;
+		int pak_num;
+		
+		// PAK file structures (local definitions)
+		#pragma pack(push, 1)
+		typedef struct { char name[56]; int filepos; int filelen; } pak_entry_t;
+		typedef struct { char id[4]; unsigned int dirofs; unsigned int dirlen; } pak_header_t;
+		#pragma pack(pop)
+		
+		// Scan pak0.pak through pak9.pak
+		for (pak_num = 0; pak_num < 10; pak_num++)
+		{
+			FILE *pakfile;
+			pak_header_t header;
+			unsigned int numfiles, j;
+			
+			q_snprintf(pakpath, sizeof(pakpath), "%s/%s/pak%d.pak", com_basedir, name, pak_num);
+			pakfile = fopen(pakpath, "rb");
+			if (!pakfile)
+				continue;
+			
+			// Read PAK header
+			if (fread(&header, 1, sizeof(header), pakfile) != sizeof(header))
+			{
+				fclose(pakfile);
+				continue;
+			}
+			
+			// Verify PAK signature
+			if (header.id[0] != 'P' || header.id[1] != 'A' || header.id[2] != 'C' || header.id[3] != 'K')
+			{
+				fclose(pakfile);
+				continue;
+			}
+			
+			header.dirofs = LittleLong(header.dirofs);
+			header.dirlen = LittleLong(header.dirlen);
+			numfiles = header.dirlen / sizeof(pak_entry_t);
+			
+			if (numfiles > 4096 || header.dirlen < 0 || header.dirofs < 0)
+			{
+				fclose(pakfile);
+				continue;
+			}
+			
+			// Seek to directory
+			fseek(pakfile, header.dirofs, SEEK_SET);
+			
+			// Read and scan entries one at a time
+			for (j = 0; j < numfiles; j++)
+			{
+				pak_entry_t entry;
+				if (fread(&entry, sizeof(entry), 1, pakfile) != 1)
+					break;
+				
+				// Check for Arcane Dimensions signature
+				// Check for Arcane Dimensions signature
+				if (!strcmp(entry.name, "maps/ad_chapters.bsp"))
+					found_ad_signature = true;
+				
+				// Check for Hipnotic (Mission Pack 1) demos
+				else if (!strcmp(entry.name, "hipdemo1.dem"))
+					found_hip_demo1 = true;
+				else if (!strcmp(entry.name, "hipdemo2.dem"))
+					found_hip_demo2 = true;
+				else if (!strcmp(entry.name, "hipdemo3.dem"))
+					found_hip_demo3 = true;
+				else if (!strcmp(entry.name, "hipdemo4.dem"))
+					found_hip_demo4 = true;
+				
+				// Check for Rogue (Mission Pack 2) files
+				else if (!strcmp(entry.name, "end1.bin"))
+					found_rog_end1 = true;
+				else if (!strcmp(entry.name, "end2.bin"))
+					found_rog_end2 = true;
+				else if (!strcmp(entry.name, "maps/r1m1.bsp"))
+					found_rog_r1m1 = true;
+				else if (!strcmp(entry.name, "maps/r1m2.bsp"))
+					found_rog_r1m2 = true;
+				else if (!strcmp(entry.name, "maps/r1m3.bsp"))
+					found_rog_r1m3 = true;
+				else if (!strcmp(entry.name, "maps/r1m4.bsp"))
+					found_rog_r1m4 = true;
+				
+				// Check for Dimension of the Machine (MachineGames) files
+				else if (!strcmp(entry.name, "maps/hub.bsp"))
+					found_mg_hub = true;
+				else if (!strcmp(entry.name, "maps/mgend.bsp"))
+					found_mg_mgend = true;
+				else if (!strcmp(entry.name, "maps/mge1m1.bsp"))
+					found_mg_mge1m1 = true;
+				else if (!strcmp(entry.name, "maps/horde1.bsp"))
+					found_mg_horde1 = true;
+			}
+			
+			fclose(pakfile);
+		}
+		
+		// Set description based on detected mod
+		if (found_ad_signature)
+		{
+			q_strlcpy(mod.description, "Arcane Dimensions", sizeof(mod.description));
+		}
+		else if (found_hip_demo1 && found_hip_demo2 && found_hip_demo3 && found_hip_demo4)
+		{
+			q_strlcpy(mod.description, "Mission Pack 1: Scourge of Armagon - Hipnotic", sizeof(mod.description));
+		}
+		else if (found_rog_end1 && found_rog_end2 && found_rog_r1m1 && found_rog_r1m2 && found_rog_r1m3 && found_rog_r1m4)
+		{
+			q_strlcpy(mod.description, "Mission Pack 2: Dissolution of Eternity - Rogue", sizeof(mod.description));
+		}
+		else if (found_mg_hub && found_mg_mgend && found_mg_mge1m1 && found_mg_horde1)
+		{
+			q_strlcpy(mod.description, "Dimension of the Machine - MachineGames", sizeof(mod.description));
+		}
+		else
+		{
+			mod.description[0] = '\0'; // No description yet
+		}
+	}
+	
+	
+	
+	
+	
+	// Read description from descript.ion file
+	{
+		char desc_path[MAX_OSPATH];
+		FILE *f;
+		q_snprintf(desc_path, sizeof(desc_path), "%s/%s/descript.ion", com_basedir, name);
+		f = fopen(desc_path, "r");
+		if (f)
+		{
+			if (fgets(mod.description, sizeof(mod.description), f))
+			{
+				// Remove trailing newline if present
+				size_t len = strlen(mod.description);
+				if (len > 0 && mod.description[len-1] == '\n')
+					mod.description[len-1] = '\0';
+			}
+			fclose(f);
+		}
+		else
+		{
+			// mod.description[0] = '\0';  // Don't clear - preserve auto-detected description
+		}
+	}
+	
 	mod.active = M_Mods_IsActive(name);
 	if (mod.active && modsmenu.list.cursor == -1)
 		modsmenu.list.cursor = modsmenu.list.numitems;
@@ -14557,7 +14758,123 @@ void M_Mods_Draw(void)
 		int color = modsmenu.items[idx].active ? 0 : 1;
 		qboolean selected = (idx == modsmenu.list.cursor);
 
-		M_PrintScroll(x, y + i * 8, (cols - 2) * 8, modsmenu.items[idx].name, selected ? modsmenu.ticker.scroll_time : 0.0, color);
+		// Display mod name with description if available
+		// Name in current color, parentheses in current color, text inside parentheses in white
+		// Uses smooth scrolling for overflow
+		{
+			const int charwidth = 8;
+			const int gap_len = 5;
+			const int scrollspeed = 30;
+			int maxwidth = (cols - 2) * 8;
+			int maxchars = maxwidth / charwidth;
+			double scroll_time = selected ? modsmenu.ticker.scroll_time : 0.0;
+			
+			const char *mod_name = modsmenu.items[idx].name;
+			const char *mod_desc = modsmenu.items[idx].description;
+			int name_len = strlen(mod_name);
+			int desc_len = strlen(mod_desc);
+			qboolean has_desc = (mod_desc[0] != '\0');
+			
+			// Calculate total length: name + " (" + description + ")" = name + 3 + desc + 1 = name + desc + 4
+			int total_len = has_desc ? (name_len + desc_len + 4) : name_len; // name + " (" + desc + ")"
+			
+			char mask = color ? 128 : 0; // 128 = gold/red, 0 = white
+			
+			if (total_len <= maxchars)
+			{
+				// No scrolling needed - just draw directly
+				int draw_x = x;
+				
+				// Draw mod name in current color
+				for (int c = 0; c < name_len; c++)
+				{
+					M_DrawCharacter(draw_x, y + i * 8, (unsigned char)mod_name[c] ^ mask);
+					draw_x += charwidth;
+				}
+				
+				if (has_desc)
+				{
+					// Draw " (" in current color
+					M_DrawCharacter(draw_x, y + i * 8, ' ' ^ mask); draw_x += charwidth;
+					M_DrawCharacter(draw_x, y + i * 8, '(' ^ mask); draw_x += charwidth;
+					
+					// Draw description in WHITE (no mask)
+					for (int c = 0; c < desc_len; c++)
+					{
+						M_DrawCharacter(draw_x, y + i * 8, (unsigned char)mod_desc[c]);
+						draw_x += charwidth;
+					}
+					
+					// Draw ")" in current color
+					M_DrawCharacter(draw_x, y + i * 8, ')' ^ mask);
+				}
+			}
+			else
+			{
+				// Scrolling needed
+				int total_chars = total_len + gap_len;
+				int cycle_pixels = total_chars * charwidth;
+				int pixel_offset = ((int)(scroll_time * scrollspeed)) % cycle_pixels;
+				if (pixel_offset < 0)
+					pixel_offset += cycle_pixels;
+				
+				for (int pass = 0; pass < 2; ++pass)
+				{
+					int base_x = x - pixel_offset + pass * cycle_pixels;
+					for (int pos = 0; pos < total_chars; ++pos)
+					{
+						int char_x = base_x + pos * charwidth;
+						
+						if (char_x + charwidth <= x)
+							continue;
+						if (char_x >= x + maxwidth)
+							break;
+						
+						int ch;
+						int ch_mask = mask; // Default to current color
+						
+						if (pos < name_len)
+						{
+							// Mod name - current color
+							ch = (unsigned char)mod_name[pos];
+						}
+						else if (has_desc && pos == name_len)
+						{
+							// Space before parenthesis - current color
+							ch = ' ';
+						}
+						else if (has_desc && pos == name_len + 1)
+						{
+							// Opening parenthesis - current color
+							ch = '(';
+						}
+						else if (has_desc && pos >= name_len + 2 && pos < name_len + 2 + desc_len)
+						{
+							// Description text - WHITE (no mask)
+							ch = (unsigned char)mod_desc[pos - name_len - 2];
+							ch_mask = 0; // White!
+						}
+						else if (has_desc && pos == name_len + 2 + desc_len)
+						{
+							// Closing parenthesis - current color
+							ch = ')';
+						}
+						else if (pos >= total_len)
+						{
+							// Gap separator - current color
+							ch = (unsigned char)" /// "[pos - total_len];
+						}
+						else
+						{
+							// Fallback
+							ch = ' ';
+						}
+						
+						M_DrawCharacter(char_x, y + i * 8, ch ^ ch_mask);
+					}
+				}
+			}
+		}
 
 		if (selected)
 			M_DrawCharacter(x - 8, y + i * 8, 12 + ((int)(realtime * 4) & 1));
@@ -14779,7 +15096,7 @@ static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 					{
 						int fitzFlags = LittleLong(*(int*)(data + pos));
 						Con_DPrintf("\n%i", fitzFlags);
-						pos += 4;           // …you might want to store this if you care
+						pos += 4;           // you might want to store this if you care
 					}
 
 					/* now the next byte really *is* maxclients */
@@ -14877,7 +15194,7 @@ static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 				break;
 
 			default:
-				off = msg_end; /* unknown – skip rest */
+				off = msg_end; /* unknown - skip rest */
 				break;
 			}
 		}
@@ -14888,7 +15205,6 @@ static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 
 build_result:
 {
-	/* first statement after label is “{” (a block), so declarations are legal */
 	struct { char name[MAX_QPATH]; int frags; } list[32];
 	int cnt = 0;
 
@@ -16413,6 +16729,8 @@ typedef struct
 {
 	char name[MAX_PAK_NAME];
 	qboolean enabled;
+	qboolean readonly;  // true for id1 paks (not editable/reorderable)
+	int source;         // 0 = base (id1), 1 = mod (sorted base first)
 } menu_pak_t;
 
 static struct
@@ -16787,7 +17105,7 @@ void M_Startup_Mousemove(int cx, int cy)
 }
 
 // Helper to add unique pak
-static void M_Pak_Add(const char* name)
+static void M_Pak_Add(const char* name, qboolean readonly, int source)
 {
 	int i;
 	if (pakmenu.num_paks >= MAX_PAKS)
@@ -16803,35 +17121,91 @@ static void M_Pak_Add(const char* name)
 	// Add new
 	q_strlcpy(pakmenu.paks[pakmenu.num_paks].name, name, MAX_PAK_NAME);
 	pakmenu.paks[pakmenu.num_paks].enabled = true;
+	pakmenu.paks[pakmenu.num_paks].readonly = readonly;
+	pakmenu.paks[pakmenu.num_paks].source = source;
 	pakmenu.num_paks++;
 }
 
 // Callback for COM_ListAllFiles
+// Callback for COM_ListAllFiles
 static qboolean M_Pak_ScanCallback(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
 {
+	char id1path[MAX_OSPATH];
+	qboolean is_id1;
+	qboolean in_id1_gamedir;
+	const char *gamedir_name;
 	const char *ext = COM_FileGetExtension(fname);
 	if (!ext) return true;
 	
 	if (q_strcasecmp(ext, "pak") && q_strcasecmp(ext, "pk3"))
 		return true;
 
-	if (!q_strncasecmp(fname, "pak0.", 5) || 
-		!q_strncasecmp(fname, "pak1.", 5) ||
-		!q_strncasecmp(fname, "quakespasm.", 11) ||
-		!q_strncasecmp(fname, "qssm.", 5))
+	if (!spath)
 		return true;
 
-	M_Pak_Add(fname);
+	// Build the id1 path for comparison
+	q_snprintf(id1path, sizeof(id1path), "%s/id1", com_basedir);
+	
+	// Determine if this pak is from id1
+	is_id1 = (q_strcasecmp(spath->filename, id1path) == 0);
+	
+	// Check if we're running in id1 gamedir (compare just the directory name)
+	gamedir_name = COM_SkipPath(com_gamedir);
+	in_id1_gamedir = (q_strcasecmp(gamedir_name, "id1") == 0);
+	
+	// If in id1 gamedir, only show paks from id1 (no base/mod distinction)
+	if (in_id1_gamedir)
+	{
+		// Running id1 only - only accept id1 paks, and filter engine paks
+		if (!is_id1)
+			return true;
+		
+		// Filter pak0/pak1 and engine paks (pinned at top) - ALWAYS in id1
+		if (!q_strncasecmp(fname, "pak0.", 5) || 
+			!q_strncasecmp(fname, "pak1.", 5) ||
+			!q_strncasecmp(fname, "quakespasm.", 11) ||
+			!q_strncasecmp(fname, "qssm.", 5))
+			return true;
+		
+		M_Pak_Add(fname, false, 1); // Not readonly when in id1
+	}
+	else
+	{
+		// Running in a mod - show both id1 and mod paks
+		if (is_id1)
+		{
+			// id1 pak - filter pak0/pak1 (pinned at top), but add others as readonly
+			if (!q_strncasecmp(fname, "pak0.", 5) || 
+				!q_strncasecmp(fname, "pak1.", 5) ||
+				!q_strncasecmp(fname, "quakespasm.", 11) ||
+				!q_strncasecmp(fname, "qssm.", 5))
+				return true;
+			
+			M_Pak_Add(fname, true, 0); // Base (id1) = source 0, readonly
+		}
+		else if (strcmp(spath->filename, com_gamedir) == 0)
+		{
+			// Mod pak - filter engine paks only, allow pak0/pak1/pak2 etc
+			if (!q_strncasecmp(fname, "quakespasm.", 11) ||
+				!q_strncasecmp(fname, "qssm.", 5))
+				return true;
+			
+			M_Pak_Add(fname, false, 1); // Mod = source 1, editable
+		}
+		// Ignore paks from other directories
+	}
+	
 	return true;
 }
-
 static int M_Pak_Compare(const void* a, const void* b)
 {
 	const menu_pak_t* pa = (const menu_pak_t*)a;
 	const menu_pak_t* pb = (const menu_pak_t*)b;
+	// Sort by source first (base=0 before mod=1), then by name
+	if (pa->source != pb->source)
+		return pa->source - pb->source;
 	return q_strcasecmp(pa->name, pb->name);
 }
-
 static void M_Pak_BuildList(void)
 {
 	char listpath[MAX_OSPATH];
@@ -16862,15 +17236,14 @@ static void M_Pak_BuildList(void)
 			while ((data = COM_Parse(data)))
 			{
 				if (!*com_token) continue;
-				M_Pak_Add(com_token);
+				M_Pak_Add(com_token, false, 1);
 			}
 			Z_Free(buffer);
 			{
-				int base = pakmenu.num_paks;
 				COM_ListAllFiles(NULL, "*.pak", M_Pak_ScanCallback, 0, NULL);
 				COM_ListAllFiles(NULL, "*.pk3", M_Pak_ScanCallback, 0, NULL);
-				if (pakmenu.num_paks - base > 1)
-					qsort(pakmenu.paks + base, pakmenu.num_paks - base, sizeof(menu_pak_t), M_Pak_Compare);
+				if (pakmenu.num_paks > 1)
+					qsort(pakmenu.paks, pakmenu.num_paks, sizeof(menu_pak_t), M_Pak_Compare); /* Full sort: base before mod */
 			}
 			pak_reorder_enabled = true;
 			pakmenu.search.len = 0;
@@ -16882,42 +17255,11 @@ static void M_Pak_BuildList(void)
 		paklist_exists = false;
 	}
 
-	{
-		int i;
-		char namebuf[MAX_PAK_NAME];
-		char pathbuf[MAX_OSPATH];
-		int base = pakmenu.num_paks;
-
-		for (i = 2;; i++)
-		{
-				qboolean found = false;
-
-				q_snprintf(namebuf, sizeof(namebuf), "pak%d.pak", i);
-				q_snprintf(pathbuf, sizeof(pathbuf), "%s/%s", com_gamedir, namebuf);
-				if (COM_FileExists(pathbuf, NULL))
-			{
-				M_Pak_Add(namebuf);
-				found = true;
-			}
-
-			q_snprintf(namebuf, sizeof(namebuf), "pak%d.pk3", i);
-			q_snprintf(pathbuf, sizeof(pathbuf), "%s/%s", com_gamedir, namebuf);
-			if (COM_FileExists(pathbuf, NULL))
-			{
-				M_Pak_Add(namebuf);
-				found = true;
-			}
-
-			if (!found)
-				break;
-		}
-
-		base = pakmenu.num_paks;
-		COM_ListAllFiles(NULL, "*.pak", M_Pak_ScanCallback, 0, NULL);
-		COM_ListAllFiles(NULL, "*.pk3", M_Pak_ScanCallback, 0, NULL);
-		if (pakmenu.num_paks - base > 1)
-			qsort(pakmenu.paks + base, pakmenu.num_paks - base, sizeof(menu_pak_t), M_Pak_Compare);
-	}
+	// Scan for all paks in current gamedir (callback filters by gamedir)
+	COM_ListAllFiles(NULL, "*.pak", M_Pak_ScanCallback, 0, NULL);
+	COM_ListAllFiles(NULL, "*.pk3", M_Pak_ScanCallback, 0, NULL);
+	if (pakmenu.num_paks > 1)
+		qsort(pakmenu.paks, pakmenu.num_paks, sizeof(menu_pak_t), M_Pak_Compare);
 
 	pakmenu.search.len = 0;
 	pakmenu.search.text[0] = 0;
@@ -16950,7 +17292,9 @@ static void M_Pak_SaveList(void)
 	fprintf(f, "// Generated by PAK Loading Menu\n");
 	for (i = 0; i < pakmenu.num_paks; i++)
 	{
-		fprintf(f, "%s\n", pakmenu.paks[i].name);
+		/* Only save mod paks, skip readonly (id1) paks */
+		if (!pakmenu.paks[i].readonly)
+			fprintf(f, "%s\n", pakmenu.paks[i].name);
 	}
 	fclose(f);
 	paklist_exists = true;
@@ -16977,7 +17321,13 @@ void M_PakLoading_Draw(void)
 	plcolour_t white = CL_PLColours_Parse("0xffffff");
 	int overflow_line_y = list_y - 8;
 
-	Draw_String(x, y - 28, "PAK Loading Order");
+	{
+		const char *gdir = COM_SkipPath(com_gamedir);
+		int title_width = strlen("PAK Loading Order (") * 8;
+		Draw_String(x, y - 28, "PAK Loading Order (");
+		M_Print(x + title_width, y - 28, gdir);
+		Draw_String(x + title_width + strlen(gdir) * 8, y - 28, ")");
+	}
 	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
 
 	if (pakmenu.cursor < pakmenu.scroll) pakmenu.scroll = pakmenu.cursor;
@@ -17018,6 +17368,10 @@ void M_PakLoading_Draw(void)
 						pakmenu.search.text,
 						pakmenu.search.len);
 				}
+				else if (pakmenu.paks[idx].readonly)
+				{
+					M_PrintRGBA(x + 16, list_y + i * 8, pakmenu.paks[idx].name, white, 0.5f, false);
+				}
 				else
 				{
 					M_Print(x + 16, list_y + i * 8,
@@ -17033,6 +17387,10 @@ void M_PakLoading_Draw(void)
 						pakmenu.paks[idx].name,
 						pakmenu.search.text,
 						pakmenu.search.len);
+				}
+				else if (pakmenu.paks[idx].readonly)
+				{
+					M_PrintRGBA(x, list_y + i * 8, pakmenu.paks[idx].name, white, 0.5f, false);
 				}
 				else
 				{
@@ -17158,6 +17516,9 @@ void M_PakLoading_Key(int k)
 
 	if (k == K_ENTER || k == K_KP_ENTER || k == K_SPACE || k == K_CTRL || k == K_SHIFT || k == K_MOUSE1)
 	{
+		/* Cannot drag readonly items */
+		if (pakmenu.paks[pakmenu.cursor].readonly)
+			return;
 		pakmenu.dragging = !pakmenu.dragging;
 		S_LocalSound("misc/menu2.wav");
 		return;
@@ -17169,6 +17530,9 @@ void M_PakLoading_Key(int k)
 		{
 			if (pakmenu.dragging)
 			{
+				/* Cannot swap with readonly items */
+				if (pakmenu.paks[pakmenu.cursor - 1].readonly)
+					return;
 				menu_pak_t tmp = pakmenu.paks[pakmenu.cursor];
 				pakmenu.paks[pakmenu.cursor] = pakmenu.paks[pakmenu.cursor - 1];
 				pakmenu.paks[pakmenu.cursor - 1] = tmp;
@@ -17188,6 +17552,9 @@ void M_PakLoading_Key(int k)
 		{
 			if (pakmenu.dragging)
 			{
+				/* Cannot swap with readonly items */
+				if (pakmenu.paks[pakmenu.cursor + 1].readonly)
+					return;
 				menu_pak_t tmp = pakmenu.paks[pakmenu.cursor];
 				pakmenu.paks[pakmenu.cursor] = pakmenu.paks[pakmenu.cursor + 1];
 				pakmenu.paks[pakmenu.cursor + 1] = tmp;
