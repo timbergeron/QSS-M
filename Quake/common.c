@@ -2740,6 +2740,9 @@ If it is a pak file handle, don't really close it
 */
 void COM_CloseFile (int h)
 {
+	if (h < 0)
+		return;
+
 	searchpath_t	*s;
 
 	for (s = com_searchpaths; s; s = s->next)
