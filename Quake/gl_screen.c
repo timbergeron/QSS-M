@@ -164,6 +164,7 @@ cvar_t		scr_printspeed = {"scr_printspeed","8",CVAR_NONE};
 cvar_t		scr_autoid = {"scr_autoid","1",CVAR_ARCHIVE}; // woods #autoid
 cvar_t		scr_scoreboard_teamsort = {"scr_scoreboard_teamsort","0",CVAR_ARCHIVE}; // woods #teamscoreboard
 cvar_t		gl_triplebuffer = {"gl_triplebuffer", "1", CVAR_ARCHIVE};
+extern cvar_t	r_clearcolor; // woods #fxaa
 
 cvar_t		cl_gun_fovscale = {"cl_gun_fovscale","1",CVAR_ARCHIVE}; // Qrack
 cvar_t		cl_menucrosshair = { "cl_menucrosshair","0",CVAR_ARCHIVE}; // woods #menucrosshair
@@ -6334,7 +6335,12 @@ void FXAA_BeginFrame(void)
     glViewport(0, 0, glwidth, glheight);
     
     // Clear with alpha = 0 to support transparency detection
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    {
+        byte *rgb;
+        int s = (int)r_clearcolor.value & 0xFF;
+        rgb = (byte *)(d_8to24table + s);
+        glClearColor(rgb[0]/255.0f, rgb[1]/255.0f, rgb[2]/255.0f, 0.0f);
+    }
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 }
 
