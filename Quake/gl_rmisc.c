@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 
 //johnfitz -- new cvars
+extern cvar_t r_alphasort; // woods #alphasort
 extern cvar_t r_stereo;
 extern cvar_t r_stereodepth;
 extern cvar_t r_clearcolor;
@@ -351,6 +352,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_pos);
 	Cvar_RegisterVariable (&r_drawflame); // woods #drawflame
 	Cvar_SetCallback (&r_drawflame, ClearParticles_f); // woods #drawflame
+	Cvar_RegisterVariable (&r_alphasort); // woods #alphasort
 
 	Cvar_RegisterVariable (&gl_finish);
 	Cvar_RegisterVariable (&gl_clear);

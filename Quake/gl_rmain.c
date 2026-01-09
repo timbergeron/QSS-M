@@ -140,6 +140,7 @@ cvar_t	r_slimealpha = {"r_slimealpha","0",CVAR_ARCHIVE};
 cvar_t	trace_any = {"trace_any","0",CVAR_NONE}; // woods #tracers
 cvar_t	trace_any_contains = {"trace_any_contains","item_artifact_super_damage",CVAR_NONE}; // woods #tracers
 cvar_t	r_drawflame = {"r_drawflame","1",CVAR_ARCHIVE}; // woods #drawflame
+cvar_t	r_alphasort = {"r_alphasort", "1", CVAR_ARCHIVE}; // woods #alphasort
 
 float	map_wateralpha, map_lavaalpha, map_telealpha, map_slimealpha;
 float	map_fallbackalpha;
@@ -453,12 +454,11 @@ qboolean R_CullBox (vec3_t emins, vec3_t emaxs)
 
 /*
 ===============
-R_CullModelForEntity -- johnfitz -- uses correct bounds based on rotation
+R_GetEntityBounds -- woods - factor out entity bounds from R_CullModelForEntity #alphasort
 ===============
 */
-qboolean R_CullModelForEntity (entity_t *e)
+void R_GetEntityBounds (const entity_t *e, vec3_t mins, vec3_t maxs)
 {
-	vec3_t mins, maxs;
 	vec_t scalefactor, *minbounds, *maxbounds;
 
 	if (e->angles[0] || e->angles[2]) //pitch or roll
@@ -480,14 +480,28 @@ qboolean R_CullModelForEntity (entity_t *e)
 	scalefactor = ENTSCALE_DECODE(e->netstate.scale);
 	if (scalefactor != 1.0f)
 	{
-		VectorMA (e->origin, scalefactor, minbounds, mins);
-		VectorMA (e->origin, scalefactor, maxbounds, maxs);
+		VectorScale(minbounds, scalefactor, mins);
+		VectorScale(maxbounds, scalefactor, maxs);
+		VectorAdd(e->origin, mins, mins);
+		VectorAdd(e->origin, maxs, maxs);
 	}
 	else
 	{
 		VectorAdd (e->origin, minbounds, mins);
 		VectorAdd (e->origin, maxbounds, maxs);
 	}
+}
+
+/*
+===============
+R_CullModelForEntity -- johnfitz -- uses correct bounds based on rotation -- woods #alphasort
+===============
+*/
+qboolean R_CullModelForEntity (entity_t *e)
+{
+	vec3_t mins, maxs;
+
+	R_GetEntityBounds (e, mins, maxs);
 
 	return R_CullBox (mins, maxs);
 }
@@ -817,90 +831,295 @@ void R_SetupView (void)
 
 /*
 =============
-R_DrawEntitiesOnList
+R_ShouldDrawEntity -- woods #alphasort
+=============
+*/
+static qboolean R_ShouldDrawEntity(entity_t *ent, qboolean alphapass)
+{
+	qboolean is_translucent;
+
+	//spike -- this would be more efficient elsewhere, but its more correct here.
+	if (ent->eflags & EFLAGS_EXTERIORMODEL)
+		return false;
+	if (!ent->model || ent->model->needload)
+		return false;
+
+	if (!r_drawflame.value) // woods
+		if (!strcmp(ent->model->name, "progs/flame.mdl") || !strcmp(ent->model->name, "progs/flame2.mdl"))
+			return false;
+
+	// Determine if entity should be treated as translucent for sorting purposes -- woods #alphasort
+	// Original behavior: only alpha < 1 triggers alpha pass
+	is_translucent = (ENTALPHA_DECODE(ent->alpha) < 1);
+
+	// Extended checks only when r_alphasort is enabled
+	if (r_alphasort.value && !is_translucent)
+	{
+		// Check for additive blend mode
+		if (ent->effects & EF_ADDITIVE)
+			is_translucent = true;
+
+		// Check for alpha-textured sprites (TEXPREF_ALPHA flag on sprite texture)
+		if (!is_translucent && ent->model->type == mod_sprite)
+		{
+			mspriteframe_t *pframe = R_GetSpriteFrame(ent);
+			if (pframe && pframe->gltexture && (pframe->gltexture->flags & TEXPREF_ALPHA))
+				is_translucent = true;
+		}
+	}
+
+	// alpha/nonalpha split
+	if (alphapass)
+	{
+		// Process only translucent entities
+		if (!is_translucent)
+			return false;
+	}
+	else
+	{
+		// Process only opaque entities
+		if (is_translucent)
+			return false;
+	}
+
+	return true;
+}
+
+/*
+=============
+R_CheckFlagSwap -- woods #alphasort
+=============
+*/
+static void R_CheckFlagSwap(entity_t *ent)
+{
+	if (ent->model->type != mod_alias)
+		return;
+
+	if (swapflagprecache && map_ctf_flag_style == 2 && !strcmp(ent->model->name, "progs/flag.mdl")) // is there an alternate flag prechaced and worldspawn, if so lets swap it #alternateflags
+	{
+		if (ent->baseline.modelindex == ogflagprecache) // if the model is the flag, we're gonna swap it
+		{
+			ent->syncbase = 0;
+			ent->model->flags = MOD_NOLERP | MOD_NOSHADOW;
+			ent->model = cl.model_precache[swapflagprecache]; // roque
+		}
+	}
+	else if (swapflagprecache2 && map_ctf_flag_style == 3 && !strcmp(ent->model->name, "progs/flag.mdl")) // is there an alternate flag prechaced and worldspawn, if so lets swap it #alternateflags
+	{
+		if (ent->baseline.modelindex == ogflagprecache) // if the model is the flag, we're gonna swap it
+		{
+			ent->syncbase = 0;
+			ent->model->flags = MOD_NOLERP | MOD_NOSHADOW;
+			ent->model = cl.model_precache[swapflagprecache2]; // alt1 (flag2.mdl)
+		}
+	}
+	else if (swapflagprecache3 && map_ctf_flag_style == 4 && !strcmp(ent->model->name, "progs/flag.mdl")) // is there an alternate flag prechaced and worldspawn, if so lets swap it #alternateflags
+	{
+		if (ent->baseline.modelindex == ogflagprecache) // if the model is the flag, we're gonna swap it
+		{
+			ent->syncbase = 0;
+			ent->model->flags = MOD_NOLERP | MOD_NOSHADOW;
+			ent->model = cl.model_precache[swapflagprecache3]; // alt2 (flag3.mdl)
+		}
+	}
+}
+
+/*
+=============
+R_DrawEntityModel -- woods #alphasort
+Helper function to render an entity based on its model type.
+Reduces code duplication between alpha and non-alpha rendering paths.
+=============
+*/
+static void R_DrawEntityModel(entity_t *ent)
+{
+	switch (ent->model->type)
+	{
+	case mod_alias:
+		R_CheckFlagSwap(ent);
+		R_DrawAliasModel(ent);
+		break;
+	case mod_brush:
+		R_DrawBrushModel(ent);
+		break;
+	case mod_sprite:
+		R_DrawSpriteModel(ent);
+		break;
+	case mod_ext_invalid:
+		break;
+	}
+}
+
+/*
+=============
+R_CalculateEntityDistance -- woods #alphasort
+Calculate distance from viewpoint to entity for depth sorting.
+Brush/alias models use nearest point on AABB for accurate large-model sorting.
+Sprites use origin for simplicity.
+=============
+*/
+static float R_CalculateEntityDistance(entity_t *ent)
+{
+	if (ent->model->type == mod_brush || ent->model->type == mod_alias)
+	{
+		// Use nearest point on AABB to view origin, projected onto view direction
+		// This gives accurate sorting for large models that cross the view plane
+		vec3_t mins, maxs;
+		float dist = 0.f;
+		int j;
+
+		R_GetEntityBounds(ent, mins, maxs);
+		for (j = 0; j < 3; j++)
+			dist += (CLAMP(mins[j], r_refdef.vieworg[j], maxs[j]) - r_refdef.vieworg[j]) * vpn[j];
+		return dist;
+	}
+	else
+	{
+		// Simple origin-based distance for sprites and other types
+		vec3_t delta;
+		VectorSubtract(ent->origin, r_refdef.vieworg, delta);
+		return DotProduct(delta, vpn);
+	}
+}
+
+/*
+=============
+CompareAlphaEntities -- woods #alphasort
+=============
+*/
+typedef struct
+{
+	entity_t *ent;
+	float dist;
+} sortable_entity_t;
+
+static int CompareAlphaEntities(const void* a, const void* b)
+{
+	const sortable_entity_t* entA = (const sortable_entity_t*)a;
+	const sortable_entity_t* entB = (const sortable_entity_t*)b;
+
+	if (entA->dist > entB->dist) return -1;
+	if (entA->dist < entB->dist) return 1;
+
+	// Stable tie-breaker: use entity pointer address to avoid flickering -- woods #alphasort
+	// Cast to uintptr_t to avoid UB when comparing pointers from different allocations
+	if ((uintptr_t)entA->ent > (uintptr_t)entB->ent) return -1;
+	if ((uintptr_t)entA->ent < (uintptr_t)entB->ent) return 1;
+	return 0;
+}
+
+/*
+=============
+R_DrawEntitiesOnList -- woods #alphasort
+Renders visible entities with optional depth sorting for alpha transparency.
+
+Performance notes:
+- Non-alpha pass: O(n) iteration
+- Alpha pass with sorting: O(n) collection + O(n log n) sort + O(n) render
+- Brush/alias use AABB distance, sprites use origin-based distance
+- Renders back-to-front for correct alpha blending
 =============
 */
 void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 {
 	int		i;
+	static sortable_entity_t sorted_ents[MAX_EDICTS];
+	int num_sorted = 0;
+	int count = cl_numvisedicts;
+
+	//johnfitz -- optimized zero-check
+	if (count == 0)
+		return;
 
 	if (!r_drawentities.value)
 		return;
 
 	//johnfitz -- sprites are not a special case
-	for (i=0 ; i<cl_numvisedicts ; i++)
+	
+	// Alpha pass with depth sorting enabled
+	if (alphapass && r_alphasort.value) // woods #alphasort
 	{
-		currententity = cl_visedicts[i];
+		// Static array, no allocation needed
+		if (count > MAX_EDICTS)
+			count = MAX_EDICTS; // Safety clamp
 
-		//johnfitz -- if alphapass is true, draw only alpha entites this time
-		//if alphapass is false, draw only nonalpha entities this time
-		if ((ENTALPHA_DECODE(currententity->alpha) < 1 && !alphapass) ||
-			(ENTALPHA_DECODE(currententity->alpha) == 1 && alphapass))
-			continue;
+		// Collect and calculate distances for all translucent entities
+		for (i = 0; i < count; i++)
+		{
+			currententity = cl_visedicts[i];
 
-		//johnfitz -- chasecam
-		if (currententity == &cl.entities[cl.viewentity])
-			currententity->angles[0] *= 0.3;
-		//johnfitz
-
-		//spike -- this would be more efficient elsewhere, but its more correct here.
-		if (currententity->eflags & EFLAGS_EXTERIORMODEL)
-			continue;
-		if (!currententity->model || currententity->model->needload)
-			continue;
-
-		if (!r_drawflame.value) // woods
-			if (!strcmp(currententity->model->name, "progs/flame.mdl") || !strcmp(currententity->model->name, "progs/flame2.mdl"))
+			if (!R_ShouldDrawEntity(currententity, true))
 				continue;
 
-		switch (currententity->model->type)
+			// Store entity and distance for sorting
+			sorted_ents[num_sorted].ent = currententity;
+			sorted_ents[num_sorted].dist = R_CalculateEntityDistance(currententity);
+			num_sorted++;
+		}
+
+		// Sort back-to-front (farthest first) for correct alpha blending
+		qsort(sorted_ents, num_sorted, sizeof(sortable_entity_t), CompareAlphaEntities);
+
+		// Render sorted entities
+		for (i = 0; i < num_sorted; i++)
 		{
-			case mod_alias:
+			currententity = sorted_ents[i].ent;
 
-				if (swapflagprecache && map_ctf_flag_style == 2 && !strcmp(currententity->model->name, "progs/flag.mdl")) // is there an alternate flag prechaced and worldspawn, if so lets swap it #alternateflags
-				{
-					if (currententity->baseline.modelindex == ogflagprecache) // if the model is the flag, we're gonna swap it
-					{
-						currententity->syncbase = 0;
-						currententity->model->flags = MOD_NOLERP | MOD_NOSHADOW;
-						currententity->model = cl.model_precache[swapflagprecache]; // roque
-			
-					}
-				}
+			//johnfitz -- chasecam
+			if (currententity == &cl.entities[cl.viewentity])
+				currententity->angles[0] *= 0.3;
+			//johnfitz
 
-				if (swapflagprecache2 && map_ctf_flag_style == 3 && !strcmp(currententity->model->name, "progs/flag.mdl")) // is there an alternate flag prechaced and worldspawn, if so lets swap it #alternateflags
-				{
-					if (currententity->baseline.modelindex == ogflagprecache) // if the model is the flag, we're gonna swap it
-					{
-						currententity->syncbase = 0;
-						currententity->model->flags = MOD_NOLERP | MOD_NOSHADOW;
-						currententity->model = cl.model_precache[swapflagprecache2]; // alt1 (flag2.mdl)
+			R_DrawEntityModel(currententity);
+		}
+	}
+	else if (!r_alphasort.value)
+	{
+		//johnfitz -- sprites are not a special case
+		for (i = 0; i < cl_numvisedicts; i++)
+		{
+			currententity = cl_visedicts[i];
 
-					}
-				}
+			//johnfitz -- if alphapass is true, draw only alpha entites this time
+			//if alphapass is false, draw only nonalpha entities this time
+			if ((ENTALPHA_DECODE(currententity->alpha) < 1 && !alphapass) ||
+				(ENTALPHA_DECODE(currententity->alpha) == 1 && alphapass))
+				continue;
 
-				if (swapflagprecache3 && map_ctf_flag_style == 4 && !strcmp(currententity->model->name, "progs/flag.mdl")) // is there an alternate flag prechaced and worldspawn, if so lets swap it #alternateflags
-				{
-					if (currententity->baseline.modelindex == ogflagprecache) // if the model is the flag, we're gonna swap it
-					{
-						currententity->syncbase = 0;
-						currententity->model->flags = MOD_NOLERP | MOD_NOSHADOW;
-						currententity->model = cl.model_precache[swapflagprecache3]; // alt2 (flag3.mdl)
+			//johnfitz -- chasecam
+			if (currententity == &cl.entities[cl.viewentity])
+				currententity->angles[0] *= 0.3;
+			//johnfitz
 
-					}
-				}
+			//spike -- this would be more efficient elsewhere, but its more correct here.
+			if (currententity->eflags & EFLAGS_EXTERIORMODEL)
+				continue;
+			if (!currententity->model || currententity->model->needload)
+				continue;
 
-				R_DrawAliasModel (currententity);
-				break;
-			case mod_brush:
-				R_DrawBrushModel (currententity);
-				break;
-			case mod_sprite:
-				R_DrawSpriteModel (currententity);
-				break;
-			case mod_ext_invalid:
-				//nothing. could draw a blob instead.
-				break;
+			if (!r_drawflame.value) // woods
+				if (!strcmp(currententity->model->name, "progs/flame.mdl") || !strcmp(currententity->model->name, "progs/flame2.mdl"))
+					continue;
+
+			R_DrawEntityModel(currententity);
+		}
+	}
+	else
+	{
+		// Non-alpha pass when alphasort is enabled
+		for (i = 0; i < cl_numvisedicts; i++)
+		{
+			currententity = cl_visedicts[i];
+
+			if (!R_ShouldDrawEntity(currententity, alphapass))
+				continue;
+
+			//johnfitz -- chasecam
+			if (currententity == &cl.entities[cl.viewentity])
+				currententity->angles[0] *= 0.3; //johnfitz -- damp pitch
+			//johnfitz
+
+			R_DrawEntityModel(currententity);
 		}
 	}
 }
@@ -2049,17 +2268,36 @@ void R_RenderScene (void)
 
 	R_DrawWorld_Water (); //johnfitz -- drawn here since they might have transparency
 
-	R_DrawEntitiesOnList (true); //johnfitz -- true means this is the pass for alpha entities
-	R_DrawLightningBeamsPolygons();
-
-	R_RenderDlights (); //triangle fan dlights -- johnfitz -- moved after water
-
-	if (r_refdef.drawworld)
+	if (r_alphasort.value) // woods #alphasort
 	{
-		R_DrawParticles ();
+		R_DrawEntitiesOnList (true); //johnfitz -- true means this is the pass for alpha entities
+		R_DrawLightningBeamsPolygons();
+
+		R_RenderDlights (); //triangle fan dlights -- johnfitz -- moved after water
+
+		// Render particles after alpha entities for correct depth sorting -- woods #alphasort
+		if (r_refdef.drawworld)
+		{
+			R_DrawParticles ();
 #ifdef PSET_SCRIPT
-		PScript_DrawParticles();
+			PScript_DrawParticles();
 #endif
+		}
+	}
+	else
+	{
+		R_DrawEntitiesOnList (true); //johnfitz -- true means this is the pass for alpha entities
+		R_DrawLightningBeamsPolygons();
+
+		R_RenderDlights (); //triangle fan dlights -- johnfitz -- moved after water
+
+		if (r_refdef.drawworld)
+		{
+			R_DrawParticles ();
+#ifdef PSET_SCRIPT
+			PScript_DrawParticles();
+#endif
+		}
 	}
 
 	Fog_DisableGFog (); //johnfitz
