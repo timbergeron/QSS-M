@@ -575,7 +575,7 @@ void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qbo
 }
 }
 
-void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str2, double time)
+void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str2, double time, qboolean name_red)
 {
 	int maxchars = maxwidth / 8;
 	int len_str = (int)strlen(str);
@@ -585,8 +585,9 @@ void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str
 
 	// Create masked version of name
 	char masked_str[MAX_QPATH];
+	char mask = name_red ? 128 : 0;
 	for (int i = 0; i < effective_len_str; i++)
-		masked_str[i] = (char)(str[i] ^ 128);
+		masked_str[i] = (char)(str[i] ^ mask);
 	masked_str[effective_len_str] = '\0';
 
 	// Calculate padding width (capped at 13)
@@ -2191,10 +2192,11 @@ void M_Maps_Draw(void)
         }
         else
         {
-            M_PrintScroll2(x, y + i * 8, (cols - 2) * 8,
+        M_PrintScroll2(x, y + i * 8, (cols - 2) * 8,
                 map_item->name,
                 map_item->date,
-                selected ? mapsmenu.ticker.scroll_time : 0.0);
+                selected ? mapsmenu.ticker.scroll_time : 0.0,
+                true);
         }
 
         if (selected)
@@ -14442,6 +14444,7 @@ static struct
 	menuticker_t		ticker;
 	qboolean			scrollbar_grab;
 	moditem_t			*items;
+	int*				filtered_indices;
 } modsmenu;
 
 static qboolean M_Mods_IsActive(const char* game)
@@ -14683,13 +14686,39 @@ static void M_Mods_Add(const char* name)
 	
 	mod.active = M_Mods_IsActive(name);
 	if (mod.active && modsmenu.list.cursor == -1)
-		modsmenu.list.cursor = modsmenu.list.numitems;
+		modsmenu.list.cursor = modsmenu.modcount;
 	
 	// Ensure there's enough space for one more item
 	VEC_PUSH(modsmenu.items, mod);
 
-	modsmenu.items[modsmenu.list.numitems] = mod;
-	modsmenu.list.numitems++;
+	modsmenu.items[modsmenu.modcount] = mod;
+	modsmenu.modcount++;
+}
+
+static void M_Mods_Refilter(void)
+{
+	int i;
+	VEC_CLEAR(modsmenu.filtered_indices);
+
+	for (i = 0; i < modsmenu.modcount; i++)
+	{
+		if (modsmenu.list.search.len == 0 || 
+			q_strcasestr(modsmenu.items[i].name, modsmenu.list.search.text) || 
+			q_strcasestr(modsmenu.items[i].description, modsmenu.list.search.text))
+		{
+			VEC_PUSH(modsmenu.filtered_indices, i);
+		}
+	}
+
+	modsmenu.list.numitems = VEC_SIZE(modsmenu.filtered_indices);
+
+	if (modsmenu.list.cursor >= modsmenu.list.numitems)
+		modsmenu.list.cursor = modsmenu.list.numitems - 1;
+
+	if (modsmenu.list.cursor < 0 && modsmenu.list.numitems > 0)
+		modsmenu.list.cursor = 0;
+
+	M_List_CenterCursor(&modsmenu.list);
 }
 
 static void M_Mods_Init(void)
@@ -14703,11 +14732,20 @@ static void M_Mods_Init(void)
 	modsmenu.modcount = 0;
 	modsmenu.scrollbar_grab = false;
 	VEC_CLEAR(modsmenu.items);
+	VEC_CLEAR(modsmenu.filtered_indices);
+
+	memset(&modsmenu.list.search, 0, sizeof(modsmenu.list.search));
+	modsmenu.list.search.maxlen = 32;
 
 	M_Ticker_Init(&modsmenu.ticker);
 
 	for (item = modlist; item; item = item->next)
 		M_Mods_Add(item->name);
+
+	// Force 12 chars for consistent column alignment as requested
+	max_word_length = 12;
+
+	M_Mods_Refilter();
 
 	if (modsmenu.list.cursor == -1)
 		modsmenu.list.cursor = 0;
@@ -14755,125 +14793,24 @@ void M_Mods_Draw(void)
 	for (i = 0; i < numvis; i++) 
 	{
 		int idx = i + firstvis;
-		int color = modsmenu.items[idx].active ? 0 : 1;
+		int mod_idx = modsmenu.filtered_indices[idx];
 		qboolean selected = (idx == modsmenu.list.cursor);
 
-		// Display mod name with description if available
-		// Name in current color, parentheses in current color, text inside parentheses in white
-		// Uses smooth scrolling for overflow
+		if (modsmenu.list.search.len > 0)
 		{
-			const int charwidth = 8;
-			const int gap_len = 5;
-			const int scrollspeed = 30;
-			int maxwidth = (cols - 2) * 8;
-			int maxchars = maxwidth / charwidth;
-			double scroll_time = selected ? modsmenu.ticker.scroll_time : 0.0;
-			
-			const char *mod_name = modsmenu.items[idx].name;
-			const char *mod_desc = modsmenu.items[idx].description;
-			int name_len = strlen(mod_name);
-			int desc_len = strlen(mod_desc);
-			qboolean has_desc = (mod_desc[0] != '\0');
-			
-			// Calculate total length: name + " (" + description + ")" = name + 3 + desc + 1 = name + desc + 4
-			int total_len = has_desc ? (name_len + desc_len + 4) : name_len; // name + " (" + desc + ")"
-			
-			char mask = color ? 128 : 0; // 128 = gold/red, 0 = white
-			
-			if (total_len <= maxchars)
-			{
-				// No scrolling needed - just draw directly
-				int draw_x = x;
-				
-				// Draw mod name in current color
-				for (int c = 0; c < name_len; c++)
-				{
-					M_DrawCharacter(draw_x, y + i * 8, (unsigned char)mod_name[c] ^ mask);
-					draw_x += charwidth;
-				}
-				
-				if (has_desc)
-				{
-					// Draw " (" in current color
-					M_DrawCharacter(draw_x, y + i * 8, ' ' ^ mask); draw_x += charwidth;
-					M_DrawCharacter(draw_x, y + i * 8, '(' ^ mask); draw_x += charwidth;
-					
-					// Draw description in WHITE (no mask)
-					for (int c = 0; c < desc_len; c++)
-					{
-						M_DrawCharacter(draw_x, y + i * 8, (unsigned char)mod_desc[c]);
-						draw_x += charwidth;
-					}
-					
-					// Draw ")" in current color
-					M_DrawCharacter(draw_x, y + i * 8, ')' ^ mask);
-				}
-			}
-			else
-			{
-				// Scrolling needed
-				int total_chars = total_len + gap_len;
-				int cycle_pixels = total_chars * charwidth;
-				int pixel_offset = ((int)(scroll_time * scrollspeed)) % cycle_pixels;
-				if (pixel_offset < 0)
-					pixel_offset += cycle_pixels;
-				
-				for (int pass = 0; pass < 2; ++pass)
-				{
-					int base_x = x - pixel_offset + pass * cycle_pixels;
-					for (int pos = 0; pos < total_chars; ++pos)
-					{
-						int char_x = base_x + pos * charwidth;
-						
-						if (char_x + charwidth <= x)
-							continue;
-						if (char_x >= x + maxwidth)
-							break;
-						
-						int ch;
-						int ch_mask = mask; // Default to current color
-						
-						if (pos < name_len)
-						{
-							// Mod name - current color
-							ch = (unsigned char)mod_name[pos];
-						}
-						else if (has_desc && pos == name_len)
-						{
-							// Space before parenthesis - current color
-							ch = ' ';
-						}
-						else if (has_desc && pos == name_len + 1)
-						{
-							// Opening parenthesis - current color
-							ch = '(';
-						}
-						else if (has_desc && pos >= name_len + 2 && pos < name_len + 2 + desc_len)
-						{
-							// Description text - WHITE (no mask)
-							ch = (unsigned char)mod_desc[pos - name_len - 2];
-							ch_mask = 0; // White!
-						}
-						else if (has_desc && pos == name_len + 2 + desc_len)
-						{
-							// Closing parenthesis - current color
-							ch = ')';
-						}
-						else if (pos >= total_len)
-						{
-							// Gap separator - current color
-							ch = (unsigned char)" /// "[pos - total_len];
-						}
-						else
-						{
-							// Fallback
-							ch = ' ';
-						}
-						
-						M_DrawCharacter(char_x, y + i * 8, ch ^ ch_mask);
-					}
-				}
-			}
+			M_PrintHighlightScroll2(x, y + i * 8, (cols - 2) * 8,
+				modsmenu.items[mod_idx].name,
+				modsmenu.items[mod_idx].description,
+				modsmenu.list.search.text,
+				selected ? modsmenu.ticker.scroll_time : 0.0);
+		}
+		else
+		{
+			M_PrintScroll2(x, y + i * 8, (cols - 2) * 8,
+				modsmenu.items[mod_idx].name,
+				modsmenu.items[mod_idx].description,
+				selected ? modsmenu.ticker.scroll_time : 0.0,
+				!modsmenu.items[mod_idx].active);
 		}
 
 		if (selected)
@@ -14889,17 +14826,59 @@ void M_Mods_Draw(void)
 		if (modsmenu.list.scroll + modsmenu.list.viewsize < modsmenu.list.numitems)
 			M_DrawEllipsisBar(x, y + modsmenu.list.viewsize * 8, cols);
 	}
+
+	if (modsmenu.list.search.len > 0) // Draw search box if search is active
+	{
+		M_DrawTextBox(16, 176, 32, 1);
+		M_PrintHighlight(24, 184, modsmenu.list.search.text,
+			modsmenu.list.search.text,
+			modsmenu.list.search.len);
+		int cursor_x = 24 + 8 * modsmenu.list.search.len;
+		if (modsmenu.list.numitems == 0)
+			M_DrawCharacter(cursor_x, 184, 11 ^ 128);
+		else
+			M_DrawCharacter(cursor_x, 184, 10 + ((int)(realtime * 4) & 1));
+	}
 }
 
 qboolean M_Mods_Match(int index, char initial)
 {
-	return q_tolower(modsmenu.items[index].name[0]) == initial;
+	int mod_idx = modsmenu.filtered_indices[index];
+	return q_tolower(modsmenu.items[mod_idx].name[0]) == initial;
 }
 
 void M_Mods_Key(int key)
 {
 	
 	int x, y; // woods #mousemenu
+
+	if (keydown[K_CTRL])
+	{
+		if ((key == 'u' || key == 'U') && modsmenu.list.search.len > 0)
+		{
+			modsmenu.list.search.len = 0;
+			modsmenu.list.search.text[0] = 0;
+			M_Mods_Refilter();
+			return;
+		}
+		else if (key == K_BACKSPACE && modsmenu.list.search.len > 0)
+		{
+			M_DeletePrevWord(&modsmenu.list.search);
+			M_Mods_Refilter();
+			return;
+		}
+	}
+
+	if (key >= 32 && key < 127) // Handle search input first, printable characters
+	{
+		if (modsmenu.list.search.len < modsmenu.list.search.maxlen)
+		{
+			modsmenu.list.search.text[modsmenu.list.search.len++] = key;
+			modsmenu.list.search.text[modsmenu.list.search.len] = 0;
+			M_Mods_Refilter();
+			return;
+		}
+	}
 
 	if (modsmenu.scrollbar_grab)
 	{
@@ -14927,6 +14906,13 @@ void M_Mods_Key(int key)
 	switch (key)
 	{
 	case K_ESCAPE:
+		if (modsmenu.list.search.len > 0) // Clear search but stay in menu
+		{
+			modsmenu.list.search.len = 0;
+			modsmenu.list.search.text[0] = 0;
+			M_Mods_Refilter();
+			return;
+		}
 	case K_BBUTTON:
 	case K_MOUSE4: // woods #mousemenu
 	case K_MOUSE2:
@@ -14935,13 +14921,25 @@ void M_Mods_Key(int key)
 		else
 			M_Menu_Main_f();
 		break;
+	case K_BACKSPACE:
+		if (modsmenu.list.search.len > 0)
+		{
+			modsmenu.list.search.text[--modsmenu.list.search.len] = 0;
+			M_Mods_Refilter();
+			return;
+		}
+		break;
 
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	enter:
-		Cbuf_AddText(va("game %s\n", modsmenu.items[modsmenu.list.cursor].name));
-		M_Menu_Main_f();
+		if (modsmenu.list.numitems > 0)
+		{
+			int mod_idx = modsmenu.filtered_indices[modsmenu.list.cursor];
+			Cbuf_AddText(va("game %s\n", modsmenu.items[mod_idx].name));
+			M_Menu_Main_f();
+		}
 		break;
 
 	case K_MOUSE1: // woods #mousemenu
