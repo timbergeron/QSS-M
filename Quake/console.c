@@ -4075,7 +4075,7 @@ static void Con_DrawTypingStatus(void) // woods #typing...
 	if (cls.state != ca_connected || cl.maxclients <= 0)
 		return;
 
-	int local_index = cl.viewentity - 1;
+	int local_index = cl.realviewentity - 1;
 
 	for (int i = 0; i < cl.maxclients; ++i)
 	{
