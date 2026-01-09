@@ -3096,7 +3096,44 @@ forward:
 			return;
 
 		if (setup_cursor == 4 || setup_cursor == 5) // inc 1 both woods #namemaker
+		{
+			// Handle direct click on color bar boxes
+			// Color bar is drawn at y+4 offset: shirt at 114, pants at 138 (8 pixels tall each)
+			// Color bar starts at x=64, each box is 8 pixels wide, 14 colors (0-13)
+			if (k == K_MOUSE1)
+			{
+				int colorbar_x = 70; // Adjusted for visual offset (boxes appear ~6px right of mouse coords)
+				int colorbar_y = (setup_cursor == 4) ? 110 : 134; // Menu item Y position
+				
+				// Check if click is within the color bar area
+				if (m_mousex >= colorbar_x && m_mousex < colorbar_x + 14 * 8 &&
+					m_mousey >= colorbar_y && m_mousey < colorbar_y + 20)
+				{
+					int clicked_color = (m_mousex - colorbar_x) / 8;
+					if (clicked_color >= 0 && clicked_color <= 13)
+					{
+						plcolour_t *target = (setup_cursor == 4) ? &setup_top : &setup_bottom;
+						target->type = 1;
+						target->basic = clicked_color;
+						S_LocalSound("misc/menu3.wav");
+						q_strlcpy(lastColorSelected, CL_PLColours_ToString(*target), sizeof(lastColorSelected));
+						if (chase_active.value && !cls.demoplayback && host_initialized && !flyme)
+						{
+							if (!CL_PLColours_Equals(setup_top, setup_oldtop) || !CL_PLColours_Equals(setup_bottom, setup_oldbottom))
+							{
+								Cbuf_AddText(va("color %s %s\n", CL_PLColours_ToString(setup_top), CL_PLColours_ToString(setup_bottom)));
+								colordelta = true;
+							}
+						}
+						return;
+					}
+				}
+			}
+			// If click was outside color bar, fall through to cycle behavior
 			goto forward;
+		}
+
+
 
 		if (setup_cursor == 3)
 		{
