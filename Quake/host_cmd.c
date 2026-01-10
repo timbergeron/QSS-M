@@ -803,7 +803,7 @@ void ServerList_Init(void)
 }
 
 //==============================================================================
-// woods -- bookmarks list management #bookmarksmenu
+// woods -- bookmarks list management #bookmarksmenu #bookmarksjson
 //==============================================================================
 
 filelist_item_t* bookmarkslist;
@@ -813,43 +813,388 @@ static void BookmarksList_Clear(void)
 	FileList_Clear(&bookmarkslist);
 }
 
-void BoomarksList_Rebuild(void)
+void BookmarksList_Rebuild(void)
 {
 	BookmarksList_Clear();
 	BookmarksList_Init();
 }
 
-void BookmarksList_Init(void)
+/*
+================
+BookmarkData_Parse
+
+Parse the data field from a bookmark entry.
+Handles both JSON format: {"alias":"...", "pinned":bool}
+and legacy format: alias |pin
+================
+*/
+void BookmarkData_Parse(const char* data, char* alias, size_t alias_size, qboolean* pinned)
 {
-	char	name[MAX_OSPATH];
+	char local_alias[BOOKMARK_DATA_LENGTH];
+	char* dest = alias;
+	size_t dest_size = alias_size;
 
-	q_snprintf(name, sizeof(name), "%s/id1", com_basedir); //  make an id1 folder if it doesnt exist already #smartafk
-	Sys_mkdir(name);
+	if (!dest || dest_size == 0)
+	{
+		dest = local_alias;
+		dest_size = sizeof(local_alias);
+	}
 
-	q_snprintf(name, sizeof(name), "%s/id1/backups", com_basedir); //  create backups folder if not there
-	Sys_mkdir(name);
+	dest[0] = '\0';
+	if (alias && alias_size)
+		alias[0] = '\0';
+	if (pinned)
+		*pinned = false;
 
-	FILE* file = fopen(va("%s/id1/backups/%s", com_basedir, BOOKMARKSLIST), "r");
+	if (!data)
+		return;
 
-	if (file == NULL) {
+	// Skip leading whitespace
+	while (*data == ' ' || *data == '\t')
+		++data;
+
+	// Try JSON parsing first
+	if (*data == '{')
+	{
+		json_t* json = JSON_Parse(data);
+		if (json && json->root && json->root->type == JSON_OBJECT)
+		{
+			const char* alias_value = JSON_FindString(json->root, "alias");
+			const qboolean* pinned_value = JSON_FindBoolean(json->root, "pinned");
+
+			if (alias_value)
+				q_strlcpy(dest, alias_value, dest_size);
+			else
+				dest[0] = '\0';
+
+			if (alias != dest && alias && alias_size)
+				q_strlcpy(alias, dest, alias_size);
+
+			if (pinned)
+				*pinned = pinned_value ? *pinned_value : false;
+
+			JSON_Free(json);
+			return;
+		}
+
+		if (json)
+			JSON_Free(json);
+	}
+
+	// Legacy format: "alias |pin" or just "alias"
+	q_strlcpy(dest, data, dest_size);
+
+	// Trim trailing whitespace
+	size_t len = strlen(dest);
+	while (len > 0 && (dest[len - 1] == ' ' || dest[len - 1] == '\t'))
+		dest[--len] = '\0';
+
+	// Check for |pin suffix (with space before it)
+	if (len >= strlen(BOOKMARK_PIN_SUFFIX))
+	{
+		const size_t suffix_len = strlen(BOOKMARK_PIN_SUFFIX);
+		char* marker = dest + len - suffix_len;
+
+		if (marker > dest && (marker[-1] == ' ' || marker[-1] == '\t') &&
+		    !q_strcasecmp(marker, BOOKMARK_PIN_SUFFIX))
+		{
+			if (pinned)
+				*pinned = true;
+
+			*marker = '\0';
+
+			// Trim trailing whitespace before the suffix
+			while (marker > dest && (marker[-1] == ' ' || marker[-1] == '\t'))
+				*--marker = '\0';
+		}
+		else if (pinned)
+		{
+			*pinned = false;
+		}
+	}
+
+	if (alias != dest && alias && alias_size)
+		q_strlcpy(alias, dest, alias_size);
+}
+
+/*
+================
+BookmarkData_Format
+
+Format bookmark data as JSON string.
+Output: {"alias":"escaped_alias","pinned":true/false}
+================
+*/
+void BookmarkData_Format(char* dest, size_t dest_size, const char* alias, qboolean pinned)
+{
+	if (!dest || dest_size == 0)
+		return;
+
+	dest[0] = '\0';
+
+	if (!alias)
+		alias = "";
+
+	char* escaped_alias = JSON_EscapeString(alias);
+	if (!escaped_alias)
+	{
+		// Fallback to legacy format if escape fails
+		if (pinned && alias[0])
+			q_snprintf(dest, dest_size, "%s %s", alias, BOOKMARK_PIN_SUFFIX);
+		else if (pinned)
+			q_snprintf(dest, dest_size, "%s", BOOKMARK_PIN_SUFFIX);
+		else
+			q_strlcpy(dest, alias, dest_size);
 		return;
 	}
 
-	char buffer[256];
-	while (fgets(buffer, sizeof(buffer), file) != NULL) {
-		// Remove newline character
-		buffer[strcspn(buffer, "\n")] = '\0';
+	q_snprintf(dest, dest_size, "{\"alias\":\"%s\",\"pinned\":%s}", escaped_alias, pinned ? "true" : "false");
 
-		char* extra_info = NULL;
-		char* token = strtok(buffer, ","); // Split the string at the comma
+	free(escaped_alias);
+}
 
-		if (token != NULL) {
-			extra_info = strtok(NULL, ""); // Get the remainder of the string after the comma
+/*
+================
+BookmarksList_Write
+
+Write bookmarks list to JSON file with atomic write (tmp + rename).
+================
+*/
+void BookmarksList_Write(void)
+{
+	char fname[MAX_OSPATH];
+	char tmpfname[MAX_OSPATH];
+	FILE* file;
+	qboolean ok = true;
+
+	q_snprintf(fname, sizeof(fname), "%s/id1", com_basedir);
+	Sys_mkdir(fname);
+
+	q_snprintf(fname, sizeof(fname), "%s/id1/backups", com_basedir);
+	Sys_mkdir(fname);
+
+	q_snprintf(fname, sizeof(fname), "%s/id1/backups/%s", com_basedir, BOOKMARKSLIST);
+	q_snprintf(tmpfname, sizeof(tmpfname), "%s.tmp", fname);
+
+	file = fopen(tmpfname, "w");
+	if (!file)
+	{
+		Con_DPrintf("BookmarksList_Write: Unable to open %s for writing\n", tmpfname);
+		return;
+	}
+
+	fprintf(file, "[\n");
+
+	filelist_item_t* item;
+	qboolean first = true;
+	for (item = bookmarkslist; item; item = item->next)
+	{
+		char alias[BOOKMARK_DATA_LENGTH];
+		qboolean pinned = false;
+		BookmarkData_Parse(item->data, alias, sizeof(alias), &pinned);
+
+		char* escaped_name = JSON_EscapeString(item->name);
+		char* escaped_alias = JSON_EscapeString(alias);
+
+		if (!escaped_name || !escaped_alias)
+		{
+			Con_Printf("BookmarksList_Write: skipping entry due to allocation failure for %s\n",
+			           item->name ? item->name : "<null>");
+			free(escaped_name);
+			free(escaped_alias);
+			ok = false;
+			break;
 		}
 
-		FileList_Add(token, extra_info, &bookmarkslist); // Pass the split parts to FileList_Add
+		if (!first)
+			fprintf(file, ",\n");
+		first = false;
+
+		fprintf(file, "  {\n");
+		fprintf(file, "    \"address\": \"%s\",\n", escaped_name);
+		fprintf(file, "    \"alias\": \"%s\",\n", escaped_alias);
+		fprintf(file, "    \"pinned\": %s\n", pinned ? "true" : "false");
+		fprintf(file, "  }");
+
+		free(escaped_name);
+		free(escaped_alias);
 	}
+
+	if (ok)
+	{
+		if (!first)
+			fprintf(file, "\n");
+		fprintf(file, "]\n");
+	}
+
+	if (fclose(file) != 0)
+		ok = false;
+
+	if (!ok)
+	{
+		Con_Printf("BookmarksList_Write: failed to flush %s, preserving existing file\n", tmpfname);
+		remove(tmpfname);
+		return;
+	}
+
+	remove(fname);  // Windows rename() fails if destination exists
+	if (rename(tmpfname, fname) != 0)
+	{
+		Con_Printf("BookmarksList_Write: unable to replace %s with %s\n", fname, tmpfname);
+		remove(tmpfname);
+	}
+}
+
+/*
+================
+BookmarksList_Init
+
+Read bookmarks from file. Supports JSON format and legacy CSV format.
+Legacy files are automatically migrated to JSON on first load.
+================
+*/
+void BookmarksList_Init(void)
+{
+	char fname[MAX_OSPATH];
+	FILE* file;
+	long file_size;
+	char* buffer;
+
+	q_snprintf(fname, sizeof(fname), "%s/id1", com_basedir);
+	Sys_mkdir(fname);
+
+	q_snprintf(fname, sizeof(fname), "%s/id1/backups", com_basedir);
+	Sys_mkdir(fname);
+
+	q_snprintf(fname, sizeof(fname), "%s/id1/backups/%s", com_basedir, BOOKMARKSLIST);
+
+	file = fopen(fname, "rb");
+	if (!file)
+	{
+		// Try legacy filename for migration
+		q_snprintf(fname, sizeof(fname), "%s/id1/backups/%s", com_basedir, BOOKMARKSLIST_LEGACY);
+		file = fopen(fname, "rb");
+		if (!file)
+			return;
+	}
+
+	fseek(file, 0, SEEK_END);
+	file_size = ftell(file);
+	rewind(file);
+
+	if (file_size <= 0)
+	{
+		fclose(file);
+		return;
+	}
+
+	buffer = (char*)malloc(file_size + 1);
+	if (!buffer)
+	{
+		fclose(file);
+		return;
+	}
+
+	if (fread(buffer, 1, file_size, file) != (size_t)file_size)
+	{
+		free(buffer);
+		fclose(file);
+		return;
+	}
+
+	buffer[file_size] = '\0';
 	fclose(file);
+
+	// Try JSON parsing first
+	json_t* json = JSON_Parse(buffer);
+	if (json && json->root && json->root->type == JSON_ARRAY)
+	{
+		const jsonentry_t* entry;
+		for (entry = json->root->firstchild; entry; entry = entry->next)
+		{
+			if (!entry || entry->type != JSON_OBJECT)
+				continue;
+
+			const char* address = JSON_FindString(entry, "address");
+			const char* alias = JSON_FindString(entry, "alias");
+			const qboolean* pinned_ptr = JSON_FindBoolean(entry, "pinned");
+			qboolean pinned = pinned_ptr ? *pinned_ptr : false;
+
+			if (!address || !alias)
+				continue;
+
+			char data[BOOKMARK_DATA_LENGTH];
+			BookmarkData_Format(data, sizeof(data), alias, pinned);
+			FileList_Add(address, data, &bookmarkslist);
+		}
+
+		JSON_Free(json);
+		free(buffer);
+		return;
+	}
+
+	if (json)
+		JSON_Free(json);
+
+	// Legacy CSV format: "address,alias" or "address,alias |pin"
+	qboolean legacy_format = false;
+	char* buffer_copy = (char*)malloc(file_size + 1);
+	if (!buffer_copy)
+	{
+		free(buffer);
+		return;
+	}
+	memcpy(buffer_copy, buffer, file_size + 1);
+
+	char* line = strtok(buffer_copy, "\n");
+	while (line)
+	{
+		char* trimmed = line;
+		while (*trimmed == ' ' || *trimmed == '\t')
+			++trimmed;
+
+		if (*trimmed)
+		{
+			char* end = trimmed + strlen(trimmed);
+			while (end > trimmed && (end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t'))
+				*--end = '\0';
+
+			char* comma = strchr(trimmed, ',');
+			char* name = trimmed;
+			const char* raw_data = NULL;
+
+			if (comma)
+			{
+				*comma = '\0';
+				raw_data = comma + 1;
+			}
+
+			char alias[BOOKMARK_DATA_LENGTH];
+			qboolean pinned = false;
+			BookmarkData_Parse(raw_data, alias, sizeof(alias), &pinned);
+
+			char data[BOOKMARK_DATA_LENGTH];
+			BookmarkData_Format(data, sizeof(data), alias, pinned);
+			FileList_Add(name, data, &bookmarkslist);
+			legacy_format = true;
+		}
+
+		line = strtok(NULL, "\n");
+	}
+
+	free(buffer_copy);
+	free(buffer);
+
+	// Auto-migrate legacy format to JSON and delete old file
+	if (legacy_format)
+	{
+		BookmarksList_Write();
+		// Delete old bookmarks.txt after successful migration
+		char legacy_fname[MAX_OSPATH];
+		q_snprintf(legacy_fname, sizeof(legacy_fname), "%s/id1/backups/%s", com_basedir, BOOKMARKSLIST_LEGACY);
+		remove(legacy_fname);
+		Con_Printf("Migrated bookmarks from %s to %s\n", BOOKMARKSLIST_LEGACY, BOOKMARKSLIST);
+	}
 }
 
 //==============================================================================

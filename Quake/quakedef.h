@@ -274,7 +274,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define	SOUND_CHANNELS		8
 
 #define	SERVERLIST	"servers.txt"	// woods for server history + tab complete #serverlist
-#define	BOOKMARKSLIST	"bookmarks.txt"	// woods #bookmarksmenu
+#define	BOOKMARKSLIST		"bookmarks.json"	// woods #bookmarksjson
+#define	BOOKMARKSLIST_LEGACY	"bookmarks.txt"		// woods #bookmarksjson - old filename for migration
+#define	BOOKMARK_DATA_LENGTH	50	// woods #bookmarksjson - max length of bookmark data field
+#define	BOOKMARK_PIN_SUFFIX	"|pin"	// woods #bookmarksjson - legacy pinned suffix
 
 #if defined(__APPLE__) && defined(__aarch64__)
 #define MACBOOK_ARM_HACK // woods #collinear
@@ -457,6 +460,10 @@ void ExecList_Rebuild (void); // woods #execlist
 void MusicList_Rebuild (void); // woods #musiclist
 void TextList_Rebuild (void); // woods #textlist
 void FileList_Add_MapDesc (const char* levelName); // woods #mapdescriptions
+void BookmarksList_Rebuild (void); // woods #bookmarksjson
+void BookmarksList_Write (void); // woods #bookmarksjson
+void BookmarkData_Parse (const char* data, char* alias, size_t alias_size, qboolean* pinned); // woods #bookmarksjson
+void BookmarkData_Format (char* dest, size_t dest_size, const char* alias, qboolean pinned); // woods #bookmarksjson
 
 void M_CheckMods (void); // woods #modsmenu (iw)
 

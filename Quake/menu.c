@@ -2562,9 +2562,78 @@ Multiplayer Menu
 */
 
 int	m_multiplayer_cursor;
-#define	MULTIPLAYER_ITEMS	3
+#define	MULTIPLAYER_BASE_ITEMS	3
+#define	MAX_PINNED_BOOKMARKS	3
 extern cvar_t scr_shownet; // woods
 
+#define	BOOKMARK_ALIAS_LENGTH	BOOKMARK_DATA_LENGTH
+
+typedef struct pinnedbookmark_s {
+	char	name[MAX_QPATH];
+	char	alias[BOOKMARK_ALIAS_LENGTH];
+} pinnedbookmark_t;
+
+// Forward declarations for pinned bookmark helpers
+static int M_Bookmarks_CountPinned(void);
+static int M_Bookmarks_GetPinned(pinnedbookmark_t* out, int max_pins);
+static int M_MultiPlayer_TotalItems(void);
+
+static int M_Bookmarks_CountPinned(void)
+{
+	int count = 0;
+	for (filelist_item_t* item = bookmarkslist; item; item = item->next)
+	{
+		qboolean pinned = false;
+		BookmarkData_Parse(item->data, NULL, 0, &pinned);
+		if (pinned)
+			count++;
+	}
+	return count;
+}
+
+static int PinnedBookmarkCompare(const void* a, const void* b)
+{
+	const pinnedbookmark_t* itemA = (const pinnedbookmark_t*)a;
+	const pinnedbookmark_t* itemB = (const pinnedbookmark_t*)b;
+	return q_strcasecmp(itemA->alias, itemB->alias);
+}
+
+static int M_Bookmarks_GetPinned(pinnedbookmark_t* out, int max_pins)
+{
+	int count = 0;
+
+	if (!out || max_pins <= 0)
+		return 0;
+
+	for (filelist_item_t* item = bookmarkslist; item && count < max_pins; item = item->next)
+	{
+		pinnedbookmark_t entry;
+		qboolean pinned = false;
+
+		BookmarkData_Parse(item->data, entry.alias, sizeof(entry.alias), &pinned);
+		if (!pinned || !entry.alias[0])
+			continue;
+
+		q_strlcpy(entry.name, item->name, sizeof(entry.name));
+		out[count++] = entry;
+	}
+
+	if (count > 1)
+		qsort(out, count, sizeof(*out), PinnedBookmarkCompare);
+
+	return count;
+}
+
+static int M_MultiPlayer_TotalItems(void)
+{
+	int total = MULTIPLAYER_BASE_ITEMS;
+	int pinned = M_Bookmarks_CountPinned();
+
+	if (pinned > MAX_PINNED_BOOKMARKS)
+		pinned = MAX_PINNED_BOOKMARKS;
+
+	return total + pinned;
+}
 
 void M_Menu_MultiPlayer_f (void)
 {
@@ -2578,8 +2647,20 @@ extern char	lastmphost[NET_NAMELEN]; // woods - connected server address
 
 void M_MultiPlayer_Draw (void)
 {
+	#define PINNED_OFFSET_Y     6   // Extra gap after Setup before first pin
+	#define PINNED_SPACING      10  // Vertical spacing between pins
+	
 	int		f, i; // woods
 	qpic_t	*p;
+	pinnedbookmark_t pinned[MAX_PINNED_BOOKMARKS];
+	int pinned_count = M_Bookmarks_GetPinned(pinned, MAX_PINNED_BOOKMARKS);
+	int total_items = M_MultiPlayer_TotalItems();
+
+	if (total_items <= 0)
+		total_items = MULTIPLAYER_BASE_ITEMS;
+
+	if (m_multiplayer_cursor >= total_items)
+		m_multiplayer_cursor = total_items - 1;
 
 	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
 	p = Draw_CachePic ("gfx/p_multi.lmp");
@@ -2591,21 +2672,39 @@ void M_MultiPlayer_Draw (void)
 	if (strlen(lastmphost) > i)
 		i = (strlen(lastmphost));
 
-	M_DrawTransPic (54, 32 + m_multiplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
+	// Draw cursor - use rotating Q for base items, rotated arrow for pinned items
+	if (m_multiplayer_cursor < MULTIPLAYER_BASE_ITEMS)
+		M_DrawTransPic (54, 32 + m_multiplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
 
-	
-	if (cl.maxclients > 1 && cls.state == ca_connected && !cls.demoplayback) // woods, give some extra info in mp menu
+	// Draw pinned bookmarks below base items
+	for (i = 0; i < pinned_count && i < MAX_PINNED_BOOKMARKS; ++i)
 	{
-		f = (320 - 26 * 8) / 2;
-		M_DrawTextBox(f, 96, i, 2);
-		f += 8;
-		M_Print(f, 104, "currently connected to:");
+		int row = MULTIPLAYER_BASE_ITEMS + i;
+		int y = 32 + MULTIPLAYER_BASE_ITEMS * 20 + PINNED_OFFSET_Y + i * PINNED_SPACING;
+		qboolean selected = (m_multiplayer_cursor == row);
 
-		if (realtime - cl.last_received_message > scr_shownet.value)
-			M_PrintRGBA(f, 112, lastmphost, CL_PLColours_Parse("0xffffff"), 0.2f, false);
-		else
-			M_PrintWhite(f, 112, lastmphost);
+		// Show arrow at 0  when selected (pointing right), 90  when not (pointing down)
+		Draw_Character_Rotation(80, y, 141, selected ? 0 : 90);
+		M_Print(96, y, pinned[i].alias);
 	}
+
+        // Draw "currently connected to" below pinned bookmarks
+        if (cl.maxclients > 1 && cls.state == ca_connected && !cls.demoplayback)
+        {
+                int conn_y = 32 + MULTIPLAYER_BASE_ITEMS * 20 + PINNED_OFFSET_Y + pinned_count * PINNED_SPACING + PINNED_OFFSET_Y;
+                int box_width = strlen(lastmphost);
+                if (box_width < 24)
+                        box_width = 24;
+                f = (320 - 26 * 8) / 2;
+                M_DrawTextBox(f, conn_y, box_width, 2);
+                f += 8;
+                M_Print(f, conn_y + 8, "currently connected to:");
+
+                if (realtime - cl.last_received_message > scr_shownet.value)
+                        M_PrintRGBA(f, conn_y + 16, lastmphost, CL_PLColours_Parse("0xffffff"), 0.2f, false);
+                else
+                        M_PrintWhite(f, conn_y + 16, lastmphost);
+        }
 
 	if (ipxAvailable || ipv4Available || ipv6Available)
 		return;
@@ -2644,14 +2743,14 @@ void M_MultiPlayer_Key (int key)
 
 	case K_DOWNARROW:
 		S_LocalSound ("misc/menu1.wav");
-		if (++m_multiplayer_cursor >= MULTIPLAYER_ITEMS)
+		if (++m_multiplayer_cursor >= M_MultiPlayer_TotalItems())
 			m_multiplayer_cursor = 0;
 		break;
 
 	case K_UPARROW:
 		S_LocalSound ("misc/menu1.wav");
 		if (--m_multiplayer_cursor < 0)
-			m_multiplayer_cursor = MULTIPLAYER_ITEMS - 1;
+			m_multiplayer_cursor = M_MultiPlayer_TotalItems() - 1;
 		break;
 
 	case K_ENTER:
@@ -2674,13 +2773,32 @@ void M_MultiPlayer_Key (int key)
 		case 2:
 			M_Menu_Setup_f ();
 			break;
+
+		default:
+			// Handle pinned bookmarks
+			if (m_multiplayer_cursor >= MULTIPLAYER_BASE_ITEMS)
+			{
+				int index = m_multiplayer_cursor - MULTIPLAYER_BASE_ITEMS;
+				pinnedbookmark_t pinned[MAX_PINNED_BOOKMARKS];
+				int count = M_Bookmarks_GetPinned(pinned, MAX_PINNED_BOOKMARKS);
+				if (index < count)
+				{
+					m_return_state = m_state;
+					m_return_onerror = true;
+					key_dest = key_game;
+					m_state = m_none;
+					IN_UpdateGrabs();
+					Cbuf_AddText(va("connect \"%s\"\n", pinned[index].name));
+				}
+			}
+			break;
 		}
 	}
 }
 
 void M_MultiPlayer_Mousemove(int cx, int cy) // woods #mousemenu
 {
-	M_UpdateCursor(cy, 32, 20, MULTIPLAYER_ITEMS, &m_multiplayer_cursor);
+	M_UpdateCursor(cy, 32, 20, M_MultiPlayer_TotalItems(), &m_multiplayer_cursor);
 }
 
 /*
@@ -12119,8 +12237,9 @@ static qboolean bookmarks_edit_shortcut = false;
 typedef struct
 {
 	const char* name;
-	const char* alias;
+	char		alias[BOOKMARK_ALIAS_LENGTH];
 	qboolean	active;
+	qboolean	pinned;
 } bookmarksitem_t;
 
 static struct
@@ -12140,14 +12259,15 @@ static qboolean M_Bookmarks_IsActive(const char* server)
 	return cls.state == ca_connected && cls.signon == SIGNONS && !strcmp(lastmphost, server);
 }
 
-static void M_Bookmarks_Add(const char* name, const char* alias)
+static void M_Bookmarks_Add(const char* name, const char* data)
 {
-	if (!strcmp(alias, ""))
-		return;
-
 	bookmarksitem_t bookmarks;
 	bookmarks.name = name;
-	bookmarks.alias = alias;  // Set the alias
+	BookmarkData_Parse(data, bookmarks.alias, sizeof(bookmarks.alias), &bookmarks.pinned);
+
+	if (!bookmarks.alias[0])
+		return;
+
 	bookmarks.active = M_Bookmarks_IsActive(name);
 
 	if (bookmarks.active && bookmarksmenu.list.cursor == -1)
@@ -12271,6 +12391,14 @@ void M_Bookmarks_Draw(void)
 
 		M_PrintScroll(x, y + i * 8, (cols - 2) * 8, bookmarksmenu.items[idx].alias, selected ? bookmarksmenu.ticker.scroll_time : 0.0, !bookmarks.active);
 
+		// Show pin indicator for pinned bookmarks
+		if (bookmarksmenu.items[idx].pinned)
+		{
+			int alias_len = strlen(bookmarksmenu.items[idx].alias);
+			if (alias_len < cols - 3)
+				Draw_Character_Rotation(x + (alias_len + 1) * 8, y + i * 8, 141, 90); // Rotated arrow, same as multiplayer menu
+		}
+
 		if (selected)
 			M_DrawCharacter(x - 8, y + i * 8, 12 + ((int)(realtime * 4) & 1));
 
@@ -12383,7 +12511,7 @@ void M_Bookmarks_Key(int key)
 		if (bookmarksmenu.items != NULL && keydown[K_CTRL])
 		{ 
 			FileList_Subtract(bookmarksmenu.items[bookmarksmenu.list.cursor].name, &bookmarkslist);
-			Write_List(bookmarkslist, BOOKMARKSLIST);
+			BookmarksList_Write();
 			M_Menu_Bookmarks_f();
 		}
 		break;
@@ -12413,13 +12541,71 @@ void M_Bookmarks_Mousemove(int cx, int cy) // woods #mousemenu
 
 /* Bookmarks Edit menu */
 
-static int		bookmarks_edit_cursor = 2;
-static int		bookmarks_edit_cursor_table[] = { 54, 86, 106 }; // woods add value, change position #namemaker #colorbar
+static int		bookmarks_edit_cursor = 3;
+static int		bookmarks_edit_cursor_table[] = { 54, 86, 114, 138 };
 
 static char temp_alias[45];
 static char temp_name[45];
+static qboolean	temp_pinned;
+static qboolean	bookmarks_edit_original_pinned;
+static char		bookmarks_edit_status[64];
+static double	bookmarks_edit_status_until;
 
-#define	NUM_BOOKMARKS_EDIT_CMDS	3
+#define	NUM_BOOKMARKS_EDIT_CMDS	4
+
+static void M_Bookmarks_Edit_ClearStatus(void)
+{
+	bookmarks_edit_status[0] = '\0';
+	bookmarks_edit_status_until = 0;
+}
+
+static void M_Bookmarks_Edit_ShowStatus(const char* message)
+{
+	if (!message)
+	{
+		M_Bookmarks_Edit_ClearStatus();
+		return;
+	}
+
+	q_strlcpy(bookmarks_edit_status, message, sizeof(bookmarks_edit_status));
+	bookmarks_edit_status_until = realtime + 3.0;
+}
+
+static qboolean M_Bookmarks_Edit_SetPinned(qboolean pinned)
+{
+	if (temp_pinned == pinned)
+	{
+		if (!pinned)
+			M_Bookmarks_Edit_ClearStatus();
+		return true;
+	}
+
+	if (pinned)
+	{
+		int pinned_count = M_Bookmarks_CountPinned();
+		if (!bookmarks_edit_new && bookmarks_edit_original_pinned && pinned_count > 0)
+			pinned_count--;
+
+		if (pinned_count >= MAX_PINNED_BOOKMARKS)
+		{
+			M_Bookmarks_Edit_ShowStatus("Max 5 pins reached");
+			S_LocalSound("misc/menu2.wav");
+			return false;
+		}
+	}
+
+	temp_pinned = pinned;
+	M_Bookmarks_Edit_ClearStatus();
+	S_LocalSound("misc/menu3.wav");
+	return true;
+}
+
+static void M_Bookmarks_ListAdd(const char* name, const char* alias, qboolean pinned)
+{
+	char data[BOOKMARK_DATA_LENGTH];
+	BookmarkData_Format(data, sizeof(data), alias, pinned);
+	FileList_Add(name, data, &bookmarkslist);
+}
 
 void M_Menu_Bookmarks_Edit_f (void)
 {
@@ -12428,7 +12614,8 @@ void M_Menu_Bookmarks_Edit_f (void)
 	m_entersound = true;
 	IN_UpdateGrabs();
 
-	bookmarks_edit_cursor = 2;
+	bookmarks_edit_cursor = 3;
+	M_Bookmarks_Edit_ClearStatus();
 
 	if (bookmarks_edit_new)
 	{
@@ -12437,16 +12624,23 @@ void M_Menu_Bookmarks_Edit_f (void)
 		else
 			temp_name[0] = 0;
 		temp_alias[0] = 0;
-
+		temp_pinned = false;
+		bookmarks_edit_original_pinned = false;
 	}
 	else if (bookmarksmenu.list.cursor >= 0 && bookmarksmenu.list.cursor < bookmarksmenu.list.numitems)
 	{
-		strncpy(temp_alias, bookmarksmenu.items[bookmarksmenu.list.cursor].alias, sizeof(temp_alias) - 2);
-		strncpy(temp_name, bookmarksmenu.items[bookmarksmenu.list.cursor].name, sizeof(temp_name) - 2);
+		strncpy(temp_alias, bookmarksmenu.items[bookmarksmenu.list.cursor].alias, sizeof(temp_alias) - 1);
+		temp_alias[sizeof(temp_alias) - 1] = 0;
+		strncpy(temp_name, bookmarksmenu.items[bookmarksmenu.list.cursor].name, sizeof(temp_name) - 1);
+		temp_name[sizeof(temp_name) - 1] = 0;
+		temp_pinned = bookmarksmenu.items[bookmarksmenu.list.cursor].pinned;
+		bookmarks_edit_original_pinned = temp_pinned;
 	}
-	else 
+	else
 	{
 		M_Menu_Bookmarks_f();  // Fall back to the bookmarks menu if the index is invalid
+		temp_pinned = false;
+		bookmarks_edit_original_pinned = false;
 		return;
 	}
 }
@@ -12469,9 +12663,11 @@ void M_Bookmarks_Edit_Draw(void)
 	M_DrawTextBox(6, 78, 38, 1);
 	M_PrintWhite(14, 86, temp_alias);
 
-	M_DrawTextBox(6, 106 - 8, 14, 1);
-	M_Print(15, 106, "Accept Changes");
+	M_Print(10, 114, "Pin");
+	if (temp_pinned) M_PrintWhite(50, 114, "on"); else M_Print(50, 114, "off");
 
+	M_DrawTextBox(6, 138 - 8, 14, 1);
+	M_Print(15, 138, "Accept Changes");
 
 	M_DrawCharacter(0, bookmarks_edit_cursor_table[bookmarks_edit_cursor], 12 + ((int)(realtime * 4) & 1));
 
@@ -12480,6 +12676,15 @@ void M_Bookmarks_Edit_Draw(void)
 
 	if (bookmarks_edit_cursor == 1)
 		M_DrawCharacter(13 + 8 * strlen(temp_alias), bookmarks_edit_cursor_table[bookmarks_edit_cursor], 10 + ((int)(realtime * 4) & 1));
+
+	if (bookmarks_edit_status[0] && realtime < bookmarks_edit_status_until)
+	{
+		int box_width = (int)strlen(bookmarks_edit_status) + 2;
+		if (box_width & 1)
+			box_width++;
+		M_DrawTextBox(6, 160, box_width, 1);
+		M_PrintWhite(14, 168, bookmarks_edit_status);
+	}
 }
 
 void M_Bookmarks_Edit_Key(int k)
@@ -12522,12 +12727,22 @@ void M_Bookmarks_Edit_Key(int k)
 
 	case K_MWHEELDOWN:
 	case K_LEFTARROW:
+		if (bookmarks_edit_cursor == 2)
+		{
+			M_Bookmarks_Edit_SetPinned(!temp_pinned);
+			return;
+		}
 		if (bookmarks_edit_cursor < 2)
 			return;
 		S_LocalSound("misc/menu3.wav");
 		break;
 	case K_MWHEELUP:
 	case K_RIGHTARROW:
+		if (bookmarks_edit_cursor == 2)
+		{
+			M_Bookmarks_Edit_SetPinned(!temp_pinned);
+			return;
+		}
 		if (bookmarks_edit_cursor < 2)
 			return;
 		S_LocalSound("misc/menu3.wav");
@@ -12540,24 +12755,31 @@ void M_Bookmarks_Edit_Key(int k)
 		if (bookmarks_edit_cursor == 0 || bookmarks_edit_cursor == 1)
 			return;
 
+		if (bookmarks_edit_cursor == 2)
+		{
+			M_Bookmarks_Edit_SetPinned(!temp_pinned);
+			return;
+		}
+
 		// (Accept Changes)
 		if (!bookmarks_edit_new) // edit + save
 		{
-			if ((Q_strcmp(bookmarksmenu.items[bookmarksmenu.list.cursor].alias, temp_alias) != 0 || Q_strcmp(bookmarksmenu.items[bookmarksmenu.list.cursor].name, temp_name) != 0)
+			if ((Q_strcmp(bookmarksmenu.items[bookmarksmenu.list.cursor].alias, temp_alias) != 0 ||
+			     Q_strcmp(bookmarksmenu.items[bookmarksmenu.list.cursor].name, temp_name) != 0 ||
+			     bookmarksmenu.items[bookmarksmenu.list.cursor].pinned != temp_pinned)
 				&& (strcmp(temp_alias, "") && (Valid_IP(temp_name) || Valid_Domain(temp_name))))
 			{
 				FileList_Subtract(bookmarksmenu.items[bookmarksmenu.list.cursor].name, &bookmarkslist);
-				FileList_Add(temp_name, temp_alias, &bookmarkslist);
-				Write_List(bookmarkslist, BOOKMARKSLIST);
+				M_Bookmarks_ListAdd(temp_name, temp_alias, temp_pinned);
+				BookmarksList_Write();
 				bookmarks_edit_new = false;
-
 			}
 		}
 		
 		if (bookmarks_edit_new && (strcmp(temp_alias, "") && (Valid_IP(temp_name) || Valid_Domain(temp_name)))) // new + save
-			{
-			FileList_Add(temp_name, temp_alias, &bookmarkslist);
-			Write_List(bookmarkslist, BOOKMARKSLIST);
+		{
+			M_Bookmarks_ListAdd(temp_name, temp_alias, temp_pinned);
+			BookmarksList_Write();
 			bookmarks_edit_new = false;
 		}
 
