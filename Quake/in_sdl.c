@@ -793,7 +793,7 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 	{
 		if (key_dest == key_console) // woods #consolecursor
 		{
-			if (!cursor_ibeam) cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+			if (!cursor_ibeam) cursor_ibeam = LoadCustomIBeamCursor();
 			if (cursor_ibeam && SDL_GetCursor() != cursor_ibeam)
 			{
 				/* Remember what was active before we force I-beam */
@@ -1006,7 +1006,7 @@ void IN_StartupJoystick (void)
 	}
 #endif
 #if defined(USE_SDL2)
-	if (!cursor_ibeam) cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM); // woods #consolecursor
+	if (!cursor_ibeam) cursor_ibeam = LoadCustomIBeamCursor(); // woods #consolecursor
 #endif
 }
 

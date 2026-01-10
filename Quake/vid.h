@@ -96,6 +96,7 @@ void	VID_SetWindowTitle(const char* title); // github.com/andrei-drexler/ironwai
 
 void VID_UpdateCursor(void);
 void LoadCustomCursorImage (void); // woods #customcursor
+SDL_Cursor *LoadCustomIBeamCursor (void); // woods #customcursor
 void VID_SetCursor(qcvm_t *vm, const char *cursorname, float hotspot[2], float cursorscale);
 
 #endif	/* __VID_DEFS_H */

@@ -1109,7 +1109,7 @@ void Con_Init (void)
 
 	// woods #conselection
     con_cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
-    con_cursor_ibeam = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+    con_cursor_ibeam = LoadCustomIBeamCursor();
     con_cursor_hand  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
     con_cursor_current = NULL;
 	// woods #conselection - start hidden; Con_UpdateMouseState/EnterCursorMode enables when console is open
