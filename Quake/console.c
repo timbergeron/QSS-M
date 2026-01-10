@@ -631,6 +631,78 @@ void Con_SelectAll (void)
     Con_GetCurrentRange(&con_selection.begin,&con_selection.end);
     while (Con_HasSelection() && Con_StrLen(con_selection.begin.line) == 0)
         con_selection.begin.line++;
+
+    // woods selection - ensure mouse selection state is synced so shift-click works after select all
+    con_mouseselection = con_selection;
+}
+
+/*
+================
+Con_MoveSelection -- woods #conselection
+
+Move selection end point by character (dir_x) or line (dir_y).
+If no selection exists, starts one at current view position.
+================
+*/
+void Con_MoveSelection (int dir_x, int dir_y)
+{
+    int len;
+
+    // If no selection exists, start one at the current view position (bottom of visible area)
+    if (!Con_HasSelection()) {
+        con_mouseselection.begin.line = con_current - con_backscroll;
+        con_mouseselection.begin.col = 0;
+        con_mouseselection.end = con_mouseselection.begin;
+    }
+
+    // Move the end point - operate on the "mouse" selection which preserves anchor direction
+    if (dir_x != 0) {
+        // Character movement (left/right)
+        con_mouseselection.end.col += dir_x;
+
+        // Clamp and wrap to previous/next line
+        if (con_mouseselection.end.col < 0) {
+            if (con_mouseselection.end.line > con_current - con_totallines + 1) {
+                con_mouseselection.end.line--;
+                len = (int)Con_StrLen(con_mouseselection.end.line);
+                con_mouseselection.end.col = len;
+            } else {
+                con_mouseselection.end.col = 0;
+            }
+        } else {
+            len = (int)Con_StrLen(con_mouseselection.end.line);
+            if (con_mouseselection.end.col > len) {
+                if (con_mouseselection.end.line < con_current) {
+                    con_mouseselection.end.line++;
+                    con_mouseselection.end.col = 0;
+                } else {
+                    con_mouseselection.end.col = len;
+                }
+            }
+        }
+    }
+
+    if (dir_y != 0) {
+        // Line movement (up/down)
+        con_mouseselection.end.line += dir_y;
+
+        // Clamp to valid range
+        if (con_mouseselection.end.line < con_current - con_totallines + 1)
+            con_mouseselection.end.line = con_current - con_totallines + 1;
+        if (con_mouseselection.end.line > con_current)
+            con_mouseselection.end.line = con_current;
+
+        // Clamp column to line length
+        len = (int)Con_StrLen(con_mouseselection.end.line);
+        if (con_mouseselection.end.col > len)
+            con_mouseselection.end.col = len;
+    }
+
+    // Publish to main selection (normalized)
+    con_selection = con_mouseselection;
+    if (Con_OfsCompare(&con_selection.begin, &con_selection.end) > 0) {
+        conofs_t t = con_selection.begin; con_selection.begin = con_selection.end; con_selection.end = t;
+    }
 }
 
 static qboolean Con_GetNormalizedSelection (conofs_t *b, conofs_t *e)
@@ -712,7 +784,15 @@ static void Con_SetMouseState (conmouse_t state)
             || Con_OfsCompare(&pos,&con_mouseselection.end) != 0) con_mouseclicks = 1;
         else con_mouseclicks++;
         con_mouseclickdelay = 0.0;
-        con_mouseselection.begin = con_mouseselection.end = pos;
+
+        // woods selection - shift click extends selection
+        if (keydown[K_SHIFT] && Con_HasSelection()) {
+            con_mouseselection.end = pos; // Extend end point
+            // con_mouseselection.begin remains as the anchor
+        } else {
+            con_mouseselection.begin = con_mouseselection.end = pos; // Start new selection
+        }
+        
         Con_ApplyMouseSelection();
         break;
     case CMS_DRAGGING:

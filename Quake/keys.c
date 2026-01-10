@@ -848,6 +848,10 @@ void Key_Console (int key)
 		return;
 
 	case K_LEFTARROW:
+		if (keydown[K_SHIFT]) { // woods #conselection - extend selection left
+			Con_MoveSelection(-1, 0);
+			return;
+		}
 		if (key_linepos > 1) // woods (ironwail) support for ctrl+left/right per word
 		{
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
@@ -864,6 +868,10 @@ void Key_Console (int key)
 		return;
 
 	case K_RIGHTARROW:
+		if (keydown[K_SHIFT]) { // woods #conselection - extend selection right
+			Con_MoveSelection(1, 0);
+			return;
+		}
 		len = strlen(workline);
 		if ((int)len == key_linepos)
 		{
@@ -891,6 +899,10 @@ void Key_Console (int key)
 		return;
 
 	case K_UPARROW:
+		if (keydown[K_SHIFT]) { // woods #conselection - extend selection up
+			Con_MoveSelection(0, 1); // +1 because higher line numbers are older
+			return;
+		}
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods (qrack)
 		if (keydown[K_COMMAND])
 #else
@@ -924,6 +936,10 @@ void Key_Console (int key)
 		return;
 
 	case K_DOWNARROW:
+		if (keydown[K_SHIFT]) { // woods #conselection - extend selection down
+			Con_MoveSelection(0, -1); // -1 because lower line numbers are newer
+			return;
+		}
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods (qrack)
 		if (keydown[K_COMMAND])
 #else
