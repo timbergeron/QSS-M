@@ -87,6 +87,7 @@ cvar_t		con_colmax = { "con_colmax", "0", CVAR_ARCHIVE}; // woods #consolecols
 cvar_t		con_coldirection = { "con_coldirection", "0", CVAR_ARCHIVE}; // woods #consolecols
 cvar_t		con_notifydiscord = {"con_notifydiscord", "", CVAR_ARCHIVE}; // woods #discord
 cvar_t		con_typing = {"con_typing", "1", CVAR_ARCHIVE}; // woods #typing...
+cvar_t		con_cursorcolor = {"con_cursorcolor", "0", CVAR_ARCHIVE}; // woods #cursorcolor (0=white, 1=red, 2=gold)
 
 char		con_lastcenterstring[1024]; //johnfitz
 
@@ -1097,6 +1098,7 @@ void Con_Init (void)
 	Cvar_RegisterVariable (&con_notifyfadetime); // woods #confade
 	Cvar_RegisterVariable (&con_notifydiscord); // woods #discord
 	Cvar_RegisterVariable (&con_typing); // woods #typing...
+	Cvar_RegisterVariable (&con_cursorcolor); // woods #cursorcolor
 	Cvar_SetCallback (&con_notifydiscord, &ConNotifyDiscord_Callback); // woods #discord
 
 
@@ -3960,7 +3962,7 @@ void Con_DrawNotify (void)
 			text++;
 		}
 
-		Draw_Character (x<<3, v, 10 + ((int)(realtime*con_cursorspeed)&1));
+		Draw_CharacterRGBA (x<<3, v, 10 + ((int)(realtime*con_cursorspeed)&1), Draw_GetConcharsCursorColor(), 1.0f); // woods #cursorcolor
 		v += 8;
 
 		scr_tileclear_updates = 0; //johnfitz
@@ -4005,11 +4007,11 @@ void Con_DrawInput (void)
 			Draw_CharacterRGBA ((i+1 + len - ofs) <<3, vid.conheight - 16, key_tabhint[i] | 0x80, CL_PLColours_Parse("0xffffff"), 0.75f);
 	}
 
-	// johnfitz -- new cursor handling
+	// johnfitz -- new cursor handling // woods #cursorcolor
 	if (!((int)((realtime-key_blinktime)*con_cursorspeed) & 1))
 	{
 		i = key_linepos - ofs;
-		Draw_Pic ((i+1)<<3, vid.conheight - 16, key_insert ? pic_ins : pic_ovr);
+		Draw_PicRGBA ((i+1)<<3, vid.conheight - 16, key_insert ? pic_ins : pic_ovr, Draw_GetConcharsCursorColor(), 1.0f);
 	}
 }
 

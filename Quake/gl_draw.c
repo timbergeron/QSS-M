@@ -41,9 +41,14 @@ qpic_t		*pic_nul; //johnfitz -- for missing gfx, don't crash
 
 extern cvar_t gl_load24bit_hud; // woods #24bithud
 extern cvar_t scr_conback; // woods #conback
+extern cvar_t con_cursorcolor; // woods #cursorcolor
+
+#define CHAR_GOLD_ZERO  18
+#define CHAR_WHITE_ZERO 48
+#define CHAR_RED_ZERO   176
 
 extern gltexture_t* char_texture; // woods #goldtext
-static const plcolour_t scr_positive_diff_default_color = { .type = 2, .rgb = { 0xF6, 0xC2, 0x2C }, .basic = 0 }; // woods #goldtext
+static const plcolour_t scr_positive_diff_default_color = { .type = 2, .rgb = { 0xF6, 0xC2, 0x2C }, .basic = 0 }; // woods #goldtext (gold)
 
 //johnfitz -- new pics
 byte pic_ovr_data[8][8] =
@@ -810,7 +815,7 @@ static void Draw_BoostAccentRGB(int* r, int* g, int* b) // woods #goldtext
 	*b = q_min(255, (int)(*b * f + 0.5f));
 }
 
-static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #goldtext
+static qboolean Draw_ComputeConcharsCharColor(plcolour_t* result, int char_index, qboolean boost) // woods #goldtext #cursorcolor
 {
 	gltexture_t* texture = char_texture;
 	byte* data = NULL;
@@ -937,17 +942,16 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 	{
 		int cell_width = width / 16;
 		int cell_height = height / 16;
-		const int accent_char_index = ('0' - 30); // tinted zero glyph used for gold digits
 		int x0, y0;
 
 		if (cell_width <= 0 || cell_height <= 0)
 			goto cleanup;
 
-		if (accent_char_index < 0 || accent_char_index >= 256)
+		if (char_index < 0 || char_index >= 256)
 			goto cleanup;
 
-		x0 = (accent_char_index & 15) * cell_width;
-		y0 = (accent_char_index >> 4) * cell_height;
+		x0 = (char_index & 15) * cell_width;
+		y0 = (char_index >> 4) * cell_height;
 
 		if (format == SRC_INDEXED)
 		{
@@ -1062,8 +1066,9 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 					best_b = b;
 				}
 
-				// Final gentle brightness boost
-				Draw_BoostAccentRGB(&best_r, &best_g, &best_b);
+				// Final gentle brightness boost (only for accent text, not cursor)
+				if (boost)
+					Draw_BoostAccentRGB(&best_r, &best_g, &best_b);
 
 				result->type = 2;
 				result->rgb[0] = (byte)best_r;
@@ -1189,8 +1194,9 @@ static qboolean Draw_ComputeConcharsAccentColor(plcolour_t* result) // woods #go
 					best_b = b;
 				}
 
-				// Final gentle brightness boost
-				Draw_BoostAccentRGB(&best_r, &best_g, &best_b);
+				// Final gentle brightness boost (only for accent text, not cursor)
+				if (boost)
+					Draw_BoostAccentRGB(&best_r, &best_g, &best_b);
 
 				result->type = 2;
 				result->rgb[0] = (byte)best_r;
@@ -1243,7 +1249,7 @@ plcolour_t Draw_GetConcharsAccentColor(void) // woods #goldtext
 	{
 		plcolour_t color;
 
-		if (!Draw_ComputeConcharsAccentColor(&color))
+		if (!Draw_ComputeConcharsCharColor(&color, CHAR_GOLD_ZERO, true)) // char 18 = gold '0', boost for HUD
 			color = scr_positive_diff_default_color;
 
 		cached_color = color;
@@ -1256,6 +1262,76 @@ plcolour_t Draw_GetConcharsAccentColor(void) // woods #goldtext
 	}
 
 	return cached_color;
+}
+
+/*
+================
+Draw_GetConcharsCursorColor -- woods #cursorcolor
+Returns cursor color based on con_cursorcolor cvar:
+  0 = white (char 48)
+  1 = red (char 176)
+  2 = gold (char 18)
+================
+*/
+plcolour_t Draw_GetConcharsCursorColor(void)
+{
+	static plcolour_t cached_colors[3];
+	static qboolean cached_valid[3] = { false, false, false };
+	static unsigned int cached_texnum = 0;
+	static unsigned short cached_crc = 0;
+	static unsigned int cached_width = 0;
+	static unsigned int cached_height = 0;
+	static char cached_source[MAX_QPATH];
+
+	// Character indices for each color option
+	static const int char_indices[3] = { CHAR_WHITE_ZERO, CHAR_RED_ZERO, CHAR_GOLD_ZERO }; // white, red, gold
+	static const plcolour_t default_colors[3] = {
+		{ .type = 2, .rgb = { 0xFC, 0xFC, 0xFC }, .basic = 0 }, // white
+		{ .type = 2, .rgb = { 0xFC, 0x00, 0x00 }, .basic = 0 }, // red
+		{ .type = 2, .rgb = { 0xF6, 0xC2, 0x2C }, .basic = 0 }  // gold
+	};
+
+	int color_index = (int)con_cursorcolor.value;
+	if (color_index < 0 || color_index > 2)
+		color_index = 0;
+
+	gltexture_t* texture = char_texture;
+
+	if (!texture)
+	{
+		if (!cached_valid[color_index])
+			cached_colors[color_index] = default_colors[color_index];
+		return cached_colors[color_index];
+	}
+
+	// Check if texture changed - invalidate all caches
+	if (cached_texnum != texture->texnum ||
+		cached_crc != texture->source_crc ||
+		cached_width != texture->source_width ||
+		cached_height != texture->source_height ||
+		strcmp(cached_source, texture->source_file))
+	{
+		cached_valid[0] = cached_valid[1] = cached_valid[2] = false;
+		cached_texnum = texture->texnum;
+		cached_crc = texture->source_crc;
+		cached_width = texture->source_width;
+		cached_height = texture->source_height;
+		q_strlcpy(cached_source, texture->source_file, sizeof(cached_source));
+	}
+
+	// Compute color if not cached
+	if (!cached_valid[color_index])
+	{
+		plcolour_t color;
+
+		if (!Draw_ComputeConcharsCharColor(&color, char_indices[color_index], false)) // no boost for cursor
+			color = default_colors[color_index];
+
+		cached_colors[color_index] = color;
+		cached_valid[color_index] = true;
+	}
+
+	return cached_colors[color_index];
 }
 
 /*
@@ -1567,6 +1643,62 @@ void Draw_Pic (int x, int y, qpic_t *pic)
 	glTexCoord2f (gl->sl, gl->th);
 	glVertex2f (x, y+pic->height);
 	glEnd ();
+}
+
+/*
+=============
+Draw_PicRGBA -- woods #cursorcolor
+Draws a qpic with color modulation
+=============
+*/
+void Draw_PicRGBA (int x, int y, qpic_t *pic, plcolour_t c, float alpha)
+{
+	if (!pic) return;
+
+	glpic_t *gl;
+
+	if (scrap_dirty)
+		Scrap_Upload ();
+	gl = (glpic_t *)pic->data;
+
+	if ((uintptr_t)gl < 0x1000)
+		return;
+
+	glEnable (GL_BLEND);
+
+	float red, green, blue;
+	if (c.type == 2) {
+		red = c.rgb[0] / 255.0f;
+		green = c.rgb[1] / 255.0f;
+		blue = c.rgb[2] / 255.0f;
+	}
+	else {
+		byte* pal = (byte*)&d_8to24table[(c.basic << 4) + 8];
+		red = pal[0] / 255.0f;
+		green = pal[1] / 255.0f;
+		blue = pal[2] / 255.0f;
+	}
+
+	glDisable (GL_ALPHA_TEST);
+	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	glColor4f (red, green, blue, alpha);
+
+	GL_Bind (gl->gltexture);
+	glBegin (GL_QUADS);
+	glTexCoord2f (gl->sl, gl->tl);
+	glVertex2f (x, y);
+	glTexCoord2f (gl->sh, gl->tl);
+	glVertex2f (x+pic->width, y);
+	glTexCoord2f (gl->sh, gl->th);
+	glVertex2f (x+pic->width, y+pic->height);
+	glTexCoord2f (gl->sl, gl->th);
+	glVertex2f (x, y+pic->height);
+	glEnd ();
+
+	glColor4f (1.0f, 1.0f, 1.0f, 1.0f);
+	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glEnable (GL_ALPHA_TEST);
+	glDisable (GL_BLEND);
 }
 
 /*
