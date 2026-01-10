@@ -28,6 +28,81 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 server_t	sv;
 server_static_t	svs;
 
+static qboolean SV_ClassnameMatches(const edict_t *ent, const char *classname) // woods #spawn
+{
+	if (!ent || ent->free || !ent->v.classname)
+		return false;
+
+	return !strcmp(PR_GetString(ent->v.classname), classname);
+}
+
+static edict_t *SV_FindEdictByClassname(const char *classname) // woods #spawn
+{
+	int	entnum;
+
+	for (entnum = 0; entnum < qcvm->num_edicts; ++entnum)
+	{
+		edict_t *ent = EDICT_NUM(entnum);
+
+		if (SV_ClassnameMatches(ent, classname))
+			return ent;
+	}
+
+	return NULL;
+}
+
+static void SV_EnsureSinglePlayerStart(void) // woods #spawn
+{
+	edict_t		*existing;
+	edict_t		*source = NULL;
+	edict_t		*start;
+	dfunction_t	*func;
+	vec3_t		origin = {0.f, 0.f, 0.f};
+	vec3_t		angles = {0.f, 0.f, 0.f};
+	const char	*source_name = "map origin";
+	int		old_self;
+
+	if (deathmatch.value > 0.f)
+		return;
+
+	existing = SV_FindEdictByClassname("info_player_start");
+	if (existing)
+		return;
+
+	source = SV_FindEdictByClassname("info_player_coop");
+	if (!source)
+		source = SV_FindEdictByClassname("info_player_deathmatch");
+
+	if (source)
+	{
+		VectorCopy(source->v.origin, origin);
+		VectorCopy(source->v.angles, angles);
+		source_name = PR_GetString(source->v.classname);
+	}
+
+	start = ED_Alloc();
+	start->v.classname = PR_SetEngineString("info_player_start");
+	VectorCopy(origin, start->v.origin);
+	VectorCopy(angles, start->v.angles);
+
+	func = ED_FindFunction("spawnfunc_info_player_start");
+	if (!func)
+		func = ED_FindFunction("info_player_start");
+
+	if (func)
+	{
+		old_self = pr_global_struct->self;
+		pr_global_struct->self = EDICT_TO_PROG(start);
+		PR_ExecuteProgram(func - qcvm->functions);
+		pr_global_struct->self = old_self;
+	}
+
+	if (source)
+		Con_Warning("Map \"%s\" is missing info_player_start; using %s as fallback spawn point.\n", sv.name, source_name);
+	else
+		Con_Warning("Map \"%s\" is missing info_player_start; created fallback spawn point at origin.\n", sv.name);
+}
+
 static char	localmodels[MAX_MODELS][8];	// inline model names for precache
 
 cvar_t	sv_defaultmap = {"sv_defaultmap","start", CVAR_ARCHIVE}; // woods #mapchangeprotect (R00k) 
@@ -4062,6 +4137,8 @@ void SV_SpawnServer (const char *server)
 	pr_global_struct->serverflags = svs.serverflags;
 
 	ED_LoadFromFile (qcvm->worldmodel->entities);
+
+	SV_EnsureSinglePlayerStart(); // woods #spawn
 
 	sv.active = true;
 
