@@ -737,14 +737,18 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 				ext = (char*)COM_FileGetExtension(texturename);
 				if (*ext)
 					*--ext = 0;
-				//luma has an extra postfix.
 				q_snprintf(uppername, sizeof(uppername), "%s_shirt", texturename);
 				q_snprintf(lowername, sizeof(lowername), "%s_pants", texturename);
-				q_snprintf(fullbrightname, sizeof(fullbrightname), "%s_luma", texturename);
 				osurf->textures[j][0].base = TexMgr_LoadImage(mod, texturename, osurf->skinwidth, osurf->skinheight, SRC_EXTERNAL, NULL, texturename, 0, TEXPREF_PAD|TEXPREF_ALPHA|TEXPREF_NOBRIGHT|TEXPREF_MIPMAP);
 				osurf->textures[j][0].lower = TexMgr_LoadImage(mod, lowername, osurf->skinwidth, osurf->skinheight, SRC_EXTERNAL, NULL, lowername, 0, TEXPREF_ALLOWMISSING|TEXPREF_PAD|TEXPREF_MIPMAP);
 				osurf->textures[j][0].upper = TexMgr_LoadImage(mod, uppername, osurf->skinwidth, osurf->skinheight, SRC_EXTERNAL, NULL, uppername, 0, TEXPREF_ALLOWMISSING|TEXPREF_PAD|TEXPREF_MIPMAP);
+				q_snprintf(fullbrightname, sizeof(fullbrightname), "%s_glow", texturename); // woods
 				osurf->textures[j][0].luma = TexMgr_LoadImage(mod, fullbrightname, osurf->skinwidth, osurf->skinheight, SRC_EXTERNAL, NULL, fullbrightname, 0, TEXPREF_ALLOWMISSING|TEXPREF_PAD|TEXPREF_ALPHA|TEXPREF_FULLBRIGHT|TEXPREF_MIPMAP);
+				if (!osurf->textures[j][0].luma) // woods
+				{
+					q_snprintf(fullbrightname, sizeof(fullbrightname), "%s_luma", texturename);
+					osurf->textures[j][0].luma = TexMgr_LoadImage(mod, fullbrightname, osurf->skinwidth, osurf->skinheight, SRC_EXTERNAL, NULL, fullbrightname, 0, TEXPREF_ALLOWMISSING|TEXPREF_PAD|TEXPREF_ALPHA|TEXPREF_FULLBRIGHT|TEXPREF_MIPMAP);
+				}
 				osurf->textures[j][3] = osurf->textures[j][2] = osurf->textures[j][1] = osurf->textures[j][0];
 			}
 			if (osurf->numskins)
