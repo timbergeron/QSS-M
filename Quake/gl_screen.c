@@ -3805,6 +3805,12 @@ void SCR_DrawCrosshair (void)
 	float cross_x = scr_crosshair_x.value;
 	float cross_y = scr_crosshair_y.value;
 
+	if (crosshair.value < 0) // Negative values select a character index from conchars (custom crosshair glyphs) -- iw, used in QBJ3
+	{
+		int custom_char = ((int)-crosshair.value) & 255;
+		Draw_CharacterRGBA(-4 + cross_x, -4 + cross_y, custom_char, color, alpha); // 0,0 is center of viewport
+	}
+
 	if (crosshair.value == 1)
 		Draw_CharacterRGBA (-4 + cross_x, -4 + cross_y, '+', color, alpha); //0,0 is center of viewport
 
