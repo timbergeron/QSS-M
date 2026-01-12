@@ -17497,10 +17497,33 @@ static void M_Pak_BuildList(void)
 			}
 			Z_Free(buffer);
 			{
+				int i, count = 0;
+				menu_pak_t temp[MAX_PAKS];
+
 				COM_ListAllFiles(NULL, "*.pak", M_Pak_ScanCallback, 0, NULL);
 				COM_ListAllFiles(NULL, "*.pk3", M_Pak_ScanCallback, 0, NULL);
-				if (pakmenu.num_paks > 1)
-					qsort(pakmenu.paks, pakmenu.num_paks, sizeof(menu_pak_t), M_Pak_Compare); /* Full sort: base before mod */
+
+				/* Sort logic:
+				   1. Base paks (source 0) - sorted by name
+				   2. Mod paks (source 1) - preserve loaded order (from pak.lst), append new ones
+				*/
+				
+				/* 1. Extract and sort base paks */
+				for (i = 0; i < pakmenu.num_paks; i++)
+					if (pakmenu.paks[i].source == 0)
+						temp[count++] = pakmenu.paks[i];
+				
+				if (count > 0)
+					qsort(temp, count, sizeof(menu_pak_t), M_Pak_Compare); /* source is same, sorts by name */
+				
+				/* 2. Append mod paks (preserve order) */
+				for (i = 0; i < pakmenu.num_paks; i++)
+					if (pakmenu.paks[i].source == 1)
+						temp[count++] = pakmenu.paks[i];
+				
+				/* Apply back to main array */
+				memcpy(pakmenu.paks, temp, count * sizeof(menu_pak_t));
+				pakmenu.num_paks = count;
 			}
 			pak_reorder_enabled = true;
 			pakmenu.search.len = 0;
