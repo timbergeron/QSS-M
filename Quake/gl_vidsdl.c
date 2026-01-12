@@ -3204,8 +3204,8 @@ void LoadCustomCursorImage (void)
 	int targetWidth = (baseWidth * vid_width.value) / baseResolutionWidth;
 	int targetHeight = (baseHeight * vid_height.value) / baseResolutionHeight;
 
-	targetWidth = SDL_clamp(targetWidth, 32, 128);
-	targetHeight = SDL_clamp(targetHeight, 32, 128);
+	targetWidth = SDL_clamp(targetWidth, 16, 128);
+	targetHeight = SDL_clamp(targetHeight, 16, 128);
 
 	SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(
 		cursorData, width, height, 32, width * 4, SDL_PIXELFORMAT_RGBA32
@@ -3226,7 +3226,12 @@ void LoadCustomCursorImage (void)
 		surface = scaledSurface;
 	}
 
-	SDL_Cursor* cursor = SDL_CreateColorCursor(surface, 30, 2);
+	int hotX = (30 * surface->w) / width;
+	int hotY = (2 * surface->h) / height;
+	hotX = SDL_clamp(hotX, 0, surface->w - 1);
+	hotY = SDL_clamp(hotY, 0, surface->h - 1);
+
+	SDL_Cursor* cursor = SDL_CreateColorCursor(surface, hotX, hotY);
 	if (cursor)
 	{
 		SDL_SetCursor(cursor);
@@ -3275,8 +3280,8 @@ SDL_Cursor *LoadCustomIBeamCursor (void)
 	int targetWidth = (baseWidth * vid_width.value) / baseResolutionWidth;
 	int targetHeight = (baseHeight * vid_height.value) / baseResolutionHeight;
 
-	targetWidth = SDL_clamp(targetWidth, 32, 128);
-	targetHeight = SDL_clamp(targetHeight, 32, 128);
+	targetWidth = SDL_clamp(targetWidth, 16, 128);
+	targetHeight = SDL_clamp(targetHeight, 16, 128);
 
 	SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(
 		cursorData, width, height, 32, width * 4, SDL_PIXELFORMAT_RGBA32
