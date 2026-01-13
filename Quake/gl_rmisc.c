@@ -722,6 +722,7 @@ void R_DeleteShaders (void)
 {
 	int i;
 
+	PolyBlend_DeleteVignetteTexture (); // vignette polyblend cleanup -- woods #polylblend2
 	if (!gl_glsl_able)
 		return;
 

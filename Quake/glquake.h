@@ -476,6 +476,7 @@ void R_DrawParticles_ShowTris (void);
 GLint GL_GetUniformLocation (GLuint *programPtr, const char *name);
 GLuint GL_CreateProgram (const GLchar *vertSource, const GLchar *fragSource, int numbindings, const glsl_attrib_binding_t *bindings);
 void R_DeleteShaders (void);
+void PolyBlend_DeleteVignetteTexture (void); // woods #polylblend2
 
 void GLWorld_CreateShaders (void);
 void GLAlias_CreateShaders (void);

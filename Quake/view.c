@@ -77,6 +77,9 @@ extern	int			in_forward, in_forward2, in_back;
 extern	qboolean	qeintermission; // woods #qeintermission #cdead
 extern	qboolean	crxintermission; // woods #crxintermission #cdead
 
+static GLuint polyblend_vignette_texture; // woods #polylblend2
+static int polyblend_vignette_size = 2048; // woods #polylblend2
+
 vec3_t	v_punchangles[2]; //johnfitz -- copied from cl.punchangle.  0 is current, 1 is previous value. never the same unless map just loaded
 double	v_punchangles_times[2]; //spike -- times, to avoid assumptions...
 
@@ -646,6 +649,85 @@ void V_UpdateBlend (void)
 
 /*
 ============
+PolyBlend_CreateVignetteTexture -- creates a radial gradient texture for smooth vignette -- woods #polylblend2
+============
+*/
+static void PolyBlend_CreateVignetteTexture (void)
+{
+	int x, y;
+	int size = polyblend_vignette_size;
+	byte *data;
+	float cx, cy;
+	float inner_radius = 0.55f;  // where transparency starts
+	float outer_radius = 1.45f; // where full opacity is reached
+	
+	if (gl_hardware_maxsize && size > gl_hardware_maxsize)
+		size = gl_hardware_maxsize;
+	
+	cx = size / 2.0f;
+	cy = size / 2.0f;
+
+	data = (byte *)Hunk_TempAlloc (size * size * 2);
+	if (!data)
+	{
+		Con_Warning ("PolyBlend_CreateVignetteTexture: failed to allocate %d bytes\n", size * size * 2);
+		return;
+	}
+	
+	for (y = 0; y < size; y++)
+	{
+		for (x = 0; x < size; x++)
+		{
+			float dx = (x - cx) / cx;
+			float dy = (y - cy) / cy;
+			float dist = sqrtf(dx * dx + dy * dy);
+			float alpha;
+			
+			// Smoothstep-like falloff
+			if (dist <= inner_radius)
+				alpha = 0.0f;
+			else if (dist >= outer_radius)
+				alpha = 1.0f;
+			else
+			{
+				float t = (dist - inner_radius) / (outer_radius - inner_radius);
+				// Smooth hermite interpolation (smoothstep)
+				alpha = t * t * (3.0f - 2.0f * t);
+			}
+			
+			data[(y * size + x) * 2 + 0] = 255; // Luminance (White)
+			data[(y * size + x) * 2 + 1] = (byte)(alpha * 255.0f); // Alpha
+		}
+	}
+	
+	glGenTextures (1, &polyblend_vignette_texture);
+	glBindTexture (GL_TEXTURE_2D, polyblend_vignette_texture);
+	// NOTE: GL_LUMINANCE_ALPHA is compatibility-profile only; core-profile would need GL_R8 + swizzle
+	glTexImage2D (GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, size, size, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, data);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	
+	Con_DPrintf ("Vignette texture created (%dx%d)\n", size, size);
+}
+
+/*
+============
+PolyBlend_DeleteVignetteTexture -- cleanup texture on video mode change -- woods #polylblend2
+============
+*/
+void PolyBlend_DeleteVignetteTexture (void)
+{
+	if (polyblend_vignette_texture)
+	{
+		glDeleteTextures (1, &polyblend_vignette_texture);
+		polyblend_vignette_texture = 0;
+	}
+}
+
+/*
+============
 V_PolyBlend -- johnfitz -- moved here from gl_rmain.c, and rewritten to use glOrtho
 ============
 */
@@ -664,21 +746,68 @@ void V_PolyBlend (void)
 	else
 		glDisable (GL_ALPHA_TEST);
 
-	glMatrixMode(GL_PROJECTION);
-	glLoadIdentity ();
-	glOrtho (0, 1, 1, 0, -99999, 99999);
-	glMatrixMode(GL_MODELVIEW);
-	glLoadIdentity ();
+	// Mode 2: Vignette effect using radial gradient texture
+	if ((int)gl_polyblend.value == 2)
+	{
+		GLboolean alpha_test_was_enabled = glIsEnabled(GL_ALPHA_TEST);
+		
+		// Create texture on first use
+		if (!polyblend_vignette_texture)
+			PolyBlend_CreateVignetteTexture ();
+		
+		glMatrixMode(GL_PROJECTION);
+		glLoadIdentity ();
+		glOrtho (0, 1, 1, 0, -99999, 99999);
+		glMatrixMode(GL_MODELVIEW);
+		glLoadIdentity ();
+		
+		// Enable texturing for the vignette
+		glEnable (GL_TEXTURE_2D);
+		glDisable (GL_ALPHA_TEST); // Ensure smooth gradients aren't clipped
+		glBindTexture (GL_TEXTURE_2D, polyblend_vignette_texture);
+		
+		// Save and set texture environment mode
+		GLint prev_texenv_mode;
+		glGetTexEnviv (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &prev_texenv_mode);
+		glTexEnvi (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+		
+		// Draw fullscreen quad with vignette texture
+		glBegin (GL_QUADS);
+		glColor4f (v_blend[0], v_blend[1], v_blend[2], v_blend[3]);
+		glTexCoord2f (0, 0);
+		glVertex2f (0, 0);
+		glTexCoord2f (1, 0);
+		glVertex2f (1, 0);
+		glTexCoord2f (1, 1);
+		glVertex2f (1, 1);
+		glTexCoord2f (0, 1);
+		glVertex2f (0, 1);
+		glEnd ();
+		
+		glTexEnvi (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, prev_texenv_mode);
+		glDisable (GL_TEXTURE_2D);
+		if (alpha_test_was_enabled)
+			glEnable (GL_ALPHA_TEST);
+	}
+	else
+	{
+		// Mode 1: Original solid fullscreen blend
+		glMatrixMode(GL_PROJECTION);
+		glLoadIdentity ();
+		glOrtho (0, 1, 1, 0, -99999, 99999);
+		glMatrixMode(GL_MODELVIEW);
+		glLoadIdentity ();
 
-	glBegin (GL_QUADS);
+		glBegin (GL_QUADS);
 
-	glColor4fv (v_blend); // inside glBegin / glEnd to workaround an AMD driver bug
+		glColor4fv (v_blend); // inside glBegin / glEnd to workaround an AMD driver bug
 
-	glVertex2f (0,0);
-	glVertex2f (1, 0);
-	glVertex2f (1, 1);
-	glVertex2f (0, 1);
-	glEnd ();
+		glVertex2f (0,0);
+		glVertex2f (1, 0);
+		glVertex2f (1, 1);
+		glVertex2f (0, 1);
+		glEnd ();
+	}
 
 	glEnable (GL_DEPTH_TEST);
 	glEnable (GL_TEXTURE_2D);
