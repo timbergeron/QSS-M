@@ -125,6 +125,7 @@ extern qboolean netquakeio; // woods
 extern int retry_counter; // woods #ms
 extern int grenadecache, rocketcache; // woods #r2g
 extern qboolean pausedprint; // woods
+static qboolean prediction_msg_shown = false; // woods #prednotify
 
 void NET_Client_AddServerDetectedDrops(int count); // woods #serverpl
 
@@ -266,6 +267,7 @@ void CL_Disconnect (void)
 		Cbuf_AddText("setinfo observing off\n"); // woods
 	pausedprint = false;  // woods
 	cl.match_pause_time = 0; // woods
+	prediction_msg_shown = false; // woods #prednotify
 }
 
 void CL_Disconnect_f (void)
@@ -787,6 +789,12 @@ static qboolean CL_LerpEntity(entity_t *ent, vec3_t org, vec3_t ang, float frac)
 
 	if (ent->netstate.pmovetype && ent-cl.entities==cl.viewentity && qcvm->worldmodel && !cl_nopred.value && cls.signon == SIGNONS)
 	{	//note: V_CalcRefdef will copy from cl.entities[viewent] to get its origin, so doing it here is the proper place anyway.
+		if (!prediction_msg_shown && !cls.demoplayback) // woods #prednotify
+		{
+			prediction_msg_shown = true;
+			Con_Printf("Server movement prediction enabled\n");
+		}
+
 		static struct
 		{
 			int seq;
