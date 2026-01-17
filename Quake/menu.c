@@ -5596,17 +5596,23 @@ void M_Keys_Key(int k)
 		if (k != K_ESCAPE && k != K_BBUTTON && k != '`')
 		{
 			int actual_idx = keysmenu.filtered_indices[keysmenu.list.cursor];
+			const char *command = bindnames[actual_idx].cmd;
 			int keys[3];
 
 			if (!(Key_GetDeviceMaskForKeynum(k) & keysmenu.devicemask))
 				return;
-			if (strcmp(bindnames[actual_idx].cmd, "+altmodifier") && Key_IsKeyGamepadAltModifier(k))
-				return;
+			if (strcmp(command, "+altmodifier"))
+			{
+				if (Key_IsKeyGamepadAltModifier(k))
+					return;
+				if (Key_GetGamepadAltModifierState() && k >= K_LTHUMB && k <= K_TOUCHPAD)
+					k += K_LTHUMB_ALT - K_LTHUMB;
+			}
 
-			M_FindKeysForCommand(bindnames[actual_idx].cmd, keys);
+			M_FindKeysForCommand(command, keys);
 			if (keys[2] != -1)
-				M_UnbindCommand(bindnames[actual_idx].cmd);
-			sprintf(cmd, "in_bind %i \"%s\" \"%s\"\n", M_Keys_GetPrimaryBindmap(), Key_KeynumToString(k), bindnames[actual_idx].cmd);
+				M_UnbindCommand(command);
+			sprintf(cmd, "in_bind %i \"%s\" \"%s\"\n", M_Keys_GetPrimaryBindmap(), Key_KeynumToString(k), command);
 			Cbuf_InsertText(cmd);
 		}
 		bind_grab = false;
