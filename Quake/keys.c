@@ -2507,7 +2507,7 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 			break;
 		case key_menu:
 			if (!Menu_HandleKeyEvent(down, key, 0))
-				M_Keydown (key);
+				M_Keydown (key, wasdown);
 			break;
 		case key_game:
 		case key_console:
@@ -2665,7 +2665,7 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		Key_Message (key);
 		break;
 	case key_menu:
-		M_Keydown (key);
+		M_Keydown (key, wasdown);
 		break;
 
 	case key_game:

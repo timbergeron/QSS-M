@@ -23555,7 +23555,7 @@ void M_Draw (void)
 }
 
 
-void M_Keydown (int key)
+void M_Keydown (int key, qboolean repeat)
 {
 	if (cls.menu_qcvm.extfuncs.m_draw)	//don't get confused.
 		return;
@@ -23572,6 +23572,27 @@ void M_Keydown (int key)
 		case K_BBUTTON:		key = K_ESCAPE; break;
 		default:
 			break;
+		}
+	}
+
+	// only allow repeat events for a few navigational keys
+	// this reduces sound spam and, for gamepads, rumble spam
+	if (repeat)
+	{
+		switch (key)
+		{
+		case K_UPARROW:
+		case K_DOWNARROW:
+		case K_LEFTARROW:
+		case K_RIGHTARROW:
+		case K_KP_UPARROW:
+		case K_KP_DOWNARROW:
+		case K_KP_LEFTARROW:
+		case K_KP_RIGHTARROW:
+		case K_ESCAPE:
+			break;
+		default:
+			return;
 		}
 	}
 
