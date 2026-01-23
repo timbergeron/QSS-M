@@ -1201,6 +1201,21 @@ void Con_Init (void)
 
 /*
 ===============
+Con_ReloadIBeamCursor -- woods #customcursor
+Reload the I-beam cursor when video mode changes, so it scales correctly
+===============
+*/
+void Con_ReloadIBeamCursor (void)
+{
+    SDL_Cursor *old_cursor = con_cursor_ibeam;
+    con_cursor_ibeam = LoadCustomIBeamCursor();
+    if (old_cursor)
+        SDL_FreeCursor(old_cursor);
+}
+
+
+/*
+===============
 Con_Linefeed
 ===============
 */

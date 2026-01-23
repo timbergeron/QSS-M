@@ -943,8 +943,9 @@ static void VID_Restart (void)
 //
 // update mouse grab
 //
-	IN_UpdateGrabs();
-	LoadCustomCursorImage (); // woods #customcursor
+IN_UpdateGrabs();
+LoadCustomCursorImage (); // woods #customcursor
+Con_ReloadIBeamCursor (); // woods #customcursor - reload I-beam cursor for correct scaling
 }
 
 /*
