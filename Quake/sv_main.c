@@ -3894,6 +3894,7 @@ void SV_SpawnServer (const char *server)
 
 	Con_DPrintf ("SpawnServer: %s\n",server);
 	svs.changelevel_issued = false;		// now safe to issue another
+	LOG_Maintenance();// deferred log roll at level changes
 
 	PR_SwitchQCVM(NULL);
 

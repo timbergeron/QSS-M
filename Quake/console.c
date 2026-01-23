@@ -1937,6 +1937,8 @@ typedef struct stat    q_stat_t;
 static char logfilename[MAX_OSPATH];    // current logfile name
 static int  log_fd = -1;                // log file descriptor
 static log_off_t log_cap = 0; // woods #condebug
+static log_off_t log_size = 0; // current cached size of log file
+static qboolean log_roll_pending = false; // deferred roll flag
 #define LOG_CAP_MAX_MIB   2048  /* clamp to avoid overflow: 2 GiB max */
 #define LOG_CAP_MIN_MIB   1
 static SDL_mutex *log_mutex = NULL; /* serialize log I/O */
@@ -1945,22 +1947,34 @@ static const char rollover_banner[] =
 static const char startup_banner[] =
     "--- log truncated at start-up (exceeded cap) ---\n";
 
-static void safe_write(int fd, const char* buf, size_t len) {
-	while (len) {
-		int n = (int)q_write(fd, buf, (unsigned int)len);
-		if (n > 0) {
-			buf += n;
-			len -= (size_t)n;
-		}
-		else if (n < 0 && errno == EINTR)
-			continue;
-		else
-			break;
-	}
+static log_off_t safe_write(int fd, const char* buf, size_t len) {
+    log_off_t total = 0;
+    while (len) {
+        int n = (int)q_write(fd, buf, (unsigned int)len);
+        if (n > 0) {
+            buf += n;
+            len -= (size_t)n;
+            total += (log_off_t)n;
+        }
+        else if (n < 0 && errno == EINTR)
+            continue;
+        else
+            break;
+    }
+    return total;
 }
 
 static void LOG_Lock(void)   { if (log_mutex) SDL_LockMutex(log_mutex); }
 static void LOG_Unlock(void) { if (log_mutex) SDL_UnlockMutex(log_mutex); }
+
+static void LOG_UpdateSize_Locked(void)
+{
+    q_stat_t st;
+    if (log_fd == -1)
+        return;
+    if (!q_fstat(log_fd, &st))
+        log_size = (log_off_t)st.st_size;
+}
 
 /* simple helper: "-condebug [N]" where N is MiB. No N => unlimited */
 static log_off_t LOG_ParseCapFromCLI(void)
@@ -2021,10 +2035,8 @@ static void LOG_RollTail_Locked(const char *reason)
     /* Calculate banner length once */
     size_t banner_len = reason ? strlen(reason) : 0;
 
-    /* Leave ~1 KB headroom for the banner (and future writes). */
-    const log_off_t headroom = 1024;
-    /* Caps smaller than ~2 KB get truncated instead of rolling. */
-    log_off_t keep = (log_cap <= headroom + 1024) ? 0 : log_cap - headroom;
+    /* Leave ~4 KB headroom for the banner and a few post-roll writes. */
+    log_off_t keep = log_cap - 4096;
     if (keep < 0) keep = 0;
 
     /* Guard against tiny caps that can't fit the banner */
@@ -2050,6 +2062,7 @@ static void LOG_RollTail_Locked(const char *reason)
         }
         if (reason)
             safe_write(log_fd, reason, banner_len);
+        LOG_UpdateSize_Locked();
         return;
     }
 
@@ -2142,6 +2155,7 @@ static void LOG_RollTail_Locked(const char *reason)
         free(buf);
         close(tmp_fd);
         q_unlink(tmpname);
+        LOG_UpdateSize_Locked();
         return;
     }
 
@@ -2162,7 +2176,30 @@ roll_fallback:
     }
     if (reason)
         safe_write(log_fd, reason, banner_len);
+    LOG_UpdateSize_Locked();
     return;
+}
+
+/*
+================
+LOG_Maintenance
+
+Runs deferred log maintenance (e.g., roll at level change or quit).
+================
+*/
+void LOG_Maintenance(void)
+{
+    if (!con_debuglog || log_cap <= 0)
+        return;
+
+    LOG_Lock();
+    if (log_fd != -1 && log_roll_pending) {
+        LOG_UpdateSize_Locked();
+        if (log_size > log_cap)
+            LOG_RollTail_Locked(rollover_banner);
+        log_roll_pending = false;
+    }
+    LOG_Unlock();
 }
 
 /*
@@ -2176,6 +2213,8 @@ void Con_DebugLog(const char *msg)
 		return;
 
 	size_t msg_len = strlen(msg);
+	if (msg_len == 0)
+		return;
 
 	LOG_Lock();
 	if (log_fd == -1) {
@@ -2183,16 +2222,12 @@ void Con_DebugLog(const char *msg)
 		return;
 	}
 
-    if (log_cap > 0) {
-        q_stat_t st;
-        if (!q_fstat(log_fd, &st)) {
-			if ((log_off_t)st.st_size + (log_off_t)msg_len > log_cap) {
-				LOG_RollTail_Locked(rollover_banner);
-			}
-		}
-}
+	if (log_cap > 0) {
+		if (log_size + (log_off_t)msg_len > log_cap)
+			log_roll_pending = true;
+	}
 
-	safe_write(log_fd, msg, msg_len);
+	log_size += safe_write(log_fd, msg, msg_len);
 	LOG_Unlock();
 }
 
@@ -4428,26 +4463,37 @@ void LOG_Init (quakeparms_t *parms) // woods #debuglogsize
 
 	if (!log_mutex) log_mutex = SDL_CreateMutex();
 	con_debuglog = true;
-	Con_DebugLog (va("\nLOG started on: %s \n\n", session)); // woods add a line
+	log_roll_pending = false;
 
-    if (log_cap > 0) {
-        q_stat_t st;
-        LOG_Lock();
-        if (!q_fstat(log_fd, &st) && (log_off_t)st.st_size > log_cap) {
-			LOG_RollTail_Locked(startup_banner);
-		}
-		LOG_Unlock();
-	}
+	LOG_Lock();
+	LOG_UpdateSize_Locked();
+	if (log_cap > 0 && log_size > log_cap)
+		LOG_RollTail_Locked(startup_banner);
+	LOG_Unlock();
+
+	Con_DebugLog (va("\nLOG started on: %s \n\n", session)); // woods add a line
 }
 
 void LOG_Close (void)
 {
-	if (log_fd == -1)
-		return;
 	LOG_Lock();
+	if (log_fd == -1) {
+		LOG_Unlock();
+		return;
+	}
+
+	/* Roll if pending before closing */
+	if (log_cap > 0 && log_roll_pending) {
+		LOG_UpdateSize_Locked();
+		if (log_size > log_cap)
+			LOG_RollTail_Locked(rollover_banner);
+	}
+
 	close (log_fd);
 	con_debuglog = false;
 	log_fd = -1;
+	log_size = 0;
+	log_roll_pending = false;
 	LOG_Unlock();
 }
 
