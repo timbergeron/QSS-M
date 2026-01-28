@@ -2043,6 +2043,18 @@ static void CL_ParseClientdata (void)
 		CL_SetHudStat(STAT_ARMOR, armourval);
 		CL_SetHudStat(STAT_WEAPON, weaponmodel);
 		CL_SetHudStat(STAT_ACTIVEWEAPON, activeweapon);
+		// woods #cdead - detect death/respawn for protocol 15
+		if (cl.stats[STAT_HEALTH] > 0 && health <= 0)
+		{
+			cl.cshifts[CSHIFT_DEAD].destcolor[0] = 70;
+			cl.cshifts[CSHIFT_DEAD].destcolor[1] = 0;
+			cl.cshifts[CSHIFT_DEAD].destcolor[2] = 0;
+			cl.cshifts[CSHIFT_DEAD].percent = 0;
+		}
+		else if (cl.stats[STAT_HEALTH] <= 0 && health > 0)
+		{
+			cl.cshifts[CSHIFT_DEAD].percent = 0;
+		}
 		CL_SetHudStat(STAT_HEALTH, health);
 		CL_SetHudStat(STAT_AMMO, ammo);
 		CL_SetHudStat(STAT_SHELLS, ammovals[0]);
