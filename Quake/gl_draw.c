@@ -48,7 +48,6 @@ extern cvar_t con_cursorcolor; // woods #cursorcolor
 #define CHAR_RED_ZERO   176
 
 extern gltexture_t* char_texture; // woods #goldtext
-static const plcolour_t scr_positive_diff_default_color = { .type = 2, .rgb = { 0xF6, 0xC2, 0x2C }, .basic = 0 }; // woods #goldtext (gold)
 
 //johnfitz -- new pics
 byte pic_ovr_data[8][8] =
@@ -1222,96 +1221,54 @@ cleanup:
 	return false;
 }
 
-plcolour_t Draw_GetConcharsAccentColor(void) // woods #goldtext
-{
-	static plcolour_t cached_color;
-	static qboolean cached_valid = false;
-	static unsigned int cached_texnum = 0;
-	static unsigned short cached_crc = 0;
-	static unsigned int cached_width = 0;
-	static unsigned int cached_height = 0;
-	static char cached_source[MAX_QPATH];
-
-	gltexture_t* texture = char_texture;
-
-	if (!texture)
-	{
-		if (!cached_valid)
-			cached_color = scr_positive_diff_default_color;
-		return cached_color;
-	}
-
-	if (!cached_valid || cached_texnum != texture->texnum ||
-		cached_crc != texture->source_crc ||
-		cached_width != texture->source_width ||
-		cached_height != texture->source_height ||
-		strcmp(cached_source, texture->source_file))
-	{
-		plcolour_t color;
-
-		if (!Draw_ComputeConcharsCharColor(&color, CHAR_GOLD_ZERO, true)) // char 18 = gold '0', boost for HUD
-			color = scr_positive_diff_default_color;
-
-		cached_color = color;
-		cached_valid = true;
-		cached_texnum = texture->texnum;
-		cached_crc = texture->source_crc;
-		cached_width = texture->source_width;
-		cached_height = texture->source_height;
-		q_strlcpy(cached_source, texture->source_file, sizeof(cached_source));
-	}
-
-	return cached_color;
-}
-
 /*
 ================
-Draw_GetConcharsCursorColor -- woods #cursorcolor
-Returns cursor color based on con_cursorcolor cvar:
-  0 = white (char 48)
-  1 = red (char 176)
-  2 = gold (char 18)
+Draw_GetConcharsColorByIndex_Internal -- woods #cursorcolor #goldtext #nadecount
+Core function for sampling conchars colors with unified caching.
+  index: 0=white, 1=red, 2=gold
+  boost: true for HUD accent colors (brighter), false for cursor/timer
 ================
 */
-plcolour_t Draw_GetConcharsCursorColor(void)
+static plcolour_t Draw_GetConcharsColorByIndex_Internal(int index, qboolean boost)
 {
-	static plcolour_t cached_colors[3];
-	static qboolean cached_valid[3] = { false, false, false };
+	// Cache slots: 0-2 = non-boosted, 3-5 = boosted
+	static plcolour_t cached_colors[6];
+	static qboolean cached_valid[6] = { false, false, false, false, false, false };
 	static unsigned int cached_texnum = 0;
 	static unsigned short cached_crc = 0;
 	static unsigned int cached_width = 0;
 	static unsigned int cached_height = 0;
 	static char cached_source[MAX_QPATH];
 
-	// Character indices for each color option
-	static const int char_indices[3] = { CHAR_WHITE_ZERO, CHAR_RED_ZERO, CHAR_GOLD_ZERO }; // white, red, gold
+	static const int char_indices[3] = { CHAR_WHITE_ZERO, CHAR_RED_ZERO, CHAR_GOLD_ZERO };
 	static const plcolour_t default_colors[3] = {
 		{ .type = 2, .rgb = { 0xFC, 0xFC, 0xFC }, .basic = 0 }, // white
 		{ .type = 2, .rgb = { 0xFC, 0x00, 0x00 }, .basic = 0 }, // red
 		{ .type = 2, .rgb = { 0xF6, 0xC2, 0x2C }, .basic = 0 }  // gold
 	};
 
-	int color_index = (int)con_cursorcolor.value;
-	if (color_index < 0 || color_index > 2)
-		color_index = 0;
+	if (index < 0 || index > 2)
+		index = 0;
+
+	int cache_index = boost ? (index + 3) : index;
 
 	gltexture_t* texture = char_texture;
 
 	if (!texture)
 	{
-		if (!cached_valid[color_index])
-			cached_colors[color_index] = default_colors[color_index];
-		return cached_colors[color_index];
+		if (!cached_valid[cache_index])
+			cached_colors[cache_index] = default_colors[index];
+		return cached_colors[cache_index];
 	}
-
 	// Check if texture changed - invalidate all caches
-	if (cached_texnum != texture->texnum ||
+	if (!cached_valid[0] || cached_texnum != texture->texnum ||
 		cached_crc != texture->source_crc ||
 		cached_width != texture->source_width ||
 		cached_height != texture->source_height ||
 		strcmp(cached_source, texture->source_file))
 	{
-		cached_valid[0] = cached_valid[1] = cached_valid[2] = false;
+		for (int i = 0; i < 6; i++)
+			cached_valid[i] = false;
 		cached_texnum = texture->texnum;
 		cached_crc = texture->source_crc;
 		cached_width = texture->source_width;
@@ -1320,18 +1277,54 @@ plcolour_t Draw_GetConcharsCursorColor(void)
 	}
 
 	// Compute color if not cached
-	if (!cached_valid[color_index])
+	if (!cached_valid[cache_index])
 	{
 		plcolour_t color;
 
-		if (!Draw_ComputeConcharsCharColor(&color, char_indices[color_index], false)) // no boost for cursor
-			color = default_colors[color_index];
+		if (!Draw_ComputeConcharsCharColor(&color, char_indices[index], boost))
+			color = default_colors[index];
 
-		cached_colors[color_index] = color;
-		cached_valid[color_index] = true;
+		cached_colors[cache_index] = color;
+		cached_valid[cache_index] = true;
 	}
 
-	return cached_colors[color_index];
+	return cached_colors[cache_index];
+}
+
+/*
+================
+Draw_GetConcharsAccentColor -- woods #goldtext
+Returns gold accent color with brightness boost for HUD elements
+================
+*/
+plcolour_t Draw_GetConcharsAccentColor(void)
+{
+	return Draw_GetConcharsColorByIndex_Internal(2, true); // gold with boost
+}
+
+/*
+================
+Draw_GetConcharsCursorColor -- woods #cursorcolor
+Returns cursor color based on con_cursorcolor cvar (0=white, 1=red, 2=gold)
+================
+*/
+plcolour_t Draw_GetConcharsCursorColor(void)
+{
+	int index = (int)con_cursorcolor.value;
+	if (index < 0 || index > 2)
+		index = 0;
+	return Draw_GetConcharsColorByIndex_Internal(index, false);
+}
+
+/*
+================
+Draw_GetConcharsCursorColorByIndex -- woods #nadecount
+Returns cursor color for a specific index (0=white, 1=red, 2=gold)
+================
+*/
+plcolour_t Draw_GetConcharsCursorColorByIndex(int index)
+{
+	return Draw_GetConcharsColorByIndex_Internal(index, false);
 }
 
 /*

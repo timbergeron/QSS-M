@@ -74,6 +74,7 @@ void Draw_GetMenuTransform(vrect_t* bounds, vrect_t* viewport); // woods #mousem
 qboolean Draw_ReloadTextures(qboolean force);
 plcolour_t Draw_GetConcharsAccentColor(void); // woods #goldtext
 plcolour_t Draw_GetConcharsCursorColor(void); // woods #cursorcolor
+plcolour_t Draw_GetConcharsCursorColorByIndex(int index); // woods #nadecount
 void Draw_PicRGBA (int x, int y, qpic_t *pic, plcolour_t c, float alpha); // woods #cursorcolor
 
 //Spike -- this is for csqc

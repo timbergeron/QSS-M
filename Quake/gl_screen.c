@@ -3288,23 +3288,13 @@ void SCR_DrawGrenadeTimer(void)
 	float pointer_top = center_y - half_size / 2.0f;
 	float pointer_bottom = center_y + half_size / 2.0f;
 
-	// Color ramp: green -> yellow -> red as time runs out
+	// Color ramp: cursor color 2 (gold) -> cursor color 1 (red) as time runs out
 	float frac_elapsed = 1.0f - smooth_time_frac; // 0=start, 1=explode
-	float r, g, b;
-	if (frac_elapsed <= 0.5f)
-	{
-		float k = frac_elapsed / 0.5f; // 0..1, green -> yellow
-		r = k;
-		g = 1.0f;
-		b = 0.0f;
-	}
-	else
-	{
-		float k = (frac_elapsed - 0.5f) / 0.5f; // 0..1, yellow -> red
-		r = 1.0f;
-		g = 1.0f - k;
-		b = 0.0f;
-	}
+	plcolour_t start_color = Draw_GetConcharsCursorColorByIndex(2); // gold
+	plcolour_t end_color = Draw_GetConcharsCursorColorByIndex(1);   // red
+	float r = (start_color.rgb[0] + (end_color.rgb[0] - start_color.rgb[0]) * frac_elapsed) / 255.0f;
+	float g = (start_color.rgb[1] + (end_color.rgb[1] - start_color.rgb[1]) * frac_elapsed) / 255.0f;
+	float b = (start_color.rgb[2] + (end_color.rgb[2] - start_color.rgb[2]) * frac_elapsed) / 255.0f;
 
 	glColor4f(r, g, b, 1.0f);
 	glBegin(GL_QUADS);
