@@ -2491,6 +2491,7 @@ static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833
 	const qboolean gib = (Cmd_Argc() > 1);   /* any 2nd arg toggles gibs */
 	int            func;
 	size_t         i, total;
+	int            count = 0;
 
 	/* Forward if typed on the host console of a listen server. */
 	if (cmd_source != src_client)
@@ -2509,12 +2510,15 @@ static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833
 		edict_t* ent = EDICT_NUM((int)i);
 		if (ent->free || !((int)ent->v.flags & FL_MONSTER))
 			continue;
+		if (ent->v.health <= 0.0f || ent->v.takedamage <= 0.0f)
+			continue;
 
 		Host_DoDamage(func, ent, gib);
+		count++;
 	}
 
-	SV_ClientPrintf("Massacred all monsters (%s)\n",
-		gib ? "gibbed" : "no gibs");
+	SV_ClientPrintf("Massacred all %d monster%s (%s)\n",
+		count, count == 1 ? "" : "s", gib ? "gibbed" : "no gibs");
 }
 
 /*
