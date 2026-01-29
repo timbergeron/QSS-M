@@ -841,12 +841,16 @@ Ported from Qrack (originally from OpenKatana by Eukos).
 static void V_CalcGunDrift (vec3_t origin, vec3_t angles)
 {
 	int		i;
-	float		speed, diff_length, k;
+	float		speed, diff_length;
+	float		side, vert;
 	static vec3_t	lastfacing;
 	static double	lasttime;
 	vec3_t		forward, right, up, diff;
 
-	AngleVectors (r_refdef.viewangles, forward, right, up);
+	if (host_frametime == 0.0f)
+		return;
+
+	AngleVectors (cl.lerpangles, forward, right, up);
 
 	// Re-init on first use, time discontinuity (map change/demo restart), or enabling from 0
 	if (lasttime == 0 || cl.time < lasttime || VectorLength(lastfacing) == 0)
@@ -855,41 +859,34 @@ static void V_CalcGunDrift (vec3_t origin, vec3_t angles)
 		lasttime = cl.time;
 		return;
 	}
-
-	if (host_frametime == 0.0)
-		return;
+	lasttime = cl.time;
 
 	VectorSubtract (forward, lastfacing, diff);
+	speed = 6.0f;
 	diff_length = VectorLength (diff);
 
-	// Base interpolation speed
-	speed = 6.0f;
-
-	// Scale speed when rotation exceeds threshold (faster catch-up)
-	// Guard against negative/zero values to prevent divide-by-zero
 	if (cl_gun_drift.value > 0 && diff_length > cl_gun_drift.value)
 		speed *= diff_length / cl_gun_drift.value;
 
-	// Clamp interpolation factor to prevent overshoot with tiny cvar values
-	k = q_min(speed * host_frametime, 1.0f);
-
-	// Smoothly interpolate lastfacing toward current forward
+	// Interpolate lastfacing toward forward
 	for (i = 0; i < 3; i++)
-		lastfacing[i] += diff[i] * k;
+		lastfacing[i] += diff[i] * (speed * host_frametime);
 	VectorNormalize (lastfacing);
 
-	lasttime = cl.time;
-
-	// Only apply visual offset when enabled
+	// Skip visual offset if disabled
 	if (cl_gun_drift.value <= 0)
 		return;
 
-	// Apply inverse position offset (weapon moves opposite to view rotation)
-	for (i = 0; i < 3; i++)
-		origin[i] += diff[i] * -5.0f;
+	// Project world-space diff onto view axes to get view-relative offset
+	side = DotProduct (diff, right);   // horizontal turn amount
+	vert = DotProduct (diff, up);      // vertical turn amount
 
-	// Add roll based on yaw change (weapon tilts when turning)
-	angles[ROLL] += diff[YAW] * 15.0f;
+	// Apply offset in view-relative coordinates (gun lags opposite to turn)
+	origin[1] += side * -5.0f;
+	origin[2] += vert * -5.0f;
+
+	// Roll based on horizontal turn
+	angles[ROLL] += side * 3.0f;
 }
 
 /*
