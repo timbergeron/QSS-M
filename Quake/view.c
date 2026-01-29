@@ -51,6 +51,8 @@ cvar_t	v_kickroll = {"v_kickroll", "0.6", CVAR_ARCHIVE};
 cvar_t	v_kickpitch = {"v_kickpitch", "0.6", CVAR_ARCHIVE};
 cvar_t	v_gunkick = {"v_gunkick", "1", CVAR_ARCHIVE}; //johnfitz
 
+cvar_t	cl_gun_drift = {"cl_gun_drift", "0", CVAR_ARCHIVE}; // woods #gdrift
+
 cvar_t	v_iyaw_cycle = {"v_iyaw_cycle", "2", CVAR_NONE};
 cvar_t	v_iroll_cycle = {"v_iroll_cycle", "0.5", CVAR_NONE};
 cvar_t	v_ipitch_cycle = {"v_ipitch_cycle", "1", CVAR_NONE};
@@ -830,6 +832,68 @@ void V_PolyBlend (void)
 
 /*
 ==================
+V_CalcGunDrift -- woods #gdrift
+
+Adds a delay/lag effect to the viewmodel based on view rotation.
+Ported from Qrack (originally from OpenKatana by Eukos).
+==================
+*/
+static void V_CalcGunDrift (vec3_t origin, vec3_t angles)
+{
+	int		i;
+	float		speed, diff_length, k;
+	static vec3_t	lastfacing;
+	static double	lasttime;
+	vec3_t		forward, right, up, diff;
+
+	AngleVectors (r_refdef.viewangles, forward, right, up);
+
+	// Re-init on first use, time discontinuity (map change/demo restart), or enabling from 0
+	if (lasttime == 0 || cl.time < lasttime || VectorLength(lastfacing) == 0)
+	{
+		VectorCopy (forward, lastfacing);
+		lasttime = cl.time;
+		return;
+	}
+
+	if (host_frametime == 0.0)
+		return;
+
+	VectorSubtract (forward, lastfacing, diff);
+	diff_length = VectorLength (diff);
+
+	// Base interpolation speed
+	speed = 6.0f;
+
+	// Scale speed when rotation exceeds threshold (faster catch-up)
+	// Guard against negative/zero values to prevent divide-by-zero
+	if (cl_gun_drift.value > 0 && diff_length > cl_gun_drift.value)
+		speed *= diff_length / cl_gun_drift.value;
+
+	// Clamp interpolation factor to prevent overshoot with tiny cvar values
+	k = q_min(speed * host_frametime, 1.0f);
+
+	// Smoothly interpolate lastfacing toward current forward
+	for (i = 0; i < 3; i++)
+		lastfacing[i] += diff[i] * k;
+	VectorNormalize (lastfacing);
+
+	lasttime = cl.time;
+
+	// Only apply visual offset when enabled
+	if (cl_gun_drift.value <= 0)
+		return;
+
+	// Apply inverse position offset (weapon moves opposite to view rotation)
+	for (i = 0; i < 3; i++)
+		origin[i] += diff[i] * -5.0f;
+
+	// Add roll based on yaw change (weapon tilts when turning)
+	angles[ROLL] += diff[YAW] * 15.0f;
+}
+
+/*
+==================
 CalcGunAngle
 ==================
 */
@@ -1075,6 +1139,8 @@ void V_CalcRefdef (void)
 			view->origin[2] += 0.5;
 	}
 
+	V_CalcGunDrift (view->origin, view->angles); // woods #gdrift
+
 	view->model = cl.model_precache[cl.stats[STAT_WEAPON]];
 	view->frame = cl.stats[STAT_WEAPONFRAME];
 	view->netstate = nullentitystate;
@@ -1229,6 +1295,7 @@ void V_Init (void)
 	Cvar_RegisterVariable (&v_kickroll);
 	Cvar_RegisterVariable (&v_kickpitch);
 	Cvar_RegisterVariable (&v_gunkick); //johnfitz
+	Cvar_RegisterVariable (&cl_gun_drift); // woods #gdrift
 
 	Cvar_RegisterVariable (&r_viewmodel_quake); //MarkV
 }
