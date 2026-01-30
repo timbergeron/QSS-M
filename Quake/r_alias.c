@@ -35,6 +35,7 @@ extern cvar_t r_nooutline_list; // woods #routline
 extern qboolean nameInList(const char* list, const char* name); // woods #desat #routline
 extern qboolean TP_IsPlayerVisible(vec3_t origin); // woods #routline
 extern qboolean IsOneVsOneMatch(void); // woods #routline
+extern void R_GetEntityBounds(const entity_t *e, vec3_t mins, vec3_t maxs); // woods #routline
 void Matrix3x4_RM_Transform4(const float* matrix, const float* vector, float* product); // woods #routline
 
 cvar_t	gl_lightning_alpha = {"gl_lightning_alpha","1"}; // woods #lightalpha
@@ -668,6 +669,17 @@ void R_BeginAliasOutlineRendering(aliasglsl_t* glsl)
 	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
 }
 
+static qboolean R_IsViewInsideEntityBounds(const entity_t *e) // woods #routline
+{
+	vec3_t mins, maxs;
+
+	R_GetEntityBounds(e, mins, maxs);
+
+	return (r_refdef.vieworg[0] >= mins[0] && r_refdef.vieworg[0] <= maxs[0]) &&
+		(r_refdef.vieworg[1] >= mins[1] && r_refdef.vieworg[1] <= maxs[1]) &&
+		(r_refdef.vieworg[2] >= mins[2] && r_refdef.vieworg[2] <= maxs[2]);
+}
+
 /*
 =============
 R_DrawAliasModelOutline -- woods #routline
@@ -711,6 +723,9 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 		if (!allow_outline)
 			return;
 	}
+
+	if (R_IsViewInsideEntityBounds(e))
+		return;
 
 	float outlineWidth = R_CalculateAliasModelOutlineWidth(paliashdr, e, lerpdata);
 
