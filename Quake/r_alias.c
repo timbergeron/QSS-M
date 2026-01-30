@@ -669,15 +669,66 @@ void R_BeginAliasOutlineRendering(aliasglsl_t* glsl)
 	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
 }
 
-static qboolean R_IsViewInsideEntityBounds(const entity_t *e) // woods #routline
+/*
+=============
+R_GetEntityBoundsFadeFactor -- woods #routline
+
+Returns a fade factor (0.0 to 1.0) based on view proximity to entity bounds.
+- Outside expanded bounds: 1.0 (full opacity)
+- Entering expanded bounds: fades from 1.0 to 0.0
+- Reaches 0.0 at 50% of the way from expanded boundary to center
+=============
+*/
+static float R_GetEntityBoundsFadeFactor(const entity_t *e)
 {
 	vec3_t mins, maxs;
+	int i, nearest_axis;
+	float min_dist, dist_to_min, dist_to_max, nearest;
+	float half_size, fade_distance;
+	float expand = 24.0f; // Expand bounds outward so fade starts earlier
 
 	R_GetEntityBounds(e, mins, maxs);
 
-	return (r_refdef.vieworg[0] >= mins[0] && r_refdef.vieworg[0] <= maxs[0]) &&
-		(r_refdef.vieworg[1] >= mins[1] && r_refdef.vieworg[1] <= maxs[1]) &&
-		(r_refdef.vieworg[2] >= mins[2] && r_refdef.vieworg[2] <= maxs[2]);
+	// Expand bounds outward
+	for (i = 0; i < 3; i++)
+	{
+		mins[i] -= expand;
+		maxs[i] += expand;
+	}
+
+	// Check if view is outside expanded bounds on any axis
+	for (i = 0; i < 3; i++)
+	{
+		if (r_refdef.vieworg[i] < mins[i] || r_refdef.vieworg[i] > maxs[i])
+			return 1.0f; // Outside bounds, full opacity
+	}
+
+	// View is inside expanded bounds - find nearest face and its axis
+	min_dist = 999999.0f;
+	nearest_axis = 0;
+	for (i = 0; i < 3; i++)
+	{
+		dist_to_min = r_refdef.vieworg[i] - mins[i];
+		dist_to_max = maxs[i] - r_refdef.vieworg[i];
+		nearest = q_min(dist_to_min, dist_to_max);
+		if (nearest < min_dist)
+		{
+			min_dist = nearest;
+			nearest_axis = i;
+		}
+	}
+
+	// Calculate fade distance as 50% of the way to center on that axis
+	half_size = (maxs[nearest_axis] - mins[nearest_axis]) * 0.5f;
+	fade_distance = half_size * 0.5f; // Fade completes at 50% to center
+
+	if (fade_distance <= 0.0f)
+		return 0.0f;
+
+	// min_dist is how far inside we are from the nearest face
+	// At boundary (min_dist ~= 0): alpha = 1.0
+	// At fade_distance inside (50% to center): alpha = 0.0
+	return CLAMP(0.0f, 1.0f - (min_dist / fade_distance), 1.0f);
 }
 
 /*
@@ -724,12 +775,14 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 			return;
 	}
 
-	if (R_IsViewInsideEntityBounds(e))
-		return;
-
 	float outlineWidth = R_CalculateAliasModelOutlineWidth(paliashdr, e, lerpdata);
 
 	if (outlineWidth <= 0.0f)
+		return;
+
+	// Fade out outline as view enters entity bounds
+	float boundsFade = R_GetEntityBoundsFadeFactor(e);
+	if (boundsFade <= 0.0f)
 		return;
 
 	// Configure stencil to only draw where stencil is not set by the model
@@ -776,6 +829,9 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 		outlineColor[2] = 2.0f / 255.0f; // Change blue component
 		outlineColor[3] = 0.2f; // Change alpha component
 	}
+
+	// Apply bounds proximity fade
+	outlineColor[3] *= boundsFade;
 
 	GL_Uniform4fvFunc(glsl->outlineColorLoc, 1, outlineColor);
 
