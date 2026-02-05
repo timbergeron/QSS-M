@@ -588,12 +588,17 @@ static conlink_t *Con_GetLinkAtPixel (int x, int y)
     return Con_GetLinkAtOfs(&ofs);
 }
 
+static qboolean Con_CursorActive (void)
+{
+    return (key_dest == key_console) || (con_forcedup && key_dest != key_menu);
+}
+
 /* helper: set OS cursor safely */
 static void Con_SetCursor(SDL_Cursor *cur)
 {
     if (!cur) return;
-    if (con_cursor_current == cur) return;
-    SDL_SetCursor(cur);
+    if (con_cursor_current == cur && SDL_GetCursor() == cur) return;
+    VID_SetCursorHandle(cur);
     con_cursor_current = cur;
 }
 static qboolean Con_HasSelection (void) { return Con_OfsCompare(&con_selection.begin,&con_selection.end)!=0; }
@@ -617,9 +622,9 @@ static void Con_LeaveCursorMode(void)
        If leaving to game, restore what the host had. */
     if (key_dest == key_menu) {
         SDL_ShowCursor(SDL_ENABLE);
-        if (con_cursor_arrow) SDL_SetCursor(con_cursor_arrow);
+        if (con_cursor_arrow) VID_SetCursorHandle(con_cursor_arrow);
     } else {
-        if (con_cursor_saved) SDL_SetCursor(con_cursor_saved);
+        if (con_cursor_saved) VID_SetCursorHandle(con_cursor_saved);
         SDL_ShowCursor(con_cursor_saved_visible);
     }
     con_cursor_current = NULL;
@@ -812,7 +817,7 @@ static void Con_Mousemove (int x, int y)
         conofs_t ofs; qboolean inside = Con_ScreenToOffset(x,y,&ofs,CT_INSIDE);
         Con_SetHotLink(Con_GetLinkAtPixel(x,y));
         /* Show appropriate cursor while console is active */
-        if (key_dest == key_console) {
+        if (Con_CursorActive()) {
             if (con_hotlink)           Con_SetCursor(con_cursor_hand);
             else if (inside)           Con_SetCursor(con_cursor_ibeam);
             else                       Con_SetCursor(con_cursor_arrow);
@@ -857,7 +862,7 @@ static void Con_Scroll(int lines)
 
 static void Con_UpdateMouseState (void)
 {
-    if (key_dest != key_console) {
+    if (!Con_CursorActive()) {
         Con_SetHotLink(NULL);
         Con_SetMouseState(CMS_NOTPRESSED);
         Con_ClearSelection();
@@ -4327,13 +4332,13 @@ void Con_DrawConsole (int lines, qboolean drawinput)
 	const char	*text;
 	const char	*ver = ENGINE_NAME_AND_VER;
 
-    Con_UpdateMouseState(); // woods #conselection - update selection/hover each frame while console is up
-
 	if (lines <= 0)
 		return;
 
 	con_vislines = lines * vid.conheight / glheight;
 	GL_SetCanvas (CANVAS_CONSOLE);
+
+    Con_UpdateMouseState(); // woods #conselection - update selection/hover each frame while console is up
 
 // draw the background
 	Draw_ConsoleBackground ();

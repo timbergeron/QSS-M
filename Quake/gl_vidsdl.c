@@ -86,6 +86,7 @@ static int		nummodes;
 static qboolean	vid_initialized = false;
 
 static SDL_Cursor	*vid_cursor;
+static SDL_Cursor	*custom_cursor; // woods #customcursor
 #if defined(USE_SDL2)
 static SDL_Window	*draw_context;
 static SDL_GLContext	gl_context;
@@ -211,6 +212,7 @@ cvar_t	vid_fsaa = {"vid_fsaa", "0", CVAR_ARCHIVE}; // QuakeSpasm -- woods remove
 cvar_t	vid_fxaa = {"vid_fxaa", "0", CVAR_ARCHIVE}; // // woods #fxaa anti-aliasing (0=off, 1=low, 2=medium, 3=high)
 static cvar_t	vid_desktopfullscreen = {"vid_desktopfullscreen", "0", CVAR_ARCHIVE}; // QuakeSpasm
 static cvar_t	vid_borderless = {"vid_borderless", "0", CVAR_ARCHIVE}; // QuakeSpasm
+extern cvar_t	scr_customcursor; // woods #customcursor (defined in gl_screen.c)
 //johnfitz
 
 cvar_t		vid_gamma = {"gamma", "1", CVAR_ARCHIVE}; //johnfitz -- moved here from view.c
@@ -1640,6 +1642,13 @@ void	VID_Shutdown (void)
 		R_MotionBlur_DeleteTexture (); // woods #motionblur
 		VID_Gamma_Shutdown (); //johnfitz
 		FXAA_Shutdown(); // woods #fxaa
+		// Free custom cursor before tearing down video subsystem
+		if (custom_cursor)
+		{
+			VID_SetCursorHandle(NULL); // restore default before freeing
+			SDL_FreeCursor(custom_cursor);
+			custom_cursor = NULL;
+		}
 #if defined(USE_SDL2)
 		SDL_GL_DeleteContext(gl_context);
 		gl_context = NULL;
@@ -3122,14 +3131,24 @@ void VID_UpdateCursor(void)
 	else
 		vm = NULL;
 	nc = vm?vm->cursorhandle:NULL;
-	if (vid_cursor != nc)
-	{
-		vid_cursor = nc;
-		if (nc)	//null is an invalid sdl cursor handle
-			SDL_SetCursor(nc);
-		else
-			SDL_SetCursor(SDL_GetDefaultCursor());	//doesn't need freeing or anything.
-	}
+
+	// Only use custom cursor if cvar is enabled
+	if (!nc && custom_cursor && scr_customcursor.value)
+		nc = custom_cursor;
+
+	VID_SetCursorHandle(nc);
+}
+
+void VID_SetCursorHandle(SDL_Cursor *cursor)
+{
+	if (vid_cursor == cursor)
+		return;
+
+	vid_cursor = cursor;
+	if (cursor)	// null is an invalid sdl cursor handle
+		SDL_SetCursor(cursor);
+	else
+		SDL_SetCursor(SDL_GetDefaultCursor());	// doesn't need freeing or anything.
 }
 void VID_SetCursor(qcvm_t *vm, const char *cursorname, float hotspot[2], float cursorscale)
 {
@@ -3189,6 +3208,16 @@ void LoadCustomCursorImage (void)
 	enum srcformat fmt;
 	qboolean malloced;
 
+	if (custom_cursor)
+	{
+		VID_SetCursorHandle(NULL); // switch away before freeing
+		SDL_FreeCursor(custom_cursor);
+		custom_cursor = NULL;
+	}
+
+	if (!scr_customcursor.value)
+		return;
+
 	if (!COM_FileExists("gfx/qssmcursor.png", NULL))
 	{
 		Con_DPrintf("No cursor image found\n");
@@ -3196,6 +3225,11 @@ void LoadCustomCursorImage (void)
 	}
 
 	byte* cursorData = Image_LoadImage("gfx/qssmcursor", &width, &height, &fmt, &malloced);
+	if (!cursorData)
+	{
+		Con_DPrintf("Failed to load cursor image\n");
+		return;
+	}
 
 	Con_DPrintf("Loaded cursor image: %dx%d\n", width, height);
 
@@ -3211,6 +3245,13 @@ void LoadCustomCursorImage (void)
 	SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(
 		cursorData, width, height, 32, width * 4, SDL_PIXELFORMAT_RGBA32
 	);
+
+	if (!surface)
+	{
+		Con_DPrintf("Failed to create cursor surface\n");
+		if (malloced) free(cursorData);
+		return;
+	}
 
 	if (width != targetWidth || height != targetHeight)
 	{
@@ -3232,10 +3273,10 @@ void LoadCustomCursorImage (void)
 	hotX = SDL_clamp(hotX, 0, surface->w - 1);
 	hotY = SDL_clamp(hotY, 0, surface->h - 1);
 
-	SDL_Cursor* cursor = SDL_CreateColorCursor(surface, hotX, hotY);
-	if (cursor)
+	custom_cursor = SDL_CreateColorCursor(surface, hotX, hotY);
+	if (custom_cursor)
 	{
-		SDL_SetCursor(cursor);
+		VID_SetCursorHandle(custom_cursor);
 		Con_DPrintf("Custom cursor set successfully\n");
 	}
 	else
@@ -3259,6 +3300,9 @@ SDL_Cursor *LoadCustomIBeamCursor (void)
 	enum srcformat fmt;
 	qboolean malloced;
 	SDL_Cursor *cursor = NULL;
+
+	if (!scr_customcursor.value)
+		return SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
 
 	if (!COM_FileExists("gfx/qssmicursor.png", NULL))
 	{

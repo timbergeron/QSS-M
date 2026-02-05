@@ -143,6 +143,7 @@ cvar_t		scr_shownet = {"scr_shownet", "0",CVAR_ARCHIVE}; // woods #shownet scr_o
 cvar_t		scr_obscenterprint = {"scr_obscenterprint", "0",CVAR_ARCHIVE}; // woods
 cvar_t		scr_obsitems = {"scr_obsitems", "1",CVAR_ARCHIVE}; // woods
 cvar_t		scr_hints = {"scr_hints", "1",CVAR_ARCHIVE}; // woods #qssmhints
+cvar_t		scr_customcursor = {"scr_customcursor", "1", CVAR_ARCHIVE}; // woods #customcursor
 //johnfitz
 cvar_t		scr_usekfont = {"scr_usekfont", "0", CVAR_NONE}; // 2021 re-release
 cvar_t		cl_predict = { "cl_predict", "0", CVAR_NONE }; // 2021 re-release
@@ -959,6 +960,20 @@ static void Clock_Completion_f(cvar_t* cvar, const char* partial)
 
 /*
 ==================
+SCR_CustomCursor_f -- woods #customcursor
+Keep OS cursor assets in sync with scr_customcursor changes.
+==================
+*/
+static void SCR_CustomCursor_f(cvar_t* cvar)
+{
+	LoadCustomCursorImage();
+	Con_ReloadIBeamCursor();
+	VID_UpdateCursor();
+	IN_UpdateGrabs();
+}
+
+/*
+==================
 SCR_Init
 ==================
 */
@@ -1005,6 +1020,9 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_obscenterprint); // woods
 	Cvar_RegisterVariable (&scr_obsitems); // woods
 	Cvar_RegisterVariable (&scr_hints); // woods #qssmhints
+	Cvar_RegisterVariable (&scr_customcursor); // woods #customcursor
+	Cvar_SetCallback (&scr_customcursor, SCR_CustomCursor_f); // woods #customcursor
+	SCR_CustomCursor_f(&scr_customcursor); // woods #customcursor - load cursors with current setting
 	//johnfitz
 	Cvar_RegisterVariable(&scr_demobar_timeout); // woods (iw) #democontrols
 	Cvar_RegisterVariable (&scr_usekfont); // 2021 re-release
