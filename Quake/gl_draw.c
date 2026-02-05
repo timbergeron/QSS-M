@@ -1239,6 +1239,7 @@ static plcolour_t Draw_GetConcharsColorByIndex_Internal(int index, qboolean boos
 	static unsigned int cached_width = 0;
 	static unsigned int cached_height = 0;
 	static char cached_source[MAX_QPATH];
+	static qboolean cache_initialized = false;
 
 	static const int char_indices[3] = { CHAR_WHITE_ZERO, CHAR_RED_ZERO, CHAR_GOLD_ZERO };
 	static const plcolour_t default_colors[3] = {
@@ -1261,7 +1262,7 @@ static plcolour_t Draw_GetConcharsColorByIndex_Internal(int index, qboolean boos
 		return cached_colors[cache_index];
 	}
 	// Check if texture changed - invalidate all caches
-	if (!cached_valid[0] || cached_texnum != texture->texnum ||
+	if (!cache_initialized || cached_texnum != texture->texnum ||
 		cached_crc != texture->source_crc ||
 		cached_width != texture->source_width ||
 		cached_height != texture->source_height ||
@@ -1274,6 +1275,7 @@ static plcolour_t Draw_GetConcharsColorByIndex_Internal(int index, qboolean boos
 		cached_width = texture->source_width;
 		cached_height = texture->source_height;
 		q_strlcpy(cached_source, texture->source_file, sizeof(cached_source));
+		cache_initialized = true;
 	}
 
 	// Compute color if not cached
