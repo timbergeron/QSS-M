@@ -47,68 +47,6 @@ static int receivedDuplicateCount = 0;
 static int shortPacketCount = 0;
 static int droppedDatagrams;
 
-static const char *Datagram_SocketOwnerString(qsocket_t *sock) // woods #serverpl
-{
-	int i;
-
-	if (svs.clients && svs.maxclients)
-		for (i = 0; i < svs.maxclients; i++)
-		{
-			client_t *cl = &svs.clients[i];
-
-			if (cl->netconnection == sock)
-				return cl->name[0] ? cl->name : NET_QSocketGetTrueAddressString(sock);
-		}
-
-	return sock ? NET_QSocketGetTrueAddressString(sock) : "unknown";
-}
-
-static byte cl_unrel_lossage_ema; // 0..255 -- woods #serverpl
-static double cl_pl_next_publish_time; // throttle timer -- woods #serverpl
-static int cl_pl_last_sent_percent = -1; // last value sent via setinfo -- woods #serverpl
-
-static void CL_UpdateAndPublishPLPercent(int inst255) // woods #serverpl -- Update EMA (7/8 old, 1/8 new), map 0..255 -> 0..100, and setinfo "pl" if changed (throttled)
-{
-    int ema = ((int)cl_unrel_lossage_ema * 7 + inst255) / 8;
-    if (ema < 0)
-        ema = 0;
-    if (ema > 255)
-        ema = 255;
-    cl_unrel_lossage_ema = (byte)ema;
-
-    /* round when mapping to percent */
-    {
-        int percent = (cl_unrel_lossage_ema * 100 + 127) / 255;
-        if (percent < 0)
-            percent = 0;
-        if (percent > 99)
-            percent = 99;
-
-        if (cls.state >= ca_connected && net_time >= cl_pl_next_publish_time)
-        {
-            if (percent != cl_pl_last_sent_percent)
-            {
-                char val[16];
-                MSG_WriteByte(&cls.message, clc_stringcmd);
-                q_snprintf(val, sizeof(val), "%d", percent);
-                MSG_WriteString(&cls.message, va("setinfo \"%s\" \"%s\"\n", "plc", val));
-                cl_pl_last_sent_percent = percent;
-            }
-            cl_pl_next_publish_time = net_time + 0.5; /* 2 Hz throttle */
-        }
-    }
-}
-
-void NET_Client_AddServerDetectedDrops(int count) // woods #serverpl -- allow other modules (e.g., client stuffcmd handler) to add drops detected by server
-{
-    if (count <= 0)
-        return;
-    droppedDatagrams += count;
-    cl.pltotal = droppedDatagrams;
-    /* trigger overlay burst since these are real drops, too */
-    cl.packetloss += count;
-}
-
 //cvars controlling dpmaster support:
 //our servers might as well claim to be 'FTE-Quake' servers. this means FTE can see us, we can see FTE (when its pretending to be nq).
 //we additionally look for 'DarkPlaces-Quake' servers too, because we can, but most of those servers will be using dpp7 and will (safely) not respond to our ccreq_server_info requests.
@@ -430,13 +368,7 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 		{
 			count = sequence - sock->unreliableReceiveSequence;
 			droppedDatagrams += count;
-				Con_DPrintf("Dropped %u datagram(s) for %s\n", count, Datagram_SocketOwnerString(sock));
-			/* compute instantaneous loss in 0..255 over this event and update+publish EMA-mapped percent -- woods #serverpl */
-			{
-				unsigned int total_now = (unsigned int)count + 1; /* include current received packet */
-				int inst255 = (int)((count * 255u + total_now / 2) / total_now);
-				CL_UpdateAndPublishPLPercent(inst255);
-		}
+			Con_DPrintf("Dropped %u datagram(s)\n", count);
 		}
 		sock->unreliableReceiveSequence = sequence + 1;
 
@@ -702,15 +634,9 @@ int	Datagram_GetMessage (qsocket_t *sock)
 			{
 				count = sequence - sock->unreliableReceiveSequence;
 				droppedDatagrams += count;
-				Con_DPrintf("Dropped %u datagram(s) for %s\n", count, Datagram_SocketOwnerString(sock));
+				Con_DPrintf("Dropped %u datagram(s)\n", count);
 				cl.packetloss = count; // woods #scrpl
 				cl.pltotal = droppedDatagrams; // woods #scrpl
-			/* compute instantaneous loss in 0..255 over this event and update+publish EMA-mapped percent -- woods #serverpl */
-			{
-				unsigned int total_now = (unsigned int)count + 1; /* include current received packet */
-				int inst255 = (int)((count * 255u + total_now / 2) / total_now);
-				CL_UpdateAndPublishPLPercent(inst255);
-			}
 			}
 			sock->unreliableReceiveSequence = sequence + 1;
 

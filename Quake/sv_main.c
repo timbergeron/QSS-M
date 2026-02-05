@@ -726,11 +726,6 @@ static void SVFTE_SetupFrames(client_t *client)
 	memset(client->oldstats_f, 0, sizeof(client->oldstats_f));
 	client->lastmovemessage = 0;	//it'll clear this too
 
-	/* woods #serverpl -- reset packet loss smoothing and publish throttle */
-	client->lossage = 0;
-	client->next_pl_publish_time = 0.0;
-	client->last_pl_percent = 255; /* sentinel to ensure initial publish */
-
 	if (!client->protocol_pext2)
 	{
 		SVFTE_DestroyFrames(client);
@@ -779,8 +774,6 @@ void SVFTE_Ack(client_t *client, int sequence)
 {	//any gaps in the sequence need to considered dropped
 	struct deltaframe_s *frame;
 	int dropseq = client->lastacksequence+1;
-	int gap_raw = 0; //woods #serverpl -- raw gap between last acked and this ack
-	qboolean do_pl = true; //woods #serverpl
 	if (!client->numframes)
 		return;	//client shouldn't be using this.
 	if (sequence == -1)
@@ -789,53 +782,6 @@ void SVFTE_Ack(client_t *client, int sequence)
 	{
 //		else Con_SafePrintf("dupe or stale ack (%s, %i->%i)\n", client->name, client->lastacksequence, sequence);
 		return;	//panic
-	}
-	
-	// woods #serverpl -- compute & smooth apparent loss before clamping drop loop
-	if (client->lastacksequence == (int)0x80000000)
-		do_pl = false; /* first valid ack after setup; skip initial sample */
-
-	if (do_pl)
-	{
-		if (sequence > client->lastacksequence)
-			gap_raw = sequence - client->lastacksequence - 1;
-		else
-			gap_raw = 0;
-
-		{
-			const int total_now = gap_raw + 1; /* include current acked frame */
-			int inst = (gap_raw * 255 + total_now / 2) / total_now; /* instantaneous loss 0..255 */
-			int ema = ((int)client->lossage * 7 + inst) / 8;       /* EMA: 7/8 prev, 1/8 new */
-			ema = CLAMP(0, ema, 255);
-			client->lossage = (byte)ema;
-
-			/* also inform client of detected dropped count so it can accumulate totals for HUD
-			   reuse existing 'pl' command with pidx = -1 to denote 'add to total' */
-			if (gap_raw > 0 && client->supports_pl_drops)
-			{
-				char cmd[32];
-				q_snprintf(cmd, sizeof(cmd), "pl -1 %d\n", gap_raw);
-				MSG_WriteByte(&client->message, svc_stufftext);
-				MSG_WriteString(&client->message, cmd);
-			}
-
-			/* map 0..255 to 0..100% with rounding */
-			int percent = (client->lossage * 100 + 127) / 255;
-
-			/* publish only if changed AND outside throttle window */
-			if (percent != client->last_pl_percent && qcvm->time >= client->next_pl_publish_time)
-			{
-				char newbuf[16];
-				int slot1 = (int)(client - svs.clients) + 1; /* 1-based index expected by SV_UpdateInfo */
-				q_snprintf(newbuf, sizeof(newbuf), "%d", percent);
-
-				/* Let the server broadcast the change */
-				SV_UpdateInfo(slot1, "pl", newbuf);
-
-				client->last_pl_percent = percent;
-				client->next_pl_publish_time = qcvm->time + 0.5; /* throttle updates */
-			}
-		}
 	}
 	
 	if ((unsigned)(dropseq-sequence) >= client->numframes)
@@ -2505,12 +2451,6 @@ void SV_ConnectClient (int clientnum)
 	memset (client, 0, sizeof(*client));
 	client->netconnection = netconnection;
 
-	client->ver_major = -1; //woods #serverpl
-	client->ver_minor = 0; //woods #serverpl
-	client->ver_patch = 0; //woods #serverpl
-	client->ver_patch_suffix = 0; //woods #serverpl
-	client->supports_pl_drops = false; //woods #serverpl
-
 	strcpy (client->name, "unconnected");
 	client->active = true;
 	client->spawned = false;
@@ -2525,7 +2465,6 @@ void SV_ConnectClient (int clientnum)
 
 	client->pextknown = false;
 	client->protocol_pext2 = 0;
-	Info_SetKey(client->userinfo, sizeof(client->userinfo), "pl", "0"); // woods #serverpl -- seed pl to 0%
 
 	if (sv.loadgame)
 		memcpy (client->spawn_parms, spawn_parms, sizeof(spawn_parms));

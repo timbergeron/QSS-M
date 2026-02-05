@@ -2861,19 +2861,6 @@ static void CL_ParseStuffText(const char *msg)
 		else
 			handled = Cmd_ExecuteString(cl.stuffcmdbuf, src_server);
 
-		// woods #serverpl -- swallow server pl -1 drop reports when this client lacks the handler
-		if (!handled && !Q_strncmp(cl.stuffcmdbuf, "pl", 2))
-		{
-			const char *p = cl.stuffcmdbuf + 2;
-			while (*p && q_isspace((unsigned char)*p))
-				p++;
-			if (*p == '-' && p[1] == '1' && (!p[2] || q_isspace((unsigned char)p[2])))
-			{
-				Con_DPrintf("ignored server pl -1 stuffcmd (no handler) raw=\"%s\"\n", cl.stuffcmdbuf);
-				continue;
-			}
-		}
-
 		//give the csqc a chance to handle them
 		if (!handled && cl.qcvm.extfuncs.CSQC_Parse_StuffCmd && str-cl.stuffcmdbuf<STRINGTEMP_LENGTH)
 		{

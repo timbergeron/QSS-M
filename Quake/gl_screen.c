@@ -1517,7 +1517,7 @@ void SCR_ShowPL(void)
 
 		// Determine if the stored value should be displayed
 		int elapsedTime = SDL_GetTicks() - lastPLTime;
-		if (elapsedTime < 2000) { // Show for 2 second
+		if (elapsedTime < 3000) { // Show for 1 second
 
 			int	x, y;
 

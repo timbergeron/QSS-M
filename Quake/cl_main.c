@@ -127,8 +127,6 @@ extern int grenadecache, rocketcache; // woods #r2g
 extern qboolean pausedprint; // woods
 static qboolean prediction_msg_shown = false; // woods #prednotify
 
-void NET_Client_AddServerDetectedDrops(int count); // woods #serverpl
-
 void CL_ClearTrailStates(void)
 {
 	int i;
@@ -3524,28 +3522,6 @@ static void CL_ServerExtension_TeamInfo_f(void) // woods #teaminfo
 	}
 }
 
-static void CL_ServerExtension_PL_f(void) // woods #serverpl
-{
-	int pidx = atoi(Cmd_Argv(1));
-	int pl = atoi(Cmd_Argv(2));
-
-	if (pidx == -1)
-	{
-		/* special case: server sends pl -1 <count> to add to client totals */
-		Con_DPrintf("server pl stuffcmd: add %d drops\n", pl);
-		if (pl > 0)
-			NET_Client_AddServerDetectedDrops(pl);
-		return;
-	}
-
-	if (pidx < cl.maxclients)
-	{
-		Con_DPrintf("server pl stuffcmd: slot %d pl=%d\n", pidx, pl);
-		scoreboard_t* player = &cl.scores[pidx];
-		player->pl = pl;
-	}
-}
-
 static void CL_ServerExtension_FullServerinfo_f(void)
 {
 	const char *newserverinfo = Cmd_Argv(1);
@@ -3651,90 +3627,6 @@ static void CL_ServerExtension_UserinfoUpdate_f(void)
 		CL_UserinfoChanged(sb);
 	}
 }
-static qboolean SV_VersionAtLeast(int major, int minor, int patch, int suffix, // woods #serverpl
-	int req_major, int req_minor, int req_patch, int req_suffix)
-{
-	if (major < 0)
-		return false;
-	if (major != req_major)
-		return major > req_major;
-	if (minor != req_minor)
-		return minor > req_minor;
-	if (patch != req_patch)
-		return patch > req_patch;
-	return suffix >= req_suffix;
-}
-
-static void SV_ClientUpdateVersionInfo(client_t *client, const char *verstr) // woods #serverpl
-{
-	const char *p = verstr;
-	char *endptr;
-	long value;
-	int major = -1;
-	int minor = 0;
-	int patch = 0;
-	int suffix = 0;
-
-	if (!client)
-		return;
-
-	if (p && *p)
-	{
-		while (*p && !isdigit((unsigned char)*p))
-			p++;
-		if (*p)
-		{
-			value = strtol(p, &endptr, 10);
-			if (endptr != p)
-			{
-				major = (int)value;
-				p = endptr;
-
-				if (*p == '.')
-				{
-					value = strtol(p + 1, &endptr, 10);
-					if (endptr != p + 1)
-					{
-						minor = (int)value;
-						p = endptr;
-					}
-					else
-						p++;
-				}
-
-				if (*p == '.')
-				{
-					value = strtol(p + 1, &endptr, 10);
-					if (endptr != p + 1)
-					{
-						patch = (int)value;
-						p = endptr;
-					}
-					else
-						p++;
-				}
-
-				while (*p && isspace((unsigned char)*p))
-					p++;
-				if (*p && isalpha((unsigned char)*p))
-					suffix = tolower((unsigned char)*p) - 'a' + 1;
-			}
-		}
-	}
-
-	client->ver_major = major;
-	client->ver_minor = minor;
-	client->ver_patch = patch;
-	client->ver_patch_suffix = suffix;
-	client->supports_pl_drops = SV_VersionAtLeast(major, minor, patch, suffix, 1, 6, 5, 'd' - 'a' + 1);
-	{
-		char suffix_char = suffix ? ('a' + suffix - 1) : '-';
-		Con_DPrintf("verinfo: client=%s *ver=\"%s\" parsed %d.%d.%d%c supports_pl_drops=%d\n",
-			client->name[0] ? client->name : "(unnamed)",
-			verstr ? verstr : "(null)", major, minor, patch, suffix_char, client->supports_pl_drops);
-	}
-}
-
 static void SV_DecodeUserInfo(client_t *client)
 {
 	char tmp[64];
@@ -3809,9 +3701,6 @@ void SV_UpdateInfo(int edict, const char *keyname, const char *value)
 		if (infoplayer)
 		{
 			SV_DecodeUserInfo(infoplayer);
-
-			if (!strcmp(keyname, "*ver"))
-				SV_ClientUpdateVersionInfo(infoplayer, value);
 
 			if (!strcmp(keyname, "name") && infoplayer->name[0]) // woods #dupnames
 				SV_CheckDuplicateNames(infoplayer);
@@ -4009,7 +3898,6 @@ void CL_Init (void)
 	Cmd_AddCommand_ServerCommand ("wps", CL_ServerExtension_Ignore_f); //ktx/cspree weapon stats
 	Cmd_AddCommand_ServerCommand ("it", CL_ServerExtension_ItemTimer_f); //cspree item timers -- woods #obstimers
 	Cmd_AddCommand_ServerCommand ("tinfo", CL_ServerExtension_TeamInfo_f); //ktx team info -- woods #teaminfo
-	Cmd_AddCommand_ServerCommand ("pl", CL_ServerExtension_PL_f); // woods #serverpl
 	Cmd_AddCommand_ServerCommand ("exectrigger", CL_ServerExtension_Ignore_f); //spike
 	Cmd_AddCommand_ServerCommand ("csqc_progname", CL_ServerExtension_Ignore_f); //spike
 	Cmd_AddCommand_ServerCommand ("csqc_progsize", CL_ServerExtension_Ignore_f); //spike

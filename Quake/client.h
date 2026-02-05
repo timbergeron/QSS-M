@@ -56,7 +56,6 @@ typedef struct
 	plcolour_t shirt;
 	plcolour_t pants;
 	int		ping;
-	int		pl; // woods #serverpl
 	int		addr;			// JPG - added this // woods for #iplog
 	int		spectator;	//support for fte's hybrid servers.
 						//FIXME: handle quakeworld's teams.

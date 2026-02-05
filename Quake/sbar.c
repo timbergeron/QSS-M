@@ -2462,29 +2462,6 @@ qboolean flash () // woods #smartstatus
 	return half_seconds % 2 == 0;
 }
 
-// Prefer userinfo "pl" (server) for a given slot; if missing, fall back to client "plc", else scoreboard s->pl.
-// Returns -1 when unknown/unsupported. Clamps to [-1..99].
-static int Sbar_GetPLForSlot(int slot, const scoreboard_t* s) // woods #serverpl
-{
-	int v = -1;
-	char buf[16];
-	const char* plstr = NULL;
-
-	if (slot >= 0 && slot < cl.maxclients) {
-		// If your build stores userinfo elsewhere, swap this pointer accordingly.
-		plstr = Info_GetKey(cl.scores[slot].userinfo, "pl", buf, sizeof(buf));
-		if (!plstr || !*plstr)
-			plstr = Info_GetKey(cl.scores[slot].userinfo, "plc", buf, sizeof(buf));
-		if (plstr && *plstr)
-			v = atoi(plstr);
-		else if (s)
-			v = s->pl; // stuffcmd/ext_pl backup path
-	}
-	if (v < -1) v = -1;
-	if (v > 99) v = 99;
-	return v;
-}
-
 /*
 ==================
 Sbar_DeathmatchOverlay
@@ -2499,37 +2476,11 @@ void Sbar_DeathmatchOverlay (void)
 	int w, w2, y2; // woods for dynamic scoreboard
 	int	xofs, yofs; // woods #scoreboard
 	char	num[12];
+	//charshortname[16]; // woods for dynamic scoreboard during match, don't show ready
 	scoreboard_t	*s;
 	int ct = (SDL_GetTicks() - maptime)/1000; // woods connected map time #maptime
 	qboolean notready = false; // woods #smartstatus
 	qboolean oneready = false; // woods #smartstatus
-
-	qboolean pl_enabled = false;
-	{
-		char vbuf[64];
-		const char* vers = Info_GetKey(cl.serverinfo, "*version", vbuf, sizeof(vbuf));
-		if (vers && *vers)
-		{
-			int maj = 0, min = 0, pat = 0;
-			const char* p = vers;
-			while (*p && !isdigit((unsigned char)*p))
-				p++;
-			if (*p)
-			{
-				int parsed = sscanf(p, "%d.%d.%d", &maj, &min, &pat);
-				if (parsed == 2)
-					pat = 0;
-				if (parsed >= 2)
-				{
-					if (maj > 1 || (maj == 1 && (min > 6 || (min == 6 && pat >= 5))))
-						pl_enabled = true;
-				}
-			}
-		}
-	}
-
-
-	int extra_w = pl_enabled ? 32 : 0;
 
 	// JPG 1.05 - check to see if we should update IP status  // woods for #iplog
 	if (iplog_size && (cl.time - cl.last_status_time > 5))
@@ -2541,14 +2492,23 @@ void Sbar_DeathmatchOverlay (void)
 
 	GL_SetCanvas (CANVAS_SCOREBOARD); //johnfitz  // woods #scoreboard
 
+	/*if (cl.matchinp && cl.modtype != 4) // woods -- match running 0 for CRCTF, 255 for CDMOD
+		w = -64;
+	else*/
 	w = 0;
+		/*if (cl.matchinp && cl.modtype != 4) // woods -- match running 0 for CRCTF, 255 for CDMOD
+		w2 = 32;
+	else*/
 	w2 = 0;
 
 	xofs = (vid.conwidth - 320) >> 1; // woods #scoreboard
 	yofs = (vid.conheight - 200) >> 1; // woods #scoreboard
 
-	x = xofs + 64 - extra_w + w2; // woods #scoreboard
+	x = xofs + 64 + w2; // woods #scoreboard
 	y2 = y = yofs - 20; // woods #smartstatus
+
+	//pic = Draw_CachePic ("gfx/ranking.lmp"); //woods #scoreboard (remove rankings logo)
+	//M_DrawPic ((320-pic->width)/2, 8, pic); woods #scoreboard
 
 // scores
 	if (scr_scoreboard_teamsort.value && Sbar_ShouldSortByTeam()) // woods #teamscoreboard
@@ -2564,12 +2524,16 @@ void Sbar_DeathmatchOverlay (void)
 
 	// woods for qrack +scoresbg #scoreboard
 
-	Draw_Fill (x - 64, y - 11, 328 + w + extra_w, 10, 16, 1);		//inside
-	Draw_Fill (x - 64, y - 12, 329 + w + extra_w, 1, 0, 1);		//Border - Top
+	Draw_Fill (x - 64, y - 11, 328 + w, 10, 16, 1);		//inside
+	Draw_Fill (x - 64, y - 12, 329 + w, 1, 0, 1);		//Border - Top
 	Draw_Fill (x - 64, y - 12, 1, 11, 0, 1);			//Border - Left
-	Draw_Fill (x + 264 + w + extra_w, y - 12, 1, 11, 0, 1);		//Border - Right
-	Draw_Fill (x - 64, y - 1, 329 + w + extra_w, 1, 0, 1);		//Border - Bottom
-	Draw_Fill (x - 64, y - 1, 329 + w + extra_w, 1, 0, 1);		//Border - Top
+	Draw_Fill (x + 264 + w, y - 12, 1, 11, 0, 1);		//Border - Right
+	Draw_Fill (x - 64, y - 1, 329 + w, 1, 0, 1);		//Border - Bottom
+	Draw_Fill (x - 64, y - 1, 329 + w, 1, 0, 1);		//Border - Top
+
+	/*if (cl.matchinp) // woods -- match running 0 for CRCTF, 255 for CDMOD
+		Draw_String(x - 64, y - 10, "  ping  frags   name"); // woods
+	else*/
 
 	oneready = false; // woods #smartstatus
 
@@ -2608,89 +2572,93 @@ void Sbar_DeathmatchOverlay (void)
 
 		if (k == cl.viewentity - 1) // #scoreboard
 		{
-			Draw_Fill(x - 63, y, 328 + w + extra_w, 10, 20, .8);  // woods
+			Draw_Fill(x - 63, y, 328 + w, 10, 20, .8);  // woods
 		}
 		else
 		{
-			Draw_Fill(x - 63, y, 328 + w + extra_w, 10, 18, .8);  // woods
+			Draw_Fill(x - 63, y, 328 + w, 10, 18, .8);  // woods
 		}
 
 		Draw_Fill(x - 64, y, 1, 10, 0, 1);	//Border - Left // woods #scoreboard
-		Draw_Fill(x + 264 + w + extra_w, y, 1, 10, 0, 1);	//Border - Right // woods #scoreboard
+		Draw_Fill(x + 264 + w, y, 1, 10, 0, 1);	//Border - Right // woods #scoreboard
 
 	// draw background
 		if (S_Voip_Speaking(k))	//spike -- display an underlay for people who are speaking
-			Draw_Fill ( x, y, 320-x*2 + extra_w, 8, ((k+1)==cl.viewentity)?75:73, 1);
+			Draw_Fill ( x, y, 320-x*2, 8, ((k+1)==cl.viewentity)?75:73, 1);
 		//else
 		//	Draw_Fill ( x, y, 320-x*2, 8, 0, 0.3);	//or darken it for readability. noisy backgrounds make text hard to read.
 
 		if (s->spectator == 1)	//2 is 'spectator-with-scores' (temporarily inactive players).
 		{
-			M_PrintWhite (x + extra_w, y, "spect");
+			M_PrintWhite (x, y, "spect");
 		}
 		else
 		{
-			Draw_FillPlayer (x + extra_w, y, 40, 4, s->shirt, 1); //johnfitz -- stretched overlays
-			Draw_FillPlayer (x + extra_w, y+4, 40, 4, s->pants, 1); //johnfitz -- stretched overlays
+			Draw_FillPlayer ( x, y, 40, 4, s->shirt, 1); //johnfitz -- stretched overlays
+			Draw_FillPlayer ( x, y+4, 40, 4, s->pants, 1); //johnfitz -- stretched overlays
 
 		// draw number
 			f = s->frags;
 			sprintf (num, "%3i",f);
 
-			Draw_Character (x+8 + extra_w, y, num[0]); //johnfitz -- stretched overlays
-			Draw_Character (x+16 + extra_w, y, num[1]); //johnfitz -- stretched overlays
-			Draw_Character (x+24 + extra_w, y, num[2]); //johnfitz -- stretched overlays
+			Draw_Character ( x+8 , y, num[0]); //johnfitz -- stretched overlays
+			Draw_Character ( x+16 , y, num[1]); //johnfitz -- stretched overlays
+			Draw_Character ( x+24 , y, num[2]); //johnfitz -- stretched overlays
 
 			if (k == cl.viewentity - 1)
-				Draw_Character (x - 8, y, 12); //johnfitz -- stretched overlays
+				Draw_Character ( x - 8, y, 12); //johnfitz -- stretched overlays
 		}
+
+#if 0
+		{
+			int total;
+			int n, minutes, tens, units;
+
+			// draw time
+			total = cl.completed_time - s->entertime;
+			minutes = (int)total/60;
+			n = total - minutes*60;
+			tens = n/10;
+			units = n%10;
+
+			sprintf (num, "%3i:%i%i", minutes, tens, units);
+
+			M_Print ( x+48 , y, num); //johnfitz -- was Draw_String, changed for stretched overlays
+		}
+#endif
 
 		sprintf (num, "%4i", s->ping);
 		if (ct > 5) // woods don't print 0 print on connect
 		M_PrintWhite ((x-8*4)-22, y, num); //johnfitz -- was Draw_String, changed for stretched overlays // woods centered ping #scoreboard
 
-		// Packet loss column: userinfo "pl" if present, else scoreboard s->pl (backup).
-		if (pl_enabled && ct > 5) {
-			int raw_pl = Sbar_GetPLForSlot(k, s);
-			if (raw_pl < 0) {
-				// Unknown -> show translucent white "0"
-				plcolour_t c;
-				c.type = 2;  c.rgb[0] = 255; c.rgb[1] = 255; c.rgb[2] = 255;
-				Draw_StringRGBA(x - 4, y, " 0", c, 0.3f);
-			} else {
-				if (raw_pl > 99) raw_pl = 99;
-				sprintf(num, "%2i", raw_pl);
-				if (raw_pl >= 10)
-					M_Print(x - 4, y, num);       // red
-				else
-					M_PrintWhite(x - 4, y, num);  // white
-			}
+	// draw name
+		/*if (cl.matchinp) // match running 0 for CRCTF, 255 for CDMOD
+		{
+			sprintf (shortname, "%.15s", s->name); // woods only show name, not 'ready' or 'afk' -- 15 characters
+			M_PrintWhite (x + 64, y, shortname); //johnfitz -- was Draw_String, changed for stretched overlays // woods changed to white #scoreboard
 		}
-
+		else*/
 
 		if (cl_contentfilter.value == 2 && was_filtered) // woods #contentfilter
 		{
-			M_PrintWhite(x + 64 + extra_w, y, filtered_name);
+			M_PrintWhite(x + 64, y, filtered_name);
 		}
 		else {
-			M_PrintWhite(x + 64 + extra_w, y, s->name); //johnfitz -- was Draw_String, changed for stretched overlays // woods changed to white #scoreboard
+			M_PrintWhite(x + 64, y, s->name); //johnfitz -- was Draw_String, changed for stretched overlays // woods changed to white #scoreboard
 		}
 		
 		y += 10;
 	}
 
-	if (pl_enabled)
-		Draw_String(x - 64, y2 - 10, "  ping  pl  frags   name");
-	else
-		Draw_String(x - 64, y2 - 10, "  ping  frags   name"); // woods #smartstatus
+	Draw_String(x - 64, y2 - 10, "  ping  frags   name"); // woods #smartstatus
 
 	if (flash() && notready && oneready) // on odd second, if im not ready AND someone else is ready
-		M_Print(x + 192 + extra_w, y2 - 10, "status");
+		M_Print(x + 192, y2 - 10, "status");
 	else
 		Draw_String
-		(x + 192 + extra_w, y2 - 10, "status");
+		(x + 192, y2 - 10, "status");
 
-	Draw_Fill(x - 64, y, 329 + w + extra_w, 1, 0, 1);	//Border - Bottom // woods #scoreboard
+	Draw_Fill(x - 64, y, 329 + w, 1, 0, 1);	//Border - Bottom // woods #scoreboard
 
 	GL_SetCanvas (CANVAS_SBAR); //johnfitz
 

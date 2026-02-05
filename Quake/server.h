@@ -157,10 +157,6 @@ typedef struct client_s
 
 	float			ping_times[NUM_PING_TIMES];
 	int				num_pings;			// ping_times[num_pings%NUM_PING_TIMES]
-	// woods #serverpl -- smoothed server->client packet loss (0..255) and publish throttle
-	byte    lossage;                // EMA of instantaneous loss scaled to 0..255
-	double  next_pl_publish_time;   // next allowed time to broadcast updated "pl"
-	byte    last_pl_percent;        // cached last published percent to avoid churn
 
 // spawn parms are carried from level to level
 	float			spawn_parms[NUM_TOTAL_SPAWN_PARMS];
@@ -223,13 +219,6 @@ typedef struct client_s
 	int lastmovemessage;
 	double lastmovetime;
 	qboolean usingpmove;	//using the SV_RunClientCommand entrypoint, or getting pmove thrust upon them serverside (disables sv_user.c+movetype stuff, enables provides pmove hints to the client)
-
-	// woods #serverpl
-	int			ver_major;
-	int			ver_minor;
-	int			ver_patch;
-	int			ver_patch_suffix; /* 1 == 'a' */
-	qboolean	supports_pl_drops; /* true => safe to send stuffcmd pl -1 ... */
 
 	char userinfo[1024];	//spike -- for csqc to (ab)use.
 	client_voip_t voip;	//spike -- for voip
