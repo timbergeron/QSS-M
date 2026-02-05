@@ -634,7 +634,7 @@ void S_StopSound (int entnum, int entchannel)
 {
 	int	i;
 
-	for (i = 0; i < MAX_DYNAMIC_CHANNELS; i++)
+	for (i = NUM_AMBIENTS; i < NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS; i++) // woods
 	{
 		if (snd_channels[i].entnum == entnum
 			&& snd_channels[i].entchannel == entchannel)
