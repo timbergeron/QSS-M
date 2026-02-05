@@ -910,6 +910,7 @@ static void VID_Restart (void)
 // which is later deleted.
 
 	RSceneCache_Shutdown();
+	Sky_ResetGL();
 	TexMgr_DeleteTextureObjects ();
 	GLSLGamma_DeleteTexture ();
 	R_ScaleView_DeleteTexture ();

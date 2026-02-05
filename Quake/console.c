@@ -3582,6 +3582,45 @@ static qboolean CompleteLoad(const char* partial, void* unused)
 	return true;
 }
 
+static qboolean CompleteSkywind(const char* partial, void* unused)
+{
+	static const char* const distance_options[] = { "0", "0.25", "0.5", "0.75", "1", "1.5", "2", "-1", "-2" };
+	static const char* const yaw_options[] = { "0", "45", "90", "135", "180", "225", "270", "315" };
+	static const char* const period_options[] = { "10", "20", "30", "45", "60" };
+	static const char* const pitch_options[] = { "-45", "-30", "-15", "0", "15", "30", "45" };
+
+	const char* const* options = NULL;
+	size_t option_count = 0;
+	int argc = Cmd_Argc();
+
+	switch (argc)
+	{
+	case 2:
+		options = distance_options;
+		option_count = sizeof(distance_options) / sizeof(distance_options[0]);
+		break;
+	case 3:
+		options = yaw_options;
+		option_count = sizeof(yaw_options) / sizeof(yaw_options[0]);
+		break;
+	case 4:
+		options = period_options;
+		option_count = sizeof(period_options) / sizeof(period_options[0]);
+		break;
+	case 5:
+		options = pitch_options;
+		option_count = sizeof(pitch_options) / sizeof(pitch_options[0]);
+		break;
+	default:
+		return false;
+	}
+
+	for (size_t i = 0; i < option_count; i++)
+		Con_AddToTabList(options[i], partial, NULL, NULL);
+
+	return option_count > 0;
+}
+
 extern qboolean CompletePAKList(const char* partial, void* unused); // woods #unpak
 
 qboolean CompleteImageList (const char* partial, void* unused); // woods
@@ -3607,6 +3646,7 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "playdemo",				CompleteFileListDemo,	&demolist },
 	{ "timedemo",				CompleteFileListDemo,	&demolist },
 	{ "sky",					CompleteFileList,		&skylist },
+	{ "skywind",				CompleteSkywind,		NULL },
 	{ "exec",					CompleteFileList,		&execlist },
 	{ "connect",				CompleteFileList,		&serverlist },
 	{ "test",					CompleteFileList,		&serverlist },

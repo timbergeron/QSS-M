@@ -741,6 +741,7 @@ void R_SetupView (void)
 	R_AnimateLight ();
 
 	Fog_SetupFrame (); //johnfitz
+	Skywind_SetupFrame();
 
 // build the transformation matrix for the given view angles
 	VectorCopy (r_refdef.vieworg, r_origin);

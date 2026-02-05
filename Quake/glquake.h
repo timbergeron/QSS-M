@@ -491,6 +491,8 @@ void Sky_Init (void);
 void Sky_ClearAll (void);
 void Sky_DrawSky (void);
 void Sky_NewMap (void);
+void Skywind_SetupFrame(void);
+void Sky_ResetGL (void);
 void Sky_LoadTexture (qmodel_t *mod, texture_t *mt, enum srcformat fmt, unsigned int width, unsigned int height);
 void Sky_LoadTextureQ64 (qmodel_t *mod, texture_t *mt);
 qboolean  Sky_LoadExternalTextures (qmodel_t* mod, texture_t* mt); // woods #extsky
