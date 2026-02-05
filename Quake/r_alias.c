@@ -671,6 +671,36 @@ void R_BeginAliasOutlineRendering(aliasglsl_t* glsl)
 
 /*
 =============
+R_IsOutlineBoundsFadeEnabled -- woods #routline
+
+Enable outline bounds fade only when in noclip-like modes.
+Includes CRMod7 observer fly (userinfo "observer" = "fly").
+=============
+*/
+static qboolean R_IsOutlineBoundsFadeEnabled(void)
+{
+	if (noclip_anglehack)
+		return true;
+
+	if (sv.active && sv_player &&
+		(sv_player->v.movetype == MOVETYPE_NOCLIP || sv_player->v.movetype == MOVETYPE_FLY))
+		return true;
+
+	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected) &&
+		cl.realviewentity >= 1 && cl.realviewentity <= cl.maxclients)
+	{
+		char buf[16], buf2[16];
+		const char* obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf));
+		const char* star_obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf2, sizeof(buf2));
+		if (!strcmp(obs, "fly") || !strcmp(star_obs, "fly"))
+			return true;
+	}
+
+	return false;
+}
+
+/*
+=============
 R_GetEntityBoundsFadeFactor -- woods #routline
 
 Returns a fade factor (0.0 to 1.0) based on view proximity to entity bounds.
@@ -780,10 +810,14 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	if (outlineWidth <= 0.0f)
 		return;
 
-	// Fade out outline as view enters entity bounds
-	float boundsFade = R_GetEntityBoundsFadeFactor(e);
-	if (boundsFade <= 0.0f)
-		return;
+	// Fade out outline as view enters entity bounds (noclip/fly only)
+	float boundsFade = 1.0f;
+	if (R_IsOutlineBoundsFadeEnabled())
+	{
+		boundsFade = R_GetEntityBoundsFadeFactor(e);
+		if (boundsFade <= 0.0f)
+			return;
+	}
 
 	// Configure stencil to only draw where stencil is not set by the model
 	glStencilFunc(GL_NOTEQUAL, 1, 0xFF); // Pass test where stencil is not 1
