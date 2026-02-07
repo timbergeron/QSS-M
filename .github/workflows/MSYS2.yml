@@ -29,6 +29,8 @@ jobs:
           make
           mingw-w64-${{ matrix.arch }}-gcc
           mingw-w64-${{ matrix.arch }}-binutils
+          mingw-w64-${{ matrix.arch }}-pkgconf
+          mingw-w64-${{ matrix.arch }}-gnutls
           mingw-w64-${{ matrix.arch }}-SDL2
           mingw-w64-${{ matrix.arch }}-libmad
           mingw-w64-${{ matrix.arch }}-opus
@@ -51,24 +53,126 @@ jobs:
     - name: Build and Package
       shell: msys2 {0}
       run: |
+        set -euxo pipefail
         cd Quake || {
           echo "Quake directory not found. Exiting."
           exit 1
         }
 
+        mingw_prefix="/mingw${{ matrix.bits }}"
+        target_triple="${{ matrix.arch }}-w64-mingw32"
+
+        echo "==== MSYS2 GNUTLS DEBUG BEGIN ===="
+        echo "MSYSTEM=${MSYSTEM:-<unset>}"
+        echo "MINGW_PREFIX=${MINGW_PREFIX:-<unset>}"
+        echo "Using workflow mingw_prefix=$mingw_prefix"
+        echo "target_triple=$target_triple"
+        echo "PATH=$PATH"
+        echo
+        echo "[tool locations]"
+        command -v make || true
+        command -v gcc || true
+        command -v pkg-config || true
+        command -v pkgconf || true
+        command -v "${target_triple}-pkg-config" || true
+        command -v "${target_triple}-pkgconf" || true
+        ls -l /usr/bin/pkg-config /usr/bin/pkgconf 2>/dev/null || true
+        ls -l "$mingw_prefix/bin/pkg-config" "$mingw_prefix/bin/pkgconf" 2>/dev/null || true
+        ls -l "/usr/bin/${target_triple}-pkg-config" "/usr/bin/${target_triple}-pkgconf" 2>/dev/null || true
+        echo
+        echo "[installed packages]"
+        pacman -Q | grep -Ei "mingw-w64-.*(gnutls|pkgconf|gcc|curl|sdl2|zlib)" || true
+        echo
+        echo "[gnutls package file listing]"
+        pacman -Ql "mingw-w64-${{ matrix.arch }}-gnutls" | sed -n '1,200p' || true
+        echo
+        echo "[pkgconfig files]"
+        ls -l "$mingw_prefix/lib/pkgconfig/gnutls.pc" 2>/dev/null || true
+        ls -l "$mingw_prefix/share/pkgconfig" 2>/dev/null || true
+        find "$mingw_prefix" -path "*/pkgconfig/gnutls.pc" -print 2>/dev/null || true
+        echo
+        echo "[probe pkg-config binaries]"
+        pkg-config --version || true
+        pkg-config --variable pc_path pkg-config || true
+        pkg-config --modversion gnutls || true
+        pkg-config --cflags gnutls || true
+        pkg-config --libs gnutls || true
+        if command -v "${target_triple}-pkg-config" >/dev/null 2>&1; then
+          "${target_triple}-pkg-config" --version || true
+          "${target_triple}-pkg-config" --modversion gnutls || true
+          "${target_triple}-pkg-config" --cflags gnutls || true
+          "${target_triple}-pkg-config" --libs gnutls || true
+        fi
+        echo "==== MSYS2 GNUTLS DEBUG END ===="
+
+        # Ensure stale dependency/object files from other environments never leak in
+        make -f Makefile.w64 clean >/dev/null 2>&1 || true
+        make -f Makefile.w32 clean >/dev/null 2>&1 || true
+        rm -f -- ./*.d ./*.o ./*.res
+        find . -maxdepth 1 -type f \( -name '*.d' -o -name '*.o' -o -name '*.res' \) -delete
+
+        # Force MinGW pkg-config explicitly and pin search paths
+        export PKG_CONFIG="$mingw_prefix/bin/pkg-config"
+        export PKG_CONFIG_PATH="$mingw_prefix/lib/pkgconfig:$mingw_prefix/share/pkgconfig"
+        export PKG_CONFIG_LIBDIR="$mingw_prefix/lib/pkgconfig:$mingw_prefix/share/pkgconfig"
+        echo "Selected PKG_CONFIG=$PKG_CONFIG"
+        "$PKG_CONFIG" --version
+        "$PKG_CONFIG" --variable pc_path pkg-config || true
+        "$PKG_CONFIG" --modversion gnutls || true
+        "$PKG_CONFIG" --cflags gnutls || true
+        "$PKG_CONFIG" --libs gnutls || true
+
+        # Fail-fast if GNUTLS cannot be resolved in this MSYS2 environment
+        if ! "$PKG_CONFIG" --exists gnutls; then
+          echo "ERROR: pkg-config cannot find gnutls in ${MSYSTEM}."
+          echo "pkg-config path: $(command -v "$PKG_CONFIG" || true)"
+          "$PKG_CONFIG" --variable pc_path pkg-config || true
+          "$PKG_CONFIG" --cflags gnutls || true
+          "$PKG_CONFIG" --libs gnutls || true
+          pacman -Q | grep -Ei "mingw-w64-.*(gnutls|pkgconf)" || true
+          exit 1
+        fi
+
         # Set build-specific environment variables
         export QSS_CFLAGS="-DQSS_REVISION=$(git rev-parse HEAD)"
         export QSS_LDFLAGS="-Wl,--allow-multiple-definition"
+        runtime_bin="/mingw${{ matrix.bits }}/bin"
+        gnutls_runtime=()
+        for pat in \
+          "libgnutls-*.dll" \
+          "libnettle-*.dll" \
+          "libhogweed-*.dll" \
+          "libgmp-*.dll" \
+          "libidn2-*.dll" \
+          "libunistring-*.dll" \
+          "libtasn1-*.dll" \
+          "libiconv-*.dll" \
+          "libp11-kit-*.dll" \
+          "libffi-*.dll"
+        do
+          for f in "$runtime_bin"/$pat; do
+            [ -e "$f" ] || continue
+            gnutls_runtime+=("$f")
+          done
+        done
         
         # Run the build with platform-specific makefile
         if [ "${{ matrix.platform }}" = "w64" ]; then
-          make -f Makefile.w64 USE_SDL2=1 -j8
+          make -f Makefile.w64 USE_SDL2=1 SDL_CONFIG=sdl2-config PKG_CONFIG="$PKG_CONFIG" -j8 2>&1 | tee build-w64.log
+          if grep -q "gnutls not found via pkg-config" build-w64.log; then
+            echo "ERROR: w64 build fell back to non-GNUTLS."
+            exit 1
+          fi
           mv quakespasm.exe QSS-M-w64.exe
-          zip -9j QSS-M-w64.zip ../Windows/codecs/x64/*.dll ../Windows/curl/lib/x64/libcurl.dll ../Windows/zlib/x64/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL2/lib64/SDL2.dll ../QSS-M-Revision.txt QSS-M-w64.exe
+          zip -9j QSS-M-w64.zip ../Windows/codecs/x64/*.dll ../Windows/curl/lib/x64/libcurl.dll ../Windows/zlib/x64/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL2/lib64/SDL2.dll ../QSS-M-Revision.txt QSS-M-w64.exe "${gnutls_runtime[@]}"
         else
-          make -f Makefile.w32 USE_SDL2=1 -j8
+          make -f Makefile.w32 USE_SDL2=1 SDL_CONFIG=sdl2-config PKG_CONFIG="$PKG_CONFIG" -j8 2>&1 | tee build-w32.log
+          if grep -q "gnutls not found via pkg-config" build-w32.log; then
+            echo "ERROR: w32 build fell back to non-GNUTLS."
+            exit 1
+          fi
           mv quakespasm.exe QSS-M-w32.exe
-          zip -9j QSS-M-w32.zip ../Windows/codecs/x86/*.dll ../Windows/curl/lib/x86/libcurl.dll ../Windows/zlib/x86/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL2/lib/SDL2.dll ../QSS-M-Revision.txt QSS-M-w32.exe
+          zip -9j QSS-M-w32.zip ../Windows/codecs/x86/*.dll ../Windows/curl/lib/x86/libcurl.dll ../Windows/zlib/x86/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL2/lib/SDL2.dll ../QSS-M-Revision.txt QSS-M-w32.exe "${gnutls_runtime[@]}"
         fi
 
     - name: Upload artifact

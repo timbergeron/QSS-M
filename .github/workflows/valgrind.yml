@@ -26,6 +26,7 @@ jobs:
           libarchive-tools \
           xvfb \
           pkg-config \
+          libgnutls28-dev \
           zip \
           valgrind \
           wget \

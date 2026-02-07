@@ -1,7 +1,8 @@
 name: macOS CI (Xcode)
 
 on:
-  push
+  push:
+  pull_request:
 
 jobs:
   build:
@@ -13,15 +14,111 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: macOS
-      if: runner.os == 'macOS'
+    - name: Debug environment (pre-install)
       run: |
+          echo "=== Runner info ==="
+          uname -a
+          sw_vers
+          echo ""
+          echo "=== Current PATH ==="
+          echo "$PATH" | tr ':' '\n'
+          echo ""
+          echo "=== Homebrew location ==="
+          which brew 2>/dev/null || echo "brew not in PATH"
+          ls -la /opt/homebrew/bin/brew 2>/dev/null || echo "/opt/homebrew/bin/brew not found"
+          ls -la /usr/local/bin/brew 2>/dev/null || echo "/usr/local/bin/brew not found"
+          echo ""
+          echo "=== Check tools BEFORE brew install ==="
+          echo "autoconf: $(command -v autoconf 2>/dev/null || echo 'NOT FOUND')"
+          echo "automake: $(command -v automake 2>/dev/null || echo 'NOT FOUND')"
+          echo "libtool:  $(command -v libtool 2>/dev/null || echo 'NOT FOUND')"
+          echo "libtoolize: $(command -v libtoolize 2>/dev/null || echo 'NOT FOUND')"
+          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
+          echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
+          echo "git: $(command -v git 2>/dev/null || echo 'NOT FOUND')"
+          echo "lipo: $(command -v lipo 2>/dev/null || echo 'NOT FOUND')"
+          echo "xcodebuild: $(command -v xcodebuild 2>/dev/null || echo 'NOT FOUND')"
+
+    - name: Setup Homebrew and install dependencies
+      run: |
+          echo "=== Evaluating brew shellenv ==="
+          if [ -x /opt/homebrew/bin/brew ]; then
+            echo "Using /opt/homebrew/bin/brew"
+            eval "$(/opt/homebrew/bin/brew shellenv)"
+          elif [ -x /usr/local/bin/brew ]; then
+            echo "Using /usr/local/bin/brew"
+            eval "$(/usr/local/bin/brew shellenv)"
+          else
+            echo "ERROR: brew not found at either location!"
+            exit 1
+          fi
+          echo ""
+          echo "=== PATH after brew shellenv ==="
+          echo "$PATH" | tr ':' '\n'
+          echo ""
+          echo "=== Installing packages ==="
+          brew install autoconf automake libtool pkg-config autoconf-archive
+          echo ""
+          echo "=== Verify installed tools ==="
+          echo "autoconf: $(command -v autoconf) -> $(autoconf --version | head -1)"
+          echo "automake: $(command -v automake) -> $(automake --version | head -1)"
+          echo "libtoolize: $(command -v libtoolize 2>/dev/null || echo 'NOT FOUND')"
+          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
+          echo "pkg-config: $(command -v pkg-config) -> $(pkg-config --version)"
+          echo ""
+          echo "=== Homebrew prefix ==="
+          brew --prefix
+          echo "=== Homebrew bin contents (autotools related) ==="
+          ls -la "$(brew --prefix)/bin/"*libtool* 2>/dev/null || echo "no libtool binaries in brew bin"
+          ls -la "$(brew --prefix)/bin/"*auto* 2>/dev/null || echo "no auto* binaries in brew bin"
+
+    - name: Debug environment (post-install)
+      run: |
+          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
+          echo "=== PATH in new shell step ==="
+          echo "$PATH" | tr ':' '\n'
+          echo ""
+          echo "=== Tool check in new shell step ==="
+          echo "autoconf: $(command -v autoconf 2>/dev/null || echo 'NOT FOUND')"
+          echo "automake: $(command -v automake 2>/dev/null || echo 'NOT FOUND')"
+          echo "libtoolize: $(command -v libtoolize 2>/dev/null || echo 'NOT FOUND')"
+          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
+          echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
+          echo ""
+          echo "=== setup-vcpkg.sh will check these ==="
+          for cmd in git lipo autoconf automake pkg-config; do
+            if command -v "$cmd" >/dev/null 2>&1; then
+              echo "  $cmd: OK ($(command -v $cmd))"
+            else
+              echo "  $cmd: MISSING"
+            fi
+          done
+          echo ""
+          echo "=== libtoolize shim logic preview ==="
+          if command -v libtoolize >/dev/null 2>&1; then
+            echo "  libtoolize found natively at $(command -v libtoolize)"
+          elif command -v glibtoolize >/dev/null 2>&1; then
+            echo "  glibtoolize found at $(command -v glibtoolize) -- shim will be created"
+          else
+            echo "  NEITHER libtoolize NOR glibtoolize found -- this will FAIL"
+          fi
+
+    - name: Build
+      run: |
+          echo "=== Build step starting ==="
+          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
+          echo "PATH: $PATH"
+          echo "autoconf: $(command -v autoconf 2>/dev/null || echo 'NOT FOUND')"
+          echo "automake: $(command -v automake 2>/dev/null || echo 'NOT FOUND')"
+          echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
+          echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
+          echo ""
           cd MacOSX
+          echo "=== Running build-macos.sh ==="
           ./build-macos.sh
 
     - name: Upload macOS artifact
       uses: actions/upload-artifact@v4
-      if: runner.os == 'macOS'
       with:
         name: QSS-M
         path: |

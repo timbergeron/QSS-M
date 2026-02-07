@@ -736,12 +736,17 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 			Sys_Error("Couldn't set fullscreen state mode");
 	}
 
-	/* Set window size and display mode */
-	SDL_SetWindowSize (draw_context, width, height);
-	if (previous_display >= 0)
-		SDL_SetWindowPosition (draw_context, SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display), SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display));
+	if (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_MAXIMIZED)
+		;	//don't resize/move it when already maximised. this avoids sdl2 bugs.
 	else
-		SDL_SetWindowPosition(draw_context, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+	{
+		/* Set window size and display mode */
+		SDL_SetWindowSize (draw_context, width, height);
+		if (previous_display >= 0)
+			SDL_SetWindowPosition (draw_context, SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display), SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display));
+		else
+			SDL_SetWindowPosition(draw_context, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+	}
 	SDL_SetWindowDisplayMode (draw_context, VID_SDL2_GetDisplayMode(width, height, refreshrate, bpp));
 	SDL_SetWindowBordered (draw_context, vid_borderless.value ? SDL_FALSE : SDL_TRUE);
 
@@ -772,6 +777,7 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	if (SDL_GL_SetSwapInterval ((vid_vsync.value) ? 1 : 0) == -1)
 		gl_swap_control = false;
 
+	SDL_GL_GetDrawableSize(draw_context, &vid.width, &vid.height);
 #else /* !defined(USE_SDL2) */
 
 	flags = DEFAULT_SDL_FLAGS;
@@ -804,10 +810,11 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	}
 
 	SDL_WM_SetCaption(caption, caption);
-#endif /* !defined(USE_SDL2) */
 
 	vid.width = VID_GetCurrentWidth();
 	vid.height = VID_GetCurrentHeight();
+#endif /* !defined(USE_SDL2) */
+
 	vid.conwidth = vid.width & 0xFFFFFFF8;
 	vid.conheight = vid.conwidth * vid.height / vid.width;
 	vid.numpages = 2;

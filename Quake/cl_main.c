@@ -67,7 +67,7 @@ cvar_t	cl_maxpitch = {"cl_maxpitch", "90", CVAR_ARCHIVE}; //johnfitz -- variable
 cvar_t	cl_minpitch = {"cl_minpitch", "-90", CVAR_ARCHIVE}; //johnfitz -- variable pitch clamping
 
 cvar_t cl_recordingdemo = {"cl_recordingdemo", "", CVAR_ROM};	//the name of the currently-recording demo.
-cvar_t	cl_demoreel = {"cl_demoreel", "0", CVAR_ARCHIVE};
+cvar_t	cl_demoreel = {"cl_demoreel", "1", CVAR_ARCHIVE};
 
 cvar_t	cl_beams_polygons = {"cl_beams_polygons", "0", CVAR_ARCHIVE}; // woods #beamspoly
 cvar_t	cl_truelightning = {"cl_truelightning", "0",CVAR_ARCHIVE}; // woods for #truelight
@@ -290,7 +290,7 @@ void CL_EstablishConnection (const char *host)
 	static char lasthost[NET_NAMELEN];
 
 	char addressip[70] = {'\0'}; // woods
-	char local_verbose[64]; // woods
+	char local_verbose[NET_NAMELEN + sizeof(addressip)]; // woods
 
 	int	numaddresses; // woods
 	qhostaddr_t addresses[16]; // woods
@@ -318,12 +318,18 @@ void CL_EstablishConnection (const char *host)
 	numaddresses = NET_ListAddresses(addresses, sizeof(addresses) / sizeof(addresses[0])); // woods
 
 	if (numaddresses && !strstr(addresses[0], "[")) // woods, no [ for ipv6
-		snprintf(addressip, sizeof(addressip), " -- %s", addresses[0]);
+	{
+		q_strlcpy(addressip, " -- ", sizeof(addressip));
+		q_strlcat(addressip, addresses[0], sizeof(addressip));
+	}
 
 	if (!strcmp(host, "local") || !strcmp(host, "localhost")) // woods
-		sprintf(local_verbose, "%s%s", host, addressip);
+	{
+		q_strlcpy(local_verbose, host, sizeof(local_verbose));
+		q_strlcat(local_verbose, addressip, sizeof(local_verbose));
+	}
 	else
-		sprintf(local_verbose, "%s", host);
+		q_strlcpy(local_verbose, host, sizeof(local_verbose));
 
 	if (!strstr(lasthost, ":"))
 		Con_Printf("connecting to ^m%s:%i\n", local_verbose, net_hostport); // woods include port if not specified
@@ -1080,7 +1086,7 @@ static void CL_ClientsidePowerupColor(entity_t* ent, int entnum)
 
 	/* Non-local ents: only known player models */
 	if (!is_local) {
-		if (!ent->model || !ent->model->name) return;
+		if (!ent->model || !ent->model->name[0]) return;
 		if (strcmp(ent->model->name, "progs/player.mdl"))
 			return;
 	}
@@ -2950,8 +2956,8 @@ int CL_ReadFromServer (void)
 		CL_ParseServerMessage ();
 	} while (ret && cls.state == ca_connected);
 
-	if (cl_shownet.value)
-		Con_Printf ("\n");
+//	if (cl_shownet.value)
+//		Con_Printf ("\n");
 
 	PR_SwitchQCVM(&cl.qcvm);
 	CL_RelinkEntities ();
@@ -3915,4 +3921,3 @@ void CL_Init (void)
 	Cmd_AddCommand_ServerCommand ("cl_downloadfinished", CL_Download_Finished_f); //spike
 	Cmd_AddCommand ("stopdownload", CL_StopDownload_f); //spike
 }
-

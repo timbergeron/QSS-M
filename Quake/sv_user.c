@@ -879,7 +879,20 @@ qboolean SV_ReadClientMessage (void)
 	return true;
 }
 
-
+static void NET_GotServerMessage(struct qsocket_s *sock)
+{
+	int i;
+	for (i=0, host_client = svs.clients ; i<svs.maxclients ; i++, host_client++)
+	{
+		if (host_client->netconnection == sock)
+		{
+			sv_player = host_client->edict;
+			if (!SV_ReadClientMessage ())
+				SV_DropClient (false);	// client misbehaved...
+			break;
+		}
+	}
+}
 /*
 ==================
 SV_RunClients
@@ -890,28 +903,10 @@ void SV_RunClients (void)
 	int				i;
 
 	//receive from clients first
-	//Spike -- reworked this to query the network code for an active connection.
-	//this allows the network code to serve multiple clients with the same listening port.
-	//this solves server-side nats, which is important for coop etc.
-	while(1)
-	{
-		struct qsocket_s *sock = NET_GetServerMessage();
-		if (!sock)
-			break;	//no more this frame
-
-		for (i=0, host_client = svs.clients ; i<svs.maxclients ; i++, host_client++)
-		{
-			if (host_client->netconnection == sock)
-			{
-				sv_player = host_client->edict;
-				if (!SV_ReadClientMessage ())
-				{
-					SV_DropClient (false);	// client misbehaved...
-					break;
-				}
-			}
-		}
-	}
+	//Spike -- reworked this to use callback with connection context.
+	//this allows the network code to serve multiple clients with the same listening port and without having to requery the ipv4 socket for each extra ipv6 packet etc.
+	//which solves server-side nats, which is important for coop etc.
+	NET_GetServerMessages(NET_GotServerMessage);
 
 	//then do the per-frame stuff
 	for (i=0, host_client = svs.clients ; i<svs.maxclients ; i++, host_client++)

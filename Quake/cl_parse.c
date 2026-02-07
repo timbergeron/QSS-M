@@ -4429,4 +4429,3 @@ void CL_ParseServerMessage (void)
 		lastcmd = cmd; //johnfitz
 	}
 }
-

@@ -129,6 +129,10 @@ CCREP_RULE_INFO
 #define CCREP_RULE_INFO		0x85
 #define CCREP_RCON			0x86
 
+#define MOD_PROQUAKE	1	//engines that want more precise angles will use this as an identifier.
+#define PQF_CHEATFREE	0x01
+#define PQF_IGNOREPORT	0x80	//defined by Spike rather than proquake, to say the server is using a single port and that its best to just continue to use whatever port you were already using.
+
 typedef struct qsocket_s
 {
 	struct qsocket_s	*next;
@@ -145,6 +149,7 @@ typedef struct qsocket_s
 	int		landriver;
 	sys_socket_t	socket;
 	void		*driverdata;
+	void		*driverdata2;
 
 	unsigned int	ackSequence;
 	unsigned int	sendSequence;
@@ -212,7 +217,7 @@ typedef struct
 	qboolean	(*SearchForHosts) (qboolean xmit);
 	qsocket_t	*(*Connect) (const char *host);
 	qsocket_t	*(*CheckNewConnections) (void);
-	qsocket_t	*(*QGetAnyMessage) (void);
+	void	(*QGetAnyMessages) (void (*callback)(struct qsocket_s *sock));
 	int		(*QGetMessage) (qsocket_t *sock);
 	int		(*QSendMessage) (qsocket_t *sock, sizebuf_t *data);
 	int		(*SendUnreliableMessage) (qsocket_t *sock, sizebuf_t *data);

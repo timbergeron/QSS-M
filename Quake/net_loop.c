@@ -168,14 +168,13 @@ int Loop_GetMessage (qsocket_t *sock)
 	return ret;
 }
 
-qsocket_t *Loop_GetAnyMessage(void)
+void Loop_GetAnyMessages(void(*callback)(qsocket_t *))
 {
 	if (loop_server)
 	{
-		if (Loop_GetMessage(loop_server) > 0)
-			return loop_server;
+		while (Loop_GetMessage(loop_server) > 0)
+			callback(loop_server);
 	}
-	return NULL;
 }
 
 

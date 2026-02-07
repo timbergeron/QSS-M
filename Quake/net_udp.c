@@ -379,7 +379,10 @@ int UDP_Write (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr
 		if (err == NET_EWOULDBLOCK)
 			return 0;
 		if (err == ENETUNREACH)
+		{	//this happens a lot on hosts that have no ipv6 route tables set up (poopy ISPs)
+			static qboolean nospam;if (!nospam) nospam=true,
 			Con_SafePrintf ("UDP_Write: %s (%s)\n", socketerror(err), UDP_AddrToString(addr, false));
+		}
 		else
 			Con_SafePrintf ("UDP_Write, sendto: %s\n", socketerror(err));
 	}
@@ -704,7 +707,7 @@ sys_socket_t UDP6_OpenSocket (int port)
 	address.sin6_port = htons((unsigned short)port);
 	if (bind (newsocket, (struct sockaddr *)&address, sizeof(address)) == 0)
 	{
-		//we don't know if we're the server or not. oh well.
+		//we don't know if we're the server or not. oh well. if we are then we need to be able to receive broadcasts (at least lan ones).
 		struct ipv6_mreq req;
 		memset(&req, 0, sizeof(req));
 		req.ipv6mr_multiaddr.s6_addr[0] = 0xff;
@@ -728,7 +731,7 @@ ErrorReturn:
 sys_socket_t UDP6_CheckNewConnections (void)
 {
 	int		available;
-	struct sockaddr_in	from;
+	struct sockaddr_in6	from;
 	socklen_t	fromlen;
 	char		buff[1];
 
@@ -866,6 +869,7 @@ int UDP6_GetAddrFromName (const char *name, struct qsockaddr *addr)
 
 #ifdef __linux__ //sadly there is no posix standard for querying all ipv4+ipv6 addresses.
 #include <ifaddrs.h>
+#include <net/if.h>
 static struct ifaddrs *iflist;
 static double iftime; //requery sometimes.
 static int UDP_GetAddresses(qhostaddr_t *addresses, int maxaddresses, int fam)
@@ -891,7 +895,11 @@ static int UDP_GetAddresses(qhostaddr_t *addresses, int maxaddresses, int fam)
 		if (ifa->ifa_addr == NULL)
 			continue;
 		if (fam == ifa->ifa_addr->sa_family)
-		{
+		{	//don't list loopback. its ugly.
+			// Skip loopback interfaces
+			if (ifa->ifa_flags & IFF_LOOPBACK)
+				continue;
+
 			q_strlcpy(addresses[result], UDP_AddrToString((struct qsockaddr*)ifa->ifa_addr, false), sizeof(addresses[0]));
 			l = strlen(addresses[result]);	//trim any useless :0 port numbers.
 			if (l > 2 && !strcmp(addresses[result]+l-2, ":0"))

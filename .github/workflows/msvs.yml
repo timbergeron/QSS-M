@@ -42,21 +42,63 @@ jobs:
         "PLATFORM_ALT=$platform_alt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         "PLATFORM_SHORT=$platform_short" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         "EXE_NAME=$exe_name" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        "ForceImportBeforeCppTargets=$($env:GITHUB_WORKSPACE)\Windows\VisualStudio\custom_build.props" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        Write-Host "Computed BUILD_ARTIFACT=$build_artifact"
+        Write-Host "Computed EXE_NAME=$exe_name"
 
     - name: Build
       shell: pwsh
       run: |
+        $ErrorActionPreference = "Stop"
         $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
         $msbuild = (& "$vswhere" -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1)
+        if (-not $msbuild) { throw "MSBuild not found via vswhere" }
+        Write-Host "MSBuild: $msbuild"
+        $logFile = "msbuild-${{ matrix.platform }}.log"
         $options = @(
           "-property:Configuration=Release"
           "-property:Platform=${{ matrix.platform }}"
+          "-property:PostBuildEventUseInBuild=false"
           "-maxcpucount"
-          "-verbosity:minimal"
+          "-verbosity:normal"
+          "-fileLogger"
+          "-fileLoggerParameters:LogFile=$logFile;Verbosity=diagnostic"
         )
-        & $msbuild Windows\VisualStudio\quakespasm.sln $options
-        if (-not $?) { throw "Build failed" }
+        & $msbuild Windows\VisualStudio\quakespasm-sdl2.vcxproj $options
+        if (-not $?) {
+          Write-Host "MSBuild failed. Dumping likely error lines from $logFile"
+          if (Test-Path $logFile) {
+            Write-Host "===== Error Matches ====="
+            Select-String -Path $logFile -Pattern "(: error | error [A-Z]{1,4}[0-9]{3,6}:|fatal error|LNK[0-9]{4}|MSB[0-9]{4})" -CaseSensitive:$false |
+              Select-Object -Last 200 |
+              ForEach-Object { $_.Line } |
+              Out-Host
+            Write-Host "===== Tail (last 300 lines) ====="
+            Get-Content $logFile -Tail 300 | Out-Host
+          } else {
+            Write-Host "MSBuild log file not found: $logFile"
+          }
+          throw "Build failed"
+        }
+
+    - name: Debug Built Binary
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Continue"
+        $compiledir = "Windows\VisualStudio\Build-quakespasm-sdl2\$($env:PLATFORM_SHORT)\Release"
+        Write-Host "Compiled directory: $compiledir"
+        Get-ChildItem $compiledir -ErrorAction SilentlyContinue
+        $exe = Get-ChildItem "$compiledir\*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($exe) {
+          Write-Host "Built EXE: $($exe.FullName)"
+          $dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+          if ($dumpbin) {
+            & $dumpbin.Path /dependents $exe.FullName | Tee-Object -FilePath "dumpbin-${{ matrix.platform }}.txt"
+          } else {
+            Write-Host "dumpbin.exe not found in PATH"
+          }
+        } else {
+          Write-Host "No EXE found in $compiledir"
+        }
 
     - name: Prepare archive
       shell: pwsh
@@ -89,6 +131,8 @@ jobs:
         Copy-Item "Quakespasm.txt" $zipdir
         Copy-Item "Quakespasm-Music.txt" $zipdir
         Copy-Item "LICENSE.txt" $zipdir
+        Write-Host "Archive staging contents:"
+        Get-ChildItem $zipdir
 
     - name: Upload archive
       uses: actions/upload-artifact@v4
@@ -96,3 +140,11 @@ jobs:
         name: ${{ env.BUILD_ARTIFACT }}
         path: artifact/*
 
+    - name: Upload MSBuild Logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: msbuild-logs-${{ matrix.platform }}
+        path: |
+          msbuild-*.log
+          dumpbin-*.txt

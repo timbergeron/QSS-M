@@ -28,7 +28,7 @@ int			Datagram_QueryAddresses(qhostaddr_t *addresses, int maxaddresses);
 qboolean	Datagram_SearchForHosts (qboolean xmit);
 qsocket_t	*Datagram_Connect (const char *host);
 qsocket_t	*Datagram_CheckNewConnections (void);
-qsocket_t	*Datagram_GetAnyMessage (void);
+void		Datagram_GetAnyMessages (void(*callback)(qsocket_t *));
 int			Datagram_GetMessage (qsocket_t *sock);
 int			Datagram_SendMessage (qsocket_t *sock, sizebuf_t *data);
 int			Datagram_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data);

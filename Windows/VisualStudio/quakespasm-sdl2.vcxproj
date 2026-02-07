@@ -161,7 +161,6 @@ copy "$(SolutionDir)..\zlib\$(PlatformShortName)\*.dll" "$(TargetDir)"</Command>
       <Optimization>Disabled</Optimization>
       <AdditionalIncludeDirectories>..\zlib\include;..\curl\include;..\SDL2\include;..\codecs\include;..\misc\include;..\..\Quake;$(VC_IncludePath);$(WindowsSDK_IncludePath);..\curl\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;USE_ZLIB;_DEBUG;_WINDOWS;_USE_WINSOCK2;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;USE_SDL2;USE_CODEC_MP3;USE_CODEC_VORBIS;USE_CODEC_WAVE;USE_CODEC_FLAC;USE_CODEC_OPUS;USE_CODEC_MIKMOD;USE_CODEC_UMX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <PrecompiledHeader />
@@ -216,6 +215,18 @@ copy "$(SolutionDir)\..\curl\lib\$(PlatformShortName)\*.dll" "$(TargetDir)"
 copy "$(SolutionDir)..\zlib\$(PlatformShortName)\*.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(QSS_USE_GNUTLS)'=='1'">
+    <ClCompile>
+      <PreprocessorDefinitions>USE_GNUTLS;GNUTLS_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(QSS_GNUTLS_INCLUDE)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories);$(QSS_GNUTLS_LIBDIR)</AdditionalLibraryDirectories>
+      <AdditionalDependencies Condition="'$(QSS_GNUTLS_IMPORT_LIB)'!=''">$(QSS_GNUTLS_IMPORT_LIB);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(QSS_GNUTLS_EXTRA_LIBS)'!=''">$(QSS_GNUTLS_EXTRA_LIBS);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(QSS_GNUTLS_IMPORT_LIB)'==''">gnutls.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\Quake\bgmusic.c" />
     <ClCompile Include="..\..\Quake\cd_sdl.c" />
@@ -247,10 +258,25 @@ copy "$(SolutionDir)..\zlib\$(PlatformShortName)\*.dll" "$(TargetDir)"</Command>
     <ClCompile Include="..\..\Quake\gl_warp.c" />
     <ClCompile Include="..\..\Quake\host.c" />
     <ClCompile Include="..\..\Quake\host_cmd.c" />
+    <ClCompile Include="..\..\Quake\ice\ice_gnutls.c" />
+    <ClCompile Include="..\..\Quake\ice\ice_main.c" />
+    <ClCompile Include="..\..\Quake\ice\ice_mdns.c" />
+    <ClCompile Include="..\..\Quake\ice\ice_quake.c" />
+    <ClCompile Include="..\..\Quake\ice\ice_sctp.c" />
+    <ClCompile Include="..\..\Quake\ice\ice_socket.c" />
+    <ClCompile Include="..\..\Quake\ice\ice_stream.c" />
+    <ClCompile Include="..\..\Quake\ice\json.c">
+      <ObjectFileName>$(IntDir)ice_json.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\..\Quake\ice\md5.c" />
+    <ClCompile Include="..\..\Quake\ice\sha1.c" />
+    <ClCompile Include="..\..\Quake\ice\sha2.c" />
     <ClCompile Include="..\..\Quake\image.c" />
     <ClCompile Include="..\..\Quake\in_sdl.c" />
     <ClCompile Include="..\..\Quake\iplog.c" />
-    <ClCompile Include="..\..\Quake\json.c" />
+    <ClCompile Include="..\..\Quake\json.c">
+      <ObjectFileName>$(IntDir)qss_json.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\..\Quake\keys.c" />
     <ClCompile Include="..\..\Quake\location.c" />
     <ClCompile Include="..\..\Quake\main_sdl.c" />
@@ -340,6 +366,8 @@ copy "$(SolutionDir)..\zlib\$(PlatformShortName)\*.dll" "$(TargetDir)"</Command>
     <ClInclude Include="..\..\Quake\net_sys.h" />
     <ClInclude Include="..\..\Quake\net_wins.h" />
     <ClInclude Include="..\..\Quake\net_wipx.h" />
+    <ClInclude Include="..\..\Quake\ice\ice_private.h" />
+    <ClInclude Include="..\..\Quake\ice\ice_quake.h" />
     <ClInclude Include="..\..\Quake\platform.h" />
     <ClInclude Include="..\..\Quake\pmove.h" />
     <ClInclude Include="..\..\Quake\progdefs.h" />

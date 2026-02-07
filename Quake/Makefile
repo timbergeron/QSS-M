@@ -13,6 +13,9 @@ USE_SDL2=1
 ### Enable the use of zlib, for compressed pk3s.
 USE_ZLIB=1
 
+### Enable the use of gnutls, for dtls/wss(tls) support
+USE_GNUTLS=1
+
 ### Do we need to link the math library?
 LINK_M=1
 
@@ -54,6 +57,10 @@ LINKER = $(CC)
 
 STRIP ?= strip
 PKG_CONFIG ?= pkg-config
+
+GNUTLS_PKG_OK := $(shell $(PKG_CONFIG) --exists gnutls >/dev/null 2>&1 && echo 1 || echo 0)
+GNUTLS_CFLAGS := $(shell $(PKG_CONFIG) --cflags gnutls 2>/dev/null)
+GNUTLS_LIBS := $(shell $(PKG_CONFIG) --libs gnutls 2>/dev/null)
 
 CPUFLAGS=
 LDFLAGS =
@@ -203,6 +210,15 @@ CFLAGS+= -DUSE_ZLIB
 COMMON_LIBS+= -lz
 endif
 
+ifeq ($(USE_GNUTLS),1)
+ifeq ($(GNUTLS_PKG_OK),1)
+CFLAGS+= -DUSE_GNUTLS -DGNUTLS_STATIC $(GNUTLS_CFLAGS)
+COMMON_LIBS+= $(GNUTLS_LIBS)
+else
+$(warning gnutls requested but not found via pkg-config; building without USE_GNUTLS)
+endif
+endif
+
 ifeq ($(LINK_M),1)
 COMMON_LIBS += -lm
 endif
@@ -213,6 +229,17 @@ LIBS := $(COMMON_LIBS) $(NET_LIBS) $(CODECLIBS)
 # objects
 # ---------------------------
 
+ICEOBJS:= ice_gnutls.o \
+	ice_main.o \
+	ice_mdns.o \
+	ice_quake.o \
+	ice_sctp.o \
+	ice_socket.o \
+	ice_stream.o \
+	ice_json.o \
+	ice_md5.o \
+	ice_sha1.o \
+	ice_sha2.o
 MUSIC_OBJS:= bgmusic.o \
 	snd_codec.o \
 	snd_flac.o \
@@ -264,6 +291,7 @@ OBJS := strlcat.o \
 	$(SYSOBJ_SND) \
 	$(SYSOBJ_CDA) \
 	$(SYSOBJ_NET) \
+	$(ICEOBJS) \
 	net_dgrm.o \
 	net_loop.o \
 	net_main.o \
@@ -316,6 +344,16 @@ DEFAULT_TARGET := quakespasm
 all: $(DEFAULT_TARGET)
 
 %.o:	%.c
+	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+%.o:	ice/%.c
+	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+ice_json.o:	ice/json.c
+	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+ice_md5.o:	ice/md5.c
+	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+ice_sha1.o:	ice/sha1.c
+	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+ice_sha2.o:	ice/sha2.c
 	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
 
 quakespasm:	$(OBJS)

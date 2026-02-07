@@ -4043,6 +4043,8 @@ void SCR_SetUpToDrawConsole (void)
 
 	if (scr_conlines < scr_con_current)
 	{
+		if (cls.timedemo)
+			scr_con_current = scr_conlines;	// spoike -- turbocharge any console shrinkage, to make it more deterministic.
 		// ericw -- (glheight/600.0) factor makes conspeed resolution independent, using 800x600 as a baseline
 		scr_con_current -= conspeed*(glheight/600.0)*host_frametime/timescale; //johnfitz -- timescale
 		if (scr_conlines > scr_con_current)

@@ -9,45 +9,350 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-          platform: [w64, w32]
-    
+        platform: [w64, w32]
+    env:
+      CROSS_GMP_VER: "6.3.0"
+      CROSS_NETTLE_VER: "3.10"
+      CROSS_LIBTASN1_VER: "4.19.0"
+      CROSS_GNUTLS_VER: "3.8.11"
+      CROSS_GNUTLS_CACHE_REV: "v2"
+
     steps:
     - uses: actions/checkout@v4
 
+    - name: Resolve Target
+      run: |
+        set -euxo pipefail
+        if [ "${{ matrix.platform }}" = "w64" ]; then
+          target="x86_64-w64-mingw32"
+        else
+          target="i686-w64-mingw32"
+        fi
+        root="${RUNNER_TEMP}/qss-cross-gnutls/${target}"
+        prefix="${root}/prefix"
+        pcwrap="${root}/bin/${target}-pkg-config-cross-static"
+        builddir="${root}/src"
+        echo "Resolved matrix platform=${{ matrix.platform }}"
+        echo "Resolved target=${target}"
+        echo "Resolved cross root=${root}"
+        echo "Resolved cross prefix=${prefix}"
+        echo "Resolved cross wrapper=${pcwrap}"
+        echo "TARGET_TRIPLET=${target}" >> "$GITHUB_ENV"
+        echo "CROSS_GNUTLS_ROOT=${root}" >> "$GITHUB_ENV"
+        echo "CROSS_GNUTLS_PREFIX=${prefix}" >> "$GITHUB_ENV"
+        echo "CROSS_GNUTLS_PCWRAP=${pcwrap}" >> "$GITHUB_ENV"
+        echo "CROSS_GNUTLS_BUILDDIR=${builddir}" >> "$GITHUB_ENV"
+
+    - name: Cache Cross GNUTLS
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}
+        key: ${{ runner.os }}-cross-gnutls-${{ env.CROSS_GNUTLS_CACHE_REV }}-${{ matrix.platform }}-gmp-${{ env.CROSS_GMP_VER }}-nettle-${{ env.CROSS_NETTLE_VER }}-tasn1-${{ env.CROSS_LIBTASN1_VER }}-gnutls-${{ env.CROSS_GNUTLS_VER }}
+
     - name: Install Dependencies
       run: |
+        set -euxo pipefail
         sudo apt-get update
-        sudo gem install apt-spy2
-        sudo apt-spy2 check
-
-        mirrors=$(apt-spy2 list | awk '{print $1}')
-        for mirror in $mirrors; do
-          echo "Trying mirror: $mirror"
-          sudo apt-spy2 select --mirror=$mirror --commit
-
-          # Run 'apt-get update' for the selected mirror
-          if sudo apt-get update; then
-            # Try to install dependencies. If successful, break out of the loop.
-            if sudo apt-get install -y mingw-w64 libsdl2-dev libmad0-dev libopus-dev libvorbis-dev zlib1g-dev libvorbisfile3 libopusfile-dev libz-mingw-w64 libz-mingw-w64-dev libcurl4-openssl-dev zip; then
-              echo "Dependencies successfully installed using mirror: $mirror"
-              break
-            else
-              echo "Failed to install dependencies from mirror: $mirror. Trying next mirror."
-            fi
-          else
-            echo "Failed to update using mirror: $mirror. Trying next mirror."
-          fi
-        done
+        sudo apt-get install -y \
+          build-essential git wget curl xz-utils pkg-config \
+          autoconf automake autopoint libtool libtool-bin gettext texinfo gperf bison flex \
+          mingw-w64 gcc-mingw-w64 g++-mingw-w64 \
+          libsdl2-dev libmad0-dev libopus-dev libvorbis-dev zlib1g-dev libvorbisfile3 \
+          libopusfile-dev libz-mingw-w64 libz-mingw-w64-dev libcurl4-openssl-dev zip
+        echo "===== apt search: mingw + gnutls ====="
+        apt-cache search gnutls | grep -i mingw || true
+        echo "===== apt search: pkg-config mingw ====="
+        apt-cache search pkg-config-mingw-w64 || true
+        echo "===== dpkg snapshot ====="
+        dpkg -l | grep -E 'mingw|gnutls|pkg-config|sdl2|curl|zlib|autoconf|automake|libtool' || true
       continue-on-error: false
-      
+
+    - name: Build Or Reuse Cross GNUTLS
+      run: |
+        set -euxo pipefail
+        echo "Runner: $(uname -a)"
+        echo "Target triplet: ${TARGET_TRIPLET}"
+        echo "Cross root: ${CROSS_GNUTLS_ROOT}"
+        echo "Cross prefix: ${CROSS_GNUTLS_PREFIX}"
+        echo "Cross wrapper: ${CROSS_GNUTLS_PCWRAP}"
+        echo "Cross source dir: ${CROSS_GNUTLS_BUILDDIR}"
+        echo "PATH=$PATH"
+        echo "PKG_CONFIG=${PKG_CONFIG:-<unset>}"
+        echo "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-<unset>}"
+        echo "PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR:-<unset>}"
+        JOBS="$(nproc)"
+        CFLAGS_COMMON="-O2 -Wno-error -Wno-error=cast-function-type -Wno-cast-function-type"
+        mkdir -p "${CROSS_GNUTLS_ROOT}" "${CROSS_GNUTLS_PREFIX}" "${CROSS_GNUTLS_BUILDDIR}" "$(dirname "${CROSS_GNUTLS_PCWRAP}")"
+
+        cat > "${CROSS_GNUTLS_PCWRAP}" <<EOF
+        #!/usr/bin/env bash
+        set -eu
+        export PKG_CONFIG_LIBDIR="${CROSS_GNUTLS_PREFIX}/lib/pkgconfig:${CROSS_GNUTLS_PREFIX}/share/pkgconfig"
+        export PKG_CONFIG_PATH="${CROSS_GNUTLS_PREFIX}/lib/pkgconfig:${CROSS_GNUTLS_PREFIX}/share/pkgconfig"
+        exec pkg-config --static "\$@"
+        EOF
+        chmod +x "${CROSS_GNUTLS_PCWRAP}"
+
+        echo "===== Tool binaries ====="
+        for b in gcc g++ make pkg-config "${TARGET_TRIPLET}-gcc" "${TARGET_TRIPLET}-g++" "${TARGET_TRIPLET}-windres" "${TARGET_TRIPLET}-pkg-config" "${TARGET_TRIPLET}-pkgconf"; do
+          command -v "$b" || true
+        done
+
+        echo "===== Cross wrapper sanity ====="
+        head -n 20 "${CROSS_GNUTLS_PCWRAP}" || true
+        "${CROSS_GNUTLS_PCWRAP}" --version || true
+        "${CROSS_GNUTLS_PCWRAP}" --variable pc_path pkg-config || true
+
+        echo "===== Existing prefix tree before build ====="
+        find "${CROSS_GNUTLS_ROOT}" -maxdepth 3 -type d -print || true
+        find "${CROSS_GNUTLS_PREFIX}" -maxdepth 3 -type f -name '*.pc' -print || true
+
+        rebuild=1
+        if "${CROSS_GNUTLS_PCWRAP}" --exists gnutls >/dev/null 2>&1; then
+          if "${CROSS_GNUTLS_PCWRAP}" --modversion gnutls >/dev/null 2>&1; then
+            rebuild=0
+          fi
+        fi
+        if [ "$rebuild" -eq 0 ]; then
+          echo "Cross GNUTLS already available in cache; skipping rebuild"
+        else
+          echo "Cross GNUTLS not found in cache; bootstrapping from source"
+          cd "${CROSS_GNUTLS_BUILDDIR}"
+          echo "Build directory now: $(pwd)"
+          ls -la
+
+          wget -nv -nc "https://ftp.gnu.org/gnu/gmp/gmp-${CROSS_GMP_VER}.tar.xz"
+          rm -rf "gmp-${CROSS_GMP_VER}"
+          tar -xf "gmp-${CROSS_GMP_VER}.tar.xz"
+          cd "gmp-${CROSS_GMP_VER}"
+          ./configure --host="${TARGET_TRIPLET}" --prefix="${CROSS_GNUTLS_PREFIX}" --disable-shared --enable-static
+          make -j"${JOBS}" V=1 2>&1 | tee "${CROSS_GNUTLS_ROOT}/build-gmp.log"
+          make install
+          cd "${CROSS_GNUTLS_BUILDDIR}"
+
+          wget -nv -nc "https://ftp.gnu.org/gnu/nettle/nettle-${CROSS_NETTLE_VER}.tar.gz"
+          rm -rf "nettle-${CROSS_NETTLE_VER}"
+          tar -xf "nettle-${CROSS_NETTLE_VER}.tar.gz"
+          cd "nettle-${CROSS_NETTLE_VER}"
+          PKG_CONFIG="${CROSS_GNUTLS_PCWRAP}" CPPFLAGS="-I${CROSS_GNUTLS_PREFIX}/include" LDFLAGS="-L${CROSS_GNUTLS_PREFIX}/lib" \
+          CFLAGS="${CFLAGS_COMMON}" CXXFLAGS="${CFLAGS_COMMON}" \
+          ./configure --host="${TARGET_TRIPLET}" --prefix="${CROSS_GNUTLS_PREFIX}" --disable-shared --enable-static --disable-documentation
+          make -j"${JOBS}" V=1 2>&1 | tee "${CROSS_GNUTLS_ROOT}/build-nettle.log"
+          make install
+          cd "${CROSS_GNUTLS_BUILDDIR}"
+
+          wget -nv -nc "https://ftp.gnu.org/gnu/libtasn1/libtasn1-${CROSS_LIBTASN1_VER}.tar.gz"
+          rm -rf "libtasn1-${CROSS_LIBTASN1_VER}"
+          tar -xf "libtasn1-${CROSS_LIBTASN1_VER}.tar.gz"
+          cd "libtasn1-${CROSS_LIBTASN1_VER}"
+          ./configure --host="${TARGET_TRIPLET}" --prefix="${CROSS_GNUTLS_PREFIX}" --disable-shared --enable-static
+          make -j"${JOBS}" V=1 2>&1 | tee "${CROSS_GNUTLS_ROOT}/build-libtasn1.log"
+          make install
+          cd "${CROSS_GNUTLS_BUILDDIR}"
+
+          wget -nv -nc "https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-${CROSS_GNUTLS_VER}.tar.xz"
+          rm -rf "gnutls-${CROSS_GNUTLS_VER}"
+          tar -xf "gnutls-${CROSS_GNUTLS_VER}.tar.xz"
+          cd "gnutls-${CROSS_GNUTLS_VER}"
+
+          if ! grep -q '__has_c_attribute(x) 0' lib/crau/crau.h; then
+            {
+              printf '#ifndef __has_c_attribute\n#define __has_c_attribute(x) 0\n#endif\n'
+              cat lib/crau/crau.h
+            } > lib/crau/crau.h.new
+            mv lib/crau/crau.h.new lib/crau/crau.h
+          fi
+
+          make distclean || true
+          set +e
+          PKG_CONFIG="${CROSS_GNUTLS_PCWRAP}" CPPFLAGS="-I${CROSS_GNUTLS_PREFIX}/include" LDFLAGS="-L${CROSS_GNUTLS_PREFIX}/lib" \
+          CFLAGS="${CFLAGS_COMMON}" CXXFLAGS="${CFLAGS_COMMON}" \
+          ./configure --host="${TARGET_TRIPLET}" --prefix="${CROSS_GNUTLS_PREFIX}" \
+            --disable-shared --enable-static \
+            --without-p11-kit --without-idn --without-zlib \
+            --disable-tools --disable-doc --disable-tests --disable-nls \
+            --disable-werror 2>&1 | tee "${CROSS_GNUTLS_ROOT}/configure-gnutls.log"
+          cfg_rc=$?
+          set -e
+
+          if [ "$cfg_rc" -ne 0 ]; then
+            echo "Primary gnutls configure failed; retrying with --with-included-unistring"
+            PKG_CONFIG="${CROSS_GNUTLS_PCWRAP}" CPPFLAGS="-I${CROSS_GNUTLS_PREFIX}/include" LDFLAGS="-L${CROSS_GNUTLS_PREFIX}/lib" \
+            CFLAGS="${CFLAGS_COMMON}" CXXFLAGS="${CFLAGS_COMMON}" \
+            ./configure --host="${TARGET_TRIPLET}" --prefix="${CROSS_GNUTLS_PREFIX}" \
+              --disable-shared --enable-static \
+              --without-p11-kit --without-zlib \
+              --with-included-unistring \
+              --disable-tools --disable-doc --disable-tests --disable-nls \
+              --disable-werror 2>&1 | tee "${CROSS_GNUTLS_ROOT}/configure-gnutls-fallback.log"
+          fi
+
+          if ! make -j"${JOBS}" V=1 2>&1 | tee "${CROSS_GNUTLS_ROOT}/build-gnutls.log"; then
+            echo "Parallel gnutls build failed, retrying with -j1"
+            make clean || true
+            make -j1 V=1 2>&1 | tee "${CROSS_GNUTLS_ROOT}/build-gnutls-j1.log"
+          fi
+          make install
+          cd "${CROSS_GNUTLS_BUILDDIR}"
+        fi
+
+        echo "===== Final cross GNUTLS metadata ====="
+        "${CROSS_GNUTLS_PCWRAP}" --modversion gnutls
+        "${CROSS_GNUTLS_PCWRAP}" --cflags gnutls
+        "${CROSS_GNUTLS_PCWRAP}" --libs gnutls
+        echo "===== Installed pkgconfig files ====="
+        find "${CROSS_GNUTLS_PREFIX}" -maxdepth 4 -type f -name '*.pc' -print | sort || true
+        echo "===== Installed gnutls headers ====="
+        find "${CROSS_GNUTLS_PREFIX}/include/gnutls" -maxdepth 2 -type f | head -n 200 || true
+        echo "===== Installed libs (subset) ====="
+        find "${CROSS_GNUTLS_PREFIX}/lib" -maxdepth 1 -type f \( -name '*gnutls*' -o -name '*nettle*' -o -name '*hogweed*' -o -name '*gmp*' -o -name '*tasn1*' -o -name '*iconv*' -o -name '*idn2*' -o -name '*unistring*' \) -print | sort || true
+
+        echo "===== Cross compile smoke test ====="
+        cat > "${CROSS_GNUTLS_ROOT}/gnutls-smoke.c" <<'EOF'
+        #include <gnutls/gnutls.h>
+        int main(void) {
+          gnutls_global_init();
+          gnutls_global_deinit();
+          return 0;
+        }
+        EOF
+        set -x
+        "${TARGET_TRIPLET}-gcc" -c "${CROSS_GNUTLS_ROOT}/gnutls-smoke.c" $("${CROSS_GNUTLS_PCWRAP}" --cflags gnutls) -o "${CROSS_GNUTLS_ROOT}/gnutls-smoke.o"
+        "${TARGET_TRIPLET}-gcc" "${CROSS_GNUTLS_ROOT}/gnutls-smoke.o" $("${CROSS_GNUTLS_PCWRAP}" --libs gnutls) -o "${CROSS_GNUTLS_ROOT}/gnutls-smoke.exe"
+        set +x
+        file "${CROSS_GNUTLS_ROOT}/gnutls-smoke.exe" || true
+
+    - name: Debug Toolchain And Cross GNUTLS
+      run: |
+        set -euxo pipefail
+        echo "Target triplet: ${TARGET_TRIPLET}"
+        echo "Cross root: ${CROSS_GNUTLS_ROOT}"
+        echo "Cross prefix: ${CROSS_GNUTLS_PREFIX}"
+        echo "Cross wrapper: ${CROSS_GNUTLS_PCWRAP}"
+        command -v "${TARGET_TRIPLET}-gcc" || true
+        command -v "${TARGET_TRIPLET}-pkg-config" || true
+        command -v "${TARGET_TRIPLET}-pkgconf" || true
+        "${TARGET_TRIPLET}-gcc" -dumpmachine || true
+        "${TARGET_TRIPLET}-gcc" -print-search-dirs || true
+        "${TARGET_TRIPLET}-gcc" -print-file-name=libgnutls.a || true
+        "${TARGET_TRIPLET}-gcc" -print-file-name=libgnutls.dll.a || true
+        "${CROSS_GNUTLS_PCWRAP}" --modversion gnutls
+        "${CROSS_GNUTLS_PCWRAP}" --cflags gnutls
+        "${CROSS_GNUTLS_PCWRAP}" --libs gnutls
+        echo "===== gnutls.pc ====="
+        find "${CROSS_GNUTLS_PREFIX}" -type f -name gnutls.pc -print -exec sed -n '1,200p' {} \; || true
+        echo "===== Makefile GNUTLS snippets ====="
+        grep -nE "USE_GNUTLS|GNUTLS_|PKG_CONFIG" Quake/Makefile.w64 Quake/Makefile.w32 || true
+
     - name: Build
       run: |
+        set -euxo pipefail
         chmod 755 build-${{ matrix.platform }}.sh
-        sudo ./build-${{ matrix.platform }}.sh
-        
+        echo "TARGET_TRIPLET=${TARGET_TRIPLET}"
+        echo "CROSS_GNUTLS_PREFIX=${CROSS_GNUTLS_PREFIX}"
+        echo "CROSS_GNUTLS_PCWRAP=${CROSS_GNUTLS_PCWRAP}"
+        echo "CROSS_GNUTLS_ROOT=${CROSS_GNUTLS_ROOT}"
+        echo "CROSS_GNUTLS_BUILDDIR=${CROSS_GNUTLS_BUILDDIR}"
+        "${CROSS_GNUTLS_PCWRAP}" --modversion gnutls
+        "${CROSS_GNUTLS_PCWRAP}" --cflags gnutls
+        "${CROSS_GNUTLS_PCWRAP}" --libs gnutls
+        echo "===== GNUTLS header probe ====="
+        grep -n "GNUTLS_STATIC" "${CROSS_GNUTLS_PREFIX}/include/gnutls/gnutls.h" | head -n 80 || true
+        grep -n "gnutls_free" "${CROSS_GNUTLS_PREFIX}/include/gnutls/gnutls.h" | head -n 80 || true
+        cat > "${CROSS_GNUTLS_ROOT}/gnutls-import-probe.c" <<'EOF'
+        #include <gnutls/gnutls.h>
+        void qss_probe(void *p) { gnutls_free(p); }
+        #ifdef GNUTLS_STATIC
+        int qss_probe_static = 1;
+        #else
+        int qss_probe_static = 0;
+        #endif
+        EOF
+        probe_cflags="$("${CROSS_GNUTLS_PCWRAP}" --cflags gnutls)"
+        echo "Probe cflags: ${probe_cflags}"
+        set +e
+        "${TARGET_TRIPLET}-gcc" -c "${CROSS_GNUTLS_ROOT}/gnutls-import-probe.c" ${probe_cflags} -D__WIN32__ -DGNUTLS_STATIC -o "${CROSS_GNUTLS_ROOT}/gnutls-import-probe-static.o"
+        probe_static_rc=$?
+        "${TARGET_TRIPLET}-gcc" -c "${CROSS_GNUTLS_ROOT}/gnutls-import-probe.c" ${probe_cflags} -D__WIN32__ -o "${CROSS_GNUTLS_ROOT}/gnutls-import-probe-dyn.o"
+        probe_dyn_rc=$?
+        set -e
+        echo "Probe compile rc: static=${probe_static_rc} dynamic=${probe_dyn_rc}"
+        if command -v "${TARGET_TRIPLET}-nm" >/dev/null 2>&1; then
+          echo "===== probe symbols (static) ====="
+          "${TARGET_TRIPLET}-nm" "${CROSS_GNUTLS_ROOT}/gnutls-import-probe-static.o" | grep -E "gnutls_free|__imp_gnutls_free|qss_probe_static" || true
+          echo "===== probe symbols (dynamic) ====="
+          "${TARGET_TRIPLET}-nm" "${CROSS_GNUTLS_ROOT}/gnutls-import-probe-dyn.o" | grep -E "gnutls_free|__imp_gnutls_free|qss_probe_static" || true
+        fi
+
+        WIN_GNUTLS_DFLAGS="-D__WIN32__ -DGNUTLS_STATIC -DGNUTLS_INTERNAL_BUILD -DEAGAIN=WSAEWOULDBLOCK -DECONNRESET=WSAECONNRESET -DECONNREFUSED=WSAECONNREFUSED -DEMSGSIZE=WSAEMSGSIZE -DEPERM=WSAEACCES"
+        echo "WIN_GNUTLS_DFLAGS=${WIN_GNUTLS_DFLAGS}"
+        build_rc=0
+        USE_GNUTLS=1 \
+        FORCE_GNUTLS_DYNAMIC=0 \
+        TARGET_TRIPLET="${TARGET_TRIPLET}" \
+        CROSS_PREFIX="${CROSS_GNUTLS_PREFIX}" \
+        CROSS_GNUTLS_DLL_DIRS="${CROSS_GNUTLS_PREFIX}/bin" \
+        PKG_CONFIG="${CROSS_GNUTLS_PCWRAP}" \
+        PKG_CONFIG_PATH= \
+        PKG_CONFIG_LIBDIR= \
+        DFLAGS="${WIN_GNUTLS_DFLAGS}" \
+        ./build-${{ matrix.platform }}.sh 2>&1 | tee build-${{ matrix.platform }}.log || build_rc=$?
+        echo "===== GNUTLS lines in build log ====="
+        grep -Ei "USE_GNUTLS|gnutls|FORCE_GNUTLS_DYNAMIC|pkg-config|PKG_CONFIG" build-${{ matrix.platform }}.log | tail -n 400 || true
+        echo "===== Potential error lines ====="
+        grep -Ei "error:|undefined reference|fatal error|No such file" build-${{ matrix.platform }}.log | tail -n 400 || true
+        echo "===== Include path lines ====="
+        grep -E -- "-I/usr/include|-idirafter /usr/include|-I${CROSS_GNUTLS_PREFIX}/include" build-${{ matrix.platform }}.log | tail -n 200 || true
+        if [ "$build_rc" -ne 0 ]; then
+          echo "Build failed with rc=$build_rc. Tail of log follows:"
+          tail -n 400 build-${{ matrix.platform }}.log || true
+          exit "$build_rc"
+        fi
+        if grep -q "building without USE_GNUTLS" build-${{ matrix.platform }}.log; then
+          echo "Build fell back to no GNUTLS"
+          exit 1
+        fi
+        if ! grep -q -- "-DUSE_GNUTLS" build-${{ matrix.platform }}.log; then
+          echo "No -DUSE_GNUTLS in compile flags"
+          exit 1
+        fi
+        if grep -Eq -- '-I/usr/include([[:space:]]|$)' build-${{ matrix.platform }}.log; then
+          echo "Detected unsafe host include path '-I/usr/include' in compile flags"
+          exit 1
+        fi
+        if grep -q -- "-idirafter /usr/include" build-${{ matrix.platform }}.log; then
+          echo "Detected unsafe host include fallback '-idirafter /usr/include' in compile flags"
+          exit 1
+        fi
+        if ! grep -q -- "-I${CROSS_GNUTLS_PREFIX}/include" build-${{ matrix.platform }}.log; then
+          echo "Cross GNUTLS include path was not detected in compile flags"
+          exit 1
+        fi
+
+    - name: Post Build Debug
+      run: |
+        set -euxo pipefail
+        echo "===== Cross GNUTLS root tree ====="
+        find "${CROSS_GNUTLS_ROOT}" -maxdepth 4 -type f | sort || true
+        ls -lah Quake || true
+        ls -lah Quake/QSS-M-w*.zip || true
+        for z in Quake/QSS-M-w*.zip; do
+          [ -f "$z" ] || continue
+          echo "Archive contents: $z"
+          unzip -l "$z" | grep -Ei "gnutls|nettle|hogweed|gmp|idn2|unistring|tasn1|iconv|p11-kit|ffi|qss-m-w" || true
+        done
+
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: QSS-M ${{ matrix.platform }}
         path: |
           Quake/QSS-M-w*.zip
+          Quake/build-${{ matrix.platform }}.log
+          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/build-gmp.log
+          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/build-nettle.log
+          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/build-libtasn1.log
+          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/configure-gnutls.log
+          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/configure-gnutls-fallback.log
+          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/build-gnutls.log
+          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/build-gnutls-j1.log

@@ -705,25 +705,23 @@ int	NET_GetMessage (qsocket_t *sock)
 
 /*
 =================
-NET_GetServerMessage
+NET_GetServerMessages
 
-If there is a complete message, return it in net_message
-
-returns the qsocket that the message was meant to be for.
+If there is a complete message, return it in net_message via callback.
+Callback can be null if we're only getting messages to ensure lower level acks are processed.
 =================
 */
-qsocket_t *NET_GetServerMessage(void)
+static void NET_DiscardServerMessage(struct qsocket_s *sock){};
+void NET_GetServerMessages(void (*callback)(struct qsocket_s *sock))
 {
-	qsocket_t *s;
+	if (!callback)
+		callback = NET_DiscardServerMessage;
 	for (net_driverlevel = 0; net_driverlevel < net_numdrivers; net_driverlevel++)
 	{
 		if (!net_drivers[net_driverlevel].initialized)
 			continue;
-		s = net_drivers[net_driverlevel].QGetAnyMessage();
-		if (s)
-			return s;
+		net_drivers[net_driverlevel].QGetAnyMessages(callback);
 	}
-	return NULL;
 }
 
 /*
@@ -928,6 +926,8 @@ int NET_SendToAll (sizebuf_t *data, double blocktime)
 	while (count)
 	{
 		count = 0;
+		NET_GetServerMessages(NULL);	//process acks at least so we can send our reliable... FIXME: don't accept reliables.
+
 		for (i = 0, host_client = svs.clients; i < svs.maxclients; i++, host_client++)
 		{
 			if (! msg_init[i])
@@ -936,10 +936,6 @@ int NET_SendToAll (sizebuf_t *data, double blocktime)
 				{
 					msg_init[i] = true;
 					NET_SendMessage(host_client->netconnection, data);
-				}
-				else
-				{
-					NET_GetMessage (host_client->netconnection);
 				}
 				count++;
 				continue;
@@ -950,10 +946,6 @@ int NET_SendToAll (sizebuf_t *data, double blocktime)
 				if (NET_CanSendMessage (host_client->netconnection))
 				{
 					msg_sent[i] = true;
-				}
-				else
-				{
-					NET_GetMessage (host_client->netconnection);
 				}
 				count++;
 				continue;

@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "net_defs.h"
 
 #include "net_dgrm.h"
+#include "ice/ice_quake.h"
 #include "net_loop.h"
 
 net_driver_t net_drivers[] =
@@ -38,7 +39,7 @@ net_driver_t net_drivers[] =
 		Loop_SearchForHosts,
 		Loop_Connect,
 		Loop_CheckNewConnections,
-		Loop_GetAnyMessage,
+		Loop_GetAnyMessages,
 		Loop_GetMessage,
 		Loop_SendMessage,
 		Loop_SendUnreliableMessage,
@@ -46,6 +47,24 @@ net_driver_t net_drivers[] =
 		Loop_CanSendUnreliableMessage,
 		Loop_Close,
 		Loop_Shutdown
+	},
+	
+		{	"ICE",
+		false,
+		NQICE_Init,
+		NQICE_Listen,
+		NQICE_QueryAddresses,
+		NQICE_SearchForHosts,
+		NQICE_Connect,
+		NQICE_CheckNewConnections,
+		NQICE_GetAnyMessages,
+		NQICE_GetMessage,
+		NQICE_SendMessage,
+		NQICE_SendUnreliableMessage,
+		NQICE_CanSendMessage,
+		NQICE_CanSendUnreliableMessage,
+		NQICE_Close,
+		NQICE_Shutdown
 	},
 
 	{	"Datagram",
@@ -56,7 +75,7 @@ net_driver_t net_drivers[] =
 		Datagram_SearchForHosts,
 		Datagram_Connect,
 		Datagram_CheckNewConnections,
-		Datagram_GetAnyMessage,
+		Datagram_GetAnyMessages,
 		Datagram_GetMessage,
 		Datagram_SendMessage,
 		Datagram_SendUnreliableMessage,

@@ -34,6 +34,7 @@ check_gcc = $(shell if echo | $(CC) $(1) -Werror -S -o /dev/null -xc - > /dev/nu
 
 DEBUG   ?= 0
 USE_ZLIB?= 1
+USE_GNUTLS?= 1
 
 # ---------------------------
 # build variables
@@ -42,6 +43,31 @@ USE_ZLIB?= 1
 CC = gcc
 LINKER = $(CC)
 WINDRES = windres
+
+CC_MACHINE := $(shell $(CC) -dumpmachine 2>/dev/null)
+ifeq ($(findstring mingw,$(CC_MACHINE)),mingw)
+ifneq ($(shell command -v $(CC_MACHINE)-pkg-config 2>/dev/null),)
+PKG_CONFIG ?= $(CC_MACHINE)-pkg-config
+else ifneq ($(shell command -v $(CC_MACHINE)-pkgconf 2>/dev/null),)
+PKG_CONFIG ?= $(CC_MACHINE)-pkgconf
+else
+PKG_CONFIG ?= pkg-config
+endif
+else
+PKG_CONFIG ?= pkg-config
+endif
+GNUTLS_PKG_OK := $(shell command -v $(PKG_CONFIG) >/dev/null 2>&1 && $(PKG_CONFIG) --exists gnutls 2>/dev/null && echo yes)
+ifeq ($(GNUTLS_PKG_OK),)
+ifneq ($(PKG_CONFIG),pkg-config)
+ifeq ($(shell command -v pkg-config >/dev/null 2>&1 && pkg-config --exists gnutls 2>/dev/null && echo yes),yes)
+PKG_CONFIG := pkg-config
+GNUTLS_PKG_OK := yes
+endif
+endif
+endif
+GNUTLS_HOST_CFLAGS_RAW := $(shell command -v pkg-config >/dev/null 2>&1 && pkg-config --exists gnutls 2>/dev/null && pkg-config --cflags gnutls 2>/dev/null)
+GNUTLS_HOST_CFLAGS := $(filter-out -I/usr/include -isystem /usr/include,$(GNUTLS_HOST_CFLAGS_RAW))
+GNUTLS_HOST_INC_FALLBACK := $(if $(wildcard /usr/include/gnutls/gnutls.h),-idirafter /usr/include)
 
 STRIP = strip
 
@@ -178,7 +204,22 @@ CFLAGS+= -DUSE_ZLIB
 COMMON_LIBS+= `$(CC) -print-file-name=libz.a`
 endif
 
+ifeq ($(USE_GNUTLS),1)
+ifeq ($(FORCE_GNUTLS_DYNAMIC),1)
+CFLAGS+= -DUSE_GNUTLS $(GNUTLS_HOST_CFLAGS) $(GNUTLS_HOST_INC_FALLBACK)
+$(warning forcing USE_GNUTLS dynamic-loader mode without pkg-config link flags)
+else ifeq ($(GNUTLS_PKG_OK),yes)
+CFLAGS+= -DUSE_GNUTLS -DGNUTLS_STATIC $(shell $(PKG_CONFIG) --cflags gnutls)
+COMMON_LIBS+= $(shell $(PKG_CONFIG) --libs gnutls)
+else
+$(warning gnutls not found via $(PKG_CONFIG); building without USE_GNUTLS. Install mingw gnutls dev packages or set PKG_CONFIG/PKG_CONFIG_LIBDIR)
+endif
+endif
+
 LIBS := $(COMMON_LIBS) $(NET_LIBS) $(CODEC_LINK) $(CODECLIBS)
+
+ICEOBJS:= ice_gnutls.o  ice_main.o  ice_mdns.o ice_quake.o ice_sctp.o  ice_socket.o  ice_stream.o  ice_json.o  ice_md5.o  ice_sha1.o  ice_sha2.o
+
 
 # ---------------------------
 # objects
@@ -235,6 +276,7 @@ OBJS := strlcat.o \
 	$(SYSOBJ_SND) \
 	$(SYSOBJ_CDA) \
 	$(SYSOBJ_NET) \
+	$(ICEOBJS) \
 	net_dgrm.o \
 	net_loop.o \
 	net_main.o \
@@ -287,6 +329,16 @@ DEFAULT_TARGET := quakespasm.exe
 all: $(DEFAULT_TARGET)
 
 %.o:	%.c
+	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+%.o:	ice/%.c
+	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+ice_json.o:	ice/json.c
+	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+ice_md5.o:	ice/md5.c
+	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+ice_sha1.o:	ice/sha1.c
+	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+ice_sha2.o:	ice/sha2.c
 	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
 %.res:	../Windows/%.rc
 	$(WINDRES) -I../Windows --output-format=coff --target=pe-x86-64 -o $@ $<

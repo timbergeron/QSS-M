@@ -3654,7 +3654,7 @@ User command to connect to server
 */
 static void Host_Connect_f (void)
 {
-	char	name[MAX_QPATH];
+	char	name[NET_NAMELEN];
 	q_strlcpy(name, Cmd_Argv(1), sizeof(name));
 
 	cls.demonum = -1;		// stop demo loop in case this fails
@@ -6644,4 +6644,3 @@ void Host_InitCommands (void)
 	}
 
 }
-

@@ -29,10 +29,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "net_defs.h"
 #include "net_dgrm.h"
 
-#define MOD_PROQUAKE	1	//engines that want more precise angles will use this as an identifier.
-#define PQF_CHEATFREE	0x01
-#define PQF_IGNOREPORT	0x80	//defined by Spike rather than proquake, to say the server is using a single port and that its best to just continue to use whatever port you were already using.
-
 // these two macros are to make the code more readable
 #define sfunc	net_landrivers[sock->landriver]
 #define dfunc	net_landrivers[net_landriverlevel]
@@ -463,7 +459,7 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 	return false;
 }
 
-qsocket_t *Datagram_GetAnyMessage(void)
+void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 {
 	qsocket_t *s;
 	struct qsockaddr addr;
@@ -514,7 +510,8 @@ qsocket_t *Datagram_GetAnyMessage(void)
 					if (Datagram_ProcessPacket(length, s))
 					{
 						s->lastMessageTime = net_time;
-						return s;	//the server needs to parse that packet.
+						callback(s);	//the server needs to parse that packet.
+						break;
 					}
 				}
 			}
@@ -549,8 +546,6 @@ qsocket_t *Datagram_GetAnyMessage(void)
 			}
 		}
 	}
-
-	return NULL;
 }
 
 int	Datagram_GetMessage (qsocket_t *sock)
@@ -1229,6 +1224,55 @@ void Datagram_Rcon_Flush(const char *text)
 	*((int *)msg.data) = BigLong(NETFLAG_CTL | (msg.cursize & NETFLAG_LENGTH_MASK));
 	net_landrivers[rcon_response_landriver].Write (rcon_response_socket, msg.data, msg.cursize, &rcon_response_address);
 }
+void Datagram_GenerateGetInfoString(char *out, size_t outsize)
+{
+	const char *gamedir = COM_GetGameNames(false);
+	size_t ofs = 0;
+	int i;
+	unsigned int numclients = 0, numbots = 0;
+
+	for (i = 0; i < svs.maxclients; i++)
+	{
+		if (svs.clients[i].active)
+		{
+			numclients++;
+			if (!svs.clients[i].netconnection)
+				numbots++;
+		}
+	}
+
+	*out = 0;
+
+	COM_Parse(com_protocolname.string);
+	if (*com_token)	//the master server needs this. This tells the master which game we should be listed as.
+		{q_snprintf(out+ofs, outsize-ofs, "\\gamename\\%s", com_token); ofs += strlen(out+ofs);}
+
+	q_snprintf(out+ofs, outsize-ofs, "\\protocol\\3n"); ofs += strlen(out+ofs);
+		//w: quakeworld
+		//n: netquake
+		//d: darkplaces
+		//x: remaster
+		//r: qwfwd proxy ('prx' infokey)
+		//t: qtv
+
+	q_snprintf(out+ofs, outsize-ofs, "\\ver\\"ENGINE_NAME_AND_VER); ofs += strlen(out+ofs);
+	q_snprintf(out+ofs, outsize-ofs, "\\nqprotocol\\%u", sv.protocol); ofs += strlen(out+ofs);	//silly nqness
+
+	if (*gamedir)
+		{q_snprintf(out+ofs, outsize-ofs, "\\modname\\%s", gamedir); ofs += strlen(out+ofs);}
+	if (*sv.name)
+		{q_snprintf(out+ofs, outsize-ofs, "\\mapname\\%s", sv.name); ofs += strlen(out+ofs);}
+	if (*deathmatch.string)
+		{q_snprintf(out+ofs, outsize-ofs, "\\deathmatch\\%s", deathmatch.string); ofs += strlen(out+ofs);}
+	if (*teamplay.string)
+		{q_snprintf(out+ofs, outsize-ofs, "\\teamplay\\%s", teamplay.string); ofs += strlen(out+ofs);}
+	if (*hostname.string)
+		{q_snprintf(out+ofs, outsize-ofs, "\\hostname\\%s", hostname.string); ofs += strlen(out+ofs);}
+	q_snprintf(out+ofs, outsize-ofs, "\\clients\\%u", numclients); ofs += strlen(out+ofs);
+	if (numbots)
+		{q_snprintf(out+ofs, outsize-ofs, "\\bots\\%u", numbots); ofs += strlen(out+ofs);}
+	q_snprintf(out+ofs, outsize-ofs, "\\sv_maxclients\\%i", svs.maxclients); ofs += strlen(out+ofs);
+}
 
 static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsockaddr *clientaddr, byte *data, unsigned int length)
 {
@@ -1254,46 +1298,19 @@ static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsock
 			qboolean full = !strcmp(Cmd_Argv(0), "getstatus");
 			char cookie[128];
 			const char *s = Cmd_Args();
-			const char *gamedir = COM_GetGameNames(false);
-			unsigned int numclients = 0, numbots = 0;
 			int i;
 			size_t j;
 			if (!s) s = "";
 			q_strlcpy(cookie, s, sizeof(cookie));
 
-			for (i = 0; i < svs.maxclients; i++)
-			{
-				if (svs.clients[i].active)
-				{
-					numclients++;
-					if (!svs.clients[i].netconnection)
-						numbots++;
-				}
-			}
-
 			SZ_Clear(&net_message);
 			MSG_WriteLong(&net_message, -1);
 			MSG_WriteString(&net_message, full?"statusResponse\n":"infoResponse\n");net_message.cursize--;
-			COM_Parse(com_protocolname.string);
-			if (*com_token)	//the master server needs this. This tells the master which game we should be listed as.
-				{MSG_WriteString(&net_message, va("\\gamename\\%s", com_token));net_message.cursize--;}
-			MSG_WriteString(&net_message, "\\protocol\\3");net_message.cursize--;	//this is stupid
-			MSG_WriteString(&net_message, "\\ver\\"ENGINE_NAME_AND_VER);net_message.cursize--;
-			MSG_WriteString(&net_message, va("\\nqprotocol\\%u", sv.protocol));net_message.cursize--;
-			if (*gamedir)
-				{MSG_WriteString(&net_message, va("\\modname\\%s", gamedir));net_message.cursize--;}
-			if (*sv.name)
-				{MSG_WriteString(&net_message, va("\\mapname\\%s", sv.name));net_message.cursize--;}
-			if (*deathmatch.string)
-				{MSG_WriteString(&net_message, va("\\deathmatch\\%s", deathmatch.string));net_message.cursize--;}
-			if (*teamplay.string)
-				{MSG_WriteString(&net_message, va("\\teamplay\\%s", teamplay.string));net_message.cursize--;}
-			if (*hostname.string)
-				{MSG_WriteString(&net_message, va("\\hostname\\%s", hostname.string));net_message.cursize--;}
-			MSG_WriteString(&net_message, va("\\clients\\%u", numclients));net_message.cursize--;
-			if (numbots)
-				{MSG_WriteString(&net_message, va("\\bots\\%u", numbots));net_message.cursize--;}
-			MSG_WriteString(&net_message, va("\\sv_maxclients\\%i", svs.maxclients));net_message.cursize--;
+
+			//kinda evil, but oh well, just write it directly.
+			Datagram_GenerateGetInfoString((char*)net_message.data, net_message.maxsize - net_message.cursize);
+			net_message.cursize += strlen((char*)net_message.data+net_message.cursize);
+
 			if (*cookie)
 				{MSG_WriteString(&net_message, va("\\challenge\\%s", cookie));net_message.cursize--;}
 
@@ -1789,44 +1806,115 @@ static void _Datagram_AddPossibleHost(struct qsockaddr *addr, qboolean master)
 	hostlist_count++;
 }
 
-
-static void Info_ReadKey(const char *info, const char *key, char *out, size_t outsize)
+void Datagram_AddHostCacheInfo(struct qsockaddr *readaddr, const char *cname, const char *info)
 {
-	size_t keylen = strlen(key);
-	while(*info)
+	char tmp[1024], *e;
+	int p;
+	enum
 	{
-		if (*info++ != '\\')
-			break;	//error / end-of-string
+		PT_NONE			= 0,
+		PT_NETQUAKE		= 1<<0,	//accepts standard(+extended) netquake clients, presumably 666+ if its responding to queries like this.
+		PT_DARKPLACES	= 1<<1,	//different handshakes, different protocol expectations.
+		PT_QUAKEWORLD	= 1<<2,	//accepts standard(+extended) quakeworld clients.
+		PT_REMASTER		= 1<<3,	//the rerelease engine ('QuakeEx' aka kex) has its own protocol
+		PT_QUAKETV		= 1<<4,	//for watching qtv/mvd streams.
+		PT_QWRELAY		= 1<<5,	//quakeworld-like, has a 'prx' userinfo key to say where to relay to.
+	} t = 0;
+	size_t n, i;
 
-		if (!strncmp(info, key, keylen) && info[keylen] == '\\')
-		{
-			char *o = out, *e = out + outsize - 1;
+	if (!cname)
+		cname = dfunc.AddrToString(readaddr, false);
+	else
+	{	//hack:
+		//fte's brpwser port needed this at one point. now we just consider old versions of ftemaster to be buggy for any server where the broker won't be able to ask for details.
+		//if the server is reported as having an *fp key then we expect the broker to be willing to punch a hole, allowing us to get some actual security out of it, as well as potentially getting past dodgy routers on the server in question.
+		//FIXME: get eukara to update his ftemaster instance, so we have fewer buggy addresses...
+		if (!strncmp(cname, "rtc:///udp/", 11))
+			if (!*Info_GetKey(info, "*fp", tmp, sizeof(tmp)))
+				cname += 11;
+	}
 
-			//skip the key name
-			info += keylen+1;
-			//this is the old value for the key. copy it to the result
-			while (*info && *info != '\\' && o < e)
-				*o++ = *info++;
-			*o++ = 0;
-
-			//success!
+	//match by cname instead of address...
+	for (n = 0; n < hostCacheCount; n++)
+	{
+		if (!strcmp(hostcache[n].cname, cname))
 			return;
-		}
-		else
-		{
-			//skip the key
-			while (*info && *info != '\\')
-				info++;
+	}
 
-			//validate that its a value now
-			if (*info++ != '\\')
-				break;	//error
-			//skip the value
-			while (*info && *info != '\\')
-				info++;
+	// is it already there?
+	if (n == hostCacheCount)
+	{
+		if (n == HOSTCACHESIZE)
+			return; //can't add.
+		hostCacheCount++;	//its new.
+	}
+
+	Info_GetKey(info, "hostname", hostcache[n].name, sizeof(hostcache[n].name));
+	if (!*hostcache[n].name)
+		q_strlcpy(hostcache[n].name, "UNNAMED", sizeof(hostcache[n].name));
+	Info_GetKey(info, "mapname", hostcache[n].map, sizeof(hostcache[n].map));
+	Info_GetKey(info, "modname", hostcache[n].gamedir, sizeof(hostcache[n].gamedir));
+
+	Info_GetKey(info, "clients", tmp, sizeof(tmp));
+	hostcache[n].users = atoi(tmp);
+	Info_GetKey(info, "sv_maxclients", tmp, sizeof(tmp));
+	hostcache[n].maxusers = atoi(tmp);
+	Info_GetKey(info, "protocol", tmp, sizeof(tmp));
+	p = strtol(tmp, &e, 10);
+	if (*e)	while(*e)switch(*e++)
+	{
+	case 'n':	t|=PT_NETQUAKE; break;	//netquake, okay
+	case 'd':	t|=PT_DARKPLACES; break;	//darkplaces, we can cope.
+	case 'w':	t|=PT_QUAKEWORLD; break;	//quakeworld, no support
+	case 'x':	t|=PT_REMASTER; break;	//remaster, requires dtls+twiddles.
+	case 't':	t|=PT_QUAKETV; break;	//qtv, has basic qw->nq translation so we should be okay.
+	case 'r':	t|=PT_QWRELAY; break;	//qwfwd-like, no support
+	}
+	else
+		t = PT_DARKPLACES; //assume the worst for outdated servers.
+	if (p != NET_PROTOCOL_VERSION || !(t&(PT_NETQUAKE|PT_DARKPLACES|PT_QUAKETV)))
+	{	//server is unsupported. give it a star.
+		Q_strcpy(hostcache[n].cname, hostcache[n].name);
+		Q_strcpy(hostcache[n].name, "*");
+		Q_strcat(hostcache[n].name, hostcache[n].cname);
+	}
+	if (readaddr)
+	{
+		Q_memcpy(&hostcache[n].addr, &readaddr, sizeof(struct qsockaddr));
+		hostcache[n].ldriver = net_landriverlevel;
+	}
+	else
+	{
+		Q_memset(&hostcache[n].addr, 0, sizeof(struct qsockaddr));
+		hostcache[n].ldriver = -1;
+	}
+	hostcache[n].driver = net_driverlevel;
+	q_strlcpy(hostcache[n].cname, cname, sizeof(hostcache[n].cname));
+
+	// check for a name conflict
+	for (i = 0; i < hostCacheCount; i++)
+	{
+		if (i == n)
+			continue;
+		if (q_strcasecmp (hostcache[n].cname, hostcache[i].cname) == 0)
+		{	//this is a dupe.
+			hostCacheCount--;
+			break;
+		}
+		if (q_strcasecmp (hostcache[n].name, hostcache[i].name) == 0)
+		{
+			i = Q_strlen(hostcache[n].name);
+			if (i < sizeof(hostcache[n].name)-1 && hostcache[n].name[i-1] > '8')
+			{
+				hostcache[n].name[i] = '0';
+				hostcache[n].name[i+1] = 0;
+			}
+			else
+				hostcache[n].name[i-1]++;
+
+			i = -1;
 		}
 	}
-	*out = 0;
 }
 
 void ResetHostlist (void) // woods #resethostlist
@@ -1844,6 +1932,7 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 	struct qsockaddr myaddr;
 	int		control;
 	qboolean sentsomething = false;
+	const char *cname;
 
 	dfunc.GetSocketAddr (dfunc.controlSock, &myaddr);
 	if (xmit)
@@ -1959,73 +2048,8 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 			}
 			else if (msg_readcount+13 <= net_message.cursize && !strncmp((char*)net_message.data+msg_readcount, "infoResponse\n", 13))
 			{	//response from a dpp7 server (or possibly 15, no idea really)
-				char tmp[1024];
 				const char *info = MSG_ReadString()+13;
-
-				// search the cache for this server
-				for (n = 0; n < hostCacheCount; n++)
-				{
-					if (dfunc.AddrCompare(&readaddr, &hostcache[n].addr) == 0)
-						break;
-				}
-
-				// is it already there?
-				if (n < hostCacheCount)
-				{
-					if (*hostcache[n].cname)
-						continue;
-				}
-				else
-				{
-					// add it
-					hostCacheCount++;
-				}
-				Info_ReadKey(info, "hostname", hostcache[n].name, sizeof(hostcache[n].name));
-				if (!*hostcache[n].name)
-					q_strlcpy(hostcache[n].name, "UNNAMED", sizeof(hostcache[n].name));
-				Info_ReadKey(info, "mapname", hostcache[n].map, sizeof(hostcache[n].map));
-				Info_ReadKey(info, "modname", hostcache[n].gamedir, sizeof(hostcache[n].gamedir));
-
-				Info_ReadKey(info, "clients", tmp, sizeof(tmp));
-				hostcache[n].users = atoi(tmp);
-				Info_ReadKey(info, "sv_maxclients", tmp, sizeof(tmp));
-				hostcache[n].maxusers = atoi(tmp);
-				Info_ReadKey(info, "protocol", tmp, sizeof(tmp));
-				if (atoi(tmp) != NET_PROTOCOL_VERSION)
-				{
-					Q_strcpy(hostcache[n].cname, hostcache[n].name);
-					Q_strcpy(hostcache[n].name, "*");
-					Q_strcat(hostcache[n].name, hostcache[n].cname);
-				}
-				Q_memcpy(&hostcache[n].addr, &readaddr, sizeof(struct qsockaddr));
-				hostcache[n].driver = net_driverlevel;
-				hostcache[n].ldriver = net_landriverlevel;
-				q_strlcpy(hostcache[n].cname, dfunc.AddrToString(&readaddr, false), sizeof(hostcache[n].cname));
-
-				// check for a name conflict
-				for (i = 0; i < hostCacheCount; i++)
-				{
-					if (i == n)
-						continue;
-					if (q_strcasecmp (hostcache[n].cname, hostcache[i].cname) == 0)
-					{	//this is a dupe.
-						hostCacheCount--;
-						break;
-					}
-					if (q_strcasecmp (hostcache[n].name, hostcache[i].name) == 0)
-					{
-						i = Q_strlen(hostcache[n].name);
-						if (i < 15 && hostcache[n].name[i-1] > '8')
-						{
-							hostcache[n].name[i] = '0';
-							hostcache[n].name[i+1] = 0;
-						}
-						else
-							hostcache[n].name[i-1]++;
-
-						i = -1;
-					}
-				}
+				Datagram_AddHostCacheInfo(&readaddr, NULL, info);
 			}
 			continue;
 		}
@@ -2048,10 +2072,12 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 			Con_SafePrintf("Server at %s claimed to be at %s\n", read, peer);
 		}*/
 
+		cname = dfunc.AddrToString(&readaddr, false);
+
 		// search the cache for this server
 		for (n = 0; n < hostCacheCount; n++)
 		{
-			if (dfunc.AddrCompare(&readaddr, &hostcache[n].addr) == 0)
+			if (!strcmp(hostcache[n].cname, cname))
 				break;
 		}
 
@@ -2082,7 +2108,7 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 		Q_memcpy(&hostcache[n].addr, &readaddr, sizeof(struct qsockaddr));
 		hostcache[n].driver = net_driverlevel;
 		hostcache[n].ldriver = net_landriverlevel;
-		q_strlcpy(hostcache[n].cname, dfunc.AddrToString(&readaddr, false), sizeof(hostcache[n].cname));
+		q_strlcpy(hostcache[n].cname, cname, sizeof(hostcache[n].cname));
 
 		// check for a name conflict
 		for (i = 0; i < hostCacheCount; i++)
@@ -2097,7 +2123,7 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 			if (q_strcasecmp (hostcache[n].name, hostcache[i].name) == 0)
 			{
 				i = Q_strlen(hostcache[n].name);
-				if (i < 15 && hostcache[n].name[i-1] > '8')
+				if (i < sizeof(hostcache[n].name)-1 && hostcache[n].name[i-1] > '8')
 				{
 					hostcache[n].name[i] = '0';
 					hostcache[n].name[i+1] = 0;

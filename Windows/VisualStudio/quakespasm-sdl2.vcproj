@@ -42,7 +42,6 @@
 				Optimization="0"
 				AdditionalIncludeDirectories="..\SDL2\include;..\codecs\include;..\misc\include;..\..\Quake;$(VC_IncludePath);$(WindowsSDK_IncludePath)"
 				PreprocessorDefinitions="WIN32;_DEBUG;_WINDOWS;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;USE_SDL2;USE_CODEC_MP3;USE_CODEC_VORBIS;USE_CODEC_WAVE;USE_CODEC_FLAC;USE_CODEC_OPUS;USE_CODEC_XMP;USE_CODEC_UMX"
-				MinimalRebuild="true"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="3"
 				UsePrecompiledHeader="0"
@@ -193,7 +192,6 @@
 				Optimization="0"
 				AdditionalIncludeDirectories="..\SDL2\include;..\codecs\include;..\misc\include;..\..\Quake;$(VC_IncludePath);$(WindowsSDK_IncludePath)"
 				PreprocessorDefinitions="WIN32;_DEBUG;_WINDOWS;_USE_WINSOCK2;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;USE_SDL2;USE_CODEC_MP3;USE_CODEC_VORBIS;USE_CODEC_WAVE;USE_CODEC_FLAC;USE_CODEC_OPUS;USE_CODEC_XMP;USE_CODEC_UMX"
-				MinimalRebuild="true"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="3"
 				UsePrecompiledHeader="0"
@@ -447,6 +445,86 @@
 			</File>
 			<File
 				RelativePath="..\..\Quake\host_cmd.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\json.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\ice_gnutls.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\ice_main.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\ice_mdns.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\ice_quake.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\ice_sctp.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\ice_socket.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\ice_stream.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\json.c"
+				>
+				<FileConfiguration
+					Name="Debug|Win32"
+					>
+					<Tool
+						Name="VCCLCompilerTool"
+						ObjectFile="$(IntDir)\ice_json.obj"
+					/>
+				</FileConfiguration>
+				<FileConfiguration
+					Name="Debug|x64"
+					>
+					<Tool
+						Name="VCCLCompilerTool"
+						ObjectFile="$(IntDir)\ice_json.obj"
+					/>
+				</FileConfiguration>
+				<FileConfiguration
+					Name="Release|Win32"
+					>
+					<Tool
+						Name="VCCLCompilerTool"
+						ObjectFile="$(IntDir)\ice_json.obj"
+					/>
+				</FileConfiguration>
+				<FileConfiguration
+					Name="Release|x64"
+					>
+					<Tool
+						Name="VCCLCompilerTool"
+						ObjectFile="$(IntDir)\ice_json.obj"
+					/>
+				</FileConfiguration>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\md5.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\sha1.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\ice\sha2.c"
 				>
 			</File>
 			<File

@@ -1707,6 +1707,14 @@ static void PF_itof(void)
 {
 	G_FLOAT(OFS_RETURN) = G_INT(OFS_PARM0);
 }
+static void PF_ftou(void)
+{
+	G_UINT(OFS_RETURN) = G_FLOAT(OFS_PARM0);
+}
+static void PF_utof(void)
+{
+	G_FLOAT(OFS_RETURN) = G_UINT(OFS_PARM0);
+}
 
 //collision stuff
 static void PF_tracebox(void)
@@ -4554,7 +4562,7 @@ static void PF_isfunction(void)
 }
 
 //other stuff
-static void PF_gettime (void)
+static void PF_gettimef (void)
 {
 	int timer = (qcvm->argc > 0)?G_FLOAT(OFS_PARM0):0;
 	switch(timer)
@@ -4566,6 +4574,25 @@ static void PF_gettime (void)
 		break;
 	case 1:		//actual time
 		G_FLOAT(OFS_RETURN) = Sys_DoubleTime();
+		break;
+	//case 2:	//highres.. looks like time into the frame. no idea
+	//case 3:	//uptime
+	//case 4:	//cd track
+	//case 5:	//client simtime
+	}
+}
+static void PF_gettimed (void)
+{
+	int timer = (qcvm->argc > 0)?G_INT(OFS_PARM0):0;
+	switch(timer)
+	{
+	default:
+		Con_DPrintf("PF_gettime: unsupported timer %i\n", timer);
+	case 0:		//cached time at start of frame
+		G_DOUBLE(OFS_RETURN) = realtime;
+		break;
+	case 1:		//actual time
+		G_DOUBLE(OFS_RETURN) = Sys_DoubleTime();
 		break;
 	//case 2:	//highres.. looks like time into the frame. no idea
 	//case 3:	//uptime
@@ -8745,6 +8772,8 @@ static struct
 	{"htos",			PF_htos,			PF_htos,			262,	PF_htos,0, D("string(int)", "Formats an integer as a base16 string, with leading 0s and no prefix. Always returns 8 characters.")},
 	{"ftoi",			PF_ftoi,			PF_ftoi,			0,		PF_ftoi,0, D("int(float)", "Converts the given float into a true integer without depending on extended qcvm instructions.")},
 	{"itof",			PF_itof,			PF_itof,			0,		PF_itof,0, D("float(int)", "Converts the given true integer into a float without depending on extended qcvm instructions.")},
+	{"ftou",			PF_ftou,			PF_ftou,			0,		PF_ftou,0, D("__uint(float)", "Converts the given float into a true integer without depending on extended qcvm instructions.")},
+	{"utof",			PF_utof,			PF_utof,			0,		PF_utof,0, D("float(__uint)", "Converts the given true integer into a float without depending on extended qcvm instructions.")},
 //	{"skel_create",		PF_skel_create,		PF_skel_create,		263,	PF_NoMenu, D("float(float modlindex, optional float useabstransforms)", "Allocates a new uninitiaised skeletal object, with enough bone info to animate the given model.\neg: self.skeletonobject = skel_create(self.modelindex);")}, // (FTE_CSQC_SKELETONOBJECTS)
 //	{"skel_build",		PF_skel_build,		PF_skel_build,		264,	PF_NoMenu, D("float(float skel, entity ent, float modelindex, float retainfrac, float firstbone, float lastbone, optional float addfrac)", "Animation data (according to the entity's frame info) is pulled from the specified model and blended into the specified skeletal object.\nIf retainfrac is set to 0 on the first call and 1 on the others, you can blend multiple animations together according to the addfrac value. The final weight should be 1. Other values will result in scaling and/or other weirdness. You can use firstbone and lastbone to update only part of the skeletal object, to allow legs to animate separately from torso, use 0 for both arguments to specify all, as bones are 1-based.")}, // (FTE_CSQC_SKELETONOBJECTS)
 //	{"skel_get_numbones",PF_skel_get_numbones,PF_skel_get_numbones,265,	PF_NoMenu, D("float(float skel)", "Retrives the number of bones in the model. The valid range is 1<=bone<=numbones.")}, // (FTE_CSQC_SKELETONOBJECTS)
@@ -9006,7 +9035,8 @@ static struct
 	{"argv_end_index",	PF_argv_end_index,	PF_argv_end_index,	516,	PF_argv_end_index,516, D("float(float idx)", "Returns the character index that the tokenized arg stopped at.")},
 	{"buf_cvarlist",	PF_buf_cvarlist,	PF_buf_cvarlist,	517,	PF_buf_cvarlist,517, D("void(strbuf strbuf, string pattern, string antipattern)", "Populates the strbuf with a list of known cvar names.")},
 	{"cvar_description",PF_cvar_description,PF_cvar_description,518,	PF_cvar_description,518, D("string(string cvarname)", "Retrieves the description of a cvar, which might be useful for tooltips or help files. This may still not be useful.")},
-	{"gettime",			PF_gettime,			PF_gettime,			519,	PF_gettime,519, "float(optional float timetype)"},
+	{"gettime",			PF_gettimef,		PF_gettimef,		519,	PF_gettimef,519, "float(optional float timetype)"},
+	{"gettimed",		PF_gettimed,		PF_gettimed,		0,		PF_gettimef,0, "double(optional int timetype)"},
 	{"findkeysforcommand",PF_NoSSQC,		PF_cl_findkeysforcommand,521,PF_cl_findkeysforcommand,610, D("string(string command, optional float bindmap)", "Returns a list of keycodes that perform the given console command in a format that can only be parsed via tokenize (NOT tokenize_console). This always returns at least two values - if only one key is actually bound, -1 will be returned. The bindmap argument is listed for compatibility with dp-specific defs, but is ignored in FTE.")},
 	{"findkeysforcommandex",PF_NoSSQC,		PF_cl_findkeysforcommandex,0,PF_cl_findkeysforcommandex,0, D("string(string command, optional float bindmap)", "Returns a list of key bindings in keyname format instead of keynums. Use tokenize to parse. This list may contain modifiers. May return large numbers of keys.")},
 //	{"loadfromdata",	PF_loadfromdata,	PF_loadfromdata,	529,	PF_NoMenu, D("void(string s)", "Reads a set of entities from the given string. This string should have the same format as a .ent file or a saved game. Entities will be spawned as required. If you need to see the entities that were created, you should use parseentitydata instead.")},

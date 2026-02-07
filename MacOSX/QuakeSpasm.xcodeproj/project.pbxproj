@@ -112,6 +112,17 @@
 		85AC9B2C2A70521E00228EF3 /* pmove.c in Sources */ = {isa = PBXBuildFile; fileRef = 85AC9B2A2A70521E00228EF3 /* pmove.c */; };
 		85AC9B2D2A70521E00228EF3 /* pmovetst.c in Sources */ = {isa = PBXBuildFile; fileRef = 85AC9B2B2A70521E00228EF3 /* pmovetst.c */; };
 		85C58F442B9D79580010F658 /* json.c in Sources */ = {isa = PBXBuildFile; fileRef = 85C58F432B9D79580010F658 /* json.c */; };
+		C6D9B732EE786BE3A94AD977 /* ice_main.c in Sources */ = {isa = PBXBuildFile; fileRef = 45F4ACF15444F99936BC8377 /* ice_main.c */; };
+		4054F6CA1309CC4F91C1D0E1 /* ice_mdns.c in Sources */ = {isa = PBXBuildFile; fileRef = A3C228E9012F1B8D0C84C323 /* ice_mdns.c */; };
+		A8F116C73FF5181967B275CF /* ice_stream.c in Sources */ = {isa = PBXBuildFile; fileRef = 912CB455951D11690C9F4CC4 /* ice_stream.c */; };
+		C441A37E9342D9F68C4F222D /* ice_socket.c in Sources */ = {isa = PBXBuildFile; fileRef = 819FB6D86708F770785F397D /* ice_socket.c */; };
+		E383D8D0E3D1C813E9CA024A /* ice_gnutls.c in Sources */ = {isa = PBXBuildFile; fileRef = 90ECE478BDE66F0C8D06B1E6 /* ice_gnutls.c */; };
+		578A300FF6F0C14AE3DFBA3C /* ice_quake.c in Sources */ = {isa = PBXBuildFile; fileRef = BF4B22DFE60E6499C7DACA95 /* ice_quake.c */; };
+		3F9E64ACBC134B69EDF5586F /* ice_sctp.c in Sources */ = {isa = PBXBuildFile; fileRef = 1695A5E28026016286A7D868 /* ice_sctp.c */; };
+		20AC0C3144322B2F02925415 /* json.c in Sources */ = {isa = PBXBuildFile; fileRef = C4DBE3E8DEEF4F8104F11C0E /* json.c */; };
+		6E1E4972589866F29E075A03 /* md5.c in Sources */ = {isa = PBXBuildFile; fileRef = 7FA834B8E03DEBBE46CD7BF3 /* md5.c */; };
+		E20E9F2EB9F085F115BA87C4 /* sha1.c in Sources */ = {isa = PBXBuildFile; fileRef = CA61141FFF62E21E619A2EF2 /* sha1.c */; };
+		7394D93821B8ED996863EF66 /* sha2.c in Sources */ = {isa = PBXBuildFile; fileRef = DA2E4F9FDA027A4AA2499356 /* sha2.c */; };
 		85F640312C9E1EE300615B7F /* macos_instructions.html in CopyFiles */ = {isa = PBXBuildFile; fileRef = 85F640302C9E1EE300615B7F /* macos_instructions.html */; };
 		932AE8F92944103F0062F917 /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 932AE8F3294410200062F917 /* libopus.a */; };
 		93B34FA22946BA0300FB5B72 /* libmad.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 93B34FA02946BA0300FB5B72 /* libmad.a */; };
@@ -358,6 +369,19 @@
 		85C58F432B9D79580010F658 /* json.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = json.c; path = ../Quake/json.c; sourceTree = "<group>"; };
 		85C58F452B9D79680010F658 /* json.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = json.h; path = ../Quake/json.h; sourceTree = SOURCE_ROOT; };
 		85C58F472B9D7AAB0010F658 /* jsmn.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = jsmn.h; path = ../Quake/jsmn.h; sourceTree = SOURCE_ROOT; };
+		45F4ACF15444F99936BC8377 /* ice_main.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = ice_main.c; path = ../Quake/ice/ice_main.c; sourceTree = "<group>"; };
+		A3C228E9012F1B8D0C84C323 /* ice_mdns.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = ice_mdns.c; path = ../Quake/ice/ice_mdns.c; sourceTree = "<group>"; };
+		912CB455951D11690C9F4CC4 /* ice_stream.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = ice_stream.c; path = ../Quake/ice/ice_stream.c; sourceTree = "<group>"; };
+		819FB6D86708F770785F397D /* ice_socket.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = ice_socket.c; path = ../Quake/ice/ice_socket.c; sourceTree = "<group>"; };
+		90ECE478BDE66F0C8D06B1E6 /* ice_gnutls.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = ice_gnutls.c; path = ../Quake/ice/ice_gnutls.c; sourceTree = "<group>"; };
+		BF4B22DFE60E6499C7DACA95 /* ice_quake.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = ice_quake.c; path = ../Quake/ice/ice_quake.c; sourceTree = "<group>"; };
+		1695A5E28026016286A7D868 /* ice_sctp.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = ice_sctp.c; path = ../Quake/ice/ice_sctp.c; sourceTree = "<group>"; };
+		C4DBE3E8DEEF4F8104F11C0E /* json.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = json.c; path = ../Quake/ice/json.c; sourceTree = "<group>"; };
+		7FA834B8E03DEBBE46CD7BF3 /* md5.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = md5.c; path = ../Quake/ice/md5.c; sourceTree = "<group>"; };
+		CA61141FFF62E21E619A2EF2 /* sha1.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = sha1.c; path = ../Quake/ice/sha1.c; sourceTree = "<group>"; };
+		DA2E4F9FDA027A4AA2499356 /* sha2.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = sha2.c; path = ../Quake/ice/sha2.c; sourceTree = "<group>"; };
+		1329232458DEB5D3C89A2781 /* ice_quake.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ice_quake.h; path = ../Quake/ice/ice_quake.h; sourceTree = "<group>"; };
+		554BBA0D192C3FA3E15D9B12 /* ice_private.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ice_private.h; path = ../Quake/ice/ice_private.h; sourceTree = "<group>"; };
 		85F640302C9E1EE300615B7F /* macos_instructions.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = macos_instructions.html; path = ../Quake/macos_instructions.html; sourceTree = "<group>"; };
 		85F94F5A2A606C26005D9F52 /* libmad.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libmad.a; path = libs_universal/libmad.a; sourceTree = "<group>"; };
 		85F94F5B2A606C31005D9F52 /* libFLAC.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libFLAC.a; path = libs_universal/libFLAC.a; sourceTree = "<group>"; };
@@ -650,12 +674,23 @@
 				483A783C0D2EEAAB00CB2E4C /* cl_main.c */,
 				483A783D0D2EEAAB00CB2E4C /* cl_parse.c */,
 				483A783E0D2EEAAB00CB2E4C /* cl_tent.c */,
+				90ECE478BDE66F0C8D06B1E6 /* ice_gnutls.c */,
+				45F4ACF15444F99936BC8377 /* ice_main.c */,
+				A3C228E9012F1B8D0C84C323 /* ice_mdns.c */,
+				BF4B22DFE60E6499C7DACA95 /* ice_quake.c */,
+				1695A5E28026016286A7D868 /* ice_sctp.c */,
+				819FB6D86708F770785F397D /* ice_socket.c */,
+				912CB455951D11690C9F4CC4 /* ice_stream.c */,
 				FD07DF932782B4E3005CB9D9 /* iplog.c */,
+				C4DBE3E8DEEF4F8104F11C0E /* json.c */,
+				7FA834B8E03DEBBE46CD7BF3 /* md5.c */,
 				48134A1412102F400015BF15 /* net_bsd.c */,
 				48728D280D3004A70004D61B /* net_dgrm.c */,
 				48728D2A0D3004A80004D61B /* net_loop.c */,
 				483A783F0D2EEAAB00CB2E4C /* net_main.c */,
 				48134A1612102F400015BF15 /* net_udp.c */,
+				CA61141FFF62E21E619A2EF2 /* sha1.c */,
+				DA2E4F9FDA027A4AA2499356 /* sha2.c */,
 				483A78410D2EEAAB00CB2E4C /* sv_main.c */,
 				483A78420D2EEAAB00CB2E4C /* sv_move.c */,
 				483A78430D2EEAAB00CB2E4C /* sv_phys.c */,
@@ -714,6 +749,8 @@
 			isa = PBXGroup;
 			children = (
 				483A77F90D2EE9A900CB2E4C /* client.h */,
+				1329232458DEB5D3C89A2781 /* ice_quake.h */,
+				554BBA0D192C3FA3E15D9B12 /* ice_private.h */,
 				FD07DF922782B4CB005CB9D9 /* iplog.h */,
 				483A77FA0D2EE9A900CB2E4C /* net.h */,
 				48134A1512102F400015BF15 /* net_defs.h */,
@@ -883,6 +920,13 @@
 				664D98A519CF6B78000D395C /* cl_main.c in Sources */,
 				664D98A619CF6B78000D395C /* cl_parse.c in Sources */,
 				664D98A719CF6B78000D395C /* cl_tent.c in Sources */,
+				E383D8D0E3D1C813E9CA024A /* ice_gnutls.c in Sources */,
+				C6D9B732EE786BE3A94AD977 /* ice_main.c in Sources */,
+				4054F6CA1309CC4F91C1D0E1 /* ice_mdns.c in Sources */,
+				578A300FF6F0C14AE3DFBA3C /* ice_quake.c in Sources */,
+				3F9E64ACBC134B69EDF5586F /* ice_sctp.c in Sources */,
+				C441A37E9342D9F68C4F222D /* ice_socket.c in Sources */,
+				A8F116C73FF5181967B275CF /* ice_stream.c in Sources */,
 				664D98A819CF6B78000D395C /* net_main.c in Sources */,
 				664D98A919CF6B78000D395C /* sv_main.c in Sources */,
 				664D98AA19CF6B78000D395C /* sv_move.c in Sources */,
@@ -941,6 +985,10 @@
 				85AC9B2C2A70521E00228EF3 /* pmove.c in Sources */,
 				664D98D719CF6B78000D395C /* snd_umx.c in Sources */,
 				664D98D819CF6B78000D395C /* cfgfile.c in Sources */,
+				20AC0C3144322B2F02925415 /* json.c in Sources */,
+				6E1E4972589866F29E075A03 /* md5.c in Sources */,
+				E20E9F2EB9F085F115BA87C4 /* sha1.c in Sources */,
+				7394D93821B8ED996863EF66 /* sha2.c in Sources */,
 				664D98D919CF6B78000D395C /* strlcat.c in Sources */,
 				664D98DA19CF6B78000D395C /* strlcpy.c in Sources */,
 				664D98DB19CF6B78000D395C /* snd_opus.c in Sources */,
@@ -1000,6 +1048,8 @@
 					USE_CODEC_UMX,
 					SDL_FRAMEWORK,
 					USE_ZLIB,
+					USE_GNUTLS,
+					GNUTLS_STATIC,
 				);
 				HEADER_SEARCH_PATHS = (
 					codecs/include,
@@ -1021,7 +1071,21 @@
 					"$(PROJECT_DIR)/codecs/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 10.13;
-				OTHER_LDFLAGS = "-lcurl";
+				OTHER_LDFLAGS = (
+					"-lcurl",
+					"-lgnutls",
+					"-lnettle",
+					"-lhogweed",
+					"-lgmp",
+					"-lidn2",
+					"-lunistring",
+					"-ltasn1",
+					"-liconv",
+					"-framework",
+					Security,
+					"-framework",
+					CoreFoundation,
+				);
 				PRODUCT_NAME = "QSS-M";
 				"SDKROOT[arch=arm64]" = macosx;
 				VALID_ARCHS = "i386 x86_64 arm64";
@@ -1055,6 +1119,8 @@
 					USE_CODEC_UMX,
 					SDL_FRAMEWORK,
 					USE_ZLIB,
+					USE_GNUTLS,
+					GNUTLS_STATIC,
 				);
 				"GCC_WARN_64_TO_32_BIT_CONVERSION[arch=*64]" = NO;
 				HEADER_SEARCH_PATHS = (
@@ -1082,7 +1148,21 @@
 					"-arch",
 					i386,
 				);
-				OTHER_LDFLAGS = "-lcurl";
+				OTHER_LDFLAGS = (
+					"-lcurl",
+					"-lgnutls",
+					"-lnettle",
+					"-lhogweed",
+					"-lgmp",
+					"-lidn2",
+					"-lunistring",
+					"-ltasn1",
+					"-liconv",
+					"-framework",
+					Security,
+					"-framework",
+					CoreFoundation,
+				);
 				"OTHER_LDFLAGS[arch=i386]" = (
 					"-arch",
 					i386,

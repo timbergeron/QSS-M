@@ -79,6 +79,15 @@ typedef int	socklen_t;			/* defining as signed int to match the old api */
 
 #define	NET_EWOULDBLOCK		EWOULDBLOCK
 #define	NET_ECONNREFUSED	ECONNREFUSED
+#define	NET_EINTR			EINTR
+#define	NET_ENOTCONN		ENOTCONN
+#define	NET_ECONNABORTED	ECONNABORTED
+#define	NET_ECONNRESET		ECONNRESET
+#define	NET_ETIMEDOUT		ETIMEDOUT
+#define NET_EINPROGRESS		EINPROGRESS
+#define NET_EADDRNOTAVAIL	EADDRNOTAVAIL
+#define NET_EACCES			EACCES
+#define NET_ENETUNREACH		ENETUNREACH
 
 #define	socketerror(x)	strerror((x))
 
@@ -129,6 +138,7 @@ typedef unsigned int	in_addr_t;	/* u_int32_t */
 
 #define	NET_EWOULDBLOCK		EWOULDBLOCK
 #define	NET_ECONNREFUSED	ECONNREFUSED
+#define	NET_EINTR			EINTR
 
 #define	socketerror(x)	strerror((x))
 /* there is h_errno but no hstrerror() */

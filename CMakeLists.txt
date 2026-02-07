@@ -1,4 +1,5 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.0)
+cmake_policy(SET CMP0069 NEW)
 
 PROJECT(QSS)
 
@@ -7,6 +8,13 @@ SET(QS_LIBS ${QS_LIBS} m ${CMAKE_DL_LIBS})
 #other people seem to still care about msvc.
 IF(CMAKE_C_COMPILER_ID MATCHES "GNU")
 	SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror=pointer-arith")	#block this gnuc extension
+ENDIF()
+IF(CMAKE_BUILD_TYPE MATCHES "Release")
+	INCLUDE(CheckIPOSupported)
+	check_ipo_supported(RESULT result)
+	IF(result)
+		SET(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+	ENDIF()
 ENDIF()
 
 FIND_PACKAGE(PkgConfig REQUIRED)
@@ -114,7 +122,7 @@ IF(XMP_FOUND)
 	SET(QS_LIBS ${QS_LIBS} ${XMP_LIBRARIES})
 	SET(QS_FILES ${QS_FILES} Quake/snd_xmp.c)
 	SET(QS_DEFS ${QS_DEFS};USE_CODEC_XMP)
-	MESSAGE("Found libxmp support.")	
+	MESSAGE("Found libxmp support.")
 ELSE()
 	MESSAGE(WARNING "no xmp support.")
 ENDIF()
@@ -127,6 +135,16 @@ ENDIF()
 #ELSE()
 #	MESSAGE(WARNING "no umx support.")
 #ENDIF()
+
+
+FIND_PACKAGE(GnuTLS)
+IF(GNUTLS_FOUND)
+	SET(QS_LIBS ${QS_LIBS} ${GNUTLS_LIBRARY})
+	SET(QS_DEFS ${QS_DEFS};USE_GNUTLS)
+	MESSAGE("Found gnutls support.")
+ELSE()
+	MESSAGE(WARNING "no gnutls support.")
+ENDIF()
 
 INCLUDE_DIRECTORIES(${QS_DIRS})
 ADD_EXECUTABLE(quakespasm
@@ -162,6 +180,17 @@ ADD_EXECUTABLE(quakespasm
 	Quake/gl_warp.c
 	Quake/host.c
 	Quake/host_cmd.c
+	Quake/ice/ice_main.c
+	Quake/ice/ice_mdns.c
+	Quake/ice/ice_stream.c
+	Quake/ice/ice_socket.c
+	Quake/ice/ice_gnutls.c
+	Quake/ice/ice_quake.c
+	Quake/ice/ice_sctp.c
+	Quake/ice/json.c
+	Quake/ice/md5.c
+	Quake/ice/sha1.c
+	Quake/ice/sha2.c
 	Quake/image.c
 	Quake/in_sdl.c
 	Quake/keys.c

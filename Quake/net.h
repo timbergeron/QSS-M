@@ -32,7 +32,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define _QUAKE_NET_H
 
 
-#define	NET_NAMELEN		64
+#define	NET_NAMELEN		128	//Spike: extended this for dtls fingerprint info etc.
 
 #define NET_MAXMESSAGE		64000	/* ericw -- was 32000 */
 
@@ -70,8 +70,8 @@ qboolean NET_CanSendMessage (struct qsocket_s *sock);
 // Returns true or false if the given qsocket can currently accept a
 // message to be transmitted.
 
-struct qsocket_s *NET_GetServerMessage(void);
-//returns data in net_message, qsocket says which client its from
+//struct qsocket_s *NET_GetServerMessage(void);	//returns data in net_message, qsocket says which client its from //Spike - removed.
+void NET_GetServerMessages(void (*GotMessage)(struct qsocket_s *sock));	//get server messages, into a callback.
 
 int NET_ListAddresses(qhostaddr_t *addresses, int maxaddresses);
 //gets a list of public addresses.
