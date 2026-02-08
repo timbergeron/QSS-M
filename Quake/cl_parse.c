@@ -2631,7 +2631,7 @@ void CL_ParseServerMessage (void)
 			Sbar_Changed ();
 			i = MSG_ReadByte ();
 			str = MSG_ReadString();
-			if (i < cl.maxclients)
+			if (i < cl.maxclients && i>=0)
 				q_strlcpy (cl.scores[i].name, str, MAX_SCOREBOARDNAME);
 			break;
 
@@ -2639,7 +2639,7 @@ void CL_ParseServerMessage (void)
 			Sbar_Changed ();
 			i = MSG_ReadByte ();
 			j = MSG_ReadShort();
-			if (i < cl.maxclients)
+			if (i < cl.maxclients && i>=0)
 				cl.scores[i].frags = j;
 			break;
 
@@ -2647,7 +2647,7 @@ void CL_ParseServerMessage (void)
 			Sbar_Changed ();
 			i = MSG_ReadByte ();
 			j = MSG_ReadByte ();
-			if (i < cl.maxclients)
+			if (i < cl.maxclients && i>=0)
 				CL_NewTranslation (i, j);
 			break;
 
