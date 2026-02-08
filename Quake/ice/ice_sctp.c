@@ -39,6 +39,13 @@ typedef struct sctp_s
 
 		uint32_t ctsn;	//acked tsn
 		uint32_t losttsn; //total gap size...
+
+		//TODO: Packetisation Layer Path MTU Discovery (PLPMTUD / RFC4821)
+		uint32_t mtu;	//reduced any time we get errors sending a larger packet.
+		#define MTU_MIN 560		//a bit smaller than the ipv6 limit. dropping below this size is abusive.
+		#define MTU_MAX 65000	//leave a little slop for dtls overhead, I guess.
+//		uint32_t mtu_probe_tns;	//if this is acked then we managed to send a larger packet than our expected mtu
+//		uint32_t mtu_probe_size;//new mtu IF probe is acked.
 	} o;
 	struct
 	{
@@ -327,20 +334,68 @@ neterr_t SCTP_Transmit(struct sctp_s *sctp, const void *data, size_t length)
 
 	if (length)
 	{
-		d = (void*)&pkt[pktlen];
-		d->chunk.type = SCTP_TYPE_DATA;
-		d->chunk.flags = 3|4;
-		d->chunk.length = BigShort(sizeof(*d) + length);
-		d->tsn = BigLong(sctp->o.tsn++);
-		d->sid = sctp->qstreamid;
-		d->seq = BigShort(0); //not needed for unordered
-		d->ppid = BigLong(SCTP_PPID_DATA);
-		memcpy(d+1, data, length);
-		pktlen += sizeof(*d) + length;
+		qboolean first = true;
+		while (length)
+		{
+			int clen = length;
+			if (clen > sctp->o.mtu - pktlen)
+			{	//won't fit...
+				if (pktlen > sizeof(*h) && !(first && length > sctp->o.mtu-sizeof(*h)))
+				{	//more to send after. don't force flushing the first time around if the packet will still be bigger than a single segment.
+					neterr_t e;
+					h->crc = SCTP_Checksum(h, pktlen);
+					e = sctp->SendPacket(sctp->context, h, pktlen);
+					switch (e)
+					{
+					case NETERR_SENT:
+						break;	//yay... keep trying.
+					case NETERR_MTU:
+						//FIXME: if ICMP is blocked, we won't receive this. we need some other way to detect when only large packets are dropped and test that they're actually getting through.
+						if (sctp->o.mtu == MTU_MIN)
+							return NETERR_MTU;	//refusing to go smaller.
+						sctp->o.mtu -= 64;
+						if (sctp->o.mtu < MTU_MIN)
+							sctp->o.mtu = MTU_MIN;
+						return NETERR_CLOGGED;	//too lazy to resplit it. probably lost acks etc.
 
-		//chrome insists on pointless padding at the end. its annoying.
-		while(pktlen&3)
-			pkt[pktlen++]=0;
+					case NETERR_CLOGGED:
+					case NETERR_DISCONNECTED:
+					case NETERR_NOROUTE:
+					default:
+						return e;	//later parts are gonna give the same code, best stop now.
+					}
+
+					pktlen = sizeof(*h);	//reset to empty packet...
+				}
+
+				clen = sctp->o.mtu - pktlen;
+				if (clen > length)
+					clen = length;	//might have given it more space since we checked...
+			}
+
+			d = (void*)&pkt[pktlen];
+			d->chunk.type = SCTP_TYPE_DATA;
+			d->chunk.flags = 4;	//1:eom, 2:bom, 4:unordered(must match between fragments)
+			d->chunk.length = BigShort(sizeof(*d) + clen);
+			d->tsn = BigLong(sctp->o.tsn++);
+			d->sid = sctp->qstreamid;
+			d->seq = BigShort(0); //not needed for unordered
+			d->ppid = BigLong(SCTP_PPID_DATA);
+			memcpy(d+1, data, clen);
+			pktlen += sizeof(*d) + clen;
+
+			//chrome insists on pointless padding at the end. its annoying.
+			while(pktlen&3)
+				pkt[pktlen++]=0;
+
+			length -= clen;
+			data = (const char*)data + clen;
+
+			if (first)
+				d->chunk.flags |= 2, first = false;	//beginning of message.
+			if (!length)
+				d->chunk.flags |= 1;	//end of message.
+		}
 	}
 	if (pktlen == sizeof(*h))
 		return NETERR_SENT; //nothing to send...
@@ -811,6 +866,8 @@ sctp_t *SCTP_Create(struct icestate_s *ctx, const char *verbosename, unsigned in
 	Sys_RandomBytes((void*)&sctp->o.verifycode, sizeof(sctp->o.verifycode));
 	Sys_RandomBytes((void*)&sctp->i.verifycode, sizeof(sctp->i.verifycode));
 
+
+	sctp->o.mtu = 1450;
 	return sctp;
 }
 

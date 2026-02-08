@@ -136,14 +136,22 @@ ENDIF()
 #	MESSAGE(WARNING "no umx support.")
 #ENDIF()
 
-
-FIND_PACKAGE(GnuTLS)
-IF(GNUTLS_FOUND)
-	SET(QS_LIBS ${QS_LIBS} ${GNUTLS_LIBRARY})
-	SET(QS_DEFS ${QS_DEFS};USE_GNUTLS)
-	MESSAGE("Found gnutls support.")
+SET(ALLOW_OPENSSL2 false CACHE BOOL "Link against openssl2 despite it not technically being gpl compatible. May be okay as a system library, but don't statically link this way. Windows kinda needs 3.2+ anyway.")
+FIND_PACKAGE(OpenSSL)
+IF(OPENSSL_FOUND AND (ALLOW_OPENSSL2 OR NOT OPENSSL_VERSION_MAJOR LESS 3))	#exclude <3 because of gpl compliance issues. we need 3.2 for system certs on windows.
+	SET(QS_LIBS ${QS_LIBS} ${OPENSSL_LIBRARIES})
+	SET(QS_DEFS ${QS_DEFS};USE_OPENSSL)
+	MESSAGE("Found openssl support.")
 ELSE()
-	MESSAGE(WARNING "no gnutls support.")
+	FIND_PACKAGE(GnuTLS)
+	IF(GNUTLS_FOUND)
+		SET(QS_LIBS ${QS_LIBS} ${GNUTLS_LIBRARY})
+		SET(QS_DEFS ${QS_DEFS};USE_GNUTLS)
+		MESSAGE("Found gnutls support (instead of openssl3+).")
+	ELSE()
+		MESSAGE(WARNING "no openssl3+ support.")
+		MESSAGE(WARNING "no gnutls support either.")
+	ENDIF()
 ENDIF()
 
 INCLUDE_DIRECTORIES(${QS_DIRS})
@@ -185,6 +193,7 @@ ADD_EXECUTABLE(quakespasm
 	Quake/ice/ice_stream.c
 	Quake/ice/ice_socket.c
 	Quake/ice/ice_gnutls.c
+	Quake/ice/ice_openssl.c
 	Quake/ice/ice_quake.c
 	Quake/ice/ice_sctp.c
 	Quake/ice/json.c

@@ -204,14 +204,17 @@ COMMON_LIBS+= -lz
 endif
 
 ifeq ($(USE_GNUTLS),1)
-CFLAGS+= -DUSE_GNUTLS -DGNUTLS_STATIC $(shell $(PKG_CONFIG) --cflags gnutls)
-COMMON_LIBS+= $(shell $(PKG_CONFIG) --libs gnutls)
+ ifeq (1,$(shell $(PKG_CONFIG) --exists gnutls && echo 1))
+  CFLAGS+= -DUSE_GNUTLS -DGNUTLS_STATIC $(shell $(PKG_CONFIG) --cflags gnutls)
+  COMMON_LIBS+= $(shell $(PKG_CONFIG) --libs gnutls)
+ endif
 endif
 
 ifeq ($(LINK_M),1)
 COMMON_LIBS += -lm
 endif
 
+CFLAGS := $(CFLAGS)
 LIBS := $(COMMON_LIBS) $(NET_LIBS) $(CODECLIBS)
 
 # ---------------------------

@@ -228,12 +228,7 @@ struct icestate_s
 		char *name;
 	} codecslot[34];		//96-127. don't really need to care about other ones.
 
-	/*struct
-	{	//this block is for our inbound udp broker reliability, ensuring we get candidate info to where its needed...
-		char *text;
-		unsigned int inseq;
-		unsigned int outseq;
-	} u;*/
+	void *userptr;
 };
 
 #ifdef HAVE_DTLS
@@ -284,7 +279,7 @@ static struct icecodecslot_s *ICE_GetCodecSlot(struct icestate_s *ice, int slot)
 	return NULL;
 }
 
-static neterr_t NET_SendPacket(struct icemodule_s *module, netadr_t *addr, const void *data, size_t datasize)
+neterr_t ICE_SendUDPPacket(struct icemodule_s *module, netadr_t *addr, const void *data, size_t datasize)
 {
 	neterr_t e;
 	int i = 0;
@@ -686,7 +681,7 @@ static neterr_t TURN_Encapsulate(struct icestate_s *ice, netadr_t *to, const qby
 #endif
 	if (ice->modeflags & ICEF_RELAY_ONLY)
 		return NETERR_CLOGGED;
-	return NET_SendPacket(ice->module, to, data, datasize);
+	return ICE_SendUDPPacket(ice->module, to, data, datasize);
 }
 static neterr_t ICE_Transmit(void *cbctx, const qbyte *data, size_t datasize)
 {
@@ -1261,7 +1256,7 @@ static void ICE_ToStunServer(struct icestate_s *con, struct iceserver_s *srv)
 	data[3] = ((buf.cursize-20)>>0)&0xff;
 
 	if (srv->isstun)
-		err = NET_SendPacket(module, &srv->addr, data, buf.cursize);
+		err = ICE_SendUDPPacket(module, &srv->addr, data, buf.cursize);
 	else if (srv->con)
 		err = srv->con->SendPacket(srv->con, &srv->addr, data, buf.cursize);
 	else
@@ -1459,6 +1454,23 @@ size_t Base64_EncodeBlock(const qbyte *in, size_t length, char *out, size_t outs
 	if (out < end)
 		*out = 0;
 	return out-start;
+}
+size_t Base64_EncodeBlockURI(const qbyte *in, size_t length, char *out, size_t outsize)
+{	//special uri-safe version (also trims)
+	outsize = Base64_EncodeBlock(in, length, out, outsize);
+	for (length = 0; length < outsize; length++)
+	{
+		if (out[length] == '+')
+			out[length] = '-';
+		else if (out[length] == '/')
+			out[length] = '_';
+		else if (out[length] == '=')
+		{	//truncate it here.
+			out[length] = 0;
+			return length;
+		}
+	}
+	return outsize;
 }
 
 
@@ -2099,6 +2111,14 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 	else
 		return false;
 	return true;
+}
+void ICE_SetUserPtr(struct icestate_s *con, void *value)
+{
+	con->userptr = value;
+}
+void *ICE_GetUserPtr(struct icestate_s *con)
+{
+	return con->userptr;
 }
 qboolean ICE_SetFailed(struct icestate_s *con, const char *reasonfmt, ...)
 {
@@ -2995,8 +3015,8 @@ static struct icestate_s *ICE_DirectConnectedInternal(struct icemodule_s *module
 {
 	struct icestate_s *con;
 	char peer[128];
-
-	NET_AdrToString(peer,sizeof(peer), adr);
+	q_strlcpy(peer, dtlsstate?"dtls://":"", sizeof(peer));
+	NET_AdrToString(peer+strlen(peer),sizeof(peer)-strlen(peer), adr);
 	con = ICE_Create(module, NULL, peer, 0, ICEP_SERVER);
 
 	con->chosenpeer = *adr;
@@ -4056,7 +4076,7 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 				TURN_Encapsulate(con, from, data, buf.cursize);
 			else
 #endif
-				NET_SendPacket(module, from, data, buf.cursize);
+				ICE_SendUDPPacket(module, from, data, buf.cursize);
 			return true;
 		}
 	}
@@ -4134,7 +4154,7 @@ icefuncs_t iceapi =
 #endif
 
 
-#if !defined(HAVE_GNUTLS)
+#if !defined(HAVE_GNUTLS) && !defined(HAVE_OPENSSL)
 	#ifdef HAVE_DTLS
 		const dtlsfuncs_t *ICE_DTLS_InitServer(void)
 		{
