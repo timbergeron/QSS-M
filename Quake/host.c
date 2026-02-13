@@ -189,6 +189,8 @@ void Host_Error (const char *error, ...)
 
 	if (cl.qcvm.progs)
 		glDisable(GL_SCISSOR_TEST);	//equivelent to drawresetcliparea, to reset any damage if we crashed in csqc.
+	cl.qcvm.extfuncs.CSQC_UpdateView = 0; //its going down. don't let it incercept any of the dumb prints etc here.
+	cl.qcvm.extfuncs.CSQC_Shutdown = 0;	//also a common cause of recursive errors. don't give it a chance.
 	if (qcvm == &cls.menu_qcvm)
 		MQC_Shutdown();
 	PR_SwitchQCVM(NULL);
@@ -211,6 +213,8 @@ void Host_Error (const char *error, ...)
 	CL_Disconnect ();
 	cls.demonum = -1;
 	cl.intermission = 0; //johnfitz -- for errors during intermissions (changelevel with no map found, etc.)
+
+	CL_ClearState ();	//spike: stuff died. clean it up. mostly doing this to strip away any csqc still execing.
 
 	inerror = false;
 
