@@ -128,6 +128,7 @@ typedef struct {
 #define MOVEFLAG_NOGRAVITYONGROUND				0x00000002	//no slope sliding
 //#define MOVEFLAG_GRAVITYUNAFFECTEDBYTICRATE	0x00000004	//apply half-gravity both before AND after the move, which better matches the curve
 #define MOVEFLAG_QWEDGEBOX						0x00010000	//calculate edgefriction using tracebox and a buggy start pos
+#define MOVEFLAG_USEAIRACCEL					0x00020000	//the vanilla qw pmove code used movevars.accelerate and NEVER movevars.airaccelerate, but different defaults make fixing this awkward.
 #define MOVEFLAG_QWCOMPAT						(MOVEFLAG_NOGRAVITYONGROUND|MOVEFLAG_QWEDGEBOX)
 
 #define MASK_PLAYERSOLID	CONTENTMASK_ANYSOLID

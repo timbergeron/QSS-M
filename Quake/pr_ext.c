@@ -2017,8 +2017,8 @@ extern cvar_t sv_accelerate;
 extern cvar_t sv_friction;
 extern cvar_t sv_gravity;
 extern cvar_t sv_stopspeed;
-static cvar_t sv_airaccelerate = {"sv_airaccelerate", "0.7"};
-static cvar_t sv_wateraccelerate = {"sv_wateraccelerate", "10"};
+static cvar_t sv_airaccelerate = {"sv_airaccelerate", "-1"};
+static cvar_t sv_wateraccelerate = {"sv_wateraccelerate", "-1"};
 static cvar_t sv_waterfriction = {"sv_waterfriction", "4"};
 static cvar_t sv_spectatormaxspeed = {"sv_spectatormaxspeed", "500"};
 void PM_Register(void)
@@ -2049,11 +2049,11 @@ void PMSV_UpdateMovevars(void)
 {
 	memset(&svmovevars, 0, sizeof(svmovevars));
 	svmovevars.accelerate		= sv_accelerate.value;
-	svmovevars.airaccelerate	= sv_airaccelerate.value;
+	svmovevars.airaccelerate	= (sv_airaccelerate.value<0)?sv_accelerate.value:sv_airaccelerate.value;
 	svmovevars.friction			= sv_friction.value;
 	svmovevars.gravity			= sv_gravity.value;
 	svmovevars.stopspeed		= sv_stopspeed.value;
-	svmovevars.wateraccelerate	= sv_wateraccelerate.value;
+	svmovevars.wateraccelerate	= (sv_wateraccelerate.value<0)?sv_accelerate.value:sv_wateraccelerate.value;
 	svmovevars.waterfriction	= sv_waterfriction.value;
 	svmovevars.entgravity		= 1.0;
 	svmovevars.maxspeed			= sv_maxspeed.value;
@@ -2119,7 +2119,7 @@ void PMCL_ServerinfoUpdated(void)
 {
 	memset(&clmovevars, 0, sizeof(clmovevars));
 	clmovevars.accelerate			= PMCL_GetKeyValue("sv_accelerate", 10);
-	clmovevars.airaccelerate		= PMCL_GetKeyValue("sv_airaccelerate", 0.7);
+	clmovevars.airaccelerate		= PMCL_GetKeyValue("sv_airaccelerate", 10);
 	clmovevars.friction				= PMCL_GetKeyValue("sv_friction", 4);
 	clmovevars.gravity				= PMCL_GetKeyValue("sv_gravity", 800);
 	clmovevars.stopspeed			= PMCL_GetKeyValue("sv_stopspeed", 100);
