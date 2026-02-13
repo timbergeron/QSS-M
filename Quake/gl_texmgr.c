@@ -585,6 +585,26 @@ void TexMgr_LoadPalette (void)
 	int i, mark;
 	FILE *f;
 
+	int fullbrights = 32;
+	int firstfullbright;
+	{
+		byte *colormap = COM_LoadTempFile("gfx/colormap.lmp", NULL);
+		if (colormap && com_filesize == VID_GRADES*256+1)
+		{
+			byte *darks = colormap + (VID_GRADES-1)*256;
+			fullbrights = 0;
+			for (i = 255; i >= 0; i--)
+			{
+				if (colormap[i] == darks[i])	//no degredation...
+					fullbrights++;
+				else
+					break;
+			}
+		}
+	}
+	firstfullbright = 256-fullbrights;
+
+
 	COM_FOpenFile ("gfx/palette.lmp", &f, NULL);
 	if (!f)
 		Sys_Error ("Couldn't load gfx/palette.lmp");
@@ -607,16 +627,16 @@ void TexMgr_LoadPalette (void)
 	((byte *) &d_8to24table[255]) [3] = 0;
 
 	//fullbright palette, 0-223 are black (for additive blending)
-	src = pal + 224*3;
-	dst = (byte *) &d_8to24table_fbright[224];
-	for (i = 224; i < 256; i++)
+	src = pal + firstfullbright*3;
+	dst = (byte *) &d_8to24table_fbright[firstfullbright];
+	for (i = firstfullbright; i < 256; i++)
 	{
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = 255;
 	}
-	for (i = 0; i < 224; i++)
+	for (i = 0; i < firstfullbright; i++)
 	{
 		dst = (byte *) &d_8to24table_fbright[i];
 		dst[3] = 255;
@@ -633,7 +653,7 @@ void TexMgr_LoadPalette (void)
 		*dst++ = *src++;
 		*dst++ = 255;
 	}
-	for (i = 224; i < 256; i++)
+	for (i = firstfullbright; i < 256; i++)
 	{
 		dst = (byte *) &d_8to24table_nobright[i];
 		dst[3] = 255;
