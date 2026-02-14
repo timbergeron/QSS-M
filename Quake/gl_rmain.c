@@ -338,16 +338,31 @@ qboolean R_CullModelForEntity (entity_t *e)
 R_RotateForEntity -- johnfitz -- modified to take origin and angles instead of pointer to entity
 ===============
 */
-void R_RotateForEntity (vec3_t origin, vec3_t angles, unsigned char scale)
+void R_RotateForEntity (vec3_t origin, vec3_t angles, entity_t *e)
 {
 	glTranslatef (origin[0],  origin[1],  origin[2]);
 	glRotatef (angles[1],  0, 0, 1);
 	glRotatef (-angles[0],  0, 1, 0);
 	glRotatef (angles[2],  1, 0, 0);
 
-	if (scale != ENTSCALE_DEFAULT)
+	if (e->netstate.scale != ENTSCALE_DEFAULT)
 	{
-		float scalefactor = ENTSCALE_DECODE(scale);
+		float scalefactor = ENTSCALE_DECODE(e->netstate.scale);
+
+		switch((e->netstate.drawflags>>5)&3)
+		{
+		case 0/*SCALE_ORIGIN_CENTER...ish*/:
+			glTranslatef (0, 0, (e->model->mins[2] + e->model->maxs[2])/2 * (1-scalefactor));
+			break;
+		case 1/*SCALE_ORIGIN_BOTTOM...ish*/:
+			glTranslatef (0, 0, e->model->mins[2] * (1-scalefactor));
+			break;
+		case 2/*SCALE_ORIGIN_TOP...ish*/:
+			glTranslatef (0, 0, e->model->maxs[2] * (1-scalefactor));
+			break;
+		case 3: //origin no extra translate needed.
+			break;
+		}
 		glScalef(scalefactor, scalefactor, scalefactor);
 	}
 }

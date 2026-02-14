@@ -1154,7 +1154,7 @@ void R_DrawAliasModel (entity_t *e)
 		glPushMatrix ();
 	}
 
-	R_RotateForEntity (lerpdata.origin, lerpdata.angles, e->netstate.scale);
+	R_RotateForEntity (lerpdata.origin, lerpdata.angles, e);
 	glTranslatef (paliashdr->scale_origin[0], paliashdr->scale_origin[1] * fovscale, paliashdr->scale_origin[2] * fovscale);
 	glScalef (paliashdr->scale[0], paliashdr->scale[1] * fovscale, paliashdr->scale[2] * fovscale);
 
@@ -1527,7 +1527,7 @@ void R_DrawAliasModel_ShowTris (entity_t *e)
 	R_SetupEntityTransform (e, &lerpdata);
 
 	glPushMatrix ();
-	R_RotateForEntity (lerpdata.origin,lerpdata.angles, e->netstate.scale);
+	R_RotateForEntity (lerpdata.origin,lerpdata.angles, e);
 	glTranslatef (paliashdr->scale_origin[0], paliashdr->scale_origin[1], paliashdr->scale_origin[2]);
 	glScalef (paliashdr->scale[0], paliashdr->scale[1], paliashdr->scale[2]);
 

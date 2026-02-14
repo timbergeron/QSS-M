@@ -34,6 +34,7 @@ cvar_t		scr_conalpha = {"scr_conalpha", "0.5", CVAR_ARCHIVE}; //johnfitz
 qpic_t		*draw_disc;
 qpic_t		*draw_backtile;
 
+qboolean	char_hexen2;	//wider, iso8859-1 with padding.
 gltexture_t *char_texture; //johnfitz
 qpic_t		*pic_ovr, *pic_ins; //johnfitz -- new cursor handling
 qpic_t		*pic_nul; //johnfitz -- for missing gfx, don't crash
@@ -455,6 +456,7 @@ void Draw_LoadPics (void)
 
 	draw_load24bit = !!gl_load24bit.value;
 
+	char_hexen2 = false;
 	char_texture = NULL;
 	//logical path
 	if (!char_texture)
@@ -462,6 +464,15 @@ void Draw_LoadPics (void)
 	//stupid quakeworldism
 	if (!char_texture)
 		char_texture = draw_load24bit?TexMgr_LoadImage (NULL, WADFILENAME":conchars", 0, 0, SRC_EXTERNAL, NULL, "charsets/conchars", 0, conchar_texflags | /*TEXPREF_MIPMAP |*/ TEXPREF_ALLOWMISSING):NULL;
+
+	if (!char_texture)
+	{
+		data = COM_LoadTempFile ("gfx/menu/conchars.lmp", NULL);
+		if (data)
+			char_texture = draw_load24bit?TexMgr_LoadImage (NULL, WADFILENAME":conchars", 256, 128, SRC_INDEXED, data, "gfx/menu/conchars", 0, conchar_texflags | /*TEXPREF_MIPMAP |*/ TEXPREF_ALLOWMISSING):NULL;
+		char_hexen2 = !!char_texture;
+	}
+
 	//vanilla.
 	if (!char_texture)
 	{
@@ -564,22 +575,35 @@ Draw_CharacterQuad -- johnfitz -- seperate function to spit out verts
 void Draw_CharacterQuad (int x, int y, char num)
 {
 	int				row, col;
-	float			frow, fcol, size;
+	float			frow, fcol, xsize, ysize;
 
-	row = num>>4;
-	col = num&15;
+	if (char_hexen2)
+	{
+		row = (byte)num>>5;
+		col = (byte)num&31;
+		if (row >= 4)	//urgh... haxx...
+			row += 8-4;
 
-	frow = row*0.0625;
-	fcol = col*0.0625;
-	size = 0.0625;
+		xsize = 1.0/32;
+		ysize = 1.0/16;
+	}
+	else
+	{
+		row = num>>4;
+		col = num&15;
+
+		xsize = ysize = 0.0625;
+	}
+	frow = row*ysize;
+	fcol = col*xsize;
 
 	glTexCoord2f (fcol, frow);
 	glVertex2f (x, y);
-	glTexCoord2f (fcol + size, frow);
+	glTexCoord2f (fcol + xsize, frow);
 	glVertex2f (x+8, y);
-	glTexCoord2f (fcol + size, frow + size);
+	glTexCoord2f (fcol + xsize, frow + ysize);
 	glVertex2f (x+8, y+8);
-	glTexCoord2f (fcol, frow + size);
+	glTexCoord2f (fcol, frow + ysize);
 	glVertex2f (x, y+8);
 }
 
@@ -731,7 +755,10 @@ void Draw_ConsoleBackground (void)
 	qpic_t *pic;
 	float alpha;
 
-	pic = Draw_CachePic ("gfx/conback.lmp");
+	if (char_hexen2)
+		pic = Draw_CachePic ("gfx/menu/conback.lmp");
+	else
+		pic = Draw_CachePic ("gfx/conback.lmp");
 	pic->width = vid.conwidth;
 	pic->height = vid.conheight;
 

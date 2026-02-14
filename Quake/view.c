@@ -773,7 +773,14 @@ void V_CalcRefdef (void)
 		for (i=0 ; i<3 ; i++)
 			r_refdef.vieworg[i] += scr_ofsx.value*forward[i] + scr_ofsy.value*right[i] + scr_ofsz.value*up[i];
 
-	V_BoundOffsets ();
+	if (ent->model && ent->model->mins[2] >= -10 && ent->model->maxs[2] >= 24+32)
+	{	//hack this hack...
+		ent->origin[2] += 24;
+		V_BoundOffsets ();
+		ent->origin[2] -= 24;
+	}
+	else
+		V_BoundOffsets ();
 
 // set up gun stuff
 	CalcGunAngle ();

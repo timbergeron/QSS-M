@@ -152,6 +152,13 @@ void Sbar_LoadPics (void)
 {
 	int		i;
 
+	lumpinfo_t *info;
+	if (W_GetLumpName("tinyfont", &info))
+	{
+		hudtype = 3;
+		return;	//hexen2's gfx.wad... don't spam. depend on csqc for any huds.
+	}
+
 	for (i = 0; i < 10; i++)
 	{
 		sb_nums[0][i] = Draw_PicFromWad (va("num_%i",i));

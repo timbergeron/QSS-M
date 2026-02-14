@@ -478,7 +478,7 @@ static unsigned int CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, c
 			/*news->abslight =*/ MSG_ReadByte();
 		//else
 		//	news->abslight = 0;
-		//news->drawflags = drawflags;
+		news->drawflags = drawflags;
 	}
 	if (bits & UF_TAGINFO)
 	{

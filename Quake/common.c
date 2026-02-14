@@ -1820,7 +1820,7 @@ entity_state_t nullentitystate;
 static void COM_SetupNullState(void)
 {
 	//the null state has some specific default values
-//	nullentitystate.drawflags = /*SCALE_ORIGIN_ORIGIN*/96;
+	nullentitystate.drawflags = /*SCALE_ORIGIN_ORIGIN*/96;
 	nullentitystate.colormod[0] = 32;
 	nullentitystate.colormod[1] = 32;
 	nullentitystate.colormod[2] = 32;

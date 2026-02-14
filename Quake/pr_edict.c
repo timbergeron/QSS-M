@@ -1299,7 +1299,7 @@ qboolean PR_LoadProgs (const char *filename, qboolean fatal, unsigned int needcr
 			Host_Error ("%s has wrong version number (%i should be %i)", filename, qcvm->progs->version, PROG_VERSION);
 		else
 		{
-			Con_Printf("%s ABI set not supported\n", filename);
+			Con_Warning("%s ABI set not supported\n", filename);
 			qcvm->progs = NULL;
 			return false;
 		}
@@ -1313,7 +1313,7 @@ qboolean PR_LoadProgs (const char *filename, qboolean fatal, unsigned int needcr
 			switch(qcvm->progs->crc)
 			{
 			case 22390:	//full csqc
-				Con_Printf("%s - full csqc is not supported\n", filename);
+				Con_Printf("%s - original csqc crc is not supported\n", filename);
 				break;
 			case 52195:	//dp csqc
 				Con_Printf("%s - obsolete csqc is not supported\n", filename);

@@ -487,6 +487,7 @@ typedef struct entity_state_s
 	unsigned char	colormod[3];	//spike -- entity tints, *32
 	unsigned char	glowmod[3];	//spike -- entity tints, *32
 	unsigned char	alpha;		//johnfitz -- added
+	unsigned char	drawflags;		//spike -- added for FTE-H2 client support. for the luls.
 	unsigned int	solidsize;	//for csqc prediction logic.
 					#define ES_SOLID_NOT 0
 					#define ES_SOLID_BSP 31

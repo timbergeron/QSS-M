@@ -774,6 +774,7 @@ static void CL_LoadCSProgs(void)
 	if (pr_checkextension.value && !cl_nocsqc.value)
 	{	//only try to use csqc if qc extensions are enabled.
 		char versionedname[MAX_QPATH];
+		char specifiedname[MAX_QPATH];
 		unsigned int csqchash;
 		size_t csqcsize;
 		const char *val;
@@ -785,11 +786,14 @@ static void CL_LoadCSProgs(void)
 			*versionedname = 0;
 		csqcsize = strtoul(Info_GetKey(cl.serverinfo, "*csprogssize", versionedname, sizeof(versionedname)), NULL, 0);
 
+		val = Info_GetKey(cl.serverinfo, "*csprogsname", specifiedname, sizeof(specifiedname));
+
 		//try csprogs.dat first, then fall back on progs.dat in case someone tried merging the two.
 		//we only care about it if it actually contains a CSQC_DrawHud, otherwise its either just a (misnamed) ssqc progs or a full csqc progs that would just crash us on 3d stuff.
-		if ((*versionedname && PR_LoadProgs(versionedname, false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && (qcvm->extfuncs.CSQC_DrawHud||cl.qcvm.extfuncs.CSQC_UpdateView))||
-			(PR_LoadProgs("csprogs.dat", false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && (qcvm->extfuncs.CSQC_DrawHud||qcvm->extfuncs.CSQC_DrawScores||cl.qcvm.extfuncs.CSQC_UpdateView))||
-			(PR_LoadProgs("progs.dat",   false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && (qcvm->extfuncs.CSQC_DrawHud||cl.qcvm.extfuncs.CSQC_UpdateView)))
+		if ((*versionedname &&	PR_LoadProgs(versionedname, false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && (qcvm->extfuncs.CSQC_DrawHud||cl.qcvm.extfuncs.CSQC_UpdateView))||
+			(*val &&			PR_LoadProgs(val,			false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && (qcvm->extfuncs.CSQC_DrawHud||cl.qcvm.extfuncs.CSQC_UpdateView))||
+			(					PR_LoadProgs("csprogs.dat", false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && (qcvm->extfuncs.CSQC_DrawHud||qcvm->extfuncs.CSQC_DrawScores||cl.qcvm.extfuncs.CSQC_UpdateView))||
+			(					PR_LoadProgs("progs.dat",   false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && (qcvm->extfuncs.CSQC_DrawHud||cl.qcvm.extfuncs.CSQC_UpdateView)))
 		{
 			qcvm->max_edicts = CLAMP (MIN_EDICTS,(int)max_edicts.value,MAX_EDICTS);
 			qcvm->edicts = (edict_t *) malloc (qcvm->max_edicts*qcvm->edict_size);
@@ -1148,7 +1152,12 @@ void Host_Init (void)
 	if (cls.state != ca_dedicated)
 	{
 		Cbuf_AddText ("cl_warncmd 0\n");
-		Cbuf_InsertText ("exec quake.rc\n");
+		if (COM_FileExists("quake.rc", NULL))
+			Cbuf_InsertText ("exec quake.rc\n");
+//		else if (COM_FileExists("hexen.rc", NULL))
+//			Cbuf_InsertText ("exec hexen.rc\n");	//includes a `menu_main` command which screws with quakespasm's normal startup behaviours. just ignore it and do the q2like thing.
+		else
+			Cbuf_InsertText ("exec default.cfg\nexec config.cfg\nexec autoexec.cfg\nstuffcmds\n");
 		Cbuf_AddText ("cl_warncmd 1\n");
 	// johnfitz -- in case the vid mode was locked during vid_init, we can unlock it now.
 		// note: two leading newlines because the command buffer swallows one of them.
