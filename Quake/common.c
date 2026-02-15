@@ -1588,8 +1588,8 @@ qboolean COM_DownloadNameOkay(const char *filename)
 		return false;
 
 	//quickly test the prefix to ensure that its in one of the allowed subdirs
-	if (strncmp(filename, "sound/", 6) && 
-		strncmp(filename, "progs/", 6) && 
+	if (strncmp(filename, "sound/", 6) &&
+		strncmp(filename, "progs/", 6) &&
 		strncmp(filename, "maps/", 5) &&
 		strncmp(filename, "models/", 7))
 		return false;
@@ -3092,7 +3092,7 @@ static void COM_Game_f (void)
 				}
 				else if (*p == '-')
 					continue;
-				
+
 				if (!*p || !strcmp(p, ".") || strstr(p, "..") || strstr(p, "/") || strstr(p, "\\") || strstr(p, ":"))
 				{
 					Con_Printf ("gamedir should be a single directory name, not a path\n");
@@ -3101,6 +3101,15 @@ static void COM_Game_f (void)
 
 				if (!q_strcasecmp(p, GAMENAME))
 					continue; //don't add id1, its not interesting enough.
+
+				if (Sys_FileType(va("%s/%s", com_basedir, p)) != FS_ENT_DIRECTORY)
+				{
+					if (host_parms->userdir == host_parms->basedir || (Sys_FileType(va("%s/%s", host_parms->userdir, p)) != FS_ENT_DIRECTORY))
+					{
+						Con_Printf ("No such game directory \"%s\"\n", p);
+						return;
+					}
+				}
 
 				if (*paths)
 					q_strlcat(paths, ";", sizeof(paths));

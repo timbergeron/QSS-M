@@ -1696,6 +1696,8 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 			out->styles[i] = INVALID_LIGHTSTYLE;
 
 		out->flags = 0;
+		if (out->numedges < 3)
+			Con_Warning("surfnum %d: bad numedges %d\n", surfnum, out->numedges);
 
 		if (side)
 			out->flags |= SURF_PLANEBACK;
@@ -2948,7 +2950,7 @@ static void *Mod_LoadAliasFrame (void * pin, maliasframedesc_t *frame, int pvtyp
 
 	pdaliasframe = (daliasframe_t *)pin;
 
-	strcpy (frame->name, pdaliasframe->name);
+	q_strlcpy (frame->name, pdaliasframe->name, sizeof (frame->name));
 	frame->firstpose = posenum;
 	frame->numposes = 1;
 
