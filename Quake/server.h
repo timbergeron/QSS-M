@@ -20,8 +20,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 
-#ifndef _QUAKE_SERVER_H
-#define _QUAKE_SERVER_H
+#ifndef QUAKE_SERVER_H
+#define QUAKE_SERVER_H
 
 // server.h
 
@@ -37,6 +37,8 @@ typedef struct
 } server_static_t;
 
 //=============================================================================
+
+#define MAX_SIGNON_BUFFERS 256
 
 typedef enum {ss_loading, ss_active} server_state_t;
 
@@ -66,8 +68,9 @@ typedef struct
 	sizebuf_t	reliable_datagram;	// copied to all clients at end of frame
 	byte		reliable_datagram_buf[MAX_DATAGRAM];
 
-	sizebuf_t	signon;
-	byte		signon_buf[MAX_MSGLEN-2]; //johnfitz -- was 8192, now uses MAX_MSGLEN
+	sizebuf_t	*signon;
+	int			num_signon_buffers;
+	sizebuf_t	*signon_buffers[MAX_SIGNON_BUFFERS];
 
 	unsigned	protocol; //johnfitz
 	unsigned	protocolflags;
@@ -109,24 +112,27 @@ typedef struct
 #define	NUM_BASIC_SPAWN_PARMS		16
 #define	NUM_TOTAL_SPAWN_PARMS		64
 
+enum sendsignon_e
+{
+  	PRESPAWN_DONE,
+  	PRESPAWN_FLUSH=1,
+//	PRESPAWN_SERVERINFO,
+  	PRESPAWN_MODELS,
+  	PRESPAWN_SOUNDS,
+  	PRESPAWN_PARTICLES,
+  	PRESPAWN_BASELINES,
+  	PRESPAWN_STATICS,
+  	PRESPAWN_AMBIENTS,
+  	PRESPAWN_SIGNONBUFS,
+  	PRESPAWN_SIGNONMSG,
+};
+
 typedef struct client_s
 {
 	qboolean		active;				// false = client is free
 	qboolean		spawned;			// false = don't send datagrams (set when client acked the first entities)
 	qboolean		dropasap;			// has been told to go to another level
-	enum
-	{
-		PRESPAWN_DONE,
-		PRESPAWN_FLUSH=1,
-//		PRESPAWN_SERVERINFO,
-		PRESPAWN_MODELS,
-		PRESPAWN_SOUNDS,
-		PRESPAWN_PARTICLES,
-		PRESPAWN_BASELINES,
-		PRESPAWN_STATICS,
-		PRESPAWN_AMBIENTS,
-		PRESPAWN_SIGNONMSG,
-	}				sendsignon;			// only valid before spawned
+	enum sendsignon_e	sendsignon;			// only valid before spawned
 	int				signonidx;
 	unsigned int	signon_sounds;		//
 	unsigned int	signon_models;		//
@@ -331,6 +337,7 @@ void SVFTE_DestroyFrames(client_t *client);
 void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state);
 void SV_SendClientMessages (void);
 void SV_ClearDatagram (void);
+void SV_ReserveSignonSpace (int numbytes);
 
 int SV_ModelIndex (const char *name);
 
@@ -356,10 +363,8 @@ void SV_MoveToGoal (void);
 void SV_ConnectClient (int clientnum);	//called from the netcode to add new clients. also called from pr_ext to spawn new botclients.
 void SV_CheckForNewClients (void);
 void SV_RunClients (void);
-void SV_SaveSpawnparms ();
+void SV_SaveSpawnparms (void);
 void SV_SpawnServer (const char *server);
 
 void SV_SetupSkyRoom(char *value);
-
-#endif	/* _QUAKE_SERVER_H */
-
+#endif	/* QUAKE_SERVER_H */

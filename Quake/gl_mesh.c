@@ -45,15 +45,13 @@ Original code by MH from RMQEngine
 void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 {
 	int i, j;
-	int maxverts_vbo;
 	unsigned short *indexes;
 	trivertx_t *verts;
 	aliasmesh_t *desc;
 
 	// there can never be more than this number of verts and we just put them all on the hunk
 	//	front/back logic says we can never have more than numverts*2
-	maxverts_vbo = paliashdr->numverts * 2;
-	desc = (aliasmesh_t *) Hunk_Alloc (sizeof (aliasmesh_t) * maxverts_vbo);
+	desc = (aliasmesh_t *) Hunk_Alloc (sizeof (aliasmesh_t) * paliashdr->numverts * 2);
 
 	// there will always be this number of indexes
 	indexes = (unsigned short *) Hunk_Alloc (sizeof (unsigned short) * paliashdr->numtris * 3);
@@ -327,11 +325,11 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 			float hscale, vscale;
 
 			//johnfitz -- padded skins
-			hscale = (float)hdr->skinwidth/(float)TexMgr_PadConditional(hdr->skinwidth);
-			vscale = (float)hdr->skinheight/(float)TexMgr_PadConditional(hdr->skinheight);
+			hscale = 1.0f/TexMgr_PadConditional(hdr->skinwidth);
+			vscale = 1.0f/TexMgr_PadConditional(hdr->skinheight);
 			//johnfitz
 
-			hdr->vbostofs = stofs; 
+			hdr->vbostofs = stofs;
 			st = (meshst_t *) (vbodata + stofs);
 			stofs += hdr->numverts_vbo*sizeof(*st);
 			switch(hdr->poseverttype)
@@ -347,8 +345,8 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 			case PV_QUAKE1:
 				for (f = 0; f < hdr->numverts_vbo; f++)
 				{
-					st[f].st[0] = hscale * ((float) desc[f].st[0] + 0.5f) / (float) hdr->skinwidth;
-					st[f].st[1] = vscale * ((float) desc[f].st[1] + 0.5f) / (float) hdr->skinheight;
+					st[f].st[0] = hscale * ((float) desc[f].st[0] + 0.5f);
+					st[f].st[1] = vscale * ((float) desc[f].st[1] + 0.5f);
 				}
 				break;
 			case PV_IQM:
@@ -413,7 +411,7 @@ void GLMesh_LoadVertexBuffers (void)
 		if (m->type != mod_alias) continue;
 
 		hdr = (aliashdr_t *) Mod_Extradata (m);
-		
+
 		GLMesh_LoadVertexBuffer (m, hdr);
 	}
 }
@@ -429,10 +427,10 @@ void GLMesh_DeleteVertexBuffers (void)
 {
 	int j;
 	qmodel_t *m;
-	
+
 	if (!gl_vbo_able)
 		return;
-	
+
 	for (j = 1; j < MAX_MODELS; j++)
 	{
 		if (!(m = cl.model_precache[j])) break;
@@ -645,7 +643,7 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 			osurf->nextsurface = size;
 		else
 			osurf->nextsurface = 0;
-		
+
 		osurf->poseverttype = PV_QUAKE3;
 		osurf->numverts_vbo = osurf->numverts = LittleLong(pinsurface->numVerts);
 		pinvert = (md3XyzNormal_t*)((byte*)pinsurface + LittleLong(pinsurface->ofsXyzNormals));

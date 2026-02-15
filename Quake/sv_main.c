@@ -1882,6 +1882,11 @@ CLIENT SPAWNING
 ==============================================================================
 */
 
+static qboolean SV_IsLocalClient (client_t *client)
+{
+	return Q_strcmp (NET_QSocketGetTrueAddressString (client->netconnection), "LOCAL") == 0;
+}
+
 /*
 ================
 SV_SendServerinfo
@@ -3411,11 +3416,32 @@ void SV_SendClientMessages (void)
 					host_client->sendsignon++;
 				}
 			}
+			if (host_client->sendsignon == PRESPAWN_SIGNONBUFS)
+			{
+				qboolean local = SV_IsLocalClient (host_client);
+				while (host_client->signonidx < sv.num_signon_buffers)
+				{
+					sizebuf_t *signon = sv.signon_buffers[host_client->signonidx];
+					if (host_client->message.cursize + signon->cursize > host_client->message.maxsize)
+						break;
+					SZ_Write (&host_client->message, signon->data, signon->cursize);
+					host_client->signonidx++;
+					// only send multiple buffers at once when playing locally,
+					// otherwise we send one signon at a time to avoid overflowing
+					// the datagram buffer for clients using a lower limit (e.g. 32000 in QS)
+					if (!local)
+						break;
+				}
+				if (host_client->signonidx >= sv.num_signon_buffers)
+				{
+					host_client->signonidx = 0;
+					host_client->sendsignon++;
+				}
+			}
 			if (host_client->sendsignon == PRESPAWN_SIGNONMSG)
 			{
-				if (host_client->message.cursize+sv.signon.cursize+2 < host_client->message.maxsize)
+				if (host_client->message.cursize+2 < host_client->message.maxsize)
 				{
-					SZ_Write (&host_client->message, sv.signon.data, sv.signon.cursize);
 					MSG_WriteByte (&host_client->message, svc_signonnum);
 					MSG_WriteByte (&host_client->message, 2);
 					host_client->sendsignon = PRESPAWN_FLUSH;
@@ -3469,6 +3495,37 @@ SERVER SPAWNING
 
 ==============================================================================
 */
+
+#define SIGNON_SIZE		31500 // QS has a MAX_DATAGRAM of 32000, try to play nice
+
+/*
+================
+SV_AddSignonBuffer
+================
+*/
+static void SV_AddSignonBuffer (void)
+{
+	sizebuf_t *sb;
+	if (sv.num_signon_buffers >= MAX_SIGNON_BUFFERS)
+		Host_Error ("SV_AddSignonBuffer overflow\n");
+
+	sb = (sizebuf_t *) Hunk_AllocName (sizeof (sizebuf_t) + SIGNON_SIZE, "signon");
+	sb->data = (byte *)(sb + 1);
+	sb->maxsize = SIGNON_SIZE;
+	sv.signon_buffers[sv.num_signon_buffers++] = sb;
+	sv.signon = sb;
+}
+
+/*
+================
+SV_ReserveSignonSpace
+================
+*/
+void SV_ReserveSignonSpace (int numbytes)
+{
+	if (sv.signon->cursize + numbytes > sv.signon->maxsize)
+		SV_AddSignonBuffer ();
+}
 
 /*
 ================
@@ -3627,7 +3684,7 @@ void SV_SpawnServer (const char *server)
 {
 	static char	dummy[8] = { 0,0,0,0,0,0,0,0 };
 	edict_t		*ent;
-	int			i;
+	int			i, signonsize;
 	qcvm_t *vm = qcvm;
 
 	// let's not have any servers with no name
@@ -3718,9 +3775,7 @@ void SV_SpawnServer (const char *server)
 	sv.reliable_datagram.cursize = 0;
 	sv.reliable_datagram.data = sv.reliable_datagram_buf;
 
-	sv.signon.maxsize = sizeof(sv.signon_buf);
-	sv.signon.cursize = 0;
-	sv.signon.data = sv.signon_buf;
+	SV_AddSignonBuffer ();
 
 // leave slots at start for clients only
 	qcvm->num_edicts = qcvm->reserved_edicts = svs.maxclients+1;
@@ -3808,8 +3863,12 @@ void SV_SpawnServer (const char *server)
 	SV_CreateBaseline ();
 
 	//johnfitz -- warn if signon buffer larger than standard server can handle
-	if (sv.signon.cursize > 8000-2) //max size that will fit into 8000-sized client->message buffer with 2 extra bytes on the end
-		Con_DWarning ("%i byte signon buffer exceeds standard limit of 7998 (max = %d).\n", sv.signon.cursize, sv.signon.maxsize);
+	for (i = 0, signonsize = 0; i < sv.num_signon_buffers; i++)
+		signonsize += sv.signon_buffers[i]->cursize;
+	if (signonsize > 64000-2)
+		Con_DWarning ("%i byte signon buffer exceeds QS limit of 63998.\n", signonsize);
+	else if (signonsize > 8000-2) //max size that will fit into 8000-sized client->message buffer with 2 extra bytes on the end
+		Con_DWarning ("%i byte signon buffer exceeds standard limit of 7998.\n", signonsize);
 	//johnfitz
 
 // send serverinfo to all connected clients

@@ -4751,14 +4751,15 @@ static void SV_Multicast(multicast_t to, float *org, int msg_entity, unsigned in
 
 	if (to == MULTICAST_INIT && sv.state != ss_loading)
 	{
-		SZ_Write (&sv.signon, sv.multicast.data, sv.multicast.cursize);
+		SZ_Write (&sv.reliable_datagram, sv.multicast.data, sv.multicast.cursize);
 		to = MULTICAST_ALL_R;	//and send to players that are already on
 	}
 
 	switch(to)
 	{
 	case MULTICAST_INIT:
-		SZ_Write (&sv.signon, sv.multicast.data, sv.multicast.cursize);
+		SV_ReserveSignonSpace (sv.multicast.cursize);
+		SZ_Write (sv.signon, sv.multicast.data, sv.multicast.cursize);
 		break;
 	case MULTICAST_ALL_R:
 	case MULTICAST_ALL_U:

@@ -99,6 +99,7 @@ modestate_t	modestate = MS_UNINIT;
 qboolean	scr_skipupdate;
 
 qboolean gl_mtexable = false;
+qboolean gl_packed_pixels = false;
 qboolean gl_texture_env_combine = false; //johnfitz
 qboolean gl_texture_env_add = false; //johnfitz
 qboolean gl_swap_control = false; //johnfitz
@@ -1268,7 +1269,6 @@ static void GL_CheckExtensions (void)
 	{
 		Con_Warning ("OpenGL version < 2, GLSL not available\n");
 	}
-	
 	// GLSL gamma
 	//
 	if (COM_CheckParm("-noglslgamma"))
@@ -1276,34 +1276,70 @@ static void GL_CheckExtensions (void)
 	else if (gl_glsl_able)
 	{
 		gl_glsl_gamma_able = true;
+		Con_Printf("Enabled: GLSL gamma\n");
 	}
 	else
 	{
 		Con_Warning ("GLSL gamma not available, using hardware gamma\n");
 	}
-    
-    // GLSL alias model rendering
-    //
+	// GLSL alias model rendering
+	//
 	if (COM_CheckParm("-noglslalias"))
 		Con_Warning ("GLSL alias model rendering disabled at command line\n");
 	else if (gl_glsl_able && gl_vbo_able && gl_max_texture_units >= 3)
 	{
 		gl_glsl_alias_able = true;
+		Con_Printf("Enabled: GLSL alias model rendering\n");
 	}
 	else
 	{
 		Con_Warning ("GLSL alias model rendering not available, using Fitz renderer\n");
 	}
 
+	// packed_pixels
+	//
+	if (COM_CheckParm("-nopackedpixels"))
+		Con_Warning ("EXT_packed_pixels disabled at command line\n");
+	else if (gl_glsl_alias_able)
+	{
+		gl_packed_pixels = true;
+		Con_Printf("Enabled: EXT_packed_pixels\n");
+	}
+	#if 0 /* Disabling for non-GLSL path, needs more surgery. */
+	else if (GL_ParseExtensionList(gl_extensions, "GL_APPLE_packed_pixels"))
+	{
+		Con_Printf("FOUND: APPLE_packed_pixels\n");
+		gl_packed_pixels = true;
+	}
+	else if (GL_ParseExtensionList(gl_extensions, "GL_EXT_packed_pixels"))
+	{
+		Con_Printf("FOUND: EXT_packed_pixels\n");
+		gl_packed_pixels = true;
+	}
+	else
+	{
+		Con_Warning ("packed_pixels not supported\n");
+	}
+	#endif
+
 	// glGenerateMipmap for warp textures
 	if (COM_CheckParm("-nowarpmipmaps"))
 		Con_Warning ("glGenerateMipmap disabled at command line\n");
 	else
 	{
-		GL_GenerateMipmap = (QS_PFNGENERATEMIPMAP) SDL_GL_GetProcAddress("glGenerateMipmap");
-		if (GL_GenerateMipmap != NULL)
-			Con_Printf ("FOUND: glGenerateMipmap\n");
-		else
+		if (gl_version_major >= 3 || GL_ParseExtensionList(gl_extensions, "GL_ARB_framebuffer_object"))
+		{
+			GL_GenerateMipmap = (QS_PFNGENERATEMIPMAP) SDL_GL_GetProcAddress("glGenerateMipmap");
+			if (GL_GenerateMipmap != NULL)
+				Con_Printf ("FOUND: glGenerateMipmap\n");
+		}
+		else if (GL_ParseExtensionList(gl_extensions, "GL_EXT_framebuffer_object"))
+		{
+			GL_GenerateMipmap = (QS_PFNGENERATEMIPMAP) SDL_GL_GetProcAddress("glGenerateMipmapEXT");
+			if (GL_GenerateMipmap != NULL)
+				Con_Printf ("FOUND: glGenerateMipmapEXT\n");
+		}
+		if (GL_GenerateMipmap == NULL)
 			Con_Warning ("glGenerateMipmap not available, liquids won't have mipmaps\n");
 	}
 }
@@ -2453,4 +2489,3 @@ void VID_SetCursor(qcvm_t *vm, const char *cursorname, float hotspot[2], float c
 	if (oldcursor)
 		SDL_FreeCursor(oldcursor);
 }
-

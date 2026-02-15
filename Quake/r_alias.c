@@ -28,9 +28,7 @@ extern cvar_t r_drawflat, gl_overbright_models, gl_fullbrights, r_lerpmodels, r_
 extern cvar_t scr_fov, cl_gun_fovscale;
 
 #define NUMVERTEXNORMALS	162
-
-float	r_avertexnormals[NUMVERTEXNORMALS][3] =
-{
+float	r_avertexnormals[NUMVERTEXNORMALS][3] = {
 #include "anorms.h"
 };
 
@@ -38,21 +36,20 @@ extern vec3_t	lightcolor; //johnfitz -- replaces "float shadelight" for lit supp
 
 // precalculated dot products for quantized angles
 #define SHADEDOT_QUANT 16
-float	r_avertexnormal_dots[SHADEDOT_QUANT][256] =
-{
+static float	r_avertexnormal_dots[SHADEDOT_QUANT][256] = {
 #include "anorm_dots.h"
 };
 
-extern	vec3_t			lightspot;
+extern	vec3_t	lightspot;
 
-float	*shadedots = r_avertexnormal_dots[0];
-vec3_t	shadevector;
+static float	*shadedots = r_avertexnormal_dots[0];
+static vec3_t	shadevector;
 
-float	entalpha; //johnfitz
+static float	entalpha; //johnfitz
 
-qboolean	overbright; //johnfitz
+static qboolean overbright; //johnfitz
 
-qboolean shading = true; //johnfitz -- if false, disable vertex shading for various reasons (fullbright, r_lightmap, showtris, etc)
+static qboolean shading = true; //johnfitz -- if false, disable vertex shading for various reasons (fullbright, r_lightmap, showtris, etc)
 
 //johnfitz -- struct for passing lerp information to drawing functions
 typedef struct {
@@ -78,20 +75,20 @@ typedef struct
 	GLuint program;
 
 	// uniforms used in vert shader
-	GLuint bonesLoc;
-	GLuint blendLoc;
-	GLuint shadevectorLoc;
-	GLuint lightColorLoc;
+	GLint bonesLoc;
+	GLint blendLoc;
+	GLint shadevectorLoc;
+	GLint lightColorLoc;
 
 	// uniforms used in frag shader
-	GLuint texLoc;
-	GLuint lowerTexLoc;
-	GLuint upperTexLoc;
-	GLuint fullbrightTexLoc;
-	GLuint useFullbrightTexLoc;
-	GLuint useOverbrightLoc;
-	GLuint useAlphaTestLoc;
-	GLuint colorTintLoc;
+	GLint texLoc;
+	GLint lowerTexLoc;
+	GLint upperTexLoc;
+	GLint fullbrightTexLoc;
+	GLint useFullbrightTexLoc;
+	GLint useOverbrightLoc;
+	GLint useAlphaTestLoc;
+	GLint colorTintLoc;
 } aliasglsl_t;
 static aliasglsl_t r_alias_glsl[ALIAS_GLSL_MODES];
 
@@ -885,7 +882,7 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 				lerpdata->blend = CLAMP (0.0f, (float)(cl.time - e->lerp.state.lerpstart) / (e->lerpfinish - e->lerp.state.lerpstart), 1.0f);
 			else
 				lerpdata->blend = CLAMP (0.0f, (float)(cl.time - e->lerp.state.lerpstart) / e->lerp.state.lerptime, 1.0f);
-			lerpdata->pose1 = e->lerp.state.previouspose;
+			lerpdata->pose1 = (lerpdata->blend == 1.0f)?e->lerp.state.currentpose:e->lerp.state.previouspose;
 			lerpdata->pose2 = e->lerp.state.currentpose;
 		}
 		else //don't lerp
@@ -1165,7 +1162,7 @@ void R_DrawAliasModel (entity_t *e)
 		glShadeModel (GL_SMOOTH);
 	if (gl_affinemodels.value)
 		glHint (GL_PERSPECTIVE_CORRECTION_HINT, GL_FASTEST);
-	overbright = gl_overbright_models.value;
+	overbright = !!gl_overbright_models.value;
 	shading = true;
 
 	//
@@ -1537,4 +1534,3 @@ void R_DrawAliasModel_ShowTris (entity_t *e)
 
 	glPopMatrix ();
 }
-

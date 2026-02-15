@@ -216,7 +216,7 @@ byte *Mod_LeafPVS (mleaf_t *leaf, qmodel_t *model)
 byte *Mod_NoVisPVS (qmodel_t *model)
 {
 	int pvsbytes;
- 
+
 	pvsbytes = (model->numleafs+7)>>3;
 	if (mod_novis == NULL || pvsbytes > mod_novis_capacity)
 	{
@@ -224,7 +224,7 @@ byte *Mod_NoVisPVS (qmodel_t *model)
 		mod_novis = (byte *) realloc (mod_novis, mod_novis_capacity);
 		if (!mod_novis)
 			Sys_Error ("Mod_NoVisPVS: realloc() failed on %d bytes", mod_novis_capacity);
-		
+
 		memset(mod_novis, 0xff, mod_novis_capacity);
 	}
 	return mod_novis;
@@ -1734,7 +1734,7 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 
 	// lighting info
 		if (loadmodel->bspversion == BSPVERSION_QUAKE64)
-			lofs /= 2; // Q64 samples are 16bits instead 8 in normal Quake 
+			lofs /= 2; // Q64 samples are 16bits instead 8 in normal Quake
 
 		for (facestyles = 0 ; facestyles<MAXLIGHTMAPS && out->styles[facestyles] != INVALID_LIGHTSTYLE ; facestyles++)
 			;	//count the styles so we can bound-check properly.
@@ -2723,7 +2723,7 @@ static byte *Mod_LoadVisibilityExternal(FILE* f)
 	byte*	visdata;
 
 	filelen = 0;
-	fread(&filelen, 1, 4, f);
+	if (!fread(&filelen, 4, 1, f)) return NULL;
 	filelen = LittleLong(filelen);
 	if (filelen <= 0) return NULL;
 	Con_DPrintf("...%d bytes visibility data\n", filelen);
@@ -2739,7 +2739,7 @@ static void Mod_LoadLeafsExternal(FILE* f)
 	void*	in;
 
 	filelen = 0;
-	fread(&filelen, 1, 4, f);
+	if (!fread(&filelen, 4, 1, f)) return;
 	filelen = LittleLong(filelen);
 	if (filelen <= 0) return;
 	Con_DPrintf("...%d bytes leaf data\n", filelen);
@@ -3722,7 +3722,7 @@ static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int fram
 Mod_LoadSpriteGroup
 =================
 */
-static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int framenum, enum srcformat fmt)
+static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int framenum, enum srcformat fmt, spriteframetype_t type)
 {
 	dspritegroup_t		*pingroup;
 	mspritegroup_t		*pspritegroup;
@@ -3735,6 +3735,8 @@ static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int fram
 	pingroup = (dspritegroup_t *)pin;
 
 	numframes = LittleLong (pingroup->numframes);
+	if (type == SPR_ANGLED && numframes != 8)
+		Sys_Error ("Mod_LoadSpriteGroup: Bad # of frames: %d", numframes);
 
 	pspritegroup = (mspritegroup_t *) Hunk_AllocName (sizeof (mspritegroup_t) +
 				(numframes - 1) * sizeof (pspritegroup->frames[0]), loadname);
@@ -3850,7 +3852,7 @@ static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer)
 		else
 		{
 			pframetype = (dspriteframetype_t *)
-					Mod_LoadSpriteGroup (pframetype + 1, &psprite->frames[i].frameptr, i, fmt);
+					Mod_LoadSpriteGroup (pframetype + 1, &psprite->frames[i].frameptr, i, fmt, frametype);
 		}
 	}
 

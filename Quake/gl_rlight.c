@@ -205,7 +205,6 @@ void R_MarkLights (dlight_t *light, vec3_t lightorg, int framecount, int num, mn
 	int			 j, s, t;
 
 start:
-
 	if (node->contents < 0)
 		return;
 
@@ -547,7 +546,7 @@ LEGACY LIGHT SAMPLING
 =============================================================================
 */
 
-mplane_t		*lightplane;
+//mplane_t		*lightplane;
 vec3_t			lightspot;
 vec3_t			lightcolor; //johnfitz -- lit support via lordhavoc
 
@@ -600,7 +599,7 @@ loc0:
 		msurface_t *surf;
 	// check for impact on this node
 		VectorCopy (mid, lightspot);
-		lightplane = node->plane;
+		//lightplane = node->plane;
 
 		surf = cl.worldmodel->surfaces + node->firstsurface;
 		for (i = 0;i < node->numsurfaces;i++, surf++)

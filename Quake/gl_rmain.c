@@ -87,7 +87,7 @@ cvar_t	r_clearcolor = {"r_clearcolor","2",CVAR_ARCHIVE};
 cvar_t	r_drawflat = {"r_drawflat","0",CVAR_NONE};
 cvar_t	r_flatlightstyles = {"r_flatlightstyles", "0", CVAR_NONE};
 cvar_t	gl_fullbrights = {"gl_fullbrights", "1", CVAR_ARCHIVE};
-cvar_t	gl_farclip = {"gl_farclip", "16384", CVAR_ARCHIVE};
+cvar_t	gl_farclip = {"gl_farclip", "65536", CVAR_ARCHIVE};
 cvar_t	gl_overbright = {"gl_overbright", "1", CVAR_ARCHIVE};
 cvar_t	gl_overbright_models = {"gl_overbright_models", "1", CVAR_ARCHIVE};
 cvar_t	r_oldskyleaf = {"r_oldskyleaf", "0", CVAR_NONE};
@@ -126,9 +126,9 @@ static GLuint r_gamma_program;
 static int r_gamma_texture_width, r_gamma_texture_height;
 
 // uniforms used in gamma shader
-static GLuint gammaLoc;
-static GLuint contrastLoc;
-static GLuint textureLoc;
+static GLint  gammaLoc;
+static GLint  contrastLoc;
+static GLint  textureLoc;
 
 /*
 =============
@@ -283,9 +283,9 @@ qboolean R_CullBox (vec3_t emins, vec3_t emaxs)
 	{
 		p = frustum + i;
 		signbits = p->signbits;
-		vec[0] = ((signbits % 2)<1) ? emaxs[0] : emins[0];
-		vec[1] = ((signbits % 4)<2) ? emaxs[1] : emins[1];
-		vec[2] = ((signbits % 8)<4) ? emaxs[2] : emins[2];
+		vec[0] = ((signbits & 1) ? emins : emaxs)[0];
+		vec[1] = ((signbits & 2) ? emins : emaxs)[1];
+		vec[2] = ((signbits & 4) ? emins : emaxs)[2];
 		if (p->normal[0]*vec[0] + p->normal[1]*vec[1] + p->normal[2]*vec[2] < p->dist)
 			return true;
 	}

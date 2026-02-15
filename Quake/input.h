@@ -19,8 +19,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 
-#ifndef _QUAKE_INPUT_H
-#define _QUAKE_INPUT_H
+#ifndef QUAKE_INPUT_H
+#define QUAKE_INPUT_H
 
 // input.h -- external (non-keyboard) input devices
 
@@ -51,5 +51,4 @@ void IN_ClearStates (void);
 // doing all the mode, state, etc checks in one place ensures that they're consistent, regardless of what else is happening.
 void IN_UpdateGrabs(void);
 
-#endif	/* _QUAKE_INPUT_H */
-
+#endif

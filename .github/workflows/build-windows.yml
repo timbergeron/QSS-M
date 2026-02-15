@@ -1,0 +1,28 @@
+name: Windows CI
+
+on: [push, pull_request]
+
+jobs:
+  build-windows:
+    name: Build Windows
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, Win32]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - uses: microsoft/setup-msbuild@v1
+
+    - name: Build ${{ matrix.platform }}
+      run: |
+        $options = @( `
+          '-property:Configuration=Release', `
+          '-property:Platform=${{ matrix.platform }}', `
+          '-maxcpucount', `
+          '-verbosity:minimal' `
+        )
+        & msbuild Windows\VisualStudio\quakespasm.sln $options
+        if (-not $?) { throw "Build failed" }

@@ -1,4 +1,4 @@
-# GNU Makefile for compiling Win32 quakespasm.exe using MinGW or MinGW-w64.
+# GNU Makefile for compiling x86-Windows quakespasm.exe using MinGW / MinGW-w64.
 # Usage: "make -f Makefile.w32"
 # To cross-compile on Linux hosts, see the build_cross_win32*.sh scripts.
 # "make DEBUG=1" to build a debug client.
@@ -50,8 +50,8 @@ STRIP = strip
 CPUFLAGS=
 LDFLAGS = -m32 -mwindows -static-libgcc
 LDFLAGS += -Wl,--large-address-aware	#don't crash out with larger hunk sizes
-LDFLAGS += $(QSS_LDFLAGS)
 LDFLAGS += -Wl,--no-insert-timestamp   #prevent non-determinism in the exe header. mustn't be used for dlls.
+LDFLAGS += $(QSS_LDFLAGS)
 DFLAGS ?=
 CFLAGS ?= -m32 -Wall -Wno-trigraphs -MMD
 CFLAGS += $(call check_gcc,-std=gnu11,)
@@ -83,19 +83,19 @@ SDL_CONFIG ?=../Windows/SDL2/bin/sdl2-config --prefix=../Windows/SDL2
 else
 SDL_CONFIG ?=../Windows/SDL/bin/sdl-config --prefix=../Windows/SDL
 endif
-SDL_CFLAGS := $(shell $(SDL_CONFIG) --cflags)
-SDL_LIBS   := $(shell $(SDL_CONFIG) --libs)
+SDL_CFLAGS = $(shell $(SDL_CONFIG) --cflags)
+SDL_LIBS   = $(shell $(SDL_CONFIG) --libs)
 
 ifeq ($(WINSOCK2),1)
-DEFWINSOCK :=-D_USE_WINSOCK2
-LIBWINSOCK := -lws2_32
+DEFWINSOCK =-D_USE_WINSOCK2
+LIBWINSOCK = -lws2_32
 else
-DEFWINSOCK :=
-LIBWINSOCK := -lwsock32
+DEFWINSOCK =
+LIBWINSOCK = -lwsock32
 endif
 
-CFLAGS     += $(DEFWINSOCK)
-NET_LIBS   := $(LIBWINSOCK)
+CFLAGS    += $(DEFWINSOCK)
+NET_LIBS   = $(LIBWINSOCK)
 
 ifneq ($(VORBISLIB),vorbis)
 ifneq ($(VORBISLIB),tremor)
@@ -124,7 +124,7 @@ cpp_vorbisdec=-DVORBIS_USE_TREMOR
 lib_vorbisdec=-lvorbisidec -logg
 endif
 
-CODECLIBS  :=
+CODECLIBS  =
 ifeq ($(USE_CODEC_WAVE),1)
 CFLAGS+= -DUSE_CODEC_WAVE
 endif
@@ -175,7 +175,7 @@ CFLAGS+= -DUSE_CODEC_UMX
 endif
 CFLAGS+= $(CODEC_INC)
 
-COMMON_LIBS:= -lopengl32 -lwinmm
+COMMON_LIBS= -lopengl32 -lwinmm
 
 ifeq ($(USE_ZLIB),1)
 CFLAGS+= -DUSE_ZLIB
@@ -190,7 +190,7 @@ ICEOBJS:= ice_gnutls.o  ice_main.o  ice_mdns.o ice_quake.o ice_sctp.o  ice_socke
 # objects
 # ---------------------------
 
-MUSIC_OBJS:= bgmusic.o \
+MUSIC_OBJS= bgmusic.o \
 	snd_codec.o \
 	snd_flac.o \
 	snd_wave.o \
@@ -233,7 +233,7 @@ GLOBJS = \
 	r_brush.o \
 	gl_model.o
 
-OBJS := strlcat.o \
+OBJS = strlcat.o \
 	strlcpy.o \
 	$(GLOBJS) \
 	$(SYSOBJ_INPUT) \
@@ -287,7 +287,7 @@ OBJS := strlcat.o \
 
 .PHONY:	clean debug release
 
-DEFAULT_TARGET := quakespasm.exe
+DEFAULT_TARGET = quakespasm.exe
 all: $(DEFAULT_TARGET)
 
 %.o:	ice/%.c

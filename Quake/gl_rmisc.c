@@ -43,7 +43,7 @@ extern cvar_t r_lerpmove;
 extern cvar_t r_nolerp_list;
 extern cvar_t r_noshadow_list;
 //johnfitz
-extern cvar_t r_scenecache;
+extern cvar_t r_scenecache, r_lightmap_format;
 extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
 cvar_t r_brokenturbbias = {"r_brokenturbbias", "1", CVAR_ARCHIVE}; //replicates QS's bug where it ignores texture coord offsets for water (breaking curved water volumes). we do NOT ignore scales though.
 
@@ -169,8 +169,6 @@ R_Init
 */
 void R_Init (void)
 {
-	extern cvar_t gl_finish;
-
 	Cmd_AddCommand ("timerefresh", R_TimeRefresh_f);
 	Cmd_AddCommand ("pointfile", R_ReadPointFile_f);
 
@@ -225,6 +223,7 @@ void R_Init (void)
 	//johnfitz
 	//spike -- new cvars...
 	Cvar_RegisterVariable (&r_scenecache);
+	Cvar_RegisterVariable (&r_lightmap_format);	//instead of qs's read-only r_lightmapwide cvar. can also select e5bgr9
 	//spike
 
 	Cvar_RegisterVariable (&gl_zfix); // QuakeSpasm z-fighting fix
@@ -269,6 +268,7 @@ static void R_ParseWorldspawn (void)
 		return; // error
 	if (com_token[0] != '{')
 		return; // error
+
 	while (1)
 	{
 		data = COM_Parse(data);
@@ -524,7 +524,7 @@ void R_DeleteShaders (void)
 	gl_num_programs = 0;
 }
 
-GLuint current_array_buffer, current_element_array_buffer;
+static GLuint current_array_buffer, current_element_array_buffer;
 
 /*
 ====================
@@ -568,7 +568,7 @@ This must be called if you do anything that could make the cached bindings
 invalid (e.g. manually binding, destroying the context).
 ====================
 */
-void GL_ClearBufferBindings ()
+void GL_ClearBufferBindings (void)
 {
 	if (!gl_vbo_able)
 		return;

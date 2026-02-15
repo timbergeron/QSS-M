@@ -1174,9 +1174,15 @@ void IN_SendKeyEvents (void)
 #if defined(USE_SDL2)
 		case SDL_WINDOWEVENT:
 			if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
-				windowhasfocus=true, S_UnblockSound();
+			{
+				windowhasfocus = true;
+				S_UnblockSound();
+			}
 			else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
-				windowhasfocus=false, S_BlockSound();
+			{
+				windowhasfocus = false;
+				S_BlockSound();
+			}
 			else if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
 			{
 				vid.width = event.window.data1;
@@ -1189,9 +1195,15 @@ void IN_SendKeyEvents (void)
 			if (event.active.state & (SDL_APPINPUTFOCUS|SDL_APPACTIVE))
 			{
 				if (event.active.gain)
-					windowhasfocus=true, S_UnblockSound();
+				{
+					windowhasfocus = true;
+					S_UnblockSound();
+				}
 				else
-					windowhasfocus=false, S_BlockSound();
+				{
+					windowhasfocus = false;
+					S_BlockSound();
+				}
 			}
 			break;
 #endif

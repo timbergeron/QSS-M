@@ -1452,6 +1452,10 @@ static void Host_Loadgame_f (void)
 		entnum++;
 	}
 
+	// Free edicts allocated during map loading but no longer used after restoring saved game state
+	for (i = entnum; i < qcvm->num_edicts; i++)
+		ED_Free(EDICT_NUM(i));
+
 	qcvm->num_edicts = entnum;
 	qcvm->time = time;
 
@@ -1468,6 +1472,9 @@ static void Host_Loadgame_f (void)
 		CL_EstablishConnection ("local");
 		Host_Reconnect_Sv_f ();
 	}
+
+	if (cls.state != ca_dedicated)
+		IN_UpdateGrabs(); // moved to here from M_Load_Key()
 }
 
 //============================================================================
@@ -1934,7 +1941,7 @@ static void Host_Spawn_f (void)
 
 	MSG_WriteByte (&host_client->message, svc_signonnum);
 	MSG_WriteByte (&host_client->message, 3);
-	host_client->sendsignon = true;
+	host_client->sendsignon = PRESPAWN_FLUSH;
 }
 
 /*

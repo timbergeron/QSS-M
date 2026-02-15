@@ -16,9 +16,6 @@ USE_ZLIB=1
 ### Enable the use of gnutls, for dtls/wss(tls) support
 USE_GNUTLS=1
 
-### Do we need to link the math library?
-LINK_M=1
-
 ### Enable/Disable codecs for streaming music support
 USE_CODEC_WAVE=1
 USE_CODEC_FLAC=0
@@ -44,9 +41,9 @@ check_gcc = $(shell if echo | $(CC) $(1) -Werror -S -o /dev/null -xc - > /dev/nu
 
 # ---------------------------
 
-HOST_OS := $(shell uname|sed -e s/_.*//|tr '[:upper:]' '[:lower:]')
+HOST_OS = $(shell uname|sed -e s/_.*//|tr '[:upper:]' '[:lower:]')
 
-DEBUG   ?= 0
+DEBUG ?= 0
 
 # ---------------------------
 # build variables
@@ -59,7 +56,7 @@ STRIP ?= strip
 PKG_CONFIG ?= pkg-config
 
 CPUFLAGS=
-LDFLAGS =
+LDFLAGS?=
 DFLAGS ?=
 CFLAGS ?= -Wall -Wno-trigraphs -MMD
 CFLAGS += $(call check_gcc,-std=gnu11,)
@@ -86,26 +83,6 @@ ifeq ($(DO_USERDIRS),1)
 CFLAGS += -DDO_USERDIRS=1
 endif
 
-### X11BASE only gets used if its in an unusual place
-
-X11DIRS := /usr/X11R7 /usr/local/X11R7 /usr/X11R6 /usr/local/X11R6
-X11BASE_GUESS := $(shell \
-	if [ -e /usr/include/X11/Xlib.h ] && \
-		[ -e /usr/lib/libX11.a ]; then exit 0; fi; \
-	if [ -e /usr/local/include/X11/Xlib.h ] && \
-		[ -e /usr/local/lib/libX11.a ]; then exit 0; fi; \
-	for DIR in $(X11DIRS); do \
-            if [ -e $$DIR/include/X11/Xlib.h ] && \
-		[ -e $$DIR/lib/libX11.a ]; then echo $$DIR; break; fi; \
-	done )
-
-X11BASE	?= $(X11BASE_GUESS)
-
-ifneq ($(X11BASE),)
-LDFLAGS+= -L$(X11BASE)/lib
-CFLAGS += -I$(X11BASE)/include
-endif
-
 ifeq ($(USE_SDL2),1)
 CFLAGS += -DUSE_SDL2
 endif
@@ -117,15 +94,15 @@ SDL_CONFIG ?= sdl2-config
 else
 SDL_CONFIG ?= sdl-config
 endif
-SDL_CFLAGS := $(shell $(SDL_CONFIG) --cflags)
-SDL_LIBS   := $(shell $(SDL_CONFIG) --libs)
+SDL_CFLAGS = $(shell $(SDL_CONFIG) --cflags)
+SDL_LIBS   = $(shell $(SDL_CONFIG) --libs)
 
+NET_LIBS   =
 ifeq ($(HOST_OS),sunos)
-NET_LIBS   :=-lsocket -lnsl -lresolv
-else ifdef HAIKU_OS
-NET_LIBS   :=-lnetwork
-else
-NET_LIBS   :=
+NET_LIBS   =-lsocket -lnsl -lresolv
+endif
+ifeq ($(HOST_OS),haiku)
+NET_LIBS   =-lnetwork
 endif
 
 ifneq ($(VORBISLIB),vorbis)
@@ -155,7 +132,7 @@ cpp_vorbisdec=-DVORBIS_USE_TREMOR
 lib_vorbisdec=-lvorbisidec -logg
 endif
 
-CODECLIBS  :=
+CODECLIBS  =
 ifeq ($(USE_CODEC_WAVE),1)
 CFLAGS+= -DUSE_CODEC_WAVE
 endif
@@ -210,7 +187,7 @@ ifeq ($(USE_GNUTLS),1)
  endif
 endif
 
-ifeq ($(LINK_M),1)
+ifneq ($(HOST_OS),haiku)
 COMMON_LIBS += -lm
 endif
 
@@ -275,7 +252,7 @@ GLOBJS = \
 	r_brush.o \
 	gl_model.o
 
-OBJS := strlcat.o \
+OBJS = strlcat.o \
 	strlcpy.o \
 	$(GLOBJS) \
 	$(SYSOBJ_INPUT) \
@@ -329,7 +306,7 @@ OBJS := strlcat.o \
 
 .PHONY:	clean debug release
 
-DEFAULT_TARGET := quakespasm
+DEFAULT_TARGET = quakespasm
 all: $(DEFAULT_TARGET)
 
 %.o:	%.c
@@ -348,7 +325,15 @@ debug:
 clean:
 	$(RM) *.o *.d $(DEFAULT_TARGET)
 
+ifeq ($(HOST_OS),haiku)
+QS_APP_DIR=$(shell finddir B_APPS_DIRECTORY)/QuakeSpasm/
+install:	quakespasm
+	mkdir -p $(QS_APP_DIR)
+	cp quakespasm $(QS_APP_DIR)
+	cp quakespasm.pak $(QS_APP_DIR)
+else
 install:	quakespasm
 	cp quakespasm /usr/local/games/quake
+endif
 
 sinclude $(OBJS:.o=.d)

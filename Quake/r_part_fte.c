@@ -1256,7 +1256,7 @@ static void P_LoadTexture(part_type_t *ptype, qboolean warn)
 		}
 		else if (strstr(ptype->texname, "classicparticle"))
 		{
-			extern gltexture_t *particletexture1;
+
 			ptype->looks.texture = particletexture1;
 			ptype->s2 = 0.5;
 			ptype->t2 = 0.5;

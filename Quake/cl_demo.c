@@ -110,7 +110,8 @@ static int CL_GetDemoMessage (void)
 	}
 
 // get the next message
-	fread (&net_message.cursize, 4, 1, cls.demofile);
+	if (! fread(&net_message.cursize, 4, 1, cls.demofile))
+		Sys_Error ("Demo read error");
 	VectorCopy (cl.mviewangles[0], cl.mviewangles[1]);
 	for (i = 0 ; i < 3 ; i++)
 	{
@@ -196,7 +197,7 @@ void CL_Stop_f (void)
 	Con_Printf ("Completed demo\n");
 
 	Cvar_SetROM(cl_recordingdemo.name, "");
-	
+
 // ericw -- update demo tab-completion list
 	DemoList_Rebuild ();
 }
@@ -541,9 +542,11 @@ void CL_Record_f (void)
 	{
 		byte *data = net_message.data;
 		int cursize = net_message.cursize;
+		int maxsize = net_message.maxsize;
 		byte weirdaltbufferthatprobablyisntneeded[NET_MAXMESSAGE];
 
 		net_message.data = weirdaltbufferthatprobablyisntneeded;
+		net_message.maxsize = sizeof(weirdaltbufferthatprobablyisntneeded);
 		SZ_Clear (&net_message);
 
 		CL_Record_Serverdata();
@@ -553,6 +556,7 @@ void CL_Record_f (void)
 		// restore net_message
 		net_message.data = data;
 		net_message.cursize = cursize;
+		net_message.maxsize = maxsize;
 	}
 }
 

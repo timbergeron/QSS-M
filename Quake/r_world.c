@@ -41,7 +41,7 @@ extern qboolean lightmaps_skipupdates;
 
 /*
 ================
-R_ClearTextureChains -- ericw 
+R_ClearTextureChains -- ericw
 
 clears texture chains for all textures used by the given model, and also
 clears the lightmap chains
@@ -365,7 +365,7 @@ static unsigned int num_vbo_indices;
 R_ClearBatch
 ================
 */
-static void R_ClearBatch ()
+static void R_ClearBatch (void)
 {
 	num_vbo_indices = 0;
 }
@@ -377,7 +377,7 @@ R_FlushBatch
 Draw the current batch if non-empty and clears it, ready for more R_BatchSurface calls.
 ================
 */
-static void R_FlushBatch ()
+static void R_FlushBatch (void)
 {
 	if (num_vbo_indices > 0)
 	{
@@ -541,7 +541,7 @@ void R_DrawTextureChains_TextureOnly (qmodel_t *model, entity_t *ent, texchain_t
 /*
 ================
 GL_WaterAlphaForEntitySurface -- ericw
- 
+
 Returns the water alpha to use for the entity and surface combination.
 ================
 */
@@ -560,13 +560,15 @@ static GLuint r_world_program;
 extern GLuint gl_bmodel_vbo;
 
 // uniforms used in frag shader
-static GLuint texLoc;
-static GLuint LMTexLoc;
-static GLuint fullbrightTexLoc;
-static GLuint useFullbrightTexLoc;
-static GLuint useOverbrightLoc;
-static GLuint useAlphaTestLoc;
-static GLuint alphaLoc;
+static GLint  texLoc;
+static GLint  LMTexLoc;
+static GLint  fullbrightTexLoc;
+static GLint  useFullbrightTexLoc;
+static GLint  useOverbrightLoc;
+static GLint  useAlphaTestLoc;
+static GLint  useLightmapWideLoc;
+static GLint  useLightmapOnlyLoc;
+static GLint  alphaLoc;
 
 
 static struct
@@ -830,6 +832,9 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 	{
 		int lastlightmap = -2;
 		int mode = -1;
+		const int overbright = !!gl_overbright.value;
+		const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+		float lightmapscale = (overbright?2:1) * (wide10bits?4:1);
 		for (i=0 ; i<model->numtextures ; i++)
 		{
 			t = model->textures[i];
@@ -876,7 +881,7 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 					GL_UseProgramFunc (r_water[mode].program);
 					GL_Uniform1fFunc (r_water[mode].time, cl.time);
 					if (r_water[mode].light_scale != -1)
-						GL_Uniform1fFunc (r_water[mode].light_scale, gl_overbright.value?2:1);
+						GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
 					GL_Uniform1fFunc (r_water[mode].alpha_scale, entalpha);
 					lastlightmap = s->lightmaptexturenum;
 				}
@@ -1036,6 +1041,8 @@ void GLWorld_CreateShaders (void)
 		"uniform bool UseFullbrightTex;\n"
 		"uniform bool UseOverbright;\n"
 		"uniform bool UseAlphaTest;\n"
+		"uniform bool UseLightmapWide;\n"
+		"uniform bool UseLightmapOnly;\n"
 		"uniform float Alpha;\n"
 		"\n"
 		"varying float FogFragCoord;\n"
@@ -1045,9 +1052,13 @@ void GLWorld_CreateShaders (void)
 		"void main()\n"
 		"{\n"
 		"	vec4 result = texture2D(Tex, tc_tex.xy);\n"
+		"	if (UseLightmapOnly)\n"
+		"		result = vec4(0.5, 0.5, 0.5, 1.0);\n"
 		"	if (UseAlphaTest && (result.a < 0.666))\n"
 		"		discard;\n"
 		"	result *= texture2D(LMTex, tc_lm.xy);\n"
+		"	if (UseLightmapWide)\n"
+		"	    result.rgb *= 4.0;\n"
 		"	if (UseOverbright)\n"
 		"		result.rgb *= 2.0;\n"
 		"	if (UseFullbrightTex)\n"
@@ -1074,6 +1085,8 @@ void GLWorld_CreateShaders (void)
 		useFullbrightTexLoc = GL_GetUniformLocation (&r_world_program, "UseFullbrightTex");
 		useOverbrightLoc = GL_GetUniformLocation (&r_world_program, "UseOverbright");
 		useAlphaTestLoc = GL_GetUniformLocation (&r_world_program, "UseAlphaTest");
+		useLightmapWideLoc = GL_GetUniformLocation (&r_world_program, "UseLightmapWide");
+		useLightmapOnlyLoc = GL_GetUniformLocation (&r_world_program, "UseLightmapOnly");
 		alphaLoc = GL_GetUniformLocation (&r_world_program, "Alpha");
 
 		GL_UseProgramFunc (r_world_program);
@@ -1096,17 +1109,18 @@ Requires 3 TMUs, OpenGL 2.0
 */
 void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 {
+	const float	entalpha = (ent != NULL) ?
+			 ENTALPHA_DECODE(ent->alpha) : 1.0f;
+	const int	overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+
 	int			i;
 	msurface_t	*s;
 	texture_t	*t;
 	//qboolean	bound; //removed this cos it was pointless anyway
 	int		lastlightmap;
 	gltexture_t	*fullbright = NULL;
-	float		entalpha;
-	unsigned int enteffects;
-
-	entalpha = (ent != NULL) ? ENTALPHA_DECODE(ent->alpha) : 1.0f;
-	enteffects = (ent != NULL) ? ent->effects : 0;
+	const unsigned int enteffects = (ent != NULL) ? ent->effects : 0;
 
 // enable blending / disable depth writes
 	if (enteffects & EF_ADDITIVE)
@@ -1140,8 +1154,10 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 	GL_Uniform1iFunc (LMTexLoc, 1);
 	GL_Uniform1iFunc (fullbrightTexLoc, 2);
 	GL_Uniform1iFunc (useFullbrightTexLoc, 0);
-	GL_Uniform1iFunc (useOverbrightLoc, (int)gl_overbright.value);
+	GL_Uniform1iFunc (useOverbrightLoc, overbright);
 	GL_Uniform1iFunc (useAlphaTestLoc, 0);
+	GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
+	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
 	GL_Uniform1fFunc (alphaLoc, entalpha);
 
 	for (i=0 ; i<model->numtextures ; i++)
@@ -1213,6 +1229,90 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 }
 
 /*
+================
+R_DrawLightmapChains_GLSL -- ericw
+================
+*/
+void R_DrawLightmapChains_GLSL(qmodel_t* model, entity_t* ent, texchain_t chain)
+{
+	const int	overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+
+	int			i;
+	msurface_t* s;
+	texture_t* t;
+	int		lastlightmap;
+
+	GL_UseProgramFunc(r_world_program);
+
+	// Bind the buffers
+	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); // indices come from client memory!
+
+	GL_EnableVertexAttribArrayFunc(vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc(texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc(LMCoordsAttrIndex);
+
+	GL_VertexAttribPointerFunc(vertAttrIndex, 3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float*)0));
+	GL_VertexAttribPointerFunc(texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float*)0) + 3);
+	GL_VertexAttribPointerFunc(LMCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float*)0) + 5);
+
+	// set uniforms
+	GL_Uniform1iFunc(texLoc, 0);
+	GL_Uniform1iFunc(LMTexLoc, 1);
+	GL_Uniform1iFunc(fullbrightTexLoc, 2);
+	GL_Uniform1iFunc(useFullbrightTexLoc, 0);
+	GL_Uniform1iFunc(useOverbrightLoc, overbright);
+	GL_Uniform1iFunc(useAlphaTestLoc, 0);
+	GL_Uniform1iFunc(useLightmapWideLoc, wide10bits);
+	GL_Uniform1fFunc(alphaLoc, 1.0f);
+	GL_Uniform1iFunc(useFullbrightTexLoc, 0);
+	GL_Uniform1iFunc(useLightmapOnlyLoc, 1);
+
+	R_ClearBatch();
+	lastlightmap = -1;
+
+	for (i = 0; i < model->numtextures; i++)
+	{
+		t = model->textures[i];
+
+		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTILED | SURF_NOTEXTURE))
+			continue;
+
+		if (t->texturechains[chain]->texinfo->flags & TEX_SPECIAL)
+			continue; // unlit water
+
+		for (s = t->texturechains[chain]; s; s = s->texturechain)
+		{
+			if (s->lightmaptexturenum < 0)
+				continue;
+
+			if (s->lightmaptexturenum != lastlightmap)
+			{
+				R_FlushBatch();
+
+				GL_SelectTexture(GL_TEXTURE1);
+				GL_Bind(lightmaps[s->lightmaptexturenum].texture);
+				lastlightmap = s->lightmaptexturenum;
+			}
+			R_BatchSurface(s);
+
+			rs_brushpasses++;
+		}
+	}
+
+	R_FlushBatch();
+
+	// clean up
+	GL_DisableVertexAttribArrayFunc(vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc(texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc(LMCoordsAttrIndex);
+
+	GL_UseProgramFunc(0);
+	GL_SelectTexture(GL_TEXTURE0);
+}
+
+/*
 =============
 R_DrawWorld -- johnfitz -- rewritten
 =============
@@ -1246,6 +1346,12 @@ void R_DrawTextureChains (qmodel_t *model, entity_t *ent, texchain_t chain)
 
 	if (r_lightmap_cheatsafe)
 	{
+		if (r_world_program != 0)
+		{
+			R_DrawLightmapChains_GLSL(model, ent, chain);
+			return;
+		}
+
 		if (!gl_overbright.value)
 		{
 			glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);

@@ -24,8 +24,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
-const int	gl_solid_format = 3;
-const int	gl_alpha_format = 4;
+static const int	gl_solid_format = 3;
+static const int	gl_alpha_format = 4;
 
 static cvar_t	gl_texturemode = {"gl_texturemode", "", CVAR_ARCHIVE};
 static cvar_t	gl_texture_anisotropy = {"gl_texture_anisotropy", "1", CVAR_ARCHIVE};
@@ -80,6 +80,7 @@ static struct
 	#define GL_UNSIGNED_INT_5_9_9_9_REV       0x8C3E
 #endif
 	{"E5BGR9",		"EXP5", GL_RGB9_E5,GL_RGB,GL_UNSIGNED_INT_5_9_9_9_REV,	 4, 1, 1, &gl_texture_e5bgr9},
+	{"RGB10_A2",	"10_2",	GL_RGB10_A2,GL_RGBA,GL_UNSIGNED_INT_10_10_10_2,	 4, 1, 1, &gl_packed_pixels},
 #if defined(GL_EXT_texture_compression_s3tc) || defined(GL_EXT_texture_compression_dxt1)
 	{"BC1_RGBA",	"BC1",  GL_COMPRESSED_RGBA_S3TC_DXT1_EXT,0,0,			 8, 4, 4, &gl_texture_s3tc},
 #endif
@@ -350,9 +351,9 @@ static void TexMgr_Imagedump_f (void)
 	for (glt = active_gltextures; glt; glt = glt->next)
 	{
 		q_strlcpy (tempname, glt->name, sizeof(tempname));
-		while ( (c = strchr(tempname, ':')) ) *c = '_';
-		while ( (c = strchr(tempname, '/')) ) *c = '_';
-		while ( (c = strchr(tempname, '*')) ) *c = '_';
+		while ((c = strchr(tempname, ':')) != NULL) *c = '_';
+		while ((c = strchr(tempname, '/')) != NULL) *c = '_';
+		while ((c = strchr(tempname, '*')) != NULL) *c = '_';
 		q_snprintf(tganame, sizeof(tganame), "imagedump/%s.tga", tempname);
 
 		GL_Bind (glt);
@@ -611,7 +612,8 @@ void TexMgr_LoadPalette (void)
 
 	mark = Hunk_LowMark ();
 	pal = (byte *) Hunk_Alloc (768);
-	fread (pal, 1, 768, f);
+	if (!fread(pal, 768, 1, f))
+		Sys_Error ("Failed reading gfx/palette.lmp");
 	fclose(f);
 
 	//standard palette, 255 is transparent
@@ -781,8 +783,7 @@ int TexMgr_PadConditional (int s)
 {
 	if (s < TexMgr_SafeTextureSize(s))
 		return TexMgr_Pad(s);
-	else
-		return s;
+	return s;
 }
 
 /*
@@ -1168,7 +1169,7 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 		mipwidth = glt->width;
 		mipheight = glt->height;
 
-		for (miplevel=1; mipwidth > 1 || mipheight > 1; miplevel++)
+		for (miplevel = 1; mipwidth > 1 || mipheight > 1; miplevel++)
 		{
 			if (mipwidth > 1)
 			{
@@ -1498,8 +1499,10 @@ static void TexMgr_LoadLightmap (gltexture_t *glt, byte *data)
 	GL_Bind (glt);
 	if (gl_lightmap_format == GL_RGB9_E5)
 		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGB9_E5, glt->width, glt->height, 0, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV, data);
+	else if (gl_lightmap_format == GL_RGB10_A2)
+		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGB10_A2, glt->width, glt->height, 0, GL_RGBA, GL_UNSIGNED_INT_10_10_10_2, data);
 	else
-		glTexImage2D (GL_TEXTURE_2D, 0, lightmap_bytes, glt->width, glt->height, 0, gl_lightmap_format, GL_UNSIGNED_BYTE, data);
+		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, glt->width, glt->height, 0, gl_lightmap_format/*rgba or bgra*/, GL_UNSIGNED_BYTE, data);
 
 	// set filter modes
 	TexMgr_SetFilterModes (glt);
@@ -1627,6 +1630,7 @@ void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants)
 	int	mark, size;
 	qboolean malloced = false;
 	enum srcformat fmt = glt->source_format;
+
 //
 // get source data
 //
@@ -1635,14 +1639,19 @@ void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants)
 	if (glt->source_file[0] && glt->source_offset)
 	{	//lump inside file
 		FILE *f;
+		int sz;
 		COM_FOpenFile(glt->source_file, &f, NULL);
 		if (!f) goto invalid;
 		fseek (f, glt->source_offset, SEEK_CUR);
 
 		size = TexMgr_ImageSize(glt->source_width, glt->source_height, glt->source_format);
 		data = (byte *) Hunk_Alloc (size);
-		fread (data, 1, size, f);
+		sz = (int) fread (data, 1, size, f);
 		fclose (f);
+		if (sz != size) {
+			Hunk_FreeToLowMark(mark);
+			Host_Error("Read error for %s", glt->name);
+		}
 	}
 	else if (glt->source_file[0] && !glt->source_offset)
 	{

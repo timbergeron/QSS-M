@@ -53,7 +53,7 @@ LIPO ?= lipo
 STRIP ?= strip -S
 
 CPUFLAGS=
-LDFLAGS =
+LDFLAGS?=
 DFLAGS ?=
 CFLAGS ?= -Wall -MMD
 # @rpath can be used when targeting 10.5+
@@ -132,7 +132,7 @@ SDL_CFLAGS+=-F$(SDL_FRAMEWORK_PATH)
 endif
 SDL_LIBS  +=-Wl,-framework,$(SDL_FRAMEWORK_NAME) -Wl,-framework,Cocoa
 
-NET_LIBS   :=
+NET_LIBS   =
 
 ifneq ($(VORBISLIB),vorbis)
 ifneq ($(VORBISLIB),tremor)
@@ -161,7 +161,7 @@ cpp_vorbisdec=-DVORBIS_USE_TREMOR
 lib_vorbisdec=-lvorbisidec -logg
 endif
 
-CODECLIBS  :=
+CODECLIBS  =
 ifeq ($(USE_CODEC_WAVE),1)
 CFLAGS+= -DUSE_CODEC_WAVE
 endif
@@ -212,7 +212,7 @@ CFLAGS+= -DUSE_CODEC_UMX
 endif
 CFLAGS+= $(CODEC_INC)
 
-COMMON_LIBS:= -Wl,-framework,IOKit -Wl,-framework,OpenGL
+COMMON_LIBS= -Wl,-framework,IOKit -Wl,-framework,OpenGL
 
 ifeq ($(USE_ZLIB),1)
 CFLAGS+= -DUSE_ZLIB
@@ -225,7 +225,7 @@ LIBS := $(COMMON_LIBS) $(NET_LIBS) $(CODEC_LINK) $(CODECLIBS)
 # objects
 # ---------------------------
 
-MUSIC_OBJS:= bgmusic.o \
+MUSIC_OBJS= bgmusic.o \
 	snd_codec.o \
 	snd_flac.o \
 	snd_wave.o \
@@ -269,7 +269,7 @@ GLOBJS = \
 	r_brush.o \
 	gl_model.o
 
-OBJS := strlcat.o \
+OBJS = strlcat.o \
 	strlcpy.o \
 	$(GLOBJS) \
 	$(SYSOBJ_INPUT) \
@@ -323,7 +323,7 @@ OBJS := strlcat.o \
 
 .PHONY:	clean debug release
 
-DEFAULT_TARGET := quakespasm
+DEFAULT_TARGET = quakespasm
 all: $(DEFAULT_TARGET)
 
 %.o:	%.c
