@@ -8633,7 +8633,8 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 		qcvm->builtins[i] = PF_Fixme;
 	qcvm->numbuiltins = i;
 	if (qcvm == &sv.qcvm &&
-		(PR_FindExtFunction("ex_centerprint") && !PR_FindExtFunction("centerprint")))
+		((PR_FindExtFunction("ex_centerprint") && !PR_FindExtFunction("centerprint")) ||	//if we've got an ext_centerprint builtin defined, but no centerprint, then assume its remaster-specific.
+			PR_FindExtFunction("finaleFinished")))	//earlier versions of the remaster included builtins which lacked prefixes. any fteextensions.qc or whatever will include the ex_ prefix so this is useful for checking first versions, but not current. should still make it a little more robust.
 	{
 		qcvm->builtins[99] = PF_checkextension;
 
