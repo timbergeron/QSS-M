@@ -33,7 +33,7 @@ extern	int	rs_skypolys; // for r_speeds readout
 extern	int	rs_skypasses; // for r_speeds readout
 
 float	skyflatcolor[3];
-float	skymins[2][6], skymaxs[2][6];
+static float	skymins[2][6], skymaxs[2][6];
 
 qboolean skyroom_drawing;
 qboolean skyroom_drawn;
@@ -41,19 +41,19 @@ qboolean skyroom_enabled;
 vec4_t skyroom_origin;
 vec4_t skyroom_orientation;
 
-char	skybox_name[1024]; //name of current skybox, or "" if no skybox
+static char	skybox_name[1024]; //name of current skybox, or "" if no skybox
 
-gltexture_t	*skybox_textures[6];
-gltexture_t	*solidskytexture, *alphaskytexture;
+static gltexture_t	*skybox_textures[6];
+static gltexture_t	*solidskytexture, *alphaskytexture;
 
 cvar_t r_fastsky = {"r_fastsky", "0", CVAR_NONE};
-cvar_t r_sky_quality = {"r_sky_quality", "12", CVAR_NONE};
+static cvar_t r_sky_quality = {"r_sky_quality", "12", CVAR_NONE};
 cvar_t r_skyalpha = {"r_skyalpha", "1", CVAR_NONE};
 cvar_t r_skyfog = {"r_skyfog","0.5",CVAR_NONE};
 
-int		skytexorder[6] = {0,2,1,3,4,5}; //for skybox
+static const int skytexorder[6] = {0,2,1,3,4,5}; //for skybox
 
-vec3_t	skyclip[6] = {
+static const vec3_t skyclip[6] = {
 	{1,1,0},
 	{1,-1,0},
 	{0,-1,1},
@@ -62,7 +62,7 @@ vec3_t	skyclip[6] = {
 	{-1,0,1}
 };
 
-int	st_to_vec[6][3] =
+static const int st_to_vec[6][3] =
 {
 	{3,-1,2},
 	{-3,1,2},
@@ -72,7 +72,7 @@ int	st_to_vec[6][3] =
 	{2,-1,-3}		// straight down
 };
 
-int	vec_to_st[6][3] =
+static const int vec_to_st[6][3] =
 {
 	{-2,3,1},
 	{2,3,-1},
@@ -82,7 +82,7 @@ int	vec_to_st[6][3] =
 	{-2,1,-3}
 };
 
-float	skyfog; // ericw
+static float	skyfog; // ericw
 
 //==============================================================================
 //
@@ -227,7 +227,7 @@ void Sky_LoadTextureQ64 (qmodel_t *mod, texture_t *mt)
 Sky_LoadSkyBox
 ==================
 */
-const char	*suf[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
+static const char *suf[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
 void Sky_LoadSkyBox (const char *name)
 {
 	int		i, mark, width, height;
@@ -379,7 +379,6 @@ void Sky_NewMap (void)
 
 		else if (!strcmp("skyfog", key))
 			skyfog = atof(value);
-
 #if 1 /* also accept non-standard keys */
 		else if (!strcmp("skyname", key)) //half-life
 			Sky_LoadSkyBox(value);
@@ -571,20 +570,22 @@ void Sky_ProjectPoly (int nump, vec3_t vecs)
 Sky_ClipPoly
 =================
 */
-void Sky_ClipPoly (int nump, vec3_t vecs, int stage)
+static void Sky_ClipPoly (int nump, vec3_t vecs, int stage)
 {
-	float	*norm;
+	const float	*norm;
 	float	*v;
 	qboolean	front, back;
 	float	d, e;
-	float	dists[MAX_CLIP_VERTS];
-	int		sides[MAX_CLIP_VERTS];
-	vec3_t	newv[2][MAX_CLIP_VERTS];
 	int		newc[2];
 	int		i, j;
 
-	if (nump > MAX_CLIP_VERTS-2)
-		Sys_Error ("Sky_ClipPoly: MAX_CLIP_VERTS");
+	const int max_clip_verts = nump + 2;
+	const int on_heap = max_clip_verts > MAX_CLIP_VERTS;
+	int	*sides;
+	float	*dists;
+	vec3_t	*newv_0;
+	vec3_t	*newv_1;
+
 	if (stage == 6) // fully clipped
 	{
 		Sky_ProjectPoly (nump, vecs);
@@ -593,6 +594,10 @@ void Sky_ClipPoly (int nump, vec3_t vecs, int stage)
 
 	front = back = false;
 	norm = skyclip[stage];
+
+	sides = (int *) (on_heap ? malloc(max_clip_verts * sizeof(int)) : alloca(max_clip_verts * sizeof(int)));
+	dists = (float *) (on_heap ? malloc(max_clip_verts * sizeof(float)) : alloca(max_clip_verts * sizeof(float)));
+
 	for (i=0, v = vecs ; i<nump ; i++, v+=3)
 	{
 		d = DotProduct (v, norm);
@@ -614,6 +619,10 @@ void Sky_ClipPoly (int nump, vec3_t vecs, int stage)
 	if (!front || !back)
 	{	// not clipped
 		Sky_ClipPoly (nump, vecs, stage+1);
+		if (on_heap) {
+			free(dists);
+			free(sides);
+		}
 		return;
 	}
 
@@ -623,22 +632,26 @@ void Sky_ClipPoly (int nump, vec3_t vecs, int stage)
 	VectorCopy (vecs, (vecs+(i*3)) );
 	newc[0] = newc[1] = 0;
 
+	// 2-dim vec3_t	 newv[2][MAX_CLIP_VERTS]; as 2 arrays
+	newv_0 = (vec3_t *) (on_heap ? malloc(max_clip_verts * sizeof(vec3_t)) : alloca(max_clip_verts * sizeof(vec3_t)));
+	newv_1 = (vec3_t *) (on_heap ? malloc(max_clip_verts * sizeof(vec3_t)) : alloca(max_clip_verts * sizeof(vec3_t)));
+
 	for (i=0, v = vecs ; i<nump ; i++, v+=3)
 	{
 		switch (sides[i])
 		{
 		case SIDE_FRONT:
-			VectorCopy (v, newv[0][newc[0]]);
+			VectorCopy (v, newv_0[newc[0]]);
 			newc[0]++;
 			break;
 		case SIDE_BACK:
-			VectorCopy (v, newv[1][newc[1]]);
+			VectorCopy (v, newv_1[newc[1]]);
 			newc[1]++;
 			break;
 		case SIDE_ON:
-			VectorCopy (v, newv[0][newc[0]]);
+			VectorCopy (v, newv_0[newc[0]]);
 			newc[0]++;
-			VectorCopy (v, newv[1][newc[1]]);
+			VectorCopy (v, newv_1[newc[1]]);
 			newc[1]++;
 			break;
 		}
@@ -650,16 +663,24 @@ void Sky_ClipPoly (int nump, vec3_t vecs, int stage)
 		for (j=0 ; j<3 ; j++)
 		{
 			e = v[j] + d*(v[j+3] - v[j]);
-			newv[0][newc[0]][j] = e;
-			newv[1][newc[1]][j] = e;
+			newv_0[newc[0]][j] = e;
+			newv_1[newc[1]][j] = e;
 		}
 		newc[0]++;
 		newc[1]++;
 	}
 
 	// continue
-	Sky_ClipPoly (newc[0], newv[0][0], stage+1);
-	Sky_ClipPoly (newc[1], newv[1][0], stage+1);
+	Sky_ClipPoly (newc[0], newv_0[0], stage+1);
+	Sky_ClipPoly (newc[1], newv_1[0], stage+1);
+
+	if (on_heap)
+	{
+		free(dists);
+		free(sides);
+		free(newv_0);
+		free(newv_1);
+	}
 }
 
 /*
@@ -669,9 +690,6 @@ Sky_ProcessPoly
 */
 void Sky_ProcessPoly (glpoly_t	*p)
 {
-	int			i;
-	vec3_t		verts[MAX_CLIP_VERTS];
-
 	//draw it
 	DrawGLPoly(p);
 	rs_brushpasses++;
@@ -679,9 +697,20 @@ void Sky_ProcessPoly (glpoly_t	*p)
 	//update sky bounds
 	if (!r_fastsky.value)
 	{
-		for (i=0 ; i<p->numverts ; i++)
+		const int max_clip_verts = p->numverts + 2;
+		const int num_verts = p->numverts;
+		const int on_heap = max_clip_verts > MAX_CLIP_VERTS;
+		vec3_t *verts = (vec3_t *) (on_heap ?
+				 malloc(max_clip_verts * sizeof(vec3_t)) :
+				 alloca(max_clip_verts * sizeof(vec3_t)));
+		int i = 0;
+
+		for ( ; i < num_verts; i++) {
 			VectorSubtract (p->verts[i], r_origin, verts[i]);
-		Sky_ClipPoly (p->numverts, verts[0], 0);
+		}
+		Sky_ClipPoly (num_verts, verts[0], 0);
+
+		if (on_heap) free(verts);
 	}
 }
 
