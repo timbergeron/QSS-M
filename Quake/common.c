@@ -263,44 +263,19 @@ int q_strncasecmp(const char *s1, const char *s2, size_t n)
 	return (int)(c1 - c2);
 }
 
-//spike -- grabbed this from fte, because its useful to me
 char *q_strcasestr(const char *haystack, const char *needle)
 {
-	int c1, c2, c2f;
-	int i;
-	c2f = *needle;
-	if (c2f >= 'a' && c2f <= 'z')
-		c2f -= ('a' - 'A');
-	if (!c2f)
-		return (char*)haystack;
-	while (1)
+	const size_t len = strlen(needle);
+
+	while (*haystack)
 	{
-		c1 = *haystack;
-		if (!c1)
-			return NULL;
-		if (c1 >= 'a' && c1 <= 'z')
-			c1 -= ('a' - 'A');
-		if (c1 == c2f)
-		{
-			for (i = 1; ; i++)
-			{
-				c1 = haystack[i];
-				c2 = needle[i];
-				if (c1 >= 'a' && c1 <= 'z')
-					c1 -= ('a' - 'A');
-				if (c2 >= 'a' && c2 <= 'z')
-					c2 -= ('a' - 'A');
-				if (!c2)
-					return (char*)haystack;	//end of needle means we found a complete match
-				if (!c1)	//end of haystack means we can't possibly find needle in it any more
-					return NULL;
-				if (c1 != c2)	//mismatch means no match starting at haystack[0]
-					break;
-			}
-		}
-		haystack++;
+		if (!q_strncasecmp(haystack, needle, len))
+			return (char *)haystack;
+
+		++haystack;
 	}
-	return NULL;	//didn't find it
+
+	return NULL;
 }
 
 char *q_strlwr (char *str)
@@ -1657,12 +1632,16 @@ qboolean COM_DownloadNameOkay(const char *filename)
 
 /*
 ==============
-COM_Parse
+COM_ParseEx
 
 Parse a token out of a string
+
+The mode argument controls how overflow is handled:
+- CPE_NOTRUNC:		return NULL (abort parsing)
+- CPE_ALLOWTRUNC:	truncate com_token (ignore the extra characters in this token)
 ==============
 */
-const char *COM_Parse (const char *data)
+const char *COM_ParseEx (const char *data, cpe_mode mode)
 {
 	int		c;
 	int		len;
@@ -1714,16 +1693,20 @@ skipwhite:
 				com_token[len] = 0;
 				return data;
 			}
-			com_token[len] = c;
-			len++;
+			if (len < Q_COUNTOF(com_token) - 1)
+				com_token[len++] = c;
+			else if (mode == CPE_NOTRUNC)
+				return NULL;
 		}
 	}
 
 // parse single characters
 	if (c == '{' || c == '}'|| c == '('|| c == ')' || c == '\'' || c == ':')
 	{
-		com_token[len] = c;
-		len++;
+		if (len < Q_COUNTOF(com_token) - 1)
+			com_token[len++] = c;
+		else if (mode == CPE_NOTRUNC)
+			return NULL;
 		com_token[len] = 0;
 		return data+1;
 	}
@@ -1731,9 +1714,11 @@ skipwhite:
 // parse a regular word
 	do
 	{
-		com_token[len] = c;
+		if (len < Q_COUNTOF(com_token) - 1)
+			com_token[len++] = c;
+		else if (mode == CPE_NOTRUNC)
+			return NULL;
 		data++;
-		len++;
 		c = *data;
 		/* commented out the check for ':' so that ip:port works */
 		if (c == '{' || c == '}'|| c == '('|| c == ')' || c == '\''/* || c == ':' */)
@@ -1742,6 +1727,21 @@ skipwhite:
 
 	com_token[len] = 0;
 	return data;
+}
+
+
+/*
+==============
+COM_Parse
+
+Parse a token out of a string
+
+Return NULL in case of overflow
+==============
+*/
+const char *COM_Parse (const char *data)
+{
+	return COM_ParseEx (data, CPE_NOTRUNC);
 }
 
 

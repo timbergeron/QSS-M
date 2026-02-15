@@ -27,8 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t r_drawflat, gl_overbright_models, gl_fullbrights, r_lerpmodels, r_lerpmove; //johnfitz
 extern cvar_t scr_fov, cl_gun_fovscale;
 
-#define NUMVERTEXNORMALS	162
-float	r_avertexnormals[NUMVERTEXNORMALS][3] = {
+const float	r_avertexnormals[NUMVERTEXNORMALS][3] = {
 #include "anorms.h"
 };
 
@@ -36,13 +35,13 @@ extern vec3_t	lightcolor; //johnfitz -- replaces "float shadelight" for lit supp
 
 // precalculated dot products for quantized angles
 #define SHADEDOT_QUANT 16
-static float	r_avertexnormal_dots[SHADEDOT_QUANT][256] = {
+static const float	r_avertexnormal_dots[SHADEDOT_QUANT][256] = {
 #include "anorm_dots.h"
 };
 
 extern	vec3_t	lightspot;
 
-static float	*shadedots = r_avertexnormal_dots[0];
+static const float	*shadedots = r_avertexnormal_dots[0];
 static vec3_t	shadevector;
 
 static float	entalpha; //johnfitz
@@ -287,7 +286,7 @@ void GLAlias_CreateShaders (void)
 		}
 		q_snprintf(processedVertSource, sizeof(processedVertSource), vertSource, defines);
 
-		glsl->program = GL_CreateProgram (processedVertSource, fragSource, sizeof(bindings)/sizeof(bindings[0]), bindings);
+		glsl->program = GL_CreateProgram (processedVertSource, fragSource, Q_COUNTOF(bindings), bindings);
 
 		if (glsl->program != 0)
 		{

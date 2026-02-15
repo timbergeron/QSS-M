@@ -34,7 +34,7 @@ int		type_size[8] = {
 	1	// sizeof(void *) / 4		// ev_pointer
 };
 
-#define	NUM_TYPE_SIZES	(int)(sizeof(type_size) / sizeof(type_size[0]))
+#define NUM_TYPE_SIZES (int)Q_COUNTOF(type_size)
 
 static ddef_t	*ED_FieldAtOfs (int ofs);
 
@@ -965,7 +965,10 @@ const char *ED_ParseEdict (const char *data, edict_t *ent)
 		}
 
 		// parse value
-		data = COM_Parse (data);
+		// HACK: we allow truncation when reading the wad field,
+		// otherwise maps using lots of wads with absolute paths
+		// could cause a parse error
+		data = COM_ParseEx (data, !strcmp (keyname, "wad") ? CPE_ALLOWTRUNC : CPE_NOTRUNC);
 		if (!data)
 			Host_Error ("ED_ParseEntity: EOF without closing brace");
 

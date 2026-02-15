@@ -168,7 +168,7 @@ const char *svc_strings[128] =
 	"126", // 126
 	"127", // 127
 };
-#define	NUM_SVC_STRINGS	(sizeof(svc_strings) / sizeof(svc_strings[0]))
+#define NUM_SVC_STRINGS Q_COUNTOF(svc_strings)
 
 qboolean warn_about_nehahra_protocol; //johnfitz
 

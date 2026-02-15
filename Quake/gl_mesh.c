@@ -128,9 +128,6 @@ void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 	}
 }
 
-#define NUMVERTEXNORMALS	 162
-extern	float	r_avertexnormals[NUMVERTEXNORMALS][3];
-
 /*
 ================
 GLMesh_LoadVertexBuffer

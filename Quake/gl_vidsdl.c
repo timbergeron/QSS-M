@@ -1607,7 +1607,7 @@ static void VID_InitModelist (void)
 
 	// enumerate fullscreen modes
 	flags = DEFAULT_SDL_FLAGS | SDL_FULLSCREEN;
-	for (i = 0; i < (int)(sizeof(bpps)/sizeof(bpps[0])); i++)
+	for (i = 0; i < (int)Q_COUNTOF(bpps); i++)
 	{
 		if (nummodes >= MAX_MODE_LIST)
 			break;
@@ -1675,7 +1675,7 @@ void	VID_Init (void)
 					 "vid_borderless",
 					 "gl_load24bit",	//including this here so we don't start up to the wrong setting.
 					 };
-#define num_readvars	( sizeof(read_vars)/sizeof(read_vars[0]) )
+#define num_readvars	Q_COUNTOF(read_vars)
 
 	Cvar_RegisterVariable (&vid_fullscreen); //johnfitz
 	Cvar_RegisterVariable (&vid_width); //johnfitz

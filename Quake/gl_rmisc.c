@@ -282,7 +282,7 @@ static void R_ParseWorldspawn (void)
 			q_strlcpy(key, com_token, sizeof(key));
 		while (key[0] && key[strlen(key)-1] == ' ') // remove trailing spaces
 			key[strlen(key)-1] = 0;
-		data = COM_Parse(data);
+		data = COM_ParseEx(data, CPE_ALLOWTRUNC);
 		if (!data)
 			return; // error
 		q_strlcpy(value, com_token, sizeof(value));
@@ -492,7 +492,7 @@ GLuint GL_CreateProgram (const GLchar *vertSource, const GLchar *fragSource, int
 	}
 	else
 	{
-		if (gl_num_programs == (sizeof(gl_programs)/sizeof(GLuint)))
+		if (gl_num_programs == Q_COUNTOF(gl_programs))
 			Host_Error ("gl_programs overflow");
 
 		gl_programs[gl_num_programs] = program;
