@@ -840,6 +840,9 @@ static qboolean Skywind_LoadConfigInternal(qboolean quiet)
 	const char *data;
 	qboolean loaded = false;
 	qboolean is_default = false;
+	qboolean has_include = false;
+	qboolean include_match = false;
+	qboolean exclude_match = false;
 
 	if (!Skywind_HasSkybox())
 	{
@@ -902,19 +905,38 @@ static qboolean Skywind_LoadConfigInternal(qboolean quiet)
 
 	while ((data = COM_Parse(data)) != NULL)
 	{
+		if (!q_strcasecmp(com_token, "include"))
+		{
+			if ((data = COM_Parse(data)) == NULL)
+				break;
+			if (is_default)
+			{
+				has_include = true;
+				if (!q_strcasecmp(com_token, skybox_name))
+					include_match = true;
+			}
+		}
 		if (!q_strcasecmp(com_token, "exclude"))
 		{
 			if ((data = COM_Parse(data)) == NULL)
 				break;
 			if (is_default && !q_strcasecmp(com_token, skybox_name))
-			{
-				Skywind_Clear();
-				Skywind_InvalidateFrame();
-				if (!quiet)
-					Con_Printf("Sky wind default config excludes \"%s\"\n", skybox_name);
-				return false;
-			}
+				exclude_match = true;
 		}
+	}
+
+	if (is_default && (exclude_match || (has_include && !include_match)))
+	{
+		Skywind_Clear();
+		Skywind_InvalidateFrame();
+		if (!quiet)
+		{
+			if (exclude_match)
+				Con_Printf("Sky wind default config excludes \"%s\"\n", skybox_name);
+			else
+				Con_Printf("Sky wind default config does not include \"%s\"\n", skybox_name);
+		}
+		return false;
 	}
 
 	Skywind_InvalidateFrame();
@@ -1126,6 +1148,7 @@ static void Skywind_f(void)
 			"   skywind_load     reload config from file\n"
 			"   skywind_lookdir  set yaw/pitch from current view\n"
 			"   skywind_rotate   adjust yaw/pitch by delta\n"
+			"   default cfg      include/exclude <skyname> (exclude wins)\n"
 			"\n"
 			"^mcurrent values:^m\n"
 			"   r_skywind (rate): %g\n"
