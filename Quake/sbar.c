@@ -1484,6 +1484,46 @@ qboolean IsOneVsOneMatch (void)
 }
 
 /*===============
+AreTeamsEven -- check if teams have equal player counts #smartstatus
+============== */
+static qboolean AreTeamsEven (void)
+{
+	int team_counts[14] = {0}; // colors 1-13
+	int nteams = 0;
+	int first_count = 0;
+
+	for (int i = 0; i < cl.maxclients; i++)
+	{
+		scoreboard_t *s = &cl.scores[i];
+
+		if (!s->name[0] || s->spectator)
+			continue;
+		if (s->frags == -99)
+			continue;
+
+		int col = s->pants.basic;
+		if (col < 1 || col > 13)
+			continue;
+
+		team_counts[col]++;
+	}
+
+	for (int i = 1; i <= 13; i++)
+	{
+		if (team_counts[i] > 0)
+		{
+			nteams++;
+			if (first_count == 0)
+				first_count = team_counts[i];
+			else if (team_counts[i] != first_count)
+				return false; // uneven
+		}
+	}
+
+	return (nteams >= 2);
+}
+
+/*===============
 Sbar_DrawFrags -- for proquake, HEAVILY modified (draws match time, and teamscores) replace this entire function // woods #pqteam
 ============== */
 void Sbar_DrawFrags(void)
@@ -2480,7 +2520,7 @@ void Sbar_DeathmatchOverlay (void)
 	scoreboard_t	*s;
 	int ct = (SDL_GetTicks() - maptime)/1000; // woods connected map time #maptime
 	qboolean notready = false; // woods #smartstatus
-	qboolean oneready = false; // woods #smartstatus
+	int unready_count = 0; // woods #smartstatus - count of unready team players
 
 	// JPG 1.05 - check to see if we should update IP status  // woods for #iplog
 	if (iplog_size && (cl.time - cl.last_status_time > 5))
@@ -2535,8 +2575,6 @@ void Sbar_DeathmatchOverlay (void)
 		Draw_String(x - 64, y - 10, "  ping  frags   name"); // woods
 	else*/
 
-	oneready = false; // woods #smartstatus
-
 	for (i = 0; i < l; i++)
 	{
 		k = fragsort[i];
@@ -2559,14 +2597,16 @@ void Sbar_DeathmatchOverlay (void)
 		{
 			if (!cl.teamgame)
 				notready = false;
-			
-			if (strstr(s->name, qfReady) || strstr(s->name, "Ready"))
-				oneready = true;
-			
-			if ((k == cl.realviewentity - 1) && cl.teamgame && !cl.matchinp && cl.notobserver && (!strstr(s->name, qfReady) || !strstr(s->name, "Ready")))
+
+			qboolean is_ready = (strstr(s->name, qfReady) || strstr(s->name, "Ready"));
+
+			if (cl.teamgame && !cl.matchinp && !s->spectator && s->frags != -99 && s->pants.basic >= 1 && !is_ready)
+				unready_count++;
+
+			if ((k == cl.realviewentity - 1) && cl.teamgame && !cl.matchinp && cl.notobserver && !is_ready)
 				notready = true;
 
-			if ((k == cl.realviewentity - 1) && cl.teamgame && !cl.matchinp && cl.notobserver && (strstr(s->name, qfReady) || strstr(s->name, "Ready")))
+			if ((k == cl.realviewentity - 1) && cl.teamgame && !cl.matchinp && cl.notobserver && is_ready)
 				notready = false;
 		}
 
@@ -2652,7 +2692,7 @@ void Sbar_DeathmatchOverlay (void)
 
 	Draw_String(x - 64, y2 - 10, "  ping  frags   name"); // woods #smartstatus
 
-	if (flash() && notready && oneready) // on odd second, if im not ready AND someone else is ready
+	if (flash() && notready && unready_count == 1 && AreTeamsEven()) // blink only if I'm the last to ready AND teams are even
 		M_Print(x + 192, y2 - 10, "status");
 	else
 		Draw_String
