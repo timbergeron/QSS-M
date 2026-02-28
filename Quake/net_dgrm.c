@@ -113,6 +113,23 @@ static char *StrAddr (struct qsockaddr *addr)
 	return buf;
 }
 
+static const char *Datagram_SocketOwnerString(const qsocket_t *sock) // woods #droplog
+{
+	int i;
+
+	if (sock && svs.clients && svs.maxclients)
+	{
+		for (i = 0; i < svs.maxclients; i++)
+		{
+			client_t *cl = &svs.clients[i];
+
+			if (cl->netconnection == sock)
+				return cl->name[0] ? cl->name : NET_QSocketGetTrueAddressString(sock);
+		}
+	}
+
+	return sock ? NET_QSocketGetTrueAddressString(sock) : "unknown";
+}
 
 #ifdef BAN_TEST
 
@@ -364,7 +381,7 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 		{
 			count = sequence - sock->unreliableReceiveSequence;
 			droppedDatagrams += count;
-			Con_DPrintf("Dropped %u datagram(s)\n", count);
+			Con_DPrintf("Dropped %u datagram(s) for %s\n", count, Datagram_SocketOwnerString(sock)); // woods #droplog
 		}
 		sock->unreliableReceiveSequence = sequence + 1;
 
@@ -629,7 +646,7 @@ int	Datagram_GetMessage (qsocket_t *sock)
 			{
 				count = sequence - sock->unreliableReceiveSequence;
 				droppedDatagrams += count;
-				Con_DPrintf("Dropped %u datagram(s)\n", count);
+				Con_DPrintf("Dropped %u datagram(s) for %s\n", count, Datagram_SocketOwnerString(sock)); // woods #droplog
 				cl.packetloss = count; // woods #scrpl
 				cl.pltotal = droppedDatagrams; // woods #scrpl
 			}
