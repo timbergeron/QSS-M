@@ -100,6 +100,8 @@ extern qboolean netquakeio; // woods
 
 void TexturePointer_Draw(void); // woods #texturepointer
 
+extern cvar_t r_lerpmove; //johnfitz
+
 extern qpic_t* sb_nums[2][11]; // woods #varmatchclock
 extern qpic_t* sb_colon; // woods #varmatchclock
 
@@ -4244,11 +4246,59 @@ qboolean TP_IsPlayerVisible(vec3_t origin)
 	return TP_IsItemVisible(&visitem);
 }
 
+static qboolean SCR_IsOutsideMapView(void)
+{
+	vec3_t end, impact;
+
+	/*
+	 * If a very long trace from the camera reaches the end point without
+	 * hitting solid world geometry, treat it as a void/outside-map view.
+	 */
+	VectorMA(r_origin, 65536.0f, vpn, end);
+	TraceLine(r_origin, end, 0, impact);
+
+	return VecLength2(impact, end) <= 1.0f;
+}
+
+static void SCR_GetAutoIDOrigin(const entity_t *state, vec3_t out)
+{
+	if (r_lerpmove.value && state != &cl.viewent && (state->lerpflags & LERP_MOVESTEP))
+	{
+		float blend;
+		vec3_t d;
+		float s = (cls.demoplayback && cls.demospeed < 0.f) ? -1.f : 1.f;
+
+		if (state->lerpflags & LERP_FINISH)
+		{
+			float denom = state->lerpfinish - state->movelerpstart;
+			blend = (denom > 0.0f) ? CLAMP(0.0f, (float)(cl.time - state->movelerpstart) / denom, 1.0f) : 1.0f;
+		}
+		else
+		{
+			blend = CLAMP(0.0f, (float)(cl.time - state->movelerpstart) / 0.1f * s, 1.0f);
+		}
+
+		VectorSubtract(state->currentorigin, state->previousorigin, d);
+		out[0] = state->previousorigin[0] + d[0] * blend;
+		out[1] = state->previousorigin[1] + d[1] * blend;
+		out[2] = state->previousorigin[2] + d[2] * blend;
+	}
+	else
+	{
+		VectorCopy(state->origin, out);
+	}
+}
+
+static int SCR_FloorToInt(float x)
+{
+	return (int)floorf(x);
+}
+
 void SCR_SetupAutoID(void)
 {
 	int		i, view[4];
 	float		model[16], project[16], winz;
-	vec3_t origin;
+	vec3_t origin, base_origin;
 	entity_t* state;
 	autoid_player_t* id;
 
@@ -4265,6 +4315,8 @@ void SCR_SetupAutoID(void)
 
 	char buf4[15];
 	const char* star_obs;
+
+	qboolean skip_vis = false; // skip LOS only for fly observers looking into map void/outside
 
 	//if (r_refdef.viewangles[ROLL] == 80) // dead, could rotate text?
 
@@ -4296,10 +4348,13 @@ void SCR_SetupAutoID(void)
 				) {
 				return;
 			}
+
+			// Only skip LOS in fly mode when the view is in map void/outside area.
+			if (!strcmp(obs, "fly") || !strcmp(star_obs, "fly"))
+				skip_vis = SCR_IsOutsideMapView();
 		}
-		else
-			if (!strcmp(cl.observer, "n")) // general observer flag for legacy mods/servers
-				return;
+		else if (!strcmp(cl.observer, "n")) // general observer flag for legacy mods/servers
+			return;
 	}
 
 	glGetFloatv(GL_MODELVIEW_MATRIX, model);
@@ -4313,21 +4368,19 @@ void SCR_SetupAutoID(void)
 		if (state->model == NULL)
 			continue;
 
-		if (VectorCompare(cl.entities[cl.viewentity].origin, state->origin))
-			continue;  // Skip our own entity
-
-		if (VectorCompare(cl.entities[cl.realviewentity].origin, state->origin))
-			continue;  // Skip our own entity (eyecam)
+		if ((1 + i) == cl.viewentity || (1 + i) == cl.realviewentity)
+			continue;  // Skip our own entity / eyecam target
 
 		if ((!strcmp(state->model->name, "progs/player.mdl") && ISDEAD(state->frame)) || !strcmp(state->model->name, "progs/h_player.mdl"))
 			continue;
 
-		VectorCopy(state->origin, origin);
+		SCR_GetAutoIDOrigin(state, base_origin);
+		VectorCopy(base_origin, origin);
 		origin[2] += 28;
 		if (R_CullSphere(origin, 0))
 			continue;
 
-		if (!TP_IsPlayerVisible(state->origin))
+		if (!skip_vis && !TP_IsPlayerVisible(base_origin))
 			continue;
 
 		id = &autoids[autoid_count];
@@ -4340,7 +4393,9 @@ void SCR_SetupAutoID(void)
 
 void SCR_DrawAutoID(void)
 {
-	int	i, x, y;
+	int	i;
+	int xi, yi;
+	float x, y, xfrac, yfrac;
 	char formatted_name[16]; // 15 chars + null terminator
 	int name_length;
 	int y_offset = 12;
@@ -4389,18 +4444,33 @@ void SCR_DrawAutoID(void)
 
 		name_length = strlen(formatted_name);
 
-		if (!strcmp(formatted_name, observing))
-			continue;
+			/*
+			 * Only suppress the tracked player's label while in eyecam.
+			 * In fly/chase modes, "observing" can still be set and should not hide names.
+			 */
+			if (cl.eyecam && !strcmp(formatted_name, observing))
+				continue;
 
-		Draw_FillPlayer(x - 4 * name_length - 1, y - 1, (name_length * 8) + 2, 11, CL_PLColours_Parse("0x000000"), decimal_part);
+		xi = SCR_FloorToInt(x);
+		yi = SCR_FloorToInt(y);
+		xfrac = x - (float)xi;
+		yfrac = y - (float)yi;
 
-		Draw_String(x - 4 * name_length, y, formatted_name);
+		glPushMatrix();
+		glTranslatef(xfrac, yfrac, 0.0f);
+
+		Draw_FillPlayer(xi - 4 * name_length - 1, yi - 1, (name_length * 8) + 2, 11, CL_PLColours_Parse("0x000000"), decimal_part);
+		Draw_String(xi - 4 * name_length, yi, formatted_name);
+
+		glPopMatrix();
 	}
 }
 
 void SCR_DrawStatusIndicators (void)
 {
-	int i, x, y;
+	int i;
+	int xi, yi;
+	float x, y, xfrac, yfrac;
 	const int y_offset = 12;
 
 	if (cls.state != ca_connected || cl.intermission || qeintermission || crxintermission)
@@ -4452,6 +4522,14 @@ void SCR_DrawStatusIndicators (void)
 		if (r_refdef.viewangles[ROLL] == 80) { x += 26; y -= y_offset; }
 		if (scr_autoid.value > 0)             y -= y_offset;   /* above shown name */
 
+		xi = SCR_FloorToInt(x);
+		yi = SCR_FloorToInt(y);
+		xfrac = x - (float)xi;
+		yfrac = y - (float)yi;
+
+		glPushMatrix();
+		glTranslatef(xfrac, yfrac, 0.0f);
+
 		if (is_afk) {
 			/* Draw red "AFK" using 128 mask */
 			char afk_text[4];
@@ -4459,12 +4537,14 @@ void SCR_DrawStatusIndicators (void)
 			afk_text[1] = 'F' | 128;  // Red F
 			afk_text[2] = 'K' | 128;  // Red K
 			afk_text[3] = '\0';
-			Draw_String(x - 12, y, afk_text);
+			Draw_String(xi - 12, yi, afk_text);
 		}
 		else {
 			/* Animated typing dots */
-			Draw_StringAnimatedDots(x - 12, y, "...");
+			Draw_StringAnimatedDots(xi - 12, yi, "...");
 		}
+
+		glPopMatrix();
 	}
 }
 
@@ -5680,6 +5760,8 @@ needs almost the entire 256k of stack space!
 */
 void SCR_UpdateScreen (void)
 {
+	double diag_render_start = 0;
+	qboolean diag_timing;
 	vid.numpages = (gl_triplebuffer.value) ? 3 : 2;
 
 	if (scr_disabled_for_loading)
