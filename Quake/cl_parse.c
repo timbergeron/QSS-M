@@ -2481,6 +2481,16 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 		}
 	}
 
+	if (cls.demorecording && !cls.demoplayback)
+	{
+		if (q_strcasestr(string, "Match tied - Overtime!! (timed OT)")
+			|| q_strcasestr(string, "Match tied - Sudden Death Overtime!! (sudden-death OT)")
+			|| q_strcasestr(string, "Sudden death overtime"))
+		{
+			cls.demo_had_overtime = true;
+		}
+	}
+
 	// woods #con_mm1mute (qrack)
 
 	if (string[1] == '(')

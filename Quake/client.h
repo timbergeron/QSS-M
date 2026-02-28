@@ -154,6 +154,7 @@ typedef struct
 // entering a map (and clearing client_state_t)
 	qboolean	demorecording;
 	qboolean	demoplayback;
+	qboolean	demo_had_overtime;
 
 	// woods #demopercent (Baker Fitzquake Mark V)
 

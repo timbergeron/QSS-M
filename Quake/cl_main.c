@@ -257,6 +257,7 @@ void CL_Disconnect (void)
 	cl.sendprespawn = false;
 	memset(lastconnected, '\0', sizeof(lastconnected)); // woods #identify+
 	cl.matchinp = 0; // woods
+	cls.demo_had_overtime = false;
 	netquakeio = false; // woods
 
 	Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "*mapmismatch", ""); // clear -- woods #mapcrc

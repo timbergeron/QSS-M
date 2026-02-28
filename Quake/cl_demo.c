@@ -645,6 +645,106 @@ int CL_GetMessage (void)
 	return r;
 }
 
+static qboolean CL_DemoFilenameExists(const char *path)
+{
+	FILE *f = fopen(path, "rb");
+	if (!f)
+		return false;
+
+	fclose(f);
+	return true;
+}
+
+static void CL_GetDemoModeTag(char *mode_tag, size_t mode_tag_size)
+{
+	char mode_buf[32];
+	const char *mode;
+
+	if (!mode_tag_size)
+		return;
+	mode_tag[0] = '\0';
+
+	if (!cl.serverinfo[0])
+		return;
+
+	mode = Info_GetKey(cl.serverinfo, "mode", mode_buf, sizeof(mode_buf));
+	if (!mode || !mode[0])
+		return;
+
+	if (!q_strcasecmp(mode, "ctf"))
+		q_strlcpy(mode_tag, "CTF", mode_tag_size);
+	else if (!q_strcasecmp(mode, "dm") || !q_strcasecmp(mode, "ffa"))
+		q_strlcpy(mode_tag, "DM", mode_tag_size);
+	else if (!q_strcasecmp(mode, "ra") || !q_strcasecmp(mode, "rocketarena"))
+		q_strlcpy(mode_tag, "RA", mode_tag_size);
+	else if (!q_strcasecmp(mode, "ca"))
+		q_strlcpy(mode_tag, "CA", mode_tag_size);
+	else if (!q_strcasecmp(mode, "airshot"))
+		q_strlcpy(mode_tag, "AIRSHOT", mode_tag_size);
+	else if (!q_strcasecmp(mode, "wipeout"))
+		q_strlcpy(mode_tag, "WIPEOUT", mode_tag_size);
+	else if (!q_strcasecmp(mode, "freezetag"))
+		q_strlcpy(mode_tag, "FREEZETAG", mode_tag_size);
+}
+
+static void CL_RenameDemoWithMatchSuffixes(void)
+{
+	char base[MAX_OSPATH];
+	char renamed[MAX_OSPATH];
+	char current_noext[MAX_OSPATH];
+	char suffix[32];
+	char mode_tag[16];
+	size_t current_len;
+	size_t suffix_len;
+	int attempt;
+
+	if (!cls.demofilename[0])
+		return;
+
+	CL_GetDemoModeTag(mode_tag, sizeof(mode_tag));
+
+	suffix[0] = '\0';
+	if (mode_tag[0])
+		q_snprintf(suffix, sizeof(suffix), "_%s", mode_tag);
+	if (cls.demo_had_overtime)
+		q_strlcat(suffix, "_OT", sizeof(suffix));
+
+	if (!suffix[0])
+		return;
+
+	COM_StripExtension(cls.demofilename, current_noext, sizeof(current_noext));
+	current_len = strlen(current_noext);
+	suffix_len = strlen(suffix);
+	if (current_len > suffix_len && !q_strcasecmp(current_noext + current_len - suffix_len, suffix))
+		return;
+
+	COM_StripExtension(cls.demofilename, base, sizeof(base));
+
+	for (attempt = 0; attempt < 1000; ++attempt)
+	{
+		if (attempt == 0)
+			q_snprintf(renamed, sizeof(renamed), "%s%s.dem", base, suffix);
+		else
+			q_snprintf(renamed, sizeof(renamed), "%s%s%d.dem", base, suffix, attempt + 1);
+
+		if (CL_DemoFilenameExists(renamed))
+			continue;
+
+		if (rename(cls.demofilename, renamed) == 0)
+		{
+			q_strlcpy(cls.demofilename, renamed, sizeof(cls.demofilename));
+			Con_Printf("renamed demo to %s\n", COM_SkipPath(renamed));
+		}
+		else
+		{
+			Con_Printf("WARNING: could not rename demo to %s\n", COM_SkipPath(renamed));
+		}
+		return;
+	}
+
+	Con_Printf("WARNING: could not find available demo name for %s\n", COM_SkipPath(cls.demofilename));
+}
+
 
 /*
 ====================
@@ -673,6 +773,10 @@ void CL_Stop_f (void)
 	fclose (cls.demofile);
 	cls.demofile = NULL;
 	cls.demorecording = false;
+
+	CL_RenameDemoWithMatchSuffixes();
+	cls.demo_had_overtime = false;
+
 	Con_Printf ("completed demo\n");
 
 	Cvar_SetROM(cl_recordingdemo.name, "");
@@ -1048,6 +1152,7 @@ void CL_Record_f (void)
 	fprintf (cls.demofile, "%i\n", cls.forcetrack);
 	q_strlcpy(cls.demofilename, name, sizeof(cls.demofilename)); // woods (iw) #democontrols
 
+	cls.demo_had_overtime = false;
 	cls.demorecording = true;
 
 	// from ProQuake: initialize the demo file if we're already connected
