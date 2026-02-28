@@ -202,6 +202,28 @@ const char *svc_strings[128] =
 };
 #define	NUM_SVC_STRINGS	(sizeof(svc_strings) / sizeof(svc_strings[0]))
 
+// SVC message profiling for scr_diagnostics // woods #scr_diag
+static int svc_profile_counts[128];
+static int svc_profile_bytes[128];
+static int svc_profile_fast_count;
+static int svc_profile_fast_bytes;
+
+void CL_GetSVCProfile(int counts[128], int bytes[128], int *fast_count, int *fast_bytes) // woods #scr_diag
+{
+	memcpy(counts, svc_profile_counts, sizeof(svc_profile_counts));
+	memcpy(bytes, svc_profile_bytes, sizeof(svc_profile_bytes));
+	if (fast_count) *fast_count = svc_profile_fast_count;
+	if (fast_bytes) *fast_bytes = svc_profile_fast_bytes;
+}
+
+void CL_ResetSVCProfile(void) // woods #scr_diag
+{
+	memset(svc_profile_counts, 0, sizeof(svc_profile_counts));
+	memset(svc_profile_bytes, 0, sizeof(svc_profile_bytes));
+	svc_profile_fast_count = 0;
+	svc_profile_fast_bytes = 0;
+}
+
 qboolean warn_about_nehahra_protocol; //johnfitz
 
 extern vec3_t	v_punchangles[2]; //johnfitz
@@ -3907,6 +3929,7 @@ void CL_ParseServerMessage (void)
 	const char		*str; //johnfitz
 	int			lastcmd; //johnfitz
 	const char*		s;	// woods #pqteam
+	int			svc_start_pos; // SVC profiling // woods #scr_diag
 //
 // if recording demos, copy the message out
 //
@@ -3923,11 +3946,13 @@ void CL_ParseServerMessage (void)
 	MSG_BeginReading ();
 
 	lastcmd = 0;
+	svc_start_pos = 0; // woods #scr_diag
 	while (1)
 	{
 		if (msg_badread)
 			Host_Error ("CL_ParseServerMessage: Bad server message");
 
+		svc_start_pos = msg_readcount; // woods #scr_diag
 		cmd = MSG_ReadByte ();
 
 		if (cmd == -1)
@@ -3956,6 +3981,8 @@ void CL_ParseServerMessage (void)
 		{
 			SHOWNET("fast update");
 			CL_ParseUpdate (cmd&127);
+			svc_profile_fast_count++; // woods #scr_diag
+			svc_profile_fast_bytes += msg_readcount - svc_start_pos; // woods #scr_diag
 			continue;
 		}
 
@@ -4434,6 +4461,13 @@ void CL_ParseServerMessage (void)
 				Host_Error ("Received svcfte_voicechat but extension not active");
 			S_Voip_Parse();
 			break;
+		}
+
+		// SVC profiling: accumulate bytes for this message // woods #scr_diag
+		if (cmd >= 0 && cmd < 128)
+		{
+			svc_profile_counts[cmd]++; // woods #scr_diag
+			svc_profile_bytes[cmd] += msg_readcount - svc_start_pos; // woods #scr_diag
 		}
 
 		lastcmd = cmd; //johnfitz

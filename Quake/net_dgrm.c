@@ -42,6 +42,8 @@ static int packetsReceived = 0;
 static int receivedDuplicateCount = 0;
 static int shortPacketCount = 0;
 static int droppedDatagrams;
+static unsigned long long bytesSent = 0; // woods #scr_diag
+static unsigned long long bytesReceived = 0; // woods #scr_diag
 
 //cvars controlling dpmaster support:
 //our servers might as well claim to be 'FTE-Quake' servers. this means FTE can see us, we can see FTE (when its pretending to be nq).
@@ -220,6 +222,7 @@ int Datagram_SendMessage (qsocket_t *sock, sizebuf_t *data)
 
 	sock->lastSendTime = net_time;
 	packetsSent++;
+	bytesSent += packetLen; // woods #scr_diag
 	return 1;
 }
 
@@ -253,6 +256,7 @@ static int SendMessageNext (qsocket_t *sock)
 
 	sock->lastSendTime = net_time;
 	packetsSent++;
+	bytesSent += packetLen; // woods #scr_diag
 	return 1;
 }
 
@@ -286,6 +290,7 @@ static int ReSendMessage (qsocket_t *sock)
 
 	sock->lastSendTime = net_time;
 	packetsReSent++;
+	bytesSent += packetLen; // woods #scr_diag
 	return 1;
 }
 
@@ -327,6 +332,7 @@ int Datagram_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data)
 		return -1;
 
 	packetsSent++;
+	bytesSent += packetLen; // woods #scr_diag
 	return 1;
 }
 
@@ -336,6 +342,7 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 	unsigned int	flags;
 	unsigned int	sequence;
 	unsigned int	count;
+	unsigned int	packetbytes = length; // woods #scr_diag
 
 	if (length < NET_HEADERSIZE)
 	{
@@ -349,6 +356,8 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 
 	if (flags & NETFLAG_CTL)
 		return false;	//should only be for OOB packets.
+
+	bytesReceived += packetbytes; // woods #scr_diag
 
 	sequence = BigLong(packetBuffer.sequence);
 	packetsReceived++;
@@ -418,7 +427,8 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 	{
 		packetBuffer.length = BigLong(NET_HEADERSIZE | NETFLAG_ACK);
 		packetBuffer.sequence = BigLong(sequence);
-		sfunc.Write (sock->socket, (byte *)&packetBuffer, NET_HEADERSIZE, &sock->addr);
+		if (sfunc.Write (sock->socket, (byte *)&packetBuffer, NET_HEADERSIZE, &sock->addr) != -1)
+			bytesSent += NET_HEADERSIZE; // woods #scr_diag
 
 		if (sequence != sock->receiveSequence)
 		{
@@ -556,6 +566,7 @@ int	Datagram_GetMessage (qsocket_t *sock)
 	struct qsockaddr readaddr;
 	unsigned int	sequence;
 	unsigned int	count;
+	unsigned int	packetbytes = 0; // woods #scr_diag
 
 	if (!sock->canSend)
 		if ((net_time - sock->lastSendTime) > 1.0)
@@ -593,6 +604,7 @@ int	Datagram_GetMessage (qsocket_t *sock)
 			shortPacketCount++;
 			continue;
 		}
+		packetbytes = length; // woods #scr_diag
 
 		length = BigLong(packetBuffer.length);
 		if (length == 0xffffffff)
@@ -613,6 +625,8 @@ int	Datagram_GetMessage (qsocket_t *sock)
 			}
 			continue;
 		}
+
+		bytesReceived += packetbytes; // woods #scr_diag
 
 		sequence = BigLong(packetBuffer.sequence);
 		packetsReceived++;
@@ -680,7 +694,8 @@ int	Datagram_GetMessage (qsocket_t *sock)
 		{
 			packetBuffer.length = BigLong(NET_HEADERSIZE | NETFLAG_ACK);
 			packetBuffer.sequence = BigLong(sequence);
-			sfunc.Write (sock->socket, (byte *)&packetBuffer, NET_HEADERSIZE, &readaddr);
+			if (sfunc.Write (sock->socket, (byte *)&packetBuffer, NET_HEADERSIZE, &readaddr) != -1)
+				bytesSent += NET_HEADERSIZE; // woods #scr_diag
 
 			if (sequence != sock->receiveSequence)
 			{
@@ -779,6 +794,28 @@ static void NET_Stats_f (void)
 
 		PrintStats(s);
 	}
+}
+
+void NET_GetPacketStats(int *sent, int *received, int *resent, int *dropped, // woods #scr_diag
+	unsigned long long *bytes_sent, unsigned long long *bytes_received,
+	int *duplicates, int *short_packets)
+{
+	if (sent)
+		*sent = packetsSent;
+	if (received)
+		*received = packetsReceived;
+	if (resent)
+		*resent = packetsReSent;
+	if (dropped)
+		*dropped = droppedDatagrams;
+	if (bytes_sent)
+		*bytes_sent = bytesSent;
+	if (bytes_received)
+		*bytes_received = bytesReceived;
+	if (duplicates)
+		*duplicates = receivedDuplicateCount;
+	if (short_packets)
+		*short_packets = shortPacketCount;
 }
 
 // recognize ip:port (based on ProQuake)

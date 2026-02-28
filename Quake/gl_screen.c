@@ -93,10 +93,13 @@ int	Sbar_ColorForMap(int m); // woods #matchhud
 void Sbar_DrawCharacter(int x, int y, int num); // woods #matchhud
 void Sbar_SortFrags_Obs(void); // woods #observerhud
 void Sound_Toggle_Mute_On_f(void); // woods #usermute -- adapted from Fitzquake Mark V
+static void SCR_DiagDump_f (void); // woods #scr_diag
+static void SCR_DiagWriteReport (void); // woods #scr_diag
 
 Uint32 HintTimer_Callback(Uint32 interval, void* param); // woods #qssmhints
 void Print_Hints_f(void); // woods #qssmhints
 extern qboolean netquakeio; // woods
+extern const char *svc_strings[128]; // woods #scr_diag
 
 void TexturePointer_Draw(void); // woods #texturepointer
 
@@ -129,6 +132,7 @@ cvar_t		scr_crosshairoutline = { "scr_crosshairoutline", "1", CVAR_ARCHIVE }; //
 cvar_t		scr_crosshair_x = {"scr_crosshair_x", "0", CVAR_ARCHIVE}; // woods #crosshair
 cvar_t		scr_crosshair_y = {"scr_crosshair_y", "0", CVAR_ARCHIVE}; // woods #crosshair
 cvar_t		scr_showfps = {"scr_showfps", "0", CVAR_ARCHIVE};
+cvar_t		scr_diagnostics = {"scr_diagnostics", "0", CVAR_ARCHIVE}; // woods #scr_diag
 cvar_t		scr_clock = {"scr_clock", "0", CVAR_ARCHIVE};
 cvar_t		scr_showgrenadecounter = {"scr_showgrenadecounter", "0", CVAR_ARCHIVE}; // woods #nadecount
 cvar_t		scr_ping = {"scr_ping", "1", CVAR_ARCHIVE};  // woods #scrping
@@ -1019,6 +1023,7 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_matchclockscale); // woods #varmatchclock
 	Cvar_RegisterVariable (&scr_showscores); // woods #observerhud
 	Cvar_RegisterVariable (&scr_shownet); // woods #shownet
+	Cvar_RegisterVariable (&scr_diagnostics); // woods #scr_diag
 	Cvar_RegisterVariable (&scr_obscenterprint); // woods
 	Cvar_RegisterVariable (&scr_obsitems); // woods
 	Cvar_RegisterVariable (&scr_hints); // woods #qssmhints
@@ -1062,6 +1067,7 @@ void SCR_Init (void)
 	Cmd_AddCommand("+zoom", SCR_ZoomDown_f); // woods #zoom (ironwail)
 	Cmd_AddCommand("-zoom", SCR_ZoomUp_f); // woods #zoom (ironwail)
 	Cmd_AddCommand("hints", Print_Hints_f); // woods #hints
+	Cmd_AddCommand("diagnosticsdump", SCR_DiagDump_f); // woods #scr_diag
 
 	SCR_LoadPics (); //johnfitz
 
@@ -1554,6 +1560,1637 @@ void SCR_ShowPL(void)
 		{
 			lastPL = 0;
 		}
+	}
+}
+
+/*
+==================
+SCR_DrawDiagnostics -- woods #scr_diag
+==================
+*/
+#define DIAG_WINDOW_SECS 5.0
+#define DIAG_SLOW_MS 33.0f
+#define DIAG_FREEZE_MS 100.0f
+
+typedef struct scr_diag_state_s
+{
+	qboolean	active;
+	double		last_realtime;
+	double		window_start;
+	double		sum_frametime_ms;
+	int			frame_count;
+	int			window_seq;
+	int			last_packets_sent;
+	int			last_packets_received;
+	int			last_packets_resent;
+	int			last_dropped;
+	unsigned long long	last_bytes_sent;
+	unsigned long long	last_bytes_received;
+	int			last_pltotal;
+	int			pl_window;
+	int			slow_count;
+	int			freeze_count;
+	float		max_frametime_ms;
+	float		last_frametime_ms;
+	double		diag_start_time;
+	qboolean	net_bad;
+	double		net_bad_start;
+	double		net_bad_total;
+	double		net_last_bad_duration;
+	double		net_last_recovery_time;
+	qboolean	frame_bad;
+	double		frame_bad_start;
+	double		frame_bad_total;
+	double		frame_last_bad_duration;
+	double		frame_last_recovery_time;
+	qboolean	input_bad;
+	double		input_bad_start;
+	double		input_bad_total;
+	double		input_last_bad_duration;
+	double		input_last_recovery_time;
+	// Server tick jitter tracking
+	float		sv_dt_samples[64];
+	int			sv_dt_head;
+	int			sv_dt_count;
+	double		sv_dt_last_mtime0;
+	// Net message buffer peak
+	int			net_msg_peak;
+} scr_diag_state_t;
+
+static scr_diag_state_t scr_diag_state;
+static double scr_diag_render_ms;
+
+typedef struct scr_diag_snapshot_s
+{
+	qboolean baselines_valid;
+	double window_elapsed;
+	int pl_window;
+	int pl_total;
+	int slow_count;
+	int freeze_count;
+	float max_ms;
+	float avg_ms;
+	float last_ms;
+	float net_gap_ms;
+	float sv_dt_ms;
+	float render_ms;
+	float input_age_ms;
+	float pps_in;
+	float pps_out;
+	float kb_in;
+	float kb_out;
+	float loss_pct;
+	float resend_pps;
+	int pkt_sent;
+	int pkt_recv;
+	int pkt_resent;
+	int pkt_dropped;
+	unsigned long long bytes_sent;
+	unsigned long long bytes_recv;
+	// Connection diag (from NET_GetConnectionDiag)
+	unsigned int seq_send, seq_recv, seq_ack;
+	qboolean can_send;
+	int reliable_queue_bytes;
+	double connect_time;
+	double last_msg_time;
+	double last_send_time;
+	// Expanded packet stats
+	int pkt_duplicates;
+	int pkt_short;
+	// Computed metrics
+	float sv_tick_hz;
+	float sv_tick_jitter_ms;
+	float lerp_frac;
+	qboolean extrapolating;
+	float timeout_remaining;
+	int conn_uptime_secs;
+	float avg_pkt_in;
+	float avg_pkt_out;
+	int net_msg_peak;
+	// Move ACK gap
+	int move_ack_gap;
+	// Reliable vs unreliable message counts (cumulative)
+	int msgs_reliable;
+	int msgs_unreliable;
+} scr_diag_snapshot_t;
+
+typedef struct scr_diag_class_s
+{
+	int net;
+	int frame;
+	int input;
+} scr_diag_class_t;
+
+typedef struct scr_diag_summary_s
+{
+	int key;
+	int window_seq;
+	double last_update;
+	int lines;
+	char line1[192];
+	char line2[192];
+	char line3[192];
+} scr_diag_summary_t;
+
+static scr_diag_summary_t scr_diag_summary;
+
+static scr_diag_class_t SCR_DiagClassify (const scr_diag_snapshot_t *snap)
+{
+	scr_diag_class_t c;
+
+	c.net = 0;
+	if (snap->loss_pct > 2.0f || snap->net_gap_ms > 250.0f || snap->pl_window >= 3)
+		c.net = 2;
+	else if (snap->loss_pct > 0.5f || snap->net_gap_ms > 100.0f || snap->pl_window > 0)
+		c.net = 1;
+
+	c.frame = 0;
+	if (snap->freeze_count > 0 || snap->max_ms > 100.0f || snap->avg_ms > 33.0f)
+		c.frame = 2;
+	else if (snap->slow_count > 0 || snap->max_ms > 50.0f || snap->avg_ms > 20.0f)
+		c.frame = 1;
+
+	c.input = 0;
+	if (snap->input_age_ms > 50.0f)
+		c.input = 2;
+	else if (snap->input_age_ms > 20.0f)
+		c.input = 1;
+
+	return c;
+}
+
+static void SCR_DiagUpdateIssue (qboolean now_bad, qboolean *was_bad, double *bad_start, double *bad_total, double *last_bad_duration, double *last_recovery_time)
+{
+	if (now_bad)
+	{
+		if (!*was_bad)
+		{
+			*was_bad = true;
+			*bad_start = realtime;
+		}
+		return;
+	}
+
+	if (*was_bad)
+	{
+		double duration = realtime - *bad_start;
+		if (duration < 0.0)
+			duration = 0.0;
+		*bad_total += duration;
+		*last_bad_duration = duration;
+		*last_recovery_time = realtime;
+		*was_bad = false;
+	}
+}
+
+static void SCR_DiagUpdateIssueHistory (const scr_diag_class_t *cls)
+{
+	if (!scr_diag_state.active)
+		return;
+
+	SCR_DiagUpdateIssue(cls->net > 0, &scr_diag_state.net_bad, &scr_diag_state.net_bad_start,
+		&scr_diag_state.net_bad_total, &scr_diag_state.net_last_bad_duration, &scr_diag_state.net_last_recovery_time);
+	SCR_DiagUpdateIssue(cls->frame > 0, &scr_diag_state.frame_bad, &scr_diag_state.frame_bad_start,
+		&scr_diag_state.frame_bad_total, &scr_diag_state.frame_last_bad_duration, &scr_diag_state.frame_last_recovery_time);
+	SCR_DiagUpdateIssue(cls->input > 0, &scr_diag_state.input_bad, &scr_diag_state.input_bad_start,
+		&scr_diag_state.input_bad_total, &scr_diag_state.input_last_bad_duration, &scr_diag_state.input_last_recovery_time);
+}
+
+static void SCR_DiagGetSnapshot (scr_diag_snapshot_t *snap)
+{
+	int cur_sent = 0;
+	int cur_recv = 0;
+	int cur_resent = 0;
+	int cur_dropped = 0;
+	unsigned long long cur_bytes_sent = 0;
+	unsigned long long cur_bytes_recv = 0;
+
+	Q_memset(snap, 0, sizeof(*snap));
+
+	snap->window_elapsed = realtime - scr_diag_state.window_start;
+	if (snap->window_elapsed < 0.001)
+		snap->window_elapsed = 0.001;
+
+	snap->pl_window = scr_diag_state.pl_window;
+	snap->pl_total = cl.pltotal;
+	snap->slow_count = scr_diag_state.slow_count;
+	snap->freeze_count = scr_diag_state.freeze_count;
+	snap->max_ms = scr_diag_state.max_frametime_ms;
+	snap->avg_ms = scr_diag_state.frame_count > 0 ? (float)(scr_diag_state.sum_frametime_ms / scr_diag_state.frame_count) : 0.0f;
+	snap->last_ms = scr_diag_state.last_frametime_ms;
+	snap->net_gap_ms = q_max(0.0f, (float)((realtime - cl.last_received_message) * 1000.0));
+	snap->sv_dt_ms = (cl.mtime[0] >= cl.mtime[1]) ? (float)((cl.mtime[0] - cl.mtime[1]) * 1000.0) : 0.0f;
+	snap->render_ms = (float)scr_diag_render_ms;
+	snap->input_age_ms = q_max(0.0f, (float)((realtime - cl.last_input_time) * 1000.0));
+
+	NET_GetPacketStats(&cur_sent, &cur_recv, &cur_resent, &cur_dropped, &cur_bytes_sent, &cur_bytes_recv,
+		&snap->pkt_duplicates, &snap->pkt_short);
+
+	snap->pkt_sent = cur_sent;
+	snap->pkt_recv = cur_recv;
+	snap->pkt_resent = cur_resent;
+	snap->pkt_dropped = cur_dropped;
+	snap->bytes_sent = cur_bytes_sent;
+	snap->bytes_recv = cur_bytes_recv;
+
+	// Connection diagnostics
+	NET_GetConnectionDiag(cls.netcon,
+		&snap->seq_send, &snap->seq_recv, &snap->seq_ack,
+		NULL, NULL,
+		&snap->can_send, &snap->reliable_queue_bytes,
+		&snap->connect_time, &snap->last_msg_time, &snap->last_send_time,
+		NULL);
+
+	// Lerp fraction
+	{
+		double mtime_delta = cl.mtime[0] - cl.mtime[1];
+		if (mtime_delta > 0.001)
+		{
+			snap->lerp_frac = (float)((cl.time - cl.mtime[1]) / mtime_delta);
+			snap->extrapolating = (cl.time > cl.mtime[0]);
+		}
+		else
+		{
+			snap->lerp_frac = 0.0f;
+			snap->extrapolating = false;
+		}
+	}
+
+	// Server tick rate and jitter
+	if (snap->sv_dt_ms > 0.001f)
+		snap->sv_tick_hz = 1000.0f / snap->sv_dt_ms;
+
+	// Jitter from ring buffer
+	if (scr_diag_state.sv_dt_count > 1)
+	{
+		int n = q_min(scr_diag_state.sv_dt_count, 64);
+		float sum = 0.0f, sum_sq = 0.0f, mean, variance;
+		int j;
+		for (j = 0; j < n; j++)
+			sum += scr_diag_state.sv_dt_samples[j];
+		mean = sum / n;
+		for (j = 0; j < n; j++)
+		{
+			float d = scr_diag_state.sv_dt_samples[j] - mean;
+			sum_sq += d * d;
+		}
+		variance = sum_sq / n;
+		snap->sv_tick_jitter_ms = (float)sqrt((double)variance);
+	}
+
+	// Timeout remaining
+	{
+		extern cvar_t net_messagetimeout;
+		if (snap->last_msg_time > 0.0)
+			snap->timeout_remaining = (float)(net_messagetimeout.value - (net_time - snap->last_msg_time));
+		else
+			snap->timeout_remaining = (float)net_messagetimeout.value;
+	}
+
+	// Uptime
+	if (snap->connect_time > 0.0)
+		snap->conn_uptime_secs = (int)(net_time - snap->connect_time);
+
+	// Average packet sizes
+	if (cur_recv > 0 && cur_bytes_recv > 0)
+		snap->avg_pkt_in = (float)((double)cur_bytes_recv / cur_recv);
+	if (cur_sent > 0 && cur_bytes_sent > 0)
+		snap->avg_pkt_out = (float)((double)cur_bytes_sent / cur_sent);
+
+	// Net message peak
+	snap->net_msg_peak = scr_diag_state.net_msg_peak;
+
+	// Move ACK gap
+	snap->move_ack_gap = cl.movemessages - cl.ackedmovemessages;
+	if (snap->move_ack_gap < 0)
+		snap->move_ack_gap = 0;
+
+	// Reliable vs unreliable message counts
+	{
+		extern int messagesSent, unreliableMessagesSent;
+		snap->msgs_reliable = messagesSent;
+		snap->msgs_unreliable = unreliableMessagesSent;
+	}
+
+	if (!scr_diag_state.active)
+	{
+		snap->baselines_valid = false;
+		return;
+	}
+
+	if (scr_diag_state.last_packets_sent == 0 && scr_diag_state.last_packets_received == 0)
+	{
+		scr_diag_state.last_packets_sent = cur_sent;
+		scr_diag_state.last_packets_received = cur_recv;
+		scr_diag_state.last_packets_resent = cur_resent;
+		scr_diag_state.last_dropped = cur_dropped;
+		scr_diag_state.last_bytes_sent = cur_bytes_sent;
+		scr_diag_state.last_bytes_received = cur_bytes_recv;
+		snap->baselines_valid = false;
+		return;
+	}
+
+	if (cur_sent < scr_diag_state.last_packets_sent)
+		scr_diag_state.last_packets_sent = cur_sent;
+	if (cur_recv < scr_diag_state.last_packets_received)
+		scr_diag_state.last_packets_received = cur_recv;
+	if (cur_resent < scr_diag_state.last_packets_resent)
+		scr_diag_state.last_packets_resent = cur_resent;
+	if (cur_dropped < scr_diag_state.last_dropped)
+		scr_diag_state.last_dropped = cur_dropped;
+	if (cur_bytes_sent < scr_diag_state.last_bytes_sent)
+		scr_diag_state.last_bytes_sent = cur_bytes_sent;
+	if (cur_bytes_recv < scr_diag_state.last_bytes_received)
+		scr_diag_state.last_bytes_received = cur_bytes_recv;
+
+	{
+		int delta_sent = cur_sent - scr_diag_state.last_packets_sent;
+		int delta_recv = cur_recv - scr_diag_state.last_packets_received;
+		int delta_resend = cur_resent - scr_diag_state.last_packets_resent;
+		int delta_drop = cur_dropped - scr_diag_state.last_dropped;
+		unsigned long long delta_bytes_sent = cur_bytes_sent - scr_diag_state.last_bytes_sent;
+		unsigned long long delta_bytes_recv = cur_bytes_recv - scr_diag_state.last_bytes_received;
+		int loss_total = delta_recv + delta_drop;
+
+		snap->pps_out = (float)(delta_sent / snap->window_elapsed);
+		snap->pps_in = (float)(delta_recv / snap->window_elapsed);
+		snap->resend_pps = (float)(delta_resend / snap->window_elapsed);
+		snap->kb_out = (float)((delta_bytes_sent / 1024.0) / snap->window_elapsed);
+		snap->kb_in = (float)((delta_bytes_recv / 1024.0) / snap->window_elapsed);
+		if (loss_total > 0)
+			snap->loss_pct = (float)(delta_drop * 100.0 / loss_total);
+	}
+
+	snap->baselines_valid = true;
+}
+
+static void SCR_DiagBuildSummary (const scr_diag_snapshot_t *snap, const scr_diag_class_t *cls)
+{
+	int key;
+	qboolean update;
+
+	key = (cls->net << 4) | (cls->frame << 2) | cls->input;
+	key |= (snap->pl_window > 0) ? (1 << 8) : 0;
+	key |= (snap->freeze_count > 0) ? (1 << 9) : 0;
+	key |= ((int)(snap->net_gap_ms / 100.0f) & 7) << 10;
+
+	update = (key != scr_diag_summary.key) ||
+		(scr_diag_summary.window_seq != scr_diag_state.window_seq) ||
+		(realtime - scr_diag_summary.last_update > 1.0);
+
+	if (!update)
+		return;
+
+	scr_diag_summary.key = key;
+	scr_diag_summary.window_seq = scr_diag_state.window_seq;
+	scr_diag_summary.last_update = realtime;
+	scr_diag_summary.lines = 2;
+	scr_diag_summary.line3[0] = '\0';
+
+	if (cls->net == 0 && cls->frame == 0 && cls->input == 0)
+	{
+		q_snprintf(scr_diag_summary.line1, sizeof(scr_diag_summary.line1),
+			"All clear. No notable loss or frame spikes in the last 5s.");
+		q_snprintf(scr_diag_summary.line2, sizeof(scr_diag_summary.line2),
+			"Render time and input sampling look stable.");
+		return;
+	}
+
+	if (cls->net > 0 && cls->frame == 0)
+	{
+		q_snprintf(scr_diag_summary.line1, sizeof(scr_diag_summary.line1),
+			"Network looks rough: gap %dms, loss %.1f%%, drops %d/5s.",
+			(int)(snap->net_gap_ms + 0.5f), snap->loss_pct, snap->pl_window);
+		q_snprintf(scr_diag_summary.line2, sizeof(scr_diag_summary.line2),
+			"Frame times are stable; likely network-side jitter.");
+	}
+	else if (cls->frame > 0 && cls->net == 0)
+	{
+		q_snprintf(scr_diag_summary.line1, sizeof(scr_diag_summary.line1),
+			"Frame pacing is the issue: %d freezes, max %dms, avg %dms.",
+			snap->freeze_count, (int)(snap->max_ms + 0.5f), (int)(snap->avg_ms + 0.5f));
+		q_snprintf(scr_diag_summary.line2, sizeof(scr_diag_summary.line2),
+			"Network looks stable; focus on CPU/GPU load or drivers.");
+	}
+	else
+	{
+		q_snprintf(scr_diag_summary.line1, sizeof(scr_diag_summary.line1),
+			"Both network and frame pacing show problems: gap %dms, loss %.1f%%, freezes %d.",
+			(int)(snap->net_gap_ms + 0.5f), snap->loss_pct, snap->freeze_count);
+		q_snprintf(scr_diag_summary.line2, sizeof(scr_diag_summary.line2),
+			"Could be system load plus network jitter; try wired + reduce render load.");
+	}
+
+	if (cls->input > 0)
+	{
+		scr_diag_summary.lines = 3;
+		q_snprintf(scr_diag_summary.line3, sizeof(scr_diag_summary.line3),
+			"Input sampling age %dms suggests queueing; check frame pacing or vsync.",
+			(int)(snap->input_age_ms + 0.5f));
+	}
+}
+
+static char scr_diag_ext_summary[512];
+static double scr_diag_ext_summary_time;
+static qboolean scr_diag_ext_summary_warn;
+
+static char scr_diag_conn_summary[512];
+static double scr_diag_conn_summary_time;
+static qboolean scr_diag_conn_summary_warn;
+
+static void SCR_DiagBuildExtSummary (const scr_diag_snapshot_t *snap)
+{
+	char buf[512];
+
+	/* throttle: only rebuild every 2 seconds */
+	if (scr_diag_ext_summary[0] && realtime - scr_diag_ext_summary_time < 2.0)
+		return;
+
+	buf[0] = '\0';
+
+	if (snap->loss_pct > 2.0f)
+		q_strlcat(buf, va("Packet loss at %.0f%% is high; check for WiFi interference or congested route. ", snap->loss_pct), sizeof(buf));
+	else if (snap->loss_pct > 0.5f)
+		q_strlcat(buf, va("Minor packet loss (%.1f%%); usually not noticeable but worth watching. ", snap->loss_pct), sizeof(buf));
+
+	if (snap->resend_pps > 2.0f)
+		q_strlcat(buf, va("Resends at %.0f/s means the reliable channel is busy retransmitting. ", snap->resend_pps), sizeof(buf));
+
+	if (snap->kb_in > 50.0f)
+		q_strlcat(buf, va("Inbound bandwidth %.0f KB/s is heavy; complex scene or many players. ", snap->kb_in), sizeof(buf));
+	else if (snap->kb_in < 1.0f && snap->baselines_valid)
+		q_strlcat(buf, "Very low inbound traffic; server may be idle or connection stalled. ", sizeof(buf));
+
+	scr_diag_ext_summary_warn = (buf[0] != '\0');
+	if (buf[0] == '\0')
+		q_strlcpy(buf, "Network rates and entity counts look normal. No concerns.", sizeof(buf));
+
+	q_strlcpy(scr_diag_ext_summary, buf, sizeof(scr_diag_ext_summary));
+	scr_diag_ext_summary_time = realtime;
+}
+
+static void SCR_DiagBuildConnSummary (const scr_diag_snapshot_t *snap)
+{
+	char buf[512];
+
+	/* throttle: only rebuild every 2 seconds */
+	if (scr_diag_conn_summary[0] && realtime - scr_diag_conn_summary_time < 2.0)
+		return;
+
+	buf[0] = '\0';
+
+	if (snap->extrapolating)
+		q_strlcat(buf, "Client is extrapolating past the last server frame; visible as jerky entity movement. ", sizeof(buf));
+	else if (snap->lerp_frac > 0.9f)
+		q_strlcat(buf, "Lerp fraction near 1.0 means the next server frame is due soon; tight but OK. ", sizeof(buf));
+
+	if (snap->sv_tick_jitter_ms > 5.0f)
+		q_strlcat(buf, va("Server tick jitter %.1fms is elevated; server may be under load or the route is uneven. ", snap->sv_tick_jitter_ms), sizeof(buf));
+
+	if (snap->timeout_remaining < 30.0f)
+		q_strlcat(buf, va("Only %.0fs until timeout disconnect; server hasn't sent data recently. ", snap->timeout_remaining), sizeof(buf));
+
+	if (!snap->can_send && snap->seq_send > snap->seq_ack)
+		q_strlcat(buf, "Reliable channel is blocked waiting for ACK; outbound messages are queued. ", sizeof(buf));
+
+	if (snap->pkt_duplicates > 10)
+		q_strlcat(buf, va("%d duplicate packets received; possibly a routing loop or server double-send. ", snap->pkt_duplicates), sizeof(buf));
+
+	{
+		float peak_pct = (float)snap->net_msg_peak / NET_MAXMESSAGE * 100.0f;
+		if (peak_pct > 80.0f)
+			q_strlcat(buf, va("Message buffer peaked at %.0f%% capacity; risk of overflow on busy frames. ", peak_pct), sizeof(buf));
+		else if (peak_pct > 50.0f)
+			q_strlcat(buf, va("Message buffer peaked at %.0f%%; moderate usage, watch on complex maps. ", peak_pct), sizeof(buf));
+	}
+
+	scr_diag_conn_summary_warn = (buf[0] != '\0');
+	if (buf[0] == '\0')
+		q_strlcpy(buf, "Connection looks healthy. Lerp, tick rate, and reliability all nominal.", sizeof(buf));
+
+	q_strlcpy(scr_diag_conn_summary, buf, sizeof(scr_diag_conn_summary));
+	scr_diag_conn_summary_time = realtime;
+}
+
+/*
+ * SCR_DiagWriteReportTo -- write the full diagnostic report.
+ * If f is non-NULL, write to file (strip ^m). If NULL, print to console (with ^m color).
+ */
+static void SCR_DiagOut (FILE *f, const char *fmt, ...) __attribute__((__format__(__printf__,2,3)));
+static void SCR_DiagOut (FILE *f, const char *fmt, ...)
+{
+	va_list ap;
+	char buf[1024];
+
+	va_start(ap, fmt);
+	q_vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+
+	if (!f)
+	{
+		Con_Printf("%s", buf);
+	}
+	else
+	{
+		/* strip ^m markers for plain text file output */
+		const char *s = buf;
+		while (*s)
+		{
+			if (s[0] == '^' && s[1] == 'm')
+			{
+				s += 2;
+				continue;
+			}
+			fputc(*s, f);
+			s++;
+		}
+	}
+}
+#define DIAG_OUT(...) SCR_DiagOut(f, __VA_ARGS__)
+static void SCR_DiagWriteReportTo (FILE *f)
+{
+	scr_diag_snapshot_t snap;
+	scr_diag_class_t cls;
+	double active_time = 0.0;
+	int finding = 0;
+	int rec = 0;
+	int severity = 0; /* 0=clean, 1=minor, 2=moderate, 3=critical */
+	float peak_pct;
+	double net_bad_pct = 0.0, frame_bad_pct = 0.0, input_bad_pct = 0.0;
+	double net_total, frame_total, input_total;
+
+	SCR_DiagGetSnapshot(&snap);
+	cls = SCR_DiagClassify(&snap);
+	(void)cls; /* used indirectly via severity */
+
+	if (scr_diag_state.active)
+	{
+		active_time = realtime - scr_diag_state.diag_start_time;
+		if (active_time < 0.0)
+			active_time = 0.0;
+	}
+
+	/* compute bad-time percentages */
+	net_total = scr_diag_state.net_bad_total;
+	if (scr_diag_state.net_bad)
+		net_total += realtime - scr_diag_state.net_bad_start;
+	frame_total = scr_diag_state.frame_bad_total;
+	if (scr_diag_state.frame_bad)
+		frame_total += realtime - scr_diag_state.frame_bad_start;
+	input_total = scr_diag_state.input_bad_total;
+	if (scr_diag_state.input_bad)
+		input_total += realtime - scr_diag_state.input_bad_start;
+	if (active_time > 0.0)
+	{
+		net_bad_pct = net_total * 100.0 / active_time;
+		frame_bad_pct = frame_total * 100.0 / active_time;
+		input_bad_pct = input_total * 100.0 / active_time;
+	}
+
+	peak_pct = (float)snap.net_msg_peak / NET_MAXMESSAGE * 100.0f;
+
+	DIAG_OUT("\n");
+	DIAG_OUT("  ========================================\n");
+	DIAG_OUT("   ^mQSS-M DIAGNOSTIC REPORT^m\n");
+	if (active_time > 0.0)
+	{
+		int mins = (int)(active_time / 60.0);
+		int secs = (int)active_time % 60;
+		if (mins > 0)
+			DIAG_OUT("   Session: ^m%dm %ds^m\n", mins, secs);
+		else
+			DIAG_OUT("   Session: ^m%ds^m\n", secs);
+	}
+	else
+		DIAG_OUT("   Session: inactive (enable scr_diagnostics to record)\n");
+	DIAG_OUT("  ========================================\n\n");
+
+	/* PERFORMANCE */
+	DIAG_OUT("  ^mPERFORMANCE^m\n");
+	DIAG_OUT("  %-22s %.1f ms (%.0f fps)\n", "Avg frame time:",
+		snap.avg_ms, (snap.avg_ms > 0.0f) ? (1000.0f / snap.avg_ms) : 0.0f);
+	DIAG_OUT("  %-22s %.1f ms\n", "Worst frame:", snap.max_ms);
+	DIAG_OUT("  %-22s %d          Freezes (>100ms): %d\n",
+		"Slow frames (>16ms):", snap.slow_count, snap.freeze_count);
+	DIAG_OUT("  %-22s %.1f ms\n", "Render time:", snap.render_ms);
+	DIAG_OUT("  %-22s %.1f ms\n", "Input age:", snap.input_age_ms);
+	DIAG_OUT("\n");
+
+	/* NETWORK */
+	DIAG_OUT("  ^mNETWORK^m\n");
+	DIAG_OUT("  %-22s %.0f in/s, %.0f out/s\n", "Packet rates:", snap.pps_in, snap.pps_out);
+	DIAG_OUT("  %-22s %.1f KB/s in, %.1f KB/s out\n", "Bandwidth:", snap.kb_in, snap.kb_out);
+	DIAG_OUT("  %-22s %.1f%%       Resends: %.1f/s\n", "Packet loss:", snap.loss_pct, snap.resend_pps);
+	{
+		int total = snap.msgs_reliable + snap.msgs_unreliable;
+		int rel_pct = (total > 0) ? (int)(snap.msgs_reliable * 100.0f / total) : 0;
+		DIAG_OUT("  %-22s %d%% reliable, %d%% unreliable (%d / %d)\n",
+			"Channel split:", rel_pct, 100 - rel_pct, snap.msgs_reliable, snap.msgs_unreliable);
+	}
+	DIAG_OUT("  %-22s %.0f b in, %.0f b out\n", "Avg packet size:", snap.avg_pkt_in, snap.avg_pkt_out);
+	DIAG_OUT("  %-22s %d       Short: %d\n", "Duplicates:", snap.pkt_duplicates, snap.pkt_short);
+	DIAG_OUT("\n");
+
+	/* CONNECTION */
+	DIAG_OUT("  ^mCONNECTION^m\n");
+	DIAG_OUT("  %-22s %.0f hz (%.1f ms, jitter %.1f ms)\n", "Server tick:",
+		snap.sv_tick_hz, snap.sv_dt_ms, snap.sv_tick_jitter_ms);
+	DIAG_OUT("  %-22s snd %u  rcv %u  ack %u\n", "Sequences:",
+		snap.seq_send, snap.seq_recv, snap.seq_ack);
+	DIAG_OUT("  %-22s %u       Reliable queue: %d b    canSend: %s\n",
+		"Inflight:", (snap.seq_send > snap.seq_ack) ? (snap.seq_send - snap.seq_ack) : 0,
+		snap.reliable_queue_bytes, snap.can_send ? "Y" : "N");
+	DIAG_OUT("  %-22s %d\n", "Move ACK gap:", snap.move_ack_gap);
+	DIAG_OUT("  %-22s %.2f%s\n", "Lerp fraction:", snap.lerp_frac,
+		snap.extrapolating ? " ^m(EXTRAPOLATING)^m" : "");
+	DIAG_OUT("  %-22s %.0f s\n", "Timeout in:", snap.timeout_remaining);
+	DIAG_OUT("  %-22s %dm %ds\n", "Uptime:", snap.conn_uptime_secs / 60, snap.conn_uptime_secs % 60);
+	DIAG_OUT("  %-22s %d / %d (%.0f%%)\n", "Msg buffer peak:", snap.net_msg_peak, NET_MAXMESSAGE, peak_pct);
+	DIAG_OUT("\n");
+
+	/* STABILITY */
+	if (active_time > 0.0)
+	{
+		DIAG_OUT("  ^mSTABILITY^m (over %.0fs)\n", active_time);
+		DIAG_OUT("  %-22s %.1fs (%.1f%% of session)%s\n", "Net issues:",
+			net_total, net_bad_pct,
+			scr_diag_state.net_bad ? "  ^m** active now **^m" : "");
+		DIAG_OUT("  %-22s %.1fs (%.1f%% of session)%s\n", "Frame issues:",
+			frame_total, frame_bad_pct,
+			scr_diag_state.frame_bad ? "  ^m** active now **^m" : "");
+		DIAG_OUT("  %-22s %.1fs (%.1f%% of session)%s\n", "Input issues:",
+			input_total, input_bad_pct,
+			scr_diag_state.input_bad ? "  ^m** active now **^m" : "");
+		DIAG_OUT("\n");
+	}
+
+	/* SVC PROFILE */
+	{
+		int svc_counts_d[128], svc_bytes_d[128], svc_fc, svc_fb;
+		int sorted[129], sc = 0, j, k;
+		CL_GetSVCProfile(svc_counts_d, svc_bytes_d, &svc_fc, &svc_fb);
+		for (j = 0; j < 128; j++)
+			if (svc_bytes_d[j] > 0)
+				sorted[sc++] = j;
+		if (svc_fb > 0)
+			sorted[sc++] = 128;
+		for (j = 1; j < sc; j++)
+		{
+			int tmp = sorted[j];
+			int tb = (tmp == 128) ? svc_fb : svc_bytes_d[tmp];
+			k = j - 1;
+			while (k >= 0)
+			{
+				int kb = (sorted[k] == 128) ? svc_fb : svc_bytes_d[sorted[k]];
+				if (kb >= tb) break;
+				sorted[k + 1] = sorted[k]; k--;
+			}
+			sorted[k + 1] = tmp;
+		}
+		if (sc > 0)
+		{
+			DIAG_OUT("  ^mSVC PROFILE^m (top by bytes)\n");
+			for (j = 0; j < sc && j < 10; j++)
+			{
+				int idx = sorted[j];
+				const char *nm = (idx == 128) ? "fast_update" : ((idx < 128 && svc_strings[idx]) ? svc_strings[idx] : "unknown");
+				int cnt = (idx == 128) ? svc_fc : svc_counts_d[idx];
+				float kbb = (idx == 128) ? (svc_fb / 1024.0f) : (svc_bytes_d[idx] / 1024.0f);
+				DIAG_OUT("  %-22s %6d  %7.1f K\n", nm, cnt, kbb);
+			}
+			DIAG_OUT("\n");
+		}
+	}
+
+	/* FINDINGS */
+	DIAG_OUT("  ^mFINDINGS^m\n");
+
+	if (snap.freeze_count > 0)
+	{
+		DIAG_OUT("  %d. %d freeze(s) detected (>100ms). Worst frame: %.0fms.\n",
+			++finding, snap.freeze_count, snap.max_ms);
+		DIAG_OUT("     Severe frame stalls cause visible teleporting and input drops.\n");
+		if (severity < 3) severity = 3;
+	}
+	else if (snap.slow_count > 3)
+	{
+		DIAG_OUT("  %d. %d slow frames (>16ms) in the sample window. Worst: %.0fms, avg: %.1fms.\n",
+			++finding, snap.slow_count, snap.max_ms, snap.avg_ms);
+		DIAG_OUT("     Frequent slow frames cause stuttery movement and inconsistent aim.\n");
+		if (severity < 2) severity = 2;
+	}
+	else if (snap.slow_count > 0)
+	{
+		DIAG_OUT("  %d. %d slow frame(s) recorded, worst %.0fms. Likely transient.\n",
+			++finding, snap.slow_count, snap.max_ms);
+		if (severity < 1) severity = 1;
+	}
+
+	if (frame_bad_pct > 10.0 && active_time > 5.0)
+	{
+		DIAG_OUT("  %d. Frame issues present %.0f%% of session (%.1fs of %.0fs).\n",
+			++finding, frame_bad_pct, frame_total, active_time);
+		DIAG_OUT("     Sustained frame problems suggest a systemic bottleneck, not transient spikes.\n");
+		if (severity < 2) severity = 2;
+	}
+
+	if (snap.input_age_ms > 16.0f)
+	{
+		DIAG_OUT("  %d. Input sampling age is %.0fms (>16ms). Input is being queued.\n",
+			++finding, snap.input_age_ms);
+		DIAG_OUT("     Mouse and keyboard actions are being processed later than they should be.\n");
+		if (severity < 2) severity = 2;
+	}
+
+	if (snap.loss_pct > 5.0f)
+	{
+		DIAG_OUT("  %d. Packet loss at %.1f%% is severe.\n", ++finding, snap.loss_pct);
+		DIAG_OUT("     Expect visible hitching, delayed damage registration, and ghost players.\n");
+		if (severity < 3) severity = 3;
+	}
+	else if (snap.loss_pct > 2.0f)
+	{
+		DIAG_OUT("  %d. Packet loss at %.1f%% is elevated.\n", ++finding, snap.loss_pct);
+		DIAG_OUT("     Noticeable as occasional position corrections and delayed hits.\n");
+		if (severity < 2) severity = 2;
+	}
+	else if (snap.loss_pct > 0.5f)
+	{
+		DIAG_OUT("  %d. Minor packet loss (%.1f%%). Usually not perceptible but worth monitoring.\n",
+			++finding, snap.loss_pct);
+		if (severity < 1) severity = 1;
+	}
+
+	if (snap.net_gap_ms > 250.0f)
+	{
+		DIAG_OUT("  %d. Network gap is %.0fms. Server data is arriving in bursts.\n",
+			++finding, snap.net_gap_ms);
+		DIAG_OUT("     Entity movement will appear jerky regardless of client framerate.\n");
+		if (severity < 3) severity = 3;
+	}
+	else if (snap.net_gap_ms > 100.0f)
+	{
+		DIAG_OUT("  %d. Network gap %.0fms is above ideal (<80ms). Possible route congestion.\n",
+			++finding, snap.net_gap_ms);
+		if (severity < 1) severity = 1;
+	}
+
+	if (snap.resend_pps > 5.0f)
+	{
+		DIAG_OUT("  %d. Reliable resends at %.0f/s. The reliable channel is struggling.\n",
+			++finding, snap.resend_pps);
+		DIAG_OUT("     Indicates repeated packet loss on reliable data (level changes, prints, etc).\n");
+		if (severity < 2) severity = 2;
+	}
+
+	if (net_bad_pct > 10.0 && active_time > 5.0)
+	{
+		DIAG_OUT("  %d. Network issues present %.0f%% of session (%.1fs of %.0fs).\n",
+			++finding, net_bad_pct, net_total, active_time);
+		if (severity < 2) severity = 2;
+	}
+
+	if (snap.extrapolating)
+	{
+		DIAG_OUT("  %d. Client is extrapolating (lerp %.2f). No server frame to interpolate toward.\n",
+			++finding, snap.lerp_frac);
+		DIAG_OUT("     Entities will overshoot their positions until the next server update arrives.\n");
+		if (severity < 2) severity = 2;
+	}
+
+	if (snap.sv_tick_jitter_ms > 8.0f)
+	{
+		DIAG_OUT("  %d. Server tick jitter is %.1fms (high). Server frame intervals are inconsistent.\n",
+			++finding, snap.sv_tick_jitter_ms);
+		DIAG_OUT("     Even with good ping, entity movement will appear uneven.\n");
+		if (severity < 2) severity = 2;
+	}
+	else if (snap.sv_tick_jitter_ms > 4.0f)
+	{
+		DIAG_OUT("  %d. Server tick jitter at %.1fms is mildly elevated.\n",
+			++finding, snap.sv_tick_jitter_ms);
+		if (severity < 1) severity = 1;
+	}
+
+	if (snap.timeout_remaining < 10.0f && snap.timeout_remaining > 0.0f)
+	{
+		DIAG_OUT("  %d. Timeout imminent (%.0fs remaining). Connection may drop.\n",
+			++finding, snap.timeout_remaining);
+		if (severity < 3) severity = 3;
+	}
+	else if (snap.timeout_remaining < 30.0f && snap.timeout_remaining > 0.0f)
+	{
+		DIAG_OUT("  %d. Timeout is low (%.0fs). Server has not sent data recently.\n",
+			++finding, snap.timeout_remaining);
+		if (severity < 2) severity = 2;
+	}
+
+	if (snap.move_ack_gap > 8)
+	{
+		DIAG_OUT("  %d. Move ACK gap is %d. Server is far behind acknowledging client input.\n",
+			++finding, snap.move_ack_gap);
+		DIAG_OUT("     Movement prediction may feel disconnected from server state.\n");
+		if (severity < 2) severity = 2;
+	}
+	else if (snap.move_ack_gap > 5)
+	{
+		DIAG_OUT("  %d. Move ACK gap at %d is mildly elevated.\n", ++finding, snap.move_ack_gap);
+		if (severity < 1) severity = 1;
+	}
+
+	if (!snap.can_send && snap.reliable_queue_bytes > 0)
+	{
+		DIAG_OUT("  %d. Reliable channel blocked. %d bytes queued waiting for ACK.\n",
+			++finding, snap.reliable_queue_bytes);
+		DIAG_OUT("     Outbound reliable messages are stalled until the server acknowledges.\n");
+		if (severity < 2) severity = 2;
+	}
+
+	if (peak_pct > 80.0f)
+	{
+		DIAG_OUT("  %d. Message buffer peaked at %.0f%% (%d/%d bytes). Risk of overflow.\n",
+			++finding, peak_pct, snap.net_msg_peak, NET_MAXMESSAGE);
+		DIAG_OUT("     A single large frame could exceed the buffer and crash the connection.\n");
+		if (severity < 3) severity = 3;
+	}
+	else if (peak_pct > 50.0f)
+	{
+		DIAG_OUT("  %d. Message buffer peaked at %.0f%%. Moderate usage, watch on complex maps.\n",
+			++finding, peak_pct);
+		if (severity < 1) severity = 1;
+	}
+
+	if (snap.pkt_duplicates > 20)
+	{
+		DIAG_OUT("  %d. %d duplicate packets. Possible routing loop or ISP-level retransmission.\n",
+			++finding, snap.pkt_duplicates);
+		if (severity < 1) severity = 1;
+	}
+
+	if (finding == 0)
+		DIAG_OUT("     No issues detected. All metrics within normal parameters.\n");
+
+	DIAG_OUT("\n");
+
+	/* RECOMMENDATIONS */
+	DIAG_OUT("  ^mRECOMMENDATIONS^m\n");
+
+	if (severity == 0)
+	{
+		DIAG_OUT("     No action needed. Connection and performance are healthy.\n");
+		if (active_time < 30.0)
+			DIAG_OUT("     Consider monitoring for a longer session to catch intermittent issues.\n");
+	}
+	else
+	{
+		if (snap.freeze_count > 0 || snap.slow_count > 3 || frame_bad_pct > 10.0)
+		{
+			DIAG_OUT("  %d. Frame pacing: ", ++rec);
+			if (snap.freeze_count > 0)
+				DIAG_OUT("Freezes suggest a major stall (disk I/O, GC, GPU sync).\n");
+			else
+				DIAG_OUT("Slow frames indicate CPU or GPU contention.\n");
+			DIAG_OUT("     - Try ^mhost_maxfps^m at your monitor refresh rate to cap engine load.\n");
+			DIAG_OUT("     - Disable vsync (^mvid_vsync 0^m) to rule out swap-chain stalls.\n");
+			DIAG_OUT("     - Reduce visual load: ^mr_shadows 0^m, lower ^mr_waterquality^m.\n");
+			DIAG_OUT("     - Check for background processes consuming CPU/GPU.\n");
+		}
+
+		if (snap.input_age_ms > 16.0f)
+		{
+			DIAG_OUT("  %d. Input latency: Input is queuing behind frame submission.\n", ++rec);
+			DIAG_OUT("     - Ensure framerate is stable and above 60 fps.\n");
+			DIAG_OUT("     - Disable vsync or use ^mvid_vsync 0^m to reduce input-to-display lag.\n");
+		}
+
+		if (snap.loss_pct > 2.0f || snap.net_gap_ms > 200.0f || snap.resend_pps > 5.0f)
+		{
+			DIAG_OUT("  %d. Network quality: ", ++rec);
+			if (snap.loss_pct > 5.0f)
+				DIAG_OUT("Severe loss usually indicates a bad route or WiFi interference.\n");
+			else
+				DIAG_OUT("Elevated loss/gap suggests congestion on the network path.\n");
+			DIAG_OUT("     - Use a wired (ethernet) connection if currently on WiFi.\n");
+			DIAG_OUT("     - Check for bandwidth-heavy applications (streaming, downloads).\n");
+			DIAG_OUT("     - Try a different server to isolate local vs remote issues.\n");
+			if (snap.resend_pps > 5.0f)
+				DIAG_OUT("     - High resends indicate the reliable channel is congested.\n");
+		}
+		else if (snap.loss_pct > 0.5f)
+		{
+			DIAG_OUT("  %d. Minor packet loss: Likely not impacting gameplay, but monitor it.\n", ++rec);
+			DIAG_OUT("     - If on WiFi, ensure good signal strength and no interference.\n");
+		}
+
+		if (snap.extrapolating)
+		{
+			DIAG_OUT("  %d. Extrapolation: Client has outrun the server's update stream.\n", ++rec);
+			DIAG_OUT("     - Usually resolves when the next server tick arrives.\n");
+			DIAG_OUT("     - If persistent, the server may be overloaded or the route is lossy.\n");
+		}
+
+		if (snap.sv_tick_jitter_ms > 4.0f)
+		{
+			DIAG_OUT("  %d. Server jitter: The server is not sending frames at a steady rate.\n", ++rec);
+			DIAG_OUT("     - This is server-side; not fixable from the client.\n");
+			DIAG_OUT("     - Try a different server or wait for server load to decrease.\n");
+		}
+
+		if (snap.timeout_remaining < 30.0f && snap.timeout_remaining > 0.0f)
+		{
+			DIAG_OUT("  %d. Timeout warning: Server has gone silent. Disconnect is imminent.\n", ++rec);
+			DIAG_OUT("     - Check your internet connection.\n");
+			DIAG_OUT("     - The server may have crashed or restarted.\n");
+		}
+
+		if (snap.move_ack_gap > 5)
+		{
+			DIAG_OUT("  %d. Move ACK gap: Server is behind on acknowledging client movement.\n", ++rec);
+			DIAG_OUT("     - High latency (ping) is the usual cause.\n");
+			DIAG_OUT("     - If persistent, server may be overloaded processing client commands.\n");
+		}
+
+		if (peak_pct > 50.0f)
+		{
+			DIAG_OUT("  %d. Buffer pressure: Message buffer usage is notable.\n", ++rec);
+			DIAG_OUT("     - Complex maps with many entities produce larger server frames.\n");
+			DIAG_OUT("     - If approaching 100%%, the connection will be dropped.\n");
+		}
+
+		if (rec == 0)
+		{
+			DIAG_OUT("     Minor issues only. No specific action required.\n");
+			DIAG_OUT("     Continue monitoring to see if conditions worsen.\n");
+		}
+	}
+
+	DIAG_OUT("\n");
+
+	/* OVERALL STATUS */
+	DIAG_OUT("  ^mSTATUS:^m ");
+	switch (severity)
+	{
+		case 0: DIAG_OUT("^mCLEAN^m - No issues detected.\n"); break;
+		case 1: DIAG_OUT("^mMINOR^m - Small anomalies, unlikely to affect gameplay.\n"); break;
+		case 2: DIAG_OUT("^mMODERATE^m - Issues present that may affect gameplay quality.\n"); break;
+		case 3: DIAG_OUT("^mCRITICAL^m - Serious problems detected. Action recommended.\n"); break;
+	}
+
+	if (!snap.baselines_valid)
+		DIAG_OUT("  NOTE: Baselines not ready. Run scr_diagnostics for a few seconds before dumping.\n");
+
+	DIAG_OUT("  ========================================\n\n");
+}
+
+/*
+ * SCR_DiagWriteReport -- write the diagnostic report to diagnosticsdump.txt.
+ * Called manually via 'diagnosticsdump' console command.
+ */
+static void SCR_DiagWriteReport (void)
+{
+	char name[MAX_OSPATH];
+	FILE *f;
+
+	q_snprintf(name, sizeof(name), "%s/diagnosticsdump.txt", com_gamedir);
+	f = fopen(name, "w");
+	if (!f)
+	{
+		Con_Printf("ERROR: couldn't write %s\n", name);
+		return;
+	}
+
+	SCR_DiagWriteReportTo(f);
+	fclose(f);
+	Con_Printf("Diagnostic report written to %s\n", name);
+}
+
+static void SCR_DiagDump_f (void)
+{
+	SCR_DiagWriteReport();
+}
+
+static int SCR_DiagWrapText(const char *text, char out[][192], int max_lines, int max_chars)
+{
+	const char *p = text;
+	int line = 0;
+	int len = 0;
+
+	for (line = 0; line < max_lines; line++)
+		out[line][0] = '\0';
+
+	line = 0;
+	while (*p && line < max_lines)
+	{
+		const char *word;
+		int wlen = 0;
+		int needed;
+
+		while (*p == ' ')
+			p++;
+		if (!*p)
+			break;
+
+		word = p;
+		while (*p && *p != ' ')
+		{
+			p++;
+			wlen++;
+		}
+
+		if (wlen > max_chars)
+		{
+			int pos = 0;
+			if (len > 0)
+			{
+				line++;
+				if (line >= max_lines)
+					break;
+				len = 0;
+			}
+			while (pos < wlen && line < max_lines)
+			{
+				int chunk = q_min(max_chars, wlen - pos);
+				Q_memcpy(out[line], word + pos, chunk);
+				out[line][chunk] = '\0';
+				pos += chunk;
+				if (pos < wlen)
+				{
+					line++;
+					if (line >= max_lines)
+						break;
+				}
+			}
+			len = (line < max_lines) ? (int)strlen(out[line]) : 0;
+			continue;
+		}
+
+		needed = (len > 0 ? 1 : 0) + wlen;
+		if (len + needed > max_chars)
+		{
+			line++;
+			if (line >= max_lines)
+				break;
+			len = 0;
+		}
+
+		if (len > 0)
+		{
+			out[line][len++] = ' ';
+			out[line][len] = '\0';
+		}
+
+		Q_memcpy(out[line] + len, word, wlen);
+		len += wlen;
+		out[line][len] = '\0';
+	}
+
+	if (line >= max_lines)
+		return max_lines;
+	return (out[line][0] ? line + 1 : line);
+}
+static void SCR_DrawDiagnostics (void)
+{
+	static qboolean colors_inited = false;
+	static plcolour_t col_bg;
+	static plcolour_t col_header;
+	static plcolour_t col_accent;
+	static plcolour_t col_text;
+	static plcolour_t col_green;
+	static plcolour_t col_yellow;
+	static plcolour_t col_red;
+	char line[64];
+
+	if (scr_diagnostics.value <= 0)
+	{
+		if (scr_diag_state.active)
+		{
+			SCR_DiagUpdateIssue(false, &scr_diag_state.net_bad, &scr_diag_state.net_bad_start,
+				&scr_diag_state.net_bad_total, &scr_diag_state.net_last_bad_duration, &scr_diag_state.net_last_recovery_time);
+			SCR_DiagUpdateIssue(false, &scr_diag_state.frame_bad, &scr_diag_state.frame_bad_start,
+				&scr_diag_state.frame_bad_total, &scr_diag_state.frame_last_bad_duration, &scr_diag_state.frame_last_recovery_time);
+			SCR_DiagUpdateIssue(false, &scr_diag_state.input_bad, &scr_diag_state.input_bad_start,
+				&scr_diag_state.input_bad_total, &scr_diag_state.input_last_bad_duration, &scr_diag_state.input_last_recovery_time);
+			SCR_DiagWriteReportTo(NULL); /* print to console on disable */
+		}
+		scr_diag_state.active = false;
+		scr_diag_state.last_realtime = realtime;
+		return;
+	}
+
+	if (!colors_inited)
+	{
+		colors_inited = true;
+		col_bg = CL_PLColours_Parse("0x000000");
+		col_header = CL_PLColours_Parse("0x1a1a1a");
+		col_accent = CL_PLColours_Parse("0x2b6cb0");
+		col_text = CL_PLColours_Parse("0xffffff");
+		col_green = CL_PLColours_Parse("0x2ecc71");
+		col_yellow = CL_PLColours_Parse("0xf1c40f");
+		col_red = CL_PLColours_Parse("0xe74c3c");
+	}
+
+	if (!scr_diag_state.active)
+	{
+		scr_diag_state.active = true;
+		scr_diag_state.window_start = realtime;
+		scr_diag_state.last_realtime = realtime;
+		scr_diag_state.sum_frametime_ms = 0.0;
+		scr_diag_state.frame_count = 0;
+		scr_diag_state.window_seq++;
+		scr_diag_state.last_packets_sent = 0;
+		scr_diag_state.last_packets_received = 0;
+		scr_diag_state.last_packets_resent = 0;
+		scr_diag_state.last_dropped = 0;
+		scr_diag_state.last_bytes_sent = 0;
+		scr_diag_state.last_bytes_received = 0;
+		scr_diag_state.last_pltotal = cl.pltotal;
+		scr_diag_state.pl_window = 0;
+		scr_diag_state.slow_count = 0;
+		scr_diag_state.freeze_count = 0;
+		scr_diag_state.max_frametime_ms = 0.0f;
+		scr_diag_state.last_frametime_ms = 0.0f;
+		scr_diag_state.diag_start_time = realtime;
+		scr_diag_state.net_bad = false;
+		scr_diag_state.net_bad_start = 0.0;
+		scr_diag_state.net_bad_total = 0.0;
+		scr_diag_state.net_last_bad_duration = 0.0;
+		scr_diag_state.net_last_recovery_time = 0.0;
+		scr_diag_state.frame_bad = false;
+		scr_diag_state.frame_bad_start = 0.0;
+		scr_diag_state.frame_bad_total = 0.0;
+		scr_diag_state.frame_last_bad_duration = 0.0;
+		scr_diag_state.frame_last_recovery_time = 0.0;
+		scr_diag_state.input_bad = false;
+		scr_diag_state.input_bad_start = 0.0;
+		scr_diag_state.input_bad_total = 0.0;
+		scr_diag_state.input_last_bad_duration = 0.0;
+		scr_diag_state.input_last_recovery_time = 0.0;
+		scr_diag_state.sv_dt_head = 0;
+		scr_diag_state.sv_dt_count = 0;
+		scr_diag_state.sv_dt_last_mtime0 = 0.0;
+		scr_diag_state.net_msg_peak = 0;
+		scr_diag_ext_summary[0] = '\0';
+		scr_diag_conn_summary[0] = '\0';
+	}
+
+	{
+		double raw = realtime - scr_diag_state.last_realtime;
+		if (raw < 0)
+			raw = 0;
+		scr_diag_state.last_realtime = realtime;
+		scr_diag_state.last_frametime_ms = (float)(raw * 1000.0);
+	}
+
+	if (realtime - scr_diag_state.window_start >= DIAG_WINDOW_SECS)
+	{
+		scr_diag_state.window_start = realtime;
+		scr_diag_state.sum_frametime_ms = 0.0;
+		scr_diag_state.frame_count = 0;
+		scr_diag_state.window_seq++;
+		scr_diag_state.last_packets_sent = 0;
+		scr_diag_state.last_packets_received = 0;
+		scr_diag_state.last_packets_resent = 0;
+		scr_diag_state.last_dropped = 0;
+		scr_diag_state.last_bytes_sent = 0;
+		scr_diag_state.last_bytes_received = 0;
+		scr_diag_state.last_pltotal = cl.pltotal;
+		scr_diag_state.pl_window = 0;
+		scr_diag_state.slow_count = 0;
+		scr_diag_state.freeze_count = 0;
+		scr_diag_state.max_frametime_ms = 0.0f;
+	}
+
+	scr_diag_state.sum_frametime_ms += scr_diag_state.last_frametime_ms;
+	scr_diag_state.frame_count++;
+
+	if (scr_diag_state.last_frametime_ms > DIAG_FREEZE_MS)
+		scr_diag_state.freeze_count++;
+	else if (scr_diag_state.last_frametime_ms > DIAG_SLOW_MS)
+		scr_diag_state.slow_count++;
+
+	if (scr_diag_state.last_frametime_ms > scr_diag_state.max_frametime_ms)
+		scr_diag_state.max_frametime_ms = scr_diag_state.last_frametime_ms;
+
+	if (cl.pltotal < scr_diag_state.last_pltotal)
+		scr_diag_state.last_pltotal = cl.pltotal;
+	scr_diag_state.pl_window = cl.pltotal - scr_diag_state.last_pltotal;
+
+	// Track sv_dt jitter ring buffer when mtime changes
+	if (cl.mtime[0] != scr_diag_state.sv_dt_last_mtime0 && cl.mtime[0] > cl.mtime[1])
+	{
+		float dt = (float)((cl.mtime[0] - cl.mtime[1]) * 1000.0);
+		scr_diag_state.sv_dt_samples[scr_diag_state.sv_dt_head] = dt;
+		scr_diag_state.sv_dt_head = (scr_diag_state.sv_dt_head + 1) & 63;
+		if (scr_diag_state.sv_dt_count < 64)
+			scr_diag_state.sv_dt_count++;
+		scr_diag_state.sv_dt_last_mtime0 = cl.mtime[0];
+	}
+
+	// Track net_message peak
+	if (net_message.cursize > scr_diag_state.net_msg_peak)
+		scr_diag_state.net_msg_peak = net_message.cursize;
+
+	{
+		plcolour_t net_color = col_green;
+		plcolour_t frame_color = col_green;
+		scr_diag_snapshot_t snap;
+		scr_diag_class_t cls;
+		SCR_DiagGetSnapshot(&snap);
+		cls = SCR_DiagClassify(&snap);
+		SCR_DiagUpdateIssueHistory(&cls);
+		SCR_DiagBuildSummary(&snap, &cls);
+
+		const int panel_x = 8;
+		const int panel_w = 310;
+		const int line_h = 8;
+		const int pad = 4;
+		const int data_lines = 4;
+		const int net_lines = 14;
+		const int svc_lines = 9;
+		const int panel_h = pad * 2 + (data_lines + 1) * line_h;
+		const int header_h = pad + line_h;
+		const int indicator_size = 6;
+		const int max_summary_chars = (panel_w - 16) / 8;
+		const int margin = 72;
+		float diag_scale = (scr_conscale.value > 1.0f) ? (scr_conscale.value - 1.0f) : 1.0f;
+		float view_h;
+		char summary_text[512];
+		char wrapped[3][192];
+		int summary_lines = 0;
+		int summary_h = 0;
+		int net_h = 0;
+		int svc_h = 0;
+		int net_summary_lines = 0;
+		int net_summary_h = 0;
+		char net_wrapped[3][192];
+		int total_h;
+		int panel_y;
+		int text_x;
+		int header_y;
+		int line1_y;
+		int line2_y;
+		int line3_y;
+		int line4_y;
+		int indicator_x;
+		int summary_y;
+
+		if (snap.net_gap_ms > 250.0f || scr_diag_state.pl_window >= 3)
+			net_color = col_red;
+		else if (snap.net_gap_ms > 100.0f || scr_diag_state.pl_window > 0)
+			net_color = col_yellow;
+
+		if (scr_diag_state.freeze_count > 0 || scr_diag_state.last_frametime_ms > DIAG_FREEZE_MS)
+			frame_color = col_red;
+		else if (scr_diag_state.slow_count > 0 || scr_diag_state.last_frametime_ms > DIAG_SLOW_MS)
+			frame_color = col_yellow;
+
+		summary_text[0] = '\0';
+		if (scr_diag_summary.lines >= 1 && scr_diag_summary.line1[0])
+			q_strlcat(summary_text, scr_diag_summary.line1, sizeof(summary_text));
+		if (scr_diag_summary.lines >= 2 && scr_diag_summary.line2[0])
+		{
+			if (summary_text[0])
+				q_strlcat(summary_text, " ", sizeof(summary_text));
+			q_strlcat(summary_text, scr_diag_summary.line2, sizeof(summary_text));
+		}
+		if (scr_diag_summary.lines >= 3 && scr_diag_summary.line3[0])
+		{
+			if (summary_text[0])
+				q_strlcat(summary_text, " ", sizeof(summary_text));
+			q_strlcat(summary_text, scr_diag_summary.line3, sizeof(summary_text));
+		}
+
+		if (summary_text[0])
+			summary_lines = SCR_DiagWrapText(summary_text, wrapped, countof(wrapped), max_summary_chars);
+
+		summary_h = summary_lines * line_h;
+
+		if (scr_diagnostics.value >= 2)
+		{
+			net_h = pad * 2 + (net_lines + 1) * line_h;
+			SCR_DiagBuildExtSummary(&snap);
+			SCR_DiagBuildConnSummary(&snap);
+			/* combine both summaries into one block */
+			{
+				char net_summary_buf[512];
+				net_summary_buf[0] = '\0';
+				if (scr_diag_ext_summary_warn && scr_diag_ext_summary[0])
+				{
+					q_strlcat(net_summary_buf, scr_diag_ext_summary, sizeof(net_summary_buf));
+					if (scr_diag_conn_summary_warn && scr_diag_conn_summary[0])
+					{
+						q_strlcat(net_summary_buf, " ", sizeof(net_summary_buf));
+						q_strlcat(net_summary_buf, scr_diag_conn_summary, sizeof(net_summary_buf));
+					}
+				}
+				else if (scr_diag_conn_summary_warn && scr_diag_conn_summary[0])
+					q_strlcat(net_summary_buf, scr_diag_conn_summary, sizeof(net_summary_buf));
+				else if (scr_diag_ext_summary[0])
+					q_strlcat(net_summary_buf, scr_diag_ext_summary, sizeof(net_summary_buf));
+				else if (scr_diag_conn_summary[0])
+					q_strlcat(net_summary_buf, scr_diag_conn_summary, sizeof(net_summary_buf));
+				if (net_summary_buf[0])
+					net_summary_lines = SCR_DiagWrapText(net_summary_buf, net_wrapped, countof(net_wrapped), max_summary_chars);
+			}
+			net_summary_h = net_summary_lines * line_h;
+		}
+		if (scr_diagnostics.value >= 3)
+			svc_h = pad * 2 + (svc_lines + 1) * line_h;
+
+		total_h = panel_h + 4 + summary_h;
+		if (scr_diagnostics.value >= 2)
+			total_h += 6 + net_h + 4 + net_summary_h;
+		if (scr_diagnostics.value >= 3)
+			total_h += 6 + svc_h;
+
+		if (diag_scale <= 0.0f)
+			diag_scale = 1.0f;
+		view_h = (float)glheight / diag_scale;
+
+		panel_y = (int)(view_h - total_h - margin);
+		if (panel_y < 0)
+			panel_y = 0;
+
+		text_x = panel_x + 8;
+		header_y = panel_y + 2;
+		line1_y = panel_y + header_h;
+		line2_y = line1_y + line_h;
+		line3_y = line2_y + line_h;
+		line4_y = line3_y + line_h;
+		indicator_x = panel_x + panel_w - indicator_size - 6;
+		summary_y = panel_y + panel_h + 4;
+
+		GL_SetCanvas (CANVAS_DEFAULT);
+		glPushMatrix();
+		glScalef(diag_scale, diag_scale, 1.0f);
+
+		Draw_FillPlayer(panel_x, panel_y, panel_w, panel_h, col_bg, 0.55f);
+		Draw_FillPlayer(panel_x, panel_y, panel_w, header_h, col_header, 0.85f);
+		Draw_FillPlayer(panel_x, panel_y, 3, panel_h, col_accent, 0.9f);
+		Draw_FillPlayer(panel_x + 3, panel_y + header_h, panel_w - 3, 1, col_header, 0.25f);
+
+		Draw_StringRGBA(text_x, header_y, (scr_diagnostics.value >= 4) ? "DIAGNOSTICS (GPU)" : "DIAGNOSTICS", col_text, 1.0f);
+
+		q_snprintf(line, sizeof(line), "PL(5s): %d/%d  GAP: %dms",
+			scr_diag_state.pl_window, cl.pltotal, (int)(snap.net_gap_ms + 0.5f));
+		Draw_StringRGBA(text_x, line1_y, line, col_text, 0.95f);
+
+		q_snprintf(line, sizeof(line), "SV: %dms  REN: %dms  IN: %dms",
+			(int)(snap.sv_dt_ms + 0.5f), (int)(snap.render_ms + 0.5f), (int)(snap.input_age_ms + 0.5f));
+		Draw_StringRGBA(text_x, line2_y, line, col_text, 0.95f);
+
+		q_snprintf(line, sizeof(line), "SLOW: %d  FREEZE: %d", scr_diag_state.slow_count, scr_diag_state.freeze_count);
+		Draw_StringRGBA(text_x, line3_y, line, col_text, 0.95f);
+
+		q_snprintf(line, sizeof(line), "MAX: %dms  AVG: %dms  LAST: %dms",
+			(int)(scr_diag_state.max_frametime_ms + 0.5f),
+			(int)(snap.avg_ms + 0.5f),
+			(int)(scr_diag_state.last_frametime_ms + 0.5f));
+		Draw_StringRGBA(text_x, line4_y, line, col_text, 0.90f);
+
+		Draw_FillPlayer(indicator_x, line1_y + 1, indicator_size, indicator_size, net_color, 0.9f);
+		Draw_FillPlayer(indicator_x, line3_y + 1, indicator_size, indicator_size, frame_color, 0.9f);
+
+		if (summary_lines > 0)
+		{
+			int i;
+			plcolour_t summary_color = (cls.net || cls.frame || cls.input) ? col_yellow : col_text;
+			for (i = 0; i < summary_lines; i++)
+				Draw_StringRGBA(panel_x + 8, summary_y + i * line_h, wrapped[i], i == 0 ? summary_color : col_text, 0.85f);
+		}
+
+		// Level 2: NETWORK panel (merged details + connection)
+		if (scr_diagnostics.value >= 2)
+		{
+			const int net_y = summary_y + summary_h + 6;
+			const int net_header_h = pad + line_h;
+			const int net_text_x = text_x;
+			const int net_header_y = net_y + 2;
+			int ny = net_y + net_header_h;
+			const int net_ind_x = panel_x + panel_w - indicator_size - 6;
+			float peak_pct;
+			plcolour_t gap_ind, inflight_ind, lerp_ind, timeout_ind, peak_ind;
+			int gap_ny, inflight_ny, lerp_ny, timeout_ny, peak_ny;
+			qboolean net_summary_warn = (scr_diag_ext_summary_warn || scr_diag_conn_summary_warn);
+
+			Draw_FillPlayer(panel_x, net_y, panel_w, net_h, col_bg, 0.55f);
+			Draw_FillPlayer(panel_x, net_y, panel_w, net_header_h, col_header, 0.85f);
+			Draw_FillPlayer(panel_x, net_y, 3, net_h, col_accent, 0.9f);
+			Draw_FillPlayer(panel_x + 3, net_y + net_header_h, panel_w - 3, 1, col_header, 0.25f);
+
+			Draw_StringRGBA(net_text_x, net_header_y, "NETWORK", col_text, 1.0f);
+
+			// -- Rates --
+			q_snprintf(line, sizeof(line), "NET IN : %5.1f pps %6.1f KB/s", snap.pps_in, snap.kb_in);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			ny += line_h;
+
+			q_snprintf(line, sizeof(line), "NET OUT: %5.1f pps %6.1f KB/s", snap.pps_out, snap.kb_out);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			ny += line_h;
+
+			q_snprintf(line, sizeof(line), "LOSS: %3.0f%%  RESEND: %5.1f pps", snap.loss_pct, snap.resend_pps);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			ny += line_h;
+
+			{
+				int total = snap.msgs_reliable + snap.msgs_unreliable;
+				int rel_pct = (total > 0) ? (int)(snap.msgs_reliable * 100.0f / total) : 0;
+				q_snprintf(line, sizeof(line), "CHAN: rel %d%%  unrel %d%%", rel_pct, 100 - rel_pct);
+			}
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			ny += line_h;
+
+			// -- Connection --
+			q_snprintf(line, sizeof(line), "SEQ: snd %u rcv %u ack %u",
+				snap.seq_send, snap.seq_recv, snap.seq_ack);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			ny += line_h;
+
+			// MOVE ACK GAP
+			q_snprintf(line, sizeof(line), "MOVE ACK GAP: %d", snap.move_ack_gap);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			gap_ind = col_green;
+			if (snap.move_ack_gap > 8) gap_ind = col_red;
+			else if (snap.move_ack_gap > 5) gap_ind = col_yellow;
+			gap_ny = ny;
+			ny += line_h;
+
+			// INFLIGHT / RQUEUE / canSend
+			q_snprintf(line, sizeof(line), "INFLIGHT: %u  RQUEUE: %db  canSend: %c",
+				(snap.seq_send > snap.seq_ack) ? (snap.seq_send - snap.seq_ack) : 0,
+				snap.reliable_queue_bytes,
+				snap.can_send ? 'Y' : 'N');
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			inflight_ind = col_green;
+			if (!snap.can_send && (snap.seq_send > snap.seq_ack)) inflight_ind = col_yellow;
+			inflight_ny = ny;
+			ny += line_h;
+
+			// DUP / SHORT
+			q_snprintf(line, sizeof(line), "DUP: %d  SHORT: %d",
+				snap.pkt_duplicates, snap.pkt_short);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			ny += line_h;
+
+			// LERP
+			if (snap.extrapolating)
+				q_snprintf(line, sizeof(line), "LERP: %.2f EXTRAP!", snap.lerp_frac);
+			else
+				q_snprintf(line, sizeof(line), "LERP: %.2f", snap.lerp_frac);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			lerp_ind = col_green;
+			if (snap.extrapolating) lerp_ind = col_red;
+			lerp_ny = ny;
+			ny += line_h;
+
+			// SV TICK
+			q_snprintf(line, sizeof(line), "SV TICK: %.0fhz (%.1fms jitter %.1fms)",
+				snap.sv_tick_hz, snap.sv_dt_ms, snap.sv_tick_jitter_ms);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			ny += line_h;
+
+			// TIMEOUT
+			q_snprintf(line, sizeof(line), "TIMEOUT: %.1fs", snap.timeout_remaining);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			timeout_ind = col_green;
+			if (snap.timeout_remaining < 10.0f) timeout_ind = col_red;
+			else if (snap.timeout_remaining < 30.0f) timeout_ind = col_yellow;
+			timeout_ny = ny;
+			ny += line_h;
+
+			// UPTIME
+			{
+				int up_min = snap.conn_uptime_secs / 60;
+				int up_sec = snap.conn_uptime_secs % 60;
+				q_snprintf(line, sizeof(line), "UPTIME: %dm %ds", up_min, up_sec);
+			}
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			ny += line_h;
+
+			// AVG PKT
+			q_snprintf(line, sizeof(line), "AVG PKT: in %.0fb out %.0fb",
+				snap.avg_pkt_in, snap.avg_pkt_out);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			ny += line_h;
+
+			// MSG PEAK
+			peak_pct = (float)snap.net_msg_peak / NET_MAXMESSAGE * 100.0f;
+			q_snprintf(line, sizeof(line), "MSG PEAK: %d/%d (%.0f%%)",
+				snap.net_msg_peak, NET_MAXMESSAGE, peak_pct);
+			Draw_StringRGBA(net_text_x, ny, line, col_text, 0.9f);
+			peak_ind = col_green;
+			if (peak_pct > 80.0f) peak_ind = col_red;
+			else if (peak_pct > 50.0f) peak_ind = col_yellow;
+			peak_ny = ny;
+
+			// Draw indicator squares
+			Draw_FillPlayer(net_ind_x, gap_ny + 1, indicator_size, indicator_size, gap_ind, 0.9f);
+			Draw_FillPlayer(net_ind_x, inflight_ny + 1, indicator_size, indicator_size, inflight_ind, 0.9f);
+			Draw_FillPlayer(net_ind_x, lerp_ny + 1, indicator_size, indicator_size, lerp_ind, 0.9f);
+			Draw_FillPlayer(net_ind_x, timeout_ny + 1, indicator_size, indicator_size, timeout_ind, 0.9f);
+			Draw_FillPlayer(net_ind_x, peak_ny + 1, indicator_size, indicator_size, peak_ind, 0.9f);
+
+			// NETWORK summary text
+			if (net_summary_lines > 0)
+			{
+				int nsi;
+				int net_summary_y = net_y + net_h + 4;
+				for (nsi = 0; nsi < net_summary_lines; nsi++)
+					Draw_StringRGBA(panel_x + 8, net_summary_y + nsi * line_h, net_wrapped[nsi], (nsi == 0 && net_summary_warn) ? col_yellow : col_text, 0.85f);
+			}
+		}
+
+		// Level 3: SVC PROFILE panel
+		if (scr_diagnostics.value >= 3)
+		{
+			int svc_y_base;
+			const int svc_header_h = pad + line_h;
+			const int svc_text_x = text_x;
+			int sy;
+			int svc_counts[128], svc_bytes_arr[128];
+			int svc_fast_count, svc_fast_bytes;
+			int sorted_idx[129]; // 128 svc + 1 for fast updates
+			int sorted_count = 0;
+			int j, k;
+
+			// Calculate svc_y position (after NETWORK panel if present)
+			if (scr_diagnostics.value >= 2)
+				svc_y_base = summary_y + summary_h + 6 + net_h + 4 + net_summary_h + 6;
+			else
+				svc_y_base = summary_y + summary_h + 6;
+
+			Draw_FillPlayer(panel_x, svc_y_base, panel_w, svc_h, col_bg, 0.55f);
+			Draw_FillPlayer(panel_x, svc_y_base, panel_w, svc_header_h, col_header, 0.85f);
+			Draw_FillPlayer(panel_x, svc_y_base, 3, svc_h, col_accent, 0.9f);
+			Draw_FillPlayer(panel_x + 3, svc_y_base + svc_header_h, panel_w - 3, 1, col_header, 0.25f);
+
+			Draw_StringRGBA(svc_text_x, svc_y_base + 2, "SVC PROFILE (top by bytes)", col_text, 1.0f);
+
+			CL_GetSVCProfile(svc_counts, svc_bytes_arr, &svc_fast_count, &svc_fast_bytes);
+
+			// Build sortable index: entries with nonzero bytes
+			for (j = 0; j < 128; j++)
+			{
+				if (svc_bytes_arr[j] > 0)
+					sorted_idx[sorted_count++] = j;
+			}
+			// Add fast updates as index 128
+			if (svc_fast_bytes > 0)
+				sorted_idx[sorted_count++] = 128;
+
+			// Sort by bytes descending (simple insertion sort for small N)
+			for (j = 1; j < sorted_count; j++)
+			{
+				int tmp = sorted_idx[j];
+				int tmp_bytes = (tmp == 128) ? svc_fast_bytes : svc_bytes_arr[tmp];
+				k = j - 1;
+				while (k >= 0)
+				{
+					int kb = (sorted_idx[k] == 128) ? svc_fast_bytes : svc_bytes_arr[sorted_idx[k]];
+					if (kb >= tmp_bytes)
+						break;
+					sorted_idx[k + 1] = sorted_idx[k];
+					k--;
+				}
+				sorted_idx[k + 1] = tmp;
+			}
+
+			// Draw top 8
+			sy = svc_y_base + svc_header_h;
+			for (j = 0; j < 8 && j < sorted_count; j++)
+			{
+				int idx = sorted_idx[j];
+				const char *name;
+				int count;
+				float kb;
+
+				if (idx == 128)
+				{
+					name = "fast_update";
+					count = svc_fast_count;
+					kb = svc_fast_bytes / 1024.0f;
+				}
+				else
+				{
+					name = (idx < (int)countof(svc_strings) && svc_strings[idx]) ? svc_strings[idx] : "unknown";
+					count = svc_counts[idx];
+					kb = svc_bytes_arr[idx] / 1024.0f;
+				}
+				{
+					char trunc_name[19];
+					q_strlcpy(trunc_name, name, sizeof(trunc_name));
+					q_snprintf(line, sizeof(line), "%-18s %5d %6.1fK", trunc_name, count, kb);
+				}
+				Draw_StringRGBA(svc_text_x, sy, line, col_text, 0.9f);
+				sy += line_h;
+			}
+			// Fill remaining lines if fewer than 8
+			for (; j < 8; j++)
+				sy += line_h;
+		}
+
+		glPopMatrix();
 	}
 }
 
@@ -2305,6 +3942,12 @@ void SCR_ShowObsFrags(void)
 
 	if (scr_viewsize.value >= 120)
 		return;
+
+	if (scr_diagnostics.value > 0) // woods #scr_diag
+	{
+		obs_frags_active = false;
+		return;
+	}
 
 	if ((!cl.notobserver && scr_obsitems.value) || (cls.demoplayback && scr_obsitems.value))
 	{
@@ -5778,6 +7421,8 @@ void SCR_UpdateScreen (void)
 	if (!scr_initialized || !con_initialized)
 		return;				// not initialized yet
 
+	diag_timing = (scr_diagnostics.value > 0); // woods #scr_diag
+
 
 	GL_BeginRendering (&glx, &gly, &glwidth, &glheight);
 
@@ -5813,7 +7458,14 @@ void SCR_UpdateScreen (void)
 		G_FLOAT(OFS_PARM1) = glheight/s;
 		G_FLOAT(OFS_PARM2) = true;
 
-		if (vid_fxaa.value > 0) // woods #fxaa
+		if (diag_timing) // woods #scr_diag
+		{
+			if (scr_diagnostics.value >= 4)
+				glFinish();
+			diag_render_start = Sys_DoubleTime();
+		}
+
+		if (vid_fxaa.value > 0) // woods #fxaa #scr_diag
 			FXAA_BeginFrame();
 
 		if (cls.signon == SIGNONS||!cl.qcvm.extfuncs.CSQC_UpdateViewLoading)
@@ -5823,6 +7475,13 @@ void SCR_UpdateScreen (void)
 
 		if (vid_fxaa.value > 0) // woods #fxaa
 			FXAA_EndFrame();
+
+		if (diag_timing) // woods #scr_diag
+		{
+			if (scr_diagnostics.value >= 4)
+				glFinish();
+			scr_diag_render_ms = (Sys_DoubleTime() - diag_render_start) * 1000.0; // woods #scr_diag
+		}
 
 		PR_SwitchQCVM(NULL);
 
@@ -5842,6 +7501,13 @@ void SCR_UpdateScreen (void)
 //
 		SCR_SetUpToDrawConsole ();
 
+		if (diag_timing) // woods #scr_diag
+		{
+			if (scr_diagnostics.value >= 4)
+				glFinish();
+			diag_render_start = Sys_DoubleTime();
+		}
+
 		if (vid_fxaa.value > 0) // woods #fxaa begin FXAA frame for 3D rendering
 			FXAA_BeginFrame();
 
@@ -5850,7 +7516,14 @@ void SCR_UpdateScreen (void)
 		if (vid_fxaa.value > 0) // woods #fxaa end FXAA frame for 3D rendering
 			FXAA_EndFrame();
 
-		GL_Set2D ();
+		if (diag_timing) // woods #scr_diag
+		{
+			if (scr_diagnostics.value >= 4)
+				glFinish();
+			scr_diag_render_ms = (Sys_DoubleTime() - diag_render_start) * 1000.0; // woods #scr_diag
+		}
+
+		GL_Set2D (); // woods #scr_diag
 
 		//FIXME: only call this when needed
 		SCR_TileClear ();
@@ -5900,6 +7573,7 @@ void SCR_UpdateScreen (void)
 		SCR_DrawDemoControls(); // woods (iw) #democontrols
 		SCR_ShowPing (); // woods #scrping
 		SCR_ShowPL (); // woods #scrpl
+		SCR_DrawDiagnostics (); // woods #scr_diag
 		SCR_DrawMatchClock (); // woods #matchhud
 		SCR_DrawMatchScores (); // woods #matchhud
 		SCR_ShowFlagStatus (); // woods #matchhud #flagstatus

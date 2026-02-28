@@ -267,6 +267,7 @@ void CL_Disconnect (void)
 	pausedprint = false;  // woods
 	cl.match_pause_time = 0; // woods
 	prediction_msg_shown = false; // woods #prednotify
+	CL_ResetSVCProfile(); // woods #scr_diag
 }
 
 void CL_Disconnect_f (void)
@@ -3023,9 +3024,13 @@ void CL_AccumulateCmd (void)
 		CL_BaseMove (&cl.pendingcmd, false);
 		IN_Move (&cl.pendingcmd);
 		CL_FinishMove(&cl.pendingcmd, false);
+		cl.last_input_time = realtime; // woods #scr_diag
 	}
 	else
+	{
 		cl.lastcmdtime = cl.mtime[0];
+		cl.last_input_time = realtime; // woods #scr_diag
+	}
 }
 
 /*

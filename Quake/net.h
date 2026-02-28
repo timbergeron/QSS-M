@@ -66,6 +66,13 @@ int NET_QSocketGetSequenceIn (const struct qsocket_s *sock);
 int NET_QSocketGetSequenceOut (const struct qsocket_s *sock);
 void NET_QSocketSetMSS(struct qsocket_s *s, int mss);
 
+void NET_GetConnectionDiag(struct qsocket_s *sock, // woods #scr_diag
+	unsigned int *send_seq, unsigned int *recv_seq, unsigned int *ack_seq,
+	unsigned int *unrel_send_seq, unsigned int *unrel_recv_seq,
+	qboolean *can_send, int *send_msg_len,
+	double *connect_time, double *last_msg_time, double *last_send_time,
+	int *max_dgram);
+
 qboolean NET_CanSendMessage (struct qsocket_s *sock);
 // Returns true or false if the given qsocket can currently accept a
 // message to be transmitted.

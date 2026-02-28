@@ -249,6 +249,41 @@ void NET_QSocketSetMSS(qsocket_t *s, int mss)
 	s->pending_max_datagram = mss;
 }
 
+void NET_GetConnectionDiag(qsocket_t *sock, // woods #scr_diag
+	unsigned int *send_seq, unsigned int *recv_seq, unsigned int *ack_seq,
+	unsigned int *unrel_send_seq, unsigned int *unrel_recv_seq,
+	qboolean *can_send, int *send_msg_len,
+	double *connect_time, double *last_msg_time, double *last_send_time,
+	int *max_dgram)
+{
+	if (!sock || sock->disconnected)
+	{
+		if (send_seq) *send_seq = 0;
+		if (recv_seq) *recv_seq = 0;
+		if (ack_seq) *ack_seq = 0;
+		if (unrel_send_seq) *unrel_send_seq = 0;
+		if (unrel_recv_seq) *unrel_recv_seq = 0;
+		if (can_send) *can_send = false;
+		if (send_msg_len) *send_msg_len = 0;
+		if (connect_time) *connect_time = 0.0;
+		if (last_msg_time) *last_msg_time = 0.0;
+		if (last_send_time) *last_send_time = 0.0;
+		if (max_dgram) *max_dgram = 0;
+		return;
+	}
+	if (send_seq) *send_seq = sock->sendSequence;
+	if (recv_seq) *recv_seq = sock->receiveSequence;
+	if (ack_seq) *ack_seq = sock->ackSequence;
+	if (unrel_send_seq) *unrel_send_seq = sock->unreliableSendSequence;
+	if (unrel_recv_seq) *unrel_recv_seq = sock->unreliableReceiveSequence;
+	if (can_send) *can_send = sock->canSend;
+	if (send_msg_len) *send_msg_len = sock->sendMessageLength;
+	if (connect_time) *connect_time = sock->connecttime;
+	if (last_msg_time) *last_msg_time = sock->lastMessageTime;
+	if (last_send_time) *last_send_time = sock->lastSendTime;
+	if (max_dgram) *max_dgram = sock->max_datagram;
+}
+
 
 static void NET_Listen_f (void)
 {

@@ -284,6 +284,7 @@ typedef struct
 
 
 	float		last_received_message;	// (realtime) for net trouble icon
+	double		last_input_time;		// (realtime) for input sampling age // woods #scr_diag
 
 //
 // information that is static for the entire time connected to a server
@@ -555,8 +556,13 @@ int  CL_ReadFromServer (void);
 void CL_AdjustAngles (void);
 void CL_BaseMove (usercmd_t *cmd, qboolean isfinal);
 void CL_FinishMove(usercmd_t *cmd, qboolean isfinal);
+void NET_GetPacketStats(int *sent, int *received, int *resent, int *dropped, // woods #scr_diag
+	unsigned long long *bytes_sent, unsigned long long *bytes_received,
+	int *duplicates, int *short_packets);
 
 void CL_Download_Data(void);
+void CL_GetSVCProfile(int counts[128], int bytes[128], int *fast_count, int *fast_bytes); // woods #scr_diag
+void CL_ResetSVCProfile(void); // woods #scr_diag
 qboolean CL_CheckDownloads(void);
 
 void CL_ParseEffect (qboolean big);
