@@ -511,7 +511,7 @@ int UDP_GetNameFromAddr (struct qsockaddr *addr, char *name)
 int UDP4_GetAddrFromName (const char *name, struct qsockaddr *addr)
 {
 	struct hostent *hostentry;
-	char *colon;
+	const char *colon;
 	unsigned short port = net_hostport;
 
 	if (name[0] >= '0' && name[0] <= '9')
@@ -784,7 +784,7 @@ int UDP6_GetAddrFromName (const char *name, struct qsockaddr *addr)
 	struct addrinfo *pos;
 	struct addrinfo udp6hint;
 	int error;
-	char *port;
+	const char *port;
 	char dupbase[256];
 	size_t len;
 	qboolean success = false;
@@ -925,4 +925,3 @@ int     UDP6_GetAddresses (qhostaddr_t *addresses, int maxaddresses)
 {
 	return UDP_GetAddresses(addresses, maxaddresses, AF_INET6);
 }
-

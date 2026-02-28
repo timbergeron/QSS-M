@@ -923,7 +923,7 @@ static part_type_t *P_GetParticleType(const char *config, const char *name) // w
 	/* ---------- 1.  Parse namespace & legacy aliases ---------- */
 	char cfgbuf[MAX_QPATH];
 	const char* cfg = config;
-	char *dot = strchr(name, '.');
+	const char *dot = strchr(name, '.');
 	if (dot && (dot - name) < MAX_QPATH-1)
 	{
 		memcpy(cfgbuf, name, dot - name);
@@ -1105,7 +1105,7 @@ int PScript_FindParticleType(const char *fullname)
 	int i;
 	part_type_t *ptype = NULL;
 	char cfg[MAX_QPATH];
-	char *dot;
+	const char *dot;
 	const char *name = fullname;
 
 	//check particle aliases, mostly for tex_sky1 -> weather.te_rain for example, or whatever
