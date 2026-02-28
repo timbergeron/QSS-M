@@ -955,7 +955,7 @@ qboolean CL_ApplyModelRotation(entity_t* ent, vec3_t angles, float dt) // true i
 	if (!ent) {
 		return false;
 	}
-	if (!ent->model || !ent->model->name) {
+	if (!ent->model || !ent->model->name[0]) {
 		return false;
 	}
 

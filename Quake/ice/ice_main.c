@@ -1977,7 +1977,6 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 		}
 
 		free(host);
-		free(s);
 		return !!okay;
 	}
 	else if (!strcmp(prop, "sdp") || !strcmp(prop, "sdpoffer") || !strcmp(prop, "sdpanswer"))

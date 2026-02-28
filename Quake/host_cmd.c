@@ -999,7 +999,7 @@ void BookmarksList_Write(void)
 		if (!escaped_name || !escaped_alias)
 		{
 			Con_Printf("BookmarksList_Write: skipping entry due to allocation failure for %s\n",
-			           item->name ? item->name : "<null>");
+			           item->name[0] ? item->name : "<null>");
 			free(escaped_name);
 			free(escaped_alias);
 			ok = false;
@@ -2549,7 +2549,7 @@ static void Host_Resurrect_f (void)
 	/*----------------------------------------------------------------
 	 * 2. Snapshot the current state
 	 *----------------------------------------------------------------*/
-	vec3_t death_origin, safe_origin;
+	vec3_t death_origin, safe_origin = {0, 0, 0};
 
 	float saved_weapon = sv_player->v.weapon;
 	float saved_ammo_shells = sv_player->v.ammo_shells;

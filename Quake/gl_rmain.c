@@ -2032,7 +2032,7 @@ static char r_lightning_alpha_cached_string[128] = { 0 };
 
 static int R_LightningAlphaSlotForModel(const qmodel_t *model)
 {
-	if (!model || !model->name)
+	if (!model || !model->name[0])
 		return LIGHTNING_ALPHA_SLOT_BOLT2;
 
 	if (!strcmp(model->name, "progs/bolt.mdl"))

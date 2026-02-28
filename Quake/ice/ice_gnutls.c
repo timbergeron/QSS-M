@@ -168,7 +168,7 @@
 	#define GNUTLS_FUNCPTR(n,ret,arglist,callargs) static ret (**q##n)arglist;
 #else
 	#define GNUTLS_FUNC(n,ret,args) static ret (*q##n)args = n;
-	#define GNUTLS_FUNCPTR(n,ret,arglist,callargs) static ret q##n arglist {return n(callargs);};
+	#define GNUTLS_FUNCPTR(n,ret,arglist,callargs) static ret q##n arglist {n(callargs);};
 #endif
 
 #ifdef HAVE_DTLS
