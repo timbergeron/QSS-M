@@ -36,5 +36,9 @@ char *PL_GetClipboardData (void);
 /* show an error dialog */
 void PL_ErrorDialog(const char *text);
 
-#endif	/* _QUAKE_PLATFORM_H */
+#if defined(_WIN32)
+/* show a confirmation dialog, true when the user selects yes */
+qboolean PL_ConfirmDialog(const char *title, const char *text);
+#endif
 
+#endif	/* _QUAKE_PLATFORM_H */

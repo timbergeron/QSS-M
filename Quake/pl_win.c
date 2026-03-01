@@ -112,3 +112,9 @@ void PL_ErrorDialog(const char *errorMsg)
 			MB_OK | MB_SETFOREGROUND | MB_ICONSTOP);
 }
 
+qboolean PL_ConfirmDialog(const char *title, const char *text)
+{
+	int result = MessageBox(NULL, text, title,
+		MB_YESNO | MB_SETFOREGROUND | MB_ICONQUESTION | MB_DEFBUTTON1);
+	return (result == IDYES) ? true : false;
+}

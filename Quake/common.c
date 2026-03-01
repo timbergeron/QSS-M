@@ -27,7 +27,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <errno.h>
 #include <sys/stat.h>
 
-#ifndef _WIN32
+#if defined(_WIN32)
+	#include <windows.h>
+#else
 	#include <dirent.h>
 	#include <fnmatch.h>
 	#ifndef FNM_CASEFOLD
@@ -81,6 +83,12 @@ char	**com_argv;
 
 #define CMDLINE_LENGTH	256		/* johnfitz -- mirrored in cmd.c */
 char	com_cmdline[CMDLINE_LENGTH];
+static char	com_missingpak_hint[1024];
+
+const char *COM_GetMissingPakHint(void)
+{
+	return com_missingpak_hint;
+}
 
 qboolean standard_quake = true, rogue, hipnotic;
 
@@ -2217,8 +2225,8 @@ static void COM_CheckRegistered (void)
 			Sys_Error ("You must have the registered version to use modified games.\n\n"
 				   "Basedir is: %s\n\n"
 				   "Check that this has an " GAMENAME " subdirectory containing pak0.pak and pak1.pak, "
-				   "or use the -basedir command-line option to specify another directory.",
-				   com_basedir);
+				   "or use the -basedir command-line option to specify another directory.%s",
+				   com_basedir, COM_GetMissingPakHint());
 		return;
 	}
 
@@ -4778,6 +4786,515 @@ qboolean CompletePAKList(const char* partial, void* unused)
 	return found;
 }
 
+#if defined(_WIN32)
+#define MAX_STEAM_PATH_CANDIDATES 64
+
+static void COM_SetMissingPakHint(const char *fmt, ...)
+{
+	va_list argptr;
+	va_start(argptr, fmt);
+	q_vsnprintf(com_missingpak_hint, sizeof(com_missingpak_hint), fmt, argptr);
+	va_end(argptr);
+}
+
+static void COM_NormalizeWinPath(char *path)
+{
+	size_t len;
+	char *p;
+
+	if (!path || !*path)
+		return;
+
+	len = strlen(path);
+	if (len >= 2 && path[0] == '"' && path[len - 1] == '"')
+	{
+		memmove(path, path + 1, len - 2);
+		path[len - 2] = 0;
+	}
+
+	for (p = path; *p; p++)
+	{
+		if (*p == '\\')
+			*p = '/';
+	}
+
+	len = strlen(path);
+	while (len > 0 && path[len - 1] == '/')
+		path[--len] = 0;
+}
+
+static void COM_JoinPath(char *dst, size_t dstsize, const char *base, const char *name)
+{
+	size_t len = strlen(base);
+	if (len > 0 && (base[len - 1] == '/' || base[len - 1] == '\\'))
+		q_snprintf(dst, dstsize, "%s%s", base, name);
+	else
+		q_snprintf(dst, dstsize, "%s/%s", base, name);
+}
+
+static qboolean COM_PathHasPakPair(const char *id1dir)
+{
+	char pak0path[MAX_OSPATH];
+	char pak1path[MAX_OSPATH];
+	COM_JoinPath(pak0path, sizeof(pak0path), id1dir, "pak0.pak");
+	COM_JoinPath(pak1path, sizeof(pak1path), id1dir, "pak1.pak");
+	return (Sys_FileType(pak0path) & FS_ENT_FILE) && (Sys_FileType(pak1path) & FS_ENT_FILE);
+}
+
+static qboolean COM_MissingLocalPakPair(void)
+{
+	char id1path[MAX_OSPATH];
+	char Id1path[MAX_OSPATH];
+	COM_JoinPath(id1path, sizeof(id1path), com_basedir, "id1");
+	if (COM_PathHasPakPair(id1path))
+		return false;
+	COM_JoinPath(Id1path, sizeof(Id1path), com_basedir, "Id1");
+	if (COM_PathHasPakPair(Id1path))
+		return false;
+	return true;
+}
+
+static int COM_AddUniquePath(char paths[][MAX_OSPATH], int count, const char *path)
+{
+	int i;
+	char normalized[MAX_OSPATH];
+
+	if (!path || !*path || count >= MAX_STEAM_PATH_CANDIDATES)
+		return count;
+
+	q_strlcpy(normalized, path, sizeof(normalized));
+	COM_NormalizeWinPath(normalized);
+	if (!*normalized)
+		return count;
+
+	for (i = 0; i < count; i++)
+	{
+		if (!q_strcasecmp(paths[i], normalized))
+			return count;
+	}
+
+	q_strlcpy(paths[count], normalized, MAX_OSPATH);
+	return count + 1;
+}
+
+static qboolean COM_ReadWindowsRegString(HKEY root, const char *subkey, const char *valuename, char *out, size_t outsize)
+{
+	HKEY key;
+	DWORD type = REG_SZ;
+	DWORD size = (DWORD)outsize;
+	LONG rc;
+
+	out[0] = 0;
+	rc = RegOpenKeyExA(root, subkey, 0, KEY_QUERY_VALUE, &key);
+	if (rc != ERROR_SUCCESS)
+		return false;
+
+	rc = RegQueryValueExA(key, valuename, NULL, &type, (LPBYTE)out, &size);
+	RegCloseKey(key);
+
+	if (rc != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ) || !out[0])
+		return false;
+
+	out[outsize - 1] = 0;
+	return true;
+}
+
+static const char *COM_ParseVdfQuoted(const char *in, char *out, size_t outsize)
+{
+	size_t len = 0;
+
+	if (!in || *in != '"')
+		return NULL;
+
+	in++; /* skip initial quote */
+	while (*in && *in != '"')
+	{
+		char c = *in++;
+		if (c == '\\' && *in)
+		{
+			char esc = *in++;
+			if (esc == '\\' || esc == '"')
+				c = esc;
+			else
+				c = esc;
+		}
+
+		if (len + 1 < outsize)
+			out[len++] = c;
+	}
+
+	if (*in != '"')
+		return NULL;
+
+	out[len] = 0;
+	return in + 1;
+}
+
+static qboolean COM_IsNumericToken(const char *s)
+{
+	if (!s || !*s)
+		return false;
+	while (*s)
+	{
+		if (!q_isdigit(*s))
+			return false;
+		s++;
+	}
+	return true;
+}
+
+static qboolean COM_LooksLikePath(const char *s)
+{
+	if (!s || !*s)
+		return false;
+	return (strchr(s, ':') || strchr(s, '\\') || strchr(s, '/')) ? true : false;
+}
+
+static int COM_ParseLibraryFoldersVdf(const char *vdfpath, char libraries[][MAX_OSPATH], int count)
+{
+	FILE *f;
+	long len;
+	char *buf;
+	const char *p;
+
+	f = fopen(vdfpath, "rb");
+	if (!f)
+		return count;
+
+	if (fseek(f, 0, SEEK_END) != 0)
+	{
+		fclose(f);
+		return count;
+	}
+
+	len = ftell(f);
+	if (len <= 0 || len > (1024 * 1024))
+	{
+		fclose(f);
+		return count;
+	}
+
+	if (fseek(f, 0, SEEK_SET) != 0)
+	{
+		fclose(f);
+		return count;
+	}
+
+	buf = (char *)malloc((size_t)len + 1);
+	if (!buf)
+	{
+		fclose(f);
+		return count;
+	}
+
+	if (fread(buf, 1, (size_t)len, f) != (size_t)len)
+	{
+		fclose(f);
+		free(buf);
+		return count;
+	}
+	fclose(f);
+	buf[len] = 0;
+
+	p = buf;
+	while (*p)
+	{
+		char key[256];
+		char value[MAX_OSPATH];
+		const char *next;
+
+		while (*p && *p != '"')
+			p++;
+		if (!*p)
+			break;
+
+		next = COM_ParseVdfQuoted(p, key, sizeof(key));
+		if (!next)
+			break;
+		p = next;
+
+		while (*p && q_isspace(*p))
+			p++;
+		if (*p != '"')
+			continue; /* likely key with nested object, no immediate value */
+
+		next = COM_ParseVdfQuoted(p, value, sizeof(value));
+		if (!next)
+			break;
+		p = next;
+
+		if (!q_strcasecmp(key, "path") || (COM_IsNumericToken(key) && COM_LooksLikePath(value)))
+			count = COM_AddUniquePath(libraries, count, value);
+	}
+
+	free(buf);
+	return count;
+}
+
+static void COM_AddSteamRootCandidates(char roots[][MAX_OSPATH], int *count)
+{
+	const char *pf86;
+	const char *pf;
+	char path[MAX_OSPATH];
+
+	if (COM_ReadWindowsRegString(HKEY_CURRENT_USER, "Software\\Valve\\Steam", "SteamPath", path, sizeof(path)))
+		*count = COM_AddUniquePath(roots, *count, path);
+	if (COM_ReadWindowsRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Valve\\Steam", "InstallPath", path, sizeof(path)))
+		*count = COM_AddUniquePath(roots, *count, path);
+	if (COM_ReadWindowsRegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\Valve\\Steam", "InstallPath", path, sizeof(path)))
+		*count = COM_AddUniquePath(roots, *count, path);
+
+	pf86 = getenv("ProgramFiles(x86)");
+	if (pf86 && *pf86)
+	{
+		COM_JoinPath(path, sizeof(path), pf86, "Steam");
+		*count = COM_AddUniquePath(roots, *count, path);
+	}
+
+	pf = getenv("ProgramFiles");
+	if (pf && *pf)
+	{
+		COM_JoinPath(path, sizeof(path), pf, "Steam");
+		*count = COM_AddUniquePath(roots, *count, path);
+	}
+
+	*count = COM_AddUniquePath(roots, *count, "C:/Program Files (x86)/Steam");
+	*count = COM_AddUniquePath(roots, *count, "C:/Program Files/Steam");
+}
+
+static qboolean COM_FindSteamPakSource(char *out_id1dir, size_t id1size, char *out_quakeroot, size_t rootsize)
+{
+	char roots[MAX_STEAM_PATH_CANDIDATES][MAX_OSPATH];
+	char libraries[MAX_STEAM_PATH_CANDIDATES][MAX_OSPATH];
+	int num_roots = 0;
+	int num_libraries = 0;
+	int i;
+
+	COM_AddSteamRootCandidates(roots, &num_roots);
+
+	for (i = 0; i < num_roots; i++)
+	{
+		char vdfpath[MAX_OSPATH];
+		num_libraries = COM_AddUniquePath(libraries, num_libraries, roots[i]);
+		COM_JoinPath(vdfpath, sizeof(vdfpath), roots[i], "steamapps/libraryfolders.vdf");
+		num_libraries = COM_ParseLibraryFoldersVdf(vdfpath, libraries, num_libraries);
+	}
+
+	for (i = 0; i < num_libraries; i++)
+	{
+		char quakeroot[MAX_OSPATH];
+		char id1path[MAX_OSPATH];
+		char Id1path[MAX_OSPATH];
+
+		COM_JoinPath(quakeroot, sizeof(quakeroot), libraries[i], "steamapps/common/Quake");
+		COM_JoinPath(id1path, sizeof(id1path), quakeroot, "id1");
+		if (COM_PathHasPakPair(id1path))
+		{
+			q_strlcpy(out_id1dir, id1path, id1size);
+			q_strlcpy(out_quakeroot, quakeroot, rootsize);
+			return true;
+		}
+
+		COM_JoinPath(Id1path, sizeof(Id1path), quakeroot, "Id1");
+		if (COM_PathHasPakPair(Id1path))
+		{
+			q_strlcpy(out_id1dir, Id1path, id1size);
+			q_strlcpy(out_quakeroot, quakeroot, rootsize);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static qboolean COM_EnsureDirectoryExistsNoFatal(const char *path, char *error, size_t errorsize)
+{
+	DWORD attrs = GetFileAttributesA(path);
+	if (attrs != INVALID_FILE_ATTRIBUTES)
+	{
+		if (attrs & FILE_ATTRIBUTE_DIRECTORY)
+			return true;
+		q_snprintf(error, errorsize, "Path exists but is not a directory: %s", path);
+		return false;
+	}
+
+	if (CreateDirectoryA(path, NULL))
+		return true;
+
+	if (GetLastError() == ERROR_ALREADY_EXISTS)
+		return true;
+
+	q_snprintf(error, errorsize, "Unable to create directory: %s", path);
+	return false;
+}
+
+static qboolean COM_CopyFileAtomicNoFatal(const char *src, const char *dst, char *error, size_t errorsize)
+{
+	FILE *infile = NULL;
+	FILE *outfile = NULL;
+	char tmpdst[MAX_OSPATH];
+	byte buffer[65536];
+	size_t nread;
+	qboolean success = false;
+
+	q_snprintf(tmpdst, sizeof(tmpdst), "%s.tmp", dst);
+
+	infile = fopen(src, "rb");
+	if (!infile)
+	{
+		q_snprintf(error, errorsize, "Unable to open source file: %s", src);
+		goto cleanup;
+	}
+
+	outfile = fopen(tmpdst, "wb");
+	if (!outfile)
+	{
+		q_snprintf(error, errorsize, "Unable to write destination file: %s", dst);
+		goto cleanup;
+	}
+
+	while ((nread = fread(buffer, 1, sizeof(buffer), infile)) > 0)
+	{
+		if (fwrite(buffer, 1, nread, outfile) != nread)
+		{
+			q_snprintf(error, errorsize, "Write failed while copying to %s", dst);
+			goto cleanup;
+		}
+	}
+
+	if (ferror(infile))
+	{
+		q_snprintf(error, errorsize, "Read failed while copying from %s", src);
+		goto cleanup;
+	}
+
+	if (fclose(outfile) != 0)
+	{
+		outfile = NULL;
+		q_snprintf(error, errorsize, "Failed to finalize destination file: %s", dst);
+		goto cleanup;
+	}
+	outfile = NULL;
+
+	fclose(infile);
+	infile = NULL;
+
+	if (!MoveFileExA(tmpdst, dst, MOVEFILE_REPLACE_EXISTING))
+	{
+		q_snprintf(error, errorsize, "Failed to move temporary file into place: %s", dst);
+		goto cleanup;
+	}
+
+	success = true;
+
+cleanup:
+	if (outfile)
+		fclose(outfile);
+	if (infile)
+		fclose(infile);
+	if (!success)
+		remove(tmpdst);
+	return success;
+}
+
+static void COM_TrySteamPakAutocopy(void)
+{
+	char steam_id1[MAX_OSPATH];
+	char steam_quake_root[MAX_OSPATH];
+	char local_id1[MAX_OSPATH];
+	char prompt[1536];
+	char error[512];
+	char src[MAX_OSPATH];
+	char dst[MAX_OSPATH];
+	qboolean need_pak0;
+	qboolean need_pak1;
+
+	com_missingpak_hint[0] = 0;
+
+	if (COM_CheckParm("-basegame"))
+		return;
+
+	if (!COM_MissingLocalPakPair())
+		return;
+
+	if (!COM_FindSteamPakSource(steam_id1, sizeof(steam_id1), steam_quake_root, sizeof(steam_quake_root)))
+		return;
+
+	COM_SetMissingPakHint(
+		"\n\nDetected compatible Steam installation at: %s\n"
+		"Copy pak0.pak and pak1.pak to %s/id1, or launch with -basedir \"%s\".",
+		steam_id1, com_basedir, steam_quake_root);
+
+	if (isDedicated)
+		return;
+
+	q_snprintf(prompt, sizeof(prompt),
+		"Required Quake pak files were not found in:\n%s/id1\n\n"
+		"Detected compatible Steam installation:\n%s\n\n"
+		"Press Yes to copy pak0.pak and pak1.pak now and continue launch.\n"
+		"Press No to continue without copying.",
+		com_basedir, steam_id1);
+
+	if (!PL_ConfirmDialog("Quake Data Files Missing", prompt))
+		return;
+
+	COM_JoinPath(local_id1, sizeof(local_id1), com_basedir, "id1");
+	if (!COM_EnsureDirectoryExistsNoFatal(local_id1, error, sizeof(error)))
+	{
+		COM_SetMissingPakHint(
+			"\n\nDetected compatible Steam installation at: %s\n"
+			"Automatic copy failed: %s\n"
+			"Copy pak0.pak and pak1.pak to %s/id1, or launch with -basedir \"%s\".",
+			steam_id1, error, com_basedir, steam_quake_root);
+		return;
+	}
+
+	COM_JoinPath(dst, sizeof(dst), local_id1, "pak0.pak");
+	need_pak0 = !(Sys_FileType(dst) & FS_ENT_FILE);
+	COM_JoinPath(dst, sizeof(dst), local_id1, "pak1.pak");
+	need_pak1 = !(Sys_FileType(dst) & FS_ENT_FILE);
+
+	if (!need_pak0 && !need_pak1)
+	{
+		com_missingpak_hint[0] = 0;
+		return;
+	}
+
+	if (need_pak0)
+	{
+		COM_JoinPath(src, sizeof(src), steam_id1, "pak0.pak");
+		COM_JoinPath(dst, sizeof(dst), local_id1, "pak0.pak");
+		if (!COM_CopyFileAtomicNoFatal(src, dst, error, sizeof(error)))
+		{
+			COM_SetMissingPakHint(
+				"\n\nDetected compatible Steam installation at: %s\n"
+				"Automatic copy failed: %s\n"
+				"Copy pak0.pak and pak1.pak to %s/id1, or launch with -basedir \"%s\".",
+				steam_id1, error, com_basedir, steam_quake_root);
+			return;
+		}
+	}
+
+	if (need_pak1)
+	{
+		COM_JoinPath(src, sizeof(src), steam_id1, "pak1.pak");
+		COM_JoinPath(dst, sizeof(dst), local_id1, "pak1.pak");
+		if (!COM_CopyFileAtomicNoFatal(src, dst, error, sizeof(error)))
+		{
+			COM_SetMissingPakHint(
+				"\n\nDetected compatible Steam installation at: %s\n"
+				"Automatic copy failed: %s\n"
+				"Copy pak0.pak and pak1.pak to %s/id1, or launch with -basedir \"%s\".",
+				steam_id1, error, com_basedir, steam_quake_root);
+			return;
+		}
+	}
+
+	com_missingpak_hint[0] = 0;
+	Sys_Printf("Detected compatible Steam installation, copied required pak files to %s\n", local_id1);
+}
+#endif
+
 /*
 =================
 COM_InitFilesystem
@@ -4812,6 +5329,12 @@ void COM_InitFilesystem (void) //johnfitz -- modified based on topaz's tutorial
 	if (j < 1) Sys_Error("Bad argument to -basedir");
 	if ((com_basedir[j-1] == '\\') || (com_basedir[j-1] == '/'))
 		com_basedir[j-1] = 0;
+
+#if defined(_WIN32)
+	COM_TrySteamPakAutocopy();
+#else
+	com_missingpak_hint[0] = 0;
+#endif
 
 	//this is horrible.
 	if (!fitzmode)
