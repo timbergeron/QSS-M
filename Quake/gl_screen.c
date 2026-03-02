@@ -5754,6 +5754,8 @@ static void SCR_DrawVolumeSlider (void)
 {
 	int x, y;
 	int i;
+	int lines;
+	int min_y, max_y;
 	int text_x;
 	int text_chars;
 	int panel_x, panel_y, panel_w, panel_h;
@@ -5775,6 +5777,22 @@ static void SCR_DrawVolumeSlider (void)
 	/* anchor in top-left console space so it tracks scr_conscale */
 	x = 20;
 	y = vid.conheight + 8;
+	panel_h = 16;
+
+	/* keep the widget below the console if there is room */
+	lines = vid.conheight - (int)(scr_con_current * vid.conheight / glheight);
+	if (scr_con_current > 0)
+	{
+		min_y = vid.conheight + 4;
+		max_y = vid.conheight + lines - (panel_h - 4);
+		if (max_y < min_y)
+		{
+			GL_SetCanvas (CANVAS_DEFAULT);
+			return;
+		}
+		y = q_min (y, max_y);
+	}
+
 	range = CLAMP(0.0f, sfxvolume.value, 1.0f);
 	value = 100.0f * range;
 
@@ -5785,7 +5803,6 @@ static void SCR_DrawVolumeSlider (void)
 	panel_x = x - 14;
 	panel_y = y - 4;
 	panel_w = (text_x + text_chars * 8 + 6) - panel_x;
-	panel_h = 16;
 
 	/* rounded translucent plate behind the volume indicator */
 	Draw_Fill_Plus_Radius(panel_x, panel_y, panel_w, panel_h, panel_color, 0.45f, true, DRAW_CORNERS_ALL, 5.0f);
@@ -5974,7 +5991,7 @@ void SCR_UpdateScreen (void)
 		TexturePointer_Draw (); // woods #texturepointer
 		SCR_DrawScopeOverlay (); // woods #scope
 		SCR_DrawConsole ();
-		if (realtime < scr_volume_display_time && key_dest != key_console)
+		if (realtime < scr_volume_display_time)
 			SCR_DrawVolumeSlider ();
 		M_Draw ();
 	}
