@@ -940,6 +940,9 @@ void SV_DropClient (qboolean crash)
 // free the client (the body stays around)
 	host_client->active = false;
 	host_client->name[0] = 0;
+	host_client->desired_name[0] = 0; // woods #dupnames - clear preferred name
+	if (sv.active)
+		SV_ReapplyPreferredNames(host_client); // woods #dupnames - let others reclaim names
 	host_client->old_frags = -999999;
 	net_activeconnections--;
 

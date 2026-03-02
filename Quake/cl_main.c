@@ -3659,6 +3659,9 @@ static void SV_DecodeUserInfo(client_t *client)
 
 	if (Q_strcmp(client->name, tmp) != 0)
 	{	//name changed.
+		// Save preferred name before duplicate check modifies it
+		q_strlcpy(client->desired_name, tmp, sizeof(client->desired_name));
+
 		if (client->name[0] && strcmp(client->name, "unconnected") )
 			Con_Printf ("%s renamed to %s\n", host_client->name, tmp);
 		Q_strcpy (host_client->name, tmp);
@@ -3710,7 +3713,10 @@ void SV_UpdateInfo(int edict, const char *keyname, const char *value)
 			SV_DecodeUserInfo(infoplayer);
 
 			if (!strcmp(keyname, "name") && infoplayer->name[0]) // woods #dupnames
+			{
 				SV_CheckDuplicateNames(infoplayer);
+				SV_ReapplyPreferredNames(infoplayer);
+			}
 
 			if (sv_mapcrc.value && !strcmp(keyname, "*mapmismatch") && !strcmp(value, "1")) // woods #mapcrc
 			{

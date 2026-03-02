@@ -104,6 +104,7 @@ static void SV_EnsureSinglePlayerStart(void) // woods #spawn
 }
 
 static char	localmodels[MAX_MODELS][8];	// inline model names for precache
+static qboolean sv_reclaiming_names;	// woods #dupnames - recursion guard
 
 cvar_t	sv_defaultmap = {"sv_defaultmap","start", CVAR_ARCHIVE}; // woods #mapchangeprotect (R00k) 
 cvar_t  sv_idlesleep = {"sv_idlesleep", "8", CVAR_ARCHIVE}; // woods #idlesleep (ezquake)
@@ -2350,21 +2351,39 @@ void SV_Pext_f(void)
 	}
 }
 
+static qboolean SV_IsNameTaken(const char *name, client_t *skip) // woods #dupnames
+{
+	size_t i;
+	client_t *cl;
+
+	for (i = 0, cl = svs.clients; i < (size_t)svs.maxclients; i++, cl++)
+	{
+		if (!cl->active || cl == skip)
+			continue;
+		if (!q_strcasecmp(cl->name, name))
+			return true;
+	}
+	return false;
+}
+
 void SV_CheckDuplicateNames (client_t* client) // woods #dupnames
 {
 	size_t i;
 	unsigned int dupc = 1;
-	char newname[32], tmpname[32], * p;
+	char newname[32], tmpname[32], *p;
 	client_t* cl;
 	size_t namelen;
+	const char *base_name;
 
-	if (!client->name[0])
+	if (!client->name[0] && !client->desired_name[0])
 		return;
 
-	q_strlcpy(newname, client->name, sizeof(newname));
+	// Use preferred base name when available.
+	base_name = client->desired_name[0] ? client->desired_name : client->name;
+	q_strlcpy(newname, base_name, sizeof(newname));
 
 	while (1)
-	{		
+	{
 		for (i = 0, cl = svs.clients; i < (size_t)svs.maxclients; i++, cl++)
 		{ // Check for duplicate names
 			if (!cl->active || cl == client)
@@ -2396,14 +2415,13 @@ void SV_CheckDuplicateNames (client_t* client) // woods #dupnames
 		}
 
 		// Add new numeric prefix with safe snprintf
-		if (dupc < 10)
+		if (dupc < 100)
+		{
 			q_snprintf(newname, sizeof(newname), "(%u)%s", dupc++, tmpname);
-		else if (dupc < 100)
-			q_snprintf(newname, sizeof(newname), "(%u)%s", dupc++, tmpname);
+			newname[sizeof(newname) - 1] = 0;
+		}
 		else
 			break; // Prevent excessive duplicates
-
-		newname[sizeof(newname) - 1] = 0;
 	}
 
 	// If name changed, update client name and userinfo safely
@@ -2411,7 +2429,49 @@ void SV_CheckDuplicateNames (client_t* client) // woods #dupnames
 	{
 		q_strlcpy(client->name, newname, sizeof(client->name));
 		Info_SetKey(client->userinfo, sizeof(client->userinfo), "name", client->name);
+		if (client->edict)
+			client->edict->v.netname = PR_SetEngineString(client->name);
 	}
+}
+
+void SV_ReapplyPreferredNames(client_t *skip) // woods #dupnames
+{
+	client_t *client;
+	client_t *saved_host;
+	size_t i;
+
+	if (sv_reclaiming_names)
+		return;
+
+	sv_reclaiming_names = true;
+	saved_host = host_client;
+
+	for (i = 0, client = svs.clients; i < (size_t)svs.maxclients; i++, client++)
+	{
+		const char *preferred;
+
+		if (!client->active || client == skip)
+			continue;
+		if (!client->desired_name[0])
+			continue;
+
+		preferred = client->desired_name;
+
+		// Already using preferred name.
+		if (!strcmp(client->name, preferred))
+			continue;
+
+		// Name still taken by someone else.
+		if (SV_IsNameTaken(preferred, client))
+			continue;
+
+		// Reclaim via update path so networking stays consistent.
+		host_client = client;
+		SV_UpdateInfo((int)(client - svs.clients) + 1, "name", preferred);
+	}
+
+	host_client = saved_host;
+	sv_reclaiming_names = false;
 }
 
 /*
@@ -2452,6 +2512,8 @@ void SV_ConnectClient (int clientnum)
 	client->netconnection = netconnection;
 
 	strcpy (client->name, "unconnected");
+	// Set when first real name is decoded from userinfo.
+	client->desired_name[0] = 0;
 	client->active = true;
 	client->spawned = false;
 	client->edict = ent;

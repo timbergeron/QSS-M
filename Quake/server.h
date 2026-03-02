@@ -153,6 +153,7 @@ typedef struct client_s
 	byte			msgbuf[MAX_MSGLEN];
 	edict_t			*edict;				// EDICT_NUM(clientnum+1)
 	char			name[32];			// for printing to other people
+	char			desired_name[32];	// preferred name without duplicate prefix
 	int				colors;
 
 	float			ping_times[NUM_PING_TIMES];
@@ -372,6 +373,7 @@ void SV_SaveSpawnparms ();
 void SV_SpawnServer (const char *server);
 
 void SV_SetupSkyRoom(char *value);
+void SV_ReapplyPreferredNames(client_t *skip); // woods #dupnames
 
 void SV_CheckDuplicateNames(client_t* client); // woods #dupnames
 
