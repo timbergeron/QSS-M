@@ -11978,6 +11978,8 @@ char	lanConfig_joinname[22];
 int     lanConfig_protocol_cursor = 0; // Track selected protocol
 static menu_textfield_t lanConfig_port_field;
 static menu_textfield_t lanConfig_join_field;
+static char lanConfig_porthint[6];
+static char lanConfig_joinhint[22];
 
 extern int sv_protocol;
 extern unsigned int	sv_protocol_pext2;
@@ -12012,6 +12014,75 @@ static void M_LanConfig_ClearTextSelections(void)
 {
 	M_TextField_ClearSelection(&lanConfig_port_field);
 	M_TextField_ClearSelection(&lanConfig_join_field);
+}
+
+static void M_LanConfig_UpdatePortHint(void)
+{
+	static const char default_port[] = "26000";
+	int len = (int)strlen(lanConfig_portname);
+
+	lanConfig_porthint[0] = '\0';
+
+	if (!q_strncasecmp(default_port, lanConfig_portname, len))
+		q_strlcpy(lanConfig_porthint, default_port + len, sizeof(lanConfig_porthint));
+}
+
+static void M_LanConfig_UpdateJoinHint(void)
+{
+	filelist_item_t *item;
+	int len = (int)strlen(lanConfig_joinname);
+
+	lanConfig_joinhint[0] = '\0';
+
+	if (len <= 0)
+		return;
+
+	for (item = serverlist; item; item = item->next)
+	{
+		if (!q_strncasecmp(item->name, lanConfig_joinname, len))
+		{
+			q_strlcpy(lanConfig_joinhint, item->name + len, sizeof(lanConfig_joinhint));
+			return;
+		}
+	}
+}
+
+static qboolean M_LanConfig_AcceptPortHint(void)
+{
+	if (!lanConfig_porthint[0])
+		return false;
+
+	if (lanConfig_port_field.cursor != (int)strlen(lanConfig_portname))
+		return false;
+
+	q_strlcat(lanConfig_portname, lanConfig_porthint, sizeof(lanConfig_portname));
+	lanConfig_port_field.cursor = (int)strlen(lanConfig_portname);
+	lanConfig_port_field.sel_start = -1;
+	M_TextField_ClampCursor(&lanConfig_port_field);
+	M_LanConfig_UpdatePortHint();
+	return true;
+}
+
+static qboolean M_LanConfig_AcceptJoinHint(void)
+{
+	if (!lanConfig_joinhint[0])
+		return false;
+
+	if (lanConfig_join_field.cursor != (int)strlen(lanConfig_joinname))
+		return false;
+
+	q_strlcat(lanConfig_joinname, lanConfig_joinhint, sizeof(lanConfig_joinname));
+	lanConfig_join_field.cursor = (int)strlen(lanConfig_joinname);
+	lanConfig_join_field.sel_start = -1;
+	M_TextField_ClampCursor(&lanConfig_join_field);
+	M_LanConfig_UpdateJoinHint();
+	return true;
+}
+
+static void M_LanConfig_UpdateHints(void)
+{
+	M_LanConfig_UpdatePortHint();
+	M_LanConfig_UpdateJoinHint();
 }
 
 void SetProtocol(int protocol_cursor)
@@ -12120,6 +12191,7 @@ void M_Menu_LanConfig_f (void)
 	sprintf(lanConfig_portname, "%u", lanConfig_port);
 	M_TextField_Init(&lanConfig_port_field, lanConfig_portname, 5, true);
 	M_TextField_Init(&lanConfig_join_field, lanConfig_joinname, 21, false);
+	M_LanConfig_UpdateHints();
 
 	m_return_onerror = false;
 	m_return_reason[0] = 0;
@@ -12226,6 +12298,13 @@ void M_LanConfig_Draw (void)
 	M_DrawTextBox (basex+8*10, y-8, 6, 1);
 	M_TextField_DrawHighlight(&lanConfig_port_field, basex + 9 * 10, y);
 	M_Print (basex+9*10, y, lanConfig_portname);
+	if (lanConfig_cursor == 0 &&
+		lanConfig_porthint[0] &&
+		lanConfig_port_field.cursor == (int)strlen(lanConfig_portname))
+	{
+		int hint_x = basex + 9 * 10 + (int)strlen(lanConfig_portname) * 8;
+		M_PrintRGBA(hint_x, y, lanConfig_porthint, CL_PLColours_Parse("0xffffff"), 0.5f, true);
+	}
 	if (lanConfig_cursor == 0)
 	{
 		M_TextField_DrawCursor(&lanConfig_port_field, basex + 9 * 10, y);
@@ -12277,11 +12356,18 @@ void M_LanConfig_Draw (void)
 			M_DrawCharacter(basex - 8, y, 12 + ((int)(realtime * 4) & 1));
 		y += 8;
 
-			M_Print (basex, y, "Join game at:");
-			y+=24;
+		M_Print (basex, y, "Join game at:");
+		y+=24;
 			M_DrawTextBox (basex+8, y-8, 22, 1);
 			M_TextField_DrawHighlight(&lanConfig_join_field, basex + 16, y);
 			M_Print (basex+16, y, lanConfig_joinname);
+			if (lanConfig_cursor == 5 &&
+				lanConfig_joinhint[0] &&
+				lanConfig_join_field.cursor == (int)strlen(lanConfig_joinname))
+			{
+				int hint_x = basex + 16 + (int)strlen(lanConfig_joinname) * 8;
+				M_PrintRGBA(hint_x, y, lanConfig_joinhint, CL_PLColours_Parse("0xffffff"), 0.5f, true);
+			}
 			if (lanConfig_cursor == 5) // woods #historymenu #bookmarksmenu
 			{
 				M_TextField_DrawCursor(&lanConfig_join_field, basex + 16, y);
@@ -12432,6 +12518,21 @@ void M_LanConfig_Key (int key)
 		}
 		break;
 
+	case K_TAB:
+		if (lanConfig_cursor == 0)
+		{
+			if (M_LanConfig_AcceptPortHint())
+				S_LocalSound("misc/menu2.wav");
+			goto finish;
+		}
+		if (JoiningGame && lanConfig_cursor == 5)
+		{
+			if (M_LanConfig_AcceptJoinHint())
+				S_LocalSound("misc/menu2.wav");
+			goto finish;
+		}
+		break;
+
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
@@ -12512,6 +12613,7 @@ finish:
 	}
 	M_TextField_ClampCursor(&lanConfig_port_field);
 	M_TextField_ClampCursor(&lanConfig_join_field);
+	M_LanConfig_UpdateHints();
 }
 
 
@@ -12519,7 +12621,15 @@ void M_LanConfig_Char (int key)
 {
 	menu_textfield_t *active_field = M_LanConfig_GetFieldForCursor();
 	if (active_field)
-		M_TextField_Char(active_field, key);
+	{
+		if (M_TextField_Char(active_field, key))
+		{
+			if (active_field == &lanConfig_port_field)
+				M_LanConfig_UpdatePortHint();
+			else if (active_field == &lanConfig_join_field)
+				M_LanConfig_UpdateJoinHint();
+		}
+	}
 }
 
 /*
