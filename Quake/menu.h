@@ -77,6 +77,29 @@ void M_Keydown (int key);
 void M_Charinput (int key);
 void M_Mousemove(int x, int y); // woods #mousemenu (iw)
 qboolean M_TextEntry (void);
+qboolean M_WantsIBeamCursor(void);
+
+typedef struct
+{
+	char		*text;
+	int			max_len;
+	int			cursor;
+	int			sel_start;
+	qboolean	digits_only;
+} menu_textfield_t;
+
+void M_TextField_Init(menu_textfield_t *tf, char *buffer, int max_len, qboolean digits_only);
+void M_TextField_ClampCursor(menu_textfield_t *tf);
+void M_TextField_ClearSelection(menu_textfield_t *tf);
+qboolean M_TextField_Key(menu_textfield_t *tf, int key);
+qboolean M_TextField_Char(menu_textfield_t *tf, int key);
+void M_TextField_MouseClick(menu_textfield_t *tf, int mouse_x, int text_x);
+void M_TextField_MouseDrag(int mouse_x);
+void M_TextField_CheckMouseRelease(void);
+qboolean M_TextField_IsDraggingField(const menu_textfield_t *tf);
+qboolean M_TextField_IsDraggingAny(void);
+void M_TextField_DrawHighlight(menu_textfield_t *tf, int x, int y);
+void M_TextField_DrawCursor(menu_textfield_t *tf, int x, int y);
 #if defined(_WIN32) // woods #disablecaps via ironwail
 qboolean M_KeyBinding(void);
 #endif

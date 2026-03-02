@@ -87,6 +87,8 @@ static qboolean	vid_initialized = false;
 
 static SDL_Cursor	*vid_cursor;
 static SDL_Cursor	*custom_cursor; // woods #customcursor
+static SDL_Cursor	*menu_text_cursor;
+static qboolean		menu_text_cursor_custom = false;
 #if defined(USE_SDL2)
 static SDL_Window	*draw_context;
 static SDL_GLContext	gl_context;
@@ -1658,6 +1660,12 @@ void	VID_Shutdown (void)
 			SDL_FreeCursor(custom_cursor);
 			custom_cursor = NULL;
 		}
+		if (menu_text_cursor)
+		{
+			SDL_FreeCursor(menu_text_cursor);
+			menu_text_cursor = NULL;
+		}
+		menu_text_cursor_custom = false;
 #if defined(USE_SDL2)
 		SDL_GL_DeleteContext(gl_context);
 		gl_context = NULL;
@@ -2208,6 +2216,63 @@ void VID_SyncCvars (void)
 extern qboolean	keydown[256]; // woods #modsmenu (iw)
 extern cvar_t host_maxfps;
 static char fps_string[16];
+#define VID_FPS_TEXT_X 188
+#define VID_FPS_TEXT_Y 88
+#define VID_FPS_MAX_LEN 4
+static menu_textfield_t fps_field;
+static int vid_menu_mouse_x = 0;
+static int vid_menu_mouse_y = 0;
+
+static SDL_Cursor *VID_GetMenuTextCursor(void)
+{
+	qboolean want_custom = (scr_customcursor.value != 0);
+
+	if (!menu_text_cursor || menu_text_cursor_custom != want_custom)
+	{
+		if (menu_text_cursor)
+		{
+			if (vid_cursor == menu_text_cursor)
+				VID_SetCursorHandle(NULL);
+			SDL_FreeCursor(menu_text_cursor);
+			menu_text_cursor = NULL;
+		}
+
+		menu_text_cursor = LoadCustomIBeamCursor();
+		menu_text_cursor_custom = want_custom;
+	}
+
+	return menu_text_cursor;
+}
+
+static void VID_FPS_UpdateCvar(void)
+{
+	int value;
+	if (fps_string[0])
+	{
+		value = Q_atoi(fps_string);
+		if (value > 1000)
+		{
+			value = 1000;
+			q_snprintf(fps_string, sizeof(fps_string), "%d", value);
+			M_TextField_ClampCursor(&fps_field);
+			M_TextField_ClearSelection(&fps_field);
+		}
+	}
+	else
+	{
+		value = 0;
+	}
+	Cvar_SetValue("host_maxfps", value);
+}
+
+static void VID_FPS_SetValue(int value)
+{
+	value = CLAMP(0, value, 1000);
+	Cvar_SetValue("host_maxfps", value);
+	q_snprintf(fps_string, sizeof(fps_string), "%d", value);
+	M_TextField_ClampCursor(&fps_field);
+	M_TextField_ClearSelection(&fps_field);
+}
 
 enum {
 	VID_OPT_MODE,
@@ -2231,6 +2296,12 @@ static struct
 } videomenu;
 
 static int	video_options_cursor = 0;
+
+static qboolean VID_MenuWantsTextCursor(void)
+{
+	return (m_state == m_video &&
+		(video_options_cursor == VID_OPT_FPSLIMIT || M_TextField_IsDraggingField(&fps_field)));
+}
 
 typedef struct {
 	int width,height;
@@ -2574,24 +2645,18 @@ VID_MenuKey
 */
 static void VID_MenuKey (int key)
 {
-	if (video_options_cursor == VID_OPT_FPSLIMIT)
+	if (video_options_cursor == VID_OPT_FPSLIMIT && M_TextField_Key(&fps_field, key))
 	{
-		if (key == K_BACKSPACE)
-		{
-			if (strlen(fps_string))
-				fps_string[strlen(fps_string) - 1] = 0;
-			return;
-		}
+		VID_FPS_UpdateCvar();
+		return;
+	}
 
-		// Allow number input when on FPS field
-		if (key >= '0' && key <= '9')
+	if (video_options_cursor == VID_OPT_FPSLIMIT && key == K_MOUSE1)
+	{
+		if (vid_menu_mouse_x >= 180 && vid_menu_mouse_x <= 180 + 7 * 8 &&
+			vid_menu_mouse_y >= VID_FPS_TEXT_Y - 4 && vid_menu_mouse_y <= VID_FPS_TEXT_Y + 12)
 		{
-			int l = strlen(fps_string);
-			if (l < 4)  // Limit to 4 digits (9999)
-			{
-				fps_string[l + 1] = 0;
-				fps_string[l] = key;
-			}
+			M_TextField_MouseClick(&fps_field, vid_menu_mouse_x, VID_FPS_TEXT_X);
 			return;
 		}
 	}
@@ -2729,9 +2794,10 @@ static void VID_MenuKey (int key)
 			// When leaving field empty, set to 0
 			if (strlen(fps_string) == 0)
 			{
-				strcpy(fps_string, "0");
-				Cvar_SetValue("host_maxfps", 0);
+				VID_FPS_SetValue(0);
 			}
+			else
+				M_TextField_ClearSelection(&fps_field);
 		}
 		video_options_cursor--;
 		if (video_options_cursor < 0)
@@ -2745,9 +2811,10 @@ static void VID_MenuKey (int key)
 			// When leaving field empty, set to 0
 			if (strlen(fps_string) == 0)
 			{
-				strcpy(fps_string, "0");
-				Cvar_SetValue("host_maxfps", 0);
+				VID_FPS_SetValue(0);
 			}
+			else
+				M_TextField_ClearSelection(&fps_field);
 		}
 		video_options_cursor++;
 		if (video_options_cursor >= VIDEO_OPTIONS_ITEMS)
@@ -2774,6 +2841,14 @@ static void VID_MenuKey (int key)
 		case VID_OPT_VSYNC:
 			Cbuf_AddText ("toggle vid_vsync\n"); // kristian
 			break;
+		case VID_OPT_FPSLIMIT:
+		{
+			int value = host_maxfps.value - 10;
+			if (value < 0)
+				value = 0;
+			VID_FPS_SetValue(value);
+			break;
+		}
 		default:
 			break;
 		}
@@ -2802,23 +2877,11 @@ static void VID_MenuKey (int key)
 		case VID_OPT_FPSLIMIT:
 		{
 			int value = host_maxfps.value + 10;
-			if (value > 1000) value = 1000;
-			Cvar_SetValue("host_maxfps", value);
+			VID_FPS_SetValue(value);
 			break;
 		}
 		default:
 			break;
-		}
-		break;
-
-	case K_BACKSPACE:
-		if (video_options_cursor == VID_OPT_FPSLIMIT)
-		{
-			int value = host_maxfps.value / 10;
-			if (value == 0)
-				Cvar_SetValue("host_maxfps", 0);
-			else
-				Cvar_SetValue("host_maxfps", value * 10);
 		}
 		break;
 
@@ -2857,7 +2920,7 @@ static void VID_MenuKey (int key)
 		{
 			int value = host_maxfps.value + 10;
 			if (value > 1000) value = 0;  // cycle back to unlimited
-			Cvar_SetValue("host_maxfps", value);
+			VID_FPS_SetValue(value);
 			break;
 		}
 		default:
@@ -2878,22 +2941,9 @@ qboolean VID_Menu_TextEntry(void)
 
 void VID_Menu_Char(int key)
 {
-	if (video_options_cursor == VID_OPT_FPSLIMIT)
+	if (video_options_cursor == VID_OPT_FPSLIMIT && M_TextField_Char(&fps_field, key))
 	{
-		if (key >= '0' && key <= '9')
-		{
-			int l = strlen(fps_string);
-			if (l < 4)  // Limit to 4 digits
-			{
-				fps_string[l + 1] = 0;
-				fps_string[l] = key;
-
-				// Update cvar immediately
-				int value = atoi(fps_string);
-				if (value > 1000) value = 1000;
-				Cvar_SetValue("host_maxfps", value);
-			}
-		}
+		VID_FPS_UpdateCvar();
 	}
 }
 
@@ -2904,6 +2954,15 @@ VID_MenuMouse -- woods #mousemenu (iw)
 */
 static void VID_MenuMouse(int cx, int cy)
 {
+	vid_menu_mouse_x = cx;
+	vid_menu_mouse_y = cy;
+
+	if (M_TextField_IsDraggingField(&fps_field))
+	{
+		M_TextField_MouseDrag(cx);
+		return;
+	}
+
     int cursor = (cy - 48) / 8;
     
     // Adjust for gaps
@@ -2916,14 +2975,15 @@ static void VID_MenuMouse(int cx, int cy)
     if (cursor < 0 || cursor >= VIDEO_OPTIONS_ITEMS)
         return;
         
-    if (video_options_cursor == VID_OPT_FPSLIMIT && cursor != VID_OPT_FPSLIMIT)
-    {
-        if (strlen(fps_string) == 0)
-        {
-            strcpy(fps_string, "0");
-            Cvar_SetValue("host_maxfps", 0);
-        }
-    }
+	if (video_options_cursor == VID_OPT_FPSLIMIT && cursor != VID_OPT_FPSLIMIT)
+	{
+		if (strlen(fps_string) == 0)
+		{
+			VID_FPS_SetValue(0);
+		}
+		else
+			M_TextField_ClearSelection(&fps_field);
+	}
 
     video_options_cursor = cursor;
 }
@@ -2938,6 +2998,8 @@ static void VID_MenuDraw (void)
 	int i, y;
 	qpic_t *p;
 	const char *title;
+
+	M_TextField_CheckMouseRelease();
 
 	y = 4;
 
@@ -3038,21 +3100,18 @@ static void VID_MenuDraw (void)
 				M_Print(16, y, text);
 			}
 
-			// Draw the value portion
-			if (i == VID_OPT_FPSLIMIT)
-			{
-				M_DrawTextBox(180, y - 8, 5, 1);  // Box will now be properly spaced
+				// Draw the value portion
+				if (i == VID_OPT_FPSLIMIT)
+				{
+					M_DrawTextBox(180, y - 8, 5, 1);
+					M_TextField_DrawHighlight(&fps_field, VID_FPS_TEXT_X, y);
 
-				if (video_options_cursor == VID_OPT_FPSLIMIT)
-				{
-					// Show what user is typing
-					M_Print(188, y, fps_string);
-					M_DrawCharacter(188 + 8 * strlen(fps_string), y, 10 + ((int)(realtime * 4) & 1));
-				}
-				else
-				{
-					// When cursor is elsewhere, show current value
-					if (strlen(fps_string) == 0)
+					if (video_options_cursor == VID_OPT_FPSLIMIT)
+					{
+						M_Print(188, y, fps_string);
+						M_TextField_DrawCursor(&fps_field, VID_FPS_TEXT_X, y);
+					}
+					else if (strlen(fps_string) == 0)
 					{
 						M_Print(188, y, "0");
 					}
@@ -3060,16 +3119,12 @@ static void VID_MenuDraw (void)
 					{
 						M_Print(188, y, fps_string);
 					}
-				}
 
-				// Show "off" if current string is empty or "0"
-				if (strlen(fps_string) == 0 || atoi(fps_string) == 0)
-				{
-					M_Print(242, y, "off");
+					if (strlen(fps_string) == 0 || atoi(fps_string) == 0)
+						M_Print(242, y, "off");
 				}
-			}
-			else if (i == VID_OPT_VSYNC && gl_swap_control)
-			{
+				else if (i == VID_OPT_VSYNC && gl_swap_control)
+				{
 				M_DrawCheckbox(184, y, (int)vid_vsync.value);
 			}
 			else if (value)
@@ -3119,6 +3174,7 @@ static void VID_Menu_f (void)
 	IN_UpdateGrabs();
 
 	q_snprintf(fps_string, sizeof(fps_string), "%d", (int)host_maxfps.value);
+	M_TextField_Init(&fps_field, fps_string, VID_FPS_MAX_LEN, true);
 
 	//set all the cvars to match the current mode when entering the menu
 	VID_SyncCvars ();
@@ -3144,6 +3200,13 @@ void VID_UpdateCursor(void)
 	// Only use custom cursor if cvar is enabled
 	if (!nc && custom_cursor && scr_customcursor.value)
 		nc = custom_cursor;
+
+	if (key_dest == key_menu && (M_WantsIBeamCursor() || VID_MenuWantsTextCursor()))
+	{
+		SDL_Cursor *text_cursor = VID_GetMenuTextCursor();
+		if (text_cursor)
+			nc = text_cursor;
+	}
 
 	VID_SetCursorHandle(nc);
 }

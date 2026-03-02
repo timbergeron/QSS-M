@@ -957,6 +957,549 @@ void M_List_CheckIntegrity(const menulist_t* list)
 	SDL_assert(list->viewsize > 0);
 }
 
+static menu_textfield_t	*textfield_drag_field = NULL;
+static int				textfield_drag_text_x = 0;
+static qboolean		textfield_mouse_dragging = false;
+static double			textfield_mouseclick_time = 0.0;
+static int				textfield_mouseclicks = 0; /* 1: char, 2: word, >=3: whole field */
+static menu_textfield_t	*textfield_click_field = NULL;
+static int				textfield_click_pos = -1;
+static const double		TEXTFIELD_DOUBLECLICK_TIME = 0.5;
+extern qpic_t *pic_ins;
+
+static qboolean M_TextField_HasShortcutModifier(void)
+{
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+	return keydown[K_COMMAND] || keydown[K_CTRL];
+#else
+	return keydown[K_CTRL];
+#endif
+}
+
+static qboolean M_TextField_HasWordMoveModifier(void)
+{
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+	return keydown[K_COMMAND];
+#else
+	return keydown[K_CTRL];
+#endif
+}
+
+static qboolean M_TextField_HasWordDeleteModifier(void)
+{
+	return keydown[K_CTRL];
+}
+
+void M_TextField_ClampCursor(menu_textfield_t *tf)
+{
+	int len = (int)strlen(tf->text);
+
+	if (tf->cursor < 0)
+		tf->cursor = 0;
+	if (tf->cursor > len)
+		tf->cursor = len;
+	if (tf->cursor > tf->max_len)
+		tf->cursor = tf->max_len;
+	if (tf->sel_start > len)
+		tf->sel_start = len;
+	if (tf->sel_start > tf->max_len)
+		tf->sel_start = tf->max_len;
+}
+
+void M_TextField_Init(menu_textfield_t *tf, char *buffer, int max_len, qboolean digits_only)
+{
+	tf->text = buffer;
+	tf->max_len = max_len;
+	tf->cursor = (int)strlen(buffer);
+	tf->sel_start = -1;
+	tf->digits_only = digits_only;
+	M_TextField_ClampCursor(tf);
+}
+
+void M_TextField_ClearSelection(menu_textfield_t *tf)
+{
+	tf->sel_start = -1;
+}
+
+static qboolean M_TextField_GetSelection(const menu_textfield_t *tf, int *out_start, int *out_end)
+{
+	if (tf->sel_start < 0)
+		return false;
+	if (tf->sel_start <= tf->cursor)
+	{
+		*out_start = tf->sel_start;
+		*out_end = tf->cursor;
+	}
+	else
+	{
+		*out_start = tf->cursor;
+		*out_end = tf->sel_start;
+	}
+	return *out_start != *out_end;
+}
+
+static int M_TextField_IntSign(int value)
+{
+	return (value < 0) ? -1 : ((value > 0) ? 1 : 0);
+}
+
+static int M_TextField_TestWordBoundary(int pos, const char *text, int len)
+{
+	if (pos <= 0)
+		return 1;
+	if (pos >= len)
+		return -1;
+	return q_isspace((unsigned char)text[pos - 1]) - q_isspace((unsigned char)text[pos]);
+}
+
+static void M_TextField_ApplyMouseSelection(menu_textfield_t *tf)
+{
+	int len = (int)strlen(tf->text);
+	int anchor;
+	int caret;
+	int begin;
+	int end;
+
+	anchor = CLAMP(0, tf->sel_start, len);
+	caret = CLAMP(0, tf->cursor, len);
+
+	if (textfield_mouseclicks <= 1)
+	{
+		tf->sel_start = anchor;
+		tf->cursor = caret;
+		return;
+	}
+
+	if (textfield_mouseclicks >= 3)
+	{
+		tf->sel_start = 0;
+		tf->cursor = len;
+		return;
+	}
+
+	/* Double-click mode: expand to whole-word boundaries like the console. */
+	{
+		int boundary = M_TextField_IntSign(M_TextField_TestWordBoundary(anchor, tf->text, len));
+		int dir = M_TextField_IntSign(caret - anchor);
+		if (boundary && boundary != dir)
+			anchor += boundary;
+	}
+
+	begin = q_min(anchor, caret);
+	end = q_max(anchor, caret);
+
+	while (!M_TextField_TestWordBoundary(begin, tf->text, len))
+		--begin;
+	while (!M_TextField_TestWordBoundary(end, tf->text, len))
+		++end;
+
+	if (anchor <= caret)
+	{
+		tf->sel_start = begin;
+		tf->cursor = end;
+	}
+	else
+	{
+		tf->sel_start = end;
+		tf->cursor = begin;
+	}
+}
+
+static int M_TextField_FindWordBoundary(const menu_textfield_t *tf, int dir)
+{
+	const char *text = tf->text;
+	int len = (int)strlen(text);
+	int pos = tf->cursor;
+
+	if (dir < 0)
+	{
+		while (pos > 0 && q_isspace(text[pos - 1]))
+			--pos;
+		while (pos > 0 && !q_isspace(text[pos - 1]))
+			--pos;
+	}
+	else
+	{
+		while (pos < len && q_isspace(text[pos]))
+			++pos;
+		while (pos < len && !q_isspace(text[pos]))
+			++pos;
+	}
+
+	return pos;
+}
+
+static void M_TextField_MoveCursor(menu_textfield_t *tf, int cursor, qboolean extend_selection)
+{
+	if (cursor < 0)
+		cursor = 0;
+	if (cursor > tf->max_len)
+		cursor = tf->max_len;
+
+	if (extend_selection)
+	{
+		if (tf->sel_start < 0)
+			tf->sel_start = tf->cursor;
+	}
+	else
+	{
+		tf->sel_start = -1;
+	}
+
+	tf->cursor = cursor;
+	M_TextField_ClampCursor(tf);
+}
+
+static qboolean M_TextField_DeleteRange(menu_textfield_t *tf, int start, int end)
+{
+	int len = (int)strlen(tf->text);
+
+	start = CLAMP(0, start, len);
+	end = CLAMP(0, end, len);
+	if (start >= end)
+		return false;
+
+	memmove(tf->text + start, tf->text + end, (size_t)(len - end + 1));
+	tf->cursor = start;
+	tf->sel_start = -1;
+	return true;
+}
+
+static qboolean M_TextField_DeleteSelection(menu_textfield_t *tf)
+{
+	int sel_begin, sel_end;
+
+	if (!M_TextField_GetSelection(tf, &sel_begin, &sel_end))
+		return false;
+
+	return M_TextField_DeleteRange(tf, sel_begin, sel_end);
+}
+
+static qboolean M_TextField_Insert(menu_textfield_t *tf, const char *src)
+{
+	int cur_len;
+	int space;
+
+	if (!src || !*src)
+		return false;
+
+	if (tf->sel_start >= 0)
+		M_TextField_DeleteSelection(tf);
+
+	cur_len = (int)strlen(tf->text);
+	space = tf->max_len - cur_len;
+	if (space <= 0)
+		return false;
+
+	if (tf->digits_only)
+	{
+		int i;
+		int inserted = 0;
+		for (i = 0; src[i] && space > 0; ++i)
+		{
+			if (src[i] >= '0' && src[i] <= '9')
+			{
+				memmove(tf->text + tf->cursor + 1, tf->text + tf->cursor, (size_t)(cur_len - tf->cursor + 1));
+				tf->text[tf->cursor] = src[i];
+				++tf->cursor;
+				++cur_len;
+				--space;
+				++inserted;
+			}
+		}
+		tf->sel_start = -1;
+		return inserted > 0;
+	}
+	else
+	{
+		int i;
+		int inserted = 0;
+		for (i = 0; src[i] && space > 0; ++i)
+		{
+			unsigned char c = (unsigned char)src[i];
+			if (c < 32 || c > 126)
+				continue;
+
+			memmove(tf->text + tf->cursor + 1, tf->text + tf->cursor, (size_t)(cur_len - tf->cursor + 1));
+			tf->text[tf->cursor] = (char)c;
+			++tf->cursor;
+			++cur_len;
+			--space;
+			++inserted;
+		}
+		tf->sel_start = -1;
+		return inserted > 0;
+	}
+}
+
+static void M_TextField_PlayCopySound(void)
+{
+	const char* sound_file = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
+	S_LocalSound(sound_file);
+}
+
+static qboolean M_TextField_CopySelection(menu_textfield_t *tf)
+{
+	int sel_begin, sel_end;
+	int copy_len;
+	char *copy;
+
+	if (!M_TextField_GetSelection(tf, &sel_begin, &sel_end))
+		return false;
+
+	copy_len = sel_end - sel_begin;
+	copy = (char *)SDL_malloc((size_t)copy_len + 1);
+	if (!copy)
+		return false;
+
+	memcpy(copy, tf->text + sel_begin, (size_t)copy_len);
+	copy[copy_len] = 0;
+	SDL_SetClipboardText(copy);
+	SDL_free(copy);
+
+	M_TextField_PlayCopySound();
+	return true;
+}
+
+qboolean M_TextField_Key(menu_textfield_t *tf, int key)
+{
+	int len = (int)strlen(tf->text);
+	int target;
+
+	switch (key)
+	{
+	case K_LEFTARROW:
+	case K_KP_LEFTARROW:
+		target = tf->cursor;
+		if (M_TextField_HasWordMoveModifier())
+			target = M_TextField_FindWordBoundary(tf, -1);
+		else if (target > 0)
+			--target;
+		M_TextField_MoveCursor(tf, target, keydown[K_SHIFT]);
+		return true;
+
+	case K_RIGHTARROW:
+	case K_KP_RIGHTARROW:
+		target = tf->cursor;
+		if (M_TextField_HasWordMoveModifier())
+			target = M_TextField_FindWordBoundary(tf, +1);
+		else if (target < len)
+			++target;
+		M_TextField_MoveCursor(tf, target, keydown[K_SHIFT]);
+		return true;
+
+	case K_HOME:
+		M_TextField_MoveCursor(tf, 0, keydown[K_SHIFT]);
+		return true;
+
+	case K_END:
+		M_TextField_MoveCursor(tf, len, keydown[K_SHIFT]);
+		return true;
+
+	case K_BACKSPACE:
+		if (M_TextField_DeleteSelection(tf))
+			return true;
+		if (M_TextField_HasWordDeleteModifier())
+			return M_TextField_DeleteRange(tf, M_TextField_FindWordBoundary(tf, -1), tf->cursor);
+		return M_TextField_DeleteRange(tf, tf->cursor - 1, tf->cursor);
+
+	case K_DEL:
+		if (M_TextField_DeleteSelection(tf))
+			return true;
+		if (M_TextField_HasWordDeleteModifier())
+			return M_TextField_DeleteRange(tf, tf->cursor, M_TextField_FindWordBoundary(tf, +1));
+		return M_TextField_DeleteRange(tf, tf->cursor, tf->cursor + 1);
+
+	case 'a':
+	case 'A':
+		if (M_TextField_HasShortcutModifier())
+		{
+			tf->sel_start = 0;
+			tf->cursor = len;
+			return true;
+		}
+		break;
+
+	case 'c':
+	case 'C':
+		if (M_TextField_HasShortcutModifier())
+			return M_TextField_CopySelection(tf);
+		break;
+
+	case 'x':
+	case 'X':
+		if (M_TextField_HasShortcutModifier())
+		{
+			if (!M_TextField_CopySelection(tf))
+				return false;
+			M_TextField_DeleteSelection(tf);
+			return true;
+		}
+		break;
+
+	case 'v':
+	case 'V':
+		if (M_TextField_HasShortcutModifier())
+		{
+			char *clipboard = SDL_GetClipboardText();
+			if (clipboard)
+			{
+				M_TextField_Insert(tf, clipboard);
+				SDL_free(clipboard);
+			}
+			return true;
+		}
+		break;
+
+	case 'u':
+	case 'U':
+		if (M_TextField_HasShortcutModifier())
+		{
+			tf->text[0] = 0;
+			tf->cursor = 0;
+			tf->sel_start = -1;
+			return true;
+		}
+		break;
+	}
+
+	return false;
+}
+
+qboolean M_TextField_Char(menu_textfield_t *tf, int key)
+{
+	char text[2];
+	char c;
+
+	if (key < 32 || key > 126)
+		return false;
+
+	c = (char)key;
+	if (tf->digits_only && (c < '0' || c > '9'))
+		return false;
+
+	text[0] = c;
+	text[1] = 0;
+	return M_TextField_Insert(tf, text);
+}
+
+static int M_TextField_MouseToCursor(menu_textfield_t *tf, int mouse_x, int text_x)
+{
+	int len = (int)strlen(tf->text);
+	int pos;
+
+	if (mouse_x < text_x)
+		return 0;
+
+	pos = (mouse_x - text_x + 4) / 8;
+	if (pos < 0)
+		pos = 0;
+	if (pos > len)
+		pos = len;
+	if (pos > tf->max_len)
+		pos = tf->max_len;
+	return pos;
+}
+
+void M_TextField_DrawHighlight(menu_textfield_t *tf, int x, int y)
+{
+	int sel_begin, sel_end;
+
+	if (M_TextField_GetSelection(tf, &sel_begin, &sel_end))
+		Draw_Fill(x + sel_begin * 8, y, (sel_end - sel_begin) * 8, 8, 170, 0.4f);
+}
+
+void M_TextField_DrawCursor(menu_textfield_t *tf, int x, int y)
+{
+	if (((int)(realtime * 4) & 1))
+		return;
+
+	if (pic_ins)
+		Draw_PicRGBA(x + 8 * tf->cursor, y, pic_ins, Draw_GetConcharsCursorColorByIndex(0), 1.0f);
+	else
+		M_DrawCharacter(x + 8 * tf->cursor, y, 10 + ((int)(realtime * 4) & 1));
+}
+
+void M_TextField_MouseClick(menu_textfield_t *tf, int mouse_x, int text_x)
+{
+	int cursor = M_TextField_MouseToCursor(tf, mouse_x, text_x);
+
+	if (keydown[K_SHIFT])
+	{
+		textfield_mouseclicks = 1;
+	}
+	else
+	{
+		if (textfield_click_field != tf ||
+			textfield_click_pos != cursor ||
+			(realtime - textfield_mouseclick_time) >= TEXTFIELD_DOUBLECLICK_TIME)
+		{
+			textfield_mouseclicks = 1;
+		}
+		else
+		{
+			++textfield_mouseclicks;
+		}
+
+		textfield_click_field = tf;
+		textfield_click_pos = cursor;
+		textfield_mouseclick_time = realtime;
+	}
+
+	if (keydown[K_SHIFT])
+	{
+		if (tf->sel_start < 0)
+			tf->sel_start = tf->cursor;
+	}
+	else
+	{
+		/* Anchor selection for drag; click-without-drag gets cleared on release. */
+		tf->sel_start = cursor;
+	}
+
+	tf->cursor = cursor;
+	M_TextField_ApplyMouseSelection(tf);
+	textfield_drag_field = tf;
+	textfield_drag_text_x = text_x;
+	textfield_mouse_dragging = true;
+}
+
+void M_TextField_MouseDrag(int mouse_x)
+{
+	if (textfield_mouse_dragging && textfield_drag_field)
+	{
+		int cursor = M_TextField_MouseToCursor(textfield_drag_field, mouse_x, textfield_drag_text_x);
+		textfield_drag_field->cursor = cursor;
+		M_TextField_ApplyMouseSelection(textfield_drag_field);
+	}
+}
+
+void M_TextField_CheckMouseRelease(void)
+{
+	if (textfield_mouse_dragging && !keydown[K_MOUSE1])
+	{
+		if (textfield_drag_field && textfield_drag_field->sel_start == textfield_drag_field->cursor)
+			textfield_drag_field->sel_start = -1;
+		textfield_drag_field = NULL;
+		textfield_mouse_dragging = false;
+	}
+}
+
+static qboolean M_TextField_MouseInRow(int mouse_y, int row_y)
+{
+	return (mouse_y >= row_y - 4 && mouse_y <= row_y + 12);
+}
+
+qboolean M_TextField_IsDraggingField(const menu_textfield_t *tf)
+{
+	return textfield_mouse_dragging && textfield_drag_field == tf;
+}
+
+qboolean M_TextField_IsDraggingAny(void)
+{
+	return textfield_mouse_dragging;
+}
+
 void M_List_AutoScroll(menulist_t* list)
 {
 	if (list->numitems <= list->viewsize)
@@ -2817,8 +3360,12 @@ char	namemaker_name[16]; // woods #namemaker
 qboolean namemaker_shortcut = false; // woods #namemaker
 qboolean from_namemaker = false; // woods #namemaker
 
+static menu_textfield_t namemaker_name_field;
+static qboolean namemaker_edit_active = false;
 static char	setup_hostname[16];
 static char	setup_myname[16];
+static menu_textfield_t setup_hostname_field;
+static menu_textfield_t setup_myname_field;
 static plcolour_t	setup_oldtop;
 static plcolour_t	setup_oldbottom;
 static plcolour_t	setup_top;
@@ -2914,6 +3461,21 @@ void M_AdjustColour(plcolour_t *tr, int dir)
 	}
 }
 
+static menu_textfield_t *M_Setup_GetFieldForCursor(void)
+{
+	if (setup_cursor == 0)
+		return &setup_hostname_field;
+	if (setup_cursor == 1)
+		return &setup_myname_field;
+	return NULL;
+}
+
+static void M_Setup_ClearTextSelections(void)
+{
+	M_TextField_ClearSelection(&setup_hostname_field);
+	M_TextField_ClearSelection(&setup_myname_field);
+}
+
 #define	NUM_SETUP_CMDS	7 // woods 5 to 6 #namemaker
 void M_Menu_Setup_f (void)
 {
@@ -2927,6 +3489,8 @@ void M_Menu_Setup_f (void)
 	Q_strcpy(setup_hostname, hostname.string);
 	setup_top = setup_oldtop = CL_PLColours_Parse(cl_topcolor.string);
 	setup_bottom = setup_oldbottom = CL_PLColours_Parse(cl_bottomcolor.string);
+	M_TextField_Init(&setup_hostname_field, setup_hostname, 15, false);
+	M_TextField_Init(&setup_myname_field, setup_myname, 15, false);
 
 	IN_UpdateGrabs();
 }
@@ -3000,6 +3564,8 @@ void M_Setup_Draw (void)
 {
 	qpic_t	*p;
 
+	M_TextField_CheckMouseRelease();
+
 	if (cls.state == ca_connected)
 	{
 		char buf[15];
@@ -3027,10 +3593,12 @@ void M_Setup_Draw (void)
 
 	M_Print (64, 40, "Hostname");
 	M_DrawTextBox (160, 32, 16, 1);
+	M_TextField_DrawHighlight(&setup_hostname_field, 168, 40);
 	M_Print (168, 40, setup_hostname);
 
 	M_Print (64, 56, "Your name");
 	M_DrawTextBox (160, 48, 16, 1);
+	M_TextField_DrawHighlight(&setup_myname_field, 168, 56);
 	M_PrintWhite (168, 56, setup_myname); // woods change to white #namemaker
 
 	M_Print(64, 72, "Name Maker"); // woods #namemaker
@@ -3105,16 +3673,20 @@ void M_Setup_Draw (void)
 	M_DrawCharacter (56, setup_cursor_table [setup_cursor], 12+((int)(realtime*4)&1));
 
 	if (setup_cursor == 0)
-		M_DrawCharacter (168 + 8*strlen(setup_hostname), setup_cursor_table [setup_cursor], 10+((int)(realtime*4)&1));
+		M_TextField_DrawCursor(&setup_hostname_field, 168, setup_cursor_table[setup_cursor]);
 
 	if (setup_cursor == 1)
-		M_DrawCharacter (168 + 8*strlen(setup_myname), setup_cursor_table [setup_cursor], 10+((int)(realtime*4)&1));
+		M_TextField_DrawCursor(&setup_myname_field, 168, setup_cursor_table[setup_cursor]);
 }
 
 char lastColorSelected[10]; // woods
 
 void M_Setup_Key (int k)
 {
+	menu_textfield_t *active_field = M_Setup_GetFieldForCursor();
+	if (active_field && M_TextField_Key(active_field, k))
+		return;
+
 	switch (k)
 	{
 	case K_ESCAPE:
@@ -3136,6 +3708,7 @@ void M_Setup_Key (int k)
 
 	case K_UPARROW:
 		S_LocalSound ("misc/menu1.wav");
+		M_Setup_ClearTextSelections();
 		setup_cursor--;
 		if (setup_cursor < 0)
 			setup_cursor = NUM_SETUP_CMDS-1;
@@ -3143,6 +3716,7 @@ void M_Setup_Key (int k)
 
 	case K_DOWNARROW:
 		S_LocalSound ("misc/menu1.wav");
+		M_Setup_ClearTextSelections();
 		setup_cursor++;
 		if (setup_cursor >= NUM_SETUP_CMDS)
 			setup_cursor = 0;
@@ -3210,6 +3784,20 @@ forward:
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	case K_MOUSE1: // woods #mousemenu
+		if (k == K_MOUSE1 && setup_cursor == 0)
+		{
+			if (M_TextField_MouseInRow(m_mousey, setup_cursor_table[0]))
+				M_TextField_MouseClick(&setup_hostname_field, m_mousex, 168);
+			return;
+		}
+
+		if (k == K_MOUSE1 && setup_cursor == 1)
+		{
+			if (M_TextField_MouseInRow(m_mousey, setup_cursor_table[1]))
+				M_TextField_MouseClick(&setup_myname_field, m_mousex, 168);
+			return;
+		}
+
 		if (setup_cursor == 0 || setup_cursor == 1)
 			return;
 
@@ -3283,66 +3871,18 @@ forward:
 			Cbuf_AddText("chase_active 0\n");
 		}
 
-		M_Menu_MultiPlayer_f ();
-		break;
-
-	case K_BACKSPACE:
-		if (setup_cursor == 0)
-		{
-			if (strlen(setup_hostname))
-			{
-				if (keydown[K_CTRL])
-				{
-					listsearch_t temp = { 0 };
-					temp.len = strlen(setup_hostname);
-					Q_strcpy(temp.text, setup_hostname);
-					M_DeletePrevWord(&temp);
-					Q_strcpy(setup_hostname, temp.text);
-		}
-				else
-					setup_hostname[strlen(setup_hostname) - 1] = 0;
-			}
-		}
-
-		if (setup_cursor == 1)
-		{
-			if (strlen(setup_myname))
-			{
-				if (keydown[K_CTRL])
-				{
-					listsearch_t temp = { 0 };
-					temp.len = strlen(setup_myname);
-					Q_strcpy(temp.text, setup_myname);
-					M_DeletePrevWord(&temp);
-					Q_strcpy(setup_myname, temp.text);
-		}
-				else
-					setup_myname[strlen(setup_myname) - 1] = 0;
-			}
-		}
-		break;
-
-	case 'u':
-	case 'U':
-		if (keydown[K_CTRL])
-		{
-			if (setup_cursor == 0)
-				setup_hostname[0] = 0;
-			else if (setup_cursor == 1)
-				setup_myname[0] = 0;
-		}
-		break;
+			M_Menu_MultiPlayer_f ();
+			break;
 
 	case 'c': // woods, copy color
 	case 'C':
-		if (keydown[K_CTRL])
+		if (M_TextField_HasShortcutModifier())
 		{
 			if (lastColorSelected[0] != '\0')
 				SDL_SetClipboardText (lastColorSelected);
 			else
 				SDL_SetClipboardText (CL_PLColours_ToString (setup_bottom));
-			const char* soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-			S_LocalSound(soundFile); // woods add sound to screenshot
+			M_TextField_PlayCopySound();
 		}
 		break;
 	}
@@ -3351,27 +3891,9 @@ forward:
 
 void M_Setup_Char (int k)
 {
-	int l;
-
-	switch (setup_cursor)
-	{
-	case 0:
-		l = strlen(setup_hostname);
-		if (l < 15)
-		{
-			setup_hostname[l+1] = 0;
-			setup_hostname[l] = k;
-		}
-		break;
-	case 1:
-		l = strlen(setup_myname);
-		if (l < 15)
-		{
-			setup_myname[l+1] = 0;
-			setup_myname[l] = k;
-		}
-		break;
-	}
+	menu_textfield_t *active_field = M_Setup_GetFieldForCursor();
+	if (active_field)
+		M_TextField_Char(active_field, k);
 }
 
 
@@ -3382,7 +3904,19 @@ qboolean M_Setup_TextEntry (void)
 
 void M_Setup_Mousemove(int cx, int cy) // woods #mousemenu
 {
+	int old_cursor;
+
+	if (textfield_mouse_dragging &&
+		(textfield_drag_field == &setup_hostname_field || textfield_drag_field == &setup_myname_field))
+	{
+		M_TextField_MouseDrag(cx);
+		return;
+	}
+
+	old_cursor = setup_cursor;
 	M_UpdateCursorWithTable(cy, setup_cursor_table, NUM_SETUP_CMDS, &setup_cursor);
+	if (setup_cursor != old_cursor)
+		M_Setup_ClearTextSelections();
 }
 
 /*
@@ -3404,6 +3938,8 @@ void M_Menu_NameMaker_f (void)
 	m_state = m_namemaker;
 	m_entersound = true;
 	q_strlcpy(namemaker_name, setup_myname, sizeof(namemaker_name));
+	M_TextField_Init(&namemaker_name_field, namemaker_name, 15, false);
+	namemaker_edit_active = false;
 }
 
 void M_Shortcut_NameMaker_f (void)
@@ -3420,9 +3956,14 @@ void M_NameMaker_Draw (void)
 {
 	int	x, y;
 
+	M_TextField_CheckMouseRelease();
+
 	M_Print(48, 16, "Your name");
 	M_DrawTextBox(120, 8, 16, 1);
+	M_TextField_DrawHighlight(&namemaker_name_field, 128, 16);
 	M_PrintWhite(128, 16, namemaker_name);
+	if (namemaker_edit_active)
+		M_TextField_DrawCursor(&namemaker_name_field, 128, 16);
 
 	for (y = 0; y < NAMEMAKER_TABLE_SIZE; y++)
 		for (x = 0; x < NAMEMAKER_TABLE_SIZE; x++)
@@ -3444,6 +3985,9 @@ void M_NameMaker_Draw (void)
 void M_NameMaker_Key (int k)
 {
 	int	l;
+
+	if (namemaker_edit_active && M_TextField_Key(&namemaker_name_field, k))
+		return;
 
 	switch (k)
 	{
@@ -3531,9 +4075,6 @@ void M_NameMaker_Key (int k)
 		break;
 
 	case K_BACKSPACE:
-		if ((l = strlen(namemaker_name)))
-			namemaker_name[l - 1] = 0;
-
 		if (keydown[K_CTRL])
 		{
 			listsearch_t temp;
@@ -3542,6 +4083,12 @@ void M_NameMaker_Key (int k)
 			M_DeletePrevWord(&temp);
 			Q_strcpy(namemaker_name, temp.text);
 		}
+		else if ((l = strlen(namemaker_name)))
+		{
+			namemaker_name[l - 1] = 0;
+		}
+		M_TextField_ClampCursor(&namemaker_name_field);
+		M_TextField_ClearSelection(&namemaker_name_field);
 		break;
 
 	case 'u':
@@ -3549,6 +4096,8 @@ void M_NameMaker_Key (int k)
 		if (keydown[K_CTRL])
 		{
 			namemaker_name[0] = 0;
+			M_TextField_ClampCursor(&namemaker_name_field);
+			M_TextField_ClearSelection(&namemaker_name_field);
 		}
 		break;
 
@@ -3559,13 +4108,33 @@ void M_NameMaker_Key (int k)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	case K_MOUSE1: // woods #mousemenu
+		if (k == K_MOUSE1 &&
+			m_mousex >= 120 && m_mousex <= 120 + 18 * 8 &&
+			M_TextField_MouseInRow(m_mousey, 16))
+		{
+			M_TextField_MouseClick(&namemaker_name_field, m_mousex, 128);
+			namemaker_edit_active = true;
+			return;
+		}
+
+		namemaker_edit_active = false;
 		if (namemaker_cursor_y < NAMEMAKER_TABLE_SIZE)
 		{
+			unsigned char grid_ch = (unsigned char)(NAMEMAKER_TABLE_SIZE * namemaker_cursor_y + namemaker_cursor_x);
+			M_TextField_ClampCursor(&namemaker_name_field);
+			if (namemaker_name_field.sel_start >= 0 && namemaker_name_field.sel_start != namemaker_name_field.cursor)
+				M_TextField_DeleteSelection(&namemaker_name_field);
+
 			l = strlen(namemaker_name);
 			if (l < 15)
 			{
-				namemaker_name[l] = NAMEMAKER_TABLE_SIZE * namemaker_cursor_y + namemaker_cursor_x;
-				namemaker_name[l + 1] = 0;
+				memmove(namemaker_name + namemaker_name_field.cursor + 1,
+				        namemaker_name + namemaker_name_field.cursor,
+				        l - namemaker_name_field.cursor + 1);
+				namemaker_name[namemaker_name_field.cursor] = grid_ch;
+				namemaker_name_field.cursor++;
+				M_TextField_ClampCursor(&namemaker_name_field);
+				M_TextField_ClearSelection(&namemaker_name_field);
 			}
 		}
 		else if (namemaker_cursor_y == NAMEMAKER_TABLE_SIZE)
@@ -3581,13 +4150,7 @@ void M_NameMaker_Key (int k)
 			break;
 
 		Key_Extra (&k);
-
-		l = strlen(namemaker_name);
-		if (l < 15)
-		{
-			namemaker_name[l] = k;
-			namemaker_name[l + 1] = 0;
-		}
+		M_TextField_Char(&namemaker_name_field, k);
 		break;
 	}
 }
@@ -3601,6 +4164,12 @@ void M_NameMaker_Mousemove(int cx, int cy) // woods #mousemenu
 	int num_rows = NAMEMAKER_TOTAL_ROWS;
 	int max_columns;
 	int temp_cursor_x, temp_cursor_y;
+
+	if (textfield_mouse_dragging && textfield_drag_field == &namemaker_name_field)
+	{
+		M_TextField_MouseDrag(cx);
+		return;
+	}
 
 	temp_cursor_x = (cx - 8 - x_origin + x_spacing / 2) / x_spacing; // Calculate tentative cursor positions
 	temp_cursor_y = (cy - 8 - y_origin + y_spacing / 2) / y_spacing;
@@ -10676,6 +11245,7 @@ static struct
 	char				status_message[128]; // Add status message
 	double				status_time; // Time when status was set
 } resetconfigmenu;
+static menu_textfield_t resetconfig_search_field;
 
 static void M_ResetConfig_Add(const char* name, const char* date)
 {
@@ -10743,6 +11313,17 @@ static void M_ResetConfig_Refilter(void)
 		resetconfigmenu.list.cursor = 0;
 
 	M_List_CenterCursor(&resetconfigmenu.list);
+}
+
+static void M_ResetConfig_SyncSearchField(void)
+{
+	resetconfigmenu.list.search.len = (int)strlen(resetconfigmenu.list.search.text);
+	if (resetconfigmenu.list.search.len >= resetconfigmenu.list.search.maxlen)
+	{
+		resetconfigmenu.list.search.len = resetconfigmenu.list.search.maxlen - 1;
+		resetconfigmenu.list.search.text[resetconfigmenu.list.search.len] = 0;
+	}
+	M_TextField_ClampCursor(&resetconfig_search_field);
 }
 
 static void M_ResetConfig_Init(void)
@@ -10893,6 +11474,10 @@ static void M_ResetConfig_Init(void)
 #endif
 
 	M_ResetConfig_Refilter();
+	M_TextField_Init(&resetconfig_search_field,
+		resetconfigmenu.list.search.text,
+		resetconfigmenu.list.search.maxlen - 1,
+		false);
 
 	if (resetconfigmenu.list.cursor == -1 && resetconfigmenu.list.numitems > 0)
 		resetconfigmenu.list.cursor = 0;
@@ -10913,6 +11498,8 @@ void M_ResetConfig_Draw(void)
 {
 	int x, y, i, cols;
 	int firstvis, numvis;
+
+	M_TextField_CheckMouseRelease();
 
 	x = 16;
 	y = 32;
@@ -11000,10 +11587,11 @@ void M_ResetConfig_Draw(void)
 	if (resetconfigmenu.list.search.len > 0)
 	{
 		M_DrawTextBox(16, 180, 32, 1);
+		M_TextField_DrawHighlight(&resetconfig_search_field, 24, 188);
 		M_PrintHighlight(24, 188, resetconfigmenu.list.search.text,
 			resetconfigmenu.list.search.text,
 			resetconfigmenu.list.search.len);
-		int cursor_x = 24 + 8 * resetconfigmenu.list.search.len;
+		int cursor_x = 24 + 8 * resetconfig_search_field.cursor;
 		if (resetconfigmenu.list.numitems == 0)
 			M_DrawCharacter(cursor_x, 188, 11 ^ 128);
 		else
@@ -11042,22 +11630,11 @@ void M_ResetConfig_Key(int key)
 		return;
 	}
 
-	// Handle Ctrl+U or Ctrl+Backspace first
-	if (keydown[K_CTRL])
+	if (M_TextField_Key(&resetconfig_search_field, key))
 	{
-		if ((key == 'u' || key == 'U') && resetconfigmenu.list.search.len > 0)
-		{
-			resetconfigmenu.list.search.len = 0;
-			resetconfigmenu.list.search.text[0] = 0;
-			M_ResetConfig_Refilter();
-			return;
-		}
-		else if (key == K_BACKSPACE && resetconfigmenu.list.search.len > 0)
-		{
-			M_DeletePrevWord(&resetconfigmenu.list.search);
-			M_ResetConfig_Refilter();
-			return;
-		}
+		M_ResetConfig_SyncSearchField();
+		M_ResetConfig_Refilter();
+		return;
 	}
 
 	if (M_List_Key(&resetconfigmenu.list, key))
@@ -11120,19 +11697,20 @@ void M_ResetConfig_Key(int key)
 		break;
 
 	case K_MOUSE1: // woods #mousemenu
+		if (resetconfigmenu.list.search.len > 0 &&
+			m_mousex >= 16 && m_mousex <= 16 + 34 * 8 &&
+			m_mousey >= 180 && m_mousey <= 196)
+		{
+			M_TextField_MouseClick(&resetconfig_search_field, m_mousex, 24);
+			return;
+		}
+
 		x = m_mousex - resetconfigmenu.x - (resetconfigmenu.cols - 1) * 8;
 		y = m_mousey - resetconfigmenu.y;
 		if (x < -8 || !M_List_UseScrollbar(&resetconfigmenu.list, y))
 			goto enter;
 		resetconfigmenu.scrollbar_grab = true;
 		M_ResetConfig_Mousemove(m_mousex, m_mousey);
-
-	case K_BACKSPACE:
-		if (resetconfigmenu.list.search.len > 0)
-		{
-			resetconfigmenu.list.search.text[--resetconfigmenu.list.search.len] = 0;
-			M_ResetConfig_Refilter();
-		}
 		break;
 
 	default:
@@ -11141,10 +11719,9 @@ void M_ResetConfig_Key(int key)
 }
 void M_ResetConfig_Char(int key)
 {
-	if (resetconfigmenu.list.search.len < resetconfigmenu.list.search.maxlen - 1 && key >= 32 && key < 127)
+	if (M_TextField_Char(&resetconfig_search_field, key))
 	{
-		resetconfigmenu.list.search.text[resetconfigmenu.list.search.len++] = key;
-		resetconfigmenu.list.search.text[resetconfigmenu.list.search.len] = 0;
+		M_ResetConfig_SyncSearchField();
 		M_ResetConfig_Refilter();
 	}
 }
@@ -11157,6 +11734,12 @@ qboolean M_ResetConfig_TextEntry(void)
 
 void M_ResetConfig_Mousemove(int cx, int cy) // woods #mousemenu
 {
+	if (textfield_mouse_dragging && textfield_drag_field == &resetconfig_search_field)
+	{
+		M_TextField_MouseDrag(cx);
+		return;
+	}
+
 	cy -= resetconfigmenu.y;
 
 	if (resetconfigmenu.scrollbar_grab)
@@ -11391,6 +11974,8 @@ int 	lanConfig_port;
 char	lanConfig_portname[6];
 char	lanConfig_joinname[22];
 int     lanConfig_protocol_cursor = 0; // Track selected protocol
+static menu_textfield_t lanConfig_port_field;
+static menu_textfield_t lanConfig_join_field;
 
 extern int sv_protocol;
 extern unsigned int	sv_protocol_pext2;
@@ -11411,6 +11996,21 @@ static char last_copied_ip[128] = "";
 static qboolean addresses_cached = false;
 static qhostaddr_t cached_addresses[16];
 static int cached_numaddresses = 0;
+
+static menu_textfield_t *M_LanConfig_GetFieldForCursor(void)
+{
+	if (lanConfig_cursor == 0)
+		return &lanConfig_port_field;
+	if (JoiningGame && lanConfig_cursor == 5)
+		return &lanConfig_join_field;
+	return NULL;
+}
+
+static void M_LanConfig_ClearTextSelections(void)
+{
+	M_TextField_ClearSelection(&lanConfig_port_field);
+	M_TextField_ClearSelection(&lanConfig_join_field);
+}
 
 void SetProtocol(int protocol_cursor)
 {
@@ -11516,6 +12116,8 @@ void M_Menu_LanConfig_f (void)
 		lanConfig_cursor = 1;
 	lanConfig_port = DEFAULTnet_hostport;
 	sprintf(lanConfig_portname, "%u", lanConfig_port);
+	M_TextField_Init(&lanConfig_port_field, lanConfig_portname, 5, true);
+	M_TextField_Init(&lanConfig_join_field, lanConfig_joinname, 21, false);
 
 	m_return_onerror = false;
 	m_return_reason[0] = 0;
@@ -11539,6 +12141,7 @@ void M_LanConfig_CheckTimeouts(void)
 void M_LanConfig_Draw (void)
 {
 	M_LanConfig_CheckTimeouts(); // woods #contentfilter
+	M_TextField_CheckMouseRelease();
 	
 	qpic_t	*p;
 	int		basex;
@@ -11619,10 +12222,11 @@ void M_LanConfig_Draw (void)
 	y+=8;	//for the port's box
 	M_Print (basex, y, "Port:");
 	M_DrawTextBox (basex+8*10, y-8, 6, 1);
+	M_TextField_DrawHighlight(&lanConfig_port_field, basex + 9 * 10, y);
 	M_Print (basex+9*10, y, lanConfig_portname);
 	if (lanConfig_cursor == 0)
 	{
-		M_DrawCharacter (basex+9*10 + 8*strlen(lanConfig_portname), y, 10+((int)(realtime*4)&1));
+		M_TextField_DrawCursor(&lanConfig_port_field, basex + 9 * 10, y);
 		M_DrawCharacter (basex-10, y, 12+((int)(realtime*4)&1));
 	}
 	y += 8;
@@ -11671,16 +12275,17 @@ void M_LanConfig_Draw (void)
 			M_DrawCharacter(basex - 8, y, 12 + ((int)(realtime * 4) & 1));
 		y += 8;
 
-		M_Print (basex, y, "Join game at:");
-		y+=24;
-		M_DrawTextBox (basex+8, y-8, 22, 1);
-		M_Print (basex+16, y, lanConfig_joinname);
-		if (lanConfig_cursor == 5) // woods #historymenu #bookmarksmenu
-		{
-			M_DrawCharacter (basex+16 + 8*strlen(lanConfig_joinname), y, 10+((int)(realtime*4)&1));
-			M_DrawCharacter (basex-8, y, 12+((int)(realtime*4)&1));
-		}
-		y += 16;
+			M_Print (basex, y, "Join game at:");
+			y+=24;
+			M_DrawTextBox (basex+8, y-8, 22, 1);
+			M_TextField_DrawHighlight(&lanConfig_join_field, basex + 16, y);
+			M_Print (basex+16, y, lanConfig_joinname);
+			if (lanConfig_cursor == 5) // woods #historymenu #bookmarksmenu
+			{
+				M_TextField_DrawCursor(&lanConfig_join_field, basex + 16, y);
+				M_DrawCharacter (basex-8, y, 12+((int)(realtime*4)&1));
+			}
+			y += 16;
 	}
 	else
 	{
@@ -11705,6 +12310,7 @@ void M_LanConfig_Draw (void)
 void M_LanConfig_Key (int key)
 {
 	int		l;
+	menu_textfield_t *active_field;
 
 	if (key == K_MOUSE1)
 	{
@@ -11751,6 +12357,10 @@ void M_LanConfig_Key (int key)
 		}
 	}
 
+	active_field = M_LanConfig_GetFieldForCursor();
+	if (active_field && M_TextField_Key(active_field, key))
+		goto finish;
+
 	switch (key)
 	{
 	case K_ESCAPE:
@@ -11762,6 +12372,7 @@ void M_LanConfig_Key (int key)
 
 	case K_UPARROW:
 		S_LocalSound("misc/menu1.wav");
+		M_LanConfig_ClearTextSelections();
 		lanConfig_cursor--;
 
 		if (StartingGame) {
@@ -11778,6 +12389,7 @@ void M_LanConfig_Key (int key)
 
 	case K_DOWNARROW:
 		S_LocalSound("misc/menu1.wav");
+		M_LanConfig_ClearTextSelections();
 		lanConfig_cursor++;
 
 		if (StartingGame) {
@@ -11822,6 +12434,17 @@ void M_LanConfig_Key (int key)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	case K_MOUSE1: // woods #mousemenu
+		if (key == K_MOUSE1 && lanConfig_cursor == 0)
+		{
+			M_TextField_MouseClick(&lanConfig_port_field, m_mousex, 170);
+			goto finish;
+		}
+		if (key == K_MOUSE1 && JoiningGame && lanConfig_cursor == 5)
+		{
+			M_TextField_MouseClick(&lanConfig_join_field, m_mousex, 96);
+			goto finish;
+		}
+
 		if (lanConfig_cursor == 0)
 			break;
 
@@ -11865,54 +12488,10 @@ void M_LanConfig_Key (int key)
 			}
 		}
 
-		break;
-
-	case K_BACKSPACE:
-		if (lanConfig_cursor == 0)
-		{
-			if (strlen(lanConfig_portname))
-				lanConfig_portname[strlen(lanConfig_portname)-1] = 0;
-		}
-
-		if (lanConfig_cursor == 5) // woods #historymenu #bookmarksmenu
-		{
-			if (strlen(lanConfig_joinname))
-				lanConfig_joinname[strlen(lanConfig_joinname)-1] = 0;
-		}
-
-		if (keydown[K_CTRL])
-		{
-			if (lanConfig_cursor == 0)
-			{
-				listsearch_t temp;
-				temp.len = strlen(lanConfig_portname);
-				Q_strcpy(temp.text, lanConfig_portname);
-				M_DeletePrevWord(&temp);
-				Q_strcpy(lanConfig_portname, temp.text);
-			}
-			else if (lanConfig_cursor == 5)
-			{
-				listsearch_t temp;
-				temp.len = strlen(lanConfig_joinname);
-				Q_strcpy(temp.text, lanConfig_joinname);
-				M_DeletePrevWord(&temp);
-				Q_strcpy(lanConfig_joinname, temp.text);
-			}
-		}
-		break;
-
-	case 'u':
-	case 'U':
-		if (keydown[K_CTRL])
-		{
-			if (lanConfig_cursor == 0)
-				lanConfig_portname[0] = 0;
-			else if (lanConfig_cursor == 5)
-				lanConfig_joinname[0] = 0;
-	}
-		break;
+			break;
 	}
 
+finish:
 	if (StartingGame && lanConfig_cursor >= 3)
 	{
 		if (key == K_UPARROW)
@@ -11922,39 +12501,23 @@ void M_LanConfig_Key (int key)
 	}
 
 	l =  Q_atoi(lanConfig_portname);
-	if (l > 65535)
-		l = lanConfig_port;
-	else
-		lanConfig_port = l;
-	sprintf(lanConfig_portname, "%u", lanConfig_port);
+	if (lanConfig_portname[0])
+	{
+		if (l <= 65535)
+			lanConfig_port = l;
+		else if (lanConfig_cursor != 0)
+			sprintf(lanConfig_portname, "%u", lanConfig_port);
+	}
+	M_TextField_ClampCursor(&lanConfig_port_field);
+	M_TextField_ClampCursor(&lanConfig_join_field);
 }
 
 
 void M_LanConfig_Char (int key)
 {
-	int l;
-
-	switch (lanConfig_cursor)
-	{
-	case 0:
-		if (key < '0' || key > '9')
-			return;
-		l = strlen(lanConfig_portname);
-		if (l < 5)
-		{
-			lanConfig_portname[l+1] = 0;
-			lanConfig_portname[l] = key;
-		}
-		break;
-	case 5: // woods #historymenu #bookmarksmenu
-		l = strlen(lanConfig_joinname);
-		if (l < 21)
-		{
-			lanConfig_joinname[l+1] = 0;
-			lanConfig_joinname[l] = key;
-		}
-		break;
-	}
+	menu_textfield_t *active_field = M_LanConfig_GetFieldForCursor();
+	if (active_field)
+		M_TextField_Char(active_field, key);
 }
 
 /*
@@ -12546,6 +13109,8 @@ static int		bookmarks_edit_cursor_table[] = { 54, 86, 114, 138 };
 
 static char temp_alias[45];
 static char temp_name[45];
+static menu_textfield_t bookmarks_edit_name_field;
+static menu_textfield_t bookmarks_edit_alias_field;
 static qboolean	temp_pinned;
 static qboolean	bookmarks_edit_original_pinned;
 static char		bookmarks_edit_status[64];
@@ -12607,6 +13172,21 @@ static void M_Bookmarks_ListAdd(const char* name, const char* alias, qboolean pi
 	FileList_Add(name, data, &bookmarkslist);
 }
 
+static menu_textfield_t *M_Bookmarks_Edit_GetFieldForCursor(void)
+{
+	if (bookmarks_edit_cursor == 0)
+		return &bookmarks_edit_name_field;
+	if (bookmarks_edit_cursor == 1)
+		return &bookmarks_edit_alias_field;
+	return NULL;
+}
+
+static void M_Bookmarks_Edit_ClearTextSelections(void)
+{
+	M_TextField_ClearSelection(&bookmarks_edit_name_field);
+	M_TextField_ClearSelection(&bookmarks_edit_alias_field);
+}
+
 void M_Menu_Bookmarks_Edit_f (void)
 {
 	key_dest = key_menu;
@@ -12643,6 +13223,9 @@ void M_Menu_Bookmarks_Edit_f (void)
 		bookmarks_edit_original_pinned = false;
 		return;
 	}
+
+	M_TextField_Init(&bookmarks_edit_name_field, temp_name, 37, false);
+	M_TextField_Init(&bookmarks_edit_alias_field, temp_alias, 37, false);
 }
 
 void M_Shortcut_Bookmarks_Edit_f(void)
@@ -12655,12 +13238,16 @@ void M_Shortcut_Bookmarks_Edit_f(void)
 
 void M_Bookmarks_Edit_Draw(void)
 {
+	M_TextField_CheckMouseRelease();
+
 	M_Print(10, 40, "Hostname/IP");
 	M_DrawTextBox(6, 46, 38, 1);
+	M_TextField_DrawHighlight(&bookmarks_edit_name_field, 14, 54);
 	M_PrintWhite(14, 54, temp_name);
 
 	M_Print(10, 72, "Bookmark Name");
 	M_DrawTextBox(6, 78, 38, 1);
+	M_TextField_DrawHighlight(&bookmarks_edit_alias_field, 14, 86);
 	M_PrintWhite(14, 86, temp_alias);
 
 	M_Print(10, 114, "Pin");
@@ -12672,10 +13259,10 @@ void M_Bookmarks_Edit_Draw(void)
 	M_DrawCharacter(0, bookmarks_edit_cursor_table[bookmarks_edit_cursor], 12 + ((int)(realtime * 4) & 1));
 
 	if (bookmarks_edit_cursor == 0)
-		M_DrawCharacter(13 + 8 * strlen(temp_name), bookmarks_edit_cursor_table[bookmarks_edit_cursor], 10 + ((int)(realtime * 4) & 1));
+		M_TextField_DrawCursor(&bookmarks_edit_name_field, 13, bookmarks_edit_cursor_table[bookmarks_edit_cursor]);
 
 	if (bookmarks_edit_cursor == 1)
-		M_DrawCharacter(13 + 8 * strlen(temp_alias), bookmarks_edit_cursor_table[bookmarks_edit_cursor], 10 + ((int)(realtime * 4) & 1));
+		M_TextField_DrawCursor(&bookmarks_edit_alias_field, 13, bookmarks_edit_cursor_table[bookmarks_edit_cursor]);
 
 	if (bookmarks_edit_status[0] && realtime < bookmarks_edit_status_until)
 	{
@@ -12689,6 +13276,9 @@ void M_Bookmarks_Edit_Draw(void)
 
 void M_Bookmarks_Edit_Key(int k)
 {
+	menu_textfield_t *active_field = M_Bookmarks_Edit_GetFieldForCursor();
+	if (active_field && M_TextField_Key(active_field, k))
+		return;
 
 	switch (k)
 	{
@@ -12712,6 +13302,7 @@ void M_Bookmarks_Edit_Key(int k)
 
 	case K_UPARROW:
 		S_LocalSound("misc/menu1.wav");
+		M_Bookmarks_Edit_ClearTextSelections();
 		bookmarks_edit_cursor--;
 		if (bookmarks_edit_cursor < 0)
 			bookmarks_edit_cursor = NUM_BOOKMARKS_EDIT_CMDS - 1;
@@ -12720,6 +13311,7 @@ void M_Bookmarks_Edit_Key(int k)
 	case K_DOWNARROW:
 	case K_TAB:
 		S_LocalSound("misc/menu1.wav");
+		M_Bookmarks_Edit_ClearTextSelections();
 		bookmarks_edit_cursor++;
 		if (bookmarks_edit_cursor >= NUM_BOOKMARKS_EDIT_CMDS)
 			bookmarks_edit_cursor = 0;
@@ -12752,6 +13344,19 @@ void M_Bookmarks_Edit_Key(int k)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	case K_MOUSE1: // woods #mousemenu
+		if (k == K_MOUSE1 && bookmarks_edit_cursor == 0)
+		{
+			if (M_TextField_MouseInRow(m_mousey, bookmarks_edit_cursor_table[0]))
+				M_TextField_MouseClick(&bookmarks_edit_name_field, m_mousex, 14);
+			return;
+		}
+		if (k == K_MOUSE1 && bookmarks_edit_cursor == 1)
+		{
+			if (M_TextField_MouseInRow(m_mousey, bookmarks_edit_cursor_table[1]))
+				M_TextField_MouseClick(&bookmarks_edit_alias_field, m_mousex, 14);
+			return;
+		}
+
 		if (bookmarks_edit_cursor == 0 || bookmarks_edit_cursor == 1)
 			return;
 
@@ -12783,81 +13388,18 @@ void M_Bookmarks_Edit_Key(int k)
 			bookmarks_edit_new = false;
 		}
 
-		m_entersound = true;
+			m_entersound = true;
 
-		M_Menu_Bookmarks_f();
-		break;
-
-	case K_BACKSPACE:
-		if (bookmarks_edit_cursor == 0)
-		{
-			if (strlen(temp_name))
-				temp_name[strlen(temp_name) - 1] = 0;
-		}
-
-		if (bookmarks_edit_cursor == 1)
-		{
-			if (strlen(temp_alias))
-				temp_alias[strlen(temp_alias) - 1] = 0;
-		}
-
-		if (keydown[K_CTRL])
-		{
-			if (bookmarks_edit_cursor == 0)
-			{
-				listsearch_t temp;
-				temp.len = strlen(temp_name);
-				Q_strcpy(temp.text, temp_name);
-				M_DeletePrevWord(&temp);
-				Q_strcpy(temp_name, temp.text);
-			}
-			else if (bookmarks_edit_cursor == 1)
-			{
-				listsearch_t temp;
-				temp.len = strlen(temp_alias);
-				Q_strcpy(temp.text, temp_alias);
-				M_DeletePrevWord(&temp);
-				Q_strcpy(temp_alias, temp.text);
-			}
-		}
-		break;
-
-	case 'u':
-	case 'U':
-		if (keydown[K_CTRL])
-		{
-			if (bookmarks_edit_cursor == 0)
-				temp_name[0] = 0;
-			else if (bookmarks_edit_cursor == 1)
-				temp_alias[0] = 0;
-	}
-		break;
+			M_Menu_Bookmarks_f();
+			break;
 	}
 }
 
 void M_Bookmarks_Edit_Char(int k)
 {
-	int l;
-
-	switch (bookmarks_edit_cursor)
-	{
-	case 0:
-		l = strlen(temp_name);
-		if (l < 37)
-		{
-			temp_name[l + 1] = 0;
-			temp_name[l] = k;
-		}
-		break;
-	case 1:
-		l = strlen(temp_alias);
-		if (l < 37)
-		{
-			temp_alias[l + 1] = 0;
-			temp_alias[l] = k;
-		}
-		break;
-	}
+	menu_textfield_t *active_field = M_Bookmarks_Edit_GetFieldForCursor();
+	if (active_field)
+		M_TextField_Char(active_field, k);
 }
 
 qboolean M_Bookmarks_Edit_TextEntry(void)
@@ -12867,7 +13409,19 @@ qboolean M_Bookmarks_Edit_TextEntry(void)
 
 void M_Bookmarks_Edit_Mousemove(int cx, int cy) // woods #mousemenu
 {
+	int old_cursor;
+
+	if (textfield_mouse_dragging &&
+		(textfield_drag_field == &bookmarks_edit_name_field || textfield_drag_field == &bookmarks_edit_alias_field))
+	{
+		M_TextField_MouseDrag(cx);
+		return;
+	}
+
+	old_cursor = bookmarks_edit_cursor;
 	M_UpdateCursorWithTable(cy, bookmarks_edit_cursor_table, NUM_BOOKMARKS_EDIT_CMDS, &bookmarks_edit_cursor);
+	if (bookmarks_edit_cursor != old_cursor)
+		M_Bookmarks_Edit_ClearTextSelections();
 }
 
 qboolean M_LanConfig_TextEntry (void)
@@ -12877,6 +13431,16 @@ qboolean M_LanConfig_TextEntry (void)
 
 void M_LanConfig_Mousemove(int cx, int cy)
 {
+	int numCommands;
+	int old_cursor;
+
+	if (textfield_mouse_dragging &&
+		(textfield_drag_field == &lanConfig_port_field || textfield_drag_field == &lanConfig_join_field))
+	{
+		M_TextField_MouseDrag(cx);
+		return;
+	}
+
 	// First check if mouse is over IP addresses
 	for (int i = 0; i < 2; i++)
 	{
@@ -12891,8 +13455,11 @@ void M_LanConfig_Mousemove(int cx, int cy)
 	}
 
 	// If not over IPs, handle regular menu cursor movement
-	int numCommands = StartingGame ? NUM_LANCONFIG_CMDS_NEWGAME : NUM_LANCONFIG_CMDS_JOINGAME;
+	numCommands = StartingGame ? NUM_LANCONFIG_CMDS_NEWGAME : NUM_LANCONFIG_CMDS_JOINGAME;
+	old_cursor = lanConfig_cursor;
 	M_UpdateCursorWithTable(cy, lanConfig_cursor_ptr, numCommands, &lanConfig_cursor);
+	if (lanConfig_cursor != old_cursor)
+		M_LanConfig_ClearTextSelections();
 }
 
 /*
@@ -16878,6 +17445,20 @@ qboolean M_TextEntry (void)
 	default:
 		return false;
 	}
+}
+
+qboolean M_WantsIBeamCursor(void)
+{
+	if (key_dest != key_menu)
+		return false;
+
+	if (M_TextField_IsDraggingAny())
+		return true;
+
+	if (m_state == m_namemaker)
+		return namemaker_edit_active;
+
+	return M_TextEntry();
 }
 
 #if defined(_WIN32) // woods #disablecaps via ironwail
