@@ -59,6 +59,15 @@ void Draw_ConsoleBackground (void); //johnfitz -- removed parameter int lines
 void Draw_TileClear (int x, int y, int w, int h);
 void Draw_Fill (int x, int y, int w, int h, int c, float alpha); //johnfitz -- added alpha
 void Draw_FillPlayer (int x, int y, int w, int h, plcolour_t c, float alpha); //Spike - for richer player colours.
+#define DRAW_CORNER_TL 0x1
+#define DRAW_CORNER_TR 0x2
+#define DRAW_CORNER_BR 0x4
+#define DRAW_CORNER_BL 0x8
+#define DRAW_CORNERS_ALL (DRAW_CORNER_TL | DRAW_CORNER_TR | DRAW_CORNER_BR | DRAW_CORNER_BL)
+void Draw_Fill_Plus (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask);
+void Draw_Fill_Plus_Radius (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius);
+void Draw_Fill_Ex (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius, float feather);
+void Draw_ShutdownGL (void); // invalidate cached GLSL handles on context loss
 void Draw_FadeScreen (void);
 void Draw_String (int x, int y, const char *str);
 void Draw_StringAnimatedDots(int x, int y, const char* str); // woods

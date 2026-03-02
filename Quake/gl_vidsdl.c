@@ -923,6 +923,7 @@ static void VID_Restart (void)
 	R_ScaleView_DeleteTexture ();
 	R_LightningBeam_DeleteTexture (); // woods #beamspoly
 	R_MotionBlur_DeleteTexture (); // woods #motionblur
+	Draw_ShutdownGL (); // rounded-fill program handle becomes invalid on context loss
 	R_DeleteShaders ();
 	GL_DeleteBModelVertexBuffer ();
 	GLMesh_DeleteVertexBuffers ();

@@ -2138,17 +2138,128 @@ void Draw_Fill (int x, int y, int w, int h, int c, float alpha) //johnfitz -- ad
 	glEnable (GL_ALPHA_TEST); //johnfitz -- for alpha
 	glEnable (GL_TEXTURE_2D);
 }
+static GLuint draw_round_program;
+static GLint draw_round_color_loc;
+static GLint draw_round_min_loc;
+static GLint draw_round_max_loc;
+static GLint draw_round_feather_loc;
+static GLint draw_round_corners_loc;
+static qboolean draw_round_init_attempted;
+
+static void Draw_AddRoundedCornerVerts (float cx, float cy, float radius, float startangle, float endangle, int segments)
+{
+	int i;
+
+	if (segments < 1)
+		segments = 1;
+
+	for (i = 1; i <= segments; ++i)
+	{
+		float t = startangle + (endangle - startangle) * ((float)i / (float)segments);
+		glVertex2f (cx + cosf(t) * radius, cy + sinf(t) * radius);
+	}
+}
+
+static qboolean Draw_InitRoundedShader (void)
+{
+	static const GLchar *vertSource =
+		"varying vec2 vPos;\n"
+		"void main(void) {\n"
+		"	gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n"
+		"	vPos = gl_Vertex.xy;\n"
+		"}\n";
+	static const GLchar *fragSource =
+		"uniform vec4 uColor;\n"
+		"uniform vec2 uMin;\n"
+		"uniform vec2 uMax;\n"
+		"uniform float uFeather;\n"
+		"uniform vec4 uCornerRadius;\n"
+		"varying vec2 vPos;\n"
+		"void main(void) {\n"
+		"	vec2 halfSize = 0.5 * (uMax - uMin);\n"
+		"	vec2 center = 0.5 * (uMax + uMin);\n"
+		"	vec2 offset = vPos - center;\n"
+		"	float cornerRadius = (offset.x >= 0.0) ? ((offset.y >= 0.0) ? uCornerRadius.z : uCornerRadius.y) : ((offset.y >= 0.0) ? uCornerRadius.w : uCornerRadius.x);\n"
+		"	vec2 local = abs(offset) - (halfSize - vec2(cornerRadius));\n"
+		"	float dist = length(max(local, vec2(0.0))) - cornerRadius;\n"
+		"	float alpha = uColor.a;\n"
+		"	if (cornerRadius > 0.0) {\n"
+		"		float feather = max(uFeather, 0.0001);\n"
+		"		alpha *= clamp(1.0 - dist / feather, 0.0, 1.0);\n"
+		"	}\n"
+		"	if (alpha <= 0.0)\n"
+		"		discard;\n"
+		"	gl_FragColor = vec4(uColor.rgb, alpha);\n"
+		"}\n";
+	GLuint program;
+
+	if (draw_round_program)
+		return true;
+
+	// Prevent recursive init attempts if GL_CreateProgram logs errors.
+	if (draw_round_init_attempted)
+		return false;
+	draw_round_init_attempted = true;
+
+	if (!gl_glsl_able || !GL_UseProgramFunc || !GL_Uniform4fFunc || !GL_Uniform2fFunc || !GL_Uniform1fFunc)
+		return false;
+
+	program = GL_CreateProgram (vertSource, fragSource, 0, NULL);
+	if (!program)
+		return false;
+
+	draw_round_color_loc = GL_GetUniformLocation (&program, "uColor");
+	draw_round_min_loc = GL_GetUniformLocation (&program, "uMin");
+	draw_round_max_loc = GL_GetUniformLocation (&program, "uMax");
+	draw_round_feather_loc = GL_GetUniformLocation (&program, "uFeather");
+	draw_round_corners_loc = GL_GetUniformLocation (&program, "uCornerRadius");
+
+	if (!program)
+		return false;
+
+	draw_round_program = program;
+
+	return true;
+}
+
+void Draw_ShutdownGL (void)
+{
+	/* Called during context loss/restart; object names are already invalid. */
+	draw_round_program = 0;
+	draw_round_color_loc = draw_round_min_loc = draw_round_max_loc = -1;
+	draw_round_feather_loc = draw_round_corners_loc = -1;
+	draw_round_init_attempted = false;
+}
+
+static void Draw_ResolvePlayerColour (const plcolour_t *c, float alpha, float rgba[4])
+{
+	if (c->type == 2)
+	{
+		rgba[0] = c->rgb[0] / 255.0f;
+		rgba[1] = c->rgb[1] / 255.0f;
+		rgba[2] = c->rgb[2] / 255.0f;
+	}
+	else
+	{
+		byte *pal = (byte *)&d_8to24table[(c->basic<<4) + 8];
+		rgba[0] = pal[0] / 255.0f;
+		rgba[1] = pal[1] / 255.0f;
+		rgba[2] = pal[2] / 255.0f;
+	}
+	rgba[3] = alpha;
+}
+
 void Draw_FillPlayer (int x, int y, int w, int h, plcolour_t c, float alpha)
 {
 	glDisable (GL_TEXTURE_2D);
 	glEnable (GL_BLEND); //johnfitz -- for alpha
 	glDisable (GL_ALPHA_TEST); //johnfitz -- for alpha
 	if (c.type == 2)
-		glColor4f (c.rgb[0]/255.0, c.rgb[1]/255.0, c.rgb[2]/255.0, alpha); //johnfitz -- added alpha
+		glColor4f (c.rgb[0]/255.0f, c.rgb[1]/255.0f, c.rgb[2]/255.0f, alpha); //johnfitz -- added alpha
 	else
 	{
 		byte *pal = (byte *)&d_8to24table[(c.basic<<4) + 8]; //johnfitz -- use d_8to24table instead of host_basepal
-		glColor4f (pal[0]/255.0, pal[1]/255.0, pal[2]/255.0, alpha); //johnfitz -- added alpha
+		glColor4f (pal[0]/255.0f, pal[1]/255.0f, pal[2]/255.0f, alpha); //johnfitz -- added alpha
 	}
 
 	glBegin (GL_QUADS);
@@ -2161,6 +2272,165 @@ void Draw_FillPlayer (int x, int y, int w, int h, plcolour_t c, float alpha)
 	glColor3f (1,1,1);
 	glDisable (GL_BLEND); //johnfitz -- for alpha
 	glEnable (GL_ALPHA_TEST); //johnfitz -- for alpha
+	glEnable (GL_TEXTURE_2D);
+}
+
+/*
+=============
+Draw_Fill_Plus
+
+Fills a box with a single color. If roundcorners is true, draws rounded corners.
+radius: corner radius in pixels. Use -1 for auto (25% of smallest dimension).
+roundmask: bitmask of which corners to round (DRAW_CORNER_TL, etc). 0 = all corners.
+=============
+*/
+void Draw_Fill_Plus (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask)
+{
+	Draw_Fill_Ex (x, y, w, h, c, alpha, roundcorners, roundmask, -1.0f, 1.0f);
+}
+
+void Draw_Fill_Plus_Radius (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius)
+{
+	Draw_Fill_Ex (x, y, w, h, c, alpha, roundcorners, roundmask, radius, 1.0f);
+}
+
+void Draw_Fill_Ex (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius, float feather)
+{
+	qboolean use_rounding;
+	float left, right, top, bottom;
+	float colour[4];
+	float radius_tl = 0.0f, radius_tr = 0.0f, radius_br = 0.0f, radius_bl = 0.0f;
+	qboolean shader_ready = false;
+
+	if (roundcorners && !roundmask)
+		roundmask = DRAW_CORNERS_ALL;
+
+	use_rounding = roundcorners && roundmask;
+
+	if (w <= 0 || h <= 0)
+		return;
+
+	if (use_rounding)
+	{
+		float smallest = q_min((float)w, (float)h);
+
+		// Auto-calculate radius if negative.
+		if (radius < 0.0f)
+			radius = 0.25f * smallest;
+
+		// Clamp to half the smallest dimension.
+		if (radius > 0.5f * smallest)
+			radius = 0.5f * smallest;
+
+		if (radius < 0.5f)
+			use_rounding = false;
+		else
+			shader_ready = Draw_InitRoundedShader ();
+	}
+
+	glDisable (GL_TEXTURE_2D);
+	glEnable (GL_BLEND);
+	glDisable (GL_ALPHA_TEST);
+
+	Draw_ResolvePlayerColour (&c, alpha, colour);
+
+	left = (float)x;
+	top = (float)y;
+	right = (float)(x + w);
+	bottom = (float)(y + h);
+
+	if (use_rounding)
+	{
+		radius_tl = (roundmask & DRAW_CORNER_TL) ? radius : 0.0f;
+		radius_tr = (roundmask & DRAW_CORNER_TR) ? radius : 0.0f;
+		radius_br = (roundmask & DRAW_CORNER_BR) ? radius : 0.0f;
+		radius_bl = (roundmask & DRAW_CORNER_BL) ? radius : 0.0f;
+
+		if (!radius_tl && !radius_tr && !radius_br && !radius_bl)
+			use_rounding = false;
+	}
+
+	if (!use_rounding)
+	{
+		glColor4fv (colour);
+
+		glBegin (GL_QUADS);
+		glVertex2f (left, top);
+		glVertex2f (right, top);
+		glVertex2f (right, bottom);
+		glVertex2f (left, bottom);
+		glEnd ();
+	}
+	else if (shader_ready)
+	{
+		GL_UseProgramFunc (draw_round_program);
+		GL_Uniform4fFunc (draw_round_color_loc, colour[0], colour[1], colour[2], colour[3]);
+		GL_Uniform2fFunc (draw_round_min_loc, left, top);
+		GL_Uniform2fFunc (draw_round_max_loc, right, bottom);
+		GL_Uniform1fFunc (draw_round_feather_loc, feather);
+		GL_Uniform4fFunc (draw_round_corners_loc, radius_tl, radius_tr, radius_br, radius_bl);
+
+		glBegin (GL_QUADS);
+		glVertex2f (left, top);
+		glVertex2f (right, top);
+		glVertex2f (right, bottom);
+		glVertex2f (left, bottom);
+		glEnd ();
+
+		GL_UseProgramFunc (0);
+	}
+	else
+	{
+		// Fallback: triangle fan approximation.
+		int segments = (int)ceilf(radius * 1.5f);
+		float top_left_x = left + radius_tl;
+		float top_right_x = right - radius_tr;
+		float right_bottom_y = bottom - radius_br;
+		float bottom_left_x = left + radius_bl;
+		float left_top_y = top + radius_tl;
+		float cx, cy;
+
+		segments = bound(2, segments, 16);
+
+		glColor4fv (colour);
+
+		glBegin (GL_TRIANGLE_FAN);
+		cx = (left + right) * 0.5f;
+		cy = (top + bottom) * 0.5f;
+		glVertex2f (cx, cy);
+
+		glVertex2f (top_left_x, top);
+		glVertex2f (top_right_x, top);
+		if (radius_tr > 0.0f)
+			Draw_AddRoundedCornerVerts (right - radius_tr, top + radius_tr, radius_tr, -0.5f * (float)M_PI, 0.0f, segments);
+		else
+			glVertex2f (right, top);
+
+		glVertex2f (right, right_bottom_y);
+		if (radius_br > 0.0f)
+			Draw_AddRoundedCornerVerts (right - radius_br, bottom - radius_br, radius_br, 0.0f, 0.5f * (float)M_PI, segments);
+		else
+			glVertex2f (right, bottom);
+
+		glVertex2f (bottom_left_x, bottom);
+		if (radius_bl > 0.0f)
+			Draw_AddRoundedCornerVerts (left + radius_bl, bottom - radius_bl, radius_bl, 0.5f * (float)M_PI, (float)M_PI, segments);
+		else
+			glVertex2f (left, bottom);
+
+		glVertex2f (left, left_top_y);
+		if (radius_tl > 0.0f)
+			Draw_AddRoundedCornerVerts (left + radius_tl, top + radius_tl, radius_tl, (float)M_PI, 1.5f * (float)M_PI, segments);
+		else
+			glVertex2f (left, top);
+
+		glVertex2f (top_left_x, top);
+		glEnd ();
+	}
+
+	glColor3f (1,1,1);
+	glDisable (GL_BLEND);
+	glEnable (GL_ALPHA_TEST);
 	glEnable (GL_TEXTURE_2D);
 }
 
