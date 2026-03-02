@@ -1797,6 +1797,8 @@ void Host_Shutdown(void)
 
 	IPLog_WriteLog ();	// JPG 1.05 - ip loggging  // woods #iplog
 
+	COM_RemoveDownloadTempFiles();
+
 	NET_Shutdown ();
 
 	if (cls.state != ca_dedicated)

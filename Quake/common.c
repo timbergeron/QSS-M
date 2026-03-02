@@ -3219,6 +3219,95 @@ void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, 
 	}
 }
 
+static void COM_RemoveTempFilesInDir_r(const char *path)
+{
+#ifdef _WIN32
+	char search[MAX_OSPATH];
+	WIN32_FIND_DATA fdat;
+	HANDLE fhnd;
+
+	q_snprintf(search, sizeof(search), "%s/*", path);
+	fhnd = FindFirstFile(search, &fdat);
+	if (fhnd == INVALID_HANDLE_VALUE)
+		return;
+
+	do
+	{
+		char fullpath[MAX_OSPATH];
+
+		if (!strcmp(fdat.cFileName, ".") || !strcmp(fdat.cFileName, ".."))
+			continue;
+
+		/* Avoid reparse points (junctions/symlinks) so we don't recurse outside com_gamedir */
+		if (fdat.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+			continue;
+
+		q_snprintf(fullpath, sizeof(fullpath), "%s/%s", path, fdat.cFileName);
+
+		if (fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			COM_RemoveTempFilesInDir_r(fullpath);
+		}
+		else if (!q_strcasecmp(COM_FileGetExtension(fdat.cFileName), "tmp"))
+		{
+			if (!remove(fullpath))
+				Con_DPrintf2("Removed stale download temp file %s\n", fullpath);
+			else
+				Con_DPrintf("Failed to remove temp file %s\n", fullpath);
+		}
+	} while (FindNextFile(fhnd, &fdat));
+
+	FindClose(fhnd);
+#else
+	DIR *dir_p;
+	struct dirent *dir_t;
+
+	dir_p = opendir(path);
+	if (!dir_p)
+		return;
+
+	while ((dir_t = readdir(dir_p)) != NULL)
+	{
+		char fullpath[MAX_OSPATH];
+		struct stat s;
+
+		if (!strcmp(dir_t->d_name, ".") || !strcmp(dir_t->d_name, ".."))
+			continue;
+
+		q_snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir_t->d_name);
+
+		if (lstat(fullpath, &s) == -1)
+			continue;
+
+		/* Skip symlinks to avoid following cycles or leaving com_gamedir */
+		if (S_ISLNK(s.st_mode))
+			continue;
+
+		if (S_ISDIR(s.st_mode))
+		{
+			COM_RemoveTempFilesInDir_r(fullpath);
+		}
+		else if (S_ISREG(s.st_mode) && !q_strcasecmp(COM_FileGetExtension(dir_t->d_name), "tmp"))
+		{
+			if (!remove(fullpath))
+				Con_DPrintf2("Removed stale download temp file %s\n", fullpath);
+			else
+				Con_DPrintf("Failed to remove temp file %s\n", fullpath);
+		}
+	}
+
+	closedir(dir_p);
+#endif
+}
+
+void COM_RemoveDownloadTempFiles(void)
+{
+	if (!*com_gamedir)
+		return;
+
+	COM_RemoveTempFilesInDir_r(com_gamedir);
+}
+
 static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile, const char *purename)
 {
 	searchpath_t *search;

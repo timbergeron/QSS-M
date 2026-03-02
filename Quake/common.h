@@ -409,6 +409,7 @@ const char *COM_GetMissingPakHint(void);
 void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter);
 const char *COM_GetGameNames(qboolean full);
 qboolean COM_GameDirMatches(const char *tdirs);
+void COM_RemoveDownloadTempFiles(void);
 
 pack_t *FSZIP_LoadArchive (const char *packfile);
 FILE *FSZIP_Deflate(FILE *src, qofs_t srcsize, qofs_t outsize, const char *entryname);
