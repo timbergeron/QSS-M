@@ -212,6 +212,7 @@ char		m_return_reason [32];
 
 void M_ConfigureNetSubsystem(void);
 void M_SetSkillMenuMap(const char* name); // woods #skillmenu (iw)
+static void M_GameOptions_ClearTypedLevel(void);
 
 void FileList_Subtract(const char* name, filelist_item_t** list); // woods #historymenu
 
@@ -2873,6 +2874,7 @@ void M_Maps_Key(int key)
 				// Set the map and return to game options
 				M_SetSkillMenuMap(mapsmenu.items[mapsmenu.filtered_indices[mapsmenu.list.cursor]].name);
 				maps_from_gameoptions = false;
+				M_GameOptions_ClearTypedLevel();
 				M_Menu_GameOptions_f();
 			}
 			else
@@ -13617,6 +13619,16 @@ extern cvar_t sv_public;
 int	startepisode;
 int	startlevel;
 int maxplayers;
+static int gameoptions_cursor_table[] = {40, 56, 64, 72, 80, 88, 96, 104, 120, 128, 152, 160};
+#define	NUM_GAMEOPTIONS	12
+int		gameoptions_cursor;
+
+static char goptions_levelname[MAX_QPATH];
+static char goptions_levelhint[MAX_QPATH];
+static qboolean goptions_levelvalid;
+static menu_textfield_t goptions_level_field;
+
+static void M_GameOptions_UpdateLevelHint(void);
 
 void M_Menu_GameOptions_f (void)
 {
@@ -13628,12 +13640,129 @@ void M_Menu_GameOptions_f (void)
 		maxplayers = svs.maxclients;
 	if (maxplayers < 2)
 		maxplayers = 16;
+	M_TextField_Init(&goptions_level_field, goptions_levelname, MAX_QPATH - 1, false);
+	M_GameOptions_UpdateLevelHint();
 }
 
 
-int gameoptions_cursor_table[] = {40, 56, 64, 72, 80, 88, 96, 104, 120, 128, 152};
-#define	NUM_GAMEOPTIONS	11
-int		gameoptions_cursor;
+static menu_textfield_t *M_GameOptions_GetFieldForCursor(void)
+{
+	if (gameoptions_cursor == 11)
+		return &goptions_level_field;
+	return NULL;
+}
+
+static void M_GameOptions_ClearTextSelections(void)
+{
+	M_TextField_ClearSelection(&goptions_level_field);
+}
+
+static void M_GameOptions_ClearTypedLevel(void)
+{
+	goptions_levelname[0] = '\0';
+	goptions_levelhint[0] = '\0';
+	goptions_levelvalid = false;
+	goptions_level_field.cursor = 0;
+	goptions_level_field.sel_start = -1;
+}
+
+/*
+============
+M_GameOptions_UpdateLevelHint
+
+Scans extralevels for a map matching the typed input and updates hint text.
+============
+*/
+static void M_GameOptions_UpdateLevelHint(void)
+{
+	filelist_item_t *level;
+	int len = (int)strlen(goptions_levelname);
+
+	goptions_levelhint[0] = '\0';
+	goptions_levelvalid = false;
+
+	if (len <= 0)
+		return;
+
+	for (level = extralevels; level; level = level->next)
+	{
+		if (!q_strncasecmp(level->name, goptions_levelname, len))
+		{
+			if (!goptions_levelhint[0])
+				q_strlcpy(goptions_levelhint, level->name + len, sizeof(goptions_levelhint));
+
+			if (!q_strcasecmp(level->name, goptions_levelname))
+			{
+				/* Exact map name typed: valid and no hint needed. */
+				goptions_levelvalid = true;
+				goptions_levelhint[0] = '\0';
+				return;
+			}
+		}
+	}
+}
+
+/*
+============
+M_GameOptions_IsValidLevel
+
+Returns true if goptions_levelname exactly matches a map in extralevels.
+============
+*/
+static qboolean M_GameOptions_IsValidLevel(void)
+{
+	return goptions_levelvalid;
+}
+
+static void M_GameOptions_AcceptLevelHint(void)
+{
+	if (!goptions_levelhint[0])
+		return;
+
+	/* Only complete when the caret is at the end of the field text. */
+	if (goptions_level_field.cursor != (int)strlen(goptions_levelname))
+		return;
+
+	q_strlcat(goptions_levelname, goptions_levelhint, sizeof(goptions_levelname));
+	goptions_levelhint[0] = '\0';
+	goptions_level_field.cursor = (int)strlen(goptions_levelname);
+	goptions_level_field.sel_start = -1;
+	M_TextField_ClampCursor(&goptions_level_field);
+	M_GameOptions_UpdateLevelHint();
+}
+
+/*
+============
+M_GameOptions_CheckLeave
+
+Called when leaving Enter Level; validates and resolves priority with Select Level.
+============
+*/
+static void M_GameOptions_CheckLeave(void)
+{
+	if (!goptions_levelname[0])
+	{
+		goptions_levelhint[0] = '\0';
+		M_TextField_ClearSelection(&goptions_level_field);
+		return;
+	}
+
+	M_GameOptions_AcceptLevelHint();
+
+	if (M_GameOptions_IsValidLevel())
+	{
+		/* Valid typed map takes priority over Select Level. */
+		m_skill_mapname[0] = '\0';
+	}
+	else
+	{
+		/* Invalid input is cleared when leaving the field. */
+		M_GameOptions_ClearTypedLevel();
+	}
+
+	M_TextField_ClearSelection(&goptions_level_field);
+	M_GameOptions_UpdateLevelHint();
+}
 
 qboolean HasBots(void) // woods -- check if deathmatch needs difficulty #botdetect
 {
@@ -13705,6 +13834,8 @@ void M_GameOptions_Draw (void)
 {
 	qpic_t	*p;
 	int y = 40;
+
+	M_TextField_CheckMouseRelease();
 
 	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
 	p = Draw_CachePic ("gfx/p_multi.lmp");
@@ -13810,7 +13941,7 @@ void M_GameOptions_Draw (void)
 	if (hipnotic)
 	{
 		M_Print (160, y, hipnoticlevels[hipnoticepisodes[startepisode].firstLevel + startlevel].description);
-		if (m_skill_mapname[0])  // Custom map selected - show faded level name
+		if (m_skill_mapname[0] || (goptions_levelname[0] && M_GameOptions_IsValidLevel()))  // Custom map selected - show faded level name
 			M_PrintRGBA(160, y + 8, hipnoticlevels[hipnoticepisodes[startepisode].firstLevel + startlevel].name,
 				CL_PLColours_Parse("0xffffff"), 0.5, false);
 		else  // No custom map - show normal level name
@@ -13820,7 +13951,7 @@ void M_GameOptions_Draw (void)
 	else if (rogue)
 	{
 		M_Print (160, y, roguelevels[rogueepisodes[startepisode].firstLevel + startlevel].description);
-		if (m_skill_mapname[0])  // Custom map selected - show faded level name
+		if (m_skill_mapname[0] || (goptions_levelname[0] && M_GameOptions_IsValidLevel()))  // Custom map selected - show faded level name
 			M_PrintRGBA(160, y+8, roguelevels[rogueepisodes[startepisode].firstLevel + startlevel].name,
 				CL_PLColours_Parse("0xffffff"), 0.5, false);
 		else  // No custom map - show normal level name
@@ -13829,19 +13960,37 @@ void M_GameOptions_Draw (void)
 	else
 	{
 		M_Print (160, y, levels[episodes[startepisode].firstLevel + startlevel].description);
-		if (m_skill_mapname[0])  // Custom map selected - show faded level name
+		if (m_skill_mapname[0] || (goptions_levelname[0] && M_GameOptions_IsValidLevel()))  // Custom map selected - show faded level name
 			M_PrintRGBA(160, y+8, levels[episodes[startepisode].firstLevel + startlevel].name,
 				CL_PLColours_Parse("0xffffff"), 0.5, false);
 		else  // No custom map - show normal level name
 			M_PrintWhite(160, y+8, levels[episodes[startepisode].firstLevel + startlevel].name);
 	}
 	y +=24;
-	// Add new option
-	M_Print(0, y, "     Custom Level");
+	M_Print(0, y, "    Select Level");
 	if (m_skill_mapname[0])
 		M_PrintWhite(160, y, m_skill_mapname);
 	else
 		M_Print(160, y, "...");
+	y += 8;
+
+	M_Print(0, y, "     Enter Level");
+	M_TextField_DrawHighlight(&goptions_level_field, 160, y);
+	if (goptions_levelname[0])
+		M_PrintWhite(160, y, goptions_levelname);
+	else if (gameoptions_cursor != 11)
+		M_Print(160, y, "...");
+
+	if (goptions_levelhint[0] &&
+		gameoptions_cursor == 11 &&
+		goptions_level_field.cursor == (int)strlen(goptions_levelname))
+	{
+		int hint_x = 160 + (int)strlen(goptions_levelname) * 8;
+		M_PrintRGBA(hint_x, y, goptions_levelhint, CL_PLColours_Parse("0xffffff"), 0.5f, true);
+	}
+
+	if (gameoptions_cursor == 11)
+		M_TextField_DrawCursor(&goptions_level_field, 160, y);
 	y += 8;
 
 // line cursor
@@ -13903,6 +14052,7 @@ void M_NetStart_Change (int dir)
 
 	case 8:
 		m_skill_mapname[0] = 0;
+		M_GameOptions_ClearTypedLevel();
 		startepisode += dir;
 	//MED 01/06/97 added hipnotic count
 		if (hipnotic)
@@ -13927,6 +14077,7 @@ void M_NetStart_Change (int dir)
 
 	case 9:
 		m_skill_mapname[0] = 0;
+		M_GameOptions_ClearTypedLevel();
 		startlevel += dir;
 	//MED 01/06/97 added hipnotic episodes
 		if (hipnotic)
@@ -13944,15 +14095,25 @@ void M_NetStart_Change (int dir)
 			startlevel = 0;
 		break;
 
-	case 10: // Use Custom Map option
+	case 10: // Select Level option - open maps menu
 		maps_from_gameoptions = true;
 		M_Menu_Maps_f();
+		break;
+
+	case 11: // Enter Level field - left/right handled by textfield
 		break;
 	}
 }
 
 void M_GameOptions_Key (int key)
 {
+	menu_textfield_t *active_field = M_GameOptions_GetFieldForCursor();
+	if (active_field && M_TextField_Key(active_field, key))
+	{
+		M_GameOptions_UpdateLevelHint();
+		return;
+	}
+
 	switch (key)
 	{
 	case K_ESCAPE:
@@ -13964,6 +14125,9 @@ void M_GameOptions_Key (int key)
 
 	case K_UPARROW:
 		S_LocalSound ("misc/menu1.wav");
+		if (gameoptions_cursor == 11 && goptions_levelname[0])
+			M_GameOptions_CheckLeave();
+		M_GameOptions_ClearTextSelections();
 		gameoptions_cursor--;
 		if (gameoptions_cursor < 0)
 			gameoptions_cursor = NUM_GAMEOPTIONS-1;
@@ -13971,6 +14135,9 @@ void M_GameOptions_Key (int key)
 
 	case K_DOWNARROW:
 		S_LocalSound ("misc/menu1.wav");
+		if (gameoptions_cursor == 11 && goptions_levelname[0])
+			M_GameOptions_CheckLeave();
+		M_GameOptions_ClearTextSelections();
 		gameoptions_cursor++;
 		if (gameoptions_cursor >= NUM_GAMEOPTIONS)
 			gameoptions_cursor = 0;
@@ -13979,7 +14146,7 @@ void M_GameOptions_Key (int key)
 	case K_LEFTARROW:
 	case K_MWHEELDOWN:
 	//case K_MOUSE2:
-		if (gameoptions_cursor == 0)
+		if (gameoptions_cursor == 0 || gameoptions_cursor == 11)
 			break;
 		S_LocalSound ("misc/menu3.wav");
 		M_NetStart_Change (-1);
@@ -13987,7 +14154,7 @@ void M_GameOptions_Key (int key)
 
 	case K_RIGHTARROW:
 	case K_MWHEELUP:
-		if (gameoptions_cursor == 0)
+		if (gameoptions_cursor == 0 || gameoptions_cursor == 11)
 			break;
 		S_LocalSound ("misc/menu3.wav");
 		M_NetStart_Change (1);
@@ -13999,12 +14166,42 @@ void M_GameOptions_Key (int key)
 		{
 			m_skill_mapname[0] = 0;
 		}
+		else if (gameoptions_cursor == 11)
+		{
+			M_GameOptions_UpdateLevelHint();
+		}
+		break;
+
+	case K_TAB:
+		if (gameoptions_cursor == 11 && goptions_levelhint[0])
+		{
+			M_GameOptions_AcceptLevelHint();
+			m_skill_mapname[0] = '\0';
+			S_LocalSound("misc/menu2.wav");
+		}
 		break;
 
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	case K_MOUSE1: // woods #mousemenu
+		if (key == K_MOUSE1 && gameoptions_cursor == 11)
+		{
+			if (M_TextField_MouseInRow(m_mousey, gameoptions_cursor_table[11]))
+				M_TextField_MouseClick(&goptions_level_field, m_mousex, 160);
+			return;
+		}
+
+		if (gameoptions_cursor == 11)
+		{
+			M_GameOptions_CheckLeave();
+			if (goptions_levelname[0] && M_GameOptions_IsValidLevel())
+				S_LocalSound("misc/menu2.wav");
+			else
+				S_LocalSound("misc/menu3.wav");
+			return;
+		}
+
 		S_LocalSound ("misc/menu2.wav");
 		if (gameoptions_cursor == 0)
 		{
@@ -14014,7 +14211,16 @@ void M_GameOptions_Key (int key)
 			Cbuf_AddText ( va ("maxplayers %u\n", maxplayers) );
 			SCR_BeginLoadingPlaque ();
 
-			if (m_skill_mapname[0])  // If custom map is selected
+			if (goptions_levelname[0])
+			{
+				M_GameOptions_CheckLeave();
+			}
+
+			if (goptions_levelname[0] && M_GameOptions_IsValidLevel())  // Enter Level has priority
+			{
+				Cbuf_AddText(va("map %s\n", goptions_levelname));
+			}
+			else if (m_skill_mapname[0])  // Fallback to Select Level
 			{
 				Cbuf_AddText(va("map %s\n", m_skill_mapname));
 			}
@@ -14038,7 +14244,34 @@ void M_GameOptions_Key (int key)
 
 void M_GameOptions_Mousemove(int cx, int cy) // woods #mousemenu
 {
+	int old_cursor;
+
+	if (textfield_mouse_dragging && textfield_drag_field == &goptions_level_field)
+	{
+		M_TextField_MouseDrag(cx);
+		return;
+	}
+
+	old_cursor = gameoptions_cursor;
 	M_UpdateCursorWithTable(cy, gameoptions_cursor_table, NUM_GAMEOPTIONS, &gameoptions_cursor);
+	if (gameoptions_cursor != old_cursor)
+	{
+		if (old_cursor == 11 && goptions_levelname[0])
+			M_GameOptions_CheckLeave();
+		M_GameOptions_ClearTextSelections();
+	}
+}
+
+void M_GameOptions_Char(int key)
+{
+	menu_textfield_t *active_field = M_GameOptions_GetFieldForCursor();
+	if (active_field && M_TextField_Char(active_field, key))
+		M_GameOptions_UpdateLevelHint();
+}
+
+qboolean M_GameOptions_TextEntry(void)
+{
+	return (gameoptions_cursor == 11);
 }
 
 /*
@@ -17422,6 +17655,9 @@ void M_Charinput (int key)
 	case m_resetconfig:
 		M_ResetConfig_Char(key);
 		return;
+	case m_gameoptions:
+		M_GameOptions_Char(key);
+		return;
 	default:
 		return;
 	}
@@ -17442,6 +17678,8 @@ qboolean M_TextEntry (void)
 		return M_LanConfig_TextEntry ();
 	case m_resetconfig:
 		return M_ResetConfig_TextEntry();
+	case m_gameoptions:
+		return M_GameOptions_TextEntry();
 	default:
 		return false;
 	}
