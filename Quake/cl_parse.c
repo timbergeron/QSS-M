@@ -1829,7 +1829,9 @@ static void CL_ParseUpdate (int bits)
 	else
 		ent->alpha = ent->baseline.alpha;
 	//johnfitz
-	
+
+	ent->netstate.modelindex = (unsigned short)modnum; // woods #r2g
+
 	//johnfitz -- moved here from above
 	model = cl.model_precache[modnum];
 	if (model != ent->model)
