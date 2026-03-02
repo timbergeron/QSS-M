@@ -12236,10 +12236,11 @@ void M_LanConfig_Draw (void)
 		startJoin = "Join Game";
 
 	M_PrintWhite (basex, 32, va ("%s", startJoin));
-	basex += 8;
+	basex += 0;
 
 	y = 52;
 	M_Print(basex, y, "Address:");
+	const int address_x = basex + (9 * 8);
 
 	if (!addresses_cached) {
 		cached_numaddresses = NET_ListAddresses(cached_addresses, sizeof(cached_addresses) / sizeof(cached_addresses[0]));
@@ -12248,47 +12249,47 @@ void M_LanConfig_Draw (void)
 
 	if (!cached_numaddresses)
 	{
-		M_Print(basex + (9 * 8) + 10, y, "NONE KNOWN");
+		M_Print(address_x, y, "NONE KNOWN");
 		y += 8;
 	}
 	else
 	{
 		// Store clickable areas for IPs and their labels
 		// Local IP
-		ip_clickables[0].label_x = basex + (9 * 8) + 10;
+		ip_clickables[0].label_x = address_x;
 		ip_clickables[0].label_width = 7 * 8;
-		ip_clickables[0].x = basex + (9 * 8) + 10 + 7 * 8;
+		ip_clickables[0].x = address_x + 7 * 8;
 		ip_clickables[0].y = y;
 		ip_clickables[0].width = strlen(cached_addresses[0]) * 8;
 		strncpy(ip_clickables[0].text, cached_addresses[0], sizeof(ip_clickables[0].text));
 
 		if (cl_contentfilter.value && !ip_temporarily_visible[0]) // woods #contentfilter
 		{
-			M_Print(basex + (9 * 8) + 10, y, "local: click to view");
+			M_Print(address_x, y, "local: click to view");
 			ip_clickables[0].width = 13 * 8; // Width of "click to view" text
 		}
 		else 
 		{
-		M_Print(basex + (9 * 8) + 10, y, va("local: %s", cached_addresses[0]));
+		M_Print(address_x, y, va("local: %s", cached_addresses[0]));
 		}
 		y += 8;
 
 		// External IP
-		ip_clickables[1].label_x = basex + (9 * 8) + 10;
+		ip_clickables[1].label_x = address_x;
 		ip_clickables[1].label_width = 7 * 8;
-		ip_clickables[1].x = basex + (9 * 8) + 10 + 7 * 8;
+		ip_clickables[1].x = address_x + 7 * 8;
 		ip_clickables[1].y = y;
 		ip_clickables[1].width = strlen(my_public_ip) * 8;
 		strncpy(ip_clickables[1].text, my_public_ip, sizeof(ip_clickables[1].text));
 
 		if (cl_contentfilter.value && !ip_temporarily_visible[1]) // woods #contentfilter
 		{
-			M_Print(basex + (9 * 8) + 10, y, "ext:   click to view");
+			M_Print(address_x, y, "ext:   click to view");
 			ip_clickables[1].width = 13 * 8; // Width of "click to view" text
 		}
 		else 
 		{
-		M_Print(basex + (9 * 8) + 10, y, va("ext:   %s", my_public_ip));
+		M_Print(address_x, y, va("ext:   %s", my_public_ip));
 		}
 		y += 8;
 	}
