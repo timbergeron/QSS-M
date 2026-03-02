@@ -4086,6 +4086,8 @@ void Con_DrawNotify (void)
 
 	GL_SetCanvas (CANVAS_CONSOLE); //johnfitz
 	v = vid.conheight + con_notifyposition.value; // woods #notifyposition
+	if (realtime < scr_volume_display_time)
+		v += 24; // keep notify lines below the temporary volume widget
 
 	for (i = con_current - maxlines + 1; i <= con_current; i++) // woods from proquake 493 #notifylines
 	{

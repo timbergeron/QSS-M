@@ -2080,9 +2080,8 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 				Cmd_ExecuteString("inc volume .02\n", src_command);
 			}
 			else
-				sfxvolume.value = 1.0; // Set to exactly 100% if we would exceed it
-			
-			Con_Printf("volume: %d%%\n", (int)(sfxvolume.value * 100 + 0.5));
+				Cvar_SetValueQuick(&sfxvolume, 1.0f); // Set to exactly 100% if we would exceed it
+
 			return;
 		}
 
@@ -2094,9 +2093,8 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 				Cmd_ExecuteString("inc volume -.02\n", src_command);
 			}
 			else
-				sfxvolume.value = 0.0; // Set to exactly 0% if we would go below it
+				Cvar_SetValueQuick(&sfxvolume, 0.0f); // Set to exactly 0% if we would go below it
 
-			Con_Printf("volume: %d%%\n", (int)(sfxvolume.value * 100 + 0.5));
 			return;
 		}
 

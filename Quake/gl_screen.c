@@ -84,6 +84,7 @@ char mute[2]; // woods for mute to memory #usermute
 qboolean pausedprint; // woods #qssmhints
 qboolean timerstarted; // woods #qssmhints
 
+double		scr_volume_display_time = 0; // woods
 float		scr_con_current;
 float		scr_conlines;		// lines of console to display
 
@@ -5747,6 +5748,65 @@ void SCR_TileClear (void)
 	}
 }
 
+#define SLIDER_RANGE 10
+
+static void SCR_DrawVolumeSlider (void)
+{
+	int x, y;
+	int i;
+	int text_x;
+	int text_chars;
+	int panel_x, panel_y, panel_w, panel_h;
+	float range;
+	float value;
+	char buffer[6];
+	static qboolean panel_color_initialized = false;
+	static plcolour_t panel_color;
+
+	if (!panel_color_initialized)
+	{
+		panel_color = CL_PLColours_Parse("0x000000");
+		panel_color_initialized = true;
+	}
+
+	GL_SetCanvas (CANVAS_CONSOLE);
+	glColor4f (1.0f, 1.0f, 1.0f, 1.0f);
+
+	/* anchor in top-left console space so it tracks scr_conscale */
+	x = 20;
+	y = vid.conheight + 8;
+	range = CLAMP(0.0f, sfxvolume.value, 1.0f);
+	value = 100.0f * range;
+
+	q_snprintf(buffer, sizeof(buffer), "%.0f%%", value);
+	text_x = x + (SLIDER_RANGE + 2) * 8;
+	text_chars = (int)strlen(buffer);
+
+	panel_x = x - 14;
+	panel_y = y - 4;
+	panel_w = (text_x + text_chars * 8 + 6) - panel_x;
+	panel_h = 16;
+
+	/* rounded translucent plate behind the volume indicator */
+	Draw_Fill_Plus_Radius(panel_x, panel_y, panel_w, panel_h, panel_color, 0.45f, true, DRAW_CORNERS_ALL, 5.0f);
+
+	Draw_Character(x - 8, y, 128);
+	for (i = 0; i < SLIDER_RANGE; i++)
+		Draw_Character(x + i * 8, y, 129);
+	Draw_Character(x + i * 8, y, 130);
+	Draw_Character(x + (int)((SLIDER_RANGE - 1) * range) * 8, y, 131);
+
+	if (range <= 0.0f)
+	{
+		for (i = 0; buffer[i]; i++)
+			buffer[i] += 128;
+	}
+
+	Draw_String(text_x, y, buffer);
+
+	GL_SetCanvas (CANVAS_DEFAULT);
+}
+
 /*
 ==================
 SCR_UpdateScreen
@@ -5914,6 +5974,8 @@ void SCR_UpdateScreen (void)
 		TexturePointer_Draw (); // woods #texturepointer
 		SCR_DrawScopeOverlay (); // woods #scope
 		SCR_DrawConsole ();
+		if (realtime < scr_volume_display_time && key_dest != key_console)
+			SCR_DrawVolumeSlider ();
 		M_Draw ();
 	}
 

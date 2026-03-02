@@ -137,6 +137,7 @@ static void S_SoundInfo_f (void)
 
 static void SND_Callback_sfxvolume (cvar_t *var)
 {
+	scr_volume_display_time = realtime + 1.0;
 	SND_InitScaletable ();
 	if (!strcmp(mute, "y")) // woods #usermute #mute
 		Sound_Toggle_Mute_f();
