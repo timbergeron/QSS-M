@@ -351,6 +351,17 @@ static void R_Player_Xray_Completion_f (cvar_t* cvar, const char* partial)
 	Con_AddToTabList("color=pcolor", partial, "color mode", NULL);
 	Con_AddToTabList("colormode=pcolor", partial, "color mode", NULL);
 
+	Con_AddToTabList("gametype=1", partial, "1v1 only", NULL);
+	Con_AddToTabList("gametype=2", partial, "up to 2v2", NULL);
+	Con_AddToTabList("gametype=3", partial, "up to 3v3", NULL);
+	Con_AddToTabList("gametype=4", partial, "up to 4v4", NULL);
+	Con_AddToTabList("gametype=5", partial, "5v5+ (no cap)", NULL);
+	Con_AddToTabList("1v1", partial, "match size", NULL);
+	Con_AddToTabList("2v2", partial, "match size", NULL);
+	Con_AddToTabList("3v3", partial, "match size", NULL);
+	Con_AddToTabList("4v4", partial, "match size", NULL);
+	Con_AddToTabList("5v5", partial, "match size (5+)", NULL);
+
 	Con_AddToTabList("enemycolor=0xFF0000", partial, "enemy outline color", NULL);
 	Con_AddToTabList("teamcolor=0x00B7FF", partial, "team outline color", NULL);
 }

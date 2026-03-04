@@ -496,10 +496,12 @@ void GLAlias_CreateShaders (void)
 R_ParseOutlineXrayParams -- woods #routline
 
 r_player_xray format:
-	"<hexcolor> <alpha> <distance> [targets] [pcolor] [enemycolor=0xRRGGBB] [teamcolor=0xRRGGBB]"
+	"<hexcolor> <alpha> <distance> [targets] [pcolor] [gametype=1..5] [enemycolor=0xRRGGBB] [teamcolor=0xRRGGBB]"
 	enemycolor/teamcolor defaults to gl_enemycolor/gl_teamcolor when omitted.
 	"pcolor" uses each target player's own shirt/pants colors and overrides
 	enemycolor/teamcolor + gl_enemycolor/gl_teamcolor.
+	"gametype" gates xray to balanced team match sizes:
+	1=1v1 only, 2=up to 2v2, ... 4=up to 4v4, 5=5v5+ (no upper cap).
 
 Examples:
 	"0xFF0000 0.8 2048"
@@ -508,6 +510,8 @@ Examples:
 	"0x00FF00 0.5 2048 enemy"
 	"0x00FF00 0.5 2048 team"
 	"0x00FF00 0.5 2048 both"
+	"0xFF0000 0.8 4096 both gametype=1"
+	"0xFF0000 0.8 4096 both gametype=5"
 	"pcolor 3072 both"
 	"0xFF0000 0.6 3072 both enemycolor=0xFF0000 teamcolor=0x00B7FF"
 	"0"
@@ -584,6 +588,45 @@ static int R_ParseOutlineXrayColorModeToken(const char *token)
 	return -1;
 }
 
+static int R_ParseOutlineXrayMatchSizeToken(const char *token)
+{
+	const char *value = token;
+	const char *eq = strchr(token, '=');
+	size_t keylen;
+	qboolean keyed = false;
+	char *endptr;
+	long parsed;
+
+	if (eq && eq[1])
+	{
+		keylen = (size_t)(eq - token);
+		if (!(keylen == 8 && !q_strncasecmp(token, "gametype", keylen)))
+			return -1;
+		value = eq + 1;
+		keyed = true;
+	}
+
+	if (!q_strcasecmp(value, "1v1") || !q_strcasecmp(value, "1on1"))
+		return 1;
+	if (!q_strcasecmp(value, "2v2") || !q_strcasecmp(value, "2on2"))
+		return 2;
+	if (!q_strcasecmp(value, "3v3") || !q_strcasecmp(value, "3on3"))
+		return 3;
+	if (!q_strcasecmp(value, "4v4") || !q_strcasecmp(value, "4on4"))
+		return 4;
+	if (!q_strcasecmp(value, "5v5") || !q_strcasecmp(value, "5on5"))
+		return 5;
+
+	if (!keyed)
+		return -1;
+
+	parsed = strtol(value, &endptr, 10);
+	if (endptr == value || *endptr != '\0' || parsed < 1 || parsed > 5)
+		return -1;
+
+	return (int)parsed;
+}
+
 static qboolean R_ParseOutlineXrayHexColorToken(const char *token, vec3_t out_color)
 {
 	unsigned int rgb;
@@ -647,7 +690,52 @@ static void R_GetPlayerMatchColor(const scoreboard_t *sb, vec3_t out_color)
 	out_color[2] = pants_rgb[2] / 255.0f;
 }
 
-static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t team_color, float *alpha, float *dist, int *target_mode, int *color_mode)
+static int R_DetectBalancedTeamMatchSize(void)
+{
+	int team_counts[14];
+	int color;
+	int active_teams = 0;
+	int team_size = 0;
+	int i;
+
+	if (!cl.scores || cl.maxclients <= 0)
+		return 0;
+
+	memset(team_counts, 0, sizeof(team_counts));
+
+	for (i = 0; i < cl.maxclients; ++i)
+	{
+		scoreboard_t *s = &cl.scores[i];
+
+		if (!s->name[0] || s->spectator || s->frags == -99)
+			continue;
+
+		color = s->pants.basic;
+		if (color < 1 || color > 13)
+			continue;
+
+		team_counts[color]++;
+	}
+
+	for (color = 1; color <= 13; ++color)
+	{
+		if (team_counts[color] <= 0)
+			continue;
+
+		++active_teams;
+		if (team_size == 0)
+			team_size = team_counts[color];
+		else if (team_counts[color] != team_size)
+			return 0;
+	}
+
+	if (active_teams != 2)
+		return 0;
+
+	return team_size;
+}
+
+static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t team_color, float *alpha, float *dist, int *target_mode, int *color_mode, int *max_match_size)
 {
 	const char *text = r_player_xray.string;
 	qboolean saw_enemy_color = false;
@@ -669,6 +757,8 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 		*target_mode = XRAY_TARGET_BOTH;
 	if (color_mode)
 		*color_mode = XRAY_COLOR_SPLIT;
+	if (max_match_size)
+		*max_match_size = 0;
 
 	if (!text || !*text)
 		return;
@@ -677,6 +767,7 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 	{
 		int parsed_target_mode;
 		int parsed_color_mode;
+		int parsed_match_size;
 		char *endptr;
 		float value;
 
@@ -706,6 +797,14 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 		{
 			if (color_mode)
 				*color_mode = parsed_color_mode;
+			continue;
+		}
+
+		parsed_match_size = R_ParseOutlineXrayMatchSizeToken(token);
+		if (parsed_match_size >= 0)
+		{
+			if (max_match_size)
+				*max_match_size = parsed_match_size;
 			continue;
 		}
 
@@ -765,6 +864,7 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 	int playernum;
 	int target_mode;
 	int color_mode;
+	int max_match_size;
 	vec3_t parsedColor;
 	vec3_t parsedEnemyColor;
 	vec3_t parsedTeamColor;
@@ -772,6 +872,7 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 	float dist;
 	vec3_t delta;
 	float distance_to_view;
+	int detected_match_size;
 	qboolean can_classify_team = false;
 	qboolean is_observer_slot;
 	qboolean is_same_team;
@@ -808,9 +909,16 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 			(star_obs[0] && q_strcasecmp(star_obs, "off")));
 	}
 
-	R_ParseOutlineXrayParams(parsedColor, parsedEnemyColor, parsedTeamColor, &parsedAlpha, &dist, &target_mode, &color_mode);
+	R_ParseOutlineXrayParams(parsedColor, parsedEnemyColor, parsedTeamColor, &parsedAlpha, &dist, &target_mode, &color_mode, &max_match_size);
 	if (dist <= 0.0f)
 		return false;
+
+	if (max_match_size > 0 && max_match_size < 5)
+	{
+		detected_match_size = R_DetectBalancedTeamMatchSize();
+		if (detected_match_size <= 0 || detected_match_size > max_match_size)
+			return false;
+	}
 
 	if (!is_observer_slot)
 		return false;
