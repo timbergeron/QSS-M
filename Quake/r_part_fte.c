@@ -146,6 +146,7 @@ typedef struct particle_s
 {
 	struct particle_s	*next;
 	float		die;
+	float		spawn;
 
 // driver-usable fields
 	vec3_t		org;
@@ -168,6 +169,7 @@ typedef struct clippeddecal_s
 {
 	struct clippeddecal_s	*next;
 	float		die;
+	float		spawn;
 
 	int entity;		//>0 is a lerpentity, <0 is a csqc ent. 0 is world. woot.
 	qmodel_t *model;	//just for paranoia
@@ -4535,6 +4537,7 @@ static void PScript_AddDecals(void *vctx, vec3_t *points, size_t numtris)
 		d->entity = ctx->entity;
 		d->model = ctx->model;
 		d->die = ptype->randdie*frandom();
+		d->spawn = particletime;
 
 		if (ptype->die)
 			d->rgba[3] = ptype->alpha + d->die*ptype->alphachange;
@@ -5171,6 +5174,7 @@ int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typ
 			ptype->particles = p;
 
 			p->die = ptype->randdie*frandom();
+			p->spawn = particletime;
 			p->scale = ptype->scale+ptype->scalerand*frandom();
 			if (ptype->die)
 				p->rgba[3] = ptype->alpha+p->die*ptype->alphachange;
@@ -6053,6 +6057,7 @@ static void PScript_ParticleTrailSpawn (vec3_t startpos, vec3_t end, part_type_t
 		ptype->particles = p;
 
 		p->die = ptype->randdie*frandom();
+		p->spawn = particletime;
 		p->scale = ptype->scale+ptype->scalerand*frandom();
 		if (ptype->die)
 			p->rgba[3] = ptype->alpha+p->die*ptype->alphachange;
@@ -6932,6 +6937,16 @@ static void R_AddTexturedParticle(scenetris_t *t, particle_t *p, plooks_t *type)
 	t->numidx += 6;
 }
 
+static qboolean PScript_IsParticleDead(const particle_t *p)
+{
+	return p->die < particletime || (cls.demoplayback && cls.demospeed < 0.f && p->spawn > cl.mtime[0]);
+}
+
+static qboolean PScript_IsDecalDead(const clippeddecal_t *d)
+{
+	return d->die < particletime || (cls.demoplayback && cls.demospeed < 0.f && d->spawn > cl.mtime[0]);
+}
+
 static void PScript_DrawParticleTypes (float pframetime)
 {
 #if UNSUPPORTED
@@ -7062,7 +7077,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 			for ( ;; )
 			{
 				dkill = type->clippeddecals;
-				if (dkill && dkill->die < particletime)
+				if (dkill && PScript_IsDecalDead(dkill))
 				{
 					type->clippeddecals = dkill->next;
 					dkill->next = free_decals;
@@ -7076,7 +7091,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 				for ( ;; )
 				{
 					dkill = d->next;
-					if (dkill && dkill->die < particletime)
+					if (dkill && PScript_IsDecalDead(dkill))
 					{
 						d->next = dkill->next;
 						dkill->next = free_decals;
@@ -7310,7 +7325,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 			for ( ;; )
 			{
 				kill = type->particles;
-				if (kill && kill->die < particletime)
+				if (kill && PScript_IsParticleDead(kill))
 				{
 					PScript_DelinkTrailstate(&kill->state.trailstate);
 					type->particles = kill->next;
@@ -7328,7 +7343,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 			for ( ;; )
 			{
 				kill = type->particles;
-				if (kill && kill->die < particletime)
+				if (kill && PScript_IsParticleDead(kill))
 				{
 					type->particles = kill->next;
 					kill->next = kill_list;
@@ -7353,7 +7368,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 				for ( ;; )
 				{
 					kill = p->next;
-					if (kill && kill->die < particletime)
+					if (kill && PScript_IsParticleDead(kill))
 					{
 						PScript_DelinkTrailstate(&kill->state.trailstate);
 						p->next = kill->next;
@@ -7371,7 +7386,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 				for ( ;; )
 				{
 					kill = p->next;
-					if (kill && kill->die < particletime)
+					if (kill && PScript_IsParticleDead(kill))
 					{
 						p->next = kill->next;
 						kill->next = kill_list;
@@ -7631,7 +7646,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 		for ( ;; )
 		{
 			bkill = type->beams;
-			if (bkill && (bkill->flags & BS_DEAD || bkill->p->die < particletime) && !(bkill->flags & BS_LASTSEG))
+			if (bkill && (bkill->flags & BS_DEAD || PScript_IsParticleDead(bkill->p)) && !(bkill->flags & BS_LASTSEG))
 			{
 				type->beams = bkill->next;
 				bkill->next = free_beams;
@@ -7687,19 +7702,19 @@ static void PScript_DrawParticleTypes (float pframetime)
 							}
 						}
 
-						if (b->p->die < particletime)
+						if (PScript_IsParticleDead(b->p))
 							b->flags |= BS_DEAD;
 					}
 				}
 				else
 				{
-					if (b->p->die < particletime) // end of the list check
+					if (PScript_IsParticleDead(b->p)) // end of the list check
 						b->flags |= BS_DEAD;
 
 					break;
 				}
 
-				if (b->p->die < particletime)
+				if (PScript_IsParticleDead(b->p))
 					b->flags |= BS_DEAD;
 
 				b = b->next;
