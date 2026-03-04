@@ -4251,6 +4251,9 @@ static void Con_DrawTypingStatus(void) // woods #typing...
 	if (!con_typing.value)
 		return;
 
+	if (cls.demoplayback)
+		return;
+
 	if (cls.state != ca_connected || cl.maxclients <= 0)
 		return;
 
