@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 
 static void CL_FinishTimeDemo (void);
+entity_t *CL_EntityNum (int num);
 
 char		demoplaying[MAX_OSPATH]; // woods for window title
 char		last_demo[MAX_OSPATH]; // woods #lastdemo
@@ -45,7 +46,7 @@ read from the demo file.
 typedef struct
 {
 	long			fileofs;
-	unsigned short	datasize;
+	size_t			datasize;
 	byte			intermission;
 	byte			forceunderwater;
 } demoframe_t;
@@ -65,7 +66,33 @@ typedef enum
 	DFE_LIGHTSTYLE,
 	DFE_CSHIFT,
 	DFE_SOUND,
+	DFE_STAT,
+	DFE_STATSTR,
+	DFE_ENTITY,
 } framevent_t;
+
+typedef struct
+{
+	int				int_value;
+	float			float_value;
+} demonumericstat_t;
+
+typedef struct
+{
+	int				update_type;
+	entity_state_t	netstate;
+	double			msgtime;
+	double			spawntime;
+	vec3_t			msg_origins[2];
+	vec3_t			msg_angles[2];
+	vec3_t			origin;
+	vec3_t			angles;
+	int				frame;
+	int				effects;
+	int				skinnum;
+	byte			lerpflags;
+	qboolean		forcelink;
+} demoentitystate_t;
 
 static struct
 {
@@ -78,8 +105,112 @@ static struct
 	{
 		cshift_t	cshift;
 		char		lightstyles[MAX_LIGHTSTYLES][MAX_STYLESTRING];
+		int			stats[MAX_CL_STATS];
+		float		statsf[MAX_CL_STATS];
+		char		*statss[MAX_CL_STATS];
+		size_t		num_entities;
+		demoentitystate_t entity_states[MAX_EDICTS];
 	}				prev;
 }					demo_rewind;
+
+static void CL_DemoRewindFreePrevStatStrings(void)
+{
+	size_t i;
+
+	for (i = 0; i < MAX_CL_STATS; i++)
+	{
+		free(demo_rewind.prev.statss[i]);
+		demo_rewind.prev.statss[i] = NULL;
+	}
+}
+
+static void CL_DemoRewindSetPrevStatString(size_t stat_idx, const char *value)
+{
+	if (demo_rewind.prev.statss[stat_idx] == value)
+		return;
+
+	if (demo_rewind.prev.statss[stat_idx] && value &&
+		strcmp(demo_rewind.prev.statss[stat_idx], value) == 0)
+		return;
+
+	free(demo_rewind.prev.statss[stat_idx]);
+	demo_rewind.prev.statss[stat_idx] = value ? strdup(value) : NULL;
+}
+
+static void CL_DemoRewindSnapshotEntity(demoentitystate_t *dst, const entity_t *src)
+{
+	memset(dst, 0, sizeof(*dst));
+	dst->update_type = src->update_type;
+	dst->netstate = src->netstate;
+	dst->msgtime = src->msgtime;
+	dst->spawntime = src->spawntime;
+	VectorCopy(src->msg_origins[0], dst->msg_origins[0]);
+	VectorCopy(src->msg_origins[1], dst->msg_origins[1]);
+	VectorCopy(src->msg_angles[0], dst->msg_angles[0]);
+	VectorCopy(src->msg_angles[1], dst->msg_angles[1]);
+	VectorCopy(src->origin, dst->origin);
+	VectorCopy(src->angles, dst->angles);
+	dst->frame = src->frame;
+	dst->effects = src->effects;
+	dst->skinnum = src->skinnum;
+	dst->lerpflags = src->lerpflags;
+	dst->forcelink = src->forcelink;
+}
+
+static void CL_DemoRewindApplyEntity(const demoentitystate_t *src, entity_t *ent)
+{
+	ent->update_type = src->update_type;
+	ent->netstate = src->netstate;
+	ent->msgtime = src->msgtime;
+	ent->spawntime = src->spawntime;
+	VectorCopy(src->msg_origins[0], ent->msg_origins[0]);
+	VectorCopy(src->msg_origins[1], ent->msg_origins[1]);
+	VectorCopy(src->msg_angles[0], ent->msg_angles[0]);
+	VectorCopy(src->msg_angles[1], ent->msg_angles[1]);
+	VectorCopy(src->origin, ent->origin);
+	VectorCopy(src->angles, ent->angles);
+	ent->frame = src->frame;
+	ent->effects = src->effects;
+	ent->skinnum = src->skinnum;
+	ent->lerpflags = src->lerpflags;
+	ent->forcelink = src->forcelink;
+	ent->alpha = ent->netstate.alpha;
+	ent->eflags = ent->netstate.eflags;
+
+	if (ent->update_type && ent->netstate.modelindex > 0 && ent->netstate.modelindex < MAX_MODELS)
+		ent->model = cl.model_precache[ent->netstate.modelindex];
+	else
+		ent->model = NULL;
+}
+
+static void CL_DemoRewindApplyNumericStat(int stat, int ival, float fval)
+{
+	if (stat < 0 || stat >= MAX_CL_STATS)
+		return;
+
+	if (stat == STAT_HEALTH)
+	{
+		if (cl.stats[STAT_HEALTH] > 0 && ival <= 0)
+		{
+			cl.cshifts[CSHIFT_DEAD].destcolor[0] = 70;
+			cl.cshifts[CSHIFT_DEAD].destcolor[1] = 0;
+			cl.cshifts[CSHIFT_DEAD].destcolor[2] = 0;
+			cl.cshifts[CSHIFT_DEAD].percent = 0;
+		}
+		else if (cl.stats[STAT_HEALTH] <= 0 && ival > 0)
+		{
+			cl.cshifts[CSHIFT_DEAD].percent = 0;
+		}
+	}
+
+	cl.stats[stat] = ival;
+	cl.statsf[stat] = fval;
+
+	if (stat == STAT_VIEWZOOM)
+		vid.recalc_refdef = true;
+
+	Sbar_Changed();
+}
 
 int demo_target_offset = -1; // woods -- target offset for seeking, -1 when not seeking
 qboolean is_seeking = false; // woods -- flag to indicate seeking status
@@ -252,10 +383,13 @@ static qboolean CL_NextDemoFrame(void)
 		{
 			VEC_CLEAR(demo_rewind.frames);
 			VEC_CLEAR(demo_rewind.frame_events);
+			CL_DemoRewindFreePrevStatStrings();
+			demo_rewind.prev.num_entities = 0;
 		}
 		else
 		{
 			demoframe_t newframe;
+			size_t snap_num_entities;
 
 			memset(&newframe, 0, sizeof(newframe));
 			newframe.fileofs = ftell(cls.demofile);
@@ -267,6 +401,18 @@ static qboolean CL_NextDemoFrame(void)
 			for (i = 0; i < MAX_LIGHTSTYLES; i++)
 				q_strlcpy(demo_rewind.prev.lightstyles[i], cl_lightstyle[i].map, MAX_STYLESTRING);
 			memcpy(&demo_rewind.prev.cshift, &cshift_empty, sizeof(cshift_empty));
+			memcpy(demo_rewind.prev.stats, cl.stats, sizeof(cl.stats));
+			memcpy(demo_rewind.prev.statsf, cl.statsf, sizeof(cl.statsf));
+			for (i = 0; i < MAX_CL_STATS; i++)
+				CL_DemoRewindSetPrevStatString(i, cl.statss[i]);
+
+			snap_num_entities = (size_t)cl.num_entities;
+			if (snap_num_entities > MAX_EDICTS)
+				snap_num_entities = MAX_EDICTS;
+			demo_rewind.prev.num_entities = snap_num_entities;
+
+			for (i = 1; i < snap_num_entities; i++)
+				CL_DemoRewindSnapshotEntity(&demo_rewind.prev.entity_states[i], &cl.entities[i]);
 		}
 		return true;
 	}
@@ -335,6 +481,88 @@ void CL_FinishDemoFrame(void)
 			lastframe->datasize += 3 + len;
 		}
 
+		// Save the previous value for any changed numeric stats
+		for (i = 0; i < MAX_CL_STATS; i++)
+		{
+			demonumericstat_t prevstat;
+
+			if (demo_rewind.prev.stats[i] == cl.stats[i] &&
+				demo_rewind.prev.statsf[i] == cl.statsf[i])
+				continue;
+
+			prevstat.int_value = demo_rewind.prev.stats[i];
+			prevstat.float_value = demo_rewind.prev.statsf[i];
+
+			VEC_PUSH(demo_rewind.frame_events, DFE_STAT);
+			VEC_PUSH(demo_rewind.frame_events, (byte)i);
+			Vec_Append((void**)&demo_rewind.frame_events, 1, &prevstat, sizeof(prevstat));
+			lastframe->datasize += 1 + 1 + sizeof(prevstat);
+
+			demo_rewind.prev.stats[i] = cl.stats[i];
+			demo_rewind.prev.statsf[i] = cl.statsf[i];
+		}
+
+		// Save the previous value for any changed string stats
+		for (i = 0; i < MAX_CL_STATS; i++)
+		{
+			const char *prevstr = demo_rewind.prev.statss[i];
+			const char *curstr = cl.statss[i];
+			size_t strlen_prev;
+			uint32_t strlen_prev32;
+
+			if ((!prevstr && !curstr) ||
+				(prevstr && curstr && strcmp(prevstr, curstr) == 0))
+				continue;
+
+			strlen_prev = prevstr ? strlen(prevstr) : 0;
+			if (strlen_prev > 0xFFFFFFFFu)
+				Sys_Error("CL_FinishDemoFrame: stat string too large");
+			strlen_prev32 = (uint32_t)strlen_prev;
+
+			VEC_PUSH(demo_rewind.frame_events, DFE_STATSTR);
+			VEC_PUSH(demo_rewind.frame_events, (byte)i);
+			Vec_Append((void**)&demo_rewind.frame_events, 1, &strlen_prev32, sizeof(strlen_prev32));
+			if (strlen_prev)
+				Vec_Append((void**)&demo_rewind.frame_events, 1, prevstr, strlen_prev);
+			lastframe->datasize += 1 + 1 + sizeof(strlen_prev32) + strlen_prev;
+
+			CL_DemoRewindSetPrevStatString(i, curstr);
+		}
+
+		// Save previous state for any changed entities (including create/remove)
+		{
+			size_t cur_num_entities = (size_t)cl.num_entities;
+			size_t max_num_entities;
+			demoentitystate_t empty_state;
+
+			if (cur_num_entities > MAX_EDICTS)
+				cur_num_entities = MAX_EDICTS;
+			max_num_entities = q_max(demo_rewind.prev.num_entities, cur_num_entities);
+			memset(&empty_state, 0, sizeof(empty_state));
+
+			for (i = 1; i < max_num_entities; i++)
+			{
+				const demoentitystate_t *prevstate;
+				demoentitystate_t curstate;
+
+				prevstate = (i < demo_rewind.prev.num_entities) ?
+					&demo_rewind.prev.entity_states[i] : &empty_state;
+
+				memset(&curstate, 0, sizeof(curstate));
+				if (i < cur_num_entities)
+					CL_DemoRewindSnapshotEntity(&curstate, &cl.entities[i]);
+
+				if (memcmp(prevstate, &curstate, sizeof(curstate)) != 0)
+				{
+					unsigned short entnum = (unsigned short)i;
+					VEC_PUSH(demo_rewind.frame_events, DFE_ENTITY);
+					Vec_Append((void**)&demo_rewind.frame_events, 1, &entnum, sizeof(entnum));
+					Vec_Append((void**)&demo_rewind.frame_events, 1, prevstate, sizeof(*prevstate));
+					lastframe->datasize += 1 + sizeof(entnum) + sizeof(*prevstate);
+				}
+			}
+		}
+
 		// Play back pending sounds in reverse order
 		len = VEC_SIZE(demo_rewind.pending_sounds);
 		while (len > 0)
@@ -348,14 +576,15 @@ void CL_FinishDemoFrame(void)
 	}
 	else // rewinding
 	{
-
-		
-
 		// Revert tracked state changes in this frame
 		if (lastframe->datasize > 0)
 		{
 			size_t end = VEC_SIZE(demo_rewind.frame_events);
-			size_t begin = end - lastframe->datasize;
+			size_t begin;
+
+			if (lastframe->datasize > end)
+				Sys_Error("CL_FinishDemoFrame: invalid event span");
+			begin = end - lastframe->datasize;
 
 			while (begin < end)
 			{
@@ -386,6 +615,76 @@ void CL_FinishDemoFrame(void)
 				}
 				break;
 
+				case DFE_STAT:
+				{
+					int stat_idx = *data++;
+					demonumericstat_t stat;
+
+					memcpy(&stat, data, sizeof(stat));
+					CL_DemoRewindApplyNumericStat(stat_idx, stat.int_value, stat.float_value);
+
+					begin += 1 + sizeof(stat);
+				}
+				break;
+
+				case DFE_STATSTR:
+				{
+					int stat_idx = *data++;
+					uint32_t str_len32;
+					size_t str_len;
+					char *str = NULL;
+					size_t remaining = end - begin;
+
+					if (remaining < 1 + sizeof(str_len32))
+						Sys_Error("CL_FinishDemoFrame: bad stat string event size");
+
+					memcpy(&str_len32, data, sizeof(str_len32));
+					str_len = (size_t)str_len32;
+					data += sizeof(str_len32);
+					if (str_len > remaining - (1 + sizeof(str_len32)))
+						Sys_Error("CL_FinishDemoFrame: bad stat string length");
+					if (str_len)
+					{
+						str = (char *)malloc(str_len + 1);
+						if (!str)
+							Sys_Error("CL_FinishDemoFrame: failed to alloc stat string");
+						memcpy(str, data, str_len);
+						str[str_len] = '\0';
+					}
+
+					if (stat_idx >= 0 && stat_idx < MAX_CL_STATS)
+					{
+						free(cl.statss[stat_idx]);
+						cl.statss[stat_idx] = str;
+						Sbar_Changed();
+					}
+					else
+					{
+						free(str);
+					}
+
+					begin += 1 + sizeof(str_len32) + str_len;
+				}
+				break;
+
+				case DFE_ENTITY:
+				{
+					unsigned short entnum;
+					demoentitystate_t entstate;
+
+					memcpy(&entnum, data, sizeof(entnum));
+					data += sizeof(entnum);
+					memcpy(&entstate, data, sizeof(entstate));
+
+					if (entnum >= 1 && entnum < cl.max_edicts)
+					{
+						entity_t *ent = CL_EntityNum(entnum);
+						CL_DemoRewindApplyEntity(&entstate, ent);
+					}
+					begin += sizeof(entnum) + sizeof(entstate);
+				}
+				break;
+
 				case DFE_SOUND:
 				{
 					soundevent_t snd;
@@ -401,7 +700,7 @@ void CL_FinishDemoFrame(void)
 				break;
 
 				default:
-					Sys_Error("CL_NextDemoFrame: bad event type %d", datatype);
+					Sys_Error("CL_FinishDemoFrame: bad event type %d", datatype);
 					break;
 				}
 			}
@@ -418,9 +717,13 @@ void CL_FinishDemoFrame(void)
 		//cl.forceunderwater = lastframe->forceunderwater;
 
 		cl.faceanimtime = 0; // woods
-		CL_SetStati(STAT_VIEWHEIGHT, DEFAULT_VIEWHEIGHT); // woods
 		memset(cl_dlights, 0, sizeof(cl_dlights)); // woods
 		//memset(cl_temp_entities, 0, sizeof(cl_temp_entities));
+
+		// Reset viewmodel state to ensure it updates immediately
+		cl.viewent.model = NULL;
+		cl.viewent.frame = 0;
+		cl.viewent.lerpflags |= LERP_RESETANIM | LERP_RESETMOVE;
 
 		VEC_POP(demo_rewind.frames);
 	}
@@ -488,13 +791,14 @@ void CL_StopPlayback (void)
 	cls.demofile = NULL;
 	cls.demofilesize = 0; // woods (iw) #democontrols
 	cls.demofilestart = 0; // woods (iw) #democontrols
-	cls.demofilename[0] = '\0'; // woods (iw) #democontrols
 	cls.state = ca_disconnected;
 
 	VEC_CLEAR(demo_rewind.frames); // woods (iw) #democontrols
 	VEC_CLEAR(demo_rewind.frame_events); // woods (iw) #democontrols
 	VEC_CLEAR(demo_rewind.pending_sounds); // woods (iw) #democontrols
 	demo_rewind.backstop = false; // woods (iw) #democontrols
+	CL_DemoRewindFreePrevStatStrings();
+	demo_rewind.prev.num_entities = 0;
 
 	if (cls.demofilename[0]) // woods #lastdemo
 	{
@@ -505,6 +809,7 @@ void CL_StopPlayback (void)
 			Log_Last_Demo_f();
 		}
 	}
+	cls.demofilename[0] = '\0'; // woods (iw) #democontrols
 
 	if (cls.timedemo)
 		CL_FinishTimeDemo ();
