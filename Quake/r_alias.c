@@ -31,6 +31,7 @@ extern cvar_t r_model_light_desat; // woods - #desat
 extern cvar_t r_model_light_desat_list; // woods - #desat
 extern cvar_t r_outline; // woods #obmodelslist #routline
 extern cvar_t r_nooutline_list; // woods #routline
+extern cvar_t r_player_xray; // woods #routline
 
 extern qboolean nameInList(const char* list, const char* name); // woods #desat #routline
 extern qboolean TP_IsPlayerVisible(vec3_t origin); // woods #routline
@@ -492,14 +493,395 @@ void GLAlias_CreateShaders (void)
 
 /*
 =============
+R_ParseOutlineXrayParams -- woods #routline
+
+r_player_xray format:
+	"<hexcolor> <alpha> <distance> [targets] [pcolor] [enemycolor=0xRRGGBB] [teamcolor=0xRRGGBB]"
+	enemycolor/teamcolor defaults to gl_enemycolor/gl_teamcolor when omitted.
+	"pcolor" uses each target player's own shirt/pants colors and overrides
+	enemycolor/teamcolor + gl_enemycolor/gl_teamcolor.
+
+Examples:
+	"0xFF0000 0.8 2048"
+	"2048"
+	"0x00FF00 0.5"
+	"0x00FF00 0.5 2048 enemy"
+	"0x00FF00 0.5 2048 team"
+	"0x00FF00 0.5 2048 both"
+	"pcolor 3072 both"
+	"0xFF0000 0.6 3072 both enemycolor=0xFF0000 teamcolor=0x00B7FF"
+	"0"
+=============
+*/
+enum
+{
+	XRAY_TARGET_BOTH = 0,
+	XRAY_TARGET_ENEMY,
+	XRAY_TARGET_TEAM
+};
+
+enum
+{
+	XRAY_COLOR_SPLIT = 0,
+	XRAY_COLOR_MATCH
+};
+
+static int R_ParseOutlineXrayTargetToken(const char *token)
+{
+	const char *value = token;
+	const char *eq = strchr(token, '=');
+	size_t keylen;
+	if (eq && eq[1])
+	{
+		keylen = (size_t)(eq - token);
+		if (!((keylen == 6 && !q_strncasecmp(token, "target", keylen)) ||
+			(keylen == 7 && !q_strncasecmp(token, "targets", keylen))))
+			return -1;
+		value = eq + 1;
+	}
+
+	if (!q_strcasecmp(value, "both") ||
+		!q_strcasecmp(value, "all") ||
+		!q_strcasecmp(value, "players"))
+		return XRAY_TARGET_BOTH;
+
+	if (!q_strcasecmp(value, "enemy") ||
+		!q_strcasecmp(value, "enemies"))
+		return XRAY_TARGET_ENEMY;
+
+	if (!q_strcasecmp(value, "team") ||
+		!q_strcasecmp(value, "teammates") ||
+		!q_strcasecmp(value, "ally") ||
+		!q_strcasecmp(value, "allies"))
+		return XRAY_TARGET_TEAM;
+
+	return -1;
+}
+
+static int R_ParseOutlineXrayColorModeToken(const char *token)
+{
+	const char *value = token;
+	const char *eq = strchr(token, '=');
+	size_t keylen;
+
+	if (eq && eq[1])
+	{
+		keylen = (size_t)(eq - token);
+		if (!((keylen == 5 && !q_strncasecmp(token, "color", keylen)) ||
+			(keylen == 6 && !q_strncasecmp(token, "colors", keylen)) ||
+			(keylen == 9 && !q_strncasecmp(token, "colormode", keylen))))
+			return -1;
+		value = eq + 1;
+	}
+
+	if (!q_strcasecmp(value, "pcolor") ||
+		!q_strcasecmp(value, "pcolors") ||
+		!q_strcasecmp(value, "player") ||
+		!q_strcasecmp(value, "playercolor") ||
+		!q_strcasecmp(value, "playercolors"))
+		return XRAY_COLOR_MATCH;
+
+	return -1;
+}
+
+static qboolean R_ParseOutlineXrayHexColorToken(const char *token, vec3_t out_color)
+{
+	unsigned int rgb;
+
+	if (q_strncasecmp(token, "0x", 2))
+		return false;
+	if (sscanf(token + 2, "%x", &rgb) != 1)
+		return false;
+
+	out_color[0] = ((rgb >> 16) & 0xFF) / 255.0f;
+	out_color[1] = ((rgb >> 8) & 0xFF) / 255.0f;
+	out_color[2] = (rgb & 0xFF) / 255.0f;
+	return true;
+}
+
+static qboolean R_ParseOutlineXrayNamedColorToken(const char *token, const char *key, vec3_t out_color)
+{
+	const char *eq = strchr(token, '=');
+	size_t keylen;
+
+	if (!eq || !eq[1])
+		return false;
+
+	keylen = (size_t)(eq - token);
+	if (strlen(key) != keylen || q_strncasecmp(token, key, keylen))
+		return false;
+
+	return R_ParseOutlineXrayHexColorToken(eq + 1, out_color);
+}
+
+static qboolean R_ParseOutlineXrayPlayerColorFallback(const char *text, vec3_t out_color)
+{
+	byte *rgb;
+	plcolour_t parsed;
+
+	if (!text || !text[0])
+		return false;
+
+	parsed = CL_PLColours_Parse(text);
+	rgb = CL_PLColours_ToRGB(&parsed);
+	if (!rgb)
+		return false;
+
+	out_color[0] = rgb[0] / 255.0f;
+	out_color[1] = rgb[1] / 255.0f;
+	out_color[2] = rgb[2] / 255.0f;
+	return true;
+}
+
+static void R_GetPlayerMatchColor(const scoreboard_t *sb, vec3_t out_color)
+{
+	byte *pants_rgb;
+	plcolour_t pants;
+
+	pants = sb->pants;
+	pants_rgb = CL_PLColours_ToRGB(&pants);
+
+	/* pcolor follows player pants color directly. */
+	out_color[0] = pants_rgb[0] / 255.0f;
+	out_color[1] = pants_rgb[1] / 255.0f;
+	out_color[2] = pants_rgb[2] / 255.0f;
+}
+
+static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t team_color, float *alpha, float *dist, int *target_mode, int *color_mode)
+{
+	const char *text = r_player_xray.string;
+	qboolean saw_enemy_color = false;
+	qboolean saw_team_color = false;
+	qboolean saw_color = false;
+	qboolean saw_alpha = false;
+	qboolean saw_dist = false;
+	char token[64];
+	int consumed = 0;
+
+	color[0] = 1.0f;
+	color[1] = 0.0f;
+	color[2] = 0.0f;
+	VectorCopy(color, enemy_color);
+	VectorCopy(color, team_color);
+	*alpha = 1.0f;
+	*dist = 0.0f;
+	if (target_mode)
+		*target_mode = XRAY_TARGET_BOTH;
+	if (color_mode)
+		*color_mode = XRAY_COLOR_SPLIT;
+
+	if (!text || !*text)
+		return;
+
+	while (sscanf(text, " %63s%n", token, &consumed) == 1)
+	{
+		int parsed_target_mode;
+		int parsed_color_mode;
+		char *endptr;
+		float value;
+
+		text += consumed;
+
+		if (R_ParseOutlineXrayNamedColorToken(token, "enemycolor", enemy_color))
+		{
+			saw_enemy_color = true;
+			continue;
+		}
+		if (R_ParseOutlineXrayNamedColorToken(token, "teamcolor", team_color))
+		{
+			saw_team_color = true;
+			continue;
+		}
+
+		parsed_target_mode = R_ParseOutlineXrayTargetToken(token);
+		if (parsed_target_mode >= 0)
+		{
+			if (target_mode)
+				*target_mode = parsed_target_mode;
+			continue;
+		}
+
+		parsed_color_mode = R_ParseOutlineXrayColorModeToken(token);
+		if (parsed_color_mode >= 0)
+		{
+			if (color_mode)
+				*color_mode = parsed_color_mode;
+			continue;
+		}
+
+		if (R_ParseOutlineXrayHexColorToken(token, color))
+		{
+			saw_color = true;
+			if (!saw_enemy_color)
+				VectorCopy(color, enemy_color);
+			if (!saw_team_color)
+				VectorCopy(color, team_color);
+			continue;
+		}
+
+		value = (float)strtod(token, &endptr);
+		if (endptr == token || *endptr != '\0')
+			continue;
+
+		if (!saw_alpha && value >= 0.0f && value <= 1.0f)
+		{
+			*alpha = value;
+			saw_alpha = true;
+		}
+		else
+		{
+			*dist = q_max(0.0f, value);
+			saw_dist = true;
+		}
+	}
+
+	*alpha = CLAMP(0.0f, *alpha, 1.0f);
+
+	if (!saw_dist && (saw_color || (saw_alpha && *alpha > 0.0f) || r_player_xray.value > 1.0f))
+		*dist = 4096.0f;
+
+	/* If explicit xray enemy/team colors were not provided, inherit engine
+	 * enemy/team color overrides when available. */
+	if (!(color_mode && *color_mode == XRAY_COLOR_MATCH))
+	{
+		if (!saw_enemy_color)
+			R_ParseOutlineXrayPlayerColorFallback(gl_enemycolor.string, enemy_color);
+		if (!saw_team_color)
+			R_ParseOutlineXrayPlayerColorFallback(gl_teamcolor.string, team_color);
+	}
+}
+
+/*
+=============
+R_IsAliasOutlineXray -- woods #routline
+=============
+*/
+static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, float *alpha_fade)
+{
+	char obs_buf[16], star_obs_buf[16];
+	const char *obs, *star_obs;
+	int local_playernum;
+	int observer_viewent;
+	int playernum;
+	int target_mode;
+	int color_mode;
+	vec3_t parsedColor;
+	vec3_t parsedEnemyColor;
+	vec3_t parsedTeamColor;
+	float parsedAlpha;
+	float dist;
+	vec3_t delta;
+	float distance_to_view;
+	qboolean can_classify_team = false;
+	qboolean is_observer_slot;
+	qboolean is_same_team;
+
+	if (!e->model || strcmp(e->model->name, "progs/player.mdl") || e == &cl.viewent)
+		return false;
+
+	/* Only real client player slots should get xray outlines. This excludes
+	 * temp/player-model marker entities (spawn markers, dummies, etc). */
+	if (!cl.entities || e <= cl.entities || e > (cl.entities + cl.maxclients))
+		return false;
+
+	playernum = (int)(e - cl.entities) - 1;
+	if (playernum < 0 || playernum >= cl.maxclients)
+		return false;
+	if (!cl.scores || !cl.scores[playernum].name[0])
+		return false;
+
+	if (cls.demoplayback)
+	{
+		/* Demo userinfo observer keys are not reliable; allow xray gating
+		 * without requiring observer-key checks. */
+		is_observer_slot = true;
+	}
+	else
+	{
+		observer_viewent = cl.realviewentity;
+		if (observer_viewent < 1 || observer_viewent > cl.maxclients)
+			return false;
+
+		obs = Info_GetKey(cl.scores[observer_viewent - 1].userinfo, "observer", obs_buf, sizeof(obs_buf));
+		star_obs = Info_GetKey(cl.scores[observer_viewent - 1].userinfo, "*observer", star_obs_buf, sizeof(star_obs_buf));
+		is_observer_slot = ((obs[0] && q_strcasecmp(obs, "off")) ||
+			(star_obs[0] && q_strcasecmp(star_obs, "off")));
+	}
+
+	R_ParseOutlineXrayParams(parsedColor, parsedEnemyColor, parsedTeamColor, &parsedAlpha, &dist, &target_mode, &color_mode);
+	if (dist <= 0.0f)
+		return false;
+
+	if (!is_observer_slot)
+		return false;
+
+	local_playernum = -1;
+	if (cl.viewentity >= 1 && cl.viewentity <= cl.maxclients)
+		local_playernum = cl.viewentity - 1;
+
+	if (local_playernum >= 0 && cl.scores[local_playernum].name[0])
+	{
+		can_classify_team = true;
+		is_same_team = (cl.scores[playernum].pants.basic == cl.scores[local_playernum].pants.basic);
+	}
+
+	if (target_mode == XRAY_TARGET_ENEMY || target_mode == XRAY_TARGET_TEAM)
+	{
+		if (!can_classify_team)
+			return false;
+
+		if (target_mode == XRAY_TARGET_ENEMY && is_same_team)
+			return false;
+		if (target_mode == XRAY_TARGET_TEAM && !is_same_team)
+			return false;
+	}
+
+	VectorSubtract(e->origin, r_origin, delta);
+	distance_to_view = VectorLength(delta);
+	if (distance_to_view > dist)
+		return false;
+
+	if (TP_IsPlayerVisible(e->origin))
+		return false;
+
+	if (color)
+	{
+		if (color_mode == XRAY_COLOR_MATCH)
+			R_GetPlayerMatchColor(&cl.scores[playernum], color);
+		else
+		{
+			if (target_mode == XRAY_TARGET_ENEMY)
+				VectorCopy(parsedEnemyColor, color);
+			else if (target_mode == XRAY_TARGET_TEAM)
+				VectorCopy(parsedTeamColor, color);
+			else if (can_classify_team)
+				VectorCopy(is_same_team ? parsedTeamColor : parsedEnemyColor, color);
+			else
+				VectorCopy(parsedEnemyColor, color);
+		}
+	}
+	if (alpha)
+		*alpha = parsedAlpha;
+	if (alpha_fade)
+	{
+		float t = CLAMP(0.0f, distance_to_view / dist, 1.0f);
+		/* Smoothstep falloff: near=1.0, max range=0.0 */
+		*alpha_fade = 1.0f - (t * t * (3.0f - 2.0f * t));
+	}
+
+	return true;
+}
+
+/*
+=============
 R_CalculateAliasModelOutlineWidth -- woods #routline
 =============
 */
-float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerpdata_t* lerpdata)
+float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerpdata_t* lerpdata, qboolean is_xray)
 {
-	if (r_outline.value <= 0 ||
+	if (!is_xray && (r_outline.value <= 0 ||
 		cl.viewent.model == e->model ||
-		nameInList(r_nooutline_list.string, e->model->name))
+		nameInList(r_nooutline_list.string, e->model->name)))
 		return 0.0f;
 
 	float radius;
@@ -638,7 +1020,14 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 	float finalScale = modelScale / 1.5;
 	if (isMD5Model)
 		finalScale *= 0.25f; // MD5 models render larger in this space; halve outline width to match others
-	float cvarValue = CLAMP(1.0f, r_outline.value, 5.0f);
+	if (is_xray && modelScale < 1.0f)
+		return 1.0f;
+
+	float cvarValue;
+	if (is_xray && r_outline.value <= 0.0f)
+		cvarValue = 1.0f;
+	else
+		cvarValue = CLAMP(1.0f, r_outline.value, 5.0f);
 
 	return cvarValue * finalScale;
 }
@@ -768,7 +1157,12 @@ R_DrawAliasModelOutline -- woods #routline
 */
 void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* lerpdata, entity_t* e)
 {
-	if (!(r_outline.value > 0 &&
+	vec3_t xrayColor = { 1.0f, 0.0f, 0.0f };
+	float xrayAlpha = 1.0f;
+	float xrayAlphaFade = 1.0f;
+	qboolean is_xray = R_IsAliasOutlineXray(e, xrayColor, &xrayAlpha, &xrayAlphaFade);
+
+	if (!is_xray && !(r_outline.value > 0 &&
 		!(cl.viewent.model == e->model) &&
 		!(nameInList(r_nooutline_list.string, e->model->name))))
 		return;
@@ -805,7 +1199,7 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 			return;
 	}
 
-	float outlineWidth = R_CalculateAliasModelOutlineWidth(paliashdr, e, lerpdata);
+	float outlineWidth = R_CalculateAliasModelOutlineWidth(paliashdr, e, lerpdata, is_xray);
 
 	if (outlineWidth <= 0.0f)
 		return;
@@ -819,14 +1213,28 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 			return;
 	}
 
-	// Configure stencil to only draw where stencil is not set by the model
-	glStencilFunc(GL_NOTEQUAL, 1, 0xFF); // Pass test where stencil is not 1
-	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // Keep the stencil buffer unchanged
-	glStencilMask(0x00); // Disable writing to the stencil buffer
+	if (is_xray)
+	{
+		// Xray: skip stencil test entirely. The model behind the wall was never
+		// drawn, so stencil was never set for this entity — but stale stencil
+		// values from previously-drawn entities can block the outline. The
+		// GL_GREATER depth test alone is sufficient to draw behind geometry.
+		glDisable(GL_STENCIL_TEST);
+	}
+	else
+	{
+		// Configure stencil to only draw where stencil is not set by the model
+		glStencilFunc(GL_NOTEQUAL, 1, 0xFF); // Pass test where stencil is not 1
+		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // Keep the stencil buffer unchanged
+		glStencilMask(0x00); // Disable writing to the stencil buffer
+	}
 
 	// Disable depth writing to prevent depth buffer modifications
 	glDepthMask(GL_FALSE);
-	glDepthFunc(GL_LEQUAL);
+	if (is_xray)
+		glDepthFunc(GL_GREATER);
+	else
+		glDepthFunc(GL_LEQUAL);
 
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -836,7 +1244,14 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	GL_Uniform1fFunc(glsl->outlineWidthLoc, outlineWidth);
 	float outlineColor[4] = { 0.0f, 0.0f, 0.0f, entalpha }; // Outline color
 
-	if (!strcmp(e->model->name, "progs/flag.mdl") && e->skinnum == 0)
+	if (is_xray)
+	{
+		outlineColor[0] = xrayColor[0];
+		outlineColor[1] = xrayColor[1];
+		outlineColor[2] = xrayColor[2];
+		outlineColor[3] = xrayAlpha * xrayAlphaFade;
+	}
+	else if (!strcmp(e->model->name, "progs/flag.mdl") && e->skinnum == 0)
 	{
 		outlineColor[0] = 1.0f; // Change red component
 		outlineColor[3] = 0.2f; // Change alpha component
