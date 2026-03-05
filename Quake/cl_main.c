@@ -217,6 +217,8 @@ This is also called on Host_Error, so it shouldn't cause any errors
 */
 void CL_Disconnect (void)
 {
+	NET_PortPingProbe_RequestAbort();
+
 	if (key_dest == key_message)
 		Key_EndChat ();	// don't get stuck in chat mode
 

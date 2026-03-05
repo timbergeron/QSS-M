@@ -1487,6 +1487,7 @@ void _Host_Frame (double time)
 	Cbuf_Execute ();
 
 	NET_Poll();
+	NET_PortPingProbe_Frame();
 	URI_Frame(); // woods #uri
 
 	if (cl.sendprespawn)

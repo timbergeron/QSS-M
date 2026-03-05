@@ -145,5 +145,20 @@ extern	char		my_ipv4_address[NET_NAMELEN];
 extern	char		my_ipv6_address[NET_NAMELEN];
 extern  char        my_public_ip[NET_NAMELEN]; // woods #extip
 
-#endif	/* _QUAKE_NET_H */
+typedef enum
+{
+	PORTPINGPROBE_IDLE,
+	PORTPINGPROBE_PROBING,
+	PORTPINGPROBE_COMPLETED,
+	PORTPINGPROBE_ABORT
+} portpingprobe_status_t;
 
+qboolean NET_PortPingProbe_IsEnabled(void);
+portpingprobe_status_t NET_PortPingProbe_GetStatus(void);
+int NET_PortPingProbe_GetProgress(void);
+qboolean NET_PortPingProbe_Start(const char *connect_addr);
+void NET_PortPingProbe_RequestAbort(void);
+void NET_PortPingProbe_Frame(void);
+qboolean NET_PortPingProbe_ConsumeCompleted(const char *connect_addr);
+
+#endif	/* _QUAKE_NET_H */

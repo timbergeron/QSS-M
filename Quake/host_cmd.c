@@ -3655,6 +3655,9 @@ User command to connect to server
 static void Host_Connect_f (void)
 {
 	char	name[NET_NAMELEN];
+	portpingprobe_status_t probe_status;
+	qboolean is_local;
+
 	q_strlcpy(name, Cmd_Argv(1), sizeof(name));
 
 	cls.demonum = -1;		// stop demo loop in case this fails
@@ -3668,8 +3671,34 @@ static void Host_Connect_f (void)
 		Host_ConnectToLastServer_f();
 	else
 	{
-		if ((((Valid_Domain(name)) || (Valid_IP(name))) && (Valid_Port(name))) || !q_strcasecmp(name, "local") || !q_strcasecmp(name, "localhost")) // woods #connectfilter -- avoid client lockup if possible
+		is_local = !q_strcasecmp(name, "local") || !q_strcasecmp(name, "localhost");
+		if ((((Valid_Domain(name)) || (Valid_IP(name))) && (Valid_Port(name))) || is_local) // woods #connectfilter -- avoid client lockup if possible
 		{
+			if (!NET_PortPingProbe_IsEnabled() && NET_PortPingProbe_GetStatus() == PORTPINGPROBE_COMPLETED)
+				NET_PortPingProbe_ConsumeCompleted(NULL);
+
+			if (!is_local && NET_PortPingProbe_IsEnabled())
+			{
+				probe_status = NET_PortPingProbe_GetStatus();
+
+				if (probe_status == PORTPINGPROBE_IDLE)
+				{
+					if (NET_PortPingProbe_Start(name))
+						return;
+				}
+				else if (probe_status == PORTPINGPROBE_PROBING || probe_status == PORTPINGPROBE_ABORT)
+				{
+					NET_PortPingProbe_RequestAbort();
+					Con_Printf("Port ping probe is still running; connect again in a moment\n");
+					return;
+				}
+				else if (probe_status == PORTPINGPROBE_COMPLETED)
+				{
+					if (!NET_PortPingProbe_ConsumeCompleted(name) && NET_PortPingProbe_Start(name))
+						return;
+				}
+			}
+
 			strcpy(lastcattempt, name); // woods verbose connection info
 			CL_EstablishConnection(name);
 			Host_Reconnect_Sv_f();
