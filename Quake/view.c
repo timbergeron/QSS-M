@@ -72,6 +72,7 @@ cvar_t	gl_cshiftpercent_powerup = {"gl_cshiftpercent_powerup", "100", CVAR_ARCHI
 cvar_t	gl_cshiftpercent_dead = {"gl_cshiftpercent_dead", "0", CVAR_ARCHIVE}; // woods #cdead
 
 cvar_t	r_viewmodel_quake = {"r_viewmodel_quake", "0", CVAR_ARCHIVE};
+cvar_t	cl_demo_eyecam = {"cl_demo_eyecam", "0", CVAR_ARCHIVE}; // woods #demoeyecam
 
 float	v_dmg_time, v_dmg_roll, v_dmg_pitch;
 
@@ -1018,6 +1019,65 @@ void V_CalcViewRoll (void)
 
 /*
 ==================
+V_FindDemoEyecamTarget
+
+Detect which player entity the observer is chasing during demo playback.
+Uses proximity heuristics: chasecam view is usually close to the target.
+==================
+*/
+static int V_FindDemoEyecamTarget (void)
+{
+	entity_t	*viewer;
+	vec3_t		diff;
+	float		dist, bestdist;
+	int			i, best;
+
+	if (!cls.demoplayback || !cl_demo_eyecam.value)
+		return 0;
+
+	if (!cl.entities || cl.viewentity < 1 || cl.viewentity >= cl.num_entities)
+		return 0;
+
+	if (cl.maxclients <= 0)
+		return 0;
+
+	viewer = &cl.entities[cl.viewentity];
+	if (!viewer->model)
+		return 0;
+
+	best = 0;
+	bestdist = 999999.0f;
+
+	for (i = 1; i <= cl.maxclients; i++)
+	{
+		entity_t *target;
+
+		if (i >= cl.num_entities || i == cl.viewentity)
+			continue;
+
+		target = &cl.entities[i];
+		if (!target->model)
+			continue;
+
+		VectorSubtract (target->origin, viewer->origin, diff);
+		dist = VectorLength (diff);
+
+		// chasecam typically within 500 units
+		if (dist > 600)
+			continue;
+
+		if (dist < bestdist)
+		{
+			bestdist = dist;
+			best = i;
+		}
+	}
+
+	return best;
+}
+
+/*
+==================
 V_CalcIntermissionRefdef
 
 ==================
@@ -1187,6 +1247,46 @@ void V_CalcRefdef (void)
 	else
 		oldz = ent->origin[2];
 
+	// woods #demoeyecam - convert chasecam demo view into eyecam view
+	if (cls.demoplayback && cl_demo_eyecam.value && cl.entities && cl.maxclients > 0)
+	{
+		int target = V_FindDemoEyecamTarget ();
+
+		if (target > 0 && target <= cl.maxclients && target < cl.num_entities)
+		{
+			entity_t *targetent = &cl.entities[target];
+
+			if (targetent->model)
+			{
+				cl.demo_eyecam_target = target;
+
+				// Override camera to target player POV.
+				VectorCopy (targetent->origin, r_refdef.vieworg);
+				r_refdef.vieworg[2] += DEFAULT_VIEWHEIGHT;
+				r_refdef.vieworg[0] += 1.0/32;
+				r_refdef.vieworg[1] += 1.0/32;
+				r_refdef.vieworg[2] += 1.0/32;
+
+				// Entity pitch is inverted; remove roll in eyecam mode.
+				r_refdef.viewangles[PITCH] = -targetent->angles[PITCH];
+				r_refdef.viewangles[YAW] = targetent->angles[YAW];
+				r_refdef.viewangles[ROLL] = 0;
+			}
+			else
+			{
+				cl.demo_eyecam_target = 0;
+			}
+		}
+		else
+		{
+			cl.demo_eyecam_target = 0;
+		}
+	}
+	else
+	{
+		cl.demo_eyecam_target = 0;
+	}
+
 	if (chase_active.value)
 		Chase_UpdateForDrawing (); //johnfitz
 }
@@ -1295,5 +1395,6 @@ void V_Init (void)
 	Cvar_RegisterVariable (&cl_gun_drift); // woods #gdrift
 
 	Cvar_RegisterVariable (&r_viewmodel_quake); //MarkV
+	Cvar_RegisterVariable (&cl_demo_eyecam); // woods #demoeyecam
 }
 

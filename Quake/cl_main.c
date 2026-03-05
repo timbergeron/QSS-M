@@ -1675,6 +1675,10 @@ void CL_RelinkEntities (void)
 		if (i == cl.viewentity && !chase_active.value)
 			continue;
 
+		// woods #demoeyecam - hide chased player model when rendering demo eyecam
+		if (cls.demoplayback && cl_demo_eyecam.value && cl.demo_eyecam_target > 0 && i == cl.demo_eyecam_target)
+			continue;
+
 		if (cl_numvisedicts < cl_maxvisedicts)
 		{
 			cl_visedicts[cl_numvisedicts] = ent;
@@ -1685,7 +1689,66 @@ void CL_RelinkEntities (void)
 
 	// viewmodel. last, for transparency reasons.
 	ent = &cl.viewent;
-	if (r_drawviewmodel.value
+
+	// woods #demoeyecam - try to show weapon for demo eyecam target
+	if (cls.demoplayback && cl_demo_eyecam.value && cl.demo_eyecam_target > 0)
+	{
+		int target = cl.demo_eyecam_target;
+		int playernum = target - 1;
+		qboolean have_weapon = false;
+		const char *weapon_name = NULL;
+
+		// Avoid carrying stale weapon models between target changes.
+		ent->model = NULL;
+
+		// Try to derive weapon from target player items (teaminfo feed).
+		if (playernum >= 0 && playernum < cl.maxclients
+			&& cl.scores[playernum].tinfo.time > cl.time - 1.0)
+		{
+			int items = cl.scores[playernum].tinfo.items;
+			int j;
+
+			// Pick best available weapon.
+			if (items & IT_LIGHTNING)
+				weapon_name = "progs/v_light.mdl";
+			else if (items & IT_ROCKET_LAUNCHER)
+				weapon_name = "progs/v_rock2.mdl";
+			else if (items & IT_GRENADE_LAUNCHER)
+				weapon_name = "progs/v_rock.mdl";
+			else if (items & IT_SUPER_NAILGUN)
+				weapon_name = "progs/v_nail2.mdl";
+			else if (items & IT_NAILGUN)
+				weapon_name = "progs/v_nail.mdl";
+			else if (items & IT_SUPER_SHOTGUN)
+				weapon_name = "progs/v_shot2.mdl";
+			else if (items & IT_SHOTGUN)
+				weapon_name = "progs/v_shot.mdl";
+			else
+				weapon_name = "progs/v_axe.mdl";
+
+			// Resolve model from precache table.
+			for (j = 1; j < MAX_MODELS; j++)
+			{
+				if (cl.model_precache[j] && !strcmp(cl.model_precache[j]->name, weapon_name))
+				{
+					ent->model = cl.model_precache[j];
+					have_weapon = true;
+					break;
+				}
+			}
+		}
+
+		// In eyecam, draw a weapon model when available (ignore observer health).
+		if (r_drawviewmodel.value && have_weapon && scr_viewsize.value < 130)
+		{
+			if (cl_numvisedicts < cl_maxvisedicts)
+			{
+				cl_visedicts[cl_numvisedicts] = ent;
+				cl_numvisedicts++;
+			}
+		}
+	}
+	else if (r_drawviewmodel.value
 		&& !chase_active.value
 		&& cl.stats[STAT_HEALTH] > 0
 		/* && !(cl.items & IT_INVISIBILITY)*/ // woods #ringalpha

@@ -423,6 +423,7 @@ typedef struct
 	int			matchinp;
 	int			notobserver;		// woods tool for detecting match participation
 	qboolean	eyecam;
+	int			demo_eyecam_target;	// woods #demoeyecam - entity number of detected chasecam target
 	char		lastchat[256];		// woods #like
 	vec3_t		lerpangles;			// JPG - angles now used by view.c so that smooth chasecam doesn't fuck up demos // woods #smoothcam
 	int			fullpitch;			// woods #pqfullpitch
@@ -612,6 +613,7 @@ float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int 
 // chase
 //
 extern	cvar_t	chase_active;
+extern	cvar_t	cl_demo_eyecam; // woods #demoeyecam
 
 void Chase_Init (void);
 void TraceLine (vec3_t start, vec3_t end, float pushoff, vec3_t impact);
