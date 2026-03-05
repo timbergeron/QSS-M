@@ -214,7 +214,23 @@ static void CL_DemoRewindApplyNumericStat(int stat, int ival, float fval)
 
 int demo_target_offset = -1; // woods -- target offset for seeking, -1 when not seeking
 qboolean is_seeking = false; // woods -- flag to indicate seeking status
+qboolean demo_seek_from_start = false; // woods -- rewind to start before seeking forward
 static qboolean initialized = false; // woods (iw) #democontrols
+
+static void CL_ClearDemoFrags(void)
+{
+	int i;
+
+	for (i = 0; i < cl.maxclients; i++)
+		cl.scores[i].frags = 0;
+}
+
+static void CL_ResetDemoSeekState(void)
+{
+	demo_target_offset = -1;
+	is_seeking = false;
+	demo_seek_from_start = false;
+}
 
 /*
 ===============
@@ -248,40 +264,47 @@ CL_UpdateDemoSpeed
 static void CL_UpdateDemoSpeed(void)
 {
 	extern qboolean keydown[256];
-	int adjust, singleframe, i;
+	int adjust, singleframe;
+	const float normal_speed = cls.basedemospeed * !cls.demopaused;
 
 	if (key_dest != key_game)
 	{
-		cls.demospeed = cls.basedemospeed * !cls.demopaused;
+		cls.demospeed = normal_speed;
 		return;
 	}
 
-	const int dynamic_threshold = q_max(100, cls.demo_file_length * 0.03); // 0.1% of the demo file length, with a minimum of 100 for very small files
+	const int dynamic_threshold = q_max(100, cls.demo_file_length * 0.03); // 3% of the demo file length, with a minimum of 100 for very small files
 	const float seeking_speed = 256;
+	const int demo_seek_start = (cls.demofilestart > 0) ? (int)cls.demofilestart : cls.demo_offset_start;
+	const int demo_seek_end = cls.demo_offset_start + cls.demo_file_length;
 
 	if (is_seeking) 
 	{
-			if (cls.demo_offset_current < demo_target_offset)
-				cls.demospeed = seeking_speed; // Move forward to target
-			else if (cls.demo_offset_current >= demo_target_offset) // move to start vert fast
-			{
-				cls.demospeed = -1e9f;
-				if (cls.basedemospeed)
-					cls.demospeed *= cls.basedemospeed;
+		if (demo_seek_from_start)
+		{
+			cls.demospeed = -1e9f;
+			if (cls.basedemospeed)
+				cls.demospeed *= cls.basedemospeed;
+			if (demo_rewind.backstop || cls.demo_offset_current <= demo_seek_start)
+				demo_seek_from_start = false;
+			return;
+		}
 
-				for (i = 0; i < cl.maxclients; i++)
-					cl.scores[i].frags = 0;
-				is_seeking = false; // Stop seeking
-				return;
-			}
+		if (demo_target_offset < demo_seek_start)
+			demo_target_offset = demo_seek_start;
+		else if (demo_target_offset > demo_seek_end)
+			demo_target_offset = demo_seek_end;
 
-			if (abs(cls.demo_offset_current - demo_target_offset) < dynamic_threshold)
-			{
-				//cls.demo_offset_current = demo_target_offset; // Align with the target
-				if (cls.basedemospeed)
-					cls.demospeed *= cls.basedemospeed;
-				is_seeking = false; // Stop seeking
-			}
+		if (abs(cls.demo_offset_current - demo_target_offset) < dynamic_threshold ||
+			cls.demo_offset_current >= demo_target_offset)
+		{
+			cls.demospeed = normal_speed;
+			CL_ResetDemoSeekState();
+			return;
+		}
+
+		cls.demospeed = seeking_speed;
+		demo_rewind.backstop = false;
 		return;
 	}
 
@@ -290,8 +313,24 @@ static void CL_UpdateDemoSpeed(void)
 		if (keydown[key])
 		{
 			float targetPercentage = (key - '0') / 10.0f;
+
 			demo_target_offset = cls.demo_offset_start + (int)(targetPercentage * (float)((cls.demo_file_length + cls.demo_offset_start) - cls.demo_offset_start)); // sometimes start is not 0
+			if (demo_target_offset < demo_seek_start)
+				demo_target_offset = demo_seek_start;
+			else if (demo_target_offset > demo_seek_end)
+				demo_target_offset = demo_seek_end;
+
+			if (abs(cls.demo_offset_current - demo_target_offset) < dynamic_threshold)
+			{
+				cls.demospeed = normal_speed;
+				CL_ResetDemoSeekState();
+				break;
+			}
+
+			demo_seek_from_start = (cls.demo_offset_current > demo_target_offset);
 			is_seeking = true;
+			if (demo_seek_from_start)
+				CL_ClearDemoFrags();
 			break;
 		}
 	}
@@ -316,11 +355,8 @@ static void CL_UpdateDemoSpeed(void)
 		cls.demospeed = -1e9f;
 		if (cls.basedemospeed)
 			cls.demospeed *= cls.basedemospeed;
-		for (i = 0; i < cl.maxclients; i++)
-		{
-			cl.scores[i].frags = 0;
-			//memset(cl.scores[i].name, 0, sizeof(cl.scores[i].name));
-		}
+		CL_ClearDemoFrags();
+		CL_ResetDemoSeekState();
 	}
 	else if (keydown[K_END])
 	{
@@ -330,7 +366,7 @@ static void CL_UpdateDemoSpeed(void)
 	}
 	else
 	{
-		cls.demospeed = cls.basedemospeed * !cls.demopaused;
+		cls.demospeed = normal_speed;
 	}
 
 	if (keydown[K_CTRL])
@@ -782,7 +818,10 @@ Called when a demo file runs out, or the user starts a game
 void CL_StopPlayback (void)
 {
 	if (!cls.demoplayback)
+	{
+		CL_ResetDemoSeekState();
 		return;
+	}
 
 	fclose (cls.demofile);
 	cls.demoplayback = false;
@@ -799,6 +838,7 @@ void CL_StopPlayback (void)
 	demo_rewind.backstop = false; // woods (iw) #democontrols
 	CL_DemoRewindFreePrevStatStrings();
 	demo_rewind.prev.num_entities = 0;
+	CL_ResetDemoSeekState();
 
 	if (cls.demofilename[0]) // woods #lastdemo
 	{
@@ -898,12 +938,8 @@ static int CL_GetDemoMessage (void)
 
 	if (cls.signon == SIGNONS && !initialized) // woods (iw) #democontrols
 	{
-		for (i = 0; i < cl.maxclients; i++)
-		{
-			cl.scores[i].frags = 0;
-			//memset(cl.scores[i].name, 0, sizeof(cl.scores[i].name));
-		}
-		demo_target_offset = -1;
+		CL_ClearDemoFrags();
+		CL_ResetDemoSeekState();
 
 		initialized = true; // Prevent reinitialization
 	}
@@ -1574,6 +1610,7 @@ void CL_PlayDemo_f (void)
 	cls.demoplayback = true;
 	cls.demopaused = false;
 	cls.demospeed = 1.f; // woods (iw) #democontrols
+	CL_ResetDemoSeekState();
 	// Only change basedemospeed if it hasn't been initialized,
 	// otherwise preserve the existing value
 	//if (!cls.basedemospeed) // woods (iw) #democontrols
