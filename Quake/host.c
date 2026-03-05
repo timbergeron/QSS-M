@@ -1485,6 +1485,7 @@ void _Host_Frame (double time)
 
 // process console commands
 	Cbuf_Execute ();
+	CL_ConnectFrame();
 
 	NET_Poll();
 	NET_PortPingProbe_Frame();

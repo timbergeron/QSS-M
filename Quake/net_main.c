@@ -600,6 +600,51 @@ JustDoIt:
 	return NULL;
 }
 
+const char *NET_ResolveCacheName(const char *host)
+{
+	size_t n;
+
+	if (!host || !*host || !hostCacheCount)
+		return host;
+
+	for (n = 0; n < hostCacheCount; n++)
+	{
+		if (q_strcasecmp(host, hostcache[n].name) == 0)
+			return hostcache[n].cname;
+	}
+
+	return host;
+}
+
+qsocket_t *NET_ConnectNoSlist (const char *host, qboolean skip_datagram)
+{
+	qsocket_t *ret;
+	int numdrivers = net_numdrivers;
+
+	SetNetTime();
+
+	if (!host || !*host)
+		return NULL;
+
+	if (q_strcasecmp(host, "local") == 0)
+		numdrivers = 1;
+
+	host = NET_ResolveCacheName(host);
+
+	for (net_driverlevel = 0; net_driverlevel < numdrivers; net_driverlevel++)
+	{
+		if (net_drivers[net_driverlevel].initialized == false)
+			continue;
+		if (skip_datagram && !q_strcasecmp(net_drivers[net_driverlevel].name, "Datagram"))
+			continue;
+		ret = dfunc.Connect(host);
+		if (ret)
+			return ret;
+	}
+
+	return NULL;
+}
+
 
 /*
 ===================
@@ -642,6 +687,13 @@ void NET_Close (qsocket_t *sock)
 		return;
 
 	SetNetTime();
+
+	if (sock->driver < 0 || sock->driver >= net_numdrivers)
+	{
+		Con_Warning("NET_Close: invalid driver index %d\n", sock->driver);
+		NET_FreeQSocket(sock);
+		return;
+	}
 
 	// call the driver_Close function
 	sfunc.Close (sock);

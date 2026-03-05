@@ -113,12 +113,15 @@ extern cvar_t	pq_lag; // woods
 extern cvar_t	sv_mapcrc; // woods #mapcrc
 extern qboolean	qeintermission; // woods #qeintermission
 extern qboolean	crxintermission; // woods #crxintermission
+extern qboolean m_return_onerror;
+extern char m_return_reason[32];
 
 char			lastmphost[NET_NAMELEN]; // woods - connected server address
 int				maptime;		// woods connected map time #maptime
 
 void Log_Last_Server_f(void); // woods #connectlast (Qrack) -- write last server to file memory
 void Host_ConnectToLastServer_f(void); // woods use #connectlast for smarter reconnect
+qboolean Host_GetLastServer(char *name, size_t namesize);
 
 extern char lastconnected[3]; // woods #identify+
 extern qboolean netquakeio; // woods
@@ -209,6 +212,209 @@ void CL_ClearState (void)
 
 /*
 =====================
+CL_Connect Helpers
+=====================
+*/
+typedef struct
+{
+	qboolean active;
+	char host[NET_NAMELEN];
+} cl_pending_connect_t;
+
+static cl_pending_connect_t cl_pending_connect = {false, {0}};
+static char cl_lasthost[NET_NAMELEN];
+static qboolean cl_next_connect_from_menu = false;
+
+static void CL_ClearConnectReturnState(void)
+{
+	m_return_onerror = false;
+	m_return_reason[0] = '\0';
+}
+
+void CL_MarkNextConnectFromMenu(void)
+{
+	cl_next_connect_from_menu = true;
+}
+
+qboolean CL_ConsumeNextConnectFromMenu(void)
+{
+	qboolean from_menu = cl_next_connect_from_menu;
+	cl_next_connect_from_menu = false;
+	return from_menu;
+}
+
+static const char *CL_PrepareConnectHost(const char *host)
+{
+	if (!host)
+	{
+		host = cl_lasthost;
+		if (!*host)
+		{
+			if (!Host_GetLastServer(cl_lasthost, sizeof(cl_lasthost)))
+				return NULL;
+
+			host = cl_lasthost;
+			Con_Printf("using server history\n");
+		}
+	}
+	else
+	{
+		q_strlcpy(cl_lasthost, host, sizeof(cl_lasthost));
+	}
+
+	return host;
+}
+
+static void CL_PrintConnectingMessage(const char *host)
+{
+	char addressip[70] = {'\0'};
+	char local_verbose[NET_NAMELEN + sizeof(addressip)];
+	int numaddresses;
+	qhostaddr_t addresses[16];
+
+	numaddresses = NET_ListAddresses(addresses, sizeof(addresses) / sizeof(addresses[0]));
+	if (numaddresses && !strstr(addresses[0], "["))
+	{
+		q_strlcpy(addressip, " -- ", sizeof(addressip));
+		q_strlcat(addressip, addresses[0], sizeof(addressip));
+	}
+
+	if (!strcmp(host, "local") || !strcmp(host, "localhost"))
+	{
+		q_strlcpy(local_verbose, host, sizeof(local_verbose));
+		q_strlcat(local_verbose, addressip, sizeof(local_verbose));
+	}
+	else
+	{
+		q_strlcpy(local_verbose, host, sizeof(local_verbose));
+	}
+
+	if (!strstr(host, ":"))
+		Con_Printf("connecting to ^m%s:%i\n", local_verbose, net_hostport);
+	else
+		Con_Printf("connecting to ^m%s\n", local_verbose);
+}
+
+static void CL_PrintConnectFailureHints(void)
+{
+	Con_Printf("\nsyntax: connect server:port (port is optional)\n");
+	if (net_hostport != 26000)
+		Con_Printf("\nTry using port 26000\n");
+}
+
+static void CL_FinalizeConnection(struct qsocket_s *netcon, const char *host)
+{
+	CL_ClearConnectReturnState();
+	cls.netcon = netcon;
+	Con_DPrintf("CL_EstablishConnection: connected to %s\n", host);
+
+	cls.demonum = -1;
+	cls.state = ca_connected;
+
+	if ((cl_autodemo.value == 3 || cl_autodemo.value == 4) && cls.demorecording)
+		Cbuf_AddText("stop\n");
+
+	SCR_BeginLoadingPlaque();
+	cl.protocol_dpdownload = false;
+	cls.signon = 0;
+	MSG_WriteByte(&cls.message, clc_nop);
+
+	q_strlcpy(lastmphost, host, sizeof(lastmphost));
+	Log_Last_Server_f();
+	Write_Log(host, SERVERLIST);
+	ServerList_Rebuild();
+}
+
+static void CL_CancelConnectInternal(qboolean clear_return_state)
+{
+	if (!cl_pending_connect.active && !NET_DatagramConnectPending())
+		return;
+
+	NET_DatagramConnectCancel();
+	cl_pending_connect.active = false;
+	cl_pending_connect.host[0] = '\0';
+
+	if (clear_return_state)
+		CL_ClearConnectReturnState();
+}
+
+void CL_CancelConnect(void)
+{
+	CL_CancelConnectInternal(true);
+}
+
+qboolean CL_BeginConnect(const char *host)
+{
+	const char *target;
+	const char *connect_target;
+	qboolean preserve_return_state;
+	struct qsocket_s *immediate = NULL;
+
+	if (cls.state == ca_dedicated || cls.demoplayback)
+		return false;
+
+	target = CL_PrepareConnectHost(host);
+	if (!target)
+		return false;
+
+	preserve_return_state = CL_ConsumeNextConnectFromMenu();
+	connect_target = NET_ResolveCacheName(target);
+	if (!preserve_return_state)
+		CL_ClearConnectReturnState();
+
+	CL_CancelConnectInternal(false);
+	CL_Disconnect();
+	CL_PrintConnectingMessage(target);
+
+	immediate = NET_ConnectNoSlist(target, true);
+	if (immediate)
+	{
+		CL_FinalizeConnection(immediate, target);
+		return true;
+	}
+
+	if (!NET_DatagramConnectStart(connect_target))
+	{
+		CL_PrintConnectFailureHints();
+		return false;
+	}
+
+	cl_pending_connect.active = true;
+	q_strlcpy(cl_pending_connect.host, target, sizeof(cl_pending_connect.host));
+	return true;
+}
+
+void CL_ConnectFrame(void)
+{
+	net_connect_result_t result;
+	struct qsocket_s *netcon = NULL;
+	const char *reason = NULL;
+
+	if (!cl_pending_connect.active)
+		return;
+
+	result = NET_DatagramConnectFrame(&netcon, &reason);
+	if (result == NET_CONNECT_PENDING)
+		return;
+
+	cl_pending_connect.active = false;
+
+	if (result == NET_CONNECT_COMPLETE && netcon)
+	{
+		CL_FinalizeConnection(netcon, cl_pending_connect.host);
+		cl_pending_connect.host[0] = '\0';
+		return;
+	}
+
+	if (reason && *reason)
+		Con_Printf("%s\n", reason);
+
+	CL_PrintConnectFailureHints();
+	cl_pending_connect.host[0] = '\0';
+}
+
+/*
+=====================
 CL_Disconnect
 
 Sends a disconnect message to the server
@@ -218,6 +424,7 @@ This is also called on Host_Error, so it shouldn't cause any errors
 void CL_Disconnect (void)
 {
 	NET_PortPingProbe_RequestAbort();
+	CL_CancelConnect();
 
 	if (key_dest == key_message)
 		Key_EndChat ();	// don't get stuck in chat mode
@@ -290,75 +497,30 @@ Host should be either "local" or a net address to be passed on
 */
 void CL_EstablishConnection (const char *host)
 {
-	static char lasthost[NET_NAMELEN];
-
-	char addressip[70] = {'\0'}; // woods
-	char local_verbose[NET_NAMELEN + sizeof(addressip)]; // woods
-
-	int	numaddresses; // woods
-	qhostaddr_t addresses[16]; // woods
+	const char *target;
+	struct qsocket_s *netcon;
 
 	if (cls.state == ca_dedicated)
 		return;
 
 	if (cls.demoplayback)
 		return;
-	if (!host)
-	{
-		host = lasthost;
-		if (!*host)
-		{ 
-			Host_ConnectToLastServer_f (); // woods use #connectlast for smarter reconnect
-			Con_Printf("using server history\n"); // woods verbose connection info
-			return;
-		}
-	}
-	else
-		q_strlcpy(lasthost, host, sizeof(lasthost));
 
+	target = CL_PrepareConnectHost(host);
+	if (!target)
+		return;
+
+	CL_CancelConnectInternal(false);
 	CL_Disconnect ();
+	CL_PrintConnectingMessage(target);
 
-	numaddresses = NET_ListAddresses(addresses, sizeof(addresses) / sizeof(addresses[0])); // woods
-
-	if (numaddresses && !strstr(addresses[0], "[")) // woods, no [ for ipv6
+	netcon = NET_Connect(target);
+	if (!netcon)
 	{
-		q_strlcpy(addressip, " -- ", sizeof(addressip));
-		q_strlcat(addressip, addresses[0], sizeof(addressip));
-	}
-
-	if (!strcmp(host, "local") || !strcmp(host, "localhost")) // woods
-	{
-		q_strlcpy(local_verbose, host, sizeof(local_verbose));
-		q_strlcat(local_verbose, addressip, sizeof(local_verbose));
-	}
-	else
-		q_strlcpy(local_verbose, host, sizeof(local_verbose));
-
-	if (!strstr(lasthost, ":"))
-		Con_Printf("connecting to ^m%s:%i\n", local_verbose, net_hostport); // woods include port if not specified
-	else
-		Con_Printf("connecting to ^m%s\n", local_verbose); // woods verbose connection info
-
-	cls.netcon = NET_Connect (host);
-	if (!cls.netcon) // woods -  Baker 3.60 - Rook's Qrack port 26000 notification on failure
-	{
-		Con_Printf("\nsyntax: connect server:port (port is optional)\n");//r00k added
-		if (net_hostport != 26000)
-			Con_Printf("\nTry using port 26000\n");//r00k added
+		CL_PrintConnectFailureHints();
 		Host_Error("connect failed");
 	}
-	Con_DPrintf ("CL_EstablishConnection: connected to %s\n", host);
-
-	cls.demonum = -1;			// not in the demo loop now
-	cls.state = ca_connected;
-	cls.signon = 0;				// need all the signon messages before playing
-	MSG_WriteByte (&cls.message, clc_nop);	// NAT Fix from ProQuake
-
-	q_strlcpy(lastmphost, host, sizeof(lastmphost)); // woods - connected server address
-
-	Log_Last_Server_f(); // woods #connectlast (Qrack) -- write last server to file memory
-	Write_Log (host, SERVERLIST); // woods write server to log #serverlist
-	ServerList_Rebuild(); // woods rebuild tab list live for connect +tab #serverlist
+	CL_FinalizeConnection(netcon, target);
 }
 
 void CL_SendInitialUserinfo(void *ctx, const char *key, const char *val)

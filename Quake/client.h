@@ -519,6 +519,11 @@ void	CL_DecayLights (void);
 void CL_Init (void);
 
 void CL_EstablishConnection (const char *host);
+qboolean CL_BeginConnect (const char *host);
+void CL_ConnectFrame (void);
+void CL_CancelConnect (void);
+void CL_MarkNextConnectFromMenu (void);
+qboolean CL_ConsumeNextConnectFromMenu (void);
 void CL_Signon1 (void);
 void CL_Signon2 (void);
 void CL_Signon3 (void);

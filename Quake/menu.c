@@ -3328,15 +3328,16 @@ void M_MultiPlayer_Key (int key)
 				int count = M_Bookmarks_GetPinned(pinned, MAX_PINNED_BOOKMARKS);
 				if (index < count)
 				{
-					m_return_state = m_state;
-					m_return_onerror = true;
-					key_dest = key_game;
-					m_state = m_none;
-					IN_UpdateGrabs();
-					Cbuf_AddText(va("connect \"%s\"\n", pinned[index].name));
+						m_return_state = m_state;
+						m_return_onerror = true;
+						key_dest = key_game;
+						m_state = m_none;
+						IN_UpdateGrabs();
+						CL_MarkNextConnectFromMenu();
+						Cbuf_AddText(va("connect \"%s\"\n", pinned[index].name));
+					}
 				}
-			}
-			break;
+				break;
 		}
 	}
 }
@@ -12583,14 +12584,15 @@ void M_LanConfig_Key (int key)
 				M_Menu_Bookmarks_f();
 			else if (lanConfig_cursor == 5)
 			{
-				m_return_state = m_state;
-				m_return_onerror = true;
-				key_dest = key_game;
-				m_state = m_none;
-				IN_UpdateGrabs();
-				Cbuf_AddText ( va ("connect \"%s\"\n", lanConfig_joinname) );
+					m_return_state = m_state;
+					m_return_onerror = true;
+					key_dest = key_game;
+					m_state = m_none;
+					IN_UpdateGrabs();
+					CL_MarkNextConnectFromMenu();
+					Cbuf_AddText ( va ("connect \"%s\"\n", lanConfig_joinname) );
+				}
 			}
-		}
 
 			break;
 	}
@@ -12853,6 +12855,7 @@ void M_History_Key(int key)
 		key_dest = key_game;
 		m_state = m_none;
 		IN_UpdateGrabs();
+		CL_MarkNextConnectFromMenu();
 		Cbuf_AddText(va("connect \"%s\"\n", historymenu.items[historymenu.list.cursor].name));
 		break;
 
@@ -13153,6 +13156,7 @@ void M_Bookmarks_Key(int key)
 		key_dest = key_game;
 		m_state = m_none;
 		IN_UpdateGrabs();
+		CL_MarkNextConnectFromMenu();
 		Cbuf_AddText(va("connect \"%s\"\n", bookmarksmenu.items[bookmarksmenu.list.cursor].name));
 		break;
 
@@ -15518,14 +15522,15 @@ void M_ServerList_Key(int key)
                         if (actualIndex < 0 || actualIndex >= serversmenu.servercount)
                                 break;
 
-                        m_return_state = m_state;
-                        m_return_onerror = true;
-                        key_dest = key_game;
-                        m_state = m_none;
-                        IN_UpdateGrabs();
-                        Cbuf_AddText(va("connect \"%s\"\n", serversmenu.items[actualIndex].ip));
-                        CleanupPingThreads();
-                }
+	                        m_return_state = m_state;
+	                        m_return_onerror = true;
+	                        key_dest = key_game;
+	                        m_state = m_none;
+	                        IN_UpdateGrabs();
+	                        CL_MarkNextConnectFromMenu();
+	                        Cbuf_AddText(va("connect \"%s\"\n", serversmenu.items[actualIndex].ip));
+	                        CleanupPingThreads();
+	                }
                 break;
 
 	case K_MOUSE1: // woods #mousemenu

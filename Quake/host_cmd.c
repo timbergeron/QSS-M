@@ -3496,7 +3496,8 @@ void Host_Reconnect_Con_f (void)
 		CL_StopPlayback ();
 		CL_Disconnect ();
 	}
-	CL_EstablishConnection (NULL);
+	if (!CL_BeginConnect(NULL))
+		Con_Printf("reconnect failed\n");
 }
 static void Host_Reconnect_Sv_f (void)
 {
@@ -3518,6 +3519,37 @@ static void Host_Lightstyle_f (void)
 
 char	lastcattempt[NET_NAMELEN]; // woods verbose connection info
 extern char	lastmphost[NET_NAMELEN]; // woods - connected server address // woods #connectlast (Qrack)
+
+/*
+===============
+Host_GetLastServer
+===============
+*/
+qboolean Host_GetLastServer(char *name, size_t namesize)
+{
+	FILE *f;
+
+	if (!name || !namesize)
+		return false;
+
+	f = fopen(va("%s/id1/backups/%s.txt", com_basedir, "lastserver"), "r");
+	if (f == NULL)
+	{
+		Con_Printf("No server connection history.\n");
+		return false;
+	}
+
+	if (fgets(name, (int)namesize, f) == NULL)
+	{
+		Con_Printf("Error reading from file.\n");
+		fclose(f);
+		return false;
+	}
+
+	name[strcspn(name, "\r\n")] = '\0';
+	fclose(f);
+	return true;
+}
 
 /*
 ===============
@@ -3556,35 +3588,20 @@ Host_ConnectToLastServer_f // woods #connectlast (Qrack)
 */
 void Host_ConnectToLastServer_f (void) // woods #connectlast (Qrack)
 {
-	FILE* f;
 	char name[NET_NAMELEN];
 
-	f = fopen(va("%s/id1/backups/%s.txt", com_basedir, "lastserver"), "r+");
-
-	if (f == NULL)
-	{
-		Con_Printf("No server connection history.\n");
+	if (!Host_GetLastServer(name, sizeof(name)))
 		return;
-	}
 
-	if (fgets(name, NET_NAMELEN, f) == NULL)
+retry:
+	if (cls.state == ca_disconnected)
+		Cbuf_AddText(va("connect %s\n", name));
+	else
 	{
-		Con_Printf("Error reading from file.\n");
-		fclose(f);
-		return;
+		CL_Disconnect();
+		if (cls.state == ca_disconnected)//if a server crash; can create an endless loop error here CLIENTS arent disconnected just in limbo. :(
+			goto retry;
 	}
-		
-	retry:
-		if (cls.state == ca_disconnected)
-			Cbuf_AddText(va("connect %s\n", name));
-		else
-		{
-			CL_Disconnect();
-			if (cls.state == ca_disconnected)//if a server crash; can create an endless loop error here CLIENTS	arent disconnected just in limbo. :(
-				goto retry;
-		}
-
-	fclose(f);
 }
 
 qboolean Valid_IP(const char* ip_str) // woods #connectfilter
@@ -3656,8 +3673,10 @@ static void Host_Connect_f (void)
 {
 	char	name[NET_NAMELEN];
 	portpingprobe_status_t probe_status;
+	qboolean from_menu;
 	qboolean is_local;
 
+	from_menu = CL_ConsumeNextConnectFromMenu();
 	q_strlcpy(name, Cmd_Argv(1), sizeof(name));
 
 	cls.demonum = -1;		// stop demo loop in case this fails
@@ -3700,10 +3719,12 @@ static void Host_Connect_f (void)
 			}
 
 			strcpy(lastcattempt, name); // woods verbose connection info
-			CL_EstablishConnection(name);
-			Host_Reconnect_Sv_f();
-
-			mpservertime = SDL_GetTicks(); // woods #servertime
+			if (from_menu)
+				CL_MarkNextConnectFromMenu();
+			if (CL_BeginConnect(name))
+			{
+				mpservertime = SDL_GetTicks(); // woods #servertime
+			}
 		}
 		else
 		{
@@ -4175,7 +4196,6 @@ static void Host_Loadgame_f (void)
 	if (cls.state != ca_dedicated)
 	{
 		CL_EstablishConnection ("local");
-		Host_Reconnect_Sv_f ();
 	}
 }
 

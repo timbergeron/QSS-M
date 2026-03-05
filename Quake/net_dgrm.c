@@ -1664,6 +1664,7 @@ void Datagram_Shutdown (void)
 {
 	int i;
 
+	NET_DatagramConnectCancel();
 	NET_PortPingProbe_Shutdown();
 	Datagram_Listen(false);
 
@@ -2991,11 +2992,436 @@ ErrorReturn2:
 	return NULL;
 }
 
+typedef enum
+{
+	DATAGRAM_CONNECT_PHASE_IDLE = 0,
+	DATAGRAM_CONNECT_PHASE_RESOLVE,
+	DATAGRAM_CONNECT_PHASE_OPEN_SOCKET,
+	DATAGRAM_CONNECT_PHASE_SEND_REQUEST,
+	DATAGRAM_CONNECT_PHASE_WAIT_RESPONSE
+} datagram_connect_phase_t;
+
+typedef struct
+{
+	qboolean active;
+	datagram_connect_phase_t phase;
+	char host[NET_NAMELEN];
+	int landriver;
+	struct qsockaddr serveraddr;
+	sys_socket_t newsock;
+	qsocket_t *sock;
+	int total_attempts;
+	int attempt;
+	double attempt_start_time;
+	char reason[64];
+} datagram_connect_ctx_t;
+
+static datagram_connect_ctx_t datagram_connect_ctx = {false, DATAGRAM_CONNECT_PHASE_IDLE, {0}, -1, {0}, INVALID_SOCKET, NULL, 0, 0, 0.0, {0}};
+
+static void Datagram_ConnectAsyncSetReason(const char *reason)
+{
+	if (!reason || !*reason)
+		reason = "connect failed";
+	q_strlcpy(datagram_connect_ctx.reason, reason, sizeof(datagram_connect_ctx.reason));
+}
+
+static void Datagram_ConnectAsyncReleaseSocket(void)
+{
+	if (datagram_connect_ctx.sock)
+	{
+		NET_FreeQSocket(datagram_connect_ctx.sock);
+		datagram_connect_ctx.sock = NULL;
+	}
+
+	if (datagram_connect_ctx.newsock != INVALID_SOCKET)
+	{
+		if (datagram_connect_ctx.landriver >= 0 &&
+			datagram_connect_ctx.landriver < net_numlandrivers &&
+			net_landrivers[datagram_connect_ctx.landriver].Close_Socket)
+		{
+			net_landrivers[datagram_connect_ctx.landriver].Close_Socket(datagram_connect_ctx.newsock);
+		}
+		datagram_connect_ctx.newsock = INVALID_SOCKET;
+	}
+}
+
+static void Datagram_ConnectAsyncFinalizeFailure(void)
+{
+	if (*datagram_connect_ctx.reason)
+		q_strlcpy(m_return_reason, datagram_connect_ctx.reason, sizeof(m_return_reason));
+	else
+		m_return_reason[0] = 0;
+
+	if (m_return_onerror)
+	{
+		key_dest = key_menu;
+		m_state = m_return_state;
+		m_return_onerror = false;
+		IN_UpdateGrabs();
+	}
+}
+
+static void Datagram_ConnectAsyncStepToNextDriver(void)
+{
+	Datagram_ConnectAsyncReleaseSocket();
+	datagram_connect_ctx.landriver++;
+	datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_RESOLVE;
+	datagram_connect_ctx.attempt = 0;
+	datagram_connect_ctx.attempt_start_time = 0;
+}
+
+static void Datagram_ConnectAsyncSendRequest(void)
+{
+	char *e;
+	int pwd;
+
+	net_landriverlevel = datagram_connect_ctx.landriver;
+	SZ_Clear(&net_message);
+	MSG_WriteLong(&net_message, 0);
+	MSG_WriteByte(&net_message, CCREQ_CONNECT);
+	MSG_WriteString(&net_message, "QUAKE");
+	MSG_WriteByte(&net_message, NET_PROTOCOL_VERSION);
+	if (datagram_connect_ctx.sock->proquake_angle_hack)
+	{
+		if (!*password.string || !strcmp(password.string, "none"))
+			pwd = 0;
+		else
+		{
+			pwd = strtol(password.string, &e, 0);
+			if (*e)
+				pwd = Com_BlockChecksum(password.string, strlen(password.string));
+		}
+
+		Con_DWarning("Attempting to use ProQuake angle hack\n");
+		MSG_WriteByte(&net_message, 1);
+		MSG_WriteByte(&net_message, 35);
+		MSG_WriteByte(&net_message, 0);
+		MSG_WriteLong(&net_message, pwd);
+	}
+
+	*((int *)net_message.data) = BigLong(NETFLAG_CTL | (net_message.cursize & NETFLAG_LENGTH_MASK));
+	dfunc.Write(datagram_connect_ctx.newsock, net_message.data, net_message.cursize, &datagram_connect_ctx.serveraddr);
+	SZ_Clear(&net_message);
+	dfunc.Write(datagram_connect_ctx.newsock, (byte*)"\xff\xff\xff\xffgetchallenge\n", strlen("\xff\xff\xff\xffgetchallenge\n"), &datagram_connect_ctx.serveraddr);
+	datagram_connect_ctx.attempt_start_time = SetNetTime();
+}
+
+qboolean NET_DatagramConnectPending(void)
+{
+	return datagram_connect_ctx.active;
+}
+
+void NET_DatagramConnectCancel(void)
+{
+	if (!datagram_connect_ctx.active)
+		return;
+
+	Datagram_ConnectAsyncReleaseSocket();
+	datagram_connect_ctx.active = false;
+	datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_IDLE;
+	datagram_connect_ctx.landriver = -1;
+}
+
+qboolean NET_DatagramConnectStart(const char *host)
+{
+	NET_DatagramConnectCancel();
+
+	if (!host || !*host)
+		return false;
+
+	host = Strip_Port(host);
+
+	memset(&datagram_connect_ctx, 0, sizeof(datagram_connect_ctx));
+	datagram_connect_ctx.active = true;
+	datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_RESOLVE;
+	datagram_connect_ctx.landriver = 0;
+	datagram_connect_ctx.newsock = INVALID_SOCKET;
+	datagram_connect_ctx.total_attempts = q_max(1, (int)net_connectattempts.value);
+	q_strlcpy(datagram_connect_ctx.host, host, sizeof(datagram_connect_ctx.host));
+
+	return true;
+}
+
+net_connect_result_t NET_DatagramConnectFrame(qsocket_t **outsock, const char **outreason)
+{
+	struct qsockaddr readaddr;
+	int ret;
+	int control;
+	int port;
+	const char *reason = NULL;
+	qboolean try_next_driver = false;
+
+	if (outsock)
+		*outsock = NULL;
+	if (outreason)
+		*outreason = NULL;
+
+	if (!datagram_connect_ctx.active)
+		return NET_CONNECT_FAILED;
+
+	SetNetTime();
+
+	while (datagram_connect_ctx.active)
+	{
+		switch (datagram_connect_ctx.phase)
+		{
+		case DATAGRAM_CONNECT_PHASE_RESOLVE:
+			/* v1 note: name resolution is still synchronous and may briefly stall for hostnames. */
+			for (; datagram_connect_ctx.landriver < net_numlandrivers; datagram_connect_ctx.landriver++)
+			{
+				if (!net_landrivers[datagram_connect_ctx.landriver].initialized)
+					continue;
+
+				net_landriverlevel = datagram_connect_ctx.landriver;
+				if (dfunc.GetAddrFromName(datagram_connect_ctx.host, &datagram_connect_ctx.serveraddr) != -1)
+				{
+					datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_OPEN_SOCKET;
+					break;
+				}
+			}
+
+			if (datagram_connect_ctx.phase != DATAGRAM_CONNECT_PHASE_OPEN_SOCKET)
+			{
+				if (!*datagram_connect_ctx.reason)
+					Datagram_ConnectAsyncSetReason("Could not resolve");
+				Datagram_ConnectAsyncFinalizeFailure();
+				datagram_connect_ctx.active = false;
+				datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_IDLE;
+				if (outreason)
+					*outreason = datagram_connect_ctx.reason;
+				return NET_CONNECT_FAILED;
+			}
+			break;
+
+		case DATAGRAM_CONNECT_PHASE_OPEN_SOCKET:
+		{
+			int probe_port_override;
+
+			net_landriverlevel = datagram_connect_ctx.landriver;
+			probe_port_override = net_probe_clientport;
+			datagram_connect_ctx.newsock = INVALID_SOCKET;
+
+			if (probe_port_override > 0)
+			{
+				datagram_connect_ctx.newsock = dfunc.Open_Socket(probe_port_override);
+				if (datagram_connect_ctx.newsock == INVALID_SOCKET)
+					Con_DPrintf("Port ping probe: source port %d unavailable, falling back to OS-assigned source port\n", probe_port_override);
+			}
+
+			if (datagram_connect_ctx.newsock == INVALID_SOCKET)
+				datagram_connect_ctx.newsock = dfunc.Open_Socket(0);
+
+			net_probe_clientport = 0;
+			if (datagram_connect_ctx.newsock == INVALID_SOCKET)
+			{
+				Datagram_ConnectAsyncSetReason("Open socket failed");
+				Datagram_ConnectAsyncStepToNextDriver();
+				break;
+			}
+
+			net_driverlevel = myDriverLevel;
+			datagram_connect_ctx.sock = NET_NewQSocket();
+			if (!datagram_connect_ctx.sock)
+			{
+				Datagram_ConnectAsyncSetReason("No qsocket available");
+				Datagram_ConnectAsyncStepToNextDriver();
+				break;
+			}
+
+			datagram_connect_ctx.sock->driver = myDriverLevel;
+			datagram_connect_ctx.sock->socket = datagram_connect_ctx.newsock;
+			datagram_connect_ctx.sock->landriver = datagram_connect_ctx.landriver;
+			datagram_connect_ctx.sock->proquake_angle_hack = true;
+
+			if (dfunc.Connect(datagram_connect_ctx.newsock, &datagram_connect_ctx.serveraddr) == -1)
+			{
+				Datagram_ConnectAsyncSetReason("Connect request failed");
+				Datagram_ConnectAsyncStepToNextDriver();
+				break;
+			}
+
+			datagram_connect_ctx.attempt = 0;
+			datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_SEND_REQUEST;
+			break;
+		}
+
+		case DATAGRAM_CONNECT_PHASE_SEND_REQUEST:
+			Datagram_ConnectAsyncSendRequest();
+			datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_WAIT_RESPONSE;
+			return NET_CONNECT_PENDING;
+
+		case DATAGRAM_CONNECT_PHASE_WAIT_RESPONSE:
+			net_landriverlevel = datagram_connect_ctx.landriver;
+			while ((ret = dfunc.Read(datagram_connect_ctx.newsock, net_message.data, net_message.maxsize, &readaddr)) > 0)
+			{
+				if (dfunc.AddrCompare(&readaddr, &datagram_connect_ctx.serveraddr) != 0)
+				{
+					Con_SafePrintf("wrong reply address\n");
+					Con_SafePrintf("Expected: %s | %s\n", dfunc.AddrToString(&datagram_connect_ctx.serveraddr, false), StrAddr(&datagram_connect_ctx.serveraddr));
+					Con_SafePrintf("Received: %s | %s\n", dfunc.AddrToString(&readaddr, false), StrAddr(&readaddr));
+					continue;
+				}
+
+				if (ret < (int)sizeof(int))
+					continue;
+
+				net_message.cursize = ret;
+				MSG_BeginReading();
+				control = BigLong(*((int *)net_message.data));
+				MSG_ReadLong();
+
+				if (control == -1)
+				{
+					const char *s = MSG_ReadString();
+					if (!strncmp(s, "challenge ", 10))
+					{
+						char buf[1024];
+						q_snprintf(buf, sizeof(buf), "%c%c%c%cconnect\\protocol\\darkplaces 3\\protocols\\RMQ FITZ DP7 NEHAHRABJP3 QUAKE\\challenge\\%s", 255, 255, 255, 255, s+10);
+						dfunc.Write(datagram_connect_ctx.newsock, (byte*)buf, strlen(buf), &datagram_connect_ctx.serveraddr);
+						continue;
+					}
+					if (!strcmp(s, "accept"))
+					{
+						Q_memcpy(&datagram_connect_ctx.sock->addr, &datagram_connect_ctx.serveraddr, sizeof(struct qsockaddr));
+						datagram_connect_ctx.sock->proquake_angle_hack = false;
+						port = 0;
+						goto datagram_async_accept;
+					}
+					continue;
+				}
+
+				if ((control & (~NETFLAG_LENGTH_MASK)) != (int)NETFLAG_CTL)
+					continue;
+				if ((control & NETFLAG_LENGTH_MASK) != ret)
+					continue;
+
+				ret = MSG_ReadByte();
+				if (ret == CCREP_REJECT)
+				{
+					reason = MSG_ReadString();
+					Datagram_ConnectAsyncSetReason(reason);
+					try_next_driver = true;
+					break;
+				}
+				if (ret != CCREP_ACCEPT)
+				{
+					Datagram_ConnectAsyncSetReason("Bad Response");
+					try_next_driver = true;
+					break;
+				}
+
+				Q_memcpy(&datagram_connect_ctx.sock->addr, &datagram_connect_ctx.serveraddr, sizeof(struct qsockaddr));
+				port = MSG_ReadLong();
+				if (msg_badread)
+					port = 0;
+
+				if (datagram_connect_ctx.sock->proquake_angle_hack)
+				{
+					byte mod = (msg_readcount < net_message.cursize) ? MSG_ReadByte() : 0;
+					byte ver = (msg_readcount < net_message.cursize) ? MSG_ReadByte() : 0;
+					byte flags = (msg_readcount < net_message.cursize) ? MSG_ReadByte() : 0;
+					(void)ver;
+
+					if (mod == MOD_PROQUAKE)
+					{
+						if (flags & PQF_CHEATFREE)
+						{
+							Datagram_ConnectAsyncSetReason("Server is incompatible");
+							try_next_driver = true;
+							break;
+						}
+						if (flags & PQF_IGNOREPORT)
+							port = 0;
+						datagram_connect_ctx.sock->proquake_angle_hack = true;
+					}
+					else
+					{
+						datagram_connect_ctx.sock->proquake_angle_hack = false;
+					}
+				}
+
+datagram_async_accept:
+				if (port)
+					dfunc.SetSocketPort(&datagram_connect_ctx.sock->addr, port);
+
+				dfunc.GetNameFromAddr(&datagram_connect_ctx.serveraddr, datagram_connect_ctx.sock->trueaddress);
+				dfunc.GetNameFromAddr(&datagram_connect_ctx.serveraddr, datagram_connect_ctx.sock->maskedaddress);
+				datagram_connect_ctx.sock->lastMessageTime = SetNetTime();
+
+				if (dfunc.Connect(datagram_connect_ctx.newsock, &datagram_connect_ctx.sock->addr) == -1)
+				{
+					Datagram_ConnectAsyncSetReason("Connect to Game failed");
+					try_next_driver = true;
+					break;
+				}
+
+				Con_Printf("Connection accepted\n");
+				m_return_onerror = false;
+				datagram_connect_ctx.active = false;
+				datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_IDLE;
+				datagram_connect_ctx.newsock = INVALID_SOCKET;
+				if (outsock)
+				{
+					*outsock = datagram_connect_ctx.sock;
+					datagram_connect_ctx.sock = NULL;
+				}
+				return NET_CONNECT_COMPLETE;
+			}
+
+			if (try_next_driver || ret == -1)
+			{
+				if (ret == -1 && !try_next_driver)
+					Datagram_ConnectAsyncSetReason("Network Error");
+				try_next_driver = false;
+				Datagram_ConnectAsyncStepToNextDriver();
+				break;
+			}
+
+			if ((SetNetTime() - datagram_connect_ctx.attempt_start_time) >= 2.5)
+			{
+				int attempts_left = datagram_connect_ctx.total_attempts - datagram_connect_ctx.attempt - 1;
+				if (attempts_left > 0)
+				{
+					Con_SafePrintf("still trying... (%d attempt%s left)\n", attempts_left, attempts_left == 1 ? "" : "s");
+					datagram_connect_ctx.attempt++;
+					datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_SEND_REQUEST;
+					return NET_CONNECT_PENDING;
+				}
+				Datagram_ConnectAsyncSetReason("No Response");
+				Datagram_ConnectAsyncStepToNextDriver();
+				break;
+			}
+
+			return NET_CONNECT_PENDING;
+
+		default:
+			Datagram_ConnectAsyncSetReason("connect failed");
+			Datagram_ConnectAsyncFinalizeFailure();
+			datagram_connect_ctx.active = false;
+			datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_IDLE;
+			if (outreason)
+				*outreason = datagram_connect_ctx.reason;
+			return NET_CONNECT_FAILED;
+		}
+	}
+
+	if (!*datagram_connect_ctx.reason)
+		Datagram_ConnectAsyncSetReason("connect failed");
+	Datagram_ConnectAsyncFinalizeFailure();
+	datagram_connect_ctx.active = false;
+	datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_IDLE;
+	if (outreason)
+		*outreason = datagram_connect_ctx.reason;
+	return NET_CONNECT_FAILED;
+}
+
 qsocket_t *Datagram_Connect (const char *host)
 {
 	qsocket_t *ret = NULL;
 	qboolean resolved = false;
 	struct qsockaddr addr;
+
+	NET_DatagramConnectCancel();
 
 	host = Strip_Port (host);
 	for (net_landriverlevel = 0; net_landriverlevel < net_numlandrivers; net_landriverlevel++)

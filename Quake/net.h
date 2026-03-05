@@ -58,6 +58,11 @@ struct qsocket_s	*NET_CheckNewConnections (void);
 struct qsocket_s	*NET_Connect (const char *host);
 // called by client to connect to a host.  Returns -1 if not able to
 
+struct qsocket_s	*NET_ConnectNoSlist (const char *host, qboolean skip_datagram);
+// connects directly without triggering the synchronous server-list lookup path
+const char *NET_ResolveCacheName(const char *host);
+// maps a cached server display name to its canonical connect string when available
+
 double NET_QSocketGetTime (const struct qsocket_s *sock);
 const char *NET_QSocketGetTrueAddressString (const struct qsocket_s *sock);
 const char *NET_QSocketGetMaskedAddressString (const struct qsocket_s *sock);
@@ -160,5 +165,17 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr);
 void NET_PortPingProbe_RequestAbort(void);
 void NET_PortPingProbe_Frame(void);
 qboolean NET_PortPingProbe_ConsumeCompleted(const char *connect_addr);
+
+typedef enum
+{
+	NET_CONNECT_PENDING,
+	NET_CONNECT_COMPLETE,
+	NET_CONNECT_FAILED
+} net_connect_result_t;
+
+qboolean NET_DatagramConnectStart(const char *host);
+net_connect_result_t NET_DatagramConnectFrame(struct qsocket_s **outsock, const char **outreason);
+void NET_DatagramConnectCancel(void);
+qboolean NET_DatagramConnectPending(void);
 
 #endif	/* _QUAKE_NET_H */
