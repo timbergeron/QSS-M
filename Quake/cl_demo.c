@@ -215,6 +215,10 @@ static void CL_DemoRewindApplyNumericStat(int stat, int ival, float fval)
 int demo_target_offset = -1; // woods -- target offset for seeking, -1 when not seeking
 qboolean is_seeking = false; // woods -- flag to indicate seeking status
 qboolean demo_seek_from_start = false; // woods -- rewind to start before seeking forward
+static qboolean is_time_seeking = false; // woods -- flag to indicate time-based seek status
+static float demo_time_seek_target = 0.f; // woods -- target demo time for J/L seeks
+static qboolean demo_jump_back_was_down = false; // woods -- edge detector for J key
+static qboolean demo_jump_forward_was_down = false; // woods -- edge detector for L key
 static qboolean initialized = false; // woods (iw) #democontrols
 
 static void CL_ClearDemoFrags(void)
@@ -230,6 +234,8 @@ static void CL_ResetDemoSeekState(void)
 	demo_target_offset = -1;
 	is_seeking = false;
 	demo_seek_from_start = false;
+	is_time_seeking = false;
+	demo_time_seek_target = 0.f;
 }
 
 /*
@@ -266,6 +272,13 @@ static void CL_UpdateDemoSpeed(void)
 	extern qboolean keydown[256];
 	int adjust, singleframe;
 	const float normal_speed = cls.basedemospeed * !cls.demopaused;
+	const qboolean jump_back_down = keydown['j'];
+	const qboolean jump_forward_down = keydown['l'];
+	const qboolean jump_back_pressed = jump_back_down && !demo_jump_back_was_down;
+	const qboolean jump_forward_pressed = jump_forward_down && !demo_jump_forward_was_down;
+
+	demo_jump_back_was_down = jump_back_down;
+	demo_jump_forward_was_down = jump_forward_down;
 
 	if (key_dest != key_game)
 	{
@@ -275,8 +288,48 @@ static void CL_UpdateDemoSpeed(void)
 
 	const int dynamic_threshold = q_max(100, cls.demo_file_length * 0.03); // 3% of the demo file length, with a minimum of 100 for very small files
 	const float seeking_speed = 256;
+	const float seek_time_step = 10.f;
+	const float seek_time_threshold = 0.05f;
 	const int demo_seek_start = (cls.demofilestart > 0) ? (int)cls.demofilestart : cls.demo_offset_start;
 	const int demo_seek_end = cls.demo_offset_start + cls.demo_file_length;
+
+	if (jump_back_pressed != jump_forward_pressed)
+	{
+		const float jump_delta = jump_forward_pressed ? seek_time_step : -seek_time_step;
+		const float current_demo_time = cl.mtime[0];
+		const float base_time = is_time_seeking ? demo_time_seek_target : current_demo_time;
+
+		CL_ResetDemoSeekState();
+		demo_time_seek_target = q_max(0.f, base_time + jump_delta);
+
+		if (fabsf(demo_time_seek_target - current_demo_time) > seek_time_threshold)
+		{
+			is_time_seeking = true;
+			if (demo_time_seek_target < current_demo_time)
+				CL_ClearDemoFrags();
+		}
+	}
+
+	if (is_time_seeking)
+	{
+		const float remaining = demo_time_seek_target - cl.mtime[0];
+
+		if (fabsf(remaining) <= seek_time_threshold ||
+			(demo_rewind.backstop && remaining < 0.f))
+		{
+			cls.demospeed = normal_speed;
+			CL_ResetDemoSeekState();
+			return;
+		}
+
+		cls.demospeed = (remaining > 0.f) ? seeking_speed : -seeking_speed;
+		if (cls.basedemospeed)
+			cls.demospeed *= cls.basedemospeed;
+
+		if (cls.demospeed > 0.f)
+			demo_rewind.backstop = false;
+		return;
+	}
 
 	if (is_seeking) 
 	{

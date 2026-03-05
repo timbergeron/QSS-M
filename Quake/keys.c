@@ -2232,16 +2232,21 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 			}
 			return;
 
-		case K_LEFTARROW:
-		case K_RIGHTARROW:
-		case K_CTRL:
-			// Temporary modifiers: they don't perform their actions on up/down events, but are queried per frame instead
-			// to avoid having to manage state transitions (e.g. pressing esc while still holding left arrow to rewind).
-			return;
+			case K_LEFTARROW:
+			case K_RIGHTARROW:
+			case K_CTRL:
+				// Temporary modifiers: they don't perform their actions on up/down events, but are queried per frame instead
+				// to avoid having to manage state transitions (e.g. pressing esc while still holding left arrow to rewind).
+				return;
 
-		default:
-			// Not a demo control key
-			break;
+			case 'j':
+			case 'l':
+				// One-shot jump keys: CL_UpdateDemoSpeed handles edge detection and seek state.
+				return;
+
+			default:
+				// Not a demo control key
+				break;
 		}
 	}
 
