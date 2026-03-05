@@ -1664,6 +1664,7 @@ void Datagram_Shutdown (void)
 {
 	int i;
 
+	NET_PortPingProbe_Shutdown();
 	Datagram_Listen(false);
 
 //
