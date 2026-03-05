@@ -2438,6 +2438,7 @@ void SV_ReapplyPreferredNames(client_t *skip) // woods #dupnames
 {
 	client_t *client;
 	client_t *saved_host;
+	qcvm_t *saved_vm;
 	size_t i;
 
 	if (sv_reclaiming_names)
@@ -2445,6 +2446,12 @@ void SV_ReapplyPreferredNames(client_t *skip) // woods #dupnames
 
 	sv_reclaiming_names = true;
 	saved_host = host_client;
+	saved_vm = qcvm;
+
+	// This helper can run from console/network disconnect paths where no QC VM
+	// is active. Reclaim under the server VM so PR_SetEngineString is valid.
+	PR_SwitchQCVM(NULL);
+	PR_SwitchQCVM(&sv.qcvm);
 
 	for (i = 0, client = svs.clients; i < (size_t)svs.maxclients; i++, client++)
 	{
@@ -2470,6 +2477,8 @@ void SV_ReapplyPreferredNames(client_t *skip) // woods #dupnames
 		SV_UpdateInfo((int)(client - svs.clients) + 1, "name", preferred);
 	}
 
+	PR_SwitchQCVM(NULL);
+	PR_SwitchQCVM(saved_vm);
 	host_client = saved_host;
 	sv_reclaiming_names = false;
 }
