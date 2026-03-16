@@ -4593,10 +4593,24 @@ static int DiscordThread(void *data)
 static void MakeDiscordPayload(const char *raw, char *out, size_t outsz)
 {
     char clean[1024];
-    q_strlcpy(clean, raw, sizeof(clean));
+    const unsigned char *src = (const unsigned char *)raw;
+    size_t len = 0;
 
-    for (unsigned char *ch = (unsigned char*)clean; *ch; ch++)
-        *ch = dequake[*ch];
+    if (!outsz) return;
+    out[0] = 0;
+    if (!raw) return;
+
+    // Strip the console chat colour prefix so Discord doesn't show ".name:".
+    while (*src == 1 || *src == 2)
+        src++;
+
+    while (*src && len + 1 < sizeof(clean))
+        clean[len++] = dequake[*src++];
+
+    while (len > 0 && (clean[len - 1] == '\n' || clean[len - 1] == '\r'))
+        len--;
+
+    clean[len] = 0;
 
     char *esc = JSON_EscapeString(clean);
     if (!esc) { out[0] = 0; return; }
