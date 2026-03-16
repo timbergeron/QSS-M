@@ -25,5 +25,6 @@ void IPLog_Identify (int addr);
 void IPLog_Dump (void);
 void IPLog_Import (void);
 
+void IPLog_PrintNames (void);
 
 
