@@ -676,6 +676,8 @@ void CL_SignonReply (void)
 			cl.modetype = 6;
 		if (!q_strcasecmp(val, "freezetag"))
 			cl.modetype = 7;
+		if (!q_strcasecmp(val, "headhunters"))
+			cl.modetype = 8;
 
 		// woods lets detect the playmode of the server for hybrid/nq crx
 
