@@ -1590,6 +1590,8 @@ play [demoname]
 void CL_PlayDemo_f (void)
 {
 	char	name[MAX_OSPATH], name2[MAX_OSPATH]; // woods #demosfolder
+	qboolean use_last_demo;
+	qboolean allow_last_fallback;
 
 	if (cmd_source != src_command)
 		return;
@@ -1597,6 +1599,7 @@ void CL_PlayDemo_f (void)
 	if (Cmd_Argc() != 2)
 	{
 		Con_Printf ("\nplaydemo <demoname> : plays a demo\n");
+		Con_Printf ("playdemo last       : plays last.dem if present, otherwise the most recently played demo\n");
 		Con_Printf ("playdemo -l         : plays the most recently played demo\n\n"); // woods #lastdemo
 		return;
 	}
@@ -1604,7 +1607,10 @@ void CL_PlayDemo_f (void)
 // disconnect from server
 	CL_Disconnect ();
 
-	if (!q_strcasecmp(Cmd_Argv(1), "-l")) // woods #lastdemo
+	use_last_demo = !q_strcasecmp(Cmd_Argv(1), "-l");
+	allow_last_fallback = !q_strcasecmp(Cmd_Argv(1), "last");
+
+	if (use_last_demo) // woods #lastdemo
 	{
 		if (!last_demo[0])
 		{
@@ -1621,14 +1627,35 @@ void CL_PlayDemo_f (void)
 	else
 	{
 		q_strlcpy(name, Cmd_Argv(1), sizeof(name));
-		q_strlcpy(last_demo, name, sizeof(last_demo));
-		Log_Last_Demo_f();
+
+		if (!FS_IsCaseSensitive()) // woods #filesystemsens
+			q_strlwr (name);
+
+		if (allow_last_fallback)
+		{
+			COM_AddExtension (name, ".dem", sizeof(name));
+			q_snprintf(name2, sizeof(name2), "demos/%s", name); // woods #demosfolder
+
+			if (!COM_FileExists(name2, NULL) && !COM_FileExists(name, NULL))
+			{
+				if (!last_demo[0])
+					Load_Last_Demo();
+
+				if (!last_demo[0])
+				{
+					Con_Printf("no last demo available\n");
+					return;
+				}
+
+				q_strlcpy(name, last_demo, sizeof(name));
+			}
+		}
 	}
 
 	if (!FS_IsCaseSensitive()) // woods #filesystemsens
 		q_strlwr (name);
 
-	q_strlcpy(demoplaying, Cmd_Argv(1), sizeof(demoplaying)); // store for window title
+	q_strlcpy(demoplaying, name, sizeof(demoplaying)); // store the resolved demo name for window title
 	COM_AddExtension (name, ".dem", sizeof(name));
 
 	q_snprintf(name2, sizeof(name2), "demos/%s", name); // woods #demosfolder
@@ -1682,6 +1709,8 @@ void CL_PlayDemo_f (void)
 	cls.state = ca_connected;
 	cls.demofilestart = ftell(cls.demofile); // woods(iw) #democontrols
 	cls.demofilesize = com_filesize; // woods (iw) #democontrols
+	q_strlcpy(last_demo, name, sizeof(last_demo));
+	Log_Last_Demo_f();
 
 // get rid of the menu and/or console
 	key_dest = key_game;

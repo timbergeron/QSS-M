@@ -2926,7 +2926,7 @@ static qboolean CompleteFileListDemo (const char* partial, void* param) // woods
 	filelist_item_t* file, ** list = (filelist_item_t**)param;
 	char currentDateStr[80];
 
-	// Get current date/time for the -last option
+	// Get current date/time for the last demo aliases
 	time_t now = time(NULL);
 	struct tm* tm_now = localtime(&now);
 
@@ -2942,6 +2942,7 @@ static qboolean CompleteFileListDemo (const char* partial, void* param) // woods
 		currentDateStr[sizeof(currentDateStr) - 1] = '\0';
 	}
 
+	Con_AddToTabList("last", partial, "play last.dem or last cached demo", currentDateStr);
 	Con_AddToTabList("-l", partial, "play last demo", currentDateStr);
 
 	for (file = *list; file; file = file->next)
