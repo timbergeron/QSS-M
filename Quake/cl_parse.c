@@ -2408,6 +2408,169 @@ void CL_ParseProQuakeMessage(void)
 
 static Uint32 last_vote_time = 0; // woods #autovote
 
+static qboolean CL_Autovote_MatchesVoteText(const char* vote_text, const char* token)
+{
+	if (!vote_text[0] || !token[0])
+		return false;
+
+	if (q_strcasestr(vote_text, token))
+		return true;
+
+	if (!q_strcasecmp(token, "timelimit") && q_strcasestr(vote_text, "match length"))
+		return true;
+
+	if (!q_strcasecmp(token, "match length") && q_strcasestr(vote_text, "timelimit"))
+		return true;
+
+	if (!q_strcasecmp(token, "ctf") &&
+		(q_strcasestr(vote_text, "capture the flag") || q_strcasestr(vote_text, "ctf duel")))
+		return true;
+
+	if (!q_strcasecmp(token, "dm") &&
+		(q_strcasestr(vote_text, "deathmatch") || q_strcasestr(vote_text, "free for all")))
+		return true;
+
+	if (!q_strcasecmp(token, "obits") && q_strcasestr(vote_text, "obituaries"))
+		return true;
+
+	return false;
+}
+
+static qboolean CL_Autovote_ShouldExcludeVote(const char* string)
+{
+	char qfrequests[13] = { 242, 229, 241, 245, 229, 243, 244, 243, ' ', 't', 'o', ' ', '\0' };
+	char qfmatchlength[13] = { 237, 225, 244, 227, 232, 32, 236, 229, 238, 231, 244, 232, '\0' };
+	const char* requester_start = string;
+	const char* requester_end = NULL;
+	const char* vote_start = NULL;
+	char requester[256] = { 0 };
+	char vote_text[256] = { 0 };
+	char listbuf[1024];
+	char* token;
+	char* saveptr;
+	qboolean include_mode = false; // false = exclude mode (default)
+	qboolean matched = false;
+
+	if (!cl_autovote_list.string[0])
+		return false;
+
+	requester_end = strstr(string, " requests to ");
+	if (requester_end)
+		vote_start = requester_end + strlen(" requests to ");
+	if (!requester_end)
+	{
+		requester_end = strstr(string, "Request to ");
+		if (requester_end)
+			vote_start = requester_end + strlen("Request to ");
+	}
+	if (!requester_end)
+	{
+		requester_end = strstr(string, qfrequests);
+		if (requester_end)
+			vote_start = requester_end + strlen(qfrequests);
+	}
+	if (!requester_end)
+	{
+		requester_end = strstr(string, "match length");
+		if (requester_end)
+			q_strlcpy(vote_text, "match length", sizeof(vote_text));
+	}
+	if (!requester_end)
+	{
+		requester_end = strstr(string, qfmatchlength);
+		if (requester_end)
+			q_strlcpy(vote_text, "match length", sizeof(vote_text));
+	}
+	if (!requester_end)
+		return false;
+
+	while (*requester_start && q_isspace((unsigned char)*requester_start))
+		requester_start++;
+
+	while (requester_end > requester_start && q_isspace((unsigned char)requester_end[-1]))
+		requester_end--;
+
+	if (requester_end > requester_start)
+	{
+		if ((size_t)(requester_end - requester_start) >= sizeof(requester))
+			requester_end = requester_start + sizeof(requester) - 1;
+
+		memcpy(requester, requester_start, requester_end - requester_start);
+		requester[requester_end - requester_start] = '\0';
+	}
+
+	if (vote_start && !vote_text[0])
+	{
+		const char* vote_end;
+
+		while (*vote_start && q_isspace((unsigned char)*vote_start))
+			vote_start++;
+
+		vote_end = vote_start + strlen(vote_start);
+		while (vote_end > vote_start && q_isspace((unsigned char)vote_end[-1]))
+			vote_end--;
+
+		if ((size_t)(vote_end - vote_start) >= sizeof(vote_text))
+			vote_end = vote_start + sizeof(vote_text) - 1;
+
+		memcpy(vote_text, vote_start, vote_end - vote_start);
+		vote_text[vote_end - vote_start] = '\0';
+	}
+
+	if (!requester[0] && !vote_text[0])
+		return false;
+
+	q_strlcpy(listbuf, cl_autovote_list.string, sizeof(listbuf));
+
+	// first token determines the mode: "exclude" or "include"
+	// if neither, default to exclude mode and treat all tokens as entries
+	token = SDL_strtokr(listbuf, ",;", &saveptr);
+	if (token)
+	{
+		while (*token && q_isspace((unsigned char)*token))
+			token++;
+
+		if (!q_strcasecmp(token, "exclude"))
+		{
+			include_mode = false;
+			token = SDL_strtokr(NULL, ",;", &saveptr); // advance past mode token
+		}
+		else if (!q_strcasecmp(token, "include"))
+		{
+			include_mode = true;
+			token = SDL_strtokr(NULL, ",;", &saveptr); // advance past mode token
+		}
+		// else: first token is not a mode keyword, treat it as an entry in exclude mode
+	}
+
+	for (; token; token = SDL_strtokr(NULL, ",;", &saveptr))
+	{
+		char* token_end;
+
+		while (*token && q_isspace((unsigned char)*token))
+			token++;
+
+		if (!*token)
+			continue;
+
+		token_end = token + strlen(token);
+		while (token_end > token && q_isspace((unsigned char)token_end[-1]))
+			*--token_end = '\0';
+
+		if (*token && ((requester[0] && q_strcasestr(requester, token)) ||
+			CL_Autovote_MatchesVoteText(vote_text, token)))
+		{
+			matched = true;
+			break;
+		}
+	}
+
+	if (include_mode)
+		return !matched; // include mode: exclude if NOT in the list
+	else
+		return matched;  // exclude mode: exclude if in the list
+}
+
 /* 
 =======================
 CL_ParseProQuakeString -- // begin rook / woods #pqteam
@@ -2579,12 +2742,13 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 				}
 
 				char qfmatchlength[13] = { 237, 225, 244, 227, 232, 32, 236, 229, 238, 231, 244, 232,'\0' }; // woods -- quake font red 'match length'
+				qboolean vote_requester_excluded = CL_Autovote_ShouldExcludeVote(string);
 				
 				Uint32 current_time = SDL_GetTicks(); // get current time in milliseconds
 
 				if (cl_autovote.value) // woods #autovote --  yes on timelimit requests
 				{
-					if ((current_time - last_vote_time) >= 31000 && !strstr(string, cl_name.string)) // check if 31 seconds
+					if ((current_time - last_vote_time) >= 31000 && !strstr(string, cl_name.string) && !vote_requester_excluded) // check if 31 seconds
 					{
 						if ((strstr(string, qfmatchlength) || (strstr(string, "match length"))))  // hybrid, crx
 						{
@@ -2601,7 +2765,7 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 
 				if (cl_autovote.value == 2 && atoi(spectator) != 1) // yes vote on all requests
 				{
-					if ((current_time - last_vote_time) >= 31000 && !strstr(string, cl_name.string)) // check if 31 seconds
+					if ((current_time - last_vote_time) >= 31000 && !strstr(string, cl_name.string) && !vote_requester_excluded) // check if 31 seconds
 					{
 						if (strstr(string, " requests to ") || strstr(string, "Request to ") || strstr(string, qfrequests)) // crx, crmod, hybrid
 						{

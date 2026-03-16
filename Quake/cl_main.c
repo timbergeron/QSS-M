@@ -92,6 +92,7 @@ cvar_t  cl_bobbing = {"cl_bobbing", "0", CVAR_ARCHIVE}; // woods (joequake #weap
 cvar_t	cl_web_download_url = {"cl_web_download_url", "q1tools/q1tools.github.io", CVAR_ARCHIVE}; // woods #webdl
 cvar_t	cl_web_download_url2 = { "cl_web_download_url2", "maps.quakeworld.nu", CVAR_ARCHIVE }; // woods #webdl
 cvar_t	cl_autovote = {"cl_autovote", "0", CVAR_ARCHIVE}; // woods #autovote
+cvar_t	cl_autovote_list = {"cl_autovote_list", "", CVAR_ARCHIVE}; // woods #autovote
 cvar_t	cl_onload = {"cl_onload", "", CVAR_ARCHIVE}; // woods #onload
 cvar_t	cl_contentfilter = {"cl_contentfilter", "0", CVAR_ARCHIVE}; // woods #contentfilter
 
@@ -4026,6 +4027,111 @@ static void CL_Onload_Completion_f(cvar_t* cvar, const char* partial)
 }
 
 /*
+===============
+CL_Autovote_List_Completion_f -- woods #autovote
+===============
+*/
+static void CL_Autovote_List_Completion_f(cvar_t* cvar, const char* partial)
+{
+	static const struct
+	{
+		const char* value;
+		const char* type;
+	} options[] =
+	{
+		{ "player", "name" },
+		{ "powerzord", "name" },
+		{ "sofdm3", "map" },
+		{ "change level", "vote" },
+		{ "next level", "vote" },
+		{ "change map", "vote" },
+		{ "change gametype", "vote" },
+		{ "change mode", "vote" },
+		{ "change frag limit", "vote" },
+		{ "frag limit", "vote" },
+		{ "change match length", "vote" },
+		{ "match length", "vote" },
+		{ "change overtime", "vote" },
+		{ "overtime", "vote" },
+		{ "weaponstay", "vote" },
+		{ "grappling hook", "vote" },
+		{ "entity set", "vote" },
+		{ "alternative entity set", "vote" },
+		{ "standard entity set", "vote" },
+		{ "gibs", "vote" },
+		{ "quad", "vote" },
+		{ "pentagram", "vote" },
+		{ "ring of shadows", "vote" },
+		{ "obituaries", "vote" },
+		{ "match autopause", "vote" },
+		{ "prediction", "vote" },
+		{ "runes", "vote" },
+		{ "abort match", "vote" },
+		{ "powerup dropping", "vote" },
+		{ "pause the match", "vote" },
+		{ "unpause the match", "vote" },
+		{ "lock the match", "vote" },
+		{ "allow new players to join", "vote" },
+		{ "start the timer", "vote" },
+		{ "randomly reshuffle the teams", "vote" },
+		{ "qwsucks", "vote" },
+		{ "q14ever", "vote" },
+		{ "free for all", "gametype" },
+		{ "team deathmatch", "gametype" },
+		{ "deathmatch", "gametype" },
+		{ "ctf", "mode" },
+		{ "capture the flag", "gametype" },
+		{ "clan arena", "gametype" },
+		{ "rocket arena", "gametype" },
+		{ "dm", "mode" },
+		{ "duel", "gametype" },
+		{ "airshot", "gametype" },
+		{ "wipeout", "gametype" },
+		{ "ctf duel", "gametype" },
+		{ "timelimit", "vote" },
+		{ "normal", "mode" },
+		{ "practice", "mode" },
+		{ "match", "mode" }
+	};
+	char candidate[MAXCMDLINE];
+	const char* comma = strrchr(partial, ',');
+	const char* semicolon = strrchr(partial, ';');
+	const char* separator = comma;
+	size_t prefix_len = 0;
+	size_t i;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	if (!separator || (semicolon && semicolon > separator))
+		separator = semicolon;
+
+	if (separator)
+	{
+		prefix_len = (size_t)((separator + 1) - partial);
+		while (partial[prefix_len] && q_isspace((unsigned char)partial[prefix_len]))
+			prefix_len++;
+	}
+
+	// offer mode keywords at first position
+	if (!prefix_len)
+	{
+		Con_AddToTabList("exclude", partial, "mode", NULL);
+		Con_AddToTabList("include", partial, "mode", NULL);
+	}
+
+	for (i = 0; i < sizeof(options) / sizeof(options[0]); ++i)
+	{
+		if (prefix_len)
+			q_snprintf(candidate, sizeof(candidate), "%.*s%s", (int)prefix_len, partial, options[i].value);
+		else
+			q_strlcpy(candidate, options[i].value, sizeof(candidate));
+
+		Con_AddToTabList(candidate, partial, options[i].type, NULL);
+	}
+}
+
+/*
 =================
 CL_Init
 =================
@@ -4101,6 +4207,8 @@ void CL_Init (void)
 	Cvar_SetCallback (&cl_web_download_url2, &Web2CheckCallback_f); // woods #webdl
 
 	Cvar_RegisterVariable (&cl_autovote); // woods #autovote
+	Cvar_RegisterVariable (&cl_autovote_list); // woods #autovote
+	Cvar_SetCompletion (&cl_autovote_list, &CL_Autovote_List_Completion_f); // woods #autovote
 	Cvar_RegisterVariable (&cl_onload); // woods #onload
 	Cvar_SetCompletion (&cl_onload, &CL_Onload_Completion_f); // woods #onload
 	Cvar_RegisterVariable (&cl_contentfilter); // woods #contentfilter
