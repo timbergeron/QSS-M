@@ -105,6 +105,7 @@ extern cvar_t r_lerpmove; //johnfitz
 
 extern qpic_t* sb_nums[2][11]; // woods #varmatchclock
 extern qpic_t* sb_colon; // woods #varmatchclock
+extern qpic_t* sb_faces[7][2]; // woods #headhunters
 
 extern cvar_t scr_scoreboard_teamsort; // woods #teamscoreboard
 void Sbar_SortFrags_TeamOrder(qboolean sort_ascending); // woods #teamscoreboard
@@ -2205,6 +2206,64 @@ void SCR_DrawMatchScores(void)
 		if (!q_strcasecmp(uiplaymode, "ffa") || !q_strcasecmp(siplaymode, "ffa"))
 		{
 			SCR_DrawFFADifferential();
+		}
+	}
+
+	// woods #headhunters -- draw head count below clock
+	if (cl.modetype == 8 && scr_match_hud.value && cl.gametype == GAME_DEATHMATCH)
+	{
+		char heads_buf[16], hval_buf[16];
+		const char *heads_str, *hval_str;
+		char num[12], hval[12];
+		int heads, headvalue, nlen, hlen;
+
+		heads_str = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "heads", heads_buf, sizeof(heads_buf));
+		heads = atoi(heads_str);
+
+		hval_str = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "headvalue", hval_buf, sizeof(hval_buf));
+		headvalue = atoi(hval_str);
+
+		sprintf(num, "%d", heads);
+		nlen = strlen(num);
+
+		sprintf(hval, "+%d", headvalue);
+		hlen = strlen(hval);
+
+		// layout: [face] count +headvalue
+		// face+count on TOPRIGHT3 (2x), +headvalue on TOPRIGHT4 (1x = half size)
+		// reserve space for +hval at half-equivalent width (each 1x char = 4 T3 units)
+		{
+			int num_w = nlen * 8;
+			int hval_equiv = (heads > 0) ? hlen * 4 : 0; /* T3-equivalent width */
+			int face_w = 12; /* 24 * 0.5 scale */
+			int gap = 3;
+			int gap2 = 1;
+			int total_w = face_w + gap + num_w + ((heads > 0) ? gap2 + hval_equiv : 0);
+			int base_x = 44 - total_w;
+			int nx = base_x + face_w + gap;
+			int count_end = nx + num_w;
+
+			GL_SetCanvas(CANVAS_TOPRIGHT3);
+			Draw_ScaledPicAlpha(base_x, 1, sb_faces[0][1], 0.5f, 1.0f);
+			Draw_String(nx, 3, num);
+
+			// draw +headvalue at half size, only when heads > 0
+			if (heads > 0)
+			{
+				plcolour_t accent = Draw_GetConcharsAccentColor();
+				int hx = 104 + 2 * (count_end + gap2);
+				int hy = 34; /* vertically centered with count text */
+				int i;
+
+				GL_SetCanvas(CANVAS_TOPRIGHT4);
+				for (i = 0; hval[i]; i++)
+				{
+					if (hval[i] >= '0' && hval[i] <= '9')
+						Draw_Character(hx + i * 8, hy, hval[i] - 30);
+					else
+						Draw_CharacterRGBA(hx + i * 8, hy, hval[i], accent, 1.0f);
+				}
+			}
 		}
 	}
 
