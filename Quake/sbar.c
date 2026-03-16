@@ -29,6 +29,7 @@ int		sb_updates;		// if >= vid.numpages, no update needed
 extern int	maptime; // woods connected map time #maptime
 extern double  mpservertime;	// woods #servertime
 extern char mute[2];			// woods for mute to memory #usermute
+extern qboolean muted;			// woods #usermute
 int	fragsort[MAX_SCOREBOARD]; // woods #scrping
 int	scoreboardlines; // woods #scrping
 extern char	lastmphost[NET_NAMELEN]; // woods
@@ -2393,9 +2394,23 @@ void Sbar_Draw (void)
 	{
 		float completed_amount_0_to_1 = (cls.demo_offset_current - cls.demo_offset_start) / (float)cls.demo_file_length;
 		int complete_pct_int = 100 - (int)(100 * completed_amount_0_to_1 + 0.5);
-		char* tempstring = va("%i%%", complete_pct_int);
-		int len = strlen(tempstring), i;
+		char *tempstring;
+		int len, i;
 		int x = 0, y = 0;
+
+		if (sb_showscores) // woods #demoframes -- show frame count when showscores is active
+		{
+			int current_frame = CL_GetDemoFrameCount();
+			int total_est = (completed_amount_0_to_1 > 0.01f) ? (int)(current_frame / completed_amount_0_to_1 + 0.5f) : 0;
+			if (total_est > 0)
+				tempstring = va("%d / %d", current_frame, total_est);
+			else
+				tempstring = va("%d", current_frame);
+		}
+		else
+			tempstring = va("%i%%", complete_pct_int);
+
+		len = strlen(tempstring);
 
 		if (clampedSbar == 3) // #qehud
 		{
@@ -2419,25 +2434,28 @@ void Sbar_Draw (void)
 
 			y = 209;
 
-			if (!scr_showspeed.value && strcmp(mute, "y")) // by itself
+			if (!scr_showspeed.value && !muted) // by itself
 					x = 24;
-			if (scr_showspeed.value && strcmp(mute, "y"))
+			if (scr_showspeed.value && !muted)
 				x = 60;
-			if (scr_showspeed.value && !strcmp(mute, "y")) // both
+			if (scr_showspeed.value && muted) // both
 				x = 104;
-			if (!scr_showspeed.value && !strcmp(mute, "y"))
+			if (!scr_showspeed.value && muted)
 				x = 62;
 
-			if (complete_pct_int < 10)
-				x -= 7;
-			if (complete_pct_int > 99)
-				x += 7;
+			if (!sb_showscores)
+			{
+				if (complete_pct_int < 10)
+					x -= 7;
+				if (complete_pct_int > 99)
+					x += 7;
+			}
 		}
 		if (clampedSbar == 1)
 		{
 			GL_SetCanvas(CANVAS_SBAR2);
 
-			if (!strcmp(mute, "y"))
+			if (muted)
 				x = 280;
 			else
 				x = 320;

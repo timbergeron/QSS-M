@@ -587,6 +587,7 @@ void CL_Stop_f (void);
 void CL_Record_f (void);
 void CL_PlayDemo_f (void);
 void CL_TimeDemo_f (void);
+int CL_GetDemoFrameCount(void); // woods #demoframes
 
 //
 // cl_parse.c

@@ -240,6 +240,16 @@ static void CL_ResetDemoSeekState(void)
 
 /*
 ===============
+CL_GetDemoFrameCount -- woods #demoframes
+===============
+*/
+int CL_GetDemoFrameCount(void)
+{
+	return (int)VEC_SIZE(demo_rewind.frames);
+}
+
+/*
+===============
 CL_AddDemoRewindSound
 ===============
 */
