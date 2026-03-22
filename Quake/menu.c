@@ -25666,7 +25666,7 @@ void M_GameOptions_Key (int key)
 					if (selected_map[0])
 						Cvar_Set("sv_defaultmap", selected_map);
 					COM_SetModvoteAutostart();
-					Cbuf_AddText(va("game %s\n", selected_mod));
+					Cbuf_AddText(va("game \"%s\"\n", selected_mod));
 				}
 				return;
 			}
@@ -28739,7 +28739,7 @@ void M_Mods_Key(int key)
 		if (modsmenu.list.numitems > 0)
 		{
 			int mod_idx = modsmenu.filtered_indices[modsmenu.list.cursor];
-			Cbuf_AddText(va("game %s\n", modsmenu.items[mod_idx].name));
+			Cbuf_AddText(va("game \"%s\"\n", modsmenu.items[mod_idx].name));
 			M_Menu_Main_f();
 		}
 		break;
