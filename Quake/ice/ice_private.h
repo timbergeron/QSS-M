@@ -19,6 +19,8 @@
 	#ifndef strncasecmp
 		#define strncasecmp _strnicmp
 	#endif
+	#include <stddef.h>
+	typedef ptrdiff_t ssize_t;
 #endif
 #define qboolean bool
 typedef unsigned char qbyte;
@@ -258,6 +260,8 @@ struct icemodule_s
 	void (*ClosedState) (struct icemodule_s *module, struct icestate_s *ice);	//an ice state timed out or was otherwise destroyed
 
 	struct icesocket_s *conn[MAX_NETWORKS];
+	int setupudpport;	// for lazy retry if sockets fail at init
+	int setuptcpport;
 
 	//private ICE state.
 	struct icemodule_s *next;
@@ -361,7 +365,7 @@ struct icesocket_s
 	int af;
 };
 struct icesocket_s *ICE_OpenUDP(netadrtype_t type, int port);
-void ICE_SetupModule(struct icemodule_s *module, int port);
+void ICE_SetupModule(struct icemodule_s *module, int udpport, int tcpport);
 
 enum addressscope_e NET_ClassifyAddress(const netadr_t *adr, const char **outdesc);
 int ParsePartialIP(const char *s, netadr_t *a);
@@ -379,6 +383,20 @@ void MDNS_Shutdown(void);
 qboolean MDNS_AddQuery(struct icemodule_s *module, struct icestate_s *con, struct icecandinfo_s *can);	//sends a query, pokes the ice state on receipt.
 void MDNS_RemoveQueries(struct icestate_s *con);						//removes any dead links if a query is pending when ice is killed.
 void MDNS_SendQueries(void);	//processes responses too.
+
+//dynamic library loading (for GNUTLS_DYNAMIC etc)
+typedef struct {
+	void **funcptr;
+	char *name;
+} dllfunction_t;
+typedef void *dllhandle_t;
+dllhandle_t *Sys_LoadLibrary(const char *name, dllfunction_t *funcs);
+void *Sys_GetAddressForName(dllhandle_t *hmod, const char *name);
+void Sys_CloseLibrary(dllhandle_t *lib);
+
+#ifndef VARGS
+#define VARGS
+#endif
 
 //imported from quake stuff...
 qboolean Sys_RandomBytes(unsigned char *out, int len);	//this function is meant to return cryptographically strong randomness. libc is generally inadequete and may be a security risk. hopefully the engine will define this...

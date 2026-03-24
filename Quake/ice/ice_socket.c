@@ -714,7 +714,7 @@ static void ICETCP_CheckAccept (struct icesocket_s *s, struct icemodule_s *modul
 	netadr_t adr;
 	socklen_t adrlen = sizeof(adr.ss);
 	SOCKET fd = accept(s->sock, &adr.sa, &adrlen);
-	if (fd >= 0)
+	if (fd != INVALID_SOCKET)
 	{	//if we got a new client, create a new 'ice' state using that link.
 		struct icesocket_s *link;
 #ifdef _WIN32
@@ -783,21 +783,29 @@ static struct icesocket_s *ICE_OpenTCPSocket(netadrtype_t type, int port)
 }
 
 
-void ICE_SetupModule(struct icemodule_s *module, int port)
+void ICE_SetupModule(struct icemodule_s *module, int udpport, int tcpport)
 {	//fixme: we should be binding one socket on each interface instead of INADDR_ANY. otherwise we're depending on the OS routing to be correct when multihomed. this may cause issues for linklocal addresses.
+	module->setupudpport = udpport;	// remember for lazy retry
+	module->setuptcpport = tcpport;
+
+	// UDP sockets for ICE/STUN (outbound, ephemeral fallback)
 	if (!module->conn[0])
-		module->conn[0] = ICE_OpenUDP(NA_IP, port);
-	if (!module->conn[0] && port)
+		module->conn[0] = ICE_OpenUDP(NA_IP, udpport);
+	if (!module->conn[0] && udpport)
 		module->conn[0] = ICE_OpenUDP(NA_IP, 0);	//try again, but with ephemeral.
 
 	if (!module->conn[1])
-		module->conn[1] = ICE_OpenUDP(NA_IPV6, port);
-	if (!module->conn[1] && port)
+		module->conn[1] = ICE_OpenUDP(NA_IPV6, udpport);
+	if (!module->conn[1] && udpport)
 		module->conn[1] = ICE_OpenUDP(NA_IPV6, 0);	//try again, but with ephemeral
 
-	//open some tcp sockets too, in case people want to use websockets.
-	if (!module->conn[2] && port)
-		module->conn[2] = ICE_OpenTCPSocket(NA_IP, port);
-	if (!module->conn[3] && port)
-		module->conn[3] = ICE_OpenTCPSocket(NA_IPV6, port);
+	// TCP sockets for WebSocket connections (on game port for easy firewall config)
+	if (!module->conn[2] && tcpport)
+		module->conn[2] = ICE_OpenTCPSocket(NA_IP, tcpport);
+	if (!module->conn[3] && tcpport)
+		module->conn[3] = ICE_OpenTCPSocket(NA_IPV6, tcpport);
+
+	// Clear retry flag once sockets are open
+	if (module->conn[0] && module->conn[2])
+		module->setupudpport = module->setuptcpport = 0;
 }

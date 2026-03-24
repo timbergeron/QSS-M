@@ -207,7 +207,9 @@ static qboolean Init_GNUTLS(void)
 		{NULL, NULL}
 	};
 	
-#ifdef GNUTLS_SONUM
+#if defined(_WIN32)
+	gnutls.hmod = Sys_LoadLibrary("libgnutls-30.dll", functable);
+#elif defined(GNUTLS_SONUM)
 	#ifdef __CYGWIN__
 		gnutls.hmod = Sys_LoadLibrary("cyggnutls"GNUTLS_SOPREFIX"-"STRINGIFY(GNUTLS_SONUM)".dll", functable);
 	#else

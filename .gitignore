@@ -9,3 +9,6 @@ Windows/VisualStudio/UpgradeLog.htm
 
 # macOS
 .DS_Store
+
+out
+.vs

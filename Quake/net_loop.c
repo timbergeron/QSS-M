@@ -216,7 +216,9 @@ int Loop_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data)
 {
 	byte *buffer;
 	int  *bufferLength;
-	int   sequence = sock->unreliableSendSequence++;
+	int   sequence;
+
+	sequence = sock->unreliableSendSequence++;
 
 	if (!sock->driverdata)
 		return -1;

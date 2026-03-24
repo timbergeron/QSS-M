@@ -3062,6 +3062,7 @@ void ICE_ProcessModule(struct icemodule_s *module)
 	struct icesocket_s *s;
 	int sz;
 	netadr_t adr;
+
 	for (i = 0; i < countof(module->conn); i++)
 	{
 		s = module->conn[i];

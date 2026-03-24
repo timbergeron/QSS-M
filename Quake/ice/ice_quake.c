@@ -60,6 +60,7 @@ static cvar_t net_ice_servers = CVARFD("net_ice_servers", "", CVAR_NOTFROMSERVER
 static cvar_t net_ice_debug = CVARFD("net_ice_debug", "0", CVAR_NOTFROMSERVER, "0: Hide messy details.\n1: Show new candidates.\n2: Show each connectivity test.");
 static cvar_t net_ice_broker = CVARFD("net_ice_broker", "master.frag-net.com:27950", CVAR_NOTFROMSERVER, "This is the default broker we attempt to connect through when using 'sv_port_rtc /foo' or 'connect /foo'.");
 cvar_t sv_port_rtc = CVARFD("sv_port_rtc", "/", CVAR_NOTFROMSERVER, "This is the '/roomname' for your server to register as. When '/' will request the master assign one. Empty will disable registration.");
+static cvar_t sv_addr_ws = CVARFD("sv_addr_ws", "", CVAR_NOTFROMSERVER, "WebSocket address for this server (e.g. wss://example.com:27950). Sent as *wsaddr in infostrings.");
 extern cvar_t com_protocolname;
 
 
@@ -349,6 +350,24 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 	{
 		const char *roomname = b->gamename;
 		char *url;
+		char *c;
+
+		// Re-read the broker cvar in case it was changed by autoexec.cfg
+		// after the initial QICE_Setup during NET_Init
+		{
+			const char *broker = net_ice_broker.string;
+			if (!strncmp(broker, "ws://", 5))
+				{ broker += 5; b->issecure = false; }
+			else if (!strncmp(broker, "wss://", 6))
+				{ broker += 6; b->issecure = true; }
+			q_strlcpy(b->brokername, broker, sizeof(b->brokername));
+			c = strchr(b->brokername, ':');
+			if (c)
+				{ b->brokerport = atoi(c+1); *c = 0; }
+			else
+				b->brokerport = PORT_ICEBROKER;
+		}
+
 		if (b->reconnecttimeout > realtime || !*b->brokername)
 			return false;
 
@@ -787,7 +806,9 @@ static qice_connection_t *QICE_Setup(const char *address, qboolean isserver)
 	newcon->icemodule.SendInitial = QICE_SendInitial;
 	newcon->icemodule.ClosedState = QICE_Closed;
 
-	ICE_SetupModule(&newcon->icemodule, isserver?net_hostport+1000:0);	//try to keep to well-defined port numbers, ish, in case people need to set up manual holepunching.
+	ICE_SetupModule(&newcon->icemodule,
+		isserver ? net_hostport+1000 : 0,	// UDP for ICE/STUN (offset to avoid conflict with game socket)
+		isserver ? net_hostport : 0);		// TCP/WebSocket on game port (no conflict, different protocol)
 
 #ifdef HAVE_DTLS
 	if (isserver)
@@ -796,42 +817,47 @@ static qice_connection_t *QICE_Setup(const char *address, qboolean isserver)
 		int a_k, a_c;
 		newcon->icemodule.dtlsfuncs = ICE_DTLS_InitServer();	//we want to support clients using dtls...
 
-		a_k = COM_CheckParm("-privkey")+1;
-		a_c = COM_CheckParm("-pubkey")+1;
-		if (a_k <= 1 || a_k >= com_argc || a_c <= 1 || a_c >= com_argc || !QICE_LoadCerts(&cred, com_argv[a_k], com_argv[a_c]))
+		if (newcon->icemodule.dtlsfuncs)
+		{
+			a_k = COM_CheckParm("-privkey")+1;
+			a_c = COM_CheckParm("-pubkey")+1;
+			if (a_k <= 1 || a_k >= com_argc || a_c <= 1 || a_c >= com_argc || !QICE_LoadCerts(&cred, com_argv[a_k], com_argv[a_c]))
 #if defined(__unix__) || defined(__POSIX__)
-			if (!QICE_LoadCerts(&cred, "/etc/ssl/private/privkey.pem", "/etc/ssl/certs/fullchain.pem"))	//look in the system path.
+				if (!QICE_LoadCerts(&cred, "/etc/ssl/private/privkey.pem", "/etc/ssl/certs/fullchain.pem"))	//look in the system path.
 #endif
-				if (!QICE_LoadCerts(&cred, va("%s/privkey.pem", com_basedir), va("%s/fullchain.pem", com_basedir)))
-					if (!QICE_LoadCerts(&cred, va("%s/privkey.der", com_basedir), va("%s/fullchain.der", com_basedir)))
-					{	//generate temp ones.
-						char *hostname = "localhost";
-						int a_h = COM_CheckParm("-certhost")+1;
-						if (a_h > 1 && a_h < com_argc)
-							hostname = com_argv[a_h];
+					if (!QICE_LoadCerts(&cred, va("%s/privkey.pem", com_basedir), va("%s/fullchain.pem", com_basedir)))
+						if (!QICE_LoadCerts(&cred, va("%s/privkey.der", com_basedir), va("%s/fullchain.der", com_basedir)))
+						{	//generate temp ones.
+							char *hostname = "localhost";
+							int a_h = COM_CheckParm("-certhost")+1;
+							if (a_h > 1 && a_h < com_argc)
+								hostname = com_argv[a_h];
 
-						if (newcon->icemodule.dtlsfuncs->GenTempCertificate(hostname, &cred))
-						{
-							int fd;
-							//and save em to disk
-							fd = Sys_FileOpenWrite(va("%s/privkey.der", com_basedir));
-							if (fd>=0)
+							if (newcon->icemodule.dtlsfuncs->GenTempCertificate(hostname, &cred))
 							{
-								Sys_FileWrite(fd, cred.key, cred.keysize);
-								Sys_FileClose(fd);
-							}
-							fd = Sys_FileOpenWrite(va("%s/fullchain.der", com_basedir));
-							if (fd>=0)
-							{
-								Sys_FileWrite(fd, cred.cert, cred.certsize);
-								Sys_FileClose(fd);
+								int fd;
+								//and save em to disk
+								fd = Sys_FileOpenWrite(va("%s/privkey.der", com_basedir));
+								if (fd>=0)
+								{
+									Sys_FileWrite(fd, cred.key, cred.keysize);
+									Sys_FileClose(fd);
+								}
+								fd = Sys_FileOpenWrite(va("%s/fullchain.der", com_basedir));
+								if (fd>=0)
+								{
+									Sys_FileWrite(fd, cred.cert, cred.certsize);
+									Sys_FileClose(fd);
+								}
 							}
 						}
-					}
 
-		newcon->icemodule.dtlsfuncs->SetCredentials(&cred);
-		free(cred.cert);
-		free(cred.key);
+			newcon->icemodule.dtlsfuncs->SetCredentials(&cred);
+			free(cred.cert);
+			free(cred.key);
+		}
+		else
+			Con_Printf(CON_WARNING"DTLS unavailable - GnuTLS library failed to load.\n");
 	}
 #endif
 
@@ -1036,6 +1062,7 @@ int NQICE_Init (void)
 	//broker context.
 	Cvar_RegisterVariable(&net_ice_broker);
 	Cvar_RegisterVariable(&sv_port_rtc);
+	Cvar_RegisterVariable(&sv_addr_ws);
 
 	Cmd_AddCommand("net_ice_show", ICE_Show_f);
 
@@ -1841,6 +1868,16 @@ void NQICE_GetAnyMessages(void(*callback)(qsocket_t *))
 	}
 }
 
+qboolean NQICE_IsListening (void)
+{
+	return qice_listening && qice_hostcon != NULL;
+}
+
+const char *NQICE_GetWsAddr (void)
+{
+	return sv_addr_ws.string;
+}
+
 void NQICE_Listen (qboolean state)	//used by server (enables websocket connection).
 {
 	//connect/disconnect the websocket connection etc.
@@ -1919,11 +1956,11 @@ int NQICE_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data)
 		memcpy(pkt->data, data->data, data->cursize);
 
 		err = iceapi.SendPacket(ice, pkt, NET_HEADERSIZE+data->cursize);
-		if (err == NETERR_CLOGGED)
-			return 0;
 		if (err == NETERR_SENT)
 			return 1; //yay
-		return -1;	//fatal
+		if (err == NETERR_DISCONNECTED)
+			return -1;	//fatal
+		return 0;	//CLOGGED, NOROUTE, etc - transient, don't kill connection for unreliable data
 	}
 	return 0;	//not doable yet
 }

@@ -36,6 +36,8 @@ qboolean	NQICE_CanSendMessage (qsocket_t *sock);
 qboolean	NQICE_CanSendUnreliableMessage (qsocket_t *sock);
 void		NQICE_Close (qsocket_t *sock);
 void		NQICE_Shutdown (void);
+qboolean	NQICE_IsListening (void);	//returns true if the ICE/WebSocket server is active
+const char	*NQICE_GetWsAddr (void);	//returns sv_addr_ws cvar value (empty string if unset)
 
 #endif	/* __ICE_QUAKE_H */
 

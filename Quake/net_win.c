@@ -49,25 +49,7 @@ net_driver_t net_drivers[] =
 		Loop_Shutdown
 	},
 	
-		{	"ICE",
-		false,
-		NQICE_Init,
-		NQICE_Listen,
-		NQICE_QueryAddresses,
-		NQICE_SearchForHosts,
-		NQICE_Connect,
-		NQICE_CheckNewConnections,
-		NQICE_GetAnyMessages,
-		NQICE_GetMessage,
-		NQICE_SendMessage,
-		NQICE_SendUnreliableMessage,
-		NQICE_CanSendMessage,
-		NQICE_CanSendUnreliableMessage,
-		NQICE_Close,
-		NQICE_Shutdown
-	},
-
-	{	"Datagram",
+		{	"Datagram",
 		false,
 		Datagram_Init,
 		Datagram_Listen,
@@ -83,6 +65,24 @@ net_driver_t net_drivers[] =
 		Datagram_CanSendUnreliableMessage,
 		Datagram_Close,
 		Datagram_Shutdown
+	},
+
+	{	"ICE",
+		false,
+		NQICE_Init,
+		NQICE_Listen,
+		NQICE_QueryAddresses,
+		NQICE_SearchForHosts,
+		NQICE_Connect,
+		NQICE_CheckNewConnections,
+		NQICE_GetAnyMessages,
+		NQICE_GetMessage,
+		NQICE_SendMessage,
+		NQICE_SendUnreliableMessage,
+		NQICE_CanSendMessage,
+		NQICE_CanSendUnreliableMessage,
+		NQICE_Close,
+		NQICE_Shutdown
 	}
 };
 
@@ -90,7 +90,7 @@ const int net_numdrivers = (sizeof(net_drivers) / sizeof(net_drivers[0]));
 
 
 #include "net_wins.h"
-#include "net_wipx.h"
+/* #include "net_wipx.h" */ /* IPX removed — not available on modern Windows */
 
 net_landriver_t	net_landrivers[] =
 {
@@ -142,6 +142,7 @@ net_landriver_t	net_landrivers[] =
 		WINS_SetSocketPort
 	},
 #endif
+#if 0 /* IPX removed — protocol not available on modern Windows */
 	{	"Winsock IPX",
 		false,
 		0,
@@ -165,6 +166,7 @@ net_landriver_t	net_landrivers[] =
 		WIPX_GetSocketPort,
 		WIPX_SetSocketPort
 	}
+#endif
 };
 
 const int net_numlandrivers = (sizeof(net_landrivers) / sizeof(net_landrivers[0]));
