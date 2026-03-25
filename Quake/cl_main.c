@@ -129,7 +129,29 @@ extern qboolean netquakeio; // woods
 extern int retry_counter; // woods #ms
 extern int grenadecache, rocketcache; // woods #r2g
 extern qboolean pausedprint; // woods
+extern SDL_TimerID chatTimerID; // woods #chatinfo
+extern qboolean isChatTimerRunning; // woods #chatinfo
 static qboolean prediction_msg_shown = false; // woods #prednotify
+
+static void CL_ClearTypingState(void)
+{
+	int i;
+
+	Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "chat", "0");
+
+	if (isChatTimerRunning)
+	{
+		SDL_RemoveTimer(chatTimerID);
+		isChatTimerRunning = false;
+		chatTimerID = 0;
+	}
+
+	if (!cl.scores || cl.maxclients <= 0)
+		return;
+
+	for (i = 0; i < cl.maxclients; i++)
+		Info_SetKey(cl.scores[i].userinfo, sizeof(cl.scores[i].userinfo), "chat", "");
+}
 
 void CL_ClearTrailStates(void)
 {
@@ -426,6 +448,7 @@ void CL_Disconnect (void)
 {
 	NET_PortPingProbe_RequestAbort();
 	CL_CancelConnect();
+	CL_ClearTypingState();
 
 	if (key_dest == key_message)
 		Key_EndChat ();	// don't get stuck in chat mode
