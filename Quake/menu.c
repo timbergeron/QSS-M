@@ -3112,7 +3112,9 @@ Multiplayer Menu
 
 int	m_multiplayer_cursor;
 #define	MULTIPLAYER_BASE_ITEMS	3
-#define	MAX_PINNED_BOOKMARKS	3
+#define	MAX_PINNED_BOOKMARKS	5
+#define	MULTIPLAYER_PINNED_OFFSET_Y	6
+#define	MULTIPLAYER_PINNED_SPACING	10
 extern cvar_t scr_shownet; // woods
 
 #define	BOOKMARK_ALIAS_LENGTH	BOOKMARK_DATA_LENGTH
@@ -3132,9 +3134,10 @@ static int M_Bookmarks_CountPinned(void)
 	int count = 0;
 	for (filelist_item_t* item = bookmarkslist; item; item = item->next)
 	{
+		char alias[BOOKMARK_ALIAS_LENGTH];
 		qboolean pinned = false;
-		BookmarkData_Parse(item->data, NULL, 0, &pinned);
-		if (pinned)
+		BookmarkData_Parse(item->data, alias, sizeof(alias), &pinned);
+		if (pinned && alias[0])
 			count++;
 	}
 	return count;
@@ -3176,12 +3179,15 @@ static int M_Bookmarks_GetPinned(pinnedbookmark_t* out, int max_pins)
 static int M_MultiPlayer_TotalItems(void)
 {
 	int total = MULTIPLAYER_BASE_ITEMS;
-	int pinned = M_Bookmarks_CountPinned();
+	pinnedbookmark_t pinned[MAX_PINNED_BOOKMARKS];
+	int pinned_count = M_Bookmarks_GetPinned(pinned, MAX_PINNED_BOOKMARKS);
 
-	if (pinned > MAX_PINNED_BOOKMARKS)
-		pinned = MAX_PINNED_BOOKMARKS;
+	return total + pinned_count;
+}
 
-	return total + pinned;
+static int M_MultiPlayer_FirstPinnedY(void)
+{
+	return 32 + MULTIPLAYER_BASE_ITEMS * 20 + MULTIPLAYER_PINNED_OFFSET_Y;
 }
 
 void M_Menu_MultiPlayer_f (void)
@@ -3196,9 +3202,6 @@ extern char	lastmphost[NET_NAMELEN]; // woods - connected server address
 
 void M_MultiPlayer_Draw (void)
 {
-	#define PINNED_OFFSET_Y     6   // Extra gap after Setup before first pin
-	#define PINNED_SPACING      10  // Vertical spacing between pins
-	
 	int		f, i; // woods
 	qpic_t	*p;
 	pinnedbookmark_t pinned[MAX_PINNED_BOOKMARKS];
@@ -3229,7 +3232,7 @@ void M_MultiPlayer_Draw (void)
 	for (i = 0; i < pinned_count && i < MAX_PINNED_BOOKMARKS; ++i)
 	{
 		int row = MULTIPLAYER_BASE_ITEMS + i;
-		int y = 32 + MULTIPLAYER_BASE_ITEMS * 20 + PINNED_OFFSET_Y + i * PINNED_SPACING;
+		int y = M_MultiPlayer_FirstPinnedY() + i * MULTIPLAYER_PINNED_SPACING;
 		qboolean selected = (m_multiplayer_cursor == row);
 
 		// Show arrow at 0  when selected (pointing right), 90  when not (pointing down)
@@ -3240,7 +3243,7 @@ void M_MultiPlayer_Draw (void)
         // Draw "currently connected to" below pinned bookmarks
         if (cl.maxclients > 1 && cls.state == ca_connected && !cls.demoplayback)
         {
-                int conn_y = 32 + MULTIPLAYER_BASE_ITEMS * 20 + PINNED_OFFSET_Y + pinned_count * PINNED_SPACING + PINNED_OFFSET_Y;
+                int conn_y = M_MultiPlayer_FirstPinnedY() + pinned_count * MULTIPLAYER_PINNED_SPACING + MULTIPLAYER_PINNED_OFFSET_Y;
                 int box_width = strlen(lastmphost);
                 if (box_width < 24)
                         box_width = 24;
@@ -3348,7 +3351,20 @@ void M_MultiPlayer_Key (int key)
 
 void M_MultiPlayer_Mousemove(int cx, int cy) // woods #mousemenu
 {
-	M_UpdateCursor(cy, 32, 20, M_MultiPlayer_TotalItems(), &m_multiplayer_cursor);
+	pinnedbookmark_t pinned[MAX_PINNED_BOOKMARKS];
+	int pinned_count = M_Bookmarks_GetPinned(pinned, MAX_PINNED_BOOKMARKS);
+	int first_pinned_y = M_MultiPlayer_FirstPinnedY();
+
+	(void)cx;
+
+	if (pinned_count > 0 && cy >= first_pinned_y)
+	{
+		M_UpdateCursor(cy, first_pinned_y, MULTIPLAYER_PINNED_SPACING, pinned_count, &m_multiplayer_cursor);
+		m_multiplayer_cursor += MULTIPLAYER_BASE_ITEMS;
+		return;
+	}
+
+	M_UpdateCursor(cy, 32, 20, MULTIPLAYER_BASE_ITEMS, &m_multiplayer_cursor);
 }
 
 /*
@@ -14486,7 +14502,7 @@ static qboolean M_Bookmarks_Edit_SetPinned(qboolean pinned)
 
 		if (pinned_count >= MAX_PINNED_BOOKMARKS)
 		{
-			M_Bookmarks_Edit_ShowStatus("Max 5 pins reached");
+			M_Bookmarks_Edit_ShowStatus(va("Max %d pins reached", MAX_PINNED_BOOKMARKS));
 			S_LocalSound("misc/menu2.wav");
 			return false;
 		}
