@@ -12,3 +12,6 @@ Windows/VisualStudio/UpgradeLog.htm
 
 out
 .vs
+# Build artifacts
+*.o
+*.d

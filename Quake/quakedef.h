@@ -48,7 +48,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define QSSM_VER_MAJOR		1
 #define QSSM_VER_MINOR		6
-#define QSSM_VER_PATCH		7
+#define QSSM_VER_PATCH		8
 #ifndef QSSM_VER_SUFFIX
 #define QSSM_VER_SUFFIX			// optional version suffix string literal like "-beta1"
 #endif
@@ -374,6 +374,7 @@ extern	quakeparms_t *host_parms;
 
 extern	cvar_t		sys_ticrate;
 extern	cvar_t		sys_throttle;
+extern	cvar_t		sys_dedmouse_capture;
 extern	cvar_t		sys_nostdout;
 extern	cvar_t		developer;
 extern	cvar_t		max_edicts; //johnfitz
@@ -437,6 +438,9 @@ void Host_BackupConfiguration (void); // woods #cfgbackup
 
 void Host_AppendDownloadData(client_t *client, sizebuf_t *buf);
 void Host_DownloadAck(client_t *client);
+void CL_ClearIgnoredChats(void);
+void CL_UpdateIgnoredChatSlot(int slot, const char *name);
+qboolean CL_ShouldIgnoreChatPrint(const char *text);
 
 void ExtraMaps_Init (void);
 void Modlist_Init (void);

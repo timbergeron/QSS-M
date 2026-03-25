@@ -41,6 +41,7 @@ enum m_state_e {
 	m_graphics,
 	m_sound,
 	m_game,
+	m_playerxray,
 	m_hud,
 	m_crosshair,
 	m_console,

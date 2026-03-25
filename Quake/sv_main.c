@@ -2502,6 +2502,9 @@ void SV_ConnectClient (int clientnum)
 
 	client = svs.clients + clientnum;
 
+	for (i = 0; i < svs.maxclients; i++)
+		svs.clients[i].chat_ignore[clientnum >> 3] &= ~(1u << (clientnum & 7));
+
 	if (client->netconnection)
 		Con_DPrintf ("Client %s connected\n", NET_QSocketGetTrueAddressString(client->netconnection));
 	else

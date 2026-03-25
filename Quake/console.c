@@ -2926,7 +2926,7 @@ static qboolean CompleteFileListDemo (const char* partial, void* param) // woods
 	filelist_item_t* file, ** list = (filelist_item_t**)param;
 	char currentDateStr[80];
 
-	// Get current date/time for the -last option
+	// Get current date/time for the last demo aliases
 	time_t now = time(NULL);
 	struct tm* tm_now = localtime(&now);
 
@@ -2942,6 +2942,7 @@ static qboolean CompleteFileListDemo (const char* partial, void* param) // woods
 		currentDateStr[sizeof(currentDateStr) - 1] = '\0';
 	}
 
+	Con_AddToTabList("last", partial, "play last.dem or last cached demo", currentDateStr);
 	Con_AddToTabList("-l", partial, "play last demo", currentDateStr);
 
 	for (file = *list; file; file = file->next)
@@ -3411,6 +3412,18 @@ static qboolean CompleteClients(const char* partial, void* unused) // woods
 	return true;
 }
 
+static qboolean CompleteCmd(const char* partial, void* unused)
+{
+	if (Cmd_Argc() == 2)
+		return CompleteGeneralList(partial, unused);
+
+	if (Cmd_Argc() == 3 &&
+		(!q_strcasecmp(Cmd_Argv(1), "ignore") || !q_strcasecmp(Cmd_Argv(1), "unignore")))
+		return CompleteClients(partial, NULL);
+
+	return false;
+}
+
 /*
 ================
 GetTimeStampedName
@@ -3686,9 +3699,11 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "flocate",				CompleteLS,				NULL },
 	{ "ip",						CompleteIP,				NULL },
 	{ "unpak",					CompletePAKList,		NULL },
-	{ "cmd",					CompleteGeneralList,	NULL },
+	{ "cmd",					CompleteCmd,			NULL },
 	{ "identify",				CompleteClients,		NULL },
 	{ "tell",					CompleteClients,		NULL },
+	{ "ignore",					CompleteClients,		NULL },
+	{ "unignore",				CompleteClients,		NULL },
 	{ "record",					CompleteRecord,			NULL },
 	{ "save",					CompleteSave,			NULL },
 	{ "load",					CompleteLoad,			NULL },
@@ -4254,7 +4269,7 @@ static void Con_DrawTypingStatus(void) // woods #typing...
 	if (cls.demoplayback)
 		return;
 
-	if (cls.state != ca_connected || cl.maxclients <= 0)
+	if (cls.state != ca_connected || cls.signon != SIGNONS || cl.maxclients <= 0)
 		return;
 
 	int local_index = cl.realviewentity - 1;
@@ -4593,10 +4608,24 @@ static int DiscordThread(void *data)
 static void MakeDiscordPayload(const char *raw, char *out, size_t outsz)
 {
     char clean[1024];
-    q_strlcpy(clean, raw, sizeof(clean));
+    const unsigned char *src = (const unsigned char *)raw;
+    size_t len = 0;
 
-    for (unsigned char *ch = (unsigned char*)clean; *ch; ch++)
-        *ch = dequake[*ch];
+    if (!outsz) return;
+    out[0] = 0;
+    if (!raw) return;
+
+    // Strip the console chat colour prefix so Discord doesn't show ".name:".
+    while (*src == 1 || *src == 2)
+        src++;
+
+    while (*src && len + 1 < sizeof(clean))
+        clean[len++] = dequake[*src++];
+
+    while (len > 0 && (clean[len - 1] == '\n' || clean[len - 1] == '\r'))
+        len--;
+
+    clean[len] = 0;
 
     char *esc = JSON_EscapeString(clean);
     if (!esc) { out[0] = 0; return; }

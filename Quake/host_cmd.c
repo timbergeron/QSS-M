@@ -57,6 +57,540 @@ extern qboolean Valid_IP(const char* ip_str); // woods #icmp
 extern qboolean Valid_Domain(const char* domain_str); // woods #icmp
 
 void CL_ManualDownload_f (const char* filename); // woods #manualdownload
+extern char unfun[129];
+int unfun_match(const char* s1, char* s2);
+
+static char cl_chat_ignored_names[MAX_SCOREBOARD][MAX_SCOREBOARDNAME];
+static int cl_chat_ignored_slots[MAX_SCOREBOARD];
+static qboolean cl_chat_ignored_active[MAX_SCOREBOARD];
+
+static qboolean unfun_equal(const char* s1, const char* s2)
+{
+	int i;
+
+	for (i = 0; s1[i] && s2[i]; i++)
+	{
+		if (unfun[s1[i] & 127] != unfun[s2[i] & 127])
+			return false;
+	}
+
+	return (!s1[i] && !s2[i]);
+}
+
+static void Host_Ignore_Printf(const char *fmt, ...)
+{
+	char msg[1024];
+	va_list ap;
+
+	va_start(ap, fmt);
+	q_vsnprintf(msg, sizeof(msg), fmt, ap);
+	va_end(ap);
+
+	if (cmd_source == src_client)
+		SV_ClientPrintf("%s", msg);
+	else
+		Con_Printf("%s", msg);
+}
+
+static int Host_FindServerPlayerSlot(const char *arg, char *resolved_name, size_t resolved_name_size, qboolean *ambiguous)
+{
+	int exact = -1;
+	int exact_matches = 0;
+	int partial = -1;
+	int partial_matches = 0;
+	int slot = Q_atoi(arg) - 1;
+
+	*ambiguous = false;
+
+	if (slot >= 0 && slot < svs.maxclients && svs.clients[slot].active)
+	{
+		q_strlcpy(resolved_name, svs.clients[slot].name, resolved_name_size);
+		return slot;
+	}
+
+	for (slot = 0; slot < svs.maxclients; slot++)
+	{
+		if (!svs.clients[slot].active)
+			continue;
+		if (!unfun_equal(arg, svs.clients[slot].name))
+			continue;
+
+		exact = slot;
+		exact_matches++;
+		if (exact_matches > 1)
+			break;
+	}
+
+	if (exact_matches == 1)
+	{
+		q_strlcpy(resolved_name, svs.clients[exact].name, resolved_name_size);
+		return exact;
+	}
+	else if (exact_matches > 1)
+	{
+		*ambiguous = true;
+		return -1;
+	}
+
+	for (slot = 0; slot < svs.maxclients; slot++)
+	{
+		if (!svs.clients[slot].active)
+			continue;
+		if (!unfun_match(arg, svs.clients[slot].name))
+			continue;
+
+		partial = slot;
+		partial_matches++;
+		if (partial_matches > 1)
+			break;
+	}
+
+	if (partial_matches == 1)
+	{
+		q_strlcpy(resolved_name, svs.clients[partial].name, resolved_name_size);
+		return partial;
+	}
+
+	*ambiguous = (partial_matches > 1);
+	return -1;
+}
+
+static int Host_FindLocalPlayerSlot(const char *arg, char *resolved_name, size_t resolved_name_size, qboolean *ambiguous)
+{
+	int exact = -1;
+	int exact_matches = 0;
+	int partial = -1;
+	int partial_matches = 0;
+	int slot = Q_atoi(arg) - 1;
+
+	*ambiguous = false;
+
+	if (slot >= 0 && slot < cl.maxclients && cl.scores[slot].name[0])
+	{
+		q_strlcpy(resolved_name, cl.scores[slot].name, resolved_name_size);
+		return slot;
+	}
+
+	for (slot = 0; slot < cl.maxclients; slot++)
+	{
+		if (!cl.scores[slot].name[0])
+			continue;
+		if (!unfun_equal(arg, cl.scores[slot].name))
+			continue;
+
+		exact = slot;
+		exact_matches++;
+		if (exact_matches > 1)
+			break;
+	}
+
+	if (exact_matches == 1)
+	{
+		q_strlcpy(resolved_name, cl.scores[exact].name, resolved_name_size);
+		return exact;
+	}
+	else if (exact_matches > 1)
+	{
+		*ambiguous = true;
+		return -1;
+	}
+
+	for (slot = 0; slot < cl.maxclients; slot++)
+	{
+		if (!cl.scores[slot].name[0])
+			continue;
+		if (!unfun_match(arg, cl.scores[slot].name))
+			continue;
+
+		partial = slot;
+		partial_matches++;
+		if (partial_matches > 1)
+			break;
+	}
+
+	if (partial_matches == 1)
+	{
+		q_strlcpy(resolved_name, cl.scores[partial].name, resolved_name_size);
+		return partial;
+	}
+
+	*ambiguous = (partial_matches > 1);
+	return -1;
+}
+
+static int CL_FindIgnoredNameSlot(const char *arg, char *resolved_name, size_t resolved_name_size, qboolean *ambiguous)
+{
+	int exact = -1;
+	int exact_matches = 0;
+	int partial = -1;
+	int partial_matches = 0;
+	int i;
+
+	*ambiguous = false;
+
+	for (i = 0; i < MAX_SCOREBOARD; i++)
+	{
+		if (!cl_chat_ignored_active[i])
+			continue;
+		if (!unfun_equal(arg, cl_chat_ignored_names[i]))
+			continue;
+
+		exact = i;
+		exact_matches++;
+		if (exact_matches > 1)
+			break;
+	}
+
+	if (exact_matches == 1)
+	{
+		q_strlcpy(resolved_name, cl_chat_ignored_names[exact], resolved_name_size);
+		return exact;
+	}
+	else if (exact_matches > 1)
+	{
+		*ambiguous = true;
+		return -1;
+	}
+
+	for (i = 0; i < MAX_SCOREBOARD; i++)
+	{
+		if (!cl_chat_ignored_active[i])
+			continue;
+		if (!unfun_match(arg, cl_chat_ignored_names[i]))
+			continue;
+
+		partial = i;
+		partial_matches++;
+		if (partial_matches > 1)
+			break;
+	}
+
+	if (partial_matches == 1)
+	{
+		q_strlcpy(resolved_name, cl_chat_ignored_names[partial], resolved_name_size);
+		return partial;
+	}
+
+	*ambiguous = (partial_matches > 1);
+	return -1;
+}
+
+static qboolean CL_AddIgnoredName(const char *name, int player_slot)
+{
+	int free_slot = -1;
+	int i;
+
+	for (i = 0; i < MAX_SCOREBOARD; i++)
+	{
+		if (!cl_chat_ignored_active[i])
+		{
+			if (free_slot < 0)
+				free_slot = i;
+			continue;
+		}
+
+		if ((player_slot >= 0 && cl_chat_ignored_slots[i] == player_slot) ||
+			!q_strcasecmp(cl_chat_ignored_names[i], name))
+			return false;
+	}
+
+	if (free_slot < 0)
+		return false;
+
+	q_strlcpy(cl_chat_ignored_names[free_slot], name, sizeof(cl_chat_ignored_names[free_slot]));
+	cl_chat_ignored_slots[free_slot] = player_slot;
+	cl_chat_ignored_active[free_slot] = true;
+	return true;
+}
+
+static qboolean CL_RemoveIgnoredName(const char *name)
+{
+	int i;
+
+	for (i = 0; i < MAX_SCOREBOARD; i++)
+	{
+		if (!cl_chat_ignored_active[i])
+			continue;
+		if (q_strcasecmp(cl_chat_ignored_names[i], name))
+			continue;
+
+		cl_chat_ignored_active[i] = false;
+		cl_chat_ignored_slots[i] = -1;
+		cl_chat_ignored_names[i][0] = '\0';
+		return true;
+	}
+
+	return false;
+}
+
+void CL_ClearIgnoredChats(void)
+{
+	int i;
+
+	memset(cl_chat_ignored_names, 0, sizeof(cl_chat_ignored_names));
+	for (i = 0; i < MAX_SCOREBOARD; i++)
+		cl_chat_ignored_slots[i] = -1;
+	memset(cl_chat_ignored_active, 0, sizeof(cl_chat_ignored_active));
+}
+
+void CL_UpdateIgnoredChatSlot(int slot, const char *name)
+{
+	int i;
+
+	if (slot < 0 || slot >= MAX_SCOREBOARD)
+		return;
+
+	if (!name)
+		name = "";
+
+	for (i = 0; i < MAX_SCOREBOARD; i++)
+	{
+		if (!cl_chat_ignored_active[i] || cl_chat_ignored_slots[i] != slot)
+			continue;
+
+		if (!name[0])
+		{
+			cl_chat_ignored_slots[i] = -1;
+			continue;
+		}
+
+		q_strlcpy(cl_chat_ignored_names[i], name, sizeof(cl_chat_ignored_names[i]));
+	}
+}
+
+static qboolean CL_IsIgnoredChatPrefix(const char *text, const char *name, const char *prefix_format)
+{
+	char prefix[MAX_SCOREBOARDNAME + 8];
+
+	q_snprintf(prefix, sizeof(prefix), prefix_format, name);
+	return !strncmp(text, prefix, strlen(prefix));
+}
+
+qboolean CL_ShouldIgnoreChatPrint(const char *text)
+{
+	int i;
+
+	for (i = 0; i < MAX_SCOREBOARD; i++)
+	{
+		if (!cl_chat_ignored_active[i])
+			continue;
+
+		if (CL_IsIgnoredChatPrefix(text, cl_chat_ignored_names[i], "\001%s:") ||
+			CL_IsIgnoredChatPrefix(text, cl_chat_ignored_names[i], "\001(%s):") ||
+			CL_IsIgnoredChatPrefix(text, cl_chat_ignored_names[i], "%s:") ||
+			CL_IsIgnoredChatPrefix(text, cl_chat_ignored_names[i], "(%s):") ||
+			CL_IsIgnoredChatPrefix(text, cl_chat_ignored_names[i], "dm [%s]:"))
+			return true;
+	}
+
+	return false;
+}
+
+static void Host_BuildIgnoreTarget(char *buffer, size_t buffer_size)
+{
+	int i;
+
+	buffer[0] = '\0';
+	for (i = 1; i < Cmd_Argc(); i++)
+	{
+		if (i > 1)
+			q_strlcat(buffer, " ", buffer_size);
+		q_strlcat(buffer, Cmd_Argv(i), buffer_size);
+	}
+}
+
+static qboolean Host_ServerChatIgnored(const client_t *receiver, int sender_slot)
+{
+	if (!receiver || sender_slot < 0 || sender_slot >= MAX_SCOREBOARD)
+		return false;
+
+	return !!(receiver->chat_ignore[sender_slot >> 3] & (1u << (sender_slot & 7)));
+}
+
+static void Host_ServerSetChatIgnored(client_t *receiver, int sender_slot, qboolean ignored)
+{
+	if (!receiver || sender_slot < 0 || sender_slot >= MAX_SCOREBOARD)
+		return;
+
+	if (ignored)
+		receiver->chat_ignore[sender_slot >> 3] |= (1u << (sender_slot & 7));
+	else
+		receiver->chat_ignore[sender_slot >> 3] &= ~(1u << (sender_slot & 7));
+}
+
+static void Host_PrintIgnoredList(void)
+{
+	int i;
+	qboolean any = false;
+
+	if (cmd_source == src_client)
+	{
+		SV_ClientPrintf("Server ignore list:\n");
+		for (i = 0; i < svs.maxclients; i++)
+		{
+			if (!svs.clients[i].active)
+				continue;
+			if (!Host_ServerChatIgnored(host_client, i))
+				continue;
+
+			SV_ClientPrintf("  %s\n", svs.clients[i].name);
+			any = true;
+		}
+
+		if (!any)
+			SV_ClientPrintf("  (empty)\n");
+	}
+	else
+	{
+		Con_Printf("Local ignore list:\n");
+		for (i = 0; i < MAX_SCOREBOARD; i++)
+		{
+			if (!cl_chat_ignored_active[i])
+				continue;
+
+			Con_Printf("  %s\n", cl_chat_ignored_names[i]);
+			any = true;
+		}
+
+		if (!any)
+			Con_Printf("  (empty)\n");
+	}
+}
+
+static void Host_Ignore_Common(qboolean ignored)
+{
+	char target_arg[MAX_SCOREBOARDNAME];
+	char resolved_name[MAX_SCOREBOARDNAME];
+	qboolean ambiguous = false;
+
+	if (Cmd_Argc() < 2)
+	{
+		if (ignored)
+			Host_PrintIgnoredList();
+		else
+			Host_Ignore_Printf("usage: %s <player>\n", Cmd_Argv(0));
+		return;
+	}
+
+	Host_BuildIgnoreTarget(target_arg, sizeof(target_arg));
+
+	if (cmd_source == src_client)
+	{
+		int target_slot;
+		int sender_slot;
+
+		target_slot = Host_FindServerPlayerSlot(target_arg, resolved_name, sizeof(resolved_name), &ambiguous);
+		if (target_slot < 0)
+		{
+			Host_Ignore_Printf("%s player match for %s\n", ambiguous ? "No unique" : "No", target_arg);
+			return;
+		}
+
+		sender_slot = (int)(host_client - svs.clients);
+		if (target_slot == sender_slot)
+		{
+			Host_Ignore_Printf("You cannot ignore yourself.\n");
+			return;
+		}
+
+		if (ignored)
+		{
+			if (Host_ServerChatIgnored(host_client, target_slot))
+			{
+				Host_Ignore_Printf("Already ignoring %s on this server.\n", resolved_name);
+				return;
+			}
+
+			Host_ServerSetChatIgnored(host_client, target_slot, true);
+			Host_Ignore_Printf("Ignoring %s on this server.\n", resolved_name);
+		}
+		else
+		{
+			if (!Host_ServerChatIgnored(host_client, target_slot))
+			{
+				Host_Ignore_Printf("%s is not ignored on this server.\n", resolved_name);
+				return;
+			}
+
+			Host_ServerSetChatIgnored(host_client, target_slot, false);
+			Host_Ignore_Printf("No longer ignoring %s on this server.\n", resolved_name);
+		}
+
+		return;
+	}
+
+	if (cmd_source != src_command)
+		return;
+
+	if (cls.state != ca_connected || cl.maxclients < 1)
+	{
+		Con_Printf("Not connected.\n");
+		return;
+	}
+
+	if (ignored)
+	{
+		int target_slot = Host_FindLocalPlayerSlot(target_arg, resolved_name, sizeof(resolved_name), &ambiguous);
+		int local_slot = cl.realviewentity > 0 ? cl.realviewentity - 1 : cl.viewentity - 1;
+
+		if (target_slot < 0)
+		{
+			Host_Ignore_Printf("%s player match for %s\n", ambiguous ? "No unique" : "No", target_arg);
+			return;
+		}
+		if (local_slot >= 0 && local_slot < cl.maxclients && target_slot == local_slot)
+		{
+			Host_Ignore_Printf("You cannot ignore yourself.\n");
+			return;
+		}
+
+		if (!CL_AddIgnoredName(resolved_name, target_slot))
+		{
+			Host_Ignore_Printf("Already ignoring %s locally.\n", resolved_name);
+			return;
+		}
+
+		Host_Ignore_Printf("Ignoring %s locally.\n", resolved_name);
+		return;
+	}
+	else
+	{
+		int stored_slot = CL_FindIgnoredNameSlot(target_arg, resolved_name, sizeof(resolved_name), &ambiguous);
+
+		if (stored_slot < 0)
+		{
+			int target_slot = Host_FindLocalPlayerSlot(target_arg, resolved_name, sizeof(resolved_name), &ambiguous);
+
+			if (target_slot < 0)
+			{
+				Host_Ignore_Printf("%s ignored player match for %s\n", ambiguous ? "No unique" : "No", target_arg);
+				return;
+			}
+		}
+		else
+		{
+			(void)stored_slot;
+		}
+
+		if (!CL_RemoveIgnoredName(resolved_name))
+		{
+			Host_Ignore_Printf("%s is not ignored locally.\n", resolved_name);
+			return;
+		}
+
+		Host_Ignore_Printf("No longer ignoring %s locally.\n", resolved_name);
+	}
+}
+
+static void Host_Ignore_f(void)
+{
+	Host_Ignore_Common(true);
+}
+
+static void Host_Unignore_f(void)
+{
+	Host_Ignore_Common(false);
+}
 
 /*
 ==================
@@ -4366,6 +4900,8 @@ void Host_Name_Load_Backup_f(void)
 
 static void Host_Say(qboolean teamonly)
 {
+#define DED_CHAT_COLOR_ON  "\x1d"
+#define DED_CHAT_COLOR_OFF "\x1e"
 	int		j;
 	client_t	*client;
 	client_t	*save;
@@ -4373,6 +4909,7 @@ static void Host_Say(qboolean teamonly)
 	char		text[MAXCMDLINE], *p2;
 	qboolean	quoted;
 	qboolean	fromServer = false;
+	int		sender_slot;
 
 	if (cmd_source == src_command)
 	{
@@ -4389,6 +4926,7 @@ static void Host_Say(qboolean teamonly)
 		return;
 
 	save = host_client;
+	sender_slot = fromServer ? -1 : (int)(save - svs.clients);
 
 	p = Cmd_Args();
 // remove quotes if present
@@ -4442,13 +4980,59 @@ static void Host_Say(qboolean teamonly)
 			continue;
 		if (teamplay.value && teamonly && client->edict->v.team != save->edict->v.team)
 			continue;
+		if (Host_ServerChatIgnored(client, sender_slot))
+			continue;
 		host_client = client;
 		SV_ClientPrintf("%s", text);
 	}
 	host_client = save;
 
 	if (cls.state == ca_dedicated)
-		Sys_Printf("%s", &text[1]);
+	{
+		char dedtext[MAXCMDLINE + 8];
+		const char *src = &text[1];
+		const char *msg = strstr (src, ": ");
+		const char *trail = src + strlen(src);
+		size_t prefix_len, msg_len, suffix_len;
+
+		if (msg)
+			msg += 2;
+		else if (src[0] == '<')
+		{
+			msg = strstr (src, "> ");
+			if (msg)
+				msg += 2;
+		}
+
+		if (!msg)
+		{
+			Sys_Printf ("%s", src);
+			return;
+		}
+
+		if (trail > msg && trail[-1] == '\n')
+			trail--;
+
+		prefix_len = (size_t)(msg - src);
+		msg_len = (size_t)(trail - msg);
+		suffix_len = strlen (trail);
+
+		if (prefix_len + strlen(DED_CHAT_COLOR_ON) + msg_len +
+			strlen(DED_CHAT_COLOR_OFF) + suffix_len + 1 > sizeof(dedtext))
+		{
+			Sys_Printf ("%s", src);
+			return;
+		}
+
+		memcpy (dedtext, src, prefix_len);
+		memcpy (dedtext + prefix_len, DED_CHAT_COLOR_ON, strlen(DED_CHAT_COLOR_ON));
+		memcpy (dedtext + prefix_len + strlen(DED_CHAT_COLOR_ON), msg, msg_len);
+		memcpy (dedtext + prefix_len + strlen(DED_CHAT_COLOR_ON) + msg_len,
+			DED_CHAT_COLOR_OFF, strlen(DED_CHAT_COLOR_OFF));
+		memcpy (dedtext + prefix_len + strlen(DED_CHAT_COLOR_ON) + msg_len +
+			strlen(DED_CHAT_COLOR_OFF), trail, suffix_len + 1);
+		Sys_Printf ("%s", dedtext);
+	}
 }
 
 static void Host_Say_f(void)
@@ -4523,56 +5107,27 @@ static void Host_Tell_f(void) // modified by woods to accept wildcards, status #
 	const char	*p;
 	char		text[MAXCMDLINE], *p2;
 	qboolean	quoted;
-	char name[16];
-
-	int unfun_match(const char* s1, char* s2);
-
-	q_strlcpy(name, Cmd_Argv(1), sizeof(name)); // set name to the name of player telling
-	i = Q_atoi(Cmd_Argv(1)) - 1; // set i to the NUMBER of player telling
-
-	if (i == -1)
-	{
-		if (sv.active)
-		{
-			for (i = 0; i < svs.maxclients; i++)
-			{
-				if (svs.clients[i].active && unfun_match(Cmd_Argv(1), svs.clients[i].name))
-					break;
-			}
-		}
-		else
-		{
-			for (i = 0; i < cl.maxclients; i++)
-			{
-				if (unfun_match(Cmd_Argv(1), cl.scores[i].name))
-					break;
-			}
-		}
-	}
+	char name[MAX_SCOREBOARDNAME];
+	qboolean ambiguous = false;
 
 	if (sv.active)
 	{
-		if (i < 0 || i >= svs.maxclients || !svs.clients[i].active)
+		i = Host_FindServerPlayerSlot(Cmd_Argv(1), name, sizeof(name), &ambiguous);
+		if (i < 0)
 		{
-			Con_Printf("No such player\n");
+			Con_Printf("%s player\n", ambiguous ? "No unique match for that" : "No such");
 			return;
 		}
-		strncpy(name, svs.clients[i].name, 15);
-		name[15] = 0;
 	}
 	else
 	{
-		if (i < 0 || i >= cl.maxclients || !cl.scores[i].name[0])
+		i = Host_FindLocalPlayerSlot(Cmd_Argv(1), name, sizeof(name), &ambiguous);
+		if (i < 0)
 		{
- 			Con_Printf("No such player\n");
+			Con_Printf("%s player\n", ambiguous ? "No unique match for that" : "No such");
 			return;
 		}
-		else
-		{
-			strncpy(name, cl.scores[i].name, 15); // copy scoreboard number player to name
-			name[15] = 0;
-			S_LocalSound("misc/talk.wav"); // woods #tell+
-		}
+		S_LocalSound("misc/talk.wav"); // woods #tell+
 	}
 
 	if (cmd_source != src_client)
@@ -4621,12 +5176,19 @@ static void Host_Tell_f(void) // modified by woods to accept wildcards, status #
 
 	save = host_client;
 	qboolean recipient_found = false; // woods #tell+
+	qboolean recipient_blocked = false;
+	int sender_slot = (int)(save - svs.clients);
 	for (j = 0, client = svs.clients; j < svs.maxclients; j++, client++)
 	{
 		if (!client->active || !client->spawned)
 			continue;
 		if (q_strcasecmp(client->name, name))
 			continue;
+		if (Host_ServerChatIgnored(client, sender_slot))
+		{
+			recipient_blocked = true;
+			break;
+		}
 		host_client = client;
 		SV_ClientPrintf("%s", text);
 		recipient_found = true; // woods #tell+
@@ -4634,7 +5196,7 @@ static void Host_Tell_f(void) // modified by woods to accept wildcards, status #
 	}
 	host_client = save;
 
-	if (recipient_found) // woods #tell+
+	if (recipient_found || recipient_blocked) // woods #tell+
 		SV_ClientPrintf("\nmessage successfully sent to %s\n\n", name); // send confirmation to sender
 	else
 		SV_ClientPrintf("\nno such player named %s\n\n", name); // inform sender that recipient wasn't found
@@ -6639,6 +7201,8 @@ void Host_InitCommands (void)
 	Cmd_AddCommand_ClientCommandQC ("st", Host_Say_Team_f2); // woods chat shortcuts
 	Cmd_AddCommand_ClientCommandQC ("like", Host_Like_f); // woods #like
 	Cmd_AddCommand_ClientCommandQC ("tell", Host_Tell_f);
+	Cmd_AddCommand_ClientCommand ("ignore", Host_Ignore_f);
+	Cmd_AddCommand_ClientCommand ("unignore", Host_Unignore_f);
 	Cmd_AddCommand_ClientCommandQC ("color", Host_Color_f);
 	Cmd_AddCommand_ClientCommandQC ("kill", Host_Kill_f);
 	Cmd_AddCommand_ClientCommandQC ("pause", Host_Pause_f);
@@ -6667,6 +7231,7 @@ void Host_InitCommands (void)
 	Cmd_AddCommand ("viewprev", Host_Viewprev_f);
 
 	Cmd_AddCommand("identify", Host_Identify_f);	// JPG 1.05 - player IP logging // woods #iplog
+	Cmd_AddCommand("ipnames", IPLog_PrintNames);	// woods - print all logged names in columns
 	Cmd_AddCommand("ipdump", IPLog_Dump);			// JPG 1.05 - player IP logging // woods #iplog
 	Cmd_AddCommand("ipmerge", IPLog_Import);		// JPG 3.00 - import an IP data file // woods #iplog
 

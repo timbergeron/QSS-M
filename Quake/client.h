@@ -493,6 +493,7 @@ extern  cvar_t	cl_idle;  // woods #damage
 extern  cvar_t	cl_smartspawn; // woods #spawntrainer
 extern  cvar_t	r_explosionlight; // woods #explosionlight
 extern  cvar_t	cl_autovote; // woods #autovote
+extern  cvar_t	cl_autovote_list; // woods #autovote
 extern	cvar_t	cl_contentfilter; // woods #contentfilter
 
 #define	MAX_TEMP_ENTITIES			1024		//johnfitz -- was 64 // woods -- was 256
@@ -587,6 +588,7 @@ void CL_Stop_f (void);
 void CL_Record_f (void);
 void CL_PlayDemo_f (void);
 void CL_TimeDemo_f (void);
+int CL_GetDemoFrameCount(void); // woods #demoframes
 
 //
 // cl_parse.c

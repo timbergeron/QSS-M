@@ -585,6 +585,7 @@ void Host_InitLocal (void)
 	Cvar_RegisterVariable (&sys_ticrate);
 	Cvar_SetCallback (&sys_ticrate, Host_Callback_Notify); // woods
 	Cvar_RegisterVariable (&sys_throttle);
+	Cvar_RegisterVariable (&sys_dedmouse_capture);
 	Cvar_RegisterVariable (&serverprofile);
 
 	Cvar_RegisterVariable (&fraglimit);
@@ -1144,6 +1145,7 @@ void Host_GetConsoleCommands (void)
 		if (!cmd)
 			break;
 		Cbuf_AddText (cmd);
+		Cbuf_AddText ("\n");
 	}
 }
 

@@ -2963,18 +2963,20 @@ static void VID_MenuMouse(int cx, int cy)
 		return;
 	}
 
-    int cursor = (cy - 48) / 8;
-    
-    // Adjust for gaps
-    if (cursor > 4)  // After vsync
-        cursor--;
-    if (cursor > 6)  // Before test
-        cursor--;
-        
-    // Prevent selecting gaps
-    if (cursor < 0 || cursor >= VIDEO_OPTIONS_ITEMS)
-        return;
-        
+	int cursor = (cy - 48) / 8;
+
+	// Adjust for gaps
+	if (cursor > 4)  // After vsync
+		cursor--;
+	if (cursor > 6)  // Before test
+		cursor--;
+
+	// Prevent selecting gaps
+	if (cursor < 0 || cursor >= VIDEO_OPTIONS_ITEMS)
+	{
+		return;
+	}
+
 	if (video_options_cursor == VID_OPT_FPSLIMIT && cursor != VID_OPT_FPSLIMIT)
 	{
 		if (strlen(fps_string) == 0)
@@ -2985,7 +2987,7 @@ static void VID_MenuMouse(int cx, int cy)
 			M_TextField_ClearSelection(&fps_field);
 	}
 
-    video_options_cursor = cursor;
+	video_options_cursor = cursor;
 }
 
 /*

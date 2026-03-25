@@ -10,6 +10,7 @@
 
 
 
+extern int con_linewidth;
 iplog_t	*iplogs;
 iplog_t *iplog_head;
 
@@ -21,6 +22,80 @@ int iplog_full;
 #define MAX_REPETITION	128
 
 static qboolean migrated_old_files = false; // Track if migration has occurred
+
+/*
+====================
+IPLog_CopyPrintableName
+====================
+*/
+static void IPLog_CopyPrintableName(char *dst, size_t dstsize, const char *src)
+{
+	unsigned char *ch;
+
+	q_strlcpy(dst, src, dstsize);
+	for (ch = (unsigned char *)dst; *ch; ch++)
+	{
+		*ch = dequake[*ch];
+		if (*ch == 10 || *ch == 13)
+			*ch = ' ';
+	}
+}
+
+/*
+====================
+IPLog_CopyRawName
+====================
+*/
+static void IPLog_CopyRawName(char *dst, size_t dstsize, const char *src)
+{
+	q_strlcpy(dst, src, dstsize);
+}
+
+/*
+====================
+IPLog_CountTree
+====================
+*/
+static int IPLog_CountTree(iplog_t *root)
+{
+	if (!root)
+		return 0;
+
+	return 1 + IPLog_CountTree(root->children[0]) + IPLog_CountTree(root->children[1]);
+}
+
+/*
+====================
+IPLog_CollectNames
+====================
+*/
+static void IPLog_CollectNames(iplog_t *root, char (*names)[16], int *count)
+{
+	if (!root)
+		return;
+
+	IPLog_CollectNames(root->children[0], names, count);
+	IPLog_CopyRawName(names[*count], sizeof(names[*count]), root->name);
+	(*count)++;
+	IPLog_CollectNames(root->children[1], names, count);
+}
+
+/*
+====================
+IPLog_CompareNames
+====================
+*/
+static int IPLog_CompareNames(const void *lhs, const void *rhs)
+{
+	const char *left = (const char *)lhs;
+	const char *right = (const char *)rhs;
+	const int diff = q_strcasecmp(left, right);
+
+	if (diff)
+		return diff;
+
+	return strcmp(left, right);
+}
 
 /*
 ====================
@@ -505,25 +580,86 @@ void IPLog_DumpTree (iplog_t *root, FILE *f)
 {
 	char address[20];
 	char name[16];
-	unsigned char *ch;
 
 	if (!root)
 		return;
 	IPLog_DumpTree(root->children[0], f);
 
 	sprintf(address, "%d.%d.%d.xxx", root->addr >> 16, (root->addr >> 8) & 0xff, root->addr & 0xff);
-	strcpy(name, root->name);
-
-	for (ch = (unsigned char*)name ; *ch ; ch++)
-	{
-		*ch = dequake[*ch];
-		if (*ch == 10 || *ch == 13)
-			*ch = ' ';
-	}
+	IPLog_CopyPrintableName(name, sizeof(name), root->name);
 
 	fprintf(f, "%-16s  %s\n", address, name); // woods 
 
 	IPLog_DumpTree(root->children[1], f);
+}
+
+/*
+====================
+IPLog_PrintNames
+====================
+*/
+void IPLog_PrintNames (void)
+{
+	char (*names)[16];
+	const char *col1;
+	int colwidth;
+	int cols;
+	int count;
+	int i;
+	int j;
+	int maxlen;
+	int unique_count;
+
+	if (!iplog_size)
+	{
+		Con_Printf("IP logging not available\n");
+		return;
+	}
+
+	count = IPLog_CountTree(iplog_head);
+	if (!count)
+	{
+		Con_Printf("No IP log entries found\n");
+		return;
+	}
+
+	names = (char (*)[16])Q_malloc(count * sizeof(*names));
+	i = 0;
+	IPLog_CollectNames(iplog_head, names, &i);
+	qsort(names, count, sizeof(*names), IPLog_CompareNames);
+
+	unique_count = 0;
+	for (i = 0; i < count; i++)
+	{
+		if (unique_count > 0 && !strcmp(names[unique_count - 1], names[i]))
+			continue;
+
+		if (unique_count != i)
+			memcpy(names[unique_count], names[i], sizeof(*names));
+		unique_count++;
+	}
+	count = unique_count;
+	maxlen = 0;
+	for (i = 0; i < count; i++)
+		maxlen = q_max(maxlen, (int)strlen(names[i]));
+
+	colwidth = q_max(maxlen + 2, 8);
+	cols = q_max(con_linewidth / colwidth, 1);
+	cols = q_min(cols, count);
+
+	Con_Printf("IP log names:\n");
+	for (i = 0; i < count; i += cols)
+	{
+		for (j = 0; j < cols && i + j < count; j++)
+		{
+			col1 = names[i + j];
+			Con_Printf("%-*.*s", colwidth, colwidth, col1);
+		}
+		Con_Printf("\n");
+	}
+	Con_Printf("%d %s found\n", count, (count == 1) ? "entry" : "entries");
+
+	free(names);
 }
 
 /*
