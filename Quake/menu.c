@@ -12179,7 +12179,7 @@ void M_Extras_Draw(void)
 			if (fabs(sys_throttle.value - 0.02) < 0.001)
 				value = "on";
 			else if (sys_throttle.value == 0)
-				value = "off";
+				value = "when idle";
 			else if (sys_throttle.value < -0.9)
 				value = "off+when minimized";
 			else
@@ -13197,25 +13197,38 @@ LAN Config Menu
 */
 
 int		lanConfig_cursor = -1;
-int     lanConfig_cursor_table_newgame[] = { 76, 86, 104 }; // Updated cursor positions for "New Game"
+int     lanConfig_cursor_table_newgame[] = { 76, 86, 104 };
+int     lanConfig_cursor_table_newgame_ice[] = { 76, 92, 108, 124 };
 int		lanConfig_cursor_table[] = { 76, 94, 102, 108, 116, 124 }; // woods #mousemenu #bookmarksmenu
 int*	lanConfig_cursor_ptr = NULL; // Pointer to the current cursor table
 
 int     NUM_LANCONFIG_CMDS;
-#define NUM_LANCONFIG_CMDS_NEWGAME 3
+#define NUM_LANCONFIG_CMDS_NEWGAME 4
 #define NUM_LANCONFIG_CMDS_JOINGAME 6
+#define LANCONFIG_CURSOR_PORT 0
+#define LANCONFIG_CURSOR_NEWGAME_ROOM 1
+#define LANCONFIG_CURSOR_NEWGAME_PROTOCOL 2
+#define LANCONFIG_CURSOR_NEWGAME_OK 3
+#define LANCONFIG_CURSOR_JOINGAME_SEARCH_LAN 1
+#define LANCONFIG_CURSOR_JOINGAME_SEARCH_WEB 2
+#define LANCONFIG_CURSOR_JOINGAME_HISTORY 3
+#define LANCONFIG_CURSOR_JOINGAME_BOOKMARKS 4
+#define LANCONFIG_CURSOR_JOINGAME_JOIN 5
 
 int 	lanConfig_port;
 char	lanConfig_portname[6];
+char	lanConfig_roomname[13];
 char	lanConfig_joinname[22];
 int     lanConfig_protocol_cursor = 0; // Track selected protocol
 static menu_textfield_t lanConfig_port_field;
+static menu_textfield_t lanConfig_room_field;
 static menu_textfield_t lanConfig_join_field;
 static char lanConfig_porthint[6];
 static char lanConfig_joinhint[22];
 
 extern int sv_protocol;
 extern unsigned int	sv_protocol_pext2;
+extern cvar_t sv_port_rtc;
 
 typedef struct {
 	int x;
@@ -13234,11 +13247,38 @@ static qboolean addresses_cached = false;
 static qhostaddr_t cached_addresses[16];
 static int cached_numaddresses = 0;
 
+static qboolean M_LanConfig_HasIce(void)
+{
+	return !safemode && COM_CheckParm("-useice") && !COM_CheckParm("-noice");
+}
+
+static qboolean M_LanConfig_ShowRoomField(void)
+{
+	return StartingGame && M_LanConfig_HasIce();
+}
+
+static int M_LanConfig_NewGameNumCommands(void)
+{
+	return M_LanConfig_ShowRoomField() ? NUM_LANCONFIG_CMDS_NEWGAME : NUM_LANCONFIG_CMDS_NEWGAME - 1;
+}
+
+static int M_LanConfig_NewGameProtocolCursor(void)
+{
+	return M_LanConfig_ShowRoomField() ? LANCONFIG_CURSOR_NEWGAME_PROTOCOL : LANCONFIG_CURSOR_NEWGAME_ROOM;
+}
+
+static int M_LanConfig_NewGameOkCursor(void)
+{
+	return M_LanConfig_ShowRoomField() ? LANCONFIG_CURSOR_NEWGAME_OK : LANCONFIG_CURSOR_NEWGAME_PROTOCOL;
+}
+
 static menu_textfield_t *M_LanConfig_GetFieldForCursor(void)
 {
-	if (lanConfig_cursor == 0)
+	if (lanConfig_cursor == LANCONFIG_CURSOR_PORT)
 		return &lanConfig_port_field;
-	if (JoiningGame && lanConfig_cursor == 5)
+	if (M_LanConfig_ShowRoomField() && lanConfig_cursor == LANCONFIG_CURSOR_NEWGAME_ROOM)
+		return &lanConfig_room_field;
+	if (JoiningGame && lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN)
 		return &lanConfig_join_field;
 	return NULL;
 }
@@ -13246,6 +13286,7 @@ static menu_textfield_t *M_LanConfig_GetFieldForCursor(void)
 static void M_LanConfig_ClearTextSelections(void)
 {
 	M_TextField_ClearSelection(&lanConfig_port_field);
+	M_TextField_ClearSelection(&lanConfig_room_field);
 	M_TextField_ClearSelection(&lanConfig_join_field);
 }
 
@@ -13318,6 +13359,35 @@ static void M_LanConfig_UpdateHints(void)
 	M_LanConfig_UpdateJoinHint();
 }
 
+static void M_LanConfig_NormalizeRoomField(void)
+{
+	int len;
+
+	if (!lanConfig_roomname[0] || lanConfig_roomname[0] == '/')
+		return;
+
+	len = (int)strlen(lanConfig_roomname);
+	if (len >= (int)sizeof(lanConfig_roomname) - 1)
+		len = (int)sizeof(lanConfig_roomname) - 2;
+
+	memmove(lanConfig_roomname + 1, lanConfig_roomname, len + 1);
+	lanConfig_roomname[0] = '/';
+	lanConfig_roomname[len + 1] = '\0';
+
+	lanConfig_room_field.cursor++;
+	if (lanConfig_room_field.sel_start >= 0)
+		lanConfig_room_field.sel_start++;
+	M_TextField_ClampCursor(&lanConfig_room_field);
+}
+
+static void M_LanConfig_SyncRoomField(void)
+{
+	if (!M_LanConfig_HasIce())
+		return;
+
+	Cvar_Set(sv_port_rtc.name, lanConfig_roomname);
+}
+
 void SetProtocol(int protocol_cursor)
 {
 	if (protocol_cursor < 3)
@@ -13379,8 +13449,8 @@ void M_Menu_LanConfig_f (void)
 	if (StartingGame)
 	{
 		// Use New Game configuration
-		lanConfig_cursor_ptr = lanConfig_cursor_table_newgame;
-		NUM_LANCONFIG_CMDS = NUM_LANCONFIG_CMDS_NEWGAME;
+		lanConfig_cursor_ptr = M_LanConfig_ShowRoomField() ? lanConfig_cursor_table_newgame_ice : lanConfig_cursor_table_newgame;
+		NUM_LANCONFIG_CMDS = M_LanConfig_NewGameNumCommands();
 		// Map sv_protocol to corresponding protocol cursor
 		switch (sv_protocol)
 		{
@@ -13413,17 +13483,23 @@ void M_Menu_LanConfig_f (void)
 
 	if (lanConfig_cursor == -1)
 	{
-		if (JoiningGame && TCPIPConfig)
-			lanConfig_cursor = 2;
+		if (StartingGame)
+			lanConfig_cursor = M_LanConfig_NewGameProtocolCursor();
+		else if (JoiningGame && TCPIPConfig)
+			lanConfig_cursor = LANCONFIG_CURSOR_JOINGAME_SEARCH_WEB;
 		else
-			lanConfig_cursor = 1;
+			lanConfig_cursor = LANCONFIG_CURSOR_JOINGAME_SEARCH_LAN;
 	}
-	if (StartingGame && lanConfig_cursor >= 3)
-		lanConfig_cursor = 1;
+	if (StartingGame && lanConfig_cursor >= NUM_LANCONFIG_CMDS)
+		lanConfig_cursor = M_LanConfig_NewGameProtocolCursor();
 	lanConfig_port = DEFAULTnet_hostport;
 	sprintf(lanConfig_portname, "%u", lanConfig_port);
+	q_strlcpy(lanConfig_roomname, sv_port_rtc.string, sizeof(lanConfig_roomname));
 	M_TextField_Init(&lanConfig_port_field, lanConfig_portname, 5, true);
+	M_TextField_Init(&lanConfig_room_field, lanConfig_roomname, sizeof(lanConfig_roomname) - 1, false);
 	M_TextField_Init(&lanConfig_join_field, lanConfig_joinname, 21, false);
+	M_LanConfig_NormalizeRoomField();
+	M_LanConfig_SyncRoomField();
 	M_LanConfig_UpdateHints();
 
 	m_return_onerror = false;
@@ -13532,14 +13608,14 @@ void M_LanConfig_Draw (void)
 	M_DrawTextBox (basex+8*10, y-8, 6, 1);
 	M_TextField_DrawHighlight(&lanConfig_port_field, basex + 9 * 10, y);
 	M_Print (basex+9*10, y, lanConfig_portname);
-	if (lanConfig_cursor == 0 &&
+	if (lanConfig_cursor == LANCONFIG_CURSOR_PORT &&
 		lanConfig_porthint[0] &&
 		lanConfig_port_field.cursor == (int)strlen(lanConfig_portname))
 	{
 		int hint_x = basex + 9 * 10 + (int)strlen(lanConfig_portname) * 8;
 		M_PrintRGBA(hint_x, y, lanConfig_porthint, CL_PLColours_Parse("0xffffff"), 0.5f, true);
 	}
-	if (lanConfig_cursor == 0)
+	if (lanConfig_cursor == LANCONFIG_CURSOR_PORT)
 	{
 		M_TextField_DrawCursor(&lanConfig_port_field, basex + 9 * 10, y);
 		M_DrawCharacter (basex-10, y, 12+((int)(realtime*4)&1));
@@ -13549,6 +13625,33 @@ void M_LanConfig_Draw (void)
 	if (StartingGame)
 	{
 		y += 8;
+		if (M_LanConfig_ShowRoomField())
+		{
+			M_Print(basex, y, "Room:");
+			M_DrawTextBox(basex + 8 * 10, y - 8, 14, 1);
+			if (lanConfig_cursor == LANCONFIG_CURSOR_NEWGAME_ROOM)
+			{
+				M_TextField_DrawHighlight(&lanConfig_room_field, basex + 9 * 10, y);
+				M_Print(basex + 9 * 10, y, lanConfig_roomname);
+				M_TextField_DrawCursor(&lanConfig_room_field, basex + 9 * 10, y);
+				M_DrawCharacter(basex - 8, y, 12 + ((int)(realtime * 4) & 1));
+			}
+			else if (!lanConfig_roomname[0])
+			{
+				M_PrintRGBA(basex + 9 * 10, y, "<DISABLED>", CL_PLColours_Parse("0xffffff"), 0.5f, true);
+			}
+			else if (!strcmp(lanConfig_roomname, "/"))
+			{
+				M_PrintRGBA(basex + 9 * 10, y, "<AUTO>", CL_PLColours_Parse("0xffffff"), 0.5f, true);
+			}
+			else
+			{
+				M_Print(basex + 9 * 10, y, lanConfig_roomname);
+			}
+
+			y += 16;
+		}
+
 		M_Print(basex, y, "Protocol:");
 
 
@@ -13558,7 +13661,7 @@ void M_LanConfig_Draw (void)
 		// Print the protocol description
 		M_Print(basex + 9 * 9 + 1, y, protocolDescription);
 
-		if (lanConfig_cursor == 1)
+		if (lanConfig_cursor == M_LanConfig_NewGameProtocolCursor())
 		{
 			M_DrawCharacter(basex - 8, y, 12 + ((int)(realtime * 4) & 1));
 		}
@@ -13571,22 +13674,22 @@ void M_LanConfig_Draw (void)
 		y += 8;
 		
 		M_Print (basex, y, "Search for local games...");
-		if (lanConfig_cursor == 1)
+		if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_SEARCH_LAN)
 			M_DrawCharacter (basex-8, y, 12+((int)(realtime*4)&1));
 		y+=8;
 
 		M_Print (basex, y, "Search for public games...");
-		if (lanConfig_cursor == 2)
+		if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_SEARCH_WEB)
 			M_DrawCharacter (basex-8, y, 12+((int)(realtime*4)&1));
 		y+=8;
 
 		M_Print(basex, y, "History"); // woods #historymenu
-		if (lanConfig_cursor == 3)
+		if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_HISTORY)
 			M_DrawCharacter(basex - 8, y, 12 + ((int)(realtime * 4) & 1));
 		y += 8;
 
 		M_Print(basex, y, "Bookmarks"); // woods #bookmarksmenu
-		if (lanConfig_cursor == 4)
+		if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_BOOKMARKS)
 			M_DrawCharacter(basex - 8, y, 12 + ((int)(realtime * 4) & 1));
 		y += 8;
 
@@ -13595,14 +13698,14 @@ void M_LanConfig_Draw (void)
 			M_DrawTextBox (basex+8, y-8, 22, 1);
 			M_TextField_DrawHighlight(&lanConfig_join_field, basex + 16, y);
 			M_Print (basex+16, y, lanConfig_joinname);
-			if (lanConfig_cursor == 5 &&
+			if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN &&
 				lanConfig_joinhint[0] &&
 				lanConfig_join_field.cursor == (int)strlen(lanConfig_joinname))
 			{
 				int hint_x = basex + 16 + (int)strlen(lanConfig_joinname) * 8;
 				M_PrintRGBA(hint_x, y, lanConfig_joinhint, CL_PLColours_Parse("0xffffff"), 0.5f, true);
 			}
-			if (lanConfig_cursor == 5) // woods #historymenu #bookmarksmenu
+			if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN) // woods #historymenu #bookmarksmenu
 			{
 				M_TextField_DrawCursor(&lanConfig_join_field, basex + 16, y);
 				M_DrawCharacter (basex-8, y, 12+((int)(realtime*4)&1));
@@ -13613,7 +13716,7 @@ void M_LanConfig_Draw (void)
 	{
 		M_DrawTextBox (basex, y-8, 2, 1);
 		M_Print (basex+8, y, "OK");
-		if (lanConfig_cursor == 2)
+		if (lanConfig_cursor == M_LanConfig_NewGameOkCursor())
 			M_DrawCharacter (basex-8, y, 12+((int)(realtime*4)&1));
 		y += 16;
 	}
@@ -13626,7 +13729,7 @@ void M_LanConfig_Draw (void)
 	}
 
 	if (*m_return_reason)
-		M_PrintWhite(basex, 148, m_return_reason);
+		M_PrintWhite(basex, y, m_return_reason);
 }
 
 void M_LanConfig_Key (int key)
@@ -13699,7 +13802,7 @@ void M_LanConfig_Key (int key)
 
 		if (StartingGame) {
 			if (lanConfig_cursor < 0) {
-				lanConfig_cursor = NUM_LANCONFIG_CMDS_NEWGAME - 1;
+				lanConfig_cursor = NUM_LANCONFIG_CMDS - 1;
 			}
 		}
 		else {
@@ -13715,7 +13818,7 @@ void M_LanConfig_Key (int key)
 		lanConfig_cursor++;
 
 		if (StartingGame) {
-			if (lanConfig_cursor >= NUM_LANCONFIG_CMDS_NEWGAME) {
+			if (lanConfig_cursor >= NUM_LANCONFIG_CMDS) {
 				lanConfig_cursor = 0;
 			}
 		}
@@ -13728,7 +13831,7 @@ void M_LanConfig_Key (int key)
 
 	case K_MWHEELUP:
 	case K_LEFTARROW:
-		if (StartingGame && lanConfig_cursor == 1)
+		if (StartingGame && lanConfig_cursor == M_LanConfig_NewGameProtocolCursor())
 		{
 			S_LocalSound("misc/menu1.wav");
 			lanConfig_protocol_cursor--;
@@ -13741,7 +13844,7 @@ void M_LanConfig_Key (int key)
 
 	case K_MWHEELDOWN:
 	case K_RIGHTARROW:
-		if (StartingGame && lanConfig_cursor == 1)
+		if (StartingGame && lanConfig_cursor == M_LanConfig_NewGameProtocolCursor())
 		{
 			S_LocalSound("misc/menu1.wav");
 			lanConfig_protocol_cursor++;
@@ -13753,13 +13856,13 @@ void M_LanConfig_Key (int key)
 		break;
 
 	case K_TAB:
-		if (lanConfig_cursor == 0)
+		if (lanConfig_cursor == LANCONFIG_CURSOR_PORT)
 		{
 			if (M_LanConfig_AcceptPortHint())
 				S_LocalSound("misc/menu2.wav");
 			goto finish;
 		}
-		if (JoiningGame && lanConfig_cursor == 5)
+		if (JoiningGame && lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN)
 		{
 			if (M_LanConfig_AcceptJoinHint())
 				S_LocalSound("misc/menu2.wav");
@@ -13771,18 +13874,24 @@ void M_LanConfig_Key (int key)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	case K_MOUSE1: // woods #mousemenu
-		if (key == K_MOUSE1 && lanConfig_cursor == 0)
+		if (key == K_MOUSE1 && lanConfig_cursor == LANCONFIG_CURSOR_PORT)
 		{
 			M_TextField_MouseClick(&lanConfig_port_field, m_mousex, 170);
 			goto finish;
 		}
-		if (key == K_MOUSE1 && JoiningGame && lanConfig_cursor == 5)
+		if (key == K_MOUSE1 && M_LanConfig_ShowRoomField() && lanConfig_cursor == LANCONFIG_CURSOR_NEWGAME_ROOM)
+		{
+			M_TextField_MouseClick(&lanConfig_room_field, m_mousex, 170);
+			goto finish;
+		}
+		if (key == K_MOUSE1 && JoiningGame && lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN)
 		{
 			M_TextField_MouseClick(&lanConfig_join_field, m_mousex, 96);
 			goto finish;
 		}
 
-		if (lanConfig_cursor == 0)
+		if (lanConfig_cursor == LANCONFIG_CURSOR_PORT ||
+			(M_LanConfig_ShowRoomField() && lanConfig_cursor == LANCONFIG_CURSOR_NEWGAME_ROOM))
 			break;
 
 		m_entersound = true;
@@ -13792,7 +13901,7 @@ void M_LanConfig_Key (int key)
 		if (StartingGame)
 		{
 
-			if (lanConfig_cursor == 1)
+			if (lanConfig_cursor == M_LanConfig_NewGameProtocolCursor())
 			{
 				S_LocalSound("misc/menu1.wav");
 				lanConfig_protocol_cursor++;
@@ -13801,20 +13910,20 @@ void M_LanConfig_Key (int key)
 
 				SetProtocol(lanConfig_protocol_cursor);
 			}
-			if (lanConfig_cursor == 2)
+			if (lanConfig_cursor == M_LanConfig_NewGameOkCursor())
 				M_Menu_GameOptions_f();
 		}
 		else
 		{
-			if (lanConfig_cursor == 1)
+			if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_SEARCH_LAN)
 				M_Menu_Search_f(SLIST_LAN); // woods #localmpfix
-			else if (lanConfig_cursor == 2)
+			else if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_SEARCH_WEB)
 				M_Menu_Search_f(SLIST_INTERNET);
-			else if (lanConfig_cursor == 3) // woods #historymenu
+			else if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_HISTORY) // woods #historymenu
 				M_Menu_History_f ();
-			else if (lanConfig_cursor == 4) // woods #bookmarksmenu
+			else if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_BOOKMARKS) // woods #bookmarksmenu
 				M_Menu_Bookmarks_f();
-			else if (lanConfig_cursor == 5)
+			else if (lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN)
 			{
 					m_return_state = m_state;
 					m_return_onerror = true;
@@ -13830,12 +13939,15 @@ void M_LanConfig_Key (int key)
 	}
 
 finish:
-	if (StartingGame && lanConfig_cursor >= 3)
+	M_LanConfig_NormalizeRoomField();
+	M_LanConfig_SyncRoomField();
+
+	if (StartingGame && lanConfig_cursor >= NUM_LANCONFIG_CMDS)
 	{
 		if (key == K_UPARROW)
-			lanConfig_cursor = 1;
+			lanConfig_cursor = M_LanConfig_NewGameProtocolCursor();
 		else
-			lanConfig_cursor = 0;
+			lanConfig_cursor = LANCONFIG_CURSOR_PORT;
 	}
 
 	l =  Q_atoi(lanConfig_portname);
@@ -13843,10 +13955,11 @@ finish:
 	{
 		if (l <= 65535)
 			lanConfig_port = l;
-		else if (lanConfig_cursor != 0)
+		else if (lanConfig_cursor != LANCONFIG_CURSOR_PORT)
 			sprintf(lanConfig_portname, "%u", lanConfig_port);
 	}
 	M_TextField_ClampCursor(&lanConfig_port_field);
+	M_TextField_ClampCursor(&lanConfig_room_field);
 	M_TextField_ClampCursor(&lanConfig_join_field);
 	M_LanConfig_UpdateHints();
 }
@@ -13861,6 +13974,11 @@ void M_LanConfig_Char (int key)
 		{
 			if (active_field == &lanConfig_port_field)
 				M_LanConfig_UpdatePortHint();
+			else if (active_field == &lanConfig_room_field)
+			{
+				M_LanConfig_NormalizeRoomField();
+				M_LanConfig_SyncRoomField();
+			}
 			else if (active_field == &lanConfig_join_field)
 				M_LanConfig_UpdateJoinHint();
 		}
@@ -14775,7 +14893,9 @@ void M_Bookmarks_Edit_Mousemove(int cx, int cy) // woods #mousemenu
 
 qboolean M_LanConfig_TextEntry (void)
 {
-	return (lanConfig_cursor == 0 || lanConfig_cursor == 5); // woods #historymenu #bookmarksmenu
+	return (lanConfig_cursor == LANCONFIG_CURSOR_PORT ||
+		(M_LanConfig_ShowRoomField() && lanConfig_cursor == LANCONFIG_CURSOR_NEWGAME_ROOM) ||
+		lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN); // woods #historymenu #bookmarksmenu
 }
 
 void M_LanConfig_Mousemove(int cx, int cy)
@@ -14784,7 +14904,9 @@ void M_LanConfig_Mousemove(int cx, int cy)
 	int old_cursor;
 
 	if (textfield_mouse_dragging &&
-		(textfield_drag_field == &lanConfig_port_field || textfield_drag_field == &lanConfig_join_field))
+		(textfield_drag_field == &lanConfig_port_field ||
+		textfield_drag_field == &lanConfig_room_field ||
+		textfield_drag_field == &lanConfig_join_field))
 	{
 		M_TextField_MouseDrag(cx);
 		return;
@@ -14804,7 +14926,7 @@ void M_LanConfig_Mousemove(int cx, int cy)
 	}
 
 	// If not over IPs, handle regular menu cursor movement
-	numCommands = StartingGame ? NUM_LANCONFIG_CMDS_NEWGAME : NUM_LANCONFIG_CMDS_JOINGAME;
+	numCommands = NUM_LANCONFIG_CMDS;
 	old_cursor = lanConfig_cursor;
 	M_UpdateCursorWithTable(cy, lanConfig_cursor_ptr, numCommands, &lanConfig_cursor);
 	if (lanConfig_cursor != old_cursor)
