@@ -9,3 +9,7 @@ Windows/VisualStudio/UpgradeLog.htm
 
 # macOS
 .DS_Store
+
+# Build artifacts
+*.o
+*.d
