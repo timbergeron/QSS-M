@@ -333,6 +333,37 @@ static void TexMgr_Anisotropy_f (cvar_t *var)
 	}
 }
 
+static const char *const texmgr_imagedump_formats[] = { "jpg", "png", "tga" };
+
+static const char *TexMgr_ImageDump_FormatForArg (const char *arg)
+{
+	int i;
+
+	for (i = 0; i < countof(texmgr_imagedump_formats); i++)
+		if (!q_strcasecmp(texmgr_imagedump_formats[i], arg))
+			return texmgr_imagedump_formats[i];
+
+	return NULL;
+}
+
+static void TexMgr_AddImageDumpFormatsToTabList (const char* partial)
+{
+	int i;
+
+	for (i = 0; i < countof(texmgr_imagedump_formats); i++)
+		Con_AddToTabList (texmgr_imagedump_formats[i], partial, NULL, NULL);
+}
+
+static qboolean TexMgr_WriteImageDump (const char *name, byte *buffer, int width, int height, int bpp, const char *ext)
+{
+	if (!q_strcasecmp(ext, "png"))
+		return Image_WritePNG (name, buffer, width, height, bpp, true);
+	if (!q_strcasecmp(ext, "jpg"))
+		return Image_WriteJPG (name, buffer, width, height, bpp, 90, true);
+
+	return Image_WriteTGA (name, buffer, width, height, bpp, true);
+}
+
 /*
 ===============
 CompleteImageList -- woods -- tab completion for imagelist/imagedump -- iw 
@@ -347,6 +378,25 @@ qboolean CompleteImageList (const char* partial, void* unused)
 			Con_AddToTabList(glt->name, partial, NULL, NULL); // #demolistsort add arg
 
 	return true;
+}
+
+/*
+===============
+CompleteImageDump -- woods -- tab completion for imagedump format/filter args
+===============
+*/
+qboolean CompleteImageDump (const char* partial, void* unused)
+{
+	if (Cmd_Argc() == 2)
+	{
+		TexMgr_AddImageDumpFormatsToTabList (partial);
+		return CompleteImageList (partial, unused);
+	}
+
+	if (Cmd_Argc() == 3 && TexMgr_ImageDump_FormatForArg(Cmd_Argv(1)))
+		return CompleteImageList (partial, unused);
+
+	return false;
 }
 
 /*
@@ -399,20 +449,38 @@ static void TexMgr_Imagelist_f (void)
 
 /*
 ===============
-TexMgr_Imagedump_f -- dump all current textures to TGA files
+TexMgr_Imagedump_f -- dump all current textures to image files
 ===============
 */
 static void TexMgr_Imagedump_f (void)
 {
-	char tganame[MAX_OSPATH], tempname[MAX_OSPATH], dirname[MAX_OSPATH];
+	char	imagename[MAX_OSPATH], tempname[MAX_OSPATH], dirname[MAX_OSPATH];
+	char	ext[4];
+	const char *requested_format;
 	const char* filter = NULL; // woods add filter (ironwail)
 	int count = 0; // woods add filter (ironwail)
 	gltexture_t	*glt;
 	byte *buffer;
 	char *c;
+	int bytes;
+	int bpp;
 
-	if (Cmd_Argc() >= 2) // woods add filter (ironwail)
-		filter = Cmd_Argv(1); // woods add filter (ironwail)
+	q_strlcpy (ext, "tga", sizeof(ext));
+
+	if (Cmd_Argc() >= 2)
+	{
+		requested_format = TexMgr_ImageDump_FormatForArg (Cmd_Argv(1));
+		if (requested_format)
+		{
+			q_strlcpy (ext, requested_format, sizeof(ext));
+			if (Cmd_Argc() >= 3)
+				filter = Cmd_Argv(2);
+		}
+		else
+		{
+			filter = Cmd_Argv(1); // woods add filter (ironwail)
+		}
+	}
 
 	//create directory
 	q_snprintf(dirname, sizeof(dirname), "%s/imagedump", com_gamedir);
@@ -429,25 +497,26 @@ static void TexMgr_Imagedump_f (void)
 		while ( (c = strchr(tempname, ':')) ) *c = '_';
 		while ( (c = strchr(tempname, '/')) ) *c = '_';
 		while ( (c = strchr(tempname, '*')) ) *c = '_';
-		q_snprintf(tganame, sizeof(tganame), "imagedump/%s.tga", tempname);
+		q_snprintf(imagename, sizeof(imagename), "imagedump/%s.%s", tempname, ext);
 
 		GL_Bind (glt);
 		glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
 
-		if (glt->flags & TEXPREF_ALPHA)
+		bpp = ((glt->flags & TEXPREF_ALPHA) && q_strcasecmp(ext, "jpg")) ? 32 : 24;
+		bytes = bpp / 8;
+		buffer = (byte *) malloc(glt->width * glt->height * bytes);
+		if (!buffer)
 		{
-			buffer = (byte *) malloc(glt->width*glt->height*4);
-			glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
-			Image_WriteTGA (tganame, buffer, glt->width, glt->height, 32, true);
+			Con_Printf ("TexMgr_Imagedump_f: Couldn't allocate memory for %s\n", glt->name);
+			continue;
 		}
+
+		glGetTexImage(GL_TEXTURE_2D, 0, bpp == 32 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, buffer);
+		if (TexMgr_WriteImageDump (imagename, buffer, glt->width, glt->height, bpp, ext))
+			count++; // woods add filter (ironwail)
 		else
-		{
-			buffer = (byte *) malloc(glt->width*glt->height*3);
-			glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, buffer);
-			Image_WriteTGA (tganame, buffer, glt->width, glt->height, 24, true);
-		}
+			Con_Printf ("TexMgr_Imagedump_f: Couldn't create %s\n", imagename);
 		free (buffer);
-		count++; // woods add filter (ironwail)
 	}
 
 	if (filter)

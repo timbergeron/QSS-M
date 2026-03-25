@@ -3637,6 +3637,7 @@ static qboolean CompleteSkywind(const char* partial, void* unused)
 extern qboolean CompletePAKList(const char* partial, void* unused); // woods #unpak
 
 qboolean CompleteImageList (const char* partial, void* unused); // woods
+qboolean CompleteImageDump (const char* partial, void* unused); // woods
 qboolean CompleteSoundList (const char* partial, void* unused); // woods
 qboolean CompleteGive (const char* partial, void* unused); // woods #give+
 
@@ -3670,7 +3671,7 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "printtxt",				CompleteFileList,		&textlist },
 	{ "r_showbboxes_filter",	CompleteClassnames,		NULL },
 	{ "imagelist",				CompleteImageList,		NULL },
-	{ "imagedump",				CompleteImageList,		NULL },
+	{ "imagedump",				CompleteImageDump,		NULL },
 	{ "bind",					CompleteBindKeys,		NULL },
 	{ "bindedit",				CompleteBoundKeys,		NULL },
 	{ "unbind",					CompleteUnbindKeys,		NULL },
