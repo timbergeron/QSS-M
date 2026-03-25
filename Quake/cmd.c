@@ -1307,7 +1307,7 @@ void Cmd_TokenizeString (const char *text)
 	while (1)
 	{
 // skip whitespace up to a /n
-		while (*text && *text <= ' ' && *text != '\n')
+		while (*text && (unsigned char)*text <= ' ' && *text != '\n')
 		{
 			text++;
 		}
