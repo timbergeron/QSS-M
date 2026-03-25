@@ -3412,6 +3412,18 @@ static qboolean CompleteClients(const char* partial, void* unused) // woods
 	return true;
 }
 
+static qboolean CompleteCmd(const char* partial, void* unused)
+{
+	if (Cmd_Argc() == 2)
+		return CompleteGeneralList(partial, unused);
+
+	if (Cmd_Argc() == 3 &&
+		(!q_strcasecmp(Cmd_Argv(1), "ignore") || !q_strcasecmp(Cmd_Argv(1), "unignore")))
+		return CompleteClients(partial, NULL);
+
+	return false;
+}
+
 /*
 ================
 GetTimeStampedName
@@ -3687,9 +3699,11 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "flocate",				CompleteLS,				NULL },
 	{ "ip",						CompleteIP,				NULL },
 	{ "unpak",					CompletePAKList,		NULL },
-	{ "cmd",					CompleteGeneralList,	NULL },
+	{ "cmd",					CompleteCmd,			NULL },
 	{ "identify",				CompleteClients,		NULL },
 	{ "tell",					CompleteClients,		NULL },
+	{ "ignore",					CompleteClients,		NULL },
+	{ "unignore",				CompleteClients,		NULL },
 	{ "record",					CompleteRecord,			NULL },
 	{ "save",					CompleteSave,			NULL },
 	{ "load",					CompleteLoad,			NULL },

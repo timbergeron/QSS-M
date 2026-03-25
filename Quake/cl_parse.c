@@ -4169,7 +4169,10 @@ void CL_ParseServerMessage (void)
 			char filtered_buffer[MAXCMDLINE];
 			s = MSG_ReadString();
 
-			if (cl_contentfilter.value == 2 && WordFilter_Check(s, filtered_buffer, sizeof(filtered_buffer))) 
+			if (CL_ShouldIgnoreChatPrint(s))
+				break;
+
+			if (cl_contentfilter.value == 2 && WordFilter_Check(s, filtered_buffer, sizeof(filtered_buffer)))
 			{
 				filtered_buffer[sizeof(filtered_buffer) - 1] = '\0';
 
@@ -4178,8 +4181,8 @@ void CL_ParseServerMessage (void)
 			}
 			else
 			{
-			if (!CL_ParseProQuakeString(s))
-				CL_ParsePrint(s);
+				if (!CL_ParseProQuakeString(s))
+					CL_ParsePrint(s);
 			}
 		}
 			break;
@@ -4276,7 +4279,11 @@ void CL_ParseServerMessage (void)
 			if (i >= cl.maxclients)
 				Host_Error ("CL_ParseServerMessage: svc_updatename (%u) > MAX_SCOREBOARD (%u)", i, cl.maxclients); // woods - temporary? fix for connection issue
 			q_strlcpy (cl.scores[i].name, MSG_ReadString(), MAX_SCOREBOARDNAME);
-			Info_SetKey(cl.scores[i].userinfo, sizeof(cl.scores[i].userinfo), "name", cl.scores[i].name);
+			if (cl.scores[i].name[0])
+				Info_SetKey(cl.scores[i].userinfo, sizeof(cl.scores[i].userinfo), "name", cl.scores[i].name);
+			else
+				memset(cl.scores[i].userinfo, 0, sizeof(cl.scores[i].userinfo));
+			CL_UpdateIgnoredChatSlot(i, cl.scores[i].name);
 			break;
 
 		case svc_updatefrags:

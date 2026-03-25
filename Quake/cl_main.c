@@ -492,6 +492,7 @@ void CL_Disconnect (void)
 	cl.matchinp = 0; // woods
 	cls.demo_had_overtime = false;
 	netquakeio = false; // woods
+	CL_ClearIgnoredChats();
 
 	Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "*mapmismatch", ""); // clear -- woods #mapcrc
 

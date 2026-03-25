@@ -222,6 +222,7 @@ typedef struct client_s
 	qboolean usingpmove;	//using the SV_RunClientCommand entrypoint, or getting pmove thrust upon them serverside (disables sv_user.c+movetype stuff, enables provides pmove hints to the client)
 
 	char userinfo[1024];	//spike -- for csqc to (ab)use.
+	unsigned char chat_ignore[(MAX_SCOREBOARD + 7) / 8];
 	client_voip_t voip;	//spike -- for voip
 	struct
 	{
