@@ -50,6 +50,7 @@ qboolean	Win95, Win95old, WinNT, WinVista;
 cvar_t		sys_throttle = {"sys_throttle", "0.02", CVAR_ARCHIVE};
 
 static HANDLE		hinput, houtput;
+static qboolean		use_vtp = false; // ANSI virtual terminal processing available
 
 static size_t	sys_handles_max;	/* spike -- removed limit, was 32 (johnfitz -- was 10) */
 static FILE		**sys_handles;
@@ -397,6 +398,18 @@ void Sys_Init (void)
 
 		hinput = GetStdHandle (STD_INPUT_HANDLE);
 		houtput = GetStdHandle (STD_OUTPUT_HANDLE);
+
+		// Enable ANSI escape sequences, UTF-8, and mouse input
+		{
+			DWORD mode = 0;
+			GetConsoleMode (houtput, &mode);
+			use_vtp = SetConsoleMode (houtput, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+			SetConsoleOutputCP (CP_UTF8);
+			GetConsoleMode (hinput, &mode);
+			mode |= ENABLE_MOUSE_INPUT;
+			mode &= ~ENABLE_QUICK_EDIT_MODE;
+			SetConsoleMode (hinput, mode | ENABLE_EXTENDED_FLAGS);
+		}
 	}
 
 	else
@@ -457,48 +470,627 @@ void Sys_Error (const char *error, ...)
 	exit (1);
 }
 
+/* ============================================================
+   Dedicated console scrollback
+   ============================================================ */
+#define SCROLLBACK_MAXLINES 2048
+#define SCROLLBACK_LINESIZE 1024
+#define DED_CHAT_COLOR_ON   0x1d
+#define DED_CHAT_COLOR_OFF  0x1e
+
+static char  scrollback_lines[SCROLLBACK_MAXLINES][SCROLLBACK_LINESIZE];
+static char  scrollback_partial[SCROLLBACK_LINESIZE];
+static int   scrollback_partial_len = 0;
+static int   scrollback_head = 0;
+static int   scrollback_count = 0;
+static int   scrollback_offset = 0;
+static qboolean scrollback_active = false;
+static int   scrollback_enter_head = 0;
+static int   scrollback_enter_partial_len = 0;
+static qboolean scrollback_wrapped = false; // buffer wrapped fully during scrollback
+
+static void Scrollback_CommitLine (void)
+{
+	scrollback_partial[scrollback_partial_len] = '\0';
+	q_strlcpy (scrollback_lines[scrollback_head], scrollback_partial, SCROLLBACK_LINESIZE);
+	scrollback_head = (scrollback_head + 1) % SCROLLBACK_MAXLINES;
+	if (scrollback_count < SCROLLBACK_MAXLINES)
+		scrollback_count++;
+	else if (scrollback_active)
+		scrollback_wrapped = true; // ring wrapped past enter_head
+	scrollback_partial_len = 0;
+	scrollback_partial[0] = '\0';
+}
+
+static void Scrollback_Feed (const char *text)
+{
+	while (*text)
+	{
+		if (*text == '\n')
+			Scrollback_CommitLine ();
+		else if (*text != '\r' && scrollback_partial_len < SCROLLBACK_LINESIZE - 1)
+		{
+			scrollback_partial[scrollback_partial_len++] = *text;
+			scrollback_partial[scrollback_partial_len] = '\0';
+		}
+		text++;
+	}
+}
+
+static int Scrollback_TermHeight (void)
+{
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+	if (GetConsoleScreenBufferInfo (houtput, &csbi))
+		return csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+	return 24;
+}
+
+static int Scrollback_TermWidth (void)
+{
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+	if (GetConsoleScreenBufferInfo (houtput, &csbi))
+		return csbi.srWindow.Right - csbi.srWindow.Left + 1;
+	return 80;
+}
+
+/* Dedicated console input state (file-scope so Sys_Printf and scrollback can access) */
+static char	ded_input[MAXCMDLINE];
+static int	ded_input_len;
+static int	ded_input_cursor;
+cvar_t		sys_dedmouse_capture = {"sys_dedmouse_capture", "1", CVAR_ARCHIVE};
+
+static qboolean Scrollback_ShowCaretRow (void)
+{
+	return scrollback_offset > 0;
+}
+
+static int Scrollback_VisibleRowsForOffset (int offset)
+{
+	int reserved = 1; // input row is always visible
+
+	if (offset > 0)
+		reserved++; // caret row only while actually scrolled up
+
+	{
+		int visible = Scrollback_TermHeight () - reserved;
+		return (visible < 1) ? 1 : visible;
+	}
+}
+
+static int Scrollback_VisibleRows (void)
+{
+	return Scrollback_VisibleRowsForOffset (scrollback_offset);
+}
+
+static int Scrollback_TotalLines (void)
+{
+	return scrollback_count + ((scrollback_partial_len > 0) ? 1 : 0);
+}
+
+static int Scrollback_LineRows (const char *line, int width)
+{
+	int cols = 0;
+
+	if (width < 1)
+		width = 1;
+
+	while (*line)
+	{
+		if ((unsigned char)*line == 27 && line[1] == '[')
+		{
+			line += 2;
+			while (*line && !(*line >= '@' && *line <= '~'))
+				line++;
+			if (*line)
+				line++;
+			continue;
+		}
+
+		if (((unsigned char)*line & 0xC0) == 0x80)
+		{
+			line++;
+			continue;
+		}
+
+		cols++;
+		line++;
+	}
+
+	return (cols <= 0) ? 1 : ((cols - 1) / width) + 1;
+}
+
+static int Scrollback_MaxOffset (void)
+{
+	int maxoff = Scrollback_TotalLines () - Scrollback_VisibleRowsForOffset (1);
+	return (maxoff < 0) ? 0 : maxoff;
+}
+
+static qboolean Scrollback_AtBottom (void)
+{
+	return scrollback_offset <= 0;
+}
+
+static qboolean Scrollback_Frozen (void)
+{
+	return scrollback_active && !Scrollback_AtBottom ();
+}
+
+static void Scrollback_Redraw (void)
+{
+	DWORD dummy;
+	int height = Scrollback_TermHeight ();
+	int width = Scrollback_TermWidth ();
+	int total = Scrollback_TotalLines ();
+	int visible;
+	int first, end, rows, i;
+
+	if (scrollback_offset > Scrollback_MaxOffset ())
+		scrollback_offset = Scrollback_MaxOffset ();
+	if (scrollback_offset < 0)
+		scrollback_offset = 0;
+
+	visible = Scrollback_VisibleRows ();
+	end = total - scrollback_offset;
+	if (end < 0)
+		end = 0;
+	if (end > total)
+		end = total;
+
+	first = end;
+	rows = 0;
+	while (first > 0)
+	{
+		const char *line;
+		int line_rows;
+
+		if (first - 1 == scrollback_count)
+			line = scrollback_partial;
+		else
+		{
+			int idx = (scrollback_head - scrollback_count + first - 1 + SCROLLBACK_MAXLINES) % SCROLLBACK_MAXLINES;
+			line = scrollback_lines[idx];
+		}
+
+		line_rows = Scrollback_LineRows (line, width);
+
+		if (rows + line_rows > visible && rows > 0)
+			break;
+
+		rows += line_rows;
+		first--;
+	}
+
+	WriteFile (houtput, "\033[2J\033[H", 7, &dummy, NULL);
+
+	for (i = first; i < end; i++)
+	{
+		if (i == scrollback_count)
+		{
+			WriteFile (houtput, scrollback_partial, (DWORD)strlen(scrollback_partial), &dummy, NULL);
+		}
+		else
+		{
+			int idx = (scrollback_head - scrollback_count + i + SCROLLBACK_MAXLINES) % SCROLLBACK_MAXLINES;
+			WriteFile (houtput, scrollback_lines[idx], (DWORD)strlen(scrollback_lines[idx]), &dummy, NULL);
+			WriteFile (houtput, "\n", 1, &dummy, NULL);
+		}
+	}
+
+	// Caret row — only when scrolled above the live bottom
+	if (Scrollback_ShowCaretRow ())
+	{
+		char pos[32];
+		char line[512];
+		int j;
+		q_snprintf (pos, sizeof(pos), "\033[%d;1H", height - 1);
+		WriteFile (houtput, pos, (DWORD)strlen(pos), &dummy, NULL);
+		if (width >= (int)sizeof(line))
+			width = (int)sizeof(line) - 1;
+		for (j = 0; j < width; j++)
+			line[j] = (j % 4 == 1) ? '^' : ' ';
+		line[width] = '\0';
+		WriteFile (houtput, line, (DWORD)width, &dummy, NULL);
+	}
+
+	// Input line on the bottom row
+	{
+		char pos[32];
+		q_snprintf (pos, sizeof(pos), "\033[%d;1H\033[2K", height);
+		WriteFile (houtput, pos, (DWORD)strlen(pos), &dummy, NULL);
+		if (ded_input_len > 0)
+			WriteFile (houtput, ded_input, ded_input_len, &dummy, NULL);
+		if (ded_input_cursor < ded_input_len)
+		{
+			q_snprintf (pos, sizeof(pos), "\033[%d;%dH", height, ded_input_cursor + 1);
+			WriteFile (houtput, pos, (DWORD)strlen(pos), &dummy, NULL);
+		}
+	}
+}
+
+static void Scrollback_Enter (void)
+{
+	DWORD dummy;
+	if (!use_vtp) // scrollback requires ANSI escape support
+		return;
+	scrollback_active = true;
+	scrollback_enter_head = scrollback_head;
+	scrollback_enter_partial_len = scrollback_partial_len;
+	scrollback_offset = Scrollback_VisibleRowsForOffset (1); // start one page up
+	if (scrollback_offset > Scrollback_MaxOffset ())
+		scrollback_offset = Scrollback_MaxOffset ();
+	WriteFile (houtput, "\033[?1049h", 8, &dummy, NULL);
+	Scrollback_Redraw ();
+}
+
+static void Ded_ClearInputLine (void);   // forward decl
+static void Ded_RestoreInputLine (void); // forward decl
+
+static void Scrollback_Exit (void)
+{
+	DWORD dummy;
+	int missed, i;
+
+	if (use_vtp)
+		WriteFile (houtput, "\033[?1049l", 8, &dummy, NULL);
+	scrollback_active = false;
+	scrollback_offset = 0;
+
+	// Clear the pending input line before replaying, so replay
+	// doesn't append onto partially-typed text
+	Ded_ClearInputLine ();
+
+	// Replay any lines that arrived while we were scrolled up
+	if (scrollback_wrapped)
+	{
+		// Ring buffer wrapped fully — replay everything we have
+		missed = scrollback_count;
+	}
+	else
+	{
+		missed = (scrollback_head - scrollback_enter_head + SCROLLBACK_MAXLINES) % SCROLLBACK_MAXLINES;
+		if (missed > scrollback_count)
+			missed = scrollback_count;
+	}
+	scrollback_wrapped = false;
+
+	if (missed > 0)
+	{
+		for (i = missed; i > 0; i--)
+		{
+			int idx = (scrollback_head - i + SCROLLBACK_MAXLINES) % SCROLLBACK_MAXLINES;
+			WriteFile (houtput, scrollback_lines[idx], (DWORD)strlen(scrollback_lines[idx]), &dummy, NULL);
+			WriteFile (houtput, "\n", 1, &dummy, NULL);
+		}
+	}
+
+	// Flush any partial line fragment that hasn't been newline-terminated
+	if (scrollback_partial_len > scrollback_enter_partial_len)
+	{
+		WriteFile (houtput, scrollback_partial + scrollback_enter_partial_len,
+			(DWORD)(scrollback_partial_len - scrollback_enter_partial_len), &dummy, NULL);
+	}
+
+	// Restore the input line so the user can keep typing
+	Ded_RestoreInputLine ();
+}
+
+static void Scrollback_PageUp (void)
+{
+	scrollback_offset += Scrollback_VisibleRowsForOffset (1);
+	Scrollback_Redraw (); // clamp happens inside
+}
+
+static void Scrollback_PageDown (void)
+{
+	if (Scrollback_AtBottom ())
+	{
+		Scrollback_Exit ();
+		return;
+	}
+	scrollback_offset -= Scrollback_VisibleRows ();
+	if (scrollback_offset < 0)
+		scrollback_offset = 0;
+	Scrollback_Redraw ();
+}
+
+static void Scrollback_LineUp (void)
+{
+	scrollback_offset++;
+	Scrollback_Redraw ();
+}
+
+static void Scrollback_LineDown (void)
+{
+	if (Scrollback_AtBottom ())
+	{
+		Scrollback_Exit ();
+		return;
+	}
+	scrollback_offset--;
+	if (scrollback_offset < 0)
+		scrollback_offset = 0;
+	Scrollback_Redraw ();
+}
+
+static char	ded_output_hold[8192];
+static size_t	ded_output_hold_len;
+
+static void Ded_ClearInputLine (void)
+{
+	DWORD dummy;
+	int i;
+	if (ded_input_len <= 0)
+		return;
+	WriteFile (houtput, "\r", 1, &dummy, NULL);
+	for (i = 0; i < ded_input_len; i++)
+		WriteFile (houtput, " ", 1, &dummy, NULL);
+	WriteFile (houtput, "\r", 1, &dummy, NULL);
+}
+
+static void Ded_RestoreInputLine (void)
+{
+	DWORD dummy;
+	int i;
+	if (ded_input_len <= 0)
+		return;
+	WriteFile (houtput, ded_input, ded_input_len, &dummy, NULL);
+	for (i = ded_input_len; i > ded_input_cursor; i--)
+		WriteFile (houtput, "\b", 1, &dummy, NULL);
+}
+
+static void Ded_WriteOutput (const char *text, size_t len)
+{
+	DWORD dummy;
+	if (len == 0)
+		return;
+	WriteFile (houtput, text, (DWORD)len, &dummy, NULL);
+}
+
+static void Ded_FlushBufferedOutput (qboolean allow_partial)
+{
+	size_t emit = 0;
+
+	if (!ded_output_hold_len)
+		return;
+
+	if (allow_partial)
+	{
+		emit = ded_output_hold_len;
+	}
+	else
+	{
+		size_t i;
+		for (i = ded_output_hold_len; i > 0; i--)
+		{
+			if (ded_output_hold[i - 1] == '\n')
+			{
+				emit = i;
+				break;
+			}
+		}
+		if (!emit)
+			return;
+	}
+
+	if (ded_input_len > 0)
+		Ded_ClearInputLine ();
+
+	Ded_WriteOutput (ded_output_hold, emit);
+
+	if (emit < ded_output_hold_len)
+		memmove (ded_output_hold, ded_output_hold + emit, ded_output_hold_len - emit);
+	ded_output_hold_len -= emit;
+
+	if (ded_input_len > 0)
+		Ded_RestoreInputLine ();
+}
+
+static void Ded_HandleOutput (const char *text)
+{
+	size_t len = strlen (text);
+
+	if (!len)
+		return;
+
+	Scrollback_Feed (text);
+	if (Scrollback_Frozen ())
+		return;
+
+	if (ded_input_len <= 0 && !ded_output_hold_len)
+	{
+		Ded_WriteOutput (text, len);
+		return;
+	}
+
+	if (len > sizeof(ded_output_hold) - ded_output_hold_len)
+	{
+		Ded_FlushBufferedOutput (ded_input_len <= 0);
+		if (len > sizeof(ded_output_hold) - ded_output_hold_len && ded_input_len <= 0)
+			Ded_FlushBufferedOutput (true);
+	}
+
+	if (len > sizeof(ded_output_hold) - ded_output_hold_len)
+	{
+		size_t keep = sizeof(ded_output_hold) - 1;
+		if (len >= keep)
+		{
+			if (ded_input_len > 0)
+			{
+				memcpy (ded_output_hold, text + len - keep, keep);
+				ded_output_hold_len = keep;
+			}
+			else
+			{
+				Ded_WriteOutput (text, len);
+				ded_output_hold_len = 0;
+			}
+			return;
+		}
+	}
+
+	memcpy (ded_output_hold + ded_output_hold_len, text, len);
+	ded_output_hold_len += len;
+
+	Ded_FlushBufferedOutput (ded_input_len <= 0);
+}
+
 void Sys_Printf (const char *fmt, ...)
 {
 	va_list		argptr;
 	char		text[1024];
-	DWORD		dummy;
 
 	va_start (argptr,fmt);
 	q_vsnprintf (text, sizeof(text), fmt, argptr);
 	va_end (argptr);
 
-	unsigned char* ch = (unsigned char*)text;
-	unsigned char* dst = (unsigned char*)text;
-
-	while (*ch)
+	if (!isDedicated)
 	{
-		if (*ch == '^' && *(ch + 1) != '\0' && *(ch + 1) == 'm')
+		// Non-dedicated: plain dequake to stdout
+		unsigned char *ch = (unsigned char *)text;
+		unsigned char *dst = (unsigned char *)text;
+		while (*ch)
 		{
-			ch += 2; // Skip over '^' and 'm'
-			continue;
+			if (*ch == '^' && *(ch + 1) != '\0' && *(ch + 1) == 'm')
+			{
+				ch += 2;
+				continue;
+			}
+			*dst++ = dequake[*ch++];
 		}
-		*dst = dequake[*ch];
-		dst++;
-		ch++;
-	}
-	*dst = '\0';
-
-	if (isDedicated)
-	{
-		if (*text == 1 || *text == 2)
-		{	//mostly for Con_[D]Warning
-			SetConsoleTextAttribute(houtput, FOREGROUND_RED);
-			WriteFile(houtput, text+1, strlen(text+1), &dummy, NULL);
-			SetConsoleTextAttribute(houtput, FOREGROUND_BLUE|FOREGROUND_GREEN|FOREGROUND_RED);
-		}
-		else
-			WriteFile(houtput, text, strlen(text), &dummy, NULL);
-	}
-	else
-	{
-	/* SDL will put these into its own stdout log,
-	   so print to stdout even in graphical mode. */
+		*dst = '\0';
 		fputs (text, stdout);
+		return;
+	}
+
+	if (!use_vtp)
+	{
+		// VTP unavailable (pre-Win10): plain dequake with WriteFile
+		unsigned char *ch = (unsigned char *)text;
+		unsigned char *dst = (unsigned char *)text;
+		while (*ch)
+		{
+			if (*ch == DED_CHAT_COLOR_ON || *ch == DED_CHAT_COLOR_OFF)
+			{
+				ch++;
+				continue;
+			}
+			if (*ch == '^' && *(ch + 1) != '\0' && *(ch + 1) == 'm')
+			{
+				ch += 2;
+				continue;
+			}
+			*dst++ = dequake[*ch++];
+		}
+		*dst = '\0';
+		Ded_HandleOutput (text);
+		return;
+	}
+
+	// Dedicated: ANSI true color + UTF-8 glyphs
+	// 0=normal, 1=red #a85c4c, 2=gold #8d7039, 3=brackets #c97d49
+	{
+		char output[8192];
+		unsigned char *ch = (unsigned char *)text;
+		char *dst = output;
+		char *end = output + sizeof(output) - 32;
+		int cur_color = 0;
+		qboolean chat_color = false;
+
+		while (*ch && dst < end)
+		{
+			int want;
+
+			if (*ch == DED_CHAT_COLOR_ON)
+			{
+				chat_color = true;
+				ch++;
+				continue;
+			}
+			if (*ch == DED_CHAT_COLOR_OFF)
+			{
+				chat_color = false;
+				ch++;
+				continue;
+			}
+			if (*ch == '^' && *(ch + 1) != '\0' && *(ch + 1) == 'm')
+			{
+				ch += 2;
+				continue;
+			}
+
+			if (chat_color)
+				want = 4; // say / say_team message text
+			else if ((*ch >= 18 && *ch <= 27) || (*ch >= 146 && *ch <= 155) ||
+			         *ch == 133 || *ch == 142 || *ch == 143 || *ch == 156)
+				want = 2; // gold digits / gold dots
+			else if ((*ch >= 16 && *ch <= 17) || (*ch >= 144 && *ch <= 145))
+				want = 3; // brackets
+			else if (*ch == 11 || *ch == 139)
+				want = 1; // red squares
+			else if (*ch == 141)
+				want = 1; // red play arrow
+			else if (*ch > 127)
+				want = 1; // red
+			else
+				want = 0; // normal
+
+			if (want != cur_color)
+			{
+				const char *esc;
+				int esc_len;
+
+				if (want == 0)
+					esc = "\033[0m";
+				else if (want == 1) // #a85c4c via ANSI 256 color 95
+					esc = "\033[38;5;95m";
+				else if (want == 2) // #8d7039 via ANSI 256 color 136
+					esc = "\033[38;5;136m";
+				else if (want == 3) // #c97d49 via ANSI 256 color 173
+					esc = "\033[38;5;173m";
+				else // chat text via ANSI 256 color 247
+					esc = "\033[38;5;247m";
+
+				esc_len = (int)strlen (esc);
+				memcpy (dst, esc, esc_len);
+				dst += esc_len;
+				cur_color = want;
+			}
+
+			if (*ch == 5 || *ch == 14 || *ch == 15 || *ch == 28 ||
+			    *ch == 133 || *ch == 142 || *ch == 143 || *ch == 156)
+			{
+				*dst++ = (char)0xC2;
+				*dst++ = (char)0xB7; // UTF-8 middle dot ·
+				ch++;
+			}
+			else if (*ch == 11 || *ch == 139)
+			{
+				*dst++ = (char)0xE2;
+				*dst++ = (char)0x96;
+				*dst++ = (char)0xA0; // UTF-8 black square ■
+				ch++;
+			}
+			else if (*ch == 141)
+			{
+				*dst++ = (char)0xE2;
+				*dst++ = (char)0x96;
+				*dst++ = (char)0xB6; // UTF-8 play arrow ▶
+				ch++;
+			}
+			else
+			{
+				*dst++ = dequake[*ch++];
+			}
+		}
+
+		if (cur_color)
+		{
+			memcpy (dst, "\033[0m", 4);
+			dst += 4;
+		}
+
+		*dst = '\0';
+		Ded_HandleOutput (output);
 	}
 }
 
@@ -587,9 +1179,7 @@ static void Sys_RewriteInputLine(const char* newline, char* con_text, size_t con
 
 const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 {
-	static char	con_text[MAXCMDLINE];
-	static int	textlen;
-	static int  cursor_pos;
+	// Input state is in file-scope ded_input / ded_input_len / ded_input_cursor
 	INPUT_RECORD	recs[1024];
 	int		ch;
 	DWORD		dummy, numread, numevents;
@@ -612,44 +1202,75 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 		{
 			if (recs[0].Event.KeyEvent.bKeyDown == FALSE)
 			{
+				// PageUp / PageDown for scrollback
+				if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_PRIOR)
+				{
+					if (!scrollback_active)
+						Scrollback_Enter ();
+					else
+						Scrollback_PageUp ();
+					continue;
+				}
+				else if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_NEXT)
+				{
+					if (scrollback_active)
+						Scrollback_PageDown ();
+					continue;
+				}
+					else if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_ESCAPE && scrollback_active)
+					{
+						Scrollback_Exit ();
+						continue;
+					}
+
+				// In scrollback mode, arrow keys scroll instead of editing
+					if (Scrollback_Frozen ())
+					{
+						if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_UP)
+							Scrollback_LineUp ();
+					else if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_DOWN)
+						Scrollback_LineDown ();
+					continue;
+				}
+
 				if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_LEFT)
 				{
-					if (cursor_pos > 0)
+					if (ded_input_cursor > 0)
 					{
-						cursor_pos--;
+						ded_input_cursor--;
 						WriteFile(houtput, "\b", 1, &dummy, NULL);
 					}
 					continue;
 				}
 				else if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_RIGHT)
 				{
-					if (cursor_pos < textlen)
+					if (ded_input_cursor < ded_input_len)
 					{
-						WriteFile(houtput, &con_text[cursor_pos], 1, &dummy, NULL);
-						cursor_pos++;
+						WriteFile(houtput, &ded_input[ded_input_cursor], 1, &dummy, NULL);
+						ded_input_cursor++;
 					}
 					continue;
 				}
 				else if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_UP)
 				{
 					char history_line[MAXCMDLINE];
-					if (History_GetPrevious(con_text, history_line, sizeof(history_line)))
-						Sys_RewriteInputLine(history_line, con_text, sizeof(con_text), &textlen, &cursor_pos, &dummy);
+					if (History_GetPrevious(ded_input, history_line, sizeof(history_line)))
+						Sys_RewriteInputLine(history_line, ded_input, sizeof(ded_input), &ded_input_len, &ded_input_cursor, &dummy);
 					continue;
 				}
 				else if (recs[0].Event.KeyEvent.wVirtualKeyCode == VK_DOWN)
 				{
 					char history_line[MAXCMDLINE];
-					if (History_GetNext(con_text, history_line, sizeof(history_line)))
-						Sys_RewriteInputLine(history_line, con_text, sizeof(con_text), &textlen, &cursor_pos, &dummy);
+					if (History_GetNext(ded_input, history_line, sizeof(history_line)))
+						Sys_RewriteInputLine(history_line, ded_input, sizeof(ded_input), &ded_input_len, &ded_input_cursor, &dummy);
 					continue;
 				}
-				else 				if (recs[0].Event.KeyEvent.uChar.AsciiChar == '\t')
+				else if (recs[0].Event.KeyEvent.uChar.AsciiChar == '\t')
 				{
-					con_text[textlen] = '\0'; // Ensure input is null terminated
-					int previous_len = textlen;
-					Con_DedicatedTabComplete(con_text, sizeof(con_text), &textlen, &cursor_pos);
-					Dedicated_RedrawInputLine(con_text, textlen, cursor_pos, previous_len);
+					ded_input[ded_input_len] = '\0';
+					int previous_len = ded_input_len;
+					Con_DedicatedTabComplete(ded_input, sizeof(ded_input), &ded_input_len, &ded_input_cursor);
+					Dedicated_RedrawInputLine(ded_input, ded_input_len, ded_input_cursor, previous_len);
 					continue;
 				}
 
@@ -658,82 +1279,112 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 				switch (ch)
 				{
 				case 21: // Ctrl-U
-					Sys_RewriteInputLine(NULL, con_text, sizeof(con_text), &textlen, &cursor_pos, &dummy);
+					Sys_RewriteInputLine(NULL, ded_input, sizeof(ded_input), &ded_input_len, &ded_input_cursor, &dummy);
 					Con_DedicatedResetTabState();
+					if (!ded_input_len)
+						Ded_FlushBufferedOutput (true);
 					break;
 
 				case '\r':
 					WriteFile(houtput, "\r\n", 2, &dummy, NULL);
 
-					if (textlen != 0)
+					if (ded_input_len != 0)
 					{
-						con_text[textlen] = 0;
-						textlen = 0;
-						cursor_pos = 0; // woods #arrowkeys
+						ded_input[ded_input_len] = 0;
+						ded_input_len = 0;
+						ded_input_cursor = 0;
 						Con_DedicatedResetTabState();
-						return con_text;
+						Ded_FlushBufferedOutput (true);
+						return ded_input;
 					}
 
 					break;
 
 				case '\b':
-					if (cursor_pos > 0)
+					if (ded_input_cursor > 0)
 					{
-						// Move characters after cursor back by one position
-						memmove(&con_text[cursor_pos - 1], &con_text[cursor_pos], textlen - cursor_pos);
-						cursor_pos--;
-						textlen--;
-						
-						// Rewrite the line from cursor position
+						memmove(&ded_input[ded_input_cursor - 1], &ded_input[ded_input_cursor], ded_input_len - ded_input_cursor);
+						ded_input_cursor--;
+						ded_input_len--;
+
 						WriteFile(houtput, "\b", 1, &dummy, NULL);
-						if (cursor_pos < textlen)
+						if (ded_input_cursor < ded_input_len)
 						{
-							WriteFile(houtput, &con_text[cursor_pos], textlen - cursor_pos, &dummy, NULL);
-							WriteFile(houtput, " ", 1, &dummy, NULL);  // Clear last character
-							// Move cursor back to position
-							for (int i = 0; i < textlen - cursor_pos + 1; i++)
+							WriteFile(houtput, &ded_input[ded_input_cursor], ded_input_len - ded_input_cursor, &dummy, NULL);
+							WriteFile(houtput, " ", 1, &dummy, NULL);
+							for (int i = 0; i < ded_input_len - ded_input_cursor + 1; i++)
 								WriteFile(houtput, "\b", 1, &dummy, NULL);
 						}
 						else
 						{
-							WriteFile(houtput, " \b", 2, &dummy, NULL);  // Clear last character
+							WriteFile(houtput, " \b", 2, &dummy, NULL);
 						}
 						Con_DedicatedResetTabState();
+						if (!ded_input_len)
+							Ded_FlushBufferedOutput (true);
 					}
 					break;
 
 				default:
 					if (ch >= ' ')
 					{
-						// Insert character at cursor position
-						if (cursor_pos < textlen)
+						if (ded_input_cursor < ded_input_len)
 						{
-							// Make room for new character
-							memmove(&con_text[cursor_pos + 1], &con_text[cursor_pos], textlen - cursor_pos);
-							con_text[cursor_pos] = ch;
-							textlen++;
-							
-							// Write the new character and the rest of the line
-							WriteFile(houtput, &con_text[cursor_pos], textlen - cursor_pos, &dummy, NULL);
-							
-							// Move cursor back to just after inserted character
-							cursor_pos++;
-							for (int i = 0; i < textlen - cursor_pos; i++)
+							memmove(&ded_input[ded_input_cursor + 1], &ded_input[ded_input_cursor], ded_input_len - ded_input_cursor);
+							ded_input[ded_input_cursor] = ch;
+							ded_input_len++;
+
+							WriteFile(houtput, &ded_input[ded_input_cursor], ded_input_len - ded_input_cursor, &dummy, NULL);
+
+							ded_input_cursor++;
+							for (int i = 0; i < ded_input_len - ded_input_cursor; i++)
 								WriteFile(houtput, "\b", 1, &dummy, NULL);
 						}
 						else
 						{
-							// Append character at end of line
-							con_text[textlen] = ch;
+							ded_input[ded_input_len] = ch;
 							WriteFile(houtput, &ch, 1, &dummy, NULL);
-							textlen++;
-							cursor_pos++;
+							ded_input_len++;
+							ded_input_cursor++;
 						}
 						Con_DedicatedResetTabState();
 					}
 
 					break;
 				}
+			}
+		}
+		else if (recs[0].EventType == MOUSE_EVENT &&
+		         recs[0].Event.MouseEvent.dwEventFlags == MOUSE_WHEELED)
+		{
+			short delta = (short)HIWORD(recs[0].Event.MouseEvent.dwButtonState);
+			if (delta > 0) // scroll up
+			{
+				if (!scrollback_active)
+				{
+					if (sys_dedmouse_capture.value != 0)
+						Scrollback_Enter ();
+				}
+				else
+				{
+					scrollback_offset += 3;
+					Scrollback_Redraw ();
+				}
+			}
+			else if (delta < 0) // scroll down
+			{
+					if (scrollback_active)
+					{
+						if (Scrollback_AtBottom ())
+							Scrollback_Exit ();
+						else
+						{
+							scrollback_offset -= 3;
+							if (scrollback_offset < 0)
+								scrollback_offset = 0;
+							Scrollback_Redraw ();
+						}
+					}
 			}
 		}
 	}

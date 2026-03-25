@@ -4366,6 +4366,8 @@ void Host_Name_Load_Backup_f(void)
 
 static void Host_Say(qboolean teamonly)
 {
+#define DED_CHAT_COLOR_ON  "\x1d"
+#define DED_CHAT_COLOR_OFF "\x1e"
 	int		j;
 	client_t	*client;
 	client_t	*save;
@@ -4448,7 +4450,51 @@ static void Host_Say(qboolean teamonly)
 	host_client = save;
 
 	if (cls.state == ca_dedicated)
-		Sys_Printf("%s", &text[1]);
+	{
+		char dedtext[MAXCMDLINE + 8];
+		const char *src = &text[1];
+		const char *msg = strstr (src, ": ");
+		const char *trail = src + strlen(src);
+		size_t prefix_len, msg_len, suffix_len;
+
+		if (msg)
+			msg += 2;
+		else if (src[0] == '<')
+		{
+			msg = strstr (src, "> ");
+			if (msg)
+				msg += 2;
+		}
+
+		if (!msg)
+		{
+			Sys_Printf ("%s", src);
+			return;
+		}
+
+		if (trail > msg && trail[-1] == '\n')
+			trail--;
+
+		prefix_len = (size_t)(msg - src);
+		msg_len = (size_t)(trail - msg);
+		suffix_len = strlen (trail);
+
+		if (prefix_len + strlen(DED_CHAT_COLOR_ON) + msg_len +
+			strlen(DED_CHAT_COLOR_OFF) + suffix_len + 1 > sizeof(dedtext))
+		{
+			Sys_Printf ("%s", src);
+			return;
+		}
+
+		memcpy (dedtext, src, prefix_len);
+		memcpy (dedtext + prefix_len, DED_CHAT_COLOR_ON, strlen(DED_CHAT_COLOR_ON));
+		memcpy (dedtext + prefix_len + strlen(DED_CHAT_COLOR_ON), msg, msg_len);
+		memcpy (dedtext + prefix_len + strlen(DED_CHAT_COLOR_ON) + msg_len,
+			DED_CHAT_COLOR_OFF, strlen(DED_CHAT_COLOR_OFF));
+		memcpy (dedtext + prefix_len + strlen(DED_CHAT_COLOR_ON) + msg_len +
+			strlen(DED_CHAT_COLOR_OFF), trail, suffix_len + 1);
+		Sys_Printf ("%s", dedtext);
+	}
 }
 
 static void Host_Say_f(void)
