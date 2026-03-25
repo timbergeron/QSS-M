@@ -692,7 +692,7 @@ void CL_SignonReply (void)
 		}
 		if (!q_strcasecmp(val, "ra") || !q_strcasecmp(val, "rocketarena"))
 			cl.modetype = 3;
-		if (!q_strcasecmp(val, "ca"))
+		if (!q_strcasecmp(val, "ca") || !q_strcasecmp(val, "clanarena"))
 			cl.modetype = 4;
 		if (!q_strcasecmp(val, "airshot"))
 			cl.modetype = 5;

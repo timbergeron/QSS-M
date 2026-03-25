@@ -1081,7 +1081,7 @@ static void CL_GetDemoModeTag(char *mode_tag, size_t mode_tag_size)
 		q_strlcpy(mode_tag, "DM", mode_tag_size);
 	else if (!q_strcasecmp(mode, "ra") || !q_strcasecmp(mode, "rocketarena"))
 		q_strlcpy(mode_tag, "RA", mode_tag_size);
-	else if (!q_strcasecmp(mode, "ca"))
+	else if (!q_strcasecmp(mode, "ca") || !q_strcasecmp(mode, "clanarena"))
 		q_strlcpy(mode_tag, "CA", mode_tag_size);
 	else if (!q_strcasecmp(mode, "airshot"))
 		q_strlcpy(mode_tag, "AIRSHOT", mode_tag_size);
