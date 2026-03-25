@@ -16745,25 +16745,28 @@ void M_ServerList_Key(int key)
 		M_Menu_LanConfig_f();
 		break;
 
-        case K_ENTER:
-        case K_KP_ENTER:
-        case K_ABUTTON:
-        enter:
-                {
-                        int actualIndex = ServersMenu_ResolveIndex(serversmenu.list.cursor);
-                        if (actualIndex < 0 || actualIndex >= serversmenu.servercount)
-                                break;
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+	enter:
+	{
+		int actualIndex = ServersMenu_ResolveIndex(serversmenu.list.cursor);
 
-	                        m_return_state = m_state;
-	                        m_return_onerror = true;
-	                        key_dest = key_game;
-	                        m_state = m_none;
-	                        IN_UpdateGrabs();
-	                        CL_MarkNextConnectFromMenu();
-	                        Cbuf_AddText(va("connect \"%s\"\n", serversmenu.items[actualIndex].ip));
-	                        CleanupPingThreads();
-	                }
-                break;
+		if (actualIndex < 0 || actualIndex >= serversmenu.servercount)
+		{
+			break;
+		}
+
+		m_return_state = m_state;
+		m_return_onerror = true;
+		key_dest = key_game;
+		m_state = m_none;
+		IN_UpdateGrabs();
+		CL_MarkNextConnectFromMenu();
+		Cbuf_AddText(va("connect \"%s\"\n", serversmenu.items[actualIndex].ip));
+		CleanupPingThreads();
+	}
+	break;
 
 	case K_MOUSE1: // woods #mousemenu
 {

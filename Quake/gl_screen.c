@@ -6005,8 +6005,6 @@ needs almost the entire 256k of stack space!
 */
 void SCR_UpdateScreen (void)
 {
-	double diag_render_start = 0;
-	qboolean diag_timing;
 	vid.numpages = (gl_triplebuffer.value) ? 3 : 2;
 
 	if (scr_disabled_for_loading)
