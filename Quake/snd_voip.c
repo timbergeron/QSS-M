@@ -67,6 +67,26 @@ dllhandle_t *Sys_LoadLibrary(const char *name, dllfunction_t *funcs)
 	int i;
 	void *lib;
 
+#ifdef _WIN32
+	{	// try loading from exe directory with absolute path
+		char exepath[MAX_PATH];
+		char dllpath[MAX_PATH];
+		DWORD len = GetModuleFileNameA(NULL, exepath, sizeof(exepath));
+		if (len > 0 && len < sizeof(exepath))
+		{
+			char *slash = strrchr(exepath, '\\');
+			if (slash) *slash = '\0';
+			SetDllDirectoryA(exepath);
+			q_snprintf(dllpath, sizeof(dllpath), "%s\\%s", exepath, name);
+			Con_SafePrintf("Sys_LoadLibrary: trying absolute path %s\n", dllpath);
+			lib = SDL_LoadObject(dllpath);
+			if (lib)
+				goto loaded;
+			Con_SafePrintf("Sys_LoadLibrary: absolute path failed: %s\n", SDL_GetError());
+		}
+	}
+#endif
+
 	lib = SDL_LoadObject(name);
 	if (!lib)
 	{
@@ -76,9 +96,15 @@ dllhandle_t *Sys_LoadLibrary(const char *name, dllfunction_t *funcs)
 		lib = SDL_LoadObject(va("%s_32", name));
 #endif
 		if (!lib)
+		{
+			Con_SafePrintf("Sys_LoadLibrary: failed to load %s: %s\n", name, SDL_GetError());
 			return NULL;
+		}
 	}
 
+#ifdef _WIN32
+loaded:
+#endif
 	if (funcs)
 	{
 		for (i = 0; funcs[i].name; i++)
@@ -96,6 +122,10 @@ dllhandle_t *Sys_LoadLibrary(const char *name, dllfunction_t *funcs)
 	}
 
 	return (dllhandle_t*)lib;
+}
+void *Sys_GetAddressForName(dllhandle_t *hmod, const char *name)
+{
+	return SDL_LoadFunction((void*)hmod, name);
 }
 
 

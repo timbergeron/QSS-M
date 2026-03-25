@@ -390,7 +390,7 @@ void Sys_Init (void)
 
 	if (isDedicated)
 	{
-		if (!AllocConsole ())
+		if (!AllocConsole () && GetLastError () != ERROR_ACCESS_DENIED)
 		{
 			isDedicated = false;	/* so that we have a graphical error dialog */
 			Sys_Error ("Couldn't create dedicated server console");

@@ -27,6 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "net_sys.h"
 #include "quakedef.h"
 #include "net_defs.h"
+#include "ice/ice_quake.h"
 #include "net_dgrm.h"
 
 // these two macros are to make the code more readable
@@ -63,7 +64,7 @@ cvar_t net_masters[] =
 	{"net_master4", ""},
 	{"net_masterextra1", "master.frag-net.com:27950"},
 	{"net_masterextra2", "dpmaster.deathmask.net:27950"},
-	{"net_masterextra3", "dpmaster.tchr.no:27950"},
+	{"net_masterextra3", "master.quakeone.com:27950"},
 	{NULL}
 };
 cvar_t rcon_password = {"rcon_password", ""};
@@ -1802,6 +1803,8 @@ void Datagram_GenerateGetInfoString(char *out, size_t outsize)
 	if (numbots)
 		{q_snprintf(out+ofs, outsize-ofs, "\\bots\\%u", numbots); ofs += strlen(out+ofs);}
 	q_snprintf(out+ofs, outsize-ofs, "\\sv_maxclients\\%i", svs.maxclients); ofs += strlen(out+ofs);
+	if (*NQICE_GetWsAddr())
+		{q_snprintf(out+ofs, outsize-ofs, "\\*wsaddr\\%s", NQICE_GetWsAddr()); ofs += strlen(out+ofs);}
 }
 
 static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsockaddr *clientaddr, byte *data, unsigned int length)
@@ -1838,7 +1841,7 @@ static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsock
 			MSG_WriteString(&net_message, full?"statusResponse\n":"infoResponse\n");net_message.cursize--;
 
 			//kinda evil, but oh well, just write it directly.
-			Datagram_GenerateGetInfoString((char*)net_message.data, net_message.maxsize - net_message.cursize);
+			Datagram_GenerateGetInfoString((char*)net_message.data+net_message.cursize, net_message.maxsize - net_message.cursize);
 			net_message.cursize += strlen((char*)net_message.data+net_message.cursize);
 
 			if (*cookie)
@@ -3449,6 +3452,7 @@ Spike: added this to list more than one ipv4 address (many people are still mult
 int Datagram_QueryAddresses(qhostaddr_t *addresses, int maxaddresses)
 {
 	int result = 0;
+	int save_landriverlevel = net_landriverlevel;
 	for (net_landriverlevel = 0; net_landriverlevel < net_numlandrivers; net_landriverlevel++)
 	{
 		if (!net_landrivers[net_landriverlevel].initialized)
@@ -3458,6 +3462,7 @@ int Datagram_QueryAddresses(qhostaddr_t *addresses, int maxaddresses)
 		if (net_landrivers[net_landriverlevel].QueryAddresses)
 			result += net_landrivers[net_landriverlevel].QueryAddresses(addresses+result, maxaddresses-result);
 	}
+	net_landriverlevel = save_landriverlevel;
 	return result;
 }
 

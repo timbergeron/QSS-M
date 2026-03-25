@@ -1945,7 +1945,7 @@ const char* COM_ParseEx (const char* data, cpe_mode mode)
 
 	// skip whitespace
 skipwhite:
-	while ((c = *data) <= ' ')
+	while ((c = (unsigned char)*data) <= ' ')
 	{
 		if (c == 0)
 			return NULL;	// end of file
@@ -2096,7 +2096,7 @@ const char *COM_Parse (const char *data)
 
 // skip whitespace
 skipwhite:
-	while ((c = *data) <= ' ')
+	while ((c = (unsigned char)*data) <= ' ')
 	{
 		if (c == 0)
 			return NULL;	// end of file

@@ -6946,7 +6946,7 @@ void Host_AppendDownloadData(client_t *client, sizebuf_t *buf)
 		return;	//no space for anything
 	if (client->download.file && client->download.started)
 	{
-		byte tbuf[1400];	//don't be too aggressive, ethernet mtu is about 1450
+		byte tbuf[1024];	//keep small enough to fit within DTLS MTU after SCTP+netchan overhead
 		unsigned int size = client->download.size - client->download.sendpos;
 		//size might be 0 at eof, and that's needed to avoid failure if we drop the last few packets
 		if (size > sizeof(tbuf))
