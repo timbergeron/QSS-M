@@ -20,6 +20,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "time.h"
+#include <errno.h>
+#include <limits.h>
 #include "quakedef.h"
 
 static void CL_FinishTimeDemo (void);
@@ -216,7 +218,11 @@ int demo_target_offset = -1; // woods -- target offset for seeking, -1 when not 
 qboolean is_seeking = false; // woods -- flag to indicate seeking status
 qboolean demo_seek_from_start = false; // woods -- rewind to start before seeking forward
 static qboolean is_time_seeking = false; // woods -- flag to indicate time-based seek status
+static qboolean is_frame_seeking = false; // woods -- flag to indicate frame-based seek status
 static float demo_time_seek_target = 0.f; // woods -- target demo time for J/L seeks
+static int demo_frame_seek_target = 0; // woods -- target demo frame for jumpdemo
+static float demo_start_server_time = 0.f; // woods -- user-facing demo time 0:00 origin
+static qboolean demo_start_server_time_valid = false; // woods -- true once first parsed demo frame is known
 static qboolean demo_jump_back_was_down = false; // woods -- edge detector for J key
 static qboolean demo_jump_forward_was_down = false; // woods -- edge detector for L key
 static qboolean initialized = false; // woods (iw) #democontrols
@@ -235,7 +241,132 @@ static void CL_ResetDemoSeekState(void)
 	is_seeking = false;
 	demo_seek_from_start = false;
 	is_time_seeking = false;
+	is_frame_seeking = false;
 	demo_time_seek_target = 0.f;
+	demo_frame_seek_target = 0;
+}
+
+static int CL_GetDemoSeekStartOffset(void)
+{
+	return (cls.demofilestart > 0) ? (int)cls.demofilestart : cls.demo_offset_start;
+}
+
+static int CL_GetDemoSeekEndOffset(void)
+{
+	return cls.demo_offset_start + cls.demo_file_length;
+}
+
+static float CL_GetCurrentDemoPercent(void)
+{
+	const int demo_seek_start = CL_GetDemoSeekStartOffset();
+	const int demo_seek_end = CL_GetDemoSeekEndOffset();
+	const int demo_seek_range = demo_seek_end - demo_seek_start;
+	int current_offset = cls.demo_offset_current;
+
+	if (demo_seek_range <= 0)
+		return 0.f;
+
+	if (current_offset < demo_seek_start)
+		current_offset = demo_seek_start;
+	else if (current_offset > demo_seek_end)
+		current_offset = demo_seek_end;
+
+	return (current_offset - demo_seek_start) / (float)demo_seek_range * 100.f;
+}
+
+static qboolean CL_ParseIntStrict(const char *str, int *value)
+{
+	char *end;
+	long parsed;
+
+	if (!str || !str[0] || !value)
+		return false;
+
+	errno = 0;
+	parsed = strtol(str, &end, 10);
+	if (errno || end == str || *end || parsed < INT_MIN || parsed > INT_MAX)
+		return false;
+
+	*value = (int)parsed;
+	return true;
+}
+
+static qboolean CL_ParseFloatStrict(const char *str, float *value)
+{
+	char *end;
+	float parsed;
+
+	if (!str || !str[0] || !value)
+		return false;
+
+	errno = 0;
+	parsed = strtof(str, &end);
+	if (errno || end == str || *end || !isfinite(parsed))
+		return false;
+
+	*value = parsed;
+	return true;
+}
+
+static qboolean CL_ParseTimeString(const char *str, float *seconds)
+{
+	int parts[3];
+	int num_parts = 0;
+	const char *p;
+
+	if (!str || !str[0] || !seconds)
+		return false;
+
+	p = str;
+	while (*p)
+	{
+		char *end;
+		long part;
+
+		if (num_parts == 3 || *p == ':')
+			return false;
+
+		errno = 0;
+		part = strtol(p, &end, 10);
+		if (errno || end == p || part < 0 || part > INT_MAX)
+			return false;
+
+		parts[num_parts++] = (int)part;
+		p = end;
+
+		if (!*p)
+			break;
+		if (*p != ':')
+			return false;
+		p++;
+		if (!*p)
+			return false;
+	}
+
+	if (num_parts == 2)
+	{
+		if (parts[1] > 59)
+			return false;
+		*seconds = parts[0] * 60.f + parts[1];
+		return true;
+	}
+
+	if (num_parts == 3)
+	{
+		if (parts[1] > 59 || parts[2] > 59)
+			return false;
+		*seconds = parts[0] * 3600.f + parts[1] * 60.f + parts[2];
+		return true;
+	}
+
+	return false;
+}
+
+static void CL_FinishExactDemoSeek(void)
+{
+	cls.demospeed = cls.basedemospeed * !cls.demopaused;
+	cl.time = cl.mtime[0];
+	CL_ResetDemoSeekState();
 }
 
 /*
@@ -290,20 +421,14 @@ static void CL_UpdateDemoSpeed(void)
 	demo_jump_back_was_down = jump_back_down;
 	demo_jump_forward_was_down = jump_forward_down;
 
-	if (key_dest != key_game)
-	{
-		cls.demospeed = normal_speed;
-		return;
-	}
-
 	const int dynamic_threshold = q_max(100, cls.demo_file_length * 0.03); // 3% of the demo file length, with a minimum of 100 for very small files
 	const float seeking_speed = 256;
 	const float seek_time_step = 10.f;
 	const float seek_time_threshold = 0.05f;
-	const int demo_seek_start = (cls.demofilestart > 0) ? (int)cls.demofilestart : cls.demo_offset_start;
-	const int demo_seek_end = cls.demo_offset_start + cls.demo_file_length;
+	const int demo_seek_start = CL_GetDemoSeekStartOffset();
+	const int demo_seek_end = CL_GetDemoSeekEndOffset();
 
-	if (jump_back_pressed != jump_forward_pressed)
+	if (key_dest == key_game && jump_back_pressed != jump_forward_pressed)
 	{
 		const float jump_delta = jump_forward_pressed ? seek_time_step : -seek_time_step;
 		const float current_demo_time = cl.mtime[0];
@@ -322,6 +447,16 @@ static void CL_UpdateDemoSpeed(void)
 
 	if (is_time_seeking)
 	{
+		if (demo_seek_from_start)
+		{
+			cls.demospeed = -1e9f;
+			if (cls.basedemospeed)
+				cls.demospeed *= cls.basedemospeed;
+			if (demo_rewind.backstop || cls.demo_offset_current <= demo_seek_start)
+				demo_seek_from_start = false;
+			return;
+		}
+
 		const float remaining = demo_time_seek_target - cl.mtime[0];
 
 		if (fabsf(remaining) <= seek_time_threshold ||
@@ -338,6 +473,30 @@ static void CL_UpdateDemoSpeed(void)
 
 		if (cls.demospeed > 0.f)
 			demo_rewind.backstop = false;
+		return;
+	}
+
+	if (is_frame_seeking)
+	{
+		if (demo_seek_from_start)
+		{
+			cls.demospeed = -1e9f;
+			if (cls.basedemospeed)
+				cls.demospeed *= cls.basedemospeed;
+			if (demo_rewind.backstop || cls.demo_offset_current <= demo_seek_start)
+				demo_seek_from_start = false;
+			return;
+		}
+
+		if (CL_GetDemoFrameCount() >= demo_frame_seek_target)
+		{
+			cls.demospeed = normal_speed;
+			CL_ResetDemoSeekState();
+			return;
+		}
+
+		cls.demospeed = seeking_speed;
+		demo_rewind.backstop = false;
 		return;
 	}
 
@@ -368,6 +527,12 @@ static void CL_UpdateDemoSpeed(void)
 
 		cls.demospeed = seeking_speed;
 		demo_rewind.backstop = false;
+		return;
+	}
+
+	if (key_dest != key_game)
+	{
+		cls.demospeed = normal_speed;
 		return;
 	}
 
@@ -550,6 +715,12 @@ void CL_FinishDemoFrame(void)
 	// We're not going to rewind before the first frame,
 	// so we only track state changes from the second one onwards
 	numframes = VEC_SIZE(demo_rewind.frames);
+	if (cls.demospeed > 0.f && !demo_start_server_time_valid && numframes > 0)
+	{
+		demo_start_server_time = cl.mtime[0];
+		demo_start_server_time_valid = true;
+	}
+
 	if (numframes < 2)
 		return;
 
@@ -883,6 +1054,8 @@ void CL_StopPlayback (void)
 	if (!cls.demoplayback)
 	{
 		CL_ResetDemoSeekState();
+		demo_start_server_time = 0.f;
+		demo_start_server_time_valid = false;
 		return;
 	}
 
@@ -902,6 +1075,8 @@ void CL_StopPlayback (void)
 	CL_DemoRewindFreePrevStatStrings();
 	demo_rewind.prev.num_entities = 0;
 	CL_ResetDemoSeekState();
+	demo_start_server_time = 0.f;
+	demo_start_server_time_valid = false;
 
 	if (cls.demofilename[0]) // woods #lastdemo
 	{
@@ -951,6 +1126,13 @@ static int CL_GetDemoMessage (void)
 
 	if (!cls.demospeed || demo_rewind.backstop) // woods (iw) #democontrols
 		return 0;
+
+	if (is_frame_seeking && !demo_seek_from_start &&
+		CL_GetDemoFrameCount() >= demo_frame_seek_target)
+	{
+		CL_FinishExactDemoSeek();
+		return 0;
+	}
 
 	// decide if it is time to grab the next message
 	if (cls.signon == SIGNONS)	// always grab until fully connected
@@ -1582,6 +1764,226 @@ void CL_Record_f (void)
 
 /*
 ====================
+CL_JumpDemo_f
+====================
+*/
+void CL_JumpDemo_f(void)
+{
+	const char *arg;
+	const char *value;
+	int len;
+	int value_len;
+	int demo_seek_start;
+	int demo_seek_end;
+	int demo_seek_range;
+	qboolean is_relative;
+	float sign;
+	char token[MAXCMDLINE];
+
+	if (cmd_source != src_command)
+		return;
+
+	if (!cls.demoplayback)
+	{
+		Con_Printf("jumpdemo: not playing a demo\n");
+		return;
+	}
+
+	if (Cmd_Argc() != 2)
+	{
+		Con_Printf("jumpdemo <frame | percent%% | M:SS | H:MM:SS | Ns> : seek (prefix +/- for relative)\n");
+		return;
+	}
+
+	if (!initialized)
+	{
+		Con_Printf("jumpdemo: demo not ready yet\n");
+		return;
+	}
+
+	arg = Cmd_Argv(1);
+	len = (int)strlen(arg);
+	if (!len)
+		return;
+
+	is_relative = (arg[0] == '+' || arg[0] == '-');
+	sign = (arg[0] == '-') ? -1.f : 1.f;
+	value = is_relative ? arg + 1 : arg;
+	value_len = is_relative ? len - 1 : len;
+
+	if (!value_len)
+	{
+		Con_Printf("jumpdemo: missing value after +/-\n");
+		return;
+	}
+
+	if (value_len >= (int)sizeof(token))
+	{
+		Con_Printf("jumpdemo: value too long\n");
+		return;
+	}
+
+	memcpy(token, value, value_len);
+	token[value_len] = '\0';
+	if (token[0] == '+' || token[0] == '-')
+	{
+		Con_Printf("jumpdemo: invalid value\n");
+		return;
+	}
+
+	demo_seek_start = CL_GetDemoSeekStartOffset();
+	demo_seek_end = CL_GetDemoSeekEndOffset();
+	demo_seek_range = demo_seek_end - demo_seek_start;
+
+	CL_ResetDemoSeekState();
+
+	if (value_len > 1 && token[value_len - 1] == '%')
+	{
+		float pct;
+
+		token[value_len - 1] = '\0';
+		if (!CL_ParseFloatStrict(token, &pct) || pct < 0.f)
+		{
+			Con_Printf("jumpdemo: invalid percentage value\n");
+			return;
+		}
+
+		if (is_relative)
+			pct = CL_GetCurrentDemoPercent() + sign * pct;
+
+		if (pct < 0.f)
+			pct = 0.f;
+		else if (pct > 100.f)
+			pct = 100.f;
+
+		demo_target_offset = demo_seek_start;
+		if (demo_seek_range > 0)
+			demo_target_offset += (int)((pct / 100.f) * demo_seek_range);
+
+		if (demo_target_offset < demo_seek_start)
+			demo_target_offset = demo_seek_start;
+		else if (demo_target_offset > demo_seek_end)
+			demo_target_offset = demo_seek_end;
+
+		demo_seek_from_start = (cls.demo_offset_current > demo_target_offset);
+		is_seeking = true;
+		if (demo_seek_from_start)
+			CL_ClearDemoFrags();
+		return;
+	}
+
+	if (value_len > 1 && (token[value_len - 1] == 's' || token[value_len - 1] == 'S'))
+	{
+		float seconds;
+		float absolute_time;
+
+		token[value_len - 1] = '\0';
+		if (!CL_ParseFloatStrict(token, &seconds) || seconds < 0.f)
+		{
+			Con_Printf("jumpdemo: invalid time value\n");
+			return;
+		}
+
+		if (is_relative)
+			absolute_time = cl.mtime[0] + sign * seconds;
+		else
+		{
+			if (!demo_start_server_time_valid)
+			{
+				Con_Printf("jumpdemo: time seeking not ready yet\n");
+				return;
+			}
+			absolute_time = demo_start_server_time + seconds;
+		}
+
+		if (demo_start_server_time_valid && absolute_time < demo_start_server_time)
+			absolute_time = demo_start_server_time;
+
+		demo_time_seek_target = absolute_time;
+		is_time_seeking = true;
+		if (absolute_time < cl.mtime[0])
+		{
+			demo_seek_from_start = true;
+			CL_ClearDemoFrags();
+		}
+		return;
+	}
+
+	if (strchr(token, ':'))
+	{
+		float seconds;
+		float absolute_time;
+
+		if (!CL_ParseTimeString(token, &seconds))
+		{
+			Con_Printf("jumpdemo: invalid time format (use M:SS or H:MM:SS)\n");
+			return;
+		}
+
+		if (is_relative)
+			absolute_time = cl.mtime[0] + sign * seconds;
+		else
+		{
+			if (!demo_start_server_time_valid)
+			{
+				Con_Printf("jumpdemo: time seeking not ready yet\n");
+				return;
+			}
+			absolute_time = demo_start_server_time + seconds;
+		}
+
+		if (demo_start_server_time_valid && absolute_time < demo_start_server_time)
+			absolute_time = demo_start_server_time;
+
+		demo_time_seek_target = absolute_time;
+		is_time_seeking = true;
+		if (absolute_time < cl.mtime[0])
+		{
+			demo_seek_from_start = true;
+			CL_ClearDemoFrags();
+		}
+		return;
+	}
+
+	{
+		int amount;
+		int target;
+		const int current_frame = CL_GetDemoFrameCount();
+
+		if (!CL_ParseIntStrict(token, &amount))
+		{
+			Con_Printf("jumpdemo: invalid frame value\n");
+			return;
+		}
+
+		if (is_relative)
+		{
+			target = current_frame + (int)(sign * amount);
+			if (target < 1)
+				target = 1;
+		}
+		else
+		{
+			target = amount;
+			if (target < 1)
+			{
+				Con_Printf("jumpdemo: frame must be >= 1\n");
+				return;
+			}
+		}
+
+		demo_frame_seek_target = target;
+		is_frame_seeking = true;
+		if (target < current_frame)
+		{
+			demo_seek_from_start = true;
+			CL_ClearDemoFrags();
+		}
+	}
+}
+
+/*
+====================
 CL_PlayDemo_f
 
 play [demoname]
@@ -1701,6 +2103,8 @@ void CL_PlayDemo_f (void)
 	cls.demopaused = false;
 	cls.demospeed = 1.f; // woods (iw) #democontrols
 	CL_ResetDemoSeekState();
+	demo_start_server_time = 0.f;
+	demo_start_server_time_valid = false;
 	// Only change basedemospeed if it hasn't been initialized,
 	// otherwise preserve the existing value
 	//if (!cls.basedemospeed) // woods (iw) #democontrols

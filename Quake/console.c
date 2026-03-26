@@ -3634,6 +3634,34 @@ static qboolean CompleteSkywind(const char* partial, void* unused)
 	return option_count > 0;
 }
 
+static qboolean CompleteJumpDemo(const char* partial, void* unused)
+{
+	static const char* const options[] =
+	{
+		"500",
+		"50%",
+		"1:30",
+		"90s",
+		"+1000",
+		"-1000",
+		"+5%",
+		"-5%",
+		"+10s",
+		"-10s",
+		"+1:30",
+		"-0:30"
+	};
+	size_t i;
+
+	if (Cmd_Argc() != 2)
+		return false;
+
+	for (i = 0; i < sizeof(options) / sizeof(options[0]); i++)
+		Con_AddToTabList(options[i], partial, NULL, NULL);
+
+	return true;
+}
+
 extern qboolean CompletePAKList(const char* partial, void* unused); // woods #unpak
 
 qboolean CompleteImageList (const char* partial, void* unused); // woods
@@ -3659,6 +3687,7 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "gamedir",				CompleteFileList,		&modlist },
 	{ "playdemo",				CompleteFileListDemo,	&demolist },
 	{ "timedemo",				CompleteFileListDemo,	&demolist },
+	{ "jumpdemo",				CompleteJumpDemo,		NULL },
 	{ "sky",					CompleteFileList,		&skylist },
 	{ "skywind",				CompleteSkywind,		NULL },
 	{ "exec",					CompleteFileList,		&execlist },
