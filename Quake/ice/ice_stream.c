@@ -457,11 +457,11 @@ static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char 
 		int i;
 	} mask;
 	unsigned short ctrl = 0x8000 | (packettype<<8);	// FIN + opcode
-	if (!f->isserver)
-		ctrl |= 0x0080;	// MASK bit: only set when acting as client (RFC 6455)
 	uint64_t paylen = 0;
 	unsigned int payoffs = f->pendingsize;
 //	int i;
+	if (!f->isserver)
+		ctrl |= 0x0080;	// MASK bit: only set when acting as client (RFC 6455)
 	if (!f->stream)
 		return;	//can't do anything anyway...
 	switch((ctrl>>8) & 0xf)

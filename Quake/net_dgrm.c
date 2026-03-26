@@ -997,6 +997,7 @@ void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 
 			if (length < 4)
 				continue;
+
 			if (BigLong(packetBuffer.length) & NETFLAG_CTL)
 			{
 				_Datagram_ServerControlPacket(sock, &addr, (byte *)&packetBuffer, length);
@@ -1028,7 +1029,12 @@ void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 					}
 				}
 			}
-			//stray packet... ignore it and just try the next
+			if (!s)
+			{	//unmatched packet — try broker DTLS, then ICE (STUN/DTLS/SCTP)
+				byte leadbyte = ((byte *)&packetBuffer)[0];
+				if (leadbyte < 4 || (leadbyte >= 20 && leadbyte < 64))
+					NQICE_ProcessPacket((byte *)&packetBuffer, length, &addr, callback);
+			}
 		}
 	}
 	for (s = net_activeSockets; s; s = s->next)
@@ -1709,13 +1715,18 @@ void Datagram_Listen (qboolean state)
 		heartbeatctx = NULL;
 	}
 
+	NQICE_UnshareGameSockets();	//invalidate before sockets change
+
 	for (i = 0; i < net_numlandrivers; i++)
 	{
 		if (net_landrivers[i].initialized)
 		{
 			net_landrivers[i].listeningSock = net_landrivers[i].Listen (state);
 			if (net_landrivers[i].listeningSock != INVALID_SOCKET)
+			{
 				islistening = true;
+				NQICE_ShareGameSocket(net_landrivers[i].listeningSock);
+			}
 
 			for (s = net_activeSockets; s; s = s->next)
 			{
@@ -1805,6 +1816,27 @@ void Datagram_GenerateGetInfoString(char *out, size_t outsize)
 	q_snprintf(out+ofs, outsize-ofs, "\\sv_maxclients\\%i", svs.maxclients); ofs += strlen(out+ofs);
 	if (*NQICE_GetWsAddr())
 		{q_snprintf(out+ofs, outsize-ofs, "\\*wsaddr\\%s", NQICE_GetWsAddr()); ofs += strlen(out+ofs);}
+	if (*NQICE_GetFingerprint())
+		{q_snprintf(out+ofs, outsize-ofs, "\\*fp\\%s", NQICE_GetFingerprint()); ofs += strlen(out+ofs);}
+}
+
+//send context for ICE UDP signaling callback — set before calling SVC_ICE_Offer/Candidate
+static sys_socket_t _ice_send_sock;
+static struct qsockaddr *_ice_send_addr;
+static void _Datagram_ICE_SendPacket(const void *data, int len)
+{
+	if (BrokerDTLS_IsAuthenticated())
+	{	//response goes back encrypted through the DTLS session
+		BrokerDTLS_Send(data, len);
+		return;
+	}
+	dfunc.Write(_ice_send_sock, (byte *)data, len, _ice_send_addr);
+}
+
+//called by BrokerDTLS to process decrypted connectionless packets
+void _Datagram_BrokerPacket(byte *data, unsigned int length, sys_socket_t sock, struct qsockaddr *addr)
+{
+	_Datagram_ServerControlPacket(sock, addr, data, length);
 }
 
 static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsockaddr *clientaddr, byte *data, unsigned int length)
@@ -1859,7 +1891,7 @@ static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsock
 						total /= NUM_PING_TIMES;
 						total *= 1000;	//put it in ms
 
-						MSG_WriteString(&net_message, va("\n%i %i %i_%i \"%s\"", 
+						MSG_WriteString(&net_message, va("\n%i %i %i_%i \"%s\"",
 							svs.clients[i].old_frags, (int)total, svs.clients[i].colors&15, svs.clients[i].colors>>4, svs.clients[i].name
 						));net_message.cursize--;
 					}
@@ -1868,6 +1900,48 @@ static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsock
 
 			dfunc.Write (acceptsock, net_message.data, net_message.cursize, clientaddr);
 			SZ_Clear(&net_message);
+		}
+		else if (!strcmp(Cmd_Argv(0), "ice_offer") || !strcmp(Cmd_Argv(0), "ice_ccand"))
+		{	//broker-to-server ICE signaling for /udp/IP:Port browser connections
+			//broker format: "command <args>\n<payload>" — separated by \n, not \0
+			//parse manually because Cmd_TokenizeString mangles some token values
+			const char *line = (const char *)data+4;
+			const char *nl = strchr(line, '\n');
+			const char *payload = (nl && nl < (const char *)data + length) ? nl + 1 : "";
+			char header[256];
+			char *args[8];
+			int nargs = 0;
+			char *p;
+
+			//copy header line for safe tokenization
+			{	size_t hlen = nl ? (size_t)(nl - line) : strlen(line);
+				if (hlen >= sizeof(header)) hlen = sizeof(header)-1;
+				memcpy(header, line, hlen);
+				header[hlen] = 0;
+			}
+
+			//split header by spaces
+			p = header;
+			while (*p && nargs < 8)
+			{
+				while (*p == ' ') p++;
+				if (!*p) break;
+				args[nargs++] = p;
+				while (*p && *p != ' ') p++;
+				if (*p) *p++ = 0;
+			}
+
+			if (nargs >= 1)
+			{
+				//capture send context for the callback
+				_ice_send_sock = acceptsock;
+				_ice_send_addr = clientaddr;
+
+				if (!strcmp(args[0], "ice_offer") && nargs >= 3)
+					SVC_ICE_Offer(args[1], args[2], payload, dfunc.AddrToString(clientaddr, false), _Datagram_ICE_SendPacket);
+				else if (!strcmp(args[0], "ice_ccand") && nargs >= 4)
+					SVC_ICE_Candidate(args[1], args[2], args[3], payload, _Datagram_ICE_SendPacket);
+			}
 		}
 		return;
 	}
