@@ -30,6 +30,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //for unlink
 #include <unistd.h>
 #endif
+#include <errno.h>
+#include <string.h>
 
 #include <curl/curl.h> // woods #webdl
 #include "cfgfile.h" // woods #webdl
@@ -2389,6 +2391,70 @@ int Progress_Callback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl
 	return 0;
 }
 
+static qboolean CL_DownloadNameIsValid(const char *relative_path)
+{
+	return COM_DownloadNameOkay(relative_path) || COM_DownloadPackageNameOkay(relative_path);
+}
+
+static void CL_DownloadAddMapDesc(const char *relative_path)
+{
+	if (!q_strcasecmp(COM_FileGetExtension(relative_path), "bsp"))
+	{
+		char mapname[MAX_QPATH];
+		COM_StripExtension(COM_SkipPath(relative_path), mapname, sizeof(mapname));
+		FileList_Add_MapDesc(mapname); // #mapdescriptions
+	}
+}
+
+static qboolean CL_FinalizeDownloadFile(const char *relative_path, const char *temp_path)
+{
+	char finalpath[MAX_OSPATH];
+	const char *extension;
+	qboolean is_package;
+	qboolean renameokay;
+	int rename_errno;
+
+	if (!CL_DownloadNameIsValid(relative_path))
+	{
+		Con_Warning("Rejected downloaded filename \"%s\"\n", relative_path ? relative_path : "(null)");
+		return false;
+	}
+
+	q_snprintf(finalpath, sizeof(finalpath), "%s/%s", com_gamedir, relative_path);
+	extension = COM_FileGetExtension(relative_path);
+	is_package = COM_IsPackageExtension(extension) && COM_DownloadPackageNameOkay(relative_path);
+	renameokay = false;
+	rename_errno = 0;
+
+	if (is_package)
+		COM_RemoveDownloadedPackage(relative_path);
+
+	if (rename(temp_path, finalpath) == 0)
+		renameokay = true;
+	else
+	{
+		unlink(finalpath);
+		if (rename(temp_path, finalpath) == 0)
+			renameokay = true;
+		else
+			rename_errno = errno;
+	}
+
+	if (!renameokay)
+	{
+		if (is_package && (Sys_FileType(finalpath) & FS_ENT_FILE))
+			COM_AddDownloadedPackage(relative_path);
+		Con_Warning("Failed to finalize download \"%s\" (%s)\n", finalpath, strerror(rename_errno));
+		return false;
+	}
+
+	if (is_package)
+		COM_AddDownloadedPackage(relative_path);
+
+	CL_DownloadAddMapDesc(relative_path);
+	return true;
+}
+
 qboolean Curl_DownloadFile (const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name) // main curl function
 {
 	stop_curl_download = false;
@@ -2537,7 +2603,7 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 		return false;
 	}
 
-	if (rename(tmp_path, local_path) != 0) 
+	if (!CL_FinalizeDownloadFile(filename, tmp_path))
 	{
 		unlink(tmp_path); // Also delete the temporary file in case renaming fails
 		cls.download.active = false;
@@ -2556,14 +2622,6 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 
 	else
 		q_snprintf(sizeStr, sizeof(sizeStr), "%ld bytes", fileSizeBytes);
-
-	if (strstr(filename, ".bsp")) // woods, add mapname to extralevels tab completion
-	{
-		char mapname[MAX_QPATH];
-		COM_StripExtension(COM_SkipPath(filename), mapname, sizeof(mapname));
-		FileList_Add_MapDesc (mapname); // #mapdescriptions
-
-	}
 
 	char tagbuf[64];
 	const char* src = (display_name && display_name[0])
@@ -2588,42 +2646,77 @@ void CL_Download_Finished_f(void)
 {
 	if (cls.download.file)
 	{
-		char finalpath[MAX_OSPATH];
-		unsigned int size = strtoul(Cmd_Argv(1), NULL, 0);
-		unsigned int hash = strtoul(Cmd_Argv(2), NULL, 0);
-		//const char *fname = Cmd_Argv(3);
+		unsigned int size;
+		unsigned int hash;
 		qboolean hashokay = false;
+
+		if (Cmd_Argc() < 3)
+		{
+			Con_Warning("Download finished with insufficient arguments\n");
+			goto cleanup;
+		}
+
+		size = strtoul(Cmd_Argv(1), NULL, 0);
+		hash = strtoul(Cmd_Argv(2), NULL, 0);
+
+		if (!CL_DownloadNameIsValid(cls.download.current))
+		{
+			Con_Warning("Rejected downloaded filename \"%s\"\n", cls.download.current);
+			goto cleanup;
+		}
+
 		if (size == cls.download.size)
 		{
-			byte *tmp = malloc(size);
-			if (tmp)
+			byte buf[16384];
+			unsigned int remaining = size;
+			unsigned short crc;
+
+			if (fseek(cls.download.file, 0, SEEK_SET) != 0)
 			{
-				fseek(cls.download.file, 0, SEEK_SET);
-				size_t bytes_read = fread(tmp, 1, size, cls.download.file); // woods
-				hashokay = (bytes_read == size && hash == CRC_Block(tmp, size)); // woods
-				free(tmp);
-
-				if (!hashokay) Con_Warning("Download hash failure\n");
+				Con_Warning("Download hash verify seek failure\n");
 			}
-			else Con_Warning("Download size too large\n");
-		}
-		else Con_Warning("Download size mismatch\n");
+			else
+			{
+				CRC_Init(&crc);
+				while (remaining)
+				{
+					size_t chunk = remaining > sizeof(buf) ? sizeof(buf) : remaining;
+					size_t bytes_read = fread(buf, 1, chunk, cls.download.file);
+					size_t i;
 
+					if (bytes_read != chunk)
+						break;
+
+					for (i = 0; i < bytes_read; i++)
+						CRC_ProcessByte(&crc, buf[i]);
+
+					remaining -= (unsigned int)bytes_read;
+				}
+
+				hashokay = (!remaining && hash == (unsigned int)crc);
+				if (!hashokay)
+					Con_Warning("Download hash failure\n");
+			}
+		}
+		else
+		{
+			Con_Warning("Download size mismatch\n");
+		}
+
+cleanup:
 		fclose(cls.download.file);
 		cls.download.file = NULL;
 		if (hashokay)
 		{
-			q_snprintf (finalpath, sizeof(finalpath), "%s/%s", com_gamedir, cls.download.current);
-			rename(cls.download.temp, finalpath);
-			
-			if (strstr(cls.download.current, ".bsp")) // woods, add mapname to extralevels tab completion
+			if (CL_FinalizeDownloadFile(cls.download.current, cls.download.temp))
 			{
-				char mapname[MAX_QPATH];
-				COM_StripExtension(COM_SkipPath(cls.download.current), mapname, sizeof(mapname));
-				FileList_Add_MapDesc (mapname); // #mapdescriptions
+				Con_SafePrintf("Downloaded %s: %u bytes\n", cls.download.current, cls.download.size);
 			}
-
-			Con_SafePrintf("Downloaded %s: %u bytes\n", cls.download.current, cls.download.size);
+			else
+			{
+				Con_Warning("Download of %s failed\n", cls.download.current);
+				unlink(cls.download.temp);
+			}
 		}
 		else
 		{
@@ -2713,8 +2806,6 @@ qboolean CL_CheckDownload(const char *filename)
 		return false;	//if the previous download failed, don't endlessly retry.
 	if (COM_FileExists(filename, NULL))
 		return false;	//no need to download anything.
-	if (!COM_DownloadNameOkay(filename))
-		return false;	//diediedie
 	if (cls.demoplayback)
 		return false;
 
@@ -2723,20 +2814,30 @@ qboolean CL_CheckDownload(const char *filename)
 	char local_path[MAX_OSPATH]; // Define the max path length	
 	char modified_filename[MAX_OSPATH];
 
-	q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, filename);
-
 	if (!strcmp(filename, "progs/star.mdl") && downloadedctf == false) // since we don't download files inside a pak, lets download the pak for ctf
 	{
 		q_strlcpy(modified_filename, "paks/ctf.pak", sizeof(modified_filename));
 		filename = modified_filename;
-		Con_Printf("\nfull ctf installation not detected, downloading ctf pak...\n\n^mrestart required to take effect\n\n");
+		Con_Printf("\nfull ctf installation not detected, downloading ctf pak...\n\n");
 		downloadedctf = true;
-
-		if (COM_FileExists("ctf.pak", NULL))
-			q_snprintf(local_path, sizeof(local_path), "%s/full%s", com_gamedir, COM_SkipPath(filename));
-		else
-			q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, COM_SkipPath(filename));
 	}
+
+	if (COM_IsPackageExtension(COM_FileGetExtension(filename)))
+	{
+		if (!COM_DownloadPackageNameOkay(filename))
+			return false;
+	}
+	else if (!COM_DownloadNameOkay(filename))
+	{
+		return false;
+	}
+
+	if (*cls.download.current && !strcmp(cls.download.current, filename))
+		return false;
+	if (COM_FileExists(filename, NULL))
+		return false;
+
+	q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, filename);
 
 	if (webcheck && (cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0')) // only run if server is verified
                 if (Curl_DownloadFile (cl_web_download_url.string, filename, local_path, false, NULL))
@@ -3069,7 +3170,7 @@ void CL_ManualDownload_f (const char* filename)
 
 	if (Cmd_Argc() != 2)
 	{
-		Con_Printf("download <filename> : filename with an extension (bsp, lit, loc, mdl, or wav)\n");
+		Con_Printf("download <filename|ctf|ra> : filename with an extension (bsp, lit, loc, mdl, or wav)\n");
 		return;
 	}
 
@@ -3124,6 +3225,15 @@ void CL_ManualDownload_f (const char* filename)
 		prefixedArg[sizeof(prefixedArg) - 1] = '\0';
 	}
 
+	if (!CL_DownloadNameIsValid(prefixedArg))
+	{
+		Con_Printf("Unsupported download path\n");
+		return;
+	}
+
+	if (*cls.download.current && !strcmp(cls.download.current, prefixedArg))
+		return;	//if the previous download failed, don't endlessly retry.
+
 	if (COM_FileExists(prefixedArg, NULL))
 	{
 		Con_Printf("File already exists, download not attempted\n");
@@ -3148,23 +3258,7 @@ void CL_ManualDownload_f (const char* filename)
 	Con_Printf("Attempting download, if found you will see progress below...\n");
 
 	char local_path[MAX_OSPATH]; // Define the max path length	
-
-	if (strcmp(filename, "ctf") == 0)
-	{
-		if (COM_FileExists("ctf.pak", NULL))
-			q_snprintf(local_path, sizeof(local_path), "%s/full%s.pak", com_gamedir, filename);
-		else
-			q_snprintf(local_path, sizeof(local_path), "%s/%s.pak", com_gamedir, filename);
-	}
-	else if (strcmp(filename, "ra") == 0)
-	{
-		if (COM_FileExists("ra.pak", NULL))
-			q_snprintf(local_path, sizeof(local_path), "%s/full%s.pak", com_gamedir, filename);
-		else
-			q_snprintf(local_path, sizeof(local_path), "%s/%s.pak", com_gamedir, filename);
-	}
-	else
-		q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, prefixedArg);
+	q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, prefixedArg);
 
 	if (webcheck && (cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0')) // only run if server is verified
                 if (Curl_DownloadFile(cl_web_download_url.string, prefixedArg, local_path, false, NULL))

@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 #include <errno.h>
+#include <limits.h>
 #include <sys/stat.h>
 
 #if defined(_WIN32)
@@ -2075,6 +2076,55 @@ qboolean COM_DownloadNameOkay(const char *filename)
 	return true;
 }
 
+qboolean COM_IsPackageExtension(const char *ext)
+{
+	if (!ext)
+		return false;
+
+	return !q_strcasecmp(ext, "pak") ||
+		!q_strcasecmp(ext, "pk3") ||
+		!q_strcasecmp(ext, "pk4") ||
+		!q_strcasecmp(ext, "zip") ||
+		!q_strcasecmp(ext, "apk") ||
+		!q_strcasecmp(ext, "kpf");
+}
+
+qboolean COM_DownloadPackageNameOkay(const char *filename)
+{
+	const char *slash;
+	const char *ext;
+
+	if (!allow_download.value)
+		return false;
+
+	if (!filename || !*filename)
+		return false;
+
+	if (*filename == '/' || *filename == '\\')
+		return false;
+
+	if (strchr(filename, '\\') || strchr(filename, ':') || strchr(filename, '*') || strchr(filename, '?') || strchr(filename, '\"'))
+		return false;
+
+	if (strstr(filename, "//"))
+		return false;
+
+	if (*filename == '.' || strstr(filename, "/."))
+		return false;
+
+	slash = strchr(filename, '/');
+	if (slash)
+	{
+		if (strncmp(filename, "paks/", 5))
+			return false;
+		if (strchr(filename + 5, '/'))
+			return false;
+	}
+
+	ext = COM_FileGetExtension(filename);
+	return COM_IsPackageExtension(ext);
+}
+
 
 /*
 ==============
@@ -3341,16 +3391,16 @@ static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile, cons
 		}
 	}
 
-	if (!q_strcasecmp(ext, "pak"))
+	if (!COM_IsPackageExtension(ext))
+		pak = NULL;
+	else if (!q_strcasecmp(ext, "pak"))
 		pak = COM_LoadPackFile (pakfile);
-	else if (!q_strcasecmp(ext, "pk3") || !q_strcasecmp(ext, "pk4") || !q_strcasecmp(ext, "zip") || !q_strcasecmp(ext, "apk") || !q_strcasecmp(ext, "kpf"))
+	else
 	{
 		pak = FSZIP_LoadArchive(pakfile);
 		if (pak)
 			com_modified = true;	//would always be true, so we don't bother with crcs.
 	}
-	else
-		pak = NULL;
 
 	if (!pak)
 		return false;
@@ -3372,14 +3422,228 @@ static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile, cons
 	return true;
 }
 
+typedef struct
+{
+	searchpath_t *basepath;
+	const char *subdir;
+} packageenumctx_t;
+
 static qboolean COM_AddEnumeratedPackage(void *ctx, const char *pakfile)
 {
-	searchpath_t *basepath = ctx;
+	packageenumctx_t *info = ctx;
 	char fullpakfile[MAX_OSPATH];
 	char purepakfile[MAX_OSPATH];
-	q_snprintf (fullpakfile, sizeof(fullpakfile), "%s/%s", basepath->filename, pakfile);
-	q_snprintf (purepakfile, sizeof(purepakfile), "%s/%s", basepath->purename, pakfile);
-	return COM_AddPackage(basepath, fullpakfile, purepakfile);
+
+	if (info->subdir && *info->subdir)
+	{
+		q_snprintf(fullpakfile, sizeof(fullpakfile), "%s/%s/%s", info->basepath->filename, info->subdir, pakfile);
+		q_snprintf(purepakfile, sizeof(purepakfile), "%s/%s/%s", info->basepath->purename, info->subdir, pakfile);
+	}
+	else
+	{
+		q_snprintf(fullpakfile, sizeof(fullpakfile), "%s/%s", info->basepath->filename, pakfile);
+		q_snprintf(purepakfile, sizeof(purepakfile), "%s/%s", info->basepath->purename, pakfile);
+	}
+
+	return COM_AddPackage(info->basepath, fullpakfile, purepakfile);
+}
+
+static void COM_ListPackageFiles(searchpath_t *basepath, const char *dirpath, const char *subdir)
+{
+	static const char *extensions[] = { "pak", "pk3", "pk4", "zip", "apk", "kpf" };
+	packageenumctx_t ctx;
+	size_t i;
+
+	ctx.basepath = basepath;
+	ctx.subdir = subdir;
+
+	for (i = 0; i < sizeof(extensions) / sizeof(extensions[0]); i++)
+		COM_ListSystemFiles(&ctx, dirpath, extensions[i], COM_AddEnumeratedPackage);
+}
+
+static int COM_ParsePakNumber(const char *purename)
+{
+	const char *basename;
+	char *end;
+	long paknum;
+
+	basename = COM_SkipPath(purename);
+	if (q_strncasecmp(basename, "pak", 3))
+		return -1;
+
+	paknum = strtol(basename + 3, &end, 10);
+	if (end == basename + 3 || (*end && *end != '.'))
+		return -1;
+	if (paknum < 0 || paknum > INT_MAX)
+		return -1;
+
+	return (int)paknum;
+}
+
+static qboolean COM_ShouldInsertBefore(searchpath_t *added, searchpath_t *existing)
+{
+	int added_num;
+	int existing_num;
+	const char *added_base;
+	const char *existing_base;
+
+	added_num = COM_ParsePakNumber(added->purename);
+	existing_num = COM_ParsePakNumber(existing->purename);
+	if (added_num >= 0 && existing_num >= 0)
+		return added_num > existing_num;
+
+	added_base = COM_SkipPath(added->purename);
+	existing_base = COM_SkipPath(existing->purename);
+	return q_strcasecmp(added_base, existing_base) > 0;
+}
+
+static void COM_FreeSearchPath(searchpath_t *search)
+{
+	if (search->pack)
+	{
+		Sys_FileClose(search->pack->handle);
+		Z_Free(search->pack->files);
+		Z_Free(search->pack);
+	}
+
+	Z_Free(search);
+}
+
+static qboolean COM_PackageSearchPathMatches(searchpath_t *search, const char *fullpakfile, const char *pakdir)
+{
+	if (search->pack)
+		return !q_strcasecmp(search->filename, fullpakfile);
+
+	return !q_strcasecmp(search->filename, pakdir);
+}
+
+void COM_RemoveDownloadedPackage(const char *relative_path)
+{
+	searchpath_t *search;
+	searchpath_t *prev;
+	char fullpakfile[MAX_OSPATH];
+	char pakdir[MAX_OSPATH];
+
+	if (!COM_DownloadPackageNameOkay(relative_path))
+		return;
+
+	q_snprintf(fullpakfile, sizeof(fullpakfile), "%s/%s", com_gamedir, relative_path);
+	q_snprintf(pakdir, sizeof(pakdir), "%sdir", fullpakfile);
+
+	search = com_searchpaths;
+	prev = NULL;
+	while (search)
+	{
+		searchpath_t *next = search->next;
+
+		if (COM_PackageSearchPathMatches(search, fullpakfile, pakdir))
+		{
+			if (prev)
+				prev->next = next;
+			else
+				com_searchpaths = next;
+
+			COM_FreeSearchPath(search);
+		}
+		else
+		{
+			prev = search;
+		}
+
+		search = next;
+	}
+}
+
+void COM_AddDownloadedPackage(const char *relative_path)
+{
+	char fullpakfile[MAX_OSPATH];
+	char pakdir[MAX_OSPATH];
+	char purename[MAX_OSPATH];
+	searchpath_t *basepath;
+	searchpath_t *search;
+
+	if (!COM_DownloadPackageNameOkay(relative_path))
+	{
+		Con_Warning("Rejected downloaded package path \"%s\"\n", relative_path ? relative_path : "(null)");
+		return;
+	}
+
+	q_snprintf(fullpakfile, sizeof(fullpakfile), "%s/%s", com_gamedir, relative_path);
+	q_snprintf(pakdir, sizeof(pakdir), "%sdir", fullpakfile);
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (COM_PackageSearchPathMatches(search, fullpakfile, pakdir))
+			return;
+	}
+
+	basepath = NULL;
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (!search->pack && !q_strcasecmp(search->filename, com_gamedir))
+		{
+			basepath = search;
+			break;
+		}
+	}
+
+	if (basepath)
+		q_snprintf(purename, sizeof(purename), "%s/%s", basepath->purename, relative_path);
+	else
+	{
+		q_strlcpy(purename, relative_path, sizeof(purename));
+		Con_Warning("Unable to locate active gamedir search path for %s; download priority may be incorrect\n", fullpakfile);
+	}
+
+	if (!COM_AddPackage(basepath, fullpakfile, purename))
+	{
+		Con_Warning("Failed to register downloaded package %s\n", fullpakfile);
+		return;
+	}
+
+	if (com_searchpaths && COM_PackageSearchPathMatches(com_searchpaths, fullpakfile, pakdir))
+	{
+		searchpath_t *added = com_searchpaths;
+		searchpath_t *prev;
+		searchpath_t *cur;
+		unsigned int path_id = added->path_id;
+
+		com_searchpaths = added->next;
+
+		if (basepath && basepath->path_id == path_id)
+			prev = basepath;
+		else
+		{
+			prev = NULL;
+			for (cur = com_searchpaths; cur; cur = cur->next)
+			{
+				if (!cur->pack && cur->path_id == path_id)
+				{
+					prev = cur;
+					break;
+				}
+			}
+		}
+
+		if (!prev)
+		{
+			added->next = com_searchpaths;
+			com_searchpaths = added;
+			return;
+		}
+
+		cur = prev->next;
+		while (cur && cur->path_id == path_id && cur->pack)
+		{
+			if (COM_ShouldInsertBefore(added, cur))
+				break;
+			prev = cur;
+			cur = cur->next;
+		}
+
+		added->next = prev->next;
+		prev->next = added;
+	}
 }
 
 const char *COM_GetGameNames(qboolean full)
@@ -3681,8 +3945,11 @@ _add_path:
 	i = COM_CheckParm ("-nowildpaks");
 	if (!i) 
 	{
-		COM_ListSystemFiles(searchdir, com_gamedir, "pak", COM_AddEnumeratedPackage);
-		COM_ListSystemFiles(searchdir, com_gamedir, "pk3", COM_AddEnumeratedPackage);
+		char paksubdir[MAX_OSPATH];
+
+		COM_ListPackageFiles(searchdir, com_gamedir, NULL);
+		q_snprintf(paksubdir, sizeof(paksubdir), "%s/paks", com_gamedir);
+		COM_ListPackageFiles(searchdir, paksubdir, "paks");
 	}
 
 	COM_ListFiles(NULL, searchdir, "#*", AddHashedDirectories); // woods #pakdirs
