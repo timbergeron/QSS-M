@@ -134,6 +134,8 @@ static int          con_clickx, con_clicky; //canvas coords at press
 static float        con_scrollspeed = 0.f; //autoscroll during drag
 static float        con_scrolldelta = 0.f;
 static const double DOUBLECLICK_TIME = 0.5;
+static qboolean     con_cursor_was_active = false;
+static qboolean     con_blockselectionuntilrelease = false;
 
 static void Con_SetHotLink(conlink_t* link) { con_hotlink = link; }
 static void Con_ClearSelection(void) { memset(&con_selection, 0, sizeof(con_selection)); }
@@ -862,7 +864,23 @@ static void Con_Scroll(int lines)
 
 static void Con_UpdateMouseState (void)
 {
-    if (!Con_CursorActive()) {
+    qboolean active = Con_CursorActive();
+
+    if (active != con_cursor_was_active) {
+        con_cursor_was_active = active;
+        con_mouseclicks = 0;
+        con_mouseclickdelay = DOUBLECLICK_TIME;
+        Con_SetMouseState(CMS_NOTPRESSED);
+        if (active) {
+            Uint32 btns = SDL_GetMouseState(NULL, NULL);
+            /* Ignore a held menu click until release when the loading console takes focus. */
+            con_blockselectionuntilrelease = (btns & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+        } else {
+            con_blockselectionuntilrelease = false;
+        }
+    }
+
+    if (!active) {
         Con_SetHotLink(NULL);
         Con_SetMouseState(CMS_NOTPRESSED);
         Con_ClearSelection();
@@ -881,6 +899,11 @@ static void Con_UpdateMouseState (void)
     {
         Uint32 btns = SDL_GetMouseState(NULL, NULL);
         qboolean left_down = (btns & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+        if (con_blockselectionuntilrelease) {
+            if (left_down)
+                return;
+            con_blockselectionuntilrelease = false;
+        }
         if (!left_down) Con_SetMouseState(CMS_NOTPRESSED);
         else if (con_mousestate == CMS_NOTPRESSED) Con_SetMouseState(CMS_PRESSED);
     }
