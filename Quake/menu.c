@@ -17515,7 +17515,7 @@ Demos Menu
 
 typedef struct
 {
-	char        name[64];
+	char        name[MAX_QPATH];
 	char        date[32];
 	char        map[64];
 	char        players[256];
@@ -17540,6 +17540,107 @@ static void FormatDuration(float secs, char *out, size_t outlen)
 	q_snprintf(out, outlen, "%d:%02d", m, s);
 }
 
+static qboolean M_IsTimestampStart(const char *s)
+{
+	return q_isdigit((unsigned char)s[0]) && q_isdigit((unsigned char)s[1]) &&
+		s[2] == '-' &&
+		q_isdigit((unsigned char)s[3]) && q_isdigit((unsigned char)s[4]) &&
+		s[5] == '-' &&
+		q_isdigit((unsigned char)s[6]) && q_isdigit((unsigned char)s[7]) &&
+		q_isdigit((unsigned char)s[8]) && q_isdigit((unsigned char)s[9]) &&
+		s[10] == '-';
+}
+
+static qboolean M_IsDatePrefix(const char *s)
+{
+	return q_isdigit((unsigned char)s[0]) &&
+		q_isdigit((unsigned char)s[1]) &&
+		q_isdigit((unsigned char)s[2]) &&
+		q_isdigit((unsigned char)s[3]) &&
+		s[4] == '-' &&
+		q_isdigit((unsigned char)s[5]) &&
+		q_isdigit((unsigned char)s[6]) &&
+		s[7] == '-' &&
+		q_isdigit((unsigned char)s[8]) &&
+		q_isdigit((unsigned char)s[9]) &&
+		(s[10] == '-' || s[10] == '_');
+}
+
+static void M_InferDemoMapName(const char *name, char *out, size_t outlen)
+{
+	char base[MAX_QPATH];
+	size_t i;
+
+	COM_FileBase(COM_SkipPath(name), base, sizeof(base));
+	if (!base[0])
+	{
+		out[0] = '\0';
+		return;
+	}
+
+	if (M_IsDatePrefix(base))
+		memmove(base, base + 11, strlen(base + 11) + 1);
+
+	for (i = 0; base[i]; ++i)
+	{
+		if ((base[i] == '_' || base[i] == '-') && M_IsTimestampStart(base + i + 1))
+		{
+			base[i] = '\0';
+			break;
+		}
+	}
+
+	if (!strncmp(base, "start_", 6) || !strncmp(base, "start-", 6))
+		base[0] = '\0';
+
+	q_strlcpy(out, base, outlen);
+}
+
+static qboolean M_IsDemoMapNameChar(int c)
+{
+	return q_isalnum((unsigned char)c) || c == '_' || c == '-' || c == '+';
+}
+
+static qboolean M_FindDemoMapNameInData(const byte *data, int start, int length,
+	char *out, size_t outlen)
+{
+	int scan_limit;
+	int i;
+
+	scan_limit = q_min(length, 512 * 1024);
+	for (i = start; i <= scan_limit - 9; ++i)
+	{
+		int name_start;
+		int j;
+
+		if (memcmp(data + i, "maps/", 5))
+			continue;
+
+		name_start = i + 5;
+		for (j = name_start; j <= scan_limit - 4; ++j)
+		{
+			int name_len;
+
+			if (!memcmp(data + j, ".bsp", 4))
+			{
+				name_len = j - name_start;
+				if (name_len <= 0)
+					break;
+				if (name_len >= (int)outlen)
+					name_len = (int)outlen - 1;
+				memcpy(out, data + name_start, name_len);
+				out[name_len] = '\0';
+				return true;
+			}
+
+			if (!M_IsDemoMapNameChar(data[j]))
+				break;
+		}
+	}
+
+	return false;
+}
+
 static inline int SkipCStringOffset(const byte* base, int off, int limit)
 {
 	const void* p = memchr(base + off, 0, (size_t)(limit - off));
@@ -17552,19 +17653,23 @@ static int CompareFrags(const void* a, const void* b)
 	return pb->frags - pa->frags;
 }
 
+static byte *M_LoadDemoInfoData(const char *name, int *length_out)
+{
+	return CL_LoadDemoBuffer(name, length_out);
+}
+
 static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 {
-	byte* data = COM_LoadMallocFile(va("demos/%s.dem", name), NULL);
+	int length;
+	byte* data = M_LoadDemoInfoData(name, &length);
 	if (!data) return false;
 
-	int length = com_filesize;
 	if (length <= 0) { free(data); return false; }
 
 	info->map[0] = info->players[0] = '\0';
 	info->duration = 0.0f;
 	info->filesize_mb = length / (1024.0f * 1024.0f);
 
-	qboolean map_found = false;
 	int maxclients = 16;
 
 	int  player_peak_frags[32];
@@ -17578,6 +17683,8 @@ static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 	while (off < length && data[off] != '\n') off++;
 	if (off < length) off++;
 
+	qboolean map_found = M_FindDemoMapNameInData(data, off, length,
+		info->map, sizeof(info->map));
 	float last_time = 0.0f;
 	int frame_count = 0;
 
@@ -17773,6 +17880,8 @@ build_result:
 	info->duration = last_time;
 	if (frame_count > 1000 && info->duration < 60.0f)
 		info->duration = frame_count / 40.0f;
+	if (!info->map[0])
+		M_InferDemoMapName(name, info->map, sizeof(info->map));
 }
 
 free(data);
@@ -17950,9 +18059,9 @@ void M_Demos_Draw (void)
         demoitem_t* demo_item = &demosmenu.items[demo_idx];
         qboolean selected = (idx == demosmenu.list.cursor);
 
-        COM_StripExtension(cls.demofilename, demofilename, sizeof(demofilename));
+        q_strlcpy(demofilename, COM_SkipPath(cls.demofilename), sizeof(demofilename));
 
-        demosmenu.items[demo_idx].active = !strcmp(demofilename, demo_item->name);
+        demosmenu.items[demo_idx].active = !q_strcasecmp(COM_SkipPath(demo_item->name), demofilename);
 
         int color = demosmenu.items[demo_idx].active ? 0 : 1;
         int len = strlen(demo_item->name);
@@ -18197,13 +18306,16 @@ void M_Demos_Key(int key)
 			int demo_idx = demosmenu.filtered_indices[demosmenu.list.cursor];
 
 			// Copy demo name to local buffer BEFORE freeing memory
-			char demo_name[64];
+			char demo_name[MAX_QPATH];
 			q_strlcpy(demo_name, demosmenu.items[demo_idx].name, sizeof(demo_name));
 
 			char demo_path[MAX_OSPATH];
 
 			// Construct the full path to the demo file
-			q_snprintf(demo_path, sizeof(demo_path), "%s/demos/%s.dem", com_gamedir, demo_name);
+			if (strchr(demo_name, '/') || strchr(demo_name, '\\'))
+				q_snprintf(demo_path, sizeof(demo_path), "%s/%s", com_gamedir, demo_name);
+			else
+				q_snprintf(demo_path, sizeof(demo_path), "%s/demos/%s", com_gamedir, demo_name);
 
 			// Try to delete the file
 			if (remove(demo_path) == 0)

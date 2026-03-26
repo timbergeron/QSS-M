@@ -467,6 +467,7 @@ extern	cvar_t	cl_alwaysrun; // QuakeSpasm
 extern	cvar_t	cl_autofire;
 
 extern	cvar_t	cl_recordingdemo;
+extern	cvar_t	cl_demo_format;
 extern	cvar_t	cl_shownet;
 extern	cvar_t	cl_nolerp;
 extern	cvar_t	cl_demoreel;
@@ -590,6 +591,7 @@ void CL_PlayDemo_f (void);
 void CL_TimeDemo_f (void);
 void CL_JumpDemo_f (void);
 int CL_GetDemoFrameCount(void); // woods #demoframes
+byte *CL_LoadDemoBuffer(const char *name, int *length_out);
 
 //
 // cl_parse.c

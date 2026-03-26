@@ -2965,7 +2965,7 @@ static qboolean CompleteFileListDemo (const char* partial, void* param) // woods
 		currentDateStr[sizeof(currentDateStr) - 1] = '\0';
 	}
 
-	Con_AddToTabList("last", partial, "play last.dem or last cached demo", currentDateStr);
+	Con_AddToTabList("last", partial, "play last.dem/last.dz or last cached demo", currentDateStr);
 	Con_AddToTabList("-l", partial, "play last demo", currentDateStr);
 
 	for (file = *list; file; file = file->next)

@@ -22,6 +22,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "time.h"
 #include <errno.h>
 #include <limits.h>
+#ifdef USE_ZLIB
+#include <assert.h>
+#include <stdint.h>
+#include <zlib.h>
+#endif
 #include "quakedef.h"
 
 static void CL_FinishTimeDemo (void);
@@ -29,6 +34,16 @@ entity_t *CL_EntityNum (int num);
 
 char		demoplaying[MAX_OSPATH]; // woods for window title
 char		last_demo[MAX_OSPATH]; // woods #lastdemo
+static char	demo_record_raw_path[MAX_OSPATH];
+static qboolean demo_record_to_dzip;
+static unsigned int demo_record_serial;
+
+#ifdef USE_ZLIB
+static void CL_DZipCleanupTempDemo(void);
+static qboolean CL_DZipOpenDemoArchive(const char *archive_path, FILE **out_demo, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size);
+static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *archive_path, const char *entry_name);
+static byte *CL_DZipLoadDemoBuffer(const char *archive_path, int *length_out);
+#endif
 
 /*
 ==============================================================================
@@ -1053,6 +1068,9 @@ void CL_StopPlayback (void)
 {
 	if (!cls.demoplayback)
 	{
+#ifdef USE_ZLIB
+		CL_DZipCleanupTempDemo();
+#endif
 		CL_ResetDemoSeekState();
 		demo_start_server_time = 0.f;
 		demo_start_server_time_valid = false;
@@ -1060,6 +1078,9 @@ void CL_StopPlayback (void)
 	}
 
 	fclose (cls.demofile);
+#ifdef USE_ZLIB
+	CL_DZipCleanupTempDemo();
+#endif
 	cls.demoplayback = false;
 	cls.demopaused = false;
 	cls.demospeed = 1.f; // woods (iw) #democontrols
@@ -1241,6 +1262,170 @@ static qboolean CL_DemoFilenameExists(const char *path)
 	return true;
 }
 
+static qboolean CL_DemoFormatWantsDZip(void)
+{
+#ifdef USE_ZLIB
+	return !q_strcasecmp(cl_demo_format.string, "dz");
+#else
+	return false;
+#endif
+}
+
+static void CL_DemoBuildArchiveEntryName(const char *archive_path, char *out, size_t outsize)
+{
+	COM_FileBase(COM_SkipPath(archive_path), out, outsize);
+	COM_AddExtension(out, ".dem", outsize);
+}
+
+static qboolean CL_DemoTryOpenPath(const char *logical_name, const char *search_path, FILE **out_file, qofs_t *out_size, char *out_name, size_t out_name_size)
+{
+	const char *ext;
+
+	*out_file = NULL;
+	if (out_size)
+		*out_size = -1;
+
+	ext = COM_FileGetExtension(search_path);
+	if (!q_strcasecmp(ext, "dz"))
+	{
+#ifdef USE_ZLIB
+		if (CL_DZipOpenDemoArchive(search_path, out_file, out_size, NULL, 0))
+		{
+			q_strlcpy(out_name, logical_name, out_name_size);
+			return true;
+		}
+#endif
+		return false;
+	}
+
+	if (COM_FOpenFile(search_path, out_file, NULL) >= 0 && *out_file)
+	{
+		if (out_size)
+			*out_size = com_filesize;
+		q_strlcpy(out_name, logical_name, out_name_size);
+		return true;
+	}
+
+	return false;
+}
+
+byte *CL_LoadDemoBuffer(const char *name, int *length_out)
+{
+	byte *data;
+	char path[MAX_OSPATH];
+	const char *ext;
+	qboolean has_path;
+
+	if (length_out)
+		*length_out = -1;
+
+	if (!name || !name[0])
+		return NULL;
+
+	ext = COM_FileGetExtension(name);
+	has_path = strchr(name, '/') != NULL || strchr(name, '\\') != NULL;
+
+	if (!q_strcasecmp(ext, "dz"))
+	{
+#ifdef USE_ZLIB
+		if (!has_path)
+		{
+			q_snprintf(path, sizeof(path), "demos/%s", name);
+			data = CL_DZipLoadDemoBuffer(path, length_out);
+			if (data)
+				return data;
+		}
+
+		return CL_DZipLoadDemoBuffer(name, length_out);
+#else
+		return NULL;
+#endif
+	}
+
+	if (has_path)
+	{
+		data = COM_LoadMallocFile(name, NULL);
+		if (data && length_out)
+			*length_out = (int)com_filesize;
+		return data;
+	}
+
+	q_snprintf(path, sizeof(path), "demos/%s", name);
+	data = COM_LoadMallocFile(path, NULL);
+	if (data)
+	{
+		if (length_out)
+			*length_out = (int)com_filesize;
+		return data;
+	}
+
+	data = COM_LoadMallocFile(name, NULL);
+	if (data && length_out)
+		*length_out = (int)com_filesize;
+	return data;
+}
+
+static qboolean CL_DemoResolvePlayback(const char *requested, FILE **out_file, qofs_t *out_size, char *out_name, size_t out_name_size)
+{
+	char logical[MAX_OSPATH];
+	char path[MAX_OSPATH];
+	char with_ext[MAX_OSPATH];
+	const char *ext;
+	qboolean has_path;
+
+	q_strlcpy(logical, requested, sizeof(logical));
+	ext = COM_FileGetExtension(logical);
+	has_path = strchr(logical, '/') != NULL || strchr(logical, '\\') != NULL;
+
+	if (ext[0])
+	{
+		if (!has_path)
+		{
+			q_snprintf(path, sizeof(path), "demos/%s", logical);
+			if (CL_DemoTryOpenPath(logical, path, out_file, out_size, out_name, out_name_size))
+				return true;
+		}
+
+		return CL_DemoTryOpenPath(logical, logical, out_file, out_size, out_name, out_name_size);
+	}
+
+	q_strlcpy(with_ext, logical, sizeof(with_ext));
+	COM_AddExtension(with_ext, ".dem", sizeof(with_ext));
+	if (!has_path)
+	{
+		q_snprintf(path, sizeof(path), "demos/%s", with_ext);
+		if (CL_DemoTryOpenPath(with_ext, path, out_file, out_size, out_name, out_name_size))
+			return true;
+	}
+	if (CL_DemoTryOpenPath(with_ext, with_ext, out_file, out_size, out_name, out_name_size))
+		return true;
+
+	q_strlcpy(with_ext, logical, sizeof(with_ext));
+	COM_AddExtension(with_ext, ".dz", sizeof(with_ext));
+	if (!has_path)
+	{
+		q_snprintf(path, sizeof(path), "demos/%s", with_ext);
+		if (CL_DemoTryOpenPath(with_ext, path, out_file, out_size, out_name, out_name_size))
+			return true;
+	}
+	return CL_DemoTryOpenPath(with_ext, with_ext, out_file, out_size, out_name, out_name_size);
+}
+
+static void CL_ResetDemoRecordingPaths(void)
+{
+	demo_record_raw_path[0] = '\0';
+	demo_record_to_dzip = false;
+}
+
+static void CL_BuildRecordingRawPath(const char *final_path, char *raw_path, size_t raw_path_size)
+{
+	char base[MAX_OSPATH];
+
+	COM_StripExtension(final_path, base, sizeof(base));
+	++demo_record_serial;
+	q_snprintf(raw_path, raw_path_size, "%s.__recording_%u.dem", base, demo_record_serial);
+}
+
 static void CL_GetDemoModeTag(char *mode_tag, size_t mode_tag_size)
 {
 	char mode_buf[32];
@@ -1273,19 +1458,19 @@ static void CL_GetDemoModeTag(char *mode_tag, size_t mode_tag_size)
 		q_strlcpy(mode_tag, "FREEZETAG", mode_tag_size);
 }
 
-static void CL_RenameDemoWithMatchSuffixes(void)
+static qboolean CL_BuildDemoPathWithMatchSuffixes(const char *input_path, char *output_path, size_t output_size)
 {
 	char base[MAX_OSPATH];
-	char renamed[MAX_OSPATH];
 	char current_noext[MAX_OSPATH];
 	char suffix[32];
 	char mode_tag[16];
+	char extdot[16];
 	size_t current_len;
 	size_t suffix_len;
 	int attempt;
 
-	if (!cls.demofilename[0])
-		return;
+	if (!input_path[0] || !output_size)
+		return false;
 
 	CL_GetDemoModeTag(mode_tag, sizeof(mode_tag));
 
@@ -1296,39 +1481,64 @@ static void CL_RenameDemoWithMatchSuffixes(void)
 		q_strlcat(suffix, "_OT", sizeof(suffix));
 
 	if (!suffix[0])
-		return;
+	{
+		q_strlcpy(output_path, input_path, output_size);
+		return true;
+	}
 
-	COM_StripExtension(cls.demofilename, current_noext, sizeof(current_noext));
+	COM_StripExtension(input_path, current_noext, sizeof(current_noext));
 	current_len = strlen(current_noext);
 	suffix_len = strlen(suffix);
 	if (current_len > suffix_len && !q_strcasecmp(current_noext + current_len - suffix_len, suffix))
-		return;
+	{
+		q_strlcpy(output_path, input_path, output_size);
+		return true;
+	}
 
-	COM_StripExtension(cls.demofilename, base, sizeof(base));
+	COM_StripExtension(input_path, base, sizeof(base));
+	q_snprintf(extdot, sizeof(extdot), ".%s", COM_FileGetExtension(input_path));
 
 	for (attempt = 0; attempt < 1000; ++attempt)
 	{
 		if (attempt == 0)
-			q_snprintf(renamed, sizeof(renamed), "%s%s.dem", base, suffix);
+			q_snprintf(output_path, output_size, "%s%s%s", base, suffix, extdot);
 		else
-			q_snprintf(renamed, sizeof(renamed), "%s%s%d.dem", base, suffix, attempt + 1);
+			q_snprintf(output_path, output_size, "%s%s%d%s", base, suffix, attempt + 1, extdot);
 
-		if (CL_DemoFilenameExists(renamed))
+		if (CL_DemoFilenameExists(output_path))
 			continue;
 
-		if (rename(cls.demofilename, renamed) == 0)
-		{
-			q_strlcpy(cls.demofilename, renamed, sizeof(cls.demofilename));
-			Con_Printf("renamed demo to %s\n", COM_SkipPath(renamed));
-		}
-		else
-		{
-			Con_Printf("WARNING: could not rename demo to %s\n", COM_SkipPath(renamed));
-		}
+		return true;
+	}
+
+	return false;
+}
+
+static void CL_RenameDemoWithMatchSuffixes(void)
+{
+	char renamed[MAX_OSPATH];
+
+	if (!cls.demofilename[0])
+		return;
+
+	if (!CL_BuildDemoPathWithMatchSuffixes(cls.demofilename, renamed, sizeof(renamed)))
+	{
+		Con_Printf("WARNING: could not find available demo name for %s\n", COM_SkipPath(cls.demofilename));
 		return;
 	}
 
-	Con_Printf("WARNING: could not find available demo name for %s\n", COM_SkipPath(cls.demofilename));
+	if (!q_strcasecmp(renamed, cls.demofilename))
+		return;
+
+	if (rename(cls.demofilename, renamed) == 0)
+	{
+		q_strlcpy(cls.demofilename, renamed, sizeof(cls.demofilename));
+		Con_Printf("renamed demo to %s\n", COM_SkipPath(renamed));
+	}
+	else
+	{
+		Con_Printf("WARNING: could not rename demo to %s\n", COM_SkipPath(renamed));
+	}
 }
 
 
@@ -1341,6 +1551,8 @@ stop recording a demo
 */
 void CL_Stop_f (void)
 {
+	qboolean completed = true;
+
 	if (cmd_source != src_command)
 		return;
 
@@ -1360,12 +1572,49 @@ void CL_Stop_f (void)
 	cls.demofile = NULL;
 	cls.demorecording = false;
 
-	CL_RenameDemoWithMatchSuffixes();
+	if (demo_record_to_dzip)
+	{
+#ifdef USE_ZLIB
+		char archived_path[MAX_OSPATH];
+		char entry_name[MAX_OSPATH];
+
+		if (!CL_BuildDemoPathWithMatchSuffixes(cls.demofilename, archived_path, sizeof(archived_path)))
+		{
+			Con_Printf("WARNING: could not build archive path for %s\n", COM_SkipPath(cls.demofilename));
+			completed = false;
+		}
+		else
+		{
+			CL_DemoBuildArchiveEntryName(archived_path, entry_name, sizeof(entry_name));
+			if (CL_DZipArchiveDemoFile(demo_record_raw_path, archived_path, entry_name))
+			{
+				remove(demo_record_raw_path);
+				q_strlcpy(cls.demofilename, archived_path, sizeof(cls.demofilename));
+			}
+			else
+			{
+				Con_Printf("WARNING: failed to write %s, raw demo kept at %s\n",
+					COM_SkipPath(archived_path), demo_record_raw_path);
+				q_strlcpy(cls.demofilename, demo_record_raw_path, sizeof(cls.demofilename));
+				completed = false;
+			}
+		}
+#else
+		completed = false;
+#endif
+	}
+	else
+	{
+		CL_RenameDemoWithMatchSuffixes();
+	}
+
 	cls.demo_had_overtime = false;
 
-	Con_Printf ("completed demo\n");
+	if (completed)
+		Con_Printf ("completed demo\n");
 
 	Cvar_SetROM(cl_recordingdemo.name, "");
+	CL_ResetDemoRecordingPaths();
 	
 // ericw -- update demo tab-completion list
 	DemoList_Rebuild ();
@@ -1721,22 +1970,29 @@ void CL_Record_f (void)
 	}
 
 // open the demo file
-	COM_AddExtension (name, ".dem", sizeof(name));
+	COM_StripExtension(name, name, sizeof(name));
+	COM_AddExtension(name, CL_DemoFormatWantsDZip() ? ".dz" : ".dem", sizeof(name));
+
+	CL_ResetDemoRecordingPaths();
+	demo_record_to_dzip = CL_DemoFormatWantsDZip();
+	if (demo_record_to_dzip)
+		CL_BuildRecordingRawPath(name, demo_record_raw_path, sizeof(demo_record_raw_path));
 
 	Cvar_SetROM(cl_recordingdemo.name, name);
+	q_strlcpy(cls.demofilename, name, sizeof(cls.demofilename)); // user-visible final target
 
 	Con_Printf ("demo recording\n");
-	cls.demofile = fopen (name, "wb");
+	cls.demofile = fopen (demo_record_to_dzip ? demo_record_raw_path : name, "wb");
 	if (!cls.demofile)
 	{
-		Con_Printf ("ERROR: couldn't create %s\n", name);
+		Con_Printf ("ERROR: couldn't create %s\n", demo_record_to_dzip ? demo_record_raw_path : name);
 		Cvar_SetROM(cl_recordingdemo.name, "");
+		CL_ResetDemoRecordingPaths();
 		return;
 	}
 
 	cls.forcetrack = track;
 	fprintf (cls.demofile, "%i\n", cls.forcetrack);
-	q_strlcpy(cls.demofilename, name, sizeof(cls.demofilename)); // woods (iw) #democontrols
 
 	cls.demo_had_overtime = false;
 	cls.demorecording = true;
@@ -1991,7 +2247,9 @@ play [demoname]
 */
 void CL_PlayDemo_f (void)
 {
-	char	name[MAX_OSPATH], name2[MAX_OSPATH]; // woods #demosfolder
+	char	requested[MAX_OSPATH];
+	char	opened_name[MAX_OSPATH];
+	qofs_t	demo_size = -1;
 	qboolean use_last_demo;
 	qboolean allow_last_fallback;
 
@@ -2001,7 +2259,7 @@ void CL_PlayDemo_f (void)
 	if (Cmd_Argc() != 2)
 	{
 		Con_Printf ("\nplaydemo <demoname> : plays a demo\n");
-		Con_Printf ("playdemo last       : plays last.dem if present, otherwise the most recently played demo\n");
+		Con_Printf ("playdemo last       : plays last.dem or last.dz if present, otherwise the most recently played demo\n");
 		Con_Printf ("playdemo -l         : plays the most recently played demo\n\n"); // woods #lastdemo
 		return;
 	}
@@ -2024,63 +2282,47 @@ void CL_PlayDemo_f (void)
 				return;
 			}
 		}
-		q_strlcpy(name, last_demo, sizeof(name));
+		q_strlcpy(requested, last_demo, sizeof(requested));
 	}
 	else
 	{
-		q_strlcpy(name, Cmd_Argv(1), sizeof(name));
-
-		if (!FS_IsCaseSensitive()) // woods #filesystemsens
-			q_strlwr (name);
-
-		if (allow_last_fallback)
-		{
-			COM_AddExtension (name, ".dem", sizeof(name));
-			q_snprintf(name2, sizeof(name2), "demos/%s", name); // woods #demosfolder
-
-			if (!COM_FileExists(name2, NULL) && !COM_FileExists(name, NULL))
-			{
-				if (!last_demo[0])
-					Load_Last_Demo();
-
-				if (!last_demo[0])
-				{
-					Con_Printf("no last demo available\n");
-					return;
-				}
-
-				q_strlcpy(name, last_demo, sizeof(name));
-			}
-		}
+		q_strlcpy(requested, Cmd_Argv(1), sizeof(requested));
 	}
 
 	if (!FS_IsCaseSensitive()) // woods #filesystemsens
-		q_strlwr (name);
+		q_strlwr (requested);
 
-	q_strlcpy(demoplaying, name, sizeof(demoplaying)); // store the resolved demo name for window title
-	COM_AddExtension (name, ".dem", sizeof(name));
-
-	q_snprintf(name2, sizeof(name2), "demos/%s", name); // woods #demosfolder
-
-	Con_Printf ("Playing demo from %s.\n", name2); // woods #demosfolder
-
-	COM_FOpenFile (name2, &cls.demofile, NULL); // check demos folder
-
-	if (!cls.demofile)
-		COM_FOpenFile(name, &cls.demofile, NULL); // check gamedir too
-
-	if (!cls.demofile)
+	if (!CL_DemoResolvePlayback(requested, &cls.demofile, &demo_size, opened_name, sizeof(opened_name)) && allow_last_fallback)
 	{
-		Con_Printf ("ERROR: couldn't open %s\n", name); // woods #demosfolder
+		if (!last_demo[0])
+			Load_Last_Demo();
+		if (!last_demo[0])
+		{
+			Con_Printf("no last demo available\n");
+			return;
+		}
+
+		q_strlcpy(requested, last_demo, sizeof(requested));
+		if (!FS_IsCaseSensitive())
+			q_strlwr(requested);
+	}
+
+	if (!cls.demofile && !CL_DemoResolvePlayback(requested, &cls.demofile, &demo_size, opened_name, sizeof(opened_name)))
+	{
+		Con_Printf ("ERROR: couldn't open %s\n", requested); // woods #demosfolder
 		cls.demonum = -1;	// stop demo loop
 		return;
 	}
 
+	q_strlcpy(demoplaying, opened_name, sizeof(demoplaying)); // store the resolved demo name for window title
+	Con_Printf ("Playing demo from %s.\n", opened_name);
+
 	// woods #demopercent (Baker Fitzquake Mark V)
 
-	strcpy(cls.demoname, name); 
+	com_filesize = demo_size;
+	q_strlcpy(cls.demoname, opened_name, sizeof(cls.demoname));
 	cls.demo_offset_start = ftell(cls.demofile);	// qfs_lastload.offset instead?
-	cls.demo_file_length = com_filesize;
+	cls.demo_file_length = demo_size;
 	cls.demo_hosttime_start = cls.demo_hosttime_elapsed = 0; // Fill this in ... host_time;
 	cls.demo_cltime_start = cls.demo_cltime_elapsed = 0; // Fill this in
 
@@ -2094,8 +2336,11 @@ void CL_PlayDemo_f (void)
 	{
 		fclose (cls.demofile);
 		cls.demofile = NULL;
+#ifdef USE_ZLIB
+		CL_DZipCleanupTempDemo();
+#endif
 		cls.demonum = -1;	// stop demo loop
-		Con_Printf ("ERROR: demo \"%s\" is invalid\n", name);
+		Con_Printf ("ERROR: demo \"%s\" is invalid\n", opened_name);
 		return;
 	}
 
@@ -2109,11 +2354,11 @@ void CL_PlayDemo_f (void)
 	// otherwise preserve the existing value
 	//if (!cls.basedemospeed) // woods (iw) #democontrols
 	cls.basedemospeed = 1.f; // woods (iw) #democontrols
-	q_strlcpy(cls.demofilename, name, sizeof(cls.demofilename)); // woods (iw) #democontrols
+	q_strlcpy(cls.demofilename, opened_name, sizeof(cls.demofilename)); // woods (iw) #democontrols
 	cls.state = ca_connected;
 	cls.demofilestart = ftell(cls.demofile); // woods(iw) #democontrols
-	cls.demofilesize = com_filesize; // woods (iw) #democontrols
-	q_strlcpy(last_demo, name, sizeof(last_demo));
+	cls.demofilesize = demo_size; // woods (iw) #democontrols
+	q_strlcpy(last_demo, opened_name, sizeof(last_demo));
 	Log_Last_Demo_f();
 
 // get rid of the menu and/or console
@@ -2173,3 +2418,2393 @@ void CL_TimeDemo_f (void)
 	cls.td_lastframe = -1;	// get a new message this frame
 }
 
+#ifdef USE_ZLIB
+/*
+==================
+DZip Support
+==================
+*/
+
+#define CL_DZIP_MAX_ENT			32768
+#define CL_DZIP_MAX_ENT_OLD		1024
+#define CL_DZIP_MAJOR_VERSION		3
+#define CL_DZIP_MINOR_VERSION		2
+#define CL_DZIP_INITCRC			0xffffffffU
+#define CL_DZIP_P_BLOCKSIZE		131072
+#define CL_DZIP_Z_BUFFER_SIZE		16384
+#define CL_DZIP_DIR_DISK_SIZE		32
+
+#define CL_DZIP_SU_PUNCH0		SU_PUNCH1
+#define CL_DZIP_SU_PUNCH1		SU_PUNCH2
+#define CL_DZIP_SU_PUNCH2		SU_PUNCH3
+#define CL_DZIP_SU_VELOCITY0		SU_VELOCITY1
+#define CL_DZIP_SU_VELOCITY1		SU_VELOCITY2
+#define CL_DZIP_SU_VELOCITY2		SU_VELOCITY3
+
+#define CL_DZIP_U_ORIGIN0		U_ORIGIN1
+#define CL_DZIP_U_ORIGIN1		U_ORIGIN2
+#define CL_DZIP_U_ORIGIN2		U_ORIGIN3
+#define CL_DZIP_U_ANGLE0		U_ANGLE1
+#define CL_DZIP_U_ANGLE1		U_ANGLE2
+#define CL_DZIP_U_ANGLE2		U_ANGLE3
+#define CL_DZIP_U_NOLERP		U_STEP
+
+enum
+{
+	CL_DZIP_TYPE_NORMAL,
+	CL_DZIP_TYPE_DEMV1,
+	CL_DZIP_TYPE_TXT,
+	CL_DZIP_TYPE_PAK,
+	CL_DZIP_TYPE_DZ,
+	CL_DZIP_TYPE_DEM,
+	CL_DZIP_TYPE_NEHAHRA,
+	CL_DZIP_TYPE_DIR,
+	CL_DZIP_TYPE_STORE,
+	CL_DZIP_TYPE_LAST
+};
+
+enum
+{
+	CL_DZIP_DEM_bad,
+	CL_DZIP_DEM_nop,
+	CL_DZIP_DEM_disconnect,
+	CL_DZIP_DEM_updatestat,
+	CL_DZIP_DEM_version,
+	CL_DZIP_DEM_setview,
+	CL_DZIP_DEM_sound,
+	CL_DZIP_DEM_time,
+	CL_DZIP_DEM_print,
+	CL_DZIP_DEM_stufftext,
+	CL_DZIP_DEM_setangle,
+	CL_DZIP_DEM_serverinfo,
+	CL_DZIP_DEM_lightstyle,
+	CL_DZIP_DEM_updatename,
+	CL_DZIP_DEM_updatefrags,
+	CL_DZIP_DEM_clientdata,
+	CL_DZIP_DEM_stopsound,
+	CL_DZIP_DEM_updatecolors,
+	CL_DZIP_DEM_particle,
+	CL_DZIP_DEM_damage,
+	CL_DZIP_DEM_spawnstatic,
+	CL_DZIP_DEM_spawnbinary,
+	CL_DZIP_DEM_spawnbaseline,
+	CL_DZIP_DEM_temp_entity,
+	CL_DZIP_DEM_setpause,
+	CL_DZIP_DEM_signonnum,
+	CL_DZIP_DEM_centerprint,
+	CL_DZIP_DEM_killedmonster,
+	CL_DZIP_DEM_foundsecret,
+	CL_DZIP_DEM_spawnstaticsound,
+	CL_DZIP_DEM_intermission,
+	CL_DZIP_DEM_finale,
+	CL_DZIP_DEM_cdtrack,
+	CL_DZIP_DEM_sellscreen,
+	CL_DZIP_DEM_cutscene,
+	CL_DZIP_DZ_longtime,
+	CL_DZIP_DEM_showlmp = 35,
+	CL_DZIP_DEM_hidelmp,
+	CL_DZIP_DEM_skybox,
+	CL_DZIP_DZ_showlmp,
+	CL_DZIP_DEM_bf = 40,
+	CL_DZIP_DEM_fog,
+	CL_DZIP_DEM_spawnbaseline2,
+	CL_DZIP_DEM_spawnstatic2,
+	CL_DZIP_DEM_spawnstaticsound2
+};
+
+#define CL_DZIP_IDENTIFIER_CLIENTDATA_FORCE	(0x40 | 0x10)
+#define CL_DZIP_IDENTIFIER_CLIENTDATA_DIFF	(0x40)
+#define CL_DZIP_IDENTIFIER_UPDATEENTITY_FORCE	(0x20 | 0x10 | 0x01)
+#define CL_DZIP_IDENTIFIER_UPDATEENTITY_DIFF	(0x20 | 0x10)
+#define CL_DZIP_IDENTIFIER_SOUND		(0x20 | 0x10 | 0x08)
+#define CL_DZIP_IDENTIFIER_UPDATEENTITY2_FORCE	(0x20 | 0x10 | 0x02)
+#define CL_DZIP_IDENTIFIER_SOUND_MOREBITS	(0x40 | 0x20)
+
+#define CL_DZIP_CD_VELOCITY0_FORCE	0x0001
+#define CL_DZIP_CD_VELOCITY1_FORCE	0x0002
+#define CL_DZIP_CD_VELOCITY2_FORCE	0x0004
+#define CL_DZIP_CD_MOREBITS_FORCE	0x0008
+#define CL_DZIP_CD_PUNCH0_FORCE		0x0100
+#define CL_DZIP_CD_PUNCH1_FORCE		0x0200
+#define CL_DZIP_CD_PUNCH2_FORCE		0x0400
+#define CL_DZIP_CD_VIEWHEIGHT_FORCE	0x0800
+#define CL_DZIP_CD_IDEALPITCH_FORCE	0x1000
+#define CL_DZIP_CD_WEAPONFRAME_FORCE	0x2000
+#define CL_DZIP_CD_ARMOR_FORCE		0x4000
+#define CL_DZIP_CD_WEAPON_FORCE		0x8000
+
+#define CL_DZIP_CD_VELOCITY2_DIFF	0x0000000001ULL
+#define CL_DZIP_CD_VELOCITY0_DIFF	0x0000000002ULL
+#define CL_DZIP_CD_VELOCITY1_DIFF	0x0000000004ULL
+#define CL_DZIP_CD_MOREBITS_DIFF	0x0000000008ULL
+#define CL_DZIP_CD_WEAPONFRAME_DIFF	0x0000000100ULL
+#define CL_DZIP_CD_ONGROUND_DIFF	0x0000000200ULL
+#define CL_DZIP_CD_PUNCH0_DIFF		0x0000000400ULL
+#define CL_DZIP_CD_AMMO_DIFF		0x0000000800ULL
+#define CL_DZIP_CD_HEALTH_DIFF		0x0000001000ULL
+#define CL_DZIP_CD_ITEMS_DIFF		0x0000002000ULL
+#define CL_DZIP_CD_ARMOR_DIFF		0x0000004000ULL
+#define CL_DZIP_CD_MOREBITS1_DIFF	0x0000008000ULL
+#define CL_DZIP_CD_IDEALPITCH_DIFF	0x0000010000ULL
+#define CL_DZIP_CD_SHELLS_DIFF		0x0000020000ULL
+#define CL_DZIP_CD_NAILS_DIFF		0x0000040000ULL
+#define CL_DZIP_CD_ROCKETS_DIFF		0x0000080000ULL
+#define CL_DZIP_CD_WEAPON_DIFF		0x0000100000ULL
+#define CL_DZIP_CD_WEAPONINDEX_DIFF	0x0000200000ULL
+#define CL_DZIP_CD_INWATER_DIFF		0x0000400000ULL
+#define CL_DZIP_CD_MOREBITS2_DIFF	0x0000800000ULL
+#define CL_DZIP_CD_VIEWHEIGHT_DIFF	0x0001000000ULL
+#define CL_DZIP_CD_CELLS_DIFF		0x0002000000ULL
+#define CL_DZIP_CD_PUNCH1_DIFF		0x0004000000ULL
+#define CL_DZIP_CD_PUNCH2_DIFF		0x0008000000ULL
+#define CL_DZIP_CD_INVBIT_DIFF		0x0010000000ULL
+#define CL_DZIP_CD_WEAPONFRAME2_DIFF	0x0020000000ULL
+#define CL_DZIP_CD_AMMO2_DIFF		0x0040000000ULL
+#define CL_DZIP_CD_MOREBITS3_DIFF	0x0080000000ULL
+#define CL_DZIP_CD_ARMOR2_DIFF		0x0100000000ULL
+#define CL_DZIP_CD_SHELLS2_DIFF		0x0200000000ULL
+#define CL_DZIP_CD_NAILS2_DIFF		0x0400000000ULL
+#define CL_DZIP_CD_ROCKETS2_DIFF	0x0800000000ULL
+#define CL_DZIP_CD_WEAPON2_DIFF		0x1000000000ULL
+#define CL_DZIP_CD_CELLS2_DIFF		0x2000000000ULL
+#define CL_DZIP_CD_WEAPONALPHA_DIFF	0x4000000000ULL
+
+#define CL_DZIP_SB_MOREBITS		0x0001
+#define CL_DZIP_SB_FRAME		0x0004
+#define CL_DZIP_SB_COLORMAP		0x0008
+#define CL_DZIP_SB_SKIN			0x0010
+#define CL_DZIP_SB_ORIGIN		0x0020
+#define CL_DZIP_SB_ANGLE1		0x0040
+#define CL_DZIP_SB_ANGLE0AND2		0x0080
+#define CL_DZIP_SB_LARGEENTITY		0x0100
+#define CL_DZIP_SB_LARGEMODEL		0x0200
+#define CL_DZIP_SB_LARGEFRAME		0x0400
+#define CL_DZIP_SB_ALPHA		0x0800
+
+#define CL_DZIP_UE_ORIGIN1_FORCE	0x00000400ULL
+#define CL_DZIP_UE_ANGLE0_FORCE		0x00000800ULL
+#define CL_DZIP_UE_ANGLE1_FORCE		0x00001000ULL
+#define CL_DZIP_UE_ANGLE2_FORCE		0x00002000ULL
+#define CL_DZIP_UE_FRAME_FORCE		0x00004000ULL
+#define CL_DZIP_UE_MOREBITS_FORCE	0x00008000ULL
+#define CL_DZIP_UE_ORIGIN0_FORCE	0x00010000ULL
+#define CL_DZIP_UE_ORIGIN2_FORCE	0x00020000ULL
+#define CL_DZIP_UE_MODEL_FORCE		0x00040000ULL
+#define CL_DZIP_UE_COLORMAP_FORCE	0x00080000ULL
+#define CL_DZIP_UE_SKIN_FORCE		0x00100000ULL
+#define CL_DZIP_UE_EFFECTS_FORCE	0x00200000ULL
+#define CL_DZIP_UE_LONGENTITY_FORCE	0x00400000ULL
+#define CL_DZIP_UE_TRANS_FORCE		0x00800000ULL
+#define CL_DZIP_UE_MOREBITS2_FORCE	0x00800000ULL
+#define CL_DZIP_UE_ALPHA_FORCE		0x01000000ULL
+#define CL_DZIP_UE_SCALE_FORCE		0x02000000ULL
+#define CL_DZIP_UE_LERPFINISH_FORCE	0x04000000ULL
+#define CL_DZIP_UE_MODEL2_FORCE		0x08000000ULL
+#define CL_DZIP_UE_FRAME2_FORCE		0x10000000ULL
+
+#define CL_DZIP_UE_ORIGIN2_DIFF		0x000001ULL
+#define CL_DZIP_UE_ORIGIN1_DIFF		0x000002ULL
+#define CL_DZIP_UE_ORIGIN0_DIFF		0x000004ULL
+#define CL_DZIP_UE_ANGLE0_DIFF		0x000008ULL
+#define CL_DZIP_UE_ANGLE1_DIFF		0x000010ULL
+#define CL_DZIP_UE_ANGLE2_DIFF		0x000020ULL
+#define CL_DZIP_UE_FRAME_SINGLE_DIFF	0x000040ULL
+#define CL_DZIP_UE_MOREBITS_DIFF	0x000080ULL
+#define CL_DZIP_UE_FRAME_NORMAL_DIFF	0x000100ULL
+#define CL_DZIP_UE_ORIGIN0_MOREBITS_DIFF	0x000200ULL
+#define CL_DZIP_UE_ORIGIN1_MOREBITS_DIFF	0x000400ULL
+#define CL_DZIP_UE_ORIGIN2_MOREBITS_DIFF	0x000800ULL
+#define CL_DZIP_UE_EFFECTS_DIFF		0x001000ULL
+#define CL_DZIP_UE_MODEL_DIFF		0x002000ULL
+#define CL_DZIP_UE_NOLERP_DIFF		0x004000ULL
+#define CL_DZIP_UE_MOREBITS2_DIFF	0x008000ULL
+#define CL_DZIP_UE_COLORMAP_DIFF	0x010000ULL
+#define CL_DZIP_UE_SKIN_DIFF		0x020000ULL
+#define CL_DZIP_UE_NEHAHRA_ALPHA_DIFF	0x040000ULL
+#define CL_DZIP_UE_NEHAHRA_FULLBRIGHT_DIFF	0x080000ULL
+#define CL_DZIP_UE_ALPHA_DIFF		0x040000ULL
+#define CL_DZIP_UE_SCALE_DIFF		0x080000ULL
+#define CL_DZIP_UE_LERPFINISH_DIFF	0x100000ULL
+#define CL_DZIP_UE_MODEL2_DIFF		0x200000ULL
+#define CL_DZIP_UE_FRAME2_DIFF		0x400000ULL
+
+typedef struct
+{
+	byte voz, pax;
+	byte ang0, ang1, ang2;
+	byte vel0, vel1, vel2;
+	int32_t items;
+	byte uk10, uk11, invbit;
+	int16_t wpf, av, wpm;
+	int health;
+	int16_t am, sh, nl, rk, ce;
+	byte wp;
+	int force;
+	byte weaponalpha;
+} cl_dzip_cdata_t;
+
+typedef struct
+{
+	uint32_t ptr;
+	uint32_t size;
+	uint32_t real;
+	uint16_t len;
+	uint16_t pak;
+	uint32_t crc;
+	uint32_t type;
+	uint32_t date;
+	uint32_t inter;
+	char *name;
+} cl_dzip_direntry_t;
+
+typedef struct
+{
+	int16_t modelindex, frame;
+	byte colormap, skin;
+	byte effects;
+	byte ang0, ang1, ang2;
+	byte newbit, present, active;
+	byte fullbright;
+	int org0, org1, org2;
+	int od0, od1, od2;
+	int force;
+	float alpha;
+	byte transparency;
+	byte scale;
+	byte lerpfinish;
+} cl_dzip_ent_t;
+
+static const byte cl_dzip_te_size[] =
+{
+	8, 8, 8, 8, 8, 16, 16, 8, 8, 16, 8, 8, 10, 16, 8, 8, 14
+};
+
+static byte *cl_dzip_inblk;
+static byte *cl_dzip_outblk;
+static byte *cl_dzip_inptr;
+static byte *cl_dzip_workbuf;
+static byte *cl_dzip_zbuf;
+static long cl_dzip_outlen;
+static unsigned int cl_dzip_totalsize;
+static cl_dzip_cdata_t cl_dzip_oldcd, cl_dzip_newcd;
+static cl_dzip_ent_t cl_dzip_base[CL_DZIP_MAX_ENT];
+static cl_dzip_ent_t cl_dzip_oldent[CL_DZIP_MAX_ENT];
+static cl_dzip_ent_t cl_dzip_newent[CL_DZIP_MAX_ENT];
+static int cl_dzip_entlink[CL_DZIP_MAX_ENT];
+static byte cl_dzip_dem_updateframe;
+static byte cl_dzip_copybaseline;
+static long cl_dzip_dem_gametime;
+static int cl_dzip_maxent;
+static int cl_dzip_lastent;
+static int cl_dzip_sble;
+static unsigned long cl_dzip_cam0, cl_dzip_cam1, cl_dzip_cam2;
+static int cl_dzip_protocol = PROTOCOL_NETQUAKE;
+static unsigned int cl_dzip_protocolflags;
+static int cl_dzip_decode_type;
+static unsigned long cl_dzip_crctable[256];
+static unsigned long cl_dzip_crcval;
+static cl_dzip_direntry_t *cl_dzip_directory;
+static int cl_dzip_numfiles;
+static int cl_dzip_maj_ver, cl_dzip_min_ver;
+static unsigned int cl_dzip_directory_offset;
+static FILE *cl_dzip_archive_file;
+static FILE *cl_dzip_output_file;
+static long cl_dzip_archive_base;
+static qofs_t cl_dzip_archive_size;
+static z_stream cl_dzip_zs;
+static unsigned int cl_dzip_ztotal;
+static qboolean cl_dzip_crc_enabled;
+static char cl_dzip_playback_temp_path[MAX_OSPATH];
+static unsigned int cl_dzip_temp_serial;
+
+#define CL_DZipDiscardMsg(x) (cl_dzip_inptr += (x))
+
+static uint16_t CL_DZipReadLE16(const byte *buf)
+{
+	return (uint16_t)(buf[0] | (buf[1] << 8));
+}
+
+static uint32_t CL_DZipReadLE32(const byte *buf)
+{
+	return (uint32_t)buf[0]
+		| ((uint32_t)buf[1] << 8)
+		| ((uint32_t)buf[2] << 16)
+		| ((uint32_t)buf[3] << 24);
+}
+
+static void CL_DZipWriteLE16(byte *buf, uint16_t value)
+{
+	buf[0] = (byte)(value & 0xff);
+	buf[1] = (byte)((value >> 8) & 0xff);
+}
+
+static void CL_DZipWriteLE32(byte *buf, uint32_t value)
+{
+	buf[0] = (byte)(value & 0xff);
+	buf[1] = (byte)((value >> 8) & 0xff);
+	buf[2] = (byte)((value >> 16) & 0xff);
+	buf[3] = (byte)((value >> 24) & 0xff);
+}
+
+static int16_t CL_DZipGetShort(const byte *buf)
+{
+	return (int16_t)CL_DZipReadLE16(buf);
+}
+
+static int32_t CL_DZipGetLong(const byte *buf)
+{
+	return (int32_t)CL_DZipReadLE32(buf);
+}
+
+static float CL_DZipGetFloat(const byte *buf)
+{
+	float f;
+	uint32_t tmp = CL_DZipReadLE32(buf);
+	memcpy(&f, &tmp, sizeof(f));
+	return f;
+}
+
+static unsigned long CL_DZipCRCReflect(unsigned long x, int bits)
+{
+	int i;
+	unsigned long value = 0;
+	unsigned long bit = 1UL << (bits - 1);
+
+	for (i = 0; i < bits; ++i)
+	{
+		if (x & 1)
+			value += bit;
+		x >>= 1;
+		bit >>= 1;
+	}
+
+	return value;
+}
+
+static void CL_DZipCRCInit(void)
+{
+	unsigned long crcpol = 0x04c11db7;
+	unsigned long i, j, k;
+
+	for (i = 0; i < 256; ++i)
+	{
+		k = CL_DZipCRCReflect(i, 8) << 24;
+		for (j = 0; j < 8; ++j)
+			k = (k << 1) ^ ((k & 0x80000000UL) ? crcpol : 0);
+		cl_dzip_crctable[i] = CL_DZipCRCReflect(k, 32);
+	}
+}
+
+static void CL_DZipMakeCRC(const byte *ptr, int len)
+{
+	while (len-- > 0)
+		cl_dzip_crcval = (cl_dzip_crcval >> 8) ^ cl_dzip_crctable[(cl_dzip_crcval & 0xff) ^ *ptr++];
+}
+
+static qboolean CL_DZipArchiveRead(void *buf, unsigned int num)
+{
+	if (!buf || !cl_dzip_archive_file)
+		return false;
+
+	return fread(buf, 1, num, cl_dzip_archive_file) == num;
+}
+
+static qboolean CL_DZipArchiveSeek(unsigned int pos)
+{
+	if (!cl_dzip_archive_file)
+		return false;
+
+	return fseek(cl_dzip_archive_file, cl_dzip_archive_base + (long)pos, SEEK_SET) == 0;
+}
+
+static qboolean CL_DZipOutputWrite(const void *buf, unsigned int num)
+{
+	if (num && cl_dzip_output_file && fwrite(buf, 1, num, cl_dzip_output_file) != num)
+		return false;
+
+	if (num && cl_dzip_crc_enabled)
+		CL_DZipMakeCRC((const byte *)buf, (int)num);
+
+	return true;
+}
+
+static void CL_DZipCopyMsg(unsigned int num)
+{
+	memcpy(cl_dzip_outblk + cl_dzip_outlen, cl_dzip_inptr, num);
+	cl_dzip_outlen += num;
+	cl_dzip_inptr += num;
+}
+
+static void CL_DZipInsertMsg(const void *msg, unsigned int num)
+{
+	memcpy(cl_dzip_outblk + cl_dzip_outlen, msg, num);
+	cl_dzip_outlen += num;
+}
+
+static int CL_DZipBPlus(int x, int y)
+{
+	if (x >= 128)
+		x -= 256;
+	return y + x;
+}
+
+static void CL_DZipFreeDirectory(void)
+{
+	int i;
+
+	if (!cl_dzip_directory)
+		return;
+
+	for (i = 0; i < cl_dzip_numfiles; ++i)
+		free(cl_dzip_directory[i].name);
+
+	free(cl_dzip_directory);
+	cl_dzip_directory = NULL;
+	cl_dzip_numfiles = 0;
+}
+
+static int CL_DZipZRead(int inlen)
+{
+	int toread, bsize;
+
+	toread = CL_DZIP_P_BLOCKSIZE - inlen;
+	cl_dzip_zs.next_out = cl_dzip_inblk + inlen;
+	cl_dzip_zs.avail_out = toread;
+	cl_dzip_totalsize += (unsigned int)toread;
+
+	while (cl_dzip_zs.avail_out)
+	{
+		if (!cl_dzip_zs.avail_in && cl_dzip_ztotal)
+		{
+			bsize = (cl_dzip_ztotal > CL_DZIP_Z_BUFFER_SIZE) ? CL_DZIP_Z_BUFFER_SIZE : (int)cl_dzip_ztotal;
+			cl_dzip_ztotal -= bsize;
+			if (!CL_DZipArchiveRead(cl_dzip_zbuf, bsize))
+				return 0;
+			cl_dzip_zs.next_in = cl_dzip_zbuf;
+			cl_dzip_zs.avail_in = bsize;
+		}
+
+		bsize = inflate(&cl_dzip_zs, Z_NO_FLUSH);
+		if (bsize == Z_DATA_ERROR)
+			return 0;
+		if (bsize == Z_STREAM_END)
+			return 1;
+	}
+
+	return 1;
+}
+
+static qboolean CL_DZipReadDirectory(const char *archive_name)
+{
+	byte header[12];
+	byte entrybuf[CL_DZIP_DIR_DISK_SIZE];
+	unsigned int offset;
+	unsigned int i;
+	unsigned int archive_bytes;
+	unsigned int dir_disk_size;
+
+	archive_bytes = (unsigned int)cl_dzip_archive_size;
+	if (archive_bytes < sizeof(header))
+	{
+		Con_Printf("DZip: %s is not a valid dz file\n", archive_name);
+		return false;
+	}
+
+	if (!CL_DZipArchiveSeek(0) || !CL_DZipArchiveRead(header, sizeof(header)))
+		return false;
+
+	if ((CL_DZipReadLE32(header) & 0xffff) != ('D' + ('Z' << 8)))
+	{
+		Con_Printf("DZip: %s is not a valid dz file\n", archive_name);
+		return false;
+	}
+
+	cl_dzip_maj_ver = (CL_DZipReadLE32(header) >> 16) & 0xff;
+	cl_dzip_min_ver = (CL_DZipReadLE32(header) >> 24) & 0xff;
+	offset = CL_DZipReadLE32(header + 4);
+	cl_dzip_directory_offset = offset;
+	cl_dzip_numfiles = (int)CL_DZipReadLE32(header + 8);
+	dir_disk_size = (cl_dzip_maj_ver == 1) ? (CL_DZIP_DIR_DISK_SIZE - 8) : CL_DZIP_DIR_DISK_SIZE;
+
+	if (cl_dzip_maj_ver > CL_DZIP_MAJOR_VERSION)
+	{
+		Con_Printf("DZip: %s was compressed with version %u.%u\n", archive_name, cl_dzip_maj_ver, cl_dzip_min_ver);
+		return false;
+	}
+
+	if (cl_dzip_numfiles <= 0 || offset >= archive_bytes)
+	{
+		Con_Printf("DZip: %s has a corrupt directory\n", archive_name);
+		return false;
+	}
+
+	if ((unsigned int)cl_dzip_numfiles > archive_bytes / dir_disk_size)
+	{
+		Con_Printf("DZip: %s has too many directory entries\n", archive_name);
+		return false;
+	}
+
+	cl_dzip_directory = (cl_dzip_direntry_t *)calloc((size_t)cl_dzip_numfiles, sizeof(*cl_dzip_directory));
+	if (!cl_dzip_directory)
+	{
+		Con_Printf("DZip: out of memory reading %s\n", archive_name);
+		return false;
+	}
+
+	if (!CL_DZipArchiveSeek(offset))
+		return false;
+
+	for (i = 0; i < (unsigned int)cl_dzip_numfiles; ++i)
+	{
+		cl_dzip_direntry_t *de = &cl_dzip_directory[i];
+		unsigned int j;
+
+		memset(entrybuf, 0, sizeof(entrybuf));
+		if (!CL_DZipArchiveRead(entrybuf, dir_disk_size))
+		{
+			Con_Printf("DZip: %s has a truncated directory\n", archive_name);
+			return false;
+		}
+
+		de->ptr = CL_DZipReadLE32(entrybuf + 0);
+		de->size = CL_DZipReadLE32(entrybuf + 4);
+		de->real = CL_DZipReadLE32(entrybuf + 8);
+		de->len = CL_DZipReadLE16(entrybuf + 12);
+		de->pak = CL_DZipReadLE16(entrybuf + 14);
+		de->crc = CL_DZipReadLE32(entrybuf + 16);
+		de->type = CL_DZipReadLE32(entrybuf + 20);
+		de->date = CL_DZipReadLE32(entrybuf + 24);
+		de->inter = CL_DZipReadLE32(entrybuf + 28);
+
+		if (de->type == CL_DZIP_TYPE_DEMV1 && cl_dzip_maj_ver > 1)
+		{
+			Con_Printf("DZip: %s has an invalid legacy demo entry\n", archive_name);
+			return false;
+		}
+
+		if (de->len == 0 || de->len > MAX_OSPATH)
+		{
+			Con_Printf("DZip: %s has an invalid entry name length\n", archive_name);
+			return false;
+		}
+
+		if (cl_dzip_maj_ver > 1 && (de->ptr > archive_bytes || de->size > archive_bytes || de->ptr + de->size > archive_bytes))
+		{
+			Con_Printf("DZip: %s has a corrupt directory entry\n", archive_name);
+			return false;
+		}
+
+		de->name = (char *)malloc(de->len);
+		if (!de->name)
+		{
+			Con_Printf("DZip: out of memory reading %s\n", archive_name);
+			return false;
+		}
+
+		if (!CL_DZipArchiveRead(de->name, de->len))
+		{
+			Con_Printf("DZip: %s has a truncated directory entry\n", archive_name);
+			return false;
+		}
+
+		de->name[de->len - 1] = '\0';
+		for (j = 0; j + 1 < de->len; ++j)
+			if (de->name[j] == '\\')
+				de->name[j] = '/';
+	}
+
+	return true;
+}
+
+static qboolean CL_DZipEntryLooksPlayableDemo(const cl_dzip_direntry_t *de)
+{
+	const char *ext;
+
+	if (!de || !de->name || !de->name[0])
+		return false;
+
+	ext = COM_FileGetExtension(de->name);
+	if (q_strcasecmp(ext, "dem"))
+		return false;
+
+	switch (de->type)
+	{
+	case CL_DZIP_TYPE_DEMV1:
+	case CL_DZIP_TYPE_DEM:
+	case CL_DZIP_TYPE_NORMAL:
+	case CL_DZIP_TYPE_STORE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static cl_dzip_direntry_t *CL_DZipFindDemoEntry(const char *archive_name)
+{
+	char wanted[MAX_QPATH];
+	int i;
+	cl_dzip_direntry_t *fallback = NULL;
+
+	COM_FileBase(COM_SkipPath(archive_name), wanted, sizeof(wanted));
+
+	for (i = 0; i < cl_dzip_numfiles; ++i)
+	{
+		cl_dzip_direntry_t *de = &cl_dzip_directory[i];
+		char basename[MAX_QPATH];
+
+		if (!CL_DZipEntryLooksPlayableDemo(de))
+			continue;
+
+		if (!fallback)
+			fallback = de;
+
+		COM_FileBase(COM_SkipPath(de->name), basename, sizeof(basename));
+		if (!q_strcasecmp(basename, wanted))
+			return de;
+	}
+
+	return fallback;
+}
+
+static qboolean CL_DZipMakePlaybackTempPath(char *out, size_t outsize)
+{
+	char demodir[MAX_OSPATH];
+
+	q_snprintf(demodir, sizeof(demodir), "%s/demos", com_gamedir);
+	Sys_mkdir(demodir);
+
+	++cl_dzip_temp_serial;
+	q_snprintf(out, outsize, "%s/demos/__dzip_playback_%u.dem", com_gamedir, cl_dzip_temp_serial);
+	return true;
+}
+
+static void CL_DZipCleanupTempDemo(void)
+{
+	if (cl_dzip_playback_temp_path[0])
+	{
+		remove(cl_dzip_playback_temp_path);
+		cl_dzip_playback_temp_path[0] = '\0';
+	}
+}
+
+static qboolean CL_DZipAllocDecodeBuffers(void)
+{
+	if (cl_dzip_workbuf)
+		return true;
+
+	cl_dzip_workbuf = (byte *)malloc(CL_DZIP_P_BLOCKSIZE * 2 + CL_DZIP_Z_BUFFER_SIZE);
+	if (!cl_dzip_workbuf)
+		return false;
+
+	cl_dzip_inblk = cl_dzip_workbuf;
+	cl_dzip_outblk = cl_dzip_inblk + CL_DZIP_P_BLOCKSIZE;
+	cl_dzip_zbuf = cl_dzip_outblk + CL_DZIP_P_BLOCKSIZE;
+	return true;
+}
+
+static void CL_DZipFreeDecodeBuffers(void)
+{
+	free(cl_dzip_workbuf);
+	cl_dzip_workbuf = NULL;
+	cl_dzip_inblk = NULL;
+	cl_dzip_outblk = NULL;
+	cl_dzip_zbuf = NULL;
+}
+
+static void CL_DZipCreateClientdataMsg(void)
+{
+	byte buf[64];
+	byte *ptr = buf + 3;
+	int mask = cl_dzip_newcd.invbit ? 0 : SU_ITEMS;
+	uint32_t tmp;
+
+	buf[0] = CL_DZIP_DEM_clientdata;
+
+#define CL_DZIP_CMADD(x, def, bit, forcebit) \
+	if ((cl_dzip_newcd.x & 0xff) != (def) || (cl_dzip_newcd.force & (forcebit))) \
+	{ \
+		mask |= (bit); \
+		*ptr++ = cl_dzip_newcd.x & 0xff; \
+	}
+#define CL_DZIP_CMADD_2HI(x, def, bit) \
+	if ((cl_dzip_newcd.x >> 8) != (def)) \
+	{ \
+		mask |= (bit); \
+		*ptr++ = (cl_dzip_newcd.x >> 8); \
+	}
+
+	CL_DZIP_CMADD(voz, 22, SU_VIEWHEIGHT, CL_DZIP_CD_VIEWHEIGHT_FORCE);
+	CL_DZIP_CMADD(pax, 0, SU_IDEALPITCH, CL_DZIP_CD_IDEALPITCH_FORCE);
+	CL_DZIP_CMADD(ang0, 0, CL_DZIP_SU_PUNCH0, CL_DZIP_CD_PUNCH0_FORCE);
+	CL_DZIP_CMADD(vel0, 0, CL_DZIP_SU_VELOCITY0, CL_DZIP_CD_VELOCITY0_FORCE);
+	CL_DZIP_CMADD(ang1, 0, CL_DZIP_SU_PUNCH1, CL_DZIP_CD_PUNCH1_FORCE);
+	CL_DZIP_CMADD(vel1, 0, CL_DZIP_SU_VELOCITY1, CL_DZIP_CD_VELOCITY1_FORCE);
+	CL_DZIP_CMADD(ang2, 0, CL_DZIP_SU_PUNCH2, CL_DZIP_CD_PUNCH2_FORCE);
+	CL_DZIP_CMADD(vel2, 0, CL_DZIP_SU_VELOCITY2, CL_DZIP_CD_VELOCITY2_FORCE);
+
+	tmp = LittleLong((uint32_t)cl_dzip_newcd.items);
+	memcpy(ptr, &tmp, 4);
+	ptr += 4;
+
+	if (cl_dzip_newcd.uk10)
+		mask |= SU_ONGROUND;
+	if (cl_dzip_newcd.uk11)
+		mask |= SU_INWATER;
+
+	CL_DZIP_CMADD(wpf, 0, SU_WEAPONFRAME, CL_DZIP_CD_WEAPONFRAME_FORCE);
+	CL_DZIP_CMADD(av, 0, SU_ARMOR, CL_DZIP_CD_ARMOR_FORCE);
+	CL_DZIP_CMADD(wpm, 0, SU_WEAPON, CL_DZIP_CD_WEAPON_FORCE);
+
+	CL_DZipWriteLE16(ptr, (uint16_t)cl_dzip_newcd.health);
+	ptr += 2;
+	*ptr++ = cl_dzip_newcd.am;
+	*ptr++ = cl_dzip_newcd.sh;
+	*ptr++ = cl_dzip_newcd.nl;
+	*ptr++ = cl_dzip_newcd.rk;
+	*ptr++ = cl_dzip_newcd.ce;
+	*ptr++ = cl_dzip_newcd.wp;
+
+	CL_DZIP_CMADD_2HI(wpm, 0, SU_WEAPON2);
+	CL_DZIP_CMADD_2HI(av, 0, SU_ARMOR2);
+	CL_DZIP_CMADD_2HI(am, 0, SU_AMMO2);
+	CL_DZIP_CMADD_2HI(sh, 0, SU_SHELLS2);
+	CL_DZIP_CMADD_2HI(nl, 0, SU_NAILS2);
+	CL_DZIP_CMADD_2HI(rk, 0, SU_ROCKETS2);
+	CL_DZIP_CMADD_2HI(ce, 0, SU_CELLS2);
+	CL_DZIP_CMADD_2HI(wpf, 0, SU_WEAPONFRAME2);
+
+	if (cl_dzip_newcd.weaponalpha != cl_dzip_oldcd.weaponalpha)
+	{
+		mask |= SU_WEAPONALPHA;
+		*ptr++ = cl_dzip_newcd.weaponalpha;
+	}
+
+	if (mask & 0xff000000)
+	{
+		memmove(buf + 5, buf + 3, (size_t)(ptr - (buf + 3)));
+		ptr += 2;
+	}
+	else if (mask & 0xff0000)
+	{
+		memmove(buf + 4, buf + 3, (size_t)(ptr - (buf + 3)));
+		ptr += 1;
+	}
+
+	if (mask & 0xff000000)
+	{
+		buf[4] = (mask >> 24) & 0xff;
+		mask |= SU_EXTEND2;
+	}
+	if (mask & 0xffff0000)
+	{
+		buf[3] = (mask >> 16) & 0xff;
+		mask |= SU_EXTEND1;
+	}
+
+	CL_DZipWriteLE16(buf + 1, (uint16_t)(mask & 0xffff));
+	CL_DZipInsertMsg(buf, (unsigned int)(ptr - buf));
+
+	cl_dzip_oldcd = cl_dzip_newcd;
+
+#undef CL_DZIP_CMADD
+#undef CL_DZIP_CMADD_2HI
+}
+
+static void CL_DZipDemv1Clientdata(void)
+{
+	byte *ptr = cl_dzip_inptr;
+	int mask = *ptr++;
+
+	if (mask & 0x01) mask += *ptr++ << 8;
+	if (mask & 0x0100) mask += *ptr++ << 16;
+	if (mask & 0x010000) mask += *ptr++ << 24;
+
+#define CL_DZIP_DEMV1_CPLUS(x, bit) \
+	if (mask & (bit)) cl_dzip_newcd.x = CL_DZipBPlus(*ptr++, cl_dzip_oldcd.x)
+
+	CL_DZIP_DEMV1_CPLUS(voz, 0x01000000);
+	CL_DZIP_DEMV1_CPLUS(pax, 0x00100000);
+	CL_DZIP_DEMV1_CPLUS(ang0, 0x08000000);
+	CL_DZIP_DEMV1_CPLUS(ang1, 0x04000000);
+	CL_DZIP_DEMV1_CPLUS(ang2, 0x02000000);
+	CL_DZIP_DEMV1_CPLUS(vel0, 0x00000008);
+	CL_DZIP_DEMV1_CPLUS(vel1, 0x00000004);
+	CL_DZIP_DEMV1_CPLUS(vel2, 0x00000002);
+	if (mask & 0x00008000) cl_dzip_newcd.uk10 = !cl_dzip_oldcd.uk10;
+	if (mask & 0x00400000) cl_dzip_newcd.uk11 = !cl_dzip_oldcd.uk11;
+	if (mask & 0x10000000) cl_dzip_newcd.invbit = !cl_dzip_oldcd.invbit;
+	if (mask & 0x00200000)
+	{
+		cl_dzip_newcd.items += CL_DZipGetLong(ptr);
+		ptr += 4;
+	}
+	CL_DZIP_DEMV1_CPLUS(wpf, 0x00004000);
+	CL_DZIP_DEMV1_CPLUS(av, 0x00080000);
+	CL_DZIP_DEMV1_CPLUS(wpm, 0x00020000);
+	if (mask & 0x00040000)
+	{
+		cl_dzip_newcd.health += CL_DZipGetShort(ptr);
+		ptr += 2;
+	}
+	CL_DZIP_DEMV1_CPLUS(am, 0x00002000);
+	CL_DZIP_DEMV1_CPLUS(sh, 0x00001000);
+	CL_DZIP_DEMV1_CPLUS(nl, 0x00000800);
+	CL_DZIP_DEMV1_CPLUS(rk, 0x00000400);
+	CL_DZIP_DEMV1_CPLUS(ce, 0x00800000);
+	CL_DZIP_DEMV1_CPLUS(wp, 0x00000200);
+
+	CL_DZipDiscardMsg((int)(ptr - cl_dzip_inptr));
+
+	if ((*ptr & 0xf0) == 0xe0)
+	{
+		mask = *ptr++;
+		if (mask & 0x08) mask |= *ptr++ << 8;
+		cl_dzip_newcd.force ^= mask & 0xff07;
+		CL_DZipDiscardMsg((int)(ptr - cl_dzip_inptr));
+	}
+
+	CL_DZipCreateClientdataMsg();
+
+#undef CL_DZIP_DEMV1_CPLUS
+}
+
+static void CL_DZipDemv1Updateentity(void)
+{
+	byte *ptr = cl_dzip_inptr + 1;
+	byte code = *cl_dzip_inptr;
+	int mask, entity;
+	cl_dzip_ent_t n, o;
+
+	cl_dzip_dem_updateframe = 1;
+
+	if (code == 0x82)
+	{
+		CL_DZipDiscardMsg(1);
+		return;
+	}
+
+	if (code == 0x83)
+	{
+		while ((entity = CL_DZipGetShort(ptr)))
+		{
+			ptr += 2;
+			memcpy(cl_dzip_newent + entity, cl_dzip_base + entity, sizeof(cl_dzip_ent_t));
+			memcpy(cl_dzip_oldent + entity, cl_dzip_base + entity, sizeof(cl_dzip_ent_t));
+		}
+		CL_DZipDiscardMsg((int)(ptr - cl_dzip_inptr + 2));
+		return;
+	}
+
+	if (code == 0x84)
+	{
+		while ((mask = CL_DZipGetShort(ptr)))
+		{
+			ptr += 2;
+			mask &= 0xffff;
+			if (mask & CL_DZIP_UE_MOREBITS_FORCE) mask |= *ptr++ << 16;
+			entity = mask & 0x3ff;
+			if (entity > cl_dzip_maxent) cl_dzip_maxent = entity;
+			cl_dzip_newent[entity].force ^= mask & 0xfffc00;
+		}
+		CL_DZipDiscardMsg((int)(ptr - cl_dzip_inptr + 2));
+		return;
+	}
+
+	for (;;)
+	{
+		if (code == 0x81)
+		{
+			mask = (*ptr++ << 8) + 1;
+			code = 0x80;
+		}
+		else
+		{
+			mask = CL_DZipGetShort(ptr) & 0xffff;
+			ptr += 2;
+		}
+
+		if (mask & 0x8000) mask += (*ptr++) << 16;
+		if (mask & 0x800000) mask += (*ptr++) << 24;
+
+		entity = mask & 0x1ff;
+		if (mask & 0x08000000) entity += 0x200;
+		if (entity > cl_dzip_maxent) cl_dzip_maxent = entity;
+		if (!entity) break;
+
+		n = cl_dzip_newent[entity];
+		o = cl_dzip_oldent[entity];
+		n.present = 1;
+		if (mask & 0x010000) n.modelindex = *ptr++;
+		if (mask & 0x0200) n.frame = o.frame + 1;
+		if (mask & 0x080000) n.frame = CL_DZipBPlus(*ptr++, o.frame);
+		if (mask & 0x01000000) n.colormap = *ptr++;
+		if (mask & 0x02000000) n.skin = *ptr++;
+		if (mask & 0x04000000) n.effects = *ptr++;
+		if (mask & 0x0400) n.org0 = CL_DZipBPlus(*ptr++, o.org0);
+		if (mask & 0x100000) { n.org0 = CL_DZipGetShort(ptr); ptr += 2; }
+		if (mask & 0x2000) n.ang0 = CL_DZipBPlus(*ptr++, o.ang0);
+		if (mask & 0x0800) n.org1 = CL_DZipBPlus(*ptr++, o.org1);
+		if (mask & 0x200000) { n.org1 = CL_DZipGetShort(ptr); ptr += 2; }
+		if (mask & 0x4000) n.ang1 = CL_DZipBPlus(*ptr++, o.ang1);
+		if (mask & 0x1000) n.org2 = CL_DZipBPlus(*ptr++, o.org2);
+		if (mask & 0x400000) { n.org2 = CL_DZipGetShort(ptr); ptr += 2; }
+		if (mask & 0x020000) n.ang2 = CL_DZipBPlus(*ptr++, o.ang2);
+		if (mask & 0x040000) n.newbit = !o.newbit;
+		cl_dzip_newent[entity] = n;
+	}
+
+	CL_DZipDiscardMsg((int)(ptr - cl_dzip_inptr));
+}
+
+static void CL_DZipDemv1Dxentities(void)
+{
+	byte buf[32];
+	byte *ptr;
+	int i, mask;
+
+	for (i = 1; i <= cl_dzip_maxent; ++i)
+	{
+		cl_dzip_ent_t n = cl_dzip_newent[i];
+		cl_dzip_ent_t b = cl_dzip_base[i];
+
+		if (!n.present)
+			continue;
+
+		ptr = buf + 2;
+		mask = U_SIGNAL;
+
+		if (i > 0xff || (n.force & CL_DZIP_UE_LONGENTITY_FORCE))
+		{
+			CL_DZipWriteLE16(ptr, (uint16_t)i);
+			ptr += 2;
+			mask |= U_LONGENTITY;
+		}
+		else
+		{
+			*ptr++ = i;
+		}
+
+#define CL_DZIP_DEMV1_BDIFF(field, bit, forcebit) \
+		if ((n.field) != (b.field) || (n.force & (forcebit))) \
+		{ \
+			*ptr++ = (n.field); \
+			mask |= (bit); \
+		}
+
+		CL_DZIP_DEMV1_BDIFF(modelindex, U_MODEL, CL_DZIP_UE_MODEL_FORCE);
+		CL_DZIP_DEMV1_BDIFF(frame, U_FRAME, CL_DZIP_UE_FRAME_FORCE);
+		CL_DZIP_DEMV1_BDIFF(colormap, U_COLORMAP, CL_DZIP_UE_COLORMAP_FORCE);
+		CL_DZIP_DEMV1_BDIFF(skin, U_SKIN, CL_DZIP_UE_SKIN_FORCE);
+		CL_DZIP_DEMV1_BDIFF(effects, U_EFFECTS, CL_DZIP_UE_EFFECTS_FORCE);
+		if (n.org0 != b.org0 || (n.force & CL_DZIP_UE_ORIGIN0_FORCE)) { mask |= CL_DZIP_U_ORIGIN0; CL_DZipWriteLE16(ptr, (uint16_t)n.org0); ptr += 2; }
+		CL_DZIP_DEMV1_BDIFF(ang0, CL_DZIP_U_ANGLE0, CL_DZIP_UE_ANGLE0_FORCE);
+		if (n.org1 != b.org1 || (n.force & CL_DZIP_UE_ORIGIN1_FORCE)) { mask |= CL_DZIP_U_ORIGIN1; CL_DZipWriteLE16(ptr, (uint16_t)n.org1); ptr += 2; }
+		CL_DZIP_DEMV1_BDIFF(ang1, CL_DZIP_U_ANGLE1, CL_DZIP_UE_ANGLE1_FORCE);
+		if (n.org2 != b.org2 || (n.force & CL_DZIP_UE_ORIGIN2_FORCE)) { mask |= CL_DZIP_U_ORIGIN2; CL_DZipWriteLE16(ptr, (uint16_t)n.org2); ptr += 2; }
+		CL_DZIP_DEMV1_BDIFF(ang2, CL_DZIP_U_ANGLE2, CL_DZIP_UE_ANGLE2_FORCE);
+		if (n.newbit) mask |= CL_DZIP_U_NOLERP;
+
+		if (mask & 0xff00) mask |= U_MOREBITS;
+		buf[0] = mask & 0xff;
+		buf[1] = (mask & 0xff00) >> 8;
+		if (!(mask & U_MOREBITS))
+		{
+			memmove(buf + 1, buf + 2, (size_t)(ptr - buf - 2));
+			--ptr;
+		}
+
+		CL_DZipInsertMsg(buf, (unsigned int)(ptr - buf));
+		memcpy(cl_dzip_oldent + i, cl_dzip_newent + i, sizeof(cl_dzip_ent_t));
+
+#undef CL_DZIP_DEMV1_BDIFF
+	}
+}
+
+static void CL_DZipDemxNop(void) { CL_DZipCopyMsg(1); }
+static void CL_DZipDemxDisconnect(void) { CL_DZipCopyMsg(1); }
+static void CL_DZipDemxUpdatestat(void) { CL_DZipCopyMsg(6); }
+static void CL_DZipDemxVersion(void) { CL_DZipCopyMsg(5); }
+static void CL_DZipDemxSetview(void) { CL_DZipCopyMsg(3); }
+static void CL_DZipDemxSetangle(void) { CL_DZipCopyMsg(4); }
+static void CL_DZipDemxStopsound(void) { CL_DZipCopyMsg(3); }
+static void CL_DZipDemxUpdatecolors(void) { CL_DZipCopyMsg(3); }
+static void CL_DZipDemxParticle(void) { CL_DZipCopyMsg(12); }
+static void CL_DZipDemxDamage(void) { CL_DZipCopyMsg(9); }
+static void CL_DZipDemxSpawnstatic(void) { CL_DZipCopyMsg(14); }
+static void CL_DZipDemxSpawnbinary(void) { CL_DZipCopyMsg(1); }
+static void CL_DZipDemxSetpause(void) { CL_DZipCopyMsg(2); }
+static void CL_DZipDemxSignonnum(void) { CL_DZipCopyMsg(2); }
+static void CL_DZipDemxKilledmonster(void) { CL_DZipCopyMsg(1); }
+static void CL_DZipDemxFoundsecret(void) { CL_DZipCopyMsg(1); }
+static void CL_DZipDemxSpawnstaticsound(void) { CL_DZipCopyMsg(10); }
+static void CL_DZipDemxIntermission(void) { CL_DZipCopyMsg(1); }
+static void CL_DZipDemxCdtrack(void) { CL_DZipCopyMsg(3); }
+static void CL_DZipDemxSellscreen(void) { CL_DZipCopyMsg(1); }
+static void CL_DZipDemxUpdatefrags(void) { CL_DZipCopyMsg(4); }
+static void CL_DZipDemxFog(void) { CL_DZipCopyMsg(6); }
+static void CL_DZipDemxSpawnstaticsound2(void) { CL_DZipCopyMsg(11); }
+
+static void CL_DZipDemxString(void)
+{
+	byte *ptr = cl_dzip_inptr + 1;
+	while (*ptr++)
+		;
+	CL_DZipCopyMsg((unsigned int)(ptr - cl_dzip_inptr));
+}
+
+static void CL_DZipDemxSound(void)
+{
+	int c;
+	int len;
+	unsigned int entity;
+	byte mask;
+	byte channel;
+	byte *ptr = cl_dzip_inptr + 1;
+
+	if (*cl_dzip_inptr > CL_DZIP_DEM_sound)
+	{
+		len = 10;
+		mask = *cl_dzip_inptr & 0x07;
+		if (!(*cl_dzip_inptr & SND_LARGEENTITY))
+			mask |= SND_LARGEENTITY;
+		if (!(*cl_dzip_inptr & SND_LARGESOUND))
+			mask |= SND_LARGESOUND;
+	}
+	else
+	{
+		len = 11;
+		mask = *ptr++;
+		++cl_dzip_inptr;
+	}
+
+	if (mask & SND_VOLUME) { ++len; ++ptr; }
+	if (mask & SND_ATTENUATION) { ++len; ++ptr; }
+
+	if (cl_dzip_decode_type == CL_DZIP_TYPE_DEMV1)
+	{
+		CL_DZipCopyMsg((unsigned int)len);
+		return;
+	}
+
+	*cl_dzip_inptr = CL_DZIP_DEM_sound;
+	CL_DZipInsertMsg(cl_dzip_inptr, 1);
+
+	*cl_dzip_inptr = mask;
+	if (mask & SND_LARGEENTITY)
+	{
+		entity = (unsigned int)(uint16_t)CL_DZipGetShort(ptr);
+		ptr += 2;
+		channel = *ptr++;
+	}
+	else
+	{
+		channel = *ptr & 7;
+		*ptr = (*ptr & 0xf8) + ((2 - channel) & 7);
+		entity = (unsigned int)((uint16_t)CL_DZipGetShort(ptr) >> 3);
+		ptr += 2;
+	}
+
+	if (mask & SND_LARGESOUND)
+		ptr += 2;
+	else
+		++ptr;
+
+	if (entity < CL_DZIP_MAX_ENT)
+	{
+		c = CL_DZipGetShort(ptr) + cl_dzip_newent[entity].org0;
+		CL_DZipWriteLE16(ptr, (uint16_t)c);
+		ptr += 2;
+		c = CL_DZipGetShort(ptr) + cl_dzip_newent[entity].org1;
+		CL_DZipWriteLE16(ptr, (uint16_t)c);
+		ptr += 2;
+		c = CL_DZipGetShort(ptr) + cl_dzip_newent[entity].org2;
+		CL_DZipWriteLE16(ptr, (uint16_t)c);
+		ptr += 2;
+	}
+
+	CL_DZipCopyMsg((unsigned int)(ptr - cl_dzip_inptr));
+}
+
+static void CL_DZipDemxLongtime(void)
+{
+	int32_t tmp = CL_DZipGetLong(cl_dzip_inptr + 1);
+	cl_dzip_dem_gametime += tmp;
+	*cl_dzip_inptr = CL_DZIP_DEM_time;
+	CL_DZipWriteLE32(cl_dzip_inptr + 1, (uint32_t)cl_dzip_dem_gametime);
+	CL_DZipCopyMsg(5);
+}
+
+static void CL_DZipDemxTime(void)
+{
+	byte buf[5];
+	uint32_t tmp = (uint32_t)(uint16_t)CL_DZipGetShort(cl_dzip_inptr + 1);
+
+	if (cl_dzip_decode_type == CL_DZIP_TYPE_DEMV1)
+	{
+		CL_DZipDemxLongtime();
+		return;
+	}
+
+	cl_dzip_dem_gametime += (long)tmp;
+	buf[0] = CL_DZIP_DEM_time;
+	CL_DZipWriteLE32(buf + 1, (uint32_t)cl_dzip_dem_gametime);
+	CL_DZipInsertMsg(buf, sizeof(buf));
+	CL_DZipDiscardMsg(3);
+}
+
+static qboolean CL_DZipDemxServerinfo(void)
+{
+	byte *ptr = cl_dzip_inptr + 1;
+	byte *start_ptr;
+
+	cl_dzip_protocol = CL_DZipGetLong(ptr);
+	ptr += sizeof(uint32_t);
+
+	if (cl_dzip_protocol == PROTOCOL_RMQ)
+	{
+		const unsigned int unsupported_flags = PRFL_SHORTANGLE | PRFL_FLOATANGLE |
+			PRFL_24BITCOORD | PRFL_FLOATCOORD | PRFL_EDICTSCALE |
+			PRFL_INT32COORD | PRFL_MOREFLAGS;
+		const unsigned int known_flags = unsupported_flags | PRFL_ALPHASANITY;
+
+		cl_dzip_protocolflags = (unsigned int)CL_DZipGetLong(ptr);
+		ptr += sizeof(uint32_t);
+
+		if (cl_dzip_protocolflags & unsupported_flags)
+		{
+			Con_Printf("DZip: PROTOCOL_RMQ demos with protocolflags %#x are not supported in .dz archives\n",
+				cl_dzip_protocolflags);
+			return false;
+		}
+
+		if (cl_dzip_protocolflags & ~known_flags)
+		{
+			Con_Printf("DZip: PROTOCOL_RMQ demo uses unknown protocolflags %#x\n",
+				cl_dzip_protocolflags);
+			return false;
+		}
+	}
+	else
+	{
+		cl_dzip_protocolflags = 0;
+	}
+
+	if (cl_dzip_protocol != PROTOCOL_NETQUAKE &&
+		cl_dzip_protocol != PROTOCOL_FITZQUAKE &&
+		cl_dzip_protocol != PROTOCOL_RMQ)
+	{
+		Con_Printf("DZip: unknown demo protocol %u\n", (unsigned)cl_dzip_protocol);
+		return false;
+	}
+
+	++ptr;
+	++ptr;
+
+	while (*ptr++)
+		;
+	do
+	{
+		start_ptr = ptr;
+		while (*ptr++)
+			;
+	} while (ptr - start_ptr > 1);
+	do
+	{
+		start_ptr = ptr;
+		while (*ptr++)
+			;
+	} while (ptr - start_ptr > 1);
+
+	CL_DZipCopyMsg((unsigned int)(ptr - cl_dzip_inptr));
+	cl_dzip_sble = 0;
+	return true;
+}
+
+static void CL_DZipDemxLightstyle(void)
+{
+	byte *ptr = cl_dzip_inptr + 2;
+	while (*ptr++)
+		;
+	CL_DZipCopyMsg((unsigned int)(ptr - cl_dzip_inptr));
+}
+
+static void CL_DZipDemxUpdatename(void)
+{
+	byte *ptr = cl_dzip_inptr + 2;
+	while (*ptr++)
+		;
+	CL_DZipCopyMsg((unsigned int)(ptr - cl_dzip_inptr));
+}
+
+static void CL_DZipDemxClientdata(void)
+{
+	byte *ptr = cl_dzip_inptr;
+	uint64_t mask = *ptr++;
+
+	cl_dzip_newcd = cl_dzip_oldcd;
+
+	if (cl_dzip_decode_type == CL_DZIP_TYPE_DEMV1)
+	{
+		CL_DZipDemv1Clientdata();
+		return;
+	}
+
+	if (mask & CL_DZIP_CD_MOREBITS_DIFF) mask |= (uint64_t)(*ptr++) << 8;
+	if (mask & CL_DZIP_CD_MOREBITS1_DIFF) mask |= (uint64_t)(*ptr++) << 16;
+	if (mask & CL_DZIP_CD_MOREBITS2_DIFF) mask |= (uint64_t)(*ptr++) << 24;
+	if (mask & CL_DZIP_CD_MOREBITS3_DIFF) mask |= (uint64_t)(*ptr++) << 32;
+
+#define CL_DZIP_CPLUS(x, bit) \
+	if (mask & (bit)) cl_dzip_newcd.x = (byte)CL_DZipBPlus(*ptr++, cl_dzip_oldcd.x)
+#define CL_DZIP_CPLUS_2(x, bit, bit2) \
+	if (mask & (bit2)) \
+	{ \
+		cl_dzip_newcd.x = CL_DZipGetShort(ptr); \
+		ptr += 2; \
+	} \
+	else if (mask & (bit)) \
+	{ \
+		if (cl_dzip_oldcd.x & 0xff00) \
+			cl_dzip_newcd.x = CL_DZipBPlus(*ptr++, cl_dzip_oldcd.x); \
+		else \
+			cl_dzip_newcd.x = (byte)CL_DZipBPlus(*ptr++, cl_dzip_oldcd.x); \
+	}
+
+	CL_DZIP_CPLUS(vel2, CL_DZIP_CD_VELOCITY2_DIFF);
+	CL_DZIP_CPLUS(vel0, CL_DZIP_CD_VELOCITY0_DIFF);
+	CL_DZIP_CPLUS(vel1, CL_DZIP_CD_VELOCITY1_DIFF);
+	CL_DZIP_CPLUS_2(wpf, CL_DZIP_CD_WEAPONFRAME_DIFF, CL_DZIP_CD_WEAPONFRAME2_DIFF);
+	if (mask & CL_DZIP_CD_ONGROUND_DIFF) cl_dzip_newcd.uk10 = !cl_dzip_oldcd.uk10;
+	CL_DZIP_CPLUS(ang0, CL_DZIP_CD_PUNCH0_DIFF);
+	CL_DZIP_CPLUS_2(am, CL_DZIP_CD_AMMO_DIFF, CL_DZIP_CD_AMMO2_DIFF);
+	if (mask & CL_DZIP_CD_HEALTH_DIFF) { cl_dzip_newcd.health += CL_DZipGetShort(ptr); ptr += 2; }
+	if (mask & CL_DZIP_CD_ITEMS_DIFF) { cl_dzip_newcd.items ^= CL_DZipGetLong(ptr); ptr += 4; }
+	CL_DZIP_CPLUS_2(av, CL_DZIP_CD_ARMOR_DIFF, CL_DZIP_CD_ARMOR2_DIFF);
+	CL_DZIP_CPLUS(pax, CL_DZIP_CD_IDEALPITCH_DIFF);
+	CL_DZIP_CPLUS_2(sh, CL_DZIP_CD_SHELLS_DIFF, CL_DZIP_CD_SHELLS2_DIFF);
+	CL_DZIP_CPLUS_2(nl, CL_DZIP_CD_NAILS_DIFF, CL_DZIP_CD_NAILS2_DIFF);
+	CL_DZIP_CPLUS_2(rk, CL_DZIP_CD_ROCKETS_DIFF, CL_DZIP_CD_ROCKETS2_DIFF);
+	CL_DZIP_CPLUS_2(wpm, CL_DZIP_CD_WEAPON_DIFF, CL_DZIP_CD_WEAPON2_DIFF);
+	CL_DZIP_CPLUS(wp, CL_DZIP_CD_WEAPONINDEX_DIFF);
+	if (mask & CL_DZIP_CD_INWATER_DIFF) cl_dzip_newcd.uk11 = !cl_dzip_oldcd.uk11;
+	CL_DZIP_CPLUS(voz, CL_DZIP_CD_VIEWHEIGHT_DIFF);
+	CL_DZIP_CPLUS_2(ce, CL_DZIP_CD_CELLS_DIFF, CL_DZIP_CD_CELLS2_DIFF);
+	CL_DZIP_CPLUS(ang1, CL_DZIP_CD_PUNCH1_DIFF);
+	CL_DZIP_CPLUS(ang2, CL_DZIP_CD_PUNCH2_DIFF);
+	if (mask & CL_DZIP_CD_INVBIT_DIFF) cl_dzip_newcd.invbit = !cl_dzip_oldcd.invbit;
+	CL_DZIP_CPLUS(weaponalpha, CL_DZIP_CD_WEAPONALPHA_DIFF);
+
+	CL_DZipDiscardMsg((int)(ptr - cl_dzip_inptr));
+
+	if ((*ptr & 0xf0) == CL_DZIP_IDENTIFIER_CLIENTDATA_FORCE)
+	{
+		mask = *ptr++;
+		if (mask & CL_DZIP_CD_MOREBITS_FORCE)
+			mask |= (uint64_t)(*ptr++) << 8;
+		cl_dzip_newcd.force ^= (int)(mask & 0xff07);
+		CL_DZipDiscardMsg((int)(ptr - cl_dzip_inptr));
+	}
+
+	CL_DZipCreateClientdataMsg();
+
+#undef CL_DZIP_CPLUS
+#undef CL_DZIP_CPLUS_2
+}
+
+static void CL_DZipDemxSpawnbaseline(void)
+{
+	byte buf[32];
+	byte *ptr = cl_dzip_inptr + 3;
+	cl_dzip_ent_t ent;
+	int mask;
+	byte bits = 0;
+	byte version = *cl_dzip_inptr;
+	int16_t index;
+
+	if (version == CL_DZIP_DEM_spawnbaseline2)
+	{
+		index = CL_DZipGetShort(cl_dzip_inptr + 1);
+		mask = *ptr++;
+		if (mask & CL_DZIP_SB_MOREBITS)
+			mask |= *ptr++ << 8;
+		if (mask & CL_DZIP_SB_LARGEMODEL)
+			bits |= B_LARGEMODEL;
+		if (mask & CL_DZIP_SB_LARGEFRAME)
+			bits |= B_LARGEFRAME;
+		if (mask & CL_DZIP_SB_ALPHA)
+			bits |= B_ALPHA;
+	}
+	else
+	{
+		mask = CL_DZipGetShort(cl_dzip_inptr + 1);
+		cl_dzip_sble = (cl_dzip_sble + (mask & (CL_DZIP_MAX_ENT_OLD - 1))) % CL_DZIP_MAX_ENT_OLD;
+		index = (int16_t)cl_dzip_sble;
+		mask >>= 8;
+	}
+
+	memset(&ent, 0, sizeof(ent));
+	if (bits & B_LARGEMODEL) { ent.modelindex = CL_DZipGetShort(ptr); ptr += 2; } else { ent.modelindex = *ptr++; }
+	if (mask & CL_DZIP_SB_FRAME)
+	{
+		if (bits & B_LARGEFRAME) { ent.frame = CL_DZipGetShort(ptr); ptr += 2; } else { ent.frame = *ptr++; }
+	}
+	if (mask & CL_DZIP_SB_COLORMAP) ent.colormap = *ptr++;
+	if (mask & CL_DZIP_SB_SKIN) ent.skin = *ptr++;
+	if (mask & CL_DZIP_SB_ORIGIN)
+	{
+		ent.org0 = CL_DZipGetShort(ptr); ptr += 2;
+		ent.org1 = CL_DZipGetShort(ptr); ptr += 2;
+		ent.org2 = CL_DZipGetShort(ptr); ptr += 2;
+	}
+	if (mask & CL_DZIP_SB_ANGLE1) ent.ang1 = *ptr++;
+	if (mask & CL_DZIP_SB_ANGLE0AND2) { ent.ang0 = *ptr++; ent.ang2 = *ptr++; }
+	if (bits & B_ALPHA) ent.transparency = *ptr++;
+
+	CL_DZipDiscardMsg((int)(ptr - cl_dzip_inptr));
+
+	if (mask & CL_DZIP_SB_LARGEENTITY)
+		version = CL_DZIP_DEM_spawnbaseline;
+
+	ptr = buf;
+	*ptr++ = version;
+	CL_DZipWriteLE16(ptr, (uint16_t)index); ptr += 2;
+	if (version == CL_DZIP_DEM_spawnbaseline2)
+		*ptr++ = bits;
+
+	if (bits & B_LARGEMODEL) { CL_DZipWriteLE16(ptr, (uint16_t)ent.modelindex); ptr += 2; } else { *ptr++ = ent.modelindex; }
+	if (bits & B_LARGEFRAME) { CL_DZipWriteLE16(ptr, (uint16_t)ent.frame); ptr += 2; } else { *ptr++ = ent.frame; }
+	*ptr++ = ent.colormap;
+	*ptr++ = ent.skin;
+	CL_DZipWriteLE16(ptr, (uint16_t)ent.org0); ptr += 2;
+	*ptr++ = ent.ang0;
+	CL_DZipWriteLE16(ptr, (uint16_t)ent.org1); ptr += 2;
+	*ptr++ = ent.ang1;
+	CL_DZipWriteLE16(ptr, (uint16_t)ent.org2); ptr += 2;
+	*ptr++ = ent.ang2;
+	if (bits & B_ALPHA) *ptr++ = ent.transparency;
+
+	CL_DZipInsertMsg(buf, (unsigned int)(ptr - buf));
+
+	cl_dzip_base[(unsigned short)index] = ent;
+	cl_dzip_copybaseline = 1;
+}
+
+static qboolean CL_DZipDemxTempEntity(void)
+{
+	if (cl_dzip_inptr[1] == 17)
+	{
+		CL_DZipCopyMsg((unsigned int)(strlen((char *)cl_dzip_inptr + 2) + 17));
+		return true;
+	}
+
+	if (cl_dzip_inptr[1] >= (int)sizeof(cl_dzip_te_size))
+		return false;
+
+	CL_DZipCopyMsg(cl_dzip_te_size[cl_dzip_inptr[1]]);
+	return true;
+}
+
+static void CL_DZipDemxSpawnstatic2(void)
+{
+	byte bits = cl_dzip_inptr[1];
+	int msgsize = 15;
+
+	if (bits & B_LARGEMODEL) ++msgsize;
+	if (bits & B_LARGEFRAME) ++msgsize;
+	if (bits & B_ALPHA) ++msgsize;
+
+	CL_DZipCopyMsg(msgsize);
+}
+
+static qboolean CL_DZipDemCopyUE(void)
+{
+	unsigned int mask = cl_dzip_inptr[0] & 0x7f;
+	int len = 1;
+
+	if (mask & U_MOREBITS)
+	{
+		mask |= cl_dzip_inptr[len++] << 8;
+		if (cl_dzip_protocol == PROTOCOL_NETQUAKE && (mask & U_TRANS))
+			return false;
+	}
+	if (cl_dzip_protocol != PROTOCOL_NETQUAKE && (mask & U_EXTEND1))
+		mask |= cl_dzip_inptr[len++] << 16;
+	if (mask & U_EXTEND2)
+		return false;
+
+	if (mask & U_LONGENTITY) ++len;
+	if (mask & U_MODEL) ++len;
+	if (mask & U_FRAME) ++len;
+	if (mask & U_COLORMAP) ++len;
+	if (mask & U_SKIN) ++len;
+	if (mask & U_EFFECTS) ++len;
+	if (mask & CL_DZIP_U_ORIGIN0) len += 2;
+	if (mask & CL_DZIP_U_ANGLE0) ++len;
+	if (mask & CL_DZIP_U_ORIGIN1) len += 2;
+	if (mask & CL_DZIP_U_ANGLE1) ++len;
+	if (mask & CL_DZIP_U_ORIGIN2) len += 2;
+	if (mask & CL_DZIP_U_ANGLE2) ++len;
+	if (mask & U_ALPHA) ++len;
+	if (mask & U_SCALE) ++len;
+	if (mask & U_FRAME2) ++len;
+	if (mask & U_MODEL2) ++len;
+	if (mask & U_LERPFINISH) ++len;
+
+	CL_DZipCopyMsg((unsigned int)(len + 1));
+	return true;
+}
+
+static qboolean CL_DZipDemxUpdateentity(void)
+{
+	byte buf[32];
+	byte *ptr;
+	uint64_t mask;
+	int i, entity;
+	int baseval = 0, prev;
+	cl_dzip_ent_t n, o;
+
+	if (cl_dzip_decode_type == CL_DZIP_TYPE_DEMV1)
+	{
+		CL_DZipDemv1Updateentity();
+		return true;
+	}
+
+	cl_dzip_lastent = 0;
+	for (ptr = cl_dzip_inptr + 1; *ptr; ++ptr)
+	{
+		if (*ptr == 0xff)
+		{
+			baseval += 0xfe;
+			continue;
+		}
+
+		entity = baseval + *ptr;
+		cl_dzip_newent[entity].active = 1;
+		while (cl_dzip_entlink[cl_dzip_lastent] <= entity)
+			cl_dzip_lastent = cl_dzip_entlink[cl_dzip_lastent];
+		if (cl_dzip_lastent < entity)
+		{
+			cl_dzip_entlink[entity] = cl_dzip_entlink[cl_dzip_lastent];
+			cl_dzip_entlink[cl_dzip_lastent] = entity;
+		}
+	}
+
+	for (prev = 0, i = cl_dzip_entlink[0], ++ptr; i < CL_DZIP_MAX_ENT; i = cl_dzip_entlink[i])
+	{
+		cl_dzip_newent[i].org0 += cl_dzip_newent[i].od0;
+		cl_dzip_newent[i].org1 += cl_dzip_newent[i].od1;
+		cl_dzip_newent[i].org2 += cl_dzip_newent[i].od2;
+
+		if (!cl_dzip_newent[i].active)
+		{
+			prev = i;
+			continue;
+		}
+
+		mask = *ptr++;
+		if (mask == CL_DZIP_UE_MOREBITS_DIFF)
+		{
+			cl_dzip_oldent[i] = cl_dzip_newent[i] = cl_dzip_base[i];
+			cl_dzip_entlink[prev] = cl_dzip_entlink[i];
+			continue;
+		}
+
+		prev = i;
+		if (mask == 0x00)
+		{
+			cl_dzip_newent[i].active = 0;
+			continue;
+		}
+
+		if (mask & CL_DZIP_UE_MOREBITS_DIFF) mask |= (uint64_t)(*ptr++) << 8;
+		if (mask & CL_DZIP_UE_MOREBITS2_DIFF) mask |= (uint64_t)(*ptr++) << 16;
+
+		n = cl_dzip_newent[i];
+		o = cl_dzip_oldent[i];
+
+		if (mask & CL_DZIP_UE_ORIGIN2_DIFF) { n.od2 = CL_DZipBPlus(*ptr++, o.od2); n.org2 = o.org2 + n.od2; }
+		if (mask & CL_DZIP_UE_ORIGIN2_MOREBITS_DIFF) { n.org2 = CL_DZipGetShort(ptr); ptr += 2; n.od2 = n.org2 - o.org2; }
+		if (mask & CL_DZIP_UE_ORIGIN1_DIFF) { n.od1 = CL_DZipBPlus(*ptr++, o.od1); n.org1 = o.org1 + n.od1; }
+		if (mask & CL_DZIP_UE_ORIGIN1_MOREBITS_DIFF) { n.org1 = CL_DZipGetShort(ptr); ptr += 2; n.od1 = n.org1 - o.org1; }
+		if (mask & CL_DZIP_UE_ORIGIN0_DIFF) { n.od0 = CL_DZipBPlus(*ptr++, o.od0); n.org0 = o.org0 + n.od0; }
+		if (mask & CL_DZIP_UE_ORIGIN0_MOREBITS_DIFF) { n.org0 = CL_DZipGetShort(ptr); ptr += 2; n.od0 = n.org0 - o.org0; }
+		if (mask & CL_DZIP_UE_ANGLE0_DIFF) n.ang0 = (byte)CL_DZipBPlus(*ptr++, o.ang0);
+		if (mask & CL_DZIP_UE_ANGLE1_DIFF) n.ang1 = (byte)CL_DZipBPlus(*ptr++, o.ang1);
+		if (mask & CL_DZIP_UE_ANGLE2_DIFF) n.ang2 = (byte)CL_DZipBPlus(*ptr++, o.ang2);
+		if (mask & CL_DZIP_UE_FRAME_SINGLE_DIFF) n.frame = o.frame + 1;
+		if (mask & CL_DZIP_UE_FRAME_NORMAL_DIFF)
+		{
+			if (o.frame & 0xff00) n.frame = CL_DZipBPlus(*ptr++, o.frame);
+			else n.frame = (byte)CL_DZipBPlus(*ptr++, o.frame);
+		}
+		if (mask & CL_DZIP_UE_FRAME2_DIFF) { n.frame = CL_DZipGetShort(ptr); ptr += 2; }
+		if (mask & CL_DZIP_UE_EFFECTS_DIFF) n.effects = *ptr++;
+		if (mask & CL_DZIP_UE_MODEL_DIFF) { n.modelindex &= 0xff00; n.modelindex |= *ptr++; }
+		if (mask & CL_DZIP_UE_MODEL2_DIFF) { n.modelindex &= 0x00ff; n.modelindex |= (*ptr++ << 8); }
+		if (mask & CL_DZIP_UE_NOLERP_DIFF) n.newbit = !o.newbit;
+		if (mask & CL_DZIP_UE_COLORMAP_DIFF) n.colormap = *ptr++;
+		if (mask & CL_DZIP_UE_SKIN_DIFF) n.skin = *ptr++;
+		if (mask & CL_DZIP_UE_NEHAHRA_ALPHA_DIFF && cl_dzip_protocol == PROTOCOL_NETQUAKE) { n.alpha = CL_DZipGetFloat(ptr); ptr += 4; }
+		if (mask & CL_DZIP_UE_NEHAHRA_FULLBRIGHT_DIFF && cl_dzip_protocol == PROTOCOL_NETQUAKE) n.fullbright = *ptr++;
+		if (mask & CL_DZIP_UE_ALPHA_DIFF && cl_dzip_protocol != PROTOCOL_NETQUAKE) n.transparency = *ptr++;
+		if (mask & CL_DZIP_UE_SCALE_DIFF && cl_dzip_protocol != PROTOCOL_NETQUAKE) n.scale = *ptr++;
+		if (mask & CL_DZIP_UE_LERPFINISH_DIFF) n.lerpfinish = *ptr++;
+
+		cl_dzip_newent[i] = n;
+	}
+
+	if (*ptr == CL_DZIP_IDENTIFIER_UPDATEENTITY_FORCE)
+	{
+		++ptr;
+		while ((mask = CL_DZipGetShort(ptr)))
+		{
+			ptr += 2;
+			mask &= 0xffff;
+			if (mask & CL_DZIP_UE_MOREBITS_FORCE) mask |= (uint64_t)(*ptr++) << 16;
+			if (cl_dzip_protocol != PROTOCOL_NETQUAKE && (mask & CL_DZIP_UE_MOREBITS2_FORCE)) mask |= (uint64_t)(*ptr++) << 24;
+			entity = (int)(mask & 0x3ff);
+			cl_dzip_newent[entity].force ^= (int)(mask & 0xfffffc00ULL);
+		}
+		ptr += 2;
+	}
+
+	if (*ptr == CL_DZIP_IDENTIFIER_UPDATEENTITY2_FORCE)
+	{
+		++ptr;
+		while ((mask = CL_DZipGetShort(ptr)))
+		{
+			ptr += 2;
+			mask &= 0xffff;
+			mask |= (uint64_t)(*ptr++) << 16;
+			if (mask & (CL_DZIP_UE_MOREBITS_FORCE << 8)) mask |= (uint64_t)(*ptr++) << 24;
+			if (cl_dzip_protocol != PROTOCOL_NETQUAKE && (mask & (CL_DZIP_UE_MOREBITS2_FORCE << 8))) mask |= (uint64_t)(*ptr++) << 32;
+			entity = (int)(mask & (CL_DZIP_MAX_ENT - 1));
+			cl_dzip_newent[entity].force ^= (int)((mask & ~(uint64_t)(CL_DZIP_MAX_ENT - 1)) >> 8);
+		}
+		ptr += 2;
+	}
+
+	CL_DZipDiscardMsg((int)(ptr - cl_dzip_inptr));
+
+	for (i = cl_dzip_entlink[0]; i < CL_DZIP_MAX_ENT; i = cl_dzip_entlink[i])
+	{
+		cl_dzip_ent_t b = cl_dzip_base[i];
+
+		n = cl_dzip_newent[i];
+		ptr = buf + 3;
+		mask = U_SIGNAL;
+
+		if (i > 0xff || (n.force & CL_DZIP_UE_LONGENTITY_FORCE))
+		{
+			CL_DZipWriteLE16(ptr, (uint16_t)i);
+			ptr += 2;
+			mask |= U_LONGENTITY;
+		}
+		else
+		{
+			*ptr++ = i;
+		}
+
+#define CL_DZIP_BDIFF(field, bit, forcebit) \
+	if ((n.field) != (b.field) || (n.force & (forcebit))) \
+	{ \
+		*ptr++ = (n.field); \
+		mask |= (bit); \
+	}
+#define CL_DZIP_BDIFF_DEF(expr, baseexpr, defval, bit, forcebit) \
+	if ((((expr) != (baseexpr) && (expr) != (defval))) || (n.force & (forcebit))) \
+	{ \
+		*ptr++ = (expr); \
+		mask |= (bit); \
+	}
+
+		CL_DZIP_BDIFF(modelindex & 0x00ff, U_MODEL, CL_DZIP_UE_MODEL_FORCE);
+		CL_DZIP_BDIFF(frame & 0x00ff, U_FRAME, CL_DZIP_UE_FRAME_FORCE);
+		CL_DZIP_BDIFF(colormap, U_COLORMAP, CL_DZIP_UE_COLORMAP_FORCE);
+		CL_DZIP_BDIFF(skin, U_SKIN, CL_DZIP_UE_SKIN_FORCE);
+		CL_DZIP_BDIFF(effects, U_EFFECTS, CL_DZIP_UE_EFFECTS_FORCE);
+		if (n.org0 != b.org0 || (n.force & CL_DZIP_UE_ORIGIN0_FORCE)) { mask |= CL_DZIP_U_ORIGIN0; CL_DZipWriteLE16(ptr, (uint16_t)n.org0); ptr += 2; }
+		CL_DZIP_BDIFF(ang0, CL_DZIP_U_ANGLE0, CL_DZIP_UE_ANGLE0_FORCE);
+		if (n.org1 != b.org1 || (n.force & CL_DZIP_UE_ORIGIN1_FORCE)) { mask |= CL_DZIP_U_ORIGIN1; CL_DZipWriteLE16(ptr, (uint16_t)n.org1); ptr += 2; }
+		CL_DZIP_BDIFF(ang1, CL_DZIP_U_ANGLE1, CL_DZIP_UE_ANGLE1_FORCE);
+		if (n.org2 != b.org2 || (n.force & CL_DZIP_UE_ORIGIN2_FORCE)) { mask |= CL_DZIP_U_ORIGIN2; CL_DZipWriteLE16(ptr, (uint16_t)n.org2); ptr += 2; }
+		CL_DZIP_BDIFF(ang2, CL_DZIP_U_ANGLE2, CL_DZIP_UE_ANGLE2_FORCE);
+		if (cl_dzip_protocol != PROTOCOL_NETQUAKE) CL_DZIP_BDIFF(transparency, U_ALPHA, CL_DZIP_UE_ALPHA_FORCE);
+		CL_DZIP_BDIFF(scale, U_SCALE, CL_DZIP_UE_SCALE_FORCE);
+		CL_DZIP_BDIFF_DEF(n.frame >> 8, b.frame >> 8, 0, U_FRAME2, CL_DZIP_UE_FRAME2_FORCE);
+		CL_DZIP_BDIFF_DEF(n.modelindex >> 8, b.modelindex >> 8, 0, U_MODEL2, CL_DZIP_UE_MODEL2_FORCE);
+		CL_DZIP_BDIFF(lerpfinish, U_LERPFINISH, CL_DZIP_UE_LERPFINISH_FORCE);
+
+		if (n.newbit)
+			mask |= CL_DZIP_U_NOLERP;
+
+		if (mask & 0xffff00) mask |= U_MOREBITS;
+		if (mask & 0xff0000) mask |= U_EXTEND1;
+
+		buf[0] = (byte)(mask & 0xff);
+		buf[1] = (byte)((mask >> 8) & 0xff);
+		buf[2] = (byte)((mask >> 16) & 0xff);
+		if (!(mask & U_EXTEND1))
+		{
+			if (!(mask & U_MOREBITS))
+			{
+				memmove(buf + 1, buf + 3, (size_t)(ptr - (buf + 3)));
+				ptr -= 2;
+			}
+			else
+			{
+				memmove(buf + 2, buf + 3, (size_t)(ptr - (buf + 3)));
+				ptr -= 1;
+			}
+		}
+
+		CL_DZipInsertMsg(buf, (unsigned int)(ptr - buf));
+		cl_dzip_oldent[i] = cl_dzip_newent[i];
+
+#undef CL_DZIP_BDIFF
+#undef CL_DZIP_BDIFF_DEF
+	}
+
+	return true;
+}
+
+static qboolean CL_DZipDemUncompressBlock(void)
+{
+	int32_t a1;
+	int uemask = (cl_dzip_decode_type == CL_DZIP_TYPE_DEMV1) ? 0x80 : CL_DZIP_IDENTIFIER_UPDATEENTITY_DIFF;
+	int cdmask = (cl_dzip_decode_type == CL_DZIP_TYPE_DEMV1) ? 0xf0 : CL_DZIP_IDENTIFIER_CLIENTDATA_DIFF;
+	byte cfields;
+
+	cfields = *cl_dzip_inptr++;
+
+	if (cfields & 1) { cl_dzip_cam0 += CL_DZipGetLong(cl_dzip_inptr); cl_dzip_inptr += 4; }
+	if (cfields & 2) { cl_dzip_cam1 += CL_DZipGetLong(cl_dzip_inptr); cl_dzip_inptr += 4; }
+	if (cfields & 4) { cl_dzip_cam2 += CL_DZipGetLong(cl_dzip_inptr); cl_dzip_inptr += 4; }
+
+	cl_dzip_outlen = 0;
+	a1 = 0;
+	CL_DZipInsertMsg(&a1, 4);
+	a1 = LittleLong((uint32_t)cl_dzip_cam0); CL_DZipInsertMsg(&a1, 4);
+	a1 = LittleLong((uint32_t)cl_dzip_cam1); CL_DZipInsertMsg(&a1, 4);
+	a1 = LittleLong((uint32_t)cl_dzip_cam2); CL_DZipInsertMsg(&a1, 4);
+
+	cl_dzip_dem_updateframe = 0;
+	while (*cl_dzip_inptr)
+	{
+		if ((*cl_dzip_inptr & 0xf8) == uemask)
+		{
+			if (!CL_DZipDemxUpdateentity())
+				return false;
+		}
+		else
+		{
+			if (cl_dzip_decode_type == CL_DZIP_TYPE_DEMV1 && cl_dzip_dem_updateframe)
+			{
+				CL_DZipDemv1Dxentities();
+				cl_dzip_dem_updateframe = 0;
+			}
+
+			if ((*cl_dzip_inptr & 0xf0) == cdmask)
+			{
+				CL_DZipDemxClientdata();
+			}
+			else if ((*cl_dzip_inptr & 0xf8) == CL_DZIP_IDENTIFIER_SOUND || (*cl_dzip_inptr & 0xe0) == CL_DZIP_IDENTIFIER_SOUND_MOREBITS)
+			{
+				CL_DZipDemxSound();
+			}
+			else if (*cl_dzip_inptr >= 0x80)
+			{
+				if (!CL_DZipDemCopyUE())
+					return false;
+			}
+			else switch (*cl_dzip_inptr)
+			{
+			case CL_DZIP_DEM_nop: CL_DZipDemxNop(); break;
+			case CL_DZIP_DEM_disconnect: CL_DZipDemxDisconnect(); break;
+			case CL_DZIP_DEM_updatestat: CL_DZipDemxUpdatestat(); break;
+			case CL_DZIP_DEM_version: CL_DZipDemxVersion(); break;
+			case CL_DZIP_DEM_setview: CL_DZipDemxSetview(); break;
+			case CL_DZIP_DEM_time: CL_DZipDemxTime(); break;
+			case CL_DZIP_DEM_print:
+			case CL_DZIP_DEM_stufftext:
+			case CL_DZIP_DEM_centerprint:
+			case CL_DZIP_DEM_finale:
+			case CL_DZIP_DEM_cutscene:
+				CL_DZipDemxString();
+				break;
+			case CL_DZIP_DEM_setangle: CL_DZipDemxSetangle(); break;
+			case CL_DZIP_DEM_serverinfo:
+				if (!CL_DZipDemxServerinfo())
+					return false;
+				break;
+			case CL_DZIP_DEM_lightstyle: CL_DZipDemxLightstyle(); break;
+			case CL_DZIP_DEM_updatename: CL_DZipDemxUpdatename(); break;
+			case CL_DZIP_DEM_updatefrags: CL_DZipDemxUpdatefrags(); break;
+			case CL_DZIP_DEM_stopsound: CL_DZipDemxStopsound(); break;
+			case CL_DZIP_DEM_updatecolors: CL_DZipDemxUpdatecolors(); break;
+			case CL_DZIP_DEM_particle: CL_DZipDemxParticle(); break;
+			case CL_DZIP_DEM_damage: CL_DZipDemxDamage(); break;
+			case CL_DZIP_DEM_spawnstatic: CL_DZipDemxSpawnstatic(); break;
+			case CL_DZIP_DEM_spawnbinary: CL_DZipDemxSpawnbinary(); break;
+			case CL_DZIP_DEM_spawnbaseline:
+			case CL_DZIP_DEM_spawnbaseline2:
+				CL_DZipDemxSpawnbaseline();
+				break;
+			case CL_DZIP_DEM_temp_entity:
+				if (!CL_DZipDemxTempEntity())
+					return false;
+				break;
+			case CL_DZIP_DEM_setpause: CL_DZipDemxSetpause(); break;
+			case CL_DZIP_DEM_signonnum: CL_DZipDemxSignonnum(); break;
+			case CL_DZIP_DEM_killedmonster: CL_DZipDemxKilledmonster(); break;
+			case CL_DZIP_DEM_foundsecret: CL_DZipDemxFoundsecret(); break;
+			case CL_DZIP_DEM_spawnstaticsound: CL_DZipDemxSpawnstaticsound(); break;
+			case CL_DZIP_DEM_intermission: CL_DZipDemxIntermission(); break;
+			case CL_DZIP_DEM_cdtrack: CL_DZipDemxCdtrack(); break;
+			case CL_DZIP_DEM_sellscreen: CL_DZipDemxSellscreen(); break;
+			case CL_DZIP_DZ_longtime: CL_DZipDemxLongtime(); break;
+			case CL_DZIP_DEM_fog: CL_DZipDemxFog(); break;
+			case CL_DZIP_DEM_spawnstatic2: CL_DZipDemxSpawnstatic2(); break;
+			case CL_DZIP_DEM_spawnstaticsound2: CL_DZipDemxSpawnstaticsound2(); break;
+			default:
+				return false;
+			}
+		}
+	}
+
+	if (cl_dzip_decode_type == CL_DZIP_TYPE_DEMV1 && cl_dzip_dem_updateframe)
+		CL_DZipDemv1Dxentities();
+
+	cl_dzip_outlen -= 16;
+	a1 = LittleLong((uint32_t)cl_dzip_outlen);
+	memcpy(cl_dzip_outblk, &a1, 4);
+	if (!CL_DZipOutputWrite(cl_dzip_outblk, (unsigned int)cl_dzip_outlen + 16))
+		return false;
+
+	if (cl_dzip_copybaseline)
+	{
+		cl_dzip_copybaseline = 0;
+		memcpy(cl_dzip_oldent, cl_dzip_base, sizeof(cl_dzip_base));
+		memcpy(cl_dzip_newent, cl_dzip_base, sizeof(cl_dzip_base));
+	}
+
+	return true;
+}
+
+static void CL_DZipDemUncompressInit(int type)
+{
+	cl_dzip_decode_type = -type;
+	memset(cl_dzip_base, 0, sizeof(cl_dzip_base));
+	memset(cl_dzip_oldent, 0, sizeof(cl_dzip_oldent));
+	memset(cl_dzip_newent, 0, sizeof(cl_dzip_newent));
+	memset(cl_dzip_entlink, 0, sizeof(cl_dzip_entlink));
+	memset(&cl_dzip_oldcd, 0, sizeof(cl_dzip_oldcd));
+	cl_dzip_oldcd.voz = 22;
+	cl_dzip_oldcd.items = 0x4001;
+	cl_dzip_entlink[0] = CL_DZIP_MAX_ENT;
+	cl_dzip_cam0 = cl_dzip_cam1 = cl_dzip_cam2 = 0;
+	cl_dzip_copybaseline = 0;
+	cl_dzip_dem_gametime = 0;
+	cl_dzip_maxent = 0;
+	cl_dzip_sble = 0;
+	cl_dzip_protocol = PROTOCOL_NETQUAKE;
+	cl_dzip_protocolflags = 0;
+}
+
+static unsigned int CL_DZipDemUncompress(unsigned int maxsize)
+{
+	unsigned int blocksize = 0;
+
+	cl_dzip_inptr = cl_dzip_inblk;
+	if (cl_dzip_decode_type < 0)
+	{
+		cl_dzip_decode_type = -cl_dzip_decode_type;
+		while (cl_dzip_inblk[blocksize] != '\n' && blocksize < 12)
+			++blocksize;
+
+		if (blocksize == 12)
+			return 0;
+
+		if (!CL_DZipOutputWrite(cl_dzip_inblk, ++blocksize))
+			return 0;
+		cl_dzip_inptr += blocksize;
+	}
+
+	while (blocksize < 16000 && blocksize < maxsize)
+	{
+		if (*cl_dzip_inptr == 0xff)
+		{
+			unsigned int len = (unsigned int)CL_DZipGetLong(cl_dzip_inptr + 1);
+			if (CL_DZIP_P_BLOCKSIZE - blocksize - 5 < len)
+				return blocksize;
+			if (!CL_DZipOutputWrite(cl_dzip_inptr + 5, len))
+				return 0;
+			blocksize = (unsigned int)(cl_dzip_inptr - cl_dzip_inblk) + len + 5;
+		}
+		else
+		{
+			if (!CL_DZipDemUncompressBlock())
+				return 0;
+			blocksize = (unsigned int)(cl_dzip_inptr - cl_dzip_inblk + 1);
+		}
+
+		if (!blocksize)
+			return 0;
+		++cl_dzip_inptr;
+	}
+
+	return blocksize;
+}
+
+static qboolean CL_DZipExtractStoredFile(const cl_dzip_direntry_t *de)
+{
+	byte buffer[65536];
+	unsigned int remaining = de->size;
+
+	if (!CL_DZipArchiveSeek(de->ptr))
+		return false;
+
+	while (remaining)
+	{
+		unsigned int chunk = remaining > sizeof(buffer) ? sizeof(buffer) : remaining;
+		if (!CL_DZipArchiveRead(buffer, chunk))
+			return false;
+		if (!CL_DZipOutputWrite(buffer, chunk))
+			return false;
+		remaining -= chunk;
+	}
+
+	return true;
+}
+
+static qboolean CL_DZipExtractNormalFile(const cl_dzip_direntry_t *de)
+{
+	byte inbuf[65536];
+	byte outbuf[65536];
+	z_stream zs;
+	unsigned int remaining = de->size;
+	int ret = Z_OK;
+
+	memset(&zs, 0, sizeof(zs));
+	if (inflateInit(&zs) != Z_OK)
+		return false;
+
+	if (!CL_DZipArchiveSeek(de->ptr))
+	{
+		inflateEnd(&zs);
+		return false;
+	}
+
+	do
+	{
+		if (zs.avail_in == 0 && remaining)
+		{
+			unsigned int chunk = remaining > sizeof(inbuf) ? sizeof(inbuf) : remaining;
+			if (!CL_DZipArchiveRead(inbuf, chunk))
+			{
+				inflateEnd(&zs);
+				return false;
+			}
+			zs.next_in = inbuf;
+			zs.avail_in = chunk;
+			remaining -= chunk;
+		}
+
+		zs.next_out = outbuf;
+		zs.avail_out = sizeof(outbuf);
+		ret = inflate(&zs, Z_NO_FLUSH);
+		if (ret != Z_OK && ret != Z_STREAM_END)
+		{
+			inflateEnd(&zs);
+			return false;
+		}
+
+		if (sizeof(outbuf) - zs.avail_out)
+		{
+			if (!CL_DZipOutputWrite(outbuf, (unsigned int)(sizeof(outbuf) - zs.avail_out)))
+			{
+				inflateEnd(&zs);
+				return false;
+			}
+		}
+	} while (ret != Z_STREAM_END);
+
+	inflateEnd(&zs);
+	return true;
+}
+
+static qboolean CL_DZipExtractDemoEntry(const cl_dzip_direntry_t *de)
+{
+	unsigned int readptr = 0;
+	unsigned int inlen = 0;
+
+	if (!CL_DZipArchiveSeek(de->ptr))
+		return false;
+
+	memset(&cl_dzip_zs, 0, sizeof(cl_dzip_zs));
+	if (inflateInit(&cl_dzip_zs) != Z_OK)
+		return false;
+
+	cl_dzip_ztotal = de->size;
+	cl_dzip_zs.avail_in = 0;
+	CL_DZipDemUncompressInit((int)de->type);
+
+	while (readptr < de->inter)
+	{
+		unsigned int blocksize;
+
+		if (!CL_DZipZRead(inlen))
+		{
+			inflateEnd(&cl_dzip_zs);
+			return false;
+		}
+
+		blocksize = CL_DZipDemUncompress(de->inter - readptr);
+		if (!blocksize)
+		{
+			inflateEnd(&cl_dzip_zs);
+			return false;
+		}
+
+		if (blocksize != CL_DZIP_P_BLOCKSIZE)
+			memmove(cl_dzip_inblk, cl_dzip_inblk + blocksize, CL_DZIP_P_BLOCKSIZE - blocksize);
+
+		readptr += blocksize;
+		inlen = CL_DZIP_P_BLOCKSIZE - blocksize;
+	}
+
+	inflateEnd(&cl_dzip_zs);
+	return true;
+}
+
+static qboolean CL_DZipExtractLegacyEntry(const cl_dzip_direntry_t *target_de)
+{
+	FILE *target_output = cl_dzip_output_file;
+	unsigned int readptr = 12;
+	unsigned int inlen = 0;
+	unsigned int i;
+	qboolean extracted = false;
+
+	if (!CL_DZipArchiveSeek(12))
+		return false;
+
+	memset(&cl_dzip_zs, 0, sizeof(cl_dzip_zs));
+	if (inflateInit(&cl_dzip_zs) != Z_OK)
+		return false;
+
+	cl_dzip_ztotal = cl_dzip_directory_offset - 12;
+	cl_dzip_totalsize = 12;
+	cl_dzip_zs.avail_in = 0;
+
+	for (i = 0; i < (unsigned int)cl_dzip_numfiles; ++i)
+	{
+		const cl_dzip_direntry_t *de = &cl_dzip_directory[i];
+		unsigned int eofptr = de->ptr + de->size;
+		qboolean demomode;
+		qboolean want_output = (de == target_de);
+
+		if (de->type == CL_DZIP_TYPE_DEMV1)
+			demomode = true;
+		else if (de->type == CL_DZIP_TYPE_NORMAL || de->type == CL_DZIP_TYPE_TXT)
+			demomode = false;
+		else
+		{
+			inflateEnd(&cl_dzip_zs);
+			cl_dzip_output_file = target_output;
+			cl_dzip_crc_enabled = true;
+			return false;
+		}
+
+		cl_dzip_output_file = want_output ? target_output : NULL;
+		cl_dzip_crc_enabled = want_output;
+		if (want_output)
+			cl_dzip_crcval = CL_DZIP_INITCRC;
+
+		if (demomode)
+			CL_DZipDemUncompressInit((int)de->type);
+
+		while (readptr < eofptr)
+		{
+			unsigned int blocksize;
+
+			if (!CL_DZipZRead(inlen))
+			{
+				inflateEnd(&cl_dzip_zs);
+				cl_dzip_output_file = target_output;
+				cl_dzip_crc_enabled = true;
+				return false;
+			}
+
+			if (demomode)
+			{
+				blocksize = CL_DZipDemUncompress(eofptr - readptr);
+				if (!blocksize)
+				{
+					inflateEnd(&cl_dzip_zs);
+					cl_dzip_output_file = target_output;
+					cl_dzip_crc_enabled = true;
+					return false;
+				}
+			}
+			else
+			{
+				blocksize = cl_dzip_totalsize - readptr;
+				if (cl_dzip_totalsize >= eofptr)
+					blocksize = eofptr - readptr;
+				if (want_output && !CL_DZipOutputWrite(cl_dzip_inblk, blocksize))
+				{
+					inflateEnd(&cl_dzip_zs);
+					cl_dzip_output_file = target_output;
+					cl_dzip_crc_enabled = true;
+					return false;
+				}
+			}
+
+			if (blocksize != CL_DZIP_P_BLOCKSIZE)
+				memmove(cl_dzip_inblk, cl_dzip_inblk + blocksize, CL_DZIP_P_BLOCKSIZE - blocksize);
+
+			readptr += blocksize;
+			inlen = CL_DZIP_P_BLOCKSIZE - blocksize;
+		}
+
+		if (want_output)
+		{
+			extracted = true;
+			break;
+		}
+	}
+
+	inflateEnd(&cl_dzip_zs);
+	cl_dzip_output_file = target_output;
+	cl_dzip_crc_enabled = true;
+	return extracted;
+}
+
+static qboolean CL_DZipExtractDemoArchiveToFile(const char *archive_path, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
+{
+	cl_dzip_direntry_t *de;
+	FILE *archive = NULL;
+	long archive_base;
+	qofs_t archive_size;
+	qboolean ok = false;
+
+	if (!out)
+		return false;
+
+	if (out_size)
+		*out_size = -1;
+	if (out_entry_name_size)
+		out_entry_name[0] = '\0';
+
+	if (COM_FOpenFile(archive_path, &archive, NULL) < 0 || !archive)
+		return false;
+
+	archive_base = ftell(archive);
+	archive_size = com_filesize;
+
+	cl_dzip_archive_file = archive;
+	cl_dzip_archive_base = archive_base;
+	cl_dzip_archive_size = archive_size;
+	cl_dzip_output_file = out;
+	cl_dzip_crc_enabled = true;
+	CL_DZipCRCInit();
+
+	CL_DZipFreeDirectory();
+	if (!CL_DZipReadDirectory(archive_path))
+		goto done;
+
+	de = CL_DZipFindDemoEntry(archive_path);
+	if (!de)
+	{
+		Con_Printf("DZip: %s does not contain a supported demo entry\n", archive_path);
+		goto done;
+	}
+
+	cl_dzip_crcval = CL_DZIP_INITCRC;
+	if ((cl_dzip_maj_ver == 1 || de->type == CL_DZIP_TYPE_DEM || de->type == CL_DZIP_TYPE_DEMV1) && !CL_DZipAllocDecodeBuffers())
+	{
+		Con_Printf("DZip: out of memory extracting %s\n", archive_path);
+		goto done;
+	}
+
+	if (cl_dzip_maj_ver == 1)
+	{
+		ok = CL_DZipExtractLegacyEntry(de);
+	}
+	else switch (de->type)
+	{
+		case CL_DZIP_TYPE_STORE:
+			ok = CL_DZipExtractStoredFile(de);
+			break;
+		case CL_DZIP_TYPE_NORMAL:
+			ok = CL_DZipExtractNormalFile(de);
+			break;
+		case CL_DZIP_TYPE_DEM:
+			ok = CL_DZipExtractDemoEntry(de);
+			break;
+		default:
+			ok = false;
+			break;
+	}
+
+	if (!ok)
+	{
+		Con_Printf("DZip: failed to extract %s from %s\n", de->name, archive_path);
+		goto done;
+	}
+
+	if (cl_dzip_crcval != de->crc)
+	{
+		Con_Printf("DZip: warning: CRC mismatch extracting %s from %s\n", de->name, archive_path);
+	}
+
+	if (fflush(out) != 0)
+		goto done;
+	if (fseek(out, 0, SEEK_END) != 0)
+		goto done;
+
+	if (out_size)
+		*out_size = ftell(out);
+
+	rewind(out);
+
+	if (out_entry_name_size)
+		q_strlcpy(out_entry_name, COM_SkipPath(de->name), out_entry_name_size);
+	ok = true;
+
+done:
+	CL_DZipFreeDirectory();
+	CL_DZipFreeDecodeBuffers();
+	if (archive)
+		fclose(archive);
+	cl_dzip_archive_file = NULL;
+	cl_dzip_output_file = NULL;
+	return ok;
+}
+
+static qboolean CL_DZipOpenDemoArchive(const char *archive_path, FILE **out_demo, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
+{
+	FILE *out = NULL;
+	char temp_path[MAX_OSPATH];
+	qboolean ok = false;
+
+	*out_demo = NULL;
+	if (out_size)
+		*out_size = -1;
+	if (out_entry_name_size)
+		out_entry_name[0] = '\0';
+
+	CL_DZipCleanupTempDemo();
+	CL_DZipMakePlaybackTempPath(temp_path, sizeof(temp_path));
+	out = fopen(temp_path, "wb+");
+	if (!out)
+	{
+		Con_Printf("DZip: could not create temp demo %s\n", temp_path);
+		goto done;
+	}
+
+	if (CL_DZipExtractDemoArchiveToFile(archive_path, out, out_size, out_entry_name, out_entry_name_size))
+	{
+		q_strlcpy(cl_dzip_playback_temp_path, temp_path, sizeof(cl_dzip_playback_temp_path));
+		*out_demo = out;
+		out = NULL;
+		ok = true;
+	}
+
+done:
+	if (out)
+	{
+		fclose(out);
+		remove(temp_path);
+	}
+	return ok;
+}
+
+static byte *CL_DZipLoadDemoBuffer(const char *archive_path, int *length_out)
+{
+	FILE *out;
+	byte *data = NULL;
+	qofs_t size = -1;
+
+	if (length_out)
+		*length_out = -1;
+
+	out = tmpfile();
+	if (!out)
+		return NULL;
+
+	if (!CL_DZipExtractDemoArchiveToFile(archive_path, out, &size, NULL, 0))
+	{
+		fclose(out);
+		return NULL;
+	}
+
+	if (size <= 0 || size > INT_MAX)
+	{
+		fclose(out);
+		return NULL;
+	}
+
+	data = (byte *)malloc((size_t)size + 1);
+	if (!data)
+	{
+		fclose(out);
+		return NULL;
+	}
+
+	if (fread(data, 1, (size_t)size, out) != (size_t)size)
+	{
+		fclose(out);
+		free(data);
+		return NULL;
+	}
+
+	data[size] = '\0';
+	fclose(out);
+
+	if (length_out)
+		*length_out = (int)size;
+	return data;
+}
+
+static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *archive_path, const char *entry_name)
+{
+	byte header[12];
+	byte dirbuf[CL_DZIP_DIR_DISK_SIZE];
+	byte inbuf[65536];
+	byte outbuf[65536];
+	FILE *in = NULL;
+	FILE *out = NULL;
+	z_stream zs;
+	long real_size;
+	long compressed_size;
+	int ret;
+	size_t entry_len;
+	qboolean ok = false;
+
+	entry_len = strlen(entry_name) + 1;
+	if (entry_len == 0 || entry_len > MAX_OSPATH)
+		return false;
+
+	in = fopen(src_dem_path, "rb");
+	if (!in)
+		return false;
+
+	if (fseek(in, 0, SEEK_END) != 0)
+		goto done;
+	real_size = ftell(in);
+	if (real_size < 0 || fseek(in, 0, SEEK_SET) != 0)
+		goto done;
+
+	out = fopen(archive_path, "wb");
+	if (!out)
+		goto done;
+
+	CL_DZipCRCInit();
+	cl_dzip_crcval = CL_DZIP_INITCRC;
+
+	CL_DZipWriteLE32(header + 0, 'D' + ('Z' << 8) + (CL_DZIP_MAJOR_VERSION << 16) + (CL_DZIP_MINOR_VERSION << 24));
+	CL_DZipWriteLE32(header + 4, 0);
+	CL_DZipWriteLE32(header + 8, 1);
+	if (fwrite(header, 1, sizeof(header), out) != sizeof(header))
+		goto done;
+
+	memset(&zs, 0, sizeof(zs));
+	if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK)
+		goto done;
+
+	do
+	{
+		size_t read = fread(inbuf, 1, sizeof(inbuf), in);
+		if (read)
+		{
+			CL_DZipMakeCRC(inbuf, (int)read);
+			zs.next_in = inbuf;
+			zs.avail_in = (uInt)read;
+			while (zs.avail_in)
+			{
+				zs.next_out = outbuf;
+				zs.avail_out = sizeof(outbuf);
+				if (deflate(&zs, Z_NO_FLUSH) != Z_OK)
+				{
+					deflateEnd(&zs);
+					goto done;
+				}
+				if (sizeof(outbuf) - zs.avail_out)
+				{
+					if (fwrite(outbuf, 1, sizeof(outbuf) - zs.avail_out, out) != sizeof(outbuf) - zs.avail_out)
+					{
+						deflateEnd(&zs);
+						goto done;
+					}
+				}
+			}
+		}
+
+		if (ferror(in))
+		{
+			deflateEnd(&zs);
+			goto done;
+		}
+
+		if (feof(in))
+			break;
+	} while (1);
+
+	do
+	{
+		zs.next_out = outbuf;
+		zs.avail_out = sizeof(outbuf);
+		ret = deflate(&zs, Z_FINISH);
+		if (ret != Z_OK && ret != Z_STREAM_END)
+		{
+			deflateEnd(&zs);
+			goto done;
+		}
+		if (sizeof(outbuf) - zs.avail_out)
+		{
+			if (fwrite(outbuf, 1, sizeof(outbuf) - zs.avail_out, out) != sizeof(outbuf) - zs.avail_out)
+			{
+				deflateEnd(&zs);
+				goto done;
+			}
+		}
+	} while (ret != Z_STREAM_END);
+
+	compressed_size = zs.total_out;
+	deflateEnd(&zs);
+
+	CL_DZipWriteLE32(dirbuf + 0, 12);
+	CL_DZipWriteLE32(dirbuf + 4, (uint32_t)compressed_size);
+	CL_DZipWriteLE32(dirbuf + 8, (uint32_t)real_size);
+	CL_DZipWriteLE16(dirbuf + 12, (uint16_t)entry_len);
+	CL_DZipWriteLE16(dirbuf + 14, 0);
+	CL_DZipWriteLE32(dirbuf + 16, (uint32_t)cl_dzip_crcval);
+	CL_DZipWriteLE32(dirbuf + 20, CL_DZIP_TYPE_NORMAL);
+	CL_DZipWriteLE32(dirbuf + 24, 0);
+	CL_DZipWriteLE32(dirbuf + 28, (uint32_t)real_size);
+
+	if (fwrite(dirbuf, 1, sizeof(dirbuf), out) != sizeof(dirbuf))
+		goto done;
+	if (fwrite(entry_name, 1, entry_len, out) != entry_len)
+		goto done;
+
+	CL_DZipWriteLE32(header + 4, (uint32_t)(12 + compressed_size));
+	if (fseek(out, 0, SEEK_SET) != 0)
+		goto done;
+	if (fwrite(header, 1, sizeof(header), out) != sizeof(header))
+		goto done;
+
+	ok = true;
+
+done:
+	if (out)
+		fclose(out);
+	if (in)
+		fclose(in);
+	if (!ok)
+		remove(archive_path);
+	return ok;
+}
+
+#endif

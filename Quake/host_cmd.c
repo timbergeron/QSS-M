@@ -2050,6 +2050,8 @@ void DemoList_Init (void)
 	WIN32_FIND_DATA	fdat;
 	SYSTEMTIME stUTC, stLocal;
 	HANDLE		fhnd;
+	const char		*patterns[] = {"*.dem", "*.dz"};
+	int			pattern_idx;
 #else
 	DIR		*dir_p;
 	struct dirent	*dir_t;
@@ -2057,7 +2059,6 @@ void DemoList_Init (void)
 	struct tm* tm;
 #endif
 	char		filestring[MAX_OSPATH];
-	char		demname[50];
 	char		ignorepakdir[32];
 	char		dateStr[80]; // To store the date string
 	searchpath_t	*search;
@@ -2073,25 +2074,27 @@ void DemoList_Init (void)
 		if (!search->pack) //directory
 		{
 #ifdef _WIN32
-			q_snprintf (filestring, sizeof(filestring), "%s/demos/*.dem", search->filename); // woods #demosfolder
-			fhnd = FindFirstFile(filestring, &fdat);
-			if (fhnd == INVALID_HANDLE_VALUE)
-				continue;
-			do
+			for (pattern_idx = 0; pattern_idx < (int)(sizeof(patterns) / sizeof(patterns[0])); ++pattern_idx)
 			{
-				// Convert the last-write time to local time
-				FileTimeToSystemTime(&fdat.ftLastWriteTime, &stUTC);
-				SystemTimeToTzSpecificLocalTime(NULL, &stUTC, &stLocal);
+				q_snprintf(filestring, sizeof(filestring), "%s/demos/%s", search->filename, patterns[pattern_idx]); // woods #demosfolder
+				fhnd = FindFirstFile(filestring, &fdat);
+				if (fhnd == INVALID_HANDLE_VALUE)
+					continue;
+				do
+				{
+					// Convert the last-write time to local time
+					FileTimeToSystemTime(&fdat.ftLastWriteTime, &stUTC);
+					SystemTimeToTzSpecificLocalTime(NULL, &stUTC, &stLocal);
 
-				// Build a string showing the date
-				sprintf(dateStr, "%04d-%02d-%02d %02d:%02d:%02d",
-					stLocal.wYear, stLocal.wMonth, stLocal.wDay,
-					stLocal.wHour, stLocal.wMinute, stLocal.wSecond);
+					// Build a string showing the date
+					sprintf(dateStr, "%04d-%02d-%02d %02d:%02d:%02d",
+						stLocal.wYear, stLocal.wMonth, stLocal.wDay,
+						stLocal.wHour, stLocal.wMinute, stLocal.wSecond);
 
-				COM_StripExtension(fdat.cFileName, demname, sizeof(demname));
-				FileList_Add (demname, dateStr, &demolist);
-			} while (FindNextFile(fhnd, &fdat));
-			FindClose(fhnd);
+					FileList_Add(fdat.cFileName, dateStr, &demolist);
+				} while (FindNextFile(fhnd, &fdat));
+				FindClose(fhnd);
+			}
 #else
 			q_snprintf (filestring, sizeof(filestring), "%s/demos/", search->filename); // woods #demosfolder
 			dir_p = opendir(filestring);
@@ -2099,7 +2102,9 @@ void DemoList_Init (void)
 				continue;
 			while ((dir_t = readdir(dir_p)) != NULL)
 			{
-				if (q_strcasecmp(COM_FileGetExtension(dir_t->d_name), "dem") != 0)
+				const char *ext = COM_FileGetExtension(dir_t->d_name);
+
+				if (q_strcasecmp(ext, "dem") != 0 && q_strcasecmp(ext, "dz") != 0)
 					continue;
 
 				char fullpath[MAX_OSPATH];
@@ -2134,8 +2139,7 @@ void DemoList_Init (void)
 					dateStr[sizeof(dateStr) - 1] = '\0'; // Ensure null termination
 		}
 
-				COM_StripExtension(dir_t->d_name, demname, sizeof(demname));
-				FileList_Add (demname, dateStr, &demolist);
+				FileList_Add(dir_t->d_name, dateStr, &demolist);
 			}
 			closedir(dir_p);
 #endif
@@ -2146,11 +2150,9 @@ void DemoList_Init (void)
 			{ //don't list standard id demos
 				for (i = 0, pak = search->pack; i < pak->numfiles; i++)
 				{
-					if (!strcmp(COM_FileGetExtension(pak->files[i].name), "dem"))
-					{
-						COM_StripExtension(pak->files[i].name, demname, sizeof(demname));
-						FileList_Add (demname, "Unknown Date", &demolist);
-					}
+					const char *ext = COM_FileGetExtension(pak->files[i].name);
+					if (!q_strcasecmp(ext, "dem") || !q_strcasecmp(ext, "dz"))
+						FileList_Add(pak->files[i].name, "Unknown Date", &demolist);
 				}
 			}
 		}
