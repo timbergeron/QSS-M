@@ -783,6 +783,24 @@ static struct icesocket_s *ICE_OpenTCPSocket(netadrtype_t type, int port)
 }
 
 
+static void ICEUDP_NoClose(struct icesocket_s *s)
+{	//do NOT close the socket — we don't own it
+	free(s);
+}
+struct icesocket_s *ICE_WrapExistingSocket(SOCKET sock, int af)
+{	//wrap an existing socket for ICE use without taking ownership
+	struct icesocket_s *n = calloc(1, sizeof(*n));
+	if (!n)
+		return NULL;
+	n->SendPacket = ICEUDP_SendPacket;
+	n->RecvPacket = ICEUDP_RecvPacket;
+	n->EnumerateAddresses = ICEUDP_GetAddresses;
+	n->CloseSocket = ICEUDP_NoClose;	//don't close — datagram driver owns it
+	n->af = af;
+	n->sock = sock;
+	return n;
+}
+
 void ICE_SetupModule(struct icemodule_s *module, int udpport, int tcpport)
 {	//fixme: we should be binding one socket on each interface instead of INADDR_ANY. otherwise we're depending on the OS routing to be correct when multihomed. this may cause issues for linklocal addresses.
 	module->setupudpport = udpport;	// remember for lazy retry

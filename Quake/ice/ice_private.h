@@ -365,6 +365,7 @@ struct icesocket_s
 	int af;
 };
 struct icesocket_s *ICE_OpenUDP(netadrtype_t type, int port);
+struct icesocket_s *ICE_WrapExistingSocket(SOCKET sock, int af);
 void ICE_SetupModule(struct icemodule_s *module, int udpport, int tcpport);
 
 enum addressscope_e NET_ClassifyAddress(const netadr_t *adr, const char **outdesc);
