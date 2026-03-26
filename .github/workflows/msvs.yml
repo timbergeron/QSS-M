@@ -19,6 +19,7 @@ jobs:
         MATRIX_PLATFORM: ${{ matrix.platform }}
       run: |
         $gitrev = (git describe --always)
+        $runtimeGitSha = (git rev-parse --short=7 HEAD)
         $gitbranch = (git branch --show-current)
         if ($gitbranch -eq "master" -or $gitbranch -eq "main") {
           $ver_suffix = "-$gitrev"
@@ -37,6 +38,7 @@ jobs:
         }
         $build_artifact = "QSS-M$ver_suffix-$platform_alt"
         "VER_SUFFIX=$ver_suffix" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "VERSION_SUFFIX=-$runtimeGitSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         "BUILD_ARTIFACT=$build_artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         "BUILD_DIR=$build_artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         "PLATFORM_ALT=$platform_alt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -57,6 +59,7 @@ jobs:
         $options = @(
           "-property:Configuration=Release"
           "-property:Platform=${{ matrix.platform }}"
+          "-property:QSSMVersionSuffix=$env:VERSION_SUFFIX"
           "-property:PostBuildEventUseInBuild=false"
           "-maxcpucount"
           "-verbosity:normal"

@@ -1,5 +1,10 @@
 #!/bin/sh
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$SCRIPT_DIR/ci-version.sh"
+
+cd "$SCRIPT_DIR"
+
 echo "Git URL:      https://github.com/timbergeron/QSS-M.git" > QSS-M-Revision.txt
 echo "Git Revision: `git rev-parse HEAD`" >> QSS-M-Revision.txt
 echo "Git Date:     `git log -1 --date=short --format=%cd`" >> QSS-M-Revision.txt
@@ -10,7 +15,7 @@ cd Quake/
 MAKEARGS="-j8"
 
 # Make Linux64
-export QSS_CFLAGS="-DQSS_REVISION=`git rev-parse HEAD`"
+export QSS_CFLAGS="$(qssm_build_cflags)"
 export QSS_LDFLAGS="-Wl,--allow-multiple-definition"
 make clean
 make USE_SDL2=1 $MAKEARGS

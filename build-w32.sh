@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$SCRIPT_DIR/ci-version.sh"
+
+cd "$SCRIPT_DIR"
+
 echo "Git URL:      https://github.com/timbergeron/QSS-M.git" > QSS-M-Revision.txt
 echo "Git Revision: `git rev-parse HEAD`" >> QSS-M-Revision.txt
 echo "Git Date:     `git log -1 --date=short --format=%cd`" >> QSS-M-Revision.txt
@@ -12,7 +17,7 @@ MAKEARGS="${MAKEARGS:--j8}"
 TARGET_TRIPLET="${TARGET_TRIPLET:-i686-w64-mingw32}"
 
 # Make win32
-export QSS_CFLAGS="-DQSS_REVISION=`git rev-parse HEAD`"
+export QSS_CFLAGS="$(qssm_build_cflags)"
 export QSS_LDFLAGS="-Wl,--allow-multiple-definition"
 
 make -f Makefile.w32 clean

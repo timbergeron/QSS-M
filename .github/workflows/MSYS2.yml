@@ -58,6 +58,7 @@ jobs:
           echo "Quake directory not found. Exiting."
           exit 1
         }
+        . ../ci-version.sh
 
         mingw_prefix="/mingw${{ matrix.bits }}"
         target_triple="${{ matrix.arch }}-w64-mingw32"
@@ -134,7 +135,7 @@ jobs:
         fi
 
         # Set build-specific environment variables
-        export QSS_CFLAGS="-DQSS_REVISION=$(git rev-parse HEAD)"
+        export QSS_CFLAGS="$(qssm_build_cflags)"
         export QSS_LDFLAGS="-Wl,--allow-multiple-definition"
         runtime_bin="/mingw${{ matrix.bits }}/bin"
         gnutls_runtime=()
