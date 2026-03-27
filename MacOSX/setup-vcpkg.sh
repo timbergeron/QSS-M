@@ -63,6 +63,16 @@ fi
 echo ""
 echo "=== All required tools found ==="
 
+if [ -n "${VCPKG_DEFAULT_BINARY_CACHE:-}" ]; then
+    mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+    echo "Using VCPKG_DEFAULT_BINARY_CACHE: $VCPKG_DEFAULT_BINARY_CACHE"
+fi
+
+if [ -n "${VCPKG_DOWNLOADS:-}" ]; then
+    mkdir -p "$VCPKG_DOWNLOADS"
+    echo "Using VCPKG_DOWNLOADS: $VCPKG_DOWNLOADS"
+fi
+
 # vcpkg ports such as libidn2 require autoconf-archive macros.
 if command -v brew >/dev/null 2>&1; then
     if ! brew list --versions autoconf-archive >/dev/null 2>&1; then

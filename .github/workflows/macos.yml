@@ -10,9 +10,24 @@ jobs:
     runs-on: macos-latest
     strategy:
       fail-fast: false
+    env:
+      VCPKG_CACHE_REV: "v1"
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
+      VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
+      VCPKG_DISABLE_METRICS: "1"
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Cache vcpkg artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          ${{ env.VCPKG_DOWNLOADS }}
+        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ hashFiles('MacOSX/setup-vcpkg.sh', 'MacOSX/custom-triplets/*.cmake') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-vcpkg-
 
     - name: Debug environment (pre-install)
       run: |
