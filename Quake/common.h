@@ -318,6 +318,7 @@ void COM_StripExtension (const char *in, char *out, size_t outsize);
 void COM_FileBase (const char *in, char *out, size_t outsize);
 void COM_AddExtension (char *path, const char *extension, size_t len);
 qboolean COM_DownloadNameOkay(const char *filename);
+qboolean COM_DownloadPackageNameOkay(const char *filename);
 /* COM_DefaultExtension can be dangerous */
 void COM_DefaultExtension (char *path, const char *extension, size_t len); // woods #locext
 const char *COM_FileGetExtension (const char *in); /* doesn't return NULL */
@@ -410,6 +411,9 @@ void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, 
 const char *COM_GetGameNames(qboolean full);
 qboolean COM_GameDirMatches(const char *tdirs);
 void COM_RemoveDownloadTempFiles(void);
+void COM_AddDownloadedPackage(const char *relative_path);
+void COM_RemoveDownloadedPackage(const char *relative_path);
+qboolean COM_IsPackageExtension(const char *extension);
 
 pack_t *FSZIP_LoadArchive (const char *packfile);
 FILE *FSZIP_Deflate(FILE *src, qofs_t srcsize, qofs_t outsize, const char *entryname);

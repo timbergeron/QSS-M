@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include <sys/types.h>
 #include <errno.h>
+#include <signal.h>
 #include <unistd.h>
 #if defined(PLATFORM_OSX) || defined(PLATFORM_HAIKU)
 #include <libgen.h>	/* dirname() and basename() */
@@ -53,7 +54,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 qboolean		isDedicated;
 cvar_t		sys_throttle = {"sys_throttle", "0.02", CVAR_ARCHIVE};
-cvar_t		sys_dedmouse_capture = {"sys_dedmouse_capture", "1", CVAR_ARCHIVE};
+cvar_t		sys_dedmouse_capture = {"sys_dedmouse_capture", "0", CVAR_ARCHIVE};
 
 static size_t	sys_handles_max;	/* spike -- removed limit, was 32 (johnfitz -- was 10) */
 static FILE		**sys_handles;
@@ -408,10 +409,73 @@ void Sys_mkdir (const char *path)
 
 static const char errortxt1[] = "\nERROR-OUT BEGIN\n\n";
 static const char errortxt2[] = "\nQUAKE ERROR: ";
+static const char sys_console_reset_seq[] = "\033[0m\033[?1l\033[?7h\033[?25h\033[?1000l\033[?1002l\033[?1003l\033[?1004l\033[?1005l\033[?1006l\033[?1015l\033[?1049l\033[?2004l";
+static const char sys_console_quit_reset_seq[] =
+	"\033[!p"      /* DECSTR soft terminal reset */
+	"\033>"        /* normal keypad mode */
+	"\033[?1l"     /* normal cursor keys */
+	"\033[?7h"     /* autowrap on */
+	"\033[?25h"    /* cursor visible */
+	"\033[0m"
+	"\033[?1000l\033[?1002l\033[?1003l\033[?1004l\033[?1005l\033[?1006l\033[?1015l"
+	"\033[?1049l"
+	"\033[?2004l"
+	"\r\n";
 
 static struct termios orig_termios_saved;
 static qboolean term_initialized = false;
+static volatile sig_atomic_t dedicated_shutdown_signal = 0;
+static volatile sig_atomic_t dedicated_shutdown_hard_exit = 0;
+static int console_signal_ttyfd = -1;
 static void Sys_ConsoleCleanup (void); // forward decl
+static int Sys_ConsoleOpenTTY (int flags);
+
+static void Sys_ConsoleEnsureSignalTTY (void)
+{
+	if (console_signal_ttyfd != -1)
+		return;
+
+	console_signal_ttyfd = Sys_ConsoleOpenTTY (O_WRONLY);
+	if (console_signal_ttyfd == -1 && isatty (STDOUT_FILENO))
+		console_signal_ttyfd = dup (STDOUT_FILENO);
+	if (console_signal_ttyfd == -1 && isatty (STDIN_FILENO))
+		console_signal_ttyfd = dup (STDIN_FILENO);
+}
+
+static void Sys_DedicatedSignalHandler (int sig)
+{
+	const char *text = sys_console_reset_seq;
+	size_t len = sizeof (sys_console_reset_seq) - 1;
+	int saved_errno = errno;
+
+	if (dedicated_shutdown_hard_exit)
+		_exit (128 + sig);
+
+	dedicated_shutdown_hard_exit = 1;
+	dedicated_shutdown_signal = sig;
+
+	if (console_signal_ttyfd != -1)
+	{
+		while (len > 0)
+		{
+			ssize_t nwritten = write (console_signal_ttyfd, text, len);
+
+			if (nwritten > 0)
+			{
+				text += nwritten;
+				len -= (size_t)nwritten;
+				continue;
+			}
+
+			if (nwritten < 0 && errno == EINTR)
+				continue;
+
+			break;
+		}
+	}
+
+	errno = saved_errno;
+}
 
 void Sys_Error (const char *error, ...)
 {
@@ -438,6 +502,30 @@ void Sys_Error (const char *error, ...)
 	exit (1);
 }
 
+void Sys_InstallDedicatedSignalHandlers (void)
+{
+	struct sigaction sa;
+
+	if (!isDedicated)
+		return;
+
+	memset (&sa, 0, sizeof(sa));
+	sa.sa_handler = Sys_DedicatedSignalHandler;
+	sigemptyset (&sa.sa_mask);
+
+	sigaction (SIGTERM, &sa, NULL);
+	sigaction (SIGINT, &sa, NULL);
+	sigaction (SIGHUP, &sa, NULL);
+#ifdef SIGQUIT
+	sigaction (SIGQUIT, &sa, NULL);
+#endif
+}
+
+qboolean Sys_HasDedicatedQuitRequest (void)
+{
+	return dedicated_shutdown_signal != 0;
+}
+
 /* ============================================================
    Dedicated console scrollback
    ============================================================ */
@@ -457,8 +545,6 @@ static int   scrollback_enter_head = 0; // head position when we entered scrollb
 static int   scrollback_enter_partial_len = 0;
 static qboolean scrollback_wrapped = false; // buffer wrapped fully during scrollback
 static qboolean mouse_reporting_enabled = false;
-
-static int Sys_ConsoleOpenTTY (int flags);
 
 static qboolean Sys_DedConsoleWantsMouseReporting (void)
 {
@@ -587,14 +673,13 @@ static void Sys_ConsoleCleanup (void)
 {
 	qboolean need_drain;
 	int rc, ttyfd;
-	static const char reset_seq[] = "\033[0m\033[?1l\033[?7h\033[?25h\033[?1000l\033[?1002l\033[?1003l\033[?1004l\033[?1005l\033[?1006l\033[?1015l\033[?1049l\033[?2004l";
 
 	if (!term_initialized)
 		return;
 
 	need_drain = mouse_reporting_enabled;
 	Sys_ConsoleSetMouseReporting (false);
-	Sys_ConsoleWriteTTY (reset_seq, sizeof(reset_seq) - 1);
+	Sys_ConsoleWriteTTY (sys_console_reset_seq, sizeof(sys_console_reset_seq) - 1);
 	if (need_drain)
 		Sys_DrainConsoleInput ();
 	tcflush (0, TCIFLUSH);
@@ -606,6 +691,11 @@ static void Sys_ConsoleCleanup (void)
 		Sys_ConsoleForceSaneTermios (ttyfd);
 	if (ttyfd != 0)
 		close (ttyfd);
+	if (console_signal_ttyfd != -1)
+	{
+		close (console_signal_ttyfd);
+		console_signal_ttyfd = -1;
+	}
 	mouse_reporting_enabled = false;
 	term_initialized = false;
 }
@@ -1317,17 +1407,7 @@ void Sys_Printf (const char *fmt, ...)
 
 void Sys_Quit (void)
 {
-	static const char quit_reset_seq[] =
-		"\033[!p"      /* DECSTR soft terminal reset */
-		"\033>"        /* normal keypad mode */
-		"\033[?1l"     /* normal cursor keys */
-		"\033[?7h"     /* autowrap on */
-		"\033[?25h"    /* cursor visible */
-		"\033[0m"
-		"\033[?1000l\033[?1002l\033[?1003l\033[?1004l\033[?1005l\033[?1006l\033[?1015l"
-		"\033[?1049l"
-		"\033[?2004l"
-		"\r\n";
+	int exit_status = 0;
 
 	if (!isDedicated)
 	{
@@ -1335,15 +1415,18 @@ void Sys_Quit (void)
 		exit (0);
 	}
 
+	if (dedicated_shutdown_signal != 0)
+		exit_status = 128 + dedicated_shutdown_signal;
+
 	Sys_ConsoleSetMouseReporting (false);
 	Host_Shutdown();
 
 	/* For normal quit, leave tty mode handoff to the shell, but
 	   explicitly disable the private terminal modes we turned on. */
-	Sys_ConsoleWriteTTY (quit_reset_seq, sizeof(quit_reset_seq) - 1);
+	Sys_ConsoleWriteTTY (sys_console_quit_reset_seq, sizeof(sys_console_quit_reset_seq) - 1);
 	Sys_ConsoleRestoreSavedTermios ();
 	fflush (stdout);
-	_exit (0);
+	_exit (exit_status);
 }
 
 double Sys_DoubleTime (void)
@@ -1421,6 +1504,7 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
             tcsetattr(0, TCSANOW, &raw_termios);
 	            orig_termios_saved = orig_termios;
 		            term_initialized = true;
+		            Sys_ConsoleEnsureSignalTTY ();
 		            term_setup = true;
 		            ded_input_cursor = 0;
 		    }
