@@ -1102,6 +1102,15 @@ void Sys_Quit (void)
 	exit (0);
 }
 
+void Sys_InstallDedicatedSignalHandlers (void)
+{
+}
+
+qboolean Sys_HasDedicatedQuitRequest (void)
+{
+	return false;
+}
+
 double Sys_DoubleTime (void)
 {
 #if 1

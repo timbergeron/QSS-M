@@ -63,6 +63,8 @@ void Sys_Printf (const char *fmt, ...) FUNC_PRINTF(1,2);
 double Sys_DoubleTime (void);
 
 const char *Sys_ConsoleInput (void);
+void Sys_InstallDedicatedSignalHandlers (void);
+qboolean Sys_HasDedicatedQuitRequest (void);
 
 void Sys_Sleep (unsigned long msecs);
 // yield for about 'msecs' milliseconds.

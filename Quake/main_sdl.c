@@ -121,17 +121,25 @@ int main(int argc, char *argv[])
 
 	Sys_Printf("Host_Init\n");
 	Host_Init();
+	if (isDedicated)
+		Sys_InstallDedicatedSignalHandlers ();
 
 	oldtime = Sys_DoubleTime();
 	if (isDedicated)
 	{
 		while (1)
 		{
+			if (Sys_HasDedicatedQuitRequest ())
+				Sys_Quit ();
+
 			newtime = Sys_DoubleTime ();
 			time = newtime - oldtime;
 
 			while (time < sys_ticrate.value)
 			{
+				if (Sys_HasDedicatedQuitRequest ())
+					Sys_Quit ();
+
 				int i;
 				qboolean hasClients = false;
 #if defined(__linux__) || defined(__APPLE__)
@@ -168,9 +176,15 @@ int main(int argc, char *argv[])
 				else
 					SDL_Delay(1);
 
+				if (Sys_HasDedicatedQuitRequest ())
+					Sys_Quit ();
+
 				newtime = Sys_DoubleTime ();
 				time = newtime - oldtime;
 			}
+
+			if (Sys_HasDedicatedQuitRequest ())
+				Sys_Quit ();
 
 			Host_Frame (time);
 			oldtime = newtime;
