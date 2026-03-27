@@ -262,6 +262,7 @@ struct icemodule_s
 	struct icesocket_s *conn[MAX_NETWORKS];
 	int setupudpport;	// for lazy retry if sockets fail at init
 	int setuptcpport;
+	int srflx_port;		// if set, override srflx candidate port (for NAT port mapping)
 
 	//private ICE state.
 	struct icemodule_s *next;
@@ -366,6 +367,7 @@ struct icesocket_s
 };
 struct icesocket_s *ICE_OpenUDP(netadrtype_t type, int port);
 struct icesocket_s *ICE_WrapExistingSocket(SOCKET sock, int af);
+struct icesocket_s *ICE_WrapExistingSocketSendOnly(SOCKET sock, int af);
 void ICE_SetupModule(struct icemodule_s *module, int udpport, int tcpport);
 
 enum addressscope_e NET_ClassifyAddress(const netadr_t *adr, const char **outdesc);

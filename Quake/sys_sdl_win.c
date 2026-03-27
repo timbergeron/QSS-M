@@ -406,8 +406,6 @@ void Sys_Init (void)
 			use_vtp = SetConsoleMode (houtput, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 			SetConsoleOutputCP (CP_UTF8);
 			GetConsoleMode (hinput, &mode);
-			mode |= ENABLE_MOUSE_INPUT;
-			mode &= ~ENABLE_QUICK_EDIT_MODE;
 			SetConsoleMode (hinput, mode | ENABLE_EXTENDED_FLAGS);
 		}
 	}
@@ -1192,6 +1190,29 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 	INPUT_RECORD	recs[1024];
 	int		ch;
 	DWORD		dummy, numread, numevents;
+
+	//apply mouse capture / quick edit mode dynamically based on cvar
+	{
+		static int last_mouse_capture = -1;
+		int want = (int)sys_dedmouse_capture.value;
+		if (want != last_mouse_capture)
+		{
+			DWORD mode = 0;
+			GetConsoleMode(hinput, &mode);
+			if (want)
+			{
+				mode |= ENABLE_MOUSE_INPUT;
+				mode &= ~ENABLE_QUICK_EDIT_MODE;
+			}
+			else
+			{
+				mode &= ~ENABLE_MOUSE_INPUT;
+				mode |= ENABLE_QUICK_EDIT_MODE;
+			}
+			SetConsoleMode(hinput, mode | ENABLE_EXTENDED_FLAGS);
+			last_mouse_capture = want;
+		}
+	}
 
 	for ( ;; )
 	{

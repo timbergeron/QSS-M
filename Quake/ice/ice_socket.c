@@ -787,6 +787,10 @@ static void ICEUDP_NoClose(struct icesocket_s *s)
 {	//do NOT close the socket — we don't own it
 	free(s);
 }
+static int ICEUDP_NoRecv(struct icesocket_s *s, netadr_t *addr, void *data, size_t datasize)
+{	//send-only wrapper — datagram driver handles recv, we just need to send through this socket
+	return 0;
+}
 struct icesocket_s *ICE_WrapExistingSocket(SOCKET sock, int af)
 {	//wrap an existing socket for ICE use without taking ownership
 	struct icesocket_s *n = calloc(1, sizeof(*n));
@@ -796,6 +800,21 @@ struct icesocket_s *ICE_WrapExistingSocket(SOCKET sock, int af)
 	n->RecvPacket = ICEUDP_RecvPacket;
 	n->EnumerateAddresses = ICEUDP_GetAddresses;
 	n->CloseSocket = ICEUDP_NoClose;	//don't close — datagram driver owns it
+	n->af = af;
+	n->sock = sock;
+	return n;
+}
+struct icesocket_s *ICE_WrapExistingSocketSendOnly(SOCKET sock, int af)
+{	//send-only wrapper — can send through the socket but recv always returns 0.
+	//used to put the shared game socket in a module's conn[] for sending responses
+	//without ICE_ProcessModule stealing packets from the datagram driver.
+	struct icesocket_s *n = calloc(1, sizeof(*n));
+	if (!n)
+		return NULL;
+	n->SendPacket = ICEUDP_SendPacket;
+	n->RecvPacket = ICEUDP_NoRecv;
+	n->EnumerateAddresses = ICEUDP_GetAddresses;
+	n->CloseSocket = ICEUDP_NoClose;
 	n->af = af;
 	n->sock = sock;
 	return n;

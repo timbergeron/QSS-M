@@ -1897,6 +1897,10 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 		free(con->rpwd);
 		con->rpwd = strdup(value);
 	}
+	else if (!strcmp(prop, "brokerless"))
+	{
+		con->brokerless = atoi(value) != 0;
+	}
 	else if (!strcmp(prop, "server"))
 	{
 		netadr_t hostadr[1];
@@ -2791,14 +2795,17 @@ void ICE_Tick(void)
 	{
 		if (con->brokerless)
 		{
-			if (con->state <= ICE_GATHERING)
+			if (con->state <= ICE_GATHERING || con->state == ICE_FAILED)
 			{
 				*link = con->next;
 				ICE_Destroy(con);
 				continue;
 			}
 			else if ((signed int)(curtime-con->icetimeout) > 0)
-				ICE_SetFailed(con, S_COLOR_GRAY"[%s]: ice timeout\n", con->friendlyname);
+			{
+				Con_DPrintf(S_COLOR_GRAY"[%s]: brokerless ice timeout\n", con->friendlyname);
+				con->state = ICE_FAILED;	//will be destroyed on next tick
+			}
 		}
 
 		if (!(con->modeflags & ICEF_ALLOW_PROBE))
@@ -3015,10 +3022,10 @@ static struct icestate_s *ICE_DirectConnectedInternal(struct icemodule_s *module
 		con->server[0].con = link;
 		con->chosenpeer.connum = con->server[0].connum = 1+MAX_NETWORKS+countof(con->server)+0;	//send through our private socket instead of wrapping in TURN.
 		con->server[0].addr = con->chosenpeer;
-		Con_Printf("%s: WebSocket connection\n", peer);
+		Con_DPrintf("%s: WebSocket connection\n", peer);
 	}
 	else
-		Con_Printf("%s: Direct connection\n", peer);
+		Con_DPrintf("%s: Direct connection\n", peer);
 
 	con->brokerless = true;
 	con->state = ICE_CONNECTED;
@@ -3253,7 +3260,9 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 								con->lc = src;
 								src->peer = adr;
 								NET_BaseAdrToString(src->info.addr, sizeof(src->info.addr), &adr);
-								src->info.port = NET_AdrToPort(&adr);
+								//use the module's srflx_port override if set (e.g. game port
+								//behind Docker/symmetric NAT where STUN reflects an ephemeral port)
+								src->info.port = con->module->srflx_port ? con->module->srflx_port : NET_AdrToPort(&adr);
 								//if (net_from.connum >= 1 && net_from.connum < 1+MAX_NETWORKS && col->conn[net_from.connum-1])
 								//	col->conn[net_from.connum-1]->GetLocalAddresses(col->conn[net_from.connum-1], &relflags, &reladdr, &relpath, 1);
 								//FIXME: we don't really know which one... NET_BaseAdrToString(src->info.reladdr, sizeof(src->info.reladdr), &reladdr);
