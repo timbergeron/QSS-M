@@ -378,10 +378,8 @@ int WINS_Read (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr
 	if (ret == SOCKET_ERROR)
 	{
 		int err = SOCKETERRNO;
-		if (err == NET_EWOULDBLOCK || err == NET_ECONNREFUSED)
+		if (err == NET_EWOULDBLOCK || err == NET_ECONNREFUSED || err == WSAECONNRESET)
 			return 0;
-		if (err == WSAECONNRESET)
-			Con_DPrintf ("WINS_Read, recvfrom: %s (%s)\n", socketerror(err), WINS_AddrToString(addr, false));
 		else
 			Con_SafePrintf ("WINS_Read, recvfrom: %s\n", socketerror(err));
 	}

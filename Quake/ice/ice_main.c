@@ -1897,6 +1897,10 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 		free(con->rpwd);
 		con->rpwd = strdup(value);
 	}
+	else if (!strcmp(prop, "brokerless"))
+	{
+		con->brokerless = atoi(value) != 0;
+	}
 	else if (!strcmp(prop, "server"))
 	{
 		netadr_t hostadr[1];
@@ -2791,7 +2795,7 @@ void ICE_Tick(void)
 	{
 		if (con->brokerless)
 		{
-			if (con->state <= ICE_GATHERING)
+			if (con->state <= ICE_GATHERING || con->state == ICE_FAILED)
 			{
 				*link = con->next;
 				ICE_Destroy(con);
@@ -3253,7 +3257,9 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 								con->lc = src;
 								src->peer = adr;
 								NET_BaseAdrToString(src->info.addr, sizeof(src->info.addr), &adr);
-								src->info.port = NET_AdrToPort(&adr);
+								//use the module's srflx_port override if set (e.g. game port
+								//behind Docker/symmetric NAT where STUN reflects an ephemeral port)
+								src->info.port = con->module->srflx_port ? con->module->srflx_port : NET_AdrToPort(&adr);
 								//if (net_from.connum >= 1 && net_from.connum < 1+MAX_NETWORKS && col->conn[net_from.connum-1])
 								//	col->conn[net_from.connum-1]->GetLocalAddresses(col->conn[net_from.connum-1], &relflags, &reladdr, &relpath, 1);
 								//FIXME: we don't really know which one... NET_BaseAdrToString(src->info.reladdr, sizeof(src->info.reladdr), &reladdr);

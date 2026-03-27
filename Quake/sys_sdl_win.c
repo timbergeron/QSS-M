@@ -406,8 +406,6 @@ void Sys_Init (void)
 			use_vtp = SetConsoleMode (houtput, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 			SetConsoleOutputCP (CP_UTF8);
 			GetConsoleMode (hinput, &mode);
-			mode |= ENABLE_MOUSE_INPUT;
-			mode &= ~ENABLE_QUICK_EDIT_MODE;
 			SetConsoleMode (hinput, mode | ENABLE_EXTENDED_FLAGS);
 		}
 	}
@@ -537,7 +535,7 @@ static int Scrollback_TermWidth (void)
 static char	ded_input[MAXCMDLINE];
 static int	ded_input_len;
 static int	ded_input_cursor;
-cvar_t		sys_dedmouse_capture = {"sys_dedmouse_capture", "1", CVAR_ARCHIVE};
+cvar_t		sys_dedmouse_capture = {"sys_dedmouse_capture", "0", CVAR_ARCHIVE};
 
 static qboolean Scrollback_ShowCaretRow (void)
 {
@@ -1183,6 +1181,29 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 	INPUT_RECORD	recs[1024];
 	int		ch;
 	DWORD		dummy, numread, numevents;
+
+	//apply mouse capture / quick edit mode dynamically based on cvar
+	{
+		static int last_mouse_capture = -1;
+		int want = (int)sys_dedmouse_capture.value;
+		if (want != last_mouse_capture)
+		{
+			DWORD mode = 0;
+			GetConsoleMode(hinput, &mode);
+			if (want)
+			{
+				mode |= ENABLE_MOUSE_INPUT;
+				mode &= ~ENABLE_QUICK_EDIT_MODE;
+			}
+			else
+			{
+				mode &= ~ENABLE_MOUSE_INPUT;
+				mode |= ENABLE_QUICK_EDIT_MODE;
+			}
+			SetConsoleMode(hinput, mode | ENABLE_EXTENDED_FLAGS);
+			last_mouse_capture = want;
+		}
+	}
 
 	for ( ;; )
 	{

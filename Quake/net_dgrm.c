@@ -1030,7 +1030,7 @@ void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 				}
 			}
 			if (!s)
-			{	//unmatched packet — try broker DTLS, then ICE (STUN/DTLS/SCTP)
+			{	//unmatched packet — try ICE (STUN/DTLS/SCTP)
 				byte leadbyte = ((byte *)&packetBuffer)[0];
 				if (leadbyte < 4 || (leadbyte >= 20 && leadbyte < 64))
 					NQICE_ProcessPacket((byte *)&packetBuffer, length, &addr, callback);

@@ -823,12 +823,15 @@ static qice_connection_t *QICE_Setup(const char *address, qboolean isserver)
 			if (wrap)
 				newcon->icemodule.conn[1] = wrap;
 		}
+		newcon->icemodule.srflx_port = net_hostport;	// use game port for srflx candidates (NAT may remap)
 		ICE_SetupModule(&newcon->icemodule,
 			0,						// shared sockets handle UDP; 0 = don't open another
 			net_hostport);			// TCP/WebSocket on game port
 	}
 	else
 	{
+		if (isserver)
+			newcon->icemodule.srflx_port = net_hostport;	// use game port for srflx candidates (NAT may remap)
 		ICE_SetupModule(&newcon->icemodule,
 			0,						// ephemeral if needed (client), or none (no shared socket)
 			isserver ? net_hostport : 0);		// TCP/WebSocket on game port
@@ -899,7 +902,7 @@ static qice_connection_t *qice_hostcon;	//broker for our server side.
 //Decrypted packets are processed as connectionless with dtls_authenticated=true.
 #ifdef HAVE_DTLS
 #define MAX_BROKER_DTLS_PEERS 8
-#define BROKER_DTLS_TIMEOUT 60.0
+#define BROKER_DTLS_TIMEOUT 5.0
 struct broker_dtls_peer_s
 {
 	netadr_t addr;
@@ -1024,11 +1027,38 @@ qboolean BrokerDTLS_HandlePacket(byte *data, int len, struct qsockaddr *qaddr, s
 		return false;
 
 	{	struct broker_dtls_peer_s temp;
+		qboolean result;
 		memset(&temp, 0, sizeof(temp));
 		temp.addr = from;
 		temp.funcs = funcs;
 		temp.sendsock = sendsock;
-		return funcs->CheckConnection(&temp, &from, sizeof(from), data, len, BrokerDTLS_Push, BrokerDTLS_Established);
+		result = funcs->CheckConnection(&temp, &from, sizeof(from), data, len, BrokerDTLS_Push, BrokerDTLS_Established);
+
+		if (!result && len > 0 && data[0] == 0x17)
+		{	//application data with no session — broker has a stale DTLS session.
+			//send a DTLS fatal alert (unexpected_message) to force re-handshake.
+			static double last_alert_time;
+			double now = Sys_DoubleTime();
+			if (now - last_alert_time > 1.0)	//rate limit
+			{
+				byte alert[] = {
+					0x15,			//content type: alert
+					0xFE, 0xFD,		//DTLS 1.2 version
+					0x00, 0x00,		//epoch
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00,	//sequence number
+					0x00, 0x02,		//length
+					0x02,			//fatal
+					0x0A			//unexpected_message
+				};
+				if (sendsock)
+					sendsock->SendPacket(sendsock, &from, alert, sizeof(alert));
+				Con_DPrintf("BrokerDTLS: sent alert to %s (stale session)\n",
+					NET_BaseAdrToString((char[64]){0}, 64, &from));
+				last_alert_time = now;
+			}
+		}
+
+		return result;
 	}
 }
 
@@ -1164,16 +1194,46 @@ void SVC_ICE_Offer(const char *clientaddr, const char *brokerid, const char *sdp
 		return;
 	ice_peer_state[pi].timeout = Sys_DoubleTime() + 30;
 
+	//close any stale ICE state for this broker_id (e.g. from a previous offer/retry)
+	ice = iceapi.Find(&qice_hostcon->icemodule, brokerid);
+	if (ice)
+		iceapi.Close(ice, true);
+
 	ice = iceapi.Create(&qice_hostcon->icemodule, brokerid, clientaddr, ICEF_DEFAULT, ICEP_SERVER);
 	if (!ice)
 	{
 		Con_Printf("ICE: iceapi.Create failed for broker_id=%s\n", brokerid);
 		return;
 	}
+	iceapi.Set(ice, "brokerless", "1");	//not managed by WebSocket broker — clean up on failure/timeout
 
-	//use the broker as a STUN server to discover our server-reflexive address
+	//use the broker as a STUN server to discover our server-reflexive address.
+	//Use the broker's known IP (from the DTLS source) with the main broker port
+	//(from net_ice_broker cvar). The DTLS session may arrive from an ephemeral alt
+	//socket, so we can't use its source port directly. And we can't resolve the
+	//broker hostname — inside Docker it may resolve to an unreachable address.
 	if (brokeraddr && *brokeraddr)
-		iceapi.Set(ice, "server", va("stun:%s", brokeraddr));
+	{
+		char stunaddr[128];
+		const char *brokerhost = net_ice_broker.string;
+		int brokerport = PORT_ICEBROKER;
+		char *colon;
+
+		//extract just the port from the broker cvar
+		if (!strncmp(brokerhost, "ws://", 5)) brokerhost += 5;
+		else if (!strncmp(brokerhost, "wss://", 6)) brokerhost += 6;
+		colon = strrchr(brokerhost, ':');
+		if (colon)
+			brokerport = atoi(colon + 1);
+
+		//extract just the IP from brokeraddr (strip its port)
+		q_strlcpy(stunaddr, brokeraddr, sizeof(stunaddr));
+		colon = strrchr(stunaddr, ':');
+		if (colon)
+			*colon = 0;
+
+		iceapi.Set(ice, "server", va("stun:%s:%d", stunaddr, brokerport));
+	}
 
 	s = net_ice_servers.string;
 	while((s=COM_Parse(s)))
@@ -2242,6 +2302,17 @@ void NQICE_ShareGameSocket (sys_socket_t sock)
 	wrap = ICE_WrapExistingSocket(sock, af);
 	if (wrap)
 		*slot = wrap;
+
+	//put a send-only wrapper in the host module so ICE responses (STUN binding
+	//replies, connectivity checks) go out through the game port, not an ephemeral port.
+	//send-only so ICE_ProcessModule won't steal packets from the datagram driver.
+	if (wrap && qice_hostcon)
+	{
+		int idx = (af == AF_INET6) ? 1 : 0;
+		if (qice_hostcon->icemodule.conn[idx])
+			qice_hostcon->icemodule.conn[idx]->CloseSocket(qice_hostcon->icemodule.conn[idx]);
+		qice_hostcon->icemodule.conn[idx] = ICE_WrapExistingSocketSendOnly(sock, af);
+	}
 }
 
 qboolean NQICE_ProcessPacket (byte *data, int len, struct qsockaddr *addr, void(*callback)(qsocket_t *))
