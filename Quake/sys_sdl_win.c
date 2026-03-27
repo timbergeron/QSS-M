@@ -537,7 +537,7 @@ static int Scrollback_TermWidth (void)
 static char	ded_input[MAXCMDLINE];
 static int	ded_input_len;
 static int	ded_input_cursor;
-cvar_t		sys_dedmouse_capture = {"sys_dedmouse_capture", "1", CVAR_ARCHIVE};
+cvar_t		sys_dedmouse_capture = {"sys_dedmouse_capture", "0", CVAR_ARCHIVE};
 
 static qboolean Scrollback_ShowCaretRow (void)
 {
@@ -1102,6 +1102,15 @@ void Sys_Quit (void)
 		FreeConsole ();
 
 	exit (0);
+}
+
+void Sys_InstallDedicatedSignalHandlers (void)
+{
+}
+
+qboolean Sys_HasDedicatedQuitRequest (void)
+{
+	return false;
 }
 
 double Sys_DoubleTime (void)
