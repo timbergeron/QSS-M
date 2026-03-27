@@ -835,6 +835,20 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 					{
 						f->serverwaiting = false;
 						f->pendingofs = 0;
+
+						//handle health check pings — respond with HTTP 200, don't upgrade
+						if (!strncmp(f->readbuffer, "GET /;/ping ", 12))
+						{
+							f->pendingsize = q_snprintf(f->pending, f->pendingmax,
+								"HTTP/1.1 200 OK\r\n"
+								"Content-Length: 0\r\n"
+								"Connection: close\r\n"
+								"\r\n");
+							WS_Flush(f);
+							f->err = VFS_ERROR_UNSPECIFIED;	//close after flush
+							break;
+						}
+
 						if (f->err)
 						{
 #if 1
@@ -898,6 +912,18 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 								//so we no longer need the old hack (fake CCREQ + frame translation).
 								//just accept 'quake' subprotocol and pass raw packets through.
 #endif
+						}
+
+						//log the request line and subprotocol for debugging
+						{
+							char reqline[128];
+							const char *rl = f->readbuffer;
+							const char *rle = rl;
+							while (*rle && *rle != '\r' && *rle != '\n' && (rle - rl) < (int)sizeof(reqline)-1)
+								rle++;
+							memcpy(reqline, rl, rle - rl);
+							reqline[rle - rl] = 0;
+							Con_DPrintf("WebSocket accepted: %s (proto: %s)\n", reqline, prot ? prot : f->protocol);
 						}
 
 						WS_Flush(f);	//flush any pending writes, so the client knows it can start sending everything else.

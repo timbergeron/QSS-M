@@ -2802,7 +2802,10 @@ void ICE_Tick(void)
 				continue;
 			}
 			else if ((signed int)(curtime-con->icetimeout) > 0)
-				ICE_SetFailed(con, S_COLOR_GRAY"[%s]: ice timeout\n", con->friendlyname);
+			{
+				Con_DPrintf(S_COLOR_GRAY"[%s]: brokerless ice timeout\n", con->friendlyname);
+				con->state = ICE_FAILED;	//will be destroyed on next tick
+			}
 		}
 
 		if (!(con->modeflags & ICEF_ALLOW_PROBE))
@@ -3019,10 +3022,10 @@ static struct icestate_s *ICE_DirectConnectedInternal(struct icemodule_s *module
 		con->server[0].con = link;
 		con->chosenpeer.connum = con->server[0].connum = 1+MAX_NETWORKS+countof(con->server)+0;	//send through our private socket instead of wrapping in TURN.
 		con->server[0].addr = con->chosenpeer;
-		Con_Printf("%s: WebSocket connection\n", peer);
+		Con_DPrintf("%s: WebSocket connection\n", peer);
 	}
 	else
-		Con_Printf("%s: Direct connection\n", peer);
+		Con_DPrintf("%s: Direct connection\n", peer);
 
 	con->brokerless = true;
 	con->state = ICE_CONNECTED;
