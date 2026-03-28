@@ -25,7 +25,7 @@ jobs:
         path: |
           ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
           ${{ env.VCPKG_DOWNLOADS }}
-        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ hashFiles('MacOSX/setup-vcpkg.sh', 'MacOSX/custom-triplets/*.cmake') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ hashFiles('MacOSX/setup-vcpkg.sh', 'MacOSX/custom-triplets/*.cmake', 'MacOSX/vcpkg-patches/*.patch') }}
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-vcpkg-
 

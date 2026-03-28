@@ -1,11 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(
+  CDPATH= cd -- "$(dirname -- "$0")" && pwd
+)"
+
+VCPKG_REPO_URL="${VCPKG_REPO_URL:-https://github.com/microsoft/vcpkg}"
+# Pin vcpkg so CI and local builds do not float with upstream master.
+VCPKG_COMMIT="${VCPKG_COMMIT:-c27eeddba73f608f10605d80bc0144c1166f8fb7}"
+
 echo "=== setup-vcpkg.sh starting ==="
 echo "PWD: $(pwd)"
 echo "PATH: $PATH"
 echo "USER: $(whoami)"
 echo "UID: $(id -u)"
+echo "VCPKG_REPO_URL: $VCPKG_REPO_URL"
+echo "VCPKG_COMMIT: $VCPKG_COMMIT"
 
 if [ "$(id -u)" -eq 0 ]; then
     echo "Do not run this script with sudo."
@@ -82,21 +92,64 @@ if command -v brew >/dev/null 2>&1; then
     fi
 fi
 
-if [ ! -d "vcpkg" ]; then
-    git clone --depth 1 https://github.com/microsoft/vcpkg
+ensure_pinned_vcpkg_checkout() {
+    rm -rf ./vcpkg
+    mkdir -p ./vcpkg
+    git -C ./vcpkg init -q
+    git -C ./vcpkg remote add origin "$VCPKG_REPO_URL"
+    git -C ./vcpkg fetch --depth 1 origin "$VCPKG_COMMIT"
+    git -C ./vcpkg checkout --force --detach FETCH_HEAD
+}
+
+apply_local_vcpkg_patches() {
+    local nettle_port_dir="./vcpkg/ports/nettle"
+    local nettle_patch_src="$SCRIPT_DIR/vcpkg-patches/nettle-gnu23-prototypes.patch"
+    local nettle_patch_dst="$nettle_port_dir/qssm-macos-gnu23-prototypes.patch"
+    local nettle_portfile="$nettle_port_dir/portfile.cmake"
+    local tmp_portfile
+
+    cp "$nettle_patch_src" "$nettle_patch_dst"
+
+    if ! grep -q 'qssm-macos-gnu23-prototypes.patch' "$nettle_portfile"; then
+        tmp_portfile="$(mktemp "${TMPDIR:-/tmp}/qssm-nettle-portfile.XXXXXX")"
+        awk '
+            { print }
+            !done && /msvc-support\.patch/ {
+                print "        qssm-macos-gnu23-prototypes.patch"
+                done = 1
+            }
+        ' "$nettle_portfile" > "$tmp_portfile"
+        mv "$tmp_portfile" "$nettle_portfile"
+    fi
+
+    if ! grep -q 'qssm-macos-gnu23-prototypes.patch' "$nettle_portfile"; then
+        echo "Failed to inject local nettle patch into vcpkg portfile"
+        exit 1
+    fi
+
+    echo "Applied local nettle port patch: qssm-macos-gnu23-prototypes.patch"
+}
+
+if [ ! -d "./vcpkg/.git" ] || [ ! -f "./vcpkg/bootstrap-vcpkg.sh" ]; then
+    echo "vcpkg checkout missing or incomplete; creating pinned checkout"
+    ensure_pinned_vcpkg_checkout
 fi
 
-# If vcpkg dir exists but is incomplete/corrupt, recreate it.
-if [ ! -f "./vcpkg/bootstrap-vcpkg.sh" ]; then
-    echo "vcpkg directory is incomplete; recreating it"
-    rm -rf ./vcpkg
-    git clone --depth 1 https://github.com/microsoft/vcpkg
+current_vcpkg_commit="$(git -C ./vcpkg rev-parse HEAD 2>/dev/null || true)"
+if [ "$current_vcpkg_commit" != "$VCPKG_COMMIT" ]; then
+    echo "vcpkg checkout is at ${current_vcpkg_commit:-<unknown>}; resetting to pinned commit $VCPKG_COMMIT"
+    ensure_pinned_vcpkg_checkout
+    current_vcpkg_commit="$(git -C ./vcpkg rev-parse HEAD 2>/dev/null || true)"
 fi
+
+apply_local_vcpkg_patches
 
 # If the repo exists but the tool binary does not, bootstrap it.
 if [ ! -x "./vcpkg/vcpkg" ]; then
     ./vcpkg/bootstrap-vcpkg.sh
 fi
+
+echo "Using vcpkg checkout: $current_vcpkg_commit"
 
 ./vcpkg/vcpkg install --overlay-triplets=custom-triplets --triplet=x64-osx-1013 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
 ./vcpkg/vcpkg install --overlay-triplets=custom-triplets --triplet=arm64-osx-11 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
