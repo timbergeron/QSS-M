@@ -76,6 +76,7 @@ void M_Menu_Main_f (void);
 			void M_Menu_Crosshair_f (void);
 		void M_Menu_Console_f (void);
 		void M_Menu_Startup_f (void);
+		void M_Menu_DemoOptions_f (void);
 		void M_Menu_PakLoading_f (void);
 		void M_Menu_ColorPicker_f (void);
 		void M_Menu_Extras_f (void);
@@ -112,6 +113,7 @@ void M_Main_Draw (void);
 		void M_PlayerXray_Draw (void);
 	void M_HUD_Draw (void);
 		void M_Startup_Draw (void);
+		void M_DemoOptions_Draw (void);
 		void M_PakLoading_Draw (void);
 		void M_ColorPicker_Draw (void);
 		void M_Extras_Draw (void);
@@ -149,6 +151,7 @@ void M_Main_Key (int key);
 		void M_PlayerXray_Key (int key);
 	void M_HUD_Key (int key);
 		void M_Startup_Key (int key);
+		void M_DemoOptions_Key (int key);
 		void M_PakLoading_Key (int key);
 		void M_ColorPicker_Key (int key);
 		void M_Extras_Key (int key);
@@ -191,6 +194,7 @@ void M_Main_Key (int key);
 			void M_Crosshair_Mousemove (int cx, int cy);
 		void M_Console_Mousemove (int cx, int cy);
 		void M_Startup_Mousemove (int cx, int cy);
+		void M_DemoOptions_Mousemove (int cx, int cy);
 		void M_PakLoading_Mousemove (int cx, int cy);
 		void M_ColorPicker_Mousemove(int cx, int cy);
 		void M_Extras_Mousemove(int cx, int cy);
@@ -4359,6 +4363,7 @@ enum
 	OPT_HUD,
 	OPT_CONSOLEM,    // Moved up, before OPT_EXTRAS
 	OPT_STARTUP,
+	OPT_DEMOOPTIONS,
 	OPT_EXTRAS,
 	OPT_SPACE,       // Spacer
 	OPT_MENUSCALE,
@@ -4568,6 +4573,9 @@ void M_Options_Draw (void)
 		case OPT_STARTUP:
 			text = "               Startup   ...";
 			break;
+		case OPT_DEMOOPTIONS:
+			text = "                 Demos   ...";
+			break;
 		case OPT_EXTRAS:
 			text = "                  Misc   ...";
 			break;
@@ -4646,6 +4654,8 @@ static const char* M_Options_GetItemText(int index)
 		return "               Console   ...";
 	case OPT_STARTUP:
 		return "               Startup   ...";
+	case OPT_DEMOOPTIONS:
+		return "                 Demos   ...";
 	case OPT_EXTRAS:
 		return "                  Misc   ...";
 	case OPT_MENUSCALE:
@@ -4768,6 +4778,9 @@ void M_Options_Key (int k)
 			break;
 		case OPT_STARTUP:
 			M_Menu_Startup_f();
+			break;
+		case OPT_DEMOOPTIONS:
+			M_Menu_DemoOptions_f();
 			break;
 		case OPT_EXTRAS:
 			M_Menu_Extras_f();
@@ -18509,6 +18522,7 @@ static struct
 	{"menu_console", M_Menu_HUD_f},
 	{"menu_colorpicker", M_Menu_ColorPicker_f},
 	{"menu_startup", M_Menu_Startup_f},
+	{"menu_demooptions", M_Menu_DemoOptions_f},
 	{"menu_pakloading", M_Menu_PakLoading_f},
 	{"menu_misc", M_Menu_Extras_f},
 	{"menu_config", M_Menu_ResetConfig_f},
@@ -18814,6 +18828,10 @@ void M_Draw (void)
 		M_Startup_Draw();
 		break;
 
+	case m_demooptions:
+		M_DemoOptions_Draw();
+		break;
+
 	case m_pakloading:
 		M_PakLoading_Draw();
 		break;
@@ -18987,6 +19005,10 @@ void M_Keydown (int key)
 
 	case m_startup:
 		M_Startup_Key(key);
+		return;
+
+	case m_demooptions:
+		M_DemoOptions_Key(key);
 		return;
 
 	case m_pakloading:
@@ -19189,6 +19211,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_startup:
 		M_Startup_Mousemove(x, y);
+		return;
+
+	case m_demooptions:
+		M_DemoOptions_Mousemove(x, y);
 		return;
 
 	case m_pakloading:
@@ -19779,6 +19805,466 @@ void M_Startup_Mousemove(int cx, int cy)
 	else
 	{
 		M_Startup_ClampCursor();
+	}
+}
+
+/*
+==================
+Demo Options Menu
+==================
+*/
+
+enum demooptions_e
+{
+	DEMOOPTIONS_DEMOEYES,
+	DEMOOPTIONS_FORMAT,
+	DEMOOPTIONS_AUTODEMO,
+	DEMOOPTIONS_DEMOREEL,
+	DEMOOPTIONS_EYECAM,
+	DEMOOPTIONS_BAR_TIMEOUT,
+	DEMOOPTIONS_ITEMS
+} demooptions_cursor;
+
+static struct
+{
+	int cursor;
+	struct {
+		char text[32];
+		int len;
+	} search;
+} demooptionsmenu;
+
+static qboolean demooptions_slider_grab;
+
+static const char* M_DemoOptions_GetItemText(int index)
+{
+	static char buffer[64];
+
+	switch (index)
+	{
+	case DEMOOPTIONS_DEMOEYES:
+		return "Demo Eyes";
+	case DEMOOPTIONS_FORMAT:
+		return "Demo Format";
+	case DEMOOPTIONS_AUTODEMO:
+		return "Auto-record";
+	case DEMOOPTIONS_DEMOREEL:
+		return "Demo Reel";
+	case DEMOOPTIONS_EYECAM:
+		return "Demo Eyecam";
+	case DEMOOPTIONS_BAR_TIMEOUT:
+		return "Demo Bar Timeout";
+	default:
+		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
+		return buffer;
+	}
+}
+
+static const char* M_DemoOptions_GetValueText(int index)
+{
+	static char buffer[64];
+
+	switch (index)
+	{
+	case DEMOOPTIONS_FORMAT:
+		if (!cl_demo_format.string[0] || !q_strcasecmp(cl_demo_format.string, "dem"))
+			return "dem (original)";
+		if (!q_strcasecmp(cl_demo_format.string, "dz"))
+			return "dz (dzip)";
+		return cl_demo_format.string;
+	case DEMOOPTIONS_AUTODEMO:
+		switch ((int)cl_autodemo.value)
+		{
+		case 0: return "off";
+		case 1: return "every map";
+		case 2: return "crmod/crctf";
+		case 3: return "online only";
+		case 4: return "split by map";
+		default:
+			q_snprintf(buffer, sizeof(buffer), "%d", (int)cl_autodemo.value);
+			return buffer;
+		}
+	case DEMOOPTIONS_DEMOREEL:
+		if (cl_demoreel.value > 1)
+			return "on";
+		if (cl_demoreel.value > 0)
+			return "startup only";
+		return "off";
+	case DEMOOPTIONS_EYECAM:
+		return cl_demo_eyecam.value ? "on" : "off";
+	case DEMOOPTIONS_BAR_TIMEOUT:
+		if (scr_demobar_timeout.value < 0.0f)
+			q_snprintf(buffer, sizeof(buffer), "hidden (%.1f)", scr_demobar_timeout.value);
+		else if (scr_demobar_timeout.value == 0.0f)
+			q_snprintf(buffer, sizeof(buffer), "always (%.1f)", scr_demobar_timeout.value);
+		else if ((float)Q_rint(scr_demobar_timeout.value) == scr_demobar_timeout.value)
+			q_snprintf(buffer, sizeof(buffer), "%d (%s)",
+				Q_rint(scr_demobar_timeout.value),
+				(Q_rint(scr_demobar_timeout.value) == 1) ? "second" : "seconds");
+		else
+			q_snprintf(buffer, sizeof(buffer), "%.1f (seconds)", scr_demobar_timeout.value);
+		return buffer;
+	default:
+		return "";
+	}
+}
+
+static void M_DemoOptions_ClampCursor(void)
+{
+	int cursor = (int)demooptions_cursor;
+
+	if (cursor < 0 || cursor >= DEMOOPTIONS_ITEMS)
+	{
+		cursor %= DEMOOPTIONS_ITEMS;
+		if (cursor < 0)
+			cursor += DEMOOPTIONS_ITEMS;
+		demooptions_cursor = (enum demooptions_e)cursor;
+	}
+}
+
+static void M_DemoOptions_MoveCursor(int delta)
+{
+	int cursor = (int)demooptions_cursor + delta;
+
+	cursor %= DEMOOPTIONS_ITEMS;
+	if (cursor < 0)
+		cursor += DEMOOPTIONS_ITEMS;
+
+	demooptions_cursor = (enum demooptions_e)cursor;
+}
+
+static void M_DemoOptions_SearchUpdate(void)
+{
+	int i;
+
+	if (demooptionsmenu.search.len <= 0)
+		return;
+
+	for (i = 0; i < DEMOOPTIONS_ITEMS; i++)
+	{
+		const char* text = M_DemoOptions_GetItemText(i);
+		if (q_strcasestr(text, demooptionsmenu.search.text))
+		{
+			demooptions_cursor = (enum demooptions_e)i;
+			M_DemoOptions_ClampCursor();
+			return;
+		}
+	}
+}
+
+static void M_DemoOptions_CycleDemoFormat(int dir)
+{
+#ifdef USE_ZLIB
+	static const char* formats[] = {"dem", "dz"};
+	const int count = (int)(sizeof(formats) / sizeof(formats[0]));
+	int index = 0;
+	int i;
+
+	for (i = 0; i < count; i++)
+	{
+		if (!q_strcasecmp(cl_demo_format.string, formats[i]))
+		{
+			index = i;
+			break;
+		}
+	}
+
+	index += (dir > 0) ? 1 : -1;
+	if (index < 0)
+		index = count - 1;
+	else if (index >= count)
+		index = 0;
+
+	Cvar_Set("cl_demo_format", formats[index]);
+#else
+	(void)dir;
+	Cvar_Set("cl_demo_format", "dem");
+#endif
+}
+
+void M_Menu_DemoOptions_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_demooptions;
+	m_entersound = true;
+	demooptions_cursor = 0;
+	demooptionsmenu.cursor = 0;
+	demooptionsmenu.search.len = 0;
+	demooptionsmenu.search.text[0] = 0;
+	demooptions_slider_grab = false;
+
+	M_DemoOptions_ClampCursor();
+	IN_UpdateGrabs();
+}
+
+static void M_DemoOptions_AdjustSliders(int dir)
+{
+	float f;
+	int m;
+
+	S_LocalSound("misc/menu3.wav");
+
+	switch (demooptions_cursor)
+	{
+	case DEMOOPTIONS_DEMOEYES:
+		f = CLAMP(0.0f, cl_demoeyes.value + dir * 0.1f, 1.0f);
+		f = Q_rint(f * 10.0f) / 10.0f;
+		if (f < 0.05f)
+			f = 0.0f;
+		Cvar_SetValueQuick(&cl_demoeyes, f);
+		break;
+	case DEMOOPTIONS_FORMAT:
+		M_DemoOptions_CycleDemoFormat(dir);
+		break;
+	case DEMOOPTIONS_AUTODEMO:
+		m = (int)cl_autodemo.value + dir;
+		if (m < 0)
+			m = 4;
+		else if (m > 4)
+			m = 0;
+		Cvar_SetValue("cl_autodemo", m);
+		break;
+	case DEMOOPTIONS_DEMOREEL:
+		m = (int)cl_demoreel.value + dir;
+		if (m < 0)
+			m = 2;
+		else if (m > 2)
+			m = 0;
+		Cvar_SetValueQuick(&cl_demoreel, m);
+		break;
+	case DEMOOPTIONS_EYECAM:
+		Cvar_SetValueQuick(&cl_demo_eyecam, cl_demo_eyecam.value ? 0 : 1);
+		break;
+	case DEMOOPTIONS_BAR_TIMEOUT:
+		if (scr_demobar_timeout.value < 0.0f)
+			f = (dir > 0) ? 0.0f : 10.0f;
+		else if (dir > 0)
+			f = (scr_demobar_timeout.value >= 10.0f) ? -1.0f : (float)Q_rint(scr_demobar_timeout.value) + 1.0f;
+		else if (scr_demobar_timeout.value <= 0.0f)
+			f = -1.0f;
+		else
+			f = (scr_demobar_timeout.value <= 1.0f) ? 0.0f : (float)Q_rint(scr_demobar_timeout.value) - 1.0f;
+		Cvar_SetValueQuick(&scr_demobar_timeout, f);
+		break;
+	default:
+		break;
+	}
+}
+
+void M_DemoOptions_Draw(void)
+{
+	qpic_t* p;
+	float r;
+	enum demooptions_e i;
+
+	M_DemoOptions_ClampCursor();
+
+	p = Draw_CachePic("gfx/p_option.lmp");
+	M_DrawPic((320 - p->width) / 2, 4, p);
+
+	{
+		const char* title = "Demo Options";
+		M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
+	}
+
+	for (i = 0; i < DEMOOPTIONS_ITEMS; i++)
+	{
+		int y = 48 + 8 * i;
+		const char* text = NULL;
+		const char* value = NULL;
+
+		switch (i)
+		{
+		case DEMOOPTIONS_DEMOEYES:
+			text = "         Demo Eyes";
+			r = CLAMP(0.0f, cl_demoeyes.value, 1.0f);
+			M_DrawSlider(186, y, r, r, "%.1f");
+			break;
+		case DEMOOPTIONS_FORMAT:
+			text = "       Demo Format";
+			value = M_DemoOptions_GetValueText(i);
+			break;
+		case DEMOOPTIONS_AUTODEMO:
+			text = "       Auto-record";
+			value = M_DemoOptions_GetValueText(i);
+			break;
+		case DEMOOPTIONS_DEMOREEL:
+			text = "         Demo Reel";
+			value = M_DemoOptions_GetValueText(i);
+			break;
+		case DEMOOPTIONS_EYECAM:
+			text = "       Demo Eyecam";
+			value = M_DemoOptions_GetValueText(i);
+			break;
+		case DEMOOPTIONS_BAR_TIMEOUT:
+			text = "  Demo Bar Timeout";
+			value = M_DemoOptions_GetValueText(i);
+			break;
+		default:
+			break;
+		}
+
+		if (text)
+		{
+			if (demooptionsmenu.search.len > 0 &&
+				q_strcasestr(text, demooptionsmenu.search.text))
+			{
+				M_PrintHighlight(0, y, text,
+					demooptionsmenu.search.text,
+					demooptionsmenu.search.len);
+			}
+			else
+			{
+				M_Print(0, y, text);
+			}
+		}
+		if (value)
+			M_Print(183, y, value);
+	}
+
+	M_DrawCharacter(172, 48 + demooptions_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+
+	if (demooptionsmenu.search.len > 0)
+	{
+		int box_x = 20;
+		int box_y = 180;
+		int cursor_x = box_x + 8 * demooptionsmenu.search.len;
+		M_DrawTextBox(box_x - 8, box_y - 8, 32, 1);
+		M_PrintHighlight(box_x, box_y, demooptionsmenu.search.text,
+			demooptionsmenu.search.text, demooptionsmenu.search.len);
+
+		{
+			qboolean match = false;
+			for (i = 0; i < DEMOOPTIONS_ITEMS; i++)
+			{
+				const char* text = M_DemoOptions_GetItemText(i);
+				if (text && q_strcasestr(text, demooptionsmenu.search.text))
+				{
+					match = true;
+					break;
+				}
+			}
+			if (match)
+				M_DrawCharacter(cursor_x, box_y, 10 + ((int)(realtime * 4) & 1));
+			else
+				M_DrawCharacter(cursor_x, box_y, 11 ^ 128);
+		}
+	}
+}
+
+void M_DemoOptions_Key(int k)
+{
+	if (!keydown[K_MOUSE1])
+		demooptions_slider_grab = false;
+
+	if (demooptions_slider_grab)
+	{
+		switch (k)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			demooptions_slider_grab = false;
+			break;
+		}
+		return;
+	}
+
+	switch (k)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Menu_Options_f();
+		break;
+	case K_MOUSE1:
+		m_entersound = true;
+		if (m_mousey >= 48 && m_mousey < 48 + (DEMOOPTIONS_ITEMS * 8))
+		{
+			demooptions_cursor = (m_mousey - 48) / 8;
+			if (demooptions_cursor == DEMOOPTIONS_DEMOEYES)
+				demooptions_slider_grab = true;
+			else
+				M_DemoOptions_AdjustSliders(1);
+		}
+		break;
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		m_entersound = true;
+		M_DemoOptions_AdjustSliders(1);
+		break;
+	case K_UPARROW:
+		S_LocalSound("misc/menu1.wav");
+		M_DemoOptions_MoveCursor(-1);
+		break;
+	case K_DOWNARROW:
+		S_LocalSound("misc/menu1.wav");
+		M_DemoOptions_MoveCursor(1);
+		break;
+	case K_LEFTARROW:
+	case K_MWHEELDOWN:
+		M_DemoOptions_AdjustSliders(-1);
+		break;
+	case K_RIGHTARROW:
+	case K_MWHEELUP:
+		M_DemoOptions_AdjustSliders(1);
+		break;
+	case K_BACKSPACE:
+		if (demooptionsmenu.search.len > 0)
+		{
+			demooptionsmenu.search.text[--demooptionsmenu.search.len] = 0;
+			M_DemoOptions_SearchUpdate();
+		}
+		break;
+	default:
+		if (k >= 32 && k < 127 && demooptionsmenu.search.len < (int)sizeof(demooptionsmenu.search.text) - 1)
+		{
+			demooptionsmenu.search.text[demooptionsmenu.search.len++] = k;
+			demooptionsmenu.search.text[demooptionsmenu.search.len] = 0;
+			M_DemoOptions_SearchUpdate();
+		}
+		break;
+	}
+}
+
+void M_DemoOptions_Mousemove(int cx, int cy)
+{
+	if (demooptions_slider_grab)
+	{
+		float f;
+
+		if (!keydown[K_MOUSE1])
+		{
+			demooptions_slider_grab = false;
+			return;
+		}
+
+		switch (demooptions_cursor)
+		{
+		case DEMOOPTIONS_DEMOEYES:
+			f = CLAMP(0.0f, M_MouseToSliderFraction(cx - 187), 1.0f);
+			f = Q_rint(f * 10.0f) / 10.0f;
+			if (f < 0.05f)
+				f = 0.0f;
+			Cvar_SetValue("cl_demoeyes", f);
+			break;
+		default:
+			break;
+		}
+		return;
+	}
+
+	int item = (cy - 48) / 8;
+	if (item >= 0 && item < DEMOOPTIONS_ITEMS)
+	{
+		demooptions_cursor = item;
+	}
+	else
+	{
+		M_DemoOptions_ClampCursor();
 	}
 }
 

@@ -111,6 +111,7 @@ extern	cvar_t		scr_crosshairscale;
 extern	cvar_t		scr_crosshaircolor; // woods #crosshair
 extern	cvar_t		scr_matchclockscale; // woods #varmatchclock
 extern	cvar_t		scr_centerprintbg; // woods #centerprintbg (iw)
+extern	cvar_t		scr_demobar_timeout; // woods #democontrols
 //johnfitz
 
 extern int scr_tileclear_updates; //johnfitz
