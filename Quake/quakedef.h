@@ -393,6 +393,13 @@ typedef struct filelist_item_s
 {
 	char			name[MAX_QPATH];
 	char			data[50]; // woods #demolistsort #mapdescriptions
+	float			total_surface_area;
+	float			floor_surface_area;
+	float			wall_surface_area;
+	float			ceiling_surface_area;
+	int			counted_faces;
+	int			total_faces;
+	qboolean		has_mapsize_cache;
 	struct filelist_item_s	*next;
 } filelist_item_t;
 

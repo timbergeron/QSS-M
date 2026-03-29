@@ -2678,6 +2678,447 @@ static float RadiusFromBounds (vec3_t mins, vec3_t maxs)
 	return VectorLength (corner);
 }
 
+#define MIN_FLOOR_NORMAL	0.7f	// matches MIN_STEP_NORMAL in pmove.c:37
+
+static mvertex_t *Mod_GetSurfaceVertex (qmodel_t *mod, msurface_t *surf, int vert)
+{
+	int edge = mod->surfedges[vert + surf->firstedge];
+
+	if (edge >= 0)
+		return &mod->vertexes[mod->edges[edge].v[0]];
+	else
+		return &mod->vertexes[mod->edges[-edge].v[1]];
+}
+
+static qboolean Mod_IsToolTexture (const char *name)
+{
+	static const char *toolnames[] = {
+		"trigger", "clip", "skip", "hint", "null", "nodraw", "playerclip", "monsterclip"
+	};
+	size_t i;
+
+	if (!name || !*name)
+		return false;
+
+	for (i = 0; i < Q_COUNTOF(toolnames); ++i)
+	{
+		const size_t len = strlen(toolnames[i]);
+
+		if (!q_strncasecmp(name, toolnames[i], len))
+			return true;
+	}
+
+	return false;
+}
+
+static float Mod_CalcSurfaceArea (msurface_t *surf, qmodel_t *mod)
+{
+	double sum[3] = {0.0, 0.0, 0.0};
+	double v0[3];
+	mvertex_t *base, *v1, *v2;
+	int i;
+
+	if (!surf || !mod || surf->numedges < 3)
+		return 0.0f;
+
+	base = Mod_GetSurfaceVertex(mod, surf, 0);
+	v0[0] = base->position[0];
+	v0[1] = base->position[1];
+	v0[2] = base->position[2];
+
+	for (i = 1; i < surf->numedges - 1; ++i)
+	{
+		double a[3], b[3];
+
+		v1 = Mod_GetSurfaceVertex(mod, surf, i);
+		v2 = Mod_GetSurfaceVertex(mod, surf, i + 1);
+
+		a[0] = (double)v1->position[0] - v0[0];
+		a[1] = (double)v1->position[1] - v0[1];
+		a[2] = (double)v1->position[2] - v0[2];
+		b[0] = (double)v2->position[0] - v0[0];
+		b[1] = (double)v2->position[1] - v0[1];
+		b[2] = (double)v2->position[2] - v0[2];
+
+		sum[0] += a[1] * b[2] - a[2] * b[1];
+		sum[1] += a[2] * b[0] - a[0] * b[2];
+		sum[2] += a[0] * b[1] - a[1] * b[0];
+	}
+
+	return (float)(0.5 * sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]));
+}
+
+static void Mod_CalcMapSurfaceAreas (qmodel_t *mod)
+{
+	double total_area = 0.0;
+	double floor_area = 0.0;
+	double wall_area = 0.0;
+	double ceiling_area = 0.0;
+	int counted_faces = 0;
+	int first, count, i;
+
+	if (!mod)
+		return;
+
+	mod->total_surface_area = 0.0f;
+	mod->floor_surface_area = 0.0f;
+	mod->wall_surface_area = 0.0f;
+	mod->ceiling_surface_area = 0.0f;
+	mod->counted_faces = 0;
+
+	if (!mod->submodels || mod->numsubmodels <= 0)
+		return;
+
+	first = mod->submodels[0].firstface;
+	count = mod->submodels[0].numfaces;
+	if (count <= 0 || first < 0 || first > mod->numsurfaces || count > mod->numsurfaces - first)
+		return;
+
+	for (i = 0; i < count; ++i)
+	{
+		float area, nz;
+		msurface_t *surf = &mod->surfaces[first + i];
+
+		if (!surf->plane || (surf->flags & SURF_DRAWSKY))
+			continue;
+		if (!surf->texinfo || !surf->texinfo->texture)
+			continue;
+		if (Mod_IsToolTexture(surf->texinfo->texture->name))
+			continue;
+
+		area = Mod_CalcSurfaceArea(surf, mod);
+		if (area <= 0.0f)
+			continue;
+
+		nz = surf->plane->normal[2];
+		if (surf->flags & SURF_PLANEBACK)
+			nz = -nz;
+
+		total_area += area;
+		counted_faces++;
+
+		if (nz > MIN_FLOOR_NORMAL)
+			floor_area += area;
+		else if (nz < -MIN_FLOOR_NORMAL)
+			ceiling_area += area;
+		else
+			wall_area += area;
+	}
+
+	mod->total_surface_area = (float)total_area;
+	mod->floor_surface_area = (float)floor_area;
+	mod->wall_surface_area = (float)wall_area;
+	mod->ceiling_surface_area = (float)ceiling_area;
+	mod->counted_faces = counted_faces;
+}
+
+static qboolean Mod_BSPLumpValid (size_t filesize, const lump_t *lump, size_t itemsize, int *count)
+{
+	if (!lump)
+		return false;
+
+	if ((size_t)lump->fileofs > filesize || (size_t)lump->filelen > filesize - (size_t)lump->fileofs)
+		return false;
+
+	if (itemsize && (lump->filelen % itemsize))
+		return false;
+
+	if (count)
+		*count = itemsize ? (int)(lump->filelen / itemsize) : 0;
+
+	return true;
+}
+
+static qboolean Mod_BSPTextureName (const byte *modbase, const lump_t *textures_lump, const texinfo_t *info, char name[17])
+{
+	const dmiptexlump_t *miptex_lump;
+	const miptex_t *tex;
+	int nummiptex, miptex;
+	int dataofs;
+	size_t header_size;
+	const char *fallback;
+
+	name[0] = '\0';
+	if (!info)
+		return false;
+
+	miptex = LittleLong(info->miptex);
+	fallback = (LittleLong(info->flags) & TEX_SPECIAL) ? "notexture2" : "notexture";
+
+	if (!textures_lump->filelen || (size_t)textures_lump->filelen < sizeof(int))
+	{
+		q_strlcpy(name, fallback, 17);
+		return true;
+	}
+
+	miptex_lump = (const dmiptexlump_t *)(modbase + textures_lump->fileofs);
+	nummiptex = LittleLong(miptex_lump->nummiptex);
+	if (nummiptex <= 0 || miptex < 0 || miptex >= nummiptex)
+	{
+		q_strlcpy(name, fallback, 17);
+		return true;
+	}
+
+	header_size = sizeof(miptex_lump->nummiptex) + (size_t)nummiptex * sizeof(miptex_lump->dataofs[0]);
+	if (header_size > textures_lump->filelen)
+		return false;
+	dataofs = LittleLong(miptex_lump->dataofs[miptex]);
+	if (dataofs < 0 || (size_t)dataofs + 16 > textures_lump->filelen)
+	{
+		q_strlcpy(name, fallback, 17);
+		return true;
+	}
+
+	tex = (const miptex_t *)((const byte *)miptex_lump + dataofs);
+	memcpy(name, tex->name, 16);
+	name[16] = '\0';
+
+	return true;
+}
+
+static qboolean Mod_BSPGetVertexPosition (const dvertex_t *vertexes, int numvertexes,
+	const dsedge_t *edges16, const dledge_t *edges32, int numedges,
+	const int *surfedges, int numsurfedges, int surfedgeindex, qboolean bsp2, double out[3])
+{
+	int edge, edgeindex, vertslot, vertindex;
+
+	if (surfedgeindex < 0 || surfedgeindex >= numsurfedges)
+		return false;
+
+	edge = LittleLong(surfedges[surfedgeindex]);
+	if (edge >= 0)
+	{
+		edgeindex = edge;
+		vertslot = 0;
+	}
+	else
+	{
+		edgeindex = -edge;
+		vertslot = 1;
+	}
+
+	if (edgeindex < 0 || edgeindex >= numedges)
+		return false;
+
+	vertindex = bsp2 ? LittleLong(edges32[edgeindex].v[vertslot]) : (unsigned short)LittleShort(edges16[edgeindex].v[vertslot]);
+	if (vertindex < 0 || vertindex >= numvertexes)
+		return false;
+
+	out[0] = LittleFloat(vertexes[vertindex].point[0]);
+	out[1] = LittleFloat(vertexes[vertindex].point[1]);
+	out[2] = LittleFloat(vertexes[vertindex].point[2]);
+
+	return true;
+}
+
+static float Mod_CalcBSPSurfaceArea (const dvertex_t *vertexes, int numvertexes,
+	const dsedge_t *edges16, const dledge_t *edges32, int numedges,
+	const int *surfedges, int numsurfedges, int firstedge, int face_numedges, qboolean bsp2)
+{
+	double sum[3] = {0.0, 0.0, 0.0};
+	double v0[3];
+	int i;
+
+	if (face_numedges < 3)
+		return 0.0f;
+	if (!Mod_BSPGetVertexPosition(vertexes, numvertexes, edges16, edges32, numedges,
+		surfedges, numsurfedges, firstedge, bsp2, v0))
+		return 0.0f;
+
+	for (i = 1; i < face_numedges - 1; ++i)
+	{
+		double a[3], b[3], v1[3], v2[3];
+
+		if (!Mod_BSPGetVertexPosition(vertexes, numvertexes, edges16, edges32, numedges,
+			surfedges, numsurfedges, firstedge + i, bsp2, v1))
+			return 0.0f;
+		if (!Mod_BSPGetVertexPosition(vertexes, numvertexes, edges16, edges32, numedges,
+			surfedges, numsurfedges, firstedge + i + 1, bsp2, v2))
+			return 0.0f;
+
+		a[0] = v1[0] - v0[0];
+		a[1] = v1[1] - v0[1];
+		a[2] = v1[2] - v0[2];
+		b[0] = v2[0] - v0[0];
+		b[1] = v2[1] - v0[1];
+		b[2] = v2[2] - v0[2];
+
+		sum[0] += a[1] * b[2] - a[2] * b[1];
+		sum[1] += a[2] * b[0] - a[0] * b[2];
+		sum[2] += a[0] * b[1] - a[1] * b[0];
+	}
+
+	return (float)(0.5 * sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]));
+}
+
+qboolean Mod_CalcBSPFileSurfaceAreas (const char *path, map_surface_areas_t *areas)
+{
+	byte *buffer;
+	size_t filesize;
+	dheader_t header;
+	const dmodelq1_t *models;
+	const dplane_t *planes;
+	const dvertex_t *vertexes;
+	const texinfo_t *texinfo;
+	const dsface_t *faces16 = NULL;
+	const dlface_t *faces32 = NULL;
+	const dsedge_t *edges16 = NULL;
+	const dledge_t *edges32 = NULL;
+	const int *surfedges;
+	int bsp2;
+	int nummodels, numplanes, numvertexes, numtexinfo, numfaces, numedges, numsurfedges;
+	int firstface, count, i;
+	double total_area = 0.0;
+	double floor_area = 0.0;
+	double wall_area = 0.0;
+	double ceiling_area = 0.0;
+	int counted_faces = 0;
+	qboolean ok = false;
+
+	if (!path || !areas)
+		return false;
+
+	memset(areas, 0, sizeof(*areas));
+
+	buffer = COM_LoadMallocFile(path, NULL);
+	if (!buffer)
+		return false;
+
+	filesize = (size_t)com_filesize;
+	if (filesize < sizeof(header))
+		goto done;
+
+	memcpy(&header, buffer, sizeof(header));
+	header.version = LittleLong(header.version);
+
+	switch (header.version)
+	{
+	case BSPVERSION:
+	case BSPVERSION_QUAKE64:
+		bsp2 = false;
+		break;
+	case BSP2VERSION_2PSB:
+	case BSP2VERSION_BSP2:
+		bsp2 = true;
+		break;
+	default:
+		goto done;
+	}
+
+	for (i = 0; i < HEADER_LUMPS; ++i)
+	{
+		header.lumps[i].fileofs = LittleLong(header.lumps[i].fileofs);
+		header.lumps[i].filelen = LittleLong(header.lumps[i].filelen);
+	}
+
+	if (!Mod_BSPLumpValid(filesize, &header.lumps[LUMP_MODELS], sizeof(*models), &nummodels) || nummodels <= 0)
+		goto done;
+	if (!Mod_BSPLumpValid(filesize, &header.lumps[LUMP_PLANES], sizeof(*planes), &numplanes) || numplanes <= 0)
+		goto done;
+	if (!Mod_BSPLumpValid(filesize, &header.lumps[LUMP_VERTEXES], sizeof(*vertexes), &numvertexes) || numvertexes <= 0)
+		goto done;
+	if (!Mod_BSPLumpValid(filesize, &header.lumps[LUMP_TEXINFO], sizeof(*texinfo), &numtexinfo) || numtexinfo <= 0)
+		goto done;
+	if (!Mod_BSPLumpValid(filesize, &header.lumps[LUMP_SURFEDGES], sizeof(*surfedges), &numsurfedges) || numsurfedges <= 0)
+		goto done;
+	if (!Mod_BSPLumpValid(filesize, &header.lumps[LUMP_EDGES], bsp2 ? sizeof(*edges32) : sizeof(*edges16), &numedges) || numedges <= 0)
+		goto done;
+	if (!Mod_BSPLumpValid(filesize, &header.lumps[LUMP_FACES], bsp2 ? sizeof(*faces32) : sizeof(*faces16), &numfaces) || numfaces < 0)
+		goto done;
+	if (header.lumps[LUMP_TEXTURES].filelen && !Mod_BSPLumpValid(filesize, &header.lumps[LUMP_TEXTURES], 0, NULL))
+		goto done;
+
+	models = (const dmodelq1_t *)(buffer + header.lumps[LUMP_MODELS].fileofs);
+	planes = (const dplane_t *)(buffer + header.lumps[LUMP_PLANES].fileofs);
+	vertexes = (const dvertex_t *)(buffer + header.lumps[LUMP_VERTEXES].fileofs);
+	texinfo = (const texinfo_t *)(buffer + header.lumps[LUMP_TEXINFO].fileofs);
+	surfedges = (const int *)(buffer + header.lumps[LUMP_SURFEDGES].fileofs);
+	if (bsp2)
+		edges32 = (const dledge_t *)(buffer + header.lumps[LUMP_EDGES].fileofs);
+	else
+		edges16 = (const dsedge_t *)(buffer + header.lumps[LUMP_EDGES].fileofs);
+	if (bsp2)
+		faces32 = (const dlface_t *)(buffer + header.lumps[LUMP_FACES].fileofs);
+	else
+		faces16 = (const dsface_t *)(buffer + header.lumps[LUMP_FACES].fileofs);
+
+	firstface = LittleLong(models[0].firstface);
+	count = LittleLong(models[0].numfaces);
+	if (firstface < 0 || count < 0 || firstface > numfaces || count > numfaces - firstface)
+		goto done;
+
+	areas->total_faces = count;
+
+	for (i = 0; i < count; ++i)
+	{
+		int planenum, side, face_firstedge, face_numedges, texinfo_idx;
+		float nz, area;
+		char texname[17];
+
+		if (bsp2)
+		{
+			const dlface_t *face = &faces32[firstface + i];
+			planenum = LittleLong(face->planenum);
+			side = LittleLong(face->side);
+			face_firstedge = LittleLong(face->firstedge);
+			face_numedges = LittleLong(face->numedges);
+			texinfo_idx = LittleLong(face->texinfo);
+		}
+		else
+		{
+			const dsface_t *face = &faces16[firstface + i];
+			planenum = LittleShort(face->planenum);
+			side = LittleShort(face->side);
+			face_firstedge = LittleLong(face->firstedge);
+			face_numedges = LittleShort(face->numedges);
+			texinfo_idx = LittleShort(face->texinfo);
+		}
+
+		if (planenum < 0 || planenum >= numplanes)
+			continue;
+		if (texinfo_idx < 0 || texinfo_idx >= numtexinfo)
+			continue;
+		if (face_firstedge < 0 || face_numedges < 3 || face_firstedge > numsurfedges || face_numedges > numsurfedges - face_firstedge)
+			continue;
+		if (!Mod_BSPTextureName(buffer, &header.lumps[LUMP_TEXTURES], &texinfo[texinfo_idx], texname))
+			continue;
+		if (!q_strncasecmp(texname, "sky", 3))
+			continue;
+		if (Mod_IsToolTexture(texname))
+			continue;
+
+		area = Mod_CalcBSPSurfaceArea(vertexes, numvertexes, edges16, edges32, numedges,
+			surfedges, numsurfedges, face_firstedge, face_numedges, bsp2);
+		if (area <= 0.0f)
+			continue;
+
+		nz = LittleFloat(planes[planenum].normal[2]);
+		if (side)
+			nz = -nz;
+
+		total_area += area;
+		counted_faces++;
+
+		if (nz > MIN_FLOOR_NORMAL)
+			floor_area += area;
+		else if (nz < -MIN_FLOOR_NORMAL)
+			ceiling_area += area;
+		else
+			wall_area += area;
+	}
+
+	areas->total_surface_area = (float)total_area;
+	areas->floor_surface_area = (float)floor_area;
+	areas->wall_surface_area = (float)wall_area;
+	areas->ceiling_surface_area = (float)ceiling_area;
+	areas->counted_faces = counted_faces;
+	ok = true;
+
+done:
+	free(buffer);
+	return ok;
+}
+
 /*
 =================
 Mod_LoadSubmodels
@@ -3008,6 +3449,7 @@ visdone:
 	mod->numframes = 2;		// regular and alternate animation
 
 	Mod_CheckWaterVis();
+	Mod_CalcMapSurfaceAreas(mod);
 
 //
 // set up the submodels (FIXME: this is confusing)
