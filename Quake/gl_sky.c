@@ -59,6 +59,7 @@ cvar_t r_skyfog = {"r_skyfog","0.5",CVAR_ARCHIVE};
 cvar_t r_skyspeed = {"r_skyspeed","1",CVAR_ARCHIVE}; // woods #skyspeed
 cvar_t r_skywind = {"r_skywind", "0", CVAR_ARCHIVE};
 cvar_t allow_download_sky = {"allow_download_sky", "1", CVAR_ARCHIVE}; // woods automatic skybox downloading #skydownloads
+cvar_t r_globalsky = {"r_globalsky", "", CVAR_ARCHIVE};
 
 qboolean Sky_DownloadSkybox(const char* name);
 extern cvar_t	cl_web_download_url;
@@ -66,8 +67,12 @@ extern cvar_t	cl_web_download_url2;
 extern qboolean IsGithubRepoPath(const char* s);
 static char pending_skybox_name[1024];
 static qboolean skybox_download_pending = false;
+static char map_skybox_name[1024];
 extern qboolean Curl_DownloadFile(const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name);
 extern qboolean scr_disabled_for_loading;
+
+static void Sky_ApplyGlobalSkybox(void);
+static void Sky_GlobalSkyboxChanged(cvar_t *var);
 
 #ifndef ARRAY_COUNT
 #define ARRAY_COUNT(arr)   (sizeof(arr) / sizeof((arr)[0]))
@@ -1641,13 +1646,51 @@ qboolean Sky_DownloadSkybox(const char* name)
 
 static void Sky_LoadSkyBoxAuto(const char *name)
 {
-    Sky_LoadSkyBoxInternal(name, Sky_DownloadsDisabled() ? false : true); // quiet if downloads enabled, verbose if disabled
-    if (!skybox_name[0] && !Sky_DownloadsDisabled())
-    {
-        // Store the name for delayed download when connection is complete
-        q_strlcpy(pending_skybox_name, name, sizeof(pending_skybox_name));
-        skybox_download_pending = true;
-    }
+	qboolean allow_downloads;
+
+	if (!name)
+		name = "";
+
+	allow_downloads = !Sky_DownloadsDisabled();
+	pending_skybox_name[0] = 0;
+	skybox_download_pending = false;
+
+	Sky_LoadSkyBoxInternal(name, allow_downloads); // quiet if downloads enabled, verbose if disabled
+
+	if (name[0] && !skybox_name[0] && allow_downloads)
+	{
+		// Store the name for delayed download when connection is complete
+		q_strlcpy(pending_skybox_name, name, sizeof(pending_skybox_name));
+		skybox_download_pending = true;
+	}
+}
+
+static void Sky_SetMapSkybox(const char *name)
+{
+	if (!name)
+		name = "";
+
+	q_strlcpy(map_skybox_name, name, sizeof(map_skybox_name));
+}
+
+static void Sky_ApplyGlobalSkybox(void)
+{
+	const char *preferred = r_globalsky.string[0] ? r_globalsky.string : map_skybox_name;
+
+	if (!cl.worldmodel)
+		return;
+
+	Sky_LoadSkyBoxAuto(preferred);
+
+	if (r_globalsky.string[0] && !skybox_name[0] && map_skybox_name[0])
+		Sky_LoadSkyBoxAuto(map_skybox_name);
+}
+
+static void Sky_GlobalSkyboxChanged(cvar_t *var)
+{
+	(void)var;
+
+	Sky_ApplyGlobalSkybox();
 }
 
 /*
@@ -1664,6 +1707,9 @@ void Sky_ClearAll (void)
 	skyroom_enabled = false;
 	externalskyloaded = false; // woods #fastsky2
 	skybox_name[0] = 0;
+	map_skybox_name[0] = 0;
+	pending_skybox_name[0] = 0;
+	skybox_download_pending = false;
 	for (i=0; i<6; i++)
 		skybox_textures[i] = NULL;
 	solidskytexture = NULL;
@@ -1711,6 +1757,7 @@ void Sky_NewMap (void)
 	qboolean	skywind_from_worldspawn = false;
 
 	skyfog = r_skyfog.value;
+	map_skybox_name[0] = 0;
 	skywind_value[0] = 0;
 
 	//
@@ -1745,7 +1792,7 @@ void Sky_NewMap (void)
 		q_strlcpy(value, com_token, sizeof(value));
 
 		if (!strcmp("sky", key))
-			Sky_LoadSkyBoxAuto(value); // woods #skydownloads
+			Sky_SetMapSkybox(value);
 		else if (!strcmp("skyroom", key))
 		{	//"_skyroom" "X Y Z". ideally the gamecode would do this with an entity, but people want to use the vanilla gamecode from 1996 for some reason.
 			const char *t = COM_Parse(value);
@@ -1778,11 +1825,13 @@ void Sky_NewMap (void)
 
 #if 1 /* also accept non-standard keys */
 		else if (!strcmp("skyname", key)) //half-life
-			Sky_LoadSkyBoxAuto(value); // woods #skydownloads
+			Sky_SetMapSkybox(value);
 		else if (!strcmp("qlsky", key)) //quake lives
-			Sky_LoadSkyBoxAuto(value); // woods #skydownloads
+			Sky_SetMapSkybox(value);
 #endif
 	}
+
+	Sky_ApplyGlobalSkybox();
 
 	if (skywind_from_worldspawn)
 		Skywind_ApplyWorldspawn(skywind_value);
@@ -1929,6 +1978,8 @@ void Sky_Init (void)
 	Cvar_SetCallback (&r_skyfog, R_SetSkyfog_f);
 	Cvar_RegisterVariable (&r_skyspeed); // woods #skyspeed
 	Cvar_RegisterVariable (&allow_download_sky); // woods automatic skybox downloading #skydownloads
+	Cvar_RegisterVariable (&r_globalsky);
+	Cvar_SetCallback (&r_globalsky, Sky_GlobalSkyboxChanged);
 	Cvar_RegisterVariable (&r_skywind);
 	Cvar_SetCompletion (&r_skywind, &Skywind_Cvar_Completion_f); // woods #iwtabcomplete
 	Cvar_SetCallback (&r_skywind, &Skywind_Cvar_OnChange);
@@ -1942,6 +1993,9 @@ void Sky_Init (void)
 	Cmd_AddCommand ("skywind_rotate",Skywind_Rotate_f);
 
 	skybox_name[0] = 0;
+	map_skybox_name[0] = 0;
+	pending_skybox_name[0] = 0;
+	skybox_download_pending = false;
 	for (i=0; i<6; i++)
 		skybox_textures[i] = NULL;
 }
