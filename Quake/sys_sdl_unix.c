@@ -1456,7 +1456,6 @@ double Sys_DoubleTime (void)
 
 static void safe_write(int fd, const void* buf, size_t count) // woods #arrowkeys
 {
-<<<<<<< HEAD
 	ssize_t result = write(fd, buf, count);
 	if (result == -1) {
 	}
