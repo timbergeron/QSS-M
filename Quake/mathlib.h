@@ -112,6 +112,7 @@ int GreatestCommonDivisor (int i1, int i2);
 void AngleVectors (vec3_t angles, vec3_t forward, vec3_t right, vec3_t up);
 int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, struct mplane_s *plane);
 float	anglemod(float a);
+qboolean RayVsBox (const vec3_t org, const vec3_t delta, const vec3_t mins, const vec3_t maxs, float *frac);
 
 
 #define BOX_ON_PLANE_SIDE(emins, emaxs, p)	\

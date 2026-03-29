@@ -102,6 +102,7 @@ extern qboolean netquakeio; // woods
 void TexturePointer_Draw(void); // woods #texturepointer
 
 extern cvar_t r_lerpmove; //johnfitz
+extern cvar_t r_showfields;
 
 extern qpic_t* sb_nums[2][11]; // woods #varmatchclock
 extern qpic_t* sb_colon; // woods #varmatchclock
@@ -5871,6 +5872,636 @@ static void SCR_DrawScopeOverlay (void)
 
 //johnfitz -- deleted SCR_BringDownConsole
 
+#define SHOWFIELDS_MAX_LABEL_CHARS 32
+#define SHOWFIELDS_MAX_VALUE_CHARS 40
+
+typedef enum
+{
+	SHOWFIELDS_LINK_NONE = 0,
+	SHOWFIELDS_LINK_OUTGOING = 1 << 0,
+	SHOWFIELDS_LINK_INCOMING = 1 << 1
+} scr_showfields_link_t;
+
+typedef struct
+{
+	float x;
+	float y;
+	double last_time;
+	qboolean valid;
+} scr_showfields_track_t;
+
+static scr_showfields_track_t scr_showfields_tracks[MAX_EDICTS * 2];
+
+void SCR_ClearShowFieldsTracks(void)
+{
+	memset(scr_showfields_tracks, 0, sizeof(scr_showfields_tracks));
+}
+
+static const char *SCR_GetEdictStringField(edict_t *ed, ddef_t *field)
+{
+	if (!field)
+		return "";
+
+	return PR_GetString(*(string_t *)((char *)&ed->v + field->ofs * 4));
+}
+
+static void SCR_GetEdictDebugBounds(edict_t *ed, vec3_t mins, vec3_t maxs)
+{
+	if ((ed->v.solid == SOLID_BSP || ed->v.solid == SOLID_EXT_BSPTRIGGER)
+		&& (ed->v.angles[0] || ed->v.angles[1] || ed->v.angles[2])
+		&& pr_checkextension.value)
+	{
+		VectorCopy(ed->v.absmin, mins);
+		VectorCopy(ed->v.absmax, maxs);
+		return;
+	}
+
+	if (VectorCompare(ed->v.mins, ed->v.maxs))
+	{
+		mins[0] = ed->v.origin[0] - 8.0f;
+		mins[1] = ed->v.origin[1] - 8.0f;
+		mins[2] = ed->v.origin[2] - 8.0f;
+		maxs[0] = ed->v.origin[0] + 8.0f;
+		maxs[1] = ed->v.origin[1] + 8.0f;
+		maxs[2] = ed->v.origin[2] + 8.0f;
+		return;
+	}
+
+	VectorAdd(ed->v.mins, ed->v.origin, mins);
+	VectorAdd(ed->v.maxs, ed->v.origin, maxs);
+}
+
+static void SCR_GetEdictDebugCenter(edict_t *ed, vec3_t center)
+{
+	vec3_t mins, maxs;
+
+	SCR_GetEdictDebugBounds(ed, mins, maxs);
+	VectorAverage(mins, maxs, center);
+}
+
+static void SCR_GetEdictDebugBottom(edict_t *ed, vec3_t bottom)
+{
+	vec3_t mins, maxs;
+
+	SCR_GetEdictDebugBounds(ed, mins, maxs);
+	bottom[0] = (mins[0] + maxs[0]) * 0.5f;
+	bottom[1] = (mins[1] + maxs[1]) * 0.5f;
+	bottom[2] = mins[2];
+}
+
+static qboolean SCR_ProjectDebugPoint(const vec3_t origin, float scale, float *x, float *y)
+{
+	vec3_t local;
+	float dist;
+	float cx, cy;
+	float xproj, yproj;
+
+	VectorSubtract(origin, r_refdef.vieworg, local);
+
+	dist = DotProduct(local, vpn);
+	if (dist <= 1.0f)
+		return false;
+
+	cx = r_refdef.vrect.x + r_refdef.vrect.width * 0.5f;
+	cy = r_refdef.vrect.y + r_refdef.vrect.height * 0.5f;
+	xproj = DotProduct(local, vright) / dist;
+	yproj = DotProduct(local, vup) / dist;
+
+	*x = (cx + (r_refdef.vrect.width * 0.5f) * xproj / tanf(DEG2RAD(r_refdef.fov_x) * 0.5f)) / scale;
+	*y = (cy - (r_refdef.vrect.height * 0.5f) * yproj / tanf(DEG2RAD(r_refdef.fov_y) * 0.5f)) / scale;
+	return true;
+}
+
+static void SCR_SetDebugLineColor(plcolour_t color, float alpha)
+{
+	byte *rgb = CL_PLColours_ToRGB(&color);
+	glColor4f(rgb[0] / 255.0f, rgb[1] / 255.0f, rgb[2] / 255.0f, alpha);
+}
+
+static void SCR_DrawDebugLine(float x1, float y1, float x2, float y2, plcolour_t color, float alpha)
+{
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_ALPHA_TEST);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glLineWidth(1.5f);
+
+	SCR_SetDebugLineColor(color, alpha);
+	glBegin(GL_LINES);
+	glVertex2f(x1, y1);
+	glVertex2f(x2, y2);
+	glEnd();
+
+	glLineWidth(1.0f);
+	glColor4f(1, 1, 1, 1);
+	glDisable(GL_BLEND);
+	glEnable(GL_ALPHA_TEST);
+	glEnable(GL_TEXTURE_2D);
+}
+
+static void SCR_DrawRedConcharsString(int x, int y, const char *str)
+{
+	char tinted[1024];
+
+	COM_TintString(str, tinted, sizeof(tinted));
+	Draw_String(x, y, tinted);
+}
+
+static int SCR_CountWrappedLines(const char *text, int max_chars)
+{
+	int lines = 1;
+	int col = 0;
+
+	if (!text || !*text)
+		return 1;
+
+	while (*text)
+	{
+		if (*text == '\n')
+		{
+			lines++;
+			col = 0;
+			text++;
+			continue;
+		}
+
+		if (col >= max_chars)
+		{
+			lines++;
+			col = 0;
+		}
+
+		col++;
+		text++;
+	}
+
+	return lines;
+}
+
+static int SCR_LongestWrappedLineChars(const char *text, int max_chars)
+{
+	int longest = 0;
+	int col = 0;
+
+	if (!text || !*text)
+		return 0;
+
+	while (*text)
+	{
+		if (*text == '\n')
+		{
+			longest = q_max(longest, col);
+			col = 0;
+			text++;
+			continue;
+		}
+
+		if (col >= max_chars)
+		{
+			longest = q_max(longest, col);
+			col = 0;
+		}
+
+		col++;
+		text++;
+	}
+
+	return q_max(longest, col);
+}
+
+static const char *SCR_CopyWrappedLine(const char *src, char *dst, size_t dstsize, int max_chars)
+{
+	int len = 0;
+	int col = 0;
+
+	while (*src && *src != '\n' && col < max_chars && len + 1 < (int)dstsize)
+	{
+		dst[len++] = *src++;
+		col++;
+	}
+
+	dst[len] = '\0';
+
+	if (*src == '\n')
+		src++;
+
+	return src;
+}
+
+static void SCR_SmoothShowFieldsPosition(int entnum, float *x, float *y)
+{
+	scr_showfields_track_t *track;
+	float alpha;
+
+	if (entnum < 0 || entnum >= (int)countof(scr_showfields_tracks))
+		return;
+
+	track = &scr_showfields_tracks[entnum];
+	if (!track->valid
+		|| realtime - track->last_time > 0.25
+		|| fabsf(*x - track->x) > 96.0f
+		|| fabsf(*y - track->y) > 96.0f)
+	{
+		track->x = *x;
+		track->y = *y;
+		track->last_time = realtime;
+		track->valid = true;
+		return;
+	}
+
+	alpha = CLAMP(0.0f, (float)host_frametime * 10.0f, 1.0f);
+	track->x += (*x - track->x) * alpha;
+	track->y += (*y - track->y) * alpha;
+	track->last_time = realtime;
+
+	*x = track->x;
+	*y = track->y;
+}
+
+static int SCR_GetShowFieldsLinkFlags(edict_t *focus, edict_t *ed, const char *focus_target, const char *focus_targetname, ddef_t *target_field, ddef_t *targetname_field)
+{
+	int i;
+	int link_flags = SHOWFIELDS_LINK_NONE;
+	int focus_prog;
+	int ed_prog;
+
+	if (!focus || ed == focus)
+		return SHOWFIELDS_LINK_NONE;
+
+	if (*focus_target)
+	{
+		const char *ed_targetname = SCR_GetEdictStringField(ed, targetname_field);
+		if (*ed_targetname && !strcmp(ed_targetname, focus_target))
+			link_flags |= SHOWFIELDS_LINK_OUTGOING;
+	}
+
+	if (*focus_targetname)
+	{
+		const char *ed_target = SCR_GetEdictStringField(ed, target_field);
+		if (*ed_target && !strcmp(ed_target, focus_targetname))
+			link_flags |= SHOWFIELDS_LINK_INCOMING;
+	}
+
+	focus_prog = EDICT_TO_PROG(focus);
+	ed_prog = EDICT_TO_PROG(ed);
+
+	for (i = 1; i < qcvm->progs->numfielddefs; i++)
+	{
+		ddef_t *d = &qcvm->fielddefs[i];
+		eval_t *focus_val;
+		eval_t *ed_val;
+
+		if ((d->type & ~DEF_SAVEGLOBAL) != ev_entity)
+			continue;
+		if (d->ofs * 4 == offsetof(entvars_t, chain))
+			continue;
+
+		focus_val = (eval_t *)((char *)&focus->v + d->ofs * 4);
+		ed_val = (eval_t *)((char *)&ed->v + d->ofs * 4);
+
+		if (focus_val->edict == ed_prog)
+			link_flags |= SHOWFIELDS_LINK_OUTGOING;
+		if (ed_val->edict == focus_prog)
+			link_flags |= SHOWFIELDS_LINK_INCOMING;
+
+		if (link_flags == (SHOWFIELDS_LINK_OUTGOING | SHOWFIELDS_LINK_INCOMING))
+			break;
+	}
+
+	return link_flags;
+}
+
+static void SCR_DrawEdictInfo (void)
+{
+	extern edict_t *bbox_focus;
+	extern float canvas_scaling;
+
+	static qboolean colors_initialized = false;
+	static plcolour_t focus_bg;
+	static plcolour_t panel_bg;
+	static plcolour_t outgoing_bg;
+	static plcolour_t incoming_bg;
+	static plcolour_t linked_bg;
+	static plcolour_t outgoing_line;
+	static plcolour_t incoming_line;
+	static plcolour_t linked_line;
+
+	qcvm_t *oldvm;
+	ddef_t *classname_field;
+	ddef_t *target_field;
+	ddef_t *targetname_field;
+	float scale;
+	float vwidth, vheight;
+	float focus_x = 0.0f, focus_y = 0.0f;
+	qboolean focus_on_screen = false;
+	const char *focus_target;
+	const char *focus_targetname;
+	char header[32];
+	int e;
+	int showfields_mode;
+	plcolour_t text_fg;
+	plcolour_t field_name_fg;
+
+	showfields_mode = (int)r_showfields.value;
+	if (showfields_mode < 0)
+		showfields_mode = -showfields_mode;
+	if (showfields_mode > 2)
+		showfields_mode = 2;
+
+	if (!showfields_mode || !sv.active)
+		return;
+
+	if (!colors_initialized)
+	{
+		focus_bg = CL_PLColours_Parse("0x000000");
+		panel_bg = CL_PLColours_Parse("0x000000");
+		outgoing_bg = CL_PLColours_Parse("0x000000");
+		incoming_bg = CL_PLColours_Parse("0x000000");
+		linked_bg = CL_PLColours_Parse("0x000000");
+		outgoing_line = CL_PLColours_Parse("0x6db0ff");
+		incoming_line = CL_PLColours_Parse("0xff7a7a");
+		linked_line = CL_PLColours_Parse("0xd38cff");
+		colors_initialized = true;
+	}
+
+	text_fg = Draw_GetConcharsCursorColorByIndex(0);
+	field_name_fg = Draw_GetConcharsCursorColor();
+
+	if (bbox_focus && bbox_focus->free)
+		bbox_focus = NULL;
+	if (!bbox_focus)
+		return;
+
+	GL_SetCanvas(CANVAS_AUTOID);
+	scale = canvas_scaling;
+	vwidth = glwidth / scale;
+	vheight = glheight / scale;
+
+	oldvm = qcvm;
+	PR_SwitchQCVM(NULL);
+	PR_SwitchQCVM(&sv.qcvm);
+
+	if (!qcvm || !qcvm->progs)
+	{
+		PR_SwitchQCVM(NULL);
+		PR_SwitchQCVM(oldvm);
+		GL_Set2D();
+		return;
+	}
+
+	classname_field = ED_FindField("classname");
+	target_field = ED_FindField("target");
+	targetname_field = ED_FindField("targetname");
+	focus_target = bbox_focus ? SCR_GetEdictStringField(bbox_focus, target_field) : "";
+	focus_targetname = bbox_focus ? SCR_GetEdictStringField(bbox_focus, targetname_field) : "";
+
+	if (bbox_focus)
+	{
+		vec3_t center;
+		SCR_GetEdictDebugCenter(bbox_focus, center);
+		focus_on_screen = SCR_ProjectDebugPoint(center, scale, &focus_x, &focus_y);
+		if (focus_on_screen)
+			SCR_SmoothShowFieldsPosition(NUM_FOR_EDICT(bbox_focus), &focus_x, &focus_y);
+	}
+
+	for (e = 1; e < qcvm->num_edicts; e++)
+	{
+		edict_t *ed = EDICT_NUM(e);
+		const char *ed_classname;
+		vec3_t center;
+		float x, y;
+		int link_flags = SHOWFIELDS_LINK_NONE;
+		float sx, sy;
+		int box_w, box_h;
+		char label[SHOWFIELDS_MAX_LABEL_CHARS + 1];
+		plcolour_t bg_color;
+
+		if (ed->free)
+			continue;
+
+		if (bbox_focus && ed != bbox_focus)
+			link_flags = SCR_GetShowFieldsLinkFlags(bbox_focus, ed, focus_target, focus_targetname, target_field, targetname_field);
+
+		if (showfields_mode == 2 && ed == bbox_focus)
+			continue;
+		if (ed != bbox_focus && !link_flags)
+			continue;
+
+		SCR_GetEdictDebugCenter(ed, center);
+		if (!SCR_ProjectDebugPoint(center, scale, &x, &y))
+			continue;
+		SCR_SmoothShowFieldsPosition(e, &x, &y);
+
+		if (focus_on_screen && ed != bbox_focus)
+		{
+			if (link_flags == (SHOWFIELDS_LINK_OUTGOING | SHOWFIELDS_LINK_INCOMING))
+				SCR_DrawDebugLine(focus_x, focus_y, x, y, linked_line, 0.95f);
+			else if (link_flags & SHOWFIELDS_LINK_OUTGOING)
+				SCR_DrawDebugLine(focus_x, focus_y, x, y, outgoing_line, 0.95f);
+			else if (link_flags & SHOWFIELDS_LINK_INCOMING)
+				SCR_DrawDebugLine(x, y, focus_x, focus_y, incoming_line, 0.95f);
+		}
+
+		ed_classname = SCR_GetEdictStringField(ed, classname_field);
+		if (!*ed_classname)
+			continue;
+
+		q_snprintf(label, sizeof(label), "%.*s", SHOWFIELDS_MAX_LABEL_CHARS, ed_classname);
+		q_snprintf(header, sizeof(header), "EDICT %i", NUM_FOR_EDICT(ed));
+
+		box_w = q_max((int)strlen(header), (int)strlen(label)) * 8 + 16;
+		box_h = 24;
+		sx = x - box_w * 0.5f;
+		sy = y - box_h * 0.5f;
+
+		if (sx < 8.0f)
+			sx = 8.0f;
+		if (sy < 8.0f)
+			sy = 8.0f;
+		if (sx + box_w > vwidth - 8.0f)
+			sx = vwidth - box_w - 8.0f;
+		if (sy + box_h > vheight - 8.0f)
+			sy = vheight - box_h - 8.0f;
+
+		if (ed == bbox_focus)
+			bg_color = focus_bg;
+		else if (link_flags == (SHOWFIELDS_LINK_OUTGOING | SHOWFIELDS_LINK_INCOMING))
+			bg_color = linked_bg;
+		else if (link_flags & SHOWFIELDS_LINK_OUTGOING)
+			bg_color = outgoing_bg;
+		else
+			bg_color = incoming_bg;
+
+		Draw_Fill_Plus_Radius((int)sx, (int)sy, box_w, box_h, bg_color, 0.7f, true, DRAW_CORNERS_ALL, 5.0f);
+		SCR_DrawRedConcharsString((int)(sx + (box_w - (int)strlen(header) * 8) * 0.5f), (int)sy + 4, header);
+		Draw_String((int)(sx + (box_w - (int)strlen(label) * 8) * 0.5f), (int)sy + 12, label);
+	}
+
+	if (bbox_focus)
+	{
+		int i;
+		int maxnamelen = 0;
+		int maxvaluelen = 0;
+		int total_lines = 0;
+		int panel_margin = 8;
+		int available_chars;
+		int value_chars;
+		int panel_w, panel_h;
+		int panel_x, panel_y;
+		int x_name, x_value;
+		int max_y;
+		float anchor_x, anchor_y;
+		qboolean anchor_on_screen;
+		qboolean truncated = false;
+		char focus_label[SHOWFIELDS_MAX_LABEL_CHARS + 1];
+
+		q_snprintf(header, sizeof(header), "EDICT %i", NUM_FOR_EDICT(bbox_focus));
+		q_snprintf(focus_label, sizeof(focus_label), "%.*s", SHOWFIELDS_MAX_LABEL_CHARS, SCR_GetEdictStringField(bbox_focus, classname_field));
+
+		for (i = 1; i < qcvm->progs->numfielddefs; i++)
+		{
+			ddef_t *d = &qcvm->fielddefs[i];
+			const char *fname;
+
+			if (d == classname_field)
+				continue;
+			if (!ED_IsRelevantField(bbox_focus, d))
+				continue;
+
+			fname = PR_GetString(d->s_name);
+			maxnamelen = q_max(maxnamelen, (int)strlen(fname));
+		}
+
+		available_chars = (int)(vwidth / 8.0f) - 8;
+		value_chars = CLAMP(14, available_chars - maxnamelen - 4, SHOWFIELDS_MAX_VALUE_CHARS);
+
+		for (i = 1; i < qcvm->progs->numfielddefs; i++)
+		{
+			ddef_t *d = &qcvm->fielddefs[i];
+			int wrapped_chars;
+
+			if (d == classname_field)
+				continue;
+			if (!ED_IsRelevantField(bbox_focus, d))
+				continue;
+
+			total_lines += SCR_CountWrappedLines(ED_FieldValueString(bbox_focus, d), value_chars);
+			wrapped_chars = SCR_LongestWrappedLineChars(ED_FieldValueString(bbox_focus, d), value_chars);
+			maxvaluelen = q_max(maxvaluelen, wrapped_chars);
+		}
+
+		maxvaluelen = q_max(maxvaluelen, 3);
+		panel_w = q_max((int)strlen(header), (int)strlen(focus_label)) * 8 + panel_margin * 2;
+		panel_w = q_max(panel_w, (maxnamelen + maxvaluelen + 2) * 8 + panel_margin * 2);
+		panel_w = q_min(panel_w, (int)vwidth - 16);
+		panel_h = (2 + total_lines) * 8 + panel_margin * 2;
+		panel_h = q_min(panel_h, (int)vheight - 16);
+
+		if (showfields_mode == 2)
+		{
+			vec3_t bottom;
+
+			SCR_GetEdictDebugBottom(bbox_focus, bottom);
+			anchor_on_screen = SCR_ProjectDebugPoint(bottom, scale, &anchor_x, &anchor_y);
+			if (anchor_on_screen)
+				SCR_SmoothShowFieldsPosition(NUM_FOR_EDICT(bbox_focus) + MAX_EDICTS, &anchor_x, &anchor_y);
+			else
+			{
+				anchor_x = focus_x;
+				anchor_y = focus_y;
+				anchor_on_screen = focus_on_screen;
+			}
+
+			if (anchor_on_screen)
+			{
+				panel_x = (int)(anchor_x - panel_w * 0.5f);
+				panel_y = (int)(anchor_y - panel_h - 8.0f);
+			}
+			else
+			{
+				panel_x = (int)vwidth - panel_w - 8;
+				panel_y = (int)vheight - panel_h - 8;
+			}
+		}
+		else
+		{
+			panel_x = (int)vwidth - panel_w - 8;
+			panel_y = (int)vheight - panel_h - 8;
+		}
+
+		if (panel_x < 8)
+			panel_x = 8;
+		if (panel_y < 8)
+			panel_y = 8;
+		if (panel_x + panel_w > (int)vwidth - 8)
+			panel_x = (int)vwidth - panel_w - 8;
+		if (panel_y + panel_h > (int)vheight - 8)
+			panel_y = (int)vheight - panel_h - 8;
+
+		x_name = panel_x + panel_margin;
+		x_value = x_name + (maxnamelen + 2) * 8;
+		max_y = panel_y + panel_h - panel_margin - 8;
+
+		Draw_Fill_Plus_Radius(panel_x, panel_y, panel_w, panel_h, panel_bg, 0.7f, true, DRAW_CORNERS_ALL, 6.0f);
+		SCR_DrawRedConcharsString(x_name, panel_y + panel_margin, header);
+		Draw_String(x_name, panel_y + panel_margin + 8, focus_label);
+
+		panel_y += panel_margin + 24;
+		for (i = 1; i < qcvm->progs->numfielddefs; i++)
+		{
+			ddef_t *d = &qcvm->fielddefs[i];
+			const char *fname;
+			const char *src;
+			char linebuf[1024];
+			qboolean first_line = true;
+
+			if (d == classname_field)
+				continue;
+			if (!ED_IsRelevantField(bbox_focus, d))
+				continue;
+			if (panel_y > max_y)
+			{
+				truncated = true;
+				break;
+			}
+
+			fname = PR_GetString(d->s_name);
+			src = ED_FieldValueString(bbox_focus, d);
+
+			while (1)
+			{
+				src = SCR_CopyWrappedLine(src, linebuf, sizeof(linebuf), value_chars);
+				if (first_line)
+				{
+					Draw_StringRGBA(x_name + (maxnamelen - (int)strlen(fname)) * 8, panel_y, fname, field_name_fg, 1.0f);
+					first_line = false;
+				}
+
+				Draw_StringRGBA(x_value, panel_y, linebuf, text_fg, 1.0f);
+				panel_y += 8;
+
+				if (!*src)
+					break;
+				if (panel_y > max_y)
+				{
+					truncated = true;
+					break;
+				}
+			}
+
+			if (truncated)
+				break;
+		}
+
+		if (truncated)
+			Draw_StringRGBA(x_value, max_y, "...", text_fg, 0.8f);
+	}
+
+	PR_SwitchQCVM(NULL);
+	PR_SwitchQCVM(oldvm);
+	GL_Set2D();
+}
+
 
 /*
 ==================
@@ -6156,6 +6787,7 @@ void SCR_UpdateScreen (void)
 		SCR_Observing (); // woods
 		TexturePointer_Draw (); // woods #texturepointer
 		SCR_DrawScopeOverlay (); // woods #scope
+		SCR_DrawEdictInfo (); // woods #showfields
 		SCR_DrawConsole ();
 		if (realtime < scr_volume_display_time)
 			SCR_DrawVolumeSlider ();

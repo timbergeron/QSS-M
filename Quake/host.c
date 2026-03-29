@@ -1059,6 +1059,9 @@ not reinitialize anything.
 */
 void Host_ClearMemory (void)
 {
+	extern edict_t *bbox_focus;
+	extern void SCR_ClearShowFieldsTracks(void);
+
 	if (cl.qcvm.extfuncs.CSQC_Shutdown)
 	{
 		PR_SwitchQCVM(&cl.qcvm);
@@ -1066,6 +1069,9 @@ void Host_ClearMemory (void)
 		qcvm->extfuncs.CSQC_Shutdown = 0;
 		PR_SwitchQCVM(NULL);
 	}
+
+	bbox_focus = NULL;
+	SCR_ClearShowFieldsTracks();
 
 	Con_DPrintf ("Clearing memory\n");
 	D_FlushCaches ();

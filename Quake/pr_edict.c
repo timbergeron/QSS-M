@@ -23,7 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
-int		type_size[8] = {
+int		type_size[ev_ext_double + 1] = {
 	1,					// ev_void
 	1,	// sizeof(string_t) / 4		// ev_string
 	1,					// ev_float
@@ -31,7 +31,12 @@ int		type_size[8] = {
 	1,					// ev_entity
 	1,					// ev_field
 	1,	// sizeof(func_t) / 4		// ev_function
-	1	// sizeof(void *) / 4		// ev_pointer
+	1,	// sizeof(void *) / 4		// ev_pointer
+	1,					// ev_ext_integer
+	1,					// ev_ext_uint32
+	2,					// ev_ext_sint64
+	2,					// ev_ext_uint64
+	2					// ev_ext_double
 };
 
 static ddef_t	*ED_FieldAtOfs (int ofs);
@@ -109,6 +114,11 @@ FIXME: walk all entities and NULL out references to this entity
 */
 void ED_Free (edict_t *ed)
 {
+	extern edict_t *bbox_focus;
+
+	if (ed == bbox_focus)
+		bbox_focus = NULL;
+
 	SV_UnlinkEdict (ed);		// unlink from world bsp
 
 	ed->free = true;
@@ -435,6 +445,204 @@ const char *PR_GlobalStringNoContents (int ofs)
 	return line;
 }
 
+/*
+=============
+ED_IsRelevantField
+
+Returns true if the field should be printed by the edict command:
+- not a _x/_y/_z variable
+- non-zero contents
+=============
+*/
+qboolean ED_IsRelevantField (edict_t *ed, ddef_t *d)
+{
+	const char	*name;
+	size_t		l;
+	int			*v;
+	int			type;
+	int			i;
+
+	name = PR_GetString(d->s_name);
+	l = strlen(name);
+	if (l > 1 && name[l - 2] == '_')
+		return false;
+
+	type = d->type & ~DEF_SAVEGLOBAL;
+	if (type < 0 || type >= (int)countof(type_size))
+		return false;
+
+	v = (int *)((char *)&ed->v + d->ofs * 4);
+	for (i = 0; i < type_size[type]; i++)
+	{
+		if (v[i])
+			return true;
+	}
+
+	return false;
+}
+
+/*
+=============
+ED_AppendFlagString
+=============
+*/
+static void ED_AppendFlagString (char *dst, size_t dstsize, const char *desc)
+{
+	if (*dst)
+		q_strlcat (dst, " | ", dstsize);
+	q_strlcat (dst, desc, dstsize);
+}
+
+/*
+=============
+ED_FieldValueString
+=============
+*/
+const char *ED_FieldValueString (edict_t *ed, ddef_t *d)
+{
+	static char str[1024];
+	int ofs = d->ofs * 4;
+	eval_t *val = (eval_t *)((char *)&ed->v + ofs);
+
+	if (ofs == offsetof (entvars_t, movetype) && val->_float == (int)val->_float)
+	{
+		switch ((int)val->_float)
+		{
+		#define MOVETYPE_CASE(x) case x: return #x
+		MOVETYPE_CASE (MOVETYPE_NONE);
+		MOVETYPE_CASE (MOVETYPE_ANGLENOCLIP);
+		MOVETYPE_CASE (MOVETYPE_ANGLECLIP);
+		MOVETYPE_CASE (MOVETYPE_WALK);
+		MOVETYPE_CASE (MOVETYPE_STEP);
+		MOVETYPE_CASE (MOVETYPE_FLY);
+		MOVETYPE_CASE (MOVETYPE_TOSS);
+		MOVETYPE_CASE (MOVETYPE_PUSH);
+		MOVETYPE_CASE (MOVETYPE_NOCLIP);
+		MOVETYPE_CASE (MOVETYPE_FLYMISSILE);
+		MOVETYPE_CASE (MOVETYPE_BOUNCE);
+		MOVETYPE_CASE (MOVETYPE_EXT_BOUNCEMISSILE);
+		MOVETYPE_CASE (MOVETYPE_EXT_FOLLOW);
+		#undef MOVETYPE_CASE
+		default:
+			break;
+		}
+	}
+
+	if (ofs == offsetof (entvars_t, solid) && val->_float == (int)val->_float)
+	{
+		switch ((int)val->_float)
+		{
+		#define SOLID_CASE(x) case x: return #x
+		SOLID_CASE (SOLID_NOT);
+		SOLID_CASE (SOLID_TRIGGER);
+		SOLID_CASE (SOLID_BBOX);
+		SOLID_CASE (SOLID_SLIDEBOX);
+		SOLID_CASE (SOLID_BSP);
+		SOLID_CASE (SOLID_EXT_CORPSE);
+		SOLID_CASE (SOLID_EXT_BSPTRIGGER);
+		#undef SOLID_CASE
+		default:
+			break;
+		}
+	}
+
+	if (ofs == offsetof (entvars_t, deadflag) && val->_float == (int)val->_float)
+	{
+		switch ((int)val->_float)
+		{
+		#define DEAD_CASE(x) case x: return #x
+		DEAD_CASE (DEAD_NO);
+		DEAD_CASE (DEAD_DYING);
+		DEAD_CASE (DEAD_DEAD);
+		#undef DEAD_CASE
+		default:
+			break;
+		}
+	}
+
+	if (ofs == offsetof (entvars_t, takedamage) && val->_float == (int)val->_float)
+	{
+		switch ((int)val->_float)
+		{
+		#define TAKEDAMAGE_CASE(x) case x: return #x
+		TAKEDAMAGE_CASE (DAMAGE_NO);
+		TAKEDAMAGE_CASE (DAMAGE_YES);
+		TAKEDAMAGE_CASE (DAMAGE_AIM);
+		#undef TAKEDAMAGE_CASE
+		default:
+			break;
+		}
+	}
+
+	if ((ofs == offsetof (entvars_t, flags)
+		|| ofs == offsetof (entvars_t, spawnflags)
+		|| ofs == offsetof (entvars_t, effects))
+		&& val->_float == (int)val->_float)
+	{
+		int bits = (int)val->_float;
+		str[0] = '\0';
+
+		#define BIT_CASE(f) do { if (bits & (int)(f)) { bits ^= (int)(f); ED_AppendFlagString (str, sizeof (str), #f); } } while (0)
+
+		if (ofs == offsetof (entvars_t, flags))
+		{
+			BIT_CASE (FL_FLY);
+			BIT_CASE (FL_SWIM);
+			BIT_CASE (FL_CONVEYOR);
+			BIT_CASE (FL_CLIENT);
+			BIT_CASE (FL_INWATER);
+			BIT_CASE (FL_MONSTER);
+			BIT_CASE (FL_GODMODE);
+			BIT_CASE (FL_NOTARGET);
+			BIT_CASE (FL_ITEM);
+			BIT_CASE (FL_ONGROUND);
+			BIT_CASE (FL_PARTIALGROUND);
+			BIT_CASE (FL_WATERJUMP);
+			BIT_CASE (FL_JUMPRELEASED);
+		}
+		else if (ofs == offsetof (entvars_t, spawnflags))
+		{
+			BIT_CASE (SPAWNFLAG_NOT_EASY);
+			BIT_CASE (SPAWNFLAG_NOT_MEDIUM);
+			BIT_CASE (SPAWNFLAG_NOT_HARD);
+			BIT_CASE (SPAWNFLAG_NOT_DEATHMATCH);
+		}
+		else if (ofs == offsetof (entvars_t, effects))
+		{
+			BIT_CASE (EF_BRIGHTFIELD);
+			BIT_CASE (EF_MUZZLEFLASH);
+			BIT_CASE (EF_BRIGHTLIGHT);
+			BIT_CASE (EF_DIMLIGHT);
+			BIT_CASE (EF_ADDITIVE);
+			BIT_CASE (EF_BLUE);
+			BIT_CASE (EF_RED);
+			BIT_CASE (EF_FULLBRIGHT);
+			BIT_CASE (EF_NOSHADOW);
+			BIT_CASE (EF_GREEN);
+			BIT_CASE (EF_NOMODELFLAGS);
+		}
+
+		#undef BIT_CASE
+
+		while (bits)
+		{
+			int lowest = bits & -bits;
+			bits ^= lowest;
+			ED_AppendFlagString (str, sizeof (str), va ("%d", lowest));
+		}
+
+		return str;
+	}
+
+	if (ofs == offsetof (entvars_t, nextthink) && val->_float)
+	{
+		q_snprintf (str, sizeof (str), " %7.1f (%+.2f)", val->_float, val->_float - qcvm->time);
+		return str;
+	}
+
+	return PR_ValueString (d->type, val);
+}
+
 
 /*
 =============
@@ -446,10 +654,8 @@ For debugging
 void ED_Print (edict_t *ed)
 {
 	ddef_t	*d;
-	int		*v;
-	int		i, j, l;
+	int		i, l;
 	const char	*name;
-	int		type;
 
 	if (ed->free)
 	{
@@ -461,29 +667,16 @@ void ED_Print (edict_t *ed)
 	for (i = 1; i < qcvm->progs->numfielddefs; i++)
 	{
 		d = &qcvm->fielddefs[i];
-		name = PR_GetString(d->s_name);
-		l = strlen (name);
-		if (l > 1 && name[l - 2] == '_')
-			continue;	// skip _x, _y, _z vars
-
-		v = (int *)((char *)&ed->v + d->ofs*4);
-
-	// if the value is still all 0, skip the field
-		type = d->type & ~DEF_SAVEGLOBAL;
-
-		for (j = 0; j < type_size[type]; j++)
-		{
-			if (v[j])
-				break;
-		}
-		if (j == type_size[type])
+		if (!ED_IsRelevantField(ed, d))
 			continue;
 
+		name = PR_GetString(d->s_name);
+		l = strlen (name);
 		Con_SafePrintf ("%s", name); //johnfitz -- was Con_Printf
 		while (l++ < 15)
 			Con_SafePrintf (" "); //johnfitz -- was Con_Printf
 
-		Con_SafePrintf ("%s\n", PR_ValueString(d->type, (eval_t *)v)); //johnfitz -- was Con_Printf
+		Con_SafePrintf ("%s\n", ED_FieldValueString(ed, d)); //johnfitz -- was Con_Printf
 	}
 }
 
@@ -498,9 +691,8 @@ void ED_Write (FILE *f, edict_t *ed)
 {
 	ddef_t	*d;
 	int		*v;
-	int		i, j;
+	int		i;
 	const char	*name;
-	int		type;
 
 	fprintf (f, "{\n");
 
@@ -513,23 +705,11 @@ void ED_Write (FILE *f, edict_t *ed)
 	for (i = 1; i < qcvm->progs->numfielddefs; i++)
 	{
 		d = &qcvm->fielddefs[i];
-		name = PR_GetString(d->s_name);
-		j = strlen (name);
-		if (j > 1 && name[j - 2] == '_')
-			continue;	// skip _x, _y, _z vars
-
-		v = (int *)((char *)&ed->v + d->ofs*4);
-
-	// if the value is still all 0, skip the field
-		type = d->type & ~DEF_SAVEGLOBAL;
-		for (j = 0; j < type_size[type]; j++)
-		{
-			if (v[j])
-				break;
-		}
-		if (j == type_size[type])
+		if (!ED_IsRelevantField(ed, d))
 			continue;
 
+		name = PR_GetString(d->s_name);
+		v = (int *)((char *)&ed->v + d->ofs*4);
 		fprintf (f, "\"%s\" ", name);
 		fprintf (f, "\"%s\"\n", PR_UglyValueString(d->type, (eval_t *)v));
 	}

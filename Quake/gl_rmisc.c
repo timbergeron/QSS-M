@@ -41,6 +41,7 @@ extern cvar_t r_oldskyleaf;
 extern cvar_t r_drawworld;
 extern cvar_t r_showtris;
 extern cvar_t r_showbboxes;
+extern cvar_t r_showfields;
 extern cvar_t r_showlocs; // woods #locext
 extern cvar_t r_showlocs_y; // woods #locext
 extern cvar_t r_lerpmodels;
@@ -430,6 +431,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_drawworld);
 	Cvar_RegisterVariable (&r_showtris);
 	Cvar_RegisterVariable (&r_showbboxes);
+	Cvar_RegisterVariable (&r_showfields);
 	Cvar_RegisterVariable (&r_showlocs); // woods #locext
 	Cvar_RegisterVariable (&r_showlocs_y); // woods #locext
 	Cvar_RegisterVariable (&gl_farclip);

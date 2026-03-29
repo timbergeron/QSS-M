@@ -104,6 +104,8 @@ void PR_Profile_f (void);
 edict_t *ED_Alloc (void);
 void ED_Free (edict_t *ed);
 
+qboolean ED_IsRelevantField (edict_t *ed, ddef_t *d);
+const char *ED_FieldValueString (edict_t *ed, ddef_t *d);
 void ED_Print (edict_t *ed);
 void ED_Write (FILE *f, edict_t *ed);
 const char *ED_ParseEdict (const char *data, edict_t *ent);
@@ -144,7 +146,7 @@ int NUM_FOR_EDICT(edict_t*);
 #define	E_VECTOR(e,o)		(&((float*)&e->v)[o])
 #define	E_STRING(e,o)		(PR_GetString(*(string_t *)&((float*)&e->v)[o]))
 
-extern	int		type_size[8];
+extern	int		type_size[ev_ext_double + 1];
 
 FUNC_NORETURN void PR_RunError (const char *error, ...) FUNC_PRINTF(1,2);
 void PR_RunWarning (const char *error, ...) FUNC_PRINTF(1,2);

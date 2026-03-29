@@ -938,3 +938,54 @@ void Matrix4_ProjectionMatrix(float fovx, float fovy, float neard, float fard, q
 	out[11] = -1;
 	out[15] = 0;
 }
+
+/*
+=============
+RayVsBox
+
+Ray-box intersection test using the slab method.
+org: ray origin
+delta: ray vector from origin to end point
+mins, maxs: box bounds
+frac: output parameter for the hit fraction along delta (0..1)
+Returns true if the ray segment intersects the box.
+=============
+*/
+qboolean RayVsBox (const vec3_t org, const vec3_t delta, const vec3_t mins, const vec3_t maxs, float *frac)
+{
+	int i;
+	float enter = 0.0f;
+	float exit = 1.0f;
+
+	if (frac)
+		*frac = 1.0f;
+
+	for (i = 0; i < 3; i++)
+	{
+		if (fabsf(delta[i]) < 1e-6f)
+		{
+			if (org[i] < mins[i] || org[i] > maxs[i])
+				return false;
+			continue;
+		}
+
+		{
+			const float invdelta = 1.0f / delta[i];
+			const float t0 = (mins[i] - org[i]) * invdelta;
+			const float t1 = (maxs[i] - org[i]) * invdelta;
+			const float tmin = q_min(t0, t1);
+			const float tmax = q_max(t0, t1);
+
+			enter = q_max(enter, tmin);
+			exit = q_min(exit, tmax);
+		}
+
+		if (enter > exit)
+			return false;
+	}
+
+	if (frac)
+		*frac = enter;
+
+	return true;
+}
