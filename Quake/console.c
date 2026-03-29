@@ -3661,6 +3661,7 @@ static qboolean CompleteJumpDemo(const char* partial, void* unused)
 {
 	static const char* const options[] =
 	{
+		"mark",
 		"500",
 		"50%",
 		"1:30",
@@ -3682,6 +3683,112 @@ static qboolean CompleteJumpDemo(const char* partial, void* unused)
 	for (i = 0; i < sizeof(options) / sizeof(options[0]); i++)
 		Con_AddToTabList(options[i], partial, NULL, NULL);
 
+	return true;
+}
+
+static qboolean CompleteMarkDemo(const char* partial, void* unused)
+{
+	static const char* const examples[] =
+	{
+		"clear",
+		"start",
+		"aerowalk",
+		"ztndm3",
+		"dm6"
+	};
+	char path[MAX_OSPATH];
+	FILE *file;
+	long file_size;
+	char *buffer = NULL;
+	json_t *json = NULL;
+	jsonentry_t *entry;
+	char seen_maps[128][MAX_QPATH];
+	size_t seen_count = 0;
+	size_t i;
+
+	if (Cmd_Argc() != 2)
+		return false;
+
+	for (i = 0; i < sizeof(examples) / sizeof(examples[0]); i++)
+		Con_AddToTabList(examples[i], partial, NULL, NULL);
+
+	if (cl.mapname[0])
+		Con_AddToTabList(cl.mapname, partial, "current map", NULL);
+
+	q_snprintf(path, sizeof(path), "%s/id1/backups/demomarks.json", com_basedir);
+	file = fopen(path, "rb");
+	if (!file)
+		return true;
+
+	fseek(file, 0, SEEK_END);
+	file_size = ftell(file);
+	rewind(file);
+
+	if (file_size <= 0)
+	{
+		fclose(file);
+		return true;
+	}
+
+	buffer = (char *)malloc((size_t)file_size + 1);
+	if (!buffer)
+	{
+		fclose(file);
+		return true;
+	}
+
+	if (fread(buffer, 1, (size_t)file_size, file) != (size_t)file_size)
+	{
+		free(buffer);
+		fclose(file);
+		return true;
+	}
+
+	buffer[file_size] = '\0';
+	fclose(file);
+
+	json = JSON_Parse(buffer);
+	free(buffer);
+	if (!json || !json->root || json->root->type != JSON_ARRAY)
+	{
+		if (json)
+			JSON_Free(json);
+		return true;
+	}
+
+	for (entry = json->root->firstchild; entry; entry = entry->next)
+	{
+		const char *map;
+		qboolean duplicate = false;
+
+		if (entry->type != JSON_OBJECT)
+			continue;
+
+		map = JSON_FindString(entry, "map");
+		if (!map || !map[0])
+			continue;
+
+		for (i = 0; i < seen_count; i++)
+		{
+			if (!q_strcasecmp(seen_maps[i], map))
+			{
+				duplicate = true;
+				break;
+			}
+		}
+
+		if (duplicate)
+			continue;
+
+		Con_AddToTabList(map, partial, "history map", NULL);
+		if (seen_count < sizeof(seen_maps) / sizeof(seen_maps[0]))
+		{
+			q_strlcpy(seen_maps[seen_count], map, sizeof(seen_maps[seen_count]));
+			seen_count++;
+		}
+	}
+
+	JSON_Free(json);
 	return true;
 }
 
@@ -3711,6 +3818,7 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "playdemo",				CompleteFileListDemo,	&demolist },
 	{ "timedemo",				CompleteFileListDemo,	&demolist },
 	{ "jumpdemo",				CompleteJumpDemo,		NULL },
+	{ "markdemo",				CompleteMarkDemo,		NULL },
 	{ "sky",					CompleteFileList,		&skylist },
 	{ "skywind",				CompleteSkywind,		NULL },
 	{ "exec",					CompleteFileList,		&execlist },

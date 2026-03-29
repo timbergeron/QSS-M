@@ -48,6 +48,7 @@ enum m_state_e {
 	m_colorpicker,
 	m_extras,
 	m_startup,
+	m_demooptions,
 	m_pakloading,
 	m_mods, // woods #modsmenu (iw)
 	m_demos, // woods #demosmenu

@@ -155,6 +155,8 @@ typedef struct
 	qboolean	demorecording;
 	qboolean	demoplayback;
 	qboolean	demo_had_overtime;
+	int		demo_marker_count;
+	int		demo_record_frame_count;
 
 	// woods #demopercent (Baker Fitzquake Mark V)
 
@@ -471,6 +473,7 @@ extern	cvar_t	cl_demo_format;
 extern	cvar_t	cl_shownet;
 extern	cvar_t	cl_nolerp;
 extern	cvar_t	cl_demoreel;
+extern	cvar_t	cl_demoeyes;
 
 extern	cvar_t	cfg_unbindall;
 extern	cvar_t	cfg_save_aliases; // woods #serveralias

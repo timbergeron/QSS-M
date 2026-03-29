@@ -19,6 +19,9 @@ server_valgrind_log="$artifacts_dir/valgrind-server-local.log"
 server_stdout_log="$artifacts_dir/server-local.log"
 server_port=26001
 combined_log="$artifacts_dir/valgrind-combined.log"
+server_timeout=90s
+client_timeout=120s
+timeout_kill_after=15s
 
 mkdir -p "$artifacts_dir"
 rm -f "$combined_log" "$stdin_stub"
@@ -48,6 +51,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+run_with_timeout() {
+  timeout --signal=TERM --kill-after="$timeout_kill_after" "$@"
+}
+
+is_timeout_status() {
+  [ "$1" -eq 124 ] || [ "$1" -eq 137 ]
+}
+
 # Use headless drivers to avoid needing a display/audio device on CI.
 export SDL_AUDIODRIVER=dummy
 export QSS_NOSTDIN=1
@@ -60,7 +71,7 @@ if [ -f "$server_dir/progs.dat" ]; then
   touch "$server_valgrind_log" "$server_stdout_log"
   if ! command -v valgrind >/dev/null 2>&1; then
     echo "Warning: valgrind not found; running server without it" >&2
-    timeout 90s "$binary" <"$stdin_stub" \
+    run_with_timeout "$server_timeout" "$binary" <"$stdin_stub" \
       -basedir "$repo_root/Quake" \
       -game "$server_mod" \
       -dedicated 1 \
@@ -69,7 +80,7 @@ if [ -f "$server_dir/progs.dat" ]; then
       +sv_public 0 \
       >"$server_stdout_log" 2>&1 &
   else
-    timeout 90s valgrind <"$stdin_stub" \
+    run_with_timeout "$server_timeout" valgrind <"$stdin_stub" \
       --tool=memcheck \
       --leak-check=full \
       --show-leak-kinds=definite \
@@ -102,7 +113,7 @@ quit
 EOF
 
 set +e
-timeout 120s xvfb-run -a valgrind \
+run_with_timeout "$client_timeout" xvfb-run -a valgrind \
   --tool=memcheck \
   --leak-check=full \
   --show-leak-kinds=definite \
@@ -125,15 +136,15 @@ fi
 
 set -e
 
-if [ "$client_status" -eq 124 ]; then
-  echo "Valgrind run timed out after 120s" >&2
-  exit $client_status
+if is_timeout_status "$client_status"; then
+  echo "Valgrind run timed out after $client_timeout" >&2
+  exit 124
 elif [ "$client_status" -ne 0 ]; then
   echo "Valgrind reported errors (exit $client_status); see $artifacts_dir/valgrind.log" >&2
 fi
 
-if [ "$server_status" -eq 124 ]; then
-  echo "Server valgrind timed out after 90s" >&2
+if is_timeout_status "$server_status"; then
+  echo "Server valgrind timed out after $server_timeout" >&2
 elif [ "$server_status" -ne 0 ]; then
   echo "Server valgrind reported errors (exit $server_status); see $server_valgrind_log" >&2
 fi

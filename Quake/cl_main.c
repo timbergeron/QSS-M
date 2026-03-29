@@ -40,6 +40,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 void CL_RotateModel_OnChange(cvar_t* var); // woods #clmrotate
 void CL_RotateModel_f(void); // woods #clmrotate
 void CL_RotateModel_RebuildFromCvar(void); // woods #clmrotate
+void CL_DemoMark_f(void); // woods #demomark
 
 // we need to declare some mouse variables here, because the menu system
 // references them even when on a unix system.
@@ -494,6 +495,8 @@ void CL_Disconnect (void)
 	memset(lastconnected, '\0', sizeof(lastconnected)); // woods #identify+
 	cl.matchinp = 0; // woods
 	cls.demo_had_overtime = false;
+	cls.demo_marker_count = 0;
+	cls.demo_record_frame_count = 0;
 	netquakeio = false; // woods
 	CL_ClearIgnoredChats();
 
@@ -4361,6 +4364,7 @@ void CL_Init (void)
 	Cmd_AddCommand ("entities", CL_PrintEntities_f);
 	Cmd_AddCommand ("disconnect", CL_Disconnect_f);
 	Cmd_AddCommand ("record", CL_Record_f);
+	Cmd_AddCommand ("markdemo", CL_DemoMark_f);
 	Cmd_AddCommand ("stop", CL_Stop_f);
 	Cmd_AddCommand ("playdemo", CL_PlayDemo_f);
 	Cmd_AddCommand ("timedemo", CL_TimeDemo_f);
@@ -4399,6 +4403,7 @@ void CL_Init (void)
 	Cmd_AddCommand_ServerCommand("crx_ignorethis", CL_ServerExtension_Ignore_f); // woods crx
 	Cmd_AddCommand_ServerCommand("ignorethis_crx", CL_ServerExtension_Ignore_f); // woods crx
 	Cmd_AddCommand_ServerCommand("init", CL_ServerExtension_Ignore_f); // woods runequake
+	Cmd_AddCommand_ServerCommand("markdemo", CL_DemoMark_f); // woods #markdemo
 	
 	Cmd_AddCommand_ServerCommand ("cl_serverextension_download", CL_ServerExtension_Download_f); //spike
 	Cmd_AddCommand_ServerCommand ("cl_downloadbegin", CL_Download_Begin_f); //spike

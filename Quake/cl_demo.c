@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <zlib.h>
 #endif
 #include "quakedef.h"
+#include "json.h"
 
 static void CL_FinishTimeDemo (void);
 entity_t *CL_EntityNum (int num);
@@ -37,6 +38,22 @@ char		last_demo[MAX_OSPATH]; // woods #lastdemo
 static char	demo_record_raw_path[MAX_OSPATH];
 static qboolean demo_record_to_dzip;
 static unsigned int demo_record_serial;
+
+#define DEMOMARK_HISTORY_FILENAME "demomarks.json"
+#define DEMOMARK_HISTORY_TIME_LENGTH 20
+
+typedef struct demomark_history_entry_s
+{
+	char demo[MAX_OSPATH];
+	char map[MAX_QPATH];
+	char created_at[DEMOMARK_HISTORY_TIME_LENGTH];
+	int frame;
+	struct demomark_history_entry_s *next;
+} demomark_history_entry_t;
+
+static demomark_history_entry_t *demomark_pending_head;
+static demomark_history_entry_t *demomark_pending_tail;
+static void CL_DemoMarkHistory_ClearPending(void);
 
 #ifdef USE_ZLIB
 static void CL_DZipCleanupTempDemo(void);
@@ -234,8 +251,13 @@ qboolean is_seeking = false; // woods -- flag to indicate seeking status
 qboolean demo_seek_from_start = false; // woods -- rewind to start before seeking forward
 static qboolean is_time_seeking = false; // woods -- flag to indicate time-based seek status
 static qboolean is_frame_seeking = false; // woods -- flag to indicate frame-based seek status
+static qboolean is_marker_seeking = false; // woods -- flag to indicate marker seek status
+static qboolean demo_marker_found = false; // woods -- marker hit during marker seek
 static float demo_time_seek_target = 0.f; // woods -- target demo time for J/L seeks
+static int demo_time_seek_direction = 0; // woods -- final direction for active time seek (-1 or +1)
 static int demo_frame_seek_target = 0; // woods -- target demo frame for jumpdemo
+static float demo_marker_found_time = 0.f; // woods -- demo time when the current marker seek hit
+static int demo_last_marker_offset = -1; // woods -- last marker location used by jumpdemo mark
 static float demo_start_server_time = 0.f; // woods -- user-facing demo time 0:00 origin
 static qboolean demo_start_server_time_valid = false; // woods -- true once first parsed demo frame is known
 static qboolean demo_jump_back_was_down = false; // woods -- edge detector for J key
@@ -257,8 +279,68 @@ static void CL_ResetDemoSeekState(void)
 	demo_seek_from_start = false;
 	is_time_seeking = false;
 	is_frame_seeking = false;
+	is_marker_seeking = false;
+	demo_marker_found = false;
 	demo_time_seek_target = 0.f;
+	demo_time_seek_direction = 0;
 	demo_frame_seek_target = 0;
+	demo_marker_found_time = 0.f;
+}
+
+static void CL_ClearDemoMarkerHistory(void)
+{
+	demo_last_marker_offset = -1;
+}
+
+static qboolean CL_DemoMarkUseServerPath(void)
+{
+	if (!cls.demorecording || cls.demoplayback || cls.state != ca_connected)
+		return false;
+
+	return cl.modtype == 1;
+}
+
+static int CL_GetDemoSeekStartOffset(void);
+static int CL_GetDemoSeekEndOffset(void);
+
+static qboolean CL_DemoNameHasMarkerTag(const char *name)
+{
+	char base[MAX_OSPATH];
+	char *tag;
+
+	if (!name || !name[0])
+		return false;
+
+	COM_FileBase(COM_SkipPath(name), base, sizeof(base));
+	for (tag = q_strcasestr(base, "_marks"); tag; tag = q_strcasestr(tag + 1, "_marks"))
+	{
+		const char *suffix = tag + 6;
+
+		if (!*suffix)
+			return true;
+
+		while (*suffix >= '0' && *suffix <= '9')
+			suffix++;
+
+		if (!*suffix)
+			return true;
+	}
+
+	for (tag = q_strcasestr(base, "_mark"); tag; tag = q_strcasestr(tag + 1, "_mark"))
+	{
+		const char *suffix = tag + 5;
+
+		if (!*suffix)
+			return true;
+
+		while (*suffix >= '0' && *suffix <= '9')
+			suffix++;
+
+		if (!*suffix)
+			return true;
+	}
+
+	return false;
 }
 
 static int CL_GetDemoSeekStartOffset(void)
@@ -449,8 +531,10 @@ static void CL_UpdateDemoSpeed(void)
 		const float current_demo_time = cl.mtime[0];
 		const float base_time = is_time_seeking ? demo_time_seek_target : current_demo_time;
 
+		CL_ClearDemoMarkerHistory();
 		CL_ResetDemoSeekState();
 		demo_time_seek_target = q_max(0.f, base_time + jump_delta);
+		demo_time_seek_direction = (demo_time_seek_target >= current_demo_time) ? 1 : -1;
 
 		if (fabsf(demo_time_seek_target - current_demo_time) > seek_time_threshold)
 		{
@@ -458,6 +542,22 @@ static void CL_UpdateDemoSpeed(void)
 			if (demo_time_seek_target < current_demo_time)
 				CL_ClearDemoFrags();
 		}
+	}
+
+	if (is_marker_seeking)
+	{
+		if (!demo_marker_found)
+		{
+			cls.demospeed = seeking_speed;
+			demo_rewind.backstop = false;
+			return;
+		}
+
+		is_marker_seeking = false;
+		demo_marker_found = false;
+		cls.demospeed = normal_speed;
+		CL_ResetDemoSeekState();
+		return;
 	}
 
 	if (is_time_seeking)
@@ -475,6 +575,8 @@ static void CL_UpdateDemoSpeed(void)
 		const float remaining = demo_time_seek_target - cl.mtime[0];
 
 		if (fabsf(remaining) <= seek_time_threshold ||
+			(demo_time_seek_direction > 0 && remaining <= 0.f) ||
+			(demo_time_seek_direction < 0 && remaining >= 0.f) ||
 			(demo_rewind.backstop && remaining < 0.f))
 		{
 			cls.demospeed = normal_speed;
@@ -482,7 +584,7 @@ static void CL_UpdateDemoSpeed(void)
 			return;
 		}
 
-		cls.demospeed = (remaining > 0.f) ? seeking_speed : -seeking_speed;
+		cls.demospeed = (demo_time_seek_direction > 0) ? seeking_speed : -seeking_speed;
 		if (cls.basedemospeed)
 			cls.demospeed *= cls.basedemospeed;
 
@@ -557,6 +659,7 @@ static void CL_UpdateDemoSpeed(void)
 		{
 			float targetPercentage = (key - '0') / 10.0f;
 
+			CL_ClearDemoMarkerHistory();
 			demo_target_offset = cls.demo_offset_start + (int)(targetPercentage * (float)((cls.demo_file_length + cls.demo_offset_start) - cls.demo_offset_start)); // sometimes start is not 0
 			if (demo_target_offset < demo_seek_start)
 				demo_target_offset = demo_seek_start;
@@ -595,6 +698,7 @@ static void CL_UpdateDemoSpeed(void)
 	}
 	else if (keydown[K_HOME] || keydown['0'])
 	{
+		CL_ClearDemoMarkerHistory();
 		cls.demospeed = -1e9f;
 		if (cls.basedemospeed)
 			cls.demospeed *= cls.basedemospeed;
@@ -603,6 +707,7 @@ static void CL_UpdateDemoSpeed(void)
 	}
 	else if (keydown[K_END])
 	{
+		CL_ClearDemoMarkerHistory();
 		cls.demospeed = 1e9f;
 		if (cls.basedemospeed)
 			cls.demospeed *= cls.basedemospeed;
@@ -1057,6 +1162,389 @@ void Load_Last_Demo (void) // woods #lastdemo
 	fclose(f);
 }
 
+static void CL_DemoMarkHistory_ClearList(demomark_history_entry_t **head, demomark_history_entry_t **tail)
+{
+	demomark_history_entry_t *entry = head ? *head : NULL;
+
+	while (entry)
+	{
+		demomark_history_entry_t *next = entry->next;
+		free(entry);
+		entry = next;
+	}
+
+	if (head)
+		*head = NULL;
+	if (tail)
+		*tail = NULL;
+}
+
+static qboolean CL_DemoMarkHistory_Append(demomark_history_entry_t **head, demomark_history_entry_t **tail,
+	const char *demo, const char *map, const char *created_at, int frame)
+{
+	demomark_history_entry_t *entry = (demomark_history_entry_t *)calloc(1, sizeof(*entry));
+
+	if (!entry)
+		return false;
+
+	if (demo)
+		q_strlcpy(entry->demo, demo, sizeof(entry->demo));
+	if (map)
+		q_strlcpy(entry->map, map, sizeof(entry->map));
+	if (created_at)
+		q_strlcpy(entry->created_at, created_at, sizeof(entry->created_at));
+	entry->frame = (frame > 0) ? frame : 0;
+
+	if (*tail)
+		(*tail)->next = entry;
+	else
+		*head = entry;
+	*tail = entry;
+
+	return true;
+}
+
+static void CL_DemoMarkHistory_EnsureDir(void)
+{
+	char path[MAX_OSPATH];
+
+	q_snprintf(path, sizeof(path), "%s/id1", com_basedir);
+	Sys_mkdir(path);
+
+	q_snprintf(path, sizeof(path), "%s/id1/backups", com_basedir);
+	Sys_mkdir(path);
+}
+
+static void CL_DemoMarkHistory_GetPath(char *path, size_t path_size)
+{
+	q_snprintf(path, path_size, "%s/id1/backups/%s", com_basedir, DEMOMARK_HISTORY_FILENAME);
+}
+
+static qboolean CL_DemoMarkHistory_ClearStored(void)
+{
+	char path[MAX_OSPATH];
+
+	CL_DemoMarkHistory_GetPath(path, sizeof(path));
+	CL_DemoMarkHistory_ClearPending();
+
+	if (remove(path) == 0 || errno == ENOENT)
+		return true;
+
+	return false;
+}
+
+static void CL_DemoMarkHistory_GetTimestamp(char *created_at, size_t created_at_size)
+{
+	time_t systime = time(NULL);
+	struct tm *loct;
+
+	if (!created_at_size)
+		return;
+
+	created_at[0] = '\0';
+	loct = localtime(&systime);
+	if (!loct)
+	{
+		q_strlcpy(created_at, "unknown", created_at_size);
+		return;
+	}
+
+	strftime(created_at, created_at_size, "%Y-%m-%d %H:%M:%S", loct);
+}
+
+static demomark_history_entry_t *CL_DemoMarkHistory_Load(demomark_history_entry_t **tail_out)
+{
+	char path[MAX_OSPATH];
+	FILE *file;
+	long file_size;
+	char *buffer;
+	json_t *json;
+	demomark_history_entry_t *head = NULL;
+	demomark_history_entry_t *tail = NULL;
+
+	if (tail_out)
+		*tail_out = NULL;
+
+	CL_DemoMarkHistory_EnsureDir();
+	CL_DemoMarkHistory_GetPath(path, sizeof(path));
+
+	file = fopen(path, "rb");
+	if (!file)
+		return NULL;
+
+	fseek(file, 0, SEEK_END);
+	file_size = ftell(file);
+	rewind(file);
+
+	if (file_size <= 0)
+	{
+		fclose(file);
+		return NULL;
+	}
+
+	buffer = (char *)malloc((size_t)file_size + 1);
+	if (!buffer)
+	{
+		fclose(file);
+		return NULL;
+	}
+
+	if (fread(buffer, 1, (size_t)file_size, file) != (size_t)file_size)
+	{
+		free(buffer);
+		fclose(file);
+		return NULL;
+	}
+
+	buffer[file_size] = '\0';
+	fclose(file);
+
+	json = JSON_Parse(buffer);
+	free(buffer);
+
+	if (!json || !json->root || json->root->type != JSON_ARRAY)
+	{
+		if (json)
+			JSON_Free(json);
+		return NULL;
+	}
+
+	{
+		const jsonentry_t *entry;
+
+		for (entry = json->root->firstchild; entry; entry = entry->next)
+		{
+			const char *demo;
+			const char *map;
+			const char *created_at;
+			const double *frame_value;
+			int frame_num;
+
+			if (!entry || entry->type != JSON_OBJECT)
+				continue;
+
+			demo = JSON_FindString(entry, "demo");
+			map = JSON_FindString(entry, "map");
+			created_at = JSON_FindString(entry, "created_at");
+			frame_value = JSON_FindNumber(entry, "frame");
+			frame_num = (frame_value && *frame_value > 0.0 && *frame_value <= (double)INT_MAX) ? (int)(*frame_value) : 0;
+
+			if (!demo || !map || !created_at)
+				continue;
+
+			if (!CL_DemoMarkHistory_Append(&head, &tail, demo, map, created_at, frame_num))
+			{
+				Con_Printf("markdemo: failed to load full history\n");
+				break;
+			}
+		}
+	}
+
+	JSON_Free(json);
+	if (tail_out)
+		*tail_out = tail;
+	return head;
+}
+
+static void CL_DemoMarkHistory_Write(const demomark_history_entry_t *head)
+{
+	char path[MAX_OSPATH];
+	char tmp_path[MAX_OSPATH];
+	FILE *file;
+	qboolean ok = true;
+	qboolean first = true;
+	const demomark_history_entry_t *entry;
+
+	CL_DemoMarkHistory_EnsureDir();
+	CL_DemoMarkHistory_GetPath(path, sizeof(path));
+	q_snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+
+	file = fopen(tmp_path, "w");
+	if (!file)
+	{
+		Con_Printf("markdemo: unable to open %s for writing\n", DEMOMARK_HISTORY_FILENAME);
+		return;
+	}
+
+	fprintf(file, "[\n");
+
+	for (entry = head; entry; entry = entry->next)
+	{
+		char *escaped_demo = JSON_EscapeString(entry->demo);
+		char *escaped_map = JSON_EscapeString(entry->map);
+		char *escaped_created_at = JSON_EscapeString(entry->created_at);
+
+		if (!escaped_demo || !escaped_map || !escaped_created_at)
+		{
+			free(escaped_demo);
+			free(escaped_map);
+			free(escaped_created_at);
+			ok = false;
+			break;
+		}
+
+		if (!first)
+			fprintf(file, ",\n");
+		first = false;
+
+		fprintf(file, "  {\n");
+		fprintf(file, "    \"demo\": \"%s\",\n", escaped_demo);
+		fprintf(file, "    \"map\": \"%s\",\n", escaped_map);
+		fprintf(file, "    \"frame\": %d,\n", entry->frame);
+		fprintf(file, "    \"created_at\": \"%s\"\n", escaped_created_at);
+		fprintf(file, "  }");
+
+		free(escaped_demo);
+		free(escaped_map);
+		free(escaped_created_at);
+	}
+
+	if (ok)
+	{
+		if (!first)
+			fprintf(file, "\n");
+		fprintf(file, "]\n");
+	}
+
+	if (fclose(file) != 0)
+		ok = false;
+
+	if (!ok)
+	{
+		Con_Printf("markdemo: failed to flush %s, preserving existing file\n", DEMOMARK_HISTORY_FILENAME);
+		remove(tmp_path);
+		return;
+	}
+
+	remove(path);
+	if (rename(tmp_path, path) != 0)
+	{
+		Con_Printf("markdemo: unable to replace %s\n", DEMOMARK_HISTORY_FILENAME);
+		remove(tmp_path);
+	}
+}
+
+static void CL_DemoMarkHistory_ClearPending(void)
+{
+	CL_DemoMarkHistory_ClearList(&demomark_pending_head, &demomark_pending_tail);
+}
+
+static void CL_DemoMarkHistory_QueuePending(const char *map, int frame)
+{
+	char created_at[DEMOMARK_HISTORY_TIME_LENGTH];
+	const char *safe_map = (map && map[0]) ? map : "unknown";
+
+	CL_DemoMarkHistory_GetTimestamp(created_at, sizeof(created_at));
+	if (!CL_DemoMarkHistory_Append(&demomark_pending_head, &demomark_pending_tail, "", safe_map, created_at, frame))
+		Con_Printf("markdemo: failed to queue history entry\n");
+}
+
+static void CL_DemoMarkHistory_FlushPending(const char *demo_path)
+{
+	demomark_history_entry_t *head = NULL;
+	demomark_history_entry_t *tail = NULL;
+	demomark_history_entry_t *pending;
+	const char *demo_name;
+
+	if (!demomark_pending_head)
+		return;
+
+	head = CL_DemoMarkHistory_Load(&tail);
+	demo_name = (demo_path && demo_path[0]) ? COM_SkipPath(demo_path) : "unknown.dem";
+
+	for (pending = demomark_pending_head; pending; pending = pending->next)
+	{
+		if (!CL_DemoMarkHistory_Append(&head, &tail, demo_name, pending->map, pending->created_at, pending->frame))
+		{
+			Con_Printf("markdemo: failed to save full history\n");
+			break;
+		}
+	}
+
+	CL_DemoMarkHistory_Write(head);
+	CL_DemoMarkHistory_ClearList(&head, &tail);
+	CL_DemoMarkHistory_ClearPending();
+}
+
+static void CL_DemoMarkHistory_Print(const char *map_filter)
+{
+	demomark_history_entry_t *head;
+	demomark_history_entry_t *tail = NULL;
+	demomark_history_entry_t *entry;
+	const demomark_history_entry_t *match;
+	const demomark_history_entry_t **matches = NULL;
+	const qboolean filtered = map_filter && map_filter[0];
+	size_t match_count = 0;
+	size_t match_index = 0;
+	size_t i;
+
+	head = CL_DemoMarkHistory_Load(&tail);
+	if (!head)
+	{
+		if (filtered)
+			Con_Printf("| no markdemo history for %s\n", map_filter);
+		else
+			Con_Printf("| no markdemo history yet\n");
+		return;
+	}
+
+	for (entry = head; entry; entry = entry->next)
+	{
+		if (filtered && q_strcasecmp(entry->map, map_filter))
+			continue;
+		match_count++;
+	}
+
+	if (!match_count)
+	{
+		if (filtered)
+			Con_Printf("| no markdemo history for %s\n", map_filter);
+		else
+			Con_Printf("| no markdemo history yet\n");
+		CL_DemoMarkHistory_ClearList(&head, &tail);
+		return;
+	}
+
+	matches = (const demomark_history_entry_t **)calloc(match_count, sizeof(*matches));
+	if (!matches)
+	{
+		Con_Printf("markdemo: failed to format history\n");
+		CL_DemoMarkHistory_ClearList(&head, &tail);
+		return;
+	}
+
+	for (entry = head; entry; entry = entry->next)
+	{
+		if (filtered && q_strcasecmp(entry->map, map_filter))
+			continue;
+		matches[match_index++] = entry;
+	}
+
+	Con_Printf("\n");
+	Con_Printf("^mtime^m                 ^mframe^m  ^mmap^m       ^mdemo^m\n");
+
+	for (i = 0; i < match_count; i++)
+	{
+		char frame_text[16];
+
+		match = matches[i];
+		if (match->frame > 0)
+			q_snprintf(frame_text, sizeof(frame_text), "%d", match->frame);
+		else
+			q_strlcpy(frame_text, "-", sizeof(frame_text));
+
+		Con_Printf("%-19s  %-5s  %-8s  %s\n",
+			match->created_at[0] ? match->created_at : "unknown",
+			frame_text,
+			match->map[0] ? match->map : "-",
+			match->demo[0] ? match->demo : "-");
+	}
+	Con_Printf("\n");
+
+	free(matches);
+	CL_DemoMarkHistory_ClearList(&head, &tail);
+}
+
 /*
 ==============
 CL_StopPlayback
@@ -1072,6 +1560,7 @@ void CL_StopPlayback (void)
 		CL_DZipCleanupTempDemo();
 #endif
 		CL_ResetDemoSeekState();
+		CL_ClearDemoMarkerHistory();
 		demo_start_server_time = 0.f;
 		demo_start_server_time_valid = false;
 		return;
@@ -1096,6 +1585,7 @@ void CL_StopPlayback (void)
 	CL_DemoRewindFreePrevStatStrings();
 	demo_rewind.prev.num_entities = 0;
 	CL_ResetDemoSeekState();
+	CL_ClearDemoMarkerHistory();
 	demo_start_server_time = 0.f;
 	demo_start_server_time_valid = false;
 
@@ -1123,21 +1613,46 @@ CL_WriteDemoMessage
 Dumps the current net message, prefixed by the length and view angles
 ====================
 */
-static void CL_WriteDemoMessage (void)
+static void CL_WriteDemoMessageData(const byte *data, int cursize, const vec3_t viewangles)
 {
 	int	len;
 	int	i;
 	float	f;
 
-	len = LittleLong (net_message.cursize);
+	len = LittleLong (cursize);
 	fwrite (&len, 4, 1, cls.demofile);
 	for (i = 0; i < 3; i++)
 	{
-		f = LittleFloat (cl.viewangles[i]);
+		f = LittleFloat (viewangles[i]);
 		fwrite (&f, 4, 1, cls.demofile);
 	}
-	fwrite (net_message.data, net_message.cursize, 1, cls.demofile);
+	fwrite (data, cursize, 1, cls.demofile);
 	fflush (cls.demofile);
+
+	if (cls.demorecording)
+		cls.demo_record_frame_count++;
+}
+
+static void CL_WriteDemoMessage (void)
+{
+	CL_WriteDemoMessageData(net_message.data, net_message.cursize, cl.viewangles);
+}
+
+static void CL_WriteRecordedDemoMarker(void)
+{
+	sizebuf_t msg;
+	byte data[64];
+
+	if (!cls.demorecording || !cls.demofile)
+		return;
+
+	memset(&msg, 0, sizeof(msg));
+	msg.data = data;
+	msg.maxsize = sizeof(data);
+	MSG_WriteByte(&msg, svc_stufftext);
+	MSG_WriteString(&msg, "//demomark\n");
+
+	CL_WriteDemoMessageData(msg.data, msg.cursize, cl.viewangles);
 }
 
 static int CL_GetDemoMessage (void)
@@ -1443,19 +1958,19 @@ static void CL_GetDemoModeTag(char *mode_tag, size_t mode_tag_size)
 		return;
 
 	if (!q_strcasecmp(mode, "ctf"))
-		q_strlcpy(mode_tag, "CTF", mode_tag_size);
+		q_strlcpy(mode_tag, "ctf", mode_tag_size);
 	else if (!q_strcasecmp(mode, "dm") || !q_strcasecmp(mode, "ffa"))
-		q_strlcpy(mode_tag, "DM", mode_tag_size);
+		q_strlcpy(mode_tag, "dm", mode_tag_size);
 	else if (!q_strcasecmp(mode, "ra") || !q_strcasecmp(mode, "rocketarena"))
-		q_strlcpy(mode_tag, "RA", mode_tag_size);
+		q_strlcpy(mode_tag, "ra", mode_tag_size);
 	else if (!q_strcasecmp(mode, "ca") || !q_strcasecmp(mode, "clanarena"))
-		q_strlcpy(mode_tag, "CA", mode_tag_size);
+		q_strlcpy(mode_tag, "ca", mode_tag_size);
 	else if (!q_strcasecmp(mode, "airshot"))
-		q_strlcpy(mode_tag, "AIRSHOT", mode_tag_size);
+		q_strlcpy(mode_tag, "airshot", mode_tag_size);
 	else if (!q_strcasecmp(mode, "wipeout"))
-		q_strlcpy(mode_tag, "WIPEOUT", mode_tag_size);
+		q_strlcpy(mode_tag, "wipeout", mode_tag_size);
 	else if (!q_strcasecmp(mode, "freezetag"))
-		q_strlcpy(mode_tag, "FREEZETAG", mode_tag_size);
+		q_strlcpy(mode_tag, "freezetag", mode_tag_size);
 }
 
 static qboolean CL_BuildDemoPathWithMatchSuffixes(const char *input_path, char *output_path, size_t output_size)
@@ -1478,7 +1993,11 @@ static qboolean CL_BuildDemoPathWithMatchSuffixes(const char *input_path, char *
 	if (mode_tag[0])
 		q_snprintf(suffix, sizeof(suffix), "_%s", mode_tag);
 	if (cls.demo_had_overtime)
-		q_strlcat(suffix, "_OT", sizeof(suffix));
+		q_strlcat(suffix, "_ot", sizeof(suffix));
+	if (cls.demo_marker_count > 1)
+		q_strlcat(suffix, "_marks", sizeof(suffix));
+	else if (cls.demo_marker_count == 1)
+		q_strlcat(suffix, "_mark", sizeof(suffix));
 
 	if (!suffix[0])
 	{
@@ -1608,7 +2127,10 @@ void CL_Stop_f (void)
 		CL_RenameDemoWithMatchSuffixes();
 	}
 
+	CL_DemoMarkHistory_FlushPending(cls.demofilename);
 	cls.demo_had_overtime = false;
+	cls.demo_marker_count = 0;
+	cls.demo_record_frame_count = 0;
 
 	if (completed)
 		Con_Printf ("completed demo\n");
@@ -1618,6 +2140,92 @@ void CL_Stop_f (void)
 	
 // ericw -- update demo tab-completion list
 	DemoList_Rebuild ();
+}
+
+void CL_DemoMark_f(void)
+{
+	if (cmd_source == src_server)
+	{
+		if (cls.demorecording && !cls.demoplayback)
+		{
+			cls.demo_marker_count++;
+			if (Cmd_Argc() > 1 && !q_strcasecmp(Cmd_Argv(1), "local"))
+			{
+				const int mark_frame = cls.demo_record_frame_count > 0 ? cls.demo_record_frame_count : 1;
+				CL_DemoMarkHistory_QueuePending(cl.mapname, mark_frame);
+				{
+					const char *soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
+					S_LocalSound(soundFile);
+				}
+				Con_Printf("demo marker added at ^mframe^d ^1%d^d\n", mark_frame);
+			}
+		}
+
+		if (is_marker_seeking)
+		{
+			if (demo_last_marker_offset >= 0 && cls.demo_offset_current <= demo_last_marker_offset)
+				return;
+
+			demo_marker_found = true;
+			demo_marker_found_time = cl.mtime[0];
+			demo_last_marker_offset = cls.demo_offset_current;
+			return;
+		}
+
+		Con_DPrintf("Demo marker hit\n");
+		return;
+	}
+
+	if (cmd_source != src_command)
+		return;
+
+	if (Cmd_Argc() > 2)
+	{
+		Con_Printf("markdemo          : add a marker while recording, or print saved mark history when not recording\n");
+		Con_Printf("markdemo clear    : clear saved mark history\n");
+		Con_Printf("markdemo <map>    : print saved mark history filtered by map\n");
+		return;
+	}
+
+	if (!cls.demorecording)
+	{
+		if (Cmd_Argc() == 2 && !q_strcasecmp(Cmd_Argv(1), "clear"))
+		{
+			if (CL_DemoMarkHistory_ClearStored())
+				Con_Printf("markdemo: cleared saved history\n");
+			else
+				Con_Printf("markdemo: failed to clear saved history\n");
+			return;
+		}
+
+		CL_DemoMarkHistory_Print(Cmd_Argc() == 2 ? Cmd_Argv(1) : NULL);
+		return;
+	}
+
+	if (Cmd_Argc() != 1)
+	{
+		Con_Printf("markdemo: while recording, use markdemo with no arguments\n");
+		return;
+	}
+
+	if (CL_DemoMarkUseServerPath())
+	{
+		Cmd_ForwardToServer();
+		return;
+	}
+
+	{
+		const int mark_frame = cls.demo_record_frame_count + 1;
+
+		cls.demo_marker_count++;
+		CL_DemoMarkHistory_QueuePending(cl.mapname, mark_frame);
+		CL_WriteRecordedDemoMarker();
+		{
+			const char *soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
+			S_LocalSound(soundFile);
+		}
+		Con_Printf("demo marker added at ^mframe^d ^1%d^d\n", mark_frame);
+	}
 }
 
 static void CL_Record_Serverdata(void)
@@ -1995,6 +2603,9 @@ void CL_Record_f (void)
 	fprintf (cls.demofile, "%i\n", cls.forcetrack);
 
 	cls.demo_had_overtime = false;
+	cls.demo_marker_count = 0;
+	cls.demo_record_frame_count = 0;
+	CL_DemoMarkHistory_ClearPending();
 	cls.demorecording = true;
 
 	// from ProQuake: initialize the demo file if we're already connected
@@ -2047,7 +2658,7 @@ void CL_JumpDemo_f(void)
 
 	if (Cmd_Argc() != 2)
 	{
-		Con_Printf("jumpdemo <frame | percent%% | M:SS | H:MM:SS | Ns> : seek (prefix +/- for relative)\n");
+		Con_Printf("jumpdemo <frame | percent%% | M:SS | H:MM:SS | Ns | mark> : seek (prefix +/- for relative)\n");
 		return;
 	}
 
@@ -2061,6 +2672,22 @@ void CL_JumpDemo_f(void)
 	len = (int)strlen(arg);
 	if (!len)
 		return;
+
+	if (!q_strcasecmp(arg, "mark"))
+	{
+		const qboolean demo_has_marker_tag = CL_DemoNameHasMarkerTag(cls.demoname);
+
+		if (!demo_has_marker_tag)
+		{
+			Con_Printf("jumpdemo %s: demo has no _mark/_marks tag\n", arg);
+			return;
+		}
+
+		CL_ResetDemoSeekState();
+		is_marker_seeking = true;
+		Con_Printf("seeking next demo marker...\n");
+		return;
+	}
 
 	is_relative = (arg[0] == '+' || arg[0] == '-');
 	sign = (arg[0] == '-') ? -1.f : 1.f;
@@ -2091,6 +2718,7 @@ void CL_JumpDemo_f(void)
 	demo_seek_end = CL_GetDemoSeekEndOffset();
 	demo_seek_range = demo_seek_end - demo_seek_start;
 
+	CL_ClearDemoMarkerHistory();
 	CL_ResetDemoSeekState();
 
 	if (value_len > 1 && token[value_len - 1] == '%')
@@ -2156,6 +2784,7 @@ void CL_JumpDemo_f(void)
 			absolute_time = demo_start_server_time;
 
 		demo_time_seek_target = absolute_time;
+		demo_time_seek_direction = (absolute_time >= cl.mtime[0]) ? 1 : -1;
 		is_time_seeking = true;
 		if (absolute_time < cl.mtime[0])
 		{
@@ -2192,6 +2821,7 @@ void CL_JumpDemo_f(void)
 			absolute_time = demo_start_server_time;
 
 		demo_time_seek_target = absolute_time;
+		demo_time_seek_direction = (absolute_time >= cl.mtime[0]) ? 1 : -1;
 		is_time_seeking = true;
 		if (absolute_time < cl.mtime[0])
 		{
@@ -2348,6 +2978,7 @@ void CL_PlayDemo_f (void)
 	cls.demopaused = false;
 	cls.demospeed = 1.f; // woods (iw) #democontrols
 	CL_ResetDemoSeekState();
+	CL_ClearDemoMarkerHistory();
 	demo_start_server_time = 0.f;
 	demo_start_server_time_valid = false;
 	// Only change basedemospeed if it hasn't been initialized,
