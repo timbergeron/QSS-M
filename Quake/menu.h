@@ -72,6 +72,7 @@ extern enum m_state_e m_return_state;
 extern qboolean m_entersound;
 extern qboolean crosshair_menu;
 
+enum versiongithubstate_e {
 	VERSIONGITHUB_IDLE,
 	VERSIONGITHUB_LOADING,
 	VERSIONGITHUB_READY,
