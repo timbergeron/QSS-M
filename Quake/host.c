@@ -309,10 +309,17 @@ void	Host_FindMaxClients (void)
 #include <mad.h>
 #endif
 
+#define HOST_VERSION_GITHUB_TIMEOUT_MS 2000
+
 void Host_Version_f(void)
 {
 	SDL_version sdl_linked;
+	versionremoteinfo_t release;
+	versionremoteinfo_t commit;
+	qboolean github_complete;
+
 	SDL_GetVersion(&sdl_linked);
+	github_complete = M_Version_WaitForGitHubInfo(&release, &commit, HOST_VERSION_GITHUB_TIMEOUT_MS);
 
 	// Application Section
 	Con_Printf("\n^mApplication Information^m\n\n");
@@ -402,6 +409,52 @@ void Host_Version_f(void)
 		Con_Printf("%-24s %s\n", "libmpg123", "1.22.4");
 	}
 #endif
+
+	Con_Printf("\n^mGitHub QSS-M Versions^m\n\n");
+
+	if (release.state == VERSIONGITHUB_LOADING || release.state == VERSIONGITHUB_IDLE)
+	{
+		Con_Printf("%-24s %s\n", "Latest release", github_complete ? "checking..." : "timeout");
+	}
+	else if (release.state == VERSIONGITHUB_READY)
+	{
+		if (release.comparison == 0)
+			Con_Printf("%-24s %s (you have this)\n", "Latest release", release.version);
+		else if (release.comparison > 0)
+			Con_Printf("%-24s %s (you have newer)\n", "Latest release", release.version);
+		else if (release.comparison < 0)
+			Con_Printf("%-24s %s (update available)\n", "Latest release", release.version);
+		else
+			Con_Printf("%-24s %s\n", "Latest release", release.version);
+	}
+	else
+	{
+		Con_Printf("%-24s error (%s)\n", "Latest release",
+			release.error[0] ? release.error : "unavailable");
+	}
+
+	if (commit.state == VERSIONGITHUB_LOADING || commit.state == VERSIONGITHUB_IDLE)
+	{
+		Con_Printf("%-24s %s\n", "Latest commit", github_complete ? "checking..." : "timeout");
+	}
+	else if (commit.state == VERSIONGITHUB_READY)
+	{
+		const char* sha = commit.detail[0] ? commit.detail : "unknown";
+
+		if (commit.comparison == 0)
+			Con_Printf("%-24s %s @ %s (you have this)\n", "Latest commit", commit.version, sha);
+		else if (commit.comparison > 0)
+			Con_Printf("%-24s %s @ %s (you have newer)\n", "Latest commit", commit.version, sha);
+		else if (commit.comparison < 0)
+			Con_Printf("%-24s %s @ %s (update available)\n", "Latest commit", commit.version, sha);
+		else
+			Con_Printf("%-24s %s @ %s\n", "Latest commit", commit.version, sha);
+	}
+	else
+	{
+		Con_Printf("%-24s error (%s)\n", "Latest commit",
+			commit.error[0] ? commit.error : "unavailable");
+	}
 
 	Con_Printf("\n");
 }
