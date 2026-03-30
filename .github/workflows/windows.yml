@@ -342,17 +342,49 @@ jobs:
           unzip -l "$z" | grep -Ei "gnutls|nettle|hogweed|gmp|idn2|unistring|tasn1|iconv|p11-kit|ffi|qss-m-w" || true
         done
 
-    - name: Upload artifact
+    - name: Prepare Artifacts
+      run: |
+        set -euxo pipefail
+        package_name="QSS-M-${{ matrix.platform }}"
+        package_root="artifact/package/${package_name}"
+        log_root="artifact/logs/${package_name}-logs"
+        cross_log_dir="${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}"
+
+        rm -rf "$package_root" "$log_root"
+        mkdir -p "$package_root" "$log_root"
+
+        unzip -q "Quake/${package_name}.zip" -d "$package_root"
+
+        cp "Quake/build-${{ matrix.platform }}.log" "$log_root/"
+        for log_name in \
+          build-gmp.log \
+          build-nettle.log \
+          build-libtasn1.log \
+          configure-gnutls.log \
+          configure-gnutls-fallback.log \
+          build-gnutls.log \
+          build-gnutls-j1.log
+        do
+          if [ -f "${cross_log_dir}/${log_name}" ]; then
+            cp "${cross_log_dir}/${log_name}" "$log_root/"
+          fi
+        done
+
+        echo "===== Package artifact tree ====="
+        find artifact/package -maxdepth 3 -type f | sort
+        echo "===== Log artifact tree ====="
+        find artifact/logs -maxdepth 3 -type f | sort
+
+    - name: Upload package artifact
       uses: actions/upload-artifact@v4
       with:
-        name: QSS-M ${{ matrix.platform }}
-        path: |
-          Quake/QSS-M-w*.zip
-          Quake/build-${{ matrix.platform }}.log
-          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/build-gmp.log
-          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/build-nettle.log
-          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/build-libtasn1.log
-          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/configure-gnutls.log
-          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/configure-gnutls-fallback.log
-          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/build-gnutls.log
-          ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}/build-gnutls-j1.log
+        name: QSS-M-${{ matrix.platform }}
+        path: artifact/package/QSS-M-${{ matrix.platform }}
+        if-no-files-found: error
+
+    - name: Upload debug logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: QSS-M-${{ matrix.platform }}-logs
+        path: artifact/logs/QSS-M-${{ matrix.platform }}-logs
+        if-no-files-found: error

@@ -137,17 +137,34 @@ jobs:
         Write-Host "Archive staging contents:"
         Get-ChildItem $zipdir
 
+    - name: Prepare MSBuild Logs
+      if: always()
+      shell: pwsh
+      run: |
+        $logdir = "artifact\msbuild-logs-${{ matrix.platform }}"
+        mkdir $logdir -Force
+
+        if (Test-Path "msbuild-${{ matrix.platform }}.log") {
+          Copy-Item "msbuild-${{ matrix.platform }}.log" $logdir
+        }
+        if (Test-Path "dumpbin-${{ matrix.platform }}.txt") {
+          Copy-Item "dumpbin-${{ matrix.platform }}.txt" $logdir
+        }
+
+        Write-Host "Log staging contents:"
+        Get-ChildItem $logdir -ErrorAction SilentlyContinue
+
     - name: Upload archive
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.BUILD_ARTIFACT }}
-        path: artifact/*
+        path: artifact/${{ env.BUILD_ARTIFACT }}
+        if-no-files-found: error
 
     - name: Upload MSBuild Logs
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: msbuild-logs-${{ matrix.platform }}
-        path: |
-          msbuild-*.log
-          dumpbin-*.txt
+        path: artifact/msbuild-logs-${{ matrix.platform }}
+        if-no-files-found: warn
