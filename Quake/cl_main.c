@@ -660,9 +660,11 @@ void CL_SignonReply (void)
 		const char* val;
 		const char* val2;
 
-		char buf[10]; // woods #modtype [crx server check]
+		char buf[10]; // woods #modtype [crx/crmod server check]
+		char bufn[16];
 		val = Info_GetKey(cl.serverinfo, "mod", buf, sizeof(buf));
-		if (q_strcasestr(val, "crx") && val[0] != 'q')
+		val2 = Info_GetKey(cl.serverinfo, "modname", bufn, sizeof(bufn));
+		if ((q_strcasestr(val, "crx") && val[0] != 'q') || q_strcasestr(val2, "crmod"))
 		{
 			cl.modtype = 1;
 			strncpy(cl.observer, "n", sizeof(cl.observer));
