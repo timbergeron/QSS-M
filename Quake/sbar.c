@@ -835,6 +835,12 @@ void Sbar_SoloScoreboard (void)
 		sprintf(str, "Secrets: %i/%i", cl.stats[STAT_SECRETS], cl.stats[STAT_TOTALSECRETS]);
 		right = 312 - strlen(str) * 8;
 		Sbar_DrawString(right, 12, str);
+
+		if (!fitzmode)
+		{
+			q_snprintf(str, sizeof(str), "skill %i", (int)(skill.value + 0.5));
+			Sbar_DrawString((left + right) / 2 - strlen(str) * 4, 12, str);
+		}
 	}
 
 	else // woods add various times + PL
@@ -861,12 +867,6 @@ void Sbar_SoloScoreboard (void)
 
 	if (!fitzmode)
 	{ /* QuakeSpasm customization: */
-		if (cl.gametype != GAME_DEATHMATCH) // woods only in singleplayer
-		{
-			q_snprintf(str, sizeof(str), "skill %i", (int)(skill.value + 0.5));
-			Sbar_DrawString((left + right) / 2 - strlen(str) * 4, 12, str);
-		}
-
 		if (cl.maxclients > 1)
 		{
 			char qfylwdot[2] = { 133, '\0' }; // woods  -- quake font yellow dot

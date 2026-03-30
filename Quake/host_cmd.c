@@ -2933,27 +2933,27 @@ static const char *Host_FormatUnsignedWithCommas (unsigned long long value)
 {
 	static char buffers[8][32];
 	static int buffer_index;
-	char digits[32];
 	char *out;
-	int src, group;
+	int group;
 
 	buffer_index = (buffer_index + 1) % Q_COUNTOF(buffers);
-	q_snprintf(digits, sizeof(digits), "%llu", value);
-
 	out = buffers[buffer_index] + sizeof(buffers[0]) - 1;
 	*out-- = '\0';
-	src = (int)strlen(digits) - 1;
 	group = 0;
 
-	while (src >= 0)
+	if (value == 0)
+	{
+		*out-- = '0';
+	}
+	else while (value > 0)
 	{
 		if (group == 3)
 		{
 			*out-- = ',';
 			group = 0;
 		}
-
-		*out-- = digits[src--];
+		*out-- = '0' + (int)(value % 10);
+		value /= 10;
 		group++;
 	}
 

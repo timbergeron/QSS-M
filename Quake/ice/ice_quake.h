@@ -42,6 +42,7 @@ const char	*NQICE_GetFingerprint (void);	//returns base64 DTLS cert fingerprint 
 void		NQICE_ShareGameSocket (sys_socket_t sock);	//share the datagram driver's UDP socket with ICE
 void		NQICE_UnshareGameSockets (void);	//invalidate shared sockets (call before closing datagram sockets)
 qboolean	NQICE_ProcessPacket (byte *data, int len, struct qsockaddr *addr, void(*callback)(qsocket_t *));	//forward a non-quake packet to ICE. returns true if consumed.
+struct icesocket_s;
 qboolean	BrokerDTLS_HandlePacket (byte *data, int len, struct qsockaddr *addr, struct icesocket_s *sendsock);
 void		BrokerDTLS_Cleanup (void);
 void		BrokerDTLS_Shutdown (void);
