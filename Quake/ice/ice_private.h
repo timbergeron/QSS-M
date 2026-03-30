@@ -22,7 +22,7 @@
 	#include <stddef.h>
 	typedef ptrdiff_t ssize_t;
 #endif
-#define qboolean bool
+#define qboolean int
 typedef unsigned char qbyte;
 
 #ifdef _WIN32
