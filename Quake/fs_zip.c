@@ -154,22 +154,33 @@ static qboolean FSZIP_FindEndCentralDirectory(zipfile_t *zip, struct zipinfo *in
 	byte traildata[0x10000 + SIZE_ENDOFCENTRALDIRECTORY+SIZE_ZIP64ENDOFCENTRALDIRECTORYLOCATOR];
 	byte *magic;
 	unsigned int trailsize = 0x10000 + SIZE_ENDOFCENTRALDIRECTORY+SIZE_ZIP64ENDOFCENTRALDIRECTORYLOCATOR;
+	unsigned int centraldir_end_ofs = 0;
 	if ((qofs_t)trailsize > zip->rawsize)
-		trailsize = zip->rawsize;
+		trailsize = (unsigned int)zip->rawsize;
+	if (trailsize < SIZE_ENDOFCENTRALDIRECTORY)
+	{
+		Con_Printf("zip: file too small for end-of-central-directory\n");
+		return false;
+	}
 	//FIXME: do in a loop to avoid a huge block of stack use
 	Sys_FileSeek(zip->raw, zip->rawsize - trailsize);
-	Sys_FileRead(zip->raw, traildata, trailsize);
+	if (Sys_FileRead(zip->raw, traildata, trailsize) != (int)trailsize)
+	{
+		Con_Printf("zip: unable to read archive trailer\n");
+		return false;
+	}
 
 	memset(info, 0, sizeof(*info));
 
-	for (magic = traildata+trailsize-SIZE_ENDOFCENTRALDIRECTORY; magic >= traildata; magic--)
+	for (centraldir_end_ofs = trailsize - SIZE_ENDOFCENTRALDIRECTORY + 1; centraldir_end_ofs-- > 0; )
 	{
+		magic = traildata + centraldir_end_ofs;
 		if (magic[0] == 'P' && 
 			magic[1] == 'K' && 
 			magic[2] == 5 && 
 			magic[3] == 6)
 		{
-			info->centraldir_end = (zip->rawsize-trailsize)+(magic-traildata);
+			info->centraldir_end = (zip->rawsize-trailsize) + centraldir_end_ofs;
 
 			info->thisdisk					= LittleU2FromPtr(magic+4);
 			info->centraldir_startdisk		= LittleU2FromPtr(magic+6);
@@ -191,8 +202,10 @@ static qboolean FSZIP_FindEndCentralDirectory(zipfile_t *zip, struct zipinfo *in
 	//now look for a zip64 header.
 	//this gives more larger archives, more files, larger files, more spanned disks.
 	//note that the central directory itself is the same, it just has a couple of extra attributes on files that need them.
-	for (magic -= SIZE_ZIP64ENDOFCENTRALDIRECTORYLOCATOR; magic >= traildata; magic--)
+	for (centraldir_end_ofs = centraldir_end_ofs >= SIZE_ZIP64ENDOFCENTRALDIRECTORYLOCATOR ? centraldir_end_ofs - SIZE_ZIP64ENDOFCENTRALDIRECTORYLOCATOR + 1 : 0;
+		centraldir_end_ofs-- > 0; )
 	{
+		magic = traildata + centraldir_end_ofs;
 		if (magic[0] == 'P' && 
 			magic[1] == 'K' && 
 			magic[2] == 6 && 
