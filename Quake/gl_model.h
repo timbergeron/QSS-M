@@ -546,6 +546,13 @@ typedef struct qmodel_s
 	int			bspversion;
 	int			contentstransparent;	//spike -- added this so we can disable glitchy wateralpha where its not supported.
 
+	// map surface area stats (computed once at load)
+	float		total_surface_area;	// all visible faces (qu^2)
+	float		floor_surface_area;	// upward-facing (qu^2)
+	float		wall_surface_area;	// vertical faces (qu^2)
+	float		ceiling_surface_area;	// downward-facing (qu^2)
+	int			counted_faces;		// faces included in calculation
+
 //
 // alias model
 //
@@ -562,6 +569,16 @@ typedef struct qmodel_s
 
 } qmodel_t;
 
+typedef struct map_surface_areas_s
+{
+	float		total_surface_area;
+	float		floor_surface_area;
+	float		wall_surface_area;
+	float		ceiling_surface_area;
+	int			counted_faces;
+	int			total_faces;
+} map_surface_areas_t;
+
 //============================================================================
 
 void	Mod_Init (void);
@@ -571,6 +588,7 @@ qmodel_t *Mod_ForName (const char *name, qboolean crash);
 void	Mod_ForEachModel(void(*callback)(qmodel_t *mod));
 void	*Mod_Extradata (qmodel_t *mod);	// handles caching
 void	Mod_TouchModel (const char *name);
+qboolean Mod_CalcBSPFileSurfaceAreas (const char *path, map_surface_areas_t *areas);
 
 mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model);
 byte	*Mod_LeafPVS (mleaf_t *leaf, qmodel_t *model);

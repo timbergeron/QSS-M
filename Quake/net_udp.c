@@ -378,13 +378,13 @@ int UDP_Write (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr
 		int err = SOCKETERRNO;
 		if (err == NET_EWOULDBLOCK)
 			return 0;
-		if (err == ENETUNREACH)
-		{	//this happens a lot on hosts that have no ipv6 route tables set up (poopy ISPs)
+		if (err == ENETUNREACH || err == EADDRNOTAVAIL)
+		{	//this happens a lot on hosts that have no ipv6 route tables set up (Docker, poopy ISPs, etc)
 			static qboolean nospam;if (!nospam) nospam=true,
 			Con_SafePrintf ("UDP_Write: %s (%s)\n", socketerror(err), UDP_AddrToString(addr, false));
 		}
 		else
-			Con_SafePrintf ("UDP_Write, sendto: %s\n", socketerror(err));
+			Con_SafePrintf ("UDP_Write, sendto: %s (%s)\n", socketerror(err), UDP_AddrToString(addr, false));
 	}
 	return ret;
 }

@@ -261,10 +261,29 @@ static char	cwd[MAX_OSPATH];
 static char	userdir[MAX_OSPATH];
 #ifdef PLATFORM_OSX
 #define SYS_USERDIR	"Library/Application Support/QuakeSpasm"
+#elif defined(PLATFORM_HAIKU)
+#define SYS_USERDIR	"QuakeSpasm"
 #else
 #define SYS_USERDIR	".quakespasm"
 #endif
 
+#ifdef PLATFORM_HAIKU
+#include <FindDirectory.h>
+#include <fs_info.h>
+
+static void Sys_GetUserdir (char *dst, size_t dstsize)
+{
+	dev_t volume = dev_for_path("/boot");
+	char buffer[B_PATH_NAME_LENGTH];
+	status_t result;
+
+	result = find_directory(B_USER_NONPACKAGED_DATA_DIRECTORY, volume, false, buffer, sizeof(buffer));
+	if (result != B_OK)
+		Sys_Error ("Couldn't determine userspace directory");
+
+	q_snprintf (dst, dstsize, "%s/%s", buffer, SYS_USERDIR);
+}
+#else
 static void Sys_GetUserdir (char *dst, size_t dstsize)
 {
 	size_t		n;
@@ -291,6 +310,7 @@ static void Sys_GetUserdir (char *dst, size_t dstsize)
 
 	q_snprintf (dst, dstsize, "%s/%s", home_dir, SYS_USERDIR);
 }
+#endif	/* PLATFORM_HAIKU */
 #endif	/* DO_USERDIRS */
 
 #ifdef PLATFORM_OSX
@@ -1486,6 +1506,7 @@ static void Sys_RewriteInputLine(const char* newline, char* con_text, size_t con
 const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 {
 	// Input state is in file-scope ded_input / ded_input_len / ded_input_cursor
+	static qboolean	con_eof = false;
 	char		c;
 	fd_set		set;
 	struct timeval	timeout;
@@ -1516,11 +1537,19 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
     timeout.tv_sec = 0;
     timeout.tv_usec = 0;
 
+	if (con_eof)
+		return NULL;
+
     while (select (1, &set, NULL, NULL, &timeout))
     {
         ssize_t len = read(0, &c, 1);
         if (len != 1)
-            continue;
+        {
+			con_eof = true;
+			if (ded_input_len <= 0)
+				return NULL;
+			c = '\n';
+        }
 
         // Handle escape sequences for arrow keys, PageUp/PageDown
         if (c == 27) // ESC character

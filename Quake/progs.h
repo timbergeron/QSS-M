@@ -53,6 +53,8 @@ typedef struct edict_s
 	unsigned char	alpha;			/* johnfitz -- hack to support alpha since it's not part of entvars_t */
 	qboolean	sendinterval;		/* johnfitz -- send time until nextthink to client for better lerp timing */
 	qboolean	onladder;			/* spike -- content_ladder stuff */
+	float		oldframe;
+	float		oldthinktime;
 
 	float		freetime;		/* sv.time when the object was freed */
 	entvars_t	v;			/* C exported fields from progs */
@@ -104,6 +106,8 @@ void PR_Profile_f (void);
 edict_t *ED_Alloc (void);
 void ED_Free (edict_t *ed);
 
+qboolean ED_IsRelevantField (edict_t *ed, ddef_t *d);
+const char *ED_FieldValueString (edict_t *ed, ddef_t *d);
 void ED_Print (edict_t *ed);
 void ED_Write (FILE *f, edict_t *ed);
 const char *ED_ParseEdict (const char *data, edict_t *ent);
@@ -122,7 +126,7 @@ int NUM_FOR_EDICT(edict_t*);
 
 #define	NEXT_EDICT(e)		((edict_t *)( (byte *)e + qcvm->edict_size))
 
-#define	EDICT_TO_PROG(e)	((byte *)e - (byte *)qcvm->edicts)
+#define	EDICT_TO_PROG(e)	(int)((byte *)e - (byte *)qcvm->edicts)
 #define PROG_TO_EDICT(e)	((edict_t *)((byte *)qcvm->edicts + e))
 
 #define	G_FLOAT(o)		(qcvm->globals[o])
@@ -144,7 +148,7 @@ int NUM_FOR_EDICT(edict_t*);
 #define	E_VECTOR(e,o)		(&((float*)&e->v)[o])
 #define	E_STRING(e,o)		(PR_GetString(*(string_t *)&((float*)&e->v)[o]))
 
-extern	int		type_size[8];
+extern	int		type_size[ev_ext_double + 1];
 
 FUNC_NORETURN void PR_RunError (const char *error, ...) FUNC_PRINTF(1,2);
 void PR_RunWarning (const char *error, ...) FUNC_PRINTF(1,2);

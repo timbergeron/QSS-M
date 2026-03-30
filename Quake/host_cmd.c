@@ -641,6 +641,7 @@ void FileList_Add (const char *name, const char* data, filelist_item_t **list) /
 	if (!item)
 		Sys_Error("FileList_Add: out of memory on %lu bytes (%s)",
 			(unsigned long)sizeof(filelist_item_t), name);
+	memset(item, 0, sizeof(*item));
 	q_strlcpy (item->name, name, sizeof(item->name));
 	if (data)
 		q_strlcpy(item->data, data, sizeof(item->data)); // woods #demolistsort add arg
@@ -828,6 +829,40 @@ filelist_item_t* FindLevelInList(filelist_item_t* list, const char* name)
 	return NULL;
 }
 
+static void FileList_ClearMapSizeCache(filelist_item_t *item)
+{
+	if (!item)
+		return;
+
+	item->total_surface_area = 0.0f;
+	item->floor_surface_area = 0.0f;
+	item->wall_surface_area = 0.0f;
+	item->ceiling_surface_area = 0.0f;
+	item->counted_faces = 0;
+	item->total_faces = 0;
+	item->has_mapsize_cache = false;
+}
+
+static void FileList_CopyMapSizeCache(filelist_item_t *dst, const filelist_item_t *src)
+{
+	if (!dst)
+		return;
+
+	if (!src || !src->has_mapsize_cache)
+	{
+		FileList_ClearMapSizeCache(dst);
+		return;
+	}
+
+	dst->total_surface_area = src->total_surface_area;
+	dst->floor_surface_area = src->floor_surface_area;
+	dst->wall_surface_area = src->wall_surface_area;
+	dst->ceiling_surface_area = src->ceiling_surface_area;
+	dst->counted_faces = src->counted_faces;
+	dst->total_faces = src->total_faces;
+	dst->has_mapsize_cache = true;
+}
+
 void InitializeMapDescJSON(void)
 {
 	char fname[MAX_OSPATH];
@@ -891,10 +926,24 @@ void SaveMapDescriptionsToJSON(filelist_item_t* extralevels)
 			return;
 		}
 
-		fprintf(file, "  {\n");
-		fprintf(file, "    \"name\": \"%s\",\n", escaped_name);
-		fprintf(file, "    \"description\": \"%s\"\n", escaped_description);
-		fprintf(file, "  }");
+			fprintf(file, "  {\n");
+			fprintf(file, "    \"name\": \"%s\",\n", escaped_name);
+			fprintf(file, "    \"description\": \"%s\"", escaped_description);
+			if (level->has_mapsize_cache)
+			{
+				fprintf(file, ",\n");
+				fprintf(file, "    \"total_surface_area\": %.9g,\n", (double)level->total_surface_area);
+				fprintf(file, "    \"floor_surface_area\": %.9g,\n", (double)level->floor_surface_area);
+				fprintf(file, "    \"wall_surface_area\": %.9g,\n", (double)level->wall_surface_area);
+				fprintf(file, "    \"ceiling_surface_area\": %.9g,\n", (double)level->ceiling_surface_area);
+				fprintf(file, "    \"counted_faces\": %d,\n", level->counted_faces);
+				fprintf(file, "    \"total_faces\": %d\n", level->total_faces);
+			}
+			else
+			{
+				fprintf(file, "\n");
+			}
+			fprintf(file, "  }");
 
 		free(escaped_name);
 		free(escaped_description);
@@ -976,12 +1025,34 @@ void LoadMapDescriptionsFromJSON(filelist_item_t** extralevels_from_json)
 			JSON_Free(json);
 			return;
 		}
+		memset(item, 0, sizeof(*item));
 
 		Q_strncpy(item->name, name, MAX_QPATH - 1);
 		item->name[MAX_QPATH - 1] = '\0';
 
 		Q_strncpy(item->data, description, 49);
 		item->data[49] = '\0';
+
+		{
+			const double *total_surface_area = JSON_FindNumber(mapEntry, "total_surface_area");
+			const double *floor_surface_area = JSON_FindNumber(mapEntry, "floor_surface_area");
+			const double *wall_surface_area = JSON_FindNumber(mapEntry, "wall_surface_area");
+			const double *ceiling_surface_area = JSON_FindNumber(mapEntry, "ceiling_surface_area");
+			const double *counted_faces = JSON_FindNumber(mapEntry, "counted_faces");
+			const double *total_faces = JSON_FindNumber(mapEntry, "total_faces");
+
+			if (total_surface_area && floor_surface_area && wall_surface_area && ceiling_surface_area
+				&& counted_faces && total_faces)
+			{
+				item->total_surface_area = (float)*total_surface_area;
+				item->floor_surface_area = (float)*floor_surface_area;
+				item->wall_surface_area = (float)*wall_surface_area;
+				item->ceiling_surface_area = (float)*ceiling_surface_area;
+				item->counted_faces = (int)*counted_faces;
+				item->total_faces = (int)*total_faces;
+				item->has_mapsize_cache = true;
+			}
+		}
 
 		item->next = NULL;
 
@@ -1028,6 +1099,8 @@ void ExtraMaps_ParseDescriptions(void)
 				strncpy(level->data, json_level->data, sizeof(level->data) - 1);
 				level->data[sizeof(level->data) - 1] = '\0';
 			}
+
+			FileList_CopyMapSizeCache(level, json_level);
 		}
 		else
 		{
@@ -1037,23 +1110,11 @@ void ExtraMaps_ParseDescriptions(void)
 			Q_strncpy(level->data, mapdesc, sizeof(level->data) - 1);
 			Con_DPrintf("cached new map description %s\n", level->name);
 			level->data[sizeof(level->data) - 1] = '\0';
-
-			// Add new description to the JSON list
-			filelist_item_t* new_json_level = malloc(sizeof(filelist_item_t));
-			if (!new_json_level) {
-				Con_DPrintf("Memory allocation failed\n");
-				continue;
-			}
-			Q_strncpy(new_json_level->name, level->name, MAX_QPATH - 1);
-			new_json_level->name[MAX_QPATH - 1] = '\0';
-			Q_strncpy(new_json_level->data, level->data, sizeof(new_json_level->data) - 1);
-			new_json_level->data[sizeof(new_json_level->data) - 1] = '\0';
-			new_json_level->next = extralevels_from_json;
-			extralevels_from_json = new_json_level;
+			FileList_ClearMapSizeCache(level);
 		}
 	}
 
-	SaveMapDescriptionsToJSON(extralevels_from_json);
+	SaveMapDescriptionsToJSON(extralevels);
 
 	FreeLevelList(extralevels_from_json);
 	extralevels_from_json = NULL;
@@ -2582,6 +2643,614 @@ static void Host_Mapname_f (void)
 	}
 
 	Con_Printf ("no map loaded\n");
+}
+
+#define PLAYER_HEIGHT_QU	56.0f		// standing hull: (-16 -16 -24) to (16 16 32)
+#define HUMAN_HEIGHT_FT		5.75f		// 5'9"
+#define HUMAN_HEIGHT_M		1.7526f
+#define QU2_PER_SQFT		((PLAYER_HEIGHT_QU / HUMAN_HEIGHT_FT) * (PLAYER_HEIGHT_QU / HUMAN_HEIGHT_FT))
+#define QU2_PER_SQM			((PLAYER_HEIGHT_QU / HUMAN_HEIGHT_M) * (PLAYER_HEIGHT_QU / HUMAN_HEIGHT_M))
+#define MAX_MAPSIZE_COMPARE	80	// matches cmd.c MAX_ARGS
+
+typedef struct mapsize_result_s
+{
+	char		mapname[MAX_QPATH];
+	float		total_surface_area;
+	float		floor_surface_area;
+	float		wall_surface_area;
+	float		ceiling_surface_area;
+	int			counted_faces;
+	int			total_faces;
+} mapsize_result_t;
+
+static qboolean Host_MapSize_IsLegacyUnitsArg (const char *arg)
+{
+	return (!q_strcasecmp(arg, "ft") || !q_strcasecmp(arg, "imperial") ||
+		!q_strcasecmp(arg, "m") || !q_strcasecmp(arg, "metric"));
+}
+
+static qboolean Host_MapSize_IsListArg (const char *arg)
+{
+	return (!q_strcasecmp(arg, "-l") || !q_strcasecmp(arg, "list"));
+}
+
+static qboolean Host_MapSize_IsClearAllArg (const char *arg)
+{
+	return !q_strcasecmp(arg, "-clearall");
+}
+
+static void Host_MapSize_SetResultFromModel (mapsize_result_t *result, const char *mapname, const qmodel_t *mod)
+{
+	memset(result, 0, sizeof(*result));
+	q_strlcpy(result->mapname, mapname, sizeof(result->mapname));
+	result->total_surface_area = mod->total_surface_area;
+	result->floor_surface_area = mod->floor_surface_area;
+	result->wall_surface_area = mod->wall_surface_area;
+	result->ceiling_surface_area = mod->ceiling_surface_area;
+	result->counted_faces = mod->counted_faces;
+	result->total_faces = (mod->submodels && mod->numsubmodels > 0) ? mod->submodels[0].numfaces : 0;
+}
+
+static void Host_MapSize_SetResultFromAreas (mapsize_result_t *result, const char *mapname, const map_surface_areas_t *areas)
+{
+	memset(result, 0, sizeof(*result));
+	q_strlcpy(result->mapname, mapname, sizeof(result->mapname));
+	result->total_surface_area = areas->total_surface_area;
+	result->floor_surface_area = areas->floor_surface_area;
+	result->wall_surface_area = areas->wall_surface_area;
+	result->ceiling_surface_area = areas->ceiling_surface_area;
+	result->counted_faces = areas->counted_faces;
+	result->total_faces = areas->total_faces;
+}
+
+static void Host_MapSize_SetResultFromCache (mapsize_result_t *result, const filelist_item_t *level)
+{
+	memset(result, 0, sizeof(*result));
+	q_strlcpy(result->mapname, level->name, sizeof(result->mapname));
+	result->total_surface_area = level->total_surface_area;
+	result->floor_surface_area = level->floor_surface_area;
+	result->wall_surface_area = level->wall_surface_area;
+	result->ceiling_surface_area = level->ceiling_surface_area;
+	result->counted_faces = level->counted_faces;
+	result->total_faces = level->total_faces;
+}
+
+static qboolean Host_MapSize_ResultMatchesCache (const mapsize_result_t *result, const filelist_item_t *level)
+{
+	return level->has_mapsize_cache
+		&& level->total_surface_area == result->total_surface_area
+		&& level->floor_surface_area == result->floor_surface_area
+		&& level->wall_surface_area == result->wall_surface_area
+		&& level->ceiling_surface_area == result->ceiling_surface_area
+		&& level->counted_faces == result->counted_faces
+		&& level->total_faces == result->total_faces;
+}
+
+static void Host_MapSize_StoreCacheOnLevel (filelist_item_t *level, const mapsize_result_t *result)
+{
+	level->total_surface_area = result->total_surface_area;
+	level->floor_surface_area = result->floor_surface_area;
+	level->wall_surface_area = result->wall_surface_area;
+	level->ceiling_surface_area = result->ceiling_surface_area;
+	level->counted_faces = result->counted_faces;
+	level->total_faces = result->total_faces;
+	level->has_mapsize_cache = true;
+}
+
+static qboolean Host_MapSize_LoadCachedResult (const char *mapname, mapsize_result_t *result)
+{
+	qboolean found = false;
+
+	if (descriptionsParsed)
+	{
+		filelist_item_t *level = FindLevelInList(extralevels, mapname);
+		if (level && level->has_mapsize_cache)
+		{
+			Host_MapSize_SetResultFromCache(result, level);
+			return true;
+		}
+	}
+	else
+	{
+		filelist_item_t *json_levels = NULL;
+		filelist_item_t *level;
+
+		LoadMapDescriptionsFromJSON(&json_levels);
+		level = FindLevelInList(json_levels, mapname);
+		if (level && level->has_mapsize_cache)
+		{
+			Host_MapSize_SetResultFromCache(result, level);
+			found = true;
+		}
+		FreeLevelList(json_levels);
+	}
+
+	return found;
+}
+
+static void Host_MapSize_UpdateCache (const mapsize_result_t *result)
+{
+	filelist_item_t *level;
+
+	if (!result->mapname[0])
+		return;
+
+	if (!descriptionsParsed)
+		ExtraMaps_ParseDescriptions();
+
+	level = FindLevelInList(extralevels, result->mapname);
+	if (!level || Host_MapSize_ResultMatchesCache(result, level))
+		return;
+
+	Host_MapSize_StoreCacheOnLevel(level, result);
+	SaveMapDescriptionsToJSON(extralevels);
+}
+
+static void Host_MapSize_RefreshAllMissingCaches (void)
+{
+	filelist_item_t *level;
+	int missing = 0;
+	int cached = 0;
+	qboolean updated = false;
+
+	if (!descriptionsParsed)
+		ExtraMaps_ParseDescriptions();
+
+	for (level = extralevels; level; level = level->next)
+		if (!level->has_mapsize_cache)
+			missing++;
+
+	if (!missing)
+		return;
+
+	Con_Printf("mapsize: caching size data for %d map%s...\n",
+		missing, (missing == 1) ? "" : "s");
+
+	for (level = extralevels; level; level = level->next)
+	{
+		char mappath[MAX_QPATH];
+		map_surface_areas_t areas;
+		mapsize_result_t result;
+
+		if (level->has_mapsize_cache)
+			continue;
+
+		if ((size_t)q_snprintf(mappath, sizeof(mappath), "maps/%s.bsp", level->name) >= sizeof(mappath))
+			continue;
+
+		if (!Mod_CalcBSPFileSurfaceAreas(mappath, &areas))
+		{
+			Con_DPrintf("mapsize: can't cache map \"%s\"\n", level->name);
+			continue;
+		}
+
+		Host_MapSize_SetResultFromAreas(&result, level->name, &areas);
+		Host_MapSize_StoreCacheOnLevel(level, &result);
+		cached++;
+		updated = true;
+	}
+
+	if (updated)
+		SaveMapDescriptionsToJSON(extralevels);
+
+	Con_Printf("mapsize: cached %d of %d map%s\n",
+		cached, missing, (missing == 1) ? "" : "s");
+}
+
+static void Host_MapSize_ClearAllCache (void)
+{
+	filelist_item_t *level;
+	filelist_item_t *json_levels = NULL;
+	int cleared = 0;
+
+	if (descriptionsParsed)
+	{
+		for (level = extralevels; level; level = level->next)
+		{
+			if (!level->has_mapsize_cache)
+				continue;
+
+			FileList_ClearMapSizeCache(level);
+			cleared++;
+		}
+
+		SaveMapDescriptionsToJSON(extralevels);
+	}
+	else
+	{
+		LoadMapDescriptionsFromJSON(&json_levels);
+		for (level = json_levels; level; level = level->next)
+		{
+			if (!level->has_mapsize_cache)
+				continue;
+
+			FileList_ClearMapSizeCache(level);
+			cleared++;
+		}
+
+		SaveMapDescriptionsToJSON(json_levels);
+		FreeLevelList(json_levels);
+	}
+
+	if (cleared)
+		Con_Printf("mapsize: cleared cached size data for %d map%s\n\n",
+			cleared, (cleared == 1) ? "" : "s");
+	else
+		Con_Printf("mapsize: no cached size data to clear\n\n");
+}
+
+static qboolean Host_MapSize_LoadMapByName (const char *arg, mapsize_result_t *result)
+{
+	char mapbase[MAX_QPATH];
+	char mapname[MAX_QPATH];
+	char mappath[MAX_QPATH];
+	map_surface_areas_t areas;
+
+	if (strstr(arg, ".."))
+	{
+		Con_Printf("invalid map name \"%s\"\n", arg);
+		return false;
+	}
+
+	q_strlcpy(mapbase, COM_SkipPath(arg), sizeof(mapbase));
+	COM_StripExtension(mapbase, mapname, sizeof(mapname));
+
+	if (!*mapname)
+	{
+		Con_Printf("invalid map name \"%s\"\n", arg);
+		return false;
+	}
+
+	if ((size_t)q_snprintf(mappath, sizeof(mappath), "maps/%s.bsp", mapname) >= sizeof(mappath))
+	{
+		Con_Printf("map name \"%s\" is too long\n", mapname);
+		return false;
+	}
+
+	if (!COM_FileExists(mappath, NULL))
+	{
+		if (Host_MapSize_IsLegacyUnitsArg(arg))
+			Con_Printf("mapsize now prints both sq ft and sq m; usage is: mapsize [mapname]\n");
+		Con_Printf("map \"%s\" not found\n", mapname);
+		return false;
+	}
+
+	if (Host_MapSize_LoadCachedResult(mapname, result))
+		return true;
+
+	if (!Mod_CalcBSPFileSurfaceAreas(mappath, &areas))
+	{
+		Con_Printf("can't load map \"%s\"\n", mapname);
+		return false;
+	}
+
+	Host_MapSize_SetResultFromAreas(result, mapname, &areas);
+	Host_MapSize_UpdateCache(result);
+	return true;
+}
+
+static const char *Host_FormatUnsignedWithCommas (unsigned long long value)
+{
+	static char buffers[8][32];
+	static int buffer_index;
+	char *out;
+	int group;
+
+	buffer_index = (buffer_index + 1) % Q_COUNTOF(buffers);
+	out = buffers[buffer_index] + sizeof(buffers[0]) - 1;
+	*out-- = '\0';
+	group = 0;
+
+	if (value == 0)
+	{
+		*out-- = '0';
+	}
+	else while (value > 0)
+	{
+		if (group == 3)
+		{
+			*out-- = ',';
+			group = 0;
+		}
+		*out-- = '0' + (int)(value % 10);
+		value /= 10;
+		group++;
+	}
+
+	return out + 1;
+}
+
+static const char *Host_FormatMapArea (float area_qu2, float qu2_per_unit)
+{
+	double converted = (double)area_qu2 / (double)qu2_per_unit;
+
+	if (converted <= 0.0)
+		return "0";
+
+	return Host_FormatUnsignedWithCommas((unsigned long long)(converted + 0.5));
+}
+
+static void Host_PrintMapAreaLine (const char *label, float area_qu2)
+{
+	Con_Printf("  %-13s %s sq ft / %s sq m\n",
+		label,
+		Host_FormatMapArea(area_qu2, QU2_PER_SQFT),
+		Host_FormatMapArea(area_qu2, QU2_PER_SQM));
+}
+
+static void Host_PrintMapSizeReport (const mapsize_result_t *result)
+{
+	Con_Printf("\n=== Map Size: %s ===\n\n", result->mapname);
+	Con_Printf("  Scale: 56 qu player height = 5'9\" human height\n\n");
+	Host_PrintMapAreaLine("Floor area:", result->floor_surface_area);
+	Host_PrintMapAreaLine("Wall area:", result->wall_surface_area);
+	Host_PrintMapAreaLine("Ceiling area:", result->ceiling_surface_area);
+	Host_PrintMapAreaLine("Total area:", result->total_surface_area);
+	Con_Printf("  Faces counted: %s of %s\n",
+		Host_FormatUnsignedWithCommas((result->counted_faces > 0) ? (unsigned long long)result->counted_faces : 0),
+		Host_FormatUnsignedWithCommas((result->total_faces > 0) ? (unsigned long long)result->total_faces : 0));
+	Con_Printf("\n");
+}
+
+static void Host_PrintMapSizeFloorComparison (mapsize_result_t *results, int count)
+{
+	int i, j;
+	int name_width = 0;
+
+	for (i = 1; i < count; ++i)
+	{
+		mapsize_result_t key = results[i];
+		float key_floor = key.floor_surface_area;
+
+		for (j = i - 1; j >= 0; --j)
+		{
+			float floor_area = results[j].floor_surface_area;
+
+			if (floor_area < key_floor)
+				break;
+			if (floor_area == key_floor && q_strcasecmp(results[j].mapname, key.mapname) <= 0)
+				break;
+
+			results[j + 1] = results[j];
+		}
+
+		results[j + 1] = key;
+	}
+
+	for (i = 0; i < count; ++i)
+		name_width = q_max(name_width, (int)strlen(results[i].mapname));
+
+	Con_Printf("\n=== Floor Compare: Smallest to Largest ===\n\n");
+	Con_Printf("  Scale: 56 qu player height = 5'9\" human height\n\n");
+	for (i = 0; i < count; ++i)
+	{
+		const float floor_area = results[i].floor_surface_area;
+
+		Con_Printf("  %-*s  %s sq ft / %s sq m",
+			name_width,
+			results[i].mapname,
+			Host_FormatMapArea(floor_area, QU2_PER_SQFT),
+			Host_FormatMapArea(floor_area, QU2_PER_SQM));
+
+		if (i > 0)
+		{
+			const float diff_area = floor_area - results[i - 1].floor_surface_area;
+
+			Con_Printf("  ^m(+%s sq ft / +%s sq m)^m",
+				Host_FormatMapArea(diff_area, QU2_PER_SQFT),
+				Host_FormatMapArea(diff_area, QU2_PER_SQM));
+		}
+
+		Con_Printf("\n");
+	}
+
+	Con_Printf("\n");
+}
+
+static int Host_MapSize_CompareLevelPtrs (const void *lhs, const void *rhs)
+{
+	const filelist_item_t *a = *(const filelist_item_t * const *)lhs;
+	const filelist_item_t *b = *(const filelist_item_t * const *)rhs;
+
+	if (a->has_mapsize_cache != b->has_mapsize_cache)
+		return a->has_mapsize_cache ? -1 : 1;
+	if (!a->has_mapsize_cache)
+		return q_strcasecmp(a->name, b->name);
+	if (a->floor_surface_area < b->floor_surface_area)
+		return -1;
+	if (a->floor_surface_area > b->floor_surface_area)
+		return 1;
+	return q_strcasecmp(a->name, b->name);
+}
+
+static void Host_MapSize_List_f (const char *filter)
+{
+	filelist_item_t *level;
+	filelist_item_t **sorted;
+	int numlevels = 0;
+	int count = 0;
+	int name_width = 0;
+	int sqft_width = 3;
+	int sqm_width = 3;
+	int i;
+
+	if (!descriptionsParsed)
+		ExtraMaps_ParseDescriptions();
+
+	Host_MapSize_RefreshAllMissingCaches();
+
+	for (level = extralevels; level; level = level->next)
+		++numlevels;
+
+	if (!numlevels)
+	{
+		Con_SafePrintf("\nno maps found\n\n");
+		return;
+	}
+
+	sorted = (filelist_item_t **)malloc(sizeof(*sorted) * numlevels);
+	if (!sorted)
+	{
+		Con_Printf("mapsize: out of memory\n");
+		return;
+	}
+
+	for (level = extralevels, i = 0; level; level = level->next)
+		sorted[i++] = level;
+
+	qsort(sorted, numlevels, sizeof(*sorted), Host_MapSize_CompareLevelPtrs);
+
+	for (i = 0; i < numlevels; ++i)
+	{
+		level = sorted[i];
+		if (filter && !(q_strcasestr(level->name, filter) || q_strcasestr(level->data, filter)))
+			continue;
+
+		name_width = q_max(name_width, (int)strlen(level->name));
+		if (level->has_mapsize_cache)
+		{
+			sqft_width = q_max(sqft_width, (int)strlen(Host_FormatMapArea(level->floor_surface_area, QU2_PER_SQFT)));
+			sqm_width = q_max(sqm_width, (int)strlen(Host_FormatMapArea(level->floor_surface_area, QU2_PER_SQM)));
+		}
+	}
+
+	Con_SafePrintf("\n");
+	Con_SafePrintf("   floor area, smallest to largest (56 qu player height = 5'9\")\n\n");
+
+	for (i = 0; i < numlevels; ++i)
+	{
+		char buf[MAX_CHAT_SIZE_EX];
+		char combined[MAX_CHAT_SIZE_EX];
+		const char *sqft = "n/a";
+		const char *sqm = "n/a";
+		int desc_space;
+
+		level = sorted[i];
+		if (filter && !(q_strcasestr(level->name, filter) || q_strcasestr(level->data, filter)))
+			continue;
+
+		if (level->has_mapsize_cache)
+		{
+			sqft = Host_FormatMapArea(level->floor_surface_area, QU2_PER_SQFT);
+			sqm = Host_FormatMapArea(level->floor_surface_area, QU2_PER_SQM);
+		}
+
+		desc_space = (int)sizeof(combined) - name_width - sqft_width - sqm_width - 24;
+		if (desc_space < 0)
+			desc_space = 0;
+
+		q_snprintf(combined, sizeof(combined), "^m%-*s^m  %*s sq ft / %*s sq m  %.*s",
+			name_width, level->name,
+			sqft_width, sqft,
+			sqm_width, sqm,
+			desc_space, level->data);
+
+		if (filter)
+		{
+			COM_TintSubstring(combined, filter, buf, sizeof(buf));
+			q_strlcpy(combined, buf, sizeof(combined));
+		}
+
+		Con_SafePrintf("   %s\n", combined);
+		count++;
+	}
+
+	free(sorted);
+
+	if (filter)
+		Con_SafePrintf("\n%i map(s) found containing '%s'\n\n", count, filter);
+	else if (count)
+		Con_SafePrintf("\n%i map(s)\n\n", count);
+	else
+		Con_SafePrintf("\nno maps found\n\n");
+}
+
+static void Host_MapSize_f (void)
+{
+	mapsize_result_t results[MAX_MAPSIZE_COMPARE];
+	int result_count = 0;
+	int i;
+
+	if (Cmd_Argc() >= 2 && Host_MapSize_IsClearAllArg(Cmd_Argv(1)))
+	{
+		if (Cmd_Argc() != 2)
+		{
+			Con_Printf("usage: mapsize -clearall\n");
+			return;
+		}
+
+		Host_MapSize_ClearAllCache();
+		return;
+	}
+
+	if (Cmd_Argc() >= 2 && Host_MapSize_IsListArg(Cmd_Argv(1)))
+	{
+		if (Cmd_Argc() > 3)
+		{
+			Con_Printf("usage: mapsize [-l|list] [filter]\n");
+			return;
+		}
+
+		Host_MapSize_List_f((Cmd_Argc() == 3) ? Cmd_Argv(2) : NULL);
+		return;
+	}
+
+	if (Cmd_Argc() > MAX_MAPSIZE_COMPARE)
+	{
+		Con_Printf("mapsize supports up to %d maps at once\n", MAX_MAPSIZE_COMPARE - 1);
+		return;
+	}
+
+	if (Cmd_Argc() == 1)
+	{
+		mapsize_result_t *result = &results[result_count];
+		qmodel_t *mod;
+		const char *mapname;
+
+		if (sv.active)
+		{
+			mod = sv.qcvm.worldmodel;
+			mapname = sv.name;
+		}
+		else if (cls.state == ca_connected)
+		{
+			mod = cl.worldmodel;
+			mapname = cl.mapname;
+		}
+		else
+		{
+			Con_Printf("no map loaded\n");
+			return;
+		}
+
+		if (!mod || !mapname[0])
+		{
+			Con_Printf("no map loaded\n");
+			return;
+		}
+
+		Host_MapSize_SetResultFromModel(result, mapname, mod);
+		Host_MapSize_UpdateCache(result);
+		result_count = 1;
+	}
+	else
+	{
+		for (i = 1; i < Cmd_Argc(); ++i)
+		{
+			mapsize_result_t *result = &results[result_count];
+
+			if (!Host_MapSize_LoadMapByName(Cmd_Argv(i), result))
+				return;
+
+			result_count++;
+		}
+	}
+
+	for (i = 0; i < result_count; ++i)
+		Host_PrintMapSizeReport(&results[i]);
+
+	if (result_count > 1)
+		Host_PrintMapSizeFloorComparison(results, result_count);
 }
 
 /*
@@ -4288,36 +4957,36 @@ Host_SavegameComment
 Writes a SAVEGAME_COMMENT_LENGTH character comment describing the current
 ===============
 */
-static void Host_SavegameComment (char *text)
+static void Host_SavegameComment (char text[SAVEGAME_COMMENT_LENGTH + 1])
 {
 	int		i;
 	char	kills[20];
-	char	*p1, *p2;
+	char	*p;
 
 	for (i = 0; i < SAVEGAME_COMMENT_LENGTH; i++)
 		text[i] = ' ';
-
-// Remove CR/LFs from level name to avoid broken saves, e.g. with autumn_sp map:
-// https://celephais.net/board/view_thread.php?id=60452&start=3666
-	p1 = strchr(cl.levelname, '\n');
-	p2 = strchr(cl.levelname, '\r');
-	if (p1 != NULL) *p1 = 0;
-	if (p2 != NULL) *p2 = 0;
+	text[SAVEGAME_COMMENT_LENGTH] = '\0';
 
 	i = (int) strlen(cl.levelname);
 	if (i > 22) i = 22;
 	memcpy (text, cl.levelname, (size_t)i);
+
+// Remove CR/LFs from level name to avoid broken saves, e.g. with autumn_sp map:
+// https://celephais.net/board/view_thread.php?id=60452&start=3666
+	while ((p = strchr(text, '\n')) != NULL)
+		*p = ' ';
+	while ((p = strchr(text, '\r')) != NULL)
+		*p = ' ';
+
 	sprintf (kills,"kills:%3i/%3i", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
 	memcpy (text+22, kills, strlen(kills));
+
 // convert space to _ to make stdio happy
 	for (i = 0; i < SAVEGAME_COMMENT_LENGTH; i++)
 	{
 		if (text[i] == ' ')
 			text[i] = '_';
 	}
-	if (p1 != NULL) *p1 = '\n';
-	if (p2 != NULL) *p2 = '\r';
-	text[SAVEGAME_COMMENT_LENGTH] = '\0';
 }
 
 static void Host_InvalidateSave(const char* relname) // woods #autoload (iw)
@@ -4716,6 +5385,10 @@ static void Host_Loadgame_f (void)
 		entnum++;
 	}
 
+	// Free edicts allocated during map loading but no longer used after restoring saved game state
+	for (i = entnum; i < qcvm->num_edicts; i++)
+		ED_Free(EDICT_NUM(i));
+
 	qcvm->num_edicts = entnum;
 	qcvm->time = time;
 
@@ -4733,6 +5406,9 @@ static void Host_Loadgame_f (void)
 	{
 		CL_EstablishConnection ("local");
 	}
+
+	if (cls.state != ca_dedicated)
+		IN_UpdateGrabs(); // QSS-M adaptation of upstream quickload input refresh
 }
 
 //============================================================================
@@ -6386,6 +7062,47 @@ qboolean CompleteGive (const char* partial, void* unused) // woods #give+
 	return false;   /* no suggestions for other argument counts */
 }
 
+qboolean CompleteMapSize (const char *partial, void *unused)
+{
+	if (Cmd_Argc() == 2)
+	{
+		Con_AddToTabList("-l", partial, NULL, NULL);
+		Con_AddToTabList("list", partial, NULL, NULL);
+		Con_AddToTabList("-clearall", partial, NULL, NULL);
+
+		{
+			filelist_item_t *level;
+
+			for (level = extralevels; level; level = level->next)
+				Con_AddToTabList(level->name, partial, NULL, NULL);
+		}
+
+		return true;
+	}
+
+	if (Cmd_Argc() >= 3 && Host_MapSize_IsListArg(Cmd_Argv(1)))
+	{
+		filelist_item_t *level;
+
+		for (level = extralevels; level; level = level->next)
+			Con_AddToTabList(level->name, partial, NULL, NULL);
+
+		return true;
+	}
+
+	if (Cmd_Argc() >= 2)
+	{
+		filelist_item_t *level;
+
+		for (level = extralevels; level; level = level->next)
+			Con_AddToTabList(level->name, partial, NULL, NULL);
+
+		return true;
+	}
+
+	return false;
+}
+
 static edict_t	*FindViewthing (void)
 {
 	int		i;
@@ -7174,6 +7891,7 @@ void Host_InitCommands (void)
 	Cmd_AddCommand ("mods", Host_Mods_f); //johnfitz
 	Cmd_AddCommand ("games", Host_Mods_f); // as an alias to "mods" -- S.A. / QuakeSpasm
 	Cmd_AddCommand ("mapname", Host_Mapname_f); //johnfitz
+	Cmd_AddCommand ("mapsize", Host_MapSize_f);
 	Cmd_AddCommand ("randmap", Host_Randmap_f); //ericw
 
 	Cmd_AddCommand_ClientCommand ("serverinfo", Host_Serverinfo_f); //spike

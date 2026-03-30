@@ -409,6 +409,9 @@ extern float	map_fallbackalpha; //spike -- because we might want r_wateralpha to
 
 extern int	map_ctf_flag_style; // woods #alternateflags
 
+#define NUMVERTEXNORMALS	162
+extern const float	r_avertexnormals[NUMVERTEXNORMALS][3];
+
 //johnfitz -- fog functions called from outside gl_fog.c
 void Fog_ParseServerMessage (void);
 float *Fog_GetColor (void);

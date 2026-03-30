@@ -41,10 +41,7 @@ void Matrix3x4_RM_Transform4(const float* matrix, const float* vector, float* pr
 
 cvar_t	gl_lightning_alpha = {"gl_lightning_alpha","1"}; // woods #lightalpha
 
-#define NUMVERTEXNORMALS	162
-
-float	r_avertexnormals[NUMVERTEXNORMALS][3] =
-{
+const float	r_avertexnormals[NUMVERTEXNORMALS][3] = {
 #include "anorms.h"
 };
 
@@ -52,15 +49,14 @@ extern vec3_t	lightcolor; //johnfitz -- replaces "float shadelight" for lit supp
 
 // precalculated dot products for quantized angles
 #define SHADEDOT_QUANT 16
-float	r_avertexnormal_dots[SHADEDOT_QUANT][256] =
-{
+static const float	r_avertexnormal_dots[SHADEDOT_QUANT][256] = {
 #include "anorm_dots.h"
 };
 
 extern	vec3_t			lightspot;
 
-float	*shadedots = r_avertexnormal_dots[0];
-vec3_t	shadevector;
+static const float	*shadedots = r_avertexnormal_dots[0];
+static vec3_t	shadevector;
 
 float	entalpha; //johnfitz
 
@@ -2252,6 +2248,8 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 				lerpdata->blend = CLAMP (0.0f, (float)(cl.time - e->lerp.state.lerpstart) / (e->lerpfinish - e->lerp.state.lerpstart), 1.0f);
 			else
 				lerpdata->blend = CLAMP (0.0f, (float)(cl.time - e->lerp.state.lerpstart) / e->lerp.state.lerptime * s, 1.0f); // woods (iw) #democontrols
+			if (lerpdata->blend == 1.0f)
+				e->lerp.state.previouspose = e->lerp.state.currentpose;
 			lerpdata->pose1 = e->lerp.state.previouspose;
 			lerpdata->pose2 = e->lerp.state.currentpose;
 		}
@@ -3137,6 +3135,7 @@ void R_DrawAliasModel_ShowTris (entity_t *e)
 {
 	aliashdr_t	*paliashdr;
 	lerpdata_t	lerpdata;
+	float	fovscale = 1.0f;
 
 	if (R_CullModelForEntity(e))
 		return;
@@ -3145,10 +3144,13 @@ void R_DrawAliasModel_ShowTris (entity_t *e)
 	R_SetupAliasFrame (paliashdr, e, &lerpdata);
 	R_SetupEntityTransform (e, &lerpdata);
 
+	if (e == &cl.viewent && r_refdef.basefov > 90.f && cl_gun_fovscale.value)
+		fovscale = 1.0f / tan(DEG2RAD(r_refdef.basefov / 2.0)) / cl_gun_fovscale.value;
+
 	glPushMatrix ();
 	R_RotateForEntity (lerpdata.origin,lerpdata.angles, e->netstate.scale);
-	glTranslatef (paliashdr->scale_origin[0], paliashdr->scale_origin[1], paliashdr->scale_origin[2]);
-	glScalef (paliashdr->scale[0], paliashdr->scale[1], paliashdr->scale[2]);
+	glTranslatef (paliashdr->scale_origin[0] * fovscale, paliashdr->scale_origin[1], paliashdr->scale_origin[2]);
+	glScalef (paliashdr->scale[0] * fovscale, paliashdr->scale[1], paliashdr->scale[2]);
 
 	shading = false;
 	glColor3f(1,1,1);
@@ -3156,4 +3158,3 @@ void R_DrawAliasModel_ShowTris (entity_t *e)
 
 	glPopMatrix ();
 }
-

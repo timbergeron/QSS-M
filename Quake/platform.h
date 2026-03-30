@@ -24,6 +24,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #ifndef _QUAKE_PLATFORM_H
 #define _QUAKE_PLATFORM_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* platform dependent way to set the window icon */
 void PL_SetWindowIcon(void);
 
@@ -39,6 +43,10 @@ void PL_ErrorDialog(const char *text);
 #if defined(_WIN32)
 /* show a confirmation dialog, true when the user selects yes */
 qboolean PL_ConfirmDialog(const char *title, const char *text);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif	/* _QUAKE_PLATFORM_H */

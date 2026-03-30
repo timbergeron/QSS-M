@@ -24,8 +24,34 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "bgmusic.h"
 #include "q_ctype.h" // woods #modsmenu (iw)
 #include <curl/curl.h> // woods #serversmenu
+#include <zlib.h>
 #include "json.h" // woods #serversmenu
 #include <sys/stat.h>
+
+#ifdef USE_CODEC_FLAC
+#include <FLAC/format.h>
+#endif
+
+#ifdef USE_CODEC_MIKMOD
+#include <mikmod.h>
+#endif
+
+#ifdef USE_CODEC_OPUS
+#include <opus/opus_defines.h>
+#include <opus/opusfile.h>
+#endif
+
+#ifdef USE_CODEC_VORBIS
+#include <vorbis/codec.h>
+#endif
+
+#ifdef USE_CODEC_XMP
+#include <xmp.h>
+#endif
+
+#ifdef USE_CODEC_MP3
+#include <mad.h>
+#endif
 
 #ifdef _WIN32
 #include <sys/types.h>
@@ -80,6 +106,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_PakLoading_f (void);
 		void M_Menu_ColorPicker_f (void);
 		void M_Menu_Extras_f (void);
+		void M_Menu_Version_f (void);
 		void M_Menu_ResetConfig_f(void); // woods #resetconfig
 	void M_Menu_Mods_f(void); // woods #modsmenu (iw)
 	void M_Menu_Demos_f (void); // woods #demosmenu
@@ -117,6 +144,7 @@ void M_Main_Draw (void);
 		void M_PakLoading_Draw (void);
 		void M_ColorPicker_Draw (void);
 		void M_Extras_Draw (void);
+		void M_Version_Draw (void);
 		void M_ResetConfig_Draw(void); // woods #resetconfig
 			void M_Crosshair_Draw (void);
 		void M_Console_Draw (void);
@@ -155,6 +183,7 @@ void M_Main_Key (int key);
 		void M_PakLoading_Key (int key);
 		void M_ColorPicker_Key (int key);
 		void M_Extras_Key (int key);
+		void M_Version_Key (int key);
 		void M_ResetConfig_Key(int key); // woods #resetconfig
 			void M_Crosshair_Key (int key);
 		void M_Console_Key (int key);
@@ -198,6 +227,7 @@ void M_Main_Key (int key);
 		void M_PakLoading_Mousemove (int cx, int cy);
 		void M_ColorPicker_Mousemove(int cx, int cy);
 		void M_Extras_Mousemove(int cx, int cy);
+		void M_Version_Mousemove(int cx, int cy);
 		void M_ResetConfig_Mousemove(int cx, int cy); // woods #resetconfig
 	//void M_Gamepad_Mousemove (int cx, int cy);
 	void M_Mods_Mousemove(int cx, int cy);
@@ -2250,7 +2280,7 @@ void M_SinglePlayer_Key (int key)
 		{
 		case 0:
 			if (sv.active)
-				if (!SCR_ModalMessage("Are you sure you want to\nstart a new game?\n", 0.0f))
+				if (!SCR_ModalMessage("Are you sure you want to\nstart a new game?\n (^mn^m/^my^m)\n", 0.0f))
 					break;
 			key_dest = key_game;
 			IN_UpdateGrabs();
@@ -12045,6 +12075,7 @@ static enum extras_e
 	EXTRAS_RESETCONFIG,
 	EXTRAS_PONG,
 	EXTRAS_HINTS,
+	EXTRAS_VERSION,
 	EXTRAS_COUNT
 } extras_cursor;
 
@@ -12087,6 +12118,8 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 		return "Quake Pong";
 	case EXTRAS_HINTS:
 		return "Paused Hints";
+	case EXTRAS_VERSION:
+		return "Version Info";
 	default:
 		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
 		return buffer;
@@ -12162,6 +12195,9 @@ static void M_Extras_AdjustSliders (int dir)
 		break;
 	case EXTRAS_HINTS: // Added Paused Hints toggle
 		Cvar_SetValueQuick(&scr_hints, !scr_hints.value);
+		break;
+	case EXTRAS_VERSION:
+		M_Menu_Version_f();
 		break;
 	case EXTRAS_ITEMS:	//not a real option
 		break;
@@ -12259,6 +12295,11 @@ void M_Extras_Draw(void)
 		case EXTRAS_HINTS: // Added Paused Hints display
 			text = "      Paused Hints";
 			value = scr_hints.value ? "on" : "off";
+			break;
+
+		case EXTRAS_VERSION:
+			text = "      Version Info";
+			value = "...";
 			break;
 
 		default:
@@ -12463,6 +12504,954 @@ void M_Extras_Mousemove(int cx, int cy)
 		// Update cursor position regardless of search state
 		extras_cursor = item;
 	}
+}
+
+/*
+==================
+Version Menu
+==================
+*/
+
+#define MAX_VIS_VERSION	17
+#define VERSION_GITHUB_URL "https://api.github.com/repos/timbergeron/QSS-M/releases/latest"
+
+typedef struct
+{
+	char		text[160];
+	qboolean	is_header;
+} versionline_t;
+
+static struct
+{
+	SDL_mutex	*mutex;
+	versionremoteinfo_t release;
+	versionremoteinfo_t commit;
+} versiongithub;
+
+static struct
+{
+	menulist_t		list;
+	int				x, y, cols;
+	int				prev_cursor;
+	qboolean		scrollbar_grab;
+	menuticker_t	ticker;
+	versionline_t	*lines;
+	int				*filtered_indices;
+	char			status_message[64];
+	double			status_time;
+	int				github_release_line_index;
+	int				github_commit_line_index;
+} versionmenu;
+
+static void M_Version_Refilter(void);
+
+typedef struct
+{
+	char	*memory;
+	size_t	size;
+} versionhttpmem_t;
+
+#define VERSION_GITHUB_RELEASE_URL VERSION_GITHUB_URL
+#define VERSION_GITHUB_COMMIT_URL "https://api.github.com/repos/timbergeron/QSS-M/commits?path=Quake/quakedef.h&per_page=1"
+#define VERSION_GITHUB_QUAKEDEF_URL_FMT "https://raw.githubusercontent.com/timbergeron/QSS-M/%s/Quake/quakedef.h"
+
+static int M_Version_Compare(int l_major, int l_minor, int l_patch,
+	int r_major, int r_minor, int r_patch)
+{
+	if (l_major != r_major)
+		return (l_major > r_major) ? 1 : -1;
+	if (l_minor != r_minor)
+		return (l_minor > r_minor) ? 1 : -1;
+	if (l_patch != r_patch)
+		return (l_patch > r_patch) ? 1 : -1;
+	return 0;
+}
+
+static int M_Version_ParseTag(const char* tag, int* major, int* minor, int* patch)
+{
+	if (!tag)
+		return 0;
+	if (*tag == 'v' || *tag == 'V')
+		tag++;
+	return sscanf(tag, "%d.%d.%d", major, minor, patch) == 3;
+}
+
+static void M_Version_GitHubEnsureMutex(void)
+{
+	if (!versiongithub.mutex)
+		versiongithub.mutex = SDL_CreateMutex();
+}
+
+static void M_Version_RemoteInfo_Init(versionremoteinfo_t* info, int state)
+{
+	info->state = state;
+	info->comparison = 2;
+	info->version[0] = '\0';
+	info->detail[0] = '\0';
+	info->error[0] = '\0';
+}
+
+static size_t M_Version_GitHubWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
+{
+	size_t realsize = size * nmemb;
+	versionhttpmem_t* mem = (versionhttpmem_t*)userp;
+	char* ptr = (char*)realloc(mem->memory, mem->size + realsize + 1);
+
+	if (!ptr)
+		return 0;
+
+	mem->memory = ptr;
+	memcpy(mem->memory + mem->size, contents, realsize);
+	mem->size += realsize;
+	mem->memory[mem->size] = '\0';
+
+	return realsize;
+}
+
+static qboolean M_Version_GitHubHttpGet(const char* url, versionhttpmem_t* mem, char* error, size_t errorsz)
+{
+	CURL* curl;
+	CURLcode res;
+	long http_code = 0;
+
+	mem->memory = (char*)malloc(1);
+	mem->size = 0;
+	if (!mem->memory)
+	{
+		q_strlcpy(error, "out of memory", errorsz);
+		return false;
+	}
+	mem->memory[0] = '\0';
+
+	curl = curl_easy_init();
+	if (!curl)
+	{
+		q_strlcpy(error, "curl init failed", errorsz);
+		free(mem->memory);
+		mem->memory = NULL;
+		return false;
+	}
+
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, M_Version_GitHubWriteCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, mem);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 3L);
+	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 10L);
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+#if CURL_AT_LEAST_VERSION(7, 85, 0)
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+#else
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+#endif
+
+	res = curl_easy_perform(curl);
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+	curl_easy_cleanup(curl);
+
+	if (res != CURLE_OK)
+	{
+		q_strlcpy(error, curl_easy_strerror(res), errorsz);
+		free(mem->memory);
+		mem->memory = NULL;
+		return false;
+	}
+
+	if (http_code < 200 || http_code >= 300)
+	{
+		q_snprintf(error, errorsz, "HTTP %ld", http_code);
+		free(mem->memory);
+		mem->memory = NULL;
+		return false;
+	}
+
+	return true;
+}
+
+static qboolean M_Version_ParseQuakedefInt(const char* text, const char* macro, int* out)
+{
+	char pattern[64];
+	const char* pos;
+
+	q_snprintf(pattern, sizeof(pattern), "#define %s", macro);
+	pos = strstr(text, pattern);
+	if (!pos)
+		return false;
+
+	return sscanf(pos + strlen(pattern), "%d", out) == 1;
+}
+
+static void M_Version_ParseQuakedefSuffix(const char* text, char* out, size_t outsz)
+{
+	char pattern[64];
+	const char* pos;
+	const char* begin;
+	const char* end;
+	size_t len;
+
+	out[0] = '\0';
+	q_snprintf(pattern, sizeof(pattern), "#define %s", "QSSM_VER_SUFFIX");
+	pos = strstr(text, pattern);
+	if (!pos)
+		return;
+
+	begin = strchr(pos + strlen(pattern), '"');
+	if (!begin)
+		return;
+	end = strchr(begin + 1, '"');
+	if (!end)
+		return;
+
+	len = (size_t)(end - begin - 1);
+	if (len >= outsz)
+		len = outsz - 1;
+	memcpy(out, begin + 1, len);
+	out[len] = '\0';
+}
+
+static qboolean M_Version_ParseQuakedefVersion(const char* text, char* out, size_t outsz, int* comparison)
+{
+	int major, minor, patch;
+	char suffix[32];
+
+	if (!M_Version_ParseQuakedefInt(text, "QSSM_VER_MAJOR", &major) ||
+		!M_Version_ParseQuakedefInt(text, "QSSM_VER_MINOR", &minor) ||
+		!M_Version_ParseQuakedefInt(text, "QSSM_VER_PATCH", &patch))
+	{
+		return false;
+	}
+
+	M_Version_ParseQuakedefSuffix(text, suffix, sizeof(suffix));
+	q_snprintf(out, outsz, "%d.%d.%d%s", major, minor, patch, suffix);
+	*comparison = M_Version_Compare(QSSM_VER_MAJOR, QSSM_VER_MINOR, QSSM_VER_PATCH,
+		major, minor, patch);
+	return true;
+}
+
+static void M_Version_GitHubFetchRelease(versionremoteinfo_t* info)
+{
+	versionhttpmem_t mem = {0};
+
+	M_Version_RemoteInfo_Init(info, VERSIONGITHUB_ERROR);
+	if (!M_Version_GitHubHttpGet(VERSION_GITHUB_RELEASE_URL, &mem, info->error, sizeof(info->error)))
+		return;
+
+	{
+		json_t* json = JSON_Parse(mem.memory);
+		if (!json || !json->root || json->root->type != JSON_OBJECT)
+		{
+			if (json)
+				JSON_Free(json);
+			free(mem.memory);
+			q_strlcpy(info->error, "invalid JSON", sizeof(info->error));
+			return;
+		}
+
+		{
+			const char* latest_tag = JSON_FindString(json->root, "tag_name");
+			if (!latest_tag || !latest_tag[0])
+			{
+				JSON_Free(json);
+				free(mem.memory);
+				q_strlcpy(info->error, "missing tag_name", sizeof(info->error));
+				return;
+			}
+
+			q_strlcpy(info->version, latest_tag, sizeof(info->version));
+
+			{
+				int major, minor, patch;
+				if (M_Version_ParseTag(latest_tag, &major, &minor, &patch))
+					info->comparison = M_Version_Compare(QSSM_VER_MAJOR, QSSM_VER_MINOR, QSSM_VER_PATCH,
+						major, minor, patch);
+			}
+		}
+
+		info->state = VERSIONGITHUB_READY;
+		JSON_Free(json);
+	}
+
+	free(mem.memory);
+}
+
+static void M_Version_GitHubFetchCommit(versionremoteinfo_t* info)
+{
+	versionhttpmem_t mem = {0};
+	versionhttpmem_t filemem = {0};
+	char rawurl[256];
+
+	M_Version_RemoteInfo_Init(info, VERSIONGITHUB_ERROR);
+	if (!M_Version_GitHubHttpGet(VERSION_GITHUB_COMMIT_URL, &mem, info->error, sizeof(info->error)))
+		return;
+
+	{
+		json_t* json = JSON_Parse(mem.memory);
+		if (!json || !json->root || json->root->type != JSON_ARRAY || !json->root->firstchild)
+		{
+			if (json)
+				JSON_Free(json);
+			free(mem.memory);
+			q_strlcpy(info->error, "invalid commit JSON", sizeof(info->error));
+			return;
+		}
+
+		{
+			const char* sha = JSON_FindString(json->root->firstchild, "sha");
+			if (!sha || !sha[0])
+			{
+				JSON_Free(json);
+				free(mem.memory);
+				q_strlcpy(info->error, "missing sha", sizeof(info->error));
+				return;
+			}
+
+			q_strlcpy(info->detail, sha, 8);
+			q_snprintf(rawurl, sizeof(rawurl), VERSION_GITHUB_QUAKEDEF_URL_FMT, sha);
+		}
+
+		JSON_Free(json);
+	}
+
+	free(mem.memory);
+
+	if (!M_Version_GitHubHttpGet(rawurl, &filemem, info->error, sizeof(info->error)))
+		return;
+
+	if (!M_Version_ParseQuakedefVersion(filemem.memory, info->version, sizeof(info->version), &info->comparison))
+	{
+		free(filemem.memory);
+		q_strlcpy(info->error, "missing QSSM version", sizeof(info->error));
+		return;
+	}
+
+	free(filemem.memory);
+	info->state = VERSIONGITHUB_READY;
+}
+
+static int M_Version_GitHubThread(void* unused)
+{
+	versionremoteinfo_t release;
+	versionremoteinfo_t commit;
+
+	(void)unused;
+
+	M_Version_GitHubFetchRelease(&release);
+	M_Version_GitHubFetchCommit(&commit);
+
+	M_Version_GitHubEnsureMutex();
+	if (!versiongithub.mutex)
+		return 0;
+
+	SDL_LockMutex(versiongithub.mutex);
+	versiongithub.release = release;
+	versiongithub.commit = commit;
+	SDL_UnlockMutex(versiongithub.mutex);
+
+	return 0;
+}
+
+void M_Version_GetGitHubInfo(versionremoteinfo_t* release, versionremoteinfo_t* commit)
+{
+	M_Version_GitHubEnsureMutex();
+
+	if (release)
+		M_Version_RemoteInfo_Init(release, VERSIONGITHUB_IDLE);
+	if (commit)
+		M_Version_RemoteInfo_Init(commit, VERSIONGITHUB_IDLE);
+
+	if (!versiongithub.mutex)
+		return;
+
+	SDL_LockMutex(versiongithub.mutex);
+	if (release)
+		*release = versiongithub.release;
+	if (commit)
+		*commit = versiongithub.commit;
+	SDL_UnlockMutex(versiongithub.mutex);
+}
+
+qboolean M_Version_WaitForGitHubInfo(versionremoteinfo_t* release, versionremoteinfo_t* commit, Uint32 timeout_ms)
+{
+	Uint32 deadline;
+
+	M_Version_StartGitHubFetch();
+	deadline = SDL_GetTicks() + timeout_ms;
+
+	for (;;)
+	{
+		M_Version_GetGitHubInfo(release, commit);
+
+		if ((!release || (release->state != VERSIONGITHUB_IDLE && release->state != VERSIONGITHUB_LOADING)) &&
+			(!commit || (commit->state != VERSIONGITHUB_IDLE && commit->state != VERSIONGITHUB_LOADING)))
+		{
+			return true;
+		}
+
+		if (!timeout_ms || SDL_TICKS_PASSED(SDL_GetTicks(), deadline))
+			return false;
+
+		SDL_Delay(10);
+	}
+}
+
+void M_Version_StartGitHubFetch(void)
+{
+	SDL_Thread* thread;
+
+	M_Version_GitHubEnsureMutex();
+	if (!versiongithub.mutex)
+		return;
+
+	SDL_LockMutex(versiongithub.mutex);
+	if (versiongithub.release.state == VERSIONGITHUB_LOADING ||
+		versiongithub.commit.state == VERSIONGITHUB_LOADING)
+	{
+		SDL_UnlockMutex(versiongithub.mutex);
+		return;
+	}
+	if (versiongithub.release.state == VERSIONGITHUB_READY &&
+		versiongithub.commit.state == VERSIONGITHUB_READY)
+	{
+		SDL_UnlockMutex(versiongithub.mutex);
+		return;
+	}
+
+	M_Version_RemoteInfo_Init(&versiongithub.release, VERSIONGITHUB_LOADING);
+	M_Version_RemoteInfo_Init(&versiongithub.commit, VERSIONGITHUB_LOADING);
+	SDL_UnlockMutex(versiongithub.mutex);
+
+	thread = SDL_CreateThread(M_Version_GitHubThread, "VersionGitHubThread", NULL);
+	if (!thread)
+	{
+		SDL_LockMutex(versiongithub.mutex);
+		M_Version_RemoteInfo_Init(&versiongithub.release, VERSIONGITHUB_ERROR);
+		M_Version_RemoteInfo_Init(&versiongithub.commit, VERSIONGITHUB_ERROR);
+		q_strlcpy(versiongithub.release.error, "thread create failed", sizeof(versiongithub.release.error));
+		q_strlcpy(versiongithub.commit.error, "thread create failed", sizeof(versiongithub.commit.error));
+		SDL_UnlockMutex(versiongithub.mutex);
+		return;
+	}
+
+	SDL_DetachThread(thread);
+}
+
+static void M_Version_UpdateGitHubLines(void)
+{
+	char release_text[sizeof(versionmenu.lines[0].text)];
+	char commit_text[sizeof(versionmenu.lines[0].text)];
+	versionremoteinfo_t release;
+	versionremoteinfo_t commit;
+	qboolean changed = false;
+
+	if (versionmenu.github_release_line_index < 0 || versionmenu.github_release_line_index >= VEC_SIZE(versionmenu.lines))
+		return;
+	if (versionmenu.github_commit_line_index < 0 || versionmenu.github_commit_line_index >= VEC_SIZE(versionmenu.lines))
+		return;
+
+	M_Version_GetGitHubInfo(&release, &commit);
+
+	if (release.state == VERSIONGITHUB_LOADING || release.state == VERSIONGITHUB_IDLE)
+	{
+		q_strlcpy(release_text, "  Latest release  checking...", sizeof(release_text));
+	}
+	else if (release.state == VERSIONGITHUB_READY)
+	{
+		if (release.comparison == 0)
+			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s (you have this)", release.version);
+		else if (release.comparison > 0)
+			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s (you have newer)", release.version);
+		else if (release.comparison < 0)
+			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s (update available)", release.version);
+		else
+			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s", release.version);
+	}
+	else
+	{
+		q_snprintf(release_text, sizeof(release_text), "  Latest release  error (%s)",
+			release.error[0] ? release.error : "unavailable");
+	}
+
+	if (commit.state == VERSIONGITHUB_LOADING || commit.state == VERSIONGITHUB_IDLE)
+	{
+		q_strlcpy(commit_text, "  Latest commit   checking...", sizeof(commit_text));
+	}
+	else if (commit.state == VERSIONGITHUB_READY)
+	{
+		if (commit.comparison == 0)
+			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s (you have this)",
+				commit.version, commit.detail[0] ? commit.detail : "unknown");
+		else if (commit.comparison > 0)
+			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s (you have newer)",
+				commit.version, commit.detail[0] ? commit.detail : "unknown");
+		else if (commit.comparison < 0)
+			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s (update available)",
+				commit.version, commit.detail[0] ? commit.detail : "unknown");
+		else
+			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s",
+				commit.version, commit.detail[0] ? commit.detail : "unknown");
+	}
+	else
+	{
+		q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   error (%s)",
+			commit.error[0] ? commit.error : "unavailable");
+	}
+
+	if (strcmp(versionmenu.lines[versionmenu.github_release_line_index].text, release_text))
+	{
+		q_strlcpy(versionmenu.lines[versionmenu.github_release_line_index].text,
+			release_text, sizeof(versionmenu.lines[versionmenu.github_release_line_index].text));
+		changed = true;
+	}
+
+	if (strcmp(versionmenu.lines[versionmenu.github_commit_line_index].text, commit_text))
+	{
+		q_strlcpy(versionmenu.lines[versionmenu.github_commit_line_index].text,
+			commit_text, sizeof(versionmenu.lines[versionmenu.github_commit_line_index].text));
+		changed = true;
+	}
+
+	if (changed && versionmenu.list.search.len > 0)
+		M_Version_Refilter();
+}
+
+static const char* M_Version_GetGLString(GLenum name)
+{
+	const char* value = (const char*)glGetString(name);
+	return value ? value : "unavailable";
+}
+
+static void M_Version_AddLine(const char* text, qboolean is_header)
+{
+	versionline_t line;
+
+	q_strlcpy(line.text, text, sizeof(line.text));
+	line.is_header = is_header;
+	VEC_PUSH(versionmenu.lines, line);
+}
+
+static void M_Version_Refilter(void)
+{
+	int i;
+
+	VEC_CLEAR(versionmenu.filtered_indices);
+
+	for (i = 0; i < VEC_SIZE(versionmenu.lines); i++)
+	{
+		if (versionmenu.list.search.len == 0 ||
+			q_strcasestr(versionmenu.lines[i].text, versionmenu.list.search.text))
+		{
+			VEC_PUSH(versionmenu.filtered_indices, i);
+		}
+	}
+
+	versionmenu.list.numitems = VEC_SIZE(versionmenu.filtered_indices);
+
+	if (versionmenu.list.numitems <= 0)
+	{
+		versionmenu.list.cursor = 0;
+		versionmenu.list.scroll = 0;
+		return;
+	}
+
+	if (versionmenu.list.cursor >= versionmenu.list.numitems)
+		versionmenu.list.cursor = versionmenu.list.numitems - 1;
+
+	if (versionmenu.list.cursor < 0)
+		versionmenu.list.cursor = 0;
+
+	M_List_CenterCursor(&versionmenu.list);
+}
+
+static void M_Version_CopyToClipboard(void)
+{
+	size_t total = 1;
+	int i;
+	char* copy;
+
+	if (VEC_SIZE(versionmenu.lines) <= 0)
+		return;
+
+	for (i = 0; i < VEC_SIZE(versionmenu.lines); i++)
+		total += strlen(versionmenu.lines[i].text) + 1;
+
+	copy = (char*)SDL_malloc(total);
+	if (!copy)
+		return;
+
+	copy[0] = '\0';
+	for (i = 0; i < VEC_SIZE(versionmenu.lines); i++)
+	{
+		q_strlcat(copy, versionmenu.lines[i].text, total);
+		q_strlcat(copy, "\n", total);
+	}
+
+	if (SDL_SetClipboardText(copy) < 0)
+		q_strlcpy(versionmenu.status_message, "Clipboard copy failed", sizeof(versionmenu.status_message));
+	else
+	{
+		q_strlcpy(versionmenu.status_message, "Copied version info", sizeof(versionmenu.status_message));
+		M_TextField_PlayCopySound();
+	}
+
+	versionmenu.status_time = realtime;
+	SDL_free(copy);
+}
+
+static void M_Version_Init(void)
+{
+	SDL_version sdl_linked;
+
+	versionmenu.list.cursor = 0;
+	versionmenu.list.scroll = 0;
+	versionmenu.list.viewsize = MAX_VIS_VERSION;
+	versionmenu.list.numitems = 0;
+	versionmenu.list.isactive_fn = NULL;
+	memset(&versionmenu.list.search, 0, sizeof(versionmenu.list.search));
+	versionmenu.list.search.maxlen = 32;
+
+	versionmenu.prev_cursor = -1;
+	versionmenu.scrollbar_grab = false;
+	versionmenu.status_message[0] = '\0';
+	versionmenu.status_time = 0.0;
+	versionmenu.github_release_line_index = -1;
+	versionmenu.github_commit_line_index = -1;
+
+	VEC_CLEAR(versionmenu.lines);
+	VEC_CLEAR(versionmenu.filtered_indices);
+
+	M_Ticker_Init(&versionmenu.ticker);
+	SDL_GetVersion(&sdl_linked);
+
+	M_Version_AddLine("Application Information", true);
+	M_Version_AddLine(va("  Quake          %1.2f", VERSION), false);
+	M_Version_AddLine(va("  QuakeSpasm     %s", QUAKESPASM_VER_STRING), false);
+	M_Version_AddLine(va("  QSS            %s", QSS_VER), false);
+	M_Version_AddLine(va("  QSS-M          %s", QSSM_VER_STRING), false);
+
+#ifdef QSS_VERSION
+	M_Version_AddLine(va("  QSS Git Desc   %s", QS_STRINGIFY(QSS_VERSION)), false);
+#endif
+#ifdef QSS_REVISION
+	M_Version_AddLine(va("  QSS Git Rev    %s", QS_STRINGIFY(QSS_REVISION)), false);
+#endif
+#ifdef QSS_DATE
+	M_Version_AddLine(va("  Build Date     %s", QS_STRINGIFY(QSS_DATE)), false);
+#else
+	M_Version_AddLine(va("  Build Date     %s %s", __DATE__, __TIME__), false);
+#endif
+
+	M_Version_AddLine(va("  Platform       %s %d-bit", SDL_GetPlatform(), (int)sizeof(void*) * 8), false);
+
+	M_Version_AddLine("", false);
+	M_Version_AddLine("Renderer Information", true);
+	M_Version_AddLine(va("  Vendor         %s", M_Version_GetGLString(GL_VENDOR)), false);
+	M_Version_AddLine(va("  Renderer       %s", M_Version_GetGLString(GL_RENDERER)), false);
+	M_Version_AddLine(va("  Version        %s", M_Version_GetGLString(GL_VERSION)), false);
+
+	M_Version_AddLine("", false);
+	M_Version_AddLine("Library Versions", true);
+	M_Version_AddLine(va("  SDL compiled   %s", Q_SDL_COMPILED_VERSION_STRING), false);
+	M_Version_AddLine(va("  SDL linked     %d.%d.%d", sdl_linked.major, sdl_linked.minor, sdl_linked.patch), false);
+	M_Version_AddLine(va("  zlib           %s", zlibVersion()), false);
+#ifdef LIBCURL_VERSION
+	M_Version_AddLine(va("  libcurl        %s", LIBCURL_VERSION), false);
+#endif
+#ifdef USE_CODEC_FLAC
+	M_Version_AddLine(va("  libFLAC        %s", FLAC__VERSION_STRING), false);
+#endif
+#ifdef USE_CODEC_OPUS
+	{
+		const char* opus_ver = opus_get_version_string();
+		const char* version = strstr(opus_ver, "libopus ");
+		M_Version_AddLine(va("  libopus        %s", version ? version + 8 : opus_ver), false);
+	}
+#endif
+#ifdef USE_CODEC_VORBIS
+	{
+		const char* vorbis_ver = vorbis_version_string();
+		const char* version = strstr(vorbis_ver, "libVorbis ");
+		M_Version_AddLine(va("  libvorbis      %s", version ? version + 10 : vorbis_ver), false);
+	}
+#endif
+#ifdef USE_CODEC_MIKMOD
+	M_Version_AddLine(va("  libmikmod      %ld.%ld.%ld",
+		LIBMIKMOD_VERSION_MAJOR,
+		LIBMIKMOD_VERSION_MINOR,
+		LIBMIKMOD_REVISION), false);
+#endif
+#ifdef USE_CODEC_XMP
+	M_Version_AddLine(va("  libxmp         %s", XMP_VERSION), false);
+#endif
+#ifdef USE_CODEC_MP3
+	M_Version_AddLine(va("  libmad         %d.%d.%d%s",
+		MAD_VERSION_MAJOR,
+		MAD_VERSION_MINOR,
+		MAD_VERSION_PATCH,
+		MAD_VERSION_EXTRA), false);
+#endif
+
+	M_Version_AddLine("", false);
+	M_Version_AddLine("GitHub QSS-M Versions", true);
+	versionmenu.github_release_line_index = VEC_SIZE(versionmenu.lines);
+	M_Version_AddLine("  Latest release  checking...", false);
+	versionmenu.github_commit_line_index = VEC_SIZE(versionmenu.lines);
+	M_Version_AddLine("  Latest commit   checking...", false);
+
+	M_Version_Refilter();
+	M_Version_StartGitHubFetch();
+	M_Version_UpdateGitHubLines();
+}
+
+void M_Menu_Version_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_version;
+	m_entersound = true;
+
+	M_Version_Init();
+	IN_UpdateGrabs();
+}
+
+void M_Version_Draw(void)
+{
+	int x, y, cols;
+	int firstvis, numvis, i;
+
+	x = 16;
+	y = 32;
+	cols = 36;
+
+	versionmenu.x = x;
+	versionmenu.y = y;
+	versionmenu.cols = cols;
+
+	if (!keydown[K_MOUSE1])
+		versionmenu.scrollbar_grab = false;
+
+	if (versionmenu.prev_cursor != versionmenu.list.cursor)
+	{
+		versionmenu.prev_cursor = versionmenu.list.cursor;
+		M_Ticker_Init(&versionmenu.ticker);
+	}
+	else
+	{
+		M_Ticker_Update(&versionmenu.ticker);
+	}
+
+	M_Version_UpdateGitHubLines();
+
+	Draw_String(x, y - 28, "Version Information");
+	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
+
+	if (versionmenu.list.numitems > 0)
+	{
+		M_List_GetVisibleRange(&versionmenu.list, &firstvis, &numvis);
+		for (i = 0; i < numvis; i++)
+		{
+			const int draw_idx = i + firstvis;
+			const int line_idx = versionmenu.filtered_indices[draw_idx];
+			versionline_t* line = &versionmenu.lines[line_idx];
+			const int item_y = y + i * 8;
+			const int maxchars = cols - 2;
+			const int maxwidth = maxchars * 8;
+			const qboolean selected = (draw_idx == versionmenu.list.cursor);
+			const qboolean matched = (versionmenu.list.search.len > 0 &&
+				q_strcasestr(line->text, versionmenu.list.search.text) != NULL);
+			const qboolean needs_scroll = ((int)strlen(line->text) > maxchars);
+
+			if (line->is_header)
+			{
+				M_PrintWhite(x, item_y, line->text);
+			}
+			else if (matched)
+			{
+				if (needs_scroll)
+					M_PrintHighlightScroll(x, item_y, maxwidth, line->text,
+						versionmenu.list.search.text,
+						selected ? versionmenu.ticker.scroll_time : 0.0);
+				else
+					M_PrintHighlight(x, item_y, line->text,
+						versionmenu.list.search.text,
+						versionmenu.list.search.len);
+			}
+			else if (needs_scroll)
+			{
+				M_PrintScroll(x, item_y, maxwidth, line->text,
+					selected ? versionmenu.ticker.scroll_time : 0.0, true);
+			}
+			else
+			{
+				M_Print(x, item_y, line->text);
+			}
+
+			if (selected)
+				M_DrawCharacter(x - 8, item_y, 12);
+		}
+	}
+	else
+	{
+		M_PrintWhite(x, y, "No matching lines");
+	}
+
+	if (M_List_GetOverflow(&versionmenu.list) > 0)
+	{
+		M_List_DrawScrollbar(&versionmenu.list, x + cols * 8 - 8, y);
+
+		if (versionmenu.list.scroll > 0)
+			M_DrawEllipsisBar(x, y - 8, cols);
+		if (versionmenu.list.scroll + versionmenu.list.viewsize < versionmenu.list.numitems)
+			M_DrawEllipsisBar(x, y + versionmenu.list.viewsize * 8, cols);
+	}
+
+	if (versionmenu.list.search.len > 0)
+	{
+		int cursor_x = 24 + 8 * versionmenu.list.search.len;
+		M_DrawTextBox(16, 176, 32, 1);
+		M_PrintHighlight(24, 184, versionmenu.list.search.text,
+			versionmenu.list.search.text,
+			versionmenu.list.search.len);
+		if (versionmenu.list.numitems == 0)
+			M_DrawCharacter(cursor_x, 184, 11 ^ 128);
+		else
+			M_DrawCharacter(cursor_x, 184, 10);
+	}
+
+	if (versionmenu.status_message[0] && (realtime - versionmenu.status_time) < 2.0)
+		M_PrintWhite(x, versionmenu.list.search.len > 0 ? 200 : 184, versionmenu.status_message);
+}
+
+void M_Version_Key(int key)
+{
+	if (M_TextField_HasShortcutModifier() && (key == 'c' || key == 'C'))
+	{
+		M_Version_CopyToClipboard();
+		return;
+	}
+
+	if (keydown[K_CTRL])
+	{
+		if ((key == 'u' || key == 'U') && versionmenu.list.search.len > 0)
+		{
+			versionmenu.list.search.len = 0;
+			versionmenu.list.search.text[0] = 0;
+			versionmenu.list.cursor = 0;
+			versionmenu.list.scroll = 0;
+			M_Version_Refilter();
+			return;
+		}
+		else if (key == K_BACKSPACE && versionmenu.list.search.len > 0)
+		{
+			M_DeletePrevWord(&versionmenu.list.search);
+			versionmenu.list.cursor = 0;
+			versionmenu.list.scroll = 0;
+			M_Version_Refilter();
+			return;
+		}
+	}
+
+	if (key >= 32 && key < 127)
+	{
+		if (versionmenu.list.search.len < versionmenu.list.search.maxlen)
+		{
+			versionmenu.list.search.text[versionmenu.list.search.len++] = key;
+			versionmenu.list.search.text[versionmenu.list.search.len] = 0;
+			versionmenu.list.cursor = 0;
+			versionmenu.list.scroll = 0;
+			M_Version_Refilter();
+		}
+		return;
+	}
+
+	if (key == K_BACKSPACE && versionmenu.list.search.len > 0)
+	{
+		versionmenu.list.search.text[--versionmenu.list.search.len] = 0;
+		versionmenu.list.cursor = 0;
+		versionmenu.list.scroll = 0;
+		M_Version_Refilter();
+		return;
+	}
+
+	if (versionmenu.scrollbar_grab)
+	{
+		switch (key)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			versionmenu.scrollbar_grab = false;
+			break;
+		}
+		return;
+	}
+
+	if (versionmenu.list.numitems > 0 && M_List_Key(&versionmenu.list, key))
+		return;
+
+	if (M_Ticker_Key(&versionmenu.ticker, key))
+		return;
+
+	switch (key)
+	{
+	case K_ESCAPE:
+		if (versionmenu.list.search.len > 0)
+		{
+			versionmenu.list.search.len = 0;
+			versionmenu.list.search.text[0] = 0;
+			versionmenu.list.cursor = 0;
+			versionmenu.list.scroll = 0;
+			M_Version_Refilter();
+			return;
+		}
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Menu_Extras_f();
+		break;
+
+	case K_MOUSE1:
+		if (versionmenu.list.numitems > 0)
+		{
+			int x = m_mousex - versionmenu.x - (versionmenu.cols - 1) * 8;
+			int y = m_mousey - versionmenu.y;
+			if (x >= -8 && M_List_UseScrollbar(&versionmenu.list, y))
+			{
+				versionmenu.scrollbar_grab = true;
+				M_Version_Mousemove(m_mousex, m_mousey);
+			}
+		}
+		break;
+
+	default:
+		break;
+	}
+}
+
+void M_Version_Mousemove(int cx, int cy)
+{
+	cy -= versionmenu.y;
+
+	if (versionmenu.scrollbar_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			versionmenu.scrollbar_grab = false;
+			return;
+		}
+		M_List_UseScrollbar(&versionmenu.list, cy);
+	}
+
+	if (versionmenu.list.numitems > 0)
+		M_List_Mousemove(&versionmenu.list, cy);
 }
 
 /*
@@ -18525,6 +19514,7 @@ static struct
 	{"menu_demooptions", M_Menu_DemoOptions_f},
 	{"menu_pakloading", M_Menu_PakLoading_f},
 	{"menu_misc", M_Menu_Extras_f},
+	{"menu_version", M_Menu_Version_f},
 	{"menu_config", M_Menu_ResetConfig_f},
 	{"menu_video", M_Menu_Video_f},
 	{"menu_graphics", M_Menu_Graphics_f},
@@ -18820,6 +19810,10 @@ void M_Draw (void)
 		M_Extras_Draw ();
 		break;
 
+	case m_version:
+		M_Version_Draw();
+		break;
+
 	case m_resetconfig: // woods #resetconfig
 		M_ResetConfig_Draw();
 		break;
@@ -18997,6 +19991,10 @@ void M_Keydown (int key)
 
 	case m_extras:
 		M_Extras_Key (key);
+		return;
+
+	case m_version:
+		M_Version_Key(key);
 		return;
 
 	case m_resetconfig: // woods #resetconfig
@@ -19203,6 +20201,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_extras:
 		M_Extras_Mousemove(x, y);
+		return;
+
+	case m_version:
+		M_Version_Mousemove(x, y);
 		return;
 
 	case m_resetconfig: // woods #resetconfig

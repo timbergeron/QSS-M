@@ -166,6 +166,7 @@ Returns 1, 2, or 1 + 2
 int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, mplane_t *p)
 {
 	float	dist1, dist2;
+	int		xneg, yneg, zneg;
 	int		sides;
 
 #if 0	// this is done by the BOX_ON_PLANE_SIDE macro before calling this
@@ -181,46 +182,19 @@ int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, mplane_t *p)
 	}
 #endif
 
-// general case
-	switch (p->signbits)
-	{
-	case 0:
-		dist1 = p->normal[0]*emaxs[0] + p->normal[1]*emaxs[1] + p->normal[2]*emaxs[2];
-		dist2 = p->normal[0]*emins[0] + p->normal[1]*emins[1] + p->normal[2]*emins[2];
-		break;
-	case 1:
-		dist1 = p->normal[0]*emins[0] + p->normal[1]*emaxs[1] + p->normal[2]*emaxs[2];
-		dist2 = p->normal[0]*emaxs[0] + p->normal[1]*emins[1] + p->normal[2]*emins[2];
-		break;
-	case 2:
-		dist1 = p->normal[0]*emaxs[0] + p->normal[1]*emins[1] + p->normal[2]*emaxs[2];
-		dist2 = p->normal[0]*emins[0] + p->normal[1]*emaxs[1] + p->normal[2]*emins[2];
-		break;
-	case 3:
-		dist1 = p->normal[0]*emins[0] + p->normal[1]*emins[1] + p->normal[2]*emaxs[2];
-		dist2 = p->normal[0]*emaxs[0] + p->normal[1]*emaxs[1] + p->normal[2]*emins[2];
-		break;
-	case 4:
-		dist1 = p->normal[0]*emaxs[0] + p->normal[1]*emaxs[1] + p->normal[2]*emins[2];
-		dist2 = p->normal[0]*emins[0] + p->normal[1]*emins[1] + p->normal[2]*emaxs[2];
-		break;
-	case 5:
-		dist1 = p->normal[0]*emins[0] + p->normal[1]*emaxs[1] + p->normal[2]*emins[2];
-		dist2 = p->normal[0]*emaxs[0] + p->normal[1]*emins[1] + p->normal[2]*emaxs[2];
-		break;
-	case 6:
-		dist1 = p->normal[0]*emaxs[0] + p->normal[1]*emins[1] + p->normal[2]*emins[2];
-		dist2 = p->normal[0]*emins[0] + p->normal[1]*emaxs[1] + p->normal[2]*emaxs[2];
-		break;
-	case 7:
-		dist1 = p->normal[0]*emins[0] + p->normal[1]*emins[1] + p->normal[2]*emins[2];
-		dist2 = p->normal[0]*emaxs[0] + p->normal[1]*emaxs[1] + p->normal[2]*emaxs[2];
-		break;
-	default:
-		dist1 = dist2 = 0;		// shut up compiler
+	xneg = p->signbits & 1;
+	yneg = (p->signbits >> 1) & 1;
+	zneg = (p->signbits >> 2) & 1;
+
+	dist1 = p->normal[0] * (xneg ? emins : emaxs)[0] +
+			p->normal[1] * (yneg ? emins : emaxs)[1] +
+			p->normal[2] * (zneg ? emins : emaxs)[2];
+	dist2 = p->normal[0] * (xneg ? emaxs : emins)[0] +
+			p->normal[1] * (yneg ? emaxs : emins)[1] +
+			p->normal[2] * (zneg ? emaxs : emins)[2];
+
+	if (p->signbits & ~7)
 		Sys_Error ("BoxOnPlaneSide:  Bad signbits");
-		break;
-	}
 
 #if 0
 	int		i;
@@ -937,4 +911,55 @@ void Matrix4_ProjectionMatrix(float fovx, float fovy, float neard, float fard, q
 	out[7] = 0;
 	out[11] = -1;
 	out[15] = 0;
+}
+
+/*
+=============
+RayVsBox
+
+Ray-box intersection test using the slab method.
+org: ray origin
+delta: ray vector from origin to end point
+mins, maxs: box bounds
+frac: output parameter for the hit fraction along delta (0..1)
+Returns true if the ray segment intersects the box.
+=============
+*/
+qboolean RayVsBox (const vec3_t org, const vec3_t delta, const vec3_t mins, const vec3_t maxs, float *frac)
+{
+	int i;
+	float enter = 0.0f;
+	float exit = 1.0f;
+
+	if (frac)
+		*frac = 1.0f;
+
+	for (i = 0; i < 3; i++)
+	{
+		if (fabsf(delta[i]) < 1e-6f)
+		{
+			if (org[i] < mins[i] || org[i] > maxs[i])
+				return false;
+			continue;
+		}
+
+		{
+			const float invdelta = 1.0f / delta[i];
+			const float t0 = (mins[i] - org[i]) * invdelta;
+			const float t1 = (maxs[i] - org[i]) * invdelta;
+			const float tmin = q_min(t0, t1);
+			const float tmax = q_max(t0, t1);
+
+			enter = q_max(enter, tmin);
+			exit = q_min(exit, tmax);
+		}
+
+		if (enter > exit)
+			return false;
+	}
+
+	if (frac)
+		*frac = enter;
+
+	return true;
 }

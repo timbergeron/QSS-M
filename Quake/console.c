@@ -3798,6 +3798,7 @@ qboolean CompleteImageList (const char* partial, void* unused); // woods
 qboolean CompleteImageDump (const char* partial, void* unused); // woods
 qboolean CompleteSoundList (const char* partial, void* unused); // woods
 qboolean CompleteGive (const char* partial, void* unused); // woods #give+
+qboolean CompleteMapSize (const char *partial, void *unused);
 
 typedef struct arg_completion_type_s // woods #iwtabcomplete
 {
@@ -3868,7 +3869,8 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "record",					CompleteRecord,			NULL },
 	{ "save",					CompleteSave,			NULL },
 	{ "load",					CompleteLoad,			NULL },
-	{ "give",					CompleteGive,			NULL }
+	{ "give",					CompleteGive,			NULL },
+	{ "mapsize",				CompleteMapSize,		NULL }
 };
 
 static const int num_arg_completion_types =

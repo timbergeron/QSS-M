@@ -106,7 +106,7 @@ cvar_t	r_clearcolor = {"r_clearcolor","2",CVAR_ARCHIVE};
 cvar_t	r_drawflat = {"r_drawflat","0",CVAR_NONE};
 cvar_t	r_flatlightstyles = {"r_flatlightstyles", "0", CVAR_NONE};
 cvar_t	gl_fullbrights = {"gl_fullbrights", "1", CVAR_ARCHIVE};
-cvar_t	gl_farclip = {"gl_farclip", "16384", CVAR_ARCHIVE};
+cvar_t	gl_farclip = {"gl_farclip", "65536", CVAR_ARCHIVE};
 cvar_t	gl_overbright = {"gl_overbright", "1", CVAR_ARCHIVE};
 cvar_t	gl_caustics = {"gl_caustics", ".5", CVAR_ARCHIVE}; // woods #caustics
 cvar_t	gl_overbright_models = {"gl_overbright_models", "1", CVAR_ARCHIVE};
@@ -116,6 +116,7 @@ cvar_t	r_oldskyleaf = {"r_oldskyleaf", "0", CVAR_NONE};
 cvar_t	r_drawworld = {"r_drawworld", "1", CVAR_NONE};
 cvar_t	r_showtris = {"r_showtris", "0", CVAR_NONE};
 cvar_t	r_showbboxes = {"r_showbboxes", "0", CVAR_NONE};
+cvar_t	r_showfields = {"r_showfields", "0", CVAR_NONE}; // 0=off; 1=bottom-right; 2=track focused entity
 cvar_t	r_showlocs = {"r_showlocs", "0", CVAR_ARCHIVE}; // woods #locext
 cvar_t	r_showlocs_y = {"r_showlocs_y", "30", CVAR_ARCHIVE }; // woods #locext
 cvar_t	r_lerpmodels = {"r_lerpmodels", "1", CVAR_ARCHIVE};
@@ -153,6 +154,8 @@ qboolean r_drawflat_cheatsafe, r_fullbright_cheatsafe, r_lightmap_cheatsafe, r_d
 
 cvar_t	r_scale = {"r_scale", "1", CVAR_ARCHIVE};
 cvar_t	r_ambient = {"r_ambient", "0", CVAR_ARCHIVE}; // woods #rambient
+
+edict_t *bbox_focus = NULL;
 
 void LaserSight(void);
 
@@ -1307,6 +1310,62 @@ static qboolean R_ShowBoundingBoxesFilter(edict_t* ed)
 	return false;
 }
 
+static qboolean R_DebugIsPointEntity(edict_t *ed)
+{
+	return VectorCompare(ed->v.mins, ed->v.maxs);
+}
+
+static void R_GetEdictDebugBounds(edict_t *ed, vec3_t mins, vec3_t maxs)
+{
+	if ((ed->v.solid == SOLID_BSP || ed->v.solid == SOLID_EXT_BSPTRIGGER)
+		&& (ed->v.angles[0] || ed->v.angles[1] || ed->v.angles[2])
+		&& pr_checkextension.value)
+	{
+		VectorCopy(ed->v.absmin, mins);
+		VectorCopy(ed->v.absmax, maxs);
+		return;
+	}
+
+	if (R_DebugIsPointEntity(ed))
+	{
+		mins[0] = ed->v.origin[0] - 8.0f;
+		mins[1] = ed->v.origin[1] - 8.0f;
+		mins[2] = ed->v.origin[2] - 8.0f;
+		maxs[0] = ed->v.origin[0] + 8.0f;
+		maxs[1] = ed->v.origin[1] + 8.0f;
+		maxs[2] = ed->v.origin[2] + 8.0f;
+		return;
+	}
+
+	VectorAdd(ed->v.mins, ed->v.origin, mins);
+	VectorAdd(ed->v.maxs, ed->v.origin, maxs);
+}
+
+static qboolean R_ShouldShowDebugEdict(edict_t *ed, edict_t *sv_player, byte *pvs, vec3_t mins, vec3_t maxs)
+{
+	if (ed == sv_player || ed->free)
+		return false;
+
+	if (!R_ShowBoundingBoxesFilter(ed))
+		return false;
+
+	R_GetEdictDebugBounds(ed, mins, maxs);
+	if (R_CullBox(mins, maxs))
+		return false;
+
+	if (pvs)
+	{
+		qboolean inpvs =
+			ed->num_leafs ?
+			SV_EdictInPVS(ed, pvs) :
+			SV_BoxInPVS(mins, maxs, pvs, qcvm->worldmodel->nodes);
+		if (!inpvs)
+			return false;
+	}
+
+	return true;
+}
+
 /*
 ================
 R_ShowBoundingBoxes -- johnfitz
@@ -1319,12 +1378,17 @@ void R_ShowBoundingBoxes (void)
 	extern		edict_t *sv_player;
 	byte		*pvs; // woods #iwshowbboxes
 	vec3_t		mins,maxs;
+	vec3_t		raydelta;
 	edict_t		*ed;
 	int			i, mode; // woods #iwshowbboxes
 	uint32_t	color; // woods #iwshowbboxes
 	qcvm_t 		*oldvm;	//in case we ever draw a scene from within csqc.
+	float		dist, bestdist;
 
-	if (!r_showbboxes.value || cl.maxclients > 1 || !r_drawentities.value || !sv.active)
+	bbox_focus = NULL;
+
+	mode = abs((int)r_showbboxes.value); // woods #iwshowbboxes
+	if ((!mode && !r_showfields.value) || cl.maxclients > 1 || !r_drawentities.value || !sv.active || !sv_player)
 		return;
 
 	glDisable (GL_DEPTH_TEST);
@@ -1332,13 +1396,14 @@ void R_ShowBoundingBoxes (void)
 	GL_PolygonOffset (OFFSET_SHOWTRIS);
 	glDisable (GL_TEXTURE_2D);
 	glDisable (GL_CULL_FACE);
+	glEnable (GL_BLEND);
+	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 	oldvm = qcvm;
 	PR_SwitchQCVM(NULL);
 	PR_SwitchQCVM(&sv.qcvm);
 
-	mode = abs((int)r_showbboxes.value); // woods #iwshowbboxes
-	if (mode >= 2)
+	if (mode >= 2 || mode == 0)
 	{
 		vec3_t org;
 		VectorAdd(sv_player->v.origin, sv_player->v.view_ofs, org);
@@ -1347,71 +1412,70 @@ void R_ShowBoundingBoxes (void)
 	else
 		pvs = NULL;
 
+	VectorScale(vpn, gl_farclip.value, raydelta);
+	bestdist = FLT_MAX;
+
 	for (i=1, ed=NEXT_EDICT(qcvm->edicts) ; i<qcvm->num_edicts ; i++, ed=NEXT_EDICT(ed))
 	{
-		if (ed == sv_player || ed->free)
-			continue; //don't draw player's own bbox or freed edicts
-
-//		if (r_showbboxes.value != 2)
-//			if (!SV_VisibleToClient (sv_player, ed, sv.worldmodel))
-//				continue; //don't draw if not in pvs
-
-		if (!R_ShowBoundingBoxesFilter(ed))
+		if (!R_ShouldShowDebugEdict(ed, sv_player, pvs, mins, maxs))
 			continue;
 
-		if (pvs) // woods #iwshowbboxes
+		if (RayVsBox(r_origin, raydelta, mins, maxs, &dist) && dist > 0.0f && dist < bestdist)
 		{
-			qboolean inpvs =
-				ed->num_leafs ?
-				SV_EdictInPVS(ed, pvs) :
-				SV_BoxInPVS(ed->v.absmin, ed->v.absmax, pvs, qcvm->worldmodel->nodes)
-				;
-			if (!inpvs)
-				continue;
+			bestdist = dist;
+			bbox_focus = ed;
 		}
+	}
 
-		if (r_showbboxes.value > 0.f) // woods #iwshowbboxes
+	for (i=1, ed=NEXT_EDICT(qcvm->edicts) ; i<qcvm->num_edicts ; i++, ed=NEXT_EDICT(ed))
+	{
+		if (!R_ShouldShowDebugEdict(ed, sv_player, pvs, mins, maxs))
+			continue;
+
+		if (ed == bbox_focus)
+		{
+			color = 0xffffffff;
+		}
+		else if (r_showbboxes.value > 0.f) // woods #iwshowbboxes
 		{
 			int modelindex = (int)ed->v.modelindex;
-			color = 0xff800080;
+			color = 0x7f800080;
 			if (modelindex >= 0 && modelindex < MAX_MODELS && sv.models[modelindex])
 			{
 				switch (sv.models[modelindex]->type)
 				{
-				case mod_brush:  color = 0xffff8080; break;
-				case mod_alias:  color = 0xff408080; break;
-				case mod_sprite: color = 0xff4040ff; break;
+				case mod_brush:  color = 0x7fff8080; break;
+				case mod_alias:  color = 0x7f408080; break;
+				case mod_sprite: color = 0x7f4040ff; break;
 				default:
 					break;
 				}
 			}
 			if (ed->v.health > 0)
-				color = 0xff0000ff;
+				color = 0x7f0000ff;
+		}
+		else if (r_showbboxes.value < 0.f)
+		{
+			color = 0x7fffffff;
 		}
 		else
-			color = 0xffffffff;
-
-		if (ed->v.mins[0] == ed->v.maxs[0] && ed->v.mins[1] == ed->v.maxs[1] && ed->v.mins[2] == ed->v.maxs[2])
 		{
-			//point entity
+			color = 0x5f7f7f7f;
+		}
+
+		if (R_DebugIsPointEntity(ed))
+		{
 			R_EmitWirePoint (ed->v.origin, color); // woods #iwshowbboxes
 		}
 		else
 		{
-			//box entity
-			if ((ed->v.solid == SOLID_BSP || ed->v.solid == SOLID_EXT_BSPTRIGGER) && (ed->v.angles[0]||ed->v.angles[1]||ed->v.angles[2]) && pr_checkextension.value)
-				R_EmitWireBox (ed->v.absmin, ed->v.absmax, color); // woods #iwshowbboxes
-			else
-			{
-				VectorAdd (ed->v.mins, ed->v.origin, mins);
-				VectorAdd (ed->v.maxs, ed->v.origin, maxs);
-				R_EmitWireBox (mins, maxs, color); // woods #iwshowbboxes
-			}
+			R_EmitWireBox (mins, maxs, color); // woods #iwshowbboxes
 		}
 	}
 	PR_SwitchQCVM(NULL);
 	PR_SwitchQCVM(oldvm);
 
+	glDisable (GL_BLEND);
 	glEnable (GL_TEXTURE_2D);
 	glEnable (GL_CULL_FACE);
 	glPolygonMode (GL_FRONT_AND_BACK, GL_FILL);

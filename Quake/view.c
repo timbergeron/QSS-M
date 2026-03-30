@@ -1195,6 +1195,13 @@ void V_CalcRefdef (void)
 		else if (scr_viewsize.value == 80)
 			view->origin[2] += 0.5;
 	}
+	if (ent->lerpflags & LERP_FINISH)
+	{
+		view->lerpflags |= LERP_FINISH;
+		view->lerpfinish = ent->lerpfinish;
+	}
+	else
+		view->lerpflags &= ~LERP_FINISH;
 
 	V_CalcGunDrift (view->origin, view->angles); // woods #gdrift
 
@@ -1397,4 +1404,3 @@ void V_Init (void)
 	Cvar_RegisterVariable (&r_viewmodel_quake); //MarkV
 	Cvar_RegisterVariable (&cl_demo_eyecam); // woods #demoeyecam
 }
-

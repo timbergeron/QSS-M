@@ -47,6 +47,7 @@ enum m_state_e {
 	m_console,
 	m_colorpicker,
 	m_extras,
+	m_version,
 	m_startup,
 	m_demooptions,
 	m_pakloading,
@@ -70,6 +71,22 @@ extern enum m_state_e m_return_state;
 
 extern qboolean m_entersound;
 extern qboolean crosshair_menu;
+
+enum versiongithubstate_e {
+	VERSIONGITHUB_IDLE,
+	VERSIONGITHUB_LOADING,
+	VERSIONGITHUB_READY,
+	VERSIONGITHUB_ERROR
+};
+
+typedef struct
+{
+	int			state;
+	int			comparison;
+	char		version[64];
+	char		detail[16];
+	char		error[96];
+} versionremoteinfo_t;
 
 //
 // menus
@@ -102,6 +119,9 @@ qboolean M_TextField_IsDraggingField(const menu_textfield_t *tf);
 qboolean M_TextField_IsDraggingAny(void);
 void M_TextField_DrawHighlight(menu_textfield_t *tf, int x, int y);
 void M_TextField_DrawCursor(menu_textfield_t *tf, int x, int y);
+void M_Version_StartGitHubFetch(void);
+void M_Version_GetGitHubInfo(versionremoteinfo_t *release, versionremoteinfo_t *commit);
+qboolean M_Version_WaitForGitHubInfo(versionremoteinfo_t *release, versionremoteinfo_t *commit, Uint32 timeout_ms);
 #if defined(_WIN32) // woods #disablecaps via ironwail
 qboolean M_KeyBinding(void);
 #endif
