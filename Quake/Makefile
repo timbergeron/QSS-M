@@ -16,6 +16,9 @@ USE_ZLIB=1
 ### Enable the use of gnutls, for dtls/wss(tls) support
 USE_GNUTLS=1
 
+### Do we need to link the math library?
+LINK_M ?= 1
+
 ### Enable/Disable codecs for streaming music support
 USE_CODEC_WAVE=1
 USE_CODEC_FLAC=0
