@@ -4110,10 +4110,6 @@ static trailstate_t *P_NewTrailstate(trailstate_t **key)
 	return ts;
 }
 
-#define NUMVERTEXNORMALS	162
-static float	r_avertexnormals[NUMVERTEXNORMALS][3] = {
-#include "anorms.h"
-};
 static vec2_t	avelocities[NUMVERTEXNORMALS];
 #define BEAMLENGTH 16
 // vec3_t	avelocity = {23, 7, 3};
