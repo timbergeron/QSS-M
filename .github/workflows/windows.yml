@@ -355,7 +355,7 @@ jobs:
 
         unzip -q "Quake/${package_name}.zip" -d "$package_root"
 
-        cp "Quake/build-${{ matrix.platform }}.log" "$log_root/"
+        cp "build-${{ matrix.platform }}.log" "$log_root/"
         for log_name in \
           build-gmp.log \
           build-nettle.log \
