@@ -521,8 +521,8 @@ handleerror:
 					}
 					if (cl >= 0 && cl < b->numclients)
 					{
-						if (b->clients[cl].isnew)
-						{	//erk? don't leak
+						if (b->clients[cl].ice)
+						{	//close any existing state (stale connection or probe)
 							iceapi.Close(b->clients[cl].ice, true);
 							b->clients[cl].ice = NULL;
 						}
@@ -691,7 +691,7 @@ handleerror:
 				char relay[MAX_QPATH];
 				const char *s;
 				struct icestate_s *probe;
-				unsigned int modeflags = ICEF_ALLOW_PROBE | ICEF_ALLOW_STUN;
+				unsigned int modeflags = ICEF_ALLOW_PROBE | ICEF_ALLOW_STUN | ICEF_ALLOW_WEBRTC;
 
 				Buf_ReadString(&data, msgbuf+len, peer, sizeof(peer));
 				Buf_ReadString(&data, msgbuf+len, relay, sizeof(relay));
@@ -728,7 +728,8 @@ handleerror:
 						b->clients[cl].ice = probe;
 						b->clients[cl].isnew = false;	//not a real connection
 
-						iceapi.Set(probe, "brokerless", "1");	//auto-cleanup on timeout
+						//set to GATHERING so ICE_Tick doesn't destroy it before the offer arrives
+						iceapi.Set(probe, "state", STRINGIFY(ICE_GATHERING));
 
 						//add STUN servers
 						iceapi.Set(probe, "server", va("stun:%s:%i", b->brokername, b->brokerport));
