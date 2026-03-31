@@ -43,6 +43,9 @@ enum icemsgtype_s
 	ICEMSG_SERVERINFO=6,//server->broker (for advertising the server properly)
 	ICEMSG_SERVERUPDATE=7,//broker->browser (for querying available server lists)
 	ICEMSG_NAMEINUSE=8,	//requested resource is unavailable.
+  ICEMSG_SERVERDETAILS_REQUEST = 9,// Broker → server: request full server details (players, scores, rules) */
+  ICEMSG_SERVERDETAILS_RESPONSE = 10, // Server → broker: response with full server details */
+  ICEMSG_PROBE = 11,		// Broker → server: lightweight ICE probe for latency measurement (no DTLS/SCTP)
 };
 
 #define CVAR_NOTFROMSERVER 0 //FIXME
@@ -618,6 +621,129 @@ handleerror:
 #ifdef HAVE_JSON
 			JSON_Destroy(json);
 #endif
+			break;
+		case ICEMSG_SERVERDETAILS_REQUEST:
+			if (b->isserver)
+			{
+				char buf[8192];
+				int ofs = QICE_PrepareBrokerFrame(ICEMSG_SERVERDETAILS_RESPONSE, cl, buf);
+				int i, j;
+
+				//server info (same as getstatus infostring)
+				Datagram_GenerateGetInfoString(buf+ofs, sizeof(buf)-ofs);
+				ofs += strlen(buf+ofs);
+
+				//player list: one line per player "\nfrags ping colors "name" address"
+				for (i = 0; i < svs.maxclients; i++)
+				{
+					if (svs.clients[i].active)
+					{
+						float total = 0;
+						const char *addr;
+
+						for (j = 0; j < NUM_PING_TIMES; j++)
+							total += svs.clients[i].ping_times[j];
+						total /= NUM_PING_TIMES;
+						total *= 1000;	//ms
+
+						if (svs.clients[i].netconnection)
+						{
+							//mask IP like Host_Status_f: x.x.x.xxx for IPv4
+							const char *fulladdr = NET_QSocketGetTrueAddressString(svs.clients[i].netconnection);
+							static char masked[64];
+							int a, b, c;
+							if (sscanf(fulladdr, "%d.%d.%d", &a, &b, &c) == 3)
+								q_snprintf(masked, sizeof(masked), "%d.%d.%d.xxx", a, b, c);
+							else
+								q_strlcpy(masked, fulladdr, sizeof(masked));
+							addr = masked;
+						}
+						else
+							addr = "botclient";
+
+						ofs += q_snprintf(buf+ofs, sizeof(buf)-ofs, "\n%i %i %i_%i \"%s\" %s",
+							svs.clients[i].old_frags, (int)total,
+							svs.clients[i].colors & 15, svs.clients[i].colors >> 4,
+							svs.clients[i].name, addr);
+					}
+				}
+
+				//rules: "\nrule=value" for each CVAR_SERVERINFO cvar
+				{
+					cvar_t *var;
+					ofs += q_snprintf(buf+ofs, sizeof(buf)-ofs, "\n");
+					for (var = Cvar_FindVarAfter("", CVAR_SERVERINFO); var; var = Cvar_FindVarAfter(var->name, CVAR_SERVERINFO))
+					{
+						ofs += q_snprintf(buf+ofs, sizeof(buf)-ofs, "\\%s\\%s", var->name, var->string);
+						if (ofs >= (int)sizeof(buf) - 64)
+							break;
+					}
+				}
+
+				QICE_SendBrokerFrame(b, buf);
+			}
+			break;
+		case ICEMSG_PROBE:
+			//lightweight ICE probe for latency measurement — no DTLS/SCTP, short timeout
+			if (b->isserver)
+			{
+				char peer[MAX_QPATH];
+				char relay[MAX_QPATH];
+				const char *s;
+				struct icestate_s *probe;
+				unsigned int modeflags = ICEF_ALLOW_PROBE | ICEF_ALLOW_STUN;
+
+				Buf_ReadString(&data, msgbuf+len, peer, sizeof(peer));
+				Buf_ReadString(&data, msgbuf+len, relay, sizeof(relay));
+
+				if (net_ice_allowmdns.value)
+					modeflags |= ICEF_ALLOW_MDNS;
+				if (net_ice_debug.value)
+					modeflags |= ICEF_VERBOSE;
+				if (net_ice_debug.value >= 2)
+					modeflags |= ICEF_VERBOSE_PROBE;
+
+				if (cl < 1024 && cl >= b->numclients)
+				{
+					void *n = realloc(b->clients, sizeof(b->clients[0])*(cl+1));
+					if (!n)
+						break;
+					b->clients = n;
+					memset(b->clients+b->numclients, 0, sizeof(b->clients[0]) * ((cl+1) - b->numclients));
+					b->numclients = cl+1;
+				}
+				if (cl >= 0 && cl < b->numclients)
+				{
+					if (b->clients[cl].ice)
+					{
+						iceapi.Close(b->clients[cl].ice, true);
+						b->clients[cl].ice = NULL;
+					}
+
+					probe = iceapi.Create(&b->icemodule, NULL,
+						(*peer) ? va("%s:%i", peer, cl) : NULL,
+						modeflags, ICEP_SERVER);
+					if (probe)
+					{
+						b->clients[cl].ice = probe;
+						b->clients[cl].isnew = false;	//not a real connection
+
+						iceapi.Set(probe, "brokerless", "1");	//auto-cleanup on timeout
+
+						//add STUN servers
+						iceapi.Set(probe, "server", va("stun:%s:%i", b->brokername, b->brokerport));
+						for (s = relay; (s=COM_Parse(s)); )
+							iceapi.Set(probe, "server", com_token);
+						s = net_ice_servers.string;
+						while ((s=COM_Parse(s)))
+							iceapi.Set(probe, "server", com_token);
+
+						if (net_ice_debug.value)
+							Con_Printf(S_COLOR_GRAY"[%s]: ICE probe from %s\n", ICE_GetConnName(probe), peer);
+					}
+				}
+				result = true;
+			}
 			break;
 		default:
 			if (net_ice_debug.value)
