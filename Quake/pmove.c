@@ -732,7 +732,7 @@ void PM_AirMove (void)
 		int blocked;
 
 		// not on ground, so little effect on velocity
-		PM_AirAccelerate (wishdir, wishspeed, movevars.accelerate);
+		PM_AirAccelerate (wishdir, wishspeed, (movevars.flags&MOVEFLAG_USEAIRACCEL)?movevars.airaccelerate:movevars.accelerate);
 
 		// add gravity
 		VectorMA(pmove.velocity, movevars.entgravity * movevars.gravity * frametime, pmove.gravitydir, pmove.velocity);

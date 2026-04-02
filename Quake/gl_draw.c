@@ -35,6 +35,7 @@ qpic_t		*draw_disc;
 qpic_t		*draw_backtile;
 qboolean	custom_conchars; // woods (iw) #democontrols
 
+qboolean	char_hexen2;	//wider, iso8859-1 with padding.
 gltexture_t *char_texture; //johnfitz
 qpic_t		*pic_ovr, *pic_ins; //johnfitz -- new cursor handling
 qpic_t		*pic_nul; //johnfitz -- for missing gfx, don't crash
@@ -470,6 +471,8 @@ void Draw_LoadPics (void)
 	else
 		draw_load24bit = false;
 
+	char_hexen2 = false;
+	custom_conchars = false;
 	char_texture = NULL;
 	//logical path
 	if (!char_texture)
@@ -477,9 +480,18 @@ void Draw_LoadPics (void)
 	//stupid quakeworldism
 	if (!char_texture)
 		char_texture = draw_load24bit?TexMgr_LoadImage (NULL, WADFILENAME":conchars", 0, 0, SRC_EXTERNAL, NULL, "charsets/conchars", 0, conchar_texflags | TEXPREF_MIPMAP | TEXPREF_ALLOWMISSING):NULL; // woods enable TEXPREF_MIPMAP
-	
+
 	custom_conchars = (char_texture != NULL); // woods (iw) #democontrols
-	
+
+	if (!char_texture)
+	{
+		data = COM_LoadTempFile ("gfx/menu/conchars.lmp", NULL);
+		if (data)
+			char_texture = draw_load24bit?TexMgr_LoadImage (NULL, WADFILENAME":conchars", 256, 128, SRC_INDEXED, data, "gfx/menu/conchars", 0, conchar_texflags | TEXPREF_ALLOWMISSING):NULL;
+		char_hexen2 = !!char_texture;
+	}
+
+	custom_conchars = (char_texture != NULL); // includes Hexen2 fallback for UI glyph selection
 	//vanilla.
 	if (!char_texture)
 	{
@@ -585,22 +597,35 @@ Draw_CharacterQuad -- johnfitz -- seperate function to spit out verts
 void Draw_CharacterQuad (int x, int y, char num)
 {
 	int				row, col;
-	float			frow, fcol, size;
+	float			frow, fcol, xsize, ysize;
 
-	row = num>>4;
-	col = num&15;
+	if (char_hexen2)
+	{
+		row = (byte)num>>5;
+		col = (byte)num&31;
+		if (row >= 4)	//urgh... haxx...
+			row += 8-4;
 
-	frow = row*0.0625;
-	fcol = col*0.0625;
-	size = 0.0625;
+		xsize = 1.0/32;
+		ysize = 1.0/16;
+	}
+	else
+	{
+		row = num>>4;
+		col = num&15;
+
+		xsize = ysize = 0.0625;
+	}
+	frow = row*ysize;
+	fcol = col*xsize;
 
 	glTexCoord2f (fcol, frow);
 	glVertex2f (x, y);
-	glTexCoord2f (fcol + size, frow);
+	glTexCoord2f (fcol + xsize, frow);
 	glVertex2f (x+8, y);
-	glTexCoord2f (fcol + size, frow + size);
+	glTexCoord2f (fcol + xsize, frow + ysize);
 	glVertex2f (x+8, y+8);
-	glTexCoord2f (fcol, frow + size);
+	glTexCoord2f (fcol, frow + ysize);
 	glVertex2f (x, y+8);
 }
 
@@ -838,7 +863,7 @@ static qboolean Draw_ComputeConcharsCharColor(plcolour_t* result, int char_index
 
 	if (format == SRC_INDEXED)
 	{
-		if (!custom_conchars)
+		if (!custom_conchars || char_hexen2)
 			return false;
 
 		size_t expected_size = (size_t)width * height;
@@ -1617,7 +1642,7 @@ Draw_Pic -- johnfitz -- modified
 void Draw_Pic (int x, int y, qpic_t *pic)
 {
 	if (!pic) return; // woods (iw) #democontrols
-	
+
 	glpic_t			*gl;
 
 	if (scrap_dirty)
@@ -1871,13 +1896,13 @@ void Draw_ConsoleBackground (void)
 	static char      last_conback[MAX_QPATH] = "";
 	static qboolean  reported_missing = false;
 	static qboolean  reported_blocked = false; /* scr_conback ignored due to gl_load24bit 0 */
-
 	float alpha;
 	plcolour_t conback_color;
 	const char* conback_str = scr_concolor.string;
 	float r, g, b;
 	byte* rgb_temp;
 	byte  rgb[3];
+	int use_default;
 
 	/* Parse the scr_concolor cvar. */
 	conback_color = CL_PLColours_Parse(conback_str);
@@ -1889,125 +1914,135 @@ void Draw_ConsoleBackground (void)
 		reported_blocked = false;
 	}
 
-	/* Decide between image path vs solid fill. */
-	{
-		int use_default =
-			(conback_color.type == 0) ||
+	use_default =
+		(conback_color.type == 0) ||
 		(conback_color.type == 2 &&
 			conback_color.rgb[0] == 0xFF &&
 			conback_color.rgb[1] == 0xFF &&
-				conback_color.rgb[2] == 0xFF);
+			conback_color.rgb[2] == 0xFF);
 
 	GL_SetCanvas (CANVAS_CONSOLE); // Ensure we're drawing on the console canvas
 
 	alpha = (con_forcedup) ? 1.0f : scr_conalpha.value;
-		if (alpha <= 0.0f)
-			return;
+	if (alpha <= 0.0f)
+		return;
 
-		if (use_default) {
-			qpic_t* pic = NULL;
+	if (use_default)
+	{
+		qpic_t *pic = NULL;
 
-			/* Decide whether the user override is allowed. */
-			qboolean allow_user_img = false;
-			if (scr_conback.string[0]) {
-				const char* ext = COM_FileGetExtension(scr_conback.string);
-				if (ext && !q_strcasecmp(ext, "lmp")) {
-					allow_user_img = true;        /* always allow .lmp */
-				}
-				else if (draw_load24bit) {      /* global hi‑res allowed? */
-					allow_user_img = true;
-				}
-				else if (!reported_blocked) {
-					Con_Printf("Console background ignored: gl_load24bit is 0 (only .lmp allowed).\n");
-					reported_blocked = true;
+		/* Decide whether the user override is allowed. */
+		qboolean allow_user_img = false;
+		if (scr_conback.string[0])
+		{
+			const char *ext = COM_FileGetExtension(scr_conback.string);
+			if (ext && !q_strcasecmp(ext, "lmp"))
+			{
+				allow_user_img = true; /* always allow .lmp */
+			}
+			else if (draw_load24bit)
+			{
+				allow_user_img = true; /* global hi-res allowed? */
+			}
+			else if (!reported_blocked)
+			{
+				Con_Printf("Console background ignored: gl_load24bit is 0 (only .lmp allowed).\n");
+				reported_blocked = true;
+			}
+		}
+
+		/* Try user-specified override first (if allowed & non-empty). */
+		if (allow_user_img)
+		{
+			char path[MAX_QPATH];
+			char temp_path[MAX_QPATH];
+			char base_path[MAX_QPATH];   /* original user string */
+			char base_nopfx[MAX_QPATH];  /* ext stripped copy    */
+			static const char *ext_full[] = { ".png", ".tga", ".jpg", ".jpeg", ".dds", ".pcx", ".lmp" };
+			static const char *ext_lmp[] = { ".lmp" };
+			const char **extensions = draw_load24bit ? ext_full : ext_lmp;
+			int num_extensions = draw_load24bit ? (int)Q_COUNTOF(ext_full) : 1;
+			int i;
+			qboolean found_file = false;
+
+			q_strlcpy(temp_path, scr_conback.string, sizeof(temp_path));
+			q_strlcpy(base_path, scr_conback.string, sizeof(base_path));
+			q_strlcpy(base_nopfx, scr_conback.string, sizeof(base_nopfx));
+
+			/* If user gave extension, try exactly that. */
+			if (COM_FileGetExtension(temp_path))
+			{
+				if (!Q_strncmp(temp_path, "gfx/", 4))
+					q_strlcpy(path, temp_path, sizeof(path));
+				else
+					q_snprintf(path, sizeof(path), "gfx/%s", temp_path);
+
+				if (COM_FileExists(path, NULL))
+				{
+					pic = Draw_TryCachePic(path, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
+					found_file = true;
 				}
 			}
 
-			/* Try user-specified override first (if allowed & non-empty). */
-			if (allow_user_img) {
-				char path[MAX_QPATH];
-				char temp_path[MAX_QPATH];
-				char base_path[MAX_QPATH];   /* original user string */
-				char base_nopfx[MAX_QPATH];  /* ext stripped copy    */
-				static const char* ext_full[] = { ".png",".tga",".jpg",".jpeg",".dds",".pcx",".lmp" };
-				static const char* ext_lmp[] = { ".lmp" };
-				const char** extensions = draw_load24bit ? ext_full : ext_lmp;
-				int num_extensions = draw_load24bit
-					? (int)(sizeof(ext_full) / sizeof(ext_full[0]))
-					: 1;
-				int i;
-				qboolean found_file = false;
-
-				q_strlcpy(temp_path, scr_conback.string, sizeof(temp_path));
-				q_strlcpy(base_path, scr_conback.string, sizeof(base_path));
-				q_strlcpy(base_nopfx, scr_conback.string, sizeof(base_nopfx));
-
-				/* If user gave extension, try exactly that. */
-				if (COM_FileGetExtension(temp_path)) {
-					if (!Q_strncmp(temp_path, "gfx/", 4))
-						q_strlcpy(path, temp_path, sizeof(path));
+			/* No ext (or missing file)? Try allowed extensions. */
+			if (!pic)
+			{
+				COM_StripExtension(base_nopfx, base_nopfx, sizeof(base_nopfx));
+				for (i = 0; i < num_extensions && !pic; i++)
+				{
+					if (!Q_strncmp(base_nopfx, "gfx/", 4))
+						q_snprintf(path, sizeof(path), "%s%s", base_nopfx, extensions[i]);
 					else
-						q_snprintf(path, sizeof(path), "gfx/%s", temp_path);
+						q_snprintf(path, sizeof(path), "gfx/%s%s", base_nopfx, extensions[i]);
 
-					if (COM_FileExists(path, NULL)) {
+					if (COM_FileExists(path, NULL))
+					{
 						pic = Draw_TryCachePic(path, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
 						found_file = true;
+						break;
 					}
 				}
-
-				/* No ext (or missing file)? Try allowed extensions. */
-				if (!pic) {
-					COM_StripExtension(base_nopfx, base_nopfx, sizeof(base_nopfx));
-					for (i = 0; i < num_extensions && !pic; i++) {
-						if (!Q_strncmp(base_nopfx, "gfx/", 4))
-							q_snprintf(path, sizeof(path), "%s%s", base_nopfx, extensions[i]);
-						else
-							q_snprintf(path, sizeof(path), "gfx/%s%s", base_nopfx, extensions[i]);
-
-						if (COM_FileExists(path, NULL)) {
-							pic = Draw_TryCachePic(path, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
-							found_file = true;
-							break;
-						}
-					}
-				}
-
-				/* Inform user once (only when we actually searched). */
-				if (!found_file && !reported_missing) {
-					char msg[1024];
-					size_t ofs = 0;
-
-					reported_missing = true; /* guard early */
-
-					ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs,
-						"Console background file not found: %s (tried: ",
-						scr_conback.string);
-
-					if (COM_FileGetExtension(base_path)) {
-						if (!Q_strncmp(base_path, "gfx/", 4))
-							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "%s", base_path);
-						else
-							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "gfx/%s", base_path);
-					}
-					else {
-						for (i = 0; i < num_extensions; i++) {
-							if (i > 0)
-								ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, ", ");
-							if (!Q_strncmp(base_nopfx, "gfx/", 4))
-								ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "%s%s", base_nopfx, extensions[i]);
-							else
-								ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "gfx/%s%s", base_nopfx, extensions[i]);
-						}
-					}
-					q_snprintf(msg + ofs, sizeof(msg) - ofs, ")\n");
-					Con_Printf("%s", msg);
-				}
-			} /* allow_user_img */
-
-			/* Fallback: behave like scr_conback "" (use gfx/conback.lmp). */
-			if (!pic) {
-				pic = Draw_CachePic("gfx/conback.lmp");
 			}
+
+			/* Inform user once (only when we actually searched). */
+			if (!found_file && !reported_missing)
+			{
+				char msg[1024];
+				size_t ofs = 0;
+
+				reported_missing = true; /* guard early */
+
+				ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs,
+					"Console background file not found: %s (tried: ",
+					scr_conback.string);
+
+				if (COM_FileGetExtension(base_path))
+				{
+					if (!Q_strncmp(base_path, "gfx/", 4))
+						ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "%s", base_path);
+					else
+						ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "gfx/%s", base_path);
+				}
+				else
+				{
+					for (i = 0; i < num_extensions; i++)
+					{
+						if (i > 0)
+							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, ", ");
+						if (!Q_strncmp(base_nopfx, "gfx/", 4))
+							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "%s%s", base_nopfx, extensions[i]);
+						else
+							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "gfx/%s%s", base_nopfx, extensions[i]);
+					}
+				}
+				q_snprintf(msg + ofs, sizeof(msg) - ofs, ")\n");
+				Con_Printf("%s", msg);
+			}
+		}
+
+		/* Fallback to the engine default console background. */
+		if (!pic)
+			pic = Draw_CachePic(char_hexen2 ? "gfx/menu/conback.lmp" : "gfx/conback.lmp");
 
 		pic->width = vid.conwidth;
 		pic->height = vid.conheight;
@@ -2038,48 +2073,46 @@ void Draw_ConsoleBackground (void)
 			}
 			glColor4f (1,1,1,1);
 		}
+
+		return;
+	}
+
+	rgb_temp = CL_PLColours_ToRGB(&conback_color);
+
+	if (rgb_temp) // copy the RGB values to a local array to ensure safe usage
+	{
+		rgb[0] = rgb_temp[0];
+		rgb[1] = rgb_temp[1];
+		rgb[2] = rgb_temp[2];
+
+		r = rgb[0] / 255.0f;
+		g = rgb[1] / 255.0f;
+		b = rgb[2] / 255.0f;
 	}
 	else
 	{
-		rgb_temp = CL_PLColours_ToRGB(&conback_color);
-
-		if (rgb_temp) // copy the RGB values to a local array to ensure safe usage
-
-		{
-			rgb[0] = rgb_temp[0];
-			rgb[1] = rgb_temp[1];
-			rgb[2] = rgb_temp[2];
-
-			r = rgb[0] / 255.0f;
-			g = rgb[1] / 255.0f;
-			b = rgb[2] / 255.0f;
-		}
-		else
-		{
-			r = g = b = 0.0f; // fallback to black if RGB conversion fails
-		}
-
-		// Set the color with alpha
-		glColor4f(r, g, b, alpha);
-
-		// Enable blending for transparency
-		glEnable (GL_BLEND);
-		glDisable(GL_TEXTURE_2D); // Disable texture rendering
-
-		// Draw a filled quad covering the console area
-		glBegin(GL_QUADS);
-		glVertex2f(0, 0);
-		glVertex2f(vid.conwidth, 0);
-		glVertex2f(vid.conwidth, vid.conheight);
-		glVertex2f(0, vid.conheight);
-		glEnd();
-
-		// Reset OpenGL states
-		glEnable(GL_TEXTURE_2D); // Re-enable textures
-		glDisable(GL_BLEND);
-		glColor4f(1, 1, 1, 1); // Reset color
+		r = g = b = 0.0f; // fallback to black if RGB conversion fails
 	}
-}
+
+	// Set the color with alpha
+	glColor4f(r, g, b, alpha);
+
+	// Enable blending for transparency
+	glEnable (GL_BLEND);
+	glDisable(GL_TEXTURE_2D); // Disable texture rendering
+
+	// Draw a filled quad covering the console area
+	glBegin(GL_QUADS);
+	glVertex2f(0, 0);
+	glVertex2f(vid.conwidth, 0);
+	glVertex2f(vid.conwidth, vid.conheight);
+	glVertex2f(0, vid.conheight);
+	glEnd();
+
+	// Reset OpenGL states
+	glEnable(GL_TEXTURE_2D); // Re-enable textures
+	glDisable(GL_BLEND);
+	glColor4f(1, 1, 1, 1); // Reset color
 }
 
 /*

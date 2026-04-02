@@ -106,20 +106,22 @@ typedef unsigned char qbyte;
 #endif
 
 //print colouring
-#define S_COLOR_GRAY	//for info
-#define S_COLOR_GREEN	//things that are good
-#define S_COLOR_YELLOW	//things that may be an issue
-#define S_COLOR_RED		//things that are bad.
-#define CON_WARNING		//for major warnings
-#define CON_ERROR		//for even bigger warnings...
-#define CON_DEFAULT		//sets it back to white.
+#define S_COLOR_GRAY	"" //for info
+#define S_COLOR_GREEN	"" //things that are good
+#define S_COLOR_YELLOW	"" //things that may be an issue
+#define S_COLOR_RED		"" //things that are bad.
+#define CON_WARNING		"" //for major warnings
+#define CON_ERROR		"" //for even bigger warnings...
+#define CON_DEFAULT		"" //sets it back to white.
 
 #define SUPPORT_ICE		//kinda the whole point...
 #define HAVE_TURN		//enables use of TURN relays, when needed.
 #define HAVE_TCP		//kinda need this for websockets.
 #define HAVE_IPV4		//might as well...
 #define HAVE_IPV6		//when possible...
-#ifdef USE_GNUTLS
+#ifdef USE_OPENSSL
+	#define HAVE_OPENSSL
+#elif defined(USE_GNUTLS)
 	#define HAVE_GNUTLS
 #endif
 #if defined(HAVE_GNUTLS) || defined(HAVE_OPENSSL)
@@ -300,11 +302,15 @@ qboolean ICE_SetFailed(struct icestate_s *con, const char *reasonfmt, ...) LIKEP
 void ICE_Debug(struct icestate_s *con);	//prints debugging info about the connection.
 void ICE_AddRCandidateInfo(struct icestate_s *con, struct icecandinfo_s *n); //result from mdns.
 int ICE_EnumerateAddresses(struct icemodule_s *module, int *out_networks, unsigned int *out_flags, netadr_t *out_addr, const char **out_params, size_t maxresults);	//gathers all addresses from a module.
+neterr_t ICE_SendUDPPacket(struct icemodule_s *module, netadr_t *addr, const void *data, size_t datasize);
 struct icemodule_s *ICE_FindMDNS(const char *mdnsname);	//so our mdns server can find the right address info.
+void *ICE_GetUserPtr(struct icestate_s *ice);	//if you set it, be sure to free it in icemodule_s::ClosedState
+void ICE_SetUserPtr(struct icestate_s *ice, void *value);	//if you set it, be sure to free it in icemodule_s::ClosedState
 
 struct dtlslocalcred_s;
 void ICE_DePEM(struct dtlslocalcred_s *cred);
 size_t Base64_EncodeBlock(const qbyte *in, size_t length, char *out, size_t outsize);
+size_t Base64_EncodeBlockURI(const qbyte *in, size_t length, char *out, size_t outsize);
 
 typedef struct
 {

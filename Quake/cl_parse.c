@@ -510,7 +510,7 @@ static unsigned int CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, c
 			/*news->abslight =*/ MSG_ReadByte();
 		//else
 		//	news->abslight = 0;
-		//news->drawflags = drawflags;
+		news->drawflags = drawflags;
 	}
 	if (bits & UF_TAGINFO)
 	{
@@ -4070,6 +4070,7 @@ void CL_ParseServerMessage (void)
 {
 	int			cmd;
 	int			i;
+	int			j;
 	const char		*str; //johnfitz
 	int			lastcmd; //johnfitz
 	const char*		s;	// woods #pqteam
@@ -4270,15 +4271,18 @@ void CL_ParseServerMessage (void)
 		case svc_updatename:
 			Sbar_Changed ();
 			i = MSG_ReadByte ();
+			str = MSG_ReadString();
 			if (cl.maxclients <= 0) // woods - serverinfo not received yet, consume args so buffer stays aligned
 			{
-				MSG_ReadString();
 				Con_DPrintf("Skipped early svc_updatename (slot %d) before serverinfo\n", i);
 				break;
 			}
 			if (i >= cl.maxclients)
-				Host_Error ("CL_ParseServerMessage: svc_updatename (%u) > MAX_SCOREBOARD (%u)", i, cl.maxclients); // woods - temporary? fix for connection issue
-			q_strlcpy (cl.scores[i].name, MSG_ReadString(), MAX_SCOREBOARDNAME);
+			{
+				Con_DPrintf("Ignored svc_updatename for invalid slot %d (maxclients %d)\n", i, cl.maxclients);
+				break;
+			}
+			q_strlcpy (cl.scores[i].name, str, MAX_SCOREBOARDNAME);
 			if (cl.scores[i].name[0])
 				Info_SetKey(cl.scores[i].userinfo, sizeof(cl.scores[i].userinfo), "name", cl.scores[i].name);
 			else
@@ -4289,29 +4293,35 @@ void CL_ParseServerMessage (void)
 		case svc_updatefrags:
 			Sbar_Changed ();
 			i = MSG_ReadByte ();
+			j = MSG_ReadShort();
 			if (cl.maxclients <= 0) // woods - serverinfo not received yet, consume args so buffer stays aligned
 			{
-				MSG_ReadShort();
 				Con_DPrintf("Skipped early svc_updatefrags (slot %d) before serverinfo\n", i);
 				break;
 			}
 			if (i >= cl.maxclients)
-				Host_Error ("CL_ParseServerMessage: svc_updatefrags > MAX_SCOREBOARD");
-			cl.scores[i].frags = MSG_ReadShort ();
+			{
+				Con_DPrintf("Ignored svc_updatefrags for invalid slot %d (maxclients %d)\n", i, cl.maxclients);
+				break;
+			}
+			cl.scores[i].frags = j;
 			break;
 
 		case svc_updatecolors:
 			Sbar_Changed ();
 			i = MSG_ReadByte ();
+			j = MSG_ReadByte ();
 			if (cl.maxclients <= 0) // woods - serverinfo not received yet, consume args so buffer stays aligned
 			{
-				MSG_ReadByte();
 				Con_DPrintf("Skipped early svc_updatecolors (slot %d) before serverinfo\n", i);
 				break;
 			}
 			if (i >= cl.maxclients)
-				Host_Error ("CL_ParseServerMessage: svc_updatecolors > MAX_SCOREBOARD");
-			CL_NewTranslation (i, MSG_ReadByte());
+			{
+				Con_DPrintf("Ignored svc_updatecolors for invalid slot %d (maxclients %d)\n", i, cl.maxclients);
+				break;
+			}
+			CL_NewTranslation (i, j);
 			Info_SetKey(cl.scores[i].userinfo, sizeof(cl.scores[i].userinfo), "topcolor", va("%d", cl.scores[i].shirt.basic));
 			Info_SetKey(cl.scores[i].userinfo, sizeof(cl.scores[i].userinfo), "bottomcolor", va("%d", cl.scores[i].pants.basic));
 			break;

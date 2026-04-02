@@ -23,7 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
-int		type_size[ev_ext_double + 1] = {
+const int	type_size[ev_ext_double + 1] = {
 	1,					// ev_void
 	1,	// sizeof(string_t) / 4		// ev_string
 	1,					// ev_float
@@ -1342,6 +1342,8 @@ void ED_LoadFromFile (const char *data)
 			continue;
 		}
 
+		SV_ReserveSignonSpace (512);
+
 		pr_global_struct->self = EDICT_TO_PROG(ent);
 		PR_ExecuteProgram (func - qcvm->functions);
 	}
@@ -1501,7 +1503,7 @@ qboolean PR_LoadProgs (const char *filename, qboolean fatal, unsigned int needcr
 			Host_Error ("%s has wrong version number (%i should be %i)", filename, qcvm->progs->version, PROG_VERSION);
 		else
 		{
-			Con_Printf("%s ABI set not supported\n", filename);
+			Con_Warning("%s ABI set not supported\n", filename);
 			qcvm->progs = NULL;
 			return false;
 		}
@@ -1515,7 +1517,7 @@ qboolean PR_LoadProgs (const char *filename, qboolean fatal, unsigned int needcr
 			switch(qcvm->progs->crc)
 			{
 			case 22390:	//full csqc
-				Con_Printf("%s - full csqc is not supported\n", filename);
+				Con_Printf("%s - original csqc crc is not supported\n", filename);
 				break;
 			case 52195:	//dp csqc
 				Con_Printf("%s - obsolete csqc is not supported\n", filename);

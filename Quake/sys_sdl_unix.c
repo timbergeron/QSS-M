@@ -58,6 +58,9 @@ cvar_t		sys_dedmouse_capture = {"sys_dedmouse_capture", "0", CVAR_ARCHIVE};
 
 static size_t	sys_handles_max;	/* spike -- removed limit, was 32 (johnfitz -- was 10) */
 static FILE		**sys_handles;
+
+static qboolean		stdinIsATTY;	/* from ioquake3 source */
+
 static int findhandle (void)
 {
 	size_t i, n;
@@ -391,6 +394,12 @@ static void Sys_GetBasedir (char *argv0, char *dst, size_t dstsize)
 
 void Sys_Init (void)
 {
+	const char* term = getenv("TERM");
+	stdinIsATTY = isatty(STDIN_FILENO) &&
+			!(term && (!strcmp(term, "raw") || !strcmp(term, "dumb")));
+	if (!stdinIsATTY)
+		Sys_Printf("Terminal input not available.\n");
+
 	memset (cwd, 0, sizeof(cwd));
 	Sys_GetBasedir(host_parms->argv[0], cwd, sizeof(cwd));
 	host_parms->basedir = cwd;
@@ -1513,6 +1522,9 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
     static struct termios orig_termios, raw_termios;
     static qboolean term_setup = false;
 
+	if (!stdinIsATTY || con_eof)
+		return NULL;
+
     // Set up terminal once
     if (!term_setup)
     {
@@ -1536,9 +1548,6 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 		FD_SET (0, &set);	// stdin
     timeout.tv_sec = 0;
     timeout.tv_usec = 0;
-
-	if (con_eof)
-		return NULL;
 
     while (select (1, &set, NULL, NULL, &timeout))
     {

@@ -80,6 +80,7 @@ static struct
 } packetBuffer;
 
 static int myDriverLevel;
+static qboolean islistening;
 
 extern qboolean m_return_onerror;
 extern char m_return_reason[32];
@@ -1320,7 +1321,7 @@ static const char *Strip_Port (const char *host)
 	if (port > 0 && port < 65536 && port != net_hostport)
 	{
 		net_hostport = port;
-		Con_Printf("Port set to %d\n", net_hostport);
+		Con_SafePrintf("Port set to %d\n", net_hostport);
 	}
 	return noport;
 }
@@ -1705,7 +1706,7 @@ void Datagram_Listen (qboolean state)
 {
 	qsocket_t *s;
 	int i;
-	qboolean islistening = false;
+	islistening = false;
 
 	heartbeat_time = 0;	//reset it
 	if (heartbeatctx)
@@ -2333,7 +2334,7 @@ qsocket_t *Datagram_CheckNewConnections (void)
 				heartbeatctx = ctx = NULL;
 			}
 		}
-		else if (Sys_DoubleTime() > heartbeat_time)
+		else if (islistening && Sys_DoubleTime() > heartbeat_time)
 		{
 			//darkplaces here refers to the master server protocol, rather than the game protocol
 			//(specifies that the server responds to infoRequest packets from the master)
@@ -2789,6 +2790,7 @@ static qsocket_t *_Datagram_Connect (struct qsockaddr *serveraddr)
 	const char		*reason;
 	int port;
 	int probe_port_override;
+	qboolean allowgetchallenge = true;
 
 	probe_port_override = net_probe_clientport;
 	newsock = INVALID_SOCKET;
@@ -2851,16 +2853,31 @@ static qsocket_t *_Datagram_Connect (struct qsockaddr *serveraddr)
 			MSG_WriteByte(&net_message, 35); /*'mod' version*/  // woods for proquake version number on login, changed to 5 from 4
 			MSG_WriteByte(&net_message, 0); /*flags*/
 			MSG_WriteLong(&net_message, pwd); /*password*/
+
+			//FTE adds a 'getchallenge' hint here for a challenge response instead of nq protocols. QW or DP would expect only a getchallenge.
+			//by sending a getchallenge for fte servers, we can get the server to use dp-style handshakes, bypassing any serverside need for smurf pretection and thus the downsides of 'sv_listen_nq 1'
+			if (allowgetchallenge)
+			{
+				if (!strchr(com_protocolname.string, '\"'))
+					MSG_WriteString(&net_message, va("getchallenge %i \"%s\" qw=0 nq=1", 0, com_protocolname.string));
+			}
 		}
 		*((int *)net_message.data) = BigLong(NETFLAG_CTL | (net_message.cursize & NETFLAG_LENGTH_MASK));
+
+		if (allowgetchallenge)
+		{
+			//for dp compat. DP sends these in addition to the above packet.
+			//if the (DP) server is running using vanilla protocols, it replies to the above, otherwise to the following, requiring both to be sent.
+			//(challenges hinder a DOS issue known as smurfing, in that the client must prove that it owns the IP that it might be spoofing before any serious resources are used)
+			//FTE servers will ignore the following ccreq if they received a challenge recently. this allows using the challenge's protocol info instead (but only if the server has sv_listen_dp set).
+			//NOTE: QW clients include a \n here, DP does not. we don't support qw protocols, so we don't want to get mistaken for a qw client.
+			#define DPGETCHALLENGE "\xff\xff\xff\xffgetchallenge"
+			dfunc.Write (newsock, (byte*)DPGETCHALLENGE, strlen(DPGETCHALLENGE), serveraddr);
+		}
+
+		//and the regular ccreq_connect.
 		dfunc.Write (newsock, net_message.data, net_message.cursize, serveraddr);
 		SZ_Clear(&net_message);
-
-		//for dp compat. DP sends these in addition to the above packet.
-		//if the (DP) server is running using vanilla protocols, it replies to the above, otherwise to the following, requiring both to be sent.
-		//(challenges hinder a DOS issue known as smurfing, in that the client must prove that it owns the IP that it might be spoofing before any serious resources are used)
-		#define DPGETCHALLENGE "\xff\xff\xff\xffgetchallenge\n"
-		dfunc.Write (newsock, (byte*)DPGETCHALLENGE, strlen(DPGETCHALLENGE), serveraddr);
 
 		do
 		{
@@ -2892,12 +2909,28 @@ static qsocket_t *_Datagram_Connect (struct qsockaddr *serveraddr)
 				MSG_ReadLong();
 				if (control == -1)
 				{
+					char *e;
 					const char *s = MSG_ReadString();
 					if (!strncmp(s, "challenge ", 10))
 					{	//either a q2 or dp server...
 						char buf[1024];
-						q_snprintf(buf, sizeof(buf), "%c%c%c%cconnect\\protocol\\darkplaces 3\\protocols\\RMQ FITZ DP7 NEHAHRABJP3 QUAKE\\challenge\\%s", 255, 255, 255, 255, s+10);
+						s+=10;
+
+						if (*password.string && !strchr(password.string, '\\') && !strchr(password.string, '\n'))
+							s = va("%s\\password\\%s", s, password.string);	//needs a password. note: this is NOT encrypted! plus the cvar may still be set from a different server/config, leaking that to an untrusted one!
+						if (*cl_name.string && !strchr(cl_name.string, '\\') && !strchr(cl_name.string, '\n'))
+							s = va("%s\\name\\%s", s, cl_name.string);	//give a name, so we don't get called 'unconnected'
+						q_snprintf(buf, sizeof(buf), "%c%c%c%cconnect\\protocol\\darkplaces 3\\protocols\\RMQ FITZ DP7 NEHAHRABJP3 QUAKE\\challenge\\%s", 255, 255, 255, 255, s);
 						dfunc.Write (newsock, (byte*)buf, strlen(buf), serveraddr);
+						ret = 0;
+						continue;
+					}
+					else if (!strncmp(s, "c", 1) && strtol(s+1, &e, 0) && !*e)
+					{	//qw server... but we were trying to look like dp cos we don't do qw...
+						//stop trying to look like dp so we don't confuse servers that prefer to send qw challenges inseead of nq ones.
+						allowgetchallenge = false;
+						ret = 0;
+						continue;
 					}
 					else if (!strcmp(s, "accept"))
 					{
@@ -2906,13 +2939,26 @@ static qsocket_t *_Datagram_Connect (struct qsockaddr *serveraddr)
 						port = 0;	//don't force it.
 						goto dpserveraccepted;
 					}
-					/*else if (!strcmp(s, "reject"))
-					{
-						reason = MSG_ReadString();
+					else if (!strncmp(s, "reject ", 7))
+					{	//single line message, mostly.
+						allowgetchallenge = false;
+						ret = 0;
+						continue;
+						/*reason = s+7;
 						Con_Printf("%s\n", reason);
 						q_strlcpy(m_return_reason, reason, sizeof(m_return_reason));
-						goto ErrorReturn;
-					}*/
+						goto ErrorReturn;*/
+					}
+					else if (!strncmp(s, "print\n", 6))
+					{	//qw rejections. just in case.
+						ret = 0;
+						continue;
+						/*
+						reason = s+6;
+						Con_Printf("%s\n", reason);
+						q_strlcpy(m_return_reason, reason, sizeof(m_return_reason));
+						goto ErrorReturn;*/
+					}
 
 					ret = 0;
 					continue;
@@ -2945,7 +2991,10 @@ static qsocket_t *_Datagram_Connect (struct qsockaddr *serveraddr)
 
 	if (ret == 0)
 	{
-		reason = "No Response";
+		if (!allowgetchallenge)
+			reason = "QuakeWorld server";
+		else
+			reason = "No Response";
 		Con_Printf("%s\n", reason);
 		Q_strcpy(m_return_reason, reason);
 		goto ErrorReturn;

@@ -2241,6 +2241,8 @@ void Con_DebugLog(const char *msg)
 		return;
 
 	size_t msg_len = strlen(msg);
+	log_off_t written;
+
 	if (msg_len == 0)
 		return;
 
@@ -2255,7 +2257,20 @@ void Con_DebugLog(const char *msg)
 			log_roll_pending = true;
 	}
 
-	log_size += safe_write(log_fd, msg, msg_len);
+	written = safe_write(log_fd, msg, msg_len);
+	log_size += written;
+	if (written < (log_off_t)msg_len)
+	{
+		close(log_fd);
+		log_fd = -1;
+		con_debuglog = false;
+		log_size = 0;
+		log_roll_pending = false;
+		LOG_Unlock();
+		fprintf(stderr, "Error writing to log file\n");
+		return;
+	}
+
 	LOG_Unlock();
 }
 
@@ -2419,7 +2434,7 @@ Okay to call even when the screen can't be updated
 void Con_SafePrintf (const char *fmt, ...)
 {
 	va_list		argptr;
-	char		msg[1024];
+	char		msg[MAXPRINTMSG];
 	int		temp;
 
 	va_start (argptr, fmt);

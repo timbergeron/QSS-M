@@ -2027,9 +2027,15 @@ void IN_SendKeyEvents (void)
 			if (event.active.state & (SDL_APPINPUTFOCUS|SDL_APPACTIVE))
 			{
 				if (event.active.gain)
-					windowhasfocus=true, S_UnblockSound();
+				{
+					windowhasfocus = true;
+					S_UnblockSound();
+				}
 				else
-					windowhasfocus=false, S_BlockSound();
+				{
+					windowhasfocus = false;
+					S_BlockSound();
+				}
 			}
 			break;
 #endif

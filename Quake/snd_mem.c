@@ -18,6 +18,7 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
+
 // snd_mem.c: sound caching
 
 #include "quakedef.h"
@@ -34,7 +35,7 @@ static void ResampleSfx (sfx_t *sfx, int inrate, int inwidth, byte *data)
 	int		srcsample;
 	float	stepscale;
 	int		i;
-	int		sample, samplefrac, fracstep;
+	int		sample, fracstep;
 	sfxcache_t	*sc;
 
 	sc = (sfxcache_t *) Cache_Check (&sfx->cache);
@@ -55,13 +56,12 @@ static void ResampleSfx (sfx_t *sfx, int inrate, int inwidth, byte *data)
 		sc->width = inwidth;
 	if (sc->stereo == 1)
 	{	//crappy approach to stereo - strip it out by merging left+right channels
-		sc->stereo = 0;
-
-		samplefrac = 0;
-		fracstep = stepscale*256;
+		// samplefrac can overflow 2**31 with very big sounds, see below.
+		int64_t samplefrac = 0;
+		fracstep = (int)(stepscale*256);
 		for (i = 0; i < outcount; i++)
 		{
-			srcsample = samplefrac >> 8;
+			srcsample = (int)(samplefrac >> 8);
 			srcsample<<=1;
 			samplefrac += fracstep;
 			if (inwidth == 2)
@@ -74,6 +74,7 @@ static void ResampleSfx (sfx_t *sfx, int inrate, int inwidth, byte *data)
 			else
 				((signed char *)sc->data)[i] = sample >> 8;
 		}
+		sc->stereo = 0;
 	}
 	else
 	{
@@ -88,11 +89,12 @@ static void ResampleSfx (sfx_t *sfx, int inrate, int inwidth, byte *data)
 		else
 		{
 	// general case
-			samplefrac = 0;
+			// samplefrac can overflow 2**31 with very big sounds, see below.
+			int64_t samplefrac = 0;
 			fracstep = stepscale*256;
 			for (i = 0; i < outcount; i++)
 			{
-				srcsample = samplefrac >> 8;
+				srcsample = (int)(samplefrac >> 8);
 				samplefrac += fracstep;
 				if (inwidth == 2)
 					sample = LittleShort ( ((short *)data)[srcsample] );
@@ -279,7 +281,7 @@ static void FindNextChunk (const char *name)
 		}
 		last_chunk = data_p + ((iff_chunk_len + 1) & ~1);
 		data_p -= 8;
-		if (!Q_strncmp((char *)data_p, name, 4))
+		if (!strncmp((char *)data_p, name, 4))
 			return;
 	}
 }
@@ -330,7 +332,7 @@ wavinfo_t GetWavinfo (const char *name, byte *wav, int wavlength)
 
 // find "RIFF" chunk
 	FindChunk("RIFF");
-	if (!(data_p && !Q_strncmp((char *)data_p + 8, "WAVE", 4)))
+	if (!(data_p && !strncmp((char *)data_p + 8, "WAVE", 4)))
 	{
 		Con_Printf("%s missing RIFF/WAVE chunks\n", name);
 		return info;
@@ -406,6 +408,13 @@ wavinfo_t GetWavinfo (const char *name, byte *wav, int wavlength)
 	}
 	else
 		info.samples = samples;
+
+	if (info.loopstart >= info.samples)
+	{
+		Con_Warning ("%s has loop start >= end\n", name);
+		info.loopstart = -1;
+		info.samples = samples;
+	}
 
 	info.dataofs = data_p - wav;
 

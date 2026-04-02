@@ -28,6 +28,7 @@ extern cvar_t gl_fullbrights, r_drawflat, gl_overbright, r_oldwater; //johnfitz
 extern cvar_t r_brokenturbbias; // to replicate a QuakeSpasm bug.
 extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
 extern cvar_t r_ambient; // woods #rambient
+cvar_t r_lightmap_format = {"r_lightmap_format","", CVAR_ARCHIVE};
 
 int		gl_lightmap_format;
 int		lightmap_bytes;
@@ -189,7 +190,7 @@ void R_DrawBrushModel (entity_t *e)
 		e->origin[1] -= DIST_EPSILON;
 		e->origin[2] -= DIST_EPSILON;
 	}
-	R_RotateForEntity (e->origin, e->angles, e->netstate.scale);
+	R_RotateForEntity (e->origin, e->angles, e);
 	if (gl_zfix.value)
 	{
 		e->origin[0] += DIST_EPSILON;
@@ -255,7 +256,7 @@ void R_DrawBrushModel_ShowTris (entity_t *e)
 
 	glPushMatrix ();
 	e->angles[0] = -e->angles[0];	// stupid quake bug
-	R_RotateForEntity (e->origin, e->angles, e->netstate.scale);
+	R_RotateForEntity (e->origin, e->angles, e);
 	e->angles[0] = -e->angles[0];	// stupid quake bug
 
 	//
@@ -421,10 +422,8 @@ int AllocBlock (int w, int h, int *x, int *y)
 }
 
 
-mvertex_t	*r_pcurrentvertbase;
-qmodel_t	*currentmodel;
-
-int	nColinElim;
+static mvertex_t	*r_pcurrentvertbase;
+static qmodel_t		*currentmodel;
 
 /*
 ========================
@@ -704,14 +703,33 @@ void GL_BuildLightmaps (void)
 	lightmap_count = 0;
 	allocated = realloc(allocated, sizeof(*allocated)*LMBLOCK_WIDTH);
 
-	if (gl_texture_e5bgr9)// && cl.worldmodel && (cl.worldmodel->flags&MOD_HDRLIGHTING))
-		gl_lightmap_format = GL_RGB9_E5; //requires gl3, allowing for hdr lighting.
+	if ((!q_strcasecmp(r_lightmap_format.string, "rgb9_e5") || !q_strcasecmp(r_lightmap_format.string, "e5bgr9") || !q_strcasecmp(r_lightmap_format.string, "rgb9e5")) && gl_texture_e5bgr9)
+		gl_lightmap_format = GL_RGB9_E5;
+	else if ((!q_strcasecmp(r_lightmap_format.string, "rgb10_a2") || !q_strcasecmp(r_lightmap_format.string, "rgb10a2") || !q_strcasecmp(r_lightmap_format.string, "rgb10")) && gl_packed_pixels)
+		gl_lightmap_format = GL_RGB10_A2;
+	else if ( !q_strcasecmp(r_lightmap_format.string, "rgbx8") || !q_strcasecmp(r_lightmap_format.string, "rgba8") || !q_strcasecmp(r_lightmap_format.string, "rgbx") || !q_strcasecmp(r_lightmap_format.string, "rgba"))
+		gl_lightmap_format = GL_RGBA;
+	else if ( !q_strcasecmp(r_lightmap_format.string, "bgrx8") || !q_strcasecmp(r_lightmap_format.string, "bgra8") || !q_strcasecmp(r_lightmap_format.string, "bgrx") || !q_strcasecmp(r_lightmap_format.string, "bgra"))
+		gl_lightmap_format = GL_BGRA;
 	else
-		gl_lightmap_format = GL_RGBA;//FIXME: hardcoded for now!
+	{	//requested format unavailable
+		if (*r_lightmap_format.string)
+			Con_Warning("r_lightmap_format: unsupported format, using default\n");
+
+		if (gl_texture_e5bgr9)// && cl.worldmodel && (cl.worldmodel->flags&MOD_HDRLIGHTING))
+			gl_lightmap_format = GL_RGB9_E5; //requires gl3, allowing for hdr lighting (both highs and lows).
+		else if (gl_packed_pixels)
+			gl_lightmap_format = GL_RGB10_A2;	//upper 2 bits used for extra 4-fold overbright. using a glsl multiplier. available with gl1.1 apparently... but also glsl.
+		else
+			gl_lightmap_format = GL_RGBA;//FIXME: hardcoded for now!
+	}
 
 	switch (gl_lightmap_format)
 	{
 	case GL_RGB9_E5:
+		lightmap_bytes = 4;
+		break;
+	case GL_RGB10_A2:
 		lightmap_bytes = 4;
 		break;
 	case GL_RGBA:
@@ -820,7 +838,7 @@ void GL_BuildBModelVertexBuffer (void)
 // ask GL for a name for our VBO
 	GL_DeleteBuffersFunc (1, &gl_bmodel_vbo);
 	GL_GenBuffersFunc (1, &gl_bmodel_vbo);
-	
+
 // count all verts in all models
 	numverts = 0;
 	for (j=1 ; j<MAX_MODELS ; j++)
@@ -845,12 +863,12 @@ void GL_BuildBModelVertexBuffer (void)
 			numverts += m->surfaces[i].numedges;
 		}
 	}
-	
+
 // build vertex array
 	varray_bytes = VERTEXSIZE * sizeof(float) * numverts;
 	varray = (float *) malloc (varray_bytes);
 	varray_index = 0;
-	
+
 	for (j=1 ; j<MAX_MODELS ; j++)
 	{
 		m = cl.model_precache[j];
@@ -884,7 +902,7 @@ void GL_BuildBModelVertexBuffer (void)
 	GL_BindBufferFunc (GL_ARRAY_BUFFER, gl_bmodel_vbo);
 	GL_BufferDataFunc (GL_ARRAY_BUFFER, varray_bytes, varray, GL_STATIC_DRAW);
 	free (varray);
-	
+
 // invalidate the cached bindings
 	GL_ClearBufferBindings ();
 }
@@ -990,8 +1008,10 @@ Combine and scale multiple lightmaps into the 8.8 format in blocklights
 */
 void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights)
 {
+	const int overbright = !!gl_overbright.value;
+
 	int			smax, tmax;
-	int			r,g,b;
+	unsigned		r, g, b;
 	int			i, j, size;
 	unsigned	scale;
 	int			maps;
@@ -1102,9 +1122,11 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 				{
 					e = 0;
 					m = q_max(q_max(bl[0], bl[1]), bl[2])/identity;
+					if (!overbright && m > 1.0)
+						m = 1.0; //clamp it to a logical 1.
 					if (m >= 0.5)
 					{	//positive exponent
-						while (m >= (1<<(e)) && e < 30-15)	//don't do nans.
+						while (m > (1<<(e)) && e < 30-15)	//don't do nans.
 							e++;
 					}
 					else
@@ -1124,6 +1146,40 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 			}
 		}
 		break;
+	case GL_RGB10_A2:
+		stride -= smax * 4;
+		bl = blocklights;
+		for (i=0 ; i<tmax ; i++, dest += stride)
+		{
+			for (j=0 ; j<smax ; j++)
+			{
+				if (overbright)
+				{
+					r = *bl++ >> 8;
+					g = *bl++ >> 8;
+					b = *bl++ >> 8;
+
+					r = (r > 1023)? 1023 : r;
+					g = (g > 1023)? 1023 : g;
+					b = (b > 1023)? 1023 : b;
+				}
+				else
+				{
+					r = *bl++ >> 7;
+					g = *bl++ >> 7;
+					b = *bl++ >> 7;
+
+					// artifically clamp to 255 so gl_overbright 0 renders as expected in the wide10bits case
+					r = (r > 255) ? 255 : r;
+					g = (g > 255) ? 255 : g;
+					b = (b > 255) ? 255 : b;
+				}
+
+				*(unsigned int*)dest = (r<<22) | (g<<12) | (b<<2) | 3;
+				dest += 4;
+			}
+		}
+		break;
 	case GL_RGBA:
 		stride -= smax * 4;
 		bl = blocklights;
@@ -1131,7 +1187,7 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 		{
 			for (j=0 ; j<smax ; j++)
 			{
-				if (gl_overbright.value)
+				if (overbright)
 				{
 					r = *bl++ >> 8;
 					g = *bl++ >> 8;
@@ -1157,7 +1213,7 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 		{
 			for (j=0 ; j<smax ; j++)
 			{
-				if (gl_overbright.value)
+				if (overbright)
 				{
 					r = *bl++ >> 8;
 					g = *bl++ >> 8;
@@ -1203,6 +1259,9 @@ static void R_UploadLightmap(int lmap)
 		if (gl_lightmap_format == GL_RGB9_E5)
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, GL_RGB,
 					GL_UNSIGNED_INT_5_9_9_9_REV, (byte*)NULL+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
+		else if (gl_lightmap_format == GL_RGB10_A2)
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, GL_RGBA,
+					GL_UNSIGNED_INT_10_10_10_2, (byte*)NULL+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
 		else
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, gl_lightmap_format,
 					GL_UNSIGNED_BYTE, (byte*)NULL+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
@@ -1213,6 +1272,9 @@ static void R_UploadLightmap(int lmap)
 		if (gl_lightmap_format == GL_RGB9_E5)
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, GL_RGB,
 					GL_UNSIGNED_INT_5_9_9_9_REV, lm->pbodata+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
+		else if (gl_lightmap_format == GL_RGB10_A2)
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, GL_RGBA,
+					GL_UNSIGNED_INT_10_10_10_2, lm->pbodata+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
 		else
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, gl_lightmap_format,
 					GL_UNSIGNED_BYTE, lm->pbodata+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
@@ -1334,6 +1396,9 @@ void R_RebuildAllLightmaps (void)
 				if (gl_lightmap_format == GL_RGB9_E5)
 					glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, LMBLOCK_WIDTH, LMBLOCK_HEIGHT, GL_RGB,
 							GL_UNSIGNED_INT_5_9_9_9_REV, NULL);
+				else if (gl_lightmap_format == GL_RGB10_A2)
+					glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, LMBLOCK_WIDTH, LMBLOCK_HEIGHT, GL_RGBA,
+							GL_UNSIGNED_INT_10_10_10_2, NULL);
 				else
 					glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, LMBLOCK_WIDTH, LMBLOCK_HEIGHT, gl_lightmap_format,
 							GL_UNSIGNED_BYTE, NULL);
@@ -1344,6 +1409,9 @@ void R_RebuildAllLightmaps (void)
 				if (gl_lightmap_format == GL_RGB9_E5)
 					glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, LMBLOCK_WIDTH, LMBLOCK_HEIGHT, GL_RGB,
 							GL_UNSIGNED_INT_5_9_9_9_REV, lightmaps[i].pbodata);
+				else if (gl_lightmap_format == GL_RGB10_A2)
+					glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, LMBLOCK_WIDTH, LMBLOCK_HEIGHT, GL_RGBA,
+							GL_UNSIGNED_INT_10_10_10_2, lightmaps[i].pbodata);
 				else
 					glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, LMBLOCK_WIDTH, LMBLOCK_HEIGHT, gl_lightmap_format,
 							GL_UNSIGNED_BYTE, lightmaps[i].pbodata);
@@ -1425,7 +1493,7 @@ void GL_DrawBrushShadow (entity_t* e) // woods #shadow
     glPushMatrix();
 
     // Apply entity transformations
-    R_RotateForEntity(e->origin, e->angles, e->netstate.scale);
+    R_RotateForEntity(e->origin, e->angles, e);
 
     // Move down to floor, apply shadow projection, then move back
     glTranslatef(0, 0, -lheight);
@@ -1481,7 +1549,7 @@ static qboolean r_ambient_warned = false; // woods #rambient
 void R_Ambient_OnChange_f(cvar_t* var) // woods #rambient
 {
 	/* Block during live online deathmatch; explain once. */
-	if (!(cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected && !cls.demoplayback))
+	if (cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected && !cls.demoplayback)
 	{
 		if (var->value != 0.0f) {
 			if (!r_ambient_warned) {

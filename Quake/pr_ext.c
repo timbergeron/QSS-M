@@ -2022,8 +2022,8 @@ extern cvar_t sv_accelerate;
 extern cvar_t sv_friction;
 extern cvar_t sv_gravity;
 extern cvar_t sv_stopspeed;
-static cvar_t sv_airaccelerate = {"sv_airaccelerate", "0.7"};
-static cvar_t sv_wateraccelerate = {"sv_wateraccelerate", "10"};
+static cvar_t sv_airaccelerate = {"sv_airaccelerate", "-1"};
+static cvar_t sv_wateraccelerate = {"sv_wateraccelerate", "-1"};
 static cvar_t sv_waterfriction = {"sv_waterfriction", "4"};
 static cvar_t sv_spectatormaxspeed = {"sv_spectatormaxspeed", "500"};
 void PM_Register(void)
@@ -2054,11 +2054,11 @@ void PMSV_UpdateMovevars(void)
 {
 	memset(&svmovevars, 0, sizeof(svmovevars));
 	svmovevars.accelerate		= sv_accelerate.value;
-	svmovevars.airaccelerate	= sv_airaccelerate.value;
+	svmovevars.airaccelerate	= (sv_airaccelerate.value<0)?sv_accelerate.value:sv_airaccelerate.value;
 	svmovevars.friction			= sv_friction.value;
 	svmovevars.gravity			= sv_gravity.value;
 	svmovevars.stopspeed		= sv_stopspeed.value;
-	svmovevars.wateraccelerate	= sv_wateraccelerate.value;
+	svmovevars.wateraccelerate	= (sv_wateraccelerate.value<0)?sv_accelerate.value:sv_wateraccelerate.value;
 	svmovevars.waterfriction	= sv_waterfriction.value;
 	svmovevars.entgravity		= 1.0;
 	svmovevars.maxspeed			= sv_maxspeed.value;
@@ -2124,7 +2124,7 @@ void PMCL_ServerinfoUpdated(void)
 {
 	memset(&clmovevars, 0, sizeof(clmovevars));
 	clmovevars.accelerate			= PMCL_GetKeyValue("sv_accelerate", 10);
-	clmovevars.airaccelerate		= PMCL_GetKeyValue("sv_airaccelerate", 0.7);
+	clmovevars.airaccelerate		= PMCL_GetKeyValue("sv_airaccelerate", 10);
 	clmovevars.friction				= PMCL_GetKeyValue("sv_friction", 4);
 	clmovevars.gravity				= PMCL_GetKeyValue("sv_gravity", 800);
 	clmovevars.stopspeed			= PMCL_GetKeyValue("sv_stopspeed", 100);
@@ -2756,35 +2756,35 @@ static void PF_cvar_description(void)
 static void PF_registercvar(void)
 {
 	const char *name = G_STRING(OFS_PARM0);
-	const char *value = (qcvm->argc>1)?G_STRING(OFS_PARM0):"";
+	const char *value = (qcvm->argc>1)?G_STRING(OFS_PARM1):"";
 	Cvar_Create(name, value);
 }
 
 //temp entities + networking
 static void PF_WriteString2(void)
 {	//writes a string without the null. a poor-man's strcat.
-	const char *string = G_STRING(OFS_PARM0);
+	const char *string = G_STRING(OFS_PARM1);
 	SZ_Write (WriteDest(), string, Q_strlen(string));
 }
 static void PF_WriteFloat(void)
 {	//curiously, this was missing in vanilla.
-	MSG_WriteFloat(WriteDest(), G_FLOAT(OFS_PARM0));
+	MSG_WriteFloat(WriteDest(), G_FLOAT(OFS_PARM1));
 }
 static void PF_WriteDouble(void)
 {
-	MSG_WriteDouble(WriteDest(), G_DOUBLE(OFS_PARM0));
+	MSG_WriteDouble(WriteDest(), G_DOUBLE(OFS_PARM1));
 }
 static void PF_WriteInt(void)
 {
-	MSG_WriteDouble(WriteDest(), G_INT(OFS_PARM0));
+	MSG_WriteLong(WriteDest(), G_INT(OFS_PARM1));
 }
 static void PF_WriteInt64(void)
 {
-	MSG_WriteInt64(WriteDest(), G_INT64(OFS_PARM0));
+	MSG_WriteInt64(WriteDest(), G_INT64(OFS_PARM1));
 }
 static void PF_WriteUInt64(void)
 {
-	MSG_WriteUInt64(WriteDest(), G_UINT64(OFS_PARM0));
+	MSG_WriteUInt64(WriteDest(), G_UINT64(OFS_PARM1));
 }
 
 static void PF_sv_te_blooddp(void)
@@ -4759,14 +4759,15 @@ static void SV_Multicast(multicast_t to, float *org, int msg_entity, unsigned in
 
 	if (to == MULTICAST_INIT && sv.state != ss_loading)
 	{
-		SZ_Write (&sv.signon, sv.multicast.data, sv.multicast.cursize);
+			SZ_Write (&sv.reliable_datagram, sv.multicast.data, sv.multicast.cursize);
 		to = MULTICAST_ALL_R;	//and send to players that are already on
 	}
 
 	switch(to)
 	{
 	case MULTICAST_INIT:
-		SZ_Write (&sv.signon, sv.multicast.data, sv.multicast.cursize);
+			SV_ReserveSignonSpace (sv.multicast.cursize);
+			SZ_Write (sv.signon, sv.multicast.data, sv.multicast.cursize);
 		break;
 	case MULTICAST_ALL_R:
 	case MULTICAST_ALL_U:
@@ -9587,7 +9588,8 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 		qcvm->builtins[i] = PF_Fixme;
 	qcvm->numbuiltins = i;
 	if (qcvm == &sv.qcvm &&
-		(PR_FindExtFunction("ex_centerprint") && !PR_FindExtFunction("centerprint")))
+		((PR_FindExtFunction("ex_centerprint") && !PR_FindExtFunction("centerprint")) ||	//if we've got an ext_centerprint builtin defined, but no centerprint, then assume its remaster-specific.
+			PR_FindExtFunction("finaleFinished")))	//earlier versions of the remaster included builtins which lacked prefixes. any fteextensions.qc or whatever will include the ex_ prefix so this is useful for checking first versions, but not current. should still make it a little more robust.
 	{
 		qcvm->builtins[99] = PF_checkextension;
 

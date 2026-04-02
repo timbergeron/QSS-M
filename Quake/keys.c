@@ -1116,7 +1116,13 @@ void Char_Console(int key) // woods -- added detection for when typing in consol
 			len = strlen(workline) + 1;
 			if (len > MAXCMDLINE-2)
 				len = MAXCMDLINE-2;
+			#if defined(__GNUC__) && (__GNUC__ > 7)
+			#pragma GCC diagnostic ignored "-Warray-bounds"
+			#endif
 			memmove (workline + 1, workline, len);
+			#if defined(__GNUC__) && (__GNUC__ > 7)
+			#pragma GCC diagnostic pop
+			#endif
 			*workline = key;
 		}
 		else

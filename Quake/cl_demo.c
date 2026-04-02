@@ -2613,9 +2613,11 @@ void CL_Record_f (void)
 	{
 		byte *data = net_message.data;
 		int cursize = net_message.cursize;
+		int maxsize = net_message.maxsize;
 		byte weirdaltbufferthatprobablyisntneeded[NET_MAXMESSAGE];
 
 		net_message.data = weirdaltbufferthatprobablyisntneeded;
+		net_message.maxsize = sizeof(weirdaltbufferthatprobablyisntneeded);
 		SZ_Clear (&net_message);
 
 		CL_Record_Serverdata();
@@ -2625,6 +2627,7 @@ void CL_Record_f (void)
 		// restore net_message
 		net_message.data = data;
 		net_message.cursize = cursize;
+		net_message.maxsize = maxsize;
 	}
 }
 

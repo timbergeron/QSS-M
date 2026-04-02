@@ -152,7 +152,7 @@ sys_socket_t UDP4_Listen (qboolean state)
 		if (net_acceptsocket4 == INVALID_SOCKET)
 		{
 			if ((net_acceptsocket4 = UDP4_OpenSocket (net_hostport)) == INVALID_SOCKET)
-				Sys_Error ("UDP4_Listen: Unable to open accept socket");
+				Con_DPrintf ("UDP4_Listen: Unable to open accept socket\n");	//no longer fatal... ice probably took the port first.
 		}
 	}
 	else
@@ -665,7 +665,7 @@ sys_socket_t UDP6_Listen (qboolean state)
 		if (net_acceptsocket6 == INVALID_SOCKET)
 		{
 			if ((net_acceptsocket6 = UDP6_OpenSocket (net_hostport)) == INVALID_SOCKET)
-				Sys_Error ("UDP6_Listen: Unable to open accept socket");
+				Con_DPrintf("UDP6_Listen: Unable to open accept socket\n");
 		}
 	}
 	else

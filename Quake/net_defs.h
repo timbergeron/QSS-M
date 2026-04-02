@@ -225,6 +225,8 @@ typedef struct
 	qboolean	(*CanSendUnreliableMessage) (qsocket_t *sock);
 	void		(*Close) (qsocket_t *sock);
 	void		(*Shutdown) (void);
+
+	qboolean	listening;
 } net_driver_t;
 
 extern net_driver_t	net_drivers[];

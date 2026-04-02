@@ -78,7 +78,7 @@ void SubdividePolygon (int numverts, float *verts)
 	float	s, t;
 
 	if (numverts > 60)
-		Sys_Error ("numverts = %i", numverts);
+		Sys_Error ("SubdividePolygon: numverts = %i", numverts);
 
 	BoundPoly (numverts, verts, mins, maxs);
 
@@ -156,6 +156,9 @@ void GL_SubdivideSurface (msurface_t *fa)
 {
 	vec3_t	verts[64];
 	int		i;
+
+	if (fa->polys->numverts > 64)
+		Sys_Error ("GL_SubdivideSurface: numverts = %i", fa->polys->numverts);
 
 	warpface = fa;
 

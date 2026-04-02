@@ -24,8 +24,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
-const int	gl_solid_format = 3;
-const int	gl_alpha_format = 4;
+static const int	gl_solid_format = 3;
+static const int	gl_alpha_format = 4;
 
 static cvar_t	gl_texturemode = {"gl_texturemode", "", CVAR_ARCHIVE};
 static cvar_t	gl_texture_anisotropy = {"gl_texture_anisotropy", "1", CVAR_ARCHIVE};
@@ -83,6 +83,7 @@ static struct
 	#define GL_UNSIGNED_INT_5_9_9_9_REV       0x8C3E
 #endif
 	{"E5BGR9",		"EXP5", GL_RGB9_E5,GL_RGB,GL_UNSIGNED_INT_5_9_9_9_REV,	 4, 1, 1, &gl_texture_e5bgr9},
+	{"RGB10_A2",	"10_2",	GL_RGB10_A2,GL_RGBA,GL_UNSIGNED_INT_10_10_10_2,	 4, 1, 1, &gl_packed_pixels},
 #if defined(GL_EXT_texture_compression_s3tc) || defined(GL_EXT_texture_compression_dxt1)
 	{"BC1_RGBA",	"BC1",  GL_COMPRESSED_RGBA_S3TC_DXT1_EXT,0,0,			 8, 4, 4, &gl_texture_s3tc},
 #endif
@@ -172,7 +173,7 @@ static glmode_t glmodes[] = {
 	{GL_LINEAR,  GL_NEAREST_MIPMAP_NEAREST,	"lnn", NULL},
 	{GL_LINEAR,  GL_NEAREST_MIPMAP_LINEAR,	"lln", NULL},
 };
-#define NUM_GLMODES (int)(sizeof(glmodes)/sizeof(glmodes[0]))
+#define NUM_GLMODES (int)Q_COUNTOF(glmodes)
 static int glmode_idx = 5; /* trilinear */
 
 int TexMgr_GetTextureMode(void)
@@ -191,10 +192,8 @@ TexMgr_DescribeTextureModes_f -- report available texturemodes
 static void TexMgr_DescribeTextureModes_f (void)
 {
 	int i;
-
 	for (i = 0; i < NUM_GLMODES; i++)
 		Con_SafePrintf ("   %2i: %s\n", i + 1, glmodes[i].name1?glmodes[i].name1:glmodes[i].name2);
-
 	Con_Printf ("%i modes\n", i);
 }
 
@@ -741,6 +740,26 @@ void TexMgr_LoadPalette (void)
 	int i, mark;
 	FILE *f;
 
+	int fullbrights = 32;
+	int firstfullbright;
+	{
+		byte *colormap = COM_LoadTempFile("gfx/colormap.lmp", NULL);
+		if (colormap && com_filesize == VID_GRADES*256+1)
+		{
+			byte *darks = colormap + (VID_GRADES-1)*256;
+			fullbrights = 0;
+			for (i = 255; i >= 0; i--)
+			{
+				if (colormap[i] == darks[i])	//no degredation...
+					fullbrights++;
+				else
+					break;
+			}
+		}
+	}
+	firstfullbright = 256-fullbrights;
+
+
 	COM_FOpenFile ("gfx/palette.lmp", &f, NULL);
 	if (!f)
 		Sys_Error ("Couldn't load gfx/palette.lmp");
@@ -767,16 +786,16 @@ void TexMgr_LoadPalette (void)
 	((byte *) &d_8to24table[255]) [3] = 0;
 
 	//fullbright palette, 0-223 are black (for additive blending)
-	src = pal + 224*3;
-	dst = (byte *) &d_8to24table_fbright[224];
-	for (i = 224; i < 256; i++)
+	src = pal + firstfullbright*3;
+	dst = (byte *) &d_8to24table_fbright[firstfullbright];
+	for (i = firstfullbright; i < 256; i++)
 	{
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = *src++;
 		*dst++ = 255;
 	}
-	for (i = 0; i < 224; i++)
+	for (i = 0; i < firstfullbright; i++)
 	{
 		dst = (byte *) &d_8to24table_fbright[i];
 		dst[3] = 255;
@@ -793,7 +812,7 @@ void TexMgr_LoadPalette (void)
 		*dst++ = *src++;
 		*dst++ = 255;
 	}
-	for (i = 224; i < 256; i++)
+	for (i = firstfullbright; i < 256; i++)
 	{
 		dst = (byte *) &d_8to24table_nobright[i];
 		dst[3] = 255;
@@ -980,8 +999,7 @@ int TexMgr_PadConditional (int s)
 {
 	if (s < TexMgr_SafeTextureSize(s))
 		return TexMgr_Pad(s);
-	else
-		return s;
+	return s;
 }
 
 /*
@@ -1407,7 +1425,7 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 		mipwidth = glt->width;
 		mipheight = glt->height;
 
-		for (miplevel=1; mipwidth > 1 || mipheight > 1; miplevel++)
+		for (miplevel = 1; mipwidth > 1 || mipheight > 1; miplevel++)
 		{
 			if (mipwidth > 1)
 			{
@@ -1737,8 +1755,10 @@ static void TexMgr_LoadLightmap (gltexture_t *glt, byte *data)
 	GL_Bind (glt);
 	if (gl_lightmap_format == GL_RGB9_E5)
 		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGB9_E5, glt->width, glt->height, 0, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV, data);
+	else if (gl_lightmap_format == GL_RGB10_A2)
+		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGB10_A2, glt->width, glt->height, 0, GL_RGBA, GL_UNSIGNED_INT_10_10_10_2, data);
 	else
-		glTexImage2D (GL_TEXTURE_2D, 0, lightmap_bytes, glt->width, glt->height, 0, gl_lightmap_format, GL_UNSIGNED_BYTE, data);
+		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, glt->width, glt->height, 0, gl_lightmap_format/*rgba or bgra*/, GL_UNSIGNED_BYTE, data);
 
 	// set filter modes
 	TexMgr_SetFilterModes (glt);

@@ -327,7 +327,7 @@ static void SSL_Close(icestream_t *vfs)
 
 	if (file->session)
 	{
-		qgnutls_bye (file->session, file->datagram?GNUTLS_SHUT_WR:GNUTLS_SHUT_RDWR);
+		qgnutls_bye (file->session, /*file->datagram?GNUTLS_SHUT_WR:*/GNUTLS_SHUT_RDWR);
 		qgnutls_deinit(file->session);
 		file->session = NULL;
 	}

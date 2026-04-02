@@ -148,7 +148,7 @@ int NUM_FOR_EDICT(edict_t*);
 #define	E_VECTOR(e,o)		(&((float*)&e->v)[o])
 #define	E_STRING(e,o)		(PR_GetString(*(string_t *)&((float*)&e->v)[o]))
 
-extern	int		type_size[ev_ext_double + 1];
+extern const int	type_size[ev_ext_double + 1];
 
 FUNC_NORETURN void PR_RunError (const char *error, ...) FUNC_PRINTF(1,2);
 void PR_RunWarning (const char *error, ...) FUNC_PRINTF(1,2);

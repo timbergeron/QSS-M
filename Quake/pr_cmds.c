@@ -1645,7 +1645,7 @@ sizebuf_t *WriteDest (void)
 		return &sv.reliable_datagram;
 
 	case MSG_INIT:
-		return &sv.signon;
+		return sv.signon;
 
 	case MSG_EXT_MULTICAST:
 	case MSG_EXT_ENTITY:	//just reuse it...
@@ -1958,7 +1958,7 @@ const builtin_t pr_ssqcbuiltins[] =
 
 	PF_sv_setspawnparms,
 };
-const int pr_ssqcnumbuiltins = sizeof(pr_ssqcbuiltins)/sizeof(pr_ssqcbuiltins[0]);
+const int pr_ssqcnumbuiltins = Q_COUNTOF(pr_ssqcbuiltins);
 
 
 
@@ -2312,7 +2312,7 @@ const builtin_t pr_csqcbuiltins[] =
 
 	PF_NoCSQC,//PF_setspawnparms
 };
-const int pr_csqcnumbuiltins = sizeof(pr_csqcbuiltins)/sizeof(pr_csqcbuiltins[0]);
+const int pr_csqcnumbuiltins = Q_COUNTOF(pr_csqcbuiltins);
 
 ///////////////////////////////////////////////////////////////////
 //menuqc
@@ -2452,5 +2452,5 @@ const builtin_t pr_menubuiltins[] = {
 	PF_MenuCQExt,			//#89 PF_cvar_defstring,
 	//all other builtins will just have to use the extension system
 };
-const int pr_menunumbuiltins = sizeof(pr_menubuiltins)/sizeof(pr_menubuiltins[0]);
+const int pr_menunumbuiltins = Q_COUNTOF(pr_menubuiltins);
 

@@ -249,7 +249,25 @@ void NET_QSocketSetMSS(qsocket_t *s, int mss)
 	s->pending_max_datagram = mss;
 }
 
+static void NET_UpdateListen (void)
+{
+	qboolean listening_dgram = listening;
 
+	for (net_driverlevel = 0; net_driverlevel < net_numdrivers; net_driverlevel++)
+	{
+		if (net_drivers[net_driverlevel].initialized == false)
+			continue;
+
+		if (!strcmp(net_drivers[net_driverlevel].name, "ICE"))
+			listening_dgram = false;	//if ICE is enabled then disable legacy Datagram.
+		if (!strcmp(net_drivers[net_driverlevel].name, "Datagram"))
+			net_drivers[net_driverlevel].listening = listening_dgram;
+		else
+			net_drivers[net_driverlevel].listening = listening;
+
+		dfunc.Listen (net_drivers[net_driverlevel].listening);
+	}
+}
 static void NET_Listen_f (void)
 {
 	if (Cmd_Argc () != 2)
@@ -259,13 +277,7 @@ static void NET_Listen_f (void)
 	}
 
 	listening = Q_atoi(Cmd_Argv(1)) ? true : false;
-
-	for (net_driverlevel = 0; net_driverlevel < net_numdrivers; net_driverlevel++)
-	{
-		if (net_drivers[net_driverlevel].initialized == false)
-			continue;
-		dfunc.Listen (listening);
-	}
+	NET_UpdateListen();
 }
 
 
@@ -539,6 +551,8 @@ qsocket_t *NET_Connect (const char *host)
 			numdrivers = 1;
 			goto JustDoIt;
 		}
+		if (strchr(host, ':')) //spike: if they specified a port number, don't look it up as just a hostname. its a waste of time
+			goto JustDoIt;
 
 		if (hostCacheCount)
 		{
@@ -1137,10 +1151,8 @@ void NET_Init (void)
 		if (strcmp(net_drivers[net_driverlevel].name, "Datagram") == 0) // woods #extip
 			net_drivers[net_driverlevel].QueryAddresses = Unix_QueryAddresses;
 #endif
-
-		if (listening)
-			net_drivers[net_driverlevel].Listen (true);
 	}
+	NET_UpdateListen();
 
 	/* Loop_Init() returns -1 for dedicated server case,
 	 * therefore the i == 0 check is correct */

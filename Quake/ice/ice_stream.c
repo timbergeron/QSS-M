@@ -1508,11 +1508,7 @@ struct icesocket_s *ICE_WSS_EstablishConnection(const char *address, netadr_t *a
 		n->f = ICE_OpenTLS(address, n->f, false);
 #endif
 
-	n->f = Websocket_WrapStream(n->f, address, "/",
-#ifdef NETQUAKE_IO_HACK
-			NETQUAKE_IO_HACK","
-#endif
-			WEBSOCKET_SUBPROTOCOL);
+	n->f = Websocket_WrapStream(n->f, address, "/", WEBSOCKET_SUBPROTOCOL);
 
 	if (!n->f)
 	{

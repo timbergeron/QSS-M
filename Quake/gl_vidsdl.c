@@ -121,6 +121,7 @@ modestate_t	modestate = MS_UNINIT;
 qboolean	scr_skipupdate;
 
 qboolean gl_mtexable = false;
+qboolean gl_packed_pixels = false;
 qboolean gl_texture_env_combine = false; //johnfitz
 qboolean gl_texture_env_add = false; //johnfitz
 qboolean gl_swap_control = false; //johnfitz
@@ -1405,6 +1406,7 @@ static void GL_CheckExtensions (void)
 	else if (gl_glsl_able)
 	{
 		gl_glsl_gamma_able = true;
+		Con_Printf("Enabled: GLSL gamma\n");
 	}
 	else
 	{
@@ -1506,11 +1508,40 @@ static void GL_CheckExtensions (void)
 	else if (gl_glsl_able && gl_vbo_able && gl_max_texture_units >= 3)
 	{
 		gl_glsl_alias_able = true;
+		Con_Printf("Enabled: GLSL alias model rendering\n");
 	}
 	else
 	{
 		Con_Warning ("GLSL alias model rendering not available, using Fitz renderer\n");
 	}
+
+	// packed_pixels
+	//
+	if (COM_CheckParm("-nopackedpixels"))
+		Con_Warning ("EXT_packed_pixels disabled at command line\n");
+	else if (gl_glsl_alias_able)
+	{
+		gl_packed_pixels = true;
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("Enabled: EXT_packed_pixels\n");
+	}
+	#if 0 /* Disabling for non-GLSL path, needs more surgery. */
+	else if (GL_ParseExtensionList(gl_extensions, "GL_APPLE_packed_pixels"))
+	{
+		Con_Printf("FOUND: APPLE_packed_pixels\n");
+		gl_packed_pixels = true;
+	}
+	else if (GL_ParseExtensionList(gl_extensions, "GL_EXT_packed_pixels"))
+	{
+		Con_Printf("FOUND: EXT_packed_pixels\n");
+		gl_packed_pixels = true;
+	}
+	else
+	{
+		Con_Warning ("packed_pixels not supported\n");
+	}
+	#endif
+
 	// glGenerateMipmap for warp textures
 	if (COM_CheckParm("-nowarpmipmaps"))
 		Con_Warning ("glGenerateMipmap disabled at command line\n");
@@ -1878,7 +1909,7 @@ static void VID_InitModelist (void)
 
 	// enumerate fullscreen modes
 	flags = DEFAULT_SDL_FLAGS | SDL_FULLSCREEN;
-	for (i = 0; i < (int)(sizeof(bpps)/sizeof(bpps[0])); i++)
+	for (i = 0; i < (int)Q_COUNTOF(bpps); i++)
 	{
 		if (nummodes >= MAX_MODE_LIST)
 			break;
