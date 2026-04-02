@@ -1094,9 +1094,29 @@ static qboolean SSL_InitGlobal(qboolean isserver)
 static qboolean GNUDTLS_SetCredentials(struct dtlslocalcred_s *cred)
 {
 	qboolean isserver = true;
-	gnutls_datum_t pub = {cred->cert, cred->certsize};
-	gnutls_datum_t priv = {cred->key, cred->keysize};
-	return !qgnutls_certificate_set_x509_key_mem(xcred[isserver], &pub, &priv, GNUTLS_X509_FMT_DER);
+	gnutls_x509_crt_fmt_t format = GNUTLS_X509_FMT_DER;
+	gnutls_datum_t pub;
+	gnutls_datum_t priv;
+
+	if (cred->rawcert && cred->rawkey)
+	{
+		pub.data = cred->rawcert;
+		pub.size = cred->rawcertsize;
+		priv.data = cred->rawkey;
+		priv.size = cred->rawkeysize;
+		if ((pub.size >= 11 && !strncmp((char *)pub.data, "-----BEGIN ", 11)) ||
+			(priv.size >= 11 && !strncmp((char *)priv.data, "-----BEGIN ", 11)))
+			format = GNUTLS_X509_FMT_PEM;
+	}
+	else
+	{
+		pub.data = cred->cert;
+		pub.size = cred->certsize;
+		priv.data = cred->key;
+		priv.size = cred->keysize;
+	}
+
+	return !qgnutls_certificate_set_x509_key_mem(xcred[isserver], &pub, &priv, format);
 }
 
 #if defined(__GNUC__) || defined(__clang__)

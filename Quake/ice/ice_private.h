@@ -440,6 +440,10 @@ typedef struct dtlscred_s
 		size_t certsize;
 		void *key;
 		size_t keysize;
+		void *rawcert;
+		size_t rawcertsize;
+		void *rawkey;
+		size_t rawkeysize;
 	} local;
 	struct dtlspeercred_s
 	{

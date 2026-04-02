@@ -939,38 +939,85 @@ static void QICE_SendInitial(struct icemodule_s *module, struct icestate_s *ice)
 }
 
 #ifdef HAVE_DTLS
-static qboolean QICE_LoadCerts(struct dtlslocalcred_s *cred, char *priv, char *cert)
+static void QICE_FreeLocalCred(struct dtlslocalcred_s *cred)
+{
+	if (cred->cert)
+		free(cred->cert);
+	if (cred->key)
+		free(cred->key);
+	if (cred->rawcert)
+		free(cred->rawcert);
+	if (cred->rawkey)
+		free(cred->rawkey);
+	cred->cert = NULL;
+	cred->certsize = 0;
+	cred->key = NULL;
+	cred->keysize = 0;
+	cred->rawcert = NULL;
+	cred->rawcertsize = 0;
+	cred->rawkey = NULL;
+	cred->rawkeysize = 0;
+}
+
+static qboolean QICE_ReadFileBuffer(const char *path, void **out, size_t *outsize)
 {
 	qofs_t sz;
 	int fd;
+	qbyte *buf;
 
-	sz = Sys_FileOpenRead(priv, &fd);	//private key is most likely to need special permissions to read, so fail on that one first.
-	if (sz>=0)
-	{
-		cred->keysize = sz;
-		if (cred->key)
-			free(cred->key);
-		cred->key = malloc(cred->keysize);
-		Sys_FileRead(fd, cred->key, cred->keysize);
-		Sys_FileClose(fd);
-	}
-	else
+	sz = Sys_FileOpenRead(path, &fd);
+	if (sz < 0)
 		return false;
 
-	sz = Sys_FileOpenRead(cert, &fd);
-	if (sz>=0)
+	buf = malloc(sz + 1);
+	if (!buf)
 	{
-		cred->certsize = sz;
-		if (cred->cert)
-			free(cred->cert);
-		cred->cert = malloc(cred->certsize);
-		Sys_FileRead(fd, cred->cert, cred->certsize);
 		Sys_FileClose(fd);
+		return false;
 	}
-	else
+
+	Sys_FileRead(fd, buf, sz);
+	Sys_FileClose(fd);
+	buf[sz] = 0;
+
+	*out = buf;
+	*outsize = sz;
+	return true;
+}
+
+static qboolean QICE_CopyBuffer(void **out, size_t *outsize, const void *src, size_t srcsize)
+{
+	qbyte *buf = malloc(srcsize + 1);
+
+	if (!buf)
+		return false;
+
+	memcpy(buf, src, srcsize);
+	buf[srcsize] = 0;
+
+	*out = buf;
+	*outsize = srcsize;
+	return true;
+}
+
+static qboolean QICE_LoadCerts(struct dtlslocalcred_s *cred, char *priv, char *cert)
+{
+	QICE_FreeLocalCred(cred);
+
+	//private key is most likely to need special permissions to read, so fail on that one first.
+	if (!QICE_ReadFileBuffer(priv, &cred->rawkey, &cred->rawkeysize))
+		return false;
+
+	if (!QICE_ReadFileBuffer(cert, &cred->rawcert, &cred->rawcertsize))
 	{
-		free(cred->key);
-		cred->key = NULL;
+		QICE_FreeLocalCred(cred);
+		return false;
+	}
+
+	if (!QICE_CopyBuffer(&cred->key, &cred->keysize, cred->rawkey, cred->rawkeysize) ||
+		!QICE_CopyBuffer(&cred->cert, &cred->certsize, cred->rawcert, cred->rawcertsize))
+	{
+		QICE_FreeLocalCred(cred);
 		return false;
 	}
 
@@ -1159,9 +1206,9 @@ static qice_connection_t *QICE_Setup(const char *address, qboolean isserver)
 			//`dtls://host:port?fp=foo` should be written consistently without confusion, so use the alt base64 format for advertised fingerprint values.
 			Base64_EncodeBlockURI(digest, CalcHash(&hash_sha2_256, digest, sizeof(digest), cred.cert, cred.certsize), fingerprint, sizeof(fingerprint));
 
-			newcon->icemodule.dtlsfuncs->SetCredentials(&cred);
-			free(cred.cert);
-			free(cred.key);
+			if (!newcon->icemodule.dtlsfuncs->SetCredentials(&cred))
+				Con_Printf(CON_WARNING"Unable to install TLS credentials from the configured certificate/key files.\n");
+			QICE_FreeLocalCred(&cred);
 		}
 		else
 			Con_Printf(CON_WARNING"DTLS unavailable - GnuTLS library failed to load.\n");
@@ -2718,12 +2765,14 @@ const char *NQICE_GetFingerprint (void)
 		}
 
 	if (!cred.certsize)
+	{
+		QICE_FreeLocalCred(&cred);
 		return "";
+	}
 
 	CalcHash(&hash_certfp, digest, sizeof(digest), cred.cert, cred.certsize);
 	Base64_EncodeBlock(digest, hash_certfp.digestsize, nqice_fp_cache, sizeof(nqice_fp_cache));
-	free(cred.cert);
-	free(cred.key);
+	QICE_FreeLocalCred(&cred);
 	return nqice_fp_cache;
 #else
 	return "";

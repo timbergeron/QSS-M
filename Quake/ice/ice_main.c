@@ -1526,20 +1526,45 @@ static size_t Base64_DecodeBlock(const char *in, const char *in_end, qbyte *out,
 }
 void ICE_DePEM(struct dtlslocalcred_s *cred)
 {	//base64 is bigger, and we handily have padding at the start. this means we can do it in-place and just truncate.
-	if (cred->certsize >= 27 && !strncmp(cred->cert, "-----BEGIN CERTIFICATE-----", 27))
+	static const char cert_begin[] = "-----BEGIN CERTIFICATE-----";
+	static const char cert_end[] = "-----END CERTIFICATE-----";
+	static const char rsa_key_begin[] = "-----BEGIN RSA PRIVATE KEY-----";
+	static const char rsa_key_end[] = "-----END RSA PRIVATE KEY-----";
+	static const char pkcs8_key_begin[] = "-----BEGIN PRIVATE KEY-----";
+	static const char pkcs8_key_end[] = "-----END PRIVATE KEY-----";
+	static const char ec_key_begin[] = "-----BEGIN EC PRIVATE KEY-----";
+	static const char ec_key_end[] = "-----END EC PRIVATE KEY-----";
+
+	if (cred->certsize >= sizeof(cert_begin)-1 && !strncmp(cred->cert, cert_begin, sizeof(cert_begin)-1))
 	{
-		char *start = (char*)cred->cert+27;
+		char *start = (char*)cred->cert + sizeof(cert_begin)-1;
 		char *end;
-		end = strstr(start, "-----END CERTIFICATE-----");
+		end = strstr(start, cert_end);
 		if (end)
 			cred->certsize = Base64_DecodeBlock(start, end, cred->cert, cred->certsize);
 	}
 
-	if (cred->keysize >= 32 && !strncmp(cred->key, "-----BEGIN RSA PRIVATE KEY-----", 31))
+	if (cred->keysize >= sizeof(rsa_key_begin)-1 && !strncmp(cred->key, rsa_key_begin, sizeof(rsa_key_begin)-1))
 	{
-		char *start = (char*)cred->key+31;
+		char *start = (char*)cred->key + sizeof(rsa_key_begin)-1;
 		char *end;
-		end = strstr(start, "-----END RSA PRIVATE KEY-----");
+		end = strstr(start, rsa_key_end);
+		if (end)
+			cred->keysize = Base64_DecodeBlock(start, end, cred->key, cred->keysize);
+	}
+	else if (cred->keysize >= sizeof(pkcs8_key_begin)-1 && !strncmp(cred->key, pkcs8_key_begin, sizeof(pkcs8_key_begin)-1))
+	{
+		char *start = (char*)cred->key + sizeof(pkcs8_key_begin)-1;
+		char *end;
+		end = strstr(start, pkcs8_key_end);
+		if (end)
+			cred->keysize = Base64_DecodeBlock(start, end, cred->key, cred->keysize);
+	}
+	else if (cred->keysize >= sizeof(ec_key_begin)-1 && !strncmp(cred->key, ec_key_begin, sizeof(ec_key_begin)-1))
+	{
+		char *start = (char*)cred->key + sizeof(ec_key_begin)-1;
+		char *end;
+		end = strstr(start, ec_key_end);
 		if (end)
 			cred->keysize = Base64_DecodeBlock(start, end, cred->key, cred->keysize);
 	}
