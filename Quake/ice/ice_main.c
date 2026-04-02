@@ -134,6 +134,7 @@ struct icecandidate_s
 	unsigned int reachable;	//looked like it was up a while ago...
 	unsigned int reached;	//timestamp of when it was last reachable. pick a new one if too old.
 	unsigned int tried;		//don't try again this round
+	unsigned int noroute;	//permanently unreachable from these networks (NETERR_NOROUTE)
 };
 struct icestate_s
 {
@@ -179,6 +180,7 @@ struct icestate_s
 
 	qboolean brokerless;	//we lost connection to our broker... clean up on failure status.
 	unsigned int icetimeout;	//time when we consider the connection dead
+	unsigned int icetimeout_ms;	//timeout duration in ms (0 = default 30s)
 	unsigned int keepalive;	//sent periodically...
 	unsigned int retries;	//bumped after each round of connectivity checks. affects future intervals.
 	enum iceproto_e proto;
@@ -254,6 +256,7 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 static struct icestate_s *icelist;	//fixme: move to modules.
 static qboolean icedestroyed; //thread unsafe.
 static void ICE_AddLCandidateInfo(struct icestate_s *con, netadr_t *adr, int type);
+static unsigned int ICE_ComputePriority(netadr_t *adr, struct icecandinfo_s *info);
 
 static const char *ICE_GetCandidateType(struct icecandinfo_s *info)
 {
@@ -719,7 +722,7 @@ static neterr_t SCTP_SendLowerPacket(struct icestate_s *ice, const void *data, s
 #endif
 static neterr_t ICE_SendPacket(struct icestate_s *con, const void *data, size_t length)
 {
-	con->icetimeout = Sys_Milliseconds()+30*1000;	//keep it alive a little longer.
+	con->icetimeout = Sys_Milliseconds() + (con->icetimeout_ms ? con->icetimeout_ms : 30*1000);
 
 	if (con->state == ICE_CONNECTING)
 		return NETERR_CLOGGED;
@@ -875,6 +878,9 @@ static qboolean ICE_SendSpam(struct icestate_s *con)
 	struct icemodule_s *module = con->module;
 
 	//only send one ping to each.
+retry_noroute:
+	bestlocal = -1;
+	bestpeer = NULL;
 	for(rc = con->rc; rc; rc = rc->next)
 	{
 		for (i = 0; i < MAX_NETWORKS; i++)
@@ -1078,9 +1084,10 @@ static qboolean ICE_SendSpam(struct icestate_s *con)
 			break;
 
 		case NETERR_NOROUTE:
+			bestpeer->noroute |= (1u<<bestlocal);	//permanently unreachable from this network, don't retry
 			if (con->modeflags & ICEF_VERBOSE_PROBE)
 				Con_Printf(S_COLOR_GRAY"ICE NETERR_NOROUTE to %s:%i(%s)\n", bestpeer->info.addr, bestpeer->info.port, candtype);
-			break;
+			goto retry_noroute;	//try next candidate/network immediately instead of waiting
 		case NETERR_DISCONNECTED:
 			if (con->modeflags & ICEF_VERBOSE_PROBE)
 				Con_Printf(S_COLOR_GRAY"ICE NETERR_DISCONNECTED to %s:%i(%s)\n", bestpeer->info.addr, bestpeer->info.port, candtype);
@@ -1097,6 +1104,48 @@ static qboolean ICE_SendSpam(struct icestate_s *con)
 		return true;
 	}
 	return false;
+}
+
+// Try to add an srflx candidate from the module's cached STUN response
+// instead of sending a new binding request.
+// Returns true if a cached address was available.
+static qboolean ICE_UseCachedSrflx(struct icestate_s *con, struct iceserver_s *srv)
+{
+	int fidx = (srv->addr.type != NA_IP);
+	netadr_t *cached = &con->module->srflx[fidx];
+	struct icecandidate_s *rc;
+	int rnd[2];
+	struct icecandidate_s *src;
+
+	if (cached->type == NA_INVALID)
+		return false;
+
+	// Already have this candidate?
+	for (rc = con->lc; rc; rc = rc->next)
+	{
+		if (NET_CompareAdr(cached, &rc->peer))
+			return true;
+	}
+
+	src = calloc(1, sizeof(*src));
+	src->next = con->lc;
+	con->lc = src;
+	src->peer = *cached;
+	NET_BaseAdrToString(src->info.addr, sizeof(src->info.addr), cached);
+	src->info.port = con->module->srflx_port ? con->module->srflx_port : NET_AdrToPort(cached);
+	src->info.type = ICE_SRFLX;
+	src->info.component = 1;
+	src->info.network = cached->connum;
+	src->dirty = true;
+	src->info.priority = ICE_ComputePriority(&src->peer, &src->info);
+
+	Sys_RandomBytes((void*)rnd, sizeof(rnd));
+	q_strlcpy(src->info.candidateid, va("x%08x%08x", rnd[0], rnd[1]), sizeof(src->info.candidateid));
+
+	if (con->modeflags & ICEF_VERBOSE)
+		Con_Printf(S_COLOR_GRAY"[%s]: Public address (cached): %s:%d\n", con->friendlyname, src->info.addr, src->info.port);
+
+	return true;
 }
 
 static void ICE_ToStunServer(struct icestate_s *con, struct iceserver_s *srv)
@@ -1304,6 +1353,7 @@ static void TURN_AuthorisePeer(struct icestate_s *con, struct iceserver_s *srv, 
 void ICE_AddRCandidateInfo(struct icestate_s *con, struct icecandinfo_s *n)
 {
 	struct icecandidate_s *o;
+	int rccount = 0;
 	qboolean isnew;
 	netadr_t peer;
 	int peerbits;
@@ -1352,6 +1402,7 @@ void ICE_AddRCandidateInfo(struct icestate_s *con, struct icecandinfo_s *n)
 	{
 		for (o = con->rc; o; o = o->next)
 		{
+			rccount++;
 			//not sure that updating candidates is particuarly useful tbh, but hey.
 			if (!strcmp(o->info.candidateid, n->candidateid))
 				break;
@@ -1361,6 +1412,7 @@ void ICE_AddRCandidateInfo(struct icestate_s *con, struct icecandinfo_s *n)
 	{
 		for (o = con->rc; o; o = o->next)
 		{
+			rccount++;
 			//avoid dupes.
 			if (!strcmp(o->info.addr, n->addr) && o->info.port == n->port)
 				break;
@@ -1368,6 +1420,8 @@ void ICE_AddRCandidateInfo(struct icestate_s *con, struct icecandinfo_s *n)
 	}
 	if (!o)
 	{
+		if (rccount >= 256)
+			return;	//reject excessive candidates
 		o = calloc(1, sizeof(*o));
 		o->next = con->rc;
 		con->rc = o;
@@ -1400,7 +1454,7 @@ void ICE_AddRCandidateInfo(struct icestate_s *con, struct icecandinfo_s *n)
 	{	//for relay candidates, add an srflx candidate too.
 		struct icecandinfo_s t = o->info;
 		t.type = ICE_SRFLX;
-		strcpy(t.addr, n->reladdr);
+		q_strlcpy(t.addr, n->reladdr, sizeof(t.addr));
 		t.port = n->relport;
 		*t.reladdr = 0;
 		t.relport = 0;
@@ -1789,7 +1843,7 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 			Con_Printf("ICE_Set invalid state %s\n", value);
 			con->state = ICE_INACTIVE;
 		}
-		con->icetimeout = Sys_Milliseconds() + 30*1000;
+		con->icetimeout = Sys_Milliseconds() + (con->icetimeout_ms ? con->icetimeout_ms : 30*1000);
 
 		con->retries = 0;
 
@@ -1937,6 +1991,10 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 	else if (!strcmp(prop, "brokerless"))
 	{
 		con->brokerless = atoi(value) != 0;
+	}
+	else if (!strcmp(prop, "timeout"))
+	{
+		con->icetimeout_ms = atoi(value);
 	}
 	else if (!strcmp(prop, "server"))
 	{
@@ -2114,7 +2172,7 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 
 		con->brokerless = true;
 		con->state = ICE_CONNECTED;
-		con->icetimeout = Sys_Milliseconds() + 1000*30;	//not dead yet...
+		con->icetimeout = Sys_Milliseconds() + (con->icetimeout_ms ? con->icetimeout_ms : 30*1000);
 		if (link)
 		{
 			con->servers = 1;
@@ -2893,8 +2951,13 @@ void ICE_Tick(void)
 					srv = &con->server[i];
 					if ((signed int)(srv->stunretry-curtime) < 0)
 					{
-						srv->stunretry = curtime + 2*1000;
-						ICE_ToStunServer(con, srv);
+						if (srv->isstun && ICE_UseCachedSrflx(con, srv))
+							srv->stunretry = curtime + 60*1000;
+						else
+						{
+							srv->stunretry = curtime + 2*1000;
+							ICE_ToStunServer(con, srv);
+						}
 					}
 #ifdef HAVE_TURN
 					for (j = 0; j < srv->peers; j++)
@@ -2920,7 +2983,7 @@ void ICE_Tick(void)
 					}
 #endif
 				}
-				if (con->keepalive < curtime && con->state != ICE_GATHERING)
+				if (con->keepalive < curtime && (con->state == ICE_CONNECTING || con->state == ICE_CONNECTED))
 				{
 					if (!ICE_SendSpam(con))
 					{
@@ -2958,24 +3021,30 @@ void ICE_Tick(void)
 								}
 							}
 						}
-						/*if (con->state == ICE_CONNECTED && best)
-						{	//once established, back off somewhat
+						if (con->state == ICE_CONNECTED && best)
+						{	//once established, only re-probe reachable candidates
 							for (rc = con->rc; rc; rc = rc->next)
-								rc->tried &= ~rc->reachable;
+								rc->tried = (rc->tried | rc->noroute) & ~rc->reachable;
+							con->keepalive = curtime + 5*1000;
 						}
-						else*/
+						else
 						{
 							for (rc = con->rc; rc; rc = rc->next)
-								rc->tried = 0;
-						}
+								rc->tried = rc->noroute;	//preserve permanently unreachable networks
 
-						con->retries++;
-						if (con->retries > 32)
-							con->retries = 32;
-						con->keepalive = curtime + 200*(con->retries);	//RTO... ish.
+							con->retries++;
+							if (con->retries > 32)
+								con->retries = 32;
+							con->keepalive = curtime + 200*(con->retries);	//RTO... ish.
+						}
 					}
 					else
-						con->keepalive = curtime + 50*(con->retries+1);	//Ta... absmin of 5ms
+					{
+						if (con->state == ICE_CONNECTED)
+							con->keepalive = curtime + 5*1000;	//connected keepalive
+						else
+							con->keepalive = curtime + 50*(con->retries+1);	//Ta... absmin of 5ms
+					}
 				}
 			}
 			if (con->state == ICE_CONNECTED)
@@ -3073,8 +3142,9 @@ static struct icestate_s *ICE_DirectConnectedInternal(struct icemodule_s *module
 		Con_DPrintf("%s: Direct connection\n", peer);
 
 	con->brokerless = true;
+	con->icetimeout_ms = 5*1000;	//short timeout — game connections survive via data flow extending it
 	con->state = ICE_CONNECTED;
-	con->icetimeout = Sys_Milliseconds() + 1000*30;	//not dead yet...
+	con->icetimeout = Sys_Milliseconds() + con->icetimeout_ms;
 
 	//so we match up inbound packets properly.
 	con->rc = calloc(1, sizeof(*con->rc));
@@ -3322,9 +3392,10 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 								q_strlcpy(src->info.candidateid, va("x%08x%08x", rnd[0], rnd[1]), sizeof(src->info.candidateid));
 
 								if (con->modeflags & ICEF_VERBOSE)
-									Con_Printf(S_COLOR_GRAY"[%s]: Public address: %s\n", con->friendlyname, NET_AdrToString(str, sizeof(str), &adr));
+									Con_Printf(S_COLOR_GRAY"[%s]: Public address: %s:%d\n", con->friendlyname, src->info.addr, src->info.port);
 							}
 							s->stunretry = Sys_Milliseconds() + 60*1000;
+							con->module->srflx[adr.type!=NA_IP] = adr;
 							return true;
 						}
 					}
@@ -3915,12 +3986,14 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 					}
 
 					//check to see if this is a new peer-reflexive address, which happens when the peer is behind a nat.
+					{	int rccount = 0;
 					for (rc = con->rc; rc; rc = rc->next)
 					{
+						rccount++;
 						if (NET_CompareAdr(from, &rc->peer))
 							break;
 					}
-					if (!rc)
+					if (!rc && rccount < 256)
 					{
 						//netadr_t reladdr;
 						//int relflags;
@@ -3940,6 +4013,7 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 						rc->info.type = ICE_PRFLX;
 						rc->dirty = true;
 						rc->info.priority = priority;
+					}
 					}
 
 					//flip ice control role, if we're wrong.
@@ -4131,7 +4205,7 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 				{
 				//	if (rc->reachable)
 					{	//found it. fix up its source address to our ICE connection (so we don't have path-switching issues) and keep chugging along.
-						con->icetimeout = Sys_Milliseconds() + 1000*30;	//not dead yet...
+						con->icetimeout = Sys_Milliseconds() + (con->icetimeout_ms ? con->icetimeout_ms : 30*1000);
 
 #ifdef HAVE_DTLS
 						if (con->dtlsstate)

@@ -621,7 +621,7 @@ handleerror:
 				if (net_ice_debug.value)
 					Con_Printf(S_COLOR_GRAY"[%s]: Broker client lost connection: %s\n", ICE_GetConnName(b->clients[cl].ice), *data?data:"<NO REASON>");
 				if (b->clients[cl].ice)
-					iceapi.Close(b->clients[cl].ice, b->clients[cl].isnew);
+					iceapi.Close(b->clients[cl].ice, true);
 				b->clients[cl].ice = NULL;
 				b->clients[cl].isnew = false;	//just in case...
 			}
@@ -868,6 +868,8 @@ handleerror:
 
 						//set to GATHERING so ICE_Tick doesn't destroy it before the offer arrives
 						iceapi.Set(probe, "state", STRINGIFY(ICE_GATHERING));
+						iceapi.Set(probe, "brokerless", "1");	//self-cleanup via icetimeout
+						iceapi.Set(probe, "timeout", "5000");	//probes are short-lived
 
 						//add STUN servers
 						iceapi.Set(probe, "server", va("stun:%s:%i", b->brokername, b->brokerport));
@@ -1573,6 +1575,7 @@ void SVC_ICE_Offer(const char *clientaddr, const char *brokerid, const char *sdp
 		return;
 	}
 	iceapi.Set(ice, "brokerless", "1");	//not managed by WebSocket broker — clean up on failure/timeout
+	iceapi.Set(ice, "timeout", "5000");	//short timeout — game connections survive via data flow extending it
 
 	//use the broker as a STUN server to discover our server-reflexive address.
 	//Use the broker's known IP (from the DTLS source) with the main broker port
@@ -2852,6 +2855,10 @@ qboolean NQICE_ProcessPacket (byte *data, int len, struct qsockaddr *addr, void(
 		via = shared_game_socket4 ? shared_game_socket4 : shared_game_socket6;
 	if (!via)
 		return false;
+
+	//set connum so ICE sends responses through the correct socket
+	//(matches ICE_ProcessModule numbering: conn[0]=IPv4=connum 1, conn[1]=IPv6=connum 2)
+	from.connum = (via == shared_game_socket6) ? 2 : 1;
 
 	//set net_driverlevel to the ICE driver so NET_NewQSocket sets the correct driver
 	for (i = 0; i < net_numdrivers; i++)

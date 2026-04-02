@@ -650,6 +650,10 @@ void SCTP_Decode(struct sctp_s *sctp, const void *msg_data, size_t msg_size, qbo
 							free(sctp->cookie);
 						sctp->cookiesize = plen - sizeof(*p);
 						sctp->cookie = calloc(1, sctp->cookiesize);
+						if (!sctp->cookie)
+						{	sctp->cookiesize = 0;
+							break;
+						}
 						memcpy(sctp->cookie, p+1, sctp->cookiesize);
 						break;
 					case 32773:	//Padding
@@ -862,7 +866,7 @@ sctp_t *SCTP_Create(struct icestate_s *ctx, const char *verbosename, unsigned in
 	sctp->myport = htons(localport);
 	sctp->peerport = htons(remoteport);
 
-	sctp->o.tsn = rand() ^ (rand()<<16);
+	Sys_RandomBytes((void*)&sctp->o.tsn, sizeof(sctp->o.tsn));
 	Sys_RandomBytes((void*)&sctp->o.verifycode, sizeof(sctp->o.verifycode));
 	Sys_RandomBytes((void*)&sctp->i.verifycode, sizeof(sctp->i.verifycode));
 

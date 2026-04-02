@@ -268,7 +268,7 @@ icestream_t *FS_WrapTCPSocket(SOCKET sock, qboolean conpending, const char *peer
 	if (sock == INVALID_SOCKET)
 		return NULL;
 
-	newf = calloc(1, sizeof(*newf) + strlen(peername));
+	newf = calloc(1, sizeof(*newf) + strlen(peername) + 1);
 	strcpy(newf->peer, peername);
 	newf->conpending = conpending;
 	newf->sock = sock;

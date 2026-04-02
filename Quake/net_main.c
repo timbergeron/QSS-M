@@ -258,8 +258,8 @@ static void NET_UpdateListen (void)
 		if (net_drivers[net_driverlevel].initialized == false)
 			continue;
 
-		if (!strcmp(net_drivers[net_driverlevel].name, "ICE"))
-			listening_dgram = false;	//if ICE is enabled then disable legacy Datagram.
+		//QSS-M: don't disable Datagram when ICE is active — we need both.
+		//Datagram handles native UDP clients, ICE handles browser WebRTC clients.
 		if (!strcmp(net_drivers[net_driverlevel].name, "Datagram"))
 			net_drivers[net_driverlevel].listening = listening_dgram;
 		else

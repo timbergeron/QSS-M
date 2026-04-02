@@ -270,9 +270,8 @@ struct icemodule_s
 	struct icemodule_s *next;
 	const struct dtlsfuncs_s *dtlsfuncs;
 
-	//for stun
-//	netadr_t srflx[2];	//ipv4, ipv6
-//	unsigned int srflx_tid[3]; //to verify the above.
+	//for stun - cached server-reflexive addresses (one per address family)
+	netadr_t srflx[2];	//ipv4, ipv6
 
 	//for mdns
 	char mdns_name[43];
