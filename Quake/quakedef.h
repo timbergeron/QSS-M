@@ -42,7 +42,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define	QUAKESPASM_VER_SUFFIX		// optional version suffix string literal like "-beta1"
 #endif
 
-#define QSS_VER	"3-01-24" // woods
+#define QSS_VER	"6-21-25" // woods - latest commit
 
 // woods add qss-m versions info
 
