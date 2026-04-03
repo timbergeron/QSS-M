@@ -837,10 +837,12 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 						f->pendingofs = 0;
 
 						//handle health check pings — respond with HTTP 200, don't upgrade
-						if (!strncmp(f->readbuffer, "GET /;/ping ", 12))
+						if (!strncmp(f->readbuffer, "GET /;/ping ", 12) || !strncmp(f->readbuffer, "OPTIONS /;/ping ", 16))
 						{
 							f->pendingsize = q_snprintf(f->pending, f->pendingmax,
 								"HTTP/1.1 200 OK\r\n"
+								"Access-Control-Allow-Origin: *\r\n"
+								"Access-Control-Allow-Methods: GET, OPTIONS\r\n"
 								"Content-Length: 0\r\n"
 								"Connection: close\r\n"
 								"\r\n");

@@ -1158,7 +1158,7 @@ static qice_connection_t *QICE_Setup(const char *address, qboolean isserver)
 		if (isserver)
 			newcon->icemodule.srflx_port = net_hostport;	// use game port for srflx candidates (NAT may remap)
 		ICE_SetupModule(&newcon->icemodule,
-			0,						// ephemeral if needed (client), or none (no shared socket)
+			0,						// ephemeral — Datagram shares its socket via NQICE_ShareGameSocket
 			isserver ? net_hostport : 0);		// TCP/WebSocket on game port
 	}
 

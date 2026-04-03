@@ -49,24 +49,6 @@ net_driver_t net_drivers[] =
 		Loop_Shutdown
 	},
 
-	{	"ICE",
-		false,
-		NQICE_Init,
-		NQICE_Listen,
-		NQICE_QueryAddresses,
-		NQICE_SearchForHosts,
-		NQICE_Connect,
-		NQICE_CheckNewConnections,
-		NQICE_GetAnyMessages,
-		NQICE_GetMessage,
-		NQICE_SendMessage,
-		NQICE_SendUnreliableMessage,
-		NQICE_CanSendMessage,
-		NQICE_CanSendUnreliableMessage,
-		NQICE_Close,
-		NQICE_Shutdown
-	},
-
 	{	"Datagram",
 		false,
 		Datagram_Init,
@@ -83,6 +65,24 @@ net_driver_t net_drivers[] =
 		Datagram_CanSendUnreliableMessage,
 		Datagram_Close,
 		Datagram_Shutdown
+	},
+
+	{	"ICE",
+		false,
+		NQICE_Init,
+		NQICE_Listen,
+		NQICE_QueryAddresses,
+		NQICE_SearchForHosts,
+		NQICE_Connect,
+		NQICE_CheckNewConnections,
+		NQICE_GetAnyMessages,
+		NQICE_GetMessage,
+		NQICE_SendMessage,
+		NQICE_SendUnreliableMessage,
+		NQICE_CanSendMessage,
+		NQICE_CanSendUnreliableMessage,
+		NQICE_Close,
+		NQICE_Shutdown
 	}
 };
 
