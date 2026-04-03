@@ -17,7 +17,7 @@ jobs:
       VCPKG_DISABLE_METRICS: "1"
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Cache vcpkg artifacts
       uses: actions/cache@v4
@@ -133,7 +133,7 @@ jobs:
           ./build-macos.sh
 
     - name: Upload macOS artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: QSS-M
         path: |

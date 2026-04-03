@@ -18,7 +18,7 @@ jobs:
       CROSS_GNUTLS_CACHE_REV: "v2"
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Resolve Target
       run: |
@@ -376,14 +376,14 @@ jobs:
         find artifact/logs -maxdepth 3 -type f | sort
 
     - name: Upload package artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: QSS-M-${{ matrix.platform }}
         path: artifact/package/QSS-M-${{ matrix.platform }}
         if-no-files-found: error
 
     - name: Upload debug logs
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: QSS-M-${{ matrix.platform }}-logs
         path: artifact/logs/QSS-M-${{ matrix.platform }}-logs

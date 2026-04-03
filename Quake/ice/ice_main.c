@@ -3369,7 +3369,6 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 								//const char *relpath;
 								int rnd[2];
 								struct icecandidate_s *src;	//server Reflexive Candidate
-								char str[256];
 								src = calloc(1, sizeof(*src));
 								src->next = con->lc;
 								con->lc = src;

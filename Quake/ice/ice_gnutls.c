@@ -700,14 +700,14 @@ static ssize_t SSL_Push(gnutls_transport_ptr_t p, const void *data, size_t size)
 		{
 		case VFS_ERROR_EOF:			return 0;
 		case VFS_ERROR_DNSFAILURE:
-		case VFS_ERROR_NORESPONSE:	eno = ECONNRESET;	break;
-		case VFS_ERROR_TRYLATER:	eno = EAGAIN;		break;
-		case VFS_ERROR_REFUSED:		eno = ECONNREFUSED;	break;
+		case VFS_ERROR_NORESPONSE:	eno = NET_ECONNRESET;	break;
+		case VFS_ERROR_TRYLATER:	eno = NET_EAGAIN;		break;
+		case VFS_ERROR_REFUSED:		eno = NET_ECONNREFUSED;	break;
 //		case VFS_ERROR_UNSPECIFIED:
 //		case VFS_ERROR_DNSFAILURE:
 //		case VFS_ERROR_WRONGCERT:
 //		case VFS_ERROR_UNTRUSTED:
-		default:					eno = ECONNRESET;	break;
+		default:					eno = NET_ECONNRESET;	break;
 		}
 		qgnutls_transport_set_errno(file->session, eno);
 		return -1;
@@ -727,10 +727,10 @@ static ssize_t SSL_Pull(gnutls_transport_ptr_t p, void *data, size_t size)
 		{
 		case VFS_ERROR_EOF:			return 0;
 		case VFS_ERROR_DNSFAILURE:
-		case VFS_ERROR_NORESPONSE:	eno = ECONNRESET;	break;
-		case VFS_ERROR_TRYLATER:	eno = EAGAIN;		break;
-		case VFS_ERROR_REFUSED:		eno = ECONNREFUSED;	break;
-		default:					eno = ECONNRESET;	break;
+		case VFS_ERROR_NORESPONSE:	eno = NET_ECONNRESET;	break;
+		case VFS_ERROR_TRYLATER:	eno = NET_EAGAIN;		break;
+		case VFS_ERROR_REFUSED:		eno = NET_ECONNREFUSED;	break;
+		default:					eno = NET_ECONNRESET;	break;
 		}
 		qgnutls_transport_set_errno(file->session, eno);
 		return -1;
@@ -755,13 +755,13 @@ static ssize_t DTLS_Push(gnutls_transport_ptr_t p, const void *data, size_t size
 	{
 	case NETERR_CLOGGED:
 	case NETERR_NOROUTE:
-		qgnutls_transport_set_errno(file->session, EAGAIN);
+		qgnutls_transport_set_errno(file->session, NET_EAGAIN);
 		return -1;
 	case NETERR_MTU:
-		qgnutls_transport_set_errno(file->session, EMSGSIZE);
+		qgnutls_transport_set_errno(file->session, NET_EMSGSIZE);
 		return -1;
 	case NETERR_DISCONNECTED:
-		qgnutls_transport_set_errno(file->session, EPERM);
+		qgnutls_transport_set_errno(file->session, NET_EPERM);
 		return -1;
 	default:
 		qgnutls_transport_set_errno(file->session, 0);
@@ -777,7 +777,7 @@ static ssize_t DTLS_Pull(gnutls_transport_ptr_t p, void *data, size_t size)
 	if (!file->readsize)
 	{	//no data left
 //		Sys_Printf("DTLS_Pull: EAGAIN\n");
-		qgnutls_transport_set_errno(file->session, EAGAIN);
+		qgnutls_transport_set_errno(file->session, NET_EAGAIN);
 		return -1;
 	}
 	else if (file->readsize > size)
@@ -785,7 +785,7 @@ static ssize_t DTLS_Pull(gnutls_transport_ptr_t p, void *data, size_t size)
 //		Sys_Printf("DTLS_Pull: EMSGSIZE\n");
 		memcpy(data, file->readdata, size);
 		file->readsize = 0;
-		qgnutls_transport_set_errno(file->session, EMSGSIZE);
+		qgnutls_transport_set_errno(file->session, NET_EMSGSIZE);
 		return -1;
 	}
 	else
