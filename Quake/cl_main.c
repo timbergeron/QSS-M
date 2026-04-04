@@ -3487,38 +3487,44 @@ void CL_Viewpos_f (void)
 	char buf[256];
 	if (cls.state != ca_connected)
 		return;
-#if 0
-	//camera position
+
+	// player position
 	q_snprintf (buf, sizeof (buf),
-		"(%i %i %i) %i %i %i",
-		(int)r_refdef.vieworg[0],
-		(int)r_refdef.vieworg[1],
-		(int)r_refdef.vieworg[2],
-		(int)r_refdef.viewangles[PITCH],
-		(int)r_refdef.viewangles[YAW],
-		(int)r_refdef.viewangles[ROLL]);
-#else
-	//player position
-	q_snprintf (buf, sizeof (buf),
-		"(%i %i %i) %i %i %i",
-		(int)cl.entities[cl.viewentity].origin[0],
-		(int)cl.entities[cl.viewentity].origin[1],
-		(int)cl.entities[cl.viewentity].origin[2],
-		(int)cl.viewangles[PITCH],
-		(int)cl.viewangles[YAW],
-		(int)cl.viewangles[ROLL]
+		"(%.0f %.0f %.0f) %.0f %.0f %.0f",
+		cl.entities[cl.viewentity].origin[0],
+		cl.entities[cl.viewentity].origin[1],
+		cl.entities[cl.viewentity].origin[2],
+		cl.viewangles[PITCH],
+		cl.viewangles[YAW],
+		cl.viewangles[ROLL]
 	);
-#endif
 
 	VectorCopy(cl.entities[cl.viewentity].origin, last_viewpos); // woods #setlast
 	VectorCopy(cl.viewangles, last_viewangles); // woods #setlast
 	has_last_viewpos = true; // woods #setlast
 
-	Con_Printf ("Viewpos: %s\n", buf);
+	Con_SafePrintf ("Player pos: %s\n", buf);
 
 	if (Cmd_Argc () >= 2 && !q_strcasecmp (Cmd_Argv (1), "copy"))
 		if (SDL_SetClipboardText (buf) < 0)
-			Con_Printf ("Clipboard copy failed: %s\n", SDL_GetError ());
+			Con_SafePrintf ("Clipboard copy failed: %s\n", SDL_GetError ());
+
+	// camera position
+	Con_SafePrintf ("Camera pos: (%.0f %.0f %.0f) %.0f %.0f %.0f\n",
+		r_refdef.vieworg[0],
+		r_refdef.vieworg[1],
+		r_refdef.vieworg[2],
+		r_refdef.viewangles[PITCH],
+		r_refdef.viewangles[YAW],
+		r_refdef.viewangles[ROLL]
+	);
+
+	// sun mangle
+	Con_SafePrintf ("Sun mangle: %.0f %.0f %.0f\n",
+		anglemod (r_refdef.viewangles[YAW] + 180.f),
+		r_refdef.viewangles[PITCH],
+		r_refdef.viewangles[ROLL]
+	);
 }
 
 /*
