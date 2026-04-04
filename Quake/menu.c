@@ -17709,10 +17709,24 @@ void M_ServerList_Draw (void)
 {
 	int x, y, i, cols;
 	int firstvis, numvis;
+	const char* title;
 
 	x = 16;
 	y = 36;
 	cols = 36;
+
+	switch (searchLastScope)
+	{
+	case SLIST_INTERNET:
+		title = "Servers (Public)";
+		break;
+	case SLIST_LAN:
+		title = "Servers (Local)";
+		break;
+	default:
+		title = "Servers";
+		break;
+	}
 
         serversmenu.x = x;
         serversmenu.y = y;
@@ -17732,7 +17746,7 @@ void M_ServerList_Draw (void)
 		M_Ticker_Update(&serversmenu.ticker);
 	}
 
-	Draw_String(x, y - 36, "Servers");
+	Draw_String(x, y - 36, title);
 	M_DrawQuakeBar(x - 8, y - 24, cols + 2);
 	// Header drawing
 	int header_y = y - 16;
