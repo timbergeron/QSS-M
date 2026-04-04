@@ -3267,7 +3267,6 @@ static void Host_Status_f (void)
 	int			minutes;
 	int			hours = 0;
 	int			j, i;
-	int			a, b, c; // Baker 3.60 - a,b,c added for IP masking// woods
 
 	qhostaddr_t addresses[32];
 	int numaddresses;
@@ -3346,8 +3345,8 @@ static void Host_Status_f (void)
 			hours = 0;
 		print_fn ("#%-2u %-16.16s  %3i  %2i:%02i:%02i\n", j+1, client->name, (int)client->edict->v.frags, hours, minutes, seconds);
 		
-		if (cmd_source != src_command && sscanf(client->netconnection ? NET_QSocketGetTrueAddressString(client->netconnection) : "botclient", "%d.%d.%d", &a, &b, &c) == 3)
-			print_fn("   %d.%d.%d.xxx\n", a, b, c); // Baker 3.60 - a,b,c added for IP masking // woods
+		if (cmd_source != src_command)
+			print_fn("   %s\n", client->netconnection ? NET_QSocketGetMaskedAddressStringForDisplay(client->netconnection) : "botclient");
 		else
 			print_fn("   %s\n", client->netconnection ? NET_QSocketGetTrueAddressString(client->netconnection) : "botclient");
 	}
@@ -5510,7 +5509,7 @@ static void Host_Name_f (void)
 
 	// JPG 1.05 - log the IP address woods for #iplog  (log the IP address)
 	if (cls.state == ca_connected && !cls.demoplayback)
-		if (sscanf(net_activeSockets->maskedaddress, "%d.%d.%d", &a, &b, &c) == 3)
+		if (sscanf(NET_QSocketGetMaskedAddressStringForDisplay(net_activeSockets), "%d.%d.%d", &a, &b, &c) == 3)
 			IPLog_Add((a << 16) | (b << 8) | c, newName);
 }
 
@@ -7468,7 +7467,7 @@ void Host_Identify_f(void)
 			Con_Printf("No such player\n");
 			return;
 		}
-		if (sscanf(svs.clients[i].netconnection->maskedaddress, "%d.%d.%d", &a, &b, &c) != 3)
+		if (sscanf(NET_QSocketGetMaskedAddressStringForDisplay(svs.clients[i].netconnection), "%d.%d.%d", &a, &b, &c) != 3)
 		{
 			Con_Printf("Could not determine IP information for %s\n", svs.clients[i].name);
 			return;

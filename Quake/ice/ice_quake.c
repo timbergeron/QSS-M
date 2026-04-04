@@ -785,17 +785,7 @@ handleerror:
 						total *= 1000;	//ms
 
 						if (svs.clients[i].netconnection)
-						{
-							//mask IP like Host_Status_f: x.x.x.xxx for IPv4
-							const char *fulladdr = NET_QSocketGetTrueAddressString(svs.clients[i].netconnection);
-							static char masked[64];
-							int a, b, c;
-							if (sscanf(fulladdr, "%d.%d.%d", &a, &b, &c) == 3)
-								q_snprintf(masked, sizeof(masked), "%d.%d.%d.xxx", a, b, c);
-							else
-								q_strlcpy(masked, fulladdr, sizeof(masked));
-							addr = masked;
-						}
+							addr = NET_QSocketGetMaskedAddressStringForDisplay(svs.clients[i].netconnection);
 						else
 							addr = "botclient";
 
@@ -2661,7 +2651,7 @@ gotgetchallenge:
 			else
 			{
 				MSG_WriteLong(&net_message, (int)(net_time - client->netconnection->connecttime));
-				MSG_WriteString(&net_message, NET_QSocketGetMaskedAddressString(client->netconnection));
+				MSG_WriteString(&net_message, NET_QSocketGetMaskedAddressStringForDisplay(client->netconnection));
 			}
 			*((int *)net_message.data) = BigLong(NETFLAG_CTL | (net_message.cursize & NETFLAG_LENGTH_MASK));
 			iceapi.SendPacket(ice, net_message.data, net_message.cursize);

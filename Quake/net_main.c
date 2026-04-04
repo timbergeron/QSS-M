@@ -238,6 +238,53 @@ const char *NET_QSocketGetMaskedAddressString (const qsocket_t *s)
 {
 	return s->maskedaddress;
 }
+static qboolean NET_FormatMaskedAddressStringForDisplay(const char *addr, char *out, size_t outsize)
+{
+	const char *scan;
+	int a, b, c;
+	unsigned int w0, w1, w2, w3;
+
+	if (!addr || !*addr)
+		return false;
+
+	for (scan = addr; *scan && *scan != '[' && !isdigit((unsigned char)*scan); scan++)
+		;
+
+	if (sscanf(scan, "%d.%d.%d", &a, &b, &c) == 3 &&
+		(unsigned int)a <= 255 && (unsigned int)b <= 255 && (unsigned int)c <= 255)
+	{
+		q_snprintf(out, outsize, "%d.%d.%d.xxx", a, b, c);
+		return true;
+	}
+
+	if (*scan == '[' && sscanf(scan, "[%x:%x:%x:%x", &w0, &w1, &w2, &w3) == 4)
+	{
+		q_snprintf(out, outsize, "[%x:%x:%x:%x::]/64", w0, w1, w2, w3);
+		return true;
+	}
+
+	return false;
+}
+const char *NET_QSocketGetMaskedAddressStringForDisplay (const qsocket_t *s)
+{
+	static char buffer[NET_NAMELEN];
+	const char *addr;
+
+	if (!s)
+		return "unknown";
+
+	if (NET_FormatMaskedAddressStringForDisplay(s->trueaddress, buffer, sizeof(buffer)))
+		return buffer;
+	if (NET_FormatMaskedAddressStringForDisplay(s->maskedaddress, buffer, sizeof(buffer)))
+		return buffer;
+
+	addr = *s->maskedaddress ? s->maskedaddress : s->trueaddress;
+	while (*addr == '@')
+		addr++;
+	q_strlcpy(buffer, addr, sizeof(buffer));
+
+	return buffer;
+}
 qboolean NET_QSocketGetProQuakeAngleHack(const qsocket_t *s)
 {
 	if (s && !s->disconnected)

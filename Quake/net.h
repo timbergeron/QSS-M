@@ -66,6 +66,7 @@ const char *NET_ResolveCacheName(const char *host);
 double NET_QSocketGetTime (const struct qsocket_s *sock);
 const char *NET_QSocketGetTrueAddressString (const struct qsocket_s *sock);
 const char *NET_QSocketGetMaskedAddressString (const struct qsocket_s *sock);
+const char *NET_QSocketGetMaskedAddressStringForDisplay (const struct qsocket_s *sock);
 qboolean NET_QSocketGetProQuakeAngleHack (const struct qsocket_s *sock);
 int NET_QSocketGetSequenceIn (const struct qsocket_s *sock);
 int NET_QSocketGetSequenceOut (const struct qsocket_s *sock);
