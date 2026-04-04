@@ -69,6 +69,7 @@ cvar_t	net_messagetimeout = {"net_messagetimeout","300",CVAR_NONE};
 cvar_t	net_connecttimeout = {"net_connecttimeout","10",CVAR_NONE};	//this might be a little brief, but we don't have a way to protect against smurf attacks.
 cvar_t	net_connectattempts = {"net_connectattempts","3",CVAR_ARCHIVE}; // woods #connectretry
 cvar_t	hostname = {"hostname", "UNNAMED", CVAR_SERVERINFO};
+cvar_t	net_master_ignore = {"net_master_ignore", "159.196.122.212", CVAR_ARCHIVE};
 
 // these two macros are to make the code more readable
 #define sfunc	net_drivers[sock->driver]
@@ -1132,6 +1133,7 @@ void NET_Init (void)
 	Cvar_RegisterVariable (&net_connecttimeout);
 	Cvar_RegisterVariable (&net_connectattempts); // woods #connectretry
 	Cvar_RegisterVariable (&hostname);
+	Cvar_RegisterVariable (&net_master_ignore);
 
 	Cmd_AddCommand ("slist", NET_Slist_f);
 	Cmd_AddCommand ("listen", NET_Listen_f);

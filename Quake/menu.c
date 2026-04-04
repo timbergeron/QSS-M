@@ -72,6 +72,7 @@ int m_mousex, m_mousey; // woods #mousemenu
 const char* ResolveHostname(const char* hostname); // woods #serversmenu
 extern qboolean Valid_IP(const char* ip_str); // woods #serversmenu
 extern qboolean Valid_Domain(const char* domain_str); // woods #serversmenu
+extern cvar_t net_master_ignore;
 
 void M_Menu_Main_f (void);
 	void M_Menu_SinglePlayer_f (void);
@@ -16882,6 +16883,103 @@ int UDP_Ping_Host(const char* host);
 static int ServersMenu_ResolveIndex(int displayIndex);
 static void SortServers(qboolean lockMutex);
 
+static void ServerList_CopyTrimmedToken(const char* start, size_t len, char* out, size_t outsize)
+{
+	const char* end = start + len;
+
+	while (start < end && (*start == ' ' || *start == '\t'))
+		start++;
+	while (end > start && (end[-1] == ' ' || end[-1] == '\t'))
+		end--;
+
+	len = end - start;
+	if (!outsize)
+		return;
+	if (len >= outsize)
+		len = outsize - 1;
+
+	memcpy(out, start, len);
+	out[len] = 0;
+}
+
+static void ServerList_GetBaseName(const char* name, char* out, size_t outsize)
+{
+	if (!name)
+		name = "";
+	if (*name == '*')
+		name++;
+	q_strlcpy(out, name, outsize);
+}
+
+static void ServerList_GetHostOnly(const char* address, char* out, size_t outsize)
+{
+	const char* start;
+	const char* end;
+
+	if (!outsize)
+		return;
+	out[0] = 0;
+
+	if (!address || !*address)
+		return;
+
+	if (address[0] == '[')
+	{
+		start = address + 1;
+		end = strchr(start, ']');
+		if (!end)
+			end = address + strlen(address);
+	}
+	else
+	{
+		const char* last_colon = strrchr(address, ':');
+		start = address;
+		end = last_colon ? last_colon : address + strlen(address);
+	}
+
+	ServerList_CopyTrimmedToken(start, end - start, out, outsize);
+}
+
+static qboolean ServerList_IsIgnored(const char* name, const char* ip)
+{
+	const char* list = net_master_ignore.string;
+	char token[256];
+	char baseName[256];
+	char hostOnly[NET_NAMELEN];
+
+	if (!list || !*list)
+		return false;
+
+	ServerList_GetBaseName(name, baseName, sizeof(baseName));
+	ServerList_GetHostOnly(ip, hostOnly, sizeof(hostOnly));
+
+	while (*list)
+	{
+		const char* comma = strchr(list, ',');
+		size_t len = comma ? (size_t)(comma - list) : strlen(list);
+
+		ServerList_CopyTrimmedToken(list, len, token, sizeof(token));
+		if (*token)
+		{
+			qboolean tokenLooksLikeAddress = strchr(token, '.') || strchr(token, ':') || strchr(token, '[') || strchr(token, ']');
+
+			if ((name && !q_strcasecmp(token, name)) ||
+				(baseName[0] && !q_strcasecmp(token, baseName)) ||
+				(ip && !q_strcasecmp(token, ip)) ||
+				(hostOnly[0] && !q_strcasecmp(token, hostOnly)) ||
+				(tokenLooksLikeAddress && ((name && q_strcasestr(name, token)) ||
+				(baseName[0] && q_strcasestr(baseName, token)))))
+				return true;
+		}
+
+		if (!comma)
+			break;
+		list = comma + 1;
+	}
+
+	return false;
+}
+
 void InitializePingMutex(void)
 {
 	pingMutex = SDL_CreateMutex();
@@ -17254,13 +17352,19 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
                         Con_DPrintf("Memory allocation for address with port failed.\n");
                         break;
                 }
-                if (needs_brackets)
-                        q_snprintf(addressWithPort, addressLength, "[%s]:%d", address, (int)*port);
-                else
-                        q_snprintf(addressWithPort, addressLength, "%s:%d", address, (int)*port);
+		if (needs_brackets)
+			q_snprintf(addressWithPort, addressLength, "[%s]:%d", address, (int)*port);
+		else
+			q_snprintf(addressWithPort, addressLength, "%s:%d", address, (int)*port);
 
-                servertitem_t* newItem = &(*items)[*actualServerCount];
-                newItem->name = strdup(name ? name : "Unknown");
+		if (ServerList_IsIgnored(name, addressWithPort))
+		{
+			free(addressWithPort);
+			continue;
+		}
+
+		servertitem_t* newItem = &(*items)[*actualServerCount];
+		newItem->name = strdup(name ? name : "Unknown");
                 newItem->ip = strdup(addressWithPort);
                 free(addressWithPort);
 		newItem->users = numPlayers;
@@ -17455,20 +17559,49 @@ static void SortServers(qboolean lockMutex)
 void RemoveDuplicateServers (servertitem_t** items, int* actualServerCount) 
 {
 	int writeIndex = 0;
-	for (int i = 0; i < *actualServerCount; i++) {
-		qboolean isDuplicate = false;
-		for (int j = 0; j < i; j++) {
-			if (strcmp((*items)[i].ip, (*items)[j].ip) == 0) {
-				isDuplicate = true;
+	for (int i = 0; i < *actualServerCount; i++)
+	{
+		int duplicateIndex = -1;
+		const char* candidateName = (*items)[i].name ? (*items)[i].name : "";
+		const char* candidateBaseName = (*items)[i].name && (*items)[i].name[0] == '*' ? (*items)[i].name + 1 : candidateName;
+		qboolean candidateStarred = (*items)[i].name && (*items)[i].name[0] == '*';
+
+		for (int j = 0; j < writeIndex; j++)
+		{
+			const char* existingName = (*items)[j].name ? (*items)[j].name : "";
+			const char* existingBaseName = (*items)[j].name && (*items)[j].name[0] == '*' ? (*items)[j].name + 1 : existingName;
+			qboolean existingStarred = (*items)[j].name && (*items)[j].name[0] == '*';
+
+			if (strcmp((*items)[i].ip, (*items)[j].ip) == 0)
+			{
+				duplicateIndex = j;
+				break;
+			}
+
+			// Public search can surface the same ICE-capable server twice:
+			// once as an unsupported starred UDP listing and again as a normal broker/API listing.
+			if ((candidateStarred || existingStarred) &&
+				!q_strcasecmp(candidateBaseName, existingBaseName) &&
+				!q_strcasecmp((*items)[i].map, (*items)[j].map) &&
+				(*items)[i].users == (*items)[j].users &&
+				(*items)[i].maxusers == (*items)[j].maxusers)
+			{
+				duplicateIndex = j;
 				break;
 			}
 		}
-		if (!isDuplicate) {
-			if (writeIndex != i) {
-				(*items)[writeIndex] = (*items)[i];
-			}
-			writeIndex++;
+
+		if (duplicateIndex >= 0)
+		{
+			qboolean existingStarred = (*items)[duplicateIndex].name && (*items)[duplicateIndex].name[0] == '*';
+			if (existingStarred && !candidateStarred)
+				(*items)[duplicateIndex] = (*items)[i];
+			continue;
 		}
+
+		if (writeIndex != i)
+			(*items)[writeIndex] = (*items)[i];
+		writeIndex++;
 	}
 	*actualServerCount = writeIndex;
 }
@@ -17492,6 +17625,9 @@ void FetchAndSortServers (void)
 		unsigned char* ch; // woods dequake
 		for (ch = (unsigned char*)serverName; *ch; ch++)
 			*ch = dequake[*ch];
+
+		if (ServerList_IsIgnored(serverName, serverIP))
+			continue;
 
 		if (serverName && serverName[0] != '\0') 
 		{

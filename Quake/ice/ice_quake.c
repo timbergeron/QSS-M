@@ -1818,6 +1818,30 @@ qboolean NQICE_SearchForHosts (qboolean xmit)
 	const char *l;
 	int r;
 
+	if (!COM_CheckParm("-useice"))
+	{
+		if (lst)
+		{
+			lst->Close(lst);
+			lst = NULL;
+		}
+		ofs = sz = 0;
+		header = 0;
+		return false;
+	}
+
+	if (slistScope != SLIST_INTERNET)
+	{
+		if (lst)
+		{
+			lst->Close(lst);
+			lst = NULL;
+		}
+		ofs = sz = 0;
+		header = 0;
+		return false;
+	}
+
 	if (xmit && !lst)
 	{
 		const char *broker = net_ice_broker.string;

@@ -2417,7 +2417,13 @@ static void _Datagram_AddPossibleHost(struct qsockaddr *addr, qboolean master)
 void Datagram_AddHostCacheInfo(struct qsockaddr *readaddr, const char *cname, const char *info)
 {
 	char tmp[1024], *e;
-	int p;
+	char hostnamebuf[sizeof(hostcache[0].name)];
+	char mapbuf[sizeof(hostcache[0].map)];
+	char gamedirbuf[sizeof(hostcache[0].gamedir)];
+	int p, connectprotocol;
+	int users, maxusers;
+	qboolean brokerentry = (readaddr == NULL);
+	qboolean supported;
 	enum
 	{
 		PT_NONE			= 0,
@@ -2454,19 +2460,16 @@ void Datagram_AddHostCacheInfo(struct qsockaddr *readaddr, const char *cname, co
 	{
 		if (n == HOSTCACHESIZE)
 			return; //can't add.
-		hostCacheCount++;	//its new.
 	}
 
-	Info_GetKey(info, "hostname", hostcache[n].name, sizeof(hostcache[n].name));
-	if (!*hostcache[n].name)
-		q_strlcpy(hostcache[n].name, "UNNAMED", sizeof(hostcache[n].name));
-	Info_GetKey(info, "mapname", hostcache[n].map, sizeof(hostcache[n].map));
-	Info_GetKey(info, "modname", hostcache[n].gamedir, sizeof(hostcache[n].gamedir));
+	Info_GetKey(info, "hostname", hostnamebuf, sizeof(hostnamebuf));
+	Info_GetKey(info, "mapname", mapbuf, sizeof(mapbuf));
+	Info_GetKey(info, "modname", gamedirbuf, sizeof(gamedirbuf));
 
 	Info_GetKey(info, "clients", tmp, sizeof(tmp));
-	hostcache[n].users = atoi(tmp);
+	users = atoi(tmp);
 	Info_GetKey(info, "sv_maxclients", tmp, sizeof(tmp));
-	hostcache[n].maxusers = atoi(tmp);
+	maxusers = atoi(tmp);
 	Info_GetKey(info, "protocol", tmp, sizeof(tmp));
 	p = strtol(tmp, &e, 10);
 	if (*e)	while(*e)switch(*e++)
@@ -2480,7 +2483,35 @@ void Datagram_AddHostCacheInfo(struct qsockaddr *readaddr, const char *cname, co
 	}
 	else
 		t = PT_DARKPLACES; //assume the worst for outdated servers.
-	if (p != NET_PROTOCOL_VERSION || !(t&(PT_NETQUAKE|PT_DARKPLACES|PT_QUAKETV)))
+
+	connectprotocol = p;
+	if (t & PT_NETQUAKE)
+	{
+		Info_GetKey(info, "nqprotocol", tmp, sizeof(tmp));
+		if (*tmp)
+			connectprotocol = atoi(tmp);
+	}
+
+	supported = (connectprotocol == NET_PROTOCOL_VERSION && (t&(PT_NETQUAKE|PT_DARKPLACES|PT_QUAKETV)));
+
+	// Broker-fed entries should already contain a complete public listing.
+	// Ignore malformed/unsupported summaries instead of filling the browser with junk rows.
+	if (brokerentry && (!*mapbuf || maxusers <= 0 || !supported))
+		return;
+
+	// is it already there?
+	if (n == hostCacheCount)
+		hostCacheCount++;	//its new.
+
+	q_strlcpy(hostcache[n].name, hostnamebuf, sizeof(hostcache[n].name));
+	if (!*hostcache[n].name)
+		q_strlcpy(hostcache[n].name, "UNNAMED", sizeof(hostcache[n].name));
+	q_strlcpy(hostcache[n].map, mapbuf, sizeof(hostcache[n].map));
+	q_strlcpy(hostcache[n].gamedir, gamedirbuf, sizeof(hostcache[n].gamedir));
+	hostcache[n].users = users;
+	hostcache[n].maxusers = maxusers;
+
+	if (!supported)
 	{	//server is unsupported. give it a star.
 		Q_strcpy(hostcache[n].cname, hostcache[n].name);
 		Q_strcpy(hostcache[n].name, "*");
