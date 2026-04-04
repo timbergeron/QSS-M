@@ -369,6 +369,29 @@ static void R_Player_Xray_Completion_f (cvar_t* cvar, const char* partial)
 
 /*
 ===============
+R_Lightmap_Format_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void R_Lightmap_Format_Completion_f (cvar_t* cvar, const char* partial)
+{
+	Con_AddToTabList("rgb9_e5", partial, "HDR packed (preferred)", NULL);
+	Con_AddToTabList("rgb9e5", partial, "alias", NULL);
+	Con_AddToTabList("e5bgr9", partial, "alias", NULL);
+	Con_AddToTabList("rgb10_a2", partial, "HDR packed fallback", NULL);
+	Con_AddToTabList("rgb10a2", partial, "alias", NULL);
+	Con_AddToTabList("rgb10", partial, "alias", NULL);
+	Con_AddToTabList("rgba8", partial, "8-bit RGBA", NULL);
+	Con_AddToTabList("rgba", partial, "alias", NULL);
+	Con_AddToTabList("rgbx8", partial, "alias", NULL);
+	Con_AddToTabList("rgbx", partial, "alias", NULL);
+	Con_AddToTabList("bgra8", partial, "8-bit BGRA", NULL);
+	Con_AddToTabList("bgra", partial, "alias", NULL);
+	Con_AddToTabList("bgrx8", partial, "alias", NULL);
+	Con_AddToTabList("bgrx", partial, "alias", NULL);
+}
+
+/*
+===============
 R_Init
 ===============
 */
@@ -461,6 +484,7 @@ void R_Init (void)
 	//spike -- new cvars...
 	Cvar_RegisterVariable (&r_scenecache);
 	Cvar_RegisterVariable (&r_lightmap_format);	//instead of qs's read-only r_lightmapwide cvar. can also select e5bgr9
+	Cvar_SetCompletion (&r_lightmap_format, &R_Lightmap_Format_Completion_f); // woods #iwtabcomplete
 	//spike
 
 	Cvar_RegisterVariable (&cl_damagehue);   // woods #damage
