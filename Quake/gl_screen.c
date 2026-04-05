@@ -4198,6 +4198,8 @@ void LaserSight (void)
 	}
 
 	vec3_t	start, forward, right, up, crosshair, wall, origin;
+	qboolean	use_stencil = false;
+	GLuint		viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
 
 	// copy origin to start, offset it correctly
 
@@ -4210,6 +4212,16 @@ void LaserSight (void)
 	VectorMA(start, 4096, forward, crosshair);
 	TraceLine(start, crosshair, 0, wall);
 	LaserSight_TraceBSPSubmodels (start, wall);
+
+	if (viewmodel_stencil_bit)
+	{
+		glPushAttrib(GL_STENCIL_BUFFER_BIT | GL_ENABLE_BIT);
+		glEnable(GL_STENCIL_TEST);
+		glStencilMask(0x00);
+		glStencilFunc(GL_NOTEQUAL, (GLint)viewmodel_stencil_bit, (GLint)viewmodel_stencil_bit);
+		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+		use_stencil = true;
+	}
 
 	glDisable(GL_DEPTH_TEST);
 	glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -4251,8 +4263,10 @@ void LaserSight (void)
 	glEnable(GL_CULL_FACE);
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 	GL_PolygonOffset(OFFSET_NONE);
+	if (use_stencil)
+		glPopAttrib();
 	glEnable(GL_DEPTH_TEST);
-	glDisable(GL_BLEND);		
+	glDisable(GL_BLEND);
 }
 
 //=============================================================================

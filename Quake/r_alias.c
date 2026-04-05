@@ -1143,15 +1143,26 @@ R_BeginAliasOutlineRendering -- woods #routline
 */
 void R_BeginAliasOutlineRendering(aliasglsl_t* glsl)
 {
+	GLuint stencil_ref = 1;
+	GLuint stencil_mask = 1;
+	GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
+
 	// Save the current OpenGL state that we are going to modify
 	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
 
 	glEnable(GL_STENCIL_TEST);
 
-	// Configure stencil to write 1s on the stencil buffer where the model is drawn
-	glStencilFunc(GL_ALWAYS, 1, 0xFF); // Set any stencil to 1
-	glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE); // Replace stencil with 1 where rendered
-	glStencilMask(0xFF); // Enable writing to the stencil buffer
+	// For viewmodels, also write the viewmodel bit so LaserSight can mask it
+	if (viewmodel_stencil_bit && gl_laserpoint.value && currententity && currententity == &cl.viewent)
+	{
+		stencil_ref |= viewmodel_stencil_bit;
+		stencil_mask |= viewmodel_stencil_bit;
+	}
+
+	// Configure stencil to write on the stencil buffer where the model is drawn
+	glStencilFunc(GL_ALWAYS, (GLint)stencil_ref, 0xFF);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+	glStencilMask(stencil_mask);
 
 	// Enable depth testing and write to depth buffer
 	glEnable(GL_DEPTH_TEST);
@@ -1265,6 +1276,7 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	float xrayAlpha = 1.0f;
 	float xrayAlphaFade = 1.0f;
 	qboolean is_xray = R_IsAliasOutlineXray(e, xrayColor, &xrayAlpha, &xrayAlphaFade);
+	GLuint outline_stencil_mask = (gl_laserpoint.value && GL_VIEWMODEL_STENCIL_BIT()) ? 0x01u : 0xFFu;
 
 	if (!is_xray && !(r_outline.value > 0 &&
 		!(cl.viewent.model == e->model) &&
@@ -1328,7 +1340,7 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	else
 	{
 		// Configure stencil to only draw where stencil is not set by the model
-		glStencilFunc(GL_NOTEQUAL, 1, 0xFF); // Pass test where stencil is not 1
+		glStencilFunc(GL_NOTEQUAL, 1, (GLint)outline_stencil_mask); // Pass test where stencil is not set by the model
 		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // Keep the stencil buffer unchanged
 		glStencilMask(0x00); // Disable writing to the stencil buffer
 	}
@@ -1415,6 +1427,8 @@ R_DrawViewmodelShell -- woods #powershell
 */
 void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* lerpdata, entity_t* e)
 {
+	GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
+
 	if (!r_coloredpowerupglow.value
 		|| gl_powerupshells.value <= 0.0f
 		|| gl_powerupshells.value > 1.0f
@@ -1443,9 +1457,20 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
 	glEnable(GL_STENCIL_TEST);
-	glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
-	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-	glStencilMask(0x00);
+	if (viewmodel_stencil_bit && gl_laserpoint.value)
+	{
+		// Keep the existing outline bit intact while stamping the viewmodel bit
+		// onto the expanded shell so LaserSight stays behind the full shell.
+		glStencilFunc(GL_NOTEQUAL, (GLint)(1u | viewmodel_stencil_bit), 0x01);
+		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+		glStencilMask(viewmodel_stencil_bit);
+	}
+	else
+	{
+		glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
+		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+		glStencilMask(0x00);
+	}
 
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
@@ -1857,6 +1882,18 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, lerpdata_t lerpdata)
 	float	blend, iblend;
 	const float *texcoords = (const float *)(currententity->model->meshvboptr+paliashdr->vbostofs);
 	int texcoordstride = 0;
+	qboolean use_viewmodel_stencil = false;
+	GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
+
+	if (viewmodel_stencil_bit && gl_laserpoint.value && currententity == &cl.viewent)
+	{
+		glPushAttrib(GL_STENCIL_BUFFER_BIT | GL_ENABLE_BIT);
+		glEnable(GL_STENCIL_TEST);
+		glStencilMask(viewmodel_stencil_bit);
+		glStencilFunc(GL_ALWAYS, (GLint)viewmodel_stencil_bit, (GLint)viewmodel_stencil_bit);
+		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+		use_viewmodel_stencil = true;
+	}
 
 	if (lerpdata.pose1 != lerpdata.pose2)
 	{
@@ -2130,6 +2167,8 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, lerpdata_t lerpdata)
 	glDisableClientState(GL_VERTEX_ARRAY);
 	glDisableClientState(GL_COLOR_ARRAY);
 
+	if (use_viewmodel_stencil)
+		glPopAttrib();
 
 	rs_aliaspasses += paliashdr->numtris;
 }

@@ -203,6 +203,11 @@ extern	float	load_subdivide_size; //johnfitz -- remember what subdivide_size val
 
 extern int		gl_stencilbits;
 
+// Viewmodel stencil bit: reserves the highest available stencil bit for the
+// viewmodel when gl_stencilbits > 1. Used by LaserSight to mask so the laser
+// appears behind the weapon viewmodel but in front of world geometry.
+#define GL_VIEWMODEL_STENCIL_BIT()  (gl_stencilbits > 1 ? (1u << (gl_stencilbits - 1)) : 0u)
+
 extern GLint gl_hardware_maxsize;
 
 // Multitexture
