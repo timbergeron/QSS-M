@@ -4340,6 +4340,187 @@ int UDP_Ping_Host(const char* host)
 
 /*
 ==================
+UDP_QueryPlayers -- query player names from a server via CCREQ_PLAYER_INFO
+Returns a malloc'd comma-separated string, or NULL on failure.
+==================
+*/
+char *UDP_QueryPlayers(const char *host, int maxslots)
+{
+	char hostbuf[MAX_SERVER_ADDRESS_LEN];
+	int port;
+	struct addrinfo hints, *res, *rp;
+	char portstr[16];
+	sys_socket_t sock = INVALID_SOCKET;
+	char names[512];
+	int nameslen = 0;
+	int ret;
+
+	if (!host || !*host || maxslots <= 0)
+		return NULL;
+	if (maxslots > MAX_SCOREBOARD)
+		maxslots = MAX_SCOREBOARD;
+
+	if (!ParseServerAddress(host, hostbuf, sizeof(hostbuf), &port))
+		return NULL;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_protocol = IPPROTO_UDP;
+	hints.ai_family = AF_UNSPEC;
+
+	q_snprintf(portstr, sizeof(portstr), "%d", port);
+	ret = getaddrinfo(hostbuf, portstr, &hints, &res);
+	if (ret != 0)
+		return NULL;
+
+	for (rp = res; rp; rp = rp->ai_next)
+	{
+		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (sock != INVALID_SOCKET)
+			break;
+	}
+	if (sock == INVALID_SOCKET || !rp)
+	{
+		freeaddrinfo(res);
+		return NULL;
+	}
+
+	/* send CCREQ_PLAYER_INFO for each slot */
+	{
+		unsigned char pkt[8];
+		int i;
+		for (i = 0; i < maxslots; i++)
+		{
+			unsigned int hdr;
+			int behdr;
+			size_t pktlen = 6; /* 4 header + 1 command + 1 slot */
+
+			pkt[4] = CCREQ_PLAYER_INFO;
+			pkt[5] = (unsigned char)i;
+			hdr = NETFLAG_CTL | ((unsigned int)pktlen & NETFLAG_LENGTH_MASK);
+			behdr = BigLong((int)hdr);
+			memcpy(pkt, &behdr, 4);
+
+			sendto(sock, (const char *)pkt, (int)pktlen, 0, rp->ai_addr, (socklen_t)rp->ai_addrlen);
+		}
+	}
+
+	/* collect responses with timeout */
+	{
+		double deadline = Sys_DoubleTime() + 1.5;
+		double idle_deadline = Sys_DoubleTime() + 0.3; /* give up if no response within 300ms */
+		int received_count = 0;
+
+		while (received_count < maxslots)
+		{
+			double now = Sys_DoubleTime();
+			double wait_until = (idle_deadline < deadline) ? idle_deadline : deadline;
+			double remaining = wait_until - now;
+			fd_set readfds;
+			struct timeval tv;
+			int sel;
+			unsigned char buf[512];
+			struct sockaddr_storage from;
+			socklen_t fromlen = sizeof(from);
+			ssize_t recv_len;
+			int len;
+
+			if (remaining <= 0)
+				break;
+
+			FD_ZERO(&readfds);
+			FD_SET(sock, &readfds);
+			if (remaining >= 1.0)
+			{
+				tv.tv_sec = (int)remaining;
+				tv.tv_usec = (int)((remaining - tv.tv_sec) * 1000000.0);
+			}
+			else
+			{
+				tv.tv_sec = 0;
+				tv.tv_usec = (int)(remaining * 1000000.0);
+				if (tv.tv_usec <= 0)
+					tv.tv_usec = 1000;
+			}
+
+#ifdef _WIN32
+			sel = selectsocket(0, &readfds, NULL, NULL, &tv);
+#else
+			sel = selectsocket((int)(sock + 1), &readfds, NULL, NULL, &tv);
+#endif
+			if (sel <= 0)
+				break;
+			if (!FD_ISSET(sock, &readfds))
+				break;
+
+			recv_len = recvfrom(sock, (char *)buf, sizeof(buf), 0, (struct sockaddr *)&from, &fromlen);
+			if (recv_len > (ssize_t)sizeof(buf))
+				continue;
+			len = (int)recv_len;
+			if (len < 6) /* minimum: 4 header + 1 type + 1 slot */
+				continue;
+
+			{
+				int control = BigLong(*(int *)buf);
+				int pktlen;
+				const unsigned char *p;
+				const char *pname;
+				int namelen;
+
+				if ((control & (~NETFLAG_LENGTH_MASK)) != (int)NETFLAG_CTL)
+					continue;
+				pktlen = control & NETFLAG_LENGTH_MASK;
+				if (pktlen != len)
+					continue;
+				if (buf[4] != CCREP_PLAYER_INFO)
+					continue;
+
+				/* buf[5] = player number, name starts at buf[6] as null-terminated string */
+				p = buf + 6;
+				pname = (const char *)p;
+
+				/* ensure name is null-terminated within received data */
+				{
+					const unsigned char *end = buf + len;
+					const unsigned char *scan = p;
+					while (scan < end && *scan)
+						scan++;
+					if (scan >= end)
+						continue; /* no null terminator found, skip */
+					namelen = (int)(scan - p);
+				}
+
+				/* trim trailing spaces */
+				while (namelen > 0 && pname[namelen - 1] == ' ')
+					namelen--;
+
+				if (namelen > 0 && nameslen + namelen + 2 < (int)sizeof(names))
+				{
+					if (nameslen > 0)
+					{
+						names[nameslen++] = ',';
+						names[nameslen++] = ' ';
+					}
+					memcpy(names + nameslen, pname, namelen);
+					nameslen += namelen;
+					names[nameslen] = '\0';
+				}
+				received_count++;
+				idle_deadline = Sys_DoubleTime() + 0.3; /* extend idle window after each response */
+			}
+		}
+	}
+
+	closesocket(sock);
+	freeaddrinfo(res);
+
+	if (nameslen > 0)
+		return strdup(names);
+	return NULL;
+}
+
+/*
+==================
 Host_Ping_f -- woods add support for external ping command #icmp
 
 ==================

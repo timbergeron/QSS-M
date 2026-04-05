@@ -16834,6 +16834,7 @@ typedef struct {
 	int users;
 	int maxusers;
 	const char* map;
+	const char* players;  // comma-separated player names (NULL if unavailable)
 	int ping;
 	qboolean active;
 	double lastPingTime;
@@ -16879,6 +16880,7 @@ static volatile qboolean pingThreadsShouldExit = false;
 SDL_mutex* pingMutex = NULL;
 
 int UDP_Ping_Host(const char* host);
+char *UDP_QueryPlayers(const char *host, int maxslots);
 
 static int ServersMenu_ResolveIndex(int displayIndex);
 static void SortServers(qboolean lockMutex);
@@ -16980,6 +16982,44 @@ static qboolean ServerList_IsIgnored(const char* name, const char* ip)
 	return false;
 }
 
+static void ServerList_FreeItem(servertitem_t* item)
+{
+	if (!item)
+		return;
+
+	free((void *)item->name);
+	free((void *)item->ip);
+	free((void *)item->map);
+	free((void *)item->players);
+
+	item->name = NULL;
+	item->ip = NULL;
+	item->map = NULL;
+	item->players = NULL;
+}
+
+static void ServerList_FreeItems(servertitem_t* items, int count)
+{
+	int i;
+
+	if (!items)
+		return;
+
+	for (i = 0; i < count; ++i)
+		ServerList_FreeItem(&items[i]);
+
+	free(items);
+}
+
+static void ServerList_MoveItem(servertitem_t* dst, servertitem_t* src)
+{
+	if (!dst || !src || dst == src)
+		return;
+
+	*dst = *src;
+	memset(src, 0, sizeof(*src));
+}
+
 void InitializePingMutex(void)
 {
 	pingMutex = SDL_CreateMutex();
@@ -17003,10 +17043,12 @@ void PingSingleServer(int index)
 
 	char serverAddress[256];
 	int  previousPing;
+	int  users;
 
 	SDL_LockMutex(pingMutex);
 	q_strlcpy(serverAddress, serversmenu.items[index].ip, sizeof(serverAddress));
 	previousPing = serversmenu.items[index].ping;
+	users = serversmenu.items[index].users;
 	serversmenu.items[index].isLoading = true;  // Set loading flag
 	SDL_UnlockMutex(pingMutex);
 
@@ -17027,6 +17069,19 @@ void PingSingleServer(int index)
 	}
 	serversmenu.items[index].isLoading = false;  // Clear loading flag
 	SDL_UnlockMutex(pingMutex);
+
+	/* refresh player names on re-ping if server has players */
+	if (ping >= 0 && users > 0)
+	{
+		char *playernames = UDP_QueryPlayers(serverAddress, users);
+		SDL_LockMutex(pingMutex);
+		if (playernames)
+		{
+			free((void *)serversmenu.items[index].players);
+			serversmenu.items[index].players = playernames;
+		}
+		SDL_UnlockMutex(pingMutex);
+	}
 }
 
 int ProcessPingQueue(void* data)
@@ -17126,7 +17181,11 @@ int PingServers(void* data)
 		if (serversmenu.items && serversmenu.items[i].ip)
 		{
 			char serverAddress[256];
+			int users;
+			qboolean has_players_already;
 			q_strlcpy(serverAddress, serversmenu.items[i].ip, sizeof(serverAddress));
+			users = serversmenu.items[i].users;
+			has_players_already = (serversmenu.items[i].players != NULL);
 			SDL_UnlockMutex(pingMutex);
 
 			int ping = UDP_Ping_Host(serverAddress);
@@ -17134,6 +17193,18 @@ int PingServers(void* data)
 			SDL_LockMutex(pingMutex);
 			serversmenu.items[i].ping = (ping >= 0) ? ping : -1;
 			SDL_UnlockMutex(pingMutex);
+
+			/* query player names if server responded to ping and has players */
+			if (ping >= 0 && users > 0 && !has_players_already)
+			{
+				char *playernames = UDP_QueryPlayers(serverAddress, users);
+				if (playernames)
+				{
+					SDL_LockMutex(pingMutex);
+					serversmenu.items[i].players = playernames;
+					SDL_UnlockMutex(pingMutex);
+				}
+			}
 		}
 		else
 		{
@@ -17310,11 +17381,32 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 		const jsonentry_t* playersArray = JSON_Find(serverEntry, "players", JSON_ARRAY);
 
 		int numPlayers = 0;
+		char playerNames[512] = "";
+		int playerNamesLen = 0;
 		if (playersArray)
 		{
 			const jsonentry_t* playerEntry;
-			for (playerEntry = playersArray->firstchild; playerEntry; playerEntry = playerEntry->next) 
+			for (playerEntry = playersArray->firstchild; playerEntry; playerEntry = playerEntry->next)
 			{
+				const char* pname = JSON_FindString(playerEntry, "name");
+				if (pname && pname[0])
+				{
+					// trim trailing spaces
+					int plen = (int)strlen(pname);
+					while (plen > 0 && pname[plen - 1] == ' ')
+						plen--;
+					if (plen > 0 && playerNamesLen + plen + 2 < (int)sizeof(playerNames))
+					{
+						if (playerNamesLen > 0)
+						{
+							playerNames[playerNamesLen++] = ',';
+							playerNames[playerNamesLen++] = ' ';
+						}
+						memcpy(playerNames + playerNamesLen, pname, plen);
+						playerNamesLen += plen;
+						playerNames[playerNamesLen] = '\0';
+					}
+				}
 				numPlayers++;
 			}
 		}
@@ -17324,11 +17416,12 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 
 		if (!status || !name || !address || !port || !gameId || (*gameId != 0 && (*gameId != 5 || !parameters || !strstr(parameters, "fte")))) continue; // Skip if essential info is missing or server is down
 
-		*items = realloc(*items, sizeof(servertitem_t) * (*actualServerCount + 1));
-		if (!*items) {
+		servertitem_t* resizedItems = realloc(*items, sizeof(servertitem_t) * (*actualServerCount + 1));
+		if (!resizedItems) {
 			Con_DPrintf("Memory allocation failed.\n");
 			break;
 		}
+		*items = resizedItems;
 
                 size_t address_len = strlen(address);
                 qboolean needs_brackets = false;
@@ -17370,8 +17463,10 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 		newItem->users = numPlayers;
 		newItem->maxusers = maxPlayers ? (int)*maxPlayers : 0;
 		newItem->map = strdup(map ? map : "Unknown");
+		newItem->players = playerNamesLen > 0 ? strdup(playerNames) : NULL;
 		newItem->active = true;
 		newItem->ping = -1;
+		newItem->isLoading = false;
 
 		(*actualServerCount)++;
 	}
@@ -17595,12 +17690,22 @@ void RemoveDuplicateServers (servertitem_t** items, int* actualServerCount)
 		{
 			qboolean existingStarred = (*items)[duplicateIndex].name && (*items)[duplicateIndex].name[0] == '*';
 			if (existingStarred && !candidateStarred)
-				(*items)[duplicateIndex] = (*items)[i];
+			{
+				ServerList_FreeItem(&(*items)[duplicateIndex]);
+				ServerList_MoveItem(&(*items)[duplicateIndex], &(*items)[i]);
+			}
+			else
+			{
+				ServerList_FreeItem(&(*items)[i]);
+			}
 			continue;
 		}
 
 		if (writeIndex != i)
-			(*items)[writeIndex] = (*items)[i];
+		{
+			ServerList_FreeItem(&(*items)[writeIndex]);
+			ServerList_MoveItem(&(*items)[writeIndex], &(*items)[i]);
+		}
 		writeIndex++;
 	}
 	*actualServerCount = writeIndex;
@@ -17608,7 +17713,7 @@ void RemoveDuplicateServers (servertitem_t** items, int* actualServerCount)
 
 void FetchAndSortServers (void) 
 {
-        free(serversmenu.items);
+        ServerList_FreeItems(serversmenu.items, serversmenu.servercount);
         serversmenu.items = NULL;
         free(serversmenu.order);
         serversmenu.order = NULL;
@@ -17631,13 +17736,20 @@ void FetchAndSortServers (void)
 
 		if (serverName && serverName[0] != '\0') 
 		{
-			serversmenu.items = (servertitem_t*)realloc(serversmenu.items, sizeof(servertitem_t) * (actualServerCount + 1));
+			servertitem_t* resizedItems = (servertitem_t*)realloc(serversmenu.items, sizeof(servertitem_t) * (actualServerCount + 1));
+			if (!resizedItems)
+			{
+				Con_DPrintf("Memory allocation failed.\n");
+				break;
+			}
+			serversmenu.items = resizedItems;
 
 			serversmenu.items[actualServerCount].name = strdup(serverName);
 			serversmenu.items[actualServerCount].ip = strdup(serverIP);
 			serversmenu.items[actualServerCount].users = users;
 			serversmenu.items[actualServerCount].maxusers = maxusers;
 			serversmenu.items[actualServerCount].map = strdup(map);
+			serversmenu.items[actualServerCount].players = NULL;
 			serversmenu.items[actualServerCount].active = true;
 			serversmenu.items[actualServerCount].ping = -1;
 			serversmenu.items[actualServerCount].isLoading = false;
@@ -17853,15 +17965,100 @@ void M_ServerList_Draw (void)
                 if (selected)
                         M_DrawCharacter(x - 8, current_y_pos, 12 + ((int)(realtime * 4) & 1));
 
-                char infoStr[40];
-
-                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server->name);
                 if (selected)
-                        M_PrintWhite(x, y + serversmenu.list.viewsize * 8 + 12, infoStr);
+                {
+                        int info_y = y + serversmenu.list.viewsize * 8 + 12;
+                        int plys_text_x = x + 25 * 8;
+                        int plys_text_w = (int)strlen(plysStr) * 8;
+                        qboolean hover_plys = (m_mousex >= plys_text_x &&
+                                m_mousex < plys_text_x + plys_text_w &&
+                                m_mousey >= current_y_pos &&
+                                m_mousey < current_y_pos + 8);
 
-                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server->ip);
-                if (selected)
-                        M_PrintWhite(x, y + serversmenu.list.viewsize * 8 + 20, infoStr);
+                        if (hover_plys && server->players && server->players[0])
+                        {
+                                // Display player names with word-wrapping (like demos menu)
+                                char players_copy[512];
+                                q_strlcpy(players_copy, server->players, sizeof(players_copy));
+
+                                char *pos = players_copy;
+                                char line_buffer[64];
+                                int line_pos = 0;
+                                int line_count = 0;
+                                int current_y = info_y;
+
+                                while (*pos)
+                                {
+                                        char *next_comma = strchr(pos, ',');
+                                        int name_len;
+
+                                        if (next_comma)
+                                        {
+                                                name_len = (int)(next_comma - pos);
+                                                while (next_comma[1] == ' ') next_comma++;
+                                        }
+                                        else
+                                        {
+                                                name_len = (int)strlen(pos);
+                                        }
+
+                                        if (name_len > 40)
+                                                name_len = 40;
+
+                                        int comma_space = next_comma ? 2 : 0;
+                                        int needed_space = name_len + comma_space;
+
+                                        if (line_pos > 0 && line_pos + needed_space > 40)
+                                        {
+                                                if (line_count >= 2)
+                                                {
+                                                        if (line_pos + 4 <= 40)
+                                                        {
+                                                                line_buffer[line_pos++] = ' ';
+                                                                line_buffer[line_pos++] = '.';
+                                                                line_buffer[line_pos++] = '.';
+                                                                line_buffer[line_pos++] = '.';
+                                                        }
+                                                        line_buffer[line_pos] = '\0';
+                                                        M_PrintWhite(x, current_y, line_buffer);
+                                                        break;
+                                                }
+
+                                                line_buffer[line_pos] = '\0';
+                                                M_PrintWhite(x, current_y, line_buffer);
+                                                current_y += 8;
+                                                line_count++;
+                                                line_pos = 0;
+                                        }
+
+                                        memcpy(line_buffer + line_pos, pos, name_len);
+                                        line_pos += name_len;
+
+                                        if (next_comma)
+                                        {
+                                                line_buffer[line_pos++] = ',';
+                                                line_buffer[line_pos++] = ' ';
+                                                pos = next_comma + 1;
+                                        }
+                                        else
+                                                break;
+                                }
+
+                                if (line_pos > 0 && line_count < 3)
+                                {
+                                        line_buffer[line_pos] = '\0';
+                                        M_PrintWhite(x, current_y, line_buffer);
+                                }
+                        }
+                        else
+                        {
+                                char infoStr[40];
+                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server->name);
+                                M_PrintWhite(x, info_y, infoStr);
+                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server->ip);
+                                M_PrintWhite(x, info_y + 8, infoStr);
+                        }
+                }
         }
 
 	if (M_List_GetOverflow(&serversmenu.list) > 0) {
