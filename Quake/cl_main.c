@@ -4280,6 +4280,24 @@ static void CL_DemoFormat_Completion_f(cvar_t* cvar, const char* partial)
 }
 
 /*
+===============
+CL_Name_Completion_f -- woods #namehistory
+===============
+*/
+static void CL_Name_Completion_f (cvar_t *cvar, const char *partial)
+{
+	filelist_item_t *item;
+
+	(void)cvar;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	for (item = namehistorylist; item; item = item->next)
+		Con_AddToTabList(item->name, partial, NULL, NULL);
+}
+
+/*
 =================
 CL_Init
 =================
@@ -4293,6 +4311,7 @@ void CL_Init (void)
 
 	Cvar_RegisterVariable (&cl_name);
 	Cvar_RegisterAlias    (&cl_name, "_cl_name");	//spike -- for compat with configs now that 'name' is a cvar in its own right.
+	Cvar_SetCompletion (&cl_name, &CL_Name_Completion_f); // woods #namehistory
 	Cvar_RegisterVariable (&cl_topcolor);
 	Cvar_RegisterVariable (&cl_bottomcolor);
 	Cmd_AddCommand ("_cl_color", CL_LegacyColor_f);	//for loading vanilla configs (we have separate qw-style topcolor/bottomcolor userinfo cvars instead)

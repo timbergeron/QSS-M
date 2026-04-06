@@ -414,6 +414,7 @@ extern filelist_item_t  *bookmarkslist; // woods #bookmarksmenu
 extern filelist_item_t*	 folderlist; // woods #folderlist
 extern filelist_item_t  *musiclist; // woods #musiclist
 extern filelist_item_t  *textlist; // woods #textlist
+extern filelist_item_t  *namehistorylist; // woods #namehistory
 
 void Write_List(filelist_item_t* list, const char* list_name); // woods #bookmarksmenu #serverlist
 
@@ -460,6 +461,8 @@ void FolderList_Init (void); // woods #folderlist
 void SkyList_Init (void); // woods #folderlist
 void MusicList_Init (void); // woods #musiclist
 void TextList_Init (void); // woods #textlist
+void NameHistory_Init (void); // woods #namehistory
+void NameHistory_Add (const char *name); // woods #namehistory
 
 
 void ExtraMaps_NewGame (void);

@@ -1398,6 +1398,695 @@ void ServerList_Init(void)
 }
 
 //==============================================================================
+// woods -- name history management #namehistory
+//==============================================================================
+
+filelist_item_t* namehistorylist;
+
+#define NAMEHISTORY_FILE "names.json"
+#define NAMEHISTORY_FILE_LEGACY "names.txt"
+#define NAMEHISTORY_TIME_LENGTH 20
+
+static void NameHistory_EnsureDir (void)
+{
+	char path[MAX_OSPATH];
+
+	q_snprintf(path, sizeof(path), "%s/id1", com_basedir);
+	Sys_mkdir(path);
+
+	q_snprintf(path, sizeof(path), "%s/id1/backups", com_basedir);
+	Sys_mkdir(path);
+}
+
+static void NameHistory_GetPath (char *path, size_t path_size)
+{
+	q_snprintf(path, path_size, "%s/id1/backups/%s", com_basedir, NAMEHISTORY_FILE);
+}
+
+static void NameHistory_GetLegacyPath (char *path, size_t path_size)
+{
+	q_snprintf(path, path_size, "%s/id1/backups/%s", com_basedir, NAMEHISTORY_FILE_LEGACY);
+}
+
+static void NameHistory_GetTimestamp (char *last_used, size_t last_used_size)
+{
+	time_t systime;
+	struct tm *loct;
+
+	if (!last_used_size)
+		return;
+
+	last_used[0] = '\0';
+
+	systime = time(NULL);
+	loct = localtime(&systime);
+	if (!loct)
+	{
+		q_strlcpy(last_used, "unknown", last_used_size);
+		return;
+	}
+
+	strftime(last_used, last_used_size, "%Y-%m-%d %H:%M:%S", loct);
+}
+
+static int NameHistory_HexValue (char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+static void NameHistory_EncodeHexName (const char *name, char *hex, size_t hex_size)
+{
+	static const char digits[] = "0123456789abcdef";
+	size_t i, j;
+
+	for (i = 0, j = 0; name[i] && j + 2 < hex_size; i++)
+	{
+		unsigned char c = (unsigned char)name[i];
+		hex[j++] = digits[c >> 4];
+		hex[j++] = digits[c & 0x0f];
+	}
+
+	hex[j] = '\0';
+}
+
+static qboolean NameHistory_DecodeHexName (const char *hex, char *name, size_t name_size)
+{
+	size_t i, j;
+
+	if (!hex || !name || !name_size)
+		return false;
+
+	for (i = 0, j = 0; hex[i]; i += 2)
+	{
+		int hi, lo;
+
+		if (!hex[i + 1] || j + 1 >= name_size)
+			return false;
+
+		hi = NameHistory_HexValue(hex[i]);
+		lo = NameHistory_HexValue(hex[i + 1]);
+		if (hi < 0 || lo < 0)
+			return false;
+
+		name[j++] = (char)((hi << 4) | lo);
+	}
+
+	name[j] = '\0';
+	return j > 0;
+}
+
+static qboolean NameHistory_DecodeLegacyJSONName (const char *src, char *dst, size_t dst_size)
+{
+	const unsigned char *in;
+	size_t out;
+
+	if (!src || !dst || !dst_size)
+		return false;
+
+	in = (const unsigned char *)src;
+	out = 0;
+
+	while (*in)
+	{
+		if (out + 1 >= dst_size)
+			return false;
+
+		// Old JSON used \u00XX for raw Quake bytes; JSON_Parse expanded those to UTF-8.
+		if ((in[0] & 0xe0) == 0xc0 && (in[1] & 0xc0) == 0x80)
+		{
+			unsigned int codepoint = ((in[0] & 0x1f) << 6) | (in[1] & 0x3f);
+			if (codepoint >= 0x80 && codepoint <= 0xff)
+			{
+				dst[out++] = (char)codepoint;
+				in += 2;
+				continue;
+			}
+		}
+
+		dst[out++] = (char)*in++;
+	}
+
+	dst[out] = '\0';
+	return out > 0;
+}
+
+static filelist_item_t *NameHistory_AllocItem (const char *name, const char *last_used)
+{
+	filelist_item_t *item;
+
+	item = (filelist_item_t *)Z_Malloc(sizeof(*item));
+	if (!item)
+		Sys_Error("NameHistory_AllocItem: out of memory on %lu bytes (%s)",
+			(unsigned long)sizeof(*item), name);
+
+	memset(item, 0, sizeof(*item));
+	q_strlcpy(item->name, name, sizeof(item->name));
+	if (last_used)
+		q_strlcpy(item->data, last_used, sizeof(item->data));
+
+	return item;
+}
+
+static filelist_item_t *NameHistory_Find (const char *name, filelist_item_t **prev_out)
+{
+	filelist_item_t *item, *prev;
+
+	prev = NULL;
+	for (item = namehistorylist; item; item = item->next)
+	{
+		if (!q_strcasecmp(name, item->name))
+		{
+			if (prev_out)
+				*prev_out = prev;
+			return item;
+		}
+		prev = item;
+	}
+
+	if (prev_out)
+		*prev_out = NULL;
+
+	return NULL;
+}
+
+static void NameHistory_SkipLine (FILE *file)
+{
+	int c;
+
+	while ((c = fgetc(file)) != '\n' && c != EOF)
+		;
+}
+
+static void NameHistory_AppendLoadedItem (filelist_item_t **tail, const char *name, const char *last_used, qboolean *rewrite)
+{
+	filelist_item_t *item;
+
+	if (!name || !name[0])
+	{
+		if (rewrite)
+			*rewrite = true;
+		return;
+	}
+
+	if (NameHistory_Find(name, NULL))
+	{
+		if (rewrite)
+			*rewrite = true;
+		return;
+	}
+
+	item = NameHistory_AllocItem(name, last_used);
+	if (*tail)
+		(*tail)->next = item;
+	else
+		namehistorylist = item;
+	*tail = item;
+}
+
+static qboolean NameHistory_Write (void)
+{
+	char path[MAX_OSPATH];
+	char tmp_path[MAX_OSPATH];
+	FILE *file;
+	filelist_item_t *item;
+	qboolean ok = true;
+	qboolean first = true;
+
+	NameHistory_EnsureDir();
+	NameHistory_GetPath(path, sizeof(path));
+	q_snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+
+	file = fopen(tmp_path, "w");
+	if (!file)
+	{
+		Con_DPrintf("NameHistory_Write: unable to open %s for writing\n", tmp_path);
+		return false;
+	}
+
+	fprintf(file, "[\n");
+
+	for (item = namehistorylist; item; item = item->next)
+	{
+		char hex_name[MAX_QPATH * 2 + 1];
+		char *escaped_last_used = item->data[0] ? JSON_EscapeString(item->data) : NULL;
+
+		NameHistory_EncodeHexName(item->name, hex_name, sizeof(hex_name));
+
+		if (item->data[0] && !escaped_last_used)
+		{
+			free(escaped_last_used);
+			ok = false;
+			break;
+		}
+
+		if (!first)
+			fprintf(file, ",\n");
+		first = false;
+
+		fprintf(file, "  {\n");
+		fprintf(file, "    \"name_hex\": \"%s\"", hex_name);
+		if (item->data[0])
+			fprintf(file, ",\n    \"last_used\": \"%s\"\n", escaped_last_used);
+		else
+			fprintf(file, "\n");
+		fprintf(file, "  }");
+
+		free(escaped_last_used);
+	}
+
+	if (ok)
+	{
+		if (!first)
+			fprintf(file, "\n");
+		fprintf(file, "]\n");
+	}
+
+	if (fclose(file) != 0)
+		ok = false;
+
+	if (!ok)
+	{
+		Con_DPrintf("NameHistory_Write: failed to flush %s, preserving existing file\n", tmp_path);
+		remove(tmp_path);
+		return false;
+	}
+
+	remove(path);
+	if (rename(tmp_path, path) != 0)
+	{
+		Con_DPrintf("NameHistory_Write: unable to replace %s with %s\n", path, tmp_path);
+		remove(tmp_path);
+		return false;
+	}
+
+	return true;
+}
+
+static qboolean NameHistory_LoadJSON (const char *path)
+{
+	FILE *file;
+	long file_size;
+	char *buffer;
+	json_t *json;
+	filelist_item_t *tail = NULL;
+	qboolean rewrite = false;
+
+	file = fopen(path, "rb");
+	if (!file)
+		return false;
+
+	fseek(file, 0, SEEK_END);
+	file_size = ftell(file);
+	rewind(file);
+
+	if (file_size <= 0)
+	{
+		fclose(file);
+		return true;
+	}
+
+	buffer = (char *)malloc((size_t)file_size + 1);
+	if (!buffer)
+	{
+		fclose(file);
+		return true;
+	}
+
+	if (fread(buffer, 1, (size_t)file_size, file) != (size_t)file_size)
+	{
+		free(buffer);
+		fclose(file);
+		return true;
+	}
+
+	buffer[file_size] = '\0';
+	fclose(file);
+
+	json = JSON_Parse(buffer);
+	free(buffer);
+
+	if (!json || !json->root || json->root->type != JSON_ARRAY)
+	{
+		if (json)
+			JSON_Free(json);
+		Con_DPrintf("NameHistory_Init: invalid %s\n", NAMEHISTORY_FILE);
+		return true;
+	}
+
+	{
+		const jsonentry_t *entry;
+
+		for (entry = json->root->firstchild; entry; entry = entry->next)
+		{
+			char decoded_name[MAX_QPATH];
+			const char *name;
+			const char *name_hex;
+			const char *legacy_name;
+			const char *last_used;
+
+			if (!entry || entry->type != JSON_OBJECT)
+			{
+				rewrite = true;
+				continue;
+			}
+
+			name_hex = JSON_FindString(entry, "name_hex");
+			legacy_name = JSON_FindString(entry, "name");
+			last_used = JSON_FindString(entry, "last_used");
+
+			if (name_hex)
+			{
+				if (!NameHistory_DecodeHexName(name_hex, decoded_name, sizeof(decoded_name)))
+				{
+					rewrite = true;
+					continue;
+				}
+				name = decoded_name;
+			}
+			else if (legacy_name)
+			{
+				if (!NameHistory_DecodeLegacyJSONName(legacy_name, decoded_name, sizeof(decoded_name)))
+				{
+					rewrite = true;
+					continue;
+				}
+				name = decoded_name;
+				rewrite = true;
+			}
+			else
+			{
+				rewrite = true;
+				continue;
+			}
+
+			NameHistory_AppendLoadedItem(&tail, name, last_used, &rewrite);
+		}
+	}
+
+	JSON_Free(json);
+
+	if (rewrite)
+		NameHistory_Write();
+
+	return true;
+}
+
+static qboolean NameHistory_LoadLegacy (const char *path)
+{
+	FILE *file;
+	char buffer[MAX_QPATH];
+	char *newline;
+	char *carriage;
+	filelist_item_t *tail = NULL;
+
+	file = fopen(path, "r");
+	if (!file)
+		return false;
+
+	while (fgets(buffer, sizeof(buffer), file) != NULL)
+	{
+		newline = strchr(buffer, '\n');
+		if (!newline && !feof(file))
+		{
+			NameHistory_SkipLine(file);
+			continue;
+		}
+
+		if (newline)
+			*newline = '\0';
+
+		carriage = strchr(buffer, '\r');
+		if (carriage)
+			*carriage = '\0';
+
+		NameHistory_AppendLoadedItem(&tail, buffer, NULL, NULL);
+	}
+
+	fclose(file);
+	NameHistory_Write();
+
+	return true;
+}
+
+void NameHistory_Init (void)
+{
+	char path[MAX_OSPATH];
+
+	FileList_Clear(&namehistorylist);
+	NameHistory_EnsureDir();
+
+	NameHistory_GetPath(path, sizeof(path));
+	if (NameHistory_LoadJSON(path))
+		return;
+
+	NameHistory_GetLegacyPath(path, sizeof(path));
+	NameHistory_LoadLegacy(path);
+}
+
+void NameHistory_Add (const char *name)
+{
+	filelist_item_t *item, *prev;
+	qboolean changed;
+	char last_used[NAMEHISTORY_TIME_LENGTH];
+
+	if (!name || !name[0])
+		return;
+
+	NameHistory_GetTimestamp(last_used, sizeof(last_used));
+	item = NameHistory_Find(name, &prev);
+	if (item)
+	{
+		changed = false;
+
+		if (Q_strcmp(item->name, name))
+		{
+			q_strlcpy(item->name, name, sizeof(item->name));
+			changed = true;
+		}
+
+		if (Q_strcmp(item->data, last_used))
+		{
+			q_strlcpy(item->data, last_used, sizeof(item->data));
+			changed = true;
+		}
+
+		if (prev)
+		{
+			prev->next = item->next;
+			item->next = namehistorylist;
+			namehistorylist = item;
+			changed = true;
+		}
+
+		if (changed)
+			NameHistory_Write();
+
+		return;
+	}
+
+	item = NameHistory_AllocItem(name, last_used);
+	item->next = namehistorylist;
+	namehistorylist = item;
+	NameHistory_Write();
+}
+
+static void NameHistory_Clear (void)
+{
+	FileList_Clear(&namehistorylist);
+	NameHistory_Write();
+}
+
+static const char *NameHistory_LastUsedString (const filelist_item_t *item)
+{
+	if (!item || !item->data[0])
+		return "unknown";
+
+	return item->data;
+}
+
+static qboolean NameHistory_DateAliasAvailable (void)
+{
+	return NameHistory_Find("date", NULL) == NULL;
+}
+
+static qboolean NameHistory_ClearAliasAvailable (void)
+{
+	return NameHistory_Find("clear", NULL) == NULL;
+}
+
+static void Host_NameHistory_Completion_f (const char *partial)
+{
+	if (Cmd_Argc() != 2)
+		return;
+
+	Con_AddToTabList("-d", partial, "show dates", NULL);
+	Con_AddToTabList("-c", partial, "clear history", NULL);
+	if (NameHistory_DateAliasAvailable())
+		Con_AddToTabList("date", partial, "show dates", NULL);
+	if (NameHistory_ClearAliasAvailable())
+		Con_AddToTabList("clear", partial, "clear history", NULL);
+}
+
+static void Host_NameHistory_PrintDates (int count)
+{
+	extern int con_linewidth;
+
+	filelist_item_t *item;
+	filelist_item_t **items;
+	int i;
+	int max_name_len;
+	int max_date_len;
+	int name_width;
+	qboolean multiline;
+
+	items = (filelist_item_t **)Z_Malloc(count * sizeof(*items));
+	i = 0;
+	max_name_len = 0;
+	max_date_len = 0;
+
+	for (item = namehistorylist; item; item = item->next)
+	{
+		items[i++] = item;
+		max_name_len = q_max(max_name_len, (int)strlen(item->name));
+		max_date_len = q_max(max_date_len, (int)strlen(NameHistory_LastUsedString(item)));
+	}
+
+	multiline = (con_linewidth < max_date_len + 12);
+	name_width = q_min(max_name_len, q_max(con_linewidth - max_date_len - 2, 8));
+
+	for (i = count - 1; i >= 0; i--)
+	{
+		item = items[i];
+		if (multiline)
+		{
+			Con_Printf("%s\n", item->name);
+			Con_Printf("  %s\n", NameHistory_LastUsedString(item));
+		}
+		else
+		{
+			Con_Printf("%-*.*s  %s\n", name_width, name_width, item->name, NameHistory_LastUsedString(item));
+		}
+	}
+
+	Con_Printf("%d %s found\n", count, (count == 1) ? "entry" : "entries");
+	Z_Free(items);
+}
+
+static void Host_NameHistory_f (void)
+{
+	extern int con_linewidth;
+
+	filelist_item_t *item;
+	int count, maxlen, colwidth, cols, col;
+	qboolean show_dates;
+	qboolean clear_history;
+	const char *arg;
+
+	show_dates = false;
+	clear_history = false;
+
+	if (Cmd_Argc() > 2)
+	{
+		Con_Printf("usage: namehistory [-d|date|-c|clear]\n");
+		return;
+	}
+
+	if (Cmd_Argc() == 2)
+	{
+		arg = Cmd_Argv(1);
+		if (!q_strcasecmp(arg, "-d"))
+		{
+			show_dates = true;
+		}
+		else if (!q_strcasecmp(arg, "date"))
+		{
+			if (NameHistory_DateAliasAvailable())
+				show_dates = true;
+			else
+			{
+				Con_Printf("namehistory date is ambiguous because \"date\" exists in history\n");
+				Con_Printf("use \"namehistory -d\" to show timestamps\n");
+				return;
+			}
+		}
+		else if (!q_strcasecmp(arg, "-c"))
+		{
+			clear_history = true;
+		}
+		else if (!q_strcasecmp(arg, "clear"))
+		{
+			if (NameHistory_ClearAliasAvailable())
+				clear_history = true;
+			else
+			{
+				Con_Printf("namehistory clear is ambiguous because \"clear\" exists in history\n");
+				Con_Printf("use \"namehistory -c\" to clear history\n");
+				return;
+			}
+		}
+		else
+		{
+			Con_Printf("usage: namehistory [-d|date|-c|clear]\n");
+			return;
+		}
+	}
+
+	if (clear_history)
+	{
+		NameHistory_Clear();
+		Con_Printf("Name history cleared\n");
+		return;
+	}
+
+	count = 0;
+	maxlen = 0;
+	for (item = namehistorylist; item; item = item->next)
+	{
+		count++;
+		maxlen = q_max(maxlen, (int)strlen(item->name));
+	}
+
+	if (!count)
+	{
+		Con_Printf("No name history found\n");
+		return;
+	}
+
+	if (show_dates)
+	{
+		Host_NameHistory_PrintDates(count);
+		return;
+	}
+
+	colwidth = q_max(maxlen + 2, 8);
+	cols = q_max(con_linewidth / colwidth, 1);
+	cols = q_min(cols, count);
+
+	col = 0;
+	for (item = namehistorylist; item; item = item->next)
+	{
+		Con_Printf("%-*.*s", colwidth, colwidth, item->name);
+		col++;
+		if (col == cols)
+		{
+			Con_Printf("\n");
+			col = 0;
+		}
+	}
+
+	if (col)
+		Con_Printf("\n");
+
+	Con_Printf("%d %s found\n", count, (count == 1) ? "entry" : "entries");
+}
+
+//==============================================================================
 // woods -- bookmarks list management #bookmarksmenu #bookmarksjson
 //==============================================================================
 
@@ -5672,9 +6361,10 @@ static void Host_Name_f (void)
 		qboolean is_first_time = (Q_strcmp(cl_name.string, default_name) == 0 && Q_strcmp(newName, default_name) != 0);
 
 		Cvar_Set ("name", newName);
+		NameHistory_Add (newName); // woods #namehistory
 
 		// Only print the message if it's not the first time setting the name
-		if (!is_first_time) 
+		if (!is_first_time)
 		{
 		Con_Printf("\n\"name\" changed to \"%s\"", newName);
 		if (truncated)
@@ -8132,6 +8822,12 @@ void Host_InitCommands (void)
 
 	Cmd_AddCommand("identify", Host_Identify_f);	// JPG 1.05 - player IP logging // woods #iplog
 	Cmd_AddCommand("ipnames", IPLog_PrintNames);	// woods - print all logged names in columns
+	Cmd_AddCommand("namehistory", Host_NameHistory_f);	// woods #namehistory
+	{
+		cmd_function_t *namehistory_cmd = Cmd_FindCommand("namehistory");
+		if (namehistory_cmd)
+			namehistory_cmd->completion = Host_NameHistory_Completion_f;
+	}
 	Cmd_AddCommand("ipdump", IPLog_Dump);			// JPG 1.05 - player IP logging // woods #iplog
 	Cmd_AddCommand("ipmerge", IPLog_Import);		// JPG 3.00 - import an IP data file // woods #iplog
 
