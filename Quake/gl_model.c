@@ -439,6 +439,8 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 			Host_Error ("Mod_LoadModel: %s not found", mod->name); //johnfitz -- was "Mod_NumForName"
 		else if (mod->name[0] == '*' && (mod->name[1] < '0' || mod->name[1] > '9'))
 			;	//*foo doesn't warn, unless its *NUM. inline models. gah.
+		else if (cl.suppress_precache_miss_warnings)
+			cl.suppressed_model_precache_warnings++;
 		else
 			Con_Warning("Mod_LoadModel: %s not found\n", mod->name);
 

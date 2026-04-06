@@ -1378,7 +1378,6 @@ static void CL_ParseServerInfo (void)
 {
 	const char	*str;
 	int		i;
-	char gamedir[1024];
 	char protname[64];
 
 	Con_DPrintf ("Serverinfo packet received.\n");
@@ -1443,11 +1442,11 @@ static void CL_ParseServerInfo (void)
 		cl.protocolflags = PRFL_SHORTANGLE|PRFL_FLOATCOORD;
 	else cl.protocolflags = 0;
 
-	*gamedir = 0;
+	cl.server_gamedir[0] = 0;
 	if (cl.protocol_pext2 & PEXT2_PREDINFO)
 	{
-		q_strlcpy(gamedir, MSG_ReadString(), sizeof(gamedir));
-		if (!COM_GameDirMatches(gamedir))
+		q_strlcpy(cl.server_gamedir, MSG_ReadString(), sizeof(cl.server_gamedir));
+		if (!COM_GameDirMatches(cl.server_gamedir))
 		{
 			cl.wronggamedir = true;
 		}
@@ -1629,15 +1628,7 @@ static void CL_ParseServerInfo (void)
 
 	//this is here, to try to make sure its a little more obvious that its there.
 	if (cl.wronggamedir)
-	{
-		const char *curgame = COM_GetGameNames(false);
-		if (!*curgame)
-			curgame = COM_GetGameNames(true);
-		Con_Warning("Server is using a different gamedir.\n");
-		Con_Warning("Current: %s\n", curgame);
-		Con_Warning("Server: %s\n", gamedir);
-		Con_Warning("You will probably want to switch gamedir to match the server.\n");
-	}
+		CL_PrintWrongGameDirWarning();
 
 	S_Voip_MapChange();
 }
