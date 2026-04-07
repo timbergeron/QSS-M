@@ -1025,9 +1025,9 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 			/*if there isn't space, try again next time around*/
 			if (payoffs + paylen > inlen)
 			{
-				if (payoffs + paylen >= sizeof(inbuffer)-1)
+				if (payoffs + paylen > sizeof(f->readbuffer))
 				{
-					f->err = VFS_ERROR_UNSPECIFIED;	//payload is too big for out in buffer
+					f->err = VFS_ERROR_UNSPECIFIED;	//payload is too big for our in buffer
 					break;
 				}
 				continue;	//need more data
@@ -1426,6 +1426,7 @@ static void TURN_TCP_Close(struct icesocket_s *con)
 	struct turntcpsocket_s *n = (struct turntcpsocket_s*)con;
 	if (n->f)
 		n->f->Close(n->f);
+	free(n);
 }
 struct icesocket_s *TURN_TCP_EstablishConnection(const char *address, netadr_t *adr, qboolean usetls)
 {
@@ -1498,6 +1499,7 @@ static void ICE_WSS_Close(struct icesocket_s *con)
 	struct icewsssocket_s *n = (struct icewsssocket_s*)con;
 	if (n->f)
 		n->f->Close(n->f);
+	free(n);
 }
 struct icesocket_s *ICE_WSS_EstablishConnection(const char *address, netadr_t *adr, qboolean usetls)
 {	//we're the client

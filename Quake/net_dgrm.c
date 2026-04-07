@@ -1819,6 +1819,88 @@ void Datagram_GenerateGetInfoString(char *out, size_t outsize)
 		{q_snprintf(out+ofs, outsize-ofs, "\\*wsaddr\\%s", NQICE_GetWsAddr()); ofs += strlen(out+ofs);}
 	if (*NQICE_GetFingerprint())
 		{q_snprintf(out+ofs, outsize-ofs, "\\*fp\\%s", NQICE_GetFingerprint()); ofs += strlen(out+ofs);}
+
+	// append QC-set serverinfo keys (e.g. "serverinfo mod crmod7"),
+	// skipping any that are already present from the hardcoded fields above.
+	{
+		const char *p = svs.serverinfo;
+		while (*p == '\\')
+		{
+			const char *keystart, *keyend, *valstart, *valend;
+			char keybuf[64], tmp[64];
+
+			if (ofs >= outsize)
+				break;
+
+			p++;
+			keystart = p;
+			while (*p && *p != '\\') p++;
+			keyend = p;
+			if (*p == '\\') p++;
+			valstart = p;
+			while (*p && *p != '\\') p++;
+			valend = p;
+
+			// only append if this key isn't already in the output
+			{
+				size_t kl = keyend - keystart;
+				if (kl >= sizeof(keybuf)) kl = sizeof(keybuf) - 1;
+				memcpy(keybuf, keystart, kl); keybuf[kl] = 0;
+			}
+			if (!*Info_GetKey(out, keybuf, tmp, sizeof(tmp)))
+			{
+				size_t vl = valend - valstart;
+				q_snprintf(out+ofs, outsize-ofs, "\\%s\\", keybuf); ofs += strlen(out+ofs);
+				if (ofs >= outsize)
+					break;
+				if (vl > outsize-ofs-1) vl = outsize-ofs-1;
+				memcpy(out+ofs, valstart, vl); ofs += vl; out[ofs] = 0;
+			}
+		}
+	}
+}
+
+/*find the next key/value pair in a \key\value info string after prevkey.
+  pass "" for prevkey to get the first pair. returns false when no more keys.*/
+qboolean Info_FindNextKey(const char *info, const char *prevkey, char *outkey, size_t outkeysize, char *outval, size_t outvalsize)
+{
+	const char *p = info;
+	qboolean found_prev = (!*prevkey);	/*empty prevkey = start from beginning*/
+
+	*outkey = 0;
+	*outval = 0;
+
+	while (*p == '\\')
+	{
+		const char *keystart, *keyend, *valstart, *valend;
+
+		p++;	/*skip leading backslash*/
+		keystart = p;
+		while (*p && *p != '\\')
+			p++;
+		keyend = p;
+		if (*p == '\\')
+			p++;
+		valstart = p;
+		while (*p && *p != '\\')
+			p++;
+		valend = p;
+
+		if (found_prev)
+		{
+			size_t kl = keyend - keystart;
+			size_t vl = valend - valstart;
+			if (kl >= outkeysize) kl = outkeysize - 1;
+			if (vl >= outvalsize) vl = outvalsize - 1;
+			memcpy(outkey, keystart, kl); outkey[kl] = 0;
+			memcpy(outval, valstart, vl); outval[vl] = 0;
+			return true;
+		}
+
+		if ((size_t)(keyend - keystart) == strlen(prevkey) && !strncmp(keystart, prevkey, keyend - keystart))
+			found_prev = true;
+	}
+	return false;
 }
 
 //send context for ICE UDP signaling callback — set before calling SVC_ICE_Offer/Candidate
@@ -2031,22 +2113,24 @@ static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsock
 
 	if (command == CCREQ_RULE_INFO)
 	{
-		const char	*prevCvarName;
-		cvar_t			*var;
+		const char	*prevKey;
+		char		info[2048], key[64], val[256];
 
-		// find the search start location
-		prevCvarName = MSG_ReadString();
-		var = Cvar_FindVarAfter (prevCvarName, CVAR_SERVERINFO);
+		prevKey = MSG_ReadString();
+
+		// build the full info string and iterate it — includes both
+		// CVAR_SERVERINFO cvars and svs.serverinfo keys (set by QC mods)
+		Datagram_GenerateGetInfoString(info, sizeof(info));
 
 		// send the response
 		SZ_Clear(&net_message);
 		// save space for the header, filled in later
 		MSG_WriteLong(&net_message, 0);
 		MSG_WriteByte(&net_message, CCREP_RULE_INFO);
-		if (var)
+		if (Info_FindNextKey(info, prevKey, key, sizeof(key), val, sizeof(val)))
 		{
-			MSG_WriteString(&net_message, var->name);
-			MSG_WriteString(&net_message, var->string);
+			MSG_WriteString(&net_message, key);
+			MSG_WriteString(&net_message, val);
 		}
 		*((int *)net_message.data) = BigLong(NETFLAG_CTL | (net_message.cursize & NETFLAG_LENGTH_MASK));
 		dfunc.Write (acceptsock, net_message.data, net_message.cursize, clientaddr);

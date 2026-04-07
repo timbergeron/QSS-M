@@ -45,6 +45,9 @@ typedef unsigned char qbyte;
 	#define NET_EMSGSIZE		WSAEMSGSIZE
 	#define NET_EPERM			WSAEACCES
 	#define	NET_EAFNOSUPPORT	WSAEAFNOSUPPORT
+	#define NET_EBADF			WSAEBADF
+	#define NET_ENOTSOCK		WSAENOTSOCK
+	#define NET_EINVAL			WSAEINVAL
 
 	#define SOCK_CLOEXEC 0
 	#define MSG_NOSIGNAL 0
@@ -78,6 +81,9 @@ typedef unsigned char qbyte;
 	#define NET_EMSGSIZE		EMSGSIZE
 	#define NET_EPERM			EPERM
 	#define	NET_EAFNOSUPPORT	EAFNOSUPPORT
+	#define NET_EBADF			EBADF
+	#define NET_ENOTSOCK		ENOTSOCK
+	#define NET_EINVAL			EINVAL
 
 	#ifndef SOCK_CLOEXEC
 		#define SOCK_CLOEXEC 0
