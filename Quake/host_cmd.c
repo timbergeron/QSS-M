@@ -6360,6 +6360,15 @@ static void Host_Name_f (void)
 		const char* default_name = "player";
 		qboolean is_first_time = (Q_strcmp(cl_name.string, default_name) == 0 && Q_strcmp(newName, default_name) != 0);
 
+		// woods #namehistory -- if the name we're changing from was never
+		// recorded (e.g. set via a config/Cvar_Set that bypassed this path),
+		// back-fill it before logging the new name so the history stays honest.
+		// Skip the "player" default; it's the uninitialized state, not a chosen name.
+		if (!is_first_time && cl_name.string[0] &&
+			Q_strcmp(cl_name.string, default_name) != 0 &&
+			!NameHistory_Find(cl_name.string, NULL))
+			NameHistory_Add (cl_name.string);
+
 		Cvar_Set ("name", newName);
 		NameHistory_Add (newName); // woods #namehistory
 
