@@ -4339,19 +4339,26 @@ static void CL_DemoFormat_Completion_f(cvar_t* cvar, const char* partial)
 /*
 ===============
 CL_Name_Completion_f -- woods #namehistory
+
+uses the shared name tab-complete helpers in console.c so the user can type
+the ascii equivalent of a name that contains quake special chars
 ===============
 */
 static void CL_Name_Completion_f (cvar_t *cvar, const char *partial)
 {
 	filelist_item_t *item;
+	char unfun_partial[32];
+	const char *match_partial;
 
 	(void)cvar;
 
 	if (Cmd_Argc() != 2)
 		return;
 
+	match_partial = Con_DequakePartial (partial, unfun_partial, sizeof(unfun_partial));
+
 	for (item = namehistorylist; item; item = item->next)
-		Con_AddToTabList(item->name, partial, NULL, NULL);
+		Con_AddNameToTabList (item->name, partial, match_partial);
 }
 
 /*

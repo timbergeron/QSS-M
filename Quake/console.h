@@ -68,7 +68,10 @@ void Con_TabComplete (tabcomplete_t mode); // woods #iwtabcomplete
 void Con_DedicatedTabComplete(char* text, size_t buf_size, int* textlen, int* cursor_pos);
 void Con_DedicatedResetTabState(void);
 void Con_AddToTabList (const char* name, const char* partial, const char* type, const char* param); // woods #iwtabcomplete -- add arg #demolistsort
-qboolean Con_Match (const char* partial, const char* str); // woods #iwtabcomplete
+void Con_AddToTabListMatched (const char* name, const char* partial, const char* type, const char* param, const char* match_name); // woods -- match against alt name, insert original
+const char *Con_DequakePartial (const char *partial, char *dst, size_t dstsize); // woods -- dequake helper for name tab completion
+void Con_AddNameToTabList (const char *name, const char *partial, const char *match_partial); // woods -- add a player/history name to the tab list
+qboolean Con_Match (const char* str, const char* partial); // woods #iwtabcomplete
 void Con_LogCenterPrint (const char *str);
 
 // woods #conselection

@@ -2649,6 +2649,7 @@ static char dedicated_tab_partial[MAXCMDLINE];
 typedef struct tab_s
 {
 	const char	*name;
+	const char	*matchname;
 	char date[20]; // woods #demolistsort
 	const char	*type;
 	struct tab_s	*next;
@@ -2764,42 +2765,50 @@ tablist is a doubly-linked loop, alphabetized by name
 static char	bash_partial[80];
 static qboolean	bash_singlematch;
 
-void Con_AddToTabList (const char* name, const char* partial, const char* type, const char* param) // woods #iwtabcomplete -- added extra arg for dynamic list type (ie demo vs sky/map etc) #demolistsort
+// woods -- internal helper. match_name is what's used for Con_Match and the
+// bash_partial common-substring logic; if NULL we fall back to name. callers
+// that want "type ascii to find a quake-special-char entry, but insert the
+// original chars on completion" pass the dequaked form as match_name and the
+// original as name.
+static void Con_AddToTabListInternal (const char* name, const char* partial, const char* type, const char* param, const char* match_name)
 {
 	tab_t* t, * insert;
 	char* i_bash, * i_bash2;
 	const char* i_name, * i_name2;
-	int		len, mark;
+	size_t	len, matchlen;
+	int		allocsize, mark;
+	const char* match = match_name ? match_name : name;
+	qboolean match_is_name = (!match_name || !strcmp(match_name, name));
 
-	if (!Con_Match (name, partial))
+	if (!Con_Match (match, partial))
 		return;
 
 	int FileIsDemo = (param != NULL); // woods #demolistsort
 
 	if (!*bash_partial && bash_singlematch)
 	{
-		q_strlcpy (bash_partial, name, sizeof(bash_partial));
+		q_strlcpy (bash_partial, match, sizeof(bash_partial));
 	}
 	else
 	{
 		bash_singlematch = 0;
 		i_bash = q_strcasestr (bash_partial, partial);
-		i_name = q_strcasestr (name, partial);
+		i_name = q_strcasestr (match, partial);
 		SDL_assert (i_bash);
 		SDL_assert (i_name);
 		if (i_name && i_bash)
 		{
 			i_bash2 = i_bash;
 			i_name2 = i_name;
-			// find max common between bash_partial and name (right side)
+			// find max common between bash_partial and match (right side)
 			while (*i_bash && q_toupper (*i_bash) == q_toupper (*i_name))
 			{
 				i_bash++;
 				i_name++;
 			}
 			*i_bash = 0;
-			// find max common between bash_partial and name (left side)
-			while (i_bash2 != bash_partial && i_name2 != name &&
+			// find max common between bash_partial and match (left side)
+			while (i_bash2 != bash_partial && i_name2 != match &&
 				q_toupper (i_bash2[-1]) == q_toupper (i_name2[-1]))
 			{
 				i_bash2--;
@@ -2812,9 +2821,21 @@ void Con_AddToTabList (const char* name, const char* partial, const char* type, 
 
 	mark = Hunk_LowMark ();
 	len = strlen (name);
-	t = (tab_t*)Hunk_AllocName (sizeof(tab_t) + len + 1, "tablist");
+	matchlen = match_is_name ? 0 : strlen(match);
+	allocsize = (int)(sizeof(tab_t) + len + 1 + (match_is_name ? 0 : matchlen + 1));
+	t = (tab_t*)Hunk_AllocName (allocsize, "tablist");
 	memcpy (t + 1, name, len + 1);
 	t->name = (const char*)(t + 1);
+	if (match_is_name)
+	{
+		t->matchname = t->name;
+	}
+	else
+	{
+		char* stored_match = (char*)(t + 1) + len + 1;
+		memcpy(stored_match, match, matchlen + 1);
+		t->matchname = stored_match;
+	}
 	t->type = type;
 	t->count = 1;
 	if (param)
@@ -2859,6 +2880,129 @@ void Con_AddToTabList (const char* name, const char* partial, const char* type, 
 		t->next->prev = t;
 		t->prev->next = t;
 	}
+}
+
+void Con_AddToTabList (const char* name, const char* partial, const char* type, const char* param) // woods #iwtabcomplete -- added extra arg for dynamic list type (ie demo vs sky/map etc) #demolistsort
+{
+	Con_AddToTabListInternal (name, partial, type, param, NULL);
+}
+
+// woods -- like Con_AddToTabList, but match against match_name (e.g. dequaked
+// ascii) while still inserting/displaying the original name (e.g. with quake
+// special chars). used by name history tab complete so the user can type the
+// ascii equivalent of a colored name and have the colored name actually applied.
+void Con_AddToTabListMatched (const char* name, const char* partial, const char* type, const char* param, const char* match_name)
+{
+	Con_AddToTabListInternal (name, partial, type, param, match_name);
+}
+
+// woods -- shared name tab-complete helpers used by both player completion
+// (CompleteClients in this file) and namehistory completion (CL_Name_Completion_f
+// in cl_main.c). they let users type the ascii equivalent of a name containing
+// quake special chars and have the original (colored) form actually inserted.
+
+extern char unfun[129];
+
+const char *Con_DequakePartial (const char *partial, char *dst, size_t dstsize)
+{
+	qboolean has_special = false;
+	size_t i;
+
+	if (!dstsize)
+		return partial;
+
+	for (i = 0; partial[i] && i < dstsize - 1; i++)
+	{
+		dst[i] = unfun[partial[i] & 127];
+		if (partial[i] != ' ' && partial[i] != dst[i])
+			has_special = true;
+	}
+	dst[i] = '\0';
+
+	return has_special ? dst : partial;
+}
+
+void Con_AddNameToTabList (const char *name, const char *partial, const char *match_partial)
+{
+	char unfun_name[32];
+	qboolean has_special_chars = false;
+	int j;
+
+	if (!name || !name[0])
+		return;
+
+	for (j = 0; name[j] && j < (int)sizeof(unfun_name) - 1; j++)
+	{
+		unfun_name[j] = unfun[name[j] & 127];
+		if (name[j] != ' ' && name[j] != unfun_name[j])
+			has_special_chars = true;
+	}
+	unfun_name[j] = '\0';
+
+	if (has_special_chars)
+		Con_AddToTabListMatched (name, match_partial, NULL, NULL, unfun_name);
+	else
+		Con_AddToTabList (name, partial, NULL, NULL);
+}
+
+static void Con_TintTabMatch (const tab_t* t, const char* partial, char* out, size_t outsize)
+{
+	const char* search;
+	const char* found;
+	size_t partial_len;
+
+	q_strlcpy(out, t->name, outsize);
+	if (!*partial)
+		return;
+
+	if (t->matchname == t->name)
+	{
+		COM_TintSubstring(t->name, partial, out, outsize);
+		return;
+	}
+
+	partial_len = strlen(partial);
+	search = t->matchname;
+	while ((found = q_strcasestr(search, partial)) != NULL)
+	{
+		size_t offset = (size_t)(found - t->matchname);
+		size_t i;
+
+		for (i = 0; i < partial_len && offset + i + 1 < outsize && out[offset + i]; i++)
+		{
+			if (out[offset + i] > ' ')
+				out[offset + i] |= 0x80;
+		}
+
+		search = found + partial_len;
+	}
+}
+
+static qboolean Con_CopyTabHint (const tab_t* t, const char* partial, char* out, size_t outsize)
+{
+	const char* found = q_strcasestr(t->matchname, partial);
+	size_t offset, partial_len, namelen;
+
+	if (!found)
+		return false;
+
+	offset = (size_t)(found - t->matchname);
+	partial_len = strlen(partial);
+	namelen = strlen(t->name);
+
+	if (offset + partial_len <= namelen)
+	{
+		if (!t->name[offset + partial_len])
+			return false;
+		q_strlcpy(out, t->name + offset + partial_len, outsize);
+		return true;
+	}
+
+	if (!found[partial_len])
+		return false;
+
+	q_strlcpy(out, found + partial_len, outsize);
+	return true;
 }
 
 /*
@@ -2913,6 +3057,25 @@ static const char* ParseCommand (void)
 	if ((uintptr_t)(end - ret) < sizeof(buf))
 		buf[end - ret] = '\0';
 	end = buf + strlen(buf);
+
+	// woods -- Quake's character set has visible glyphs in the 0x01-0x08 and
+	// 0x0E-0x1F range (e.g. 0x10/0x11 are the brackets used in player names like
+	// "[DaS].Woods"). The tokenizer treats anything <= 0x20 as whitespace, which
+	// would split such names into multiple args and break tab completion (e.g.
+	// `name [DaS].Woods` would parse as 3 args, failing the `Cmd_Argc() == 2`
+	// check in CL_Name_Completion_f). Replace those visible-but-low chars with a
+	// harmless placeholder so the tokenizer keeps the arg count correct. This
+	// only affects argv contents, not the `partial` we read directly from the
+	// edit line for name matching.
+	{
+		char *p;
+		for (p = buf; *p; p++)
+		{
+			unsigned char ch = (unsigned char)*p;
+			if ((ch >= 0x01 && ch <= 0x08) || (ch >= 0x0E && ch <= 0x1F))
+				*p = '_';
+		}
+	}
 
 	Cmd_TokenizeString (buf);
 	// last arg should always be the one we're trying to complete,
@@ -3337,7 +3500,9 @@ static qboolean CompleteIP(const char* partial, void* unused) // woods
 
 static qboolean CompleteClients(const char* partial, void* unused) // woods
 {
-	extern char unfun[129];
+	char unfun_partial[32];
+	const char *match_partial;
+	int i;
 
 	if (Cmd_Argc() != 2)
 		return false;
@@ -3346,59 +3511,40 @@ static qboolean CompleteClients(const char* partial, void* unused) // woods
 	if (cls.state != ca_connected && cl.maxclients < 1)
 		return false;
 
-	// Check if partial has special chars
-	char unfun_partial[32];
-	qboolean partial_has_special = false;
-	int i;
-
-	for (i = 0; partial[i] && i < 31; i++) {
-		if (partial[i] != ' ' && partial[i] != unfun[partial[i] & 127]) {
-			partial_has_special = true;
-			break;
-		}
-	}
-
-	// Only convert to unfun if special chars present
-	if (partial_has_special) {
-		for (i = 0; partial[i] && i < 31; i++)
-			unfun_partial[i] = unfun[partial[i] & 127];
-		unfun_partial[i] = '\0';
-	}
+	match_partial = Con_DequakePartial (partial, unfun_partial, sizeof(unfun_partial));
 
 	// Loop through all possible players
 	for (i = 0; i < cl.maxclients; i++)
 	{
 		scoreboard_t* s = &cl.scores[i];
 		const char* colored_name = s->name;
-		char unfun_name[32];
-		qboolean has_special_chars = false;
+		char trimmed_name[16];
+		int true_end = 0;
+		int last_char = 0;
+		int space_count = 0;
+		int max_allowed_spaces = 1;
+		int trim_len;
+		int j;
 
 		// Skip empty slots
 		if (!colored_name[0])
 			continue;
 
 		// Scan the entire name first to find the true last character
-		int true_end = 0;
-		for (int j = 0; colored_name[j] && j < 31; j++)
+		for (j = 0; colored_name[j] && j < 31; j++)
 		{
 			if (colored_name[j] != ' ')
 				true_end = j;
 		}
 
 		// Now scan up to true_end to find any large gaps
-		int last_char = 0;
-		int space_count = 0;
-		int max_allowed_spaces = 1;
-
-		for (int j = 0; j <= true_end && j < 31; j++)
+		for (j = 0; j <= true_end && j < 31; j++)
 		{
 			if (colored_name[j] == ' ')
 			{
 				space_count++;
 				if (space_count > max_allowed_spaces)
-				{
 					break;
-				}
 			}
 			else
 			{
@@ -3407,44 +3553,13 @@ static qboolean CompleteClients(const char* partial, void* unused) // woods
 			}
 		}
 
-		// Create permanent copy of trimmed name
-		int trim_len = q_min(last_char + 1, 15);
-		char* permanent_name = (char*)Hunk_AllocName(trim_len + 1, "tabname");
-		memcpy(permanent_name, colored_name, trim_len);
-		permanent_name[trim_len] = '\0';
+		// Trimmed copy of the colored name (Con_AddToTabListInternal copies
+		// both name and match_name, so a stack buffer is fine)
+		trim_len = q_min(last_char + 1, 15);
+		memcpy(trimmed_name, colored_name, trim_len);
+		trimmed_name[trim_len] = '\0';
 
-		// First check if name has any special chars
-		for (int j = 0; permanent_name[j] && j < trim_len; j++)
-		{
-			if (permanent_name[j] != ' ' && permanent_name[j] != unfun[permanent_name[j] & 127])
-			{
-				has_special_chars = true;
-				break;
-			}
-		}
-
-		// Only do unfun conversion if we have special chars
-		if (has_special_chars)
-		{
-			for (int j = 0; permanent_name[j] && j < trim_len; j++)
-			{
-				unfun_name[j] = unfun[permanent_name[j] & 127];
-			}
-			unfun_name[trim_len] = '\0';
-
-			if (q_strcasestr(unfun_name, partial_has_special ? unfun_partial : partial))
-			{
-				Con_AddToTabList(unfun_name, partial, permanent_name, NULL);
-			}
-		}
-		else
-		{
-			// For normal names, just do direct comparison
-			if (q_strcasestr(permanent_name, partial))
-			{
-				Con_AddToTabList(permanent_name, partial, NULL, NULL);
-			}
-		}
+		Con_AddNameToTabList (trimmed_name, partial, match_partial);
 	}
 
 	return true;
@@ -3972,7 +4087,7 @@ static void Con_FormatTabMatch (const tab_t* t, char* dst, size_t dstsize)
 	if (cls.state == ca_dedicated)
 		q_strlcpy(tinted, t->name, sizeof(tinted));
 	else
-		COM_TintSubstring(t->name, bash_partial, tinted, sizeof(tinted));
+		Con_TintTabMatch(t, bash_partial, tinted, sizeof(tinted));
 
 	if (!t->type)
 		q_strlcpy(dst, tinted, dstsize);
@@ -4110,6 +4225,7 @@ void Con_TabComplete (tabcomplete_t mode)
 	char	partial[MAXCMDLINE];
 	const char* match;
 	static char* c;
+	const tab_t* selected = NULL;
 	tab_t* t;
 	int		mark, i;
 
@@ -4156,7 +4272,7 @@ void Con_TabComplete (tabcomplete_t mode)
 
 		if (!tablist)
 		{
-			Hunk_FreeToLowMark (mark); 
+			Hunk_FreeToLowMark (mark);
 			return;
 		}
 
@@ -4164,9 +4280,16 @@ void Con_TabComplete (tabcomplete_t mode)
 		if (tablist->next != tablist && mode == TABCOMPLETE_USER)
 			Con_PrintTabList (); // woods #consolecols
 
-		//	match = tablist->name;
-		// First time, just show maximum matching chars -- S.A.
-		match = bash_singlematch ? tablist->name : bash_partial;
+		if (bash_singlematch)
+		{
+			selected = tablist;
+			match = selected->name;
+		}
+		else
+		{
+			// First time, just show maximum matching chars -- S.A.
+			match = bash_partial;
+		}
 	}
 	else
 	{
@@ -4180,24 +4303,28 @@ void Con_TabComplete (tabcomplete_t mode)
 
 		//find current match -- can't save a pointer because the list will be rebuilt each time
 		t = tablist;
-		match = keydown[K_SHIFT] ? t->prev->name : t->name;
+		selected = keydown[K_SHIFT] ? t->prev : t;
 		do
 		{
 			if (!q_strcasecmp (t->name, partial))
 			{
-				match = keydown[K_SHIFT] ? t->prev->name : t->next->name;
+				selected = keydown[K_SHIFT] ? t->prev : t->next;
 				break;
 			}
 			t = t->next;
 		} while (t != tablist);
+		match = selected->name;
 	}
 
 	if (mode == TABCOMPLETE_AUTOHINT)
 	{
 		size_t len = strlen(partial);
-		match = q_strcasestr (match, partial);
-		if (match && match[len])
-			q_strlcpy (key_tabhint, match + len, sizeof (key_tabhint));
+		if (!(selected && Con_CopyTabHint(selected, partial, key_tabhint, sizeof(key_tabhint))))
+		{
+			match = q_strcasestr (match, partial);
+			if (match && match[len])
+				q_strlcpy (key_tabhint, match + len, sizeof (key_tabhint));
+		}
 		Hunk_FreeToLowMark (mark);
 		key_tabpartial[0] = '\0';
 		return;
@@ -4212,9 +4339,6 @@ void Con_TabComplete (tabcomplete_t mode)
 	if (key_linepos >= MAXCMDLINE)
 		key_linepos = MAXCMDLINE - 1;
 
-	Hunk_FreeToLowMark (mark);
-
-	match = NULL;
 	Hunk_FreeToLowMark (mark);
 
 	// if cursor is at end of string, let's append a space to make life easier

@@ -1987,7 +1987,7 @@ skipwhite:
 		else if (mode == CPE_NOTRUNC)
 			return NULL;
 		data++;
-		c = *data;
+		c = (unsigned char)*data;	// woods -- keep high-bit chars (>127) as word chars, matching the skipwhite cast above
 		/* commented out the check for ':' so that ip:port works */
 		if (c == '{' || c == '}' || c == '(' || c == ')' || c == '\''/* || c == ':' */)
 			break;
