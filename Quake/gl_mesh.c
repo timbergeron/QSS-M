@@ -1985,13 +1985,14 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 							q_snprintf(texname, sizeof(texname), "progs/%s_%02u_%02u_luma", com_token, surf->numskins, f);
 							surf->textures[surf->numskins][f].luma = TexMgr_LoadImage(mod, texname, surf->skinwidth, surf->skinheight, SRC_EXTERNAL, NULL, texname, 0, TEXPREF_ALLOWMISSING|TEXPREF_MIPMAP);
 						}
-
-						q_snprintf(texname, sizeof(texname), "progs/%s_%02u_%02u_pants", com_token, surf->numskins, f);
-						surf->textures[surf->numskins][f].lower = TexMgr_LoadImage(mod, texname, surf->skinwidth, surf->skinheight, SRC_EXTERNAL, NULL, texname, 0, TEXPREF_ALLOWMISSING|TEXPREF_MIPMAP);
-
-						q_snprintf(texname, sizeof(texname), "progs/%s_%02u_%02u_shirt", com_token, surf->numskins, f);
-						surf->textures[surf->numskins][f].upper = TexMgr_LoadImage(mod, texname, surf->skinwidth, surf->skinheight, SRC_EXTERNAL, NULL, texname, 0, TEXPREF_ALLOWMISSING|TEXPREF_MIPMAP);
 					}
+
+					//try to load pants/shirt mask textures (works with both indexed and 32bit base)
+					q_snprintf(texname, sizeof(texname), "progs/%s_%02u_%02u_pants", com_token, surf->numskins, f);
+					surf->textures[surf->numskins][f].lower = TexMgr_LoadImage(mod, texname, surf->skinwidth, surf->skinheight, SRC_EXTERNAL, NULL, texname, 0, TEXPREF_ALLOWMISSING|TEXPREF_MIPMAP);
+
+					q_snprintf(texname, sizeof(texname), "progs/%s_%02u_%02u_shirt", com_token, surf->numskins, f);
+					surf->textures[surf->numskins][f].upper = TexMgr_LoadImage(mod, texname, surf->skinwidth, surf->skinheight, SRC_EXTERNAL, NULL, texname, 0, TEXPREF_ALLOWMISSING|TEXPREF_MIPMAP);
 
 					//now try to load glow/luma image from the same place
 					if (malloced)

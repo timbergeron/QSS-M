@@ -48,6 +48,10 @@ typedef struct stdio_buffer_s {
 static stdio_buffer_t *Buf_Alloc(FILE *f)
 {
 	stdio_buffer_t *buf = (stdio_buffer_t *) calloc(1, sizeof(stdio_buffer_t));
+
+	if (!buf)
+		return NULL;
+
 	buf->f = f;
 	return buf;
 }
@@ -69,6 +73,39 @@ static inline int Buf_GetC(stdio_buffer_t *buf)
 	}
 
 	return buf->buffer[buf->pos++];
+}
+
+static qboolean File_ReadByte(FILE *f, byte *out)
+{
+	int c = fgetc(f);
+
+	if (c == EOF)
+		return false;
+
+	*out = (byte)c;
+	return true;
+}
+
+static qboolean File_ReadLittleShort(FILE *f, unsigned short *out)
+{
+	byte b1, b2;
+
+	if (!File_ReadByte(f, &b1) || !File_ReadByte(f, &b2))
+		return false;
+
+	*out = (unsigned short)(b1 + b2 * 256);
+	return true;
+}
+
+static qboolean Buf_ReadByte(stdio_buffer_t *buf, byte *out)
+{
+	int c = Buf_GetC(buf);
+
+	if (c == EOF)
+		return false;
+
+	*out = (byte)c;
+	return true;
 }
 
 /*small function to read files with stb_image - single-file image loader library.
@@ -610,28 +647,6 @@ typedef struct targaheader_s {
 
 #define TARGAHEADERSIZE 18		/* size on disk */
 
-int fgetLittleShort (FILE *f)
-{
-	byte	b1, b2;
-
-	b1 = fgetc(f);
-	b2 = fgetc(f);
-
-	return (short)(b1 + b2*256);
-}
-
-int fgetLittleLong (FILE *f)
-{
-	byte	b1, b2, b3, b4;
-
-	b1 = fgetc(f);
-	b2 = fgetc(f);
-	b3 = fgetc(f);
-	b4 = fgetc(f);
-
-	return b1 + (b2<<8) + (b3<<16) + (b4<<24);
-}
-
 /*
 ============
 Image_WriteTGA -- writes RGB or RGBA data to a TGA file
@@ -687,7 +702,7 @@ Image_LoadTGA
 */
 byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 {
-	int				columns, rows, numPixels;
+	int				columns, rows;
 	byte			*pixbuf;
 	int				row, column;
 	byte			*targa_rgba;
@@ -695,46 +710,76 @@ byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 	qboolean		upside_down; //johnfitz -- fix for upside-down targas
 	stdio_buffer_t	*buf;
 	targaheader_t	targa_header;
+	int				hunkmark;
+	size_t			numPixels, dataSize;
 
-	targa_header.id_length = fgetc(fin);
-	targa_header.colormap_type = fgetc(fin);
-	targa_header.image_type = fgetc(fin);
+	hunkmark = Hunk_LowMark ();
+	buf = NULL;
 
-	targa_header.colormap_index = fgetLittleShort(fin);
-	targa_header.colormap_length = fgetLittleShort(fin);
-	targa_header.colormap_size = fgetc(fin);
-	targa_header.x_origin = fgetLittleShort(fin);
-	targa_header.y_origin = fgetLittleShort(fin);
-	targa_header.width = fgetLittleShort(fin);
-	targa_header.height = fgetLittleShort(fin);
-	targa_header.pixel_size = fgetc(fin);
-	targa_header.attributes = fgetc(fin);
+	if (!File_ReadByte(fin, &targa_header.id_length) ||
+		!File_ReadByte(fin, &targa_header.colormap_type) ||
+		!File_ReadByte(fin, &targa_header.image_type) ||
+		!File_ReadLittleShort(fin, &targa_header.colormap_index) ||
+		!File_ReadLittleShort(fin, &targa_header.colormap_length) ||
+		!File_ReadByte(fin, &targa_header.colormap_size) ||
+		!File_ReadLittleShort(fin, &targa_header.x_origin) ||
+		!File_ReadLittleShort(fin, &targa_header.y_origin) ||
+		!File_ReadLittleShort(fin, &targa_header.width) ||
+		!File_ReadLittleShort(fin, &targa_header.height) ||
+		!File_ReadByte(fin, &targa_header.pixel_size) ||
+		!File_ReadByte(fin, &targa_header.attributes))
+	{
+		Con_Warning ("Image_LoadTGA: %s is truncated\n", loadfilename);
+		goto invalid;
+	}
 
 	if (targa_header.image_type==1)
 	{
 		if (targa_header.pixel_size != 8 || targa_header.colormap_size != 24 || targa_header.colormap_length > 256)
-			Sys_Error ("Image_LoadTGA: %s has an %ibit palette", loadfilename, targa_header.colormap_type);
+		{
+			Con_Warning ("Image_LoadTGA: %s has an %ibit palette\n", loadfilename, targa_header.colormap_size);
+			goto invalid;
+		}
 	}
 	else
 	{
 		if (targa_header.image_type!=2 && targa_header.image_type!=10)
-			Sys_Error ("Image_LoadTGA: %s is not a type 2 or type 10 targa (%i)", loadfilename, targa_header.image_type);
+		{
+			Con_Warning ("Image_LoadTGA: %s is not a type 2 or type 10 targa (%i)\n", loadfilename, targa_header.image_type);
+			goto invalid;
+		}
 
 		if (targa_header.colormap_type !=0 || (targa_header.pixel_size!=32 && targa_header.pixel_size!=24))
-			Sys_Error ("Image_LoadTGA: %s is not a 24bit or 32bit targa", loadfilename);
+		{
+			Con_Warning ("Image_LoadTGA: %s is not a 24bit or 32bit targa\n", loadfilename);
+			goto invalid;
+		}
 	}
 
 	columns = targa_header.width;
 	rows = targa_header.height;
-	numPixels = columns * rows;
+	if (columns <= 0 || rows <= 0)
+	{
+		Con_Warning ("Image_LoadTGA: %s has invalid dimensions %dx%d\n", loadfilename, columns, rows);
+		goto invalid;
+	}
+	numPixels = (size_t)columns * (size_t)rows;
+	if (numPixels > (size_t)INT_MAX / 4)
+	{
+		Con_Warning ("Image_LoadTGA: %s dimensions %dx%d are too large\n", loadfilename, columns, rows);
+		goto invalid;
+	}
+	dataSize = numPixels * 4;
 	upside_down = !(targa_header.attributes & 0x20); //johnfitz -- fix for upside-down targas
 
-	targa_rgba = (byte *) Hunk_Alloc (numPixels*4);
+	targa_rgba = (byte *) Hunk_Alloc ((int)dataSize);
 
 	if (targa_header.id_length != 0)
 		fseek(fin, targa_header.id_length, SEEK_CUR);  // skip TARGA image comment
 
 	buf = Buf_Alloc(fin);
+	if (!buf)
+		goto invalid;
 
 	if (targa_header.image_type==1) // Uncompressed, paletted images
 	{
@@ -743,9 +788,10 @@ byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 		//palette data comes first
 		for (i = 0; i < targa_header.colormap_length; i++)
 		{	//this palette data is bgr.
-			palette[i*3+2] = Buf_GetC(buf);
-			palette[i*3+1] = Buf_GetC(buf);
-			palette[i*3+0] = Buf_GetC(buf);
+			if (!Buf_ReadByte(buf, &palette[i*3+2]) ||
+				!Buf_ReadByte(buf, &palette[i*3+1]) ||
+				!Buf_ReadByte(buf, &palette[i*3+0]))
+				goto truncated;
 			palette[i*3+3] = 255;
 		}
 		for (i = targa_header.colormap_length*4; i < sizeof(palette); i++)
@@ -757,7 +803,11 @@ byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 
 			for(column=0; column<columns; column++)
 			{
-				i = Buf_GetC(buf);
+				byte palindex;
+
+				if (!Buf_ReadByte(buf, &palindex))
+					goto truncated;
+				i = palindex;
 				*pixbuf++= palette[i*3+0];
 				*pixbuf++= palette[i*3+1];
 				*pixbuf++= palette[i*3+2];
@@ -779,19 +829,21 @@ byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 				switch (targa_header.pixel_size)
 				{
 				case 24:
-					blue = Buf_GetC(buf);
-					green = Buf_GetC(buf);
-					red = Buf_GetC(buf);
+					if (!Buf_ReadByte(buf, &blue) ||
+						!Buf_ReadByte(buf, &green) ||
+						!Buf_ReadByte(buf, &red))
+						goto truncated;
 					*pixbuf++ = red;
 					*pixbuf++ = green;
 					*pixbuf++ = blue;
 					*pixbuf++ = 255;
 					break;
 				case 32:
-					blue = Buf_GetC(buf);
-					green = Buf_GetC(buf);
-					red = Buf_GetC(buf);
-					alphabyte = Buf_GetC(buf);
+					if (!Buf_ReadByte(buf, &blue) ||
+						!Buf_ReadByte(buf, &green) ||
+						!Buf_ReadByte(buf, &red) ||
+						!Buf_ReadByte(buf, &alphabyte))
+						goto truncated;
 					*pixbuf++ = red;
 					*pixbuf++ = green;
 					*pixbuf++ = blue;
@@ -812,23 +864,26 @@ byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 			//johnfitz
 			for(column=0; column<columns; )
 			{
-				packetHeader=Buf_GetC(buf);
+				if (!Buf_ReadByte(buf, &packetHeader))
+					goto truncated;
 				packetSize = 1 + (packetHeader & 0x7f);
 				if (packetHeader & 0x80) // run-length packet
 				{
 					switch (targa_header.pixel_size)
 					{
 					case 24:
-						blue = Buf_GetC(buf);
-						green = Buf_GetC(buf);
-						red = Buf_GetC(buf);
+						if (!Buf_ReadByte(buf, &blue) ||
+							!Buf_ReadByte(buf, &green) ||
+							!Buf_ReadByte(buf, &red))
+							goto truncated;
 						alphabyte = 255;
 						break;
 					case 32:
-						blue = Buf_GetC(buf);
-						green = Buf_GetC(buf);
-						red = Buf_GetC(buf);
-						alphabyte = Buf_GetC(buf);
+						if (!Buf_ReadByte(buf, &blue) ||
+							!Buf_ReadByte(buf, &green) ||
+							!Buf_ReadByte(buf, &red) ||
+							!Buf_ReadByte(buf, &alphabyte))
+							goto truncated;
 						break;
 					default: /* avoid compiler warnings */
 						blue = red = green = alphabyte = 0;
@@ -862,19 +917,21 @@ byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 						switch (targa_header.pixel_size)
 						{
 						case 24:
-							blue = Buf_GetC(buf);
-							green = Buf_GetC(buf);
-							red = Buf_GetC(buf);
+							if (!Buf_ReadByte(buf, &blue) ||
+								!Buf_ReadByte(buf, &green) ||
+								!Buf_ReadByte(buf, &red))
+								goto truncated;
 							*pixbuf++ = red;
 							*pixbuf++ = green;
 							*pixbuf++ = blue;
 							*pixbuf++ = 255;
 							break;
 						case 32:
-							blue = Buf_GetC(buf);
-							green = Buf_GetC(buf);
-							red = Buf_GetC(buf);
-							alphabyte = Buf_GetC(buf);
+							if (!Buf_ReadByte(buf, &blue) ||
+								!Buf_ReadByte(buf, &green) ||
+								!Buf_ReadByte(buf, &red) ||
+								!Buf_ReadByte(buf, &alphabyte))
+								goto truncated;
 							*pixbuf++ = red;
 							*pixbuf++ = green;
 							*pixbuf++ = blue;
@@ -909,6 +966,16 @@ byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 	*width = (int)(targa_header.width);
 	*height = (int)(targa_header.height);
 	return targa_rgba;
+
+truncated:
+	Con_Warning ("Image_LoadTGA: %s is truncated\n", loadfilename);
+
+invalid:
+	if (buf)
+		Buf_Free(buf);
+	fclose(fin);
+	Hunk_FreeToLowMark (hunkmark);
+	return NULL;
 }
 
 //==============================================================================
@@ -979,6 +1046,8 @@ byte *Image_LoadPCX (FILE *f, int *width, int *height)
 	fseek (f, start + sizeof(pcx), SEEK_SET);
 
 	buf = Buf_Alloc(f);
+	if (!buf)
+		Sys_Error ("Image_LoadPCX: failed to allocate stdio buffer for '%s'", loadfilename);
 
 	for (y=0; y<h; y++)
 	{

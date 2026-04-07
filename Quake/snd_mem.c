@@ -181,7 +181,10 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 
 	if (!data)
 	{
-		Con_Printf ("Couldn't load %s\n", namebuffer);
+		if (cl.suppress_precache_miss_warnings)
+			cl.suppressed_sound_precache_warnings++;
+		else
+			Con_Printf ("Couldn't load %s\n", namebuffer);
 		return NULL;
 	}
 

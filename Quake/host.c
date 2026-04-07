@@ -1769,6 +1769,7 @@ void Host_Init (void)
 		TextList_Init(); // woods #textlist
 		ParticleList_Init (); // woods #particlelist
 		ServerList_Init(); // woods #serverlist
+		NameHistory_Init(); // woods #namehistory
 		BookmarksList_Init (); // woods #bookmarksmenu
 		FolderList_Init(); // woods #folderlist
 		MusicList_Init (); // woods #musiclist

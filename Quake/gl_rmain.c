@@ -724,11 +724,16 @@ R_Clear -- johnfitz -- rewritten and gutted
 void R_Clear (void)
 {
 	unsigned int clearbits;
+	GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
 
 	clearbits = GL_DEPTH_BUFFER_BIT;
 	// from mh -- if we get a stencil buffer, we should clear it, even though we don't use it
 	if (gl_stencilbits)
+	{
+		if (viewmodel_stencil_bit && gl_laserpoint.value)
+			glStencilMask(~0u);
 		clearbits |= GL_STENCIL_BUFFER_BIT;
+	}
 	if (gl_clear.value && !skyroom_drawn && r_refdef.drawworld)
 		clearbits |= GL_COLOR_BUFFER_BIT;
 	glClear (clearbits);
@@ -1964,6 +1969,7 @@ R_DrawShadows
 void R_DrawShadows (void)
 {
 	int i;
+	qboolean use_viewmodel_stencil = false;
 
 	if (!r_shadows.value || !r_drawentities.value || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
 		return;
@@ -1971,7 +1977,21 @@ void R_DrawShadows (void)
 	// Use stencil buffer to prevent self-intersecting shadows, from Baker (MarkV)
 	if (gl_stencilbits)
 	{
+		GLuint stencil_mask = (gl_stencilbits > 0 && gl_stencilbits < 32) ? ((1u << gl_stencilbits) - 1u) : 0xFFu;
+		GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
+
+		// Exclude viewmodel bit from shadow stencil writes when laser is active
+		if (viewmodel_stencil_bit && gl_laserpoint.value)
+		{
+			use_viewmodel_stencil = true;
+			stencil_mask &= ~viewmodel_stencil_bit;
+		}
+
+		if (use_viewmodel_stencil)
+			glStencilMask(~0u);
 		glClear(GL_STENCIL_BUFFER_BIT);
+		if (use_viewmodel_stencil)
+			glStencilMask(stencil_mask);
 		glStencilFunc(GL_EQUAL, 0, ~0);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
 		glEnable(GL_STENCIL_TEST);
@@ -2001,6 +2021,8 @@ void R_DrawShadows (void)
 
 	if (gl_stencilbits)
 	{
+		if (use_viewmodel_stencil)
+			glStencilMask(~0u);
 		glDisable(GL_STENCIL_TEST);
 	}
 }

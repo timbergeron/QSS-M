@@ -333,6 +333,11 @@ typedef struct
 	unsigned	protocol_pext2;	//spike -- flag of fte protocol extensions
 	qboolean	protocol_dpdownload;
 	qboolean	wronggamedir;	//blocks downloads
+	char		server_gamedir[MAX_OSPATH];
+	qboolean	wronggamedir_latewarned;
+	qboolean	suppress_precache_miss_warnings;
+	int		suppressed_model_precache_warnings;
+	int		suppressed_sound_precache_warnings;
 
 #ifdef PSET_SCRIPT
 	qboolean	protocol_particles;
@@ -578,6 +583,7 @@ void CL_UpdateTEnts (void);
 void CL_FreeState(void);
 void CL_ClearState (void);
 void CL_ClearTrailStates(void);
+void CL_PrintWrongGameDirWarning(void);
 
 //
 // cl_demo.c

@@ -329,6 +329,56 @@ static void CL_PrintConnectFailureHints(void)
 		Con_Printf("\nTry using port 26000\n");
 }
 
+void CL_PrintWrongGameDirWarning(void)
+{
+	const char *curgame;
+	const char *servergame;
+
+	if (!cl.wronggamedir)
+		return;
+
+	curgame = COM_GetGameNames(false);
+	if (!*curgame)
+		curgame = COM_GetGameNames(true);
+
+	servergame = cl.server_gamedir;
+	if (!*servergame)
+		servergame = "(unknown)";
+
+	Con_Warning("Server is using a different gamedir.\n");
+	Con_Warning("Current: %s\n", curgame);
+	Con_Warning("Server: %s\n", servergame);
+	Con_Warning("You will probably want to switch gamedir to match the server.\n");
+}
+
+static void CL_MaybePrintLateWrongGameDirWarning(void)
+{
+	if (!cl.wronggamedir || cl.wronggamedir_latewarned)
+		return;
+
+	if (cl.suppressed_model_precache_warnings == 0 && cl.suppressed_sound_precache_warnings == 0)
+		return;
+
+	CL_PrintWrongGameDirWarning();
+	if (cl.suppressed_model_precache_warnings && cl.suppressed_sound_precache_warnings)
+	{
+		Con_Warning("Suppressed %d missing model warnings and %d missing sound warnings caused by the gamedir mismatch.\n",
+			cl.suppressed_model_precache_warnings, cl.suppressed_sound_precache_warnings);
+	}
+	else if (cl.suppressed_model_precache_warnings)
+	{
+		Con_Warning("Suppressed %d missing model warnings caused by the gamedir mismatch.\n",
+			cl.suppressed_model_precache_warnings);
+	}
+	else
+	{
+		Con_Warning("Suppressed %d missing sound warnings caused by the gamedir mismatch.\n",
+			cl.suppressed_sound_precache_warnings);
+	}
+
+	cl.wronggamedir_latewarned = true;
+}
+
 static void CL_FinalizeConnection(struct qsocket_s *netcon, const char *host)
 {
 	CL_ClearConnectReturnState();
@@ -3040,6 +3090,7 @@ extern qboolean Sky_DownloadSkybox(const char* name);
 qboolean CL_CheckDownloads(void)
 {
 	int i;
+	cl.suppress_precache_miss_warnings = false;
 	if (cl.model_download == 0 && cl.model_count && cl.model_name[1][0]) // woods
 	{	//haxors, download the lit first, but only if we don't already have the bsp
 		//this ensures that we don't keep requesting the lit for maps that just don't have one (although may be problematic if the first server we find deleted them all, but oh well)
@@ -3104,7 +3155,9 @@ qboolean CL_CheckDownloads(void)
 		{
 			if (CL_CheckDownload(cl.model_name[cl.model_download]))
 				return false;
+			cl.suppress_precache_miss_warnings = cl.wronggamedir;
 			cl.model_precache[cl.model_download] = Mod_ForName (cl.model_name[cl.model_download], false);
+			cl.suppress_precache_miss_warnings = false;
 			if (cl.model_precache[cl.model_download] == NULL)
 			{
 				Host_Error ("Model %s not found", cl.model_name[cl.model_download]);
@@ -3119,10 +3172,14 @@ qboolean CL_CheckDownloads(void)
 		{
 			if (CL_CheckDownload(va("sound/%s", cl.sound_name[cl.sound_download])))
 				return false;
+			cl.suppress_precache_miss_warnings = cl.wronggamedir;
 			cl.sound_precache[cl.sound_download] = S_PrecacheSound (cl.sound_name[cl.sound_download]);
+			cl.suppress_precache_miss_warnings = false;
 		}
 		cl.sound_download++;
 	}
+
+	CL_MaybePrintLateWrongGameDirWarning();
 
 	if (!cl.worldmodel && cl.model_count >= 2)
 	{
@@ -4280,6 +4337,24 @@ static void CL_DemoFormat_Completion_f(cvar_t* cvar, const char* partial)
 }
 
 /*
+===============
+CL_Name_Completion_f -- woods #namehistory
+===============
+*/
+static void CL_Name_Completion_f (cvar_t *cvar, const char *partial)
+{
+	filelist_item_t *item;
+
+	(void)cvar;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	for (item = namehistorylist; item; item = item->next)
+		Con_AddToTabList(item->name, partial, NULL, NULL);
+}
+
+/*
 =================
 CL_Init
 =================
@@ -4293,6 +4368,7 @@ void CL_Init (void)
 
 	Cvar_RegisterVariable (&cl_name);
 	Cvar_RegisterAlias    (&cl_name, "_cl_name");	//spike -- for compat with configs now that 'name' is a cvar in its own right.
+	Cvar_SetCompletion (&cl_name, &CL_Name_Completion_f); // woods #namehistory
 	Cvar_RegisterVariable (&cl_topcolor);
 	Cvar_RegisterVariable (&cl_bottomcolor);
 	Cmd_AddCommand ("_cl_color", CL_LegacyColor_f);	//for loading vanilla configs (we have separate qw-style topcolor/bottomcolor userinfo cvars instead)

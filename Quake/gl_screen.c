@@ -4102,6 +4102,89 @@ void SCR_DrawCrosshair (void)
 
 /*
 ================
+LaserSight_TraceBSPSubmodels - trace against visible BSP submodels (doors, plats, etc.)
+================
+*/
+static void LaserSight_TraceBSPSubmodels (vec3_t start, vec3_t wall)
+{
+	int i;
+	trace_t trace;
+	float best_dist;
+	vec3_t adjusted_start, adjusted_end, end;
+
+	if (!cl.worldmodel || cls.signon < SIGNONS)
+		return;
+
+	VectorCopy (wall, end);
+	best_dist = VecLength2 (start, wall);
+
+	for (i = 0; i < cl_numvisedicts; i++)
+	{
+		entity_t *ent = cl_visedicts[i];
+		vec3_t f, r, u, temp;
+		qboolean rotated;
+
+		if (!ent || !ent->model)
+			continue;
+		if (ent->model->type != mod_brush)
+			continue;
+		if (ent->model->surfaces != cl.worldmodel->surfaces)
+			continue;
+
+		VectorSubtract (start, ent->origin, adjusted_start);
+		VectorSubtract (end, ent->origin, adjusted_end);
+
+		rotated = (ent->angles[0] || ent->angles[1] || ent->angles[2]);
+		if (rotated)
+		{
+			AngleVectors (ent->angles, f, r, u);
+
+			VectorCopy (adjusted_start, temp);
+			adjusted_start[0] =  DotProduct (temp, f);
+			adjusted_start[1] = -DotProduct (temp, r);
+			adjusted_start[2] =  DotProduct (temp, u);
+
+			VectorCopy (adjusted_end, temp);
+			adjusted_end[0] =  DotProduct (temp, f);
+			adjusted_end[1] = -DotProduct (temp, r);
+			adjusted_end[2] =  DotProduct (temp, u);
+		}
+
+		memset (&trace, 0, sizeof(trace));
+		trace.fraction = 1;
+		trace.allsolid = true;
+		VectorCopy (adjusted_end, trace.endpos);
+		SV_RecursiveHullCheck (&ent->model->hulls[0], adjusted_start, adjusted_end, &trace, CONTENTMASK_ANYSOLID);
+
+		if (trace.fraction < 1)
+		{
+			vec3_t hit;
+			float dist;
+
+			if (rotated)
+			{
+				// Inverse-rotate endpos back to world space
+				VectorCopy (trace.endpos, temp);
+				hit[0] = f[0]*temp[0] - r[0]*temp[1] + u[0]*temp[2];
+				hit[1] = f[1]*temp[0] - r[1]*temp[1] + u[1]*temp[2];
+				hit[2] = f[2]*temp[0] - r[2]*temp[1] + u[2]*temp[2];
+				VectorAdd (hit, ent->origin, hit);
+			}
+			else
+				VectorAdd (trace.endpos, ent->origin, hit);
+
+			dist = VecLength2 (start, hit);
+			if (dist < best_dist)
+			{
+				best_dist = dist;
+				VectorCopy (hit, wall);
+			}
+		}
+	}
+}
+
+/*
+================
 LaserSight - port from quakespasm-shalrathy / qrack --  woods #laser
 ================
 */
@@ -4115,6 +4198,8 @@ void LaserSight (void)
 	}
 
 	vec3_t	start, forward, right, up, crosshair, wall, origin;
+	qboolean	use_stencil = false;
+	GLuint		viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
 
 	// copy origin to start, offset it correctly
 
@@ -4126,6 +4211,17 @@ void LaserSight (void)
 	// find the spot the player is looking at
 	VectorMA(start, 4096, forward, crosshair);
 	TraceLine(start, crosshair, 0, wall);
+	LaserSight_TraceBSPSubmodels (start, wall);
+
+	if (viewmodel_stencil_bit)
+	{
+		glPushAttrib(GL_STENCIL_BUFFER_BIT | GL_ENABLE_BIT);
+		glEnable(GL_STENCIL_TEST);
+		glStencilMask(0x00);
+		glStencilFunc(GL_NOTEQUAL, (GLint)viewmodel_stencil_bit, (GLint)viewmodel_stencil_bit);
+		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+		use_stencil = true;
+	}
 
 	glDisable(GL_DEPTH_TEST);
 	glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -4167,8 +4263,10 @@ void LaserSight (void)
 	glEnable(GL_CULL_FACE);
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 	GL_PolygonOffset(OFFSET_NONE);
+	if (use_stencil)
+		glPopAttrib();
 	glEnable(GL_DEPTH_TEST);
-	glDisable(GL_BLEND);		
+	glDisable(GL_BLEND);
 }
 
 //=============================================================================
