@@ -722,7 +722,7 @@ static neterr_t SCTP_SendLowerPacket(struct icestate_s *ice, const void *data, s
 #endif
 static neterr_t ICE_SendPacket(struct icestate_s *con, const void *data, size_t length)
 {
-	con->icetimeout = Sys_Milliseconds() + (con->icetimeout_ms ? con->icetimeout_ms : 30*1000);
+	neterr_t err;
 
 	if (con->state == ICE_CONNECTING)
 		return NETERR_CLOGGED;
@@ -732,15 +732,25 @@ static neterr_t ICE_SendPacket(struct icestate_s *con, const void *data, size_t 
 		return NETERR_DISCONNECTED;
 #ifdef HAVE_SCTP
 	if (con->sctp)
-		return SCTP_Transmit(con->sctp, data, length);
+		err = SCTP_Transmit(con->sctp, data, length);
+	else
 #endif
 #ifdef HAVE_DTLS
 	if (con->dtlsstate)
-		return con->dtlsfuncs->Transmit(con->dtlsstate, data, length);
+		err = con->dtlsfuncs->Transmit(con->dtlsstate, data, length);
+	else
 #endif
 	if (con->chosenpeer.type != NA_INVALID)
-		return ICE_Transmit(con, data, length);
-	return NETERR_CLOGGED;	//still pending... waiting for the handshakes.
+		err = ICE_Transmit(con, data, length);
+	else
+		err = NETERR_CLOGGED;	//still pending... waiting for the handshakes.
+
+	//only extend the timeout when data was actually sent — failed/clogged sends
+	//must not keep dead connections alive or they linger until TCP retransmit gives up
+	if (err == NETERR_SENT)
+		con->icetimeout = Sys_Milliseconds() + (con->icetimeout_ms ? con->icetimeout_ms : 30*1000);
+
+	return err;
 }
 
 static struct icestate_s *ICE_Create(struct icemodule_s *module, const char *conname, const char *peername, unsigned int modeflags, enum iceproto_e proto)
@@ -3184,6 +3194,11 @@ void ICE_ProcessModule(struct icemodule_s *module)
 	struct icesocket_s *s;
 	int sz;
 	netadr_t adr;
+
+	//reopen TCP listen sockets if they died (e.g. container network namespace change)
+	//only check conn[2] (IPv4) — conn[3] (IPv6) may legitimately be NULL if unavailable
+	if (module->setuptcpport && !module->conn[2])
+		ICE_SetupModule(module, module->setupudpport, module->setuptcpport);
 
 	for (i = 0; i < countof(module->conn); i++)
 	{

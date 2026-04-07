@@ -729,6 +729,26 @@ static void ICETCP_CheckAccept (struct icesocket_s *s, struct icemodule_s *modul
 		link = ICE_WS_ServerConnection(fd, &adr);
 		GotConnection(module, link, &adr);
 	}
+	else
+	{
+		int e = NET_ERRNO();
+		if (e == NET_EBADF || e == NET_ENOTSOCK || e == NET_EINVAL)
+		{	//permanent error — socket fd is dead or no longer listening.
+			//null the module slot so ICE_SetupModule can reopen it.
+			//transient errors (EMFILE, ENOMEM, ECONNABORTED, etc.) are left alone.
+			int i;
+			Con_Printf(CON_WARNING "TCP listen socket died (errno %d), will reopen\n", e);
+			for (i = 0; i < (int)countof(module->conn); i++)
+			{
+				if (module->conn[i] == s)
+				{
+					s->CloseSocket(s);
+					module->conn[i] = NULL;
+					break;
+				}
+			}
+		}
+	}
 }
 static struct icesocket_s *ICE_OpenTCPSocket(netadrtype_t type, int port)
 {
@@ -772,7 +792,7 @@ static struct icesocket_s *ICE_OpenTCPSocket(netadrtype_t type, int port)
 			if (ioctlsocket (n->sock, FIONBIO, &_true) >= 0)
 				if (!bind(n->sock, &adr.sa, sasz))
 				{	//socket is okay. use it.
-					if (!listen(n->sock, 1))	//we don't expect heavy traffic
+					if (!listen(n->sock, 16))	//modest backlog for websocket game connections
 						return n;
 				}
 			closesocket(n->sock);
@@ -842,7 +862,5 @@ void ICE_SetupModule(struct icemodule_s *module, int udpport, int tcpport)
 	if (!module->conn[3] && tcpport)
 		module->conn[3] = ICE_OpenTCPSocket(NA_IPV6, tcpport);
 
-	// Clear retry flag once sockets are open
-	if (module->conn[0] && module->conn[2])
-		module->setupudpport = module->setuptcpport = 0;
+	// Keep setupudpport/setuptcpport so we can reopen if a socket dies later
 }

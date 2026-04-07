@@ -68,6 +68,8 @@ static cvar_t net_ice_broker = CVARFD("net_ice_broker", "master.frag-net.com:279
 cvar_t sv_port_rtc = CVARFD("sv_port_rtc", "/", CVAR_NOTFROMSERVER, "This is the '/roomname' for your server to register as. When '/' will request the master assign one. Empty will disable registration.");
 static cvar_t sv_addr_ws = CVARFD("sv_addr_ws", "", CVAR_NOTFROMSERVER, "WebSocket address for this server (e.g. wss://example.com:27950). Sent as *wsaddr in infostrings.");
 extern cvar_t com_protocolname;
+extern cvar_t net_messagetimeout;
+extern cvar_t net_connecttimeout;
 
 static char fingerprint[256];
 
@@ -215,6 +217,7 @@ static int DNSLookupThread(void *vctx)
 	return true;
 }
 extern void Datagram_GenerateGetInfoString(char *out, size_t outsize);
+extern qboolean Info_FindNextKey(const char *info, const char *prevkey, char *outkey, size_t outkeysize, char *outval, size_t outvalsize);
 static void QICE_Heartbeat(qice_connection_t *b)
 {
 	char info[2048];
@@ -2658,23 +2661,25 @@ gotgetchallenge:
 			SZ_Clear(&net_message);
 		}
 		else if (req == CCREQ_RULE_INFO)
-		{	//use Q3's \xff\xff\xff\xffgetinfo request instead.
-			const char	*prevCvarName;
-			cvar_t			*var;
+		{
+			const char	*prevKey;
+			char		info[2048], key[64], val[256];
 
-			// find the search start location
-			prevCvarName = MSG_ReadString();
-			var = Cvar_FindVarAfter (prevCvarName, CVAR_SERVERINFO);
+			prevKey = MSG_ReadString();
+
+			// build the full info string and iterate it — includes both
+			// CVAR_SERVERINFO cvars and svs.serverinfo keys (set by QC mods)
+			Datagram_GenerateGetInfoString(info, sizeof(info));
 
 			// send the response
 			SZ_Clear(&net_message);
 			// save space for the header, filled in later
 			MSG_WriteLong(&net_message, 0);
 			MSG_WriteByte(&net_message, CCREP_RULE_INFO);
-			if (var)
+			if (Info_FindNextKey(info, prevKey, key, sizeof(key), val, sizeof(val)))
 			{
-				MSG_WriteString(&net_message, var->name);
-				MSG_WriteString(&net_message, var->string);
+				MSG_WriteString(&net_message, key);
+				MSG_WriteString(&net_message, val);
 			}
 			*((int *)net_message.data) = BigLong(NETFLAG_CTL | (net_message.cursize & NETFLAG_LENGTH_MASK));
 			iceapi.SendPacket(ice, net_message.data, net_message.cursize);
@@ -2706,6 +2711,8 @@ static qboolean QICE_GotC2SMessage (struct icestate_s *ice, const void *data, si
 	if (!s)
 		return false;	//no idea who this is... did they try sneaking past the password checks?
 
+	s->lastMessageTime = net_time;
+
 	SZ_Clear(&net_message);
 	QICE_ProcessMessage(header, ice, s, data, datasize, &net_message);
 	if (net_message.cursize && qice_servercb)
@@ -2727,15 +2734,34 @@ void NQICE_GetAnyMessages(void(*callback)(qsocket_t *))
 	iceapi.ProcessModule(&b->icemodule);
 	qice_servercb = NULL;
 
-	for (s = net_activeSockets; s; s = s->next)
 	{
-		if (s->driverdata == b)
+		qsocket_t *next;
+		for (s = net_activeSockets; s; s = next)
 		{
-		   //handle nq's reliable resends
+			next = s->next;
+			if (s->driverdata != b)
+				continue;
+
+			//handle nq's reliable resends
 			if ((net_time - s->lastSendTime) > 1.0)
 				s->sendNext = true;
 			if (s->sendNext)
 				QICE_ResendReliable(s);
+
+			//kick clients that stopped responding — mirrors net_dgrm.c timeout logic
+			if (net_time - s->lastMessageTime > ((!s->ackSequence)?net_connecttimeout.value:net_messagetimeout.value))
+			{
+				int i;
+				for (i = 0; i < svs.maxclients; i++)
+				{
+					if (svs.clients[i].netconnection == s)
+					{
+						host_client = &svs.clients[i];
+						SV_DropClient(false);
+						break;
+					}
+				}
+			}
 		}
 	}
 }
