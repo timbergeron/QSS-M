@@ -2700,6 +2700,7 @@ void Key_ClearStates (void)
 			Key_Event (i, false);
 	}
 
+	memset(key_gamepad_alttranslated, 0, sizeof(key_gamepad_alttranslated));
 }
 
 /*
