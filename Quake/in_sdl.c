@@ -299,6 +299,7 @@ qboolean windowhasfocus = true;	//just in case sdl fails to tell us... // woods 
 extern cvar_t cl_pong; // woods #pong
 extern void Pong_ToggleFreeze(void); // woods #pong
 static qboolean	textmode;
+static keydevice_t lastactivetype = KD_NONE;
 extern qboolean	bind_grab;	//from the menu code, so that we regrab the mouse in order to pass inputs through
 
 static cvar_t in_debugkeys = {"in_debugkeys", "0", CVAR_NONE};
@@ -467,11 +468,45 @@ cvar_t	joy_invert = { "joy_invert", "0", CVAR_ARCHIVE };
 cvar_t	joy_exponent = { "joy_exponent", "2", CVAR_ARCHIVE };
 cvar_t	joy_exponent_move = { "joy_exponent_move", "2", CVAR_ARCHIVE };
 cvar_t	joy_swapmovelook = { "joy_swapmovelook", "0", CVAR_ARCHIVE };
+cvar_t	joy_flick = { "joy_flick", "0", CVAR_ARCHIVE };
+cvar_t	joy_flick_time = { "joy_flick_time", "0.125", CVAR_ARCHIVE };
+cvar_t	joy_flick_recenter = { "joy_flick_recenter", "0.0", CVAR_ARCHIVE };
+cvar_t	joy_flick_deadzone = { "joy_flick_deadzone", "0.9", CVAR_ARCHIVE };
+cvar_t	joy_flick_noise_thresh = { "joy_flick_noise_thresh", "2.0", CVAR_ARCHIVE };
+cvar_t	joy_flick_adjust_speed = { "joy_flick_adjust_speed", "30.0", CVAR_ARCHIVE };
+cvar_t	joy_rumble = { "joy_rumble", "0.3", CVAR_ARCHIVE };
 cvar_t	joy_enable = { "joy_enable", "1", CVAR_ARCHIVE };
+cvar_t	joy_device = { "joy_device", "0", CVAR_ARCHIVE };
+cvar_t	joy_always_active = { "joy_always_active", "0", CVAR_ARCHIVE };
+
+cvar_t gyro_enable = { "gyro_enable", "1", CVAR_ARCHIVE };
+cvar_t gyro_mode = { "gyro_mode", "2", CVAR_ARCHIVE };
+cvar_t gyro_turning_axis = { "gyro_turning_axis", "0", CVAR_ARCHIVE };
+cvar_t gyro_yawsensitivity = { "gyro_yawsensitivity", "2.5", CVAR_ARCHIVE };
+cvar_t gyro_pitchsensitivity = { "gyro_pitchsensitivity", "2.5", CVAR_ARCHIVE };
+cvar_t gyro_calibration_x = { "gyro_calibration_x", "0", CVAR_ARCHIVE };
+cvar_t gyro_calibration_y = { "gyro_calibration_y", "0", CVAR_ARCHIVE };
+cvar_t gyro_calibration_z = { "gyro_calibration_z", "0", CVAR_ARCHIVE };
+cvar_t gyro_noise_thresh = { "gyro_noise_thresh", "1.5", CVAR_ARCHIVE };
 
 #if defined(USE_SDL2)
-static SDL_JoystickID joy_active_instaceid = -1;
+static SDL_JoystickID joy_active_instanceid = -1;
+static int joy_active_device = -1;
 static SDL_GameController *joy_active_controller = NULL;
+static gamepadtype_t joy_active_type = GAMEPAD_NONE;
+static char joy_active_name[256];
+static qboolean joy_has_rumble = false;
+
+static void IN_LoadControllerMappings(void);
+static qboolean IN_UseController(int device_index);
+static void IN_SetupJoystick(void);
+static qboolean IN_RemapJoystick(void);
+static void IN_ReloadControllerMappings_f(void);
+static void Joy_Device_f(cvar_t *cvar);
+static void Joy_Device_Completion_f(cvar_t *cvar, const char *partial);
+static void Joy_Flick_f(cvar_t *cvar);
+void IN_GyroActionDown(void);
+void IN_GyroActionUp(void);
 #endif
 
 static qboolean	no_mouse = false;
@@ -491,6 +526,26 @@ static int buttonremap[] =
 
 /* total accumulated mouse movement since last frame */
 static int	total_dx, total_dy = 0;
+static float gyro_yaw = 0.f, gyro_pitch = 0.f, gyro_raw_mag = 0.f;
+static float gyro_center_frac = 0.f, gyro_center_amount = 0.f;
+
+#define GYRO_CALIBRATION_SAMPLES 300
+static float gyro_accum[3] = {0.f, 0.f, 0.f};
+static unsigned int updates_countdown = 0;
+
+static qboolean gyro_present = false;
+static qboolean gyro_button_pressed = false;
+static double joy_rumble_test_end = 0.0;
+
+static struct
+{
+	float yaw;
+	float pitch;
+	float yaw_delta;
+	float prev_lerp_frac;
+	float prev_angle;
+	float prev_scale;
+} flick;
 
 static Uint32 obs_cursor_last_move = 0; // ms timestamp of last motion / click -- woods #eyemouse
 static qboolean obs_cursor_hidden = false; // SDL_ShowCursor() state we forced -- woods #eyemouse
@@ -949,68 +1004,268 @@ static void IN_MouseInfo_f(void)
 void IN_StartupJoystick (void)
 {
 #if defined(USE_SDL2)
-	int i;
-	int nummappings;
-	char controllerdb[MAX_OSPATH];
-	SDL_GameController *gamecontroller;
-	
 	if (COM_CheckParm("-nojoy"))
 		return;
-	
+
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE, "1");
+#endif
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5, "1");
+#endif
+#if SDL_VERSION_ATLEAST(2, 0, 22)
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4, "1");
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_SWITCH, "1");
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_JOY_CONS, "1");
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, "1");
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
+#endif
+#if SDL_VERSION_ATLEAST(2, 23, 2)
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_COMBINE_JOY_CONS, "1");
+#endif
+#if SDL_VERSION_ATLEAST(2, 25, 1)
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS3, "1");
+#endif
+#if SDL_VERSION_ATLEAST(2, 26, 0)
+	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_WII, "1");
+#endif
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+	SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
+	SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT_CORRELATE_XINPUT, "1");
+#endif
+
 	if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) == -1 )
 	{
 		Con_Warning("could not initialize SDL Game Controller\n");
 		return;
 	}
-	
-	// Load additional SDL2 controller definitions from gamecontrollerdb.txt
-	q_snprintf (controllerdb, sizeof(controllerdb), "%s/gamecontrollerdb.txt", com_basedir);
-	nummappings = SDL_GameControllerAddMappingsFromFile(controllerdb);
-	if (nummappings > 0)
-		Con_Printf("%d mappings loaded from gamecontrollerdb.txt\n", nummappings);
-	
-	// Also try host_parms->userdir
-	if (host_parms->userdir != host_parms->basedir)
-	{
-		q_snprintf (controllerdb, sizeof(controllerdb), "%s/gamecontrollerdb.txt", host_parms->userdir);
-		nummappings = SDL_GameControllerAddMappingsFromFile(controllerdb);
-		if (nummappings > 0)
-			Con_Printf("%d mappings loaded from gamecontrollerdb.txt\n", nummappings);
-	}
 
-	for (i = 0; i < SDL_NumJoysticks(); i++)
-	{
-		const char *joyname = SDL_JoystickNameForIndex(i);
-		if ( SDL_IsGameController(i) )
-		{
-			const char *controllername = SDL_GameControllerNameForIndex(i);
-			gamecontroller = SDL_GameControllerOpen(i);
-			if (gamecontroller)
-			{
-				Con_Printf("detected controller: %s\n", controllername != NULL ? controllername : "NULL");
-				
-				joy_active_instaceid = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gamecontroller));
-				joy_active_controller = gamecontroller;
-				break;
-			}
-			else
-			{
-				Con_Warning("failed to open controller: %s\n", controllername != NULL ? controllername : "NULL");
-			}
-		}
-		else
-		{
-			Con_Warning("joystick missing controller mappings: %s\n", joyname != NULL ? joyname : "NULL" );
-		}
-	}
+	IN_LoadControllerMappings();
+	IN_SetupJoystick();
 #endif
 }
 
 void IN_ShutdownJoystick (void)
 {
 #if defined(USE_SDL2)
+	IN_UseController(-1);
 	SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
 #endif
+}
+
+qboolean IN_HasGamepad (void)
+{
+#if defined(USE_SDL2)
+	return joy_active_controller != NULL;
+#else
+	return false;
+#endif
+}
+
+const char *IN_GetGamepadName (void)
+{
+#if defined(USE_SDL2)
+	return joy_active_controller ? joy_active_name : NULL;
+#else
+	return NULL;
+#endif
+}
+
+gamepadtype_t IN_GetGamepadType (void)
+{
+#if defined(USE_SDL2)
+	return joy_active_type;
+#else
+	return GAMEPAD_NONE;
+#endif
+}
+
+qboolean IN_HasRumble (void)
+{
+#if defined(USE_SDL2)
+	return joy_has_rumble;
+#else
+	return false;
+#endif
+}
+
+void IN_TestRumble (void)
+{
+#if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2, 0, 9)
+	if (joy_active_controller && joy_has_rumble)
+	{
+		joy_rumble_test_end = Sys_DoubleTime() + 0.2;
+		SDL_GameControllerRumble(joy_active_controller, 0x6000, 0xffff, 200);
+	}
+#endif
+}
+
+qboolean IN_HasGyro (void)
+{
+#if defined(USE_SDL2)
+	return gyro_present;
+#else
+	return false;
+#endif
+}
+
+float IN_GetRawGyroMagnitude (void)
+{
+#if defined(USE_SDL2)
+	return gyro_present ? gyro_raw_mag : 0.f;
+#else
+	return 0.f;
+#endif
+}
+
+#if defined(USE_SDL2)
+static float IN_GetControllerAxis (SDL_GameControllerAxis axis)
+{
+	if (!joy_active_controller)
+		return 0.f;
+
+	return SDL_GameControllerGetAxis(joy_active_controller, axis) / 32768.0f;
+}
+#endif
+
+void IN_GetRawLookAxis (float *x, float *y)
+{
+#if defined(USE_SDL2)
+	if (x)
+		*x = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTX : SDL_CONTROLLER_AXIS_RIGHTX);
+	if (y)
+		*y = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_RIGHTY);
+#else
+	if (x)
+		*x = 0.f;
+	if (y)
+		*y = 0.f;
+#endif
+}
+
+void IN_GetRawMoveAxis (float *x, float *y)
+{
+#if defined(USE_SDL2)
+	if (x)
+		*x = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTX : SDL_CONTROLLER_AXIS_LEFTX);
+	if (y)
+		*y = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTY : SDL_CONTROLLER_AXIS_LEFTY);
+#else
+	if (x)
+		*x = 0.f;
+	if (y)
+		*y = 0.f;
+#endif
+}
+
+void IN_GetRawTriggerAxis (float *left, float *right)
+{
+#if defined(USE_SDL2)
+	if (left)
+		*left = CLAMP(0.f, IN_GetControllerAxis(SDL_CONTROLLER_AXIS_TRIGGERLEFT), 1.f);
+	if (right)
+		*right = CLAMP(0.f, IN_GetControllerAxis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT), 1.f);
+#else
+	if (left)
+		*left = 0.f;
+	if (right)
+		*right = 0.f;
+#endif
+}
+
+float IN_GetRawLookMagnitude (void)
+{
+	float x, y;
+
+	IN_GetRawLookAxis(&x, &y);
+	return sqrtf(x * x + y * y);
+}
+
+float IN_GetRawMoveMagnitude (void)
+{
+	float x, y;
+
+	IN_GetRawMoveAxis(&x, &y);
+	return sqrtf(x * x + y * y);
+}
+
+float IN_GetRawTriggerMagnitude (void)
+{
+	float left, right;
+
+	IN_GetRawTriggerAxis(&left, &right);
+	return q_max(left, right);
+}
+
+void IN_StartGyroCalibration (void)
+{
+#if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2, 0, 9)
+	if (joy_has_rumble)
+		SDL_GameControllerRumble(joy_active_controller, 0, 0, 100);
+#endif
+
+	gyro_accum[0] = 0.f;
+	gyro_accum[1] = 0.f;
+	gyro_accum[2] = 0.f;
+	updates_countdown = GYRO_CALIBRATION_SAMPLES;
+	Con_Printf("Calibrating, please wait...\n");
+}
+
+qboolean IN_IsCalibratingGyro (void)
+{
+	return updates_countdown != 0;
+}
+
+float IN_GetGyroCalibrationProgress (void)
+{
+	return (GYRO_CALIBRATION_SAMPLES - updates_countdown) / (float)GYRO_CALIBRATION_SAMPLES;
+}
+
+int IN_GetLastActiveDeviceType (void)
+{
+	return lastactivetype;
+}
+
+static qboolean IN_UpdateGyroCalibration (const float newsample[3])
+{
+	if (!updates_countdown)
+		return false;
+
+	gyro_accum[0] += newsample[0];
+	gyro_accum[1] += newsample[1];
+	gyro_accum[2] += newsample[2];
+
+	updates_countdown--;
+	if (!updates_countdown)
+	{
+		const float inversesamples = 1.f / GYRO_CALIBRATION_SAMPLES;
+
+		Cvar_SetValue("gyro_calibration_x", gyro_accum[0] * inversesamples);
+		Cvar_SetValue("gyro_calibration_y", gyro_accum[1] * inversesamples);
+		Cvar_SetValue("gyro_calibration_z", gyro_accum[2] * inversesamples);
+
+		Con_Printf("Calibration results:\n X=%f Y=%f Z=%f\n",
+			gyro_calibration_x.value, gyro_calibration_y.value, gyro_calibration_z.value);
+		Con_Printf("Calibration finished\n");
+		return false;
+	}
+
+	return true;
+}
+
+static float IN_FilterGyroSample (float prev, float cur)
+{
+	float thresh = DEG2RAD(gyro_noise_thresh.value);
+	float d = fabs(cur - prev);
+
+	if (d < thresh)
+	{
+		d /= thresh;
+		cur = LERP(prev, cur, 0.01f + 0.99f * d * d);
+	}
+
+	return cur;
 }
 
 void IN_Init (void)
@@ -1052,9 +1307,33 @@ void IN_Init (void)
 	Cvar_RegisterVariable(&joy_exponent);
 	Cvar_RegisterVariable(&joy_exponent_move);
 	Cvar_RegisterVariable(&joy_swapmovelook);
+	Cvar_RegisterVariable(&joy_flick);
+	Cvar_SetCallback(&joy_flick, Joy_Flick_f);
+	Cvar_RegisterVariable(&joy_flick_time);
+	Cvar_RegisterVariable(&joy_flick_recenter);
+	Cvar_RegisterVariable(&joy_flick_deadzone);
+	Cvar_RegisterVariable(&joy_flick_noise_thresh);
+	Cvar_RegisterVariable(&joy_flick_adjust_speed);
+	Cvar_RegisterVariable(&joy_rumble);
 	Cvar_RegisterVariable(&joy_enable);
+	Cvar_RegisterVariable(&joy_device);
+	Cvar_SetCallback(&joy_device, Joy_Device_f);
+	Cvar_SetCompletion(&joy_device, Joy_Device_Completion_f);
+	Cvar_RegisterVariable(&joy_always_active);
+	Cvar_RegisterVariable(&gyro_enable);
+	Cvar_RegisterVariable(&gyro_mode);
+	Cvar_RegisterVariable(&gyro_turning_axis);
+	Cvar_RegisterVariable(&gyro_yawsensitivity);
+	Cvar_RegisterVariable(&gyro_pitchsensitivity);
+	Cvar_RegisterVariable(&gyro_calibration_x);
+	Cvar_RegisterVariable(&gyro_calibration_y);
+	Cvar_RegisterVariable(&gyro_calibration_z);
+	Cvar_RegisterVariable(&gyro_noise_thresh);
 
 	Cmd_AddCommand("in_mouseinfo", IN_MouseInfo_f);
+	Cmd_AddCommand("+gyroaction", IN_GyroActionDown);
+	Cmd_AddCommand("-gyroaction", IN_GyroActionUp);
+	Cmd_AddCommand("gamecontrollerdb_reload", IN_ReloadControllerMappings_f);
 
 	IN_UpdateGrabs();
 	IN_StartupJoystick();
@@ -1094,8 +1373,19 @@ void IN_Shutdown (void)
 
 extern cvar_t cl_maxpitch; /* johnfitz -- variable pitch clamping */
 extern cvar_t cl_minpitch; /* johnfitz -- variable pitch clamping */
+extern cvar_t v_centerspeed;
 
 extern cvar_t scr_fov; // woods #zoom (ironwail)
+
+static float IN_FovScale (void)
+{
+	return tan(DEG2RAD(r_refdef.basefov) * 0.5f) / tan(DEG2RAD(scr_fov.value) * 0.5f);
+}
+
+static float IN_RecenterEasing (float frac)
+{
+	return frac * frac;
+}
 
 void IN_MouseMotion(int dx, int dy, int wx, int wy)
 {
@@ -1197,6 +1487,8 @@ static double joy_emulatedkeytimer[6];
 #define sqrtf sqrt
 #endif
 
+static int IN_KeyForControllerButton(SDL_GameControllerButton button);
+
 /*
 ================
 IN_AxisMagnitude
@@ -1208,6 +1500,42 @@ static vec_t IN_AxisMagnitude(joyaxis_t axis)
 {
 	vec_t magnitude = sqrtf((axis.x * axis.x) + (axis.y * axis.y));
 	return magnitude;
+}
+
+static void IN_ResetFlickState(void)
+{
+	memset(&flick, 0, sizeof(flick));
+}
+
+static void IN_ReleaseJoystickKeys(void)
+{
+	int i;
+
+	for (i = 0; i < SDL_CONTROLLER_BUTTON_MAX; i++)
+	{
+		if (joy_buttonstate.buttondown[i])
+		{
+			int key = IN_KeyForControllerButton((SDL_GameControllerButton)i);
+			if (key > 0)
+				Key_Event(key, false);
+		}
+	}
+
+	Key_Event(K_LEFTARROW, false);
+	Key_Event(K_RIGHTARROW, false);
+	Key_Event(K_UPARROW, false);
+	Key_Event(K_DOWNARROW, false);
+	Key_Event(K_LTRIGGER, false);
+	Key_Event(K_RTRIGGER, false);
+}
+
+static void IN_ResetJoystickState(void)
+{
+	IN_ReleaseJoystickKeys();
+	memset(&joy_buttonstate, 0, sizeof(joy_buttonstate));
+	memset(&joy_axisstate, 0, sizeof(joy_axisstate));
+	memset(joy_buttontimer, 0, sizeof(joy_buttontimer));
+	memset(joy_emulatedkeytimer, 0, sizeof(joy_emulatedkeytimer));
 }
 
 /*
@@ -1265,6 +1593,29 @@ static joyaxis_t IN_ApplyDeadzone(joyaxis_t axis, float deadzone, float outer_th
 	return result;
 }
 
+static joyaxis_t IN_GetLookAxis(joyaxisstate_t *state)
+{
+	joyaxis_t axis;
+
+	axis.x = state->axisvalue[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTX : SDL_CONTROLLER_AXIS_RIGHTX];
+	axis.y = state->axisvalue[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_RIGHTY];
+	return axis;
+}
+
+static joyaxis_t IN_GetMoveAxis(joyaxisstate_t *state)
+{
+	joyaxis_t axis;
+
+	axis.x = state->axisvalue[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTX : SDL_CONTROLLER_AXIS_LEFTX];
+	axis.y = state->axisvalue[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTY : SDL_CONTROLLER_AXIS_LEFTY];
+	return axis;
+}
+
+static qboolean IN_JoyActive(void)
+{
+	return joy_active_controller != NULL && (joy_always_active.value || lastactivetype == KD_GAMEPAD);
+}
+
 /*
 ================
 IN_KeyForControllerButton
@@ -1284,10 +1635,18 @@ static int IN_KeyForControllerButton(SDL_GameControllerButton button)
 		case SDL_CONTROLLER_BUTTON_RIGHTSTICK: return K_RTHUMB;
 		case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: return K_LSHOULDER;
 		case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return K_RSHOULDER;
-		case SDL_CONTROLLER_BUTTON_DPAD_UP: return K_UPARROW;
-		case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return K_DOWNARROW;
-		case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return K_LEFTARROW;
-		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return K_RIGHTARROW;
+		case SDL_CONTROLLER_BUTTON_DPAD_UP: return K_DPAD_UP;
+		case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return K_DPAD_DOWN;
+		case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return K_DPAD_LEFT;
+		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return K_DPAD_RIGHT;
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+		case SDL_CONTROLLER_BUTTON_MISC1: return K_MISC1;
+		case SDL_CONTROLLER_BUTTON_PADDLE1: return K_PADDLE1;
+		case SDL_CONTROLLER_BUTTON_PADDLE2: return K_PADDLE2;
+		case SDL_CONTROLLER_BUTTON_PADDLE3: return K_PADDLE3;
+		case SDL_CONTROLLER_BUTTON_PADDLE4: return K_PADDLE4;
+		case SDL_CONTROLLER_BUTTON_TOUCHPAD: return K_TOUCHPAD;
+#endif
 		default: return 0;
 	}
 }
@@ -1304,6 +1663,9 @@ Adapted from DarkPlaces by lordhavoc
 */
 static void IN_JoyKeyEvent(qboolean wasdown, qboolean isdown, int key, double *timer)
 {
+	static const double repeatdelay = 0.5;
+	static const double repeatrate = 32.0;
+
 	// we can't use `realtime` for key repeats because it is not monotomic
 	const double currenttime = Sys_DoubleTime();
 	
@@ -1313,13 +1675,15 @@ static void IN_JoyKeyEvent(qboolean wasdown, qboolean isdown, int key, double *t
 		{
 			if (currenttime >= *timer)
 			{
-				*timer = currenttime + 0.1;
+				*timer = currenttime + 1.0 / repeatrate;
+				lastactivetype = KD_GAMEPAD;
 				Key_Event(key, true);
 			}
 		}
 		else
 		{
 			*timer = 0;
+			lastactivetype = KD_GAMEPAD;
 			Key_Event(key, false);
 		}
 	}
@@ -1327,10 +1691,308 @@ static void IN_JoyKeyEvent(qboolean wasdown, qboolean isdown, int key, double *t
 	{
 		if (isdown)
 		{
-			*timer = currenttime + 0.5;
+			*timer = currenttime + repeatdelay;
+			lastactivetype = KD_GAMEPAD;
 			Key_Event(key, true);
 		}
 	}
+}
+
+static void IN_LoadControllerMappingsFromDir(const char *dir)
+{
+	char controllerdb[MAX_OSPATH];
+	int nummappings;
+
+	if (!dir || !*dir)
+		return;
+
+	q_snprintf(controllerdb, sizeof(controllerdb), "%s/gamecontrollerdb.txt", dir);
+	nummappings = SDL_GameControllerAddMappingsFromFile(controllerdb);
+	if (nummappings > 0)
+		Con_Printf("%d mappings loaded from %s\n", nummappings, controllerdb);
+}
+
+static void IN_LoadControllerMappings(void)
+{
+	searchpath_t *search, *prev;
+	const char *userdir = host_parms ? host_parms->userdir : NULL;
+
+	// This also backs gamecontrollerdb_reload for picking up mappings after searchpath changes.
+	IN_LoadControllerMappingsFromDir(com_basedir);
+
+	if (userdir && *userdir && q_strcasecmp(userdir, com_basedir))
+		IN_LoadControllerMappingsFromDir(userdir);
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (search->pack || !search->filename[0])
+			continue;
+		if (!q_strcasecmp(search->filename, com_basedir))
+			continue;
+		if (userdir && *userdir && !q_strcasecmp(search->filename, userdir))
+			continue;
+
+		for (prev = com_searchpaths; prev != search; prev = prev->next)
+		{
+			if (!prev->pack && !q_strcasecmp(prev->filename, search->filename))
+				break;
+		}
+		if (prev != search)
+			continue;
+
+		IN_LoadControllerMappingsFromDir(search->filename);
+	}
+}
+
+static void IN_ReloadControllerMappings_f(void)
+{
+	int desired_device;
+	qboolean had_active_controller;
+
+	if (!(SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER))
+	{
+		Con_Printf("Controller subsystem is not initialized\n");
+		return;
+	}
+
+	desired_device = (int)joy_device.value;
+	had_active_controller = joy_active_controller != NULL;
+
+	if (had_active_controller)
+	{
+#if SDL_VERSION_ATLEAST(2, 0, 9)
+		if (joy_has_rumble)
+			SDL_GameControllerRumble(joy_active_controller, 0, 0, 100);
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+		if (SDL_GameControllerHasLED(joy_active_controller))
+			SDL_GameControllerSetLED(joy_active_controller, 0, 0, 0);
+#endif
+#endif
+		SDL_GameControllerClose(joy_active_controller);
+		joy_active_controller = NULL;
+		joy_active_instanceid = -1;
+		joy_active_device = -1;
+		joy_active_type = GAMEPAD_NONE;
+		joy_active_name[0] = '\0';
+		gyro_present = false;
+		gyro_yaw = 0.f;
+		gyro_pitch = 0.f;
+		gyro_raw_mag = 0.f;
+		gyro_center_frac = 0.f;
+		gyro_center_amount = 0.f;
+		joy_has_rumble = false;
+		gyro_button_pressed = false;
+		updates_countdown = 0;
+		IN_ResetFlickState();
+		IN_ResetJoystickState();
+	}
+
+	IN_LoadControllerMappings();
+	Con_Printf("Controller mappings reloaded\n");
+
+	if (had_active_controller)
+		Cvar_SetValueQuick(&joy_device, desired_device);
+
+	IN_SetupJoystick();
+}
+
+static qboolean IN_UseController(int device_index)
+{
+	SDL_GameController *gamecontroller;
+	const char *controllername;
+
+	if (device_index == joy_active_device)
+		return true;
+
+	if (joy_active_controller)
+	{
+#if SDL_VERSION_ATLEAST(2, 0, 9)
+		if (joy_has_rumble)
+			SDL_GameControllerRumble(joy_active_controller, 0, 0, 100);
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+		if (SDL_GameControllerHasLED(joy_active_controller))
+			SDL_GameControllerSetLED(joy_active_controller, 0, 0, 0);
+#endif
+#endif
+		SDL_GameControllerClose(joy_active_controller);
+
+		if (device_index == -1)
+			Con_Printf("Gamepad removed: %s\n", joy_active_name);
+
+		joy_active_controller = NULL;
+		joy_active_instanceid = -1;
+		joy_active_device = -1;
+		joy_active_type = GAMEPAD_NONE;
+		joy_active_name[0] = '\0';
+		Cvar_SetValueQuick(&joy_device, -1);
+		gyro_present = false;
+		gyro_yaw = 0.f;
+		gyro_pitch = 0.f;
+		gyro_raw_mag = 0.f;
+		gyro_center_frac = 0.f;
+		gyro_center_amount = 0.f;
+		joy_has_rumble = false;
+		gyro_button_pressed = false;
+		updates_countdown = 0;
+		IN_ResetFlickState();
+	}
+
+	IN_ResetJoystickState();
+
+	if (device_index == -1)
+		return true;
+
+	if (device_index < 0 || device_index >= SDL_NumJoysticks())
+		return false;
+
+	if (!SDL_IsGameController(device_index))
+	{
+		const char *joyname = SDL_JoystickNameForIndex(device_index);
+		Con_Warning("joystick missing controller mappings: %s\n",
+			joyname != NULL ? joyname : "NULL");
+		return false;
+	}
+
+	gamecontroller = SDL_GameControllerOpen(device_index);
+	if (!gamecontroller)
+	{
+		Con_Warning("couldn't open gamepad device %d\n", device_index);
+		return false;
+	}
+
+	controllername = SDL_GameControllerName(gamecontroller);
+	if (!controllername)
+		controllername = "[Unknown gamepad]";
+	Con_Printf("Using gamepad: %s\n", controllername);
+
+	joy_active_controller = gamecontroller;
+	joy_active_instanceid = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gamecontroller));
+	joy_active_device = device_index;
+	Cvar_SetValueQuick(&joy_device, device_index);
+	q_strlcpy(joy_active_name, controllername, sizeof(joy_active_name));
+
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+	switch (SDL_GameControllerGetType(joy_active_controller))
+	{
+	default:
+	case SDL_CONTROLLER_TYPE_XBOX360:
+	case SDL_CONTROLLER_TYPE_XBOXONE:
+		joy_active_type = GAMEPAD_XBOX;
+		break;
+
+	case SDL_CONTROLLER_TYPE_PS3:
+	case SDL_CONTROLLER_TYPE_PS4:
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+	case SDL_CONTROLLER_TYPE_PS5:
+#endif
+		joy_active_type = GAMEPAD_PLAYSTATION;
+		break;
+
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO:
+#if SDL_VERSION_ATLEAST(2, 24, 0)
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+#endif
+		joy_active_type = GAMEPAD_NINTENDO;
+		break;
+	}
+#else
+	joy_active_type = GAMEPAD_XBOX;
+#endif
+
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+	if (SDL_GameControllerHasLED(joy_active_controller))
+		SDL_GameControllerSetLED(joy_active_controller, 80, 20, 0);
+
+	if (SDL_GameControllerHasSensor(joy_active_controller, SDL_SENSOR_GYRO) &&
+		!SDL_GameControllerSetSensorEnabled(joy_active_controller, SDL_SENSOR_GYRO, SDL_TRUE))
+	{
+		gyro_present = true;
+#if SDL_VERSION_ATLEAST(2, 0, 16)
+		Con_Printf("Gyro sensor enabled at %g Hz\n",
+			SDL_GameControllerGetSensorDataRate(joy_active_controller, SDL_SENSOR_GYRO));
+#else
+		Con_Printf("Gyro sensor enabled.\n");
+#endif
+	}
+	else
+	{
+		Con_Printf("Gyro sensor not found\n");
+	}
+#endif
+
+#if SDL_VERSION_ATLEAST(2, 0, 9)
+	joy_has_rumble = SDL_GameControllerHasRumble(joy_active_controller);
+#endif
+
+	return true;
+}
+
+static void IN_SetupJoystick(void)
+{
+	int count = SDL_NumJoysticks();
+	int device_index = CLAMP(-1, (int)joy_device.value, count - 1);
+
+	IN_UseController(device_index);
+}
+
+static qboolean IN_RemapJoystick(void)
+{
+	int i, count, old_device;
+
+	if (joy_active_instanceid == -1)
+		return false;
+
+	old_device = joy_active_device;
+
+	for (i = 0, count = SDL_NumJoysticks(); i < count; i++)
+	{
+		if (SDL_JoystickGetDeviceInstanceID(i) == joy_active_instanceid)
+		{
+			joy_active_device = i;
+			if ((int)joy_device.value == old_device)
+				Cvar_SetValueQuick(&joy_device, i);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void Joy_Device_f(cvar_t *cvar)
+{
+	if ((int)cvar->value != joy_active_device)
+		IN_SetupJoystick();
+}
+
+static void Joy_Device_Completion_f(cvar_t *cvar, const char *partial)
+{
+	int i, count;
+
+	(void)cvar;
+
+	for (i = 0, count = SDL_NumJoysticks(); i < count; i++)
+	{
+		if (SDL_IsGameController(i))
+			Con_AddToTabList(va("%d", i), partial, SDL_GameControllerNameForIndex(i), NULL);
+	}
+}
+
+static void Joy_Flick_f(cvar_t *cvar)
+{
+	(void)cvar;
+	IN_ResetFlickState();
+}
+
+void IN_GyroActionDown (void)
+{
+	gyro_button_pressed = true;
+}
+
+void IN_GyroActionUp (void)
+{
+	gyro_button_pressed = false;
 }
 #endif
 
@@ -1345,15 +2007,22 @@ void IN_Commands (void)
 {
 #if defined(USE_SDL2)
 	joyaxisstate_t newaxisstate;
+	joyaxis_t old_move, new_move, raw, deadzone, eased;
 	int i;
 	const float stickthreshold = 0.9;
 	const float triggerthreshold = joy_deadzone_trigger.value;
 	
 	if (!joy_enable.value)
+	{
+		IN_ResetJoystickState();
 		return;
+	}
 	
 	if (!joy_active_controller)
+	{
+		IN_ResetJoystickState();
 		return;
+	}
 
 	// emit key events for controller buttons
 	for (i = 0; i < SDL_CONTROLLER_BUTTON_MAX; i++)
@@ -1375,10 +2044,50 @@ void IN_Commands (void)
 	// emit emulated arrow keys so the analog sticks can be used in the menu
 	if (key_dest != key_game)
 	{
-		IN_JoyKeyEvent(joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_LEFTX] < -stickthreshold, newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_LEFTX] < -stickthreshold, K_LEFTARROW, &joy_emulatedkeytimer[0]);
-		IN_JoyKeyEvent(joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_LEFTX] > stickthreshold,  newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_LEFTX] > stickthreshold, K_RIGHTARROW, &joy_emulatedkeytimer[1]);
-		IN_JoyKeyEvent(joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_LEFTY] < -stickthreshold, newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_LEFTY] < -stickthreshold, K_UPARROW, &joy_emulatedkeytimer[2]);
-		IN_JoyKeyEvent(joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_LEFTY] > stickthreshold,  newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_LEFTY] > stickthreshold, K_DOWNARROW, &joy_emulatedkeytimer[3]);
+		old_move = IN_GetMoveAxis(&joy_axisstate);
+		new_move = IN_GetMoveAxis(&newaxisstate);
+		IN_JoyKeyEvent(old_move.x < -stickthreshold, new_move.x < -stickthreshold, K_LEFTARROW, &joy_emulatedkeytimer[0]);
+		IN_JoyKeyEvent(old_move.x >  stickthreshold, new_move.x >  stickthreshold, K_RIGHTARROW, &joy_emulatedkeytimer[1]);
+		IN_JoyKeyEvent(old_move.y < -stickthreshold, new_move.y < -stickthreshold, K_UPARROW, &joy_emulatedkeytimer[2]);
+		IN_JoyKeyEvent(old_move.y >  stickthreshold, new_move.y >  stickthreshold, K_DOWNARROW, &joy_emulatedkeytimer[3]);
+	}
+	else if (lastactivetype != KD_GAMEPAD)
+	{
+		if (IN_AxisMagnitude(IN_GetLookAxis(&newaxisstate)) > joy_deadzone_look.value ||
+			IN_AxisMagnitude(IN_GetMoveAxis(&newaxisstate)) > joy_deadzone_move.value)
+			lastactivetype = KD_GAMEPAD;
+	}
+
+	if (key_dest == key_console)
+	{
+		const float scrollthreshold = 0.1f;
+		const float maxscrollspeed = 72.f;
+		const float scrollinterval = 1.f / maxscrollspeed;
+		static double timer = 0.0;
+		float scale;
+
+		raw = IN_GetLookAxis(&newaxisstate);
+		deadzone = IN_ApplyDeadzone(raw, joy_deadzone_look.value, joy_outer_threshold_look.value);
+		eased = IN_ApplyEasing(deadzone, joy_exponent.value);
+		if (joy_invert.value)
+			eased.y = -eased.y;
+
+		scale = fabs(eased.y);
+		if (scale > scrollthreshold)
+		{
+			scale = (scale - scrollthreshold) / (1.f - scrollthreshold);
+			timer -= scale * host_frametime;
+			if (timer < 0.0)
+			{
+				int ticks = (int)ceil(-timer / scrollinterval);
+				timer += ticks * scrollinterval;
+				Con_Scroll(eased.y < 0.0f ? ticks : -ticks);
+			}
+		}
+		else
+		{
+			timer = 0.0;
+		}
 	}
 	
 	// emit emulated keys for the analog triggers
@@ -1386,7 +2095,31 @@ void IN_Commands (void)
 	IN_JoyKeyEvent(joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] > triggerthreshold, newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] > triggerthreshold, K_RTRIGGER, &joy_emulatedkeytimer[5]);
 	
 	joy_axisstate = newaxisstate;
+
+#if SDL_VERSION_ATLEAST(2, 0, 9)
+	if (joy_has_rumble && !IN_IsCalibratingGyro() && Sys_DoubleTime() >= joy_rumble_test_end && joy_rumble.value > 0.f && IN_JoyActive())
+	{
+		float strength = CLAMP(0.f, joy_rumble.value, 1.f) * 0xffff;
+		float lofreq = GetClampedFraction(S_GetLoFreqLevel(), 0.067f, 0.45f);
+		float hifreq = GetClampedFraction(S_GetHiFreqLevel(), 0.061f, 0.45f);
+
+		hifreq *= hifreq;
+		SDL_GameControllerRumble(joy_active_controller, lofreq * strength, hifreq * strength, 100);
+	}
 #endif
+#endif
+}
+
+/*
+================
+IN_FlickStickEasing
+================
+*/
+static float IN_FlickStickEasing(float frac)
+{
+	frac = 1.f - frac;
+	frac = 1.f - frac * frac;
+	return frac;
 }
 
 /*
@@ -1397,7 +2130,8 @@ IN_JoyMove
 void IN_JoyMove (usercmd_t *cmd)
 {
 #if defined(USE_SDL2)
-	float	speed;
+	float speed;
+	const float csqcsens = cl.csqc_sensitivity;
 	joyaxis_t moveRaw, moveDeadzone, moveEased;
 	joyaxis_t lookRaw, lookDeadzone, lookEased;
 	extern	cvar_t	sv_maxspeed;
@@ -1410,19 +2144,9 @@ void IN_JoyMove (usercmd_t *cmd)
 
 	if (cl.paused || key_dest != key_game)
 		return;
-	
-	moveRaw.x = joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_LEFTX];
-	moveRaw.y = joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_LEFTY];
-	lookRaw.x = joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_RIGHTX];
-	lookRaw.y = joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_RIGHTY];
-	
-	if (joy_swapmovelook.value)
-	{
-		joyaxis_t temp = moveRaw;
-		moveRaw = lookRaw;
-		lookRaw = temp;
-	}
-	
+
+	moveRaw = IN_GetMoveAxis(&joy_axisstate);
+	lookRaw = IN_GetLookAxis(&joy_axisstate);
 	moveDeadzone = IN_ApplyDeadzone(moveRaw, joy_deadzone_move.value, joy_outer_threshold_move.value);
 	lookDeadzone = IN_ApplyDeadzone(lookRaw, joy_deadzone_look.value, joy_outer_threshold_look.value);
 
@@ -1442,11 +2166,82 @@ void IN_JoyMove (usercmd_t *cmd)
 	cmd->sidemove += speed * moveEased.x;
 	cmd->forwardmove -= speed * moveEased.y;
 
-	cl.viewangles[YAW] -= lookEased.x * joy_sensitivity_yaw.value * host_frametime * cl.csqc_sensitivity;
-	cl.viewangles[PITCH] += lookEased.y * joy_sensitivity_pitch.value * (joy_invert.value ? -1.0 : 1.0) * host_frametime * cl.csqc_sensitivity;
+	if (joy_flick.value && gyro_present && gyro_enable.value)
+	{
+		float angle, scale, lerp_frac, delta;
+		qboolean isactive, wasactive;
 
-	if (lookEased.x != 0 || lookEased.y != 0)
-		V_StopPitchDrift();
+		angle = NormalizeAngle(RAD2DEG(atan2(lookRaw.y, lookRaw.x)) + 90.f);
+		scale = IN_AxisMagnitude(lookRaw);
+
+		isactive = scale > joy_flick_deadzone.value;
+		wasactive = flick.prev_scale > joy_flick_deadzone.value;
+			if (isactive != wasactive)
+			{
+				if (!wasactive)
+				{
+					flick.prev_lerp_frac = 0.f;
+					flick.yaw = angle;
+					flick.pitch = cl.viewangles[PITCH];
+					flick.prev_angle = angle;
+					flick.yaw_delta = 0.f;
+				}
+			}
+		else if (isactive)
+		{
+			delta = AngleDifference(angle, flick.prev_angle);
+			if (joy_flick_noise_thresh.value > 0.f)
+			{
+				float filter_scale = fabs(delta) / joy_flick_noise_thresh.value;
+
+				if (filter_scale < 1.f)
+				{
+					filter_scale = LERP(0.05f, 1.f, filter_scale * filter_scale);
+					delta *= filter_scale;
+					angle = NormalizeAngle(flick.prev_angle + delta);
+				}
+			}
+			flick.yaw_delta += delta;
+		}
+
+		if (joy_flick_adjust_speed.value > 0.f)
+			delta = flick.yaw_delta * q_min(1.0, host_frametime * joy_flick_adjust_speed.value);
+		else
+			delta = flick.yaw_delta;
+		if (fabs(delta) > 0.01f)
+		{
+			cl.viewangles[YAW] -= delta * csqcsens;
+			flick.yaw_delta -= delta;
+		}
+
+		if (joy_flick_time.value > 0.f)
+		{
+			lerp_frac = flick.prev_lerp_frac + host_frametime / joy_flick_time.value;
+			lerp_frac = CLAMP(0.f, lerp_frac, 1.f);
+		}
+		else
+		{
+			lerp_frac = 1.f;
+		}
+
+		delta = IN_FlickStickEasing(lerp_frac) - IN_FlickStickEasing(flick.prev_lerp_frac);
+		cl.viewangles[YAW] -= flick.yaw * delta * csqcsens;
+		cl.viewangles[PITCH] -= flick.pitch * delta * CLAMP(0.f, joy_flick_recenter.value, 1.f) * csqcsens;
+
+		flick.prev_scale = scale;
+		flick.prev_angle = angle;
+		flick.prev_lerp_frac = lerp_frac;
+	}
+	else
+	{
+		IN_ResetFlickState();
+
+		cl.viewangles[YAW] -= lookEased.x * joy_sensitivity_yaw.value * host_frametime * csqcsens;
+		cl.viewangles[PITCH] += lookEased.y * joy_sensitivity_pitch.value * (joy_invert.value ? -1.0 : 1.0) * host_frametime * csqcsens;
+
+		if (lookEased.x != 0 || lookEased.y != 0)
+			V_StopPitchDrift();
+	}
 
 	if (cl.fullpitch == 0) // woods #pqfullpitch -- force client to adapt when not allowed
 	{
@@ -1463,6 +2258,87 @@ void IN_JoyMove (usercmd_t *cmd)
 		if (cl.viewangles[PITCH] < cl_minpitch.value)
 			cl.viewangles[PITCH] = cl_minpitch.value;
 	}
+#endif
+}
+
+void IN_GyroMove(usercmd_t *cmd)
+{
+#if defined(USE_SDL2)
+	float scale, duration, lerp_frac;
+
+	(void)cmd;
+
+	if (!joy_enable.value)
+		return;
+	if (!gyro_enable.value)
+		return;
+	if (!IN_JoyActive())
+		return;
+	if (cl.paused || key_dest != key_game)
+		return;
+	scale = (180.f / M_PI) * host_frametime * IN_FovScale() * cl.csqc_sensitivity;
+	switch ((int)gyro_mode.value)
+	{
+	case GYRO_BUTTON_DISABLES:
+		if (gyro_button_pressed)
+			return;
+		break;
+	case GYRO_BUTTON_ENABLES:
+		if (!gyro_button_pressed)
+			return;
+		break;
+	case GYRO_BUTTON_INVERTS_DIR:
+		if (gyro_button_pressed)
+			scale = -scale;
+		break;
+	default:
+		break;
+	}
+
+	cl.viewangles[YAW] += scale * gyro_yaw * gyro_yawsensitivity.value;
+	cl.viewangles[PITCH] -= scale * gyro_pitch * gyro_pitchsensitivity.value;
+
+	// Default pitch drift constantly pulls toward idealpitch. With gyro active,
+	// keep that from fighting the player's aim and re-apply the centering delta
+	// additively when pitch drift was started this frame.
+	V_StopPitchDrift();
+
+	if (cl.lastcenterstart == cl.time)
+	{
+		gyro_center_frac = 0.f;
+		gyro_center_amount = cl.statsf[STAT_IDEALPITCH] - cl.viewangles[PITCH];
+	}
+
+	if (gyro_center_amount != 0.f && v_centerspeed.value > 0.f)
+	{
+		duration = fabs(gyro_center_amount / v_centerspeed.value);
+		lerp_frac = gyro_center_frac + host_frametime / duration;
+		lerp_frac = CLAMP(0.f, lerp_frac, 1.f);
+	}
+	else
+	{
+		lerp_frac = 1.f;
+	}
+	scale = IN_RecenterEasing(lerp_frac) - IN_RecenterEasing(gyro_center_frac);
+	gyro_center_frac = lerp_frac;
+	cl.viewangles[PITCH] += gyro_center_amount * scale;
+
+	if (cl.fullpitch == 0)
+	{
+		if (cl.viewangles[PITCH] > 80)
+			cl.viewangles[PITCH] = 80;
+		if (cl.viewangles[PITCH] < -70)
+			cl.viewangles[PITCH] = -70;
+	}
+	else
+	{
+		if (cl.viewangles[PITCH] > cl_maxpitch.value)
+			cl.viewangles[PITCH] = cl_maxpitch.value;
+		if (cl.viewangles[PITCH] < cl_minpitch.value)
+			cl.viewangles[PITCH] = cl_minpitch.value;
+	}
+#else
+	(void)cmd;
 #endif
 }
 
@@ -1546,6 +2422,7 @@ void IN_MouseMove(usercmd_t *cmd)
 void IN_Move(usercmd_t *cmd)
 {
 	IN_JoyMove(cmd);
+	IN_GyroMove(cmd);
 	IN_MouseMove(cmd);
 }
 
@@ -1651,7 +2528,7 @@ static inline int IN_SDL_KeysymToQuakeKey(SDLKey sym)
 	case SDLK_BREAK: return K_PAUSE;
 	case SDLK_PAUSE: return K_PAUSE;
 
-	case SDLK_WORLD_18: return '~'; // the '²' key
+	case SDLK_WORLD_18: return '~'; // the alternate tilde key
 
 	default: return 0;
 	}
@@ -2238,6 +3115,7 @@ void IN_SendKeyEvents (void)
 #endif
 #if defined(USE_SDL2)
 		case SDL_TEXTINPUT:
+			lastactivetype = KD_KEYBOARD;
 			if (in_debugkeys.value)
 				IN_DebugTextEvent(&event);
 
@@ -2255,6 +3133,7 @@ void IN_SendKeyEvents (void)
 		case SDL_KEYDOWN:
 		case SDL_KEYUP:
 			down = (event.key.state == SDL_PRESSED);
+			lastactivetype = KD_KEYBOARD;
 
 			if (in_debugkeys.value)
 				IN_DebugKeyEvent(&event);
@@ -2311,11 +3190,13 @@ void IN_SendKeyEvents (void)
 
 			if (key_dest == key_menu) // woods #mousemenu
 				M_Mousemove(event.button.x, event.button.y);
+			lastactivetype = KD_MOUSE;
 			Key_Event(buttonremap[event.button.button - 1], event.button.state == SDL_PRESSED);
 			break;
 
 #if defined(USE_SDL2)
 		case SDL_MOUSEWHEEL:
+			lastactivetype = KD_MOUSE;
 			if (event.wheel.y > 0)
 			{
 				Key_Event(K_MWHEELUP, true);
@@ -2330,6 +3211,7 @@ void IN_SendKeyEvents (void)
 #endif
 
 		case SDL_MOUSEMOTION:
+			lastactivetype = KD_MOUSE;
 			if (key_dest == key_menu) // woods #mousemenu
 			{
 				M_Mousemove(event.button.x, event.button.y);
@@ -2351,34 +3233,35 @@ void IN_SendKeyEvents (void)
 			break;
 
 #if defined(USE_SDL2)
-		case SDL_CONTROLLERDEVICEADDED:
-			if (joy_active_instaceid == -1)
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+		case SDL_CONTROLLERSENSORUPDATE:
+			if (event.csensor.sensor == SDL_SENSOR_GYRO && event.csensor.which == joy_active_instanceid)
 			{
-				joy_active_controller = SDL_GameControllerOpen(event.cdevice.which);
-				if (joy_active_controller == NULL)
-					Con_DPrintf("Couldn't open game controller\n");
+				float prev_yaw = gyro_yaw;
+				float prev_pitch = gyro_pitch;
+
+				if (IN_UpdateGyroCalibration(event.csensor.data))
+					break;
+
+				if (!gyro_turning_axis.value)
+					gyro_yaw = event.csensor.data[1] - gyro_calibration_y.value;
 				else
-				{
-					SDL_Joystick *joy;
-					joy = SDL_GameControllerGetJoystick(joy_active_controller);
-					joy_active_instaceid = SDL_JoystickInstanceID(joy);
-				}
+					gyro_yaw = -(event.csensor.data[2] - gyro_calibration_z.value);
+				gyro_pitch = event.csensor.data[0] - gyro_calibration_x.value;
+				gyro_raw_mag = RAD2DEG(sqrt(gyro_yaw * gyro_yaw + gyro_pitch * gyro_pitch));
+				gyro_yaw = IN_FilterGyroSample(prev_yaw, gyro_yaw);
+				gyro_pitch = IN_FilterGyroSample(prev_pitch, gyro_pitch);
 			}
-			else
-				Con_DPrintf("Ignoring SDL_CONTROLLERDEVICEADDED\n");
+			break;
+#endif
+		case SDL_CONTROLLERDEVICEADDED:
+			if (!IN_RemapJoystick())
+				IN_UseController(event.cdevice.which);
 			break;
 		case SDL_CONTROLLERDEVICEREMOVED:
-			if (joy_active_instaceid != -1 && event.cdevice.which == joy_active_instaceid)
-			{
-				SDL_GameControllerClose(joy_active_controller);
-				joy_active_controller = NULL;
-				joy_active_instaceid = -1;
-			}
-			else
-				Con_DPrintf("Ignoring SDL_CONTROLLERDEVICEREMOVED\n");
-			break;
 		case SDL_CONTROLLERDEVICEREMAPPED:
-			Con_DPrintf("Ignoring SDL_CONTROLLERDEVICEREMAPPED\n");
+			if (!IN_RemapJoystick())
+				IN_SetupJoystick();
 			break;
 		case SDL_DROPFILE:
 		{

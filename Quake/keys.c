@@ -51,6 +51,8 @@ qboolean	keydown[MAX_KEYS];
 
 qboolean	Cmd_Exists2(const char* cmd_name); // woods #ezsay
 qboolean	ctrlpressed; // woods #saymodifier
+static qboolean key_gamepad_altmodifier_pressed = false;
+static qboolean key_gamepad_alttranslated[K_GAMEPAD_COUNT];
 
 void Sound_Toggle_Mute_f (void); // woods #usermute
 void SCR_Mute_Switch (void); // woods #usermute
@@ -65,7 +67,7 @@ typedef struct
 	int		keynum;
 } keyname_t;
 
-keyname_t keynames[] =
+static const keyname_t keynames[] =
 {
 	{"TAB", K_TAB},
 	{"ENTER", K_ENTER},
@@ -181,14 +183,69 @@ keyname_t keynames[] =
 	{"RTHUMB", K_RTHUMB},
 	{"LSHOULDER", K_LSHOULDER},
 	{"RSHOULDER", K_RSHOULDER},
+	{"DPAD_UP", K_DPAD_UP},
+	{"DPAD_DOWN", K_DPAD_DOWN},
+	{"DPAD_LEFT", K_DPAD_LEFT},
+	{"DPAD_RIGHT", K_DPAD_RIGHT},
 	{"ABUTTON", K_ABUTTON},
 	{"BBUTTON", K_BBUTTON},
 	{"XBUTTON", K_XBUTTON},
 	{"YBUTTON", K_YBUTTON},
 	{"LTRIGGER", K_LTRIGGER},
 	{"RTRIGGER", K_RTRIGGER},
+	{"MISC1", K_MISC1},
+	{"PADDLE1", K_PADDLE1},
+	{"PADDLE2", K_PADDLE2},
+	{"PADDLE3", K_PADDLE3},
+	{"PADDLE4", K_PADDLE4},
+	{"TOUCHPAD", K_TOUCHPAD},
+
+	// Gamepad "Start" and "Back" buttons are always mapped to ESC/TAB.
+	// We don't expose key names for them so they can't be rebound in the console.
+
+	{"LTHUMB_ALT", K_LTHUMB_ALT},
+	{"RTHUMB_ALT", K_RTHUMB_ALT},
+	{"LSHOULDER_ALT", K_LSHOULDER_ALT},
+	{"RSHOULDER_ALT", K_RSHOULDER_ALT},
+	{"DPAD_UP_ALT", K_DPAD_UP_ALT},
+	{"DPAD_DOWN_ALT", K_DPAD_DOWN_ALT},
+	{"DPAD_LEFT_ALT", K_DPAD_LEFT_ALT},
+	{"DPAD_RIGHT_ALT", K_DPAD_RIGHT_ALT},
+	{"ABUTTON_ALT", K_ABUTTON_ALT},
+	{"BBUTTON_ALT", K_BBUTTON_ALT},
+	{"XBUTTON_ALT", K_XBUTTON_ALT},
+	{"YBUTTON_ALT", K_YBUTTON_ALT},
+	{"LTRIGGER_ALT", K_LTRIGGER_ALT},
+	{"RTRIGGER_ALT", K_RTRIGGER_ALT},
+	{"MISC1_ALT", K_MISC1_ALT},
+	{"PADDLE1_ALT", K_PADDLE1_ALT},
+	{"PADDLE2_ALT", K_PADDLE2_ALT},
+	{"PADDLE3_ALT", K_PADDLE3_ALT},
+	{"PADDLE4_ALT", K_PADDLE4_ALT},
+	{"TOUCHPAD_ALT", K_TOUCHPAD_ALT},
 
 	{NULL,		0}
+};
+
+static const char *const xbox_names[K_GAMEPAD_COUNT] =
+{
+#define GAMEPAD_KEY_NAME(keycode, value, xboxname, psname, nintendoname) xboxname,
+	GAMEPAD_KEY_LIST(GAMEPAD_KEY_NAME)
+#undef GAMEPAD_KEY_NAME
+};
+
+static const char *const ps_names[K_GAMEPAD_COUNT] =
+{
+#define GAMEPAD_KEY_NAME(keycode, value, xboxname, psname, nintendoname) psname,
+	GAMEPAD_KEY_LIST(GAMEPAD_KEY_NAME)
+#undef GAMEPAD_KEY_NAME
+};
+
+static const char *const nintendo_names[K_GAMEPAD_COUNT] =
+{
+#define GAMEPAD_KEY_NAME(keycode, value, xboxname, psname, nintendoname) nintendoname,
+	GAMEPAD_KEY_LIST(GAMEPAD_KEY_NAME)
+#undef GAMEPAD_KEY_NAME
 };
 
 
@@ -747,6 +804,8 @@ void Key_Console (int key)
 				Cbuf_AddText("say ");
 				key_tabhint[0] = '\0';
 		}
+		// K_ABUTTON shares enter behavior, but skips the chat shortcut branch above.
+	case K_ABUTTON:
 	case K_KP_ENTER:
 		key_tabpartial[0] = 0;
 		Cbuf_AddText (workline + 1);	// skip the prompt
@@ -848,6 +907,7 @@ void Key_Console (int key)
 		return;
 
 	case K_LEFTARROW:
+	case K_DPAD_LEFT:
 		if (keydown[K_SHIFT]) { // woods #conselection - extend selection left
 			Con_MoveSelection(-1, 0);
 			return;
@@ -868,6 +928,7 @@ void Key_Console (int key)
 		return;
 
 	case K_RIGHTARROW:
+	case K_DPAD_RIGHT:
 		if (keydown[K_SHIFT]) { // woods #conselection - extend selection right
 			Con_MoveSelection(1, 0);
 			return;
@@ -899,6 +960,7 @@ void Key_Console (int key)
 		return;
 
 	case K_UPARROW:
+	case K_DPAD_UP:
 		if (keydown[K_SHIFT]) { // woods #conselection - extend selection up
 			Con_MoveSelection(0, 1); // +1 because higher line numbers are older
 			return;
@@ -936,6 +998,7 @@ void Key_Console (int key)
 		return;
 
 	case K_DOWNARROW:
+	case K_DPAD_DOWN:
 		if (keydown[K_SHIFT]) { // woods #conselection - extend selection down
 			Con_MoveSelection(0, -1); // -1 because lower line numbers are newer
 			return;
@@ -1291,7 +1354,7 @@ the K_* names are matched up.
 */
 int Key_StringToKeynum (const char *str)
 {
-	keyname_t	*kn;
+	const keyname_t	*kn;
 
 	if (!str || !str[0])
 		return -1;
@@ -1318,7 +1381,7 @@ FIXME: handle quote special (general escape sequence?)
 const char *Key_KeynumToString (int keynum)
 {
 	static	char	tinystr[128][2]; // woods #iwtabcomplete
-	keyname_t	*kn;
+	const keyname_t	*kn;
 
 	if (keynum == -1)
 		return "<KEY NOT FOUND>";
@@ -1336,6 +1399,171 @@ const char *Key_KeynumToString (int keynum)
 	}
 
 	return "<UNKNOWN KEYNUM>";
+}
+
+/*
+===================
+Key_KeynumToFriendlyString
+
+Returns a user-facing string for the given keynum.
+===================
+*/
+const char *Key_KeynumToFriendlyString (int keynum)
+{
+	if (keynum >= K_GAMEPAD_BEGIN && keynum < K_GAMEPAD_END)
+	{
+		const char *str = NULL;
+
+		switch (IN_GetGamepadType())
+		{
+		default:
+		case GAMEPAD_NONE:
+		case GAMEPAD_XBOX:
+			str = xbox_names[keynum - K_GAMEPAD_BEGIN];
+			break;
+		case GAMEPAD_PLAYSTATION:
+			str = ps_names[keynum - K_GAMEPAD_BEGIN];
+			break;
+		case GAMEPAD_NINTENDO:
+			str = nintendo_names[keynum - K_GAMEPAD_BEGIN];
+			break;
+		}
+
+		if (str && *str)
+			return str;
+	}
+
+	return Key_KeynumToString(keynum);
+}
+
+static const char *Key_GetEffectiveBinding (int keynum)
+{
+	if (keynum < 0 || keynum >= MAX_KEYS)
+		return NULL;
+
+	if (key_bindmap[0] >= 0 && key_bindmap[0] < MAX_BINDMAPS && keybindings[key_bindmap[0]][keynum])
+		return keybindings[key_bindmap[0]][keynum];
+	if (key_bindmap[1] >= 0 && key_bindmap[1] < MAX_BINDMAPS && keybindings[key_bindmap[1]][keynum])
+		return keybindings[key_bindmap[1]][keynum];
+
+	return NULL;
+}
+
+static qboolean Key_IsAltModifierBinding (const char *binding)
+{
+	return binding && !strcmp(binding, "+altmodifier");
+}
+
+static qboolean *Key_GetGamepadAltTranslatedSlot (int keynum)
+{
+	if (keynum < K_LTHUMB || keynum > K_TOUCHPAD)
+		return NULL;
+
+	return &key_gamepad_alttranslated[keynum - K_GAMEPAD_BEGIN];
+}
+
+/*
+===================
+Key_GetDeviceForKeynum
+===================
+*/
+keydevice_t Key_GetDeviceForKeynum (int keynum)
+{
+	if (keynum < 0 || keynum >= MAX_KEYS)
+		return KD_NONE;
+
+	switch (keynum)
+	{
+	case K_MOUSE1:
+	case K_MOUSE2:
+	case K_MOUSE3:
+	case K_MOUSE4:
+	case K_MOUSE5:
+	case K_MWHEELUP:
+	case K_MWHEELDOWN:
+		return KD_MOUSE;
+	default:
+		break;
+	}
+
+	if ((keynum >= K_JOY1 && keynum <= K_AUX32) ||
+		(keynum >= K_GAMEPAD_BEGIN && keynum < K_GAMEPAD_END))
+		return KD_GAMEPAD;
+
+	return KD_KEYBOARD;
+}
+
+/*
+===================
+Key_GetDeviceMaskForKeynum
+===================
+*/
+keydevicemask_t Key_GetDeviceMaskForKeynum (int keynum)
+{
+	keydevice_t device = Key_GetDeviceForKeynum(keynum);
+	return device == KD_NONE ? KDM_NONE : (keydevicemask_t)(1 << (int)device);
+}
+
+/*
+===================
+Key_GetKeysForCommand
+===================
+*/
+int Key_GetKeysForCommand (const char *command, int *keys, int maxkeys, keydevicemask_t devmask)
+{
+	int i, count;
+
+	if (maxkeys <= 0)
+		return 0;
+
+	for (i = 0; i < maxkeys; i++)
+		keys[i] = -1;
+	count = 0;
+
+	for (i = 0; i < MAX_KEYS; i++)
+	{
+		const char *binding = Key_GetEffectiveBinding(i);
+		if (binding && !strcmp(binding, command))
+		{
+			if ((Key_GetDeviceMaskForKeynum(i) & devmask) == 0)
+				continue;
+			keys[count++] = i;
+			if (count == maxkeys)
+				break;
+		}
+	}
+
+	return count;
+}
+
+/*
+===================
+Key_IsKeyGamepadAltModifier
+===================
+*/
+qboolean Key_IsKeyGamepadAltModifier (int keynum)
+{
+	return Key_IsAltModifierBinding(Key_GetEffectiveBinding(keynum));
+}
+
+/*
+===================
+Key_GetGamepadAltModifierState
+===================
+*/
+qboolean Key_GetGamepadAltModifierState (void)
+{
+	return key_gamepad_altmodifier_pressed;
+}
+
+static void Key_GamepadAltModifierDown (void)
+{
+	key_gamepad_altmodifier_pressed = true;
+}
+
+static void Key_GamepadAltModifierUp (void)
+{
+	key_gamepad_altmodifier_pressed = false;
 }
 
 
@@ -1513,6 +1741,9 @@ void Key_Bind_f (void)
 		Con_Printf("KP_STAR      F2              END       PAUSE        PRINTSCREEN\n");
 		Con_Printf("KP_MINUS     F3              COMMAND   MWHEELUP     \n");
 		Con_Printf("KP_HOME      F4              MOUSE1    MWHEELDOWN   \n");
+		Con_Printf("\n");
+		Con_Printf("Gamepad extras: DPAD_UP DPAD_DOWN DPAD_LEFT DPAD_RIGHT MISC1\n");
+		Con_Printf("PADDLE1 PADDLE2 PADDLE3 PADDLE4 TOUCHPAD *_ALT\n");
 		Con_Printf("\n");
 		return;
 	}
@@ -1772,6 +2003,10 @@ void Key_Init (void)
 	consolekeys[K_DOWNARROW] = true;
 	consolekeys[K_LEFTARROW] = true;
 	consolekeys[K_RIGHTARROW] = true;
+	consolekeys[K_DPAD_UP] = true;
+	consolekeys[K_DPAD_DOWN] = true;
+	consolekeys[K_DPAD_LEFT] = true;
+	consolekeys[K_DPAD_RIGHT] = true;
 	consolekeys[K_CTRL] = true;
 	consolekeys[K_SHIFT] = true;
 	consolekeys[K_INS] = true;
@@ -1802,6 +2037,7 @@ void Key_Init (void)
 #endif
 	consolekeys[K_MWHEELUP] = true;
 	consolekeys[K_MWHEELDOWN] = true;
+	consolekeys[K_ABUTTON] = true;
 	consolekeys[K_CAPSLOCK] = true; // woods #capslock
 	consolekeys[K_PRINTSCREEN] = true; // woods #printscreen
 
@@ -1823,6 +2059,8 @@ void Key_Init (void)
 
 	Cmd_AddCommand ("in_bind",Key_Bind_f);	//spike -- purely for dp compat.
 	Cmd_AddCommand ("in_unbind",Key_Unbind_f);	//spike -- purely for dp compat.
+	Cmd_AddCommand ("+altmodifier", Key_GamepadAltModifierDown);
+	Cmd_AddCommand ("-altmodifier", Key_GamepadAltModifierUp);
 }
 
 static struct {
@@ -1945,7 +2183,7 @@ not necessarily the US-keyboard-based scancode. Pass 0 if not applicable.
 */
 void Key_EventWithKeycode (int key, qboolean down, int keycode)
 {
-	char	*kb;
+	const char	*kb;
 	char	cmd[1024];
 	qboolean wasdown;  // woods #printscreen
 
@@ -2118,6 +2356,41 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		return;
 	}
 
+	// If the gamepad alt modifier is held, translate normal gamepad buttons
+	// into their alternate-layer keycodes when an alt binding exists.
+	if (key >= K_LTHUMB && key <= K_TOUCHPAD)
+	{
+		qboolean *alttranslated = Key_GetGamepadAltTranslatedSlot(key);
+
+		if (alttranslated && !Key_IsKeyGamepadAltModifier(key))
+		{
+			if (!down)
+			{
+				if (*alttranslated)
+					key += K_LTHUMB_ALT - K_LTHUMB;
+				*alttranslated = false;
+			}
+			else
+			{
+				*alttranslated = false;
+				if (key_gamepad_altmodifier_pressed)
+				{
+					int altkey = key + (K_LTHUMB_ALT - K_LTHUMB);
+
+					if (Key_GetEffectiveBinding(altkey) != NULL || Key_GetEffectiveBinding(key) == NULL)
+					{
+						key = altkey;
+						*alttranslated = true;
+					}
+				}
+			}
+		}
+		else if (alttranslated && down)
+		{
+			*alttranslated = false;
+		}
+	}
+
 // handle autorepeats and stray key up events
 	if (down)
 	{
@@ -2194,7 +2467,7 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 
 	// if Print Screen isn't bound, take a screenshot // woods #printscreen (ironwail 1734367)
 
-	if (key == K_PRINTSCREEN && !keybindings[key_bindmap[0]][key])
+	if (key == K_PRINTSCREEN && !Key_GetEffectiveBinding(key))
 	{
 		if (down && !wasdown)
 			Cbuf_AddText("screenshot\n");
@@ -2270,9 +2543,7 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 // downs can be matched with ups
 	if (!down)
 	{
-		kb = keybindings[key_bindmap[0]][key];
-		if (!kb)
-			kb = keybindings[key_bindmap[1]][key];	//FIXME: if the qc changes the bindmap while a key is held then things will break. this is consistent with DP.
+		kb = Key_GetEffectiveBinding(key);
 		if (kb && kb[0] == '+')
 		{
 			sprintf (cmd, "-%s %i\n", kb+1, key);
@@ -2296,9 +2567,7 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 	    (key_dest == key_console && !consolekeys[key]) ||
 	    (key_dest == key_game && (!con_forcedup || !consolekeys[key])))
 	{
-		kb = keybindings[key_bindmap[0]][key];
-		if (!kb)
-			kb = keybindings[key_bindmap[1]][key];
+		kb = Key_GetEffectiveBinding(key);
 		if (kb)
 		{
 			if (kb[0] == '+')
@@ -2430,6 +2699,7 @@ void Key_ClearStates (void)
 		if (keydown[i])
 			Key_Event (i, false);
 	}
+
 }
 
 /*

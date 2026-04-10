@@ -2256,7 +2256,6 @@ void VID_SyncCvars (void)
 //
 //==========================================================================
 
-extern qboolean	keydown[256]; // woods #modsmenu (iw)
 extern cvar_t host_maxfps;
 static char fps_string[16];
 #define VID_FPS_TEXT_X 188

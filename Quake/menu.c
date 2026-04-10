@@ -66,7 +66,6 @@ void (*vid_menukeyfn)(int key);
 void (*vid_menumousefn)(int cx, int cy); // woods #mousemenu
 
 enum m_state_e m_state;
-extern qboolean	keydown[256]; // woods #modsmenu (iw)
 int m_mousex, m_mousey; // woods #mousemenu
 
 const char* ResolveHostname(const char* hostname); // woods #serversmenu
@@ -94,6 +93,9 @@ void M_Menu_Main_f (void);
 	void M_Menu_Options_f (void);
 		void M_Menu_Keys_f (void);
 		void M_Menu_Mouse_f (void);
+		void M_Menu_Controller_f (void);
+		void M_Menu_Controller_Test_f (void);
+		void M_Menu_Calibration_f (void);
 		void M_Menu_Video_f (void);
 	void M_Menu_Graphics_f (void);
 	void M_Menu_Sound_f (void);
@@ -134,6 +136,9 @@ void M_Main_Draw (void);
 	void M_Options_Draw (void);
 		void M_Keys_Draw (void);
 		void M_Mouse_Draw (void);
+		void M_Controller_Draw (void);
+		void M_Controller_Test_Draw (void);
+		void M_Calibration_Draw (void);
 		void M_Video_Draw (void);
 	void M_Graphics_Draw (void);
 	void M_Sound_Draw (void);
@@ -173,6 +178,9 @@ void M_Main_Key (int key);
 	void M_Options_Key (int key);
 		void M_Keys_Key (int key);
 		void M_Mouse_Key (int key);
+		void M_Controller_Key (int key);
+		void M_Controller_Test_Key (int key);
+		void M_Calibration_Key (int key);
 		void M_Video_Key (int key);
 	void M_Graphics_Key (int key);
 	void M_Sound_Key (int key);
@@ -215,6 +223,7 @@ void M_Main_Key (int key);
 	void M_Options_Mousemove(int cx, int cy);
 		void M_Keys_Mousemove(int cx, int cy);
 		void M_Mouse_Mousemove (int cx, int cy);
+		void M_Controller_Mousemove (int cx, int cy);
 		void M_Video_Mousemove (int cx, int cy);
 		void M_Graphics_Mousemove (int cx, int cy);
 		void M_Sound_Mousemove (int cx, int cy);
@@ -4387,6 +4396,7 @@ enum
 {
 	OPT_CUSTOMIZE = 0,
 	OPT_MOUSE,
+	OPT_CONTROLLER,
 	OPT_VIDEO,
 	OPT_GRAPHICS,
 	OPT_SOUND,
@@ -4576,10 +4586,13 @@ void M_Options_Draw (void)
 		// Get menu item text based on index
 		switch (i) {
 		case OPT_CUSTOMIZE:
-			text = "             Key Setup   ...";
+			text = "      Key/Button Setup   ...";
 			break;
 		case OPT_MOUSE:
 			text = "                 Mouse   ...";
+			break;
+		case OPT_CONTROLLER:
+			text = "            Controller   ...";
 			break;
 		case OPT_VIDEO:
 			if (vid_menudrawfn)
@@ -4668,9 +4681,11 @@ static const char* M_Options_GetItemText(int index)
 	switch (index)
 	{
 	case OPT_CUSTOMIZE:
-		return "             Key Setup   ...";
+		return "      Key/Button Setup   ...";
 	case OPT_MOUSE:
 		return "                 Mouse   ...";
+	case OPT_CONTROLLER:
+		return "            Controller   ...";
 	case OPT_VIDEO:
 		return "               Display   ...";
 	case OPT_GRAPHICS:
@@ -4788,6 +4803,9 @@ void M_Options_Key (int k)
 			break;
 		case OPT_MOUSE:
 			M_Menu_Mouse_f();
+			break;
+		case OPT_CONTROLLER:
+			M_Menu_Controller_f();
 			break;
 		case OPT_VIDEO:
 			M_Menu_Video_f();
@@ -4922,42 +4940,53 @@ Keys Menu
 ==================
 */
 
-const char *quakebindnames[][2] = // woods use iw quake bind names
+typedef struct
 {
-	{"+forward",		"Move forward"},
-	{"+back",			"Move backward"},
-	{"+moveleft",		"Move left"},
-	{"+moveright",		"Move right"},
-	{"+jump",			"Jump / swim up"},
-	{"+moveup",			"Swim up"},
-	{"+movedown",		"Swim down"},
-	{"+speed",			"Run"},
-	{"+strafe",			"Sidestep"},
-	{"+left",			"Turn left"},
-	{"+right",			"Turn right"},
-	{"+lookup",			"Look up"},
-	{"+lookdown",		"Look down"},
-	{"centerview",		"Center view"},
-	{"zoom_in",			"Toggle zoom"},
-	{"+zoom",			"Quick zoom"},
-	{"+attack",			"Attack"},
-	{"impulse 10",		"Next weapon"},
-	{"impulse 12",		"Previous weapon"},
-	{"impulse 1",		"Axe"},
-	{"impulse 2",		"Shotgun"},
-	{"impulse 3",		"Super Shotgun"},
-	{"impulse 4",		"Nailgun"},
-	{"impulse 5",		"Super Nailgun"},
-	{"impulse 6",		"Grenade Launcher"},
-	{"impulse 7",		"Rocket Launcher"},
-	{"impulse 8",		"Thunderbolt"},
-	{"impulse 225",		"Laser Cannon"},
-	{"impulse 226",		"Mjolnir"},
+	const char *cmd;
+	const char *desc;
+	keydevicemask_t devicemask;
+} defaultbind_t;
+
+static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
+{
+	{"+forward",		"Move forward",			KDM_KEYBOARD_AND_MOUSE},
+	{"+back",			"Move backward",		KDM_KEYBOARD_AND_MOUSE},
+	{"+moveleft",		"Move left",			KDM_KEYBOARD_AND_MOUSE},
+	{"+moveright",		"Move right",			KDM_KEYBOARD_AND_MOUSE},
+	{"+jump",			"Jump / swim up",		KDM_ANY},
+	{"+moveup",			"Swim up",				KDM_ANY},
+	{"+movedown",		"Swim down",			KDM_ANY},
+	{"+speed",			"Run",					KDM_KEYBOARD_AND_MOUSE},
+	{"+strafe",			"Sidestep",				KDM_KEYBOARD_AND_MOUSE},
+	{"+left",			"Turn left",			KDM_KEYBOARD_AND_MOUSE},
+	{"+right",			"Turn right",			KDM_KEYBOARD_AND_MOUSE},
+	{"+lookup",			"Look up",				KDM_KEYBOARD_AND_MOUSE},
+	{"+lookdown",		"Look down",			KDM_KEYBOARD_AND_MOUSE},
+	{"centerview",		"Center view",			KDM_ANY},
+	{"zoom_in",			"Toggle zoom",			KDM_ANY},
+	{"+zoom",			"Quick zoom",			KDM_ANY},
+	{"+gyroaction",		"Gyro switch",			KDM_GAMEPAD},
+	{"+altmodifier",	"Alt modifier",			KDM_GAMEPAD},
+	{"+attack",			"Attack",				KDM_ANY},
+	{"impulse 10",		"Next weapon",			KDM_ANY},
+	{"impulse 12",		"Previous weapon",		KDM_ANY},
+	{"impulse 1",		"Axe",					KDM_ANY},
+	{"impulse 2",		"Shotgun",				KDM_ANY},
+	{"impulse 3",		"Super Shotgun",		KDM_ANY},
+	{"impulse 4",		"Nailgun",				KDM_ANY},
+	{"impulse 5",		"Super Nailgun",		KDM_ANY},
+	{"impulse 6",		"Grenade Launcher",		KDM_ANY},
+	{"impulse 7",		"Rocket Launcher",		KDM_ANY},
+	{"impulse 8",		"Thunderbolt",			KDM_ANY},
+	{"impulse 225",		"Laser Cannon",			KDM_ANY},
+	{"impulse 226",		"Mjolnir",				KDM_ANY},
 };
 #define	NUMQUAKECOMMANDS	(sizeof(quakebindnames)/sizeof(quakebindnames[0]))
 
 
-#define MAX_VIS_KEYS	15 // woods #mousemenu
+#define MAX_VIS_KEYS	14 // woods #mousemenu
+#define KEYS_TAB_Y		40
+#define KEYS_LIST_Y		56
 
 static struct
 {
@@ -4967,6 +4996,7 @@ static struct
 		int len;
 		int maxlen;
 	} search;
+	keydevicemask_t devicemask;
 	int* filtered_indices;
 	int num_filtered;
 	qboolean scrollbar_grab;  // Add this
@@ -4976,12 +5006,84 @@ static struct
 typedef struct { // woods #mousemenu
 	char* cmd;
 	char* desc;
+	keydevicemask_t devicemask;
 } bindname_t;
 
 static bindname_t* bindnames = NULL; // woods #mousemenu
 static int numbindnames = 0; // woods #mousemenu
 
 qboolean	bind_grab;
+
+static void M_Keys_UpdateFilter(void);
+
+static void M_Keys_SetDeviceMask(keydevicemask_t devicemask)
+{
+	if (devicemask == KDM_NONE || keysmenu.devicemask == devicemask)
+		return;
+
+	keysmenu.devicemask = devicemask;
+	M_Keys_UpdateFilter();
+}
+
+static keydevicemask_t M_Keys_GetTabAtPoint(int x, int y)
+{
+	if (y < KEYS_TAB_Y || y >= KEYS_TAB_Y + 8)
+		return KDM_NONE;
+
+	return x < 160 ? KDM_KEYBOARD_AND_MOUSE : KDM_GAMEPAD;
+}
+
+static void M_Keys_AddBindName (const char *cmd, const char *desc, keydevicemask_t devicemask)
+{
+	bindnames = (bindname_t *)Z_Realloc(bindnames, sizeof(bindname_t) * (numbindnames + 1));
+	bindnames[numbindnames].cmd = (char *)Z_Malloc(strlen(cmd) + 1);
+	strcpy(bindnames[numbindnames].cmd, cmd);
+	bindnames[numbindnames].desc = (char *)Z_Malloc(strlen(desc) + 1);
+	strcpy(bindnames[numbindnames].desc, desc);
+	bindnames[numbindnames].devicemask = devicemask;
+	numbindnames++;
+}
+
+static const defaultbind_t *M_Keys_FindDefaultBind (const char *cmd)
+{
+	int i;
+
+	for (i = 0; i < NUMQUAKECOMMANDS; i++)
+	{
+		if (!strcmp(quakebindnames[i].cmd, cmd))
+			return &quakebindnames[i];
+	}
+
+	return NULL;
+}
+
+static qboolean M_Keys_HasCommand (const char *cmd)
+{
+	int i;
+
+	for (i = 0; i < numbindnames; i++)
+	{
+		if (!strcmp(bindnames[i].cmd, cmd))
+			return true;
+	}
+
+	return false;
+}
+
+static void M_Keys_AddMissingControllerBinds (void)
+{
+	int i;
+
+	for (i = 0; i < NUMQUAKECOMMANDS; i++)
+	{
+		if (quakebindnames[i].devicemask != KDM_GAMEPAD)
+			continue;
+		if (M_Keys_HasCommand(quakebindnames[i].cmd))
+			continue;
+
+		M_Keys_AddBindName(quakebindnames[i].cmd, quakebindnames[i].desc, quakebindnames[i].devicemask);
+	}
+}
 
 void M_Keys_Populate(void) // woods #mousemenu -- modified 
 {
@@ -4995,35 +5097,27 @@ void M_Keys_Populate(void) // woods #mousemenu -- modified
 		while (fgets(line, sizeof(line), file))
 		{
 			const char* cmd, * desc;
+			const defaultbind_t *defaultbind;
 			Cmd_TokenizeString(line);
 			cmd = Cmd_Argv(0);
 			desc = Cmd_Argv(1);
 
 			if (*cmd)
 			{
-				bindnames = (bindname_t*)Z_Realloc(bindnames, sizeof(bindname_t)*(numbindnames+1));
-				bindnames[numbindnames].cmd = (char*)Z_Malloc(strlen(cmd)+1);
-				strcpy(bindnames[numbindnames].cmd, cmd);
-				bindnames[numbindnames].desc = (char*)Z_Malloc(strlen(desc)+1);
-				strcpy(bindnames[numbindnames].desc, desc);
-				numbindnames++;
+				defaultbind = M_Keys_FindDefaultBind(cmd);
+				M_Keys_AddBindName(cmd, desc, defaultbind ? defaultbind->devicemask : KDM_ANY);
 			}
 		}
 		fclose(file);
+		if (numbindnames)
+			M_Keys_AddMissingControllerBinds();
 	}
 
 	// Fallback to default bindings if no bindings were loaded from the file
 	if (!numbindnames)
 	{
-		bindnames = (bindname_t*)Z_Realloc(bindnames, sizeof(bindname_t)*NUMQUAKECOMMANDS);
 		for (int i = 0; i < NUMQUAKECOMMANDS; i++)
-		{
-			bindnames[i].cmd = (char*)Z_Malloc(strlen(quakebindnames[i][0])+1);
-			strcpy(bindnames[i].cmd, quakebindnames[i][0]);
-			bindnames[i].desc = (char*)Z_Malloc(strlen(quakebindnames[i][1])+1);
-			strcpy(bindnames[i].desc, quakebindnames[i][1]);
-		}
-		numbindnames = NUMQUAKECOMMANDS;
+			M_Keys_AddBindName(quakebindnames[i].cmd, quakebindnames[i].desc, quakebindnames[i].devicemask);
 	}
 }
 
@@ -5035,10 +5129,13 @@ void M_Keys_UpdateFilter(void)
 	// First pass: count matches
 	for (int i = 0; i < numbindnames; i++)
 	{
+		if (!(bindnames[i].devicemask & keysmenu.devicemask))
+			continue;
+
 		if (keysmenu.search.len == 0)
 		{
-			keysmenu.num_filtered = numbindnames;
-			break;
+			keysmenu.num_filtered++;
+			continue;
 		}
 		else
 		{
@@ -5075,8 +5172,12 @@ void M_Keys_UpdateFilter(void)
 	if (keysmenu.search.len == 0)
 	{
 		// No search, just copy all indices
+		int filter_idx = 0;
 		for (int i = 0; i < numbindnames; i++)
-			keysmenu.filtered_indices[i] = i;
+		{
+			if (bindnames[i].devicemask & keysmenu.devicemask)
+				keysmenu.filtered_indices[filter_idx++] = i;
+		}
 	}
 	else
 	{
@@ -5084,6 +5185,9 @@ void M_Keys_UpdateFilter(void)
 		int filter_idx = 0;
 		for (int i = 0; i < numbindnames; i++)
 		{
+			if (!(bindnames[i].devicemask & keysmenu.devicemask))
+				continue;
+
 			const char* desc = bindnames[i].desc;
 			const char* cmd = bindnames[i].cmd;
 			const char* search = keysmenu.search.text;
@@ -5132,19 +5236,19 @@ void M_Menu_Keys_f(void)
 	keysmenu.search.len = 0;
 	keysmenu.search.text[0] = 0;
 	keysmenu.search.maxlen = sizeof(keysmenu.search.text) - 1;
+	keysmenu.devicemask = (IN_GetLastActiveDeviceType() == KD_GAMEPAD) ? KDM_GAMEPAD : KDM_KEYBOARD_AND_MOUSE;
 
 	keysmenu.scrollbar_grab = false;
 	keysmenu.x = 0;
-	keysmenu.y = 48;
+	keysmenu.y = KEYS_LIST_Y;
 	keysmenu.cols = 36;
 
 	// Initialize filtered indices array
 	if (keysmenu.filtered_indices)
 		Z_Free(keysmenu.filtered_indices);
 	keysmenu.filtered_indices = (int*)Z_Malloc(numbindnames * sizeof(int));
-	keysmenu.num_filtered = numbindnames;
-	for (int i = 0; i < numbindnames; i++)
-		keysmenu.filtered_indices[i] = i;
+	keysmenu.num_filtered = 0;
+	M_Keys_UpdateFilter();
 
 	IN_UpdateGrabs();
 }
@@ -5180,42 +5284,40 @@ qboolean IsCompleteCommand(const char* binding, const char* command)
 
 void M_FindKeysForCommand (const char *command, int *threekeys)
 {
-	int		count;
-	int		j;
-	char	*b;
-	int		bindmap = 0;
+	Key_GetKeysForCommand(command, threekeys, 3, keysmenu.devicemask);
+}
 
-	threekeys[0] = threekeys[1] = threekeys[2] = -1;
-	count = 0;
-
-	for (j = 0; j < MAX_KEYS; j++)
-	{
-		b = keybindings[bindmap][j];
-		if (!b)
-			continue;
-		if (IsCompleteCommand(b, command))
-		{
-			threekeys[count] = j;
-			count++;
-			if (count == 3)
-				break;
-		}
-	}
+static int M_Keys_GetPrimaryBindmap (void)
+{
+	if (key_bindmap[0] >= 0 && key_bindmap[0] < MAX_BINDMAPS)
+		return key_bindmap[0];
+	return 0;
 }
 
 void M_UnbindCommand (const char *command)
 {
-	int		j;
-	char	*b;
-	int		bindmap = 0;
+	int active_bindmaps[2];
+	int i, j;
 
-	for (j = 0; j < MAX_KEYS; j++)
+	active_bindmaps[0] = M_Keys_GetPrimaryBindmap();
+	active_bindmaps[1] = (key_bindmap[1] >= 0 && key_bindmap[1] < MAX_BINDMAPS) ? key_bindmap[1] : -1;
+
+	for (i = 0; i < 2; i++)
 	{
-		b = keybindings[bindmap][j];
-		if (!b)
+		int bindmap = active_bindmaps[i];
+
+		if (bindmap < 0 || (i > 0 && bindmap == active_bindmaps[0]))
 			continue;
-		if (IsCompleteCommand(b, command))
-			Key_SetBinding(j, NULL, bindmap);
+
+		for (j = 0; j < MAX_KEYS; j++)
+		{
+			char *b = keybindings[bindmap][j];
+
+			if (!b)
+				continue;
+			if (IsCompleteCommand(b, command) && (Key_GetDeviceMaskForKeynum(j) & keysmenu.devicemask))
+				Key_SetBinding(j, NULL, bindmap);
+		}
 	}
 }
 
@@ -5225,16 +5327,24 @@ void M_Keys_Draw(void)
 {
 	int firstvis, numvis, x, y, cols;
 	qpic_t* p;
+	const char* hint = NULL;
 
-	p = Draw_CachePic("gfx/ttl_cstm.lmp");
+	p = Draw_CachePic("gfx/p_option.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
-	if (bind_grab)
-		M_Print(12, 32, "press a key or button for this action");
+
+	if (keysmenu.devicemask == KDM_GAMEPAD)
+	{
+		M_Print(16, KEYS_TAB_Y, "Keyboard & Mouse");
+		M_PrintWhite(184, KEYS_TAB_Y, "Gamepad");
+	}
 	else
-		M_Print(18, 32, "enter to change, backspace to clear");
+	{
+		M_PrintWhite(16, KEYS_TAB_Y, "Keyboard & Mouse");
+		M_Print(184, KEYS_TAB_Y, "Gamepad");
+	}
 
 	x = 0;
-	y = 48;
+	y = keysmenu.y;
 	cols = 36;
 
 	// Get visible range
@@ -5251,10 +5361,7 @@ void M_Keys_Draw(void)
 		M_List_DrawScrollbar(&keysmenu.list, keysmenu.x + keysmenu.cols * 8 - 8, keysmenu.y);
 	}
 
-	y += 2;
-
 	// Draw visible items
-	 // Draw visible items
 	for (int i = 0; i < numvis; i++)
 	{
 		int list_index = firstvis + i;
@@ -5275,7 +5382,7 @@ void M_Keys_Draw(void)
 		int x_pos = 136;
 		if (keys[0] != -1)
 		{
-			const char* keyStr = Key_KeynumToString(keys[0]);
+			const char* keyStr = Key_KeynumToFriendlyString(keys[0]);
 			print_fn(x_pos, y, keyStr);
 			x_pos += (strlen(keyStr) * 8);
 
@@ -5287,7 +5394,7 @@ void M_Keys_Draw(void)
 				x_pos += 8;  // Comma width
 				M_PrintRGBA(x_pos, y, " ", CL_PLColours_Parse("0xffffff"), alpha, masked);
 				x_pos += 8;  // Space width
-				keyStr = Key_KeynumToString(keys[j]);
+				keyStr = Key_KeynumToFriendlyString(keys[j]);
 				print_fn(x_pos, y, keyStr);
 				x_pos += (strlen(keyStr) * 8);
 			}
@@ -5296,7 +5403,9 @@ void M_Keys_Draw(void)
 		{
 			qboolean masked = !is_selected;
 			float alpha = masked ? 0.5f : 1.0f;
-			M_PrintRGBA(x_pos, y, "???", CL_PLColours_Parse("0xffffff"), alpha, masked);
+			M_PrintRGBA(x_pos, y,
+				(bind_grab && list_index == keysmenu.list.cursor && Key_GetGamepadAltModifierState()) ? "Alt-???" : "???",
+				CL_PLColours_Parse("0xffffff"), alpha, masked);
 		}
 
 		if (list_index == keysmenu.list.cursor)
@@ -5319,11 +5428,31 @@ void M_Keys_Draw(void)
 		else
 			M_DrawCharacter(cursor_x, 182, 10 + ((int)(realtime * 4) & 1));
 	}
+	else
+	{
+		if (bind_grab)
+		{
+			hint = keysmenu.devicemask == KDM_GAMEPAD ?
+				va("Press new button, or %s to cancel", Key_KeynumToFriendlyString(K_START)) :
+				va("Press new key, or %s to cancel", Key_KeynumToFriendlyString(K_ESCAPE));
+		}
+		else if (keysmenu.devicemask == KDM_GAMEPAD)
+		{
+			hint = va("%s = change, %s = clear", Key_KeynumToFriendlyString(K_ABUTTON), Key_KeynumToFriendlyString(K_YBUTTON));
+		}
+		else
+		{
+			hint = va("%s = change, %s = clear", Key_KeynumToFriendlyString(K_ENTER), Key_KeynumToFriendlyString(K_BACKSPACE));
+		}
+
+		M_PrintWhite((320 - 8 * strlen(hint)) / 2, 182, hint);
+	}
 }
 
 void M_Keys_Key(int k)
 {
 	int x, y;
+	keydevicemask_t clickedmask = KDM_NONE;
 
 	if (keysmenu.scrollbar_grab)
 	{
@@ -5338,23 +5467,56 @@ void M_Keys_Key(int k)
 		}
 		return;
 	}
+
+	if (k == K_MOUSE1)
+	{
+		clickedmask = M_Keys_GetTabAtPoint(m_mousex, m_mousey);
+		if (clickedmask != KDM_NONE)
+		{
+			if (bind_grab)
+			{
+				bind_grab = false;
+				IN_UpdateGrabs();
+			}
+
+			if (clickedmask != keysmenu.devicemask)
+			{
+				S_LocalSound("misc/menu1.wav");
+				M_Keys_SetDeviceMask(clickedmask);
+			}
+			return;
+		}
+	}
 	
 	char    cmd[80];
 	if (bind_grab)
 	{   // defining a key
 		S_LocalSound("misc/menu1.wav");
-		if (k != K_ESCAPE && k != '`')
+		if (k != K_ESCAPE && k != K_BBUTTON && k != '`')
 		{
 			int actual_idx = keysmenu.filtered_indices[keysmenu.list.cursor];
 			int keys[3];
+
+			if (!(Key_GetDeviceMaskForKeynum(k) & keysmenu.devicemask))
+				return;
+			if (strcmp(bindnames[actual_idx].cmd, "+altmodifier") && Key_IsKeyGamepadAltModifier(k))
+				return;
+
 			M_FindKeysForCommand(bindnames[actual_idx].cmd, keys);
 			if (keys[2] != -1)
 				M_UnbindCommand(bindnames[actual_idx].cmd);
-			sprintf(cmd, "bind \"%s\" \"%s\"\n", Key_KeynumToString(k), bindnames[actual_idx].cmd);
+			sprintf(cmd, "in_bind %i \"%s\" \"%s\"\n", M_Keys_GetPrimaryBindmap(), Key_KeynumToString(k), bindnames[actual_idx].cmd);
 			Cbuf_InsertText(cmd);
 		}
 		bind_grab = false;
 		IN_UpdateGrabs();
+		return;
+	}
+
+	if (k == K_TAB || k == K_LSHOULDER || k == K_RSHOULDER)
+	{
+		S_LocalSound("misc/menu1.wav");
+		M_Keys_SetDeviceMask((keysmenu.devicemask == KDM_GAMEPAD) ? KDM_KEYBOARD_AND_MOUSE : KDM_GAMEPAD);
 		return;
 	}
 
@@ -5443,6 +5605,9 @@ void M_Keys_Key(int k)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	case K_MOUSE1:
+	{
+		if (keysmenu.num_filtered <= 0)
+			break;
 		x = m_mousex - keysmenu.x - (keysmenu.cols - 1) * 8;
 		y = m_mousey - keysmenu.y;
 		if (x < -8 || !M_List_UseScrollbar(&keysmenu.list, y))
@@ -5459,10 +5624,12 @@ void M_Keys_Key(int k)
 			M_Keys_Mousemove(m_mousex, m_mousey);
 		}
 		break;
+	}
 
 	case K_BACKSPACE:
 	case K_DEL:
-		if (!keysmenu.search.len)  // Only delete binding if not searching
+	case K_YBUTTON:
+		if (!keysmenu.search.len && keysmenu.num_filtered > 0)  // Only delete binding if not searching
 		{
 			S_LocalSound("misc/menu2.wav");
 			int actual_idx = keysmenu.filtered_indices[keysmenu.list.cursor];
@@ -5939,6 +6106,1187 @@ void M_Mouse_Mousemove(int cx, int cy)
 	{
 		// Update the cursor position
 		mouse_cursor = item;
+	}
+}
+
+/*
+==================
+Controller Menu
+==================
+*/
+
+extern cvar_t joy_device;
+extern cvar_t joy_deadzone_look, joy_deadzone_move, joy_deadzone_trigger;
+extern cvar_t joy_sensitivity_yaw, joy_sensitivity_pitch;
+extern cvar_t joy_invert, joy_exponent, joy_exponent_move, joy_swapmovelook;
+extern cvar_t joy_flick, joy_rumble;
+extern cvar_t gyro_enable, gyro_mode, gyro_turning_axis;
+extern cvar_t gyro_yawsensitivity, gyro_pitchsensitivity, gyro_noise_thresh;
+
+#define CONTROLLER_SLIDER_X		186
+#define CONTROLLER_CURSOR_X		168
+#define CONTROLLER_VALUE_X		178
+#define CONTROLLER_TITLE_Y		32
+#define CONTROLLER_TOP_Y		48
+#define CONTROLLER_MAX_VISIBLE	19
+#define MIN_JOY_SENS			60.f
+#define MAX_JOY_SENS			720.f
+#define MIN_JOY_EXPONENT		1.f
+#define MAX_JOY_EXPONENT		5.f
+#define MIN_STICK_DEADZONE		0.f
+#define MAX_STICK_DEADZONE		0.75f
+#define MIN_TRIGGER_DEADZONE	0.f
+#define MAX_TRIGGER_DEADZONE	0.75f
+#define MIN_RUMBLE				0.f
+#define MAX_RUMBLE				1.f
+#define MIN_GYRO_SENS			0.1f
+#define MAX_GYRO_SENS			20.f
+#define MIN_GYRO_NOISE_THRESH	0.f
+#define MAX_GYRO_NOISE_THRESH	5.f
+
+static enum controller_e
+{
+	CONTROLLER_DEVICE,
+	CONTROLLER_SENSX,
+	CONTROLLER_SENSY,
+	CONTROLLER_INVERT,
+	CONTROLLER_LOOK_STICK,
+	CONTROLLER_EXPONENT_LOOK,
+	CONTROLLER_EXPONENT_MOVE,
+	CONTROLLER_DEADZONE_LOOK,
+	CONTROLLER_DEADZONE_MOVE,
+	CONTROLLER_TRIGGER_THRESH,
+	CONTROLLER_TEST,
+	CONTROLLER_RUMBLE,
+	CONTROLLER_GYRO_ENABLE,
+	CONTROLLER_FLICK_STICK,
+	CONTROLLER_GYRO_MODE,
+	CONTROLLER_GYRO_AXIS,
+	CONTROLLER_GYRO_SENSX,
+	CONTROLLER_GYRO_SENSY,
+	CONTROLLER_GYRO_NOISE,
+	CONTROLLER_CALIBRATE,
+	CONTROLLER_COUNT
+} controller_cursor;
+
+#define CONTROLLER_ITEMS (CONTROLLER_COUNT)
+
+static qboolean controller_slider_grab;
+static int controller_scroll;
+
+static const char *M_Controller_GetItemText(int index)
+{
+	static char buffer[64];
+
+	switch (index)
+	{
+	case CONTROLLER_DEVICE:
+		return "          Device";
+	case CONTROLLER_SENSX:
+		return "       Yaw Speed";
+	case CONTROLLER_SENSY:
+		return "     Pitch Speed";
+	case CONTROLLER_INVERT:
+		return "    Invert Pitch";
+	case CONTROLLER_LOOK_STICK:
+		return "      Look Stick";
+	case CONTROLLER_EXPONENT_LOOK:
+		return "      Look Accel";
+	case CONTROLLER_EXPONENT_MOVE:
+		return "      Move Accel";
+	case CONTROLLER_DEADZONE_LOOK:
+		return "   Look Deadzone";
+	case CONTROLLER_DEADZONE_MOVE:
+		return "   Move Deadzone";
+	case CONTROLLER_TRIGGER_THRESH:
+		return "  Trigger Thresh";
+	case CONTROLLER_TEST:
+		return " Controller Test";
+	case CONTROLLER_RUMBLE:
+		return "       Vibration";
+	case CONTROLLER_GYRO_ENABLE:
+		return "            Gyro";
+	case CONTROLLER_FLICK_STICK:
+		return "     Flick Stick";
+	case CONTROLLER_GYRO_MODE:
+		return "     Gyro Button";
+	case CONTROLLER_GYRO_AXIS:
+		return "       Gyro Axis";
+	case CONTROLLER_GYRO_SENSX:
+		return "  Gyro Yaw Speed";
+	case CONTROLLER_GYRO_SENSY:
+		return "Gyro Pitch Speed";
+	case CONTROLLER_GYRO_NOISE:
+		return "      Gyro Noise";
+	case CONTROLLER_CALIBRATE:
+		return "       Calibrate";
+	default:
+		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
+		return buffer;
+	}
+}
+
+static qboolean M_Controller_IsSlider(int option)
+{
+	switch (option)
+	{
+	case CONTROLLER_SENSX:
+	case CONTROLLER_SENSY:
+	case CONTROLLER_EXPONENT_LOOK:
+	case CONTROLLER_EXPONENT_MOVE:
+	case CONTROLLER_DEADZONE_LOOK:
+	case CONTROLLER_DEADZONE_MOVE:
+	case CONTROLLER_TRIGGER_THRESH:
+	case CONTROLLER_RUMBLE:
+	case CONTROLLER_GYRO_SENSX:
+	case CONTROLLER_GYRO_SENSY:
+	case CONTROLLER_GYRO_NOISE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static qboolean M_Controller_IsOptionVisible(int option)
+{
+	switch (option)
+	{
+	case CONTROLLER_RUMBLE:
+		return IN_HasRumble();
+
+	case CONTROLLER_GYRO_ENABLE:
+	case CONTROLLER_FLICK_STICK:
+	case CONTROLLER_GYRO_MODE:
+	case CONTROLLER_GYRO_AXIS:
+	case CONTROLLER_GYRO_SENSX:
+	case CONTROLLER_GYRO_SENSY:
+	case CONTROLLER_GYRO_NOISE:
+	case CONTROLLER_CALIBRATE:
+		return IN_HasGyro();
+
+	default:
+		return true;
+	}
+}
+
+static int M_Controller_GetVisibleItemCount(void)
+{
+	int count = 0;
+	int option;
+
+	for (option = 0; option < CONTROLLER_ITEMS; option++)
+	{
+		if (M_Controller_IsOptionVisible(option))
+			count++;
+	}
+
+	return count;
+}
+
+static int M_Controller_CursorToOption(int cursor)
+{
+	int option;
+	int visible_index = 0;
+
+	for (option = 0; option < CONTROLLER_ITEMS; option++)
+	{
+		if (!M_Controller_IsOptionVisible(option))
+			continue;
+		if (visible_index == cursor)
+			return option;
+		visible_index++;
+	}
+
+	return CONTROLLER_DEVICE;
+}
+
+static void M_Controller_ClampCursor(void)
+{
+	int visible_count = M_Controller_GetVisibleItemCount();
+	int max_visible = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
+
+	if (visible_count <= 0)
+	{
+		controller_cursor = 0;
+		controller_scroll = 0;
+		return;
+	}
+
+	if (controller_cursor < 0)
+		controller_cursor = 0;
+	else if (controller_cursor >= visible_count)
+		controller_cursor = visible_count - 1;
+
+	if (controller_scroll < 0)
+		controller_scroll = 0;
+	else if (controller_scroll > visible_count - max_visible)
+		controller_scroll = visible_count - max_visible;
+
+	if (controller_cursor < controller_scroll)
+		controller_scroll = controller_cursor;
+	else if (controller_cursor >= controller_scroll + max_visible)
+		controller_scroll = controller_cursor - max_visible + 1;
+}
+
+static void M_Controller_Ellipsize(char *dst, size_t dstsize, const char *src, int maxchars)
+{
+	if (!dstsize)
+		return;
+
+	if (!src)
+	{
+		dst[0] = '\0';
+		return;
+	}
+
+	if (maxchars < 4)
+	{
+		q_strlcpy(dst, src, dstsize);
+		if ((size_t)maxchars < dstsize)
+			dst[maxchars] = '\0';
+		return;
+	}
+
+	if ((size_t)(maxchars + 1) > dstsize)
+		maxchars = (int)dstsize - 1;
+
+	if ((int)strlen(src) <= maxchars)
+	{
+		q_strlcpy(dst, src, dstsize);
+		return;
+	}
+
+	memcpy(dst, src, maxchars - 3);
+	dst[maxchars - 3] = '.';
+	dst[maxchars - 2] = '.';
+	dst[maxchars - 1] = '.';
+	dst[maxchars] = '\0';
+}
+
+static const char *M_Controller_GetDeviceLabel(void)
+{
+	static char label[20];
+	const char *name = NULL;
+	int device = (int)joy_device.value;
+
+#if defined(USE_SDL2)
+	if (device < 0)
+		return "Disabled";
+
+	if (device < SDL_NumJoysticks())
+	{
+		if (!SDL_IsGameController(device))
+			return "Unsupported";
+
+		name = SDL_GameControllerNameForIndex(device);
+	}
+	else
+	{
+		name = IN_GetGamepadName();
+		if (!name)
+			return "Not connected";
+	}
+#else
+	name = IN_GetGamepadName();
+	if (!name)
+		return "Unavailable";
+#endif
+
+	if (!name || !*name)
+		name = "[Unknown gamepad]";
+
+	M_Controller_Ellipsize(label, sizeof(label), name, 16);
+	return label;
+}
+
+static const char *M_Controller_GetGyroModeLabel(void)
+{
+	switch ((int)gyro_mode.value)
+	{
+	case GYRO_BUTTON_ENABLES:
+		return "Hold To Use";
+	case GYRO_BUTTON_DISABLES:
+		return "Hold To Pause";
+	case GYRO_BUTTON_INVERTS_DIR:
+		return "Hold To Invert";
+	default:
+		return "Always On";
+	}
+}
+
+static const char *M_Controller_GetGyroAxisLabel(void)
+{
+	return gyro_turning_axis.value ? "Roll" : "Yaw";
+}
+
+static void M_Controller_CycleDevice(int dir)
+{
+#if defined(USE_SDL2)
+	int i, count, current, effective_current, first, last, next, prev, target;
+
+	count = SDL_NumJoysticks();
+	current = (int)joy_device.value;
+	effective_current = (current >= 0 && current < count && SDL_IsGameController(current)) ? current : -1;
+	first = last = next = prev = -1;
+	target = current;
+
+	for (i = 0; i < count; i++)
+	{
+		if (!SDL_IsGameController(i))
+			continue;
+
+		if (first == -1)
+			first = i;
+		last = i;
+
+		if (i < effective_current)
+			prev = i;
+		else if (i > effective_current && next == -1)
+			next = i;
+	}
+
+	if (first == -1)
+		return;
+
+	if (effective_current < 0)
+		target = dir > 0 ? first : last;
+	else if (dir > 0)
+		target = next != -1 ? next : -1;
+	else
+		target = prev != -1 ? prev : -1;
+
+	if (target != current)
+		Cvar_SetValueQuick(&joy_device, target);
+#else
+	(void)dir;
+#endif
+}
+
+static void M_Controller_AdjustSliders(int dir)
+{
+	int option;
+
+	M_Controller_ClampCursor();
+	option = M_Controller_CursorToOption(controller_cursor);
+	S_LocalSound("misc/menu3.wav");
+
+	switch (option)
+	{
+	case CONTROLLER_DEVICE:
+		M_Controller_CycleDevice(dir);
+		break;
+
+	case CONTROLLER_SENSX:
+		Cvar_SetValueQuick(&joy_sensitivity_yaw, CLAMP(MIN_JOY_SENS, joy_sensitivity_yaw.value + dir * 10.f, MAX_JOY_SENS));
+		break;
+
+	case CONTROLLER_SENSY:
+		Cvar_SetValueQuick(&joy_sensitivity_pitch, CLAMP(MIN_JOY_SENS, joy_sensitivity_pitch.value + dir * 10.f, MAX_JOY_SENS));
+		break;
+
+	case CONTROLLER_INVERT:
+		Cvar_SetValueQuick(&joy_invert, !joy_invert.value);
+		break;
+
+	case CONTROLLER_LOOK_STICK:
+		Cvar_SetValueQuick(&joy_swapmovelook, !joy_swapmovelook.value);
+		break;
+
+	case CONTROLLER_EXPONENT_LOOK:
+		Cvar_SetValueQuick(&joy_exponent, CLAMP(MIN_JOY_EXPONENT, joy_exponent.value + dir * 0.5f, MAX_JOY_EXPONENT));
+		break;
+
+	case CONTROLLER_EXPONENT_MOVE:
+		Cvar_SetValueQuick(&joy_exponent_move, CLAMP(MIN_JOY_EXPONENT, joy_exponent_move.value + dir * 0.5f, MAX_JOY_EXPONENT));
+		break;
+
+	case CONTROLLER_DEADZONE_LOOK:
+		Cvar_SetValueQuick(&joy_deadzone_look, CLAMP(MIN_STICK_DEADZONE, joy_deadzone_look.value + dir * 0.05f, MAX_STICK_DEADZONE));
+		break;
+
+	case CONTROLLER_DEADZONE_MOVE:
+		Cvar_SetValueQuick(&joy_deadzone_move, CLAMP(MIN_STICK_DEADZONE, joy_deadzone_move.value + dir * 0.05f, MAX_STICK_DEADZONE));
+		break;
+
+	case CONTROLLER_TRIGGER_THRESH:
+		Cvar_SetValueQuick(&joy_deadzone_trigger, CLAMP(MIN_TRIGGER_DEADZONE, joy_deadzone_trigger.value + dir * 0.05f, MAX_TRIGGER_DEADZONE));
+		break;
+
+	case CONTROLLER_TEST:
+		M_Menu_Controller_Test_f();
+		break;
+
+	case CONTROLLER_RUMBLE:
+		Cvar_SetValueQuick(&joy_rumble, CLAMP(MIN_RUMBLE, joy_rumble.value + dir * 0.05f, MAX_RUMBLE));
+		break;
+
+	case CONTROLLER_GYRO_ENABLE:
+		Cvar_SetValueQuick(&gyro_enable, !gyro_enable.value);
+		break;
+
+	case CONTROLLER_FLICK_STICK:
+		Cvar_SetValueQuick(&joy_flick, !joy_flick.value);
+		break;
+
+	case CONTROLLER_GYRO_MODE:
+		Cvar_SetValueQuick(&gyro_mode, ((int)gyro_mode.value + GYRO_MODE_COUNT + dir) % GYRO_MODE_COUNT);
+		break;
+
+	case CONTROLLER_GYRO_AXIS:
+		Cvar_SetValueQuick(&gyro_turning_axis, !gyro_turning_axis.value);
+		break;
+
+	case CONTROLLER_GYRO_SENSX:
+		Cvar_SetValueQuick(&gyro_yawsensitivity, CLAMP(MIN_GYRO_SENS, gyro_yawsensitivity.value + dir * 0.1f, MAX_GYRO_SENS));
+		break;
+
+	case CONTROLLER_GYRO_SENSY:
+		Cvar_SetValueQuick(&gyro_pitchsensitivity, CLAMP(MIN_GYRO_SENS, gyro_pitchsensitivity.value + dir * 0.1f, MAX_GYRO_SENS));
+		break;
+
+	case CONTROLLER_GYRO_NOISE:
+		Cvar_SetValueQuick(&gyro_noise_thresh, CLAMP(MIN_GYRO_NOISE_THRESH, gyro_noise_thresh.value + dir * 0.1f, MAX_GYRO_NOISE_THRESH));
+		break;
+
+	case CONTROLLER_CALIBRATE:
+		if (IN_HasGyro())
+			M_Menu_Calibration_f();
+		break;
+
+	default:
+		break;
+	}
+}
+
+static qboolean M_Controller_SetSliderValue(int option, float frac)
+{
+	frac = CLAMP(0.f, frac, 1.f);
+
+	switch (option)
+	{
+	case CONTROLLER_SENSX:
+		Cvar_SetValueQuick(&joy_sensitivity_yaw, MIN_JOY_SENS + frac * (MAX_JOY_SENS - MIN_JOY_SENS));
+		return true;
+
+	case CONTROLLER_SENSY:
+		Cvar_SetValueQuick(&joy_sensitivity_pitch, MIN_JOY_SENS + frac * (MAX_JOY_SENS - MIN_JOY_SENS));
+		return true;
+
+	case CONTROLLER_EXPONENT_LOOK:
+		Cvar_SetValueQuick(&joy_exponent, MIN_JOY_EXPONENT + frac * (MAX_JOY_EXPONENT - MIN_JOY_EXPONENT));
+		return true;
+
+	case CONTROLLER_EXPONENT_MOVE:
+		Cvar_SetValueQuick(&joy_exponent_move, MIN_JOY_EXPONENT + frac * (MAX_JOY_EXPONENT - MIN_JOY_EXPONENT));
+		return true;
+
+	case CONTROLLER_DEADZONE_LOOK:
+		Cvar_SetValueQuick(&joy_deadzone_look, MIN_STICK_DEADZONE + frac * (MAX_STICK_DEADZONE - MIN_STICK_DEADZONE));
+		return true;
+
+	case CONTROLLER_DEADZONE_MOVE:
+		Cvar_SetValueQuick(&joy_deadzone_move, MIN_STICK_DEADZONE + frac * (MAX_STICK_DEADZONE - MIN_STICK_DEADZONE));
+		return true;
+
+	case CONTROLLER_TRIGGER_THRESH:
+		Cvar_SetValueQuick(&joy_deadzone_trigger, MIN_TRIGGER_DEADZONE + frac * (MAX_TRIGGER_DEADZONE - MIN_TRIGGER_DEADZONE));
+		return true;
+
+	case CONTROLLER_RUMBLE:
+		Cvar_SetValueQuick(&joy_rumble, MIN_RUMBLE + frac * (MAX_RUMBLE - MIN_RUMBLE));
+		return true;
+
+	case CONTROLLER_GYRO_SENSX:
+		Cvar_SetValueQuick(&gyro_yawsensitivity, MIN_GYRO_SENS + frac * (MAX_GYRO_SENS - MIN_GYRO_SENS));
+		return true;
+
+	case CONTROLLER_GYRO_SENSY:
+		Cvar_SetValueQuick(&gyro_pitchsensitivity, MIN_GYRO_SENS + frac * (MAX_GYRO_SENS - MIN_GYRO_SENS));
+		return true;
+
+	case CONTROLLER_GYRO_NOISE:
+		Cvar_SetValueQuick(&gyro_noise_thresh, MIN_GYRO_NOISE_THRESH + frac * (MAX_GYRO_NOISE_THRESH - MIN_GYRO_NOISE_THRESH));
+		return true;
+
+	default:
+		return false;
+	}
+}
+
+static enum calibration_e
+{
+	CALIBRATION_INTRO_TEXT,
+	CALIBRATION_IN_PROGRESS,
+	CALIBRATION_FINISHED,
+} calibration_state;
+
+static double calibration_finished_delay;
+
+static void M_Calibration_Update(void)
+{
+	switch (calibration_state)
+	{
+	case CALIBRATION_IN_PROGRESS:
+		if (!IN_IsCalibratingGyro())
+			calibration_state = CALIBRATION_FINISHED;
+		break;
+
+	case CALIBRATION_FINISHED:
+		calibration_finished_delay -= host_frametime;
+		if (calibration_finished_delay < 0.0)
+			M_Menu_Controller_f();
+		break;
+
+	default:
+		break;
+	}
+}
+
+void M_Menu_Calibration_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_calibration;
+	m_entersound = true;
+	calibration_state = CALIBRATION_INTRO_TEXT;
+	calibration_finished_delay = 1.0;
+
+	IN_UpdateGrabs();
+}
+
+void M_Calibration_Draw(void)
+{
+	char anim[16];
+	int i, progress;
+	int y = 72;
+	qpic_t *p;
+
+	p = Draw_CachePic("gfx/p_option.lmp");
+	M_DrawPic((320 - p->width) / 2, 4, p);
+	M_PrintWhite((320 - 8 * strlen("Gyro Calibration")) / 2, 32, "Gyro Calibration");
+
+	switch (calibration_state)
+	{
+	case CALIBRATION_INTRO_TEXT:
+		M_PrintWhite((320 - 8 * strlen("Place the controller flat")) / 2, y - 8, "Place the controller flat");
+		M_PrintWhite((320 - 8 * strlen("on a stable surface")) / 2, y, "on a stable surface");
+		M_DrawTextBox(160 - 5 * 8, y + 24, 8, 1);
+		M_DrawArrowCursor(160 - 6 * 8, y + 32);
+		M_PrintWhite((320 - 8 * strlen("Continue")) / 2, y + 32, "Continue");
+		break;
+
+	case CALIBRATION_IN_PROGRESS:
+		progress = (int)(IN_GetGyroCalibrationProgress() * (Q_COUNTOF(anim) - 1) + 0.5f);
+		for (i = 0; i < (int)Q_COUNTOF(anim) - 1; i++)
+			anim[i] = i < progress ? (char)('.' | 128) : '.';
+		anim[i] = '\0';
+		M_PrintWhite((320 - 8 * strlen("Calibrating, please wait...")) / 2, y, "Calibrating, please wait...");
+		M_PrintWhite((320 - 8 * strlen(anim)) / 2, y + 16, anim);
+		break;
+
+	case CALIBRATION_FINISHED:
+		M_PrintWhite((320 - 8 * strlen("Calibration complete!")) / 2, y, "Calibration complete!");
+		break;
+	}
+}
+
+void M_Calibration_Key(int key)
+{
+	if (calibration_state != CALIBRATION_INTRO_TEXT)
+		return;
+
+	switch (key)
+	{
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+	case K_MOUSE1:
+		calibration_state = CALIBRATION_IN_PROGRESS;
+		S_LocalSound("misc/menu2.wav");
+		IN_StartGyroCalibration();
+		break;
+
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Menu_Controller_f();
+		break;
+	}
+}
+
+void M_Menu_Controller_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_controller;
+	m_entersound = true;
+	controller_cursor = 0;
+	controller_scroll = 0;
+	controller_slider_grab = false;
+	M_Controller_ClampCursor();
+
+	IN_UpdateGrabs();
+}
+
+void M_Controller_Draw(void)
+{
+	qpic_t *p;
+	float r;
+	int i;
+	int visible_index;
+	int max_visible;
+	int visible_count;
+	const char *title = "Controller Options";
+
+	M_Controller_ClampCursor();
+	visible_count = M_Controller_GetVisibleItemCount();
+	max_visible = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
+
+	p = Draw_CachePic("gfx/p_option.lmp");
+	M_DrawPic((320 - p->width) / 2, 4, p);
+	M_PrintWhite((320 - 8 * strlen(title)) / 2, CONTROLLER_TITLE_Y, title);
+
+	visible_index = 0;
+	for (i = 0; i < CONTROLLER_ITEMS; i++)
+	{
+		int y;
+		int display_index;
+
+		if (!M_Controller_IsOptionVisible(i))
+			continue;
+
+		display_index = visible_index - controller_scroll;
+		visible_index++;
+		if (display_index < 0 || display_index >= CONTROLLER_MAX_VISIBLE)
+			continue;
+
+		y = CONTROLLER_TOP_Y + 8 * display_index;
+
+		M_Print(16, y, M_Controller_GetItemText(i));
+
+		switch (i)
+		{
+		case CONTROLLER_DEVICE:
+			M_Print(CONTROLLER_VALUE_X, y, M_Controller_GetDeviceLabel());
+			break;
+
+		case CONTROLLER_SENSX:
+			r = (joy_sensitivity_yaw.value - MIN_JOY_SENS) / (MAX_JOY_SENS - MIN_JOY_SENS);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_sensitivity_yaw.value, "%.0f");
+			break;
+
+		case CONTROLLER_SENSY:
+			r = (joy_sensitivity_pitch.value - MIN_JOY_SENS) / (MAX_JOY_SENS - MIN_JOY_SENS);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_sensitivity_pitch.value, "%.0f");
+			break;
+
+		case CONTROLLER_INVERT:
+			M_DrawCheckbox(CONTROLLER_VALUE_X, y, joy_invert.value);
+			break;
+
+		case CONTROLLER_LOOK_STICK:
+			M_Print(CONTROLLER_VALUE_X, y, joy_swapmovelook.value ? "Left" : "Right");
+			break;
+
+		case CONTROLLER_EXPONENT_LOOK:
+			r = (joy_exponent.value - MIN_JOY_EXPONENT) / (MAX_JOY_EXPONENT - MIN_JOY_EXPONENT);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_exponent.value, "%.1f");
+			break;
+
+		case CONTROLLER_EXPONENT_MOVE:
+			r = (joy_exponent_move.value - MIN_JOY_EXPONENT) / (MAX_JOY_EXPONENT - MIN_JOY_EXPONENT);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_exponent_move.value, "%.1f");
+			break;
+
+		case CONTROLLER_DEADZONE_LOOK:
+			r = (joy_deadzone_look.value - MIN_STICK_DEADZONE) / (MAX_STICK_DEADZONE - MIN_STICK_DEADZONE);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_deadzone_look.value * 100.f, "%.0f%%");
+			break;
+
+		case CONTROLLER_DEADZONE_MOVE:
+			r = (joy_deadzone_move.value - MIN_STICK_DEADZONE) / (MAX_STICK_DEADZONE - MIN_STICK_DEADZONE);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_deadzone_move.value * 100.f, "%.0f%%");
+			break;
+
+		case CONTROLLER_TRIGGER_THRESH:
+			r = (joy_deadzone_trigger.value - MIN_TRIGGER_DEADZONE) / (MAX_TRIGGER_DEADZONE - MIN_TRIGGER_DEADZONE);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_deadzone_trigger.value * 100.f, "%.0f%%");
+			break;
+
+		case CONTROLLER_TEST:
+			M_Print(CONTROLLER_VALUE_X, y, "...");
+			break;
+
+		case CONTROLLER_RUMBLE:
+			r = (joy_rumble.value - MIN_RUMBLE) / (MAX_RUMBLE - MIN_RUMBLE);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_rumble.value * 100.f, "%.0f%%");
+			break;
+
+		case CONTROLLER_GYRO_ENABLE:
+			M_DrawCheckbox(CONTROLLER_VALUE_X, y, gyro_enable.value);
+			break;
+
+		case CONTROLLER_FLICK_STICK:
+			M_DrawCheckbox(CONTROLLER_VALUE_X, y, joy_flick.value);
+			break;
+
+		case CONTROLLER_GYRO_MODE:
+			M_Print(CONTROLLER_VALUE_X, y, M_Controller_GetGyroModeLabel());
+			break;
+
+		case CONTROLLER_GYRO_AXIS:
+			M_Print(CONTROLLER_VALUE_X, y, M_Controller_GetGyroAxisLabel());
+			break;
+
+		case CONTROLLER_GYRO_SENSX:
+			r = (gyro_yawsensitivity.value - MIN_GYRO_SENS) / (MAX_GYRO_SENS - MIN_GYRO_SENS);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, gyro_yawsensitivity.value, "%.1f");
+			break;
+
+		case CONTROLLER_GYRO_SENSY:
+			r = (gyro_pitchsensitivity.value - MIN_GYRO_SENS) / (MAX_GYRO_SENS - MIN_GYRO_SENS);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, gyro_pitchsensitivity.value, "%.1f");
+			break;
+
+		case CONTROLLER_GYRO_NOISE:
+			r = (gyro_noise_thresh.value - MIN_GYRO_NOISE_THRESH) / (MAX_GYRO_NOISE_THRESH - MIN_GYRO_NOISE_THRESH);
+			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, gyro_noise_thresh.value, "%.1f");
+			break;
+
+		case CONTROLLER_CALIBRATE:
+			M_Print(CONTROLLER_VALUE_X, y, IN_HasGyro() ? "Start" : "Unavailable");
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	if (controller_scroll > 0)
+		M_PrintWhite(304, CONTROLLER_TOP_Y, "^");
+	if (controller_scroll + max_visible < visible_count)
+		M_PrintWhite(304, CONTROLLER_TOP_Y + 8 * (max_visible - 1), "v");
+
+	M_DrawCharacter(CONTROLLER_CURSOR_X, CONTROLLER_TOP_Y + (controller_cursor - controller_scroll) * 8, 12 + ((int)(realtime * 4) & 1));
+}
+
+void M_Controller_Key(int k)
+{
+	int option;
+	int visible_count;
+
+	M_Controller_ClampCursor();
+
+	if (!keydown[K_MOUSE1])
+		controller_slider_grab = false;
+
+	if (controller_slider_grab)
+	{
+		switch (k)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			controller_slider_grab = false;
+			break;
+		}
+		return;
+	}
+
+	switch (k)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Menu_Options_f();
+		break;
+
+	case K_MOUSE1:
+		m_entersound = true;
+		visible_count = M_Controller_GetVisibleItemCount();
+		visible_count = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
+		if (m_mousey >= CONTROLLER_TOP_Y && m_mousey < CONTROLLER_TOP_Y + visible_count * 8)
+		{
+			controller_cursor = controller_scroll + (m_mousey - CONTROLLER_TOP_Y) / 8;
+			M_Controller_ClampCursor();
+			option = M_Controller_CursorToOption(controller_cursor);
+
+			if (M_Controller_IsSlider(option) &&
+				m_mousex >= CONTROLLER_SLIDER_X &&
+				m_mousex <= CONTROLLER_SLIDER_X + SLIDER_RANGE * 8)
+			{
+				controller_slider_grab = true;
+				M_Controller_SetSliderValue(option, M_MouseToSliderFraction(m_mousex - CONTROLLER_SLIDER_X));
+				S_LocalSound("misc/menu3.wav");
+			}
+			else
+			{
+				M_Controller_AdjustSliders(1);
+			}
+		}
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		m_entersound = true;
+		M_Controller_AdjustSliders(1);
+		break;
+
+	case K_UPARROW:
+		visible_count = M_Controller_GetVisibleItemCount();
+		S_LocalSound("misc/menu1.wav");
+		controller_cursor--;
+		if (controller_cursor < 0)
+			controller_cursor = visible_count - 1;
+		M_Controller_ClampCursor();
+		break;
+
+	case K_DOWNARROW:
+		visible_count = M_Controller_GetVisibleItemCount();
+		S_LocalSound("misc/menu1.wav");
+		controller_cursor++;
+		if (controller_cursor >= visible_count)
+			controller_cursor = 0;
+		M_Controller_ClampCursor();
+		break;
+
+	case K_LEFTARROW:
+		M_Controller_AdjustSliders(-1);
+		break;
+
+	case K_MWHEELUP:
+		visible_count = M_Controller_GetVisibleItemCount();
+		if (visible_count > CONTROLLER_MAX_VISIBLE)
+		{
+			S_LocalSound("misc/menu1.wav");
+			controller_cursor--;
+			if (controller_cursor < 0)
+				controller_cursor = visible_count - 1;
+			M_Controller_ClampCursor();
+		}
+		else
+		{
+			M_Controller_AdjustSliders(1);
+		}
+		break;
+
+	case K_MWHEELDOWN:
+		visible_count = M_Controller_GetVisibleItemCount();
+		if (visible_count > CONTROLLER_MAX_VISIBLE)
+		{
+			S_LocalSound("misc/menu1.wav");
+			controller_cursor++;
+			if (controller_cursor >= visible_count)
+				controller_cursor = 0;
+			M_Controller_ClampCursor();
+		}
+		else
+		{
+			M_Controller_AdjustSliders(-1);
+		}
+		break;
+
+	case K_RIGHTARROW:
+		M_Controller_AdjustSliders(1);
+		break;
+
+	case 't':
+	case 'T':
+		M_Menu_Controller_Test_f();
+		break;
+	}
+}
+
+void M_Controller_Mousemove(int cx, int cy)
+{
+	int visible_count;
+
+	M_Controller_ClampCursor();
+
+	if (controller_slider_grab)
+	{
+		int option = M_Controller_CursorToOption(controller_cursor);
+
+		if (!keydown[K_MOUSE1])
+		{
+			controller_slider_grab = false;
+			return;
+		}
+
+		M_Controller_SetSliderValue(option, M_MouseToSliderFraction(cx - CONTROLLER_SLIDER_X));
+		return;
+	}
+
+	visible_count = M_Controller_GetVisibleItemCount();
+	visible_count = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
+	if (cy >= CONTROLLER_TOP_Y && cy < CONTROLLER_TOP_Y + visible_count * 8)
+	{
+		controller_cursor = controller_scroll + (cy - CONTROLLER_TOP_Y) / 8;
+		M_Controller_ClampCursor();
+	}
+}
+
+/*
+==================
+Controller Test Menu
+==================
+*/
+
+static enum m_state_e controller_test_prev = m_controller;
+
+static int M_Controller_Test_AxisPixel(float value, float scale)
+{
+	value = CLAMP(-1.f, value, 1.f);
+	return (int)(value * scale + (value < 0.f ? -0.5f : 0.5f));
+}
+
+static void M_Controller_Test_DrawStickBox(int x, int y, const char *label, float ax, float ay, float deadzone)
+{
+	int marker_x, marker_y;
+	qboolean active;
+
+	M_Print(x + 16, y - 8, label);
+	M_DrawTextBox(x, y, 5, 4);
+
+	marker_x = x + 32 + M_Controller_Test_AxisPixel(ax, 16.f);
+	marker_y = y + 24 + M_Controller_Test_AxisPixel(ay, 16.f);
+	active = (ax * ax + ay * ay) > (deadzone * deadzone);
+
+	if (active)
+		M_PrintWhite(marker_x, marker_y, "+");
+	else
+		M_Print(marker_x, marker_y, "+");
+}
+
+static const char *M_Controller_Test_GamepadTypeLabel(void)
+{
+	switch (IN_GetGamepadType())
+	{
+	case GAMEPAD_XBOX:
+		return "Xbox";
+	case GAMEPAD_PLAYSTATION:
+		return "PlayStation";
+	case GAMEPAD_NINTENDO:
+		return "Nintendo";
+	default:
+		return "Unknown";
+	}
+}
+
+static void M_Controller_Test_AppendHeldKey(char *dst, size_t dstsize, int keynum, const char *label)
+{
+	const char *name;
+
+	if (!keydown[keynum])
+		return;
+
+	name = label ? label : Key_KeynumToFriendlyString(keynum);
+	if (!name || !*name)
+		return;
+
+	if (strlen(dst) + strlen(name) + 2 >= dstsize)
+	{
+		if (!strstr(dst, "..."))
+			q_strlcat(dst, " ...", dstsize);
+		return;
+	}
+
+	q_strlcat(dst, " ", dstsize);
+	q_strlcat(dst, name, dstsize);
+}
+
+static void M_Controller_Test_DrawHeldButtons(int y)
+{
+	char face[38];
+	char other[38];
+
+	q_strlcpy(face, "Face:", sizeof(face));
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_ABUTTON, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_BBUTTON, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_XBUTTON, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_YBUTTON, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_ABUTTON_ALT, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_BBUTTON_ALT, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_XBUTTON_ALT, NULL);
+	M_Controller_Test_AppendHeldKey(face, sizeof(face), K_YBUTTON_ALT, NULL);
+	if (!strcmp(face, "Face:"))
+		q_strlcat(face, " -", sizeof(face));
+
+	q_strlcpy(other, "Other:", sizeof(other));
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_DPAD_UP, "Up");
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_DPAD_DOWN, "Down");
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_DPAD_LEFT, "Left");
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_DPAD_RIGHT, "Right");
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_LSHOULDER, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_RSHOULDER, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_LTRIGGER, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_RTRIGGER, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_LTHUMB, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_RTHUMB, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_START, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_BACK, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_MISC1, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_PADDLE1, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_PADDLE2, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_PADDLE3, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_PADDLE4, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_TOUCHPAD, NULL);
+	if (!strcmp(other, "Other:"))
+		q_strlcat(other, " -", sizeof(other));
+
+	M_Print(16, y, face);
+	M_Print(16, y + 8, other);
+}
+
+static void M_Controller_Test_DrawHints(int y)
+{
+	const char *hint;
+
+	if (IN_HasRumble() && IN_HasGyro())
+		hint = "A Rumble  X Cal";
+	else if (IN_HasRumble())
+		hint = "A Rumble";
+	else if (IN_HasGyro())
+		hint = "X Calibrate";
+	else
+		return;
+
+	M_PrintWhite((320 - 8 * strlen(hint)) / 2, y, hint);
+}
+
+void M_Menu_Controller_Test_f(void)
+{
+	if (m_state != m_controller_test && m_state != m_none)
+		controller_test_prev = m_state;
+	else
+		controller_test_prev = m_controller;
+
+	key_dest = key_menu;
+	m_state = m_controller_test;
+	m_entersound = true;
+
+	IN_UpdateGrabs();
+}
+
+static void M_Controller_Test_Back(void)
+{
+	if (controller_test_prev == m_options)
+		M_Menu_Options_f();
+	else
+		M_Menu_Controller_f();
+}
+
+void M_Controller_Test_Draw(void)
+{
+	qpic_t *p;
+	float movex, movey, lookx, looky, trigleft, trigright;
+	float gyro, r;
+	char value[32];
+	const char *title = "Controller Test";
+
+	IN_GetRawMoveAxis(&movex, &movey);
+	IN_GetRawLookAxis(&lookx, &looky);
+	IN_GetRawTriggerAxis(&trigleft, &trigright);
+
+	p = Draw_CachePic("gfx/p_option.lmp");
+	M_DrawPic((320 - p->width) / 2, 4, p);
+	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
+
+	M_Print(16, 48, "Device");
+	M_Print(88, 48, M_Controller_GetDeviceLabel());
+	M_Print(16, 56, "Type");
+	M_Print(64, 56, M_Controller_Test_GamepadTypeLabel());
+	M_Print(160, 56, "Rumble");
+	M_Print(224, 56, IN_HasRumble() ? "Yes" : "No");
+	M_Print(256, 56, "Gyro");
+	M_Print(296, 56, IN_HasGyro() ? "Yes" : "No");
+
+	if (!IN_HasGamepad())
+	{
+		M_PrintWhite(88, 72, "No active controller");
+		M_Print(32, 96, "Choose a Device in");
+		M_Print(32, 104, "Controller Options first");
+		return;
+	}
+
+	M_Controller_Test_DrawStickBox(24, 72, "Move", movex, movey, joy_deadzone_move.value);
+	M_Controller_Test_DrawStickBox(112, 72, "Look", lookx, looky, joy_deadzone_look.value);
+
+	q_snprintf(value, sizeof(value), "X%+.1f Y%+.1f", movex, movey);
+	M_Print(16, 120, value);
+	q_snprintf(value, sizeof(value), "X%+.1f Y%+.1f", lookx, looky);
+	M_Print(112, 120, value);
+
+	if (trigleft > joy_deadzone_trigger.value)
+		M_PrintWhite(40, 136, "Left Trigger");
+	else
+		M_Print(40, 136, "Left Trigger");
+	M_DrawSlider(176, 136, trigleft, trigleft * 100.f, "%.0f%%");
+	if (trigright > joy_deadzone_trigger.value)
+		M_PrintWhite(40, 144, "Right Trigger");
+	else
+		M_Print(40, 144, "Right Trigger");
+	M_DrawSlider(176, 144, trigright, trigright * 100.f, "%.0f%%");
+
+	if (IN_HasGyro())
+	{
+		gyro = IN_GetRawGyroMagnitude();
+		r = CLAMP(0.f, gyro / 180.f, 1.f);
+		if (gyro > gyro_noise_thresh.value)
+			M_PrintWhite(40, 152, "Gyro");
+		else
+			M_Print(40, 152, "Gyro");
+		M_DrawSlider(176, 152, r, gyro, "%.0f");
+	}
+	else
+	{
+		M_Print(40, 152, "Gyro");
+		M_Print(176, 152, "Unavailable");
+	}
+
+	M_Controller_Test_DrawHeldButtons(168);
+	M_Controller_Test_DrawHints(184);
+}
+
+void M_Controller_Test_Key(int key)
+{
+	switch (key)
+	{
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		if (IN_HasRumble())
+		{
+			S_LocalSound("misc/menu3.wav");
+			IN_TestRumble();
+		}
+		else
+		{
+			S_LocalSound("misc/menu1.wav");
+		}
+		break;
+
+	case K_XBUTTON:
+	case 'c':
+	case 'C':
+		if (IN_HasGyro())
+		{
+			M_Menu_Calibration_f();
+		}
+		else
+		{
+			S_LocalSound("misc/menu1.wav");
+		}
+		break;
+
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Controller_Test_Back();
+		break;
 	}
 }
 
@@ -14110,8 +15458,10 @@ void M_Menu_Quit_f (void)
 
 void M_Quit_Key (int key)
 {
-	if (key == K_ESCAPE)
+	switch (key)
 	{
+	case K_ESCAPE:
+	case K_BBUTTON:
 		if (wasInMenus)
 		{
 			m_state = m_quit_prevstate;
@@ -14123,6 +15473,15 @@ void M_Quit_Key (int key)
 			m_state = m_none;
 			IN_UpdateGrabs();
 		}
+		break;
+
+	case K_ABUTTON:
+		key_dest = key_console;
+		Host_Quit_f ();
+		break;
+
+	default:
+		break;
 	}
 }
 
@@ -19851,6 +21210,8 @@ static struct
 	{"menu_options", M_Menu_Options_f},
 	{"menu_keys", M_Menu_Keys_f},
 	{"menu_mouse", M_Menu_Mouse_f},
+	{"menu_controller", M_Menu_Controller_f},
+	{"menu_controller_test", M_Menu_Controller_Test_f},
 	{"menu_sound", M_Menu_Sound_f},
 	{"menu_game", M_Menu_Game_f},
 	{"menu_hud", M_Menu_HUD_f},
@@ -20149,6 +21510,20 @@ void M_Draw (void)
 		M_Mouse_Draw();
 		break;
 
+	case m_controller:
+		M_Controller_Draw();
+		break;
+
+	case m_controller_test:
+		M_Controller_Test_Draw();
+		break;
+
+	case m_calibration:
+		M_Calibration_Update();
+		if (m_state == m_calibration)
+			M_Calibration_Draw();
+		break;
+
 	case m_colorpicker:
 		M_ColorPicker_Draw();
 		break;
@@ -20263,6 +21638,21 @@ void M_Keydown (int key)
 	if (cls.menu_qcvm.extfuncs.m_draw)	//don't get confused.
 		return;
 
+	if (!bind_grab)
+	{
+		switch (key)
+		{
+		case K_DPAD_UP:		key = K_UPARROW; break;
+		case K_DPAD_DOWN:	key = K_DOWNARROW; break;
+		case K_DPAD_LEFT:	key = K_LEFTARROW; break;
+		case K_DPAD_RIGHT:	key = K_RIGHTARROW; break;
+		case K_ABUTTON:		key = K_ENTER; break;
+		case K_BBUTTON:		key = K_ESCAPE; break;
+		default:
+			break;
+		}
+	}
+
 	switch (m_state)
 	{
 	case m_none:
@@ -20330,6 +21720,18 @@ void M_Keydown (int key)
 
 	case m_mouse:
 		M_Mouse_Key(key);
+		return;
+
+	case m_controller:
+		M_Controller_Key(key);
+		return;
+
+	case m_controller_test:
+		M_Controller_Test_Key(key);
+		return;
+
+	case m_calibration:
+		M_Calibration_Key(key);
 		return;
 
 	case m_colorpicker:
@@ -20508,6 +21910,13 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_mouse:
 		M_Mouse_Mousemove(x, y);
+		return;
+
+	case m_controller:
+		M_Controller_Mousemove(x, y);
+		return;
+
+	case m_controller_test:
 		return;
 
 	case m_colorpicker:

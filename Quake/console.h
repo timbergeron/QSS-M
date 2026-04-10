@@ -76,6 +76,7 @@ void Con_LogCenterPrint (const char *str);
 
 // woods #conselection
 void Con_ForceMouseMove (void);
+void Con_Scroll (int lines);
 void Con_SelectAll (void);
 void Con_MoveSelection (int dir_x, int dir_y);
 qboolean Con_CopySelectionToClipboard (void);

@@ -143,7 +143,6 @@ static void Con_EnterCursorMode(void);
 static void Con_LeaveCursorMode(void);
 
 
-extern qboolean keydown[256];
 extern double host_frametime;
 extern float scr_con_current;
 
@@ -854,7 +853,7 @@ void Con_ForceMouseMove (void)
     int x,y; SDL_GetMouseState(&x,&y); Con_Mousemove(x,y);
 }
 
-static void Con_Scroll(int lines)
+void Con_Scroll(int lines)
 {
     con_backscroll += lines;
     if (con_backscroll < 0) con_backscroll = 0;
@@ -2669,8 +2668,6 @@ void Con_DedicatedTabComplete(char* text, size_t buf_size, int* textlen, int* cu
 	extern size_t key_linepos;
 	extern int edit_line;
 	extern char key_tabhint[MAXCMDLINE];
-	extern qboolean keydown[MAX_KEYS];
-
 	char saved_line[MAXCMDLINE];
 	char saved_tabpartial[MAXCMDLINE];
 	char saved_tabhint[MAXCMDLINE];
@@ -2741,7 +2738,6 @@ void Con_DedicatedTabComplete(char* text, size_t buf_size, int* textlen, int* cu
 }
 
 //defs from elsewhere
-extern qboolean	keydown[256];
 extern	cmd_function_t	*cmd_functions;
 #define	MAX_ALIAS_NAME	32
 typedef struct cmdalias_s

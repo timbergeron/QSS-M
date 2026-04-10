@@ -690,6 +690,7 @@ void S_ClearBuffer (void)
 
 	memset (shm->buffer, clear, shm->samples * shm->samplebits / 8);
 	memset (s_rawsamples, 0, sizeof (s_rawsamples));
+	S_ClearFilteredLevels ();
 
 	SNDDMA_Submit ();
 }

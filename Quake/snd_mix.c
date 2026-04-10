@@ -30,6 +30,8 @@ int		*snd_p, snd_linear_count;
 short		*snd_out;
 
 static int	snd_vol;
+static float snd_lofreqlevel;
+static float snd_hifreqlevel;
 
 qboolean muted = false; // // woods #mute -- adapted from Fitzquake Mark V
 void SCR_Mute_Switch(void); // woods #usermute
@@ -401,6 +403,44 @@ static void S_UnderwaterFilter(int endtime)
 	}
 }
 
+static void S_UpdateLevels (int endtime)
+{
+	int i;
+	float scale;
+
+	if (snd_vol <= 0)
+	{
+		snd_lofreqlevel = 0.f;
+		snd_hifreqlevel = 0.f;
+		return;
+	}
+
+	scale = 0.5f / (snd_vol * 32768.f);
+	for (i = 0; i < endtime; i++)
+	{
+		float sample = (abs (paintbuffer[i].left) + abs (paintbuffer[i].right)) * scale;
+
+		snd_lofreqlevel = LERP (snd_lofreqlevel, sample, 1e-3f);
+		snd_hifreqlevel = LERP (snd_hifreqlevel, sample, 1e-2f);
+	}
+}
+
+float S_GetLoFreqLevel (void)
+{
+	return snd_lofreqlevel;
+}
+
+float S_GetHiFreqLevel (void)
+{
+	return snd_hifreqlevel;
+}
+
+void S_ClearFilteredLevels (void)
+{
+	snd_lofreqlevel = 0.f;
+	snd_hifreqlevel = 0.f;
+}
+
 /*
 ===============================================================================
 
@@ -502,6 +542,7 @@ void S_PaintChannels (int endtime)
 		}
 
 		S_UnderwaterFilter(end - paintedtime); // woods #waterfx (ironwail)
+		S_UpdateLevels(end - paintedtime);
 
 	// paint in the music
 		if (s_rawend >= paintedtime)

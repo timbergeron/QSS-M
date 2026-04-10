@@ -24,6 +24,53 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define _QUAKE_KEYS_H
 
 //
+// gamepad button definitions
+//
+#define GAMEPAD_KEY_LIST(def) \
+	def(K_START,         243, "MENU",             "OPTIONS",           "+") \
+	def(K_BACK,          244, "VIEW",             "CREATE",            "-") \
+	def(K_LTHUMB,        245, "LS",               "L3",                "LSB") \
+	def(K_RTHUMB,        246, "RS",               "R3",                "RSB") \
+	def(K_LSHOULDER,     247, "LB",               "L1",                "L") \
+	def(K_RSHOULDER,     248, "RB",               "R1",                "R") \
+	def(K_DPAD_UP,       249, "DPAD UP",          "DPAD UP",           "DPAD UP") \
+	def(K_DPAD_DOWN,     250, "DPAD DOWN",        "DPAD DOWN",         "DPAD DOWN") \
+	def(K_DPAD_LEFT,     251, "DPAD LEFT",        "DPAD LEFT",         "DPAD LEFT") \
+	def(K_DPAD_RIGHT,    252, "DPAD RIGHT",       "DPAD RIGHT",        "DPAD RIGHT") \
+	def(K_ABUTTON,       253, "A",                "X",                 "A") \
+	def(K_BBUTTON,       254, "B",                "CIRCLE",            "B") \
+	def(K_XBUTTON,       255, "X",                "SQUARE",            "X") \
+	def(K_YBUTTON,       256, "Y",                "TRIANGLE",          "Y") \
+	def(K_LTRIGGER,      257, "LT",               "L2",                "ZL") \
+	def(K_RTRIGGER,      258, "RT",               "R2",                "ZR") \
+	def(K_MISC1,         259, NULL,               "MUTE",              "CAPTURE") \
+	def(K_PADDLE1,       260, "P1 PADDLE",        NULL,                NULL) \
+	def(K_PADDLE2,       261, "P3 PADDLE",        NULL,                NULL) \
+	def(K_PADDLE3,       262, "P2 PADDLE",        NULL,                NULL) \
+	def(K_PADDLE4,       263, "P4 PADDLE",        NULL,                NULL) \
+	def(K_TOUCHPAD,      264, NULL,               "TOUCHPAD",          NULL) \
+	def(K_LTHUMB_ALT,    265, "LS (alt)",         "L3 (alt)",          "LSB (alt)") \
+	def(K_RTHUMB_ALT,    266, "RS (alt)",         "R3 (alt)",          "RSB (alt)") \
+	def(K_LSHOULDER_ALT, 267, "LB (alt)",         "L1 (alt)",          "L (alt)") \
+	def(K_RSHOULDER_ALT, 268, "RB (alt)",         "R1 (alt)",          "R (alt)") \
+	def(K_DPAD_UP_ALT,   269, "DPAD UP (alt)",    "DPAD UP (alt)",     "DPAD UP (alt)") \
+	def(K_DPAD_DOWN_ALT, 270, "DPAD DOWN (alt)",  "DPAD DOWN (alt)",   "DPAD DOWN (alt)") \
+	def(K_DPAD_LEFT_ALT, 271, "DPAD LEFT (alt)",  "DPAD LEFT (alt)",   "DPAD LEFT (alt)") \
+	def(K_DPAD_RIGHT_ALT,272, "DPAD RIGHT (alt)", "DPAD RIGHT (alt)",  "DPAD RIGHT (alt)") \
+	def(K_ABUTTON_ALT,   273, "A (alt)",          "X (alt)",           "A (alt)") \
+	def(K_BBUTTON_ALT,   274, "B (alt)",          "CIRCLE (alt)",      "B (alt)") \
+	def(K_XBUTTON_ALT,   275, "X (alt)",          "SQUARE (alt)",      "X (alt)") \
+	def(K_YBUTTON_ALT,   276, "Y (alt)",          "TRIANGLE (alt)",    "Y (alt)") \
+	def(K_LTRIGGER_ALT,  277, "LT (alt)",         "L2 (alt)",          "ZL (alt)") \
+	def(K_RTRIGGER_ALT,  278, "RT (alt)",         "R2 (alt)",          "ZR (alt)") \
+	def(K_MISC1_ALT,     279, NULL,               "MUTE (alt)",        "CAPTURE (alt)") \
+	def(K_PADDLE1_ALT,   280, "P1 PADDLE (alt)",  NULL,                NULL) \
+	def(K_PADDLE2_ALT,   281, "P3 PADDLE (alt)",  NULL,                NULL) \
+	def(K_PADDLE3_ALT,   282, "P2 PADDLE (alt)",  NULL,                NULL) \
+	def(K_PADDLE4_ALT,   283, "P4 PADDLE (alt)",  NULL,                NULL) \
+	def(K_TOUCHPAD_ALT,  284, NULL,               "TOUCHPAD (alt)",    NULL)
+
+//
 // these are the key numbers that should be passed to Key_Event
 //
 #define	K_TAB			9
@@ -82,8 +129,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define	K_COMMAND		170
 #define K_PRINTSCREEN	174 // woods #printscreen
-
-#define K_PAUSE			255
 
 //
 // mouse buttons generate virtual keys
@@ -145,18 +190,18 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define K_MOUSE5		242
 
 // SDL2 game controller keys
-#define K_LTHUMB		243
-#define K_RTHUMB		244
-#define K_LSHOULDER		245
-#define K_RSHOULDER		246
-#define K_ABUTTON		247
-#define K_BBUTTON		248
-#define K_XBUTTON		249
-#define K_YBUTTON		250
-#define K_LTRIGGER		251
-#define K_RTRIGGER		252
+#define GAMEPAD_KEYCODE_DEFINE(keycode, value, xboxname, psname, nintendoname) enum { keycode = value };
+GAMEPAD_KEY_LIST(GAMEPAD_KEYCODE_DEFINE)
+#undef GAMEPAD_KEYCODE_DEFINE
 
-#define	MAX_KEYS		256
+#define K_GAMEPAD_BEGIN		K_START
+#define K_GAMEPAD_END		(K_TOUCHPAD_ALT + 1)
+#define K_GAMEPAD_COUNT		(K_GAMEPAD_END - K_GAMEPAD_BEGIN)
+COMPILE_TIME_ASSERT(gamepad_end_correct, K_TOUCHPAD_ALT + 1 == K_GAMEPAD_END);
+
+#define K_PAUSE			K_GAMEPAD_END
+
+#define	MAX_KEYS		320
 #define MAX_BINDMAPS	8
 
 #define	MAXCMDLINE	256
@@ -165,8 +210,27 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 typedef enum {key_game, key_console, key_message, key_menu} keydest_t;
 
+typedef enum
+{
+	KD_NONE = -1,
+	KD_KEYBOARD,
+	KD_MOUSE,
+	KD_GAMEPAD,
+} keydevice_t;
+
+typedef enum
+{
+	KDM_NONE = 0,
+	KDM_KEYBOARD = 1 << KD_KEYBOARD,
+	KDM_MOUSE = 1 << KD_MOUSE,
+	KDM_GAMEPAD = 1 << KD_GAMEPAD,
+	KDM_KEYBOARD_AND_MOUSE = KDM_KEYBOARD | KDM_MOUSE,
+	KDM_ANY = -1,
+} keydevicemask_t;
+
 extern keydest_t	key_dest;
 extern	char	*keybindings[MAX_BINDMAPS][MAX_KEYS];
+extern	qboolean	keydown[MAX_KEYS];
 
 #define		CMDLINES 64
 
@@ -194,7 +258,13 @@ void Char_Event (int key);
 qboolean Key_TextEntry (void);
 
 void Key_SetBinding (int keynum, const char *binding, int bindmap);
+keydevice_t Key_GetDeviceForKeynum (int keynum);
+keydevicemask_t Key_GetDeviceMaskForKeynum (int keynum);
+int Key_GetKeysForCommand (const char *command, int *keys, int maxkeys, keydevicemask_t devmask);
+qboolean Key_IsKeyGamepadAltModifier (int keynum);
+qboolean Key_GetGamepadAltModifierState (void);
 const char *Key_KeynumToString (int keynum);
+const char *Key_KeynumToFriendlyString (int keynum);
 int Key_StringToKeynum (const char *str);
 int Key_NativeToQC(int code);
 int Key_QCToNative(int code);	//warning: will return negative values for unknown qc keys.

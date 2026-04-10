@@ -172,6 +172,7 @@ void V_StartPitchDrift (void)
 		return;		// something else is keeping it from drifting
 	}
 #endif
+	cl.lastcenterstart = cl.time;
 	if (cl.nodrift || !cl.pitchvel)
 	{
 		cl.pitchvel = v_centerspeed.value;

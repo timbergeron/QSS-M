@@ -34,6 +34,44 @@ void IN_Commands (void);
 // mouse moved by dx and dy pixels
 void IN_MouseMotion(int dx, int dy, int wx, int wy);
 
+typedef enum gyromode_t
+{
+	GYRO_BUTTON_IGNORED,
+	GYRO_BUTTON_ENABLES,
+	GYRO_BUTTON_DISABLES,
+	GYRO_BUTTON_INVERTS_DIR,
+
+	GYRO_MODE_COUNT,
+} gyromode_t;
+
+typedef enum gamepadtype_t
+{
+	GAMEPAD_NONE,
+	GAMEPAD_XBOX,
+	GAMEPAD_PLAYSTATION,
+	GAMEPAD_NINTENDO,
+} gamepadtype_t;
+
+qboolean IN_HasGyro (void);
+float IN_GetRawGyroMagnitude (void);
+void IN_StartGyroCalibration (void);
+qboolean IN_IsCalibratingGyro (void);
+float IN_GetGyroCalibrationProgress (void);
+
+float IN_GetRawLookMagnitude (void);
+float IN_GetRawMoveMagnitude (void);
+float IN_GetRawTriggerMagnitude (void);
+void IN_GetRawLookAxis (float *x, float *y);
+void IN_GetRawMoveAxis (float *x, float *y);
+void IN_GetRawTriggerAxis (float *left, float *right);
+
+qboolean IN_HasRumble (void);
+void IN_TestRumble (void);
+qboolean IN_HasGamepad (void);
+const char *IN_GetGamepadName (void);
+gamepadtype_t IN_GetGamepadType (void);
+int IN_GetLastActiveDeviceType (void);
+
 
 void IN_SendKeyEvents (void);
 // used as a callback for Sys_SendKeyEvents() by some drivers

@@ -267,6 +267,7 @@ typedef struct
 	qboolean	nodrift;
 	float		driftmove;
 	double		laststop;
+	double		lastcenterstart;
 
 	float		crouch;			// local amount for smoothing stepups
 

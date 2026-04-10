@@ -507,7 +507,6 @@ CL_UpdateDemoSpeed
 */
 static void CL_UpdateDemoSpeed(void)
 {
-	extern qboolean keydown[256];
 	int adjust, singleframe;
 	const float normal_speed = cls.basedemospeed * !cls.demopaused;
 	const qboolean jump_back_down = keydown['j'];

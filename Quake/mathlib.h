@@ -34,6 +34,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define M_PI_DIV_180	(M_PI / 180.0) //johnfitz
 #define DEG2RAD(a)		((a) * M_PI_DIV_180)
+#define RAD2DEG(a)		((a) * (180.0 / M_PI))
 
 struct mplane_s;
 
@@ -90,6 +91,8 @@ float VectorNormalize (vec3_t v);		// returns vector length
 void VectorInverse (vec3_t v);
 void VectorScale (const vec3_t in, vec_t scale, vec3_t out);
 int Q_log2(int val);
+float GetFraction (float val, float minval, float maxval);
+float GetClampedFraction (float val, float minval, float maxval);
 
 void R_ConcatRotations (float in1[3][3], float in2[3][3], float out[3][3]);
 void R_ConcatTransforms (float in1[3][4], float in2[3][4], float out[3][4]);
@@ -112,6 +115,8 @@ int GreatestCommonDivisor (int i1, int i2);
 void AngleVectors (vec3_t angles, vec3_t forward, vec3_t right, vec3_t up);
 int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, struct mplane_s *plane);
 float	anglemod(float a);
+float NormalizeAngle (float degrees);
+float AngleDifference (float dega, float degb);
 qboolean RayVsBox (const vec3_t org, const vec3_t delta, const vec3_t mins, const vec3_t maxs, float *frac);
 
 

@@ -155,6 +155,26 @@ float	anglemod(float a)
 	return a;
 }
 
+float NormalizeAngle (float degrees)
+{
+	float normalized = fmodf (degrees, 360.f);
+
+	if (normalized < 0.f)
+		normalized += 360.f;
+
+	return normalized;
+}
+
+float AngleDifference (float dega, float degb)
+{
+	float delta = NormalizeAngle (dega - degb);
+
+	if (delta > 180.f)
+		delta -= 360.f;
+
+	return delta;
+}
+
 
 /*
 ==================
@@ -440,6 +460,17 @@ int Q_log2(int val)
 	while (val>>=1)
 		answer++;
 	return answer;
+}
+
+float GetFraction (float val, float minval, float maxval)
+{
+	return (val - minval) / (maxval - minval);
+}
+
+float GetClampedFraction (float val, float minval, float maxval)
+{
+	val = GetFraction (val, minval, maxval);
+	return CLAMP (0.f, val, 1.f);
 }
 
 
