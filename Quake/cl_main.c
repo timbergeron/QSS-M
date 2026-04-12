@@ -157,6 +157,26 @@ static void CL_ClearTypingState(void)
 		Info_SetKey(cl.scores[i].userinfo, sizeof(cl.scores[i].userinfo), "chat", "");
 }
 
+static const char cl_empty_userinfo[] = "";
+
+const char *CL_GetSafeUserinfoForClientSlot(int playernum)
+{
+	if (!cl.scores || cl.maxclients <= 0 || playernum < 0 || playernum >= cl.maxclients)
+		return cl_empty_userinfo;
+
+	return cl.scores[playernum].userinfo;
+}
+
+const char *CL_GetSafeViewEntityUserinfo(void)
+{
+	return CL_GetSafeUserinfoForClientSlot(cl.viewentity - 1);
+}
+
+const char *CL_GetSafeRealViewEntityUserinfo(void)
+{
+	return CL_GetSafeUserinfoForClientSlot(cl.realviewentity - 1);
+}
+
 void CL_ClearTrailStates(void)
 {
 	int i;
@@ -1455,8 +1475,9 @@ static qboolean CL_DemoEyesIsObserving(void)
 		return false;
 	
 	char buf1[32], buf2[32];
-	const char *obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf1, sizeof(buf1));
-	const char *star_obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf2, sizeof(buf2));
+	const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
+	const char *obs = Info_GetKey(userinfo, "observer", buf1, sizeof(buf1));
+	const char *star_obs = Info_GetKey(userinfo, "*observer", buf2, sizeof(buf2));
 	
 	if (!strcmp(obs, "eyecam") || !strcmp(obs, "chase") || !strcmp(obs, "fly") || !strcmp(obs, "walk") ||
 	    !strcmp(star_obs, "eyecam") || !strcmp(star_obs, "chase") || !strcmp(star_obs, "fly") || !strcmp(star_obs, "walk"))

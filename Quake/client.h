@@ -585,6 +585,9 @@ void CL_FreeState(void);
 void CL_ClearState (void);
 void CL_ClearTrailStates(void);
 void CL_PrintWrongGameDirWarning(void);
+const char *CL_GetSafeUserinfoForClientSlot(int playernum);
+const char *CL_GetSafeViewEntityUserinfo(void);
+const char *CL_GetSafeRealViewEntityUserinfo(void);
 
 //
 // cl_demo.c

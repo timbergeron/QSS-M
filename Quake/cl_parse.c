@@ -2588,17 +2588,18 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 
 	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
 	{// am I colored up?
+		const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
 
 		char buf[10];
 		char buf2[32];
 		char buf3[10];
 		char buf4[10];
 		char buf5[10];
-		observer = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf)); // userinfo
-		star_observer = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf5, sizeof(buf5));  // userinfo
-		observing = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observing", buf2, sizeof(buf2)); // userinfo
-		mode = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "mode", buf3, sizeof(buf3)); // userinfo
-		spectator = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*spectator", buf4, sizeof(buf4)); // woods #autovote
+		observer = Info_GetKey(userinfo, "observer", buf, sizeof(buf)); // userinfo
+		star_observer = Info_GetKey(userinfo, "*observer", buf5, sizeof(buf5));  // userinfo
+		observing = Info_GetKey(userinfo, "observing", buf2, sizeof(buf2)); // userinfo
+		mode = Info_GetKey(userinfo, "mode", buf3, sizeof(buf3)); // userinfo
+		spectator = Info_GetKey(userinfo, "*spectator", buf4, sizeof(buf4)); // woods #autovote
 	}
 
 	if (cl.modtype == 4) // no *obs key

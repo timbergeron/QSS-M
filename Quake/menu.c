@@ -3639,8 +3639,9 @@ void M_Setup_Draw (void)
 		char buf2[15];
 		const char* obs;
 		const char* star_obs;
-		obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf));
-		star_obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf2, sizeof(buf2));
+		const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
+		obs = Info_GetKey(userinfo, "observer", buf, sizeof(buf));
+		star_obs = Info_GetKey(userinfo, "*observer", buf2, sizeof(buf2));
 
 		if (!strcmp(obs, "fly") || !strcmp(star_obs, "fly")) // woods #3rdperson
 			flyme = true;

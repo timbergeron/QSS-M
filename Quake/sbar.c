@@ -718,7 +718,7 @@ qboolean Sbar_ShouldSortByTeam(void)
 		if (cl.realviewentity < 1 || cl.realviewentity > MAX_SCOREBOARD) {
 			return false;
 		}
-		info_source = cl.scores[cl.realviewentity - 1].userinfo;
+		info_source = CL_GetSafeRealViewEntityUserinfo();
 	}
 	else {
 		info_source = cl.serverinfo;
@@ -1795,9 +1795,9 @@ static void UpdatePowerupTime (int current_items, int previous_items, int item_f
 	}
 
 void Sbar_PowerupChanged (void)
-	{
+{
 	int playernum = cl.viewentity - 1;
-	if (playernum < 0 || playernum >= MAX_SCOREBOARD)
+	if (!cl.scores || playernum < 0 || playernum >= cl.maxclients || playernum >= MAX_SCOREBOARD)
 		return;
 
 	const float TIME_WINDOW = 20.0f / 72.0f;
@@ -1853,7 +1853,7 @@ static void Draw_PowerupOverlays(int x, int y)
 	float base_alpha = 0.4;
 
 	int playernum = cl.viewentity - 1;
-	if (playernum < 0 || playernum >= MAX_SCOREBOARD)
+	if (!cl.scores || playernum < 0 || playernum >= cl.maxclients || playernum >= MAX_SCOREBOARD)
 		return;
 
 	if (cl.modtype == 1 && cl.notobserver)
@@ -1932,6 +1932,9 @@ Sbar_DrawFace_Team -- woods to color face in sbar when on a match team #teamface
 void Sbar_DrawFace_Team (void)
 {
 	if (!scr_sbarfacecolor.value)
+		return;
+
+	if (!cl.scores || cl.viewentity < 1 || cl.viewentity > cl.maxclients)
 		return;
 	
 	int color;
@@ -2073,8 +2076,10 @@ void Sbar_Draw (void)
 
 	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected)) // woods #obspent
 	{
-		obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf));
-		star_obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf2, sizeof(buf2));
+		const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
+
+		obs = Info_GetKey(userinfo, "observer", buf, sizeof(buf));
+		star_obs = Info_GetKey(userinfo, "*observer", buf2, sizeof(buf2));
 	}
 
 	if (obs || star_obs) // woods #obspent

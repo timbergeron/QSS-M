@@ -5883,7 +5883,7 @@ void PF_cl_playerkey_internal(int player, const char *key, qboolean retfloat)
 	const char *ret = buf;
 	if (player < 0 && player >= -scoreboardlines)
 		player = fragsort[-1-player];
-	if (player < 0 || player >= MAX_SCOREBOARD)
+	if (!cl.scores || player < 0 || player >= cl.maxclients || player >= MAX_SCOREBOARD)
 		ret = NULL;
 	else if (!strcmp(key, "viewentity"))
 		q_snprintf(buf, sizeof(buf), "%i", player+1);	//hack for DP compat. always returned even when the slot is empty (so long as its valid).

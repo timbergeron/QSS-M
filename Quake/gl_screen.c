@@ -567,8 +567,9 @@ void SCR_DrawCenterString (void) //actually do the drawing
 	char buf2[15];
 	const char* realobs;
 	const char* star_realobs;
-	realobs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf));
-	star_realobs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf2, sizeof(buf2));
+	const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
+	realobs = Info_GetKey(userinfo, "observer", buf, sizeof(buf));
+	star_realobs = Info_GetKey(userinfo, "*observer", buf2, sizeof(buf2));
 
 	if (!scr_obscenterprint.value && !cameras && !countdown && !qeintermission && !crxintermission &&
 		((cl.modtype == 1 || cl.modtype == 4) &&
@@ -1637,7 +1638,7 @@ void SCR_DrawMatchClock(void)
 			{
 				char buf[10];
 				const char* uimt;
-				uimt = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "matchtime", buf, sizeof(buf)); // userinfo (qecrx)
+				uimt = Info_GetKey(CL_GetSafeRealViewEntityUserinfo(), "matchtime", buf, sizeof(buf)); // userinfo (qecrx)
 				tl = atoi(uimt);
 			}
 			else
@@ -2003,6 +2004,7 @@ static void SCR_DrawPositiveDiffString(int x, int y, const char* str) // woods #
 static qboolean SCR_GetMatchHudInfoKey(const char *key, char *value, size_t value_size)
 {
 	const char *info_val;
+	const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
 	char key_buf[32];
 
 	if (!value_size)
@@ -2010,11 +2012,9 @@ static qboolean SCR_GetMatchHudInfoKey(const char *key, char *value, size_t valu
 
 	value[0] = '\0';
 
-	if (cl.realviewentity >= 1 &&
-		cl.realviewentity <= cl.maxclients &&
-		cl.scores[cl.realviewentity - 1].userinfo[0])
+	if (userinfo[0])
 	{
-		info_val = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, key, key_buf, sizeof(key_buf));
+		info_val = Info_GetKey(userinfo, key, key_buf, sizeof(key_buf));
 		if (info_val && info_val[0])
 		{
 			q_strlcpy(value, info_val, value_size);
@@ -2308,7 +2308,7 @@ void SCR_DrawMatchScores(void)
 		use_demo_calculation = true;
 			}
 
-	uiplaymode = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "mode", buf, sizeof(buf)); // serverinfo
+	uiplaymode = Info_GetKey(CL_GetSafeRealViewEntityUserinfo(), "mode", buf, sizeof(buf)); // serverinfo
 	siplaymode = Info_GetKey(cl.serverinfo, "playmode", buf2, sizeof(buf2)); // userinfo (qecrx)
 
 	if (scr_match_hud.value && cl.gametype == GAME_DEATHMATCH)   // woods for console var off and on
@@ -2322,15 +2322,16 @@ void SCR_DrawMatchScores(void)
 	// woods #headhunters -- draw head count below clock
 	if (cl.modetype == 8 && scr_match_hud.value && cl.gametype == GAME_DEATHMATCH)
 	{
+		const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
 		char heads_buf[16], hval_buf[16];
 		const char *heads_str, *hval_str;
 		char num[12], hval[12];
 		int heads, headvalue, nlen, hlen;
 
-		heads_str = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "heads", heads_buf, sizeof(heads_buf));
+		heads_str = Info_GetKey(userinfo, "heads", heads_buf, sizeof(heads_buf));
 		heads = atoi(heads_str);
 
-		hval_str = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "headvalue", hval_buf, sizeof(hval_buf));
+		hval_str = Info_GetKey(userinfo, "headvalue", hval_buf, sizeof(hval_buf));
 		headvalue = atoi(hval_str);
 
 		sprintf(num, "%d", heads);
@@ -2497,8 +2498,10 @@ void SCR_ShowObsFrags(void)
 
 	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
 	{
-		obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf));
-		star_obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf2, sizeof(buf2));
+		const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
+
+		obs = Info_GetKey(userinfo, "observer", buf, sizeof(buf));
+		star_obs = Info_GetKey(userinfo, "*observer", buf2, sizeof(buf2));
 
 		if ((!strcmp(cl.observer, "y") && (cl.modtype >= 2)) ||
 			scr_showscores.value ||
@@ -3600,9 +3603,10 @@ void SCR_Observing(void)
 		const char* star_obs;
 		const char* observing_ptr;
 		int color, y;
-		obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf2, sizeof(buf2));
-		star_obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf4, sizeof(buf4));
-		observing_ptr = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observing", buf3, sizeof(buf3));
+		const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
+		obs = Info_GetKey(userinfo, "observer", buf2, sizeof(buf2));
+		star_obs = Info_GetKey(userinfo, "*observer", buf4, sizeof(buf4));
+		observing_ptr = Info_GetKey(userinfo, "observing", buf3, sizeof(buf3));
 
 		Q_strncpy(original_observing_name, observing_ptr, sizeof(original_observing_name) - 1);
 		original_observing_name[sizeof(original_observing_name) - 1] = '\0';
@@ -4593,8 +4597,10 @@ void SCR_SetupAutoID(void)
 
 	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected) && !cls.demoplayback)
 	{
-		obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf));
-		star_obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf4, sizeof(buf4));
+		const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
+
+		obs = Info_GetKey(userinfo, "observer", buf, sizeof(buf));
+		star_obs = Info_GetKey(userinfo, "*observer", buf4, sizeof(buf4));
 		playmode = Info_GetKey(cl.serverinfo, "playmode", buf2, sizeof(buf2));
 		mode = Info_GetKey(cl.serverinfo, "mode", buf3, sizeof(buf3));
 
@@ -4684,7 +4690,7 @@ void SCR_DrawAutoID(void)
 
 	const char* observing = "null";
 	char buf[16];
-	observing = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observing", buf, sizeof(buf)); // userinfo
+	observing = Info_GetKey(CL_GetSafeRealViewEntityUserinfo(), "observing", buf, sizeof(buf)); // userinfo
 
 	for (i = 0; i < autoid_count; i++)
 	{

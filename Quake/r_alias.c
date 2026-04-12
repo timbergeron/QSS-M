@@ -899,8 +899,8 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 		if (observer_viewent < 1 || observer_viewent > cl.maxclients)
 			return false;
 
-		obs = Info_GetKey(cl.scores[observer_viewent - 1].userinfo, "observer", obs_buf, sizeof(obs_buf));
-		star_obs = Info_GetKey(cl.scores[observer_viewent - 1].userinfo, "*observer", star_obs_buf, sizeof(star_obs_buf));
+		obs = Info_GetKey(CL_GetSafeUserinfoForClientSlot(observer_viewent - 1), "observer", obs_buf, sizeof(obs_buf));
+		star_obs = Info_GetKey(CL_GetSafeUserinfoForClientSlot(observer_viewent - 1), "*observer", star_obs_buf, sizeof(star_obs_buf));
 		is_observer_slot = ((obs[0] && q_strcasecmp(obs, "off")) ||
 			(star_obs[0] && q_strcasecmp(star_obs, "off")));
 	}
@@ -1193,9 +1193,10 @@ static qboolean R_IsOutlineBoundsFadeEnabled(void)
 	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected) &&
 		cl.realviewentity >= 1 && cl.realviewentity <= cl.maxclients)
 	{
+		const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
 		char buf[16], buf2[16];
-		const char* obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf));
-		const char* star_obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf2, sizeof(buf2));
+		const char* obs = Info_GetKey(userinfo, "observer", buf, sizeof(buf));
+		const char* star_obs = Info_GetKey(userinfo, "*observer", buf2, sizeof(buf2));
 		if (!strcmp(obs, "fly") || !strcmp(star_obs, "fly"))
 			return true;
 	}
@@ -1291,11 +1292,12 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 			allow_outline = true;
 		else if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
 		{
+			const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
 			char buf[16], buf2[16];
 			const char* obs, * star_obs;
 
-			obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "observer", buf, sizeof(buf));
-			star_obs = Info_GetKey(cl.scores[cl.realviewentity - 1].userinfo, "*observer", buf2, sizeof(buf2));
+			obs = Info_GetKey(userinfo, "observer", buf, sizeof(buf));
+			star_obs = Info_GetKey(userinfo, "*observer", buf2, sizeof(buf2));
 
 			if (cl.modtype == 1 || cl.modtype == 4) // mods with observer keys
 			{
@@ -1710,7 +1712,7 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 		qboolean isTeamColorSet = strcmp(gl_teamcolor.string, "") != 0;
 		qboolean isEnemyColorSet = strcmp(gl_enemycolor.string, "") != 0;
 		qboolean isSamePants = sb->pants.basic == cl.scores[cl.viewentity - 1].pants.basic;
-		qboolean isSelf = sb->userinfo == cl.scores[cl.viewentity - 1].userinfo;
+		qboolean isSelf = sb->userinfo == CL_GetSafeViewEntityUserinfo();
 
 		if ((isTeamColorSet || isEnemyColorSet) && !cls.demoplayback && !isSelf) // woods #enemycolors, do we run it?
 		{
@@ -2836,7 +2838,7 @@ void R_DrawAliasModel (entity_t *e)
 					qboolean isTeamColorSet = strcmp(gl_teamcolor.string, "") != 0;
 					qboolean isEnemyColorSet = strcmp(gl_enemycolor.string, "") != 0;
 					qboolean isSamePants = sb->pants.basic == cl.scores[cl.viewentity - 1].pants.basic;
-					qboolean isSelf = sb->userinfo == cl.scores[cl.viewentity - 1].userinfo;
+					qboolean isSelf = sb->userinfo == CL_GetSafeViewEntityUserinfo();
 
 
                 if ((isTeamColorSet || isEnemyColorSet) && !cls.demoplayback && !isSelf && key_dest != key_menu) // woods #enemycolors, do we run it?
