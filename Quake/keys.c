@@ -377,10 +377,10 @@ int Key_NativeToQC(int code)
 	case K_AUX31:			return 814;
 	case K_AUX32:			return 815;
 
-//	case K_GP_DPAD_UP:		return 816;
-//	case K_GP_DPAD_DOWN:	return 817;
-//	case K_GP_DPAD_LEFT:	return 818;
-//	case K_GP_DPAD_RIGHT:	return 819;
+	case K_DPAD_UP:			return 816;
+	case K_DPAD_DOWN:		return 817;
+	case K_DPAD_LEFT:		return 818;
+	case K_DPAD_RIGHT:		return 819;
 //	case K_GP_START:		return 820;
 //	case K_GP_BACK:			return 821;
 	case K_LTHUMB:			return 822;
@@ -393,6 +393,32 @@ int Key_NativeToQC(int code)
 	case K_YBUTTON:			return 829;
 	case K_LTRIGGER:		return 830;
 	case K_RTRIGGER:		return 831;
+	case K_MISC1:			return 840;
+	case K_PADDLE1:			return 841;
+	case K_PADDLE2:			return 842;
+	case K_PADDLE3:			return 843;
+	case K_PADDLE4:			return 844;
+	case K_TOUCHPAD:		return 845;
+	case K_LTHUMB_ALT:		return 846;
+	case K_RTHUMB_ALT:		return 847;
+	case K_LSHOULDER_ALT:	return 848;
+	case K_RSHOULDER_ALT:	return 849;
+	case K_DPAD_UP_ALT:		return 850;
+	case K_DPAD_DOWN_ALT:	return 851;
+	case K_DPAD_LEFT_ALT:	return 852;
+	case K_DPAD_RIGHT_ALT:	return 853;
+	case K_ABUTTON_ALT:		return 854;
+	case K_BBUTTON_ALT:		return 855;
+	case K_XBUTTON_ALT:		return 856;
+	case K_YBUTTON_ALT:		return 857;
+	case K_LTRIGGER_ALT:	return 858;
+	case K_RTRIGGER_ALT:	return 859;
+	case K_MISC1_ALT:		return 860;
+	case K_PADDLE1_ALT:		return 861;
+	case K_PADDLE2_ALT:		return 862;
+	case K_PADDLE3_ALT:		return 863;
+	case K_PADDLE4_ALT:		return 864;
+	case K_TOUCHPAD_ALT:	return 865;
 
 	default:
 		//ascii chars are mapped as-is (yes this means upper-case keys don't get used).
@@ -528,10 +554,10 @@ int Key_QCToNative(int code)
 	case 814:		return K_AUX31;
 	case 815:		return K_AUX32;
 
-//	case 816:		return K_GP_DPAD_UP;
-//	case 817:		return K_GP_DPAD_DOWN;
-//	case 818:		return K_GP_DPAD_LEFT;
-//	case 819:		return K_GP_DPAD_RIGHT;
+	case 816:		return K_DPAD_UP;
+	case 817:		return K_DPAD_DOWN;
+	case 818:		return K_DPAD_LEFT;
+	case 819:		return K_DPAD_RIGHT;
 //	case 820:		return K_GP_START;
 //	case 821:		return K_GP_BACK;
 	case 822:		return K_LTHUMB;
@@ -544,6 +570,32 @@ int Key_QCToNative(int code)
 	case 829:		return K_YBUTTON;
 	case 830:		return K_LTRIGGER;
 	case 831:		return K_RTRIGGER;
+	case 840:		return K_MISC1;
+	case 841:		return K_PADDLE1;
+	case 842:		return K_PADDLE2;
+	case 843:		return K_PADDLE3;
+	case 844:		return K_PADDLE4;
+	case 845:		return K_TOUCHPAD;
+	case 846:		return K_LTHUMB_ALT;
+	case 847:		return K_RTHUMB_ALT;
+	case 848:		return K_LSHOULDER_ALT;
+	case 849:		return K_RSHOULDER_ALT;
+	case 850:		return K_DPAD_UP_ALT;
+	case 851:		return K_DPAD_DOWN_ALT;
+	case 852:		return K_DPAD_LEFT_ALT;
+	case 853:		return K_DPAD_RIGHT_ALT;
+	case 854:		return K_ABUTTON_ALT;
+	case 855:		return K_BBUTTON_ALT;
+	case 856:		return K_XBUTTON_ALT;
+	case 857:		return K_YBUTTON_ALT;
+	case 858:		return K_LTRIGGER_ALT;
+	case 859:		return K_RTRIGGER_ALT;
+	case 860:		return K_MISC1_ALT;
+	case 861:		return K_PADDLE1_ALT;
+	case 862:		return K_PADDLE2_ALT;
+	case 863:		return K_PADDLE3_ALT;
+	case 864:		return K_PADDLE4_ALT;
+	case 865:		return K_TOUCHPAD_ALT;
 //	case 832:		return K_GP_LEFT_THUMB_UP;
 //	case 833:		return K_GP_LEFT_THUMB_DOWN;
 //	case 834:		return K_GP_LEFT_THUMB_LEFT;
@@ -2130,8 +2182,22 @@ qboolean Menu_HandleKeyEvent(qboolean down, int keyc, int unic)
 	}
 	else if (down?cls.menu_qcvm.extfuncs.m_keydown:cls.menu_qcvm.extfuncs.m_keyup)
 	{
+		int legacykey = keyc;
+
+		switch (legacykey)
+		{
+		case K_DPAD_UP:		legacykey = K_UPARROW; break;
+		case K_DPAD_DOWN:	legacykey = K_DOWNARROW; break;
+		case K_DPAD_LEFT:	legacykey = K_LEFTARROW; break;
+		case K_DPAD_RIGHT:	legacykey = K_RIGHTARROW; break;
+		case K_ABUTTON:		legacykey = K_ENTER; break;
+		case K_BBUTTON:		legacykey = K_ESCAPE; break;
+		default:
+			break;
+		}
+
 		PR_SwitchQCVM(&cls.menu_qcvm);
-		G_FLOAT(OFS_PARM0) = Key_NativeToQC(keyc);	//scancode
+		G_FLOAT(OFS_PARM0) = Key_NativeToQC(legacykey);	//scancode
 		G_FLOAT(OFS_PARM1) = unic;					//unicode
 		PR_ExecuteProgram(down?cls.menu_qcvm.extfuncs.m_keydown:cls.menu_qcvm.extfuncs.m_keyup);
 		inhibit	 = G_FLOAT(OFS_RETURN);
@@ -2487,9 +2553,10 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 			return;
 
 		case K_UPARROW:
+		case K_DPAD_UP:
 		case '.':
 			// Resume/increase speed
-			if ((key == K_UPARROW || (key == '.' && keydown[K_SHIFT])) && down > wasdown)
+			if (((key == K_UPARROW || key == K_DPAD_UP) || (key == '.' && keydown[K_SHIFT])) && down > wasdown)
 			{
 				if (!cls.demopaused)
 					cls.basedemospeed = CLAMP(0.03125f, cls.basedemospeed * 2.f, 32.f);
@@ -2498,9 +2565,10 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 			return;
 
 		case K_DOWNARROW:
+		case K_DPAD_DOWN:
 		case ',':
 			// Decrease speed/pause
-			if ((key == K_DOWNARROW || (key == ',' && keydown[K_SHIFT])) && down > wasdown)
+			if (((key == K_DOWNARROW || key == K_DPAD_DOWN) || (key == ',' && keydown[K_SHIFT])) && down > wasdown)
 			{
 				cls.basedemospeed *= 0.5f;
 				if (cls.basedemospeed < 0.03125f)
@@ -2511,21 +2579,23 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 			}
 			return;
 
-			case K_LEFTARROW:
-			case K_RIGHTARROW:
-			case K_CTRL:
-				// Temporary modifiers: they don't perform their actions on up/down events, but are queried per frame instead
-				// to avoid having to manage state transitions (e.g. pressing esc while still holding left arrow to rewind).
-				return;
+		case K_LEFTARROW:
+		case K_RIGHTARROW:
+		case K_DPAD_LEFT:
+		case K_DPAD_RIGHT:
+		case K_CTRL:
+			// Temporary modifiers: they don't perform their actions on up/down events, but are queried per frame instead
+			// to avoid having to manage state transitions (e.g. pressing esc while still holding left arrow to rewind).
+			return;
 
-			case 'j':
-			case 'l':
-				// One-shot jump keys: CL_UpdateDemoSpeed handles edge detection and seek state.
-				return;
+		case 'j':
+		case 'l':
+			// One-shot jump keys: CL_UpdateDemoSpeed handles edge detection and seek state.
+			return;
 
-			default:
-				// Not a demo control key
-				break;
+		default:
+			// Not a demo control key
+			break;
 		}
 	}
 

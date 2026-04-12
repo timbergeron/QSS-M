@@ -1521,10 +1521,16 @@ static void IN_ReleaseJoystickKeys(void)
 		}
 	}
 
-	Key_Event(K_LEFTARROW, false);
-	Key_Event(K_RIGHTARROW, false);
-	Key_Event(K_UPARROW, false);
-	Key_Event(K_DOWNARROW, false);
+	// These arrow keycodes are shared with the physical keyboard, so only
+	// release them here when joystick menu emulation actually generated them.
+	if (joy_emulatedkeytimer[0] != 0.0)
+		Key_Event(K_LEFTARROW, false);
+	if (joy_emulatedkeytimer[1] != 0.0)
+		Key_Event(K_RIGHTARROW, false);
+	if (joy_emulatedkeytimer[2] != 0.0)
+		Key_Event(K_UPARROW, false);
+	if (joy_emulatedkeytimer[3] != 0.0)
+		Key_Event(K_DOWNARROW, false);
 	Key_Event(K_LTRIGGER, false);
 	Key_Event(K_RTRIGGER, false);
 }

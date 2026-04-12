@@ -7126,8 +7126,8 @@ static void M_Controller_Test_DrawHeldButtons(int y)
 	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_RTRIGGER, NULL);
 	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_LTHUMB, NULL);
 	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_RTHUMB, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_START, NULL);
-	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_BACK, NULL);
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_ESCAPE, Key_KeynumToFriendlyString(K_START));
+	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_TAB, Key_KeynumToFriendlyString(K_BACK));
 	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_MISC1, NULL);
 	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_PADDLE1, NULL);
 	M_Controller_Test_AppendHeldKey(other, sizeof(other), K_PADDLE2, NULL);

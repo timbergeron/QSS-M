@@ -680,7 +680,8 @@ static void CL_UpdateDemoSpeed(void)
 		}
 	}
 
-	adjust = keydown[K_RIGHTARROW] - keydown[K_LEFTARROW];
+	adjust = (keydown[K_RIGHTARROW] || keydown[K_DPAD_RIGHT]) -
+		(keydown[K_LEFTARROW] || keydown[K_DPAD_LEFT]);
 	singleframe = keydown['.'] - keydown[','];
 
 	if (adjust)
