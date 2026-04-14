@@ -43,6 +43,7 @@ enum m_state_e {
 	m_video,
 	m_graphics,
 	m_sound,
+	m_voip,
 	m_game,
 	m_playerxray,
 	m_hud,

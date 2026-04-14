@@ -99,6 +99,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_Video_f (void);
 	void M_Menu_Graphics_f (void);
 	void M_Menu_Sound_f (void);
+		void M_Menu_Voip_f (void);
 	void M_Menu_Game_f (void);
 		void M_Menu_PlayerXray_f (void);
 		void M_Menu_HUD_f (void);
@@ -142,6 +143,7 @@ void M_Main_Draw (void);
 		void M_Video_Draw (void);
 	void M_Graphics_Draw (void);
 	void M_Sound_Draw (void);
+		void M_Voip_Draw (void);
 	void M_Game_Draw (void);
 		void M_PlayerXray_Draw (void);
 	void M_HUD_Draw (void);
@@ -184,6 +186,7 @@ void M_Main_Key (int key);
 		void M_Video_Key (int key);
 	void M_Graphics_Key (int key);
 	void M_Sound_Key (int key);
+		void M_Voip_Key (int key);
 	void M_Game_Key (int key);
 		void M_PlayerXray_Key (int key);
 	void M_HUD_Key (int key);
@@ -227,6 +230,7 @@ void M_Main_Key (int key);
 		void M_Video_Mousemove (int cx, int cy);
 		void M_Graphics_Mousemove (int cx, int cy);
 		void M_Sound_Mousemove (int cx, int cy);
+			void M_Voip_Mousemove (int cx, int cy);
 		void M_Game_Mousemove (int cx, int cy);
 		void M_PlayerXray_Mousemove (int cx, int cy);
 		void M_HUD_Mousemove (int cx, int cy);
@@ -8063,6 +8067,7 @@ static enum sound_e
 	SOUND_AMBIENTLEVEL,
 	SOUND_STOPSOUND,
 	SOUND_MUTE,
+	SOUND_VOIP,
 	SOUND_COUNT
 } sound_cursor;
 
@@ -8100,6 +8105,8 @@ static const char* M_Sound_GetItemText(int index)
 		return "Stop Sound";
 	case SOUND_MUTE:
 		return "Mute";
+	case SOUND_VOIP:
+		return "VoIP";
 	default:
 		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
 		return buffer;
@@ -8196,6 +8203,10 @@ static void M_Sound_AdjustSliders(int dir)
 			q_snprintf(mute, sizeof(mute), "n");  // Set to not muted (will show "on")
 		break;
 
+	case SOUND_VOIP:
+		M_Menu_Voip_f();
+		break;
+
 	default:
 		break;
 	}
@@ -8281,6 +8292,11 @@ void M_Sound_Draw(void)
 				M_Print(178, y, "off");
 		}
 		break;
+
+		case SOUND_VOIP:
+			text = "              VoIP";
+			M_Print(178, y, "...");
+			break;
 
 		default:
 			break;
@@ -8556,6 +8572,7 @@ void M_Sound_Mousemove(int cx, int cy)
 		case SOUND_AUDIORATE:
 		case SOUND_STOPSOUND:
 		case SOUND_MUTE:
+		case SOUND_VOIP:
 		case SOUND_COUNT:
 			// No action needed for these cases in mouse movement
 			break;
@@ -8580,6 +8597,375 @@ void M_Sound_Mousemove(int cx, int cy)
 		// Update the cursor position
 		sound_cursor = item;
 	}
+}
+
+
+/*
+==================
+VoIP Menu
+==================
+*/
+
+extern cvar_t cl_voip_send, cl_voip_play, cl_voip_capturingvol, cl_voip_micamp,
+	cl_voip_vad_threshhold, cl_voip_vad_delay, cl_voip_ducking, cl_voip_noisefilter,
+	cl_voip_autogain, cl_voip_showmeter, cl_voip_bitrate, cl_voip_test;
+
+static enum voip_e
+{
+	VOIP_SEND,
+	VOIP_PLAYVOL,
+	VOIP_MICVOL,
+	VOIP_MICAMP,
+	VOIP_VADTHRESH,
+	VOIP_VADDELAY,
+	VOIP_DUCKING,
+	VOIP_NOISEFILTER,
+	VOIP_AUTOGAIN,
+	VOIP_SHOWMETER,
+	VOIP_BITRATE,
+	VOIP_TEST,
+	VOIP_COUNT
+} voip_cursor;
+
+#define VOIP_ITEMS (VOIP_COUNT)
+
+static qboolean voip_slider_grab;
+
+void M_Menu_Voip_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_voip;
+	m_entersound = true;
+	voip_cursor = 0;
+	voip_slider_grab = false;
+
+	IN_UpdateGrabs();
+}
+
+static void M_Voip_AdjustSetting(int dir)
+{
+	float f;
+	int v;
+
+	S_LocalSound("misc/menu3.wav");
+
+	switch (voip_cursor)
+	{
+	case VOIP_SEND:
+		v = (int)cl_voip_send.value + dir;
+		if (v < 0) v = 2;
+		else if (v > 2) v = 0;
+		Cvar_SetValue("cl_voip_send", v);
+		break;
+
+	case VOIP_PLAYVOL:
+		f = cl_voip_play.value + dir * 0.05f;
+		f = CLAMP(0.f, f, 1.f);
+		Cvar_SetValue("cl_voip_play", f);
+		break;
+
+	case VOIP_MICVOL:
+		f = cl_voip_capturingvol.value + dir * 0.05f;
+		f = CLAMP(0.f, f, 1.f);
+		Cvar_SetValue("cl_voip_capturingvol", f);
+		break;
+
+	case VOIP_MICAMP:
+		f = cl_voip_micamp.value + dir * 0.25f;
+		f = CLAMP(0.f, f, 8.f);
+		Cvar_SetValue("cl_voip_micamp", f);
+		break;
+
+	case VOIP_VADTHRESH:
+		f = cl_voip_vad_threshhold.value + dir * 5.f;
+		f = CLAMP(0.f, f, 100.f);
+		Cvar_SetValue("cl_voip_vad_threshhold", f);
+		break;
+
+	case VOIP_VADDELAY:
+		f = cl_voip_vad_delay.value + dir * 0.1f;
+		f = CLAMP(0.f, f, 5.f);
+		Cvar_SetValue("cl_voip_vad_delay", f);
+		break;
+
+	case VOIP_DUCKING:
+		f = cl_voip_ducking.value + dir * 0.05f;
+		f = CLAMP(0.f, f, 1.f);
+		Cvar_SetValue("cl_voip_ducking", f);
+		break;
+
+	case VOIP_NOISEFILTER:
+		Cvar_SetValue("cl_voip_noisefilter", cl_voip_noisefilter.value ? 0 : 1);
+		break;
+
+	case VOIP_AUTOGAIN:
+		Cvar_SetValue("cl_voip_autogain", cl_voip_autogain.value ? 0 : 1);
+		break;
+
+	case VOIP_SHOWMETER:
+		v = (int)cl_voip_showmeter.value + dir;
+		if (v < 0) v = 2;
+		else if (v > 2) v = 0;
+		Cvar_SetValue("cl_voip_showmeter", v);
+		break;
+
+	case VOIP_BITRATE:
+	{
+		static const int rates[] = { 1500, 2000, 3000, 4000, 6000, 8000, 12000, 16000, 24000, 32000 };
+		int n = (int)(sizeof(rates) / sizeof(rates[0]));
+		int cur = 0, i;
+		int best = 0;
+		int bestdiff = 0x7fffffff;
+		for (i = 0; i < n; i++)
+		{
+			int diff = (int)cl_voip_bitrate.value - rates[i];
+			if (diff < 0) diff = -diff;
+			if (diff < bestdiff) { bestdiff = diff; best = i; }
+		}
+		cur = best + dir;
+		if (cur < 0) cur = n - 1;
+		else if (cur >= n) cur = 0;
+		Cvar_SetValue("cl_voip_bitrate", rates[cur]);
+		break;
+	}
+
+	case VOIP_TEST:
+		Cvar_SetValue("cl_voip_test", cl_voip_test.value ? 0 : 1);
+		break;
+
+	default:
+		break;
+	}
+}
+
+void M_Voip_Draw(void)
+{
+	qpic_t *p;
+	enum voip_e i;
+	const char *sendlabels[3] = { "off", "voice activation", "continuous" };
+	const char *meterlabels[3] = { "off", "on", "verbose" };
+
+	p = Draw_CachePic("gfx/p_option.lmp");
+	M_DrawPic((320 - p->width) / 2, 4, p);
+
+	const char *title = "VoIP Options";
+	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
+
+	for (i = 0; i < VOIP_ITEMS; i++)
+	{
+		int y = 48 + 8 * i;
+		const char *text = NULL;
+		float r;
+		int idx;
+
+		switch (i)
+		{
+		case VOIP_SEND:
+			text = "              Mode";
+			idx = (int)cl_voip_send.value;
+			M_Print(178, y, (idx >= 0 && idx < 3) ? sendlabels[idx] : va("%d", idx));
+			break;
+
+		case VOIP_PLAYVOL:
+			text = "       Play Volume";
+			r = cl_voip_play.value;
+			M_DrawSlider(186, y, r, 100.f * cl_voip_play.value, "%.0f%%");
+			break;
+
+		case VOIP_MICVOL:
+			text = "        Mic Volume";
+			r = cl_voip_capturingvol.value;
+			M_DrawSlider(186, y, r, 100.f * cl_voip_capturingvol.value, "%.0f%%");
+			break;
+
+		case VOIP_MICAMP:
+			text = "       Mic Amplify";
+			r = cl_voip_micamp.value / 8.f;
+			M_DrawSlider(186, y, r, cl_voip_micamp.value, "%.2fx");
+			break;
+
+		case VOIP_VADTHRESH:
+			text = "     VAD Threshold";
+			r = cl_voip_vad_threshhold.value / 100.f;
+			M_DrawSlider(186, y, r, cl_voip_vad_threshhold.value, "%.0f");
+			break;
+
+		case VOIP_VADDELAY:
+			text = "         VAD Delay";
+			r = cl_voip_vad_delay.value / 5.f;
+			M_DrawSlider(186, y, r, cl_voip_vad_delay.value, "%.2fs");
+			break;
+
+		case VOIP_DUCKING:
+			text = "           Ducking";
+			r = cl_voip_ducking.value;
+			M_DrawSlider(186, y, r, 100.f * cl_voip_ducking.value, "%.0f%%");
+			break;
+
+		case VOIP_NOISEFILTER:
+			text = "      Noise Filter";
+			M_DrawCheckbox(178, y, cl_voip_noisefilter.value);
+			break;
+
+		case VOIP_AUTOGAIN:
+			text = "         Auto Gain";
+			M_DrawCheckbox(178, y, cl_voip_autogain.value);
+			break;
+
+		case VOIP_SHOWMETER:
+			text = "        Show Meter";
+			idx = (int)cl_voip_showmeter.value;
+			M_Print(178, y, (idx >= 0 && idx < 3) ? meterlabels[idx] : va("%d", idx));
+			break;
+
+		case VOIP_BITRATE:
+			text = "           Bitrate";
+			M_Print(178, y, va("%d bps", (int)cl_voip_bitrate.value));
+			break;
+
+		case VOIP_TEST:
+			text = "          Mic Test";
+			M_DrawCheckbox(178, y, cl_voip_test.value);
+			break;
+
+		default:
+			break;
+		}
+
+		if (text)
+			M_Print(0, y, text);
+	}
+
+	M_DrawCharacter(168, 48 + voip_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+}
+
+void M_Voip_Key(int k)
+{
+	if (!keydown[K_MOUSE1])
+		voip_slider_grab = false;
+
+	if (voip_slider_grab)
+	{
+		switch (k)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			voip_slider_grab = false;
+			break;
+		}
+		return;
+	}
+
+	switch (k)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Menu_Sound_f();
+		sound_cursor = SOUND_VOIP;
+		break;
+
+	case K_MOUSE1:
+		m_entersound = true;
+		if (m_mousey >= 48 && m_mousey < 48 + (VOIP_ITEMS * 8))
+		{
+			voip_cursor = (m_mousey - 48) / 8;
+			if (voip_cursor == VOIP_PLAYVOL ||
+				voip_cursor == VOIP_MICVOL ||
+				voip_cursor == VOIP_MICAMP ||
+				voip_cursor == VOIP_VADTHRESH ||
+				voip_cursor == VOIP_VADDELAY ||
+				voip_cursor == VOIP_DUCKING)
+			{
+				voip_slider_grab = true;
+			}
+			else
+			{
+				M_Voip_AdjustSetting(1);
+			}
+		}
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		m_entersound = true;
+		M_Voip_AdjustSetting(1);
+		break;
+
+	case K_UPARROW:
+		S_LocalSound("misc/menu1.wav");
+		if (voip_cursor == 0)
+			voip_cursor = VOIP_ITEMS - 1;
+		else
+			voip_cursor--;
+		break;
+
+	case K_DOWNARROW:
+		S_LocalSound("misc/menu1.wav");
+		voip_cursor++;
+		if (voip_cursor >= VOIP_ITEMS)
+			voip_cursor = 0;
+		break;
+
+	case K_LEFTARROW:
+	case K_MWHEELDOWN:
+		M_Voip_AdjustSetting(-1);
+		break;
+
+	case K_RIGHTARROW:
+	case K_MWHEELUP:
+		M_Voip_AdjustSetting(1);
+		break;
+	}
+}
+
+void M_Voip_Mousemove(int cx, int cy)
+{
+	if (voip_slider_grab)
+	{
+		float f;
+
+		if (!keydown[K_MOUSE1])
+		{
+			voip_slider_grab = false;
+			return;
+		}
+
+		f = CLAMP(0.f, M_MouseToSliderFraction(cx - 187), 1.f);
+
+		switch (voip_cursor)
+		{
+		case VOIP_PLAYVOL:
+			Cvar_SetValue("cl_voip_play", f);
+			break;
+		case VOIP_MICVOL:
+			Cvar_SetValue("cl_voip_capturingvol", f);
+			break;
+		case VOIP_MICAMP:
+			Cvar_SetValue("cl_voip_micamp", f * 8.f);
+			break;
+		case VOIP_VADTHRESH:
+			Cvar_SetValue("cl_voip_vad_threshhold", f * 100.f);
+			break;
+		case VOIP_VADDELAY:
+			Cvar_SetValue("cl_voip_vad_delay", f * 5.f);
+			break;
+		case VOIP_DUCKING:
+			Cvar_SetValue("cl_voip_ducking", f);
+			break;
+		default:
+			break;
+		}
+		return;
+	}
+
+	int item = (cy - 48) / 8;
+	if (item >= 0 && item < VOIP_ITEMS)
+		voip_cursor = item;
 }
 
 
@@ -21214,6 +21600,7 @@ static struct
 	{"menu_controller", M_Menu_Controller_f},
 	{"menu_controller_test", M_Menu_Controller_Test_f},
 	{"menu_sound", M_Menu_Sound_f},
+	{"menu_voip", M_Menu_Voip_f},
 	{"menu_game", M_Menu_Game_f},
 	{"menu_hud", M_Menu_HUD_f},
 	{"menu_crosshair", M_Menu_Crosshair_f},
@@ -21565,6 +21952,10 @@ void M_Draw (void)
 		M_Sound_Draw ();
 		break;
 
+	case m_voip:
+		M_Voip_Draw ();
+		break;
+
 	case m_game:
 		M_Game_Draw();
 		break;
@@ -21775,6 +22166,10 @@ void M_Keydown (int key)
 		M_Sound_Key (key);
 		break;
 
+	case m_voip:
+		M_Voip_Key (key);
+		break;
+
 	case m_game:
 		M_Game_Key(key);
 		break;
@@ -21934,6 +22329,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_sound:
 		M_Sound_Mousemove(x, y);
+		return;
+
+	case m_voip:
+		M_Voip_Mousemove(x, y);
 		return;
 
 	case m_game:
