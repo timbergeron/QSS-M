@@ -5337,15 +5337,21 @@ void M_Keys_Draw(void)
 	p = Draw_CachePic("gfx/p_option.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
 
-	if (keysmenu.devicemask == KDM_GAMEPAD)
 	{
-		M_Print(16, KEYS_TAB_Y, "Keyboard & Mouse");
-		M_PrintWhite(184, KEYS_TAB_Y, "Gamepad");
-	}
-	else
-	{
-		M_PrintWhite(16, KEYS_TAB_Y, "Keyboard & Mouse");
-		M_Print(184, KEYS_TAB_Y, "Gamepad");
+		qboolean gamepad_connected = IN_HasGamepad();
+		qboolean gamepad_active = (keysmenu.devicemask == KDM_GAMEPAD);
+
+		if (gamepad_active)
+			M_Print(16, KEYS_TAB_Y, "Keyboard & Mouse");
+		else
+			M_PrintWhite(16, KEYS_TAB_Y, "Keyboard & Mouse");
+
+		if (!gamepad_connected)
+			M_PrintRGBA(184, KEYS_TAB_Y, "Gamepad", CL_PLColours_Parse("0xffffff"), 0.375f, !gamepad_active);
+		else if (gamepad_active)
+			M_PrintWhite(184, KEYS_TAB_Y, "Gamepad");
+		else
+			M_Print(184, KEYS_TAB_Y, "Gamepad");
 	}
 
 	x = 0;
@@ -5478,6 +5484,9 @@ void M_Keys_Key(int k)
 		clickedmask = M_Keys_GetTabAtPoint(m_mousex, m_mousey);
 		if (clickedmask != KDM_NONE)
 		{
+			if (clickedmask == KDM_GAMEPAD && !IN_HasGamepad())
+				return;
+
 			if (bind_grab)
 			{
 				bind_grab = false;
@@ -5520,6 +5529,8 @@ void M_Keys_Key(int k)
 
 	if (k == K_TAB || k == K_LSHOULDER || k == K_RSHOULDER)
 	{
+		if (keysmenu.devicemask != KDM_GAMEPAD && !IN_HasGamepad())
+			return;
 		S_LocalSound("misc/menu1.wav");
 		M_Keys_SetDeviceMask((keysmenu.devicemask == KDM_GAMEPAD) ? KDM_KEYBOARD_AND_MOUSE : KDM_GAMEPAD);
 		return;
@@ -6133,7 +6144,7 @@ extern cvar_t gyro_yawsensitivity, gyro_pitchsensitivity, gyro_noise_thresh;
 #define CONTROLLER_VALUE_X		178
 #define CONTROLLER_TITLE_Y		32
 #define CONTROLLER_TOP_Y		48
-#define CONTROLLER_MAX_VISIBLE	19
+#define CONTROLLER_MAX_VISIBLE	18
 #define MIN_JOY_SENS			60.f
 #define MAX_JOY_SENS			720.f
 #define MIN_JOY_EXPONENT		1.f
@@ -6152,17 +6163,20 @@ extern cvar_t gyro_yawsensitivity, gyro_pitchsensitivity, gyro_noise_thresh;
 static enum controller_e
 {
 	CONTROLLER_DEVICE,
+	CONTROLLER_SPACE_DEVICE,
 	CONTROLLER_SENSX,
 	CONTROLLER_SENSY,
 	CONTROLLER_INVERT,
 	CONTROLLER_LOOK_STICK,
+	CONTROLLER_SPACE_LOOK_STICK,
 	CONTROLLER_EXPONENT_LOOK,
 	CONTROLLER_EXPONENT_MOVE,
 	CONTROLLER_DEADZONE_LOOK,
 	CONTROLLER_DEADZONE_MOVE,
 	CONTROLLER_TRIGGER_THRESH,
-	CONTROLLER_TEST,
+	CONTROLLER_SPACE_BEFORE_RUMBLE,
 	CONTROLLER_RUMBLE,
+	CONTROLLER_SPACE_AFTER_RUMBLE,
 	CONTROLLER_GYRO_ENABLE,
 	CONTROLLER_FLICK_STICK,
 	CONTROLLER_GYRO_MODE,
@@ -6171,6 +6185,7 @@ static enum controller_e
 	CONTROLLER_GYRO_SENSY,
 	CONTROLLER_GYRO_NOISE,
 	CONTROLLER_CALIBRATE,
+	CONTROLLER_TEST,
 	CONTROLLER_COUNT
 } controller_cursor;
 
@@ -6185,6 +6200,11 @@ static const char *M_Controller_GetItemText(int index)
 
 	switch (index)
 	{
+	case CONTROLLER_SPACE_DEVICE:
+	case CONTROLLER_SPACE_LOOK_STICK:
+	case CONTROLLER_SPACE_BEFORE_RUMBLE:
+	case CONTROLLER_SPACE_AFTER_RUMBLE:
+		return "";
 	case CONTROLLER_DEVICE:
 		return "          Device";
 	case CONTROLLER_SENSX:
@@ -6256,6 +6276,31 @@ static qboolean M_Controller_IsOptionVisible(int option)
 {
 	switch (option)
 	{
+	case CONTROLLER_CALIBRATE:
+		return IN_HasGyro();
+
+	default:
+		return true;
+	}
+}
+
+#define CONTROLLER_DIM_ALPHA	0.375f
+
+static int M_Controller_GetVisibleItemCount(void);
+static int M_Controller_CursorToOption(int cursor);
+
+static qboolean M_Controller_IsOptionEnabled(int option)
+{
+	if (option == CONTROLLER_SPACE_DEVICE || option == CONTROLLER_SPACE_LOOK_STICK
+		|| option == CONTROLLER_SPACE_BEFORE_RUMBLE || option == CONTROLLER_SPACE_AFTER_RUMBLE)
+		return false;
+	if (option == CONTROLLER_DEVICE)
+		return true;
+	if (!IN_HasGamepad())
+		return false;
+
+	switch (option)
+	{
 	case CONTROLLER_RUMBLE:
 		return IN_HasRumble();
 
@@ -6266,12 +6311,76 @@ static qboolean M_Controller_IsOptionVisible(int option)
 	case CONTROLLER_GYRO_SENSX:
 	case CONTROLLER_GYRO_SENSY:
 	case CONTROLLER_GYRO_NOISE:
-	case CONTROLLER_CALIBRATE:
 		return IN_HasGyro();
 
 	default:
 		return true;
 	}
+}
+
+static void M_Controller_PrintMaybeDim(int x, int y, const char *str, qboolean enabled)
+{
+	if (enabled)
+		M_Print(x, y, str);
+	else
+		M_PrintRGBA(x, y, str, CL_PLColours_Parse("0xffffff"), CONTROLLER_DIM_ALPHA, true);
+}
+
+static void M_Controller_DrawSliderMaybeDim(int x, int y, float range, float value, const char *format, qboolean enabled)
+{
+	int i;
+	char buffer[6];
+	plcolour_t c;
+
+	if (enabled)
+	{
+		M_DrawSlider(x, y, range, value, format);
+		return;
+	}
+
+	c = CL_PLColours_Parse("0xffffff");
+	if (range < 0) range = 0;
+	if (range > 1) range = 1;
+	M_DrawCharacterRGBA(x - 8, y, 128, c, CONTROLLER_DIM_ALPHA);
+	for (i = 0; i < SLIDER_RANGE; i++)
+		M_DrawCharacterRGBA(x + i * 8, y, 129, c, CONTROLLER_DIM_ALPHA);
+	M_DrawCharacterRGBA(x + i * 8, y, 130, c, CONTROLLER_DIM_ALPHA);
+	M_DrawCharacterRGBA(x + (SLIDER_RANGE - 1) * 8 * range, y, 131, c, CONTROLLER_DIM_ALPHA);
+
+	q_snprintf(buffer, sizeof(buffer), format, value);
+	M_PrintRGBA(x + (SLIDER_RANGE + 2) * 8, y, buffer, c, CONTROLLER_DIM_ALPHA, true);
+}
+
+static void M_Controller_DrawCheckboxMaybeDim(int x, int y, int on, qboolean enabled)
+{
+	if (enabled)
+		M_DrawCheckbox(x, y, on);
+	else
+		M_PrintRGBA(x, y, on ? "on" : "off", CL_PLColours_Parse("0xffffff"), CONTROLLER_DIM_ALPHA, true);
+}
+
+static int M_Controller_StepCursorToEnabled(int start, int dir)
+{
+	int visible_count = M_Controller_GetVisibleItemCount();
+	int cursor = start;
+	int steps;
+
+	if (visible_count <= 0)
+		return 0;
+
+	for (steps = 0; steps < visible_count; steps++)
+	{
+		int option = M_Controller_CursorToOption(cursor);
+		if (M_Controller_IsOptionEnabled(option))
+			return cursor;
+		cursor += dir;
+		if (cursor < 0)
+			cursor = visible_count - 1;
+		else if (cursor >= visible_count)
+			cursor = 0;
+	}
+
+	return start;
 }
 
 static int M_Controller_GetVisibleItemCount(void)
@@ -6309,6 +6418,7 @@ static void M_Controller_ClampCursor(void)
 {
 	int visible_count = M_Controller_GetVisibleItemCount();
 	int max_visible = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
+	int option;
 
 	if (visible_count <= 0)
 	{
@@ -6322,10 +6432,23 @@ static void M_Controller_ClampCursor(void)
 	else if (controller_cursor >= visible_count)
 		controller_cursor = visible_count - 1;
 
+	option = M_Controller_CursorToOption(controller_cursor);
+	if (!M_Controller_IsOptionEnabled(option))
+		controller_cursor = M_Controller_StepCursorToEnabled(controller_cursor, 1);
+
 	if (controller_scroll < 0)
 		controller_scroll = 0;
 	else if (controller_scroll > visible_count - max_visible)
 		controller_scroll = visible_count - max_visible;
+}
+
+static void M_Controller_ScrollToCursor(void)
+{
+	int visible_count = M_Controller_GetVisibleItemCount();
+	int max_visible = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
+
+	if (visible_count <= 0)
+		return;
 
 	if (controller_cursor < controller_scroll)
 		controller_scroll = controller_cursor;
@@ -6473,6 +6596,10 @@ static void M_Controller_AdjustSliders(int dir)
 
 	M_Controller_ClampCursor();
 	option = M_Controller_CursorToOption(controller_cursor);
+
+	if (!M_Controller_IsOptionEnabled(option))
+		return;
+
 	S_LocalSound("misc/menu3.wav");
 
 	switch (option)
@@ -6755,6 +6882,7 @@ void M_Controller_Draw(void)
 	{
 		int y;
 		int display_index;
+		qboolean enabled;
 
 		if (!M_Controller_IsOptionVisible(i))
 			continue;
@@ -6765,100 +6893,111 @@ void M_Controller_Draw(void)
 			continue;
 
 		y = CONTROLLER_TOP_Y + 8 * display_index;
+		enabled = M_Controller_IsOptionEnabled(i);
 
-		M_Print(16, y, M_Controller_GetItemText(i));
+		M_Controller_PrintMaybeDim(16, y, M_Controller_GetItemText(i), enabled);
 
 		switch (i)
 		{
 		case CONTROLLER_DEVICE:
-			M_Print(CONTROLLER_VALUE_X, y, M_Controller_GetDeviceLabel());
+			M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetDeviceLabel(), enabled);
 			break;
 
 		case CONTROLLER_SENSX:
 			r = (joy_sensitivity_yaw.value - MIN_JOY_SENS) / (MAX_JOY_SENS - MIN_JOY_SENS);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_sensitivity_yaw.value, "%.0f");
+			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_sensitivity_yaw.value, "%.0f", enabled);
 			break;
 
 		case CONTROLLER_SENSY:
 			r = (joy_sensitivity_pitch.value - MIN_JOY_SENS) / (MAX_JOY_SENS - MIN_JOY_SENS);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_sensitivity_pitch.value, "%.0f");
+			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_sensitivity_pitch.value, "%.0f", enabled);
 			break;
 
 		case CONTROLLER_INVERT:
-			M_DrawCheckbox(CONTROLLER_VALUE_X, y, joy_invert.value);
+			M_Controller_DrawCheckboxMaybeDim(CONTROLLER_VALUE_X, y, joy_invert.value, enabled);
 			break;
 
 		case CONTROLLER_LOOK_STICK:
-			M_Print(CONTROLLER_VALUE_X, y, joy_swapmovelook.value ? "Left" : "Right");
+			M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, joy_swapmovelook.value ? "Left" : "Right", enabled);
 			break;
 
 		case CONTROLLER_EXPONENT_LOOK:
 			r = (joy_exponent.value - MIN_JOY_EXPONENT) / (MAX_JOY_EXPONENT - MIN_JOY_EXPONENT);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_exponent.value, "%.1f");
+			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_exponent.value, "%.1f", enabled);
 			break;
 
 		case CONTROLLER_EXPONENT_MOVE:
 			r = (joy_exponent_move.value - MIN_JOY_EXPONENT) / (MAX_JOY_EXPONENT - MIN_JOY_EXPONENT);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_exponent_move.value, "%.1f");
+			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_exponent_move.value, "%.1f", enabled);
 			break;
 
 		case CONTROLLER_DEADZONE_LOOK:
 			r = (joy_deadzone_look.value - MIN_STICK_DEADZONE) / (MAX_STICK_DEADZONE - MIN_STICK_DEADZONE);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_deadzone_look.value * 100.f, "%.0f%%");
+			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_deadzone_look.value * 100.f, "%.0f%%", enabled);
 			break;
 
 		case CONTROLLER_DEADZONE_MOVE:
 			r = (joy_deadzone_move.value - MIN_STICK_DEADZONE) / (MAX_STICK_DEADZONE - MIN_STICK_DEADZONE);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_deadzone_move.value * 100.f, "%.0f%%");
+			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_deadzone_move.value * 100.f, "%.0f%%", enabled);
 			break;
 
 		case CONTROLLER_TRIGGER_THRESH:
 			r = (joy_deadzone_trigger.value - MIN_TRIGGER_DEADZONE) / (MAX_TRIGGER_DEADZONE - MIN_TRIGGER_DEADZONE);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_deadzone_trigger.value * 100.f, "%.0f%%");
+			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_deadzone_trigger.value * 100.f, "%.0f%%", enabled);
 			break;
 
 		case CONTROLLER_TEST:
-			M_Print(CONTROLLER_VALUE_X, y, "...");
+			M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, "...", enabled);
 			break;
 
 		case CONTROLLER_RUMBLE:
-			r = (joy_rumble.value - MIN_RUMBLE) / (MAX_RUMBLE - MIN_RUMBLE);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, joy_rumble.value * 100.f, "%.0f%%");
+			if (!IN_HasRumble())
+			{
+				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, "Unavailable", false);
+			}
+			else
+			{
+				r = (joy_rumble.value - MIN_RUMBLE) / (MAX_RUMBLE - MIN_RUMBLE);
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_rumble.value * 100.f, "%.0f%%", enabled);
+			}
 			break;
 
 		case CONTROLLER_GYRO_ENABLE:
-			M_DrawCheckbox(CONTROLLER_VALUE_X, y, gyro_enable.value);
+			if (!IN_HasGyro())
+				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, "Unavailable", false);
+			else
+				M_Controller_DrawCheckboxMaybeDim(CONTROLLER_VALUE_X, y, gyro_enable.value, enabled);
 			break;
 
 		case CONTROLLER_FLICK_STICK:
-			M_DrawCheckbox(CONTROLLER_VALUE_X, y, joy_flick.value);
+			M_Controller_DrawCheckboxMaybeDim(CONTROLLER_VALUE_X, y, joy_flick.value, enabled);
 			break;
 
 		case CONTROLLER_GYRO_MODE:
-			M_Print(CONTROLLER_VALUE_X, y, M_Controller_GetGyroModeLabel());
+			M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetGyroModeLabel(), enabled);
 			break;
 
 		case CONTROLLER_GYRO_AXIS:
-			M_Print(CONTROLLER_VALUE_X, y, M_Controller_GetGyroAxisLabel());
+			M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetGyroAxisLabel(), enabled);
 			break;
 
 		case CONTROLLER_GYRO_SENSX:
 			r = (gyro_yawsensitivity.value - MIN_GYRO_SENS) / (MAX_GYRO_SENS - MIN_GYRO_SENS);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, gyro_yawsensitivity.value, "%.1f");
+			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, gyro_yawsensitivity.value, "%.1f", enabled);
 			break;
 
 		case CONTROLLER_GYRO_SENSY:
 			r = (gyro_pitchsensitivity.value - MIN_GYRO_SENS) / (MAX_GYRO_SENS - MIN_GYRO_SENS);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, gyro_pitchsensitivity.value, "%.1f");
+			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, gyro_pitchsensitivity.value, "%.1f", enabled);
 			break;
 
 		case CONTROLLER_GYRO_NOISE:
 			r = (gyro_noise_thresh.value - MIN_GYRO_NOISE_THRESH) / (MAX_GYRO_NOISE_THRESH - MIN_GYRO_NOISE_THRESH);
-			M_DrawSlider(CONTROLLER_SLIDER_X, y, r, gyro_noise_thresh.value, "%.1f");
+			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, gyro_noise_thresh.value, "%.1f", enabled);
 			break;
 
 		case CONTROLLER_CALIBRATE:
-			M_Print(CONTROLLER_VALUE_X, y, IN_HasGyro() ? "Start" : "Unavailable");
+			M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, IN_HasGyro() ? "Start" : "Unavailable", enabled);
 			break;
 
 		default:
@@ -6866,12 +7005,16 @@ void M_Controller_Draw(void)
 		}
 	}
 
-	if (controller_scroll > 0)
-		M_PrintWhite(304, CONTROLLER_TOP_Y, "^");
-	if (controller_scroll + max_visible < visible_count)
-		M_PrintWhite(304, CONTROLLER_TOP_Y + 8 * (max_visible - 1), "v");
+	if (visible_count > max_visible)
+	{
+		if (controller_scroll > 0)
+			M_DrawEllipsisBar(16, CONTROLLER_TOP_Y - 8, 36);
+		if (controller_scroll + max_visible < visible_count)
+			M_DrawEllipsisBar(16, CONTROLLER_TOP_Y + max_visible * 8, 36);
+	}
 
-	M_DrawCharacter(CONTROLLER_CURSOR_X, CONTROLLER_TOP_Y + (controller_cursor - controller_scroll) * 8, 12 + ((int)(realtime * 4) & 1));
+	if (controller_cursor >= controller_scroll && controller_cursor < controller_scroll + max_visible)
+		M_DrawCharacter(CONTROLLER_CURSOR_X, CONTROLLER_TOP_Y + (controller_cursor - controller_scroll) * 8, 12 + ((int)(realtime * 4) & 1));
 }
 
 void M_Controller_Key(int k)
@@ -6913,7 +7056,19 @@ void M_Controller_Key(int k)
 		visible_count = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
 		if (m_mousey >= CONTROLLER_TOP_Y && m_mousey < CONTROLLER_TOP_Y + visible_count * 8)
 		{
-			controller_cursor = controller_scroll + (m_mousey - CONTROLLER_TOP_Y) / 8;
+			int clicked = controller_scroll + (m_mousey - CONTROLLER_TOP_Y) / 8;
+			int clicked_option;
+
+			if (clicked < 0)
+				clicked = 0;
+			else if (clicked >= M_Controller_GetVisibleItemCount())
+				clicked = M_Controller_GetVisibleItemCount() - 1;
+
+			clicked_option = M_Controller_CursorToOption(clicked);
+			if (!M_Controller_IsOptionEnabled(clicked_option))
+				break;
+
+			controller_cursor = clicked;
 			M_Controller_ClampCursor();
 			option = M_Controller_CursorToOption(controller_cursor);
 
@@ -6945,7 +7100,9 @@ void M_Controller_Key(int k)
 		controller_cursor--;
 		if (controller_cursor < 0)
 			controller_cursor = visible_count - 1;
+		controller_cursor = M_Controller_StepCursorToEnabled(controller_cursor, -1);
 		M_Controller_ClampCursor();
+		M_Controller_ScrollToCursor();
 		break;
 
 	case K_DOWNARROW:
@@ -6954,7 +7111,9 @@ void M_Controller_Key(int k)
 		controller_cursor++;
 		if (controller_cursor >= visible_count)
 			controller_cursor = 0;
+		controller_cursor = M_Controller_StepCursorToEnabled(controller_cursor, 1);
 		M_Controller_ClampCursor();
+		M_Controller_ScrollToCursor();
 		break;
 
 	case K_LEFTARROW:
@@ -6965,11 +7124,11 @@ void M_Controller_Key(int k)
 		visible_count = M_Controller_GetVisibleItemCount();
 		if (visible_count > CONTROLLER_MAX_VISIBLE)
 		{
-			S_LocalSound("misc/menu1.wav");
-			controller_cursor--;
-			if (controller_cursor < 0)
-				controller_cursor = visible_count - 1;
-			M_Controller_ClampCursor();
+			if (controller_scroll > 0)
+			{
+				S_LocalSound("misc/menu1.wav");
+				controller_scroll--;
+			}
 		}
 		else
 		{
@@ -6981,11 +7140,12 @@ void M_Controller_Key(int k)
 		visible_count = M_Controller_GetVisibleItemCount();
 		if (visible_count > CONTROLLER_MAX_VISIBLE)
 		{
-			S_LocalSound("misc/menu1.wav");
-			controller_cursor++;
-			if (controller_cursor >= visible_count)
-				controller_cursor = 0;
-			M_Controller_ClampCursor();
+			int max_visible = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
+			if (controller_scroll + max_visible < visible_count)
+			{
+				S_LocalSound("misc/menu1.wav");
+				controller_scroll++;
+			}
 		}
 		else
 		{
@@ -6999,7 +7159,8 @@ void M_Controller_Key(int k)
 
 	case 't':
 	case 'T':
-		M_Menu_Controller_Test_f();
+		if (IN_HasGamepad())
+			M_Menu_Controller_Test_f();
 		break;
 	}
 }
@@ -7028,8 +7189,21 @@ void M_Controller_Mousemove(int cx, int cy)
 	visible_count = q_min(visible_count, CONTROLLER_MAX_VISIBLE);
 	if (cy >= CONTROLLER_TOP_Y && cy < CONTROLLER_TOP_Y + visible_count * 8)
 	{
-		controller_cursor = controller_scroll + (cy - CONTROLLER_TOP_Y) / 8;
-		M_Controller_ClampCursor();
+		int hovered = controller_scroll + (cy - CONTROLLER_TOP_Y) / 8;
+		int total = M_Controller_GetVisibleItemCount();
+		int hovered_option;
+
+		if (hovered < 0)
+			hovered = 0;
+		else if (hovered >= total)
+			hovered = total - 1;
+
+		hovered_option = M_Controller_CursorToOption(hovered);
+		if (M_Controller_IsOptionEnabled(hovered_option))
+		{
+			controller_cursor = hovered;
+			M_Controller_ClampCursor();
+		}
 	}
 }
 
@@ -7039,6 +7213,9 @@ Controller Test Menu
 ==================
 */
 
+#define M_CONTROLLER_TEST_PLACEHOLDER_ALPHA	0.55f
+#define M_CONTROLLER_TEST_DIM_ALPHA		0.45f
+
 static enum m_state_e controller_test_prev = m_controller;
 
 static int M_Controller_Test_AxisPixel(float value, float scale)
@@ -7047,22 +7224,35 @@ static int M_Controller_Test_AxisPixel(float value, float scale)
 	return (int)(value * scale + (value < 0.f ? -0.5f : 0.5f));
 }
 
-static void M_Controller_Test_DrawStickBox(int x, int y, const char *label, float ax, float ay, float deadzone)
+static void M_Controller_Test_DimPrint(int x, int y, const char *s, qboolean dim)
+{
+	if (dim)
+		M_PrintRGBA(x, y, s, CL_PLColours_Parse("0xffffff"), M_CONTROLLER_TEST_DIM_ALPHA, true);
+	else
+		M_Print(x, y, s);
+}
+
+static void M_Controller_Test_DrawStickBox(int x, int y, const char *label, float ax, float ay, float deadzone, qboolean dim)
 {
 	int marker_x, marker_y;
 	qboolean active;
+	plcolour_t white = CL_PLColours_Parse("0xffffff");
 
-	M_Print(x + 16, y - 8, label);
-	M_DrawTextBox(x, y, 5, 4);
+	M_Controller_Test_DimPrint(x + 16, y - 8, label, dim);
+
+	if (dim)
+		M_DrawTextBox_WithAlpha(x, y, 5, 4, M_CONTROLLER_TEST_DIM_ALPHA);
+	else
+		M_DrawTextBox(x, y, 5, 4);
 
 	marker_x = x + 32 + M_Controller_Test_AxisPixel(ax, 16.f);
 	marker_y = y + 24 + M_Controller_Test_AxisPixel(ay, 16.f);
-	active = (ax * ax + ay * ay) > (deadzone * deadzone);
+	active = !dim && (ax * ax + ay * ay) > (deadzone * deadzone);
 
 	if (active)
 		M_PrintWhite(marker_x, marker_y, "+");
 	else
-		M_Print(marker_x, marker_y, "+");
+		M_PrintRGBA(marker_x, marker_y, "+", white, dim ? 0.25f : 0.35f, true);
 }
 
 static const char *M_Controller_Test_GamepadTypeLabel(void)
@@ -7102,7 +7292,7 @@ static void M_Controller_Test_AppendHeldKey(char *dst, size_t dstsize, int keynu
 	q_strlcat(dst, name, dstsize);
 }
 
-static void M_Controller_Test_DrawHeldButtons(int y)
+static void M_Controller_Test_DrawHeldButtons(int y, qboolean dim)
 {
 	char face[38];
 	char other[38];
@@ -7141,24 +7331,69 @@ static void M_Controller_Test_DrawHeldButtons(int y)
 	if (!strcmp(other, "Other:"))
 		q_strlcat(other, " -", sizeof(other));
 
-	M_Print(16, y, face);
-	M_Print(16, y + 8, other);
+	M_Controller_Test_DimPrint(16, y, face, dim);
+	M_Controller_Test_DimPrint(16, y + 8, other, dim);
 }
 
-static void M_Controller_Test_DrawHints(int y)
+static void M_Controller_Test_DrawHintLetter(int x, int y, const char *s, qboolean dim)
 {
-	const char *hint;
-
-	if (IN_HasRumble() && IN_HasGyro())
-		hint = "A Rumble  X Cal";
-	else if (IN_HasRumble())
-		hint = "A Rumble";
-	else if (IN_HasGyro())
-		hint = "X Calibrate";
+	if (dim)
+		M_PrintRGBA(x, y, s, CL_PLColours_Parse("0xffffff"), M_CONTROLLER_TEST_DIM_ALPHA, true);
 	else
-		return;
+		M_PrintWhite(x, y, s);
+}
 
-	M_PrintWhite((320 - 8 * strlen(hint)) / 2, y, hint);
+static void M_Controller_Test_DrawHints(int y, qboolean dim)
+{
+	qboolean show_rumble, show_gyro;
+	int w, x;
+
+	if (dim)
+	{
+		show_rumble = true;
+		show_gyro = true;
+	}
+	else
+	{
+		show_rumble = IN_HasRumble();
+		show_gyro = IN_HasGyro();
+	}
+
+	w = 0;
+	if (show_rumble) w += 8;			// "A Rumble"
+	if (show_gyro) w += (show_rumble ? 2 : 0) + 11;	// "  X Calibrate"
+	if (!w) return;
+
+	x = (320 - 8 * w) / 2;
+	if (show_rumble)
+	{
+		M_Controller_Test_DrawHintLetter(x, y, "A", dim);
+		M_Controller_Test_DimPrint(x + 8, y, " Rumble", dim);
+		x += 8 * 8;
+	}
+	if (show_gyro)
+	{
+		if (show_rumble)
+			x += 16;
+		M_Controller_Test_DrawHintLetter(x, y, "X", dim);
+		M_Controller_Test_DimPrint(x + 8, y, " Calibrate", dim);
+	}
+}
+
+static void M_Controller_Test_DrawStatusValue(int x, int y, const char *value, qboolean present, qboolean warn)
+{
+	if (!present)
+		M_PrintRGBA(x, y, value, CL_PLColours_Parse("0xffffff"), M_CONTROLLER_TEST_PLACEHOLDER_ALPHA, true);
+	else if (warn)
+		M_PrintRGBA(x, y, value, CL_PLColours_Parse("0xffcc44"), 1.f, true);
+	else
+		M_PrintWhite(x, y, value);
+}
+
+static void M_Controller_Test_DrawStatusValueRA(int end_x, int y, const char *value, qboolean present, qboolean warn)
+{
+	int x = end_x - 8 * (int)strlen(value);
+	M_Controller_Test_DrawStatusValue(x, y, value, present, warn);
 }
 
 void M_Menu_Controller_Test_f(void)
@@ -7190,6 +7425,8 @@ void M_Controller_Test_Draw(void)
 	float gyro, r;
 	char value[32];
 	const char *title = "Controller Test";
+	qboolean has_pad = IN_HasGamepad();
+	qboolean dim = !has_pad;
 
 	IN_GetRawMoveAxis(&movex, &movey);
 	IN_GetRawLookAxis(&lookx, &looky);
@@ -7199,60 +7436,61 @@ void M_Controller_Test_Draw(void)
 	M_DrawPic((320 - p->width) / 2, 4, p);
 	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
 
-	M_Print(16, 48, "Device");
-	M_Print(88, 48, M_Controller_GetDeviceLabel());
-	M_Print(16, 56, "Type");
-	M_Print(64, 56, M_Controller_Test_GamepadTypeLabel());
-	M_Print(160, 56, "Rumble");
-	M_Print(224, 56, IN_HasRumble() ? "Yes" : "No");
-	M_Print(256, 56, "Gyro");
-	M_Print(296, 56, IN_HasGyro() ? "Yes" : "No");
-
-	if (!IN_HasGamepad())
 	{
-		M_PrintWhite(88, 72, "No active controller");
-		M_Print(32, 96, "Choose a Device in");
-		M_Print(32, 104, "Controller Options first");
-		return;
+		const char *device_label = M_Controller_GetDeviceLabel();
+
+		M_Print(16, 48, "Device");
+		M_Controller_Test_DrawStatusValue(72, 48, device_label, true, false);
+
+		M_Print(16, 56, "Type");
+		M_Controller_Test_DrawStatusValueRA(152, 56, has_pad ? M_Controller_Test_GamepadTypeLabel() : "--", has_pad, false);
+
+		M_Print(160, 56, "Rumble");
+		M_Controller_Test_DrawStatusValueRA(240, 56, has_pad ? (IN_HasRumble() ? "Yes" : "No") : "--", has_pad && IN_HasRumble(), false);
+
+		M_Print(248, 56, "Gyro");
+		M_Controller_Test_DrawStatusValueRA(312, 56, has_pad ? (IN_HasGyro() ? "Yes" : "No") : "--", has_pad && IN_HasGyro(), false);
 	}
 
-	M_Controller_Test_DrawStickBox(24, 72, "Move", movex, movey, joy_deadzone_move.value);
-	M_Controller_Test_DrawStickBox(112, 72, "Look", lookx, looky, joy_deadzone_look.value);
+	M_Controller_Test_DrawStickBox(24, 72, "Move", movex, movey, joy_deadzone_move.value, dim);
+	M_Controller_Test_DrawStickBox(112, 72, "Look", lookx, looky, joy_deadzone_look.value, dim);
 
 	q_snprintf(value, sizeof(value), "X%+.1f Y%+.1f", movex, movey);
-	M_Print(16, 120, value);
+	M_Controller_Test_DimPrint(56 - 4 * (int)strlen(value), 120, value, dim);
 	q_snprintf(value, sizeof(value), "X%+.1f Y%+.1f", lookx, looky);
-	M_Print(112, 120, value);
+	M_Controller_Test_DimPrint(144 - 4 * (int)strlen(value), 120, value, dim);
 
-	if (trigleft > joy_deadzone_trigger.value)
-		M_PrintWhite(40, 136, "Left Trigger");
-	else
-		M_Print(40, 136, "Left Trigger");
-	M_DrawSlider(176, 136, trigleft, trigleft * 100.f, "%.0f%%");
-	if (trigright > joy_deadzone_trigger.value)
-		M_PrintWhite(40, 144, "Right Trigger");
-	else
-		M_Print(40, 144, "Right Trigger");
-	M_DrawSlider(176, 144, trigright, trigright * 100.f, "%.0f%%");
+	{
+		qboolean lt_active = !dim && trigleft  > joy_deadzone_trigger.value;
+		qboolean rt_active = !dim && trigright > joy_deadzone_trigger.value;
+
+		if (lt_active) M_PrintWhite(40, 136, "Left Trigger");
+		else           M_Controller_Test_DimPrint(40, 136, "Left Trigger", dim);
+		M_Controller_DrawSliderMaybeDim(176, 136, trigleft,  trigleft  * 100.f, "%.0f%%", !dim);
+
+		if (rt_active) M_PrintWhite(40, 144, "Right Trigger");
+		else           M_Controller_Test_DimPrint(40, 144, "Right Trigger", dim);
+		M_Controller_DrawSliderMaybeDim(176, 144, trigright, trigright * 100.f, "%.0f%%", !dim);
+	}
 
 	if (IN_HasGyro())
 	{
+		qboolean gyro_active;
 		gyro = IN_GetRawGyroMagnitude();
 		r = CLAMP(0.f, gyro / 180.f, 1.f);
-		if (gyro > gyro_noise_thresh.value)
-			M_PrintWhite(40, 152, "Gyro");
-		else
-			M_Print(40, 152, "Gyro");
-		M_DrawSlider(176, 152, r, gyro, "%.0f");
+		gyro_active = gyro > gyro_noise_thresh.value;
+		if (gyro_active) M_PrintWhite(40, 152, "Gyro");
+		else             M_Controller_Test_DimPrint(40, 152, "Gyro", dim);
+		M_Controller_DrawSliderMaybeDim(176, 152, r, gyro, "%.0f", !dim);
 	}
 	else
 	{
-		M_Print(40, 152, "Gyro");
-		M_Print(176, 152, "Unavailable");
+		M_Controller_Test_DimPrint(40, 152, "Gyro", dim);
+		M_Controller_Test_DimPrint(176, 152, "Unavailable", dim);
 	}
 
-	M_Controller_Test_DrawHeldButtons(168);
-	M_Controller_Test_DrawHints(184);
+	M_Controller_Test_DrawHeldButtons(168, dim);
+	M_Controller_Test_DrawHints(184, dim);
 }
 
 void M_Controller_Test_Key(int key)
@@ -7262,7 +7500,12 @@ void M_Controller_Test_Key(int key)
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
-		if (IN_HasRumble())
+		if (!IN_HasGamepad())
+		{
+			S_LocalSound("misc/menu2.wav");
+			M_Menu_Controller_f();
+		}
+		else if (IN_HasRumble())
 		{
 			S_LocalSound("misc/menu3.wav");
 			IN_TestRumble();
@@ -13795,9 +14038,9 @@ Misc Menu
 ==================
 */
 
-extern cvar_t pr_checkextension, r_replacemodels, gl_load24bit, cl_nopext, r_lerpmodels, r_lerpmove, 
+extern cvar_t pr_checkextension, r_replacemodels, gl_load24bit, cl_nopext, r_lerpmodels, r_lerpmove,
 sys_throttle, r_particles, sv_nqplayerphysics, cl_nopred, cl_autodemo, cl_smartspawn, cl_bobbing, cl_onload,
-cl_pong, scr_hints;
+cl_pong, scr_hints, cl_portpingprobe_enable;
 
 static enum extras_e
 {
@@ -13806,6 +14049,7 @@ static enum extras_e
 	EXTRAS_QCEXTENSIONS,
 	EXTRAS_PREDICTION,
 	EXTRAS_AUTODEMO,
+	EXTRAS_PORTPINGPROBE,
 	EXTRAS_SPAWNTRAINER,
 	EXTRAS_ITEMBOB,
 	EXTRAS_RESETCONFIG,
@@ -13844,6 +14088,8 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 		return "Prediction";
 	case EXTRAS_AUTODEMO:
 		return "Auto Demo";
+	case EXTRAS_PORTPINGPROBE:
+		return "Port Ping Probe";
 	case EXTRAS_SPAWNTRAINER:
 		return "Spawn Trainer";
 	case EXTRAS_ITEMBOB:
@@ -13911,6 +14157,9 @@ static void M_Extras_AdjustSliders (int dir)
 		if (m < 0) m = 4;
 		if (m > 4) m = 0;
 		Cvar_SetValue("cl_autodemo", m);
+		break;
+	case EXTRAS_PORTPINGPROBE:
+		Cvar_SetValueQuick(&cl_portpingprobe_enable, !cl_portpingprobe_enable.value);
 		break;
 	case EXTRAS_SPAWNTRAINER:
 		Cvar_SetValue("cl_smartspawn", !cl_smartspawn.value);
@@ -14005,6 +14254,11 @@ void M_Extras_Draw(void)
 			case 4: value = "all maps (split)"; break;
 			default: value = "unknown"; break;
 			}
+			break;
+
+		case EXTRAS_PORTPINGPROBE:
+			text = "   Port Ping Probe";
+			value = cl_portpingprobe_enable.value ? "on" : "off";
 			break;
 
 		case EXTRAS_SPAWNTRAINER:
