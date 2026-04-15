@@ -98,6 +98,8 @@ void M_Menu_Main_f (void);
 		void M_Menu_Calibration_f (void);
 		void M_Menu_Video_f (void);
 	void M_Menu_Graphics_f (void);
+		void M_Menu_Sky_f (void);
+			void M_Menu_Skywind_f (void);
 	void M_Menu_Sound_f (void);
 		void M_Menu_Voip_f (void);
 	void M_Menu_Game_f (void);
@@ -142,6 +144,8 @@ void M_Main_Draw (void);
 		void M_Calibration_Draw (void);
 		void M_Video_Draw (void);
 	void M_Graphics_Draw (void);
+		void M_Sky_Draw (void);
+			void M_Skywind_Draw (void);
 	void M_Sound_Draw (void);
 		void M_Voip_Draw (void);
 	void M_Game_Draw (void);
@@ -185,6 +189,10 @@ void M_Main_Key (int key);
 		void M_Calibration_Key (int key);
 		void M_Video_Key (int key);
 	void M_Graphics_Key (int key);
+		void M_Sky_Key (int key);
+		void M_Sky_Char (int key);
+		qboolean M_Sky_TextEntry (void);
+			void M_Skywind_Key (int key);
 	void M_Sound_Key (int key);
 		void M_Voip_Key (int key);
 	void M_Game_Key (int key);
@@ -229,6 +237,8 @@ void M_Main_Key (int key);
 		void M_Controller_Mousemove (int cx, int cy);
 		void M_Video_Mousemove (int cx, int cy);
 		void M_Graphics_Mousemove (int cx, int cy);
+			void M_Sky_Mousemove (int cx, int cy);
+				void M_Skywind_Mousemove (int cx, int cy);
 		void M_Sound_Mousemove (int cx, int cy);
 			void M_Voip_Mousemove (int cx, int cy);
 		void M_Game_Mousemove (int cx, int cy);
@@ -5679,6 +5689,214 @@ Mouse Menu
 ==================
 */
 
+typedef const char* (*menu_search_gettext_fn)(int index);
+
+static int M_Menu_ClampCursorValue(int cursor, int total_items)
+{
+	if (total_items <= 0)
+		return 0;
+
+	if (cursor < 0 || cursor >= total_items)
+	{
+		cursor %= total_items;
+		if (cursor < 0)
+			cursor += total_items;
+	}
+
+	return cursor;
+}
+
+static qboolean M_Menu_SearchItemMatches(menu_search_gettext_fn get_item_text,
+	const char* search_text, int index)
+{
+	const char* itemtext = get_item_text(index);
+
+	return itemtext && q_strcasestr(itemtext, search_text);
+}
+
+static int M_Menu_UpdateSearchCursor(int total_items, int cursor,
+	int* filtered_count, menu_search_gettext_fn get_item_text,
+	const char* search_text, int search_len)
+{
+	int i;
+	int first_match = -1;
+	const qboolean has_search = search_len > 0;
+	qboolean current_matches;
+
+	cursor = M_Menu_ClampCursorValue(cursor, total_items);
+	current_matches = has_search &&
+		M_Menu_SearchItemMatches(get_item_text, search_text, cursor);
+
+	if (!has_search)
+	{
+		*filtered_count = total_items;
+		return cursor;
+	}
+
+	*filtered_count = 0;
+	for (i = 0; i < total_items; i++)
+	{
+		if (M_Menu_SearchItemMatches(get_item_text, search_text, i))
+		{
+			if (first_match < 0)
+				first_match = i;
+			(*filtered_count)++;
+		}
+	}
+
+	if (*filtered_count > 0 && !current_matches)
+		cursor = first_match;
+
+	return cursor;
+}
+
+static int M_Menu_MoveSearchCursor(int total_items, int filtered_count,
+	int cursor, int delta, menu_search_gettext_fn get_item_text,
+	const char* search_text, int search_len)
+{
+	int i;
+
+	cursor = M_Menu_ClampCursorValue(cursor, total_items);
+
+	if (search_len <= 0)
+	{
+		cursor += delta;
+		cursor %= total_items;
+		if (cursor < 0)
+			cursor += total_items;
+		return cursor;
+	}
+
+	if (filtered_count <= 0)
+		return cursor;
+
+	for (i = 0; i < total_items; i++)
+	{
+		cursor += delta;
+		cursor %= total_items;
+		if (cursor < 0)
+			cursor += total_items;
+
+		if (M_Menu_SearchItemMatches(get_item_text, search_text, cursor))
+			return cursor;
+	}
+
+	return cursor;
+}
+
+static size_t M_Menu_CommonPrefixLength(const char *a, const char *b)
+{
+	size_t i = 0;
+
+	while (a[i] && b[i] && q_tolower((unsigned char)a[i]) == q_tolower((unsigned char)b[i]))
+		++i;
+
+	return i;
+}
+
+static qboolean M_Menu_TabCompleteFileList(menu_textfield_t *field,
+	char *buffer, size_t buffer_size, filelist_item_t *list,
+	char *tab_partial, size_t tab_partial_size)
+{
+	const filelist_item_t *item;
+	const filelist_item_t *first_match = NULL;
+	const filelist_item_t *last_match = NULL;
+	const filelist_item_t *prev_match = NULL;
+	const filelist_item_t *current_match = NULL;
+	const filelist_item_t *next_match = NULL;
+	char prefix[MAXCMDLINE];
+	char completed[MAXCMDLINE];
+	const char *replacement = NULL;
+	size_t prefix_len, partial_len, common_len = 0;
+	int match_count = 0;
+	qboolean first_cycle = !tab_partial[0];
+
+	if (!buffer_size)
+		return false;
+
+	prefix_len = (size_t)CLAMP(0, field->cursor, (int)strlen(buffer));
+	if (prefix_len >= sizeof(prefix))
+		prefix_len = sizeof(prefix) - 1;
+
+	memcpy(prefix, buffer, prefix_len);
+	prefix[prefix_len] = '\0';
+
+	if (first_cycle)
+		q_strlcpy(tab_partial, prefix, tab_partial_size);
+
+	partial_len = strlen(tab_partial);
+
+	for (item = list; item; item = item->next)
+	{
+		if (partial_len && q_strncasecmp(item->name, tab_partial, partial_len) != 0)
+			continue;
+
+		if (!first_match)
+		{
+			first_match = item;
+			common_len = strlen(item->name);
+		}
+		else
+		{
+			common_len = q_min(common_len, M_Menu_CommonPrefixLength(first_match->name, item->name));
+		}
+
+		if (current_match && !next_match)
+			next_match = item;
+
+		if (!q_strcasecmp(item->name, prefix))
+			current_match = item;
+		else if (!current_match)
+			prev_match = item;
+
+		last_match = item;
+		++match_count;
+	}
+
+	if (!first_match)
+		return false;
+
+	if (first_cycle)
+	{
+		if (match_count == 1)
+		{
+			replacement = first_match->name;
+		}
+		else if (common_len > partial_len)
+		{
+			memcpy(completed, first_match->name, common_len);
+			completed[common_len] = '\0';
+			replacement = completed;
+		}
+		else
+		{
+			replacement = keydown[K_SHIFT] ? last_match->name : first_match->name;
+		}
+	}
+	else if (current_match)
+	{
+		replacement = keydown[K_SHIFT]
+			? (prev_match ? prev_match->name : last_match->name)
+			: (next_match ? next_match->name : first_match->name);
+	}
+	else
+	{
+		replacement = keydown[K_SHIFT] ? last_match->name : first_match->name;
+	}
+
+	q_strlcpy(completed, replacement, sizeof(completed));
+	q_strlcat(completed, buffer + prefix_len, sizeof(completed));
+
+	if (!strcmp(buffer, completed) && field->cursor == (int)strlen(replacement))
+		return false;
+
+	q_strlcpy(buffer, completed, buffer_size);
+	field->cursor = (int)strlen(replacement);
+	field->sel_start = -1;
+	M_TextField_ClampCursor(field);
+	return true;
+}
+
 extern cvar_t cl_minpitch, cl_maxpitch;
 extern cvar_t scr_customcursor;
 
@@ -5758,6 +5976,20 @@ static const char* M_Mouse_GetItemText(int index)
 	}
 }
 
+static void M_Mouse_UpdateSearch(void)
+{
+	mouse_cursor = (enum mouse_e)M_Menu_UpdateSearchCursor(
+		MOUSE_ITEMS, (int)mouse_cursor, &numberOfMouseItems,
+		M_Mouse_GetItemText, mousemenu.search.text, mousemenu.search.len);
+}
+
+static void M_Mouse_MoveCursor(int delta)
+{
+	mouse_cursor = (enum mouse_e)M_Menu_MoveSearchCursor(
+		MOUSE_ITEMS, numberOfMouseItems, (int)mouse_cursor, delta,
+		M_Mouse_GetItemText, mousemenu.search.text, mousemenu.search.len);
+}
+
 void M_Menu_Mouse_f(void)
 {
 	key_dest = key_menu;
@@ -5822,6 +6054,8 @@ void M_Mouse_Draw(void)
 	qpic_t* p;
 	float r;
 	enum mouse_e i;
+
+	mouse_cursor = (enum mouse_e)M_Menu_ClampCursorValue((int)mouse_cursor, MOUSE_ITEMS);
 
 	p = Draw_CachePic("gfx/p_option.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
@@ -5937,7 +6171,7 @@ void M_Mouse_Key(int k)
 		{
 			mousemenu.search.len = 0;
 			mousemenu.search.text[0] = 0;
-			numberOfMouseItems = MOUSE_ITEMS;
+			M_Mouse_UpdateSearch();
 			return;
 		}
 		M_Menu_Options_f();
@@ -5960,28 +6194,10 @@ void M_Mouse_Key(int k)
 			else
 			{
 				// Delete one character
-			mousemenu.search.text[--mousemenu.search.len] = 0;
+				mousemenu.search.text[--mousemenu.search.len] = 0;
 			}
 
-			// Update filtering
-			if (mousemenu.search.len > 0)
-			{
-				numberOfMouseItems = 0;
-				for (int i = 0; i < MOUSE_ITEMS; i++)
-				{
-					const char* itemtext = M_Mouse_GetItemText(i);
-					if (itemtext && q_strcasestr(itemtext, mousemenu.search.text))
-					{
-						numberOfMouseItems++;
-						if (numberOfMouseItems == 1)
-							mouse_cursor = i;
-					}
-				}
-			}
-			else
-			{
-				numberOfMouseItems = MOUSE_ITEMS;
-			}
+			M_Mouse_UpdateSearch();
 			return;
 		}
 	}
@@ -5991,7 +6207,7 @@ void M_Mouse_Key(int k)
 		{
 			mousemenu.search.len = 0;
 			mousemenu.search.text[0] = 0;
-			numberOfMouseItems = MOUSE_ITEMS;
+			M_Mouse_UpdateSearch();
 			return;
 		}
 	}
@@ -6001,18 +6217,7 @@ void M_Mouse_Key(int k)
 		{
 			mousemenu.search.text[mousemenu.search.len++] = k;
 			mousemenu.search.text[mousemenu.search.len] = 0;
-
-			numberOfMouseItems = 0;
-			for (int i = 0; i < MOUSE_ITEMS; i++)
-			{
-				const char* itemtext = M_Mouse_GetItemText(i);
-				if (itemtext && q_strcasestr(itemtext, mousemenu.search.text))
-				{
-					numberOfMouseItems++;
-					if (numberOfMouseItems == 1)
-						mouse_cursor = i;
-				}
-			}
+			M_Mouse_UpdateSearch();
 			return;
 		}
 	}
@@ -6058,16 +6263,12 @@ void M_Mouse_Key(int k)
 
 	case K_UPARROW:
 		S_LocalSound("misc/menu1.wav");
-		mouse_cursor--;
-		if (mouse_cursor < 0)
-			mouse_cursor = numberOfMouseItems - 1;
+		M_Mouse_MoveCursor(-1);
 		break;
 
 	case K_DOWNARROW:
 		S_LocalSound("misc/menu1.wav");
-		mouse_cursor++;
-		if (mouse_cursor >= numberOfMouseItems)
-			mouse_cursor = 0;
+		M_Mouse_MoveCursor(1);
 		break;
 
 	case K_LEFTARROW:
@@ -7568,6 +7769,7 @@ static enum graphics_e
 	GRAPHICS_MODELOUTLINES,
 	GRAPHICS_POWERUPSHELLS,
 	GRAPHICS_WATERCAUSTICS,
+	GRAPHICS_SKY,
 	GRAPHICS_COUNT
 } graphics_cursor;
 
@@ -7625,9 +7827,98 @@ static const char* M_Graphics_GetItemText(int index)
 		return "Powerup Shells";
 	case GRAPHICS_WATERCAUSTICS:
 		return "Water Caustics";
+	case GRAPHICS_SKY:
+		return "Sky";
 	default:
 		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
 		return buffer;
+	}
+}
+
+static void M_Graphics_ClampCursor(void)
+{
+	int cursor = (int)graphics_cursor;
+
+	if (cursor < 0 || cursor >= GRAPHICS_ITEMS)
+	{
+		cursor %= GRAPHICS_ITEMS;
+		if (cursor < 0)
+			cursor += GRAPHICS_ITEMS;
+		graphics_cursor = (enum graphics_e)cursor;
+	}
+}
+
+static qboolean M_Graphics_ItemMatchesSearch(int index)
+{
+	const char* itemtext = M_Graphics_GetItemText(index);
+
+	return itemtext && q_strcasestr(itemtext, graphicsmenu.search.text);
+}
+
+static void M_Graphics_UpdateSearch(void)
+{
+	int i;
+	int first_match = -1;
+	const qboolean has_search = graphicsmenu.search.len > 0;
+	const qboolean current_matches = has_search &&
+		M_Graphics_ItemMatchesSearch((int)graphics_cursor);
+
+	M_Graphics_ClampCursor();
+
+	if (!has_search)
+	{
+		numberOfGraphicsItems = GRAPHICS_ITEMS;
+		return;
+	}
+
+	numberOfGraphicsItems = 0;
+	for (i = 0; i < GRAPHICS_ITEMS; i++)
+	{
+		if (M_Graphics_ItemMatchesSearch(i))
+		{
+			if (first_match < 0)
+				first_match = i;
+			numberOfGraphicsItems++;
+		}
+	}
+
+	if (numberOfGraphicsItems > 0 && !current_matches)
+		graphics_cursor = (enum graphics_e)first_match;
+}
+
+static void M_Graphics_MoveCursor(int delta)
+{
+	int cursor;
+	int i;
+
+	M_Graphics_ClampCursor();
+
+	if (graphicsmenu.search.len <= 0)
+	{
+		cursor = (int)graphics_cursor + delta;
+		cursor %= GRAPHICS_ITEMS;
+		if (cursor < 0)
+			cursor += GRAPHICS_ITEMS;
+		graphics_cursor = (enum graphics_e)cursor;
+		return;
+	}
+
+	if (numberOfGraphicsItems <= 0)
+		return;
+
+	cursor = (int)graphics_cursor;
+	for (i = 0; i < GRAPHICS_ITEMS; i++)
+	{
+		cursor += delta;
+		cursor %= GRAPHICS_ITEMS;
+		if (cursor < 0)
+			cursor += GRAPHICS_ITEMS;
+
+		if (M_Graphics_ItemMatchesSearch(cursor))
+		{
+			graphics_cursor = (enum graphics_e)cursor;
+			return;
+		}
 	}
 }
 
@@ -7814,6 +8105,10 @@ static void M_Graphics_AdjustSliders(int dir)
 		break;
 	}
 	break;
+
+	case GRAPHICS_SKY:
+		M_Menu_Sky_f();
+		break;
 	}
 }
 
@@ -7823,6 +8118,8 @@ void M_Graphics_Draw(void)
 	enum graphics_e i;
 	float r;
 	int m;
+
+	M_Graphics_ClampCursor();
 
 	p = Draw_CachePic("gfx/p_option.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
@@ -7968,6 +8265,11 @@ void M_Graphics_Draw(void)
 			M_DrawSlider(186, y, r, gl_caustics.value * 10.0f, "%.0f%%"); // Display as 0-100%
 			break;
 
+		case GRAPHICS_SKY:
+			text = "               Sky";
+			M_Print(178, y, "...");
+			break;
+
 		default:
 			break;
 		}
@@ -8038,7 +8340,7 @@ void M_Graphics_Key(int k)
 		{
 			graphicsmenu.search.len = 0;
 			graphicsmenu.search.text[0] = 0;
-			numberOfGraphicsItems = GRAPHICS_ITEMS;
+			M_Graphics_UpdateSearch();
 			return;
 		}
 		M_Menu_Options_f();
@@ -8051,7 +8353,7 @@ void M_Graphics_Key(int k)
 			// Clear entire search with Ctrl+U
 			graphicsmenu.search.len = 0;
 			graphicsmenu.search.text[0] = 0;
-			numberOfGraphicsItems = GRAPHICS_ITEMS;
+			M_Graphics_UpdateSearch();
 			return;
 		}
 		else if (k == K_BACKSPACE && graphicsmenu.search.len > 0)
@@ -8063,26 +8365,7 @@ void M_Graphics_Key(int k)
 			M_DeletePrevWord(&temp);
 			Q_strcpy(graphicsmenu.search.text, temp.text);
 			graphicsmenu.search.len = temp.len;
-
-			// Update filtering based on new search text
-			if (graphicsmenu.search.len > 0)
-			{
-				numberOfGraphicsItems = 0;
-				for (int i = 0; i < GRAPHICS_ITEMS; i++)
-				{
-					const char* itemtext = M_Graphics_GetItemText(i);
-					if (itemtext && q_strcasestr(itemtext, graphicsmenu.search.text))
-					{
-						numberOfGraphicsItems++;
-						if (numberOfGraphicsItems == 1)
-							graphics_cursor = i;
-					}
-				}
-			}
-			else
-			{
-				numberOfGraphicsItems = GRAPHICS_ITEMS;
-			}
+			M_Graphics_UpdateSearch();
 			return;
 	}
 	}
@@ -8091,24 +8374,7 @@ void M_Graphics_Key(int k)
 		if (graphicsmenu.search.len > 0)
 		{
 			graphicsmenu.search.text[--graphicsmenu.search.len] = 0;
-			if (graphicsmenu.search.len > 0)
-			{
-				numberOfGraphicsItems = 0;
-				for (int i = 0; i < GRAPHICS_ITEMS; i++)
-				{
-					const char* itemtext = M_Graphics_GetItemText(i);
-					if (itemtext && q_strcasestr(itemtext, graphicsmenu.search.text))
-					{
-						numberOfGraphicsItems++;
-						if (numberOfGraphicsItems == 1)
-							graphics_cursor = i;
-					}
-				}
-			}
-			else
-			{
-				numberOfGraphicsItems = GRAPHICS_ITEMS;
-			}
+			M_Graphics_UpdateSearch();
 			return;
 		}
 	}
@@ -8118,18 +8384,7 @@ void M_Graphics_Key(int k)
 		{
 			graphicsmenu.search.text[graphicsmenu.search.len++] = k;
 			graphicsmenu.search.text[graphicsmenu.search.len] = 0;
-
-			numberOfGraphicsItems = 0;
-			for (int i = 0; i < GRAPHICS_ITEMS; i++)
-			{
-				const char* itemtext = M_Graphics_GetItemText(i);
-				if (itemtext && q_strcasestr(itemtext, graphicsmenu.search.text))
-				{
-					numberOfGraphicsItems++;
-					if (numberOfGraphicsItems == 1)
-						graphics_cursor = i;
-				}
-			}
+			M_Graphics_UpdateSearch();
 			return;
 		}
 	}
@@ -8181,16 +8436,12 @@ void M_Graphics_Key(int k)
 
 	case K_UPARROW:
 		S_LocalSound("misc/menu1.wav");
-		graphics_cursor--;
-		if (graphics_cursor < 0)
-			graphics_cursor = numberOfGraphicsItems - 1;
+		M_Graphics_MoveCursor(-1);
 		break;
 
 	case K_DOWNARROW:
 		S_LocalSound("misc/menu1.wav");
-		graphics_cursor++;
-		if (graphics_cursor >= numberOfGraphicsItems)
-			graphics_cursor = 0;
+		M_Graphics_MoveCursor(1);
 		break;
 
 	case K_LEFTARROW:
@@ -8266,6 +8517,7 @@ void M_Graphics_Mousemove(int cx, int cy)
 		case GRAPHICS_COLOREDLIGHTING:
 		case GRAPHICS_BRUSHSHADOW:
 		case GRAPHICS_POWERUPSHELLS:
+		case GRAPHICS_SKY:
 		case GRAPHICS_COUNT:
 			break;
 
@@ -8287,6 +8539,950 @@ void M_Graphics_Mousemove(int cx, int cy)
 	{
 		// Update the cursor position
 		graphics_cursor = item;
+	}
+}
+
+
+/*
+==================
+Sky Menu
+==================
+*/
+
+extern cvar_t r_fastsky, r_fastskycolor, r_skyalpha, r_skyfog, r_skyspeed;
+extern cvar_t r_skywind, r_globalsky, allow_download_sky;
+// r_sky_quality is file-static in gl_sky.c; we access it by name via Cvar_FindVar.
+
+void Sky_GetWindParams(float *dist, float *yaw, float *period, float *pitch);
+void Sky_SetWindParams(float dist, float yaw, float period, float pitch);
+
+static qboolean sky_rgb_active;
+
+#define SKY_GLOBALSKY_BOX_X     178
+#define SKY_GLOBALSKY_BOX_WIDTH 14
+#define SKY_GLOBALSKY_TEXT_X    (SKY_GLOBALSKY_BOX_X + 8)
+
+static enum sky_e
+{
+	SKY_FASTSKY,
+	SKY_FASTSKY_COLOR,
+	SKY_QUALITY,
+	SKY_ALPHA,
+	SKY_FOG,
+	SKY_SPEED,
+	SKY_ALLOW_DOWNLOAD,
+	SKY_GLOBALSKY,
+	SKY_WIND,
+	SKY_COUNT
+} sky_cursor;
+
+#define SKY_ITEMS (SKY_COUNT)
+
+static qboolean sky_slider_grab;
+static qboolean sky_field_editing;
+static menu_textfield_t sky_globalsky_field;
+static char sky_globalsky_buffer[MAX_QPATH];
+static char sky_globalsky_hint[MAX_QPATH];
+static char sky_globalsky_tabpartial[MAX_QPATH];
+
+static int M_Sky_GetItemY(int index)
+{
+	int y = 48 + index * 8;
+	if (index >= SKY_GLOBALSKY)
+		y += 8;
+	if (index > SKY_GLOBALSKY)
+		y += 8;
+	return y;
+}
+
+static int M_Sky_GetItemAtY(int cy)
+{
+	int i;
+	for (i = 0; i < SKY_ITEMS; i++)
+	{
+		int y = M_Sky_GetItemY(i);
+		int top = (i == SKY_GLOBALSKY) ? y - 8 : y;
+		int bottom = y + 8;
+		if (cy >= top && cy < bottom)
+			return i;
+	}
+	return -1;
+}
+
+static int M_Sky_GlobalskyViewStart(const menu_textfield_t *field)
+{
+	int len = (int)strlen(field->text);
+	if (len <= SKY_GLOBALSKY_BOX_WIDTH)
+		return 0;
+	return CLAMP(0, field->cursor - SKY_GLOBALSKY_BOX_WIDTH, len - SKY_GLOBALSKY_BOX_WIDTH);
+}
+
+static void M_Sky_UpdateGlobalskyHint(void)
+{
+	filelist_item_t *item;
+	int len = (int)strlen(sky_globalsky_buffer);
+
+	sky_globalsky_hint[0] = '\0';
+
+	if (len <= 0)
+		return;
+
+	for (item = skylist; item; item = item->next)
+	{
+		if (!q_strncasecmp(item->name, sky_globalsky_buffer, len))
+		{
+			q_strlcpy(sky_globalsky_hint, item->name + len, sizeof(sky_globalsky_hint));
+			return;
+		}
+	}
+}
+
+static void M_Sky_BeginFieldEdit(void)
+{
+	q_strlcpy(sky_globalsky_buffer, r_globalsky.string, sizeof(sky_globalsky_buffer));
+	M_TextField_Init(&sky_globalsky_field, sky_globalsky_buffer,
+		sizeof(sky_globalsky_buffer) - 1, false);
+	sky_globalsky_field.cursor = (int)strlen(sky_globalsky_field.text);
+	sky_globalsky_field.sel_start = -1;
+	sky_field_editing = true;
+	sky_globalsky_tabpartial[0] = '\0';
+	M_Sky_UpdateGlobalskyHint();
+}
+
+static void M_Sky_EndFieldEdit(qboolean apply_changes)
+{
+	if (apply_changes)
+		Cvar_Set("r_globalsky", sky_globalsky_buffer);
+	else
+		q_strlcpy(sky_globalsky_buffer, r_globalsky.string, sizeof(sky_globalsky_buffer));
+
+	sky_globalsky_field.cursor = (int)strlen(sky_globalsky_field.text);
+	sky_globalsky_field.sel_start = -1;
+	M_TextField_ClampCursor(&sky_globalsky_field);
+	sky_field_editing = false;
+	sky_globalsky_hint[0] = '\0';
+	sky_globalsky_tabpartial[0] = '\0';
+}
+
+static cvar_t *M_Sky_QualityCvar(void)
+{
+	static cvar_t *cached = NULL;
+	if (!cached)
+		cached = Cvar_FindVar("r_sky_quality");
+	return cached;
+}
+
+static void M_Sky_ClampCursor(void)
+{
+	sky_cursor = (enum sky_e)M_Menu_ClampCursorValue((int)sky_cursor, SKY_ITEMS);
+}
+
+static void M_Sky_MoveCursor(int delta)
+{
+	sky_cursor = (enum sky_e)M_Menu_ClampCursorValue((int)sky_cursor + delta, SKY_ITEMS);
+}
+
+void M_Menu_Sky_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_sky;
+	m_entersound = true;
+	sky_cursor = 0;
+	sky_slider_grab = false;
+	sky_field_editing = false;
+	sky_globalsky_hint[0] = '\0';
+	sky_globalsky_tabpartial[0] = '\0';
+
+	q_strlcpy(sky_globalsky_buffer, r_globalsky.string, sizeof(sky_globalsky_buffer));
+	M_TextField_Init(&sky_globalsky_field, sky_globalsky_buffer,
+		sizeof(sky_globalsky_buffer) - 1, false);
+
+	IN_UpdateGrabs();
+}
+
+static void M_Sky_AdjustColor(int dir)
+{
+	const char *current = r_fastskycolor.string;
+
+	if (keydown[K_SHIFT])
+	{
+		plcolour_t color = CL_PLColours_Parse(current);
+		vec3_t hsv;
+
+		sky_rgb_active = true;
+
+		if (color.type != 2)
+		{
+			byte *pal = (byte *)&d_8to24table[(color.basic << 4) + 8];
+			color.rgb[0] = pal[0];
+			color.rgb[1] = pal[1];
+			color.rgb[2] = pal[2];
+		}
+
+		rgbtohsv(color.rgb, hsv);
+		hsv[0] += dir / 128.0;
+		hsv[1] = 1;
+		hsv[2] = 1;
+		color.type = 2;
+		color.basic = 0;
+		hsvtorgb(hsv[0], hsv[1], hsv[2], color.rgb);
+
+		Cvar_Set("r_fastskycolor", CL_PLColours_ToString(color));
+		return;
+	}
+
+	sky_rgb_active = false;
+
+	if (!current[0])
+	{
+		if (dir > 0)
+		{
+			plcolour_t color;
+			color.type = 1;
+			color.basic = 0;
+			Cvar_Set("r_fastskycolor", CL_PLColours_ToString(color));
+		}
+		return;
+	}
+
+	{
+		plcolour_t color = CL_PLColours_Parse(current);
+		int newBasic;
+
+		color.type = 1;
+		newBasic = color.basic + dir;
+
+		if (newBasic < 0)
+		{
+			Cvar_Set("r_fastskycolor", "");
+			return;
+		}
+		if (newBasic > 13)
+			newBasic = 0;
+		color.basic = newBasic;
+		Cvar_Set("r_fastskycolor", CL_PLColours_ToString(color));
+	}
+}
+
+static void M_Sky_AdjustSliders(int dir)
+{
+	cvar_t *q;
+	float f;
+	int mode;
+
+	S_LocalSound("misc/menu3.wav");
+
+	switch (sky_cursor)
+	{
+	case SKY_FASTSKY:
+		mode = (int)r_fastsky.value;
+		mode = (mode + (dir > 0 ? 1 : 2)) % 3; // cycle 0->1->2
+		Cvar_SetValue("r_fastsky", (float)mode);
+		break;
+
+	case SKY_FASTSKY_COLOR:
+		M_Sky_AdjustColor(dir);
+		break;
+
+	case SKY_QUALITY:
+		q = M_Sky_QualityCvar();
+		if (q)
+		{
+			f = q->value + dir;
+			f = CLAMP(4, f, 32);
+			Cvar_SetValue("r_sky_quality", f);
+		}
+		break;
+
+	case SKY_ALPHA:
+		f = r_skyalpha.value + dir * 0.1f;
+		f = CLAMP(0, f, 1);
+		Cvar_SetValue("r_skyalpha", f);
+		break;
+
+	case SKY_FOG:
+		f = r_skyfog.value + dir * 0.05f;
+		f = CLAMP(0, f, 1);
+		Cvar_SetValue("r_skyfog", f);
+		break;
+
+	case SKY_SPEED:
+		f = r_skyspeed.value + dir * 0.25f;
+		f = CLAMP(0, f, 10);
+		Cvar_SetValue("r_skyspeed", f);
+		break;
+
+	case SKY_ALLOW_DOWNLOAD:
+		Cvar_SetValue("allow_download_sky", !allow_download_sky.value);
+		break;
+
+	case SKY_GLOBALSKY:
+		M_Sky_BeginFieldEdit();
+		break;
+
+	case SKY_WIND:
+		M_Menu_Skywind_f();
+		break;
+
+	case SKY_COUNT:
+	default:
+		break;
+	}
+}
+
+void M_Sky_Draw(void)
+{
+	qpic_t *p;
+	cvar_t *q;
+	float r;
+	int i;
+
+	M_TextField_CheckMouseRelease();
+	M_Sky_ClampCursor();
+
+	p = Draw_CachePic("gfx/p_option.lmp");
+	M_DrawPic((320 - p->width) / 2, 4, p);
+
+	{
+		const char *title = "Sky";
+		M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
+	}
+
+	for (i = 0; i < SKY_ITEMS; i++)
+	{
+		int y = M_Sky_GetItemY(i);
+		const char *text = NULL;
+
+		switch (i)
+		{
+		case SKY_FASTSKY:
+		{
+			static const char *labels[3] = {"off", "flat", "auto"};
+			int mode = (int)r_fastsky.value;
+			text = "          Fast Sky";
+			if (mode < 0) mode = 0;
+			if (mode > 2) mode = 2;
+			M_Print(178, y, labels[mode]);
+			break;
+		}
+
+		case SKY_FASTSKY_COLOR:
+		{
+			const char *val = r_fastskycolor.string;
+			const char *display;
+			text = "    Fast Sky Color";
+			if (!val[0])
+			{
+				display = "off";
+				M_Print(178, y, display);
+			}
+			else if (sky_rgb_active)
+			{
+				display = val;
+				M_Print(178, y, display);
+			}
+			else
+			{
+				plcolour_t color = CL_PLColours_Parse(val);
+				display = (color.type == 2) ? val : va("%d", color.basic);
+				M_Print(178, y, display);
+			}
+			if (val[0])
+				Draw_FillPlayer(178 + (strlen(display) * 8) + 4, y + 2, 6, 6,
+					CL_PLColours_Parse(val), 1.0);
+			break;
+		}
+
+		case SKY_QUALITY:
+			text = "       Sky Quality";
+			q = M_Sky_QualityCvar();
+			if (q)
+			{
+				float v = CLAMP(4, q->value, 32);
+				r = (v - 4) / (32 - 4);
+				M_DrawSlider(186, y, r, v, "%.0f");
+			}
+			else
+			{
+				M_Print(178, y, "n/a");
+			}
+			break;
+
+		case SKY_ALPHA:
+			text = "         Sky Alpha";
+			r = r_skyalpha.value;
+			M_DrawSlider(186, y, r, r * 100.0f, "%.0f%%");
+			break;
+
+		case SKY_FOG:
+			text = "           Sky Fog";
+			r = r_skyfog.value;
+			M_DrawSlider(186, y, r, r * 100.0f, "%.0f%%");
+			break;
+
+		case SKY_SPEED:
+			text = "         Sky Speed";
+			r = r_skyspeed.value / 10.0f;
+			M_DrawSlider(186, y, r, r_skyspeed.value, "%.2f");
+			break;
+
+		case SKY_ALLOW_DOWNLOAD:
+			text = "  Skybox Downloads";
+			M_DrawCheckbox(178, y, allow_download_sky.value != 0);
+			break;
+
+		case SKY_GLOBALSKY:
+		{
+			menu_textfield_t *field = &sky_globalsky_field;
+			int view_start = M_Sky_GlobalskyViewStart(field);
+			int sel_begin, sel_end;
+
+			text = "        Global Sky";
+			M_DrawTextBox(SKY_GLOBALSKY_BOX_X, y - 8, SKY_GLOBALSKY_BOX_WIDTH, 1);
+
+			if (M_TextField_GetSelection(field, &sel_begin, &sel_end))
+			{
+				int visible_begin = CLAMP(view_start, sel_begin, view_start + SKY_GLOBALSKY_BOX_WIDTH);
+				int visible_end   = CLAMP(view_start, sel_end,   view_start + SKY_GLOBALSKY_BOX_WIDTH);
+				if (visible_begin < visible_end)
+				{
+					Draw_Fill(SKY_GLOBALSKY_TEXT_X + (visible_begin - view_start) * 8, y,
+						(visible_end - visible_begin) * 8, 8, 170, 0.4f);
+				}
+			}
+
+			if (field->text[0])
+			{
+				char visible_text[SKY_GLOBALSKY_BOX_WIDTH + 1];
+				q_strlcpy(visible_text, field->text + view_start, sizeof(visible_text));
+				M_PrintWhite(SKY_GLOBALSKY_TEXT_X, y, visible_text);
+
+				if (sky_field_editing &&
+					sky_globalsky_hint[0] &&
+					field->cursor == (int)strlen(field->text))
+				{
+					int hint_col = field->cursor - view_start;
+					int max_hint_len = SKY_GLOBALSKY_BOX_WIDTH - hint_col;
+
+					if (hint_col >= 0 && max_hint_len > 0)
+					{
+						char visible_hint[SKY_GLOBALSKY_BOX_WIDTH + 1];
+						q_strlcpy(visible_hint, sky_globalsky_hint, (size_t)max_hint_len + 1);
+						M_PrintRGBA(SKY_GLOBALSKY_TEXT_X + hint_col * 8, y, visible_hint,
+							CL_PLColours_Parse("0xffffff"), 0.5f, true);
+					}
+				}
+			}
+			else if (!sky_field_editing)
+			{
+				M_PrintRGBA(SKY_GLOBALSKY_TEXT_X, y, "none",
+					CL_PLColours_Parse("0xffffff"), 0.5f, false);
+			}
+
+			if (sky_field_editing)
+			{
+				menu_textfield_t visible_field = *field;
+				visible_field.cursor = CLAMP(0, field->cursor - view_start, SKY_GLOBALSKY_BOX_WIDTH);
+				M_TextField_DrawCursor(&visible_field, SKY_GLOBALSKY_TEXT_X, y);
+			}
+			break;
+		}
+
+		case SKY_WIND:
+			text = "           Skywind";
+			M_Print(178, y, "...");
+			break;
+
+		default:
+			break;
+		}
+
+		if (text)
+			M_Print(0, y, text);
+	}
+
+	M_DrawCharacter(168, M_Sky_GetItemY(sky_cursor), 12 + ((int)(realtime * 4) & 1));
+
+	if (sky_field_editing)
+	{
+		const char *hint = "Tab completes, Enter applies, Esc cancels";
+		M_PrintRGBA((320 - (int)strlen(hint) * 8) / 2, 160, hint,
+			CL_PLColours_Parse("0xffffff"), 0.5f, false);
+	}
+}
+
+void M_Sky_Key(int k)
+{
+	if (!keydown[K_MOUSE1])
+		sky_slider_grab = false;
+
+	if (sky_slider_grab)
+	{
+		switch (k)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			sky_slider_grab = false;
+			break;
+		}
+		return;
+	}
+
+	if (sky_field_editing)
+	{
+		if (k == K_TAB)
+		{
+			if (M_Menu_TabCompleteFileList(&sky_globalsky_field, sky_globalsky_buffer,
+				sizeof(sky_globalsky_buffer), skylist,
+				sky_globalsky_tabpartial, sizeof(sky_globalsky_tabpartial)))
+			{
+				M_Sky_UpdateGlobalskyHint();
+				S_LocalSound("misc/menu2.wav");
+			}
+			return;
+		}
+
+		if (M_TextField_Key(&sky_globalsky_field, k))
+		{
+			sky_globalsky_tabpartial[0] = '\0';
+			M_Sky_UpdateGlobalskyHint();
+			return;
+		}
+
+		switch (k)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			M_Sky_EndFieldEdit(false);
+			return;
+
+		case K_ENTER:
+		case K_KP_ENTER:
+		case K_ABUTTON:
+			S_LocalSound("misc/menu3.wav");
+			M_Sky_EndFieldEdit(true);
+			return;
+
+		case K_UPARROW:
+			M_Sky_EndFieldEdit(true);
+			S_LocalSound("misc/menu1.wav");
+			M_Sky_MoveCursor(-1);
+			return;
+
+		case K_DOWNARROW:
+			M_Sky_EndFieldEdit(true);
+			S_LocalSound("misc/menu1.wav");
+			M_Sky_MoveCursor(1);
+			return;
+
+		case K_MOUSE1:
+			if (M_TextField_MouseInRow(m_mousey, M_Sky_GetItemY(SKY_GLOBALSKY)))
+			{
+				int view_start = M_Sky_GlobalskyViewStart(&sky_globalsky_field);
+				sky_globalsky_tabpartial[0] = '\0';
+				M_TextField_MouseClick(&sky_globalsky_field, m_mousex,
+					SKY_GLOBALSKY_TEXT_X - view_start * 8);
+				return;
+			}
+			M_Sky_EndFieldEdit(true);
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	switch (k)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Menu_Graphics_f();
+		graphics_cursor = GRAPHICS_SKY;
+		break;
+
+	case K_MOUSE1:
+		m_entersound = true;
+		{
+			int item = M_Sky_GetItemAtY(m_mousey);
+			if (item >= 0)
+			{
+				sky_cursor = item;
+				if (sky_cursor == SKY_QUALITY || sky_cursor == SKY_ALPHA ||
+					sky_cursor == SKY_FOG || sky_cursor == SKY_SPEED)
+					sky_slider_grab = true;
+				else
+					M_Sky_AdjustSliders(1);
+			}
+		}
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		m_entersound = true;
+		M_Sky_AdjustSliders(1);
+		break;
+
+	case K_UPARROW:
+		S_LocalSound("misc/menu1.wav");
+		M_Sky_MoveCursor(-1);
+		break;
+
+	case K_DOWNARROW:
+		S_LocalSound("misc/menu1.wav");
+		M_Sky_MoveCursor(1);
+		break;
+
+	case K_LEFTARROW:
+	case K_MWHEELDOWN:
+		M_Sky_AdjustSliders(-1);
+		break;
+
+	case K_RIGHTARROW:
+	case K_MWHEELUP:
+		M_Sky_AdjustSliders(1);
+		break;
+	}
+}
+
+void M_Sky_Char(int k)
+{
+	if (!sky_field_editing)
+		return;
+	if (M_TextField_Char(&sky_globalsky_field, k))
+	{
+		sky_globalsky_tabpartial[0] = '\0';
+		M_Sky_UpdateGlobalskyHint();
+	}
+}
+
+qboolean M_Sky_TextEntry(void)
+{
+	return sky_field_editing;
+}
+
+void M_Sky_Mousemove(int cx, int cy)
+{
+	if (M_TextField_IsDraggingField(&sky_globalsky_field))
+	{
+		M_TextField_MouseDrag(cx);
+		return;
+	}
+
+	if (sky_slider_grab)
+	{
+		cvar_t *q;
+		float f;
+
+		if (!keydown[K_MOUSE1])
+		{
+			sky_slider_grab = false;
+			return;
+		}
+
+		switch (sky_cursor)
+		{
+		case SKY_QUALITY:
+			q = M_Sky_QualityCvar();
+			if (q)
+			{
+				f = 4.0f + M_MouseToSliderFraction(cx - 187) * (32 - 4);
+				Cvar_SetValue("r_sky_quality", floorf(f + 0.5f));
+			}
+			break;
+
+		case SKY_ALPHA:
+			f = CLAMP(0.0f, M_MouseToSliderFraction(cx - 187), 1.0f);
+			Cvar_SetValue("r_skyalpha", f);
+			break;
+
+		case SKY_FOG:
+			f = CLAMP(0.0f, M_MouseToSliderFraction(cx - 187), 1.0f);
+			Cvar_SetValue("r_skyfog", f);
+			break;
+
+		case SKY_SPEED:
+			f = CLAMP(0.0f, M_MouseToSliderFraction(cx - 187), 1.0f) * 10.0f;
+			Cvar_SetValue("r_skyspeed", f);
+			break;
+
+		default:
+			break;
+		}
+		return;
+	}
+
+	if (sky_field_editing)
+	{
+		if (M_TextField_MouseInRow(cy, M_Sky_GetItemY(SKY_GLOBALSKY)))
+			return;
+		M_Sky_EndFieldEdit(true);
+	}
+
+	{
+		int item = M_Sky_GetItemAtY(cy);
+		if (item >= 0)
+			sky_cursor = item;
+	}
+}
+
+
+/*
+==================
+Skywind Menu
+==================
+*/
+
+static enum skywind_e
+{
+	SKYWIND_STRENGTH,
+	SKYWIND_DIRECTION,
+	SKYWIND_PITCH,
+	SKYWIND_PERIOD,
+	SKYWIND_COUNT
+} skywind_cursor;
+
+#define SKYWIND_ITEMS (SKYWIND_COUNT)
+
+static qboolean skywind_slider_grab;
+
+static void M_Skywind_ClampCursor(void)
+{
+	skywind_cursor = (enum skywind_e)M_Menu_ClampCursorValue((int)skywind_cursor, SKYWIND_ITEMS);
+}
+
+static void M_Skywind_MoveCursor(int delta)
+{
+	skywind_cursor = (enum skywind_e)M_Menu_ClampCursorValue((int)skywind_cursor + delta, SKYWIND_ITEMS);
+}
+
+static void M_Skywind_Adjust(int dir)
+{
+	float dist, yaw, period, pitch;
+
+	Sky_GetWindParams(&dist, &yaw, &period, &pitch);
+	S_LocalSound("misc/menu3.wav");
+
+	switch (skywind_cursor)
+	{
+	case SKYWIND_STRENGTH:
+		dist = CLAMP(-2.0f, dist + dir * 0.1f, 2.0f);
+		break;
+
+	case SKYWIND_DIRECTION:
+		yaw += dir * 15.0f;
+		while (yaw < 0.0f)   yaw += 360.0f;
+		while (yaw >= 360.0f) yaw -= 360.0f;
+		break;
+
+	case SKYWIND_PITCH:
+		pitch = CLAMP(-90.0f, pitch + dir * 5.0f, 90.0f);
+		break;
+
+	case SKYWIND_PERIOD:
+		period = CLAMP(1.0f, period + dir * 1.0f, 120.0f);
+		break;
+
+	case SKYWIND_COUNT:
+	default:
+		return;
+	}
+
+	Sky_SetWindParams(dist, yaw, period, pitch);
+}
+
+void M_Menu_Skywind_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_skywind;
+	m_entersound = true;
+	skywind_cursor = 0;
+	skywind_slider_grab = false;
+
+	IN_UpdateGrabs();
+}
+
+void M_Skywind_Draw(void)
+{
+	qpic_t *p;
+	float dist, yaw, period, pitch;
+	float r;
+	int i;
+
+	M_Skywind_ClampCursor();
+
+	Sky_GetWindParams(&dist, &yaw, &period, &pitch);
+
+	p = Draw_CachePic("gfx/p_option.lmp");
+	M_DrawPic((320 - p->width) / 2, 4, p);
+
+	{
+		const char *title = "Skywind";
+		M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
+	}
+
+	for (i = 0; i < SKYWIND_ITEMS; i++)
+	{
+		int y = 48 + 8 * i;
+		const char *text = NULL;
+
+		switch (i)
+		{
+		case SKYWIND_STRENGTH:
+			text = "          Strength";
+			r = (dist + 2.0f) / 4.0f; // map -2..2 to 0..1
+			M_DrawSlider(186, y, r, dist, "%.2f");
+			break;
+
+		case SKYWIND_DIRECTION:
+			text = "         Direction";
+			r = yaw / 360.0f;
+			M_DrawSlider(186, y, r, yaw, "%.0f\xf8"); // degree sign glyph
+			break;
+
+		case SKYWIND_PITCH:
+			text = "             Pitch";
+			r = (pitch + 90.0f) / 180.0f;
+			M_DrawSlider(186, y, r, pitch, "%.0f\xf8");
+			break;
+
+		case SKYWIND_PERIOD:
+			text = "            Period";
+			r = (period - 1.0f) / (120.0f - 1.0f);
+			M_DrawSlider(186, y, r, period, "%.0fs");
+			break;
+
+		default:
+			break;
+		}
+
+		if (text)
+			M_Print(0, y, text);
+	}
+
+	M_DrawCharacter(168, 48 + skywind_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+
+	if (dist == 0.0f)
+		M_PrintRGBA(80, 144, "strength 0 = disabled",
+			CL_PLColours_Parse("0xffffff"), 0.6f, false);
+}
+
+void M_Skywind_Key(int k)
+{
+	if (!keydown[K_MOUSE1])
+		skywind_slider_grab = false;
+
+	if (skywind_slider_grab)
+	{
+		switch (k)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			skywind_slider_grab = false;
+			break;
+		}
+		return;
+	}
+
+	switch (k)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Menu_Sky_f();
+		sky_cursor = SKY_WIND;
+		break;
+
+	case K_MOUSE1:
+		m_entersound = true;
+		if (m_mousey >= 48 && m_mousey < 48 + (SKYWIND_ITEMS * 8))
+		{
+			skywind_cursor = (m_mousey - 48) / 8;
+			skywind_slider_grab = true;
+		}
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		m_entersound = true;
+		M_Skywind_Adjust(1);
+		break;
+
+	case K_UPARROW:
+		S_LocalSound("misc/menu1.wav");
+		M_Skywind_MoveCursor(-1);
+		break;
+
+	case K_DOWNARROW:
+		S_LocalSound("misc/menu1.wav");
+		M_Skywind_MoveCursor(1);
+		break;
+
+	case K_LEFTARROW:
+	case K_MWHEELDOWN:
+		M_Skywind_Adjust(-1);
+		break;
+
+	case K_RIGHTARROW:
+	case K_MWHEELUP:
+		M_Skywind_Adjust(1);
+		break;
+	}
+}
+
+void M_Skywind_Mousemove(int cx, int cy)
+{
+	if (skywind_slider_grab)
+	{
+		float dist, yaw, period, pitch;
+		float frac;
+
+		if (!keydown[K_MOUSE1])
+		{
+			skywind_slider_grab = false;
+			return;
+		}
+
+		Sky_GetWindParams(&dist, &yaw, &period, &pitch);
+		frac = CLAMP(0.0f, M_MouseToSliderFraction(cx - 187), 1.0f);
+
+		switch (skywind_cursor)
+		{
+		case SKYWIND_STRENGTH:
+			dist = frac * 4.0f - 2.0f;
+			break;
+		case SKYWIND_DIRECTION:
+			yaw = floorf((frac * 360.0f) / 5.0f + 0.5f) * 5.0f;
+			if (yaw >= 360.0f) yaw -= 360.0f;
+			break;
+		case SKYWIND_PITCH:
+			pitch = frac * 180.0f - 90.0f;
+			break;
+		case SKYWIND_PERIOD:
+			period = 1.0f + frac * (120.0f - 1.0f);
+			break;
+		default:
+			return;
+		}
+
+		Sky_SetWindParams(dist, yaw, period, pitch);
+		return;
+	}
+
+	{
+		int item = (cy - 48) / 8;
+		if (item >= 0 && item < SKYWIND_ITEMS)
+			skywind_cursor = item;
 	}
 }
 
@@ -8354,6 +9550,20 @@ static const char* M_Sound_GetItemText(int index)
 		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
 		return buffer;
 	}
+}
+
+static void M_Sound_UpdateSearch(void)
+{
+	sound_cursor = (enum sound_e)M_Menu_UpdateSearchCursor(
+		SOUND_ITEMS, (int)sound_cursor, &numberOfSoundItems,
+		M_Sound_GetItemText, soundmenu.search.text, soundmenu.search.len);
+}
+
+static void M_Sound_MoveCursor(int delta)
+{
+	sound_cursor = (enum sound_e)M_Menu_MoveSearchCursor(
+		SOUND_ITEMS, numberOfSoundItems, (int)sound_cursor, delta,
+		M_Sound_GetItemText, soundmenu.search.text, soundmenu.search.len);
 }
 
 void M_Menu_Sound_f(void)
@@ -8460,6 +9670,8 @@ void M_Sound_Draw(void)
 {
 	qpic_t* p;
 	enum sound_e i;
+
+	sound_cursor = (enum sound_e)M_Menu_ClampCursorValue((int)sound_cursor, SOUND_ITEMS);
 
 	p = Draw_CachePic("gfx/p_option.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
@@ -8609,7 +9821,7 @@ void M_Sound_Key(int k)
 		{
 			soundmenu.search.len = 0;
 			soundmenu.search.text[0] = 0;
-			numberOfSoundItems = SOUND_ITEMS;
+			M_Sound_UpdateSearch();
 			return;
 		}
 		M_Menu_Options_f();
@@ -8622,7 +9834,7 @@ void M_Sound_Key(int k)
 			// Clear entire search with Ctrl+U
 			soundmenu.search.len = 0;
 			soundmenu.search.text[0] = 0;
-			numberOfSoundItems = SOUND_ITEMS;
+			M_Sound_UpdateSearch();
 			return;
 		}
 		else if (k == K_BACKSPACE && soundmenu.search.len > 0)
@@ -8634,26 +9846,7 @@ void M_Sound_Key(int k)
 			M_DeletePrevWord(&temp);
 			Q_strcpy(soundmenu.search.text, temp.text);
 			soundmenu.search.len = temp.len;
-
-			// Update filtering based on new search text
-			if (soundmenu.search.len > 0)
-			{
-				numberOfSoundItems = 0;
-				for (int i = 0; i < SOUND_ITEMS; i++)
-				{
-					const char* itemtext = M_Sound_GetItemText(i);
-					if (itemtext && q_strcasestr(itemtext, soundmenu.search.text))
-					{
-						numberOfSoundItems++;
-						if (numberOfSoundItems == 1)
-							sound_cursor = i;
-					}
-				}
-			}
-			else
-			{
-				numberOfSoundItems = SOUND_ITEMS;
-			}
+			M_Sound_UpdateSearch();
 			return;
 		}
 	}
@@ -8662,24 +9855,7 @@ void M_Sound_Key(int k)
 		if (soundmenu.search.len > 0)
 		{
 			soundmenu.search.text[--soundmenu.search.len] = 0;
-			if (soundmenu.search.len > 0)
-			{
-				numberOfSoundItems = 0;
-				for (int i = 0; i < SOUND_ITEMS; i++)
-				{
-					const char* itemtext = M_Sound_GetItemText(i);
-					if (itemtext && q_strcasestr(itemtext, soundmenu.search.text))
-					{
-						numberOfSoundItems++;
-						if (numberOfSoundItems == 1)
-							sound_cursor = i;
-					}
-				}
-			}
-			else
-			{
-				numberOfSoundItems = SOUND_ITEMS;
-			}
+			M_Sound_UpdateSearch();
 			return;
 		}
 	}
@@ -8689,18 +9865,7 @@ void M_Sound_Key(int k)
 		{
 			soundmenu.search.text[soundmenu.search.len++] = k;
 			soundmenu.search.text[soundmenu.search.len] = 0;
-
-			numberOfSoundItems = 0;
-			for (int i = 0; i < SOUND_ITEMS; i++)
-			{
-				const char* itemtext = M_Sound_GetItemText(i);
-				if (itemtext && q_strcasestr(itemtext, soundmenu.search.text))
-				{
-					numberOfSoundItems++;
-					if (numberOfSoundItems == 1)
-						sound_cursor = i;
-				}
-			}
+			M_Sound_UpdateSearch();
 			return;
 		}
 	}
@@ -8749,16 +9914,12 @@ void M_Sound_Key(int k)
 
 	case K_UPARROW:
 		S_LocalSound("misc/menu1.wav");
-		sound_cursor--;
-		if (sound_cursor < 0)
-			sound_cursor = numberOfSoundItems - 1;
+		M_Sound_MoveCursor(-1);
 		break;
 
 	case K_DOWNARROW:
 		S_LocalSound("misc/menu1.wav");
-		sound_cursor++;
-		if (sound_cursor >= numberOfSoundItems)
-			sound_cursor = 0;
+		M_Sound_MoveCursor(1);
 		break;
 
 	case K_LEFTARROW:
@@ -9942,6 +11103,20 @@ static const char* M_Game_GetItemText(int index)
 	}
 }
 
+static void M_Game_UpdateSearch(void)
+{
+	game_cursor = (enum game_e)M_Menu_UpdateSearchCursor(
+		GAME_ITEMS, (int)game_cursor, &numberOfGameItems,
+		M_Game_GetItemText, gamemenu.search.text, gamemenu.search.len);
+}
+
+static void M_Game_MoveCursor(int delta)
+{
+	game_cursor = (enum game_e)M_Menu_MoveSearchCursor(
+		GAME_ITEMS, numberOfGameItems, (int)game_cursor, delta,
+		M_Game_GetItemText, gamemenu.search.text, gamemenu.search.len);
+}
+
 void M_Menu_Game_f(void)
 {
 	key_dest = key_menu;
@@ -10138,6 +11313,8 @@ void M_Game_Draw(void)
 	//qpic_t* p;
 	float r;
 	enum game_e i;
+
+	game_cursor = (enum game_e)M_Menu_ClampCursorValue((int)game_cursor, GAME_ITEMS);
 
 	//p = Draw_CachePic("gfx/p_option.lmp");
 	//M_DrawPic((320 - p->width) / 2, 4, p);
@@ -10362,7 +11539,7 @@ void M_Game_Key(int k)
 		{
 			gamemenu.search.len = 0;
 			gamemenu.search.text[0] = 0;
-			numberOfGameItems = GAME_ITEMS;
+			M_Game_UpdateSearch();
 			return;
 		}
 		M_Menu_Options_f();
@@ -10375,7 +11552,7 @@ void M_Game_Key(int k)
 			// Clear entire search with Ctrl+U
 			gamemenu.search.len = 0;
 			gamemenu.search.text[0] = 0;
-			numberOfGameItems = GAME_ITEMS;
+			M_Game_UpdateSearch();
 			return;
 		}
 		else if (k == K_BACKSPACE && gamemenu.search.len > 0)
@@ -10387,26 +11564,7 @@ void M_Game_Key(int k)
 			M_DeletePrevWord(&temp);
 			Q_strcpy(gamemenu.search.text, temp.text);
 			gamemenu.search.len = temp.len;
-
-			// Update filtering based on new search text
-			if (gamemenu.search.len > 0)
-			{
-				numberOfGameItems = 0;
-				for (int i = 0; i < GAME_ITEMS; i++)
-				{
-					const char* itemtext = M_Game_GetItemText(i);
-					if (itemtext && q_strcasestr(itemtext, gamemenu.search.text))
-					{
-						numberOfGameItems++;
-						if (numberOfGameItems == 1)
-							game_cursor = i;
-					}
-				}
-			}
-			else
-			{
-				numberOfGameItems = GAME_ITEMS;
-			}
+			M_Game_UpdateSearch();
 			return;
 	}
 	}
@@ -10415,24 +11573,7 @@ void M_Game_Key(int k)
 		if (gamemenu.search.len > 0)
 		{
 			gamemenu.search.text[--gamemenu.search.len] = 0;
-			if (gamemenu.search.len > 0)
-			{
-				numberOfGameItems = 0;
-				for (int i = 0; i < GAME_ITEMS; i++)
-				{
-					const char* itemtext = M_Game_GetItemText(i);
-					if (itemtext && q_strcasestr(itemtext, gamemenu.search.text))
-					{
-						numberOfGameItems++;
-						if (numberOfGameItems == 1)
-							game_cursor = i;
-					}
-				}
-			}
-			else
-			{
-				numberOfGameItems = GAME_ITEMS;
-			}
+			M_Game_UpdateSearch();
 			return;
 		}
 	}
@@ -10442,18 +11583,7 @@ void M_Game_Key(int k)
 		{
 			gamemenu.search.text[gamemenu.search.len++] = k;
 			gamemenu.search.text[gamemenu.search.len] = 0;
-
-			numberOfGameItems = 0;
-			for (int i = 0; i < GAME_ITEMS; i++)
-			{
-				const char* itemtext = M_Game_GetItemText(i);
-				if (itemtext && q_strcasestr(itemtext, gamemenu.search.text))
-				{
-					numberOfGameItems++;
-					if (numberOfGameItems == 1)
-						game_cursor = i;
-				}
-			}
+			M_Game_UpdateSearch();
 			return;
 		}
 	}
@@ -10503,16 +11633,12 @@ void M_Game_Key(int k)
 
 	case K_UPARROW:
 		S_LocalSound("misc/menu1.wav");
-		game_cursor--;
-		if (game_cursor < 0)
-			game_cursor = numberOfGameItems - 1;
+		M_Game_MoveCursor(-1);
 		break;
 
 	case K_DOWNARROW:
 		S_LocalSound("misc/menu1.wav");
-		game_cursor++;
-		if (game_cursor >= numberOfGameItems)
-			game_cursor = 0;
+		M_Game_MoveCursor(1);
 		break;
 
 	case K_LEFTARROW:
@@ -12412,6 +13538,7 @@ static menu_textfield_t console_conback_field;
 static char console_conback_buffer[MAX_QPATH];
 static qboolean console_rgb_active;
 static const char* M_Console_GetItemText(int index);
+static void M_Console_UpdateSearchResults(void);
 
 static menu_textfield_t *M_Console_GetFieldForCursor(void)
 {
@@ -12441,29 +13568,14 @@ static void M_Console_ClearSearch(void)
 {
 	consolemenu.search.len = 0;
 	consolemenu.search.text[0] = 0;
-	numberOfConsoleItems = CONSOLE_ITEMS;
+	M_Console_UpdateSearchResults();
 }
 
 static void M_Console_UpdateSearchResults(void)
 {
-	if (consolemenu.search.len > 0)
-	{
-		numberOfConsoleItems = 0;
-		for (int i = 0; i < CONSOLE_ITEMS; i++)
-		{
-			const char* itemtext = M_Console_GetItemText(i);
-			if (itemtext && q_strcasestr(itemtext, consolemenu.search.text))
-			{
-				numberOfConsoleItems++;
-				if (numberOfConsoleItems == 1)
-					console_cursor = i;
-			}
-		}
-	}
-	else
-	{
-		numberOfConsoleItems = CONSOLE_ITEMS;
-	}
+	console_cursor = (enum console_e)M_Menu_UpdateSearchCursor(
+		CONSOLE_ITEMS, (int)console_cursor, &numberOfConsoleItems,
+		M_Console_GetItemText, consolemenu.search.text, consolemenu.search.len);
 }
 
 static int M_Console_GetItemY(int index)
@@ -12770,6 +13882,7 @@ void M_Console_Draw(void)
 	const char* value;
 
 	M_TextField_CheckMouseRelease();
+	console_cursor = (enum console_e)M_Menu_ClampCursorValue((int)console_cursor, CONSOLE_ITEMS);
 
 	p = Draw_CachePic("gfx/p_option.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
@@ -12867,7 +13980,7 @@ void M_Console_Draw(void)
 	}
 
 	// Draw cursor
-	M_DrawCharacter(144, M_Console_GetItemY(console_cursor), 12 + ((int)(realtime * 4) & 1));
+	M_DrawCharacter(168, M_Console_GetItemY(console_cursor), 12 + ((int)(realtime * 4) & 1));
 
 	if (console_field_editing)
 	{
@@ -13078,16 +14191,16 @@ void M_Console_Key(int k)
 
 	case K_UPARROW:
 		S_LocalSound("misc/menu1.wav");
-		console_cursor--;
-		if (console_cursor < 0)
-			console_cursor = numberOfConsoleItems - 1;
+		console_cursor = (enum console_e)M_Menu_MoveSearchCursor(
+			CONSOLE_ITEMS, numberOfConsoleItems, (int)console_cursor, -1,
+			M_Console_GetItemText, consolemenu.search.text, consolemenu.search.len);
 		break;
 
 	case K_DOWNARROW:
 		S_LocalSound("misc/menu1.wav");
-		console_cursor++;
-		if (console_cursor >= numberOfConsoleItems)
-			console_cursor = 0;
+		console_cursor = (enum console_e)M_Menu_MoveSearchCursor(
+			CONSOLE_ITEMS, numberOfConsoleItems, (int)console_cursor, 1,
+			M_Console_GetItemText, consolemenu.search.text, consolemenu.search.len);
 		break;
 
 	case K_LEFTARROW:
@@ -14108,6 +15221,20 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 	}
 }
 
+static void M_Extras_UpdateSearch(void)
+{
+	extras_cursor = (enum extras_e)M_Menu_UpdateSearchCursor(
+		EXTRAS_ITEMS, (int)extras_cursor, &numberOfExtrasItems,
+		M_Extras_GetItemText, extrasmenu.search.text, extrasmenu.search.len);
+}
+
+static void M_Extras_MoveCursor(int delta)
+{
+	extras_cursor = (enum extras_e)M_Menu_MoveSearchCursor(
+		EXTRAS_ITEMS, numberOfExtrasItems, (int)extras_cursor, delta,
+		M_Extras_GetItemText, extrasmenu.search.text, extrasmenu.search.len);
+}
+
 void M_Menu_Extras_f(void)
 {
 	key_dest = key_menu;
@@ -14193,6 +15320,8 @@ void M_Extras_Draw(void)
 {
 	qpic_t* p;
 	enum extras_e i;
+
+	extras_cursor = (enum extras_e)M_Menu_ClampCursorValue((int)extras_cursor, EXTRAS_ITEMS);
 
 	p = Draw_CachePic("gfx/p_option.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
@@ -14340,7 +15469,7 @@ void M_Extras_Key(int k)
 		{
 			extrasmenu.search.len = 0;
 			extrasmenu.search.text[0] = 0;
-			numberOfExtrasItems = EXTRAS_ITEMS;
+			M_Extras_UpdateSearch();
 			return;
 		}
 		M_Menu_Options_f();
@@ -14353,7 +15482,7 @@ void M_Extras_Key(int k)
 			// Clear entire search with Ctrl+U
 			extrasmenu.search.len = 0;
 			extrasmenu.search.text[0] = 0;
-			numberOfExtrasItems = EXTRAS_ITEMS;
+			M_Extras_UpdateSearch();
 			return;
 		}
 		else if (k == K_BACKSPACE && extrasmenu.search.len > 0)
@@ -14365,26 +15494,7 @@ void M_Extras_Key(int k)
 			M_DeletePrevWord(&temp);
 			Q_strcpy(extrasmenu.search.text, temp.text);
 			extrasmenu.search.len = temp.len;
-
-			// Update filtering based on new search text
-			if (extrasmenu.search.len > 0)
-			{
-				numberOfExtrasItems = 0;
-				for (int i = 0; i < EXTRAS_ITEMS; i++)
-				{
-					const char* itemtext = M_Extras_GetItemText(i);
-					if (itemtext && q_strcasestr(itemtext, extrasmenu.search.text))
-					{
-						numberOfExtrasItems++;
-						if (numberOfExtrasItems == 1)
-							extras_cursor = i;
-					}
-				}
-			}
-			else
-			{
-				numberOfExtrasItems = EXTRAS_ITEMS;
-			}
+			M_Extras_UpdateSearch();
 			return;
 		}
 	}
@@ -14393,24 +15503,7 @@ void M_Extras_Key(int k)
 		if (extrasmenu.search.len > 0)
 		{
 			extrasmenu.search.text[--extrasmenu.search.len] = 0;
-			if (extrasmenu.search.len > 0)
-			{
-				numberOfExtrasItems = 0;
-				for (int i = 0; i < EXTRAS_ITEMS; i++)
-				{
-					const char* itemtext = M_Extras_GetItemText(i);
-					if (itemtext && q_strcasestr(itemtext, extrasmenu.search.text))
-					{
-						numberOfExtrasItems++;
-						if (numberOfExtrasItems == 1)
-							extras_cursor = i;
-					}
-				}
-			}
-			else
-			{
-				numberOfExtrasItems = EXTRAS_ITEMS;
-			}
+			M_Extras_UpdateSearch();
 			return;
 		}
 	}
@@ -14420,18 +15513,7 @@ void M_Extras_Key(int k)
 		{
 			extrasmenu.search.text[extrasmenu.search.len++] = k;
 			extrasmenu.search.text[extrasmenu.search.len] = 0;
-
-			numberOfExtrasItems = 0;
-			for (int i = 0; i < EXTRAS_ITEMS; i++)
-			{
-				const char* itemtext = M_Extras_GetItemText(i);
-				if (itemtext && q_strcasestr(itemtext, extrasmenu.search.text))
-				{
-					numberOfExtrasItems++;
-					if (numberOfExtrasItems == 1)
-						extras_cursor = i;
-				}
-			}
+			M_Extras_UpdateSearch();
 			return;
 		}
 	}
@@ -14455,16 +15537,12 @@ void M_Extras_Key(int k)
 
 	case K_UPARROW:
 		S_LocalSound("misc/menu1.wav");
-		extras_cursor--;
-		if (extras_cursor < 0)
-			extras_cursor = EXTRAS_ITEMS - 1;
+		M_Extras_MoveCursor(-1);
 		break;
 
 	case K_DOWNARROW:
 		S_LocalSound("misc/menu1.wav");
-		extras_cursor++;
-		if (extras_cursor >= EXTRAS_ITEMS)
-			extras_cursor = 0;
+		M_Extras_MoveCursor(1);
 		break;
 
 	case K_LEFTARROW:
@@ -16228,6 +17306,7 @@ static menu_textfield_t lanConfig_room_field;
 static menu_textfield_t lanConfig_join_field;
 static char lanConfig_porthint[6];
 static char lanConfig_joinhint[22];
+static char lanConfig_join_tabpartial[22];
 
 extern int sv_protocol;
 extern unsigned int	sv_protocol_pext2;
@@ -16337,22 +17416,6 @@ static qboolean M_LanConfig_AcceptPortHint(void)
 	lanConfig_port_field.sel_start = -1;
 	M_TextField_ClampCursor(&lanConfig_port_field);
 	M_LanConfig_UpdatePortHint();
-	return true;
-}
-
-static qboolean M_LanConfig_AcceptJoinHint(void)
-{
-	if (!lanConfig_joinhint[0])
-		return false;
-
-	if (lanConfig_join_field.cursor != (int)strlen(lanConfig_joinname))
-		return false;
-
-	q_strlcat(lanConfig_joinname, lanConfig_joinhint, sizeof(lanConfig_joinname));
-	lanConfig_join_field.cursor = (int)strlen(lanConfig_joinname);
-	lanConfig_join_field.sel_start = -1;
-	M_TextField_ClampCursor(&lanConfig_join_field);
-	M_LanConfig_UpdateJoinHint();
 	return true;
 }
 
@@ -16501,6 +17564,7 @@ void M_Menu_LanConfig_f (void)
 	M_TextField_Init(&lanConfig_port_field, lanConfig_portname, 5, true);
 	M_TextField_Init(&lanConfig_room_field, lanConfig_roomname, sizeof(lanConfig_roomname) - 1, false);
 	M_TextField_Init(&lanConfig_join_field, lanConfig_joinname, 21, false);
+	lanConfig_join_tabpartial[0] = '\0';
 	M_LanConfig_NormalizeRoomField();
 	M_LanConfig_SyncRoomField();
 	M_LanConfig_UpdateHints();
@@ -16787,7 +17851,11 @@ void M_LanConfig_Key (int key)
 
 	active_field = M_LanConfig_GetFieldForCursor();
 	if (active_field && M_TextField_Key(active_field, key))
+	{
+		if (active_field == &lanConfig_join_field)
+			lanConfig_join_tabpartial[0] = '\0';
 		goto finish;
+	}
 
 	switch (key)
 	{
@@ -16867,7 +17935,9 @@ void M_LanConfig_Key (int key)
 		}
 		if (JoiningGame && lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN)
 		{
-			if (M_LanConfig_AcceptJoinHint())
+			if (M_Menu_TabCompleteFileList(&lanConfig_join_field, lanConfig_joinname,
+				sizeof(lanConfig_joinname), serverlist,
+				lanConfig_join_tabpartial, sizeof(lanConfig_join_tabpartial)))
 				S_LocalSound("misc/menu2.wav");
 			goto finish;
 		}
@@ -16889,6 +17959,7 @@ void M_LanConfig_Key (int key)
 		}
 		if (key == K_MOUSE1 && JoiningGame && lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN)
 		{
+			lanConfig_join_tabpartial[0] = '\0';
 			M_TextField_MouseClick(&lanConfig_join_field, m_mousex, 96);
 			goto finish;
 		}
@@ -16945,6 +18016,9 @@ finish:
 	M_LanConfig_NormalizeRoomField();
 	M_LanConfig_SyncRoomField();
 
+	if (!(JoiningGame && lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN))
+		lanConfig_join_tabpartial[0] = '\0';
+
 	if (StartingGame && lanConfig_cursor >= NUM_LANCONFIG_CMDS)
 	{
 		if (key == K_UPARROW)
@@ -16983,7 +18057,10 @@ void M_LanConfig_Char (int key)
 				M_LanConfig_SyncRoomField();
 			}
 			else if (active_field == &lanConfig_join_field)
+			{
+				lanConfig_join_tabpartial[0] = '\0';
 				M_LanConfig_UpdateJoinHint();
+			}
 		}
 	}
 }
@@ -17933,7 +19010,11 @@ void M_LanConfig_Mousemove(int cx, int cy)
 	old_cursor = lanConfig_cursor;
 	M_UpdateCursorWithTable(cy, lanConfig_cursor_ptr, numCommands, &lanConfig_cursor);
 	if (lanConfig_cursor != old_cursor)
+	{
+		if (!(JoiningGame && lanConfig_cursor == LANCONFIG_CURSOR_JOINGAME_JOIN))
+			lanConfig_join_tabpartial[0] = '\0';
 		M_LanConfig_ClearTextSelections();
+	}
 }
 
 /*
@@ -22068,13 +23149,15 @@ void M_Draw (void)
 
 	if (!m_recursiveDraw)
 	{
+		qboolean live_world_menu = (m_state == m_skywind && cl.worldmodel);
+
 		if (scr_con_current)
 		{
 			Draw_ConsoleBackground ();
 			S_ExtraUpdate ();
 		}
 
-		if (m_state != m_crosshair && !scr_con_current)
+		if (m_state != m_crosshair && !live_world_menu && !scr_con_current)
 			Draw_FadeScreen (); //johnfitz -- fade even if console fills screen
 	}
 	else
@@ -22201,6 +23284,14 @@ void M_Draw (void)
 
 	case m_graphics:
 		M_Graphics_Draw();
+		break;
+
+	case m_sky:
+		M_Sky_Draw();
+		break;
+
+	case m_skywind:
+		M_Skywind_Draw();
 		break;
 
 	case m_sound:
@@ -22417,6 +23508,14 @@ void M_Keydown (int key)
 		M_Graphics_Key(key);
 		return;
 
+	case m_sky:
+		M_Sky_Key(key);
+		return;
+
+	case m_skywind:
+		M_Skywind_Key(key);
+		return;
+
 	case m_sound:
 		M_Sound_Key (key);
 		break;
@@ -22582,6 +23681,14 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 		M_Graphics_Mousemove(x, y);
 		return;
 
+	case m_sky:
+		M_Sky_Mousemove(x, y);
+		return;
+
+	case m_skywind:
+		M_Skywind_Mousemove(x, y);
+		return;
+
 	case m_sound:
 		M_Sound_Mousemove(x, y);
 		return;
@@ -22682,6 +23789,9 @@ void M_Charinput (int key)
 	case m_console:
 		M_Console_Char(key);
 		return;
+	case m_sky:
+		M_Sky_Char(key);
+		return;
 	case m_bookmarks_edit: // woods #bookmarksmenu
 		M_Bookmarks_Edit_Char(key);
 		return;
@@ -22711,6 +23821,8 @@ qboolean M_TextEntry (void)
 		return M_Setup_TextEntry ();
 	case m_console:
 		return M_Console_TextEntry();
+	case m_sky:
+		return M_Sky_TextEntry();
 	case m_bookmarks_edit: // woods #bookmarksmenu
 		return M_Bookmarks_Edit_TextEntry();
 	case m_quit:

@@ -2345,6 +2345,35 @@ static qboolean VID_MenuWantsTextCursor(void)
 		(video_options_cursor == VID_OPT_FPSLIMIT || M_TextField_IsDraggingField(&fps_field)));
 }
 
+static int VID_Menu_GetItemY(int index)
+{
+	int y = 48 + index * 8;
+
+	if (index >= VID_OPT_FPSLIMIT)
+		y += 8;
+	if (index >= VID_OPT_TEST)
+		y += 16;
+
+	return y;
+}
+
+static int VID_Menu_GetItemAtY(int cy)
+{
+	int i;
+
+	for (i = 0; i < VIDEO_OPTIONS_ITEMS; ++i)
+	{
+		int y = VID_Menu_GetItemY(i);
+		int top = (i == VID_OPT_FPSLIMIT) ? y - 8 : y;
+		int bottom = y + 8;
+
+		if (cy >= top && cy < bottom)
+			return i;
+	}
+
+	return -1;
+}
+
 typedef struct {
 	int width,height;
 } vid_menu_mode;
@@ -3005,13 +3034,7 @@ static void VID_MenuMouse(int cx, int cy)
 		return;
 	}
 
-	int cursor = (cy - 48) / 8;
-
-	// Adjust for gaps
-	if (cursor > 4)  // After vsync
-		cursor--;
-	if (cursor > 6)  // Before test
-		cursor--;
+	int cursor = VID_Menu_GetItemAtY(cy);
 
 	// Prevent selecting gaps
 	if (cursor < 0 || cursor >= VIDEO_OPTIONS_ITEMS)
@@ -3065,6 +3088,7 @@ static void VID_MenuDraw (void)
 	// options
 	for (i = 0; i < VIDEO_OPTIONS_ITEMS; i++)
 	{
+		y = VID_Menu_GetItemY(i);
 		const char* text = NULL;
 		const char* value = NULL;
 
@@ -3110,17 +3134,15 @@ static void VID_MenuDraw (void)
 			break;
 
 		case VID_OPT_FPSLIMIT:
-			y += 8;
 			text = "         FPS Limit";
 			break;
 
 		case VID_OPT_TEST:
-			y += 8; //separate the test and apply items
-			text = "      Test Changes";
+			value = "Test Changes";
 			break;
 
 		case VID_OPT_APPLY:
-			text = "     Apply Changes";
+			value = "Apply Changes";
 			break;
 		}
 
@@ -3144,34 +3166,44 @@ static void VID_MenuDraw (void)
 				M_Print(16, y, text);
 			}
 
-				// Draw the value portion
-				if (i == VID_OPT_FPSLIMIT)
-				{
-					M_DrawTextBox(180, y - 8, 5, 1);
-					M_TextField_DrawHighlight(&fps_field, VID_FPS_TEXT_X, y);
+		}
 
-					if (video_options_cursor == VID_OPT_FPSLIMIT)
-					{
-						M_Print(188, y, fps_string);
-						M_TextField_DrawCursor(&fps_field, VID_FPS_TEXT_X, y);
-					}
-					else if (strlen(fps_string) == 0)
-					{
-						M_Print(188, y, "0");
-					}
-					else
-					{
-						M_Print(188, y, fps_string);
-					}
+		// Draw the value portion
+		if (i == VID_OPT_FPSLIMIT)
+		{
+			M_DrawTextBox(180, y - 8, 5, 1);
+			M_TextField_DrawHighlight(&fps_field, VID_FPS_TEXT_X, y);
 
-					if (strlen(fps_string) == 0 || atoi(fps_string) == 0)
-						M_Print(242, y, "off");
-				}
-				else if (i == VID_OPT_VSYNC && gl_swap_control)
-				{
-				M_DrawCheckbox(184, y, (int)vid_vsync.value);
+			if (video_options_cursor == VID_OPT_FPSLIMIT)
+			{
+				M_Print(188, y, fps_string);
+				M_TextField_DrawCursor(&fps_field, VID_FPS_TEXT_X, y);
 			}
-			else if (value)
+			else if (strlen(fps_string) == 0)
+			{
+				M_Print(188, y, "0");
+			}
+			else
+			{
+				M_Print(188, y, fps_string);
+			}
+
+			if (strlen(fps_string) == 0 || atoi(fps_string) == 0)
+				M_Print(242, y, "off");
+		}
+		else if (i == VID_OPT_VSYNC && gl_swap_control)
+		{
+			M_DrawCheckbox(184, y, (int)vid_vsync.value);
+		}
+		else if (value)
+		{
+			if (videomenu.search.len > 0 &&
+				(i == VID_OPT_TEST || i == VID_OPT_APPLY) &&
+				q_strcasestr(value, videomenu.search.text))
+			{
+				M_PrintHighlight(184, y, value, videomenu.search.text, videomenu.search.len);
+			}
+			else
 			{
 				M_Print(184, y, value);
 			}
@@ -3182,8 +3214,6 @@ static void VID_MenuDraw (void)
 		{
 			M_DrawCharacter(172, y, 12 + ((int)(realtime * 4) & 1));
 		}
-
-		y += 8;
 	}
 
 	// Draw search box if search is active

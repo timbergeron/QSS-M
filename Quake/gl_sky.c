@@ -1187,6 +1187,32 @@ static void Skywind_f(void)
 	skywind_source = SKYWIND_SRC_COMMAND;
 }
 
+void Sky_GetWindParams(float *dist, float *yaw, float *period, float *pitch)
+{
+	if (dist)   *dist   = skywind_dist;
+	if (yaw)    *yaw    = skywind_yaw;
+	if (period) *period = skywind_period;
+	if (pitch)  *pitch  = skywind_pitch;
+}
+
+void Sky_SetWindParams(float dist, float yaw, float period, float pitch)
+{
+	char buf[128];
+
+	skywind_dist   = bound(-2.0f, dist, 2.0f);
+	skywind_yaw    = Skywind_Normalize360(yaw);
+	skywind_period = period > 0.1f ? period : 0.1f;
+	skywind_pitch  = Skywind_NormalizePitch(pitch);
+	// Set source before writing cvar so the OnChange callback doesn't bail
+	// when a map's worldspawn or a config previously claimed ownership.
+	skywind_source = SKYWIND_SRC_COMMAND;
+	Skywind_InvalidateFrame();
+
+	q_snprintf(buf, sizeof(buf), "%g %g %g %g",
+		skywind_dist, skywind_yaw, skywind_period, skywind_pitch);
+	Cvar_Set("r_skywind", buf);
+}
+
 //==============================================================================
 //
 //  INIT
