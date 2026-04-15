@@ -19974,8 +19974,9 @@ void M_ServerList_Draw (void)
                                 m_mousex < plys_text_x + plys_text_w &&
                                 m_mousey >= current_y_pos &&
                                 m_mousey < current_y_pos + 8);
+                        qboolean tab_held = keydown[K_TAB];
 
-                        if (hover_plys && server->players && server->players[0])
+                        if ((hover_plys || tab_held) && server->players && server->players[0])
                         {
                                 // Display player names with word-wrapping (like demos menu)
                                 char players_copy[512];
