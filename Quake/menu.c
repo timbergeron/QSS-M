@@ -3431,6 +3431,10 @@ Setup Menu
 ==================
 */
 
+static qboolean M_Menu_TabCompleteNameHistory(menu_textfield_t *field,
+	char *buffer, size_t buffer_size,
+	char *tab_partial, size_t tab_partial_size); // woods #namehistory
+
 static int		setup_cursor = 6; // woods 4 to 5 #
 
 static int		setup_cursor_table[] = {40, 56, 72, 88, 104, 128, 158}; // woods add value, change position #namemaker #colorbar
@@ -3447,6 +3451,8 @@ static char	setup_hostname[16];
 static char	setup_myname[16];
 static menu_textfield_t setup_hostname_field;
 static menu_textfield_t setup_myname_field;
+static char	setup_myname_tabpartial[16]; // woods #namehistory
+static char	setup_myname_hint[16]; // woods #namehistory
 static plcolour_t	setup_oldtop;
 static plcolour_t	setup_oldbottom;
 static plcolour_t	setup_top;
@@ -3557,6 +3563,38 @@ static void M_Setup_ClearTextSelections(void)
 	M_TextField_ClearSelection(&setup_myname_field);
 }
 
+static void M_Setup_UpdateNameHint(void) // woods #namehistory
+{
+	extern char unfun[129];
+	filelist_item_t *item;
+	int len = (int)strlen(setup_myname);
+	char unfun_prefix[16];
+	char unfun_name[32];
+	int i;
+
+	setup_myname_hint[0] = '\0';
+
+	if (len <= 0)
+		return;
+
+	for (i = 0; i < len && i < (int)sizeof(unfun_prefix) - 1; i++)
+		unfun_prefix[i] = unfun[setup_myname[i] & 127];
+	unfun_prefix[i] = '\0';
+
+	for (item = namehistorylist; item; item = item->next)
+	{
+		for (i = 0; item->name[i] && i < (int)sizeof(unfun_name) - 1; i++)
+			unfun_name[i] = unfun[item->name[i] & 127];
+		unfun_name[i] = '\0';
+
+		if (!q_strncasecmp(unfun_name, unfun_prefix, len))
+		{
+			q_strlcpy(setup_myname_hint, item->name + len, sizeof(setup_myname_hint));
+			return;
+		}
+	}
+}
+
 #define	NUM_SETUP_CMDS	7 // woods 5 to 6 #namemaker
 void M_Menu_Setup_f (void)
 {
@@ -3572,6 +3610,8 @@ void M_Menu_Setup_f (void)
 	setup_bottom = setup_oldbottom = CL_PLColours_Parse(cl_bottomcolor.string);
 	M_TextField_Init(&setup_hostname_field, setup_hostname, 15, false);
 	M_TextField_Init(&setup_myname_field, setup_myname, 15, false);
+	setup_myname_tabpartial[0] = '\0'; // woods #namehistory
+	M_Setup_UpdateNameHint(); // woods #namehistory
 
 	IN_UpdateGrabs();
 }
@@ -3682,6 +3722,13 @@ void M_Setup_Draw (void)
 	M_DrawTextBox (160, 48, 16, 1);
 	M_TextField_DrawHighlight(&setup_myname_field, 168, 56);
 	M_PrintWhite (168, 56, setup_myname); // woods change to white #namemaker
+	if (setup_cursor == 1 && // woods #namehistory
+		setup_myname_hint[0] &&
+		setup_myname_field.cursor == (int)strlen(setup_myname))
+	{
+		int hint_x = 168 + (int)strlen(setup_myname) * 8;
+		M_PrintRGBA(hint_x, 56, setup_myname_hint, CL_PLColours_Parse("0xffffff"), 0.5f, false);
+	}
 
 	M_Print(64, 72, "Name Maker"); // woods #namemaker
 
@@ -3767,7 +3814,23 @@ void M_Setup_Key (int k)
 {
 	menu_textfield_t *active_field = M_Setup_GetFieldForCursor();
 	if (active_field && M_TextField_Key(active_field, k))
+	{
+		if (active_field == &setup_myname_field)
+		{
+			setup_myname_tabpartial[0] = '\0'; // woods #namehistory
+			M_Setup_UpdateNameHint();
+		}
 		return;
+	}
+
+	if (k == K_TAB && setup_cursor == 1) // woods #namehistory
+	{
+		if (M_Menu_TabCompleteNameHistory(&setup_myname_field, setup_myname,
+			sizeof(setup_myname), setup_myname_tabpartial, sizeof(setup_myname_tabpartial)))
+			S_LocalSound("misc/menu2.wav");
+		M_Setup_UpdateNameHint();
+		return;
+	}
 
 	switch (k)
 	{
@@ -3791,6 +3854,7 @@ void M_Setup_Key (int k)
 	case K_UPARROW:
 		S_LocalSound ("misc/menu1.wav");
 		M_Setup_ClearTextSelections();
+		setup_myname_tabpartial[0] = '\0'; // woods #namehistory
 		setup_cursor--;
 		if (setup_cursor < 0)
 			setup_cursor = NUM_SETUP_CMDS-1;
@@ -3799,6 +3863,7 @@ void M_Setup_Key (int k)
 	case K_DOWNARROW:
 		S_LocalSound ("misc/menu1.wav");
 		M_Setup_ClearTextSelections();
+		setup_myname_tabpartial[0] = '\0'; // woods #namehistory
 		setup_cursor++;
 		if (setup_cursor >= NUM_SETUP_CMDS)
 			setup_cursor = 0;
@@ -3876,7 +3941,10 @@ forward:
 		if (k == K_MOUSE1 && setup_cursor == 1)
 		{
 			if (M_TextField_MouseInRow(m_mousey, setup_cursor_table[1]))
+			{
+				setup_myname_tabpartial[0] = '\0'; // woods #namehistory
 				M_TextField_MouseClick(&setup_myname_field, m_mousex, 168);
+			}
 			return;
 		}
 
@@ -3975,7 +4043,13 @@ void M_Setup_Char (int k)
 {
 	menu_textfield_t *active_field = M_Setup_GetFieldForCursor();
 	if (active_field)
-		M_TextField_Char(active_field, k);
+	{
+		if (M_TextField_Char(active_field, k) && active_field == &setup_myname_field)
+		{
+			setup_myname_tabpartial[0] = '\0'; // woods #namehistory
+			M_Setup_UpdateNameHint();
+		}
+	}
 }
 
 
@@ -3998,7 +4072,10 @@ void M_Setup_Mousemove(int cx, int cy) // woods #mousemenu
 	old_cursor = setup_cursor;
 	M_UpdateCursorWithTable(cy, setup_cursor_table, NUM_SETUP_CMDS, &setup_cursor);
 	if (setup_cursor != old_cursor)
+	{
 		M_Setup_ClearTextSelections();
+		setup_myname_tabpartial[0] = '\0'; // woods #namehistory
+	}
 }
 
 /*
@@ -5892,6 +5969,113 @@ static qboolean M_Menu_TabCompleteFileList(menu_textfield_t *field,
 
 	q_strlcpy(buffer, completed, buffer_size);
 	field->cursor = (int)strlen(replacement);
+	field->sel_start = -1;
+	M_TextField_ClampCursor(field);
+	return true;
+}
+
+/*
+=================
+M_Menu_TabCompleteNameHistory -- woods #namehistory
+
+Like M_Menu_TabCompleteFileList but walks namehistorylist and matches against
+the dequaked (plain ascii) form of each stored name via substring search
+(matching Con_Match / console behaviour), so the user can type any portion of
+a saved name — including one that contains quake special chars — and have the
+original name inserted with its colours preserved.
+=================
+*/
+static qboolean M_Menu_TabCompleteNameHistory(menu_textfield_t *field,
+	char *buffer, size_t buffer_size,
+	char *tab_partial, size_t tab_partial_size)
+{
+	extern char unfun[129];
+	const filelist_item_t *item;
+	const filelist_item_t *first_match = NULL;
+	const filelist_item_t *last_match = NULL;
+	const filelist_item_t *prev_match = NULL;
+	const filelist_item_t *current_match = NULL;
+	const filelist_item_t *next_match = NULL;
+	char prefix[MAXCMDLINE];
+	char unfun_prefix[MAXCMDLINE];
+	char unfun_partial[MAXCMDLINE];
+	char unfun_name[MAXCMDLINE];
+	const char *replacement = NULL;
+	size_t prefix_len;
+	size_t i;
+	qboolean first_cycle = !tab_partial[0];
+
+	if (!buffer_size)
+		return false;
+
+	prefix_len = (size_t)CLAMP(0, field->cursor, (int)strlen(buffer));
+	if (prefix_len >= sizeof(prefix))
+		prefix_len = sizeof(prefix) - 1;
+	memcpy(prefix, buffer, prefix_len);
+	prefix[prefix_len] = '\0';
+
+	if (first_cycle)
+		q_strlcpy(tab_partial, prefix, tab_partial_size);
+
+	/* dequake the saved partial for substring matching */
+	for (i = 0; tab_partial[i] && i < sizeof(unfun_partial) - 1; i++)
+		unfun_partial[i] = unfun[tab_partial[i] & 127];
+	unfun_partial[i] = '\0';
+
+	/* dequake the current buffer for "is this the current match?" check */
+	for (i = 0; prefix[i] && i < sizeof(unfun_prefix) - 1; i++)
+		unfun_prefix[i] = unfun[prefix[i] & 127];
+	unfun_prefix[i] = '\0';
+
+	for (item = namehistorylist; item; item = item->next)
+	{
+		for (i = 0; item->name[i] && i < sizeof(unfun_name) - 1; i++)
+			unfun_name[i] = unfun[item->name[i] & 127];
+		unfun_name[i] = '\0';
+
+		/* substring match -- matches Con_Match / console behaviour */
+		if (unfun_partial[0] && !q_strcasestr(unfun_name, unfun_partial))
+			continue;
+
+		if (!first_match)
+			first_match = item;
+
+		if (current_match && !next_match)
+			next_match = item;
+
+		if (!q_strcasecmp(unfun_name, unfun_prefix))
+			current_match = item;
+		else if (!current_match)
+			prev_match = item;
+
+		last_match = item;
+	}
+
+	if (!first_match)
+		return false;
+
+	/* always cycle through full names (no common-prefix shortcut —
+	   substring matches may appear at different offsets) */
+	if (first_cycle)
+	{
+		replacement = keydown[K_SHIFT] ? last_match->name : first_match->name;
+	}
+	else if (current_match)
+	{
+		replacement = keydown[K_SHIFT]
+			? (prev_match ? prev_match->name : last_match->name)
+			: (next_match ? next_match->name : first_match->name);
+	}
+	else
+	{
+		replacement = keydown[K_SHIFT] ? last_match->name : first_match->name;
+	}
+
+	if (!strcmp(buffer, replacement))
+		return false;
+
+	q_strlcpy(buffer, replacement, buffer_size);
+	field->cursor = (int)strlen(buffer);
 	field->sel_start = -1;
 	M_TextField_ClampCursor(field);
 	return true;
