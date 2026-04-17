@@ -1241,26 +1241,63 @@ void V_CalcRefdef (void)
 	}
 //johnfitz
 
-// smooth out stair step ups
-	if (!noclip_anglehack && cl.onground && ent->origin[2] - oldz > 0) //johnfitz -- added exception for noclip
-	//FIXME: noclip_anglehack is set on the server, so in a nonlocal game this won't work.
+// smooth out stair step ups / fast elevator rises
+// joequake-style adaptive rate: small delta (stairs) uses the classic 80 u/s;
+// large upward moves (>20 units) boost to 160 u/s with extra offset window.
 	{
+		static vec3_t oldorigin = {0,0,0};
+		static float extracrouch = 0;
+		static float crouchspeed = 80;
 		float steptime;
+		vec3_t odiff;
 
 		steptime = cl.time - cl.oldtime;
 		if (steptime < 0)
 			//FIXME	I_Error ("steptime < 0");
 			steptime = 0;
 
-		oldz += steptime * 80;
-		if (oldz > ent->origin[2])
+		// teleport / respawn detection: reset smoothing state
+		VectorSubtract (ent->origin, oldorigin, odiff);
+		if (DotProduct (odiff, odiff) > 48 * 48)
+		{
 			oldz = ent->origin[2];
-		if (ent->origin[2] - oldz > 12)
-			oldz = ent->origin[2] - 12;
-		r_refdef.vieworg[2] += oldz - ent->origin[2];
+			extracrouch = 0;
+			crouchspeed = 80;
+		}
+		VectorCopy (ent->origin, oldorigin);
+
+		if (!noclip_anglehack && cl.onground && ent->origin[2] - oldz > 0) //johnfitz -- added exception for noclip
+		//FIXME: noclip_anglehack is set on the server, so in a nonlocal game this won't work.
+		{
+			if (ent->origin[2] - oldz > 20)
+			{
+				if (crouchspeed < 160)
+				{
+					extracrouch = ent->origin[2] - oldz - steptime * 200 - 15;
+					extracrouch = q_min (extracrouch, 5);
+				}
+				crouchspeed = 160;
+			}
+
+			oldz += steptime * crouchspeed;
+			if (oldz > ent->origin[2])
+				oldz = ent->origin[2];
+			if (ent->origin[2] - oldz > 12 + extracrouch)
+				oldz = ent->origin[2] - 12 - extracrouch;
+
+			extracrouch -= steptime * 200;
+			if (extracrouch < 0)
+				extracrouch = 0;
+
+			r_refdef.vieworg[2] += oldz - ent->origin[2];
+		}
+		else
+		{
+			oldz = ent->origin[2];
+			crouchspeed = 80;
+			extracrouch = 0;
+		}
 	}
-	else
-		oldz = ent->origin[2];
 
 	// woods #demoeyecam - convert chasecam demo view into eyecam view
 	if (cls.demoplayback && cl_demo_eyecam.value && cl.entities && cl.maxclients > 0)
