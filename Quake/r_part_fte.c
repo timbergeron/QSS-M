@@ -37,7 +37,10 @@ The engine has a few builtins.
 #endif
 
 extern cvar_t r_drawflame; // woods #drawflame
+extern cvar_t r_novis;
+extern cvar_t r_scenecache;
 extern int grenadecache; // woods #r2g
+byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
 
 #define frandom() (rand()*(1.0f/RAND_MAX))
 #define crandom() (rand()*(2.0f/RAND_MAX)-1.0f)
@@ -3883,13 +3886,15 @@ static void R_ParticleDesc_Callback(struct cvar_s *var)
 	CL_RegisterParticles();
 }
 
-static void P_AddRainParticles(qmodel_t *mod, vec3_t axis[3], vec3_t eorg, int visframe, float contribution)
+static void P_AddRainParticles(qmodel_t *mod, vec3_t axis[3], vec3_t eorg, byte *scenevis, float contribution)
 {
 	float x;
 	float y;
 	part_type_t *type;
 
 	vec3_t org, vdist, worg, wnorm;
+	mleaf_t *leaf;
+	int cluster;
 
 	skytris_t *st;
 	if (!r_part_rain_quantity.value)
@@ -3899,12 +3904,6 @@ static void P_AddRainParticles(qmodel_t *mod, vec3_t axis[3], vec3_t eorg, int v
 
 	for (st = mod->skytris; st; st = st->next)
 	{
-		if (st->face->visframe != visframe)
-		{
-			st->nexttime = mod->skytime;
-			continue;
-		}
-
 		if ((unsigned int)st->ptype >= (unsigned int)numparticletypes)
 			continue;
 		type = &part_type[st->ptype];
@@ -3942,10 +3941,19 @@ static void P_AddRainParticles(qmodel_t *mod, vec3_t axis[3], vec3_t eorg, int v
 			wnorm[2] = DotProduct(vdist, axis[2]);
 
 			VectorMA(worg, 0.5, wnorm, worg);
-			if (!(CL_PointContentsMask(worg) & FTECONTENTS_SOLID))	//should be paranoia, at least for the world.
+
+			if (CL_PointContentsMask(worg) & FTECONTENTS_SOLID)
+				continue;
+
+			if (scenevis && cl.worldmodel)
 			{
-				PScript_RunParticleEffectState(worg, wnorm, 1, st->ptype, NULL);
+				leaf = Mod_PointInLeaf(worg, cl.worldmodel);
+				cluster = (int)(leaf - cl.worldmodel->leafs) - 1;
+				if (cluster >= 0 && !(scenevis[cluster>>3] & (1 << (cluster&7))))
+					continue;
 			}
+
+			PScript_RunParticleEffectState(worg, wnorm, 1, st->ptype, NULL);
 		}
 	}
 }
@@ -7837,7 +7845,9 @@ void PScript_DrawParticles (void)
 	int i;
 	entity_t *ent;
 	vec3_t axis[3];
+	byte *scenevis = NULL;
 	float pframetime;
+	qboolean scenevis_resolved = false;
 	static float oldtime;
 	
 	pframetime = cl.time - oldtime;
@@ -7859,10 +7869,34 @@ void PScript_DrawParticles (void)
 				continue;
 			if (!ent->model->skytris)
 				continue;
+
+			if (!scenevis_resolved && cl.worldmodel && r_viewleaf)
+			{
+				qboolean nearwaterportal = r_scenecache.value != 0;
+				msurface_t **mark;
+
+				scenevis_resolved = true;
+				for (mark = r_viewleaf->firstmarksurface; mark < r_viewleaf->firstmarksurface + r_viewleaf->nummarksurfaces; mark++)
+				{
+					if ((*mark)->flags & SURF_DRAWTURB)
+					{
+						nearwaterportal = true;
+						break;
+					}
+				}
+
+				if (r_novis.value || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
+					scenevis = Mod_NoVisPVS(cl.worldmodel);
+				else if (nearwaterportal)
+					scenevis = SV_FatPVS(r_origin, cl.worldmodel);
+				else
+					scenevis = Mod_LeafPVS(r_viewleaf, cl.worldmodel);
+			}
+
 			AngleVectors(ent->angles, axis[0], axis[1], axis[2]);
 			//this timer, as well as the per-tri timer, are unable to deal with certain rates+sizes. it would be good to fix that...
 			//it would also be nice to do mdls too...
-			P_AddRainParticles(ent->model, axis, ent->origin, ((i==0)?r_visframecount:0), pframetime);
+			P_AddRainParticles(ent->model, axis, ent->origin, scenevis, pframetime);
 		}
 
 		//FIXME: static entities too!
