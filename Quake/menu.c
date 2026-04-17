@@ -4587,6 +4587,28 @@ void M_DrawSlider (int x, int y, float range, float value, const char* format)
 	M_Print(i, y, buffer);
 }
 
+#define MENU_CHECKBOX_ROW_OFFSET	4
+#define MENU_CHECKBOX_BOX_SCALE		1.375f
+#define MENU_CHECKBOX_X_SCALE		0.625f
+
+void M_DrawCheckboxBox (int x, int y, int on)
+{
+	glPushMatrix();
+	glTranslatef(x, y - MENU_CHECKBOX_ROW_OFFSET - 2, 0);
+	glScalef(MENU_CHECKBOX_BOX_SCALE, MENU_CHECKBOX_BOX_SCALE, 1.0f);
+	M_DrawTextBox(0, 0, 0, 0);
+	glPopMatrix();
+
+	if (on)
+	{
+		glPushMatrix();
+		glTranslatef(x + 8, y + 2, 0);
+		glScalef(MENU_CHECKBOX_X_SCALE, MENU_CHECKBOX_X_SCALE, 1.0f);
+		M_PrintWhite(0, 0, "X");
+		glPopMatrix();
+	}
+}
+
 void M_DrawCheckbox (int x, int y, int on)
 {
 #if 0
@@ -18991,7 +19013,7 @@ void M_Bookmarks_Edit_Draw(void)
 	M_PrintWhite(14, 86, temp_alias);
 
 	M_Print(10, 114, "Pin");
-	if (temp_pinned) M_PrintWhite(50, 114, "on"); else M_Print(50, 114, "off");
+	M_DrawCheckboxBox(36, 114, temp_pinned);
 
 	M_DrawTextBox(6, 138 - 8, 14, 1);
 	M_Print(15, 138, "Accept Changes");
@@ -23365,7 +23387,7 @@ static qboolean M_Demos_SameDemoName(const char *a, const char *b)
 
 static qboolean M_Demos_QueuePlayDemo(const char *name)
 {
-	const char *demo_name = M_Demos_CommandName(name);
+	const char *demo_name = name;
 
 	if (strchr(demo_name, '"') || strchr(demo_name, '\n') || strchr(demo_name, '\r'))
 	{
