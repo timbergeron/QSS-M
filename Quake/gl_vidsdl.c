@@ -750,9 +750,11 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 			SDL_SetWindowPosition (draw_context, SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display), SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display));
 		else
 			SDL_SetWindowPosition(draw_context, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-	}
-	SDL_SetWindowDisplayMode (draw_context, VID_SDL2_GetDisplayMode(width, height, refreshrate, bpp));
-	SDL_SetWindowBordered (draw_context, vid_borderless.value ? SDL_FALSE : SDL_TRUE);
+		}
+		SDL_SetWindowDisplayMode (draw_context, VID_SDL2_GetDisplayMode(width, height, refreshrate, bpp));
+		SDL_SetWindowBordered (draw_context, vid_borderless.value ? SDL_FALSE : SDL_TRUE);
+		SDL_SetWindowResizable (draw_context,
+			(!fullscreen && !vid_borderless.value) ? SDL_TRUE : SDL_FALSE);
 
 	/* Make window fullscreen if needed, and show the window */
 
