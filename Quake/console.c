@@ -3118,9 +3118,199 @@ static qboolean CompleteClassnames (const char* partial, void* unused) // woods 
 	return true;
 }
 
+void FileList_Add(const char* name, const char* data, filelist_item_t** list);
+
+#define DEMO_COMPLETION_MAX_DEPTH 8
+
+static void CompleteDemo_ClearList(filelist_item_t **list)
+{
+	filelist_item_t *next;
+
+	while (*list)
+	{
+		next = (*list)->next;
+		Z_Free(*list);
+		*list = next;
+	}
+}
+
+static void CompleteDemo_FormatDate(time_t mtime, char *out, size_t outlen)
+{
+	struct tm *tm;
+
+	if (!mtime)
+	{
+		q_strlcpy(out, "Unknown Date", outlen);
+		return;
+	}
+
+	tm = localtime(&mtime);
+	if (!tm)
+	{
+		q_strlcpy(out, "Unknown Date", outlen);
+		return;
+	}
+
+	q_snprintf(out, outlen, "%04d-%02d-%02d %02d:%02d:%02d",
+		tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+		tm->tm_hour, tm->tm_min, tm->tm_sec);
+}
+
+static const char *CompleteDemo_StripDemosPrefix(const char *name)
+{
+	if (!q_strncasecmp(name, "demos/", 6) || !q_strncasecmp(name, "demos\\", 6))
+		return name + 6;
+	return name;
+}
+
+static void CompleteDemo_AddSubdirDemo(filelist_item_t **list, const char *relpath, const char *date)
+{
+	if (!relpath || !strchr(relpath, '/'))
+		return;
+
+	FileList_Add(relpath, date, list);
+}
+
+static qboolean CompleteDemo_ListContains(filelist_item_t *list, const char *name)
+{
+	filelist_item_t *file;
+
+	for (file = list; file; file = file->next)
+	{
+		if (!q_strcasecmp(CompleteDemo_StripDemosPrefix(file->name), name))
+			return true;
+	}
+
+	return false;
+}
+
+static void CompleteDemo_ScanPhysicalDir(filelist_item_t **list, const char *basepath, const char *relpath, int depth)
+{
+	char path[MAX_OSPATH];
+
+	if (depth >= DEMO_COMPLETION_MAX_DEPTH)
+		return;
+
+	if (relpath && relpath[0])
+		q_snprintf(path, sizeof(path), "%s/%s", basepath, relpath);
+	else
+		q_strlcpy(path, basepath, sizeof(path));
+
+#ifdef _WIN32
+	{
+		char searchpath[MAX_OSPATH];
+		WIN32_FIND_DATA fdat;
+		HANDLE fhnd;
+
+		q_snprintf(searchpath, sizeof(searchpath), "%s/*", path);
+		fhnd = FindFirstFile(searchpath, &fdat);
+		if (fhnd == INVALID_HANDLE_VALUE)
+			return;
+
+		do
+		{
+			char child_rel[MAX_QPATH];
+
+			if (fdat.cFileName[0] == '.')
+				continue;
+
+			if (relpath && relpath[0])
+				q_snprintf(child_rel, sizeof(child_rel), "%s/%s", relpath, fdat.cFileName);
+			else
+				q_strlcpy(child_rel, fdat.cFileName, sizeof(child_rel));
+
+			if (fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			{
+				CompleteDemo_ScanPhysicalDir(list, basepath, child_rel, depth + 1);
+			}
+			else
+			{
+				const char *ext = COM_FileGetExtension(fdat.cFileName);
+				if (!q_strcasecmp(ext, "dem") || !q_strcasecmp(ext, "dz"))
+				{
+					SYSTEMTIME stUTC, stLocal;
+					char date[32];
+
+					FileTimeToSystemTime(&fdat.ftLastWriteTime, &stUTC);
+					SystemTimeToTzSpecificLocalTime(NULL, &stUTC, &stLocal);
+					q_snprintf(date, sizeof(date), "%04d-%02d-%02d %02d:%02d:%02d",
+						stLocal.wYear, stLocal.wMonth, stLocal.wDay,
+						stLocal.wHour, stLocal.wMinute, stLocal.wSecond);
+					CompleteDemo_AddSubdirDemo(list, child_rel, date);
+				}
+			}
+		} while (FindNextFile(fhnd, &fdat));
+
+		FindClose(fhnd);
+	}
+#else
+	{
+		DIR *dir_p;
+		struct dirent *dir_t;
+
+		dir_p = opendir(path);
+		if (!dir_p)
+			return;
+
+		while ((dir_t = readdir(dir_p)) != NULL)
+		{
+			char fullpath[MAX_OSPATH];
+			char child_rel[MAX_QPATH];
+			struct stat st;
+
+			if (dir_t->d_name[0] == '.')
+				continue;
+
+			q_snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir_t->d_name);
+			if (stat(fullpath, &st) < 0)
+				continue;
+
+			if (relpath && relpath[0])
+				q_snprintf(child_rel, sizeof(child_rel), "%s/%s", relpath, dir_t->d_name);
+			else
+				q_strlcpy(child_rel, dir_t->d_name, sizeof(child_rel));
+
+			if (S_ISDIR(st.st_mode))
+				CompleteDemo_ScanPhysicalDir(list, basepath, child_rel, depth + 1);
+			else if (S_ISREG(st.st_mode))
+			{
+				const char *ext = COM_FileGetExtension(dir_t->d_name);
+				if (!q_strcasecmp(ext, "dem") || !q_strcasecmp(ext, "dz"))
+				{
+					char date[32];
+
+					CompleteDemo_FormatDate(st.st_mtime, date, sizeof(date));
+					CompleteDemo_AddSubdirDemo(list, child_rel, date);
+				}
+			}
+		}
+
+		closedir(dir_p);
+	}
+#endif
+}
+
+static void CompleteDemo_BuildSubdirList(filelist_item_t **list)
+{
+	searchpath_t *search;
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		char demos_path[MAX_OSPATH];
+
+		if (search->pack)
+			continue;
+
+		q_snprintf(demos_path, sizeof(demos_path), "%s/demos", search->filename);
+		CompleteDemo_ScanPhysicalDir(list, demos_path, NULL, 0);
+	}
+}
+
 static qboolean CompleteFileListDemo (const char* partial, void* param) // woods #iwtabcomplete #demolistsort
 {
 	filelist_item_t* file, ** list = (filelist_item_t**)param;
+	filelist_item_t* subdir_demos = NULL;
+	filelist_item_t* completed_demos = NULL;
 	char currentDateStr[80];
 
 	// Get current date/time for the last demo aliases
@@ -3143,7 +3333,26 @@ static qboolean CompleteFileListDemo (const char* partial, void* param) // woods
 	Con_AddToTabList("-l", partial, "play last demo", currentDateStr);
 
 	for (file = *list; file; file = file->next)
-		Con_AddToTabList (file->name, partial, NULL, file->data);
+	{
+		const char *name = CompleteDemo_StripDemosPrefix(file->name);
+		if (!CompleteDemo_ListContains(completed_demos, name))
+		{
+			Con_AddToTabList(name, partial, NULL, file->data);
+			FileList_Add(name, NULL, &completed_demos);
+		}
+	}
+
+	CompleteDemo_BuildSubdirList(&subdir_demos);
+	for (file = subdir_demos; file; file = file->next)
+	{
+		if (!CompleteDemo_ListContains(completed_demos, file->name))
+		{
+			Con_AddToTabList(file->name, partial, NULL, file->data);
+			FileList_Add(file->name, NULL, &completed_demos);
+		}
+	}
+	CompleteDemo_ClearList(&subdir_demos);
+	CompleteDemo_ClearList(&completed_demos);
 	return true;
 }
 

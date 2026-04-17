@@ -208,6 +208,9 @@ void M_Main_Key (int key);
 			void M_Crosshair_Key (int key);
 		void M_Console_Key (int key);
 	void M_Mods_Key (int key);
+	void M_Demos_Key (int key);
+	void M_Demos_Char (int key);
+	qboolean M_Demos_TextEntry (void);
 	void M_Help_Key (int key);
 	void M_Quit_Key (int key);
 	void M_NameMaker_Key(int key); // woods #namemaker
@@ -22132,11 +22135,21 @@ Demos Menu
 ==================
 */
 
-#define MAX_VIS_DEMOS	14
+#define MAX_VIS_DEMOS	11
+#define DEMOS_PATH_ROW_Y	32
+#define DEMOS_PATH_LABEL_X	16
+#define DEMOS_PATH_BOX_X	56
+#define DEMOS_PATH_TEXT_X	64
+#define DEMOS_PATH_BOX_CHARS	30
+#define DEMOS_PATH_MAX_DEPTH	8
+#define DEMOS_ID1_ROW_Y	44
+#define DEMOS_ID1_TEXT_X	(DEMOS_PATH_BOX_X + 8)
+#define DEMOS_ID1_TEXT_SCALE	0.8125f
 
 typedef struct
 {
 	char        name[MAX_QPATH];
+	char        display[MAX_QPATH + 8];
 	char        date[32];
 	char        map[64];
 	char        players[256];
@@ -22144,6 +22157,7 @@ typedef struct
 	char        filesize[16];
 	qboolean    active;
 	qboolean    parsed;
+	qboolean    from_id1;
 } demoitem_t;
 	
 typedef struct
@@ -22520,7 +22534,142 @@ static struct
 	demoitem_t			*items;
 	qboolean			scrollbar_grab;
 	int*                filtered_indices;
+	menu_textfield_t	path_field;
+	char				path_suffix[MAX_QPATH];
+	char				remembered_path_suffix[MAX_QPATH];
+	char				path_hint[MAX_QPATH];
+	char				path_tabpartial[MAX_QPATH];
+	filelist_item_t		*path_folders;
+	qboolean			path_editing;
+	qboolean			path_valid;
+	qboolean			show_id1;
 } demosmenu;
+
+static const char *M_Demos_CurrentGameName(void)
+{
+	const char *gamedir = COM_SkipPath(com_gamedir);
+
+	if (!gamedir || !gamedir[0])
+		gamedir = GAMENAME;
+
+	return gamedir;
+}
+
+static qboolean M_Demos_CurrentGameIsId1(void)
+{
+	return !q_strcasecmp(M_Demos_CurrentGameName(), GAMENAME);
+}
+
+static const char *M_Demos_PathBase(void)
+{
+	static char base[MAX_QPATH];
+	const char *gamedir = M_Demos_CurrentGameName();
+
+	q_snprintf(base, sizeof(base), "/%s/demos", gamedir);
+	return base;
+}
+
+static const char *M_Demos_SkipPathBasePrefix(const char *path)
+{
+	char game_base[MAX_QPATH];
+	const char *gamedir = M_Demos_CurrentGameName();
+	size_t len;
+
+	while (*path == '/')
+		++path;
+
+	q_snprintf(game_base, sizeof(game_base), "%s/demos", gamedir);
+	len = strlen(game_base);
+	if (!q_strncasecmp(path, game_base, len) && (path[len] == '\0' || path[len] == '/'))
+	{
+		path += len;
+		while (*path == '/')
+			++path;
+		return path;
+	}
+
+	if (!q_strncasecmp(path, "id1/demos", 9) && (path[9] == '\0' || path[9] == '/'))
+	{
+		path += 9;
+		while (*path == '/')
+			++path;
+		return path;
+	}
+
+	if (!q_strncasecmp(path, "demos", 5) && (path[5] == '\0' || path[5] == '/'))
+	{
+		path += 5;
+		while (*path == '/')
+			++path;
+	}
+
+	return path;
+}
+
+static qboolean M_Demos_SearchPathMatchesGame(searchpath_t *search, const char *gamedir)
+{
+	size_t len;
+
+	if (!search || !gamedir || !gamedir[0])
+		return false;
+
+	len = strlen(gamedir);
+	return !q_strncasecmp(search->purename, gamedir, len) &&
+		(search->purename[len] == '\0' ||
+		 search->purename[len] == '/' ||
+		 search->purename[len] == '\\');
+}
+
+static qboolean M_Demos_SearchPathAllowed(searchpath_t *search, qboolean *from_id1)
+{
+	qboolean is_id1;
+
+	if (from_id1)
+		*from_id1 = false;
+
+	if (M_Demos_SearchPathMatchesGame(search, M_Demos_CurrentGameName()))
+		return true;
+
+	is_id1 = M_Demos_SearchPathMatchesGame(search, GAMENAME);
+	if (!M_Demos_CurrentGameIsId1() && demosmenu.show_id1 && is_id1)
+	{
+		if (from_id1)
+			*from_id1 = true;
+		return true;
+	}
+
+	return false;
+}
+
+static qboolean M_Demos_HasId1SearchPath(void)
+{
+	searchpath_t *search;
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (M_Demos_SearchPathMatchesGame(search, GAMENAME))
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean M_Demos_ShowId1Toggle(void)
+{
+	return !M_Demos_CurrentGameIsId1() && M_Demos_HasId1SearchPath();
+}
+
+static void M_Demos_ClearFileList(filelist_item_t **list)
+{
+	filelist_item_t *next;
+
+	while (*list)
+	{
+		next = (*list)->next;
+		Z_Free(*list);
+		*list = next;
+	}
+}
 
 static void M_Demos_FreeItems(void)
 {
@@ -22537,11 +22686,30 @@ static void M_Demos_FreeItems(void)
 	demosmenu.democount = 0;
 }
 
-static void M_Demos_Add (const char* name, const char* date)
+static void M_Demos_AddEx(const char* name, const char* date, const char *display, qboolean from_id1)
 {
     demoitem_t tempDemo;
-	
+	char display_with_source[MAX_QPATH + 8];
+	int i;
+
+	if (!date)
+		date = "Unknown Date";
+
+	for (i = 0; i < demosmenu.democount; i++)
+	{
+		if (!q_strcasecmp(name, demosmenu.items[i].name))
+			return;
+	}
+
 	q_strlcpy(tempDemo.name, name, sizeof(tempDemo.name));
+	if (from_id1 && !M_Demos_CurrentGameIsId1())
+	{
+		q_snprintf(display_with_source, sizeof(display_with_source), "%s [id1]",
+			display && display[0] ? display : name);
+		q_strlcpy(tempDemo.display, display_with_source, sizeof(tempDemo.display));
+	}
+	else
+		q_strlcpy(tempDemo.display, display && display[0] ? display : name, sizeof(tempDemo.display));
 	q_strlcpy(tempDemo.date, date, sizeof(tempDemo.date));
 	tempDemo.map[0] = '\0';
 	tempDemo.players[0] = '\0';
@@ -22549,6 +22717,7 @@ static void M_Demos_Add (const char* name, const char* date)
 	tempDemo.filesize[0] = '\0';
     tempDemo.active = false;
 	tempDemo.parsed = false;
+	tempDemo.from_id1 = from_id1;
 
     int insertPos = demosmenu.democount;
 
@@ -22576,6 +22745,357 @@ static void M_Demos_Add (const char* name, const char* date)
     demosmenu.democount++;
 }
 
+static void M_Demos_AddFolderAncestors(const char *relpath)
+{
+	char folder[MAX_QPATH];
+	char *slash;
+
+	if (!relpath || !relpath[0])
+		return;
+
+	q_strlcpy(folder, relpath, sizeof(folder));
+	for (slash = folder; *slash; ++slash)
+	{
+		if (*slash == '/' || *slash == '\\')
+		{
+			*slash = '\0';
+			if (folder[0])
+				FileList_Add(folder, NULL, &demosmenu.path_folders);
+			*slash = '/';
+		}
+	}
+
+	FileList_Add(folder, NULL, &demosmenu.path_folders);
+}
+
+static void M_Demos_AddFolderFromDemoPath(const char *path)
+{
+	const char *rel;
+	const char *slash;
+	char folder[MAX_QPATH];
+	size_t len;
+
+	if (q_strncasecmp(path, "demos/", 6))
+		return;
+
+	rel = path + 6;
+	slash = strrchr(rel, '/');
+	if (!slash)
+		return;
+
+	len = (size_t)(slash - rel);
+	if (len <= 0)
+		return;
+	if (len >= sizeof(folder))
+		len = sizeof(folder) - 1;
+
+	memcpy(folder, rel, len);
+	folder[len] = '\0';
+	M_Demos_AddFolderAncestors(folder);
+}
+
+static void M_Demos_ScanPakFolders(void)
+{
+	searchpath_t *search;
+	pack_t *pak;
+	int i;
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (!search->pack)
+			continue;
+		if (!M_Demos_SearchPathAllowed(search, NULL))
+			continue;
+
+		pak = search->pack;
+		for (i = 0; i < pak->numfiles; i++)
+		{
+			const char *ext = COM_FileGetExtension(pak->files[i].name);
+			if (q_strcasecmp(ext, "dem") && q_strcasecmp(ext, "dz"))
+				continue;
+			M_Demos_AddFolderFromDemoPath(pak->files[i].name);
+		}
+	}
+}
+
+static void M_Demos_ScanPhysicalFolders(const char *basepath, const char *relpath, int depth)
+{
+	char path[MAX_OSPATH];
+
+	if (depth >= DEMOS_PATH_MAX_DEPTH)
+		return;
+
+	if (relpath && relpath[0])
+		q_snprintf(path, sizeof(path), "%s/%s", basepath, relpath);
+	else
+		q_strlcpy(path, basepath, sizeof(path));
+
+#ifdef _WIN32
+	{
+		char searchpath[MAX_OSPATH];
+		WIN32_FIND_DATA fdat;
+		HANDLE fhnd;
+
+		q_snprintf(searchpath, sizeof(searchpath), "%s/*", path);
+		fhnd = FindFirstFile(searchpath, &fdat);
+		if (fhnd == INVALID_HANDLE_VALUE)
+			return;
+
+		do
+		{
+			char child_rel[MAX_QPATH];
+
+			if (!(fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				continue;
+			if (fdat.cFileName[0] == '.')
+				continue;
+
+			if (relpath && relpath[0])
+				q_snprintf(child_rel, sizeof(child_rel), "%s/%s", relpath, fdat.cFileName);
+			else
+				q_strlcpy(child_rel, fdat.cFileName, sizeof(child_rel));
+
+			FileList_Add(child_rel, NULL, &demosmenu.path_folders);
+			M_Demos_ScanPhysicalFolders(basepath, child_rel, depth + 1);
+		} while (FindNextFile(fhnd, &fdat));
+
+		FindClose(fhnd);
+	}
+#else
+	{
+		DIR *dir_p;
+		struct dirent *dir_t;
+
+		dir_p = opendir(path);
+		if (!dir_p)
+			return;
+
+		while ((dir_t = readdir(dir_p)) != NULL)
+		{
+			char fullpath[MAX_OSPATH];
+			char child_rel[MAX_QPATH];
+			struct stat st;
+
+			if (dir_t->d_name[0] == '.')
+				continue;
+
+			q_snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir_t->d_name);
+			if (stat(fullpath, &st) < 0 || !S_ISDIR(st.st_mode))
+				continue;
+
+			if (relpath && relpath[0])
+				q_snprintf(child_rel, sizeof(child_rel), "%s/%s", relpath, dir_t->d_name);
+			else
+				q_strlcpy(child_rel, dir_t->d_name, sizeof(child_rel));
+
+			FileList_Add(child_rel, NULL, &demosmenu.path_folders);
+			M_Demos_ScanPhysicalFolders(basepath, child_rel, depth + 1);
+		}
+
+		closedir(dir_p);
+	}
+#endif
+}
+
+static void M_Demos_RebuildFolderList(void)
+{
+	searchpath_t *search;
+	char demos_path[MAX_OSPATH];
+
+	M_Demos_ClearFileList(&demosmenu.path_folders);
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (search->pack)
+			continue;
+		if (!M_Demos_SearchPathAllowed(search, NULL))
+			continue;
+
+		q_snprintf(demos_path, sizeof(demos_path), "%s/demos", search->filename);
+		M_Demos_ScanPhysicalFolders(demos_path, NULL, 0);
+	}
+
+	M_Demos_ScanPakFolders();
+}
+
+static void M_Demos_FormatFileDate(time_t mtime, char *out, size_t outlen)
+{
+	struct tm *tm;
+
+	if (!mtime)
+	{
+		q_strlcpy(out, "Unknown Date", outlen);
+		return;
+	}
+
+	tm = localtime(&mtime);
+	if (!tm)
+	{
+		q_strlcpy(out, "Unknown Date", outlen);
+		return;
+	}
+
+	q_snprintf(out, outlen, "%04d-%02d-%02d %02d:%02d:%02d",
+		tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+		tm->tm_hour, tm->tm_min, tm->tm_sec);
+}
+
+static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
+{
+	char date[32];
+	qboolean from_id1;
+
+	(void)ctx;
+	(void)fsize;
+
+	if (!M_Demos_SearchPathAllowed(spath, &from_id1))
+		return true;
+
+	M_Demos_FormatFileDate(mtime, date, sizeof(date));
+	M_Demos_AddEx(fname, date, COM_SkipPath(fname), from_id1);
+	return true;
+}
+
+static void M_Demos_CopyLookupSuffix(const char *src, char *out, size_t outlen)
+{
+	size_t len;
+
+	q_strlcpy(out, src, outlen);
+	len = strlen(out);
+	while (len > 0 && out[len - 1] == '/')
+		out[--len] = '\0';
+}
+
+static qboolean M_Demos_FindFolder(const char *suffix, char *actual, size_t actual_size)
+{
+	filelist_item_t *folder;
+	char lookup[MAX_QPATH];
+
+	M_Demos_CopyLookupSuffix(suffix, lookup, sizeof(lookup));
+	if (!lookup[0])
+	{
+		if (actual_size)
+			actual[0] = '\0';
+		return true;
+	}
+
+	for (folder = demosmenu.path_folders; folder; folder = folder->next)
+	{
+		if (!q_strcasecmp(folder->name, lookup))
+		{
+			q_strlcpy(actual, folder->name, actual_size);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void M_Demos_CleanPathSuffix(void)
+{
+	char src[MAX_QPATH];
+	char clean[MAX_QPATH];
+	const char *p;
+	char *w;
+	size_t out = 0;
+	qboolean last_slash = false;
+
+	q_strlcpy(src, demosmenu.path_suffix, sizeof(src));
+	for (w = src; *w; ++w)
+	{
+		if (*w == '\\')
+			*w = '/';
+	}
+
+	p = M_Demos_SkipPathBasePrefix(src);
+
+	clean[0] = '\0';
+	while (*p && out < sizeof(clean) - 1)
+	{
+		char c = *p++;
+
+		if (c == ':')
+			continue;
+		if (c == '/')
+		{
+			if (out == 0 || last_slash)
+				continue;
+			clean[out++] = '/';
+			last_slash = true;
+			continue;
+		}
+
+		clean[out++] = c;
+		last_slash = false;
+	}
+	clean[out] = '\0';
+
+	if (strstr(clean, "../") || strstr(clean, "/..") || !strcmp(clean, "..") ||
+		strstr(clean, "./") || strstr(clean, "/.") || !strcmp(clean, "."))
+	{
+		char safe[MAX_QPATH];
+		size_t i = 0, j = 0;
+
+		while (clean[i] && j < sizeof(safe) - 1)
+		{
+			size_t start = i;
+			size_t len;
+
+			while (clean[i] && clean[i] != '/')
+				++i;
+			len = i - start;
+
+			if (!(len == 1 && clean[start] == '.') &&
+				!(len == 2 && clean[start] == '.' && clean[start + 1] == '.'))
+			{
+				if (j > 0 && safe[j - 1] != '/' && j < sizeof(safe) - 1)
+					safe[j++] = '/';
+				while (len-- && j < sizeof(safe) - 1)
+					safe[j++] = clean[start++];
+			}
+
+			while (clean[i] == '/')
+				++i;
+		}
+
+		if (last_slash && j > 0 && safe[j - 1] != '/' && j < sizeof(safe) - 1)
+			safe[j++] = '/';
+		safe[j] = '\0';
+		q_strlcpy(clean, safe, sizeof(clean));
+	}
+
+	if (strcmp(demosmenu.path_suffix, clean))
+	{
+		q_strlcpy(demosmenu.path_suffix, clean, sizeof(demosmenu.path_suffix));
+		demosmenu.path_field.cursor = (int)strlen(demosmenu.path_suffix);
+		demosmenu.path_field.sel_start = -1;
+		M_TextField_ClampCursor(&demosmenu.path_field);
+	}
+}
+
+static void M_Demos_UpdatePathHint(void)
+{
+	filelist_item_t *folder;
+	int len = (int)strlen(demosmenu.path_suffix);
+
+	demosmenu.path_hint[0] = '\0';
+
+	if (!demosmenu.path_editing || len <= 0 ||
+		demosmenu.path_field.cursor != len)
+		return;
+
+	for (folder = demosmenu.path_folders; folder; folder = folder->next)
+	{
+		if (q_strncasecmp(folder->name, demosmenu.path_suffix, len))
+			continue;
+		if ((int)strlen(folder->name) <= len)
+			continue;
+
+		q_strlcpy(demosmenu.path_hint, folder->name + len, sizeof(demosmenu.path_hint));
+		return;
+	}
+}
+
 static void M_Demos_Refilter(void)
 {
     int i;
@@ -22585,6 +23105,7 @@ static void M_Demos_Refilter(void)
     {
         if (demosmenu.list.search.len == 0 ||
             q_strcasestr(demosmenu.items[i].name, demosmenu.list.search.text) ||
+            q_strcasestr(demosmenu.items[i].display, demosmenu.list.search.text) ||
             q_strcasestr(demosmenu.items[i].date, demosmenu.list.search.text) ||
             q_strcasestr(demosmenu.items[i].map, demosmenu.list.search.text) ||
             q_strcasestr(demosmenu.items[i].players, demosmenu.list.search.text))
@@ -22604,34 +23125,120 @@ static void M_Demos_Refilter(void)
     M_List_CenterCursor(&demosmenu.list);
 }
 
+static void M_Demos_RebuildForCurrentPath(void)
+{
+	char actual_folder[MAX_QPATH];
+
+	M_Demos_FreeItems();
+	demosmenu.list.cursor = -1;
+	demosmenu.list.scroll = 0;
+	demosmenu.democount = 0;
+	VEC_CLEAR(demosmenu.items);
+	VEC_CLEAR(demosmenu.filtered_indices);
+
+	demosmenu.path_valid = M_Demos_FindFolder(demosmenu.path_suffix,
+		actual_folder, sizeof(actual_folder));
+
+	if (demosmenu.path_valid)
+	{
+		if (!actual_folder[0])
+		{
+			COM_ListAllFiles(NULL, "demos/*.dem", M_Demos_AddListedFile, 0, NULL);
+			COM_ListAllFiles(NULL, "demos/*.dz", M_Demos_AddListedFile, 0, NULL);
+		}
+		else
+		{
+			char pattern[MAX_OSPATH];
+
+			q_snprintf(pattern, sizeof(pattern), "demos/%s/*.dem", actual_folder);
+			COM_ListAllFiles(NULL, pattern, M_Demos_AddListedFile, 0, NULL);
+
+			q_snprintf(pattern, sizeof(pattern), "demos/%s/*.dz", actual_folder);
+			COM_ListAllFiles(NULL, pattern, M_Demos_AddListedFile, 0, NULL);
+		}
+	}
+
+	M_Demos_Refilter();
+
+	if (demosmenu.list.cursor == -1 && demosmenu.list.numitems > 0)
+		demosmenu.list.cursor = 0;
+
+	M_List_CenterCursor(&demosmenu.list);
+	M_Demos_UpdatePathHint();
+}
+
+static void M_Demos_ClearRememberedPath(void)
+{
+	demosmenu.remembered_path_suffix[0] = '\0';
+}
+
+static void M_Demos_PathChanged(void)
+{
+	M_Demos_CleanPathSuffix();
+	if (!demosmenu.path_suffix[0])
+		M_Demos_ClearRememberedPath();
+	demosmenu.path_tabpartial[0] = '\0';
+	M_Demos_RebuildForCurrentPath();
+}
+
+static void M_Demos_ToggleShowId1(void)
+{
+	if (!M_Demos_ShowId1Toggle())
+		return;
+
+	demosmenu.show_id1 = !demosmenu.show_id1;
+	demosmenu.path_tabpartial[0] = '\0';
+	M_Demos_RebuildFolderList();
+	M_Demos_RebuildForCurrentPath();
+	S_LocalSound("misc/menu1.wav");
+}
+
+static void M_Demos_RememberCurrentPath(void)
+{
+	q_strlcpy(demosmenu.remembered_path_suffix, demosmenu.path_suffix,
+		sizeof(demosmenu.remembered_path_suffix));
+}
+
+static void M_Demos_ResetPathToRoot(void)
+{
+	demosmenu.path_suffix[0] = '\0';
+	demosmenu.path_field.cursor = 0;
+	demosmenu.path_field.sel_start = -1;
+	demosmenu.path_tabpartial[0] = '\0';
+	demosmenu.path_hint[0] = '\0';
+	M_TextField_ClampCursor(&demosmenu.path_field);
+}
+
 static void M_Demos_Init(void)
 {
-    filelist_item_t* item;
-
-    M_Demos_FreeItems();
-
     demosmenu.list.viewsize = MAX_VIS_DEMOS;
     demosmenu.list.cursor = -1;
     demosmenu.list.scroll = 0;
     demosmenu.democount = 0;
     demosmenu.scrollbar_grab = false;
     VEC_CLEAR(demosmenu.items);
-    VEC_CLEAR(demosmenu.filtered_indices);
+	VEC_CLEAR(demosmenu.filtered_indices);
+	demosmenu.path_editing = false;
+	demosmenu.path_valid = true;
+	q_strlcpy(demosmenu.path_suffix, demosmenu.remembered_path_suffix,
+		sizeof(demosmenu.path_suffix));
+	demosmenu.path_hint[0] = '\0';
+	demosmenu.path_tabpartial[0] = '\0';
+	M_TextField_Init(&demosmenu.path_field, demosmenu.path_suffix, sizeof(demosmenu.path_suffix) - 1, false);
 
     memset(&demosmenu.list.search, 0, sizeof(demosmenu.list.search));
     demosmenu.list.search.maxlen = 32;
 
-    M_Ticker_Init (&demosmenu.ticker);
+	M_Ticker_Init (&demosmenu.ticker);
 
-    for (item = demolist; item; item = item->next)
-        M_Demos_Add(item->name, item->data);
-
-    M_Demos_Refilter();
-
-    if (demosmenu.list.cursor == -1)
-        demosmenu.list.cursor = 0;
-
-    M_List_CenterCursor(&demosmenu.list);
+	M_Demos_RebuildFolderList();
+	M_Demos_RebuildForCurrentPath();
+	if (demosmenu.remembered_path_suffix[0] && !demosmenu.path_valid)
+	{
+		M_Demos_ClearRememberedPath();
+		M_Demos_ResetPathToRoot();
+		M_Demos_RebuildForCurrentPath();
+	}
 }
 
 void M_Menu_Demos_f (void)
@@ -22643,13 +23250,277 @@ void M_Menu_Demos_f (void)
 	M_Demos_Init();
 }
 
+static int M_Demos_PathSuffixVisibleChars(void)
+{
+	return q_max(0, DEMOS_PATH_BOX_CHARS - (int)strlen(M_Demos_PathBase()) - 1);
+}
+
+static int M_Demos_PathViewStart(void)
+{
+	int suffix_chars = M_Demos_PathSuffixVisibleChars();
+	int len = (int)strlen(demosmenu.path_suffix);
+
+	if (suffix_chars <= 0 || len <= suffix_chars)
+		return 0;
+
+	return CLAMP(0, demosmenu.path_field.cursor - suffix_chars, len - suffix_chars);
+}
+
+static qboolean M_Demos_ShowPathOptions(void)
+{
+	return demosmenu.path_editing &&
+		(!demosmenu.path_suffix[0] || !demosmenu.path_valid);
+}
+
+static int M_Demos_ListY(void)
+{
+	return M_Demos_ShowId1Toggle() ? 64 : 56;
+}
+
+static qboolean M_Demos_MouseInShowId1Toggle(void)
+{
+	return M_Demos_ShowId1Toggle() &&
+		M_TextField_MouseInRow(m_mousey, DEMOS_ID1_ROW_Y) &&
+		m_mousex >= DEMOS_ID1_TEXT_X &&
+		m_mousex < DEMOS_ID1_TEXT_X + (int)(22 * 8 * DEMOS_ID1_TEXT_SCALE);
+}
+
+static qboolean M_Demos_MouseInPathOptionsArea(void)
+{
+	int width = (demosmenu.cols - 2) * 8;
+	int height = demosmenu.list.viewsize * 8;
+	int left = demosmenu.x - 8;
+
+	return M_Demos_ShowPathOptions() &&
+		m_mousex >= left &&
+		m_mousex < demosmenu.x + width &&
+		m_mousey >= demosmenu.y &&
+		m_mousey < demosmenu.y + height;
+}
+
+static filelist_item_t *M_Demos_GetPathOptionAtRow(int row)
+{
+	filelist_item_t *folder;
+	const char *partial = demosmenu.path_tabpartial[0] ?
+		demosmenu.path_tabpartial : demosmenu.path_suffix;
+	int partial_len = (int)strlen(partial);
+	int shown = 0;
+
+	if (row < 0 || row >= demosmenu.list.viewsize)
+		return NULL;
+
+	for (folder = demosmenu.path_folders; folder; folder = folder->next)
+	{
+		if (partial_len && q_strncasecmp(folder->name, partial, partial_len))
+			continue;
+
+		if (shown == row)
+			return folder;
+
+		++shown;
+		if (shown >= demosmenu.list.viewsize)
+			break;
+	}
+
+	return NULL;
+}
+
+static filelist_item_t *M_Demos_GetHoveredPathOption(void)
+{
+	int row;
+
+	if (!M_Demos_MouseInPathOptionsArea())
+		return NULL;
+
+	row = (m_mousey - demosmenu.y) / 8;
+	return M_Demos_GetPathOptionAtRow(row);
+}
+
+static void M_Demos_EndPathEdit(void);
+
+static void M_Demos_SelectPathOption(filelist_item_t *folder)
+{
+	if (!folder)
+		return;
+
+	q_strlcpy(demosmenu.path_suffix, folder->name, sizeof(demosmenu.path_suffix));
+	demosmenu.path_field.cursor = (int)strlen(demosmenu.path_suffix);
+	demosmenu.path_field.sel_start = -1;
+	demosmenu.path_tabpartial[0] = '\0';
+	M_Demos_EndPathEdit();
+	M_Demos_RebuildForCurrentPath();
+}
+
+static const char *M_Demos_CommandName(const char *name)
+{
+	if (!q_strncasecmp(name, "demos/", 6) || !q_strncasecmp(name, "demos\\", 6))
+		return name + 6;
+	return name;
+}
+
+static qboolean M_Demos_SameDemoName(const char *a, const char *b)
+{
+	return !q_strcasecmp(M_Demos_CommandName(a), M_Demos_CommandName(b));
+}
+
+static qboolean M_Demos_QueuePlayDemo(const char *name)
+{
+	const char *demo_name = M_Demos_CommandName(name);
+
+	if (strchr(demo_name, '"') || strchr(demo_name, '\n') || strchr(demo_name, '\r'))
+	{
+		Con_Printf("cannot play demo with unsupported characters in path: %s\n", demo_name);
+		S_LocalSound("misc/menu3.wav");
+		return false;
+	}
+
+	Cbuf_AddText(va("playdemo \"%s\"\n", demo_name));
+	return true;
+}
+
+static void M_Demos_DrawPathField(void)
+{
+	int row_y = DEMOS_PATH_ROW_Y;
+	const char *base = M_Demos_PathBase();
+	int base_len = (int)strlen(base);
+	int slash_x = DEMOS_PATH_TEXT_X + base_len * 8;
+	int suffix_x = slash_x + 8;
+	int suffix_chars = M_Demos_PathSuffixVisibleChars();
+	int view_start = M_Demos_PathViewStart();
+	qboolean show_separator = demosmenu.path_editing || demosmenu.path_suffix[0];
+	char visible_suffix[MAX_QPATH];
+
+	M_Print(DEMOS_PATH_LABEL_X, row_y, "path:");
+	M_DrawTextBox(DEMOS_PATH_BOX_X, row_y - 8, DEMOS_PATH_BOX_CHARS, 1);
+	M_Print(DEMOS_PATH_TEXT_X, row_y, base);
+
+	if (show_separator)
+		M_Print(slash_x, row_y, "/");
+
+	visible_suffix[0] = '\0';
+	if (show_separator && suffix_chars > 0)
+	{
+		q_strlcpy(visible_suffix, demosmenu.path_suffix + view_start, sizeof(visible_suffix));
+		visible_suffix[suffix_chars] = '\0';
+
+		if (demosmenu.path_editing)
+		{
+			menu_textfield_t visible_field = demosmenu.path_field;
+			visible_field.text = demosmenu.path_suffix + view_start;
+			visible_field.cursor = CLAMP(0, demosmenu.path_field.cursor - view_start, suffix_chars);
+			visible_field.max_len = suffix_chars;
+			if (demosmenu.path_field.sel_start >= 0)
+				visible_field.sel_start = CLAMP(0, demosmenu.path_field.sel_start - view_start, suffix_chars);
+			M_TextField_DrawHighlight(&visible_field, suffix_x, row_y);
+		}
+
+		M_Print(suffix_x, row_y, visible_suffix);
+	}
+
+	if (demosmenu.path_editing &&
+		demosmenu.path_hint[0] &&
+		demosmenu.path_field.cursor == (int)strlen(demosmenu.path_suffix))
+	{
+		int hint_col = (int)strlen(demosmenu.path_suffix) - view_start;
+		if (hint_col >= 0 && hint_col < suffix_chars)
+		{
+			int hint_x = suffix_x + hint_col * 8;
+			M_PrintRGBA(hint_x, row_y, demosmenu.path_hint,
+				CL_PLColours_Parse("0xffffff"), 0.5f, true);
+		}
+	}
+
+	if (demosmenu.path_editing)
+	{
+		menu_textfield_t visible_field = demosmenu.path_field;
+		visible_field.text = demosmenu.path_suffix + view_start;
+		visible_field.cursor = CLAMP(0, demosmenu.path_field.cursor - view_start, suffix_chars);
+		visible_field.max_len = suffix_chars;
+		visible_field.sel_start = -1;
+		M_TextField_DrawCursor(&visible_field, suffix_x, row_y);
+	}
+}
+
+static void M_Demos_DrawShowId1Toggle(void)
+{
+	const int value_x = DEMOS_ID1_TEXT_X + (int)(16 * 8 * DEMOS_ID1_TEXT_SCALE);
+
+	if (!M_Demos_ShowId1Toggle())
+		return;
+
+	glPushMatrix();
+	glTranslatef(DEMOS_ID1_TEXT_X, DEMOS_ID1_ROW_Y + 1, 0);
+	glScalef(DEMOS_ID1_TEXT_SCALE, DEMOS_ID1_TEXT_SCALE, 1.0f);
+	M_Print(0, 0, "show id1 demos:");
+	glPopMatrix();
+
+	glPushMatrix();
+	glTranslatef(value_x, DEMOS_ID1_ROW_Y + 1, 0);
+	glScalef(DEMOS_ID1_TEXT_SCALE, DEMOS_ID1_TEXT_SCALE, 1.0f);
+	M_PrintWhite(0, 0, demosmenu.show_id1 ? "on" : "off");
+	glPopMatrix();
+}
+
+static void M_Demos_DrawPathOptions(int x, int y, int cols)
+{
+	filelist_item_t *folder;
+	filelist_item_t *hovered = M_Demos_GetHoveredPathOption();
+	const char *partial = demosmenu.path_tabpartial[0] ?
+		demosmenu.path_tabpartial : demosmenu.path_suffix;
+	int partial_len = (int)strlen(partial);
+	int shown = 0;
+	int matches = 0;
+
+	for (folder = demosmenu.path_folders; folder; folder = folder->next)
+	{
+		char label[MAX_QPATH + 2];
+		int len;
+
+		if (partial_len && q_strncasecmp(folder->name, partial, partial_len))
+			continue;
+
+		++matches;
+		if (shown >= demosmenu.list.viewsize)
+			continue;
+
+		q_snprintf(label, sizeof(label), "%s/", folder->name);
+		len = (int)strlen(label);
+
+		if (folder == hovered)
+			M_DrawCharacter(x - 8, y + shown * 8, 12 + ((int)(realtime * 4) & 1));
+
+		if (partial_len > 0 && len <= cols - 2)
+			M_PrintHighlight(x, y + shown * 8, label, partial, partial_len);
+		else if (len <= cols - 2)
+			M_Print(x, y + shown * 8, label);
+		else
+			M_PrintScroll(x, y + shown * 8, (cols - 2) * 8, label, 0.0, 1);
+
+		++shown;
+	}
+
+	if (!matches)
+	{
+		if (!demosmenu.path_folders)
+			M_PrintRGBA(x, y, va("no folders under %s", M_Demos_PathBase()),
+				CL_PLColours_Parse("0xffffff"), 0.5f, true);
+		else
+			M_PrintRGBA(x, y, "no matching folders",
+				CL_PLColours_Parse("0xffffff"), 0.5f, true);
+		return;
+	}
+
+	if (matches > shown)
+		M_DrawEllipsisBar(x, y + shown * 8, cols);
+}
+
 void M_Demos_Draw (void)
 {
     int x, y, i, cols;
     int firstvis, numvis;
 
     x = 16;
-    y = 32;
+    y = M_Demos_ListY();
     cols = 36;
 
     char demofilename[MAX_OSPATH];
@@ -22667,10 +23538,29 @@ void M_Demos_Draw (void)
         M_Ticker_Init(&demosmenu.ticker);
     }
     else
+    {
         M_Ticker_Update(&demosmenu.ticker);
+    }
 
-    Draw_String(x, y - 28, "Demos");
-    M_DrawQuakeBar(x - 8, y - 16, cols + 2);
+	M_TextField_CheckMouseRelease();
+
+    Draw_String(x, 4, "Demos");
+    M_DrawQuakeBar(x - 8, 16, cols + 2);
+	M_Demos_DrawPathField();
+	M_Demos_DrawShowId1Toggle();
+
+	if (M_Demos_ShowPathOptions())
+	{
+		M_Demos_DrawPathOptions(x, y, cols);
+		return;
+	}
+
+	if (!demosmenu.path_valid)
+	{
+		M_PrintRGBA(x, y, "invalid demos path",
+			CL_PLColours_Parse("0xffffff"), 0.5f, true);
+		return;
+	}
 
     M_List_GetVisibleRange(&demosmenu.list, &firstvis, &numvis);
     for (i = 0; i < numvis; i++)
@@ -22680,12 +23570,12 @@ void M_Demos_Draw (void)
         demoitem_t* demo_item = &demosmenu.items[demo_idx];
         qboolean selected = (idx == demosmenu.list.cursor);
 
-        q_strlcpy(demofilename, COM_SkipPath(cls.demofilename), sizeof(demofilename));
+        q_strlcpy(demofilename, cls.demofilename, sizeof(demofilename));
 
-        demosmenu.items[demo_idx].active = !q_strcasecmp(COM_SkipPath(demo_item->name), demofilename);
+        demosmenu.items[demo_idx].active = M_Demos_SameDemoName(demo_item->name, demofilename);
 
         int color = demosmenu.items[demo_idx].active ? 0 : 1;
-        int len = strlen(demo_item->name);
+        int len = strlen(demo_item->display);
         int maxchars = (cols - 2);
 
         if (demosmenu.list.search.len > 0)
@@ -22693,13 +23583,13 @@ void M_Demos_Draw (void)
             if (len <= maxchars)
             {
                 // No scrolling needed, display with highlighting
-                M_PrintHighlight(x, y + i * 8, demo_item->name, demosmenu.list.search.text, demosmenu.list.search.len);
+                M_PrintHighlight(x, y + i * 8, demo_item->display, demosmenu.list.search.text, demosmenu.list.search.len);
             }
             else
             {
                 // Scrolling needed, display with scrolling and highlighting
                 M_PrintHighlightScroll(x, y + i * 8, (cols - 2) * 8,
-				demo_item->name, demosmenu.list.search.text,
+				demo_item->display, demosmenu.list.search.text,
 				selected ? demosmenu.ticker.scroll_time : 0.0);
             }
         }
@@ -22709,15 +23599,15 @@ void M_Demos_Draw (void)
             {
                 // No scrolling needed
                 if (color)
-                    M_Print(x, y + i * 8, demo_item->name);
+                    M_Print(x, y + i * 8, demo_item->display);
                 else
-                    M_PrintWhite(x, y + i * 8, demo_item->name);
+                    M_PrintWhite(x, y + i * 8, demo_item->display);
             }
             else
             {
                 // Scrolling needed
                 M_PrintScroll(x, y + i * 8, (cols - 2) * 8,
-                    demo_item->name,
+                    demo_item->display,
                     selected ? demosmenu.ticker.scroll_time : 0.0,
                     color);
             }
@@ -22726,6 +23616,10 @@ void M_Demos_Draw (void)
         if (selected)
             M_DrawCharacter(x - 8, y + i * 8, 12 + ((int)(realtime * 4) & 1));
     }
+
+	if (demosmenu.list.numitems == 0)
+		M_PrintRGBA(x, y, "no demos in this path",
+			CL_PLColours_Parse("0xffffff"), 0.5f, true);
 
     if (M_List_GetOverflow(&demosmenu.list) > 0)
     {
@@ -22898,12 +23792,157 @@ void M_Demos_Draw (void)
 qboolean M_Demos_Match(int index, char initial)
 {
     int demo_idx = demosmenu.filtered_indices[index];
-    return q_tolower(demosmenu.items[demo_idx].name[0]) == initial;
+    return q_tolower(demosmenu.items[demo_idx].display[0]) == initial;
+}
+
+static int M_Demos_PathSuffixTextX(void)
+{
+	return DEMOS_PATH_TEXT_X + ((int)strlen(M_Demos_PathBase()) + 1) * 8;
+}
+
+static qboolean M_Demos_MouseInPathField(void)
+{
+	int box_w = (DEMOS_PATH_BOX_CHARS + 2) * 8;
+
+	return M_TextField_MouseInRow(m_mousey, DEMOS_PATH_ROW_Y) &&
+		m_mousex >= DEMOS_PATH_BOX_X &&
+		m_mousex <= DEMOS_PATH_BOX_X + box_w;
+}
+
+static void M_Demos_BeginPathEdit(void)
+{
+	demosmenu.path_editing = true;
+	M_TextField_ClampCursor(&demosmenu.path_field);
+	M_Demos_UpdatePathHint();
+}
+
+static void M_Demos_EndPathEdit(void)
+{
+	demosmenu.path_editing = false;
+	demosmenu.path_tabpartial[0] = '\0';
+	demosmenu.path_hint[0] = '\0';
+	M_TextField_ClearSelection(&demosmenu.path_field);
+}
+
+static void M_Demos_MouseClickPathField(void)
+{
+	int view_start = M_Demos_PathViewStart();
+	int suffix_x = M_Demos_PathSuffixTextX();
+
+	M_Demos_BeginPathEdit();
+	demosmenu.path_tabpartial[0] = '\0';
+	M_TextField_MouseClick(&demosmenu.path_field, m_mousex,
+		suffix_x - view_start * 8);
+	M_Demos_UpdatePathHint();
 }
 
 void M_Demos_Key(int key)
 {
     int x, y; // woods #mousemenu
+
+	if (demosmenu.path_editing)
+	{
+		char old_suffix[MAX_QPATH];
+
+		q_strlcpy(old_suffix, demosmenu.path_suffix, sizeof(old_suffix));
+		if (M_TextField_Key(&demosmenu.path_field, key))
+		{
+			if (strcmp(old_suffix, demosmenu.path_suffix))
+				M_Demos_PathChanged();
+			else
+				M_Demos_UpdatePathHint();
+			return;
+		}
+
+		switch (key)
+		{
+		case K_TAB:
+			if (M_Menu_TabCompleteFileList(&demosmenu.path_field, demosmenu.path_suffix,
+				sizeof(demosmenu.path_suffix), demosmenu.path_folders,
+				demosmenu.path_tabpartial, sizeof(demosmenu.path_tabpartial)))
+			{
+				M_Demos_CleanPathSuffix();
+				M_Demos_RebuildForCurrentPath();
+				S_LocalSound("misc/menu2.wav");
+			}
+			else
+				M_Demos_UpdatePathHint();
+			return;
+
+		case K_ESCAPE:
+		case K_BBUTTON:
+			M_Demos_EndPathEdit();
+			return;
+
+		case K_MOUSE4:
+		case K_MOUSE2:
+			M_Demos_EndPathEdit();
+			S_LocalSound("misc/menu1.wav");
+			return;
+
+		case K_ENTER:
+		case K_KP_ENTER:
+		case K_ABUTTON:
+			if (demosmenu.path_valid)
+			{
+				M_Demos_EndPathEdit();
+				S_LocalSound("misc/menu1.wav");
+			}
+			else
+				S_LocalSound("misc/menu3.wav");
+			return;
+
+		case K_MOUSE1:
+			{
+				filelist_item_t *folder = M_Demos_GetHoveredPathOption();
+
+				if (folder)
+				{
+					M_Demos_SelectPathOption(folder);
+					S_LocalSound("misc/menu2.wav");
+				}
+				else if (M_Demos_MouseInShowId1Toggle())
+				{
+					M_Demos_EndPathEdit();
+					M_Demos_ToggleShowId1();
+				}
+				else if (M_Demos_MouseInPathField())
+					M_Demos_MouseClickPathField();
+				else
+					M_Demos_EndPathEdit();
+			}
+			return;
+
+		case K_UPARROW:
+		case K_DOWNARROW:
+		case K_MWHEELUP:
+		case K_MWHEELDOWN:
+			if (M_Demos_ShowPathOptions())
+				return;
+			break;
+
+		case K_BACKSPACE:
+		case K_DEL:
+			return;
+
+		default:
+			if (key >= 32 && key < 127)
+				return;
+			break;
+		}
+	}
+
+	if (key == K_MOUSE1 && M_Demos_MouseInShowId1Toggle())
+	{
+		M_Demos_ToggleShowId1();
+		return;
+	}
+
+	if (key == K_MOUSE1 && M_Demos_MouseInPathField())
+	{
+		M_Demos_MouseClickPathField();
+		return;
+	}
 
 	// Handle Ctrl+U or Ctrl+Backspace first
 	if (keydown[K_CTRL])
@@ -22925,10 +23964,18 @@ void M_Demos_Key(int key)
 		{
 			// Delete the currently selected demo file
 			int demo_idx = demosmenu.filtered_indices[demosmenu.list.cursor];
+			demoitem_t *demo = &demosmenu.items[demo_idx];
 
 			// Copy demo name to local buffer BEFORE freeing memory
 			char demo_name[MAX_QPATH];
-			q_strlcpy(demo_name, demosmenu.items[demo_idx].name, sizeof(demo_name));
+			q_strlcpy(demo_name, demo->name, sizeof(demo_name));
+
+			if (demo->from_id1)
+			{
+				S_LocalSound("misc/menu3.wav");
+				Con_Printf("cannot delete inherited id1 demo ^m%s^m from this menu\n", M_Demos_CommandName(demo_name));
+				return;
+			}
 
 			char demo_path[MAX_OSPATH];
 
@@ -22947,16 +23994,7 @@ void M_Demos_Key(int key)
 				// Store current cursor position
 				int old_cursor = demosmenu.list.cursor;
 
-				// Use the existing function to properly free items
-				M_Demos_FreeItems();
-
-				// Rebuild items from updated demolist
-				filelist_item_t* item;
-				for (item = demolist; item; item = item->next)
-					M_Demos_Add(item->name, item->data);
-
-				// Refilter to update the filtered_indices array
-				M_Demos_Refilter();
+				M_Demos_RebuildForCurrentPath();
 
 				// Restore cursor position (adjust if necessary)
 				if (old_cursor >= demosmenu.list.numitems && demosmenu.list.numitems > 0)
@@ -23051,8 +24089,13 @@ void M_Demos_Key(int key)
     enter: // woods #mousemenu
         if (demosmenu.list.numitems > 0)
         {
-            Cbuf_AddText(va("playdemo %s\n", demosmenu.items[demosmenu.filtered_indices[demosmenu.list.cursor]].name));
-            M_Menu_Main_f();
+			demoitem_t *demo = &demosmenu.items[demosmenu.filtered_indices[demosmenu.list.cursor]];
+
+			if (M_Demos_QueuePlayDemo(demo->name))
+			{
+				M_Demos_RememberCurrentPath();
+				M_Menu_Main_f();
+			}
         }
         else
             S_LocalSound("misc/menu3.wav");
@@ -23072,9 +24115,33 @@ void M_Demos_Key(int key)
     }
 }
 
+void M_Demos_Char(int key)
+{
+	if (!demosmenu.path_editing)
+		return;
+
+	if (M_TextField_Char(&demosmenu.path_field, key))
+		M_Demos_PathChanged();
+}
+
+qboolean M_Demos_TextEntry(void)
+{
+	return demosmenu.path_editing;
+}
+
 void M_Demos_Mousemove(int cx, int cy) // woods #mousemenu
 {
+	if (textfield_mouse_dragging && textfield_drag_field == &demosmenu.path_field)
+	{
+		M_TextField_MouseDrag(cx);
+		M_Demos_UpdatePathHint();
+		return;
+	}
+
 	cy -= demosmenu.y;
+
+	if (M_Demos_ShowPathOptions())
+		return;
 
 	if (demosmenu.scrollbar_grab)
 	{
@@ -23205,6 +24272,7 @@ void MQC_Shutdown(void)
 
 	// Clean up menu memory
 	M_Demos_FreeItems();
+	M_Demos_ClearFileList(&demosmenu.path_folders);
 
 	for (i = 0; i < sizeof(menucommands)/sizeof(menucommands[0]); i++)
 		if (!menucommands[i].cmd)
@@ -24012,6 +25080,9 @@ void M_Charinput (int key)
 	case m_lanconfig:
 		M_LanConfig_Char (key);
 		return;
+	case m_demos:
+		M_Demos_Char(key);
+		return;
 	case m_resetconfig:
 		M_ResetConfig_Char(key);
 		return;
@@ -24040,6 +25111,8 @@ qboolean M_TextEntry (void)
 		return M_Quit_TextEntry ();
 	case m_lanconfig:
 		return M_LanConfig_TextEntry ();
+	case m_demos:
+		return M_Demos_TextEntry();
 	case m_resetconfig:
 		return M_ResetConfig_TextEntry();
 	case m_gameoptions:
@@ -24059,6 +25132,11 @@ qboolean M_WantsIBeamCursor(void)
 
 	if (m_state == m_namemaker)
 		return namemaker_edit_active;
+
+	if (m_state == m_demos)
+		return M_Demos_TextEntry() &&
+			!M_Demos_MouseInPathOptionsArea() &&
+			!M_Demos_MouseInShowId1Toggle();
 
 	return M_TextEntry();
 }

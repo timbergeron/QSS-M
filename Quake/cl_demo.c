@@ -1591,7 +1591,7 @@ void CL_StopPlayback (void)
 
 	if (cls.demofilename[0]) // woods #lastdemo
 	{
-		const char* demoname = COM_SkipPath(cls.demofilename);
+		const char* demoname = cls.demofilename;
 		if (demoname[0])
 		{
 			q_strlcpy(last_demo, demoname, sizeof(last_demo));
@@ -1824,6 +1824,17 @@ static qboolean CL_DemoTryOpenPath(const char *logical_name, const char *search_
 	return false;
 }
 
+static qboolean CL_DemoShouldTryDemosPrefix(const char *name)
+{
+	if (!name || !name[0])
+		return false;
+	if (name[0] == '/' || name[0] == '\\' || strchr(name, ':'))
+		return false;
+	if (!q_strncasecmp(name, "demos/", 6) || !q_strncasecmp(name, "demos\\", 6))
+		return false;
+	return strchr(name, '/') != NULL || strchr(name, '\\') != NULL;
+}
+
 byte *CL_LoadDemoBuffer(const char *name, int *length_out)
 {
 	byte *data;
@@ -1843,7 +1854,7 @@ byte *CL_LoadDemoBuffer(const char *name, int *length_out)
 	if (!q_strcasecmp(ext, "dz"))
 	{
 #ifdef USE_ZLIB
-		if (!has_path)
+		if (!has_path || CL_DemoShouldTryDemosPrefix(name))
 		{
 			q_snprintf(path, sizeof(path), "demos/%s", name);
 			data = CL_DZipLoadDemoBuffer(path, length_out);
@@ -1859,6 +1870,18 @@ byte *CL_LoadDemoBuffer(const char *name, int *length_out)
 
 	if (has_path)
 	{
+		if (CL_DemoShouldTryDemosPrefix(name))
+		{
+			q_snprintf(path, sizeof(path), "demos/%s", name);
+			data = COM_LoadMallocFile(path, NULL);
+			if (data)
+			{
+				if (length_out)
+					*length_out = (int)com_filesize;
+				return data;
+			}
+		}
+
 		data = COM_LoadMallocFile(name, NULL);
 		if (data && length_out)
 			*length_out = (int)com_filesize;
@@ -1894,7 +1917,7 @@ static qboolean CL_DemoResolvePlayback(const char *requested, FILE **out_file, q
 
 	if (ext[0])
 	{
-		if (!has_path)
+		if (!has_path || CL_DemoShouldTryDemosPrefix(logical))
 		{
 			q_snprintf(path, sizeof(path), "demos/%s", logical);
 			if (CL_DemoTryOpenPath(logical, path, out_file, out_size, out_name, out_name_size))
@@ -1906,7 +1929,7 @@ static qboolean CL_DemoResolvePlayback(const char *requested, FILE **out_file, q
 
 	q_strlcpy(with_ext, logical, sizeof(with_ext));
 	COM_AddExtension(with_ext, ".dem", sizeof(with_ext));
-	if (!has_path)
+	if (!has_path || CL_DemoShouldTryDemosPrefix(with_ext))
 	{
 		q_snprintf(path, sizeof(path), "demos/%s", with_ext);
 		if (CL_DemoTryOpenPath(with_ext, path, out_file, out_size, out_name, out_name_size))
@@ -1917,7 +1940,7 @@ static qboolean CL_DemoResolvePlayback(const char *requested, FILE **out_file, q
 
 	q_strlcpy(with_ext, logical, sizeof(with_ext));
 	COM_AddExtension(with_ext, ".dz", sizeof(with_ext));
-	if (!has_path)
+	if (!has_path || CL_DemoShouldTryDemosPrefix(with_ext))
 	{
 		q_snprintf(path, sizeof(path), "demos/%s", with_ext);
 		if (CL_DemoTryOpenPath(with_ext, path, out_file, out_size, out_name, out_name_size))
