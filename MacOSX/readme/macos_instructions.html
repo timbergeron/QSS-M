@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Run QSS-M on macOS</title>
+
+	<!-- Font Awesome CDN for icons -->
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+
+	<style>
+		:root {
+			--bg:            #1b1d21;
+			--bg-elev:       #242830;
+			--bg-code:       #0f1115;
+			--border:        #3a3f48;
+			--border-soft:   #2e333c;
+			--text:          #e6e8ec;
+			--text-muted:    #a7aeb9;
+			--text-dim:      #7d8591;
+			--accent:        #c8593b;  /* quake-ish rust/orange */
+			--accent-soft:   #e2a088;
+			--radius:        10px;
+			--radius-sm:     6px;
+			--shadow:        0 2px 8px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.4);
+			--font-sans:     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+			--font-mono:     ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+		}
+
+		* { box-sizing: border-box; }
+
+		body {
+			font-family: var(--font-sans);
+			line-height: 1.6;
+			background:
+				radial-gradient(ellipse at top, #272a31 0%, var(--bg) 60%) fixed;
+			color: var(--text);
+			margin: 0;
+			padding: 48px 24px;
+			-webkit-font-smoothing: antialiased;
+			-moz-osx-font-smoothing: grayscale;
+		}
+
+		.container {
+			max-width: 820px;
+			margin: 0 auto;
+		}
+
+		/* Header */
+		.hero {
+			padding: 28px 32px;
+			background: linear-gradient(180deg, var(--bg-elev) 0%, rgba(36,40,48,0.6) 100%);
+			border: 1px solid var(--border-soft);
+			border-radius: var(--radius);
+			box-shadow: var(--shadow);
+			margin-bottom: 32px;
+		}
+		.hero .eyebrow {
+			font-size: 0.78rem;
+			letter-spacing: 0.14em;
+			text-transform: uppercase;
+			color: var(--accent-soft);
+			font-weight: 600;
+			margin-bottom: 8px;
+		}
+		.hero h1 {
+			color: #fff;
+			font-size: 1.75rem;
+			line-height: 1.25;
+			margin: 0 0 10px;
+			letter-spacing: -0.01em;
+		}
+		.hero p {
+			margin: 0;
+			color: var(--text-muted);
+			font-size: 1rem;
+		}
+
+		/* Sections */
+		section.card {
+			background: var(--bg-elev);
+			border: 1px solid var(--border-soft);
+			border-radius: var(--radius);
+			padding: 24px 32px;
+			margin-bottom: 28px;
+			box-shadow: var(--shadow);
+		}
+		section.card:last-of-type { margin-bottom: 0; }
+		section.card h2 {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			color: #fff;
+			margin: 4px 0 6px;
+			font-size: 1.2rem;
+			letter-spacing: -0.005em;
+		}
+		section.card h2 i {
+			color: var(--accent);
+			font-size: 1rem;
+		}
+		section.card > p {
+			color: var(--text-muted);
+			margin-top: 0;
+		}
+
+		/* Ordered steps */
+		ol.steps {
+			list-style: none;
+			counter-reset: step;
+			padding: 0;
+			margin: 18px 0 0;
+		}
+		ol.steps > li {
+			counter-increment: step;
+			position: relative;
+			padding: 4px 0 20px 44px;
+			color: var(--text);
+		}
+		ol.steps > li::before {
+			content: counter(step);
+			position: absolute;
+			left: 0;
+			top: 0;
+			width: 28px;
+			height: 28px;
+			border-radius: 50%;
+			background: var(--accent);
+			color: #fff;
+			font-weight: 600;
+			font-size: 0.85rem;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			box-shadow: 0 0 0 3px rgba(200,89,59,0.18);
+		}
+		ol.steps > li + li { border-top: 1px solid var(--border-soft); padding-top: 20px; }
+		ol.steps > li + li::before { top: 20px; }
+		ol.steps .step-title { font-weight: 600; color: #fff; }
+		ol.steps p { margin: 6px 0 0; color: var(--text-muted); font-size: 0.95rem; }
+
+		/* Code block */
+		.code-block {
+			position: relative;
+			background: var(--bg-code);
+			border: 1px solid var(--border);
+			border-radius: var(--radius-sm);
+			margin: 12px 0 4px;
+			font-family: var(--font-mono);
+			font-size: 0.92rem;
+			color: #e8ebf0;
+			overflow: hidden;
+		}
+		.code-block code {
+			display: block;
+			padding: 12px 52px 12px 16px;
+			white-space: pre-wrap;
+			word-break: break-all;
+			background: transparent;
+			border: 0;
+		}
+		.code-block code::before {
+			content: "$ ";
+			color: var(--text-dim);
+			user-select: none;
+		}
+		.copy-btn {
+			position: absolute;
+			top: 6px;
+			right: 6px;
+			width: 32px;
+			height: 32px;
+			background: transparent;
+			border: 1px solid transparent;
+			border-radius: 6px;
+			color: var(--text-dim);
+			cursor: pointer;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+		}
+		.copy-btn:hover { color: var(--text); background: rgba(255,255,255,0.04); border-color: var(--border); }
+		.copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+		.copy-btn.copied { color: #7ed07e; }
+		.copy-btn i { pointer-events: none; font-size: 14px; }
+
+		/* Screenshots */
+		figure {
+			margin: 14px 0 4px;
+			text-align: center;
+		}
+		.screenshot {
+			max-width: 100%;
+			width: 560px;
+			height: auto;
+			display: block;
+			border: 1px solid var(--border);
+			border-radius: var(--radius-sm);
+			margin: 8px auto 10px;
+			box-shadow: var(--shadow);
+		}
+		figcaption {
+			color: var(--text-dim);
+			font-size: 0.88rem;
+			font-style: italic;
+		}
+
+		/* Inline helpers */
+		strong { color: #fff; font-weight: 600; }
+		em { color: var(--accent-soft); font-style: normal; }
+		a { color: var(--accent-soft); }
+
+		footer {
+			text-align: center;
+			color: var(--text-dim);
+			font-size: 0.82rem;
+			margin-top: 12px;
+		}
+
+		@media (max-width: 560px) {
+			body { padding: 24px 14px; }
+			.hero, section.card { padding: 20px; }
+			.hero h1 { font-size: 1.4rem; }
+			ol.steps > li { padding-left: 38px; }
+			ol.steps > li::before { width: 24px; height: 24px; font-size: 0.78rem; }
+		}
+	</style>
+</head>
+<body>
+<div class="container">
+
+	<header class="hero">
+		<div class="eyebrow">QSS-M · macOS Setup</div>
+		<h1>How to Allow QSS-M to Run on macOS</h1>
+		<p>If you installed <strong>QSS-M</strong> outside the App Store, macOS needs a couple of one-time permissions before it will launch and capture raw mouse input.</p>
+	</header>
+
+	<section class="card">
+		<h2><i class="fas fa-terminal"></i> Step 1 — Authorize the App to Launch</h2>
+		<p>Open <strong>Terminal</strong> (Applications &rsaquo; Utilities), then run these commands. Tip: drag <strong>QSS-M.app</strong> onto the Terminal window to auto-fill its path.</p>
+
+		<ol class="steps">
+			<li>
+				<span class="step-title">Change to the app's directory</span>
+				<div class="code-block">
+					<code id="code1">cd path/to/QSS-M.app</code>
+					<button class="copy-btn" aria-label="Copy command" onclick="copyText('code1', this)"><i class="fas fa-copy"></i></button>
+				</div>
+				<p>Type the path, or drag the app into Terminal to insert it automatically.</p>
+			</li>
+
+			<li>
+				<span class="step-title">Make the app executable</span>
+				<div class="code-block">
+					<code id="code2">sudo chmod +x QSS-M.app</code>
+					<button class="copy-btn" aria-label="Copy command" onclick="copyText('code2', this)"><i class="fas fa-copy"></i></button>
+				</div>
+				<p>Grants the app permission to run on this system.</p>
+			</li>
+
+			<li>
+				<span class="step-title">Remove the quarantine flag</span>
+				<div class="code-block">
+					<code id="code3">sudo xattr -r -d com.apple.quarantine QSS-M.app</code>
+					<button class="copy-btn" aria-label="Copy command" onclick="copyText('code3', this)"><i class="fas fa-copy"></i></button>
+				</div>
+				<p>Clears the "downloaded from the internet" restriction that blocks launch.</p>
+			</li>
+		</ol>
+	</section>
+
+	<section class="card">
+		<h2><i class="fas fa-keyboard"></i> Step 2 — Enable Input Monitoring (if prompted)</h2>
+		<p>If macOS prompts to allow keystroke/input access for <strong>QSS-M</strong>, this is needed so the app can read <em>raw mouse input</em> for high-precision movement. The screenshots below are loaded from the GitHub repo and are not bundled with the app.</p>
+
+		<ol class="steps">
+			<li>
+				<span class="step-title">Open System Settings from the Keystroke Receiving dialog</span>
+				<figure>
+					<img class="screenshot" src="https://raw.githubusercontent.com/timbergeron/QSS-M/qsrebase/MacOSX/readme/keystroke.png" alt="Keystroke Receiving dialog asking to allow QSS-M to receive keystrokes">
+					<figcaption>Click <em>Open System Settings</em> on the "Keystroke Receiving" prompt.</figcaption>
+				</figure>
+			</li>
+
+			<li>
+				<span class="step-title">Navigate to Input Monitoring</span>
+				<figure>
+					<img class="screenshot" src="https://raw.githubusercontent.com/timbergeron/QSS-M/qsrebase/MacOSX/readme/input.png" alt="System Settings showing Privacy & Security with Input Monitoring available">
+					<figcaption>Open <em>Privacy &amp; Security</em>, then select <em>Input Monitoring</em>.</figcaption>
+				</figure>
+			</li>
+
+			<li>
+				<span class="step-title">Enable QSS-M and relaunch</span>
+				<figure>
+					<img class="screenshot" src="https://raw.githubusercontent.com/timbergeron/QSS-M/qsrebase/MacOSX/readme/allow.png" alt="Dialog offering Later or Quit & Reopen for Input Monitoring access">
+					<figcaption>Select <em>Quit &amp; Reopen</em> to relaunch QSS-M with the new permission.</figcaption>
+				</figure>
+			</li>
+		</ol>
+	</section>
+
+</div>
+
+<script>
+	function copyText(id, btn) {
+		var codeBlock = document.getElementById(id);
+		var text = codeBlock.textContent;
+
+		if (navigator.clipboard && navigator.clipboard.writeText) {
+			navigator.clipboard.writeText(text);
+		} else {
+			var sel = window.getSelection();
+			var range = document.createRange();
+			range.selectNodeContents(codeBlock);
+			sel.removeAllRanges();
+			sel.addRange(range);
+			try { document.execCommand('copy'); } catch (e) {}
+			sel.removeAllRanges();
+		}
+
+		var icon = btn.querySelector('i');
+		btn.classList.add('copied');
+		icon.classList.remove('fa-copy');
+		icon.classList.add('fa-check');
+
+		setTimeout(function() {
+			btn.classList.remove('copied');
+			icon.classList.remove('fa-check');
+			icon.classList.add('fa-copy');
+		}, 900);
+	}
+</script>
+</body>
+</html>

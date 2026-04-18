@@ -382,7 +382,7 @@
 		DA2E4F9FDA027A4AA2499356 /* sha2.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = sha2.c; path = ../Quake/ice/sha2.c; sourceTree = "<group>"; };
 		1329232458DEB5D3C89A2781 /* ice_quake.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ice_quake.h; path = ../Quake/ice/ice_quake.h; sourceTree = "<group>"; };
 		554BBA0D192C3FA3E15D9B12 /* ice_private.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ice_private.h; path = ../Quake/ice/ice_private.h; sourceTree = "<group>"; };
-		85F640302C9E1EE300615B7F /* macos_instructions.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = macos_instructions.html; path = ../Quake/macos_instructions.html; sourceTree = "<group>"; };
+		85F640302C9E1EE300615B7F /* macos_instructions.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = macos_instructions.html; path = readme/macos_instructions.html; sourceTree = "<group>"; };
 		85F94F5A2A606C26005D9F52 /* libmad.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libmad.a; path = libs_universal/libmad.a; sourceTree = "<group>"; };
 		85F94F5B2A606C31005D9F52 /* libFLAC.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libFLAC.a; path = libs_universal/libFLAC.a; sourceTree = "<group>"; };
 		8D1107310486CEB800E47090 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
