@@ -978,87 +978,69 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 
 /*
 =============
-R_CalculateAliasModelOutlineWidth -- woods #routline
+R_CalculateAliasModelRadius
 =============
 */
-float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerpdata_t* lerpdata, qboolean is_xray)
+static float R_CalculateAliasModelRadius(aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata, qboolean *isMD5Model)
 {
-	if (!is_xray && (r_outline.value <= 0 ||
-		cl.viewent.model == e->model ||
-		nameInList(r_nooutline_list.string, e->model->name)))
-		return 0.0f;
+	float radius = 0.0f;
+	maliasframedesc_t *frame = &paliashdr->frames[e->frame];
 
-	float radius;
-	qboolean isMD5Model = false;
-	maliasframedesc_t* frame = &paliashdr->frames[e->frame];
+	if (isMD5Model)
+		*isMD5Model = false;
 
-	// Calculate radius based on model format
 	switch (paliashdr->poseverttype)
 	{
 	case PV_QUAKE3:  // MD3 format
 	{
-		// Calculate current frame offset
 		int frameOffset = frame->firstpose * paliashdr->numverts;
-		meshxyz_md3_t* verts = (meshxyz_md3_t*)((byte*)paliashdr + paliashdr->vertexes + (frameOffset * sizeof(meshxyz_md3_t)));
-
-		// Find maximum vertex distance
+		meshxyz_md3_t *verts = (meshxyz_md3_t *)((byte *)paliashdr + paliashdr->vertexes + (frameOffset * sizeof(meshxyz_md3_t)));
 		float maxDist = 0.0f;
+
 		for (int i = 0; i < paliashdr->numverts; i++)
 		{
-			// MD3 vertices are stored as signed shorts, scaled by 1/64
-			float x = (float)verts[i].xyz[0] * (1.0f / 64.0f);
-			float y = (float)verts[i].xyz[1] * (1.0f / 64.0f);
-			float z = (float)verts[i].xyz[2] * (1.0f / 64.0f);
-
-			// Apply model scale (MD3 models typically use this scale)
-			x *= paliashdr->scale[0];
-			y *= paliashdr->scale[1];
-			z *= paliashdr->scale[2];
-
+			float x = (float)verts[i].xyz[0] * (1.0f / 64.0f) * paliashdr->scale[0];
+			float y = (float)verts[i].xyz[1] * (1.0f / 64.0f) * paliashdr->scale[1];
+			float z = (float)verts[i].xyz[2] * (1.0f / 64.0f) * paliashdr->scale[2];
 			float dist = sqrt(x * x + y * y + z * z);
+
 			if (dist > maxDist)
 				maxDist = dist;
 		}
+
 		radius = maxDist;
 		break;
 	}
 
 	case PV_IQM:
 	{
-		// Calculate radius for IQM/MD5 models
-		const iqmvert_t* verts = (const iqmvert_t*)((byte*)paliashdr + paliashdr->vertexes);
+		const iqmvert_t *verts = (const iqmvert_t *)((byte *)paliashdr + paliashdr->vertexes);
+		float maxDist = 0.0f;
 		qboolean isMD5 = true;
 
-		// Determine if this baked IQM vertex buffer originated from an MD5
 		for (int i = 0; i < paliashdr->numverts && isMD5; i++)
 		{
 			float weightSum = verts[i].weight[0] + verts[i].weight[1] + verts[i].weight[2] + verts[i].weight[3];
 			if (weightSum < 0.999f || weightSum > 1.001f)
 				isMD5 = false;
-			}
+		}
 
-		float maxDist = 0.0f;
-		if (lerpdata->bonestate)
+		if (lerpdata && lerpdata->bonestate)
 		{
-			// For animated models, transform vertices by bones
 			for (int i = 0; i < paliashdr->numverts; i++)
 			{
-				vec3_t transformedVert = { 0, 0, 0 };
+				vec3_t transformedVert = {0, 0, 0};
 
-				// Transform vertex by weighted bones
 				for (int j = 0; j < 4; j++)
 				{
 					if (verts[i].weight[j] > 0.0f)
 					{
 						vec3_t pos;
-						Matrix3x4_RM_Transform4(lerpdata->bonestate[verts[i].idx[j]].mat,
-							verts[i].xyz,
-							pos);
+						Matrix3x4_RM_Transform4(lerpdata->bonestate[verts[i].idx[j]].mat, verts[i].xyz, pos);
 						VectorMA(transformedVert, verts[i].weight[j], pos, transformedVert);
 					}
 				}
 
-				// Standard IQM scaling
 				float scaledVert[3];
 				scaledVert[0] = transformedVert[0] * paliashdr->scale[0];
 				scaledVert[1] = transformedVert[1] * paliashdr->scale[1];
@@ -1069,15 +1051,12 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 					scaledVert[2] * scaledVert[2]);
 				maxDist = q_max(maxDist, dist);
 			}
-			radius = maxDist;
 		}
 		else
 		{
-			// For static models (no bone state), calculate radius from raw vertices
 			for (int i = 0; i < paliashdr->numverts; i++)
 			{
 				float scaledVert[3];
-				// Apply scale (usually 1.0 for IQM/MD5 but consistent with animated path)
 				scaledVert[0] = verts[i].xyz[0] * paliashdr->scale[0];
 				scaledVert[1] = verts[i].xyz[1] * paliashdr->scale[1];
 				scaledVert[2] = verts[i].xyz[2] * paliashdr->scale[2];
@@ -1087,9 +1066,11 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 					scaledVert[2] * scaledVert[2]);
 				maxDist = q_max(maxDist, dist);
 			}
-		radius = maxDist;
 		}
-		isMD5Model = isMD5;
+
+		if (isMD5Model)
+			*isMD5Model = isMD5;
+		radius = maxDist;
 		break;
 	}
 
@@ -1102,10 +1083,11 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 		}
 		else
 		{
-			trivertx_t* verts = (trivertx_t*)((byte*)paliashdr + paliashdr->vertexes);
+			trivertx_t *verts = (trivertx_t *)((byte *)paliashdr + paliashdr->vertexes);
+			float maxDist = 0.0f;
+
 			verts += frame->firstpose * paliashdr->numverts;
 
-			float maxDist = 0.0f;
 			for (int i = 0; i < paliashdr->numverts; i++)
 			{
 				float dx = verts[i].v[0] * paliashdr->scale[0] + paliashdr->scale_origin[0];
@@ -1114,16 +1096,34 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 				float dist = sqrt(dx * dx + dy * dy + dz * dz);
 				maxDist = q_max(maxDist, dist);
 			}
+
 			radius = maxDist;
 		}
 		break;
 	}
 	}
 
-	float modelScale = 50.0f / q_max(radius, 1.0f);
+	return q_max(radius, 1.0f);
+}
+
+/*
+=============
+R_CalculateAliasModelOutlineWidth -- woods #routline
+=============
+*/
+float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerpdata_t* lerpdata, qboolean is_xray)
+{
+	if (!is_xray && (r_outline.value <= 0 ||
+		cl.viewent.model == e->model ||
+		nameInList(r_nooutline_list.string, e->model->name)))
+		return 0.0f;
+
+	qboolean isMD5Model = false;
+	float radius = R_CalculateAliasModelRadius(paliashdr, e, lerpdata, &isMD5Model);
+	float modelScale = 50.0f / radius;
 	float finalScale = modelScale / 1.5;
 	if (isMD5Model)
-		finalScale *= 0.25f; // MD5 models render larger in this space; halve outline width to match others
+		finalScale *= 0.25f; // MD5 models render larger in shell/outline space, so keep them in line with classic models
 	if (is_xray && modelScale < 1.0f)
 		return 1.0f;
 
@@ -1441,20 +1441,14 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 		return;
 	}
 
-	float modelRadius;
-
-	if (paliashdr->boundingradius > 0) 
-	{
-		modelRadius = paliashdr->boundingradius;
-	}
-	else 
-	{ // Calculate approximate radius from scale
-		modelRadius = (paliashdr->scale[0] + paliashdr->scale[1] + paliashdr->scale[2]) / 3.0f;
-	}
+	qboolean isMD5Model = false;
+	float modelRadius = R_CalculateAliasModelRadius(paliashdr, e, lerpdata, &isMD5Model);
 
 	float baseScale = 14.0f;
-	float inverseScale = baseScale * pow(15.0f / q_max(modelRadius, 1.0f), 1.6f);
+	float inverseScale = baseScale * pow(15.0f / modelRadius, 1.6f);
 	float shellScale = CLAMP(0.08f, inverseScale, 8.0f);
+	if (isMD5Model)
+		shellScale *= 1.30f;
 
 	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
