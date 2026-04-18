@@ -24790,6 +24790,11 @@ void M_Keydown (int key, qboolean repeat)
 		case K_KP_RIGHTARROW:
 		case K_ESCAPE:
 			break;
+		case K_BACKSPACE:
+		case K_DEL:
+			if (M_TextEntry())
+				break;
+			return;
 		default:
 			return;
 		}
