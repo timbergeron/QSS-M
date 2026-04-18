@@ -3450,6 +3450,8 @@ qboolean from_namemaker = false; // woods #namemaker
 
 static menu_textfield_t namemaker_name_field;
 static qboolean namemaker_edit_active = false;
+static char	namemaker_name_tabpartial[16]; // woods #namehistory
+static char	namemaker_name_hint[16]; // woods #namehistory
 static char	setup_hostname[16];
 static char	setup_myname[16];
 static menu_textfield_t setup_hostname_field;
@@ -3566,22 +3568,25 @@ static void M_Setup_ClearTextSelections(void)
 	M_TextField_ClearSelection(&setup_myname_field);
 }
 
-static void M_Setup_UpdateNameHint(void) // woods #namehistory
+static void M_Menu_UpdateNameHistoryHint(const char *name, char *hint, size_t hint_size) // woods #namehistory
 {
 	extern char unfun[129];
 	filelist_item_t *item;
-	int len = (int)strlen(setup_myname);
-	char unfun_prefix[16];
+	int len = (int)strlen(name);
+	char unfun_prefix[MAXCMDLINE];
 	char unfun_name[32];
 	int i;
 
-	setup_myname_hint[0] = '\0';
+	if (!hint_size)
+		return;
+
+	hint[0] = '\0';
 
 	if (len <= 0)
 		return;
 
 	for (i = 0; i < len && i < (int)sizeof(unfun_prefix) - 1; i++)
-		unfun_prefix[i] = unfun[setup_myname[i] & 127];
+		unfun_prefix[i] = unfun[name[i] & 127];
 	unfun_prefix[i] = '\0';
 
 	for (item = namehistorylist; item; item = item->next)
@@ -3592,10 +3597,15 @@ static void M_Setup_UpdateNameHint(void) // woods #namehistory
 
 		if (!q_strncasecmp(unfun_name, unfun_prefix, len))
 		{
-			q_strlcpy(setup_myname_hint, item->name + len, sizeof(setup_myname_hint));
+			q_strlcpy(hint, item->name + len, hint_size);
 			return;
 		}
 	}
+}
+
+static void M_Setup_UpdateNameHint(void) // woods #namehistory
+{
+	M_Menu_UpdateNameHistoryHint(setup_myname, setup_myname_hint, sizeof(setup_myname_hint));
 }
 
 #define	NUM_SETUP_CMDS	7 // woods 5 to 6 #namemaker
@@ -4093,6 +4103,46 @@ int	namemaker_cursor_x, namemaker_cursor_y;
 
 //extern int key_special_dest;
 
+static void M_NameMaker_UpdateNameHint(void) // woods #namehistory
+{
+	M_Menu_UpdateNameHistoryHint(namemaker_name, namemaker_name_hint, sizeof(namemaker_name_hint));
+}
+
+static void M_NameMaker_NameChanged(void) // woods #namehistory
+{
+	namemaker_name_tabpartial[0] = '\0';
+	M_NameMaker_UpdateNameHint();
+}
+
+static qboolean M_NameMaker_TextFieldKey(int k)
+{
+	if (M_TextField_Key(&namemaker_name_field, k))
+	{
+		M_NameMaker_NameChanged();
+		return true;
+	}
+
+	if (M_TextField_HasShortcutModifier())
+	{
+		switch (k)
+		{
+		case 'a':
+		case 'A':
+		case 'c':
+		case 'C':
+		case 'x':
+		case 'X':
+		case 'v':
+		case 'V':
+		case 'u':
+		case 'U':
+			return true;
+		}
+	}
+
+	return (k == K_BACKSPACE || k == K_DEL);
+}
+
 void M_Menu_NameMaker_f (void)
 {
 	key_dest = key_menu;
@@ -4101,7 +4151,9 @@ void M_Menu_NameMaker_f (void)
 	m_entersound = true;
 	q_strlcpy(namemaker_name, setup_myname, sizeof(namemaker_name));
 	M_TextField_Init(&namemaker_name_field, namemaker_name, 15, false);
-	namemaker_edit_active = false;
+	namemaker_name_tabpartial[0] = '\0'; // woods #namehistory
+	M_NameMaker_UpdateNameHint(); // woods #namehistory
+	namemaker_edit_active = true;
 }
 
 void M_Shortcut_NameMaker_f (void)
@@ -4124,6 +4176,13 @@ void M_NameMaker_Draw (void)
 	M_DrawTextBox(120, 8, 16, 1);
 	M_TextField_DrawHighlight(&namemaker_name_field, 128, 16);
 	M_PrintWhite(128, 16, namemaker_name);
+	if (namemaker_edit_active && // woods #namehistory
+		namemaker_name_hint[0] &&
+		namemaker_name_field.cursor == (int)strlen(namemaker_name))
+	{
+		int hint_x = 128 + (int)strlen(namemaker_name) * 8;
+		M_PrintRGBA(hint_x, 16, namemaker_name_hint, CL_PLColours_Parse("0xffffff"), 0.5f, false);
+	}
 	if (namemaker_edit_active)
 		M_TextField_DrawCursor(&namemaker_name_field, 128, 16);
 
@@ -4148,8 +4207,29 @@ void M_NameMaker_Key (int k)
 {
 	int	l;
 
-	if (namemaker_edit_active && M_TextField_Key(&namemaker_name_field, k))
+	if (k == K_TAB) // woods #namehistory
+	{
+		if (M_Menu_TabCompleteNameHistory(&namemaker_name_field, namemaker_name,
+			sizeof(namemaker_name), namemaker_name_tabpartial, sizeof(namemaker_name_tabpartial)))
+			S_LocalSound("misc/menu2.wav");
+		M_NameMaker_UpdateNameHint();
+		namemaker_edit_active = true;
 		return;
+	}
+
+	if (namemaker_edit_active && M_NameMaker_TextFieldKey(k))
+		return;
+
+	if (namemaker_edit_active && k >= 32 && k <= 127)
+	{
+		if (M_TextField_HasShortcutModifier())
+			return;
+
+		Key_Extra(&k);
+		if (M_TextField_Char(&namemaker_name_field, k))
+			M_NameMaker_NameChanged();
+		return;
+	}
 
 	switch (k)
 	{
@@ -4183,14 +4263,18 @@ void M_NameMaker_Key (int k)
 		break;
 
 	case K_UPARROW:
+	case K_KP_UPARROW:
 		S_LocalSound("misc/menu1.wav");
+		namemaker_edit_active = false;
 		namemaker_cursor_y--;
 		if (namemaker_cursor_y < 0)
 			namemaker_cursor_y = NAMEMAKER_TOTAL_ROWS - 1;
 		break;
 
 	case K_DOWNARROW:
+	case K_KP_DOWNARROW:
 		S_LocalSound("misc/menu1.wav");
+		namemaker_edit_active = false;
 		namemaker_cursor_y++;
 		if (namemaker_cursor_y >= NAMEMAKER_TOTAL_ROWS)
 			namemaker_cursor_y = 0;
@@ -4198,15 +4282,18 @@ void M_NameMaker_Key (int k)
 
 	case K_PGUP:
 		S_LocalSound("misc/menu1.wav");
+		namemaker_edit_active = false;
 		namemaker_cursor_y = 0;
 		break;
 
 	case K_PGDN:
 		S_LocalSound("misc/menu1.wav");
+		namemaker_edit_active = false;
 		namemaker_cursor_y = NAMEMAKER_TABLE_SIZE - 1;
 		break;
 
 	case K_LEFTARROW:
+	case K_KP_LEFTARROW:
 		if (namemaker_cursor_y < NAMEMAKER_TABLE_SIZE) // Only move left if within table
 		{
 			S_LocalSound("misc/menu1.wav");
@@ -4217,6 +4304,7 @@ void M_NameMaker_Key (int k)
 		break;
 
 	case K_RIGHTARROW:
+	case K_KP_RIGHTARROW:
 		if (namemaker_cursor_y < NAMEMAKER_TABLE_SIZE) // Only move right if within table
 		{
 			S_LocalSound("misc/menu1.wav");
@@ -4228,11 +4316,13 @@ void M_NameMaker_Key (int k)
 
 	case K_HOME:
 		S_LocalSound("misc/menu1.wav");
+		namemaker_edit_active = false;
 		namemaker_cursor_x = 0;
 		break;
 
 	case K_END:
 		S_LocalSound("misc/menu1.wav");
+		namemaker_edit_active = false;
 		namemaker_cursor_x = NAMEMAKER_TABLE_SIZE - 1;
 		break;
 
@@ -4251,6 +4341,7 @@ void M_NameMaker_Key (int k)
 		}
 		M_TextField_ClampCursor(&namemaker_name_field);
 		M_TextField_ClearSelection(&namemaker_name_field);
+		M_NameMaker_NameChanged(); // woods #namehistory
 		break;
 
 	case 'u':
@@ -4260,6 +4351,7 @@ void M_NameMaker_Key (int k)
 			namemaker_name[0] = 0;
 			M_TextField_ClampCursor(&namemaker_name_field);
 			M_TextField_ClearSelection(&namemaker_name_field);
+			M_NameMaker_NameChanged(); // woods #namehistory
 		}
 		break;
 
@@ -4275,6 +4367,7 @@ void M_NameMaker_Key (int k)
 			M_TextField_MouseInRow(m_mousey, 16))
 		{
 			M_TextField_MouseClick(&namemaker_name_field, m_mousex, 128);
+			M_NameMaker_NameChanged(); // woods #namehistory
 			namemaker_edit_active = true;
 			return;
 		}
@@ -4297,6 +4390,7 @@ void M_NameMaker_Key (int k)
 				namemaker_name_field.cursor++;
 				M_TextField_ClampCursor(&namemaker_name_field);
 				M_TextField_ClearSelection(&namemaker_name_field);
+				M_NameMaker_NameChanged(); // woods #namehistory
 			}
 		}
 		else if (namemaker_cursor_y == NAMEMAKER_TABLE_SIZE)
@@ -4312,9 +4406,18 @@ void M_NameMaker_Key (int k)
 			break;
 
 		Key_Extra (&k);
-		M_TextField_Char(&namemaker_name_field, k);
+		if (M_TextField_Char(&namemaker_name_field, k))
+		{
+			M_NameMaker_NameChanged(); // woods #namehistory
+			namemaker_edit_active = true;
+		}
 		break;
 	}
+}
+
+qboolean M_NameMaker_TextEntry(void)
+{
+	return namemaker_edit_active;
 }
 
 void M_NameMaker_Mousemove(int cx, int cy) // woods #mousemenu
@@ -25123,6 +25226,8 @@ qboolean M_TextEntry (void)
 	{
 	case m_setup:
 		return M_Setup_TextEntry ();
+	case m_namemaker:
+		return M_NameMaker_TextEntry();
 	case m_console:
 		return M_Console_TextEntry();
 	case m_sky:
