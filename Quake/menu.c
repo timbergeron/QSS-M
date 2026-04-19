@@ -16847,6 +16847,11 @@ Reset Config Menu
 */
 
 #define MAX_VIS_RESETCONFIG	17
+#define RESETCONFIG_SEARCH_BOX_X	16
+#define RESETCONFIG_SEARCH_BOX_Y	180
+#define RESETCONFIG_SEARCH_BOX_COLS	32
+#define RESETCONFIG_SEARCH_TEXT_X	(RESETCONFIG_SEARCH_BOX_X + 8)
+#define RESETCONFIG_SEARCH_TEXT_Y	(RESETCONFIG_SEARCH_BOX_Y + 8)
 
 typedef struct
 {
@@ -16869,6 +16874,20 @@ static struct
 	double				status_time; // Time when status was set
 } resetconfigmenu;
 static menu_textfield_t resetconfig_search_field;
+
+static qboolean M_ResetConfig_ShowSearchBox(void)
+{
+	return resetconfigmenu.list.search.len > 0;
+}
+
+static qboolean M_ResetConfig_MouseInSearchBox(void)
+{
+	return M_ResetConfig_ShowSearchBox() &&
+		m_mousex >= RESETCONFIG_SEARCH_BOX_X &&
+		m_mousex <= RESETCONFIG_SEARCH_BOX_X + (RESETCONFIG_SEARCH_BOX_COLS + 2) * 8 &&
+		m_mousey >= RESETCONFIG_SEARCH_BOX_Y &&
+		m_mousey <= RESETCONFIG_SEARCH_BOX_Y + 16;
+}
 
 static void M_ResetConfig_Add(const char* name, const char* date)
 {
@@ -17207,18 +17226,18 @@ void M_ResetConfig_Draw(void)
 			M_DrawEllipsisBar(x, y + resetconfigmenu.list.viewsize * 8, cols);
 	}
 
-	if (resetconfigmenu.list.search.len > 0)
+	if (M_ResetConfig_ShowSearchBox())
 	{
-		M_DrawTextBox(16, 180, 32, 1);
-		M_TextField_DrawHighlight(&resetconfig_search_field, 24, 188);
-		M_PrintHighlight(24, 188, resetconfigmenu.list.search.text,
+		M_DrawTextBox(RESETCONFIG_SEARCH_BOX_X, RESETCONFIG_SEARCH_BOX_Y, RESETCONFIG_SEARCH_BOX_COLS, 1);
+		M_TextField_DrawHighlight(&resetconfig_search_field, RESETCONFIG_SEARCH_TEXT_X, RESETCONFIG_SEARCH_TEXT_Y);
+		M_PrintHighlight(RESETCONFIG_SEARCH_TEXT_X, RESETCONFIG_SEARCH_TEXT_Y, resetconfigmenu.list.search.text,
 			resetconfigmenu.list.search.text,
 			resetconfigmenu.list.search.len);
-		int cursor_x = 24 + 8 * resetconfig_search_field.cursor;
+		int cursor_x = RESETCONFIG_SEARCH_TEXT_X + 8 * resetconfig_search_field.cursor;
 		if (resetconfigmenu.list.numitems == 0)
-			M_DrawCharacter(cursor_x, 188, 11 ^ 128);
+			M_DrawCharacter(cursor_x, RESETCONFIG_SEARCH_TEXT_Y, 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, 188, 10 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(cursor_x, RESETCONFIG_SEARCH_TEXT_Y, 10 + ((int)(realtime * 4) & 1));
 	}
 
 	// Display status message if recent (show for 3 seconds)
@@ -17320,11 +17339,9 @@ void M_ResetConfig_Key(int key)
 		break;
 
 	case K_MOUSE1: // woods #mousemenu
-		if (resetconfigmenu.list.search.len > 0 &&
-			m_mousex >= 16 && m_mousex <= 16 + 34 * 8 &&
-			m_mousey >= 180 && m_mousey <= 196)
+		if (M_ResetConfig_MouseInSearchBox())
 		{
-			M_TextField_MouseClick(&resetconfig_search_field, m_mousex, 24);
+			M_TextField_MouseClick(&resetconfig_search_field, m_mousex, RESETCONFIG_SEARCH_TEXT_X);
 			return;
 		}
 
@@ -25269,6 +25286,9 @@ qboolean M_WantsIBeamCursor(void)
 		return M_Demos_TextEntry() &&
 			!M_Demos_MouseInPathOptionsArea() &&
 			!M_Demos_MouseInShowId1Toggle();
+
+	if (m_state == m_resetconfig)
+		return M_ResetConfig_MouseInSearchBox();
 
 	return M_TextEntry();
 }
