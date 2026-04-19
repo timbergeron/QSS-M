@@ -286,6 +286,8 @@ void Mod_ClearAll (void)
 			RSceneCache_Cleanup(mod);
 		}
 	}
+
+	InvalidateTraceLineCache();
 }
 
 void Mod_ResetAll (void)
@@ -307,6 +309,8 @@ void Mod_ResetAll (void)
 		memset(mod, 0, sizeof(qmodel_t));
 	}
 	mod_numknown = 0;
+
+	InvalidateTraceLineCache();
 }
 
 void	Mod_ForEachModel(void(*callback)(qmodel_t *mod))
@@ -349,6 +353,7 @@ static qmodel_t *Mod_FindName (const char *name)
 		q_strlcpy (mod->name, name, MAX_QPATH);
 		mod->needload = true;
 		mod_numknown++;
+		InvalidateTraceLineCache();
 	}
 
 	return mod;
@@ -396,6 +401,8 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 		else
 			return mod;		// not cached at all
 	}
+
+	InvalidateTraceLineCache();
 
 //
 // load the file

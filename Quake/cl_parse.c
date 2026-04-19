@@ -648,6 +648,7 @@ static void CL_EntitiesDeltaed(void)
 		if (model != ent->model)
 		{
 			ent->model = model;
+			InvalidateTraceLineCache();
 		// automatic animation (torches, etc) can be either all together
 		// or randomized
 			if (model)
@@ -737,12 +738,14 @@ static void CLFTE_ParseEntitiesUpdate(void)
 					CL_EntityNum(newnum)->netstate.pmovetype = 0;
 					CL_EntityNum(newnum)->model = NULL;
 				}
+				InvalidateTraceLineCache();
 				cl.requestresend = false;	//we got it.
 				continue;
 			}
 			ent->update_type = false; //no longer valid
 			ent->model = NULL;
 			ent->spawntime = 0; // woods (iw) #democontrols
+			InvalidateTraceLineCache();
 			continue;
 		}
 		else if (ent->update_type)
@@ -1152,6 +1155,7 @@ static void CLDP_ParseEntitiesUpdate(void)
 			ent = CL_EntityNum(id);
 			ent->update_type = false;
 			ent->model = NULL;
+			InvalidateTraceLineCache();
 		}
 		else
 		{
@@ -1837,6 +1841,7 @@ static void CL_ParseUpdate (int bits)
 	if (model != ent->model)
 	{
 		ent->model = model;
+		InvalidateTraceLineCache();
 	// automatic animation (torches, etc) can be either all together
 	// or randomized
 		if (model)
@@ -2132,6 +2137,7 @@ static void CL_ParseStatic (int version) //johnfitz -- added a parameter
 	VectorCopy (ent->baseline.origin, ent->origin);
 	VectorCopy (ent->baseline.angles, ent->angles);
 	CL_LinkStaticEnt(&cl.static_entities[i]);
+	InvalidateTraceLineCache();
 }
 
 /*

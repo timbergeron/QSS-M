@@ -130,6 +130,7 @@ static int pe_size3 = P_INVALID;
 static int pe_defaulttrail = P_INVALID;
 
 static float psintable[256];
+int r_trace_line_cache_counter;
 
 int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typenum, trailstate_t **tsk);
 int PScript_ParticleTrail (vec3_t startpos, vec3_t end, int type, float timeinterval, int dlkey, vec3_t axis[3], trailstate_t **tsk);
@@ -674,11 +675,28 @@ float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int 
 	vec3_t relstart, relend;
 	VectorCopy (end, impact);
 	VectorSet(normal, 0, 0, 1);
+
+	static int num_trace_line_ents;
+	static int trace_line_ents[MAX_EDICTS];
+	static int cache_valid_count = -1;
+	if (cache_valid_count != r_trace_line_cache_counter)
+	{
+		num_trace_line_ents = 0;
+		for (i = 0; i < cl.num_entities; i++)
+		{
+			ent = &cl.entities[i];
+			if (!ent->model || ent->model->needload || ent->model->type != mod_brush)
+				continue;
+			trace_line_ents[num_trace_line_ents++] = i;
+		}
+		cache_valid_count = r_trace_line_cache_counter;
+	}
+
 	if (entnum)
 		*entnum = 0;
-	for (i = 0; i < cl.num_entities; i++)
+	for (i = 0; i < num_trace_line_ents; i++)
 	{
-		ent = &cl.entities[i];
+		ent = &cl.entities[trace_line_ents[i]];
 		if (!ent->model || ent->model->needload || ent->model->type != mod_brush)
 			continue;
 
@@ -700,7 +718,7 @@ float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int 
 			VectorCopy (trace.plane.normal, normal);
 
 			if (entnum)
-				*entnum = i;
+				*entnum = trace_line_ents[i];
 			if (frac <= 0)
 				break;
 		}

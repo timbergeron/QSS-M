@@ -1757,6 +1757,7 @@ void CL_RelinkEntities (void)
 		{
 			ent->model = NULL;
 			ent->lerpflags |= LERP_RESETMOVE|LERP_RESETANIM; //johnfitz -- next time this entity slot is reused, the lerp will need to be reset
+			InvalidateTraceLineCache();
 			continue;
 		}
 
@@ -1764,6 +1765,7 @@ void CL_RelinkEntities (void)
 		{
 			ent->model = NULL;
 			ent->lerpflags |= LERP_RESETMOVE | LERP_RESETANIM;
+			InvalidateTraceLineCache();
 
 			continue;
 		}
@@ -3280,6 +3282,7 @@ qboolean CL_CheckDownloads(void)
 		if (cl.static_entities[i].ent->model)
 			continue;
 		cl.static_entities[i].ent->model = cl.model_precache[cl.static_entities[i].ent->netstate.modelindex];
+		InvalidateTraceLineCache();
 		CL_LinkStaticEnt(&cl.static_entities[i]);
 	}
 	return true;

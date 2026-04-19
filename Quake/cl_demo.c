@@ -215,6 +215,8 @@ static void CL_DemoRewindApplyEntity(const demoentitystate_t *src, entity_t *ent
 		ent->model = cl.model_precache[ent->netstate.modelindex];
 	else
 		ent->model = NULL;
+
+	InvalidateTraceLineCache();
 }
 
 static void CL_DemoRewindApplyNumericStat(int stat, int ival, float fval)
@@ -1099,6 +1101,8 @@ void CL_FinishDemoFrame(void)
 
 			VEC_POP_N(demo_rewind.frame_events, lastframe->datasize);
 			lastframe->datasize = 0;
+
+			InvalidateTraceLineCache();
 		}
 
 		if (cl.intermission != lastframe->intermission && !lastframe->intermission)
