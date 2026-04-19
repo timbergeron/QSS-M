@@ -655,6 +655,81 @@ static qboolean VID_ValidMode (int width, int height, int refreshrate, int bpp, 
 	return true;
 }
 
+#if defined(USE_SDL2)
+static int VID_ModeAbsDiff (int a, int b)
+{
+	return (a > b) ? (a - b) : (b - a);
+}
+
+static qboolean VID_FindClosestFullscreenMode (int width, int height, int refreshrate, int bpp, vmode_t *bestmode)
+{
+	int i, best = -1;
+	unsigned long long best_dimscore = 0;
+	unsigned int best_bppdelta = 0;
+	unsigned int best_ratedelta = 0;
+
+	for (i = 0; i < nummodes; i++)
+	{
+		long long dw, dh;
+		unsigned long long dimscore;
+		unsigned int bppdelta, ratedelta;
+
+		if (modelist[i].width < 320 || modelist[i].height < 200)
+			continue;
+
+		dw = (long long)modelist[i].width - width;
+		dh = (long long)modelist[i].height - height;
+		dimscore = (unsigned long long)(dw * dw + dh * dh);
+		bppdelta = bpp > 0 ? (unsigned int)VID_ModeAbsDiff(modelist[i].bpp, bpp) : 0;
+		ratedelta = refreshrate > 0 ? (unsigned int)VID_ModeAbsDiff(modelist[i].refreshrate, refreshrate) : 0;
+
+		if (best < 0 ||
+			dimscore < best_dimscore ||
+			(dimscore == best_dimscore && bppdelta < best_bppdelta) ||
+			(dimscore == best_dimscore && bppdelta == best_bppdelta && ratedelta < best_ratedelta))
+		{
+			best = i;
+			best_dimscore = dimscore;
+			best_bppdelta = bppdelta;
+			best_ratedelta = ratedelta;
+		}
+	}
+
+	if (best < 0)
+		return false;
+
+	*bestmode = modelist[best];
+	return true;
+}
+
+// Rewrites vid_width/height/refreshrate/bpp to an enumerated mode when the
+// requested exclusive-fullscreen mode isn't available (e.g. macOS Retina
+// logical window sizes that don't match any real display mode).
+static qboolean VID_UseClosestFullscreenMode (int *width, int *height, int *refreshrate, int *bpp)
+{
+	vmode_t mode;
+
+	if (!VID_FindClosestFullscreenMode(*width, *height, *refreshrate, *bpp, &mode))
+		return false;
+
+	Con_Printf ("%dx%dx%d %dHz fullscreen is not available, using closest mode %dx%dx%d %dHz\n",
+		*width, *height, *bpp, *refreshrate,
+		mode.width, mode.height, mode.bpp, mode.refreshrate);
+
+	*width = mode.width;
+	*height = mode.height;
+	*refreshrate = mode.refreshrate;
+	*bpp = mode.bpp;
+
+	Cvar_SetValueQuick (&vid_width, (float)*width);
+	Cvar_SetValueQuick (&vid_height, (float)*height);
+	Cvar_SetValueQuick (&vid_refreshrate, (float)*refreshrate);
+	Cvar_SetValueQuick (&vid_bpp, (float)*bpp);
+
+	return true;
+}
+#endif /* USE_SDL2 */
+
 /*
 ================
 VID_SetMode
@@ -913,7 +988,7 @@ VID_Restart -- johnfitz -- change video modes on the fly
 static void VID_Restart (void)
 {
 	int width, height, refreshrate, bpp;
-	qboolean fullscreen;
+	qboolean fullscreen, validmode;
 
 	if (vid_locked || !vid_changed)
 		return;
@@ -927,7 +1002,14 @@ static void VID_Restart (void)
 //
 // validate new mode
 //
-	if (!VID_ValidMode (width, height, refreshrate, bpp, fullscreen))
+	validmode = VID_ValidMode (width, height, refreshrate, bpp, fullscreen);
+#if defined(USE_SDL2)
+	if (!validmode && fullscreen && !vid_desktopfullscreen.value)
+		validmode = VID_UseClosestFullscreenMode(&width, &height, &refreshrate, &bpp) &&
+			VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
+#endif
+
+	if (!validmode)
 	{
 		Con_Printf ("%dx%dx%d %dHz %s is not a valid mode\n",
 				width, height, bpp, refreshrate, fullscreen? "fullscreen" : "windowed");
@@ -2007,7 +2089,7 @@ void	VID_Init (void)
 	static char vid_center[] = "SDL_VIDEO_CENTERED=center";
 	int		p, width, height, refreshrate, bpp;
 	int		display_width, display_height, display_refreshrate, display_bpp;
-	qboolean	fullscreen;
+	qboolean	fullscreen, validmode;
 	cvar_t *v;
 	size_t i;
 	static const char	*read_vars[] = { "vid_fullscreen",
@@ -2156,7 +2238,14 @@ void	VID_Init (void)
 	if (p && p < com_argc-1)
 		fsaa = atoi(com_argv[p+1]);
 
-	if (!VID_ValidMode(width, height, refreshrate, bpp, fullscreen))
+	validmode = VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
+#if defined(USE_SDL2)
+	if (!validmode && fullscreen && !vid_desktopfullscreen.value)
+		validmode = VID_UseClosestFullscreenMode(&width, &height, &refreshrate, &bpp) &&
+			VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
+#endif
+
+	if (!validmode)
 	{
 		width = (int)vid_width.value;
 		height = (int)vid_height.value;
@@ -2165,7 +2254,14 @@ void	VID_Init (void)
 		fullscreen = (int)vid_fullscreen.value;
 	}
 
-	if (!VID_ValidMode(width, height, refreshrate, bpp, fullscreen))
+	validmode = VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
+#if defined(USE_SDL2)
+	if (!validmode && fullscreen && !vid_desktopfullscreen.value)
+		validmode = VID_UseClosestFullscreenMode(&width, &height, &refreshrate, &bpp) &&
+			VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
+#endif
+
+	if (!validmode)
 	{
 		width = 640;
 		height = 480;
