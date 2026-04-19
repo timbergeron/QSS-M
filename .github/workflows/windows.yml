@@ -11,6 +11,7 @@ jobs:
       matrix:
         platform: [w64, w32]
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       CROSS_GMP_VER: "6.3.0"
       CROSS_NETTLE_VER: "3.10"
       CROSS_LIBTASN1_VER: "4.19.0"
