@@ -395,7 +395,6 @@ wavinfo_t GetWavinfo (const char *name, byte *wav, int wavlength)
 			{
 				Con_Warning("%s contains bad LIST chunk\n", name);
 			}
-			}
 		}
 	}
 	else
