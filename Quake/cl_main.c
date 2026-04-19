@@ -440,6 +440,45 @@ void CL_CancelConnect(void)
 	CL_CancelConnectInternal(true);
 }
 
+static qboolean CL_HandlePortPingProbe(const char *target)
+{
+	portpingprobe_status_t probe_status;
+	qboolean is_local;
+
+	if (!target || !*target)
+		return false;
+
+	if (!NET_PortPingProbe_IsEnabled())
+	{
+		if (NET_PortPingProbe_GetStatus() == PORTPINGPROBE_COMPLETED)
+			NET_PortPingProbe_ConsumeCompleted(NULL);
+		return false;
+	}
+
+	is_local = !q_strcasecmp(target, "local") || !q_strcasecmp(target, "localhost");
+	if (is_local)
+		return false;
+
+	probe_status = NET_PortPingProbe_GetStatus();
+	if (probe_status == PORTPINGPROBE_IDLE)
+		return NET_PortPingProbe_Start(target);
+
+	if (probe_status == PORTPINGPROBE_PROBING || probe_status == PORTPINGPROBE_ABORT)
+	{
+		NET_PortPingProbe_RequestAbort();
+		Con_Printf("Port ping probe is still running; connect again in a moment\n");
+		return true;
+	}
+
+	if (probe_status == PORTPINGPROBE_COMPLETED)
+	{
+		if (!NET_PortPingProbe_ConsumeCompleted(target))
+			return NET_PortPingProbe_Start(target);
+	}
+
+	return false;
+}
+
 qboolean CL_BeginConnect(const char *host)
 {
 	const char *target;
@@ -453,6 +492,9 @@ qboolean CL_BeginConnect(const char *host)
 	target = CL_PrepareConnectHost(host);
 	if (!target)
 		return false;
+
+	if (CL_HandlePortPingProbe(target))
+		return true;
 
 	preserve_return_state = CL_ConsumeNextConnectFromMenu();
 	connect_target = NET_ResolveCacheName(target);
