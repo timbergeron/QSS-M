@@ -1390,6 +1390,9 @@ static void CL_ParseServerInfo (void)
 	if (cls.demoplayback)
 		SCR_BeginLoadingPlaque();
 
+	/* Clear the current DMA contents before the incoming level load stalls mixing. */
+	S_StopAllSounds (true);
+
 //
 // wipe the client_state_t struct
 //
