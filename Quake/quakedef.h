@@ -80,6 +80,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "q_stdinc.h"
 
+#if defined(_MSC_VER)
+#define THREAD_LOCAL __declspec(thread)
+#else
+#define THREAD_LOCAL _Thread_local
+#endif
+
 // !!! if this is changed, it must be changed in d_ifacea.h too !!!
 #define CACHE_SIZE	32	// used to align key data structures
 
@@ -519,4 +525,3 @@ typedef struct server_alias_s // woods #serveralias
 } server_alias_t;
 
 #endif	/* QUAKEDEFS_H */
-
