@@ -19,6 +19,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 #import "AppController.h"
 #import "ScreenInfo.h"
+#import <ApplicationServices/ApplicationServices.h>
+#import <IOKit/hidsystem/IOHIDLib.h>
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
 #if defined(USE_SDL2)
 #import <SDL2/SDL.h>
@@ -33,6 +35,374 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 NSString *FQPrefCommandLineKey = @"CommandLine";
 NSString *FQPrefFullscreenKey = @"Fullscreen";
 NSString *FQPrefScreenModeKey = @"ScreenMode";
+
+typedef struct {
+    CGRect frame;
+    CGRect visibleFrame;
+    BOOL valid;
+} QSSSystemSettingsWindowSnapshot;
+
+static const CGFloat QSSRawMouseOverlayWidth = 530.0f;
+static const CGFloat QSSRawMouseOverlayHeight = 109.0f;
+
+static BOOL QSSSupportsInputMonitoring(void)
+{
+    if (@available(macOS 10.15, *))
+        return YES;
+    return NO;
+}
+
+static IOHIDAccessType QSSInputMonitoringAccessType(void)
+{
+    if (@available(macOS 10.15, *))
+        return IOHIDCheckAccess(kIOHIDRequestTypeListenEvent);
+    return kIOHIDAccessTypeGranted;
+}
+
+static BOOL QSSInputMonitoringIsGranted(void)
+{
+    return !QSSSupportsInputMonitoring() ||
+        QSSInputMonitoringAccessType() == kIOHIDAccessTypeGranted;
+}
+
+static NSURL *QSSInputMonitoringSettingsURL(void)
+{
+    NSString *settingsPath;
+
+    if (@available(macOS 13.0, *))
+        settingsPath = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ListenEvent";
+    else
+        settingsPath = @"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
+
+    return [NSURL URLWithString:settingsPath];
+}
+
+static BOOL QSSIsSystemSettingsOwnerName(NSString *ownerName)
+{
+    return [ownerName isEqualToString:@"System Settings"] ||
+        [ownerName isEqualToString:@"System Preferences"];
+}
+
+static BOOL QSSFrontmostAppIsSystemSettings(void)
+{
+    NSRunningApplication *frontmostApp = [[NSWorkspace sharedWorkspace] frontmostApplication];
+    NSString *bundleIdentifier = [frontmostApp bundleIdentifier];
+    NSString *localizedName = [frontmostApp localizedName];
+
+    if ([bundleIdentifier isEqualToString:@"com.apple.systempreferences"] ||
+        [bundleIdentifier isEqualToString:@"com.apple.SystemSettings"])
+        return YES;
+
+    return QSSIsSystemSettingsOwnerName(localizedName);
+}
+
+static BOOL QSSConvertWindowFrameToAppKit(CGRect cgFrame, CGRect *frame, CGRect *visibleFrame)
+{
+    NSArray *screens = [NSScreen screens];
+    NSScreen *matchedScreen = nil;
+    CGRect matchedBounds = CGRectZero;
+    CGFloat bestArea = 0.0f;
+
+    for (NSScreen *screen in screens)
+    {
+        NSNumber *screenNumber = [[screen deviceDescription] objectForKey:@"NSScreenNumber"];
+        if (!screenNumber)
+            continue;
+
+        CGDirectDisplayID displayID = (CGDirectDisplayID)[screenNumber unsignedIntValue];
+        CGRect displayBounds = CGDisplayBounds(displayID);
+        CGRect intersection = CGRectIntersection(displayBounds, cgFrame);
+        CGFloat area;
+
+        if (CGRectIsNull(intersection) || CGRectIsEmpty(intersection))
+            continue;
+
+        area = CGRectGetWidth(intersection) * CGRectGetHeight(intersection);
+        if (area > bestArea)
+        {
+            bestArea = area;
+            matchedScreen = screen;
+            matchedBounds = displayBounds;
+        }
+    }
+
+    if (!matchedScreen)
+    {
+        if (frame)
+            *frame = cgFrame;
+        if (visibleFrame)
+            *visibleFrame = [[NSScreen mainScreen] visibleFrame];
+        return YES;
+    }
+
+    if (frame)
+    {
+        CGFloat localX = CGRectGetMinX(cgFrame) - CGRectGetMinX(matchedBounds);
+        CGFloat localY = CGRectGetMinY(cgFrame) - CGRectGetMinY(matchedBounds);
+        NSRect screenFrame = [matchedScreen frame];
+
+        *frame = CGRectMake(NSMinX(screenFrame) + localX,
+            NSMaxY(screenFrame) - localY - CGRectGetHeight(cgFrame),
+            CGRectGetWidth(cgFrame), CGRectGetHeight(cgFrame));
+    }
+
+    if (visibleFrame)
+        *visibleFrame = [matchedScreen visibleFrame];
+
+    return YES;
+}
+
+static BOOL QSSCopySystemSettingsWindowSnapshot(QSSSystemSettingsWindowSnapshot *snapshot)
+{
+    CFArrayRef windowInfoRef;
+    NSArray *windowInfo;
+    NSDictionary *info;
+    CGFloat bestArea = 0.0f;
+
+    if (!snapshot || !QSSFrontmostAppIsSystemSettings())
+        return NO;
+
+    snapshot->valid = NO;
+    windowInfoRef = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID);
+    if (!windowInfoRef)
+        return NO;
+
+    windowInfo = (NSArray *)windowInfoRef;
+    for (info in windowInfo)
+    {
+        NSString *ownerName = [info objectForKey:(id)kCGWindowOwnerName];
+        NSNumber *layer = [info objectForKey:(id)kCGWindowLayer];
+        NSDictionary *bounds = [info objectForKey:(id)kCGWindowBounds];
+        CGRect cgFrame;
+        CGRect frame;
+        CGRect visibleFrame;
+        CGFloat area;
+
+        if (!QSSIsSystemSettingsOwnerName(ownerName))
+            continue;
+        if ([layer intValue] != 0)
+            continue;
+        if (![bounds isKindOfClass:[NSDictionary class]])
+            continue;
+        if (!CGRectMakeWithDictionaryRepresentation((CFDictionaryRef)bounds, &cgFrame))
+            continue;
+        if (CGRectGetWidth(cgFrame) <= 320.0f || CGRectGetHeight(cgFrame) <= 240.0f)
+            continue;
+
+        QSSConvertWindowFrameToAppKit(cgFrame, &frame, &visibleFrame);
+        area = CGRectGetWidth(frame) * CGRectGetHeight(frame);
+        if (area <= bestArea)
+            continue;
+
+        bestArea = area;
+        snapshot->frame = frame;
+        snapshot->visibleFrame = visibleFrame;
+        snapshot->valid = YES;
+    }
+
+    CFRelease(windowInfoRef);
+    return snapshot->valid;
+}
+
+static NSPoint QSSRawMouseOverlayOrigin(QSSSystemSettingsWindowSnapshot snapshot)
+{
+    CGFloat sidebarWidth = 170.0f;
+    CGFloat contentMinX = NSMinX(snapshot.frame) + sidebarWidth;
+    CGFloat contentWidth = MAX(NSWidth(snapshot.frame) - sidebarWidth, QSSRawMouseOverlayWidth);
+    CGFloat preferredX = contentMinX + ((contentWidth - QSSRawMouseOverlayWidth) / 2.0f) - 8.0f;
+    CGFloat preferredY = NSMinY(snapshot.frame) + 14.0f;
+    CGFloat minX = NSMinX(snapshot.visibleFrame) + 8.0f;
+    CGFloat maxX = NSMaxX(snapshot.visibleFrame) - QSSRawMouseOverlayWidth - 8.0f;
+    CGFloat minY = NSMinY(snapshot.visibleFrame) + 8.0f;
+    CGFloat maxY = NSMaxY(snapshot.visibleFrame) - QSSRawMouseOverlayHeight - 8.0f;
+
+    if (maxX < minX)
+        maxX = minX;
+    if (maxY < minY)
+        maxY = minY;
+
+    return NSMakePoint(MIN(MAX(preferredX, minX), maxX),
+        MIN(MAX(preferredY, minY), maxY));
+}
+
+static NSURL *QSSHostAppBundleURL(void)
+{
+    return [[NSBundle mainBundle] bundleURL];
+}
+
+static NSString *QSSHostAppDisplayName(void)
+{
+    NSBundle *bundle = [NSBundle mainBundle];
+    NSString *displayName = [bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+
+    if (!displayName || [displayName length] == 0)
+        displayName = [bundle objectForInfoDictionaryKey:(NSString *)kCFBundleNameKey];
+    if (!displayName || [displayName length] == 0)
+        displayName = [[[bundle bundleURL] URLByDeletingPathExtension] lastPathComponent];
+
+    return displayName ? displayName : @"QSS-M";
+}
+
+static NSImage *QSSHostAppIcon(void)
+{
+    NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:[[QSSHostAppBundleURL() path] stringByStandardizingPath]];
+    [icon setSize:NSMakeSize(48.0f, 48.0f)];
+    return icon;
+}
+
+@interface QSSAppDragSourceView : NSView <NSDraggingSource> {
+    NSURL *bundleURL;
+    NSString *displayName;
+    NSImage *appIcon;
+    NSView *rowView;
+    void (^successfulDropHandler)(void);
+}
+
+- (id)initWithFrame:(NSRect)frameRect
+          bundleURL:(NSURL *)appBundleURL
+        displayName:(NSString *)appDisplayName
+               icon:(NSImage *)icon
+   onSuccessfulDrop:(void (^)(void))handler;
+
+@end
+
+@implementation QSSAppDragSourceView
+
+- (id)initWithFrame:(NSRect)frameRect
+          bundleURL:(NSURL *)appBundleURL
+        displayName:(NSString *)appDisplayName
+               icon:(NSImage *)icon
+   onSuccessfulDrop:(void (^)(void))handler
+{
+    NSView *iconChrome;
+    NSImageView *iconView;
+    NSTextField *label;
+
+    self = [super initWithFrame:frameRect];
+    if (!self)
+        return nil;
+
+    bundleURL = [appBundleURL retain];
+    displayName = [appDisplayName copy];
+    appIcon = [icon retain];
+    successfulDropHandler = [handler copy];
+
+    [self setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
+    [self setWantsLayer:YES];
+
+    rowView = [[[NSView alloc] initWithFrame:[self bounds]] autorelease];
+    [rowView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+    [rowView setWantsLayer:YES];
+    [[rowView layer] setCornerRadius:7.0f];
+    [[rowView layer] setBorderWidth:1.0f];
+    [[rowView layer] setBorderColor:[[NSColor disabledControlTextColor] colorWithAlphaComponent:0.22f].CGColor];
+    [[rowView layer] setBackgroundColor:[[NSColor controlBackgroundColor] colorWithAlphaComponent:0.96f].CGColor];
+    [self addSubview:rowView];
+
+    iconChrome = [[[NSView alloc] initWithFrame:NSMakeRect(10.0f, 8.0f, 26.0f, 26.0f)] autorelease];
+    [iconChrome setWantsLayer:YES];
+    [[iconChrome layer] setCornerRadius:6.0f];
+    [[iconChrome layer] setBackgroundColor:[[NSColor whiteColor] colorWithAlphaComponent:0.9f].CGColor];
+    [iconChrome setAutoresizingMask:NSViewMaxXMargin];
+    [rowView addSubview:iconChrome];
+
+    iconView = [[[NSImageView alloc] initWithFrame:NSMakeRect(2.0f, 2.0f, 22.0f, 22.0f)] autorelease];
+    [iconView setImage:appIcon];
+    [iconView setImageScaling:NSImageScaleProportionallyUpOrDown];
+    [iconChrome addSubview:iconView];
+
+    label = [[[NSTextField alloc] initWithFrame:NSMakeRect(47.0f, 11.0f, NSWidth(frameRect) - 59.0f, 20.0f)] autorelease];
+    [label setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin | NSViewMaxYMargin)];
+    [label setBezeled:NO];
+    [label setDrawsBackground:NO];
+    [label setEditable:NO];
+    [label setSelectable:NO];
+    [label setFont:[NSFont boldSystemFontOfSize:15.0f]];
+    [label setTextColor:[NSColor labelColor]];
+    [label setStringValue:displayName];
+    [rowView addSubview:label];
+
+    return self;
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent *)event
+{
+    (void)event;
+    return YES;
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    NSDraggingItem *draggingItem;
+    NSDraggingSession *session;
+
+    if (!bundleURL)
+        return;
+
+    draggingItem = [[[NSDraggingItem alloc] initWithPasteboardWriter:bundleURL] autorelease];
+    [draggingItem setDraggingFrame:[self draggingFrame] contents:[self draggingImage]];
+
+    session = [self beginDraggingSessionWithItems:[NSArray arrayWithObject:draggingItem]
+                                            event:event
+                                           source:self];
+    [session setAnimatesToStartingPositionsOnCancelOrFail:YES];
+}
+
+- (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context
+{
+    (void)session;
+    (void)context;
+    return NSDragOperationCopy;
+}
+
+- (void)draggingSession:(NSDraggingSession *)session willBeginAtPoint:(NSPoint)screenPoint
+{
+    (void)session;
+    (void)screenPoint;
+    [rowView setHidden:YES];
+}
+
+- (void)draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)screenPoint operation:(NSDragOperation)operation
+{
+    (void)session;
+    (void)screenPoint;
+
+    if (operation == NSDragOperationNone)
+        [rowView setHidden:NO];
+    else if (successfulDropHandler)
+        successfulDropHandler();
+}
+
+- (NSRect)draggingFrame
+{
+    return [self convertRect:[rowView bounds] fromView:rowView];
+}
+
+- (NSImage *)draggingImage
+{
+    NSBitmapImageRep *rep;
+    NSImage *image;
+
+    rep = [[[rowView bitmapImageRepForCachingDisplayInRect:[rowView bounds]] retain] autorelease];
+    [rowView cacheDisplayInRect:[rowView bounds] toBitmapImageRep:rep];
+
+    image = [[[NSImage alloc] initWithSize:[rowView bounds].size] autorelease];
+    [image addRepresentation:rep];
+    return image;
+}
+
+- (void)dealloc
+{
+    [bundleURL release];
+    [displayName release];
+    [appIcon release];
+    [successfulDropHandler release];
+    [super dealloc];
+}
+
+@end
 
 @implementation AppController
 
@@ -417,6 +787,399 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
     [startButton setFrame:startFrame];
 }
 
+- (BOOL)openMacOSInstructionsPage
+{
+    NSURL *instructionsURL = [[NSBundle mainBundle] URLForResource:@"macos_instructions"
+                                                     withExtension:@"html"];
+    if (!instructionsURL)
+        return NO;
+
+    return [[NSWorkspace sharedWorkspace] openURL:instructionsURL];
+}
+
+- (BOOL)rawMouseOverlayShouldShowDragSource
+{
+    if (!QSSSupportsInputMonitoring() || QSSInputMonitoringIsGranted())
+        return NO;
+    return !rawMouseDragCompleted;
+}
+
+- (void)refreshRawMouseOverlayContent
+{
+    BOOL showDragSource;
+
+    if (!rawMouseOverlayTitleField)
+        return;
+
+    showDragSource = [self rawMouseOverlayShouldShowDragSource];
+
+    if (showDragSource)
+    {
+        [rawMouseOverlayTitleField setFrame:NSMakeRect(66.0f, 68.0f, 438.0f, 22.0f)];
+        [rawMouseOverlayTitleField setFont:[NSFont systemFontOfSize:14.0f weight:NSFontWeightMedium]];
+        [rawMouseOverlayTitleField setStringValue:[NSString stringWithFormat:
+            @"Drag %@ to the list above to allow RAW Mouse Input", QSSHostAppDisplayName()]];
+        [rawMouseOverlayArrowField setFrame:NSMakeRect(28.0f, 62.0f, 36.0f, 36.0f)];
+        [rawMouseOverlayDragSourceView setHidden:NO];
+    }
+    else
+    {
+        [rawMouseOverlayTitleField setFrame:NSMakeRect(66.0f, 44.0f, 438.0f, 34.0f)];
+        [rawMouseOverlayTitleField setFont:[NSFont systemFontOfSize:14.0f weight:NSFontWeightMedium]];
+        [rawMouseOverlayTitleField setStringValue:@"Enable QSS-M in the list above, then choose Quit & Reopen if macOS asks."];
+        [rawMouseOverlayArrowField setFrame:NSMakeRect(28.0f, 42.0f, 36.0f, 36.0f)];
+        [rawMouseOverlayDragSourceView setHidden:YES];
+    }
+}
+
+- (void)rawMousePermissionDragDidComplete
+{
+    rawMouseDragCompleted = YES;
+    if (rawMouseOverlayWindow)
+        [rawMouseOverlayWindow orderOut:nil];
+    rawMouseOverlayPresented = NO;
+}
+
+- (void)createRawMouseOverlayWindowIfNeeded
+{
+    NSPanel *panel;
+    NSVisualEffectView *materialView;
+    NSRect bounds;
+    QSSAppDragSourceView *dragSourceView;
+    __block AppController *blockSelf;
+
+    if (rawMouseOverlayWindow)
+        return;
+
+    panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0.0f, 0.0f,
+            QSSRawMouseOverlayWidth, QSSRawMouseOverlayHeight)
+                                       styleMask:(NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel)
+                                         backing:NSBackingStoreBuffered
+                                           defer:NO];
+    [panel setOpaque:NO];
+    [panel setBackgroundColor:[NSColor clearColor]];
+    [panel setHasShadow:YES];
+    [panel setHidesOnDeactivate:NO];
+    [panel setFloatingPanel:YES];
+    [panel setLevel:NSStatusWindowLevel];
+    [panel setCollectionBehavior:(NSWindowCollectionBehaviorCanJoinAllSpaces |
+        NSWindowCollectionBehaviorStationary |
+        NSWindowCollectionBehaviorIgnoresCycle)];
+
+    bounds = NSMakeRect(0.0f, 0.0f, QSSRawMouseOverlayWidth, QSSRawMouseOverlayHeight);
+    materialView = [[[NSVisualEffectView alloc] initWithFrame:bounds] autorelease];
+    [materialView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+    [materialView setMaterial:NSVisualEffectMaterialPopover];
+    [materialView setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
+    [materialView setState:NSVisualEffectStateActive];
+    [materialView setWantsLayer:YES];
+    [[materialView layer] setCornerRadius:18.0f];
+    [[materialView layer] setMasksToBounds:YES];
+    [[materialView layer] setBorderWidth:0.5f];
+    [[materialView layer] setBorderColor:[[NSColor disabledControlTextColor] colorWithAlphaComponent:0.18f].CGColor];
+
+    rawMouseOverlayArrowField = [[NSTextField alloc] initWithFrame:NSMakeRect(28.0f, 62.0f, 36.0f, 36.0f)];
+    [rawMouseOverlayArrowField setBezeled:NO];
+    [rawMouseOverlayArrowField setDrawsBackground:NO];
+    [rawMouseOverlayArrowField setEditable:NO];
+    [rawMouseOverlayArrowField setSelectable:NO];
+    [rawMouseOverlayArrowField setAlignment:NSTextAlignmentCenter];
+    [rawMouseOverlayArrowField setFont:[NSFont boldSystemFontOfSize:28.0f]];
+    [rawMouseOverlayArrowField setTextColor:[NSColor colorWithSRGBRed:0.15f green:0.54f blue:0.98f alpha:1.0f]];
+    [rawMouseOverlayArrowField setStringValue:@"↑"];
+    [materialView addSubview:rawMouseOverlayArrowField];
+
+    rawMouseOverlayTitleField = [[NSTextField alloc] initWithFrame:NSMakeRect(66.0f, 68.0f, 438.0f, 22.0f)];
+    [rawMouseOverlayTitleField setBezeled:NO];
+    [rawMouseOverlayTitleField setDrawsBackground:NO];
+    [rawMouseOverlayTitleField setEditable:NO];
+    [rawMouseOverlayTitleField setSelectable:NO];
+    [rawMouseOverlayTitleField setTextColor:[NSColor labelColor]];
+    [rawMouseOverlayTitleField setAlignment:NSTextAlignmentLeft];
+    [[rawMouseOverlayTitleField cell] setWraps:YES];
+    [[rawMouseOverlayTitleField cell] setScrollable:NO];
+    [[rawMouseOverlayTitleField cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    [materialView addSubview:rawMouseOverlayTitleField];
+
+    blockSelf = self;
+    dragSourceView = [[[QSSAppDragSourceView alloc] initWithFrame:NSMakeRect(24.0f, 18.0f, 482.0f, 43.0f)
+                                                        bundleURL:QSSHostAppBundleURL()
+                                                      displayName:QSSHostAppDisplayName()
+                                                             icon:QSSHostAppIcon()
+                                                 onSuccessfulDrop:^{
+        [blockSelf rawMousePermissionDragDidComplete];
+    }] autorelease];
+    rawMouseOverlayDragSourceView = [dragSourceView retain];
+    [materialView addSubview:dragSourceView];
+
+    [panel setContentView:materialView];
+    rawMouseOverlayWindow = panel;
+    [self refreshRawMouseOverlayContent];
+}
+
+- (NSRect)rawMouseInputButtonFrameInScreen
+{
+    NSRect buttonFrameInWindow;
+
+    if (!rawMouseInputButton || !launcherWindow || ![rawMouseInputButton superview])
+        return NSZeroRect;
+
+    buttonFrameInWindow = [[rawMouseInputButton superview] convertRect:[rawMouseInputButton frame]
+                                                                toView:nil];
+    return [launcherWindow convertRectToScreen:buttonFrameInWindow];
+}
+
+- (void)adjustRawMousePermissionLayoutVisible:(BOOL)visible
+{
+    NSRect labelFrame;
+    NSRect popupFrame;
+    NSRect fullscreenFrame;
+    NSRect buttonFrame;
+    CGFloat permissionLayoutOffset = 23.0f;
+
+    if (!rawMousePermissionLayoutInitialized || !rawMouseInputButton)
+        return;
+
+    labelFrame = screenModeLabelBaseFrame;
+    popupFrame = screenModePopUpBaseFrame;
+    fullscreenFrame = fullscreenCheckBoxBaseFrame;
+    buttonFrame = NSMakeRect(NSMinX(screenModePopUpBaseFrame), 17.0f, 184.0f, 20.0f);
+
+    if (visible)
+    {
+        labelFrame.origin.y += permissionLayoutOffset;
+        popupFrame.origin.y += permissionLayoutOffset;
+        fullscreenFrame.origin.y += permissionLayoutOffset;
+        [rawMouseInputButton setFrame:buttonFrame];
+    }
+
+    if (screenModeLabel)
+        [screenModeLabel setFrame:labelFrame];
+    [screenModePopUp setFrame:popupFrame];
+    [fullscreenCheckBox setFrame:fullscreenFrame];
+    [rawMouseInputButton setHidden:!visible];
+}
+
+- (void)refreshRawMousePermissionUI
+{
+    BOOL showButton;
+
+    if (!rawMousePermissionLayoutInitialized)
+        return;
+
+    showButton = QSSSupportsInputMonitoring() && !QSSInputMonitoringIsGranted();
+    [self adjustRawMousePermissionLayoutVisible:showButton];
+
+    if (!showButton)
+        [self stopRawMousePermissionAssistant];
+}
+
+- (void)setupRawMousePermissionUI
+{
+    NSView *parent;
+    NSView *subview;
+
+    if (!launcherWindow || !screenModePopUp || rawMouseInputButton)
+        return;
+
+    parent = [screenModePopUp superview];
+    if (!parent)
+        return;
+
+    for (subview in [parent subviews])
+    {
+        if (![subview isKindOfClass:[NSTextField class]])
+            continue;
+        if ([[(NSTextField *)subview stringValue] isEqualToString:@"Resolution and color depth"])
+        {
+            screenModeLabel = (NSTextField *)subview;
+            break;
+        }
+    }
+
+    if (!screenModeLabel)
+        return;
+
+    screenModeLabelBaseFrame = [screenModeLabel frame];
+    screenModePopUpBaseFrame = [screenModePopUp frame];
+    fullscreenCheckBoxBaseFrame = [fullscreenCheckBox frame];
+
+    rawMouseInputButton = [[NSButton alloc] initWithFrame:NSZeroRect];
+    [rawMouseInputButton setTitle:@"Allow RAW Mouse Input"];
+    [rawMouseInputButton setBezelStyle:NSBezelStyleRounded];
+    [rawMouseInputButton setControlSize:NSControlSizeSmall];
+    [rawMouseInputButton setFont:[NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
+    [rawMouseInputButton setTarget:self];
+    [rawMouseInputButton setAction:@selector(allowRawMouseInput:)];
+    [rawMouseInputButton setAutoresizingMask:(NSViewMaxXMargin | NSViewMinYMargin)];
+    [rawMouseInputButton setHidden:YES];
+    [parent addSubview:rawMouseInputButton];
+
+    rawMousePermissionLayoutInitialized = YES;
+    [self refreshRawMousePermissionUI];
+}
+
+- (void)showRawMouseOverlayWithSnapshot:(QSSSystemSettingsWindowSnapshot)snapshot
+{
+    NSPoint targetOrigin;
+    NSRect targetFrame;
+
+    [self createRawMouseOverlayWindowIfNeeded];
+
+    targetOrigin = QSSRawMouseOverlayOrigin(snapshot);
+    targetFrame = NSMakeRect(targetOrigin.x, targetOrigin.y,
+        QSSRawMouseOverlayWidth, QSSRawMouseOverlayHeight);
+
+    if (!rawMouseOverlayPresented || ![rawMouseOverlayWindow isVisible])
+    {
+        NSRect startFrame = [self rawMouseInputButtonFrameInScreen];
+
+        if (NSIsEmptyRect(startFrame))
+            startFrame = targetFrame;
+
+        [rawMouseOverlayWindow setAlphaValue:NSIsEmptyRect(startFrame) ? 1.0f : 0.0f];
+        [rawMouseOverlayWindow setFrame:startFrame display:NO];
+        [rawMouseOverlayWindow orderFrontRegardless];
+
+        [NSAnimationContext beginGrouping];
+        [[NSAnimationContext currentContext] setDuration:0.22f];
+        [[rawMouseOverlayWindow animator] setAlphaValue:1.0f];
+        [[rawMouseOverlayWindow animator] setFrame:targetFrame display:YES];
+        [NSAnimationContext endGrouping];
+
+        rawMouseOverlayPresented = YES;
+        return;
+    }
+
+    [rawMouseOverlayWindow setAlphaValue:1.0f];
+    [rawMouseOverlayWindow setFrame:targetFrame display:YES];
+    [rawMouseOverlayWindow orderFrontRegardless];
+}
+
+- (void)updateRawMousePermissionOverlay:(NSTimer *)timer
+{
+    QSSSystemSettingsWindowSnapshot snapshot;
+
+    (void)timer;
+
+    if (QSSInputMonitoringIsGranted())
+    {
+        [self refreshRawMousePermissionUI];
+        return;
+    }
+
+    if (rawMouseDragCompleted)
+    {
+        if (rawMouseOverlayWindow)
+            [rawMouseOverlayWindow orderOut:nil];
+        rawMouseOverlayPresented = NO;
+        return;
+    }
+
+    if (!QSSCopySystemSettingsWindowSnapshot(&snapshot))
+    {
+        if (rawMouseOverlayWindow)
+            [rawMouseOverlayWindow orderOut:nil];
+        rawMouseOverlayPresented = NO;
+        return;
+    }
+
+    [self refreshRawMouseOverlayContent];
+    [self showRawMouseOverlayWithSnapshot:snapshot];
+}
+
+- (void)startRawMousePermissionAssistant
+{
+    NSNotificationCenter *workspaceNotificationCenter;
+
+    if (rawMouseOverlayTimer)
+        [rawMouseOverlayTimer invalidate];
+    [rawMouseOverlayTimer release];
+    rawMouseOverlayTimer = [[NSTimer scheduledTimerWithTimeInterval:0.20f
+                                                             target:self
+                                                           selector:@selector(updateRawMousePermissionOverlay:)
+                                                           userInfo:nil
+                                                            repeats:YES] retain];
+
+    workspaceNotificationCenter = [[NSWorkspace sharedWorkspace] notificationCenter];
+    if (!rawMouseActivationObserver)
+    {
+        rawMouseActivationObserver = [workspaceNotificationCenter addObserverForName:NSWorkspaceDidActivateApplicationNotification
+                                                                              object:nil
+                                                                               queue:[NSOperationQueue mainQueue]
+                                                                          usingBlock:^(NSNotification *note) {
+            (void)note;
+            [self updateRawMousePermissionOverlay:nil];
+            [self refreshRawMousePermissionUI];
+        }];
+    }
+
+    [self updateRawMousePermissionOverlay:nil];
+}
+
+- (void)stopRawMousePermissionAssistant
+{
+    NSNotificationCenter *workspaceNotificationCenter;
+
+    if (rawMouseOverlayTimer)
+    {
+        [rawMouseOverlayTimer invalidate];
+        [rawMouseOverlayTimer release];
+        rawMouseOverlayTimer = nil;
+    }
+
+    if (rawMouseActivationObserver)
+    {
+        workspaceNotificationCenter = [[NSWorkspace sharedWorkspace] notificationCenter];
+        [workspaceNotificationCenter removeObserver:rawMouseActivationObserver];
+        rawMouseActivationObserver = nil;
+    }
+
+    if (rawMouseOverlayWindow)
+        [rawMouseOverlayWindow orderOut:nil];
+    rawMouseOverlayPresented = NO;
+}
+
+- (IBAction)allowRawMouseInput:(id)sender
+{
+    NSURL *settingsURL;
+    BOOL openedSettings = NO;
+
+    (void)sender;
+
+    if (!QSSSupportsInputMonitoring())
+    {
+        [self openMacOSInstructionsPage];
+        return;
+    }
+
+    if (QSSInputMonitoringIsGranted())
+    {
+        [self refreshRawMousePermissionUI];
+        return;
+    }
+
+    rawMouseDragCompleted = NO;
+
+    if (@available(macOS 10.15, *))
+        (void)IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+
+    settingsURL = QSSInputMonitoringSettingsURL();
+    if (settingsURL)
+        openedSettings = [[NSWorkspace sharedWorkspace] openURL:settingsURL];
+    if (!openedSettings)
+    {
+        settingsURL = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"];
+        if (settingsURL)
+            openedSettings = [[NSWorkspace sharedWorkspace] openURL:settingsURL];
+    }
+
+    if (openedSettings)
+        [self startRawMousePermissionAssistant];
+    else
+        [self openMacOSInstructionsPage];
+}
+
 #ifndef MAC_OS_X_VERSION_10_13
 #define NSControlStateValueOff NSOffState
 #define NSControlStateValueOn NSOnState
@@ -436,7 +1199,7 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
         BOOL fullscreen = [defaults boolForKey:FQPrefFullscreenKey];
         [fullscreenCheckBox setState:fullscreen ? NSControlStateValueOn : NSControlStateValueOff];
         
-        int screenModeIndex = [defaults integerForKey:FQPrefScreenModeKey];
+        NSInteger screenModeIndex = [defaults integerForKey:FQPrefScreenModeKey];
         [screenModePopUp selectItemAtIndex:screenModeIndex];
 
         // If we stripped anything (like stray -nolauncher tokens),
@@ -454,6 +1217,7 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
     [self configureQuitButton];
     [self layoutStartAndQuitButtons];
     [self setupCommandLineOptionsUI];
+    [self setupRawMousePermissionUI];
 
     if (launcherWindow) {
         [launcherWindow setTitle:@"QSS-M"];
@@ -487,6 +1251,8 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
         [self hideSettingsLabelInView:contentView];
     }
 
+    [self refreshRawMousePermissionUI];
+
     // Get current keyboard state - woods #option
     NSUInteger flags = [NSEvent modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
     BOOL optionKeyPressed = (flags & NSEventModifierFlagOption) != 0;
@@ -503,8 +1269,13 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
 	} else {
         // Show launcher window if Option key is pressed
         [launcherWindow center];
-		[launcherWindow makeKeyAndOrderFront:self];
+        [launcherWindow makeKeyAndOrderFront:self];
 	}
+}
+
+- (void)applicationDidBecomeActive:(NSNotification *)notification {
+    (void)notification;
+    [self refreshRawMousePermissionUI];
 }
 
 - (IBAction)changeScreenMode:(id)sender {
@@ -562,6 +1333,7 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
 
     // Terminate the launcher app; the dedicated server will
     // continue running in the Terminal session.
+    [self stopRawMousePermissionAssistant];
     exit(0);
 }
 
@@ -578,7 +1350,7 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
         return;
     }
     
-    int index = [screenModePopUp indexOfSelectedItem];
+    NSInteger index = [screenModePopUp indexOfSelectedItem];
     if (index > 0) {
         ScreenInfo *info = [screenModes objectAtIndex:index];
         
@@ -610,17 +1382,18 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
     
     int argc = [arguments count] + 1;
     char *argv[argc];
-    
+
     argv[0] = gArgv[0];
     [arguments setArguments:argv + 1];
 
+    [self stopRawMousePermissionAssistant];
     [launcherWindow close];
 
     // update the defaults
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setObject:[paramTextField stringValue] forKey:FQPrefCommandLineKey];
     [defaults setObject:[NSNumber numberWithBool:[fullscreenCheckBox state] == NSControlStateValueOn] forKey:FQPrefFullscreenKey];
-    [defaults setObject:[NSNumber numberWithInt:index] forKey:FQPrefScreenModeKey];
+    [defaults setObject:[NSNumber numberWithInteger:index] forKey:FQPrefScreenModeKey];
     [defaults synchronize];
 
     int status = SDL_main (argc, argv);
@@ -628,6 +1401,8 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
 }
 
 - (IBAction)cancel:(id)sender {
+    (void)sender;
+    [self stopRawMousePermissionAssistant];
     exit(0);
 }
 
@@ -756,6 +1531,12 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
 }
 
 - (void) dealloc {
+    [self stopRawMousePermissionAssistant];
+    [rawMouseOverlayWindow release];
+    [rawMouseOverlayArrowField release];
+    [rawMouseOverlayTitleField release];
+    [rawMouseOverlayDragSourceView release];
+    [rawMouseInputButton release];
     [launcherTitleLabel release];
     [commandOptionPopUp release];
     [screenModes release];
