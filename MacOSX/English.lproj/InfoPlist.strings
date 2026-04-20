@@ -1,7 +1,0 @@
-/* Localized versions of Info.plist keys */
-
-CFBundleName = "QSS-M";
-CFBundleShortVersionString = "";
-CFBundleVersion = "";
-CFBundleGetInfoString = "QSS-M 1.6.5";
-NSHumanReadableCopyright = "";

@@ -1530,6 +1530,12 @@ static NSImage *QSSHostAppIcon(void)
         [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
+- (IBAction)openWebsite:(id)sender {
+    NSURL *url = [NSURL URLWithString:@"https://qssm.quakeone.com/"];
+    if (url)
+        [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
 - (void) dealloc {
     [self stopRawMousePermissionAssistant];
     [rawMouseOverlayWindow release];

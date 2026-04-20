@@ -59,6 +59,7 @@ extern NSString *FQPrefScreenModeKey;
 - (IBAction)showAboutPanel:(id)sender;
 - (IBAction)addCommandLineOption:(id)sender;
 - (IBAction)openGithub:(id)sender;
+- (IBAction)openWebsite:(id)sender;
 
 - (NSArray *)screenModes;
 

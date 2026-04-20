@@ -317,9 +317,9 @@
                 <menuItem title="Help" id="103" userLabel="1">
                     <menu key="submenu" title="Help" id="106" userLabel="2">
                         <items>
-                            <menuItem title="NewApplication Help" keyEquivalent="?" id="111">
+                            <menuItem title="QSS-M Website" keyEquivalent="?" id="111">
                                 <connections>
-                                    <action selector="showHelp:" target="-1" id="360"/>
+                                    <action selector="openWebsite:" target="375" id="360"/>
                                 </connections>
                             </menuItem>
                         </items>

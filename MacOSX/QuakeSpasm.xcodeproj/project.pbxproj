@@ -9,8 +9,7 @@
 /* Begin PBXBuildFile section */
 		6348AF9226EA46F500E036E2 /* snd_xmp.c in Sources */ = {isa = PBXBuildFile; fileRef = 6348AF8F26EA46F500E036E2 /* snd_xmp.c */; };
 		63D6EB3623A255900047028C /* snd_mp3tag.c in Sources */ = {isa = PBXBuildFile; fileRef = 63D6EB3423A255900047028C /* snd_mp3tag.c */; };
-		664D988A19CF6B78000D395C /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 089C165CFE840E0CC02AAC07 /* InfoPlist.strings */; };
-		664D988B19CF6B78000D395C /* Launcher.nib in Resources */ = {isa = PBXBuildFile; fileRef = 48B9E7860D340B1E0001CACF /* Launcher.nib */; };
+		664D988B19CF6B78000D395C /* Launcher.xib in Resources */ = {isa = PBXBuildFile; fileRef = 48B9E7860D340B1E0001CACF /* Launcher.xib */; };
 		664D988C19CF6B78000D395C /* QuakeSpasm.icns in Resources */ = {isa = PBXBuildFile; fileRef = 484AA4B30D3FF6C0005D917A /* QuakeSpasm.icns */; };
 		664D988E19CF6B78000D395C /* SDLMain.m in Sources */ = {isa = PBXBuildFile; fileRef = 002F3A2C09D0888800EBEB88 /* SDLMain.m */; };
 		664D988F19CF6B78000D395C /* chase.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78100D2EEA5400CB2E4C /* chase.c */; };
@@ -201,11 +200,9 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXFileReference section */
-		002F39F909D0881F00EBEB88 /* SDL.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = SDL.framework; sourceTree = SOURCE_ROOT; };
 		002F3A2B09D0888800EBEB88 /* SDLMain.h */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.c.h; path = SDLMain.h; sourceTree = "<group>"; };
 		002F3A2C09D0888800EBEB88 /* SDLMain.m */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.c.objc; path = SDLMain.m; sourceTree = "<group>"; };
 		002F3C0009D093BD00EBEB88 /* OpenGL.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = OpenGL.framework; path = /System/Library/Frameworks/OpenGL.framework; sourceTree = "<absolute>"; };
-		089C165DFE840E0CC02AAC07 /* English */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.strings; name = English; path = English.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		1058C7A1FEA54F0111CA2CBB /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = /System/Library/Frameworks/Cocoa.framework; sourceTree = "<absolute>"; };
 		29B97324FDCFA39411CA2CEA /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = /System/Library/Frameworks/AppKit.framework; sourceTree = "<absolute>"; };
 		29B97325FDCFA39411CA2CEA /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = /System/Library/Frameworks/Foundation.framework; sourceTree = "<absolute>"; };
@@ -339,7 +336,7 @@
 		48A7C1F914AA34940011B754 /* strl_fn.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = strl_fn.h; path = ../Quake/strl_fn.h; sourceTree = "<group>"; };
 		48A7C1FA14AA34940011B754 /* strlcat.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = strlcat.c; path = ../Quake/strlcat.c; sourceTree = "<group>"; };
 		48A7C1FB14AA34940011B754 /* strlcpy.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = strlcpy.c; path = ../Quake/strlcpy.c; sourceTree = "<group>"; };
-		48B9E7870D340B1E0001CACF /* English */ = {isa = PBXFileReference; lastKnownFileType = wrapper.nib; name = English; path = English.lproj/Launcher.nib; sourceTree = "<group>"; };
+		48B9E7860D340B1E0001CACF /* Launcher.xib */ = {isa = PBXFileReference; lastKnownFileType = file.xib; path = Base.lproj/Launcher.xib; sourceTree = "<group>"; };
 		48B9E7A50D340BEA0001CACF /* AppController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = AppController.h; sourceTree = "<group>"; };
 		48B9E7A60D340BEA0001CACF /* AppController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = AppController.m; sourceTree = "<group>"; };
 		48B9E7BE0D340EA80001CACF /* SDLApplication.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SDLApplication.h; sourceTree = "<group>"; };
@@ -365,7 +362,6 @@
 		6348AF9026EA46F500E036E2 /* snd_xmp.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = snd_xmp.h; path = ../Quake/snd_xmp.h; sourceTree = SOURCE_ROOT; };
 		63D6EB3423A255900047028C /* snd_mp3tag.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = snd_mp3tag.c; path = ../Quake/snd_mp3tag.c; sourceTree = SOURCE_ROOT; };
 		664D98F919CF6B78000D395C /* QSS-M.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "QSS-M.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		664D98FB19CF6B78000D395C /* Info copy.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info copy.plist"; sourceTree = "<group>"; };
 		664D990519CF6E16000D395C /* SDL2.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = SDL2.framework; sourceTree = SOURCE_ROOT; };
 		668A010E277D0BD6009D9427 /* pr_ext.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = pr_ext.c; path = ../Quake/pr_ext.c; sourceTree = "<group>"; };
 		668A0111277D0BE8009D9427 /* mdfour.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = mdfour.c; path = ../Quake/mdfour.c; sourceTree = "<group>"; };
@@ -464,7 +460,6 @@
 			children = (
 				488EF23614B83A370021DD41 /* IOKit.framework */,
 				664D990519CF6E16000D395C /* SDL2.framework */,
-				002F39F909D0881F00EBEB88 /* SDL.framework */,
 				1058C7A1FEA54F0111CA2CBB /* Cocoa.framework */,
 				002F3C0009D093BD00EBEB88 /* OpenGL.framework */,
 			);
@@ -519,12 +514,11 @@
 			isa = PBXGroup;
 			children = (
 				484AA4B30D3FF6C0005D917A /* QuakeSpasm.icns */,
-				48B9E7860D340B1E0001CACF /* Launcher.nib */,
+				48B9E7860D340B1E0001CACF /* Launcher.xib */,
 				8D1107310486CEB800E47090 /* Info.plist */,
-				089C165CFE840E0CC02AAC07 /* InfoPlist.strings */,
-				664D98FB19CF6B78000D395C /* Info copy.plist */,
 			);
 			name = Resources;
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		29B97323FDCFA39411CA2CEA /* Frameworks */ = {
@@ -549,20 +543,44 @@
 		48243B060D33ED0A00C29F8F /* MacOSX */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D40102030405060708 /* Sources */,
+			);
+			name = MacOSX;
+			sourceTree = "<group>";
+		};
+		A1B2C3D40102030405060708 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D40102030405060709 /* Launcher */,
+				A1B2C3D4010203040506070A /* SDL */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		A1B2C3D40102030405060709 /* Launcher */ = {
+			isa = PBXGroup;
+			children = (
 				48B9E7A50D340BEA0001CACF /* AppController.h */,
 				48B9E7A60D340BEA0001CACF /* AppController.m */,
+				48C85E390D3AD10E00797678 /* QuakeArgument.h */,
+				48C85E3A0D3AD10E00797678 /* QuakeArgument.m */,
 				48FE58590D3A82C8006BB491 /* QuakeArguments.h */,
 				48FE585A0D3A82C8006BB491 /* QuakeArguments.m */,
 				489D8D2D0D3A630D00AA4471 /* ScreenInfo.h */,
 				489D8D2E0D3A630D00AA4471 /* ScreenInfo.m */,
+			);
+			path = Launcher;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4010203040506070A /* SDL */ = {
+			isa = PBXGroup;
+			children = (
 				48B9E7BE0D340EA80001CACF /* SDLApplication.h */,
 				48B9E7BF0D340EA80001CACF /* SDLApplication.m */,
 				002F3A2B09D0888800EBEB88 /* SDLMain.h */,
 				002F3A2C09D0888800EBEB88 /* SDLMain.m */,
-				48C85E390D3AD10E00797678 /* QuakeArgument.h */,
-				48C85E3A0D3AD10E00797678 /* QuakeArgument.m */,
 			);
-			name = MacOSX;
+			path = SDL;
 			sourceTree = "<group>";
 		};
 		483A77D80D2EE8C500CB2E4C /* Quake */ = {
@@ -881,6 +899,7 @@
 			developmentRegion = English;
 			hasScannedForEncodings = 1;
 			knownRegions = (
+				Base,
 				English,
 				Japanese,
 				French,
@@ -900,8 +919,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				664D988A19CF6B78000D395C /* InfoPlist.strings in Resources */,
-				664D988B19CF6B78000D395C /* Launcher.nib in Resources */,
+				664D988B19CF6B78000D395C /* Launcher.xib in Resources */,
 				664D988C19CF6B78000D395C /* QuakeSpasm.icns in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1020,25 +1038,6 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
-/* Begin PBXVariantGroup section */
-		089C165CFE840E0CC02AAC07 /* InfoPlist.strings */ = {
-			isa = PBXVariantGroup;
-			children = (
-				089C165DFE840E0CC02AAC07 /* English */,
-			);
-			name = InfoPlist.strings;
-			sourceTree = "<group>";
-		};
-		48B9E7860D340B1E0001CACF /* Launcher.nib */ = {
-			isa = PBXVariantGroup;
-			children = (
-				48B9E7870D340B1E0001CACF /* English */,
-			);
-			name = Launcher.nib;
-			sourceTree = "<group>";
-		};
-/* End PBXVariantGroup section */
-
 /* Begin XCBuildConfiguration section */
 		664D98F719CF6B78000D395C /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -1079,7 +1078,7 @@
 					"vcpkg/installed/arm64-osx-11/include/opus",
 					"$(HEADER_SEARCH_PATHS)",
 				);
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = Resources/Info.plist;
 				INSTALL_PATH = "$(HOME)/Applications";
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1151,7 +1150,7 @@
 					"vcpkg/installed/arm64-osx-11/include/opus",
 					"$(HEADER_SEARCH_PATHS)",
 				);
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = Resources/Info.plist;
 				INSTALL_PATH = "$(HOME)/Applications";
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
