@@ -3142,6 +3142,7 @@ static void CompleteDemo_ClearList(filelist_item_t **list)
 	}
 }
 
+#ifndef _WIN32
 static void CompleteDemo_FormatDate(time_t mtime, char *out, size_t outlen)
 {
 	struct tm *tm;
@@ -3163,6 +3164,7 @@ static void CompleteDemo_FormatDate(time_t mtime, char *out, size_t outlen)
 		tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
 		tm->tm_hour, tm->tm_min, tm->tm_sec);
 }
+#endif
 
 static const char *CompleteDemo_StripDemosPrefix(const char *name)
 {
