@@ -23,44 +23,46 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #import "QuakeArguments.h"
 
 extern NSString *FQPrefCommandLineKey;
-extern NSString *FQPrefFullscreenKey;
-extern NSString *FQPrefScreenModeKey;
 
-@interface AppController : NSObject {
+@interface AppController : NSObject <NSTextFieldDelegate> {
     IBOutlet NSWindow *launcherWindow;
-    IBOutlet NSTextField *paramTextField;
-    IBOutlet NSPopUpButton *screenModePopUp;
-    IBOutlet NSButton *fullscreenCheckBox;
-    NSTextField *screenModeLabel;
-    NSButton *rawMouseInputButton;
+
+    NSTextField *launcherTitleLabel;
+    NSTextField *launcherSubtitleLabel;
+    NSView *launchOptionsCard;
+    NSTextField *launchOptionsHeaderLabel;
+    NSView *settingsCard;
+    NSTextField *argumentTextField;
+    NSTextField *argumentCompletionGhostLabel;
+    NSButton *addArgumentButton;
+    NSMenu *presetArgumentsMenu;
+    NSView *chipsContainer;
+    NSMutableArray *argumentChips;
+    BOOL suppressArgumentTextSync;
+    NSTextField *helperLabel;
+    NSControl *rawMouseSwitch;
+    NSButton *cancelButton;
+    NSButton *launchButton;
+
     NSWindow *rawMouseOverlayWindow;
     NSTextField *rawMouseOverlayArrowField;
     NSTextField *rawMouseOverlayTitleField;
     NSView *rawMouseOverlayDragSourceView;
     NSTimer *rawMouseOverlayTimer;
+    NSTimer *rawMouseStartupRefreshTimer;
     id rawMouseActivationObserver;
-    NSRect screenModeLabelBaseFrame;
-    NSRect screenModePopUpBaseFrame;
-    NSRect fullscreenCheckBoxBaseFrame;
-    BOOL rawMousePermissionLayoutInitialized;
     BOOL rawMouseOverlayPresented;
     BOOL rawMouseDragCompleted;
+    BOOL rawMousePermissionPending;
 
-    NSTextField *launcherTitleLabel;
-    NSPopUpButton *commandOptionPopUp;
-
-    NSMutableArray *screenModes;
     QuakeArguments *arguments;
 }
 
-- (IBAction)changeScreenMode:(id)sender;
 - (IBAction)launchQuake:(id)sender;
 - (IBAction)cancel:(id)sender;
 - (IBAction)showAboutPanel:(id)sender;
-- (IBAction)addCommandLineOption:(id)sender;
+- (IBAction)openQuakeFolder:(id)sender;
 - (IBAction)openGithub:(id)sender;
 - (IBAction)openWebsite:(id)sender;
-
-- (NSArray *)screenModes;
 
 @end

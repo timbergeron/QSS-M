@@ -35,6 +35,8 @@
 	</dict>
 	<key>NSMainNibFile</key>
 	<string>Launcher</string>
+	<key>NSInputMonitoringUsageDescription</key>
+	<string>QSS-M uses Input Monitoring to read raw mouse movement for responsive in-game aiming.</string>
 	<key>NSPrincipalClass</key>
 	<string>SDLApplication</string>
 </dict>

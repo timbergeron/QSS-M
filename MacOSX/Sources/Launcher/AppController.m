@@ -18,8 +18,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 #import "AppController.h"
-#import "ScreenInfo.h"
 #import <ApplicationServices/ApplicationServices.h>
+#import <IOKit/hid/IOHIDLib.h>
+#import <IOKit/hid/IOHIDUsageTables.h>
 #import <IOKit/hidsystem/IOHIDLib.h>
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
 #if defined(USE_SDL2)
@@ -33,8 +34,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #import "SDLMain.h"
 
 NSString *FQPrefCommandLineKey = @"CommandLine";
-NSString *FQPrefFullscreenKey = @"Fullscreen";
-NSString *FQPrefScreenModeKey = @"ScreenMode";
+static NSString *QSSPrefRawMouseInputEnabledKey = @"RawMouseInputEnabled";
+
+#ifndef MAC_OS_X_VERSION_10_13
+#define NSControlStateValueOff NSOffState
+#define NSControlStateValueOn NSOnState
+#endif
 
 typedef struct {
     CGRect frame;
@@ -44,6 +49,193 @@ typedef struct {
 
 static const CGFloat QSSRawMouseOverlayWidth = 530.0f;
 static const CGFloat QSSRawMouseOverlayHeight = 109.0f;
+static const CGFloat QSSLauncherWindowWidth = 580.0f;
+static const CGFloat QSSLauncherWindowHeight = 460.0f;
+static const CGFloat QSSLauncherCardInset = 24.0f;
+static const CGFloat QSSChipHeight = 24.0f;
+static const CGFloat QSSLaunchOptionsBaseHeight = 112.0f;
+static const CGFloat QSSSettingsCardHeight = 102.0f;
+static const CGFloat QSSRawMouseSwitchRightInsetExtra = 8.0f;
+
+typedef struct {
+    NSString *title;
+    NSString *insert;
+} QSSPresetArgumentEntry;
+
+static QSSPresetArgumentEntry QSSPresetArgumentEntries[] = {
+    { @"-condebug (log console to file)", @"-condebug" },
+    { @"-safe (disable optional subsystems)", @"-safe" },
+    { @"-nohome (ignore ~/.quakespasm)", @"-nohome" },
+    { @"-fitz (FitzQuake emulation)", @"-fitz" },
+    { @"-qmenu (classic menu)", @"-qmenu" },
+    { nil, nil },
+    { @"-game <gamedir>", @"-game " },
+    { @"-basegame <gamedir>", @"-basegame " },
+    { @"-basedir <path>", @"-basedir " },
+    { @"-rogue (Dissolution of Eternity)", @"-rogue" },
+    { @"-hipnotic (Scourge of Armagon)", @"-hipnotic" },
+    { @"-quoth", @"-quoth" },
+    { @"-nowildpaks (disable wildcard pak loading)", @"-nowildpaks" },
+    { nil, nil },
+    { @"-heapsize <kb> (engine heap)", @"-heapsize " },
+    { @"-mem <mb> (engine heap)", @"-mem " },
+    { @"-zone <kb>", @"-zone " },
+    { @"-minmemory", @"-minmemory" },
+    { nil, nil },
+    { @"-width <pixels>", @"-width " },
+    { @"-height <pixels>", @"-height " },
+    { @"-bpp <bits>", @"-bpp " },
+    { @"-refreshrate <hz>", @"-refreshrate " },
+    { @"-fsaa <samples>", @"-fsaa " },
+    { @"-window (windowed)", @"-window" },
+    { @"-w (windowed alias)", @"-w" },
+    { @"-fullscreen", @"-fullscreen" },
+    { @"-f (fullscreen alias)", @"-f" },
+    { @"-novbo (disable VBOs)", @"-novbo" },
+    { @"-nomtex (disable multitexture)", @"-nomtex" },
+    { @"-nocombine (disable combine)", @"-nocombine" },
+    { @"-noadd (disable additive blends)", @"-noadd" },
+    { @"-notexturenpot (no NPOT textures)", @"-notexturenpot" },
+    { @"-noglsl (disable GLSL)", @"-noglsl" },
+    { @"-noglslgamma (disable GLSL gamma)", @"-noglslgamma" },
+    { @"-noglslalias (disable GLSL alias)", @"-noglslalias" },
+    { @"-nopackedpixels", @"-nopackedpixels" },
+    { @"-nowarpmipmaps", @"-nowarpmipmaps" },
+    { @"-current (use current display mode)", @"-current" },
+    { @"-particles <count>", @"-particles " },
+    { nil, nil },
+    { @"-nosound (disable sound)", @"-nosound" },
+    { @"-noextmusic (disable external music)", @"-noextmusic" },
+    { @"-sndspeed <hz>", @"-sndspeed " },
+    { @"-mixspeed <hz>", @"-mixspeed " },
+    { @"-nocdaudio (disable CD audio)", @"-nocdaudio" },
+    { nil, nil },
+    { @"-nojoy (disable joystick)", @"-nojoy" },
+    { @"-nomouse (disable mouse)", @"-nomouse" },
+    { nil, nil },
+    { @"-dedicated (dedicated server)", @"-dedicated" },
+    { @"-listen (listen server)", @"-listen" },
+    { @"-protocol <15|666|999>", @"-protocol " },
+    { @"-port <port>", @"-port " },
+    { @"-udpport <port>", @"-udpport " },
+    { @"-ipxport <port>", @"-ipxport " },
+    { @"-ip <address>", @"-ip " },
+    { @"-ip6 <address>", @"-ip6 " },
+    { @"-nolan (disable LAN broadcast)", @"-nolan" },
+    { @"-noudp (disable UDP)", @"-noudp" },
+    { @"-noudp4 (disable IPv4 UDP)", @"-noudp4" },
+    { @"-noudp6 (disable IPv6 UDP)", @"-noudp6" },
+    { @"-noipx (disable IPX)", @"-noipx" },
+    { @"-useice (enable ICE networking)", @"-useice" },
+    { @"-noice (disable ICE networking)", @"-noice" },
+    { @"-privkey <file>", @"-privkey " },
+    { @"-pubkey <file>", @"-pubkey " },
+    { @"-certhost <host>", @"-certhost " },
+    { nil, nil },
+    { @"-consize <kb> (console buffer)", @"-consize " },
+    { nil, nil },
+    { @"-cddev <device>", @"-cddev " },
+    { nil, nil },
+    { @"+map <mapname>", @"+map " },
+    { @"+skill <0-3>", @"+skill " },
+    { @"+name <playername>", @"+name " },
+    { @"+connect <address>", @"+connect " },
+    { @"+exec <cfg>", @"+exec " },
+    { @"+developer 1", @"+developer 1" },
+};
+
+static NSString *QSSLaunchOptionsDefaultHelperText(void)
+{
+    return @"Type a switch, then Tab to complete. Blank launches normally.";
+}
+
+static NSColor *QSSResolvedSystemColor(NSColor *color, NSWindow *window, NSColor *fallback)
+{
+    NSColor *resolved;
+
+    if (!color)
+        return fallback;
+
+    if (@available(macOS 10.14, *)) {
+        NSAppearance *appearance = window ? [window effectiveAppearance] : [NSAppearance currentAppearance];
+        if (!appearance)
+            appearance = [NSApp appearance];
+        if (appearance) {
+            __block NSColor *resolvedInAppearance = nil;
+            if (@available(macOS 11.0, *)) {
+                [appearance performAsCurrentDrawingAppearance:^{
+                    resolvedInAppearance = [[color colorUsingColorSpace:[NSColorSpace deviceRGBColorSpace]] retain];
+                }];
+            } else {
+                NSAppearance *previousAppearance = [NSAppearance currentAppearance];
+                [NSAppearance setCurrentAppearance:appearance];
+                resolvedInAppearance = [[color colorUsingColorSpace:[NSColorSpace deviceRGBColorSpace]] retain];
+                [NSAppearance setCurrentAppearance:previousAppearance];
+            }
+            if (resolvedInAppearance)
+                return [resolvedInAppearance autorelease];
+        }
+    }
+
+    resolved = [color colorUsingColorSpace:[NSColorSpace deviceRGBColorSpace]];
+    return resolved ? resolved : fallback;
+}
+
+static NSColor *QSSSystemColorWithAlpha(NSColor *color, NSWindow *window, NSColor *fallback, CGFloat alpha)
+{
+    NSColor *resolved = QSSResolvedSystemColor(color, window, fallback);
+    return [resolved colorWithAlphaComponent:alpha];
+}
+
+static BOOL QSSWindowUsesDarkAppearance(NSWindow *window)
+{
+    if (@available(macOS 10.14, *)) {
+        NSAppearance *appearance = window ? [window effectiveAppearance] : [NSAppearance currentAppearance];
+        NSString *match;
+
+        if (!appearance)
+            appearance = [NSApp appearance];
+        if (!appearance)
+            return NO;
+
+        match = [appearance bestMatchFromAppearancesWithNames:
+                 @[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]];
+        return [match isEqualToString:NSAppearanceNameDarkAqua];
+    }
+
+    return NO;
+}
+
+static NSColor *QSSSeparatorColorForWindow(NSWindow *window)
+{
+    if (QSSWindowUsesDarkAppearance(window))
+        return [NSColor colorWithCalibratedWhite:0.70f alpha:0.12f];
+
+    return [NSColor colorWithCalibratedWhite:0.0f alpha:0.14f];
+}
+
+static NSColor *QSSLauncherWindowBackgroundColorForWindow(NSWindow *window)
+{
+    return QSSSystemColorWithAlpha([NSColor windowBackgroundColor], window,
+        [NSColor colorWithCalibratedWhite:0.94f alpha:1.0f], 0.98f);
+}
+
+static NSColor *QSSLauncherSurfaceColorForWindow(NSWindow *window, CGFloat alpha)
+{
+    return QSSSystemColorWithAlpha([NSColor controlBackgroundColor], window,
+        [NSColor colorWithCalibratedWhite:1.0f alpha:1.0f], alpha);
+}
+
+static NSColor *QSSLauncherTextInputColorForWindow(NSWindow *window, CGFloat alpha)
+{
+    return QSSSystemColorWithAlpha([NSColor textBackgroundColor], window,
+        [NSColor colorWithCalibratedWhite:1.0f alpha:1.0f], alpha);
+}
+
+static NSColor *QSSAboutLinkColor(void)
+{
+    return [NSColor colorWithSRGBRed:139.0f/255.0f green:95.0f/255.0f blue:71.0f/255.0f alpha:1.0f];
+}
 
 static BOOL QSSSupportsInputMonitoring(void)
 {
@@ -59,10 +251,74 @@ static IOHIDAccessType QSSInputMonitoringAccessType(void)
     return kIOHIDAccessTypeGranted;
 }
 
+static BOOL QSSCanOpenHIDMouseInput(void)
+{
+    IOHIDManagerRef manager = NULL;
+    CFMutableDictionaryRef mice = NULL;
+    CFNumberRef pageRef = NULL;
+    CFNumberRef usageRef = NULL;
+    UInt32 page = kHIDPage_GenericDesktop;
+    UInt32 usage = kHIDUsage_GD_Mouse;
+    IOReturn ret;
+    BOOL granted = NO;
+
+    if (!QSSSupportsInputMonitoring())
+        return YES;
+
+    manager = IOHIDManagerCreate(kCFAllocatorSystemDefault, kIOHIDOptionsTypeNone);
+    if (!manager)
+        goto cleanup;
+
+    mice = CFDictionaryCreateMutable(kCFAllocatorSystemDefault, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (!mice)
+        goto cleanup;
+
+    pageRef = CFNumberCreate(kCFAllocatorSystemDefault, kCFNumberIntType, &page);
+    usageRef = CFNumberCreate(kCFAllocatorSystemDefault, kCFNumberIntType, &usage);
+    if (!pageRef || !usageRef)
+        goto cleanup;
+
+    CFDictionarySetValue(mice, CFSTR(kIOHIDDeviceUsagePageKey), pageRef);
+    CFDictionarySetValue(mice, CFSTR(kIOHIDDeviceUsageKey), usageRef);
+    IOHIDManagerSetDeviceMatching(manager, mice);
+
+    ret = IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone);
+    granted = (ret == kIOReturnSuccess);
+    if (granted)
+        IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
+
+cleanup:
+    if (pageRef)
+        CFRelease(pageRef);
+    if (usageRef)
+        CFRelease(usageRef);
+    if (mice)
+        CFRelease(mice);
+    if (manager)
+        CFRelease(manager);
+
+    return granted;
+}
+
 static BOOL QSSInputMonitoringIsGranted(void)
 {
-    return !QSSSupportsInputMonitoring() ||
-        QSSInputMonitoringAccessType() == kIOHIDAccessTypeGranted;
+    if (!QSSSupportsInputMonitoring())
+        return YES;
+
+    if (QSSInputMonitoringAccessType() == kIOHIDAccessTypeGranted)
+        return YES;
+
+    if (@available(macOS 10.15, *))
+    {
+        if (CGPreflightListenEventAccess())
+            return YES;
+    }
+
+    if (QSSCanOpenHIDMouseInput())
+        return YES;
+
+    return NO;
 }
 
 static NSURL *QSSInputMonitoringSettingsURL(void)
@@ -75,6 +331,20 @@ static NSURL *QSSInputMonitoringSettingsURL(void)
         settingsPath = @"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
 
     return [NSURL URLWithString:settingsPath];
+}
+
+static BOOL QSSOpenInputMonitoringSettings(void)
+{
+    NSURL *settingsURL = QSSInputMonitoringSettingsURL();
+
+    if (settingsURL && [[NSWorkspace sharedWorkspace] openURL:settingsURL])
+        return YES;
+
+    settingsURL = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"];
+    if (settingsURL && [[NSWorkspace sharedWorkspace] openURL:settingsURL])
+        return YES;
+
+    return NO;
 }
 
 static BOOL QSSIsSystemSettingsOwnerName(NSString *ownerName)
@@ -297,7 +567,7 @@ static NSImage *QSSHostAppIcon(void)
     [rowView setWantsLayer:YES];
     [[rowView layer] setCornerRadius:7.0f];
     [[rowView layer] setBorderWidth:1.0f];
-    [[rowView layer] setBorderColor:[[NSColor disabledControlTextColor] colorWithAlphaComponent:0.22f].CGColor];
+    [[rowView layer] setBorderColor:[QSSSeparatorColorForWindow(nil) CGColor]];
     [[rowView layer] setBackgroundColor:[[NSColor controlBackgroundColor] colorWithAlphaComponent:0.96f].CGColor];
     [self addSubview:rowView];
 
@@ -404,81 +674,279 @@ static NSImage *QSSHostAppIcon(void)
 
 @end
 
+@interface QSSCenteredTextFieldCell : NSTextFieldCell
+@end
+
+@implementation QSSCenteredTextFieldCell
+
+- (NSRect)qssCenteredTextRectForBounds:(NSRect)rect
+{
+    NSRect centeredRect = [super drawingRectForBounds:rect];
+    NSFont *font = [self font];
+    CGFloat textHeight;
+    CGFloat delta;
+    CGFloat horizontalInset = 8.0f;
+
+    if (!font)
+        font = [NSFont systemFontOfSize:[NSFont systemFontSize]];
+
+    if (NSWidth(centeredRect) > horizontalInset * 2.0f) {
+        centeredRect.origin.x += horizontalInset;
+        centeredRect.size.width -= horizontalInset * 2.0f;
+    }
+
+    textHeight = ceilf([font ascender] - [font descender]);
+    delta = NSHeight(centeredRect) - textHeight;
+
+    if (delta > 0.0f)
+        centeredRect.origin.y += floorf(delta / 2.0f) - 1.0f;
+
+    return centeredRect;
+}
+
+- (NSRect)drawingRectForBounds:(NSRect)rect
+{
+    return [self qssCenteredTextRectForBounds:rect];
+}
+
+- (void)editWithFrame:(NSRect)rect
+               inView:(NSView *)view
+               editor:(NSText *)editor
+             delegate:(id)delegate
+                event:(NSEvent *)event
+{
+    [super editWithFrame:[self qssCenteredTextRectForBounds:rect]
+                  inView:view
+                  editor:editor
+                delegate:delegate
+                   event:event];
+}
+
+- (void)selectWithFrame:(NSRect)rect
+                 inView:(NSView *)view
+                 editor:(NSText *)editor
+               delegate:(id)delegate
+                  start:(NSInteger)start
+                 length:(NSInteger)length
+{
+    [super selectWithFrame:[self qssCenteredTextRectForBounds:rect]
+                    inView:view
+                    editor:editor
+                  delegate:delegate
+                     start:start
+                    length:length];
+}
+
+@end
+
+@interface QSSPassthroughTextField : NSTextField
+@end
+
+@implementation QSSPassthroughTextField
+
+- (NSView *)hitTest:(NSPoint)point
+{
+    (void)point;
+    return nil;
+}
+
+@end
+
+@interface QSSAppearanceView : NSView {
+    id __unsafe_unretained owner;
+    SEL appearanceAction;
+}
+
+- (void)setAppearanceOwner:(id)newOwner action:(SEL)newAction;
+
+@end
+
+@implementation QSSAppearanceView
+
+- (void)setAppearanceOwner:(id)newOwner action:(SEL)newAction
+{
+    owner = newOwner;
+    appearanceAction = newAction;
+}
+
+- (void)viewDidChangeEffectiveAppearance
+{
+    void (*appearanceIMP)(id, SEL, id);
+
+    if (@available(macOS 10.14, *))
+        [super viewDidChangeEffectiveAppearance];
+
+    if (owner && appearanceAction && [owner respondsToSelector:appearanceAction]) {
+        appearanceIMP = (void (*)(id, SEL, id))[owner methodForSelector:appearanceAction];
+        appearanceIMP(owner, appearanceAction, self);
+    }
+}
+
+@end
+
+@interface QSSArgumentChipView : NSView {
+    NSString *argumentString;
+    NSTextField *label;
+    NSButton *closeButton;
+    id __unsafe_unretained owner;
+    SEL removeAction;
+}
+
+- (id)initWithArgument:(NSString *)arg owner:(id)ownerObject removeAction:(SEL)action;
+- (NSString *)argumentString;
+- (void)refreshAppearance;
+- (void)sizeChipToFit;
+
+@end
+
+@implementation QSSArgumentChipView
+
+- (id)initWithArgument:(NSString *)arg owner:(id)ownerObject removeAction:(SEL)action
+{
+    self = [super initWithFrame:NSMakeRect(0.0f, 0.0f, 80.0f, QSSChipHeight)];
+    if (!self)
+        return nil;
+
+    argumentString = [arg copy];
+    owner = ownerObject;
+    removeAction = action;
+
+    [self setWantsLayer:YES];
+    [[self layer] setCornerRadius:QSSChipHeight / 2.0f];
+    [[self layer] setBorderWidth:0.5f];
+
+    label = [[NSTextField alloc] initWithFrame:NSMakeRect(10.0f, 0.0f, 60.0f, QSSChipHeight)];
+    [label setBezeled:NO];
+    [label setDrawsBackground:NO];
+    [label setEditable:NO];
+    [label setSelectable:NO];
+    [label setFont:[NSFont systemFontOfSize:11.5f weight:NSFontWeightMedium]];
+    [label setTextColor:[NSColor labelColor]];
+    [label setStringValue:argumentString ? argumentString : @""];
+    [self addSubview:label];
+    [label release];
+
+    closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(0.0f, 0.0f, 18.0f, 18.0f)];
+    [closeButton setBordered:NO];
+    [closeButton setTitle:@"×"];
+    [closeButton setFont:[NSFont systemFontOfSize:14.0f weight:NSFontWeightSemibold]];
+    [closeButton setButtonType:NSButtonTypeMomentaryChange];
+    [closeButton setTarget:self];
+    [closeButton setAction:@selector(closeButtonPressed:)];
+    [[closeButton cell] setHighlightsBy:NSContentsCellMask];
+    [self addSubview:closeButton];
+    [closeButton release];
+
+    [self sizeChipToFit];
+    [self refreshAppearance];
+    return self;
+}
+
+- (NSString *)argumentString
+{
+    return argumentString;
+}
+
+- (void)refreshAppearance
+{
+    NSWindow *window = [self window];
+
+    [[self layer] setBackgroundColor:[QSSLauncherSurfaceColorForWindow(window, 0.92f) CGColor]];
+    [[self layer] setBorderColor:[QSSSeparatorColorForWindow(window) CGColor]];
+    [label setTextColor:[NSColor labelColor]];
+}
+
+- (void)viewDidMoveToWindow
+{
+    [super viewDidMoveToWindow];
+    [self refreshAppearance];
+}
+
+- (void)viewDidChangeEffectiveAppearance
+{
+    if (@available(macOS 10.14, *))
+        [super viewDidChangeEffectiveAppearance];
+    [self refreshAppearance];
+}
+
+- (void)sizeChipToFit
+{
+    NSRect labelFrame;
+    NSRect closeFrame;
+    NSRect selfFrame;
+
+    [label sizeToFit];
+    labelFrame = [label frame];
+    labelFrame.origin.x = 10.0f;
+    labelFrame.origin.y = (QSSChipHeight - NSHeight(labelFrame)) / 2.0f;
+    [label setFrame:labelFrame];
+
+    closeFrame.size.width = 18.0f;
+    closeFrame.size.height = 18.0f;
+    closeFrame.origin.x = NSMaxX(labelFrame) + 2.0f;
+    closeFrame.origin.y = (QSSChipHeight - NSHeight(closeFrame)) / 2.0f;
+    [closeButton setFrame:closeFrame];
+
+    selfFrame = [self frame];
+    selfFrame.size.width = NSMaxX(closeFrame) + 6.0f;
+    selfFrame.size.height = QSSChipHeight;
+    [self setFrame:selfFrame];
+}
+
+- (void)closeButtonPressed:(id)sender
+{
+    void (*removeIMP)(id, SEL, id);
+
+    (void)sender;
+    if (owner && removeAction && [owner respondsToSelector:removeAction])
+    {
+        removeIMP = (void (*)(id, SEL, id))[owner methodForSelector:removeAction];
+        removeIMP(owner, removeAction, self);
+    }
+}
+
+- (void)dealloc
+{
+    [argumentString release];
+    [super dealloc];
+}
+
+@end
+
+@interface AppController ()
+- (NSText *)activeArgumentFieldEditor;
+- (NSString *)currentArgumentText;
+- (void)hideArgumentCompletionGhost;
+- (void)updateArgumentCompletionGhostWithText:(NSString *)text
+                                   completion:(NSString *)completion
+                                   tokenRange:(NSRange)tokenRange;
+- (void)updateArgumentCompletionHint;
+- (void)launcherAppearanceDidChange:(id)sender;
+- (void)refreshLauncherAppearance;
+@end
+
 @implementation AppController
 
 +(void) initialize {
     NSMutableDictionary *defaults = [NSMutableDictionary dictionary];
-    
+
     [defaults setObject:@"" forKey:FQPrefCommandLineKey];
-    [defaults setObject:[NSNumber numberWithBool:YES] forKey:FQPrefFullscreenKey];
-    [defaults setObject:[NSNumber numberWithInt:0] forKey:FQPrefScreenModeKey];
-    
+    [defaults setObject:[NSNumber numberWithBool:NO] forKey:QSSPrefRawMouseInputEnabledKey];
+
     [[NSUserDefaults standardUserDefaults] registerDefaults:defaults];
 }
 
 - (id)init {
-    int i;
-#ifndef USE_SDL2
-    int j;
-    int flags;
-    int bpps[3] = {32, 24, 16};
-    SDL_PixelFormat format;
-    SDL_Rect **modes;
-#endif
-    ScreenInfo *info;
-
     self = [super init];
     if (!self)
         return nil;
 
-    screenModes = [[NSMutableArray alloc] init];
-    [screenModes addObject:@"Default or command line arguments"];
-
-    if (SDL_InitSubSystem(SDL_INIT_VIDEO) == -1)
-        return self;
-    
-#if defined(USE_SDL2)
-    {
-        const int sdlmodes = SDL_GetNumDisplayModes(0);
-        for (i = 0; i < sdlmodes; i++)
-        {
-            SDL_DisplayMode mode;
-            if (SDL_GetDisplayMode(0, i, &mode) == 0)
-            {
-                info = [[ScreenInfo alloc] initWithWidth:mode.w height:mode.h bpp:SDL_BITSPERPIXEL(mode.format)];
-                [screenModes addObject:info];
-                [info release];
-            }
-        }
-    }
-#else
-    flags = SDL_OPENGL | SDL_FULLSCREEN;
-    format.palette = NULL;
-    
-    for (i = 0; i < 3; i++) {
-        format.BitsPerPixel = bpps[i];
-        modes = SDL_ListModes(&format, flags);
-
-        if (modes == (SDL_Rect **)0 || modes == (SDL_Rect **)-1)
-            continue;
-
-        for (j = 0; modes[j]; j++) {
-            info = [[ScreenInfo alloc] initWithWidth:modes[j]->w height:modes[j]->h bpp:bpps[i]];
-            [screenModes addObject:info];
-            [info release];
-        }
-    }
-#endif
-
-    SDL_QuitSubSystem(SDL_INIT_VIDEO);
-    
     arguments = [[QuakeArguments alloc] initWithArguments:gArgv + 1 count:gArgc - 1];
+    argumentChips = [[NSMutableArray alloc] init];
     return self;
 }
 
-- (NSArray *)screenModes {
-    return screenModes;
-}
+#pragma mark - Command-line helpers
 
 - (NSString *)sanitizeCommandLine:(NSString *)args
 {
@@ -500,102 +968,63 @@ static NSImage *QSSHostAppIcon(void)
     return [kept componentsJoinedByString:@" "];
 }
 
-- (void)addOptionWithTitle:(NSString *)title
-                    insert:(NSString *)insertString
-                   enabled:(BOOL)enabled
+- (NSArray *)chipStringsFromCommandLine:(NSString *)line
 {
-    if (!commandOptionPopUp)
-        return;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    NSArray *tokens;
+    NSMutableArray *chips = [NSMutableArray array];
+    NSMutableString *current = nil;
 
-    NSMenu *menu = [commandOptionPopUp menu];
-    NSMenuItem *item = [[[NSMenuItem alloc] initWithTitle:title action:NULL keyEquivalent:@""] autorelease];
-    [item setEnabled:enabled];
-    if (insertString)
-        [item setRepresentedObject:insertString];
-    [menu addItem:item];
+    if (!line)
+        return chips;
+
+    tokens = [line componentsSeparatedByCharactersInSet:ws];
+    for (NSString *tok in tokens) {
+        unichar c;
+        if ([tok length] == 0)
+            continue;
+        c = [tok characterAtIndex:0];
+        if (c == '-' || c == '+') {
+            if (current)
+                [chips addObject:[[current copy] autorelease]];
+            current = [NSMutableString stringWithString:tok];
+        } else if (current) {
+            [current appendFormat:@" %@", tok];
+        } else {
+            current = [NSMutableString stringWithString:tok];
+        }
+    }
+    if (current)
+        [chips addObject:[[current copy] autorelease]];
+
+    return chips;
 }
 
-- (void)populateCommandLineOptionsMenu {
-    if (!commandOptionPopUp)
-        return;
-
-    NSMenu *menu = [commandOptionPopUp menu];
-    [menu removeAllItems];
-
-    // General / debug
-    [self addOptionWithTitle:@"-condebug (log console to file)" insert:@"-condebug" enabled:YES];
-    [self addOptionWithTitle:@"-nohome (ignore ~/.quakespasm)" insert:@"-nohome" enabled:YES];
-    [self addOptionWithTitle:@"-fitz (FitzQuake emulation)" insert:@"-fitz" enabled:YES];
-    [self addOptionWithTitle:@"-qmenu (classic menu)" insert:@"-qmenu" enabled:YES];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    // Memory
-    [self addOptionWithTitle:@"-heapsize <kb> (engine heap)" insert:@"-heapsize " enabled:YES];
-    [self addOptionWithTitle:@"-mem <mb> (engine heap)" insert:@"-mem " enabled:YES];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    // Video
-    [self addOptionWithTitle:@"-width <pixels>" insert:@"-width " enabled:YES];
-    [self addOptionWithTitle:@"-height <pixels>" insert:@"-height " enabled:YES];
-    [self addOptionWithTitle:@"-bpp <bits>" insert:@"-bpp " enabled:YES];
-    [self addOptionWithTitle:@"-refreshrate <hz>" insert:@"-refreshrate " enabled:YES];
-    [self addOptionWithTitle:@"-window (windowed)" insert:@"-window" enabled:YES];
-    [self addOptionWithTitle:@"-fullscreen (fullscreen)" insert:@"-fullscreen" enabled:YES];
-    [self addOptionWithTitle:@"-novbo (disable VBOs)" insert:@"-novbo" enabled:YES];
-    [self addOptionWithTitle:@"-nomtex (disable multitexture)" insert:@"-nomtex" enabled:YES];
-    [self addOptionWithTitle:@"-nocombine (disable combine)" insert:@"-nocombine" enabled:YES];
-    [self addOptionWithTitle:@"-noadd (disable additive blends)" insert:@"-noadd" enabled:YES];
-    [self addOptionWithTitle:@"-notexturenpot (no NPOT textures)" insert:@"-notexturenpot" enabled:YES];
-    [self addOptionWithTitle:@"-noglsl (disable GLSL)" insert:@"-noglsl" enabled:YES];
-    [self addOptionWithTitle:@"-noglslgamma (disable GLSL gamma)" insert:@"-noglslgamma" enabled:YES];
-    [self addOptionWithTitle:@"-noglslalias (disable GLSL alias)" insert:@"-noglslalias" enabled:YES];
-    [self addOptionWithTitle:@"-nowarpmipmaps" insert:@"-nowarpmipmaps" enabled:YES];
-    [self addOptionWithTitle:@"-current (use current display mode)" insert:@"-current" enabled:YES];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    // Audio
-    [self addOptionWithTitle:@"-nosound (disable sound)" insert:@"-nosound" enabled:YES];
-    [self addOptionWithTitle:@"-noextmusic (disable external music)" insert:@"-noextmusic" enabled:YES];
-    [self addOptionWithTitle:@"-sndspeed <hz>" insert:@"-sndspeed " enabled:YES];
-    [self addOptionWithTitle:@"-mixspeed <hz>" insert:@"-mixspeed " enabled:YES];
-    [self addOptionWithTitle:@"-nocdaudio (disable CD audio)" insert:@"-nocdaudio" enabled:YES];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    // Input
-    [self addOptionWithTitle:@"-nojoy (disable joystick)" insert:@"-nojoy" enabled:YES];
-    [self addOptionWithTitle:@"-nomouse (disable mouse)" insert:@"-nomouse" enabled:YES];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    // Network / server
-    [self addOptionWithTitle:@"-dedicated (dedicated server)" insert:@"-dedicated" enabled:YES];
-    [self addOptionWithTitle:@"-listen (listen server)" insert:@"-listen" enabled:YES];
-    [self addOptionWithTitle:@"-nolan (disable LAN broadcast)" insert:@"-nolan" enabled:YES];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    // Console
-    [self addOptionWithTitle:@"-consize <kb> (console buffer)" insert:@"-consize " enabled:YES];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    // CD / misc
-    [self addOptionWithTitle:@"-cddev <device>" insert:@"-cddev " enabled:YES];
-
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    // Startup commands (+console)
-    [self addOptionWithTitle:@"+map <mapname>" insert:@"+map " enabled:YES];
-    [self addOptionWithTitle:@"+skill <0-3>" insert:@"+skill " enabled:YES];
-    [self addOptionWithTitle:@"+name <playername>" insert:@"+name " enabled:YES];
-    [self addOptionWithTitle:@"+connect <address>" insert:@"+connect " enabled:YES];
-    [self addOptionWithTitle:@"+exec <cfg>" insert:@"+exec " enabled:YES];
-    [self addOptionWithTitle:@"+developer 1" insert:@"+developer 1" enabled:YES];
+- (NSString *)joinedArgumentString
+{
+    NSMutableArray *strings = [NSMutableArray arrayWithCapacity:[argumentChips count]];
+    for (QSSArgumentChipView *chip in argumentChips) {
+        NSString *s = [chip argumentString];
+        if (s && [s length] > 0)
+            [strings addObject:s];
+    }
+    return [strings componentsJoinedByString:@" "];
 }
+
+- (NSString *)effectiveCommandLineWithLaunchOptions:(NSString *)launchOptions
+{
+    NSString *initialArgs = [self sanitizeCommandLine:[arguments description]];
+    NSString *uiArgs = [self sanitizeCommandLine:launchOptions];
+
+    if ([initialArgs length] == 0)
+        return uiArgs ? uiArgs : @"";
+    if ([uiArgs length] == 0)
+        return initialArgs;
+
+    return [NSString stringWithFormat:@"%@ %@", initialArgs, uiArgs];
+}
+
+#pragma mark - Menu configuration
 
 - (void)configureAboutMenu {
     NSMenu *mainMenu = [NSApp mainMenu];
@@ -637,155 +1066,1199 @@ static NSImage *QSSHostAppIcon(void)
     }
 }
 
-- (void)configureQuitButtonInView:(NSView *)view {
-    NSEnumerator *enumerator = [[view subviews] objectEnumerator];
-    NSView *subview;
+- (void)configureFileMenu
+{
+    NSMenu *mainMenu = [NSApp mainMenu];
+    NSMenuItem *fileMenuItem;
+    NSMenu *fileMenu;
+    NSMenuItem *openFolderItem;
 
-    while ((subview = [enumerator nextObject])) {
-        if ([subview isKindOfClass:[NSButton class]]) {
-            NSButton *button = (NSButton *)subview;
-            if ([[button title] isEqualToString:@"Cancel"]) {
-                [button setTitle:@"Quit"];
-                [button setKeyEquivalent:@"q"];
-                [button setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
-                return;
-            }
-        }
-        [self configureQuitButtonInView:subview];
+    if (!mainMenu)
+        return;
+
+    fileMenuItem = [mainMenu itemWithTitle:@"File"];
+    if (!fileMenuItem) {
+        fileMenuItem = [[[NSMenuItem alloc] initWithTitle:@"File" action:NULL keyEquivalent:@""] autorelease];
+        [mainMenu insertItem:fileMenuItem atIndex:MIN(1, [mainMenu numberOfItems])];
+    }
+
+    fileMenu = [fileMenuItem submenu];
+    if (!fileMenu) {
+        fileMenu = [[[NSMenu alloc] initWithTitle:@"File"] autorelease];
+        [fileMenuItem setSubmenu:fileMenu];
+    }
+
+    [fileMenu removeAllItems];
+    openFolderItem = [[[NSMenuItem alloc] initWithTitle:@"Open Quake Folder"
+                                                 action:@selector(openQuakeFolder:)
+                                          keyEquivalent:@""] autorelease];
+    [openFolderItem setTarget:self];
+    [openFolderItem setEnabled:YES];
+    [fileMenu addItem:openFolderItem];
+}
+
+- (void)removeUnusedMenus
+{
+    NSMenu *mainMenu = [NSApp mainMenu];
+    NSArray *titles = @[ @"Format", @"View" ];
+
+    for (NSString *title in titles) {
+        NSMenuItem *item = [mainMenu itemWithTitle:title];
+        if (item)
+            [mainMenu removeItem:item];
     }
 }
 
-- (void)hideSettingsLabelInView:(NSView *)view {
-    NSArray *subviews = [view subviews];
-    for (NSView *subview in subviews) {
-        if ([subview isKindOfClass:[NSTextField class]]) {
-            NSTextField *textField = (NSTextField *)subview;
-            if ([[textField stringValue] isEqualToString:@"Settings"]) {
-                [textField setHidden:YES];
-            }
-        }
-        [self hideSettingsLabelInView:subview];
+#pragma mark - Launcher window layout
+
+- (NSView *)createCardWithFrame:(NSRect)frame
+{
+    NSView *card = [[[NSView alloc] initWithFrame:frame] autorelease];
+    [card setWantsLayer:YES];
+    [[card layer] setCornerRadius:16.0f];
+    [[card layer] setBorderWidth:1.0f];
+    [[card layer] setBackgroundColor:[QSSLauncherSurfaceColorForWindow(launcherWindow, 0.88f) CGColor]];
+    [[card layer] setBorderColor:[QSSSeparatorColorForWindow(launcherWindow) CGColor]];
+    return card;
+}
+
+- (NSTextField *)createStaticLabelWithText:(NSString *)text
+                                      font:(NSFont *)font
+                                     color:(NSColor *)color
+                                     frame:(NSRect)frame
+{
+    NSTextField *field = [[[NSTextField alloc] initWithFrame:frame] autorelease];
+    [field setBezeled:NO];
+    [field setDrawsBackground:NO];
+    [field setEditable:NO];
+    [field setSelectable:NO];
+    [field setFont:font];
+    [field setTextColor:color];
+    [field setStringValue:text ? text : @""];
+    return field;
+}
+
+- (void)styleTextInput:(NSTextField *)textField
+{
+    CALayer *layer;
+
+    if (!textField)
+        return;
+
+    [textField setCell:[[[QSSCenteredTextFieldCell alloc] initTextCell:@""] autorelease]];
+    [textField setBezeled:NO];
+    [textField setBordered:NO];
+    [textField setDrawsBackground:NO];
+    [textField setFocusRingType:NSFocusRingTypeNone];
+    [textField setTextColor:[NSColor labelColor]];
+    [textField setWantsLayer:YES];
+
+    layer = [textField layer];
+    [layer setCornerRadius:11.0f];
+    [layer setBorderWidth:1.0f];
+    [layer setBorderColor:[QSSSeparatorColorForWindow(launcherWindow) CGColor]];
+    [layer setBackgroundColor:[QSSLauncherTextInputColorForWindow(launcherWindow, 0.96f) CGColor]];
+}
+
+- (void)styleFilledButton:(NSButton *)button
+          backgroundColor:(NSColor *)backgroundColor
+               titleColor:(NSColor *)titleColor
+              borderColor:(NSColor *)borderColor
+             cornerRadius:(CGFloat)cornerRadius
+{
+    NSDictionary *attributes;
+    NSAttributedString *title;
+    CALayer *layer;
+
+    if (!button)
+        return;
+
+    attributes = @{
+        NSForegroundColorAttributeName: titleColor ? titleColor : [NSColor labelColor],
+        NSFontAttributeName: [NSFont systemFontOfSize:15.0f weight:NSFontWeightSemibold]
+    };
+    title = [[[NSAttributedString alloc] initWithString:[button title] attributes:attributes] autorelease];
+
+    [button setBordered:NO];
+    [button setButtonType:NSButtonTypeMomentaryChange];
+    [button setAttributedTitle:title];
+    [button setAttributedAlternateTitle:title];
+    [button setFocusRingType:NSFocusRingTypeNone];
+    [button setWantsLayer:YES];
+
+    layer = [button layer];
+    [layer setCornerRadius:cornerRadius];
+    [layer setBackgroundColor:[backgroundColor CGColor]];
+    [layer setBorderWidth:borderColor ? 1.0f : 0.0f];
+    if (borderColor)
+        [layer setBorderColor:[borderColor CGColor]];
+}
+
+- (NSControl *)createRawMouseSwitch
+{
+    if (@available(macOS 10.15, *)) {
+        NSSwitch *sw = [[[NSSwitch alloc] initWithFrame:NSMakeRect(0.0f, 0.0f, 38.0f, 22.0f)] autorelease];
+        [sw setTarget:self];
+        [sw setAction:@selector(rawMouseSwitchToggled:)];
+        return sw;
     }
+    NSButton *cb = [[[NSButton alloc] initWithFrame:NSMakeRect(0.0f, 0.0f, 18.0f, 18.0f)] autorelease];
+    [cb setButtonType:NSButtonTypeSwitch];
+    [cb setTitle:@""];
+    [cb setTarget:self];
+    [cb setAction:@selector(rawMouseSwitchToggled:)];
+    return cb;
 }
 
-- (void)configureQuitButton {
-    if (!launcherWindow)
-        return;
-
-    NSView *contentView = [launcherWindow contentView];
-    if (!contentView)
-        return;
-
-    [self configureQuitButtonInView:contentView];
+- (void)setRawMouseSwitchOn:(BOOL)on
+{
+    NSInteger state = on ? NSControlStateValueOn : NSControlStateValueOff;
+    if (@available(macOS 10.15, *)) {
+        if ([rawMouseSwitch isKindOfClass:[NSSwitch class]]) {
+            [(NSSwitch *)rawMouseSwitch setState:state];
+            return;
+        }
+    }
+    if ([rawMouseSwitch isKindOfClass:[NSButton class]])
+        [(NSButton *)rawMouseSwitch setState:state];
 }
 
-- (void)setupCommandLineOptionsUI {
-    if (!launcherWindow || !paramTextField || commandOptionPopUp)
-        return;
+- (BOOL)rawMouseSwitchIsOn
+{
+    if (@available(macOS 10.15, *)) {
+        if ([rawMouseSwitch isKindOfClass:[NSSwitch class]])
+            return [(NSSwitch *)rawMouseSwitch state] == NSControlStateValueOn;
+    }
+    if ([rawMouseSwitch isKindOfClass:[NSButton class]])
+        return [(NSButton *)rawMouseSwitch state] == NSControlStateValueOn;
+    return NO;
+}
 
-    NSView *parent = [paramTextField superview];
-    if (!parent)
-        return;
+- (void)refreshRawMouseSwitchState
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    BOOL granted = QSSInputMonitoringIsGranted();
+    BOOL remembered = [defaults boolForKey:QSSPrefRawMouseInputEnabledKey];
 
-    NSRect paramFrame = [paramTextField frame];
+    if (granted) {
+        rawMousePermissionPending = NO;
+        remembered = YES;
+        [defaults setBool:YES forKey:QSSPrefRawMouseInputEnabledKey];
+        [defaults synchronize];
+    }
 
-    // Layout: [TextField] [Label "Add"] [Popup]
-    CGFloat popupWidth = 24.0f;
-    CGFloat labelWidth = 30.0f;
+    [self setRawMouseSwitchOn:(granted || rawMousePermissionPending || remembered)];
+
+    if (granted)
+        [self stopRawMousePermissionAssistant];
+}
+
+- (void)refreshRawMouseSwitchStateFromTimer:(NSTimer *)timer
+{
+    (void)timer;
+    if (rawMouseStartupRefreshTimer)
+    {
+        [rawMouseStartupRefreshTimer release];
+        rawMouseStartupRefreshTimer = nil;
+    }
+    [self refreshRawMouseSwitchState];
+}
+
+- (void)scheduleRawMouseStartupRefresh
+{
+    if (rawMouseStartupRefreshTimer)
+    {
+        [rawMouseStartupRefreshTimer invalidate];
+        [rawMouseStartupRefreshTimer release];
+        rawMouseStartupRefreshTimer = nil;
+    }
+
+    rawMouseStartupRefreshTimer = [[NSTimer scheduledTimerWithTimeInterval:0.35f
+                                                                    target:self
+                                                                  selector:@selector(refreshRawMouseSwitchStateFromTimer:)
+                                                                  userInfo:nil
+                                                                   repeats:NO] retain];
+}
+
+- (void)buildLaunchOptionsCard
+{
+    CGFloat cardW = NSWidth([launchOptionsCard bounds]);
+    CGFloat cardH = NSHeight([launchOptionsCard bounds]);
+    CGFloat pad = 16.0f;
+    NSRect textFrame;
+    NSRect addFrame;
+
+    launchOptionsHeaderLabel = [self createStaticLabelWithText:@"Launch options"
+                                                          font:[NSFont systemFontOfSize:13.0f weight:NSFontWeightSemibold]
+                                                         color:[NSColor labelColor]
+                                                         frame:NSMakeRect(pad, cardH - pad - 18.0f, cardW - pad * 2.0f, 18.0f)];
+    [launchOptionsCard addSubview:launchOptionsHeaderLabel];
+
+    CGFloat rowY = cardH - pad - 18.0f - 14.0f - 28.0f;
+    CGFloat addWidth = 32.0f;
     CGFloat spacing = 8.0f;
 
-    // Shrink the text field to make room for the label + popup.
-    NSRect newParamFrame = paramFrame;
-    CGFloat minWidth = 120.0f;
-    CGFloat shrinkAmount = labelWidth + popupWidth + spacing * 2.0f;
-    if (newParamFrame.size.width > minWidth + shrinkAmount)
-        newParamFrame.size.width -= shrinkAmount;
-    else
-        newParamFrame.size.width = minWidth;
+    addFrame = NSMakeRect(cardW - pad - addWidth, rowY, addWidth, 28.0f);
+    textFrame = NSMakeRect(pad, rowY, NSMinX(addFrame) - spacing - pad, 28.0f);
 
-    [paramTextField setFrame:newParamFrame];
+    argumentTextField = [[NSTextField alloc] initWithFrame:textFrame];
+    [self styleTextInput:argumentTextField];
+    [argumentTextField setFont:[NSFont systemFontOfSize:13.0f]];
+    [argumentTextField setPlaceholderString:@"Example: -heapsize 256000 -game ctf"];
+    [argumentTextField setEditable:YES];
+    [argumentTextField setSelectable:YES];
+    [argumentTextField setTarget:self];
+    [argumentTextField setAction:@selector(argumentTextFieldEntered:)];
+    [argumentTextField setDelegate:self];
+    [launchOptionsCard addSubview:argumentTextField];
 
-    // "Add" Label
-    NSRect labelFrame;
-    labelFrame.size.width = labelWidth;
-    labelFrame.size.height = 17.0f; // Standard label height
-    labelFrame.origin.x = NSMaxX(newParamFrame) + spacing;
-    // Center vertically relative to text field
-    labelFrame.origin.y = newParamFrame.origin.y + (newParamFrame.size.height - labelFrame.size.height) / 2.0f - 1.0f;
+    argumentCompletionGhostLabel = [[QSSPassthroughTextField alloc] initWithFrame:textFrame];
+    [argumentCompletionGhostLabel setCell:[[[QSSCenteredTextFieldCell alloc] initTextCell:@""] autorelease]];
+    [argumentCompletionGhostLabel setBezeled:NO];
+    [argumentCompletionGhostLabel setDrawsBackground:NO];
+    [argumentCompletionGhostLabel setEditable:NO];
+    [argumentCompletionGhostLabel setSelectable:NO];
+    [argumentCompletionGhostLabel setFont:[argumentTextField font]];
+    [argumentCompletionGhostLabel setTextColor:[[NSColor labelColor] colorWithAlphaComponent:0.32f]];
+    [argumentCompletionGhostLabel setStringValue:@""];
+    [argumentCompletionGhostLabel setHidden:YES];
+    [launchOptionsCard addSubview:argumentCompletionGhostLabel
+                       positioned:NSWindowAbove
+                       relativeTo:argumentTextField];
 
-    NSTextField *addLabel = [[NSTextField alloc] initWithFrame:labelFrame];
-    [addLabel setStringValue:@"Add"];
-    [addLabel setBezeled:NO];
-    [addLabel setDrawsBackground:NO];
-    [addLabel setEditable:NO];
-    [addLabel setSelectable:NO];
-    [addLabel setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
-    [addLabel setTextColor:[NSColor labelColor]];
-    [addLabel setAutoresizingMask:(NSViewMinXMargin | NSViewMinYMargin)];
-    [parent addSubview:addLabel];
-    [addLabel release];
+    addArgumentButton = [[NSButton alloc] initWithFrame:addFrame];
+    [addArgumentButton setTitle:@"+"];
+    [addArgumentButton setFont:[NSFont systemFontOfSize:16.0f weight:NSFontWeightSemibold]];
+    [addArgumentButton setTarget:self];
+    [addArgumentButton setAction:@selector(addArgumentButtonPressed:)];
+    [self styleFilledButton:addArgumentButton
+            backgroundColor:QSSLauncherSurfaceColorForWindow(launcherWindow, 1.0f)
+                 titleColor:QSSAboutLinkColor()
+                borderColor:QSSSeparatorColorForWindow(launcherWindow)
+               cornerRadius:11.0f];
+    [launchOptionsCard addSubview:addArgumentButton];
 
-    // Popup
-    NSRect popupFrame;
-    popupFrame.size.width = popupWidth;
-    popupFrame.size.height = newParamFrame.size.height;
-    popupFrame.origin.x = NSMaxX(labelFrame) + spacing;
-    popupFrame.origin.y = newParamFrame.origin.y;
+    CGFloat helperY = 10.0f;
+    helperLabel = [[self createStaticLabelWithText:QSSLaunchOptionsDefaultHelperText()
+                                              font:[NSFont systemFontOfSize:11.0f]
+                                             color:[NSColor secondaryLabelColor]
+                                             frame:NSMakeRect(pad, helperY, cardW - pad * 2.0f, 16.0f)] retain];
+    [launchOptionsCard addSubview:helperLabel];
+    [helperLabel release];
 
-    commandOptionPopUp = [[NSPopUpButton alloc] initWithFrame:popupFrame pullsDown:NO];
-    [commandOptionPopUp setAutoresizingMask:(NSViewMinXMargin | NSViewMinYMargin)];
-    [commandOptionPopUp setTarget:self];
-    [commandOptionPopUp setAction:@selector(addCommandLineOption:)];
-    [parent addSubview:commandOptionPopUp];
+    CGFloat chipsY = helperY + 16.0f + 6.0f;
+    CGFloat chipsH = NSMinY(textFrame) - chipsY - 6.0f;
+    if (chipsH < QSSChipHeight)
+        chipsH = QSSChipHeight;
 
-    [self populateCommandLineOptionsMenu];
-
-    // Don't show any initial label in the popup,
-    // just the arrows.
-    [commandOptionPopUp selectItem:nil];
-    [commandOptionPopUp setTitle:@""];
+    chipsContainer = [[NSView alloc] initWithFrame:NSMakeRect(pad, chipsY, cardW - pad * 2.0f, chipsH)];
+    [chipsContainer setWantsLayer:YES];
+    [[chipsContainer layer] setBackgroundColor:[[NSColor clearColor] CGColor]];
+    [launchOptionsCard addSubview:chipsContainer];
+    [chipsContainer release];
 }
 
-- (void)layoutStartAndQuitButtons {
+- (void)buildSettingsCard
+{
+    CGFloat cardW = NSWidth([settingsCard bounds]);
+    CGFloat cardH = NSHeight([settingsCard bounds]);
+    CGFloat pad = 16.0f;
+    NSTextField *header;
+    NSTextField *titleLabel;
+    NSTextField *subtitleLabel;
+    NSRect switchFrame;
+
+    header = [self createStaticLabelWithText:@"Settings"
+                                        font:[NSFont systemFontOfSize:13.0f weight:NSFontWeightSemibold]
+                                       color:[NSColor labelColor]
+                                       frame:NSMakeRect(pad, cardH - pad - 18.0f, cardW - pad * 2.0f, 18.0f)];
+    [settingsCard addSubview:header];
+
+    rawMouseSwitch = [[self createRawMouseSwitch] retain];
+    switchFrame = [rawMouseSwitch frame];
+    switchFrame.origin.x = cardW - pad - QSSRawMouseSwitchRightInsetExtra - NSWidth(switchFrame);
+    switchFrame.origin.y = (cardH - pad - 22.0f - NSHeight(switchFrame)) / 2.0f + 4.0f;
+    [rawMouseSwitch setFrame:switchFrame];
+    [settingsCard addSubview:rawMouseSwitch];
+
+    CGFloat textMaxX = NSMinX(switchFrame) - 10.0f;
+    CGFloat textWidth = textMaxX - pad;
+    CGFloat titleY = NSMidY(switchFrame) + 2.0f;
+    CGFloat subtitleY = NSMidY(switchFrame) - 16.0f;
+
+    titleLabel = [self createStaticLabelWithText:@"RAW Mouse Input"
+                                            font:[NSFont systemFontOfSize:13.0f weight:NSFontWeightMedium]
+                                           color:[NSColor labelColor]
+                                           frame:NSMakeRect(pad, titleY, textWidth, 18.0f)];
+    [settingsCard addSubview:titleLabel];
+
+    subtitleLabel = [self createStaticLabelWithText:@"Improves input responsiveness in-game."
+                                               font:[NSFont systemFontOfSize:11.0f]
+                                              color:[NSColor secondaryLabelColor]
+                                              frame:NSMakeRect(pad, subtitleY, textWidth, 16.0f)];
+    [settingsCard addSubview:subtitleLabel];
+
+    [self refreshRawMouseSwitchState];
+}
+
+- (void)buildLauncherUI
+{
+    NSView *contentView;
+    CGFloat inset = QSSLauncherCardInset;
+    CGFloat cardsWidth;
+    CGFloat launchCardH = QSSLaunchOptionsBaseHeight;
+    CGFloat settingsCardH = QSSSettingsCardHeight;
+    CGFloat titleY;
+    CGFloat subtitleY;
+    CGFloat launchCardY;
+    CGFloat settingsCardY;
+    CGFloat buttonY = 22.0f;
+    CGFloat buttonH = 40.0f;
+
     if (!launcherWindow)
         return;
 
-    NSView *contentView = [launcherWindow contentView];
-    if (!contentView)
+    contentView = [launcherWindow contentView];
+    cardsWidth = QSSLauncherWindowWidth - inset * 2.0f;
+
+    titleY = QSSLauncherWindowHeight - inset - 34.0f;
+    subtitleY = titleY - 22.0f;
+    launchCardY = subtitleY - 16.0f - launchCardH;
+    settingsCardY = launchCardY - 12.0f - settingsCardH;
+
+    launcherTitleLabel = [self createStaticLabelWithText:@"Launch Quake"
+                                                    font:[NSFont systemFontOfSize:26.0f weight:NSFontWeightBold]
+                                                   color:[NSColor labelColor]
+                                                   frame:NSMakeRect(inset, titleY, cardsWidth, 34.0f)];
+    [contentView addSubview:launcherTitleLabel];
+
+    launcherSubtitleLabel = [self createStaticLabelWithText:@"Optional startup settings before launching."
+                                                       font:[NSFont systemFontOfSize:12.5f]
+                                                      color:[NSColor secondaryLabelColor]
+                                                      frame:NSMakeRect(inset, subtitleY, cardsWidth, 18.0f)];
+    [contentView addSubview:launcherSubtitleLabel];
+
+    launchOptionsCard = [[self createCardWithFrame:NSMakeRect(inset, launchCardY, cardsWidth, launchCardH)] retain];
+    [contentView addSubview:launchOptionsCard];
+    [launchOptionsCard release];
+    [self buildLaunchOptionsCard];
+
+    settingsCard = [[self createCardWithFrame:NSMakeRect(inset, settingsCardY, cardsWidth, settingsCardH)] retain];
+    [contentView addSubview:settingsCard];
+    [settingsCard release];
+    [self buildSettingsCard];
+
+    launchButton = [[NSButton alloc] initWithFrame:NSMakeRect(0.0f, buttonY, 144.0f, buttonH)];
+    [launchButton setTitle:@"Launch"];
+    [launchButton setKeyEquivalent:@"\r"];
+    [launchButton setTarget:self];
+    [launchButton setAction:@selector(launchQuake:)];
+    [self styleFilledButton:launchButton
+            backgroundColor:QSSAboutLinkColor()
+                 titleColor:[NSColor whiteColor]
+                borderColor:nil
+               cornerRadius:13.0f];
+    {
+        NSRect f = [launchButton frame];
+        f.origin.x = QSSLauncherWindowWidth - inset - NSWidth(f);
+        [launchButton setFrame:f];
+    }
+    [contentView addSubview:launchButton];
+
+    cancelButton = [[NSButton alloc] initWithFrame:NSMakeRect(0.0f, buttonY, 126.0f, buttonH)];
+    [cancelButton setTitle:@"Quit"];
+    [cancelButton setKeyEquivalent:@"\033"];
+    [cancelButton setTarget:self];
+    [cancelButton setAction:@selector(cancel:)];
+    [self styleFilledButton:cancelButton
+            backgroundColor:QSSLauncherSurfaceColorForWindow(launcherWindow, 1.0f)
+                 titleColor:[NSColor labelColor]
+                borderColor:QSSSeparatorColorForWindow(launcherWindow)
+               cornerRadius:13.0f];
+    {
+        NSRect f = [cancelButton frame];
+        f.origin.x = NSMinX([launchButton frame]) - 16.0f - NSWidth(f);
+        [cancelButton setFrame:f];
+    }
+    [contentView addSubview:cancelButton];
+
+    [self reflowChips];
+    [self refreshLauncherAppearance];
+}
+
+- (void)configureLauncherWindow
+{
+    NSView *contentView;
+    NSWindowStyleMask style;
+
+    if (!launcherWindow)
         return;
 
-    NSButton *startButton = nil;
-    NSButton *quitButton = nil;
+    [launcherWindow setTitle:@"QSS-M"];
+    [launcherWindow setContentSize:NSMakeSize(QSSLauncherWindowWidth, QSSLauncherWindowHeight)];
 
-    for (NSView *subview in [contentView subviews]) {
-        if (![subview isKindOfClass:[NSButton class]])
-            continue;
+    style = [launcherWindow styleMask];
+    style |= NSWindowStyleMaskTitled;
+    style |= NSWindowStyleMaskFullSizeContentView;
+    style &= ~NSWindowStyleMaskClosable;
+    style &= ~NSWindowStyleMaskMiniaturizable;
+    style &= ~NSWindowStyleMaskResizable;
+    [launcherWindow setStyleMask:style];
 
-        NSButton *button = (NSButton *)subview;
-        NSString *title = [button title];
-        if ([title isEqualToString:@"Start"])
-            startButton = button;
-        else if ([title isEqualToString:@"Quit"] || [title isEqualToString:@"Cancel"])
-            quitButton = button;
+    [launcherWindow setTitleVisibility:NSWindowTitleHidden];
+    [launcherWindow setTitlebarAppearsTransparent:YES];
+    [launcherWindow setMovableByWindowBackground:YES];
+    [launcherWindow setBackgroundColor:[NSColor clearColor]];
+    [launcherWindow setOpaque:NO];
+
+    contentView = [launcherWindow contentView];
+    if (![contentView isKindOfClass:[QSSAppearanceView class]]) {
+        QSSAppearanceView *appearanceView = [[[QSSAppearanceView alloc] initWithFrame:[contentView frame]] autorelease];
+        [appearanceView setAutoresizingMask:[contentView autoresizingMask]];
+        [launcherWindow setContentView:appearanceView];
+        contentView = appearanceView;
+    }
+    [(QSSAppearanceView *)contentView setAppearanceOwner:self action:@selector(launcherAppearanceDidChange:)];
+
+    [contentView setWantsLayer:YES];
+    [[contentView layer] setCornerRadius:18.0f];
+    [[contentView layer] setMasksToBounds:YES];
+    [[contentView layer] setBorderWidth:1.0f];
+    [[contentView layer] setBackgroundColor:[QSSLauncherWindowBackgroundColorForWindow(launcherWindow) CGColor]];
+    [[contentView layer] setBorderColor:[QSSSeparatorColorForWindow(launcherWindow) CGColor]];
+}
+
+- (void)launcherAppearanceDidChange:(id)sender
+{
+    (void)sender;
+    [self refreshLauncherAppearance];
+}
+
+- (void)refreshLauncherAppearance
+{
+    NSWindow *window = launcherWindow;
+    NSView *contentView = [launcherWindow contentView];
+
+    if (contentView && [contentView layer]) {
+        [[contentView layer] setBackgroundColor:[QSSLauncherWindowBackgroundColorForWindow(window) CGColor]];
+        [[contentView layer] setBorderColor:[QSSSeparatorColorForWindow(window) CGColor]];
     }
 
-    if (!startButton || !quitButton)
+    if (launchOptionsCard && [launchOptionsCard layer]) {
+        [[launchOptionsCard layer] setBackgroundColor:[QSSLauncherSurfaceColorForWindow(window, 0.88f) CGColor]];
+        [[launchOptionsCard layer] setBorderColor:[QSSSeparatorColorForWindow(window) CGColor]];
+    }
+
+    if (settingsCard && [settingsCard layer]) {
+        [[settingsCard layer] setBackgroundColor:[QSSLauncherSurfaceColorForWindow(window, 0.88f) CGColor]];
+        [[settingsCard layer] setBorderColor:[QSSSeparatorColorForWindow(window) CGColor]];
+    }
+
+    if (argumentTextField && [argumentTextField layer]) {
+        [argumentTextField setTextColor:[NSColor labelColor]];
+        [[argumentTextField layer] setBackgroundColor:[QSSLauncherTextInputColorForWindow(window, 0.96f) CGColor]];
+        [[argumentTextField layer] setBorderColor:[QSSSeparatorColorForWindow(window) CGColor]];
+    }
+
+    if (argumentCompletionGhostLabel)
+        [argumentCompletionGhostLabel setTextColor:[[NSColor labelColor] colorWithAlphaComponent:0.32f]];
+
+    if (launcherTitleLabel)
+        [launcherTitleLabel setTextColor:[NSColor labelColor]];
+    if (launcherSubtitleLabel)
+        [launcherSubtitleLabel setTextColor:[NSColor secondaryLabelColor]];
+    if (launchOptionsHeaderLabel)
+        [launchOptionsHeaderLabel setTextColor:[NSColor labelColor]];
+    if (helperLabel)
+        [helperLabel setTextColor:[NSColor secondaryLabelColor]];
+
+    if (addArgumentButton) {
+        [self styleFilledButton:addArgumentButton
+                backgroundColor:QSSLauncherSurfaceColorForWindow(window, 1.0f)
+                     titleColor:QSSAboutLinkColor()
+                    borderColor:QSSSeparatorColorForWindow(window)
+                   cornerRadius:11.0f];
+    }
+
+    if (launchButton) {
+        [self styleFilledButton:launchButton
+                backgroundColor:QSSAboutLinkColor()
+                     titleColor:[NSColor whiteColor]
+                    borderColor:nil
+                   cornerRadius:13.0f];
+    }
+
+    if (cancelButton) {
+        [self styleFilledButton:cancelButton
+                backgroundColor:QSSLauncherSurfaceColorForWindow(window, 1.0f)
+                     titleColor:[NSColor labelColor]
+                    borderColor:QSSSeparatorColorForWindow(window)
+                   cornerRadius:13.0f];
+    }
+
+    for (QSSArgumentChipView *chip in argumentChips)
+        [chip refreshAppearance];
+}
+
+- (void)layoutLauncherWindowForChipRows:(NSUInteger)rows chipContainerHeight:(CGFloat)containerH
+{
+    CGFloat inset = QSSLauncherCardInset;
+    CGFloat titleHeight = 34.0f;
+    CGFloat subtitleHeight = 18.0f;
+    CGFloat subtitleGap = 4.0f;
+    CGFloat buttonHeight = 40.0f;
+    CGFloat buttonGap = 12.0f;
+    CGFloat bottomInset = 18.0f;
+    CGFloat cardsWidth = QSSLauncherWindowWidth - inset * 2.0f;
+    CGFloat launchCardHeight = QSSLaunchOptionsBaseHeight + (rows > 0 ? containerH + 10.0f : 0.0f);
+    CGFloat contentHeight = inset + titleHeight + subtitleGap + subtitleHeight + 16.0f +
+        launchCardHeight + 12.0f + QSSSettingsCardHeight + buttonGap + buttonHeight + bottomInset;
+    CGFloat titleY;
+    CGFloat subtitleY;
+    CGFloat launchCardY;
+    CGFloat settingsCardY;
+    CGFloat buttonY;
+    NSRect windowFrame;
+    NSRect contentFrame;
+    NSRect newWindowFrame;
+    CGFloat pad = 16.0f;
+    CGFloat addWidth = 32.0f;
+    CGFloat spacing = 8.0f;
+    CGFloat rowY;
+    NSRect headerFrame;
+    NSRect addFrame;
+    NSRect textFieldFrame;
+    NSRect helperFrame;
+    NSRect chipsFrame;
+    NSRect settingsFrame;
+    NSRect launchButtonFrame;
+    NSRect cancelButtonFrame;
+
+    if (!launcherWindow || !launchOptionsCard || !settingsCard || !launchButton || !cancelButton ||
+        !launcherTitleLabel || !launcherSubtitleLabel || !launchOptionsHeaderLabel ||
+        !argumentTextField || !addArgumentButton || !helperLabel || !chipsContainer)
         return;
 
-    NSRect contentBounds = [contentView bounds];
-    NSRect quitFrame = [quitButton frame];
-    NSRect startFrame = [startButton frame];
+    windowFrame = [launcherWindow frame];
+    contentFrame = [launcherWindow contentRectForFrameRect:windowFrame];
+    if (fabs(NSHeight(contentFrame) - contentHeight) > 0.5f) {
+        newWindowFrame = [launcherWindow frameRectForContentRect:
+                          NSMakeRect(0.0f, 0.0f, QSSLauncherWindowWidth, contentHeight)];
+        newWindowFrame.origin.x = windowFrame.origin.x;
+        newWindowFrame.origin.y = NSMaxY(windowFrame) - NSHeight(newWindowFrame);
+        [launcherWindow setFrame:newWindowFrame display:YES];
+    }
 
-    CGFloat spacing = 30.0f;
-    CGFloat totalWidth = quitFrame.size.width + spacing + startFrame.size.width;
-    CGFloat originX = (NSWidth(contentBounds) - totalWidth) / 2.0f;
+    titleY = contentHeight - inset - titleHeight;
+    subtitleY = titleY - subtitleGap - subtitleHeight;
+    launchCardY = subtitleY - 16.0f - launchCardHeight;
+    settingsCardY = launchCardY - 12.0f - QSSSettingsCardHeight;
+    buttonY = settingsCardY - buttonGap - buttonHeight;
 
-    quitFrame.origin.x = originX;
-    startFrame.origin.x = originX + quitFrame.size.width + spacing;
+    [launcherTitleLabel setFrame:NSMakeRect(inset, titleY, cardsWidth, titleHeight)];
+    [launcherSubtitleLabel setFrame:NSMakeRect(inset, subtitleY, cardsWidth, subtitleHeight)];
+    [launchOptionsCard setFrame:NSMakeRect(inset, launchCardY, cardsWidth, launchCardHeight)];
 
-    [quitButton setFrame:quitFrame];
-    [startButton setFrame:startFrame];
+    headerFrame = NSMakeRect(pad, launchCardHeight - pad - 18.0f, cardsWidth - pad * 2.0f, 18.0f);
+    [launchOptionsHeaderLabel setFrame:headerFrame];
+
+    rowY = launchCardHeight - pad - 18.0f - 14.0f - 28.0f;
+    addFrame = NSMakeRect(cardsWidth - pad - addWidth, rowY, addWidth, 28.0f);
+    textFieldFrame = NSMakeRect(pad, rowY, NSMinX(addFrame) - spacing - pad, 28.0f);
+    [argumentTextField setFrame:textFieldFrame];
+    [addArgumentButton setFrame:addFrame];
+
+    helperFrame = NSMakeRect(pad, 10.0f, cardsWidth - pad * 2.0f, 16.0f);
+    [helperLabel setFrame:helperFrame];
+
+    chipsFrame = NSMakeRect(pad, NSMaxY(helperFrame) + 10.0f, cardsWidth - pad * 2.0f, containerH);
+    [chipsContainer setFrame:chipsFrame];
+    [chipsContainer setHidden:(rows == 0)];
+
+    settingsFrame = [settingsCard frame];
+    settingsFrame.origin.x = inset;
+    settingsFrame.origin.y = settingsCardY;
+    settingsFrame.size.width = cardsWidth;
+    settingsFrame.size.height = QSSSettingsCardHeight;
+    [settingsCard setFrame:settingsFrame];
+
+    launchButtonFrame = [launchButton frame];
+    launchButtonFrame.origin.y = buttonY;
+    launchButtonFrame.origin.x = QSSLauncherWindowWidth - inset - NSWidth(launchButtonFrame);
+    [launchButton setFrame:launchButtonFrame];
+
+    cancelButtonFrame = [cancelButton frame];
+    cancelButtonFrame.origin.y = buttonY;
+    cancelButtonFrame.origin.x = NSMinX(launchButtonFrame) - 16.0f - NSWidth(cancelButtonFrame);
+    [cancelButton setFrame:cancelButtonFrame];
 }
+
+#pragma mark - Chip management
+
+- (void)reflowChips
+{
+    CGFloat spacingX = 6.0f;
+    CGFloat spacingY = 6.0f;
+    CGFloat maxW;
+    CGFloat cursorX = 0.0f;
+    CGFloat lineY;
+    CGFloat containerH = 0.0f;
+    NSUInteger rows = 0;
+    CGFloat rowTopY;
+    NSRect chipsFrame;
+
+    if (!chipsContainer || !helperLabel || !argumentTextField || !launchOptionsCard)
+        return;
+
+    maxW = NSWidth([chipsContainer bounds]);
+
+    for (QSSArgumentChipView *chip in argumentChips) {
+        NSRect f = [chip frame];
+        if (rows == 0) {
+            rows = 1;
+        } else if (cursorX > 0.0f && cursorX + NSWidth(f) > maxW) {
+            cursorX = 0.0f;
+            rows++;
+        }
+        cursorX += NSWidth(f) + spacingX;
+    }
+
+    if (rows > 0)
+        containerH = (rows * QSSChipHeight) + ((rows - 1) * spacingY);
+
+    [self layoutLauncherWindowForChipRows:rows chipContainerHeight:containerH];
+
+    chipsFrame = [chipsContainer frame];
+    maxW = NSWidth(chipsFrame);
+
+    cursorX = 0.0f;
+    rowTopY = containerH - QSSChipHeight;
+    lineY = rowTopY;
+
+    for (QSSArgumentChipView *chip in argumentChips) {
+        NSRect f = [chip frame];
+        if (cursorX > 0.0f && cursorX + NSWidth(f) > maxW) {
+            cursorX = 0.0f;
+            lineY -= (QSSChipHeight + spacingY);
+            rows++;
+        }
+        f.origin.x = cursorX;
+        f.origin.y = lineY;
+        [chip setFrame:f];
+        cursorX += NSWidth(f) + spacingX;
+    }
+}
+
+- (void)addChipWithString:(NSString *)str
+{
+    QSSArgumentChipView *chip;
+    NSString *trimmed;
+
+    if (!str)
+        return;
+    trimmed = [str stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([trimmed length] == 0)
+        return;
+
+    chip = [[[QSSArgumentChipView alloc] initWithArgument:trimmed
+                                                    owner:self
+                                             removeAction:@selector(chipRemoveRequested:)] autorelease];
+    [argumentChips addObject:chip];
+    [chipsContainer addSubview:chip];
+    [self reflowChips];
+    [self syncArgumentTextFieldFromChips];
+}
+
+- (void)removeAllChips
+{
+    for (QSSArgumentChipView *chip in argumentChips)
+        [chip removeFromSuperview];
+    [argumentChips removeAllObjects];
+}
+
+- (void)syncArgumentTextFieldFromChips
+{
+    NSString *joined;
+    NSText *editor;
+
+    if (!argumentTextField || suppressArgumentTextSync)
+        return;
+
+    joined = [self joinedArgumentString];
+    [argumentTextField setStringValue:joined];
+
+    editor = [self activeArgumentFieldEditor];
+    if (editor) {
+        [editor setString:joined];
+        [editor setSelectedRange:NSMakeRange([joined length], 0)];
+    }
+
+    [self updateArgumentCompletionHint];
+}
+
+- (void)rebuildChipsFromString:(NSString *)line syncTextField:(BOOL)syncTextField
+{
+    NSArray *strings;
+    BOOL oldSuppressArgumentTextSync = suppressArgumentTextSync;
+
+    suppressArgumentTextSync = !syncTextField;
+    [self removeAllChips];
+    strings = [self chipStringsFromCommandLine:line];
+    for (NSString *s in strings)
+        [self addChipWithString:s];
+    suppressArgumentTextSync = oldSuppressArgumentTextSync;
+
+    [self reflowChips];
+    if (syncTextField)
+        [self syncArgumentTextFieldFromChips];
+}
+
+- (void)rebuildChipsFromString:(NSString *)line
+{
+    [self rebuildChipsFromString:line syncTextField:YES];
+}
+
+- (void)chipRemoveRequested:(QSSArgumentChipView *)chip
+{
+    if (!chip)
+        return;
+    [chip removeFromSuperview];
+    [argumentChips removeObject:chip];
+    [self reflowChips];
+    [self syncArgumentTextFieldFromChips];
+}
+
+#pragma mark - Text field / add actions
+
+- (void)argumentTextFieldEntered:(id)sender
+{
+    NSString *value;
+
+    (void)sender;
+    if (!argumentTextField)
+        return;
+    value = [[self currentArgumentText] stringByTrimmingCharactersInSet:
+             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+
+    if ([value length] == 0) {
+        [self removeAllChips];
+        [self reflowChips];
+        [self syncArgumentTextFieldFromChips];
+        [self updateArgumentCompletionHint];
+        return;
+    }
+
+    [self rebuildChipsFromString:value];
+    [self updateArgumentCompletionHint];
+}
+
+- (NSText *)activeArgumentFieldEditor
+{
+    NSWindow *window;
+    NSText *editor;
+
+    if (!argumentTextField)
+        return nil;
+
+    window = [argumentTextField window];
+    if (!window)
+        return nil;
+
+    editor = [window fieldEditor:NO forObject:argumentTextField];
+    if (editor && [window firstResponder] == editor)
+        return editor;
+
+    return nil;
+}
+
+- (NSString *)currentArgumentText
+{
+    NSText *editor = [self activeArgumentFieldEditor];
+    NSString *text;
+
+    if (editor) {
+        text = [editor string];
+        return text ? text : @"";
+    }
+
+    text = [argumentTextField stringValue];
+    return text ? text : @"";
+}
+
+- (NSRange)argumentCompletionTokenRangeForText:(NSString *)text cursor:(NSUInteger)cursor
+{
+    NSCharacterSet *ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    NSUInteger length = [text length];
+    NSUInteger start;
+    NSUInteger end;
+
+    if (cursor > length)
+        cursor = length;
+
+    start = cursor;
+    while (start > 0 && ![ws characterIsMember:[text characterAtIndex:start - 1]])
+        start--;
+
+    end = cursor;
+    while (end < length && ![ws characterIsMember:[text characterAtIndex:end]])
+        end++;
+
+    return NSMakeRange(start, end - start);
+}
+
+- (NSString *)argumentCompletionForText:(NSString *)text tokenRange:(NSRange *)tokenRangeOut
+{
+    NSText *editor;
+    NSRange selectedRange;
+    NSRange tokenRange;
+    NSString *partial;
+
+    if (!text)
+        text = [self currentArgumentText];
+
+    selectedRange = NSMakeRange([text length], 0);
+    editor = [self activeArgumentFieldEditor];
+    if (editor)
+        selectedRange = [editor selectedRange];
+
+    tokenRange = [self argumentCompletionTokenRangeForText:text cursor:selectedRange.location];
+    if (tokenRangeOut)
+        *tokenRangeOut = tokenRange;
+    if (tokenRange.length < 2)
+        return nil;
+
+    partial = [text substringWithRange:tokenRange];
+    if (!([partial hasPrefix:@"-"] || [partial hasPrefix:@"+"]))
+        return nil;
+
+    for (size_t i = 0; i < sizeof(QSSPresetArgumentEntries) / sizeof(QSSPresetArgumentEntries[0]); i++) {
+        NSString *insert = QSSPresetArgumentEntries[i].insert;
+        NSString *candidate;
+        if (!insert)
+            continue;
+
+        candidate = [insert stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([candidate length] == 0)
+            continue;
+
+        if ([candidate caseInsensitiveCompare:partial] == NSOrderedSame)
+            return [insert hasSuffix:@" "] ? insert : nil;
+    }
+
+    for (size_t i = 0; i < sizeof(QSSPresetArgumentEntries) / sizeof(QSSPresetArgumentEntries[0]); i++) {
+        NSString *insert = QSSPresetArgumentEntries[i].insert;
+        NSString *candidate;
+        if (!insert)
+            continue;
+
+        candidate = [insert stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([candidate length] == 0)
+            continue;
+
+        if ([candidate rangeOfString:partial options:(NSAnchoredSearch | NSCaseInsensitiveSearch)].location == NSNotFound)
+            continue;
+
+        if ([candidate length] > [partial length])
+            return insert;
+    }
+
+    return nil;
+}
+
+- (void)hideArgumentCompletionGhost
+{
+    if (!argumentCompletionGhostLabel)
+        return;
+
+    [argumentCompletionGhostLabel setStringValue:@""];
+    [argumentCompletionGhostLabel setHidden:YES];
+}
+
+- (void)updateArgumentCompletionGhostWithText:(NSString *)text
+                                   completion:(NSString *)completion
+                                   tokenRange:(NSRange)tokenRange
+{
+    static const CGFloat textInset = 8.0f;
+    NSText *editor;
+    NSRange selectedRange;
+    NSString *partial;
+    NSString *suffix;
+    NSString *trailingText;
+    NSCharacterSet *ws;
+    NSFont *font;
+    NSDictionary *attributes;
+    CGFloat prefixWidth;
+    NSRect fieldFrame;
+    CGFloat hintX;
+    CGFloat maxX;
+
+    if (!argumentCompletionGhostLabel || !argumentTextField || !text || !completion) {
+        [self hideArgumentCompletionGhost];
+        return;
+    }
+
+    editor = [self activeArgumentFieldEditor];
+    if (!editor) {
+        [self hideArgumentCompletionGhost];
+        return;
+    }
+
+    selectedRange = [editor selectedRange];
+    if (selectedRange.length != 0 ||
+        tokenRange.location == NSNotFound ||
+        NSMaxRange(tokenRange) > [text length] ||
+        selectedRange.location != NSMaxRange(tokenRange))
+    {
+        [self hideArgumentCompletionGhost];
+        return;
+    }
+
+    ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    trailingText = [text substringFromIndex:selectedRange.location];
+    if ([[trailingText stringByTrimmingCharactersInSet:ws] length] != 0) {
+        [self hideArgumentCompletionGhost];
+        return;
+    }
+
+    partial = [text substringWithRange:tokenRange];
+    if ([completion length] <= [partial length]) {
+        [self hideArgumentCompletionGhost];
+        return;
+    }
+
+    suffix = [completion substringFromIndex:[partial length]];
+    if ([[suffix stringByTrimmingCharactersInSet:ws] length] == 0) {
+        [self hideArgumentCompletionGhost];
+        return;
+    }
+
+    font = [argumentTextField font];
+    if (!font)
+        font = [NSFont systemFontOfSize:13.0f];
+
+    attributes = @{ NSFontAttributeName: font };
+    prefixWidth = ceilf([[text substringToIndex:NSMaxRange(tokenRange)] sizeWithAttributes:attributes].width);
+    fieldFrame = [argumentTextField frame];
+    hintX = NSMinX(fieldFrame) + textInset + prefixWidth;
+    maxX = NSMaxX(fieldFrame) - textInset;
+
+    if (hintX >= maxX) {
+        [self hideArgumentCompletionGhost];
+        return;
+    }
+
+    [argumentCompletionGhostLabel setFont:font];
+    [argumentCompletionGhostLabel setStringValue:suffix];
+    [argumentCompletionGhostLabel setFrame:NSMakeRect(hintX - textInset,
+                                                      NSMinY(fieldFrame),
+                                                      maxX - hintX + textInset,
+                                                      NSHeight(fieldFrame))];
+    [[argumentCompletionGhostLabel superview] addSubview:argumentCompletionGhostLabel
+                                              positioned:NSWindowAbove
+                                              relativeTo:nil];
+    [argumentCompletionGhostLabel setHidden:NO];
+}
+
+- (void)updateArgumentCompletionHint
+{
+    NSString *completion;
+    NSString *display;
+    NSString *hint;
+    NSString *text;
+    NSRange tokenRange = NSMakeRange(NSNotFound, 0);
+
+    if (!helperLabel || !argumentTextField)
+        return;
+
+    text = [self currentArgumentText];
+    completion = [self argumentCompletionForText:text tokenRange:&tokenRange];
+    if (!completion) {
+        [self hideArgumentCompletionGhost];
+        [helperLabel setStringValue:QSSLaunchOptionsDefaultHelperText()];
+        return;
+    }
+
+    [self updateArgumentCompletionGhostWithText:text completion:completion tokenRange:tokenRange];
+
+    display = [completion stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    hint = [completion hasSuffix:@" "]
+        ? [NSString stringWithFormat:@"Tab completes %@; type a value after it.", display]
+        : [NSString stringWithFormat:@"Tab completes %@.", display];
+    [helperLabel setStringValue:hint];
+}
+
+- (BOOL)acceptArgumentCompletion
+{
+    NSString *text;
+    NSString *completion;
+    NSMutableString *newText;
+    NSRange tokenRange;
+    NSUInteger cursor;
+    NSText *editor;
+
+    if (!argumentTextField)
+        return NO;
+
+    text = [self currentArgumentText];
+    completion = [self argumentCompletionForText:text tokenRange:&tokenRange];
+    if (!completion)
+        return NO;
+
+    newText = [[text mutableCopy] autorelease];
+    [newText replaceCharactersInRange:tokenRange withString:completion];
+    cursor = tokenRange.location + [completion length];
+
+    [argumentTextField setStringValue:newText];
+    [[argumentTextField window] makeFirstResponder:argumentTextField];
+    editor = [[argumentTextField window] fieldEditor:YES forObject:argumentTextField];
+    [editor setString:newText];
+    [editor setSelectedRange:NSMakeRange(cursor, 0)];
+
+    [self rebuildChipsFromString:newText syncTextField:NO];
+    [self updateArgumentCompletionHint];
+    return YES;
+}
+
+- (BOOL)control:(NSControl *)control
+       textView:(NSTextView *)textView
+doCommandBySelector:(SEL)commandSelector
+{
+    if (control == argumentTextField && commandSelector == @selector(insertTab:))
+        return [self acceptArgumentCompletion];
+
+    (void)textView;
+
+    if (control == argumentTextField &&
+        (commandSelector == @selector(insertNewline:) ||
+         commandSelector == @selector(insertNewlineIgnoringFieldEditor:)))
+    {
+        NSString *value = [[self currentArgumentText] stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([value length] == 0)
+            return NO;
+
+        [self argumentTextFieldEntered:argumentTextField];
+        return YES;
+    }
+
+    return NO;
+}
+
+- (void)controlTextDidEndEditing:(NSNotification *)notification
+{
+    NSString *value;
+    NSString *current;
+
+    if ([notification object] != argumentTextField)
+        return;
+
+    value = [[self currentArgumentText] stringByTrimmingCharactersInSet:
+             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    current = [self joinedArgumentString];
+
+    if (![value isEqualToString:current])
+        [self argumentTextFieldEntered:argumentTextField];
+    else
+        [self syncArgumentTextFieldFromChips];
+    [self updateArgumentCompletionHint];
+}
+
+- (void)controlTextDidChange:(NSNotification *)notification
+{
+    NSString *value;
+
+    if ([notification object] != argumentTextField)
+        return;
+
+    value = [self currentArgumentText];
+    [self rebuildChipsFromString:value syncTextField:NO];
+    [self updateArgumentCompletionHint];
+}
+
+- (NSMenu *)buildPresetArgumentsMenu
+{
+    NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+    [menu setAutoenablesItems:NO];
+
+    for (size_t i = 0; i < sizeof(QSSPresetArgumentEntries) / sizeof(QSSPresetArgumentEntries[0]); i++) {
+        NSMenuItem *item;
+        if (!QSSPresetArgumentEntries[i].title) {
+            [menu addItem:[NSMenuItem separatorItem]];
+            continue;
+        }
+        item = [[[NSMenuItem alloc] initWithTitle:QSSPresetArgumentEntries[i].title
+                                           action:@selector(presetMenuSelected:)
+                                    keyEquivalent:@""] autorelease];
+        [item setTarget:self];
+        [item setRepresentedObject:QSSPresetArgumentEntries[i].insert];
+        [item setEnabled:YES];
+        [menu addItem:item];
+    }
+
+    return menu;
+}
+
+- (void)presetMenuSelected:(id)sender
+{
+    NSMenuItem *item;
+    NSString *insert;
+    NSString *trimmed;
+
+    if (![sender isKindOfClass:[NSMenuItem class]])
+        return;
+
+    item = (NSMenuItem *)sender;
+    insert = [item representedObject];
+    if (!insert)
+        return;
+
+    trimmed = [insert stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([insert hasSuffix:@" "] && ![trimmed isEqualToString:insert]) {
+        NSString *current = [[self currentArgumentText] stringByTrimmingCharactersInSet:
+                             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSString *newText = ([current length] > 0)
+            ? [NSString stringWithFormat:@"%@ %@", current, insert]
+            : insert;
+
+        // Preset expects a value; drop it into the text field so user can type one.
+        [argumentTextField setStringValue:newText];
+        [self rebuildChipsFromString:newText syncTextField:NO];
+        [self updateArgumentCompletionHint];
+        [[argumentTextField window] makeFirstResponder:argumentTextField];
+        NSText *editor = [[argumentTextField window] fieldEditor:YES forObject:argumentTextField];
+        [editor setString:newText];
+        [editor setSelectedRange:NSMakeRange([newText length], 0)];
+        return;
+    }
+
+    [self addChipWithString:trimmed];
+}
+
+- (void)addArgumentButtonPressed:(id)sender
+{
+    NSString *typed;
+    NSString *current;
+    (void)sender;
+
+    typed = [[self currentArgumentText] stringByTrimmingCharactersInSet:
+             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    current = [self joinedArgumentString];
+
+    if ([typed length] > 0 && ![typed isEqualToString:current]) {
+        [self argumentTextFieldEntered:argumentTextField];
+        return;
+    }
+
+    {
+        NSRect f = [addArgumentButton frame];
+        NSPoint loc = NSMakePoint(0.0f, NSMinY(f) - 2.0f);
+        if (!presetArgumentsMenu)
+            presetArgumentsMenu = [[self buildPresetArgumentsMenu] retain];
+        [presetArgumentsMenu popUpMenuPositioningItem:nil atLocation:loc inView:addArgumentButton];
+    }
+}
+
+#pragma mark - Help assistant / overlay
 
 - (BOOL)openMacOSInstructionsPage
 {
@@ -835,6 +2308,10 @@ static NSImage *QSSHostAppIcon(void)
 - (void)rawMousePermissionDragDidComplete
 {
     rawMouseDragCompleted = YES;
+    rawMousePermissionPending = YES;
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:QSSPrefRawMouseInputEnabledKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    [self refreshRawMouseSwitchState];
     if (rawMouseOverlayWindow)
         [rawMouseOverlayWindow orderOut:nil];
     rawMouseOverlayPresented = NO;
@@ -876,7 +2353,7 @@ static NSImage *QSSHostAppIcon(void)
     [[materialView layer] setCornerRadius:18.0f];
     [[materialView layer] setMasksToBounds:YES];
     [[materialView layer] setBorderWidth:0.5f];
-    [[materialView layer] setBorderColor:[[NSColor disabledControlTextColor] colorWithAlphaComponent:0.18f].CGColor];
+    [[materialView layer] setBorderColor:[QSSSeparatorColorForWindow(panel) CGColor]];
 
     rawMouseOverlayArrowField = [[NSTextField alloc] initWithFrame:NSMakeRect(28.0f, 62.0f, 36.0f, 36.0f)];
     [rawMouseOverlayArrowField setBezeled:NO];
@@ -917,106 +2394,16 @@ static NSImage *QSSHostAppIcon(void)
     [self refreshRawMouseOverlayContent];
 }
 
-- (NSRect)rawMouseInputButtonFrameInScreen
+- (NSRect)rawMouseSwitchFrameInScreen
 {
     NSRect buttonFrameInWindow;
 
-    if (!rawMouseInputButton || !launcherWindow || ![rawMouseInputButton superview])
+    if (!rawMouseSwitch || !launcherWindow || ![rawMouseSwitch superview])
         return NSZeroRect;
 
-    buttonFrameInWindow = [[rawMouseInputButton superview] convertRect:[rawMouseInputButton frame]
-                                                                toView:nil];
+    buttonFrameInWindow = [[rawMouseSwitch superview] convertRect:[rawMouseSwitch frame]
+                                                           toView:nil];
     return [launcherWindow convertRectToScreen:buttonFrameInWindow];
-}
-
-- (void)adjustRawMousePermissionLayoutVisible:(BOOL)visible
-{
-    NSRect labelFrame;
-    NSRect popupFrame;
-    NSRect fullscreenFrame;
-    NSRect buttonFrame;
-    CGFloat permissionLayoutOffset = 23.0f;
-
-    if (!rawMousePermissionLayoutInitialized || !rawMouseInputButton)
-        return;
-
-    labelFrame = screenModeLabelBaseFrame;
-    popupFrame = screenModePopUpBaseFrame;
-    fullscreenFrame = fullscreenCheckBoxBaseFrame;
-    buttonFrame = NSMakeRect(NSMinX(screenModePopUpBaseFrame), 17.0f, 184.0f, 20.0f);
-
-    if (visible)
-    {
-        labelFrame.origin.y += permissionLayoutOffset;
-        popupFrame.origin.y += permissionLayoutOffset;
-        fullscreenFrame.origin.y += permissionLayoutOffset;
-        [rawMouseInputButton setFrame:buttonFrame];
-    }
-
-    if (screenModeLabel)
-        [screenModeLabel setFrame:labelFrame];
-    [screenModePopUp setFrame:popupFrame];
-    [fullscreenCheckBox setFrame:fullscreenFrame];
-    [rawMouseInputButton setHidden:!visible];
-}
-
-- (void)refreshRawMousePermissionUI
-{
-    BOOL showButton;
-
-    if (!rawMousePermissionLayoutInitialized)
-        return;
-
-    showButton = QSSSupportsInputMonitoring() && !QSSInputMonitoringIsGranted();
-    [self adjustRawMousePermissionLayoutVisible:showButton];
-
-    if (!showButton)
-        [self stopRawMousePermissionAssistant];
-}
-
-- (void)setupRawMousePermissionUI
-{
-    NSView *parent;
-    NSView *subview;
-
-    if (!launcherWindow || !screenModePopUp || rawMouseInputButton)
-        return;
-
-    parent = [screenModePopUp superview];
-    if (!parent)
-        return;
-
-    for (subview in [parent subviews])
-    {
-        if (![subview isKindOfClass:[NSTextField class]])
-            continue;
-        if ([[(NSTextField *)subview stringValue] isEqualToString:@"Resolution and color depth"])
-        {
-            screenModeLabel = (NSTextField *)subview;
-            break;
-        }
-    }
-
-    if (!screenModeLabel)
-        return;
-
-    screenModeLabelBaseFrame = [screenModeLabel frame];
-    screenModePopUpBaseFrame = [screenModePopUp frame];
-    fullscreenCheckBoxBaseFrame = [fullscreenCheckBox frame];
-
-    rawMouseInputButton = [[NSButton alloc] initWithFrame:NSZeroRect];
-    [rawMouseInputButton setTitle:@"Allow RAW Mouse Input"];
-    [rawMouseInputButton setBezelStyle:NSBezelStyleRounded];
-    [rawMouseInputButton setControlSize:NSControlSizeSmall];
-    [rawMouseInputButton setFont:[NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
-    [rawMouseInputButton setTarget:self];
-    [rawMouseInputButton setAction:@selector(allowRawMouseInput:)];
-    [rawMouseInputButton setAutoresizingMask:(NSViewMaxXMargin | NSViewMinYMargin)];
-    [rawMouseInputButton setHidden:YES];
-    [parent addSubview:rawMouseInputButton];
-
-    rawMousePermissionLayoutInitialized = YES;
-    [self refreshRawMousePermissionUI];
 }
 
 - (void)showRawMouseOverlayWithSnapshot:(QSSSystemSettingsWindowSnapshot)snapshot
@@ -1032,7 +2419,7 @@ static NSImage *QSSHostAppIcon(void)
 
     if (!rawMouseOverlayPresented || ![rawMouseOverlayWindow isVisible])
     {
-        NSRect startFrame = [self rawMouseInputButtonFrameInScreen];
+        NSRect startFrame = [self rawMouseSwitchFrameInScreen];
 
         if (NSIsEmptyRect(startFrame))
             startFrame = targetFrame;
@@ -1064,7 +2451,7 @@ static NSImage *QSSHostAppIcon(void)
 
     if (QSSInputMonitoringIsGranted())
     {
-        [self refreshRawMousePermissionUI];
+        [self refreshRawMouseSwitchState];
         return;
     }
 
@@ -1110,7 +2497,7 @@ static NSImage *QSSHostAppIcon(void)
                                                                           usingBlock:^(NSNotification *note) {
             (void)note;
             [self updateRawMousePermissionOverlay:nil];
-            [self refreshRawMousePermissionUI];
+            [self refreshRawMouseSwitchState];
         }];
     }
 
@@ -1140,12 +2527,9 @@ static NSImage *QSSHostAppIcon(void)
     rawMouseOverlayPresented = NO;
 }
 
-- (IBAction)allowRawMouseInput:(id)sender
+- (void)startPermissionFlow
 {
-    NSURL *settingsURL;
     BOOL openedSettings = NO;
-
-    (void)sender;
 
     if (!QSSSupportsInputMonitoring())
     {
@@ -1155,133 +2539,114 @@ static NSImage *QSSHostAppIcon(void)
 
     if (QSSInputMonitoringIsGranted())
     {
-        [self refreshRawMousePermissionUI];
+        [self refreshRawMouseSwitchState];
         return;
     }
 
+    rawMousePermissionPending = YES;
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:QSSPrefRawMouseInputEnabledKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    [self setRawMouseSwitchOn:YES];
     rawMouseDragCompleted = NO;
 
     if (@available(macOS 10.15, *))
         (void)IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
 
-    settingsURL = QSSInputMonitoringSettingsURL();
-    if (settingsURL)
-        openedSettings = [[NSWorkspace sharedWorkspace] openURL:settingsURL];
-    if (!openedSettings)
-    {
-        settingsURL = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"];
-        if (settingsURL)
-            openedSettings = [[NSWorkspace sharedWorkspace] openURL:settingsURL];
-    }
+    openedSettings = QSSOpenInputMonitoringSettings();
 
     if (openedSettings)
         [self startRawMousePermissionAssistant];
     else
+    {
+        rawMousePermissionPending = NO;
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:QSSPrefRawMouseInputEnabledKey];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        [self setRawMouseSwitchOn:NO];
         [self openMacOSInstructionsPage];
+    }
 }
 
-#ifndef MAC_OS_X_VERSION_10_13
-#define NSControlStateValueOff NSOffState
-#define NSControlStateValueOn NSOnState
-#endif
-- (void)awakeFromNib {
-    if ([arguments count] > 0) {
-        NSString *sanitized = [self sanitizeCommandLine:[arguments description]];
-        [paramTextField setStringValue:sanitized];
-        if ([arguments argument:@"-window"] != nil)
-            [fullscreenCheckBox setState:NSControlStateValueOff];
-    } else {
-		NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-        NSString *raw = [defaults stringForKey:FQPrefCommandLineKey];
-        NSString *sanitized = [self sanitizeCommandLine:raw];
-        [paramTextField setStringValue:sanitized ? sanitized : @""];
-        
-        BOOL fullscreen = [defaults boolForKey:FQPrefFullscreenKey];
-        [fullscreenCheckBox setState:fullscreen ? NSControlStateValueOn : NSControlStateValueOff];
-        
-        NSInteger screenModeIndex = [defaults integerForKey:FQPrefScreenModeKey];
-        [screenModePopUp selectItemAtIndex:screenModeIndex];
+- (void)rawMouseSwitchToggled:(id)sender
+{
+    BOOL userWantsOn = [self rawMouseSwitchIsOn];
+    BOOL granted = QSSInputMonitoringIsGranted();
 
-        // If we stripped anything (like stray -nolauncher tokens),
-        // persist the cleaned value so it doesn't come back.
-        if (raw && ![sanitized isEqualToString:raw]) {
-            [defaults setObject:sanitized forKey:FQPrefCommandLineKey];
-            [defaults synchronize];
-        }
+    (void)sender;
+
+    if (userWantsOn && !granted) {
+        [self startPermissionFlow];
+    } else if (userWantsOn) {
+        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:QSSPrefRawMouseInputEnabledKey];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        [self refreshRawMouseSwitchState];
+    } else if (!userWantsOn) {
+        rawMousePermissionPending = NO;
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:QSSPrefRawMouseInputEnabledKey];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        [self stopRawMousePermissionAssistant];
+        [self setRawMouseSwitchOn:NO];
+
+        if (QSSSupportsInputMonitoring() && !QSSOpenInputMonitoringSettings())
+            [self openMacOSInstructionsPage];
     }
+}
+
+#pragma mark - App lifecycle
+
+- (void)awakeFromNib {
+}
+
+- (void)populateInitialChips
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+
+    [self removeAllChips];
+    if (argumentTextField)
+        [argumentTextField setStringValue:@""];
+
+    // Launch options are session-only UI state. Clear any older persisted values.
+    [defaults removeObjectForKey:FQPrefCommandLineKey];
+    [defaults synchronize];
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
+    NSUInteger flags;
+    BOOL optionKeyPressed;
+
+    (void)aNotification;
+
     [self configureAboutMenu];
     [self configureQuitMenu];
-    [self configureQuitButton];
-    [self layoutStartAndQuitButtons];
-    [self setupCommandLineOptionsUI];
-    [self setupRawMousePermissionUI];
+    [self configureFileMenu];
+    [self removeUnusedMenus];
 
     if (launcherWindow) {
-        [launcherWindow setTitle:@"QSS-M"];
-        
-        // Remove title bar and other controls
-        NSWindowStyleMask style = [launcherWindow styleMask];
-        // Ensure Titled is present so it can be key, but hide it visually
-        style |= NSWindowStyleMaskTitled;
-        style |= NSWindowStyleMaskFullSizeContentView;
-        style &= ~NSWindowStyleMaskClosable;
-        style &= ~NSWindowStyleMaskMiniaturizable;
-        style &= ~NSWindowStyleMaskResizable;
-        [launcherWindow setStyleMask:style];
-        
-        [launcherWindow setTitleVisibility:NSWindowTitleHidden];
-        [launcherWindow setTitlebarAppearsTransparent:YES];
-        
-        // Allow moving the window by dragging the background since there is no title bar
-        [launcherWindow setMovableByWindowBackground:YES];
-        
-        // Rounded corners
-        [launcherWindow setBackgroundColor:[NSColor clearColor]];
-        [launcherWindow setOpaque:NO];
-        
-        NSView *contentView = [launcherWindow contentView];
-        [contentView setWantsLayer:YES];
-        [contentView.layer setCornerRadius:15.0f];
-        [contentView.layer setMasksToBounds:YES];
-        [contentView.layer setBackgroundColor:[[NSColor windowBackgroundColor] CGColor]];
-        
-        [self hideSettingsLabelInView:contentView];
+        [self configureLauncherWindow];
+        [self buildLauncherUI];
+        [self populateInitialChips];
     }
 
-    [self refreshRawMousePermissionUI];
+    [self refreshRawMouseSwitchState];
 
-    // Get current keyboard state - woods #option
-    NSUInteger flags = [NSEvent modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
-    BOOL optionKeyPressed = (flags & NSEventModifierFlagOption) != 0;
+    flags = [NSEvent modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+    optionKeyPressed = (flags & NSEventModifierFlagOption) != 0;
 
-	if ([arguments argument:@"-nolauncher"] != nil) {
-		[arguments removeArgument:@"-nolauncher"];
-		[self launchQuake:self];
-    } else if (!optionKeyPressed) {
-        // If Option key is NOT pressed, directly execute the launch code
-        // First load preferences as awakeFromNib would have done
-        [self awakeFromNib];
-        // Then launch the game directly
+    if ([arguments argument:@"-nolauncher"] != nil) {
+        [arguments removeArgument:@"-nolauncher"];
         [self launchQuake:self];
-	} else {
-        // Show launcher window if Option key is pressed
+    } else if (!optionKeyPressed) {
+        [self launchQuake:self];
+    } else {
         [launcherWindow center];
         [launcherWindow makeKeyAndOrderFront:self];
-	}
+        [self scheduleRawMouseStartupRefresh];
+    }
 }
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
     (void)notification;
-    [self refreshRawMousePermissionUI];
-}
-
-- (IBAction)changeScreenMode:(id)sender {
-    // Always allow changing fullscreen, even when using
-    // "Default or command line arguments" for resolution.
-    [fullscreenCheckBox setEnabled:YES];
+    [self refreshLauncherAppearance];
+    [self refreshRawMouseSwitchState];
 }
 
 - (void)launchDedicatedServerWithParsedArguments
@@ -1291,14 +2656,9 @@ static NSImage *QSSHostAppIcon(void)
         return;
 
     NSString *executableDir = [executablePath stringByDeletingLastPathComponent];
-
-    // Build the exact shell command we want Terminal to run,
-    // matching the working manual invocation:
-    //   cd /path/to/QSS-M.app/Contents/MacOS && ./QSS-M -dedicated -mem 128 ...
-    // Start from the text field so we only use what the user typed.
-    NSString *argsString = [self sanitizeCommandLine:[paramTextField stringValue]];
-
+    NSString *argsString = [self sanitizeCommandLine:[self joinedArgumentString]];
     BOOL hasMemOrHeap = NO;
+
     if ([argsString rangeOfString:@"-mem "].location != NSNotFound ||
         [argsString rangeOfString:@"-heapsize "].location != NSNotFound)
         hasMemOrHeap = YES;
@@ -1314,8 +2674,6 @@ static NSImage *QSSHostAppIcon(void)
         [command appendString:@" -mem 128"];
     }
 
-    // Launch Terminal.app and run the command there so the
-    // dedicated server has a visible console window.
     NSString *terminalPath = [[NSWorkspace sharedWorkspace] fullPathForApplication:@"Terminal"];
     if (!terminalPath)
         terminalPath = @"/Applications/Utilities/Terminal.app";
@@ -1331,73 +2689,61 @@ static NSImage *QSSHostAppIcon(void)
     [task launch];
     [task release];
 
-    // Terminate the launcher app; the dedicated server will
-    // continue running in the Terminal session.
     [self stopRawMousePermissionAssistant];
     exit(0);
 }
 
 - (IBAction)launchQuake:(id)sender {
     BOOL hadInitialArgs = ([arguments count] > 0);
-    [arguments parseArguments:[paramTextField stringValue]];
+    NSString *launchOptions;
+    NSString *effectiveCommandLine;
+    NSString *path;
+    QuakeArguments *launchArguments;
+    int argc;
+    int i;
 
-    // If launched from the GUI (no initial command-line args)
-    // and the user requested -dedicated, spawn a separate
-    // dedicated server process that matches the working
-    // terminal command instead of running inside the GUI app.
-    if (!hadInitialArgs && [arguments argument:@"-dedicated"] != nil) {
+    (void)sender;
+
+    // If the user has text pending in the argument text field, add it before launch.
+    if (argumentTextField) {
+        NSString *pending = [[self currentArgumentText] stringByTrimmingCharactersInSet:
+                             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([pending length] > 0)
+            [self argumentTextFieldEntered:argumentTextField];
+    }
+
+    launchOptions = [self joinedArgumentString];
+    effectiveCommandLine = [self effectiveCommandLineWithLaunchOptions:launchOptions];
+    launchArguments = [[QuakeArguments alloc] init];
+    [launchArguments parseArguments:effectiveCommandLine];
+
+    if (!hadInitialArgs && [launchArguments argument:@"-dedicated"] != nil) {
+        [launchArguments release];
         [self launchDedicatedServerWithParsedArguments];
         return;
     }
-    
-    NSInteger index = [screenModePopUp indexOfSelectedItem];
-    if (index > 0) {
-        ScreenInfo *info = [screenModes objectAtIndex:index];
-        
-        int width = [info width];
-        int height = [info height];
-        int bpp = [info bpp];
 
-        [arguments addArgument:@"-width" withValue:[NSString stringWithFormat:@"%d", width]];
-        [arguments addArgument:@"-height" withValue:[NSString stringWithFormat:@"%d", height]];
-        [arguments addArgument:@"-bpp" withValue:[NSString stringWithFormat:@"%d", bpp]];
-    }
-    
-    [arguments removeArgument:@"-fullscreen"];
-    [arguments removeArgument:@"-window"];
-    BOOL fullscreen = [fullscreenCheckBox state] == NSControlStateValueOn;
-    if (fullscreen)
-        [arguments addArgument:@"-fullscreen"];
-    else
-        [arguments addArgument:@"-window"];
+    path = [NSString stringWithCString:gArgv[0] encoding:NSASCIIStringEncoding];
 
-    NSString *path = [NSString stringWithCString:gArgv[0] encoding:NSASCIIStringEncoding];
-    
-    int i;
     for (i = 0; i < 4; i++)
         path = [path stringByDeletingLastPathComponent];
 
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    [fileManager changeCurrentDirectoryPath:path];
-    
-    int argc = [arguments count] + 1;
-    char *argv[argc];
+    [[NSFileManager defaultManager] changeCurrentDirectoryPath:path];
 
-    argv[0] = gArgv[0];
-    [arguments setArguments:argv + 1];
+    argc = [launchArguments count] + 1;
+    {
+        char *argv[argc];
+        argv[0] = gArgv[0];
+        [launchArguments setArguments:argv + 1];
 
-    [self stopRawMousePermissionAssistant];
-    [launcherWindow close];
+        [self stopRawMousePermissionAssistant];
+        if (launcherWindow)
+            [launcherWindow close];
 
-    // update the defaults
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    [defaults setObject:[paramTextField stringValue] forKey:FQPrefCommandLineKey];
-    [defaults setObject:[NSNumber numberWithBool:[fullscreenCheckBox state] == NSControlStateValueOn] forKey:FQPrefFullscreenKey];
-    [defaults setObject:[NSNumber numberWithInteger:index] forKey:FQPrefScreenModeKey];
-    [defaults synchronize];
-
-    int status = SDL_main (argc, argv);
-    exit(status);
+        int status = SDL_main(argc, argv);
+        [launchArguments release];
+        exit(status);
+    }
 }
 
 - (IBAction)cancel:(id)sender {
@@ -1417,13 +2763,12 @@ static NSImage *QSSHostAppIcon(void)
                                                         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
                                                           backing:NSBackingStoreBuffered
                                                             defer:NO];
-   
+
     [aboutWindow setReleasedWhenClosed:NO];
 
     NSView *contentView = [aboutWindow contentView];
     NSRect bounds = [contentView bounds];
 
-    // Large icon centered at top
     NSImage *appIcon = [NSApp applicationIconImage];
     CGFloat iconSize = 128.0f;
     CGFloat iconX = (NSWidth(bounds) - iconSize) / 2.0f;
@@ -1439,7 +2784,6 @@ static NSImage *QSSHostAppIcon(void)
     CGFloat versionY = titleY - 22.0f;
     CGFloat linkY = versionY - 16.0f;
 
-    // Title (below icon)
     NSTextField *titleField = [[[NSTextField alloc] initWithFrame:NSMakeRect(textX, titleY, textWidth, 24)] autorelease];
     [titleField setBezeled:NO];
     [titleField setDrawsBackground:NO];
@@ -1450,7 +2794,6 @@ static NSImage *QSSHostAppIcon(void)
     [titleField setStringValue:@"QSS-M"];
     [contentView addSubview:titleField];
 
-    // Version (below title)
     NSTextField *versionField = [[[NSTextField alloc] initWithFrame:NSMakeRect(textX, versionY, textWidth, 20)] autorelease];
     [versionField setBezeled:NO];
     [versionField setDrawsBackground:NO];
@@ -1461,7 +2804,6 @@ static NSImage *QSSHostAppIcon(void)
     [versionField setStringValue:[NSString stringWithFormat:@"Version %@", versionString]];
     [contentView addSubview:versionField];
 
-    // GitHub link as a button (below version)
     NSButton *linkButton = [[[NSButton alloc] initWithFrame:NSMakeRect(textX, linkY, textWidth, 20)] autorelease];
     [linkButton setBordered:NO];
     [linkButton setButtonType:NSButtonTypeMomentaryChange];
@@ -1470,14 +2812,13 @@ static NSImage *QSSHostAppIcon(void)
     [linkButton setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
 
     NSDictionary *linkAttributes = @{
-        NSForegroundColorAttributeName: [NSColor colorWithSRGBRed:139.0f/255.0f green:95.0f/255.0f blue:71.0f/255.0f alpha:1.0f],
+        NSForegroundColorAttributeName: QSSAboutLinkColor(),
         NSUnderlineStyleAttributeName: [NSNumber numberWithInt:NSUnderlineStyleSingle]
     };
     NSMutableAttributedString *linkTitle = [[[NSMutableAttributedString alloc] initWithString:githubDisplay attributes:linkAttributes] autorelease];
     [linkButton setAttributedTitle:linkTitle];
     [contentView addSubview:linkButton];
 
-    // Only show close button; hide minimize+zoom if present
     NSButton *minimizeButton = [aboutWindow standardWindowButton:NSWindowMiniaturizeButton];
     if (minimizeButton)
         [minimizeButton setHidden:YES];
@@ -1490,47 +2831,31 @@ static NSImage *QSSHostAppIcon(void)
     [NSApp activateIgnoringOtherApps:YES];
 }
 
-- (IBAction)addCommandLineOption:(id)sender {
-    if (!commandOptionPopUp || !paramTextField)
-        return;
+- (IBAction)openQuakeFolder:(id)sender {
+    NSURL *bundleURL;
+    NSURL *folderURL;
 
-    NSMenuItem *item = [commandOptionPopUp selectedItem];
-    if (!item || ![item isEnabled] || [item isSeparatorItem])
-        return;
+    (void)sender;
 
-    NSString *insert = [item representedObject];
-    if (!insert || [insert length] == 0)
-        insert = [item title];
-    if (!insert || [insert length] == 0)
-        return;
+    bundleURL = [[NSBundle mainBundle] bundleURL];
+    folderURL = [bundleURL URLByDeletingLastPathComponent];
+    if (!folderURL)
+        folderURL = [NSURL fileURLWithPath:[[NSFileManager defaultManager] currentDirectoryPath]
+                               isDirectory:YES];
 
-    NSString *current = [paramTextField stringValue];
-    if (!current)
-        current = @"";
-
-    // Trim trailing whitespace and append a space if needed.
-    current = [current stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if ([current length] > 0)
-        current = [current stringByAppendingString:@" "];
-
-    NSString *newText = [current stringByAppendingString:insert];
-    [paramTextField setStringValue:newText];
-
-    // Focus the text field so the user can edit values.
-    [[paramTextField window] makeFirstResponder:paramTextField];
-
-    // Reset the popup selection so it looks like a button again
-    [commandOptionPopUp selectItem:nil];
-    [commandOptionPopUp setTitle:@""];
+    if (folderURL)
+        [[NSWorkspace sharedWorkspace] openURL:folderURL];
 }
 
 - (IBAction)openGithub:(id)sender {
+    (void)sender;
     NSURL *url = [NSURL URLWithString:@"https://github.com/timbergeron/QSS-M"];
     if (url)
         [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
 - (IBAction)openWebsite:(id)sender {
+    (void)sender;
     NSURL *url = [NSURL URLWithString:@"https://qssm.quakeone.com/"];
     if (url)
         [[NSWorkspace sharedWorkspace] openURL:url];
@@ -1542,12 +2867,20 @@ static NSImage *QSSHostAppIcon(void)
     [rawMouseOverlayArrowField release];
     [rawMouseOverlayTitleField release];
     [rawMouseOverlayDragSourceView release];
-    [rawMouseInputButton release];
-    [launcherTitleLabel release];
-    [commandOptionPopUp release];
-    [screenModes release];
+    if (rawMouseStartupRefreshTimer)
+        [rawMouseStartupRefreshTimer invalidate];
+    [rawMouseStartupRefreshTimer release];
+    [rawMouseSwitch release];
+    [launchOptionsCard release];
+    [settingsCard release];
+    [argumentTextField release];
+    [argumentCompletionGhostLabel release];
+    [addArgumentButton release];
+    [presetArgumentsMenu release];
+    [argumentChips release];
+    [launchButton release];
+    [cancelButton release];
     [super dealloc];
 }
-
 
 @end
