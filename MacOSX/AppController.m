@@ -633,7 +633,9 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
 
 - (IBAction)showAboutPanel:(id)sender {
     NSString *githubDisplay = @"github.com/timbergeron/QSS-M";
-    NSString *versionString = @"1.6.5";
+    NSString *versionString = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleShortVersionString"];
+    if (!versionString)
+        versionString = @"";
 
     NSRect frame = NSMakeRect(0, 0, 480, 260);
     NSWindow *aboutWindow = [[NSWindow alloc] initWithContentRect:frame
@@ -693,7 +695,7 @@ NSString *FQPrefScreenModeKey = @"ScreenMode";
     [linkButton setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
 
     NSDictionary *linkAttributes = @{
-        NSForegroundColorAttributeName: [NSColor linkColor],
+        NSForegroundColorAttributeName: [NSColor colorWithSRGBRed:139.0f/255.0f green:95.0f/255.0f blue:71.0f/255.0f alpha:1.0f],
         NSUnderlineStyleAttributeName: [NSNumber numberWithInt:NSUnderlineStyleSingle]
     };
     NSMutableAttributedString *linkTitle = [[[NSMutableAttributedString alloc] initWithString:githubDisplay attributes:linkAttributes] autorelease];

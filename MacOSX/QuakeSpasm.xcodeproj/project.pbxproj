@@ -181,6 +181,25 @@
 		};
 /* End PBXCopyFilesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		85D17E7520261A1A00100001 /* Sync Version from quakedef.h */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/../Quake/quakedef.h",
+			);
+			name = "Sync Version from quakedef.h";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "HEADER=\"${SRCROOT}/../Quake/quakedef.h\"\nPLIST=\"${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}\"\n\nif [ ! -f \"$HEADER\" ]; then\n\techo \"warning: quakedef.h not found at $HEADER\"\n\texit 0\nfi\nif [ ! -f \"$PLIST\" ]; then\n\techo \"warning: Info.plist not found at $PLIST\"\n\texit 0\nfi\n\nMAJOR=$(awk '/^#define[[:space:]]+QSSM_VER_MAJOR[[:space:]]/ {print $3}' \"$HEADER\")\nMINOR=$(awk '/^#define[[:space:]]+QSSM_VER_MINOR[[:space:]]/ {print $3}' \"$HEADER\")\nPATCH=$(awk '/^#define[[:space:]]+QSSM_VER_PATCH[[:space:]]/ {print $3}' \"$HEADER\")\n\nif [ -z \"$MAJOR\" ] || [ -z \"$MINOR\" ] || [ -z \"$PATCH\" ]; then\n\techo \"warning: could not parse QSSM_VER_* from $HEADER\"\n\texit 0\nfi\n\nVERSION=\"${MAJOR}.${MINOR}.${PATCH}\"\n/usr/libexec/PlistBuddy -c \"Set :CFBundleShortVersionString ${VERSION}\" \"$PLIST\"\necho \"Set CFBundleShortVersionString to ${VERSION}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXFileReference section */
 		002F39F909D0881F00EBEB88 /* SDL.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = SDL.framework; sourceTree = SOURCE_ROOT; };
 		002F3A2B09D0888800EBEB88 /* SDLMain.h */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.c.h; path = SDLMain.h; sourceTree = "<group>"; };
@@ -837,6 +856,7 @@
 				664D98ED19CF6B78000D395C /* Copy Libraries */,
 				66991C001DBAB3F500C373C0 /* CopyFiles */,
 				93F78A1F2946BD5B00800F54 /* Embed Frameworks */,
+				85D17E7520261A1A00100001 /* Sync Version from quakedef.h */,
 			);
 			buildRules = (
 			);
