@@ -4353,7 +4353,7 @@ Host_GetDamageFunction
 */
 static int Host_GetDamageFunction(void)
 {
-	int i, total;
+	dfunction_t *func;
 
 	if (!qcvm || !qcvm->progs) // VM present?
 		return -1;
@@ -4361,21 +4361,44 @@ static int Host_GetDamageFunction(void)
 	if (deathmatch.value || coop.value)
 		return -1;
 
-	total = qcvm->progs->numfunctions;
-	for (i = 0; i < total; ++i)
-	{
-		if (!strcmp(PR_GetString(qcvm->functions[i].s_name), "T_Damage"))
-			return i;
-	}
-	return -1;      /* not found */
+	func = ED_FindFunction("T_Damage");
+	return func ? (int)(func - qcvm->functions) : -1;
+}
+
+static qboolean Host_EdictClassnameIs(const edict_t *ent, const char *classname)
+{
+	return ent && !ent->free && ent->v.classname
+		&& !strcmp(PR_GetString(ent->v.classname), classname);
+}
+
+static int Host_FindEntityGlobalOffset(const char *name)
+{
+	ddef_t *def = ED_FindGlobal(name);
+
+	if (!def || ((def->type & ~DEF_SAVEGLOBAL) != ev_entity))
+		return -1;
+
+	return def->ofs;
+}
+
+static void Host_SetEntityGlobal(int ofs, edict_t *ent)
+{
+	if (ofs >= 0)
+		G_INT(ofs) = ent ? EDICT_TO_PROG(ent) : 0;
 }
 
 static void Host_DoDamage(int func, edict_t* target, qboolean gib)
 {
 	const float health = target->v.health;
+	const int old_self = pr_global_struct->self;
+	const int old_other = pr_global_struct->other;
 
 	if (health <= 0.0f || target->v.takedamage <= 0.0f) // Skip corpses or invulnerable entities
 		return;
+
+	pr_global_struct->time = qcvm->time;
+	pr_global_struct->self = EDICT_TO_PROG(sv_player);
+	pr_global_struct->other = EDICT_TO_PROG(sv_player);
 
 	/* Parameter setup. */
 	G_INT(OFS_PARM0) = EDICT_TO_PROG(target);   /* target    */
@@ -4385,6 +4408,54 @@ static void Host_DoDamage(int func, edict_t* target, qboolean gib)
 	memset(&qcvm->globals[OFS_PARM4], 0, sizeof(float) * 3 * 4);
 
 	PR_ExecuteProgram(func);
+
+	pr_global_struct->self = old_self;
+	pr_global_struct->other = old_other;
+}
+
+static qboolean Host_RunEntityFunction(const char *funcname, edict_t *self, edict_t *other)
+{
+	dfunction_t *func;
+	const int old_self = pr_global_struct->self;
+	const int old_other = pr_global_struct->other;
+	const int activator_ofs = Host_FindEntityGlobalOffset("activator");
+	const int old_activator = (activator_ofs >= 0) ? G_INT(activator_ofs) : 0;
+
+	func = ED_FindFunction(funcname);
+	if (!func)
+		return false;
+
+	pr_global_struct->time = qcvm->time;
+	pr_global_struct->self = EDICT_TO_PROG(self);
+	pr_global_struct->other = other ? EDICT_TO_PROG(other) : 0;
+	Host_SetEntityGlobal(activator_ofs, other);
+
+	PR_ExecuteProgram((func_t)(func - qcvm->functions));
+
+	pr_global_struct->self = old_self;
+	pr_global_struct->other = old_other;
+	if (activator_ofs >= 0)
+		G_INT(activator_ofs) = old_activator;
+
+	return true;
+}
+
+static qboolean Host_MassacreBoss(edict_t *ent, int damage_func, qboolean gib)
+{
+	if (Host_EdictClassnameIs(ent, "monster_boss"))
+		return Host_RunEntityFunction("boss_death10", ent, sv_player);
+
+	if (Host_EdictClassnameIs(ent, "monster_oldone"))
+	{
+		if (ent->v.health <= 0.0f || ent->v.takedamage <= 0.0f)
+			return false;
+
+		ent->v.flags = (int)ent->v.flags | FL_MONSTER;
+		Host_DoDamage(damage_func, ent, gib);
+		return true;
+	}
+
+	return false;
 }
 
 static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833c
@@ -4409,6 +4480,13 @@ static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833
 	for (i = 1; i < total; ++i)                /* edict 0 = world */
 	{
 		edict_t* ent = EDICT_NUM((int)i);
+		if (ent->free)
+			continue;
+		if (Host_MassacreBoss(ent, func, gib))
+		{
+			count++;
+			continue;
+		}
 		if (ent->free || !((int)ent->v.flags & FL_MONSTER))
 			continue;
 		if (ent->v.health <= 0.0f || ent->v.takedamage <= 0.0f)
