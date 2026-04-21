@@ -1510,7 +1510,8 @@ static void GL_CheckExtensions (void)
 	else if (gl_glsl_able)
 	{
 		gl_glsl_gamma_able = true;
-		Con_Printf("Enabled: GLSL gamma\n");
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("Enabled: GLSL gamma\n");
 	}
 	else
 	{
@@ -1612,7 +1613,8 @@ static void GL_CheckExtensions (void)
 	else if (gl_glsl_able && gl_vbo_able && gl_max_texture_units >= 3)
 	{
 		gl_glsl_alias_able = true;
-		Con_Printf("Enabled: GLSL alias model rendering\n");
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("Enabled: GLSL alias model rendering\n");
 	}
 	else
 	{
