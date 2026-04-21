@@ -24,27 +24,60 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "snd_codec.h"
 
+static int ResampleSfx_SafeOutcount (int outcount, int inlength, double stepscale)
+{
+	while (outcount > 0 && (int)((outcount - 1) * stepscale) >= inlength)
+		outcount--;
+
+	return outcount;
+}
+
+static int ResampleSfx_GetMonoSample (const byte *data, int inwidth, int srcsample)
+{
+	if (inwidth == 2)
+		return LittleShort (((const short *)data)[srcsample]);
+
+	return ((int)((unsigned char)data[srcsample]) - 128) << 8;
+}
+
+static int ResampleSfx_GetStereoSample (const byte *data, int inwidth, int srcsample)
+{
+	srcsample <<= 1;
+
+	if (inwidth == 2)
+		return (LittleShort (((const short *)data)[srcsample]) +
+			LittleShort (((const short *)data)[srcsample + 1])) / 2;
+
+	return ((((int)((unsigned char)data[srcsample]) - 128) << 8) +
+		(((int)((unsigned char)data[srcsample + 1]) - 128) << 8)) / 2;
+}
+
 /*
 ================
 ResampleSfx
 ================
 */
-static void ResampleSfx (sfx_t *sfx, int inrate, int inwidth, byte *data)
+static void ResampleSfx (sfx_t *sfx, int inrate, int inwidth, const byte *data)
 {
 	int		outcount;
+	int		safe_outcount;
 	int		srcsample;
-	float	stepscale;
+	int		inlength;
+	double	stepscale;
 	int		i;
-	int		sample, fracstep;
+	int		sample;
 	sfxcache_t	*sc;
 
 	sc = (sfxcache_t *) Cache_Check (&sfx->cache);
 	if (!sc)
 		return;
 
-	stepscale = (float)inrate / shm->speed;	// this is usually 0.5, 1, or 2
+	inlength = sc->length;
+	stepscale = (double)inrate / shm->speed;	// this is usually 0.5, 1, or 2
 
 	outcount = sc->length / stepscale;
+	/* resampling math can round the last output sample past the source buffer */
+	safe_outcount = ResampleSfx_SafeOutcount(outcount, inlength, stepscale);
 	sc->length = outcount;
 	if (sc->loopstart != -1)
 		sc->loopstart = sc->loopstart / stepscale;
@@ -56,29 +89,31 @@ static void ResampleSfx (sfx_t *sfx, int inrate, int inwidth, byte *data)
 		sc->width = inwidth;
 	if (sc->stereo == 1)
 	{	//crappy approach to stereo - strip it out by merging left+right channels
-		// samplefrac can overflow 2**31 with very big sounds, see below.
-		int64_t samplefrac = 0;
-		fracstep = (int)(stepscale*256);
-		for (i = 0; i < outcount; i++)
+		for (i = 0; i < safe_outcount; i++)
 		{
-			srcsample = (int)(samplefrac >> 8);
-			srcsample<<=1;
-			samplefrac += fracstep;
-			if (inwidth == 2)
-				sample = LittleShort ( ((short *)data)[srcsample] ) + LittleShort ( ((short *)data)[srcsample+1] );
-			else
-				sample = ((int)( (unsigned char)(data[srcsample]) - 128) << 8) + ((int)( (unsigned char)(data[srcsample+1]) - 128) << 8);
-			sample /= 2;
+			srcsample = (int)(i * stepscale);
+			sample = ResampleSfx_GetStereoSample(data, inwidth, srcsample);
 			if (sc->width == 2)
 				((short *)sc->data)[i] = sample;
 			else
 				((signed char *)sc->data)[i] = sample >> 8;
 		}
+		if (safe_outcount < outcount)
+		{
+			sample = ResampleSfx_GetStereoSample(data, inwidth, inlength - 1);
+			for (i = safe_outcount; i < outcount; i++)
+			{
+				if (sc->width == 2)
+					((short *)sc->data)[i] = sample;
+				else
+					((signed char *)sc->data)[i] = sample >> 8;
+			}
+		}
 		sc->stereo = 0;
 	}
 	else
 	{
-	// resample / decimate to the current source rate
+		// resample / decimate to the current source rate
 
 		if (stepscale == 1 && inwidth == 1 && sc->width == 1)
 		{
@@ -89,21 +124,25 @@ static void ResampleSfx (sfx_t *sfx, int inrate, int inwidth, byte *data)
 		else
 		{
 	// general case
-			// samplefrac can overflow 2**31 with very big sounds, see below.
-			int64_t samplefrac = 0;
-			fracstep = stepscale*256;
-			for (i = 0; i < outcount; i++)
+			for (i = 0; i < safe_outcount; i++)
 			{
-				srcsample = (int)(samplefrac >> 8);
-				samplefrac += fracstep;
-				if (inwidth == 2)
-					sample = LittleShort ( ((short *)data)[srcsample] );
-				else
-					sample = (int)( (unsigned char)(data[srcsample]) - 128) << 8;
+				srcsample = (int)(i * stepscale);
+				sample = ResampleSfx_GetMonoSample(data, inwidth, srcsample);
 				if (sc->width == 2)
 					((short *)sc->data)[i] = sample;
 				else
 					((signed char *)sc->data)[i] = sample >> 8;
+			}
+			if (safe_outcount < outcount)
+			{
+				sample = ResampleSfx_GetMonoSample(data, inwidth, inlength - 1);
+				for (i = safe_outcount; i < outcount; i++)
+				{
+					if (sc->width == 2)
+						((short *)sc->data)[i] = sample;
+					else
+						((signed char *)sc->data)[i] = sample >> 8;
+				}
 			}
 		}
 	}
@@ -122,7 +161,7 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 	byte	*data;
 	wavinfo_t	info;
 	int		len;
-	float	stepscale;
+	double	stepscale;
 	sfxcache_t	*sc;
 	byte	stackbuf[1*1024];		// avoid dirtying the cache heap
 
@@ -145,27 +184,52 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 			stream = S_CodecOpenStreamExt(s->name, false);
 		if (stream)
 		{
-			size_t decodedsize = 1024*1024*16;
+			snd_info_t	streaminfo;
+			int decodedsize = 1024*1024*16;
 			void *decoded = malloc(decodedsize);
-			int res = S_CodecReadStream(stream, decodedsize, decoded);
+			int res;
 			int len;
+
+			if (!decoded)
+			{
+				S_CodecCloseStream(stream);
+				return NULL;
+			}
+
+			res = S_CodecReadStream(stream, decodedsize, decoded);
+			streaminfo = stream->info;
 			S_CodecCloseStream(stream);
 
-			res /= stream->info.width*stream->info.channels;
-
-			stepscale = (float)stream->info.rate / shm->speed;
-			len = res / stepscale;
-			len = len * stream->info.width;// * info.channels;
-
-			sc = (sfxcache_t *) Cache_Alloc ( &s->cache, res + sizeof(sfxcache_t), s->name);
-			if (!sc)
+			if (res <= 0)
+			{
+				free(decoded);
 				return NULL;
+			}
 
-			sc->length = res / stream->info.channels;
+			res /= streaminfo.width * streaminfo.channels;
+
+			stepscale = (double)streaminfo.rate / shm->speed;
+			len = res / stepscale;
+			len = len * streaminfo.width;// * info.channels;
+
+			if (res == 0 || len == 0)
+			{
+				free(decoded);
+				return NULL;
+			}
+
+			sc = (sfxcache_t *) Cache_Alloc ( &s->cache, len + sizeof(sfxcache_t), s->name);
+			if (!sc)
+			{
+				free(decoded);
+				return NULL;
+			}
+
+			sc->length = res;
 			sc->loopstart = -1;
-			sc->speed = stream->info.rate;
-			sc->width = stream->info.width;
-			sc->stereo = stream->info.channels-1;
+			sc->speed = streaminfo.rate;
+			sc->width = streaminfo.width;
+			sc->stereo = streaminfo.channels-1;
 
 			ResampleSfx (s, sc->speed, sc->width, decoded);
 			free(decoded);
@@ -201,7 +265,7 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 		return NULL;
 	}
 
-	stepscale = (float)info.rate / shm->speed;
+	stepscale = (double)info.rate / shm->speed;
 	len = info.samples / stepscale;
 
 	len = len * info.width;// * info.channels;
@@ -318,7 +382,7 @@ static void DumpChunks (void)
 GetWavinfo
 ============
 */
-wavinfo_t GetWavinfo (const char *name, byte *wav, int wavlength)
+wavinfo_t GetWavinfo (const char *name, byte *wav, qofs_t wavlength)
 {
 	wavinfo_t	info;
 	int	i;

@@ -86,7 +86,7 @@ typedef struct
 	int	channels;
 	int	loopstart;
 	int	samples;
-	int	dataofs;		/* chunk starts this many bytes from file start	*/
+	qofs_t	dataofs;		/* chunk starts this many bytes from file start	*/
 } wavinfo_t;
 
 void S_Init (void);
@@ -188,7 +188,7 @@ extern	cvar_t		bgmvolume;
 void S_LocalSound (const char *name);
 sfxcache_t *S_LoadSound (sfx_t *s);
 
-wavinfo_t GetWavinfo (const char *name, byte *wav, int wavlength);
+wavinfo_t GetWavinfo (const char *name, byte *wav, qofs_t wavlength);
 
 void SND_InitScaletable (void);
 
