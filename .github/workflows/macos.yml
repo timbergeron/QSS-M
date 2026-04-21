@@ -7,11 +7,14 @@ on:
 jobs:
   build:
     name: arm64-universal
-    runs-on: macos-latest
+    # Pin the major macOS image to avoid surprise `macos-latest` migrations
+    # changing the toolchain and invalidating caches unexpectedly.
+    runs-on: macos-15
     strategy:
       fail-fast: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
       VCPKG_CACHE_REV: "v1"
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
       VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
@@ -20,15 +23,42 @@ jobs:
     steps:
     - uses: actions/checkout@v5
 
+    - name: Compute vcpkg cache key inputs
+      id: vcpkg-cache
+      shell: bash
+      run: |
+          image_os="${ImageOS:-$(sw_vers -productVersion)}"
+          image_version="${ImageVersion:-unknown}"
+          xcode_version="$(xcodebuild -version | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/ $//')"
+          xcode_hash="$(printf '%s' "$xcode_version" | shasum -a 256 | cut -d' ' -f1)"
+          echo "image_os=$image_os" >> "$GITHUB_OUTPUT"
+          echo "image_version=$image_version" >> "$GITHUB_OUTPUT"
+          echo "xcode_hash=$xcode_hash" >> "$GITHUB_OUTPUT"
+          echo "Using ImageOS=$image_os"
+          echo "Using ImageVersion=$image_version"
+          echo "Using Xcode=$xcode_version"
+
     - name: Cache vcpkg artifacts
+      id: vcpkg-cache-restore
       uses: actions/cache@v4
       with:
         path: |
           ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
           ${{ env.VCPKG_DOWNLOADS }}
-        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ hashFiles('MacOSX/setup-vcpkg.sh', 'MacOSX/custom-triplets/*.cmake', 'MacOSX/vcpkg-patches/*.patch') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-${{ hashFiles('MacOSX/setup-vcpkg.sh', 'MacOSX/custom-triplets/*.cmake', 'MacOSX/vcpkg-patches/*.patch') }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-vcpkg-
+          ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-
+          ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-
+
+    - name: Report cache restore result
+      run: |
+          if [ "${{ steps.vcpkg-cache-restore.outputs.cache-hit }}" = "true" ]; then
+            echo "actions/cache exact key hit"
+          elif [ "${{ steps.vcpkg-cache-restore.outputs.cache-hit }}" = "false" ]; then
+            echo "actions/cache restored from a partial or restore-key match"
+          else
+            echo "actions/cache miss"
+          fi
 
     - name: Debug environment (pre-install)
       run: |
@@ -73,7 +103,7 @@ jobs:
           echo "$PATH" | tr ':' '\n'
           echo ""
           echo "=== Installing packages ==="
-          brew install autoconf automake libtool autoconf-archive
+          brew install autoconf automake libtool autoconf-archive pkg-config
           echo ""
           echo "=== Verify installed tools ==="
           echo "autoconf: $(command -v autoconf) -> $(autoconf --version | head -1)"
