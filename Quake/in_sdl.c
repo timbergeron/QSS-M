@@ -3115,16 +3115,23 @@ static qboolean IN_InstallExternalFile(const char *source_path, const char *sour
 		if (!same_path)
 		{
 			char	path_copy[MAX_OSPATH];
-			qboolean replacing;
+			qboolean dest_exists;
 
-			q_strlcpy(path_copy, dest_path, sizeof(path_copy));
-			COM_CreatePath(path_copy);
+			dest_exists = (Sys_FileType(dest_path) & FS_ENT_FILE) != 0;
+			if (dest_exists)
+			{
+				Con_Printf("Using existing file at %s/%s\n", COM_SkipPath(com_gamedir), relative_path);
+			}
+			else
+			{
+				q_strlcpy(path_copy, dest_path, sizeof(path_copy));
+				COM_CreatePath(path_copy);
 
-			replacing = (Sys_FileType(dest_path) & FS_ENT_FILE) != 0;
-			if (!IN_CopyExternalFile(normalized_path, dest_path))
-				return false;
+				if (!IN_CopyExternalFile(normalized_path, dest_path))
+					return false;
 
-			Con_Printf("%s %s to %s/%s\n", replacing ? "Replaced" : "Copied", source_desc, COM_SkipPath(com_gamedir), relative_path);
+				Con_Printf("Copied %s to %s/%s\n", source_desc, COM_SkipPath(com_gamedir), relative_path);
+			}
 
 			/* Also copy .lit file if installing a .bsp */
 			if (is_map)
@@ -3140,9 +3147,14 @@ static qboolean IN_InstallExternalFile(const char *source_path, const char *sour
 						COM_StripExtension(dest_path, lit_dest, sizeof(lit_dest));
 						if ((size_t)q_strlcat(lit_dest, ".lit", sizeof(lit_dest)) < sizeof(lit_dest))
 						{
-							replacing = (Sys_FileType(lit_dest) & FS_ENT_FILE) != 0;
-							if (IN_CopyExternalFile(lit_source, lit_dest))
-								Con_Printf("%s .lit file to %s/maps/\n", replacing ? "Replaced" : "Copied", COM_SkipPath(com_gamedir));
+							if (Sys_FileType(lit_dest) & FS_ENT_FILE)
+							{
+								Con_Printf("Using existing .lit file in %s/maps/\n", COM_SkipPath(com_gamedir));
+							}
+							else if (IN_CopyExternalFile(lit_source, lit_dest))
+							{
+								Con_Printf("Copied .lit file to %s/maps/\n", COM_SkipPath(com_gamedir));
+							}
 						}
 					}
 				}
