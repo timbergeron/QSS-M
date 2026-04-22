@@ -45,6 +45,7 @@ void PL_VID_Shutdown (void)
 #if MAC_OS_X_VERSION_MIN_REQUIRED < 1060
 #define NSPasteboardTypeString NSStringPboardType
 #endif
+#define QSSPasteboardTypeFileURL @"public.file-url"
 #define MAX_CLIPBOARDTXT	MAXCMDLINE	/* 256 */
 char *PL_GetClipboardData (void)
 {
@@ -65,6 +66,45 @@ char *PL_GetClipboardData (void)
             }
         }
     }
+    return data;
+}
+
+char *PL_GetClipboardFilePath (void)
+{
+    char *data			= NULL;
+    NSPasteboard* pasteboard	= [NSPasteboard generalPasteboard];
+    NSArray* types		= [pasteboard types];
+    NSString* clipboardPath	= nil;
+
+    if ([types containsObject: QSSPasteboardTypeFileURL]) {
+        NSString* fileURLString = [pasteboard stringForType: QSSPasteboardTypeFileURL];
+        if (fileURLString != NULL) {
+            NSURL* fileURL = [NSURL URLWithString: fileURLString];
+            if (fileURL != NULL && [fileURL isFileURL])
+                clipboardPath = [fileURL path];
+        }
+    }
+
+    if (clipboardPath == nil && [types containsObject: NSFilenamesPboardType]) {
+        id filenames = [pasteboard propertyListForType: NSFilenamesPboardType];
+        if ([filenames isKindOfClass: [NSArray class]] && [filenames count] > 0) {
+            id firstPath = [filenames objectAtIndex: 0];
+            if ([firstPath isKindOfClass: [NSString class]])
+                clipboardPath = firstPath;
+        }
+    }
+
+    if (clipboardPath != nil && [clipboardPath length] > 0) {
+        const char *path = [clipboardPath fileSystemRepresentation];
+        if (path != NULL && path[0]) {
+            size_t size = strlen(path) + 1;
+            if (size <= (size_t)Q_MAXINT) {
+                data = (char *) Z_Malloc((int)size);
+                q_strlcpy(data, path, size);
+            }
+        }
+    }
+
     return data;
 }
 

@@ -2483,6 +2483,13 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		return;
 	}
 
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+	if (down && !wasdown && (key == 'v' || key == 'V') && (keydown[K_CTRL] || keydown[K_COMMAND]) && IN_PasteClipboardFile())
+#else
+	if (down && !wasdown && (key == 'v' || key == 'V') && keydown[K_CTRL] && IN_PasteClipboardFile())
+#endif
+		return;
+
 // handle escape specialy, so the user can never unbind it
 	if (key == K_ESCAPE)
 	{

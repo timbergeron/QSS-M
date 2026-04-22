@@ -83,6 +83,116 @@ char *PL_GetClipboardData (void)
 		size = q_min((size_t)(MAX_CLIPBOARDTXT), size);
 		data = (char *) Z_Malloc((int)size);
 		q_strlcpy (data, cliptext, size);
+		SDL_free(cliptext);
+	}
+#endif
+
+	return data;
+}
+
+#if defined(USE_SDL2)
+static int PL_HexValue(int c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+static char *PL_DecodeFileURI(const char *uri, size_t uri_len)
+{
+	const char	*src;
+	const char	*end;
+	char		*data;
+	char		*dst;
+
+	if (uri_len < 7 || strncmp(uri, "file://", 7) != 0)
+		return NULL;
+
+	src = uri + 7;
+	uri_len -= 7;
+	if (uri_len >= 9 && strncmp(src, "localhost", 9) == 0)
+	{
+		src += 9;
+		uri_len -= 9;
+	}
+	else if (uri_len == 0 || src[0] != '/')
+		return NULL;
+
+	if (uri_len == 0 || src[0] != '/')
+		return NULL;
+
+	if (uri_len >= (size_t)Q_MAXINT)
+		return NULL;
+
+	data = (char *) Z_Malloc((int)uri_len + 1);
+	dst = data;
+	end = src + uri_len;
+	while (src < end)
+	{
+		if (*src == '%' && src + 2 < end)
+		{
+			int hi = PL_HexValue((unsigned char)src[1]);
+			int lo = PL_HexValue((unsigned char)src[2]);
+			if (hi >= 0 && lo >= 0)
+			{
+				*dst++ = (char)((hi << 4) | lo);
+				src += 3;
+				continue;
+			}
+		}
+		*dst++ = *src++;
+	}
+	*dst = '\0';
+	return data;
+}
+
+static char *PL_GetFileURIFromClipboardText(char *cliptext)
+{
+	char *line;
+
+	for (line = cliptext; line && *line; )
+	{
+		char	*end = line;
+		size_t	line_len;
+
+		while (*end && *end != '\r' && *end != '\n')
+			end++;
+
+		line_len = (size_t)(end - line);
+		if (line_len > 0 && line[0] == '#')
+		{
+			while (*end == '\r' || *end == '\n')
+				end++;
+			line = end;
+			continue;
+		}
+
+		if (line_len >= 7 && strncmp(line, "file://", 7) == 0)
+			return PL_DecodeFileURI(line, line_len);
+
+		while (*end == '\r' || *end == '\n')
+			end++;
+		line = end;
+	}
+
+	return NULL;
+}
+#endif
+
+char *PL_GetClipboardFilePath (void)
+{
+	char *data = NULL;
+#if defined(USE_SDL2)
+	char *cliptext = SDL_GetClipboardText();
+
+	if (cliptext != NULL)
+	{
+		data = PL_GetFileURIFromClipboardText(cliptext);
+		SDL_free(cliptext);
 	}
 #endif
 

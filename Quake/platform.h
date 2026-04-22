@@ -37,6 +37,9 @@ void PL_VID_Shutdown (void);
 /* retrieve text from the clipboard (returns Z_Malloc()'ed data) */
 char *PL_GetClipboardData (void);
 
+/* retrieve a file path from the clipboard (returns Z_Malloc()'ed data) */
+char *PL_GetClipboardFilePath (void);
+
 /* show an error dialog */
 void PL_ErrorDialog(const char *text);
 

@@ -106,6 +106,80 @@ char *PL_GetClipboardData (void)
 	return data;
 }
 
+char *PL_GetClipboardFilePath (void)
+{
+	typedef struct
+	{
+		DWORD pFiles;
+		POINT pt;
+		BOOL fNC;
+		BOOL fWide;
+	} pl_dropfiles_t;
+
+	char *data = NULL;
+
+	if (OpenClipboard(NULL) != 0)
+	{
+		HANDLE hClipboardData;
+
+		if ((hClipboardData = GetClipboardData(CF_HDROP)) != NULL)
+		{
+			pl_dropfiles_t *drop = (pl_dropfiles_t *) GlobalLock(hClipboardData);
+			SIZE_T drop_size = GlobalSize(hClipboardData);
+
+			if (drop != NULL && drop->pFiles >= sizeof(pl_dropfiles_t) && drop->pFiles < drop_size)
+			{
+				const char *files = (const char *)drop + drop->pFiles;
+				SIZE_T bytes_remaining = drop_size - drop->pFiles;
+
+				if (drop->fWide)
+				{
+					const WCHAR *wpath = (const WCHAR *)files;
+					size_t max_chars = bytes_remaining / sizeof(WCHAR);
+					size_t chars = 0;
+
+					while (chars < max_chars && wpath[chars])
+						chars++;
+
+					if (chars > 0 && chars < max_chars && chars < (size_t)Q_MAXINT)
+					{
+						int size = WideCharToMultiByte(CP_UTF8, 0, wpath, (int)chars, NULL, 0, NULL, NULL);
+						if (size > 0 && size < Q_MAXINT)
+						{
+							data = (char *) Z_Malloc(size + 1);
+							if (WideCharToMultiByte(CP_UTF8, 0, wpath, (int)chars, data, size, NULL, NULL) == size)
+								data[size] = '\0';
+							else
+							{
+								Z_Free(data);
+								data = NULL;
+							}
+						}
+					}
+				}
+				else
+				{
+					size_t bytes = 0;
+
+					while (bytes < bytes_remaining && files[bytes])
+						bytes++;
+
+					if (bytes > 0 && bytes < bytes_remaining && bytes < (size_t)Q_MAXINT)
+					{
+						data = (char *) Z_Malloc((int)bytes + 1);
+						memcpy(data, files, bytes);
+						data[bytes] = '\0';
+					}
+				}
+			}
+			if (drop != NULL)
+				GlobalUnlock(hClipboardData);
+		}
+		CloseClipboard ();
+	}
+	return data;
+}
+
 void PL_ErrorDialog(const char *errorMsg)
 {
 	MessageBox (NULL, errorMsg, "Quake Error",

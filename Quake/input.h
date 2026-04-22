@@ -76,6 +76,9 @@ int IN_GetLastActiveDeviceType (void);
 void IN_SendKeyEvents (void);
 // used as a callback for Sys_SendKeyEvents() by some drivers
 
+qboolean IN_PasteClipboardFile (void);
+// install a supported file path from the clipboard, if one is available
+
 void IN_UpdateInputMode (void);
 // do stuff if input mode (text/non-text) changes matter to the keyboard driver
 

@@ -2889,7 +2889,7 @@ static qboolean IN_BuildRelativeDroppedPath(const char *absolute_path, char *rel
 	return false;
 }
 
-static qboolean IN_CopyDroppedFile(const char *source, const char *destination)
+static qboolean IN_CopyExternalFile(const char *source, const char *destination)
 {
 	FILE	*src;
 	FILE	*dst;
@@ -2902,14 +2902,14 @@ static qboolean IN_CopyDroppedFile(const char *source, const char *destination)
 	result = q_snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", destination);
 	if (result < 0 || (size_t)result >= sizeof(tmp_path))
 	{
-		Con_Printf("Path too long for dropped file temp copy.\n");
+		Con_Printf("Path too long for file temp copy.\n");
 		return false;
 	}
 
 	src = fopen(source, "rb");
 	if (!src)
 	{
-		Con_Printf("Failed to open dropped file \"%s\": %s\n", source, strerror(errno));
+		Con_Printf("Failed to open file \"%s\": %s\n", source, strerror(errno));
 		return false;
 	}
 
@@ -2925,7 +2925,7 @@ static qboolean IN_CopyDroppedFile(const char *source, const char *destination)
 	{
 		if (fwrite(buffer, 1, count, dst) != count)
 		{
-			Con_Printf("Failed to write dropped file to \"%s\": %s\n", tmp_path, strerror(errno));
+			Con_Printf("Failed to write file to \"%s\": %s\n", tmp_path, strerror(errno));
 			success = false;
 			break;
 		}
@@ -2933,7 +2933,7 @@ static qboolean IN_CopyDroppedFile(const char *source, const char *destination)
 
 	if (success && ferror(src))
 	{
-		Con_Printf("Failed to read dropped file \"%s\": %s\n", source, strerror(errno));
+		Con_Printf("Failed to read file \"%s\": %s\n", source, strerror(errno));
 		success = false;
 	}
 
@@ -2968,6 +2968,240 @@ static qboolean IN_CopyDroppedFile(const char *source, const char *destination)
 #endif
 
 	return true;
+}
+
+static qboolean IN_InstallExternalFile(const char *source_path, const char *source_desc)
+{
+	char	normalized_path[MAX_OSPATH];
+	char	relative_path[MAX_OSPATH];
+	char	dest_path[MAX_OSPATH];
+	char	command_path[MAX_OSPATH];
+	const char	*extension;
+	const char	*subdir;
+	const char	*dest_ext;
+	qboolean	is_demo;
+	qboolean	is_map;
+	qboolean	is_loc;
+	qboolean	is_lit;
+	qboolean	has_relative;
+	qboolean	should_copy;
+	qboolean	relative_in_gamedir = false;
+
+	if (!source_path || !*source_path)
+		return false;
+
+	if (!source_desc || !*source_desc)
+		source_desc = "file";
+
+	if (q_strlcpy(normalized_path, source_path, sizeof(normalized_path)) >= sizeof(normalized_path))
+	{
+		Con_Printf("Path too long for %s.\n", source_desc);
+		return false;
+	}
+	IN_NormalizeDroppedPath(normalized_path);
+
+	extension = COM_FileGetExtension(normalized_path);
+	is_demo = !q_strcasecmp(extension, "dem");
+	is_map = !q_strcasecmp(extension, "bsp");
+	is_loc = !q_strcasecmp(extension, "loc");
+	is_lit = !q_strcasecmp(extension, "lit");
+
+	if (!is_demo && !is_map && !is_loc && !is_lit)
+	{
+		Con_Printf("Unsupported %s: %s\n", source_desc, COM_SkipPath(normalized_path));
+		return false;
+	}
+
+	if (is_demo)
+	{
+		subdir = "demos";
+		dest_ext = ".dem";
+	}
+	else if (is_loc)
+	{
+		subdir = "locs";
+		dest_ext = ".loc";
+	}
+	else if (is_map)
+	{
+		subdir = "maps";
+		dest_ext = ".bsp";
+	}
+	else
+	{
+		subdir = "maps";
+		dest_ext = ".lit";
+	}
+
+	relative_path[0] = '\0';
+	has_relative = IN_BuildRelativeDroppedPath(normalized_path, relative_path, sizeof(relative_path), &relative_in_gamedir);
+	should_copy = !has_relative || !relative_in_gamedir;
+
+	if (has_relative && relative_in_gamedir)
+	{
+		if (is_demo)
+		{
+			if (strchr(relative_path, '/'))
+			{
+#ifdef _WIN32
+				if (q_strncasecmp(relative_path, "demos/", 6) != 0)
+#else
+				if (strncmp(relative_path, "demos/", 6) != 0)
+#endif
+					should_copy = true;
+				else
+					should_copy = false;
+			}
+			else
+				should_copy = false;
+		}
+		else if (is_loc)
+		{
+#ifdef _WIN32
+			if (q_strncasecmp(relative_path, "locs/", 5) != 0)
+#else
+			if (strncmp(relative_path, "locs/", 5) != 0)
+#endif
+				should_copy = true;
+			else
+				should_copy = false;
+		}
+		else /* .bsp and .lit both go in maps/ */
+		{
+#ifdef _WIN32
+			if (q_strncasecmp(relative_path, "maps/", 5) != 0)
+#else
+			if (strncmp(relative_path, "maps/", 5) != 0)
+#endif
+				should_copy = true;
+			else
+				should_copy = false;
+		}
+	}
+
+	if (should_copy)
+	{
+		char	dest_filename[MAX_OSPATH];
+		qboolean same_path;
+		int	result;
+
+		COM_StripExtension(COM_SkipPath(normalized_path), dest_filename, sizeof(dest_filename));
+		if ((size_t)q_strlcat(dest_filename, dest_ext, sizeof(dest_filename)) >= sizeof(dest_filename))
+		{
+			Con_Printf("Filename too long for %s.\n", source_desc);
+			return false;
+		}
+
+		result = q_snprintf(relative_path, sizeof(relative_path), "%s/%s", subdir, dest_filename);
+		if (result < 0 || (size_t)result >= sizeof(relative_path))
+		{
+			Con_Printf("Path too long for %s.\n", source_desc);
+			return false;
+		}
+
+		result = q_snprintf(dest_path, sizeof(dest_path), "%s/%s", com_gamedir, relative_path);
+		if (result < 0 || (size_t)result >= sizeof(dest_path))
+		{
+			Con_Printf("Path too long for %s.\n", source_desc);
+			return false;
+		}
+
+		IN_NormalizeDroppedPath(dest_path);
+#ifdef _WIN32
+		same_path = (q_strcasecmp(normalized_path, dest_path) == 0);
+#else
+		same_path = (strcmp(normalized_path, dest_path) == 0);
+#endif
+		if (!same_path)
+		{
+			char	path_copy[MAX_OSPATH];
+			qboolean replacing;
+
+			q_strlcpy(path_copy, dest_path, sizeof(path_copy));
+			COM_CreatePath(path_copy);
+
+			replacing = (Sys_FileType(dest_path) & FS_ENT_FILE) != 0;
+			if (!IN_CopyExternalFile(normalized_path, dest_path))
+				return false;
+
+			Con_Printf("%s %s to %s/%s\n", replacing ? "Replaced" : "Copied", source_desc, COM_SkipPath(com_gamedir), relative_path);
+
+			/* Also copy .lit file if installing a .bsp */
+			if (is_map)
+			{
+				char	lit_source[MAX_OSPATH];
+				char	lit_dest[MAX_OSPATH];
+
+				COM_StripExtension(normalized_path, lit_source, sizeof(lit_source));
+				if ((size_t)q_strlcat(lit_source, ".lit", sizeof(lit_source)) < sizeof(lit_source))
+				{
+					if (Sys_FileType(lit_source) & FS_ENT_FILE)
+					{
+						COM_StripExtension(dest_path, lit_dest, sizeof(lit_dest));
+						if ((size_t)q_strlcat(lit_dest, ".lit", sizeof(lit_dest)) < sizeof(lit_dest))
+						{
+							replacing = (Sys_FileType(lit_dest) & FS_ENT_FILE) != 0;
+							if (IN_CopyExternalFile(lit_source, lit_dest))
+								Con_Printf("%s .lit file to %s/maps/\n", replacing ? "Replaced" : "Copied", COM_SkipPath(com_gamedir));
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if (is_demo || is_map)
+	{
+		COM_StripExtension(relative_path, command_path, sizeof(command_path));
+		if (is_demo)
+		{
+#ifdef _WIN32
+			if (!q_strncasecmp(command_path, "demos/", 6))
+#else
+			if (!strncmp(command_path, "demos/", 6))
+#endif
+				memmove(command_path, command_path + 6, strlen(command_path + 6) + 1);
+
+			if (!command_path[0])
+				q_strlcpy(command_path, COM_SkipPath(relative_path), sizeof(command_path));
+
+			Cbuf_AddText(va("stopdemo; playdemo \"%s\"\n", command_path));
+		}
+		else
+		{
+#ifdef _WIN32
+			if (!q_strncasecmp(command_path, "maps/", 5))
+#else
+			if (!strncmp(command_path, "maps/", 5))
+#endif
+				memmove(command_path, command_path + 5, strlen(command_path + 5) + 1);
+
+			if (!command_path[0])
+				q_strlcpy(command_path, COM_SkipPath(relative_path), sizeof(command_path));
+
+			Cbuf_AddText(va("map \"%s\"\n", command_path));
+		}
+	}
+
+	return true;
+}
+
+qboolean IN_PasteClipboardFile (void)
+{
+	char	*clipboard_file;
+
+	clipboard_file = PL_GetClipboardFilePath();
+	if (!clipboard_file)
+		return false;
+
+	IN_InstallExternalFile(clipboard_file, "clipboard file");
+	Z_Free(clipboard_file);
+	return true;
+}
+#else
+qboolean IN_PasteClipboardFile (void)
+{
+	return false;
 }
 #endif
 
@@ -3282,215 +3516,15 @@ void IN_SendKeyEvents (void)
 			break;
 		case SDL_DROPFILE:
 		{
-			do
+			char	*dropped_file;
+
+			dropped_file = event.drop.file;
+			if (dropped_file)
 			{
-				char	normalized_path[MAX_OSPATH];
-				char	relative_path[MAX_OSPATH];
-				char	dest_path[MAX_OSPATH];
-				char	command_path[MAX_OSPATH];
-				const char	*extension;
-				const char	*subdir;
-				const char	*dest_ext;
-				qboolean	is_demo;
-				qboolean	is_map;
-				qboolean	is_loc;
-				qboolean	is_lit;
-				qboolean	has_relative;
-				qboolean	should_copy;
-				qboolean	relative_in_gamedir = false;
-				char	*dropped_file;
-
-				dropped_file = event.drop.file;
-				if (!dropped_file)
-					break;
-
-				q_strlcpy(normalized_path, dropped_file, sizeof(normalized_path));
+				IN_InstallExternalFile(dropped_file, "dropped file");
 				SDL_free(dropped_file);
 				event.drop.file = NULL;
-				IN_NormalizeDroppedPath(normalized_path);
-
-				extension = COM_FileGetExtension(normalized_path);
-				is_demo = !q_strcasecmp(extension, "dem");
-				is_map = !q_strcasecmp(extension, "bsp");
-				is_loc = !q_strcasecmp(extension, "loc");
-				is_lit = !q_strcasecmp(extension, "lit");
-
-				if (!is_demo && !is_map && !is_loc && !is_lit)
-				{
-					Con_Printf("Unsupported file dropped: %s\n", COM_SkipPath(normalized_path));
-					break;
-				}
-
-				if (is_demo)
-				{
-					subdir = "demos";
-					dest_ext = ".dem";
-				}
-				else if (is_loc)
-				{
-					subdir = "locs";
-					dest_ext = ".loc";
-				}
-				else if (is_map)
-				{
-					subdir = "maps";
-					dest_ext = ".bsp";
-				}
-				else
-				{
-					subdir = "maps";
-					dest_ext = ".lit";
-				}
-				relative_path[0] = '\0';
-				has_relative = IN_BuildRelativeDroppedPath(normalized_path, relative_path, sizeof(relative_path), &relative_in_gamedir);
-				should_copy = !has_relative || !relative_in_gamedir;
-
-				if (has_relative && relative_in_gamedir)
-				{
-					if (is_demo)
-					{
-						if (strchr(relative_path, '/'))
-						{
-#ifdef _WIN32
-							if (q_strncasecmp(relative_path, "demos/", 6) != 0)
-#else
-							if (strncmp(relative_path, "demos/", 6) != 0)
-#endif
-								should_copy = true;
-							else
-								should_copy = false;
-						}
-						else
-							should_copy = false;
-					}
-					else if (is_loc)
-					{
-#ifdef _WIN32
-						if (q_strncasecmp(relative_path, "locs/", 5) != 0)
-#else
-						if (strncmp(relative_path, "locs/", 5) != 0)
-#endif
-							should_copy = true;
-						else
-							should_copy = false;
-					}
-					else /* .bsp and .lit both go in maps/ */
-					{
-#ifdef _WIN32
-						if (q_strncasecmp(relative_path, "maps/", 5) != 0)
-#else
-						if (strncmp(relative_path, "maps/", 5) != 0)
-#endif
-							should_copy = true;
-						else
-							should_copy = false;
-					}
-				}
-
-				if (should_copy)
-				{
-					char	dest_filename[MAX_OSPATH];
-					qboolean same_path;
-					int	result;
-
-					COM_StripExtension(COM_SkipPath(normalized_path), dest_filename, sizeof(dest_filename));
-					if ((size_t)q_strlcat(dest_filename, dest_ext, sizeof(dest_filename)) >= sizeof(dest_filename))
-					{
-						Con_Printf("Filename too long for dropped file.\n");
-						break;
-					}
-
-					result = q_snprintf(relative_path, sizeof(relative_path), "%s/%s", subdir, dest_filename);
-					if (result < 0 || (size_t)result >= sizeof(relative_path))
-					{
-						Con_Printf("Path too long for dropped file.\n");
-						break;
-					}
-
-					result = q_snprintf(dest_path, sizeof(dest_path), "%s/%s", com_gamedir, relative_path);
-					if (result < 0 || (size_t)result >= sizeof(dest_path))
-					{
-						Con_Printf("Path too long for dropped file.\n");
-						break;
-					}
-
-					IN_NormalizeDroppedPath(dest_path);
-#ifdef _WIN32
-					same_path = (q_strcasecmp(normalized_path, dest_path) == 0);
-#else
-					same_path = (strcmp(normalized_path, dest_path) == 0);
-#endif
-					if (!same_path)
-					{
-						char	path_copy[MAX_OSPATH];
-						qboolean replacing;
-
-						q_strlcpy(path_copy, dest_path, sizeof(path_copy));
-						COM_CreatePath(path_copy);
-
-						replacing = (Sys_FileType(dest_path) & FS_ENT_FILE) != 0;
-						if (!IN_CopyDroppedFile(normalized_path, dest_path))
-							break;
-
-						Con_Printf("%s dropped file to %s/%s\n", replacing ? "Replaced" : "Copied", COM_SkipPath(com_gamedir), relative_path);
-
-						/* Also copy .lit file if dropping a .bsp */
-						if (is_map)
-						{
-							char	lit_source[MAX_OSPATH];
-							char	lit_dest[MAX_OSPATH];
-
-							COM_StripExtension(normalized_path, lit_source, sizeof(lit_source));
-							if ((size_t)q_strlcat(lit_source, ".lit", sizeof(lit_source)) < sizeof(lit_source))
-							{
-								if (Sys_FileType(lit_source) & FS_ENT_FILE)
-								{
-									COM_StripExtension(dest_path, lit_dest, sizeof(lit_dest));
-									if ((size_t)q_strlcat(lit_dest, ".lit", sizeof(lit_dest)) < sizeof(lit_dest))
-									{
-										replacing = (Sys_FileType(lit_dest) & FS_ENT_FILE) != 0;
-										if (IN_CopyDroppedFile(lit_source, lit_dest))
-											Con_Printf("%s .lit file to %s/maps/\n", replacing ? "Replaced" : "Copied", COM_SkipPath(com_gamedir));
-									}
-								}
-							}
-						}
-					}
-				}
-
-				if (is_demo || is_map)
-				{
-					COM_StripExtension(relative_path, command_path, sizeof(command_path));
-					if (is_demo)
-					{
-#ifdef _WIN32
-						if (!q_strncasecmp(command_path, "demos/", 6))
-#else
-						if (!strncmp(command_path, "demos/", 6))
-#endif
-							memmove(command_path, command_path + 6, strlen(command_path + 6) + 1);
-
-						if (!command_path[0])
-							q_strlcpy(command_path, COM_SkipPath(relative_path), sizeof(command_path));
-
-						Cbuf_AddText(va("stopdemo; playdemo \"%s\"\n", command_path));
-					}
-					else
-					{
-#ifdef _WIN32
-						if (!q_strncasecmp(command_path, "maps/", 5))
-#else
-						if (!strncmp(command_path, "maps/", 5))
-#endif
-							memmove(command_path, command_path + 5, strlen(command_path + 5) + 1);
-
-						if (!command_path[0])
-							q_strlcpy(command_path, COM_SkipPath(relative_path), sizeof(command_path));
-
-						Cbuf_AddText(va("map \"%s\"\n", command_path));
-					}
-				}
-			} while (0);
+			}
 		}
 		break;
 #endif
