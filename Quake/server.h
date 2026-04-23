@@ -244,6 +244,12 @@ typedef struct client_s
 	qboolean		knowntoqc;			// putclientinserver was called
 	qboolean		csqcactive;			// its prepared to accept csqc entities.
 	int				powerup_warn_flags;	// woods - #resurrect #giveflags for powerup warning sounds
+	qboolean		modvote_motd_shown;	// one-time per connection join message
+	qboolean		modvote_motd_active;	// join centerprint currently active
+	qboolean		modvote_motd_centerprint_suppressed; // QC used centerprint; keep join MOTD off that channel
+	qboolean		modvote_motd_input_seen; // move/fire attempted since join motd appeared
+	double			modvote_motd_start_time;
+	double			modvote_motd_next_refresh_time;
 } client_t;
 
 

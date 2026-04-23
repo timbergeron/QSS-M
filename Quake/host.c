@@ -100,6 +100,7 @@ cvar_t	sv_cheats = {"sv_cheats","0",CVAR_NONE}; // for the 2021 rerelease
 devstats_t dev_stats, dev_peakstats;
 overflowtimes_t dev_overflows; //this stores the last time overflow messages were displayed, not the last time overflows occured
 
+extern cvar_t	sv_modvote;
 extern cvar_t	pq_lag; // woods
 extern char	lastmphost[NET_NAMELEN]; // woods - connected server address
 extern char demoplaying[MAX_OSPATH]; // woods for window title
@@ -472,6 +473,12 @@ void Host_Callback_Notify (cvar_t *var)
 		SV_BroadcastPrintf ("\"%s\" changed to \"%s\"\n", var->name, var->string);
 }
 
+static void Host_Modvote_GateChanged(cvar_t *var)
+{
+	if (sv_modvote.value < 1.0f || coop.value < 1.0f)
+		Host_Modvote_Reset();
+}
+
 char dequake[256];	// JPG 1.05 // woods for #iplog to work
 
 /*
@@ -658,6 +665,9 @@ void Host_InitLocal (void)
 	Cvar_RegisterVariable (&developer);
 	Cvar_RegisterVariable (&coop);
 	Cvar_RegisterVariable (&deathmatch);
+	Cvar_RegisterVariable (&sv_modvote);
+	Cvar_SetCallback (&coop, Host_Modvote_GateChanged);
+	Cvar_SetCallback (&sv_modvote, Host_Modvote_GateChanged);
 
 	Cvar_RegisterVariable (&campaign);
 	Cvar_RegisterVariable (&horde);
@@ -960,7 +970,11 @@ void SV_DropClient (qboolean crash)
 {
 	int		saveSelf;
 	int		i;
+	int		client_index;
 	client_t *client;
+
+	client_index = (int)(host_client - svs.clients);
+	Host_Modvote_RemoveClientVote(client_index);
 
 	if (!crash)
 	{
@@ -1253,6 +1267,7 @@ void Host_ServerFrame (void)
 
 // read client messages
 	SV_RunClients ();
+	Host_Modvote_UpdateJoinMotd();
 
 // move things around and think
 // always pause in single player if in console or menus

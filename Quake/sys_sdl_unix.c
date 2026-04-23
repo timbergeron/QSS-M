@@ -1284,7 +1284,8 @@ void Sys_Printf (const char *fmt, ...)
 				ch++;
 				continue;
 			}
-			if (*ch == '^' && *(ch + 1) != '\0' && *(ch + 1) == 'm')
+			if (*ch == '^' && *(ch + 1) != '\0' &&
+				(*(ch + 1) == 'm' || *(ch + 1) == 'g' || *(ch + 1) == 'd'))
 			{
 				ch += 2;
 				continue;
@@ -1329,6 +1330,7 @@ void Sys_Printf (const char *fmt, ...)
 			char *end = output + sizeof(output) - 32;
 			int cur_color = 0;
 			qboolean chat_color = false;
+			qboolean gold_digits = false;
 
 			while (*ch && dst < end)
 			{
@@ -1351,9 +1353,23 @@ void Sys_Printf (const char *fmt, ...)
 					ch += 2;
 					continue;
 				}
+				if (*ch == '^' && *(ch + 1) != '\0' && *(ch + 1) == 'd')
+				{
+					gold_digits = false;
+					ch += 2;
+					continue;
+				}
+				if (*ch == '^' && *(ch + 1) != '\0' && *(ch + 1) == 'g')
+				{
+					gold_digits ^= true;
+					ch += 2;
+					continue;
+				}
 
 				if (chat_color)
 					want = 4; // say / say_team message text
+				else if (gold_digits && *ch >= '0' && *ch <= '9')
+					want = 2; // explicit gold digit markup
 				else if ((*ch >= 18 && *ch <= 27) || (*ch >= 146 && *ch <= 155) ||
 				    *ch == 133 || *ch == 142 || *ch == 143 || *ch == 156)
 					want = 2; // gold digits / gold dots

@@ -427,6 +427,7 @@ static void PF_centerprint (void)
 	}
 
 	client = &svs.clients[entnum-1];
+	Host_Modvote_NotifyQCCenterprint(client);
 
 	MSG_WriteChar (&client->message,svc_centerprint);
 	MSG_WriteString (&client->message, s);

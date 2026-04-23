@@ -3935,6 +3935,41 @@ void COM_ResetGameDirectories(char *newgamedirs)
 //johnfitz -- dynamic gamedir stuff -- modified by QuakeSpasm team.
 //==============================================================================
 
+static qboolean com_modvote_autostart = false;
+static qboolean COM_IsValidModvoteAutostartMap(const char *mapname);
+
+void COM_SetModvoteAutostart(void)
+{
+	com_modvote_autostart = true;
+}
+
+static void COM_ModvoteStartMap_f(void)
+{
+	const char *autostart_map = Cvar_VariableString("sv_defaultmap");
+
+	if (!COM_IsValidModvoteAutostartMap(autostart_map))
+		autostart_map = "start";
+
+	Cbuf_InsertText(va("map %s\n", autostart_map));
+}
+
+static qboolean COM_IsValidModvoteAutostartMap(const char *mapname)
+{
+	if (!mapname || !mapname[0])
+		return false;
+	if (strstr(mapname, "..") || strstr(mapname, "/") || strstr(mapname, "\\") || strstr(mapname, ":") || strstr(mapname, ";") || strchr(mapname, '\"'))
+		return false;
+
+	while (*mapname)
+	{
+		if (q_isspace((unsigned char)*mapname))
+			return false;
+		mapname++;
+	}
+
+	return true;
+}
+
 /*
 =================
 COM_GameDirExists
@@ -3959,6 +3994,9 @@ COM_Game_f
 */
 static void COM_Game_f (void)
 {
+	qboolean autostart = com_modvote_autostart;
+	com_modvote_autostart = false;
+
 	if (Cmd_Argc() > 1)
 	{
 		int i, pri;
@@ -4019,6 +4057,7 @@ static void COM_Game_f (void)
 
 		//Kill the server
 		CL_Disconnect ();
+		Host_Modvote_Reset();
 		Host_ShutdownServer(true);
 		Host_ClearMemory (); // woods -- clear allocated mem on game switches
 
@@ -4054,7 +4093,22 @@ static void COM_Game_f (void)
 
 		VID_Lock ();
 		Cbuf_AddText ("unaliasall\n");
-		Cbuf_AddText ("exec quake.rc\n");
+		if (cls.state == ca_dedicated)
+		{
+			// Match dedicated startup semantics: skip quake.rc and suppress
+			// warnings from client-only commands in default.cfg.
+			Cbuf_AddText ("cl_warncmd 0\n");
+			Cbuf_AddText ("exec default.cfg\n");
+			Cbuf_AddText ("cl_warncmd 1\n");
+		}
+		else if (COM_FileExists("quake.rc", NULL))
+			Cbuf_AddText ("exec quake.rc\n");
+		else
+			Cbuf_AddText ("exec default.cfg\n");
+		Cbuf_AddText ("exec server.cfg\n");
+		Cbuf_AddText ("exec autoexec.cfg\n");
+		if (autostart)
+			Cbuf_AddText ("wait; modvote_startmap\n");
 		Cbuf_AddText ("vid_unlock\n");
 	}
 	else //Diplay the current gamedir
@@ -5620,6 +5674,7 @@ void COM_InitFilesystem (void) //johnfitz -- modified based on topaz's tutorial
 	Cmd_AddCommand ("flocate", COM_Dir_f);
 	Cmd_AddCommand ("game", COM_Game_f); //johnfitz
 	Cmd_AddCommand ("gamedir", COM_Game_f); //Spike -- alternative name for it, consistent with quakeworld and a few other engines
+	Cmd_AddCommand ("modvote_startmap", COM_ModvoteStartMap_f);
 	Cmd_AddCommand ("open", COM_Dir_Open_f); // woods #openfolder
 	Cmd_AddCommand ("writeconfig", Host_WriteConfig_f); // woods #writecfg
 	Cmd_AddCommand ("unpak", COM_UnPAK_f); // woods #unpak

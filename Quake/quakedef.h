@@ -433,6 +433,10 @@ void Host_ServerFrame (void);
 void Host_InitCommands (void);
 void Host_Init (void);
 void Host_Shutdown(void);
+void Host_Modvote_Reset(void);
+void Host_Modvote_RemoveClientVote(int client_index);
+void Host_Modvote_NotifyQCCenterprint(client_t *client);
+void Host_Modvote_UpdateJoinMotd(void);
 void Host_Callback_Notify (cvar_t *var);	/* callback function for CVAR_NOTIFY */
 FUNC_NORETURN void Host_Error (const char *error, ...) FUNC_PRINTF(1,2);
 FUNC_NORETURN void Host_EndGame (const char *message, ...) FUNC_PRINTF(1,2);

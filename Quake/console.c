@@ -1501,6 +1501,7 @@ static void Con_Print (const char *txt)
 	int		c, l;
 	static int	cr;
 	int		mask;
+	qboolean	gold_digits;
 	qboolean	boundary;
 	static int fixline = 0; // woods #confilter
 
@@ -1770,6 +1771,7 @@ static void Con_Print (const char *txt)
 	}
 	else
 		mask = 0;
+	gold_digits = false;
 
 	boundary = true;
 
@@ -1813,6 +1815,9 @@ static void Con_Print (const char *txt)
 			case 'h':	//toggle half-alpha
 			case 'b':	//blink
 			case 'd':	//reset to defaults (fixme: should reset ^m without resetting \1)
+				gold_digits = false;
+				txt+=2;
+				continue;
 			case 's':	//modstack push
 			case 'r':	//modstack restore
 				txt+=2;
@@ -1839,6 +1844,10 @@ static void Con_Print (const char *txt)
 			case 'm':	//toggle masking.
 				txt+=2;
 				mask ^= 128;
+				continue;
+			case 'g':	//toggle gold digits.
+				txt+=2;
+				gold_digits ^= true;
 				continue;
 			case 'U':	//ucs-2 unicode codepoint
 				if (ishex(txt[2]) && ishex(txt[3]) && ishex(txt[4]) && ishex(txt[5]))
@@ -1933,6 +1942,8 @@ static void Con_Print (const char *txt)
 			break;
 
 		default:	// display character and advance
+			if (gold_digits && c >= '0' && c <= '9')
+				c -= 30;
 			y = con_current % con_totallines;
 			con_text[y*con_linewidth+con_x] = c | mask;
 			con_x++;
@@ -4171,6 +4182,7 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "entdump",				CompleteFileList,		&extralevels },
 	{ "game",					CompleteFileList,		&modlist },
 	{ "gamedir",				CompleteFileList,		&modlist },
+	{ "modvote",				CompleteFileList,		&modlist },
 	{ "playdemo",				CompleteFileListDemo,	&demolist },
 	{ "timedemo",				CompleteFileListDemo,	&demolist },
 	{ "jumpdemo",				CompleteJumpDemo,		NULL },

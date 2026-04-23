@@ -5241,13 +5241,13 @@ void SCR_EndLoadingPlaque (void)
 const char	*scr_notifystring;
 qboolean	scr_drawdialog;
 
-void SCR_DrawNotifyString (void) // woods add ^m support
+void SCR_DrawNotifyString (void) // woods add ^m/^g support
 {
 	const char	*start;
 	int		l;
 	int		x, y;
-	int mask = 0;       // Masking state
-	int last_char = 0;  // Previous character
+	int mask = 0;
+	int gold_digits = 0;
 
 	GL_SetCanvas (CANVAS_MENU); //johnfitz
 
@@ -5264,14 +5264,15 @@ void SCR_DrawNotifyString (void) // woods add ^m support
 			if (start[l] == '\n' || !start[l])
 				break;
 
-			// Skip ^m sequences when calculating length
-			if (start[l] == '^' && l + 1 < 40 && start[l + 1] == 'm')
+			// Skip inline style toggles when calculating length
+			if (start[l] == '^' && l + 1 < 40 &&
+				(start[l + 1] == 'm' || start[l + 1] == 'g' || start[l + 1] == 'd'))
 			{
-				l++; // Skip both ^ and m
+				l++;
 				continue;
 			}
-			// Skip standalone ^ if it's not part of a valid sequence
-			if (start[l] == '^' && l + 1 < 40 && start[l + 1] != 'm')
+			if (start[l] == '^' && l + 1 < 40 &&
+				start[l + 1] != 'm' && start[l + 1] != 'g' && start[l + 1] != 'd')
 			{
 				continue;
 			}
@@ -5286,34 +5287,27 @@ void SCR_DrawNotifyString (void) // woods add ^m support
 		{
 			char c = start[j];
 
-			// Handle masking sequences
-			if (last_char == '^' && c == 'm')
+			if (c == '^' && j + 1 < l && start[j + 1] == 'm')
 			{
-				mask ^= 128;  // Toggle mask
-				last_char = 0;
-				j++;
+				mask ^= 128;
+				j += 2;
 				continue;
 			}
-
-			if (c == '^')
+			if (c == '^' && j + 1 < l && start[j + 1] == 'd')
 			{
-				last_char = '^';
-				j++;
+				gold_digits = 0;
+				j += 2;
 				continue;
 			}
-
-			if (last_char == '^' && c != 'm')
+			if (c == '^' && j + 1 < l && start[j + 1] == 'g')
 			{
-				last_char = 0;
-				// Continue to draw the current character
+				gold_digits ^= 1;
+				j += 2;
+				continue;
 			}
-			else
-			{
-				last_char = 0;
-			}
-
-			// Apply mask if enabled
 			int num = c;
+			if (gold_digits && c >= '0' && c <= '9')
+				num = c - 30;
 			if (mask)
 				num = (num & 127) | 128;
 			else

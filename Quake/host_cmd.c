@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "q_stdinc.h" // woods for #iplog
+#include "q_ctype.h"
 #include "arch_def.h" // woods for #iplog
 #include "net_sys.h" // woods for #iplog
 #include "net_defs.h" // woods for #iplog
@@ -51,6 +52,7 @@ double		mpservertime;	// woods #servertime
 extern		char afk_name[16]; // woods #smartafk
 
 cvar_t sv_adminnick = {"sv_adminnick", "server admin", CVAR_ARCHIVE}; // woods (darkpaces) #adminnick
+cvar_t sv_modvote = {"sv_modvote", "0", CVAR_ARCHIVE | CVAR_SERVERINFO};
 extern char lastconnected[3]; // woods -- #identify+
 extern qboolean ctrlpressed; // woods #saymodifier
 extern qboolean Valid_IP(const char* ip_str); // woods #icmp
@@ -1347,6 +1349,790 @@ void Modlist_Init (void)
 	closedir(dir_p);
 }
 #endif
+
+//==============================================================================
+// coop mod voting
+//==============================================================================
+
+typedef struct modvote_choice_s
+{
+	char					name[MAX_QPATH];
+	int						votes;
+	struct modvote_choice_s *next;
+} modvote_choice_t;
+
+static modvote_choice_t *sv_modvote_choices;
+static modvote_choice_t *sv_modvote_client_choices[MAX_SCOREBOARD];
+static Uint32 sv_modvote_last_vote_time[MAX_SCOREBOARD];
+
+#define MODVOTE_COOLDOWN_MS 1000U
+#define MODVOTE_TAG "^m[vote]^m "
+#define MODVOTE_MOTD_MIN_SECONDS 10.0
+#define MODVOTE_MOTD_LEGACY_REFRESH_SECONDS 1.0
+
+static void Host_Modvote_Core(client_t *voter, const char *modname, qboolean is_chat);
+static void Host_Modvote_Apply(const char *modname);
+
+static void Host_Modvote_StyleText(char *text)
+{
+	char *src = text;
+	char *dst = text;
+	qboolean masked = false;
+	qboolean gold_digits = false;
+
+	while (*src)
+	{
+		unsigned char ch = (unsigned char)*src++;
+
+		if (ch == '^' && *src == '^')
+		{
+			src++;
+			*dst++ = '^';
+			continue;
+		}
+		if (ch == '^' && *src == 'm')
+		{
+			src++;
+			masked = !masked;
+			continue;
+		}
+		if (ch == '^' && *src == 'g')
+		{
+			src++;
+			gold_digits = !gold_digits;
+			continue;
+		}
+
+		if (gold_digits && ch >= '0' && ch <= '9')
+			*dst++ = (char)(ch - 30);
+		else if (masked && ch >= 32 && ch < 127)
+			*dst++ = (char)(ch | 128);
+		else
+			*dst++ = (char)ch;
+	}
+
+	*dst = '\0';
+}
+
+static void Host_Modvote_EscapeMarkup(const char *src, char *dst, size_t dstsize)
+{
+	char *out = dst;
+	char *end;
+
+	if (!dstsize)
+		return;
+
+	if (!src)
+		src = "";
+
+	end = dst + dstsize - 1;
+	while (*src && out < end)
+	{
+		if (*src == '^' && out + 1 < end)
+			*out++ = '^';
+		*out++ = *src++;
+	}
+
+	*out = '\0';
+}
+
+static void Host_Modvote_BroadcastPrintf(const char *fmt, ...)
+{
+	va_list argptr;
+	char msg[1024];
+
+	va_start(argptr, fmt);
+	q_vsnprintf(msg, sizeof(msg), fmt, argptr);
+	va_end(argptr);
+	Host_Modvote_StyleText(msg);
+
+	SV_BroadcastPrintf("%s", msg);
+}
+
+static void Host_Modvote_Printf(client_t *client, const char *fmt, ...)
+{
+	va_list argptr;
+	char msg[1024];
+	client_t *saved_client = host_client;
+
+	va_start(argptr, fmt);
+	q_vsnprintf(msg, sizeof(msg), fmt, argptr);
+	va_end(argptr);
+	Host_Modvote_StyleText(msg);
+
+	if (client)
+	{
+		host_client = client;
+		SV_ClientPrintf("%s", msg);
+		host_client = saved_client;
+	}
+	else
+	{
+		Con_Printf("%s", msg);
+	}
+}
+
+static void Host_Modvote_CenterPrintf(client_t *client, const char *fmt, ...)
+{
+	va_list argptr;
+	char msg[1024];
+
+	if (!client)
+		return;
+
+	va_start(argptr, fmt);
+	q_vsnprintf(msg, sizeof(msg), fmt, argptr);
+	va_end(argptr);
+	Host_Modvote_StyleText(msg);
+
+	MSG_WriteByte(&client->message, svc_centerprint);
+	MSG_WriteString(&client->message, msg);
+}
+
+static qboolean Host_Modvote_ClientSupportsPersistentCenterprint(client_t *client)
+{
+	char ver[64];
+
+	if (!client)
+		return false;
+
+	Info_GetKey(client->userinfo, "*ver", ver, sizeof(ver));
+	return !q_strncasecmp(ver, "QSS-M", 5);
+}
+
+static void Host_Modvote_SendJoinCenterprint(client_t *client)
+{
+	char safe_hostname[128];
+	const char *servername;
+	const char *coop_line;
+	const char *prefix = "";
+
+	if (!client)
+		return;
+	if (client->modvote_motd_centerprint_suppressed)
+		return;
+
+	Host_Modvote_EscapeMarkup(hostname.string, safe_hostname, sizeof(safe_hostname));
+	servername = safe_hostname[0] ? safe_hostname : "this server";
+	coop_line = (coop.value >= 1.0f) ?
+		"Server mod voting is enabled for this coop game." :
+		"Server mod voting is enabled and becomes available during coop games.";
+
+	if (Host_Modvote_ClientSupportsPersistentCenterprint(client))
+		prefix = "/P";
+
+	Host_Modvote_CenterPrintf(client, "%s^mWelcome to %s^m\n\n%s\n\n^mVote with^m ^mmodvote <modname>^m\n\n^mChat:^m ^m/modvote <modname>^m or ^m!modvote <modname>^m",
+		prefix, servername, coop_line);
+}
+
+void Host_Modvote_NotifyQCCenterprint(client_t *client)
+{
+	if (!client || !client->netconnection)
+		return;
+
+	client->modvote_motd_centerprint_suppressed = true;
+	client->modvote_motd_active = false;
+}
+
+static qboolean Host_Modvote_ClientTriedJoinMotdInput(client_t *client)
+{
+	if (!client || !client->edict)
+		return false;
+
+	if (client->cmd.forwardmove || client->cmd.sidemove || client->cmd.upmove)
+		return true;
+	if (client->edict->v.button0 || client->edict->v.button2 || client->edict->v.impulse)
+		return true;
+
+	return false;
+}
+
+static void Host_Modvote_ClientReply(client_t *client, const char *fmt, ...)
+{
+	va_list argptr;
+	char msg[1024];
+
+	va_start(argptr, fmt);
+	q_vsnprintf(msg, sizeof(msg), fmt, argptr);
+	va_end(argptr);
+
+	Host_Modvote_Printf(client, "\n%s\n", msg);
+}
+
+static qboolean Host_Modvote_IsValidModName(const char *modname)
+{
+	if (!modname || !modname[0])
+		return false;
+	if (modname[0] == '-' || !strcmp(modname, "."))
+		return false;
+	if (strstr(modname, "..") || strstr(modname, "/") || strstr(modname, "\\") || strstr(modname, ":") || strstr(modname, ";"))
+		return false;
+	return true;
+}
+
+static modvote_choice_t *Host_Modvote_FindChoice(const char *modname)
+{
+	modvote_choice_t *choice;
+
+	for (choice = sv_modvote_choices; choice; choice = choice->next)
+	{
+		if (!q_strcasecmp(choice->name, modname))
+			return choice;
+	}
+
+	return NULL;
+}
+
+static void Host_Modvote_UnlinkChoice(modvote_choice_t *choice)
+{
+	modvote_choice_t **link;
+
+	for (link = &sv_modvote_choices; *link; link = &(*link)->next)
+	{
+		if (*link == choice)
+		{
+			*link = choice->next;
+			Z_Free(choice);
+			return;
+		}
+	}
+}
+
+static qboolean Host_Modvote_IsValidMod(const char *modname)
+{
+	filelist_item_t *mod;
+
+	for (mod = modlist; mod; mod = mod->next)
+	{
+		if (!q_strcasecmp(mod->name, modname))
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean Host_Modvote_ClientIsEligible(client_t *cl)
+{
+	char chat_val[64];
+	char spectator_val[16];
+
+	// Botclients have no netconnection in this engine and should not affect
+	// human vote thresholds or eligibility.
+	if (!cl || !cl->active || !cl->spawned || !cl->netconnection)
+		return false;
+
+	Info_GetKey(cl->userinfo, "*spectator", spectator_val, sizeof(spectator_val));
+	if (spectator_val[0] && Q_atoi(spectator_val))
+		return false;
+
+	Info_GetKey(cl->userinfo, "chat", chat_val, sizeof(chat_val));
+	if (chat_val[0] && (!q_strcasecmp(chat_val, "afk") || (Q_atoi(chat_val) & CIF_AFK)))
+		return false;
+
+	return true;
+}
+
+static void Host_Modvote_PruneIneligibleVotes(void)
+{
+	int i;
+
+	for (i = 0; i < svs.maxclients && i < MAX_SCOREBOARD; ++i)
+	{
+		if (sv_modvote_client_choices[i] && !Host_Modvote_ClientIsEligible(&svs.clients[i]))
+			Host_Modvote_RemoveClientVote(i);
+	}
+}
+
+static int Host_Modvote_CountEligibleClients(void)
+{
+	int i;
+	int count = 0;
+
+	for (i = 0; i < svs.maxclients; ++i)
+	{
+		if (Host_Modvote_ClientIsEligible(&svs.clients[i]))
+			++count;
+	}
+
+	return count;
+}
+
+static int Host_Modvote_VotesNeeded(int eligible)
+{
+	if (eligible <= 0)
+		return 1;
+	return (eligible / 2) + 1;
+}
+
+static qboolean Host_Modvote_CheckMajority(void)
+{
+	modvote_choice_t *choice;
+	int eligible;
+	int needed;
+
+	if (!sv.active || sv_modvote.value < 1.0f || coop.value < 1.0f || !sv_modvote_choices)
+		return false;
+
+	Host_Modvote_PruneIneligibleVotes();
+	eligible = Host_Modvote_CountEligibleClients();
+	needed = Host_Modvote_VotesNeeded(eligible);
+
+	for (choice = sv_modvote_choices; choice; choice = choice->next)
+	{
+		if (choice->votes >= needed)
+		{
+			char modname[MAX_QPATH];
+
+			q_strlcpy(modname, choice->name, sizeof(modname));
+			Host_Modvote_Apply(modname);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void Host_Modvote_PrintAvailableMods(client_t *client, qboolean motd_format)
+{
+	filelist_item_t *mod;
+	int count = 0;
+	const char *active_mod = COM_GetGameNames(false);
+	char safe_active_mod[2048];
+	char safe_modname[MAX_QPATH * 2];
+
+	if (motd_format)
+		Host_Modvote_Printf(client, "Available vote options:\n");
+	else
+		Host_Modvote_Printf(client, MODVOTE_TAG "Available vote options:\n");
+
+	if (!active_mod || !active_mod[0])
+		active_mod = GAMENAME;
+
+	Host_Modvote_EscapeMarkup(active_mod, safe_active_mod, sizeof(safe_active_mod));
+	Host_Modvote_Printf(client, "  ^m%s^m ^m(active)^m\n", safe_active_mod);
+
+	for (mod = modlist; mod; mod = mod->next)
+	{
+		if (COM_GameDirMatches(mod->name))
+			continue;
+
+		Host_Modvote_EscapeMarkup(mod->name, safe_modname, sizeof(safe_modname));
+		Host_Modvote_Printf(client, "  ^m%s^m\n", safe_modname);
+		count++;
+	}
+
+	if (!count)
+		Host_Modvote_Printf(client, "  ^mNo other mods are available to vote for.^m\n");
+}
+
+static void Host_Modvote_PrintJoinMotd(client_t *client)
+{
+	char safe_hostname[128];
+	const char *servername;
+
+	if (!client || !client->netconnection || client->modvote_motd_shown || sv_modvote.value < 1.0f)
+		return;
+
+	client->modvote_motd_shown = true;
+	client->modvote_motd_active = false;
+	client->modvote_motd_input_seen = false;
+
+	Host_Modvote_EscapeMarkup(hostname.string, safe_hostname, sizeof(safe_hostname));
+	servername = safe_hostname[0] ? safe_hostname : "this server";
+
+	Host_Modvote_Printf(client, "\n");
+	if (!client->modvote_motd_centerprint_suppressed)
+	{
+		client->modvote_motd_active = true;
+		client->modvote_motd_start_time = realtime;
+		client->modvote_motd_next_refresh_time = realtime + MODVOTE_MOTD_LEGACY_REFRESH_SECONDS;
+		Host_Modvote_SendJoinCenterprint(client);
+	}
+
+	Host_Modvote_Printf(client, "^mWelcome to %s.^m\n\n", servername);
+	if (coop.value >= 1.0f)
+		Host_Modvote_Printf(client, "Server mod voting is enabled for this coop game.\n\n");
+	else
+		Host_Modvote_Printf(client, "Server mod voting is enabled and becomes available during coop games.\n\n");
+	Host_Modvote_Printf(client, "^mVote with^m ^mmodvote <modname>^m.\n\n");
+	Host_Modvote_Printf(client, "^mChat:^m ^m/modvote <modname>^m or ^m!modvote <modname>^m.\n\n");
+	Host_Modvote_Printf(client, "Use ^mmodvote^m with no mod name to view status and vote options.\n\n");
+	Host_Modvote_PrintAvailableMods(client, true);
+	Host_Modvote_Printf(client, "\n");
+}
+
+void Host_Modvote_UpdateJoinMotd(void)
+{
+	int i;
+
+	if (Host_Modvote_CheckMajority())
+		return;
+
+	for (i = 0; i < svs.maxclients; ++i)
+	{
+		client_t *client = &svs.clients[i];
+
+		if (!client->active || !client->spawned || !client->netconnection || !client->modvote_motd_active)
+			continue;
+
+		if (Host_Modvote_ClientTriedJoinMotdInput(client))
+			client->modvote_motd_input_seen = true;
+
+		if (client->modvote_motd_input_seen &&
+			realtime - client->modvote_motd_start_time >= MODVOTE_MOTD_MIN_SECONDS)
+		{
+			Host_Modvote_CenterPrintf(client, "");
+			client->modvote_motd_active = false;
+			continue;
+		}
+
+		if (!Host_Modvote_ClientSupportsPersistentCenterprint(client) &&
+			realtime >= client->modvote_motd_next_refresh_time)
+		{
+			Host_Modvote_SendJoinCenterprint(client);
+			client->modvote_motd_next_refresh_time = realtime + MODVOTE_MOTD_LEGACY_REFRESH_SECONDS;
+		}
+	}
+}
+
+static void Host_Modvote_PrintStatus(client_t *client)
+{
+	modvote_choice_t *choice;
+	int eligible;
+	int needed;
+	const char *player_plural;
+	const char *vote_plural;
+	qboolean framed = (client != NULL);
+
+	if (framed)
+		Host_Modvote_Printf(client, "\n");
+
+	if (sv_modvote.value < 1.0f)
+	{
+		Host_Modvote_Printf(client, MODVOTE_TAG "Mod voting is disabled on this server.\n");
+		goto done;
+	}
+
+	if (coop.value < 1.0f)
+	{
+		Host_Modvote_Printf(client, MODVOTE_TAG "Mod voting is only available in coop games.\n");
+		goto done;
+	}
+
+	if (Host_Modvote_CheckMajority())
+		return;
+
+	eligible = Host_Modvote_CountEligibleClients();
+	needed = Host_Modvote_VotesNeeded(eligible);
+	player_plural = (eligible == 1) ? "" : "s";
+	vote_plural = (needed == 1) ? "" : "s";
+
+	Host_Modvote_Printf(client, MODVOTE_TAG "Status: ^g%d^g active coop player%s, ^g%d^g vote%s required for a majority.\n",
+		eligible, player_plural, needed, vote_plural);
+
+	if (!sv_modvote_choices)
+		Host_Modvote_Printf(client, MODVOTE_TAG "No active tallies. Use ^m\"modvote <modname>\"^m to start one.\n");
+	else
+	{
+		char safe_choice_name[MAX_QPATH * 2];
+
+		Host_Modvote_Printf(client, MODVOTE_TAG "Current tallies:\n");
+		for (choice = sv_modvote_choices; choice; choice = choice->next)
+		{
+			Host_Modvote_EscapeMarkup(choice->name, safe_choice_name, sizeof(safe_choice_name));
+			Host_Modvote_Printf(client, "  ^m%s^m : ^g%d^g vote%s\n", safe_choice_name, choice->votes, (choice->votes == 1) ? "" : "s");
+		}
+	}
+
+	Host_Modvote_PrintAvailableMods(client, false);
+
+done:
+	if (framed)
+		Host_Modvote_Printf(client, "\n");
+}
+
+void Host_Modvote_Reset(void)
+{
+	modvote_choice_t *choice = sv_modvote_choices;
+
+	while (choice)
+	{
+		modvote_choice_t *next = choice->next;
+		Z_Free(choice);
+		choice = next;
+	}
+
+	sv_modvote_choices = NULL;
+	memset(sv_modvote_client_choices, 0, sizeof(sv_modvote_client_choices));
+	memset(sv_modvote_last_vote_time, 0, sizeof(sv_modvote_last_vote_time));
+}
+
+void Host_Modvote_RemoveClientVote(int client_index)
+{
+	modvote_choice_t *choice;
+
+	if (client_index < 0 || client_index >= MAX_SCOREBOARD)
+		return;
+
+	sv_modvote_last_vote_time[client_index] = 0;
+
+	choice = sv_modvote_client_choices[client_index];
+	if (!choice)
+		return;
+
+	sv_modvote_client_choices[client_index] = NULL;
+
+	if (choice->votes > 0)
+		--choice->votes;
+
+	if (choice->votes <= 0)
+		Host_Modvote_UnlinkChoice(choice);
+}
+
+static void Host_Modvote_Apply(const char *modname)
+{
+	int i;
+	char modcopy[MAX_QPATH];
+	char safe_modcopy[MAX_QPATH * 2];
+
+	q_strlcpy(modcopy, modname, sizeof(modcopy));
+	Host_Modvote_EscapeMarkup(modcopy, safe_modcopy, sizeof(safe_modcopy));
+
+	Host_Modvote_Printf(NULL, MODVOTE_TAG "Passed for ^m\"%s\"^m.\n", safe_modcopy);
+	Host_Modvote_BroadcastPrintf("\n" MODVOTE_TAG "Vote passed! Switching server to mod ^m\"%s\"^m.\n", safe_modcopy);
+
+	Host_Modvote_Reset();
+
+	for (i = 0; i < svs.maxclients; ++i)
+	{
+		client_t *cl = &svs.clients[i];
+
+		if (!cl->active)
+			continue;
+
+		Host_Modvote_Printf(cl, MODVOTE_TAG "Vote passed. Server switching to mod ^m\"%s\"^m. You are being disconnected; load the mod client-side, then reconnect.\n\n", safe_modcopy);
+	}
+
+	for (i = 0; i < svs.maxclients; ++i)
+	{
+		client_t *cl = &svs.clients[i];
+
+		if (!cl->active)
+			continue;
+
+		host_client = cl;
+		SV_DropClient(false);
+	}
+
+	host_client = svs.clients;
+
+	COM_SetModvoteAutostart();
+	Cbuf_AddText(va("game %s\n", modcopy));
+}
+
+static void Host_Modvote_Core(client_t *voter, const char *modname_arg, qboolean is_chat)
+{
+	const char *modname = modname_arg ? modname_arg : "";
+	char modname_token[MAX_QPATH];
+	char safe_modname[MAX_QPATH * 2];
+	modvote_choice_t *current;
+	modvote_choice_t *choice;
+	int client_index;
+	int eligible;
+	int needed;
+	size_t i;
+	Uint32 current_time;
+	qboolean is_change;
+	char old_name[MAX_QPATH];
+
+	if (!sv.active)
+	{
+		Host_Modvote_ClientReply(voter, MODVOTE_TAG "The server is not currently running a game.\n");
+		return;
+	}
+
+	if (sv_modvote.value < 1.0f)
+	{
+		Host_Modvote_ClientReply(voter, MODVOTE_TAG "Mod voting is disabled on this server.\n");
+		return;
+	}
+
+	if (coop.value < 1.0f)
+	{
+		Host_Modvote_ClientReply(voter, MODVOTE_TAG "Mod voting is only available in coop games.\n");
+		return;
+	}
+
+	if (Host_Modvote_CheckMajority())
+		return;
+
+	if (!Host_Modvote_ClientIsEligible(voter))
+	{
+		Host_Modvote_ClientReply(voter, MODVOTE_TAG "You must be an active in-game coop player to use modvote.\n");
+		return;
+	}
+
+	while (q_isspace((unsigned char)*modname))
+		modname++;
+	if (*modname == '\"')
+		modname++;
+	while (q_isspace((unsigned char)*modname))
+		modname++;
+
+	if (!*modname)
+	{
+		Host_Modvote_PrintStatus(voter);
+		return;
+	}
+
+	for (i = 0; modname[i] && !q_isspace((unsigned char)modname[i]) && modname[i] != '\"' && i + 1 < sizeof(modname_token); ++i)
+		modname_token[i] = modname[i];
+	modname_token[i] = '\0';
+	modname = modname_token;
+	Host_Modvote_EscapeMarkup(modname, safe_modname, sizeof(safe_modname));
+
+	if (!Host_Modvote_IsValidModName(modname))
+	{
+		Host_Modvote_ClientReply(voter, MODVOTE_TAG "Usage: ^m%s <modname>^m\n", is_chat ? "say /modvote" : "modvote");
+		return;
+	}
+
+	if (!Host_Modvote_IsValidMod(modname))
+	{
+		Host_Modvote_ClientReply(voter, MODVOTE_TAG "Mod ^m\"%s\"^m is not available on this server. Use ^m\"modvote\"^m with no mod name to list available vote options.\n", safe_modname);
+		return;
+	}
+
+	if (COM_GameDirMatches(modname))
+	{
+		Host_Modvote_ClientReply(voter, MODVOTE_TAG "Mod ^m\"%s\"^m is already active.\n", safe_modname);
+		return;
+	}
+
+	eligible = Host_Modvote_CountEligibleClients();
+	needed = Host_Modvote_VotesNeeded(eligible);
+
+	client_index = (int)(voter - svs.clients);
+	if (client_index < 0 || client_index >= svs.maxclients || client_index >= MAX_SCOREBOARD)
+		return;
+
+	current_time = SDL_GetTicks();
+	if (!SDL_TICKS_PASSED(current_time, sv_modvote_last_vote_time[client_index] + MODVOTE_COOLDOWN_MS))
+	{
+		Host_Modvote_ClientReply(voter, MODVOTE_TAG "Please wait a moment before changing your vote.\n");
+		return;
+	}
+	sv_modvote_last_vote_time[client_index] = current_time;
+
+	current = sv_modvote_client_choices[client_index];
+	if (current && !q_strcasecmp(current->name, modname))
+	{
+		char safe_current_name[MAX_QPATH * 2];
+
+		Host_Modvote_EscapeMarkup(current->name, safe_current_name, sizeof(safe_current_name));
+		Host_Modvote_ClientReply(voter, MODVOTE_TAG "You have already voted for mod ^m\"%s\"^m (^g%d^g/^g%d^g).\n", safe_current_name, current->votes, needed);
+		return;
+	}
+
+	is_change = (current != NULL);
+	if (is_change)
+	{
+		q_strlcpy(old_name, current->name, sizeof(old_name));
+		sv_modvote_client_choices[client_index] = NULL;
+		if (current->votes > 0)
+			--current->votes;
+		if (current->votes <= 0)
+			Host_Modvote_UnlinkChoice(current);
+	}
+
+	choice = Host_Modvote_FindChoice(modname);
+	if (!choice)
+	{
+		choice = (modvote_choice_t *)Z_Malloc(sizeof(*choice));
+		q_strlcpy(choice->name, modname, sizeof(choice->name));
+		choice->votes = 0;
+		choice->next = sv_modvote_choices;
+		sv_modvote_choices = choice;
+	}
+
+	choice->votes++;
+	sv_modvote_client_choices[client_index] = choice;
+
+	{
+		char safe_voter_name[MAX_QPATH * 2];
+		char safe_choice_name[MAX_QPATH * 2];
+
+		Host_Modvote_EscapeMarkup(voter->name, safe_voter_name, sizeof(safe_voter_name));
+		Host_Modvote_EscapeMarkup(choice->name, safe_choice_name, sizeof(safe_choice_name));
+		if (is_change)
+		{
+			char safe_old_name[MAX_QPATH * 2];
+			Host_Modvote_EscapeMarkup(old_name, safe_old_name, sizeof(safe_old_name));
+			Host_Modvote_BroadcastPrintf(MODVOTE_TAG "%s changed vote from ^m\"%s\"^m to ^m\"%s\"^m (^g%d^g/^g%d^g).\n", safe_voter_name, safe_old_name, safe_choice_name, choice->votes, needed);
+		}
+		else
+		{
+			Host_Modvote_BroadcastPrintf(MODVOTE_TAG "%s voted to switch to mod ^m\"%s\"^m (^g%d^g/^g%d^g).\n", safe_voter_name, safe_choice_name, choice->votes, needed);
+		}
+		Host_Modvote_BroadcastPrintf(MODVOTE_TAG "To vote: ^m\"modvote %s\"^m or chat ^m\"/modvote %s\"^m.\n", safe_choice_name, safe_choice_name);
+		Host_Modvote_Printf(NULL, MODVOTE_TAG "%s voted for mod ^m\"%s\"^m (^g%d^g/^g%d^g).\n", safe_voter_name, safe_choice_name, choice->votes, needed);
+	}
+
+	if (choice->votes >= needed)
+	{
+		Host_Modvote_Apply(choice->name);
+		return;
+	}
+
+	Host_Modvote_PrintStatus(NULL);
+}
+
+static void Host_Modvote_f(void)
+{
+	client_t *voter;
+
+	if (cmd_source != src_client && cls.state == ca_connected && !cls.demoplayback)
+	{
+		Cmd_ForwardToServer();
+		return;
+	}
+
+	if (!sv.active)
+	{
+		if (cmd_source == src_client)
+			Host_Modvote_ClientReply(host_client, MODVOTE_TAG "The server is not currently running a game.\n");
+		else
+			Host_Modvote_Printf(NULL, MODVOTE_TAG "The server is not currently running a game.\n");
+		return;
+	}
+
+	if (Cmd_Argc() < 2)
+	{
+		Host_Modvote_PrintStatus((cmd_source == src_client) ? host_client : NULL);
+		return;
+	}
+
+	if (cmd_source == src_client)
+	{
+		voter = host_client;
+	}
+	else if (isDedicated)
+	{
+		Host_Modvote_Printf(NULL, MODVOTE_TAG "Only connected clients may cast ballots.\n");
+		return;
+	}
+	else
+	{
+		voter = &svs.clients[0];
+		if (!voter->active)
+		{
+			Host_Modvote_Printf(NULL, MODVOTE_TAG "No active local client is connected to cast a ballot.\n");
+			return;
+		}
+	}
+
+	Host_Modvote_Core(voter, Cmd_Argv(1), false);
+}
 
 //==============================================================================
 // woods -- server list management #serverlist
@@ -6563,6 +7349,30 @@ static void Host_Say(qboolean teamonly)
 		p++;
 		quoted = true;
 	}
+
+	if (!fromServer)
+	{
+		const char *s = p;
+		const char *modname_arg = NULL;
+
+		while (q_isspace((unsigned char)*s))
+			s++;
+
+		if (*s == '/' || *s == '!')
+		{
+			s++;
+			if (!q_strncasecmp(s, "modvote", 7) && (s[7] == '\0' || s[7] == '\"' || q_isspace((unsigned char)s[7])))
+				modname_arg = s + 7;
+		}
+
+		if (modname_arg)
+		{
+			while (q_isspace((unsigned char)*modname_arg))
+				modname_arg++;
+			Host_Modvote_Core(save, modname_arg, true);
+			return;
+		}
+	}
 // turn on color set 1
 	if (!fromServer)
 	{
@@ -7198,6 +8008,7 @@ static void Host_Begin_f (void)
 	}
 
 	host_client->spawned = true;
+	Host_Modvote_PrintJoinMotd(host_client);
 }
 
 //===========================================================================
@@ -8892,6 +9703,7 @@ void Host_InitCommands (void)
 	Cmd_AddCommand_ClientCommand ("sv_startdownload", Host_StartDownload_f);
 	Cmd_AddCommand_ClientCommand ("enablecsqc", Host_EnableCSQC_f);
 	Cmd_AddCommand_ClientCommand ("disablecsqc", Host_DisableCSQC_f);
+	Cmd_AddCommand_ClientCommand ("modvote", Host_Modvote_f);
 
 	Cmd_AddCommand ("startdemos", Host_Startdemos_f);
 	Cmd_AddCommand ("demos", Host_Demos_f);

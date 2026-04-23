@@ -4044,6 +4044,7 @@ void SV_SpawnServer (const char *server)
 
 	Con_DPrintf ("SpawnServer: %s\n",server);
 	svs.changelevel_issued = false;		// now safe to issue another
+	Host_Modvote_Reset();
 	LOG_Maintenance();// deferred log roll at level changes
 
 	PR_SwitchQCVM(NULL);
@@ -4106,6 +4107,18 @@ void SV_SpawnServer (const char *server)
 	}
 
 	Info_SetKey(svs.serverinfo, sizeof(svs.serverinfo), "*version", ENGINE_NAME_AND_VER); // woods send version info
+	{
+		const char *gamedirs = COM_GetGameNames(false);
+		const char *active_gamedir = GAMENAME;
+
+		if (*gamedirs)
+		{
+			const char *last = strrchr(gamedirs, ';');
+			active_gamedir = last ? last + 1 : gamedirs;
+		}
+
+		Info_SetKey(svs.serverinfo, sizeof(svs.serverinfo), "*gamedir", active_gamedir);
+	}
 
 	PR_SwitchQCVM(vm);
 // load progs to get entity field count

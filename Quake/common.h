@@ -411,6 +411,7 @@ const char *COM_GetMissingPakHint(void);
 void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter);
 const char *COM_GetGameNames(qboolean full);
 qboolean COM_GameDirMatches(const char *tdirs);
+void COM_SetModvoteAutostart(void);
 void COM_RemoveDownloadTempFiles(void);
 void COM_AddDownloadedPackage(const char *relative_path);
 void COM_RemoveDownloadedPackage(const char *relative_path);
