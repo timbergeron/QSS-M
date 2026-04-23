@@ -424,6 +424,9 @@ void COM_WriteFile (const char *filename, const void *data, int len);
 int COM_OpenFile (const char *filename, int *handle, unsigned int *path_id);
 int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id);
 qboolean COM_FileExists (const char *filename, unsigned int *path_id);
+qboolean COM_ConfigFileUsesConfigsDir (const char *filename);
+qboolean COM_ConfigFileExists (const char *filename, unsigned int *path_id);
+qboolean COM_ExecConfigFile (const char *filename);
 void COM_CloseFile (int h);
 
 // these procedures open a file using COM_FindFile and loads it into a proper

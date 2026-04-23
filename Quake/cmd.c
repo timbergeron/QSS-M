@@ -291,7 +291,8 @@ Cmd_Exec_f
 */
 void Cmd_Exec_f (void)
 {
-	const char	*f;
+	const char	*f, *config_f;
+	char		config_path[MAX_QPATH];
 	int		mark;
 
 	if (Cmd_Argc () != 2)
@@ -302,17 +303,28 @@ void Cmd_Exec_f (void)
 
 	mark = Hunk_LowMark ();
 	f = (const char *)COM_LoadHunkFile (Cmd_Argv(1), NULL);
+	config_f = NULL;
+	if (COM_ConfigFileUsesConfigsDir(Cmd_Argv(1)))
+	{
+		q_snprintf(config_path, sizeof(config_path), "configs/%s", Cmd_Argv(1));
+		config_f = (const char *)COM_LoadHunkFile (config_path, NULL);
+	}
 	if (!f && !strcmp(Cmd_Argv(1), "default.cfg")) {
 		f = default_cfg;	/* see above.. */
 	}
-	if (!f)
+	if (!f && !config_f)
 	{
 		if (cmd_warncmd.value)
 			Con_Printf ("couldn't exec %s\n",Cmd_Argv(1));
 		return;
 	}
 	if (cmd_warncmd.value)
-		Con_Printf ("execing %s\n",Cmd_Argv(1));
+	{
+		if (f)
+			Con_Printf ("execing %s\n",Cmd_Argv(1));
+		if (config_f)
+			Con_Printf ("execing %s\n",config_path);
+	}
 
 	if (!in_cfg_exec) // woods - Skip apropos text for unknown commands executed from config (ironwail)
 	{
@@ -322,7 +334,10 @@ void Cmd_Exec_f (void)
 	}
 
 	Cbuf_InsertText ("\n");	//just in case there was no trailing \n.
-	Cbuf_InsertText (f);
+	if (config_f)
+		Cbuf_InsertText (config_f);
+	if (f)
+		Cbuf_InsertText (f);
 	if (f != default_cfg) {
 		Hunk_FreeToLowMark (mark);
 	}

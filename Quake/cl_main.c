@@ -680,19 +680,19 @@ void CL_SendInitialUserinfo(void *ctx, const char *key, const char *val)
 
 Uint32 exec_connect_cfg (Uint32 interval, void* param) // woods #execdelay
 {
-	Cbuf_AddText("exec connect.cfg\n"); // exec some configs based on serverinfo, hybrid uses userinfo
+	COM_ExecConfigFile("connect.cfg"); // exec some configs based on serverinfo, hybrid uses userinfo
 	return 0; // only exec once
 }
 
 Uint32 exec_ctf_cfg (Uint32 interval, void* param) // woods #execdelay
 {
-	Cbuf_AddText("exec ctf.cfg\n"); // exec some configs based on serverinfo, hybrid uses userinfo
+	COM_ExecConfigFile("ctf.cfg"); // exec some configs based on serverinfo, hybrid uses userinfo
 	return 0; // only exec once
 }
 
 Uint32 exec_dm_cfg (Uint32 interval, void* param) // woods #execdelay
 {
-	Cbuf_AddText("exec dm.cfg\n"); // exec some configs based on serverinfo, hybrid uses userinfo
+	COM_ExecConfigFile("dm.cfg"); // exec some configs based on serverinfo, hybrid uses userinfo
 	return 0; // only exec once
 }
 
@@ -768,7 +768,7 @@ void CL_SignonReply (void)
 
 		strncpy(cl.observer, "n", sizeof(cl.observer));
 
-		if (COM_FileExists("connect.cfg", NULL))
+		if (COM_ConfigFileExists("connect.cfg", NULL))
 			SDL_AddTimer(900, exec_connect_cfg, NULL); // 2 sec delay after connect #execdelay
 
 		const char* val;
@@ -804,13 +804,13 @@ void CL_SignonReply (void)
 		if (!q_strcasecmp(val, "ctf"))
 		{
 			cl.modetype = 1;
-			if (COM_FileExists("ctf.cfg", NULL))
+			if (COM_ConfigFileExists("ctf.cfg", NULL))
 				SDL_AddTimer(1000, exec_ctf_cfg, NULL); // 2 sec delay after connect #execdelay
 		}
 		if (!strcmp(val, "dm") || !strcmp(val, "ffa"))
 		{
 			cl.modetype = 2;
-			if (COM_FileExists("dm.cfg", NULL))
+			if (COM_ConfigFileExists("dm.cfg", NULL))
 				SDL_AddTimer(1000, exec_dm_cfg, NULL); // 2 sec delay after connect #execdelay
 		}
 		if (!q_strcasecmp(val, "ra") || !q_strcasecmp(val, "rocketarena"))
@@ -2403,12 +2403,31 @@ void WebCheckInit (void) // runs at launch in CL_Init if default values
 {
 	char* webearly = NULL;
 	char* web2early = NULL;
+	char* weboverride = NULL;
+	char* web2override = NULL;
 
 	if (CFG_OpenConfig("config.cfg") == 0) // get these early config values
 	{
 		webearly = CFG_ReadCvarValue("cl_web_download_url");
 		web2early = CFG_ReadCvarValue("cl_web_download_url2");
 		CFG_CloseConfig();
+	}
+	if (CFG_OpenConfig("configs/config.cfg") == 0)
+	{
+		weboverride = CFG_ReadCvarValue("cl_web_download_url");
+		web2override = CFG_ReadCvarValue("cl_web_download_url2");
+		CFG_CloseConfig();
+
+		if (weboverride != NULL)
+		{
+			free(webearly);
+			webearly = weboverride;
+		}
+		if (web2override != NULL)
+		{
+			free(web2early);
+			web2early = web2override;
+		}
 	}
 
 	if (webearly != NULL && webearly[0] != '\0')

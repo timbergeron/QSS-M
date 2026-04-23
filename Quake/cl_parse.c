@@ -2740,8 +2740,7 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 				if (!strcmp(string, "Sending ClanRing CRCTF v3.5 bindings\n"))  // woods differemt cfgs per mod #modcfg
 				{
 					cl.modtype = 2; // woods #modtype [crctf server check]
-					if (COM_FileExists("ctf.cfg", NULL))
-						Cbuf_AddText("exec ctf.cfg\n"); // exec some configs based on serverinfo, hybrid uses userinfo
+					COM_ExecConfigFile("ctf.cfg"); // exec some configs based on serverinfo, hybrid uses userinfo
 				}
 				if (!strcmp(string, "ClanRing CRCTF v3.5\n"))  // woods #observerhud
 				{
@@ -2797,7 +2796,7 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 				if (!strncmp(string, qfClanRing, 8) && strstr(string, qfCRMod)) // crmod wierd chars // woods differemt cfgs per mod #modcfg
 				{
 					cl.modtype = 3; // woods #modtype [crmod server check]
-					if (COM_FileExists("dm.cfg", NULL))
+					if (COM_ConfigFileExists("dm.cfg", NULL))
 						SDL_AddTimer(2000, exec_dm_cfg, NULL); // 2 sec delay after connect #execdelay
 					strncpy(cl.observer, "n", sizeof(cl.observer)); // woods #observer set to no on join
 				}

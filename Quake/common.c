@@ -2711,6 +2711,50 @@ qboolean COM_FileExists (const char *filename, unsigned int *path_id)
 	return (ret == -1) ? false : true;
 }
 
+static qboolean COM_ConfigDirPath (const char *filename, char *config_path, size_t config_path_size)
+{
+	if (!COM_ConfigFileUsesConfigsDir(filename))
+		return false;
+
+	q_snprintf(config_path, config_path_size, "configs/%s", filename);
+	return true;
+}
+
+qboolean COM_ConfigFileUsesConfigsDir (const char *filename)
+{
+	if (strchr(filename, '/') || strchr(filename, '\\'))
+		return false;
+
+	return !q_strcasecmp(filename, "config.cfg") ||
+	       !q_strcasecmp(filename, "autoexec.cfg") ||
+	       !q_strcasecmp(filename, "server.cfg") ||
+	       !q_strcasecmp(filename, "connect.cfg") ||
+	       !q_strcasecmp(filename, "ctf.cfg") ||
+	       !q_strcasecmp(filename, "dm.cfg");
+}
+
+qboolean COM_ConfigFileExists (const char *filename, unsigned int *path_id)
+{
+	char config_path[MAX_QPATH];
+
+	if (COM_FileExists(filename, path_id))
+		return true;
+
+	if (!COM_ConfigDirPath(filename, config_path, sizeof(config_path)))
+		return false;
+
+	return COM_FileExists(config_path, path_id);
+}
+
+qboolean COM_ExecConfigFile (const char *filename)
+{
+	if (!COM_ConfigFileExists(filename, NULL))
+		return false;
+
+	Cbuf_AddText(va("exec %s\n", filename));
+	return true;
+}
+
 /*
 ===========
 COM_OpenFile
