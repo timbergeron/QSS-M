@@ -667,7 +667,7 @@ void SCR_CheckDrawCenterString (void)
 	if (cl.paused) //johnfitz -- don't show centerprint during a pause
 		return;
 
-	if (sb_showscores == true && (cl.gametype == GAME_DEATHMATCH)) // woods don't overlap centerprints with scoreboard
+	if (sb_showscores == true && (cl.gametype == GAME_DEATHMATCH || cl.maxclients > 1)) // woods don't overlap centerprints with scoreboard
 		return;
 
 	draw = true; // woods #crxcamera #qeintermission

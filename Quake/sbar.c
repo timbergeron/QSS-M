@@ -60,6 +60,11 @@ qboolean	sb_showscores;
 
 int		sb_lines;			// scan lines to draw
 
+static qboolean Sbar_ShouldDrawMultiplayerScoreboard (void)
+{
+	return cl.gametype == GAME_DEATHMATCH || cl.maxclients > 1;
+}
+
 qpic_t		*rsb_invbar[2];
 qpic_t		*rsb_weapons[5];
 qpic_t		*rsb_items[2];
@@ -919,7 +924,7 @@ Sbar_DrawScoreboard
 void Sbar_DrawScoreboard (void)
 {
 	Sbar_SoloScoreboard ();
-	if (cl.gametype == GAME_DEATHMATCH || cl.maxclients > 1) // woods coop support (sleeper) -- joequake/qrack
+	if (Sbar_ShouldDrawMultiplayerScoreboard()) // woods coop support (sleeper) -- joequake/qrack
 		Sbar_DeathmatchOverlay ();
 }
 
@@ -2138,7 +2143,7 @@ void Sbar_Draw (void)
 		glDisable(GL_SCISSOR_TEST);
 		glColor3f (1,1,1);
 
-		if (deathmatchoverlay && cl.gametype == GAME_DEATHMATCH)
+		if (deathmatchoverlay && Sbar_ShouldDrawMultiplayerScoreboard())
 		{
 			GL_SetCanvas (CANVAS_SBAR);
 			Sbar_DeathmatchOverlay ();
@@ -2605,7 +2610,7 @@ void Sbar_DeathmatchOverlay (void)
 	int unready_count = 0; // woods #smartstatus - count of unready team players
 
 	// JPG 1.05 - check to see if we should update IP status  // woods for #iplog
-	if (iplog_size && (cl.time - cl.last_status_time > 5))
+	if (cl.gametype == GAME_DEATHMATCH && iplog_size && !cls.message.cursize && (cl.time - cl.last_status_time > 5))
 	{
 		MSG_WriteByte(&cls.message, clc_stringcmd);
 		SZ_Print(&cls.message, "status\n");
@@ -2908,7 +2913,7 @@ void Sbar_IntermissionOverlay (void)
 		return;
 	}
 
-	if (cl.gametype == GAME_DEATHMATCH)
+	if (Sbar_ShouldDrawMultiplayerScoreboard())
 	{
 		Sbar_DeathmatchOverlay ();
 		return;
