@@ -3671,6 +3671,26 @@ qboolean AddHashedDirectories(void* ctx, const char* fname, time_t mtime, size_t
 	return true; // Return true to continue processing
 }
 
+static qboolean COM_AddGamePackageFile(searchpath_t *searchdir, const char *dir, const char *filename)
+{
+	char pakfile[MAX_OSPATH];
+	char purename[MAX_OSPATH];
+	qboolean found = false;
+
+	if (strchr(filename, '/') || strchr(filename, '\\') || strchr(filename, ':'))
+		return false;
+
+	q_snprintf(pakfile, sizeof(pakfile), "%s/%s", com_gamedir, filename);
+	q_snprintf(purename, sizeof(purename), "%s/%s", dir, filename);
+	found |= COM_AddPackage(searchdir, pakfile, purename);
+
+	q_snprintf(pakfile, sizeof(pakfile), "%s/paks/%s", com_gamedir, filename);
+	q_snprintf(purename, sizeof(purename), "%s/paks/%s", dir, filename);
+	found |= COM_AddPackage(searchdir, pakfile, purename);
+
+	return found;
+}
+
 /*
 =================
 COM_AddGameDirectory -- johnfitz -- modified based on topaz's tutorial, reworked (woods)
@@ -3697,12 +3717,13 @@ COM_AddGameDirectory -- johnfitz -- modified based on topaz's tutorial, reworked
 //    - Loaded in the order specified in pak.lst
 //    - Should NOT include engine paks (quakespasm.pak, qssm.pak)
 //    - Should NOT include base paks (pak0.pak, pak1.pak)
+//    - Each entry is searched in the game directory and optional paks/ folder
 //    - If pak.lst doesn't exist, falls back to loading pak2+ numerically
 //    - Duplicate entries in pak.lst are ignored (first occurrence is used)
-//    - Non-existent files in pak.lst are skipped with a warning.
+//    - Non-existent files in pak.lst are skipped.
 //
 // 5. Unlisted Paks (unless -nowildpaks is specified)
-//    - Any .pak files not listed in pak.lst
+//    - Any .pak files not listed in pak.lst from the game directory and paks/
 //    - Loaded in alphabetical order
 //    - Example: pak2.pak, custom.pak, etc.
 //    - Both .pak and .pk3 formats are included
@@ -3733,6 +3754,7 @@ COM_AddGameDirectory -- johnfitz -- modified based on topaz's tutorial, reworked
 //
 // Notes:
 // - All paths support both .pak and .pk3 formats
+// - pak.lst and numeric pak2+ loads also search the optional paks/ folder
 // - The -nowildpaks command line parameter disables loading of unlisted paks
 // - Files in a later game directory will override ALL content 
 //   (including #directories and loose files) from earlier game directories
@@ -3846,15 +3868,14 @@ _add_path:
 	{
 		// If no pak.lst exists, load remaining paks in alphabetical order
 		for (i = 2; ; i++) {
+			char pakname[MAX_OSPATH];
 			qboolean found = false;
 
-			q_snprintf(pakfile, sizeof(pakfile), "%s/pak%i.pak", com_gamedir, i);
-			q_snprintf(purename, sizeof(purename), "%s/pak%i.pak", dir, i);
-			found |= COM_AddPackage(searchdir, pakfile, purename);
+			q_snprintf(pakname, sizeof(pakname), "pak%i.pak", i);
+			found |= COM_AddGamePackageFile(searchdir, dir, pakname);
 
-			q_snprintf(pakfile, sizeof(pakfile), "%s/pak%i.pk3", com_gamedir, i);
-			q_snprintf(purename, sizeof(purename), "%s/pak%i.pk3", dir, i);
-			found |= COM_AddPackage(searchdir, pakfile, purename);
+			q_snprintf(pakname, sizeof(pakname), "pak%i.pk3", i);
+			found |= COM_AddGamePackageFile(searchdir, dir, pakname);
 
 			if (!found)
 				break;
@@ -3895,9 +3916,7 @@ _add_path:
 				q_strncasecmp(com_token, "pak1.", 5) == 0)
 				continue;
 
-			q_snprintf (pakfile, sizeof(pakfile), "%s/%s", com_gamedir, com_token);
-			q_snprintf (purename, sizeof(purename), "%s/%s", dir, com_token);
-			COM_AddPackage(searchdir, pakfile, purename);
+			COM_AddGamePackageFile(searchdir, dir, com_token);
 		}
 
 		Z_Free(buffer);

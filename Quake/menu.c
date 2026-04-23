@@ -26265,6 +26265,7 @@ static qboolean M_Pak_ScanCallback(void *ctx, const char *fname, time_t mtime, s
 	qboolean in_id1_gamedir;
 	const char *gamedir_name;
 	const char *ext = COM_FileGetExtension(fname);
+	const char *pakname = fname;
 	if (!ext) return true;
 	
 	if (q_strcasecmp(ext, "pak") && q_strcasecmp(ext, "pk3"))
@@ -26282,6 +26283,9 @@ static qboolean M_Pak_ScanCallback(void *ctx, const char *fname, time_t mtime, s
 	// Check if we're running in id1 gamedir (compare just the directory name)
 	gamedir_name = COM_SkipPath(com_gamedir);
 	in_id1_gamedir = (q_strcasecmp(gamedir_name, "id1") == 0);
+
+	if (!q_strncasecmp(fname, "paks/", 5) || !q_strncasecmp(fname, "paks\\", 5))
+		pakname = fname + 5;
 	
 	// If in id1 gamedir, only show paks from id1 (no base/mod distinction)
 	if (in_id1_gamedir)
@@ -26291,13 +26295,13 @@ static qboolean M_Pak_ScanCallback(void *ctx, const char *fname, time_t mtime, s
 			return true;
 		
 		// Filter pak0/pak1 and engine paks (pinned at top) - ALWAYS in id1
-		if (!q_strncasecmp(fname, "pak0.", 5) || 
-			!q_strncasecmp(fname, "pak1.", 5) ||
-			!q_strncasecmp(fname, "quakespasm.", 11) ||
-			!q_strncasecmp(fname, "qssm.", 5))
+		if (!q_strncasecmp(pakname, "pak0.", 5) ||
+			!q_strncasecmp(pakname, "pak1.", 5) ||
+			!q_strncasecmp(pakname, "quakespasm.", 11) ||
+			!q_strncasecmp(pakname, "qssm.", 5))
 			return true;
 		
-		M_Pak_Add(fname, false, 1); // Not readonly when in id1
+		M_Pak_Add(pakname, false, 1); // Not readonly when in id1
 	}
 	else
 	{
@@ -26305,22 +26309,22 @@ static qboolean M_Pak_ScanCallback(void *ctx, const char *fname, time_t mtime, s
 		if (is_id1)
 		{
 			// id1 pak - filter pak0/pak1 (pinned at top), but add others as readonly
-			if (!q_strncasecmp(fname, "pak0.", 5) || 
-				!q_strncasecmp(fname, "pak1.", 5) ||
-				!q_strncasecmp(fname, "quakespasm.", 11) ||
-				!q_strncasecmp(fname, "qssm.", 5))
+			if (!q_strncasecmp(pakname, "pak0.", 5) ||
+				!q_strncasecmp(pakname, "pak1.", 5) ||
+				!q_strncasecmp(pakname, "quakespasm.", 11) ||
+				!q_strncasecmp(pakname, "qssm.", 5))
 				return true;
 			
-			M_Pak_Add(fname, true, 0); // Base (id1) = source 0, readonly
+			M_Pak_Add(pakname, true, 0); // Base (id1) = source 0, readonly
 		}
 		else if (strcmp(spath->filename, com_gamedir) == 0)
 		{
 			// Mod pak - filter engine paks only, allow pak0/pak1/pak2 etc
-			if (!q_strncasecmp(fname, "quakespasm.", 11) ||
-				!q_strncasecmp(fname, "qssm.", 5))
+			if (!q_strncasecmp(pakname, "quakespasm.", 11) ||
+				!q_strncasecmp(pakname, "qssm.", 5))
 				return true;
 			
-			M_Pak_Add(fname, false, 1); // Mod = source 1, editable
+			M_Pak_Add(pakname, false, 1); // Mod = source 1, editable
 		}
 		// Ignore paks from other directories
 	}
@@ -26375,6 +26379,8 @@ static void M_Pak_BuildList(void)
 
 				COM_ListAllFiles(NULL, "*.pak", M_Pak_ScanCallback, 0, NULL);
 				COM_ListAllFiles(NULL, "*.pk3", M_Pak_ScanCallback, 0, NULL);
+				COM_ListAllFiles(NULL, "paks/*.pak", M_Pak_ScanCallback, 0, NULL);
+				COM_ListAllFiles(NULL, "paks/*.pk3", M_Pak_ScanCallback, 0, NULL);
 
 				/* Sort logic:
 				   1. Base paks (source 0) - sorted by name
@@ -26411,6 +26417,8 @@ static void M_Pak_BuildList(void)
 	// Scan for all paks in current gamedir (callback filters by gamedir)
 	COM_ListAllFiles(NULL, "*.pak", M_Pak_ScanCallback, 0, NULL);
 	COM_ListAllFiles(NULL, "*.pk3", M_Pak_ScanCallback, 0, NULL);
+	COM_ListAllFiles(NULL, "paks/*.pak", M_Pak_ScanCallback, 0, NULL);
+	COM_ListAllFiles(NULL, "paks/*.pk3", M_Pak_ScanCallback, 0, NULL);
 	if (pakmenu.num_paks > 1)
 		qsort(pakmenu.paks, pakmenu.num_paks, sizeof(menu_pak_t), M_Pak_Compare);
 
