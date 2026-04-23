@@ -3704,6 +3704,7 @@ COM_AddGameDirectory -- johnfitz -- modified based on topaz's tutorial, reworked
 // 1. Base Pak 0 (ALWAYS first)
 //    - pak0.pak
 //    - Both .pak and .pk3 formats tried for each
+//    - Each entry is searched in the game directory and optional paks/ folder
 //
 // 2. Engine Paks (ALWAYS second)
 //    - quakespasm.pak
@@ -3713,6 +3714,7 @@ COM_AddGameDirectory -- johnfitz -- modified based on topaz's tutorial, reworked
 // 3. Base Pak 1 (ALWAYS after engine paks)
 //    - pak1.pak
 //    - Both .pak and .pk3 formats tried for each
+//    - Each entry is searched in the game directory and optional paks/ folder
 //
 // 4. Paks Listed in pak.lst
 //    - Loaded in the order specified in pak.lst
@@ -3755,7 +3757,7 @@ COM_AddGameDirectory -- johnfitz -- modified based on topaz's tutorial, reworked
 //
 // Notes:
 // - All paths support both .pak and .pk3 formats
-// - pak.lst and numeric pak2+ loads also search the optional paks/ folder
+// - Base paks, pak.lst entries, and numeric pak2+ loads also search the optional paks/ folder
 // - The -nowildpaks command line parameter disables loading of unlisted paks
 // - Files in a later game directory will override ALL content 
 //   (including #directories and loose files) from earlier game directories
@@ -3820,15 +3822,9 @@ _add_path:
 	q_strlcpy (searchdir->filename, com_gamedir, sizeof(searchdir->filename));
 	q_strlcpy (searchdir->purename, dir, sizeof(searchdir->purename));
 
-	// Load pak0.pak
-	q_snprintf(pakfile, sizeof(pakfile), "%s/pak0.pak", com_gamedir);
-	q_snprintf(purename, sizeof(purename), "%s/pak0.pak", dir);
-	COM_AddPackage(searchdir, pakfile, purename);
-
-	// Load pak0.pk3
-	q_snprintf(pakfile, sizeof(pakfile), "%s/pak0.pk3", com_gamedir);
-	q_snprintf(purename, sizeof(purename), "%s/pak0.pk3", dir);
-	COM_AddPackage(searchdir, pakfile, purename);
+	// Load pak0
+	COM_AddGamePackageFile(searchdir, dir, "pak0.pak");
+	COM_AddGamePackageFile(searchdir, dir, "pak0.pk3");
 
 	//  Load engine paks
 	for (i = 0; i < num_enginepacks; i++) 
@@ -3851,15 +3847,9 @@ _add_path:
 		com_modified = old;
 	}
 
-	// Load pak1.pak
-	q_snprintf(pakfile, sizeof(pakfile), "%s/pak1.pak", com_gamedir);
-	q_snprintf(purename, sizeof(purename), "%s/pak1.pak", dir);
-	COM_AddPackage(searchdir, pakfile, purename);
-
-	// Load pak1.pk3
-	q_snprintf(pakfile, sizeof(pakfile), "%s/pak1.pk3", com_gamedir);
-	q_snprintf(purename, sizeof(purename), "%s/pak1.pk3", dir);
-	COM_AddPackage(searchdir, pakfile, purename);
+	// Load pak1
+	COM_AddGamePackageFile(searchdir, dir, "pak1.pak");
+	COM_AddGamePackageFile(searchdir, dir, "pak1.pk3");
 
 	// Load additional paks not in pak.lst first
 	q_snprintf (pakfile, sizeof(pakfile), "%s/pak.lst", com_gamedir);
@@ -5255,13 +5245,35 @@ static void COM_JoinPath(char *dst, size_t dstsize, const char *base, const char
 		q_snprintf(dst, dstsize, "%s/%s", base, name);
 }
 
+static qboolean COM_FindPakInId1Path(const char *id1dir, const char *pakname, char *outpath, size_t outsize)
+{
+	char pakpath[MAX_OSPATH];
+	char paksubdir[MAX_OSPATH];
+
+	COM_JoinPath(pakpath, sizeof(pakpath), id1dir, pakname);
+	if (Sys_FileType(pakpath) & FS_ENT_FILE)
+	{
+		if (outpath && outsize > 0)
+			q_strlcpy(outpath, pakpath, outsize);
+		return true;
+	}
+
+	COM_JoinPath(paksubdir, sizeof(paksubdir), id1dir, "paks");
+	COM_JoinPath(pakpath, sizeof(pakpath), paksubdir, pakname);
+	if (Sys_FileType(pakpath) & FS_ENT_FILE)
+	{
+		if (outpath && outsize > 0)
+			q_strlcpy(outpath, pakpath, outsize);
+		return true;
+	}
+
+	return false;
+}
+
 static qboolean COM_PathHasPakPair(const char *id1dir)
 {
-	char pak0path[MAX_OSPATH];
-	char pak1path[MAX_OSPATH];
-	COM_JoinPath(pak0path, sizeof(pak0path), id1dir, "pak0.pak");
-	COM_JoinPath(pak1path, sizeof(pak1path), id1dir, "pak1.pak");
-	return (Sys_FileType(pak0path) & FS_ENT_FILE) && (Sys_FileType(pak1path) & FS_ENT_FILE);
+	return COM_FindPakInId1Path(id1dir, "pak0.pak", NULL, 0) &&
+	       COM_FindPakInId1Path(id1dir, "pak1.pak", NULL, 0);
 }
 
 static qboolean COM_MissingLocalPakPair(void)
@@ -5645,14 +5657,14 @@ static void COM_TrySteamPakAutocopy(void)
 
 	COM_SetMissingPakHint(
 		"\n\nDetected compatible Steam installation at: %s\n"
-		"Copy pak0.pak and pak1.pak to %s/id1, or launch with -basedir \"%s\".",
+		"Copy pak0.pak and pak1.pak to %s/id1 or its paks/ subfolder, or launch with -basedir \"%s\".",
 		steam_id1, com_basedir, steam_quake_root);
 
 	if (isDedicated)
 		return;
 
 	q_snprintf(prompt, sizeof(prompt),
-		"Required Quake pak files were not found in:\n%s/id1\n\n"
+		"Required Quake pak files were not found in:\n%s/id1 or its paks/ subfolder\n\n"
 		"Detected compatible Steam installation:\n%s\n\n"
 		"Press Yes to copy pak0.pak and pak1.pak now and continue launch.\n"
 		"Press No to continue without copying.",
@@ -5667,15 +5679,13 @@ static void COM_TrySteamPakAutocopy(void)
 		COM_SetMissingPakHint(
 			"\n\nDetected compatible Steam installation at: %s\n"
 			"Automatic copy failed: %s\n"
-			"Copy pak0.pak and pak1.pak to %s/id1, or launch with -basedir \"%s\".",
+			"Copy pak0.pak and pak1.pak to %s/id1 or its paks/ subfolder, or launch with -basedir \"%s\".",
 			steam_id1, error, com_basedir, steam_quake_root);
 		return;
 	}
 
-	COM_JoinPath(dst, sizeof(dst), local_id1, "pak0.pak");
-	need_pak0 = !(Sys_FileType(dst) & FS_ENT_FILE);
-	COM_JoinPath(dst, sizeof(dst), local_id1, "pak1.pak");
-	need_pak1 = !(Sys_FileType(dst) & FS_ENT_FILE);
+	need_pak0 = !COM_FindPakInId1Path(local_id1, "pak0.pak", NULL, 0);
+	need_pak1 = !COM_FindPakInId1Path(local_id1, "pak1.pak", NULL, 0);
 
 	if (!need_pak0 && !need_pak1)
 	{
@@ -5685,14 +5695,22 @@ static void COM_TrySteamPakAutocopy(void)
 
 	if (need_pak0)
 	{
-		COM_JoinPath(src, sizeof(src), steam_id1, "pak0.pak");
+		if (!COM_FindPakInId1Path(steam_id1, "pak0.pak", src, sizeof(src)))
+		{
+			COM_SetMissingPakHint(
+				"\n\nDetected compatible Steam installation at: %s\n"
+				"Automatic copy failed: unable to locate pak0.pak in source install\n"
+				"Copy pak0.pak and pak1.pak to %s/id1 or its paks/ subfolder, or launch with -basedir \"%s\".",
+				steam_id1, com_basedir, steam_quake_root);
+			return;
+		}
 		COM_JoinPath(dst, sizeof(dst), local_id1, "pak0.pak");
 		if (!COM_CopyFileAtomicNoFatal(src, dst, error, sizeof(error)))
 		{
 			COM_SetMissingPakHint(
 				"\n\nDetected compatible Steam installation at: %s\n"
 				"Automatic copy failed: %s\n"
-				"Copy pak0.pak and pak1.pak to %s/id1, or launch with -basedir \"%s\".",
+				"Copy pak0.pak and pak1.pak to %s/id1 or its paks/ subfolder, or launch with -basedir \"%s\".",
 				steam_id1, error, com_basedir, steam_quake_root);
 			return;
 		}
@@ -5700,14 +5718,22 @@ static void COM_TrySteamPakAutocopy(void)
 
 	if (need_pak1)
 	{
-		COM_JoinPath(src, sizeof(src), steam_id1, "pak1.pak");
+		if (!COM_FindPakInId1Path(steam_id1, "pak1.pak", src, sizeof(src)))
+		{
+			COM_SetMissingPakHint(
+				"\n\nDetected compatible Steam installation at: %s\n"
+				"Automatic copy failed: unable to locate pak1.pak in source install\n"
+				"Copy pak0.pak and pak1.pak to %s/id1 or its paks/ subfolder, or launch with -basedir \"%s\".",
+				steam_id1, com_basedir, steam_quake_root);
+			return;
+		}
 		COM_JoinPath(dst, sizeof(dst), local_id1, "pak1.pak");
 		if (!COM_CopyFileAtomicNoFatal(src, dst, error, sizeof(error)))
 		{
 			COM_SetMissingPakHint(
 				"\n\nDetected compatible Steam installation at: %s\n"
 				"Automatic copy failed: %s\n"
-				"Copy pak0.pak and pak1.pak to %s/id1, or launch with -basedir \"%s\".",
+				"Copy pak0.pak and pak1.pak to %s/id1 or its paks/ subfolder, or launch with -basedir \"%s\".",
 				steam_id1, error, com_basedir, steam_quake_root);
 			return;
 		}
