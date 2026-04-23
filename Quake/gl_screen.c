@@ -3831,7 +3831,7 @@ char* hints[] = {
 	"type lastid to see your last recorded ghost code",
 	"type hints to print all hints to the console",
 	"typing 'maps chamber' will search maps for chamber",
-	"anything in end.cfg will be executed at match end",
+	"anything in end.cfg or configs/end.cfg will be executed at match end",
 	"anything in ctf.cfg or configs/ctf.cfg will be executed if mode is ctf",
 	"anything in dm.cfg or configs/dm.cfg will be executed if mode is dm",
 	"type namemaker to make custom names with quake chars",

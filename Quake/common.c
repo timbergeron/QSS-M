@@ -2730,7 +2730,8 @@ qboolean COM_ConfigFileUsesConfigsDir (const char *filename)
 	       !q_strcasecmp(filename, "server.cfg") ||
 	       !q_strcasecmp(filename, "connect.cfg") ||
 	       !q_strcasecmp(filename, "ctf.cfg") ||
-	       !q_strcasecmp(filename, "dm.cfg");
+	       !q_strcasecmp(filename, "dm.cfg") ||
+	       !q_strcasecmp(filename, "end.cfg");
 }
 
 qboolean COM_ConfigFileExists (const char *filename, unsigned int *path_id)

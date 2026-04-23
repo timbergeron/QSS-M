@@ -2723,8 +2723,7 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 					
 					if (VID_HasMouseOrInputFocus() && !cls.demoplayback)
 					{
-						if (COM_FileExists("end.cfg", NULL))
-							Cbuf_AddText("exec end.cfg\n"); // exec some configs based on serverinfo, hybrid uses userinfo
+						COM_ExecConfigFile("end.cfg"); // exec some configs based on serverinfo, hybrid uses userinfo
 					}
 				}
 				if ((cl_autodemo.value == 2) && ((!cls.demoplayback) && (!cls.demorecording))) // intiate autodemo 2 // woods #autodemo
