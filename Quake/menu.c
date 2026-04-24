@@ -3298,7 +3298,10 @@ void M_MultiPlayer_Draw (void)
 
 		// Show arrow at 0  when selected (pointing right), 90  when not (pointing down)
 		Draw_Character_Rotation(80, y, 141, selected ? 0 : 90);
-		M_Print(96, y, pinned[i].alias);
+		if (selected)
+			M_PrintWhite(96, y, pinned[i].alias);
+		else
+			M_Print(96, y, pinned[i].alias);
 	}
 
         // Draw "currently connected to" below pinned bookmarks
