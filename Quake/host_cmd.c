@@ -1293,14 +1293,14 @@ static void Modlist_Add (const char *name)
 }
 
 #ifdef _WIN32
-void Modlist_Init (void)
+static void Modlist_AddDirectoriesInPath (const char *path)
 {
 	WIN32_FIND_DATA	fdat;
 	HANDLE		fhnd;
 	DWORD		attribs;
 	char		dir_string[MAX_OSPATH], mod_string[MAX_OSPATH];
 
-	q_snprintf (dir_string, sizeof(dir_string), "%s/*", com_basedir);
+	q_snprintf (dir_string, sizeof(dir_string), "%s/*", path);
 	fhnd = FindFirstFile(dir_string, &fdat);
 	if (fhnd == INVALID_HANDLE_VALUE)
 		return;
@@ -1309,7 +1309,7 @@ void Modlist_Init (void)
 	{
 		if (!strcmp(fdat.cFileName, ".") || !strcmp(fdat.cFileName, ".."))
 			continue;
-		q_snprintf (mod_string, sizeof(mod_string), "%s/%s", com_basedir, fdat.cFileName);
+		q_snprintf (mod_string, sizeof(mod_string), "%s/%s", path, fdat.cFileName);
 		attribs = GetFileAttributes (mod_string);
 		if (attribs != INVALID_FILE_ATTRIBUTES && (attribs & FILE_ATTRIBUTE_DIRECTORY)) {
 			/* don't bother testing for pak files / progs.dat */
@@ -1319,14 +1319,25 @@ void Modlist_Init (void)
 
 	FindClose(fhnd);
 }
-#else
+
 void Modlist_Init (void)
+{
+	char modpath[MAX_OSPATH];
+
+	Modlist_AddDirectoriesInPath(com_basedir);
+	q_snprintf(modpath, sizeof(modpath), "%s/games", com_basedir);
+	Modlist_AddDirectoriesInPath(modpath);
+	q_snprintf(modpath, sizeof(modpath), "%s/mods", com_basedir);
+	Modlist_AddDirectoriesInPath(modpath);
+}
+#else
+static void Modlist_AddDirectoriesInPath (const char *path)
 {
 	DIR		*dir_p, *mod_dir_p;
 	struct dirent	*dir_t;
 	char		dir_string[MAX_OSPATH], mod_string[MAX_OSPATH];
 
-	q_snprintf (dir_string, sizeof(dir_string), "%s/", com_basedir);
+	q_snprintf (dir_string, sizeof(dir_string), "%s/", path);
 	dir_p = opendir(dir_string);
 	if (dir_p == NULL)
 		return;
@@ -1347,6 +1358,17 @@ void Modlist_Init (void)
 	}
 
 	closedir(dir_p);
+}
+
+void Modlist_Init (void)
+{
+	char modpath[MAX_OSPATH];
+
+	Modlist_AddDirectoriesInPath(com_basedir);
+	q_snprintf(modpath, sizeof(modpath), "%s/games", com_basedir);
+	Modlist_AddDirectoriesInPath(modpath);
+	q_snprintf(modpath, sizeof(modpath), "%s/mods", com_basedir);
+	Modlist_AddDirectoriesInPath(modpath);
 }
 #endif
 

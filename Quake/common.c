@@ -3690,6 +3690,48 @@ qboolean COM_GameDirMatches(const char *tdirs)
 	return false;
 }
 
+static qboolean COM_GameDirExistsInRoot(const char *root, const char *prefix, const char *game, char *resolved, size_t resolved_size)
+{
+	char relative[MAX_OSPATH];
+	char path[MAX_OSPATH];
+
+	if (prefix && *prefix)
+		q_snprintf(relative, sizeof(relative), "%s/%s", prefix, game);
+	else
+		q_strlcpy(relative, game, sizeof(relative));
+
+	q_snprintf(path, sizeof(path), "%s/%s", root, relative);
+	if (!(Sys_FileType(path) & FS_ENT_DIRECTORY))
+		return false;
+
+	if (resolved && resolved_size)
+		q_strlcpy(resolved, relative, resolved_size);
+
+	return true;
+}
+
+qboolean COM_ResolveGameDir(const char *game, char *resolved, size_t resolved_size)
+{
+	static const char *prefixes[] = { "", "games", "mods" };
+	size_t i;
+
+	if (!game || !*game)
+		return false;
+	if (!strcmp(game, ".") || strstr(game, "..") || strstr(game, "/") || strstr(game, "\\") || strstr(game, ":"))
+		return false;
+
+	for (i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++)
+	{
+		if (COM_GameDirExistsInRoot(com_basedir, prefixes[i], game, resolved, resolved_size))
+			return true;
+		if (host_parms->userdir != host_parms->basedir &&
+			COM_GameDirExistsInRoot(host_parms->userdir, prefixes[i], game, resolved, resolved_size))
+			return true;
+	}
+
+	return false;
+}
+
 static void COM_AddGameDirectory(const char* dir); // woods #pakdirs
 
 qboolean AddHashedDirectories(void* ctx, const char* fname, time_t mtime, size_t fsize, searchpath_t* spath)
@@ -3808,11 +3850,13 @@ COM_AddGameDirectory -- johnfitz -- modified based on topaz's tutorial, reworked
 static void COM_AddGameDirectory (const char *dir)
 {
 	const char *base = com_basedir;
+	const char *load_dir;
 	int i;
 	unsigned int path_id;
 	searchpath_t *searchdir;
 	char pakfile[MAX_OSPATH];
 	char purename[MAX_OSPATH];
+	char resolved_dir[MAX_OSPATH];
 	qboolean been_here = false;
 	FILE *listing;
 	const char* enginepacknames[] = { "quakespasm", "qssm" }; // woods
@@ -3828,6 +3872,11 @@ static void COM_AddGameDirectory (const char *dir)
 		q_strlcat(com_gamenames, dir, sizeof(com_gamenames));
 	}
 
+	if (!strchr(dir, '/') && !strchr(dir, '\\') && COM_ResolveGameDir(dir, resolved_dir, sizeof(resolved_dir)))
+		load_dir = resolved_dir;
+	else
+		load_dir = dir;
+
 	//quakespasm enables mission pack flags automatically, so -game rogue works without breaking the hud
 //we might as well do that here to simplify the code.
 	if (!q_strcasecmp(dir,"rogue")) {
@@ -3839,7 +3888,7 @@ static void COM_AddGameDirectory (const char *dir)
 		standard_quake = false;
 	}
 
-	q_strlcpy (com_gamedir, va("%s/%s", base, dir), sizeof(com_gamedir));
+	q_strlcpy (com_gamedir, va("%s/%s", base, load_dir), sizeof(com_gamedir));
 
 	// assign a path_id to this game directory
 	if (com_searchpaths && com_searchpaths->path_id)
@@ -3964,7 +4013,8 @@ _add_path:
 	if (!been_here && host_parms->userdir != host_parms->basedir) 
 	{
 		been_here = true;
-		q_strlcpy(com_gamedir, va("%s/%s", host_parms->userdir, dir), sizeof(com_gamedir));
+		q_strlcpy(com_gamedir, va("%s/%s", host_parms->userdir, load_dir), sizeof(com_gamedir));
+		COM_CreatePath(com_gamedir);
 		Sys_mkdir(com_gamedir);
 		goto _add_path;
 	}
@@ -4063,12 +4113,7 @@ Checks if a gamedir exists in either the base dir or user dir
 */
 static qboolean COM_GameDirExists (const char *game)
 {
-	if (Sys_FileType (va ("%s/%s", com_basedir, game)) == FS_ENT_DIRECTORY)
-		return true;
-	if (host_parms->userdir != host_parms->basedir &&
-		Sys_FileType (va ("%s/%s", host_parms->userdir, game)) == FS_ENT_DIRECTORY)
-		return true;
-	return false;
+	return COM_ResolveGameDir(game, NULL, 0);
 }
 
 /*

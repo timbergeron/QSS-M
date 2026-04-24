@@ -21781,12 +21781,18 @@ static qboolean M_Mods_IsActive(const char* game)
 static void M_Mods_Add(const char* name)
 {
 	char check_path[MAX_OSPATH];
+	char game_dir[MAX_OSPATH];
+	char game_path[MAX_OSPATH];
 	FILE *check_file;
 	qboolean has_progs = false;
 	qboolean has_pak = false;
+
+	if (!COM_ResolveGameDir(name, game_dir, sizeof(game_dir)))
+		return;
+	q_snprintf(game_path, sizeof(game_path), "%s/%s", com_basedir, game_dir);
 	
 	// Check for progs.dat
-	q_snprintf(check_path, sizeof(check_path), "%s/%s/progs.dat", com_basedir, name);
+	q_snprintf(check_path, sizeof(check_path), "%s/progs.dat", game_path);
 	check_file = fopen(check_path, "rb");
 	if (check_file)
 	{
@@ -21799,7 +21805,7 @@ static void M_Mods_Add(const char* name)
 	{
 		for (int pak_num = 0; pak_num < 10 && !has_pak; pak_num++)
 		{
-			q_snprintf(check_path, sizeof(check_path), "%s/%s/pak%d.pak", com_basedir, name, pak_num);
+			q_snprintf(check_path, sizeof(check_path), "%s/pak%d.pak", game_path, pak_num);
 			check_file = fopen(check_path, "rb");
 			if (check_file)
 			{
@@ -21850,7 +21856,7 @@ static void M_Mods_Add(const char* name)
 			pak_header_t header;
 			unsigned int numfiles, j;
 			
-			q_snprintf(pakpath, sizeof(pakpath), "%s/%s/pak%d.pak", com_basedir, name, pak_num);
+			q_snprintf(pakpath, sizeof(pakpath), "%s/pak%d.pak", game_path, pak_num);
 			pakfile = fopen(pakpath, "rb");
 			if (!pakfile)
 				continue;
@@ -21963,7 +21969,7 @@ static void M_Mods_Add(const char* name)
 	{
 		char desc_path[MAX_OSPATH];
 		FILE *f;
-		q_snprintf(desc_path, sizeof(desc_path), "%s/%s/descript.ion", com_basedir, name);
+		q_snprintf(desc_path, sizeof(desc_path), "%s/descript.ion", game_path);
 		f = fopen(desc_path, "r");
 		if (f)
 		{
