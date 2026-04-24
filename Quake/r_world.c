@@ -1770,6 +1770,61 @@ dynamic:
 	}
 }
 
+static unsigned short rscenecache_used_lightstyles[MAX_LIGHTSTYLES];
+static int rscenecache_num_used_lightstyles;
+static qmodel_t *rscenecache_lightstyle_model;
+
+static void RSceneCache_ResetLightstyleTracking(qmodel_t *mod)
+{
+	if (!mod || rscenecache_lightstyle_model == mod)
+	{
+		rscenecache_lightstyle_model = NULL;
+		rscenecache_num_used_lightstyles = 0;
+	}
+}
+
+static qboolean RSceneCache_UsedLightstylesChanged(const int *old_vals, const int *new_vals)
+{
+	msurface_t *surf;
+	int i, j;
+
+	// Compare only styles referenced by world surfaces, but preserve the
+	// force-rebuild sentinel used by RSceneCache_Queue.
+	if (old_vals[0] == INT_MIN)
+		return true;
+
+	if (rscenecache_lightstyle_model != cl.worldmodel)
+	{
+		byte seen[(MAX_LIGHTSTYLES + 7) / 8];
+
+		memset(seen, 0, sizeof(seen));
+		rscenecache_num_used_lightstyles = 0;
+		rscenecache_lightstyle_model = cl.worldmodel;
+
+		for (i = 0, surf = cl.worldmodel->surfaces; i < cl.worldmodel->numsurfaces; i++, surf++)
+		{
+			for (j = 0; j < MAXLIGHTMAPS && surf->styles[j] != INVALID_LIGHTSTYLE; j++)
+			{
+				unsigned short style = surf->styles[j];
+
+				if (style >= MAX_LIGHTSTYLES)
+					continue;
+				if (seen[style >> 3] & (1u << (style & 7)))
+					continue;
+
+				seen[style >> 3] |= (1u << (style & 7));
+				rscenecache_used_lightstyles[rscenecache_num_used_lightstyles++] = style;
+			}
+		}
+	}
+
+	for (i = 0; i < rscenecache_num_used_lightstyles; i++)
+		if (old_vals[rscenecache_used_lightstyles[i]] != new_vals[rscenecache_used_lightstyles[i]])
+			return true;
+
+	return false;
+}
+
 static qboolean RSceneCache_HasActiveDlights(const dlight_t *lights, size_t count, double time)
 {
 	size_t i;
@@ -2131,7 +2186,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 	{
 		if (!building)
 		{	//if the lighting is changing then keep rebuilding,
-			if (memcmp(old_lightstylevalue, d_lightstylevalue, sizeof(old_lightstylevalue)))	//FIXME: only check lightstyles that are actually used! deathmatch maps can save the resulting expense.
+			if (RSceneCache_UsedLightstylesChanged(old_lightstylevalue, d_lightstylevalue))
 			{
 				old_lightstylevalue[0] = INT_MIN;	//something that'll force a regen pretty soon...
 				cache = NULL;	//make sure its rebuilt (can still use the best while it computes).
@@ -2322,6 +2377,9 @@ static void RSceneCache_Uncache(struct rscenecache_s *cache)
 void RSceneCache_Cleanup(qmodel_t *mod)
 {
 	struct rscenecache_s **link, *cache;
+
+	RSceneCache_ResetLightstyleTracking(mod);
+
 	for (link = &rscenecache.cache; (cache=*link); )
 	{
 		if (cache->worldmodel == mod)
@@ -2702,6 +2760,9 @@ qboolean RSceneCache_DrawSkySurfDepth(void)
 void RSceneCache_Shutdown(void)
 {	//clean up the scene cache stuff.
 	struct rscenecache_s *cache;
+
+	RSceneCache_ResetLightstyleTracking(NULL);
+
 	while ((cache=rscenecache.cache))
 	{
 		rscenecache.cache = cache->next;
