@@ -864,7 +864,7 @@ static qboolean Draw_ComputeConcharsCharColor(plcolour_t* result, int char_index
 
 	if (format == SRC_INDEXED)
 	{
-		if (!custom_conchars || char_hexen2)
+		if (char_hexen2)
 			return false;
 
 		size_t expected_size = (size_t)width * height;
@@ -881,7 +881,7 @@ static qboolean Draw_ComputeConcharsCharColor(plcolour_t* result, int char_index
 				return false;
 
 			data = (byte*)Q_malloc(expected_size + 8);
-			if (fseek(f, (long)texture->source_offset, SEEK_SET) != 0)
+			if (fseek(f, (long)texture->source_offset, SEEK_CUR) != 0)
 			{
 				fclose(f);
 				free(data);
@@ -925,7 +925,7 @@ static qboolean Draw_ComputeConcharsCharColor(plcolour_t* result, int char_index
 				pixel_data += sizeof(stored_w) + sizeof(stored_h);
 				pixel_capacity -= sizeof(stored_w) + sizeof(stored_h);
 			}
-	}
+		}
 
 		if (pixel_capacity < expected_size)
 			goto cleanup;
@@ -985,6 +985,7 @@ static qboolean Draw_ComputeConcharsCharColor(plcolour_t* result, int char_index
 			unsigned int sum_g[256];
 			unsigned int sum_b[256];
 			unsigned int best_count = 0;
+			int best_value = -1;
 			int best_sat = -1;
 			int best_r = 0, best_g = 0, best_b = 0;
 			int brightest_value = 0;
@@ -994,52 +995,52 @@ static qboolean Draw_ComputeConcharsCharColor(plcolour_t* result, int char_index
 			memset(sum_g, 0, sizeof(sum_g));
 			memset(sum_b, 0, sizeof(sum_b));
 
-				for (int py = 0; py < cell_height; ++py)
-				{
-					int y = y0 + py;
-					if (y >= height)
-						continue;
+			for (int py = 0; py < cell_height; ++py)
+			{
+				int y = y0 + py;
+				if (y >= height)
+					continue;
 
 				byte* row_ptr = pixel_data + y * width;
 
-					for (int px = 0; px < cell_width; ++px)
-					{
-						int x = x0 + px;
-						byte index;
-						byte* rgba;
-						int r, g, b;
+				for (int px = 0; px < cell_width; ++px)
+				{
+					int x = x0 + px;
+					byte index;
+					byte* rgba;
+					int r, g, b;
 
-						if (x >= width)
-							continue;
+					if (x >= width)
+						continue;
 
 					index = row_ptr[x];
-						if (!index)
-							continue;
+					if (!index)
+						continue;
 
-						rgba = (byte*)&d_8to24table_conchars[index];
-						if (!rgba[3])
-							continue;
+					rgba = (byte*)&d_8to24table_conchars[index];
+					if (!rgba[3])
+						continue;
 
-						r = rgba[0];
-						g = rgba[1];
-						b = rgba[2];
+					r = rgba[0];
+					g = rgba[1];
+					b = rgba[2];
 
-						if (r <= 16 && g <= 16 && b <= 16)
-							continue;
+					if (r <= 16 && g <= 16 && b <= 16)
+						continue;
 
-						{
-							int value = q_max(r, q_max(g, b));
+					{
+						int value = q_max(r, q_max(g, b));
 
-							if (value > brightest_value)
-								brightest_value = value;
-						}
-
-						counts[index]++;
-						sum_r[index] += (unsigned int)r;
-						sum_g[index] += (unsigned int)g;
-						sum_b[index] += (unsigned int)b;
+						if (value > brightest_value)
+							brightest_value = value;
 					}
+
+					counts[index]++;
+					sum_r[index] += (unsigned int)r;
+					sum_g[index] += (unsigned int)g;
+					sum_b[index] += (unsigned int)b;
 				}
+			}
 
 			for (int i = 0; i < 256; ++i)
 			{
@@ -1055,9 +1056,12 @@ static qboolean Draw_ComputeConcharsCharColor(plcolour_t* result, int char_index
 				int minc = q_min(r, q_min(g, b));
 				int sat = maxc - minc;
 
-				if (count > best_count || (count == best_count && sat > best_sat))
+				if (maxc > best_value ||
+					(maxc == best_value && count > best_count) ||
+					(maxc == best_value && count == best_count && sat > best_sat))
 				{
 					best_count = count;
+					best_value = maxc;
 					best_sat = sat;
 					best_r = r;
 					best_g = g;
