@@ -89,6 +89,20 @@ static void Console_Color_Completion_f(cvar_t* cvar, const char* partial)
 
 /*
 ===============
+R_ReplaceModels_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void R_ReplaceModels_Completion_f(cvar_t* cvar, const char* partial)
+{
+	Con_AddToTabList("\"\"", partial, "disabled", NULL);
+	Con_AddToTabList("\"iqm md5mesh md3\"", partial, "all supported", NULL);
+	Con_AddToTabList("iqm", partial, "Inter-Quake Model", NULL);
+	Con_AddToTabList("md5mesh", partial, "Doom 3 MD5 mesh", NULL);
+	Con_AddToTabList("md3", partial, "Quake 3 MD3", NULL);
+}
+
+/*
+===============
 Mod_Init
 ===============
 */
@@ -101,6 +115,7 @@ void Mod_Init (void)
 	Cvar_RegisterVariable (&external_lits_dir); // woods #litdir
 	Cvar_RegisterVariable (&gl_load24bit);
 	Cvar_RegisterVariable (&r_replacemodels);
+	Cvar_SetCompletion (&r_replacemodels, &R_ReplaceModels_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&mod_ignorelmscale);
 	Cvar_RegisterVariable (&gl_loadlitfiles); // woods #loadlits
 	Cvar_RegisterVariable (&gl_load24bit_skins); // woods #loadskins
