@@ -293,6 +293,7 @@ void Cmd_Exec_f (void)
 {
 	const char	*f, *config_f;
 	char		config_path[MAX_QPATH];
+	qboolean	config_only;
 	int		mark;
 
 	if (Cmd_Argc () != 2)
@@ -302,7 +303,8 @@ void Cmd_Exec_f (void)
 	}
 
 	mark = Hunk_LowMark ();
-	f = (const char *)COM_LoadHunkFile (Cmd_Argv(1), NULL);
+	config_only = COM_ConfigFilePrefersConfigsDir(Cmd_Argv(1));
+	f = config_only ? NULL : (const char *)COM_LoadHunkFile (Cmd_Argv(1), NULL);
 	config_f = NULL;
 	if (COM_ConfigFileUsesConfigsDir(Cmd_Argv(1)))
 	{

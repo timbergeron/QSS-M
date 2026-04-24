@@ -2183,11 +2183,6 @@ void	VID_Init (void)
 		CFG_ReadCvars(read_vars, num_readvars);
 		CFG_CloseConfig();
 	}
-	if (CFG_OpenConfig("configs/config.cfg") == 0)
-	{
-		CFG_ReadCvars(read_vars, num_readvars);
-		CFG_CloseConfig();
-	}
 	CFG_ReadCvarOverrides(read_vars, num_readvars);
 
 	VID_InitModelist();

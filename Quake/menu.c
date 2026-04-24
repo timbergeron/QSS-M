@@ -15616,8 +15616,8 @@ static void M_Extras_AdjustSliders (int dir)
 		if (!SCR_ModalMessage("Are you sure you want to\nreset your configuration?\n (^mn^m/^my^m)\n", 0.0f))
 			break;
 		// Execute config reset commands
-		Cbuf_AddText("cfg_reset\n");  // Reset to default config
-		Cbuf_AddText("cfg_save\n");   // Save the reset config
+		Cbuf_AddText("resetcfg\n");              // Reset archived cvars to defaults
+		Cbuf_AddText("writeconfig config.cfg\n"); // Persist reset config to disk
 		M_Menu_Options_f();           // Return to Options menu
 		break;
 	case EXTRAS_PONG: // Added Quake Pong toggle

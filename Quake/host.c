@@ -763,15 +763,24 @@ Writes key bindings and archived cvars to specified file
 void Host_WriteConfigurationToFile (const char* name)
 {
 	FILE	*f;
+	char	write_name[MAX_QPATH];
+	char	config_dir[MAX_OSPATH];
 
 // dedicated servers initialize the host but don't parse and set the
 // config.cfg cvars
 	if (host_initialized && !isDedicated && !host_parms->errstate)
 	{
-		f = fopen (va("%s/%s", com_gamedir, name), "w");
+		COM_ConfigFileEffectivePath(name, write_name, sizeof(write_name));
+		if (!q_strncasecmp(write_name, "configs/", 8))
+		{
+			q_snprintf(config_dir, sizeof(config_dir), "%s/configs", com_gamedir);
+			Sys_mkdir(config_dir);
+		}
+
+		f = fopen (va("%s/%s", com_gamedir, write_name), "w");
 		if (!f)
 		{
-			Con_Printf ("Couldn't write %s.\n", name);
+			Con_Printf ("Couldn't write %s.\n", write_name);
 			return;
 		}
 
@@ -797,7 +806,7 @@ void Host_WriteConfigurationToFile (const char* name)
 
 		fclose (f);
 
-		Con_Printf("Wrote %s.\n", name);
+		Con_Printf("Wrote %s.\n", write_name);
 	}
 }
 
@@ -836,6 +845,7 @@ void Host_BackupConfiguration(void)
 	FILE* f;
 
 	char	name[MAX_OSPATH];
+	char	config_name[MAX_QPATH];
 	
 	char str[24];
 	time_t systime = time(0);
@@ -850,10 +860,12 @@ void Host_BackupConfiguration(void)
 		q_snprintf(name, sizeof(name), "%s/id1", com_basedir); //  make an id1 folder if it doesnt exist already #smartafk
 		Sys_mkdir(name);
 
-		f = fopen(va("%s/%s", com_gamedir, "config.cfg"), "r");
+		COM_ConfigFileEffectivePath("config.cfg", config_name, sizeof(config_name));
+		f = fopen(va("%s/%s", com_gamedir, config_name), "r");
 
 		if (f)
 		{
+			fclose(f);
 			q_snprintf(name, sizeof(name), "%s/backups", com_gamedir); //  create backups folder if not there
 			Sys_mkdir(name);
 		}

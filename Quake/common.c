@@ -2734,9 +2734,39 @@ qboolean COM_ConfigFileUsesConfigsDir (const char *filename)
 	       !q_strcasecmp(filename, "end.cfg");
 }
 
+qboolean COM_ConfigFilePrefersConfigsDir (const char *filename)
+{
+	char config_path[MAX_QPATH];
+
+	if (q_strcasecmp(filename, "config.cfg"))
+		return false;
+
+	if (!COM_ConfigDirPath(filename, config_path, sizeof(config_path)))
+		return false;
+
+	return COM_FileExists(config_path, NULL);
+}
+
+void COM_ConfigFileEffectivePath (const char *filename, char *path, size_t path_size)
+{
+	if (COM_ConfigFilePrefersConfigsDir(filename))
+	{
+		COM_ConfigDirPath(filename, path, path_size);
+		return;
+	}
+
+	q_strlcpy(path, filename, path_size);
+}
+
 qboolean COM_ConfigFileExists (const char *filename, unsigned int *path_id)
 {
 	char config_path[MAX_QPATH];
+
+	if (COM_ConfigFilePrefersConfigsDir(filename))
+	{
+		COM_ConfigDirPath(filename, config_path, sizeof(config_path));
+		return COM_FileExists(config_path, path_id);
+	}
 
 	if (COM_FileExists(filename, path_id))
 		return true;

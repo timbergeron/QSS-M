@@ -203,10 +203,12 @@ int CFG_OpenConfig (const char *cfg_name)
 	FILE	*f;
 	long		length;
 	qboolean	pak;
+	char		effective_name[MAX_QPATH];
 
 	CFG_CloseConfig ();
 
-	length = (long) COM_FOpenFile (cfg_name, &f, NULL);
+	COM_ConfigFileEffectivePath(cfg_name, effective_name, sizeof(effective_name));
+	length = (long) COM_FOpenFile (effective_name, &f, NULL);
 	pak = file_from_pak;
 	if (length == -1)
 		return -1;

@@ -2403,31 +2403,12 @@ void WebCheckInit (void) // runs at launch in CL_Init if default values
 {
 	char* webearly = NULL;
 	char* web2early = NULL;
-	char* weboverride = NULL;
-	char* web2override = NULL;
 
 	if (CFG_OpenConfig("config.cfg") == 0) // get these early config values
 	{
 		webearly = CFG_ReadCvarValue("cl_web_download_url");
 		web2early = CFG_ReadCvarValue("cl_web_download_url2");
 		CFG_CloseConfig();
-	}
-	if (CFG_OpenConfig("configs/config.cfg") == 0)
-	{
-		weboverride = CFG_ReadCvarValue("cl_web_download_url");
-		web2override = CFG_ReadCvarValue("cl_web_download_url2");
-		CFG_CloseConfig();
-
-		if (weboverride != NULL)
-		{
-			free(webearly);
-			webearly = weboverride;
-		}
-		if (web2override != NULL)
-		{
-			free(web2early);
-			web2early = web2override;
-		}
 	}
 
 	if (webearly != NULL && webearly[0] != '\0')
