@@ -980,6 +980,64 @@ static void Clock_Completion_f(cvar_t* cvar, const char* partial)
 }
 
 /*
+===============
+CenterPrintBg_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void CenterPrintBg_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "text box", NULL);
+	Con_AddToTabList("2", partial, "menu box", NULL);
+	Con_AddToTabList("3", partial, "menu strip", NULL);
+}
+
+/*
+===============
+Sbar_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void Sbar_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("1", partial, "classic", NULL);
+	Con_AddToTabList("2", partial, "quakeworld", NULL);
+	Con_AddToTabList("3", partial, "modern/remaster", NULL);
+}
+
+/*
+===============
+ShowSpeed_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void ShowSpeed_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "numbers", NULL);
+	Con_AddToTabList("2", partial, "visual meter", NULL);
+}
+
+/*
+===============
+MatchClock_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void MatchClock_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "digits auto-red", NULL);
+	Con_AddToTabList("2", partial, "red digits", NULL);
+	Con_AddToTabList("3", partial, "text", NULL);
+}
+
+/*
 ==================
 SCR_CustomCursor_f -- woods #customcursor
 Keep OS cursor assets in sync with scr_customcursor changes.
@@ -1003,12 +1061,14 @@ void SCR_Init (void)
 	//johnfitz -- new cvars
 	Cvar_RegisterVariable (&scr_menuscale);
 	Cvar_RegisterVariable (&scr_centerprintbg); // woods #centerprintbg (iw)
+	Cvar_SetCompletion (&scr_centerprintbg, &CenterPrintBg_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_sbarscale);
 	Cvar_SetCallback (&scr_sbaralpha, SCR_Callback_refdef);
 	Cvar_RegisterVariable (&scr_sbaralpha);
 	Cvar_RegisterVariable (&scr_sbaralphaqwammo); // woods #sbarstyles
 	Cvar_RegisterVariable (&scr_sbarshowqeammo); // woods #sbarstyles
 	Cvar_RegisterVariable (&scr_sbar); // woods #sbarstyles
+	Cvar_SetCompletion (&scr_sbar, &Sbar_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_sbarfacecolor); // woods #teamface
 	Cvar_SetCallback (&scr_conwidth, &SCR_Conwidth_f);
 	Cvar_SetCallback (&scr_conscale, &SCR_Conwidth_f);
@@ -1030,9 +1090,11 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_ping); // woods #scrping
 	Cvar_RegisterVariable(&scr_match_hud); // woods #matchhud
 	Cvar_RegisterVariable (&scr_showspeed); // woods #speed
+	Cvar_SetCompletion (&scr_showspeed, &ShowSpeed_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_showspeed_y); // woods #speedometer
 	Cvar_RegisterVariable (&scr_movekeys); // woods #movementkeys
 	Cvar_RegisterVariable (&scr_matchclock); // woods #varmatchclock
+	Cvar_SetCompletion (&scr_matchclock, &MatchClock_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_matchclock_y); // woods #varmatchclock
 	Cvar_RegisterVariable (&scr_matchclock_x); // woods #varmatchclock
 	Cvar_RegisterVariable (&scr_matchclockscale); // woods #varmatchclock

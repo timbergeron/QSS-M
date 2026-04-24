@@ -358,6 +358,20 @@ static void Con_Clear_f (void)
 }
 
 /*
+===============
+Con_CursorColor_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void Con_CursorColor_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "white", NULL);
+	Con_AddToTabList("1", partial, "red", NULL);
+	Con_AddToTabList("2", partial, "gold", NULL);
+}
+
+/*
 ================
 Con_Dump_f -- johnfitz -- adapted from quake2 source
 ================
@@ -1214,6 +1228,7 @@ void Con_Init (void)
 	Cvar_RegisterVariable (&con_notifydiscord); // woods #discord
 	Cvar_RegisterVariable (&con_typing); // woods #typing...
 	Cvar_RegisterVariable (&con_cursorcolor); // woods #cursorcolor
+	Cvar_SetCompletion (&con_cursorcolor, &Con_CursorColor_Completion_f); // woods #iwtabcomplete
 	Cvar_SetCallback (&con_notifydiscord, &ConNotifyDiscord_Callback); // woods #discord
 
 
@@ -2921,6 +2936,75 @@ void Con_AddToTabListMatched (const char* name, const char* partial, const char*
 	Con_AddToTabListInternal (name, partial, type, param, match_name);
 }
 
+static qboolean Con_IsCompletableModelName (const char *name)
+{
+	const char *ext;
+
+	if (!name || !name[0])
+		return false;
+	if (name[0] == '*')
+		return false;
+
+	ext = COM_FileGetExtension(name);
+	if (!q_strcasecmp(ext, "bsp"))
+		return false;
+
+	return true;
+}
+
+static size_t Con_ModelNameListPrefixLen (const char *partial)
+{
+	const char *comma = strrchr(partial, ',');
+	const char *semicolon = strrchr(partial, ';');
+	const char *separator = comma;
+	size_t prefix_len;
+
+	if (!separator || (semicolon && semicolon > separator))
+		separator = semicolon;
+	if (!separator)
+		return 0;
+
+	prefix_len = (size_t)((separator + 1) - partial);
+	while (partial[prefix_len] && q_isspace((unsigned char)partial[prefix_len]))
+		prefix_len++;
+
+	return prefix_len;
+}
+
+void Con_AddModelNamesToTabList (const char *partial, qboolean list_completion)
+{
+	char candidate[MAXCMDLINE];
+	size_t prefix_len;
+	int i;
+
+	prefix_len = list_completion ? Con_ModelNameListPrefixLen(partial) : 0;
+
+	for (i = 1; i < cl.model_count && i < MAX_MODELS; i++)
+	{
+		const char *name = cl.model_name[i];
+
+		if (!Con_IsCompletableModelName(name))
+			continue;
+
+		if (prefix_len)
+			q_snprintf(candidate, sizeof(candidate), "%.*s%s", (int)prefix_len, partial, name);
+		else
+			q_strlcpy(candidate, name, sizeof(candidate));
+
+		Con_AddToTabList(candidate, partial, "model", NULL);
+	}
+}
+
+void Con_ModelName_List_Completion_f (cvar_t *cvar, const char *partial)
+{
+	(void)cvar;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	Con_AddModelNamesToTabList(partial, true);
+}
+
 // woods -- shared name tab-complete helpers used by both player completion
 // (CompleteClients in this file) and namehistory completion (CL_Name_Completion_f
 // in cl_main.c). they let users type the ascii equivalent of a name containing
@@ -3040,6 +3124,45 @@ qboolean Con_Match (const char* str, const char* partial)
 	return q_strcasestr(str, partial) != NULL;
 }
 
+static qboolean Con_OpenQuoteIsCvarValue(const char* command_start, const char* quote_contents)
+{
+	char prefix[MAXCMDLINE];
+	char* p;
+	char* name;
+	cvar_t* cvar;
+	size_t len;
+
+	if (!command_start || !quote_contents || quote_contents <= command_start || quote_contents[-1] != '\"')
+		return false;
+
+	len = (size_t)(quote_contents - command_start - 1);
+	if (len >= sizeof(prefix))
+		return false;
+
+	memcpy(prefix, command_start, len);
+	prefix[len] = '\0';
+
+	p = prefix;
+	while (*p && q_isspace((unsigned char)*p))
+		p++;
+	if (!*p)
+		return false;
+
+	name = p;
+	while (*p && !q_isspace((unsigned char)*p))
+		p++;
+	if (*p)
+		*p++ = '\0';
+
+	while (*p && q_isspace((unsigned char)*p))
+		p++;
+	if (*p)
+		return false;
+
+	cvar = Cvar_FindVar(name);
+	return cvar && cvar->completion;
+}
+
 /*
 ============
 ParseCommand -- woods #iwtabcomplete
@@ -3052,6 +3175,8 @@ static const char* ParseCommand (void)
 	const char* end = str + key_linepos - 1;
 	const char* ret = str;
 	const char* quote = NULL;
+	const char* quote_contents = NULL;
+	qboolean open_quote_cvar_value = false;
 
 	while (*str && str != end)
 	{
@@ -3061,18 +3186,26 @@ static const char* ParseCommand (void)
 			if (!quote)
 			{
 				quote = ret; // save previous command boundary
+				quote_contents = str; // first byte inside the quote
 				ret = str; // new command
 			}
 			else
 			{
 				ret = quote; // restore saved cursor
 				quote = NULL;
+				quote_contents = NULL;
 			}
 		}
 		else if (c == ';')
 			ret = str;
 		else if (!quote && c == '/' && *str == '/')
 			break;
+	}
+
+	if (quote && Con_OpenQuoteIsCvarValue(quote, quote_contents))
+	{
+		ret = quote;
+		open_quote_cvar_value = true;
 	}
 
 	while (*ret == ' ')
@@ -3105,7 +3238,7 @@ static const char* ParseCommand (void)
 	Cmd_TokenizeString (buf);
 	// last arg should always be the one we're trying to complete,
 	// so we add a new empty one if the command ends with a space
-	if (end != buf && end[-1] == ' ')
+	if (end != buf && end[-1] == ' ' && !open_quote_cvar_value)
 		Cmd_AddArg ("");
 
 	return ret;
@@ -3462,6 +3595,59 @@ static qboolean CompleteSetpos(const char* partial, void* unused) // woods
 	if (has_last_viewpos)
 		Con_AddToTabList("last", partial, NULL, NULL); // #demolistsort add arg
 
+	return true;
+}
+
+static qboolean CompleteColor(const char* partial, void* unused) // woods #iwtabcomplete
+{
+	static const struct
+	{
+		const char* value;
+		const char* type;
+	} colors[] =
+	{
+		{ "0", "white" },
+		{ "1", "brown" },
+		{ "2", "light blue" },
+		{ "3", "green" },
+		{ "4", "red" },
+		{ "5", "orange" },
+		{ "6", "gold" },
+		{ "7", "peach" },
+		{ "8", "purple" },
+		{ "9", "magenta" },
+		{ "10", "tan" },
+		{ "11", "green" },
+		{ "12", "yellow" },
+		{ "13", "blue" },
+		{ "x", "random" },
+		{ "y", "random" },
+		{ "n", "random" },
+		{ "0x66ff00", "bright green" },
+		{ "0xff00cd", "bright magenta" },
+		{ "0xffff00", "bright yellow" }
+	};
+	size_t i;
+
+	(void)unused;
+
+	if (Cmd_Argc() != 2 && Cmd_Argc() != 3)
+		return false;
+
+	for (i = 0; i < sizeof(colors) / sizeof(colors[0]); i++)
+		Con_AddToTabList(colors[i].value, partial, colors[i].type, NULL);
+
+	return true;
+}
+
+static qboolean CompleteModelName(const char* partial, void* unused) // woods #iwtabcomplete
+{
+	(void)unused;
+
+	if (Cmd_Argc() != 2)
+		return false;
+
+	Con_AddModelNamesToTabList(partial, false);
 	return true;
 }
 
@@ -4165,6 +4351,7 @@ qboolean CompleteImageDump (const char* partial, void* unused); // woods
 qboolean CompleteSoundList (const char* partial, void* unused); // woods
 qboolean CompleteGive (const char* partial, void* unused); // woods #give+
 qboolean CompleteMapSize (const char *partial, void *unused);
+qboolean CompleteRotateModel (const char* partial, void* unused); // woods #clmrotate
 
 typedef struct arg_completion_type_s // woods #iwtabcomplete
 {
@@ -4205,6 +4392,7 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "unbind",					CompleteUnbindKeys,		NULL },
 	{ "viewpos",				CompleteViewpos,		NULL },
 	{ "setpos",					CompleteSetpos,			NULL },
+	{ "viewmodel",				CompleteModelName,		NULL },
 	{ "reset",					CompleteCvarList,		NULL },
 	{ "toggle",					CompleteCvarList,		NULL },
 	{ "cycle",					CompleteCvarList,		NULL },
@@ -4231,6 +4419,8 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "cmd",					CompleteCmd,			NULL },
 	{ "identify",				CompleteClients,		NULL },
 	{ "tell",					CompleteClients,		NULL },
+	{ "color",					CompleteColor,			NULL },
+	{ "rotatemodel",			CompleteRotateModel,	NULL },
 	{ "ignore",					CompleteClients,		NULL },
 	{ "unignore",				CompleteClients,		NULL },
 	{ "record",					CompleteRecord,			NULL },

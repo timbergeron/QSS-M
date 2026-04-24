@@ -1999,6 +1999,38 @@ static void VID_Refresh_Completion_f (cvar_t* cvar, const char* partial)
 }
 
 /*
+================
+VID_FSAA_Completion_f -- woods #iwtabcomplete
+================
+*/
+static void VID_FSAA_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("2", partial, "2x MSAA", NULL);
+	Con_AddToTabList("4", partial, "4x MSAA", NULL);
+	Con_AddToTabList("6", partial, "6x MSAA", NULL);
+	Con_AddToTabList("8", partial, "8x MSAA", NULL);
+	Con_AddToTabList("16", partial, "16x MSAA", NULL);
+}
+
+/*
+================
+VID_FXAA_Completion_f -- woods #iwtabcomplete
+================
+*/
+static void VID_FXAA_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "low", NULL);
+	Con_AddToTabList("2", partial, "medium", NULL);
+	Con_AddToTabList("3", partial, "high", NULL);
+}
+
+/*
 =================
 VID_InitModelist
 =================
@@ -2138,6 +2170,8 @@ void	VID_Init (void)
 	Cvar_SetCompletion (&vid_width, VID_Width_Completion_f); // woods #iwtabcomplete
 	Cvar_SetCompletion (&vid_height, VID_Height_Completion_f); // woods #iwtabcomplete
 	Cvar_SetCompletion (&vid_refreshrate, VID_Refresh_Completion_f); // woods #iwtabcomplete
+	Cvar_SetCompletion (&vid_fsaa, VID_FSAA_Completion_f); // woods #iwtabcomplete
+	Cvar_SetCompletion (&vid_fxaa, VID_FXAA_Completion_f); // woods #iwtabcomplete
 
 	Cvar_SetCallback (&vid_fxaa, FXAA_VidFxaaChanged); // woods #fxaa
 

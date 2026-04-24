@@ -467,13 +467,17 @@ void R_Init (void)
 	Cvar_RegisterVariable (&gl_overbright_models);
 	Cvar_RegisterVariable (&r_model_light_desat); // woods #dedat
 	Cvar_RegisterVariable (&r_model_light_desat_list); // woods #dedat
+	Cvar_SetCompletion (&r_model_light_desat_list, &Con_ModelName_List_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&r_lerpmodels);
 	Cvar_RegisterVariable (&r_lerpmove);
 	Cvar_RegisterVariable (&r_nolerp_list);
 	Cvar_SetCallback (&r_nolerp_list, R_Model_ExtraFlags_List_f);
+	Cvar_SetCompletion (&r_nolerp_list, &Con_ModelName_List_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&r_noshadow_list);
 	Cvar_SetCallback (&r_noshadow_list, R_Model_ExtraFlags_List_f);
+	Cvar_SetCompletion (&r_noshadow_list, &Con_ModelName_List_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable(&r_nooutline_list); // woods #routline
+	Cvar_SetCompletion(&r_nooutline_list, &Con_ModelName_List_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable(&r_outline); // woods #routline
 	Cvar_RegisterVariable(&r_player_xray); // woods #routline
 	Cvar_SetCompletion (&r_player_xray, &R_Player_Xray_Completion_f); // woods #iwtabcomplete
@@ -884,10 +888,11 @@ static int      cl_rotatemodels_count = 0;
 #endif
 
 /* Single archived list cvar.
- * Format: "<ax> <ay> <az> <mdl[,mdl2…]>; <ax> <ay> <az> <mdl>; ..."
+ * Format: "<ax> <ay> <az> <mdl[,mdl2...]>; <ax> <ay> <az> <mdl>; ..."
  * Empty string => no rotations (off). Non-empty => parsed.
  */
 void CL_RotateModel_RebuildFromCvar(void);
+void CL_RotateModel_Cvar_Completion_f(cvar_t* cvar, const char* partial);
 static void CL_RotateModel_SyncCvar(void);
 void CL_RotateModel_OnChange(cvar_t* var);
 
@@ -949,9 +954,52 @@ static void CL_AddRotateSpec(const vec3_t avel, const char* model_csv)
 	}
 }
 
+static void CL_RotateModel_CompleteAngles(const char* partial)
+{
+	Con_AddToTabList("0", partial, "angle", NULL);
+	Con_AddToTabList("90", partial, "angle", NULL);
+	Con_AddToTabList("180", partial, "angle", NULL);
+	Con_AddToTabList("-90", partial, "angle", NULL);
+}
+
+static void CL_RotateModel_CompleteModels(const char* partial)
+{
+	Con_AddModelNamesToTabList(partial, true);
+}
+
+qboolean CompleteRotateModel(const char* partial, void* unused)
+{
+	(void)unused;
+
+	if (Cmd_Argc() == 2)
+	{
+		Con_AddToTabList("clear", partial, "subcommand", NULL);
+		Con_AddToTabList("list", partial, "subcommand", NULL);
+		Con_AddToTabList("reload", partial, "subcommand", NULL);
+		Con_AddToTabList("revert", partial, "subcommand", NULL);
+		Con_AddToTabList("save", partial, "subcommand", NULL);
+		CL_RotateModel_CompleteAngles(partial);
+		return true;
+	}
+
+	if (Cmd_Argc() == 3 || Cmd_Argc() == 4)
+	{
+		CL_RotateModel_CompleteAngles(partial);
+		return true;
+	}
+
+	if (Cmd_Argc() == 5)
+	{
+		CL_RotateModel_CompleteModels(partial);
+		return true;
+	}
+
+	return false;
+}
+
 void CL_RotateModel_f(void)
 {
-	/* ---- CLEAR / LIST / RELOAD / SAVE ---- */
+	/* ---- CLEAR / LIST / RELOAD / REVERT / SAVE ---- */
 	if (Cmd_Argc() == 2) {
 		const char* arg = Cmd_Argv(1);
 		if (!q_strcasecmp(arg, "clear")) {
@@ -986,7 +1034,7 @@ void CL_RotateModel_f(void)
 			"\n"
 			"Usage:\n"
 			"  rotatemodel <ax> <ay> <az> <mdl1[,mdl2...]>\n"
-			"  rotatemodel clear | list | reload | save\n"
+			"  rotatemodel clear | list | reload | revert | save\n"
 			"\n"
 			"Notes:\n"
 			"  - <ax,ay,az> are degrees/second around X,Y,Z (right, up, forward).\n"
@@ -996,10 +1044,10 @@ void CL_RotateModel_f(void)
 			"\n"
 			"Examples:\n"
 			"  rotatemodel 0 180 0 progs/armor.mdl\n"
-			"     Spins the armor around Y at 180 degreess.\n"
+			"     Spins the armor around Y at 180 degrees.\n"
 			"\n"
 			"  rotatemodel 0 90 0 progs/backpack.mdl,progs/g_shot.mdl\n"
-			"     Spins backpack and shotgun pickup at 90 degreess around Y.\n"
+			"     Spins backpack and shotgun pickup at 90 degrees around Y.\n"
 			"\n"
 			"  rotatemodel list\n"
 			"     Shows the current runtime list and the cl_rot string.\n"
@@ -1124,6 +1172,59 @@ qboolean CL_ApplyModelRotation(entity_t* ent, vec3_t angles, float dt) // true i
 }
 
 /* --------------------- Cvar <-> List bridging --------------------- */
+static int CL_RotateModel_CvarField(void)
+{
+	const char* value = Cmd_Argv(1);
+	const char* entry = strrchr(value, ';');
+	const char* p;
+	qboolean in_token = false;
+	qboolean ended_space = true;
+	int tokens = 0;
+
+	entry = entry ? entry + 1 : value;
+	while (*entry && isspace((unsigned char)*entry))
+		entry++;
+
+	for (p = entry; *p; p++)
+	{
+		if (isspace((unsigned char)*p))
+		{
+			in_token = false;
+			ended_space = true;
+			continue;
+		}
+
+		if (!in_token)
+		{
+			tokens++;
+			in_token = true;
+		}
+		ended_space = false;
+	}
+
+	if (!*entry)
+		return 1;
+	if (ended_space)
+		return tokens + 1;
+	return tokens;
+}
+
+void CL_RotateModel_Cvar_Completion_f(cvar_t* cvar, const char* partial)
+{
+	int field;
+
+	(void)cvar;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	field = CL_RotateModel_CvarField();
+	if (field >= 1 && field <= 3)
+		CL_RotateModel_CompleteAngles(partial);
+	else
+		CL_RotateModel_CompleteModels(partial);
+}
+
 void CL_RotateModel_RebuildFromCvar(void)
 {
 	cl_rotatemodels_count = 0;
@@ -1139,7 +1240,7 @@ void CL_RotateModel_RebuildFromCvar(void)
 		while (*entry && isspace((unsigned char)*entry)) entry++;
 		if (!*entry) continue;
 
-		// Parse "<ax> <ay> <az> <mdl[,mdl2…]>"
+		// Parse "<ax> <ay> <az> <mdl[,mdl2...]>"
 		char* p = entry, * endptr = NULL;
 		vec3_t avel = { 0,0,0 };
 		avel[0] = (float)strtod(p, &endptr); if (endptr == p) continue; p = endptr;

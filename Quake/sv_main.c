@@ -1625,6 +1625,21 @@ void Extralevels_Completion_f (cvar_t* cvar, const char* partial)
 }
 
 /*
+================
+SV_Autoload_Completion_f -- woods #iwtabcomplete
+================
+*/
+static void SV_Autoload_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "prompt", NULL);
+	Con_AddToTabList("2", partial, "death only", NULL);
+	Con_AddToTabList("3", partial, "always", NULL);
+}
+
+/*
 ===============
 SV_Init
 ===============
@@ -1686,6 +1701,7 @@ void SV_Init (void)
 	Cvar_RegisterVariable (&pr_checkextension);
 	Cvar_RegisterVariable (&sv_altnoclip); //johnfitz
 	Cvar_RegisterVariable (&sv_autoload); // woods #autoload (iw)
+	Cvar_SetCompletion (&sv_autoload, &SV_Autoload_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&sv_nqplayerphysics);	//spike
 	Cvar_RegisterVariable (&sv_bunnyhopqw); // woods #qwbunnyhop
 	Cvar_RegisterVariable (&sv_fullpitch); // woods

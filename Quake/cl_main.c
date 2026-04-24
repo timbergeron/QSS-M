@@ -40,6 +40,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 void CL_RotateModel_OnChange(cvar_t* var); // woods #clmrotate
 void CL_RotateModel_f(void); // woods #clmrotate
 void CL_RotateModel_RebuildFromCvar(void); // woods #clmrotate
+void CL_RotateModel_Cvar_Completion_f(cvar_t* cvar, const char* partial); // woods #clmrotate
 void CL_DemoMark_f(void); // woods #demomark
 
 // we need to declare some mouse variables here, because the menu system
@@ -4283,6 +4284,20 @@ static void CL_Onload_Completion_f(cvar_t* cvar, const char* partial)
 
 /*
 ===============
+CL_ContentFilter_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void CL_ContentFilter_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "partial", NULL);
+	Con_AddToTabList("2", partial, "full", NULL);
+}
+
+/*
+===============
 CL_Autovote_List_Completion_f -- woods #autovote
 ===============
 */
@@ -4406,6 +4421,48 @@ static void CL_DemoFormat_Completion_f(cvar_t* cvar, const char* partial)
 
 /*
 ===============
+CL_PlayerColor_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void CL_PlayerColor_Completion_f(cvar_t* cvar, const char* partial)
+{
+	static const struct
+	{
+		const char* value;
+		const char* type;
+	} colors[] =
+	{
+		{ "0", "white" },
+		{ "1", "brown" },
+		{ "2", "light blue" },
+		{ "3", "green" },
+		{ "4", "red" },
+		{ "5", "orange" },
+		{ "6", "gold" },
+		{ "7", "peach" },
+		{ "8", "purple" },
+		{ "9", "magenta" },
+		{ "10", "tan" },
+		{ "11", "green" },
+		{ "12", "yellow" },
+		{ "13", "blue" },
+		{ "0x66ff00", "bright green" },
+		{ "0xff00cd", "bright magenta" },
+		{ "0xffff00", "bright yellow" }
+	};
+	size_t i;
+
+	(void)cvar;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	for (i = 0; i < sizeof(colors) / sizeof(colors[0]); i++)
+		Con_AddToTabList(colors[i].value, partial, colors[i].type, NULL);
+}
+
+/*
+===============
 CL_Name_Completion_f -- woods #namehistory
 
 uses the shared name tab-complete helpers in console.c so the user can type
@@ -4446,6 +4503,8 @@ void CL_Init (void)
 	Cvar_SetCompletion (&cl_name, &CL_Name_Completion_f); // woods #namehistory
 	Cvar_RegisterVariable (&cl_topcolor);
 	Cvar_RegisterVariable (&cl_bottomcolor);
+	Cvar_SetCompletion (&cl_topcolor, &CL_PlayerColor_Completion_f); // woods #iwtabcomplete
+	Cvar_SetCompletion (&cl_bottomcolor, &CL_PlayerColor_Completion_f); // woods #iwtabcomplete
 	Cmd_AddCommand ("_cl_color", CL_LegacyColor_f);	//for loading vanilla configs (we have separate qw-style topcolor/bottomcolor userinfo cvars instead)
 	Cvar_RegisterVariable (&cl_upspeed);
 	Cvar_RegisterVariable (&cl_forwardspeed);
@@ -4513,9 +4572,11 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_onload); // woods #onload
 	Cvar_SetCompletion (&cl_onload, &CL_Onload_Completion_f); // woods #onload
 	Cvar_RegisterVariable (&cl_contentfilter); // woods #contentfilter
+	Cvar_SetCompletion (&cl_contentfilter, &CL_ContentFilter_Completion_f); // woods #iwtabcomplete
 
 	Cvar_RegisterVariable(&cl_rot); // woods #clmrotate
 	Cvar_SetCallback(&cl_rot, CL_RotateModel_OnChange); // woods #clmrotate
+	Cvar_SetCompletion(&cl_rot, CL_RotateModel_Cvar_Completion_f); // woods #clmrotate
 	CL_RotateModel_RebuildFromCvar(); // woods #clmrotate
 
 	WebCheckInit (); // woods -- check if the web downloads servers are live at launch (threaded) #webdl
