@@ -79,6 +79,33 @@ int		paintedtime;	// sample PAIRS
 int		s_rawend;
 portable_samplepair_t	s_rawsamples[MAX_RAW_SAMPLES];
 
+static unsigned int SND_HashUInt (unsigned int hash, unsigned int value)
+{
+	hash ^= value;
+	hash *= 0x01000193u;
+	return hash;
+}
+
+static int SND_DeterministicSkip (int maxskip, int entnum, int entchannel,
+		const vec3_t origin, int target_channel)
+{
+	unsigned int	hash;
+	int				i;
+
+	if (maxskip <= 1)
+		return 0;
+
+	hash = 0x811c9dc5u;
+	hash = SND_HashUInt (hash, (unsigned int)entnum);
+	hash = SND_HashUInt (hash, (unsigned int)entchannel);
+	hash = SND_HashUInt (hash, (unsigned int)paintedtime);
+	hash = SND_HashUInt (hash, (unsigned int)target_channel);
+	for (i = 0; i < 3; i++)
+		hash = SND_HashUInt (hash, (unsigned int)Q_rint(origin[i] * 8.0f));
+
+	return 1 + (int)(hash % (unsigned int)(maxskip - 1));
+}
+
 #define	MAX_SFX		MAX_SOUNDS
 static sfx_t	*known_sfx = NULL;	// hunk allocated [MAX_SFX]
 static int	num_sfx;
@@ -633,7 +660,8 @@ void S_StartSound (int entnum, int entchannel, sfx_t *sfx, vec3_t origin, float 
 			if (skip > sc->length)
 				skip = sc->length;
 			if (skip > 0)
-				skip /= 2; /* deterministic midpoint: don't perturb the global RNG stream */
+				skip = SND_DeterministicSkip(skip, entnum, entchannel,
+					origin, (int)(target_chan - snd_channels));
 			target_chan->pos += skip;
 			target_chan->end -= skip;
 			break;
