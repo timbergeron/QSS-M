@@ -4620,6 +4620,8 @@ int		options_cursor;
 qboolean slider_grab; // woods #mousemenu
 static float pending_scale_value;
 
+#define OPTIONS_WHEEL_REPEAT_TIME 0.12
+
 struct // woods #mousemenu
 {
 	menulist_t		list;
@@ -4629,6 +4631,8 @@ struct // woods #mousemenu
 	int				video_cursor;
 	int* last_cursor;
 	qboolean        scrollbar_grab;
+	double          wheel_time;
+	int             wheel_dir;
 } optionsmenu;
 
 static void M_Options_Init(void)
@@ -4638,10 +4642,25 @@ static void M_Options_Init(void)
 	optionsmenu.list.scroll = 0;
 	optionsmenu.list.numitems = OPTIONS_ITEMS;
 	optionsmenu.scrollbar_grab = false;
+	optionsmenu.wheel_time = -OPTIONS_WHEEL_REPEAT_TIME;
+	optionsmenu.wheel_dir = 0;
 
 	// Initialize search
 	memset(&optionsmenu.list.search, 0, sizeof(optionsmenu.list.search));
 	optionsmenu.list.search.maxlen = 32;
+}
+
+static qboolean M_Options_AcceptWheelMove(int dir)
+{
+	if (optionsmenu.wheel_dir != dir ||
+		realtime - optionsmenu.wheel_time >= OPTIONS_WHEEL_REPEAT_TIME)
+	{
+		optionsmenu.wheel_dir = dir;
+		optionsmenu.wheel_time = realtime;
+		return true;
+	}
+
+	return false;
 }
 
 void M_Menu_Options_f (void)
@@ -4660,11 +4679,10 @@ void M_AdjustSliders (int dir)
 {
 	float	f;
 
-	S_LocalSound ("misc/menu3.wav");
-
 	switch (options_cursor)
 	{
 	case OPT_MENUSCALE:
+		S_LocalSound ("misc/menu3.wav");
 		f = scr_menuscale.value + dir;
 		if (f > 6) f = 6;
 		else if (f < 1) f = 1;
@@ -5079,6 +5097,17 @@ void M_Options_Key (int k)
 			options_cursor--;
 		break;
 
+	case K_MWHEELUP:
+		if (!M_Options_AcceptWheelMove(-1))
+			return;
+		S_LocalSound ("misc/menu1.wav");
+		options_cursor--;
+		if (options_cursor < 0)
+			options_cursor = OPTIONS_ITEMS-1;
+		if (options_cursor == OPT_SPACE)  // Skip space when going up
+			options_cursor--;
+		break;
+
 	case K_DOWNARROW:
 		S_LocalSound ("misc/menu1.wav");
 		options_cursor++;
@@ -5088,13 +5117,22 @@ void M_Options_Key (int k)
 			options_cursor++;
 		break;
 
+	case K_MWHEELDOWN:
+		if (!M_Options_AcceptWheelMove(1))
+			return;
+		S_LocalSound ("misc/menu1.wav");
+		options_cursor++;
+		if (options_cursor >= OPTIONS_ITEMS)
+			options_cursor = 0;
+		if (options_cursor == OPT_SPACE)  // Skip space when going down
+			options_cursor++;
+		break;
+
 	case K_LEFTARROW:
-	case K_MWHEELDOWN: // woods #mousemenu
 		M_AdjustSliders (-1);
 		break;
 
 	case K_RIGHTARROW:
-	case K_MWHEELUP: // woods #mousemenu
 		M_AdjustSliders (1);
 		break;
 
@@ -5112,7 +5150,7 @@ void M_Options_Key (int k)
 
 	if (options_cursor == OPTIONS_ITEMS - 1 && vid_menudrawfn == NULL)
 	{
-		if (k == K_UPARROW)
+		if (k == K_UPARROW || k == K_MWHEELUP)
 			options_cursor = OPTIONS_ITEMS - 2;
 		else
 			options_cursor = 0;
@@ -7643,6 +7681,9 @@ void M_Controller_Key(int k)
 		break;
 
 	case K_MWHEELUP:
+		option = M_Controller_CursorToOption(controller_cursor);
+		if (option == CONTROLLER_TEST)
+			break;
 		visible_count = M_Controller_GetVisibleItemCount();
 		if (visible_count > CONTROLLER_MAX_VISIBLE)
 		{
@@ -7659,6 +7700,9 @@ void M_Controller_Key(int k)
 		break;
 
 	case K_MWHEELDOWN:
+		option = M_Controller_CursorToOption(controller_cursor);
+		if (option == CONTROLLER_TEST)
+			break;
 		visible_count = M_Controller_GetVisibleItemCount();
 		if (visible_count > CONTROLLER_MAX_VISIBLE)
 		{
@@ -8766,13 +8810,21 @@ void M_Graphics_Key(int k)
 		break;
 
 	case K_LEFTARROW:
-	case K_MWHEELDOWN:
 		M_Graphics_AdjustSliders(-1);
 		break;
 
+	case K_MWHEELDOWN:
+		if (graphics_cursor != GRAPHICS_SKY)
+			M_Graphics_AdjustSliders(-1);
+		break;
+
 	case K_RIGHTARROW:
-	case K_MWHEELUP:
 		M_Graphics_AdjustSliders(1);
+		break;
+
+	case K_MWHEELUP:
+		if (graphics_cursor != GRAPHICS_SKY)
+			M_Graphics_AdjustSliders(1);
 		break;
 	}
 }
@@ -9461,13 +9513,21 @@ void M_Sky_Key(int k)
 		break;
 
 	case K_LEFTARROW:
-	case K_MWHEELDOWN:
 		M_Sky_AdjustSliders(-1);
 		break;
 
+	case K_MWHEELDOWN:
+		if (sky_cursor != SKY_WIND)
+			M_Sky_AdjustSliders(-1);
+		break;
+
 	case K_RIGHTARROW:
-	case K_MWHEELUP:
 		M_Sky_AdjustSliders(1);
+		break;
+
+	case K_MWHEELUP:
+		if (sky_cursor != SKY_WIND)
+			M_Sky_AdjustSliders(1);
 		break;
 	}
 }
@@ -10244,13 +10304,21 @@ void M_Sound_Key(int k)
 		break;
 
 	case K_LEFTARROW:
-	case K_MWHEELDOWN:
 		M_Sound_AdjustSliders(-1);
 		break;
 
+	case K_MWHEELDOWN:
+		if (sound_cursor != SOUND_VOIP)
+			M_Sound_AdjustSliders(-1);
+		break;
+
 	case K_RIGHTARROW:
-	case K_MWHEELUP:
 		M_Sound_AdjustSliders(1);
+		break;
+
+	case K_MWHEELUP:
+		if (sound_cursor != SOUND_VOIP)
+			M_Sound_AdjustSliders(1);
 		break;
 	}
 }
@@ -11963,13 +12031,21 @@ void M_Game_Key(int k)
 		break;
 
 	case K_LEFTARROW:
-	case K_MWHEELDOWN:
 		M_Game_AdjustSliders(-1);
 		break;
 
+	case K_MWHEELDOWN:
+		if (game_cursor != GAME_PLAYERXRAY)
+			M_Game_AdjustSliders(-1);
+		break;
+
 	case K_RIGHTARROW:
-	case K_MWHEELUP:
 		M_Game_AdjustSliders(1);
+		break;
+
+	case K_MWHEELUP:
+		if (game_cursor != GAME_PLAYERXRAY)
+			M_Game_AdjustSliders(1);
 		break;
 	}
 }
@@ -13011,13 +13087,21 @@ void M_HUD_Key(int k)
 		break;
 
 	case K_LEFTARROW:
-	case K_MWHEELDOWN:
 		M_HUD_AdjustSliders(-1);
 		break;
 
+	case K_MWHEELDOWN:
+		if (hud_cursor != HUD_CROSSHAIR)
+			M_HUD_AdjustSliders(-1);
+		break;
+
 	case K_RIGHTARROW:
-	case K_MWHEELUP:
 		M_HUD_AdjustSliders(1);
+		break;
+
+	case K_MWHEELUP:
+		if (hud_cursor != HUD_CROSSHAIR)
+			M_HUD_AdjustSliders(1);
 		break;
 	}
 }
@@ -15867,13 +15951,21 @@ void M_Extras_Key(int k)
 		break;
 
 	case K_LEFTARROW:
-	case K_MWHEELDOWN:
 		M_Extras_AdjustSliders(-1);
 		break;
 
+	case K_MWHEELDOWN:
+		if (extras_cursor != EXTRAS_VERSION)
+			M_Extras_AdjustSliders(-1);
+		break;
+
 	case K_RIGHTARROW:
-	case K_MWHEELUP:
 		M_Extras_AdjustSliders(1);
+		break;
+
+	case K_MWHEELUP:
+		if (extras_cursor != EXTRAS_VERSION)
+			M_Extras_AdjustSliders(1);
 		break;
 	}
 }
@@ -20035,7 +20127,6 @@ void M_GameOptions_Key (int key)
 		break;
 
 	case K_LEFTARROW:
-	case K_MWHEELDOWN:
 	//case K_MOUSE2:
 		if (gameoptions_cursor == 0 || gameoptions_cursor == 11)
 			break;
@@ -20043,9 +20134,22 @@ void M_GameOptions_Key (int key)
 		M_NetStart_Change (-1);
 		break;
 
+	case K_MWHEELDOWN:
+		if (gameoptions_cursor == 0 || gameoptions_cursor == 10 || gameoptions_cursor == 11)
+			break;
+		S_LocalSound ("misc/menu3.wav");
+		M_NetStart_Change (-1);
+		break;
+
 	case K_RIGHTARROW:
-	case K_MWHEELUP:
 		if (gameoptions_cursor == 0 || gameoptions_cursor == 11)
+			break;
+		S_LocalSound ("misc/menu3.wav");
+		M_NetStart_Change (1);
+		break;
+
+	case K_MWHEELUP:
+		if (gameoptions_cursor == 0 || gameoptions_cursor == 10 || gameoptions_cursor == 11)
 			break;
 		S_LocalSound ("misc/menu3.wav");
 		M_NetStart_Change (1);
@@ -25745,12 +25849,21 @@ void M_Startup_Key(int k)
 		M_Startup_MoveCursor(1);
 		break;
 	case K_LEFTARROW:
-	case K_MWHEELDOWN:
 		M_Startup_AdjustSliders(-1);
 		break;
+
+	case K_MWHEELDOWN:
+		if (startup_cursor != STARTUP_PAK_LOADING)
+			M_Startup_AdjustSliders(-1);
+		break;
+
 	case K_RIGHTARROW:
-	case K_MWHEELUP:
 		M_Startup_AdjustSliders(1);
+		break;
+
+	case K_MWHEELUP:
+		if (startup_cursor != STARTUP_PAK_LOADING)
+			M_Startup_AdjustSliders(1);
 		break;
 	case K_BACKSPACE:
 		if (startupmenu.search.len > 0)
