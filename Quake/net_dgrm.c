@@ -545,7 +545,7 @@ void NET_PortPingProbe_Frame(void)
 		{
 			portpingprobe_last_percent = progress_percent;
 			portpingprobe_console_inline = true;
-			Con_SafePrintf("Port probe progress: %d%%\r", progress_percent);
+			Con_SafePrintf("Port probe progress: ^g%d^g^m%%^m\r", progress_percent);
 		}
 		return;
 	}
