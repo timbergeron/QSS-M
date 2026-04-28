@@ -7213,7 +7213,12 @@ static void PF_cs_addentities(void)
 	if (mask & MASK_VIEWMODEL)
 	{
 		//default viewmodel. add it into the scene.
-		if (cl.viewent.model)
+		if (r_drawviewmodel.value
+			&& !chase_active.value
+			&& cl.stats[STAT_HEALTH] > 0
+			&& cl.viewent.model
+			&& scr_viewsize.value < 130
+			&& cl_numvisedicts < cl_maxvisedicts)
 		{	//make sure its relevant
 			cl_visedicts[cl_numvisedicts] = &cl.viewent;
 			cl_numvisedicts++;

@@ -2054,7 +2054,7 @@ void CL_RelinkEntities (void)
 		}
 
 		// In eyecam, draw a weapon model when available (ignore observer health).
-		if (r_drawviewmodel.value && have_weapon && scr_viewsize.value < 130)
+		if (r_drawviewmodel.value && !chase_active.value && have_weapon && scr_viewsize.value < 130)
 		{
 			if (cl_numvisedicts < cl_maxvisedicts)
 			{
