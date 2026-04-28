@@ -62,6 +62,8 @@ void CL_ManualDownload_f (const char* filename); // woods #manualdownload
 extern char unfun[129];
 int unfun_match(const char* s1, char* s2);
 
+static void Host_Resurrect_f (void);
+
 static char cl_chat_ignored_names[MAX_SCOREBOARD][MAX_SCOREBOARDNAME];
 static int cl_chat_ignored_slots[MAX_SCOREBOARD];
 static qboolean cl_chat_ignored_active[MAX_SCOREBOARD];
@@ -4873,6 +4875,14 @@ static void Host_God_f (void)
 
 	if (pr_global_struct->deathmatch)
 		return;
+
+	if (sv_player->v.deadflag != DEAD_NO || sv_player->v.health <= 0)
+	{
+		Host_Resurrect_f ();
+		sv_player->v.flags = (int)sv_player->v.flags | FL_GODMODE;
+		SV_ClientPrintf ("godmode ON\n");
+		return;
+	}
 
 	//johnfitz -- allow user to explicitly set god mode to on or off
 	switch (Cmd_Argc())
