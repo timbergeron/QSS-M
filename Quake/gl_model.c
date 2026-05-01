@@ -300,6 +300,7 @@ void Mod_ClearAll (void)
 			TexMgr_FreeTexturesForOwner (mod); //johnfitz
 			PScript_ClearSurfaceParticles(mod);
 			RSceneCache_Cleanup(mod);
+			R_GrassCache_Cleanup(mod);
 		}
 	}
 
@@ -321,6 +322,7 @@ void Mod_ResetAll (void)
 			TexMgr_FreeTexturesForOwner (mod);
 			PScript_ClearSurfaceParticles(mod);
 			RSceneCache_Cleanup(mod);
+			R_GrassCache_Cleanup(mod);
 		}
 		memset(mod, 0, sizeof(qmodel_t));
 	}
@@ -687,6 +689,217 @@ static qboolean Mod_CheckFullbrights (byte *pixels, int count)
 	return false;
 }
 
+static qboolean Mod_IsGrassGreenPixel (byte r, byte g, byte b, byte a)
+{
+	if (a < 128 || g < 36)
+		return false;
+	if ((int)g + 10 < (int)r)
+		return false;
+	if ((int)g < (int)b + 8)
+		return false;
+	if ((int)g * 5 < ((int)r + (int)b) * 2)
+		return false;
+	return true;
+}
+
+static void Mod_SetGrassTextureColor (texture_t *tx, double rsum, double gsum, double bsum, size_t green)
+{
+	tx->grass_color_valid = true;
+	tx->grass_color[0] = CLAMP(0.025f, (float)(rsum / green) * (1.0f / 255.0f), 0.42f);
+	tx->grass_color[1] = CLAMP(0.08f, (float)(gsum / green) * (1.0f / 255.0f), 0.62f);
+	tx->grass_color[2] = CLAMP(0.01f, (float)(bsum / green) * (1.0f / 255.0f), 0.32f);
+}
+
+static void Mod_DetectGrassTextureIndexed (texture_t *tx, const byte *data, unsigned int width, unsigned int height)
+{
+	size_t i, pixels, step, tested, green;
+	unsigned int counts[256];
+	unsigned int sum_r[256];
+	unsigned int sum_g[256];
+	unsigned int sum_b[256];
+	unsigned int best_count;
+	int best_value;
+	int best_index;
+
+	if (!data || !width || !height)
+		return;
+
+	pixels = (size_t)width * (size_t)height;
+	step = pixels > 65536 ? pixels / 65536 : 1;
+	tested = green = 0;
+	best_count = 0;
+	best_value = -1;
+	best_index = -1;
+	memset(counts, 0, sizeof(counts));
+	memset(sum_r, 0, sizeof(sum_r));
+	memset(sum_g, 0, sizeof(sum_g));
+	memset(sum_b, 0, sizeof(sum_b));
+
+	for (i = 0; i < pixels; i += step)
+	{
+		byte index = data[i];
+		byte *rgba = (byte *)&d_8to24table[index];
+
+		if (rgba[3] < 128)
+			continue;
+		tested++;
+		if (!Mod_IsGrassGreenPixel(rgba[0], rgba[1], rgba[2], rgba[3]))
+			continue;
+
+		green++;
+		counts[index]++;
+		sum_r[index] += rgba[0];
+		sum_g[index] += rgba[1];
+		sum_b[index] += rgba[2];
+	}
+
+	if (green >= 8)
+	{
+		for (i = 0; i < 256; i++)
+		{
+			unsigned int count = counts[i];
+			int r, g, b, value;
+
+			if (!count)
+				continue;
+
+			r = (int)((sum_r[i] + count / 2) / count);
+			g = (int)((sum_g[i] + count / 2) / count);
+			b = (int)((sum_b[i] + count / 2) / count);
+			value = q_max(r, q_max(g, b));
+
+			if (count > best_count || (count == best_count && value > best_value))
+			{
+				best_count = count;
+				best_value = value;
+				best_index = (int)i;
+			}
+		}
+
+		if (best_index >= 0)
+			Mod_SetGrassTextureColor(tx, sum_r[best_index], sum_g[best_index], sum_b[best_index], best_count);
+		if (tested > 0 && (float)green / (float)tested >= 0.035f)
+			tx->grass_detected = true;
+	}
+}
+
+static void Mod_DetectGrassTextureRGBA (texture_t *tx, const byte *data, unsigned int width, unsigned int height)
+{
+	enum { bucket_count = 16 * 16 * 16 };
+	size_t i, pixels, step, tested, green;
+	unsigned int counts[bucket_count];
+	unsigned int sum_r[bucket_count];
+	unsigned int sum_g[bucket_count];
+	unsigned int sum_b[bucket_count];
+	unsigned int best_count;
+	int best_value;
+	int best_bucket;
+
+	if (!data || !width || !height)
+		return;
+
+	pixels = (size_t)width * (size_t)height;
+	step = pixels > 65536 ? pixels / 65536 : 1;
+	tested = green = 0;
+	best_count = 0;
+	best_value = -1;
+	best_bucket = -1;
+	memset(counts, 0, sizeof(counts));
+	memset(sum_r, 0, sizeof(sum_r));
+	memset(sum_g, 0, sizeof(sum_g));
+	memset(sum_b, 0, sizeof(sum_b));
+
+	for (i = 0; i < pixels; i += step)
+	{
+		const byte *rgba = data + i * 4;
+		int bucket;
+
+		if (rgba[3] < 128)
+			continue;
+		tested++;
+		if (!Mod_IsGrassGreenPixel(rgba[0], rgba[1], rgba[2], rgba[3]))
+			continue;
+
+		bucket = ((rgba[0] >> 4) << 8) | ((rgba[1] >> 4) << 4) | (rgba[2] >> 4);
+		green++;
+		counts[bucket]++;
+		sum_r[bucket] += rgba[0];
+		sum_g[bucket] += rgba[1];
+		sum_b[bucket] += rgba[2];
+	}
+
+	if (green >= 8)
+	{
+		for (i = 0; i < bucket_count; i++)
+		{
+			unsigned int count = counts[i];
+			int r, g, b, value;
+
+			if (!count)
+				continue;
+
+			r = (int)((sum_r[i] + count / 2) / count);
+			g = (int)((sum_g[i] + count / 2) / count);
+			b = (int)((sum_b[i] + count / 2) / count);
+			value = q_max(r, q_max(g, b));
+
+			if (count > best_count || (count == best_count && value > best_value))
+			{
+				best_count = count;
+				best_value = value;
+				best_bucket = (int)i;
+			}
+		}
+
+		if (best_bucket >= 0)
+			Mod_SetGrassTextureColor(tx, sum_r[best_bucket], sum_g[best_bucket], sum_b[best_bucket], best_count);
+		if (tested > 0 && (float)green / (float)tested >= 0.035f)
+			tx->grass_detected = true;
+	}
+}
+
+static qboolean Mod_TextureNameCanHaveGrass (const char *name)
+{
+	const char *checkname;
+
+	if (!name || !name[0])
+		return false;
+
+	checkname = name;
+	if (checkname[0] == '+' && checkname[1] && checkname[2])
+		checkname += 2;
+
+	if (checkname[0] == '*' || checkname[0] == '!' || checkname[0] == '{')
+		return false;
+	if (!q_strncasecmp(checkname, "sky", 3))
+		return false;
+	return true;
+}
+
+static void Mod_DetectGrassTexture (texture_t *tx, enum srcformat fmt, const byte *data, unsigned int width, unsigned int height)
+{
+	tx->grass_detected = false;
+	tx->grass_color_valid = false;
+	tx->grass_color[0] = 0.11f;
+	tx->grass_color[1] = 0.34f;
+	tx->grass_color[2] = 0.045f;
+
+	if (!Mod_TextureNameCanHaveGrass(tx->name))
+		return;
+
+	switch (fmt)
+	{
+	case SRC_INDEXED:
+		Mod_DetectGrassTextureIndexed(tx, data, width, height);
+		break;
+	case SRC_RGBA:
+		Mod_DetectGrassTextureRGBA(tx, data, width, height);
+		break;
+	default:
+		break;
+	}
+}
+
 static texture_t *Mod_LoadMipTex(miptex_t *mt, byte *lumpend, enum srcformat *fmt, unsigned int *width, unsigned int *height, unsigned int *pixelbytes)
 {
 	//if offsets[0] is 0, then we've no legacy data (offsets[3] signifies the end of the extension data.
@@ -1012,6 +1225,7 @@ static void Mod_LoadTextures (lump_t *l)
 				if (data) //load external image
 				{
 					char filename2[MAX_OSPATH];
+					Mod_DetectGrassTexture(tx, rfmt, data, fwidth, fheight); // woods #grass
 					tx->gltexture = TexMgr_LoadImage (loadmodel, filename, fwidth, fheight,
 						rfmt, data, filename, 0, TEXPREF_MIPMAP | extraflags );
 
@@ -1035,6 +1249,7 @@ static void Mod_LoadTextures (lump_t *l)
 				{
 					q_snprintf (texturename, sizeof(texturename), "%s:%s", loadmodel->name, tx->name);
 					offset = (src_offset_t)(mt+1) - (src_offset_t)mod_base;
+					Mod_DetectGrassTexture(tx, fmt, (byte *)(tx+1), imgwidth, imgheight); // woods #grass
 					if (fmt == SRC_INDEXED && Mod_CheckFullbrights ((byte *)(tx+1), imgpixels))
 					{
 						tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, imgwidth, imgheight,

@@ -392,6 +392,54 @@ static void R_Lightmap_Format_Completion_f (cvar_t* cvar, const char* partial)
 
 /*
 ===============
+R_GrassTex_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void R_GrassTex_Completion_f (cvar_t* cvar, const char* partial)
+{
+	int i;
+
+	(void)cvar;
+
+	Con_AddToTabList("\"\"", partial, "auto green detect", NULL);
+	Con_AddToTabList("ground1_1,ground1_6,wgrnd1_6,wgrass1_1", partial, "default grass textures", NULL);
+	Con_AddToTabList("ground1_1", partial, "single grass texture", NULL);
+
+	if (!cl.worldmodel)
+		return;
+
+	for (i = 0; i < cl.worldmodel->numtextures; ++i)
+	{
+		texture_t *t = cl.worldmodel->textures[i];
+
+		if (!t || !t->name[0])
+			continue;
+		if (t->name[0] == '*' || t->name[0] == '!' || t->name[0] == '{')
+			continue;
+		if (!q_strncasecmp(t->name, "sky", 3))
+			continue;
+
+		Con_AddToTabList(t->name, partial, "map texture", NULL);
+	}
+}
+
+/*
+===============
+R_Grass_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void R_Grass_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "defaults", NULL);
+	Con_AddToTabList("2,0.35,18,1024,0.35,1", partial, "blades density height dist movement lod", NULL);
+	Con_AddToTabList("1,2,0.35,18,1024,0.35,1", partial, "amount blades density height dist movement lod", NULL);
+}
+
+/*
+===============
 R_Init
 ===============
 */
@@ -461,6 +509,10 @@ void R_Init (void)
 	Cvar_RegisterVariable (&gl_powerupshells); // woods #powershell
 	Cvar_RegisterVariable (&gl_powerupshells_alpha); // woods #powershell
 	Cvar_RegisterVariable (&gl_caustics); // woods #caustics
+	Cvar_RegisterVariable (&r_grass); // woods #grass
+	Cvar_RegisterVariable (&r_grass_tex); // woods #grass
+	Cvar_SetCompletion (&r_grass, &R_Grass_Completion_f); // woods #iwtabcomplete #grass
+	Cvar_SetCompletion (&r_grass_tex, &R_GrassTex_Completion_f); // woods #iwtabcomplete #grass
 	Cvar_RegisterVariable (&gl_motion_blur); // woods #motionblur
 	Cvar_SetCallback (&gl_fullbrights, GL_Fullbrights_f);
 	Cvar_SetCallback (&gl_overbright, GL_Overbright_f);
@@ -784,6 +836,42 @@ GLuint GL_CreateProgram (const GLchar *vertSource, const GLchar *fragSource, int
 
 		return program;
 	}
+}
+
+/*
+====================
+GL_DeleteProgramTracked
+
+Deletes a GLSL program if it is still owned by the tracked program list.
+====================
+*/
+void GL_DeleteProgramTracked (GLuint *program)
+{
+	int i;
+
+	if (!program || !*program)
+		return;
+
+	if (!gl_glsl_able)
+	{
+		*program = 0;
+		return;
+	}
+
+	for (i = 0; i < gl_num_programs; i++)
+	{
+		if (gl_programs[i] != *program)
+			continue;
+
+		GL_DeleteProgramFunc(gl_programs[i]);
+		gl_num_programs--;
+		gl_programs[i] = gl_programs[gl_num_programs];
+		gl_programs[gl_num_programs] = 0;
+		*program = 0;
+		return;
+	}
+
+	*program = 0;
 }
 
 /*

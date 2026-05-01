@@ -1930,6 +1930,7 @@ void Host_Shutdown(void)
 		CDAudio_Shutdown ();
 		S_Shutdown ();
 		IN_Shutdown ();
+		R_GrassShutdown();
 		VID_Shutdown();
 	}
 	else // woods #serverhistory

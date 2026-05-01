@@ -190,6 +190,8 @@ extern	cvar_t	gl_polyblend;
 extern	cvar_t	gl_flashblend;
 extern	cvar_t	gl_nocolors;
 extern  cvar_t	gl_caustics; // woods #caustics
+extern  cvar_t	r_grass; // woods #grass
+extern  cvar_t	r_grass_tex; // woods #grass
 extern	cvar_t	gl_enemycolor; // woods #enemycolors
 extern	cvar_t	gl_teamcolor; // woods #enemycolors
 extern	cvar_t	gl_laserpoint; // woods #laser
@@ -493,6 +495,7 @@ void R_DrawParticles_ShowTris (void);
 
 GLint GL_GetUniformLocation (GLuint *programPtr, const char *name);
 GLuint GL_CreateProgram (const GLchar *vertSource, const GLchar *fragSource, int numbindings, const glsl_attrib_binding_t *bindings);
+void GL_DeleteProgramTracked (GLuint *program);
 void R_DeleteShaders (void);
 void PolyBlend_DeleteVignetteTexture (void); // woods #polylblend2
 
@@ -534,6 +537,8 @@ void RSceneCache_Shutdown(void);
 qboolean RSceneCache_DrawSkySurfDepth(void);	//Draws sky surfaces.
 qboolean RSceneCache_HasSky(void);
 #endif
+void R_GrassCache_Cleanup(qmodel_t *mod);
+void R_GrassShutdown(void);
 extern byte *skipsubmodels;
 
 void GL_BindBuffer (GLenum target, GLuint buffer);

@@ -81,6 +81,9 @@ typedef struct texture_s
 	unsigned			shift;		// Q64
 	struct gltexture_s	*gltexture; //johnfitz -- pointer to gltexture
 	struct gltexture_s	*fullbright; //johnfitz -- fullbright mask texture
+	qboolean			grass_detected; // woods #grass
+	qboolean			grass_color_valid; // woods #grass
+	vec3_t				grass_color; // woods #grass
 	struct msurface_s	*texturechains[2];	// for texture chains
 	int					anim_total;				// total tenths in sequence ( 0 = no)
 	int					anim_min, anim_max;		// time for this frame min <=time< max
