@@ -1833,6 +1833,7 @@ void Host_Init (void)
 		ExtraMaps_Init();
 		Modlist_Init();
 		ExecList_Init();
+        CL_InitWebDownloads(false);
 	}
 
 	LOC_Init (); // for 2021 rerelease support.

@@ -2112,7 +2112,7 @@ Note: Ensure correct configuration of the map repository URL.
 =============================================
 */
 
-#define MAX_URLPATH 200
+#define MAX_URLPATH 1024
 #define BYTES_TO_KB(bytes) ((bytes) / 1024.0f)
 #define BYTES_TO_MB(bytes) ((bytes) / (1024.0 * 1024.0))
 
@@ -2144,6 +2144,9 @@ qboolean IsGithubRepoPath(const char* s)
 	if (!s)
 		return false;
 
+    if (strstr(s, "://"))
+        return false;
+
 	const char* first = strchr(s, '/');
 	if (!first)
 		return false;
@@ -2157,12 +2160,13 @@ qboolean IsGithubRepoPath(const char* s)
 * NormalizeGithubRepoPath
 *     Ensures GitHub repo paths have "/main" appended if they only have user/repo
 *     e.g., "q1tools/q1tools.github.io" becomes "q1tools/q1tools.github.io/main"
+*     Returns false if the normalized value would be truncated.
 ==============================================================================
 */
-static void NormalizeGithubRepoPath(const char* input, char* output, size_t output_size)
+static qboolean NormalizeGithubRepoPath(const char* input, char* output, size_t output_size)
 {
 	if (!input || !output || output_size == 0)
-		return;
+        return false;
 
 	// Count slashes to determine if we need to append "/main"
 	int slash_count = 0;
@@ -2175,13 +2179,19 @@ static void NormalizeGithubRepoPath(const char* input, char* output, size_t outp
 	// If we have exactly 1 slash (user/repo), append "/main"
 	if (slash_count == 1)
 	{
-		q_snprintf(output, output_size, "%s/main", input);
+        return (size_t)q_snprintf(output, output_size, "%s/main", input) < output_size;
 	}
 	else
 	{
 		// Otherwise, use as-is
-		q_strlcpy(output, input, output_size);
+        return q_strlcpy(output, input, output_size) < output_size;
 	}
+}
+
+static const char *CL_DownloadUrlPathSeparator(const char *base)
+{
+    size_t len = strlen(base);
+    return (len > 0 && base[len - 1] == '/') ? "" : "/";
 }
 
 static inline const char* DL_DisplayTag(const char* base, char* buf, size_t bufsz)
@@ -2274,27 +2284,28 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
 		return -1;
 	}
 
-	char fullurl[256];
+	char fullurl[MAX_URLPATH];
 	char user[64], repo[64];
-	
+
 	// Normalize the URL to include /main if needed for GitHub repo paths
 	char normalized_url[MAX_URLPATH];
 	if (IsGithubRepoPath(data->url))
 	{
-		NormalizeGithubRepoPath(data->url, normalized_url, sizeof(normalized_url));
-		if (GithubExtractUserRepo(normalized_url, user, sizeof(user), repo, sizeof(repo)))
-		{
-			q_snprintf(fullurl, sizeof(fullurl), "https://github.com/%s/%s", user, repo);
-		}
-	}
-	else if (GithubExtractUserRepo(data->url, user, sizeof(user), repo, sizeof(repo)))
-	{
-		q_snprintf(fullurl, sizeof(fullurl), "https://github.com/%s/%s", user, repo);
+		if (!NormalizeGithubRepoPath(data->url, normalized_url, sizeof(normalized_url)) ||
+			!GithubExtractUserRepo(normalized_url, user, sizeof(user), repo, sizeof(repo)) ||
+			(size_t)q_snprintf(fullurl, sizeof(fullurl), "https://github.com/%s/%s", user, repo) >= sizeof(fullurl))
+			goto invalid_url;
 	}
 	else if (!strstr(data->url, "://"))
-		q_snprintf(fullurl, sizeof(fullurl), "https://%s/", data->url);
+	{
+		if ((size_t)q_snprintf(fullurl, sizeof(fullurl), "https://%s/", data->url) >= sizeof(fullurl))
+			goto invalid_url;
+	}
 	else
-		q_strlcpy(fullurl, data->url, sizeof(fullurl));
+	{
+		if (q_strlcpy(fullurl, data->url, sizeof(fullurl)) >= sizeof(fullurl))
+			goto invalid_url;
+	}
 
 	curl_easy_setopt(curl, CURLOPT_URL, fullurl);
 	curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // HEAD request
@@ -2333,6 +2344,25 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
 
 	free(data->url);
 	free(data);
+
+    return 0;
+
+invalid_url:
+    Con_DPrintf("cl_web_download_url %s is invalid or too long\n", data->url);
+
+    switch (data->web)
+    {
+    case 1:
+        webcheck = false;
+        break;
+    case 2:
+        web2check = false;
+        break;
+    }
+
+    curl_easy_cleanup(curl);
+    free(data->url);
+    free(data);
 
 	return 0;
 }
@@ -2432,6 +2462,22 @@ void WebCheckInit (void) // runs at launch in CL_Init if default values
 	}
 }
 
+void CL_InitWebDownloads(qboolean run_checks)
+{
+    if (!(cl_web_download_url.flags & CVAR_REGISTERED))
+        Cvar_RegisterVariable (&cl_web_download_url); // woods #webdl
+    if (!(cl_web_download_url2.flags & CVAR_REGISTERED))
+        Cvar_RegisterVariable (&cl_web_download_url2); // woods #webdl
+
+    if (!run_checks)
+        return;
+
+    Cvar_SetCallback (&cl_web_download_url, &WebCheckCallback_f); // woods #webdl
+    Cvar_SetCallback (&cl_web_download_url2, &Web2CheckCallback_f); // woods #webdl
+
+    WebCheckInit (); // woods -- check if the web download servers are live at launch (threaded) #webdl
+}
+
 size_t Write_Data (void* ptr, size_t size, size_t nmemb, FILE* stream)
 {
 	return fwrite (ptr, size, nmemb, stream);
@@ -2505,7 +2551,7 @@ int Progress_Callback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl
 				sizeStr,
 				progress);
 
-			if (scr_disabled_for_loading != true)
+            if (!isDedicated && scr_disabled_for_loading != true)
 			{
 				SDL_PumpEvents();
 			}
@@ -2543,7 +2589,12 @@ static qboolean CL_FinalizeDownloadFile(const char *relative_path, const char *t
 		return false;
 	}
 
-	q_snprintf(finalpath, sizeof(finalpath), "%s/%s", com_gamedir, relative_path);
+    if ((size_t)q_snprintf(finalpath, sizeof(finalpath), "%s/%s", com_gamedir, relative_path) >= sizeof(finalpath))
+    {
+        Con_Warning("Download path too long for \"%s\"\n", relative_path);
+        return false;
+    }
+
 	extension = COM_FileGetExtension(relative_path);
 	is_package = COM_IsPackageExtension(extension) && COM_DownloadPackageNameOkay(relative_path);
 	renameokay = false;
@@ -2585,28 +2636,35 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 	curl_download_active = true;
 
 	if (url == NULL || url[0] == '\0')
+	{
+		cls.download.active = false;
+		curl_download_active = false;
 		return false;
+	}
 
 	char full_url[MAX_URLPATH];
+	int full_url_len = -1;
 	const char* skipped_path = COM_SkipPath(filename);
 
-	
+
 	if (IsGithubRepoPath(url))
 	{
 		/* Normalize the URL to include /main if needed */
 		char normalized_url[MAX_URLPATH];
-		NormalizeGithubRepoPath(url, normalized_url, sizeof(normalized_url));
-		
+		if (!NormalizeGithubRepoPath(url, normalized_url, sizeof(normalized_url)))
+			goto url_too_long;
+
 		/* Build the common prefix once */
 		char repo_base[MAX_URLPATH];
-		q_snprintf(repo_base, sizeof(repo_base),
-			"https://raw.githubusercontent.com/%s/", normalized_url);
+		if ((size_t)q_snprintf(repo_base, sizeof(repo_base),
+			"https://raw.githubusercontent.com/%s/", normalized_url) >= sizeof(repo_base))
+			goto url_too_long;
 
 		/* 1.  Skyboxes -> skyboxes/<face>.(tga|png|...) */
 		if (is_skybox && !strncmp(filename, "gfx/env/", 8))
 		{
 			/* skip the "gfx/env/" part */
-			q_snprintf(full_url, sizeof(full_url),
+			full_url_len = q_snprintf(full_url, sizeof(full_url),
 				"%sgfx/env/%s", repo_base, filename + 8);
 		}
 		/* 2.  Maps -> maps/<A-Z or 0-9>/<basename>.bsp */
@@ -2623,20 +2681,26 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 				directory[2] = '\0';
 			}
 
-			q_snprintf(full_url, sizeof(full_url),
+            full_url_len = q_snprintf(full_url, sizeof(full_url),
 				"%smaps/%s%s", repo_base, directory, base);
 		}
 		/* 3.  Everything else -> branch/<original path> */
 		else
 		{
-			q_snprintf(full_url, sizeof(full_url),
+            full_url_len = q_snprintf(full_url, sizeof(full_url),
 				"%s%s", repo_base, filename);
 		}
 	}
 
-	else if (strstr(url, "github.io") && strstr(filename, "maps")) // special case for github.io
+    else if (strstr(url, "github.io") && !strncmp(filename, "maps/", 5)) // special case for github.io
 	{
+        const char *githubio_host = url;
 		char directory[5];
+
+        if (!strncmp(githubio_host, "https://", 8))
+            githubio_host += 8;
+        else if (!strncmp(githubio_host, "http://", 7))
+            githubio_host += 7;
 
 		if (isdigit((unsigned char)skipped_path[0]))
 		{
@@ -2648,18 +2712,26 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 			directory[2] = '\0';
 		}
 
-		q_snprintf(full_url, sizeof(full_url), "https://%s/maps/%s/%s", url, directory, skipped_path); // Construct the URL with directory
+		full_url_len = q_snprintf(full_url, sizeof(full_url), "https://%s%smaps/%s/%s",
+			githubio_host, CL_DownloadUrlPathSeparator(githubio_host), directory, skipped_path); // Construct the URL with directory
 	}
 
 	else if (strstr(url, "maps.quakeworld.nu")) // special cases for maps.quakeworld.nu
 	{
-		if (strstr(filename, ".loc"))
-			q_snprintf(full_url, sizeof(full_url), "https://%s/%s", "maps.quakeworld.nu", filename);
+		if (!q_strcasecmp(COM_FileGetExtension(filename), "loc"))
+			full_url_len = q_snprintf(full_url, sizeof(full_url), "https://%s/%s", "maps.quakeworld.nu", filename);
 		else
-			q_snprintf(full_url, sizeof(full_url), "https://%s/%s", "maps.quakeworld.nu/all", skipped_path); // use secure https and skip path
+			full_url_len = q_snprintf(full_url, sizeof(full_url), "https://%s/%s", "maps.quakeworld.nu/all", skipped_path); // use secure https and skip path
 	}
-	else 
-		q_snprintf(full_url, sizeof(full_url), "https://%s/%s", url, filename); // use secure https
+	else if (strstr(url, "://"))
+		full_url_len = q_snprintf(full_url, sizeof(full_url), "%s%s%s",
+			url, CL_DownloadUrlPathSeparator(url), filename);
+	else
+		full_url_len = q_snprintf(full_url, sizeof(full_url), "https://%s%s%s",
+			url, CL_DownloadUrlPathSeparator(url), filename); // use secure https
+
+	if (full_url_len < 0 || (size_t)full_url_len >= sizeof(full_url))
+		goto url_too_long;
 
 	DownloadData dl_data;
 	memset(&dl_data, 0, sizeof(dl_data)); // Reset dl_data
@@ -2674,17 +2746,29 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 
 	CURL* curl = curl_easy_init();
 	if (!curl)
+    {
+        cls.download.active = false;
+        curl_download_active = false;
 		return false;
+    }
 
 	char tmp_path[MAX_OSPATH];
-	q_snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", local_path);
+    if ((size_t)q_snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", local_path) >= sizeof(tmp_path))
+    {
+        curl_easy_cleanup(curl);
+        cls.download.active = false;
+        curl_download_active = false;
+        return false;
+    }
 
 	COM_CreatePath(tmp_path);
 
 	FILE* fp = fopen(tmp_path, "wb");
-	if (!fp) 
+	if (!fp)
 	{
 		curl_easy_cleanup(curl);
+		cls.download.active = false;
+		curl_download_active = false;
 		return false;
 	}
 
@@ -2755,6 +2839,12 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 		COM_SkipPath(filename), sizeStr, src);
 
 	return true; // File successfully downloaded
+
+url_too_long:
+    Con_DPrintf("Download URL is invalid or too long: %s\n", url ? url : "(null)");
+    cls.download.active = false;
+    curl_download_active = false;
+    return false;
 }
 
 //sent by the server to let us know that dp downloads can be used
@@ -2960,7 +3050,8 @@ qboolean CL_CheckDownload(const char *filename)
 	if (COM_FileExists(filename, NULL))
 		return false;
 
-	q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, filename);
+    if ((size_t)q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, filename) >= sizeof(local_path))
+        return false;
 
 	if (webcheck && (cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0')) // only run if server is verified
                 if (Curl_DownloadFile (cl_web_download_url.string, filename, local_path, false, NULL))
@@ -3296,71 +3387,120 @@ qboolean CL_CheckDownloads(void)
 CL_ManualDownload_f -- woods #manualdownload
 ====================
 */
-void CL_ManualDownload_f (const char* filename)
+static qboolean CL_ManualDownloadNameHasPrefix(const char *filename, const char *prefix)
 {
+    return !q_strncasecmp(filename, prefix, strlen(prefix));
+}
 
-	if (Cmd_Argc() != 2)
+static void CL_ManualDownloadSetPrefixedName(const char *filename, const char *prefix, char *out, size_t outsize)
+{
+    if (CL_ManualDownloadNameHasPrefix(filename, prefix))
+        q_snprintf(out, outsize, "%s%s", prefix, filename + strlen(prefix));
+    else
+        q_snprintf(out, outsize, "%s%s", prefix, filename);
+}
+
+static qboolean CL_ManualDownloadNormalizeName(const char *filename, char *out, size_t outsize)
+{
+    const char* extension;
+
+    if (!filename || !filename[0])
+        return false;
+
+    if (!q_strcasecmp(filename, "ctf"))
 	{
-		Con_Printf("download <filename|ctf|ra> : filename with an extension (bsp, lit, loc, mdl, or wav)\n");
-		return;
+        q_strlcpy(out, "paks/ctf.pak", outsize);
+        return true;
+	}
+    else if (!q_strcasecmp(filename, "ra"))
+	{
+        q_strlcpy(out, "paks/ra.pak", outsize);
+        return true;
 	}
 
-	if (*filename == '*')
-		return;	//don't download these...
-	if (cls.download.active)
-		return;	//block while we're already downloading something
-	if (*cls.download.current && !strcmp(cls.download.current, filename))
-		return;	//if the previous download failed, don't endlessly retry.
-
-	const char* extension = COM_FileGetExtension(Cmd_Argv(1));
-
-	char prefixedArg[MAX_OSPATH];
-
-	if (strcmp(filename, "ctf") == 0)
-	{
-		snprintf(prefixedArg, sizeof(prefixedArg), "paks/%s.pak", Cmd_Argv(1));
-	}
-	else if (strcmp(filename, "ra") == 0)
-	{
-		snprintf(prefixedArg, sizeof(prefixedArg), "paks/%s.pak", Cmd_Argv(1));
-	}
-	else if (strlen(extension) == 0)
+    extension = COM_FileGetExtension(filename);
+    if (!extension[0])
 	{
 		Con_Printf("Please use a filename with an extension (bsp, lit, loc, mdl, or wav)\n");
-		return;
+        return false;
 	}
-	else if (strcmp(extension, "bsp") != 0 && strcmp(extension, "lit") != 0 && strcmp(extension, "loc") != 0 && strcmp(extension, "mdl") != 0 && strcmp(extension, "wav") != 0)
+
+    if (!q_strcasecmp(extension, "bsp") || !q_strcasecmp(extension, "lit"))
 	{
-		Con_Printf("Unsupported file extension. Use bsp, lit, loc, mdl, or wav extensions\n");
-		return;
+        CL_ManualDownloadSetPrefixedName(filename, "maps/", out, outsize);
+        return true;
 	}
-	else if (strcmp(extension, "bsp") == 0 || strcmp(extension, "lit") == 0)
+    else if (!q_strcasecmp(extension, "wav"))
 	{
-		snprintf(prefixedArg, sizeof(prefixedArg), "maps/%s", Cmd_Argv(1));
+        CL_ManualDownloadSetPrefixedName(filename, "sound/", out, outsize);
+        return true;
 	}
-	else if (strcmp(extension, "wav") == 0)
+    else if (!q_strcasecmp(extension, "loc"))
 	{
-		snprintf(prefixedArg, sizeof(prefixedArg), "sound/%s", Cmd_Argv(1));
+        CL_ManualDownloadSetPrefixedName(filename, "locs/", out, outsize);
+        return true;
 	}
-	else if (strcmp(extension, "loc") == 0)
+    else if (!q_strcasecmp(extension, "mdl"))
 	{
-		snprintf(prefixedArg, sizeof(prefixedArg), "locs/%s", Cmd_Argv(1));
+        CL_ManualDownloadSetPrefixedName(filename, "progs/", out, outsize);
+        return true;
 	}
-	else if (strcmp(extension, "mdl") == 0)
+
+    Con_Printf("Unsupported file extension. Use bsp, lit, loc, mdl, or wav extensions\n");
+    return false;
+}
+
+static qboolean CL_ManualDownloadTryMirror(cvar_t *url, qboolean mirror_active, const char *filename, const char *local_path, qboolean require_active_check)
+{
+    if (!url->string || !url->string[0])
+        return false;
+    if (require_active_check && !mirror_active)
+        return false;
+
+    if (!require_active_check)
+        Con_Printf("Trying %s...\n", url->string);
+
+    return Curl_DownloadFile(url->string, filename, local_path, false, NULL);
+}
+
+static void CL_ManualDownloadClearCurrent(const char *filename)
+{
+    if (!strcmp(cls.download.current, filename))
+        cls.download.current[0] = '\0';
+}
+
+void CL_ManualDownload_f (const char* filename)
+{
+    char prefixedArg[MAX_OSPATH];
+    char local_path[MAX_OSPATH];
+    qboolean require_active_check;
+    qboolean isNeitherWebDownloadServerSet;
+
+    if (Cmd_Argc() != 2)
 	{
-		snprintf(prefixedArg, sizeof(prefixedArg), "progs/%s", Cmd_Argv(1));
+        Con_Printf("download <filename|ctf|ra> : filename with an extension (bsp, lit, loc, mdl, or wav)\n");
+        return;
 	}
-	else
-	{
-		strncpy(prefixedArg, Cmd_Argv(1), sizeof(prefixedArg));
-		prefixedArg[sizeof(prefixedArg) - 1] = '\0';
-	}
+
+    if (*filename == '*')
+        return;    //don't download these...
+    if (cls.download.active)
+        return;    //block while we're already downloading something
+
+    if (!CL_ManualDownloadNormalizeName(filename, prefixedArg, sizeof(prefixedArg)))
+        return;
 
 	if (!CL_DownloadNameIsValid(prefixedArg))
 	{
 		Con_Printf("Unsupported download path\n");
 		return;
 	}
+
+    if (strlen(prefixedArg) >= sizeof(cls.download.current))
+    {
+        Con_Printf("Download path too long\n");
+        return;
+    }
 
 	if (*cls.download.current && !strcmp(cls.download.current, prefixedArg))
 		return;	//if the previous download failed, don't endlessly retry.
@@ -3371,7 +3511,7 @@ void CL_ManualDownload_f (const char* filename)
 		return;
 	}
 
-	qboolean isNeitherWebDownloadServerSet = (cl_web_download_url.string == NULL || cl_web_download_url.string[0] == '\0') &&
+    isNeitherWebDownloadServerSet = (cl_web_download_url.string == NULL || cl_web_download_url.string[0] == '\0') &&
 		(cl_web_download_url2.string == NULL || cl_web_download_url2.string[0] == '\0');
 
 	if (isNeitherWebDownloadServerSet)
@@ -3380,7 +3520,9 @@ void CL_ManualDownload_f (const char* filename)
 		return;
 	}
 
-	if (!webcheck && !web2check)
+    require_active_check = (cls.state != ca_dedicated);
+
+    if (require_active_check && !webcheck && !web2check)
 	{
 		Con_Printf("No web download servers are active\n");
 		return;
@@ -3388,16 +3530,26 @@ void CL_ManualDownload_f (const char* filename)
 
 	Con_Printf("Attempting download, if found you will see progress below...\n");
 
-	char local_path[MAX_OSPATH]; // Define the max path length	
-	q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, prefixedArg);
+	if ((size_t)q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, prefixedArg) >= sizeof(local_path))
+	{
+		Con_Printf("Download path too long\n");
+		return;
+	}
 
-	if (webcheck && (cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0')) // only run if server is verified
-                if (Curl_DownloadFile(cl_web_download_url.string, prefixedArg, local_path, false, NULL))
-			return;
+	if (CL_ManualDownloadTryMirror(&cl_web_download_url, webcheck, prefixedArg, local_path, require_active_check))
+	{
+		CL_ManualDownloadClearCurrent(prefixedArg);
+		return;
+	}
 
-	if (web2check && (cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0')) // only run if server is verified
-                if (Curl_DownloadFile(cl_web_download_url2.string, prefixedArg, local_path, false, NULL))
-			return;
+	if (CL_ManualDownloadTryMirror(&cl_web_download_url2, web2check, prefixedArg, local_path, require_active_check))
+	{
+		CL_ManualDownloadClearCurrent(prefixedArg);
+		return;
+	}
+
+	Con_Printf("Download failed: %s\n", prefixedArg);
+	CL_ManualDownloadClearCurrent(prefixedArg);
 }
 
 /*
@@ -4560,11 +4712,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&r_coloredpowerupglow); // woods
 	Cvar_RegisterVariable (&cl_bobbing); // woods (joequake #weaponbob)
 
-	Cvar_RegisterVariable (&cl_web_download_url); // woods #webdl
-	Cvar_RegisterVariable (&cl_web_download_url2); // woods #webdl
-
-	Cvar_SetCallback (&cl_web_download_url, &WebCheckCallback_f); // woods #webdl
-	Cvar_SetCallback (&cl_web_download_url2, &Web2CheckCallback_f); // woods #webdl
+    CL_InitWebDownloads(false);
 
 	Cvar_RegisterVariable (&cl_autovote); // woods #autovote
 	Cvar_RegisterVariable (&cl_autovote_list); // woods #autovote
@@ -4578,8 +4726,7 @@ void CL_Init (void)
 	Cvar_SetCallback(&cl_rot, CL_RotateModel_OnChange); // woods #clmrotate
 	Cvar_SetCompletion(&cl_rot, CL_RotateModel_Cvar_Completion_f); // woods #clmrotate
 	CL_RotateModel_RebuildFromCvar(); // woods #clmrotate
-
-	WebCheckInit (); // woods -- check if the web downloads servers are live at launch (threaded) #webdl
+    CL_InitWebDownloads(true);
 
 	Cmd_AddCommand ("entities", CL_PrintEntities_f);
 	Cmd_AddCommand ("disconnect", CL_Disconnect_f);

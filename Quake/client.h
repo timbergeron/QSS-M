@@ -576,6 +576,7 @@ void CL_FinishMove(usercmd_t *cmd, qboolean isfinal);
 
 void CL_Download_Data(void);
 qboolean CL_CheckDownloads(void);
+void CL_InitWebDownloads(qboolean run_checks);
 
 void CL_ParseEffect (qboolean big);
 void CL_UpdateBeam (struct qmodel_s *m, const char *trailname, const char *impactname, int ent, float *start, float *end);
