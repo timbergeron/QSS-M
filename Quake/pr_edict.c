@@ -53,6 +53,8 @@ cvar_t	saved2 = {"saved2", "0", CVAR_ARCHIVE};
 cvar_t	saved3 = {"saved3", "0", CVAR_ARCHIVE};
 cvar_t	saved4 = {"saved4", "0", CVAR_ARCHIVE};
 
+extern cvar_t sv_gameplayfix_fishcount;
+
 /*
 =================
 ED_ClearEdict
@@ -63,6 +65,7 @@ Sets everything to NULL
 void ED_ClearEdict (edict_t *e)
 {
 	memset (&e->v, 0, qcvm->progs->entityfields * 4);
+	e->swimmonster_start_counted = false;
 	e->free = false;
 }
 
@@ -243,6 +246,14 @@ dfunction_t *ED_FindFunction (const char *fn_name)
 			return func;
 	}
 	return NULL;
+}
+
+const char *PR_GetFunctionName (func_t fnum)
+{
+	if (fnum <= 0 || fnum >= qcvm->progs->numfunctions)
+		return "";
+
+	return PR_GetString(qcvm->functions[fnum].s_name);
 }
 
 /*
@@ -1110,6 +1121,7 @@ const char *ED_ParseEdict (const char *data, edict_t *ent)
 	// clear it
 	if (ent != qcvm->edicts)	// hack
 		memset (&ent->v, 0, qcvm->progs->entityfields * 4);
+	ent->swimmonster_start_counted = false;
 
 	// go through all the dictionary pairs
 	while (1)
@@ -1260,6 +1272,7 @@ void ED_LoadFromFile (const char *data)
 	edict_t		*ent = NULL;
 	int		inhibit = 0;
 	int usingspawnfunc = 0;
+	float old_total_monsters;
 
 	pr_global_struct->time = qcvm->time;
 
@@ -1344,8 +1357,15 @@ void ED_LoadFromFile (const char *data)
 
 		SV_ReserveSignonSpace (512);
 
+		old_total_monsters = pr_global_struct->total_monsters;
 		pr_global_struct->self = EDICT_TO_PROG(ent);
 		PR_ExecuteProgram (func - qcvm->functions);
+
+		/* Vanilla QuakeC counts swim monsters here, then counts them again in swimmonster_start_go. */
+		if (sv_gameplayfix_fishcount.value && !ent->free &&
+		    pr_global_struct->total_monsters > old_total_monsters &&
+		    !strcmp(PR_GetFunctionName(ent->v.think), "swimmonster_start_go"))
+			ent->swimmonster_start_counted = true;
 	}
 
 	Con_DPrintf ("%i entities inhibited\n", inhibit);

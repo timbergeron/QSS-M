@@ -53,6 +53,7 @@ typedef struct edict_s
 	unsigned char	alpha;			/* johnfitz -- hack to support alpha since it's not part of entvars_t */
 	qboolean	sendinterval;		/* johnfitz -- send time until nextthink to client for better lerp timing */
 	qboolean	onladder;			/* spike -- content_ladder stuff */
+	qboolean	swimmonster_start_counted;
 	float		oldframe;
 	float		oldthinktime;
 
@@ -97,6 +98,7 @@ ddef_t *ED_FindGlobal (const char *name);
 dfunction_t *ED_FindFunction (const char *fn_name);
 
 const char *PR_GetString (int num);
+const char *PR_GetFunctionName (func_t fnum);
 int PR_SetEngineString (const char *s);
 int PR_AllocString (int bufferlength, char **ptr);
 void PR_ClearEngineString(int num);

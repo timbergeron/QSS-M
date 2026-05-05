@@ -49,6 +49,7 @@ cvar_t	sv_nostep = {"sv_nostep","0",CVAR_NONE};
 cvar_t	sv_freezenonclients = {"sv_freezenonclients","0",CVAR_NONE};
 cvar_t	sv_gameplayfix_spawnbeforethinks = {"sv_gameplayfix_spawnbeforethinks","0",CVAR_NONE};
 cvar_t	sv_gameplayfix_bouncedownslopes = {"sv_gameplayfix_bouncedownslopes","0",CVAR_NONE};	//fixes grenades making horrible noises on slopes.
+cvar_t	sv_gameplayfix_fishcount = {"sv_gameplayfix_fishcount","1",CVAR_NONE};
 
 cvar_t	sv_sound_watersplash	= {"sv_sound_watersplash",	"misc/h2ohit1.wav", CVAR_NONE};
 cvar_t	sv_sound_land			= {"sv_sound_land",			"demon/dland2.wav", CVAR_NONE};
@@ -211,6 +212,8 @@ Returns false if the entity removed itself.
 qboolean SV_RunThink (edict_t *ent)
 {
 	float	thinktime;
+	float	old_total_monsters;
+	qboolean fix_fishcount;
 
 	thinktime = ent->v.nextthink;
 	if (thinktime <= 0 || thinktime > qcvm->time + qcvm->frametime)
@@ -223,12 +226,23 @@ qboolean SV_RunThink (edict_t *ent)
 
 	ent->oldthinktime = thinktime;
 	ent->oldframe = ent->v.frame; //johnfitz
+	fix_fishcount = sv_gameplayfix_fishcount.value &&
+	    ent->swimmonster_start_counted &&
+	    !strcmp(PR_GetFunctionName(ent->v.think), "swimmonster_start_go");
+	old_total_monsters = pr_global_struct->total_monsters;
 
 	ent->v.nextthink = 0;
 	pr_global_struct->time = thinktime;
 	pr_global_struct->self = EDICT_TO_PROG(ent);
 	pr_global_struct->other = EDICT_TO_PROG(qcvm->edicts);
 	PR_ExecuteProgram (ent->v.think);
+
+	if (fix_fishcount)
+	{
+		ent->swimmonster_start_counted = false;
+		if (pr_global_struct->total_monsters == old_total_monsters + 1.0f)
+			pr_global_struct->total_monsters = old_total_monsters;
+	}
 
 	return !ent->free;
 }
