@@ -2420,9 +2420,9 @@ void Sbar_Draw (void)
 		if (sb_showscores) // woods #demoframes -- show frame count when showscores is active
 		{
 			int current_frame = CL_GetDemoFrameCount();
-			int total_est = (completed_amount_0_to_1 > 0.01f) ? (int)(current_frame / completed_amount_0_to_1 + 0.5f) : 0;
-			if (total_est > 0)
-				tempstring = va("%d / %d", current_frame, total_est);
+			int total_frames = CL_GetDemoTotalFrameCount();
+			if (total_frames > 0)
+				tempstring = va("%d / %d", current_frame, total_frames);
 			else
 				tempstring = va("%d", current_frame);
 		}

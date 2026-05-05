@@ -264,6 +264,7 @@ static float demo_start_server_time = 0.f; // woods -- user-facing demo time 0:0
 static qboolean demo_start_server_time_valid = false; // woods -- true once first parsed demo frame is known
 static qboolean demo_jump_back_was_down = false; // woods -- edge detector for J key
 static qboolean demo_jump_forward_was_down = false; // woods -- edge detector for L key
+static int demo_total_frame_count = 0; // woods #demoframes -- playable frames after signon
 static qboolean initialized = false; // woods (iw) #democontrols
 
 static void CL_ClearDemoFrags(void)
@@ -476,6 +477,66 @@ CL_GetDemoFrameCount -- woods #demoframes
 int CL_GetDemoFrameCount(void)
 {
 	return (int)VEC_SIZE(demo_rewind.frames);
+}
+
+/*
+===============
+CL_GetDemoTotalFrameCount -- woods #demoframes
+===============
+*/
+int CL_GetDemoTotalFrameCount(void)
+{
+	return demo_total_frame_count;
+}
+
+/*
+===============
+CL_CountRemainingDemoFrames -- woods #demoframes
+===============
+*/
+static int CL_CountRemainingDemoFrames(void)
+{
+	long saved_offset;
+	int end_offset;
+	int count = 0;
+
+	if (!cls.demofile || cls.demo_file_length <= 0)
+		return 0;
+
+	saved_offset = ftell(cls.demofile);
+	if (saved_offset < 0)
+		return 0;
+
+	end_offset = CL_GetDemoSeekEndOffset();
+	while (1)
+	{
+		long current_offset = ftell(cls.demofile);
+		int cursize;
+
+		if (current_offset < 0 || current_offset >= end_offset)
+			break;
+		if (end_offset - current_offset < 16)
+			break;
+		if (fread(&cursize, 4, 1, cls.demofile) != 1)
+			break;
+
+		cursize = LittleLong(cursize);
+		if (cursize <= 0 || cursize > MAX_MSGLEN)
+			break;
+
+		current_offset = ftell(cls.demofile);
+		if (current_offset < 0 || current_offset + 12L + cursize > end_offset)
+			break;
+		if (fseek(cls.demofile, 12L + cursize, SEEK_CUR) != 0)
+			break;
+
+		count++;
+	}
+
+	fseek(cls.demofile, saved_offset, SEEK_SET);
+	clearerr(cls.demofile);
+
+	return count;
 }
 
 /*
@@ -1567,6 +1628,7 @@ void CL_StopPlayback (void)
 		CL_ClearDemoMarkerHistory();
 		demo_start_server_time = 0.f;
 		demo_start_server_time_valid = false;
+		demo_total_frame_count = 0;
 		return;
 	}
 
@@ -1592,6 +1654,7 @@ void CL_StopPlayback (void)
 	CL_ClearDemoMarkerHistory();
 	demo_start_server_time = 0.f;
 	demo_start_server_time_valid = false;
+	demo_total_frame_count = 0;
 
 	if (cls.demofilename[0]) // woods #lastdemo
 	{
@@ -1727,6 +1790,7 @@ static int CL_GetDemoMessage (void)
 
 	if (cls.signon == SIGNONS && !initialized) // woods (iw) #democontrols
 	{
+		demo_total_frame_count = CL_GetDemoFrameCount() + 1 + CL_CountRemainingDemoFrames();
 		CL_ClearDemoFrags();
 		CL_ResetDemoSeekState();
 
@@ -3015,6 +3079,7 @@ void CL_PlayDemo_f (void)
 	CL_ClearDemoMarkerHistory();
 	demo_start_server_time = 0.f;
 	demo_start_server_time_valid = false;
+	demo_total_frame_count = 0;
 	// Only change basedemospeed if it hasn't been initialized,
 	// otherwise preserve the existing value
 	//if (!cls.basedemospeed) // woods (iw) #democontrols

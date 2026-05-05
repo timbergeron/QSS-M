@@ -606,6 +606,7 @@ void CL_PlayDemo_f (void);
 void CL_TimeDemo_f (void);
 void CL_JumpDemo_f (void);
 int CL_GetDemoFrameCount(void); // woods #demoframes
+int CL_GetDemoTotalFrameCount(void); // woods #demoframes
 byte *CL_LoadDemoBuffer(const char *name, int *length_out);
 
 //
