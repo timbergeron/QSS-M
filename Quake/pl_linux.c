@@ -150,10 +150,13 @@ static char *PL_DecodeFileURI(const char *uri, size_t uri_len)
 	return data;
 }
 
-static char *PL_GetFileURIFromClipboardText(char *cliptext)
+static char **PL_GetFileURIsFromClipboardText(char *cliptext, int *count)
 {
+	char	**paths = NULL;
 	char *line;
+	int capacity = 0;
 
+	*count = 0;
 	for (line = cliptext; line && *line; )
 	{
 		char	*end = line;
@@ -172,30 +175,67 @@ static char *PL_GetFileURIFromClipboardText(char *cliptext)
 		}
 
 		if (line_len >= 7 && strncmp(line, "file://", 7) == 0)
-			return PL_DecodeFileURI(line, line_len);
+		{
+			char *path = PL_DecodeFileURI(line, line_len);
+			if (path)
+				PL_AddClipboardFilePath(&paths, count, &capacity, path);
+		}
 
 		while (*end == '\r' || *end == '\n')
 			end++;
 		line = end;
 	}
 
-	return NULL;
+	return paths;
 }
 #endif
 
-char *PL_GetClipboardFilePath (void)
+char **PL_GetClipboardFilePaths (int *count)
 {
-	char *data = NULL;
+	char **paths = NULL;
+	int local_count = 0;
 #if defined(USE_SDL2)
 	char *cliptext = SDL_GetClipboardText();
 
 	if (cliptext != NULL)
 	{
-		data = PL_GetFileURIFromClipboardText(cliptext);
+		paths = PL_GetFileURIsFromClipboardText(cliptext, &local_count);
 		SDL_free(cliptext);
 	}
 #endif
 
+	if (count)
+		*count = local_count;
+	return paths;
+}
+
+void PL_FreeClipboardFilePaths (char **paths, int count)
+{
+	int i;
+
+	if (!paths)
+		return;
+	for (i = 0; i < count; ++i)
+	{
+		if (paths[i])
+			Z_Free(paths[i]);
+	}
+	Z_Free(paths);
+}
+
+char *PL_GetClipboardFilePath (void)
+{
+	char **paths;
+	char *data = NULL;
+	int count = 0;
+
+	paths = PL_GetClipboardFilePaths(&count);
+	if (paths && count > 0)
+	{
+		data = paths[0];
+		paths[0] = NULL;
+	}
+	PL_FreeClipboardFilePaths(paths, count);
 	return data;
 }
 

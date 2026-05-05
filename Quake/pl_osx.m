@@ -69,30 +69,9 @@ char *PL_GetClipboardData (void)
     return data;
 }
 
-char *PL_GetClipboardFilePath (void)
+static char *PL_CopyNSStringPath(NSString *clipboardPath)
 {
-    char *data			= NULL;
-    NSPasteboard* pasteboard	= [NSPasteboard generalPasteboard];
-    NSArray* types		= [pasteboard types];
-    NSString* clipboardPath	= nil;
-
-    if ([types containsObject: QSSPasteboardTypeFileURL]) {
-        NSString* fileURLString = [pasteboard stringForType: QSSPasteboardTypeFileURL];
-        if (fileURLString != NULL) {
-            NSURL* fileURL = [NSURL URLWithString: fileURLString];
-            if (fileURL != NULL && [fileURL isFileURL])
-                clipboardPath = [fileURL path];
-        }
-    }
-
-    if (clipboardPath == nil && [types containsObject: NSFilenamesPboardType]) {
-        id filenames = [pasteboard propertyListForType: NSFilenamesPboardType];
-        if ([filenames isKindOfClass: [NSArray class]] && [filenames count] > 0) {
-            id firstPath = [filenames objectAtIndex: 0];
-            if ([firstPath isKindOfClass: [NSString class]])
-                clipboardPath = firstPath;
-        }
-    }
+    char *data = NULL;
 
     if (clipboardPath != nil && [clipboardPath length] > 0) {
         const char *path = [clipboardPath fileSystemRepresentation];
@@ -105,6 +84,71 @@ char *PL_GetClipboardFilePath (void)
         }
     }
 
+    return data;
+}
+
+char **PL_GetClipboardFilePaths (int *count)
+{
+    char **paths		= NULL;
+    int local_count		= 0;
+    int local_capacity		= 0;
+    NSPasteboard* pasteboard	= [NSPasteboard generalPasteboard];
+    NSArray* types		= [pasteboard types];
+
+    if ([types containsObject: NSFilenamesPboardType]) {
+        id filenames = [pasteboard propertyListForType: NSFilenamesPboardType];
+        if ([filenames isKindOfClass: [NSArray class]]) {
+            NSUInteger i, num_files = [filenames count];
+            for (i = 0; i < num_files && local_count < Q_MAXINT; ++i) {
+                id filePath = [filenames objectAtIndex: i];
+                if ([filePath isKindOfClass: [NSString class]]) {
+                    char *path = PL_CopyNSStringPath(filePath);
+                    if (path)
+                        PL_AddClipboardFilePath(&paths, &local_count, &local_capacity, path);
+                }
+            }
+        }
+    }
+
+    if (local_count == 0 && [types containsObject: QSSPasteboardTypeFileURL]) {
+        NSString* fileURLString = [pasteboard stringForType: QSSPasteboardTypeFileURL];
+        if (fileURLString != NULL) {
+            NSURL* fileURL = [NSURL URLWithString: fileURLString];
+            if (fileURL != NULL && [fileURL isFileURL])
+                PL_AddClipboardFilePath(&paths, &local_count, &local_capacity, PL_CopyNSStringPath([fileURL path]));
+        }
+    }
+
+    if (count)
+        *count = local_count;
+    return paths;
+}
+
+void PL_FreeClipboardFilePaths (char **paths, int count)
+{
+    int i;
+
+    if (!paths)
+        return;
+    for (i = 0; i < count; ++i) {
+        if (paths[i])
+            Z_Free(paths[i]);
+    }
+    Z_Free(paths);
+}
+
+char *PL_GetClipboardFilePath (void)
+{
+    char **paths;
+    char *data = NULL;
+    int count = 0;
+
+    paths = PL_GetClipboardFilePaths(&count);
+    if (paths && count > 0) {
+        data = paths[0];
+        paths[0] = NULL;
+    }
+    PL_FreeClipboardFilePaths(paths, count);
     return data;
 }
 

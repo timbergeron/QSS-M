@@ -40,6 +40,11 @@ char *PL_GetClipboardData (void);
 /* retrieve a file path from the clipboard (returns Z_Malloc()'ed data) */
 char *PL_GetClipboardFilePath (void);
 
+/* retrieve file paths from the clipboard (returns Z_Malloc()'ed array/data) */
+qboolean PL_AddClipboardFilePath (char ***paths, int *count, int *capacity, char *path);
+char **PL_GetClipboardFilePaths (int *count);
+void PL_FreeClipboardFilePaths (char **paths, int count);
+
 /* show an error dialog */
 void PL_ErrorDialog(const char *text);
 

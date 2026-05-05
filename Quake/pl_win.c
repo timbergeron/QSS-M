@@ -106,7 +106,43 @@ char *PL_GetClipboardData (void)
 	return data;
 }
 
-char *PL_GetClipboardFilePath (void)
+static char *PL_CopyClipboardPathA(const char *path, size_t bytes)
+{
+	char *data;
+
+	if (!path || bytes == 0 || bytes >= (size_t)Q_MAXINT)
+		return NULL;
+
+	data = (char *) Z_Malloc((int)bytes + 1);
+	memcpy(data, path, bytes);
+	data[bytes] = '\0';
+	return data;
+}
+
+static char *PL_CopyClipboardPathW(const WCHAR *path, size_t chars)
+{
+	char	*data;
+	int	size;
+
+	if (!path || chars == 0 || chars >= (size_t)Q_MAXINT)
+		return NULL;
+
+	size = WideCharToMultiByte(CP_UTF8, 0, path, (int)chars, NULL, 0, NULL, NULL);
+	if (size <= 0 || size >= Q_MAXINT)
+		return NULL;
+
+	data = (char *) Z_Malloc(size + 1);
+	if (WideCharToMultiByte(CP_UTF8, 0, path, (int)chars, data, size, NULL, NULL) == size)
+	{
+		data[size] = '\0';
+		return data;
+	}
+
+	Z_Free(data);
+	return NULL;
+}
+
+char **PL_GetClipboardFilePaths (int *count)
 {
 	typedef struct
 	{
@@ -116,7 +152,9 @@ char *PL_GetClipboardFilePath (void)
 		BOOL fWide;
 	} pl_dropfiles_t;
 
-	char *data = NULL;
+	char **paths = NULL;
+	int local_count = 0;
+	int local_capacity = 0;
 
 	if (OpenClipboard(NULL) != 0)
 	{
@@ -136,39 +174,44 @@ char *PL_GetClipboardFilePath (void)
 				{
 					const WCHAR *wpath = (const WCHAR *)files;
 					size_t max_chars = bytes_remaining / sizeof(WCHAR);
-					size_t chars = 0;
+					size_t pos = 0;
 
-					while (chars < max_chars && wpath[chars])
-						chars++;
-
-					if (chars > 0 && chars < max_chars && chars < (size_t)Q_MAXINT)
+					while (pos < max_chars && wpath[pos])
 					{
-						int size = WideCharToMultiByte(CP_UTF8, 0, wpath, (int)chars, NULL, 0, NULL, NULL);
-						if (size > 0 && size < Q_MAXINT)
+						size_t start = pos;
+
+						while (pos < max_chars && wpath[pos])
+							pos++;
+						if (pos >= max_chars)
+							break;
+						if (pos > start)
 						{
-							data = (char *) Z_Malloc(size + 1);
-							if (WideCharToMultiByte(CP_UTF8, 0, wpath, (int)chars, data, size, NULL, NULL) == size)
-								data[size] = '\0';
-							else
-							{
-								Z_Free(data);
-								data = NULL;
-							}
+							char *path = PL_CopyClipboardPathW(wpath + start, pos - start);
+							if (path)
+								PL_AddClipboardFilePath(&paths, &local_count, &local_capacity, path);
 						}
+						pos++;
 					}
 				}
 				else
 				{
-					size_t bytes = 0;
+					size_t pos = 0;
 
-					while (bytes < bytes_remaining && files[bytes])
-						bytes++;
-
-					if (bytes > 0 && bytes < bytes_remaining && bytes < (size_t)Q_MAXINT)
+					while (pos < bytes_remaining && files[pos])
 					{
-						data = (char *) Z_Malloc((int)bytes + 1);
-						memcpy(data, files, bytes);
-						data[bytes] = '\0';
+						size_t start = pos;
+
+						while (pos < bytes_remaining && files[pos])
+							pos++;
+						if (pos >= bytes_remaining)
+							break;
+						if (pos > start)
+						{
+							char *path = PL_CopyClipboardPathA(files + start, pos - start);
+							if (path)
+								PL_AddClipboardFilePath(&paths, &local_count, &local_capacity, path);
+						}
+						pos++;
 					}
 				}
 			}
@@ -177,6 +220,39 @@ char *PL_GetClipboardFilePath (void)
 		}
 		CloseClipboard ();
 	}
+
+	if (count)
+		*count = local_count;
+	return paths;
+}
+
+void PL_FreeClipboardFilePaths (char **paths, int count)
+{
+	int i;
+
+	if (!paths)
+		return;
+	for (i = 0; i < count; ++i)
+	{
+		if (paths[i])
+			Z_Free(paths[i]);
+	}
+	Z_Free(paths);
+}
+
+char *PL_GetClipboardFilePath (void)
+{
+	char **paths;
+	char *data = NULL;
+	int count = 0;
+
+	paths = PL_GetClipboardFilePaths(&count);
+	if (paths && count > 0)
+	{
+		data = paths[0];
+		paths[0] = NULL;
+	}
+	PL_FreeClipboardFilePaths(paths, count);
 	return data;
 }
 

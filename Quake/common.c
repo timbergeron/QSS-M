@@ -65,6 +65,68 @@ static qboolean		com_modified;	// set true if using non-id files
 qboolean		fitzmode;
 qboolean		pak0; // woods #pak0only
 
+qboolean PL_AddClipboardFilePath (char ***paths, int *count, int *capacity, char *path)
+{
+	char	**new_paths;
+	size_t	needed;
+	size_t	max_paths;
+	int	new_capacity;
+
+	if (!path || !*path)
+	{
+		if (path)
+			Z_Free(path);
+		return false;
+	}
+	if (!paths || !count || !capacity || *count < 0 || *capacity < *count)
+	{
+		Z_Free(path);
+		return false;
+	}
+	if (*count > 0 && !*paths)
+	{
+		Z_Free(path);
+		return false;
+	}
+	if (!*paths)
+		*capacity = 0;
+
+	needed = (size_t)*count + 1;
+	max_paths = (size_t)Q_MAXINT / sizeof(*new_paths);
+	if (needed > max_paths)
+	{
+		Z_Free(path);
+		return false;
+	}
+
+	if (*count >= *capacity)
+	{
+		new_capacity = *capacity > 0 ? *capacity : 4;
+		while ((size_t)new_capacity < needed)
+		{
+			if ((size_t)new_capacity > max_paths / 2)
+			{
+				new_capacity = (int)max_paths;
+				break;
+			}
+			new_capacity *= 2;
+		}
+
+		new_paths = (char **) Z_Malloc(new_capacity * (int)sizeof(*new_paths));
+		if (*paths)
+		{
+			memcpy(new_paths, *paths, *count * sizeof(*new_paths));
+			Z_Free(*paths);
+		}
+		*paths = new_paths;
+		*capacity = new_capacity;
+	}
+
+	(*paths)[*count] = path;
+	++(*count);
+	return true;
+}
+
 static void COM_Path_f (void);
 void Host_WriteConfig_f (void); // woods #writecfg
 

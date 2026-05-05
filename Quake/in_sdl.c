@@ -34,6 +34,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "SDL.h"
 #endif
 
+#if defined(USE_SDL2)
+static void IN_ClearDropBatch(void);
+#endif
+
 #ifdef __APPLE__
 #include <IOKit/hid/IOHIDLib.h>
 #include <IOKit/hidsystem/event_status_driver.h>
@@ -1356,6 +1360,9 @@ void IN_Init (void)
 void IN_Shutdown (void)
 {
 	Con_DPrintf("IN_Shutdown called\n");
+#if defined(USE_SDL2)
+	IN_ClearDropBatch();
+#endif
 #if defined(_WIN32) // woods #disablecaps via ironwail
 	Sys_ActivateKeyFilter(false);
 #endif
@@ -2873,7 +2880,9 @@ static qboolean IN_BuildRelativeDroppedPath(const char *absolute_path, char *rel
 #else
 			if (!strcmp(search_for_compare, gamedir_for_compare))
 #endif
-			*out_is_in_gamedir = true;
+			{
+				*out_is_in_gamedir = true;
+			}
 		}
 
 		const char *rest = normalized_absolute + prefix_len;
@@ -2968,6 +2977,27 @@ static qboolean IN_CopyExternalFile(const char *source, const char *destination)
 #endif
 
 	return true;
+}
+
+static qboolean IN_IsSafeQuotedCommandArg(const char *text)
+{
+	const char *c;
+
+	if (!text || !*text)
+		return false;
+	for (c = text; *c; ++c)
+	{
+		if (*c == '\"' || *c == ';' || *c == '\r' || *c == '\n')
+			return false;
+	}
+	return true;
+}
+
+static void IN_PlayCopySound(void)
+{
+	const char *sound_file = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
+
+	S_LocalSound(sound_file);
 }
 
 static qboolean IN_InstallExternalFile(const char *source_path, const char *source_desc)
@@ -3177,6 +3207,11 @@ static qboolean IN_InstallExternalFile(const char *source_path, const char *sour
 			if (!command_path[0])
 				q_strlcpy(command_path, COM_SkipPath(relative_path), sizeof(command_path));
 
+			if (!IN_IsSafeQuotedCommandArg(command_path))
+			{
+				Con_Printf("Installed %s, not auto-running because the filename contains command characters.\n", source_desc);
+				return true;
+			}
 			Cbuf_AddText(va("stopdemo; playdemo \"%s\"\n", command_path));
 		}
 		else
@@ -3191,6 +3226,11 @@ static qboolean IN_InstallExternalFile(const char *source_path, const char *sour
 			if (!command_path[0])
 				q_strlcpy(command_path, COM_SkipPath(relative_path), sizeof(command_path));
 
+			if (!IN_IsSafeQuotedCommandArg(command_path))
+			{
+				Con_Printf("Installed %s, not auto-running because the filename contains command characters.\n", source_desc);
+				return true;
+			}
 			Cbuf_AddText(va("map \"%s\"\n", command_path));
 		}
 	}
@@ -3198,17 +3238,1316 @@ static qboolean IN_InstallExternalFile(const char *source_path, const char *sour
 	return true;
 }
 
-qboolean IN_PasteClipboardFile (void)
+typedef struct
 {
-	char	*clipboard_file;
+	char	path[MAX_OSPATH];
+	char	basename[MAX_OSPATH];
+	char	relative_path[MAX_OSPATH];
+	char	dest_path[MAX_OSPATH];
+	size_t	light_lump_len;
+	qboolean	valid;
+	qboolean	installed;
+	qboolean	using_existing;
+	qboolean	existing_matches_source;
+} in_map_bsp_t;
 
-	clipboard_file = PL_GetClipboardFilePath();
-	if (!clipboard_file)
+typedef struct
+{
+	char	path[MAX_OSPATH];
+	char	basename[MAX_OSPATH];
+} in_map_sidecar_t;
+
+static qboolean IN_GetExternalFileSize(FILE *f, size_t *filesize, char *reason, size_t reason_size)
+{
+	long end;
+
+	if (fseek(f, 0, SEEK_END) != 0)
+	{
+		q_snprintf(reason, reason_size, "could not seek file: %s", strerror(errno));
+		return false;
+	}
+	end = ftell(f);
+	if (end < 0)
+	{
+		q_snprintf(reason, reason_size, "could not read file size: %s", strerror(errno));
+		return false;
+	}
+	if (fseek(f, 0, SEEK_SET) != 0)
+	{
+		q_snprintf(reason, reason_size, "could not rewind file: %s", strerror(errno));
+		return false;
+	}
+
+	*filesize = (size_t)end;
+	return true;
+}
+
+static qboolean IN_ExternalFilesMatch(const char *path1, const char *path2, qboolean *match)
+{
+	FILE	*f1 = NULL;
+	FILE	*f2 = NULL;
+	byte	buffer1[4096];
+	byte	buffer2[4096];
+	size_t	size1;
+	size_t	size2;
+	size_t	remaining;
+	qboolean ok = false;
+	char	reason[128];
+
+	if (match)
+		*match = false;
+	if (!path1 || !path2 || !match)
 		return false;
 
-	IN_InstallExternalFile(clipboard_file, "clipboard file");
-	Z_Free(clipboard_file);
+	f1 = fopen(path1, "rb");
+	if (!f1)
+		goto done;
+	f2 = fopen(path2, "rb");
+	if (!f2)
+		goto done;
+
+	if (!IN_GetExternalFileSize(f1, &size1, reason, sizeof(reason)) ||
+		!IN_GetExternalFileSize(f2, &size2, reason, sizeof(reason)))
+		goto done;
+	if (size1 != size2)
+	{
+		ok = true;
+		goto done;
+	}
+
+	remaining = size1;
+	while (remaining > 0)
+	{
+		size_t chunk = q_min(remaining, sizeof(buffer1));
+
+		if (fread(buffer1, 1, chunk, f1) != chunk ||
+			fread(buffer2, 1, chunk, f2) != chunk)
+			goto done;
+		if (memcmp(buffer1, buffer2, chunk) != 0)
+		{
+			ok = true;
+			goto done;
+		}
+		remaining -= chunk;
+	}
+
+	*match = true;
+	ok = true;
+
+done:
+	if (f1)
+		fclose(f1);
+	if (f2)
+		fclose(f2);
+	return ok;
+}
+
+static qboolean IN_ModelLumpLooksHexen2(FILE *f, const lump_t *model_lump)
+{
+	dmodelq1_t	models[2];
+	long	saved_offset;
+	qboolean	result = false;
+
+	if (model_lump->filelen < sizeof(dmodelh2_t) ||
+		model_lump->filelen % sizeof(dmodelh2_t) != 0 ||
+		model_lump->filelen < 2 * sizeof(dmodelq1_t))
+		return false;
+
+	saved_offset = ftell(f);
+	if (saved_offset < 0)
+		return false;
+	if (fseek(f, (long)model_lump->fileofs, SEEK_SET) != 0)
+		goto done;
+	if (fread(models, sizeof(models), 1, f) != 1)
+		goto done;
+
+	result = (LittleLong(models[0].numfaces) == 0 && LittleLong(models[1].firstface) != 0);
+
+done:
+	fseek(f, saved_offset, SEEK_SET);
+	clearerr(f);
+	return result;
+}
+
+static qboolean IN_ValidateBSPFile(const char *path, in_map_bsp_t *info, char *reason, size_t reason_size)
+{
+	FILE	*f;
+	dheader_t	header;
+	lump_t	*model_lump;
+	size_t	filesize;
+	int	version;
+	int	i;
+	qboolean	ok = false;
+
+	f = fopen(path, "rb");
+	if (!f)
+	{
+		q_snprintf(reason, reason_size, "could not open file: %s", strerror(errno));
+		return false;
+	}
+
+	if (!IN_GetExternalFileSize(f, &filesize, reason, reason_size))
+		goto done;
+	if (filesize < sizeof(header))
+	{
+		q_snprintf(reason, reason_size, "file is too small for a BSP header");
+		goto done;
+	}
+	if (fread(&header, sizeof(header), 1, f) != 1)
+	{
+		q_snprintf(reason, reason_size, "could not read BSP header: %s", strerror(errno));
+		goto done;
+	}
+
+	version = LittleLong(header.version);
+	switch (version)
+	{
+	case BSPVERSION:
+	case BSP2VERSION_2PSB:
+	case BSP2VERSION_BSP2:
+	case BSPVERSION_QUAKE64:
+		break;
+	default:
+		q_snprintf(reason, reason_size, "unsupported BSP version %d", version);
+		goto done;
+	}
+
+	for (i = 0; i < HEADER_LUMPS; ++i)
+	{
+		size_t fileofs, filelen;
+
+		header.lumps[i].fileofs = (unsigned int)LittleLong((int)header.lumps[i].fileofs);
+		header.lumps[i].filelen = (unsigned int)LittleLong((int)header.lumps[i].filelen);
+		fileofs = (size_t)header.lumps[i].fileofs;
+		filelen = (size_t)header.lumps[i].filelen;
+		if (fileofs > filesize || filelen > filesize - fileofs)
+		{
+			q_snprintf(reason, reason_size, "BSP lump %d is outside the file", i);
+			goto done;
+		}
+	}
+
+	if (header.lumps[LUMP_ENTITIES].filelen == 0)
+	{
+		q_snprintf(reason, reason_size, "missing entity lump");
+		goto done;
+	}
+
+	model_lump = &header.lumps[LUMP_MODELS];
+	if (model_lump->filelen < sizeof(dmodelq1_t) ||
+		(model_lump->filelen % sizeof(dmodelq1_t) && !IN_ModelLumpLooksHexen2(f, model_lump)))
+	{
+		q_snprintf(reason, reason_size, "invalid model lump");
+		goto done;
+	}
+
+	if (info)
+		info->light_lump_len = (size_t)header.lumps[LUMP_LIGHTING].filelen;
+	ok = true;
+
+done:
+	fclose(f);
+	return ok;
+}
+
+static qboolean IN_ValidateLITFile(const char *path, const in_map_bsp_t *bsp, char *reason, size_t reason_size)
+{
+	FILE	*f;
+	byte	header[8];
+	size_t	filesize;
+	size_t	expected_size;
+	size_t	sample_size;
+	int	version;
+	qboolean	ok = false;
+
+	if (!bsp)
+	{
+		q_snprintf(reason, reason_size, "matching BSP is missing");
+		return false;
+	}
+
+	f = fopen(path, "rb");
+	if (!f)
+	{
+		q_snprintf(reason, reason_size, "could not open file: %s", strerror(errno));
+		return false;
+	}
+
+	if (!IN_GetExternalFileSize(f, &filesize, reason, reason_size))
+		goto done;
+	if (filesize < sizeof(header))
+	{
+		q_snprintf(reason, reason_size, "file is too small for a LIT header");
+		goto done;
+	}
+	if (fread(header, sizeof(header), 1, f) != 1)
+	{
+		q_snprintf(reason, reason_size, "could not read LIT header: %s", strerror(errno));
+		goto done;
+	}
+	if (memcmp(header, "QLIT", 4) != 0)
+	{
+		q_snprintf(reason, reason_size, "missing QLIT header");
+		goto done;
+	}
+
+	memcpy(&version, header + 4, sizeof(version));
+	version = LittleLong(version);
+	if (version == 1)
+		sample_size = 3;
+	else if (version == 0x10001)
+		sample_size = 4;
+	else
+	{
+		q_snprintf(reason, reason_size, "unsupported LIT version %d", version);
+		goto done;
+	}
+
+	if (bsp->light_lump_len > (((size_t)-1) - 8) / sample_size)
+	{
+		q_snprintf(reason, reason_size, "matching BSP light lump is too large");
+		goto done;
+	}
+	expected_size = 8 + bsp->light_lump_len * sample_size;
+	if (filesize != expected_size)
+	{
+		q_snprintf(reason, reason_size, "size mismatch, expected %llu bytes but got %llu",
+			(unsigned long long)expected_size, (unsigned long long)filesize);
+		goto done;
+	}
+
+	ok = true;
+
+done:
+	fclose(f);
+	return ok;
+}
+
+static qboolean IN_LoadExternalTextFile(const char *path, char **data, size_t *filesize, char *reason, size_t reason_size)
+{
+	FILE	*f;
+	char	*buffer = NULL;
+	size_t	size;
+	qboolean ok = false;
+
+	*data = NULL;
+	if (filesize)
+		*filesize = 0;
+
+	f = fopen(path, "rb");
+	if (!f)
+	{
+		q_snprintf(reason, reason_size, "could not open file: %s", strerror(errno));
+		return false;
+	}
+
+	if (!IN_GetExternalFileSize(f, &size, reason, reason_size))
+		goto done;
+	if (size == 0)
+	{
+		q_snprintf(reason, reason_size, "file is empty");
+		goto done;
+	}
+	if (size >= (size_t)Q_MAXINT)
+	{
+		q_snprintf(reason, reason_size, "file is too large");
+		goto done;
+	}
+
+	buffer = (char *) Z_Malloc((int)size + 1);
+	if (fread(buffer, 1, size, f) != size)
+	{
+		q_snprintf(reason, reason_size, "could not read file: %s", strerror(errno));
+		goto done;
+	}
+	buffer[size] = '\0';
+
+	*data = buffer;
+	if (filesize)
+		*filesize = size;
+	buffer = NULL;
+	ok = true;
+
+done:
+	if (buffer)
+		Z_Free(buffer);
+	fclose(f);
+	return ok;
+}
+
+static qboolean IN_ValidateENTFile(const char *path, char *reason, size_t reason_size)
+{
+	char	*data = NULL;
+	const char *p;
+	int	depth = 0;
+	qboolean saw_entity = false;
+	qboolean ok = false;
+
+	if (!IN_LoadExternalTextFile(path, &data, NULL, reason, reason_size))
+		return false;
+
+	p = data;
+	while ((p = COM_Parse(p)) != NULL)
+	{
+		if (!strcmp(com_token, "{"))
+		{
+			if (depth != 0)
+			{
+				q_snprintf(reason, reason_size, "nested entity block");
+				goto done;
+			}
+			++depth;
+		}
+		else if (!strcmp(com_token, "}"))
+		{
+			if (depth != 1)
+			{
+				q_snprintf(reason, reason_size, "unmatched entity close brace");
+				goto done;
+			}
+			--depth;
+			saw_entity = true;
+		}
+	}
+
+	if (depth != 0)
+	{
+		q_snprintf(reason, reason_size, "unterminated entity block");
+		goto done;
+	}
+	if (!saw_entity)
+	{
+		q_snprintf(reason, reason_size, "no entity blocks found");
+		goto done;
+	}
+
+	ok = true;
+
+done:
+	Z_Free(data);
+	return ok;
+}
+
+static qboolean IN_VISMapNameMatches(const char *mapname, const char *basename)
+{
+	char	expected[32];
+	int	result;
+
+	result = q_snprintf(expected, sizeof(expected), "%s.bsp", basename);
+	if (result < 0 || (size_t)result >= sizeof(expected))
+		return false;
+	return !q_strcasecmp(mapname, expected);
+}
+
+static qboolean IN_ValidateVISFile(const char *path, const char *basename, char *reason, size_t reason_size)
+{
+	typedef struct
+	{
+		char	mapname[32];
+		int	filelen;
+	} in_vispatch_t;
+
+	FILE	*f;
+	in_vispatch_t header;
+	size_t	filesize;
+	size_t	offset = 0;
+	qboolean ok = false;
+
+	if (!basename || !*basename)
+	{
+		q_snprintf(reason, reason_size, "matching BSP is missing");
+		return false;
+	}
+
+	f = fopen(path, "rb");
+	if (!f)
+	{
+		q_snprintf(reason, reason_size, "could not open file: %s", strerror(errno));
+		return false;
+	}
+
+	if (!IN_GetExternalFileSize(f, &filesize, reason, reason_size))
+		goto done;
+	if (filesize < sizeof(header))
+	{
+		q_snprintf(reason, reason_size, "file is too small for a VIS header");
+		goto done;
+	}
+
+	while (offset + sizeof(header) <= filesize)
+	{
+		int	filelen;
+		size_t	entry_size;
+
+		if (fseek(f, (long)offset, SEEK_SET) != 0)
+		{
+			q_snprintf(reason, reason_size, "could not seek VIS entry: %s", strerror(errno));
+			goto done;
+		}
+		if (fread(&header, 1, sizeof(header), f) != sizeof(header))
+		{
+			q_snprintf(reason, reason_size, "could not read VIS header: %s", strerror(errno));
+			goto done;
+		}
+		if (!memchr(header.mapname, '\0', sizeof(header.mapname)))
+		{
+			q_snprintf(reason, reason_size, "VIS map name is not terminated");
+			goto done;
+		}
+
+		filelen = LittleLong(header.filelen);
+		if (filelen <= 0)
+		{
+			q_snprintf(reason, reason_size, "VIS entry has invalid length");
+			goto done;
+		}
+		entry_size = (size_t)filelen;
+		if (entry_size > filesize - offset - sizeof(header))
+		{
+			q_snprintf(reason, reason_size, "VIS entry is outside the file");
+			goto done;
+		}
+
+		if (IN_VISMapNameMatches(header.mapname, basename))
+		{
+			int vis_len;
+
+			if (entry_size < sizeof(vis_len))
+			{
+				q_snprintf(reason, reason_size, "matching VIS entry is too small");
+				goto done;
+			}
+			if (fread(&vis_len, 1, sizeof(vis_len), f) != sizeof(vis_len))
+			{
+				q_snprintf(reason, reason_size, "could not read VIS data length: %s", strerror(errno));
+				goto done;
+			}
+			vis_len = LittleLong(vis_len);
+			if (vis_len <= 0 || (size_t)vis_len > entry_size - sizeof(vis_len))
+			{
+				q_snprintf(reason, reason_size, "matching VIS entry has invalid data length");
+				goto done;
+			}
+			ok = true;
+			goto done;
+		}
+
+		offset += sizeof(header) + entry_size;
+	}
+
+	q_snprintf(reason, reason_size, "no VIS entry for %s.bsp", basename);
+
+done:
+	fclose(f);
+	return ok;
+}
+
+static qboolean IN_BuildMapInstallPaths(const char *basename, const char *extension, char *relative_path, size_t relative_path_size, char *dest_path, size_t dest_path_size)
+{
+	int result;
+
+	if (!basename || !*basename)
+		return false;
+
+	result = q_snprintf(relative_path, relative_path_size, "maps/%s%s", basename, extension);
+	if (result < 0 || (size_t)result >= relative_path_size)
+	{
+		Con_Printf("Path too long for map file.\n");
+		return false;
+	}
+
+	result = q_snprintf(dest_path, dest_path_size, "%s/%s", com_gamedir, relative_path);
+	if (result < 0 || (size_t)result >= dest_path_size)
+	{
+		Con_Printf("Path too long for map destination.\n");
+		return false;
+	}
+	IN_NormalizeDroppedPath(dest_path);
 	return true;
+}
+
+static qboolean IN_CopyExternalFileToMapPath(const char *source_path, const char *source_desc, const char *relative_path, const char *dest_path, qboolean *using_existing)
+{
+	char	normalized_path[MAX_OSPATH];
+	char	path_copy[MAX_OSPATH];
+	qboolean same_path;
+
+	if (using_existing)
+		*using_existing = false;
+
+	if (q_strlcpy(normalized_path, source_path, sizeof(normalized_path)) >= sizeof(normalized_path))
+	{
+		Con_Printf("Path too long for %s.\n", source_desc);
+		return false;
+	}
+	IN_NormalizeDroppedPath(normalized_path);
+
+#ifdef _WIN32
+	same_path = (q_strcasecmp(normalized_path, dest_path) == 0);
+#else
+	same_path = (strcmp(normalized_path, dest_path) == 0);
+#endif
+	if (same_path)
+		return true;
+
+	if (Sys_FileType(dest_path) & FS_ENT_FILE)
+	{
+		if (using_existing)
+			*using_existing = true;
+		Con_Printf("Using existing file at %s/%s\n", COM_SkipPath(com_gamedir), relative_path);
+		return true;
+	}
+
+	q_strlcpy(path_copy, dest_path, sizeof(path_copy));
+	COM_CreatePath(path_copy);
+
+	if (!IN_CopyExternalFile(normalized_path, dest_path))
+		return false;
+
+	Con_Printf("Copied %s to %s/%s\n", source_desc, COM_SkipPath(com_gamedir), relative_path);
+	return true;
+}
+
+static int IN_FindBatchBSPForBasename(const char *basename, const in_map_bsp_t *bsps, int bsp_count, qboolean *ambiguous)
+{
+	int i;
+	int match = -1;
+
+	*ambiguous = false;
+	for (i = 0; i < bsp_count; ++i)
+	{
+		if (!bsps[i].valid)
+			continue;
+		if (q_strcasecmp(basename, bsps[i].basename))
+			continue;
+		if (match >= 0)
+		{
+			*ambiguous = true;
+			return -1;
+		}
+		match = i;
+	}
+
+	return match;
+}
+
+static qboolean IN_LoadBSPInfoFromPath(const char *path, in_map_bsp_t *bsp, char *reason, size_t reason_size)
+{
+	if (!(Sys_FileType(path) & FS_ENT_FILE))
+	{
+		q_snprintf(reason, reason_size, "matching .bsp was not found");
+		return false;
+	}
+	if (q_strlcpy(bsp->path, path, sizeof(bsp->path)) >= sizeof(bsp->path))
+	{
+		q_snprintf(reason, reason_size, "matching .bsp path is too long");
+		return false;
+	}
+	IN_NormalizeDroppedPath(bsp->path);
+	COM_StripExtension(COM_SkipPath(bsp->path), bsp->basename, sizeof(bsp->basename));
+	bsp->valid = IN_ValidateBSPFile(bsp->path, bsp, reason, reason_size);
+	return bsp->valid;
+}
+
+static qboolean IN_FindExternalBSPForSidecar(const in_map_sidecar_t *sidecar, in_map_bsp_t *bsp, char *reason, size_t reason_size)
+{
+	char	root[MAX_OSPATH];
+	char	candidate[MAX_OSPATH];
+	char	invalid_reason[128];
+	qboolean saw_invalid = false;
+	int	result;
+
+	COM_StripExtension(sidecar->path, root, sizeof(root));
+
+	result = q_snprintf(candidate, sizeof(candidate), "%s/maps/%s.bsp", com_gamedir, sidecar->basename);
+	if (result >= 0 && (size_t)result < sizeof(candidate))
+	{
+		IN_NormalizeDroppedPath(candidate);
+		if (IN_LoadBSPInfoFromPath(candidate, bsp, invalid_reason, sizeof(invalid_reason)))
+			return true;
+		if (Sys_FileType(candidate) & FS_ENT_FILE)
+			saw_invalid = true;
+	}
+
+	result = q_snprintf(candidate, sizeof(candidate), "%s.bsp", root);
+	if (result >= 0 && (size_t)result < sizeof(candidate))
+	{
+		if (IN_LoadBSPInfoFromPath(candidate, bsp, invalid_reason, sizeof(invalid_reason)))
+			return true;
+		if (Sys_FileType(candidate) & FS_ENT_FILE)
+			saw_invalid = true;
+	}
+
+	result = q_snprintf(candidate, sizeof(candidate), "%s.BSP", root);
+	if (result >= 0 && (size_t)result < sizeof(candidate))
+	{
+		if (IN_LoadBSPInfoFromPath(candidate, bsp, invalid_reason, sizeof(invalid_reason)))
+			return true;
+		if (Sys_FileType(candidate) & FS_ENT_FILE)
+			saw_invalid = true;
+	}
+
+	if (saw_invalid)
+		q_snprintf(reason, reason_size, "matching .bsp is invalid: %s", invalid_reason);
+	else
+		q_snprintf(reason, reason_size, "matching .bsp was not found");
+	return false;
+}
+
+static qboolean IN_TryInstallAdjacentLITForBSP(const in_map_bsp_t *bsp, const char *lit_desc)
+{
+	in_map_sidecar_t lit;
+	char	reason[128];
+	char	relative_path[MAX_OSPATH];
+	char	dest_path[MAX_OSPATH];
+	qboolean result;
+
+	if (!bsp->installed)
+		return false;
+	if (bsp->using_existing && !bsp->existing_matches_source)
+	{
+		Con_Printf("Skipping adjacent .lit: existing .bsp differs from pasted .bsp.\n");
+		return false;
+	}
+
+	COM_StripExtension(bsp->path, lit.path, sizeof(lit.path));
+	if ((size_t)q_strlcat(lit.path, ".lit", sizeof(lit.path)) >= sizeof(lit.path))
+		return false;
+	if (!(Sys_FileType(lit.path) & FS_ENT_FILE))
+	{
+		COM_StripExtension(bsp->path, lit.path, sizeof(lit.path));
+		if ((size_t)q_strlcat(lit.path, ".LIT", sizeof(lit.path)) >= sizeof(lit.path))
+			return false;
+		if (!(Sys_FileType(lit.path) & FS_ENT_FILE))
+			return false;
+	}
+	q_strlcpy(lit.basename, bsp->basename, sizeof(lit.basename));
+
+	if (!IN_ValidateLITFile(lit.path, bsp, reason, sizeof(reason)))
+	{
+		Con_Printf("Skipping invalid adjacent .lit %s: %s\n", COM_SkipPath(lit.path), reason);
+		return false;
+	}
+	if (!IN_BuildMapInstallPaths(bsp->basename, ".lit", relative_path, sizeof(relative_path), dest_path, sizeof(dest_path)))
+		return false;
+
+	result = IN_CopyExternalFileToMapPath(lit.path, lit_desc, relative_path, dest_path, NULL);
+	return result;
+}
+
+static qboolean IN_InstallMapLIT(const in_map_sidecar_t *lit, const in_map_bsp_t *bsp, const char *dest_basename, const char *lit_desc)
+{
+	char	reason[128];
+	char	relative_path[MAX_OSPATH];
+	char	dest_path[MAX_OSPATH];
+
+	if (!IN_ValidateLITFile(lit->path, bsp, reason, sizeof(reason)))
+	{
+		Con_Printf("Skipping invalid .lit %s: %s\n", COM_SkipPath(lit->path), reason);
+		return false;
+	}
+	if (!IN_BuildMapInstallPaths(dest_basename, ".lit", relative_path, sizeof(relative_path), dest_path, sizeof(dest_path)))
+		return false;
+	return IN_CopyExternalFileToMapPath(lit->path, lit_desc, relative_path, dest_path, NULL);
+}
+
+static qboolean IN_InstallMapENT(const in_map_sidecar_t *ent, const in_map_bsp_t *bsp, const char *dest_basename, const char *ent_desc)
+{
+	char	reason[128];
+	char	relative_path[MAX_OSPATH];
+	char	dest_path[MAX_OSPATH];
+
+	if (!bsp)
+	{
+		Con_Printf("Skipping .ent %s: matching .bsp is missing.\n", COM_SkipPath(ent->path));
+		return false;
+	}
+	if (!IN_ValidateENTFile(ent->path, reason, sizeof(reason)))
+	{
+		Con_Printf("Skipping invalid .ent %s: %s\n", COM_SkipPath(ent->path), reason);
+		return false;
+	}
+	if (!IN_BuildMapInstallPaths(dest_basename, ".ent", relative_path, sizeof(relative_path), dest_path, sizeof(dest_path)))
+		return false;
+	return IN_CopyExternalFileToMapPath(ent->path, ent_desc, relative_path, dest_path, NULL);
+}
+
+static qboolean IN_InstallMapVIS(const in_map_sidecar_t *vis, const in_map_bsp_t *bsp, const char *dest_basename, const char *vis_desc)
+{
+	char	reason[128];
+	char	relative_path[MAX_OSPATH];
+	char	dest_path[MAX_OSPATH];
+
+	if (!bsp)
+	{
+		Con_Printf("Skipping .vis %s: matching .bsp is missing.\n", COM_SkipPath(vis->path));
+		return false;
+	}
+	if (!IN_ValidateVISFile(vis->path, dest_basename, reason, sizeof(reason)))
+	{
+		Con_Printf("Skipping invalid .vis %s: %s\n", COM_SkipPath(vis->path), reason);
+		return false;
+	}
+	if (!IN_BuildMapInstallPaths(dest_basename, ".vis", relative_path, sizeof(relative_path), dest_path, sizeof(dest_path)))
+		return false;
+	return IN_CopyExternalFileToMapPath(vis->path, vis_desc, relative_path, dest_path, NULL);
+}
+
+static qboolean IN_TryInstallAdjacentENTForBSP(const in_map_bsp_t *bsp, const char *ent_desc)
+{
+	in_map_sidecar_t ent;
+
+	if (!bsp->installed)
+		return false;
+	if (bsp->using_existing && !bsp->existing_matches_source)
+	{
+		Con_Printf("Skipping adjacent .ent: existing .bsp differs from pasted .bsp.\n");
+		return false;
+	}
+
+	COM_StripExtension(bsp->path, ent.path, sizeof(ent.path));
+	if ((size_t)q_strlcat(ent.path, ".ent", sizeof(ent.path)) >= sizeof(ent.path))
+		return false;
+	if (!(Sys_FileType(ent.path) & FS_ENT_FILE))
+	{
+		COM_StripExtension(bsp->path, ent.path, sizeof(ent.path));
+		if ((size_t)q_strlcat(ent.path, ".ENT", sizeof(ent.path)) >= sizeof(ent.path))
+			return false;
+		if (!(Sys_FileType(ent.path) & FS_ENT_FILE))
+			return false;
+	}
+	q_strlcpy(ent.basename, bsp->basename, sizeof(ent.basename));
+	return IN_InstallMapENT(&ent, bsp, bsp->basename, ent_desc);
+}
+
+static qboolean IN_TryInstallAdjacentVISForBSP(const in_map_bsp_t *bsp, const char *vis_desc)
+{
+	in_map_sidecar_t vis;
+
+	if (!bsp->installed)
+		return false;
+	if (bsp->using_existing && !bsp->existing_matches_source)
+	{
+		Con_Printf("Skipping adjacent .vis: existing .bsp differs from pasted .bsp.\n");
+		return false;
+	}
+
+	COM_StripExtension(bsp->path, vis.path, sizeof(vis.path));
+	if ((size_t)q_strlcat(vis.path, ".vis", sizeof(vis.path)) >= sizeof(vis.path))
+		return false;
+	if (!(Sys_FileType(vis.path) & FS_ENT_FILE))
+	{
+		COM_StripExtension(bsp->path, vis.path, sizeof(vis.path));
+		if ((size_t)q_strlcat(vis.path, ".VIS", sizeof(vis.path)) >= sizeof(vis.path))
+			return false;
+		if (!(Sys_FileType(vis.path) & FS_ENT_FILE))
+			return false;
+	}
+	q_strlcpy(vis.basename, bsp->basename, sizeof(vis.basename));
+	return IN_InstallMapVIS(&vis, bsp, bsp->basename, vis_desc);
+}
+
+static qboolean IN_IsMapAssetExtension(const char *extension)
+{
+	return !q_strcasecmp(extension, "bsp") || !q_strcasecmp(extension, "lit") ||
+		!q_strcasecmp(extension, "ent") || !q_strcasecmp(extension, "vis");
+}
+
+static qboolean IN_IsMapAssetFile(const char *path)
+{
+	char	normalized_path[MAX_OSPATH];
+
+	if (!path || !*path)
+		return false;
+	if (q_strlcpy(normalized_path, path, sizeof(normalized_path)) >= sizeof(normalized_path))
+		return false;
+	IN_NormalizeDroppedPath(normalized_path);
+	return IN_IsMapAssetExtension(COM_FileGetExtension(normalized_path));
+}
+
+static qboolean IN_HasMapAssetFiles(char **paths, int count)
+{
+	int i;
+
+	for (i = 0; i < count; ++i)
+	{
+		if (IN_IsMapAssetFile(paths[i]))
+			return true;
+	}
+	return false;
+}
+
+static qboolean IN_IsLegacyExternalExtension(const char *extension)
+{
+	return !q_strcasecmp(extension, "dem") || !q_strcasecmp(extension, "loc");
+}
+
+static qboolean IN_IsLegacyExternalFile(const char *path)
+{
+	char	normalized_path[MAX_OSPATH];
+
+	if (!path || !*path)
+		return false;
+	if (q_strlcpy(normalized_path, path, sizeof(normalized_path)) >= sizeof(normalized_path))
+		return false;
+	IN_NormalizeDroppedPath(normalized_path);
+	return IN_IsLegacyExternalExtension(COM_FileGetExtension(normalized_path));
+}
+
+static qboolean IN_ResolveMapSidecarBSP(const in_map_sidecar_t *sidecar, const char *extension, const in_map_bsp_t *bsps, int bsp_count, in_map_bsp_t *external_bsp, const in_map_bsp_t **paired_bsp, const char **dest_basename)
+{
+	char reason[128];
+	qboolean ambiguous;
+	int bsp_index;
+
+	*paired_bsp = NULL;
+	*dest_basename = NULL;
+
+	bsp_index = IN_FindBatchBSPForBasename(sidecar->basename, bsps, bsp_count, &ambiguous);
+	if (ambiguous)
+	{
+		Con_Printf("Skipping %s %s: ambiguous matching .bsp in batch.\n", extension, COM_SkipPath(sidecar->path));
+		return false;
+	}
+	if (bsp_index >= 0)
+	{
+		if (!bsps[bsp_index].installed)
+		{
+			Con_Printf("Skipping %s %s: matching .bsp was not installed.\n", extension, COM_SkipPath(sidecar->path));
+			return false;
+		}
+		if (bsps[bsp_index].using_existing && !bsps[bsp_index].existing_matches_source)
+		{
+			Con_Printf("Skipping %s %s: existing .bsp differs from pasted .bsp.\n", extension, COM_SkipPath(sidecar->path));
+			return false;
+		}
+		*paired_bsp = &bsps[bsp_index];
+		*dest_basename = bsps[bsp_index].basename;
+		return true;
+	}
+
+	memset(external_bsp, 0, sizeof(*external_bsp));
+	if (!IN_FindExternalBSPForSidecar(sidecar, external_bsp, reason, sizeof(reason)))
+	{
+		Con_Printf("Skipping orphan %s %s: %s\n", extension, COM_SkipPath(sidecar->path), reason);
+		return false;
+	}
+
+	*paired_bsp = external_bsp;
+	*dest_basename = external_bsp->basename;
+	return true;
+}
+
+static qboolean IN_AddMapSidecar(in_map_sidecar_t *sidecars, int *sidecar_count, const char *normalized_path, const char *extension, const char *file_desc, int *skipped_count)
+{
+	in_map_sidecar_t *sidecar = &sidecars[(*sidecar_count)++];
+
+	q_strlcpy(sidecar->path, normalized_path, sizeof(sidecar->path));
+	COM_StripExtension(COM_SkipPath(normalized_path), sidecar->basename, sizeof(sidecar->basename));
+	if (!sidecar->basename[0] || sidecar->basename[0] == '.')
+	{
+		Con_Printf("Skipping %s with invalid filename: %s\n", extension, COM_SkipPath(normalized_path));
+		--(*sidecar_count);
+		++(*skipped_count);
+		return false;
+	}
+	return true;
+}
+
+static qboolean IN_InstallMapFiles(char **paths, int path_count, const char *batch_desc, const char *file_desc, const char *bsp_desc, const char *lit_desc, const char *ent_desc, const char *vis_desc, qboolean *installed_any)
+{
+	in_map_bsp_t	*bsps = NULL;
+	in_map_sidecar_t	*lits = NULL;
+	in_map_sidecar_t	*ents = NULL;
+	in_map_sidecar_t	*vises = NULL;
+	int	i;
+	int	bsp_count = 0;
+	int	lit_count = 0;
+	int	ent_count = 0;
+	int	vis_count = 0;
+	int	valid_bsp_count = 0;
+	int	ready_bsp_count = 0;
+	int	ready_lit_count = 0;
+	int	ready_ent_count = 0;
+	int	ready_vis_count = 0;
+	int	skipped_count = 0;
+	int	auto_run_bsp = -1;
+	qboolean	found_map_asset = false;
+
+	if (installed_any)
+		*installed_any = false;
+
+	if (!batch_desc || !*batch_desc)
+		batch_desc = "Map";
+	if (!file_desc || !*file_desc)
+		file_desc = "map file";
+	if (!bsp_desc || !*bsp_desc)
+		bsp_desc = "map .bsp";
+	if (!lit_desc || !*lit_desc)
+		lit_desc = "map .lit";
+	if (!ent_desc || !*ent_desc)
+		ent_desc = "map .ent";
+	if (!vis_desc || !*vis_desc)
+		vis_desc = "map .vis";
+
+	if (!paths || path_count <= 0)
+		return false;
+	if ((size_t)path_count > (size_t)Q_MAXINT / sizeof(*bsps) ||
+		(size_t)path_count > (size_t)Q_MAXINT / sizeof(*lits) ||
+		(size_t)path_count > (size_t)Q_MAXINT / sizeof(*ents) ||
+		(size_t)path_count > (size_t)Q_MAXINT / sizeof(*vises))
+	{
+		Con_Printf("Too many map files.\n");
+		return true;
+	}
+
+	bsps = (in_map_bsp_t *) Z_Malloc(path_count * (int)sizeof(*bsps));
+	lits = (in_map_sidecar_t *) Z_Malloc(path_count * (int)sizeof(*lits));
+	ents = (in_map_sidecar_t *) Z_Malloc(path_count * (int)sizeof(*ents));
+	vises = (in_map_sidecar_t *) Z_Malloc(path_count * (int)sizeof(*vises));
+
+	for (i = 0; i < path_count; ++i)
+	{
+		char	normalized_path[MAX_OSPATH];
+		const char *extension;
+
+		if (!paths[i] || !*paths[i])
+			continue;
+		if (q_strlcpy(normalized_path, paths[i], sizeof(normalized_path)) >= sizeof(normalized_path))
+		{
+			Con_Printf("Skipping %s with too-long path.\n", file_desc);
+			++skipped_count;
+			continue;
+		}
+		IN_NormalizeDroppedPath(normalized_path);
+		extension = COM_FileGetExtension(normalized_path);
+
+		if (!q_strcasecmp(extension, "bsp"))
+		{
+			in_map_bsp_t *bsp = &bsps[bsp_count++];
+			char reason[128];
+
+			found_map_asset = true;
+			q_strlcpy(bsp->path, normalized_path, sizeof(bsp->path));
+			COM_StripExtension(COM_SkipPath(normalized_path), bsp->basename, sizeof(bsp->basename));
+			if (!bsp->basename[0] || bsp->basename[0] == '.')
+			{
+				Con_Printf("Skipping .bsp with invalid filename: %s\n", COM_SkipPath(normalized_path));
+				--bsp_count;
+				++skipped_count;
+				continue;
+			}
+			bsp->valid = IN_ValidateBSPFile(bsp->path, bsp, reason, sizeof(reason));
+			if (bsp->valid)
+			{
+				++valid_bsp_count;
+				auto_run_bsp = bsp_count - 1;
+			}
+			else
+			{
+				Con_Printf("Skipping invalid .bsp %s: %s\n", COM_SkipPath(normalized_path), reason);
+				++skipped_count;
+			}
+		}
+		else if (!q_strcasecmp(extension, "lit"))
+		{
+			found_map_asset = true;
+			IN_AddMapSidecar(lits, &lit_count, normalized_path, ".lit", file_desc, &skipped_count);
+		}
+		else if (!q_strcasecmp(extension, "ent"))
+		{
+			found_map_asset = true;
+			IN_AddMapSidecar(ents, &ent_count, normalized_path, ".ent", file_desc, &skipped_count);
+		}
+		else if (!q_strcasecmp(extension, "vis"))
+		{
+			found_map_asset = true;
+			IN_AddMapSidecar(vises, &vis_count, normalized_path, ".vis", file_desc, &skipped_count);
+		}
+		else if (path_count > 1 && !IN_IsLegacyExternalExtension(extension))
+		{
+			Con_Printf("Unsupported %s: %s\n", file_desc, COM_SkipPath(normalized_path));
+			++skipped_count;
+		}
+	}
+
+	for (i = 0; i < bsp_count; ++i)
+	{
+		if (!bsps[i].valid)
+			continue;
+		if (!IN_BuildMapInstallPaths(bsps[i].basename, ".bsp", bsps[i].relative_path, sizeof(bsps[i].relative_path), bsps[i].dest_path, sizeof(bsps[i].dest_path)))
+		{
+			++skipped_count;
+			continue;
+		}
+		bsps[i].installed = IN_CopyExternalFileToMapPath(bsps[i].path, bsp_desc, bsps[i].relative_path, bsps[i].dest_path, &bsps[i].using_existing);
+		if (bsps[i].installed && bsps[i].using_existing)
+		{
+			in_map_bsp_t dest_bsp;
+			char reason[128];
+
+			memset(&dest_bsp, 0, sizeof(dest_bsp));
+			if (!IN_ExternalFilesMatch(bsps[i].path, bsps[i].dest_path, &bsps[i].existing_matches_source))
+				bsps[i].existing_matches_source = false;
+			if (!IN_LoadBSPInfoFromPath(bsps[i].dest_path, &dest_bsp, reason, sizeof(reason)))
+			{
+				Con_Printf("Skipping .bsp %s: existing destination is invalid: %s\n", COM_SkipPath(bsps[i].path), reason);
+				bsps[i].installed = false;
+			}
+			else
+			{
+				bsps[i].light_lump_len = dest_bsp.light_lump_len;
+			}
+		}
+		if (bsps[i].installed)
+			++ready_bsp_count;
+		else
+			++skipped_count;
+	}
+
+	for (i = 0; i < lit_count; ++i)
+	{
+		in_map_bsp_t external_bsp;
+		const in_map_bsp_t *paired_bsp = NULL;
+		const char *dest_basename = NULL;
+
+		if (!IN_ResolveMapSidecarBSP(&lits[i], ".lit", bsps, bsp_count, &external_bsp, &paired_bsp, &dest_basename))
+		{
+			++skipped_count;
+			continue;
+		}
+
+		if (IN_InstallMapLIT(&lits[i], paired_bsp, dest_basename, lit_desc))
+			++ready_lit_count;
+		else
+			++skipped_count;
+	}
+
+	for (i = 0; i < ent_count; ++i)
+	{
+		in_map_bsp_t external_bsp;
+		const in_map_bsp_t *paired_bsp = NULL;
+		const char *dest_basename = NULL;
+
+		if (!IN_ResolveMapSidecarBSP(&ents[i], ".ent", bsps, bsp_count, &external_bsp, &paired_bsp, &dest_basename))
+		{
+			++skipped_count;
+			continue;
+		}
+
+		if (IN_InstallMapENT(&ents[i], paired_bsp, dest_basename, ent_desc))
+			++ready_ent_count;
+		else
+			++skipped_count;
+	}
+
+	for (i = 0; i < vis_count; ++i)
+	{
+		in_map_bsp_t external_bsp;
+		const in_map_bsp_t *paired_bsp = NULL;
+		const char *dest_basename = NULL;
+
+		if (!IN_ResolveMapSidecarBSP(&vises[i], ".vis", bsps, bsp_count, &external_bsp, &paired_bsp, &dest_basename))
+		{
+			++skipped_count;
+			continue;
+		}
+
+		if (IN_InstallMapVIS(&vises[i], paired_bsp, dest_basename, vis_desc))
+			++ready_vis_count;
+		else
+			++skipped_count;
+	}
+
+	if (path_count == 1 && valid_bsp_count == 1 && lit_count == 0 && ent_count == 0 && vis_count == 0 && auto_run_bsp >= 0)
+	{
+		if (IN_TryInstallAdjacentLITForBSP(&bsps[auto_run_bsp], lit_desc))
+			++ready_lit_count;
+		if (IN_TryInstallAdjacentENTForBSP(&bsps[auto_run_bsp], ent_desc))
+			++ready_ent_count;
+		if (IN_TryInstallAdjacentVISForBSP(&bsps[auto_run_bsp], vis_desc))
+			++ready_vis_count;
+	}
+
+	if (ready_bsp_count > 0)
+		ExtraMaps_NewGame();
+	if (valid_bsp_count == 1 && auto_run_bsp >= 0 && bsps[auto_run_bsp].installed)
+	{
+		if (IN_IsSafeQuotedCommandArg(bsps[auto_run_bsp].basename))
+			Cbuf_AddText(va("map \"%s\"\n", bsps[auto_run_bsp].basename));
+		else
+			Con_Printf("Installed map, not auto-running because the filename contains command characters.\n");
+	}
+
+	if (found_map_asset)
+		Con_Printf("%s maps: %d .bsp ready, %d .lit ready, %d .ent ready, %d .vis ready, %d skipped.\n",
+			batch_desc, ready_bsp_count, ready_lit_count, ready_ent_count, ready_vis_count, skipped_count);
+	if (installed_any)
+		*installed_any = (ready_bsp_count > 0 || ready_lit_count > 0 || ready_ent_count > 0 || ready_vis_count > 0);
+
+	Z_Free(bsps);
+	Z_Free(lits);
+	Z_Free(ents);
+	Z_Free(vises);
+	return found_map_asset;
+}
+
+static qboolean IN_ProcessExternalFiles(char **paths, int count, const char *batch_desc, const char *file_desc, const char *bsp_desc, const char *lit_desc, const char *ent_desc, const char *vis_desc)
+{
+	qboolean handled = false;
+	qboolean handled_maps;
+	qboolean installed_any = false;
+	qboolean map_installed = false;
+	int i;
+
+	if (!paths || count <= 0)
+		return false;
+
+	handled_maps = IN_HasMapAssetFiles(paths, count) &&
+		IN_InstallMapFiles(paths, count, batch_desc, file_desc, bsp_desc, lit_desc, ent_desc, vis_desc, &map_installed);
+	if (handled_maps)
+		handled = true;
+
+	for (i = 0; i < count; ++i)
+	{
+		if (!paths[i])
+			continue;
+		if (handled_maps && !IN_IsLegacyExternalFile(paths[i]))
+			continue;
+		if (IN_InstallExternalFile(paths[i], file_desc))
+		{
+			handled = true;
+			installed_any = true;
+		}
+	}
+
+	if (map_installed || installed_any)
+		IN_PlayCopySound();
+
+	return handled;
+}
+
+qboolean IN_PasteClipboardFile (void)
+{
+	char	**clipboard_files;
+	int	count = 0;
+	qboolean handled = false;
+
+	clipboard_files = PL_GetClipboardFilePaths(&count);
+	if (!clipboard_files || count <= 0)
+	{
+		PL_FreeClipboardFilePaths(clipboard_files, count);
+		return false;
+	}
+
+	handled = IN_ProcessExternalFiles(clipboard_files, count, "Clipboard", "clipboard file",
+		"clipboard .bsp", "clipboard .lit", "clipboard .ent", "clipboard .vis");
+
+	PL_FreeClipboardFilePaths(clipboard_files, count);
+	return handled;
+}
+
+typedef struct
+{
+	char	**paths;
+	int	count;
+	int	capacity;
+	qboolean	active;
+} in_drop_batch_t;
+
+static in_drop_batch_t in_drop_batch;
+
+static void IN_ClearDropBatch(void)
+{
+	int i;
+
+	if (in_drop_batch.paths)
+	{
+		for (i = 0; i < in_drop_batch.count; ++i)
+		{
+			if (in_drop_batch.paths[i])
+				Z_Free(in_drop_batch.paths[i]);
+		}
+		Z_Free(in_drop_batch.paths);
+	}
+
+	in_drop_batch.paths = NULL;
+	in_drop_batch.count = 0;
+	in_drop_batch.capacity = 0;
+	in_drop_batch.active = false;
+}
+
+static qboolean IN_AddDropBatchFile(const char *path)
+{
+	char	**new_paths;
+	char	*copy;
+	size_t	len;
+	size_t	needed;
+	size_t	max_paths;
+	int	new_capacity;
+
+	if (!path || !*path)
+		return false;
+
+	needed = (size_t)in_drop_batch.count + 1;
+	max_paths = (size_t)Q_MAXINT / sizeof(*new_paths);
+	if (needed > max_paths)
+	{
+		Con_Printf("Too many dropped files.\n");
+		return false;
+	}
+
+	if (in_drop_batch.count >= in_drop_batch.capacity)
+	{
+		new_capacity = in_drop_batch.capacity > 0 ? in_drop_batch.capacity : 4;
+		while ((size_t)new_capacity < needed)
+		{
+			if ((size_t)new_capacity > max_paths / 2)
+			{
+				new_capacity = (int)max_paths;
+				break;
+			}
+			new_capacity *= 2;
+		}
+
+		new_paths = (char **) Z_Malloc(new_capacity * (int)sizeof(*new_paths));
+		if (in_drop_batch.paths)
+		{
+			memcpy(new_paths, in_drop_batch.paths, in_drop_batch.count * sizeof(*new_paths));
+			Z_Free(in_drop_batch.paths);
+		}
+		in_drop_batch.paths = new_paths;
+		in_drop_batch.capacity = new_capacity;
+	}
+
+	len = strlen(path) + 1;
+	if (len > (size_t)Q_MAXINT)
+	{
+		Con_Printf("Skipping dropped file with too-long path.\n");
+		return false;
+	}
+
+	copy = (char *) Z_Malloc((int)len);
+	q_strlcpy(copy, path, len);
+
+	in_drop_batch.paths[in_drop_batch.count] = copy;
+	++in_drop_batch.count;
+	return true;
+}
+
+static qboolean IN_ProcessDroppedFiles(char **paths, int count)
+{
+	return IN_ProcessExternalFiles(paths, count, "Dropped", "dropped file",
+		"dropped .bsp", "dropped .lit", "dropped .ent", "dropped .vis");
+}
+
+static qboolean IN_FinishDropBatch(void)
+{
+	qboolean handled;
+
+	handled = IN_ProcessDroppedFiles(in_drop_batch.paths, in_drop_batch.count);
+	IN_ClearDropBatch();
+	return handled;
 }
 #else
 qboolean IN_PasteClipboardFile (void)
@@ -3239,7 +4578,7 @@ void IN_SendKeyEvents (void)
 	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
 	{
 		if (cl.modtype == 1)
-		{ 
+		{
 			char qfAFK[4] = { 193, 198, 203, '\0' }; // woods -- quake font red 'AFK'
 			sprintf(afktype, "%s", qfAFK);
 		}
@@ -3316,7 +4655,7 @@ void IN_SendKeyEvents (void)
 				windowhasfocus=false;
 				BGM_Pause(); // woods #usermute - music
 				Sound_Toggle_Mute_On_f(); // woods #mute -- adapted from Fitzquake Mark V
-				
+
 #ifdef MACOS_X_ACCELERATION_HACK
 				/* NEW: Force restore on focus lost to avoid timing issues */
 				if (originalMouseSpeed != -1)
@@ -3329,7 +4668,7 @@ void IN_SendKeyEvents (void)
 					Con_DPrintf("Focus lost: acceleration was not disabled (originalMouseSpeed=-1)\n");
 				}
 #endif
-				
+
 				if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
 				{
 					if (cl.modtype == 1 || cl.modtype == 4) // woods if afk is NO
@@ -3526,6 +4865,18 @@ void IN_SendKeyEvents (void)
 			if (!IN_RemapJoystick())
 				IN_SetupJoystick();
 			break;
+#if SDL_VERSION_ATLEAST(2, 0, 5)
+		case SDL_DROPBEGIN:
+			IN_ClearDropBatch();
+			in_drop_batch.active = true;
+			break;
+		case SDL_DROPCOMPLETE:
+			if (in_drop_batch.active)
+				IN_FinishDropBatch();
+			else
+				IN_ClearDropBatch();
+			break;
+#endif
 		case SDL_DROPFILE:
 		{
 			char	*dropped_file;
@@ -3533,7 +4884,19 @@ void IN_SendKeyEvents (void)
 			dropped_file = event.drop.file;
 			if (dropped_file)
 			{
-				IN_InstallExternalFile(dropped_file, "dropped file");
+#if SDL_VERSION_ATLEAST(2, 0, 5)
+				if (in_drop_batch.active)
+				{
+					IN_AddDropBatchFile(dropped_file);
+				}
+				else
+#endif
+				{
+					char *single_drop[1];
+
+					single_drop[0] = dropped_file;
+					IN_ProcessDroppedFiles(single_drop, 1);
+				}
 				SDL_free(dropped_file);
 				event.drop.file = NULL;
 			}
