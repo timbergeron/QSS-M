@@ -32,6 +32,7 @@ beam_t		cl_beams[MAX_BEAMS];
 static	vec3_t	playerbeam_end; // woods #truelight
 vec3_t	NULLVEC = { 0,0,0 }; // woods for #truelight
 void vectoangles(vec3_t vec, vec3_t ang); // woods for #truelight
+extern cvar_t v_viewheight;
 
 qboolean CL_BeamTrailIsLightning(const char *trailname) // woods #beamspoly
 {
@@ -630,6 +631,8 @@ void CL_UpdateTEnts (void)
 		if (b->entity == cl.viewentity && cl.entities)
 		{
 			VectorCopy (cl.entities[cl.viewentity].origin, b->start);
+			if (!chase_active.value)
+				b->start[2] += bound(-7, v_viewheight.value, 4);
 
 			// begin woods for truelightning #truelight
 
@@ -667,8 +670,6 @@ void CL_UpdateTEnts (void)
 				VectorCopy(cl.entities[cl.viewentity].origin, org);
 
 				org[2] += 16;
-				//	org[2] += bound(0, 16, 16);
-				//	org[2] += bound(-7, 0, 4);
 
 				VectorAdd(org, forward, b->end);
 

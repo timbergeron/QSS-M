@@ -60,6 +60,7 @@ cvar_t	v_iyaw_level = {"v_iyaw_level", "0.3", CVAR_NONE};
 cvar_t	v_iroll_level = {"v_iroll_level", "0.1", CVAR_NONE};
 cvar_t	v_ipitch_level = {"v_ipitch_level", "0.3", CVAR_NONE};
 
+cvar_t	v_viewheight = {"v_viewheight", "0", CVAR_ARCHIVE};
 cvar_t	v_idlescale = {"v_idlescale", "0", CVAR_NONE};
 
 cvar_t	crosshair = {"crosshair", "0", CVAR_ARCHIVE};
@@ -89,6 +90,31 @@ double	v_punchangles_times[2]; //spike -- times, to avoid assumptions...
 void SCR_SetupAutoID(void); // woods #autoid
 void SCR_DrawAutoID(void); // woods #autoid
 void SCR_DrawStatusIndicators(void); // woods #autoid
+
+static void V_Viewheight_Completion_f (cvar_t *cvar, const char *partial)
+{
+	int i;
+
+	(void)cvar;
+
+	for (i = -7; i <= 4; i++)
+	{
+		const char *type = NULL;
+		char value[8];
+
+		if (i == -7)
+			type = "lowest";
+		else if (i == -6)
+			type = "aim height";
+		else if (i == 0)
+			type = "default";
+		else if (i == 4)
+			type = "highest";
+
+		q_snprintf (value, sizeof(value), "%d", i);
+		Con_AddToTabList (value, partial, type, NULL);
+	}
+}
 
 /*
 ===============
@@ -1130,7 +1156,7 @@ void V_CalcRefdef (void)
 	int			i;
 	vec3_t		forward, right, up;
 	vec3_t		angles;
-	float		bob;
+	float		bob, height_adjustment;
 	static float oldz = 0;
 	static vec3_t punch = {0,0,0}; //johnfitz -- v_gunkick
 	float delta; //johnfitz -- v_gunkick
@@ -1149,10 +1175,17 @@ void V_CalcRefdef (void)
 	ent->angles[PITCH] = -cl.lerpangles[PITCH];	// the model should face the view dir // woods to lerp #smoothcam
 
 	bob = V_CalcBob ();
+	if (v_viewheight.value)
+	{
+		height_adjustment = bound(-7, v_viewheight.value, 4);
+		bob = 0;
+	}
+	else
+		height_adjustment = bob;
 
 // refresh position
 	VectorCopy (ent->origin, r_refdef.vieworg);
-	r_refdef.vieworg[2] += cl.stats[STAT_VIEWHEIGHT] + bob;
+	r_refdef.vieworg[2] += cl.stats[STAT_VIEWHEIGHT] + height_adjustment;
 
 // never let it sit exactly on a node line, because a water plane can
 // dissapear when viewed with the eye exactly on it.
@@ -1329,7 +1362,7 @@ void V_CalcRefdef (void)
 
 				// Override camera to target player POV.
 				VectorCopy (targetent->origin, r_refdef.vieworg);
-				r_refdef.vieworg[2] += DEFAULT_VIEWHEIGHT;
+				r_refdef.vieworg[2] += DEFAULT_VIEWHEIGHT + bound(-7, v_viewheight.value, 4);
 				r_refdef.vieworg[0] += 1.0/32;
 				r_refdef.vieworg[1] += 1.0/32;
 				r_refdef.vieworg[2] += 1.0/32;
@@ -1434,6 +1467,8 @@ void V_Init (void)
 	Cvar_RegisterVariable (&v_iroll_level);
 	Cvar_RegisterVariable (&v_ipitch_level);
 
+	Cvar_RegisterVariable (&v_viewheight);
+	Cvar_SetCompletion (&v_viewheight, &V_Viewheight_Completion_f);
 	Cvar_RegisterVariable (&v_idlescale);
 	Cvar_RegisterVariable (&crosshair);
 	Cvar_RegisterVariable (&gl_cshiftpercent);
