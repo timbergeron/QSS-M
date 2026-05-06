@@ -4456,7 +4456,7 @@ typedef struct player_autoid_s
 	scoreboard_t* player;
 } autoid_player_t;
 
-static	autoid_player_t	autoids[MAX_SCOREBOARDNAME];
+static	autoid_player_t	autoids[MAX_SCOREBOARD];
 static	int		autoid_count;
 
 typedef struct item_vis_s {
@@ -4734,6 +4734,9 @@ void SCR_SetupAutoID(void)
 			continue;
 
 		if (!skip_vis && !TP_IsPlayerVisible(base_origin))
+			continue;
+
+		if (autoid_count >= (int)(sizeof(autoids) / sizeof(autoids[0])))
 			continue;
 
 		id = &autoids[autoid_count];

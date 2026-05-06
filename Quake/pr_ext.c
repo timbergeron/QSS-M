@@ -7638,6 +7638,9 @@ static void PF_cl_setproperty(void)
 }
 
 void V_PolyBlend (void);
+void SCR_SetupAutoID(void);
+void SCR_DrawAutoID(void);
+void SCR_DrawStatusIndicators(void);
 void SCR_DrawCrosshair (void);
 float CalcFovy (float fov_x, float width, float height);
 extern cvar_t scr_fov;
@@ -7682,6 +7685,12 @@ static void PF_cl_renderscene(void)
 		return;	//can't draw nuffin...
 
 	R_RenderView();
+	if (qcvm == &cl.qcvm && r_refdef.drawworld)
+	{
+		SCR_SetupAutoID();
+		SCR_DrawAutoID();
+		SCR_DrawStatusIndicators();
+	}
 	if (r_refdef.drawworld)
 		V_PolyBlend ();
 
