@@ -4185,26 +4185,155 @@ void SCR_DrawCrosshair (void)
 
 /*
 ================
-LaserSight_TraceBSPSubmodels - trace against visible BSP submodels (doors, plats, etc.)
+Auto-ID BSP submodel blocker cache
 ================
 */
-static void LaserSight_TraceBSPSubmodels (vec3_t start, vec3_t wall)
+static qmodel_t *scr_autoid_bmodel_worldmodel;
+static byte *scr_autoid_bmodel_blockers;
+static int scr_autoid_bmodel_blocker_count;
+
+static void SCR_ClearAutoIDBModelBlockers (void)
+{
+	free (scr_autoid_bmodel_blockers);
+	scr_autoid_bmodel_blockers = NULL;
+	scr_autoid_bmodel_blocker_count = 0;
+	scr_autoid_bmodel_worldmodel = NULL;
+}
+
+static qboolean SCR_AutoIDBModelClassBlocks (const char *classname)
+{
+	if (!classname || !classname[0])
+		return false;
+
+	return q_strcasestr(classname, "door") != NULL;
+}
+
+static void SCR_MarkAutoIDBModelBlocker (const char *modelname)
+{
+	int submodel;
+
+	if (!modelname || modelname[0] != '*' || !scr_autoid_bmodel_blockers)
+		return;
+
+	submodel = Q_atoi(modelname + 1);
+	if (submodel <= 0 || submodel >= scr_autoid_bmodel_blocker_count)
+		return;
+
+	scr_autoid_bmodel_blockers[submodel >> 3] |= (byte)(1u << (submodel & 7));
+}
+
+static void SCR_BuildAutoIDBModelBlockers (void)
+{
+	const char *data;
+	int bytes;
+	qboolean parse_failed;
+
+	if (scr_autoid_bmodel_worldmodel == cl.worldmodel)
+		return;
+
+	SCR_ClearAutoIDBModelBlockers();
+	scr_autoid_bmodel_worldmodel = cl.worldmodel;
+
+	if (!cl.worldmodel || cl.worldmodel->numsubmodels <= 1 || !cl.worldmodel->entities)
+		return;
+
+	scr_autoid_bmodel_blocker_count = cl.worldmodel->numsubmodels;
+	bytes = (scr_autoid_bmodel_blocker_count + 7) >> 3;
+	scr_autoid_bmodel_blockers = (byte *)calloc(1, (size_t)bytes);
+	if (!scr_autoid_bmodel_blockers)
+		return;
+
+	data = cl.worldmodel->entities;
+	parse_failed = false;
+	while ((data = COM_Parse(data)) != NULL)
+	{
+		char classname[128], modelname[64];
+
+		if (com_token[0] != '{')
+			break;
+
+		classname[0] = 0;
+		modelname[0] = 0;
+		while (1)
+		{
+			char key[128];
+
+			data = COM_Parse(data);
+			if (!data)
+			{
+				parse_failed = true;
+				break;
+			}
+			if (com_token[0] == '}')
+				break;
+
+			q_strlcpy(key, com_token, sizeof(key));
+			data = COM_ParseEx(data, CPE_ALLOWTRUNC);
+			if (!data)
+			{
+				parse_failed = true;
+				break;
+			}
+
+			if (!q_strcasecmp(key, "classname"))
+				q_strlcpy(classname, com_token, sizeof(classname));
+			else if (!q_strcasecmp(key, "model"))
+				q_strlcpy(modelname, com_token, sizeof(modelname));
+		}
+
+		if (parse_failed)
+			break;
+		if (SCR_AutoIDBModelClassBlocks(classname))
+			SCR_MarkAutoIDBModelBlocker(modelname);
+	}
+}
+
+static qboolean SCR_AutoIDBModelMarked (const qmodel_t *model)
+{
+	unsigned int submodel;
+
+	SCR_BuildAutoIDBModelBlockers();
+
+	if (!model || model->submodelof != cl.worldmodel || !scr_autoid_bmodel_blockers)
+		return false;
+
+	submodel = model->submodelidx;
+	if (submodel >= (unsigned int)scr_autoid_bmodel_blocker_count)
+		return false;
+
+	return (scr_autoid_bmodel_blockers[submodel >> 3] & (1u << (submodel & 7))) != 0;
+}
+
+static qboolean SCR_AutoIDBModelCanBlock (const entity_t *ent)
+{
+	return SCR_AutoIDBModelMarked(ent->model);
+}
+
+/*
+================
+SCR_TraceBSPSubmodels - trace against visible BSP submodels (doors, plats, etc.)
+================
+*/
+static qboolean SCR_TraceBSPSubmodels (vec3_t start, vec3_t impact, qboolean autoid_blockers_only)
 {
 	int i;
 	trace_t trace;
 	float best_dist;
-	vec3_t adjusted_start, adjusted_end, end;
+	vec3_t adjusted_start, adjusted_end, end, ray_delta;
+	qboolean hit_bmodel = false;
+	extern void R_GetEntityBounds (const entity_t *e, vec3_t mins, vec3_t maxs);
 
 	if (!cl.worldmodel || cls.signon < SIGNONS)
-		return;
+		return false;
 
-	VectorCopy (wall, end);
-	best_dist = VecLength2 (start, wall);
+	VectorCopy (impact, end);
+	VectorSubtract (end, start, ray_delta);
+	best_dist = VecLength2 (start, impact);
 
 	for (i = 0; i < cl_numvisedicts; i++)
 	{
 		entity_t *ent = cl_visedicts[i];
-		vec3_t f, r, u, temp;
+		vec3_t f, r, u, temp, mins, maxs;
 		qboolean rotated;
 
 		if (!ent || !ent->model)
@@ -4212,6 +4341,12 @@ static void LaserSight_TraceBSPSubmodels (vec3_t start, vec3_t wall)
 		if (ent->model->type != mod_brush)
 			continue;
 		if (ent->model->surfaces != cl.worldmodel->surfaces)
+			continue;
+		if (autoid_blockers_only && !SCR_AutoIDBModelCanBlock(ent))
+			continue;
+
+		R_GetEntityBounds(ent, mins, maxs);
+		if (!RayVsBox(start, ray_delta, mins, maxs, NULL))
 			continue;
 
 		VectorSubtract (start, ent->origin, adjusted_start);
@@ -4239,6 +4374,9 @@ static void LaserSight_TraceBSPSubmodels (vec3_t start, vec3_t wall)
 		VectorCopy (adjusted_end, trace.endpos);
 		SV_RecursiveHullCheck (&ent->model->hulls[0], adjusted_start, adjusted_end, &trace, CONTENTMASK_ANYSOLID);
 
+		if (trace.startsolid)
+			continue;
+
 		if (trace.fraction < 1)
 		{
 			vec3_t hit;
@@ -4257,13 +4395,18 @@ static void LaserSight_TraceBSPSubmodels (vec3_t start, vec3_t wall)
 				VectorAdd (trace.endpos, ent->origin, hit);
 
 			dist = VecLength2 (start, hit);
+			if (dist <= 1.0f)
+				continue;
 			if (dist < best_dist)
 			{
 				best_dist = dist;
-				VectorCopy (hit, wall);
+				VectorCopy (hit, impact);
+				hit_bmodel = true;
 			}
 		}
 	}
+
+	return hit_bmodel;
 }
 
 /*
@@ -4294,7 +4437,7 @@ void LaserSight (void)
 	// find the spot the player is looking at
 	VectorMA(start, 4096, forward, crosshair);
 	TraceLine(start, crosshair, 0, wall);
-	LaserSight_TraceBSPSubmodels (start, wall);
+	SCR_TraceBSPSubmodels (start, wall, false);
 
 	if (viewmodel_stencil_bit)
 	{
@@ -4535,12 +4678,21 @@ int qglProject(float objx, float objy, float objz, float* model, float* proj, in
 	return 1;
 }
 
+static qboolean SCR_AutoIDTraceLine (vec3_t start, vec3_t end, vec3_t impact)
+{
+	TraceLine(start, end, 0, impact);
+	return SCR_TraceBSPSubmodels(start, impact, true);
+}
+
 qboolean TP_IsItemVisible(item_vis_t* visitem)
 {
-	vec3_t impact, end, v;
+	vec3_t impact, end, raw_end, v;
 	int i;
+	qboolean blocked;
 
-	TraceLine(visitem->vieworg, visitem->entorg, 0, impact); // trace from the viewer's origin to the target's position
+	blocked = SCR_AutoIDTraceLine(visitem->vieworg, visitem->entorg, impact); // trace from the viewer's origin to the target's position
+	if (blocked)
+		return false;
 
 	if (VecLength2(impact, visitem->entorg) <= visitem->radius) // did trace hit the target directly within the radius
 		return true; // Target is visible
@@ -4563,16 +4715,22 @@ qboolean TP_IsItemVisible(item_vis_t* visitem)
 
 	for (i = 0; i < num_offsets; i++) // Loop through the offsets
 	{
-		VectorAdd(visitem->entorg, offsets[i], end); // Compute the end point trace by adding the offset to the target's origin
+		VectorAdd(visitem->entorg, offsets[i], raw_end); // Compute the end point trace by adding the offset to the target's origin
+
+		// Check the full probe before pulling it toward the camera; otherwise a nearby door can be skipped.
+		if (SCR_AutoIDTraceLine(visitem->vieworg, raw_end, impact))
+			continue;
+
+		VectorCopy(raw_end, end);
 
 		VectorSubtract(end, visitem->vieworg, v); // Compute the direction vector from the viewer to the end point
 		VectorNormalize(v);
 
 		VectorMA(end, -visitem->radius, v, end); // Adjust the end point slightly towards the viewer to account for the target's radius
 
-		TraceLine(visitem->vieworg, end, 0, impact); // Perform the trace from the viewer's origin to the adjusted end point
+		blocked = SCR_AutoIDTraceLine(visitem->vieworg, end, impact); // Perform the trace from the viewer's origin to the adjusted end point
 
-		if (VecLength2(impact, end) <= visitem->radius) // Check if the trace hit within the target's radius
+		if (!blocked && VecLength2(impact, end) <= visitem->radius) // Check if the trace hit within the target's radius
 			return true; // Target is visible
 	}
 
