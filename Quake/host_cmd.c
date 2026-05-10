@@ -5329,7 +5329,7 @@ static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833
 Host_Resurrect_f -- woods #resurrect
 
 Bring the local player back to life exactly where they died,
-preserving inventory and giving 5 s of invulnerability.
+preserving inventory and giving brief invulnerability when supported.
 ==================
 */
 
@@ -5349,6 +5349,12 @@ static void Host_Resurrect_f (void)
 	if (pr_global_struct->deathmatch)      /* no cheats in deathmatch */
 		return;
 
+	if (sv_player->v.deadflag == DEAD_NO && sv_player->v.health > 0)
+	{
+		SV_ClientPrintf("You are not dead\n");
+		return;
+	}
+
 	/*----------------------------------------------------------------
 	 * 2. Snapshot the current state
 	 *----------------------------------------------------------------*/
@@ -5359,12 +5365,35 @@ static void Host_Resurrect_f (void)
 	float saved_ammo_nails = sv_player->v.ammo_nails;
 	float saved_ammo_rockets = sv_player->v.ammo_rockets;
 	float saved_ammo_cells = sv_player->v.ammo_cells;
-	int   saved_items = (int)sv_player->v.items;
+	float saved_currentammo = sv_player->v.currentammo;
+	string_t saved_weaponmodel = sv_player->v.weaponmodel;
+	/* items can carry IT_SIGIL4 (1u<<31), so signed casts can saturate
+	   or overflow on high-bit item sets and poison unrelated bits. */
+	unsigned saved_items = (unsigned)sv_player->v.items;
+	float saved_armortype = sv_player->v.armortype;
+	float saved_armorvalue = sv_player->v.armorvalue;
+
+	/* PutClientInServer would otherwise snap the view to spawnpoint angles. */
+	vec3_t saved_angles, saved_v_angle;
+	VectorCopy(sv_player->v.angles, saved_angles);
+	VectorCopy(sv_player->v.v_angle, saved_v_angle);
+
+	/* items2 is mission-pack/mod-only; snapshot only if defined */
+	int   saved_items2 = 0;
+	int   items2_ofs = ED_FindFieldOffset("items2");
+	if (items2_ofs >= 0)
+	{
+		val = GetEdictFieldValue(sv_player, items2_ofs);
+		if (val)
+			saved_items2 = (int)val->_float;
+		else
+			items2_ofs = -1;
+	}
 
 	VectorCopy(sv_player->v.origin, death_origin);
 
 	/*----------------------------------------------------------------
-	 * 3. Find a safe spot near the death position (TraceLine version)
+	 * 3. Find a safe spot near the death position
 	 *----------------------------------------------------------------*/
 #define STEP_RINGS   4               /* 0, 32, 64, 96 */
 #define STEP_RADIUS  32.0f
@@ -5372,7 +5401,7 @@ static void Host_Resurrect_f (void)
 		{  0,  0}, { 1,  0}, {-1,  0}, { 0,  1},
 		{  0, -1}, { 1,  1}, {-1,  1}, { 1, -1}, {-1, -1}
 	};
-	int ring, dir, found = 0;
+	int ring, dir, found = 0, found_ring = 0;
 
 	for (ring = 0; ring < STEP_RINGS && !found; ++ring)
 	{
@@ -5381,16 +5410,25 @@ static void Host_Resurrect_f (void)
 		for (dir = 0; dir < 9 && !found; ++dir)
 		{
 			vec3_t try_xy, above, below, impact;
+			trace_t ground_trace;
 
 			/* XY offset in this ring */
 			try_xy[0] = death_origin[0] + ring_xy[dir][0] * r;
 			try_xy[1] = death_origin[1] + ring_xy[dir][1] * r;
 			try_xy[2] = death_origin[2];
 
-			/* Trace 64 down from 64 up to find ground */
+			/* Trace 64 down from 64 up to find ground. Use the server trace
+			   path; client TraceLine relies on cl.worldmodel and is wrong for
+			   dedicated/remote server command handling. */
 			VectorCopy(try_xy, above);  above[2] += 64.0f;
 			VectorCopy(try_xy, below);  below[2] -= 64.0f;
-			TraceLine(above, below, 0.0f, impact);
+			ground_trace = SV_Move(above, vec3_origin, vec3_origin, below,
+				MOVE_NOMONSTERS, sv_player);
+			if (ground_trace.allsolid || ground_trace.startsolid ||
+				ground_trace.fraction >= 1.0f ||
+				ground_trace.plane.normal[2] <= 0.0f)
+				continue;
+			VectorCopy(ground_trace.endpos, impact);
 
 			/* Place the player 18 units above impact point */
 			VectorCopy(impact, safe_origin);
@@ -5398,9 +5436,19 @@ static void Host_Resurrect_f (void)
 
 			VectorCopy(safe_origin, sv_player->v.origin);
 			if (!SV_TestEntityPosition(sv_player))
+			{
 				found = 1;
+				found_ring = ring;
+			}
 		}
 	}
+
+#undef STEP_RADIUS
+#undef STEP_RINGS
+
+	/* Probing left sv_player->v.origin at the last test position; restore it
+	   so PutClientInServer sees the original spot. We reposition afterwards. */
+	VectorCopy(death_origin, sv_player->v.origin);
 
 	if (!found)
 	{
@@ -5410,30 +5458,48 @@ static void Host_Resurrect_f (void)
 	}
 
 	/*----------------------------------------------------------------
-	 * 4. Play resurrection sound
-	 *----------------------------------------------------------------*/
-	SV_StartSound(sv_player, sv_player->v.origin, 0,
-		"items/protect.wav", 255, 1.0f);
-
-	/*----------------------------------------------------------------
-	 * 5. Call QC PutClientInServer to reset player state
+	 * 4. Call QC PutClientInServer to reset player state
 	 *----------------------------------------------------------------*/
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->self = EDICT_TO_PROG(sv_player);
 	PR_ExecuteProgram(pr_global_struct->PutClientInServer);
 
+	/* PutClientInServer chose a spawnpoint; remember it as a final fallback
+	   in case our safe_origin doesn't fit the live player bbox (e.g. corpse
+	   was crushed against geometry, or a mod shrinks the corpse bbox). */
+	vec3_t spawnpoint_origin;
+	qboolean used_spawnpoint = false;
+	VectorCopy(sv_player->v.origin, spawnpoint_origin);
+
 	/*----------------------------------------------------------------
-	 * 6. Restore inventory, position, and health
+	 * 5. Restore inventory, position, and health
 	 *----------------------------------------------------------------*/
 	VectorCopy(safe_origin, sv_player->v.origin);
+	if (SV_TestEntityPosition(sv_player))
+	{
+		VectorCopy(spawnpoint_origin, sv_player->v.origin);
+		used_spawnpoint = true;
+		found_ring = 0;
+	}
 
 	sv_player->v.weapon = saved_weapon;
 	sv_player->v.ammo_shells = saved_ammo_shells;
 	sv_player->v.ammo_nails = saved_ammo_nails;
 	sv_player->v.ammo_rockets = saved_ammo_rockets;
 	sv_player->v.ammo_cells = saved_ammo_cells;
-	sv_player->v.items = saved_items | IT_INVULNERABILITY; /* keep pent */
-	host_client->powerup_warn_flags |= PWARN_GIVE;
+	sv_player->v.armortype = saved_armortype;
+	sv_player->v.armorvalue = saved_armorvalue;
+	/* The matching timers are cleared below. Drop temporary powerup item bits
+	   here so HUD/effect state cannot survive without a valid expiry timer. */
+	sv_player->v.items = saved_items &
+		~(IT_INVISIBILITY | IT_INVULNERABILITY | IT_SUIT | IT_QUAD);
+
+	if (items2_ofs >= 0)
+	{
+		val = GetEdictFieldValue(sv_player, items2_ofs);
+		if (val)
+			val->_float = (float)saved_items2;
+	}
 
 	sv_player->v.health = 100;
 	sv_player->v.max_health = 100;
@@ -5442,11 +5508,26 @@ static void Host_Resurrect_f (void)
 	sv_player->v.movetype = MOVETYPE_WALK;
 	sv_player->v.solid = SOLID_SLIDEBOX;
 	sv_player->v.flags = (int)sv_player->v.flags | (FL_CLIENT | FL_ONGROUND);
-	sv_player->v.effects = (int)sv_player->v.effects | EF_DIMLIGHT;
+	{
+		unsigned powerup_effects = EF_DIMLIGHT | EF_RED | EF_BLUE;
+		if (qcvm->brokeneffects)
+			powerup_effects |= EFQE_QUADLIGHT | EFQE_PENTLIGHT;
+
+		/* PutClientInServer usually clears effects, but keep this in step
+		   with the timer/item cleanup for mods that leave glow bits intact. */
+		sv_player->v.effects = (unsigned)sv_player->v.effects & ~powerup_effects;
+	}
 	sv_player->v.weaponframe = 0;
 
+	/* Restore facing so the resurrected player keeps looking where they died
+	   instead of snapping to the spawnpoint orientation. fixangle=1 makes
+	   the engine push the angles to the client. */
+	VectorCopy(saved_angles, sv_player->v.angles);
+	VectorCopy(saved_v_angle, sv_player->v.v_angle);
+	sv_player->v.fixangle = 1;
+
 	/*----------------------------------------------------------------
-	 * 7. Reset miscellaneous QC-only fields
+	 * 6. Reset miscellaneous QC-only fields
 	 *----------------------------------------------------------------*/
 	static const struct { const char* name; float value; } scalars[] = {
 		{"show_hostile",     0},
@@ -5455,14 +5536,17 @@ static void Host_Resurrect_f (void)
 		{"attack_finished",  0},
 	};
 	for (size_t s = 0; s < Q_COUNTOF(scalars); ++s)
-		if ((ofs = ED_FindFieldOffset(scalars[s].name)))
-			GetEdictFieldValue(sv_player, ofs)->_float =
-			(scalars[s].name[0] == 'a') ? qcvm->time + scalars[s].value
-			: scalars[s].value;
+	{
+		ofs = ED_FindFieldOffset(scalars[s].name);
+		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+			val->_float = (scalars[s].name[0] == 'a')
+				? qcvm->time + scalars[s].value
+				: scalars[s].value;
+	}
 
 	/* -----------------------------------------------------------------
- * clear temporary power-up timers (no helper function needed)
- * -----------------------------------------------------------------*/
+	 * clear temporary power-up timers
+	 * -----------------------------------------------------------------*/
 	static const char* timers[] = {
 		"super_damage_finished",
 		"radsuit_finished",
@@ -5474,66 +5558,104 @@ static void Host_Resurrect_f (void)
 	for (size_t k = 0; k < Q_COUNTOF(timers); ++k)
 	{
 		ofs = ED_FindFieldOffset(timers[k]);
-		if (ofs)                               /* field exists in this progs */
+		if (ofs >= 0)                          /* field exists in this progs */
 		{
 			val = GetEdictFieldValue(sv_player, ofs);
 			if (val)                           /* field is addressable       */
 				val->_float = 0.0f;
-					}
 		}
+	}
 
-	/* mission-pack friendly invulnerability timers */
+	/* Arm a 5s invulnerability via timer fields. Only set IT_INVULNERABILITY
+	   if invincible_finished exists; otherwise CheckPowerups has nothing to
+	   consult and the icon would persist indefinitely. */
+	qboolean invuln_armed = false;
 	ofs = ED_FindFieldOffset("invincible_finished");
-	if (ofs && (val = GetEdictFieldValue(sv_player, ofs)))
+	if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+	{
 		val->_float = qcvm->time + 5.0f;
+		invuln_armed = true;
+	}
 
-	ofs = ED_FindFieldOffset("invincible_time");
-	if (ofs && (val = GetEdictFieldValue(sv_player, ofs)))
-		val->_float = qcvm->time + 5.0f;
+	if (invuln_armed)
+	{
+		/* invincible_time is a stock-QC warning-cadence marker, not an expiry:
+		   pickups set it to 1 and use invincible_finished as the actual timer. */
+		ofs = ED_FindFieldOffset("invincible_time");
+		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+			val->_float = 1.0f;
+	}
 
 	/* pain cooldown reset */
 	ofs = ED_FindFieldOffset("pain_finished");
-	if (ofs && (val = GetEdictFieldValue(sv_player, ofs)))
+	if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
 		val->_float = 0.0f;
 
-
 	/*----------------------------------------------------------------
-	 * 8. Fix currentammo so the HUD is correct
+	 * 7. Sync currentammo and weaponmodel to the restored weapon
 	 *----------------------------------------------------------------*/
-	switch ((int)sv_player->v.weapon)
+	if (!Host_RunEntityFunction("W_SetCurrentAmmo", sv_player, NULL))
 	{
-	case IT_SHOTGUN:
-	case IT_SUPER_SHOTGUN:
-		sv_player->v.currentammo = sv_player->v.ammo_shells;  break;
+		sv_player->v.currentammo = saved_currentammo;
+		sv_player->v.weaponmodel = saved_weaponmodel;
 
-	case IT_NAILGUN:
-	case IT_SUPER_NAILGUN:
-	case RIT_LAVA_SUPER_NAILGUN:
-		sv_player->v.currentammo = sv_player->v.ammo_nails;   break;
+		/* Progs without W_SetCurrentAmmo: stock weapons can still derive the
+		   correct ammo counter. Custom weapons keep their saved values. */
+		switch ((int)sv_player->v.weapon)
+		{
+		case IT_SHOTGUN:
+		case IT_SUPER_SHOTGUN:
+			sv_player->v.currentammo = sv_player->v.ammo_shells;  break;
 
-	case IT_GRENADE_LAUNCHER:
-	case IT_ROCKET_LAUNCHER:
-	case RIT_MULTI_GRENADE:
-	case RIT_MULTI_ROCKET:
-		sv_player->v.currentammo = sv_player->v.ammo_rockets; break;
+		case IT_NAILGUN:
+		case IT_SUPER_NAILGUN:
+		case RIT_LAVA_SUPER_NAILGUN:
+			sv_player->v.currentammo = sv_player->v.ammo_nails;   break;
 
-	case IT_LIGHTNING:
-	case HIT_LASER_CANNON:
-	case HIT_MJOLNIR:
-		sv_player->v.currentammo = sv_player->v.ammo_cells;   break;
+		case IT_GRENADE_LAUNCHER:
+		case IT_ROCKET_LAUNCHER:
+		case RIT_MULTI_GRENADE:
+		case RIT_MULTI_ROCKET:
+			sv_player->v.currentammo = sv_player->v.ammo_rockets; break;
+
+		case IT_LIGHTNING:
+		case HIT_LASER_CANNON:
+		case HIT_MJOLNIR:
+			sv_player->v.currentammo = sv_player->v.ammo_cells;   break;
+		}
+	}
+
+	if (invuln_armed)
+	{
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_INVULNERABILITY;
+		if (qcvm->brokeneffects)
+			sv_player->v.effects = (unsigned)sv_player->v.effects | EFQE_PENTLIGHT;
+		else
+			sv_player->v.effects = (unsigned)sv_player->v.effects | EF_DIMLIGHT;
+		host_client->powerup_warn_flags |= PWARN_GIVE | PWARN_RESURRECT_INVULN;
 	}
 
 	/*----------------------------------------------------------------
-	 * 9. Finalise: relink, force client update, print messages
+	 * 8. Finalise: relink, play sound, force client update, print
 	 *----------------------------------------------------------------*/
 	SV_LinkEdict(sv_player, false);      /* update physics box */
+
+	/* Sound emanates from the final position, not the death origin. */
+	SV_StartSound(sv_player, sv_player->v.origin, 0,
+		"items/protect.wav", 255, 1.0f);
+
 	MSG_WriteByte(&host_client->message, svc_stufftext);
 	MSG_WriteString(&host_client->message, "bf\n"); /* refresh pics and icons */
 
-	if (found && ring)  /* ring > 0 means we actually moved */
-		SV_ClientPrintf("Moved to safe position (%d units)\n", ring * 32);
+	if (used_spawnpoint)
+		SV_ClientPrintf("Death position unsafe; respawned at spawnpoint\n");
+	else if (found && found_ring > 0)
+		SV_ClientPrintf("Moved to safe position (%d units)\n", found_ring * 32);
 
-	SV_ClientPrintf("Resurrected with 100 health and 5 seconds of invulnerability!\n");
+	if (invuln_armed)
+		SV_ClientPrintf("Resurrected with 100 health and 5 seconds of invulnerability!\n");
+	else
+		SV_ClientPrintf("Resurrected with 100 health\n");
 	SV_BroadcastPrintf("%s was resurrected\n",
 		PR_GetString(sv_player->v.netname));
 }
@@ -8185,17 +8307,17 @@ static void Host_Give_f (void)
 			{
 				if (item[0] == '6')
 				{
-					sv_player->v.items = (int)sv_player->v.items | IT_GRENADE_LAUNCHER;
+					sv_player->v.items = (unsigned)sv_player->v.items | IT_GRENADE_LAUNCHER;
 				}
 				else if (item[0] == '9')
-					sv_player->v.items = (int)sv_player->v.items | HIT_LASER_CANNON;
+					sv_player->v.items = (unsigned)sv_player->v.items | HIT_LASER_CANNON;
 				else if (item[0] == '0')
-					sv_player->v.items = (int)sv_player->v.items | HIT_MJOLNIR;
+					sv_player->v.items = (unsigned)sv_player->v.items | HIT_MJOLNIR;
 				else if (item[0] >= '2')
-					sv_player->v.items = (int)sv_player->v.items | (IT_SHOTGUN << (item[0] - '2'));
+					sv_player->v.items = (unsigned)sv_player->v.items | (IT_SHOTGUN << (item[0] - '2'));
 			}
 			else if (item[0] >= '2')
-				sv_player->v.items = (int)sv_player->v.items | (IT_SHOTGUN << (item[0] - '2'));
+				sv_player->v.items = (unsigned)sv_player->v.items | (IT_SHOTGUN << (item[0] - '2'));
 
 			msg = va("weapon %c", item[0]);
 			break;
@@ -8203,7 +8325,7 @@ static void Host_Give_f (void)
 		else if (strlen(item) == 2 && hipnotic && item[0] == '6' && item[1] == 'a')
 		{
 			// Special case for Hipnotic proximity gun
-			sv_player->v.items = (int)sv_player->v.items | HIT_PROXIMITY_GUN;
+			sv_player->v.items = (unsigned)sv_player->v.items | HIT_PROXIMITY_GUN;
 			msg = "weapon 6a (proximity gun)";
 			break;
 		}
@@ -8458,42 +8580,46 @@ KEYWORDS:
 		else if (amt > 100) sv_player->v.armortype = 0.6f; else sv_player->v.armortype = 0.3f;
 		}
 		sv_player->v.armorvalue = amt;
-		sv_player->v.items = (int)sv_player->v.items & ~(IT_ARMOR1 | IT_ARMOR2 | IT_ARMOR3);
-		if (sv_player->v.armortype == 0.8f) sv_player->v.items = (int)sv_player->v.items | IT_ARMOR3;
-		else if (sv_player->v.armortype == 0.6f) sv_player->v.items = (int)sv_player->v.items | IT_ARMOR2;
-		else                                   sv_player->v.items = (int)sv_player->v.items | IT_ARMOR1;
+		sv_player->v.items = (unsigned)sv_player->v.items & ~(unsigned)(IT_ARMOR1 | IT_ARMOR2 | IT_ARMOR3);
+		if (sv_player->v.armortype == 0.8f) sv_player->v.items = (unsigned)sv_player->v.items | IT_ARMOR3;
+		else if (sv_player->v.armortype == 0.6f) sv_player->v.items = (unsigned)sv_player->v.items | IT_ARMOR2;
+		else                                   sv_player->v.items = (unsigned)sv_player->v.items | IT_ARMOR1;
 		SV_StartSound(sv_player, NULL, 0, "items/armor1.wav", 255, 1.0f);
 		msg = va("%d armour", amt);
 	}
 	/*----- Power‑ups --------------------------------------------*/
 	else if (!q_strcasecmp(item, "quad")) { 
-		sv_player->v.items = (int)sv_player->v.items | IT_QUAD;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_QUAD;
 		int ofs = ED_FindFieldOffset("super_damage_finished");
-		if (ofs) GetEdictFieldValue(sv_player, ofs)->_float = qcvm->time + 30.0f;
+		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+			val->_float = qcvm->time + 30.0f;
 		SV_StartSound(sv_player, NULL, 0, "items/damage.wav", 255, 1.0f);
 		host_client->powerup_warn_flags |= PWARN_GIVE;
 		msg = "Quad Damage"; 
 	}
 	else if (!q_strcasecmp(item, "pent") || !q_strcasecmp(item, "666")) { 
-		sv_player->v.items = (int)sv_player->v.items | IT_INVULNERABILITY;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_INVULNERABILITY;
 		int ofs = ED_FindFieldOffset("invincible_finished");
-		if (ofs) GetEdictFieldValue(sv_player, ofs)->_float = qcvm->time + 30.0f;
+		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+			val->_float = qcvm->time + 30.0f;
 		SV_StartSound(sv_player, NULL, 0, "items/protect.wav", 255, 1.0f);
 		host_client->powerup_warn_flags |= PWARN_GIVE;
 		msg = "Pent"; 
 	}
 	else if (!q_strcasecmp(item, "ring") || !q_strcasecmp(item, "eyes")) { 
-		sv_player->v.items = (int)sv_player->v.items | IT_INVISIBILITY;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_INVISIBILITY;
 		int ofs = ED_FindFieldOffset("invisible_finished");
-		if (ofs) GetEdictFieldValue(sv_player, ofs)->_float = qcvm->time + 30.0f;
+		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+			val->_float = qcvm->time + 30.0f;
 		SV_StartSound(sv_player, NULL, 0, "items/inv1.wav", 255, 1.0f);
 		host_client->powerup_warn_flags |= PWARN_GIVE;
 		msg = "Ring"; 
 	}
 	else if (!q_strcasecmp(item, "suit") || !q_strcasecmp(item, "biosuit")) { 
-		sv_player->v.items = (int)sv_player->v.items | IT_SUIT;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_SUIT;
 		int ofs = ED_FindFieldOffset("radsuit_finished");
-		if (ofs) GetEdictFieldValue(sv_player, ofs)->_float = qcvm->time + 30.0f;
+		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+			val->_float = qcvm->time + 30.0f;
 		SV_StartSound(sv_player, NULL, 0, "items/suit.wav", 255, 1.0f);
 		host_client->powerup_warn_flags |= PWARN_GIVE;
 		msg = "Biosuit"; 
@@ -8501,82 +8627,82 @@ KEYWORDS:
 	/*----- Keys --------------------------------------------------*/
 	else if (!q_strcasecmp(item, "keys"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_KEY1 | IT_KEY2;        msg = "both keys";
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_KEY1 | IT_KEY2;        msg = "both keys";
 	}
 	else if (!q_strcasecmp(item, "key1") || !q_strcasecmp(item, "silverkey") || !q_strcasecmp(item, "blueflag"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_KEY1;                  msg = "silver key";
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_KEY1;                  msg = "silver key";
 	}
 	else if (!q_strcasecmp(item, "key2") || !q_strcasecmp(item, "goldkey") || !q_strcasecmp(item, "redflag"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_KEY2;                  msg = "gold key";
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_KEY2;                  msg = "gold key";
 	}
 	/*----- Sigils -----------------------------------------------*/
 	else if (!q_strcasecmp(item, "sigils") || !q_strcasecmp(item, "runes"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_SIGIL1 | IT_SIGIL2 | IT_SIGIL3 | IT_SIGIL4; msg = "all sigils";
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_SIGIL1 | IT_SIGIL2 | IT_SIGIL3 | IT_SIGIL4; msg = "all sigils";
 	}
 	else if (!q_strcasecmp(item, "sigil1") || !q_strcasecmp(item, "rune1"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_SIGIL1;               msg = "sigil 1";
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_SIGIL1;               msg = "sigil 1";
 	}
 	else if (!q_strcasecmp(item, "sigil2") || !q_strcasecmp(item, "rune2"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_SIGIL2;               msg = "sigil 2";
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_SIGIL2;               msg = "sigil 2";
 	}
 	else if (!q_strcasecmp(item, "sigil3") || !q_strcasecmp(item, "rune3"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_SIGIL3;               msg = "sigil 3";
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_SIGIL3;               msg = "sigil 3";
 	}
 	else if (!q_strcasecmp(item, "sigil4") || !q_strcasecmp(item, "rune4"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_SIGIL4;               msg = "sigil 4";
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_SIGIL4;               msg = "sigil 4";
 	}
 	/*----- Individual Weapons ----------------------------------*/
 	else if (!q_strcasecmp(item, "axe") || !q_strcasecmp(item, "1"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_AXE;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_AXE;
 		msg = "axe";
 	}
 	else if (!q_strcasecmp(item, "shotgun") || !q_strcasecmp(item, "sg") || !q_strcasecmp(item, "2"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_SHOTGUN;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_SHOTGUN;
 		sv_player->v.ammo_shells = 999;
 		msg = "shotgun + 999 shells";
 	}
 	else if (!q_strcasecmp(item, "supershotgun") || !q_strcasecmp(item, "ssg") || !q_strcasecmp(item, "3"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_SUPER_SHOTGUN;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_SUPER_SHOTGUN;
 		sv_player->v.ammo_shells = 999;
 		msg = "super shotgun + 999 shells";
 	}
 	else if (!q_strcasecmp(item, "nailgun") || !q_strcasecmp(item, "ng") || !q_strcasecmp(item, "4"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_NAILGUN;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_NAILGUN;
 		sv_player->v.ammo_nails = 999;
 		msg = "nailgun + 999 nails";
 	}
 	else if (!q_strcasecmp(item, "supernailgun") || !q_strcasecmp(item, "sng") || !q_strcasecmp(item, "5"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_SUPER_NAILGUN;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_SUPER_NAILGUN;
 		sv_player->v.ammo_nails = 999;
 		msg = "super nailgun + 999 nails";
 	}
 	else if (!q_strcasecmp(item, "grenadelauncher") || !q_strcasecmp(item, "gl") || !q_strcasecmp(item, "6"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_GRENADE_LAUNCHER;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_GRENADE_LAUNCHER;
 		sv_player->v.ammo_rockets = 999;
 		msg = "grenade launcher + 999 rockets";
 	}
 	else if (!q_strcasecmp(item, "rocketlauncher") || !q_strcasecmp(item, "rl") || !q_strcasecmp(item, "7"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_ROCKET_LAUNCHER;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_ROCKET_LAUNCHER;
 		sv_player->v.ammo_rockets = 999;
 		msg = "rocket launcher + 999 rockets";
 	}
 	else if (!q_strcasecmp(item, "lightninggun") || !q_strcasecmp(item, "lg") || !q_strcasecmp(item, "8"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_LIGHTNING;
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_LIGHTNING;
 		sv_player->v.ammo_cells = 999;
 		msg = "lightning gun + 999 cells";
 	}
@@ -8585,7 +8711,7 @@ KEYWORDS:
 	{
 		if (hipnotic)
 		{
-			sv_player->v.items = (int)sv_player->v.items | HIT_PROXIMITY_GUN;
+			sv_player->v.items = (unsigned)sv_player->v.items | HIT_PROXIMITY_GUN;
 			sv_player->v.ammo_rockets = 999;
 			msg = "proximity gun + 999 rockets";
 		}
@@ -8599,7 +8725,7 @@ KEYWORDS:
 	{
 		if (hipnotic)
 		{
-			sv_player->v.items = (int)sv_player->v.items | HIT_LASER_CANNON;
+			sv_player->v.items = (unsigned)sv_player->v.items | HIT_LASER_CANNON;
 			sv_player->v.ammo_cells = 999;
 			msg = "laser cannon + 999 cells";
 		}
@@ -8613,7 +8739,7 @@ KEYWORDS:
 	{
 		if (hipnotic)
 		{
-			sv_player->v.items = (int)sv_player->v.items | HIT_MJOLNIR;
+			sv_player->v.items = (unsigned)sv_player->v.items | HIT_MJOLNIR;
 			sv_player->v.ammo_cells = 999;
 			msg = "mjolnir + 999 cells";
 		}
@@ -8628,7 +8754,7 @@ KEYWORDS:
 	{
 		if (rogue)
 		{
-			sv_player->v.items = (int)sv_player->v.items | RIT_LAVA_NAILGUN;
+			sv_player->v.items = (unsigned)sv_player->v.items | RIT_LAVA_NAILGUN;
 			sv_player->v.ammo_nails = 999;
 			msg = "lava nailgun + 999 nails";
 		}
@@ -8642,7 +8768,7 @@ KEYWORDS:
 	{
 		if (rogue)
 		{
-			sv_player->v.items = (int)sv_player->v.items | RIT_MULTI_GRENADE;
+			sv_player->v.items = (unsigned)sv_player->v.items | RIT_MULTI_GRENADE;
 			sv_player->v.ammo_rockets = 999;
 			msg = "multi grenade launcher + 999 rockets";
 		}
@@ -8656,7 +8782,7 @@ KEYWORDS:
 	{
 		if (rogue)
 		{
-			sv_player->v.items = (int)sv_player->v.items | RIT_MULTI_ROCKET;
+			sv_player->v.items = (unsigned)sv_player->v.items | RIT_MULTI_ROCKET;
 			sv_player->v.ammo_rockets = 999;
 			msg = "multi rocket launcher + 999 rockets";
 		}
@@ -8670,7 +8796,7 @@ KEYWORDS:
 	{
 		if (rogue)
 		{
-			sv_player->v.items = (int)sv_player->v.items | RIT_PLASMA_GUN;
+			sv_player->v.items = (unsigned)sv_player->v.items | RIT_PLASMA_GUN;
 			sv_player->v.ammo_cells = 999;
 			msg = "plasma gun + 999 cells";
 		}
@@ -8683,7 +8809,7 @@ KEYWORDS:
 	/*----- Weapons set / Macro ----------------------------------*/
 	else if (!q_strcasecmp(item, "weapons"))
 	{
-		sv_player->v.items = (int)sv_player->v.items | IT_SHOTGUN | IT_SUPER_SHOTGUN | IT_NAILGUN | IT_SUPER_NAILGUN |
+		sv_player->v.items = (unsigned)sv_player->v.items | IT_SHOTGUN | IT_SUPER_SHOTGUN | IT_NAILGUN | IT_SUPER_NAILGUN |
 			IT_GRENADE_LAUNCHER | IT_ROCKET_LAUNCHER | IT_LIGHTNING;
 		sv_player->v.weapon = IT_SHOTGUN; // Equip shotgun by default
 		sv_player->v.weaponframe = 0;

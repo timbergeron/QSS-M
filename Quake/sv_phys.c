@@ -87,21 +87,23 @@ static void SV_CheckPowerupWarn (edict_t *ent)
 	static int ofs_super_damage_finished = -1;
 	static int ofs_invincible_finished = -1;
 	static int ofs_invisible_finished = -1;
+	static qboolean offsets_init = false;
 	static float last_quad_warn = 0.0f;
 	static float last_pent_warn = 0.0f;
 	static float last_ring_warn = 0.0f;
 
 	/* Initialize field offsets on first call */
-	if (ofs_super_damage_finished == -1)
+	if (!offsets_init)
 	{
 		ofs_super_damage_finished = ED_FindFieldOffset("super_damage_finished");
 		ofs_invincible_finished = ED_FindFieldOffset("invincible_finished");
 		ofs_invisible_finished = ED_FindFieldOffset("invisible_finished");
+		offsets_init = true;
 	}
 
 	/* Quad Damage --------------------------------------------------- */
-	if (((int)ent->v.items & IT_QUAD) &&
-	    ofs_super_damage_finished &&
+	if (((unsigned)ent->v.items & IT_QUAD) &&
+	    ofs_super_damage_finished >= 0 &&
 	    (val = GetEdictFieldValue(ent, ofs_super_damage_finished)) &&
 	    (t = val->_float - qcvm->time) > 0.0f && t <= 3.0f)
 	{
@@ -114,8 +116,8 @@ static void SV_CheckPowerupWarn (edict_t *ent)
 	}
 
 	/* Pent (Invulnerability) --------------------------------------- */
-	if (((int)ent->v.items & IT_INVULNERABILITY) &&
-	    ofs_invincible_finished &&
+	if (((unsigned)ent->v.items & IT_INVULNERABILITY) &&
+	    ofs_invincible_finished >= 0 &&
 	    (val = GetEdictFieldValue(ent, ofs_invincible_finished)) &&
 	    (t = val->_float - qcvm->time) > 0.0f && t <= 3.0f)
 	{
@@ -128,8 +130,8 @@ static void SV_CheckPowerupWarn (edict_t *ent)
 	}
 
 	/* Ring (Invisibility) ------------------------------------------ */
-	if (((int)ent->v.items & IT_INVISIBILITY) &&
-	    ofs_invisible_finished &&
+	if (((unsigned)ent->v.items & IT_INVISIBILITY) &&
+	    ofs_invisible_finished >= 0 &&
 	    (val = GetEdictFieldValue(ent, ofs_invisible_finished)) &&
 	    (t = val->_float - qcvm->time) > 0.0f && t <= 3.0f)
 	{
@@ -140,6 +142,39 @@ static void SV_CheckPowerupWarn (edict_t *ent)
 			last_ring_warn = qcvm->time;
 		}
 	}
+}
+
+static void SV_CheckResurrectInvuln (client_t *client, edict_t *ent)
+{
+	eval_t *val;
+	int ofs;
+	qboolean expired;
+
+	if (!(client->powerup_warn_flags & PWARN_RESURRECT_INVULN))
+		return;
+
+	/* items/effects can exceed INT_MAX once high-bit item/effect flags are
+	   set. Use unsigned casts so clearing one bit cannot poison the rest. */
+	expired = (((unsigned)ent->v.items & IT_INVULNERABILITY) == 0);
+	ofs = ED_FindFieldOffset("invincible_finished");
+	if (ofs >= 0 && (val = GetEdictFieldValue(ent, ofs)) &&
+		val->_float <= qcvm->time)
+		expired = true;
+
+	if (!expired)
+		return;
+
+	ent->v.items = (unsigned)ent->v.items & ~(unsigned)IT_INVULNERABILITY;
+	if (qcvm->brokeneffects)
+		ent->v.effects = (unsigned)ent->v.effects & ~(unsigned)EFQE_PENTLIGHT;
+	else
+		ent->v.effects = (unsigned)ent->v.effects & ~(unsigned)EF_DIMLIGHT;
+
+	ofs = ED_FindFieldOffset("invincible_time");
+	if (ofs >= 0 && (val = GetEdictFieldValue(ent, ofs)))
+		val->_float = 0.0f;
+
+	client->powerup_warn_flags &= ~PWARN_RESURRECT_INVULN;
 }
 
 /*
@@ -1267,6 +1302,8 @@ void SV_Physics_Client (edict_t	*ent, int num)
 
 	if ( ! svs.clients[num-1].active )
 		return;		// unconnected slot
+
+	SV_CheckResurrectInvuln (&svs.clients[num-1], ent);
 
 	if (svs.clients[num-1].usingpmove)
 		return;	//we're doing independant player physics with this mod, so clientside prediction can do its thing.

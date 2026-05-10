@@ -232,10 +232,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define	IT_INVULNERABILITY	1048576
 #define	IT_SUIT			2097152
 #define	IT_QUAD			4194304
-#define	IT_SIGIL1		(1<<28)
-#define	IT_SIGIL2		(1<<29)
-#define	IT_SIGIL3		(1<<30)
-#define	IT_SIGIL4		(1<<31)
+#define	IT_SIGIL1		(1u<<28)
+#define	IT_SIGIL2		(1u<<29)
+#define	IT_SIGIL3		(1u<<30)
+#define	IT_SIGIL4		(1u<<31)
 
 //===========================================
 //rogue changed and added defines

@@ -125,12 +125,12 @@ void SV_CalcStats(client_t *client, int *statsi, float *statsf, const char **sta
 	edict_t *ent = client->edict;
 	const qboolean send_punchangle = !sv_nopunchangle.value;
 	//FIXME: string stats!
-	int items;
+	unsigned int items;
 	eval_t *val = GetEdictFieldValue(ent, qcvm->extfields.items2);
 	if (val)
-		items = (int)ent->v.items | ((int)val->_float << 23);
+		items = (unsigned)ent->v.items | ((unsigned)val->_float << 23);
 	else
-		items = (int)ent->v.items | ((int)pr_global_struct->serverflags << 28);
+		items = (unsigned)ent->v.items | ((unsigned)pr_global_struct->serverflags << 28);
 
 	memset(statsi, 0, sizeof(*statsi)*MAX_CL_STATS);
 	memset(statsf, 0, sizeof(*statsf)*MAX_CL_STATS);
@@ -166,7 +166,7 @@ void SV_CalcStats(client_t *client, int *statsi, float *statsf, const char **sta
 
 	if (client->protocol_pext2 & PEXT2_PREDINFO)
 	{	//predinfo also kills clc_clientdata
-		statsi[STAT_ITEMS] = items;
+		statsi[STAT_ITEMS] = (int)items;
 		statsf[STAT_VIEWHEIGHT] = ent->v.view_ofs[2];
 		statsf[STAT_IDEALPITCH] = ent->v.idealpitch;
 		if (send_punchangle)
@@ -1244,9 +1244,9 @@ void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state)
 	if (qcvm->brokeneffects && (state->effects & 0xf0u))
 	{	//translate qe effects to something more standard.
 		state->effects &= ~0xf0u;
-		if ((int)ent->v.effects & EFQE_QUADLIGHT)
+		if ((unsigned)ent->v.effects & EFQE_QUADLIGHT)
 			state->effects |= EF_BLUE;
-		if ((int)ent->v.effects & EFQE_PENTLIGHT)
+		if ((unsigned)ent->v.effects & EFQE_PENTLIGHT)
 			state->effects |= EF_RED;
 	}
 	if ((val = GetEdictFieldValue(ent, qcvm->extfields.modelflags)))
@@ -2923,9 +2923,9 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 		if (qcvm->brokeneffects && (effects & 0xf0u))
 		{	//translate qe effects to something more standard.
 			effects &= ~0xf0u;
-			if ((int)ent->v.effects & EFQE_QUADLIGHT)
+			if ((unsigned)ent->v.effects & EFQE_QUADLIGHT)
 				effects |= EF_BLUE;
-			if ((int)ent->v.effects & EFQE_PENTLIGHT)
+			if ((unsigned)ent->v.effects & EFQE_PENTLIGHT)
 				effects |= EF_RED;
 		}
 		if (ent->baseline.effects ^ effects)
@@ -3033,7 +3033,7 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 		if (sv.protocol == PROTOCOL_VERSION_BJP3)
 		{
 			//this protocol is shite
-			if ((int)ent->v.effects & EF_FULLBRIGHT)
+			if ((unsigned)ent->v.effects & EF_FULLBRIGHT)
 			{
 				MSG_WriteFloat(msg, 2);
 				MSG_WriteFloat(msg, ENTALPHA_DECODE(ent->alpha));
@@ -3088,7 +3088,7 @@ void SV_CleanupEnts (void)
 	{
 		for (e=1 ; e<qcvm->num_edicts ; e++, ent = NEXT_EDICT(ent))
 		{
-			ent->v.effects = (int)ent->v.effects & ~EF_MUZZLEFLASH;
+			ent->v.effects = (unsigned)ent->v.effects & ~(unsigned)EF_MUZZLEFLASH;
 			GetEdictFieldEval(ent, SendFlags)->_float = 0;
 		}
 	}
@@ -3096,7 +3096,7 @@ void SV_CleanupEnts (void)
 	{
 		for (e=1 ; e<qcvm->num_edicts ; e++, ent = NEXT_EDICT(ent))
 		{
-			ent->v.effects = (int)ent->v.effects & ~EF_MUZZLEFLASH;
+			ent->v.effects = (unsigned)ent->v.effects & ~(unsigned)EF_MUZZLEFLASH;
 		}
 	}
 }
@@ -3154,7 +3154,7 @@ void SV_WriteClientdataToMessage (client_t *client, sizebuf_t *msg)
 	edict_t	*ent = client->edict;
 	int		bits;
 	int		i;
-	int		items;
+	unsigned int	items;
 	eval_t	*val;
 	unsigned int		weaponmodelindex = SV_ModelIndex(PR_GetString(ent->v.weaponmodel));
 	const qboolean send_punchangle = !sv_nopunchangle.value;
@@ -3175,9 +3175,9 @@ void SV_WriteClientdataToMessage (client_t *client, sizebuf_t *msg)
 	val = GetEdictFieldValue(ent, qcvm->extfields.items2);
 
 	if (val)
-		items = (int)ent->v.items | ((int)val->_float << 23);
+		items = (unsigned)ent->v.items | ((unsigned)val->_float << 23);
 	else
-		items = (int)ent->v.items | ((int)pr_global_struct->serverflags << 28);
+		items = (unsigned)ent->v.items | ((unsigned)pr_global_struct->serverflags << 28);
 
 	bits |= SU_ITEMS;
 
@@ -3246,7 +3246,7 @@ void SV_WriteClientdataToMessage (client_t *client, sizebuf_t *msg)
 	}
 
 // [always sent]	if (bits & SU_ITEMS)
-	MSG_WriteLong (msg, items);
+	MSG_WriteLong (msg, (int)items);
 
 	if (bits & SU_WEAPONFRAME)
 		MSG_WriteByte (msg, ent->v.weaponframe);

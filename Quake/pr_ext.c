@@ -2814,7 +2814,7 @@ static void PF_sv_te_lightningblood(void)
 static void PF_sv_te_muzzleflash(void)
 {
 	edict_t *ent = G_EDICT(OFS_PARM0);
-	ent->v.effects = (int)ent->v.effects|EF_MUZZLEFLASH;
+	ent->v.effects = (unsigned)ent->v.effects | EF_MUZZLEFLASH;
 }
 static void PF_cl_te_muzzleflash(void)
 {
