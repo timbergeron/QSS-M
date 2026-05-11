@@ -4415,30 +4415,55 @@ static qboolean SCR_TraceBSPSubmodels (vec3_t start, vec3_t impact, qboolean aut
 LaserSight - port from quakespasm-shalrathy / qrack --  woods #laser
 ================
 */
-void LaserSight (void)
+static qboolean SCR_LaserPointCanDraw (void)
 {
 	if (!cl.viewent.model || cl.viewent.model->name[0] == '\0' || cl.intermission || qeintermission || crxintermission || scr_viewsize.value >= 130 ||
 		(countdown && draw) || (qeintermission && draw) || cl.stats[STAT_HEALTH] <= 0 || 
 		!strcmp(cl.viewent.model->name, "progs/v_axe.mdl") || chase_active.value) //R00k: dont show laserpoint when observer!
 	{
-		return;
+		return false;
 	}
 
-	vec3_t	start, forward, right, up, crosshair, wall, origin;
+	return true;
+}
+
+static qboolean SCR_GetLaserPointTrace (vec3_t wall, vec3_t crosshair, vec3_t origin)
+{
+	vec3_t start, forward, right, up;
+
+	if (!gl_laserpoint.value || cls.state != ca_connected || cls.signon < SIGNONS || !cl.worldmodel)
+		return false;
+
+	if (!SCR_LaserPointCanDraw ())
+		return false;
+
+	AngleVectors (r_refdef.viewangles, forward, right, up);
+	VectorCopy (cl.entities[cl.viewentity].origin, start);
+	VectorCopy (cl.entities[cl.viewentity].origin, origin);
+	start[2] += 16;//QuakeC uses + '0 0 16' for gun aim.
+
+	VectorMA (start, 4096, forward, crosshair);
+	TraceLine (start, crosshair, 0, wall);
+	SCR_TraceBSPSubmodels (start, wall, false);
+
+	return true;
+}
+
+qboolean SCR_GetLaserPoint (vec3_t point)
+{
+	vec3_t crosshair, origin;
+
+	return SCR_GetLaserPointTrace (point, crosshair, origin);
+}
+
+void LaserSight (void)
+{
+	vec3_t	crosshair, wall, origin;
 	qboolean	use_stencil = false;
 	GLuint		viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
 
-	// copy origin to start, offset it correctly
-
-	AngleVectors(r_refdef.viewangles, forward, right, up);
-	VectorCopy(cl.entities[cl.viewentity].origin, start);
-	VectorCopy(cl.entities[cl.viewentity].origin, origin);
-	start[2] += 16;//QuakeC uses + '0 0 16' for gun aim.
-
-	// find the spot the player is looking at
-	VectorMA(start, 4096, forward, crosshair);
-	TraceLine(start, crosshair, 0, wall);
-	SCR_TraceBSPSubmodels (start, wall, false);
+	if (!SCR_GetLaserPointTrace (wall, crosshair, origin))
+		return;
 
 	if (viewmodel_stencil_bit)
 	{

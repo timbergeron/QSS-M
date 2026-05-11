@@ -3763,6 +3763,7 @@ display client's position and angles
 void CL_Viewpos_f (void)
 {
 	char buf[256];
+	vec3_t laserpoint;
 	if (cls.state != ca_connected)
 		return;
 
@@ -3786,6 +3787,13 @@ void CL_Viewpos_f (void)
 	if (Cmd_Argc () >= 2 && !q_strcasecmp (Cmd_Argv (1), "copy"))
 		if (SDL_SetClipboardText (buf) < 0)
 			Con_SafePrintf ("Clipboard copy failed: %s\n", SDL_GetError ());
+
+	if (SCR_GetLaserPoint (laserpoint))
+		Con_SafePrintf ("Laserpoint pos: (%.0f %.0f %.0f)\n",
+			laserpoint[0],
+			laserpoint[1],
+			laserpoint[2]
+		);
 
 	// camera position
 	Con_SafePrintf ("Camera pos: (%.0f %.0f %.0f) %.0f %.0f %.0f\n",
