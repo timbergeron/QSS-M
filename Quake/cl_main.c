@@ -2144,8 +2144,8 @@ qboolean IsGithubRepoPath(const char* s)
 	if (!s)
 		return false;
 
-    if (strstr(s, "://"))
-        return false;
+	if (strstr(s, "://"))
+		return false;
 
 	const char* first = strchr(s, '/');
 	if (!first)
@@ -3050,16 +3050,20 @@ qboolean CL_CheckDownload(const char *filename)
 	if (COM_FileExists(filename, NULL))
 		return false;
 
-    if ((size_t)q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, filename) >= sizeof(local_path))
-        return false;
+	if ((size_t)q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, filename) >= sizeof(local_path))
+		return false;
 
 	if (webcheck && (cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0')) // only run if server is verified
-                if (Curl_DownloadFile (cl_web_download_url.string, filename, local_path, false, NULL))
+	{
+		if (Curl_DownloadFile (cl_web_download_url.string, filename, local_path, false, NULL))
 			return false;
+	}
 
 	if (web2check && (cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0')) // only run if server is verified
-                if (Curl_DownloadFile (cl_web_download_url2.string, filename, local_path, false, NULL))
+	{
+		if (Curl_DownloadFile (cl_web_download_url2.string, filename, local_path, false, NULL))
 			return false;
+	}
 
 	// woods, if not available via web, try the server #webdl
 
@@ -3476,19 +3480,19 @@ void CL_ManualDownload_f (const char* filename)
     qboolean require_active_check;
     qboolean isNeitherWebDownloadServerSet;
 
-    if (Cmd_Argc() != 2)
+	if (Cmd_Argc() != 2)
 	{
-        Con_Printf("download <filename|ctf|ra> : filename with an extension (bsp, lit, loc, mdl, or wav)\n");
-        return;
+		Con_Printf("download <filename|ctf|ra> : filename with an extension (bsp, lit, loc, mdl, or wav)\n");
+		return;
 	}
 
-    if (*filename == '*')
-        return;    //don't download these...
-    if (cls.download.active)
-        return;    //block while we're already downloading something
+	if (*filename == '*')
+		return;    //don't download these...
+	if (cls.download.active)
+		return;    //block while we're already downloading something
 
-    if (!CL_ManualDownloadNormalizeName(filename, prefixedArg, sizeof(prefixedArg)))
-        return;
+	if (!CL_ManualDownloadNormalizeName(filename, prefixedArg, sizeof(prefixedArg)))
+		return;
 
 	if (!CL_DownloadNameIsValid(prefixedArg))
 	{

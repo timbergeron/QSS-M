@@ -29,6 +29,7 @@ void SCR_Init (void);
 void SCR_LoadPics (void);
 
 void SCR_UpdateScreen (void);
+qboolean SCR_GetLaserPoint (vec3_t point);
 
 void SCR_UpdateZoom(void); // woods #zoom (ironwail)
 

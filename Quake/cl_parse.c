@@ -3234,10 +3234,9 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 				strncpy(ecolor, gl_enemycolor.string, sizeof(ecolor) - 1);
 
 			// for movement key
-			int	i, count;
+			int	i;
 			int bindmap = 0;
 
-			count = 0;
 			for (i = 0; i < MAX_KEYS; i++)
 			{
 				if (keybindings[bindmap][i] && *keybindings[bindmap][i])
@@ -3254,7 +3253,6 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 					{ 
 						strcpy(key, "?");
 					}
-					count++;
 				}
 			}
 
