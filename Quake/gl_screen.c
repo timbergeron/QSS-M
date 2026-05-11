@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "time.h"
 #include "quakedef.h"
+#include "q_ctype.h"
 
 /*
 
@@ -5065,6 +5066,142 @@ void SCR_DrawStatusIndicators (void)
 float last_pause_time = 0.0f; // woods #obstimers - Store pause start time
 float pause_offset = 0.0f; // woods #obstimers - Accumulated pause offset
 
+static qboolean SCR_ObsTimerIsWordBoundaryChar(int c)
+{
+	return c == '\0' || !q_isalnum((unsigned char)c);
+}
+
+static qboolean SCR_ObsTimerMatchesWordAt(const char *text, const char *pos, const char *word)
+{
+	const size_t word_len = strlen(word);
+
+	if (pos != text && !SCR_ObsTimerIsWordBoundaryChar(pos[-1]))
+		return false;
+
+	return q_strncasecmp(pos, word, word_len) == 0 &&
+		SCR_ObsTimerIsWordBoundaryChar(pos[word_len]);
+}
+
+static const char * const scr_obs_timer_location_prefixes[] = {"red", "blue", "upper", "lower", "green", "yellow"};
+static const char * const scr_obs_timer_red_yellow_prefixes[] = {"red", "yellow"};
+static const char * const scr_obs_timer_green_prefixes[] = {"green"};
+static const char * const scr_obs_timer_green_yellow_prefixes[] = {"green", "yellow"};
+static const char * const scr_obs_timer_red_yellow_armor_names[] = {"ra", "ya"};
+static const char * const scr_obs_timer_green_armor_names[] = {"ga"};
+static const char * const scr_obs_timer_powerup_names[] = {"quad", "pent", "ring", "eyes"};
+
+static qboolean SCR_ObsTimerStringInList(const char *text, const char * const *values, size_t num_values)
+{
+	if (!text)
+		return false;
+
+	for (size_t i = 0; i < num_values; i++)
+	{
+		if (!q_strcasecmp(text, values[i]))
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean SCR_ObsTimerMatchesLocationPrefixAt(const char *text, const char *pos, const char **prefix)
+{
+	for (size_t i = 0; i < Q_COUNTOF(scr_obs_timer_location_prefixes); i++)
+	{
+		if (SCR_ObsTimerMatchesWordAt(text, pos, scr_obs_timer_location_prefixes[i]))
+		{
+			if (prefix)
+				*prefix = scr_obs_timer_location_prefixes[i];
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static qboolean SCR_ObsTimerPrefixAppliesToTimerName(const char *prefix, const char *timername)
+{
+	if (SCR_ObsTimerStringInList(prefix, scr_obs_timer_red_yellow_prefixes, Q_COUNTOF(scr_obs_timer_red_yellow_prefixes)) &&
+		SCR_ObsTimerStringInList(timername, scr_obs_timer_red_yellow_armor_names, Q_COUNTOF(scr_obs_timer_red_yellow_armor_names)))
+		return false;
+
+	if (SCR_ObsTimerStringInList(prefix, scr_obs_timer_green_prefixes, Q_COUNTOF(scr_obs_timer_green_prefixes)) &&
+		SCR_ObsTimerStringInList(timername, scr_obs_timer_green_armor_names, Q_COUNTOF(scr_obs_timer_green_armor_names)))
+		return false;
+
+	if (SCR_ObsTimerStringInList(prefix, scr_obs_timer_green_yellow_prefixes, Q_COUNTOF(scr_obs_timer_green_yellow_prefixes)) &&
+		SCR_ObsTimerStringInList(timername, scr_obs_timer_powerup_names, Q_COUNTOF(scr_obs_timer_powerup_names)))
+		return false;
+
+	return true;
+}
+
+static const char *SCR_ObsTimerFindLocationPrefix(const char *text, const char *timername)
+{
+	const char *p;
+	const char *prefix;
+
+	for (p = text; *p; p++)
+	{
+		if (SCR_ObsTimerMatchesLocationPrefixAt(text, p, &prefix) &&
+			SCR_ObsTimerPrefixAppliesToTimerName(prefix, timername))
+			return prefix;
+	}
+
+	return NULL;
+}
+
+static qboolean SCR_ObsTimerNameStartsWithLocationPrefix(const char *name)
+{
+	return SCR_ObsTimerMatchesLocationPrefixAt(name, name, NULL);
+}
+
+static void SCR_BuildObsTimerLabel(const struct itemtimer_s *timer, char *out, size_t outsize)
+{
+	const char *timername = (timer && timer->timername) ? timer->timername : "";
+	const char *locname;
+	const char *prefix;
+	vec3_t origin;
+
+	if (!outsize)
+		return;
+
+	if (!timer)
+	{
+		q_snprintf(out, outsize, "%s", timername);
+		return;
+	}
+
+	if (!timername[0])
+	{
+		q_snprintf(out, outsize, "%s", timername);
+		return;
+	}
+
+	VectorCopy(timer->origin, origin);
+	locname = LOC_GetLocation(origin);
+	if (!locname || !locname[0] || !strcmp(locname, "no .loc"))
+	{
+		q_snprintf(out, outsize, "%s", timername);
+		return;
+	}
+
+	if (SCR_ObsTimerNameStartsWithLocationPrefix(timername))
+	{
+		q_snprintf(out, outsize, "%s", timername);
+		return;
+	}
+
+	prefix = SCR_ObsTimerFindLocationPrefix(locname, timername);
+	if (!prefix)
+	{
+		q_snprintf(out, outsize, "%s", timername);
+		return;
+	}
+
+	q_snprintf(out, outsize, "%s %s", prefix, timername);
+}
+
 /*
 ==============
 SCR_DrawObsTimers -- woods #obstimers
@@ -5186,14 +5323,18 @@ void SCR_DrawObsTimers (void)
 		struct itemtimer_s* timer = visible_timers[i].timer;
 		float time_left = visible_timers[i].time_left;
 		int y = base_y - (i * TIMER_SPACING);
-		int name_width = strlen(timer->timername) * 8;
+		char display_name[128];
+		int name_width;
 
-		Draw_String(x, y, timer->timername);
+		SCR_BuildObsTimerLabel(timer, display_name, sizeof(display_name));
+		name_width = strlen(display_name) * 8;
+
+		Draw_String(x, y, display_name);
 
 		if (time_left <= 0)
 			M_Print(x + name_width + 8, y, "spawn");
 		else {
-			sprintf(str, "%d", (int)ceil(time_left));
+			q_snprintf(str, sizeof(str), "%d", (int)ceil(time_left));
 			M_Print(x + name_width + 8, y, str);
 		}
 	}
