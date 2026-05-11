@@ -245,6 +245,7 @@ typedef struct client_s
 	qboolean		knowntoqc;			// putclientinserver was called
 	qboolean		csqcactive;			// its prepared to accept csqc entities.
 	int				powerup_warn_flags;	// woods - #resurrect #give powerup state flags
+	double			coop_goto_next_time; // woods #goto - realtime throttle
 	qboolean		modvote_motd_shown;	// one-time per connection join message
 	qboolean		modvote_motd_active;	// join centerprint currently active
 	qboolean		modvote_motd_centerprint_suppressed; // QC used centerprint; keep join MOTD off that channel
@@ -375,6 +376,7 @@ void SV_BroadcastPrintf (const char *fmt, ...) FUNC_PRINTF(1,2);
 void SV_Physics (double frametime);
 
 qboolean SV_CheckBottom (edict_t *ent);
+qboolean SV_CheckWater (edict_t *ent);
 qboolean SV_movestep (edict_t *ent, vec3_t move, qboolean relink);
 
 void SV_WriteClientdataToMessage (client_t *client, sizebuf_t *msg);

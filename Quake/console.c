@@ -4417,6 +4417,7 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "ip",						CompleteIP,				NULL },
 	{ "unpak",					CompletePAKList,		NULL },
 	{ "cmd",					CompleteCmd,			NULL },
+	{ "goto",					CompleteClients,		NULL },
 	{ "identify",				CompleteClients,		NULL },
 	{ "tell",					CompleteClients,		NULL },
 	{ "color",					CompleteColor,			NULL },

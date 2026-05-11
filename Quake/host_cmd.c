@@ -62,6 +62,7 @@ void CL_ManualDownload_f (const char* filename); // woods #manualdownload
 extern char unfun[129];
 int unfun_match(const char* s1, char* s2);
 
+static void Host_Goto_f (void);
 static void Host_Resurrect_f (void);
 
 static char cl_chat_ignored_names[MAX_SCOREBOARD][MAX_SCOREBOARDNAME];
@@ -390,7 +391,7 @@ qboolean CL_ShouldIgnoreChatPrint(const char *text)
 	return false;
 }
 
-static void Host_BuildIgnoreTarget(char *buffer, size_t buffer_size)
+static void Host_BuildPlayerTarget(char *buffer, size_t buffer_size)
 {
 	int i;
 
@@ -476,7 +477,7 @@ static void Host_Ignore_Common(qboolean ignored)
 		return;
 	}
 
-	Host_BuildIgnoreTarget(target_arg, sizeof(target_arg));
+	Host_BuildPlayerTarget(target_arg, sizeof(target_arg));
 
 	if (cmd_source == src_client)
 	{
@@ -5324,6 +5325,359 @@ static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833
 		count, count == 1 ? "" : "s", gib ? "gibbed" : "no gibs");
 }
 
+static qboolean Host_CoopMoveClientLiving(const client_t *client)
+{
+	edict_t *ent;
+
+	if (!client || !client->active || !client->spawned)
+		return false;
+
+	ent = client->edict;
+	if (!ent || ent->free)
+		return false;
+
+	return ent->v.deadflag == DEAD_NO && ent->v.health > 0.0f;
+}
+
+static qboolean Host_CoopMoveIntermissionActive(void)
+{
+	ddef_t *def;
+
+	if (svs.changelevel_issued)
+		return true;
+
+	/* Do not infer this from PF_sv_WriteByte: QC writes arbitrary payload
+	   bytes, and 30/31 are valid non-command byte values. */
+	def = ED_FindGlobal("intermission_running");
+	return def && G_FLOAT(def->ofs) != 0.0f;
+}
+
+#define HOST_COOP_GOTO_COOLDOWN		2.0
+#define HOST_COOP_MOVE_TRACE_UP		64.0f
+#define HOST_COOP_MOVE_TRACE_DOWN	128.0f
+#define HOST_COOP_MOVE_MIN_FLOOR_Z	0.7f
+#define HOST_COOP_MOVE_RING_RADIUS	32.0f
+#define HOST_COOP_MOVE_RING_COUNT	4
+
+static int Host_CoopMoveCoordSize(void)
+{
+	if (sv.protocolflags & PRFL_FLOATCOORD)
+		return 4;
+	if (sv.protocolflags & PRFL_INT32COORD)
+		return 4;
+	if (sv.protocolflags & PRFL_24BITCOORD)
+		return 3;
+	return 2;
+}
+
+static qboolean Host_CoopMoveSpotVisible(edict_t *anchor, const vec3_t spot)
+{
+	vec3_t end;
+	trace_t trace;
+
+	VectorCopy(spot, end);
+	trace = SV_Move(anchor->v.origin, vec3_origin, vec3_origin, end,
+		MOVE_NOMONSTERS, anchor);
+	return !trace.allsolid && !trace.startsolid && trace.fraction >= 1.0f;
+}
+
+static qboolean Host_CoopMoveTrySpot(edict_t *mover, const vec3_t base, vec3_t out, edict_t **ground)
+{
+	static const float vertical_offsets[] = {0.0f, 8.0f, 16.0f, 24.0f, -8.0f, -16.0f, -24.0f};
+	size_t i;
+
+	if (ground)
+		*ground = NULL;
+
+	for (i = 0; i < Q_COUNTOF(vertical_offsets); i++)
+	{
+		vec3_t probe, above, below, spot;
+		trace_t ground_trace;
+
+		VectorCopy(base, probe);
+		probe[2] += vertical_offsets[i];
+
+		VectorCopy(probe, above);
+		above[2] += HOST_COOP_MOVE_TRACE_UP;
+		VectorCopy(probe, below);
+		below[2] -= HOST_COOP_MOVE_TRACE_DOWN;
+
+		ground_trace = SV_Move(above, vec3_origin, vec3_origin, below,
+			MOVE_NOMONSTERS, mover);
+		if (ground_trace.allsolid || ground_trace.startsolid ||
+			ground_trace.fraction >= 1.0f ||
+			ground_trace.plane.normal[2] < HOST_COOP_MOVE_MIN_FLOOR_Z)
+			continue;
+
+		VectorCopy(ground_trace.endpos, spot);
+		spot[2] += -mover->v.mins[2] + 1.0f;
+
+		VectorCopy(spot, mover->v.origin);
+		if (!SV_TestEntityPosition(mover) && SV_CheckBottom(mover))
+		{
+			VectorCopy(spot, out);
+			if (ground)
+				*ground = ground_trace.ent;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static qboolean Host_CoopMoveFindSafeSpot(edict_t *mover, edict_t *anchor, vec3_t out, edict_t **ground)
+{
+	static const float preferred_offsets[][2] = {
+		{-48.0f,   0.0f},
+		{-48.0f,  32.0f},
+		{-48.0f, -32.0f},
+		{  0.0f,  48.0f},
+		{  0.0f, -48.0f},
+		{-72.0f,   0.0f},
+		{-72.0f,  32.0f},
+		{-72.0f, -32.0f}
+	};
+	static const float ring_xy[][2] = {
+		{ 1.0f,  0.0f},
+		{-1.0f,  0.0f},
+		{ 0.0f,  1.0f},
+		{ 0.0f, -1.0f},
+		{ 1.0f,  1.0f},
+		{-1.0f,  1.0f},
+		{ 1.0f, -1.0f},
+		{-1.0f, -1.0f}
+	};
+	vec3_t old_origin;
+	float old_solid, old_movetype;
+	vec3_t angles, forward, right, up;
+	edict_t *candidate_ground;
+	size_t i;
+	int ring;
+
+	VectorCopy(mover->v.origin, old_origin);
+	old_solid = mover->v.solid;
+	old_movetype = mover->v.movetype;
+	mover->v.solid = SOLID_SLIDEBOX;
+	mover->v.movetype = MOVETYPE_WALK;
+	if (ground)
+		*ground = NULL;
+
+	/* Test probes temporarily write mover->v.origin; do not relink until the
+	   original origin is restored below. */
+	VectorCopy(vec3_origin, angles);
+	angles[YAW] = anchor->v.angles[YAW];
+	AngleVectors(angles, forward, right, up);
+
+	for (i = 0; i < Q_COUNTOF(preferred_offsets); i++)
+	{
+		vec3_t base;
+
+		VectorMA(anchor->v.origin, preferred_offsets[i][0], forward, base);
+		VectorMA(base, preferred_offsets[i][1], right, base);
+
+		if (Host_CoopMoveTrySpot(mover, base, out, &candidate_ground) &&
+			Host_CoopMoveSpotVisible(anchor, out))
+		{
+			if (ground)
+				*ground = candidate_ground;
+			goto found;
+		}
+	}
+
+	for (ring = 1; ring <= HOST_COOP_MOVE_RING_COUNT; ring++)
+	{
+		float radius = ring * HOST_COOP_MOVE_RING_RADIUS;
+
+		for (i = 0; i < Q_COUNTOF(ring_xy); i++)
+		{
+			vec3_t base;
+
+			VectorCopy(anchor->v.origin, base);
+			base[0] += ring_xy[i][0] * radius;
+			base[1] += ring_xy[i][1] * radius;
+
+			if (Host_CoopMoveTrySpot(mover, base, out, &candidate_ground) &&
+				Host_CoopMoveSpotVisible(anchor, out))
+			{
+				if (ground)
+					*ground = candidate_ground;
+				goto found;
+			}
+		}
+	}
+
+	VectorCopy(old_origin, mover->v.origin);
+	mover->v.solid = old_solid;
+	mover->v.movetype = old_movetype;
+	if (ground)
+		*ground = NULL;
+	return false;
+
+found:
+	VectorCopy(old_origin, mover->v.origin);
+	mover->v.solid = old_solid;
+	mover->v.movetype = old_movetype;
+	return true;
+}
+
+static void Host_CoopMoveTeleportSplash(const vec3_t origin)
+{
+	int msgsize = 2 + 3 * Host_CoopMoveCoordSize();
+
+	if (sv.datagram.cursize > MAX_DATAGRAM - msgsize)
+		return;
+
+	MSG_WriteByte(&sv.datagram, svc_temp_entity);
+	MSG_WriteByte(&sv.datagram, TE_TELEPORT);
+	MSG_WriteCoord(&sv.datagram, origin[0], sv.protocolflags);
+	MSG_WriteCoord(&sv.datagram, origin[1], sv.protocolflags);
+	MSG_WriteCoord(&sv.datagram, origin[2], sv.protocolflags);
+}
+
+static void Host_CoopMoveApply(edict_t *player, const vec3_t origin, edict_t *ground)
+{
+	eval_t *val;
+	vec3_t old_origin;
+	int ofs;
+
+	VectorCopy(player->v.origin, old_origin);
+	SV_StartSound(player, old_origin, 0, "misc/r_tele1.wav", 255, 1.0f);
+	Host_CoopMoveTeleportSplash(old_origin);
+
+	VectorCopy(origin, player->v.origin);
+	VectorClear(player->v.velocity);
+	player->v.movetype = MOVETYPE_WALK;
+	player->v.solid = SOLID_SLIDEBOX;
+	player->v.flags = (int)player->v.flags & ~FL_WATERJUMP;
+	if (ground && ground->v.solid == SOLID_BSP)
+	{
+		player->v.flags = (int)player->v.flags | FL_ONGROUND;
+		player->v.groundentity = EDICT_TO_PROG(ground);
+	}
+	else
+	{
+		player->v.flags = (int)player->v.flags & ~FL_ONGROUND;
+		player->v.groundentity = 0;
+	}
+
+	ofs = ED_FindFieldOffset("waterjump_time");
+	if (ofs >= 0 && (val = GetEdictFieldValue(player, ofs)))
+		val->_float = 0.0f;
+
+	SV_CheckWater(player);
+
+	/* Assist moves are positioning help, not map teleports, so do not fire triggers. */
+	SV_LinkEdict(player, false);
+	Host_CoopMoveTeleportSplash(player->v.origin);
+	SV_StartSound(player, player->v.origin, 0, "misc/r_tele1.wav", 255, 1.0f);
+}
+
+/*
+==================
+Host_Goto_f -- woods #goto
+
+Move the calling coop player to a safe spot near another living coop player.
+==================
+*/
+static void Host_Goto_f (void)
+{
+	char target_name[MAX_SCOREBOARDNAME];
+	char target_arg_buffer[MAX_SCOREBOARDNAME];
+	const char *target_arg;
+	qboolean ambiguous = false;
+	int target_slot;
+	client_t *target_client;
+	vec3_t safe_origin;
+	edict_t *safe_ground;
+
+	if (cmd_source != src_client)
+	{
+		if (Con_IsRedirected())
+			Con_Printf("goto is only available as a client command\n");
+		else if (cls.state == ca_connected && !cls.demoplayback)
+			Cmd_ForwardToServer();
+		else
+			Con_Printf("goto is only available as a client command\n");
+		return;
+	}
+
+	if (!sv.active)
+	{
+		SV_ClientPrintf("No active server\n");
+		return;
+	}
+
+	if (coop.value <= 0.0f)
+	{
+		SV_ClientPrintf("goto is only available in coop\n");
+		return;
+	}
+
+	if (pr_global_struct->deathmatch)
+	{
+		SV_ClientPrintf("goto is not available in deathmatch\n");
+		return;
+	}
+
+	if (Host_CoopMoveIntermissionActive())
+	{
+		SV_ClientPrintf("goto is not available during intermission or level changes\n");
+		return;
+	}
+
+	if (Cmd_Argc() < 2)
+	{
+		SV_ClientPrintf("usage: goto <player>\n");
+		return;
+	}
+
+	if (!Host_CoopMoveClientLiving(host_client))
+	{
+		SV_ClientPrintf("You must be alive to use goto\n");
+		return;
+	}
+
+	if (realtime < host_client->coop_goto_next_time)
+	{
+		SV_ClientPrintf("goto is available in %.1f seconds\n",
+			host_client->coop_goto_next_time - realtime);
+		return;
+	}
+
+	Host_BuildPlayerTarget(target_arg_buffer, sizeof(target_arg_buffer));
+	target_arg = target_arg_buffer;
+	target_slot = Host_FindServerPlayerSlot(target_arg, target_name, sizeof(target_name), &ambiguous);
+	if (target_slot < 0)
+	{
+		SV_ClientPrintf("%s player match for %s\n", ambiguous ? "No unique" : "No", target_arg);
+		return;
+	}
+
+	target_client = &svs.clients[target_slot];
+	if (target_client == host_client)
+	{
+		SV_ClientPrintf("You cannot goto yourself\n");
+		return;
+	}
+
+	if (!Host_CoopMoveClientLiving(target_client))
+	{
+		SV_ClientPrintf("%s is not alive\n", target_name);
+		return;
+	}
+
+	if (!Host_CoopMoveFindSafeSpot(host_client->edict, target_client->edict, safe_origin, &safe_ground))
+	{
+		SV_ClientPrintf("No safe spot near %s\n", target_name);
+		return;
+	}
+
+	Host_CoopMoveApply(host_client->edict, safe_origin, safe_ground);
+	host_client->coop_goto_next_time = realtime + HOST_COOP_GOTO_COOLDOWN;
+	SV_BroadcastPrintf("%s joined %s\n", host_client->name, target_client->name);
+	Con_DPrintf("coop move: goto: %s near %s\n", host_client->name, target_client->name);
+}
+
 /*
 ==================
 Host_Resurrect_f -- woods #resurrect
@@ -9856,6 +10210,7 @@ void Host_InitCommands (void)
 	Cmd_AddCommand ("save", Host_Savegame_f);
 	Cmd_AddCommand_ClientCommandQC ("give", Host_Give_f);
 	Cmd_AddCommand_ClientCommandQC ("massacre", Host_Massacre_f);
+	Cmd_AddCommand_ClientCommandQC ("goto", Host_Goto_f); // woods #goto
 	Cmd_AddCommand_ClientCommandQC ("resurrect", Host_Resurrect_f); // woods #resurrect
 	Cmd_AddCommand_ClientCommand ("download", Host_Download_f);
 	Cmd_AddCommand_ClientCommand ("sv_startdownload", Host_StartDownload_f);
