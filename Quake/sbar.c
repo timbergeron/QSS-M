@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 
 extern	qboolean premul_hud;
+extern qpic_t *Draw_ExternalPicFromWadBase (const char *base_name, const char *replacement_name);
 int		sb_updates;		// if >= vid.numpages, no update needed
 
 extern int	maptime; // woods connected map time #maptime
@@ -54,7 +55,10 @@ qpic_t		*sb_faces[7][2];		// 0 is gibbed, 1 is dead, 2-6 are alive
 qpic_t		*sb_face_invis;
 qpic_t		*sb_face_quad;
 qpic_t		*sb_face_invuln;
+qpic_t		*sb_face_quad_invuln;
 qpic_t		*sb_face_invis_invuln;
+qpic_t		*sb_face_invis_quad;
+qpic_t		*sb_face_invis_quad_invuln;
 
 qboolean	sb_showscores;
 
@@ -147,7 +151,6 @@ void Sbar_Changed (void)
 
 qpic_t *Sbar_CheckPicFromWad (const char *name)
 {
-	extern qpic_t *pic_nul;
 	qpic_t *r;
 	lumpinfo_t *info;
 	if (!hudtype)
@@ -160,6 +163,22 @@ qpic_t *Sbar_CheckPicFromWad (const char *name)
 		hudtype = 0;
 	return r;
 }
+
+static qpic_t *Sbar_OptionalPicFromWad (const char *name, const char *base_name)
+{
+	lumpinfo_t *info;
+	qpic_t *pic;
+
+	if (W_GetLumpName(name, &info))
+	{
+		pic = Draw_PicFromWad(name);
+		if (pic != pic_nul)
+			return pic;
+	}
+
+	return Draw_ExternalPicFromWadBase(base_name, name);
+}
+
 /*
 ===============
 Sbar_LoadPics -- johnfitz -- load all the sbar pics
@@ -249,7 +268,10 @@ void Sbar_LoadPics (void)
 
 	sb_face_invis = Draw_PicFromWad ("face_invis");
 	sb_face_invuln = Draw_PicFromWad ("face_invul2");
-	sb_face_invis_invuln = Draw_PicFromWad ("face_inv2");
+	sb_face_quad_invuln = Sbar_OptionalPicFromWad ("face_invul1", "face_invul2");
+	sb_face_invis_invuln = Sbar_OptionalPicFromWad ("face_inv2", "face_invul2");
+	sb_face_invis_quad = Sbar_OptionalPicFromWad ("face_inv3", "face_invul2");
+	sb_face_invis_quad_invuln = Sbar_OptionalPicFromWad ("face_inv4", "face_invul2");
 	sb_face_quad = Draw_PicFromWad ("face_quad");
 
 	sb_sbar = Draw_PicFromWad2 ("sbar", TEXPREF_PAD|TEXPREF_NOPICMIP|TEXPREF_ALPHA); // woods, add alpha 
@@ -1880,6 +1902,38 @@ static void Draw_PowerupOverlays(int x, int y)
 	}
 }
 
+static qpic_t *Sbar_PowerupFacePic (void)
+{
+	int items = cl.items;
+
+	if ((items & (IT_INVISIBILITY | IT_INVULNERABILITY | IT_QUAD))
+		== (IT_INVISIBILITY | IT_INVULNERABILITY | IT_QUAD)
+		&& sb_face_invis_quad_invuln)
+		return sb_face_invis_quad_invuln;
+
+	if ((items & (IT_INVULNERABILITY | IT_QUAD)) == (IT_INVULNERABILITY | IT_QUAD)
+		&& sb_face_quad_invuln)
+		return sb_face_quad_invuln;
+
+	if ((items & (IT_INVISIBILITY | IT_QUAD)) == (IT_INVISIBILITY | IT_QUAD)
+		&& sb_face_invis_quad)
+		return sb_face_invis_quad;
+
+	if ((items & (IT_INVISIBILITY | IT_INVULNERABILITY))
+		== (IT_INVISIBILITY | IT_INVULNERABILITY)
+		&& sb_face_invis_invuln)
+		return sb_face_invis_invuln;
+
+	if (items & IT_QUAD)
+		return sb_face_quad;
+	if (items & IT_INVISIBILITY)
+		return sb_face_invis;
+	if (items & IT_INVULNERABILITY)
+		return sb_face_invuln;
+
+	return NULL;
+}
+
 /*
 ===============
 Sbar_DrawFace
@@ -1893,22 +1947,14 @@ void Sbar_DrawFace (void)
 	// Call our powerup state change function
 	Sbar_PowerupChanged();
 
-	// Determine which face pic to use based on powerups and health
-	if ((cl.items & (IT_INVISIBILITY | IT_INVULNERABILITY)) == (IT_INVISIBILITY | IT_INVULNERABILITY))
-		face_pic = sb_face_invis_invuln;
-	else if (cl.items & IT_QUAD)
-		face_pic = sb_face_quad;
-	else if (cl.items & IT_INVISIBILITY)
-		face_pic = sb_face_invis;
-	else if (cl.items & IT_INVULNERABILITY)
-		face_pic = sb_face_invuln;
-	else
+	face_pic = Sbar_PowerupFacePic();
+	if (!face_pic)
 	{
 		// Regular face selection based on health
 		f = cl.stats[STAT_HEALTH] / 20;
 		f = bound(0, f, 4);
 
-	if (cl.time <= cl.faceanimtime)
+		if (cl.time <= cl.faceanimtime)
 			face_pic = sb_faces[f][1];
 		else
 			face_pic = sb_faces[f][0];
@@ -1925,7 +1971,7 @@ void Sbar_DrawFace (void)
 		return;
 	}
 
-			Draw_PowerupOverlays(112, 24);
+	Draw_PowerupOverlays(112, 24);
 }
 
 /*
@@ -2014,33 +2060,25 @@ static qpic_t* Sbar_FacePic(void)
 
 	Sbar_PowerupChanged();
 
-	if ((cl.items & (IT_INVISIBILITY | IT_INVULNERABILITY))
-		== (IT_INVISIBILITY | IT_INVULNERABILITY))
-		face_pic = sb_face_invis_invuln;
-	else if (cl.items & IT_QUAD)
-		face_pic = sb_face_quad;
-	else if (cl.items & IT_INVISIBILITY)
-		face_pic = sb_face_invis;
-	else if (cl.items & IT_INVULNERABILITY)
-		face_pic = sb_face_invuln;
-	else
+	face_pic = Sbar_PowerupFacePic();
+	if (!face_pic)
 	{
-	if (cl.stats[STAT_HEALTH] >= 100)
-		f = 4;
-	else
-		f = cl.stats[STAT_HEALTH] / 20;
-	if (f < 0)	// in case we ever decide to draw when health <= 0
-		f = 0;
+		if (cl.stats[STAT_HEALTH] >= 100)
+			f = 4;
+		else
+			f = cl.stats[STAT_HEALTH] / 20;
+		if (f < 0)	// in case we ever decide to draw when health <= 0
+			f = 0;
 
-	if (cl.time <= cl.faceanimtime)
-	{
-		anim = 1;
-		sb_updates = 0;		// make sure the anim gets drawn over
-	}
-	else
-		anim = 0;
+		if (cl.time <= cl.faceanimtime)
+		{
+			anim = 1;
+			sb_updates = 0;		// make sure the anim gets drawn over
+		}
+		else
+			anim = 0;
 
-	face_pic = sb_faces[f][anim];
+		face_pic = sb_faces[f][anim];
 	}
 
 	Sbar_DrawPic(18, 140, face_pic);

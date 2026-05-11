@@ -318,6 +318,67 @@ qpic_t *Draw_PicFromWad (const char *name)
 	return Draw_PicFromWad2(name, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
 }
 
+/*
+================
+Draw_ExternalPicFromWadBase
+
+Sbar-only optional HUD face helper. It lives here because cachepic_t and
+glpic_t are private to the draw cache, so keep it out of draw.h.
+================
+*/
+qpic_t *Draw_ExternalPicFromWadBase (const char *base_name, const char *replacement_name)
+{
+	cachepic_t	*pic;
+	qpic_t		*base;
+	glpic_t		gl;
+	char		cachename[MAX_QPATH];
+	unsigned int texflags = TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP;
+	int			i;
+
+	if (!draw_load24bit)
+		return NULL;
+
+	q_snprintf(cachename, sizeof(cachename), "%s:%s", base_name, replacement_name);
+
+	for (pic = menu_cachepics, i = 0; i < menu_numcachepics; pic++, i++)
+	{
+		if (!strcmp(cachename, pic->name))
+			return &pic->pic;
+	}
+
+	base = Draw_PicFromWad(base_name);
+	if (base == pic_nul)
+		return NULL;
+
+	texflags |= (premul_hud ? TEXPREF_PREMULTIPLY : 0);
+	gl.gltexture = TexMgr_LoadImage(NULL, cachename, 0, 0, SRC_EXTERNAL, NULL,
+		va("gfx/%s", replacement_name), 0, texflags | TEXPREF_MIPMAP | TEXPREF_ALLOWMISSING);
+	if (!gl.gltexture)
+	{
+		/* Some HUD replacement packs keep these optional faces at the pak root
+		   instead of under gfx/. Keep this fallback scoped to optional faces. */
+		gl.gltexture = TexMgr_LoadImage(NULL, cachename, 0, 0, SRC_EXTERNAL, NULL,
+			replacement_name, 0, texflags | TEXPREF_MIPMAP | TEXPREF_ALLOWMISSING);
+	}
+	if (!gl.gltexture)
+		return NULL;
+
+	if (menu_numcachepics == MAX_CACHED_PICS)
+		Sys_Error ("menu_numcachepics == MAX_CACHED_PICS");
+
+	gl.sl = 0;
+	gl.sh = (float)gl.gltexture->source_width / (float)TexMgr_PadConditional(gl.gltexture->source_width);
+	gl.tl = 0;
+	gl.th = (float)gl.gltexture->source_height / (float)TexMgr_PadConditional(gl.gltexture->source_height);
+
+	pic = &menu_cachepics[menu_numcachepics++];
+	q_strlcpy(pic->name, cachename, sizeof(pic->name));
+	pic->pic = *base;
+	memcpy(pic->pic.data, &gl, sizeof(glpic_t));
+
+	return &pic->pic;
+}
+
 qpic_t	*Draw_GetCachedPic (const char *path)
 {
 	cachepic_t	*pic;

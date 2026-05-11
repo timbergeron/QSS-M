@@ -74,6 +74,7 @@ void Draw_StringAnimatedDots(int x, int y, const char* str); // woods
 void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float span_px, float alpha, qboolean masked); // woods
 void Draw_StringRGBA (int x, int y, const char* str, plcolour_t c, float alpha); // woods
 void Draw_ScaledPicAlpha (int x, int y, qpic_t* pic, float scale, float alpha); // woods #observerhud #eyemouse
+extern qpic_t *pic_nul; //johnfitz -- for missing gfx, don't crash
 qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags);
 qpic_t *Draw_PicFromWad (const char *name);
 qpic_t *Draw_CachePic (const char *path);
