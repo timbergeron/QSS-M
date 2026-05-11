@@ -2993,6 +2993,12 @@ static qboolean IN_IsSafeQuotedCommandArg(const char *text)
 	return true;
 }
 
+static qboolean IN_IsActiveMatchParticipant(void)
+{
+	return cls.state == ca_connected && !cls.demoplayback &&
+		cl.matchinp == 1 && cl.notobserver == 1 && cl.teamcolor[0] != '\0';
+}
+
 static void IN_PlayCopySound(void)
 {
 	const char *sound_file = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
@@ -3000,7 +3006,7 @@ static void IN_PlayCopySound(void)
 	S_LocalSound(sound_file);
 }
 
-static qboolean IN_InstallExternalFile(const char *source_path, const char *source_desc)
+static qboolean IN_InstallExternalFile(const char *source_path, const char *source_desc, qboolean suppress_demo_autoplay)
 {
 	char	normalized_path[MAX_OSPATH];
 	char	relative_path[MAX_OSPATH];
@@ -3197,6 +3203,9 @@ static qboolean IN_InstallExternalFile(const char *source_path, const char *sour
 		COM_StripExtension(relative_path, command_path, sizeof(command_path));
 		if (is_demo)
 		{
+			if (suppress_demo_autoplay)
+				return true;
+
 #ifdef _WIN32
 			if (!q_strncasecmp(command_path, "demos/", 6))
 #else
@@ -4094,6 +4103,31 @@ static qboolean IN_IsLegacyExternalFile(const char *path)
 	return IN_IsLegacyExternalExtension(COM_FileGetExtension(normalized_path));
 }
 
+static qboolean IN_IsDemoExternalFile(const char *path)
+{
+	char	normalized_path[MAX_OSPATH];
+
+	if (!path || !*path)
+		return false;
+	if (q_strlcpy(normalized_path, path, sizeof(normalized_path)) >= sizeof(normalized_path))
+		return false;
+	IN_NormalizeDroppedPath(normalized_path);
+	return !q_strcasecmp(COM_FileGetExtension(normalized_path), "dem");
+}
+
+static int IN_CountDemoExternalFiles(char **paths, int count)
+{
+	int i;
+	int demo_count = 0;
+
+	for (i = 0; i < count; ++i)
+	{
+		if (IN_IsDemoExternalFile(paths[i]))
+			++demo_count;
+	}
+	return demo_count;
+}
+
 static qboolean IN_ResolveMapSidecarBSP(const in_map_sidecar_t *sidecar, const char *extension, const in_map_bsp_t *bsps, int bsp_count, in_map_bsp_t *external_bsp, const in_map_bsp_t **paired_bsp, const char **dest_basename)
 {
 	char reason[128];
@@ -4398,10 +4432,18 @@ static qboolean IN_ProcessExternalFiles(char **paths, int count, const char *bat
 	qboolean handled_maps;
 	qboolean installed_any = false;
 	qboolean map_installed = false;
+	qboolean suppress_demo_autoplay_for_match;
+	qboolean suppress_demo_autoplay;
+	qboolean suppressed_demo_autoplay = false;
+	int demo_count;
 	int i;
 
 	if (!paths || count <= 0)
 		return false;
+
+	demo_count = IN_CountDemoExternalFiles(paths, count);
+	suppress_demo_autoplay_for_match = (demo_count > 0 && IN_IsActiveMatchParticipant());
+	suppress_demo_autoplay = (demo_count > 1 || suppress_demo_autoplay_for_match);
 
 	handled_maps = IN_HasMapAssetFiles(paths, count) &&
 		IN_InstallMapFiles(paths, count, batch_desc, file_desc, bsp_desc, lit_desc, ent_desc, vis_desc, &map_installed);
@@ -4414,11 +4456,21 @@ static qboolean IN_ProcessExternalFiles(char **paths, int count, const char *bat
 			continue;
 		if (handled_maps && !IN_IsLegacyExternalFile(paths[i]))
 			continue;
-		if (IN_InstallExternalFile(paths[i], file_desc))
+		if (IN_InstallExternalFile(paths[i], file_desc, suppress_demo_autoplay))
 		{
 			handled = true;
 			installed_any = true;
+			if (suppress_demo_autoplay && IN_IsDemoExternalFile(paths[i]))
+				suppressed_demo_autoplay = true;
 		}
+	}
+
+	if (suppressed_demo_autoplay)
+	{
+		if (suppress_demo_autoplay_for_match)
+			Con_Printf("Demo imported; not auto-playing while you are an active match participant.\n");
+		else
+			Con_Printf("Multiple demos imported; not auto-playing.\n");
 	}
 
 	if (map_installed || installed_any)
