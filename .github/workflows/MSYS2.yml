@@ -2,6 +2,9 @@ name: Windows CI MSYS
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build on Windows ${{ matrix.platform }}
@@ -18,7 +21,7 @@ jobs:
             bits: 32
     
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
     
     - name: Set up MSYS2
       uses: msys2/setup-msys2@v2
@@ -176,25 +179,23 @@ jobs:
           zip -9j QSS-M-w32.zip ../Windows/codecs/x86/*.dll ../Windows/curl/lib/x86/libcurl.dll ../Windows/zlib/x86/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL2/lib/SDL2.dll ../QSS-M-Revision.txt QSS-M-w32.exe "${gnutls_runtime[@]}"
         fi
 
-    - name: Prepare Artifacts
+    - name: Verify package artifact
       shell: pwsh
       run: |
         $packageName = "QSS-M-${{ matrix.platform }}"
-        $packageRoot = "artifact/package/$packageName"
-
-        if (Test-Path $packageRoot) {
-          Remove-Item $packageRoot -Recurse -Force
+        $packageZip = "Quake/$packageName.zip"
+        if (-not (Test-Path $packageZip)) {
+          throw "Package archive not found: $packageZip"
         }
-        New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
 
-        Expand-Archive -Path "Quake/$packageName.zip" -DestinationPath $packageRoot -Force
-
-        Write-Host "===== Package artifact tree ====="
-        Get-ChildItem $packageRoot -Recurse | ForEach-Object { $_.FullName }
+        Write-Host "===== Package archive ====="
+        Get-Item $packageZip | Format-List FullName,Length
+        Write-Host "===== Package archive contents ====="
+        tar -tf $packageZip
 
     - name: Upload package artifact
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
-        name: QSS-M-${{ matrix.platform }}
-        path: artifact/package/QSS-M-${{ matrix.platform }}
+        path: Quake/QSS-M-${{ matrix.platform }}.zip
         if-no-files-found: error
+        archive: false

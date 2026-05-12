@@ -2,12 +2,15 @@ name: Linux Valgrind
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   valgrind:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Install dependencies
       run: |
@@ -81,7 +84,7 @@ jobs:
         ./Misc/valgrind/run-valgrind.sh
 
     - name: Upload valgrind logs
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: valgrind-logs
         path: |
@@ -92,7 +95,7 @@ jobs:
         if-no-files-found: warn
 
     - name: Upload valgrind binary
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: quakespasm-valgrind
         path: |

@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: arm64-universal
@@ -21,7 +24,7 @@ jobs:
       VCPKG_DISABLE_METRICS: "1"
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Compute vcpkg cache key inputs
       id: vcpkg-cache
@@ -40,7 +43,7 @@ jobs:
 
     - name: Cache vcpkg artifacts
       id: vcpkg-cache-restore
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
@@ -164,8 +167,8 @@ jobs:
           ./build-macos.sh
 
     - name: Upload macOS artifact
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
-        name: QSS-M
-        path: |
-          MacOSX/build/Release/*.zip
+        path: MacOSX/build/Release/QSS-M_MacOS.zip
+        if-no-files-found: error
+        archive: false

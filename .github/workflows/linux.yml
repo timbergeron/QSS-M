@@ -2,13 +2,16 @@ name: Linux CI
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: x64
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Install Dependencies
       run: |
@@ -67,8 +70,8 @@ jobs:
         fi
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
-        name: QSS-M
-        path: |
-          Quake/QSS-M-l64.zip
+        path: Quake/QSS-M-l64.zip
+        if-no-files-found: error
+        archive: false

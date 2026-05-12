@@ -2,6 +2,9 @@ name: Windows CI (MinGW Linux Cross)
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: ${{ matrix.platform }}
@@ -19,7 +22,7 @@ jobs:
       CROSS_GNUTLS_CACHE_REV: "v2"
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Resolve Target
       run: |
@@ -45,7 +48,7 @@ jobs:
         echo "CROSS_GNUTLS_BUILDDIR=${builddir}" >> "$GITHUB_ENV"
 
     - name: Cache Cross GNUTLS
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}
         key: ${{ runner.os }}-cross-gnutls-${{ env.CROSS_GNUTLS_CACHE_REV }}-${{ matrix.platform }}-gmp-${{ env.CROSS_GMP_VER }}-nettle-${{ env.CROSS_NETTLE_VER }}-tasn1-${{ env.CROSS_LIBTASN1_VER }}-gnutls-${{ env.CROSS_GNUTLS_VER }}
@@ -347,14 +350,14 @@ jobs:
       run: |
         set -euxo pipefail
         package_name="QSS-M-${{ matrix.platform }}"
-        package_root="artifact/package/${package_name}"
+        package_zip="Quake/${package_name}.zip"
         log_root="artifact/logs/${package_name}-logs"
         cross_log_dir="${{ runner.temp }}/qss-cross-gnutls/${{ matrix.platform == 'w64' && 'x86_64-w64-mingw32' || 'i686-w64-mingw32' }}"
 
-        rm -rf "$package_root" "$log_root"
-        mkdir -p "$package_root" "$log_root"
+        rm -rf "$log_root"
+        mkdir -p "$log_root"
 
-        unzip -q "Quake/${package_name}.zip" -d "$package_root"
+        test -f "$package_zip"
 
         cp "build-${{ matrix.platform }}.log" "$log_root/"
         for log_name in \
@@ -371,20 +374,20 @@ jobs:
           fi
         done
 
-        echo "===== Package artifact tree ====="
-        find artifact/package -maxdepth 3 -type f | sort
+        echo "===== Package archive contents ====="
+        unzip -l "$package_zip"
         echo "===== Log artifact tree ====="
         find artifact/logs -maxdepth 3 -type f | sort
 
     - name: Upload package artifact
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
-        name: QSS-M-${{ matrix.platform }}
-        path: artifact/package/QSS-M-${{ matrix.platform }}
+        path: Quake/QSS-M-${{ matrix.platform }}.zip
         if-no-files-found: error
+        archive: false
 
     - name: Upload debug logs
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: QSS-M-${{ matrix.platform }}-logs
         path: artifact/logs/QSS-M-${{ matrix.platform }}-logs
