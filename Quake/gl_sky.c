@@ -1474,6 +1474,73 @@ Sky_LoadSkyBox
 ==================
 */
 static const char *suf[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
+static const char *skybox_image_extensions[] = {"dds", "tga", "png", "jpeg", "jpg", "pcx"};
+
+static qboolean Sky_FileExistsWithExtension(const char *name, const char *extension)
+{
+	char filename[MAX_OSPATH];
+	const char *skipname;
+
+	if (!name || !name[0])
+		return false;
+
+	q_snprintf(filename, sizeof(filename), "%s.%s", name, extension);
+	if (COM_FileExists(filename, NULL))
+		return true;
+
+	q_snprintf(filename, sizeof(filename), "textures/%s.%s", name, extension);
+	if (COM_FileExists(filename, NULL))
+		return true;
+
+	skipname = COM_SkipPath(name);
+	if (skipname != name)
+	{
+		q_snprintf(filename, sizeof(filename), "textures/%s.%s", skipname, extension);
+		if (COM_FileExists(filename, NULL))
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean Sky_HasSkyboxFace(const char *name, const char *suffix)
+{
+	char filename[MAX_OSPATH];
+
+	if (!name || !name[0])
+		return false;
+
+	q_snprintf(filename, sizeof(filename), "gfx/env/%s%s", name, suffix);
+
+	for (int i = 0; i < (int)ARRAY_COUNT(skybox_image_extensions); i++)
+	{
+		if (Sky_FileExistsWithExtension(filename, skybox_image_extensions[i]))
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean Sky_HasAllSkyboxFaces(const char *name)
+{
+	if (!name || !name[0])
+		return false;
+
+	for (int i = 0; i < 6; i++)
+	{
+		if (!Sky_HasSkyboxFace(name, suf[i]))
+			return false;
+	}
+
+	return true;
+}
+
+void Sky_WarnMissingSkybox(const char *name)
+{
+	Con_Printf("this map uses an external sky, couldn't load skybox ^m%s^m\n",
+		name ? name : "");
+}
+
 static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #skydownloads
 {
 	int		i, mark;
@@ -1557,9 +1624,9 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 	}
 	Hunk_FreeToLowMark (mark);
 
-        if (nonefound && !quiet) // woods, verbose missing sky + limit spam
+	if (numloaded < 6 && !quiet) // woods, verbose missing sky + limit spam
 	{
-                Con_Printf("this map uses an external sky, could't load skybox ^m%s^m\n", name);
+		Sky_WarnMissingSkybox(name);
 	}
 
 	if (nonefound) // go back to scrolling sky if skybox is totally missing
@@ -1606,68 +1673,48 @@ qboolean Sky_DownloadSkybox(const char* name)
 		cl_web_download_url2.string
 	};
 
-	static const char* suffixes[6] = { "rt", "bk", "lf", "ft", "up", "dn" };
 	static const char* extensions[] = { "tga", "png", "jpg", "dds" };
 
 	char remote_path[MAX_QPATH];
 	char local_path[MAX_OSPATH];
-	qboolean any_downloads = false;
 
-	// First pass: check if we need to download anything
-	for (int b = 0; b < 2; ++b)
+	if (Sky_HasAllSkyboxFaces(name))
+		return true;
+
+	for (int i = 0; i < 6; ++i)
 	{
-		if (!IsGithubRepoPath(bases[b]))
+		if (Sky_HasSkyboxFace(name, suf[i]))
 			continue;
 
-		for (int e = 0; e < (int)ARRAY_COUNT(extensions); ++e)
+		for (int b = 0; b < 2; ++b)
 		{
-			for (int i = 0; i < 6; ++i)
+			if (!IsGithubRepoPath(bases[b]))      /* skip plain hosts       */
+				continue;
+
+			for (int e = 0; e < (int)ARRAY_COUNT(extensions); ++e)
 			{
 				q_snprintf(remote_path, sizeof(remote_path),
-					"gfx/env/%s%s.%s", name, suffixes[i], extensions[e]);
-
-				if (!COM_FileExists(remote_path, NULL))
-				{
-					any_downloads = true;
-					break;
-				}
-			}
-			if (any_downloads) break;
-		}
-		if (any_downloads) break;
-	}
-
-	for (int b = 0; b < 2; ++b)
-	{
-		if (!IsGithubRepoPath(bases[b]))          /* skip plain hosts       */
-			continue;
-
-		for (int e = 0; e < (int)ARRAY_COUNT(extensions); ++e)
-		{
-			for (int i = 0; i < 6; ++i)
-			{
-				q_snprintf(remote_path, sizeof(remote_path),
-					"gfx/env/%s%s.%s", name, suffixes[i], extensions[e]);
-
-				if (COM_FileExists(remote_path, NULL))
-					continue;                     /* face already present   */
+					"gfx/env/%s%s.%s", name, suf[i], extensions[e]);
 
 				q_snprintf(local_path, sizeof(local_path),
 					"%s/%s", com_gamedir, remote_path);
 
-				if (!Curl_DownloadFile(bases[b],
+				if (Curl_DownloadFile(bases[b],
 					remote_path,
 					local_path,
 					/* is_skybox   */ true,
 					/* display_tag */ NULL))
 				{
-					break;                         /* try next ext/mirror   */
+					break;                         /* face is present       */
 				}
 			}
+
+			if (Sky_HasSkyboxFace(name, suf[i]))
+				break;
 		}
 	}
 
-	return false;                                  /* no mirror succeeded   */
+	return Sky_HasAllSkyboxFaces(name);
 }
 
 static void Sky_LoadSkyBoxAuto(const char *name)

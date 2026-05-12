@@ -3247,6 +3247,7 @@ try_external_ent:
 
 extern qboolean Sky_DownloadsDisabled(void);
 extern qboolean Sky_DownloadSkybox(const char* name);
+extern void Sky_WarnMissingSkybox(const char* name);
 
 //download+load models and sounds as needed, once complete let the server know we're ready for the next stage.
 //returning false will trigger nops.
@@ -3299,12 +3300,12 @@ qboolean CL_CheckDownloads(void)
 		if (Sky_PeekSkyKeyFromBSP(cl.model_name[1], skyname, sizeof(skyname))
 			&& skyname[0])
 		{
+			qboolean try_skybox_download = !Sky_DownloadsDisabled();
+
 			/* Only try if any face is missing; Sky_DownloadSkybox itself
 			   skips mirrors that aren't in user/repo/branch form       */
-			if (!Sky_DownloadsDisabled() && Sky_DownloadSkybox(skyname))
-			{
-				/* success – carry on */
-			}
+			if (try_skybox_download && !Sky_DownloadSkybox(skyname))
+				Sky_WarnMissingSkybox(skyname);
 			/* on failure we still fall through – we tried once */
 		}
 
