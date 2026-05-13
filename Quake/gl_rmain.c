@@ -772,7 +772,6 @@ void R_SetupView (void)
 	// Need to do those early because we now update dynamic light maps during R_MarkSurfaces
 	R_AnimateLight ();
 
-	Fog_SetupFrame (); //johnfitz
 	Skywind_SetupFrame();
 
 // build the transformation matrix for the given view angles
@@ -814,6 +813,7 @@ void R_SetupView (void)
 	else
 		viewcontents = CONTENTS_EMPTY;
 
+	Fog_SetupFrame (viewcontents); //johnfitz
 	V_SetContentsColor (viewcontents);
 	V_CalcBlend ();
 

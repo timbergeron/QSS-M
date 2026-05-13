@@ -113,6 +113,7 @@ typedef struct
 	GLint shellModeLoc; // woods #powershell
 	GLint shellTimeLoc; // woods #powershell
 	GLint shellWaveParamsLoc; // woods #powershell
+	GLint fogModeLoc;
 } aliasglsl_t;
 static aliasglsl_t r_alias_glsl[ALIAS_GLSL_MODES];
 
@@ -350,11 +351,21 @@ void GLAlias_CreateShaders (void)
 			"uniform vec4 ColourTint[3];\n"	//base+bot+top+fb
 			"uniform int isOutlinePass;      // Indicates if this is the outline pass\n" // woods #routline
 			"uniform vec4 outlineColor;       // Color to use for the outline\n" // woods #routline
+			"uniform int FogMode;\n"
 			"\n"
 			"varying vec2 ShellCoord;\n" // woods #powershell
 			"varying vec2 ShellCoord2;\n" // woods #powershell
 			"\n"
 			"varying float FogFragCoord;\n"
+			"\n"
+			"float FogFactor(float dist)\n"
+			"{\n"
+			"	if (FogMode == 1)\n"
+			"		return (gl_Fog.end - dist) / (gl_Fog.end - gl_Fog.start);\n"
+			"	if (FogMode == 2)\n"
+			"		return exp(-gl_Fog.density * dist);\n"
+			"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n"
+			"}\n"
 			"\n"
 			"void main()\n"
 			"{\n"
@@ -404,7 +415,7 @@ void GLAlias_CreateShaders (void)
 			"	if (UseFullbrightTex)\n"
 			"		result += texture2D(FullbrightTex, gl_TexCoord[0].xy) * ColourTint[2];\n" //fullbrights (with glowmod)
 			"	result = clamp(result, 0.0, 1.0);\n"
-			"	float fog = exp(-gl_Fog.density * gl_Fog.density * FogFragCoord * FogFragCoord);\n"
+			"	float fog = FogFactor(FogFragCoord);\n"
 			"	fog = clamp(fog, 0.0, 1.0) * gl_Fog.color.a;\n"
 			"	result.rgb = mix(gl_Fog.color.rgb, result.rgb, fog);\n"
 			"	result.a *= gl_Color.a;\n" // FIXME: This will make almost transparent things cut holes though heavy fog
@@ -469,6 +480,7 @@ void GLAlias_CreateShaders (void)
 			glsl->shellModeLoc = GL_GetUniformLocation(&glsl->program, "shellMode");
 			glsl->shellTimeLoc = GL_GetUniformLocation(&glsl->program, "shellTime");
 			glsl->shellWaveParamsLoc = GL_GetUniformLocation(&glsl->program, "shellWaveParams");
+			glsl->fogModeLoc = GL_GetUniformLocation(&glsl->program, "FogMode");
 
 			//we can do this here, its not going to change.
 			GL_UseProgramFunc (glsl->program);
@@ -1831,6 +1843,7 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	GL_Uniform1fFunc (glsl->useOverbrightLoc, overbright ? 1 : 0);
 	GL_Uniform1iFunc (glsl->useAlphaTestLoc, (currententity->model->flags & MF_HOLEY) ? 1 : 0);
 	GL_Uniform4fvFunc(glsl->colorTintLoc, countof(tints), tints[0]);	//colourmapping and glowmod.
+	GL_Uniform1iFunc (glsl->fogModeLoc, Fog_GetMode());
 
 	R_BeginAliasOutlineRendering(glsl); // woods #routline
 

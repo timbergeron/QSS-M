@@ -619,12 +619,14 @@ static GLint grassTimeLoc; // woods #grass
 static GLint grassBaseColorLoc; // woods #grass
 static GLint grassTipColorLoc; // woods #grass
 static GLint grassMovementLoc; // woods #grass
+static GLint fogModeLoc;
 static GLuint r_grass_program; // woods #grass
 static GLint grassGeomAmountLoc; // woods #grass
 static GLint grassGeomTimeLoc; // woods #grass
 static GLint grassGeomMovementLoc; // woods #grass
 static GLint grassGeomEyePosLoc; // woods #grass
 static GLint grassGeomFadeDistLoc; // woods #grass
+static GLint grassGeomFogModeLoc;
 
 
 static struct
@@ -637,6 +639,8 @@ static struct
 	GLuint eyepos;
 	GLuint fogalpha;
 	GLuint colour;
+	GLint fogmode;
+	GLint skyfogcolor;
 } r_water[4];	//
 
 static void GLWorld_DeleteShaderPrograms (void)
@@ -668,6 +672,7 @@ static void GLWorld_DeleteShaderPrograms (void)
 	grassBaseColorLoc = -1;
 	grassTipColorLoc = -1;
 	grassMovementLoc = -1;
+	fogModeLoc = -1;
 
 	r_grass_program = 0;
 	grassGeomAmountLoc = -1;
@@ -675,6 +680,7 @@ static void GLWorld_DeleteShaderPrograms (void)
 	grassGeomMovementLoc = -1;
 	grassGeomEyePosLoc = -1;
 	grassGeomFadeDistLoc = -1;
+	grassGeomFogModeLoc = -1;
 
 	for (i = 0; i < countof(r_water); i++)
 	{
@@ -685,6 +691,8 @@ static void GLWorld_DeleteShaderPrograms (void)
 		r_water[i].eyepos = 0;
 		r_water[i].fogalpha = 0;
 		r_water[i].colour = 0;
+		r_water[i].fogmode = -1;
+		r_water[i].skyfogcolor = -1;
 	}
 }
 
@@ -2465,6 +2473,7 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 		GL_Uniform1fFunc(grassGeomMovementLoc, movement);
 		GL_Uniform3fFunc(grassGeomEyePosLoc, grass_eye[0], grass_eye[1], grass_eye[2]);
 		GL_Uniform1fFunc(grassGeomFadeDistLoc, grassdist);
+		GL_Uniform1iFunc(grassGeomFogModeLoc, Fog_GetMode());
 	}
 	else if (GL_UseProgramFunc)
 		GL_UseProgramFunc(0);
@@ -2589,11 +2598,21 @@ static void GLGrass_CreateShaders (void)
 		"uniform float GrassTime;\n"
 		"uniform float GrassMovement;\n"
 		"uniform float GrassFadeDist;\n"
+		"uniform int FogMode;\n"
 		"\n"
 		"varying vec4 BladeCoord;\n"
 		"varying vec4 BladeColor;\n"
 		"varying float FogFragCoord;\n"
 		"varying vec3 ViewDir;\n"
+		"\n"
+		"float FogFactor(float dist)\n"
+		"{\n"
+		"	if (FogMode == 1)\n"
+		"		return (gl_Fog.end - dist) / (gl_Fog.end - gl_Fog.start);\n"
+		"	if (FogMode == 2)\n"
+		"		return exp(-gl_Fog.density * dist);\n"
+		"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n"
+		"}\n"
 		"\n"
 		"float GrassHash1(float n)\n"
 		"{\n"
@@ -2684,7 +2703,7 @@ static void GLGrass_CreateShaders (void)
 		"	colour += vec3(spec);\n"
 		"\n"
 		"	colour += vec3(GrassDither());\n"
-		"	float fog = exp(-gl_Fog.density * gl_Fog.density * FogFragCoord * FogFragCoord);\n"
+		"	float fog = FogFactor(FogFragCoord);\n"
 		"	fog = clamp(fog, 0.0, 1.0);\n"
 		"	gl_FragColor = vec4(mix(gl_Fog.color.rgb, colour, fog), 1.0);\n"
 		"}\n";
@@ -2700,6 +2719,7 @@ static void GLGrass_CreateShaders (void)
 		grassGeomMovementLoc = GL_GetUniformLocation (&r_grass_program, "GrassMovement");
 		grassGeomEyePosLoc = GL_GetUniformLocation (&r_grass_program, "GrassEyePos");
 		grassGeomFadeDistLoc = GL_GetUniformLocation (&r_grass_program, "GrassFadeDist");
+		grassGeomFogModeLoc = GL_GetUniformLocation (&r_grass_program, "FogMode");
 	}
 }
 
@@ -2761,9 +2781,19 @@ static void GLWater_CreateShaders (void)
 "#endif\n"
 		"uniform float Alpha;\n"
 		"uniform float WarpTime;\n"
+		"uniform int FogMode;\n"
 		"\n"
 		"varying float FogFragCoord;\n"
 		"varying vec2 tc_tex;\n"
+		"\n"
+		"float FogFactor(float dist)\n"
+		"{\n"
+		"	if (FogMode == 1)\n"
+		"		return (gl_Fog.end - dist) / (gl_Fog.end - gl_Fog.start);\n"
+		"	if (FogMode == 2)\n"
+		"		return exp(-gl_Fog.density * dist);\n"
+		"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n"
+		"}\n"
 		"\n"
 		"void main()\n"
 		"{\n"
@@ -2788,7 +2818,7 @@ static void GLWater_CreateShaders (void)
 "#endif\n"
 		"	result.a *= Alpha;\n"
 		"	result = clamp(result, 0.0, 1.0);\n"
-		"	float fog = exp(-gl_Fog.density * gl_Fog.density * FogFragCoord * FogFragCoord);\n"
+		"	float fog = FogFactor(FogFragCoord);\n"
 		"	fog = clamp(fog, 0.0, 1.0);\n"
 		"	result.rgb = mix(gl_Fog.color.rgb, result.rgb, fog);\n"
 		"	gl_FragColor = result;\n"
@@ -2818,6 +2848,7 @@ static void GLWater_CreateShaders (void)
 		"uniform sampler2D CloudTex;\n"
 		"uniform float WarpTime;\n"
 		"uniform float Alpha, FogAlpha;\n"
+		"uniform vec3 FogColour;\n"
 		"varying float FogFragCoord;\n"
 		"varying vec3 SkyDir;\n"
 		"void main ()\n"
@@ -2834,8 +2865,8 @@ static void GLWater_CreateShaders (void)
 			"sky = (sky.rgb*(1.0-clouds.a)) + (clouds.a*clouds.rgb);\n"
 
 #if 1	//sky is logically an infinite distance away, so fog is just an alpha blend with the colour, no distance calcs needed.
-			"if (gl_Fog.density > 0.0)\n"
-				"sky.rgb = mix(sky.rgb, gl_Fog.color.rgb, FogAlpha);\n"
+			"if (FogAlpha > 0.0)\n"
+				"sky.rgb = mix(sky.rgb, FogColour.rgb, FogAlpha);\n"
 #else	//do fog as normal. we actually have distance values.
 			"float fog = exp(-gl_Fog.density * gl_Fog.density * FogFragCoord * FogFragCoord);\n"
 			"fog = clamp(fog, 0.0, 1.0) * FogAlpha + (1.0-FogAlpha);\n"
@@ -2859,14 +2890,15 @@ static void GLWater_CreateShaders (void)
 		"\n"
 		"uniform float Alpha, FogAlpha;\n"
 		"uniform vec3 SkyColour;\n"
+		"uniform vec3 FogColour;\n"
 		"varying float FogFragCoord;\n"
 		"void main ()\n"
 		"{\n"
 			"vec3 sky = SkyColour.rgb;\n"
 
 #if 1	//sky is logically an infinite distance away, so fog is just an alpha blend with the colour, no distance calcs needed.
-			"if (gl_Fog.density > 0.0)\n"
-				"sky.rgb = mix(sky.rgb, gl_Fog.color.rgb, FogAlpha);\n"
+			"if (FogAlpha > 0.0)\n"
+				"sky.rgb = mix(sky.rgb, FogColour.rgb, FogAlpha);\n"
 #else	//do fog as normal. we actually have distance values.
 			"float fog = exp(-gl_Fog.density * gl_Fog.density * FogFragCoord * FogFragCoord);\n"
 			"fog = clamp(fog, 0.0, 1.0) * FogAlpha + (1.0-FogAlpha);\n"
@@ -2877,7 +2909,7 @@ static void GLWater_CreateShaders (void)
 
 	size_t i;
 	char vtext[1024];
-	char ftext[1024];
+	char ftext[4096];
 	gl_glsl_water_able = false;
 
 	if (!gl_glsl_able)
@@ -2908,6 +2940,8 @@ static void GLWater_CreateShaders (void)
 			r_water[i].eyepos			= ((i==2)?GL_GetUniformLocation (&r_water[i].program, "EyePos"):-1);
 			r_water[i].fogalpha			= ((i>=2)?GL_GetUniformLocation (&r_water[i].program, "FogAlpha"):-1);
 			r_water[i].colour			= ((i==3)?GL_GetUniformLocation (&r_water[i].program, "SkyColour"):-1);
+			r_water[i].fogmode			= ((i<2)?GL_GetUniformLocation (&r_water[i].program, "FogMode"):-1);
+			r_water[i].skyfogcolor		= ((i>=2)?GL_GetUniformLocation (&r_water[i].program, "FogColour"):-1);
 
 			if (!r_water[i].program)
 				return;
@@ -2996,6 +3030,7 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 
 					GL_UseProgramFunc (r_water[mode].program);
 					GL_Uniform1fFunc (r_water[mode].time, cl.time);
+					GL_Uniform1iFunc (r_water[mode].fogmode, Fog_GetMode());
 					if (r_water[mode].light_scale != -1)
 						GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
 					GL_Uniform1fFunc (r_water[mode].alpha_scale, entalpha);
@@ -3172,10 +3207,20 @@ void GLWorld_CreateShaders (void)
 		"uniform vec3 GrassBaseColor;\n"
 		"uniform vec3 GrassTipColor;\n"
 		"uniform float GrassMovement;\n"
+		"uniform int FogMode;\n"
 		"\n"
 		"varying float FogFragCoord;\n"
 		"varying vec2 tc_tex;\n"
 		"varying vec2 tc_lm;\n"
+		"\n"
+		"float FogFactor(float dist)\n"
+		"{\n"
+		"	if (FogMode == 1)\n"
+		"		return (gl_Fog.end - dist) / (gl_Fog.end - gl_Fog.start);\n"
+		"	if (FogMode == 2)\n"
+		"		return exp(-gl_Fog.density * dist);\n"
+		"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n"
+		"}\n"
 		"\n"
 		"float GrassHash(vec2 p)\n"
 		"{\n"
@@ -3290,7 +3335,7 @@ void GLWorld_CreateShaders (void)
 		"	}\n"
 		"\n"
 		"	result = clamp(result, 0.0, 1.0);\n"
-		"	float fog = exp(-gl_Fog.density * gl_Fog.density * FogFragCoord * FogFragCoord);\n"
+		"	float fog = FogFactor(FogFragCoord);\n"
 		"	fog = clamp(fog, 0.0, 1.0);\n"
 		"	result = mix(gl_Fog.color, result, fog);\n"
 		"	result.a = Alpha;\n" // FIXME: This will make almost transparent things cut holes though heavy fog
@@ -3326,6 +3371,7 @@ void GLWorld_CreateShaders (void)
 		grassBaseColorLoc = GL_GetUniformLocation (&r_world_program, "GrassBaseColor"); // woods #grass
 		grassTipColorLoc = GL_GetUniformLocation (&r_world_program, "GrassTipColor"); // woods #grass
 		grassMovementLoc = GL_GetUniformLocation (&r_world_program, "GrassMovement"); // woods #grass
+		fogModeLoc = GL_GetUniformLocation (&r_world_program, "FogMode");
 
 		GL_UseProgramFunc (r_world_program);
 		GL_Uniform1iFunc (texLoc, 0);
@@ -3409,6 +3455,7 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 	GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount()); // woods #grass
 	GL_Uniform1fFunc (grassTimeLoc, cl.time); // woods #grass
 	GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement()); // woods #grass
+	GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
 
 	for (i=0 ; i<model->numtextures ; i++)
 	{
@@ -3544,6 +3591,7 @@ void R_DrawLightmapChains_GLSL(qmodel_t* model, entity_t* ent, texchain_t chain)
 	GL_Uniform1fFunc(alphaLoc, 1.0f);
 	GL_Uniform1iFunc(useFullbrightTexLoc, 0);
 	GL_Uniform1iFunc(useLightmapOnlyLoc, 1);
+	GL_Uniform1iFunc(fogModeLoc, Fog_GetMode());
 
 	R_ClearBatch();
 	lastlightmap = -1;
@@ -4751,6 +4799,7 @@ static void RSceneCache_Draw(qboolean water)
 						lastprog = r_water[mode].program;
 						GL_UseProgramFunc (r_water[mode].program);
 						GL_Uniform1fFunc (r_water[mode].time, cl.time);
+						GL_Uniform1iFunc (r_water[mode].fogmode, Fog_GetMode());
 						if (r_water[mode].light_scale != -1)
 							GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
 					}
@@ -4761,6 +4810,8 @@ static void RSceneCache_Draw(qboolean water)
 					//sky. because why not.
 					extern cvar_t r_skyalpha, r_skyfog, r_fastsky;
 					extern float skyflatcolor[3];
+					float skyfog = 0.0f;
+					float *fogcolor;
 					if (r_fastsky.value == 1)  // woods -- #fastsky2
 						mode = 3;
 					else if (r_fastsky.value == 2)
@@ -4770,6 +4821,10 @@ static void RSceneCache_Draw(qboolean water)
 
 					if (rscenecache.doingskybox)
 						break;	//we're doing skies weirdly. FIXME: replace with cubemap skies, where possible.
+
+					if (Fog_GetGlobalDensity() > 0.0f)
+						skyfog = CLAMP(0.0f, r_skyfog.value, 1.0f);
+					fogcolor = Fog_GetGlobalColor();
 
 					GL_SelectTexture (GL_TEXTURE2);
 					GL_Bind(tex->fullbright);
@@ -4784,7 +4839,9 @@ static void RSceneCache_Draw(qboolean water)
 
 						GL_Uniform1fFunc (r_water[mode].alpha_scale, r_skyalpha.value);
 						GL_Uniform3fFunc (r_water[mode].eyepos, r_origin[0], r_origin[1], r_origin[2]);
-						GL_Uniform1fFunc (r_water[mode].fogalpha, r_skyfog.value);
+						GL_Uniform1fFunc (r_water[mode].fogalpha, skyfog);
+						if (r_water[mode].skyfogcolor != -1)
+							GL_Uniform3fFunc (r_water[mode].skyfogcolor, fogcolor[0], fogcolor[1], fogcolor[2]);
 						if (r_water[mode].colour != (GLuint)-1)
 							GL_Uniform3fFunc (r_water[mode].colour, skyflatcolor[0], skyflatcolor[1], skyflatcolor[2]);
 					}
@@ -4802,6 +4859,7 @@ static void RSceneCache_Draw(qboolean water)
 						GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount()); // woods #grass
 						GL_Uniform1fFunc (grassTimeLoc, cl.time); // woods #grass
 						GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement()); // woods #grass
+						GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
 						R_SetGrassColorUniforms(NULL); // woods #grass
 
 						GL_Uniform1fFunc(clTimeLoc, cl.time);

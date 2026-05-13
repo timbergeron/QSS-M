@@ -431,13 +431,16 @@ extern const float	r_avertexnormals[NUMVERTEXNORMALS][3];
 
 //johnfitz -- fog functions called from outside gl_fog.c
 void Fog_ParseServerMessage (void);
+float *Fog_GetGlobalColor (void);
+float Fog_GetGlobalDensity (void);
 float *Fog_GetColor (void);
 float Fog_GetDensity (void);
+int Fog_GetMode (void);
 void Fog_EnableGFog (void);
 void Fog_DisableGFog (void);
 void Fog_StartAdditive (void);
 void Fog_StopAdditive (void);
-void Fog_SetupFrame (void);
+void Fog_SetupFrame (int viewcontents);
 void Fog_NewMap (void);
 void Fog_Init (void);
 void Fog_SetupState (void);

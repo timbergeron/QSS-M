@@ -26,9 +26,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define	MAX_CLIP_VERTS 64
 
-float Fog_GetDensity(void);
-float *Fog_GetColor(void);
-
 void Sky_EmitSkyBoxVertex (float s, float t, int axis);
 
 extern	int	rs_skypolys; // for r_speeds readout
@@ -686,8 +683,8 @@ static qboolean Skywind_DrawSkyBox_Cubemap(const vec3_t wind_dir, float phase)
 		GL_Uniform3fFunc(skywind_cubemap_uniform_eye, r_origin[0], r_origin[1], r_origin[2]);
 
 	{
-		float fog_density = Fog_GetDensity();
-		float *fog_color = Fog_GetColor();
+		float fog_density = Fog_GetGlobalDensity();
+		float *fog_color = Fog_GetGlobalColor();
 		float density = 0.0f;
 		static float fog_fallback[3] = {0.5f, 0.5f, 0.5f};
 
@@ -758,8 +755,8 @@ static qboolean Skywind_DrawSkyBox_Shader(const vec3_t wind_dir, float phase)
 		GL_Uniform1fFunc(skywind_uniform_phase, phase);
 
 	{
-		float fog_density = Fog_GetDensity();
-		float *fog_color = Fog_GetColor();
+		float fog_density = Fog_GetGlobalDensity();
+		float *fog_color = Fog_GetGlobalColor();
 		float density = 0.0f;
 		static float fog_fallback[3] = {0.5f, 0.5f, 0.5f};
 
@@ -2556,7 +2553,7 @@ static void Sky_DrawSkyBoxFogOverlay(void)
 	int i;
 	float fog_density;
 
-	fog_density = Fog_GetDensity();
+	fog_density = Fog_GetGlobalDensity();
 	if (fog_density <= 0.0f || skyfog <= 0.0f)
 		return;
 
@@ -2564,7 +2561,7 @@ static void Sky_DrawSkyBoxFogOverlay(void)
 	glDisable (GL_TEXTURE_2D);
 
 	{
-		float *c = Fog_GetColor();
+		float *c = Fog_GetGlobalColor();
 		glColor4f (c[0], c[1], c[2], CLAMP(0.0f, skyfog, 1.0f));
 	}
 
@@ -2779,11 +2776,11 @@ void Sky_DrawFaceQuad (glpoly_t *p)
 		rs_skypasses += 2;
 	}
 
-	if (Fog_GetDensity() > 0 && skyfog > 0)
+	if (Fog_GetGlobalDensity() > 0 && skyfog > 0)
 	{
 		float *c;
 
-		c = Fog_GetColor();
+		c = Fog_GetGlobalColor();
 		glEnable (GL_BLEND);
 		glDisable (GL_TEXTURE_2D);
 		glColor4f (c[0],c[1],c[2], CLAMP(0.0f,skyfog,1.0f));
@@ -2942,8 +2939,8 @@ void Sky_DrawSky (void)
 	//
 	Fog_DisableGFog ();
 	glDisable (GL_TEXTURE_2D);
-	if (Fog_GetDensity() > 0)
-		glColor3fv (Fog_GetColor());
+	if (Fog_GetGlobalDensity() > 0)
+		glColor3fv (Fog_GetGlobalColor());
 	else
 		glColor3fv (skyflatcolor);
 
@@ -2983,8 +2980,8 @@ void Sky_DrawSky (void)
 	//
 	// render slow sky: cloud layers or skybox
 	//
-	if ((!r_fastsky.value && !(Fog_GetDensity() > 0 && skyfog >= 1)) ||
-		(r_fastsky.value == 2 && (skybox_name[0] || externalskyloaded) && !(Fog_GetDensity() > 0 && skyfog >= 1))) // woods -- #fastsky2 | r_fastsky 2 gives skybox precedence over fastsky, but fallback if not skybox
+	if ((!r_fastsky.value && !(Fog_GetGlobalDensity() > 0 && skyfog >= 1)) ||
+		(r_fastsky.value == 2 && (skybox_name[0] || externalskyloaded) && !(Fog_GetGlobalDensity() > 0 && skyfog >= 1))) // woods -- #fastsky2 | r_fastsky 2 gives skybox precedence over fastsky, but fallback if not skybox
 	{
 		glDepthFunc(GL_GEQUAL);
 		glDepthMask(0);

@@ -32,12 +32,30 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define DEFAULT_DENSITY 0.0
 #define DEFAULT_GRAY 0.3
 
+enum
+{
+	FOG_MODE_EXP2,
+	FOG_MODE_LINEAR,
+	FOG_MODE_EXP
+};
+
 static float fog_density;
 static float fog_red;
 static float fog_green;
 static float fog_blue;
 
 static cvar_t r_fogalpha = {"r_fogalpha", "1", CVAR_ARCHIVE}; // woods #fogalpha
+static cvar_t gl_waterfog = {"gl_waterfog", "0", CVAR_ARCHIVE};
+static cvar_t gl_waterfog_density = {"gl_waterfog_density", "0.5", CVAR_ARCHIVE};
+
+static int fog_viewcontents = CONTENTS_EMPTY;
+static int fog_mode = FOG_MODE_EXP2;
+static qboolean waterfog_set = false;
+static qboolean waterfog_dynamic = false;
+static float waterfog_density;
+static float waterfog_red = DEFAULT_GRAY;
+static float waterfog_green = DEFAULT_GRAY;
+static float waterfog_blue = DEFAULT_GRAY;
 
 static float old_density;
 static float old_red;
@@ -46,6 +64,113 @@ static float old_blue;
 
 static float fade_time; //duration of fade
 static float fade_done; //time when fade will be done
+
+static qboolean Fog_IsLiquidContents (int contents)
+{
+	switch (contents)
+	{
+	case CONTENTS_WATER:
+	case CONTENTS_SLIME:
+	case CONTENTS_LAVA:
+	case CONTENTS_CURRENT_0:
+	case CONTENTS_CURRENT_90:
+	case CONTENTS_CURRENT_180:
+	case CONTENTS_CURRENT_270:
+	case CONTENTS_CURRENT_UP:
+	case CONTENTS_CURRENT_DOWN:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static qboolean Fog_IsWaterFog (void)
+{
+	if (gl_waterfog.value <= 0.0f ||
+		CLAMP(0.0f, r_fogalpha.value, 1.0f) <= 0.0f ||
+		!Fog_IsLiquidContents(fog_viewcontents))
+		return false;
+
+	if (waterfog_set)
+		return waterfog_density > 0.0f;
+
+	return true;
+}
+
+int Fog_GetMode (void)
+{
+	return fog_mode;
+}
+
+static void Fog_ResetWaterFog (void)
+{
+	waterfog_set = false;
+	waterfog_dynamic = false;
+	waterfog_density = 0.0f;
+	waterfog_red = DEFAULT_GRAY;
+	waterfog_green = DEFAULT_GRAY;
+	waterfog_blue = DEFAULT_GRAY;
+}
+
+static void Fog_SetWaterFog (float density, float red, float green, float blue)
+{
+	waterfog_set = true;
+	waterfog_density = q_max(0.0f, density);
+	waterfog_red = CLAMP(0.0f, red, 1.0f);
+	waterfog_green = CLAMP(0.0f, green, 1.0f);
+	waterfog_blue = CLAMP(0.0f, blue, 1.0f);
+}
+
+static const cshift_t *Fog_GetContentsCShift (void)
+{
+	switch (fog_viewcontents)
+	{
+	case CONTENTS_LAVA:
+		return &cshift_lava;
+	case CONTENTS_SLIME:
+		return &cshift_slime;
+	default:
+		return &cshift_water;
+	}
+}
+
+static qboolean Fog_ParseWaterFogString (const char *value)
+{
+	float d = 0.05f;
+	float r = DEFAULT_GRAY;
+	float g = DEFAULT_GRAY;
+	float b = DEFAULT_GRAY;
+	float a, c, e, f;
+	int count;
+
+	count = sscanf(value, "%f %f %f %f", &a, &c, &e, &f);
+	switch (count)
+	{
+	case 1:
+		d = a;
+		break;
+	case 2:
+		d = a;
+		r = g = b = c;
+		break;
+	case 3:
+		r = a;
+		g = c;
+		b = e;
+		break;
+	case 4:
+		d = a;
+		r = c;
+		g = e;
+		b = f;
+		break;
+	default:
+		return false;
+	}
+
+	Fog_SetWaterFog(d, r, g, b);
+	return true;
+}
 
 /*
 =============
@@ -182,6 +307,95 @@ void Fog_FogCommand_f (void)
 
 /*
 =============
+Fog_WaterFogCommand_f
+
+handle the 'waterfog' console command
+=============
+*/
+void Fog_WaterFogCommand_f (void)
+{
+	float d, r, g, b;
+
+	switch (Cmd_Argc())
+	{
+	default:
+	case 1:
+		Con_Printf("usage:\n");
+		Con_Printf("   waterfog <density>\n");
+		Con_Printf("   waterfog <density> <gray>\n");
+		Con_Printf("   waterfog <red> <green> <blue>\n");
+		Con_Printf("   waterfog <density> <red> <green> <blue>\n");
+		Con_Printf("current values:\n");
+		Con_Printf("   \"override\" is \"%i\"\n", waterfog_set ? 1 : 0);
+		Con_Printf("   \"density\" is \"%f\"\n", waterfog_density);
+		Con_Printf("   \"red\" is \"%f\"\n", waterfog_red);
+		Con_Printf("   \"green\" is \"%f\"\n", waterfog_green);
+		Con_Printf("   \"blue\" is \"%f\"\n", waterfog_blue);
+		return;
+	case 2:
+		d = Q_atof(Cmd_Argv(1));
+		r = g = b = DEFAULT_GRAY;
+		break;
+	case 3:
+		d = Q_atof(Cmd_Argv(1));
+		r = g = b = Q_atof(Cmd_Argv(2));
+		break;
+	case 4:
+		d = 0.05f;
+		r = Q_atof(Cmd_Argv(1));
+		g = Q_atof(Cmd_Argv(2));
+		b = Q_atof(Cmd_Argv(3));
+		break;
+	case 5:
+		d = Q_atof(Cmd_Argv(1));
+		r = Q_atof(Cmd_Argv(2));
+		g = Q_atof(Cmd_Argv(3));
+		b = Q_atof(Cmd_Argv(4));
+		break;
+	}
+
+	Fog_SetWaterFog(d, r, g, b);
+	waterfog_dynamic = true;
+}
+
+/*
+===============
+Fog_WaterFog_Cvar_Completion_f
+===============
+*/
+static void Fog_WaterFog_Cvar_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "linear", NULL);
+	Con_AddToTabList("2", partial, "exponential", NULL);
+}
+
+/*
+===============
+Fog_WaterFogDensity_Cvar_Completion_f
+===============
+*/
+static void Fog_WaterFogDensity_Cvar_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	Con_AddToTabList("0", partial, "clear", NULL);
+	Con_AddToTabList("0.25", partial, "light", NULL);
+	Con_AddToTabList("0.5", partial, "medium", NULL);
+	Con_AddToTabList("0.75", partial, "heavy", NULL);
+	Con_AddToTabList("1", partial, "maximum", NULL);
+}
+
+/*
+=============
 Fog_ParseWorldspawn
 
 called at map load
@@ -205,6 +419,7 @@ void Fog_ParseWorldspawn (void)
 
 	fade_time = 0.0;
 	fade_done = 0.0;
+	Fog_ResetWaterFog();
 
 	data = COM_Parse(cl.worldmodel->entities);
 	if (!data)
@@ -237,17 +452,19 @@ void Fog_ParseWorldspawn (void)
 			fog_green = bound(0.0, fog_green, 1.0);
 			fog_blue = bound(0.0, fog_blue, 1.0);
 		}
+		else if (!strcmp("waterfog", key))
+			Fog_ParseWaterFogString(value);
 	}
 }
 
 /*
 =============
-Fog_GetColor
+Fog_GetGlobalColor
 
-calculates fog color for this frame, taking into account fade times
+calculates global fog color for this frame, taking into account fade times
 =============
 */
-float *Fog_GetColor (void)
+float *Fog_GetGlobalColor (void)
 {
 	static float c[4];
 	float f;
@@ -283,12 +500,49 @@ float *Fog_GetColor (void)
 
 /*
 =============
-Fog_GetDensity
+Fog_GetColor
 
-returns current density of fog
+calculates fog color for this frame, taking into account fade times
 =============
 */
-float Fog_GetDensity (void)
+float *Fog_GetColor (void)
+{
+	static float c[4];
+	const cshift_t *cshift;
+	int i;
+
+	if (!Fog_IsWaterFog())
+		return Fog_GetGlobalColor();
+
+	if (waterfog_set)
+	{
+		c[0] = waterfog_red;
+		c[1] = waterfog_green;
+		c[2] = waterfog_blue;
+		c[3] = 1.0f;
+		for (i = 0; i < 3; i++)
+			c[i] = (float)(Q_rint(c[i] * 255)) / 255.0f;
+		return c;
+	}
+
+	cshift = Fog_GetContentsCShift();
+	c[0] = cshift->destcolor[0] / 255.0f;
+	c[1] = cshift->destcolor[1] / 255.0f;
+	c[2] = cshift->destcolor[2] / 255.0f;
+	c[3] = 1.0f;
+	for (i = 0; i < 3; i++)
+		c[i] = (float)(Q_rint(CLAMP(0.0f, c[i], 1.0f) * 255)) / 255.0f;
+	return c;
+}
+
+/*
+=============
+Fog_GetGlobalDensity
+
+returns current global fog density
+=============
+*/
+float Fog_GetGlobalDensity (void)
 {
 	float f;
 
@@ -299,6 +553,21 @@ float Fog_GetDensity (void)
 	}
 	else
 		return fog_density;
+}
+
+/*
+=============
+Fog_GetDensity
+
+returns effective density for fixed-function fog state/gates
+=============
+*/
+float Fog_GetDensity (void)
+{
+	if (Fog_IsWaterFog())
+		return 1.0f;
+
+	return Fog_GetGlobalDensity();
 }
 
 static float Fog_EffectiveDensity(void) // woods #fogalpha
@@ -316,10 +585,47 @@ Fog_SetupFrame
 called at the beginning of each frame
 =============
 */
-void Fog_SetupFrame (void)
+void Fog_SetupFrame (int viewcontents)
 {
+	float scale = CLAMP(0.0f, r_fogalpha.value, 1.0f);
+
+	fog_viewcontents = viewcontents;
+
 	glFogfv(GL_FOG_COLOR, Fog_GetColor());
-	glFogf(GL_FOG_DENSITY, Fog_EffectiveDensity() / 64.0f); // woods #fogalpha
+
+	if (Fog_IsWaterFog())
+	{
+		if (waterfog_set)
+		{
+			fog_mode = FOG_MODE_EXP2;
+			glFogi(GL_FOG_MODE, GL_EXP2);
+			glFogf(GL_FOG_DENSITY, waterfog_density * scale / 64.0f);
+		}
+		else if (gl_waterfog.value >= 2.0f)
+		{
+			float density = CLAMP(0.0f, gl_waterfog_density.value, 1.0f) * scale;
+
+			fog_mode = FOG_MODE_EXP;
+			glFogi(GL_FOG_MODE, GL_EXP);
+			glFogf(GL_FOG_DENSITY, 0.0002f + (0.0009f - 0.0002f) * density);
+		}
+		else
+		{
+			float density = CLAMP(0.0f, gl_waterfog_density.value, 1.0f) * scale;
+
+			fog_mode = FOG_MODE_LINEAR;
+			glFogi(GL_FOG_MODE, GL_LINEAR);
+			glFogf(GL_FOG_DENSITY, 1.0f);
+			glFogf(GL_FOG_START, 150.0f);
+			glFogf(GL_FOG_END, 4250.0f - (4250.0f - 1536.0f) * density);
+		}
+	}
+	else
+	{
+		fog_mode = FOG_MODE_EXP2;
+		glFogi(GL_FOG_MODE, GL_EXP2);
+		glFogf(GL_FOG_DENSITY, Fog_EffectiveDensity() / 64.0f); // woods #fogalpha
+	}
 }
 
 /*
@@ -401,6 +707,8 @@ called whenever a map is loaded
 */
 void Fog_NewMap (void)
 {
+        fog_viewcontents = CONTENTS_EMPTY;
+        Fog_ResetWaterFog();
         Fog_ParseWorldspawn (); //for global fog
         Fog_MarkModels (); //for volumetric fog
 }
@@ -414,11 +722,17 @@ so fog is preserved when starting a demo recording
 */
 const char *Fog_GetFogCommand(void)
 {
+	if (fade_done && waterfog_dynamic && waterfog_set)
+		return va("\nfog %g %g %g %g\nwaterfog %g %g %g %g\n",
+			fog_density, fog_red, fog_green, fog_blue,
+			waterfog_density, waterfog_red, waterfog_green, waterfog_blue);
 	if (fade_done)
 	{	//if this mod is using dynamic fog, make sure we start with the right values.
 		//don't bother with this if we got fog from a clientside worldspawn key.
 		return va("\nfog %g %g %g %g\n", fog_density, fog_red, fog_green, fog_blue);
 	}
+	if (waterfog_dynamic && waterfog_set)
+		return va("\nwaterfog %g %g %g %g\n", waterfog_density, waterfog_red, waterfog_green, waterfog_blue);
 	return NULL;
 }
 
@@ -432,8 +746,13 @@ called when quake initializes
 void Fog_Init (void)
 {
         Cmd_AddCommand ("fog",Fog_FogCommand_f);
+        Cmd_AddCommand ("waterfog",Fog_WaterFogCommand_f);
 
         Cvar_RegisterVariable(&r_fogalpha); // woods #fogalpha
+        Cvar_RegisterVariable(&gl_waterfog);
+        Cvar_SetCompletion(&gl_waterfog, Fog_WaterFog_Cvar_Completion_f); // woods #iwtabcomplete
+        Cvar_RegisterVariable(&gl_waterfog_density);
+        Cvar_SetCompletion(&gl_waterfog_density, Fog_WaterFogDensity_Cvar_Completion_f); // woods #iwtabcomplete
 
 	//Cvar_RegisterVariable (&r_vfog);
 

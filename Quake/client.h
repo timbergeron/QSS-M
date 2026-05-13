@@ -78,6 +78,7 @@ typedef struct
 } cshift_t;
 
 extern cshift_t		cshift_empty; // woods (iw) #democontrols
+extern cshift_t		cshift_water, cshift_slime, cshift_lava; // woods #cshiftwater
 
 #define	CSHIFT_CONTENTS	0
 #define	CSHIFT_DAMAGE	1
