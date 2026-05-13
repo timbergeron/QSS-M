@@ -96,6 +96,7 @@ cvar_t devstats = {"devstats","0",CVAR_NONE}; //johnfitz -- track developer stat
 cvar_t	campaign = {"campaign","0",CVAR_NONE}; // for the 2021 rerelease
 cvar_t	horde = {"horde","0",CVAR_NONE}; // for the 2021 rerelease
 cvar_t	sv_cheats = {"sv_cheats","0",CVAR_NONE}; // for the 2021 rerelease
+cvar_t	cl_migration_schema = {"cl_migration_schema","0",CVAR_ARCHIVE}; // woods #migration
 
 devstats_t dev_stats, dev_peakstats;
 overflowtimes_t dev_overflows; //this stores the last time overflow messages were displayed, not the last time overflows occured
@@ -631,6 +632,7 @@ void Host_InitLocal (void)
 	Cmd_AddCommand ("version", Host_Version_f);
 	Cmd_AddCommand ("svnextmap", SV_Next_Map_f); // woods #maprotation
 	Cmd_AddCommand ("startup", Host_Startup_f); // woods #onload
+	Cmd_AddCommand ("host_cvar_migrate", Host_RunCvarMigrations); // woods #migration
 
 	Host_InitCommands ();
 
@@ -672,6 +674,7 @@ void Host_InitLocal (void)
 	Cvar_RegisterVariable (&campaign);
 	Cvar_RegisterVariable (&horde);
 	Cvar_RegisterVariable (&sv_cheats);
+	Cvar_RegisterVariable (&cl_migration_schema); // woods #migration
 
 	Cvar_RegisterVariable (&pausable);
 
@@ -1546,6 +1549,38 @@ static void CL_LoadCSProgs(void)
 	PR_SwitchQCVM(NULL);
 }
 
+void Host_RunCvarMigrations (void) // woods #migration
+{
+	cvar_t	*cv;
+	int	schema = (int)cl_migration_schema.value;
+	int	original_schema = schema;
+
+	if (schema < 1)
+	{
+		cv = Cvar_FindVar ("cl_web_download_url");
+		if (cv && !q_strcasecmp (cv->string, "q1tools.github.io"))
+		{
+			Cvar_Set ("cl_web_download_url", "q1tools/q1tools.github.io");
+			Con_Printf ("Migrated cl_web_download_url to q1tools/q1tools.github.io\n");
+		}
+
+		cv = Cvar_FindVar ("cl_afk");
+		if (cv && !q_strcasecmp (cv->string, "1"))
+		{
+			Cvar_Set ("cl_afk", "0");
+			Con_Printf ("Migrated cl_afk to 0\n");
+		}
+
+		schema = 1;
+	}
+
+	if (schema != original_schema)
+	{
+		Cvar_SetValue ("cl_migration_schema", (float)schema);
+		Con_DPrintf ("Cvar migrations applied: %d -> %d\n", original_schema, schema);
+	}
+}
+
 /*
 ==================
 Host_Frame
@@ -1859,7 +1894,7 @@ void Host_Init (void)
 	{
 		Cbuf_AddText ("cl_warncmd 0\n");
 		if (COM_FileExists("quake.rc", NULL))
-			Cbuf_InsertText ("exec quake.rc\n");
+			Cbuf_InsertText ("exec quake.rc\nhost_cvar_migrate\n");
 //		else if (COM_FileExists("hexen.rc", NULL))
 //			Cbuf_InsertText ("exec hexen.rc\n");	//includes a `menu_main` command which screws with quakespasm's normal startup behaviours. just ignore it and do the q2like thing.
 		else

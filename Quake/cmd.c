@@ -277,6 +277,7 @@ void Cmd_StuffCmds_f (void)
 	}
 	cmds[j] = 0;
 
+	Host_RunCvarMigrations ();
 	Cbuf_InsertText (cmds);
 }
 

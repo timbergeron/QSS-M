@@ -433,6 +433,7 @@ void Host_ServerFrame (void);
 void Host_InitCommands (void);
 void Host_Init (void);
 void Host_Shutdown(void);
+void Host_RunCvarMigrations (void);
 void Host_Modvote_Reset(void);
 void Host_Modvote_RemoveClientVote(int client_index);
 void Host_Modvote_NotifyQCCenterprint(client_t *client);
