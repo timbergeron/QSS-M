@@ -1343,6 +1343,11 @@ static void GetGameSummary(summary_t* s)
 	}
 }
 
+static qboolean Summary_HasLevelStats(const summary_t *s)
+{
+	return s->stats.total_monsters > 0 || s->stats.total_secrets > 0;
+}
+
 /*
 ==================
 UpdateWindowTitle - github.com/andrei-drexler/ironwail (Show game summary in window title)
@@ -1395,21 +1400,34 @@ else if (cls.demoplayback) // woods added demofile
 }
 else
 {
-    if (ln[0] != '\0')
+    if (Summary_HasLevelStats(&current))
+    {
+        if (ln[0] != '\0')
+            q_snprintf(title, sizeof(title),
+                "%s (%s)  |  skill %d  |  %d/%d kills  |  %d/%d secrets  -  " ENGINE_NAME_AND_VER,
+                ln, current.map,
+                current.stats.skill,
+                current.stats.monsters, current.stats.total_monsters,
+                current.stats.secrets, current.stats.total_secrets
+            );
+        else
+            q_snprintf(title, sizeof(title),
+                "%s  |  skill %d  |  %d/%d kills  |  %d/%d secrets  -  " ENGINE_NAME_AND_VER,
+                current.map,
+                current.stats.skill,
+                current.stats.monsters, current.stats.total_monsters,
+                current.stats.secrets, current.stats.total_secrets
+            );
+    }
+    else if (ln[0] != '\0' && Q_strcmp(ln, current.map) != 0)
         q_snprintf(title, sizeof(title),
-            "%s (%s)  |  skill %d  |  %d/%d kills  |  %d/%d secrets  -  " ENGINE_NAME_AND_VER,
-            ln, current.map,
-            current.stats.skill,
-            current.stats.monsters, current.stats.total_monsters,
-            current.stats.secrets, current.stats.total_secrets
+            "%s (%s)  -  " ENGINE_NAME_AND_VER,
+            ln, current.map
         );
     else
         q_snprintf(title, sizeof(title),
-            "%s  |  skill %d  |  %d/%d kills  |  %d/%d secrets  -  " ENGINE_NAME_AND_VER,
-            current.map,
-            current.stats.skill,
-            current.stats.monsters, current.stats.total_monsters,
-            current.stats.secrets, current.stats.total_secrets
+            "%s  -  " ENGINE_NAME_AND_VER,
+            current.map
         );
 }
 VID_SetWindowTitle(title);
