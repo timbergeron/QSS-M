@@ -19619,7 +19619,10 @@ enum
 	GAMEOPTIONS_ENTER_LEVEL,
 	NUM_GAMEOPTIONS
 };
-static int gameoptions_cursor_table[] = {40, 56, 64, 72, 80, 88, 96, 104, 112, 128, 136, 160, 168};
+static int gameoptions_cursor_table[] = {40, 56, 64, 72, 80, 88, 96, 104, 112, 128, 136, 160, 176};
+#define GAMEOPTIONS_LEVEL_FIELD_BOX_X	152
+#define GAMEOPTIONS_LEVEL_FIELD_TEXT_X	160
+#define GAMEOPTIONS_LEVEL_FIELD_BOX_WIDTH	18
 int		gameoptions_cursor;
 static int gameoptions_mod_index;
 typedef struct
@@ -20113,25 +20116,24 @@ void M_GameOptions_Draw (void)
 		M_PrintWhite(160, y, m_skill_mapname);
 	else
 		M_Print(160, y, "...");
-	y += 8;
+	y += 16;
 
 	M_Print(0, y, "     Enter Level");
-	M_TextField_DrawHighlight(&goptions_level_field, 160, y);
+	M_DrawTextBox(GAMEOPTIONS_LEVEL_FIELD_BOX_X, y - 8, GAMEOPTIONS_LEVEL_FIELD_BOX_WIDTH, 1);
+	M_TextField_DrawHighlight(&goptions_level_field, GAMEOPTIONS_LEVEL_FIELD_TEXT_X, y);
 	if (goptions_levelname[0])
-		M_PrintWhite(160, y, goptions_levelname);
-	else if (gameoptions_cursor != GAMEOPTIONS_ENTER_LEVEL)
-		M_Print(160, y, "...");
+		M_PrintWhite(GAMEOPTIONS_LEVEL_FIELD_TEXT_X, y, goptions_levelname);
 
 	if (goptions_levelhint[0] &&
 		gameoptions_cursor == GAMEOPTIONS_ENTER_LEVEL &&
 		goptions_level_field.cursor == (int)strlen(goptions_levelname))
 	{
-		int hint_x = 160 + (int)strlen(goptions_levelname) * 8;
+		int hint_x = GAMEOPTIONS_LEVEL_FIELD_TEXT_X + (int)strlen(goptions_levelname) * 8;
 		M_PrintRGBA(hint_x, y, goptions_levelhint, CL_PLColours_Parse("0xffffff"), 0.5f, true);
 	}
 
 	if (gameoptions_cursor == GAMEOPTIONS_ENTER_LEVEL)
-		M_TextField_DrawCursor(&goptions_level_field, 160, y);
+		M_TextField_DrawCursor(&goptions_level_field, GAMEOPTIONS_LEVEL_FIELD_TEXT_X, y);
 	y += 8;
 
 // line cursor
@@ -20359,7 +20361,7 @@ void M_GameOptions_Key (int key)
 		if (key == K_MOUSE1 && gameoptions_cursor == GAMEOPTIONS_ENTER_LEVEL)
 		{
 			if (M_TextField_MouseInRow(m_mousey, gameoptions_cursor_table[GAMEOPTIONS_ENTER_LEVEL]))
-				M_TextField_MouseClick(&goptions_level_field, m_mousex, 160);
+				M_TextField_MouseClick(&goptions_level_field, m_mousex, GAMEOPTIONS_LEVEL_FIELD_TEXT_X);
 			return;
 		}
 
