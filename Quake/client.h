@@ -209,6 +209,9 @@ typedef struct
 		char	current[MAX_QPATH];	//also prevents us from repeatedly trying to download the same file
 		char	temp[MAX_OSPATH];		//the temp filename for the download, will be renamed to current
 		float	starttime;
+		float	percent;		// -1 if unknown, otherwise 0-100
+		double	received;
+		double	total;
 	} download;
 
 	char userinfo[8192];
@@ -578,6 +581,8 @@ void CL_FinishMove(usercmd_t *cmd, qboolean isfinal);
 void CL_Download_Data(void);
 qboolean CL_CheckDownloads(void);
 void CL_InitWebDownloads(qboolean run_checks);
+qboolean CL_QWMapListDownloadsAvailable(void);
+void CL_QWMapListDownloadsRetry(void);
 
 void CL_ParseEffect (qboolean big);
 void CL_UpdateBeam (struct qmodel_s *m, const char *trailname, const char *impactname, int ent, float *start, float *end);

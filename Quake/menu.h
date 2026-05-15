@@ -30,6 +30,7 @@ enum m_state_e {
 	m_load,
 	m_save,
 	m_maps, // woods #mapsmenu (iw)
+	m_downloadmaps,
 	m_skill, // woods #skillmenu (iw)
 	m_multiplayer,
 	m_setup,

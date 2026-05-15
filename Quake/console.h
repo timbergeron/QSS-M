@@ -60,6 +60,12 @@ typedef enum { // woods #iwtabcomplete
 	TABCOMPLETE_USER,
 } tabcomplete_t;
 
+typedef enum {
+	QW_MAPLIST_UNLOADED,
+	QW_MAPLIST_LOADED,
+	QW_MAPLIST_FAILED
+} qw_maplist_state_t;
+
 void Con_Show (void);
 void Con_Hide (void);
 
@@ -75,6 +81,16 @@ const char *Con_DequakePartial (const char *partial, char *dst, size_t dstsize);
 void Con_AddNameToTabList (const char *name, const char *partial, const char *match_partial); // woods -- add a player/history name to the tab list
 qboolean Con_Match (const char* str, const char* partial); // woods #iwtabcomplete
 void Con_LogCenterPrint (const char *str);
+
+qboolean QWMapList_LoadOnce (void);
+void QWMapList_Reload (void);
+qw_maplist_state_t QWMapList_State (void);
+const char *QWMapList_StateName (void);
+const char *QWMapList_Path (void);
+const char *QWMapList_NameAt (int index);
+int QWMapList_Count (void);
+int QWMapList_MinChars (void);
+int QWMapList_CompletionCap (void);
 
 // woods #conselection
 void Con_ForceMouseMove (void);

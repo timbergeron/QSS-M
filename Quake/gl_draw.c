@@ -1495,6 +1495,10 @@ Masked  : baseline EXACT red; sweep LIGHTENS toward white (no base alpha boost).
 */
 void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float span_px, float alpha, qboolean masked)
 {
+	static qboolean start_time_set = false;
+	static double start_time = 0.0;
+	double sweep_time;
+
 	if (!str || !*str) return;
 
 	const int   char_w = 8;
@@ -1508,10 +1512,20 @@ void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float 
 	const float cycle_w = total_px + sweep_span;
 	if (cycle_w <= 0.0f) return;
 
-	const float px_speed = q_max(0.0f, speed);
-	const float t = (px_speed > 0.0f) ? fmodf((float)realtime * px_speed, cycle_w) : 0.0f;
+	sweep_time = Sys_DoubleTime();
+	if (!start_time_set)
+	{
+		start_time = sweep_time;
+		start_time_set = true;
+	}
+	sweep_time -= start_time;
+	if (sweep_time < 0.0)
+		sweep_time = 0.0;
 
-	// palette[128] sample for “Quake red”
+	const float px_speed = q_max(0.0f, speed);
+	const float t = (px_speed > 0.0f) ? fmodf((float)(sweep_time * px_speed), cycle_w) : 0.0f;
+
+	// palette[128] sample for Quake red
 	byte* red = (byte*)&d_8to24table[128];
 	const float red_r = red[0] / 255.0f;
 	const float red_g = red[1] / 255.0f;
@@ -1582,8 +1596,8 @@ void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float 
 
 			if (!masked)
 			{
-				// UNMASKED (white font): white → red, plus bright core + warm tail; alpha can lift in core.
-				float r = (1.0f - mix) + mix * red_r; // lerp(white, red, mix)
+				// UNMASKED (white font): white -> red, plus bright core + warm tail.
+				float r = (1.0f - mix) + mix * red_r;
 				float g = (1.0f - mix) + mix * red_g;
 				float b = (1.0f - mix) + mix * red_b;
 

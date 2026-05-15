@@ -602,6 +602,7 @@ void CL_Disconnect (void)
 	if (cls.download.file)
 		fclose(cls.download.file);
 	memset(&cls.download, 0, sizeof(cls.download));
+	cls.download.percent = -1.0f;
 	cl.intermission = 0;
 	cl.worldmodel = NULL;
 	cl.sendprespawn = false;
@@ -2126,6 +2127,8 @@ typedef struct
 
 qboolean web2check = false;
 qboolean webcheck = false;
+static qboolean qwmaplist_webcheck = false;
+static qboolean qwmaplist_webcheck_started = false;
 qboolean stop_curl_download = false;
 qboolean curl_download_active = false;
 qboolean downloadedctf = false;
@@ -2137,6 +2140,10 @@ typedef struct {
 
 SDL_Thread* currentWebCheckThread = NULL;
 SDL_Thread* currentWeb2CheckThread = NULL;
+
+#define QW_MAPLIST_SOURCE_HOST "maps.quakeworld.nu"
+#define QW_MAPLIST_SOURCE_URL "https://maps.quakeworld.nu/all/"
+#define MENU_DOWNLOAD_REDRAW_INTERVAL_MS 50
 
 
 qboolean IsGithubRepoPath(const char* s)
@@ -2209,6 +2216,64 @@ static inline const char* DL_DisplayTag(const char* base, char* buf, size_t bufs
 	return base;                                   /* e.g. "maps.quakeworld.nu" */
 }
 
+static qboolean CL_DownloadUrlUsesQWMapListHost(const char *url)
+{
+	const char *host;
+	const char *end;
+	size_t host_len;
+
+	if (!url || !*url)
+		return false;
+
+	host = url;
+	if (!q_strncasecmp(host, "https://", 8))
+		host += 8;
+	else if (!q_strncasecmp(host, "http://", 7))
+		host += 7;
+
+	if (!*host || *host == '/')
+		return false;
+
+	end = host;
+	while (*end && *end != '/' && *end != ':' && *end != '?' && *end != '#')
+		++end;
+
+	host_len = end - host;
+	return host_len == strlen(QW_MAPLIST_SOURCE_HOST) &&
+		!q_strncasecmp(host, QW_MAPLIST_SOURCE_HOST, host_len);
+}
+
+static const char *WebCheckLabel(int web)
+{
+	switch (web)
+	{
+	case 1:
+		return "cl_web_download_url";
+	case 2:
+		return "cl_web_download_url2";
+	case 3:
+		return "qwmaplist source";
+	default:
+		return "web download URL";
+	}
+}
+
+static void WebCheckSetResult(int web, qboolean active)
+{
+	switch (web)
+	{
+	case 1:
+		webcheck = active;
+		break;
+	case 2:
+		web2check = active;
+		break;
+	case 3:
+		qwmaplist_webcheck = active;
+		break;
+	}
+}
+
 /*
 ==============================================================================
 *  GithubExtractUserRepo
@@ -2255,8 +2320,7 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
 	for (const char* p = data->url; *p; ++p)
 		if ((unsigned char)*p <= 32 || ((unsigned char)*p & 0x80))
 		{
-			if (data->web == 1) webcheck = false;
-			if (data->web == 2) web2check = false;
+			WebCheckSetResult(data->web, false);
 			free(data->url);
 			free(data);
 			return 0;
@@ -2269,8 +2333,7 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
 			if (!isalnum((unsigned char)*p) &&
 				*p != '/' && *p != '.' && *p != '-' && *p != '_')
 			{
-				if (data->web == 1) webcheck = false;
-				if (data->web == 2) web2check = false;
+				WebCheckSetResult(data->web, false);
 				free(data->url);
 				free(data);
 				return 0;
@@ -2279,6 +2342,7 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
 
 	CURL* curl = curl_easy_init();
 	if (curl == NULL) {
+		WebCheckSetResult(data->web, false);
 		free(data->url);
 		free(data);
 		return -1;
@@ -2315,29 +2379,13 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
 	CURLcode res = curl_easy_perform(curl);
 	if (res == CURLE_OK)
 	{
-		switch (data->web)
-		{
-		case 1:
-			webcheck = true;
-			break;
-		case 2:
-			web2check = true;
-			break;
-		}
+		WebCheckSetResult(data->web, true);
 	}
 	else
 	{
-		Con_DPrintf("cl_web_download_url %s is not responsive: %s\n", data->url, curl_easy_strerror(res));
-
-		switch (data->web)
-		{
-		case 1:
-			webcheck = false;
-			break;
-		case 2:
-			web2check = false;
-			break;
-		}
+		Con_DPrintf("%s %s is not responsive: %s\n",
+			WebCheckLabel(data->web), data->url, curl_easy_strerror(res));
+		WebCheckSetResult(data->web, false);
 	}
 
 	curl_easy_cleanup(curl);
@@ -2348,17 +2396,8 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
     return 0;
 
 invalid_url:
-    Con_DPrintf("cl_web_download_url %s is invalid or too long\n", data->url);
-
-    switch (data->web)
-    {
-    case 1:
-        webcheck = false;
-        break;
-    case 2:
-        web2check = false;
-        break;
-    }
+    Con_DPrintf("%s %s is invalid or too long\n", WebCheckLabel(data->web), data->url);
+    WebCheckSetResult(data->web, false);
 
     curl_easy_cleanup(curl);
     free(data->url);
@@ -2402,6 +2441,95 @@ SDL_Thread* webDownloadCheck (const char* url, int webId)
 	return thread;
 }
 
+static qboolean QWMapListSourceIsConfiguredWebDownload(void)
+{
+	return CL_DownloadUrlUsesQWMapListHost(cl_web_download_url.string) ||
+		CL_DownloadUrlUsesQWMapListHost(cl_web_download_url2.string);
+}
+
+static qboolean CL_AnyWebDownloadServerActive(void)
+{
+	return (webcheck && cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0') ||
+		(web2check && cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0');
+}
+
+static void QWMapListWebCheckStart(void)
+{
+	SDL_Thread *thread;
+
+	if (cls.state == ca_dedicated)
+		return;
+
+	if (QWMapListSourceIsConfiguredWebDownload())
+		return;
+
+	if (qwmaplist_webcheck_started)
+		return;
+
+	qwmaplist_webcheck = false;
+	qwmaplist_webcheck_started = true;
+	thread = webDownloadCheck(QW_MAPLIST_SOURCE_URL, 3);
+	if (thread != NULL)
+		SDL_DetachThread(thread);
+	else
+		qwmaplist_webcheck_started = false;
+}
+
+static void QWMapListWebCheckReset(void)
+{
+	qwmaplist_webcheck = false;
+	qwmaplist_webcheck_started = false;
+}
+
+void CL_QWMapListDownloadsRetry(void)
+{
+	if (cls.state == ca_dedicated)
+		return;
+
+	if (currentWebCheckThread != NULL)
+	{
+		SDL_WaitThread(currentWebCheckThread, NULL);
+		currentWebCheckThread = NULL;
+	}
+
+	webcheck = false;
+	if (cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0')
+		currentWebCheckThread = webDownloadCheck(cl_web_download_url.string, 1);
+
+	if (currentWeb2CheckThread != NULL)
+	{
+		SDL_WaitThread(currentWeb2CheckThread, NULL);
+		currentWeb2CheckThread = NULL;
+	}
+
+	web2check = false;
+	if (cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0')
+		currentWeb2CheckThread = webDownloadCheck(cl_web_download_url2.string, 2);
+
+	QWMapListWebCheckReset();
+	QWMapListWebCheckStart();
+}
+
+qboolean CL_QWMapListDownloadsAvailable(void)
+{
+	qboolean url1_maps = CL_DownloadUrlUsesQWMapListHost(cl_web_download_url.string);
+	qboolean url2_maps = CL_DownloadUrlUsesQWMapListHost(cl_web_download_url2.string);
+	qboolean source_available;
+
+	if (cls.state == ca_dedicated)
+		return false;
+
+	if (url1_maps || url2_maps)
+		source_available = (url1_maps && webcheck) || (url2_maps && web2check);
+	else
+	{
+		QWMapListWebCheckStart();
+		source_available = qwmaplist_webcheck;
+	}
+
+	return source_available && CL_AnyWebDownloadServerActive();
+}
+
 void WebCheckCallback_f (cvar_t* var)
 {
 	if (currentWebCheckThread != NULL)
@@ -2410,10 +2538,15 @@ void WebCheckCallback_f (cvar_t* var)
 		currentWebCheckThread = NULL; // Reset the pointer
 	}
 
+	webcheck = false;
+	QWMapListWebCheckReset();
+
 	if (cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0')
 	{
 		currentWebCheckThread = webDownloadCheck(cl_web_download_url.string, 1);
 	}
+
+	QWMapListWebCheckStart();
 }
 
 void Web2CheckCallback_f (cvar_t* var)
@@ -2424,16 +2557,23 @@ void Web2CheckCallback_f (cvar_t* var)
 		currentWeb2CheckThread = NULL; // Reset the pointer
 	}
 
+	web2check = false;
+	QWMapListWebCheckReset();
+
 	if (cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0')
 	{
 		currentWeb2CheckThread = webDownloadCheck(cl_web_download_url2.string, 2);
 	}
+
+	QWMapListWebCheckStart();
 }
 
 void WebCheckInit (void) // runs at launch in CL_Init if default values
 {
 	char* webearly = NULL;
 	char* web2early = NULL;
+	qboolean checked_web = false;
+	qboolean checked_web2 = false;
 
 	if (CFG_OpenConfig("config.cfg") == 0) // get these early config values
 	{
@@ -2444,10 +2584,32 @@ void WebCheckInit (void) // runs at launch in CL_Init if default values
 
 	if (webearly != NULL && webearly[0] != '\0')
 		if (!strcmp(webearly, cl_web_download_url.default_string))
+		{
 			WebCheckCallback_f(&cl_web_download_url);
+			checked_web = true;
+		}
 	if (web2early != NULL && web2early[0] != '\0')
 		if (!strcmp(web2early, cl_web_download_url2.default_string))
+		{
 			Web2CheckCallback_f(&cl_web_download_url2);
+			checked_web2 = true;
+		}
+
+	if (!checked_web && webearly == NULL &&
+		cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0' &&
+		!strcmp(cl_web_download_url.string, cl_web_download_url.default_string))
+	{
+		WebCheckCallback_f(&cl_web_download_url);
+		checked_web = true;
+	}
+
+	if (!checked_web2 && web2early == NULL &&
+		cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0' &&
+		!strcmp(cl_web_download_url2.string, cl_web_download_url2.default_string))
+	{
+		Web2CheckCallback_f(&cl_web_download_url2);
+		checked_web2 = true;
+	}
 
 	if (webearly != NULL)
 	{
@@ -2460,6 +2622,8 @@ void WebCheckInit (void) // runs at launch in CL_Init if default values
 		free(web2early);
 		web2early = NULL;
 	}
+
+	QWMapListWebCheckStart();
 }
 
 void CL_InitWebDownloads(qboolean run_checks)
@@ -2478,6 +2642,56 @@ void CL_InitWebDownloads(qboolean run_checks)
     WebCheckInit (); // woods -- check if the web download servers are live at launch (threaded) #webdl
 }
 
+static void CL_DownloadProgress_Begin(const char *filename)
+{
+	cls.download.active = true;
+	cls.download.percent = -1.0f;
+	cls.download.received = 0.0;
+	cls.download.total = 0.0;
+	cls.download.starttime = (float)realtime;
+	if (filename)
+		q_strlcpy(cls.download.current, filename, sizeof(cls.download.current));
+}
+
+static void CL_DownloadProgress_Update(double received, double total)
+{
+	cls.download.received = received > 0.0 ? received : 0.0;
+	cls.download.total = total > 0.0 ? total : 0.0;
+
+	if (cls.download.total > 0.0)
+	{
+		double percent = (cls.download.received * 100.0) / cls.download.total;
+		if (percent < 0.0)
+			percent = 0.0;
+		else if (percent > 100.0)
+			percent = 100.0;
+		cls.download.percent = (float)percent;
+	}
+	else
+		cls.download.percent = -1.0f;
+}
+
+static void CL_DownloadProgress_UpdateMenuScreen(void)
+{
+	static Uint32 last_update_time = 0;
+	Uint32 now;
+
+	if (isDedicated || scr_disabled_for_loading)
+		return;
+
+	SDL_PumpEvents();
+
+	if (key_dest != key_menu)
+		return;
+
+	now = SDL_GetTicks();
+	if (last_update_time && now - last_update_time < MENU_DOWNLOAD_REDRAW_INTERVAL_MS)
+		return;
+
+	last_update_time = now;
+	SCR_UpdateScreen();
+}
+
 size_t Write_Data (void* ptr, size_t size, size_t nmemb, FILE* stream)
 {
 	return fwrite (ptr, size, nmemb, stream);
@@ -2492,6 +2706,8 @@ int Progress_Callback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl
 
 	if (dataFromCurl == NULL)
 		return 0;
+
+	CL_DownloadProgress_Update((double)dlnow, (double)dltotal);
 
 	static int dotCount = 0;
 	static int callbackInvocationCount = 0;
@@ -2550,12 +2766,9 @@ int Progress_Callback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl
 				urlLimited,
 				sizeStr,
 				progress);
-
-            if (!isDedicated && scr_disabled_for_loading != true)
-			{
-				SDL_PumpEvents();
-			}
 		}
+
+		CL_DownloadProgress_UpdateMenuScreen();
 	}
 	return 0;
 }
@@ -2632,7 +2845,7 @@ static qboolean CL_FinalizeDownloadFile(const char *relative_path, const char *t
 qboolean Curl_DownloadFile (const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name) // main curl function
 {
 	stop_curl_download = false;
-	cls.download.active = true;
+	CL_DownloadProgress_Begin(filename);
 	curl_download_active = true;
 
 	if (url == NULL || url[0] == '\0')
@@ -2817,6 +3030,7 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 		curl_download_active = false;
 		return false;
 	}
+	CL_DownloadProgress_Update((double)fileSizeBytes, (double)fileSizeBytes);
 	cls.download.active = false;
 	curl_download_active = false;
 
@@ -2970,6 +3184,7 @@ void CL_Download_Begin_f(void)
 
 	//cl_downloadbegin size "name"
 	cls.download.size = strtoul(Cmd_Argv(1), NULL, 0);
+	CL_DownloadProgress_Update(0.0, (double)cls.download.size);
 
 	COM_CreatePath(cls.download.temp);
 	cls.download.file = fopen(cls.download.temp, "wb+");	//+ so we can read the data back to validate it
@@ -2995,6 +3210,7 @@ void CL_Download_Data(void)
 
 	fseek(cls.download.file, start, SEEK_SET);
 	fwrite(data, 1, size, cls.download.file);
+	CL_DownloadProgress_Update((double)(start + size), (double)cls.download.size);
 
 	Con_SafePrintf("Downloading %s (%.2f MB): %g%%\r", cls.download.current, (double)cls.download.size / (1024 * 1024), 100 * (start + size) / (double)cls.download.size); // woods add file size info
 
@@ -3080,8 +3296,7 @@ qboolean CL_CheckDownload(const char *filename)
 			return false;	//can't download anyway
 	}
 
-	cls.download.active = true;
-	q_strlcpy(cls.download.current, filename, sizeof(cls.download.current));
+	CL_DownloadProgress_Begin(filename);
 	q_snprintf (cls.download.temp, sizeof(cls.download.temp), "%s/%s.tmp", com_gamedir, filename);
 	if (!strstr(filename, ".loc")) // woods, don't show attempt
 		Con_Printf("Downloading %s...\r", filename);
@@ -4659,6 +4874,7 @@ CL_Init
 void CL_Init (void)
 {
 	SZ_Alloc (&cls.message, 1024);
+	cls.download.percent = -1.0f;
 
 	CL_InitInput ();
 	CL_InitTEnts ();
