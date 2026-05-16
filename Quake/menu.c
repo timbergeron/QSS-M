@@ -3458,6 +3458,19 @@ void M_DownloadMaps_Draw(void)
 	if (!keydown[K_MOUSE1])
 		downloadmapsmenu.scrollbar_grab = false;
 
+	if (downloadmapsmenu.mapcount <= 0 && QWMapList_LoadOnce())
+	{
+		int count = QWMapList_Count();
+		if (count > 0)
+		{
+			downloadmapsmenu.mapcount = count;
+			M_DownloadMaps_Refilter();
+			if (downloadmapsmenu.list.cursor < 0)
+				downloadmapsmenu.list.cursor = 0;
+			M_List_CenterCursor(&downloadmapsmenu.list);
+		}
+	}
+
 	M_DownloadMaps_UpdateCompletionState();
 	selected_name = M_DownloadMaps_SelectedName();
 	selected_already_have = M_DownloadMaps_AlreadyHave(selected_name);
@@ -3482,7 +3495,14 @@ void M_DownloadMaps_Draw(void)
 
 	if (downloadmapsmenu.mapcount <= 0)
 	{
-		if (QWMapList_State() == QW_MAPLIST_FAILED)
+		if (QWMapList_IsRefreshing())
+		{
+			char buf[64];
+			int dots = (int)(realtime * 2) % 4;
+			q_snprintf(buf, sizeof(buf), "Fetching map list%.*s", dots, "...");
+			M_Print(x, y, buf);
+		}
+		else if (QWMapList_State() == QW_MAPLIST_FAILED)
 			M_Print(x, y, "qw_maps.txt not available");
 		else
 			M_Print(x, y, "No download maps");

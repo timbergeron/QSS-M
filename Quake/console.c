@@ -4669,6 +4669,11 @@ qw_maplist_state_t QWMapList_State(void)
 	return qw_maplist_state;
 }
 
+qboolean QWMapList_IsRefreshing(void)
+{
+	return SDL_AtomicGet(&qw_maplist_refresh_running) != 0;
+}
+
 const char *QWMapList_StateName(void)
 {
 	switch (qw_maplist_state)

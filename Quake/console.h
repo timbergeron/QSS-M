@@ -85,6 +85,7 @@ void Con_LogCenterPrint (const char *str);
 qboolean QWMapList_LoadOnce (void);
 void QWMapList_Reload (void);
 qw_maplist_state_t QWMapList_State (void);
+qboolean QWMapList_IsRefreshing (void);
 const char *QWMapList_StateName (void);
 const char *QWMapList_Path (void);
 const char *QWMapList_NameAt (int index);
