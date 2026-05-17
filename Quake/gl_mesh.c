@@ -2010,16 +2010,10 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 			if (f == 0)
 				break;	//no images loaded...
 
-			//this stuff is hideous.
-			if (f < 2)
-				surf->textures[surf->numskins][1] = surf->textures[surf->numskins][0];
 			if (f == 3)
 				Con_Warning("progs/%s_%02u_##: 3 skinframes found...\n", com_token, surf->numskins);
-			if (f < 4)
-			{
-				surf->textures[surf->numskins][3] = surf->textures[surf->numskins][1];
-				surf->textures[surf->numskins][2] = surf->textures[surf->numskins][0];
-			}
+			for (j = f; j < countof(surf->textures[0]); j++)
+				surf->textures[surf->numskins][j] = surf->textures[surf->numskins][j - f];
 		}
 		surf->skinwidth = surf->textures[0][0].base?surf->textures[0][0].base->width:1;
 		surf->skinheight = surf->textures[0][0].base?surf->textures[0][0].base->height:1;
