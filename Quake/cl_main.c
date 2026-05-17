@@ -72,6 +72,7 @@ cvar_t	cl_minpitch = {"cl_minpitch", "-90", CVAR_ARCHIVE}; //johnfitz -- variabl
 
 cvar_t cl_recordingdemo = {"cl_recordingdemo", "", CVAR_ROM};	//the name of the currently-recording demo.
 cvar_t	cl_demo_format = {"cl_demo_format", "dem", CVAR_ARCHIVE};
+cvar_t	cl_demo_minframes = {"cl_demo_minframes", "0", CVAR_ARCHIVE}; // abs(value) hides shorter demos; <0 also deletes just-finished short demos
 cvar_t	cl_demoreel = {"cl_demoreel", "1", CVAR_ARCHIVE};
 
 cvar_t	cl_beams_polygons = {"cl_beams_polygons", "0", CVAR_ARCHIVE}; // woods #beamspoly
@@ -4801,6 +4802,40 @@ static void CL_DemoFormat_Completion_f(cvar_t* cvar, const char* partial)
 
 /*
 ===============
+CL_DemoMinFrames_Completion_f
+===============
+*/
+static void CL_DemoMinFrames_Completion_f(cvar_t* cvar, const char* partial)
+{
+	static const struct
+	{
+		const char* value;
+		const char* type;
+	} thresholds[] =
+	{
+		{ "0",     "off" },
+		{ "72",    "hide <1s" },
+		{ "720",   "hide <10s" },
+		{ "2160",  "hide <30s" },
+		{ "4320",  "hide <1min" },
+		{ "-72",   "delete <1s" },
+		{ "-720",  "delete <10s" },
+		{ "-2160", "delete <30s" },
+		{ "-4320", "delete <1min" },
+	};
+	size_t i;
+
+	(void)cvar;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	for (i = 0; i < Q_COUNTOF(thresholds); i++)
+		Con_AddToTabList(thresholds[i].value, partial, thresholds[i].type, NULL);
+}
+
+/*
+===============
 CL_PlayerColor_Completion_f -- woods #iwtabcomplete
 ===============
 */
@@ -4917,6 +4952,8 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_recordingdemo); //spike -- for mod hacks. combine with cvar_string or something
 	Cvar_RegisterVariable (&cl_demo_format);
 	Cvar_SetCompletion (&cl_demo_format, &CL_DemoFormat_Completion_f);
+	Cvar_RegisterVariable (&cl_demo_minframes);
+	Cvar_SetCompletion (&cl_demo_minframes, &CL_DemoMinFrames_Completion_f);
 	Cvar_RegisterVariable (&cl_demoreel);
 
 	Cvar_RegisterVariable (&cl_beams_polygons); // woods #beamspoly

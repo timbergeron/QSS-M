@@ -24176,15 +24176,118 @@ static void M_Demos_FormatFileDate(time_t mtime, char *out, size_t outlen)
 		tm->tm_hour, tm->tm_min, tm->tm_sec);
 }
 
+#define DEMO_FRAME_CACHE_MAX	512
+
+typedef struct
+{
+	char	path[MAX_OSPATH];
+	time_t	mtime;
+	size_t	fsize;
+	int		frames;
+} demo_frame_cache_entry_t;
+
+static demo_frame_cache_entry_t demo_frame_cache[DEMO_FRAME_CACHE_MAX];
+static int demo_frame_cache_count = 0;
+static int demo_frame_cache_next = 0;
+
+static int M_Demos_FrameCache_Find(const char *path)
+{
+	int i;
+	for (i = 0; i < demo_frame_cache_count; i++)
+		if (!strcmp(demo_frame_cache[i].path, path))
+			return i;
+	return -1;
+}
+
+static void M_Demos_FrameCache_Store(const char *path, time_t mtime, size_t fsize, int frames)
+{
+	int slot = M_Demos_FrameCache_Find(path);
+	if (slot < 0)
+	{
+		if (demo_frame_cache_count < DEMO_FRAME_CACHE_MAX)
+			slot = demo_frame_cache_count++;
+		else
+		{
+			slot = demo_frame_cache_next;
+			demo_frame_cache_next = (demo_frame_cache_next + 1) % DEMO_FRAME_CACHE_MAX;
+		}
+	}
+	q_strlcpy(demo_frame_cache[slot].path, path, sizeof(demo_frame_cache[slot].path));
+	demo_frame_cache[slot].mtime = mtime;
+	demo_frame_cache[slot].fsize = fsize;
+	demo_frame_cache[slot].frames = frames;
+}
+
+static qboolean M_Demos_FrameCache_Lookup(const char *path, time_t mtime, size_t fsize, int *frames_out)
+{
+	int slot = M_Demos_FrameCache_Find(path);
+	if (slot < 0 ||
+		demo_frame_cache[slot].mtime != mtime ||
+		demo_frame_cache[slot].fsize != fsize)
+		return false;
+	*frames_out = demo_frame_cache[slot].frames;
+	return true;
+}
+
+static int M_Demos_CountFrames(const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
+{
+	char key[MAX_OSPATH];
+	int frames;
+
+	if (spath && spath->pack)
+		q_snprintf(key, sizeof(key), "%s|%s", spath->filename, fname);
+	else if (spath)
+		q_snprintf(key, sizeof(key), "%s/%s", spath->filename, fname);
+	else
+		q_strlcpy(key, fname, sizeof(key));
+
+	if (M_Demos_FrameCache_Lookup(key, mtime, fsize, &frames))
+		return frames;
+
+	if (spath && !spath->pack)
+		frames = CL_CountDemoFramesInFile(key);
+	else
+	{
+		byte *data;
+		int length;
+
+		data = CL_LoadDemoBuffer(fname, &length);
+		if (!data)
+			frames = -1;
+		else
+		{
+			frames = CL_CountDemoFramesInBuffer(data, length);
+			free(data);
+		}
+	}
+
+	M_Demos_FrameCache_Store(key, mtime, fsize, frames);
+	return frames;
+}
+
+static qboolean M_Demos_BelowMinFrames(const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
+{
+	int min_frames = CL_DemoMinFramesThreshold(NULL);
+	int frames;
+
+	if (min_frames <= 0)
+		return false;
+
+	frames = M_Demos_CountFrames(fname, mtime, fsize, spath);
+	return frames >= 0 && frames < min_frames;
+}
+
 static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
 {
 	char date[32];
 	qboolean from_id1;
 
 	(void)ctx;
-	(void)fsize;
 
 	if (!M_Demos_SearchPathAllowed(spath, &from_id1))
+		return true;
+
+	if (M_Demos_BelowMinFrames(fname, mtime, fsize, spath))
 		return true;
 
 	M_Demos_FormatFileDate(mtime, date, sizeof(date));

@@ -58,6 +58,7 @@ static void CL_DemoMarkHistory_ClearPending(void);
 #ifdef USE_ZLIB
 static void CL_DZipCleanupTempDemo(void);
 static qboolean CL_DZipOpenDemoArchive(const char *archive_path, FILE **out_demo, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size);
+static qboolean CL_DZipExtractDemoArchiveOSPathToFile(const char *archive_path, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size);
 static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *archive_path, const char *entry_name);
 static byte *CL_DZipLoadDemoBuffer(const char *archive_path, int *length_out);
 #endif
@@ -494,6 +495,139 @@ CL_GetDemoTotalFrameCount -- woods #demoframes
 int CL_GetDemoTotalFrameCount(void)
 {
 	return demo_total_frame_count;
+}
+
+int CL_CountDemoFramesInBuffer(const byte *data, int length)
+{
+	int off = 0;
+	int count = 0;
+
+	if (!data || length <= 0)
+		return -1;
+
+	while (off < length && data[off] != '\n')
+		off++;
+	if (off < length)
+		off++;
+
+	while (off <= length - 16)
+	{
+		int msg_len;
+
+		memcpy(&msg_len, data + off, sizeof(msg_len));
+		msg_len = LittleLong(msg_len);
+		off += 4;
+
+		if (msg_len <= 0 || msg_len > MAX_MSGLEN || msg_len > length - off - 12)
+			break;
+
+		off += 12 + msg_len;
+		count++;
+	}
+
+	return count;
+}
+
+static int CL_CountDemoFramesInStream(FILE *f)
+{
+	int c;
+	int count = 0;
+	int msg_len;
+	long end_offset;
+	long current_offset;
+
+	if (!f)
+		return -1;
+
+	if (fseek(f, 0, SEEK_END) != 0)
+		return -1;
+	end_offset = ftell(f);
+	if (end_offset < 0 || fseek(f, 0, SEEK_SET) != 0)
+		return -1;
+
+	// skip the cdtrack line
+	while ((c = fgetc(f)) != EOF && c != '\n')
+		;
+	if (c == EOF)
+		return 0;
+
+	for (;;)
+	{
+		current_offset = ftell(f);
+		if (current_offset < 0 || current_offset > end_offset - 16)
+			break;
+
+		if (fread(&msg_len, sizeof(msg_len), 1, f) != 1)
+			break;
+		msg_len = LittleLong(msg_len);
+		if (msg_len <= 0 || msg_len > MAX_MSGLEN)
+			break;
+
+		current_offset = ftell(f);
+		if (current_offset < 0 || msg_len > end_offset - current_offset - 12)
+			break;
+
+		if (fseek(f, 12 + msg_len, SEEK_CUR) != 0)
+			break;
+		count++;
+	}
+
+	return count;
+}
+
+int CL_CountDemoFramesInFile(const char *path)
+{
+	if (!path || !path[0])
+		return -1;
+
+	if (!q_strcasecmp(COM_FileGetExtension(path), "dz"))
+	{
+#ifdef USE_ZLIB
+		FILE *out;
+		int frames = -1;
+
+		out = tmpfile();
+		if (!out)
+			return -1;
+
+		if (CL_DZipExtractDemoArchiveOSPathToFile(path, out, NULL, NULL, 0))
+			frames = CL_CountDemoFramesInStream(out);
+
+		fclose(out);
+		return frames;
+#else
+		return -1;
+#endif
+	}
+	else
+	{
+		FILE *f;
+		int frames;
+
+		f = fopen(path, "rb");
+		if (!f)
+			return -1;
+
+		frames = CL_CountDemoFramesInStream(f);
+		fclose(f);
+		return frames;
+	}
+}
+
+int CL_DemoMinFramesThreshold(qboolean *auto_delete)
+{
+	float value = cl_demo_minframes.value;
+
+	if (auto_delete)
+		*auto_delete = value < 0.0f;
+
+	if (value < 0.0f)
+		value = -value;
+	if (!(value > 0.0f))
+		return 0;
+	if (value > (float)INT_MAX)
+		return INT_MAX;
+	return (int)value;
 }
 
 qboolean CL_DemoSeekConsumeFrameActivity(void)
@@ -2483,6 +2617,32 @@ static void CL_BuildRecordingRawPath(const char *final_path, char *raw_path, siz
 	q_snprintf(raw_path, raw_path_size, "%s.__recording_%u.dem", base, demo_record_serial);
 }
 
+static qboolean CL_DemoShouldAutoDelete(int frames)
+{
+	qboolean auto_delete;
+	int min_frames = CL_DemoMinFramesThreshold(&auto_delete);
+
+	return auto_delete && min_frames > 0 && frames >= 0 && frames < min_frames;
+}
+
+static qboolean CL_AutoDeleteShortDemo(const char *path, int frames)
+{
+	if (!path || !path[0])
+		return false;
+
+	if (!CL_DemoShouldAutoDelete(frames))
+		return false;
+
+	if (remove(path) != 0)
+	{
+		Con_Printf("WARNING: could not delete short demo %s\n", COM_SkipPath(path));
+		return false;
+	}
+
+	Con_Printf("deleted short demo %s (%d frames)\n", COM_SkipPath(path), frames);
+	return true;
+}
+
 static void CL_GetDemoModeTag(char *mode_tag, size_t mode_tag_size)
 {
 	char mode_buf[32];
@@ -2613,6 +2773,7 @@ stop recording a demo
 void CL_Stop_f (void)
 {
 	qboolean completed = true;
+	qboolean deleted_short = false;
 
 	if (cmd_source != src_command)
 		return;
@@ -2669,12 +2830,19 @@ void CL_Stop_f (void)
 		CL_RenameDemoWithMatchSuffixes();
 	}
 
-	CL_DemoMarkHistory_FlushPending(cls.demofilename);
+	if (completed)
+		deleted_short = CL_AutoDeleteShortDemo(cls.demofilename, cls.demo_record_frame_count);
+
+	if (deleted_short)
+		CL_DemoMarkHistory_ClearPending();
+	else
+		CL_DemoMarkHistory_FlushPending(cls.demofilename);
+
 	cls.demo_had_overtime = false;
 	cls.demo_marker_count = 0;
 	cls.demo_record_frame_count = 0;
 
-	if (completed)
+	if (completed && !deleted_short)
 		Con_Printf ("completed demo\n");
 
 	Cvar_SetROM(cl_recordingdemo.name, "");
@@ -4135,7 +4303,7 @@ static qboolean CL_DZipReadDirectory(const char *archive_name)
 			return false;
 		}
 
-		if (cl_dzip_maj_ver > 1 && (de->ptr > archive_bytes || de->size > archive_bytes || de->ptr + de->size > archive_bytes))
+		if (cl_dzip_maj_ver > 1 && (de->ptr > archive_bytes || de->size > archive_bytes - de->ptr))
 		{
 			Con_Printf("DZip: %s has a corrupt directory entry\n", archive_name);
 			return false;
@@ -5627,27 +5795,26 @@ static qboolean CL_DZipExtractLegacyEntry(const cl_dzip_direntry_t *target_de)
 	return extracted;
 }
 
-static qboolean CL_DZipExtractDemoArchiveToFile(const char *archive_path, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
+static qboolean CL_DZipExtractOpenedDemoArchiveToFile(const char *archive_path, FILE *archive, long archive_base, qofs_t archive_size, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
 {
 	cl_dzip_direntry_t *de;
-	FILE *archive = NULL;
-	long archive_base;
-	qofs_t archive_size;
 	qboolean ok = false;
 
-	if (!out)
+	if (!archive)
 		return false;
+	if (!out)
+	{
+		fclose(archive);
+		return false;
+	}
 
 	if (out_size)
 		*out_size = -1;
-	if (out_entry_name_size)
+	if (out_entry_name && out_entry_name_size)
 		out_entry_name[0] = '\0';
 
-	if (COM_FOpenFile(archive_path, &archive, NULL) < 0 || !archive)
-		return false;
-
-	archive_base = ftell(archive);
-	archive_size = com_filesize;
+	if (archive_base < 0 || archive_size <= 0 || archive_size > UINT_MAX)
+		goto done;
 
 	cl_dzip_archive_file = archive;
 	cl_dzip_archive_base = archive_base;
@@ -5715,7 +5882,7 @@ static qboolean CL_DZipExtractDemoArchiveToFile(const char *archive_path, FILE *
 
 	rewind(out);
 
-	if (out_entry_name_size)
+	if (out_entry_name && out_entry_name_size)
 		q_strlcpy(out_entry_name, COM_SkipPath(de->name), out_entry_name_size);
 	ok = true;
 
@@ -5726,7 +5893,57 @@ done:
 		fclose(archive);
 	cl_dzip_archive_file = NULL;
 	cl_dzip_output_file = NULL;
+	cl_dzip_archive_base = 0;
+	cl_dzip_archive_size = 0;
+	cl_dzip_crc_enabled = false;
 	return ok;
+}
+
+static qboolean CL_DZipExtractDemoArchiveToFile(const char *archive_path, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
+{
+	FILE *archive = NULL;
+	long archive_base;
+
+	if (COM_FOpenFile(archive_path, &archive, NULL) < 0 || !archive)
+		return false;
+
+	archive_base = ftell(archive);
+	if (archive_base < 0)
+	{
+		fclose(archive);
+		return false;
+	}
+
+	return CL_DZipExtractOpenedDemoArchiveToFile(archive_path, archive, archive_base,
+		com_filesize, out, out_size, out_entry_name, out_entry_name_size);
+}
+
+static qboolean CL_DZipExtractDemoArchiveOSPathToFile(const char *archive_path, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
+{
+	FILE *archive;
+	long archive_size;
+
+	if (!archive_path || !archive_path[0])
+		return false;
+
+	archive = fopen(archive_path, "rb");
+	if (!archive)
+		return false;
+
+	if (fseek(archive, 0, SEEK_END) != 0)
+	{
+		fclose(archive);
+		return false;
+	}
+	archive_size = ftell(archive);
+	if (archive_size < 0)
+	{
+		fclose(archive);
+		return false;
+	}
+
+	return CL_DZipExtractOpenedDemoArchiveToFile(archive_path, archive, 0,
+		(qofs_t)archive_size, out, out_size, out_entry_name, out_entry_name_size);
 }
 
 static qboolean CL_DZipOpenDemoArchive(const char *archive_path, FILE **out_demo, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size)
@@ -5738,7 +5955,7 @@ static qboolean CL_DZipOpenDemoArchive(const char *archive_path, FILE **out_demo
 	*out_demo = NULL;
 	if (out_size)
 		*out_size = -1;
-	if (out_entry_name_size)
+	if (out_entry_name && out_entry_name_size)
 		out_entry_name[0] = '\0';
 
 	CL_DZipCleanupTempDemo();
