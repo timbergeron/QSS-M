@@ -8021,8 +8021,10 @@ static void Host_Like_f (void) // woods #like
 		return;
 
 	char text[MAXCMDLINE];
+	const char *verb = keydown[K_CTRL] ? "loves" : "likes";
+	qboolean saved_ctrlpressed;
 
-	if (strstr(cl.lastchat, ": ^mlikes^m")) // no intinite likes
+	if (strstr(cl.lastchat, ": ^mlikes^m") || strstr(cl.lastchat, ": ^mloves^m")) // no intinite likes
 		return;
 
 	if (cl.lastchat[0] == '\0')
@@ -8036,12 +8038,17 @@ static void Host_Like_f (void) // woods #like
 	qboolean is_team_message = (strchr(cl.lastchat, '(') != NULL && strchr(cl.lastchat, ')') != NULL);
 
 	if (is_team_message) {
-		q_snprintf(text, sizeof(text), "say_team likes %s", cl.lastchat + 1);
+		q_snprintf(text, sizeof(text), "say_team %s %s", verb, cl.lastchat + 1);
 	}
 	else {
-	q_snprintf(text, sizeof(text), "say likes %s", cl.lastchat + 1);
+		q_snprintf(text, sizeof(text), "say %s %s", verb, cl.lastchat + 1);
 	}
-	Cbuf_AddText(text);
+
+	// Ctrl selects "loves" here; don't let the generic say modifier flip the channel.
+	saved_ctrlpressed = ctrlpressed;
+	ctrlpressed = false;
+	Cmd_ExecuteString(text, src_command);
+	ctrlpressed = saved_ctrlpressed;
 }
 
 static void Host_Tell_f(void) // modified by woods to accept wildcards, status #s like proquake identify #tell+

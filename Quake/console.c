@@ -1444,11 +1444,19 @@ static qboolean Con_ProcessPlayerMessage(const char* txt) // woods #like
 		}
 	}
 
-	// If it's a valid player message, look for "likes" and format it, for qss(m) white chars
+	// If it's a valid player message, look for "likes"/"loves" and format it, for qss(m) white chars
 	if (valid_player)
 	{
 		const char* search = ": likes ";
+		const char* verb = "likes";
 		const char* likes_pos = strstr(txt, search);
+
+		if (!likes_pos)
+		{
+			search = ": loves ";
+			verb = "loves";
+			likes_pos = strstr(txt, search);
+		}
 
 		if (likes_pos)
 		{
@@ -1459,12 +1467,12 @@ static qboolean Con_ProcessPlayerMessage(const char* txt) // woods #like
 			{
 				size_t prefix_len = likes_pos - txt;
 
-				Q_strncpy(modified_txt, txt, prefix_len); // Copy before ": likes "
-				Q_strcpy(modified_txt + prefix_len, ": ^mlikes^m "); // Add formatted "likes"
-				Q_strcpy(modified_txt + prefix_len + strlen(": ^mlikes^m "),
+				memcpy(modified_txt, txt, prefix_len); // Copy before ": likes "/"loves "
+				q_snprintf(modified_txt + prefix_len, new_len + 1 - prefix_len, ": ^m%s^m ", verb);
+				Q_strcpy(modified_txt + prefix_len + strlen(": ^m") + strlen(verb) + strlen("^m "),
 					likes_pos + strlen(search));
 
-				// Don't copy "likes" messages to lastchat
+				// Don't copy "likes"/"loves" messages to lastchat
 				Con_Printf("%s", modified_txt);
 
 				free(modified_txt);
