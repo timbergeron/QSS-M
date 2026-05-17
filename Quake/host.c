@@ -1709,15 +1709,39 @@ void _Host_Frame (double time)
 
 // fetch results from server
 	if (cls.state == ca_connected)
-		CL_ReadFromServer ();
+	{
+		qboolean demo_seek_activity;
+
+		CL_DemoSeekConsumeFrameActivity();
+
+			// Burn most of this frame parsing demo messages headlessly when a
+			// demo seek is active (restart, rewind, forward, marker, frame,
+			// time, byte-offset); renders one progress frame after.
+		demo_seek_activity = CL_DemoSeekFastPump ();
+		if (cls.state == ca_connected)
+			CL_ReadFromServer ();
+		demo_seek_activity |= CL_DemoSeekConsumeFrameActivity();
+
+		// Seek work can advance cl.time by many seconds in a single host
+		// frame. Resync CSQC's qcvm clock only after seek-speed parsing;
+		// normal demo playback needs the next frame to see the usual delta.
+		if (demo_seek_activity && cls.state == ca_connected && cls.demoplayback && cl.qcvm.progs)
+			cl.qcvm.time = cl.time;
+	}
 
 // update video
 	if (host_speeds.value)
 		time1 = Sys_DoubleTime ();
 
-	SCR_UpdateScreen ();
-
-	CL_RunParticles (); //johnfitz -- seperated from rendering
+	// Skip the renderer (and particle stepping) while a demo seek is active so
+	// the pump can use the full host frame for parsing instead of yielding ~10ms
+	// to SCR_UpdateScreen per iteration. Last rendered frame stays on screen
+	// until the seek completes, then the next host frame draws the result.
+	if (!CL_DemoSeekActive ())
+	{
+		SCR_UpdateScreen ();
+		CL_RunParticles (); //johnfitz -- seperated from rendering
+	}
 
 	if (host_speeds.value)
 		time2 = Sys_DoubleTime ();

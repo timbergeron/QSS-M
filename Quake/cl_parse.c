@@ -1265,7 +1265,7 @@ static void CL_ParseStartSoundPacket(void)
 
 
 
-	if (cl.qcvm.extfuncs.CSQC_Event_Sound && cl.sound_precache[sound_num] && !cl.qcvm.nogameaccess)
+	if (!CL_DemoSeekActive() && cl.qcvm.extfuncs.CSQC_Event_Sound && cl.sound_precache[sound_num] && !cl.qcvm.nogameaccess)
 	{	//blocked with csqc, too easy to do dead-reckoning.
 		qboolean ret = false;
 		PR_SwitchQCVM(&cl.qcvm);

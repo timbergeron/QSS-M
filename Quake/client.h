@@ -604,6 +604,9 @@ void CL_StopPlayback (void);
 int CL_GetMessage (void);
 void CL_AdvanceTime(void); // woods (iw) #democontrols
 void CL_FinishDemoFrame(void); // woods (iw) #democontrols
+qboolean CL_DemoSeekFastPump(void); // host-frame demo seek pump (restart, rewind, forward, marker, frame, time, byte-offset)
+qboolean CL_DemoSeekConsumeFrameActivity(void); // true once when current host frame did seek-speed demo parsing
+qboolean CL_DemoSeekActive(void); // true while demo seek/restart warp is active; suppresses parser side effects
 void CL_AddDemoRewindSound(int entnum, int channel, sfx_t* sfx, vec3_t pos, int vol, float atten); // woods (iw) #democontrols
 
 void CL_Stop_f (void);

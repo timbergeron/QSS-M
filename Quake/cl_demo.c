@@ -264,8 +264,15 @@ static float demo_start_server_time = 0.f; // woods -- user-facing demo time 0:0
 static qboolean demo_start_server_time_valid = false; // woods -- true once first parsed demo frame is known
 static qboolean demo_jump_back_was_down = false; // woods -- edge detector for J key
 static qboolean demo_jump_forward_was_down = false; // woods -- edge detector for L key
+static qboolean demo_jump_home_was_down = false; // woods -- edge detector for 0/Home
+static qboolean demo_jump_end_was_down = false; // woods -- edge detector for End
 static int demo_total_frame_count = 0; // woods #demoframes -- playable frames after signon
 static qboolean initialized = false; // woods (iw) #democontrols
+static qboolean demo_seek_frame_activity = false; // woods -- true if this host frame did seek-speed parsing
+static qboolean demo_restart_pending = false; // woods -- 0/Home restart request, processed from the host-frame pump
+static char demo_restart_name[MAX_OSPATH]; // woods -- logical demo name to reopen for a clean start jump
+
+static qboolean CL_DemoProcessRestartRequest(void);
 
 static void CL_ClearDemoFrags(void)
 {
@@ -489,6 +496,13 @@ int CL_GetDemoTotalFrameCount(void)
 	return demo_total_frame_count;
 }
 
+qboolean CL_DemoSeekConsumeFrameActivity(void)
+{
+	qboolean activity = demo_seek_frame_activity;
+	demo_seek_frame_activity = false;
+	return activity;
+}
+
 /*
 ===============
 CL_CountRemainingDemoFrames -- woods #demoframes
@@ -565,6 +579,322 @@ void CL_AddDemoRewindSound(int entnum, int channel, sfx_t* sfx, vec3_t pos, int 
 
 /*
 ===============
+CL_DemoSeekForwardActive
+
+True when forward parsing should advance to reach the seek target. Compares
+current position to target directly (not demo_seek_from_start), so the J-key
+backward time seek and the post-rewind forward catch-up both benefit.
+===============
+*/
+static qboolean CL_DemoSeekForwardActive(void)
+{
+	if (!cls.demoplayback || cls.signon < SIGNONS)
+		return false;
+	if (is_marker_seeking)
+		return !demo_marker_found;
+	if (is_frame_seeking)
+		return CL_GetDemoFrameCount() < demo_frame_seek_target;
+	if (is_time_seeking)
+		return cl.mtime[0] < demo_time_seek_target;
+	if (is_seeking)
+		return cls.demo_offset_current < demo_target_offset;
+	return false;
+}
+
+qboolean CL_DemoSeekActive(void)
+{
+	if (!cls.demoplayback)
+		return false;
+	if (demo_restart_pending || is_marker_seeking || is_time_seeking || is_frame_seeking || is_seeking)
+		return true;
+	return fabsf(cls.demospeed) > 8.f;
+}
+
+/*
+===============
+CL_DemoSeekBackwardActive
+
+True when rewind-via-snapshot-ring should pop frames to reach the seek
+target. Like the forward predicate, this is position-vs-target rather than
+flag-gated, so backward J-key time seeks (which don't set demo_seek_from_start)
+also use the fast rewind.
+===============
+*/
+static qboolean CL_DemoSeekBackwardActive(void)
+{
+	if (!cls.demoplayback || cls.signon < SIGNONS)
+		return false;
+	if (is_marker_seeking)
+		return false; // marker seek only walks forward
+	if (is_frame_seeking)
+		return CL_GetDemoFrameCount() > demo_frame_seek_target;
+	if (is_time_seeking)
+		return cl.mtime[0] > demo_time_seek_target;
+	if (is_seeking)
+		return cls.demo_offset_current > demo_target_offset;
+	return false;
+}
+
+/*
+===============
+CL_DemoSeekFastRewind
+
+Tight loop variant of the existing rewind path: pops snapshot frames and
+applies their inverse deltas until the seek target is crossed (or the demo's
+start is reached). Avoids the "rewind to start, then replay forward" cost
+that the slow path incurs because it only knows how to stop at backstop.
+
+When the target is crossed, flips demo_seek_from_start off so the next host
+frame's CL_DemoSeekFastForward catches up to the exact target.
+===============
+*/
+static int CL_DemoSeekFastRewind(double deadline)
+{
+	const int seek_start = CL_GetDemoSeekStartOffset();
+	int msgs = 0;
+	int ret;
+
+	while (Sys_DoubleTime() < deadline)
+	{
+		if (demo_rewind.backstop)
+			break;
+		if (cls.demo_offset_current <= seek_start)
+			break;
+		if (!CL_DemoSeekBackwardActive())
+			break;
+
+		Cbuf_Execute();
+
+		// Cbuf_Execute may have run a stuffcmd that disconnected us; if so,
+		// CL_GetMessage would now route to the network path with a NULL or
+		// stale netcon. Re-check before touching it.
+		if (!cls.demoplayback || cls.state != ca_connected || !cls.demofile)
+			break;
+
+		// Force the rewind branch in CL_NextDemoFrame, and open the rewind
+		// gate in CL_GetDemoMessage by dropping cl.time below cl.mtime[0]
+		// (gate during rewind: "no message yet" while cl.time >= cl.mtime[0]).
+		cls.demospeed = -1e9f;
+		if (cls.basedemospeed)
+			cls.demospeed *= cls.basedemospeed;
+		cl.oldtime = cl.time;
+		cl.time = cl.mtime[0] - 1.0;
+
+		ret = CL_GetMessage();
+		if (ret == -1)
+			Host_Error("CL_DemoSeekFastRewind: lost server connection");
+		if (!ret)
+			break;
+
+		cl.last_received_message = realtime;
+		CL_ParseServerMessage();
+		msgs++;
+
+		if (!cls.demoplayback || cls.state != ca_connected || cls.signon < SIGNONS)
+			break;
+	}
+
+	if (msgs > 0)
+	{
+		// Drain queued sounds but preserve static/ambient sounds tied to the
+		// world (svc_spawnstaticsound entries don't get re-emitted on render
+		// resume).
+		S_StopAllSounds(true, true);
+		cl.time = cl.mtime[0];
+
+		// Each normal rewind iteration reads its frame (file ends past it) and
+		// then undoes that frame's state via CL_FinishDemoFrame, so after any
+		// partial batch the game state is pre-frame while stdio is naturally
+		// post-frame. Keep the file position aligned with the current state in
+		// case the seek is interrupted or changes direction before the next
+		// rewind batch. The backstop frame is special: CL_FinishDemoFrame
+		// intentionally leaves the first frame applied, so stdio's post-frame
+		// position already matches the client state.
+		if (!demo_rewind.backstop && cls.demofile)
+			fseek(cls.demofile, cls.demo_offset_current, SEEK_SET);
+
+		if (demo_rewind.backstop ||
+			cls.demo_offset_current <= seek_start ||
+			!CL_DemoSeekBackwardActive())
+		{
+			// Clear demo_seek_from_start so the slow-path UpdateDemoSpeed
+			// doesn't keep firing the "rewind to start" branch, and let
+			// CL_DemoSeekFastForward handle the final approach if we
+			// overshot the target.
+			demo_seek_from_start = false;
+			cls.demospeed = cls.basedemospeed * !cls.demopaused;
+		}
+	}
+
+	return msgs;
+}
+
+/*
+===============
+CL_DemoSeekFastForward
+
+Tight loop that reads and parses demo messages without rendering, sound
+mixing, or particle stepping. Bounded by deadline so the host loop can still
+draw progress between batches.
+===============
+*/
+static int CL_DemoSeekFastForward(double deadline)
+{
+	int msgs = 0;
+	int ret;
+
+	while (Sys_DoubleTime() < deadline)
+	{
+		if (!CL_DemoSeekForwardActive())
+			break;
+
+		// drain any svc_stufftext commands parsed in the previous iteration so
+		// they take effect before we read another batch of messages
+		Cbuf_Execute();
+
+		// Cbuf_Execute may have run a stuffcmd that disconnected us; if so,
+		// CL_GetMessage would now route to the network path with a NULL or
+		// stale netcon. Re-check before touching it.
+		if (!cls.demoplayback || cls.state != ca_connected || !cls.demofile)
+			break;
+
+		// Force positive demospeed so CL_GetDemoMessage's `!cls.demospeed`
+		// early-out doesn't trip when seeking while paused (basedemospeed *
+		// !demopaused = 0 leaves demospeed at 0 from the previous frame's
+		// CL_UpdateDemoSpeed). Mirror what the rewind side already does.
+		cls.demospeed = 1e9f;
+		if (cls.basedemospeed)
+			cls.demospeed *= cls.basedemospeed;
+
+		// open the gate inside CL_GetDemoMessage: it only returns a message
+		// when cl.time has advanced past the next frame's server timestamp
+		cl.oldtime = cl.time;
+		cl.time = cl.mtime[0] + 1.0;
+
+		ret = CL_GetMessage();
+		if (ret == -1)
+			Host_Error("CL_DemoSeekFastForward: lost server connection");
+		if (!ret)
+			break;
+
+		cl.last_received_message = realtime;
+		CL_ParseServerMessage();
+		msgs++;
+
+		// bail out the moment anything wants attention from the full host loop:
+		// map change, demo end, disconnect, or the seek state machine cleared
+		// itself (e.g. exact frame target reached in CL_GetDemoMessage)
+		if (!cls.demoplayback || cls.state != ca_connected || cls.signon < SIGNONS)
+			break;
+	}
+
+	if (msgs > 0)
+	{
+		// Channels accumulate svc_sound/svc_temp_entity output during the pump
+		// with no S_Update in between; drain them so the user doesn't hear a
+		// burst of stale sounds when rendering resumes. Keep statics so
+		// world-attached ambient sounds (svc_spawnstaticsound) survive.
+		S_StopAllSounds(true, true);
+
+		// Keep cl.time consistent with what we last parsed so the normal frame
+		// that follows interpolates from a sane baseline.
+		cl.time = cl.mtime[0];
+	}
+
+	return msgs;
+}
+
+/*
+===============
+CL_DemoSeekFastPump
+
+Single host-loop hook for demo seeking. Processes queued clean restarts for
+0/Home, then dispatches to the rewind or forward variant; it may run both in
+sequence within one budget window when the rewind crosses its target and hands
+off.
+===============
+*/
+qboolean CL_DemoSeekFastPump(void)
+{
+	// Bigger budget = fewer host-frame round-trips for medium-to-large seeks.
+	// The render skip in _Host_Frame means each pump iteration owns most of
+	// the wall clock, so a 250ms cap lets common 1-3 minute jumps finish in
+	// a single pump and feel instant; very large jumps still chunk across
+	// multiple frames.
+	const double pump_budget = 0.250;
+	double	deadline;
+	int		msgs = 0;
+
+	deadline = Sys_DoubleTime() + pump_budget;
+
+	if (CL_DemoProcessRestartRequest())
+	{
+		demo_seek_frame_activity = true;
+		return true;
+	}
+
+	if (CL_DemoSeekBackwardActive())
+		msgs += CL_DemoSeekFastRewind(deadline);
+	if (CL_DemoSeekForwardActive())
+		msgs += CL_DemoSeekFastForward(deadline);
+
+	if (msgs > 0)
+		demo_seek_frame_activity = true;
+
+	return msgs > 0;
+}
+
+static qboolean CL_DemoSeekRewindFromStart(int demo_seek_start, float seeking_speed)
+{
+	if (!demo_seek_from_start)
+		return false;
+
+	if (demo_rewind.backstop ||
+		cls.demo_offset_current <= demo_seek_start ||
+		!CL_DemoSeekBackwardActive())
+	{
+		// Mirror CL_DemoSeekFastRewind's exit fseek: when the slow inner
+		// loop overshoots the target (state pre-frame, stdio post-frame),
+		// the next forward read would skip a frame. Backstop and seek_start
+		// already have file/state aligned, so only fseek on target crossing.
+		if (!demo_rewind.backstop && cls.demo_offset_current > demo_seek_start && cls.demofile)
+			fseek(cls.demofile, cls.demo_offset_current, SEEK_SET);
+		demo_seek_from_start = false;
+		return false;
+	}
+
+	demo_seek_frame_activity = true;
+	cls.demospeed = -seeking_speed;
+	if (cls.basedemospeed)
+		cls.demospeed *= cls.basedemospeed;
+	return true;
+}
+
+static void CL_DemoSeekFinish(float normal_speed)
+{
+	cls.demospeed = normal_speed;
+	if (cls.demospeed > 0.f)
+		demo_rewind.backstop = false;
+	CL_ResetDemoSeekState();
+}
+
+static qboolean CL_DemoQueueRestart(void)
+{
+	const char *restart_name = cls.demofilename[0] ? cls.demofilename : cls.demoname;
+
+	if (!cls.demoplayback || !restart_name[0])
+		return false;
+
+	CL_ClearDemoMarkerHistory();
+	CL_ResetDemoSeekState();
+	q_strlcpy(demo_restart_name, restart_name, sizeof(demo_restart_name));
+	demo_restart_pending = true;
+	cls.demospeed = 0.f;
+	return true;
+}
+
+/*
+===============
 CL_UpdateDemoSpeed
 ===============
 */
@@ -576,9 +906,15 @@ static void CL_UpdateDemoSpeed(void)
 	const qboolean jump_forward_down = keydown['l'];
 	const qboolean jump_back_pressed = jump_back_down && !demo_jump_back_was_down;
 	const qboolean jump_forward_pressed = jump_forward_down && !demo_jump_forward_was_down;
+	const qboolean jump_home_down = keydown[K_HOME] || keydown['0'];
+	const qboolean jump_end_down = keydown[K_END];
+	const qboolean jump_home_pressed = jump_home_down && !demo_jump_home_was_down;
+	const qboolean jump_end_pressed = jump_end_down && !demo_jump_end_was_down;
 
 	demo_jump_back_was_down = jump_back_down;
 	demo_jump_forward_was_down = jump_forward_down;
+	demo_jump_home_was_down = jump_home_down;
+	demo_jump_end_was_down = jump_end_down;
 
 	const int dynamic_threshold = q_max(100, cls.demo_file_length * 0.03); // 3% of the demo file length, with a minimum of 100 for very small files
 	const float seeking_speed = 256;
@@ -593,23 +929,31 @@ static void CL_UpdateDemoSpeed(void)
 		const float current_demo_time = cl.mtime[0];
 		const float base_time = is_time_seeking ? demo_time_seek_target : current_demo_time;
 
-		CL_ClearDemoMarkerHistory();
-		CL_ResetDemoSeekState();
-		demo_time_seek_target = q_max(0.f, base_time + jump_delta);
-		demo_time_seek_direction = (demo_time_seek_target >= current_demo_time) ? 1 : -1;
+			CL_ClearDemoMarkerHistory();
+			CL_ResetDemoSeekState();
+			demo_time_seek_target = q_max(0.f, base_time + jump_delta);
+			if (demo_start_server_time_valid && demo_time_seek_target < demo_start_server_time)
+				demo_time_seek_target = demo_start_server_time;
+			demo_time_seek_direction = (demo_time_seek_target >= current_demo_time) ? 1 : -1;
 
-		if (fabsf(demo_time_seek_target - current_demo_time) > seek_time_threshold)
-		{
-			is_time_seeking = true;
-			if (demo_time_seek_target < current_demo_time)
-				CL_ClearDemoFrags();
-		}
+			if (fabsf(demo_time_seek_target - current_demo_time) > seek_time_threshold)
+			{
+				if (demo_start_server_time_valid &&
+					demo_time_seek_target <= demo_start_server_time + seek_time_threshold &&
+					current_demo_time > demo_start_server_time + seek_time_threshold &&
+					CL_DemoQueueRestart())
+					return;
+				is_time_seeking = true;
+				if (demo_time_seek_target < current_demo_time)
+					CL_ClearDemoFrags();
+			}
 	}
 
 	if (is_marker_seeking)
 	{
 		if (!demo_marker_found)
 		{
+			demo_seek_frame_activity = true;
 			cls.demospeed = seeking_speed;
 			demo_rewind.backstop = false;
 			return;
@@ -617,22 +961,14 @@ static void CL_UpdateDemoSpeed(void)
 
 		is_marker_seeking = false;
 		demo_marker_found = false;
-		cls.demospeed = normal_speed;
-		CL_ResetDemoSeekState();
+		CL_DemoSeekFinish(normal_speed);
 		return;
 	}
 
 	if (is_time_seeking)
 	{
-		if (demo_seek_from_start)
-		{
-			cls.demospeed = -1e9f;
-			if (cls.basedemospeed)
-				cls.demospeed *= cls.basedemospeed;
-			if (demo_rewind.backstop || cls.demo_offset_current <= demo_seek_start)
-				demo_seek_from_start = false;
+		if (CL_DemoSeekRewindFromStart(demo_seek_start, seeking_speed))
 			return;
-		}
 
 		const float remaining = demo_time_seek_target - cl.mtime[0];
 
@@ -641,11 +977,11 @@ static void CL_UpdateDemoSpeed(void)
 			(demo_time_seek_direction < 0 && remaining >= 0.f) ||
 			(demo_rewind.backstop && remaining < 0.f))
 		{
-			cls.demospeed = normal_speed;
-			CL_ResetDemoSeekState();
+			CL_DemoSeekFinish(normal_speed);
 			return;
 		}
 
+		demo_seek_frame_activity = true;
 		cls.demospeed = (demo_time_seek_direction > 0) ? seeking_speed : -seeking_speed;
 		if (cls.basedemospeed)
 			cls.demospeed *= cls.basedemospeed;
@@ -657,23 +993,16 @@ static void CL_UpdateDemoSpeed(void)
 
 	if (is_frame_seeking)
 	{
-		if (demo_seek_from_start)
-		{
-			cls.demospeed = -1e9f;
-			if (cls.basedemospeed)
-				cls.demospeed *= cls.basedemospeed;
-			if (demo_rewind.backstop || cls.demo_offset_current <= demo_seek_start)
-				demo_seek_from_start = false;
+		if (CL_DemoSeekRewindFromStart(demo_seek_start, seeking_speed))
 			return;
-		}
 
 		if (CL_GetDemoFrameCount() >= demo_frame_seek_target)
 		{
-			cls.demospeed = normal_speed;
-			CL_ResetDemoSeekState();
+			CL_DemoSeekFinish(normal_speed);
 			return;
 		}
 
+		demo_seek_frame_activity = true;
 		cls.demospeed = seeking_speed;
 		demo_rewind.backstop = false;
 		return;
@@ -681,15 +1010,8 @@ static void CL_UpdateDemoSpeed(void)
 
 	if (is_seeking) 
 	{
-		if (demo_seek_from_start)
-		{
-			cls.demospeed = -1e9f;
-			if (cls.basedemospeed)
-				cls.demospeed *= cls.basedemospeed;
-			if (demo_rewind.backstop || cls.demo_offset_current <= demo_seek_start)
-				demo_seek_from_start = false;
+		if (CL_DemoSeekRewindFromStart(demo_seek_start, seeking_speed))
 			return;
-		}
 
 		if (demo_target_offset < demo_seek_start)
 			demo_target_offset = demo_seek_start;
@@ -699,11 +1021,11 @@ static void CL_UpdateDemoSpeed(void)
 		if (abs(cls.demo_offset_current - demo_target_offset) < dynamic_threshold ||
 			cls.demo_offset_current >= demo_target_offset)
 		{
-			cls.demospeed = normal_speed;
-			CL_ResetDemoSeekState();
+			CL_DemoSeekFinish(normal_speed);
 			return;
 		}
 
+		demo_seek_frame_activity = true;
 		cls.demospeed = seeking_speed;
 		demo_rewind.backstop = false;
 		return;
@@ -743,6 +1065,29 @@ static void CL_UpdateDemoSpeed(void)
 		}
 	}
 
+	// 0/Home restarts the current demo through the normal playdemo setup path.
+	// Seeking to the first rewind frame is fragile because the first stored
+	// frame intentionally has no inverse state to apply; FTEQW handles backward
+	// start jumps by restarting the stream for the same reason.
+	if (jump_home_pressed)
+	{
+		if (CL_DemoQueueRestart())
+			return;
+	}
+	else if (jump_end_pressed)
+	{
+		CL_ClearDemoMarkerHistory();
+		CL_ResetDemoSeekState();
+		demo_target_offset = demo_seek_end;
+		if (cls.demo_offset_current < demo_target_offset)
+		{
+			demo_seek_from_start = false;
+			is_seeking = true;
+			cls.demospeed = 0.f;
+			return;
+		}
+	}
+
 	adjust = (keydown[K_RIGHTARROW] || keydown[K_DPAD_RIGHT]) -
 		(keydown[K_LEFTARROW] || keydown[K_DPAD_LEFT]);
 	singleframe = keydown['.'] - keydown[','];
@@ -756,22 +1101,6 @@ static void CL_UpdateDemoSpeed(void)
 	else if (singleframe && cls.demopaused)
 	{
 		cls.demospeed = singleframe * 0.03215f;
-		if (cls.basedemospeed)
-			cls.demospeed *= cls.basedemospeed;
-	}
-	else if (keydown[K_HOME] || keydown['0'])
-	{
-		CL_ClearDemoMarkerHistory();
-		cls.demospeed = -1e9f;
-		if (cls.basedemospeed)
-			cls.demospeed *= cls.basedemospeed;
-		CL_ClearDemoFrags();
-		CL_ResetDemoSeekState();
-	}
-	else if (keydown[K_END])
-	{
-		CL_ClearDemoMarkerHistory();
-		cls.demospeed = 1e9f;
 		if (cls.basedemospeed)
 			cls.demospeed *= cls.basedemospeed;
 	}
@@ -1626,6 +1955,8 @@ void CL_StopPlayback (void)
 #endif
 		CL_ResetDemoSeekState();
 		CL_ClearDemoMarkerHistory();
+		demo_restart_pending = false;
+		demo_restart_name[0] = '\0';
 		demo_start_server_time = 0.f;
 		demo_start_server_time_valid = false;
 		demo_total_frame_count = 0;
@@ -1652,6 +1983,8 @@ void CL_StopPlayback (void)
 	demo_rewind.prev.num_entities = 0;
 	CL_ResetDemoSeekState();
 	CL_ClearDemoMarkerHistory();
+	demo_restart_pending = false;
+	demo_restart_name[0] = '\0';
 	demo_start_server_time = 0.f;
 	demo_start_server_time_valid = false;
 	demo_total_frame_count = 0;
@@ -2019,6 +2352,120 @@ static qboolean CL_DemoResolvePlayback(const char *requested, FILE **out_file, q
 			return true;
 	}
 	return CL_DemoTryOpenPath(with_ext, with_ext, out_file, out_size, out_name, out_name_size);
+}
+
+static qboolean CL_StartDemoPlayback(FILE *demofile, qofs_t demo_size, const char *opened_name, qboolean restarting)
+{
+	cls.demofile = demofile;
+	q_strlcpy(demoplaying, opened_name, sizeof(demoplaying)); // store the resolved demo name for window title
+	Con_Printf("%s demo from %s.\n", restarting ? "Restarting" : "Playing", opened_name);
+
+	// woods #demopercent (Baker Fitzquake Mark V)
+	com_filesize = demo_size;
+	q_strlcpy(cls.demoname, opened_name, sizeof(cls.demoname));
+	cls.demo_offset_start = ftell(cls.demofile);	// qfs_lastload.offset instead?
+	cls.demo_file_length = demo_size;
+	cls.demo_hosttime_start = cls.demo_hosttime_elapsed = 0; // Fill this in ... host_time;
+	cls.demo_cltime_start = cls.demo_cltime_elapsed = 0; // Fill this in
+	// end #demopercent (Baker Fitzquake Mark V)
+
+// ZOID, fscanf is evil
+// O.S.: if a space character e.g. 0x20 (' ') follows '\n',
+// fscanf skips that byte too and screws up further reads.
+//	fscanf (cls.demofile, "%i\n", &cls.forcetrack);
+	if (fscanf (cls.demofile, "%i", &cls.forcetrack) != 1 || fgetc (cls.demofile) != '\n')
+	{
+		fclose (cls.demofile);
+		cls.demofile = NULL;
+#ifdef USE_ZLIB
+		CL_DZipCleanupTempDemo();
+#endif
+		cls.demonum = -1;	// stop demo loop
+		Con_Printf ("ERROR: demo \"%s\" is invalid\n", opened_name);
+		return false;
+	}
+
+	cls.demoplayback = true;
+	cls.demopaused = false;
+	cls.demospeed = 1.f; // woods (iw) #democontrols
+	CL_ResetDemoSeekState();
+	CL_ClearDemoMarkerHistory();
+	demo_restart_pending = false;
+	demo_restart_name[0] = '\0';
+	demo_rewind.backstop = false;
+	demo_start_server_time = 0.f;
+	demo_start_server_time_valid = false;
+	demo_total_frame_count = 0;
+	initialized = false;
+	// Only change basedemospeed if it hasn't been initialized,
+	// otherwise preserve the existing value
+	//if (!cls.basedemospeed) // woods (iw) #democontrols
+	cls.basedemospeed = 1.f; // woods (iw) #democontrols
+	q_strlcpy(cls.demofilename, opened_name, sizeof(cls.demofilename)); // woods (iw) #democontrols
+	cls.state = ca_connected;
+	cls.demofilestart = ftell(cls.demofile); // woods(iw) #democontrols
+	cls.demofilesize = demo_size; // woods (iw) #democontrols
+	q_strlcpy(last_demo, opened_name, sizeof(last_demo));
+	Log_Last_Demo_f();
+
+// get rid of the menu and/or console
+	key_dest = key_game;
+
+	memset(cl_dlights, 0, sizeof(cl_dlights)); // woods (iw) #democontrols
+	return true;
+}
+
+static qboolean CL_DemoRestartPlayback(const char *requested)
+{
+	char requested_name[MAX_OSPATH];
+	char opened_name[MAX_OSPATH];
+	FILE *demofile = NULL;
+	qofs_t demo_size = -1;
+	const float saved_basedemospeed = cls.basedemospeed ? cls.basedemospeed : 1.f;
+
+	q_strlcpy(requested_name, requested, sizeof(requested_name));
+	if (!requested_name[0])
+		return false;
+
+	// Close the current playback before opening a replacement; this keeps dzip
+	// temp-file ownership and CL_StopPlayback cleanup in the normal order.
+	CL_Disconnect();
+
+	if (!FS_IsCaseSensitive()) // woods #filesystemsens
+		q_strlwr(requested_name);
+
+	if (!CL_DemoResolvePlayback(requested_name, &demofile, &demo_size, opened_name, sizeof(opened_name)))
+	{
+		Con_Printf("ERROR: couldn't restart demo %s\n", requested_name);
+		cls.demonum = -1;	// stop demo loop
+		return false;
+	}
+
+	if (!CL_StartDemoPlayback(demofile, demo_size, opened_name, true))
+		return false;
+
+	cls.basedemospeed = saved_basedemospeed;
+	cls.demospeed = cls.basedemospeed;
+	return true;
+}
+
+static qboolean CL_DemoProcessRestartRequest(void)
+{
+	char requested_name[MAX_OSPATH];
+
+	if (!demo_restart_pending)
+		return false;
+
+	q_strlcpy(requested_name, demo_restart_name, sizeof(requested_name));
+	demo_restart_pending = false;
+	demo_restart_name[0] = '\0';
+	CL_ResetDemoSeekState();
+	CL_ClearDemoMarkerHistory();
+
+	if (requested_name[0])
+		CL_DemoRestartPlayback(requested_name);
+
+	return true;
 }
 
 static void CL_ResetDemoRecordingPaths(void)
@@ -2744,6 +3191,7 @@ void CL_JumpDemo_f(void)
 	qboolean is_relative;
 	float sign;
 	char token[MAXCMDLINE];
+	const float seek_time_threshold = 0.05f;
 
 	if (cmd_source != src_command)
 		return;
@@ -2847,6 +3295,10 @@ void CL_JumpDemo_f(void)
 		else if (demo_target_offset > demo_seek_end)
 			demo_target_offset = demo_seek_end;
 
+		if (demo_target_offset <= demo_seek_start && cls.demo_offset_current > demo_seek_start &&
+			CL_DemoQueueRestart())
+			return;
+
 		demo_seek_from_start = (cls.demo_offset_current > demo_target_offset);
 		is_seeking = true;
 		if (demo_seek_from_start)
@@ -2880,6 +3332,12 @@ void CL_JumpDemo_f(void)
 
 		if (demo_start_server_time_valid && absolute_time < demo_start_server_time)
 			absolute_time = demo_start_server_time;
+
+		if (demo_start_server_time_valid &&
+			absolute_time <= demo_start_server_time + seek_time_threshold &&
+			cl.mtime[0] > demo_start_server_time + seek_time_threshold &&
+			CL_DemoQueueRestart())
+			return;
 
 		demo_time_seek_target = absolute_time;
 		demo_time_seek_direction = (absolute_time >= cl.mtime[0]) ? 1 : -1;
@@ -2917,6 +3375,12 @@ void CL_JumpDemo_f(void)
 
 		if (demo_start_server_time_valid && absolute_time < demo_start_server_time)
 			absolute_time = demo_start_server_time;
+
+		if (demo_start_server_time_valid &&
+			absolute_time <= demo_start_server_time + seek_time_threshold &&
+			cl.mtime[0] > demo_start_server_time + seek_time_threshold &&
+			CL_DemoQueueRestart())
+			return;
 
 		demo_time_seek_target = absolute_time;
 		demo_time_seek_direction = (absolute_time >= cl.mtime[0]) ? 1 : -1;
@@ -2957,6 +3421,9 @@ void CL_JumpDemo_f(void)
 		}
 
 		demo_frame_seek_target = target;
+		if (target <= 1 && current_frame > 1 && CL_DemoQueueRestart())
+			return;
+
 		is_frame_seeking = true;
 		if (target < current_frame)
 		{
@@ -2977,6 +3444,7 @@ void CL_PlayDemo_f (void)
 {
 	char	requested[MAX_OSPATH];
 	char	opened_name[MAX_OSPATH];
+	FILE	*demofile = NULL;
 	qofs_t	demo_size = -1;
 	qboolean use_last_demo;
 	qboolean allow_last_fallback;
@@ -3020,7 +3488,7 @@ void CL_PlayDemo_f (void)
 	if (!FS_IsCaseSensitive()) // woods #filesystemsens
 		q_strlwr (requested);
 
-	if (!CL_DemoResolvePlayback(requested, &cls.demofile, &demo_size, opened_name, sizeof(opened_name)) && allow_last_fallback)
+	if (!CL_DemoResolvePlayback(requested, &demofile, &demo_size, opened_name, sizeof(opened_name)) && allow_last_fallback)
 	{
 		if (!last_demo[0])
 			Load_Last_Demo();
@@ -3035,66 +3503,15 @@ void CL_PlayDemo_f (void)
 			q_strlwr(requested);
 	}
 
-	if (!cls.demofile && !CL_DemoResolvePlayback(requested, &cls.demofile, &demo_size, opened_name, sizeof(opened_name)))
+	if (!demofile && !CL_DemoResolvePlayback(requested, &demofile, &demo_size, opened_name, sizeof(opened_name)))
 	{
 		Con_Printf ("ERROR: couldn't open %s\n", requested); // woods #demosfolder
 		cls.demonum = -1;	// stop demo loop
 		return;
 	}
 
-	q_strlcpy(demoplaying, opened_name, sizeof(demoplaying)); // store the resolved demo name for window title
-	Con_Printf ("Playing demo from %s.\n", opened_name);
-
-	// woods #demopercent (Baker Fitzquake Mark V)
-
-	com_filesize = demo_size;
-	q_strlcpy(cls.demoname, opened_name, sizeof(cls.demoname));
-	cls.demo_offset_start = ftell(cls.demofile);	// qfs_lastload.offset instead?
-	cls.demo_file_length = demo_size;
-	cls.demo_hosttime_start = cls.demo_hosttime_elapsed = 0; // Fill this in ... host_time;
-	cls.demo_cltime_start = cls.demo_cltime_elapsed = 0; // Fill this in
-
-	// end #demopercent (Baker Fitzquake Mark V)
-	// 
-// ZOID, fscanf is evil
-// O.S.: if a space character e.g. 0x20 (' ') follows '\n',
-// fscanf skips that byte too and screws up further reads.
-//	fscanf (cls.demofile, "%i\n", &cls.forcetrack);
-	if (fscanf (cls.demofile, "%i", &cls.forcetrack) != 1 || fgetc (cls.demofile) != '\n')
-	{
-		fclose (cls.demofile);
-		cls.demofile = NULL;
-#ifdef USE_ZLIB
-		CL_DZipCleanupTempDemo();
-#endif
-		cls.demonum = -1;	// stop demo loop
-		Con_Printf ("ERROR: demo \"%s\" is invalid\n", opened_name);
+	if (!CL_StartDemoPlayback(demofile, demo_size, opened_name, false))
 		return;
-	}
-
-	cls.demoplayback = true;
-	cls.demopaused = false;
-	cls.demospeed = 1.f; // woods (iw) #democontrols
-	CL_ResetDemoSeekState();
-	CL_ClearDemoMarkerHistory();
-	demo_start_server_time = 0.f;
-	demo_start_server_time_valid = false;
-	demo_total_frame_count = 0;
-	// Only change basedemospeed if it hasn't been initialized,
-	// otherwise preserve the existing value
-	//if (!cls.basedemospeed) // woods (iw) #democontrols
-	cls.basedemospeed = 1.f; // woods (iw) #democontrols
-	q_strlcpy(cls.demofilename, opened_name, sizeof(cls.demofilename)); // woods (iw) #democontrols
-	cls.state = ca_connected;
-	cls.demofilestart = ftell(cls.demofile); // woods(iw) #democontrols
-	cls.demofilesize = demo_size; // woods (iw) #democontrols
-	q_strlcpy(last_demo, opened_name, sizeof(last_demo));
-	Log_Last_Demo_f();
-
-// get rid of the menu and/or console
-	key_dest = key_game;
-
-	memset(cl_dlights, 0, sizeof(cl_dlights)); // woods (iw) #democontrols
 }
 
 /*
