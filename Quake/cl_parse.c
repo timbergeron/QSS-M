@@ -46,6 +46,10 @@ extern cvar_t cl_iDrive; // woods for f_config
 extern qboolean WordFilter_Check(const char* text, char* dest_buffer, size_t buffer_size); // woods #contentfilter
 
 int ogflagprecache = 0, swapflagprecache = 0, swapflagprecache2 = 0, swapflagprecache3 = 0; // woods #alternateflags
+int ctfpubflagprecache = 0; // woods #ctfpubmodels
+int ctfpubhookprecache = 0; // woods #ctfpubmodels
+int ctfpubhookchainprecache = 0; // woods #ctfpubmodels
+int ctfpubhookweaponprecache = 0; // woods #ctfpubmodels
 int grenadecache = -1, rocketcache = -1; // woods #r2g
 
 
@@ -57,6 +61,19 @@ extern qboolean pausedprint; // woods
 
 extern Uint32 exec_dm_cfg (Uint32 interval, void* param); // woods #execdelay
 server_alias_t* server_aliases = NULL; // woods #serveralias
+
+static void CL_AddClientsideModelPrecache (const char *name, int *precache_index)
+{
+	if (cl.model_count >= MAX_MODELS)
+	{
+		Con_DWarning ("No room to add clientside model %s\n", name);
+		return;
+	}
+
+	q_strlcpy (cl.model_name[cl.model_count], name, MAX_QPATH);
+	*precache_index = cl.model_count++;
+	Mod_TouchModel (name);
+}
 
 const char *svc_strings[128] =
 {
@@ -611,7 +628,7 @@ static void CL_EntitiesDeltaed(void)
 
 			ent->msgtime = cl.mtime[0];
 
-			if (cl.viewent.model != cl.model_precache[cl.stats[STAT_WEAPON]]) // woods
+			if (cl.viewent.model != CL_CTFPugTranslateModel (cl.model_precache[cl.stats[STAT_WEAPON]])) // woods
 			{
 				cl.viewent.lerpflags |= LERP_WRESET; // woods #wplerp don't lerp animation across model changes
 			}
@@ -1533,6 +1550,12 @@ static void CL_ParseServerInfo (void)
 
 // precache models
 	memset (cl.model_precache, 0, sizeof(cl.model_precache));
+	ogflagprecache = swapflagprecache = swapflagprecache2 = swapflagprecache3 = 0;
+	ctfpubflagprecache = 0;
+	ctfpubhookprecache = 0;
+	ctfpubhookchainprecache = 0;
+	ctfpubhookweaponprecache = 0;
+	grenadecache = rocketcache = -1;
 	for (cl.model_count = 1 ; ; cl.model_count++)
 	{
 		str = MSG_ReadString ();
@@ -1547,7 +1570,19 @@ static void CL_ParseServerInfo (void)
 		Mod_TouchModel (str);
 
 		if (!strcmp(str, "progs/flag.mdl")) // find the precache number #alternateflags
+		{
 			ogflagprecache = cl.model_count;
+			ctfpubflagprecache = cl.model_count;
+		}
+
+		if (!strcmp(str, "progs/star.mdl")) // woods #ctfpubmodels
+			ctfpubhookprecache = cl.model_count;
+
+		if (!strcmp(str, "progs/bit.mdl")) // woods #ctfpubmodels
+			ctfpubhookchainprecache = cl.model_count;
+
+		if (!strcmp(str, "progs/v_star.mdl")) // woods #ctfpubmodels
+			ctfpubhookweaponprecache = cl.model_count;
 
 		if (!strcmp(str, "progs/grenade.mdl")) // woods #r2g
 			grenadecache = cl.model_count;
@@ -1558,26 +1593,37 @@ static void CL_ParseServerInfo (void)
 
 	if (COM_FileExists("progs/ctfmodel.mdl", NULL)) // woods -> does client have alternate flag model? Quake Mission Pack 2: Dissolution of Eternity (Rogue) -- official #alternateflags
 	{ 
-		const char* ss = "progs/ctfmodel.mdl";
-		q_strlcpy(cl.model_name[cl.model_count++], ss, MAX_QPATH);
-		swapflagprecache = cl.model_count-1;
-		Mod_TouchModel(ss);
+		CL_AddClientsideModelPrecache ("progs/ctfmodel.mdl", &swapflagprecache);
 	}
 
 	if (COM_FileExists("progs/flag2.mdl", NULL)) // woods -> does client have alternate flag model #alternateflags
 	{
-		const char* ss2 = "progs/flag2.mdl";
-		q_strlcpy(cl.model_name[cl.model_count++], ss2, MAX_QPATH);
-		swapflagprecache2 = cl.model_count - 1;
-		Mod_TouchModel(ss2);
+		CL_AddClientsideModelPrecache ("progs/flag2.mdl", &swapflagprecache2);
 	}
 
 	if (COM_FileExists("progs/flag3.mdl", NULL)) // woods -> does client have alternate flag model 2 #alternateflags
 	{
-		const char* ss3 = "progs/flag3.mdl";
-		q_strlcpy(cl.model_name[cl.model_count++], ss3, MAX_QPATH);
-		swapflagprecache3 = cl.model_count - 1;
-		Mod_TouchModel(ss3);
+		CL_AddClientsideModelPrecache ("progs/flag3.mdl", &swapflagprecache3);
+	}
+
+	if (!ctfpubflagprecache && COM_FileExists("progs/flag.mdl", NULL)) // woods #ctfpubmodels
+	{
+		CL_AddClientsideModelPrecache ("progs/flag.mdl", &ctfpubflagprecache);
+	}
+
+	if (!ctfpubhookprecache && COM_FileExists("progs/star.mdl", NULL)) // woods #ctfpubmodels
+	{
+		CL_AddClientsideModelPrecache ("progs/star.mdl", &ctfpubhookprecache);
+	}
+
+	if (!ctfpubhookchainprecache && COM_FileExists("progs/bit.mdl", NULL)) // woods #ctfpubmodels
+	{
+		CL_AddClientsideModelPrecache ("progs/bit.mdl", &ctfpubhookchainprecache);
+	}
+
+	if (!ctfpubhookweaponprecache && COM_FileExists("progs/v_star.mdl", NULL)) // woods #ctfpubmodels
+	{
+		CL_AddClientsideModelPrecache ("progs/v_star.mdl", &ctfpubhookweaponprecache);
 	}
 
 	//johnfitz -- check for excessive models
@@ -2072,7 +2118,7 @@ static void CL_ParseClientdata (void)
 
 	//johnfitz -- lerping
 	//ericw -- this was done before the upper 8 bits of cl.stats[STAT_WEAPON] were filled in, breaking on large maps like zendar.bsp
-	if (cl.viewent.model != cl.model_precache[cl.stats[STAT_WEAPON]])
+	if (cl.viewent.model != CL_CTFPugTranslateModel (cl.model_precache[cl.stats[STAT_WEAPON]]))
 	{
 		cl.viewent.lerpflags |= LERP_RESETANIM; //don't lerp animation across model changes
 	}
@@ -2185,6 +2231,14 @@ static void CL_ParsePrecache(void)
 			if (cl.model_count == index)
 				cl.model_count = index+1;
 			q_strlcpy (cl.model_name[index], name, MAX_QPATH);
+			if (!strcmp(name, "progs/flag.mdl")) // woods #ctfpubmodels
+				ctfpubflagprecache = index;
+			if (!strcmp(name, "progs/star.mdl")) // woods #ctfpubmodels
+				ctfpubhookprecache = index;
+			if (!strcmp(name, "progs/bit.mdl")) // woods #ctfpubmodels
+				ctfpubhookchainprecache = index;
+			if (!strcmp(name, "progs/v_star.mdl")) // woods #ctfpubmodels
+				ctfpubhookweaponprecache = index;
 			Mod_TouchModel (name);
 			if (!cl.sendprespawn)
 			{

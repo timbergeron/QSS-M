@@ -4312,6 +4312,9 @@ static qboolean RSceneCache_Queue(byte *vis)
 
 		if (pent->model && cl_numvisedicts < cl_maxvisedicts)
 		{
+			if (CL_CTFPugSwapEntityModel(pent))
+				CL_LinkStaticEnt(test);
+
 			if (test->num_clusters<=MAX_ENT_LEAFS)
 			{
 				unsigned int i;

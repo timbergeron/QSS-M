@@ -486,6 +486,7 @@ extern	cvar_t	cl_shownet;
 extern	cvar_t	cl_nolerp;
 extern	cvar_t	cl_demoreel;
 extern	cvar_t	cl_demoeyes;
+extern	cvar_t	cl_ctf_pub_modelswap;
 
 extern	cvar_t	cfg_unbindall;
 extern	cvar_t	cfg_save_aliases; // woods #serveralias
@@ -613,6 +614,8 @@ void CL_PrintWrongGameDirWarning(void);
 const char *CL_GetSafeUserinfoForClientSlot(int playernum);
 const char *CL_GetSafeViewEntityUserinfo(void);
 const char *CL_GetSafeRealViewEntityUserinfo(void);
+struct qmodel_s *CL_CTFPugTranslateModel(struct qmodel_s *model);
+qboolean CL_CTFPugSwapEntityModel(entity_t *ent);
 
 //
 // cl_demo.c

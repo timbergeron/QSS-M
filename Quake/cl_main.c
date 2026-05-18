@@ -86,6 +86,7 @@ cvar_t  cl_muzzleflash = {"cl_muzzleflash", "0", CVAR_ARCHIVE}; // woods #muzzle
 cvar_t  cl_deadbodyfilter = {"cl_deadbodyfilter", "1", CVAR_ARCHIVE}; // woods #deadbody
 cvar_t	cl_r2g = {"cl_r2g","0",CVAR_ARCHIVE}; // woods #r2g
 cvar_t	cl_demoeyes = {"cl_demoeyes", "0", CVAR_ARCHIVE}; // woods #demoeyes (value = alpha, 0 = disabled)
+cvar_t	cl_ctf_pub_modelswap = {"cl_ctf_pub_modelswap", "0", CVAR_ARCHIVE}; // woods #ctfpubmodels
 cvar_t	cl_rot = {"cl_rot", "", CVAR_ARCHIVE}; // woods #clmrotate
 
 cvar_t  w_switch = {"w_switch", "0", CVAR_ARCHIVE | CVAR_USERINFO}; // woods #autoweapon
@@ -118,6 +119,10 @@ extern float	host_netinterval;	//Spike
 extern cvar_t	allow_download; // woods #ftehack
 extern cvar_t	pq_lag; // woods
 extern cvar_t	sv_mapcrc; // woods #mapcrc
+extern int		ctfpubflagprecache; // woods #ctfpubmodels
+extern int		ctfpubhookprecache; // woods #ctfpubmodels
+extern int		ctfpubhookchainprecache; // woods #ctfpubmodels
+extern int		ctfpubhookweaponprecache; // woods #ctfpubmodels
 extern qboolean	qeintermission; // woods #qeintermission
 extern qboolean	crxintermission; // woods #crxintermission
 extern qboolean m_return_onerror;
@@ -699,6 +704,34 @@ Uint32 exec_dm_cfg (Uint32 interval, void* param) // woods #execdelay
 	return 0; // only exec once
 }
 
+static qboolean CL_ServerinfoIsCTFPug (void)
+{
+	char mode[16];
+	char playmode[16];
+
+	Info_GetKey (cl.serverinfo, "mode", mode, sizeof(mode));
+	Info_GetKey (cl.serverinfo, "playmode", playmode, sizeof(playmode));
+
+	return (!q_strcasecmp(mode, "ctf") && !q_strcasecmp(playmode, "pug"));
+}
+
+static void CL_UpdatePlaymodeFromServerinfo (void)
+{
+	char playmode[16];
+	const char *val;
+
+	val = Info_GetKey (cl.serverinfo, "playmode", playmode, sizeof(playmode));
+	cl.playmode = 0;
+
+	if (!q_strcasecmp(val, "match"))
+		cl.playmode = 1;
+	else if (!q_strcasecmp(val, "ffa") || !q_strcasecmp(val, "pug") ||
+		!q_strcasecmp(val, "normal") || !q_strcasecmp(val, "pub"))
+		cl.playmode = 2;
+	else if (!q_strcasecmp(val, "practice"))
+		cl.playmode = 3;
+}
+
 /*
 =====================
 CL_SignonReply
@@ -830,16 +863,7 @@ void CL_SignonReply (void)
 			cl.modetype = 8;
 
 		// woods lets detect the playmode of the server for hybrid/nq crx
-
-		char buf4[16];
-		val2 = Info_GetKey(cl.serverinfo, "playmode", buf4, sizeof(buf4));
-
-		if (!q_strcasecmp(val2, "match"))
-			cl.playmode = 1;
-		if (!q_strcasecmp(val2, "ffa") || !q_strcasecmp(val2, "pug") || !q_strcasecmp(val2, "normal"))
-			cl.playmode = 2;
-		if (!q_strcasecmp(val2, "practice"))
-			cl.playmode = 3;
+		CL_UpdatePlaymodeFromServerinfo ();
 
 		const char* val3;
 		char buf8[4];
@@ -1681,6 +1705,160 @@ static void CL_DemoEyesMaybeAnimate(entity_t *ent, int entnum)
 	}
 }
 
+enum
+{
+	CTFPUB_FLAG_RED_SKIN = 0,
+	CTFPUB_FLAG_BLUE_SKIN = 1
+};
+
+static qboolean CL_CTFPugModelSwapActive (void)
+{
+	return (cl_ctf_pub_modelswap.value && CL_ServerinfoIsCTFPug ());
+}
+
+static qmodel_t *CL_CTFPugPrecacheModel (int precache)
+{
+	if (!CL_CTFPugModelSwapActive())
+		return NULL;
+
+	if (precache <= 0 || precache >= MAX_MODELS)
+		return NULL;
+
+	return cl.model_precache[precache];
+}
+
+static qboolean CL_CTFPugIsSilverKeyModel (qmodel_t *model)
+{
+	return (model && model->name[0] &&
+		(!strcmp(model->name, "progs/w_s_key.mdl") ||
+		 !strcmp(model->name, "progs/m_s_key.mdl") ||
+		 !strcmp(model->name, "progs/b_s_key.mdl")));
+}
+
+static qboolean CL_CTFPugIsGoldKeyModel (qmodel_t *model)
+{
+	return (model && model->name[0] &&
+		(!strcmp(model->name, "progs/w_g_key.mdl") ||
+		 !strcmp(model->name, "progs/m_g_key.mdl") ||
+		 !strcmp(model->name, "progs/b_g_key.mdl")));
+}
+
+static qmodel_t *CL_CTFPugTranslateModelAndSkin (qmodel_t *model, int *skinnum)
+{
+	if (!model || !model->name[0])
+		return model;
+
+	if (!strcmp(model->name, "progs/v_spike.mdl"))
+	{
+		qmodel_t *star_model = CL_CTFPugPrecacheModel (ctfpubhookprecache);
+		if (star_model)
+			return star_model;
+	}
+	else if (!strcmp(model->name, "progs/s_spike.mdl"))
+	{
+		qmodel_t *chain_model = CL_CTFPugPrecacheModel (ctfpubhookchainprecache);
+		if (chain_model)
+			return chain_model;
+	}
+	else if (!strcmp(model->name, "progs/v_axe.mdl"))
+	{
+		qmodel_t *weapon_model = CL_CTFPugPrecacheModel (ctfpubhookweaponprecache);
+		if (weapon_model)
+			return weapon_model;
+	}
+	else if (CL_CTFPugIsSilverKeyModel(model))
+	{
+		qmodel_t *flag_model = CL_CTFPugPrecacheModel (ctfpubflagprecache);
+		if (flag_model)
+		{
+			if (skinnum)
+				*skinnum = CTFPUB_FLAG_BLUE_SKIN;
+			return flag_model;
+		}
+	}
+	else if (CL_CTFPugIsGoldKeyModel(model))
+	{
+		qmodel_t *flag_model = CL_CTFPugPrecacheModel (ctfpubflagprecache);
+		if (flag_model)
+		{
+			if (skinnum)
+				*skinnum = CTFPUB_FLAG_RED_SKIN;
+			return flag_model;
+		}
+	}
+
+	return model;
+}
+
+qmodel_t *CL_CTFPugTranslateModel (qmodel_t *model)
+{
+	return CL_CTFPugTranslateModelAndSkin (model, NULL);
+}
+
+static qboolean CL_CTFPugModelIsSwapTargetForSource (qmodel_t *source_model, qmodel_t *current_model)
+{
+	if (!source_model || !current_model || !source_model->name[0] || !current_model->name[0])
+		return false;
+
+	if (!strcmp(source_model->name, "progs/v_spike.mdl"))
+		return !strcmp(current_model->name, "progs/star.mdl");
+	if (!strcmp(source_model->name, "progs/s_spike.mdl"))
+		return !strcmp(current_model->name, "progs/bit.mdl");
+	if (!strcmp(source_model->name, "progs/v_axe.mdl"))
+		return !strcmp(current_model->name, "progs/v_star.mdl");
+	if (CL_CTFPugIsSilverKeyModel(source_model) || CL_CTFPugIsGoldKeyModel(source_model))
+		return !strcmp(current_model->name, "progs/flag.mdl");
+
+	return false;
+}
+
+qboolean CL_CTFPugSwapEntityModel (entity_t *ent)
+{
+	qmodel_t *base_model;
+	qmodel_t *translated_model;
+	int base_skin;
+	int translated_skin;
+
+	if (!ent->model)
+		return false;
+
+	base_model = ent->model;
+	base_skin = ent->skinnum;
+	if (ent->netstate.modelindex > 0 && ent->netstate.modelindex < MAX_MODELS &&
+		cl.model_precache[ent->netstate.modelindex])
+	{
+		base_model = cl.model_precache[ent->netstate.modelindex];
+		base_skin = ent->netstate.skin;
+	}
+
+	translated_skin = base_skin;
+	translated_model = CL_CTFPugTranslateModelAndSkin (base_model, &translated_skin);
+	if (translated_model != base_model)
+	{
+		qboolean changed = (ent->model != translated_model || ent->skinnum != translated_skin);
+
+		ent->model = translated_model;
+		ent->skinnum = translated_skin;
+
+		if (!strcmp(ent->model->name, "progs/flag.mdl"))
+		{
+			ent->syncbase = 0;
+			ent->model->flags |= MOD_NOLERP | MOD_NOSHADOW;
+		}
+
+		return changed;
+	}
+
+	if (base_model != ent->model && CL_CTFPugModelIsSwapTargetForSource(base_model, ent->model))
+	{
+		ent->model = base_model;
+		ent->skinnum = base_skin;
+		return true;
+	}
+
+	return false;
+}
+
 /*
 ===============
 CL_RelinkEntities
@@ -1779,6 +1957,7 @@ void CL_RelinkEntities (void)
 
 		CL_ClientsidePowerupColor(ent, i); // woods
 		CL_DemoEyesMaybeAnimate(ent, i); // woods #demoeyes
+		CL_CTFPugSwapEntityModel(ent); // woods #ctfpubmodels
 
 		if (CL_LerpEntity(ent, ent->origin, ent->angles, frac))
 			ent->lerpflags |= LERP_RESETMOVE;
@@ -4401,6 +4580,7 @@ static void CL_ServerExtension_FullServerinfo_f(void)
 	const char *newserverinfo = Cmd_Argv(1);
 	Q_strncpy(cl.serverinfo, newserverinfo, sizeof(cl.serverinfo));	//just replace it
 
+	CL_UpdatePlaymodeFromServerinfo ();
 	PMCL_ServerinfoUpdated();
 }
 static void CL_ServerExtension_ServerinfoUpdate_f(void)
@@ -4409,6 +4589,7 @@ static void CL_ServerExtension_ServerinfoUpdate_f(void)
 	const char *newservervalue = Cmd_Argv(2);
 	Info_SetKey(cl.serverinfo, sizeof(cl.serverinfo), newserverkey, newservervalue);
 
+	CL_UpdatePlaymodeFromServerinfo ();
 	PMCL_ServerinfoUpdated();
 }
 
@@ -4968,6 +5149,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_deadbodyfilter); // woods #deadbody
 	Cvar_RegisterVariable (&cl_r2g); // woods #r2g
 	Cvar_RegisterVariable (&cl_demoeyes); // woods #demoeyes
+	Cvar_RegisterVariable (&cl_ctf_pub_modelswap); // woods #ctfpubmodels
 
 	Cvar_RegisterVariable (&w_switch); // woods #autoweapon
 	Cvar_RegisterVariable (&b_switch); // woods #autoweapon
