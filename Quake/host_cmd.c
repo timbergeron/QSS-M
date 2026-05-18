@@ -9125,565 +9125,356 @@ static void Give_ConfirmPrint(const char* fmt, ...) // woods #give+
 Host_Give_f -- woods #give+
 ==================
 */
-static void Host_Give_f (void)
+typedef enum give_ammo_e
 {
-	const char* item = Cmd_Argv(1);                 /* what to give              */
-	int         amt = (Cmd_Argc() >= 3) ? atoi(Cmd_Argv(2)) : 999;
-	eval_t* val = NULL;
-	const char* msg = NULL;                        /* human text for echo       */
+	GIVE_AMMO_SHELLS,
+	GIVE_AMMO_NAILS,
+	GIVE_AMMO_ROCKETS,
+	GIVE_AMMO_CELLS,
+	GIVE_AMMO_LAVA_NAILS,
+	GIVE_AMMO_MULTI_ROCKETS,
+	GIVE_AMMO_PLASMA_CELLS
+} give_ammo_t;
 
-	if (cmd_source != src_client) { Cmd_ForwardToServer(); return; }
-	if (pr_global_struct->deathmatch)                /* no cheats in DM           */
+static qboolean Give_IsIntegerArg (const char *s)
+{
+	if (!s || !*s)
+		return false;
+
+	if (*s == '-' || *s == '+')
+		s++;
+
+	if (!isdigit((unsigned char)*s))
+		return false;
+
+	while (*++s)
+	{
+		if (!isdigit((unsigned char)*s))
+			return false;
+	}
+
+	return true;
+}
+
+static qboolean Give_IsIntegerPrefix (const char *s)
+{
+	if (!s)
+		return false;
+
+	if (*s == '-' || *s == '+')
+		s++;
+
+	while (*s)
+	{
+		if (!isdigit((unsigned char)*s))
+			return false;
+		s++;
+	}
+
+	return true;
+}
+
+static qboolean Give_IsDigitWeaponArg (const char *item)
+{
+	return item && item[1] == '\0' && item[0] >= '0' && item[0] <= '9';
+}
+
+static qboolean Give_IsArmorColor (const char *s)
+{
+	return s && (!q_strcasecmp(s, "red") ||
+		!q_strcasecmp(s, "yellow") ||
+		!q_strcasecmp(s, "green"));
+}
+
+static qboolean Give_IsArmorItem (const char *item)
+{
+	return item && ((!q_strcasecmp(item, "armor")) ||
+		(item[0] == 'a' && item[1] == '\0'));
+}
+
+static qboolean Give_ItemAcceptsAmount (const char *item)
+{
+	if (!item)
+		return false;
+
+	if (item[1] == '\0')
+	{
+		switch (item[0])
+		{
+		case 's':
+		case 'n':
+		case 'l':
+		case 'r':
+		case 'm':
+		case 'h':
+		case 'c':
+		case 'p':
+		case 'a':
+		case '0':
+		case '1':
+		case '2':
+		case '3':
+		case '4':
+		case '5':
+		case '6':
+		case '7':
+		case '8':
+		case '9':
+			return true;
+		}
+	}
+
+	return !q_strcasecmp(item, "shells") ||
+		!q_strcasecmp(item, "nails") ||
+		!q_strcasecmp(item, "rockets") ||
+		!q_strcasecmp(item, "cells") ||
+		!q_strcasecmp(item, "lavanails") ||
+		!q_strcasecmp(item, "multirockets") ||
+		!q_strcasecmp(item, "plasmacells") ||
+		!q_strcasecmp(item, "health") ||
+		!q_strcasecmp(item, "shotgun") ||
+		!q_strcasecmp(item, "sg") ||
+		!q_strcasecmp(item, "supershotgun") ||
+		!q_strcasecmp(item, "ssg") ||
+		!q_strcasecmp(item, "nailgun") ||
+		!q_strcasecmp(item, "ng") ||
+		!q_strcasecmp(item, "supernailgun") ||
+		!q_strcasecmp(item, "sng") ||
+		!q_strcasecmp(item, "grenadelauncher") ||
+		!q_strcasecmp(item, "gl") ||
+		!q_strcasecmp(item, "rocketlauncher") ||
+		!q_strcasecmp(item, "rl") ||
+		!q_strcasecmp(item, "lightninggun") ||
+		!q_strcasecmp(item, "lg") ||
+		!q_strcasecmp(item, "6a") ||
+		!q_strcasecmp(item, "proximitygun") ||
+		!q_strcasecmp(item, "lasercannon") ||
+		!q_strcasecmp(item, "mjolnir") ||
+		!q_strcasecmp(item, "lavanailgun") ||
+		!q_strcasecmp(item, "lavagun") ||
+		!q_strcasecmp(item, "multigrenade") ||
+		!q_strcasecmp(item, "multigren") ||
+		!q_strcasecmp(item, "multirocket") ||
+		!q_strcasecmp(item, "multirock") ||
+		!q_strcasecmp(item, "plasmagun") ||
+		!q_strcasecmp(item, "plasma") ||
+		!q_strcasecmp(item, "weapons");
+}
+
+static qboolean Give_ShouldConsumeAmount (const char *item, const char *next)
+{
+	if (!Give_ItemAcceptsAmount(item) || !Give_IsIntegerArg(next))
+		return false;
+
+	if (Give_IsDigitWeaponArg(item) && Give_IsDigitWeaponArg(next))
+		return false;
+
+	return true;
+}
+
+static void Give_AddItem (unsigned int item)
+{
+	sv_player->v.items = (unsigned)sv_player->v.items | item;
+}
+
+static unsigned int Give_SigilFlagsFromItems (unsigned int sigils)
+{
+	unsigned int flags = 0;
+
+	if (sigils & IT_SIGIL1)
+		flags |= 1u;
+	if (sigils & IT_SIGIL2)
+		flags |= 2u;
+	if (sigils & IT_SIGIL3)
+		flags |= 4u;
+	if (sigils & IT_SIGIL4)
+		flags |= 8u;
+
+	return flags;
+}
+
+static void Give_AddSigils (unsigned int sigils)
+{
+	unsigned int flags = (unsigned int)pr_global_struct->serverflags;
+
+	flags |= Give_SigilFlagsFromItems(sigils);
+
+	pr_global_struct->serverflags = flags;
+	svs.serverflags = flags;
+}
+
+static void Give_NormalizeVanillaSigilItemBits (void)
+{
+	const unsigned int sigil_mask = (unsigned)(IT_SIGIL1 | IT_SIGIL2 | IT_SIGIL3 | IT_SIGIL4);
+	unsigned int items, sigils;
+
+	if (rogue)
 		return;
 
-	/* =========================================================== *
-	 * 0.  Legacy single‑chars / digits  (kept verbatim + echo)
-	 * =========================================================== */
-	switch (item[0])
+	items = (unsigned)sv_player->v.items;
+	sigils = items & sigil_mask;
+	if (!sigils)
+		return;
+
+	/* Vanilla sigils are canonical in serverflags.  Older give code could
+	   leave them in the float-backed item mask, where high bits can drop
+	   lower weapon bits on later item grants. */
+	Give_AddSigils(sigils);
+	sv_player->v.items = items & ~sigil_mask;
+}
+
+static void Give_SetAmmo (give_ammo_t ammo, int amt)
+{
+	eval_t *val;
+
+	amt = q_max(amt, 0);
+
+	/* Rogue mirrors shells, but splits nails/rockets/cells by current weapon. */
+	switch (ammo)
 	{
-		/*----- digit weapons (plus Hipnotic variants) ---------------*/
-	case '0': case '1': case '2': case '3': case '4':
-	case '5': case '6': case '7': case '8': case '9':
-		if (strlen(item) == 1) // Only handle single digits
+	case GIVE_AMMO_SHELLS:
+		if (rogue)
 		{
-			// MED 01/04/97 added hipnotic give stuff
-			if (hipnotic)
-			{
-				if (item[0] == '6')
-				{
-					sv_player->v.items = (unsigned)sv_player->v.items | IT_GRENADE_LAUNCHER;
-				}
-				else if (item[0] == '9')
-					sv_player->v.items = (unsigned)sv_player->v.items | HIT_LASER_CANNON;
-				else if (item[0] == '0')
-					sv_player->v.items = (unsigned)sv_player->v.items | HIT_MJOLNIR;
-				else if (item[0] >= '2')
-					sv_player->v.items = (unsigned)sv_player->v.items | (IT_SHOTGUN << (item[0] - '2'));
-			}
-			else if (item[0] >= '2')
-				sv_player->v.items = (unsigned)sv_player->v.items | (IT_SHOTGUN << (item[0] - '2'));
-
-			msg = va("weapon %c", item[0]);
-			break;
+			if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_shells1"))))
+				val->_float = amt;
 		}
-		else if (strlen(item) == 2 && hipnotic && item[0] == '6' && item[1] == 'a')
-		{
-			// Special case for Hipnotic proximity gun
-			sv_player->v.items = (unsigned)sv_player->v.items | HIT_PROXIMITY_GUN;
-			msg = "weapon 6a (proximity gun)";
-			break;
-		}
-		else
-			goto KEYWORDS; // Multi-character strings starting with digits go to keywords
+		sv_player->v.ammo_shells = amt;
+		break;
 
-		/*----- letter ammo / health / armour ------------------------*/
-	case 's': /* shells */
-		if (strlen(item) == 1) // Only handle single 's'
+	case GIVE_AMMO_NAILS:
+		if (rogue)
 		{
-			if (rogue)
+			if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_nails1"))))
 			{
-				if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_shells1"))))
-					val->_float = amt;
-			}
-			sv_player->v.ammo_shells = amt;
-			msg = va("%d shells", amt);
-			break;
-		}
-		else
-			goto KEYWORDS; // Multi-character strings starting with 's' go to keywords
-
-	case 'n': /* nails */
-		if (strlen(item) == 1) // Only handle single 'n'
-		{
-			if (rogue)
-			{
-				if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_nails1"))))
-				{
-					val->_float = amt;
-					if (sv_player->v.weapon <= IT_LIGHTNING)
-						sv_player->v.ammo_nails = amt;
-				}
-			}
-			else
-			{
-				sv_player->v.ammo_nails = amt;
-			}
-			msg = va("%d nails", amt);
-			break;
-		}
-		else
-			goto KEYWORDS; // Multi-character strings starting with 'n' go to keywords
-
-	case 'l': /* lava nails (Rogue) */
-		if (strlen(item) == 1) // Only handle single 'l'
-		{
-			if (rogue)
-			{
-				if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_lava_nails"))))
-					val->_float = amt;
-				if (sv_player->v.weapon > IT_LIGHTNING)
+				val->_float = amt;
+				if (sv_player->v.weapon <= IT_LIGHTNING)
 					sv_player->v.ammo_nails = amt;
-				msg = va("%d lava nails", amt);
 			}
-			else 
-			{
-				SV_ClientPrintf("lava nails (ignored - not Rogue)\n");
-				return;
-			}
-		}
-		else
-			goto KEYWORDS; // Multi-character strings starting with 'l' go to keywords
-
-	case 'r': /* rockets */
-		if (strlen(item) == 1) // Only handle single 'r'
-		{
-			if (rogue)
-			{
-				if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_rockets1"))))
-				{
-					val->_float = amt;
-					if (sv_player->v.weapon <= IT_LIGHTNING)
-						sv_player->v.ammo_rockets = amt;
-				}
-			}
-			else
-			{
-				sv_player->v.ammo_rockets = amt;
-			}
-			msg = va("%d rockets", amt);
 			break;
 		}
-		else
-			goto KEYWORDS; // Multi-character strings starting with 'r' go to keywords
+		sv_player->v.ammo_nails = amt;
+		break;
 
-	case 'm': /* multi rockets (Rogue) */
-		if (strlen(item) == 1) // Only handle single 'm'
+	case GIVE_AMMO_ROCKETS:
+		if (rogue)
 		{
-			if (rogue)
+			if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_rockets1"))))
 			{
-				if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_multi_rockets"))))
-					val->_float = amt;
-				if (sv_player->v.weapon > IT_LIGHTNING)
+				val->_float = amt;
+				if (sv_player->v.weapon <= IT_LIGHTNING)
 					sv_player->v.ammo_rockets = amt;
-				msg = va("%d multi‑rockets", amt);
 			}
-			else 
-			{
-				SV_ClientPrintf("multi rockets (ignored - not Rogue)\n");
-				return;
-			}
-		}
-		else
-			goto KEYWORDS; // Multi-character strings starting with 'm' go to keywords
-
-	case 'h': /* health */
-		if (strlen(item) == 1) // Only handle single 'h'
-		{
-			sv_player->v.health = amt;
-			SV_StartSound(sv_player, NULL, 0, "items/r_item1.wav", 255, 1.0f);
-			msg = va("%d health", amt);
 			break;
 		}
-		else
-			goto KEYWORDS; // Multi-character strings starting with 'h' go to keywords
+		sv_player->v.ammo_rockets = amt;
+		break;
 
-	case 'c': /* cells */
-		if (strlen(item) == 1) // Only handle single 'c'
+	case GIVE_AMMO_CELLS:
+		if (rogue)
 		{
-			if (rogue)
+			if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_cells1"))))
 			{
-				if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_cells1"))))
-				{
-					val->_float = amt;
-					if (sv_player->v.weapon <= IT_LIGHTNING)
-						sv_player->v.ammo_cells = amt;
-				}
-			}
-			else
-			{
-				sv_player->v.ammo_cells = amt;
-			}
-			msg = va("%d cells", amt);
-			break;
-		}
-		else
-			goto KEYWORDS; // Multi-character strings starting with 'c' go to keywords
-
-	case 'p': /* plasma cells (Rogue) */
-		if (strlen(item) == 1) // Only handle single 'p'
-		{
-			if (rogue)
-			{
-				if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_plasma"))))
-					val->_float = amt;
-				if (sv_player->v.weapon > IT_LIGHTNING)
+				val->_float = amt;
+				if (sv_player->v.weapon <= IT_LIGHTNING)
 					sv_player->v.ammo_cells = amt;
-				msg = va("%d plasma cells", amt);
 			}
-			else 
-			{
-				SV_ClientPrintf("plasma cells (ignored - not Rogue)\n");
-				return;
-			}
+			break;
 		}
-		else
-			goto KEYWORDS; // Multi-character strings starting with 'p' go to keywords
+		sv_player->v.ammo_cells = amt;
+		break;
 
-	case 'a': /* armour numeric */
-		if (strlen(item) == 1) // Only handle single 'a'
-		{
-			goto ARMOUR_NUMERIC;
-		}
-		else
-			goto KEYWORDS; // Multi-character strings starting with 'a' go to keywords
+	case GIVE_AMMO_LAVA_NAILS:
+		if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_lava_nails"))))
+			val->_float = amt;
+		if (sv_player->v.weapon > IT_LIGHTNING)
+			sv_player->v.ammo_nails = amt;
+		break;
 
-	default:
-		goto KEYWORDS;   /* fall‑through to new keyword branch */
-	}
-	goto FINISH;         /* legacy handled –  skip keywords   */
+	case GIVE_AMMO_MULTI_ROCKETS:
+		if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_multi_rockets"))))
+			val->_float = amt;
+		if (sv_player->v.weapon > IT_LIGHTNING)
+			sv_player->v.ammo_rockets = amt;
+		break;
 
-	/* =========================================================== *
-	 * 1.  Keyword interface
-	 * =========================================================== */
-KEYWORDS:
+	case GIVE_AMMO_PLASMA_CELLS:
+		if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_plasma"))))
+			val->_float = amt;
+		if (sv_player->v.weapon > IT_LIGHTNING)
+			sv_player->v.ammo_cells = amt;
+		break;
+	}
+}
 
-	/*----- Ammo --------------------------------------------------*/
-	if (!q_strcasecmp(item, "shells")) { sv_player->v.ammo_shells = amt; msg = va("%d shells", amt); }
-	else if (!q_strcasecmp(item, "nails")) { sv_player->v.ammo_nails = amt; msg = va("%d nails", amt); }
-	else if (!q_strcasecmp(item, "rockets")) { sv_player->v.ammo_rockets = amt; msg = va("%d rockets", amt); }
-	else if (!q_strcasecmp(item, "cells")) { sv_player->v.ammo_cells = amt; msg = va("%d cells", amt); }
-	/*----- Rogue Ammo --------------------------------------------*/
-	else if (!q_strcasecmp(item, "lavanails"))
-	{
-		if (rogue)
-		{
-			if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_lava_nails"))))
-				val->_float = amt;
-			if (sv_player->v.weapon > IT_LIGHTNING)
-				sv_player->v.ammo_nails = amt;
-			msg = va("%d lava nails", amt);
-		}
-		else 
-		{
-			SV_ClientPrintf("lava nails (ignored - not Rogue)\n");
-			return;
-		}
-	}
-	else if (!q_strcasecmp(item, "multirockets"))
-	{
-		if (rogue)
-		{
-			if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_multi_rockets"))))
-				val->_float = amt;
-			if (sv_player->v.weapon > IT_LIGHTNING)
-				sv_player->v.ammo_rockets = amt;
-			msg = va("%d multi-rockets", amt);
-		}
-		else 
-		{
-			SV_ClientPrintf("multi rockets (ignored - not Rogue)\n");
-			return;
-		}
-	}
-	else if (!q_strcasecmp(item, "plasmacells"))
-	{
-		if (rogue)
-		{
-			if ((val = GetEdictFieldValue(sv_player, ED_FindFieldOffset("ammo_plasma"))))
-				val->_float = amt;
-			if (sv_player->v.weapon > IT_LIGHTNING)
-				sv_player->v.ammo_cells = amt;
-			msg = va("%d plasma cells", amt);
-		}
-		else 
-		{
-			SV_ClientPrintf("plasma cells (ignored - not Rogue)\n");
-			return;
-		}
-	}
+static void Give_SetArmor (int amt, qboolean has_amount, const char *color)
+{
+	if (color && !has_amount)
+		amt = 0;
 
-	/*----- Health -----------------------------------------------*/
-	else if (!q_strcasecmp(item, "health"))
-	{
-		sv_player->v.health = sv_player->v.max_health = amt;
-		SV_StartSound(sv_player, NULL, 0, "items/r_item1.wav", 255, 1.0f);
-		msg = va("%d health", amt);
-	}
+	amt = q_max(amt, 0);
 
-	/*----- Armour (colour or numeric) ---------------------------*/
-	else if (!q_strcasecmp(item, "armor"))
+	if (color && !q_strcasecmp(color, "red"))
 	{
-		if (Cmd_Argc() == 3 && !isdigit((unsigned char)Cmd_Argv(2)[0]))
-			amt = 0;          /* colour only, numeric ignored    */
-
-	ARMOUR_NUMERIC:
-		if (!q_strcasecmp(Cmd_Argv(Cmd_Argc() - 1), "red") || amt > 150) { sv_player->v.armortype = 0.8f; amt = q_max(amt, 200); }
-		else if (!q_strcasecmp(Cmd_Argv(Cmd_Argc() - 1), "yellow") || amt > 100) { sv_player->v.armortype = 0.6f; amt = q_max(amt, 150); }
-		else if (!q_strcasecmp(Cmd_Argv(Cmd_Argc() - 1), "green")) { sv_player->v.armortype = 0.3f; amt = q_max(amt, 100); }
-		else if (amt >= 0) { /* decide type by value */         if (amt > 150) sv_player->v.armortype = 0.8f;
-		else if (amt > 100) sv_player->v.armortype = 0.6f; else sv_player->v.armortype = 0.3f;
-		}
-		sv_player->v.armorvalue = amt;
-		sv_player->v.items = (unsigned)sv_player->v.items & ~(unsigned)(IT_ARMOR1 | IT_ARMOR2 | IT_ARMOR3);
-		if (sv_player->v.armortype == 0.8f) sv_player->v.items = (unsigned)sv_player->v.items | IT_ARMOR3;
-		else if (sv_player->v.armortype == 0.6f) sv_player->v.items = (unsigned)sv_player->v.items | IT_ARMOR2;
-		else                                   sv_player->v.items = (unsigned)sv_player->v.items | IT_ARMOR1;
-		SV_StartSound(sv_player, NULL, 0, "items/armor1.wav", 255, 1.0f);
-		msg = va("%d armour", amt);
+		sv_player->v.armortype = 0.8f;
+		amt = q_max(amt, 200);
 	}
-	/*----- Power‑ups --------------------------------------------*/
-	else if (!q_strcasecmp(item, "quad")) { 
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_QUAD;
-		int ofs = ED_FindFieldOffset("super_damage_finished");
-		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
-			val->_float = qcvm->time + 30.0f;
-		SV_StartSound(sv_player, NULL, 0, "items/damage.wav", 255, 1.0f);
-		host_client->powerup_warn_flags |= PWARN_GIVE;
-		msg = "Quad Damage"; 
-	}
-	else if (!q_strcasecmp(item, "pent") || !q_strcasecmp(item, "666")) { 
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_INVULNERABILITY;
-		int ofs = ED_FindFieldOffset("invincible_finished");
-		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
-			val->_float = qcvm->time + 30.0f;
-		SV_StartSound(sv_player, NULL, 0, "items/protect.wav", 255, 1.0f);
-		host_client->powerup_warn_flags |= PWARN_GIVE;
-		msg = "Pent"; 
-	}
-	else if (!q_strcasecmp(item, "ring") || !q_strcasecmp(item, "eyes")) { 
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_INVISIBILITY;
-		int ofs = ED_FindFieldOffset("invisible_finished");
-		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
-			val->_float = qcvm->time + 30.0f;
-		SV_StartSound(sv_player, NULL, 0, "items/inv1.wav", 255, 1.0f);
-		host_client->powerup_warn_flags |= PWARN_GIVE;
-		msg = "Ring"; 
-	}
-	else if (!q_strcasecmp(item, "suit") || !q_strcasecmp(item, "biosuit")) { 
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_SUIT;
-		int ofs = ED_FindFieldOffset("radsuit_finished");
-		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
-			val->_float = qcvm->time + 30.0f;
-		SV_StartSound(sv_player, NULL, 0, "items/suit.wav", 255, 1.0f);
-		host_client->powerup_warn_flags |= PWARN_GIVE;
-		msg = "Biosuit"; 
-	}
-	/*----- Keys --------------------------------------------------*/
-	else if (!q_strcasecmp(item, "keys"))
+	else if (color && !q_strcasecmp(color, "yellow"))
 	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_KEY1 | IT_KEY2;        msg = "both keys";
+		sv_player->v.armortype = 0.6f;
+		amt = q_max(amt, 150);
 	}
-	else if (!q_strcasecmp(item, "key1") || !q_strcasecmp(item, "silverkey") || !q_strcasecmp(item, "blueflag"))
+	else if (color && !q_strcasecmp(color, "green"))
 	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_KEY1;                  msg = "silver key";
-	}
-	else if (!q_strcasecmp(item, "key2") || !q_strcasecmp(item, "goldkey") || !q_strcasecmp(item, "redflag"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_KEY2;                  msg = "gold key";
-	}
-	/*----- Sigils -----------------------------------------------*/
-	else if (!q_strcasecmp(item, "sigils") || !q_strcasecmp(item, "runes"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_SIGIL1 | IT_SIGIL2 | IT_SIGIL3 | IT_SIGIL4; msg = "all sigils";
-	}
-	else if (!q_strcasecmp(item, "sigil1") || !q_strcasecmp(item, "rune1"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_SIGIL1;               msg = "sigil 1";
-	}
-	else if (!q_strcasecmp(item, "sigil2") || !q_strcasecmp(item, "rune2"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_SIGIL2;               msg = "sigil 2";
-	}
-	else if (!q_strcasecmp(item, "sigil3") || !q_strcasecmp(item, "rune3"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_SIGIL3;               msg = "sigil 3";
-	}
-	else if (!q_strcasecmp(item, "sigil4") || !q_strcasecmp(item, "rune4"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_SIGIL4;               msg = "sigil 4";
-	}
-	/*----- Individual Weapons ----------------------------------*/
-	else if (!q_strcasecmp(item, "axe") || !q_strcasecmp(item, "1"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_AXE;
-		msg = "axe";
-	}
-	else if (!q_strcasecmp(item, "shotgun") || !q_strcasecmp(item, "sg") || !q_strcasecmp(item, "2"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_SHOTGUN;
-		sv_player->v.ammo_shells = 999;
-		msg = "shotgun + 999 shells";
-	}
-	else if (!q_strcasecmp(item, "supershotgun") || !q_strcasecmp(item, "ssg") || !q_strcasecmp(item, "3"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_SUPER_SHOTGUN;
-		sv_player->v.ammo_shells = 999;
-		msg = "super shotgun + 999 shells";
-	}
-	else if (!q_strcasecmp(item, "nailgun") || !q_strcasecmp(item, "ng") || !q_strcasecmp(item, "4"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_NAILGUN;
-		sv_player->v.ammo_nails = 999;
-		msg = "nailgun + 999 nails";
-	}
-	else if (!q_strcasecmp(item, "supernailgun") || !q_strcasecmp(item, "sng") || !q_strcasecmp(item, "5"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_SUPER_NAILGUN;
-		sv_player->v.ammo_nails = 999;
-		msg = "super nailgun + 999 nails";
-	}
-	else if (!q_strcasecmp(item, "grenadelauncher") || !q_strcasecmp(item, "gl") || !q_strcasecmp(item, "6"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_GRENADE_LAUNCHER;
-		sv_player->v.ammo_rockets = 999;
-		msg = "grenade launcher + 999 rockets";
-	}
-	else if (!q_strcasecmp(item, "rocketlauncher") || !q_strcasecmp(item, "rl") || !q_strcasecmp(item, "7"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_ROCKET_LAUNCHER;
-		sv_player->v.ammo_rockets = 999;
-		msg = "rocket launcher + 999 rockets";
-	}
-	else if (!q_strcasecmp(item, "lightninggun") || !q_strcasecmp(item, "lg") || !q_strcasecmp(item, "8"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_LIGHTNING;
-		sv_player->v.ammo_cells = 999;
-		msg = "lightning gun + 999 cells";
-	}
-	/*----- Hipnotic Weapons -----------------------------------*/
-	else if (!q_strcasecmp(item, "proximitygun") || !q_strcasecmp(item, "6a"))
-	{
-		if (hipnotic)
-		{
-			sv_player->v.items = (unsigned)sv_player->v.items | HIT_PROXIMITY_GUN;
-			sv_player->v.ammo_rockets = 999;
-			msg = "proximity gun + 999 rockets";
-		}
-		else
-		{
-			SV_ClientPrintf("proximity gun (ignored - not Hipnotic)\n");
-			return;
-		}
-	}
-	else if (!q_strcasecmp(item, "lasercannon") || !q_strcasecmp(item, "9"))
-	{
-		if (hipnotic)
-		{
-			sv_player->v.items = (unsigned)sv_player->v.items | HIT_LASER_CANNON;
-			sv_player->v.ammo_cells = 999;
-			msg = "laser cannon + 999 cells";
-		}
-		else
-		{
-			SV_ClientPrintf("laser cannon (ignored - not Hipnotic)\n");
-			return;
-		}
-	}
-	else if (!q_strcasecmp(item, "mjolnir") || !q_strcasecmp(item, "0"))
-	{
-		if (hipnotic)
-		{
-			sv_player->v.items = (unsigned)sv_player->v.items | HIT_MJOLNIR;
-			sv_player->v.ammo_cells = 999;
-			msg = "mjolnir + 999 cells";
-		}
-		else
-		{
-			SV_ClientPrintf("mjolnir (ignored - not Hipnotic)\n");
-			return;
-		}
-	}
-	/*----- Rogue Weapons --------------------------------------*/
-	else if (!q_strcasecmp(item, "lavanailgun") || !q_strcasecmp(item, "lavagun"))
-	{
-		if (rogue)
-		{
-			sv_player->v.items = (unsigned)sv_player->v.items | RIT_LAVA_NAILGUN;
-			sv_player->v.ammo_nails = 999;
-			msg = "lava nailgun + 999 nails";
-		}
-		else
-		{
-			SV_ClientPrintf("lava nailgun (ignored - not Rogue)\n");
-			return;
-		}
-	}
-	else if (!q_strcasecmp(item, "multigrenade") || !q_strcasecmp(item, "multigren"))
-	{
-		if (rogue)
-		{
-			sv_player->v.items = (unsigned)sv_player->v.items | RIT_MULTI_GRENADE;
-			sv_player->v.ammo_rockets = 999;
-			msg = "multi grenade launcher + 999 rockets";
-		}
-		else
-		{
-			SV_ClientPrintf("multi grenade launcher (ignored - not Rogue)\n");
-			return;
-		}
-	}
-	else if (!q_strcasecmp(item, "multirocket") || !q_strcasecmp(item, "multirock"))
-	{
-		if (rogue)
-		{
-			sv_player->v.items = (unsigned)sv_player->v.items | RIT_MULTI_ROCKET;
-			sv_player->v.ammo_rockets = 999;
-			msg = "multi rocket launcher + 999 rockets";
-		}
-		else
-		{
-			SV_ClientPrintf("multi rocket launcher (ignored - not Rogue)\n");
-			return;
-		}
-	}
-	else if (!q_strcasecmp(item, "plasmagun") || !q_strcasecmp(item, "plasma"))
-	{
-		if (rogue)
-		{
-			sv_player->v.items = (unsigned)sv_player->v.items | RIT_PLASMA_GUN;
-			sv_player->v.ammo_cells = 999;
-			msg = "plasma gun + 999 cells";
-		}
-		else
-		{
-			SV_ClientPrintf("plasma gun (ignored - not Rogue)\n");
-			return;
-		}
-	}
-	/*----- Weapons set / Macro ----------------------------------*/
-	else if (!q_strcasecmp(item, "weapons"))
-	{
-		sv_player->v.items = (unsigned)sv_player->v.items | IT_SHOTGUN | IT_SUPER_SHOTGUN | IT_NAILGUN | IT_SUPER_NAILGUN |
-			IT_GRENADE_LAUNCHER | IT_ROCKET_LAUNCHER | IT_LIGHTNING;
-		sv_player->v.weapon = IT_SHOTGUN; // Equip shotgun by default
-		sv_player->v.weaponframe = 0;
-		sv_player->v.ammo_shells = 999;
-		sv_player->v.ammo_nails = 999;
-		sv_player->v.ammo_rockets = 999;
-		sv_player->v.ammo_cells = 999;
-		msg = "all weapons";
-	}
-	else if (!q_strcasecmp(item, "all"))
-	{
-		Cmd_ExecuteString("give weapons", src_client);
-		Cmd_ExecuteString("give shells 100", src_client);
-		Cmd_ExecuteString("give nails 200", src_client);
-		Cmd_ExecuteString("give rockets 100", src_client);
-		Cmd_ExecuteString("give cells 200", src_client);
-		Cmd_ExecuteString("give health 250", src_client);
-		Cmd_ExecuteString("give armor red", src_client);
-		Cmd_ExecuteString("give sigils", src_client);
-		msg = "EVERYTHING";
+		sv_player->v.armortype = 0.3f;
+		amt = q_max(amt, 100);
 	}
 	else
 	{
-		SV_ClientPrintf("Unknown give item '%s'\n", item); return;
+		if (amt > 150)
+			sv_player->v.armortype = 0.8f;
+		else if (amt > 100)
+			sv_player->v.armortype = 0.6f;
+		else
+			sv_player->v.armortype = 0.3f;
 	}
 
-	/* =========================================================== *
-	 * 2.  Sync HUD currentammo
-	 * =========================================================== */
-FINISH:
+	sv_player->v.armorvalue = amt;
+	sv_player->v.items = (unsigned)sv_player->v.items & ~(unsigned)(IT_ARMOR1 | IT_ARMOR2 | IT_ARMOR3);
+	if (sv_player->v.armortype == 0.8f)
+		Give_AddItem(IT_ARMOR3);
+	else if (sv_player->v.armortype == 0.6f)
+		Give_AddItem(IT_ARMOR2);
+	else
+		Give_AddItem(IT_ARMOR1);
+
+	SV_StartSound(sv_player, NULL, 0, "items/armor1.wav", 255, 1.0f);
+}
+
+static void Give_SetBaseWeapons (int ammo)
+{
+	Give_AddItem(IT_AXE | IT_SHOTGUN | IT_SUPER_SHOTGUN | IT_NAILGUN | IT_SUPER_NAILGUN |
+		IT_GRENADE_LAUNCHER | IT_ROCKET_LAUNCHER | IT_LIGHTNING);
+	sv_player->v.weapon = IT_SHOTGUN;
+	sv_player->v.weaponframe = 0;
+	Give_SetAmmo(GIVE_AMMO_SHELLS, ammo);
+	Give_SetAmmo(GIVE_AMMO_NAILS, ammo);
+	Give_SetAmmo(GIVE_AMMO_ROCKETS, ammo);
+	Give_SetAmmo(GIVE_AMMO_CELLS, ammo);
+}
+
+static void Give_SetEverything (void)
+{
+	Give_SetBaseWeapons(999);
+	sv_player->v.health = sv_player->v.max_health = 250;
+	Give_SetArmor(200, true, "red");
+	Give_AddSigils(IT_SIGIL1 | IT_SIGIL2 | IT_SIGIL3 | IT_SIGIL4);
+}
+
+static void Give_SyncCurrentAmmo (void)
+{
+	if (Host_RunEntityFunction("W_SetCurrentAmmo", sv_player, NULL))
+		return;
+
 	switch ((int)sv_player->v.weapon)
 	{
 	case IT_SHOTGUN:
@@ -9706,32 +9497,589 @@ FINISH:
 	case HIT_MJOLNIR:
 		sv_player->v.currentammo = sv_player->v.ammo_cells;
 		break;
-	case RIT_LAVA_NAILGUN: //same as IT_AXE
+	case RIT_LAVA_NAILGUN:
 		if (rogue)
 			sv_player->v.currentammo = sv_player->v.ammo_nails;
 		break;
-	case RIT_PLASMA_GUN: //same as HIT_PROXIMITY_GUN
+	case RIT_PLASMA_GUN:
 		if (rogue)
 			sv_player->v.currentammo = sv_player->v.ammo_cells;
 		if (hipnotic)
 			sv_player->v.currentammo = sv_player->v.ammo_rockets;
 		break;
 	}
-	//johnfitz
+}
 
-	/* =========================================================== *
-	 * 3.  Confirmation echo
-	 * =========================================================== */
+static qboolean Give_GrantItem (const char *item, int amt, qboolean has_amount, const char *armor_color)
+{
+	const char *msg = NULL;
+
+	if (!item || !*item)
+		return false;
+
+	if (!q_strcasecmp(item, "6a"))
+	{
+		if (!hipnotic)
+		{
+			SV_ClientPrintf("proximity gun (ignored - not Hipnotic)\n");
+			return true;
+		}
+		Give_AddItem(HIT_PROXIMITY_GUN);
+		Give_SetAmmo(GIVE_AMMO_ROCKETS, amt);
+		msg = va("proximity gun + %d rockets", amt);
+		goto DONE;
+	}
+
+	if (item[1] == '\0')
+	{
+		switch (item[0])
+		{
+		case '0':
+			if (!hipnotic)
+			{
+				SV_ClientPrintf("weapon 0 (ignored - not Hipnotic)\n");
+				return true;
+			}
+			Give_AddItem(HIT_MJOLNIR);
+			Give_SetAmmo(GIVE_AMMO_CELLS, amt);
+			msg = va("mjolnir + %d cells", amt);
+			goto DONE;
+		case '1':
+			Give_AddItem(IT_AXE);
+			msg = "axe";
+			goto DONE;
+		case '2':
+			Give_AddItem(IT_SHOTGUN);
+			Give_SetAmmo(GIVE_AMMO_SHELLS, amt);
+			msg = va("shotgun + %d shells", amt);
+			goto DONE;
+		case '3':
+			Give_AddItem(IT_SUPER_SHOTGUN);
+			Give_SetAmmo(GIVE_AMMO_SHELLS, amt);
+			msg = va("super shotgun + %d shells", amt);
+			goto DONE;
+		case '4':
+			Give_AddItem(IT_NAILGUN);
+			Give_SetAmmo(GIVE_AMMO_NAILS, amt);
+			msg = va("nailgun + %d nails", amt);
+			goto DONE;
+		case '5':
+			Give_AddItem(IT_SUPER_NAILGUN);
+			Give_SetAmmo(GIVE_AMMO_NAILS, amt);
+			msg = va("super nailgun + %d nails", amt);
+			goto DONE;
+		case '6':
+			Give_AddItem(IT_GRENADE_LAUNCHER);
+			Give_SetAmmo(GIVE_AMMO_ROCKETS, amt);
+			msg = va("grenade launcher + %d rockets", amt);
+			goto DONE;
+		case '7':
+			Give_AddItem(IT_ROCKET_LAUNCHER);
+			Give_SetAmmo(GIVE_AMMO_ROCKETS, amt);
+			msg = va("rocket launcher + %d rockets", amt);
+			goto DONE;
+		case '8':
+			Give_AddItem(IT_LIGHTNING);
+			Give_SetAmmo(GIVE_AMMO_CELLS, amt);
+			msg = va("lightning gun + %d cells", amt);
+			goto DONE;
+		case '9':
+			if (hipnotic)
+			{
+				Give_AddItem(HIT_LASER_CANNON);
+				Give_SetAmmo(GIVE_AMMO_CELLS, amt);
+				msg = va("laser cannon + %d cells", amt);
+			}
+			else
+			{
+				Give_AddItem(IT_SUPER_LIGHTNING);
+				Give_SetAmmo(GIVE_AMMO_CELLS, amt);
+				msg = va("weapon 9 + %d cells", amt);
+			}
+			goto DONE;
+		case 's':
+			Give_SetAmmo(GIVE_AMMO_SHELLS, amt);
+			msg = va("%d shells", amt);
+			goto DONE;
+		case 'n':
+			Give_SetAmmo(GIVE_AMMO_NAILS, amt);
+			msg = va("%d nails", amt);
+			goto DONE;
+		case 'l':
+			if (!rogue)
+			{
+				SV_ClientPrintf("lava nails (ignored - not Rogue)\n");
+				return true;
+			}
+			Give_SetAmmo(GIVE_AMMO_LAVA_NAILS, amt);
+			msg = va("%d lava nails", amt);
+			goto DONE;
+		case 'r':
+			Give_SetAmmo(GIVE_AMMO_ROCKETS, amt);
+			msg = va("%d rockets", amt);
+			goto DONE;
+		case 'm':
+			if (!rogue)
+			{
+				SV_ClientPrintf("multi rockets (ignored - not Rogue)\n");
+				return true;
+			}
+			Give_SetAmmo(GIVE_AMMO_MULTI_ROCKETS, amt);
+			msg = va("%d multi-rockets", amt);
+			goto DONE;
+		case 'h':
+			sv_player->v.health = amt;
+			SV_StartSound(sv_player, NULL, 0, "items/r_item1.wav", 255, 1.0f);
+			msg = va("%d health", amt);
+			goto DONE;
+		case 'c':
+			Give_SetAmmo(GIVE_AMMO_CELLS, amt);
+			msg = va("%d cells", amt);
+			goto DONE;
+		case 'p':
+			if (!rogue)
+			{
+				SV_ClientPrintf("plasma cells (ignored - not Rogue)\n");
+				return true;
+			}
+			Give_SetAmmo(GIVE_AMMO_PLASMA_CELLS, amt);
+			msg = va("%d plasma cells", amt);
+			goto DONE;
+		case 'a':
+			Give_SetArmor(amt, has_amount, armor_color);
+			msg = va("%d armour", (int)sv_player->v.armorvalue);
+			goto DONE;
+		}
+	}
+
+	/*----- Ammo --------------------------------------------------*/
+	if (!q_strcasecmp(item, "shells")) { Give_SetAmmo(GIVE_AMMO_SHELLS, amt); msg = va("%d shells", amt); }
+	else if (!q_strcasecmp(item, "nails")) { Give_SetAmmo(GIVE_AMMO_NAILS, amt); msg = va("%d nails", amt); }
+	else if (!q_strcasecmp(item, "rockets")) { Give_SetAmmo(GIVE_AMMO_ROCKETS, amt); msg = va("%d rockets", amt); }
+	else if (!q_strcasecmp(item, "cells")) { Give_SetAmmo(GIVE_AMMO_CELLS, amt); msg = va("%d cells", amt); }
+
+	/*----- Rogue Ammo --------------------------------------------*/
+	else if (!q_strcasecmp(item, "lavanails"))
+	{
+		if (!rogue)
+		{
+			SV_ClientPrintf("lava nails (ignored - not Rogue)\n");
+			return true;
+		}
+		Give_SetAmmo(GIVE_AMMO_LAVA_NAILS, amt);
+		msg = va("%d lava nails", amt);
+	}
+	else if (!q_strcasecmp(item, "multirockets"))
+	{
+		if (!rogue)
+		{
+			SV_ClientPrintf("multi rockets (ignored - not Rogue)\n");
+			return true;
+		}
+		Give_SetAmmo(GIVE_AMMO_MULTI_ROCKETS, amt);
+		msg = va("%d multi-rockets", amt);
+	}
+	else if (!q_strcasecmp(item, "plasmacells"))
+	{
+		if (!rogue)
+		{
+			SV_ClientPrintf("plasma cells (ignored - not Rogue)\n");
+			return true;
+		}
+		Give_SetAmmo(GIVE_AMMO_PLASMA_CELLS, amt);
+		msg = va("%d plasma cells", amt);
+	}
+
+	/*----- Health -----------------------------------------------*/
+	else if (!q_strcasecmp(item, "health"))
+	{
+		sv_player->v.health = sv_player->v.max_health = amt;
+		SV_StartSound(sv_player, NULL, 0, "items/r_item1.wav", 255, 1.0f);
+		msg = va("%d health", amt);
+	}
+
+	/*----- Armour (colour or numeric) ---------------------------*/
+	else if (!q_strcasecmp(item, "armor"))
+	{
+		Give_SetArmor(amt, has_amount, armor_color);
+		msg = va("%d armour", (int)sv_player->v.armorvalue);
+	}
+
+	/*----- Power-ups --------------------------------------------*/
+	else if (!q_strcasecmp(item, "quad"))
+	{
+		eval_t *val;
+		int ofs;
+
+		Give_AddItem(IT_QUAD);
+		ofs = ED_FindFieldOffset("super_damage_finished");
+		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+			val->_float = qcvm->time + 30.0f;
+		SV_StartSound(sv_player, NULL, 0, "items/damage.wav", 255, 1.0f);
+		host_client->powerup_warn_flags |= PWARN_GIVE;
+		msg = "Quad Damage";
+	}
+	else if (!q_strcasecmp(item, "pent") || !q_strcasecmp(item, "666"))
+	{
+		eval_t *val;
+		int ofs;
+
+		Give_AddItem(IT_INVULNERABILITY);
+		ofs = ED_FindFieldOffset("invincible_finished");
+		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+			val->_float = qcvm->time + 30.0f;
+		SV_StartSound(sv_player, NULL, 0, "items/protect.wav", 255, 1.0f);
+		host_client->powerup_warn_flags |= PWARN_GIVE;
+		msg = "Pent";
+	}
+	else if (!q_strcasecmp(item, "ring") || !q_strcasecmp(item, "eyes"))
+	{
+		eval_t *val;
+		int ofs;
+
+		Give_AddItem(IT_INVISIBILITY);
+		ofs = ED_FindFieldOffset("invisible_finished");
+		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+			val->_float = qcvm->time + 30.0f;
+		SV_StartSound(sv_player, NULL, 0, "items/inv1.wav", 255, 1.0f);
+		host_client->powerup_warn_flags |= PWARN_GIVE;
+		msg = "Ring";
+	}
+	else if (!q_strcasecmp(item, "suit") || !q_strcasecmp(item, "biosuit"))
+	{
+		eval_t *val;
+		int ofs;
+
+		Give_AddItem(IT_SUIT);
+		ofs = ED_FindFieldOffset("radsuit_finished");
+		if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+			val->_float = qcvm->time + 30.0f;
+		SV_StartSound(sv_player, NULL, 0, "items/suit.wav", 255, 1.0f);
+		host_client->powerup_warn_flags |= PWARN_GIVE;
+		msg = "Biosuit";
+	}
+
+	/*----- Keys --------------------------------------------------*/
+	else if (!q_strcasecmp(item, "keys"))
+	{
+		Give_AddItem(IT_KEY1 | IT_KEY2);
+		msg = "both keys";
+	}
+	else if (!q_strcasecmp(item, "key1") || !q_strcasecmp(item, "silverkey") || !q_strcasecmp(item, "blueflag"))
+	{
+		Give_AddItem(IT_KEY1);
+		msg = "silver key";
+	}
+	else if (!q_strcasecmp(item, "key2") || !q_strcasecmp(item, "goldkey") || !q_strcasecmp(item, "redflag"))
+	{
+		Give_AddItem(IT_KEY2);
+		msg = "gold key";
+	}
+
+	/*----- Sigils -----------------------------------------------*/
+	else if (!q_strcasecmp(item, "sigils") || !q_strcasecmp(item, "runes"))
+	{
+		Give_AddSigils(IT_SIGIL1 | IT_SIGIL2 | IT_SIGIL3 | IT_SIGIL4);
+		msg = "all sigils";
+	}
+	else if (!q_strcasecmp(item, "sigil1") || !q_strcasecmp(item, "rune1"))
+	{
+		Give_AddSigils(IT_SIGIL1);
+		msg = "sigil 1";
+	}
+	else if (!q_strcasecmp(item, "sigil2") || !q_strcasecmp(item, "rune2"))
+	{
+		Give_AddSigils(IT_SIGIL2);
+		msg = "sigil 2";
+	}
+	else if (!q_strcasecmp(item, "sigil3") || !q_strcasecmp(item, "rune3"))
+	{
+		Give_AddSigils(IT_SIGIL3);
+		msg = "sigil 3";
+	}
+	else if (!q_strcasecmp(item, "sigil4") || !q_strcasecmp(item, "rune4"))
+	{
+		Give_AddSigils(IT_SIGIL4);
+		msg = "sigil 4";
+	}
+
+	/*----- Individual Weapons ----------------------------------*/
+	else if (!q_strcasecmp(item, "axe"))
+	{
+		Give_AddItem(IT_AXE);
+		msg = "axe";
+	}
+	else if (!q_strcasecmp(item, "shotgun") || !q_strcasecmp(item, "sg"))
+	{
+		Give_AddItem(IT_SHOTGUN);
+		Give_SetAmmo(GIVE_AMMO_SHELLS, amt);
+		msg = va("shotgun + %d shells", amt);
+	}
+	else if (!q_strcasecmp(item, "supershotgun") || !q_strcasecmp(item, "ssg"))
+	{
+		Give_AddItem(IT_SUPER_SHOTGUN);
+		Give_SetAmmo(GIVE_AMMO_SHELLS, amt);
+		msg = va("super shotgun + %d shells", amt);
+	}
+	else if (!q_strcasecmp(item, "nailgun") || !q_strcasecmp(item, "ng"))
+	{
+		Give_AddItem(IT_NAILGUN);
+		Give_SetAmmo(GIVE_AMMO_NAILS, amt);
+		msg = va("nailgun + %d nails", amt);
+	}
+	else if (!q_strcasecmp(item, "supernailgun") || !q_strcasecmp(item, "sng"))
+	{
+		Give_AddItem(IT_SUPER_NAILGUN);
+		Give_SetAmmo(GIVE_AMMO_NAILS, amt);
+		msg = va("super nailgun + %d nails", amt);
+	}
+	else if (!q_strcasecmp(item, "grenadelauncher") || !q_strcasecmp(item, "gl"))
+	{
+		Give_AddItem(IT_GRENADE_LAUNCHER);
+		Give_SetAmmo(GIVE_AMMO_ROCKETS, amt);
+		msg = va("grenade launcher + %d rockets", amt);
+	}
+	else if (!q_strcasecmp(item, "rocketlauncher") || !q_strcasecmp(item, "rl"))
+	{
+		Give_AddItem(IT_ROCKET_LAUNCHER);
+		Give_SetAmmo(GIVE_AMMO_ROCKETS, amt);
+		msg = va("rocket launcher + %d rockets", amt);
+	}
+	else if (!q_strcasecmp(item, "lightninggun") || !q_strcasecmp(item, "lg"))
+	{
+		Give_AddItem(IT_LIGHTNING);
+		Give_SetAmmo(GIVE_AMMO_CELLS, amt);
+		msg = va("lightning gun + %d cells", amt);
+	}
+
+	/*----- Hipnotic Weapons -----------------------------------*/
+	else if (!q_strcasecmp(item, "proximitygun"))
+	{
+		if (!hipnotic)
+		{
+			SV_ClientPrintf("proximity gun (ignored - not Hipnotic)\n");
+			return true;
+		}
+		Give_AddItem(HIT_PROXIMITY_GUN);
+		Give_SetAmmo(GIVE_AMMO_ROCKETS, amt);
+		msg = va("proximity gun + %d rockets", amt);
+	}
+	else if (!q_strcasecmp(item, "lasercannon"))
+	{
+		if (!hipnotic)
+		{
+			SV_ClientPrintf("laser cannon (ignored - not Hipnotic)\n");
+			return true;
+		}
+		Give_AddItem(HIT_LASER_CANNON);
+		Give_SetAmmo(GIVE_AMMO_CELLS, amt);
+		msg = va("laser cannon + %d cells", amt);
+	}
+	else if (!q_strcasecmp(item, "mjolnir"))
+	{
+		if (!hipnotic)
+		{
+			SV_ClientPrintf("mjolnir (ignored - not Hipnotic)\n");
+			return true;
+		}
+		Give_AddItem(HIT_MJOLNIR);
+		Give_SetAmmo(GIVE_AMMO_CELLS, amt);
+		msg = va("mjolnir + %d cells", amt);
+	}
+
+	/*----- Rogue Weapons --------------------------------------*/
+	else if (!q_strcasecmp(item, "lavanailgun") || !q_strcasecmp(item, "lavagun"))
+	{
+		if (!rogue)
+		{
+			SV_ClientPrintf("lava nailgun (ignored - not Rogue)\n");
+			return true;
+		}
+		Give_AddItem(RIT_LAVA_NAILGUN);
+		Give_SetAmmo(GIVE_AMMO_LAVA_NAILS, amt);
+		msg = va("lava nailgun + %d lava nails", amt);
+	}
+	else if (!q_strcasecmp(item, "multigrenade") || !q_strcasecmp(item, "multigren"))
+	{
+		if (!rogue)
+		{
+			SV_ClientPrintf("multi grenade launcher (ignored - not Rogue)\n");
+			return true;
+		}
+		Give_AddItem(RIT_MULTI_GRENADE);
+		Give_SetAmmo(GIVE_AMMO_MULTI_ROCKETS, amt);
+		msg = va("multi grenade launcher + %d multi-rockets", amt);
+	}
+	else if (!q_strcasecmp(item, "multirocket") || !q_strcasecmp(item, "multirock"))
+	{
+		if (!rogue)
+		{
+			SV_ClientPrintf("multi rocket launcher (ignored - not Rogue)\n");
+			return true;
+		}
+		Give_AddItem(RIT_MULTI_ROCKET);
+		Give_SetAmmo(GIVE_AMMO_MULTI_ROCKETS, amt);
+		msg = va("multi rocket launcher + %d multi-rockets", amt);
+	}
+	else if (!q_strcasecmp(item, "plasmagun") || !q_strcasecmp(item, "plasma"))
+	{
+		if (!rogue)
+		{
+			SV_ClientPrintf("plasma gun (ignored - not Rogue)\n");
+			return true;
+		}
+		Give_AddItem(RIT_PLASMA_GUN);
+		Give_SetAmmo(GIVE_AMMO_PLASMA_CELLS, amt);
+		msg = va("plasma gun + %d plasma cells", amt);
+	}
+
+	/*----- Weapons set / Macro ----------------------------------*/
+	else if (!q_strcasecmp(item, "weapons"))
+	{
+		Give_SetBaseWeapons(amt);
+		msg = "all weapons";
+	}
+	else if (!q_strcasecmp(item, "all"))
+	{
+		Give_SetEverything();
+		msg = "EVERYTHING";
+	}
+	else
+		return false;
+
+DONE:
 	if (msg)
 		Give_ConfirmPrint("Gave %s", msg);
+
+	return true;
+}
+
+static void Host_Give_f (void)
+{
+	int i;
+	qboolean matched = false;
+
+	if (cmd_source != src_client) { Cmd_ForwardToServer(); return; }
+	if (pr_global_struct->deathmatch)                /* no cheats in DM           */
+		return;
+
+	if (Cmd_Argc() < 2)
+	{
+		SV_ClientPrintf("usage: give <item> [amount] [item] [amount] ...\n");
+		return;
+	}
+
+	Give_NormalizeVanillaSigilItemBits();
+
+	for (i = 1; i < Cmd_Argc(); i++)
+	{
+		const char *item = Cmd_Argv(i);
+		const char *armor_color = NULL;
+		qboolean has_amount = false;
+		int amt = 999;
+
+		if (Give_IsArmorItem(item))
+		{
+			int look;
+			for (look = i + 1; look < Cmd_Argc(); look++)
+			{
+				const char *next = Cmd_Argv(look);
+
+				if (!armor_color && Give_IsArmorColor(next))
+				{
+					armor_color = next;
+					continue;
+				}
+				if (!has_amount && Give_IsIntegerArg(next))
+				{
+					amt = q_max(atoi(next), 0);
+					has_amount = true;
+					continue;
+				}
+				break;
+			}
+			i = look - 1;
+		}
+		else if (i + 1 < Cmd_Argc() && Give_ShouldConsumeAmount(item, Cmd_Argv(i + 1)))
+		{
+			amt = q_max(atoi(Cmd_Argv(++i)), 0);
+			has_amount = true;
+		}
+
+		if (Give_GrantItem(item, amt, has_amount, armor_color))
+			matched = true;
+		else
+			SV_ClientPrintf("Unknown give item '%s'\n", item);
+	}
+
+	if (matched)
+		Give_SyncCurrentAmmo();
 }
 
 qboolean CompleteGive (const char* partial, void* unused) // woods #give+
 {
+	const int argc = Cmd_Argc();
+	const char *prev = (argc >= 3) ? Cmd_Argv(argc - 2) : NULL;
+	const char *prevprev = (argc >= 4) ? Cmd_Argv(argc - 3) : NULL;
+	const char *prevprevprev = (argc >= 5) ? Cmd_Argv(argc - 4) : NULL;
+	const qboolean prev_is_value =
+		(prev && prevprev && Give_ShouldConsumeAmount(prevprev, prev)) ||
+		(prev && prevprev && Give_IsArmorItem(prevprev) && Give_IsIntegerArg(prev)) ||
+		(prev && prevprev && prevprevprev &&
+			Give_IsIntegerArg(prev) && Give_IsArmorColor(prevprev) && Give_IsArmorItem(prevprevprev));
+
 	/* ------------------------------------------------------------------ *
-	 *  Stage 1 – completing the **second token** ("give <it…TAB>")       *
+	 *  Complete optional value tokens after any give item.               *
 	 * ------------------------------------------------------------------ */
-	if (Cmd_Argc() == 2)   /* user typed exactly:  give <partial> */
+	if (!prev_is_value && prev && Give_IsArmorItem(prev))
+	{
+		static const char* colours[] = { "red", "yellow", "green" };
+		static const char* values[] = { "100", "150", "200", "999" };
+
+		for (size_t i = 0; i < Q_COUNTOF(colours); ++i)
+			if (!q_strncasecmp(partial, colours[i], strlen(partial)))
+				Con_AddToTabList(colours[i], partial, NULL, NULL);
+
+		for (size_t i = 0; i < Q_COUNTOF(values); ++i)
+			if (!q_strncasecmp(partial, values[i], strlen(partial)))
+				Con_AddToTabList(values[i], partial, NULL, NULL);
+
+		return true;
+	}
+
+	if (!prev_is_value && prev && prevprev && Give_IsArmorColor(prev) && Give_IsArmorItem(prevprev) &&
+		(!partial[0] || isdigit((unsigned char)partial[0])))
+	{
+		static const char* values[] = { "100", "150", "200", "999" };
+		for (size_t i = 0; i < Q_COUNTOF(values); ++i)
+			if (!q_strncasecmp(partial, values[i], strlen(partial)))
+				Con_AddToTabList(values[i], partial, NULL, NULL);
+
+		return true;
+	}
+
+	if (!prev_is_value && prev && (!q_strcasecmp(prev, "health") || (prev[0] == 'h' && prev[1] == '\0')))
+	{
+		static const char* hp[] = { "100", "150", "200", "250", "999" };
+		for (size_t i = 0; i < Q_COUNTOF(hp); ++i)
+			if (!q_strncasecmp(partial, hp[i], strlen(partial)))
+				Con_AddToTabList(hp[i], partial, NULL, NULL);
+
+		return true;
+	}
+
+	if (!prev_is_value && prev && Give_ItemAcceptsAmount(prev) && !Give_IsArmorItem(prev) && Give_IsIntegerPrefix(partial))
+	{
+		if (!q_strncasecmp(partial, "999", strlen(partial)))
+			Con_AddToTabList("999", partial, NULL, NULL);
+
+		return true;
+	}
+
+	/* ------------------------------------------------------------------ *
+	 *  Stage 1 - completing an item token.                               *
+	 * ------------------------------------------------------------------ */
+	if (argc >= 2)
 	{
 		static const char* items[] = {
 			/* ammo ---------------------------------------------------- */
@@ -9768,60 +10116,6 @@ qboolean CompleteGive (const char* partial, void* unused) // woods #give+
 				Con_AddToTabList(items[i], partial, NULL, NULL);
 
 		return true;       /* handled */
-	}
-
-	/* ------------------------------------------------------------------ *
-	 *  Stage 2 – completing an **optional third token**.                 *
-	 * ------------------------------------------------------------------ */
-
-	 /* 2a: armour colour after "give armor …" --------------------------- */
-	if (Cmd_Argc() == 3 && !q_strcasecmp(Cmd_Argv(1), "armor"))
-	{
-		static const char* colours[] = { "red", "yellow", "green" };
-		for (size_t i = 0; i < Q_COUNTOF(colours); ++i)
-			if (!q_strncasecmp(partial, colours[i], strlen(partial)))
-				Con_AddToTabList(colours[i], partial, NULL, NULL);
-
-		static const char* values[] = { "100", "150", "200", "999" };
-		for (size_t i = 0; i < Q_COUNTOF(values); ++i)
-			if (!q_strncasecmp(partial, values[i], strlen(partial)))
-				Con_AddToTabList(values[i], partial, NULL, NULL);
-
-		return true;
-	}
-
-	/* 2b: health presets after "give health …" ------------------------- */
-	if (Cmd_Argc() == 3 && !q_strcasecmp(Cmd_Argv(1), "health"))
-	{
-		static const char* hp[] = { "100", "150", "200", "250", "999" };
-		for (size_t i = 0; i < Q_COUNTOF(hp); ++i)
-			if (!q_strncasecmp(partial, hp[i], strlen(partial)))
-				Con_AddToTabList(hp[i], partial, NULL, NULL);
-
-		return true;
-	}
-
-	/* 2c: full‑stack suggestion (999) for any ammo item ---------------- */
-	if (Cmd_Argc() == 3 &&
-		/* long names */ (!q_strcasecmp(Cmd_Argv(1), "shells") ||
-			!q_strcasecmp(Cmd_Argv(1), "nails") ||
-			!q_strcasecmp(Cmd_Argv(1), "rockets") ||
-			!q_strcasecmp(Cmd_Argv(1), "cells") ||
-			!q_strcasecmp(Cmd_Argv(1), "lavanails") ||
-			!q_strcasecmp(Cmd_Argv(1), "multirockets") ||
-			!q_strcasecmp(Cmd_Argv(1), "plasmacells") ||
-			/* short names */ !q_strcasecmp(Cmd_Argv(1), "s") ||
-			!q_strcasecmp(Cmd_Argv(1), "n") ||
-			!q_strcasecmp(Cmd_Argv(1), "r") ||
-			!q_strcasecmp(Cmd_Argv(1), "c") ||
-			!q_strcasecmp(Cmd_Argv(1), "l") ||
-			!q_strcasecmp(Cmd_Argv(1), "m") ||
-			!q_strcasecmp(Cmd_Argv(1), "p")))
-	{
-		if (!q_strncasecmp(partial, "999", strlen(partial)))
-			Con_AddToTabList("999", partial, NULL, NULL);
-
-		return true;
 	}
 
 	return false;   /* no suggestions for other argument counts */
