@@ -1275,6 +1275,16 @@ static int Wheel_NearestSelectableSlot (int slot, int prefer_direction)
 	return slot;
 }
 
+static int Wheel_SlotDistance (int a, int b, int count)
+{
+	int dist;
+
+	if (count <= 0)
+		return 0;
+	dist = abs (a - b) % count;
+	return q_min (dist, count - dist);
+}
+
 static int Wheel_CurrentWeaponSlot (void)
 {
 	int weap = cl.stats[STAT_ACTIVEWEAPON];
@@ -1349,6 +1359,17 @@ static void Wheel_SetPickFromVector (float x, float y)
 		return;
 	span = 2.0f * (float)M_PI / count;
 	sector = (int)((angle + span * 0.5f) / span) % count;
+	if (!Wheel_WeaponSelectable (sector) &&
+		wheel_pick >= 0 && wheel_pick < count &&
+		Wheel_WeaponSelectable (wheel_pick))
+	{
+		// Keep an equally near current pick stable instead of oscillating
+		// between both neighbors of an unavailable sector.
+		int nearest = Wheel_NearestSelectableSlot (sector, 1);
+		if (Wheel_SlotDistance (sector, wheel_pick, count) <=
+			Wheel_SlotDistance (sector, nearest, count))
+			return;
+	}
 	{
 		int prefer_direction = 1;
 		if (wheel_pick >= 0 && wheel_pick < count)
