@@ -7241,6 +7241,8 @@ void SCR_UpdateScreen (void)
 		}
 	}
 
+	Wheel_Draw ();
+
 	if (scr_drawdialog) //new game confirm
 	{
 		if (con_forcedup)

@@ -79,6 +79,7 @@ static const char default_cfg[] =
 "bind RSHOULDER \"impulse 10\"\n"
 "bind LTRIGGER +jump\n"
 "bind RTRIGGER +attack\n"
+"bind YBUTTON +weaponwheel\n"
 
 "gamma 1.0\n"
 "volume 0.7\n"

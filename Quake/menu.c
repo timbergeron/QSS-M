@@ -6008,6 +6008,7 @@ static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 	{"+gyroaction",		"Gyro switch",			KDM_GAMEPAD},
 	{"+altmodifier",	"Alt modifier",			KDM_GAMEPAD},
 	{"+attack",			"Attack",				KDM_ANY},
+	{"+weaponwheel",	"Weapon wheel",			KDM_ANY},
 	{"impulse 10",		"Next weapon",			KDM_ANY},
 	{"impulse 12",		"Previous weapon",		KDM_ANY},
 	{"impulse 1",		"Axe",					KDM_ANY},

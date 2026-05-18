@@ -590,6 +590,7 @@ void Draw_NewGame (void)
 	for (pic = menu_cachepics, i = 0; i < menu_numcachepics; pic++, i++)
 		pic->name[0] = 0;
 	menu_numcachepics = 0;
+	Wheel_ClearIcons ();
 
 	// reload wad pics
 	W_LoadWadFile (); //johnfitz -- filename is now hard-coded for honesty

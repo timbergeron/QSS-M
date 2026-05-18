@@ -514,6 +514,7 @@ void IN_GyroActionUp(void);
 #endif
 
 static qboolean	no_mouse = false;
+static qboolean	wheel_block_mouse2 = false;
 
 static int buttonremap[] =
 {
@@ -2048,9 +2049,27 @@ void IN_Commands (void)
 	{
 		qboolean newstate = SDL_GameControllerGetButton(joy_active_controller, (SDL_GameControllerButton)i);
 		qboolean oldstate = joy_buttonstate.buttondown[i];
-		
+
 		joy_buttonstate.buttondown[i] = newstate;
-		
+
+		// weapon wheel: B cancels an open wheel without firing.  Only intercept the
+		// down-edge while already open, so a B-bound +weaponwheel still works.
+		if (i == SDL_CONTROLLER_BUTTON_B)
+		{
+			if (Wheel_IsOpen () && newstate && !oldstate)
+			{
+				Wheel_Cancel ();
+				Wheel_BlockBButtonRelease ();
+				continue;
+			}
+			if (Wheel_BlockBButton ())
+			{
+				if (!newstate)
+					Wheel_ClearBBlock ();
+				continue;
+			}
+		}
+
 		// NOTE: This can cause a reentrant call of IN_Commands, via SCR_ModalMessage when confirming a new game.
 		IN_JoyKeyEvent(oldstate, newstate, IN_KeyForControllerButton((SDL_GameControllerButton)i), &joy_buttontimer[i]);
 	}
@@ -2185,6 +2204,15 @@ void IN_JoyMove (usercmd_t *cmd)
 	cmd->sidemove += speed * moveEased.x;
 	cmd->forwardmove -= speed * moveEased.y;
 
+	// weapon wheel: consume the look stick for sector selection but keep
+	// left-stick movement working so the player can strafe while picking.
+	if (Wheel_IsOpen ())
+	{
+		Wheel_UpdateSelection (lookRaw.x, -lookRaw.y);
+		IN_ResetFlickState ();
+		return;
+	}
+
 	if (joy_flick.value && gyro_present && gyro_enable.value)
 	{
 		float angle, scale, lerp_frac, delta;
@@ -2295,6 +2323,8 @@ void IN_GyroMove(usercmd_t *cmd)
 		return;
 	if (cl.paused || key_dest != key_game)
 		return;
+	if (Wheel_IsOpen ())
+		return;
 	scale = (180.f / M_PI) * host_frametime * IN_FovScale() * cl.csqc_sensitivity;
 	switch ((int)gyro_mode.value)
 	{
@@ -2363,7 +2393,7 @@ void IN_GyroMove(usercmd_t *cmd)
 
 void IN_MouseMove(usercmd_t *cmd)
 {
-	float	dmx, dmy;
+	float	dmx, dmy, raw_dx, raw_dy;
 	float		sens; // woods #zoom (ironwail)
 	qboolean pong_active = cl_pong.value && (cl.paused || cl.match_pause_time); // woods #pong
 
@@ -2387,8 +2417,10 @@ void IN_MouseMove(usercmd_t *cmd)
 	sens = tan(DEG2RAD(r_refdef.basefov) * 0.5f) / tan(DEG2RAD(scr_fov.value) * 0.5f); // woods #zoom (ironwail)
 	sens *= sensitivity.value; // woods #zoom (ironwail)
 
-	dmx = total_dx * sens; // woods #zoom (ironwail)
-	dmy = total_dy * sens; // woods #zoom (ironwail)
+	raw_dx = (float)total_dx;
+	raw_dy = (float)total_dy;
+	dmx = raw_dx * sens; // woods #zoom (ironwail)
+	dmy = raw_dy * sens; // woods #zoom (ironwail)
 
 	total_dx = 0;
 	total_dy = 0;
@@ -2405,6 +2437,13 @@ void IN_MouseMove(usercmd_t *cmd)
 	// Also return if demo is playing or match is paused
 	if (pong_active || cl.paused || key_dest != key_game || cls.demoplayback || cl.match_pause_time > 0) // woods #pong
 		return;
+
+	// weapon wheel eats mouse motion before it can rotate the view.
+	if (Wheel_IsOpen ())
+	{
+		Wheel_UpdateMouse (raw_dx, raw_dy);
+		return;
+	}
 
 	if ( (in_strafe.state & 1) || (lookstrafe.value && (in_mlook.state & 1) ))
 		cl.accummoves[1] += m_side.value * dmx;
@@ -4800,6 +4839,12 @@ void IN_SendKeyEvents (void)
 			key = IN_SDL_KeysymToQuakeKey(event.key.keysym.sym);
 #endif
 
+			if (Wheel_IsOpen () && down && key == K_ESCAPE && key_dest == key_game)
+			{
+				Wheel_Cancel ();
+				break;
+			}
+
 		// also pass along the underlying keycode using the proper current layout for Y/N prompts.
 			Key_EventWithKeycode (key, down, event.key.keysym.sym);
 
@@ -4816,6 +4861,25 @@ void IN_SendKeyEvents (void)
 			{
 				Con_Printf ("Ignored event for mouse button %d\n",
 					event.button.button);
+				break;
+			}
+
+			if (event.button.button == SDL_BUTTON_RIGHT && wheel_block_mouse2)
+			{
+				lastactivetype = KD_MOUSE;
+				if (event.button.state == SDL_RELEASED)
+					wheel_block_mouse2 = false;
+				break;
+			}
+
+			if (Wheel_IsOpen () &&
+				event.button.state == SDL_PRESSED &&
+				event.button.button == SDL_BUTTON_RIGHT &&
+				key_dest == key_game)
+			{
+				lastactivetype = KD_MOUSE;
+				Wheel_Cancel ();
+				wheel_block_mouse2 = true;
 				break;
 			}
 
@@ -4851,6 +4915,14 @@ void IN_SendKeyEvents (void)
 #if defined(USE_SDL2)
 		case SDL_MOUSEWHEEL:
 			lastactivetype = KD_MOUSE;
+			if (Wheel_IsOpen ())
+			{
+				if (event.wheel.y > 0)
+					Wheel_ScrollSelection (-1);
+				else if (event.wheel.y < 0)
+					Wheel_ScrollSelection (1);
+				break;
+			}
 			if (event.wheel.y > 0)
 			{
 				Key_Event(K_MWHEELUP, true);

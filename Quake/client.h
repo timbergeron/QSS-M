@@ -570,6 +570,22 @@ extern	kbutton_t	in_attack; // JPG - added this for completeness from PROQUAKE  
 
 void CL_InitInput (void);
 void CL_AccumulateCmd (void);
+
+// weapon wheel (cl_input.c)
+void	Wheel_Init (void);
+void	Wheel_Reset (void);
+qboolean Wheel_IsOpen (void);
+void	Wheel_UpdateSelection (float stick_x, float stick_y);
+void	Wheel_UpdateMouse (float dx, float dy);
+void	Wheel_ScrollSelection (int direction);
+void	Wheel_Cancel (void);
+void	Wheel_ClearIcons (void);
+qboolean Wheel_BlockBButton (void);
+void	Wheel_BlockBButtonRelease (void);
+void	Wheel_ClearBBlock (void);
+void	Wheel_Draw (void);
+void	Wheel_ShutdownGL (void);	// invalidate cached GLSL program on context loss
+
 void CL_SendCmd (void);
 void CL_SendMove (const usercmd_t *cmd);
 void CL_SendMove2 (const usercmd_t* cmd); // woods #pqlag

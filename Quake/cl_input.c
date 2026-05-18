@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 extern cvar_t cl_maxpitch; //johnfitz -- variable pitch clamping
 extern cvar_t cl_minpitch; //johnfitz -- variable pitch clamping
+extern cvar_t gl_load24bit; // woods #weaponwheel
 
 cvar_t	cl_iDrive = {"cl_iDrive", "1", CVAR_ARCHIVE}; // woods #idrive
 
@@ -991,5 +992,1447 @@ void CL_InitInput (void)
 	Cvar_RegisterVariable (&pq_lag); // JPG - synthetic lag // woods #pqlag
 	Cvar_RegisterVariable (&cl_iDrive); // woods #idrive
 
+	Wheel_Init ();
 }
 
+
+/*
+=============================================================================
+
+WEAPON WHEEL  (Quake remaster style, stock/mission-pack .lmps plus generated axe icon)
+
+=============================================================================
+*/
+
+#define WHEEL_RING_STEPS	64
+#define WHEEL_STRINGIFY_(x)	#x
+#define WHEEL_STRINGIFY(x)	WHEEL_STRINGIFY_(x)
+#define WHEEL_AXE_ICON_DISPLAY_WIDTH	32
+#define WHEEL_AXE_ICON_DISPLAY_HEIGHT	16
+#define WHEEL_AXE_ICON_TEXTURE_SCALE	4
+#define WHEEL_AXE_ICON_WIDTH	(WHEEL_AXE_ICON_DISPLAY_WIDTH * WHEEL_AXE_ICON_TEXTURE_SCALE)
+#define WHEEL_AXE_ICON_HEIGHT	(WHEEL_AXE_ICON_DISPLAY_HEIGHT * WHEEL_AXE_ICON_TEXTURE_SCALE)
+#define WHEEL_AXE_ICON_TRANSPARENT	255
+#define WHEEL_AXE_ICON_AXIS_H	2	// model Z: handle length
+#define WHEEL_AXE_ICON_AXIS_V	1	// model Y: blade height
+#define WHEEL_AXE_ICON_AXIS_D	0	// model X: draw order
+#define WHEEL_CONCHARS_GOLD_ZERO	18
+#define WHEEL_AXE_LABEL_CHAR		(WHEEL_CONCHARS_GOLD_ZERO + 1)
+#define WHEEL_AXE_UNSELECTED_ALPHA	0.45f
+#define WHEEL_DEADZONE			0.35f
+#define WHEEL_SCALE			0.28f
+#define WHEEL_ICON_SCALE		2.75f
+#define WHEEL_CENTER_X			0.76f
+#define WHEEL_CENTER_Y			0.50f
+#define WHEEL_SCREEN_MARGIN		8.0f
+#define WHEEL_MOUSE_SENSITIVITY		0.040f
+#define WHEEL_DEBUG			0
+#define WHEEL_SHADER			1
+#define WHEEL_GLOW			30.0f
+#define WHEEL_GLOW_OPACITY		0.40
+#define WHEEL_FALLBACK_GLOW_OPACITY	0.20f
+#define WHEEL_NOISE			0.90f
+#define WHEEL_BEVEL			7.0f
+#define WHEEL_BEVEL_OPACITY		0.05f
+#define WHEEL_OPACITY			0.85f
+#define WHEEL_PACK_BASE		0
+#define WHEEL_PACK_HIPNOTIC	1
+#define WHEEL_PACK_ROGUE	2
+#define WHEEL_FLAG_AXE		1
+#define WHEEL_SELECT_NORMAL	0
+#define WHEEL_SELECT_HIP_PROX	1
+
+typedef struct
+{
+	const char	*name;
+	const char	*icon;			// inv_*  (dim/inactive)
+	const char	*icon_active;	// inv2_* (highlighted)
+	int		impulse;
+	int		item_bit;
+	int		rogue_item_bit;		// Rogue changes the axe bit; 0 means item_bit
+	int		ammo_stat;
+	int		ammo_min;
+	int		pack;
+	int		flags;
+	int		select_mode;
+	int		fallback_char;
+} wheel_weapon_t;
+
+static const wheel_weapon_t wheel_weapons[] = {
+	// Quake remaster visual wheel order: shotgun at top, then 3/4/5/6/7/8/axe
+	// counter-clockwise.  Wheel_SlotAngle advances clockwise, so store the
+	// clockwise order here.
+	{"Shotgun",                "inv_shotgun",  "inv2_shotgun",  2, IT_SHOTGUN,            0,       STAT_SHELLS,  1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '2'},
+	{"Axe",                    NULL,           NULL,            1, IT_AXE,                RIT_AXE, 0,            0, WHEEL_PACK_BASE,     WHEEL_FLAG_AXE, WHEEL_SELECT_NORMAL,   WHEEL_AXE_LABEL_CHAR},
+	{"Thunderbolt",            "inv_lightng",  "inv2_lightng",  8, IT_LIGHTNING,          0,       STAT_CELLS,   1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '8'},
+	{"Rocket Launcher",        "inv_srlaunch", "inv2_srlaunch", 7, IT_ROCKET_LAUNCHER,    0,       STAT_ROCKETS, 1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '7'},
+	{"Grenade Launcher",       "inv_rlaunch",  "inv2_rlaunch",  6, IT_GRENADE_LAUNCHER,   0,       STAT_ROCKETS, 1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '6'},
+	{"Super Nailgun",          "inv_snailgun", "inv2_snailgun", 5, IT_SUPER_NAILGUN,      0,       STAT_NAILS,   2, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '5'},
+	{"Nailgun",                "inv_nailgun",  "inv2_nailgun",  4, IT_NAILGUN,            0,       STAT_NAILS,   1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '4'},
+	{"Super Shotgun",          "inv_sshotgun", "inv2_sshotgun", 3, IT_SUPER_SHOTGUN,      0,       STAT_SHELLS,  2, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '3'},
+	{"Proximity Gun",          "inv_prox",     "inv2_prox",     6, HIT_PROXIMITY_GUN,     0,       STAT_ROCKETS, 1, WHEEL_PACK_HIPNOTIC, 0,              WHEEL_SELECT_HIP_PROX, 0},
+	{"Laser Cannon",           "inv_laser",    "inv2_laser",  225, HIT_LASER_CANNON,     0,       STAT_CELLS,   1, WHEEL_PACK_HIPNOTIC, 0,              WHEEL_SELECT_NORMAL,   0},
+	{"Mjolnir",                "inv_mjolnir",  "inv2_mjolnir",226, HIT_MJOLNIR,          0,       STAT_CELLS,   1, WHEEL_PACK_HIPNOTIC, 0,              WHEEL_SELECT_NORMAL,   0},
+	{"Lava Nailgun",           "r_lava",       NULL,           60, RIT_LAVA_NAILGUN,      0,       STAT_NAILS,   1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '4'},
+	{"Lava Super Nailgun",     "r_superlava",  NULL,           61, RIT_LAVA_SUPER_NAILGUN,0,       STAT_NAILS,   2, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '5'},
+	{"Multi Grenade Launcher", "r_gren",       NULL,           62, RIT_MULTI_GRENADE,     0,       STAT_ROCKETS, 1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '6'},
+	{"Multi Rocket Launcher",  "r_multirock",  NULL,           63, RIT_MULTI_ROCKET,      0,       STAT_ROCKETS, 1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '7'},
+	{"Plasma Gun",             "r_plasma",     NULL,           64, RIT_PLASMA_GUN,        0,       STAT_CELLS,   1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '8'}
+};
+#define WHEEL_WEAPON_COUNT ((int)(sizeof(wheel_weapons) / sizeof(wheel_weapons[0])))
+
+static qboolean	wheel_open;
+static qboolean	wheel_block_b;		// swallow B until release after cancel
+static int	wheel_open_refs;	// held +weaponwheel bindings
+static int	wheel_pick;		// 0..Wheel_WeaponCount()-1
+static float	wheel_mouse_x;		// virtual stick built from accumulated mouse delta
+static float	wheel_mouse_y;
+static qboolean	wheel_icons_loaded;
+static qpic_t	*wheel_icons[WHEEL_WEAPON_COUNT];
+static qpic_t	*wheel_icons_active[WHEEL_WEAPON_COUNT];
+static qpic_t	*wheel_box_pic = NULL;	// backtile from gfx.wad -- tiled body texture
+
+// Local mirror of gl_draw.c's file-static glpic_t so we can pull the
+// texture and atlas UVs out of a qpic_t->data blob.  Layout must match.
+typedef struct { gltexture_t *gltexture; float sl, tl, sh, th; } wheel_glpic_t;
+typedef struct { qpic_t pic; byte padding[32]; } wheel_generated_pic_t;
+typedef struct
+{
+	const byte	*skin;
+	const stvert_t	*stverts;
+	const dtriangle_t *triangles;
+	const trivertx_t *verts;
+	float		scale[3];
+	float		scale_origin[3];
+	int		skinwidth;
+	int		skinheight;
+	int		numverts;
+	int		numtris;
+} wheel_axe_model_t;
+
+static wheel_generated_pic_t wheel_axe_icon_storage;
+static byte	wheel_axe_icon_pixels[WHEEL_AXE_ICON_WIDTH * WHEEL_AXE_ICON_HEIGHT];
+static byte	wheel_axe_icon_rgba_pixels[WHEEL_AXE_ICON_WIDTH * WHEEL_AXE_ICON_HEIGHT * 4];
+static float	wheel_axe_icon_zbuf[WHEEL_AXE_ICON_WIDTH * WHEEL_AXE_ICON_HEIGHT];
+static qpic_t	*wheel_axe_icon_pic;
+static qboolean	wheel_axe_icon_attempted;
+static const plcolour_t wheel_white = { .type = 2, .rgb = { 0xff, 0xff, 0xff }, .basic = 0 };
+
+static GLuint	wheel_shader_program = 0;
+static qboolean	wheel_shader_init_attempted = false;
+static GLint	wheel_shader_u_center = -1;
+static GLint	wheel_shader_u_radii = -1;
+static GLint	wheel_shader_u_glow = -1;
+static GLint	wheel_shader_u_body = -1;
+static GLint	wheel_shader_u_rim = -1;
+static GLint	wheel_shader_u_noise = -1;	// (scale, amount) -- legacy, drives box-texture amount
+static GLint	wheel_shader_u_bevel = -1;	// rim Gaussian width in pixels
+static GLint	wheel_shader_u_box_uv = -1;	// atlas remap (sl, tl, sh, th)
+static GLint	wheel_shader_u_box_scale = -1;	// tile frequency (1/px)
+
+static void Wheel_DebugMsg (const char *msg)
+{
+	if (WHEEL_DEBUG)
+		Con_Printf ("weaponwheel: %s\n", msg);
+}
+
+static qboolean Wheel_Allowed (qboolean quiet)
+{
+	if (key_dest != key_game)
+	{
+		if (!quiet) Wheel_DebugMsg ("blocked (not in game)");
+		return false;
+	}
+	if (cls.state != ca_connected || cls.signon < SIGNONS)
+	{
+		if (!quiet) Wheel_DebugMsg ("blocked (still loading)");
+		return false;
+	}
+	if (cl.paused || cl.match_pause_time > 0)
+	{
+		if (!quiet) Wheel_DebugMsg ("blocked (paused)");
+		return false;
+	}
+	if (cls.demoplayback)
+	{
+		if (!quiet) Wheel_DebugMsg ("blocked (demo)");
+		return false;
+	}
+	if (cl.intermission)
+	{
+		if (!quiet) Wheel_DebugMsg ("blocked (intermission)");
+		return false;
+	}
+	if (cl.stats[STAT_HEALTH] <= 0)
+	{
+		if (!quiet) Wheel_DebugMsg ("blocked (dead)");
+		return false;
+	}
+	return true;
+}
+
+static qboolean Wheel_WeaponAvailable (const wheel_weapon_t *weapon)
+{
+	if (weapon->pack == WHEEL_PACK_HIPNOTIC)
+		return hipnotic;
+	if (weapon->pack == WHEEL_PACK_ROGUE)
+		return rogue;
+	return true;
+}
+
+static int Wheel_WeaponCount (void)
+{
+	int i, count = 0;
+
+	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
+	{
+		if (Wheel_WeaponAvailable (&wheel_weapons[i]))
+			count++;
+	}
+	return count;
+}
+
+static int Wheel_WeaponIndexForSlot (int slot)
+{
+	int i, count = 0;
+
+	if (slot < 0)
+		return -1;
+	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
+	{
+		if (!Wheel_WeaponAvailable (&wheel_weapons[i]))
+			continue;
+		if (count == slot)
+			return i;
+		count++;
+	}
+	return -1;
+}
+
+static const wheel_weapon_t *Wheel_WeaponForSlot (int slot)
+{
+	int index = Wheel_WeaponIndexForSlot (slot);
+	return (index >= 0) ? &wheel_weapons[index] : NULL;
+}
+
+static int Wheel_WeaponItemBit (const wheel_weapon_t *weapon)
+{
+	if (rogue && weapon->rogue_item_bit)
+		return weapon->rogue_item_bit;
+	return weapon->item_bit;
+}
+
+static qboolean Wheel_WeaponIsCurrent (const wheel_weapon_t *weapon)
+{
+	return cl.stats[STAT_ACTIVEWEAPON] == Wheel_WeaponItemBit (weapon);
+}
+
+static qboolean Wheel_WeaponOwned (int slot)
+{
+	const wheel_weapon_t *weapon = Wheel_WeaponForSlot (slot);
+	if (!weapon)
+		return false;
+	return (cl.items & Wheel_WeaponItemBit (weapon)) != 0;
+}
+
+static qboolean Wheel_WeaponSelectable (int slot)
+{
+	const wheel_weapon_t *weapon = Wheel_WeaponForSlot (slot);
+
+	if (!weapon)
+		return false;
+	if (!Wheel_WeaponOwned (slot))
+		return false;
+	if (!weapon->ammo_stat || weapon->ammo_min <= 0)
+		return true;
+	return cl.stats[weapon->ammo_stat] >= weapon->ammo_min;
+}
+
+static int Wheel_NearestSelectableSlot (int slot, int prefer_direction)
+{
+	int count, step, dir;
+
+	count = Wheel_WeaponCount ();
+	if (count <= 0)
+		return slot;
+	if (slot < 0 || slot >= count)
+		slot = 0;
+	if (Wheel_WeaponSelectable (slot))
+		return slot;
+
+	dir = (prefer_direction < 0) ? -1 : 1;
+	for (step = 1; step < count; step++)
+	{
+		int forward = (slot + dir * step + count) % count;
+		int backward = (slot - dir * step + count) % count;
+
+		if (Wheel_WeaponSelectable (forward))
+			return forward;
+		if (Wheel_WeaponSelectable (backward))
+			return backward;
+	}
+
+	return slot;
+}
+
+static int Wheel_CurrentWeaponSlot (void)
+{
+	int weap = cl.stats[STAT_ACTIVEWEAPON];
+	int i, slot = 0;
+
+	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
+	{
+		if (!Wheel_WeaponAvailable (&wheel_weapons[i]))
+			continue;
+		if (weap == Wheel_WeaponItemBit (&wheel_weapons[i]))
+			return Wheel_NearestSelectableSlot (slot, 1);
+		slot++;
+	}
+	return Wheel_NearestSelectableSlot (0, 1);
+}
+
+static float Wheel_Radius (void)
+{
+	float dim = (float)q_min (glwidth, glheight);
+	float scale = CLAMP (0.12f, WHEEL_SCALE, 0.45f);
+	return dim * scale;
+}
+
+static void Wheel_Position (float radius, float *cx, float *cy)
+{
+	float margin = WHEEL_SCREEN_MARGIN + CLAMP (0.0f, WHEEL_GLOW, 96.0f);
+	float min_x = radius + margin;
+	float max_x = (float)glwidth - radius - margin;
+	float min_y = radius + margin;
+	float max_y = (float)glheight - radius - margin;
+
+	*cx = (float)glwidth * WHEEL_CENTER_X;
+	*cy = (float)glheight * WHEEL_CENTER_Y;
+
+	if (max_x >= min_x)
+		*cx = CLAMP (min_x, *cx, max_x);
+	else
+		*cx = (float)glwidth * 0.5f;
+
+	if (max_y >= min_y)
+		*cy = CLAMP (min_y, *cy, max_y);
+	else
+		*cy = (float)glheight * 0.5f;
+}
+
+static float Wheel_SlotAngle (int slot)
+{
+	// sector 0 at top (12 o'clock), advance clockwise.  Screen Y grows downward
+	// so "up" is -y; that matches Wheel_SetPickFromVector below.
+	int count = q_max (1, Wheel_WeaponCount ());
+	float span = 2.0f * (float)M_PI / (float)count;
+	return -0.5f * (float)M_PI + slot * span;
+}
+
+static void Wheel_SetPickFromVector (float x, float y)
+{
+	float deadzone, mag, angle, span;
+	int sector, count;
+
+	mag = sqrtf (x * x + y * y);
+	deadzone = CLAMP (0.0f, WHEEL_DEADZONE, 0.95f);
+	if (mag < deadzone)
+		return;
+
+	// stick +x = right, stick +y = up.  Want sector 0 at top, clockwise.
+	angle = atan2f (x, y);
+	if (angle < 0)
+		angle += 2.0f * (float)M_PI;
+
+	count = Wheel_WeaponCount ();
+	if (count <= 0)
+		return;
+	span = 2.0f * (float)M_PI / count;
+	sector = (int)((angle + span * 0.5f) / span) % count;
+	{
+		int prefer_direction = 1;
+		if (wheel_pick >= 0 && wheel_pick < count)
+		{
+			int delta = sector - wheel_pick;
+			if (delta > count / 2)
+				delta -= count;
+			else if (delta < -count / 2)
+				delta += count;
+			if (delta < 0)
+				prefer_direction = -1;
+		}
+		wheel_pick = Wheel_NearestSelectableSlot (sector, prefer_direction);
+	}
+}
+
+static qboolean Wheel_RangeOK (const byte *base, const byte *end, const byte *ptr, size_t len)
+{
+	return ptr >= base && ptr <= end && len <= (size_t)(end - ptr);
+}
+
+static qboolean Wheel_ParseAxeModel (const byte *model, size_t filesize, wheel_axe_model_t *out)
+{
+	const mdl_t *pinmodel;
+	const byte *end, *p;
+	size_t skin_size;
+	int i, j, type, numskins, groupskins;
+
+	memset (out, 0, sizeof(*out));
+
+	if (filesize < sizeof(*pinmodel))
+		return false;
+
+	pinmodel = (const mdl_t *)model;
+	if (LittleLong (pinmodel->ident) != IDPOLYHEADER ||
+		LittleLong (pinmodel->version) != ALIAS_VERSION)
+		return false;
+
+	out->skinwidth = LittleLong (pinmodel->skinwidth);
+	out->skinheight = LittleLong (pinmodel->skinheight);
+	numskins = LittleLong (pinmodel->numskins);
+	out->numverts = LittleLong (pinmodel->numverts);
+	out->numtris = LittleLong (pinmodel->numtris);
+	for (i = 0; i < 3; i++)
+	{
+		out->scale[i] = LittleFloat (pinmodel->scale[i]);
+		out->scale_origin[i] = LittleFloat (pinmodel->scale_origin[i]);
+	}
+	if (out->skinwidth <= 0 || out->skinheight <= 0 || numskins <= 0 ||
+		numskins > MAX_SKINS || LittleLong (pinmodel->numframes) <= 0 ||
+		out->skinwidth > 4096 || out->skinheight > 4096 ||
+		out->numverts <= 0 || out->numverts > MAXALIASVERTS ||
+		out->numtris <= 0 || out->numtris > 65535)
+		return false;
+
+	skin_size = (size_t)out->skinwidth * (size_t)out->skinheight;
+	if (skin_size / (size_t)out->skinwidth != (size_t)out->skinheight)
+		return false;
+
+	end = model + filesize;
+	p = model + sizeof(*pinmodel);
+
+	for (i = 0; i < numskins; i++)
+	{
+		if (!Wheel_RangeOK (model, end, p, sizeof(daliasskintype_t)))
+			return false;
+
+		type = LittleLong (((const daliasskintype_t *)p)->type);
+		p += sizeof(daliasskintype_t);
+
+		if (type == ALIAS_SKIN_SINGLE)
+		{
+			if (!Wheel_RangeOK (model, end, p, skin_size))
+				return false;
+			if (i == 0)
+				out->skin = p;
+			p += skin_size;
+		}
+		else if (type == ALIAS_SKIN_GROUP)
+		{
+			if (!Wheel_RangeOK (model, end, p, sizeof(daliasskingroup_t)))
+				return false;
+			groupskins = LittleLong (((const daliasskingroup_t *)p)->numskins);
+			if (groupskins <= 0 || groupskins > MAX_SKINS)
+				return false;
+
+			p += sizeof(daliasskingroup_t);
+			if (!Wheel_RangeOK (model, end, p, sizeof(daliasskininterval_t) * (size_t)groupskins))
+				return false;
+			p += sizeof(daliasskininterval_t) * (size_t)groupskins;
+
+			for (j = 0; j < groupskins; j++)
+			{
+				if (!Wheel_RangeOK (model, end, p, skin_size))
+					return false;
+				if (i == 0 && j == 0)
+					out->skin = p;
+				p += skin_size;
+			}
+		}
+		else
+			return false;
+	}
+
+	if (!out->skin)
+		return false;
+
+	if (!Wheel_RangeOK (model, end, p, sizeof(stvert_t) * (size_t)out->numverts))
+		return false;
+	out->stverts = (const stvert_t *)p;
+	p += sizeof(stvert_t) * (size_t)out->numverts;
+
+	if (!Wheel_RangeOK (model, end, p, sizeof(dtriangle_t) * (size_t)out->numtris))
+		return false;
+	out->triangles = (const dtriangle_t *)p;
+	p += sizeof(dtriangle_t) * (size_t)out->numtris;
+
+	if (!Wheel_RangeOK (model, end, p, sizeof(daliasframetype_t)))
+		return false;
+	type = LittleLong (((const daliasframetype_t *)p)->type);
+	p += sizeof(daliasframetype_t);
+
+	if (type == ALIAS_SINGLE)
+	{
+		if (!Wheel_RangeOK (model, end, p, sizeof(daliasframe_t) + sizeof(trivertx_t) * (size_t)out->numverts))
+			return false;
+		out->verts = (const trivertx_t *)((const daliasframe_t *)p + 1);
+	}
+	else if (type == ALIAS_GROUP)
+	{
+		int groupframes;
+
+		if (!Wheel_RangeOK (model, end, p, sizeof(daliasgroup_t)))
+			return false;
+		groupframes = LittleLong (((const daliasgroup_t *)p)->numframes);
+		if (groupframes <= 0 || groupframes > MAXALIASFRAMES)
+			return false;
+
+		p += sizeof(daliasgroup_t);
+		if (!Wheel_RangeOK (model, end, p, sizeof(daliasinterval_t) * (size_t)groupframes))
+			return false;
+		p += sizeof(daliasinterval_t) * (size_t)groupframes;
+
+		if (!Wheel_RangeOK (model, end, p, sizeof(daliasframe_t) + sizeof(trivertx_t) * (size_t)out->numverts))
+			return false;
+		out->verts = (const trivertx_t *)((const daliasframe_t *)p + 1);
+	}
+	else
+		return false;
+
+	return true;
+}
+
+static float Wheel_AxeUVEdge (float ax, float ay, float bx, float by, float px, float py)
+{
+	return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+}
+
+static qboolean Wheel_AxeTriangleData (const wheel_axe_model_t *mdl, const dtriangle_t *tri,
+	int vertindex[3], float s[3], float t[3])
+{
+	int facesfront = LittleLong (tri->facesfront);
+	int j;
+
+	for (j = 0; j < 3; j++)
+	{
+		int st_s, st_t, onseam;
+
+		vertindex[j] = LittleLong (tri->vertindex[j]);
+		if (vertindex[j] < 0 || vertindex[j] >= mdl->numverts)
+			return false;
+
+		st_s = LittleLong (mdl->stverts[vertindex[j]].s);
+		st_t = LittleLong (mdl->stverts[vertindex[j]].t);
+		onseam = LittleLong (mdl->stverts[vertindex[j]].onseam);
+		if (!facesfront && onseam)
+			st_s += mdl->skinwidth / 2;
+
+		s[j] = (float)st_s;
+		t[j] = (float)st_t;
+	}
+
+	return true;
+}
+
+static qboolean Wheel_AxeTriangleSelected (const wheel_axe_model_t *mdl, const float s[3], const float t[3])
+{
+	float cx = (s[0] + s[1] + s[2]) * (1.0f / 3.0f);
+	float cy = (t[0] + t[1] + t[2]) * (1.0f / 3.0f);
+
+	return cx < (float)mdl->skinwidth * 0.5f &&
+		cy < (float)mdl->skinheight * 0.5f;
+}
+
+static float Wheel_AxeVertexAxis (const wheel_axe_model_t *mdl, int vertindex, int axis)
+{
+	return (float)mdl->verts[vertindex].v[axis] * mdl->scale[axis] + mdl->scale_origin[axis];
+}
+
+static qboolean Wheel_AxeDrawModelTriangle (const wheel_axe_model_t *mdl, const int vertindex[3],
+	const float st_s[3], const float st_t[3], float center_h, float center_v, float icon_scale,
+	const byte *skin, int skinwidth, int skinheight, qboolean skin_rgba, float *zbuf, byte *out)
+{
+	float sx[3], sy[3], depth[3];
+	float area;
+	int minx, maxx, miny, maxy;
+	int x, y;
+	qboolean drew = false;
+
+	for (int i = 0; i < 3; i++)
+	{
+		float h = Wheel_AxeVertexAxis (mdl, vertindex[i], WHEEL_AXE_ICON_AXIS_H);
+		float v = Wheel_AxeVertexAxis (mdl, vertindex[i], WHEEL_AXE_ICON_AXIS_V);
+
+		sx[i] = (h - center_h) * icon_scale + (float)WHEEL_AXE_ICON_WIDTH * 0.5f;
+		sy[i] = (float)(WHEEL_AXE_ICON_HEIGHT - 1) -
+			((v - center_v) * icon_scale + (float)WHEEL_AXE_ICON_HEIGHT * 0.5f);
+		depth[i] = Wheel_AxeVertexAxis (mdl, vertindex[i], WHEEL_AXE_ICON_AXIS_D);
+	}
+
+	area = Wheel_AxeUVEdge (sx[0], sy[0], sx[1], sy[1], sx[2], sy[2]);
+	if (fabsf (area) < 0.01f)
+		return false;
+
+	minx = (int)floorf (q_min (q_min (sx[0], sx[1]), sx[2])) - 1;
+	maxx = (int)ceilf  (q_max (q_max (sx[0], sx[1]), sx[2])) + 1;
+	miny = (int)floorf (q_min (q_min (sy[0], sy[1]), sy[2])) - 1;
+	maxy = (int)ceilf  (q_max (q_max (sy[0], sy[1]), sy[2])) + 1;
+
+	minx = CLAMP (0, minx, WHEEL_AXE_ICON_WIDTH - 1);
+	maxx = CLAMP (0, maxx, WHEEL_AXE_ICON_WIDTH - 1);
+	miny = CLAMP (0, miny, WHEEL_AXE_ICON_HEIGHT - 1);
+	maxy = CLAMP (0, maxy, WHEEL_AXE_ICON_HEIGHT - 1);
+
+	for (y = miny; y <= maxy; y++)
+	{
+		for (x = minx; x <= maxx; x++)
+		{
+			float px = (float)x + 0.5f;
+			float py = (float)y + 0.5f;
+			float e0 = Wheel_AxeUVEdge (sx[1], sy[1], sx[2], sy[2], px, py);
+			float e1 = Wheel_AxeUVEdge (sx[2], sy[2], sx[0], sy[0], px, py);
+			float e2 = Wheel_AxeUVEdge (sx[0], sy[0], sx[1], sy[1], px, py);
+			float w0, w1, w2, d, us, vt;
+			int idx, si, ti;
+
+			if (!((area > 0.0f && e0 >= -0.01f && e1 >= -0.01f && e2 >= -0.01f) ||
+				(area < 0.0f && e0 <=  0.01f && e1 <=  0.01f && e2 <=  0.01f)))
+				continue;
+
+			w0 = e0 / area;
+			w1 = e1 / area;
+			w2 = e2 / area;
+			d = w0 * depth[0] + w1 * depth[1] + w2 * depth[2];
+
+			idx = y * WHEEL_AXE_ICON_WIDTH + x;
+			if (d < zbuf[idx])
+				continue;
+
+			us = w0 * st_s[0] + w1 * st_s[1] + w2 * st_s[2];
+			vt = w0 * st_t[0] + w1 * st_t[1] + w2 * st_t[2];
+
+			if (skin_rgba)
+			{
+				const byte *rgba;
+				byte *dst;
+
+				si = CLAMP (0, (int)(((us + 0.5f) / (float)mdl->skinwidth) * (float)skinwidth), skinwidth - 1);
+				ti = CLAMP (0, (int)(((vt + 0.5f) / (float)mdl->skinheight) * (float)skinheight), skinheight - 1);
+				rgba = skin + (ti * skinwidth + si) * 4;
+				if (!rgba[3])
+					continue;
+
+				zbuf[idx] = d;
+				dst = out + idx * 4;
+				dst[0] = rgba[0];
+				dst[1] = rgba[1];
+				dst[2] = rgba[2];
+				dst[3] = rgba[3];
+				drew = true;
+			}
+			else
+			{
+				byte c;
+
+				si = CLAMP (0, (int)(us + 0.5f), skinwidth - 1);
+				ti = CLAMP (0, (int)(vt + 0.5f), skinheight - 1);
+				c = skin[ti * skinwidth + si];
+				if (c == WHEEL_AXE_ICON_TRANSPARENT)
+					continue;
+
+				zbuf[idx] = d;
+				out[idx] = c;
+				drew = true;
+			}
+		}
+	}
+
+	return drew;
+}
+
+static qboolean Wheel_BuildAxeIconPixels (const wheel_axe_model_t *mdl,
+	const byte *skin, int skinwidth, int skinheight, qboolean skin_rgba, byte *out)
+{
+	float min_h =  999999.0f, max_h = -999999.0f;
+	float min_v =  999999.0f, max_v = -999999.0f;
+	float center_h, center_v, icon_scale, hscale, vscale, pad;
+	float *zbuf = wheel_axe_icon_zbuf;
+	int i, j, selected = 0;
+	qboolean drew = false;
+
+	if (!skin || skinwidth <= 0 || skinheight <= 0)
+		return false;
+
+	if (skin_rgba)
+		memset (out, 0, WHEEL_AXE_ICON_WIDTH * WHEEL_AXE_ICON_HEIGHT * 4);
+	else
+		memset (out, WHEEL_AXE_ICON_TRANSPARENT, WHEEL_AXE_ICON_WIDTH * WHEEL_AXE_ICON_HEIGHT);
+
+	for (i = 0; i < mdl->numtris; i++)
+	{
+		int vertindex[3];
+		float s[3], t[3];
+
+		if (!Wheel_AxeTriangleData (mdl, &mdl->triangles[i], vertindex, s, t) ||
+			!Wheel_AxeTriangleSelected (mdl, s, t))
+			continue;
+
+		selected++;
+		for (j = 0; j < 3; j++)
+		{
+			float h = Wheel_AxeVertexAxis (mdl, vertindex[j], WHEEL_AXE_ICON_AXIS_H);
+			float v = Wheel_AxeVertexAxis (mdl, vertindex[j], WHEEL_AXE_ICON_AXIS_V);
+
+			if (h < min_h) min_h = h;
+			if (h > max_h) max_h = h;
+			if (v < min_v) min_v = v;
+			if (v > max_v) max_v = v;
+		}
+	}
+
+	if (!selected || max_h <= min_h || max_v <= min_v)
+		return false;
+
+	pad = (max_h - min_h) * 0.08f;
+	min_h -= pad; max_h += pad;
+	pad = (max_v - min_v) * 0.08f;
+	min_v -= pad; max_v += pad;
+
+	center_h = (min_h + max_h) * 0.5f;
+	center_v = (min_v + max_v) * 0.5f;
+	hscale = (float)(WHEEL_AXE_ICON_WIDTH - 1) / (max_h - min_h);
+	vscale = (float)(WHEEL_AXE_ICON_HEIGHT - 1) / (max_v - min_v);
+	icon_scale = q_min (hscale, vscale);
+
+	for (i = 0; i < WHEEL_AXE_ICON_WIDTH * WHEEL_AXE_ICON_HEIGHT; i++)
+		zbuf[i] = -999999.0f;
+
+	for (i = 0; i < mdl->numtris; i++)
+	{
+		int vertindex[3];
+		float s[3], t[3];
+
+		if (!Wheel_AxeTriangleData (mdl, &mdl->triangles[i], vertindex, s, t) ||
+			!Wheel_AxeTriangleSelected (mdl, s, t))
+			continue;
+
+		if (Wheel_AxeDrawModelTriangle (mdl, vertindex, s, t, center_h, center_v, icon_scale,
+			skin, skinwidth, skinheight, skin_rgba, zbuf, out))
+			drew = true;
+	}
+
+	return drew;
+}
+
+static qpic_t *Wheel_LoadAxeIcon (void)
+{
+	byte *model;
+	const char *model_path = "progs/v_axe.mdl";
+	wheel_axe_model_t mdl;
+	wheel_glpic_t gl;
+	size_t filesize;
+	unsigned int flags;
+	enum srcformat icon_format = SRC_INDEXED;
+	byte *icon_pixels = wheel_axe_icon_pixels;
+
+	if (wheel_axe_icon_attempted)
+		return wheel_axe_icon_pic;
+	wheel_axe_icon_attempted = true;
+
+	model = COM_LoadTempFile (model_path, NULL);
+	if (!model)
+	{
+		model_path = "v_axe.mdl";
+		model = COM_LoadTempFile (model_path, NULL);
+	}
+	if (!model || com_filesize < (qofs_t)sizeof(mdl_t))
+		return NULL;
+
+	filesize = (size_t)com_filesize;
+	if (!Wheel_ParseAxeModel (model, filesize, &mdl))
+		return NULL;
+
+	if (gl_load24bit.value > 0)
+	{
+		int mark = Hunk_LowMark ();
+		int fwidth = 0, fheight = 0;
+		qboolean malloced = false;
+		enum srcformat fmt = SRC_RGBA;
+		char filename[MAX_QPATH];
+		byte *data;
+
+		q_snprintf (filename, sizeof(filename), "%s_0", model_path);
+		data = Image_LoadImage (filename, &fwidth, &fheight, &fmt, &malloced);
+		if (data && fmt == SRC_RGBA &&
+			Wheel_BuildAxeIconPixels (&mdl, data, fwidth, fheight, true, wheel_axe_icon_rgba_pixels))
+		{
+			icon_format = SRC_RGBA;
+			icon_pixels = wheel_axe_icon_rgba_pixels;
+		}
+
+		if (malloced)
+			free (data);
+		Hunk_FreeToLowMark (mark);
+	}
+
+	if (icon_format != SRC_RGBA &&
+		!Wheel_BuildAxeIconPixels (&mdl, mdl.skin, mdl.skinwidth, mdl.skinheight, false, wheel_axe_icon_pixels))
+		return NULL;
+
+	flags = TEXPREF_LINEAR | TEXPREF_ALPHA | TEXPREF_PERSIST |
+		TEXPREF_NOPICMIP | TEXPREF_PAD | TEXPREF_OVERWRITE;
+	gl.gltexture = TexMgr_LoadImage (NULL, "weaponwheel_axe", WHEEL_AXE_ICON_WIDTH,
+		WHEEL_AXE_ICON_HEIGHT, icon_format, icon_pixels, "",
+		(src_offset_t)icon_pixels, flags);
+	if (!gl.gltexture)
+		return NULL;
+
+	gl.sl = 0;
+	gl.sh = (float)WHEEL_AXE_ICON_WIDTH / (float)TexMgr_PadConditional (WHEEL_AXE_ICON_WIDTH);
+	gl.tl = 0;
+	gl.th = (float)WHEEL_AXE_ICON_HEIGHT / (float)TexMgr_PadConditional (WHEEL_AXE_ICON_HEIGHT);
+
+	wheel_axe_icon_storage.pic.width = WHEEL_AXE_ICON_DISPLAY_WIDTH;
+	wheel_axe_icon_storage.pic.height = WHEEL_AXE_ICON_DISPLAY_HEIGHT;
+	memcpy (wheel_axe_icon_storage.pic.data, &gl, sizeof(gl));
+
+	wheel_axe_icon_pic = &wheel_axe_icon_storage.pic;
+	return wheel_axe_icon_pic;
+}
+
+static void Wheel_LoadIcons (void)
+{
+	int i;
+	if (wheel_icons_loaded)
+		return;
+	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
+	{
+		if (!Wheel_WeaponAvailable (&wheel_weapons[i]))
+		{
+			wheel_icons[i] = NULL;
+			wheel_icons_active[i] = NULL;
+			continue;
+		}
+		wheel_icons[i] = wheel_weapons[i].icon ?
+			Draw_PicFromWad2 (wheel_weapons[i].icon, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP) : NULL;
+		wheel_icons_active[i] = wheel_weapons[i].icon_active ?
+			Draw_PicFromWad2 (wheel_weapons[i].icon_active, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP) : NULL;
+		if (wheel_icons[i] == pic_nul)
+			wheel_icons[i] = NULL;
+		if (wheel_icons_active[i] == pic_nul)
+			wheel_icons_active[i] = NULL;
+		if ((wheel_weapons[i].flags & WHEEL_FLAG_AXE) && !wheel_icons[i])
+			wheel_icons[i] = Wheel_LoadAxeIcon ();
+		if (!wheel_icons_active[i])
+			wheel_icons_active[i] = wheel_icons[i];
+	}
+	// BACKTILE from gfx.wad: loaded without PAD/ALPHA so it tiles cleanly
+	// (same flags the engine uses for draw_backtile in gl_draw.c).
+	wheel_box_pic = Draw_PicFromWad2 ("backtile", TEXPREF_NOPICMIP);
+	if (wheel_box_pic == pic_nul)
+		wheel_box_pic = NULL;
+	wheel_icons_loaded = true;
+}
+
+qboolean Wheel_IsOpen (void)
+{
+	return wheel_open;
+}
+
+qboolean Wheel_BlockBButton (void)
+{
+	return wheel_block_b;
+}
+
+void Wheel_BlockBButtonRelease (void)
+{
+	wheel_block_b = true;
+}
+
+void Wheel_ClearBBlock (void)
+{
+	wheel_block_b = false;
+}
+
+void Wheel_UpdateSelection (float stick_x, float stick_y)
+{
+	if (!wheel_open)
+		return;
+	Wheel_SetPickFromVector (stick_x, stick_y);
+}
+
+void Wheel_ScrollSelection (int direction)
+{
+	int count, start, i;
+
+	if (!wheel_open || !direction)
+		return;
+
+	count = Wheel_WeaponCount ();
+	if (count <= 0)
+		return;
+
+	start = (wheel_pick >= 0 && wheel_pick < count) ? wheel_pick : Wheel_CurrentWeaponSlot ();
+	direction = (direction > 0) ? 1 : -1;
+
+	for (i = 1; i <= count; i++)
+	{
+		int slot = (start + direction * i + count) % count;
+		if (Wheel_WeaponSelectable (slot))
+		{
+			wheel_pick = slot;
+			return;
+		}
+	}
+}
+
+void Wheel_UpdateMouse (float dx, float dy)
+{
+	float sens, mag;
+
+	if (!wheel_open)
+		return;
+
+	sens = WHEEL_MOUSE_SENSITIVITY;
+	// invert dy: screen-space delta y grows downward, but we want "mouse up = top sector".
+	wheel_mouse_x += dx * sens;
+	wheel_mouse_y -= dy * sens;
+
+	mag = sqrtf (wheel_mouse_x * wheel_mouse_x + wheel_mouse_y * wheel_mouse_y);
+	if (mag > 1.0f)
+	{
+		wheel_mouse_x /= mag;
+		wheel_mouse_y /= mag;
+	}
+	Wheel_SetPickFromVector (wheel_mouse_x, wheel_mouse_y);
+}
+
+static void Wheel_SelectCommand (const wheel_weapon_t *weapon, char *cmd, size_t cmdsize)
+{
+	cmd[0] = 0;
+
+	if (weapon->select_mode == WHEEL_SELECT_HIP_PROX)
+	{
+		if (cl.stats[STAT_ACTIVEWEAPON] == HIT_PROXIMITY_GUN)
+			return;
+
+		// Hipnotic has no direct proximity impulse.  The official progs toggle
+		// proximity from the grenade launcher on a second impulse 6.
+		if ((cl.items & IT_GRENADE_LAUNCHER) &&
+			cl.stats[STAT_ACTIVEWEAPON] != IT_GRENADE_LAUNCHER)
+			q_snprintf (cmd, cmdsize, "impulse 6\nwait\nimpulse 6\n");
+		else
+			q_snprintf (cmd, cmdsize, "impulse 6\n");
+		return;
+	}
+
+	if (Wheel_WeaponIsCurrent (weapon))
+		return;
+	q_snprintf (cmd, cmdsize, "impulse %i\n", weapon->impulse);
+}
+
+static qboolean Wheel_Open (void)
+{
+	const wheel_weapon_t *weapon;
+
+	if (wheel_open)
+		return true;
+	if (!Wheel_Allowed (false))
+		return false;
+
+	Wheel_LoadIcons ();
+	wheel_pick = Wheel_CurrentWeaponSlot ();
+	wheel_mouse_x = 0.0f;
+	wheel_mouse_y = 0.0f;
+
+	wheel_open = true;
+	weapon = Wheel_WeaponForSlot (wheel_pick);
+	Wheel_DebugMsg (va ("open (pick=%i %s)", wheel_pick, weapon ? weapon->name : "none"));
+	return true;
+}
+
+static void Wheel_CloseSelect (void)
+{
+	const wheel_weapon_t *weapon;
+	char cmd[64];
+	int count;
+
+	if (!wheel_open)
+		return;
+	if (!Wheel_Allowed (true))
+	{
+		Wheel_Reset ();
+		return;
+	}
+
+	count = Wheel_WeaponCount ();
+	if (count <= 0)
+	{
+		Wheel_Reset ();
+		return;
+	}
+	if (wheel_pick < 0 || wheel_pick >= count || !Wheel_WeaponSelectable (wheel_pick))
+		wheel_pick = Wheel_NearestSelectableSlot (wheel_pick, 1);
+
+	wheel_open = false;
+	wheel_open_refs = 0;
+
+	weapon = Wheel_WeaponForSlot (wheel_pick);
+	if (!weapon)
+	{
+		Wheel_DebugMsg (va ("close (slot %i invalid)", wheel_pick));
+		return;
+	}
+	if (!Wheel_WeaponSelectable (wheel_pick))
+	{
+		Wheel_DebugMsg (va ("close (slot %i not selectable)", wheel_pick));
+		return;
+	}
+
+	Wheel_SelectCommand (weapon, cmd, sizeof(cmd));
+	if (!cmd[0])
+	{
+		Wheel_DebugMsg (va ("close (%s already active)", weapon->name));
+		return;
+	}
+
+	Cbuf_AddText (cmd);
+	Wheel_DebugMsg (va ("commit %s", weapon->name));
+}
+
+void Wheel_Cancel (void)
+{
+	if (!wheel_open)
+		return;
+	wheel_open = false;
+	wheel_open_refs = 0;
+	Wheel_DebugMsg ("cancel");
+}
+
+void Wheel_ClearIcons (void)
+{
+	memset (wheel_icons, 0, sizeof(wheel_icons));
+	memset (wheel_icons_active, 0, sizeof(wheel_icons_active));
+	wheel_box_pic = NULL;
+	wheel_icons_loaded = false;
+	wheel_axe_icon_pic = NULL;
+	wheel_axe_icon_attempted = false;
+}
+
+void Wheel_Reset (void)
+{
+	wheel_open = false;
+	wheel_open_refs = 0;
+	wheel_block_b = false;
+	wheel_mouse_x = 0.0f;
+	wheel_mouse_y = 0.0f;
+}
+
+static void Wheel_OpenDown (void)
+{
+	if (wheel_open)
+	{
+		wheel_open_refs++;
+		return;
+	}
+	if (Wheel_Open ())
+		wheel_open_refs = 1;
+}
+
+static void Wheel_OpenUp (void)
+{
+	if (!wheel_open)
+	{
+		wheel_open_refs = 0;
+		return;
+	}
+	if (wheel_open_refs > 1)
+	{
+		wheel_open_refs--;
+		return;
+	}
+	wheel_open_refs = 0;
+	Wheel_CloseSelect ();
+}
+
+void Wheel_Init (void)
+{
+	Cmd_AddCommand ("+weaponwheel", Wheel_OpenDown);
+	Cmd_AddCommand ("-weaponwheel", Wheel_OpenUp);
+
+	Wheel_Reset ();
+}
+
+/*
+===============
+Wheel rendering: remaster-style translucent ring + small arrow pointer.
+No fullscreen dim, no sector wedges.
+===============
+*/
+
+/*
+===============
+GLSL wheel: one quad, fragment shader does body + outer glow + uniform bevel
+rims + procedural noise tint.  Falls back to the primitive path below when
+GLSL is unavailable or WHEEL_SHADER is 0.
+===============
+*/
+
+static qboolean Wheel_InitShader (void)
+{
+	static const GLchar *vertSrc =
+		"varying vec2 vPos;\n"
+		"void main(void) {\n"
+		"	gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n"
+		"	vPos = gl_Vertex.xy;\n"
+		"}\n";
+
+	static const GLchar *fragSrc =
+		"uniform vec2  uCenter;\n"
+		"uniform vec2  uRadii;       // (r_in, r_out) in pixels\n"
+		"uniform float uGlow;        // outer glow falloff radius in pixels\n"
+		"uniform vec4  uBody;        // ring body RGBA\n"
+		"uniform vec4  uRim;         // bevel rim RGBA (color multiplied by intensity)\n"
+		"uniform vec2  uNoise;       // (unused, amount 0..1) -- box texture blend\n"
+		"uniform float uBevel;       // bevel Gaussian width in pixels\n"
+		"uniform sampler2D uBoxTex;  // gfx/backtile atlas\n"
+		"uniform vec4  uBoxUV;       // (sl, tl, sh, th) sub-rect in atlas\n"
+		"uniform float uBoxScale;    // tile frequency (1/px)\n"
+		"varying vec2  vPos;\n"
+		"\n"
+		"void main(void) {\n"
+		"	float d = length(vPos - uCenter);\n"
+		"	float r_in = uRadii.x;\n"
+		"	float r_out = uRadii.y;\n"
+		"	float feather = 1.0;\n"
+		"\n"
+		"	// 1px AA annulus\n"
+		"	float outer = smoothstep(r_out, r_out - feather, d);\n"
+		"	float hole  = smoothstep(r_in + feather, r_in - feather, d);\n"
+		"	float ring  = clamp(outer - hole, 0.0, 1.0);\n"
+		"\n"
+		"	// outer halo: fades from 1 at r_out to 0 at r_out+uGlow, only beyond the ring\n"
+		"	float glow_out = (1.0 - smoothstep(r_out, r_out + uGlow, d)) * (1.0 - outer);\n"
+		"	// inner halo: peaks at r_in, fades toward center over uGlow pixels, only inside the hole\n"
+		"	float glow_in  = smoothstep(r_in - uGlow, r_in, d) * hole;\n"
+		"	float glow = glow_out + glow_in;\n"
+		"\n"
+		"	// backtile from gfx.wad, tiled across the ring body, atlas-remapped\n"
+		"	vec2 uv = fract(vPos * uBoxScale);\n"
+		"	uv = mix(uBoxUV.xy, uBoxUV.zw, uv);\n"
+		"	vec3 box  = texture2D(uBoxTex, uv).rgb;\n"
+		"	vec3 body = mix(uBody.rgb, box, clamp(uNoise.y, 0.0, 1.0));\n"
+		"\n"
+		"	// uniform bright rim near both edges (Gaussian band, clipped to ring)\n"
+		"	float band = max(uBevel, 0.5);\n"
+		"	float dOut = (d - r_out) / band;\n"
+		"	float dIn  = (d - r_in)  / band;\n"
+		"	float rim  = (exp(-dOut * dOut) + exp(-dIn * dIn)) * ring;\n"
+		"\n"
+		"	vec3  col  = mix(vec3(0.0), body, ring);\n"
+		"	float a    = ring * uBody.a + glow * " WHEEL_STRINGIFY(WHEEL_GLOW_OPACITY) ";\n"
+		"	col = mix(col, uRim.rgb, uRim.a * rim);\n"
+		"	a   = max(a, uRim.a * rim);\n"
+		"\n"
+		"	if (a <= 0.0) discard;\n"
+		"	gl_FragColor = vec4(col, a);\n"
+		"}\n";
+
+	GLuint program;
+
+	if (wheel_shader_program)
+		return true;
+	if (wheel_shader_init_attempted)
+		return false;
+	wheel_shader_init_attempted = true;
+
+	if (!gl_glsl_able || !GL_UseProgramFunc || !GL_Uniform4fFunc || !GL_Uniform2fFunc || !GL_Uniform1fFunc)
+		return false;
+
+	program = GL_CreateProgram (vertSrc, fragSrc, 0, NULL);
+	if (!program)
+		return false;
+
+	wheel_shader_u_center = GL_GetUniformLocation (&program, "uCenter");
+	wheel_shader_u_radii  = GL_GetUniformLocation (&program, "uRadii");
+	wheel_shader_u_glow   = GL_GetUniformLocation (&program, "uGlow");
+	wheel_shader_u_body   = GL_GetUniformLocation (&program, "uBody");
+	wheel_shader_u_rim    = GL_GetUniformLocation (&program, "uRim");
+	wheel_shader_u_noise  = GL_GetUniformLocation (&program, "uNoise");
+	wheel_shader_u_bevel  = GL_GetUniformLocation (&program, "uBevel");
+	wheel_shader_u_box_uv = GL_GetUniformLocation (&program, "uBoxUV");
+	wheel_shader_u_box_scale = GL_GetUniformLocation (&program, "uBoxScale");
+
+	wheel_shader_program = program;
+	return true;
+}
+
+void Wheel_ShutdownGL (void)
+{
+	wheel_shader_program = 0;
+	wheel_shader_init_attempted = false;
+	wheel_shader_u_center = wheel_shader_u_radii = wheel_shader_u_glow = -1;
+	wheel_shader_u_body = wheel_shader_u_rim = wheel_shader_u_noise = -1;
+	wheel_shader_u_bevel = -1;
+	wheel_shader_u_box_uv = wheel_shader_u_box_scale = -1;
+}
+
+// Draws the wheel body + glow + bevel in a single shader pass.  Returns
+// false if the shader path is unavailable so the caller can fall back.
+static qboolean Wheel_DrawBodyShader (float cx, float cy, float r_in, float r_out, float glow_px)
+{
+	float left, right, top, bottom;
+	wheel_glpic_t *box;
+
+	if (!WHEEL_SHADER)
+		return false;
+	if (!Wheel_InitShader ())
+		return false;
+	if (!wheel_box_pic)
+		return false;
+
+	box = (wheel_glpic_t *)wheel_box_pic->data;
+	if (!box->gltexture)
+		return false;
+
+	left   = cx - r_out - glow_px - 2.f;
+	right  = cx + r_out + glow_px + 2.f;
+	top    = cy - r_out - glow_px - 2.f;
+	bottom = cy + r_out + glow_px + 2.f;
+
+	glEnable (GL_TEXTURE_2D);
+	glEnable (GL_BLEND);
+	glDisable (GL_ALPHA_TEST);
+	GL_Bind (box->gltexture);
+
+	GL_UseProgramFunc (wheel_shader_program);
+	GL_Uniform2fFunc (wheel_shader_u_center, cx, cy);
+	GL_Uniform2fFunc (wheel_shader_u_radii, r_in, r_out);
+	GL_Uniform1fFunc (wheel_shader_u_glow, glow_px);
+	GL_Uniform4fFunc (wheel_shader_u_body,
+		0.10f, 0.08f, 0.07f,
+		CLAMP (0.0f, WHEEL_OPACITY, 1.0f));
+	GL_Uniform4fFunc (wheel_shader_u_rim,
+		0.95f, 0.88f, 0.72f,
+		CLAMP (0.0f, WHEEL_BEVEL_OPACITY, 1.0f));
+	GL_Uniform2fFunc (wheel_shader_u_noise,
+		0.08f,
+		CLAMP (0.0f, WHEEL_NOISE, 1.0f));
+	GL_Uniform1fFunc (wheel_shader_u_bevel,
+		CLAMP (0.5f, WHEEL_BEVEL, 40.0f));
+	GL_Uniform4fFunc (wheel_shader_u_box_uv, box->sl, box->tl, box->sh, box->th);
+	GL_Uniform1fFunc (wheel_shader_u_box_scale, 1.0f / 64.0f);	// backtile is 64x64; 1:1 tiling
+
+	glBegin (GL_QUADS);
+	glVertex2f (left,  top);
+	glVertex2f (right, top);
+	glVertex2f (right, bottom);
+	glVertex2f (left,  bottom);
+	glEnd ();
+
+	GL_UseProgramFunc (0);
+	return true;
+}
+
+static void Wheel_DrawAnnulus (float cx, float cy, float r_in, float r_out, float r, float g, float b, float a)
+{
+	int i;
+	float ang, c, s;
+
+	glDisable (GL_TEXTURE_2D);
+	glEnable (GL_BLEND);
+	glDisable (GL_ALPHA_TEST);
+	glColor4f (r, g, b, a);
+
+	glBegin (GL_TRIANGLE_STRIP);
+	for (i = 0; i <= WHEEL_RING_STEPS; i++)
+	{
+		ang = (float)i * (2.0f * (float)M_PI / (float)WHEEL_RING_STEPS);
+		c = cosf (ang); s = sinf (ang);
+		glVertex2f (cx + c * r_out, cy + s * r_out);
+		glVertex2f (cx + c * r_in,  cy + s * r_in);
+	}
+	glEnd ();
+}
+
+// Uniform outer glow: stack concentric annuli outside r_out, each thicker
+// and fainter than the last, to darken the wall in a radial halo around the
+// ring.  Black with low alpha so it tints the underlying texture.
+static void Wheel_DrawOuterGlow (float cx, float cy, float r_out)
+{
+	int pass;
+	const int passes = 6;
+	const float step = 5.0f;
+	float prev = r_out;
+
+	for (pass = 0; pass < passes; pass++)
+	{
+		float t     = (float)(pass + 1) / (float)passes;	// 0.16 .. 1.0
+		float r     = r_out + step * (pass + 1);
+		float alpha = WHEEL_FALLBACK_GLOW_OPACITY * (1.0f - t * 0.9f);
+		Wheel_DrawAnnulus (cx, cy, prev, r, 0.f, 0.f, 0.f, alpha);
+		prev = r;
+	}
+}
+
+// Subtle uniform rim: a single thin line loop in a soft warm color, drawn
+// all the way around at low alpha so the edge reads as a faint highlight
+// without picking a light direction.
+static void Wheel_DrawSubtleRim (float cx, float cy, float r, float alpha)
+{
+	int i;
+	float ang;
+
+	glDisable (GL_TEXTURE_2D);
+	glEnable (GL_BLEND);
+	glDisable (GL_ALPHA_TEST);
+	glLineWidth (1.0f);
+	glColor4f (0.95f, 0.88f, 0.72f, alpha);
+
+	glBegin (GL_LINE_LOOP);
+	for (i = 0; i < WHEEL_RING_STEPS; i++)
+	{
+		ang = (float)i * (2.0f * (float)M_PI / (float)WHEEL_RING_STEPS);
+		glVertex2f (cx + cosf (ang) * r, cy + sinf (ang) * r);
+	}
+	glEnd ();
+}
+
+// Pointer: same arrow character (141) the menu uses for pinned bookmarks,
+// reused via Draw_Character_Rotation.  We push our own matrix to scale and
+// position around the slot direction; Draw_Character_Rotation handles its
+// own pivot/rotate/restore internally.
+//
+// Char 141 is the menu pin; keep the rotation aligned to the same screen-space
+// slot angle used for positioning around the wheel.
+static void Wheel_DrawPointerChar (float cx, float cy, float r_in, int slot, float scale)
+{
+	float a = Wheel_SlotAngle (slot);
+	float pointer_r = r_in * 0.85f;
+	float px = cx + cosf (a) * pointer_r;
+	float py = cy + sinf (a) * pointer_r;
+	float rot = RAD2DEG (a);
+
+	glEnable (GL_TEXTURE_2D);
+	glEnable (GL_ALPHA_TEST);
+	glDisable (GL_BLEND);
+	glColor4f (1.f, 1.f, 1.f, 1.f);
+
+	glPushMatrix ();
+	glTranslatef (px, py, 0.f);
+	glScalef (scale, scale, 1.f);
+	Draw_Character_Rotation (-4, -4, 141, (int)rot);
+	glPopMatrix ();
+}
+
+static void Wheel_DrawAxeSlotLabel (float ix, float iy, qpic_t *pic, float icon_scale, float alpha)
+{
+	float label_scale = CLAMP (1.0f, icon_scale * 0.75f, 2.5f);
+	float label_x = ix - 4.0f * label_scale;
+	float label_y = iy + (float)pic->height * icon_scale * 0.5f + 0.5f * label_scale;
+
+	glPushMatrix ();
+	glTranslatef ((float)((int)(label_x + 0.5f)), (float)((int)(label_y + 0.5f)), 0.f);
+	glScalef (label_scale, label_scale, 1.f);
+	Draw_CharacterRGBA (0, 0, WHEEL_AXE_LABEL_CHAR, wheel_white, alpha);
+	glPopMatrix ();
+}
+
+void Wheel_Draw (void)
+{
+	int i, count;
+	float cx, cy, radius, r_in, r_out, icon_r, iscale;
+
+	if (!wheel_open)
+		return;
+
+	// soft-close if state changed (menu, disconnect, death, intermission, ...)
+	if (!Wheel_Allowed (true))
+	{
+		Wheel_Reset ();
+		return;
+	}
+
+	Wheel_LoadIcons ();
+	GL_SetCanvas (CANVAS_DEFAULT);
+	count = Wheel_WeaponCount ();
+	if (count <= 0)
+	{
+		Wheel_Reset ();
+		return;
+	}
+	if (wheel_pick < 0 || wheel_pick >= count)
+		wheel_pick = Wheel_CurrentWeaponSlot ();
+	if (!Wheel_WeaponSelectable (wheel_pick))
+		wheel_pick = Wheel_NearestSelectableSlot (wheel_pick, 1);
+
+	radius = Wheel_Radius ();
+	Wheel_Position (radius, &cx, &cy);
+	r_out = radius;
+	r_in  = radius * 0.50f;
+	icon_r = (r_in + r_out) * 0.5f;
+	iscale = CLAMP (1.0f, WHEEL_ICON_SCALE, 5.0f);
+
+	{
+		float glow_px = CLAMP (0.f, WHEEL_GLOW, 96.f);
+		if (!Wheel_DrawBodyShader (cx, cy, r_in, r_out, glow_px))
+		{
+			// fallback: immediate-mode glow + body + uniform rim
+			Wheel_DrawOuterGlow (cx, cy, r_out);
+			Wheel_DrawAnnulus (cx, cy, r_in, r_out, 0.10f, 0.08f, 0.07f, 0.60f);
+			Wheel_DrawSubtleRim (cx, cy, r_out, 0.35f);
+			Wheel_DrawSubtleRim (cx, cy, r_in,  0.28f);
+		}
+	}
+
+	// icons / labels
+	glEnable (GL_TEXTURE_2D);
+	for (i = 0; i < count; i++)
+	{
+		int weapon_index = Wheel_WeaponIndexForSlot (i);
+		const wheel_weapon_t *weapon = &wheel_weapons[weapon_index];
+		float a = Wheel_SlotAngle (i);
+		float ix = cx + cosf (a) * icon_r;
+		float iy = cy + sinf (a) * icon_r;
+		qboolean owned = Wheel_WeaponOwned (i);
+		qboolean selectable = Wheel_WeaponSelectable (i);
+		float alpha = selectable ? 1.0f : (owned ? 0.45f : 0.28f);
+		qpic_t *pic = (i == wheel_pick && selectable && wheel_icons_active[weapon_index]) ?
+			wheel_icons_active[weapon_index] : wheel_icons[weapon_index];
+
+		if ((weapon->flags & WHEEL_FLAG_AXE) && i != wheel_pick)
+			alpha = q_min (alpha, WHEEL_AXE_UNSELECTED_ALPHA);
+
+		if (pic)
+		{
+			float w = pic->width * iscale;
+			float h = pic->height * iscale;
+			Draw_ScaledPicAlpha ((int)(ix - w * 0.5f), (int)(iy - h * 0.5f), pic, iscale, alpha);
+			if (weapon->flags & WHEEL_FLAG_AXE)
+				Wheel_DrawAxeSlotLabel (ix, iy, pic, iscale, alpha);
+		}
+		else
+		{
+			// fallback: impulse digit, dimmed consistently with generated icons.
+			int ch = weapon->fallback_char;
+			if (ch && (owned || i == wheel_pick))
+				Draw_CharacterRGBA ((int)(ix - 4), (int)(iy - 4), ch, wheel_white, alpha);
+		}
+	}
+
+	// arrow pointing at current pick (char 141, scaled with the wheel)
+	if (Wheel_WeaponSelectable (wheel_pick))
+		Wheel_DrawPointerChar (cx, cy, r_in, wheel_pick, iscale);
+
+	// restore GL state for the rest of the HUD
+	glColor4f (1.f, 1.f, 1.f, 1.f);
+	glDisable (GL_BLEND);
+	glEnable (GL_ALPHA_TEST);
+	glEnable (GL_TEXTURE_2D);
+
+	if (WHEEL_DEBUG)
+	{
+		const wheel_weapon_t *weapon = Wheel_WeaponForSlot (wheel_pick);
+		Draw_String (8, 8, va ("wheel: %s", weapon ? weapon->name : "none"));
+	}
+}
