@@ -169,6 +169,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define STAT_PUNCHVECTOR_Y	30
 #define STAT_PUNCHVECTOR_Z	31
 
+// QSS-M-owned opt-in clientstats. Keep these outside STAT_USER's 32..127
+// mod-defined range. Mods should publish EV_INTEGER canonical wheel weapon
+// bits here, not mod-local weapon bits.
+#define STAT_QSSM_WHEEL_WEAPONS 128
+#define STAT_QSSM_WHEEL_ACTIVE 129
+
 //dp defines these. most are useless but we fill them in for consistency.
 //#define STAT_MOVEVARS_AIRACCEL_QW_STRETCHFACTOR		220
 //#define STAT_MOVEVARS_AIRCONTROL_PENALTY			221

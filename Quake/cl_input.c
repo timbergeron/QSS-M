@@ -1222,17 +1222,64 @@ static int Wheel_WeaponItemBit (const wheel_weapon_t *weapon)
 	return weapon->item_bit;
 }
 
+static qboolean Wheel_IsSingleBit (unsigned int value)
+{
+	return value && !(value & (value - 1));
+}
+
+static unsigned int Wheel_CustomWeaponMask (void)
+{
+	int stat_value = cl.stats[STAT_QSSM_WHEEL_WEAPONS];
+
+	// Explicit opt-in only. Mods must translate their weapon layout to the
+	// canonical wheel bits in wheel_weapons[] before publishing this stat.
+	if (stat_value <= 0)
+		return 0;
+	return (unsigned int)stat_value;
+}
+
+static unsigned int Wheel_ActiveWeaponBit (void)
+{
+	int stat_value = cl.stats[STAT_QSSM_WHEEL_ACTIVE];
+	unsigned int active;
+
+	// Lets mods with custom weapon bit layouts publish the current weapon in
+	// the same canonical bit space as STAT_QSSM_WHEEL_WEAPONS.
+	if (stat_value > 0)
+	{
+		active = (unsigned int)stat_value;
+		if (Wheel_IsSingleBit (active))
+			return active;
+	}
+
+	return (unsigned int)cl.stats[STAT_ACTIVEWEAPON];
+}
+
 static qboolean Wheel_WeaponIsCurrent (const wheel_weapon_t *weapon)
 {
-	return cl.stats[STAT_ACTIVEWEAPON] == Wheel_WeaponItemBit (weapon);
+	unsigned int active = Wheel_ActiveWeaponBit ();
+	unsigned int item_bit = (unsigned int)Wheel_WeaponItemBit (weapon);
+
+	return active == item_bit;
 }
 
 static qboolean Wheel_WeaponOwned (int slot)
 {
 	const wheel_weapon_t *weapon = Wheel_WeaponForSlot (slot);
+	unsigned int item_bit;
+	unsigned int custom_mask;
 	if (!weapon)
 		return false;
-	return (cl.items & Wheel_WeaponItemBit (weapon)) != 0;
+
+	item_bit = (unsigned int)Wheel_WeaponItemBit (weapon);
+	if (cl.items & item_bit)
+		return true;
+
+	custom_mask = Wheel_CustomWeaponMask ();
+	if (custom_mask & item_bit)
+		return true;
+
+	return false;
 }
 
 static qboolean Wheel_WeaponSelectable (int slot)
@@ -1287,14 +1334,13 @@ static int Wheel_SlotDistance (int a, int b, int count)
 
 static int Wheel_CurrentWeaponSlot (void)
 {
-	int weap = cl.stats[STAT_ACTIVEWEAPON];
 	int i, slot = 0;
 
 	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
 	{
 		if (!Wheel_WeaponAvailable (&wheel_weapons[i]))
 			continue;
-		if (weap == Wheel_WeaponItemBit (&wheel_weapons[i]))
+		if (Wheel_WeaponIsCurrent (&wheel_weapons[i]))
 			return Wheel_NearestSelectableSlot (slot, 1);
 		slot++;
 	}
