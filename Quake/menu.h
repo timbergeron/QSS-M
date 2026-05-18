@@ -40,6 +40,7 @@ enum m_state_e {
 	m_mouse,
 	m_controller,
 	m_controller_test,
+	m_weaponwheel,
 	m_calibration,
 	m_video,
 	m_graphics,

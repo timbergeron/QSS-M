@@ -1041,10 +1041,12 @@ WEAPON WHEEL  (Quake remaster style, stock/mission-pack .lmps plus generated axe
 #define WHEEL_FLAG_AXE		1
 #define WHEEL_SELECT_NORMAL	0
 #define WHEEL_SELECT_HIP_PROX	1
+#define WHEEL_ORDER_DEFAULT	"shotgun axe lg rl gl sng ng ssg prox laser mjolnir lavang lavasng multigl multirl plasma"
 
 typedef struct
 {
 	const char	*name;
+	const char	*id;
 	const char	*icon;			// inv_*  (dim/inactive)
 	const char	*icon_active;	// inv2_* (highlighted)
 	int		impulse;
@@ -1062,24 +1064,26 @@ static const wheel_weapon_t wheel_weapons[] = {
 	// Quake remaster visual wheel order: shotgun at top, then 3/4/5/6/7/8/axe
 	// counter-clockwise.  Wheel_SlotAngle advances clockwise, so store the
 	// clockwise order here.
-	{"Shotgun",                "inv_shotgun",  "inv2_shotgun",  2, IT_SHOTGUN,            0,       STAT_SHELLS,  1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '2'},
-	{"Axe",                    NULL,           NULL,            1, IT_AXE,                RIT_AXE, 0,            0, WHEEL_PACK_BASE,     WHEEL_FLAG_AXE, WHEEL_SELECT_NORMAL,   WHEEL_AXE_LABEL_CHAR},
-	{"Thunderbolt",            "inv_lightng",  "inv2_lightng",  8, IT_LIGHTNING,          0,       STAT_CELLS,   1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '8'},
-	{"Rocket Launcher",        "inv_srlaunch", "inv2_srlaunch", 7, IT_ROCKET_LAUNCHER,    0,       STAT_ROCKETS, 1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '7'},
-	{"Grenade Launcher",       "inv_rlaunch",  "inv2_rlaunch",  6, IT_GRENADE_LAUNCHER,   0,       STAT_ROCKETS, 1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '6'},
-	{"Super Nailgun",          "inv_snailgun", "inv2_snailgun", 5, IT_SUPER_NAILGUN,      0,       STAT_NAILS,   2, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '5'},
-	{"Nailgun",                "inv_nailgun",  "inv2_nailgun",  4, IT_NAILGUN,            0,       STAT_NAILS,   1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '4'},
-	{"Super Shotgun",          "inv_sshotgun", "inv2_sshotgun", 3, IT_SUPER_SHOTGUN,      0,       STAT_SHELLS,  2, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '3'},
-	{"Proximity Gun",          "inv_prox",     "inv2_prox",     6, HIT_PROXIMITY_GUN,     0,       STAT_ROCKETS, 1, WHEEL_PACK_HIPNOTIC, 0,              WHEEL_SELECT_HIP_PROX, 0},
-	{"Laser Cannon",           "inv_laser",    "inv2_laser",  225, HIT_LASER_CANNON,     0,       STAT_CELLS,   1, WHEEL_PACK_HIPNOTIC, 0,              WHEEL_SELECT_NORMAL,   0},
-	{"Mjolnir",                "inv_mjolnir",  "inv2_mjolnir",226, HIT_MJOLNIR,          0,       STAT_CELLS,   1, WHEEL_PACK_HIPNOTIC, 0,              WHEEL_SELECT_NORMAL,   0},
-	{"Lava Nailgun",           "r_lava",       NULL,           60, RIT_LAVA_NAILGUN,      0,       STAT_NAILS,   1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '4'},
-	{"Lava Super Nailgun",     "r_superlava",  NULL,           61, RIT_LAVA_SUPER_NAILGUN,0,       STAT_NAILS,   2, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '5'},
-	{"Multi Grenade Launcher", "r_gren",       NULL,           62, RIT_MULTI_GRENADE,     0,       STAT_ROCKETS, 1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '6'},
-	{"Multi Rocket Launcher",  "r_multirock",  NULL,           63, RIT_MULTI_ROCKET,      0,       STAT_ROCKETS, 1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '7'},
-	{"Plasma Gun",             "r_plasma",     NULL,           64, RIT_PLASMA_GUN,        0,       STAT_CELLS,   1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '8'}
+	{"Shotgun",                "shotgun", "inv_shotgun",  "inv2_shotgun",  2, IT_SHOTGUN,            0,       STAT_SHELLS,  1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '2'},
+	{"Axe",                    "axe",     NULL,           NULL,            1, IT_AXE,                RIT_AXE, 0,            0, WHEEL_PACK_BASE,     WHEEL_FLAG_AXE, WHEEL_SELECT_NORMAL,   WHEEL_AXE_LABEL_CHAR},
+	{"Thunderbolt",            "lg",      "inv_lightng",  "inv2_lightng",  8, IT_LIGHTNING,          0,       STAT_CELLS,   1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '8'},
+	{"Rocket Launcher",        "rl",      "inv_srlaunch", "inv2_srlaunch", 7, IT_ROCKET_LAUNCHER,    0,       STAT_ROCKETS, 1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '7'},
+	{"Grenade Launcher",       "gl",      "inv_rlaunch",  "inv2_rlaunch",  6, IT_GRENADE_LAUNCHER,   0,       STAT_ROCKETS, 1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '6'},
+	{"Super Nailgun",          "sng",     "inv_snailgun", "inv2_snailgun", 5, IT_SUPER_NAILGUN,      0,       STAT_NAILS,   2, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '5'},
+	{"Nailgun",                "ng",      "inv_nailgun",  "inv2_nailgun",  4, IT_NAILGUN,            0,       STAT_NAILS,   1, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '4'},
+	{"Super Shotgun",          "ssg",     "inv_sshotgun", "inv2_sshotgun", 3, IT_SUPER_SHOTGUN,      0,       STAT_SHELLS,  2, WHEEL_PACK_BASE,     0,              WHEEL_SELECT_NORMAL,   '3'},
+	{"Proximity Gun",          "prox",    "inv_prox",     "inv2_prox",     6, HIT_PROXIMITY_GUN,     0,       STAT_ROCKETS, 1, WHEEL_PACK_HIPNOTIC, 0,              WHEEL_SELECT_HIP_PROX, 0},
+	{"Laser Cannon",           "laser",   "inv_laser",    "inv2_laser",  225, HIT_LASER_CANNON,     0,       STAT_CELLS,   1, WHEEL_PACK_HIPNOTIC, 0,              WHEEL_SELECT_NORMAL,   0},
+	{"Mjolnir",                "mjolnir", "inv_mjolnir",  "inv2_mjolnir",226, HIT_MJOLNIR,          0,       STAT_CELLS,   1, WHEEL_PACK_HIPNOTIC, 0,              WHEEL_SELECT_NORMAL,   0},
+	{"Lava Nailgun",           "lavang",  "r_lava",       NULL,           60, RIT_LAVA_NAILGUN,      0,       STAT_NAILS,   1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '4'},
+	{"Lava Super Nailgun",     "lavasng", "r_superlava",  NULL,           61, RIT_LAVA_SUPER_NAILGUN,0,       STAT_NAILS,   2, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '5'},
+	{"Multi Grenade Launcher", "multigl", "r_gren",       NULL,           62, RIT_MULTI_GRENADE,     0,       STAT_ROCKETS, 1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '6'},
+	{"Multi Rocket Launcher",  "multirl", "r_multirock",  NULL,           63, RIT_MULTI_ROCKET,      0,       STAT_ROCKETS, 1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '7'},
+	{"Plasma Gun",             "plasma",  "r_plasma",     NULL,           64, RIT_PLASMA_GUN,        0,       STAT_CELLS,   1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '8'}
 };
 #define WHEEL_WEAPON_COUNT ((int)(sizeof(wheel_weapons) / sizeof(wheel_weapons[0])))
+
+static cvar_t	cl_wheel_order = {"cl_wheel_order", WHEEL_ORDER_DEFAULT, CVAR_ARCHIVE};
 
 static qboolean	wheel_open;
 static qboolean	wheel_block_b;		// swallow B until release after cancel
@@ -1091,6 +1095,11 @@ static qboolean	wheel_icons_loaded;
 static qpic_t	*wheel_icons[WHEEL_WEAPON_COUNT];
 static qpic_t	*wheel_icons_active[WHEEL_WEAPON_COUNT];
 static qpic_t	*wheel_box_pic = NULL;	// backtile from gfx.wad -- tiled body texture
+static int	wheel_order_indices[WHEEL_WEAPON_COUNT];
+static int	wheel_order_count;
+static qboolean	wheel_order_dirty = true;
+static qboolean	wheel_order_seen_hipnotic;
+static qboolean	wheel_order_seen_rogue;
 
 // Local mirror of gl_draw.c's file-static glpic_t so we can pull the
 // texture and atlas UVs out of a qpic_t->data blob.  Layout must match.
@@ -1180,33 +1189,147 @@ static qboolean Wheel_WeaponAvailable (const wheel_weapon_t *weapon)
 	return true;
 }
 
-static int Wheel_WeaponCount (void)
+static int Wheel_WeaponIndexForId (const char *id)
 {
-	int i, count = 0;
+	int i;
 
 	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
 	{
-		if (Wheel_WeaponAvailable (&wheel_weapons[i]))
-			count++;
+		if (!q_strcasecmp (id, wheel_weapons[i].id))
+			return i;
 	}
+	return -1;
+}
+
+static int Wheel_BuildRawOrder (const char *value, int *order, int max_order, qboolean warn_unknown)
+{
+	qboolean used[WHEEL_WEAPON_COUNT];
+	qboolean using_default;
+	const char *data;
+	int count = 0;
+
+	if (max_order <= 0)
+		return 0;
+
+	using_default = (!value || !value[0]);
+	data = using_default ? WHEEL_ORDER_DEFAULT : value;
+	memset (used, 0, sizeof(used));
+
+	while ((data = COM_Parse (data)) != NULL)
+	{
+		int weapon_index;
+
+		if (!com_token[0])
+			continue;
+
+		weapon_index = Wheel_WeaponIndexForId (com_token);
+		if (weapon_index < 0)
+		{
+			if (warn_unknown)
+				Con_Warning ("cl_wheel_order: unknown weapon id \"%s\"\n", com_token);
+			continue;
+		}
+		if (used[weapon_index])
+			continue;
+
+		used[weapon_index] = true;
+		if (count < max_order)
+			order[count++] = weapon_index;
+	}
+
+	if (count == 0 && !using_default)
+		return Wheel_BuildRawOrder (WHEEL_ORDER_DEFAULT, order, max_order, false);
+
 	return count;
+}
+
+static void Wheel_RebuildOrder (void)
+{
+	int raw_order[WHEEL_WEAPON_COUNT];
+	int raw_count, i;
+
+	raw_count = Wheel_BuildRawOrder (cl_wheel_order.string, raw_order, WHEEL_WEAPON_COUNT, true);
+
+	wheel_order_count = 0;
+	for (i = 0; i < raw_count; i++)
+	{
+		int weapon_index = raw_order[i];
+		if (Wheel_WeaponAvailable (&wheel_weapons[weapon_index]))
+			wheel_order_indices[wheel_order_count++] = weapon_index;
+	}
+
+	if (wheel_order_count == 0)
+	{
+		raw_count = Wheel_BuildRawOrder (WHEEL_ORDER_DEFAULT, raw_order, WHEEL_WEAPON_COUNT, false);
+		for (i = 0; i < raw_count; i++)
+		{
+			int weapon_index = raw_order[i];
+			if (Wheel_WeaponAvailable (&wheel_weapons[weapon_index]))
+				wheel_order_indices[wheel_order_count++] = weapon_index;
+		}
+	}
+
+	wheel_order_dirty = false;
+	wheel_order_seen_hipnotic = hipnotic ? true : false;
+	wheel_order_seen_rogue = rogue ? true : false;
+}
+
+static void Wheel_EnsureOrder (void)
+{
+	if (wheel_order_dirty ||
+		wheel_order_seen_hipnotic != (hipnotic ? true : false) ||
+		wheel_order_seen_rogue != (rogue ? true : false))
+		Wheel_RebuildOrder ();
+}
+
+static void Wheel_OrderChanged (cvar_t *var)
+{
+	(void)var;
+	wheel_order_dirty = true;
+}
+
+static void Wheel_OrderCompletion (cvar_t *var, const char *partial)
+{
+	qboolean used[WHEEL_WEAPON_COUNT];
+	const char *data;
+	int i;
+
+	(void)var;
+	memset (used, 0, sizeof(used));
+
+	data = Cmd_Argv (1);
+	while ((data = COM_Parse (data)) != NULL)
+	{
+		int weapon_index;
+
+		if (!com_token[0])
+			continue;
+
+		weapon_index = Wheel_WeaponIndexForId (com_token);
+		if (weapon_index >= 0)
+			used[weapon_index] = true;
+	}
+
+	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
+	{
+		if (used[i] && q_strcasecmp (partial, wheel_weapons[i].id))
+			continue;
+		Con_AddToTabList (wheel_weapons[i].id, partial, wheel_weapons[i].name, NULL);
+	}
+}
+
+static int Wheel_WeaponCount (void)
+{
+	Wheel_EnsureOrder ();
+	return wheel_order_count;
 }
 
 static int Wheel_WeaponIndexForSlot (int slot)
 {
-	int i, count = 0;
-
-	if (slot < 0)
+	Wheel_EnsureOrder ();
+	if (slot < 0 || slot >= wheel_order_count)
 		return -1;
-	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
-	{
-		if (!Wheel_WeaponAvailable (&wheel_weapons[i]))
-			continue;
-		if (count == slot)
-			return i;
-		count++;
-	}
-	return -1;
+	return wheel_order_indices[slot];
 }
 
 static const wheel_weapon_t *Wheel_WeaponForSlot (int slot)
@@ -1334,15 +1457,14 @@ static int Wheel_SlotDistance (int a, int b, int count)
 
 static int Wheel_CurrentWeaponSlot (void)
 {
-	int i, slot = 0;
+	int slot;
 
-	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
+	Wheel_EnsureOrder ();
+	for (slot = 0; slot < wheel_order_count; slot++)
 	{
-		if (!Wheel_WeaponAvailable (&wheel_weapons[i]))
-			continue;
-		if (Wheel_WeaponIsCurrent (&wheel_weapons[i]))
+		int weapon_index = wheel_order_indices[slot];
+		if (Wheel_WeaponIsCurrent (&wheel_weapons[weapon_index]))
 			return Wheel_NearestSelectableSlot (slot, 1);
-		slot++;
 	}
 	return Wheel_NearestSelectableSlot (0, 1);
 }
@@ -1921,6 +2043,120 @@ void Wheel_ClearBBlock (void)
 	wheel_block_b = false;
 }
 
+const char *Wheel_MenuWeaponName (int weapon_index)
+{
+	if (weapon_index < 0 || weapon_index >= WHEEL_WEAPON_COUNT)
+		return "";
+	return wheel_weapons[weapon_index].name;
+}
+
+qboolean Wheel_MenuWeaponAvailable (int weapon_index)
+{
+	if (weapon_index < 0 || weapon_index >= WHEEL_WEAPON_COUNT)
+		return false;
+	return Wheel_WeaponAvailable (&wheel_weapons[weapon_index]);
+}
+
+static void Wheel_MenuAppendOrderValue (char *value, size_t value_size, int weapon_index)
+{
+	if (weapon_index < 0 || weapon_index >= WHEEL_WEAPON_COUNT)
+		return;
+	if (value[0])
+		q_strlcat (value, " ", value_size);
+	q_strlcat (value, wheel_weapons[weapon_index].id, value_size);
+}
+
+void Wheel_MenuBuildOrder (int *visible, int *visible_count, int *hidden, int *hidden_count, int max_count)
+{
+	int raw_order[WHEEL_WEAPON_COUNT];
+	int default_order[WHEEL_WEAPON_COUNT];
+	qboolean used[WHEEL_WEAPON_COUNT];
+	int raw_count, default_count, i;
+	int vcount = 0, hcount = 0;
+
+	if (visible_count)
+		*visible_count = 0;
+	if (hidden_count)
+		*hidden_count = 0;
+	if (max_count <= 0)
+		return;
+
+	memset (used, 0, sizeof(used));
+	raw_count = Wheel_BuildRawOrder (cl_wheel_order.string, raw_order, WHEEL_WEAPON_COUNT, false);
+	for (i = 0; i < raw_count && vcount < max_count; i++)
+	{
+		int weapon_index = raw_order[i];
+		used[weapon_index] = true;
+		if (!Wheel_WeaponAvailable (&wheel_weapons[weapon_index]))
+			continue;
+		if (visible)
+			visible[vcount] = weapon_index;
+		vcount++;
+	}
+
+	default_count = Wheel_BuildRawOrder (WHEEL_ORDER_DEFAULT, default_order, WHEEL_WEAPON_COUNT, false);
+	for (i = 0; i < default_count && hcount < max_count; i++)
+	{
+		int weapon_index = default_order[i];
+		if (used[weapon_index])
+			continue;
+		if (!Wheel_WeaponAvailable (&wheel_weapons[weapon_index]))
+			continue;
+		if (hidden)
+			hidden[hcount] = weapon_index;
+		hcount++;
+	}
+
+	if (visible_count)
+		*visible_count = vcount;
+	if (hidden_count)
+		*hidden_count = hcount;
+}
+
+void Wheel_MenuSetOrder (const int *visible, int visible_count)
+{
+	int old_order[WHEEL_WEAPON_COUNT];
+	qboolean used[WHEEL_WEAPON_COUNT];
+	char value[512];
+	int old_count, i;
+
+	memset (used, 0, sizeof(used));
+	value[0] = 0;
+	for (i = 0; i < visible_count; i++)
+	{
+		int weapon_index = visible[i];
+		if (weapon_index < 0 || weapon_index >= WHEEL_WEAPON_COUNT)
+			continue;
+		if (used[weapon_index])
+			continue;
+		if (!Wheel_WeaponAvailable (&wheel_weapons[weapon_index]))
+			continue;
+		Wheel_MenuAppendOrderValue (value, sizeof(value), weapon_index);
+		used[weapon_index] = true;
+	}
+
+	old_count = Wheel_BuildRawOrder (cl_wheel_order.string, old_order, WHEEL_WEAPON_COUNT, false);
+	for (i = 0; i < old_count; i++)
+	{
+		int weapon_index = old_order[i];
+		if (weapon_index < 0 || weapon_index >= WHEEL_WEAPON_COUNT)
+			continue;
+		if (used[weapon_index])
+			continue;
+		if (Wheel_WeaponAvailable (&wheel_weapons[weapon_index]))
+			continue;
+		Wheel_MenuAppendOrderValue (value, sizeof(value), weapon_index);
+		used[weapon_index] = true;
+	}
+
+	Cvar_Set ("cl_wheel_order", value);
+}
+
+void Wheel_MenuResetOrder (void)
+{
+	Cvar_Set ("cl_wheel_order", WHEEL_ORDER_DEFAULT);
+}
+
 void Wheel_UpdateSelection (float stick_x, float stick_y)
 {
 	if (!wheel_open)
@@ -2124,9 +2360,14 @@ static void Wheel_OpenUp (void)
 
 void Wheel_Init (void)
 {
+	Cvar_RegisterVariable (&cl_wheel_order);
+	Cvar_SetCallback (&cl_wheel_order, Wheel_OrderChanged);
+	Cvar_SetCompletion (&cl_wheel_order, Wheel_OrderCompletion);
+
 	Cmd_AddCommand ("+weaponwheel", Wheel_OpenDown);
 	Cmd_AddCommand ("-weaponwheel", Wheel_OpenUp);
 
+	Wheel_RebuildOrder ();
 	Wheel_Reset ();
 }
 
@@ -2394,7 +2635,7 @@ static void Wheel_DrawPointerChar (float cx, float cy, float r_in, int slot, flo
 
 static void Wheel_DrawAxeSlotLabel (float ix, float iy, qpic_t *pic, float icon_scale, float alpha)
 {
-	float label_scale = CLAMP (1.0f, icon_scale * 0.75f, 2.5f);
+	float label_scale = CLAMP (0.25f, icon_scale * 0.75f, 2.5f);
 	float label_x = ix - 4.0f * label_scale;
 	float label_y = iy + (float)pic->height * icon_scale * 0.5f + 0.5f * label_scale;
 
@@ -2405,10 +2646,169 @@ static void Wheel_DrawAxeSlotLabel (float ix, float iy, qpic_t *pic, float icon_
 	glPopMatrix ();
 }
 
-void Wheel_Draw (void)
+static void Wheel_DrawAt (float cx, float cy, float radius, int pick, qboolean preview, float icon_scale, float glow_px)
 {
 	int i, count;
-	float cx, cy, radius, r_in, r_out, icon_r, iscale;
+	float r_in, r_out, icon_r, iscale;
+
+	count = Wheel_WeaponCount ();
+	if (count <= 0)
+		return;
+	if (pick < 0 || pick >= count)
+		pick = 0;
+
+	r_out = radius;
+	r_in  = radius * 0.50f;
+	icon_r = (r_in + r_out) * 0.5f;
+	iscale = CLAMP (0.1f, icon_scale, 5.0f);
+
+	if (!Wheel_DrawBodyShader (cx, cy, r_in, r_out, glow_px))
+	{
+		// fallback: immediate-mode glow + body + uniform rim
+		Wheel_DrawOuterGlow (cx, cy, r_out);
+		Wheel_DrawAnnulus (cx, cy, r_in, r_out, 0.10f, 0.08f, 0.07f, 0.60f);
+		Wheel_DrawSubtleRim (cx, cy, r_out, 0.35f);
+		Wheel_DrawSubtleRim (cx, cy, r_in,  0.28f);
+	}
+
+	// icons / labels
+	glEnable (GL_TEXTURE_2D);
+	for (i = 0; i < count; i++)
+	{
+		int weapon_index = Wheel_WeaponIndexForSlot (i);
+		const wheel_weapon_t *weapon = &wheel_weapons[weapon_index];
+		float a = Wheel_SlotAngle (i);
+		float ix = cx + cosf (a) * icon_r;
+		float iy = cy + sinf (a) * icon_r;
+		qboolean owned = preview ? true : Wheel_WeaponOwned (i);
+		qboolean selectable = preview ? true : Wheel_WeaponSelectable (i);
+		float alpha = selectable ? 1.0f : (owned ? 0.45f : 0.28f);
+		qpic_t *pic = (i == pick && selectable && wheel_icons_active[weapon_index]) ?
+			wheel_icons_active[weapon_index] : wheel_icons[weapon_index];
+
+		if ((weapon->flags & WHEEL_FLAG_AXE) && i != pick)
+			alpha = q_min (alpha, WHEEL_AXE_UNSELECTED_ALPHA);
+
+		if (pic)
+		{
+			float w = pic->width * iscale;
+			float h = pic->height * iscale;
+			Draw_ScaledPicAlpha ((int)(ix - w * 0.5f), (int)(iy - h * 0.5f), pic, iscale, alpha);
+			if (weapon->flags & WHEEL_FLAG_AXE)
+				Wheel_DrawAxeSlotLabel (ix, iy, pic, iscale, alpha);
+		}
+		else
+		{
+			// fallback: impulse digit, dimmed consistently with generated icons.
+			int ch = weapon->fallback_char;
+			if (ch && (preview || owned || i == pick))
+				Draw_CharacterRGBA ((int)(ix - 4), (int)(iy - 4), ch, wheel_white, alpha);
+		}
+	}
+
+	// arrow pointing at current pick (char 141, scaled with the wheel)
+	if (preview || Wheel_WeaponSelectable (pick))
+		Wheel_DrawPointerChar (cx, cy, r_in, pick, iscale);
+
+	// restore GL state for the rest of the HUD
+	glColor4f (1.f, 1.f, 1.f, 1.f);
+	glDisable (GL_BLEND);
+	glEnable (GL_ALPHA_TEST);
+	glEnable (GL_TEXTURE_2D);
+}
+
+static void Wheel_MenuPreviewLayout (float *cx, float *cy, float *radius, float *icon_scale, float *glow_px)
+{
+	vrect_t bounds, viewport;
+	float canvas_scale;
+	float screen_radius;
+
+	Draw_GetMenuTransform (&bounds, &viewport);
+	canvas_scale = (viewport.width > 0 && bounds.width > 0) ?
+		(float)viewport.width / (float)bounds.width : 1.0f;
+	if (canvas_scale <= 0.0f)
+		canvas_scale = 1.0f;
+
+	screen_radius = Wheel_Radius ();
+
+	if (cx)
+		*cx = (float)bounds.x + 160.0f;
+	if (cy)
+		*cy = (float)bounds.y + 100.0f;
+	if (radius)
+		*radius = screen_radius / canvas_scale;
+	if (icon_scale)
+		*icon_scale = CLAMP (1.0f, WHEEL_ICON_SCALE, 5.0f) / canvas_scale;
+	if (glow_px)
+		*glow_px = CLAMP (0.f, WHEEL_GLOW, 96.f) / canvas_scale;
+}
+
+int Wheel_MenuPreviewStart (void)
+{
+	int count = Wheel_WeaponCount ();
+	int pick;
+
+	if (count <= 0)
+		return 0;
+	pick = Wheel_CurrentWeaponSlot ();
+	if (pick < 0 || pick >= count)
+		pick = 0;
+	return pick;
+}
+
+int Wheel_MenuPreviewScroll (int pick, int direction)
+{
+	int count = Wheel_WeaponCount ();
+
+	if (count <= 0)
+		return 0;
+	if (pick < 0 || pick >= count)
+		pick = 0;
+	if (!direction)
+		return pick;
+	return (pick + ((direction > 0) ? 1 : -1) + count) % count;
+}
+
+int Wheel_MenuPreviewPickFromPoint (int pick, float x, float y)
+{
+	float cx, cy, radius;
+	float dx, dy, mag, angle, span;
+	int sector, count;
+
+	count = Wheel_WeaponCount ();
+	if (count <= 0)
+		return 0;
+	if (pick < 0 || pick >= count)
+		pick = 0;
+
+	Wheel_MenuPreviewLayout (&cx, &cy, &radius, NULL, NULL);
+	dx = x - cx;
+	dy = cy - y;
+	mag = sqrtf (dx * dx + dy * dy);
+	if (mag < radius * 0.50f || mag > radius * 1.40f)
+		return pick;
+
+	angle = atan2f (dx, dy);
+	if (angle < 0)
+		angle += 2.0f * (float)M_PI;
+	span = 2.0f * (float)M_PI / (float)count;
+	sector = (int)((angle + span * 0.5f) / span) % count;
+	return sector;
+}
+
+void Wheel_MenuDrawPreview (int pick)
+{
+	float cx, cy, radius, icon_scale, glow_px;
+
+	Wheel_LoadIcons ();
+	Wheel_MenuPreviewLayout (&cx, &cy, &radius, &icon_scale, &glow_px);
+	Wheel_DrawAt (cx, cy, radius, pick, true, icon_scale, glow_px);
+}
+
+void Wheel_Draw (void)
+{
+	int count;
+	float cx, cy, radius;
 
 	if (!wheel_open)
 		return;
@@ -2435,67 +2835,8 @@ void Wheel_Draw (void)
 
 	radius = Wheel_Radius ();
 	Wheel_Position (radius, &cx, &cy);
-	r_out = radius;
-	r_in  = radius * 0.50f;
-	icon_r = (r_in + r_out) * 0.5f;
-	iscale = CLAMP (1.0f, WHEEL_ICON_SCALE, 5.0f);
-
-	{
-		float glow_px = CLAMP (0.f, WHEEL_GLOW, 96.f);
-		if (!Wheel_DrawBodyShader (cx, cy, r_in, r_out, glow_px))
-		{
-			// fallback: immediate-mode glow + body + uniform rim
-			Wheel_DrawOuterGlow (cx, cy, r_out);
-			Wheel_DrawAnnulus (cx, cy, r_in, r_out, 0.10f, 0.08f, 0.07f, 0.60f);
-			Wheel_DrawSubtleRim (cx, cy, r_out, 0.35f);
-			Wheel_DrawSubtleRim (cx, cy, r_in,  0.28f);
-		}
-	}
-
-	// icons / labels
-	glEnable (GL_TEXTURE_2D);
-	for (i = 0; i < count; i++)
-	{
-		int weapon_index = Wheel_WeaponIndexForSlot (i);
-		const wheel_weapon_t *weapon = &wheel_weapons[weapon_index];
-		float a = Wheel_SlotAngle (i);
-		float ix = cx + cosf (a) * icon_r;
-		float iy = cy + sinf (a) * icon_r;
-		qboolean owned = Wheel_WeaponOwned (i);
-		qboolean selectable = Wheel_WeaponSelectable (i);
-		float alpha = selectable ? 1.0f : (owned ? 0.45f : 0.28f);
-		qpic_t *pic = (i == wheel_pick && selectable && wheel_icons_active[weapon_index]) ?
-			wheel_icons_active[weapon_index] : wheel_icons[weapon_index];
-
-		if ((weapon->flags & WHEEL_FLAG_AXE) && i != wheel_pick)
-			alpha = q_min (alpha, WHEEL_AXE_UNSELECTED_ALPHA);
-
-		if (pic)
-		{
-			float w = pic->width * iscale;
-			float h = pic->height * iscale;
-			Draw_ScaledPicAlpha ((int)(ix - w * 0.5f), (int)(iy - h * 0.5f), pic, iscale, alpha);
-			if (weapon->flags & WHEEL_FLAG_AXE)
-				Wheel_DrawAxeSlotLabel (ix, iy, pic, iscale, alpha);
-		}
-		else
-		{
-			// fallback: impulse digit, dimmed consistently with generated icons.
-			int ch = weapon->fallback_char;
-			if (ch && (owned || i == wheel_pick))
-				Draw_CharacterRGBA ((int)(ix - 4), (int)(iy - 4), ch, wheel_white, alpha);
-		}
-	}
-
-	// arrow pointing at current pick (char 141, scaled with the wheel)
-	if (Wheel_WeaponSelectable (wheel_pick))
-		Wheel_DrawPointerChar (cx, cy, r_in, wheel_pick, iscale);
-
-	// restore GL state for the rest of the HUD
-	glColor4f (1.f, 1.f, 1.f, 1.f);
-	glDisable (GL_BLEND);
-	glEnable (GL_ALPHA_TEST);
-	glEnable (GL_TEXTURE_2D);
+	Wheel_DrawAt (cx, cy, radius, wheel_pick, false,
+		CLAMP (1.0f, WHEEL_ICON_SCALE, 5.0f), CLAMP (0.f, WHEEL_GLOW, 96.f));
 
 	if (WHEEL_DEBUG)
 	{

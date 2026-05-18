@@ -96,6 +96,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_Mouse_f (void);
 		void M_Menu_Controller_f (void);
 		void M_Menu_Controller_Test_f (void);
+		void M_Menu_WeaponWheel_f (void);
 		void M_Menu_Calibration_f (void);
 		void M_Menu_Video_f (void);
 	void M_Menu_Graphics_f (void);
@@ -143,6 +144,7 @@ void M_Main_Draw (void);
 		void M_Mouse_Draw (void);
 		void M_Controller_Draw (void);
 		void M_Controller_Test_Draw (void);
+		void M_WeaponWheel_Draw (void);
 		void M_Calibration_Draw (void);
 		void M_Video_Draw (void);
 	void M_Graphics_Draw (void);
@@ -189,6 +191,7 @@ void M_Main_Key (int key);
 		void M_Mouse_Key (int key);
 		void M_Controller_Key (int key);
 		void M_Controller_Test_Key (int key);
+		void M_WeaponWheel_Key (int key);
 		void M_Calibration_Key (int key);
 		void M_Video_Key (int key);
 	void M_Graphics_Key (int key);
@@ -242,6 +245,7 @@ void M_Main_Key (int key);
 		void M_Keys_Mousemove(int cx, int cy);
 		void M_Mouse_Mousemove (int cx, int cy);
 		void M_Controller_Mousemove (int cx, int cy);
+		void M_WeaponWheel_Mousemove (int cx, int cy);
 		void M_Video_Mousemove (int cx, int cy);
 		void M_Graphics_Mousemove (int cx, int cy);
 			void M_Sky_Mousemove (int cx, int cy);
@@ -5377,6 +5381,7 @@ enum
 	OPT_CUSTOMIZE = 0,
 	OPT_MOUSE,
 	OPT_CONTROLLER,
+	OPT_WEAPONWHEEL,
 	OPT_VIDEO,
 	OPT_GRAPHICS,
 	OPT_SOUND,
@@ -5614,6 +5619,9 @@ void M_Options_Draw (void)
 		case OPT_CONTROLLER:
 			text = "            Controller   ...";
 			break;
+		case OPT_WEAPONWHEEL:
+			text = "          Weapon Wheel   ...";
+			break;
 		case OPT_VIDEO:
 			if (vid_menudrawfn)
 			text = "               Display   ...";
@@ -5706,6 +5714,8 @@ static const char* M_Options_GetItemText(int index)
 		return "                 Mouse   ...";
 	case OPT_CONTROLLER:
 		return "            Controller   ...";
+	case OPT_WEAPONWHEEL:
+		return "          Weapon Wheel   ...";
 	case OPT_VIDEO:
 		return "               Display   ...";
 	case OPT_GRAPHICS:
@@ -5826,6 +5836,9 @@ void M_Options_Key (int k)
 			break;
 		case OPT_CONTROLLER:
 			M_Menu_Controller_f();
+			break;
+		case OPT_WEAPONWHEEL:
+			M_Menu_WeaponWheel_f();
 			break;
 		case OPT_VIDEO:
 			M_Menu_Video_f();
@@ -5972,6 +5985,602 @@ void M_Options_Mousemove(int cx, int cy) // woods #mousemenu
 		else if (old_cursor > OPT_SPACE)
 			options_cursor--;
 	}
+}
+
+/*
+==================
+Weapon Wheel Menu
+==================
+*/
+
+#define WEAPONWHEEL_MENU_MAX	32
+#define WEAPONWHEEL_HEADER_X	16
+#define WEAPONWHEEL_HEADER_Y	32
+#define WEAPONWHEEL_HEADER_COLS	36
+#define WEAPONWHEEL_LIST_Y	32
+
+static struct
+{
+	int	items[WEAPONWHEEL_MENU_MAX];
+	int	visible_count;
+	int	total_count;
+	int	cursor;
+	qboolean mouse_down;
+	int	mouse_item;
+	qboolean mouse_dragged;
+	qboolean preview;
+	int	preview_pick;
+} weaponwheelmenu;
+
+static int M_WeaponWheel_PreviewIndex(void)
+{
+	return weaponwheelmenu.total_count;
+}
+
+static int M_WeaponWheel_MenuCount(void)
+{
+	return weaponwheelmenu.total_count > 0 ? weaponwheelmenu.total_count + 1 : 0;
+}
+
+static qboolean M_WeaponWheel_IsPreviewItem(int item)
+{
+	return weaponwheelmenu.total_count > 0 && item == M_WeaponWheel_PreviewIndex();
+}
+
+static void M_WeaponWheel_ClampCursor(void)
+{
+	int count = M_WeaponWheel_MenuCount();
+
+	if (count <= 0)
+	{
+		weaponwheelmenu.cursor = 0;
+		return;
+	}
+	if (weaponwheelmenu.cursor < 0)
+		weaponwheelmenu.cursor = count - 1;
+	else if (weaponwheelmenu.cursor >= count)
+		weaponwheelmenu.cursor = 0;
+}
+
+static qboolean M_WeaponWheel_HasHidden(void)
+{
+	return weaponwheelmenu.visible_count < weaponwheelmenu.total_count;
+}
+
+static int M_WeaponWheel_RowY(int item)
+{
+	int y = WEAPONWHEEL_LIST_Y + item * 8;
+
+	if (M_WeaponWheel_HasHidden() && item >= weaponwheelmenu.visible_count)
+		y += 8;
+	return y;
+}
+
+static int M_WeaponWheel_PreviewY(void)
+{
+	if (weaponwheelmenu.total_count <= 0)
+		return WEAPONWHEEL_LIST_Y;
+	return M_WeaponWheel_RowY(weaponwheelmenu.total_count - 1) + 16;
+}
+
+static int M_WeaponWheel_CursorY(int item)
+{
+	if (M_WeaponWheel_IsPreviewItem(item))
+		return M_WeaponWheel_PreviewY();
+	return M_WeaponWheel_RowY(item);
+}
+
+static int M_WeaponWheel_ItemAtY(int y)
+{
+	int rel = y - WEAPONWHEEL_LIST_Y;
+	int item;
+
+	if (rel < 0)
+		return -1;
+	if (M_WeaponWheel_HasHidden() && rel >= weaponwheelmenu.visible_count * 8)
+	{
+		if (rel < (weaponwheelmenu.visible_count + 1) * 8)
+			return -1;
+		rel -= 8;
+	}
+
+	item = rel / 8;
+	if (item < 0 || item >= weaponwheelmenu.total_count)
+	{
+		int preview_y = M_WeaponWheel_PreviewY();
+		if (weaponwheelmenu.total_count > 0 && y >= preview_y - 8 && y < preview_y + 16)
+			return M_WeaponWheel_PreviewIndex();
+		return -1;
+	}
+	return item;
+}
+
+static void M_WeaponWheel_LoadOrder(void)
+{
+	int visible[WEAPONWHEEL_MENU_MAX];
+	int hidden[WEAPONWHEEL_MENU_MAX];
+	int visible_count = 0, hidden_count = 0;
+	int i;
+
+	Wheel_MenuBuildOrder(visible, &visible_count, hidden, &hidden_count, WEAPONWHEEL_MENU_MAX);
+
+	weaponwheelmenu.visible_count = visible_count;
+	weaponwheelmenu.total_count = 0;
+	for (i = 0; i < visible_count && weaponwheelmenu.total_count < WEAPONWHEEL_MENU_MAX; i++)
+		weaponwheelmenu.items[weaponwheelmenu.total_count++] = visible[i];
+	for (i = 0; i < hidden_count && weaponwheelmenu.total_count < WEAPONWHEEL_MENU_MAX; i++)
+		weaponwheelmenu.items[weaponwheelmenu.total_count++] = hidden[i];
+
+	M_WeaponWheel_ClampCursor();
+}
+
+static void M_WeaponWheel_Save(void)
+{
+	Wheel_MenuSetOrder(weaponwheelmenu.items, weaponwheelmenu.visible_count);
+}
+
+static void M_WeaponWheel_ClearMouseDrag(void)
+{
+	weaponwheelmenu.mouse_down = false;
+	weaponwheelmenu.mouse_item = -1;
+	weaponwheelmenu.mouse_dragged = false;
+}
+
+static void M_WeaponWheel_ResetDefaults(void)
+{
+	Wheel_MenuResetOrder();
+	weaponwheelmenu.cursor = 0;
+	weaponwheelmenu.preview = false;
+	weaponwheelmenu.preview_pick = 0;
+	M_WeaponWheel_ClearMouseDrag();
+	M_WeaponWheel_LoadOrder();
+	S_LocalSound("misc/menu3.wav");
+}
+
+void M_Menu_WeaponWheel_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_weaponwheel;
+	m_entersound = true;
+
+	weaponwheelmenu.cursor = 0;
+	weaponwheelmenu.preview = false;
+	weaponwheelmenu.preview_pick = 0;
+	M_WeaponWheel_ClearMouseDrag();
+	M_WeaponWheel_LoadOrder();
+	IN_UpdateGrabs();
+}
+
+static void M_WeaponWheel_MoveCursor(int dir)
+{
+	if (M_WeaponWheel_MenuCount() <= 0)
+		return;
+	S_LocalSound("misc/menu1.wav");
+	weaponwheelmenu.cursor += dir;
+	M_WeaponWheel_ClampCursor();
+}
+
+static void M_WeaponWheel_MoveSelected(int dir)
+{
+	int target, tmp;
+
+	if (weaponwheelmenu.cursor < 0 || weaponwheelmenu.cursor >= weaponwheelmenu.visible_count)
+	{
+		S_LocalSound("misc/menu2.wav");
+		return;
+	}
+
+	target = weaponwheelmenu.cursor + dir;
+	if (target < 0 || target >= weaponwheelmenu.visible_count)
+	{
+		S_LocalSound("misc/menu2.wav");
+		return;
+	}
+
+	tmp = weaponwheelmenu.items[weaponwheelmenu.cursor];
+	weaponwheelmenu.items[weaponwheelmenu.cursor] = weaponwheelmenu.items[target];
+	weaponwheelmenu.items[target] = tmp;
+	weaponwheelmenu.cursor = target;
+
+	S_LocalSound("misc/menu3.wav");
+	M_WeaponWheel_Save();
+}
+
+static void M_WeaponWheel_MoveItem(int from, int to)
+{
+	int weapon_index;
+
+	if (from < 0 || from >= weaponwheelmenu.visible_count ||
+		to < 0 || to >= weaponwheelmenu.visible_count ||
+		from == to)
+		return;
+
+	weapon_index = weaponwheelmenu.items[from];
+	if (from < to)
+		memmove(&weaponwheelmenu.items[from],
+			&weaponwheelmenu.items[from + 1],
+			(to - from) * sizeof(weaponwheelmenu.items[0]));
+	else
+		memmove(&weaponwheelmenu.items[to + 1],
+			&weaponwheelmenu.items[to],
+			(from - to) * sizeof(weaponwheelmenu.items[0]));
+
+	weaponwheelmenu.items[to] = weapon_index;
+	weaponwheelmenu.cursor = to;
+	weaponwheelmenu.mouse_item = to;
+	weaponwheelmenu.mouse_dragged = true;
+
+	S_LocalSound("misc/menu3.wav");
+	M_WeaponWheel_Save();
+}
+
+static void M_WeaponWheel_ToggleSelected(void)
+{
+	int weapon_index;
+
+	if (M_WeaponWheel_IsPreviewItem(weaponwheelmenu.cursor))
+	{
+		M_WeaponWheel_Save();
+		weaponwheelmenu.preview = true;
+		weaponwheelmenu.preview_pick = Wheel_MenuPreviewStart();
+		M_WeaponWheel_ClearMouseDrag();
+		S_LocalSound("misc/menu3.wav");
+		return;
+	}
+
+	if (weaponwheelmenu.cursor < 0 || weaponwheelmenu.cursor >= weaponwheelmenu.total_count)
+		return;
+
+	if (weaponwheelmenu.cursor < weaponwheelmenu.visible_count)
+	{
+		if (weaponwheelmenu.visible_count <= 1)
+			return;
+
+		weapon_index = weaponwheelmenu.items[weaponwheelmenu.cursor];
+		memmove(&weaponwheelmenu.items[weaponwheelmenu.cursor],
+			&weaponwheelmenu.items[weaponwheelmenu.cursor + 1],
+			(weaponwheelmenu.total_count - weaponwheelmenu.cursor - 1) * sizeof(weaponwheelmenu.items[0]));
+		weaponwheelmenu.items[weaponwheelmenu.total_count - 1] = weapon_index;
+		weaponwheelmenu.visible_count--;
+	}
+	else
+	{
+		int insert = weaponwheelmenu.visible_count;
+
+		weapon_index = weaponwheelmenu.items[weaponwheelmenu.cursor];
+		memmove(&weaponwheelmenu.items[weaponwheelmenu.cursor],
+			&weaponwheelmenu.items[weaponwheelmenu.cursor + 1],
+			(weaponwheelmenu.total_count - weaponwheelmenu.cursor - 1) * sizeof(weaponwheelmenu.items[0]));
+		memmove(&weaponwheelmenu.items[insert + 1],
+			&weaponwheelmenu.items[insert],
+			(weaponwheelmenu.total_count - insert - 1) * sizeof(weaponwheelmenu.items[0]));
+		weaponwheelmenu.items[insert] = weapon_index;
+		weaponwheelmenu.visible_count++;
+		weaponwheelmenu.cursor = insert;
+	}
+
+	S_LocalSound("misc/menu3.wav");
+	M_WeaponWheel_Save();
+	M_WeaponWheel_ClampCursor();
+}
+
+static void M_WeaponWheel_FinishMouseClick(void)
+{
+	int item;
+
+	if (!weaponwheelmenu.mouse_down)
+		return;
+
+	item = M_WeaponWheel_ItemAtY(m_mousey);
+	if (!weaponwheelmenu.mouse_dragged && item >= 0)
+	{
+		weaponwheelmenu.cursor = item;
+		m_entersound = true;
+		M_WeaponWheel_ToggleSelected();
+	}
+
+	M_WeaponWheel_ClearMouseDrag();
+}
+
+static void M_WeaponWheel_PrintLegendSegment(float *x, int y, const char *text, qboolean white, float scale)
+{
+	glPushMatrix();
+	glTranslatef(*x, y, 0);
+	glScalef(scale, scale, 1.0f);
+	if (white)
+		M_PrintWhite(0, 0, text);
+	else
+		M_Print(0, 0, text);
+	glPopMatrix();
+
+	*x += (float)strlen(text) * 8.0f * scale;
+}
+
+static void M_WeaponWheel_DrawTextBoxExact(int x, int y, int width, int lines)
+{
+	qpic_t *p;
+	int cx, cy;
+	int n;
+
+	cx = x;
+	cy = y;
+	p = Draw_CachePic("gfx/box_tl.lmp");
+	M_DrawTransPic(cx, cy, p);
+	p = Draw_CachePic("gfx/box_ml.lmp");
+	for (n = 0; n < lines; n++)
+	{
+		cy += 8;
+		M_DrawTransPic(cx, cy, p);
+	}
+	p = Draw_CachePic("gfx/box_bl.lmp");
+	M_DrawTransPic(cx, cy + 8, p);
+
+	cx += 8;
+	while (width >= 2)
+	{
+		cy = y;
+		p = Draw_CachePic("gfx/box_tm.lmp");
+		M_DrawTransPic(cx, cy, p);
+		p = Draw_CachePic("gfx/box_mm.lmp");
+		for (n = 0; n < lines; n++)
+		{
+			cy += 8;
+			if (n == 1)
+				p = Draw_CachePic("gfx/box_mm2.lmp");
+			M_DrawTransPic(cx, cy, p);
+		}
+		p = Draw_CachePic("gfx/box_bm.lmp");
+		M_DrawTransPic(cx, cy + 8, p);
+		width -= 2;
+		cx += 16;
+	}
+	if (width > 0)
+	{
+		cy = y;
+		p = Draw_CachePic("gfx/box_tm.lmp");
+		M_DrawSubpic(cx, cy, p, 0, 0, 8, p->height);
+		p = Draw_CachePic("gfx/box_mm.lmp");
+		for (n = 0; n < lines; n++)
+		{
+			cy += 8;
+			if (n == 1)
+				p = Draw_CachePic("gfx/box_mm2.lmp");
+			M_DrawSubpic(cx, cy, p, 0, 0, 8, p->height);
+		}
+		p = Draw_CachePic("gfx/box_bm.lmp");
+		M_DrawSubpic(cx, cy + 8, p, 0, 0, 8, p->height);
+		cx += 8;
+	}
+
+	cy = y;
+	p = Draw_CachePic("gfx/box_tr.lmp");
+	M_DrawTransPic(cx, cy, p);
+	p = Draw_CachePic("gfx/box_mr.lmp");
+	for (n = 0; n < lines; n++)
+	{
+		cy += 8;
+		M_DrawTransPic(cx, cy, p);
+	}
+	p = Draw_CachePic("gfx/box_br.lmp");
+	M_DrawTransPic(cx, cy + 8, p);
+}
+
+void M_WeaponWheel_Draw(void)
+{
+	plcolour_t white = CL_PLColours_Parse("0xffffff");
+	float legend_x;
+	float legend_width;
+	const float legend_scale = 0.75f;
+	int preview_y;
+	int i;
+
+	if (weaponwheelmenu.mouse_down && !keydown[K_MOUSE1])
+		M_WeaponWheel_FinishMouseClick();
+
+	Draw_String(WEAPONWHEEL_HEADER_X, WEAPONWHEEL_HEADER_Y - 28, "Weapon Wheel");
+	M_DrawQuakeBar(WEAPONWHEEL_HEADER_X - 8, WEAPONWHEEL_HEADER_Y - 16, WEAPONWHEEL_HEADER_COLS + 2);
+
+	if (weaponwheelmenu.preview)
+	{
+		Wheel_MenuDrawPreview(weaponwheelmenu.preview_pick);
+		return;
+	}
+
+	for (i = 0; i < weaponwheelmenu.total_count; i++)
+	{
+		int weapon_index = weaponwheelmenu.items[i];
+		int y = M_WeaponWheel_RowY(i);
+		qboolean included = i < weaponwheelmenu.visible_count;
+		qboolean available = Wheel_MenuWeaponAvailable(weapon_index);
+
+		if (included && available)
+		{
+			M_Print(32, y, "[ ]");
+			M_PrintRGBA(40, y, "x", white, 1.0f, false);
+			M_Print(64, y, Wheel_MenuWeaponName(weapon_index));
+		}
+		else
+		{
+			float alpha = included ? 0.55f : 0.40f;
+
+			M_PrintRGBA(32, y, "[ ]", white, alpha, true);
+			if (included)
+				M_PrintRGBA(40, y, "x", white, alpha, false);
+			M_PrintRGBA(64, y, Wheel_MenuWeaponName(weapon_index), white, alpha, true);
+		}
+	}
+
+	if (weaponwheelmenu.total_count > 0)
+	{
+		preview_y = M_WeaponWheel_PreviewY();
+		M_WeaponWheel_DrawTextBoxExact(24, preview_y - 8, 7, 1);
+		M_PrintWhite(32, preview_y, "Preview");
+	}
+	else
+	{
+		M_Print(32, WEAPONWHEEL_LIST_Y, "no weapons available");
+	}
+
+	if (M_WeaponWheel_MenuCount() > 0)
+		M_DrawCharacter(16, M_WeaponWheel_CursorY(weaponwheelmenu.cursor), 12 + ((int)(realtime * 4) & 1));
+
+	legend_width = (float)(strlen("enter:") + strlen("toggle  ") + strlen("left/right:") +
+		strlen("reorder  ") + strlen("ctrl+r:") + strlen("defaults")) * 8.0f * legend_scale;
+	legend_x = (320.0f - legend_width) * 0.5f;
+	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "enter:", false, legend_scale);
+	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "toggle  ", true, legend_scale);
+	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "left/right:", false, legend_scale);
+	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "reorder  ", true, legend_scale);
+	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "ctrl+r:", false, legend_scale);
+	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "defaults", true, legend_scale);
+}
+
+void M_WeaponWheel_Key(int key)
+{
+	if (weaponwheelmenu.preview)
+	{
+		switch (key)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+		case K_ENTER:
+		case K_KP_ENTER:
+		case K_ABUTTON:
+			weaponwheelmenu.preview = false;
+			M_WeaponWheel_ClearMouseDrag();
+			S_LocalSound("misc/menu3.wav");
+			return;
+		case K_MOUSE1:
+			weaponwheelmenu.preview_pick = Wheel_MenuPreviewPickFromPoint(weaponwheelmenu.preview_pick,
+				(float)m_mousex, (float)m_mousey);
+			S_LocalSound("misc/menu1.wav");
+			return;
+		case K_MWHEELUP:
+		case K_UPARROW:
+		case K_LEFTARROW:
+		case '[':
+			weaponwheelmenu.preview_pick = Wheel_MenuPreviewScroll(weaponwheelmenu.preview_pick, -1);
+			S_LocalSound("misc/menu1.wav");
+			return;
+		case K_MWHEELDOWN:
+		case K_DOWNARROW:
+		case K_RIGHTARROW:
+		case ']':
+			weaponwheelmenu.preview_pick = Wheel_MenuPreviewScroll(weaponwheelmenu.preview_pick, 1);
+			S_LocalSound("misc/menu1.wav");
+			return;
+		default:
+			return;
+		}
+	}
+
+	if (keydown[K_CTRL] && (key == 'r' || key == 'R'))
+	{
+		M_WeaponWheel_ResetDefaults();
+		return;
+	}
+
+	switch (key)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_WeaponWheel_Save();
+		M_Menu_Options_f();
+		break;
+
+	case K_MOUSE1:
+	{
+		int item = M_WeaponWheel_ItemAtY(m_mousey);
+		if (item >= 0)
+		{
+			weaponwheelmenu.cursor = item;
+			weaponwheelmenu.mouse_down = true;
+			weaponwheelmenu.mouse_item = item;
+			weaponwheelmenu.mouse_dragged = false;
+		}
+		else
+			M_WeaponWheel_ClearMouseDrag();
+		break;
+	}
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		m_entersound = true;
+		M_WeaponWheel_ToggleSelected();
+		break;
+
+	case K_UPARROW:
+		if (keydown[K_SHIFT])
+			M_WeaponWheel_MoveSelected(-1);
+		else
+			M_WeaponWheel_MoveCursor(-1);
+		break;
+
+	case K_DOWNARROW:
+		if (keydown[K_SHIFT])
+			M_WeaponWheel_MoveSelected(1);
+		else
+			M_WeaponWheel_MoveCursor(1);
+		break;
+
+	case K_MWHEELUP:
+		M_WeaponWheel_MoveCursor(-1);
+		break;
+
+	case K_MWHEELDOWN:
+		M_WeaponWheel_MoveCursor(1);
+		break;
+
+	case K_LEFTARROW:
+	case '[':
+		M_WeaponWheel_MoveSelected(-1);
+		break;
+
+	case K_RIGHTARROW:
+	case ']':
+		M_WeaponWheel_MoveSelected(1);
+		break;
+	}
+}
+
+void M_WeaponWheel_Mousemove(int cx, int cy)
+{
+	int item = M_WeaponWheel_ItemAtY(cy);
+
+	if (weaponwheelmenu.preview)
+	{
+		weaponwheelmenu.preview_pick = Wheel_MenuPreviewPickFromPoint(weaponwheelmenu.preview_pick,
+			(float)cx, (float)cy);
+		return;
+	}
+
+	if (weaponwheelmenu.mouse_down)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			M_WeaponWheel_FinishMouseClick();
+			return;
+		}
+
+		if (item != weaponwheelmenu.mouse_item)
+			weaponwheelmenu.mouse_dragged = true;
+
+		if (weaponwheelmenu.mouse_item >= 0 &&
+			weaponwheelmenu.mouse_item < weaponwheelmenu.visible_count &&
+			item >= 0 && item < weaponwheelmenu.visible_count)
+		{
+			M_WeaponWheel_MoveItem(weaponwheelmenu.mouse_item, item);
+		}
+		return;
+	}
+
+	if (item >= 0)
+		weaponwheelmenu.cursor = item;
 }
 
 /*
@@ -25532,6 +26141,7 @@ static struct
 	{"menu_mouse", M_Menu_Mouse_f},
 	{"menu_controller", M_Menu_Controller_f},
 	{"menu_controller_test", M_Menu_Controller_Test_f},
+	{"menu_weaponwheel", M_Menu_WeaponWheel_f},
 	{"menu_sound", M_Menu_Sound_f},
 	{"menu_voip", M_Menu_Voip_f},
 	{"menu_game", M_Menu_Game_f},
@@ -25847,6 +26457,10 @@ void M_Draw (void)
 		M_Controller_Test_Draw();
 		break;
 
+	case m_weaponwheel:
+		M_WeaponWheel_Draw();
+		break;
+
 	case m_calibration:
 		M_Calibration_Update();
 		if (m_state == m_calibration)
@@ -26101,6 +26715,10 @@ void M_Keydown (int key, qboolean repeat)
 		M_Controller_Test_Key(key);
 		return;
 
+	case m_weaponwheel:
+		M_WeaponWheel_Key(key);
+		return;
+
 	case m_calibration:
 		M_Calibration_Key(key);
 		return;
@@ -26304,6 +26922,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 		return;
 
 	case m_controller_test:
+		return;
+
+	case m_weaponwheel:
+		M_WeaponWheel_Mousemove(x, y);
 		return;
 
 	case m_colorpicker:

@@ -584,6 +584,15 @@ void	Wheel_ClearIcons (void);
 qboolean Wheel_BlockBButton (void);
 void	Wheel_BlockBButtonRelease (void);
 void	Wheel_ClearBBlock (void);
+const char *Wheel_MenuWeaponName (int weapon_index);
+qboolean Wheel_MenuWeaponAvailable (int weapon_index);
+void	Wheel_MenuBuildOrder (int *visible, int *visible_count, int *hidden, int *hidden_count, int max_count);
+void	Wheel_MenuSetOrder (const int *visible, int visible_count);
+void	Wheel_MenuResetOrder (void);
+int		Wheel_MenuPreviewStart (void);
+int		Wheel_MenuPreviewScroll (int pick, int direction);
+int		Wheel_MenuPreviewPickFromPoint (int pick, float x, float y);
+void	Wheel_MenuDrawPreview (int pick);
 void	Wheel_Draw (void);
 void	Wheel_ShutdownGL (void);	// invalidate cached GLSL program on context loss
 
