@@ -5016,6 +5016,449 @@ static void Host_Noclip_f (void)
 }
 
 #define VectorClear(v) ((v)[0] = (v)[1] = (v)[2] = 0) // woods #setlast
+#define HOST_SETPOS_TRACE_UP			256.0f
+#define HOST_SETPOS_TRACE_DOWN			2048.0f
+#define HOST_SETPOS_MIN_FLOOR_Z			0.7f
+#define HOST_SETPOS_END_RING_COUNT		8
+#define HOST_SETPOS_END_TRIGGER_MARGIN	96.0f
+#define HOST_SETPOS_MIDDLE_RING_STEP	128.0f
+#define HOST_SETPOS_MIDDLE_MAX_RINGS	48
+
+typedef struct host_setpos_item_target_s
+{
+	const char *alias;
+	const char *classname;
+	int spawnflags;
+} host_setpos_item_target_t;
+
+static const host_setpos_item_target_t host_setpos_item_targets[] =
+{
+	{ "quad",	"item_artifact_super_damage",		0 },
+	{ "pent",	"item_artifact_invulnerability",	0 },
+	{ "rl",		"weapon_rocketlauncher",			0 },
+	{ "gl",		"weapon_grenadelauncher",			0 },
+	{ "sg",		"weapon_shotgun",					0 },
+	{ "ssg",	"weapon_supershotgun",				0 },
+	{ "sng",	"weapon_supernailgun",				0 },
+	{ "ng",		"weapon_nailgun",					0 },
+	{ "lg",		"weapon_lightning",					0 },
+	{ "mega",	"item_health",						2 },
+	{ "ring",	"item_artifact_invisibility",		0 },
+	{ "eyes",	"item_artifact_invisibility",		0 },
+	{ "suit",	"item_artifact_envirosuit",			0 }
+};
+
+static qboolean Host_SetPosClassnameIs(const edict_t *ent, const char *classname)
+{
+	if (!ent || ent->free || !ent->v.classname)
+		return false;
+
+	return !strcmp(PR_GetString(ent->v.classname), classname);
+}
+
+static edict_t *Host_SetPosFindClassname(const char *classname)
+{
+	int entnum;
+
+	for (entnum = 0; entnum < qcvm->num_edicts; entnum++)
+	{
+		edict_t *ent = EDICT_NUM(entnum);
+
+		if (Host_SetPosClassnameIs(ent, classname))
+			return ent;
+	}
+
+	return NULL;
+}
+
+static void Host_SetPosEntityCenter(const edict_t *ent, vec3_t out)
+{
+	VectorAdd(ent->v.absmin, ent->v.absmax, out);
+	VectorScale(out, 0.5f, out);
+
+	if (DotProduct(out, out) == 0.0f)
+		VectorCopy(ent->v.origin, out);
+}
+
+static float Host_SetPosDistanceSquared(const vec3_t a, const vec3_t b)
+{
+	vec3_t delta;
+
+	VectorSubtract(a, b, delta);
+	return DotProduct(delta, delta);
+}
+
+static const host_setpos_item_target_t *Host_SetPosFindItemTarget(const char *alias)
+{
+	size_t i;
+
+	for (i = 0; i < Q_COUNTOF(host_setpos_item_targets); i++)
+		if (!q_strcasecmp(alias, host_setpos_item_targets[i].alias))
+			return &host_setpos_item_targets[i];
+
+	return NULL;
+}
+
+static qboolean Host_SetPosItemTargetMatches(const edict_t *ent, const host_setpos_item_target_t *target)
+{
+	if (!Host_SetPosClassnameIs(ent, target->classname))
+		return false;
+
+	if (target->spawnflags && (((int)ent->v.spawnflags & target->spawnflags) != target->spawnflags))
+		return false;
+
+	return true;
+}
+
+static qboolean Host_SetPosFindItem(const host_setpos_item_target_t *target, const char *alias, vec3_t origin, int *match_index, int *match_count)
+{
+	static char last_alias[16];
+	static char last_map[MAX_QPATH];
+	static int last_entnum = -1;
+	qboolean reset_cycle;
+	int entnum, first_entnum = -1, selected_entnum = -1;
+	int selected_index = 0, count = 0;
+	int start_after;
+	edict_t *ent;
+
+	reset_cycle = q_strcasecmp(last_alias, alias) || strcmp(last_map, sv.name);
+	start_after = reset_cycle ? -1 : last_entnum;
+
+	for (entnum = 0; entnum < qcvm->num_edicts; entnum++)
+	{
+		ent = EDICT_NUM(entnum);
+		if (!Host_SetPosItemTargetMatches(ent, target))
+			continue;
+
+		count++;
+		if (first_entnum < 0)
+			first_entnum = entnum;
+		if (selected_entnum < 0 && entnum > start_after)
+		{
+			selected_entnum = entnum;
+			selected_index = count;
+		}
+	}
+
+	if (count <= 0)
+		return false;
+
+	if (selected_entnum < 0)
+	{
+		selected_entnum = first_entnum;
+		selected_index = 1;
+	}
+
+	ent = EDICT_NUM(selected_entnum);
+	VectorCopy(ent->v.origin, origin);
+	if (DotProduct(origin, origin) == 0.0f)
+		Host_SetPosEntityCenter(ent, origin);
+
+	q_strlcpy(last_alias, alias, sizeof(last_alias));
+	q_strlcpy(last_map, sv.name, sizeof(last_map));
+	last_entnum = selected_entnum;
+
+	if (match_index)
+		*match_index = selected_index;
+	if (match_count)
+		*match_count = count;
+
+	return true;
+}
+
+static qboolean Host_SetPosFindStart(vec3_t origin, vec3_t angles)
+{
+	static const char *start_classnames[] = {
+		"info_player_start",
+		"info_player_coop",
+		"info_player_deathmatch"
+	};
+	size_t i;
+
+	for (i = 0; i < Q_COUNTOF(start_classnames); i++)
+	{
+		edict_t *ent = Host_SetPosFindClassname(start_classnames[i]);
+
+		if (ent)
+		{
+			VectorCopy(ent->v.origin, origin);
+			VectorCopy(ent->v.angles, angles);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static float Host_SetPosVerticalMaxOffset(void)
+{
+	float height, max_offset;
+
+	if (!qcvm->worldmodel)
+		return 512.0f;
+
+	height = qcvm->worldmodel->maxs[2] - qcvm->worldmodel->mins[2];
+	max_offset = q_max(512.0f, height * 0.5f);
+	return max_offset;
+}
+
+static qboolean Host_SetPosTryFloorProbe(edict_t *mover, const vec3_t base, float vertical_offset, vec3_t out)
+{
+	vec3_t old_origin, probe, above, below, spot;
+	trace_t trace;
+
+	VectorCopy(mover->v.origin, old_origin);
+
+	VectorCopy(base, probe);
+	probe[2] += vertical_offset;
+
+	VectorCopy(probe, above);
+	above[2] += HOST_SETPOS_TRACE_UP;
+	VectorCopy(probe, below);
+	below[2] -= HOST_SETPOS_TRACE_DOWN;
+
+	trace = SV_Move(above, vec3_origin, vec3_origin, below,
+		MOVE_NOMONSTERS, mover);
+	if (trace.allsolid || trace.startsolid ||
+		trace.fraction >= 1.0f ||
+		trace.plane.normal[2] < HOST_SETPOS_MIN_FLOOR_Z)
+	{
+		VectorCopy(old_origin, mover->v.origin);
+		return false;
+	}
+
+	VectorCopy(trace.endpos, spot);
+	spot[2] += -mover->v.mins[2] + 1.0f;
+
+	VectorCopy(spot, mover->v.origin);
+	if (!SV_TestEntityPosition(mover) && SV_CheckBottom(mover))
+	{
+		VectorCopy(spot, out);
+		VectorCopy(old_origin, mover->v.origin);
+		return true;
+	}
+
+	VectorCopy(old_origin, mover->v.origin);
+	return false;
+}
+
+static qboolean Host_SetPosProbeFloorSpot(edict_t *mover, const vec3_t base, vec3_t out)
+{
+	static const float close_vertical_offsets[] = {
+		0.0f, 64.0f, -64.0f, 128.0f, -128.0f, 256.0f, -256.0f
+	};
+	float max_offset, offset;
+	size_t i;
+
+	for (i = 0; i < Q_COUNTOF(close_vertical_offsets); i++)
+		if (Host_SetPosTryFloorProbe(mover, base, close_vertical_offsets[i], out))
+			return true;
+
+	max_offset = Host_SetPosVerticalMaxOffset();
+	for (offset = 512.0f; offset <= max_offset; offset *= 2.0f)
+	{
+		if (Host_SetPosTryFloorProbe(mover, base, offset, out))
+			return true;
+		if (Host_SetPosTryFloorProbe(mover, base, -offset, out))
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean Host_SetPosFindSafeSpotNear(edict_t *mover, const vec3_t base, vec3_t out, int ring_count, float ring_step)
+{
+	static const float ring_xy[][2] = {
+		{ 1.0f,  0.0f},
+		{-1.0f,  0.0f},
+		{ 0.0f,  1.0f},
+		{ 0.0f, -1.0f},
+		{ 0.7071f,  0.7071f},
+		{-0.7071f,  0.7071f},
+		{ 0.7071f, -0.7071f},
+		{-0.7071f, -0.7071f},
+		{ 0.9239f,  0.3827f},
+		{-0.9239f,  0.3827f},
+		{ 0.9239f, -0.3827f},
+		{-0.9239f, -0.3827f},
+		{ 0.3827f,  0.9239f},
+		{-0.3827f,  0.9239f},
+		{ 0.3827f, -0.9239f},
+		{-0.3827f, -0.9239f}
+	};
+	vec3_t old_origin;
+	float old_solid, old_movetype;
+	size_t i;
+	int ring;
+
+	VectorCopy(mover->v.origin, old_origin);
+	old_solid = mover->v.solid;
+	old_movetype = mover->v.movetype;
+	mover->v.solid = SOLID_SLIDEBOX;
+	mover->v.movetype = MOVETYPE_WALK;
+
+	if (Host_SetPosProbeFloorSpot(mover, base, out))
+		goto found;
+
+	for (ring = 1; ring <= ring_count; ring++)
+	{
+		float radius = ring * ring_step;
+
+		for (i = 0; i < Q_COUNTOF(ring_xy); i++)
+		{
+			vec3_t probe;
+
+			VectorCopy(base, probe);
+			probe[0] += ring_xy[i][0] * radius;
+			probe[1] += ring_xy[i][1] * radius;
+
+			if (Host_SetPosProbeFloorSpot(mover, probe, out))
+				goto found;
+		}
+	}
+
+	VectorCopy(old_origin, mover->v.origin);
+	mover->v.solid = old_solid;
+	mover->v.movetype = old_movetype;
+	return false;
+
+found:
+	VectorCopy(old_origin, mover->v.origin);
+	mover->v.solid = old_solid;
+	mover->v.movetype = old_movetype;
+	return true;
+}
+
+static int Host_SetPosMiddleRingCount(void)
+{
+	float width, depth, max_extent;
+	int rings;
+
+	if (!qcvm->worldmodel)
+		return HOST_SETPOS_MIDDLE_MAX_RINGS;
+
+	width = qcvm->worldmodel->maxs[0] - qcvm->worldmodel->mins[0];
+	depth = qcvm->worldmodel->maxs[1] - qcvm->worldmodel->mins[1];
+	max_extent = q_max(width, depth) * 0.5f;
+	rings = (int)(max_extent / HOST_SETPOS_MIDDLE_RING_STEP) + 1;
+	rings = q_max(rings, 1);
+	rings = q_min(rings, HOST_SETPOS_MIDDLE_MAX_RINGS);
+	return rings;
+}
+
+static void Host_SetPosTriggerOutsidePoint(const edict_t *trigger, const vec3_t reference, vec3_t out)
+{
+	vec3_t center, dir;
+	float len, half_x, half_y, dist_x, dist_y, edge_dist;
+
+	Host_SetPosEntityCenter(trigger, center);
+	VectorSubtract(reference, center, dir);
+	dir[2] = 0.0f;
+	len = VectorLength(dir);
+	if (len < 1.0f)
+	{
+		dir[0] = -1.0f;
+		dir[1] = 0.0f;
+		dir[2] = 0.0f;
+	}
+	else
+	{
+		VectorScale(dir, 1.0f / len, dir);
+	}
+
+	half_x = q_max(fabs(center[0] - trigger->v.absmin[0]), fabs(trigger->v.absmax[0] - center[0]));
+	half_y = q_max(fabs(center[1] - trigger->v.absmin[1]), fabs(trigger->v.absmax[1] - center[1]));
+	dist_x = (fabs(dir[0]) > 0.001f) ? half_x / fabs(dir[0]) : 999999.0f;
+	dist_y = (fabs(dir[1]) > 0.001f) ? half_y / fabs(dir[1]) : 999999.0f;
+	edge_dist = q_min(dist_x, dist_y);
+	if (edge_dist > 999998.0f)
+		edge_dist = 0.0f;
+
+	VectorMA(center, edge_dist + HOST_SETPOS_END_TRIGGER_MARGIN, dir, out);
+	out[2] = center[2];
+}
+
+static qboolean Host_SetPosFindEnd(vec3_t origin)
+{
+	edict_t *start = Host_SetPosFindClassname("info_player_start");
+	vec3_t reference;
+	edict_t *best = NULL;
+	float best_dist = -1.0f;
+	int entnum;
+
+	if (start)
+		VectorCopy(start->v.origin, reference);
+	else
+		VectorCopy(sv_player->v.origin, reference);
+
+	for (entnum = 0; entnum < qcvm->num_edicts; entnum++)
+	{
+		edict_t *ent = EDICT_NUM(entnum);
+		vec3_t center;
+		float dist;
+
+		if (!Host_SetPosClassnameIs(ent, "trigger_changelevel"))
+			continue;
+
+		Host_SetPosEntityCenter(ent, center);
+		dist = Host_SetPosDistanceSquared(center, reference);
+		if (!best || dist > best_dist)
+		{
+			best = ent;
+			best_dist = dist;
+			VectorCopy(center, origin);
+		}
+	}
+
+	if (!best)
+		return false;
+
+	Host_SetPosTriggerOutsidePoint(best, reference, origin);
+	if (Host_SetPosFindSafeSpotNear(sv_player, origin, origin,
+		HOST_SETPOS_END_RING_COUNT, HOST_SETPOS_MIDDLE_RING_STEP))
+		return true;
+
+	return true;
+}
+
+static qboolean Host_SetPosFindMiddle(vec3_t origin)
+{
+	if (!qcvm->worldmodel)
+		return false;
+
+	/* Geometric BSP bounds center; this is not aware of playable route flow. */
+	VectorAdd(qcvm->worldmodel->mins, qcvm->worldmodel->maxs, origin);
+	VectorScale(origin, 0.5f, origin);
+
+	return Host_SetPosFindSafeSpotNear(sv_player, origin, origin,
+		Host_SetPosMiddleRingCount(), HOST_SETPOS_MIDDLE_RING_STEP);
+}
+
+static void Host_SetPosApply(const vec3_t origin, const vec3_t angles, qboolean use_angles, qboolean force_noclip)
+{
+	vec3_t forward, right, up;
+
+	if (force_noclip && sv_player->v.movetype != MOVETYPE_NOCLIP)
+	{
+		noclip_anglehack = true;
+		sv_player->v.movetype = MOVETYPE_NOCLIP;
+		SV_ClientPrintf ("noclip ON\n");
+	}
+
+	VectorClear(sv_player->v.velocity);
+	VectorCopy(origin, sv_player->v.origin);
+
+	if (use_angles)
+	{
+		VectorCopy(angles, sv_player->v.angles);
+		sv_player->v.fixangle = 1;
+	}
+
+	AngleVectors(sv_player->v.angles, forward, right, up);
+	S_Update(sv_player->v.origin, forward, right, up);
+
+	SV_LinkEdict(sv_player, false);
+}
 
 /*
 ====================
@@ -5028,7 +5471,11 @@ static void Host_SetPos_f(void)
 {
 	int     i, numargs;
 	float   args[6];
-	vec3_t	forward, right, up;
+	const char *target;
+	const host_setpos_item_target_t *item_target;
+	vec3_t origin, angles;
+	qboolean use_angles;
+	int match_index, match_count;
 
 	if (cmd_source != src_client)
 	{
@@ -5043,26 +5490,76 @@ static void Host_SetPos_f(void)
 	extern vec3_t last_viewangles; // woods  #setlast
 	extern qboolean has_last_viewpos; // woods #setlast
 
-	if (Cmd_Argc() == 2 && !q_strcasecmp(Cmd_Argv(1), "last")) // woods #setlast
+	if (Cmd_Argc() == 2)
 	{
-		if (!has_last_viewpos)
+		target = Cmd_Argv(1);
+		item_target = NULL;
+		use_angles = false;
+		VectorCopy(sv_player->v.angles, angles);
+
+		if (!q_strcasecmp(target, "last")) // woods #setlast
 		{
-			SV_ClientPrintf("\nno previous viewpos available\n\n");
+			if (!has_last_viewpos)
+			{
+				SV_ClientPrintf("\nno previous viewpos available\n\n");
+				return;
+			}
+
+			Host_SetPosApply(last_viewpos, last_viewangles, true, false);
 			return;
 		}
 
-		VectorCopy(last_viewpos, sv_player->v.origin);
-		VectorCopy(last_viewangles, sv_player->v.angles);
-		sv_player->v.fixangle = 1;
+		if (!q_strcasecmp(target, "start"))
+		{
+			if (!Host_SetPosFindStart(origin, angles))
+			{
+				SV_ClientPrintf("setpos start: no player start found\n");
+				return;
+			}
+			use_angles = true;
+		}
+		else if (!q_strcasecmp(target, "end"))
+		{
+			if (!Host_SetPosFindEnd(origin))
+			{
+				SV_ClientPrintf("setpos end: no changelevel trigger found\n");
+				return;
+			}
+		}
+		else if (!q_strcasecmp(target, "middle"))
+		{
+			if (!Host_SetPosFindMiddle(origin))
+			{
+				SV_ClientPrintf("setpos middle: no safe middle spot found\n");
+				return;
+			}
+		}
+		else if ((item_target = Host_SetPosFindItemTarget(target)) != NULL)
+		{
+			if (!Host_SetPosFindItem(item_target, target, origin, &match_index, &match_count))
+			{
+				SV_ClientPrintf("setpos %s: no matching item found\n", target);
+				return;
+			}
+		}
+		else
+			goto parse_coords;
 
-		VectorClear(sv_player->v.velocity);
-
-		AngleVectors(sv_player->v.angles, forward, right, up);
-		S_Update(sv_player->v.origin, forward, right, up);
-
-		SV_LinkEdict(sv_player, false);
+		Host_SetPosApply(origin, angles, use_angles, true);
+		if (item_target && match_count > 1)
+			SV_ClientPrintf("setpos %s %i/%i: %i %i %i\n", target, match_index, match_count,
+				(int)sv_player->v.origin[0],
+				(int)sv_player->v.origin[1],
+				(int)sv_player->v.origin[2]);
+		else
+			SV_ClientPrintf("setpos %s: %i %i %i\n", target,
+				(int)sv_player->v.origin[0],
+				(int)sv_player->v.origin[1],
+				(int)sv_player->v.origin[2]);
 		return;
 	}
+
+parse_coords:
 
 	for (i = 1, numargs = 0; i < Cmd_Argc(); i++)
 	{
@@ -5078,6 +5575,8 @@ static void Host_SetPos_f(void)
 		SV_ClientPrintf("usage:\n");
 		SV_ClientPrintf("   setpos <x> <y> <z>\n");
 		SV_ClientPrintf("   setpos <x> <y> <z> <pitch> <yaw> <roll>\n");
+		SV_ClientPrintf("   setpos start | end | middle | last\n");
+		SV_ClientPrintf("   setpos quad | pent | ring | eyes | suit | mega | rl | gl | lg | sng | ng | ssg | sg\n");
 		SV_ClientPrintf("current values:\n");
 		SV_ClientPrintf("   %i %i %i %i %i %i\n",
 			(int)sv_player->v.origin[0],
@@ -5089,34 +5588,18 @@ static void Host_SetPos_f(void)
 		return;
 	}
 
-	if (sv_player->v.movetype != MOVETYPE_NOCLIP)
-	{
-		noclip_anglehack = true;
-		sv_player->v.movetype = MOVETYPE_NOCLIP;
-		SV_ClientPrintf ("noclip ON\n");
-	}
-
-	//make sure they're not going to whizz away from it
-	sv_player->v.velocity[0] = 0;
-	sv_player->v.velocity[1] = 0;
-	sv_player->v.velocity[2] = 0;
-
-	sv_player->v.origin[0] = args[0];
-	sv_player->v.origin[1] = args[1];
-	sv_player->v.origin[2] = args[2];
-
+	origin[0] = args[0];
+	origin[1] = args[1];
+	origin[2] = args[2];
+	VectorCopy(sv_player->v.angles, angles);
 	if (numargs == 6)
 	{
-		sv_player->v.angles[0] = args[3];
-		sv_player->v.angles[1] = args[4];
-		sv_player->v.angles[2] = args[5];
-		sv_player->v.fixangle = 1;
+		angles[0] = args[3];
+		angles[1] = args[4];
+		angles[2] = args[5];
 	}
 
-	AngleVectors(sv_player->v.angles, forward, right, up);
-	S_Update(sv_player->v.origin, forward, right, up);
-
-	SV_LinkEdict (sv_player, false);
+	Host_SetPosApply(origin, angles, numargs == 6, true);
 }
 
 /*

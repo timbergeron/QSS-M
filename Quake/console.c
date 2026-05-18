@@ -3604,6 +3604,15 @@ static qboolean CompleteSetpos(const char* partial, void* unused) // woods
 		return false;
 	
 	extern qboolean has_last_viewpos;
+	static const char* targets[] = {
+		"start", "end", "middle",
+		"quad", "pent", "ring", "eyes", "suit", "mega",
+		"rl", "gl", "lg", "sng", "ng", "ssg", "sg"
+	};
+	size_t i;
+
+	for (i = 0; i < Q_COUNTOF(targets); i++)
+		Con_AddToTabList(targets[i], partial, NULL, NULL);
 
 	if (has_last_viewpos)
 		Con_AddToTabList("last", partial, NULL, NULL); // #demolistsort add arg
