@@ -1343,8 +1343,28 @@ static void GetGameSummary(summary_t* s)
 	}
 }
 
-static qboolean Summary_HasLevelStats(const summary_t *s)
+static qboolean Summary_IsKnownCTFMap (const char *mapname)
 {
+	if (!mapname)
+		return false;
+
+	if (!q_strncasecmp (mapname, "ctf", 3) &&
+		mapname[3] >= '1' && mapname[3] <= '8' &&
+		mapname[4] == '\0')
+		return true;
+
+	return !q_strncasecmp (mapname, "ctf2m", 5) &&
+		mapname[5] >= '1' && mapname[5] <= '8' &&
+		mapname[6] == '\0';
+}
+
+static qboolean Summary_HasLevelStats (const summary_t *s)
+{
+	// Known CTF maps are multiplayer maps, so don't show single-player stats
+	// even when the BSP contains monsters or secrets.
+	if (Summary_IsKnownCTFMap (s->map))
+		return false;
+
 	return s->stats.total_monsters > 0 || s->stats.total_secrets > 0;
 }
 
