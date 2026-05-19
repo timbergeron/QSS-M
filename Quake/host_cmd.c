@@ -7435,6 +7435,11 @@ for compatibility with quakeworld et al, we also allow this as a user-command to
 */
 void Host_Reconnect_Con_f (void)
 {
+	extern char	lastmphost[NET_NAMELEN]; // woods #connectlast
+	qboolean Host_GetLastServer(char *name, size_t namesize);
+	char fallback[NET_NAMELEN];
+	const char *target = NULL;
+
 	CL_Disconnect_f();
 	cls.demonum = -1;		// stop demo loop in case this fails
 	if (cls.demoplayback)
@@ -7442,7 +7447,14 @@ void Host_Reconnect_Con_f (void)
 		CL_StopPlayback ();
 		CL_Disconnect ();
 	}
-	if (!CL_BeginConnect(NULL))
+
+	// ignore local: reconnect should target the last network server
+	if (*lastmphost && q_strcasecmp(lastmphost, "local") && q_strcasecmp(lastmphost, "localhost"))
+		target = lastmphost;
+	else if (Host_GetLastServer(fallback, sizeof(fallback)))
+		target = fallback;
+
+	if (!target || !CL_BeginConnect(target))
 		Con_Printf("reconnect failed\n");
 }
 static void Host_Reconnect_Sv_f (void)
