@@ -50,41 +50,91 @@ void Cvar_List_f (void)
 {
 	cvar_t	*cvar;
 	const char 	*partial;
-	int		len, count;
+	int		i, len, count, modified, archived, serverinfo;
+	qboolean	filter_modified, filter_archived, filter_serverinfo;
 
-	if (Cmd_Argc() > 1)
+	partial = NULL;
+	len = 0;
+	filter_modified = filter_archived = filter_serverinfo = false;
+
+	// args may be filter flags (any combination of !, *, s — combined like "*!s" or as separate args)
+	// and/or a partial name prefix. A token made up entirely of flag chars is treated as flags.
+	for (i = 1; i < Cmd_Argc(); i++)
 	{
-		partial = Cmd_Argv (1);
-		len = Q_strlen(partial);
-	}
-	else
-	{
-		partial = NULL;
-		len = 0;
+		const char	*arg = Cmd_Argv(i);
+		const char	*c;
+		qboolean	flags_only = (*arg != '\0');
+
+		for (c = arg; *c; c++)
+		{
+			if (*c != '!' && *c != '*' && *c != 's')
+			{
+				flags_only = false;
+				break;
+			}
+		}
+
+		if (flags_only)
+		{
+			for (c = arg; *c; c++)
+			{
+				if (*c == '!') filter_modified = true;
+				else if (*c == '*') filter_archived = true;
+				else if (*c == 's') filter_serverinfo = true;
+			}
+		}
+		else if (!partial && *arg)
+		{
+			partial = arg;
+			len = Q_strlen(partial);
+		}
 	}
 
-	count = 0;
+	count = modified = archived = serverinfo = 0;
 	for (cvar = cvar_vars ; cvar ; cvar = cvar->next)
 	{
+		qboolean is_modified, is_archived, is_serverinfo;
+
 		if (partial && Q_strncmp(partial, cvar->name, len))
 		{
 			continue;
 		}
+		is_modified   = (strcmp(cvar->string, cvar->default_string) != 0);
+		is_archived   = (cvar->flags & CVAR_ARCHIVE) != 0;
+		is_serverinfo = (cvar->flags & CVAR_NOTIFY)  != 0;
+
+		if (filter_modified   && !is_modified)   continue;
+		if (filter_archived   && !is_archived)   continue;
+		if (filter_serverinfo && !is_serverinfo) continue;
+
 		Con_SafePrintf ("%s%s%s %s \"%s\"\n",
-			strcmp(cvar->string, cvar->default_string) ? "!" : " ",
-			(cvar->flags & CVAR_ARCHIVE) ? "*" : " ",
-			(cvar->flags & CVAR_NOTIFY)  ? "s" : " ",
+			is_modified  ? "!" : " ",
+			is_archived  ? "*" : " ",
+			is_serverinfo ? "s" : " ",
 			cvar->name,
 			cvar->string);
 		count++;
+		if (is_modified)   modified++;
+		if (is_archived)   archived++;
+		if (is_serverinfo) serverinfo++;
 	}
 
-	Con_SafePrintf ("%i cvars", count);
+	Con_SafePrintf ("\n");
+	Con_SafePrintf (" ^m!^m modified   ^m*^m archived   ^ms^m serverinfo\n");
+	Con_SafePrintf ("\n");
+	Con_SafePrintf (" ^m%i^m cvars", count);
+	if (filter_modified || filter_archived || filter_serverinfo)
+	{
+		Con_SafePrintf (" with ^m%s%s%s^m",
+			filter_modified   ? "!" : "",
+			filter_archived   ? "*" : "",
+			filter_serverinfo ? "s" : "");
+	}
 	if (partial)
 	{
-		Con_SafePrintf (" beginning with \"%s\"", partial);
+		Con_SafePrintf (" matching \"^m%s^m\"", partial);
 	}
-	Con_SafePrintf ("\n");
+	Con_SafePrintf ("  (^m%i^m modified, ^m%i^m archived, ^m%i^m serverinfo)\n", modified, archived, serverinfo);
 }
 
 /*
