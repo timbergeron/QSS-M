@@ -1216,6 +1216,255 @@ void Sky_SetWindParams(float dist, float yaw, float period, float pitch)
 //
 //==============================================================================
 
+static float skyflatcolor_avg[3];
+static qboolean skyflatcolor_avg_valid;
+
+/*
+=============
+Sky_ApplyFlatColor
+
+Sets skyflatcolor from r_fastskycolor if the cvar parses to a real colour,
+otherwise from the cached pixel average computed at map-load.
+==============
+*/
+static void Sky_ApplyFlatColor (void)
+{
+	plcolour_t sky_color = CL_PLColours_Parse (r_fastskycolor.string);
+
+	if (sky_color.type != 0)
+	{
+		byte *rgb = CL_PLColours_ToRGB (&sky_color);
+		if (rgb)
+		{
+			skyflatcolor[0] = (float)rgb[0] / 255.0f;
+			skyflatcolor[1] = (float)rgb[1] / 255.0f;
+			skyflatcolor[2] = (float)rgb[2] / 255.0f;
+			return;
+		}
+		skyflatcolor[0] = skyflatcolor[1] = skyflatcolor[2] = 0.0f;
+		return;
+	}
+
+	if (skyflatcolor_avg_valid)
+	{
+		skyflatcolor[0] = skyflatcolor_avg[0];
+		skyflatcolor[1] = skyflatcolor_avg[1];
+		skyflatcolor[2] = skyflatcolor_avg[2];
+	}
+	else
+	{
+		skyflatcolor[0] = skyflatcolor[1] = skyflatcolor[2] = 0.0f;
+	}
+}
+
+/*
+=============
+Sky_SetFlatColorAverage / Sky_InvalidateFlatColorAverage
+
+Cache (or clear) the map-load pixel average and reapply skyflatcolor so
+r_fastskycolor still wins when it's set.
+==============
+*/
+static void Sky_SetFlatColorAverage (float r, float g, float b)
+{
+	skyflatcolor_avg[0] = r;
+	skyflatcolor_avg[1] = g;
+	skyflatcolor_avg[2] = b;
+	skyflatcolor_avg_valid = true;
+	Sky_ApplyFlatColor ();
+}
+
+static void Sky_InvalidateFlatColorAverage (void)
+{
+	skyflatcolor_avg_valid = false;
+	Sky_ApplyFlatColor ();
+}
+
+/*
+=============
+Sky_FastSkyColorChanged
+
+Cvar callback so runtime changes to r_fastskycolor take effect without
+a map reload.
+==============
+*/
+static void Sky_FastSkyColorChanged (cvar_t *var)
+{
+	(void)var;
+	Sky_ApplyFlatColor ();
+}
+
+/*
+=============
+Sky_AverageBspFront
+
+Average opaque pixels of the left (front) half of a BSP sky miptex.
+src is the full miptex pixel buffer; each row is [front | back] of
+`width = srcwidth/2` blocks. Returns false if no opaque pixels or
+unsupported format.
+==============
+*/
+static qboolean Sky_AverageBspFront (const byte *src, int srcwidth, int height, enum srcformat fmt,
+									 float *out_r, float *out_g, float *out_b)
+{
+	int width = srcwidth / 2;
+	uint64_t r = 0, g = 0, b = 0, count = 0;
+	int x, y;
+
+	if (srcwidth <= 0 || height <= 0)
+		return false;
+
+	if (fmt == SRC_INDEXED)
+	{
+		for (y = 0; y < height; y++)
+		{
+			const byte *row = src + (size_t)y * (size_t)srcwidth;
+			for (x = 0; x < width; x++)
+			{
+				byte p = row[x];
+				if (p != 0)
+				{
+					unsigned *rgba = &d_8to24table[p];
+					r += ((byte *)rgba)[0];
+					g += ((byte *)rgba)[1];
+					b += ((byte *)rgba)[2];
+					count++;
+				}
+			}
+		}
+	}
+	else if (fmt == SRC_RGBA)
+	{
+		for (y = 0; y < height; y++)
+		{
+			const byte *row = src + (size_t)y * (size_t)srcwidth * 4;
+			for (x = 0; x < width; x++)
+			{
+				const byte *px = row + (size_t)x * 4;
+				if (px[3] != 0)
+				{
+					r += px[0];
+					g += px[1];
+					b += px[2];
+					count++;
+				}
+			}
+		}
+	}
+	else
+	{
+		return false;
+	}
+
+	if (count == 0)
+		return false;
+
+	*out_r = (float)((double)r / ((double)count * 255.0));
+	*out_g = (float)((double)g / ((double)count * 255.0));
+	*out_b = (float)((double)b / ((double)count * 255.0));
+	return true;
+}
+
+/*
+=============
+Sky_AverageQ64Front
+
+Average pixels of a Quake64 BSP sky miptex front layer. Q64 skies are
+stacked vertically: full-width front on top (halfheight), back below.
+All pixels contribute (Q64 doesn't reserve index 0 as transparent for the
+front layer), matching Sky_LoadTextureQ64's own averaging.
+==============
+*/
+static qboolean Sky_AverageQ64Front (const byte *src, int width, int halfheight,
+									  float *out_r, float *out_g, float *out_b)
+{
+	uint64_t r = 0, g = 0, b = 0, count = 0;
+	size_t i, n;
+
+	if (width <= 0 || halfheight <= 0)
+		return false;
+	n = (size_t)width * (size_t)halfheight;
+
+	for (i = 0; i < n; i++)
+	{
+		unsigned *rgba = &d_8to24table[src[i]];
+		r += ((byte *)rgba)[0];
+		g += ((byte *)rgba)[1];
+		b += ((byte *)rgba)[2];
+		count++;
+	}
+
+	if (count == 0)
+		return false;
+
+	*out_r = (float)((double)r / ((double)count * 255.0));
+	*out_g = (float)((double)g / ((double)count * 255.0));
+	*out_b = (float)((double)b / ((double)count * 255.0));
+	return true;
+}
+
+/*
+=============
+Sky_AverageFullImage
+
+Average opaque pixels of an externally-loaded image (no front/back split).
+Only SRC_RGBA and SRC_INDEXED are supported; other formats (e.g. DDS
+compressed) return false so callers can fall back.
+==============
+*/
+static qboolean Sky_AverageFullImage (const byte *data, int width, int height, enum srcformat fmt,
+									  float *out_r, float *out_g, float *out_b)
+{
+	uint64_t r = 0, g = 0, b = 0, count = 0;
+	size_t i, n;
+
+	if (width <= 0 || height <= 0)
+		return false;
+	n = (size_t)width * (size_t)height;
+
+	if (fmt == SRC_RGBA)
+	{
+		for (i = 0; i < n; i++)
+		{
+			const byte *px = data + i * 4;
+			if (px[3] != 0)
+			{
+				r += px[0];
+				g += px[1];
+				b += px[2];
+				count++;
+			}
+		}
+	}
+	else if (fmt == SRC_INDEXED)
+	{
+		for (i = 0; i < n; i++)
+		{
+			byte p = data[i];
+			if (p != 0)
+			{
+				unsigned *rgba = &d_8to24table[p];
+				r += ((byte *)rgba)[0];
+				g += ((byte *)rgba)[1];
+				b += ((byte *)rgba)[2];
+				count++;
+			}
+		}
+	}
+	else
+	{
+		return false;
+	}
+
+	if (count == 0)
+		return false;
+
+	*out_r = (float)((double)r / ((double)count * 255.0));
+	*out_g = (float)((double)g / ((double)count * 255.0));
+	*out_b = (float)((double)b / ((double)count * 255.0));
+	return true;
+}
+
 /*
 =============
 Sky_LoadTexture
@@ -1226,12 +1475,10 @@ A sky texture is 256*128, with the left side being a masked overlay
 void Sky_LoadTexture (qmodel_t *mod, texture_t *mt, enum srcformat fmt, unsigned int srcwidth, unsigned int height)
 {
 	char		texturename[64];
-	int p, r, g, b, count;
 	unsigned int i;
 	byte		*src;
 	byte	*front_data;
 	byte	*back_data;
-	unsigned	*rgba;
 	unsigned int rows, columns;
 	int bb,bw,bh;
 	int width = srcwidth/2;
@@ -1266,55 +1513,14 @@ void Sky_LoadTexture (qmodel_t *mod, texture_t *mt, enum srcformat fmt, unsigned
 	q_snprintf(texturename, sizeof(texturename), "%s:%s_front", mod->name, mt->name);
 	mt->fullbright = alphaskytexture = TexMgr_LoadImage (mod, texturename, width, height, fmt, front_data, "", (src_offset_t)front_data, TEXPREF_ALPHA);
 
-	r = g = b = count = 0;
-
-	const char* skycolor_str = r_fastskycolor.string;
-	plcolour_t sky_color = CL_PLColours_Parse(skycolor_str);
-	byte* rgb_temp; // temporary pointer for RGB values
-	byte rgb[3]; // local array to copy RGB values safely
-
-	int use_default = sky_color.type == 0;
-
-	if (!use_default) // If custom color is set
+	// average opaque front pixels using the raw miptex (the in-place 0->255
+	// remap above destroyed transparency in front_data for SRC_INDEXED)
 	{
-		rgb_temp = CL_PLColours_ToRGB(&sky_color);
-		if (rgb_temp) // copy the RGB values to a local array for safe usage
-		{
-			rgb[0] = rgb_temp[0];
-			rgb[1] = rgb_temp[1];
-			rgb[2] = rgb_temp[2];
-
-			r = rgb[0];
-			g = rgb[1];
-			b = rgb[2];
-		}
+		float ar, ag, ab;
+		if (Sky_AverageBspFront (src, srcwidth, height, fmt, &ar, &ag, &ab))
+			Sky_SetFlatColorAverage (ar, ag, ab);
 		else
-		{
-			r = g = b = 0.0f; // fallback to black if RGB conversion fails
-		}
-		skyflatcolor[0] = (float)r / 255.0f;
-		skyflatcolor[1] = (float)g / 255.0f;
-		skyflatcolor[2] = (float)b / 255.0f;
-	}
-// calculate r_fastsky color based on average of all opaque foreground colors, if we can.
-	else if (fmt == SRC_INDEXED)
-	{
-		for (i=0 ; i<width*height ; i++)
-		{
-			p = src[i];
-			if (p != 0)
-			{
-				rgba = &d_8to24table[p];
-				r += ((byte *)rgba)[0];
-				g += ((byte *)rgba)[1];
-				b += ((byte *)rgba)[2];
-				count++;
-			}
-		}
-
-		skyflatcolor[0] = (float)r/(count*255);
-		skyflatcolor[1] = (float)g/(count*255);
-		skyflatcolor[2] = (float)b/(count*255);
+			Sky_InvalidateFlatColorAverage ();
 	}
 }
 
@@ -1348,65 +1554,34 @@ void Sky_LoadTextureQ64 (qmodel_t *mod, texture_t *mt)
 	q_snprintf(texturename, sizeof(texturename), "%s:%s_back", mod->name, mt->name);
 	mt->gltexture = solidskytexture = TexMgr_LoadImage (mod, texturename, mt->width, halfheight, SRC_INDEXED, back, "", (src_offset_t)back, TEXPREF_NONE);
 
-	// front layer, convert to RGBA and upload
+	// front layer, convert to RGBA and upload; also average for fast-sky colour
 	p = r = g = b = count = 0;
 
-	const char* skycolor_str = r_fastskycolor.string;
-	plcolour_t sky_color = CL_PLColours_Parse(skycolor_str);
-	byte* rgb_temp; // temporary pointer for RGB values
-	byte rgb[3]; // local array to copy RGB values safely
-
-	int use_default = sky_color.type == 0;
-
-	if (!use_default)
+	for (i = mt->width * halfheight; i != 0; i--)
 	{
-		rgb_temp = CL_PLColours_ToRGB(&sky_color);
-		if (rgb_temp) // copy the RGB values to a local array for safe usage
-		{
-			rgb[0] = rgb_temp[0];
-			rgb[1] = rgb_temp[1];
-			rgb[2] = rgb_temp[2];
+		rgba = &d_8to24table[*front++];
 
-			skyflatcolor[0] = (float)rgb[0] / 255.0f;
-			skyflatcolor[1] = (float)rgb[1] / 255.0f;
-			skyflatcolor[2] = (float)rgb[2] / 255.0f;
-		}
-		else
-		{
-			skyflatcolor[0] = skyflatcolor[1] = skyflatcolor[2] = 0.0f; // fallback to black if RGB conversion fails
-		}
-	}
-	else
-	{
-		for (i = mt->width * halfheight; i != 0; i--)
-		{
-			rgba = &d_8to24table[*front++];
+		// RGB
+		front_rgba[p++] = ((byte*)rgba)[0];
+		front_rgba[p++] = ((byte*)rgba)[1];
+		front_rgba[p++] = ((byte*)rgba)[2];
+		// Alpha
+		front_rgba[p++] = 128; // this look ok to me!
 
-			// RGB
-			front_rgba[p++] = ((byte*)rgba)[0];
-			front_rgba[p++] = ((byte*)rgba)[1];
-			front_rgba[p++] = ((byte*)rgba)[2];
-			// Alpha
-			front_rgba[p++] = 128; // this look ok to me!
-
-			// Fast sky
-			r += ((byte *)rgba)[0];
-			g += ((byte *)rgba)[1];
-			b += ((byte *)rgba)[2];
-			count++;
-		}
+		// Fast sky
+		r += ((byte *)rgba)[0];
+		g += ((byte *)rgba)[1];
+		b += ((byte *)rgba)[2];
+		count++;
 	}
 
 	q_snprintf(texturename, sizeof(texturename), "%s:%s_front", mod->name, mt->name);
 	mt->fullbright = alphaskytexture = TexMgr_LoadImage (mod, texturename, mt->width, halfheight, SRC_RGBA, front_rgba, "", (src_offset_t)front_rgba, TEXPREF_ALPHA);
 
-	if (use_default)
-	{
-		// calculate r_fastsky color based on average of all opaque foreground colors
-		skyflatcolor[0] = (float)r/(count*255);
-		skyflatcolor[1] = (float)g/(count*255);
-		skyflatcolor[2] = (float)b/(count*255);
-	}
+	if (count > 0)
+		Sky_SetFlatColorAverage ((float)r/(count*255), (float)g/(count*255), (float)b/(count*255));
+	else
+		Sky_InvalidateFlatColorAverage ();
 }
 
 /*
@@ -1449,6 +1624,25 @@ qboolean Sky_LoadExternalTextures (qmodel_t* mod, texture_t* mt)
 	{
 		mt->gltexture = solidskytexture = TexMgr_LoadImage(mod, texturename_back, fwidth_back, fheight_back, rfmt_back, back_data, texturename_back, 0, TEXPREF_NONE);
 		mt->fullbright = alphaskytexture = TexMgr_LoadImage(mod, texturename_front, fwidth_front, fheight_front, rfmt_front, front_data, texturename_front, 0, TEXPREF_ALPHA);
+
+		// fast-sky colour: average the external front if its pixels are addressable,
+		// otherwise (compressed DDS etc.) fall back to the BSP miptex using the
+		// right layout for this map's BSP version
+		{
+			float ar, ag, ab;
+			qboolean got = Sky_AverageFullImage (front_data, fwidth_front, fheight_front, rfmt_front, &ar, &ag, &ab);
+			if (!got)
+			{
+				if (mod->bspversion == BSPVERSION_QUAKE64)
+					got = Sky_AverageQ64Front ((const byte *)(mt + 1), mt->width, mt->height / 2, &ar, &ag, &ab);
+				else
+					got = Sky_AverageBspFront ((const byte *)(mt + 1), mt->width, mt->height, SRC_INDEXED, &ar, &ag, &ab);
+			}
+			if (got)
+				Sky_SetFlatColorAverage (ar, ag, ab);
+			else
+				Sky_InvalidateFlatColorAverage ();
+		}
 
 		if (malloced_back) free(back_data);
 		if (malloced_front) free(front_data);
@@ -1776,6 +1970,8 @@ void Sky_ClearAll (void)
 
 	skyroom_enabled = false;
 	externalskyloaded = false; // woods #fastsky2
+	skyflatcolor_avg[0] = skyflatcolor_avg[1] = skyflatcolor_avg[2] = 0.0f;
+	Sky_InvalidateFlatColorAverage (); // also resets skyflatcolor[] via Sky_ApplyFlatColor
 	skybox_name[0] = 0;
 	map_skybox_name[0] = 0;
 	pending_skybox_name[0] = 0;
@@ -2042,6 +2238,7 @@ void Sky_Init (void)
 	Cvar_RegisterVariable (&r_fastsky);
 	Cvar_RegisterVariable (&r_fastskycolor); // woods #fastskycolor
 	Cvar_SetCompletion (&r_fastskycolor, &SKy_Color_Completion_f); // woods #iwtabcomplete #fastskycolor
+	Cvar_SetCallback (&r_fastskycolor, Sky_FastSkyColorChanged);
 	Cvar_RegisterVariable (&r_sky_quality);
 	Cvar_RegisterVariable (&r_skyalpha);
 	Cvar_RegisterVariable (&r_skyfog);
