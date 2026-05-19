@@ -1140,6 +1140,39 @@ byte *Image_LoadLMP (FILE *f, int *width, int *height, enum srcformat *fmt)
 	return data;
 }
 
+/*
+============
+Image_WriteLMP -- writes paletted (qpic/lmp) data: width/height header then indexed bytes
+============
+*/
+qboolean Image_WriteLMP (const char *name, byte *data, int width, int height)
+{
+	int		handle;
+	char		pathname[MAX_OSPATH];
+	unsigned int	hdr[2];
+	size_t		size;
+
+	if (width <= 0 || height <= 0)
+		return false;
+	size = (size_t)width * (size_t)height;
+	if (size > (size_t)INT_MAX)	//Sys_FileWrite takes int; refuse rather than silently truncate
+		return false;
+
+	Sys_mkdir (com_gamedir);
+	q_snprintf (pathname, sizeof(pathname), "%s/%s", com_gamedir, name);
+	handle = Sys_FileOpenWrite (pathname);
+	if (handle == -1)
+		return false;
+
+	hdr[0] = LittleLong (width);
+	hdr[1] = LittleLong (height);
+	Sys_FileWrite (handle, hdr, sizeof(hdr));
+	Sys_FileWrite (handle, data, (int)size);
+	Sys_FileClose (handle);
+
+	return true;
+}
+
 //==============================================================================
 //
 //  STB_IMAGE_WRITE

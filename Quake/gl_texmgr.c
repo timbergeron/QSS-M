@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //gl_texmgr.c -- fitzquake's texture manager. manages opengl texture images
 
 #include "quakedef.h"
+#include <time.h>
 
 static const int	gl_solid_format = 3;
 static const int	gl_alpha_format = 4;
@@ -332,7 +333,7 @@ static void TexMgr_Anisotropy_f (cvar_t *var)
 	}
 }
 
-static const char *const texmgr_imagedump_formats[] = { "jpg", "png", "tga" };
+static const char *const texmgr_imagedump_formats[] = { "jpg", "lmp", "png", "tga" };
 
 static const char *TexMgr_ImageDump_FormatForArg (const char *arg)
 {
@@ -361,6 +362,153 @@ static qboolean TexMgr_WriteImageDump (const char *name, byte *buffer, int width
 		return Image_WriteJPG (name, buffer, width, height, bpp, 90, true);
 
 	return Image_WriteTGA (name, buffer, width, height, bpp, true);
+}
+
+/*
+===============
+TexMgr_SanitizeDumpName -- neutralize path-traversal hazards in untrusted strings
+used as directory or filename components. Mutates buf in place.
+- '\\' -> '_' (Windows separator that the engine doesn't normalize)
+- "..": collapses both bytes to '_' so e.g. "../foo" -> "__/foo"
+
+'/' is intentionally preserved when allow_slash is true (texture names embed
+subdir structure we want to mirror), but always stripped when false (used for
+single-segment values like cl.mapname).
+===============
+*/
+static void TexMgr_SanitizeDumpName (char *buf, qboolean allow_slash)
+{
+	char *c;
+	for (c = buf; *c; c++)
+	{
+		if (*c == '\\' || *c == '<' || *c == '>' || *c == '"' ||
+			*c == '|' || *c == '?' || (unsigned char)*c < ' ' ||
+			(!allow_slash && *c == '/'))
+			*c = '_';
+	}
+	for (c = buf; (c = strstr (c, "..")) != NULL; c += 2)
+	{
+		c[0] = '_';
+		c[1] = '_';
+	}
+}
+
+static byte *TexMgr_CopyIndexedSourceData (const byte *data, size_t size)
+{
+	byte *out;
+
+	out = (byte *) malloc (size);
+	if (!out)
+		return NULL;
+	memcpy (out, data, size);
+	return out;
+}
+
+static byte *TexMgr_CopyLoadedIndexedSource (byte *data, int width, int height, enum srcformat fmt,
+	qboolean malloced, int mark, gltexture_t *glt, size_t size)
+{
+	byte *out = NULL;
+
+	if (data && fmt == SRC_INDEXED &&
+		width == (int)glt->source_width && height == (int)glt->source_height)
+		out = TexMgr_CopyIndexedSourceData (data, size);
+
+	if (malloced)
+		free (data);
+	Hunk_FreeToLowMark (mark);
+
+	return out;
+}
+
+static byte *TexMgr_LoadIndexedLMPFile (const char *filename, gltexture_t *glt, size_t size)
+{
+	FILE		*f;
+	byte		*data;
+	int		mark, width, height;
+	enum srcformat	fmt;
+
+	COM_FOpenFile (filename, &f, NULL);
+	if (!f)
+		return NULL;
+
+	mark = Hunk_LowMark ();
+	data = Image_LoadLMP (f, &width, &height, &fmt);
+	return TexMgr_CopyLoadedIndexedSource (data, width, height, fmt, false, mark, glt, size);
+}
+
+static byte *TexMgr_LoadIndexedFileSource (gltexture_t *glt, size_t size)
+{
+	byte		*data, *out;
+	int		mark, width, height;
+	qboolean	malloced = false;
+	enum srcformat	fmt;
+	const char	*ext;
+	char		filename[MAX_QPATH];
+
+	ext = COM_FileGetExtension (glt->source_file);
+	if (!q_strcasecmp (ext, "lmp"))
+		return TexMgr_LoadIndexedLMPFile (glt->source_file, glt, size);
+
+	mark = Hunk_LowMark ();
+	fmt = SRC_RGBA;
+	width = height = 0;
+	data = Image_LoadImage (glt->source_file, &width, &height, &fmt, &malloced);
+	out = TexMgr_CopyLoadedIndexedSource (data, width, height, fmt, malloced, mark, glt, size);
+	if (out || ext[0])
+		return out;
+
+	q_snprintf (filename, sizeof(filename), "%s.lmp", glt->source_file);
+	return TexMgr_LoadIndexedLMPFile (filename, glt, size);
+}
+
+/*
+===============
+TexMgr_LoadIndexedSource -- recover the original paletted bytes for a SRC_INDEXED texture.
+Returns a malloc'd buffer of source_width*source_height bytes (caller must free), or NULL.
+===============
+*/
+static byte *TexMgr_LoadIndexedSource (gltexture_t *glt)
+{
+	size_t	size;
+	byte	*out;
+
+	if (glt->source_format != SRC_INDEXED)
+		return NULL;
+	size = (size_t)glt->source_width * (size_t)glt->source_height;
+	if (!size)
+		return NULL;
+	if (glt->source_width > (unsigned int)INT_MAX || glt->source_height > (unsigned int)INT_MAX ||
+		size > (size_t)INT_MAX)
+		return NULL;
+
+	if (glt->source_file[0] && glt->source_offset)
+	{	//lump inside file (typically gfx.wad)
+		FILE *f;
+		COM_FOpenFile (glt->source_file, &f, NULL);
+		if (!f) return NULL;
+		if (fseek (f, glt->source_offset, SEEK_CUR))
+		{
+			fclose (f);
+			return NULL;
+		}
+		out = (byte *) malloc (size);
+		if (!out) { fclose(f); return NULL; }
+		if (fread (out, 1, size, f) != size)
+		{
+			free (out);
+			fclose (f);
+			return NULL;
+		}
+		fclose (f);
+		return out;
+	}
+	if (glt->source_file[0] && !glt->source_offset)
+		return TexMgr_LoadIndexedFileSource (glt, size);
+	if (!glt->source_file[0] && glt->source_offset)
+	{	//data was in memory at load time -- pointer assumed still valid (same as TexMgr_ReloadImage)
+		return TexMgr_CopyIndexedSourceData ((byte *)glt->source_offset, size);
+	}
+	return NULL;
 }
 
 /*
@@ -453,8 +601,10 @@ TexMgr_Imagedump_f -- dump all current textures to image files
 */
 static void TexMgr_Imagedump_f (void)
 {
-	char	imagename[MAX_OSPATH], tempname[MAX_OSPATH], dirname[MAX_OSPATH];
+	char	imagename[MAX_OSPATH], tempname[MAX_OSPATH], dirname[MAX_OSPATH], subdir[MAX_OSPATH], fullpath[MAX_OSPATH];
 	char	ext[4];
+	char	timestamp[24];
+	char	mapname[sizeof(cl.mapname)];
 	const char *requested_format;
 	const char* filter = NULL; // woods add filter (ironwail)
 	int count = 0; // woods add filter (ironwail)
@@ -463,6 +613,10 @@ static void TexMgr_Imagedump_f (void)
 	char *c;
 	int bytes;
 	int bpp;
+	qboolean dir_created = false;
+	qboolean want_lmp;
+	time_t systime;
+	struct tm loct;
 
 	q_strlcpy (ext, "tga", sizeof(ext));
 
@@ -480,53 +634,125 @@ static void TexMgr_Imagedump_f (void)
 			filter = Cmd_Argv(1); // woods add filter (ironwail)
 		}
 	}
+	want_lmp = !q_strcasecmp (ext, "lmp");
 
-	//create directory
-	q_snprintf(dirname, sizeof(dirname), "%s/imagedump", com_gamedir);
-	Sys_mkdir (dirname);
+	//build a timestamped (and map-tagged when in-game) folder name -- mirrors screenshots/demos
+	systime = time(0);
+	loct = *localtime(&systime);
+	strftime (timestamp, sizeof(timestamp), "%m-%d-%Y-%H%M%S", &loct);
+	if (cl.mapname[0] && cls.state != ca_disconnected)
+	{
+		q_strlcpy (mapname, cl.mapname, sizeof(mapname));
+		TexMgr_SanitizeDumpName (mapname, false); //mapname is one segment -- no '/' allowed
+		q_snprintf (subdir, sizeof(subdir), "imagedump_%s_%s", mapname, timestamp);
+	}
+	else
+		q_snprintf (subdir, sizeof(subdir), "imagedump_%s", timestamp);
+	q_snprintf (dirname, sizeof(dirname), "%s/%s", com_gamedir, subdir);
 
 	//loop through textures
 	for (glt = active_gltextures; glt; glt = glt->next)
 	{
-		
+
 		if (filter && !q_strcasestr(glt->name, filter)) // woods add filter (ironwail)
 			continue; // woods add filter (ironwail)
-		
+
+		if (want_lmp && glt->source_format != SRC_INDEXED)
+			continue;	//cheap skip before allocating anything
+
+		//preserve '/' so we mirror the source folder structure on disk;
+		//also promote ':' (the engine's "owner:name" separator -- e.g. "maps/start.bsp:trigger"
+		//or "gfx.wad:conchars") to '/' so the owning container becomes its own folder
+		//instead of leaving the owner name redundantly tacked onto every dumped filename
 		q_strlcpy (tempname, glt->name, sizeof(tempname));
-		while ( (c = strchr(tempname, ':')) ) *c = '_';
-		while ( (c = strchr(tempname, '/')) ) *c = '_';
+		while ( (c = strchr(tempname, ':')) ) *c = '/';
 		while ( (c = strchr(tempname, '*')) ) *c = '_';
-		q_snprintf(imagename, sizeof(imagename), "imagedump/%s.%s", tempname, ext);
+		TexMgr_SanitizeDumpName (tempname, true);
+		{	//collapse runs of '/' to a single '/' (e.g. from "foo::bar" or "foo:/bar")
+			char *src, *dst;
+			for (src = dst = tempname; *src; )
+			{
+				*dst++ = *src++;
+				if (dst[-1] == '/')
+					while (*src == '/') src++;
+			}
+			*dst = 0;
+		}
+		{	//strip trailing '/' so e.g. "foo:" doesn't become "foo/.tga" (hidden file)
+			size_t len = strlen (tempname);
+			while (len > 0 && tempname[len - 1] == '/') tempname[--len] = 0;
+		}
+		if (tempname[0] == '/') tempname[0] = '_';	//never let a name start with '/'
+		if (!tempname[0]) continue;	//degenerate (e.g. name was just ":") -- nothing to write
+		q_snprintf(imagename, sizeof(imagename), "%s/%s.%s", subdir, tempname, ext);
 
-		GL_Bind (glt);
-		glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
-
-		bpp = ((glt->flags & TEXPREF_ALPHA) && q_strcasecmp(ext, "jpg")) ? 32 : 24;
-		bytes = bpp / 8;
-		buffer = (byte *) malloc(glt->width * glt->height * bytes);
-		if (!buffer)
+		if (want_lmp)
+		{	//paletted output: only valid for textures whose source was paletted
+			buffer = TexMgr_LoadIndexedSource (glt);
+			if (!buffer)
+				continue;
+		}
+		else
 		{
-			Con_Printf ("TexMgr_Imagedump_f: Couldn't allocate memory for %s\n", glt->name);
-			continue;
+			GL_Bind (glt);
+			glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
+
+			bpp = ((glt->flags & TEXPREF_ALPHA) && q_strcasecmp(ext, "jpg")) ? 32 : 24;
+			bytes = bpp / 8;
+			buffer = (byte *) malloc(glt->width * glt->height * bytes);
+			if (!buffer)
+			{
+				Con_Printf ("TexMgr_Imagedump_f: Couldn't allocate memory for %s\n", glt->name);
+				continue;
+			}
+			glGetTexImage(GL_TEXTURE_2D, 0, bpp == 32 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, buffer);
 		}
 
-		glGetTexImage(GL_TEXTURE_2D, 0, bpp == 32 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, buffer);
-		if (TexMgr_WriteImageDump (imagename, buffer, glt->width, glt->height, bpp, ext))
-			count++; // woods add filter (ironwail)
+		//lazy-create the dump folder so an empty filter doesn't leave a stamped orphan
+		if (!dir_created)
+		{
+			Sys_mkdir (com_gamedir);
+			Sys_mkdir (dirname);
+			dir_created = true;
+		}
+		q_snprintf (fullpath, sizeof(fullpath), "%s/%s", com_gamedir, imagename);
+		COM_CreatePath (fullpath);
+
+		if (want_lmp)
+		{
+			if (Image_WriteLMP (imagename, buffer, glt->source_width, glt->source_height))
+				count++;
+			else
+				Con_Printf ("TexMgr_Imagedump_f: Couldn't create %s\n", imagename);
+		}
 		else
-			Con_Printf ("TexMgr_Imagedump_f: Couldn't create %s\n", imagename);
+		{
+			if (TexMgr_WriteImageDump (imagename, buffer, glt->width, glt->height, bpp, ext))
+				count++; // woods add filter (ironwail)
+			else
+				Con_Printf ("TexMgr_Imagedump_f: Couldn't create %s\n", imagename);
+		}
 		free (buffer);
+	}
+
+	if (count == 0)
+	{
+		if (filter)
+			Con_Printf ("no textures matched '%s'\n", filter);
+		else
+			Con_Printf ("no textures to dump\n");
+		return;
 	}
 
 	if (filter)
 	{
 		if (cl_contentfilter.value) // woods #contentfilter
-			Con_Printf("dumped %i textures containing '%s' to %s/imagedump.\n", count, filter, COM_SkipPath(com_gamedir));
+			Con_Printf("dumped %i textures containing '%s' to %s/%s.\n", count, filter, COM_SkipPath(com_gamedir), subdir);
 		else
-		Con_Printf("dumped %i textures containing '%s' to %s\n", count, filter, dirname);
+			Con_Printf("dumped %i textures containing '%s' to %s\n", count, filter, dirname);
 	}
 	else if (cl_contentfilter.value) // woods #contentfilter
-		Con_Printf("dumped %i textures to %s/imagedump.\n", count, COM_SkipPath(com_gamedir));
+		Con_Printf("dumped %i textures to %s/%s.\n", count, COM_SkipPath(com_gamedir), subdir);
 	else
 		Con_Printf("dumped %i textures to %s\n", count, dirname);
 }
