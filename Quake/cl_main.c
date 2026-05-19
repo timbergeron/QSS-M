@@ -1843,7 +1843,8 @@ qboolean CL_CTFPugSwapEntityModel (entity_t *ent)
 		if (!strcmp(ent->model->name, "progs/flag.mdl"))
 		{
 			ent->syncbase = 0;
-			ent->model->flags |= MOD_NOLERP | MOD_NOSHADOW;
+			ent->effects |= EF_NOSHADOW;
+			ent->lerpflags |= LERP_RESETANIM;
 		}
 
 		return changed;
@@ -1853,6 +1854,8 @@ qboolean CL_CTFPugSwapEntityModel (entity_t *ent)
 	{
 		ent->model = base_model;
 		ent->skinnum = base_skin;
+		if (!(ent->netstate.effects & EF_NOSHADOW))
+			ent->effects &= ~EF_NOSHADOW;
 		return true;
 	}
 

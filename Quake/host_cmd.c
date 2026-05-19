@@ -9465,6 +9465,10 @@ static void Give_SetBaseWeapons (int ammo)
 static void Give_SetEverything (void)
 {
 	Give_SetBaseWeapons(999);
+	Give_SetAmmo(GIVE_AMMO_SHELLS, 100);
+	Give_SetAmmo(GIVE_AMMO_NAILS, 200);
+	Give_SetAmmo(GIVE_AMMO_ROCKETS, 100);
+	Give_SetAmmo(GIVE_AMMO_CELLS, 200);
 	sv_player->v.health = sv_player->v.max_health = 250;
 	Give_SetArmor(200, true, "red");
 	Give_AddSigils(IT_SIGIL1 | IT_SIGIL2 | IT_SIGIL3 | IT_SIGIL4);

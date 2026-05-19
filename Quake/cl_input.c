@@ -1373,7 +1373,11 @@ static unsigned int Wheel_ActiveWeaponBit (void)
 		active = (unsigned int)stat_value;
 		if (Wheel_IsSingleBit (active))
 			return active;
+		return 0;
 	}
+
+	if (Wheel_CustomWeaponMask ())
+		return 0;
 
 	return (unsigned int)cl.stats[STAT_ACTIVEWEAPON];
 }
@@ -1395,14 +1399,11 @@ static qboolean Wheel_WeaponOwned (int slot)
 		return false;
 
 	item_bit = (unsigned int)Wheel_WeaponItemBit (weapon);
-	if (cl.items & item_bit)
-		return true;
-
 	custom_mask = Wheel_CustomWeaponMask ();
-	if (custom_mask & item_bit)
-		return true;
+	if (custom_mask)
+		return (custom_mask & item_bit) != 0;
 
-	return false;
+	return (cl.items & item_bit) != 0;
 }
 
 static qboolean Wheel_WeaponSelectable (int slot)

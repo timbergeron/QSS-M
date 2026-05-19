@@ -933,7 +933,8 @@ static void R_CheckFlagSwap(entity_t *ent)
 		if (ent->baseline.modelindex == ogflagprecache) // if the model is the flag, we're gonna swap it
 		{
 			ent->syncbase = 0;
-			ent->model->flags = MOD_NOLERP | MOD_NOSHADOW;
+			ent->effects |= EF_NOSHADOW;
+			ent->lerpflags |= LERP_RESETANIM;
 			ent->model = cl.model_precache[swapflagprecache]; // roque
 		}
 	}
@@ -942,7 +943,8 @@ static void R_CheckFlagSwap(entity_t *ent)
 		if (ent->baseline.modelindex == ogflagprecache) // if the model is the flag, we're gonna swap it
 		{
 			ent->syncbase = 0;
-			ent->model->flags = MOD_NOLERP | MOD_NOSHADOW;
+			ent->effects |= EF_NOSHADOW;
+			ent->lerpflags |= LERP_RESETANIM;
 			ent->model = cl.model_precache[swapflagprecache2]; // alt1 (flag2.mdl)
 		}
 	}
@@ -951,7 +953,8 @@ static void R_CheckFlagSwap(entity_t *ent)
 		if (ent->baseline.modelindex == ogflagprecache) // if the model is the flag, we're gonna swap it
 		{
 			ent->syncbase = 0;
-			ent->model->flags = MOD_NOLERP | MOD_NOSHADOW;
+			ent->effects |= EF_NOSHADOW;
+			ent->lerpflags |= LERP_RESETANIM;
 			ent->model = cl.model_precache[swapflagprecache3]; // alt2 (flag3.mdl)
 		}
 	}
