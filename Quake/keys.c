@@ -2551,6 +2551,13 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 
 	if (cls.demoplayback && key_dest == key_game)
 	{
+		if (down && (key == K_LEFTARROW || key == K_RIGHTARROW ||
+			key == K_DPAD_LEFT || key == K_DPAD_RIGHT ||
+			(key >= '1' && key <= '9')))
+		{
+			SCR_ShowDemoBar ();
+		}
+
 		switch (key)
 		{
 		case K_SPACE:

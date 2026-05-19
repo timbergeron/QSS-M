@@ -1010,6 +1010,7 @@ static void CL_DemoSeekFinish(float normal_speed)
 	if (cls.demospeed > 0.f)
 		demo_rewind.backstop = false;
 	CL_ResetDemoSeekState();
+	SCR_ShowDemoBar (); // woods #democontrols -- ensure the bar reappears at the landing spot
 }
 
 static qboolean CL_DemoQueueRestart(void)

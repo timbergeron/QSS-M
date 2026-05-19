@@ -1238,6 +1238,20 @@ void SCR_DrawFPS (void)
 
 // woods (iw) #democontrols
 
+static double scr_demobar_force_until = 0.0; // woods #democontrols -- realtime deadline for forced-visible bar
+
+/*
+==============
+SCR_ShowDemoBar
+==============
+*/
+void SCR_ShowDemoBar (void)
+{
+	if (!cls.demoplayback)
+		return;
+	scr_demobar_force_until = realtime + 1.0;
+}
+
 /*
 ==============
 SCR_DrawDemoControls
@@ -1249,6 +1263,7 @@ void SCR_DrawDemoControls(void)
 	static float		prevspeed = 1.0f;
 	static float		prevbasespeed = 1.0f;
 	static float		showtime = 1.0f;
+	qboolean			force_show;
 	int					i, len, x, y, min, sec, canvasleft, canvasright, canvasbottom, canvastop, match_time;
 	float				frac;
 	const char* str;
@@ -1264,7 +1279,9 @@ void SCR_DrawDemoControls(void)
 	canvastop = 0;
 	canvasbottom = 240;
 
-	if (!cls.demoplayback || scr_demobar_timeout.value < 0.f)
+	force_show = (scr_demobar_force_until > realtime);
+
+	if (!cls.demoplayback || (scr_demobar_timeout.value < 0.f && !force_show))
 	{
 		showtime = 0.f;
 		return;
@@ -1273,7 +1290,8 @@ void SCR_DrawDemoControls(void)
 	// Determine for how long the demo playback info should be displayed
 	if (cls.demospeed != prevspeed || cls.basedemospeed != prevbasespeed ||			// speed/base speed changed
 		fabs(cls.demospeed) > cls.basedemospeed ||									// fast forward/rewind
-		!scr_demobar_timeout.value)													// controls always shown
+		!scr_demobar_timeout.value ||												// controls always shown
+		force_show)																	// forced visible by key handler
 	{
 		prevspeed = cls.demospeed;
 		prevbasespeed = cls.basedemospeed;
