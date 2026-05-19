@@ -84,6 +84,18 @@ extern	qboolean	crxintermission; // woods #crxintermission #cdead
 static GLuint polyblend_vignette_texture; // woods #polylblend2
 static int polyblend_vignette_size = 2048; // woods #polylblend2
 
+// GLSL vignette path: computes the gradient analytically and adds zero-mean
+// temporal alpha dither AFTER multiplying by uBlend.a, so the dither survives
+// at low cshifts (where the texture path's baked dither gets compressed away).
+static GLuint   polyblend_program;
+static GLint    polyblend_blendLoc = -1; // -1 is GL's sentinel for unknown/inactive
+static GLint    polyblend_frameLoc = -1;
+// Latched on a failed create so we don't retry every frame. Without this guard,
+// a uniform-lookup failure would leak a tracked GL program per frame until
+// R_DeleteShaders, because GL_GetUniformLocation zeroes the program handle
+// without untracking it.
+static qboolean polyblend_shader_failed;
+
 vec3_t	v_punchangles[2]; //johnfitz -- copied from cl.punchangle.  0 is current, 1 is previous value. never the same unless map just loaded
 double	v_punchangles_times[2]; //spike -- times, to avoid assumptions...
 
@@ -693,6 +705,70 @@ void V_UpdateBlend (void)
 
 /*
 ============
+PolyBlend_CreateShader -- analytical vignette + alpha dither, post-multiply
+============
+*/
+static void PolyBlend_CreateShader (void)
+{
+	const GLchar *vertSource = \
+		"#version 110\n"
+		"void main(void) {\n"
+		"	gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n"
+		"	gl_TexCoord[0] = gl_MultiTexCoord0;\n"
+		"}\n";
+
+	// Vignette is computed from a centered [-1,1] coord. Dither is added in
+	// 0..1 alpha space AFTER vignette*uBlend.a, so the framebuffer-LSB dither
+	// amplitude is independent of uBlend.a. Temporal IGN seed comes from uFrame.
+	const GLchar *fragSource = \
+		"#version 110\n"
+		"uniform vec4  uBlend;\n"
+		"uniform float uFrame;\n"
+		"void main(void) {\n"
+		"	vec2 p = gl_TexCoord[0].xy * 2.0 - 1.0;\n"
+		"	float dist = length(p);\n"
+		"	float inner = 0.55;\n"
+		"	float outer = 1.45;\n"
+		"	float v = clamp((dist - inner) / (outer - inner), 0.0, 1.0);\n"
+		"	v = v * v * (3.0 - 2.0 * v);\n"
+		"	float a = v * uBlend.a;\n"
+		"	if (v > 0.0 && v < 1.0) {\n"
+		"		vec2 q = gl_FragCoord.xy + vec2(uFrame, uFrame * 1.6180339);\n"
+		"		float ign = fract(52.9829189 * fract(0.06711056 * q.x + 0.00583715 * q.y));\n"
+		"		a += (ign - 0.5) * (1.0 / 255.0);\n"
+		"	}\n"
+		"	gl_FragColor = vec4(uBlend.rgb, clamp(a, 0.0, uBlend.a));\n"
+		"}\n";
+
+	if (!gl_glsl_able)
+		return;
+
+	GLuint program = GL_CreateProgram (vertSource, fragSource, 0, NULL);
+	if (!program)
+	{
+		polyblend_shader_failed = true;
+		return;
+	}
+
+	// GL_GetUniformLocation zeroes its program-ptr arg on lookup failure but
+	// leaves the program tracked, so keep the original handle to untrack.
+	GLuint tracked = program;
+	GLint blendLoc = GL_GetUniformLocation (&program, "uBlend");
+	GLint frameLoc = GL_GetUniformLocation (&program, "uFrame");
+	if (!program)
+	{
+		GL_DeleteProgramTracked (&tracked);
+		polyblend_shader_failed = true;
+		return;
+	}
+
+	polyblend_program  = program;
+	polyblend_blendLoc = blendLoc;
+	polyblend_frameLoc = frameLoc;
+}
+
+/*
+============
 PolyBlend_CreateVignetteTexture -- creates a radial gradient texture for smooth vignette -- woods #polylblend2
 ============
 */
@@ -726,7 +802,7 @@ static void PolyBlend_CreateVignetteTexture (void)
 			float dy = (y - cy) / cy;
 			float dist = sqrtf(dx * dx + dy * dy);
 			float alpha;
-			
+
 			// Smoothstep-like falloff
 			if (dist <= inner_radius)
 				alpha = 0.0f;
@@ -738,7 +814,7 @@ static void PolyBlend_CreateVignetteTexture (void)
 				// Smooth hermite interpolation (smoothstep)
 				alpha = t * t * (3.0f - 2.0f * t);
 			}
-			
+
 			data[(y * size + x) * 2 + 0] = 255; // Luminance (White)
 			data[(y * size + x) * 2 + 1] = (byte)(alpha * 255.0f); // Alpha
 		}
@@ -768,6 +844,10 @@ void PolyBlend_DeleteVignetteTexture (void)
 		glDeleteTextures (1, &polyblend_vignette_texture);
 		polyblend_vignette_texture = 0;
 	}
+	polyblend_program = 0; // deleted in R_DeleteShaders
+	polyblend_blendLoc = -1;
+	polyblend_frameLoc = -1;
+	polyblend_shader_failed = false;
 }
 
 /*
@@ -790,8 +870,42 @@ void V_PolyBlend (void)
 	else
 		glDisable (GL_ALPHA_TEST);
 
-	// Mode 2: Vignette effect using radial gradient texture
-	if ((int)gl_polyblend.value == 2)
+	// Mode 2: Vignette. GLSL path adds dither after the vignette*v_blend.a
+	// multiply so it survives at low cshifts; the texture path is a fallback
+	// for systems without GLSL or where shader creation failed.
+	qboolean use_shader = ((int)gl_polyblend.value == 2 && gl_glsl_able && GL_UseProgramFunc && !polyblend_shader_failed);
+	if (use_shader && !polyblend_program)
+		PolyBlend_CreateShader ();
+	if (use_shader && !polyblend_program)
+		use_shader = false; // create just failed; polyblend_shader_failed is now set
+
+	if (use_shader)
+	{
+		glMatrixMode(GL_PROJECTION);
+		glLoadIdentity ();
+		glOrtho (0, 1, 1, 0, -99999, 99999);
+		glMatrixMode(GL_MODELVIEW);
+		glLoadIdentity ();
+
+		// Alpha test still applies to shader output in compat profile, so
+		// disable it for the same reason the texture path does. The cleanup
+		// block below restores it when !premul_hud.
+		glDisable (GL_ALPHA_TEST);
+
+		GL_UseProgramFunc (polyblend_program);
+		GL_Uniform4fFunc (polyblend_blendLoc, v_blend[0], v_blend[1], v_blend[2], v_blend[3]);
+		GL_Uniform1fFunc (polyblend_frameLoc, (float)(host_framecount & 1023));
+
+		glBegin (GL_QUADS);
+		glTexCoord2f (0, 0); glVertex2f (0, 0);
+		glTexCoord2f (1, 0); glVertex2f (1, 0);
+		glTexCoord2f (1, 1); glVertex2f (1, 1);
+		glTexCoord2f (0, 1); glVertex2f (0, 1);
+		glEnd ();
+
+		GL_UseProgramFunc (0);
+	}
+	else if ((int)gl_polyblend.value == 2)
 	{
 		GLboolean alpha_test_was_enabled = glIsEnabled(GL_ALPHA_TEST);
 		
