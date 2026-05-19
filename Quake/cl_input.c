@@ -1476,9 +1476,22 @@ static float Wheel_Radius (void)
 	return dim * scale;
 }
 
+// Icons and glow are sized in screen pixels.  Pure linear scaling keeps
+// the icon/ring ratio constant at every resolution.  Baseline 690 pins
+// that ratio to what looks right at 1490p (~0.34) — Wheel_DrawAt snaps
+// iscale to an integer for crisp nearest-neighbor sampling.
+static float Wheel_ResolutionScale (void)
+{
+	float dim = (float)q_min (glwidth, glheight);
+	return dim / 690.0f;
+}
+
 static void Wheel_Position (float radius, float *cx, float *cy)
 {
-	float margin = WHEEL_SCREEN_MARGIN + CLAMP (0.0f, WHEEL_GLOW, 96.0f);
+	// Reserve enough margin for the *scaled* glow — the draw call uses
+	// WHEEL_GLOW * Wheel_ResolutionScale(), so at high res the unscaled
+	// 30px isn't enough and the glow would clip against the screen edge.
+	float margin = WHEEL_SCREEN_MARGIN + WHEEL_GLOW * Wheel_ResolutionScale ();
 	float min_x = radius + margin;
 	float max_x = (float)glwidth - radius - margin;
 	float min_y = radius + margin;
@@ -2566,13 +2579,17 @@ static void Wheel_DrawAnnulus (float cx, float cy, float r_in, float r_out, floa
 // Uniform outer glow: stack concentric annuli outside r_out, each thicker
 // and fainter than the last, to darken the wall in a radial halo around the
 // ring.  Black with low alpha so it tints the underlying texture.
-static void Wheel_DrawOuterGlow (float cx, float cy, float r_out)
+static void Wheel_DrawOuterGlow (float cx, float cy, float r_out, float glow_px)
 {
 	int pass;
 	const int passes = 6;
-	const float step = 5.0f;
+	float step;
 	float prev = r_out;
 
+	if (glow_px <= 0.0f)
+		return;
+
+	step = glow_px / (float)passes;
 	for (pass = 0; pass < passes; pass++)
 	{
 		float t     = (float)(pass + 1) / (float)passes;	// 0.16 .. 1.0
@@ -2635,7 +2652,7 @@ static void Wheel_DrawPointerChar (float cx, float cy, float r_in, int slot, flo
 
 static void Wheel_DrawAxeSlotLabel (float ix, float iy, qpic_t *pic, float icon_scale, float alpha)
 {
-	float label_scale = CLAMP (0.25f, icon_scale * 0.75f, 2.5f);
+	float label_scale = CLAMP (0.25f, icon_scale * 0.75f, 24.0f);
 	float label_x = ix - 4.0f * label_scale;
 	float label_y = iy + (float)pic->height * icon_scale * 0.5f + 0.5f * label_scale;
 
@@ -2660,12 +2677,14 @@ static void Wheel_DrawAt (float cx, float cy, float radius, int pick, qboolean p
 	r_out = radius;
 	r_in  = radius * 0.50f;
 	icon_r = (r_in + r_out) * 0.5f;
-	iscale = CLAMP (0.1f, icon_scale, 5.0f);
+	// Snap to integer scale: 24x24 inv pics render crisp at integer multipliers
+	// with nearest-neighbor sampling — fractional scales (esp. thirds) blur them.
+	iscale = floorf (CLAMP (1.0f, icon_scale, 32.0f) + 0.5f);
 
 	if (!Wheel_DrawBodyShader (cx, cy, r_in, r_out, glow_px))
 	{
 		// fallback: immediate-mode glow + body + uniform rim
-		Wheel_DrawOuterGlow (cx, cy, r_out);
+		Wheel_DrawOuterGlow (cx, cy, r_out, glow_px);
 		Wheel_DrawAnnulus (cx, cy, r_in, r_out, 0.10f, 0.08f, 0.07f, 0.60f);
 		Wheel_DrawSubtleRim (cx, cy, r_out, 0.35f);
 		Wheel_DrawSubtleRim (cx, cy, r_in,  0.28f);
@@ -2720,27 +2739,24 @@ static void Wheel_DrawAt (float cx, float cy, float radius, int pick, qboolean p
 static void Wheel_MenuPreviewLayout (float *cx, float *cy, float *radius, float *icon_scale, float *glow_px)
 {
 	vrect_t bounds, viewport;
-	float canvas_scale;
-	float screen_radius;
 
 	Draw_GetMenuTransform (&bounds, &viewport);
-	canvas_scale = (viewport.width > 0 && bounds.width > 0) ?
-		(float)viewport.width / (float)bounds.width : 1.0f;
-	if (canvas_scale <= 0.0f)
-		canvas_scale = 1.0f;
 
-	screen_radius = Wheel_Radius ();
-
+	// Menu preview is drawn in the 640x200 menu canvas, which the renderer
+	// already scales by scr_menuscale.  Use fixed canvas-space sizes here so
+	// the preview stays a sensible fraction of the menu at any resolution.
 	if (cx)
 		*cx = (float)bounds.x + 160.0f;
 	if (cy)
 		*cy = (float)bounds.y + 100.0f;
+	// Integer-snapped icon scale (Wheel_DrawAt floors to ≥1) gives the
+	// menu preview a crisp ~0.40 icon/ring ratio at radius 60.
 	if (radius)
-		*radius = screen_radius / canvas_scale;
+		*radius = 60.0f;
 	if (icon_scale)
-		*icon_scale = CLAMP (1.0f, WHEEL_ICON_SCALE, 5.0f) / canvas_scale;
+		*icon_scale = 1.0f;
 	if (glow_px)
-		*glow_px = CLAMP (0.f, WHEEL_GLOW, 96.f) / canvas_scale;
+		*glow_px = 8.0f;
 }
 
 int Wheel_MenuPreviewStart (void)
@@ -2835,8 +2851,11 @@ void Wheel_Draw (void)
 
 	radius = Wheel_Radius ();
 	Wheel_Position (radius, &cx, &cy);
-	Wheel_DrawAt (cx, cy, radius, wheel_pick, false,
-		CLAMP (1.0f, WHEEL_ICON_SCALE, 5.0f), CLAMP (0.f, WHEEL_GLOW, 96.f));
+	{
+		float res = Wheel_ResolutionScale ();
+		Wheel_DrawAt (cx, cy, radius, wheel_pick, false,
+			WHEEL_ICON_SCALE * res, WHEEL_GLOW * res);
+	}
 
 	if (WHEEL_DEBUG)
 	{
