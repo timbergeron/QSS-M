@@ -43,6 +43,7 @@ JPG, r00k, Spoike for QSS and FTEQW, Ozkan Sezer & Eric Wasylishen (Quakespasm),
 
 - Mouse support for classic menus, including sliders and menu navigation
 - Options/menu value display improvements
+- Menu live previews for visual options, including Shift pinning (`ui_live_preview`)
 - Long-name scrolling and search highlighting in menu lists
 - Mods, Levels/Maps, and Skill menus
 - Map descriptions and cached map metadata

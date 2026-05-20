@@ -292,6 +292,608 @@ void FileList_Subtract(const char* name, filelist_item_t** list); // woods #hist
 static qboolean has_custom_progs = false; // woods #botdetect
 qboolean progs_check_done = false; // woods #botdetect
 
+//=============================================================================
+// Live Preview - ported from Ironwail's ui_live_preview.
+// Option draw code reports the selected previewable item each frame, but the
+// preview only starts when the option is actually changed. Console options
+// additionally drop the console so their visual cvars can be seen live.
+//=============================================================================
+
+cvar_t ui_live_preview = {"ui_live_preview", "1", CVAR_ARCHIVE};
+extern cvar_t gl_cshiftpercent;
+
+typedef enum {
+	LP_NONE = -1,
+	LP_BRIGHTNESS,
+	LP_CONTRAST,
+	LP_FILTERING,
+	LP_MODELLERP,
+	LP_RENDERSCALE,
+	LP_CLASSICPARTICLES,
+	LP_GRAPHICS,
+	LP_SKY,
+	LP_HUDSCALE,
+	LP_SCRSIZE,
+	LP_SBALPHA,
+	LP_SBARSTYLE,
+	LP_FOV,
+	LP_CSHIFT,
+	LP_DAMAGETINT,
+	LP_VIEWMODEL,
+	LP_POWERUPSHELLS,
+	LP_ITEMBOB,
+	LP_PONG,
+	LP_HINTS,
+	LP_DEMOBAR,
+	LP_CONFONT,
+	LP_CONHEIGHT,
+	LP_CONSPEED,
+	LP_CONALPHA,
+	LP_CONBACK,
+	LP_CONCOLOR,
+	LP_CONTYPING,
+	LP_MATCHSCORES,
+	LP_SHOWSPEED,
+	LP_SHOWSCORES,
+	LP_MOVEKEYS,
+	LP_COUNT
+} livepreview_id_t;
+
+#define LP_FADEIN_TIME		0.125f
+#define LP_FADEOUT_TIME		0.125f
+#define LP_HOLD_TIME		1.25f
+#define LP_LONG_HOLD_TIME	2.25f
+#define LP_PONG_HOLD_TIME	4.0f
+#define LP_HINTS_HOLD_TIME	4.0f
+#define LP_DEMOBAR_HOLD_TIME	4.0f
+#define LP_DEMOBAR_MARGIN_TIME	1.25f
+#define LP_CONSPEED_HOLD_TIME	4.0f
+#define LP_CONSPEED_CYCLE_TIME	0.85f
+
+static struct {
+	int		id;
+	int		selection_id;
+	int		selection_state;
+	int		y;
+	int		selection_y;
+	float	frac;
+	float	frac_target;
+	float	hold_time;
+	float	console_speed_cycle_start;
+	qboolean	hold_paused;
+} livepreview = { LP_NONE, LP_NONE, m_none, 0, 0, 0.f, 0.f, 0.f, 0.f, false };
+
+static qboolean lp_user_pinned;
+qboolean slider_grab; // woods #mousemenu
+static qboolean graphics_slider_grab;
+static qboolean game_slider_grab;
+static qboolean hud_slider_grab;
+static qboolean console_slider_grab;
+static qboolean sky_slider_grab;
+static qboolean skywind_slider_grab;
+static qboolean demooptions_slider_grab;
+
+static float M_LivePreview_HoldTimeForId (int id)
+{
+	switch (id) {
+	case LP_CONSPEED:
+		return LP_CONSPEED_HOLD_TIME;
+	case LP_PONG:
+		return LP_PONG_HOLD_TIME;
+	case LP_HINTS:
+		return LP_HINTS_HOLD_TIME;
+	case LP_DEMOBAR:
+		if (scr_demobar_timeout.value > 0.f)
+			return scr_demobar_timeout.value + LP_DEMOBAR_MARGIN_TIME;
+		return LP_DEMOBAR_HOLD_TIME;
+	case LP_CONALPHA:
+		return LP_LONG_HOLD_TIME;
+	default:
+		return LP_HOLD_TIME;
+	}
+}
+
+static qboolean M_LivePreview_GameAvailable (void)
+{
+	return (cls.state == ca_connected && cls.signon == SIGNONS);
+}
+
+static qboolean M_LivePreview_HoldPaused (void)
+{
+	if (lp_user_pinned)
+		return true;
+
+	switch (m_state)
+	{
+	case m_options:
+		return slider_grab;
+	case m_graphics:
+		return graphics_slider_grab;
+	case m_game:
+		return game_slider_grab;
+	case m_hud:
+		return hud_slider_grab;
+	case m_console:
+		return console_slider_grab;
+	case m_sky:
+		return sky_slider_grab;
+	case m_skywind:
+		return skywind_slider_grab;
+	case m_demooptions:
+		return demooptions_slider_grab;
+	default:
+		return false;
+	}
+}
+
+static void M_LivePreview_ClearSelection (void)
+{
+	lp_user_pinned = false;
+	livepreview.selection_id = LP_NONE;
+	livepreview.selection_y = 0;
+	livepreview.selection_state = m_state;
+}
+
+static void M_LivePreview_Stop (qboolean clear_selection)
+{
+	if (clear_selection)
+		M_LivePreview_ClearSelection ();
+
+	livepreview.frac_target = 0.f;
+	livepreview.hold_time = 0.f;
+}
+
+static void M_LivePreview_StopImmediate (qboolean clear_selection)
+{
+	if (clear_selection)
+		M_LivePreview_ClearSelection ();
+
+	livepreview.id = LP_NONE;
+	livepreview.y = 0;
+	livepreview.frac = 0.f;
+	livepreview.frac_target = 0.f;
+	livepreview.hold_time = 0.f;
+	livepreview.console_speed_cycle_start = 0.f;
+	livepreview.hold_paused = false;
+	lp_user_pinned = false;
+}
+
+static qboolean M_LivePreview_ValidateFrame (void)
+{
+	if (livepreview.selection_state != m_state)
+	{
+		M_LivePreview_StopImmediate (true);
+		return false;
+	}
+
+	if (!ui_live_preview.value || key_dest != key_menu)
+	{
+		M_LivePreview_StopImmediate (true);
+		return false;
+	}
+
+	if (livepreview.id != LP_NONE && !M_LivePreview_GameAvailable ())
+	{
+		M_LivePreview_StopImmediate (false);
+		return false;
+	}
+
+	return true;
+}
+
+static void M_LivePreview_Want (int id)
+{
+	if (id < LP_NONE || id >= LP_COUNT)
+		id = LP_NONE;
+
+	if (livepreview.selection_id == id)
+		return;
+
+	livepreview.selection_id = id;
+	if (livepreview.id != LP_NONE && livepreview.id != id)
+		M_LivePreview_Stop (false);
+}
+
+static void M_LivePreview_WantAt (int id, int y)
+{
+	if (id < LP_NONE || id >= LP_COUNT)
+		id = LP_NONE;
+
+	if (livepreview.selection_state != m_state)
+		M_LivePreview_ClearSelection ();
+
+	if (id != LP_NONE)
+	{
+		if (livepreview.selection_id == id &&
+			livepreview.selection_y != y &&
+			livepreview.id == id &&
+			livepreview.y != y)
+		{
+			livepreview.frac_target = 0.f;
+			livepreview.hold_time = 0.f;
+		}
+		livepreview.selection_y = y;
+	}
+	else
+	{
+		livepreview.selection_y = 0;
+	}
+
+	M_LivePreview_Want (id);
+}
+
+static void M_LivePreview_WantAndKick (int id, int y)
+{
+	M_LivePreview_WantAt (id, y);
+	M_LivePreview_Kick ();
+}
+
+static void M_LivePreview_UpdateUserPin (void)
+{
+	lp_user_pinned = (keydown[K_SHIFT] &&
+					  livepreview.selection_id != LP_NONE &&
+					  livepreview.selection_state == m_state &&
+					  ui_live_preview.value &&
+					  key_dest == key_menu &&
+					  M_LivePreview_GameAvailable ());
+	if (!lp_user_pinned)
+		return;
+
+	if (livepreview.id != livepreview.selection_id ||
+		livepreview.y != livepreview.selection_y ||
+		livepreview.frac_target == 0.f)
+		M_LivePreview_Kick ();
+
+	if (livepreview.id != LP_NONE)
+	{
+		livepreview.frac_target = 1.f;
+		livepreview.hold_time = 0.f;
+	}
+}
+
+void M_LivePreview_Kick (void)
+{
+	int id = livepreview.selection_id;
+	qboolean new_id, restarting;
+
+	if (!ui_live_preview.value || key_dest != key_menu)
+		id = LP_NONE;
+
+	// Ironwail only reveals the world for live preview while a level is active.
+	if (id != LP_NONE && !M_LivePreview_GameAvailable ())
+		id = LP_NONE;
+
+	if (id == LP_NONE)
+	{
+		M_LivePreview_Stop (false);
+		return;
+	}
+
+	new_id = (livepreview.id != id);
+	restarting = (livepreview.frac_target == 0.f);
+	livepreview.id = id;
+	livepreview.y = livepreview.selection_y;
+	if (id == LP_CONSPEED && (new_id || restarting))
+		livepreview.console_speed_cycle_start = realtime;
+	livepreview.hold_time = M_LivePreview_HoldTimeForId (livepreview.id);
+	livepreview.frac_target = 1.f;
+	if (id == LP_DEMOBAR)
+		SCR_ShowDemoBarFor (livepreview.hold_time);
+}
+
+void M_LivePreview_Reset (void)
+{
+	livepreview.id = LP_NONE;
+	livepreview.selection_id = LP_NONE;
+	livepreview.selection_state = m_none;
+	livepreview.y = 0;
+	livepreview.selection_y = 0;
+	livepreview.frac = 0.f;
+	livepreview.frac_target = 0.f;
+	livepreview.hold_time = 0.f;
+	livepreview.console_speed_cycle_start = 0.f;
+	livepreview.hold_paused = false;
+	lp_user_pinned = false;
+}
+
+float M_LivePreview_Alpha (void)
+{
+	return livepreview.frac;
+}
+
+static qboolean M_LivePreview_IsConsoleId (int id)
+{
+	switch (id)
+	{
+	case LP_CONFONT:
+	case LP_CONHEIGHT:
+	case LP_CONSPEED:
+	case LP_CONALPHA:
+	case LP_CONBACK:
+	case LP_CONCOLOR:
+	case LP_CONTYPING:
+		return true;
+	default:
+		return false;
+	}
+}
+
+qboolean M_WantsConsole (float *alpha)
+{
+	qboolean want = (key_dest == key_menu &&
+					 M_LivePreview_GameAvailable () &&
+					 M_LivePreview_IsConsoleId (livepreview.id) &&
+					 livepreview.frac > 0.f);
+	if (alpha)
+		*alpha = want ? livepreview.frac : 0.f;
+	return want;
+}
+
+qboolean M_LivePreview_UseConsoleHeight (void)
+{
+	return M_WantsConsole (NULL);
+}
+
+qboolean M_LivePreview_UseConsoleSpeed (void)
+{
+	return (key_dest == key_menu &&
+			M_LivePreview_GameAvailable () &&
+			livepreview.id == LP_CONSPEED &&
+			livepreview.frac > 0.f);
+}
+
+qboolean M_LivePreview_ConsoleSpeedOpen (void)
+{
+	float elapsed;
+	int phase;
+
+	if (!M_LivePreview_UseConsoleSpeed ())
+		return true;
+
+	elapsed = realtime - livepreview.console_speed_cycle_start;
+	if (elapsed < 0.f)
+		elapsed = 0.f;
+	phase = (int)(elapsed / LP_CONSPEED_CYCLE_TIME);
+	return (phase & 1) == 0;
+}
+
+qboolean M_LivePreview_UseDamageTint (void)
+{
+	return (key_dest == key_menu &&
+			M_LivePreview_GameAvailable () &&
+			livepreview.id == LP_DAMAGETINT &&
+			livepreview.frac > 0.f);
+}
+
+qboolean M_LivePreview_UsePong (void)
+{
+	return (key_dest == key_menu &&
+			M_LivePreview_GameAvailable () &&
+			!cls.demoplayback &&
+			livepreview.id == LP_PONG &&
+			livepreview.frac > 0.f);
+}
+
+qboolean M_LivePreview_UsePowerupShells (void)
+{
+	return (key_dest == key_menu &&
+			M_LivePreview_GameAvailable () &&
+			livepreview.id == LP_POWERUPSHELLS &&
+			livepreview.frac > 0.f);
+}
+
+qboolean M_LivePreview_UsePausedHints (void)
+{
+	return (key_dest == key_menu &&
+			M_LivePreview_GameAvailable () &&
+			!cls.demoplayback &&
+			livepreview.id == LP_HINTS &&
+			livepreview.frac > 0.f);
+}
+
+qboolean M_LivePreview_UseTypingStatus (void)
+{
+	return (key_dest == key_menu &&
+			M_LivePreview_GameAvailable () &&
+			livepreview.id == LP_CONTYPING &&
+			livepreview.frac > 0.f);
+}
+
+qboolean M_LivePreview_UseMatchScores (void)
+{
+	return (key_dest == key_menu &&
+			M_LivePreview_GameAvailable () &&
+			livepreview.id == LP_MATCHSCORES &&
+			livepreview.frac > 0.f);
+}
+
+qboolean M_LivePreview_UseSpeed (void)
+{
+	return (key_dest == key_menu &&
+			M_LivePreview_GameAvailable () &&
+			livepreview.id == LP_SHOWSPEED &&
+			livepreview.frac > 0.f);
+}
+
+qboolean M_LivePreview_UseScores (void)
+{
+	return (key_dest == key_menu &&
+			M_LivePreview_GameAvailable () &&
+			livepreview.id == LP_SHOWSCORES &&
+			livepreview.frac > 0.f);
+}
+
+qboolean M_LivePreview_UseMovementKeys (void)
+{
+	return (key_dest == key_menu &&
+			M_LivePreview_GameAvailable () &&
+			livepreview.id == LP_MOVEKEYS &&
+			livepreview.frac > 0.f);
+}
+
+static qboolean M_LivePreview_IsolateY (int y)
+{
+	return (livepreview.id != LP_NONE &&
+			livepreview.frac > 0.f &&
+			livepreview.y == y);
+}
+
+static void M_LivePreview_DrawColorOverlay (float r, float g, float b, float alpha)
+{
+	alpha = CLAMP (0.f, alpha, 1.f);
+	if (alpha <= 0.f)
+		return;
+
+	GL_SetCanvas (CANVAS_DEFAULT);
+	glEnable (GL_BLEND);
+	glDisable (GL_ALPHA_TEST);
+	glDisable (GL_TEXTURE_2D);
+	glColor4f (r, g, b, alpha);
+	glBegin (GL_QUADS);
+	glVertex2f (0, 0);
+	glVertex2f (glwidth, 0);
+	glVertex2f (glwidth, glheight);
+	glVertex2f (0, glheight);
+	glEnd ();
+	glColor4f (1.f, 1.f, 1.f, 1.f);
+	glEnable (GL_TEXTURE_2D);
+	glEnable (GL_ALPHA_TEST);
+	glDisable (GL_BLEND);
+}
+
+static void M_LivePreview_DrawEffects (void)
+{
+	float alpha;
+
+	if (livepreview.id == LP_NONE || livepreview.frac <= 0.f)
+		return;
+
+	switch (livepreview.id)
+	{
+	case LP_CSHIFT:
+		alpha = (150.f * CLAMP (0.f, gl_cshiftpercent.value, 100.f) / 100.f) / 255.f;
+		M_LivePreview_DrawColorOverlay (1.f, 0.f, 0.f, alpha * livepreview.frac);
+		break;
+	default:
+		break;
+	}
+}
+
+// While the menu is faded for preview, the previewed line should stay at full
+// alpha so the user can see which option produced the live change.
+// Submenu draw fns bracket the previewed item's draws with these.
+static int lp_isolate_depth = 0;
+static float lp_isolate_prev_alpha = 1.f;
+
+void M_LivePreview_BeginIsolate (void)
+{
+	if (lp_isolate_depth > 0)
+	{
+		lp_isolate_depth++;
+		return;
+	}
+
+	if (gl_menu_alpha < 1.f)
+	{
+		lp_isolate_depth = 1;
+		lp_isolate_prev_alpha = gl_menu_alpha;
+		// gl_draw.c multiplies primitives by gl_menu_alpha during preview;
+		// raising it here temporarily opts the isolated row back into normal
+		// draw-state restoration while this bracket is active.
+		gl_menu_alpha = 1.f;
+		glColor4f (1.f, 1.f, 1.f, 1.f);
+	}
+}
+
+void M_LivePreview_EndIsolate (void)
+{
+	if (lp_isolate_depth > 0 && --lp_isolate_depth == 0)
+	{
+		gl_menu_alpha = lp_isolate_prev_alpha;
+		glEnable (GL_BLEND);
+		glDisable (GL_ALPHA_TEST);
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+		glColor4f (1.f, 1.f, 1.f, gl_menu_alpha);
+	}
+}
+
+static void M_LivePreview_Update (void)
+{
+	qboolean hold_paused;
+
+	if (!M_LivePreview_ValidateFrame ())
+		return;
+
+	M_LivePreview_UpdateUserPin ();
+
+	hold_paused = (livepreview.id >= 0 && livepreview.frac_target == 1.f) ?
+		M_LivePreview_HoldPaused () : false;
+	if (livepreview.hold_paused && !hold_paused &&
+		livepreview.id >= 0 &&
+		livepreview.frac_target == 1.f &&
+		livepreview.frac > 0.f)
+		livepreview.hold_time = M_LivePreview_HoldTimeForId (livepreview.id);
+	livepreview.hold_paused = hold_paused;
+
+	// Hold timer counts down only while we're fully faded in.
+	if (livepreview.id >= 0 &&
+		livepreview.frac >= livepreview.frac_target &&
+		livepreview.frac_target == 1.f &&
+		livepreview.hold_time > 0.f &&
+		!hold_paused)
+	{
+		livepreview.hold_time -= host_frametime;
+		if (livepreview.hold_time <= 0.f)
+		{
+			livepreview.hold_time = 0.f;
+			livepreview.frac_target = 0.f;
+		}
+	}
+
+	// Advance fade toward target.
+	if (livepreview.frac < livepreview.frac_target)
+	{
+		livepreview.frac += host_frametime / LP_FADEIN_TIME;
+		if (livepreview.frac > livepreview.frac_target)
+			livepreview.frac = livepreview.frac_target;
+	}
+	else if (livepreview.frac > livepreview.frac_target)
+	{
+		livepreview.frac -= host_frametime / LP_FADEOUT_TIME;
+		if (livepreview.frac < livepreview.frac_target)
+			livepreview.frac = livepreview.frac_target;
+		if (livepreview.frac == 0.f && livepreview.frac_target == 0.f)
+			livepreview.id = LP_NONE;
+	}
+}
+
+static float M_LivePreview_EaseInOut (float t)
+{
+	t = CLAMP (0.f, t, 1.f);
+	return t * t * (3.f - 2.f * t);
+}
+
+static void M_LivePreview_DrawFadeScreen (void)
+{
+	vrect_t bounds, viewport;
+	float center, frac, s, y0, y1;
+
+	if (livepreview.id == LP_NONE || livepreview.frac <= 0.f)
+		return;
+
+	Draw_GetMenuTransform (&bounds, &viewport);
+	// livepreview.y is in menu-canvas coordinates. Draw_GetMenuTransform gives
+	// the active menu viewport in GL pixels, so scale from the 320x200-style
+	// bounds into that viewport before drawing the default-canvas fade band.
+	s = (float)viewport.height / (float)bounds.height;
+	center = (viewport.y - gly) + (livepreview.y + CHARSIZE / 2) * s;
+	frac = M_LivePreview_EaseInOut (livepreview.frac);
+	y0 = LERP (0.f, center - CHARSIZE * s, frac);
+	y1 = LERP ((float)glheight, center + CHARSIZE * s, frac);
+
+	Draw_FadeScreen_Rect_Alpha (0.f, y0, (float)glwidth, y1, 0.5f);
+}
+
 /*
 ================
 M_DrawCharacter
@@ -5401,7 +6003,6 @@ enum
 #define	SLIDER_RANGE	6
 
 int		options_cursor;
-qboolean slider_grab; // woods #mousemenu
 static float pending_scale_value;
 
 #define OPTIONS_WHEEL_REPEAT_TIME 0.12
@@ -5447,12 +6048,23 @@ static qboolean M_Options_AcceptWheelMove(int dir)
 	return false;
 }
 
+static int M_Options_RowY(int item)
+{
+	return 32 + item * 8;
+}
+
+static int M_Options_LivePreviewId(void)
+{
+	return LP_NONE;
+}
+
 void M_Menu_Options_f (void)
 {
 	key_dest = key_menu;
 	m_state = m_options;
 	m_entersound = true;
 	slider_grab = false; // woods #mousemenu
+	M_LivePreview_Reset();
 	M_Options_Init();
 
 	IN_UpdateGrabs();
@@ -5578,12 +6190,12 @@ qboolean M_SliderClick(int cx, int cy) // woods #mousemenu
 	{
 		float f = M_MouseToSliderFraction(cx);
 		f = f * 5.0f + 1.0f;
-		f = (int)f;
-		pending_scale_value = f;  // Store initial value
-		slider_grab = true;
-		S_LocalSound("misc/menu3.wav");
-		return true;
-	}
+			f = (int)f;
+			pending_scale_value = f;  // Store initial value
+			slider_grab = true;
+			S_LocalSound("misc/menu3.wav");
+			return true;
+		}
 
 	slider_grab = true;
 	S_LocalSound("misc/menu3.wav");
@@ -5602,11 +6214,17 @@ void M_Options_Draw (void)
 	p = Draw_CachePic ("gfx/p_option.lmp");
 	M_DrawPic ( (320-p->width)/2, 4, p);
 
+	M_LivePreview_WantAt (M_Options_LivePreviewId (), M_Options_RowY (options_cursor));
+
 	// Draw menu items with search highlighting if active
 	for (int i = 0; i < OPTIONS_ITEMS; i++)
 	{
 		const char* text = NULL;
-		int y = 32 + 8 * i;
+		int y = M_Options_RowY (i);
+		qboolean isolated = M_LivePreview_IsolateY (y);
+
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
 
 		// Get menu item text based on index
 		switch (i) {
@@ -5686,9 +6304,20 @@ void M_Options_Draw (void)
 				M_Print(16, y, text);
 			}
 		}
+
+		if (isolated)
+			M_LivePreview_EndIsolate ();
 	}
 	// Draw cursor
-	M_DrawCharacter(200, 32 + options_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+	{
+		int y = M_Options_RowY (options_cursor);
+		qboolean isolated = M_LivePreview_IsolateY (y);
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
+		M_DrawCharacter(200, y, 12 + ((int)(realtime * 4) & 1));
+		if (isolated)
+			M_LivePreview_EndIsolate ();
+	}
 
 	if (optionsmenu.list.search.len > 0) // Draw search box if search is active
 	{
@@ -5759,6 +6388,11 @@ void M_Options_Key (int k)
 			return;
 		}
 		// If no search active, proceed with normal menu exit
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Main_f();
 		return;
 	}
@@ -5818,6 +6452,11 @@ void M_Options_Key (int k)
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Main_f ();
 		break;
 
@@ -7922,6 +8561,11 @@ void M_Mouse_Key(int k)
 			M_Mouse_UpdateSearch();
 			return;
 		}
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Options_f();
 		return;
 	}
@@ -7976,6 +8620,11 @@ void M_Mouse_Key(int k)
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Options_f();
 		break;
 
@@ -9676,6 +10325,32 @@ static void M_Graphics_MoveCursor(int delta)
 	}
 }
 
+static int M_Graphics_LivePreviewId(void)
+{
+	switch (graphics_cursor)
+	{
+	case GRAPHICS_BRIGHTNESS:		return LP_BRIGHTNESS;
+	case GRAPHICS_CONTRAST:			return LP_CONTRAST;
+	case GRAPHICS_FILTERING:		return LP_FILTERING;
+	case GRAPHICS_MODELLERP:		return LP_MODELLERP;
+	case GRAPHICS_RENDERSCALE:		return LP_RENDERSCALE;
+	case GRAPHICS_CLASSICPARTICLES:	return LP_CLASSICPARTICLES;
+	case GRAPHICS_POWERUPSHELLS:	return chase_active.value ? LP_NONE : LP_POWERUPSHELLS;
+	case GRAPHICS_CUSTOMPARTICLES:
+	case GRAPHICS_ALIASSHADOW:
+	case GRAPHICS_BRUSHSHADOW:
+	case GRAPHICS_MODELOUTLINES:
+		return LP_GRAPHICS;
+	case GRAPHICS_WATERCAUSTICS:
+		return (cl.inwater ||
+				(r_viewleaf &&
+				 (r_viewleaf->contents == CONTENTS_WATER ||
+				  r_viewleaf->contents == CONTENTS_SLIME ||
+				  r_viewleaf->contents == CONTENTS_LAVA))) ? LP_GRAPHICS : LP_NONE;
+	default:						return LP_NONE;
+	}
+}
+
 void M_Menu_Graphics_f(void)
 {
 	key_dest = key_menu;
@@ -9686,6 +10361,7 @@ void M_Menu_Graphics_f(void)
 	graphicsmenu.search.len = 0;
 	graphicsmenu.search.text[0] = 0;
 	numberOfGraphicsItems = GRAPHICS_ITEMS;
+	M_LivePreview_Reset();
 
 	IN_UpdateGrabs();
 }
@@ -9695,6 +10371,8 @@ static void M_Graphics_AdjustSliders(int dir)
 	int m;
 	float f;
 	S_LocalSound("misc/menu3.wav");
+
+	M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 48 + graphics_cursor * 8);
 
 	switch (graphics_cursor)
 	{
@@ -9875,6 +10553,8 @@ void M_Graphics_Draw(void)
 
 	M_Graphics_ClampCursor();
 
+	M_LivePreview_WantAt (M_Graphics_LivePreviewId (), 48 + graphics_cursor * 8);
+
 	p = Draw_CachePic("gfx/p_option.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
 
@@ -9884,8 +10564,12 @@ void M_Graphics_Draw(void)
 	for (i = 0; i < GRAPHICS_ITEMS; i++)
 	{
 		int y = 48 + 8 * i;
+		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
+
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
 
 		switch (i)
 		{
@@ -10045,6 +10729,9 @@ void M_Graphics_Draw(void)
 			if (value)
 				M_Print(178, y, value);
 		}
+
+		if (isolated)
+			M_LivePreview_EndIsolate ();
 	}
 
 	// Draw search box if search is active
@@ -10062,10 +10749,16 @@ void M_Graphics_Draw(void)
 	}
 
 	// cursor
-	M_DrawCharacter(168, 48 + graphics_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+	{
+		int y = 48 + graphics_cursor * 8;
+		qboolean isolated = M_LivePreview_IsolateY (y);
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
+		M_DrawCharacter(168, y, 12 + ((int)(realtime * 4) & 1));
+		if (isolated)
+			M_LivePreview_EndIsolate ();
+	}
 }
-
-static qboolean graphics_slider_grab;
 
 void M_Graphics_Key(int k)
 {
@@ -10095,6 +10788,11 @@ void M_Graphics_Key(int k)
 			graphicsmenu.search.len = 0;
 			graphicsmenu.search.text[0] = 0;
 			M_Graphics_UpdateSearch();
+			return;
+		}
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
 			return;
 		}
 		M_Menu_Options_f();
@@ -10149,6 +10847,11 @@ void M_Graphics_Key(int k)
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Options_f();
 		break;
 
@@ -10173,6 +10876,7 @@ void M_Graphics_Key(int k)
 				graphics_cursor == GRAPHICS_WATERCAUSTICS)
 			{
 				graphics_slider_grab = true;
+				M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 48 + graphics_cursor * 8);
 			}
 			else
 			{
@@ -10227,6 +10931,8 @@ void M_Graphics_Mousemove(int cx, int cy)
 			graphics_slider_grab = false;
 			return;
 		}
+
+		M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 48 + graphics_cursor * 8);
 
 		float f;
 		switch (graphics_cursor)
@@ -10340,12 +11046,16 @@ static enum sky_e
 
 #define SKY_ITEMS (SKY_COUNT)
 
-static qboolean sky_slider_grab;
 static qboolean sky_field_editing;
 static menu_textfield_t sky_globalsky_field;
 static char sky_globalsky_buffer[MAX_QPATH];
 static char sky_globalsky_hint[MAX_QPATH];
 static char sky_globalsky_tabpartial[MAX_QPATH];
+
+static qboolean M_Sky_PreviewAvailable(void)
+{
+	return R_WorldSkyVisible();
+}
 
 static int M_Sky_GetItemY(int index)
 {
@@ -10424,6 +11134,9 @@ static void M_Sky_EndFieldEdit(qboolean apply_changes)
 	sky_field_editing = false;
 	sky_globalsky_hint[0] = '\0';
 	sky_globalsky_tabpartial[0] = '\0';
+
+	if (apply_changes && M_Sky_PreviewAvailable())
+		M_LivePreview_WantAndKick (LP_SKY, M_Sky_GetItemY (SKY_GLOBALSKY));
 }
 
 static cvar_t *M_Sky_QualityCvar(void)
@@ -10444,6 +11157,31 @@ static void M_Sky_MoveCursor(int delta)
 	sky_cursor = (enum sky_e)M_Menu_ClampCursorValue((int)sky_cursor + delta, SKY_ITEMS);
 }
 
+static int M_Sky_LivePreviewId(void)
+{
+	if (!M_Sky_PreviewAvailable())
+		return LP_NONE;
+
+	switch (sky_cursor)
+	{
+	case SKY_FASTSKY:
+	case SKY_FASTSKY_COLOR:
+	case SKY_QUALITY:
+	case SKY_ALPHA:
+	case SKY_FOG:
+	case SKY_SPEED:
+	case SKY_GLOBALSKY:
+		return LP_SKY;
+	default:
+		return LP_NONE;
+	}
+}
+
+static void M_Sky_KickLivePreview(void)
+{
+	M_LivePreview_WantAndKick (M_Sky_LivePreviewId (), M_Sky_GetItemY (sky_cursor));
+}
+
 void M_Menu_Sky_f(void)
 {
 	key_dest = key_menu;
@@ -10458,6 +11196,7 @@ void M_Menu_Sky_f(void)
 	q_strlcpy(sky_globalsky_buffer, r_globalsky.string, sizeof(sky_globalsky_buffer));
 	M_TextField_Init(&sky_globalsky_field, sky_globalsky_buffer,
 		sizeof(sky_globalsky_buffer) - 1, false);
+	M_LivePreview_Reset();
 
 	IN_UpdateGrabs();
 }
@@ -10537,12 +11276,14 @@ static void M_Sky_AdjustSliders(int dir)
 	switch (sky_cursor)
 	{
 	case SKY_FASTSKY:
+		M_Sky_KickLivePreview();
 		mode = (int)r_fastsky.value;
 		mode = (mode + (dir > 0 ? 1 : 2)) % 3; // cycle 0->1->2
 		Cvar_SetValue("r_fastsky", (float)mode);
 		break;
 
 	case SKY_FASTSKY_COLOR:
+		M_Sky_KickLivePreview();
 		M_Sky_AdjustColor(dir);
 		break;
 
@@ -10550,6 +11291,7 @@ static void M_Sky_AdjustSliders(int dir)
 		q = M_Sky_QualityCvar();
 		if (q)
 		{
+			M_Sky_KickLivePreview();
 			f = q->value + dir;
 			f = CLAMP(4, f, 32);
 			Cvar_SetValue("r_sky_quality", f);
@@ -10557,18 +11299,21 @@ static void M_Sky_AdjustSliders(int dir)
 		break;
 
 	case SKY_ALPHA:
+		M_Sky_KickLivePreview();
 		f = r_skyalpha.value + dir * 0.1f;
 		f = CLAMP(0, f, 1);
 		Cvar_SetValue("r_skyalpha", f);
 		break;
 
 	case SKY_FOG:
+		M_Sky_KickLivePreview();
 		f = r_skyfog.value + dir * 0.05f;
 		f = CLAMP(0, f, 1);
 		Cvar_SetValue("r_skyfog", f);
 		break;
 
 	case SKY_SPEED:
+		M_Sky_KickLivePreview();
 		f = r_skyspeed.value + dir * 0.25f;
 		f = CLAMP(0, f, 10);
 		Cvar_SetValue("r_skyspeed", f);
@@ -10610,10 +11355,16 @@ void M_Sky_Draw(void)
 		M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
 	}
 
+	M_LivePreview_WantAt (M_Sky_LivePreviewId (), M_Sky_GetItemY (sky_cursor));
+
 	for (i = 0; i < SKY_ITEMS; i++)
 	{
 		int y = M_Sky_GetItemY(i);
+		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char *text = NULL;
+
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
 
 		switch (i)
 		{
@@ -10761,9 +11512,20 @@ void M_Sky_Draw(void)
 
 		if (text)
 			M_Print(0, y, text);
+
+		if (isolated)
+			M_LivePreview_EndIsolate ();
 	}
 
-	M_DrawCharacter(168, M_Sky_GetItemY(sky_cursor), 12 + ((int)(realtime * 4) & 1));
+	{
+		int y = M_Sky_GetItemY(sky_cursor);
+		qboolean isolated = M_LivePreview_IsolateY (y);
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
+		M_DrawCharacter(168, y, 12 + ((int)(realtime * 4) & 1));
+		if (isolated)
+			M_LivePreview_EndIsolate ();
+	}
 
 	if (sky_field_editing)
 	{
@@ -10864,6 +11626,11 @@ void M_Sky_Key(int k)
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Graphics_f();
 		graphics_cursor = GRAPHICS_SKY;
 		break;
@@ -10877,7 +11644,10 @@ void M_Sky_Key(int k)
 				sky_cursor = item;
 				if (sky_cursor == SKY_QUALITY || sky_cursor == SKY_ALPHA ||
 					sky_cursor == SKY_FOG || sky_cursor == SKY_SPEED)
+				{
 					sky_slider_grab = true;
+					M_Sky_KickLivePreview();
+				}
 				else
 					M_Sky_AdjustSliders(1);
 			}
@@ -10956,6 +11726,8 @@ void M_Sky_Mousemove(int cx, int cy)
 			return;
 		}
 
+		M_Sky_KickLivePreview();
+
 		switch (sky_cursor)
 		{
 		case SKY_QUALITY:
@@ -11020,8 +11792,6 @@ static enum skywind_e
 
 #define SKYWIND_ITEMS (SKYWIND_COUNT)
 
-static qboolean skywind_slider_grab;
-
 static void M_Skywind_ClampCursor(void)
 {
 	skywind_cursor = (enum skywind_e)M_Menu_ClampCursorValue((int)skywind_cursor, SKYWIND_ITEMS);
@@ -11032,12 +11802,23 @@ static void M_Skywind_MoveCursor(int delta)
 	skywind_cursor = (enum skywind_e)M_Menu_ClampCursorValue((int)skywind_cursor + delta, SKYWIND_ITEMS);
 }
 
+static int M_Skywind_LivePreviewId(void)
+{
+	return M_Sky_PreviewAvailable() ? LP_SKY : LP_NONE;
+}
+
+static void M_Skywind_KickLivePreview(void)
+{
+	M_LivePreview_WantAndKick (M_Skywind_LivePreviewId (), 48 + skywind_cursor * 8);
+}
+
 static void M_Skywind_Adjust(int dir)
 {
 	float dist, yaw, period, pitch;
 
 	Sky_GetWindParams(&dist, &yaw, &period, &pitch);
 	S_LocalSound("misc/menu3.wav");
+	M_Skywind_KickLivePreview();
 
 	switch (skywind_cursor)
 	{
@@ -11074,6 +11855,7 @@ void M_Menu_Skywind_f(void)
 	m_entersound = true;
 	skywind_cursor = 0;
 	skywind_slider_grab = false;
+	M_LivePreview_Reset();
 
 	IN_UpdateGrabs();
 }
@@ -11097,10 +11879,16 @@ void M_Skywind_Draw(void)
 		M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
 	}
 
+	M_LivePreview_WantAt (M_Skywind_LivePreviewId (), 48 + skywind_cursor * 8);
+
 	for (i = 0; i < SKYWIND_ITEMS; i++)
 	{
 		int y = 48 + 8 * i;
+		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char *text = NULL;
+
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
 
 		switch (i)
 		{
@@ -11134,9 +11922,20 @@ void M_Skywind_Draw(void)
 
 		if (text)
 			M_Print(0, y, text);
+
+		if (isolated)
+			M_LivePreview_EndIsolate ();
 	}
 
-	M_DrawCharacter(168, 48 + skywind_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+	{
+		int y = 48 + skywind_cursor * 8;
+		qboolean isolated = M_LivePreview_IsolateY (y);
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
+		M_DrawCharacter(168, y, 12 + ((int)(realtime * 4) & 1));
+		if (isolated)
+			M_LivePreview_EndIsolate ();
+	}
 
 	if (dist == 0.0f)
 		M_PrintRGBA(80, 144, "strength 0 = disabled",
@@ -11168,6 +11967,11 @@ void M_Skywind_Key(int k)
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Sky_f();
 		sky_cursor = SKY_WIND;
 		break;
@@ -11178,6 +11982,7 @@ void M_Skywind_Key(int k)
 		{
 			skywind_cursor = (m_mousey - 48) / 8;
 			skywind_slider_grab = true;
+			M_Skywind_KickLivePreview();
 		}
 		break;
 
@@ -11225,6 +12030,7 @@ void M_Skywind_Mousemove(int cx, int cy)
 
 		Sky_GetWindParams(&dist, &yaw, &period, &pitch);
 		frac = CLAMP(0.0f, M_MouseToSliderFraction(cx - 187), 1.0f);
+		M_Skywind_KickLivePreview();
 
 		switch (skywind_cursor)
 		{
@@ -12205,7 +13011,6 @@ static struct
 	} search;
 } gamemenu;
 
-static qboolean game_slider_grab;
 static qboolean team_rgb_active;
 static qboolean enemy_rgb_active;
 static char last_team_color[10];
@@ -12895,6 +13700,23 @@ static void M_Game_MoveCursor(int delta)
 		M_Game_GetItemText, gamemenu.search.text, gamemenu.search.len);
 }
 
+static int M_Game_LivePreviewId(void)
+{
+	switch (game_cursor)
+	{
+	case GAME_FOV:
+		return LP_FOV;
+	case GAME_FLASHES:
+		return LP_CSHIFT;
+	case GAME_DAMAGETINT:
+		return LP_DAMAGETINT;
+	case GAME_VIEWMODEL:
+		return LP_VIEWMODEL;
+	default:
+		return LP_NONE;
+	}
+}
+
 void M_Menu_Game_f(void)
 {
 	key_dest = key_menu;
@@ -12905,6 +13727,7 @@ void M_Menu_Game_f(void)
 	gamemenu.search.len = 0;
 	gamemenu.search.text[0] = 0;
 	numberOfGameItems = GAME_ITEMS;
+	M_LivePreview_Reset();
 
 	IN_UpdateGrabs();
 }
@@ -12914,6 +13737,8 @@ static void M_Game_AdjustSliders(int dir)
 	int curr_alwaysrun, target_alwaysrun;
 	float f;
 	S_LocalSound("misc/menu3.wav");
+
+	M_LivePreview_WantAndKick (M_Game_LivePreviewId (), 20 + game_cursor * 8);
 
 	switch (game_cursor)
 	{
@@ -13100,11 +13925,17 @@ void M_Game_Draw(void)
 	const char* title = "Game Options";
 	M_PrintWhite((320 - 8 * strlen(title)) / 2, 4, title);
 
+	M_LivePreview_WantAt (M_Game_LivePreviewId (), 20 + game_cursor * 8);
+
 	for (i = 0; i < GAME_ITEMS; i++)
 	{
 		int y = 20 + 8 * i;
+		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
+
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
 
 		switch (i)
 		{
@@ -13267,10 +14098,21 @@ void M_Game_Draw(void)
 				M_Print(0, y, text);
 			}
 		}
+
+		if (isolated)
+			M_LivePreview_EndIsolate ();
 	}
 
 	// Draw cursor
-	M_DrawCharacter(168, 20 + game_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+	{
+		int y = 20 + game_cursor * 8;
+		qboolean isolated = M_LivePreview_IsolateY (y);
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
+		M_DrawCharacter(168, y, 12 + ((int)(realtime * 4) & 1));
+		if (isolated)
+			M_LivePreview_EndIsolate ();
+	}
 
 	if (game_cursor == GAME_TEAMCOLOR || game_cursor == GAME_ENEMYCOLOR)
 		M_PrintRGBA(74, 176, "+shift for RGB colors", CL_PLColours_Parse("0xffffff"), 0.6f, false);
@@ -13318,6 +14160,11 @@ void M_Game_Key(int k)
 			gamemenu.search.len = 0;
 			gamemenu.search.text[0] = 0;
 			M_Game_UpdateSearch();
+			return;
+		}
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
 			return;
 		}
 		M_Menu_Options_f();
@@ -13372,6 +14219,11 @@ void M_Game_Key(int k)
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Options_f();
 		break;
 
@@ -13394,6 +14246,7 @@ void M_Game_Key(int k)
 				game_cursor == GAME_VIEWMODEL)
 			{
 				game_slider_grab = true;
+				M_LivePreview_WantAndKick (M_Game_LivePreviewId (), 20 + game_cursor * 8);
 			}
 			else
 			{
@@ -13448,6 +14301,8 @@ void M_Game_Mousemove(int cx, int cy)
 			game_slider_grab = false;
 			return;
 		}
+
+		M_LivePreview_WantAndKick (M_Game_LivePreviewId (), 20 + game_cursor * 8);
 
 		float f;
 		switch (game_cursor)
@@ -13832,7 +14687,6 @@ static struct
 	} search;
 } hudmenu;
 
-static qboolean hud_slider_grab;
 float target_hud_scale_frac;
 
 static const char* M_HUD_GetItemText(int index)
@@ -13882,6 +14736,23 @@ static const char* M_HUD_GetItemText(int index)
 	}
 }
 
+static int M_HUD_LivePreviewId(void)
+{
+	switch (hud_cursor)
+	{
+	case HUD_SCALE:		return LP_HUDSCALE;
+	case HUD_SCRSIZE:	return LP_SCRSIZE;
+	case HUD_SBALPHA:	return LP_SBALPHA;
+	case HUD_SBARSTYLE:	return LP_SBARSTYLE;
+	case HUD_MATCHSCORES:	return LP_MATCHSCORES;
+	case HUD_SHOWSPEED:	return LP_SHOWSPEED;
+	case HUD_SHOWSCORES:	return LP_SHOWSCORES;
+	case HUD_MOVEKEYS:	return LP_MOVEKEYS;
+	case HUD_CONSOLEFONT:	return LP_CONFONT;
+	default:			return LP_NONE;
+	}
+}
+
 void M_Menu_HUD_f(void)
 {
 	key_dest = key_menu;
@@ -13893,6 +14764,7 @@ void M_Menu_HUD_f(void)
 	hudmenu.search.text[0] = 0;
 	numberOfHUDItems = HUD_ITEMS;
 	hud_slider_grab = false;
+	M_LivePreview_Reset();
 
 	IN_UpdateGrabs();
 }
@@ -13902,6 +14774,8 @@ static void M_HUD_AdjustSliders(int dir)
 	float f, l;
 	int value;
 	S_LocalSound("misc/menu3.wav");
+
+	M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
 
 	switch (hud_cursor)
 	{
@@ -14013,10 +14887,16 @@ void M_HUD_Draw(void)
 	const char* title = "HUD Options";
 	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
 
+	M_LivePreview_WantAt (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
+
 	for (int i = 0; i < HUD_ITEMS; i++)
 	{
 		int y = 48 + 8 * i;
+		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
+
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
 
 		switch (i)
 		{
@@ -14167,6 +15047,9 @@ void M_HUD_Draw(void)
 				M_Print(0, y, text);
 			}
 		}
+
+		if (isolated)
+			M_LivePreview_EndIsolate ();
 	}
 
 	// Draw search box if active
@@ -14184,7 +15067,15 @@ void M_HUD_Draw(void)
 	}
 
 	// Draw cursor
-	M_DrawCharacter(168, 48 + hud_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+	{
+		int y = 48 + hud_cursor * 8;
+		qboolean isolated = M_LivePreview_IsolateY (y);
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
+		M_DrawCharacter(168, y, 12 + ((int)(realtime * 4) & 1));
+		if (isolated)
+			M_LivePreview_EndIsolate ();
+	}
 }
 
 void M_HUD_Key(int k)
@@ -14215,6 +15106,11 @@ void M_HUD_Key(int k)
 			hudmenu.search.len = 0;
 			hudmenu.search.text[0] = 0;
 			numberOfHUDItems = HUD_ITEMS;
+			return;
+		}
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
 			return;
 		}
 		M_Menu_Options_f();
@@ -14316,6 +15212,11 @@ void M_HUD_Key(int k)
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Options_f();
 		break;
 
@@ -14329,16 +15230,13 @@ void M_HUD_Key(int k)
 			M_Menu_Crosshair_f();
 			break;
 		case HUD_SBARSTYLE:
-		{
-			int value = scr_sbar.value + 1;
-			if (value > 3) value = 1;
-			Cvar_SetValue("scr_sbar", value);
+			M_HUD_AdjustSliders(1);
 			break;
-		}
 		case HUD_SHOWFPS:
 			Cvar_SetValue("scr_showfps", !scr_showfps.value);
 			break;
 		case HUD_MATCHSCORES:
+			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
 			Cvar_SetValue("scr_match_hud", !scr_match_hud.value);
 			break;
 		case HUD_MATCHCLOCK:
@@ -14356,6 +15254,10 @@ void M_HUD_Key(int k)
 		}
 		case HUD_OBSITEMS:
 			Cvar_SetValue("scr_obsitems", !scr_obsitems.value);
+			break;
+		case HUD_SHOWSCORES:
+			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
+			Cvar_SetValue("scr_showscores", !scr_showscores.value);
 			break;
 		case HUD_SCOREBOARD_SORT:
 		{
@@ -14394,12 +15296,11 @@ void M_HUD_Key(int k)
 				hud_cursor == HUD_CONSOLEFONT)
 			{
 				hud_slider_grab = true;
+				M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
 			}
 			else if (hud_cursor == HUD_SBARSTYLE)
 			{
-				int value = scr_sbar.value + 1;
-				if (value > 3) value = 1;
-				Cvar_SetValue("scr_sbar", value);
+				M_HUD_AdjustSliders(1);
 			}
 			else if (hud_cursor == HUD_SHOWFPS)
 			{
@@ -14407,6 +15308,7 @@ void M_HUD_Key(int k)
 			}
 			else if (hud_cursor == HUD_MATCHSCORES)
 			{
+				M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
 				Cvar_SetValue("scr_match_hud", !scr_match_hud.value);
 			}
 			else if (hud_cursor == HUD_MATCHCLOCK)
@@ -14436,11 +15338,13 @@ void M_HUD_Key(int k)
 			else if (hud_cursor == HUD_SHOWSPEED)
 			{
 				int value = scr_showspeed.value + 1;
+				M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
 				if (value > 2) value = 0;
 				Cvar_SetValue("scr_showspeed", value);
 			}
 			else if (hud_cursor == HUD_SHOWSCORES)
 			{
+				M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
 				Cvar_SetValue("scr_showscores", !scr_showscores.value);
 			}
 			else if (hud_cursor == HUD_AUTOID)
@@ -14451,6 +15355,7 @@ void M_HUD_Key(int k)
 			}
 			else if (hud_cursor == HUD_MOVEKEYS)
 			{
+				M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
 				Cvar_SetValue("scr_movekeys", !scr_movekeys.value);
 			}
 			else
@@ -14504,6 +15409,8 @@ void M_HUD_Mousemove(int cx, int cy)
 			hud_slider_grab = false;
 			return;
 		}
+
+		M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
 
 		float f, l;
 		switch (hud_cursor)
@@ -15326,13 +16233,13 @@ static struct
 	} search;
 } consolemenu;
 
-static qboolean console_slider_grab;
 static qboolean console_field_editing;
 static menu_textfield_t console_conback_field;
 static char console_conback_buffer[MAX_QPATH];
 static qboolean console_rgb_active;
 static const char* M_Console_GetItemText(int index);
 static void M_Console_UpdateSearchResults(void);
+static int M_Console_LivePreviewId(void);
 
 static menu_textfield_t *M_Console_GetFieldForCursor(void)
 {
@@ -15430,6 +16337,7 @@ static void M_Console_EndFieldEdit(qboolean apply_changes)
 	if (apply_changes)
 	{
 		Cvar_Set("scr_conback", console_conback_buffer);
+		M_LivePreview_WantAndKick (M_Console_LivePreviewId (), M_Console_GetItemY (console_cursor));
 	}
 	else
 	{
@@ -15593,6 +16501,43 @@ static const char* M_Console_GetItemText(int index)
 	}
 }
 
+static int M_Console_LivePreviewId(void)
+{
+	switch (console_cursor)
+	{
+	case CONSOLE_FONTSIZE:
+		return LP_CONFONT;
+	case CONSOLE_HEIGHT:
+		return LP_CONHEIGHT;
+	case CONSOLE_SPEED:
+		return LP_CONSPEED;
+	case CONSOLE_TRANSPARENCY:
+		return LP_CONALPHA;
+	case CONSOLE_CONBACK:
+		return LP_CONBACK;
+	case CONSOLE_CONCOLOR:
+		return LP_CONCOLOR;
+	case CONSOLE_TYPING:
+		return LP_CONTYPING;
+	default:
+		return LP_NONE;
+	}
+}
+
+static qboolean M_Console_IsSliderItem (void)
+{
+	return (console_cursor == CONSOLE_FONTSIZE ||
+			console_cursor == CONSOLE_HEIGHT ||
+			console_cursor == CONSOLE_SPEED ||
+			console_cursor == CONSOLE_TRANSPARENCY);
+}
+
+static void M_Console_StartSliderGrab (void)
+{
+	console_slider_grab = true;
+	M_LivePreview_WantAndKick (M_Console_LivePreviewId (), M_Console_GetItemY (console_cursor));
+}
+
 void M_Menu_Console_f(void)
 {
 	key_dest = key_menu;
@@ -15604,6 +16549,7 @@ void M_Menu_Console_f(void)
 	consolemenu.search.text[0] = 0;
 	numberOfConsoleItems = CONSOLE_ITEMS;
 	M_Console_InitTextFields();
+	M_LivePreview_Reset();
 
 	IN_UpdateGrabs();
 }
@@ -15617,6 +16563,8 @@ static void M_Console_AdjustSliders(int dir)
 		return;
 
 	S_LocalSound("misc/menu3.wav");
+
+	M_LivePreview_WantAndKick (M_Console_LivePreviewId (), M_Console_GetItemY (console_cursor));
 
 	switch (console_cursor)
 	{
@@ -15684,10 +16632,16 @@ void M_Console_Draw(void)
 	const char* title = "Console Options";
 	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
 
+	M_LivePreview_WantAt (M_Console_LivePreviewId (), M_Console_GetItemY (console_cursor));
+
 	for (i = 0; i < CONSOLE_ITEMS; i++)
 	{
 		int y = M_Console_GetItemY(i);
+		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
+
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
 
 		switch (i)
 		{
@@ -15771,10 +16725,21 @@ void M_Console_Draw(void)
 				M_Print(16, y, text);
 			}
 		}
+
+		if (isolated)
+			M_LivePreview_EndIsolate ();
 	}
 
 	// Draw cursor
-	M_DrawCharacter(168, M_Console_GetItemY(console_cursor), 12 + ((int)(realtime * 4) & 1));
+	{
+		int y = M_Console_GetItemY(console_cursor);
+		qboolean isolated = M_LivePreview_IsolateY (y);
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
+		M_DrawCharacter(168, y, 12 + ((int)(realtime * 4) & 1));
+		if (isolated)
+			M_LivePreview_EndIsolate ();
+	}
 
 	if (console_field_editing)
 	{
@@ -15883,6 +16848,11 @@ void M_Console_Key(int k)
 			M_Console_ClearSearch();
 			return;
 		}
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Options_f();
 		return;
 	}
@@ -15933,6 +16903,11 @@ void M_Console_Key(int k)
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Options_f();
 		break;
 
@@ -15942,11 +16917,8 @@ void M_Console_Key(int k)
 		m_entersound = true;
 		if (M_Console_GetFieldForCursor())
 			M_Console_BeginFieldEdit();
-		else if (console_cursor == CONSOLE_FONTSIZE ||
-			console_cursor == CONSOLE_HEIGHT ||
-			console_cursor == CONSOLE_SPEED ||
-			console_cursor == CONSOLE_TRANSPARENCY)
-			console_slider_grab = true;
+		else if (M_Console_IsSliderItem ())
+			M_Console_StartSliderGrab ();
 		else
 			M_Console_AdjustSliders(1);
 		break;
@@ -15972,11 +16944,8 @@ void M_Console_Key(int k)
 						if (field)
 							M_Console_MouseClickField(field, m_mousex);
 					}
-				else if (console_cursor == CONSOLE_FONTSIZE ||
-					console_cursor == CONSOLE_HEIGHT ||
-					console_cursor == CONSOLE_SPEED ||
-					console_cursor == CONSOLE_TRANSPARENCY)
-					console_slider_grab = true;
+				else if (M_Console_IsSliderItem ())
+					M_Console_StartSliderGrab ();
 				else
 					M_Console_AdjustSliders(1);
 			}
@@ -16045,6 +17014,8 @@ void M_Console_Mousemove(int cx, int cy)
 			console_slider_grab = false;
 			return;
 		}
+
+		M_LivePreview_WantAndKick (M_Console_LivePreviewId (), M_Console_GetItemY (console_cursor));
 
 		float f;
 		switch (console_cursor)
@@ -16962,6 +17933,7 @@ static enum extras_e
 	EXTRAS_RESETCONFIG,
 	EXTRAS_PONG,
 	EXTRAS_HINTS,
+	EXTRAS_LIVEPREVIEW,
 	EXTRAS_VERSION,
 	EXTRAS_COUNT
 } extras_cursor;
@@ -17007,6 +17979,8 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 		return "Quake Pong";
 	case EXTRAS_HINTS:
 		return "Paused Hints";
+	case EXTRAS_LIVEPREVIEW:
+		return "Live Preview";
 	case EXTRAS_VERSION:
 		return "Version Info";
 	default:
@@ -17029,6 +18003,26 @@ static void M_Extras_MoveCursor(int delta)
 		M_Extras_GetItemText, extrasmenu.search.text, extrasmenu.search.len);
 }
 
+static int M_Extras_RowY(int item)
+{
+	return 48 + item * 8;
+}
+
+static int M_Extras_LivePreviewId(void)
+{
+	switch (extras_cursor)
+	{
+	case EXTRAS_ITEMBOB:
+		return CL_ViewingQ3ItemBobbingItem () ? LP_ITEMBOB : LP_NONE;
+	case EXTRAS_PONG:
+		return cls.demoplayback ? LP_NONE : LP_PONG;
+	case EXTRAS_HINTS:
+		return cls.demoplayback ? LP_NONE : LP_HINTS;
+	default:
+		return LP_NONE;
+	}
+}
+
 void M_Menu_Extras_f(void)
 {
 	key_dest = key_menu;
@@ -17039,6 +18033,7 @@ void M_Menu_Extras_f(void)
 	extrasmenu.search.len = 0;
 	extrasmenu.search.text[0] = 0;
 	numberOfExtrasItems = EXTRAS_ITEMS;
+	M_LivePreview_Reset();
 
 	IN_UpdateGrabs();
 }
@@ -17086,6 +18081,7 @@ static void M_Extras_AdjustSliders (int dir)
 		Cvar_SetValue("cl_smartspawn", !cl_smartspawn.value);
 		break;
 	case EXTRAS_ITEMBOB:
+		M_LivePreview_WantAndKick (M_Extras_LivePreviewId (), M_Extras_RowY (extras_cursor));
 		Cvar_SetValue("cl_bobbing", !cl_bobbing.value);
 		break;
 	case EXTRAS_RESETCONFIG:
@@ -17098,9 +18094,22 @@ static void M_Extras_AdjustSliders (int dir)
 		break;
 	case EXTRAS_PONG: // Added Quake Pong toggle
 		Cvar_SetValueQuick(&cl_pong, !cl_pong.value);
+		if (cl_pong.value)
+			M_LivePreview_WantAndKick (M_Extras_LivePreviewId (), M_Extras_RowY (extras_cursor));
+		else
+			M_LivePreview_Reset();
 		break;
 	case EXTRAS_HINTS: // Added Paused Hints toggle
 		Cvar_SetValueQuick(&scr_hints, !scr_hints.value);
+		if (scr_hints.value)
+			M_LivePreview_WantAndKick (M_Extras_LivePreviewId (), M_Extras_RowY (extras_cursor));
+		else
+			M_LivePreview_Reset();
+		break;
+	case EXTRAS_LIVEPREVIEW:
+		Cvar_SetValueQuick(&ui_live_preview, !ui_live_preview.value);
+		if (!ui_live_preview.value)
+			M_LivePreview_Reset();
 		break;
 	case EXTRAS_VERSION:
 		M_Menu_Version_f();
@@ -17123,11 +18132,17 @@ void M_Extras_Draw(void)
 	const char* title = "Miscellaneous Options";
 	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
 
+	M_LivePreview_WantAt (M_Extras_LivePreviewId (), M_Extras_RowY (extras_cursor));
+
 	for (i = 0; i < EXTRAS_ITEMS; i++)
 	{
-		int y = 48 + 8 * i;
+		int y = M_Extras_RowY (i);
+		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
+
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
 
 		switch (i)
 		{
@@ -17210,6 +18225,11 @@ void M_Extras_Draw(void)
 			value = scr_hints.value ? "on" : "off";
 			break;
 
+		case EXTRAS_LIVEPREVIEW:
+			text = "      Live Preview";
+			value = ui_live_preview.value ? "on" : "off";
+			break;
+
 		case EXTRAS_VERSION:
 			text = "      Version Info";
 			value = "...";
@@ -17235,10 +18255,21 @@ void M_Extras_Draw(void)
 
 			M_Print(168, y, value);
 		}
+
+		if (isolated)
+			M_LivePreview_EndIsolate ();
 	}
 
 	// Draw cursor
-	M_DrawCharacter(160, 48 + extras_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+	{
+		int y = M_Extras_RowY (extras_cursor);
+		qboolean isolated = M_LivePreview_IsolateY (y);
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
+		M_DrawCharacter(160, y, 12 + ((int)(realtime * 4) & 1));
+		if (isolated)
+			M_LivePreview_EndIsolate ();
+	}
 
 	// Draw search box if search is active
 	if (extrasmenu.search.len > 0)
@@ -17264,6 +18295,11 @@ void M_Extras_Key(int k)
 			extrasmenu.search.len = 0;
 			extrasmenu.search.text[0] = 0;
 			M_Extras_UpdateSearch();
+			return;
+		}
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
 			return;
 		}
 		M_Menu_Options_f();
@@ -17318,6 +18354,11 @@ void M_Extras_Key(int k)
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Options_f();
 		break;
 
@@ -26109,7 +27150,7 @@ void M_Demos_Mousemove(int cx, int cy) // woods #mousemenu
 /*
 =========================================
 Credit Menu - used by the 2021 re-release
-========================================+
+=========================================
 */
 
 void M_Menu_Credits_f (void)
@@ -26147,7 +27188,7 @@ static struct
 	{"menu_game", M_Menu_Game_f},
 	{"menu_hud", M_Menu_HUD_f},
 	{"menu_crosshair", M_Menu_Crosshair_f},
-	{"menu_console", M_Menu_HUD_f},
+	{"menu_console", M_Menu_Console_f},
 	{"menu_colorpicker", M_Menu_ColorPicker_f},
 	{"menu_startup", M_Menu_Startup_f},
 	{"menu_demooptions", M_Menu_DemoOptions_f},
@@ -26307,6 +27348,8 @@ void M_Init (void)
 	Cmd_AddCommand ("menu_cmd", MQC_Command_f);
 	Cmd_AddCommand ("menu_restart", M_MenuRestart_f);	//qss still loads progs on hunk, so we can't do this safely.
 
+	Cvar_RegisterVariable (&ui_live_preview);
+
 	if (!MQC_Init())
 		MQC_Shutdown();
 }
@@ -26317,6 +27360,7 @@ void M_Draw (void)
 	if (cls.menu_qcvm.extfuncs.m_draw)
 	{	//Spike -- menuqc
 		float s = q_min((float)glwidth / 320.0, (float)glheight / 200.0);
+		M_LivePreview_Reset ();
 		s = CLAMP (1.0, scr_menuscale.value, s);
 		if (!host_initialized)
 			return;
@@ -26354,20 +27398,34 @@ void M_Draw (void)
 	}
 
 	if (m_state == m_none || key_dest != key_menu)
+	{
+		M_LivePreview_Update ();
 		return;
+	}
+
+	M_LivePreview_Update ();
 
 	if (!m_recursiveDraw)
 	{
 		qboolean live_world_menu = (m_state == m_skywind && cl.worldmodel);
+		float lp_frac = M_LivePreview_Alpha ();
 
-		if (scr_con_current)
+		if (scr_con_current && !M_WantsConsole (NULL))
 		{
 			Draw_ConsoleBackground ();
 			S_ExtraUpdate ();
 		}
 
-		if (m_state != m_crosshair && !live_world_menu && !scr_con_current)
-			Draw_FadeScreen (); //johnfitz -- fade even if console fills screen
+		if (m_state != m_crosshair && !live_world_menu)
+		{
+			if (lp_frac > 0.f)
+			{
+				M_LivePreview_DrawEffects ();
+				M_LivePreview_DrawFadeScreen ();
+			}
+			else if (!scr_con_current)
+				Draw_FadeScreen ();
+		}
 	}
 	else
 	{
@@ -26375,6 +27433,26 @@ void M_Draw (void)
 	}
 
 	GL_SetCanvas (CANVAS_MENU); //johnfitz
+
+	{
+		float lp_frac = M_LivePreview_Alpha ();
+		if (lp_frac > 0.f)
+		{
+			// Fade the menu itself (Ironwail-style). gl_menu_alpha is the
+			// single source of truth: draw primitives that reset glColor at
+			// the end honor it (see gl_draw.c) so the bracket survives across
+			// nested RGBA draws. MODULATE texenv lets pics scale by glColor's
+			// alpha; BLEND on + ALPHA_TEST off avoids the usual masked-pic
+			// logic discarding our faded pixels. Squaring (alpha *= alpha)
+			// matches Ironwail's fade curve: fast initial dim, slow tail.
+			gl_menu_alpha = 1.f - lp_frac;
+			gl_menu_alpha *= gl_menu_alpha;
+			glEnable (GL_BLEND);
+			glDisable (GL_ALPHA_TEST);
+			glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+			glColor4f (1.f, 1.f, 1.f, gl_menu_alpha);
+		}
+	}
 
 	switch (m_state)
 	{
@@ -26578,6 +27656,15 @@ void M_Draw (void)
 		break;
 	}
 
+	if (M_LivePreview_Alpha () > 0.f)
+	{
+		gl_menu_alpha = 1.f;
+		glColor4f (1.f, 1.f, 1.f, 1.f);
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable (GL_ALPHA_TEST);
+		glDisable (GL_BLEND);
+	}
+
 	if (m_entersound)
 	{
 		S_LocalSound ("misc/menu2.wav");
@@ -26633,6 +27720,9 @@ void M_Keydown (int key, qboolean repeat)
 			return;
 		}
 	}
+
+	if (key == K_SHIFT)
+		M_LivePreview_UpdateUserPin ();
 
 	switch (m_state)
 	{
@@ -27642,8 +28732,6 @@ static struct
 	} search;
 } demooptionsmenu;
 
-static qboolean demooptions_slider_grab;
-
 static const char* M_DemoOptions_GetItemText(int index)
 {
 	static char buffer[64];
@@ -27760,6 +28848,22 @@ static void M_DemoOptions_SearchUpdate(void)
 	}
 }
 
+static int M_DemoOptions_RowY(int item)
+{
+	return 48 + item * 8;
+}
+
+static int M_DemoOptions_LivePreviewId(void)
+{
+	switch (demooptions_cursor)
+	{
+	case DEMOOPTIONS_BAR_TIMEOUT:
+		return cls.demoplayback ? LP_DEMOBAR : LP_NONE;
+	default:
+		return LP_NONE;
+	}
+}
+
 static void M_DemoOptions_CycleDemoFormat(int dir)
 {
 #ifdef USE_ZLIB
@@ -27800,6 +28904,7 @@ void M_Menu_DemoOptions_f(void)
 	demooptionsmenu.search.len = 0;
 	demooptionsmenu.search.text[0] = 0;
 	demooptions_slider_grab = false;
+	M_LivePreview_Reset();
 
 	M_DemoOptions_ClampCursor();
 	IN_UpdateGrabs();
@@ -27853,6 +28958,7 @@ static void M_DemoOptions_AdjustSliders(int dir)
 		else
 			f = (scr_demobar_timeout.value <= 1.0f) ? 0.0f : (float)Q_rint(scr_demobar_timeout.value) - 1.0f;
 		Cvar_SetValueQuick(&scr_demobar_timeout, f);
+		M_LivePreview_WantAndKick (M_DemoOptions_LivePreviewId (), M_DemoOptions_RowY (demooptions_cursor));
 		break;
 	default:
 		break;
@@ -27875,11 +28981,17 @@ void M_DemoOptions_Draw(void)
 		M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
 	}
 
+	M_LivePreview_WantAt (M_DemoOptions_LivePreviewId (), M_DemoOptions_RowY (demooptions_cursor));
+
 	for (i = 0; i < DEMOOPTIONS_ITEMS; i++)
 	{
-		int y = 48 + 8 * i;
+		int y = M_DemoOptions_RowY (i);
+		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
+
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
 
 		switch (i)
 		{
@@ -27928,9 +29040,20 @@ void M_DemoOptions_Draw(void)
 		}
 		if (value)
 			M_Print(183, y, value);
+
+		if (isolated)
+			M_LivePreview_EndIsolate ();
 	}
 
-	M_DrawCharacter(172, 48 + demooptions_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+	{
+		int y = M_DemoOptions_RowY (demooptions_cursor);
+		qboolean isolated = M_LivePreview_IsolateY (y);
+		if (isolated)
+			M_LivePreview_BeginIsolate ();
+		M_DrawCharacter(172, y, 12 + ((int)(realtime * 4) & 1));
+		if (isolated)
+			M_LivePreview_EndIsolate ();
+	}
 
 	if (demooptionsmenu.search.len > 0)
 	{
@@ -27985,13 +29108,18 @@ void M_DemoOptions_Key(int k)
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
+		if (M_LivePreview_Alpha() > 0.f)
+		{
+			M_LivePreview_Reset();
+			return;
+		}
 		M_Menu_Options_f();
 		break;
 	case K_MOUSE1:
 		m_entersound = true;
-		if (m_mousey >= 48 && m_mousey < 48 + (DEMOOPTIONS_ITEMS * 8))
+		if (m_mousey >= M_DemoOptions_RowY (0) && m_mousey < M_DemoOptions_RowY (DEMOOPTIONS_ITEMS))
 		{
-			demooptions_cursor = (m_mousey - 48) / 8;
+			demooptions_cursor = (m_mousey - M_DemoOptions_RowY (0)) / 8;
 			if (demooptions_cursor == DEMOOPTIONS_DEMOEYES)
 				demooptions_slider_grab = true;
 			else
@@ -28065,7 +29193,7 @@ void M_DemoOptions_Mousemove(int cx, int cy)
 		return;
 	}
 
-	int item = (cy - 48) / 8;
+	int item = (cy - M_DemoOptions_RowY (0)) / 8;
 	if (item >= 0 && item < DEMOOPTIONS_ITEMS)
 	{
 		demooptions_cursor = item;

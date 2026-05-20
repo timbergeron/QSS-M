@@ -149,6 +149,33 @@ void M_PrintWhite (int cx, int cy, const char *str);
 void M_Draw (void);
 void M_DrawCharacter (int cx, int line, int num);
 
+// Live preview (ported from Ironwail ui_live_preview).
+// Previewing submenus track their selected previewable item internally, then
+// call M_LivePreview_Kick() when that option changes. During the fade, M_Draw
+// owns the gl_menu_alpha bracket; Draw_* helpers that reset GL color must
+// restore to gl_menu_alpha rather than plain opaque white so the faded menu
+// state survives across nested draws.
+void M_LivePreview_Kick (void);
+void M_LivePreview_Reset (void);
+float M_LivePreview_Alpha (void);
+qboolean M_WantsConsole (float *alpha);
+qboolean M_LivePreview_UseConsoleHeight (void);
+qboolean M_LivePreview_UseConsoleSpeed (void);
+qboolean M_LivePreview_ConsoleSpeedOpen (void);
+qboolean M_LivePreview_UseDamageTint (void);
+qboolean M_LivePreview_UsePong (void);
+qboolean M_LivePreview_UsePowerupShells (void);
+qboolean M_LivePreview_UsePausedHints (void);
+qboolean M_LivePreview_UseTypingStatus (void);
+qboolean M_LivePreview_UseMatchScores (void);
+qboolean M_LivePreview_UseSpeed (void);
+qboolean M_LivePreview_UseScores (void);
+qboolean M_LivePreview_UseMovementKeys (void);
+// Wrap the previewed line's draws with these so it stays at full alpha
+// while the rest of the menu fades during a live preview.
+void M_LivePreview_BeginIsolate (void);
+void M_LivePreview_EndIsolate (void);
+
 void M_DrawPic (int x, int y, qpic_t *pic);
 void M_DrawSubpic (int x, int y, qpic_t* pic, int left, int top, int width, int height); // woods #modsmenu (iw)
 void M_DrawTransPic (int x, int y, qpic_t *pic);

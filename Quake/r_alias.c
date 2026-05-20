@@ -1454,12 +1454,13 @@ R_DrawViewmodelShell -- woods #powershell
 void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* lerpdata, entity_t* e)
 {
 	GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
+	int powerup_items = cl.items | (M_LivePreview_UsePowerupShells() ? IT_QUAD : 0);
 
 	if (!r_coloredpowerupglow.value
 		|| gl_powerupshells.value <= 0.0f
 		|| gl_powerupshells.value > 1.0f
 		|| e != &cl.viewent
-		|| !(cl.items & (IT_QUAD | IT_INVULNERABILITY))
+		|| !(powerup_items & (IT_QUAD | IT_INVULNERABILITY))
 		|| chase_active.value)
 	{
 		return;
@@ -1509,7 +1510,7 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 
 	float shellColor[4] = { 0.0f, 0.0f, 0.0f, shellAlpha };
 
-	if (cl.time <= cl.faceanimtime && cl_damagehue.value)
+	if ((cl.time <= cl.faceanimtime || M_LivePreview_UseDamageTint()) && cl_damagehue.value)
 	{
 		plcolour_t dhvalue = CL_PLColours_Parse(cl_damagehuecolor.string);
 		byte* dhuecolor = CL_PLColours_ToRGB(&dhvalue);
@@ -1520,14 +1521,14 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 	}
 	else
 	{
-	if ((cl.items & IT_QUAD) && (cl.items & IT_INVULNERABILITY))
+	if ((powerup_items & IT_QUAD) && (powerup_items & IT_INVULNERABILITY))
 	{
 		shellColor[0] = 1.0f;  // Red
 		shellColor[2] = 1.0f;  // Blue
 	}
-	else if (cl.items & IT_QUAD)
+	else if (powerup_items & IT_QUAD)
 		shellColor[2] = 1.0f;  // Blue
-	else if (cl.items & IT_INVULNERABILITY)
+	else if (powerup_items & IT_INVULNERABILITY)
 		shellColor[0] = 1.0f;  // Red
 	}
 
@@ -1561,12 +1562,14 @@ static void ApplyShellEffect(aliasglsl_t* glsl, float red, float green, float bl
 
 static void R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- woods #powershell
 {
+	int powerup_items = cl.items | (M_LivePreview_UsePowerupShells() ? IT_QUAD : 0);
+
 	GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
 
 	if (!r_coloredpowerupglow.value || gl_powerupshells.value <= 0.0f || e != &cl.viewent || chase_active.value)
 		return;
 
-	if (cl.time <= cl.faceanimtime && cl_damagehue.value)
+	if ((cl.time <= cl.faceanimtime || M_LivePreview_UseDamageTint()) && cl_damagehue.value)
 	{
 		if (e == &cl.viewent && !chase_active.value)
 		{
@@ -1605,11 +1608,11 @@ static void R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- wood
 				if (shellAlpha <= 0.0001f)
 					return;
 
-				if ((cl.items & IT_QUAD) && (cl.items & IT_INVULNERABILITY))
+				if ((powerup_items & IT_QUAD) && (powerup_items & IT_INVULNERABILITY))
 					ApplyShellEffect(glsl, 1.0f, 0.0f, 1.0f, cl.time, shellAlpha);
-				else if (cl.items & IT_QUAD)
+				else if (powerup_items & IT_QUAD)
 					ApplyShellEffect(glsl, 0.0f, 0.0f, 1.0f, cl.time, shellAlpha);
-				else if (cl.items & IT_INVULNERABILITY)
+				else if (powerup_items & IT_INVULNERABILITY)
 					ApplyShellEffect(glsl, 1.0f, 0.0f, 0.0f, cl.time, shellAlpha);
 			}
 		}
@@ -2538,7 +2541,7 @@ void R_SetupAliasLighting (entity_t	*e)
 	
 	// begin woods for hue damage taken #damage
 
-	if (cl.time <= cl.faceanimtime && cl_damagehue.value)
+	if ((cl.time <= cl.faceanimtime || M_LivePreview_UseDamageTint()) && cl_damagehue.value)
 		if (e == &cl.viewent)
 		{
 			{
@@ -2552,11 +2555,13 @@ void R_SetupAliasLighting (entity_t	*e)
 
 	// begin woods add hue to gun model with powerups, simple #powershell value of 1 to 2
 
-	if (!(cl.time <= cl.faceanimtime && cl_damagehue.value))
+	if (!((cl.time <= cl.faceanimtime || M_LivePreview_UseDamageTint()) && cl_damagehue.value))
 	{
 		if (r_coloredpowerupglow.value && gl_powerupshells.value)
 		{
-			if (e == &cl.viewent && (cl.items & (IT_QUAD | IT_INVULNERABILITY)))
+			int powerup_items = cl.items | (M_LivePreview_UsePowerupShells() ? IT_QUAD : 0);
+
+			if (e == &cl.viewent && (powerup_items & (IT_QUAD | IT_INVULNERABILITY)))
 			{
 			float alpha;
 				float t;
@@ -2588,16 +2593,16 @@ void R_SetupAliasLighting (entity_t	*e)
 					float k = alpha_knob * kmax;
 					float a = CLAMP(alpha, 0.0f, 1.0f);
 					alpha = 1.0f - powf(1.0f - a, k);
-			}
+				}
 
 				// Pick a single tint to apply (no triple-blend)
 				vec3_t tint = { 0, 0, 0 };
-				if ((cl.items & (IT_QUAD | IT_INVULNERABILITY)) == (IT_QUAD | IT_INVULNERABILITY))
+				if ((powerup_items & (IT_QUAD | IT_INVULNERABILITY)) == (IT_QUAD | IT_INVULNERABILITY))
 				{
 					// both
 					tint[0] = 211.0f; tint[1] = 113.0f; tint[2] = 194.0f;
 				}
-				else if (cl.items & IT_QUAD)
+				else if (powerup_items & IT_QUAD)
 				{
 					// quad
 					tint[0] = 50.0f; tint[1] = 50.0f; tint[2] = 121.0f;

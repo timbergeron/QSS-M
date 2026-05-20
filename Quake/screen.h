@@ -65,6 +65,7 @@ extern	cvar_t		scr_sbar; // woods #sbarstyles
 void SCR_UpdateWholeScreen (void);
 
 void SCR_ShowDemoBar (void); // woods #democontrols -- force the demo bar to appear briefly
+void SCR_ShowDemoBarFor (float seconds); // woods #democontrols -- force the demo bar for a specific duration
 
 //johnfitz -- stuff for 2d drawing control
 typedef enum {

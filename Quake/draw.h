@@ -69,6 +69,10 @@ void Draw_Fill_Plus_Radius (int x, int y, int w, int h, plcolour_t c, float alph
 void Draw_Fill_Ex (int x, int y, int w, int h, plcolour_t c, float alpha, qboolean roundcorners, unsigned char roundmask, float radius, float feather);
 void Draw_ShutdownGL (void); // invalidate cached GLSL handles on context loss
 void Draw_FadeScreen (void);
+void Draw_FadeScreen_Alpha (float alpha);
+// Rectangular fade used by menu live preview to leave the selected row visible.
+void Draw_FadeScreen_Rect_Alpha (float x0, float y0, float x1, float y1, float alpha);
+extern float gl_menu_alpha; // set by M_Draw to fade the menu during live preview
 void Draw_String (int x, int y, const char *str);
 void Draw_StringAnimatedDots(int x, int y, const char* str); // woods
 void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float span_px, float alpha, qboolean masked); // woods

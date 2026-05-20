@@ -6026,51 +6026,65 @@ static void Con_DrawBirthdayMessage (void)
 static void Con_DrawTypingStatus(void) // woods #typing...
 {
 	scoreboard_t* typing_players[2];
+	qboolean typing_preview = M_LivePreview_UseTypingStatus();
 	int total_typing = 0;
 
 	if (!con_typing.value)
 		return;
 
-	if (cls.demoplayback)
+	if (cls.demoplayback && !typing_preview)
 		return;
 
-	if (cls.state != ca_connected || cls.signon != SIGNONS || cl.maxclients <= 0)
+	if ((cls.state != ca_connected || cls.signon != SIGNONS || cl.maxclients <= 0) && !typing_preview)
 		return;
 
-	int local_index = cl.realviewentity - 1;
-
-	for (int i = 0; i < cl.maxclients; ++i)
+	if (!typing_preview)
 	{
-		scoreboard_t* score = &cl.scores[i];
+		int local_index = cl.realviewentity - 1;
 
-		if (!score->name[0])
-			continue;
+		for (int i = 0; i < cl.maxclients; ++i)
+		{
+			scoreboard_t* score = &cl.scores[i];
 
-		if (i == local_index && !developer.value)
-			continue;
+			if (!score->name[0])
+				continue;
 
-		char chatbuf[8];
-		const char* chat_value = Info_GetKey(score->userinfo, "chat", chatbuf, sizeof(chatbuf));
-		int chat_flags = (chat_value && *chat_value) ? atoi(chat_value) : 0;
+			if (i == local_index && !developer.value)
+				continue;
 
-		if (!(chat_flags & CIF_CHAT))
-			continue;
+			char chatbuf[8];
+			const char* chat_value = Info_GetKey(score->userinfo, "chat", chatbuf, sizeof(chatbuf));
+			int chat_flags = (chat_value && *chat_value) ? atoi(chat_value) : 0;
 
-		if (total_typing < 2)
-			typing_players[total_typing] = score;
+			if (!(chat_flags & CIF_CHAT))
+				continue;
 
-		total_typing++;
+			if (total_typing < 2)
+				typing_players[total_typing] = score;
+
+			total_typing++;
+		}
 	}
 
 	if (total_typing == 0)
-		return;
+	{
+		if (!typing_preview)
+			return;
+		total_typing = 1;
+	}
 
 	char message[128];
 	char name[16] = {0};
 	char name1[16] = {0};
 	char name2[16] = {0};
 
-	if (total_typing == 1)
+	if (typing_preview)
+	{
+		Con_GetShortName(cl_name.string[0] ? cl_name.string : "player", name, sizeof(name));
+		if (!name[0])
+			q_strlcpy(name, "player", sizeof(name));
+	}
+	else if (total_typing == 1)
 	{
 		Con_GetShortName(typing_players[0]->name, name, sizeof(name));
 	}

@@ -535,6 +535,7 @@ dlight_t *CL_AllocDlight (int key);
 void	CL_DecayLights (void);
 
 void CL_Init (void);
+qboolean CL_ViewingQ3ItemBobbingItem (void);
 
 void CL_EstablishConnection (const char *host);
 qboolean CL_BeginConnect (const char *host);

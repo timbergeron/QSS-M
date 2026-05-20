@@ -1862,6 +1862,46 @@ qboolean CL_CTFPugSwapEntityModel (entity_t *ent)
 	return false;
 }
 
+static int CL_EntityModelFlags (const entity_t *ent)
+{
+	int modelflags;
+
+	if (!ent)
+		return 0;
+
+	modelflags = (ent->effects >> 24) & 0xff;
+	if (ent->model && !(ent->effects & EF_NOMODELFLAGS))
+		modelflags |= ent->model->flags;
+
+	return modelflags;
+}
+
+qboolean CL_ViewingQ3ItemBobbingItem (void)
+{
+	int i;
+
+	if (cls.state != ca_connected || cls.signon != SIGNONS || !cl.worldmodel || !r_drawentities.value)
+		return false;
+
+	for (i = 0; i < cl_numvisedicts; i++)
+	{
+		entity_t *ent = cl_visedicts[i];
+
+		if (!ent || !ent->model || ent->model->needload)
+			continue;
+		if (ent->eflags & EFLAGS_EXTERIORMODEL)
+			continue;
+		if (!(CL_EntityModelFlags (ent) & EF_ROTATE))
+			continue;
+		if (R_CullModelForEntity (ent))
+			continue;
+
+		return true;
+	}
+
+	return false;
+}
+
 /*
 ===============
 CL_RelinkEntities
@@ -1972,9 +2012,7 @@ void CL_RelinkEntities (void)
 			continue;
 		}
 
-		modelflags = (ent->effects>>24)&0xff;
-		if (!(ent->effects & EF_NOMODELFLAGS))
-			modelflags |= ent->model->flags;
+		modelflags = CL_EntityModelFlags (ent);
 
 // rotate binary objects locally
 		if (modelflags & EF_ROTATE)

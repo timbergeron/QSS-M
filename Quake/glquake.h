@@ -534,6 +534,7 @@ void R_ClearTextureChains (qmodel_t *mod, texchain_t chain);
 void R_ChainSurface (msurface_t *surf, texchain_t chain);
 void R_DrawTextureChains (qmodel_t *model, entity_t *ent, texchain_t chain);
 void R_DrawWorld_Water (void);
+qboolean R_WorldSkyVisible(void);
 #ifndef SDL_THREADS_DISABLED
 void RSceneCache_Cleanup(qmodel_t *mod);
 void RSceneCache_Shutdown(void);

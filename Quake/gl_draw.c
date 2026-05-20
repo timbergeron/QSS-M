@@ -31,6 +31,11 @@ qboolean	draw_load24bit;
 qboolean	premul_hud = false;//true;
 cvar_t		scr_conalpha = {"scr_conalpha", "0.5", CVAR_ARCHIVE}; //johnfitz
 
+// Set by M_Draw during ui_live_preview to fade the whole menu.
+// All draw primitives that reset glColor at the end honor this so the
+// menu's bracketed BLEND+MODULATE+alpha state survives across them.
+float gl_menu_alpha = 1.0f;
+
 qpic_t		*draw_disc;
 qpic_t		*draw_backtile;
 qboolean	custom_conchars; // woods (iw) #democontrols
@@ -724,6 +729,7 @@ void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha)
 {
 	int				row, col;
 	float			frow, fcol, size;
+	float			a = alpha * gl_menu_alpha;
 
 	num &= 255;
 
@@ -733,11 +739,11 @@ void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha)
 	glEnable (GL_BLEND);
 
 	if (c.type == 2)
-		glColor4f(c.rgb[0] / 255.0, c.rgb[1] / 255.0, c.rgb[2] / 255.0, alpha);
+		glColor4f(c.rgb[0] / 255.0, c.rgb[1] / 255.0, c.rgb[2] / 255.0, a);
 	else
 	{
 		byte* pal = (byte*)&d_8to24table[(c.basic << 4) + 8];
-		glColor4f(pal[0] / 255.0, pal[1] / 255.0, pal[2] / 255.0, alpha);
+		glColor4f(pal[0] / 255.0, pal[1] / 255.0, pal[2] / 255.0, a);
 	}
 
 	glDisable (GL_ALPHA_TEST);
@@ -764,10 +770,18 @@ void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha)
 
 	glEnd();
 
-	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-	glEnable (GL_ALPHA_TEST);
-	glDisable (GL_BLEND);
-	glColor4f (1, 1, 1, 1);
+	if (gl_menu_alpha < 1.0f)
+	{
+		// Leave the menu's bracketed fade state in place for subsequent draws.
+		glColor4f (1, 1, 1, gl_menu_alpha);
+	}
+	else
+	{
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable (GL_ALPHA_TEST);
+		glDisable (GL_BLEND);
+		glColor4f (1, 1, 1, 1);
+	}
 }
 
 void Draw_Character_Rotation (int x, int y, int num, int rotation) // woods #movementkeys
@@ -850,6 +864,7 @@ void Draw_StringRGBA (int x, int y, const char* str, plcolour_t c, float alpha)
 	//if (y <= -8) // woods enabled for more printing options #varmatchclock
 	//	return;			// totally off screen
 
+	alpha *= gl_menu_alpha;
 	glEnable(GL_BLEND);
 
 	if (c.type == 2)
@@ -876,10 +891,17 @@ void Draw_StringRGBA (int x, int y, const char* str, plcolour_t c, float alpha)
 
 	glEnd();
 
-	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-	glEnable(GL_ALPHA_TEST);
-	glDisable(GL_BLEND);
-	glColor4f(1, 1, 1, 1);
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f(1, 1, 1, gl_menu_alpha);
+	}
+	else
+	{
+		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable(GL_ALPHA_TEST);
+		glDisable(GL_BLEND);
+		glColor4f(1, 1, 1, 1);
+	}
 }
 
 static void Draw_BoostAccentRGB(int* r, int* g, int* b) // woods #goldtext
@@ -1473,7 +1495,7 @@ void Draw_StringAnimatedDots(int x, int y, const char* str)
 			alpha = MIN_ALPHA;
 		}
 
-		glColor4f(1.0f, 1.0f, 1.0f, alpha);
+		glColor4f(1.0f, 1.0f, 1.0f, alpha * gl_menu_alpha);
 
 		if (str[i] != 32) // don't waste verts on spaces
 			Draw_CharacterQuad(x + i * 8, y, str[i]);
@@ -1481,10 +1503,17 @@ void Draw_StringAnimatedDots(int x, int y, const char* str)
 
 	glEnd();
 
-	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-	glEnable(GL_ALPHA_TEST);
-	glDisable(GL_BLEND);
-	glColor4f(1, 1, 1, 1);
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f(1, 1, 1, gl_menu_alpha);
+	}
+	else
+	{
+		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable(GL_ALPHA_TEST);
+		glDisable(GL_BLEND);
+		glColor4f(1, 1, 1, 1);
+	}
 }
 
 /*
@@ -1532,7 +1561,7 @@ void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float 
 	const float red_g = red[1] / 255.0f;
 	const float red_b = red[2] / 255.0f;
 
-	const float draw_alpha = CLAMP(0.0f, alpha, 1.0f);
+	const float draw_alpha = CLAMP(0.0f, alpha, 1.0f) * gl_menu_alpha;
 
 	// Tunables (in-function “knobs”)
 	const float glow_strength_unmasked = 0.20f;   // extra pop at the center of the band (unmasked only)
@@ -1662,10 +1691,17 @@ void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float 
 
 	glEnd();
 
-	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-	glEnable(GL_ALPHA_TEST);
-	glDisable(GL_BLEND);
-	glColor4f(1, 1, 1, 1);
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f(1, 1, 1, gl_menu_alpha);
+	}
+	else
+	{
+		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable(GL_ALPHA_TEST);
+		glDisable(GL_BLEND);
+		glColor4f(1, 1, 1, 1);
+	}
 }
 
 
@@ -1693,7 +1729,7 @@ void Draw_ScaledPicAlpha (int x, int y, qpic_t* pic, float scale, float alpha)
 
 	glEnable(GL_BLEND);
 
-	glColor4f(1, 1, 1, alpha);
+	glColor4f(1, 1, 1, alpha * gl_menu_alpha);
 
 	glDisable(GL_ALPHA_TEST);
 	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
@@ -1710,9 +1746,16 @@ void Draw_ScaledPicAlpha (int x, int y, qpic_t* pic, float scale, float alpha)
 	glVertex2f(x, y + height);
 	glEnd();
 
-	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-	glEnable(GL_ALPHA_TEST);
-	glDisable(GL_BLEND);
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f(1, 1, 1, gl_menu_alpha);
+	}
+	else
+	{
+		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable(GL_ALPHA_TEST);
+		glDisable(GL_BLEND);
+	}
 }
 
 /*
@@ -1782,7 +1825,7 @@ void Draw_PicRGBA (int x, int y, qpic_t *pic, plcolour_t c, float alpha)
 
 	glDisable (GL_ALPHA_TEST);
 	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-	glColor4f (red, green, blue, alpha);
+	glColor4f (red, green, blue, alpha * gl_menu_alpha);
 
 	GL_Bind (gl->gltexture);
 	glBegin (GL_QUADS);
@@ -1796,10 +1839,17 @@ void Draw_PicRGBA (int x, int y, qpic_t *pic, plcolour_t c, float alpha)
 	glVertex2f (x, y+pic->height);
 	glEnd ();
 
-	glColor4f (1.0f, 1.0f, 1.0f, 1.0f);
-	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-	glEnable (GL_ALPHA_TEST);
-	glDisable (GL_BLEND);
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f (1.0f, 1.0f, 1.0f, gl_menu_alpha);
+	}
+	else
+	{
+		glColor4f (1.0f, 1.0f, 1.0f, 1.0f);
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable (GL_ALPHA_TEST);
+		glDisable (GL_BLEND);
+	}
 }
 
 /*
@@ -1838,29 +1888,40 @@ void Draw_Pic_RGBA_Outline (int x, int y, qpic_t* pic, plcolour_t c, float alpha
 	glDisable(GL_ALPHA_TEST);
 	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 
-	// Draw the outline by drawing a slightly larger quad behind the original
-	glColor4f(0.0f, 0.0f, 0.0f, alpha);
-	GL_Bind(gl->gltexture);
-	glBegin(GL_QUADS);
-	glTexCoord2f(gl->sl, gl->tl); glVertex2f(x - outlineThickness, y - outlineThickness);
-	glTexCoord2f(gl->sh, gl->tl); glVertex2f(x + pic->width + outlineThickness, y - outlineThickness);
-	glTexCoord2f(gl->sh, gl->th); glVertex2f(x + pic->width + outlineThickness, y + pic->height + outlineThickness);
-	glTexCoord2f(gl->sl, gl->th); glVertex2f(x - outlineThickness, y + pic->height + outlineThickness);
-	glEnd();
+	{
+		float a = alpha * gl_menu_alpha;
 
-	// Draw the filled quad
-	glColor4f(red, green, blue, alpha);
-	glBegin(GL_QUADS);
-	glTexCoord2f(gl->sl, gl->tl); glVertex2f(x, y);
-	glTexCoord2f(gl->sh, gl->tl); glVertex2f(x + pic->width, y);
-	glTexCoord2f(gl->sh, gl->th); glVertex2f(x + pic->width, y + pic->height);
-	glTexCoord2f(gl->sl, gl->th); glVertex2f(x, y + pic->height);
-	glEnd();
+		// Draw the outline by drawing a slightly larger quad behind the original
+		glColor4f(0.0f, 0.0f, 0.0f, a);
+		GL_Bind(gl->gltexture);
+		glBegin(GL_QUADS);
+		glTexCoord2f(gl->sl, gl->tl); glVertex2f(x - outlineThickness, y - outlineThickness);
+		glTexCoord2f(gl->sh, gl->tl); glVertex2f(x + pic->width + outlineThickness, y - outlineThickness);
+		glTexCoord2f(gl->sh, gl->th); glVertex2f(x + pic->width + outlineThickness, y + pic->height + outlineThickness);
+		glTexCoord2f(gl->sl, gl->th); glVertex2f(x - outlineThickness, y + pic->height + outlineThickness);
+		glEnd();
 
-	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-	glEnable(GL_ALPHA_TEST);
-	glDisable(GL_BLEND);
+		// Draw the filled quad
+		glColor4f(red, green, blue, a);
+		glBegin(GL_QUADS);
+		glTexCoord2f(gl->sl, gl->tl); glVertex2f(x, y);
+		glTexCoord2f(gl->sh, gl->tl); glVertex2f(x + pic->width, y);
+		glTexCoord2f(gl->sh, gl->th); glVertex2f(x + pic->width, y + pic->height);
+		glTexCoord2f(gl->sl, gl->th); glVertex2f(x, y + pic->height);
+		glEnd();
+	}
+
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f(1.0f, 1.0f, 1.0f, gl_menu_alpha);
+	}
+	else
+	{
+		glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable(GL_ALPHA_TEST);
+		glDisable(GL_BLEND);
+	}
 }
 
 // woods #sbarstyles for qw hud
@@ -2004,7 +2065,13 @@ void Draw_ConsoleBackground (void)
 
 	GL_SetCanvas (CANVAS_CONSOLE); // Ensure we're drawing on the console canvas
 
-	alpha = (con_forcedup) ? 1.0f : scr_conalpha.value;
+	{
+		float preview_frac;
+		if (M_WantsConsole (&preview_frac))
+			alpha = scr_conalpha.value * preview_frac;
+		else
+			alpha = (con_forcedup) ? 1.0f : scr_conalpha.value;
+	}
 	if (alpha <= 0.0f)
 		return;
 
@@ -2210,7 +2277,7 @@ void Draw_TileClear (int x, int y, int w, int h)
 
 	gl = (glpic_t *)draw_backtile->data;
 
-	glColor3f (1,1,1);
+	glColor4f (1,1,1, gl_menu_alpha);
 	GL_Bind (gl->gltexture);
 	glBegin (GL_QUADS);
 	glTexCoord2f (x/64.0, y/64.0);
@@ -2238,7 +2305,7 @@ void Draw_Fill (int x, int y, int w, int h, int c, float alpha) //johnfitz -- ad
 	glDisable (GL_TEXTURE_2D);
 	glEnable (GL_BLEND); //johnfitz -- for alpha
 	glDisable (GL_ALPHA_TEST); //johnfitz -- for alpha
-	glColor4f (pal[c*4]/255.0, pal[c*4+1]/255.0, pal[c*4+2]/255.0, alpha); //johnfitz -- added alpha
+	glColor4f (pal[c*4]/255.0, pal[c*4+1]/255.0, pal[c*4+2]/255.0, alpha * gl_menu_alpha); //johnfitz -- added alpha
 
 	glBegin (GL_QUADS);
 	glVertex2f (x,y);
@@ -2247,10 +2314,17 @@ void Draw_Fill (int x, int y, int w, int h, int c, float alpha) //johnfitz -- ad
 	glVertex2f (x, y+h);
 	glEnd ();
 
-	glColor3f (1,1,1);
-	glDisable (GL_BLEND); //johnfitz -- for alpha
-	glEnable (GL_ALPHA_TEST); //johnfitz -- for alpha
 	glEnable (GL_TEXTURE_2D);
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f (1, 1, 1, gl_menu_alpha);
+	}
+	else
+	{
+		glColor3f (1,1,1);
+		glDisable (GL_BLEND); //johnfitz -- for alpha
+		glEnable (GL_ALPHA_TEST); //johnfitz -- for alpha
+	}
 }
 static GLuint draw_round_program;
 static GLint draw_round_color_loc;
@@ -2369,11 +2443,11 @@ void Draw_FillPlayer (int x, int y, int w, int h, plcolour_t c, float alpha)
 	glEnable (GL_BLEND); //johnfitz -- for alpha
 	glDisable (GL_ALPHA_TEST); //johnfitz -- for alpha
 	if (c.type == 2)
-		glColor4f (c.rgb[0]/255.0f, c.rgb[1]/255.0f, c.rgb[2]/255.0f, alpha); //johnfitz -- added alpha
+		glColor4f (c.rgb[0]/255.0f, c.rgb[1]/255.0f, c.rgb[2]/255.0f, alpha * gl_menu_alpha); //johnfitz -- added alpha
 	else
 	{
 		byte *pal = (byte *)&d_8to24table[(c.basic<<4) + 8]; //johnfitz -- use d_8to24table instead of host_basepal
-		glColor4f (pal[0]/255.0f, pal[1]/255.0f, pal[2]/255.0f, alpha); //johnfitz -- added alpha
+		glColor4f (pal[0]/255.0f, pal[1]/255.0f, pal[2]/255.0f, alpha * gl_menu_alpha); //johnfitz -- added alpha
 	}
 
 	glBegin (GL_QUADS);
@@ -2383,10 +2457,17 @@ void Draw_FillPlayer (int x, int y, int w, int h, plcolour_t c, float alpha)
 	glVertex2f (x, y+h);
 	glEnd ();
 
-	glColor3f (1,1,1);
-	glDisable (GL_BLEND); //johnfitz -- for alpha
-	glEnable (GL_ALPHA_TEST); //johnfitz -- for alpha
 	glEnable (GL_TEXTURE_2D);
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f (1, 1, 1, gl_menu_alpha);
+	}
+	else
+	{
+		glColor3f (1,1,1);
+		glDisable (GL_BLEND); //johnfitz -- for alpha
+		glEnable (GL_ALPHA_TEST); //johnfitz -- for alpha
+	}
 }
 
 /*
@@ -2447,6 +2528,7 @@ void Draw_Fill_Ex (int x, int y, int w, int h, plcolour_t c, float alpha, qboole
 	glDisable (GL_ALPHA_TEST);
 
 	Draw_ResolvePlayerColour (&c, alpha, colour);
+	colour[3] *= gl_menu_alpha;
 
 	left = (float)x;
 	top = (float)y;
@@ -2542,10 +2624,17 @@ void Draw_Fill_Ex (int x, int y, int w, int h, plcolour_t c, float alpha, qboole
 		glEnd ();
 	}
 
-	glColor3f (1,1,1);
-	glDisable (GL_BLEND);
-	glEnable (GL_ALPHA_TEST);
 	glEnable (GL_TEXTURE_2D);
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f (1, 1, 1, gl_menu_alpha);
+	}
+	else
+	{
+		glColor3f (1,1,1);
+		glDisable (GL_BLEND);
+		glEnable (GL_ALPHA_TEST);
+	}
 }
 
 /*
@@ -2555,12 +2644,20 @@ Draw_FadeScreen -- johnfitz -- revised
 */
 void Draw_FadeScreen (void)
 {
+	Draw_FadeScreen_Alpha (0.5f);
+}
+
+void Draw_FadeScreen_Alpha (float alpha)
+{
+	if (alpha <= 0.f)
+		return;
+
 	GL_SetCanvas (CANVAS_DEFAULT);
 
 	glEnable (GL_BLEND);
 	glDisable (GL_ALPHA_TEST);
 	glDisable (GL_TEXTURE_2D);
-	glColor4f (0, 0, 0, 0.5);
+	glColor4f (0, 0, 0, alpha);
 	glBegin (GL_QUADS);
 
 	glVertex2f (0,0);
@@ -2575,6 +2672,31 @@ void Draw_FadeScreen (void)
 	glDisable (GL_BLEND);
 
 	Sbar_Changed();
+}
+
+void Draw_FadeScreen_Rect_Alpha (float x0, float y0, float x1, float y1, float alpha)
+{
+	if (alpha <= 0.f)
+		return;
+
+	GL_SetCanvas (CANVAS_DEFAULT);
+
+	glEnable (GL_BLEND);
+	glDisable (GL_ALPHA_TEST);
+	glDisable (GL_TEXTURE_2D);
+	glColor4f (0, 0, 0, alpha);
+	glBegin (GL_QUADS);
+
+	glVertex2f (x0, y0);
+	glVertex2f (x1, y0);
+	glVertex2f (x1, y1);
+	glVertex2f (x0, y1);
+
+	glEnd ();
+	glColor4f (1,1,1,1);
+	glEnable (GL_TEXTURE_2D);
+	glEnable (GL_ALPHA_TEST);
+	glDisable (GL_BLEND);
 }
 
 /*

@@ -4974,7 +4974,7 @@ static void RSceneCache_Draw(qboolean water)
 qboolean RSceneCache_HasSky(void)
 {
 	struct rscenecache_s *cache = rscenecache.drawing;
-	unsigned int i;
+	unsigned int i, j;
 	texture_t *tex;
 
 	if (cache)
@@ -4984,7 +4984,9 @@ qboolean RSceneCache_HasSky(void)
 			tex = cache->worldmodel->textures[i];
 			if (!tex || !(tex->name[0]=='s'&&tex->name[1]=='k'&&tex->name[2]=='y'))
 				continue;	//we only want sky textures.
-			return true;
+			for (j = 0; j < cache->lightmaps * 2; j++)
+				if (cache->batches[i * cache->lightmaps * 2 + j].numidx)
+					return true;
 		}
 	}
 	return false;
@@ -5071,3 +5073,40 @@ void RSceneCache_Shutdown(void)
 	skipsubmodels = NULL;
 }
 #endif
+
+qboolean R_WorldSkyVisible(void)
+{
+	qmodel_t *model = cl.worldmodel;
+	texture_t *tex;
+	msurface_t *surf, **mark;
+	int i;
+
+	if (!model)
+		return false;
+
+#ifndef SDL_THREADS_DISABLED
+	if (RSceneCache_HasSky())
+		return true;
+#endif
+
+	for (i = 0, surf = model->surfaces; i < model->numsurfaces; i++, surf++)
+		if ((surf->flags & SURF_DRAWSKY) && surf->visframe == r_visframecount)
+			return true;
+
+	for (i = 0; i < model->numtextures; i++)
+	{
+		tex = model->textures[i];
+		if (tex && tex->texturechains[chain_world] &&
+			(tex->texturechains[chain_world]->flags & SURF_DRAWSKY))
+			return true;
+	}
+
+	if (r_viewleaf)
+	{
+		for (i = 0, mark = r_viewleaf->firstmarksurface; i < r_viewleaf->nummarksurfaces; i++, mark++)
+			if ((*mark)->flags & SURF_DRAWSKY)
+				return true;
+	}
+
+	return false;
+}

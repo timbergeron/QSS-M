@@ -1247,9 +1247,14 @@ SCR_ShowDemoBar
 */
 void SCR_ShowDemoBar (void)
 {
+	SCR_ShowDemoBarFor (1.0f);
+}
+
+void SCR_ShowDemoBarFor (float seconds)
+{
 	if (!cls.demoplayback)
 		return;
-	scr_demobar_force_until = realtime + 1.0;
+	scr_demobar_force_until = realtime + q_max (0.0f, seconds);
 }
 
 /*
@@ -1673,6 +1678,35 @@ static int scr_matchclock_minute_digits = 3;
 static int scr_matchclock_narrow_digits = 0; // count of '1' digits in minutes (visually narrower in sb_nums)
 static qboolean SCR_GetRoundHudString(char *num, size_t num_size);
 
+static qboolean SCR_MatchScoresHaveLiveData(void)
+{
+	char buf[10];
+	char buf2[10];
+	const char *uiplaymode;
+	const char *siplaymode;
+
+	if (scr_viewsize.value >= 130 || cl.gametype != GAME_DEATHMATCH)
+		return false;
+
+	uiplaymode = Info_GetKey(CL_GetSafeRealViewEntityUserinfo(), "mode", buf, sizeof(buf));
+	siplaymode = Info_GetKey(cl.serverinfo, "playmode", buf2, sizeof(buf2));
+
+	if (!q_strcasecmp(uiplaymode, "ffa") || !q_strcasecmp(siplaymode, "ffa"))
+		return true;
+
+	if (cl.modetype == 3)
+		return false;
+
+	return (cl.teamgame || cl.modetype == 8);
+}
+
+static qboolean SCR_LivePreviewUseSyntheticMatchScores(void)
+{
+	return (M_LivePreview_UseMatchScores() &&
+			scr_match_hud.value &&
+			!SCR_MatchScoresHaveLiveData());
+}
+
 void SCR_DrawMatchClock(void)
 {
 	char			num[22] = "empty";
@@ -1680,6 +1714,9 @@ void SCR_DrawMatchClock(void)
 	qboolean		show_round_hud;
 	int				teamscores, minutes, seconds;
 	int				match_time, tl;
+
+	if (SCR_LivePreviewUseSyntheticMatchScores())
+		return;
 
 	match_time = ceil(60.0 * cl.minutes + cl.seconds - (cl.time - cl.last_match_time));
 	minutes = match_time / 60;
@@ -2078,6 +2115,34 @@ int SCR_DrawTeamScores(int x, int y, int l, qboolean use_demo_calculation, int* 
 	return y; // Return the updated y position
 }
 
+static void SCR_DrawLivePreviewTeamScoreRow(int y, int team_color, int score)
+{
+	char num[30];
+	int mapped = Sbar_ColorForMap(team_color << 4);
+
+	GL_SetCanvas(CANVAS_TOPRIGHT3);
+	Draw_Fill(11, y + 1, 32, 6, mapped, .6);
+	Draw_Fill(11, y + 7, 32, 3.5, mapped, .6);
+
+	sprintf(num, "%3i", score);
+	Sbar_DrawCharacter(15, y - 23, num[0]);
+	Sbar_DrawCharacter(23, y - 23, num[1]);
+	Sbar_DrawCharacter(31, y - 23, num[2]);
+}
+
+static void SCR_DrawLivePreviewMatchScores(void)
+{
+	const char *time = " 7:42";
+
+	GL_SetCanvas(CANVAS_TOPRIGHT2);
+	Draw_String(((314 - (strlen(time) << 3)) + 1), 195 - 8, time);
+
+	GL_SetCanvas(CANVAS_TOPRIGHT3);
+	Draw_Fill(11, 1, 32, 18, 0, 0.3);
+	SCR_DrawLivePreviewTeamScoreRow(0, 13, 12); // blue
+	SCR_DrawLivePreviewTeamScoreRow(9, 4, 9);   // red
+}
+
 static void SCR_DrawPositiveDiffString(int x, int y, const char* str) // woods #goldtext
 {
         int cx = x;
@@ -2398,6 +2463,12 @@ void SCR_DrawMatchScores(void)
 	const char* uiplaymode;
 	const char* siplaymode;
 
+	if (SCR_LivePreviewUseSyntheticMatchScores())
+	{
+		SCR_DrawLivePreviewMatchScores();
+		return;
+	}
+
 	if (scr_viewsize.value >= 130)
 		return;
 
@@ -2550,6 +2621,82 @@ SCR_ShowObsFrags -- added by woods #observerhud #eyemouse
 
 #define OBS_POWERUP_DURATION 30.5f
 
+static void SCR_DrawLivePreviewScoreRow(int x, int y, const char *name, int frags, plcolour_t shirt, plcolour_t pants)
+{
+	char num[12];
+
+	Draw_FillPlayer(x, y + 1, 40, 4, shirt, 1);
+	Draw_FillPlayer(x, y + 5, 40, 3, pants, 1);
+
+	q_snprintf(num, sizeof(num), "%3i", frags);
+	Draw_Character(x + 8, y, num[0]);
+	Draw_Character(x + 16, y, num[1]);
+	Draw_Character(x + 24, y, num[2]);
+
+	M_PrintWhite(x + 50, y, name);
+}
+
+static void SCR_DrawLivePreviewScores(void)
+{
+	const float sample_scale = 0.875f;
+	static const struct {
+		const char *name;
+		int frags;
+		int color;
+	} sample_scores[] = {
+		{ NULL, 32, 1 },
+		{ "carmack", 28, 2 },
+		{ "zoid", 24, 3 },
+		{ "romero", 21, 4 },
+		{ "ranger", 18, 5 },
+		{ "american", 15, 6 },
+		{ "rook", 12, 7 },
+		{ "sarge", 10, 8 },
+		{ "slash", 8, 9 },
+		{ "grunt", 6, 10 },
+		{ "hunter", 4, 11 },
+		{ "scout", 2, 12 },
+		{ "reaper", 1, 13 },
+	};
+	int x, y;
+	size_t i;
+	int clampedSbar = CLAMP(1, (int)scr_sbar.value, 3);
+	char local_name[16];
+
+	if (!scr_showscores.value)
+		return;
+
+	if (clampedSbar == 3)
+	{
+		GL_SetCanvas(CANVAS_BOTTOMLEFTQESCORES);
+		x = 24;
+		y = 170;
+	}
+	else
+	{
+		GL_SetCanvas(CANVAS_SCORES);
+		x = 10;
+		y = 160;
+	}
+
+	getShortName(cl_name.string[0] ? cl_name.string : "player", local_name);
+	if (!local_name[0])
+		q_strlcpy(local_name, "player", sizeof(local_name));
+
+	glPushMatrix();
+	glTranslatef(x, y, 0.0f);
+	glScalef(sample_scale, sample_scale, 1.0f);
+
+	for (i = 0; i < Q_COUNTOF(sample_scores); i++)
+	{
+		const char *name = sample_scores[i].name ? sample_scores[i].name : local_name;
+		plcolour_t color = CL_PLColours_FromLegacy(sample_scores[i].color);
+		SCR_DrawLivePreviewScoreRow(0, (int)i * 8, name, sample_scores[i].frags, color, color);
+	}
+
+	glPopMatrix();
+}
+
 void SCR_ShowObsFrags(void)
 {
 	int	i, k, x, y, f;
@@ -2568,12 +2715,23 @@ void SCR_ShowObsFrags(void)
 	static qpic_t* sb_key1 = NULL;
 	static qpic_t* sb_key2 = NULL;
 	static qpic_t* sb_sigil[4] = { NULL, NULL, NULL, NULL };
+	qboolean drew_scores = false;
+
+	if (M_LivePreview_UseScores() && (cl.gametype != GAME_DEATHMATCH || cls.state != ca_connected))
+	{
+		SCR_DrawLivePreviewScores();
+		return;
+	}
 
 	if (cl.intermission || qeintermission || crxintermission)
 		return;
 
 	if (scr_viewsize.value >= 120)
+	{
+		if (M_LivePreview_UseScores())
+			SCR_DrawLivePreviewScores();
 		return;
+	}
 
 	if ((!cl.notobserver && scr_obsitems.value) || (cls.demoplayback && scr_obsitems.value))
 	{
@@ -2632,6 +2790,7 @@ void SCR_ShowObsFrags(void)
 			obs_frags_x = x;
 			obs_frags_y = y;
 			obs_frags_height = scoreboardlines * 8;
+			drew_scores = (scoreboardlines > 0);
 
 			char qflbracket[2] = { 144, '\0' }; // woods  -- quake font left bracket
 			char qfrbracket[2] = { 145, '\0' }; // woods  -- quake font right bracket
@@ -2841,6 +3000,9 @@ void SCR_ShowObsFrags(void)
 			obs_frags_active = true;
 		}
 	}
+
+	if (M_LivePreview_UseScores() && !drew_scores)
+		SCR_DrawLivePreviewScores();
 }
 
 void Draw_GetScoreboardTransform (vrect_t* bounds, vrect_t* viewport) // woods #eyemouse
@@ -3149,8 +3311,16 @@ static float GetLocalVelocity(void)
 	return VectorLength(vel);
 }
 
+static float SCR_LivePreviewSpeedValue(void)
+{
+	return 475.0f + sin(realtime * 3.0f) * 60.0f;
+}
+
 static float GetSpeedValue(void)
 {
+	if (M_LivePreview_UseSpeed())
+		return SCR_LivePreviewSpeedValue();
+
 	if (!cl.notobserver &&
 		cl.viewentity - 1 >= 0 && cl.viewentity - 1 < MAX_SCOREBOARD)
 	{
@@ -3192,6 +3362,7 @@ void SCR_Speedometer(void)
 	char st[8];
 	float alpha = 0.5;
 	int y = scr_showspeed_y.value;
+	qboolean speed_preview = M_LivePreview_UseSpeed();
 
 	GL_SetCanvas(CANVAS_SBAR2);
 
@@ -3207,7 +3378,12 @@ void SCR_Speedometer(void)
 	if (speed > maxspeed)
 		maxspeed = speed;
 
-	if (sv.active && speed_info.speed >= 0)
+	if (speed_preview)
+	{
+		display_speed = speed;
+		bad_jump = false;
+	}
+	else if (sv.active && speed_info.speed >= 0)
 	{
 		display_speed = speed_info.speed;
 		bad_jump = speed_info.jump_fmove == 0 || speed_info.jump_smove == 0;
@@ -3255,7 +3431,11 @@ SCR_DrawSpeed -- woods #speed
 */
 void SCR_DrawSpeed (void)
 {
-	if (cl.intermission || qeintermission || crxintermission || scr_viewsize.value >= 120)
+	qboolean speed_preview = M_LivePreview_UseSpeed();
+
+	if ((speed_preview && scr_showspeed.value <= 0) ||
+		(!speed_preview && (cl.intermission || qeintermission || crxintermission)) ||
+		scr_viewsize.value >= 120)
 		return;
 	
 	if (scr_showspeed.value > 1)
@@ -3292,7 +3472,7 @@ void SCR_DrawSpeed (void)
 			y = 233;
 	}
 
-	if (scr_showspeed.value == 1 && (!cl.intermission || !qeintermission || !crxintermission))
+	if ((speed_preview || scr_showspeed.value == 1) && (!cl.intermission || !qeintermission || !crxintermission))
 	{
 		speed = GetSpeedValue();
 
@@ -3316,7 +3496,11 @@ SCR_DrawMovementKeys -- woods #movementkeys (soruced from: https://github.com/j0
 */
 void SCR_DrawMovementKeys(void)
 {
-	if (!scr_movekeys.value || cl.intermission || qeintermission || crxintermission || scr_viewsize.value > 110)
+	qboolean movekeys_preview = M_LivePreview_UseMovementKeys();
+
+	if (!scr_movekeys.value ||
+		(!movekeys_preview && (cl.intermission || qeintermission || crxintermission)) ||
+		scr_viewsize.value > 110)
 		return;
 
 	extern kbutton_t in_moveleft, in_moveright, in_forward, in_back, in_jump, in_up;
@@ -3348,15 +3532,15 @@ void SCR_DrawMovementKeys(void)
 	}
 
 	// Draw movement keys
-	if (in_forward.state & 1)
+	if (movekeys_preview || (in_forward.state & 1))
 		Draw_Character_Rotation(x, y - size, '^', 0);
-	if (in_back.state & 1)
+	if (movekeys_preview || (in_back.state & 1))
 		Draw_Character_Rotation(x, y + size, '^', 180);
-	if (in_moveleft.state & 1)
+	if (movekeys_preview || (in_moveleft.state & 1))
 		Draw_Character_Rotation(x - size, y, '^', 270);
-	if (in_moveright.state & 1)
+	if (movekeys_preview || (in_moveright.state & 1))
 		Draw_Character_Rotation(x + size, y, '^', 90);
-	if (in_jump.state & 1)
+	if (movekeys_preview || (in_jump.state & 1))
 		M_Print(x, y - 1, "j");
 	else if (in_up.state & 1)
 		M_Print(x, y -1, "s");
@@ -3959,27 +4143,36 @@ void SCR_DrawPause2(void)
 {
 	qpic_t* pic;
 	char hint[80];
+	qboolean hint_preview = M_LivePreview_UsePausedHints () && !cls.demoplayback;
+	qboolean show_hints = ((cl.match_pause_time > 0 && !cls.demoplayback) || pausedprint || hint_preview);
 	static SDL_TimerID hint_timer_id = 0;
 
 	GL_SetCanvas(CANVAS_MENU2); //johnfitz
 
 	pic = Draw_CachePic("gfx/pause.lmp");
 
-	if ((cl.match_pause_time > 0 && !cls.demoplayback) || pausedprint)
+	if (show_hints)
 		Draw_Pic((320 - pic->width) / 2, (240 - 48 - pic->height) / 2, pic); //johnfitz -- stretched menus
 
-	if (((cl.match_pause_time > 0 && !cls.demoplayback) || pausedprint) && scr_hints.value)
+	if (show_hints && scr_hints.value)
 	{
 		GL_SetCanvas(CANVAS_HINT);
 
-		if (!timerstarted) // only start timer once
-		{ 
-			random_hint = hints[rand() % num_hints];
-			hint_timer_id = SDL_AddTimer(6000, HintTimer_Callback, NULL);
-			timerstarted = true;
+		if (hint_preview)
+		{
+			q_strlcpy(hint, (num_hints > 0) ? hints[0] : "QSS-M hints are enabled", sizeof(hint));
 		}
+		else
+		{
+			if (!timerstarted) // only start timer once
+			{
+				random_hint = hints[rand() % num_hints];
+				hint_timer_id = SDL_AddTimer(6000, HintTimer_Callback, NULL);
+				timerstarted = true;
+			}
 
-		snprintf(hint, sizeof(hint), "%s", random_hint);
+			q_strlcpy(hint, random_hint, sizeof(hint));
+		}
 		M_Print(360, 300, "QSS-M Hint");
 		M_PrintWhite(400 - (strlen(hint) * 4), 320, hint);
 	}
@@ -4076,7 +4269,7 @@ void SCR_DrawCrosshair (void)
 	plcolour_t damage = CL_PLColours_Parse(scr_crosshaircshift.string);
 	float alpha = scr_crosshairalpha.value;
 
-	if (cl.time <= cl.faceanimtime && cl_damagehue.value == 2)
+	if ((cl.time <= cl.faceanimtime || M_LivePreview_UseDamageTint()) && cl_damagehue.value == 2)
 	{ 
 		color = damage;
 		alpha = 1;
@@ -4575,11 +4768,30 @@ void SCR_SetUpToDrawConsole (void)
 		if (scr_conlines > glheight - 50)
 			scr_conlines = glheight - 50;
 	}
+	else if (M_WantsConsole (NULL))
+	{
+		if (M_LivePreview_UseConsoleSpeed () && !M_LivePreview_ConsoleSpeedOpen ())
+			scr_conlines = 0;
+		else if (M_LivePreview_UseConsoleHeight ())
+		{
+			scr_conlines = glheight * scr_consize.value; // preview the configured console height
+			if (scr_conlines < 50)
+				scr_conlines = 50;
+			if (scr_conlines > glheight - 50)
+				scr_conlines = glheight - 50;
+		}
+		else
+			scr_conlines = glheight / 2;
+	}
 	else
 		scr_conlines = 0; //none visible
 
 	timescale = (host_timescale.value > 0) ? host_timescale.value : 1; //johnfitz -- timescale
 	conspeed = (scr_conspeed.value > 0 && !cls.timedemo) ? scr_conspeed.value : 1e6f;
+
+	// the preview fade is brief, so make sure the console can catch up
+	if (key_dest == key_menu && !M_LivePreview_UseConsoleSpeed ())
+		conspeed = q_max (conspeed, 2000.f);
 
 	if (scr_conlines < scr_con_current)
 	{
@@ -5851,6 +6063,7 @@ static qboolean sprite_checked = false;
 static float    last_upd_time = 0;
 static float    player_paddle_flash_time = 0.0f; // Time when the flash should end
 static qboolean pong_user_frozen = false;
+static qboolean pong_preview_only_active = false;
 
 void Pong_ToggleFreeze(void)
 {
@@ -5984,7 +6197,21 @@ static inline void Pong_HandlePaddleCollision(paddle_t* P)
 
 void Pong_Update(void)
 {
-	if (cl_pong.value <= 0 || (!cl.paused && !cl.match_pause_time) || cls.demoplayback) return;
+	qboolean pong_preview = M_LivePreview_UsePong ();
+	qboolean preview_only = (pong_preview && !cl.paused && !cl.match_pause_time);
+
+	if (!preview_only && pong_preview_only_active)
+	{
+		game_init = false;
+		sprite_checked = false;
+		pong_preview_only_active = false;
+	}
+	else if (preview_only)
+	{
+		pong_preview_only_active = true;
+	}
+
+	if (cl_pong.value <= 0 || (!cl.paused && !cl.match_pause_time && !pong_preview) || cls.demoplayback) return;
 
 	if (game_init && (vid.width != scr_w || vid.height != scr_h)) // Check if the window was resized while paused
 	{
@@ -6002,8 +6229,7 @@ void Pong_Update(void)
 	}
 
 	qboolean frozen = (pong_user_frozen ||
-		key_dest != key_game ||
-		!windowhasfocus);
+		(!pong_preview && (key_dest != key_game || !windowhasfocus)));
 
 	// Initialize the game on the first *active* frame if needed
 	// We also need last_upd_time to be set correctly before calculating dt
@@ -6094,9 +6320,22 @@ void Pong_Update(void)
 	// Player paddle position is updated by Pong_MouseMove
 
 	/* scoring ------------------------------------------------------------ */
-	if (ball.x < 0) { ++ply_score;S_LocalSound("zombie/z_miss.wav");Pong_Reset(); }
-	else if (ball.x > sw) {
-		++ai_score;S_LocalSound("zombie/z_miss.wav");
+	if (ball.x < 0)
+	{
+		if (!preview_only)
+		{
+			++ply_score;
+			S_LocalSound("zombie/z_miss.wav");
+		}
+		Pong_Reset();
+	}
+	else if (ball.x > sw)
+	{
+		if (!preview_only)
+		{
+			++ai_score;
+			S_LocalSound("zombie/z_miss.wav");
+		}
 		player_paddle_flash_time = realtime + 0.1f;
 		Pong_Reset();
 	}
@@ -6111,11 +6350,24 @@ static void Quad(float x, float y, float w, float h)
 
 void Pong_Draw(void)
 {
+	qboolean pong_preview = M_LivePreview_UsePong ();
+
 	// Skip drawing during demo playback
 	if (cls.demoplayback) return;
 
-	// Only draw if enabled and game is paused
-	if (cl_pong.value <= 0 || (!cl.paused && !cl.match_pause_time)) return;
+	// Only draw if enabled and game is paused, or while the menu previews Pong.
+	if (cl_pong.value <= 0 || (!cl.paused && !cl.match_pause_time && !pong_preview)) return;
+
+	if (!pong_pause_pic)
+		pong_pause_pic = Draw_CachePic("gfx/pause.lmp");
+
+	if (pong_preview && !cl.paused && !cl.match_pause_time)
+	{
+		GL_SetCanvas(CANVAS_MENU);
+		Draw_Pic((320 - pong_pause_pic->width) / 2,
+			(240 - 48 - pong_pause_pic->height) / 2,
+			pong_pause_pic);
+	}
 
 	GL_SetCanvas(CANVAS_DEFAULT);
 
