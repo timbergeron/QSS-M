@@ -646,14 +646,16 @@ void CL_SendLagMove(void)
 
 	while ((lag_tail < lag_head) && (lag_sendtime[lag_tail & 31] <= realtime))
 	{
-		lag_tail++;
-		if (++cl.movemessages <= 2)
+		unsigned int lag_index = lag_tail++ & 31;
+		if (cl.movemessages <= 2)
 		{
 			lag_head = lag_tail = 0;  // JPG - hack: if cl.movemessages has been reset, we should reset these too
 			continue;	// return -> continue
 		}
+		if (!lag_buff[lag_index].cursize)
+			continue;
 
-		if (NET_SendUnreliableMessage(cls.netcon, &lag_buff[(lag_tail - 1) & 31]) == -1)
+		if (NET_SendUnreliableMessage(cls.netcon, &lag_buff[lag_index]) == -1)
 		{
 			Con_Printf("CL_SendMove: lost server connection\n");
 			CL_Disconnect();
