@@ -1985,6 +1985,7 @@ void CL_RelinkEntities (void)
 	dlight_t	*dl;
 	float		frametime;
 	int			modelflags;
+	qboolean	hidden_viewentity;
 	qmodel_t	*model; // woods #r2g
 
 // determine partial update time
@@ -2064,6 +2065,7 @@ void CL_RelinkEntities (void)
 			continue;
 		}
 
+		hidden_viewentity = (i == cl.viewentity && !chase_active.value);
 		VectorCopy (ent->origin, oldorg);
 
 		CL_ClientsidePowerupColor(ent, i); // woods
@@ -2081,6 +2083,14 @@ void CL_RelinkEntities (void)
 		}
 
 		modelflags = CL_EntityModelFlags (ent);
+
+		if (hidden_viewentity && cl.stats[STAT_HEALTH] <= 0)
+		{
+			PScript_DelinkTrailstate(&ent->trailstate);
+			PScript_DelinkTrailstate(&ent->emitstate);
+			ent->forcelink = false;
+			continue;
+		}
 
 // rotate binary objects locally
 		if (modelflags & EF_ROTATE)
@@ -2277,7 +2287,7 @@ void CL_RelinkEntities (void)
 		}
 #endif
 
-		if (i == cl.viewentity && !chase_active.value)
+		if (hidden_viewentity)
 			continue;
 
 		// woods #demoeyecam - hide chased player model when rendering demo eyecam
