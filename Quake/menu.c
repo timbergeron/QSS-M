@@ -27675,6 +27675,32 @@ void M_Draw (void)
 }
 
 
+// menus whose key handler treats printable input as a list-search filter
+// and K_BACKSPACE as deleting a character from that search
+static qboolean M_HasSearchField (void)
+{
+	switch (m_state)
+	{
+	case m_maps:
+	case m_downloadmaps:
+	case m_keys:
+	case m_graphics:
+	case m_sound:
+	case m_game:
+	case m_hud:
+	case m_console:
+	case m_extras:
+	case m_version:
+	case m_slist:
+	case m_mods:
+	case m_demos:
+		return true;
+	default:
+		return false;
+	}
+}
+
+
 void M_Keydown (int key, qboolean repeat)
 {
 	if (cls.menu_qcvm.extfuncs.m_draw)	//don't get confused.
@@ -27699,6 +27725,7 @@ void M_Keydown (int key, qboolean repeat)
 	// this reduces sound spam and, for gamepads, rumble spam
 	if (repeat)
 	{
+		qboolean has_search = M_HasSearchField();
 		switch (key)
 		{
 		case K_UPARROW:
@@ -27713,10 +27740,14 @@ void M_Keydown (int key, qboolean repeat)
 			break;
 		case K_BACKSPACE:
 		case K_DEL:
-			if (M_TextEntry())
+			if (M_TextEntry() || has_search)
 				break;
 			return;
 		default:
+			// also let printable characters repeat in list-search menus so
+			// holding a letter keeps filtering, matching the typing behavior
+			if (has_search && key >= 32 && key < 127)
+				break;
 			return;
 		}
 	}
