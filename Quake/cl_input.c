@@ -585,7 +585,7 @@ void CL_FinishMove(usercmd_t *cmd, qboolean isfinal)
 		&in_jump,
 		&in_button3,
 		&in_button4,
-		&in_button3,
+		&in_button5,
 		&in_button6,
 		&in_button7,
 		&in_button8,
