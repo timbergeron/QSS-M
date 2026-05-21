@@ -52,6 +52,7 @@ typedef struct
 	qboolean	paused;
 	qboolean	loadgame;			// handle connections specially
 	qboolean	nomonsters;			// woods #nomonsters (ironwail) -- server started with 'nomonsters' cvar active
+	qboolean	showflags;			// woods #showflags -- server started with single-player CTF flag fallback active
 
 	int			lastcheck;			// used by PF_checkclient
 	double		lastchecktime;

@@ -42,6 +42,7 @@ const int	type_size[ev_ext_double + 1] = {
 static ddef_t	*ED_FieldAtOfs (int ofs);
 
 cvar_t	nomonsters = {"nomonsters", "0", CVAR_NONE};
+cvar_t	showflags = {"showflags", "0", CVAR_NONE};
 cvar_t	gamecfg = {"gamecfg", "0", CVAR_NONE};
 cvar_t	scratch1 = {"scratch1", "0", CVAR_NONE};
 cvar_t	scratch2 = {"scratch2", "0", CVAR_NONE};
@@ -1265,11 +1266,141 @@ Used for both fresh maps and savegame loads.  A fresh map would also need
 to call ED_CallSpawnFunctions () to let the objects initialize themselves.
 ================
 */
+static qboolean ED_IsCTFFlagClassname (const char *classname)
+{
+	return (!strcmp (classname, "item_flag_team1") ||
+		!strcmp (classname, "item_flag_team2"));
+}
+
+typedef enum
+{
+	ed_ctf_flag_spawn_not_handled,
+	ed_ctf_flag_spawned,
+	ed_ctf_flag_inhibited
+} ed_ctf_flag_spawn_result_t;
+
+// Common CTF flag entities place their origin above the floor at flag-head height.
+// Flag models need to drop to the stand; key fallback models already sit higher
+// because of their smaller bbox, so they need no shift.
+#define ED_CTF_FALLBACK_FLAG_Z_OFFSET 24.f
+
+static const char * const ed_ctf_flag_models[] = {
+	"progs/flag.mdl",
+	"progs/ctfmodel.mdl",
+	"progs/flag2.mdl",
+	"progs/flag3.mdl"
+};
+
+static const char * const ed_ctf_key_models[][2] = {
+	{ "progs/w_s_key.mdl", "progs/w_g_key.mdl" },
+	{ "progs/m_s_key.mdl", "progs/m_g_key.mdl" },
+	{ "progs/b_s_key.mdl", "progs/b_g_key.mdl" }
+};
+
+static const char *ED_FindCTFFlagModel (void)
+{
+	size_t i;
+
+	for (i = 0; i < Q_COUNTOF(ed_ctf_flag_models); i++)
+	{
+		if (COM_FileExists (ed_ctf_flag_models[i], NULL))
+			return ed_ctf_flag_models[i];
+	}
+
+	return NULL;
+}
+
+static const char *ED_FindCTFKeyModel (qboolean blue)
+{
+	enum { ctf_key_blue, ctf_key_red };
+	size_t color = blue ? ctf_key_blue : ctf_key_red;
+	size_t i;
+
+	// Public CTF convention: item_flag_team2 (blue) uses silver keys,
+	// and team1 (red) uses gold keys.
+	for (i = 0; i < Q_COUNTOF(ed_ctf_key_models); i++)
+	{
+		if (COM_FileExists (ed_ctf_key_models[i][color], NULL))
+			return ed_ctf_key_models[i][color];
+	}
+
+	return NULL;
+}
+
+static dfunction_t *ED_FindSpawnFunction (const char *classname, qboolean *prefixed)
+{
+	dfunction_t *func;
+
+	func = ED_FindFunction (va ("spawnfunc_%s", classname));
+	if (func)
+	{
+		if (prefixed)
+			*prefixed = true;
+		return func;
+	}
+
+	if (prefixed)
+		*prefixed = false;
+	return ED_FindFunction (classname);
+}
+
+static qboolean ED_SinglePlayerCTFFlagFallbackAllowed (const char *classname)
+{
+	return (svs.maxclients == 1 &&
+		sv.showflags &&
+		!deathmatch.value &&
+		!coop.value &&
+		ED_IsCTFFlagClassname (classname));
+}
+
+static qboolean ED_ShouldFallbackSinglePlayerCTFFlag (const char *classname, dfunction_t *func)
+{
+	return (!func && ED_SinglePlayerCTFFlagFallbackAllowed (classname));
+}
+
+static ed_ctf_flag_spawn_result_t ED_SpawnSinglePlayerCTFFlag (edict_t *ent, const char *classname)
+{
+	const char *modelname;
+	qboolean blue;
+	qboolean using_key_model = false;
+
+	if (!ED_SinglePlayerCTFFlagFallbackAllowed (classname))
+		return ed_ctf_flag_spawn_not_handled;
+
+	blue = !strcmp (classname, "item_flag_team2");
+	modelname = ED_FindCTFFlagModel ();
+	if (!modelname)
+	{
+		modelname = ED_FindCTFKeyModel (blue);
+		using_key_model = true;
+		if (!modelname)
+		{
+			Con_Warning ("No CTF flag or key model for %s fallback\n", classname);
+			ED_Free (ent);
+			return ed_ctf_flag_inhibited;
+		}
+	}
+
+	ent->v.model = PR_SetEngineString (modelname);
+	// flag.mdl skin 0 is red and skin 1 is blue; key fallback models use skin 0.
+	ent->v.skin = using_key_model ? 0 : (blue ? 1 : 0);
+	ent->v.effects = (float)((int)ent->v.effects | (blue ? EF_BLUE : EF_RED));
+	// Normal static baselines omit effects; this marker carries the fallback color there.
+	ent->v.colormap = blue ? STATIC_COLORMAP_CTF_BLUE : STATIC_COLORMAP_CTF_RED;
+	if (!using_key_model)
+		ent->v.origin[2] -= ED_CTF_FALLBACK_FLAG_Z_OFFSET;
+
+	PR_spawnfunc_misc_model (ent);
+	return ed_ctf_flag_spawned;
+}
+
 void ED_LoadFromFile (const char *data)
 {
 	const char* classname; // woods #nomonsters (ironwail)
 	dfunction_t	*func;
 	edict_t		*ent = NULL;
+	ed_ctf_flag_spawn_result_t ctf_flag_result;
+	qboolean	prefixed_spawnfunc;
 	int		inhibit = 0;
 	int usingspawnfunc = 0;
 	float old_total_monsters;
@@ -1291,6 +1422,9 @@ void ED_LoadFromFile (const char *data)
 		else
 			ent = ED_Alloc ();
 		data = ED_ParseEdict (data, ent);
+		classname = ent->v.classname ? PR_GetString (ent->v.classname) : "";
+		prefixed_spawnfunc = false;
+		func = ent->v.classname ? ED_FindSpawnFunction (classname, &prefixed_spawnfunc) : NULL;
 
 		// remove things from different skill levels or deathmatch
 		if (deathmatch.value)
@@ -1302,9 +1436,10 @@ void ED_LoadFromFile (const char *data)
 				continue;
 			}
 		}
-		else if ((current_skill == 0 && ((int)ent->v.spawnflags & SPAWNFLAG_NOT_EASY))
+		else if (!ED_ShouldFallbackSinglePlayerCTFFlag (classname, func) &&
+				((current_skill == 0 && ((int)ent->v.spawnflags & SPAWNFLAG_NOT_EASY))
 				|| (current_skill == 1 && ((int)ent->v.spawnflags & SPAWNFLAG_NOT_MEDIUM))
-				|| (current_skill >= 2 && ((int)ent->v.spawnflags & SPAWNFLAG_NOT_HARD)) )
+				|| (current_skill >= 2 && ((int)ent->v.spawnflags & SPAWNFLAG_NOT_HARD))) )
 		{
 			ED_Free (ent);
 			inhibit++;
@@ -1322,7 +1457,6 @@ void ED_LoadFromFile (const char *data)
 			continue;
 		}
 
-		classname = PR_GetString(ent->v.classname); // woods #nomonsters (ironwail)
 		if (sv.nomonsters && !Q_strncmp(classname, "monster_", 8))
 		{
 			ED_Free(ent);
@@ -1330,18 +1464,25 @@ void ED_LoadFromFile (const char *data)
 			continue;
 		}
 
-	// look for the spawn function
+		if (!func)
+		{
+			ctf_flag_result = ED_SpawnSinglePlayerCTFFlag (ent, classname);
+			if (ctf_flag_result != ed_ctf_flag_spawn_not_handled)
+			{
+				if (ctf_flag_result == ed_ctf_flag_inhibited)
+					inhibit++;
+				continue;
+			}
+		}
+
+	// call the spawn function
 		//
-		func = ED_FindFunction(va("spawnfunc_%s", classname)); // woods #nomonsters (ironwail)
 		if (func)
 		{
-			if (!usingspawnfunc++)
+			if (prefixed_spawnfunc && !usingspawnfunc++)
 				Con_DPrintf2 ("Using DP_SV_SPAWNFUNC_PREFIX\n");
 		}
 		else
-			func = ED_FindFunction (classname); // woods #nomonsters (ironwail)
-
-		if (!func)
 		{
 			const char *classname = PR_GetString(ent->v.classname);
 			if (!strcmp(classname, "misc_model"))
@@ -1809,6 +1950,7 @@ void PR_Init (void)
 	Cmd_AddCommand ("pr_dumpplatform", PR_DumpPlatform_f);
 	Cvar_RegisterVariable (&nomonsters);
 	Cvar_SetCallback (&nomonsters, ED_Nomonsters_f); // woods #nomonsters (ironwail)
+	Cvar_RegisterVariable (&showflags);
 	Cvar_RegisterVariable (&gamecfg);
 	Cvar_RegisterVariable (&scratch1);
 	Cvar_RegisterVariable (&scratch2);

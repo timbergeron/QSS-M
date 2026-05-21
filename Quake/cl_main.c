@@ -1876,6 +1876,26 @@ static int CL_EntityModelFlags (const entity_t *ent)
 	return modelflags;
 }
 
+static qboolean CL_IsSinglePlayerCTFFallbackStaticModel (const entity_t *ent)
+{
+	const char *name;
+
+	if (!ent || !ent->model || !ent->model->name[0])
+		return false;
+
+	name = ent->model->name;
+	return (!strcmp(name, "progs/flag.mdl") ||
+		!strcmp(name, "progs/ctfmodel.mdl") ||
+		!strcmp(name, "progs/flag2.mdl") ||
+		!strcmp(name, "progs/flag3.mdl") ||
+		!strcmp(name, "progs/w_s_key.mdl") ||
+		!strcmp(name, "progs/w_g_key.mdl") ||
+		!strcmp(name, "progs/m_s_key.mdl") ||
+		!strcmp(name, "progs/m_g_key.mdl") ||
+		!strcmp(name, "progs/b_s_key.mdl") ||
+		!strcmp(name, "progs/b_g_key.mdl"));
+}
+
 qboolean CL_ViewingQ3ItemBobbingItem (void)
 {
 	int i;
@@ -1907,6 +1927,54 @@ qboolean CL_ViewingQ3ItemBobbingItem (void)
 CL_RelinkEntities
 ===============
 */
+#define CL_CTF_FALLBACK_STATIC_DLIGHT_Z 24.f
+#define CL_CTF_FALLBACK_STATIC_DLIGHT_RADIUS 256.f
+
+static void CL_AddSinglePlayerCTFFallbackStaticLights (void)
+{
+	entity_t	*ent;
+	dlight_t	*dl;
+	unsigned int	effects;
+	int		i;
+
+	if (cl.maxclients != 1)
+		return;
+
+	// Static entities do not pass through the normal per-entity effect light path.
+	for (i = 0; i < cl.num_statics; i++)
+	{
+		ent = cl.static_entities[i].ent;
+		if (!ent || !ent->model)
+			continue;
+
+		effects = ent->baseline.effects & (EF_RED | EF_GREEN | EF_BLUE);
+		if (!effects)
+		{
+			if (!CL_IsSinglePlayerCTFFallbackStaticModel (ent))
+				continue;
+
+			if (ent->baseline.colormap == STATIC_COLORMAP_CTF_RED)
+				effects = EF_RED;
+			else if (ent->baseline.colormap == STATIC_COLORMAP_CTF_BLUE)
+				effects = EF_BLUE;
+		}
+		if (!effects)
+			continue;
+
+		dl = CL_AllocDlight (-(MAX_EDICTS + i + 1));
+		VectorCopy (ent->origin, dl->origin);
+		dl->origin[2] += CL_CTF_FALLBACK_STATIC_DLIGHT_Z;
+		dl->radius = CL_CTF_FALLBACK_STATIC_DLIGHT_RADIUS;
+		dl->die = cl.time + 0.1;
+		if (r_coloredpowerupglow.value)
+		{
+			dl->color[0] = !!(effects & EF_RED);
+			dl->color[1] = !!(effects & EF_GREEN);
+			dl->color[2] = !!(effects & EF_BLUE);
+		}
+	}
+}
+
 void CL_RelinkEntities (void)
 {
 	entity_t	*ent;
@@ -2223,6 +2291,7 @@ void CL_RelinkEntities (void)
 		}
 	}
 
+	CL_AddSinglePlayerCTFFallbackStaticLights ();
 
 	// viewmodel. last, for transparency reasons.
 	ent = &cl.viewent;

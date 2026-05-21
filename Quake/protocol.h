@@ -247,6 +247,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define B_SCALE			(1<<3)	// added as part of rmq 999 (NOT valid for 666)
 //johnfitz
 
+// Single-player CTF flag fallback markers. Normal static baseline formats
+// omit effects, so these carry the fallback color when EF_* bits are not sent.
+#define STATIC_COLORMAP_CTF_RED		254
+#define STATIC_COLORMAP_CTF_BLUE	255
+
 //johnfitz -- PROTOCOL_FITZQUAKE -- alpha encoding
 #define ENTALPHA_DEFAULT	0	//entity's alpha is "default" (i.e. water obeys r_wateralpha) -- must be zero so zeroed out memory works
 #define ENTALPHA_ZERO		1	//entity is invisible (lowest possible alpha)
