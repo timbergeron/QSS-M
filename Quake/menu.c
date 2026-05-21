@@ -25430,6 +25430,8 @@ static struct
 	qboolean			path_editing;
 	qboolean			path_valid;
 	qboolean			show_id1;
+	int					bg_parse_cursor;       // next index to background-parse for searchable metadata
+	int					last_refilter_parsed;  // bg_parse_cursor value at last refilter (to detect new data)
 } demosmenu;
 
 static const char *M_Demos_CurrentGameName(void)
@@ -25571,6 +25573,8 @@ static void M_Demos_FreeItems(void)
 		demosmenu.filtered_indices = NULL;
 	}
 	demosmenu.democount = 0;
+	demosmenu.bg_parse_cursor = 0;
+	demosmenu.last_refilter_parsed = 0;
 }
 
 static void M_Demos_AddEx(const char* name, const char* date, const char *display, qboolean from_id1)
@@ -26086,33 +26090,149 @@ static void M_Demos_UpdatePathHint(void)
 	}
 }
 
-static void M_Demos_Refilter(void)
+extern int unfun_match(const char *s1, char *s2);  // host_cmd.c — Quake-special-aware substring match (used by name/identify/tell)
+
+static void M_Demos_ParseItem(demoitem_t *di)
+{
+    demoinfo_t info;
+    if (Parse_DemoInfo(di->name, &info))
+    {
+        q_strlcpy(di->map, info.map, sizeof(di->map));
+        q_strlcpy(di->players, info.players, sizeof(di->players));
+        FormatDuration(info.duration, di->duration, sizeof(di->duration));
+        q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", info.filesize_mb);
+    }
+    else
+    {
+        q_strlcpy(di->map, "unknown", sizeof(di->map));
+        q_strlcpy(di->players, "n/a", sizeof(di->players));
+        q_strlcpy(di->duration, "n/a", sizeof(di->duration));
+        q_strlcpy(di->filesize, "n/a", sizeof(di->filesize));
+    }
+    di->parsed = true;
+}
+
+// Parse a small number of demos per frame so typed searches don't block.
+// Returns true if anything was parsed this call (so caller can refresh
+// dependent state like the filtered list).
+static qboolean M_Demos_TickBackgroundParse(void)
+{
+    const int BUDGET = 2;  // demos per frame; each Parse_DemoInfo can be I/O heavy
+    int parsed = 0;
+
+    while (parsed < BUDGET && demosmenu.bg_parse_cursor < demosmenu.democount)
+    {
+        demoitem_t *di = &demosmenu.items[demosmenu.bg_parse_cursor++];
+        if (!di->parsed)
+        {
+            M_Demos_ParseItem(di);
+            parsed++;
+        }
+    }
+    return parsed > 0;
+}
+
+// preserve_view=true: keep the user's scroll position when possible.  Used by
+// the background-parse tick so newly-matched items can stream into the list
+// without scroll-jumping under the user.  Keystroke callers pass false and
+// get the legacy center-on-cursor behavior.
+static void M_Demos_RefilterEx(qboolean preserve_view)
 {
     int i;
+    qboolean has_search = demosmenu.list.search.len > 0;
+    int prev_demo_idx = -1;
+    int prev_scroll = demosmenu.list.scroll;
+
+    // Remember which demo the cursor was on so we can keep it selected even
+    // when the filter set grows or items shift index.
+    if (demosmenu.list.cursor >= 0 &&
+        demosmenu.list.cursor < (int)VEC_SIZE(demosmenu.filtered_indices))
+        prev_demo_idx = demosmenu.filtered_indices[demosmenu.list.cursor];
+
     VEC_CLEAR(demosmenu.filtered_indices);
 
     for (i = 0; i < demosmenu.democount; i++)
     {
-        if (demosmenu.list.search.len == 0 ||
-            q_strcasestr(demosmenu.items[i].name, demosmenu.list.search.text) ||
-            q_strcasestr(demosmenu.items[i].display, demosmenu.list.search.text) ||
-            q_strcasestr(demosmenu.items[i].date, demosmenu.list.search.text) ||
-            q_strcasestr(demosmenu.items[i].map, demosmenu.list.search.text) ||
-            q_strcasestr(demosmenu.items[i].players, demosmenu.list.search.text))
+        demoitem_t *di = &demosmenu.items[i];
+
+        // Tooltip metadata (map/players/duration/filesize) is filled in
+        // by the background parser in M_Demos_Draw; unparsed items match
+        // only on name/display/date until they're filled in, then a later
+        // refilter folds them in.  This keeps the keystroke path lag-free.
+        //
+        // For the players field we use unfun_match so typed ASCII matches
+        // names that contain Quake's gold/colored chars (same matcher used
+        // by name/identify/tell tab-completion).  Other fields stay on
+        // q_strcasestr because the unfun table folds ASCII digits 0-9 into
+        // letters (intended for gold-digit player names), which would
+        // garble searches against map ("e1m1") or duration ("1:23").
+        if (!has_search ||
+            q_strcasestr(di->name, demosmenu.list.search.text) ||
+            q_strcasestr(di->display, demosmenu.list.search.text) ||
+            q_strcasestr(di->date, demosmenu.list.search.text) ||
+            (di->parsed && (
+                q_strcasestr(di->map, demosmenu.list.search.text) ||
+                unfun_match(demosmenu.list.search.text, di->players) ||
+                q_strcasestr(di->duration, demosmenu.list.search.text) ||
+                q_strcasestr(di->filesize, demosmenu.list.search.text))))
         {
             VEC_PUSH(demosmenu.filtered_indices, i);
         }
     }
 
+    demosmenu.last_refilter_parsed = demosmenu.bg_parse_cursor;
     demosmenu.list.numitems = VEC_SIZE(demosmenu.filtered_indices);
 
+    // Try to relocate the previously-selected demo in the new filter set so
+    // identity (not position) is preserved across the refilter.
+    int new_cursor = -1;
+    if (prev_demo_idx >= 0)
+    {
+        for (i = 0; i < demosmenu.list.numitems; i++)
+        {
+            if (demosmenu.filtered_indices[i] == prev_demo_idx)
+            {
+                new_cursor = i;
+                break;
+            }
+        }
+    }
+
+    if (new_cursor >= 0)
+    {
+        demosmenu.list.cursor = new_cursor;
+
+        if (preserve_view)
+        {
+            int max_scroll = demosmenu.list.numitems - demosmenu.list.viewsize;
+            if (max_scroll < 0)
+                max_scroll = 0;
+            demosmenu.list.scroll = CLAMP(0, prev_scroll, max_scroll);
+            // Only re-center if the preserved cursor scrolled out of view.
+            if (new_cursor < demosmenu.list.scroll ||
+                new_cursor >= demosmenu.list.scroll + demosmenu.list.viewsize)
+                M_List_CenterCursor(&demosmenu.list);
+        }
+        else
+        {
+            M_List_CenterCursor(&demosmenu.list);
+        }
+        return;
+    }
+
+    // Previous selection no longer matches — fall back to clamping the
+    // existing cursor index and re-centering.
     if (demosmenu.list.cursor >= demosmenu.list.numitems)
         demosmenu.list.cursor = demosmenu.list.numitems - 1;
-
     if (demosmenu.list.cursor < 0 && demosmenu.list.numitems > 0)
         demosmenu.list.cursor = 0;
 
     M_List_CenterCursor(&demosmenu.list);
+}
+
+static void M_Demos_Refilter(void)
+{
+    M_Demos_RefilterEx(false);
 }
 
 static void M_Demos_RebuildForCurrentPath(void)
@@ -26123,6 +26243,8 @@ static void M_Demos_RebuildForCurrentPath(void)
 	demosmenu.list.cursor = -1;
 	demosmenu.list.scroll = 0;
 	demosmenu.democount = 0;
+	demosmenu.bg_parse_cursor = 0;
+	demosmenu.last_refilter_parsed = 0;
 	VEC_CLEAR(demosmenu.items);
 	VEC_CLEAR(demosmenu.filtered_indices);
 
@@ -26532,6 +26654,21 @@ void M_Demos_Draw (void)
         M_Ticker_Update(&demosmenu.ticker);
     }
 
+    // Background-parse a few demos per frame so search can match tooltip
+    // metadata without stalling on the first keystroke.  When a search is
+    // active, refresh the filter as new metadata trickles in — preserve
+    // the user's scroll/selection so results stream in without jumping.
+    // Coalesce refilters across several parses so very large demo libraries
+    // don't pay an O(democount) sweep every couple of frames.
+    if (M_Demos_TickBackgroundParse() && demosmenu.list.search.len > 0)
+    {
+        const int REFILTER_BATCH = 8;
+        int new_parses = demosmenu.bg_parse_cursor - demosmenu.last_refilter_parsed;
+        qboolean done = (demosmenu.bg_parse_cursor >= demosmenu.democount);
+        if (new_parses >= REFILTER_BATCH || done)
+            M_Demos_RefilterEx(true);
+    }
+
 	M_TextField_CheckMouseRelease();
 
     Draw_String(x, 4, "Demos");
@@ -26625,27 +26762,10 @@ void M_Demos_Draw (void)
     {
         int demo_idx = demosmenu.filtered_indices[demosmenu.list.cursor];
         demoitem_t* di = &demosmenu.items[demo_idx];
-        
+
         // Lazy parsing: only parse when item is selected for the first time
         if (!di->parsed)
-        {
-            demoinfo_t info;
-            if (Parse_DemoInfo(di->name, &info))
-            {
-                q_strlcpy(di->map, info.map, sizeof(di->map));
-                q_strlcpy(di->players, info.players, sizeof(di->players));
-                FormatDuration(info.duration, di->duration, sizeof(di->duration));
-                q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", info.filesize_mb);
-            }
-            else
-            {
-                q_strlcpy(di->map, "unknown", sizeof(di->map));
-                q_strlcpy(di->players, "n/a", sizeof(di->players));
-                q_strlcpy(di->duration, "n/a", sizeof(di->duration));
-                q_strlcpy(di->filesize, "n/a", sizeof(di->filesize));
-            }
-            di->parsed = true;
-        }
+            M_Demos_ParseItem(di);
         int info_y = y + demosmenu.list.viewsize * 8 + 4;
         qboolean at_bottom = (demosmenu.list.scroll + demosmenu.list.viewsize >= demosmenu.list.numitems);
         if (!at_bottom && M_List_GetOverflow(&demosmenu.list) > 0)
