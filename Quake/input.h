@@ -91,6 +91,7 @@ void IN_ClearStates (void);
 // spike - called whenever mouse focus etc has changed (including console toggled). this is optional, but there's still a number of blocking commands, like connect
 // doing all the mode, state, etc checks in one place ensures that they're consistent, regardless of what else is happening.
 void IN_UpdateGrabs(void);
+void IN_DemoScrubCapture(qboolean capture);
 
 #endif	/* _QUAKE_INPUT_H */
 

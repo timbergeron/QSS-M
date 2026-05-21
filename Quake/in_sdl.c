@@ -515,6 +515,15 @@ void IN_GyroActionUp(void);
 
 static qboolean	no_mouse = false;
 static qboolean	wheel_block_mouse2 = false;
+static qboolean demoscrub_hover = false;
+static double demoscrub_hover_until = 0.0;
+static qboolean demoscrub_was_eligible = false;
+static qboolean demoscrub_cursor_was_visible = false;
+#if defined(USE_SDL2)
+#if SDL_VERSION_ATLEAST(2, 0, 4)
+static qboolean demoscrub_mouse_captured = false;
+#endif
+#endif
 
 static int buttonremap[] =
 {
@@ -805,6 +814,269 @@ qboolean CL_IsActiveObserver (void) // woods #eyemouse
 	return (cl.modtype == 1 && cl.eyecam && !qeintermission && !crxintermission && !cl.intermission);
 }
 
+static qboolean IN_DemoScrubEligible(void)
+{
+	scr_demobar_rect_t rect;
+
+	if (key_dest != key_game || !cls.demoplayback)
+		return false;
+	if (!SCR_GetDemoBarRect(&rect) || !rect.eligible)
+		return false;
+
+	return scr_demobar_timeout.value >= 0.f || rect.visible || CL_DemoScrubActive();
+}
+
+static qboolean IN_DemoScrubBarVisible(void)
+{
+	scr_demobar_rect_t rect;
+
+	if (key_dest != key_game)
+		return false;
+	return SCR_GetDemoBarRect(&rect) && rect.eligible && rect.visible;
+}
+
+static qboolean IN_DemoScrubExpireHover(void)
+{
+	if (demoscrub_hover && realtime >= demoscrub_hover_until)
+	{
+		demoscrub_hover = false;
+		return true;
+	}
+	return false;
+}
+
+static qboolean IN_DemoScrubPollHoverActive(void)
+{
+	if (IN_DemoScrubExpireHover())
+		return false;
+	return demoscrub_hover;
+}
+
+static qboolean IN_DemoScrubCursorVisible(void)
+{
+	return IN_DemoScrubBarVisible() || CL_DemoScrubActive() || IN_DemoScrubPollHoverActive();
+}
+
+static void IN_DemoScrubSetHover(qboolean active)
+{
+	if (active)
+	{
+		demoscrub_hover = true;
+		demoscrub_hover_until = realtime + 0.25;
+	}
+	else
+	{
+		demoscrub_hover = false;
+		demoscrub_hover_until = 0.0;
+	}
+}
+
+static qboolean IN_DemoScrubWindowToPct(int win_x, int win_y, float *pct, qboolean *inside_hit)
+{
+	scr_demobar_rect_t rect;
+	int canvas_x, canvas_y;
+
+	if (pct)
+		*pct = 0.f;
+	if (inside_hit)
+		*inside_hit = false;
+
+	if (!SCR_GetDemoBarRect(&rect) || !rect.eligible)
+		return false;
+	if (!Draw_WindowToCanvas(rect.canvas, win_x, win_y, &canvas_x, &canvas_y))
+		return false;
+
+	if (rect.seek_max_x > rect.seek_min_x && pct)
+		*pct = CLAMP(0.f, (canvas_x - rect.seek_min_x) * 100.f / (float)(rect.seek_max_x - rect.seek_min_x), 100.f);
+
+	if (inside_hit)
+	{
+		*inside_hit =
+			canvas_x >= rect.hit_x1 && canvas_x <= rect.hit_x2 &&
+			canvas_y >= rect.hit_y1 && canvas_y <= rect.hit_y2;
+	}
+
+	return true;
+}
+
+static void IN_DemoScrubSeedHover(void)
+{
+	int x, y;
+	float pct;
+	qboolean inside_hit;
+	qboolean was_hover = IN_DemoScrubPollHoverActive();
+
+	if (!IN_DemoScrubEligible())
+	{
+		IN_DemoScrubSetHover(false);
+		return;
+	}
+
+	SDL_GetMouseState(&x, &y);
+	if (IN_DemoScrubWindowToPct(x, y, &pct, &inside_hit) && inside_hit)
+		IN_DemoScrubSetHover(true);
+	else if (!was_hover)
+		IN_DemoScrubSetHover(false);
+}
+
+static qboolean IN_DemoScrubHandleButton(const SDL_Event *event)
+{
+	float pct;
+	float display_pct;
+	qboolean inside_hit;
+
+	if (event->button.button != SDL_BUTTON_LEFT)
+		return false;
+
+	if (event->button.state == SDL_PRESSED && CL_DemoScrubActive())
+		return true;
+
+	if (event->button.state == SDL_RELEASED)
+	{
+		if (!CL_DemoScrubActive())
+			return false;
+
+		if (!IN_DemoScrubWindowToPct(event->button.x, event->button.y, &pct, &inside_hit))
+		{
+			if (!CL_DemoScrub_GetDisplayPercent(&display_pct))
+				display_pct = 0.f;
+			pct = display_pct;
+		}
+
+		CL_DemoScrub_End(pct);
+		IN_UpdateGrabs();
+		return true;
+	}
+
+	if (event->button.state != SDL_PRESSED || !IN_DemoScrubEligible())
+		return false;
+
+	if (!IN_DemoScrubWindowToPct(event->button.x, event->button.y, &pct, &inside_hit) || !inside_hit)
+		return false;
+
+	if (!CL_DemoScrub_Begin(pct))
+		return false;
+
+	SCR_ShowDemoBar();
+	IN_DemoScrubSetHover(true);
+	IN_UpdateGrabs();
+	return true;
+}
+
+static qboolean IN_DemoScrubHandleMotion(const SDL_Event *event)
+{
+	float pct;
+	float display_pct;
+	qboolean inside_hit;
+	qboolean was_hover = IN_DemoScrubPollHoverActive();
+
+	if (CL_DemoScrubActive())
+	{
+		if (!IN_DemoScrubWindowToPct(event->motion.x, event->motion.y, &pct, &inside_hit))
+		{
+			if (!CL_DemoScrub_GetDisplayPercent(&display_pct))
+				display_pct = 0.f;
+			pct = display_pct;
+		}
+
+		CL_DemoScrub_Update(pct);
+		SCR_ShowDemoBar();
+		return true;
+	}
+
+	if (!IN_DemoScrubEligible())
+	{
+		if (was_hover)
+		{
+			IN_DemoScrubSetHover(false);
+			IN_UpdateGrabs();
+		}
+		return false;
+	}
+
+	if (IN_DemoScrubWindowToPct(event->motion.x, event->motion.y, &pct, &inside_hit) && inside_hit)
+	{
+		IN_DemoScrubSetHover(true);
+		SCR_ShowDemoBar();
+		if (!was_hover)
+			IN_UpdateGrabs();
+	}
+	else if (was_hover && IN_DemoScrubExpireHover())
+		IN_UpdateGrabs();
+
+	return false;
+}
+
+#if defined(USE_SDL2)
+static qboolean IN_DemoScrubHandleWheel(const SDL_Event *event)
+{
+	int x, y;
+	float pct;
+	qboolean inside_hit = false;
+	qboolean hover_active;
+	float seconds;
+
+	if (CL_DemoScrubActive())
+		return true;
+
+	if (!IN_DemoScrubEligible())
+		return false;
+
+	SDL_GetMouseState(&x, &y);
+	if (IN_DemoScrubWindowToPct(x, y, &pct, &inside_hit) && inside_hit)
+		IN_DemoScrubSetHover(true);
+
+	hover_active = IN_DemoScrubPollHoverActive();
+	if (!inside_hit && !hover_active)
+		return false;
+
+	if (event->wheel.y > 0)
+		seconds = 1.0f;
+	else if (event->wheel.y < 0)
+		seconds = -1.0f;
+	else
+		return false;
+
+	if (!CL_DemoSeekRelativeSeconds(seconds))
+		return false;
+
+	SCR_ShowDemoBar();
+	IN_UpdateGrabs();
+	return true;
+}
+#endif
+
+static void IN_DemoScrubRefreshCursor(void)
+{
+	const qboolean eligible = IN_DemoScrubEligible();
+	const qboolean cursor_visible = IN_DemoScrubCursorVisible();
+
+	if (eligible != demoscrub_was_eligible ||
+		cursor_visible != demoscrub_cursor_was_visible)
+		IN_UpdateGrabs();
+}
+
+void IN_DemoScrubCapture(qboolean capture)
+{
+#if defined(USE_SDL2)
+#if SDL_VERSION_ATLEAST(2, 0, 4)
+	if (capture == demoscrub_mouse_captured)
+		return;
+	if (SDL_CaptureMouse(capture ? SDL_TRUE : SDL_FALSE) != 0)
+	{
+		Con_DPrintf("WARNING: SDL_CaptureMouse(%s) failed: %s\n",
+			capture ? "true" : "false", SDL_GetError());
+		return;
+	}
+	demoscrub_mouse_captured = capture;
+#else
+	Q_UNUSED(capture);
+#endif
+#else
+	Q_UNUSED(capture);
+#endif
+}
+
 static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 {
 	qboolean wantcursor;	//we're trying to get a cursor here...
@@ -813,15 +1085,26 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 
 	qboolean pong_active = cl_pong.value && (cl.paused || cl.match_pause_time > 0) && key_dest == key_game; // woods #pong active?
 	qboolean gamecodecursor = (key_dest == key_game && cl.qcvm.cursorforced) || (key_dest == key_menu && cls.menu_qcvm.cursorforced);
+	qboolean demoscrub_eligible = IN_DemoScrubEligible();
+	qboolean demoscrub_cursor;
+
+	if (demoscrub_eligible && !demoscrub_was_eligible)
+		IN_DemoScrubSeedHover();
+	else if (!demoscrub_eligible && demoscrub_was_eligible)
+		IN_DemoScrubSetHover(false);
+	demoscrub_was_eligible = demoscrub_eligible;
+	demoscrub_cursor = IN_DemoScrubCursorVisible();
+	demoscrub_cursor_was_visible = demoscrub_cursor;
+
 	wantcursor = (key_dest == key_console)
 	          || ((key_dest == key_game && CL_IsActiveObserver() && !obs_cursor_hidden)
 	              || (key_dest == key_menu&&!bind_grab))
-	          || gamecodecursor || !windowhasfocus;
+	          || gamecodecursor || demoscrub_cursor || !windowhasfocus;
 	
 	if (pong_active) // woods #pong
 		wantcursor = false;
 	
-	freemouse = wantcursor || gamecodecursor || (key_dest == key_game && CL_IsActiveObserver()); // woods #mousemenu - keep free mouse mode even when cursor is hidden
+	freemouse = wantcursor || gamecodecursor || demoscrub_eligible || CL_DemoScrubActive() || (key_dest == key_game && CL_IsActiveObserver()); // woods #mousemenu - keep free mouse mode even when cursor is hidden
 
 	if (pong_active) // woods #pong
 		freemouse = true;
@@ -4744,6 +5027,10 @@ void IN_SendKeyEvents (void)
 #endif
 				//S_BlockSound();
 				windowhasfocus=false;
+				if (CL_DemoScrubActive())
+					CL_DemoScrub_Cancel();
+				IN_DemoScrubSetHover(false);
+				IN_UpdateGrabs();
 				BGM_Pause(); // woods #usermute - music
 				Sound_Toggle_Mute_On_f(); // woods #mute -- adapted from Fitzquake Mark V
 
@@ -4787,6 +5074,11 @@ void IN_SendKeyEvents (void)
 			else if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
 			{
 				VID_OnResize (event.window.data1, event.window.data2); // github.com/andrei-drexler/ironwail (Enable resizing)
+			}
+			else if (event.window.event == SDL_WINDOWEVENT_ENTER)
+			{
+				IN_DemoScrubSeedHover();
+				IN_UpdateGrabs();
 			}
 			break;
 #else
@@ -4864,6 +5156,12 @@ void IN_SendKeyEvents (void)
 				break;
 			}
 
+			if (IN_DemoScrubHandleButton(&event))
+			{
+				lastactivetype = KD_MOUSE;
+				break;
+			}
+
 			if (event.button.button == SDL_BUTTON_RIGHT && wheel_block_mouse2)
 			{
 				lastactivetype = KD_MOUSE;
@@ -4915,6 +5213,8 @@ void IN_SendKeyEvents (void)
 #if defined(USE_SDL2)
 		case SDL_MOUSEWHEEL:
 			lastactivetype = KD_MOUSE;
+			if (IN_DemoScrubHandleWheel(&event))
+				break;
 			if (Wheel_IsOpen ())
 			{
 				if (event.wheel.y > 0)
@@ -4938,6 +5238,8 @@ void IN_SendKeyEvents (void)
 
 		case SDL_MOUSEMOTION:
 			lastactivetype = KD_MOUSE;
+			if (IN_DemoScrubHandleMotion(&event))
+				break;
 			if (key_dest == key_menu) // woods #mousemenu
 			{
 				M_Mousemove(event.button.x, event.button.y);
@@ -5043,6 +5345,8 @@ void IN_SendKeyEvents (void)
 			break;
 		}
 	}
+
+	IN_DemoScrubRefreshCursor();
 
 	if (key_dest == key_game && CL_IsActiveObserver()) // woods -- observer cursor auto-hide #eyemouse
 	{

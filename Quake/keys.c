@@ -2500,6 +2500,13 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 			return;
 		}
 
+		if (CL_DemoScrubActive())
+		{
+			CL_DemoScrub_Cancel();
+			IN_UpdateGrabs();
+			return;
+		}
+
 		if (keydown[K_SHIFT])
 		{	//shift+escape forces the console (without closing it again - use a regular escape to get rid fo it after, making it easier to type blind).
 			if (key_dest != key_console)
@@ -2556,6 +2563,13 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 			(key >= '1' && key <= '9')))
 		{
 			SCR_ShowDemoBar ();
+		}
+
+		if (key >= '1' && key <= '9')
+		{
+			if (down > wasdown)
+				CL_DemoSeekPercent((key - '0') * 10.f);
+			return;
 		}
 
 		switch (key)

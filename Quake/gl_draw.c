@@ -2701,23 +2701,112 @@ void Draw_FadeScreen_Rect_Alpha (float x0, float y0, float x1, float y1, float a
 
 /*
 ================
+Draw_GetCanvasTransform -- woods #mousemenu (iw)
+================
+*/
+qboolean Draw_GetCanvasTransform(canvastype canvas, vrect_t *bounds, vrect_t *viewport)
+{
+	float s;
+
+	if (!bounds || !viewport)
+		return false;
+
+	memset(bounds, 0, sizeof(*bounds));
+	memset(viewport, 0, sizeof(*viewport));
+
+	switch (canvas)
+	{
+	case CANVAS_MENU:
+		s = q_min((float)glwidth / 320.0f, (float)glheight / 200.0f);
+		s = CLAMP(1.0f, scr_menuscale.value, s);
+		// ericw -- doubled width to 640 to accommodate long keybindings
+		bounds->x = 0;
+		bounds->y = 0;
+		bounds->width = 640;
+		bounds->height = 200;
+		viewport->x = glx + (glwidth - 320 * s) / 2;
+		viewport->y = gly + (glheight - 200 * s) / 2;
+		viewport->width = 640 * s;
+		viewport->height = 200 * s;
+		return true;
+
+	case CANVAS_SBAR2:
+		s = CLAMP(1.0f, scr_sbarscale.value, (float)glwidth / 320.0f);
+		bounds->x = 0;
+		bounds->y = 0;
+		bounds->width = 320;
+		bounds->height = 270;
+		viewport->x = glx + (glwidth - 320 * s) / 2;
+		viewport->y = gly;
+		viewport->width = 320 * s;
+		viewport->height = 270 * s;
+		return true;
+
+	default:
+		return false;
+	}
+}
+
+/*
+================
+Draw_WindowToCanvas -- woods #democontrols
+================
+*/
+qboolean Draw_WindowToCanvas(canvastype canvas, int win_x, int win_y, int *canvas_x, int *canvas_y)
+{
+	vrect_t bounds, viewport;
+	float drawable_x = (float)win_x;
+	float drawable_y = (float)win_y;
+	int drawable_h = glheight;
+	int viewport_top_y;
+
+	if (!canvas_x || !canvas_y)
+		return false;
+	if (!Draw_GetCanvasTransform(canvas, &bounds, &viewport))
+		return false;
+	if (viewport.width <= 0 || viewport.height <= 0)
+		return false;
+
+#if defined(USE_SDL2)
+	{
+		SDL_Window *window = (SDL_Window *)VID_GetWindow();
+		int window_w = 0, window_h = 0;
+		int sdl_drawable_w = 0, sdl_drawable_h = 0;
+
+		if (window)
+		{
+			SDL_GetWindowSize(window, &window_w, &window_h);
+			SDL_GL_GetDrawableSize(window, &sdl_drawable_w, &sdl_drawable_h);
+		}
+
+		// High-DPI backends can report mouse events in window pixels while
+		// the canvas viewport is in GL drawable pixels.
+		if (sdl_drawable_w > 0 && sdl_drawable_h > 0)
+			drawable_h = sdl_drawable_h;
+
+		if (window_w > 0 && window_h > 0 && sdl_drawable_w > 0 && sdl_drawable_h > 0 &&
+			(window_w != sdl_drawable_w || window_h != sdl_drawable_h))
+		{
+			drawable_x = (float)win_x * (float)sdl_drawable_w / (float)window_w;
+			drawable_y = (float)win_y * (float)sdl_drawable_h / (float)window_h;
+		}
+	}
+#endif
+
+	viewport_top_y = drawable_h - (viewport.y + viewport.height);
+	*canvas_x = bounds.x + (int)((drawable_x - viewport.x) * bounds.width / (float)viewport.width + 0.5f);
+	*canvas_y = bounds.y + (int)((drawable_y - viewport_top_y) * bounds.height / (float)viewport.height + 0.5f);
+	return true;
+}
+
+/*
+================
 Draw_GetMenuTransform -- woods #mousemenu (iw)
 ================
 */
 void Draw_GetMenuTransform(vrect_t* bounds, vrect_t* viewport)
 {
-	float s;
-	s = q_min((float)glwidth / 320.0, (float)glheight / 200.0);
-	s = CLAMP(1.0, scr_menuscale.value, s);
-	// ericw -- doubled width to 640 to accommodate long keybindings
-	bounds->x = 0;
-	bounds->y = 0;
-	bounds->width = 640;
-	bounds->height = 200;
-	viewport->x = glx + (glwidth - 320 * s) / 2;
-	viewport->y = gly + (glheight - 200 * s) / 2;
-	viewport->width = 640 * s;
-	viewport->height = 200 * s;
+	Draw_GetCanvasTransform(CANVAS_MENU, bounds, viewport);
 }
 
 float canvas_scaling; // woods #autoid

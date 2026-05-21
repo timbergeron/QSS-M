@@ -272,8 +272,18 @@ static qboolean initialized = false; // woods (iw) #democontrols
 static qboolean demo_seek_frame_activity = false; // woods -- true if this host frame did seek-speed parsing
 static qboolean demo_restart_pending = false; // woods -- 0/Home restart request, processed from the host-frame pump
 static char demo_restart_name[MAX_OSPATH]; // woods -- logical demo name to reopen for a clean start jump
+static qboolean demo_scrub_dragging = false;
+static qboolean demo_scrub_saved_paused = false;
+static qboolean demo_scrub_have_saved_paused = false;
+static double demo_scrub_last_seek_time = 0.0;
+static float demo_scrub_last_seek_pct = 0.f;
+static float demo_scrub_pending_pct = 0.f;
+static qboolean demo_scrub_have_total_seconds_est = false;
+static float demo_scrub_total_seconds_est = 0.f;
 
 static qboolean CL_DemoProcessRestartRequest(void);
+static qboolean CL_DemoQueueRestart(void);
+static qboolean CL_DemoSeekToPercent(float pct);
 
 static void CL_ClearDemoFrags(void)
 {
@@ -296,6 +306,12 @@ static void CL_ResetDemoSeekState(void)
 	demo_time_seek_direction = 0;
 	demo_frame_seek_target = 0;
 	demo_marker_found_time = 0.f;
+}
+
+static void CL_ClearDemoRestartRequest(void)
+{
+	demo_restart_pending = false;
+	demo_restart_name[0] = '\0';
 }
 
 static void CL_ClearDemoMarkerHistory(void)
@@ -380,6 +396,175 @@ static float CL_GetCurrentDemoPercent(void)
 		current_offset = demo_seek_end;
 
 	return (current_offset - demo_seek_start) / (float)demo_seek_range * 100.f;
+}
+
+static int CL_DemoSeekOffsetThreshold(void)
+{
+	return q_max(100, cls.demo_file_length * 0.03);
+}
+
+static qboolean CL_DemoScrubEstimateTotalSeconds(float *seconds)
+{
+	float current_pct;
+	float current_elapsed;
+
+	if (!seconds || !demo_start_server_time_valid)
+		return false;
+
+	current_pct = CL_GetCurrentDemoPercent();
+	current_elapsed = cl.mtime[0] - demo_start_server_time;
+	if (current_pct <= 0.1f || current_elapsed <= 0.f)
+		return false;
+
+	*seconds = current_elapsed * 100.f / current_pct;
+	return true;
+}
+
+static qboolean CL_DemoSeekToPercent(float pct)
+{
+	const int demo_seek_start = CL_GetDemoSeekStartOffset();
+	const int demo_seek_end = CL_GetDemoSeekEndOffset();
+	const int dynamic_threshold = CL_DemoSeekOffsetThreshold();
+	int target_offset;
+
+	if (!cls.demoplayback || !initialized || !cls.demofile || cls.demo_file_length <= 0)
+		return false;
+
+	pct = CLAMP(0.f, pct, 100.f);
+
+	// Match the original 1-9 seek behavior: percentage is over the demo file
+	// span, then clamped past the text track header/sign-on seek start.
+	target_offset = cls.demo_offset_start + (int)((pct / 100.f) * (float)cls.demo_file_length);
+	if (target_offset < demo_seek_start)
+		target_offset = demo_seek_start;
+	else if (target_offset > demo_seek_end)
+		target_offset = demo_seek_end;
+
+	if (pct <= 0.f && target_offset <= demo_seek_start && cls.demo_offset_current > demo_seek_start &&
+		CL_DemoQueueRestart())
+		return true;
+
+	CL_ClearDemoRestartRequest();
+	CL_ClearDemoMarkerHistory();
+	CL_ResetDemoSeekState();
+
+	if (abs(cls.demo_offset_current - target_offset) < dynamic_threshold)
+	{
+		cls.demospeed = cls.basedemospeed * !cls.demopaused;
+		return true;
+	}
+
+	demo_target_offset = target_offset;
+	demo_seek_from_start = (cls.demo_offset_current > target_offset);
+	is_seeking = true;
+	if (demo_seek_from_start)
+		CL_ClearDemoFrags();
+
+	return true;
+}
+
+qboolean CL_DemoSeekPercent(float pct)
+{
+	return CL_DemoSeekToPercent(pct);
+}
+
+qboolean CL_DemoScrubActive(void)
+{
+	return demo_scrub_dragging;
+}
+
+qboolean CL_DemoScrub_Begin(float pct)
+{
+	pct = CLAMP(0.f, pct, 100.f);
+
+	if (!cls.demoplayback || !initialized)
+		return false;
+
+	demo_scrub_saved_paused = cls.demopaused;
+	demo_scrub_have_saved_paused = true;
+	cls.demopaused = true;
+	demo_scrub_dragging = true;
+	demo_scrub_pending_pct = pct;
+	demo_scrub_have_total_seconds_est = CL_DemoScrubEstimateTotalSeconds(&demo_scrub_total_seconds_est);
+
+	if (!CL_DemoSeekToPercent(pct))
+	{
+		CL_DemoScrub_Cancel();
+		return false;
+	}
+
+	demo_scrub_last_seek_time = realtime;
+	demo_scrub_last_seek_pct = pct;
+	IN_DemoScrubCapture(true);
+	return true;
+}
+
+void CL_DemoScrub_Update(float pct)
+{
+	pct = CLAMP(0.f, pct, 100.f);
+
+	if (!demo_scrub_dragging)
+		return;
+
+	demo_scrub_pending_pct = pct;
+
+	if (realtime - demo_scrub_last_seek_time >= 0.05 ||
+		fabsf(pct - demo_scrub_last_seek_pct) >= 0.5f)
+	{
+		if (CL_DemoSeekToPercent(pct))
+		{
+			demo_scrub_last_seek_time = realtime;
+			demo_scrub_last_seek_pct = pct;
+		}
+	}
+}
+
+void CL_DemoScrub_End(float pct)
+{
+	pct = CLAMP(0.f, pct, 100.f);
+
+	if (!demo_scrub_dragging)
+		return;
+
+	demo_scrub_pending_pct = pct;
+	CL_DemoSeekToPercent(pct);
+
+	if (demo_scrub_have_saved_paused)
+		cls.demopaused = demo_scrub_saved_paused;
+	demo_scrub_dragging = false;
+	demo_scrub_have_saved_paused = false;
+	demo_scrub_have_total_seconds_est = false;
+	IN_DemoScrubCapture(false);
+}
+
+void CL_DemoScrub_Cancel(void)
+{
+	if (demo_scrub_have_saved_paused)
+		cls.demopaused = demo_scrub_saved_paused;
+	demo_scrub_dragging = false;
+	demo_scrub_have_saved_paused = false;
+	demo_scrub_have_total_seconds_est = false;
+	IN_DemoScrubCapture(false);
+}
+
+qboolean CL_DemoScrub_GetDisplayPercent(float *pct)
+{
+	if (!pct || !cls.demoplayback || !initialized || !demo_scrub_dragging)
+		return false;
+
+	*pct = demo_scrub_pending_pct;
+	return true;
+}
+
+qboolean CL_DemoScrub_GetDisplayTime(float *seconds)
+{
+	if (!seconds || !demo_scrub_dragging || !demo_scrub_have_total_seconds_est)
+		return false;
+
+	*seconds = demo_scrub_total_seconds_est * (demo_scrub_pending_pct / 100.f);
+	if (*seconds < 0.f)
+		*seconds = 0.f;
+	return true;
 }
 
 static qboolean CL_ParseIntStrict(const char *str, int *value)
@@ -1028,6 +1213,51 @@ static qboolean CL_DemoQueueRestart(void)
 	return true;
 }
 
+static qboolean CL_DemoSeekToTime(float absolute_time)
+{
+	const float seek_time_threshold = 0.05f;
+	const float current_demo_time = cl.mtime[0];
+
+	if (!cls.demoplayback || !initialized)
+		return false;
+
+	if (demo_start_server_time_valid && absolute_time < demo_start_server_time)
+		absolute_time = demo_start_server_time;
+
+	if (fabsf(absolute_time - current_demo_time) <= seek_time_threshold)
+		return false;
+
+	CL_ClearDemoRestartRequest();
+	CL_ClearDemoMarkerHistory();
+	CL_ResetDemoSeekState();
+
+	if (demo_start_server_time_valid &&
+		absolute_time <= demo_start_server_time + seek_time_threshold &&
+		current_demo_time > demo_start_server_time + seek_time_threshold &&
+		CL_DemoQueueRestart())
+		return true;
+
+	demo_time_seek_target = absolute_time;
+	demo_time_seek_direction = (absolute_time >= current_demo_time) ? 1 : -1;
+	is_time_seeking = true;
+	if (absolute_time < current_demo_time)
+	{
+		demo_seek_from_start = true;
+		CL_ClearDemoFrags();
+	}
+	return true;
+}
+
+qboolean CL_DemoSeekRelativeSeconds(float seconds)
+{
+	const float base_time = is_time_seeking ? demo_time_seek_target : cl.mtime[0];
+
+	if (!cls.demoplayback || !initialized || !demo_start_server_time_valid)
+		return false;
+
+	return CL_DemoSeekToTime(base_time + seconds);
+}
+
 /*
 ===============
 CL_UpdateDemoSpeed
@@ -1051,7 +1281,7 @@ static void CL_UpdateDemoSpeed(void)
 	demo_jump_home_was_down = jump_home_down;
 	demo_jump_end_was_down = jump_end_down;
 
-	const int dynamic_threshold = q_max(100, cls.demo_file_length * 0.03); // 3% of the demo file length, with a minimum of 100 for very small files
+	const int dynamic_threshold = CL_DemoSeekOffsetThreshold(); // 3% of the demo file length, with a minimum of 100 for very small files
 	const float seeking_speed = 256;
 	const float seek_time_step = 10.f;
 	const float seek_time_threshold = 0.05f;
@@ -1064,24 +1294,25 @@ static void CL_UpdateDemoSpeed(void)
 		const float current_demo_time = cl.mtime[0];
 		const float base_time = is_time_seeking ? demo_time_seek_target : current_demo_time;
 
-			CL_ClearDemoMarkerHistory();
-			CL_ResetDemoSeekState();
-			demo_time_seek_target = q_max(0.f, base_time + jump_delta);
-			if (demo_start_server_time_valid && demo_time_seek_target < demo_start_server_time)
-				demo_time_seek_target = demo_start_server_time;
-			demo_time_seek_direction = (demo_time_seek_target >= current_demo_time) ? 1 : -1;
+		CL_ClearDemoRestartRequest();
+		CL_ClearDemoMarkerHistory();
+		CL_ResetDemoSeekState();
+		demo_time_seek_target = q_max(0.f, base_time + jump_delta);
+		if (demo_start_server_time_valid && demo_time_seek_target < demo_start_server_time)
+			demo_time_seek_target = demo_start_server_time;
+		demo_time_seek_direction = (demo_time_seek_target >= current_demo_time) ? 1 : -1;
 
-			if (fabsf(demo_time_seek_target - current_demo_time) > seek_time_threshold)
-			{
-				if (demo_start_server_time_valid &&
-					demo_time_seek_target <= demo_start_server_time + seek_time_threshold &&
-					current_demo_time > demo_start_server_time + seek_time_threshold &&
-					CL_DemoQueueRestart())
-					return;
-				is_time_seeking = true;
-				if (demo_time_seek_target < current_demo_time)
-					CL_ClearDemoFrags();
-			}
+		if (fabsf(demo_time_seek_target - current_demo_time) > seek_time_threshold)
+		{
+			if (demo_start_server_time_valid &&
+				demo_time_seek_target <= demo_start_server_time + seek_time_threshold &&
+				current_demo_time > demo_start_server_time + seek_time_threshold &&
+				CL_DemoQueueRestart())
+				return;
+			is_time_seeking = true;
+			if (demo_time_seek_target < current_demo_time)
+				CL_ClearDemoFrags();
+		}
 	}
 
 	if (is_marker_seeking)
@@ -1172,34 +1403,6 @@ static void CL_UpdateDemoSpeed(void)
 		return;
 	}
 
-	for (int key = '1'; key <= '9'; ++key)
-	{
-		if (keydown[key])
-		{
-			float targetPercentage = (key - '0') / 10.0f;
-
-			CL_ClearDemoMarkerHistory();
-			demo_target_offset = cls.demo_offset_start + (int)(targetPercentage * (float)((cls.demo_file_length + cls.demo_offset_start) - cls.demo_offset_start)); // sometimes start is not 0
-			if (demo_target_offset < demo_seek_start)
-				demo_target_offset = demo_seek_start;
-			else if (demo_target_offset > demo_seek_end)
-				demo_target_offset = demo_seek_end;
-
-			if (abs(cls.demo_offset_current - demo_target_offset) < dynamic_threshold)
-			{
-				cls.demospeed = normal_speed;
-				CL_ResetDemoSeekState();
-				break;
-			}
-
-			demo_seek_from_start = (cls.demo_offset_current > demo_target_offset);
-			is_seeking = true;
-			if (demo_seek_from_start)
-				CL_ClearDemoFrags();
-			break;
-		}
-	}
-
 	// 0/Home restarts the current demo through the normal playdemo setup path.
 	// Seeking to the first rewind frame is fragile because the first stored
 	// frame intentionally has no inverse state to apply; FTEQW handles backward
@@ -1211,6 +1414,7 @@ static void CL_UpdateDemoSpeed(void)
 	}
 	else if (jump_end_pressed)
 	{
+		CL_ClearDemoRestartRequest();
 		CL_ClearDemoMarkerHistory();
 		CL_ResetDemoSeekState();
 		demo_target_offset = demo_seek_end;
@@ -2083,6 +2287,8 @@ Called when a demo file runs out, or the user starts a game
 */
 void CL_StopPlayback (void)
 {
+	CL_DemoScrub_Cancel();
+
 	if (!cls.demoplayback)
 	{
 #ifdef USE_ZLIB
@@ -2090,8 +2296,7 @@ void CL_StopPlayback (void)
 #endif
 		CL_ResetDemoSeekState();
 		CL_ClearDemoMarkerHistory();
-		demo_restart_pending = false;
-		demo_restart_name[0] = '\0';
+		CL_ClearDemoRestartRequest();
 		demo_start_server_time = 0.f;
 		demo_start_server_time_valid = false;
 		demo_total_frame_count = 0;
@@ -2118,8 +2323,7 @@ void CL_StopPlayback (void)
 	demo_rewind.prev.num_entities = 0;
 	CL_ResetDemoSeekState();
 	CL_ClearDemoMarkerHistory();
-	demo_restart_pending = false;
-	demo_restart_name[0] = '\0';
+	CL_ClearDemoRestartRequest();
 	demo_start_server_time = 0.f;
 	demo_start_server_time_valid = false;
 	demo_total_frame_count = 0;
@@ -2525,8 +2729,7 @@ static qboolean CL_StartDemoPlayback(FILE *demofile, qofs_t demo_size, const cha
 	cls.demospeed = 1.f; // woods (iw) #democontrols
 	CL_ResetDemoSeekState();
 	CL_ClearDemoMarkerHistory();
-	demo_restart_pending = false;
-	demo_restart_name[0] = '\0';
+	CL_ClearDemoRestartRequest();
 	demo_rewind.backstop = false;
 	demo_start_server_time = 0.f;
 	demo_start_server_time_valid = false;
@@ -2592,8 +2795,7 @@ static qboolean CL_DemoProcessRestartRequest(void)
 		return false;
 
 	q_strlcpy(requested_name, demo_restart_name, sizeof(requested_name));
-	demo_restart_pending = false;
-	demo_restart_name[0] = '\0';
+	CL_ClearDemoRestartRequest();
 	CL_ResetDemoSeekState();
 	CL_ClearDemoMarkerHistory();
 
@@ -3354,13 +3556,9 @@ void CL_JumpDemo_f(void)
 	const char *value;
 	int len;
 	int value_len;
-	int demo_seek_start;
-	int demo_seek_end;
-	int demo_seek_range;
 	qboolean is_relative;
 	float sign;
 	char token[MAXCMDLINE];
-	const float seek_time_threshold = 0.05f;
 
 	if (cmd_source != src_command)
 		return;
@@ -3383,6 +3581,9 @@ void CL_JumpDemo_f(void)
 		return;
 	}
 
+	if (CL_DemoScrubActive())
+		CL_DemoScrub_Cancel();
+
 	arg = Cmd_Argv(1);
 	len = (int)strlen(arg);
 	if (!len)
@@ -3398,6 +3599,7 @@ void CL_JumpDemo_f(void)
 			return;
 		}
 
+		CL_ClearDemoRestartRequest();
 		CL_ResetDemoSeekState();
 		is_marker_seeking = true;
 		Con_Printf("seeking next demo marker...\n");
@@ -3429,13 +3631,6 @@ void CL_JumpDemo_f(void)
 		return;
 	}
 
-	demo_seek_start = CL_GetDemoSeekStartOffset();
-	demo_seek_end = CL_GetDemoSeekEndOffset();
-	demo_seek_range = demo_seek_end - demo_seek_start;
-
-	CL_ClearDemoMarkerHistory();
-	CL_ResetDemoSeekState();
-
 	if (value_len > 1 && token[value_len - 1] == '%')
 	{
 		float pct;
@@ -3450,28 +3645,8 @@ void CL_JumpDemo_f(void)
 		if (is_relative)
 			pct = CL_GetCurrentDemoPercent() + sign * pct;
 
-		if (pct < 0.f)
-			pct = 0.f;
-		else if (pct > 100.f)
-			pct = 100.f;
-
-		demo_target_offset = demo_seek_start;
-		if (demo_seek_range > 0)
-			demo_target_offset += (int)((pct / 100.f) * demo_seek_range);
-
-		if (demo_target_offset < demo_seek_start)
-			demo_target_offset = demo_seek_start;
-		else if (demo_target_offset > demo_seek_end)
-			demo_target_offset = demo_seek_end;
-
-		if (demo_target_offset <= demo_seek_start && cls.demo_offset_current > demo_seek_start &&
-			CL_DemoQueueRestart())
-			return;
-
-		demo_seek_from_start = (cls.demo_offset_current > demo_target_offset);
-		is_seeking = true;
-		if (demo_seek_from_start)
-			CL_ClearDemoFrags();
+		if (!CL_DemoSeekToPercent(pct))
+			Con_Printf("jumpdemo: percentage seeking not ready yet\n");
 		return;
 	}
 
@@ -3499,23 +3674,7 @@ void CL_JumpDemo_f(void)
 			absolute_time = demo_start_server_time + seconds;
 		}
 
-		if (demo_start_server_time_valid && absolute_time < demo_start_server_time)
-			absolute_time = demo_start_server_time;
-
-		if (demo_start_server_time_valid &&
-			absolute_time <= demo_start_server_time + seek_time_threshold &&
-			cl.mtime[0] > demo_start_server_time + seek_time_threshold &&
-			CL_DemoQueueRestart())
-			return;
-
-		demo_time_seek_target = absolute_time;
-		demo_time_seek_direction = (absolute_time >= cl.mtime[0]) ? 1 : -1;
-		is_time_seeking = true;
-		if (absolute_time < cl.mtime[0])
-		{
-			demo_seek_from_start = true;
-			CL_ClearDemoFrags();
-		}
+		CL_DemoSeekToTime(absolute_time);
 		return;
 	}
 
@@ -3542,23 +3701,7 @@ void CL_JumpDemo_f(void)
 			absolute_time = demo_start_server_time + seconds;
 		}
 
-		if (demo_start_server_time_valid && absolute_time < demo_start_server_time)
-			absolute_time = demo_start_server_time;
-
-		if (demo_start_server_time_valid &&
-			absolute_time <= demo_start_server_time + seek_time_threshold &&
-			cl.mtime[0] > demo_start_server_time + seek_time_threshold &&
-			CL_DemoQueueRestart())
-			return;
-
-		demo_time_seek_target = absolute_time;
-		demo_time_seek_direction = (absolute_time >= cl.mtime[0]) ? 1 : -1;
-		is_time_seeking = true;
-		if (absolute_time < cl.mtime[0])
-		{
-			demo_seek_from_start = true;
-			CL_ClearDemoFrags();
-		}
+		CL_DemoSeekToTime(absolute_time);
 		return;
 	}
 
@@ -3589,6 +3732,9 @@ void CL_JumpDemo_f(void)
 			}
 		}
 
+		CL_ClearDemoRestartRequest();
+		CL_ClearDemoMarkerHistory();
+		CL_ResetDemoSeekState();
 		demo_frame_seek_target = target;
 		if (target <= 1 && current_frame > 1 && CL_DemoQueueRestart())
 			return;

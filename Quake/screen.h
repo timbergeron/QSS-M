@@ -64,9 +64,6 @@ extern	cvar_t		scr_sbar; // woods #sbarstyles
 
 void SCR_UpdateWholeScreen (void);
 
-void SCR_ShowDemoBar (void); // woods #democontrols -- force the demo bar to appear briefly
-void SCR_ShowDemoBarFor (float seconds); // woods #democontrols -- force the demo bar for a specific duration
-
 //johnfitz -- stuff for 2d drawing control
 typedef enum {
 	CANVAS_NONE,
@@ -105,6 +102,22 @@ typedef enum {
 	CANVAS_MENUQC,
 	CANVAS_INVALID = -1
 } canvastype;
+
+typedef struct {
+	qboolean eligible;      // demo playback is active
+	qboolean visible;       // bar is being shown now
+	canvastype canvas;      // CANVAS_SBAR2 or CANVAS_MENU
+	int seek_min_x;         // x coordinate for 0%
+	int seek_max_x;         // x coordinate for 100%
+	int rail_y;
+	int hit_x1, hit_y1;
+	int hit_x2, hit_y2;
+} scr_demobar_rect_t;
+
+void SCR_ShowDemoBar (void); // woods #democontrols -- force the demo bar to appear briefly
+void SCR_ShowDemoBarFor (float seconds); // woods #democontrols -- force the demo bar for a specific duration
+qboolean SCR_GetDemoBarRect(scr_demobar_rect_t *out);
+
 extern	cvar_t		scr_menuscale;
 extern	cvar_t		scr_sbarscale;
 extern	cvar_t		scr_conwidth;

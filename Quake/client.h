@@ -638,6 +638,15 @@ qboolean CL_DemoSeekFastPump(void); // host-frame demo seek pump (restart, rewin
 qboolean CL_DemoSeekConsumeFrameActivity(void); // true once when current host frame did seek-speed demo parsing
 qboolean CL_DemoSeekActive(void); // true while demo seek/restart warp is active; suppresses parser side effects
 void CL_AddDemoRewindSound(int entnum, int channel, sfx_t* sfx, vec3_t pos, int vol, float atten); // woods (iw) #democontrols
+qboolean CL_DemoScrubActive(void);
+qboolean CL_DemoScrub_Begin(float pct);
+void CL_DemoScrub_Update(float pct);
+void CL_DemoScrub_End(float pct);
+void CL_DemoScrub_Cancel(void);
+qboolean CL_DemoScrub_GetDisplayPercent(float *pct);
+qboolean CL_DemoScrub_GetDisplayTime(float *seconds);
+qboolean CL_DemoSeekRelativeSeconds(float seconds);
+qboolean CL_DemoSeekPercent(float pct);
 
 void CL_Stop_f (void);
 void CL_Record_f (void);

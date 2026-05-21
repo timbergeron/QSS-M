@@ -1238,7 +1238,112 @@ void SCR_DrawFPS (void)
 
 // woods (iw) #democontrols
 
+#define DEMOBAR_TIMEBAR_CHARS 38
+#define DEMOBAR_CHAR_W 8
+#define DEMOBAR_CURSOR_MARGIN 12
+
+static float scr_demobar_prevspeed = 1.0f;
+static float scr_demobar_prevbasespeed = 1.0f;
+static float scr_demobar_showtime = 1.0f;
 static double scr_demobar_force_until = 0.0; // woods #democontrols -- realtime deadline for forced-visible bar
+
+static qboolean SCR_DemoBarEligible(void)
+{
+	return cls.demoplayback;
+}
+
+static int SCR_DemoBarStatusY(void)
+{
+	// Intermission uses CANVAS_MENU, whose logical height is 200.
+	if (cl.intermission)
+		return LERP(200, 0, 0.125f) + 8;
+	return 240 - 68;
+}
+
+static qboolean SCR_DemoBarVisible(void)
+{
+	if (!SCR_DemoBarEligible())
+		return false;
+
+	if (scr_demobar_timeout.value < 0.f)
+		return realtime < scr_demobar_force_until || CL_DemoScrubActive();
+
+	return !scr_demobar_timeout.value ||
+		cls.demospeed != scr_demobar_prevspeed ||
+		cls.basedemospeed != scr_demobar_prevbasespeed ||
+		fabs(cls.demospeed) > cls.basedemospeed ||
+		scr_demobar_showtime > 0.f ||
+		realtime < scr_demobar_force_until ||
+		CL_DemoScrubActive();
+}
+
+static void SCR_UpdateDemoBarRect(scr_demobar_rect_t *rect)
+{
+	const int rail_x = 8;
+
+	memset(rect, 0, sizeof(*rect));
+	rect->eligible = SCR_DemoBarEligible();
+	rect->visible = SCR_DemoBarVisible();
+	rect->canvas = cl.intermission ? CANVAS_MENU : CANVAS_SBAR2;
+
+	if (!rect->eligible)
+		return;
+
+	rect->rail_y = SCR_DemoBarStatusY() - DEMOBAR_CHAR_W;
+	rect->seek_min_x = rail_x + DEMOBAR_CURSOR_MARGIN;
+	rect->seek_max_x = rail_x + (DEMOBAR_TIMEBAR_CHARS - 1) * DEMOBAR_CHAR_W - DEMOBAR_CURSOR_MARGIN;
+	rect->hit_x1 = rail_x - DEMOBAR_CHAR_W;
+	rect->hit_x2 = rail_x + DEMOBAR_TIMEBAR_CHARS * DEMOBAR_CHAR_W + DEMOBAR_CHAR_W;
+	rect->hit_y1 = rect->rail_y - 24;
+	rect->hit_y2 = rect->rail_y + 24;
+}
+
+qboolean SCR_GetDemoBarRect(scr_demobar_rect_t *out)
+{
+	scr_demobar_rect_t rect;
+
+	SCR_UpdateDemoBarRect(&rect);
+	if (out)
+		*out = rect;
+	return rect.eligible;
+}
+
+static qboolean SCR_UpdateDemoBarVisibility(float frame_time)
+{
+	const qboolean force_show = (realtime < scr_demobar_force_until);
+
+	if (!SCR_DemoBarEligible())
+	{
+		scr_demobar_showtime = 0.f;
+		return false;
+	}
+
+	if (scr_demobar_timeout.value < 0.f)
+	{
+		scr_demobar_showtime = 0.f;
+		return SCR_DemoBarVisible();
+	}
+
+	if (cls.demospeed != scr_demobar_prevspeed ||
+		cls.basedemospeed != scr_demobar_prevbasespeed ||
+		fabs(cls.demospeed) > cls.basedemospeed ||
+		!scr_demobar_timeout.value ||
+		force_show ||
+		CL_DemoScrubActive())
+	{
+		scr_demobar_prevspeed = cls.demospeed;
+		scr_demobar_prevbasespeed = cls.basedemospeed;
+		scr_demobar_showtime = scr_demobar_timeout.value > 0.f ? scr_demobar_timeout.value : 1.f;
+	}
+	else
+	{
+		scr_demobar_showtime -= frame_time;
+		if (scr_demobar_showtime < 0.f)
+			scr_demobar_showtime = 0.f;
+	}
+
+	return SCR_DemoBarVisible();
+}
 
 /*
 ==============
@@ -1252,7 +1357,7 @@ void SCR_ShowDemoBar (void)
 
 void SCR_ShowDemoBarFor (float seconds)
 {
-	if (!cls.demoplayback)
+	if (!SCR_DemoBarEligible())
 		return;
 	scr_demobar_force_until = realtime + q_max (0.0f, seconds);
 }
@@ -1264,13 +1369,11 @@ SCR_DrawDemoControls
 */
 void SCR_DrawDemoControls(void)
 {
-	static const int	TIMEBAR_CHARS = 38;
-	static float		prevspeed = 1.0f;
-	static float		prevbasespeed = 1.0f;
-	static float		showtime = 1.0f;
-	qboolean			force_show;
-	int					i, len, x, y, min, sec, canvasleft, canvasright, canvasbottom, canvastop, match_time;
+	qboolean			have_display_time = false;
+	int					i, len, x, y, min, sec, canvasleft, canvasright, match_time;
 	float				frac;
+	float				display_pct;
+	float				display_time;
 	const char* str;
 	char				name[31]; // size chosen to avoid overlap with side text
 	
@@ -1281,58 +1384,34 @@ void SCR_DrawDemoControls(void)
 
 	canvasleft = 0;
 	canvasright = 320;
-	canvastop = 0;
-	canvasbottom = 240;
 
-	force_show = (scr_demobar_force_until > realtime);
-
-	if (!cls.demoplayback || (scr_demobar_timeout.value < 0.f && !force_show))
-	{
-		showtime = 0.f;
+	if (!SCR_UpdateDemoBarVisibility(smoothedFrameTime))
 		return;
-	}
 
-	// Determine for how long the demo playback info should be displayed
-	if (cls.demospeed != prevspeed || cls.basedemospeed != prevbasespeed ||			// speed/base speed changed
-		fabs(cls.demospeed) > cls.basedemospeed ||									// fast forward/rewind
-		!scr_demobar_timeout.value ||												// controls always shown
-		force_show)																	// forced visible by key handler
-	{
-		prevspeed = cls.demospeed;
-		prevbasespeed = cls.basedemospeed;
-		showtime = scr_demobar_timeout.value > 0.f ? scr_demobar_timeout.value : 1.f;
-	}
+	if (CL_DemoScrub_GetDisplayPercent(&display_pct))
+		frac = CLAMP(0.f, display_pct / 100.f, 1.f);
 	else
 	{
-		showtime -= smoothedFrameTime; // woods
-		if (showtime < 0.f)
-		{
-			showtime = 0.f;
-			return;
-		}
+		// Approximate the fraction of the demo that's already been played back
+		// based on the current file offset and total demo size.
+		frac = (ftell(cls.demofile) - cls.demofilestart) / (double)cls.demofilesize;
+		frac = CLAMP(0.f, frac, 1.f);
 	}
-
-	// Approximate the fraction of the demo that's already been played back
-	// based on the current file offset and total demo size
-	// Note: we need to take into account the starting offset for pak files
-	frac = (ftell(cls.demofile) - cls.demofilestart) / (double)cls.demofilesize;
-	frac = CLAMP(0.f, frac, 1.f);
 
 	if (cl.intermission)
 	{
 		GL_SetCanvas(CANVAS_MENU);
-		y = LERP(canvasbottom, canvastop, 0.125f) + 8;
 	}
 	else
 	{
 		GL_SetCanvas(CANVAS_SBAR2);
-		y = canvasbottom - 68;
 	}
-	x = (canvasleft + canvasright) / 2 - TIMEBAR_CHARS / 2 * 8;
+	y = SCR_DemoBarStatusY();
+	x = (canvasleft + canvasright) / 2 - DEMOBAR_TIMEBAR_CHARS / 2 * DEMOBAR_CHAR_W;
 
 	// Draw status box background
 	//GL_SetCanvasColor(1.f, 1.f, 1.f, scr_sbaralpha.value);
-	M_DrawTextBox(x - 8, y - 8, TIMEBAR_CHARS, 1);
+	M_DrawTextBox(x - DEMOBAR_CHAR_W, y - DEMOBAR_CHAR_W, DEMOBAR_TIMEBAR_CHARS, 1);
 	//GL_SetCanvasColor(1.f, 1.f, 1.f, 1.f);
 
 	// Print playback status on the left (paused/playing/fast-forward/rewind)
@@ -1359,42 +1438,40 @@ void SCR_DrawDemoControls(void)
 		str = va("%gx", fabs(cls.basedemospeed));
 	else
 		str = va("1/%gx", 1.f / fabs(cls.basedemospeed));
-	M_Print(x + (TIMEBAR_CHARS - strlen(str)) * 8, y, str);
+	M_Print(x + (DEMOBAR_TIMEBAR_CHARS - strlen(str)) * DEMOBAR_CHAR_W, y, str);
 
 	// Print demo name in the center
 	COM_StripExtension(COM_SkipPath(cls.demofilename), name, sizeof(name));
 	x = (canvasleft + canvasright) / 2;
-	M_Print(x - strlen(name) * 8 / 2, y, name);
+	M_Print(x - strlen(name) * DEMOBAR_CHAR_W / 2, y, name);
 
 	// Draw seek bar rail
-	x = (canvasleft + canvasright) / 2 - TIMEBAR_CHARS / 2 * 8;
-	y -= 8;
-	Draw_Character(x - 8, y, 128);
-	for (i = 0; i < TIMEBAR_CHARS; i++)
-		Draw_Character(x + i * 8, y, 129);
-	Draw_Character(x + i * 8, y, 130);
+	x = (canvasleft + canvasright) / 2 - DEMOBAR_TIMEBAR_CHARS / 2 * DEMOBAR_CHAR_W;
+	y -= DEMOBAR_CHAR_W;
+	Draw_Character(x - DEMOBAR_CHAR_W, y, 128);
+	for (i = 0; i < DEMOBAR_TIMEBAR_CHARS; i++)
+		Draw_Character(x + i * DEMOBAR_CHAR_W, y, 129);
+	Draw_Character(x + i * DEMOBAR_CHAR_W, y, 130);
 
-	// Define a margin for the cursor. Assuming the cursor width is 8 pixels, and we add a bit of padding
-	int cursorMargin = 12; // Adjust this value as needed
-
-	// Adjust the calculation of 'x' for the cursor position
-	// The original line was: x += (TIMEBAR_CHARS - 1) * 8 * frac;
-	// We subtract the margin from both ends (2 * cursorMargin) and adjust the calculation
-	x += ((TIMEBAR_CHARS - 1) * 8 - (2 * cursorMargin)) * frac;
-
-	// Adjust 'x' to include the margin at the start of the seek bar
-	x += cursorMargin;
+	x += ((DEMOBAR_TIMEBAR_CHARS - 1) * DEMOBAR_CHAR_W - (2 * DEMOBAR_CURSOR_MARGIN)) * frac;
+	x += DEMOBAR_CURSOR_MARGIN;
 
 	// Now draw the seek bar cursor with the adjusted 'x' position
 	Draw_Character(x, y, 131);
 
 	// Print current time above the cursor
 	y -= 11;
-	sec = (int)cl.time;
+	if (CL_DemoScrub_GetDisplayTime(&display_time))
+	{
+		sec = (int)display_time;
+		have_display_time = true;
+	}
+	else
+		sec = (int)cl.time;
 	min = sec / 60;
 	sec %= 60;
 
-	if (cl.teamgame) // pq match time
+	if (!have_display_time && cl.teamgame) // pq match time
 	{
 		if (cl.match_pause_time)
 			match_time = ceil(60.0 * cl.minutes + cl.seconds - (cl.match_pause_time - cl.last_match_time));
@@ -1410,12 +1487,12 @@ void SCR_DrawDemoControls(void)
 	}
 
 	str = va("%i:%02i", min, sec);
-	x -= (strchr(str, ':') - str) * 8; // align ':' with cursor
+	x -= (strchr(str, ':') - str) * DEMOBAR_CHAR_W; // align ':' with cursor
 	len = strlen(str);
 	// M_DrawTextBox effectively rounds width up to a multiple of 2,
 	// so if our length is odd we pad by half a character on each side
 	//GL_SetCanvasColor(1.f, 1.f, 1.f, scr_sbaralpha.value);
-	M_DrawTextBox(x - 8 - (len & 1) * 8 / 2, y - 8, len + (len & 1), 1);
+	M_DrawTextBox(x - DEMOBAR_CHAR_W - (len & 1) * DEMOBAR_CHAR_W / 2, y - DEMOBAR_CHAR_W, len + (len & 1), 1);
 //	GL_SetCanvasColor(1.f, 1.f, 1.f, 1.f);
 	Draw_String(x, y, str);
 }
