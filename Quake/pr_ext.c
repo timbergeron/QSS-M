@@ -1918,7 +1918,7 @@ static void PF_both_pmove(edict_t *e)
 	pmove.onground = !!((int)e->v.flags & FL_ONGROUND); //in case we're using pm_pground
 	switch((int)e->v.movetype)
 	{
-	case MOVETYPE_WALK:		pmove.pm_type = PM_NORMAL;		break;
+	case MOVETYPE_WALK:		pmove.pm_type = (qcvm == &sv.qcvm && (e->v.deadflag != DEAD_NO || e->v.health <= 0)) ? PM_DEAD : PM_NORMAL;	break;
 	case MOVETYPE_TOSS:		//pmove.pm_type = PM_DEAD;		break;
 	case MOVETYPE_BOUNCE:	pmove.pm_type = PM_DEAD;		break;
 	case MOVETYPE_FLY:		pmove.pm_type = PM_FLY;			break;

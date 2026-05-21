@@ -1132,7 +1132,7 @@ static qboolean CL_LerpEntity(entity_t *ent, vec3_t org, vec3_t ang, float frac)
 	vec3_t delta;
 	qboolean teleported = false;
 
-	if (ent->netstate.pmovetype && ent-cl.entities==cl.viewentity && qcvm->worldmodel && !cl_nopred.value && cls.signon == SIGNONS)
+	if (ent->netstate.pmovetype && ent-cl.entities==cl.viewentity && qcvm->worldmodel && !cl_nopred.value && cls.signon == SIGNONS && cl.stats[STAT_HEALTH] > 0 && cl.ackedmovemessages > 0)
 	{	//note: V_CalcRefdef will copy from cl.entities[viewent] to get its origin, so doing it here is the proper place anyway.
 		if (!prediction_msg_shown && !cls.demoplayback) // woods #prednotify
 		{
