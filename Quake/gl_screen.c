@@ -1495,6 +1495,17 @@ void SCR_DrawDemoControls(void)
 	M_DrawTextBox(x - DEMOBAR_CHAR_W - (len & 1) * DEMOBAR_CHAR_W / 2, y - DEMOBAR_CHAR_W, len + (len & 1), 1);
 //	GL_SetCanvasColor(1.f, 1.f, 1.f, 1.f);
 	Draw_String(x, y, str);
+
+	// Label the bar whenever eyecam is actively overriding the view, so
+	// the viewer knows the view they're seeing is overridden, not original.
+	if (cl_demo_eyecam.value && cl.demo_eyecam_target > 0)
+	{
+		const char *eyecam_str = "demo eyecam enabled and active";
+		int eyecam_x = (canvasleft + canvasright) / 2 - (int)strlen(eyecam_str) * DEMOBAR_CHAR_W / 2;
+		// Below the status box, with a small gap of spacing.
+		int eyecam_y = SCR_DemoBarStatusY() + DEMOBAR_CHAR_W * 2 + 4;
+		M_Print(eyecam_x, eyecam_y, eyecam_str);
+	}
 }
 
 

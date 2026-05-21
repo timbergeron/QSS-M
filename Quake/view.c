@@ -73,7 +73,7 @@ cvar_t	gl_cshiftpercent_powerup = {"gl_cshiftpercent_powerup", "100", CVAR_ARCHI
 cvar_t	gl_cshiftpercent_dead = {"gl_cshiftpercent_dead", "0", CVAR_ARCHIVE}; // woods #cdead
 
 cvar_t	r_viewmodel_quake = {"r_viewmodel_quake", "0", CVAR_ARCHIVE};
-cvar_t	cl_demo_eyecam = {"cl_demo_eyecam", "0", CVAR_ARCHIVE}; // woods #demoeyecam
+cvar_t	cl_demo_eyecam = {"cl_demo_eyecam", "0", CVAR_NONE}; // woods #demoeyecam
 
 float	v_dmg_time, v_dmg_roll, v_dmg_pitch;
 
@@ -1233,6 +1233,49 @@ static int V_FindDemoEyecamTarget (void)
 
 /*
 ==================
+V_ShouldApplyDemoEyecam
+
+Gate for cl_demo_eyecam. Suppress the override when the recorder's
+*observer userinfo key is "eyecam" (demo is already first-person), or
+when the nearest player is too far away to plausibly be a chase target.
+Observer chase mode locks the camera ~100 units behind the target, so a
+small distance is a strong signal we're following them.
+==================
+*/
+static qboolean V_ShouldApplyDemoEyecam (int target)
+{
+	char		 buf1[32], buf2[32];
+	const char	*userinfo;
+	const char	*obs;
+	const char	*star_obs;
+	entity_t	*viewer;
+	entity_t	*targetent;
+	vec3_t		 diff;
+
+	if (target <= 0 || target > cl.maxclients || target >= cl.num_entities)
+		return false;
+
+	userinfo = CL_GetSafeViewEntityUserinfo ();
+	obs = Info_GetKey (userinfo, "observer", buf1, sizeof(buf1));
+	star_obs = Info_GetKey (userinfo, "*observer", buf2, sizeof(buf2));
+
+	if (!strcmp(obs, "eyecam") || !strcmp(star_obs, "eyecam"))
+		return false;
+
+	if (!cl.entities || cl.viewentity < 1 || cl.viewentity >= cl.num_entities)
+		return false;
+
+	viewer = &cl.entities[cl.viewentity];
+	targetent = &cl.entities[target];
+	VectorSubtract (targetent->origin, viewer->origin, diff);
+	if (VectorLength (diff) > 200.0f)
+		return false;
+
+	return true;
+}
+
+/*
+==================
 V_CalcIntermissionRefdef
 
 ==================
@@ -1472,7 +1515,7 @@ void V_CalcRefdef (void)
 	{
 		int target = V_FindDemoEyecamTarget ();
 
-		if (target > 0 && target <= cl.maxclients && target < cl.num_entities)
+		if (V_ShouldApplyDemoEyecam (target))
 		{
 			entity_t *targetent = &cl.entities[target];
 
