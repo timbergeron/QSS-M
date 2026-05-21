@@ -7180,6 +7180,10 @@ static void PF_cs_addentities(void)
 			if (i == cl.viewentity && !chase_active.value)
 				continue;
 
+			// woods #demoeyecam - hide chased player model when rendering demo eyecam
+			if (cls.demoplayback && cl_demo_eyecam.value && cl.demo_eyecam_target > 0 && i == cl.demo_eyecam_target)
+				continue;
+
 			if (cl_numvisedicts < cl_maxvisedicts)
 			{
 				cl_visedicts[cl_numvisedicts] = ent;
