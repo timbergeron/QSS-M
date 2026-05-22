@@ -20155,6 +20155,8 @@ int     NUM_LANCONFIG_CMDS;
 #define LANCONFIG_CURSOR_JOINGAME_HISTORY 3
 #define LANCONFIG_CURSOR_JOINGAME_BOOKMARKS 4
 #define LANCONFIG_CURSOR_JOINGAME_JOIN 5
+#define LANCONFIG_PROTOCOL_BASE_COUNT 3
+#define LANCONFIG_PROTOCOL_COUNT 6
 
 int 	lanConfig_port;
 char	lanConfig_portname[6];
@@ -20316,7 +20318,7 @@ static void M_LanConfig_SyncRoomField(void)
 
 void SetProtocol(int protocol_cursor)
 {
-	if (protocol_cursor < 3)
+	if (protocol_cursor < LANCONFIG_PROTOCOL_BASE_COUNT)
 	{
 		// Set base protocols (no FTE extensions)
 		switch (protocol_cursor)
@@ -20329,7 +20331,7 @@ void SetProtocol(int protocol_cursor)
 	else
 	{
 		// Set FTE+ protocols (with extensions)
-		switch (protocol_cursor - 3) // Adjust cursor for FTE+ options
+		switch (protocol_cursor - LANCONFIG_PROTOCOL_BASE_COUNT) // Adjust cursor for FTE+ options
 		{
 		case 0: Cbuf_AddText("sv_protocol FTE+15\n"); break; // PROTOCOL_NETQUAKE with FTE extensions
 		case 1: Cbuf_AddText("sv_protocol FTE+666\n"); break; // PROTOCOL_FITZQUAKE with FTE extensions
@@ -20340,7 +20342,7 @@ void SetProtocol(int protocol_cursor)
 
 const char* GetProtocolDescription(int protocol_cursor)
 {
-	if (protocol_cursor < 3)
+	if (protocol_cursor < LANCONFIG_PROTOCOL_BASE_COUNT)
 	{
 		// Base protocols (no FTE extensions)
 		switch (protocol_cursor)
@@ -20354,7 +20356,7 @@ const char* GetProtocolDescription(int protocol_cursor)
 	else
 	{
 		// FTE+ protocols (with extensions)
-		switch (protocol_cursor - 3) // Adjust cursor for FTE+ options
+		switch (protocol_cursor - LANCONFIG_PROTOCOL_BASE_COUNT) // Adjust cursor for FTE+ options
 		{
 		case 0: return "FTE+15 (netquake+pext)";
 		case 1: return "FTE+666 (fitzquake+pext)";
@@ -20394,10 +20396,10 @@ void M_Menu_LanConfig_f (void)
 			break;
 		}
 
-		// If FTE extensions are enabled, shift by 5 to reflect FTE+ versions
+		// If FTE extensions are enabled, shift to the FTE+ protocol entries.
 		if (sv_protocol_pext2)
 		{
-			lanConfig_protocol_cursor += 3; // Shift to FTE+ versions
+			lanConfig_protocol_cursor += LANCONFIG_PROTOCOL_BASE_COUNT; // Shift to FTE+ versions
 		}
 	}
 	else
@@ -20767,7 +20769,7 @@ void M_LanConfig_Key (int key)
 			S_LocalSound("misc/menu1.wav");
 			lanConfig_protocol_cursor--;
 			if (lanConfig_protocol_cursor < 0)
-				lanConfig_protocol_cursor = 5; // Wrap around to the last protocol
+				lanConfig_protocol_cursor = LANCONFIG_PROTOCOL_COUNT - 1; // Wrap around to the last protocol
 
 			SetProtocol(lanConfig_protocol_cursor);
 		}
@@ -20779,7 +20781,7 @@ void M_LanConfig_Key (int key)
 		{
 			S_LocalSound("misc/menu1.wav");
 			lanConfig_protocol_cursor++;
-			if (lanConfig_protocol_cursor > 5)
+			if (lanConfig_protocol_cursor >= LANCONFIG_PROTOCOL_COUNT)
 				lanConfig_protocol_cursor = 0; // Wrap around to the first protocol
 
 			SetProtocol(lanConfig_protocol_cursor);
@@ -20839,7 +20841,7 @@ void M_LanConfig_Key (int key)
 			{
 				S_LocalSound("misc/menu1.wav");
 				lanConfig_protocol_cursor++;
-				if (lanConfig_protocol_cursor > 9)
+				if (lanConfig_protocol_cursor >= LANCONFIG_PROTOCOL_COUNT)
 					lanConfig_protocol_cursor = 0; // Wrap around to the first protocol
 
 				SetProtocol(lanConfig_protocol_cursor);
