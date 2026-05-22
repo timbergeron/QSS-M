@@ -26340,6 +26340,7 @@ static void M_Demos_UpdatePathHint(void)
 }
 
 extern int unfun_match(const char *s1, char *s2);  // host_cmd.c — Quake-special-aware substring match (used by name/identify/tell)
+extern filelist_item_t *FindLevelInList(filelist_item_t *list, const char *name);  // host_cmd.c #mapdescriptions
 
 static void M_Demos_ParseItem(demoitem_t *di)
 {
@@ -26415,6 +26416,18 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
         // q_strcasestr because the unfun table folds ASCII digits 0-9 into
         // letters (intended for gold-digit player names), which would
         // garble searches against map ("e1m1") or duration ("1:23").
+        // Also match against the worldspawn description from mapdesc.json
+        // (e.g. typing "necropolis" finds demos on e1m3).  Descriptions live
+        // on extralevels[].data once ExtraMaps_ParseDescriptions has run;
+        // M_Demos_Init kicks that off so this lookup is usually populated.
+        const char *map_desc = NULL;
+        if (di->parsed && di->map[0] && descriptionsParsed)
+        {
+            filelist_item_t *level = FindLevelInList(extralevels, di->map);
+            if (level && level->data[0])
+                map_desc = level->data;
+        }
+
         if (!has_search ||
             q_strcasestr(di->name, demosmenu.list.search.text) ||
             q_strcasestr(di->display, demosmenu.list.search.text) ||
@@ -26423,7 +26436,8 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
                 q_strcasestr(di->map, demosmenu.list.search.text) ||
                 unfun_match(demosmenu.list.search.text, di->players) ||
                 q_strcasestr(di->duration, demosmenu.list.search.text) ||
-                q_strcasestr(di->filesize, demosmenu.list.search.text))))
+                q_strcasestr(di->filesize, demosmenu.list.search.text) ||
+                (map_desc && q_strcasestr(map_desc, demosmenu.list.search.text)))))
         {
             VEC_PUSH(demosmenu.filtered_indices, i);
         }
@@ -26591,6 +26605,11 @@ static void M_Demos_Init(void)
     demosmenu.list.search.maxlen = 32;
 
 	M_Ticker_Init (&demosmenu.ticker);
+
+	// Populate extralevels[].data so the search filter can match demos by
+	// their map's worldspawn description (e.g. typing "necropolis" → e1m3).
+	if (!descriptionsParsed)
+		ExtraMaps_ParseDescriptions();
 
 	M_Demos_RebuildFolderList();
 	M_Demos_RebuildForCurrentPath();
