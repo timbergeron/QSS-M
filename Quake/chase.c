@@ -27,6 +27,63 @@ cvar_t	chase_back = {"chase_back", "90", CVAR_ARCHIVE};
 cvar_t	chase_up = {"chase_up", "30", CVAR_ARCHIVE };
 cvar_t	chase_right = {"chase_right", "0", CVAR_ARCHIVE };
 cvar_t	chase_active = {"chase_active", "0", CVAR_NONE};
+cvar_t	chase_modelangles = {"chase_modelangles", "0 0 0", CVAR_ARCHIVE};
+
+static qboolean Chase_IsTopDownMode (int mode)
+{
+	return mode == 2 || mode == 3;
+}
+
+static qboolean Chase_IsNorthLockedMode (int mode)
+{
+	return mode == 3;
+}
+
+qboolean Chase_GetPlayerModelAngleOffset (entity_t *e, vec3_t out)
+{
+	int n;
+
+	out[PITCH] = out[YAW] = out[ROLL] = 0;
+
+	if (!chase_active.value)
+		return false;
+	if (!cl.entities)
+		return false;
+	if (cl.viewentity <= 0 || cl.viewentity >= cl.num_entities)
+		return false;
+	if (e != &cl.entities[cl.viewentity])
+		return false;
+	if (!chase_modelangles.string || !*chase_modelangles.string)
+		return false;
+
+	n = sscanf (chase_modelangles.string, "%f %f %f", &out[PITCH], &out[YAW], &out[ROLL]);
+	if (n < 1)
+		return false;
+
+	return (out[PITCH] != 0.f || out[YAW] != 0.f || out[ROLL] != 0.f);
+}
+
+static void Chase_ModelAngles_Completion_f (cvar_t *cvar, const char *partial)
+{
+	(void)cvar;
+	Con_AddToTabListMatched ("\"0 0 0\"",   partial, "default",  NULL, "0 0 0 default");
+	Con_AddToTabListMatched ("\"0 90 0\"",  partial, "left",     NULL, "0 90 0 left");
+	Con_AddToTabListMatched ("\"0 -90 0\"", partial, "right",    NULL, "0 -90 0 right");
+	Con_AddToTabListMatched ("\"0 180 0\"", partial, "backward", NULL, "0 180 0 backward");
+	Con_AddToTabListMatched ("\"0 0 90\"",  partial, "roll +",   NULL, "0 0 90 roll +");
+	Con_AddToTabListMatched ("\"0 0 -90\"", partial, "roll -",   NULL, "0 0 -90 roll -");
+	Con_AddToTabListMatched ("\"90 0 0\"",  partial, "pitch +",  NULL, "90 0 0 pitch +");
+	Con_AddToTabListMatched ("\"-90 0 0\"", partial, "pitch -",  NULL, "-90 0 0 pitch -");
+}
+
+static void Chase_Active_Completion_f (cvar_t *cvar, const char *partial)
+{
+	(void)cvar;
+	Con_AddToTabList ("0", partial, "off", NULL);
+	Con_AddToTabList ("1", partial, "third-person", NULL);
+	Con_AddToTabList ("2", partial, "top-down", NULL);
+	Con_AddToTabList ("3", partial, "north-locked top-down", NULL);
+}
 
 /*
 ==============
@@ -39,6 +96,9 @@ void Chase_Init (void)
 	Cvar_RegisterVariable (&chase_up);
 	Cvar_RegisterVariable (&chase_right);
 	Cvar_RegisterVariable (&chase_active);
+	Cvar_SetCompletion (&chase_active, &Chase_Active_Completion_f);
+	Cvar_RegisterVariable (&chase_modelangles);
+	Cvar_SetCompletion (&chase_modelangles, &Chase_ModelAngles_Completion_f);
 }
 
 extern int SV_HullPointContents(hull_t* hull, int num, vec3_t p); // woods(Qrack) #betterchase
@@ -253,12 +313,20 @@ TODO: stay at least 8 units away from all walls in this leaf
 void Chase_UpdateForDrawing (void)
 {
 	int		i;
+	int		mode = (int)chase_active.value;
 	vec3_t	forward, up, right;
 	vec3_t	ideal, crosshair, temp;
+	vec3_t	lookangles;
 	float	alpha = 1, alphadist = 1;
 	float	absdist;
 
-	AngleVectors (cl.lerpangles, forward, right, up); // woods added lerpangles for #smoothcam
+	VectorCopy (cl.lerpangles, lookangles); // woods added lerpangles for #smoothcam
+	if (Chase_IsTopDownMode (mode))
+		lookangles[PITCH] = 90;
+	if (Chase_IsNorthLockedMode (mode))
+		lookangles[YAW] = 0;
+
+	AngleVectors (lookangles, forward, right, up);
 
 	// calc ideal camera location before checking for walls
 	for (i=0 ; i<3 ; i++)
@@ -297,6 +365,6 @@ void Chase_UpdateForDrawing (void)
 	VectorSubtract (crosshair, r_refdef.vieworg, temp);
 	VectorAngles (temp, NULL, r_refdef.viewangles);
 	if (r_refdef.viewangles[PITCH] >= 89.9 || r_refdef.viewangles[PITCH] <= -89.9)
-		r_refdef.viewangles[YAW] = cl.viewangles[YAW];
+		r_refdef.viewangles[YAW] = Chase_IsNorthLockedMode (mode) ? 0 : cl.viewangles[YAW];
 }
 

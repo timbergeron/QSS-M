@@ -2419,6 +2419,16 @@ void R_SetupEntityTransform (entity_t *e, lerpdata_t *lerpdata)
 	{
 		e->effects &= ~EF_ROTATE; // EF_ROTATE already cleared server-side, but if mapper forgot
 	}
+
+	{
+		vec3_t off;
+		if (Chase_GetPlayerModelAngleOffset (e, off))
+		{
+			lerpdata->angles[PITCH] = anglemod (lerpdata->angles[PITCH] + off[PITCH]);
+			lerpdata->angles[YAW]   = anglemod (lerpdata->angles[YAW]   + off[YAW]);
+			lerpdata->angles[ROLL]  = anglemod (lerpdata->angles[ROLL]  + off[ROLL]);
+		}
+	}
 }
 
 /*
@@ -2807,7 +2817,16 @@ void R_DrawAliasModel (entity_t *e)
 	//
 	// set up lighting
 	//
-	R_SetupAliasLighting (e);
+	{
+		vec3_t off;
+		float saved_yaw = e->angles[YAW];
+		qboolean chase_offset = Chase_GetPlayerModelAngleOffset (e, off);
+		if (chase_offset)
+			e->angles[YAW] = anglemod (e->angles[YAW] + off[YAW]);
+		R_SetupAliasLighting (e);
+		if (chase_offset)
+			e->angles[YAW] = saved_yaw;
+	}
 
 	for(surf=0;;surf++)
 	{
