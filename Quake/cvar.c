@@ -33,6 +33,19 @@ static struct cvaralias_s
 	struct cvaralias_s	*next;
 } *cvar_aliases;
 
+typedef struct mapcvar_s
+{
+	cvar_t				*cvar;
+	char				*old_value;
+	unsigned int		old_flags;
+	struct mapcvar_s	*next;
+} mapcvar_t;
+
+static mapcvar_t	*map_locked_cvars;
+static mapcvar_t	*map_restoring_cvars;
+
+static void Cvar_MapLock_Status_f (void);
+
 //==============================================================================
 //
 //  USER COMMANDS
@@ -220,6 +233,12 @@ void Cvar_Set_f (void)
 		return;
 	}
 
+	if (var->flags & CVAR_LOCKED)
+	{
+		Con_Printf ("\"%s\" is locked by the current map\n", var->name);
+		return;
+	}
+
 	var->flags |= fl;
 	Cvar_SetQuick(var, varvalue);
 }
@@ -241,6 +260,11 @@ void Cvar_Toggle_f (void)
 	if (!v)
 	{
 		Con_Printf ("variable \"%s\" not found\n", Cmd_Argv(1));
+		return;
+	}
+	if (v->flags & CVAR_LOCKED)
+	{
+		Con_Printf ("\"%s\" is locked by the current map\n", v->name);
 		return;
 	}
 
@@ -405,6 +429,7 @@ void Cvar_Init (void)
 	Cmd_AddCommand ("set", Cvar_Set_f);
 	Cmd_AddCommand ("seta", Cvar_Set_f);
 	Cmd_AddCommand ("setfl", Cvar_Set_f);
+	Cmd_AddCommand ("maplock_status", Cvar_MapLock_Status_f);
 }
 
 //==============================================================================
@@ -485,10 +510,278 @@ void Cvar_UnlockAll (void)
 {
 	cvar_t	*var;
 
+	// Map locks carry saved values, so restoring is part of fully unlocking them.
+	Cvar_MapLock_RestoreAll ();
+
 	for (var = cvar_vars ; var ; var = var->next)
 	{
 		var->flags &= ~CVAR_LOCKED;
 	}
+}
+
+static mapcvar_t *Cvar_MapLock_FindInList (mapcvar_t *list, const cvar_t *var)
+{
+	mapcvar_t	*curr;
+
+	for (curr = list ; curr ; curr = curr->next)
+		if (curr->cvar == var)
+			return curr;
+
+	return NULL;
+}
+
+static mapcvar_t *Cvar_MapLock_FindActive (const cvar_t *var)
+{
+	return Cvar_MapLock_FindInList (map_locked_cvars, var);
+}
+
+static mapcvar_t *Cvar_MapLock_FindSaved (const cvar_t *var)
+{
+	mapcvar_t	*curr;
+
+	curr = Cvar_MapLock_FindActive (var);
+	if (curr)
+		return curr;
+
+	return Cvar_MapLock_FindInList (map_restoring_cvars, var);
+}
+
+static qboolean Cvar_MapLock_DeniedName (const char *name)
+{
+	// Some names are also covered by prefixes; keep them explicit to document high-risk cvars.
+	static const char *const denied_names[] =
+	{
+		"cmdline",
+		"registered",
+		"developer",
+		"sv_cheats",
+		"host_framerate",
+		"host_timescale",
+		"host_maxfps",
+		"deathmatch",
+		"coop",
+		"skill",
+		"teamplay",
+		"fraglimit",
+		"timelimit",
+		"samelevel",
+		"noexit",
+		"pausable",
+		"serverprofile",
+		"devstats",
+		"campaign",
+		"horde",
+		"temp1",
+		"hostname",
+		"password",
+		"rcon_password",
+		"allow_download",
+		"allow_download_sky",
+		"cl_web_download_url",
+		"cl_web_download_url2",
+		"cl_autodemo",
+		"cl_autovote",
+		"cl_autovote_list",
+		"cl_contentfilter",
+		"cl_migration_schema",
+		"cl_nocsqc",
+		"cl_nopext",
+		"cl_onload",
+		"sensitivity",
+		"lookspring",
+		"lookstrafe",
+		"m_pitch",
+		"m_yaw",
+		"cl_minpitch",
+		"cl_maxpitch",
+		"volume",
+		"bgmvolume",
+		"nosound",
+		"sndspeed",
+		"precache",
+		"loadas8bit",
+		"max_edicts",
+		"nomonsters",
+		"edgefriction",
+		"gl_max_size",
+		"gl_picmip",
+		"vid_fullscreen",
+		"vid_width",
+		"vid_height",
+		"vid_desktopfullscreen",
+		"vid_refreshrate",
+		"vid_bpp",
+		"vid_borderless",
+		"vid_saveresize",
+		"vid_vsync",
+		"vid_fsaa",
+		"vid_fxaa",
+		NULL
+	};
+	static const char *const denied_prefixes[] =
+	{
+		"_",
+		"cfg_",
+		"cmd_",
+		"com_",
+		"con_",
+		"fs_",
+		"gyro_",
+		"host_",
+		"in_",
+		"joy_",
+		"log_",
+		"m_",
+		"net_",
+		"pm_",
+		"pq_",
+		"pr_",
+		"snd_",
+		"sys_",
+		"sv_",
+		"cl_demo",
+		"cl_download",
+		"cl_portpingprobe_",
+		"cl_voip_",
+		NULL
+	};
+	int		i;
+
+	for (i = 0 ; denied_names[i] ; i++)
+		if (!q_strcasecmp (name, denied_names[i]))
+			return true;
+
+	for (i = 0 ; denied_prefixes[i] ; i++)
+	{
+		size_t	len = strlen (denied_prefixes[i]);
+
+		if (!q_strncasecmp (name, denied_prefixes[i], len))
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean Cvar_MapLock_CanSet (const cvar_t *var)
+{
+	if (!var)
+		return false;
+	if (!(var->flags & CVAR_REGISTERED))
+		return false;
+	if (var->flags & (CVAR_ROM | CVAR_LOCKED | CVAR_NOTIFY | CVAR_SERVERINFO | CVAR_USERINFO | CVAR_USERDEFINED | CVAR_AUTOCVAR))
+		return false;
+	if (Cvar_MapLock_DeniedName (var->name))
+		return false;
+	return true;
+}
+
+void Cvar_MapLock_Set (const char *var_name, const char *value)
+{
+	cvar_t		*var;
+	mapcvar_t	*curr;
+	unsigned int	apply_flags;
+
+	if (!var_name || !*var_name || !value)
+		return;
+
+	var = Cvar_FindVar (var_name);
+	if (!var)
+		return;
+
+	curr = Cvar_MapLock_FindActive (var);
+	if (!curr)
+	{
+		// Only first-lock validates CVAR_LOCKED; duplicate worldspawn keys keep the saved original.
+		if (!Cvar_MapLock_CanSet (var))
+			return;
+
+		curr = (mapcvar_t *) Z_Malloc (sizeof(*curr));
+		curr->cvar = var;
+		curr->old_value = Z_Strdup (var->string);
+		curr->old_flags = var->flags;
+		curr->next = map_locked_cvars;
+		map_locked_cvars = curr;
+	}
+
+	apply_flags = curr->old_flags;
+	// Clearing ROM/LOCKED is defensive; first-lock filters reject those flags.
+	var->flags = apply_flags & ~(CVAR_ROM | CVAR_LOCKED);
+	Cvar_SetQuick (var, value);
+	var->flags = apply_flags | CVAR_LOCKED;
+}
+
+void Cvar_MapLock_RestoreAll (void)
+{
+	mapcvar_t	*curr, *next;
+
+	if (!map_locked_cvars)
+		return;
+
+	curr = map_locked_cvars;
+	map_locked_cvars = NULL;
+	map_restoring_cvars = curr;
+
+	while (curr)
+	{
+		next = curr->next;
+
+		curr->cvar->flags = curr->old_flags & ~(CVAR_ROM | CVAR_LOCKED);
+		Cvar_SetQuick (curr->cvar, curr->old_value);
+		curr->cvar->flags = curr->old_flags;
+
+		map_restoring_cvars = next;
+		Z_Free (curr->old_value);
+		Z_Free (curr);
+		curr = next;
+	}
+
+	map_restoring_cvars = NULL;
+}
+
+qboolean Cvar_MapLock_ParseWorldspawnKey (const char *key, const char *value)
+{
+	if (q_strncasecmp (key, "cvar_", 5))
+		return false;
+
+	Cvar_MapLock_Set (key + 5, value);
+	return true;
+}
+
+qboolean Cvar_MapLock_GetSavedState (const cvar_t *var, const char **value, unsigned int *flags)
+{
+	mapcvar_t	*curr;
+
+	curr = Cvar_MapLock_FindSaved (var);
+	if (!curr)
+		return false;
+
+	if (value)
+		*value = curr->old_value;
+	if (flags)
+		*flags = curr->old_flags;
+	return true;
+}
+
+static void Cvar_MapLock_Status_f (void)
+{
+	mapcvar_t	*curr;
+	int		count;
+
+	if (!map_locked_cvars)
+	{
+		Con_Printf ("No map-locked cvars.\n");
+		return;
+	}
+
+	Con_Printf ("Map-locked cvars:\n");
+	count = 0;
+	for (curr = map_locked_cvars ; curr ; curr = curr->next)
+	{
+		Con_Printf ("  %s saved \"%s\" effective \"%s\"\n",
+			curr->cvar->name, curr->old_value, curr->cvar->string);
+		count++;
+	}
+	Con_Printf ("%i map-locked cvar%s.\n", count, count == 1 ? "" : "s");
 }
 
 /*
@@ -566,6 +859,8 @@ void Cvar_Reset (const char *name)
 	var = Cvar_FindVar (name);
 	if (!var)
 		Con_Printf ("variable \"%s\" not found\n", name);
+	else if (var->flags & CVAR_LOCKED)
+		Con_Printf ("\"%s\" is locked by the current map\n", var->name);
 	else
 		Cvar_SetQuick (var, var->default_string);
 }
@@ -946,6 +1241,12 @@ qboolean	Cvar_Command (void)
 		return true;
 	}
 
+	if (v->flags & CVAR_LOCKED)
+	{
+		Con_Printf ("\"%s\" is locked by the current map\n", v->name);
+		return true;
+	}
+
 	if (Con_IsRedirected())
 		Con_Printf ("changing \"%s\" from \"%s\" to \"%s\"\n", v->name, v->string, Cmd_Argv(1));
 
@@ -965,14 +1266,22 @@ with the archive flag set to true.
 void Cvar_WriteVariables (FILE *f)
 {
 	cvar_t	*var;
+	const char	*value;
+	unsigned int	flags;
 
 	for (var = cvar_vars ; var ; var = var->next)
 	{
-		if (var->flags & CVAR_ARCHIVE)
+		if (!Cvar_MapLock_GetSavedState (var, &value, &flags))
 		{
-			if (var->flags & (CVAR_USERDEFINED|CVAR_SETA))
+			value = var->string;
+			flags = var->flags;
+		}
+
+		if (flags & CVAR_ARCHIVE)
+		{
+			if (flags & (CVAR_USERDEFINED|CVAR_SETA))
 				fprintf (f, "seta ");
-			fprintf (f, "%s \"%s\"\n", var->name, var->string);
+			fprintf (f, "%s \"%s\"\n", var->name, value);
 		}
 	}
 }

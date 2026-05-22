@@ -231,6 +231,8 @@ void CL_ClearState (void)
 		PR_SwitchQCVM(NULL);
 	}
 
+	Cvar_MapLock_RestoreAll ();
+
 	if (!sv.active)
 		Host_ClearMemory ();
 
@@ -572,6 +574,9 @@ void CL_Disconnect (void)
 	NET_PortPingProbe_RequestAbort();
 	CL_CancelConnect();
 	CL_ClearTypingState();
+
+	// Idempotent with CL_StopPlayback; needed for non-demo disconnect paths.
+	Cvar_MapLock_RestoreAll ();
 
 	if (key_dest == key_message)
 		Key_EndChat ();	// don't get stuck in chat mode

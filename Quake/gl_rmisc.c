@@ -584,6 +584,12 @@ static void R_ParseWorldspawn (void)
 {
 	char key[128], value[4096];
 	const char *data;
+	qboolean parsed_wateralpha = false;
+	qboolean parsed_lavaalpha = false;
+	qboolean parsed_telealpha = false;
+	qboolean parsed_slimealpha = false;
+
+	Cvar_MapLock_RestoreAll ();
 
 	map_fallbackalpha = r_wateralpha.value;
 	map_wateralpha = (cl.worldmodel->contentstransparent&SURF_DRAWWATER)?r_wateralpha.value:1;
@@ -617,21 +623,48 @@ static void R_ParseWorldspawn (void)
 			return; // error
 		q_strlcpy(value, com_token, sizeof(value));
 
+		if (Cvar_MapLock_ParseWorldspawnKey (key, value))
+			continue;
+
 		if (!strcmp("wateralpha", key))
+		{
 			map_fallbackalpha = map_wateralpha = atof(value);
+			parsed_wateralpha = true;
+		}
 
 		if (!strcmp("lavaalpha", key))
+		{
 			map_lavaalpha = atof(value);
+			parsed_lavaalpha = true;
+		}
 
 		if (!strcmp("telealpha", key))
+		{
 			map_telealpha = atof(value);
+			parsed_telealpha = true;
+		}
 
 		if (!strcmp("slimealpha", key))
+		{
 			map_slimealpha = atof(value);
+			parsed_slimealpha = true;
+		}
 
 		if (!strcmp("ctfstyle", key)) // woods lets set whgat flag style we use [ 1 - default, 2 - rogue, 3 - alternate option1, 4 - alternate option2 ] #alternateflags
 			map_ctf_flag_style = atof(value);
 	}
+
+	if (!parsed_wateralpha)
+	{
+		map_fallbackalpha = r_wateralpha.value;
+		map_wateralpha = (cl.worldmodel->contentstransparent&SURF_DRAWWATER)?r_wateralpha.value:1;
+	}
+	if (!parsed_lavaalpha)
+		map_lavaalpha = (cl.worldmodel->contentstransparent&SURF_DRAWLAVA)?r_lavaalpha.value:1;
+	if (!parsed_telealpha)
+		map_telealpha = (cl.worldmodel->contentstransparent&SURF_DRAWTELE)?r_telealpha.value:1;
+	if (!parsed_slimealpha)
+		map_slimealpha = (cl.worldmodel->contentstransparent&SURF_DRAWSLIME)?r_slimealpha.value:1;
 }
 
 

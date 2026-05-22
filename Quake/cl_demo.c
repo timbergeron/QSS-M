@@ -2303,6 +2303,9 @@ void CL_StopPlayback (void)
 		return;
 	}
 
+	// Also reached from CL_Disconnect; restore is idempotent.
+	Cvar_MapLock_RestoreAll ();
+
 	fclose (cls.demofile);
 #ifdef USE_ZLIB
 	CL_DZipCleanupTempDemo();

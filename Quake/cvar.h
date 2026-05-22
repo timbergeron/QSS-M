@@ -144,6 +144,10 @@ cvar_t	*Cvar_FindVarAfter (const char *prev_name, unsigned int with_flags);
 void	Cvar_LockVar (const char *var_name);
 void	Cvar_UnlockVar (const char *var_name);
 void	Cvar_UnlockAll (void);
+void	Cvar_MapLock_Set (const char *var_name, const char *value);
+void	Cvar_MapLock_RestoreAll (void);
+qboolean Cvar_MapLock_ParseWorldspawnKey (const char *key, const char *value);
+qboolean Cvar_MapLock_GetSavedState (const cvar_t *var, const char **value, unsigned int *flags);
 
 void	Cvar_Init (void);
 
