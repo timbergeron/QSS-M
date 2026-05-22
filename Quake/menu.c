@@ -22067,9 +22067,249 @@ static qboolean goptions_levelvalid;
 static menu_textfield_t goptions_level_field;
 
 static void M_GameOptions_UpdateLevelHint(void);
+static const char *M_GameOptions_SelectedMod(void);
 static qboolean M_GameOptions_UsingDefaultMod(void);
+static void M_GameOptions_ClearTypedLevel(void);
 static void M_GameOptions_ClampCursor(void);
 static void M_GameOptions_RebuildMods(void);
+static void M_GameOptions_LoadHistory(void);
+static void M_GameOptions_SaveHistory(const char *selected_map);
+
+#define SHISTORY_FILENAME          "shistory.json"
+#define SHISTORY_MAX_FILE_SIZE     (64 * 1024)
+
+static qboolean gameoptions_history_loaded = false;
+
+static void M_GameOptions_HistoryPath(char *path, size_t size)
+{
+	q_snprintf(path, size, "%s/id1/backups/%s", com_basedir, SHISTORY_FILENAME);
+}
+
+static int M_GameOptions_EpisodeCount(void)
+{
+	if (hipnotic)
+		return (int)(sizeof(hipnoticepisodes) / sizeof(hipnoticepisodes[0]));
+	if (rogue)
+		return (int)(sizeof(rogueepisodes) / sizeof(rogueepisodes[0]));
+	if (registered.value)
+		return (int)(sizeof(episodes) / sizeof(episodes[0]));
+	return 2;
+}
+
+static int M_GameOptions_LevelCount(int episode_idx)
+{
+	int ep_count = M_GameOptions_EpisodeCount();
+
+	if (episode_idx < 0 || episode_idx >= ep_count)
+		episode_idx = 0;
+
+	if (hipnotic)
+		return hipnoticepisodes[episode_idx].levels;
+	if (rogue)
+		return rogueepisodes[episode_idx].levels;
+	return episodes[episode_idx].levels;
+}
+
+static void M_GameOptions_ClampEpisodeLevel(void)
+{
+	int ep_count = M_GameOptions_EpisodeCount();
+	int lvl_count;
+
+	if (startepisode < 0 || startepisode >= ep_count)
+		startepisode = 0;
+
+	lvl_count = M_GameOptions_LevelCount(startepisode);
+	if (startlevel < 0 || startlevel >= lvl_count)
+		startlevel = 0;
+}
+
+static qboolean M_GameOptions_ReadHistoryInt(const jsonentry_t *entry, const char *name, int minval, int maxval, int *out)
+{
+	const double *d;
+
+	if (maxval < minval)
+		return false;
+
+	d = JSON_FindNumber(entry, name);
+	if (!d || !isfinite(*d))
+		return false;
+
+	if (*d <= minval)
+		*out = minval;
+	else if (*d >= maxval)
+		*out = maxval;
+	else
+		*out = (int)*d;
+
+	return true;
+}
+
+static void M_GameOptions_LoadHistory(void)
+{
+	char path[MAX_OSPATH];
+	FILE *file;
+	long file_size;
+	char *text;
+	json_t *json;
+	const char *s;
+	int n;
+
+	M_GameOptions_HistoryPath(path, sizeof(path));
+	file = fopen(path, "rb");
+	if (!file)
+		return;
+
+	if (fseek(file, 0, SEEK_END) != 0)
+	{
+		fclose(file);
+		return;
+	}
+	file_size = ftell(file);
+	rewind(file);
+	if (file_size <= 0 || file_size > SHISTORY_MAX_FILE_SIZE)
+	{
+		fclose(file);
+		return;
+	}
+
+	text = (char *)malloc((size_t)file_size + 1);
+	if (!text)
+	{
+		fclose(file);
+		return;
+	}
+	if (fread(text, 1, (size_t)file_size, file) != (size_t)file_size)
+	{
+		free(text);
+		fclose(file);
+		return;
+	}
+	text[file_size] = '\0';
+	fclose(file);
+
+	json = JSON_Parse(text);
+	free(text);
+	if (!json || !json->root || json->root->type != JSON_OBJECT)
+	{
+		if (json)
+			JSON_Free(json);
+		return;
+	}
+
+	n = svs.maxclientslimit;
+	if (n < 2)
+		n = 2;
+	if (M_GameOptions_ReadHistoryInt(json->root, "maxplayers", 2, n, &n))
+		maxplayers = n;
+
+	if (M_GameOptions_ReadHistoryInt(json->root, "sv_public", 0, 1, &n))
+		Cvar_SetValue("sv_public", (float)n);
+	if (M_GameOptions_ReadHistoryInt(json->root, "coop", 0, 1, &n))
+		Cvar_SetValue("coop", (float)n);
+	if (M_GameOptions_ReadHistoryInt(json->root, "teamplay", 0, rogue ? 6 : 2, &n))
+		Cvar_SetValue("teamplay", (float)n);
+	if (M_GameOptions_ReadHistoryInt(json->root, "skill", 0, 3, &n))
+		Cvar_SetValue("skill", (float)n);
+	if (M_GameOptions_ReadHistoryInt(json->root, "fraglimit", 0, 100, &n))
+		Cvar_SetValue("fraglimit", (float)n);
+	if (M_GameOptions_ReadHistoryInt(json->root, "timelimit", 0, 60, &n))
+		Cvar_SetValue("timelimit", (float)n);
+
+	if (M_GameOptions_ReadHistoryInt(json->root, "episode", 0, M_GameOptions_EpisodeCount() - 1, &n))
+	{
+		startepisode = n;
+		if (M_GameOptions_ReadHistoryInt(json->root, "level", 0, M_GameOptions_LevelCount(startepisode) - 1, &n))
+			startlevel = n;
+	}
+	else if (M_GameOptions_ReadHistoryInt(json->root, "level", 0, M_GameOptions_LevelCount(startepisode) - 1, &n))
+		startlevel = n;
+	M_GameOptions_ClampEpisodeLevel();
+
+	gameoptions_mod_index = 0;
+	s = JSON_FindString(json->root, "mod");
+	if (s && s[0])
+	{
+		size_t i, count = VEC_SIZE(gameoptions_mods);
+		for (i = 0; i < count; i++)
+		{
+			if (!q_strcasecmp(gameoptions_mods[i].name, s))
+			{
+				gameoptions_mod_index = (int)(i + 1);
+				break;
+			}
+		}
+	}
+
+	m_skill_mapname[0] = '\0';
+	M_GameOptions_ClearTypedLevel();
+	s = JSON_FindString(json->root, "map");
+	if (s && s[0])
+	{
+		q_strlcpy(goptions_levelname, s, sizeof(goptions_levelname));
+		goptions_level_field.cursor = (int)strlen(goptions_levelname);
+		goptions_level_field.sel_start = -1;
+		M_TextField_ClampCursor(&goptions_level_field);
+	}
+
+	JSON_Free(json);
+}
+
+static void M_GameOptions_SaveHistory(const char *selected_map)
+{
+	char path[MAX_OSPATH];
+	char dir[MAX_OSPATH];
+	FILE *file;
+	const char *selected_mod = M_GameOptions_SelectedMod();
+	char *escaped_mod;
+	char *escaped_map;
+	qboolean write_failed;
+
+	escaped_mod = JSON_EscapeString(selected_mod ? selected_mod : "");
+	escaped_map = JSON_EscapeString(selected_map ? selected_map : "");
+	if (!escaped_mod || !escaped_map)
+	{
+		Con_DPrintf("Failed to encode %s for writing\n", SHISTORY_FILENAME);
+		free(escaped_mod);
+		free(escaped_map);
+		return;
+	}
+
+	q_snprintf(dir, sizeof(dir), "%s/id1/backups", com_basedir);
+	Sys_mkdir(dir);
+	M_GameOptions_HistoryPath(path, sizeof(path));
+
+	file = fopen(path, "w");
+	if (!file)
+	{
+		Con_DPrintf("Failed to open %s for writing\n", SHISTORY_FILENAME);
+		free(escaped_mod);
+		free(escaped_map);
+		return;
+	}
+
+	write_failed =
+		fprintf(file, "{\n") < 0 ||
+		fprintf(file, "  \"maxplayers\": %d,\n", maxplayers) < 0 ||
+		fprintf(file, "  \"sv_public\": %d,\n", sv_public.value ? 1 : 0) < 0 ||
+		fprintf(file, "  \"coop\": %d,\n", (int)coop.value) < 0 ||
+		fprintf(file, "  \"teamplay\": %d,\n", (int)teamplay.value) < 0 ||
+		fprintf(file, "  \"skill\": %d,\n", (int)skill.value) < 0 ||
+		fprintf(file, "  \"fraglimit\": %d,\n", (int)fraglimit.value) < 0 ||
+		fprintf(file, "  \"timelimit\": %d,\n", (int)timelimit.value) < 0 ||
+		fprintf(file, "  \"mod\": \"%s\",\n", escaped_mod) < 0 ||
+		fprintf(file, "  \"episode\": %d,\n", startepisode) < 0 ||
+		fprintf(file, "  \"level\": %d,\n", startlevel) < 0 ||
+		fprintf(file, "  \"map\": \"%s\"\n", escaped_map) < 0 ||
+		fprintf(file, "}\n") < 0;
+	if (fclose(file) != 0)
+		write_failed = true;
+
+	if (write_failed)
+		Con_DPrintf("Failed to write %s\n", SHISTORY_FILENAME);
+
+	free(escaped_mod);
+	free(escaped_map);
+}
 
 void M_Menu_GameOptions_f (void)
 {
@@ -22077,13 +22317,18 @@ void M_Menu_GameOptions_f (void)
 	m_state = m_gameoptions;
 	IN_UpdateGrabs();
 	m_entersound = true;
+	M_TextField_Init(&goptions_level_field, goptions_levelname, MAX_QPATH - 1, false);
+	M_GameOptions_RebuildMods();
+	if (!gameoptions_history_loaded && !sv.active)
+	{
+		M_GameOptions_LoadHistory();
+		gameoptions_history_loaded = true;
+	}
 	if (maxplayers == 0)
 		maxplayers = svs.maxclients;
 	if (maxplayers < 2)
 		maxplayers = 16;
-	M_TextField_Init(&goptions_level_field, goptions_levelname, MAX_QPATH - 1, false);
 	M_GameOptions_UpdateLevelHint();
-	M_GameOptions_RebuildMods();
 	M_GameOptions_ClampCursor();
 }
 
@@ -22826,6 +23071,8 @@ void M_GameOptions_Key (int key)
 				q_strlcpy(selected_map, goptions_levelname, sizeof(selected_map));
 			else if (m_skill_mapname[0])  // Fallback to Select Level
 				q_strlcpy(selected_map, m_skill_mapname, sizeof(selected_map));
+
+			M_GameOptions_SaveHistory(selected_map);
 
 			if (selected_mod)
 			{
