@@ -25851,7 +25851,7 @@ static void M_Demos_AddEx(const char* name, const char* date, const char *displa
 	else
 		q_strlcpy(tempDemo.display, display && display[0] ? display : name, sizeof(tempDemo.display));
 	q_strlcpy(tempDemo.date, date, sizeof(tempDemo.date));
-	tempDemo.map[0] = '\0';
+	M_InferDemoMapName(name, tempDemo.map, sizeof(tempDemo.map));
 	tempDemo.players[0] = '\0';
 	tempDemo.duration[0] = '\0';
 	tempDemo.filesize[0] = '\0';
@@ -26405,10 +26405,10 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
     {
         demoitem_t *di = &demosmenu.items[i];
 
-        // Tooltip metadata (map/players/duration/filesize) is filled in
-        // by the background parser in M_Demos_Draw; unparsed items match
-        // only on name/display/date until they're filled in, then a later
-        // refilter folds them in.  This keeps the keystroke path lag-free.
+        // Tooltip metadata (players/duration/filesize) is filled in by the
+        // background parser in M_Demos_Draw.  Map starts with a filename
+        // inference so common searches can match immediately, then the parser
+        // overwrites it with authoritative demo metadata when available.
         //
         // For the players field we use unfun_match so typed ASCII matches
         // names that contain Quake's gold/colored chars (same matcher used
@@ -26421,7 +26421,7 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
         // on extralevels[].data once ExtraMaps_ParseDescriptions has run;
         // M_Demos_Init kicks that off so this lookup is usually populated.
         const char *map_desc = NULL;
-        if (di->parsed && di->map[0] && descriptionsParsed)
+        if (has_search && di->map[0] && descriptionsParsed)
         {
             filelist_item_t *level = FindLevelInList(extralevels, di->map);
             if (level && level->data[0])
@@ -26432,12 +26432,12 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
             q_strcasestr(di->name, demosmenu.list.search.text) ||
             q_strcasestr(di->display, demosmenu.list.search.text) ||
             q_strcasestr(di->date, demosmenu.list.search.text) ||
+            (di->map[0] && q_strcasestr(di->map, demosmenu.list.search.text)) ||
+            (map_desc && q_strcasestr(map_desc, demosmenu.list.search.text)) ||
             (di->parsed && (
-                q_strcasestr(di->map, demosmenu.list.search.text) ||
                 unfun_match(demosmenu.list.search.text, di->players) ||
                 q_strcasestr(di->duration, demosmenu.list.search.text) ||
-                q_strcasestr(di->filesize, demosmenu.list.search.text) ||
-                (map_desc && q_strcasestr(map_desc, demosmenu.list.search.text)))))
+                q_strcasestr(di->filesize, demosmenu.list.search.text))))
         {
             VEC_PUSH(demosmenu.filtered_indices, i);
         }
