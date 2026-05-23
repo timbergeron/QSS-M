@@ -27,7 +27,7 @@ cvar_t	chase_back = {"chase_back", "90", CVAR_ARCHIVE};
 cvar_t	chase_up = {"chase_up", "30", CVAR_ARCHIVE };
 cvar_t	chase_right = {"chase_right", "0", CVAR_ARCHIVE };
 cvar_t	chase_active = {"chase_active", "0", CVAR_NONE};
-cvar_t	chase_modelangles = {"chase_modelangles", "0 0 0", CVAR_ARCHIVE};
+cvar_t	chase_modelangles = {"chase_modelangles", "0 0 0", CVAR_NONE};
 
 static qboolean Chase_IsTopDownMode (int mode)
 {
