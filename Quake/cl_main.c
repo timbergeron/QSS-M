@@ -232,6 +232,7 @@ void CL_ClearState (void)
 	}
 
 	Cvar_MapLock_RestoreAll ();
+	V_MapScoped_RestoreServerStuff ();
 
 	if (!sv.active)
 		Host_ClearMemory ();
@@ -577,6 +578,7 @@ void CL_Disconnect (void)
 
 	// Idempotent with CL_StopPlayback; needed for non-demo disconnect paths.
 	Cvar_MapLock_RestoreAll ();
+	V_MapScoped_RestoreServerStuff ();
 
 	if (key_dest == key_message)
 		Key_EndChat ();	// don't get stuck in chat mode

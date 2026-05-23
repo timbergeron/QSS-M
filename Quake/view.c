@@ -314,6 +314,8 @@ cshift_t	cshift_slime = { {0,25,5}, 150 };
 cshift_t	cshift_lava = { {255,80,0}, 150 };
 
 float		v_blend[4];		// rgba 0.0 - 1.0
+static cshift_t	map_scoped_cshift_empty;
+static qboolean	map_scoped_cshift_empty_saved;
 
 //johnfitz -- deleted BuildGammaTable(), V_CheckGamma(), gammatable[], and ramps[][]
 
@@ -329,6 +331,31 @@ void V_ResetEffects (void)
 	v_dmg_time = 0.f;
 	v_dmg_roll = 0.f;
 	v_dmg_pitch = 0.f;
+}
+
+qboolean V_MapScoped_MarkServerStuffCmd (const char *cmd)
+{
+	if (!cmd || !*cmd)
+		return false;
+	if (q_strcasecmp (cmd, "v_cshift"))
+		return false;
+
+	if (!map_scoped_cshift_empty_saved)
+	{
+		map_scoped_cshift_empty = cshift_empty;
+		map_scoped_cshift_empty_saved = true;
+	}
+	return true;
+}
+
+void V_MapScoped_RestoreServerStuff (void)
+{
+	if (!map_scoped_cshift_empty_saved)
+		return;
+
+	// v_cshift is not a cvar, so restore the saved server-stuffed state unconditionally.
+	cshift_empty = map_scoped_cshift_empty;
+	map_scoped_cshift_empty_saved = false;
 }
 
 /*

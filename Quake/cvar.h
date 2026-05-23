@@ -148,6 +148,8 @@ void	Cvar_MapLock_Set (const char *var_name, const char *value);
 void	Cvar_MapLock_RestoreAll (void);
 qboolean Cvar_MapLock_ParseWorldspawnKey (const char *key, const char *value);
 qboolean Cvar_MapLock_GetSavedState (const cvar_t *var, const char **value, unsigned int *flags);
+qboolean Cvar_MapScoped_MarkServerStuffCmd (const char *cmd, const char *arg1, int argc);
+const char *Cvar_MapScoped_CommitCommand (void);
 
 void	Cvar_Init (void);
 

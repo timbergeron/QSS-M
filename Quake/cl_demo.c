@@ -2305,6 +2305,7 @@ void CL_StopPlayback (void)
 
 	// Also reached from CL_Disconnect; restore is idempotent.
 	Cvar_MapLock_RestoreAll ();
+	V_MapScoped_RestoreServerStuff ();
 
 	fclose (cls.demofile);
 #ifdef USE_ZLIB

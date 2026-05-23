@@ -590,6 +590,7 @@ static void R_ParseWorldspawn (void)
 	qboolean parsed_slimealpha = false;
 
 	Cvar_MapLock_RestoreAll ();
+	V_MapScoped_RestoreServerStuff ();
 
 	map_fallbackalpha = r_wateralpha.value;
 	map_wateralpha = (cl.worldmodel->contentstransparent&SURF_DRAWWATER)?r_wateralpha.value:1;

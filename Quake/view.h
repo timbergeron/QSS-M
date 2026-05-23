@@ -39,6 +39,8 @@ void V_ResetEffects (void);
 float V_CalcRoll (vec3_t angles, vec3_t velocity);
 void V_RestoreAngles (void);
 //void V_UpdatePalette (void); //johnfitz
+qboolean V_MapScoped_MarkServerStuffCmd (const char *cmd);
+void V_MapScoped_RestoreServerStuff (void);
 
 void CShift_ParseWorldspawn (void); //infin -- woods tag
 

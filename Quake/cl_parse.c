@@ -3027,6 +3027,90 @@ static void CL_ParseStatString(int stat, const char *str)
 //some mods bug out and omit the \n entirely, this function helps prevent the damage from spreading too much.
 //some servers or mods use //prefixed commands as extensions to avoid spam about unrecognised commands.
 //proquake has its own extension coding thing.
+static qboolean CL_MarkMapScopedServerStuffLine(const char *line)
+{
+	const char	*data;
+	char		cmd[128];
+	char		arg1[128];
+	int		argc;
+	qboolean	marked;
+
+	cmd[0] = 0;
+	arg1[0] = 0;
+	argc = 0;
+	data = line;
+
+	while (argc < 3)
+	{
+		data = COM_Parse(data);
+		if (!data)
+			break;
+		if (!com_token[0])
+			break;
+
+		if (argc == 0)
+			q_strlcpy(cmd, com_token, sizeof(cmd));
+		else if (argc == 1)
+			q_strlcpy(arg1, com_token, sizeof(arg1));
+		argc++;
+	}
+
+	if (argc < 1)
+		return false;
+
+	marked = Cvar_MapScoped_MarkServerStuffCmd (cmd, arg1, argc);
+	marked = V_MapScoped_MarkServerStuffCmd (cmd) || marked;
+	return marked;
+}
+
+static qboolean CL_MarkMapScopedServerStuffText(const char *text)
+{
+	const char	*start, *p;
+	char		line[1024];
+	int		quotes;
+	qboolean	comment;
+	qboolean	marked;
+
+	if (!text)
+		return false;
+
+	start = text;
+	quotes = 0;
+	comment = false;
+	marked = false;
+	for (p = text ; ; p++)
+	{
+		if (!*p || (!(quotes & 1) && !comment && *p == ';') || *p == '\n')
+		{
+			size_t len = p - start;
+
+			if (len)
+			{
+				// This is only for detecting cvar-style writes; the command buffer still gets the full line.
+				if (len >= sizeof(line))
+					len = sizeof(line) - 1;
+				memcpy (line, start, len);
+				line[len] = 0;
+
+				marked = CL_MarkMapScopedServerStuffLine(line) || marked;
+			}
+
+			if (!*p)
+				return marked;
+
+			start = p + 1;
+			quotes = 0;
+			comment = false;
+			continue;
+		}
+
+		if (*p == '"')
+			quotes++;
+		else if (!(quotes & 1) && *p == '/' && p[1] == '/')
+			comment = true;
+	}
+}
+
 static void CL_ParseStuffText(const char *msg)
 {
 	char *str;
@@ -3114,8 +3198,12 @@ static void CL_ParseStuffText(const char *msg)
 		//let the server exec general user commands (massive security hole)
 		if (!handled)
 		{
+			// Only fallback stuffcmds reach the user command buffer; server commands that mutate cvars need explicit marking.
+			qboolean map_scoped = CL_MarkMapScopedServerStuffText(cl.stuffcmdbuf);
 			Cbuf_AddTextLen(cl.stuffcmdbuf, str-cl.stuffcmdbuf);
 			Cbuf_AddTextLen("\n", 1);
+			if (map_scoped)
+				Cbuf_AddText(Cvar_MapScoped_CommitCommand ());
 		}
 	}
 }

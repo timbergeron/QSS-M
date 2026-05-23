@@ -37,14 +37,34 @@ typedef struct mapcvar_s
 {
 	cvar_t				*cvar;
 	char				*old_value;
+	char				*server_value;
 	unsigned int		old_flags;
+	unsigned int		server_flags;
+	qboolean			locked;
+	qboolean			server_stuffed;
+	qboolean			server_pending;
+	unsigned int		server_pending_batch;
+	qboolean			user_value_changed;
+	qboolean			user_flags_changed;
 	struct mapcvar_s	*next;
 } mapcvar_t;
 
-static mapcvar_t	*map_locked_cvars;
+typedef struct mapcommit_s
+{
+	char				token[64];
+	unsigned int		batch;
+	struct mapcommit_s	*next;
+} mapcommit_t;
+
+static mapcvar_t	*map_scoped_cvars;
 static mapcvar_t	*map_restoring_cvars;
+static mapcommit_t	*map_scoped_commit_tokens;
+static unsigned int	map_scoped_commit_sequence;
+static unsigned int	map_scoped_mark_sequence = 1;
 
 static void Cvar_MapLock_Status_f (void);
+static void Cvar_MapScoped_CommitServerStuff_f (void);
+static void Cvar_MapScoped_NoteUserChange (cvar_t *var, qboolean flags_changed);
 
 //==============================================================================
 //
@@ -157,6 +177,8 @@ Cvar_Inc_f -- johnfitz
 */
 void Cvar_Inc_f (void)
 {
+	cvar_t	*var;
+
 	switch (Cmd_Argc())
 	{
 	default:
@@ -164,10 +186,22 @@ void Cvar_Inc_f (void)
 		Con_Printf("inc <cvar> [amount] : increment cvar\n");
 		break;
 	case 2:
-		Cvar_SetValue (Cmd_Argv(1), Cvar_VariableValue(Cmd_Argv(1)) + 1);
+		var = Cvar_FindVar (Cmd_Argv(1));
+		if (!var)
+			Con_Printf ("variable \"%s\" not found\n", Cmd_Argv(1));
+		else if (var->flags & CVAR_LOCKED)
+			Con_Printf ("\"%s\" is locked by the current map\n", var->name);
+		else
+			Cvar_SetValue (Cmd_Argv(1), Cvar_VariableValue(Cmd_Argv(1)) + 1);
 		break;
 	case 3:
-		Cvar_SetValue (Cmd_Argv(1), Cvar_VariableValue(Cmd_Argv(1)) + Q_atof(Cmd_Argv(2)));
+		var = Cvar_FindVar (Cmd_Argv(1));
+		if (!var)
+			Con_Printf ("variable \"%s\" not found\n", Cmd_Argv(1));
+		else if (var->flags & CVAR_LOCKED)
+			Con_Printf ("\"%s\" is locked by the current map\n", var->name);
+		else
+			Cvar_SetValue (Cmd_Argv(1), Cvar_VariableValue(Cmd_Argv(1)) + Q_atof(Cmd_Argv(2)));
 		break;
 	}
 }
@@ -239,6 +273,7 @@ void Cvar_Set_f (void)
 		return;
 	}
 
+	Cvar_MapScoped_NoteUserChange (var, fl != 0);
 	var->flags |= fl;
 	Cvar_SetQuick(var, varvalue);
 }
@@ -273,6 +308,7 @@ void Cvar_Toggle_f (void)
 		const char *newval = Cmd_Argv(2);
 		const char *defval = (Cmd_Argc()>3)?Cmd_Argv(3):v->default_string;
 		if (!defval) defval = "0";
+		Cvar_MapScoped_NoteUserChange (v, false);
 		if (!strcmp(newval, v->string))
 			Cvar_SetQuick(v, defval);
 		else
@@ -280,6 +316,7 @@ void Cvar_Toggle_f (void)
 	}
 	else
 	{
+		Cvar_MapScoped_NoteUserChange (v, false);
 		if (v->value)
 			Cvar_SetQuick(v, "0");
 		else
@@ -324,10 +361,22 @@ Cvar_Cycle_f -- johnfitz
 void Cvar_Cycle_f (void)
 {
 	int i;
+	cvar_t *v;
 
 	if (Cmd_Argc() < 3)
 	{
 		Con_Printf("cycle <cvar> <value list>: cycle cvar through a list of values\n");
+		return;
+	}
+	v = Cvar_FindVar(Cmd_Argv(1));
+	if (!v)
+	{
+		Con_Printf ("variable \"%s\" not found\n", Cmd_Argv(1));
+		return;
+	}
+	if (v->flags & CVAR_LOCKED)
+	{
+		Con_Printf ("\"%s\" is locked by the current map\n", v->name);
 		return;
 	}
 
@@ -341,12 +390,12 @@ void Cvar_Cycle_f (void)
 		//it will be comparing strings that all had the same source (the user) so it will work.
 		if (Q_atof(Cmd_Argv(i)) == 0)
 		{
-			if (!strcmp(Cmd_Argv(i), Cvar_VariableString(Cmd_Argv(1))))
+			if (!strcmp(Cmd_Argv(i), v->string))
 				break;
 		}
 		else
 		{
-			if (Q_atof(Cmd_Argv(i)) == Cvar_VariableValue(Cmd_Argv(1)))
+			if (Q_atof(Cmd_Argv(i)) == v->value)
 				break;
 		}
 	}
@@ -430,6 +479,7 @@ void Cvar_Init (void)
 	Cmd_AddCommand ("seta", Cvar_Set_f);
 	Cmd_AddCommand ("setfl", Cvar_Set_f);
 	Cmd_AddCommand ("maplock_status", Cvar_MapLock_Status_f);
+	Cmd_AddCommand ("__mapscoped_commit", Cvar_MapScoped_CommitServerStuff_f);
 }
 
 //==============================================================================
@@ -510,7 +560,7 @@ void Cvar_UnlockAll (void)
 {
 	cvar_t	*var;
 
-	// Map locks carry saved values, so restoring is part of fully unlocking them.
+	// Map-scoped overrides carry saved values, so restoring is part of fully unlocking them.
 	Cvar_MapLock_RestoreAll ();
 
 	for (var = cvar_vars ; var ; var = var->next)
@@ -532,7 +582,7 @@ static mapcvar_t *Cvar_MapLock_FindInList (mapcvar_t *list, const cvar_t *var)
 
 static mapcvar_t *Cvar_MapLock_FindActive (const cvar_t *var)
 {
-	return Cvar_MapLock_FindInList (map_locked_cvars, var);
+	return Cvar_MapLock_FindInList (map_scoped_cvars, var);
 }
 
 static mapcvar_t *Cvar_MapLock_FindSaved (const cvar_t *var)
@@ -675,6 +725,153 @@ static qboolean Cvar_MapLock_CanSet (const cvar_t *var)
 	return true;
 }
 
+static qboolean Cvar_MapScoped_CanSaveServerStuff (const cvar_t *var)
+{
+	if (!var)
+		return false;
+	if (!(var->flags & CVAR_REGISTERED))
+		return false;
+	// Network/user identity cvars are deliberately excluded from this minimal FTE-style restore.
+	// FTE blocks many of these with CVAR_NOTFROMSERVER; QSS-M still allows legacy server control.
+	if (var->flags & (CVAR_ROM | CVAR_LOCKED | CVAR_NOTIFY | CVAR_SERVERINFO | CVAR_USERINFO | CVAR_AUTOCVAR))
+		return false;
+	return true;
+}
+
+static mapcvar_t *Cvar_MapScoped_Save (cvar_t *var)
+{
+	mapcvar_t	*curr;
+
+	curr = Cvar_MapLock_FindActive (var);
+	if (curr)
+		return curr;
+
+	curr = (mapcvar_t *) Z_Malloc (sizeof(*curr));
+	curr->cvar = var;
+	curr->old_value = Z_Strdup (var->string ? var->string : "");
+	curr->server_value = NULL;
+	curr->old_flags = var->flags;
+	curr->server_flags = 0;
+	curr->locked = false;
+	curr->server_stuffed = false;
+	curr->server_pending = false;
+	curr->server_pending_batch = 0;
+	curr->user_value_changed = false;
+	curr->user_flags_changed = false;
+	curr->next = map_scoped_cvars;
+	map_scoped_cvars = curr;
+	return curr;
+}
+
+static qboolean Cvar_MapScoped_ShouldRestoreValue (const mapcvar_t *curr)
+{
+	const char	*current;
+
+	if (!curr)
+		return false;
+	if (curr->locked)
+		return true;
+
+	if (curr->server_stuffed && curr->server_value)
+	{
+		current = curr->cvar->string ? curr->cvar->string : "";
+		if (curr->user_value_changed || strcmp(current, curr->server_value))
+			return false;
+	}
+	return true;
+}
+
+static qboolean Cvar_MapScoped_ShouldRestoreFlags (const mapcvar_t *curr)
+{
+	if (!curr)
+		return false;
+	if (curr->locked)
+		return true;
+
+	if (curr->server_stuffed && curr->server_value)
+	{
+		if (curr->user_flags_changed || ((curr->cvar->flags ^ curr->server_flags) & ~CVAR_CHANGED))
+			return false;
+	}
+	return true;
+}
+
+static void Cvar_MapScoped_NoteUserChange (cvar_t *var, qboolean flags_changed)
+{
+	mapcvar_t	*curr;
+
+	curr = Cvar_MapLock_FindActive (var);
+	if (!curr || curr->locked || !curr->server_stuffed || curr->server_pending)
+		return;
+
+	curr->user_value_changed = true;
+	if (flags_changed)
+		curr->user_flags_changed = true;
+}
+
+static void Cvar_MapScoped_ClearCommitTokens (void)
+{
+	mapcommit_t	*curr, *next;
+
+	for (curr = map_scoped_commit_tokens ; curr ; curr = next)
+	{
+		next = curr->next;
+		Z_Free (curr);
+	}
+	map_scoped_commit_tokens = NULL;
+}
+
+static qboolean Cvar_MapScoped_ConsumeCommitToken (const char *token, unsigned int *batch)
+{
+	mapcommit_t	*curr, *prev;
+
+	if (!token || !*token)
+		return false;
+
+	prev = NULL;
+	for (curr = map_scoped_commit_tokens ; curr ; curr = curr->next)
+	{
+		if (strcmp(curr->token, token))
+		{
+			prev = curr;
+			continue;
+		}
+
+		if (prev)
+			prev->next = curr->next;
+		else
+			map_scoped_commit_tokens = curr->next;
+		if (batch)
+			*batch = curr->batch;
+		Z_Free (curr);
+		return true;
+	}
+
+	return false;
+}
+
+static void Cvar_MapScoped_AdvanceMarkSequence (void)
+{
+	map_scoped_mark_sequence++;
+	if (!map_scoped_mark_sequence)
+		map_scoped_mark_sequence = 1;
+}
+
+const char *Cvar_MapScoped_CommitCommand (void)
+{
+	mapcommit_t	*commit;
+
+	commit = (mapcommit_t *) Z_Malloc (sizeof(*commit));
+	q_snprintf (commit->token, sizeof(commit->token), "%p-%u", (void *)commit, ++map_scoped_commit_sequence);
+	// Marks made since the previous commit command belong to this command-buffer batch.
+	commit->batch = map_scoped_mark_sequence;
+	commit->next = map_scoped_commit_tokens;
+	map_scoped_commit_tokens = commit;
+	Cvar_MapScoped_AdvanceMarkSequence ();
+
+	return va("__mapscoped_commit %s\n", commit->token);
+}
+
 void Cvar_MapLock_Set (const char *var_name, const char *value)
 {
 	cvar_t		*var;
@@ -695,14 +892,15 @@ void Cvar_MapLock_Set (const char *var_name, const char *value)
 		if (!Cvar_MapLock_CanSet (var))
 			return;
 
-		curr = (mapcvar_t *) Z_Malloc (sizeof(*curr));
-		curr->cvar = var;
-		curr->old_value = Z_Strdup (var->string);
-		curr->old_flags = var->flags;
-		curr->next = map_locked_cvars;
-		map_locked_cvars = curr;
+		curr = Cvar_MapScoped_Save (var);
+	}
+	else if (!curr->locked)
+	{
+		if (!Cvar_MapLock_CanSet (var))
+			return;
 	}
 
+	curr->locked = true;
 	apply_flags = curr->old_flags;
 	// Clearing ROM/LOCKED is defensive; first-lock filters reject those flags.
 	var->flags = apply_flags & ~(CVAR_ROM | CVAR_LOCKED);
@@ -714,22 +912,39 @@ void Cvar_MapLock_RestoreAll (void)
 {
 	mapcvar_t	*curr, *next;
 
-	if (!map_locked_cvars)
+	Cvar_MapScoped_ClearCommitTokens ();
+
+	if (!map_scoped_cvars)
 		return;
 
-	curr = map_locked_cvars;
-	map_locked_cvars = NULL;
+	curr = map_scoped_cvars;
+	map_scoped_cvars = NULL;
 	map_restoring_cvars = curr;
 
 	while (curr)
 	{
 		next = curr->next;
 
-		curr->cvar->flags = curr->old_flags & ~(CVAR_ROM | CVAR_LOCKED);
-		Cvar_SetQuick (curr->cvar, curr->old_value);
-		curr->cvar->flags = curr->old_flags;
+		if (Cvar_MapScoped_ShouldRestoreValue (curr) || Cvar_MapScoped_ShouldRestoreFlags (curr))
+		{
+			const char	*restore_value;
+			unsigned int	restore_flags;
+
+			restore_value = Cvar_MapScoped_ShouldRestoreValue (curr)
+				? curr->old_value
+				: curr->cvar->string;
+			restore_flags = Cvar_MapScoped_ShouldRestoreFlags (curr)
+				? curr->old_flags
+				: curr->cvar->flags;
+
+			curr->cvar->flags = restore_flags & ~(CVAR_ROM | CVAR_LOCKED);
+			Cvar_SetQuick (curr->cvar, restore_value);
+			curr->cvar->flags = restore_flags;
+		}
 
 		map_restoring_cvars = next;
+		if (curr->server_value)
+			Z_Free (curr->server_value);
 		Z_Free (curr->old_value);
 		Z_Free (curr);
 		curr = next;
@@ -747,18 +962,90 @@ qboolean Cvar_MapLock_ParseWorldspawnKey (const char *key, const char *value)
 	return true;
 }
 
+qboolean Cvar_MapScoped_MarkServerStuffCmd (const char *cmd, const char *arg1, int argc)
+{
+	const char	*var_name = NULL;
+	cvar_t		*var;
+	mapcvar_t	*curr;
+
+	if (!cmd || !*cmd || argc < 1)
+		return false;
+
+	if ((!q_strcasecmp(cmd, "set") || !q_strcasecmp(cmd, "seta") || !q_strcasecmp(cmd, "setfl")) && argc >= 3)
+		var_name = arg1;
+	else if ((!q_strcasecmp(cmd, "inc") || !q_strcasecmp(cmd, "toggle") || !q_strcasecmp(cmd, "cycle") || !q_strcasecmp(cmd, "reset")) && argc >= 2)
+		var_name = arg1;
+	else if (argc >= 2)
+		var_name = cmd;
+
+	if (!var_name || !*var_name)
+		return false;
+
+	var = Cvar_FindVar (var_name);
+	curr = Cvar_MapLock_FindActive (var);
+	if (curr)
+	{
+		curr->server_stuffed = true;
+		curr->server_pending = true;
+		curr->server_pending_batch = map_scoped_mark_sequence;
+		curr->user_value_changed = false;
+		curr->user_flags_changed = false;
+		return true;
+	}
+
+	if (!Cvar_MapScoped_CanSaveServerStuff (var))
+		return false;
+
+	curr = Cvar_MapScoped_Save (var);
+	curr->server_stuffed = true;
+	curr->server_pending = true;
+	curr->server_pending_batch = map_scoped_mark_sequence;
+	curr->user_value_changed = false;
+	curr->user_flags_changed = false;
+	return true;
+}
+
+static void Cvar_MapScoped_CommitServerStuff_f (void)
+{
+	mapcvar_t	*curr;
+	unsigned int	batch;
+
+	if (Cmd_Argc() != 2 || !Cvar_MapScoped_ConsumeCommitToken (Cmd_Argv(1), &batch))
+		return;
+
+	for (curr = map_scoped_cvars ; curr ; curr = curr->next)
+	{
+		if (!curr->server_pending || curr->server_pending_batch != batch)
+			continue;
+
+		if (curr->server_value)
+			Z_Free (curr->server_value);
+		curr->server_value = Z_Strdup (curr->cvar->string ? curr->cvar->string : "");
+		curr->server_flags = curr->cvar->flags;
+		curr->server_pending = false;
+		curr->server_pending_batch = 0;
+	}
+}
+
 qboolean Cvar_MapLock_GetSavedState (const cvar_t *var, const char **value, unsigned int *flags)
 {
 	mapcvar_t	*curr;
+	qboolean	restore_value;
+	qboolean	restore_flags;
 
 	curr = Cvar_MapLock_FindSaved (var);
 	if (!curr)
 		return false;
 
+	restore_value = Cvar_MapScoped_ShouldRestoreValue (curr);
+	restore_flags = Cvar_MapScoped_ShouldRestoreFlags (curr);
+	if (!restore_value && !restore_flags)
+		return false;
+
 	if (value)
-		*value = curr->old_value;
+		*value = restore_value ? curr->old_value : curr->cvar->string;
 	if (flags)
-		*flags = curr->old_flags;
+		*flags = restore_flags ? curr->old_flags : curr->cvar->flags;
 	return true;
 }
 
@@ -767,21 +1054,25 @@ static void Cvar_MapLock_Status_f (void)
 	mapcvar_t	*curr;
 	int		count;
 
-	if (!map_locked_cvars)
+	if (!map_scoped_cvars)
 	{
-		Con_Printf ("No map-locked cvars.\n");
+		Con_Printf ("No map-scoped cvars.\n");
 		return;
 	}
 
-	Con_Printf ("Map-locked cvars:\n");
+	Con_Printf ("Map-scoped cvars:\n");
 	count = 0;
-	for (curr = map_locked_cvars ; curr ; curr = curr->next)
+	for (curr = map_scoped_cvars ; curr ; curr = curr->next)
 	{
-		Con_Printf ("  %s saved \"%s\" effective \"%s\"\n",
-			curr->cvar->name, curr->old_value, curr->cvar->string);
+		const char *scope = curr->locked
+			? (curr->server_stuffed ? "locked/stuffcmd" : "locked")
+			: "stuffcmd";
+
+		Con_Printf ("  %s [%s] saved \"%s\" effective \"%s\"\n",
+			curr->cvar->name, scope, curr->old_value, curr->cvar->string);
 		count++;
 	}
-	Con_Printf ("%i map-locked cvar%s.\n", count, count == 1 ? "" : "s");
+	Con_Printf ("%i map-scoped cvar%s.\n", count, count == 1 ? "" : "s");
 }
 
 /*
@@ -862,7 +1153,10 @@ void Cvar_Reset (const char *name)
 	else if (var->flags & CVAR_LOCKED)
 		Con_Printf ("\"%s\" is locked by the current map\n", var->name);
 	else
+	{
+		Cvar_MapScoped_NoteUserChange (var, false);
 		Cvar_SetQuick (var, var->default_string);
+	}
 }
 
 void Cvar_SetQuick (cvar_t *var, const char *value)
@@ -881,6 +1175,7 @@ void Cvar_SetQuick (cvar_t *var, const char *value)
 		if (!strcmp(var->string, value))
 			return;	// no change
 
+		Cvar_MapScoped_NoteUserChange (var, false);
 		var->flags |= CVAR_CHANGED;
 		len = Q_strlen (value);
 		if (len != Q_strlen(var->string))
@@ -975,6 +1270,10 @@ void Cvar_Set (const char *var_name, const char *value)
 		Con_Printf ("Cvar_Set: variable %s not found\n", var_name);
 		return;
 	}
+
+	// Avoid map-scoped ownership notes and special Cvar_Set side effects after a no-op set.
+	if (var->flags & (CVAR_ROM|CVAR_LOCKED))
+		return;
 
 	Cvar_SetQuick (var, value);
 
