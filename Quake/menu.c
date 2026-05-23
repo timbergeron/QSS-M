@@ -26382,6 +26382,94 @@ static qboolean M_Demos_TickBackgroundParse(void)
     return parsed > 0;
 }
 
+#define DEMOS_SEARCH_MAX_TERMS	8
+#define DEMOS_SEARCH_TERM_SIZE	32
+
+typedef struct
+{
+	char text[DEMOS_SEARCH_TERM_SIZE];
+} demosearchterm_t;
+
+static int M_Demos_ParseSearchTerms(const char *search, demosearchterm_t *terms, int max_terms)
+{
+	int count = 0;
+	const char *p = search;
+
+	while (*p && count < max_terms)
+	{
+		char *out;
+		size_t outlen = 0;
+		size_t outsize;
+		qboolean quoted = false;
+
+		while (q_isspace((unsigned char)*p))
+			++p;
+		if (!*p)
+			break;
+
+		if (*p == '"')
+		{
+			quoted = true;
+			++p;
+		}
+
+		out = terms[count].text;
+		outsize = sizeof(terms[count].text);
+		while (*p && ((!quoted && !q_isspace((unsigned char)*p)) || (quoted && *p != '"')))
+		{
+			if (outlen < outsize - 1)
+				out[outlen++] = *p;
+			++p;
+		}
+		out[outlen] = '\0';
+
+		if (quoted && *p == '"')
+			++p;
+
+		if (outlen > 0)
+			++count;
+	}
+
+	return count;
+}
+
+static qboolean M_Demos_FieldMatchesTerm(const char *field, const char *term)
+{
+	return field && field[0] && q_strcasestr(field, term);
+}
+
+static qboolean M_Demos_ItemMatchesTerm(demoitem_t *di, const char *term, const char *map_desc)
+{
+	if (M_Demos_FieldMatchesTerm(di->name, term) ||
+		M_Demos_FieldMatchesTerm(di->display, term) ||
+		M_Demos_FieldMatchesTerm(di->date, term) ||
+		M_Demos_FieldMatchesTerm(di->map, term) ||
+		M_Demos_FieldMatchesTerm(map_desc, term))
+		return true;
+
+	if (di->parsed &&
+		((di->players[0] && unfun_match(term, di->players)) ||
+		 M_Demos_FieldMatchesTerm(di->duration, term) ||
+		 M_Demos_FieldMatchesTerm(di->filesize, term)))
+		return true;
+
+	return false;
+}
+
+static qboolean M_Demos_ItemMatchesSearch(demoitem_t *di, const demosearchterm_t *terms,
+	int term_count, const char *map_desc)
+{
+	int i;
+
+	for (i = 0; i < term_count; ++i)
+	{
+		if (!M_Demos_ItemMatchesTerm(di, terms[i].text, map_desc))
+			return false;
+	}
+
+	return true;
+}
+
 // preserve_view=true: keep the user's scroll position when possible.  Used by
 // the background-parse tick so newly-matched items can stream into the list
 // without scroll-jumping under the user.  Keystroke callers pass false and
@@ -26390,6 +26478,9 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
 {
     int i;
     qboolean has_search = demosmenu.list.search.len > 0;
+    demosearchterm_t terms[DEMOS_SEARCH_MAX_TERMS];
+    int term_count = has_search ? M_Demos_ParseSearchTerms(demosmenu.list.search.text,
+		terms, (int)Q_COUNTOF(terms)) : 0;
     int prev_demo_idx = -1;
     int prev_scroll = demosmenu.list.scroll;
 
@@ -26421,23 +26512,14 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
         // on extralevels[].data once ExtraMaps_ParseDescriptions has run;
         // M_Demos_Init kicks that off so this lookup is usually populated.
         const char *map_desc = NULL;
-        if (has_search && di->map[0] && descriptionsParsed)
+        if (term_count > 0 && di->map[0] && descriptionsParsed)
         {
             filelist_item_t *level = FindLevelInList(extralevels, di->map);
             if (level && level->data[0])
                 map_desc = level->data;
         }
 
-        if (!has_search ||
-            q_strcasestr(di->name, demosmenu.list.search.text) ||
-            q_strcasestr(di->display, demosmenu.list.search.text) ||
-            q_strcasestr(di->date, demosmenu.list.search.text) ||
-            (di->map[0] && q_strcasestr(di->map, demosmenu.list.search.text)) ||
-            (map_desc && q_strcasestr(map_desc, demosmenu.list.search.text)) ||
-            (di->parsed && (
-                unfun_match(demosmenu.list.search.text, di->players) ||
-                q_strcasestr(di->duration, demosmenu.list.search.text) ||
-                q_strcasestr(di->filesize, demosmenu.list.search.text))))
+        if (term_count <= 0 || M_Demos_ItemMatchesSearch(di, terms, term_count, map_desc))
         {
             VEC_PUSH(demosmenu.filtered_indices, i);
         }
