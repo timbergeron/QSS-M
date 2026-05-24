@@ -50,7 +50,7 @@ static stdio_buffer_t *Buf_Alloc(FILE *f)
 	stdio_buffer_t *buf = (stdio_buffer_t *) calloc(1, sizeof(stdio_buffer_t));
 
 	if (!buf)
-		return NULL;
+		Sys_Error ("Buf_Alloc: out of memory");
 
 	buf->f = f;
 	return buf;
@@ -65,7 +65,7 @@ static inline int Buf_GetC(stdio_buffer_t *buf)
 {
 	if (buf->pos >= buf->size)
 	{
-		buf->size = fread(buf->buffer, 1, sizeof(buf->buffer), buf->f);
+		buf->size = (int)fread(buf->buffer, 1, sizeof(buf->buffer), buf->f);
 		buf->pos = 0;
 		
 		if (buf->size == 0)
@@ -126,8 +126,18 @@ static byte *Image_LoadSTBI(FILE *f, int *width, int *height)
 	if (heap)
 	{	//this is silly, but we do it for consistency.
 		//frankly, most people should be using tga-inside-pk3.
-		byte *hunk = Hunk_Alloc(*width**height*4);
-		memcpy(hunk, heap, *width**height*4);
+		size_t numbytes;
+		byte *hunk;
+
+		if (*width <= 0 || *height <= 0 || (size_t)*width > (size_t)INT_MAX / (size_t)*height / 4)
+		{
+			free(heap);
+			return NULL;
+		}
+
+		numbytes = (size_t)*width * (size_t)*height * 4;
+		hunk = Hunk_AllocNoFill((int)numbytes);
+		memcpy(hunk, heap, numbytes);
 		free(heap);
 		return hunk;
 	}
@@ -208,7 +218,8 @@ static byte *Image_LoadDDS(FILE *f, int *width, int *height, enum srcformat *fmt
 	const char *fname = loadfilename;	//parameters as globals is a shitty practise, but I'm too lazy to fix up the other loaders too.
 	int nummips;
 	int mipnum;
-	int datasize;
+	int mark;
+	size_t datasize;
 	byte *ret;
 	enum srcformat encoding = SRC_EXTERNAL;
 
@@ -228,7 +239,9 @@ static byte *Image_LoadDDS(FILE *f, int *width, int *height, enum srcformat *fmt
 
 	fmt10header.arraysize = (fmtheader.ddsCaps[1] & 0x200)?6:1; //cubemaps need 6 faces...
 
-	nummips = fmtheader.dwMipMapCount;
+	if (fmtheader.dwMipMapCount > INT_MAX)
+		goto fail;
+	nummips = (int)fmtheader.dwMipMapCount;
 	if (nummips < 1)
 		nummips = 1;
 
@@ -518,10 +531,14 @@ static byte *Image_LoadDDS(FILE *f, int *width, int *height, enum srcformat *fmt
 		//layers = fmt10header.arraysize;
 	}
 
+	if (!fmtheader.dwWidth || !fmtheader.dwHeight ||
+		fmtheader.dwWidth > INT_MAX || fmtheader.dwHeight > INT_MAX)
+		goto fail;
+
 	for (mipnum = 0; ; mipnum++)
 	{
-		int mipwidth = fmtheader.dwWidth >> mipnum;
-		int mipheight = fmtheader.dwHeight >> mipnum;
+		int mipwidth = (int)(fmtheader.dwWidth >> mipnum);
+		int mipheight = (int)(fmtheader.dwHeight >> mipnum);
 		if (!mipwidth && !mipheight)
 			break;
 		mipwidth = q_max(1,mipwidth);	//include the 1*1 mip with non-square textures.
@@ -533,22 +550,24 @@ static byte *Image_LoadDDS(FILE *f, int *width, int *height, enum srcformat *fmt
 		goto fail;
 	}
 
-	datasize = TexMgr_ImageSize(fmtheader.dwWidth, fmtheader.dwHeight, encoding);
-	if (!datasize)
+	datasize = TexMgr_ImageSize((int)fmtheader.dwWidth, (int)fmtheader.dwHeight, encoding);
+	if (!datasize || datasize > INT_MAX)
 		goto fail;	//werid/unsupported
 
 	//just read the mipchain into a new bit of memory and return that.
 	//note that layers and mips are awkward, but we don't support layers here so its just a densely packed pyramid.
-	ret = (byte *) Hunk_Alloc (datasize);
+	mark = Hunk_LowMark ();
+	ret = (byte *) Hunk_AllocNoFill ((int)datasize);
 	if (fread(ret, 1, datasize, f) != datasize) // woods
 	{
+		Hunk_FreeToLowMark (mark);
 		goto fail;
 	}
 
 	fclose(f);
 
-	*width = fmtheader.dwWidth;
-	*height = fmtheader.dwHeight;
+	*width = (int)fmtheader.dwWidth;
+	*height = (int)fmtheader.dwHeight;
 	*fmt = encoding;
 	return ret;
 
@@ -772,7 +791,7 @@ byte *Image_LoadTGA (FILE *fin, int *width, int *height)
 	dataSize = numPixels * 4;
 	upside_down = !(targa_header.attributes & 0x20); //johnfitz -- fix for upside-down targas
 
-	targa_rgba = (byte *) Hunk_Alloc ((int)dataSize);
+	targa_rgba = (byte *) Hunk_AllocNoFill ((int)dataSize);
 
 	if (targa_header.id_length != 0)
 		fseek(fin, targa_header.id_length, SEEK_CUR);  // skip TARGA image comment
@@ -1008,10 +1027,12 @@ Image_LoadPCX
 byte *Image_LoadPCX (FILE *f, int *width, int *height)
 {
 	pcxheader_t	pcx;
-	int			x, y, w, h, readbyte, runlength, start;
+	int			x, y, w, h, readbyte, runlength;
+	long		start;
 	byte		*p, *data;
 	byte		palette[768];
 	stdio_buffer_t  *buf;
+	size_t		pixels;
 
 	start = ftell (f); //save start of file (since we might be inside a pak file, SEEK_SET might not be the start of the pcx)
 
@@ -1035,7 +1056,14 @@ byte *Image_LoadPCX (FILE *f, int *width, int *height)
 	w = pcx.xmax - pcx.xmin + 1;
 	h = pcx.ymax - pcx.ymin + 1;
 
-	data = (byte *) Hunk_Alloc((w*h+1)*4); //+1 to allow reading padding byte on last line
+	if (w <= 0 || h <= 0 || pcx.bytes_per_line < w)
+		Sys_Error ("'%s' has invalid PCX dimensions", loadfilename);
+
+	if ((size_t)w > ((size_t)INT_MAX / 4) / (size_t)h)
+		Sys_Error ("'%s' is too large", loadfilename);
+
+	pixels = (size_t)w * (size_t)h;
+	data = (byte *) Hunk_AllocNoFill((int)(pixels * 4));
 
 	//load palette
 	fseek (f, start + com_filesize - 768, SEEK_SET);
@@ -1056,22 +1084,29 @@ byte *Image_LoadPCX (FILE *f, int *width, int *height)
 		for (x=0; x<(pcx.bytes_per_line); ) //read the extra padding byte if necessary
 		{
 			readbyte = Buf_GetC(buf);
+			if (readbyte == EOF)
+				Sys_Error("Failed to read PCX data from '%s'", loadfilename);
 
 			if(readbyte >= 0xC0)
 			{
 				runlength = readbyte & 0x3F;
 				readbyte = Buf_GetC(buf);
+				if (readbyte == EOF)
+					Sys_Error("Failed to read PCX data from '%s'", loadfilename);
 			}
 			else
 				runlength = 1;
 
-			while(runlength--)
+			while(runlength-- && x < pcx.bytes_per_line)
 			{
-				p[0] = palette[readbyte*3];
-				p[1] = palette[readbyte*3+1];
-				p[2] = palette[readbyte*3+2];
-				p[3] = 255;
-				p += 4;
+				if (x < w)
+				{
+					p[0] = palette[readbyte*3];
+					p[1] = palette[readbyte*3+1];
+					p[2] = palette[readbyte*3+2];
+					p[3] = 255;
+					p += 4;
+				}
 				x++;
 			}
 		}
@@ -1116,16 +1151,28 @@ byte *Image_LoadLMP (FILE *f, int *width, int *height, enum srcformat *fmt)
 	qpic.width = LittleLong (qpic.width);
 	qpic.height = LittleLong (qpic.height);
 
-	pix = qpic.width*qpic.height;
+	if (!qpic.width || !qpic.height || qpic.width > INT_MAX || qpic.height > INT_MAX)
+	{
+		fclose (f);
+		return NULL;
+	}
 
-	if (com_filesize != sizeof (qpic) + pix)
+	if ((size_t)qpic.width > (size_t)INT_MAX / (size_t)qpic.height)
+	{
+		fclose (f);
+		return NULL;
+	}
+
+	pix = (size_t)qpic.width * (size_t)qpic.height;
+
+	if (com_filesize != (qofs_t)(sizeof (qpic) + pix))
 	{
 		fclose (f);
 		return NULL;
 	}
 
 	mark = Hunk_LowMark ();
-	data = (byte *) Hunk_Alloc(pix); //+1 to allow reading padding byte on last line
+	data = (byte *) Hunk_AllocNoFill((int)pix);
 	if (fread(data, 1, pix, f) != pix) // woods
 	{
 		Hunk_FreeToLowMark (mark);

@@ -32,6 +32,28 @@ ALIAS MODEL DISPLAY LIST GENERATION
 =================================================================
 */
 
+static size_t GLMesh_CheckedSize (size_t count, size_t size, const char *caller)
+{
+	if (size && count > SIZE_MAX / size)
+		Sys_Error ("%s: allocation too large", caller);
+	return count * size;
+}
+
+static int GLMesh_CheckedHunkSize (size_t count, size_t size, const char *caller)
+{
+	size_t bytes = GLMesh_CheckedSize (count, size, caller);
+	if (bytes > (size_t)INT_MAX)
+		Sys_Error ("%s: allocation too large", caller);
+	return (int)bytes;
+}
+
+static void GLMesh_AddCheckedSize (size_t *total, size_t bytes, const char *caller)
+{
+	if (*total > SIZE_MAX - bytes || *total + bytes > (size_t)INT_MAX)
+		Sys_Error ("%s: allocation too large", caller);
+	*total += bytes;
+}
+
 /*
 ================
 GL_MakeAliasModelDisplayLists
@@ -53,10 +75,10 @@ void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 
 	// there can never be more than this number of verts and we just put them all on the hunk
 	// (each vertex can be used twice, once with the original UVs and once with the seam adjustment)
-	desc = (aliasmesh_t *) Hunk_Alloc (sizeof (aliasmesh_t) * paliashdr->numverts * 2);
+	desc = (aliasmesh_t *) Hunk_Alloc (GLMesh_CheckedHunkSize ((size_t)paliashdr->numverts * 2, sizeof (aliasmesh_t), "GL_MakeAliasModelDisplayLists"));
 
 	// there will always be this number of indexes
-	indexes = (unsigned short *) Hunk_Alloc (sizeof (unsigned short) * paliashdr->numtris * 3);
+	indexes = (unsigned short *) Hunk_Alloc (GLMesh_CheckedHunkSize ((size_t)paliashdr->numtris * 3, sizeof (unsigned short), "GL_MakeAliasModelDisplayLists"));
 
 	paliashdr->indexes = (intptr_t) indexes - (intptr_t) paliashdr;
 	paliashdr->meshdesc = (intptr_t) desc - (intptr_t) paliashdr;
@@ -67,7 +89,7 @@ void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 
 	// each pair of elements in the remap array corresponds to one source vertex
 	// each value is the final index + 1, or 0 if the corresponding vertex hasn't been emitted yet
-	remap = (unsigned short *) Hunk_Alloc (paliashdr->numverts * 2 * sizeof (remap[0]));
+	remap = (unsigned short *) Hunk_Alloc (GLMesh_CheckedHunkSize ((size_t)paliashdr->numverts * 2, sizeof (remap[0]), "GL_MakeAliasModelDisplayLists"));
 
 	for (i = 0; i < paliashdr->numtris; i++)
 	{
@@ -112,7 +134,7 @@ void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 	switch(paliashdr->poseverttype)
 	{
 	case PV_QUAKEFORGE:
-		verts = (trivertx_t *) Hunk_Alloc (paliashdr->nummorphposes * paliashdr->numverts_vbo*2 * sizeof(*verts));
+		verts = (trivertx_t *) Hunk_AllocNoFill (GLMesh_CheckedHunkSize ((size_t)paliashdr->nummorphposes * (size_t)paliashdr->numverts_vbo * 2, sizeof(*verts), "GL_MakeAliasModelDisplayLists"));
 		paliashdr->vertexes = (byte *)verts - (byte *)paliashdr;
 		for (i=0 ; i<paliashdr->nummorphposes ; i++)
 			for (j=0 ; j<paliashdr->numverts_vbo ; j++)
@@ -122,7 +144,7 @@ void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *paliashdr)
 			}
 		break;
 	case PV_QUAKE1:
-		verts = (trivertx_t *) Hunk_Alloc (paliashdr->nummorphposes * paliashdr->numverts_vbo * sizeof(*verts));
+		verts = (trivertx_t *) Hunk_AllocNoFill (GLMesh_CheckedHunkSize ((size_t)paliashdr->nummorphposes * (size_t)paliashdr->numverts_vbo, sizeof(*verts), "GL_MakeAliasModelDisplayLists"));
 		paliashdr->vertexes = (byte *)verts - (byte *)paliashdr;
 		for (i=0 ; i<paliashdr->nummorphposes ; i++)
 			for (j=0 ; j<paliashdr->numverts_vbo ; j++)
@@ -150,14 +172,14 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 	//we always need vertex array data.
 	//if we don't support vbos(gles?) then we just use system memory.
 	//if we're not using glsl(gles1?), then we don't actually need all the data, but we do still need some so its easier to just alloc the lot.
-	int totalvbosize = 0;
+	size_t totalvbosize = 0;
 	const aliasmesh_t *desc;
 	const void *trivertexes;
 	byte *ebodata;
 	byte *vbodata;
 	int f;
 	aliashdr_t *hdr;
-	unsigned int numindexes, numverts;
+	size_t numindexes, numverts;
 	intptr_t stofs;
 	intptr_t vertofs;
 
@@ -167,24 +189,27 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 	//count how much space we're going to need.
 	for(hdr = mainhdr, numverts = 0, numindexes = 0; ; )
 	{
+		if (hdr->nummorphposes < 0 || hdr->numverts_vbo < 0 || hdr->numindexes < 0)
+			Sys_Error ("GLMesh_LoadVertexBuffer: invalid alias mesh counts");
+
 		switch(hdr->poseverttype)
 		{
 		case PV_QUAKE1:
-			totalvbosize += (hdr->nummorphposes * hdr->numverts_vbo * sizeof (meshxyz_mdl_t)); // ericw -- what RMQEngine called nummeshframes is called numposes in QuakeSpasm
+			GLMesh_AddCheckedSize (&totalvbosize, GLMesh_CheckedSize ((size_t)hdr->nummorphposes * (size_t)hdr->numverts_vbo, sizeof (meshxyz_mdl_t), "GLMesh_LoadVertexBuffer"), "GLMesh_LoadVertexBuffer"); // ericw -- what RMQEngine called nummeshframes is called numposes in QuakeSpasm
 			break;
 		case PV_QUAKEFORGE:
-			totalvbosize += (hdr->nummorphposes * hdr->numverts_vbo * sizeof (meshxyz_mdl16_t));
+			GLMesh_AddCheckedSize (&totalvbosize, GLMesh_CheckedSize ((size_t)hdr->nummorphposes * (size_t)hdr->numverts_vbo, sizeof (meshxyz_mdl16_t), "GLMesh_LoadVertexBuffer"), "GLMesh_LoadVertexBuffer");
 			break;
 		case PV_QUAKE3:
-			totalvbosize += (hdr->nummorphposes * hdr->numverts_vbo * sizeof (meshxyz_md3_t));
+			GLMesh_AddCheckedSize (&totalvbosize, GLMesh_CheckedSize ((size_t)hdr->nummorphposes * (size_t)hdr->numverts_vbo, sizeof (meshxyz_md3_t), "GLMesh_LoadVertexBuffer"), "GLMesh_LoadVertexBuffer");
 			break;
 		case PV_IQM:
-			totalvbosize += (hdr->nummorphposes * hdr->numverts_vbo * sizeof (iqmvert_t));
+			GLMesh_AddCheckedSize (&totalvbosize, GLMesh_CheckedSize ((size_t)hdr->nummorphposes * (size_t)hdr->numverts_vbo, sizeof (iqmvert_t), "GLMesh_LoadVertexBuffer"), "GLMesh_LoadVertexBuffer");
 			break;
 		}
 
-		numverts += hdr->numverts_vbo;
-		numindexes += hdr->numindexes;
+		GLMesh_AddCheckedSize (&numverts, (size_t)hdr->numverts_vbo, "GLMesh_LoadVertexBuffer");
+		GLMesh_AddCheckedSize (&numindexes, (size_t)hdr->numindexes, "GLMesh_LoadVertexBuffer");
 
 		if (hdr->nextsurface)
 			hdr = (aliashdr_t*)((byte*)hdr + hdr->nextsurface);
@@ -194,15 +219,17 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 	hdr = NULL;
 
 	vertofs = 0;
+	if (totalvbosize > (size_t)INT_MAX - 7)
+		Sys_Error ("GLMesh_LoadVertexBuffer: allocation too large");
 	totalvbosize = (totalvbosize+7)&~7;	//align it.
-	stofs = totalvbosize;
-	totalvbosize += (numverts * sizeof (meshst_t));
+	stofs = (intptr_t)totalvbosize;
+	GLMesh_AddCheckedSize (&totalvbosize, GLMesh_CheckedSize (numverts, sizeof (meshst_t), "GLMesh_LoadVertexBuffer"), "GLMesh_LoadVertexBuffer");
 
 	if (!totalvbosize) return;
 	if (!numindexes) return;
 
 	//create an elements buffer
-	ebodata = (byte *) malloc(numindexes * sizeof(unsigned short));
+	ebodata = (byte *) malloc(GLMesh_CheckedSize (numindexes, sizeof(unsigned short), "GLMesh_LoadVertexBuffer"));
 	if (!ebodata)
 		return;	//fatal
 
@@ -224,7 +251,7 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 		trivertexes = (void *) ((byte *)hdr + hdr->vertexes);
 
 		//submit the index data.
-		hdr->eboofs = numindexes * sizeof (unsigned short);
+		hdr->eboofs = (intptr_t)GLMesh_CheckedSize (numindexes, sizeof (unsigned short), "GLMesh_LoadVertexBuffer");
 		numindexes += hdr->numindexes;
 		memcpy(ebodata + hdr->eboofs, (short *) ((byte *) hdr + hdr->indexes), hdr->numindexes * sizeof (unsigned short));
 
@@ -374,13 +401,13 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 		GL_DeleteBuffersFunc (1, &m->meshindexesvbo);
 		GL_GenBuffersFunc (1, &m->meshindexesvbo);
 		GL_BindBufferFunc (GL_ELEMENT_ARRAY_BUFFER, m->meshindexesvbo);
-		GL_BufferDataFunc (GL_ELEMENT_ARRAY_BUFFER, numindexes * sizeof (unsigned short), ebodata, GL_STATIC_DRAW);
+		GL_BufferDataFunc (GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)GLMesh_CheckedSize (numindexes, sizeof (unsigned short), "GLMesh_LoadVertexBuffer"), ebodata, GL_STATIC_DRAW);
 
 		// upload vertexes buffer
 		GL_DeleteBuffersFunc (1, &m->meshvbo);
 		GL_GenBuffersFunc (1, &m->meshvbo);
 		GL_BindBufferFunc (GL_ARRAY_BUFFER, m->meshvbo);
-		GL_BufferDataFunc (GL_ARRAY_BUFFER, totalvbosize, vbodata, GL_STATIC_DRAW);
+		GL_BufferDataFunc (GL_ARRAY_BUFFER, (GLsizeiptr)totalvbosize, vbodata, GL_STATIC_DRAW);
 
 		free (vbodata);
 		free (ebodata);
@@ -616,10 +643,12 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 	numsurfs = LittleLong (pinheader->numSurfaces);
 	numframes = LittleLong(pinheader->numFrames);
 
+	if (numframes < 1)
+		Sys_Error ("%s has no frames", diskname);
 	if (numframes > MAXALIASFRAMES)
 		Sys_Error ("%s has too many frames (%i vs %i)",
 				 diskname, numframes, MAXALIASFRAMES);
-	if (!numsurfs)
+	if (numsurfs < 1)
 		Sys_Error ("%s has nosurfaces", diskname);
 
 	pinframes = (md3Frame_t*)((byte*)buffer + LittleLong(pinheader->ofsFrames));
@@ -627,7 +656,11 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 // allocate space for a working header, plus all the data except the frames,
 // skin and group info
 //
+	if ((size_t)(numframes - 1) > ((size_t)INT_MAX - sizeof(aliashdr_t)) / sizeof(outhdr->frames[0]))
+		Sys_Error ("%s header too large", diskname);
 	size	= sizeof(aliashdr_t) + (numframes-1) * sizeof (outhdr->frames[0]);
+	if ((size_t)numsurfs > (size_t)INT_MAX / (size_t)size)
+		Sys_Error ("%s header too large", diskname);
 	outhdr = (aliashdr_t *) Hunk_AllocName (size * numsurfs, loadname);
 
 	for (numskinfiles = 0; numskinfiles < countof(skinfile); numskinfiles++)
@@ -644,6 +677,8 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 			Sys_Error ("%s corrupt surface ident", diskname);
 		if (LittleLong(pinsurface->numFrames) != numframes)
 			Sys_Error ("%s mismatched framecounts", diskname);
+		if (LittleLong(pinsurface->ofsEnd) <= 0)
+			Sys_Error ("%s corrupt surface size", diskname);
 
 		if (surf+1 < numsurfs)
 			osurf->nextsurface = size;
@@ -652,8 +687,10 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 		
 		osurf->poseverttype = PV_QUAKE3;
 		osurf->numverts_vbo = osurf->numverts = LittleLong(pinsurface->numVerts);
+		if (osurf->numverts <= 0 || osurf->numverts > 0xffff)
+			Sys_Error ("%s has invalid vertex count (%i)", diskname, osurf->numverts);
 		pinvert = (md3XyzNormal_t*)((byte*)pinsurface + LittleLong(pinsurface->ofsXyzNormals));
-		poutvert = (md3XyzNormal_t *) Hunk_Alloc (numframes * osurf->numverts * sizeof(*poutvert));
+		poutvert = (md3XyzNormal_t *) Hunk_Alloc (GLMesh_CheckedHunkSize ((size_t)numframes * (size_t)osurf->numverts, sizeof(*poutvert), "Mod_LoadMD3Model"));
 		osurf->vertexes = (byte *)poutvert - (byte *)osurf;
 		for (ival = 0; ival < numframes; ival++)
 		{
@@ -676,14 +713,21 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 		osurf->nummorphposes = osurf->numframes = numframes;
 
 		osurf->numtris = LittleLong(pinsurface->numTriangles);
+		if (osurf->numtris <= 0 || (size_t)osurf->numtris > (size_t)INT_MAX / 3)
+			Sys_Error ("%s has invalid triangle count (%i)", diskname, osurf->numtris);
 		osurf->numindexes = osurf->numtris*3;
 		pintriangle = (md3Triangle_t*)((byte*)pinsurface + LittleLong(pinsurface->ofsTriangles));
-		poutindexes = (unsigned short *) Hunk_Alloc (sizeof (*poutindexes) * osurf->numindexes);
+		poutindexes = (unsigned short *) Hunk_Alloc (GLMesh_CheckedHunkSize ((size_t)osurf->numindexes, sizeof (*poutindexes), "Mod_LoadMD3Model"));
 		osurf->indexes = (intptr_t) poutindexes - (intptr_t) osurf;
 		for (ival = 0; ival < osurf->numtris; ival++, pintriangle++, poutindexes+=3)
 		{
 			for (j = 0; j < 3; j++)
-				poutindexes[j] = LittleLong(pintriangle->indexes[j]);
+			{
+				int index = LittleLong(pintriangle->indexes[j]);
+				if (index < 0 || index >= osurf->numverts)
+					Sys_Error ("%s has invalid triangle index (%i)", diskname, index);
+				poutindexes[j] = (unsigned short)index;
+			}
 		}
 
 		for (j = 0; j < 3; j++)
@@ -699,12 +743,14 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 		//load the textures
 		if (!isDedicated)
 		{
-			int numshaders = pinsurface->numShaders;
+			int numshaders = LittleLong(pinsurface->numShaders);
+			if (numshaders < 0)
+				numshaders = 0;
 			pinshader = (md3Shader_t*)((byte*)pinsurface + LittleLong(pinsurface->ofsShaders));
 			if (numskinfiles)
 				osurf->numskins = numskinfiles;
 			else
-				osurf->numskins = q_max(1, q_min(countof(osurf->textures), numshaders));
+				osurf->numskins = q_max(1, q_min((int)countof(osurf->textures), numshaders));
 			for (j = 0; j < osurf->numskins; j++, pinshader++)
 			{
 				char texturename[MAX_QPATH];
@@ -764,7 +810,7 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 
 		//and figure out the texture coords properly, now we know the actual sizes.
 		pinst = (md3St_t*)((byte*)pinsurface + LittleLong(pinsurface->ofsSt));
-		poutst = (aliasmesh_t *) Hunk_Alloc (sizeof (*poutst) * osurf->numverts);
+		poutst = (aliasmesh_t *) Hunk_Alloc (GLMesh_CheckedHunkSize ((size_t)osurf->numverts, sizeof (*poutst), "Mod_LoadMD3Model"));
 		osurf->meshdesc = (intptr_t) poutst - (intptr_t) osurf;
 		for (j = 0; j < osurf->numverts; j++)
 		{
@@ -773,6 +819,19 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 			poutst[j].st[1] = pinst[j].t;
 		}
 	}
+	for (j = 0; (unsigned int)j < numskinfiles; j++)
+		free (skinfile[j]);
+
+//
+// make sure pointer-relative alias data stayed inside one hunk segment before
+// any consumer walks those offsets.
+//
+	end = Hunk_LowMark ();
+	total = end - start;
+
+	if (!Hunk_IsContiguous (start, end))
+		Sys_Error ("Mod_LoadMD3Model: %s spans multiple hunk segments (try a larger -heapsize)", mod->name);
+
 	GLMesh_LoadVertexBuffer (mod, outhdr);
 
 	//small violation of the spec, but it seems like noone else uses it.
@@ -788,9 +847,6 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 //
 // move the complete, relocatable alias model to the cache
 //
-	end = Hunk_LowMark ();
-	total = end - start;
-
 	Cache_Alloc (&mod->cache, total, loadname);
 	if (!mod->cache.data)
 		return;
@@ -1241,8 +1297,8 @@ void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer)
 	int						ival, j, a;
 	int						numsurfs, surf;
 	aliashdr_t				*outhdr;
-	int						numverts, firstidx, firstvert;
-	int						numanims;
+	int						numverts, numtriangles, firstidx, firstvert;
+	int						numanims, numhdrframes;
 
 	bonepose_t				*outposes;
 	boneinfo_t				*outbones;
@@ -1261,17 +1317,27 @@ void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer)
 	pintext = (const char*)buffer + LittleLong(pinheader->ofs_text);
 
 	numsurfs = LittleLong (pinheader->num_meshes);
-	if (!numsurfs)
+	if (numsurfs < 1)
 		Sys_Error ("%s has no surfaces (animation-only iqms are not supported)", mod->name);
-	if (pinheader->num_vertexes > 0xffff)	//indexes is an unsigned short.
-		Sys_Error ("%s has too many verts (%u>%u)", mod->name, pinheader->num_vertexes, 0xffffu);
-
-	numanims = LittleLong (pinheader->num_anims);
-	size	= sizeof(aliashdr_t) + q_max(1,numanims-1) * sizeof (outhdr->frames[0]);
-	outhdr = (aliashdr_t *) Hunk_AllocName (size * numsurfs, loadname);
 
 	numverts = LittleLong(pinheader->num_vertexes);
-	poutvert = (iqmvert_t *) Hunk_Alloc (sizeof (*poutvert) * numverts);
+	if (numverts < 0 || numverts > 0xffff)	//indexes is an unsigned short.
+		Sys_Error ("%s has too many verts (%i>%u)", mod->name, numverts, 0xffffu);
+	numtriangles = LittleLong(pinheader->num_triangles);
+	if (numtriangles < 0)
+		Sys_Error ("%s has invalid triangle count (%i)", mod->name, numtriangles);
+	numanims = LittleLong (pinheader->num_anims);
+	if (numanims < 0 || numanims > MAXALIASFRAMES)
+		Sys_Error ("%s has invalid animation count (%i)", mod->name, numanims);
+	numhdrframes = q_max(1, numanims);
+	if ((size_t)(numhdrframes - 1) > ((size_t)INT_MAX - sizeof(aliashdr_t)) / sizeof(outhdr->frames[0]))
+		Sys_Error ("%s header too large", mod->name);
+	size	= sizeof(aliashdr_t) + (numhdrframes - 1) * sizeof (outhdr->frames[0]);
+	if ((size_t)numsurfs > (size_t)INT_MAX / (size_t)size)
+		Sys_Error ("%s header too large", mod->name);
+	outhdr = (aliashdr_t *) Hunk_AllocName (size * numsurfs, loadname);
+
+	poutvert = (iqmvert_t *) Hunk_Alloc (GLMesh_CheckedHunkSize ((size_t)numverts, sizeof (*poutvert), "Mod_LoadIQMModel"));
 	for (j = 0; j < numverts; j++)	//initialise verts, just in case.
 		poutvert[j].rgba[0] = poutvert[j].rgba[1] = poutvert[j].rgba[2] = poutvert[j].rgba[3] = poutvert[j].weight[0] = 1;
 	for (a = 0; a < LittleLong(pinheader->num_vertexarrays); a++)
@@ -1293,13 +1359,17 @@ void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer)
 
 	numposes = LittleLong (pinheader->num_frames);
 	numjoints = LittleLong(pinheader->num_poses);
-	if (pinheader->num_poses == pinheader->num_joints)
+	if (numposes < 0 || numjoints < 0)
+		Sys_Error ("%s has invalid skeletal counts", mod->name);
+	if (numjoints > 256)
+		Sys_Error ("%s has too many joints (%i > 256)", mod->name, numjoints);
+	if (numjoints == LittleLong(pinheader->num_joints))
 	{
-		const unsigned short	*pinframedata = (const unsigned short*)((const byte*)buffer + pinheader->ofs_frames);
-		const struct iqmpose	*pinajoint = (const struct iqmpose*)((const byte*)buffer + pinheader->ofs_poses), *p;
+		const unsigned short	*pinframedata = (const unsigned short*)((const byte*)buffer + LittleLong(pinheader->ofs_frames));
+		const struct iqmpose	*pinajoint = (const struct iqmpose*)((const byte*)buffer + LittleLong(pinheader->ofs_poses)), *p;
 		vec3_t pos, scale;
 		vec4_t quat;
-		outposes = Hunk_Alloc(sizeof(*outposes)*numposes*numjoints);
+		outposes = Hunk_Alloc(GLMesh_CheckedHunkSize ((size_t)numposes * (size_t)numjoints, sizeof(*outposes), "Mod_LoadIQMModel"));
 		for (a = 0; a < numposes; a++)
 		{
 			for (j = 0, p = pinajoint; j < numjoints; j++, p++)
@@ -1330,14 +1400,16 @@ void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer)
 	}
 
 	{
-		const struct iqmjoint	*pinbjoint = (const struct iqmjoint*)((const byte*)buffer + pinheader->ofs_joints);
+		const struct iqmjoint	*pinbjoint = (const struct iqmjoint*)((const byte*)buffer + LittleLong(pinheader->ofs_joints));
 		bonepose_t basepose[256], rel;
 		vec3_t pos, scale;
 		vec4_t quat;
-		outbones = Hunk_Alloc(sizeof(*outbones)*numjoints);
+		outbones = Hunk_Alloc(GLMesh_CheckedHunkSize ((size_t)numjoints, sizeof(*outbones), "Mod_LoadIQMModel"));
 		for (j = 0; j < numjoints; j++)
 		{
 			outbones[j].parent = LittleLong(pinbjoint[j].parent);
+			if (outbones[j].parent < -1 || outbones[j].parent >= j)
+				Sys_Error ("%s has invalid joint parent (%i)", mod->name, outbones[j].parent);
 			q_strlcpy(outbones[j].name, pintext+LittleLong(pinbjoint[j].name), sizeof(outbones[j].name));
 
 			pos[0]   = LittleFloat(pinbjoint[j].translate[0]);
@@ -1367,6 +1439,7 @@ void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer)
 	for (surf = 0, pinsurface = (const struct iqmmesh*)((const byte*)buffer + LittleLong(pinheader->ofs_meshes)); surf < numsurfs; surf++, pinsurface++)
 	{
 		aliashdr_t	*osurf = (aliashdr_t*)((byte*)outhdr + size*surf);
+		int firsttri;
 
 		if (surf+1 < numsurfs)
 			osurf->nextsurface = size;
@@ -1377,21 +1450,33 @@ void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer)
 		osurf->numverts_vbo = osurf->numverts = LittleLong(pinsurface->num_vertexes);
 
 		firstvert = LittleLong(pinsurface->first_vertex);
+		if (firstvert < 0 || osurf->numverts < 0 || firstvert > numverts || osurf->numverts > numverts - firstvert)
+			Sys_Error ("%s has invalid mesh vertex range", mod->name);
 		osurf->vertexes = (intptr_t)(poutvert + firstvert) - (intptr_t)osurf;
 		osurf->numverts = LittleLong(pinsurface->num_vertexes);
 		osurf->nummorphposes = 1;	//as a skeletal model, we do all our animations via bones rather than vertex morphs.
 
 		osurf->numtris = LittleLong(pinsurface->num_triangles);
+		if (osurf->numtris < 0 || (size_t)osurf->numtris > (size_t)INT_MAX / 3)
+			Sys_Error ("%s has invalid mesh triangle count (%i)", mod->name, osurf->numtris);
 		osurf->numindexes = osurf->numtris*3;
-		poutindexes = (unsigned short *) Hunk_Alloc (sizeof (*poutindexes) * osurf->numindexes);
+		poutindexes = (unsigned short *) Hunk_Alloc (GLMesh_CheckedHunkSize ((size_t)osurf->numindexes, sizeof (*poutindexes), "Mod_LoadIQMModel"));
 		osurf->indexes = (intptr_t)poutindexes - (intptr_t)osurf;
 		pintriangle = (const unsigned int*)((const byte*)buffer + LittleLong(pinheader->ofs_triangles));
-		firstidx = LittleLong(pinsurface->first_triangle)*3;
+		firsttri = LittleLong(pinsurface->first_triangle);
+		if (firsttri < 0 || firsttri > numtriangles || osurf->numtris > numtriangles - firsttri || (size_t)firsttri > (size_t)INT_MAX / 3)
+			Sys_Error ("%s has invalid mesh triangle range", mod->name);
+		firstidx = firsttri*3;
 		pintriangle += firstidx;
 		for (j = 0; j < osurf->numindexes; j++)
-			poutindexes[j] = pintriangle[j] - firstvert;
+		{
+			int index = LittleLong(pintriangle[j]);
+			if (index < firstvert || index >= firstvert + osurf->numverts)
+				Sys_Error ("%s has invalid triangle index (%i)", mod->name, index);
+			poutindexes[j] = (unsigned short)(index - firstvert);
+		}
 
-		pinframes = (const struct iqmanim*)((const byte*)buffer + pinheader->ofs_anims);
+		pinframes = (const struct iqmanim*)((const byte*)buffer + LittleLong(pinheader->ofs_anims));
 		for (a = 0; a < numanims; a++, pinframes++)
 		{
 			osurf->frames[a].firstpose = LittleLong(pinframes->first_frame);
@@ -1444,8 +1529,19 @@ void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer)
 
 		//load the textures
 		if (!isDedicated)
-			Mod_LoadIQMSkin (mod, pinheader, osurf, surf, pinheader->num_meshes, pintext + LittleLong(pinsurface->material));
+			Mod_LoadIQMSkin (mod, pinheader, osurf, surf, (unsigned int)numsurfs, pintext + LittleLong(pinsurface->material));
 	}
+
+//
+// make sure pointer-relative alias data stayed inside one hunk segment before
+// any consumer walks those offsets.
+//
+	end = Hunk_LowMark ();
+	total = end - start;
+
+	if (!Hunk_IsContiguous (start, end))
+		Sys_Error ("Mod_LoadIQMModel: %s spans multiple hunk segments (try a larger -heapsize)", mod->name);
+
 	GLMesh_LoadVertexBuffer (mod, outhdr);
 
 	//small violation of the spec, but it seems like noone else uses it.
@@ -1460,9 +1556,6 @@ void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer)
 //
 // move the complete, relocatable alias model to the cache
 //
-	end = Hunk_LowMark ();
-	total = end - start;
-
 	Cache_Alloc (&mod->cache, total, loadname);
 	if (!mod->cache.data)
 		return;
@@ -2089,6 +2182,16 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 	}
 	Z_Free(outposes);
 
+//
+// make sure pointer-relative alias data stayed inside one hunk segment before
+// any consumer walks those offsets.
+//
+	end = Hunk_LowMark ();
+	total = end - start;
+
+	if (!Hunk_IsContiguous (start, end))
+		Sys_Error ("Mod_LoadMD5MeshModel: %s spans multiple hunk segments (try a larger -heapsize)", mod->name);
+
 	GLMesh_LoadVertexBuffer (mod, outhdr);
 
 	//the md5 format does not have its own modelflags, yet we still need to know about trails and rotating etc
@@ -2102,9 +2205,6 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 //
 // move the complete, relocatable alias model to the cache
 //
-	end = Hunk_LowMark ();
-	total = end - start;
-
 	Cache_Alloc (&mod->cache, total, loadname);
 	if (!mod->cache.data)
 		return;

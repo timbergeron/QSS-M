@@ -741,6 +741,8 @@ static void SVFTE_SetupFrames(client_t *client)
 
 	client->numframes = 64;	//must be power-of-two
 	client->frames = malloc(sizeof(*client->frames) * client->numframes);
+	if (!client->frames)
+		Sys_Error ("SVFTE_SetupFrames: out of memory (%u frames)", (unsigned int)client->numframes);
 	client->lastacksequence = (int)0x80000000;
 	memset(client->frames, 0, sizeof(*client->frames) * client->numframes);
 	for (fr = 0; fr < client->numframes; fr++)
@@ -748,12 +750,16 @@ static void SVFTE_SetupFrames(client_t *client)
 
 	client->numpendingentities = qcvm->num_edicts;
 	client->pendingentities_bits = calloc(client->numpendingentities, sizeof(*client->pendingentities_bits));
+	if (!client->pendingentities_bits)
+		Sys_Error ("SVFTE_SetupFrames: out of memory (%u pending entities)", (unsigned int)client->numpendingentities);
 
 	client->pendingentities_bits[0] = UF_REMOVE;
 
 
 	client->numpendingcsqcentities = qcvm->num_edicts;
 	client->pendingcsqcentities_bits = calloc(client->numpendingcsqcentities, sizeof(*client->pendingcsqcentities_bits));
+	if (!client->pendingcsqcentities_bits)
+		Sys_Error ("SVFTE_SetupFrames: out of memory (%u pending CSQC entities)", (unsigned int)client->numpendingcsqcentities);
 }
 static void SVFTE_DroppedFrame(client_t *client, int sequence)
 {
@@ -908,7 +914,10 @@ static void SVFTE_CalcEntityDeltas(client_t *client)
 	if ((int)client->numpendingentities < qcvm->num_edicts)
 	{
 		int newmax = qcvm->num_edicts+64;
-		client->pendingentities_bits = realloc(client->pendingentities_bits, sizeof(*client->pendingentities_bits) * newmax);
+		unsigned int *newbits = realloc(client->pendingentities_bits, sizeof(*client->pendingentities_bits) * newmax);
+		if (!newbits)
+			Sys_Error ("SVFTE_CalcEntityDeltas: out of memory (%d pending entities)", newmax);
+		client->pendingentities_bits = newbits;
 		memset(client->pendingentities_bits+client->numpendingentities, 0, sizeof(*client->pendingentities_bits)*(newmax-client->numpendingentities));
 		client->numpendingentities = newmax;
 	}
@@ -1056,8 +1065,12 @@ static void SVFTE_WriteEntitiesToClient(client_t *client, sizebuf_t *msg, size_t
 		}
 		if (frame->numents == frame->maxents)
 		{
+			void *newents;
 			frame->maxents += 64;
-			frame->ents = realloc(frame->ents, sizeof(*frame->ents)*frame->maxents);
+			newents = realloc(frame->ents, sizeof(*frame->ents)*frame->maxents);
+			if (!newents)
+				Sys_Error ("SVFTE_EmitEntitiesUpdate: out of memory (%d frame entities)", frame->maxents);
+			frame->ents = newents;
 		}
 		frame->ents[frame->numents].num = entnum;
 		frame->ents[frame->numents].ebits = logbits;
@@ -1180,8 +1193,12 @@ sendremove:
 		{
 			if (frame->numents == frame->maxents)
 			{
+				void *newents;
 				frame->maxents += 64;
-				frame->ents = realloc(frame->ents, sizeof(*frame->ents)*frame->maxents);
+				newents = realloc(frame->ents, sizeof(*frame->ents)*frame->maxents);
+				if (!newents)
+					Sys_Error ("SVFTE_EmitCSQCEntitiesUpdate: out of memory (%d frame entities)", frame->maxents);
+				frame->ents = newents;
 			}
 			frame->ents[frame->numents].num = entnum;
 			frame->ents[frame->numents].ebits = 0;
@@ -1310,7 +1327,10 @@ static void SVFTE_BuildSnapshotForClient (client_t *client)
 	if ((int)client->numpendingcsqcentities < maxentities)
 	{	//this is the problem with dynamic memory allocations.
 		int newmax = maxentities+64;
-		client->pendingcsqcentities_bits = realloc(client->pendingcsqcentities_bits, sizeof(*client->pendingcsqcentities_bits) * newmax);
+		unsigned int *newbits = realloc(client->pendingcsqcentities_bits, sizeof(*client->pendingcsqcentities_bits) * newmax);
+		if (!newbits)
+			Sys_Error ("SVFTE_BuildSnapshotForClient: out of memory (%d pending CSQC entities)", newmax);
+		client->pendingcsqcentities_bits = newbits;
 		memset(client->pendingcsqcentities_bits+client->numpendingcsqcentities, 0, sizeof(*client->pendingcsqcentities_bits)*(newmax-client->numpendingcsqcentities));
 		client->numpendingcsqcentities = newmax;
 	}
@@ -1396,8 +1416,12 @@ invisible:
 
 		if (numents == maxents)
 		{
+			void *newents;
 			maxents += 64;
-			ents = realloc(ents, maxents*sizeof(*ents));
+			newents = realloc(ents, maxents*sizeof(*ents));
+			if (!newents)
+				Sys_Error ("SVFTE_BuildSnapshotForClient: out of memory (%u snapshot entities)", (unsigned int)maxents);
+			ents = newents;
 		}
 
 		ents[numents].num = e;
@@ -4147,6 +4171,8 @@ void SV_SpawnServer (const char *server)
 	/* Host_ClearMemory() called above already cleared the whole sv structure */
 	qcvm->max_edicts = CLAMP (MIN_EDICTS,(int)max_edicts.value,MAX_EDICTS); //johnfitz -- max_edicts cvar
 	qcvm->edicts = (edict_t *) malloc (qcvm->max_edicts*qcvm->edict_size); // ericw -- sv.edicts switched to use malloc()
+	if (!qcvm->edicts)
+		Sys_Error ("SV_SpawnServer: out of memory (%d edicts x %d bytes)", qcvm->max_edicts, qcvm->edict_size);
 
 	sv.datagram.maxsize = sizeof(sv.datagram_buf);
 	sv.datagram.cursize = 0;

@@ -2905,16 +2905,8 @@ Filename are reletive to the quake directory.
 Allways appends a 0 byte.
 ============
 */
-#define	LOADFILE_ZONE		0
-#define	LOADFILE_HUNK		1
-#define	LOADFILE_TEMPHUNK	2
-#define	LOADFILE_CACHE		3
-#define	LOADFILE_STACK		4
-#define	LOADFILE_MALLOC		5
-
-static byte	*loadbuf;
-static cache_user_t *loadcache;
-static int	loadsize;
+#define	LOADFILE_HUNK		0
+#define	LOADFILE_MALLOC		1
 
 byte *COM_LoadFile (const char *path, int usehunk, unsigned int *path_id)
 {
@@ -2936,22 +2928,7 @@ byte *COM_LoadFile (const char *path, int usehunk, unsigned int *path_id)
 	switch (usehunk)
 	{
 	case LOADFILE_HUNK:
-		buf = (byte *) Hunk_AllocName (len+1, base);
-		break;
-	case LOADFILE_TEMPHUNK:
-		buf = (byte *) Hunk_TempAlloc (len+1);
-		break;
-	case LOADFILE_ZONE:
-		buf = (byte *) Z_Malloc (len+1);
-		break;
-	case LOADFILE_CACHE:
-		buf = (byte *) Cache_Alloc (loadcache, len+1, base);
-		break;
-	case LOADFILE_STACK:
-		if (len < loadsize)
-			buf = loadbuf;
-		else
-			buf = (byte *) Hunk_TempAlloc (len+1);
+		buf = (byte *) Hunk_AllocNameNoFill (len+1, base);
 		break;
 	case LOADFILE_MALLOC:
 		buf = (byte *) malloc (len+1);
@@ -2976,34 +2953,6 @@ byte *COM_LoadFile (const char *path, int usehunk, unsigned int *path_id)
 byte *COM_LoadHunkFile (const char *path, unsigned int *path_id)
 {
 	return COM_LoadFile (path, LOADFILE_HUNK, path_id);
-}
-
-byte *COM_LoadZoneFile (const char *path, unsigned int *path_id)
-{
-	return COM_LoadFile (path, LOADFILE_ZONE, path_id);
-}
-
-byte *COM_LoadTempFile (const char *path, unsigned int *path_id)
-{
-	return COM_LoadFile (path, LOADFILE_TEMPHUNK, path_id);
-}
-
-void COM_LoadCacheFile (const char *path, struct cache_user_s *cu, unsigned int *path_id)
-{
-	loadcache = cu;
-	COM_LoadFile (path, LOADFILE_CACHE, path_id);
-}
-
-// uses temp hunk if larger than bufsize
-byte *COM_LoadStackFile (const char *path, void *buffer, int bufsize, unsigned int *path_id)
-{
-	byte	*buf;
-
-	loadbuf = (byte *)buffer;
-	loadsize = bufsize;
-	buf = COM_LoadFile (path, LOADFILE_STACK, path_id);
-
-	return buf;
 }
 
 // returns malloc'd memory

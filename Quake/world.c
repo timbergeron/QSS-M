@@ -464,7 +464,7 @@ void SV_TouchLinks (edict_t *ent)
 	int		mark;
 	
 	mark = Hunk_LowMark ();
-	list = (edict_t **) Hunk_Alloc (qcvm->num_edicts*sizeof(edict_t *));
+	list = (edict_t **) Hunk_AllocNoFill (qcvm->num_edicts*sizeof(edict_t *));
 	
 	listcount = 0;
 	SV_AreaTriggerEdicts (ent, qcvm->areanodes, list, &listcount, qcvm->num_edicts);

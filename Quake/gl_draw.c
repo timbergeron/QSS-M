@@ -443,7 +443,7 @@ qpic_t	*Draw_TryCachePic (const char *path, unsigned int texflags)
 //
 // load the pic from disk
 //
-	dat = (qpic_t *)COM_LoadTempFile (path, NULL);
+	dat = (qpic_t *)COM_LoadMallocFile (path, NULL);
 	if (!dat)
 		return NULL;
 	SwapPic (dat);
@@ -475,6 +475,7 @@ qpic_t	*Draw_TryCachePic (const char *path, unsigned int texflags)
 		gl.tl = 0;
 		gl.th = (texflags&TEXPREF_PAD)?(float)dat->height/(float)TexMgr_PadConditional(dat->height):1; //johnfitz
 	}
+	free (dat);
 	memcpy (pic->pic.data, &gl, sizeof(glpic_t));
 
 	return &pic->pic;
@@ -552,9 +553,12 @@ void Draw_LoadPics (void)
 
 	if (!char_texture)
 	{
-		data = COM_LoadTempFile ("gfx/menu/conchars.lmp", NULL);
+		data = COM_LoadMallocFile ("gfx/menu/conchars.lmp", NULL);
 		if (data)
+		{
 			char_texture = draw_load24bit?TexMgr_LoadImage (NULL, WADFILENAME":conchars", 256, 128, SRC_INDEXED, data, "gfx/menu/conchars", 0, conchar_texflags | TEXPREF_ALLOWMISSING):NULL;
+			free (data);
+		}
 		char_hexen2 = !!char_texture;
 	}
 

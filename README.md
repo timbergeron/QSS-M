@@ -75,6 +75,9 @@ JPG, r00k, Spoike for QSS and FTEQW, Ozkan Sezer & Eric Wasylishen (Quakespasm),
 - Particle trail emission-rate limiting
 - Particle trail state tracking for cleaner demo playback and rewinds
 - External HUD/menu texture clamp and padding fixes to reduce edge bleeding
+- Dynamic multi-segment hunk allocator so large maps load without needing `-heapsize`
+- `Hunk_AllocNoFill` skips zero-fill on hot allocation paths
+- Out-of-memory and size-overflow guards on previously unchecked malloc sites
 
 </details>
 

@@ -163,7 +163,6 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 	int		len;
 	double	stepscale;
 	sfxcache_t	*sc;
-	byte	stackbuf[1*1024];		// avoid dirtying the cache heap
 
 // see if still in memory
 	sc = (sfxcache_t *) Cache_Check (&s->cache);
@@ -239,9 +238,9 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 
 //	Con_Printf ("loading %s\n",namebuffer);
 
-	data = COM_LoadStackFile(namebuffer, stackbuf, sizeof(stackbuf), NULL);
+	data = COM_LoadMallocFile(namebuffer, NULL);
 	if (!data)
-		data = COM_LoadStackFile(s->name, stackbuf, sizeof(stackbuf), NULL);
+		data = COM_LoadMallocFile(s->name, NULL);
 
 	if (!data)
 	{
@@ -256,12 +255,14 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 	if (info.channels != 1 && info.channels != 2)
 	{
 		Con_Printf ("%s is a stereo sample\n",s->name);
+		free (data);
 		return NULL;
 	}
 
 	if (info.width != 1 && info.width != 2)
 	{
 		Con_Printf("%s is not 8 or 16 bit\n", s->name);
+		free (data);
 		return NULL;
 	}
 
@@ -273,12 +274,16 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 	if (info.samples == 0 || len == 0)
 	{
 		Con_Printf("%s has zero samples\n", s->name);
+		free (data);
 		return NULL;
 	}
 
 	sc = (sfxcache_t *) Cache_Alloc ( &s->cache, len + sizeof(sfxcache_t), s->name);
 	if (!sc)
+	{
+		free (data);
 		return NULL;
+	}
 
 	sc->length = info.samples / info.channels;
 	sc->loopstart = info.loopstart;
@@ -288,6 +293,7 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 
 	ResampleSfx (s, sc->speed, sc->width, data + info.dataofs);
 
+	free (data);
 	return sc;
 }
 

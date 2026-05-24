@@ -1944,18 +1944,25 @@ static qpic_t *Wheel_LoadAxeIcon (void)
 		return wheel_axe_icon_pic;
 	wheel_axe_icon_attempted = true;
 
-	model = COM_LoadTempFile (model_path, NULL);
+	model = COM_LoadMallocFile (model_path, NULL);
 	if (!model)
 	{
 		model_path = "v_axe.mdl";
-		model = COM_LoadTempFile (model_path, NULL);
+		model = COM_LoadMallocFile (model_path, NULL);
 	}
 	if (!model || com_filesize < (qofs_t)sizeof(mdl_t))
+	{
+		if (model)
+			free (model);
 		return NULL;
+	}
 
 	filesize = (size_t)com_filesize;
 	if (!Wheel_ParseAxeModel (model, filesize, &mdl))
+	{
+		free (model);
 		return NULL;
+	}
 
 	if (gl_load24bit.value > 0)
 	{
@@ -1982,7 +1989,12 @@ static qpic_t *Wheel_LoadAxeIcon (void)
 
 	if (icon_format != SRC_RGBA &&
 		!Wheel_BuildAxeIconPixels (&mdl, mdl.skin, mdl.skinwidth, mdl.skinheight, false, wheel_axe_icon_pixels))
+	{
+		free (model);
 		return NULL;
+	}
+
+	free (model);
 
 	flags = TEXPREF_LINEAR | TEXPREF_ALPHA | TEXPREF_PERSIST |
 		TEXPREF_NOPICMIP | TEXPREF_PAD | TEXPREF_OVERWRITE;

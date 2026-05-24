@@ -694,12 +694,20 @@ static void TexMgr_Imagedump_f (void)
 		}
 		else
 		{
+			size_t buffersize;
+
 			GL_Bind (glt);
 			glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
 
 			bpp = ((glt->flags & TEXPREF_ALPHA) && q_strcasecmp(ext, "jpg")) ? 32 : 24;
 			bytes = bpp / 8;
-			buffer = (byte *) malloc(glt->width * glt->height * bytes);
+			if (glt->height && (size_t)glt->width > (SIZE_MAX / (size_t)glt->height) / (size_t)bytes)
+			{
+				Con_Printf ("TexMgr_Imagedump_f: Texture %s is too large to dump\n", glt->name);
+				continue;
+			}
+			buffersize = (size_t)glt->width * (size_t)glt->height * (size_t)bytes;
+			buffer = (byte *) malloc(buffersize);
 			if (!buffer)
 			{
 				Con_Printf ("TexMgr_Imagedump_f: Couldn't allocate memory for %s\n", glt->name);
@@ -825,6 +833,8 @@ gltexture_t *TexMgr_NewTexture (void)
 	{
 		int i, newtexturecount = 64;
 		free_gltextures = (gltexture_t *) malloc (newtexturecount * sizeof(gltexture_t));
+		if (!free_gltextures)
+			Sys_Error ("TexMgr_NewTexture: out of memory (%d textures)", newtexturecount);
 		for (i = 0; i < newtexturecount - 1; i++)
 			free_gltextures[i].next = &free_gltextures[i+1];
 		free_gltextures[i].next = NULL;
@@ -969,7 +979,7 @@ void TexMgr_LoadPalette (void)
 	int fullbrights = 32;
 	int firstfullbright;
 	{
-		byte *colormap = COM_LoadTempFile("gfx/colormap.lmp", NULL);
+		byte *colormap = COM_LoadMallocFile("gfx/colormap.lmp", NULL);
 		if (colormap && com_filesize == VID_GRADES*256+1)
 		{
 			byte *darks = colormap + (VID_GRADES-1)*256;
@@ -982,6 +992,7 @@ void TexMgr_LoadPalette (void)
 					break;
 			}
 		}
+		free (colormap);
 	}
 	firstfullbright = 256-fullbrights;
 
@@ -991,7 +1002,7 @@ void TexMgr_LoadPalette (void)
 		Sys_Error ("Couldn't load gfx/palette.lmp");
 
 	mark = Hunk_LowMark ();
-	pal = (byte *) Hunk_Alloc (768);
+	pal = (byte *) Hunk_AllocNoFill (768);
 	if (fread (pal, 1, 768, f) != 768) // woods
 	{
 		fclose(f);
@@ -1282,6 +1293,13 @@ static unsigned *TexMgr_MipMapH (unsigned *data, int width, int height)
 TexMgr_ResampleTexture -- bilinear resample
 ================
 */
+static int TexMgr_CheckedHunkImageBytes (size_t width, size_t height, size_t bytes, const char *caller)
+{
+	if (!width || !height || !bytes || width > ((size_t)INT_MAX / height) / bytes)
+		Sys_Error ("%s: image too large", caller);
+	return (int)(width * height * bytes);
+}
+
 static unsigned *TexMgr_ResampleTexture (unsigned *in, int inwidth, int inheight, qboolean alpha)
 {
 	byte *nwpx, *nepx, *swpx, *sepx, *dest;
@@ -1294,7 +1312,7 @@ static unsigned *TexMgr_ResampleTexture (unsigned *in, int inwidth, int inheight
 
 	outwidth = TexMgr_Pad(inwidth);
 	outheight = TexMgr_Pad(inheight);
-	out = (unsigned *) Hunk_Alloc(outwidth*outheight*4);
+	out = (unsigned *) Hunk_AllocNoFill (TexMgr_CheckedHunkImageBytes (outwidth, outheight, 4, "TexMgr_ResampleTexture"));
 
 	xfrac = ((inwidth-1) << 16) / (outwidth-1);
 	yfrac = ((inheight-1) << 16) / (outheight-1);
@@ -1554,7 +1572,10 @@ static unsigned *TexMgr_8to32 (byte *in, int pixels, unsigned int *usepal)
 	int i;
 	unsigned *out, *data;
 
-	out = data = (unsigned *) Hunk_Alloc(pixels*4);
+	if (pixels < 0)
+		Sys_Error ("TexMgr_8to32: bad pixel count");
+
+	out = data = (unsigned *) Hunk_AllocNoFill (TexMgr_CheckedHunkImageBytes (pixels, 1, 4, "TexMgr_8to32"));
 
 	for (i = 0; i < pixels; i++)
 		*out++ = usepal[*in++];
@@ -1577,7 +1598,7 @@ static byte *TexMgr_PadImageW (byte *in, int width, int height, byte padbyte)
 
 	outwidth = TexMgr_Pad(width);
 
-	out = data = (byte *) Hunk_Alloc(outwidth*height);
+	out = data = (byte *) Hunk_AllocNoFill(TexMgr_CheckedHunkImageBytes (outwidth, height, 1, "TexMgr_PadImageW"));
 
 	for (i = 0; i < height; i++)
 	{
@@ -1597,16 +1618,17 @@ TexMgr_PadImageH -- return image with height padded up to power-of-two dimention
 */
 static byte *TexMgr_PadImageH (byte *in, int width, int height, byte padbyte)
 {
-	int i, srcpix, dstpix;
+	int i, srcpix, dstpix, outheight;
 	byte *data, *out;
 
 	if (height == TexMgr_Pad(height))
 		return in;
 
-	srcpix = width * height;
-	dstpix = width * TexMgr_Pad(height);
+	outheight = TexMgr_Pad(height);
+	srcpix = TexMgr_CheckedHunkImageBytes (width, height, 1, "TexMgr_PadImageH");
+	dstpix = TexMgr_CheckedHunkImageBytes (width, outheight, 1, "TexMgr_PadImageH");
 
-	out = data = (byte *) Hunk_Alloc(dstpix);
+	out = data = (byte *) Hunk_AllocNoFill(dstpix);
 
 	for (i = 0; i < srcpix; i++)
 		*out++ = *in++;
@@ -1618,8 +1640,9 @@ static byte *TexMgr_PadImageH (byte *in, int width, int height, byte padbyte)
 
 static byte *TexMgr_PreMultiply32(byte *in, size_t width, size_t height)
 {
+	int size = TexMgr_CheckedHunkImageBytes (width, height, 4, "TexMgr_PreMultiply32");
 	size_t pixels = width * height;
-	byte *out = (byte *) Hunk_Alloc(pixels*4);
+	byte *out = (byte *) Hunk_AllocNoFill (size);
 	byte *result = out;
 	while (pixels --> 0)
 	{
@@ -1774,14 +1797,18 @@ size_t TexMgr_ImageSize (int width, int height, enum srcformat format)
 	int	miplevel, mipwidth, mipheight;
 	size_t mipbytes = 0, blockbytes;
 	unsigned int blockwidth, blockheight;
+
+	if (width <= 0 || height <= 0)
+		return 0;
+
 	switch(format)
 	{
 	case SRC_RGBA:
-		return width*height*4;
+		return (size_t)width * (size_t)height * 4;
 	case SRC_LIGHTMAP:
-		return width*height*lightmap_bytes;
+		return (size_t)width * (size_t)height * (size_t)lightmap_bytes;
 	case SRC_INDEXED:
-		return width*height;
+		return (size_t)width * (size_t)height;
 	case SRC_EXTERNAL:	//panic
 		Con_Printf("TexMgr_ImageCompressedSize called for SRC_EXTERNAL\n");
 		return 0;
@@ -1811,7 +1838,7 @@ enum srcformat TexMgr_FormatForName (const char *code)
 		if (!compressedformats[i].formatname)
 			continue;
 		if (!q_strcasecmp(code, compressedformats[i].formatname))
-			return i;
+			return (enum srcformat)i;
 	}
 	return SRC_EXTERNAL;
 }
@@ -1823,7 +1850,7 @@ enum srcformat TexMgr_FormatForCode (const char *code)
 		if (!compressedformats[i].mipextname)
 			continue;
 		if (!q_strncasecmp(code, compressedformats[i].mipextname, 4))
-			return i;
+			return (enum srcformat)i;
 	}
 	return SRC_EXTERNAL;
 }
@@ -1864,13 +1891,17 @@ static void TexMgr_LoadImageCompressed (gltexture_t *glt, byte *data)
 		mipwidth = q_max(1,mipwidth);	//include the 1*1 mip with non-square textures.
 		mipheight = q_max(1,mipheight);
 		mipbytes = blockbytes*((mipwidth+blockwidth-1)/blockwidth)*((mipheight+blockheight-1)/blockheight);
-		if (miplevel-picmip >= 0)
-		{
-			if (type)
-				glTexImage2D(GL_TEXTURE_2D, miplevel-picmip, internalformat, mipwidth, mipheight, 0, format, type, data);
-			else
-				GL_CompressedTexImage2D(GL_TEXTURE_2D, miplevel-picmip, internalformat, mipwidth, mipheight, 0, mipbytes, data);
-		}
+			if (miplevel-picmip >= 0)
+			{
+				if (type)
+					glTexImage2D(GL_TEXTURE_2D, miplevel-picmip, internalformat, mipwidth, mipheight, 0, format, type, data);
+				else
+				{
+					if (mipbytes > INT_MAX)
+						Sys_Error ("TexMgr_LoadImageCompressed: mip level too large");
+					GL_CompressedTexImage2D(GL_TEXTURE_2D, miplevel-picmip, internalformat, mipwidth, mipheight, 0, (GLsizei)mipbytes, data);
+				}
+			}
 		data += mipbytes;
 
 		if (!(glt->flags & TEXPREF_MIPMAP))
@@ -2186,7 +2217,8 @@ TexMgr_ReloadImage -- reloads a texture, and colormaps it if needed
 void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants)
 {
 	byte	*data = NULL;
-	int	mark, size;
+	int	mark;
+	size_t size;
 	qboolean malloced = false;
 	enum srcformat fmt = glt->source_format;
 //
@@ -2202,7 +2234,12 @@ void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants)
 		fseek (f, glt->source_offset, SEEK_CUR);
 
 		size = TexMgr_ImageSize(glt->source_width, glt->source_height, glt->source_format);
-		data = (byte *) Hunk_Alloc (size);
+		if (!size || size > INT_MAX)
+		{
+			fclose(f);
+			goto invalid;
+		}
+		data = (byte *) Hunk_AllocNoFill ((int)size);
 		if (fread (data, 1, size, f) != size) // woods
 		{
 			fclose(f);
@@ -2369,7 +2406,7 @@ struct gltexture_s *TexMgr_ColormapTexture(struct gltexture_s *basetex, plcolour
 		}
 	}
 	if (numcolourmappedtextures < countof(colourmappedtexture))
-		oldest = numcolourmappedtextures++;	//just use a new one
+		oldest = (int)numcolourmappedtextures++;	//just use a new one
 	else
 	{
 		otime = colourmappedtexture[oldest=0].usetime;

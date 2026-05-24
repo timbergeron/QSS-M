@@ -590,7 +590,7 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime)
 	}
 
 	//using johnfitz's dynamic alloc strategy, consistent with SV_PushMove
-	pushed_p = pushed = Hunk_Alloc (qcvm->num_edicts*sizeof(*pushed));
+	pushed_p = pushed = Hunk_AllocNoFill (qcvm->num_edicts*sizeof(*pushed));
 
 	// find the bounding box
 	for (i=0 ; i<3 ; i++)
@@ -823,8 +823,8 @@ void SV_PushMove (edict_t *pusher, float movetime)
 
 	//johnfitz -- dynamically allocate
 	mark = Hunk_LowMark ();
-	moved_edict = (edict_t **) Hunk_Alloc (qcvm->num_edicts*sizeof(edict_t *));
-	moved_from = (vec3_t *) Hunk_Alloc (qcvm->num_edicts*sizeof(vec3_t));
+	moved_edict = (edict_t **) Hunk_AllocNoFill (qcvm->num_edicts*sizeof(edict_t *));
+	moved_from = (vec3_t *) Hunk_AllocNoFill (qcvm->num_edicts*sizeof(vec3_t));
 	//johnfitz
 
 // see if any solid entities are inside the final position

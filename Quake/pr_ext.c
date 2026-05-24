@@ -4171,7 +4171,7 @@ static void PF_buf_loadfile(void)
 {
 	const char *fname = G_STRING(OFS_PARM0);
 	size_t bufno = G_FLOAT(OFS_PARM1)-BUFSTRBASE;
-	char *line, *nl;
+	char *buffer, *line, *nl;
 	const char *fallback;
 
 	G_FLOAT(OFS_RETURN) = 0;
@@ -4186,12 +4186,13 @@ static void PF_buf_loadfile(void)
 		Con_Printf("qcfopen: Access denied: %s\n", fname);
 		return;
 	}
-	line = (char*)COM_LoadTempFile(fname, NULL);
-	if (!line && fallback)
-		line = (char*)COM_LoadTempFile(fallback, NULL);
-	if (!line)
+	buffer = (char*)COM_LoadMallocFile(fname, NULL);
+	if (!buffer && fallback)
+		buffer = (char*)COM_LoadMallocFile(fallback, NULL);
+	if (!buffer)
 		return;
 
+	line = buffer;
 	while(line)
 	{
 		nl = strchr(line, '\n');
@@ -4200,6 +4201,7 @@ static void PF_buf_loadfile(void)
 		PF_bufstr_add_internal(bufno, line, true);
 		line = nl;
 	}
+	free (buffer);
 
 	G_FLOAT(OFS_RETURN) = true;
 }

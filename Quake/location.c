@@ -111,7 +111,7 @@ qboolean LOC_LoadLocations (void) // woods #qwlocs
         return false;
     }
 
-    filedata = (char*)COM_LoadTempFile(filename, NULL);
+    filedata = (char*)COM_LoadMallocFile(filename, NULL);
 
     if (!filedata)
     {
@@ -243,6 +243,7 @@ qboolean LOC_LoadLocations (void) // woods #qwlocs
         else
             Con_DPrintf("Error parsing location data on line %d.\n", linenumber);
     }
+    free(filedata);
     return true;
 }
 

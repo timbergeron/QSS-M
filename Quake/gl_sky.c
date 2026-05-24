@@ -926,11 +926,11 @@ static qboolean Skywind_LoadConfigInternal(qboolean quiet)
 
 	q_snprintf(relpath, sizeof(relpath), "gfx/env/%s%s", skybox_name, SKYWIND_CFG);
 
-	buffer = (char *)COM_LoadTempFile(relpath, NULL);
+	buffer = (char *)COM_LoadMallocFile(relpath, NULL);
 	if (!buffer)
 	{
 		q_snprintf(relpath, sizeof(relpath), "%s", SKYWIND_DEFAULT_CFG);
-		buffer = (char *)COM_LoadTempFile(relpath, NULL);
+		buffer = (char *)COM_LoadMallocFile(relpath, NULL);
 		is_default = (buffer != NULL);
 	}
 	if (!buffer)
@@ -949,8 +949,8 @@ static qboolean Skywind_LoadConfigInternal(qboolean quiet)
 		if (!quiet)
 			Con_Printf("Sky wind config \"%s\" is empty\n", relpath);
 		if (Skywind_ApplyCvarDefaultsInternal(quiet))
-			return true;
-		return false;
+			loaded = true;
+		goto cleanup;
 	}
 
 	Skywind_Clear();
@@ -960,8 +960,8 @@ static qboolean Skywind_LoadConfigInternal(qboolean quiet)
 		if (!quiet)
 			Con_Printf("Sky wind config \"%s\" is invalid\n", relpath);
 		if (Skywind_ApplyCvarDefaultsInternal(quiet))
-			return true;
-		return false;
+			loaded = true;
+		goto cleanup;
 	}
 
 	if ((data = COM_Parse(data)) != NULL)
@@ -1009,7 +1009,7 @@ static qboolean Skywind_LoadConfigInternal(qboolean quiet)
 			else
 				Con_Printf("Sky wind default config does not include \"%s\"\n", skybox_name);
 		}
-		return false;
+		goto cleanup;
 	}
 
 	Skywind_InvalidateFrame();
@@ -1019,6 +1019,8 @@ static qboolean Skywind_LoadConfigInternal(qboolean quiet)
 	if (!quiet)
 		Con_Printf("Loaded sky wind config \"%s\"\n", relpath);
 
+cleanup:
+	free (buffer);
 	return loaded;
 }
 

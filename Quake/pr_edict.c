@@ -1741,6 +1741,8 @@ static void PR_MergeEngineFieldDefs (void)
 	{	//we now know how many entries we need to add...
 		ddef_t *olddefs = qcvm->fielddefs;
 		qcvm->fielddefs = malloc(maxdefs * sizeof(*qcvm->fielddefs));
+		if (!qcvm->fielddefs)
+			Sys_Error ("PR_MergeEngineFieldDefs: out of memory (%d defs)", maxdefs);
 		memcpy(qcvm->fielddefs, olddefs, qcvm->progs->numfielddefs*sizeof(*qcvm->fielddefs));
 		if (olddefs != (ddef_t *)((byte *)qcvm->progs + qcvm->progs->ofs_fielddefs))
 			free(olddefs);

@@ -246,7 +246,10 @@ static void S_UpdateFilter(filter_t *filter, int M, float f_c)
 		filter->kernelsize = (M + 1) + 16 - ((M + 1) % 16);
 		filter->memory = (float *) calloc(filter->kernelsize, sizeof(float));
 		filter->kernel = (float *) calloc(filter->kernelsize, sizeof(float));
-		
+
+		if (!filter->memory || !filter->kernel)
+			Sys_Error ("S_UpdateFilter: out of memory (%d bytes)", (int)(filter->kernelsize * sizeof (float)));
+
 		S_MakeBlackmanWindowKernel(filter->kernel, M, f_c);
 	}
 }
@@ -266,14 +269,19 @@ known to be 0 and skip 3/4 of the filter kernel.
 static void S_ApplyFilter(filter_t *filter, int *data, int stride, int count)
 {
 	int i, j;
+	size_t inputsize;
 	float *input;
 	const int kernelsize = filter->kernelsize;
 	const float *kernel = filter->kernel;
+	int mark;
 	int parity;
 
-	input = (float *) malloc(sizeof(float) * (filter->kernelsize + count));
-	if (!input)
-		return;
+	mark = Hunk_LowMark ();
+	if (filter->kernelsize < 0 || count < 0 ||
+		(size_t)filter->kernelsize + (size_t)count > (size_t)INT_MAX / sizeof(float))
+		Sys_Error ("S_ApplyFilter: input too large");
+	inputsize = sizeof(float) * ((size_t)filter->kernelsize + (size_t)count);
+	input = (float *) Hunk_AllocNoFill ((int)inputsize);
 
 // set up the input buffer
 // memory holds the previous filter->kernelsize samples of input.
@@ -313,7 +321,7 @@ static void S_ApplyFilter(filter_t *filter, int *data, int stride, int count)
 
 	filter->parity = parity;
 
-	free(input);
+	Hunk_FreeToLowMark (mark);
 }
 
 /*

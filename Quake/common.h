@@ -151,6 +151,10 @@ void InsertLinkAfter (link_t *l, link_t *after);
 
 //============================================================================
 
+#define PTR_IN_RANGE(ptr, begin, end)			(((uintptr_t)(ptr)-(uintptr_t)(begin)) < ((uintptr_t)(end)-(uintptr_t)(begin)))
+
+//============================================================================
+
 // woods #modsmenu #demosmenu (iw)
 
 typedef struct vec_header_t {
@@ -435,20 +439,8 @@ void COM_CloseFile (int h);
 // these procedures open a file using COM_FindFile and loads it into a proper
 // buffer. the buffer is allocated with a total size of com_filesize + 1. the
 // procedures differ by their buffer allocation method.
-byte *COM_LoadStackFile (const char *path, void *buffer, int bufsize,
-						unsigned int *path_id);
-	// uses the specified stack stack buffer with the specified size
-	// of bufsize. if bufsize is too short, uses temp hunk. the bufsize
-	// must include the +1
-byte *COM_LoadTempFile (const char *path, unsigned int *path_id);
-	// allocates the buffer on the temp hunk.
 byte *COM_LoadHunkFile (const char *path, unsigned int *path_id);
 	// allocates the buffer on the hunk.
-byte *COM_LoadZoneFile (const char *path, unsigned int *path_id);
-	// allocates the buffer on the zone.
-void COM_LoadCacheFile (const char *path, struct cache_user_s *cu,
-						unsigned int *path_id);
-	// uses cache mem for allocating the buffer.
 byte *COM_LoadMallocFile (const char *path, unsigned int *path_id);
 	// allocates the buffer on the system mem (malloc).
 

@@ -380,8 +380,12 @@ int AllocBlock (int w, int h, int *x, int *y)
 	{
 		if (texnum == lightmap_count)
 		{
+			struct lightmap_s *newlightmaps;
 			lightmap_count++;
-			lightmaps = (struct lightmap_s *) realloc(lightmaps, sizeof(*lightmaps)*lightmap_count);
+			newlightmaps = (struct lightmap_s *) realloc(lightmaps, sizeof(*lightmaps)*lightmap_count);
+			if (!newlightmaps)
+				Sys_Error ("AllocBlock: out of memory (%d lightmaps)", lightmap_count);
+			lightmaps = newlightmaps;
 			memset(&lightmaps[texnum], 0, sizeof(lightmaps[texnum]));
 			if (GL_BufferStorageFunc)
 			{	//if we have bufferstorage then we have mapbufferrange+persistent+coherent
@@ -392,7 +396,11 @@ int AllocBlock (int w, int h, int *x, int *y)
 				GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
 			}
 			else
+			{
 				lightmaps[texnum].pbodata = (byte *) calloc(1, 4*LMBLOCK_WIDTH*LMBLOCK_HEIGHT);
+				if (!lightmaps[texnum].pbodata)
+					Sys_Error ("GL_BuildLightmaps: out of memory on %d bytes", 4*LMBLOCK_WIDTH*LMBLOCK_HEIGHT);
+			}
 			//as we're only tracking one texture, we don't need multiple copies of allocated any more.
 			memset(allocated, 0, sizeof(*allocated)*LMBLOCK_WIDTH);
 
@@ -716,7 +724,12 @@ void GL_BuildLightmaps (void)
 	lightmaps = NULL;
 	last_lightmap_allocated = 0;
 	lightmap_count = 0;
-	allocated = realloc(allocated, sizeof(*allocated)*LMBLOCK_WIDTH);
+	{
+		int *newallocated = realloc(allocated, sizeof(*allocated)*LMBLOCK_WIDTH);
+		if (!newallocated)
+			Sys_Error ("GL_BuildLightmaps: out of memory on %u bytes", (unsigned int)(sizeof(*allocated)*LMBLOCK_WIDTH));
+		allocated = newallocated;
+	}
 
 	if ((!q_strcasecmp(r_lightmap_format.string, "rgb9_e5") || !q_strcasecmp(r_lightmap_format.string, "e5bgr9") || !q_strcasecmp(r_lightmap_format.string, "rgb9e5")) && gl_texture_e5bgr9)
 		gl_lightmap_format = GL_RGB9_E5;
@@ -842,7 +855,7 @@ surfaces from world + all brush models
 */
 void GL_BuildBModelVertexBuffer (void)
 {
-	unsigned int	numverts, varray_bytes, varray_index;
+	size_t		numverts, varray_bytes, varray_index;
 	int		i, j;
 	qmodel_t	*m;
 	float		*varray;
@@ -864,7 +877,9 @@ void GL_BuildBModelVertexBuffer (void)
 
 		for (i=0 ; i<m->numsurfaces ; i++)
 		{
-			numverts += m->surfaces[i].numedges;
+			if (m->surfaces[i].numedges < 0 || (size_t)m->surfaces[i].numedges > (size_t)INT_MAX - numverts)
+				Sys_Error ("GL_BuildBModelVertexBuffer: too many vertices");
+			numverts += (size_t)m->surfaces[i].numedges;
 		}
 	}
 	for (j=1 ; j<MAX_MODELS ; j++)
@@ -875,15 +890,19 @@ void GL_BuildBModelVertexBuffer (void)
 
 		for (i=0 ; i<m->numsurfaces ; i++)
 		{
-			numverts += m->surfaces[i].numedges;
+			if (m->surfaces[i].numedges < 0 || (size_t)m->surfaces[i].numedges > (size_t)INT_MAX - numverts)
+				Sys_Error ("GL_BuildBModelVertexBuffer: too many vertices");
+			numverts += (size_t)m->surfaces[i].numedges;
 		}
 	}
 
 // build vertex array
+	if (numverts > SIZE_MAX / (VERTEXSIZE * sizeof(float)))
+		Sys_Error ("GL_BuildBModelVertexBuffer: vertex buffer too large");
 	varray_bytes = VERTEXSIZE * sizeof(float) * numverts;
 	varray = (float *) malloc (varray_bytes);
 	if (!varray && varray_bytes)
-		Sys_Error ("GL_BuildBModelVertexBuffer: out of memory (%u bytes)", varray_bytes);
+		Sys_Error ("GL_BuildBModelVertexBuffer: out of memory (%" SDL_PRIu64 " bytes)", (uint64_t)varray_bytes);
 	varray_index = 0;
 
 	for (j=1 ; j<MAX_MODELS ; j++)
@@ -895,9 +914,9 @@ void GL_BuildBModelVertexBuffer (void)
 		for (i=0 ; i<m->numsurfaces ; i++)
 		{
 			msurface_t *s = &m->surfaces[i];
-			s->vbo_firstvert = varray_index;
-			memcpy (&varray[VERTEXSIZE * varray_index], s->polys->verts, VERTEXSIZE * sizeof(float) * s->numedges);
-			varray_index += s->numedges;
+			s->vbo_firstvert = (int)varray_index;
+			memcpy (&varray[VERTEXSIZE * varray_index], s->polys->verts, VERTEXSIZE * sizeof(float) * (size_t)s->numedges);
+			varray_index += (size_t)s->numedges;
 		}
 	}
 	for (j=1 ; j<MAX_MODELS ; j++)
@@ -909,15 +928,15 @@ void GL_BuildBModelVertexBuffer (void)
 		for (i=0 ; i<m->numsurfaces ; i++)
 		{
 			msurface_t *s = &m->surfaces[i];
-			s->vbo_firstvert = varray_index;
-			memcpy (&varray[VERTEXSIZE * varray_index], s->polys->verts, VERTEXSIZE * sizeof(float) * s->numedges);
-			varray_index += s->numedges;
+			s->vbo_firstvert = (int)varray_index;
+			memcpy (&varray[VERTEXSIZE * varray_index], s->polys->verts, VERTEXSIZE * sizeof(float) * (size_t)s->numedges);
+			varray_index += (size_t)s->numedges;
 		}
 	}
 
 // upload to GPU
 	GL_BindBufferFunc (GL_ARRAY_BUFFER, gl_bmodel_vbo);
-	GL_BufferDataFunc (GL_ARRAY_BUFFER, varray_bytes, varray, GL_STATIC_DRAW);
+	GL_BufferDataFunc (GL_ARRAY_BUFFER, (GLsizeiptr)varray_bytes, varray, GL_STATIC_DRAW);
 	free (varray);
 
 // invalidate the cached bindings

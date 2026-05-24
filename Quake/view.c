@@ -814,7 +814,7 @@ static void PolyBlend_CreateVignetteTexture (void)
 	cx = size / 2.0f;
 	cy = size / 2.0f;
 
-	data = (byte *)Hunk_TempAlloc (size * size * 2);
+	data = (byte *)malloc (size * size * 2);
 	if (!data)
 	{
 		Con_Warning ("PolyBlend_CreateVignetteTexture: failed to allocate %d bytes\n", size * size * 2);
@@ -855,7 +855,8 @@ static void PolyBlend_CreateVignetteTexture (void)
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	
+	free (data);
+
 	Con_DPrintf ("Vignette texture created (%dx%d)\n", size, size);
 }
 
