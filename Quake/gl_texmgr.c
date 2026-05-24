@@ -2230,20 +2230,20 @@ void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants)
 	{	//lump inside file
 		FILE *f;
 		COM_FOpenFile(glt->source_file, &f, NULL);
-		if (!f) goto invalid;
+		if (!f) goto invalid_source;
 		fseek (f, glt->source_offset, SEEK_CUR);
 
 		size = TexMgr_ImageSize(glt->source_width, glt->source_height, glt->source_format);
 		if (!size || size > INT_MAX)
 		{
 			fclose(f);
-			goto invalid;
+			goto invalid_source;
 		}
 		data = (byte *) Hunk_AllocNoFill ((int)size);
 		if (fread (data, 1, size, f) != size) // woods
 		{
 			fclose(f);
-			goto invalid;
+			goto invalid_source;
 		}
 		fclose (f);
 	}
@@ -2256,8 +2256,7 @@ void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants)
 		data = (byte *) glt->source_offset; //image in memory
 	}
 	if (!data) {
-invalid:	/*Con_Printf("TexMgr_ReloadImage: invalid source for %s\n", glt->name);*/ // woods disable 
-invalid:
+invalid_source:
 		Con_DWarning("TexMgr_ReloadImage: invalid source for %s\n", glt->name);
 
 		/*
