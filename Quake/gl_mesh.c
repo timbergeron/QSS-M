@@ -1675,7 +1675,9 @@ static void MD5_BakeInfluences(const char *fname, bonepose_t *outposes, iqmvert_
 		vert->weight[0] = vert->weight[1] = vert->weight[2] = vert->weight[3] = 0;
 		vert->rgba[0] = vert->rgba[1] = vert->rgba[2] = vert->rgba[3] = 1;	//for consistency with iqm, though irrelevant here
 
-		if (vinfo->firstweight + vinfo->count > numweights)
+		if (!vinfo->count)
+			Sys_Error ("%s: vertex has no weights", fname);
+		if (vinfo->firstweight > numweights || vinfo->count > numweights - vinfo->firstweight)
 			Sys_Error ("%s: weight index out of bounds", fname);
 		if (maxinfluences < vinfo->count)
 			maxinfluences = vinfo->count;
@@ -1725,33 +1727,91 @@ static void MD5_BakeInfluences(const char *fname, bonepose_t *outposes, iqmvert_
 	if (maxinfluences > countof(vert->weight))
 		Con_DWarning("%s uses up to %u influences per vertex (weakest: %g)\n", fname, maxinfluences, scaleimprecision);
 }
+static unsigned MD5_HashVert(const vec3_t v)
+{
+	return COM_HashBlock(&v[0], 3 * sizeof(float));
+}
+
 static void MD5_ComputeNormals(iqmvert_t *vert, size_t numverts, unsigned short *indexes, size_t numindexes)
 {
-	size_t v, t;
-	iqmvert_t *v0, *v1, *v2;
-	vec3_t d1, d2, norm;
+	size_t v, t, hashsize;
+	int *hashmap;
+	unsigned short *weld;
+	vec3_t *normals;
+
 	for (v = 0; v < numverts; v++)
 		vert[v].norm[0] = vert[v].norm[1] = vert[v].norm[2] = 0;
+
+	if (!numverts || !numindexes)
+		return;
+
+	hashsize = numverts * 2;
+	hashmap = (int *) calloc(hashsize, sizeof(*hashmap));
+	weld = (unsigned short *) malloc(numverts * sizeof(*weld));
+	normals = (vec3_t *) calloc(numverts, sizeof(*normals));
+	if (!hashmap || !weld || !normals)
+		Sys_Error ("MD5_ComputeNormals: out of memory (%u verts/%u tris)", (unsigned int)numverts, (unsigned int)(numindexes / 3));
+
+	for (v = 0; v < numverts; v++)
+	{
+		unsigned pos = MD5_HashVert(vert[v].xyz) % hashsize;
+		unsigned end = pos;
+		weld[v] = (unsigned short)v;
+
+		do
+		{
+			if (!hashmap[pos])
+			{
+				hashmap[pos] = (int)v + 1;
+				break;
+			}
+
+			t = (size_t)hashmap[pos] - 1;
+			if (VectorCompare(vert[t].xyz, vert[v].xyz))
+			{
+				weld[v] = weld[t];
+				break;
+			}
+
+			pos++;
+			if (pos == hashsize)
+				pos = 0;
+		} while (pos != end);
+	}
+
 	for (t = 0; t < numindexes; t+=3)
 	{
-		v0 = &vert[indexes[t+0]];
-		v1 = &vert[indexes[t+1]];
-		v2 = &vert[indexes[t+2]];
+		vec3_t d1, d2, norm;
+		unsigned short i0 = weld[indexes[t+0]];
+		unsigned short i1 = weld[indexes[t+1]];
+		unsigned short i2 = weld[indexes[t+2]];
+		iqmvert_t *v0 = &vert[i0];
+		iqmvert_t *v1 = &vert[i1];
+		iqmvert_t *v2 = &vert[i2];
 
 		VectorSubtract(v1->xyz, v0->xyz, d1);
 		VectorSubtract(v2->xyz, v0->xyz, d2);
 		CrossProduct(d1, d2, norm);
-		VectorNormalize(norm);
 
-		//FIXME: this should be weighted by each vertex angle.
-		VectorAdd(v0->norm, norm, v0->norm);
-		VectorAdd(v1->norm, norm, v1->norm);
-		VectorAdd(v2->norm, norm, v2->norm);
+		VectorAdd(normals[i0], norm, normals[i0]);
+		VectorAdd(normals[i1], norm, normals[i1]);
+		VectorAdd(normals[i2], norm, normals[i2]);
 	}
 
-	//and make sure it actually makes sense.
 	for (v = 0; v < numverts; v++)
-		VectorNormalize(vert[v].norm);
+	{
+		if (weld[v] == v)
+		{
+			VectorNormalize(normals[v]);
+			VectorCopy(normals[v], vert[v].norm);
+		}
+		else
+			VectorCopy(vert[weld[v]].norm, vert[v].norm);
+	}
+
+	free(normals);
+	free(weld);
+	free(hashmap);
 }
 
 static unsigned int MD5_HackyModelFlags(const char *name)
@@ -1779,6 +1839,7 @@ struct md5animctx_s
 	char fname[MAX_QPATH];
 	size_t numposes;
 	size_t numjoints;
+	float frametime;
 	bonepose_t *posedata;
 };
 //This is split into two because aliashdr_t has silly trailing framegroup info.
@@ -1790,6 +1851,7 @@ static void MD5Anim_Begin(struct md5animctx_s *ctx, const char *fname)
 	fname = ctx->fname;
 	ctx->animfile = COM_LoadMallocFile(fname, NULL);
 	ctx->numposes = 0;
+	ctx->frametime = 0.1f;
 
 	if (ctx->animfile)
 	{
@@ -1799,9 +1861,16 @@ static void MD5Anim_Begin(struct md5animctx_s *ctx, const char *fname)
 		if (MD5CHECK("commandline"))	buffer = COM_Parse(buffer);
 		MD5EXPECT("numFrames");	ctx->numposes = MD5UINT();
 		MD5EXPECT("numJoints");	ctx->numjoints = MD5UINT();
-		MD5EXPECT("frameRate"); /*irrelevant here*/
+		MD5EXPECT("frameRate");
+		{
+			char *endptr;
+			double framerate = SDL_strtod(com_token, &endptr);
+			if (endptr == com_token || *endptr || !isfinite(framerate) || framerate <= 0)
+				Sys_Error ("%s has invalid frame rate", fname);
+			ctx->frametime = (float)(1.0 / framerate);
+		}
 
-		if (ctx->numposes <= 0)
+		if (!ctx->numposes)
 			Sys_Error ("%s has no poses", fname);
 
 		ctx->buffer = buffer;
@@ -1810,12 +1879,15 @@ static void MD5Anim_Begin(struct md5animctx_s *ctx, const char *fname)
 static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t numbones)
 {
 	const char *fname = ctx->fname;
-	struct {unsigned int flags, offset;} *ab;
+	struct {unsigned int flags; size_t offset;} *ab;
 	size_t rawcount;
 	float *raw, *r;
+	vec3_t *basepos;
+	vec4_t *basequat;
+	byte *framedone;
 	bonepose_t *outposes;
 	const void *buffer = COM_Parse(ctx->buffer);
-	size_t j;
+	size_t framecount, j;
 
 	if (!buffer)
 	{
@@ -1827,11 +1899,18 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 
 	if (ctx->numjoints != numbones)
 		Sys_Error ("%s has incorrect bone count", fname);
+	if (ctx->numposes > (size_t)INT_MAX)
+		Sys_Error ("%s has too many poses", fname);
 
-	raw = Z_Malloc(sizeof(*raw)*(rawcount+6));
-	ab = Z_Malloc(sizeof(*ab)*ctx->numjoints);
+	if (rawcount > (size_t)INT_MAX / sizeof(*raw) - 6)
+		Sys_Error ("%s: too many animated components", fname);
+	raw = Z_Malloc(GLMesh_CheckedHunkSize(rawcount + 6, sizeof(*raw), "MD5Anim_Load"));
+	ab = Z_Malloc(GLMesh_CheckedHunkSize(ctx->numjoints, sizeof(*ab), "MD5Anim_Load"));
+	basepos = Z_Malloc(GLMesh_CheckedHunkSize(ctx->numjoints, sizeof(*basepos), "MD5Anim_Load"));
+	basequat = Z_Malloc(GLMesh_CheckedHunkSize(ctx->numjoints, sizeof(*basequat), "MD5Anim_Load"));
+	framedone = Z_Malloc(GLMesh_CheckedHunkSize(ctx->numposes, sizeof(*framedone), "MD5Anim_Load"));
 
-	ctx->posedata = outposes = Hunk_Alloc(sizeof(*outposes)*ctx->numjoints*ctx->numposes);
+	ctx->posedata = outposes = Hunk_Alloc(GLMesh_CheckedHunkSize(GLMesh_CheckedSize(ctx->numjoints, ctx->numposes, "MD5Anim_Load"), sizeof(*outposes), "MD5Anim_Load"));
 
 
 	MD5EXPECT("hierarchy");
@@ -1845,18 +1924,30 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 		if (bones[j].parent != MD5SINT())
 			Sys_Error ("%s: bone has wrong parent", fname);
 		//new info
-		ab[j].flags = MD5UINT();
-		if (ab[j].flags & ~63)
-			Sys_Error ("%s: bone has unsupported flags", fname);
+		{
+			size_t flags = MD5UINT();
+			if (flags & ~63u)
+				Sys_Error ("%s: bone has unsupported flags", fname);
+			ab[j].flags = (unsigned int)flags;
+		}
 		ab[j].offset = MD5UINT();
-		if (ab[j].offset > rawcount+6)
-			Sys_Error ("%s: bone has bad offset", fname);
+		{
+			unsigned int components = 0, flags = ab[j].flags;
+			while (flags)
+			{
+				components += flags & 1;
+				flags >>= 1;
+			}
+			if (ab[j].offset > rawcount || components > rawcount - ab[j].offset)
+				Sys_Error ("%s: bone has bad offset", fname);
+		}
 	}
 	MD5EXPECT("}");
 	MD5EXPECT("bounds");
 	MD5EXPECT("{");
-	while(MD5CHECK("("))
+	for (j = 0; j < ctx->numposes; j++)
 	{
+		MD5EXPECT("(");
 		(void)MD5FLOAT();
 		(void)MD5FLOAT();
 		(void)MD5FLOAT();
@@ -1872,26 +1963,32 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 
 	MD5EXPECT("baseframe");
 	MD5EXPECT("{");
-	while(MD5CHECK("("))
+	for (j = 0; j < ctx->numjoints; j++)
 	{
-		(void)MD5FLOAT();
-		(void)MD5FLOAT();
-		(void)MD5FLOAT();
+		MD5EXPECT("(");
+		basepos[j][0] = MD5FLOAT();
+		basepos[j][1] = MD5FLOAT();
+		basepos[j][2] = MD5FLOAT();
 		MD5EXPECT(")");
 
 		MD5EXPECT("(");
-		(void)MD5FLOAT();
-		(void)MD5FLOAT();
-		(void)MD5FLOAT();
+		basequat[j][0] = MD5FLOAT();
+		basequat[j][1] = MD5FLOAT();
+		basequat[j][2] = MD5FLOAT();
 		MD5EXPECT(")");
 	}
 	MD5EXPECT("}");
 
+	framecount = 0;
 	while(MD5CHECK("frame"))
 	{
 		size_t idx = MD5UINT();
 		if (idx >= ctx->numposes)
 			Sys_Error ("%s: invalid pose index", fname);
+		if (framedone[idx])
+			Sys_Error ("%s: duplicate pose index", fname);
+		framedone[idx] = true;
+		framecount++;
 		MD5EXPECT("{");
 		for (j = 0; j < rawcount; j++)
 			raw[j] = MD5FLOAT();
@@ -1900,9 +1997,13 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 		//okay, we have our raw info, unpack the actual bone info.
 		for (j = 0; j < ctx->numjoints; j++)
 		{
-			vec3_t pos = {0,0,0};
+			vec3_t pos;
 			static vec3_t scale = {1,1,1};
-			vec4_t quat = {0,0,0};
+			vec4_t quat;
+			VectorCopy(basepos[j], pos);
+			quat[0] = basequat[j][0];
+			quat[1] = basequat[j][1];
+			quat[2] = basequat[j][2];
 			r = raw + ab[j].offset;
 			if (ab[j].flags & 1)	pos[0] = *r++;
 			if (ab[j].flags & 2)	pos[1] = *r++;
@@ -1920,6 +2021,11 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 			GenMatrixPosQuat4Scale(pos, quat, scale, outposes[idx*ctx->numjoints + j].mat);
 		}
 	}
+	if (framecount != ctx->numposes)
+		Sys_Error ("%s: missing pose frame", fname);
+	Z_Free(framedone);
+	Z_Free(basequat);
+	Z_Free(basepos);
 	Z_Free(raw);
 	Z_Free(ab);
 	free(ctx->animfile);
@@ -1955,20 +2061,22 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 	MD5EXPECT("numJoints");	numjoints = MD5UINT();
 	MD5EXPECT("numMeshes");	nummeshes = MD5UINT();
 
-	if (numjoints <= 0)
+	if (!numjoints)
 		Sys_Error ("%s has no bones", mod->name);
-	if (nummeshes <= 0)
+	if (!nummeshes)
 		Sys_Error ("%s has no meshes", mod->name);
+	if (numjoints > 256)
+		Sys_Error ("%s has too many bones", mod->name);
 
 	if (strcmp(com_token, "joints")) Sys_Error ("Mod_LoadMD5MeshModel(%s): Expected \"%s\"", fname, "joints");
 	MD5Anim_Begin(&anim, fname);
 	buffer = COM_Parse(buffer);
 
 	hdrsize = sizeof(*outhdr) - sizeof(outhdr->frames);
-	hdrsize += sizeof(outhdr->frames)*anim.numposes;
-	outhdr = Hunk_Alloc(hdrsize*numjoints);
-	outbones = Hunk_Alloc(sizeof(*outbones)*numjoints);
-	outposes = Z_Malloc(sizeof(*outposes)*numjoints);
+	GLMesh_AddCheckedSize(&hdrsize, GLMesh_CheckedSize(anim.numposes, sizeof(outhdr->frames), "Mod_LoadMD5MeshModel"), "Mod_LoadMD5MeshModel");
+	outhdr = Hunk_Alloc(GLMesh_CheckedHunkSize (nummeshes, hdrsize, "Mod_LoadMD5MeshModel"));
+	outbones = Hunk_Alloc(GLMesh_CheckedHunkSize (numjoints, sizeof(*outbones), "Mod_LoadMD5MeshModel"));
+	outposes = Z_Malloc(GLMesh_CheckedHunkSize (numjoints, sizeof(*outposes), "Mod_LoadMD5MeshModel"));
 
 	MD5EXPECT("{");
 	for (j = 0; j < numjoints; j++)
@@ -1977,9 +2085,12 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 		static vec3_t scale = {1,1,1};
 		vec4_t quat;
 		q_strlcpy(outbones[j].name, com_token, sizeof(outbones[j].name));	buffer = COM_Parse(buffer);
-		outbones[j].parent = MD5SINT();
-		if (outbones[j].parent < -1 && outbones[j].parent >= numjoints)
-			Sys_Error ("bone index out of bounds");
+		{
+			long parent = MD5SINT();
+			if (parent < -1 || (parent >= 0 && (size_t)parent >= j))
+				Sys_Error ("%s: bone index out of bounds", fname);
+			outbones[j].parent = (int)parent;
+		}
 		MD5EXPECT("(");
 		pos[0] = MD5FLOAT();
 		pos[1] = MD5FLOAT();
@@ -2021,21 +2132,21 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 			surf->scale[j] = 1.0;
 		}
 
-		surf->numbones = numjoints;
+		surf->numbones = (int)numjoints;
 		surf->boneinfo = (byte*)outbones-(byte*)surf;
 
 		if (anim.numposes)
 		{
 			surf->boneposedata = (byte*)anim.posedata-(byte*)surf;
-			surf->numboneposes = anim.numposes;
+			surf->numboneposes = (int)anim.numposes;
 
 			for (j = 0; j < anim.numposes; j++)
 			{
-				surf->frames[j].firstpose = j;
+				surf->frames[j].firstpose = (int)j;
 				surf->frames[j].numposes = 1;
-				surf->frames[j].interval = 0.1;
+				surf->frames[j].interval = anim.frametime;
 			}
-			surf->numframes = j;
+			surf->numframes = (int)j;
 		}
 
 		MD5EXPECT("shader");
@@ -2112,63 +2223,116 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 		surf->skinheight = surf->textures[0][0].base?surf->textures[0][0].base->height:1;
 		buffer = COM_Parse(buffer);
 		MD5EXPECT("numverts");
-		surf->numverts_vbo = surf->numverts = MD5UINT();
+		{
+			size_t numverts = MD5UINT();
+			if (!numverts)
+				Sys_Error ("%s: mesh has no vertices", fname);
+			if (numverts > (size_t)INT_MAX)
+				Sys_Error ("%s: too many vertices", fname);
+			if (numverts > (size_t)USHRT_MAX + 1)
+				Sys_Error ("%s: too many vertices for 16-bit indexes", fname);
+			surf->numverts_vbo = surf->numverts = (int)numverts;
+		}
 
-		vinfo = Z_Malloc(sizeof(*vinfo)*surf->numverts);
-		poutvert = Hunk_Alloc(sizeof(*poutvert)*surf->numverts);
+		vinfo = Z_Malloc(GLMesh_CheckedHunkSize ((size_t)surf->numverts, sizeof(*vinfo), "Mod_LoadMD5MeshModel"));
+		poutvert = Hunk_Alloc(GLMesh_CheckedHunkSize ((size_t)surf->numverts, sizeof(*poutvert), "Mod_LoadMD5MeshModel"));
 		surf->vertexes = (byte*)poutvert-(byte*)surf;
 		surf->nummorphposes = 1;
-		while (MD5CHECK("vert"))
 		{
-			size_t idx = MD5UINT();
-			if (idx >= (size_t)surf->numverts)
-				Sys_Error ("vertex index out of bounds");
-			MD5EXPECT("(");
-			poutvert[idx].st[0] = MD5FLOAT();
-			poutvert[idx].st[1] = MD5FLOAT();
-			MD5EXPECT(")");
-			vinfo[idx].firstweight = MD5UINT();
-			vinfo[idx].count = MD5UINT();
+			byte *vertdone = Z_Malloc(GLMesh_CheckedHunkSize ((size_t)surf->numverts, sizeof(*vertdone), "Mod_LoadMD5MeshModel"));
+			while (MD5CHECK("vert"))
+			{
+				size_t idx = MD5UINT();
+				if (idx >= (size_t)surf->numverts)
+					Sys_Error ("%s: vertex index out of bounds", fname);
+				if (vertdone[idx])
+					Sys_Error ("%s: duplicate vertex index", fname);
+				vertdone[idx] = true;
+				MD5EXPECT("(");
+				poutvert[idx].st[0] = MD5FLOAT();
+				poutvert[idx].st[1] = MD5FLOAT();
+				MD5EXPECT(")");
+				vinfo[idx].firstweight = MD5UINT();
+				{
+					size_t count = MD5UINT();
+					if (count > (size_t)UINT_MAX)
+						Sys_Error ("%s: too many weights on vertex", fname);
+					vinfo[idx].count = (unsigned int)count;
+				}
+			}
+			for (j = 0; j < (size_t)surf->numverts; j++)
+				if (!vertdone[j])
+					Sys_Error ("%s: missing vertex", fname);
+			Z_Free(vertdone);
 		}
 		MD5EXPECT("numtris");
-		surf->numtris = MD5UINT();
-		surf->numindexes = surf->numtris*3;
-		poutindexes = Hunk_Alloc(sizeof(*poutindexes)*surf->numindexes);
-		surf->indexes = (byte*)poutindexes-(byte*)surf;
-		while (MD5CHECK("tri"))
 		{
-			size_t idx = MD5UINT();
-			if (idx >= (size_t)surf->numtris)
-				Sys_Error ("triangle index out of bounds");
-			idx *= 3;
-			for (j = 0; j < 3; j++)
+			size_t numtris = MD5UINT();
+			if (!numtris)
+				Sys_Error ("%s: mesh has no triangles", fname);
+			if (numtris > (size_t)INT_MAX / 3)
+				Sys_Error ("%s: too many triangles", fname);
+			surf->numtris = (int)numtris;
+			surf->numindexes = surf->numtris * 3;
+		}
+		poutindexes = Hunk_Alloc(GLMesh_CheckedHunkSize ((size_t)surf->numindexes, sizeof(*poutindexes), "Mod_LoadMD5MeshModel"));
+		surf->indexes = (byte*)poutindexes-(byte*)surf;
+		{
+			byte *tridone = Z_Malloc(GLMesh_CheckedHunkSize ((size_t)surf->numtris, sizeof(*tridone), "Mod_LoadMD5MeshModel"));
+			while (MD5CHECK("tri"))
 			{
-				size_t t = MD5UINT();
-				if (t > (size_t)surf->numverts)
-					Sys_Error ("vertex index out of bounds");
-				poutindexes[idx+j] = t;
+				size_t idx = MD5UINT();
+				if (idx >= (size_t)surf->numtris)
+					Sys_Error ("%s: triangle index out of bounds", fname);
+				if (tridone[idx])
+					Sys_Error ("%s: duplicate triangle index", fname);
+				tridone[idx] = true;
+				idx *= 3;
+				for (j = 0; j < 3; j++)
+				{
+					size_t t = MD5UINT();
+					if (t >= (size_t)surf->numverts)
+						Sys_Error ("%s: vertex index out of bounds", fname);
+					poutindexes[idx+j] = t;
+				}
 			}
+			for (j = 0; j < (size_t)surf->numtris; j++)
+				if (!tridone[j])
+					Sys_Error ("%s: missing triangle", fname);
+			Z_Free(tridone);
 		}
 
 		//md5 is a gpu-unfriendly interchange format. :(
 		MD5EXPECT("numweights");
 		numweights = MD5UINT();
-		weight = Z_Malloc(sizeof(*weight)*numweights);
-		while (MD5CHECK("weight"))
+		if (!numweights)
+			Sys_Error ("%s: mesh has no weights", fname);
+		weight = Z_Malloc(GLMesh_CheckedHunkSize (numweights, sizeof(*weight), "Mod_LoadMD5MeshModel"));
 		{
-			size_t idx = MD5UINT();
-			if (idx >= numweights)
-				Sys_Error ("weight index out of bounds");
+			byte *weightdone = Z_Malloc(GLMesh_CheckedHunkSize (numweights, sizeof(*weightdone), "Mod_LoadMD5MeshModel"));
+			while (MD5CHECK("weight"))
+			{
+				size_t idx = MD5UINT();
+				if (idx >= numweights)
+					Sys_Error ("%s: weight index out of bounds", fname);
+				if (weightdone[idx])
+					Sys_Error ("%s: duplicate weight index", fname);
+				weightdone[idx] = true;
 
-			weight[idx].bone = MD5UINT();
-			if (weight[idx].bone >= numjoints)
-				Sys_Error ("bone index out of bounds");
-			weight[idx].pos[3] = MD5FLOAT();
-			MD5EXPECT("(");
-			weight[idx].pos[0] = MD5FLOAT()*weight[idx].pos[3];
-			weight[idx].pos[1] = MD5FLOAT()*weight[idx].pos[3];
-			weight[idx].pos[2] = MD5FLOAT()*weight[idx].pos[3];
-			MD5EXPECT(")");
+				weight[idx].bone = MD5UINT();
+				if (weight[idx].bone >= numjoints)
+					Sys_Error ("%s: bone index out of bounds", fname);
+				weight[idx].pos[3] = MD5FLOAT();
+				MD5EXPECT("(");
+				weight[idx].pos[0] = MD5FLOAT()*weight[idx].pos[3];
+				weight[idx].pos[1] = MD5FLOAT()*weight[idx].pos[3];
+				weight[idx].pos[2] = MD5FLOAT()*weight[idx].pos[3];
+				MD5EXPECT(")");
+			}
+			for (j = 0; j < numweights; j++)
+				if (!weightdone[j])
+					Sys_Error ("%s: missing weight", fname);
+			Z_Free(weightdone);
 		}
 		//so make it gpu-friendly.
 		MD5_BakeInfluences(fname, outposes, poutvert, vinfo, weight, surf->numverts, numweights);

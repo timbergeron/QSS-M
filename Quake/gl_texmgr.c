@@ -2257,6 +2257,28 @@ void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants)
 	}
 	if (!data) {
 invalid:	/*Con_Printf("TexMgr_ReloadImage: invalid source for %s\n", glt->name);*/ // woods disable 
+invalid:
+		Con_DWarning("TexMgr_ReloadImage: invalid source for %s\n", glt->name);
+
+		/*
+		 * TexMgr_ReloadImages has already generated a new GL texture name.
+		 * Leave it populated, otherwise a reload miss renders as a black
+		 * incomplete texture until the model is loaded again.
+		 */
+		{
+			unsigned int fallback[4] = {
+				0xffff00ffu, 0xff000000u,
+				0xff000000u, 0xffff00ffu,
+			};
+			const int oldwidth = glt->width;
+			const int oldheight = glt->height;
+
+			glt->width = 2;
+			glt->height = 2;
+			TexMgr_LoadImage32 (glt, fallback);
+			glt->width = oldwidth;
+			glt->height = oldheight;
+		}
 		Hunk_FreeToLowMark(mark);
 		return;
 	}

@@ -2334,6 +2334,10 @@ void R_SetupAliasFrame (aliashdr_t *paliashdr, entity_t *e, lerpdata_t *lerpdata
 		const bonepose_t *p2 = (const bonepose_t *)((byte*)paliashdr + paliashdr->boneposedata) + lerpdata->pose2*paliashdr->numbones;
 		float w2 = lerpdata->blend;
 		float w1 = 1-w2;
+
+		if ((size_t)paliashdr->numbones > countof(lerpbones))
+			Sys_Error ("%s has too many bones", e->model->name);
+
 		for (b = 0; b < paliashdr->numbones; b++, p1++, p2++)
 		{
 			//interpolate it
