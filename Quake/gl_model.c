@@ -494,6 +494,17 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 // call the apropriate loader
 	mod->needload = false;
 
+	if (com_filesize < 4)
+	{
+		Con_Warning("%s is too small to be a model\n", mod->name);
+		free (buf);
+		Q1BSPX_Reset();
+		mod->type = mod_ext_invalid;
+		mod->flags = 0;
+		Mod_SetExtraFlags (mod);
+		return mod;
+	}
+
 	mod_type = (buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24));
 	switch (mod_type)
 	{
@@ -919,6 +930,7 @@ static texture_t *Mod_LoadMipTex(miptex_t *mt, byte *lumpend, enum srcformat *fm
 	byte *srcdata = NULL;
 	size_t sz;
 	int shift = 0;
+	unsigned int allocpixelbytes;
 
 	if (loadmodel->bspversion == BSPVERSION_QUAKE64)
 		extdata = lumpend;	//don't bother, I'm too lazy to validate offsets.
@@ -991,9 +1003,10 @@ static texture_t *Mod_LoadMipTex(miptex_t *mt, byte *lumpend, enum srcformat *fm
 		}
 	}
 
-	if ((size_t)*pixelbytes > (size_t)INT_MAX - sizeof(texture_t))
+	allocpixelbytes = *pixelbytes;
+	if ((size_t)allocpixelbytes > (size_t)INT_MAX - sizeof(texture_t))
 		Sys_Error ("Mod_LoadMipTex: texture %s is too large", mt->name);
-	tx = (texture_t *) Hunk_AllocNameNoFill ((int)(sizeof(texture_t) + (size_t)*pixelbytes), loadname );
+	tx = (texture_t *) Hunk_AllocNameNoFill ((int)(sizeof(texture_t) + (size_t)allocpixelbytes), loadname );
 	// only clear the texture struct, not the pixel buffer following it
 	memset (tx, 0, sizeof (*tx));
 	memcpy (tx->name, mt->name, sizeof(tx->name));
@@ -1016,11 +1029,13 @@ static texture_t *Mod_LoadMipTex(miptex_t *mt, byte *lumpend, enum srcformat *fm
 		}
 
 		memcpy ( tx+1, srcdata, *pixelbytes);
+		if (*pixelbytes < allocpixelbytes)
+			memset ((byte *)(tx+1) + *pixelbytes, 0, allocpixelbytes - *pixelbytes);
 	}
 	else
 	{
 		size_t x,y;
-		for(y=0;y<tx->width;y++)
+		for(y=0;y<tx->height;y++)
 			for(x=0;x<tx->width;x++)
 				((byte*)(tx+1))[y*tx->width+x] = (((x>>2)^(y>>2))&1)?6:2;
 	}
@@ -1773,6 +1788,7 @@ static void Mod_LoadEdges (lump_t *l, int bsp2)
 			out->v[0] = LittleLong(in->v[0]);
 			out->v[1] = LittleLong(in->v[1]);
 		}
+		out->v[0] = out->v[1] = 0;
 	}
 	else
 	{
@@ -1792,6 +1808,7 @@ static void Mod_LoadEdges (lump_t *l, int bsp2)
 			out->v[0] = (unsigned short)LittleShort(in->v[0]);
 			out->v[1] = (unsigned short)LittleShort(in->v[1]);
 		}
+		out->v[0] = out->v[1] = 0;
 	}
 }
 

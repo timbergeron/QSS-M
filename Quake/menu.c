@@ -112,6 +112,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_Startup_f (void);
 		void M_Menu_DemoOptions_f (void);
 		void M_Menu_PakLoading_f (void);
+		void M_Menu_ModelViewer_f (void);
 		void M_Menu_ColorPicker_f (void);
 		void M_Menu_Extras_f (void);
 		void M_Menu_Version_f (void);
@@ -158,6 +159,7 @@ void M_Main_Draw (void);
 		void M_Startup_Draw (void);
 		void M_DemoOptions_Draw (void);
 		void M_PakLoading_Draw (void);
+		void M_ModelViewer_Draw (void);
 		void M_ColorPicker_Draw (void);
 		void M_Extras_Draw (void);
 		void M_Version_Draw (void);
@@ -207,6 +209,7 @@ void M_Main_Key (int key);
 		void M_Startup_Key (int key);
 		void M_DemoOptions_Key (int key);
 		void M_PakLoading_Key (int key);
+		void M_ModelViewer_Key (int key);
 		void M_ColorPicker_Key (int key);
 		void M_Extras_Key (int key);
 		void M_Version_Key (int key);
@@ -260,6 +263,7 @@ void M_Main_Key (int key);
 		void M_Startup_Mousemove (int cx, int cy);
 		void M_DemoOptions_Mousemove (int cx, int cy);
 		void M_PakLoading_Mousemove (int cx, int cy);
+		void M_ModelViewer_Mousemove(int cx, int cy);
 		void M_ColorPicker_Mousemove(int cx, int cy);
 		void M_Extras_Mousemove(int cx, int cy);
 		void M_Version_Mousemove(int cx, int cy);
@@ -288,6 +292,7 @@ void M_SetSkillMenuMap(const char* name); // woods #skillmenu (iw)
 static void M_GameOptions_ClearTypedLevel(void);
 
 void FileList_Subtract(const char* name, filelist_item_t** list); // woods #historymenu
+void FileList_Add(const char* name, const char* data, filelist_item_t** list);
 
 static qboolean has_custom_progs = false; // woods #botdetect
 qboolean progs_check_done = false; // woods #botdetect
@@ -17934,6 +17939,7 @@ static enum extras_e
 	EXTRAS_PONG,
 	EXTRAS_HINTS,
 	EXTRAS_LIVEPREVIEW,
+	EXTRAS_MODELVIEWER,
 	EXTRAS_VERSION,
 	EXTRAS_COUNT
 } extras_cursor;
@@ -17981,6 +17987,8 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 		return "Paused Hints";
 	case EXTRAS_LIVEPREVIEW:
 		return "Live Preview";
+	case EXTRAS_MODELVIEWER:
+		return "Model Viewer";
 	case EXTRAS_VERSION:
 		return "Version Info";
 	default:
@@ -18111,6 +18119,9 @@ static void M_Extras_AdjustSliders (int dir)
 		if (!ui_live_preview.value)
 			M_LivePreview_Reset();
 		break;
+	case EXTRAS_MODELVIEWER:
+		M_Menu_ModelViewer_f();
+		break;
 	case EXTRAS_VERSION:
 		M_Menu_Version_f();
 		break;
@@ -18228,6 +18239,11 @@ void M_Extras_Draw(void)
 		case EXTRAS_LIVEPREVIEW:
 			text = "      Live Preview";
 			value = ui_live_preview.value ? "on" : "off";
+			break;
+
+		case EXTRAS_MODELVIEWER:
+			text = "      Model Viewer";
+			value = "...";
 			break;
 
 		case EXTRAS_VERSION:
@@ -18414,6 +18430,755 @@ void M_Extras_Mousemove(int cx, int cy)
 	{
 		// Update cursor position regardless of search state
 		extras_cursor = item;
+	}
+}
+
+/*
+==================
+Model Viewer Menu
+==================
+*/
+
+#define MAX_VIS_MODELVIEWER	16
+#define MODELVIEWER_LIST_X	16
+#define MODELVIEWER_LIST_Y	12
+#define MODELVIEWER_LIST_COLS	14
+#define MODELVIEWER_PREVIEW_X	136
+#define MODELVIEWER_PREVIEW_Y	12
+#define MODELVIEWER_PREVIEW_W	168
+#define MODELVIEWER_PREVIEW_H	136
+#define MODELVIEWER_PREVIEW_BOX_COLS	22
+#define MODELVIEWER_PREVIEW_BOX_LINES	17
+#define MODELVIEWER_DETAIL_X	16
+#define MODELVIEWER_DETAIL_Y	160
+#define MODELVIEWER_DETAIL_W	288
+#define MODELVIEWER_SEARCH_BOX_X	16
+#define MODELVIEWER_SEARCH_BOX_Y	176
+#define MODELVIEWER_ORBIT_SENSITIVITY	2.0f
+
+typedef struct
+{
+	char name[MAX_QPATH];
+	char source[50];
+} modelvieweritem_t;
+
+static struct
+{
+	menulist_t			list;
+	modelvieweritem_t	*items;
+	int					*filtered_indices;
+	int					x, y, cols;
+	int					prev_cursor;
+	menuticker_t		ticker;
+	qboolean			scrollbar_grab;
+	qboolean			orbit_grab;
+	int					orbit_last_x, orbit_last_y;
+	float				orbit_yaw, orbit_pitch;
+	float				orbit_distance_scale;
+} modelviewermenu;
+
+static qboolean M_ModelViewer_IsModelFile(const char *name)
+{
+	const char *ext = COM_FileGetExtension(name);
+
+	return !q_strcasecmp(ext, "mdl") ||
+		!q_strcasecmp(ext, "md3") ||
+		!q_strcasecmp(ext, "md5") ||
+		!q_strcasecmp(ext, "md5mesh") ||
+		!q_strcasecmp(ext, "iqm");
+}
+
+static qboolean M_ModelViewer_JoinRelative(char *out, size_t outsize, const char *prefix, const char *name)
+{
+	size_t len = strlen(name);
+
+	if (prefix && *prefix)
+		len += strlen(prefix) + 1;
+	if (len >= outsize)
+		return false;
+
+	if (prefix && *prefix)
+		q_snprintf(out, outsize, "%s/%s", prefix, name);
+	else
+		q_strlcpy(out, name, outsize);
+
+	return true;
+}
+
+static void M_ModelViewer_JoinFullPath(char *out, size_t outsize, const char *base, const char *relpath)
+{
+	if (relpath && *relpath)
+		q_snprintf(out, outsize, "%s/%s", base, relpath);
+	else
+		q_strlcpy(out, base, outsize);
+}
+
+static void M_ModelViewer_AddCandidate(filelist_item_t **models, const char *name, const char *source)
+{
+	if (!name || !*name || strlen(name) >= MAX_QPATH)
+		return;
+	if (!M_ModelViewer_IsModelFile(name))
+		return;
+
+	FileList_Add(name, source, models);
+}
+
+static qboolean M_ModelViewer_IsMountedLoosePackage(searchpath_t *search)
+{
+	const char *base;
+	const char *ext;
+
+	if (!search || search->pack)
+		return false;
+
+	base = COM_SkipPath(search->purename);
+	ext = COM_FileGetExtension(base);
+
+	return base[0] == '#' ||
+		!q_strcasecmp(ext, "pak") ||
+		!q_strcasecmp(ext, "pk3") ||
+		!q_strcasecmp(ext, "pk4") ||
+		!q_strcasecmp(ext, "zip") ||
+		!q_strcasecmp(ext, "apk") ||
+		!q_strcasecmp(ext, "kpf");
+}
+
+static qboolean M_ModelViewer_IsLooseModelRoot(const char *name)
+{
+	return !q_strcasecmp(name, "progs") ||
+		!q_strcasecmp(name, "models");
+}
+
+static qboolean M_ModelViewer_ShouldScanLooseDir(const char *relpath, const char *name, qboolean mounted_package)
+{
+	if (mounted_package)
+		return true;
+	if (relpath && *relpath)
+		return true;
+	if (!name || !*name || name[0] == '#')
+		return false;
+
+	return M_ModelViewer_IsLooseModelRoot(name);
+}
+
+#ifdef _WIN32
+static void M_ModelViewer_ScanLooseDir(filelist_item_t **models, const char *base, const char *relpath, const char *source, int depth, qboolean mounted_package)
+{
+	WIN32_FIND_DATA fdat;
+	HANDLE fhnd;
+	char dirpath[MAX_OSPATH];
+	char searchpath[MAX_OSPATH];
+	char childrel[MAX_QPATH];
+
+	if (depth > 16)
+		return;
+
+	M_ModelViewer_JoinFullPath(dirpath, sizeof(dirpath), base, relpath);
+	q_snprintf(searchpath, sizeof(searchpath), "%s/*", dirpath);
+
+	fhnd = FindFirstFile(searchpath, &fdat);
+	if (fhnd == INVALID_HANDLE_VALUE)
+		return;
+
+	do
+	{
+		if (!strcmp(fdat.cFileName, ".") || !strcmp(fdat.cFileName, ".."))
+			continue;
+		if (!M_ModelViewer_JoinRelative(childrel, sizeof(childrel), relpath, fdat.cFileName))
+			continue;
+
+		if (fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			if (M_ModelViewer_ShouldScanLooseDir(relpath, fdat.cFileName, mounted_package))
+				M_ModelViewer_ScanLooseDir(models, base, childrel, source, depth + 1, mounted_package);
+		}
+		else
+			M_ModelViewer_AddCandidate(models, childrel, source);
+	} while (FindNextFile(fhnd, &fdat));
+
+	FindClose(fhnd);
+}
+#else
+static void M_ModelViewer_ScanLooseDir(filelist_item_t **models, const char *base, const char *relpath, const char *source, int depth, qboolean mounted_package)
+{
+	DIR *dir_p;
+	struct dirent *dir_t;
+	char dirpath[MAX_OSPATH];
+	char fullpath[MAX_OSPATH];
+	char childrel[MAX_QPATH];
+	struct stat st;
+
+	if (depth > 16)
+		return;
+
+	M_ModelViewer_JoinFullPath(dirpath, sizeof(dirpath), base, relpath);
+	dir_p = opendir(dirpath);
+	if (!dir_p)
+		return;
+
+	while ((dir_t = readdir(dir_p)) != NULL)
+	{
+		if (dir_t->d_name[0] == '.')
+			continue;
+		if (!M_ModelViewer_JoinRelative(childrel, sizeof(childrel), relpath, dir_t->d_name))
+			continue;
+
+		M_ModelViewer_JoinFullPath(fullpath, sizeof(fullpath), base, childrel);
+		if (stat(fullpath, &st) < 0)
+			continue;
+
+		if (S_ISDIR(st.st_mode))
+		{
+			if (M_ModelViewer_ShouldScanLooseDir(relpath, dir_t->d_name, mounted_package))
+				M_ModelViewer_ScanLooseDir(models, base, childrel, source, depth + 1, mounted_package);
+		}
+		else if (S_ISREG(st.st_mode))
+			M_ModelViewer_AddCandidate(models, childrel, source);
+	}
+
+	closedir(dir_p);
+}
+#endif
+
+static void M_ModelViewer_SourceLabel(searchpath_t *search, char *out, size_t outsize)
+{
+	const char *source;
+
+	if (search->pack)
+	{
+		source = search->purename[0] ? search->purename : search->pack->filename;
+		q_strlcpy(out, COM_SkipPath(source), outsize);
+	}
+	else
+	{
+		source = search->purename[0] ? search->purename : search->filename;
+		q_strlcpy(out, COM_SkipPath(source), outsize);
+	}
+}
+
+static void M_ModelViewer_ClearFileList(filelist_item_t **list)
+{
+	filelist_item_t *next;
+
+	while (*list)
+	{
+		next = (*list)->next;
+		Z_Free(*list);
+		*list = next;
+	}
+}
+
+static void M_ModelViewer_BuildItems(void)
+{
+	searchpath_t *search;
+	filelist_item_t *models = NULL;
+	filelist_item_t *item;
+	char source[50];
+
+	VEC_CLEAR(modelviewermenu.items);
+	VEC_CLEAR(modelviewermenu.filtered_indices);
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		M_ModelViewer_SourceLabel(search, source, sizeof(source));
+
+		if (search->pack)
+		{
+			pack_t *pak = search->pack;
+			int i;
+			for (i = 0; i < pak->numfiles; i++)
+				M_ModelViewer_AddCandidate(&models, pak->files[i].name, source);
+		}
+		else
+		{
+			M_ModelViewer_ScanLooseDir(&models, search->filename, "", source, 0,
+				M_ModelViewer_IsMountedLoosePackage(search));
+		}
+	}
+
+	for (item = models; item; item = item->next)
+	{
+		modelvieweritem_t viewer_item;
+		q_strlcpy(viewer_item.name, item->name, sizeof(viewer_item.name));
+		q_strlcpy(viewer_item.source, item->data[0] ? item->data : "unknown", sizeof(viewer_item.source));
+		VEC_PUSH(modelviewermenu.items, viewer_item);
+	}
+
+	M_ModelViewer_ClearFileList(&models);
+}
+
+static void M_ModelViewer_Refilter(void)
+{
+	int i;
+	int item_count = (int)VEC_SIZE(modelviewermenu.items);
+
+	VEC_CLEAR(modelviewermenu.filtered_indices);
+
+	for (i = 0; i < item_count; i++)
+	{
+		if (modelviewermenu.list.search.len == 0 ||
+			q_strcasestr(modelviewermenu.items[i].name, modelviewermenu.list.search.text) ||
+			q_strcasestr(modelviewermenu.items[i].source, modelviewermenu.list.search.text))
+		{
+			VEC_PUSH(modelviewermenu.filtered_indices, i);
+		}
+	}
+
+	modelviewermenu.list.numitems = (int)VEC_SIZE(modelviewermenu.filtered_indices);
+
+	if (modelviewermenu.list.numitems <= 0)
+	{
+		modelviewermenu.list.cursor = 0;
+		modelviewermenu.list.scroll = 0;
+		return;
+	}
+
+	if (modelviewermenu.list.cursor >= modelviewermenu.list.numitems)
+		modelviewermenu.list.cursor = modelviewermenu.list.numitems - 1;
+	if (modelviewermenu.list.cursor < 0)
+		modelviewermenu.list.cursor = 0;
+
+	M_List_CenterCursor(&modelviewermenu.list);
+}
+
+static modelvieweritem_t *M_ModelViewer_SelectedItem(void)
+{
+	int item_index;
+
+	if (modelviewermenu.list.numitems <= 0 ||
+		modelviewermenu.list.cursor < 0 ||
+		modelviewermenu.list.cursor >= modelviewermenu.list.numitems)
+	{
+		return NULL;
+	}
+
+	item_index = modelviewermenu.filtered_indices[modelviewermenu.list.cursor];
+	return &modelviewermenu.items[item_index];
+}
+
+static void M_ModelViewer_MenuRectToPixels(float x, float y, float w, float h,
+	float *px, float *py, float *pw, float *ph)
+{
+	vrect_t bounds, vp;
+	float sx, sy;
+
+	Draw_GetMenuTransform(&bounds, &vp);
+	sx = (float)vp.width / (float)bounds.width;
+	sy = (float)vp.height / (float)bounds.height;
+
+	*px = vp.x + (x - bounds.x) * sx;
+	*py = vp.y + (y - bounds.y) * sy;
+	*pw = w * sx;
+	*ph = h * sy;
+}
+
+static qboolean M_ModelViewer_PointInPreview(int x, int y)
+{
+	return x >= MODELVIEWER_PREVIEW_X &&
+		x < MODELVIEWER_PREVIEW_X + MODELVIEWER_PREVIEW_W &&
+		y >= MODELVIEWER_PREVIEW_Y &&
+		y < MODELVIEWER_PREVIEW_Y + MODELVIEWER_PREVIEW_H;
+}
+
+static void M_ModelViewer_ResetOrbit(void)
+{
+	modelviewermenu.orbit_yaw = 0.0f;
+	modelviewermenu.orbit_pitch = 0.0f;
+	modelviewermenu.orbit_distance_scale = 1.0f;
+}
+
+static void M_ModelViewer_Zoom(float factor)
+{
+	modelviewermenu.orbit_distance_scale = CLAMP(0.35f,
+		modelviewermenu.orbit_distance_scale * factor,
+		3.0f);
+}
+
+static void M_ModelViewer_DrawPreview(modelvieweritem_t *item)
+{
+	qmodel_t *mod;
+	float px, py, pw, ph;
+
+	M_DrawTextBox(MODELVIEWER_PREVIEW_X - 8, MODELVIEWER_PREVIEW_Y - 8,
+		MODELVIEWER_PREVIEW_BOX_COLS, MODELVIEWER_PREVIEW_BOX_LINES);
+
+	if (!item)
+		return;
+
+	mod = Mod_ForName(item->name, false);
+	if (!mod || mod->type != mod_alias)
+	{
+		const char *status = (mod && mod->type != mod_ext_invalid) ? "not alias" : "load failed";
+		M_PrintWhite(MODELVIEWER_PREVIEW_X + 40, MODELVIEWER_PREVIEW_Y + 60, status);
+		return;
+	}
+
+	M_ModelViewer_MenuRectToPixels(MODELVIEWER_PREVIEW_X, MODELVIEWER_PREVIEW_Y,
+		MODELVIEWER_PREVIEW_W, MODELVIEWER_PREVIEW_H,
+		&px, &py, &pw, &ph);
+
+	DrawOrbitModelToMenuPixelsFit(item->name,
+		px, py, pw, ph,
+		25.0f,
+		0.0f,
+		0, 0, 0, 0,
+		modelviewermenu.orbit_yaw,
+		modelviewermenu.orbit_pitch,
+		modelviewermenu.orbit_distance_scale);
+
+	GL_SetCanvas(CANVAS_MENU);
+	glDisable(GL_BLEND);
+	glEnable(GL_ALPHA_TEST);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+}
+
+static void M_ModelViewer_MoveCursor(int delta)
+{
+	if (modelviewermenu.list.numitems <= 0)
+		return;
+
+	S_LocalSound("misc/menu1.wav");
+	modelviewermenu.list.cursor += delta;
+	modelviewermenu.list.cursor %= modelviewermenu.list.numitems;
+	if (modelviewermenu.list.cursor < 0)
+		modelviewermenu.list.cursor += modelviewermenu.list.numitems;
+	M_List_AutoScroll(&modelviewermenu.list);
+}
+
+static void M_ModelViewer_Close(void)
+{
+	VEC_CLEAR(modelviewermenu.items);
+	VEC_CLEAR(modelviewermenu.filtered_indices);
+	M_Menu_Extras_f();
+}
+
+static void M_ModelViewer_Init(void)
+{
+	modelviewermenu.list.cursor = 0;
+	modelviewermenu.list.scroll = 0;
+	modelviewermenu.list.viewsize = MAX_VIS_MODELVIEWER;
+	modelviewermenu.list.numitems = 0;
+	modelviewermenu.list.isactive_fn = NULL;
+	memset(&modelviewermenu.list.search, 0, sizeof(modelviewermenu.list.search));
+	modelviewermenu.list.search.maxlen = 32;
+	modelviewermenu.x = MODELVIEWER_LIST_X;
+	modelviewermenu.y = MODELVIEWER_LIST_Y;
+	modelviewermenu.cols = MODELVIEWER_LIST_COLS;
+	modelviewermenu.prev_cursor = -1;
+	modelviewermenu.scrollbar_grab = false;
+	modelviewermenu.orbit_grab = false;
+	modelviewermenu.orbit_last_x = 0;
+	modelviewermenu.orbit_last_y = 0;
+	M_ModelViewer_ResetOrbit();
+
+	M_Ticker_Init(&modelviewermenu.ticker);
+	M_ModelViewer_BuildItems();
+	M_ModelViewer_Refilter();
+}
+
+void M_Menu_ModelViewer_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_modelviewer;
+	m_entersound = true;
+
+	M_ModelViewer_Init();
+	IN_UpdateGrabs();
+}
+
+void M_ModelViewer_Draw(void)
+{
+	int firstvis, numvis, i;
+	modelvieweritem_t *selected;
+
+	modelviewermenu.x = MODELVIEWER_LIST_X;
+	modelviewermenu.y = MODELVIEWER_LIST_Y;
+	modelviewermenu.cols = MODELVIEWER_LIST_COLS;
+
+	if (!keydown[K_MOUSE1])
+	{
+		modelviewermenu.scrollbar_grab = false;
+		modelviewermenu.orbit_grab = false;
+	}
+
+	if (modelviewermenu.prev_cursor != modelviewermenu.list.cursor)
+	{
+		modelviewermenu.prev_cursor = modelviewermenu.list.cursor;
+		M_Ticker_Init(&modelviewermenu.ticker);
+	}
+	else
+	{
+		M_Ticker_Update(&modelviewermenu.ticker);
+	}
+
+	if (modelviewermenu.list.numitems > 0)
+	{
+		M_List_GetVisibleRange(&modelviewermenu.list, &firstvis, &numvis);
+		for (i = 0; i < numvis; i++)
+		{
+			const int draw_idx = i + firstvis;
+			const int item_idx = modelviewermenu.filtered_indices[draw_idx];
+			modelvieweritem_t *item = &modelviewermenu.items[item_idx];
+			char display_name[MAX_QPATH];
+			const int item_y = MODELVIEWER_LIST_Y + i * 8;
+			const int maxchars = MODELVIEWER_LIST_COLS - 2;
+			const int maxwidth = maxchars * 8;
+			const qboolean selected_row = (draw_idx == modelviewermenu.list.cursor);
+			qboolean matched;
+			qboolean needs_scroll;
+
+			COM_StripExtension(COM_SkipPath(item->name), display_name, sizeof(display_name));
+			matched = (modelviewermenu.list.search.len > 0 &&
+				q_strcasestr(display_name, modelviewermenu.list.search.text) != NULL);
+			needs_scroll = ((int)strlen(display_name) > maxchars);
+
+			if (matched)
+			{
+				if (needs_scroll)
+					M_PrintHighlightScroll(MODELVIEWER_LIST_X, item_y, maxwidth,
+						display_name, modelviewermenu.list.search.text,
+						selected_row ? modelviewermenu.ticker.scroll_time : 0.0);
+				else
+					M_PrintHighlight(MODELVIEWER_LIST_X, item_y, display_name,
+						modelviewermenu.list.search.text,
+						modelviewermenu.list.search.len);
+			}
+			else if (needs_scroll)
+			{
+				M_PrintScroll(MODELVIEWER_LIST_X, item_y, maxwidth, display_name,
+					selected_row ? modelviewermenu.ticker.scroll_time : 0.0, true);
+			}
+			else
+			{
+				M_Print(MODELVIEWER_LIST_X, item_y, display_name);
+			}
+
+			if (selected_row)
+				M_DrawCharacter(MODELVIEWER_LIST_X - 8, item_y, 12 + ((int)(realtime * 4) & 1));
+		}
+	}
+	else if (VEC_SIZE(modelviewermenu.items) > 0)
+	{
+		M_PrintWhite(MODELVIEWER_LIST_X, MODELVIEWER_LIST_Y, "No matches");
+	}
+	else
+	{
+		M_PrintWhite(MODELVIEWER_LIST_X, MODELVIEWER_LIST_Y, "No models");
+	}
+
+	if (M_List_GetOverflow(&modelviewermenu.list) > 0)
+	{
+		M_List_DrawScrollbar(&modelviewermenu.list,
+			MODELVIEWER_LIST_X + MODELVIEWER_LIST_COLS * 8 - 8,
+			MODELVIEWER_LIST_Y);
+
+		if (modelviewermenu.list.scroll > 0)
+			M_DrawEllipsisBar(MODELVIEWER_LIST_X, MODELVIEWER_LIST_Y - 8, MODELVIEWER_LIST_COLS);
+		if (modelviewermenu.list.scroll + modelviewermenu.list.viewsize < modelviewermenu.list.numitems)
+			M_DrawEllipsisBar(MODELVIEWER_LIST_X,
+				MODELVIEWER_LIST_Y + modelviewermenu.list.viewsize * 8,
+				MODELVIEWER_LIST_COLS);
+	}
+
+	selected = M_ModelViewer_SelectedItem();
+	M_ModelViewer_DrawPreview(selected);
+
+	if (selected)
+	{
+		M_PrintScroll(MODELVIEWER_DETAIL_X, MODELVIEWER_DETAIL_Y,
+			MODELVIEWER_DETAIL_W,
+			selected->name, modelviewermenu.ticker.scroll_time, false);
+		M_PrintScroll(MODELVIEWER_DETAIL_X, MODELVIEWER_DETAIL_Y + 8,
+			MODELVIEWER_DETAIL_W, selected->source,
+			modelviewermenu.ticker.scroll_time, true);
+	}
+
+	if (modelviewermenu.list.search.len > 0)
+	{
+		int cursor_x = MODELVIEWER_SEARCH_BOX_X + 8 + 8 * modelviewermenu.list.search.len;
+		M_DrawTextBox(MODELVIEWER_SEARCH_BOX_X, MODELVIEWER_SEARCH_BOX_Y, 32, 1);
+		M_PrintHighlight(MODELVIEWER_SEARCH_BOX_X + 8, MODELVIEWER_SEARCH_BOX_Y + 8, modelviewermenu.list.search.text,
+			modelviewermenu.list.search.text,
+			modelviewermenu.list.search.len);
+		if (modelviewermenu.list.numitems == 0)
+			M_DrawCharacter(cursor_x, MODELVIEWER_SEARCH_BOX_Y + 8, 11 ^ 128);
+		else
+			M_DrawCharacter(cursor_x, MODELVIEWER_SEARCH_BOX_Y + 8, 10 + ((int)(realtime * 4) & 1));
+	}
+}
+
+void M_ModelViewer_Key(int key)
+{
+	if (keydown[K_CTRL])
+	{
+		if ((key == 'u' || key == 'U') && modelviewermenu.list.search.len > 0)
+		{
+			modelviewermenu.list.search.len = 0;
+			modelviewermenu.list.search.text[0] = 0;
+			modelviewermenu.list.cursor = 0;
+			modelviewermenu.list.scroll = 0;
+			M_ModelViewer_Refilter();
+			return;
+		}
+		else if (key == K_BACKSPACE && modelviewermenu.list.search.len > 0)
+		{
+			M_DeletePrevWord(&modelviewermenu.list.search);
+			modelviewermenu.list.cursor = 0;
+			modelviewermenu.list.scroll = 0;
+			M_ModelViewer_Refilter();
+			return;
+		}
+	}
+
+	if (key >= 32 && key < 127)
+	{
+		if (modelviewermenu.list.search.len < modelviewermenu.list.search.maxlen)
+		{
+			modelviewermenu.list.search.text[modelviewermenu.list.search.len++] = key;
+			modelviewermenu.list.search.text[modelviewermenu.list.search.len] = 0;
+			modelviewermenu.list.cursor = 0;
+			modelviewermenu.list.scroll = 0;
+			M_ModelViewer_Refilter();
+		}
+		return;
+	}
+
+	if (key == K_BACKSPACE && modelviewermenu.list.search.len > 0)
+	{
+		modelviewermenu.list.search.text[--modelviewermenu.list.search.len] = 0;
+		modelviewermenu.list.cursor = 0;
+		modelviewermenu.list.scroll = 0;
+		M_ModelViewer_Refilter();
+		return;
+	}
+
+	if (modelviewermenu.scrollbar_grab)
+	{
+		switch (key)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			modelviewermenu.scrollbar_grab = false;
+			break;
+		}
+		return;
+	}
+
+	switch (key)
+	{
+	case K_ESCAPE:
+		if (modelviewermenu.list.search.len > 0)
+		{
+			modelviewermenu.list.search.len = 0;
+			modelviewermenu.list.search.text[0] = 0;
+			modelviewermenu.list.cursor = 0;
+			modelviewermenu.list.scroll = 0;
+			M_ModelViewer_Refilter();
+			return;
+		}
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_ModelViewer_Close();
+		return;
+
+	case K_LEFTARROW:
+	case K_KP_LEFTARROW:
+		M_ModelViewer_MoveCursor(-1);
+		return;
+
+	case K_RIGHTARROW:
+	case K_KP_RIGHTARROW:
+		M_ModelViewer_MoveCursor(1);
+		return;
+
+	case K_MWHEELUP:
+		if (M_ModelViewer_PointInPreview(m_mousex, m_mousey))
+			M_ModelViewer_Zoom(0.9f);
+		else
+			M_ModelViewer_MoveCursor(-1);
+		return;
+
+	case K_MWHEELDOWN:
+		if (M_ModelViewer_PointInPreview(m_mousex, m_mousey))
+			M_ModelViewer_Zoom(1.1f);
+		else
+			M_ModelViewer_MoveCursor(1);
+		return;
+
+	case K_MOUSE1:
+		if (M_ModelViewer_PointInPreview(m_mousex, m_mousey) && M_ModelViewer_SelectedItem())
+		{
+			modelviewermenu.orbit_grab = true;
+			modelviewermenu.orbit_last_x = m_mousex;
+			modelviewermenu.orbit_last_y = m_mousey;
+			return;
+		}
+
+		if (modelviewermenu.list.numitems > 0)
+		{
+			int x = m_mousex - modelviewermenu.x - (modelviewermenu.cols - 1) * 8;
+			int y = m_mousey - modelviewermenu.y;
+			if (x >= -8 && M_List_UseScrollbar(&modelviewermenu.list, y))
+			{
+				modelviewermenu.scrollbar_grab = true;
+				M_ModelViewer_Mousemove(m_mousex, m_mousey);
+			}
+		}
+		return;
+
+	default:
+		break;
+	}
+
+	if (modelviewermenu.list.numitems > 0 && M_List_Key(&modelviewermenu.list, key))
+		return;
+
+	M_Ticker_Key(&modelviewermenu.ticker, key);
+}
+
+void M_ModelViewer_Mousemove(int cx, int cy)
+{
+	int list_y = cy - modelviewermenu.y;
+
+	if (modelviewermenu.orbit_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			modelviewermenu.orbit_grab = false;
+			return;
+		}
+
+		modelviewermenu.orbit_yaw += (float)(cx - modelviewermenu.orbit_last_x) * MODELVIEWER_ORBIT_SENSITIVITY;
+		while (modelviewermenu.orbit_yaw >= 360.0f)
+			modelviewermenu.orbit_yaw -= 360.0f;
+		while (modelviewermenu.orbit_yaw < 0.0f)
+			modelviewermenu.orbit_yaw += 360.0f;
+		modelviewermenu.orbit_pitch = CLAMP(-80.0f,
+			modelviewermenu.orbit_pitch + (float)(cy - modelviewermenu.orbit_last_y) * MODELVIEWER_ORBIT_SENSITIVITY,
+			80.0f);
+		modelviewermenu.orbit_last_x = cx;
+		modelviewermenu.orbit_last_y = cy;
+		return;
+	}
+
+	if (modelviewermenu.scrollbar_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			modelviewermenu.scrollbar_grab = false;
+			return;
+		}
+		M_List_UseScrollbar(&modelviewermenu.list, list_y);
+	}
+
+	if (modelviewermenu.list.numitems > 0 &&
+		cx >= modelviewermenu.x - 8 &&
+		cx < modelviewermenu.x + modelviewermenu.cols * 8)
+	{
+		M_List_Mousemove(&modelviewermenu.list, list_y);
 	}
 }
 
@@ -24856,7 +25621,7 @@ static void M_Mods_Add(const char* name)
 		// PAK file structures (local definitions)
 		#pragma pack(push, 1)
 		typedef struct { char name[56]; int filepos; int filelen; } pak_entry_t;
-		typedef struct { char id[4]; unsigned int dirofs; unsigned int dirlen; } pak_header_t;
+		typedef struct { char id[4]; int dirofs; int dirlen; } pak_header_t;
 		#pragma pack(pop)
 		
 		// Scan pak0.pak through pak9.pak in the game dir and optional paks/ folder.
@@ -24866,6 +25631,7 @@ static void M_Mods_Add(const char* name)
 			{
 				FILE *pakfile;
 				pak_header_t header;
+				long pak_size;
 				unsigned int numfiles, j;
 
 				q_snprintf(pakpath, sizeof(pakpath), "%s/%spak%d.pak", game_path, pak_dirs[pak_dir], pak_num);
@@ -24889,16 +25655,36 @@ static void M_Mods_Add(const char* name)
 
 				header.dirofs = LittleLong(header.dirofs);
 				header.dirlen = LittleLong(header.dirlen);
-				numfiles = header.dirlen / sizeof(pak_entry_t);
 
-				if (numfiles > 4096 || header.dirlen < 0 || header.dirofs < 0)
+				if (fseek(pakfile, 0, SEEK_END) != 0 ||
+					(pak_size = ftell(pakfile)) < (long)sizeof(header))
+				{
+					fclose(pakfile);
+					continue;
+				}
+
+				if (header.dirlen < 0 || header.dirofs < 0 ||
+					header.dirlen % (int)sizeof(pak_entry_t) != 0 ||
+					(long)header.dirofs > pak_size ||
+					(long)header.dirlen > pak_size - (long)header.dirofs)
+				{
+					fclose(pakfile);
+					continue;
+				}
+
+				numfiles = (unsigned int)(header.dirlen / (int)sizeof(pak_entry_t));
+				if (numfiles > 4096)
 				{
 					fclose(pakfile);
 					continue;
 				}
 
 				// Seek to directory
-				fseek(pakfile, header.dirofs, SEEK_SET);
+				if (fseek(pakfile, header.dirofs, SEEK_SET) != 0)
+				{
+					fclose(pakfile);
+					continue;
+				}
 
 				// Read and scan entries one at a time
 				for (j = 0; j < numfiles; j++)
@@ -27687,6 +28473,7 @@ static struct
 	{"menu_startup", M_Menu_Startup_f},
 	{"menu_demooptions", M_Menu_DemoOptions_f},
 	{"menu_pakloading", M_Menu_PakLoading_f},
+	{"menu_modelviewer", M_Menu_ModelViewer_f},
 	{"menu_misc", M_Menu_Extras_f},
 	{"menu_version", M_Menu_Version_f},
 	{"menu_config", M_Menu_ResetConfig_f},
@@ -28067,6 +28854,10 @@ void M_Draw (void)
 		M_PakLoading_Draw();
 		break;
 
+	case m_modelviewer:
+		M_ModelViewer_Draw();
+		break;
+
 	case m_video:
 		M_Video_Draw ();
 		break;
@@ -28185,6 +28976,7 @@ static qboolean M_HasSearchField (void)
 	case m_console:
 	case m_extras:
 	case m_version:
+	case m_modelviewer:
 	case m_slist:
 	case m_mods:
 	case m_demos:
@@ -28364,6 +29156,10 @@ void M_Keydown (int key, qboolean repeat)
 
 	case m_pakloading:
 		M_PakLoading_Key(key);
+		return;
+
+	case m_modelviewer:
+		M_ModelViewer_Key(key);
 		return;
 
 	case m_video:
@@ -28613,6 +29409,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_pakloading:
 		M_PakLoading_Mousemove(x, y);
+		return;
+
+	case m_modelviewer:
+		M_ModelViewer_Mousemove(x, y);
 		return;
 
 	case m_mods:

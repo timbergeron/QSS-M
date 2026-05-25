@@ -578,11 +578,11 @@ static void *Hunk_AllocInternal (int size, const char *name, hunkflags_t flags)
 	Hunk_Check ();
 #endif
 
-	if (size == 0)
-		return NULL;
-
 	if (size < 0)
 		Sys_Error ("Hunk_Alloc: bad size: %i", size);
+
+	if (size == 0)
+		return NULL;
 
 	if (size > INT_MAX - (int) sizeof(hunk_t) - 15)
 		Sys_Error ("Hunk_Alloc: bad size: %i", size);

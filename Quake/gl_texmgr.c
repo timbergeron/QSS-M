@@ -2460,8 +2460,13 @@ struct gltexture_s *TexMgr_ColormapTexture(struct gltexture_s *basetex, plcolour
 	glt->source_height = basetex->source_height;
 	glt->source_crc = basetex->source_crc+1;	//something wrong so we don't get found so easily...
 
-	//and now reload it so it gets the proper colours.
-	TexMgr_ReloadImage(glt, upper, lower);
+	// Avoid freeing owner textures if reload allocations flush the cache.
+	{
+		qboolean saved_in_reload_images = in_reload_images;
+		in_reload_images = true;
+		TexMgr_ReloadImage(glt, upper, lower);
+		in_reload_images = saved_in_reload_images;
+	}
 
 	basetex->flags |= TEXPREF_COLOURMAPPED;	//so we clean up other textures spawned from it too.
 

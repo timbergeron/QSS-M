@@ -2038,6 +2038,7 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 	int						start, end, total;
 	aliashdr_t				*outhdr, *surf;
 	size_t					hdrsize;
+	size_t					numhdrframes;
 
 	bonepose_t				*outposes;
 	boneinfo_t				*outbones;
@@ -2073,7 +2074,8 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 	buffer = COM_Parse(buffer);
 
 	hdrsize = sizeof(*outhdr) - sizeof(outhdr->frames);
-	GLMesh_AddCheckedSize(&hdrsize, GLMesh_CheckedSize(anim.numposes, sizeof(outhdr->frames), "Mod_LoadMD5MeshModel"), "Mod_LoadMD5MeshModel");
+	numhdrframes = q_max((size_t)1, anim.numposes);
+	GLMesh_AddCheckedSize(&hdrsize, GLMesh_CheckedSize(numhdrframes, sizeof(outhdr->frames), "Mod_LoadMD5MeshModel"), "Mod_LoadMD5MeshModel");
 	outhdr = Hunk_Alloc(GLMesh_CheckedHunkSize (nummeshes, hdrsize, "Mod_LoadMD5MeshModel"));
 	outbones = Hunk_Alloc(GLMesh_CheckedHunkSize (numjoints, sizeof(*outbones), "Mod_LoadMD5MeshModel"));
 	outposes = Z_Malloc(GLMesh_CheckedHunkSize (numjoints, sizeof(*outposes), "Mod_LoadMD5MeshModel"));
@@ -2147,6 +2149,13 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 				surf->frames[j].interval = anim.frametime;
 			}
 			surf->numframes = (int)j;
+		}
+		else
+		{
+			surf->frames[0].firstpose = 0;
+			surf->frames[0].numposes = 1;
+			surf->frames[0].interval = 0.1f;
+			surf->numframes = 1;
 		}
 
 		MD5EXPECT("shader");

@@ -486,6 +486,22 @@ void DrawSpinningModelToMenuPixels(const char* modelname,
 	float zbias,
 	float firstframe, float framecount,
 	float shootframe, float shootframes);
+void DrawSpinningModelToMenuPixelsFit(const char* modelname,
+	float pixel_x, float pixel_y,
+	float pixel_w, float pixel_h,
+	float afov,
+	float zbias,
+	float firstframe, float framecount,
+	float shootframe, float shootframes);
+void DrawOrbitModelToMenuPixelsFit(const char* modelname,
+	float pixel_x, float pixel_y,
+	float pixel_w, float pixel_h,
+	float afov,
+	float zbias,
+	float firstframe, float framecount,
+	float shootframe, float shootframes,
+	float model_yaw, float model_pitch,
+	float distance_scale);
 
 void PR_SetMenuPreviewLegacyColors(int top, int bottom); // Set legacy shirt/pants colours (0..13) for menu preview. Pass -1 to disable.
 void PR_SetMenuPreviewRGBColors(int top_r, int top_g, int top_b, int bot_r, int bot_g, int bot_b); // Set legacy-independent RGB for preview (values -1 to disable)

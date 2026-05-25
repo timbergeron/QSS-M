@@ -56,7 +56,7 @@ static int pr_ext_warned_particleeffectnum;	//so these only spam once per map
 
 static void *PR_FindExtGlobal(int type, const char *name);
 void SV_CheckVelocity (edict_t *ent);
-extern cvar_t gl_load24bit, gl_load24bit_skins; // woods #spinnymodel
+extern cvar_t gl_load24bit, gl_load24bit_skins, r_outline; // woods #spinnymodel
 
 typedef enum multicast_e
 {
@@ -7719,7 +7719,7 @@ static void PF_cl_renderscene(void)
 
 // woods #spinnymodel -- QSS DevKit
 
-static void PR_addentity_internalNew(edict_t* ed) // woods #spinnymodel
+static void PR_addentity_internalNew(edict_t* ed, float frame2, float lerpfrac, float frame1time, float frame2time) // woods #spinnymodel
 {
 	qmodel_t* model = qcvm->GetModel(ed->v.modelindex);
 
@@ -7746,48 +7746,11 @@ static void PR_addentity_internalNew(edict_t* ed) // woods #spinnymodel
 			e->alpha = ENTALPHA_DEFAULT;
 			e->lerpflags = LERP_EXPLICIT | LERP_RESETANIM | LERP_RESETMOVE;
 			e->frame = ed->v.frame;
+			e->lerp.snap.frame2 = frame2;
+			e->lerp.snap.lerpfrac = CLAMP(0.f, lerpfrac, 1.f);
+			e->lerp.snap.time[0] = frame1time;
+			e->lerp.snap.time[1] = frame2time;
 
-			/* If a progs is active, honor any extended fields safely */
-			if (qcvm->progs)
-			{
-				eval_t* frame2 = GetEdictFieldValue(ed, qcvm->extfields.frame2);
-				eval_t* lerpfrac = GetEdictFieldValue(ed, qcvm->extfields.lerpfrac);
-				eval_t* frame1time = GetEdictFieldValue(ed, qcvm->extfields.frame1time);
-				eval_t* frame2time = GetEdictFieldValue(ed, qcvm->extfields.frame2time);
-				eval_t* colormod = GetEdictFieldValue(ed, qcvm->extfields.colormod);
-				eval_t* alpha = GetEdictFieldValue(ed, qcvm->extfields.alpha);
-				eval_t* scale = GetEdictFieldValue(ed, qcvm->extfields.scale);
-				eval_t* renderflags = GetEdictFieldValue(ed, qcvm->extfields.renderflags);
-				int rf = renderflags ? renderflags->_float : 0;
-
-				if (colormod && (colormod->vector[0] || colormod->vector[1] || colormod->vector[2]))
-				{
-					e->netstate.colormod[0] *= colormod->vector[0];
-					e->netstate.colormod[1] *= colormod->vector[1];
-					e->netstate.colormod[2] *= colormod->vector[2];
-				}
-				if (alpha)
-					e->alpha = ENTALPHA_ENCODE(alpha->_float);
-				if (scale)
-					e->netstate.scale = ENTSCALE_ENCODE(scale->_float);
-
-				e->lerp.snap.frame2 = frame2 ? frame2->_float : 0;
-				e->lerp.snap.lerpfrac = lerpfrac ? lerpfrac->_float : 0;
-				e->lerp.snap.lerpfrac = q_max(0.f, e->lerp.snap.lerpfrac);
-				e->lerp.snap.lerpfrac = q_min(1.f, e->lerp.snap.lerpfrac);
-				e->lerp.snap.time[0] = frame1time ? frame1time->_float : 0;
-				e->lerp.snap.time[1] = frame2time ? frame2time->_float : 0;
-
-				if (rf & RF_VIEWMODEL)
-					e->eflags |= EFLAGS_VIEWMODEL;
-				if (rf & RF_EXTERNALMODEL)
-					e->eflags |= EFLAGS_EXTERIORMODEL;
-				if (rf & RF_WEIRDFRAMETIMES)
-				{
-					e->lerp.snap.time[0] = qcvm->time - e->lerp.snap.time[0];
-					e->lerp.snap.time[1] = qcvm->time - e->lerp.snap.time[1];
-				}
-			}
 		}
 	}
 }
@@ -7900,14 +7863,64 @@ static void MenuPreview_DrawQuad(GLuint tex, float px, float py, float pw, float
 	if (wasAlpha)  glEnable(GL_ALPHA_TEST);
 }
 
-/* Render a spinning model into a menu viewport (menu units or pixels via Pixels API). */
+static float MenuPreview_ModelFitDistance(qmodel_t *mdl, float afov, float rect_size_x, float rect_size_y)
+{
+	float fov_y, fov_x;
+	float half_height, half_width, depth_radius;
+	float height_dist, width_dist;
+	float aspect;
+
+	if (!mdl)
+		return 128.0f;
+
+	rect_size_x = q_max(1.0f, rect_size_x);
+	rect_size_y = q_max(1.0f, rect_size_y);
+
+	if (afov <= 0)
+		afov = scr_fov.value;
+	afov = CLAMP(10.0f, afov, 120.0f);
+
+	aspect = rect_size_x / rect_size_y;
+	if (aspect < 4.0f / 3.0f)
+	{
+		fov_y = afov;
+		fov_x = CalcFovy(fov_y, rect_size_y, rect_size_x);
+	}
+	else
+	{
+		fov_y = atan(tan(afov * M_PI / 360.0) * (3.0 / 4.0)) * (360.0 / M_PI);
+		fov_x = atan(tan(fov_y * M_PI / 360.0) * aspect) * (360.0 / M_PI);
+	}
+
+	half_height = q_max(1.0f, (mdl->ymaxs[2] - mdl->ymins[2]) * 0.5f);
+	half_width = q_max(fabs(mdl->ymins[1]), fabs(mdl->ymaxs[1]));
+	depth_radius = q_max(fabs(mdl->ymins[0]), fabs(mdl->ymaxs[0]));
+
+	if (half_width < 1.0f)
+		half_width = q_max(fabs(mdl->mins[1]), fabs(mdl->maxs[1]));
+	if (half_width < 1.0f)
+		half_width = 1.0f;
+	if (depth_radius < 1.0f)
+		depth_radius = q_max(fabs(mdl->mins[0]), fabs(mdl->maxs[0]));
+
+	height_dist = half_height / tan(fov_y * M_PI / 360.0);
+	width_dist = half_width / tan(fov_x * M_PI / 360.0);
+
+	return q_max(16.0f, depth_radius + q_max(height_dist, width_dist) * 1.12f);
+}
+
+/* Render a menu model preview into a viewport (menu units or pixels via Pixels API). */
 static void DrawSpinningModelToMenu(const char* modelname,
 	float rect_min_x, float rect_min_y,
 	float rect_size_x, float rect_size_y,
 	float afov,
 	float zbias,
 	float firstframe, float framecount,
-	float shootframe, float shootframes)
+	float shootframe, float shootframes,
+	qboolean fit_to_box,
+	qboolean spin,
+	float model_yaw, float model_pitch,
+	float distance_scale)
 {
 	qcvm_t* oldvm = qcvm;
 	edict_t ed; /* transient edict carrying fields for PR_addentity_internal */
@@ -7950,7 +7963,6 @@ static void DrawSpinningModelToMenu(const char* modelname,
 		viewprops.afov = afov;
 	viewprops.drawsbar = false;
 	viewprops.drawcrosshair = false;
-	VectorCopy(vieworg, viewprops.origin);
 	VectorCopy(viewang, viewprops.angles);
 
 	memset(&ed, 0, sizeof(ed));
@@ -7971,11 +7983,28 @@ static void DrawSpinningModelToMenu(const char* modelname,
 	{
 		zbias = ((mdl->mins[2] - mdl->maxs[2]) * 0.5f) - mdl->mins[2];
 	}
+	if (fit_to_box && mdl && mdl->type == mod_alias)
+	{
+		if (distance_scale <= 0.0f)
+			distance_scale = 1.0f;
+		vieworg[0] = -MenuPreview_ModelFitDistance(mdl, afov, viewprops.rect_size[0], viewprops.rect_size[1]) *
+			CLAMP(0.25f, distance_scale, 4.0f);
+	}
+	VectorCopy(vieworg, viewprops.origin);
 
-	/* Spin the model around the Y axis */
-	s_angles_y += 45.0f * (float)host_frametime;
-	if (s_angles_y >= 360.0f)
-		s_angles_y -= 360.0f;
+	if (spin)
+	{
+		/* Spin the model around the Y axis */
+		s_angles_y += 45.0f * (float)host_frametime;
+		if (s_angles_y >= 360.0f)
+			s_angles_y -= 360.0f;
+		model_yaw = s_angles_y;
+		model_pitch = 0.0f;
+	}
+	else
+	{
+		model_pitch = CLAMP(-89.0f, model_pitch, 89.0f);
+	}
 
 	/* Optional simple frame animation */
 	if (framecount > 0 || shootframes > 0)
@@ -7987,7 +8016,7 @@ static void DrawSpinningModelToMenu(const char* modelname,
 			s_frame2 = s_frame;
 			s_frame += 1.0f;
 
-			if (s_angles_y >= 170.0f && shootframes > 0)
+			if (spin && s_angles_y >= 170.0f && shootframes > 0)
 			{
 				if (s_frame == shootframe + shootframes)
 				{
@@ -8016,17 +8045,21 @@ static void DrawSpinningModelToMenu(const char* modelname,
 	VectorClear(ed.v.origin);
 	ed.v.origin[2] = zbias;
 	VectorClear(ed.v.angles);
-	ed.v.angles[1] = s_angles_y;
+	ed.v.angles[0] = model_pitch;
+	ed.v.angles[1] = model_yaw;
 	ed.v.skin = 0;
 	ed.v.frame = s_frame;
 	/* Colour mapping: RGB > legacy > fallback */
 	scoreboard_t* saved_scores = NULL;
 	int saved_maxclients = 0;
+	qboolean saved_score_state = false;
 	static scoreboard_t preview_sb; /* static to keep stable address during draw */
+
 	if (g_menu_preview_hasrgb)
 	{
 		saved_scores = cl.scores;
 		saved_maxclients = cl.maxclients;
+		saved_score_state = true;
 		memset(&preview_sb, 0, sizeof(preview_sb));
 		preview_sb.shirt.type = 2;
 		preview_sb.shirt.basic = 0;
@@ -8052,6 +8085,7 @@ static void DrawSpinningModelToMenu(const char* modelname,
 		{
 			saved_scores = cl.scores;
 			saved_maxclients = cl.maxclients;
+			saved_score_state = true;
 			memset(&preview_sb, 0, sizeof(preview_sb));
 			preview_sb.shirt.type = 1;
 			preview_sb.shirt.basic = (g_menu_preview_top & 15);
@@ -8067,20 +8101,6 @@ static void DrawSpinningModelToMenu(const char* modelname,
 		ed.v.colormap = cl.viewentity; /* fallback to local player's scoreboard colours */
 	}
 
-	/* supply explicit lerp fields if available */
-	if (qcvm->progs && qcvm->extfields.frame2 >= 0)
-	{
-		eval_t* ev;
-		ev = GetEdictFieldValue(&ed, qcvm->extfields.frame2);
-		if (ev) ev->_float = s_frame2;
-		ev = GetEdictFieldValue(&ed, qcvm->extfields.lerpfrac);
-		if (ev) ev->_float = s_lerpfrac;
-		ev = GetEdictFieldValue(&ed, qcvm->extfields.frame1time);
-		if (ev) ev->_float = cl.time;
-		ev = GetEdictFieldValue(&ed, qcvm->extfields.frame2time);
-		if (ev) ev->_float = cl.time;
-	}
-
 	/* bind modelindex */
 	{
 		extern int CL_Precache_Model(const char* name);
@@ -8088,11 +8108,11 @@ static void DrawSpinningModelToMenu(const char* modelname,
 		ed.v.modelindex = mi;
 	}
 
-	PR_addentity_internalNew(&ed);
+	PR_addentity_internalNew(&ed, s_frame2, s_lerpfrac, cl.time, cl.time);
 	PF_cl_renderscene();
 
 	PR_SwitchQCVM(oldvm);
-	if (saved_scores)
+	if (saved_score_state)
 	{
 		cl.scores = saved_scores;
 		cl.maxclients = saved_maxclients;
@@ -8100,13 +8120,17 @@ static void DrawSpinningModelToMenu(const char* modelname,
 	menuvm->GetModel = old_GetModel;
 }
 
-void DrawSpinningModelToMenuPixels(const char* modelname,
+static void DrawSpinningModelToMenuPixelsInternal(const char* modelname,
 	float pixel_x, float pixel_y,
 	float pixel_w, float pixel_h,
 	float afov,
 	float zbias,
 	float firstframe, float framecount,
-	float shootframe, float shootframes)
+	float shootframe, float shootframes,
+	qboolean fit_to_box,
+	qboolean spin,
+	float model_yaw, float model_pitch,
+	float distance_scale)
 {
 	/* Offscreen FBO: render model, then draw textured quad at pixel rect. */
 	if (MenuPreviewFBO_Ensure((int)pixel_w, (int)pixel_h))
@@ -8129,7 +8153,9 @@ void DrawSpinningModelToMenuPixels(const char* modelname,
 			0.0f, 0.0f,
 			(float)preview_fbo.w, (float)preview_fbo.h,
 			afov, zbias,
-			firstframe, framecount, shootframe, shootframes);
+			firstframe, framecount, shootframe, shootframes,
+			fit_to_box,
+			spin, model_yaw, model_pitch, distance_scale);
 		g_menu_vm_scale_override = prev_override;
 		glx = old_glx; gly = old_gly; glwidth = old_glw; glheight = old_glh;
 
@@ -8157,8 +8183,64 @@ void DrawSpinningModelToMenuPixels(const char* modelname,
 		pixel_x, pixel_y,
 		pixel_w, pixel_h,
 		afov, zbias,
-		firstframe, framecount, shootframe, shootframes);
+		firstframe, framecount, shootframe, shootframes,
+		fit_to_box,
+		spin, model_yaw, model_pitch, distance_scale);
 	g_menu_vm_scale_override = prev_override;
+}
+
+void DrawSpinningModelToMenuPixels(const char* modelname,
+	float pixel_x, float pixel_y,
+	float pixel_w, float pixel_h,
+	float afov,
+	float zbias,
+	float firstframe, float framecount,
+	float shootframe, float shootframes)
+{
+	DrawSpinningModelToMenuPixelsInternal(modelname,
+		pixel_x, pixel_y, pixel_w, pixel_h,
+		afov, zbias,
+		firstframe, framecount, shootframe, shootframes,
+		false,
+		true, 0.0f, 0.0f, 1.0f);
+}
+
+void DrawSpinningModelToMenuPixelsFit(const char* modelname,
+	float pixel_x, float pixel_y,
+	float pixel_w, float pixel_h,
+	float afov,
+	float zbias,
+	float firstframe, float framecount,
+	float shootframe, float shootframes)
+{
+	DrawSpinningModelToMenuPixelsInternal(modelname,
+		pixel_x, pixel_y, pixel_w, pixel_h,
+		afov, zbias,
+		firstframe, framecount, shootframe, shootframes,
+		true,
+		true, 0.0f, 0.0f, 1.0f);
+}
+
+void DrawOrbitModelToMenuPixelsFit(const char* modelname,
+	float pixel_x, float pixel_y,
+	float pixel_w, float pixel_h,
+	float afov,
+	float zbias,
+	float firstframe, float framecount,
+	float shootframe, float shootframes,
+	float model_yaw, float model_pitch,
+	float distance_scale)
+{
+	float saved_outline = r_outline.value;
+
+	r_outline.value = 0.0f;
+	DrawSpinningModelToMenuPixelsInternal(modelname,
+		pixel_x, pixel_y, pixel_w, pixel_h,
+		afov, zbias,
+		firstframe, framecount, shootframe, shootframes,
+		true,
+		false, model_yaw, model_pitch, distance_scale);
+	r_outline.value = saved_outline;
 }
 
 void PR_SetMenuPreviewLegacyColors(int top, int bottom)

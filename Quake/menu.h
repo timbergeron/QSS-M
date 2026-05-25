@@ -59,6 +59,7 @@ enum m_state_e {
 	m_startup,
 	m_demooptions,
 	m_pakloading,
+	m_modelviewer,
 	m_mods, // woods #modsmenu (iw)
 	m_demos, // woods #demosmenu
 	m_help,

@@ -1722,9 +1722,12 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	}
 
 #define MyVectorScale(a,s,b) do{(b)[0]=(s)*(a)[0];(b)[1]=(s)*(a)[1];(b)[2]=(s)*(a)[2];}while(0)
-	if (e->netstate.colormap > 0 && e->netstate.colormap <= cl.maxclients)
+	if (cl.scores && e->netstate.colormap > 0 && e->netstate.colormap <= cl.maxclients)
 	{
 		scoreboard_t* sb = &cl.scores[e->netstate.colormap - 1];
+		qboolean have_view_score = cl.viewentity > 0 && cl.viewentity <= cl.maxclients;
+		qboolean isSamePants = false;
+		qboolean isSelf = false;
 		byte* pal;
 
 		const char* enemycolor = gl_enemycolor.string;
@@ -1735,10 +1738,13 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 
 		qboolean isTeamColorSet = strcmp(gl_teamcolor.string, "") != 0;
 		qboolean isEnemyColorSet = strcmp(gl_enemycolor.string, "") != 0;
-		qboolean isSamePants = sb->pants.basic == cl.scores[cl.viewentity - 1].pants.basic;
-		qboolean isSelf = sb->userinfo == CL_GetSafeViewEntityUserinfo();
+		if (have_view_score)
+		{
+			isSamePants = sb->pants.basic == cl.scores[cl.viewentity - 1].pants.basic;
+			isSelf = sb->userinfo == CL_GetSafeViewEntityUserinfo();
+		}
 
-		if ((isTeamColorSet || isEnemyColorSet) && !cls.demoplayback && !isSelf) // woods #enemycolors, do we run it?
+		if ((isTeamColorSet || isEnemyColorSet) && !cls.demoplayback && !isSelf && have_view_score && key_dest != key_menu) // woods #enemycolors, do we run it?
 		{
 			if (isTeamColorSet && !isEnemyColorSet && cl.teamcolor[0]) // team color active, enemy blank
 			{
@@ -2897,7 +2903,7 @@ void R_DrawAliasModel (entity_t *e)
 						tex.base = t;
 				}
 			}
-			else if (e->netstate.colormap>=1&&e->netstate.colormap<=cl.maxclients)
+			else if (cl.scores && e->netstate.colormap>=1&&e->netstate.colormap<=cl.maxclients)
 			{	//despite being able to handle _shirt+_pants textures in our glsl, we still prefer to generate per-player textures.
 				//1) works with non-glsl.
 				//2) preserves the weird non-linear ranges.
@@ -2907,6 +2913,9 @@ void R_DrawAliasModel (entity_t *e)
 				if (tex.base && tex.base->source_format == SRC_INDEXED && !tex.upper && !tex.lower)
 				{
 					scoreboard_t* sb = &cl.scores[e->netstate.colormap - 1];
+					qboolean have_view_score = cl.viewentity > 0 && cl.viewentity <= cl.maxclients;
+					qboolean isSamePants = false;
+					qboolean isSelf = false;
 					struct gltexture_s* t = NULL; // woods
 
 					// woods force colors #enemycolors
@@ -2916,11 +2925,13 @@ void R_DrawAliasModel (entity_t *e)
 
 					qboolean isTeamColorSet = strcmp(gl_teamcolor.string, "") != 0;
 					qboolean isEnemyColorSet = strcmp(gl_enemycolor.string, "") != 0;
-					qboolean isSamePants = sb->pants.basic == cl.scores[cl.viewentity - 1].pants.basic;
-					qboolean isSelf = sb->userinfo == CL_GetSafeViewEntityUserinfo();
+					if (have_view_score)
+					{
+						isSamePants = sb->pants.basic == cl.scores[cl.viewentity - 1].pants.basic;
+						isSelf = sb->userinfo == CL_GetSafeViewEntityUserinfo();
+					}
 
-
-                if ((isTeamColorSet || isEnemyColorSet) && !cls.demoplayback && !isSelf && key_dest != key_menu) // woods #enemycolors, do we run it?
+					if ((isTeamColorSet || isEnemyColorSet) && !cls.demoplayback && !isSelf && have_view_score && key_dest != key_menu) // woods #enemycolors, do we run it?
 					{
 						if (isTeamColorSet && !isEnemyColorSet) // team color active, enemy blank
 							t = isSamePants ? TexMgr_ColormapTexture(tex.base, team, team) : TexMgr_ColormapTexture(tex.base, sb->pants, sb->shirt);
@@ -2944,6 +2955,21 @@ void R_DrawAliasModel (entity_t *e)
 		}
 		if (!gl_fullbrights.value)
 			tex.luma = NULL;
+
+		// woods #md5crash -- the skin/colormap work above can call TexMgr_ColormapTexture,
+		// which allocates from the hunk; if that grows a new hunk segment it triggers a
+		// Cache_Flush that frees the very model we are drawing (alias extradata lives in the
+		// relocatable cache). Re-fetch our surface pointer so the draw below and the surface
+		// walk never dereference freed memory.
+		{
+			aliashdr_t *rebase = (aliashdr_t *)Mod_Extradata (e->model);
+			int rs;
+			if (!rebase)
+				goto cleanup;
+			paliashdr = rebase;
+			for (rs = 0; rs < surf && paliashdr->nextsurface; rs++)
+				paliashdr = (aliashdr_t*)((byte*)paliashdr + paliashdr->nextsurface);
+		}
 
 		//
 		// draw it
@@ -3120,7 +3146,21 @@ void R_DrawAliasModel (entity_t *e)
 		}
 		if (!paliashdr->nextsurface)
 			break;
-		paliashdr = (aliashdr_t*)((byte*)paliashdr + paliashdr->nextsurface);
+		{
+			intptr_t ns = paliashdr->nextsurface;
+			if (ns < 256 || ns > 64*1024*1024)	// woods #md5crash -- guard against corrupted surface chains
+			{
+				static qboolean warned = false;
+				if (!warned)
+				{
+					warned = true;
+					Con_Warning("R_DrawAliasModel: '%s' bad nextsurface %lld at surf %d (pvt %d, numbones %d, numtris %d) - stopping walk\n",
+						e->model->name, (long long)ns, surf, (int)paliashdr->poseverttype, paliashdr->numbones, paliashdr->numtris);
+				}
+				break;
+			}
+			paliashdr = (aliashdr_t*)((byte*)paliashdr + ns);
+		}
 	}
 
 cleanup:
