@@ -28967,9 +28967,12 @@ static qboolean M_HasSearchField (void)
 {
 	switch (m_state)
 	{
+	case m_options:
 	case m_maps:
 	case m_downloadmaps:
 	case m_keys:
+	case m_mouse:
+	case m_video:
 	case m_graphics:
 	case m_sound:
 	case m_game:
@@ -28977,6 +28980,9 @@ static qboolean M_HasSearchField (void)
 	case m_console:
 	case m_extras:
 	case m_version:
+	case m_startup:
+	case m_demooptions:
+	case m_pakloading:
 	case m_modelviewer:
 	case m_slist:
 	case m_mods:
@@ -28987,9 +28993,48 @@ static qboolean M_HasSearchField (void)
 	}
 }
 
+static int M_ShiftedPrintableKey (int key)
+{
+	if (key < 32 || key >= 127)
+		return key;
+	if (!keydown[K_SHIFT])
+		return key;
+
+	if (key >= 'a' && key <= 'z')
+		return key - ('a' - 'A');
+
+	switch (key)
+	{
+	case '`': return '~';
+	case '1': return '!';
+	case '2': return '@';
+	case '3': return '#';
+	case '4': return '$';
+	case '5': return '%';
+	case '6': return '^';
+	case '7': return '&';
+	case '8': return '*';
+	case '9': return '(';
+	case '0': return ')';
+	case '-': return '_';
+	case '=': return '+';
+	case '[': return '{';
+	case ']': return '}';
+	case '\\': return '|';
+	case ';': return ':';
+	case '\'': return '"';
+	case ',': return '<';
+	case '.': return '>';
+	case '/': return '?';
+	default: return key;
+	}
+}
+
 
 void M_Keydown (int key, qboolean repeat)
 {
+	qboolean has_search;
+
 	if (cls.menu_qcvm.extfuncs.m_draw)	//don't get confused.
 		return;
 
@@ -29010,9 +29055,9 @@ void M_Keydown (int key, qboolean repeat)
 
 	// only allow repeat events for a few navigational keys
 	// this reduces sound spam and, for gamepads, rumble spam
+	has_search = M_HasSearchField();
 	if (repeat)
 	{
-		qboolean has_search = M_HasSearchField();
 		switch (key)
 		{
 		case K_UPARROW:
@@ -29041,6 +29086,9 @@ void M_Keydown (int key, qboolean repeat)
 
 	if (key == K_SHIFT)
 		M_LivePreview_UpdateUserPin ();
+
+	if (!bind_grab && has_search)
+		key = M_ShiftedPrintableKey(key);
 
 	switch (m_state)
 	{
