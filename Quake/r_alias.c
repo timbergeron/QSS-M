@@ -434,6 +434,9 @@ void GLAlias_CreateShaders (void)
 			"	gl_FragColor = result;\n"
 			"}\n";
 
+	for (i = 0; i < ALIAS_GLSL_MODES; i++)
+		memset (&r_alias_glsl[i], 0, sizeof(r_alias_glsl[i]));
+
 	if (!gl_glsl_alias_able)
 		return;
 
@@ -2092,26 +2095,6 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, lerpdata_t lerpdata)
 			const iqmvert_t *verts2 = (const iqmvert_t*)((byte *)paliashdr + paliashdr->vertexes) + morphpose * paliashdr->numverts_vbo;
 			const iqmvert_t *vboverts2 = (const iqmvert_t*)(currententity->model->meshvboptr+paliashdr->vbovertofs) + (paliashdr->numverts_vbo * morphpose);
 
-			if (shading)
-			{
-				for (i = 0; i < paliashdr->numverts_vbo; i++)
-				{
-					float dot;
-					dot = DotProduct(verts2[i].norm, shadevector);	//NOTE: ignores animated normals
-					if (dot < 0.0)	//bizzare maths guessed by mh
-						dot = 1.0 + dot * (13.0 / 44.0);
-					else
-						dot = 1.0 + dot;
-					vc[i][0] = dot * lightcolor[0] * verts2[i].rgba[0];
-					vc[i][1] = dot * lightcolor[1] * verts2[i].rgba[1];
-					vc[i][2] = dot * lightcolor[2] * verts2[i].rgba[2];
-					vc[i][3] = entalpha * verts2[i].rgba[3];
-				}
-				glEnableClientState(GL_COLOR_ARRAY);
-				GL_BindBuffer (GL_ARRAY_BUFFER, 0);
-				glColorPointer(4, GL_FLOAT, 0, vc);
-			}
-
 			if (lerpdata.bonestate)
 			{	//oh dear. its animated. and we don't have any glsl to animate it for us.
 				bonepose_t pose;
@@ -2121,12 +2104,12 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, lerpdata_t lerpdata)
 				int j, k;
 				for (i = 0; i < paliashdr->numverts_vbo; i++)
 				{
-					//lerp the matrix... this is less of a nightmare in glsl...
+					// Match the skeletal GLSL path: blend all four weights, then transform position and normal.
 					in = lerpdata.bonestate + verts2[i].idx[0];
 					w = verts2[i].weight[0];
 					for (j = 0; j < 12; j++)
 						pose.mat[j] = in->mat[j] * w;
-					for (k = 1; k < 3; k++)
+					for (k = 1; k < 4; k++)
 					{
 						w = verts2[i].weight[k];
 						if (!w)
@@ -2140,6 +2123,35 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, lerpdata_t lerpdata)
 					vpos[i][0] = xyz[0]*pose.mat[0] + xyz[1]*pose.mat[1] + xyz[2]*pose.mat[2] + pose.mat[3];
 					vpos[i][1] = xyz[0]*pose.mat[4] + xyz[1]*pose.mat[5] + xyz[2]*pose.mat[6] + pose.mat[7];
 					vpos[i][2] = xyz[0]*pose.mat[8] + xyz[1]*pose.mat[9] + xyz[2]*pose.mat[10] + pose.mat[11];
+
+					if (shading)
+					{
+						vec3_t n;
+						float dot;
+
+						xyz = verts2[i].norm;
+						n[0] = xyz[0]*pose.mat[0] + xyz[1]*pose.mat[1] + xyz[2]*pose.mat[2];
+						n[1] = xyz[0]*pose.mat[4] + xyz[1]*pose.mat[5] + xyz[2]*pose.mat[6];
+						n[2] = xyz[0]*pose.mat[8] + xyz[1]*pose.mat[9] + xyz[2]*pose.mat[10];
+						VectorNormalize(n);
+
+						dot = DotProduct(n, shadevector);
+						if (dot < 0.0)	//bizzare maths guessed by mh
+							dot = 1.0 + dot * (13.0 / 44.0);
+						else
+							dot = 1.0 + dot;
+						vc[i][0] = dot * lightcolor[0] * verts2[i].rgba[0];
+						vc[i][1] = dot * lightcolor[1] * verts2[i].rgba[1];
+						vc[i][2] = dot * lightcolor[2] * verts2[i].rgba[2];
+						vc[i][3] = entalpha * verts2[i].rgba[3];
+					}
+				}
+
+				if (shading)
+				{
+					glEnableClientState(GL_COLOR_ARRAY);
+					GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+					glColorPointer(4, GL_FLOAT, 0, vc);
 				}
 
 				GL_BindBuffer (GL_ARRAY_BUFFER, 0);
@@ -2147,6 +2159,26 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, lerpdata_t lerpdata)
 			}
 			else
 			{
+				if (shading)
+				{
+					for (i = 0; i < paliashdr->numverts_vbo; i++)
+					{
+						float dot;
+						dot = DotProduct(verts2[i].norm, shadevector);
+						if (dot < 0.0)	//bizzare maths guessed by mh
+							dot = 1.0 + dot * (13.0 / 44.0);
+						else
+							dot = 1.0 + dot;
+						vc[i][0] = dot * lightcolor[0] * verts2[i].rgba[0];
+						vc[i][1] = dot * lightcolor[1] * verts2[i].rgba[1];
+						vc[i][2] = dot * lightcolor[2] * verts2[i].rgba[2];
+						vc[i][3] = entalpha * verts2[i].rgba[3];
+					}
+					glEnableClientState(GL_COLOR_ARRAY);
+					GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+					glColorPointer(4, GL_FLOAT, 0, vc);
+				}
+
 				GL_BindBuffer (GL_ARRAY_BUFFER, currententity->model->meshvbo);
 				glVertexPointer(3, GL_FLOAT, sizeof (iqmvert_t), vboverts2->xyz);
 			}
