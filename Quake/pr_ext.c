@@ -7892,7 +7892,10 @@ static float MenuPreview_ModelFitDistance(qmodel_t *mdl, float afov, float rect_
 		fov_x = atan(tan(fov_y * M_PI / 360.0) * aspect) * (360.0 / M_PI);
 	}
 
-	half_height = q_max(1.0f, (mdl->ymaxs[2] - mdl->ymins[2]) * 0.5f);
+	if (mdl->ymaxs[2] > mdl->ymins[2])
+		half_height = q_max(1.0f, (mdl->ymaxs[2] - mdl->ymins[2]) * 0.5f);
+	else
+		half_height = q_max(1.0f, (mdl->maxs[2] - mdl->mins[2]) * 0.5f);
 	half_width = q_max(fabs(mdl->ymins[1]), fabs(mdl->ymaxs[1]));
 	depth_radius = q_max(fabs(mdl->ymins[0]), fabs(mdl->ymaxs[0]));
 
@@ -7983,7 +7986,7 @@ static void DrawSpinningModelToMenu(const char* modelname,
 	{
 		zbias = ((mdl->mins[2] - mdl->maxs[2]) * 0.5f) - mdl->mins[2];
 	}
-	if (fit_to_box && mdl && mdl->type == mod_alias)
+	if (fit_to_box && mdl && (mdl->type == mod_alias || mdl->type == mod_sprite))
 	{
 		if (distance_scale <= 0.0f)
 			distance_scale = 1.0f;

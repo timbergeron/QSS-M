@@ -18482,6 +18482,7 @@ static qboolean M_ModelViewer_IsModelFile(const char *name)
 	const char *ext = COM_FileGetExtension(name);
 
 	return !q_strcasecmp(ext, "mdl") ||
+		!q_strcasecmp(ext, "spr") ||
 		!q_strcasecmp(ext, "md3") ||
 		!q_strcasecmp(ext, "md5") ||
 		!q_strcasecmp(ext, "md5mesh") ||
@@ -18806,9 +18807,9 @@ static void M_ModelViewer_DrawPreview(modelvieweritem_t *item)
 		return;
 
 	mod = Mod_ForName(item->name, false);
-	if (!mod || mod->type != mod_alias)
+	if (!mod || (mod->type != mod_alias && mod->type != mod_sprite))
 	{
-		const char *status = (mod && mod->type != mod_ext_invalid) ? "not alias" : "load failed";
+		const char *status = (mod && mod->type != mod_ext_invalid) ? "not renderable" : "load failed";
 		M_PrintWhite(MODELVIEWER_PREVIEW_X + 40, MODELVIEWER_PREVIEW_Y + 60, status);
 		return;
 	}
