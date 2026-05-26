@@ -633,6 +633,11 @@ static GLint grassGeomStaticNormalLoc;
 static GLint grassGeomStaticTangentLoc;
 static GLint grassGeomStaticLodLoc;
 static GLint grassGeomStaticCellWeightLoc;
+static GLint grassGeomDLightCountLoc;
+static GLint grassGeomDLightPosRadiusLoc;
+static GLint grassGeomDLightColorMinLoc;
+
+#define GRASS_SHADER_DLIGHTS 4 // woods #grass -- keep in sync with GLSL define
 
 
 static struct
@@ -692,6 +697,9 @@ static void GLWorld_DeleteShaderPrograms (void)
 	grassGeomStaticTangentLoc = -1;
 	grassGeomStaticLodLoc = -1;
 	grassGeomStaticCellWeightLoc = -1;
+	grassGeomDLightCountLoc = -1;
+	grassGeomDLightPosRadiusLoc = -1;
+	grassGeomDLightColorMinLoc = -1;
 
 	for (i = 0; i < countof(r_water); i++)
 	{
@@ -1412,30 +1420,6 @@ static void R_GrassBuildDlightList (const msurface_t *s, const entity_t *ent, gr
 		dst->minlight = light->minlight;
 		dst->cull_radius2 = cull_radius * cull_radius;
 	}
-}
-
-static qboolean R_GrassSurfaceHasActiveDlights (const msurface_t *s)
-{
-	int lnum;
-
-	if (s->dlightframe != r_framecount)
-		return false;
-
-	for (lnum = 0; lnum < MAX_DLIGHTS; lnum++)
-	{
-		dlight_t *light;
-
-		if (!(s->dlightbits[lnum >> 5] & (1U << (lnum & 31))))
-			continue;
-		light = &cl_dlights[lnum];
-		if (light->die < cl.time || (light->spawn > cl.mtime[0] && cls.demoplayback) || !light->radius)
-			continue;
-		if (light->radius - light->minlight <= 0.0f)
-			continue;
-		return true;
-	}
-
-	return false;
 }
 
 static qboolean R_GrassLightstyleIsAnimated (unsigned int style)
@@ -2717,7 +2701,45 @@ static qboolean R_GrassEnsureSurfaceShaderVBO (qmodel_t *model, const msurface_t
 	return true;
 }
 
-static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const msurface_t *s, grass_surface_cache_t *cache, int cellstep, float baseheight, const vec3_t basecolor, const vec3_t tipcolor)
+static void R_GrassUploadShaderDlights (const msurface_t *s, const entity_t *ent)
+{
+	grass_dlight_list_t list;
+	float posradius[GRASS_SHADER_DLIGHTS * 4];
+	float colormin[GRASS_SHADER_DLIGHTS * 4];
+	int i, count;
+
+	if (grassGeomDLightCountLoc < 0)
+		return;
+
+	R_GrassBuildDlightList(s, ent, &list);
+	count = list.count;
+	if (count > GRASS_SHADER_DLIGHTS)
+		count = GRASS_SHADER_DLIGHTS;
+
+	for (i = 0; i < count; i++)
+	{
+		const grass_dlight_t *l = &list.lights[i];
+		posradius[i * 4 + 0] = l->origin[0];
+		posradius[i * 4 + 1] = l->origin[1];
+		posradius[i * 4 + 2] = l->origin[2];
+		posradius[i * 4 + 3] = l->radius;
+		colormin[i * 4 + 0] = l->color[0];
+		colormin[i * 4 + 1] = l->color[1];
+		colormin[i * 4 + 2] = l->color[2];
+		colormin[i * 4 + 3] = l->minlight;
+	}
+
+	GL_Uniform1iFunc(grassGeomDLightCountLoc, count);
+	if (count > 0)
+	{
+		if (grassGeomDLightPosRadiusLoc >= 0)
+			GL_Uniform4fvFunc(grassGeomDLightPosRadiusLoc, count, posradius);
+		if (grassGeomDLightColorMinLoc >= 0)
+			GL_Uniform4fvFunc(grassGeomDLightColorMinLoc, count, colormin);
+	}
+}
+
+static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *ent, const msurface_t *s, grass_surface_cache_t *cache, int cellstep, float baseheight, const vec3_t basecolor, const vec3_t tipcolor)
 {
 	int lodindex, drawcount;
 	vec3_t normal, tangent, bitangent;
@@ -2738,6 +2760,7 @@ static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const msurface_t *
 		GL_Uniform3fFunc(grassGeomStaticTangentLoc, tangent[0], tangent[1], tangent[2]);
 	if (grassGeomStaticCellWeightLoc >= 0)
 		GL_Uniform1fFunc(grassGeomStaticCellWeightLoc, (float)(cellstep * cellstep));
+	R_GrassUploadShaderDlights(s, ent);
 
 	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 	GL_BindBuffer(GL_ARRAY_BUFFER, cache->shader_vbo[lodindex]);
@@ -2968,8 +2991,8 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 		if (use_static_shader)
 		{
 			surface_cellstep = R_GrassCellStepForScale(surface_density_scale);
-			if (!R_GrassSurfaceHasActiveDlights(s) && !R_GrassSurfaceHasAnimatedLightstyles(s) &&
-				R_DrawGrassSurfaceShaderVBO(model, s, surfacecache, surface_cellstep, baseheight, basecolor, tipcolor))
+			if (!R_GrassSurfaceHasAnimatedLightstyles(s) &&
+				R_DrawGrassSurfaceShaderVBO(model, ent, s, surfacecache, surface_cellstep, baseheight, basecolor, tipcolor))
 				continue;
 
 			if (grassGeomStaticModeLoc >= 0)
@@ -3023,10 +3046,15 @@ static void GLGrass_CreateShaders (void)
 		"uniform vec3 GrassStaticTangent;\n"
 		"uniform float GrassStaticLod;\n"
 		"uniform float GrassStaticCellWeight;\n"
+		"#define GRASS_SHADER_DLIGHTS 4\n"
+		"uniform int GrassDLightCount;\n"
+		"uniform vec4 GrassDLightPosRadius[GRASS_SHADER_DLIGHTS];\n"
+		"uniform vec4 GrassDLightColorMin[GRASS_SHADER_DLIGHTS];\n"
 		"\n"
 		"varying vec4 BladeCoord;\n"
 		"varying vec4 BladeColor;\n"
 		"varying float BladeCull;\n"
+		"varying vec3 BladeDynLight;\n"
 		"varying float FogFragCoord;\n"
 		"\n"
 		"vec3 GrassSafeNormalize(vec3 v, vec3 fallback)\n"
@@ -3086,6 +3114,7 @@ static void GLGrass_CreateShaders (void)
 		"	float seed = bladeCoord.z;\n"
 		"	float curl = clamp(bladeCoord.w, 0.0, 1.0);\n"
 		"	float bladeCull = 1.0;\n"
+		"	vec3 dynLight = vec3(0.0);\n"
 		"	vec4 vertex = gl_Vertex;\n"
 		"	if (GrassStaticMode != 0)\n"
 		"	{\n"
@@ -3107,6 +3136,14 @@ static void GLGrass_CreateShaders (void)
 		"		vertex.xyz += (side * (geom.y * sideSign) + normal * (geom.x * tip)) * bladeCull;\n"
 		"		vertex.xyz += (side * (geom.x * curl * 0.16 * tip) - normal * (geom.x * curl * 0.08 * tip)) * bladeCull;\n"
 		"		bend *= bladeCull;\n"
+		"		for (int li = 0; li < GRASS_SHADER_DLIGHTS; li++)\n"
+		"		{\n"
+		"			if (li >= GrassDLightCount)\n"
+		"				break;\n"
+		"			float add = GrassDLightPosRadius[li].w - distance(gl_Vertex.xyz, GrassDLightPosRadius[li].xyz);\n"
+		"			if (add > GrassDLightColorMin[li].w)\n"
+		"				dynLight += (add * (1.0 / 128.0)) * GrassDLightColorMin[li].xyz;\n"
+		"		}\n"
 		"	}\n"
 		"	vec2 worldXY = vertex.xy * 0.0035;\n"
 		"	float windAngle = GrassWindNoise(worldXY + vec2(GrassTime * 0.025, GrassTime * -0.018)) * 6.28318;\n"
@@ -3117,6 +3154,7 @@ static void GLGrass_CreateShaders (void)
 		"	BladeCoord = bladeCoord;\n"
 		"	BladeColor = gl_Color;\n"
 		"	BladeCull = bladeCull;\n"
+		"	BladeDynLight = dynLight;\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * vertex;\n"
 		"	FogFragCoord = gl_Position.w;\n"
 		"}\n";
@@ -3132,6 +3170,7 @@ static void GLGrass_CreateShaders (void)
 		"varying vec4 BladeCoord;\n"
 		"varying vec4 BladeColor;\n"
 		"varying float BladeCull;\n"
+		"varying vec3 BladeDynLight;\n"
 		"varying float FogFragCoord;\n"
 		"\n"
 		"float FogFactor(float dist)\n"
@@ -3171,9 +3210,7 @@ static void GLGrass_CreateShaders (void)
 		"	p.y -= curltip * curltip * 0.055;\n"
 		"	p.x *= s;\n"
 		"	p.y = (1.0 + p.y) * s - 1.0;\n"
-		"	float edgepower = abs(p.x) * 19.0;\n"
-		"	float m = 1.0 - smoothstep(0.0, clamp(1.0 - p.y * 1.5, 0.01, 0.6) * 0.2 * s, edgepower * edgepower + p.y - 0.6);\n"
-		"	return vec4(mix(vec3(0.05, 0.1, 0.0) * 0.8, vec3(0.0, 0.3, 0.0), (p.y + 1.0) * 0.5 + abs(p.x)), m * smoothstep(-1.0, -0.9, p.y));\n"
+		"	return vec4(mix(vec3(0.05, 0.1, 0.0) * 0.8, vec3(0.0, 0.3, 0.0), (p.y + 1.0) * 0.5 + abs(p.x)), 1.0);\n"
 		"}\n"
 		"\n"
 		"float GrassDither()\n"
@@ -3204,7 +3241,7 @@ static void GLGrass_CreateShaders (void)
 		"{\n"
 		"	float curl = clamp(BladeCoord.w, 0.0, 1.0);\n"
 		"	vec4 blade = GrassBlade(BladeCoord.xy, BladeCoord.z, curl);\n"
-		"	float alpha = blade.a * GrassAmount * BladeCull;\n"
+		"	float alpha = GrassAmount * BladeCull;\n"
 		"	if (GrassFadeDist > 0.0)\n"
 		"		alpha *= 1.0 - smoothstep(GrassFadeDist * 0.55, GrassFadeDist * 0.85, FogFragCoord);\n"
 		"	if (alpha < 0.12)\n"
@@ -3218,6 +3255,7 @@ static void GLGrass_CreateShaders (void)
 		"	float ao = 1.0 - root * root * 0.45;\n"
 		"	float sideShade = 0.94 - side * 0.10 + tipBlend * 0.05;\n"
 		"	colour *= sideShade * ao;\n"
+		"	colour *= 1.0 + BladeDynLight;\n"
 		"\n"
 		"	colour += vec3(GrassDither());\n"
 		"	float fog = FogFactor(FogFragCoord);\n"
@@ -3244,6 +3282,9 @@ static void GLGrass_CreateShaders (void)
 		grassGeomStaticTangentLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticTangent");
 		grassGeomStaticLodLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticLod");
 		grassGeomStaticCellWeightLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticCellWeight");
+		grassGeomDLightCountLoc = GL_GetUniformLocation (&r_grass_program, "GrassDLightCount");
+		grassGeomDLightPosRadiusLoc = GL_GetUniformLocation (&r_grass_program, "GrassDLightPosRadius");
+		grassGeomDLightColorMinLoc = GL_GetUniformLocation (&r_grass_program, "GrassDLightColorMin");
 	}
 }
 
