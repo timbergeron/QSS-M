@@ -428,14 +428,46 @@ static void R_GrassTex_Completion_f (cvar_t* cvar, const char* partial)
 R_Grass_Completion_f -- woods #iwtabcomplete
 ===============
 */
+#define R_GRASS_VALUE_OFF "0"
+#define R_GRASS_VALUE_HIGH "2,20,18,2048,0.1,1"
+#define R_GRASS_VALUE_DEFAULT "2,0.35,18,1024,0.35,1"
+#define R_GRASS_ARGS_TUNING "blades density height dist movement lod"
+#define R_GRASS_USAGE_TUNING "<blades>,<density>,<height>,<dist>,<movement>,<lod>"
+
 static void R_Grass_Completion_f (cvar_t* cvar, const char* partial)
 {
 	(void)cvar;
 
-	Con_AddToTabList("0", partial, "off", NULL);
-	Con_AddToTabList("1", partial, "defaults", NULL);
-	Con_AddToTabList("2,0.35,18,1024,0.35,1", partial, "blades density height dist movement lod", NULL);
-	Con_AddToTabList("1,2,0.35,18,1024,0.35,1", partial, "amount blades density height dist movement lod", NULL);
+	Con_AddToTabList(R_GRASS_VALUE_OFF, partial, "off", NULL);
+	Con_AddToTabList(R_GRASS_VALUE_HIGH, partial, R_GRASS_ARGS_TUNING, NULL);
+	Con_AddToTabList(R_GRASS_VALUE_DEFAULT, partial, R_GRASS_ARGS_TUNING, NULL);
+}
+
+/*
+===============
+R_Grass_Help_f -- woods #grass
+===============
+*/
+static void R_Grass_Help_f (cvar_t *cvar)
+{
+	(void)cvar;
+
+	Con_Printf("\n");
+	Con_Printf("usage:\n");
+	Con_Printf("  r_grass %s\n", R_GRASS_VALUE_OFF);
+	Con_Printf("      disable grass\n");
+	Con_Printf("  r_grass %s\n", R_GRASS_USAGE_TUNING);
+	Con_Printf("      enable grass; example: r_grass %s\n", R_GRASS_VALUE_DEFAULT);
+	Con_Printf("      high-density example: r_grass %s\n", R_GRASS_VALUE_HIGH);
+	Con_Printf("\n");
+	Con_Printf("args:\n");
+	Con_Printf("  blades    0 flat texture grass, 1 CPU blades, 2 shader blades\n");
+	Con_Printf("  density   blade placement density, clamped 0..500\n");
+	Con_Printf("  height    blade height in units, clamped 1..96\n");
+	Con_Printf("  dist      draw/fade distance, clamped 0..8192\n");
+	Con_Printf("  movement  wind amount, clamped 0..2\n");
+	Con_Printf("  lod       distance thinning, clamped 0..2\n");
+	Con_Printf("\n");
 }
 
 /*
@@ -512,6 +544,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_grass); // woods #grass
 	Cvar_RegisterVariable (&r_grass_tex); // woods #grass
 	Cvar_SetCompletion (&r_grass, &R_Grass_Completion_f); // woods #iwtabcomplete #grass
+	Cvar_SetHelp (&r_grass, &R_Grass_Help_f); // woods #grass
 	Cvar_SetCompletion (&r_grass_tex, &R_GrassTex_Completion_f); // woods #iwtabcomplete #grass
 	Cvar_RegisterVariable (&gl_motion_blur); // woods #motionblur
 	Cvar_SetCallback (&gl_fullbrights, GL_Fullbrights_f);

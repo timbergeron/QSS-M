@@ -542,6 +542,7 @@ qboolean RSceneCache_DrawSkySurfDepth(void);	//Draws sky surfaces.
 qboolean RSceneCache_HasSky(void);
 #endif
 void R_GrassCache_Cleanup(qmodel_t *mod);
+void R_GrassShutdownGL(void);
 void R_GrassShutdown(void);
 extern byte *skipsubmodels;
 

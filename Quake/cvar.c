@@ -1511,6 +1511,18 @@ void Cvar_SetCompletion (cvar_t* var, cvarcompletion_t func)
 
 /*
 ============
+Cvar_SetHelp
+
+Set a no-argument usage/help printer for the var
+============
+*/
+void Cvar_SetHelp (cvar_t *var, cvarhelp_t func)
+{
+	var->help = func;
+}
+
+/*
+============
 Cvar_Command
 
 Handles variable inspection and changing from the console
@@ -1537,6 +1549,8 @@ qboolean	Cvar_Command (void)
 		}
 		else
 			Con_Printf("\"%s\" is \"%s\"\n", v->name, v->string);
+		if (v->help)
+			v->help(v);
 		return true;
 	}
 

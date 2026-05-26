@@ -80,6 +80,7 @@ interface from being ambiguous.
 
 typedef void (*cvarcallback_t) (struct cvar_s *);
 typedef void (*cvarcompletion_t) (struct cvar_s*, const char*); // woods #iwtabcomplete
+typedef void (*cvarhelp_t) (struct cvar_s*);
 
 typedef struct cvar_s
 {
@@ -90,6 +91,7 @@ typedef struct cvar_s
 	const char	*default_string; //johnfitz -- remember defaults for reset function
 	cvarcallback_t	callback;
 	cvarcompletion_t	completion; // woods #iwtabcomplete
+	cvarhelp_t	help;
 	struct cvar_s	*next;
 } cvar_t;
 
@@ -106,6 +108,9 @@ void Cvar_SetCallback (cvar_t *var, cvarcallback_t func);
 
 void Cvar_SetCompletion (cvar_t* var, cvarcompletion_t func); // woods #iwtabcomplete
 // set a callback function to the var
+
+void Cvar_SetHelp (cvar_t *var, cvarhelp_t func);
+// set a no-argument usage/help printer for the var
 
 void	Cvar_Set (const char *var_name, const char *value);
 // equivelant to "<name> <variable>" typed at the console

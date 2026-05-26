@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "view.h" // woods #fxaa
 
 extern cvar_t gl_fullbrights, r_drawflat, gl_overbright, r_oldskyleaf, r_showtris; //johnfitz
+extern cvar_t r_flatlightstyles;
 cvar_t r_scenecache = {"r_scenecache",""};	//spike, an attempt to cope with abusive maps a bit better.
 
 byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
@@ -624,9 +625,14 @@ static GLuint r_grass_program; // woods #grass
 static GLint grassGeomAmountLoc; // woods #grass
 static GLint grassGeomTimeLoc; // woods #grass
 static GLint grassGeomMovementLoc; // woods #grass
-static GLint grassGeomEyePosLoc; // woods #grass
 static GLint grassGeomFadeDistLoc; // woods #grass
 static GLint grassGeomFogModeLoc;
+static GLint grassGeomEyePosLoc;
+static GLint grassGeomStaticModeLoc;
+static GLint grassGeomStaticNormalLoc;
+static GLint grassGeomStaticTangentLoc;
+static GLint grassGeomStaticLodLoc;
+static GLint grassGeomStaticCellWeightLoc;
 
 
 static struct
@@ -678,9 +684,14 @@ static void GLWorld_DeleteShaderPrograms (void)
 	grassGeomAmountLoc = -1;
 	grassGeomTimeLoc = -1;
 	grassGeomMovementLoc = -1;
-	grassGeomEyePosLoc = -1;
 	grassGeomFadeDistLoc = -1;
 	grassGeomFogModeLoc = -1;
+	grassGeomEyePosLoc = -1;
+	grassGeomStaticModeLoc = -1;
+	grassGeomStaticNormalLoc = -1;
+	grassGeomStaticTangentLoc = -1;
+	grassGeomStaticLodLoc = -1;
+	grassGeomStaticCellWeightLoc = -1;
 
 	for (i = 0; i < countof(r_water); i++)
 	{
@@ -717,6 +728,8 @@ static void GLWorld_DeleteShaderPrograms (void)
 #define GRASS_LIGHT_CACHE_SIZE 256
 #define GRASS_LIGHT_CACHE_PROBES 8
 #define GRASS_LIGHT_CACHE_CELL 64.0f
+#define GRASS_TIME_WRAP 4096.0
+#define GRASS_SHADER_LOD_LEVELS 4
 
 typedef struct grass_settings_s
 {
@@ -728,6 +741,16 @@ typedef struct grass_settings_s
 	float movement;
 	float lod;
 } grass_settings_t;
+
+typedef struct grass_lod_params_s
+{
+	float dist;
+	float dist2;
+	float nearclip2;
+	float invfade;
+	float lod;
+	qboolean use_dist;
+} grass_lod_params_t;
 
 typedef struct grass_dlight_s
 {
@@ -759,6 +782,14 @@ typedef struct grass_vertex_s
 	float texcoord[4];
 } grass_vertex_t;
 
+typedef struct grass_shader_vertex_s
+{
+	float base[3];
+	float color[4];
+	float bladecoord[4];
+	float geom[4];
+} grass_shader_vertex_t;
+
 typedef struct grass_cached_blade_s
 {
 	vec3_t pos;
@@ -780,6 +811,14 @@ typedef struct grass_surface_cache_s
 	int capacity;
 	qboolean built;
 	qboolean failed;
+	GLuint shader_vbo[GRASS_SHADER_LOD_LEVELS];
+	int shader_vertex_count[GRASS_SHADER_LOD_LEVELS];
+	float shader_baseheight[GRASS_SHADER_LOD_LEVELS];
+	vec3_t shader_basecolor[GRASS_SHADER_LOD_LEVELS];
+	vec3_t shader_tipcolor[GRASS_SHADER_LOD_LEVELS];
+	unsigned int shader_lightstyle_hash[GRASS_SHADER_LOD_LEVELS];
+	qboolean shader_built[GRASS_SHADER_LOD_LEVELS];
+	qboolean shader_failed[GRASS_SHADER_LOD_LEVELS];
 } grass_surface_cache_t;
 
 typedef struct grass_model_cache_s
@@ -804,6 +843,7 @@ static char grass_settings_string[256];
 static qboolean grass_settings_valid;
 static grass_vertex_t *r_grass_vertex_batch;
 static int r_grass_vertex_count;
+static GLuint r_grass_vertex_vbo;
 static grass_light_cache_entry_t r_grass_light_cache[GRASS_LIGHT_CACHE_SIZE];
 static unsigned int r_grass_light_cache_generation;
 static grass_model_cache_t *r_grass_model_caches;
@@ -813,6 +853,27 @@ static byte *r_grass_brush_blocker_submodels;
 static int r_grass_brush_blocker_submodel_count;
 static grass_brush_blocker_t *r_grass_brush_blockers;
 static int r_grass_brush_blocker_count;
+
+static float R_GrassAnimTime (void)
+{
+	double t;
+
+	t = fmod(cl.time, GRASS_TIME_WRAP);
+	if (t < 0.0)
+		t += GRASS_TIME_WRAP;
+	return (float)t;
+}
+
+static qboolean R_GrassUseVertexVBO (void)
+{
+	return r_grass_vertex_vbo != 0 && gl_vbo_able && GL_BufferDataFunc;
+}
+
+static qboolean R_GrassUseStaticShaderVBO (void)
+{
+	return gl_vbo_able && GL_GenBuffersFunc && GL_BufferDataFunc &&
+		GL_ClientActiveTextureFunc && GL_Uniform3fFunc && gl_max_texture_units >= 2;
+}
 
 static qboolean R_GrassValueSeparator (char c)
 {
@@ -1353,6 +1414,67 @@ static void R_GrassBuildDlightList (const msurface_t *s, const entity_t *ent, gr
 	}
 }
 
+static qboolean R_GrassSurfaceHasActiveDlights (const msurface_t *s)
+{
+	int lnum;
+
+	if (s->dlightframe != r_framecount)
+		return false;
+
+	for (lnum = 0; lnum < MAX_DLIGHTS; lnum++)
+	{
+		dlight_t *light;
+
+		if (!(s->dlightbits[lnum >> 5] & (1U << (lnum & 31))))
+			continue;
+		light = &cl_dlights[lnum];
+		if (light->die < cl.time || (light->spawn > cl.mtime[0] && cls.demoplayback) || !light->radius)
+			continue;
+		if (light->radius - light->minlight <= 0.0f)
+			continue;
+		return true;
+	}
+
+	return false;
+}
+
+static qboolean R_GrassLightstyleIsAnimated (unsigned int style)
+{
+	const lightstyle_t *lightstyle;
+	int i;
+	char first;
+
+	if (style >= MAX_LIGHTSTYLES)
+		return false;
+
+	lightstyle = &cl_lightstyle[style];
+	if (lightstyle->length <= 1)
+		return false;
+
+	first = lightstyle->map[0];
+	for (i = 1; i < lightstyle->length; i++)
+		if (lightstyle->map[i] != first)
+			return true;
+
+	return false;
+}
+
+static qboolean R_GrassSurfaceHasAnimatedLightstyles (const msurface_t *s)
+{
+	int maps;
+
+	if (r_flatlightstyles.value || !r_dynamic.value)
+		return false;
+
+	for (maps = 0; maps < MAXLIGHTMAPS && s->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+	{
+		if (R_GrassLightstyleIsAnimated((unsigned int)s->styles[maps]))
+			return true;
+	}
+
+	return false;
+}
+
 static void R_GrassAddDynamicLights (const grass_dlight_list_t *list, const vec3_t point, vec3_t blocklight)
 {
 	int i;
@@ -1456,60 +1578,98 @@ static void R_GrassSurfaceNormal (const msurface_t *s, vec3_t normal)
 		VectorScale(normal, -1.0f, normal);
 }
 
-static float R_GrassDensityScaleForDelta (const vec3_t delta, float dist, float lod)
+static unsigned int R_GrassSurfaceLightstyleHash (const msurface_t *s)
 {
-	float dist2, nearclip, nearclip2, d2, d, fade;
+	unsigned int hash;
+	int maps;
 
+	hash = 2166136261U;
+	for (maps = 0; maps < MAXLIGHTMAPS && s->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+	{
+		hash ^= (unsigned int)s->styles[maps] + 0x9e3779b9U;
+		hash *= 16777619U;
+		hash ^= (unsigned int)d_lightstylevalue[s->styles[maps]];
+		hash *= 16777619U;
+	}
+
+	return hash;
+}
+
+static qboolean R_GrassColorsMatch (const vec3_t a, const vec3_t b)
+{
+	return fabsf(a[0] - b[0]) < 0.0001f &&
+		fabsf(a[1] - b[1]) < 0.0001f &&
+		fabsf(a[2] - b[2]) < 0.0001f;
+}
+
+static void R_GrassLODParams (float dist, float lod, grass_lod_params_t *params)
+{
+	float nearclip;
+
+	params->dist = dist;
+	params->dist2 = dist * dist;
+	params->lod = lod;
+	params->use_dist = dist > 0.0f;
 	if (dist <= 0.0f)
-		return 1.0f;
-
-	dist2 = dist * dist;
-	d2 = DotProduct(delta, delta);
-	if (d2 >= dist2)
-		return 0.0f;
-
-	if (lod <= 0.0f)
-		return 1.0f;
+	{
+		params->nearclip2 = 0.0f;
+		params->invfade = 0.0f;
+		return;
+	}
 
 	nearclip = dist * 0.25f;
-	nearclip2 = nearclip * nearclip;
-	if (d2 <= nearclip2)
+	params->nearclip2 = nearclip * nearclip;
+	params->invfade = 1.0f / (dist - nearclip);
+}
+
+static float R_GrassDensityScaleForDelta (const vec3_t delta, const grass_lod_params_t *params)
+{
+	float d2, d, fade;
+
+	if (!params->use_dist)
+		return 1.0f;
+
+	d2 = DotProduct(delta, delta);
+	if (d2 >= params->dist2)
+		return 0.0f;
+
+	if (params->lod <= 0.0f)
+		return 1.0f;
+
+	if (d2 <= params->nearclip2)
 		return 1.0f;
 
 	d = sqrtf(d2);
-	fade = (dist - d) / (dist - nearclip);
+	fade = (params->dist - d) * params->invfade;
 	fade = CLAMP(0.0f, fade, 1.0f);
 	fade = fade * fade * (3.0f - 2.0f * fade);
 	fade *= fade;
-	if (lod > 1.0f)
-		fade = powf(fade, lod);
+	if (params->lod > 1.0f)
+		fade = powf(fade, params->lod);
 
 	return fade;
 }
 
-static float R_GrassSurfaceDensityScale (const msurface_t *s, const entity_t *ent, float grassdist, float grasslod)
+static float R_GrassSurfaceDensityScale (const msurface_t *s, const vec3_t vieworg, const grass_lod_params_t *lodparams)
 {
 	int i;
-	vec3_t closest, delta, vieworg;
-
-	R_GrassPointToEntitySpace(ent, r_refdef.vieworg, vieworg);
+	vec3_t closest, delta;
 
 	for (i = 0; i < 3; i++)
 		closest[i] = CLAMP(s->mins[i], vieworg[i], s->maxs[i]);
 
 	VectorSubtract(closest, vieworg, delta);
 
-	return R_GrassDensityScaleForDelta(delta, grassdist, grasslod);
+	return R_GrassDensityScaleForDelta(delta, lodparams);
 }
 
-static float R_GrassPointDensityScale (const vec3_t point, const entity_t *ent, float grassdist, float grasslod)
+static float R_GrassPointDensityScale (const vec3_t point, const vec3_t vieworg, const grass_lod_params_t *lodparams)
 {
-	vec3_t delta, vieworg;
+	vec3_t delta;
 
-	R_GrassPointToEntitySpace(ent, r_refdef.vieworg, vieworg);
 	VectorSubtract(point, vieworg, delta);
 
-	return R_GrassDensityScaleForDelta(delta, grassdist, grasslod);
+	return R_GrassDensityScaleForDelta(delta, lodparams);
 }
 
 static qboolean R_GrassSurfaceVolumeCulled (const msurface_t *s, const entity_t *ent, const vec3_t normal, float maxheight, float movement)
@@ -1668,7 +1828,7 @@ static float R_GrassWeatherNoise (float x, float y, unsigned int salt)
 
 static void R_GrassWindBend (const vec3_t pos, float height, float movement, unsigned int seed, vec3_t bend)
 {
-	float phase, weather, gust, pulse, eddy, angle, amount;
+	float time, phase, weather, gust, pulse, eddy, angle, amount;
 	vec3_t dir, swaydir;
 
 	if (movement <= 0.0f)
@@ -1677,11 +1837,12 @@ static void R_GrassWindBend (const vec3_t pos, float height, float movement, uns
 		return;
 	}
 
+	time = R_GrassAnimTime();
 	phase = R_GrassHashFloat(seed + 73U) * M_PI * 2.0f;
-	weather = R_GrassWeatherNoise(pos[0] * 0.0016f + (float)cl.time * 0.004f, pos[1] * 0.0016f - (float)cl.time * 0.003f, 17U);
-	gust = R_GrassWeatherNoise(pos[0] * 0.0065f + (float)cl.time * 0.018f, pos[1] * 0.0065f - (float)cl.time * 0.011f, 53U);
-	eddy = R_GrassWeatherNoise(pos[0] * 0.014f - (float)cl.time * 0.010f, pos[1] * 0.014f + (float)cl.time * 0.007f, 97U);
-	pulse = 0.5f + 0.5f * sinf((float)cl.time * (0.18f + weather * 0.16f) + phase + gust * M_PI * 2.0f);
+	weather = R_GrassWeatherNoise(pos[0] * 0.0016f + time * 0.004f, pos[1] * 0.0016f - time * 0.003f, 17U);
+	gust = R_GrassWeatherNoise(pos[0] * 0.0065f + time * 0.018f, pos[1] * 0.0065f - time * 0.011f, 53U);
+	eddy = R_GrassWeatherNoise(pos[0] * 0.014f - time * 0.010f, pos[1] * 0.014f + time * 0.007f, 97U);
+	pulse = 0.5f + 0.5f * sinf(time * (0.18f + weather * 0.16f) + phase + gust * M_PI * 2.0f);
 
 	angle = weather * M_PI * 2.0f + (eddy - 0.5f) * 1.15f;
 	dir[0] = cosf(angle);
@@ -1706,8 +1867,34 @@ static qboolean R_GrassPointInTriangle2D (float pu, float pv, float au, float av
 	return *ba >= 0.0f && *bb >= 0.0f && *bc >= 0.0f;
 }
 
+static void R_GrassClearSurfaceShaderVBO (grass_surface_cache_t *cache, int index)
+{
+	if (cache->shader_vbo[index] && gl_vbo_able && GL_DeleteBuffersFunc)
+	{
+		GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+		GL_DeleteBuffersFunc(1, &cache->shader_vbo[index]);
+	}
+	cache->shader_vbo[index] = 0;
+	cache->shader_vertex_count[index] = 0;
+	cache->shader_baseheight[index] = 0.0f;
+	cache->shader_basecolor[index][0] = cache->shader_basecolor[index][1] = cache->shader_basecolor[index][2] = 0.0f;
+	cache->shader_tipcolor[index][0] = cache->shader_tipcolor[index][1] = cache->shader_tipcolor[index][2] = 0.0f;
+	cache->shader_lightstyle_hash[index] = 0;
+	cache->shader_built[index] = false;
+	cache->shader_failed[index] = false;
+}
+
+static void R_GrassClearSurfaceShaderVBOs (grass_surface_cache_t *cache)
+{
+	int i;
+
+	for (i = 0; i < GRASS_SHADER_LOD_LEVELS; i++)
+		R_GrassClearSurfaceShaderVBO(cache, i);
+}
+
 static void R_GrassClearSurfaceCache (grass_surface_cache_t *cache)
 {
+	R_GrassClearSurfaceShaderVBOs(cache);
 	free(cache->blades);
 	cache->blades = NULL;
 	cache->count = 0;
@@ -1785,14 +1972,40 @@ void R_GrassCache_Cleanup (qmodel_t *mod)
 		R_GrassClearBrushSubmodelBlockers();
 }
 
+static void R_GrassClearAllShaderVBOs (void)
+{
+	grass_model_cache_t *cache;
+	int i;
+
+	for (cache = r_grass_model_caches; cache; cache = cache->next)
+	{
+		if (!cache->surfaces)
+			continue;
+		for (i = 0; i < cache->numsurfaces; i++)
+			R_GrassClearSurfaceShaderVBOs(&cache->surfaces[i]);
+	}
+}
+
 void R_GrassShutdown (void)
 {
 	R_GrassFreeAllModelCaches();
 	r_grass_cache_worldmodel = NULL;
 	R_GrassClearBrushSubmodelBlockers();
+	R_GrassShutdownGL();
 	free(r_grass_vertex_batch);
 	r_grass_vertex_batch = NULL;
 	r_grass_vertex_count = 0;
+}
+
+void R_GrassShutdownGL (void)
+{
+	R_GrassClearAllShaderVBOs();
+	if (r_grass_vertex_vbo && gl_vbo_able && GL_DeleteBuffersFunc)
+	{
+		GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+		GL_DeleteBuffersFunc(1, &r_grass_vertex_vbo);
+	}
+	r_grass_vertex_vbo = 0;
 }
 
 static void R_GrassResetCachesIfWorldChanged (void)
@@ -2221,19 +2434,22 @@ static qboolean R_GrassEnsureVertexBatch (void)
 {
 	static qboolean warned;
 
-	if (r_grass_vertex_batch)
-		return true;
-
-	r_grass_vertex_batch = (grass_vertex_t *)malloc(sizeof(*r_grass_vertex_batch) * GRASS_VERTEX_BATCH_MAX);
 	if (!r_grass_vertex_batch)
 	{
-		if (!warned)
+		r_grass_vertex_batch = (grass_vertex_t *)malloc(sizeof(*r_grass_vertex_batch) * GRASS_VERTEX_BATCH_MAX);
+		if (!r_grass_vertex_batch)
 		{
-			warned = true;
-			Con_Printf("R_DrawGrassBlades: failed to allocate grass vertex batch\n");
+			if (!warned)
+			{
+				warned = true;
+				Con_Printf("R_DrawGrassBlades: failed to allocate grass vertex batch\n");
+			}
+			return false;
 		}
-		return false;
 	}
+
+	if (!r_grass_vertex_vbo && gl_vbo_able && GL_GenBuffersFunc)
+		GL_GenBuffersFunc(1, &r_grass_vertex_vbo);
 
 	return true;
 }
@@ -2242,13 +2458,22 @@ static void R_GrassFlushVertexBatch (void)
 {
 	static qboolean warned_incomplete;
 	int drawcount;
+	qboolean usevbo;
 
 	if (r_grass_vertex_count <= 0)
 		return;
 
+	usevbo = R_GrassUseVertexVBO();
 	drawcount = r_grass_vertex_count - (r_grass_vertex_count % 3);
 	if (drawcount > 0)
+	{
+		if (usevbo)
+		{
+			GL_BindBuffer(GL_ARRAY_BUFFER, r_grass_vertex_vbo);
+			GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*r_grass_vertex_batch) * (size_t)drawcount), r_grass_vertex_batch, GL_STREAM_DRAW);
+		}
 		glDrawArrays(GL_TRIANGLES, 0, drawcount);
+	}
 	if (drawcount != r_grass_vertex_count && !warned_incomplete)
 	{
 		warned_incomplete = true;
@@ -2259,19 +2484,35 @@ static void R_GrassFlushVertexBatch (void)
 
 static void R_GrassBeginVertexBatch (void)
 {
+	qboolean usevbo;
+
 	r_grass_vertex_count = 0;
 
-	GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+	usevbo = R_GrassUseVertexVBO();
 	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 	if (GL_ClientActiveTextureFunc)
 		GL_ClientActiveTextureFunc(GL_TEXTURE0);
 
+	if (usevbo)
+		GL_BindBuffer(GL_ARRAY_BUFFER, r_grass_vertex_vbo);
+	else
+		GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glEnableClientState(GL_COLOR_ARRAY);
 	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-	glVertexPointer(3, GL_FLOAT, sizeof(*r_grass_vertex_batch), r_grass_vertex_batch[0].vertex);
-	glColorPointer(4, GL_FLOAT, sizeof(*r_grass_vertex_batch), r_grass_vertex_batch[0].color);
-	glTexCoordPointer(4, GL_FLOAT, sizeof(*r_grass_vertex_batch), r_grass_vertex_batch[0].texcoord);
+	if (usevbo)
+	{
+		glVertexPointer(3, GL_FLOAT, sizeof(*r_grass_vertex_batch), (const GLvoid *)offsetof(grass_vertex_t, vertex));
+		glColorPointer(4, GL_FLOAT, sizeof(*r_grass_vertex_batch), (const GLvoid *)offsetof(grass_vertex_t, color));
+		glTexCoordPointer(4, GL_FLOAT, sizeof(*r_grass_vertex_batch), (const GLvoid *)offsetof(grass_vertex_t, texcoord));
+	}
+	else
+	{
+		glVertexPointer(3, GL_FLOAT, sizeof(*r_grass_vertex_batch), r_grass_vertex_batch[0].vertex);
+		glColorPointer(4, GL_FLOAT, sizeof(*r_grass_vertex_batch), r_grass_vertex_batch[0].color);
+		glTexCoordPointer(4, GL_FLOAT, sizeof(*r_grass_vertex_batch), r_grass_vertex_batch[0].texcoord);
+	}
 }
 
 static void R_GrassEndVertexBatch (void)
@@ -2281,6 +2522,7 @@ static void R_GrassEndVertexBatch (void)
 	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 	glDisableClientState(GL_COLOR_ARRAY);
 	glDisableClientState(GL_VERTEX_ARRAY);
+	GL_BindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 static void R_GrassAddVertex (const vec3_t vertex, const vec3_t color, float s, float t, float seed, float curl)
@@ -2331,11 +2573,204 @@ static void R_DrawGrassBladeTri (const vec3_t base, const vec3_t normal, const v
 	R_GrassAddVertex(tip, shadedtip, 0.0f, 1.0f, seed, curl);
 }
 
-static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, const msurface_t *s, const grass_surface_cache_t *cache, float grassamount, float baseheight, float movement, float grassdist, float grasslod, float surface_density_scale, const vec3_t basecolor, const vec3_t tipcolor, int mode)
+static int R_GrassShaderLODIndexForStep (int cellstep)
+{
+	if (cellstep >= 8)
+		return 3;
+	if (cellstep >= 4)
+		return 2;
+	if (cellstep >= 2)
+		return 1;
+	return 0;
+}
+
+static void R_GrassStoreShaderVBOKey (grass_surface_cache_t *cache, int index, float baseheight, const vec3_t basecolor, const vec3_t tipcolor, unsigned int lightstyle_hash)
+{
+	cache->shader_baseheight[index] = baseheight;
+	VectorCopy(basecolor, cache->shader_basecolor[index]);
+	VectorCopy(tipcolor, cache->shader_tipcolor[index]);
+	cache->shader_lightstyle_hash[index] = lightstyle_hash;
+}
+
+static qboolean R_GrassShaderVBOKeyMatches (const grass_surface_cache_t *cache, int index, float baseheight, const vec3_t basecolor, const vec3_t tipcolor, unsigned int lightstyle_hash)
+{
+	return fabsf(cache->shader_baseheight[index] - baseheight) < 0.001f &&
+		cache->shader_lightstyle_hash[index] == lightstyle_hash &&
+		R_GrassColorsMatch(cache->shader_basecolor[index], basecolor) &&
+		R_GrassColorsMatch(cache->shader_tipcolor[index], tipcolor);
+}
+
+static void R_GrassEmitShaderVertex (grass_shader_vertex_t *out, const vec3_t base, const vec3_t color, float s, float t, float seed, float curl, float height, float width, float lodrand)
+{
+	VectorCopy(base, out->base);
+	out->color[0] = color[0];
+	out->color[1] = color[1];
+	out->color[2] = color[2];
+	out->color[3] = 1.0f;
+	out->bladecoord[0] = s;
+	out->bladecoord[1] = t;
+	out->bladecoord[2] = seed;
+	out->bladecoord[3] = curl;
+	out->geom[0] = height;
+	out->geom[1] = width;
+	out->geom[2] = lodrand;
+	out->geom[3] = 0.0f;
+}
+
+static qboolean R_GrassEnsureSurfaceShaderVBO (qmodel_t *model, const msurface_t *s, grass_surface_cache_t *cache, int cellstep, float baseheight, const vec3_t basecolor, const vec3_t tipcolor)
+{
+	int i, colorindex, lodindex, vertex_count;
+	size_t maxverts;
+	unsigned int lightstyle_hash;
+	vec3_t normal;
+	grass_shader_vertex_t *vertices;
+	grass_dlight_list_t nodlights;
+	grass_light_cache_entry_t *lightcacheptr;
+
+	if (!R_GrassUseStaticShaderVBO() || !cache || cache->count <= 0)
+		return false;
+
+	lodindex = R_GrassShaderLODIndexForStep(cellstep);
+	lightstyle_hash = R_GrassSurfaceLightstyleHash(s);
+	if (cache->shader_built[lodindex] &&
+		R_GrassShaderVBOKeyMatches(cache, lodindex, baseheight, basecolor, tipcolor, lightstyle_hash))
+		return true;
+	if (cache->shader_failed[lodindex] &&
+		R_GrassShaderVBOKeyMatches(cache, lodindex, baseheight, basecolor, tipcolor, lightstyle_hash))
+		return false;
+
+	R_GrassClearSurfaceShaderVBO(cache, lodindex);
+	R_GrassStoreShaderVBOKey(cache, lodindex, baseheight, basecolor, tipcolor, lightstyle_hash);
+
+	R_GrassSurfaceNormal(s, normal);
+	if (normal[2] < 0.35f)
+		return false;
+
+	maxverts = (size_t)cache->count * 3U;
+	vertices = (grass_shader_vertex_t *)malloc(sizeof(*vertices) * maxverts);
+	if (!vertices)
+	{
+		cache->shader_failed[lodindex] = true;
+		return false;
+	}
+
+	nodlights.count = 0;
+	lightcacheptr = R_GrassBeginLightCache();
+	vertex_count = 0;
+
+	for (i = 0; i < cache->count; i++)
+	{
+		const grass_cached_blade_t *blade;
+		unsigned int seed, bladebits;
+		float height, width, shade, widthrand, shaderand, curlrand, curl, seedcoord, lodrand;
+		vec3_t base, light, variedbasecolor, variedtipcolor, litbasecolor, littipcolor;
+
+		blade = &cache->blades[i];
+		if (!R_GrassCachedBladeSelectedForStep(blade, cellstep))
+			continue;
+
+		seed = blade->seed;
+		VectorMA(blade->pos, 0.8f, normal, base);
+
+		bladebits = blade->bladebits;
+		widthrand = (float)(bladebits & 0xffU) * (1.0f / 255.0f);
+		shaderand = (float)((bladebits >> 8) & 0xffU) * (1.0f / 255.0f);
+		height = baseheight * blade->heightscale;
+		width = CLAMP(0.25f, height * (0.018f + widthrand * 0.020f), 0.80f) * 1.05f;
+		shade = 0.75f + shaderand * 0.45f;
+		curlrand = (float)((blade->colorbits >> 24) & 0xffU) * (1.0f / 255.0f);
+		curl = curlrand > 0.90f ? 0.45f + (curlrand - 0.90f) * (0.55f / 0.10f) : 0.0f;
+
+		R_GrassLightForPointCached(model, s, &nodlights, blade->pos, false, lightcacheptr, light);
+		R_GrassApplyBladeColorVariation(blade->colorbits, basecolor, tipcolor, variedbasecolor, variedtipcolor);
+		for (colorindex = 0; colorindex < 3; colorindex++)
+		{
+			litbasecolor[colorindex] = variedbasecolor[colorindex] * light[colorindex] * shade;
+			littipcolor[colorindex] = variedtipcolor[colorindex] * light[colorindex] * shade;
+		}
+
+		seedcoord = (float)(seed & 0xffffU) * (1.0f / 256.0f);
+		lodrand = R_GrassBitsToFloat(blade->lodbits);
+		R_GrassEmitShaderVertex(&vertices[vertex_count++], base, litbasecolor, -0.055f, -1.0f, seedcoord, curl, height, width, lodrand);
+		R_GrassEmitShaderVertex(&vertices[vertex_count++], base, litbasecolor, 0.055f, -1.0f, seedcoord, curl, height, width, lodrand);
+		R_GrassEmitShaderVertex(&vertices[vertex_count++], base, littipcolor, 0.0f, 1.0f, seedcoord, curl, height, width, lodrand);
+	}
+
+	if (vertex_count > 0)
+	{
+		GL_GenBuffersFunc(1, &cache->shader_vbo[lodindex]);
+		if (!cache->shader_vbo[lodindex])
+		{
+			free(vertices);
+			cache->shader_failed[lodindex] = true;
+			return false;
+		}
+		GL_BindBuffer(GL_ARRAY_BUFFER, cache->shader_vbo[lodindex]);
+		GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*vertices) * (size_t)vertex_count), vertices, GL_STATIC_DRAW);
+		GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+	}
+
+	free(vertices);
+	cache->shader_vertex_count[lodindex] = vertex_count;
+	cache->shader_built[lodindex] = true;
+	cache->shader_failed[lodindex] = false;
+	return true;
+}
+
+static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const msurface_t *s, grass_surface_cache_t *cache, int cellstep, float baseheight, const vec3_t basecolor, const vec3_t tipcolor)
+{
+	int lodindex, drawcount;
+	vec3_t normal, tangent, bitangent;
+
+	if (!R_GrassEnsureSurfaceShaderVBO(model, s, cache, cellstep, baseheight, basecolor, tipcolor))
+		return false;
+
+	lodindex = R_GrassShaderLODIndexForStep(cellstep);
+	drawcount = cache->shader_vertex_count[lodindex];
+	if (drawcount <= 0)
+		return true;
+
+	R_GrassSurfaceNormal(s, normal);
+	R_GrassBasisForSurface(s, normal, tangent, bitangent);
+	if (grassGeomStaticNormalLoc >= 0)
+		GL_Uniform3fFunc(grassGeomStaticNormalLoc, normal[0], normal[1], normal[2]);
+	if (grassGeomStaticTangentLoc >= 0)
+		GL_Uniform3fFunc(grassGeomStaticTangentLoc, tangent[0], tangent[1], tangent[2]);
+	if (grassGeomStaticCellWeightLoc >= 0)
+		GL_Uniform1fFunc(grassGeomStaticCellWeightLoc, (float)(cellstep * cellstep));
+
+	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	GL_BindBuffer(GL_ARRAY_BUFFER, cache->shader_vbo[lodindex]);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glVertexPointer(3, GL_FLOAT, sizeof(grass_shader_vertex_t), (const GLvoid *)offsetof(grass_shader_vertex_t, base));
+	glColorPointer(4, GL_FLOAT, sizeof(grass_shader_vertex_t), (const GLvoid *)offsetof(grass_shader_vertex_t, color));
+
+	GL_ClientActiveTextureFunc(GL_TEXTURE0);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glTexCoordPointer(4, GL_FLOAT, sizeof(grass_shader_vertex_t), (const GLvoid *)offsetof(grass_shader_vertex_t, bladecoord));
+	GL_ClientActiveTextureFunc(GL_TEXTURE1);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glTexCoordPointer(4, GL_FLOAT, sizeof(grass_shader_vertex_t), (const GLvoid *)offsetof(grass_shader_vertex_t, geom));
+	GL_ClientActiveTextureFunc(GL_TEXTURE0);
+
+	glDrawArrays(GL_TRIANGLES, 0, drawcount);
+
+	GL_ClientActiveTextureFunc(GL_TEXTURE1);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	GL_ClientActiveTextureFunc(GL_TEXTURE0);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	glDisableClientState(GL_COLOR_ARRAY);
+	glDisableClientState(GL_VERTEX_ARRAY);
+	GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+	return true;
+}
+
+static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, const msurface_t *s, const grass_surface_cache_t *cache, float grassamount, float baseheight, float movement, const vec3_t vieworg, const grass_lod_params_t *lodparams, float surface_density_scale, const vec3_t basecolor, const vec3_t tipcolor, int mode)
 {
 	int i, cellstep, colorindex;
 	float cellweight;
-	vec3_t normal, tangent, bitangent, shader_side, shader_bend, shader_vieworg;
+	vec3_t normal, tangent, bitangent, shader_side, shader_bend;
 	grass_dlight_list_t dlights;
 	grass_light_cache_entry_t *lightcacheptr;
 
@@ -2349,7 +2784,6 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 	lightcacheptr = R_GrassBeginLightCache();
 	if (mode == GRASS_BLADE_MODE_SHADER)
 	{
-		R_GrassPointToEntitySpace(ent, r_refdef.vieworg, shader_vieworg);
 		shader_side[0] = shader_side[1] = shader_side[2] = 0.0f;
 		shader_bend[0] = shader_bend[1] = shader_bend[2] = 0.0f;
 	}
@@ -2373,7 +2807,7 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 		if (!R_GrassCachedBladeSelectedForStep(blade, cellstep))
 			continue;
 
-		lodscale = R_GrassPointDensityScale(blade->pos, ent, grassdist, grasslod);
+		lodscale = R_GrassPointDensityScale(blade->pos, vieworg, lodparams);
 		lodchance = lodscale * cellweight;
 		if (lodchance <= 0.0f || (lodchance < 1.0f && R_GrassBitsToFloat(blade->lodbits) > lodchance))
 			continue;
@@ -2401,7 +2835,7 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 
 		if (mode == GRASS_BLADE_MODE_SHADER)
 		{
-			R_GrassShaderSideForPoint(shader_vieworg, base, normal, tangent, shader_side);
+			R_GrassShaderSideForPoint(vieworg, base, normal, tangent, shader_side);
 			R_DrawGrassBladeTri(base, normal, shader_side, shader_bend, height, width * 1.05f, shade, (float)(seed & 0xffffU) * (1.0f / 256.0f), curl, litbasecolor, littipcolor);
 		}
 		else
@@ -2436,8 +2870,11 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 	int i, mode, firstsurface, numsurfaces;
 	float density, grassamount, baseheight, grassdist, grasslod, movement, cellsize;
 	const grass_settings_t *settings;
+	grass_lod_params_t lodparams;
 	grass_model_cache_t *modelcache;
 	msurface_t *s;
+	vec3_t grass_vieworg;
+	qboolean use_static_shader;
 
 	if (!R_GrassBladesActive() || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
 		return;
@@ -2453,7 +2890,14 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 	grasslod = CLAMP(0.0f, settings->lod, 2.0f);
 	movement = CLAMP(0.0f, settings->movement, 2.0f);
 	cellsize = sqrtf(512.0f / q_max(0.01f, density));
-	if (!R_GrassEnsureVertexBatch())
+	R_GrassPointToEntitySpace(ent, r_refdef.vieworg, grass_vieworg);
+	R_GrassLODParams(grassdist, grasslod, &lodparams);
+	use_static_shader = (mode == GRASS_BLADE_MODE_SHADER && grassamount >= 0.999f &&
+		grassGeomStaticModeLoc >= 0 && grassGeomEyePosLoc >= 0 &&
+		grassGeomStaticNormalLoc >= 0 && grassGeomStaticTangentLoc >= 0 &&
+		grassGeomStaticLodLoc >= 0 && grassGeomStaticCellWeightLoc >= 0 &&
+		R_GrassUseStaticShaderVBO());
+	if (!use_static_shader && !R_GrassEnsureVertexBatch())
 		return;
 	modelcache = R_GrassGetModelCache(model, density, cellsize);
 	if (!modelcache)
@@ -2464,16 +2908,18 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 		GL_SelectTexture(GL_TEXTURE0);
 	if (mode == GRASS_BLADE_MODE_SHADER)
 	{
-		vec3_t grass_eye;
-
-		R_GrassPointToEntitySpace(ent, r_refdef.vieworg, grass_eye);
 		GL_UseProgramFunc(r_grass_program);
 		GL_Uniform1fFunc(grassGeomAmountLoc, 1.0f);
-		GL_Uniform1fFunc(grassGeomTimeLoc, cl.time);
+		GL_Uniform1fFunc(grassGeomTimeLoc, R_GrassAnimTime());
 		GL_Uniform1fFunc(grassGeomMovementLoc, movement);
-		GL_Uniform3fFunc(grassGeomEyePosLoc, grass_eye[0], grass_eye[1], grass_eye[2]);
 		GL_Uniform1fFunc(grassGeomFadeDistLoc, grassdist);
 		GL_Uniform1iFunc(grassGeomFogModeLoc, Fog_GetMode());
+		if (grassGeomEyePosLoc >= 0)
+			GL_Uniform3fFunc(grassGeomEyePosLoc, grass_vieworg[0], grass_vieworg[1], grass_vieworg[2]);
+		if (grassGeomStaticModeLoc >= 0)
+			GL_Uniform1iFunc(grassGeomStaticModeLoc, use_static_shader ? 1 : 0);
+		if (grassGeomStaticLodLoc >= 0)
+			GL_Uniform1fFunc(grassGeomStaticLodLoc, grasslod);
 	}
 	else if (GL_UseProgramFunc)
 		GL_UseProgramFunc(0);
@@ -2485,13 +2931,15 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 	glDisable(GL_CULL_FACE);
 	glShadeModel(GL_SMOOTH);
 
-	R_GrassBeginVertexBatch();
+	if (!use_static_shader)
+		R_GrassBeginVertexBatch();
 	firstsurface = model->firstmodelsurface;
 	numsurfaces = model->nummodelsurfaces;
 	for (i = 0, s = model->surfaces + firstsurface; i < numsurfaces; i++, s++)
 	{
 		texture_t *t, *animt;
 		float surface_density_scale;
+		int surface_cellstep;
 		vec3_t basecolor, tipcolor;
 		grass_surface_cache_t *surfacecache;
 		vec3_t surfacenormal;
@@ -2505,7 +2953,7 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 		if (!R_TextureHasGrass(t))
 			continue;
 
-		surface_density_scale = R_GrassSurfaceDensityScale(s, ent, grassdist, grasslod);
+		surface_density_scale = R_GrassSurfaceDensityScale(s, grass_vieworg, &lodparams);
 		if (surface_density_scale <= 0.001f)
 			continue;
 		R_GrassSurfaceNormal(s, surfacenormal);
@@ -2517,9 +2965,29 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 		animt = R_TextureAnimation(t, ent ? ent->frame : 0);
 		R_TextureGrassBladeColors(animt, basecolor, tipcolor);
 		surfacecache = R_GrassGetSurfaceCache(modelcache, s);
-		R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, grassdist, grasslod, surface_density_scale, basecolor, tipcolor, mode);
+		if (use_static_shader)
+		{
+			surface_cellstep = R_GrassCellStepForScale(surface_density_scale);
+			if (!R_GrassSurfaceHasActiveDlights(s) && !R_GrassSurfaceHasAnimatedLightstyles(s) &&
+				R_DrawGrassSurfaceShaderVBO(model, s, surfacecache, surface_cellstep, baseheight, basecolor, tipcolor))
+				continue;
+
+			if (grassGeomStaticModeLoc >= 0)
+				GL_Uniform1iFunc(grassGeomStaticModeLoc, 0);
+			if (R_GrassEnsureVertexBatch())
+			{
+				R_GrassBeginVertexBatch();
+				R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode);
+				R_GrassEndVertexBatch();
+			}
+			if (grassGeomStaticModeLoc >= 0)
+				GL_Uniform1iFunc(grassGeomStaticModeLoc, 1);
+		}
+		else
+			R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode);
 	}
-	R_GrassEndVertexBatch();
+	if (!use_static_shader)
+		R_GrassEndVertexBatch();
 
 	glShadeModel(GL_FLAT);
 	if (gl_cull.value)
@@ -2548,12 +3016,26 @@ static void GLGrass_CreateShaders (void)
 		"\n"
 		"uniform float GrassTime;\n"
 		"uniform float GrassMovement;\n"
+		"uniform float GrassFadeDist;\n"
 		"uniform vec3 GrassEyePos;\n"
+		"uniform int GrassStaticMode;\n"
+		"uniform vec3 GrassStaticNormal;\n"
+		"uniform vec3 GrassStaticTangent;\n"
+		"uniform float GrassStaticLod;\n"
+		"uniform float GrassStaticCellWeight;\n"
 		"\n"
 		"varying vec4 BladeCoord;\n"
 		"varying vec4 BladeColor;\n"
+		"varying float BladeCull;\n"
 		"varying float FogFragCoord;\n"
-		"varying vec3 ViewDir;\n"
+		"\n"
+		"vec3 GrassSafeNormalize(vec3 v, vec3 fallback)\n"
+		"{\n"
+		"	float len2 = dot(v, v);\n"
+		"	if (len2 > 0.000001)\n"
+		"		return v * inversesqrt(len2);\n"
+		"	return fallback;\n"
+		"}\n"
 		"\n"
 		"float GrassWindHash(vec2 p)\n"
 		"{\n"
@@ -2572,22 +3054,69 @@ static void GLGrass_CreateShaders (void)
 		"	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);\n"
 		"}\n"
 		"\n"
+		"float GrassStaticDensityScale(vec3 base)\n"
+		"{\n"
+		"	if (GrassFadeDist <= 0.0)\n"
+		"		return 1.0;\n"
+		"	vec3 delta = base - GrassEyePos;\n"
+		"	float d2 = dot(delta, delta);\n"
+		"	float dist2 = GrassFadeDist * GrassFadeDist;\n"
+		"	if (d2 >= dist2)\n"
+		"		return 0.0;\n"
+		"	if (GrassStaticLod <= 0.0)\n"
+		"		return 1.0;\n"
+		"	float nearclip = GrassFadeDist * 0.25;\n"
+		"	float nearclip2 = nearclip * nearclip;\n"
+		"	if (d2 <= nearclip2)\n"
+		"		return 1.0;\n"
+		"	float fade = (GrassFadeDist - sqrt(d2)) / (GrassFadeDist - nearclip);\n"
+		"	fade = clamp(fade, 0.0, 1.0);\n"
+		"	fade = fade * fade * (3.0 - 2.0 * fade);\n"
+		"	fade *= fade;\n"
+		"	if (GrassStaticLod > 1.0)\n"
+		"		fade = pow(fade, GrassStaticLod);\n"
+		"	return fade;\n"
+		"}\n"
+		"\n"
 		"void main()\n"
 		"{\n"
 		"	vec4 bladeCoord = gl_MultiTexCoord0;\n"
 		"	float tip = clamp((bladeCoord.y + 1.0) * 0.5, 0.0, 1.0);\n"
 		"	float bend = tip * (0.2 + 0.8 * tip);\n"
 		"	float seed = bladeCoord.z;\n"
-		"	vec2 worldXY = gl_Vertex.xy * 0.0035;\n"
+		"	float curl = clamp(bladeCoord.w, 0.0, 1.0);\n"
+		"	float bladeCull = 1.0;\n"
+		"	vec4 vertex = gl_Vertex;\n"
+		"	if (GrassStaticMode != 0)\n"
+		"	{\n"
+		"		vec4 geom = gl_MultiTexCoord1;\n"
+		"		float lodchance = GrassStaticDensityScale(vertex.xyz) * GrassStaticCellWeight;\n"
+		"		if (lodchance <= 0.0 || (lodchance < 1.0 && geom.z > lodchance))\n"
+		"			bladeCull = 0.0;\n"
+		"		vec3 normal = GrassSafeNormalize(GrassStaticNormal, vec3(0.0, 0.0, 1.0));\n"
+		"		vec3 tangent = GrassSafeNormalize(GrassStaticTangent, vec3(1.0, 0.0, 0.0));\n"
+		"		vec3 viewdir = GrassEyePos - vertex.xyz;\n"
+		"		viewdir -= normal * dot(viewdir, normal);\n"
+		"		viewdir = GrassSafeNormalize(viewdir, tangent);\n"
+		"		vec3 side = GrassSafeNormalize(cross(normal, viewdir), tangent);\n"
+		"		float sideSign = 0.0;\n"
+		"		if (bladeCoord.x < -0.0001)\n"
+		"			sideSign = 1.0;\n"
+		"		else if (bladeCoord.x > 0.0001)\n"
+		"			sideSign = -1.0;\n"
+		"		vertex.xyz += (side * (geom.y * sideSign) + normal * (geom.x * tip)) * bladeCull;\n"
+		"		vertex.xyz += (side * (geom.x * curl * 0.16 * tip) - normal * (geom.x * curl * 0.08 * tip)) * bladeCull;\n"
+		"		bend *= bladeCull;\n"
+		"	}\n"
+		"	vec2 worldXY = vertex.xy * 0.0035;\n"
 		"	float windAngle = GrassWindNoise(worldXY + vec2(GrassTime * 0.025, GrassTime * -0.018)) * 6.28318;\n"
 		"	vec2 windDir = vec2(cos(windAngle), sin(windAngle));\n"
 		"	float windStr = GrassWindNoise(worldXY * 4.0 - vec2(GrassTime * 0.06, GrassTime * 0.04));\n"
 		"	float jitter = sin(GrassTime * (1.25 + fract(seed * 0.013) * 0.5) + seed * 0.071) * 0.20;\n"
-		"	vec4 vertex = gl_Vertex;\n"
 		"	vertex.xy += (windDir * (0.55 + 0.45 * windStr) + vec2(jitter, jitter * 0.7)) * GrassMovement * bend * 1.6;\n"
 		"	BladeCoord = bladeCoord;\n"
 		"	BladeColor = gl_Color;\n"
-		"	ViewDir = vertex.xyz - GrassEyePos;\n"
+		"	BladeCull = bladeCull;\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * vertex;\n"
 		"	FogFragCoord = gl_Position.w;\n"
 		"}\n";
@@ -2602,8 +3131,8 @@ static void GLGrass_CreateShaders (void)
 		"\n"
 		"varying vec4 BladeCoord;\n"
 		"varying vec4 BladeColor;\n"
+		"varying float BladeCull;\n"
 		"varying float FogFragCoord;\n"
-		"varying vec3 ViewDir;\n"
 		"\n"
 		"float FogFactor(float dist)\n"
 		"{\n"
@@ -2619,14 +3148,6 @@ static void GLGrass_CreateShaders (void)
 		"	return fract(sin(n) * 43758.5453);\n"
 		"}\n"
 		"\n"
-		"float GrassNoise1(float x)\n"
-		"{\n"
-		"	float i = floor(x);\n"
-		"	float f = fract(x);\n"
-		"	f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);\n"
-		"	return mix(GrassHash1(i), GrassHash1(i + 1.0), f);\n"
-		"}\n"
-		"\n"
 		"float FogDitherHash(vec2 p)\n"
 		"{\n"
 		"	return fract(52.9829189 * fract(p.x * 0.06711056 + p.y * 0.00583715));\n"
@@ -2640,43 +3161,39 @@ static void GLGrass_CreateShaders (void)
 		"\n"
 		"vec4 GrassBlade(vec2 p, float x, float curl)\n"
 		"{\n"
-		"	float hdist = (fract(sin(x * 1.71) * 43758.5453) + fract(sin(x * 2.43) * 24634.6345) + fract(sin(x * 3.17) * 12414.1457) + fract(sin(x * 4.89) * 34532.2341)) * 0.25;\n"
+		"	float hdist = GrassHash1(x * 1.71);\n"
 		"	float s = mix(0.85, 1.75, hdist);\n"
 		"	float tip = clamp((p.y + 1.0) * 0.5, 0.0, 1.0);\n"
 		"	float curltip = curl * smoothstep(0.58, 1.0, tip);\n"
-		"	float weather = GrassNoise1(x * 0.031 + GrassTime * 0.018);\n"
-		"	float gust = GrassNoise1(x * 0.097 - GrassTime * 0.041 + 19.0);\n"
-		"	float pulse = 0.5 + 0.5 * sin(GrassTime * (0.18 + weather * 0.18) + x * 0.071 + gust * 6.28318);\n"
-		"	float sway = (gust - 0.5) * 0.070 + 0.020 * sin(GrassTime * 0.42 + x * 0.23 + weather * 6.28318);\n"
-		"	p.x += tip * (0.2 + 0.8 * tip) * GrassMovement * (0.035 + 0.115 * gust * pulse + sway);\n"
+		"	float sway = (GrassHash1(x * 0.097 + 19.0) - 0.5) * 0.024;\n"
+		"	p.x += tip * (0.2 + 0.8 * tip) * sway;\n"
 		"	p.x -= curltip * (0.022 + 0.052 * tip);\n"
 		"	p.y -= curltip * curltip * 0.055;\n"
 		"	p.x *= s;\n"
 		"	p.y = (1.0 + p.y) * s - 1.0;\n"
-		"	float m = 1.0 - smoothstep(0.0, clamp(1.0 - p.y * 1.5, 0.01, 0.6) * 0.2 * s, pow(abs(p.x) * 19.0, 1.5) + p.y - 0.6);\n"
+		"	float edgepower = abs(p.x) * 19.0;\n"
+		"	float m = 1.0 - smoothstep(0.0, clamp(1.0 - p.y * 1.5, 0.01, 0.6) * 0.2 * s, edgepower * edgepower + p.y - 0.6);\n"
 		"	return vec4(mix(vec3(0.05, 0.1, 0.0) * 0.8, vec3(0.0, 0.3, 0.0), (p.y + 1.0) * 0.5 + abs(p.x)), m * smoothstep(-1.0, -0.9, p.y));\n"
 		"}\n"
 		"\n"
 		"float GrassDither()\n"
 		"{\n"
-		"	return fract(gl_FragCoord.x * 0.482635532 + gl_FragCoord.y * 0.1353412 + GrassTime * 100.0) * 0.008;\n"
+		"	return (fract(gl_FragCoord.x * 0.482635532 + gl_FragCoord.y * 0.1353412) - 0.5) * 0.006;\n"
 		"}\n"
 		"\n"
 		"vec3 GrassBladeTexture(vec2 p, float x, float curl)\n"
 		"{\n"
 		"	float v = clamp((p.y + 1.0) * 0.5, 0.0, 1.0);\n"
 		"	float u = clamp(p.x * 9.0 + 0.5, 0.0, 1.0);\n"
-		"	float longfibers = GrassNoise1(u * 42.0 + x * 0.013);\n"
-		"	float finefibers = GrassNoise1(u * 124.0 + x * 0.031);\n"
-		"	float brokenfibers = GrassNoise1(u * 68.0 + floor(v * 9.0) * 0.37 + x * 0.047);\n"
+		"	float fiber = GrassHash1(x * 0.041 + floor(u * 32.0) * 3.11 + floor(v * 10.0) * 11.7);\n"
 		"	float center = 1.0 - smoothstep(0.0, 0.035, abs(p.x));\n"
 		"	float edge = smoothstep(0.035, 0.060, abs(p.x));\n"
 		"	float top = smoothstep(0.38, 1.0, v);\n"
 		"	float curltip = curl * smoothstep(0.68, 1.0, v);\n"
-		"	float fibers = (longfibers - 0.5) * 0.20 + (finefibers - 0.5) * 0.11 + (brokenfibers - 0.5) * 0.07;\n"
+		"	float fibers = (fiber - 0.5) * 0.16;\n"
 		"	float value = mix(0.72, 1.04, v) + fibers + center * (0.055 + top * 0.035) - edge * 0.12;\n"
 		"	vec3 detail = vec3(value);\n"
-		"	detail += vec3(0.060, 0.085, -0.025) * top * (0.45 + 0.55 * longfibers);\n"
+		"	detail += vec3(0.060, 0.085, -0.025) * top * (0.45 + 0.55 * fiber);\n"
 		"	detail += vec3(0.025, 0.035, -0.015) * center * (0.35 + 0.65 * v);\n"
 		"	detail *= 1.0 - curltip * 0.10;\n"
 		"	detail += vec3(0.045, 0.060, -0.025) * curltip * (1.0 - edge);\n"
@@ -2687,7 +3204,7 @@ static void GLGrass_CreateShaders (void)
 		"{\n"
 		"	float curl = clamp(BladeCoord.w, 0.0, 1.0);\n"
 		"	vec4 blade = GrassBlade(BladeCoord.xy, BladeCoord.z, curl);\n"
-		"	float alpha = blade.a * GrassAmount;\n"
+		"	float alpha = blade.a * GrassAmount * BladeCull;\n"
 		"	if (GrassFadeDist > 0.0)\n"
 		"		alpha *= 1.0 - smoothstep(GrassFadeDist * 0.55, GrassFadeDist * 0.85, FogFragCoord);\n"
 		"	if (alpha < 0.12)\n"
@@ -2695,23 +3212,12 @@ static void GLGrass_CreateShaders (void)
 		"	vec3 bladeTexture = GrassBladeTexture(BladeCoord.xy, BladeCoord.z, curl);\n"
 		"	vec3 colour = BladeColor.rgb * bladeTexture * (0.84 + blade.g * 0.45);\n"
 		"\n"
-		"	float side = clamp(BladeCoord.x * 18.0, -1.0, 1.0);\n"
+		"	float side = clamp(abs(BladeCoord.x) * 18.0, 0.0, 1.0);\n"
 		"	float tipBlend = clamp((BladeCoord.y + 1.0) * 0.5, 0.0, 1.0);\n"
-		"	float vdLen = length(ViewDir);\n"
-		"	vec3 vd = vdLen > 0.0001 ? ViewDir / vdLen : vec3(0.0, 0.0, 1.0);\n"
-		"	vec3 sideAxis = cross(vec3(0.0, 0.0, 1.0), vd);\n"
-		"	float sideLen = length(sideAxis);\n"
-		"	sideAxis = sideLen > 0.0001 ? sideAxis / sideLen : vec3(1.0, 0.0, 0.0);\n"
-		"	vec3 fakeNormal = normalize(vec3(0.0, 0.0, 0.55) + sideAxis * side * 0.85 - vd * 0.30);\n"
-		"	if (!gl_FrontFacing) fakeNormal = -fakeNormal;\n"
-		"	vec3 sunDir = normalize(vec3(0.45, 0.30, 0.85));\n"
-		"	float lambert = abs(dot(fakeNormal, sunDir)) * 0.45 + 0.55;\n"
 		"	float root = 1.0 - tipBlend;\n"
 		"	float ao = 1.0 - root * root * 0.45;\n"
-		"	vec3 reflectDir = reflect(-sunDir, fakeNormal);\n"
-		"	float spec = pow(max(0.0, dot(reflectDir, -vd)), 12.0) * smoothstep(0.30, 0.95, tipBlend) * 0.35;\n"
-		"	colour *= lambert * ao;\n"
-		"	colour += vec3(spec);\n"
+		"	float sideShade = 0.94 - side * 0.10 + tipBlend * 0.05;\n"
+		"	colour *= sideShade * ao;\n"
 		"\n"
 		"	colour += vec3(GrassDither());\n"
 		"	float fog = FogFactor(FogFragCoord);\n"
@@ -2730,9 +3236,14 @@ static void GLGrass_CreateShaders (void)
 		grassGeomAmountLoc = GL_GetUniformLocation (&r_grass_program, "GrassAmount");
 		grassGeomTimeLoc = GL_GetUniformLocation (&r_grass_program, "GrassTime");
 		grassGeomMovementLoc = GL_GetUniformLocation (&r_grass_program, "GrassMovement");
-		grassGeomEyePosLoc = GL_GetUniformLocation (&r_grass_program, "GrassEyePos");
 		grassGeomFadeDistLoc = GL_GetUniformLocation (&r_grass_program, "GrassFadeDist");
 		grassGeomFogModeLoc = GL_GetUniformLocation (&r_grass_program, "FogMode");
+		grassGeomEyePosLoc = GL_GetUniformLocation (&r_grass_program, "GrassEyePos");
+		grassGeomStaticModeLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticMode");
+		grassGeomStaticNormalLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticNormal");
+		grassGeomStaticTangentLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticTangent");
+		grassGeomStaticLodLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticLod");
+		grassGeomStaticCellWeightLoc = GL_GetUniformLocation (&r_grass_program, "GrassStaticCellWeight");
 	}
 }
 
@@ -3490,7 +4001,7 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 	GL_Uniform1fFunc(clTimeLoc, cl.time); // woods #caustics
 	GL_Uniform1fFunc(causticsOpacityLoc, gl_caustics.value); // woods #caustics
 	GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount()); // woods #grass
-	GL_Uniform1fFunc (grassTimeLoc, cl.time); // woods #grass
+	GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime()); // woods #grass
 	GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement()); // woods #grass
 	GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
 
@@ -4897,7 +5408,7 @@ static void RSceneCache_Draw(qboolean water)
 						GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
 						GL_Uniform1fFunc (alphaLoc, 1);			//worldmodel is never translucent.
 						GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount()); // woods #grass
-						GL_Uniform1fFunc (grassTimeLoc, cl.time); // woods #grass
+						GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime()); // woods #grass
 						GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement()); // woods #grass
 						GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
 						R_SetGrassColorUniforms(NULL); // woods #grass
