@@ -116,6 +116,8 @@ typedef struct particle_s
 	int PScript_RunParticleEffect (vec3_t org, vec3_t dir, int color, int count);
 	void PScript_DelinkTrailstate(struct trailstate_s **tsk);
 	void PScript_ClearParticles (void);
+	void PScript_MapDecalsReady (qboolean ready);
+	void PScript_SpawnMapDecals (void);
 	void PScript_UpdateModelEffects(qmodel_t *mod);
 	void PScript_ClearSurfaceParticles(qmodel_t *mod);	//model is being unloaded.
 	extern int r_trace_line_cache_counter;
@@ -130,6 +132,8 @@ typedef struct particle_s
 	#define PScript_RunParticleWeather(min,max,d,c,p,n) true
 	#define PScript_ClearSurfaceParticles(m)
 	#define PScript_DelinkTrailstate(tsp)
+	#define PScript_MapDecalsReady(ready)
+	#define PScript_SpawnMapDecals()
 	#define InvalidateTraceLineCache()
 #endif
 

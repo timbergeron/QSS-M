@@ -174,6 +174,7 @@ typedef struct clippeddecal_s
 	struct clippeddecal_s	*next;
 	float		die;
 	float		spawn;
+	qboolean	mapdecal;
 
 	int entity;		//>0 is a lerpentity, <0 is a csqc ent. 0 is world. woot.
 	qmodel_t *model;	//just for paranoia
@@ -454,12 +455,14 @@ static		qboolean r_plooksdirty;	//a particle effect was changed, reevaluate shar
 static void FinishParticleType(part_type_t *ptype);
 
 static void R_ParticleDesc_Callback(struct cvar_s *var);
+static void R_MapDecals_Callback(struct cvar_s *var);
 static cvar_t r_bouncysparks = {"r_bouncysparks", "1"};
 static cvar_t r_part_rain = {"r_part_rain", "1"};
 #if UNSUPPORTED
 static cvar_t r_bloodstains = {"r_bloodstains", "1"};
 #endif
 static cvar_t r_decal_noperpendicular = {"r_decal_noperpendicular", "1"};
+static cvar_t r_part_mapdecals = {"r_part_mapdecals", "1", CVAR_ARCHIVE};
 cvar_t r_particledesc = {"r_particledesc", "classic", CVAR_ARCHIVE};
 static cvar_t r_part_rain_quantity = {"r_part_rain_quantity", "1"};
 static cvar_t r_particle_tracelimit = {"r_particle_tracelimit", "0x7fffffff"};
@@ -475,6 +478,30 @@ static cvar_t r_lightflicker = {"r_lightflicker", "1"};
 extern cvar_t r_particles; // woods (vk)
 
 static float particletime;
+static qboolean pscript_mapdecal_spawn;
+static qboolean pscript_mapdecal_surfaces_ready;
+static vec3_t pscript_mapdecal_tangent1;
+static vec3_t pscript_mapdecal_tangent2;
+static float pscript_mapdecal_rotate;
+static int pscript_mapdecal_fragments;
+static qboolean pscript_mapdecal_trace_hit;
+static qboolean pscript_mapdecal_no_slots;
+static qboolean pscript_clearing_particles;
+
+#define MAPDECAL_TRACE_DISTANCE 64.0f
+
+typedef struct mapdecal_type_cache_s
+{
+	struct mapdecal_type_cache_s *next;
+	char name[MAX_QPATH];
+	char texture[MAX_QPATH];
+	blendmode_t blendmode;
+	int premul;
+	int typenum;
+} mapdecal_type_cache_t;
+
+static mapdecal_type_cache_t *pscript_mapdecal_type_cache;
+static int pscript_mapdecal_type_count;
 
 typedef struct
 {
@@ -694,8 +721,24 @@ float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int 
 
 	if (entnum)
 		*entnum = 0;
+	if (cl.worldmodel && !cl.worldmodel->needload && cl.worldmodel->type == mod_brush)
+	{
+		memset (&trace, 0, sizeof(trace));
+		trace.fraction = 1;
+		Q1BSP_RecursiveHullCheck(&cl.worldmodel->hulls[0], cl.worldmodel->hulls[0].firstclipnode, 0, 1, start, end, &trace);
+		if (frac > trace.fraction)
+		{
+			frac = trace.fraction;
+			VectorCopy(trace.endpos, impact);
+			VectorCopy (trace.plane.normal, normal);
+			if (frac <= 0)
+				return frac;
+		}
+	}
 	for (i = 0; i < num_trace_line_ents; i++)
 	{
+		if (!trace_line_ents[i])
+			continue;
 		ent = &cl.entities[trace_line_ents[i]];
 		if (!ent->model || ent->model->needload || ent->model->type != mod_brush)
 			continue;
@@ -3501,6 +3544,8 @@ void PScript_InitParticles (void)
 	Cvar_RegisterVariable(&r_bloodstains);
 #endif
 	Cvar_RegisterVariable(&r_decal_noperpendicular);
+	Cvar_RegisterVariable(&r_part_mapdecals);
+	Cvar_SetCallback(&r_part_mapdecals, R_MapDecals_Callback);
 	Cvar_RegisterVariable(&r_particledesc);
 	Cvar_SetCompletion (&r_particledesc, &Particles_Completion_f); // woods #particlelist
 	Cvar_RegisterVariable(&r_part_rain_quantity);
@@ -3561,6 +3606,14 @@ void PScript_Shutdown (void)
 		Z_Free(cfg);
 	}
 
+	while (pscript_mapdecal_type_cache)
+	{
+		mapdecal_type_cache_t *cache = pscript_mapdecal_type_cache;
+		pscript_mapdecal_type_cache = cache->next;
+		Z_Free(cache);
+	}
+	pscript_mapdecal_type_count = 0;
+
 	while (numparticletypes > 0)
 	{
 		numparticletypes--;
@@ -3590,6 +3643,10 @@ void PScript_Shutdown (void)
 	free_particles = NULL;
 	free_decals = NULL;
 	free_beams = NULL;
+	pscript_mapdecal_surfaces_ready = false;
+	pscript_mapdecal_spawn = false;
+	pscript_mapdecal_no_slots = false;
+	pscript_clearing_particles = false;
 
 	PScript_ClearAllSurfaceParticles();
 
@@ -3734,7 +3791,9 @@ P_ClearParticles
 void PScript_ClearParticles (void)
 {
 	int		i;
+	qboolean old_clearing = pscript_clearing_particles;
 
+	pscript_clearing_particles = true;
 	PScript_Startup();
 
 //	if (fallback)
@@ -3747,7 +3806,10 @@ void PScript_ClearParticles (void)
 
 	free_decals = &decals[0];
 	for (i=0 ;i<r_numdecals ; i++)
+	{
+		decals[i].mapdecal = false;
 		decals[i].next = &decals[i+1];
+	}
 	decals[r_numdecals-1].next = NULL;
 
 	free_beams = &beams[0];
@@ -3777,6 +3839,461 @@ void PScript_ClearParticles (void)
 	r_plooksdirty = true;
 
 	CL_ClearTrailStates();
+
+	pscript_clearing_particles = old_clearing;
+	if (!pscript_clearing_particles)
+		PScript_SpawnMapDecals();
+}
+
+void PScript_MapDecalsReady(qboolean ready)
+{
+	pscript_mapdecal_surfaces_ready = ready;
+}
+
+static void PScript_ParseMapDecalVector(const char *s, vec3_t out)
+{
+	int i;
+	char string[128];
+	char *p, *end;
+
+	VectorClear(out);
+	q_strlcpy(string, s, sizeof(string));
+	p = string;
+
+	for (i = 0; i < 3; i++)
+	{
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			break;
+		out[i] = strtod(p, &end);
+		if (end == p)
+			break;
+		p = end;
+	}
+}
+
+static void PScript_ParseMapDecalBlend(const char *value, blendmode_t *blendmode, int *premul)
+{
+	*premul = 0;
+
+	if (!*value || !strcmp(value, "blendalpha") || !strcmp(value, "blend"))
+		*blendmode = BM_BLEND;
+	else if (!strcmp(value, "adda") || !strcmp(value, "add"))
+		*blendmode = BM_ADDA;
+	else if (!strcmp(value, "addc"))
+		*blendmode = BM_ADDC;
+	else if (!strcmp(value, "subtract"))
+		*blendmode = BM_SUBTRACT;
+	else if (!strcmp(value, "invmoda") || !strcmp(value, "invmod"))
+		*blendmode = BM_INVMODA;
+	else if (!strcmp(value, "invmodc"))
+		*blendmode = BM_INVMODC;
+	else if (!strcmp(value, "blendcolour") || !strcmp(value, "blendcolor"))
+		*blendmode = BM_BLENDCOLOUR;
+	else if (!strcmp(value, "premul_subtract"))
+	{
+		*premul = 1;
+		*blendmode = BM_INVMODC;
+	}
+	else if (!strcmp(value, "premul_add"))
+	{
+		*premul = 2;
+		*blendmode = BM_PREMUL;
+	}
+	else if (!strcmp(value, "premul_blend"))
+	{
+		*premul = 1;
+		*blendmode = BM_PREMUL;
+	}
+	else
+	{
+		Con_DPrintf("misc_decal uses unknown blend type '%s', assuming blendalpha\n", value);
+		*blendmode = BM_BLEND;
+	}
+}
+
+static void PScript_InitSyntheticMapDecalType(part_type_t *ptype, const char *texture, blendmode_t blendmode, int premul)
+{
+	P_ResetToDefaults(ptype);
+
+	q_strlcpy(ptype->texname, texture, sizeof(ptype->texname));
+	VectorSet(ptype->rgb, 1, 1, 1);
+	ptype->alpha = 1;
+	ptype->alphachange = 0;
+	ptype->die = 0;
+	ptype->scale = 64;
+	ptype->looks.type = PT_CDECAL;
+	ptype->looks.blendmode = blendmode;
+	ptype->looks.premul = premul;
+	ptype->loaded = 1;
+
+	FinishParticleType(ptype);
+}
+
+static int PScript_GetSyntheticMapDecalType(const char *texture, blendmode_t blendmode, int premul)
+{
+	mapdecal_type_cache_t *cache;
+	part_type_t *ptype;
+
+	for (cache = pscript_mapdecal_type_cache; cache; cache = cache->next)
+	{
+		if (cache->blendmode != blendmode || cache->premul != premul || strcmp(cache->texture, texture))
+			continue;
+
+		ptype = NULL;
+		if (cache->typenum >= 0 && cache->typenum < numparticletypes)
+		{
+			ptype = &part_type[cache->typenum];
+			if (strcmp(ptype->config, "__mapdecal") || strcmp(ptype->name, cache->name))
+				ptype = NULL;
+		}
+		if (!ptype)
+		{
+			ptype = P_GetParticleType("__mapdecal", cache->name);
+			cache->typenum = ptype - part_type;
+		}
+
+		if (!ptype->loaded || strcmp(ptype->texname, texture) || ptype->looks.blendmode != blendmode || ptype->looks.premul != premul || ptype->looks.type != PT_CDECAL)
+			PScript_InitSyntheticMapDecalType(ptype, texture, blendmode, premul);
+		return cache->typenum;
+	}
+
+	cache = Z_Malloc(sizeof(*cache));
+	memset(cache, 0, sizeof(*cache));
+	q_strlcpy(cache->texture, texture, sizeof(cache->texture));
+	cache->blendmode = blendmode;
+	cache->premul = premul;
+
+	q_snprintf(cache->name, sizeof(cache->name), "__mapdecal_%i", pscript_mapdecal_type_count++);
+	ptype = P_GetParticleType("__mapdecal", cache->name);
+	cache->typenum = ptype - part_type;
+	PScript_InitSyntheticMapDecalType(ptype, texture, blendmode, premul);
+
+	cache->next = pscript_mapdecal_type_cache;
+	pscript_mapdecal_type_cache = cache;
+
+	return cache->typenum;
+}
+
+static void PScript_RemoveMapDecals(void)
+{
+	int i;
+
+	if (!part_type)
+		return;
+
+	for (i = 0; i < numparticletypes; i++)
+	{
+		clippeddecal_t **link = &part_type[i].clippeddecals;
+
+		while (*link)
+		{
+			clippeddecal_t *d = *link;
+
+			if (!d->mapdecal)
+			{
+				link = &d->next;
+				continue;
+			}
+
+			*link = d->next;
+			d->mapdecal = false;
+			d->next = free_decals;
+			free_decals = d;
+		}
+	}
+}
+
+static void PScript_SetupMapDecalSpawn(vec3_t angles, float rotate, vec3_t dir)
+{
+	vec3_t forward, right, up;
+
+	AngleVectors(angles, forward, right, up);
+	VectorClear(dir);
+	VectorCopy(right, pscript_mapdecal_tangent1);
+	VectorCopy(up, pscript_mapdecal_tangent2);
+	pscript_mapdecal_rotate = rotate;
+}
+
+static qboolean PScript_ProjectMapDecalAxis(const vec3_t axis, const vec3_t normal, vec3_t out)
+{
+	VectorMA(axis, -DotProduct(axis, normal), normal, out);
+	if (DotProduct(out, out) < 0.0001f)
+		return false;
+
+	VectorNormalize(out);
+	return true;
+}
+
+static void PScript_BuildMapDecalTangents(const vec3_t normal, vec3_t tangent1, vec3_t tangent2)
+{
+	vec3_t up;
+	qboolean haveup;
+
+	if (!PScript_ProjectMapDecalAxis(pscript_mapdecal_tangent1, normal, tangent1))
+	{
+		if (PScript_ProjectMapDecalAxis(pscript_mapdecal_tangent2, normal, tangent2))
+		{
+			CrossProduct(tangent2, normal, tangent1);
+			VectorNormalize(tangent1);
+			return;
+		}
+		else
+		{
+			void PerpendicularVector(vec3_t dst, const vec3_t src);
+
+			PerpendicularVector(tangent1, normal);
+			VectorNormalize(tangent1);
+		}
+	}
+
+	haveup = PScript_ProjectMapDecalAxis(pscript_mapdecal_tangent2, normal, up);
+	CrossProduct(normal, tangent1, tangent2);
+	VectorNormalize(tangent2);
+
+	if (haveup && DotProduct(tangent2, up) < 0)
+		VectorScale(tangent2, -1, tangent2);
+}
+
+static void PScript_RotateMapDecalTangents(vec3_t tangent1, vec3_t tangent2)
+{
+	float radians, c, s;
+	vec3_t old1, old2;
+	int i;
+
+	if (!pscript_mapdecal_rotate)
+		return;
+
+	radians = pscript_mapdecal_rotate * M_PI / 180.0f;
+	c = cos(radians);
+	s = sin(radians);
+	VectorCopy(tangent1, old1);
+	VectorCopy(tangent2, old2);
+
+	for (i = 0; i < 3; i++)
+	{
+		tangent1[i] = old1[i] * c - old2[i] * s;
+		tangent2[i] = old1[i] * s + old2[i] * c;
+	}
+
+	VectorNormalize(tangent1);
+	VectorNormalize(tangent2);
+}
+
+static void PScript_FinalizeMapDecalTangents(const vec3_t normal, vec3_t tangent1, vec3_t tangent2)
+{
+	PScript_BuildMapDecalTangents(normal, tangent1, tangent2);
+	VectorScale(tangent2, -1, tangent2);
+	PScript_RotateMapDecalTangents(tangent1, tangent2);
+}
+
+static void PScript_ReportMapDecalSpawn(vec3_t origin, const char *source, int result)
+{
+	if (result)
+		Con_Printf(CON_WARNING "misc_decal %s at %.1f %.1f %.1f: effect not found\n", source, origin[0], origin[1], origin[2]);
+	else if (pscript_mapdecal_no_slots)
+		Con_Printf(CON_WARNING "misc_decal %s at %.1f %.1f %.1f: no free decal slots\n", source, origin[0], origin[1], origin[2]);
+	else if (!pscript_mapdecal_trace_hit)
+		Con_Printf(CON_WARNING "misc_decal %s at %.1f %.1f %.1f: hit nothing within %.0f units\n", source, origin[0], origin[1], origin[2], MAPDECAL_TRACE_DISTANCE);
+	else if (!pscript_mapdecal_fragments)
+		Con_Printf(CON_WARNING "misc_decal %s at %.1f %.1f %.1f: 0 fragments\n", source, origin[0], origin[1], origin[2]);
+	else
+		Con_DPrintf("misc_decal %s at %.1f %.1f %.1f: %i fragments\n", source, origin[0], origin[1], origin[2], pscript_mapdecal_fragments);
+}
+
+static void PScript_RunMapDecalType(vec3_t origin, vec3_t angles, float rotate, int typenum)
+{
+	vec3_t dir;
+
+	if (typenum < 0 || typenum >= numparticletypes)
+		return;
+
+	PScript_SetupMapDecalSpawn(angles, rotate, dir);
+
+	pscript_mapdecal_fragments = 0;
+	pscript_mapdecal_trace_hit = false;
+	pscript_mapdecal_no_slots = false;
+	pscript_mapdecal_spawn = true;
+	PScript_RunParticleEffectState(origin, dir, 1, typenum, NULL);
+	pscript_mapdecal_spawn = false;
+	PScript_ReportMapDecalSpawn(origin, part_type[typenum].texname, 0);
+}
+
+static void PScript_RunSyntheticMapDecal(vec3_t origin, vec3_t angles, float rotate, int typenum, float scale, float alpha)
+{
+	part_type_t *ptype;
+	float oldscale, oldalpha, oldalphachange, olddie;
+
+	if (typenum < 0 || typenum >= numparticletypes)
+		return;
+
+	ptype = &part_type[typenum];
+	oldscale = ptype->scale;
+	oldalpha = ptype->alpha;
+	oldalphachange = ptype->alphachange;
+	olddie = ptype->die;
+
+	ptype->scale = scale > 0 ? scale : 64;
+	ptype->alpha = alpha;
+	ptype->alphachange = 0;
+	ptype->die = 0;
+
+	PScript_RunMapDecalType(origin, angles, rotate, typenum);
+
+	ptype->scale = oldscale;
+	ptype->alpha = oldalpha;
+	ptype->alphachange = oldalphachange;
+	ptype->die = olddie;
+}
+
+static void PScript_RunMapDecal(vec3_t origin, vec3_t angles, float rotate, const char *effect)
+{
+	vec3_t dir;
+	int result;
+
+	PScript_SetupMapDecalSpawn(angles, rotate, dir);
+
+	pscript_mapdecal_fragments = 0;
+	pscript_mapdecal_trace_hit = false;
+	pscript_mapdecal_no_slots = false;
+	pscript_mapdecal_spawn = true;
+	result = PScript_RunParticleEffectTypeString(origin, dir, 1, effect);
+	pscript_mapdecal_spawn = false;
+	PScript_ReportMapDecalSpawn(origin, effect, result);
+}
+
+void PScript_SpawnMapDecals(void)
+{
+	const char *data;
+	char key[128], value[256], classname[64], effect[MAX_QPATH], texture[MAX_QPATH], blend[64];
+	vec3_t origin, angles;
+	float scale, alpha, rotate;
+	qboolean has_origin, has_scale, has_alpha, has_blend;
+
+	if (!decals || !r_numdecals || !pscript_mapdecal_surfaces_ready)
+		return;
+
+	PScript_RemoveMapDecals();
+
+	if (!r_part_mapdecals.value || !cl.worldmodel || !cl.worldmodel->entities)
+		return;
+	if (!free_decals)
+	{
+		Con_DPrintf(CON_WARNING "misc_decal: no free decal slots\n");
+		return;
+	}
+
+	data = cl.worldmodel->entities;
+	while (1)
+	{
+		data = COM_Parse(data);
+		if (!data)
+			break;
+		if (com_token[0] != '{')
+			return;
+
+		classname[0] = 0;
+		effect[0] = 0;
+		texture[0] = 0;
+		blend[0] = 0;
+		VectorClear(origin);
+		VectorClear(angles);
+		scale = 64;
+		alpha = 1;
+		rotate = 0;
+		has_origin = false;
+		has_scale = false;
+		has_alpha = false;
+		has_blend = false;
+
+		while (1)
+		{
+			data = COM_Parse(data);
+			if (!data)
+				return;
+			if (com_token[0] == '}')
+				break;
+			q_strlcpy(key, com_token, sizeof(key));
+
+			data = COM_Parse(data);
+			if (!data)
+				return;
+			q_strlcpy(value, com_token, sizeof(value));
+
+			if (!strcmp(key, "classname"))
+				q_strlcpy(classname, value, sizeof(classname));
+			else if (!strcmp(key, "effect"))
+				q_strlcpy(effect, value, sizeof(effect));
+			else if (!strcmp(key, "texture") || !strcmp(key, "tex"))
+				q_strlcpy(texture, value, sizeof(texture));
+			else if (!strcmp(key, "origin"))
+			{
+				PScript_ParseMapDecalVector(value, origin);
+				has_origin = true;
+			}
+			else if (!strcmp(key, "angles"))
+				PScript_ParseMapDecalVector(value, angles);
+			else if (!strcmp(key, "angle"))
+				angles[1] = atof(value);
+			else if (!strcmp(key, "roll"))
+				Con_DPrintf("misc_decal roll key ignored; use rotate\n");
+			else if (!strcmp(key, "rotate") || !strcmp(key, "rotation") || !strcmp(key, "rotate_clockwise") || !strcmp(key, "clockwise"))
+				rotate = atof(value);
+			else if (!strcmp(key, "scale"))
+			{
+				scale = atof(value);
+				has_scale = true;
+			}
+			else if (!strcmp(key, "alpha"))
+			{
+				alpha = atof(value);
+				has_alpha = true;
+			}
+			else if (!strcmp(key, "blend"))
+			{
+				q_strlcpy(blend, value, sizeof(blend));
+				has_blend = true;
+			}
+		}
+
+		if (strcmp(classname, "misc_decal"))
+			continue;
+		if (!has_origin || (!effect[0] && !texture[0]))
+		{
+			Con_DPrintf("misc_decal missing origin or effect/texture\n");
+			continue;
+		}
+		if (scale <= 0)
+			scale = 64;
+		if (alpha < 0)
+			alpha = 0;
+		else if (alpha > 1)
+			alpha = 1;
+
+		if (effect[0])
+		{
+			if (has_scale || has_alpha || has_blend)
+				Con_DPrintf("misc_decal effect \"%s\" ignores scale/alpha/blend keys\n", effect);
+			PScript_RunMapDecal(origin, angles, rotate, effect);
+		}
+		else
+		{
+			int typenum, premul;
+			blendmode_t blendmode;
+
+			PScript_ParseMapDecalBlend(blend, &blendmode, &premul);
+			typenum = PScript_GetSyntheticMapDecalType(texture, blendmode, premul);
+			Con_DPrintf("misc_decal tex \"%s\", org %.0f %.0f %.0f, ang %.0f %.0f %.0f, cw %.0f\n", texture, origin[0], origin[1], origin[2], angles[0], angles[1], angles[2], rotate);
+			PScript_RunSyntheticMapDecal(origin, angles, rotate, typenum, scale, alpha);
+		}
+	}
+}
+
+static void R_MapDecals_Callback(cvar_t *var)
+{
+	(void)var;
+	PScript_SpawnMapDecals();
 }
 
 int warningCount = 0;
@@ -3857,10 +4374,10 @@ static void R_Particles_KillAllEffects(void)
 		*part_type[i].texname = '\0';
 		part_type[i].scale = 0;
 		part_type[i].loaded = 0;
-		if (part_type->ramp)
-			Z_Free(part_type->ramp);
-		part_type->ramp = NULL;
-		part_type->rampmode = RAMP_NONE;
+		if (part_type[i].ramp)
+			Z_Free(part_type[i].ramp);
+		part_type[i].ramp = NULL;
+		part_type[i].rampmode = RAMP_NONE;
 	}
 
 //	f_modified_particles = false;
@@ -3902,6 +4419,8 @@ static void R_ParticleDesc_Callback(struct cvar_s *var)
 
 	//make sure nothing is stale.
 	CL_RegisterParticles();
+	if (!pscript_clearing_particles)
+		PScript_SpawnMapDecals();
 }
 
 static void P_AddRainParticles(qmodel_t *mod, vec3_t axis[3], vec3_t eorg, byte *scenevis, float contribution)
@@ -4505,6 +5024,7 @@ typedef struct
 	part_type_t *ptype;
 	int entity;
 	qmodel_t *model;
+	qboolean mapdecal;
 	vec3_t center;
 	vec3_t normal;
 	vec3_t tangent1;
@@ -4528,12 +5048,19 @@ static void PScript_AddDecals(void *vctx, vec3_t *points, size_t numtris)
 	while(numtris-->0)
 	{
 		if (!free_decals)
+		{
+			if (ctx->mapdecal)
+				pscript_mapdecal_no_slots = true;
 			break;
+		}
 
 		d = free_decals;
 		free_decals = d->next;
 		d->next = ptype->clippeddecals;
 		ptype->clippeddecals = d;
+		d->mapdecal = ctx->mapdecal;
+		if (d->mapdecal)
+			pscript_mapdecal_fragments++;
 
 		for (i = 0; i < 3; i++)
 		{
@@ -4591,6 +5118,8 @@ static void PScript_AddDecals(void *vctx, vec3_t *points, size_t numtris)
 		d->rgba[2] += vec[2]*ptype->rgbrand[2] + ptype->rgbchange[2]*d->die;
 
 		d->die = particletime + ptype->die - d->die;
+		if (d->mapdecal)
+			d->die = 1.0e30f;
 
 		if (ptype->looks.type != PT_CDECAL)
 			d->die += 20;
@@ -4973,22 +5502,29 @@ int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typ
 		{
 #ifdef USE_DECALS
 			vec3_t vec={0.5, 0.5, 0.5};
-			int i;
+			int i, prevfrags;
 			decalctx_t ctx;
 			vec3_t bestdir;
 			vec3_t start, end;
 
 			if (!free_decals)
+			{
+				if (pscript_mapdecal_spawn)
+					pscript_mapdecal_no_slots = true;
 				return 0;
+			}
 
 			ctx.entity = 0;
+			ctx.mapdecal = pscript_mapdecal_spawn;
 
 			VectorCopy(org, ctx.center);
 			if (!dir || (dir[0] == 0 && dir[1] == 0 && dir[2] == 0))
 			{
-				float bestfrac = 1;
-				float frac;
-				vec3_t impact, normal;
+				float trace_dist = pscript_mapdecal_spawn ? MAPDECAL_TRACE_DISTANCE : 16;
+				float bestdist = trace_dist + 1;
+				float frac, dist;
+				qboolean hit = false;
+				vec3_t delta, impact, normal;
 				int what;
 				bestdir[0] = 0;
 				bestdir[1] = 0.73;
@@ -4998,36 +5534,55 @@ int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typ
 				{
 					if (i >= 3)
 					{
-						end[0] = (i==3)*16;
-						end[1] = (i==4)*16;
-						end[2] = (i==5)*16;
+						end[0] = (i==3)*trace_dist;
+						end[1] = (i==4)*trace_dist;
+						end[2] = (i==5)*trace_dist;
 					}
 					else
 					{
-						end[0] = -(i==0)*16;
-						end[1] = -(i==1)*16;
-						end[2] = -(i==2)*16;
+						end[0] = -(i==0)*trace_dist;
+						end[1] = -(i==1)*trace_dist;
+						end[2] = -(i==2)*trace_dist;
 					}
 					VectorSubtract(org, end, start);
 					VectorAdd(org, end, end);
 
 
 					frac = CL_TraceLine(start, end, impact, normal, &what);
-					if (bestfrac > frac)
+					if (frac >= 1)
+						continue;
+
+					VectorSubtract(impact, org, delta);
+					dist = VectorLength(delta);
+					if (bestdist > dist)
 					{
-						bestfrac = frac;
+						hit = true;
+						bestdist = dist;
 						VectorCopy(normal, bestdir);
 						VectorCopy(impact, ctx.center);
 						ctx.entity = what;
 					}
 				}
+				if (pscript_mapdecal_spawn)
+				{
+					pscript_mapdecal_trace_hit = hit;
+					if (!hit)
+						return 0;
+				}
 				dir = bestdir;
 			}
 			else
 			{	//try to get it exactly on the plane, otherwise network or collision inprecisions can leave us further away from the surface than the radius of the decal
+				float tracefrac;
 				VectorSubtract(org, dir, start);
 				VectorAdd(org, dir, end);
-				CL_TraceLine(start, end, ctx.center, bestdir, &ctx.entity);
+				tracefrac = CL_TraceLine(start, end, ctx.center, bestdir, &ctx.entity);
+				if (pscript_mapdecal_spawn)
+				{
+					pscript_mapdecal_trace_hit = tracefrac < 1;
+					if (tracefrac >= 1)
+						return 0;
+				}
 			}
 			if (ctx.entity)
 			{
@@ -5055,11 +5610,18 @@ int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typ
 			VectorScale(dir, -1, ctx.normal);
 			VectorNormalize(ctx.normal);
 
-			//we know the normal now. pick two random tangents.
-			VectorNormalize(vec);
-			CrossProduct(ctx.normal, vec, ctx.tangent1);
-			RotatePointAroundVector(ctx.tangent2, ctx.normal, ctx.tangent1, frandom()*360);
-			CrossProduct(ctx.normal, ctx.tangent2, ctx.tangent1);
+			if (pscript_mapdecal_spawn)
+			{
+				PScript_FinalizeMapDecalTangents(ctx.normal, ctx.tangent1, ctx.tangent2);
+			}
+			else
+			{
+				//we know the normal now. pick two random tangents.
+				VectorNormalize(vec);
+				CrossProduct(ctx.normal, vec, ctx.tangent1);
+				RotatePointAroundVector(ctx.tangent2, ctx.normal, ctx.tangent1, frandom()*360);
+				CrossProduct(ctx.normal, ctx.tangent2, ctx.tangent1);
+			}
 
 			VectorNormalize(ctx.tangent1);
 			VectorNormalize(ctx.tangent2);
@@ -5070,6 +5632,8 @@ int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typ
 			ctx.scale2 = ptype->t2 - ptype->t1;
 			ctx.bias2 = ptype->t1 + ctx.scale2/2;
 			m = ptype->scale + frandom() * ptype->scalerand;
+			if (m <= 0)
+				goto skip;
 			ctx.scale0 = 2.0 / m;
 			ctx.scale1 /= m;
 			ctx.scale2 /= m;
@@ -5078,7 +5642,14 @@ int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typ
 				ctx.bias1 += ptype->texsstride * (rand()%ptype->randsmax);
 
 			//inserts decals through a callback.
+			prevfrags = pscript_mapdecal_fragments;
 			Mod_ClipDecal(ctx.model, ctx.center, ctx.normal, ctx.tangent2, ctx.tangent1, m, ptype->surfflagmask, ptype->surfflagmatch, PScript_AddDecals, &ctx);
+			if (pscript_mapdecal_spawn && pscript_mapdecal_fragments == prevfrags)
+			{
+				VectorScale(ctx.normal, -1, ctx.normal);
+				PScript_FinalizeMapDecalTangents(ctx.normal, ctx.tangent1, ctx.tangent2);
+				Mod_ClipDecal(ctx.model, ctx.center, ctx.normal, ctx.tangent2, ctx.tangent1, m, ptype->surfflagmask, ptype->surfflagmatch, PScript_AddDecals, &ctx);
+			}
 #endif
 			if (ptype->assoc < 0)
 				break;
@@ -6966,7 +7537,36 @@ static qboolean PScript_IsParticleDead(const particle_t *p)
 
 static qboolean PScript_IsDecalDead(const clippeddecal_t *d)
 {
+	if (d->mapdecal)
+		return d->die < particletime;
 	return d->die < particletime || (cls.demoplayback && cls.demospeed < 0.f && d->spawn > cl.mtime[0]);
+}
+
+static void PScript_MarkDecalForReuse(void)
+{
+	int i, first;
+
+	if (!r_numdecals || !decals)
+		return;
+
+	first = r_decalrecycle;
+	for (i = 0; i < r_numdecals; i++)
+	{
+		clippeddecal_t *d = &decals[r_decalrecycle];
+
+		if (++r_decalrecycle >= r_numdecals)
+			r_decalrecycle = 0;
+
+		if (!d->mapdecal)
+		{
+			d->die = -1;
+			return;
+		}
+	}
+
+	decals[first].die = -1;
+	if (++r_decalrecycle >= r_numdecals)
+		r_decalrecycle = 0;
 }
 
 static void PScript_DrawParticleTypes (float pframetime)
@@ -7047,11 +7647,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 	{
 		//mark some as dead, so we can keep spawning new ones next frame.
 		for (i = 0; i < 256; i++)
-		{
-			decals[r_decalrecycle].die = -1;
-			if (++r_decalrecycle >= r_numdecals)
-				r_decalrecycle = 0;
-		}
+			PScript_MarkDecalForReuse();
 	}
 	if (!free_particles)
 	{
@@ -7928,5 +8524,4 @@ void PScript_DrawParticles (void)
 
 #endif
 #endif
-
 
