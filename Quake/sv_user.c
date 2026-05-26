@@ -29,6 +29,7 @@ edict_t	*sv_player;
 extern	cvar_t	sv_friction;
 cvar_t	sv_edgefriction = {"edgefriction", "2", CVAR_NONE};
 extern	cvar_t	sv_stopspeed;
+extern	cvar_t	cl_noclip_speed; // woods #fastnoclip
 
 static	vec3_t		forward, right, up;
 
@@ -52,6 +53,15 @@ cvar_t	sv_fullpitch = {"sv_fullpitch","1",CVAR_ARCHIVE| CVAR_SERVERINFO}; // woo
 qboolean SV_RunThink (edict_t *ent);
 
 speed_info_t speed_info = { -1, -1, -1 }; // woods #speedometer
+
+static qboolean SV_FastNoclipActive(void) // woods #fastnoclip
+{
+	if (!sv_player->v.button2 || cl_noclip_speed.value <= 0)
+		return false;
+	if (!host_client || !host_client->netconnection)
+		return false;
+	return Q_strcmp(NET_QSocketGetTrueAddressString(host_client->netconnection), "LOCAL") == 0;
+}
 
 /*
 ===============
@@ -320,6 +330,8 @@ new, alternate noclip. old noclip is still handled in SV_AirMove
 */
 void SV_NoclipMove (void)
 {
+	float maxspeed;
+
 	AngleVectors (sv_player->v.v_angle, forward, right, up);
 
 	velocity[0] = forward[0]*cmd.forwardmove + right[0]*cmd.sidemove;
@@ -327,10 +339,14 @@ void SV_NoclipMove (void)
 	velocity[2] = forward[2]*cmd.forwardmove + right[2]*cmd.sidemove;
 	velocity[2] += cmd.upmove*2; //doubled to match running speed
 
-	if (VectorLength (velocity) > sv_maxspeed.value)
+	maxspeed = sv_maxspeed.value;
+	if (SV_FastNoclipActive())
+		maxspeed = cl_noclip_speed.value;
+
+	if (VectorLength (velocity) > maxspeed)
 	{
 		VectorNormalize (velocity);
-		VectorScale (velocity, sv_maxspeed.value, velocity);
+		VectorScale (velocity, maxspeed, velocity);
 	}
 }
 
@@ -362,6 +378,7 @@ void SV_AirMove (void)
 	vec3_t		wishvel, wishdir;
 	float		wishspeed;
 	float		fmove, smove;
+	float		maxspeed;
 
 	AngleVectors (sv_player->v.angles, forward, right, up);
 
@@ -382,10 +399,13 @@ void SV_AirMove (void)
 
 	VectorCopy (wishvel, wishdir);
 	wishspeed = VectorNormalize(wishdir);
-	if (wishspeed > sv_maxspeed.value)
+	maxspeed = sv_maxspeed.value;
+	if (sv_player->v.movetype == MOVETYPE_NOCLIP && SV_FastNoclipActive())
+		maxspeed = cl_noclip_speed.value;
+	if (wishspeed > maxspeed)
 	{
-		VectorScale (wishvel, sv_maxspeed.value/wishspeed, wishvel);
-		wishspeed = sv_maxspeed.value;
+		VectorScale (wishvel, maxspeed/wishspeed, wishvel);
+		wishspeed = maxspeed;
 	}
 
 	if ( sv_player->v.movetype == MOVETYPE_NOCLIP)

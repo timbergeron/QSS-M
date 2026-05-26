@@ -62,19 +62,7 @@ kbutton_t	in_up, in_down;
 
 int			in_impulse;
 
-qboolean speed_boost_active = false; // woods #fastnoclip
-
-extern cvar_t cl_forwardspeed; // woods #fastnoclip
-extern cvar_t cl_backspeed; // woods #fastnoclip
-extern cvar_t cl_sidespeed; // woods #fastnoclip
-extern cvar_t sv_maxspeed; // woods #fastnoclip
-
 extern edict_t* sv_player; // woods #fastnoclip
-
-static int original_sv_maxspeed = 0; // woods #fastnoclip
-static int original_cl_forwardspeed = 0; // woods #fastnoclip 
-static int original_cl_backspeed = 0; // woods #fastnoclip
-static int original_cl_sidespeed = 0; // woods #fastnoclip
 
 // JPG 1.05 - translate +jump to +moveup under water
 //extern cvar_t	pq_moveup;
@@ -116,35 +104,6 @@ void KeyDown (kbutton_t *b)
 	// JPG 1.05 - if jump is pressed underwater, translate it to a moveup
 	if (b == &in_jump /*&& pq_moveup.value*/ && cl.stats[STAT_HEALTH] > 0 && cl.inwater)
 		b = &in_up;
-
-	// woods #fastnoclip - handle speed boost when jump pressed in noclip
-	if (b == &in_jump && svs.clients->spawned && sv_player && !sv_player->free &&
-		sv_player->v.movetype == MOVETYPE_NOCLIP && sv_maxspeed.value < 720)
-	{
-		// Store original values before boosting
-		original_sv_maxspeed = sv_maxspeed.value;
-		original_cl_forwardspeed = cl_forwardspeed.value;
-		original_cl_backspeed = cl_backspeed.value;
-		original_cl_sidespeed = cl_sidespeed.value;
-
-		speed_boost_active = true;
-
-		float new_max = sv_maxspeed.value + 400;
-		if (new_max > 720) new_max = 720;
-		Cvar_SetQuick(&sv_maxspeed, va("%f", new_max));
-
-		float new_forward = cl_forwardspeed.value + 400;
-		if (new_forward > 720) new_forward = 720;
-		Cvar_SetQuick(&cl_forwardspeed, va("%f", new_forward));
-
-		float new_back = cl_backspeed.value + 400;
-		if (new_back > 720) new_back = 720;
-		Cvar_SetQuick(&cl_backspeed, va("%f", new_back));
-
-		float new_side = cl_sidespeed.value + 400;
-		if (new_side > 720) new_side = 720;
-		Cvar_SetQuick(&cl_sidespeed, va("%f", new_side));
-	}
 
 	if (k == b->down[0] || k == b->down[1])
 		return;		// repeating key
@@ -191,15 +150,6 @@ void KeyUp (kbutton_t *b)
 			// in case a -moveup got lost somewhere
 			in_up.down[0] = in_up.down[1] = 0;
 			in_up.state = 4;
-		}
-
-		if (speed_boost_active) // woods #fastnoclip - reset speeds when jump released
-		{
-			Cvar_SetQuick(&sv_maxspeed, va("%i", original_sv_maxspeed));
-			Cvar_SetQuick(&cl_forwardspeed, va("%i", original_cl_forwardspeed));
-			Cvar_SetQuick(&cl_backspeed, va("%i", original_cl_backspeed));
-			Cvar_SetQuick(&cl_sidespeed, va("%i", original_cl_sidespeed));
-			speed_boost_active = false;
 		}
 	}
 
@@ -398,6 +348,7 @@ cvar_t	cl_upspeed = {"cl_upspeed","200",CVAR_ARCHIVE};
 cvar_t	cl_forwardspeed = {"cl_forwardspeed","200", CVAR_ARCHIVE};
 cvar_t	cl_backspeed = {"cl_backspeed","200", CVAR_ARCHIVE};
 cvar_t	cl_sidespeed = {"cl_sidespeed","350",CVAR_ARCHIVE};
+cvar_t	cl_noclip_speed = {"cl_noclip_speed","720",CVAR_ARCHIVE};
 
 cvar_t	cl_movespeedkey = {"cl_movespeedkey","2.0",CVAR_NONE};
 
@@ -410,6 +361,15 @@ cvar_t	cl_alwaysrun = {"cl_alwaysrun","0",CVAR_ARCHIVE}; // QuakeSpasm -- new al
 
 cvar_t	pq_lag = { "pq_lag", "0" };			// JPG - synthetic lag // woods #pqlag
 cvar_t	cl_smartspawn = {"cl_smartspawn", "0", CVAR_ARCHIVE}; // woods #spawntrainer
+
+static qboolean CL_FastNoclipActive(void) // woods #fastnoclip
+{
+	if (!(in_jump.state & 1) || cl_noclip_speed.value <= 0)
+		return false;
+	if (!sv.active || !svs.clients || !svs.clients->spawned || !sv_player || sv_player->free)
+		return false;
+	return sv_player->v.movetype == MOVETYPE_NOCLIP;
+}
 
 /*
 ================
@@ -482,12 +442,20 @@ Send the intended movement message to the server
 */
 void CL_BaseMove (usercmd_t *cmd, qboolean isfinal)
 {
+	float forward_speed, back_speed, side_speed;
+
 	Q_memset (cmd, 0, sizeof(*cmd));
 
 	VectorCopy(cl.viewangles, cmd->viewangles);
 
 	if (cls.signon != SIGNONS)
 		return;
+
+	forward_speed = cl_forwardspeed.value;
+	back_speed = cl_backspeed.value;
+	side_speed = cl_sidespeed.value;
+	if (CL_FastNoclipActive())
+		forward_speed = back_speed = side_speed = cl_noclip_speed.value;
 
 	if (cl_iDrive.value) // woods #idrive
 	{
@@ -504,8 +472,8 @@ void CL_BaseMove (usercmd_t *cmd, qboolean isfinal)
 				if (in_right.downtime < in_left.downtime)
 					s1 = 0;
 			}
-			cmd->sidemove += cl_sidespeed.value * s1;
-			cmd->sidemove -= cl_sidespeed.value * s2;
+			cmd->sidemove += side_speed * s1;
+			cmd->sidemove -= side_speed * s2;
 		}
 		s1 = CL_KeyState (&in_moveright, isfinal);
 		s2 = CL_KeyState (&in_moveleft, isfinal);
@@ -516,8 +484,8 @@ void CL_BaseMove (usercmd_t *cmd, qboolean isfinal)
 			if (in_moveright.downtime < in_moveleft.downtime)
 				s1 = 0;
 		}
-		cmd->sidemove += cl_sidespeed.value * s1;
-		cmd->sidemove -= cl_sidespeed.value * s2;
+		cmd->sidemove += side_speed * s1;
+		cmd->sidemove -= side_speed * s2;
 		s1 = CL_KeyState (&in_up, isfinal);
 		s2 = CL_KeyState (&in_down, isfinal);
 		if (s1 && s2)
@@ -542,28 +510,28 @@ void CL_BaseMove (usercmd_t *cmd, qboolean isfinal)
 				if (in_forward.downtime < in_back.downtime)
 					s1 = 0;
 			}
-			cmd->forwardmove += cl_forwardspeed.value * s1;
-			cmd->forwardmove -= cl_backspeed.value * s2;
+			cmd->forwardmove += forward_speed * s1;
+			cmd->forwardmove -= back_speed * s2;
 		}
 	}
 	else
 	{
 		if (in_strafe.state & 1)
 		{
-		cmd->sidemove += cl_sidespeed.value * CL_KeyState (&in_right, isfinal);
-		cmd->sidemove -= cl_sidespeed.value * CL_KeyState (&in_left, isfinal);
+		cmd->sidemove += side_speed * CL_KeyState (&in_right, isfinal);
+		cmd->sidemove -= side_speed * CL_KeyState (&in_left, isfinal);
 	}
 
-	cmd->sidemove += cl_sidespeed.value * CL_KeyState (&in_moveright, isfinal);
-	cmd->sidemove -= cl_sidespeed.value * CL_KeyState (&in_moveleft, isfinal);
+	cmd->sidemove += side_speed * CL_KeyState (&in_moveright, isfinal);
+	cmd->sidemove -= side_speed * CL_KeyState (&in_moveleft, isfinal);
 
 	cmd->upmove += cl_upspeed.value * CL_KeyState (&in_up, isfinal);
 	cmd->upmove -= cl_upspeed.value * CL_KeyState (&in_down, isfinal);
 
 	if (! (in_klook.state & 1) )
 	{
-		cmd->forwardmove += cl_forwardspeed.value * CL_KeyState (&in_forward, isfinal);
-		cmd->forwardmove -= cl_backspeed.value * CL_KeyState (&in_back, isfinal);
+		cmd->forwardmove += forward_speed * CL_KeyState (&in_forward, isfinal);
+		cmd->forwardmove -= back_speed * CL_KeyState (&in_back, isfinal);
 	}
 	}
 
