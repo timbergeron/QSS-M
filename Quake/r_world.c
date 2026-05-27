@@ -29,10 +29,21 @@ extern cvar_t gl_fullbrights, r_drawflat, gl_overbright, r_oldskyleaf, r_showtri
 extern cvar_t r_flatlightstyles;
 cvar_t r_scenecache = {"r_scenecache",""};	//spike, an attempt to cope with abusive maps a bit better.
 
+typedef struct grass_presence_cache_s grass_presence_cache_t;
+
 byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
 static qboolean RSceneCache_Queue(byte *vis);
 static void RSceneCache_Draw(qboolean water);
 void RSceneCache_Shutdown(void);
+static qboolean R_GrassBladesActive (void);
+static qboolean R_GrassSurfaceCanHaveBlades (const msurface_t *s);
+static grass_presence_cache_t *R_GrassGetPresenceCache (qmodel_t *model, qboolean create);
+static qboolean R_GrassPresenceCacheHasBladeSurfaces (const grass_presence_cache_t *cache);
+static qboolean R_GrassSurfaceCanHaveBladesCached (const grass_presence_cache_t *cache, qmodel_t *model, const msurface_t *s);
+#ifndef SDL_THREADS_DISABLED
+static void R_GrassMarkSurfaceVisibleCached (grass_presence_cache_t *cache, qmodel_t *model, const msurface_t *s);
+#endif
+static int r_grass_scenecache_visframe;
 extern qboolean lightmaps_skipupdates;
 extern char	skybox_name[1024]; // woods -- #fastsky2
 extern qboolean externalskyloaded; // woods -- #fastsky2
@@ -115,6 +126,43 @@ qboolean R_BackFaceCull (msurface_t *surf)
 	return false;
 }
 
+#ifndef SDL_THREADS_DISABLED
+static void R_MarkGrassSurfaces (byte *vis)
+{
+	grass_presence_cache_t *presencecache;
+	mleaf_t *leaf;
+	msurface_t *surf, **mark;
+	int i, j;
+
+	if (!vis || !R_GrassBladesActive() || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
+		return;
+	presencecache = R_GrassGetPresenceCache(cl.worldmodel, true);
+	if (!R_GrassPresenceCacheHasBladeSurfaces(presencecache))
+		return;
+
+	r_grass_scenecache_visframe = r_visframecount;
+
+	leaf = &cl.worldmodel->leafs[1];
+	for (i = 0; i < cl.worldmodel->numleafs; i++, leaf++)
+	{
+		if (!(vis[i >> 3] & (1 << (i & 7))))
+			continue;
+		if (R_CullBox(leaf->minmaxs, leaf->minmaxs + 3))
+			continue;
+
+		if (leaf->contents != CONTENTS_SKY || r_oldskyleaf.value)
+		{
+			for (j = 0, mark = leaf->firstmarksurface; j < leaf->nummarksurfaces; j++, mark++)
+			{
+				surf = *mark;
+				if (R_GrassSurfaceCanHaveBladesCached(presencecache, cl.worldmodel, surf))
+					R_GrassMarkSurfaceVisibleCached(presencecache, cl.worldmodel, surf);
+			}
+		}
+	}
+}
+#endif
+
 /*
 ===============
 R_MarkSurfaces -- johnfitz -- mark surfaces based on PVS and rebuild texture chains
@@ -156,7 +204,10 @@ void R_MarkSurfaces (void)
 
 #ifndef SDL_THREADS_DISABLED
 	if (RSceneCache_Queue(vis))
+	{
+		R_MarkGrassSurfaces(vis);
 		return;
+	}
 	lightmaps_skipupdates = false;
 #endif
 
@@ -840,6 +891,18 @@ typedef struct grass_model_cache_s
 	struct grass_model_cache_s *next;
 } grass_model_cache_t;
 
+struct grass_presence_cache_s
+{
+	qmodel_t *model;
+	int firstsurface;
+	int numsurfaces;
+	unsigned int texhash;
+	qboolean has_blade_surfaces;
+	byte *surface_blade_flags;
+	int *surface_visframes;
+	struct grass_presence_cache_s *next;
+};
+
 typedef struct grass_brush_blocker_s
 {
 	vec3_t mins;
@@ -855,6 +918,7 @@ static GLuint r_grass_vertex_vbo;
 static grass_light_cache_entry_t r_grass_light_cache[GRASS_LIGHT_CACHE_SIZE];
 static unsigned int r_grass_light_cache_generation;
 static grass_model_cache_t *r_grass_model_caches;
+static grass_presence_cache_t *r_grass_presence_caches;
 static qmodel_t *r_grass_cache_worldmodel;
 static qmodel_t *r_grass_brush_blocker_worldmodel;
 static byte *r_grass_brush_blocker_submodels;
@@ -1384,20 +1448,33 @@ static void R_GrassPointFromEntitySpace (const entity_t *ent, const vec3_t in, v
 		VectorAdd(in, ent->origin, out);
 }
 
-static void R_GrassBuildDlightList (const msurface_t *s, const entity_t *ent, grass_dlight_list_t *list)
+static qboolean R_GrassLightIntersectsSurfaceBounds (const msurface_t *s, const vec3_t origin, float radius)
+{
+	int i;
+	vec3_t closest, delta;
+
+	for (i = 0; i < 3; i++)
+		closest[i] = CLAMP(s->mins[i], origin[i], s->maxs[i]);
+
+	VectorSubtract(closest, origin, delta);
+	return DotProduct(delta, delta) < radius * radius;
+}
+
+static void R_GrassBuildDlightList (const msurface_t *s, const entity_t *ent, grass_dlight_list_t *list, qboolean force_scan)
 {
 	int lnum;
 	qboolean use_dlightbits;
 
 	list->count = 0;
-	use_dlightbits = (s->dlightframe == r_framecount);
-	if (!use_dlightbits)
+	use_dlightbits = !force_scan && (s->dlightframe == r_framecount);
+	if (!use_dlightbits && !force_scan)
 		return;
 
 	for (lnum = 0; lnum < MAX_DLIGHTS; lnum++)
 	{
 		dlight_t *light;
 		grass_dlight_t *dst;
+		vec3_t lightorg;
 		float cull_radius;
 
 		if (use_dlightbits && !(s->dlightbits[lnum >> 5] & (1U << (lnum & 31))))
@@ -1409,12 +1486,15 @@ static void R_GrassBuildDlightList (const msurface_t *s, const entity_t *ent, gr
 		cull_radius = light->radius - light->minlight;
 		if (cull_radius <= 0.0f)
 			continue;
+		R_GrassPointToEntitySpace(ent, light->origin, lightorg);
+		if (force_scan && !R_GrassLightIntersectsSurfaceBounds(s, lightorg, cull_radius))
+			continue;
 
 		if (list->count >= MAX_DLIGHTS)
 			break;
 
 		dst = &list->lights[list->count++];
-		R_GrassPointToEntitySpace(ent, light->origin, dst->origin);
+		VectorCopy(lightorg, dst->origin);
 		VectorCopy(light->color, dst->color);
 		dst->radius = light->radius;
 		dst->minlight = light->minlight;
@@ -1560,6 +1640,215 @@ static void R_GrassSurfaceNormal (const msurface_t *s, vec3_t normal)
 	VectorCopy(s->plane->normal, normal);
 	if (s->flags & SURF_PLANEBACK)
 		VectorScale(normal, -1.0f, normal);
+}
+
+static unsigned int R_GrassTexStringHash (void)
+{
+	const unsigned char *s;
+	unsigned int hash;
+
+	s = (const unsigned char *)(r_grass_tex.string ? r_grass_tex.string : "");
+	hash = 2166136261U;
+	while (*s)
+	{
+		hash ^= *s++;
+		hash *= 16777619U;
+	}
+
+	return hash;
+}
+
+static qboolean R_GrassSurfaceCanHaveBlades (const msurface_t *s)
+{
+	vec3_t normal;
+
+	if (!s || !s->texinfo || !s->texinfo->texture || !s->polys)
+		return false;
+	if (s->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE | SURF_DRAWFENCE))
+		return false;
+	if (!R_TextureHasGrass(s->texinfo->texture))
+		return false;
+
+	R_GrassSurfaceNormal(s, normal);
+	return normal[2] >= 0.35f;
+}
+
+static qboolean R_GrassScanModelForBladeSurfaces (qmodel_t *model)
+{
+	int i, firstsurface, numsurfaces;
+	msurface_t *s;
+
+	if (!model || model->type != mod_brush || !model->surfaces)
+		return false;
+
+	firstsurface = model->firstmodelsurface;
+	numsurfaces = model->nummodelsurfaces;
+	if (firstsurface < 0 || firstsurface > model->numsurfaces ||
+		numsurfaces <= 0 || numsurfaces > model->numsurfaces - firstsurface)
+		return false;
+
+	for (i = 0, s = model->surfaces + firstsurface; i < numsurfaces; i++, s++)
+		if (R_GrassSurfaceCanHaveBlades(s))
+			return true;
+
+	return false;
+}
+
+static qboolean R_GrassRefreshPresenceCache (qmodel_t *model, grass_presence_cache_t *cache)
+{
+	int i, firstsurface, numsurfaces;
+	msurface_t *s;
+
+	if (!cache)
+		return R_GrassScanModelForBladeSurfaces(model);
+
+	cache->has_blade_surfaces = false;
+	if (cache->surface_blade_flags)
+		memset(cache->surface_blade_flags, 0, (size_t)cache->numsurfaces * sizeof(*cache->surface_blade_flags));
+
+	if (!model || model->type != mod_brush || !model->surfaces)
+		return false;
+
+	firstsurface = model->firstmodelsurface;
+	numsurfaces = model->nummodelsurfaces;
+	if (firstsurface < 0 || firstsurface > model->numsurfaces ||
+		numsurfaces <= 0 || numsurfaces > model->numsurfaces - firstsurface)
+		return false;
+
+	for (i = 0, s = model->surfaces + firstsurface; i < numsurfaces; i++, s++)
+	{
+		if (!R_GrassSurfaceCanHaveBlades(s))
+			continue;
+		cache->has_blade_surfaces = true;
+		if (cache->surface_blade_flags)
+			cache->surface_blade_flags[i] = 1;
+	}
+
+	return cache->has_blade_surfaces;
+}
+
+static void R_GrassFreePresenceCache (grass_presence_cache_t *cache)
+{
+	if (!cache)
+		return;
+
+	free(cache->surface_blade_flags);
+	free(cache->surface_visframes);
+	free(cache);
+}
+
+static grass_presence_cache_t *R_GrassGetPresenceCache (qmodel_t *model, qboolean create)
+{
+	grass_presence_cache_t **link, *cache;
+	unsigned int texhash;
+
+	if (!model)
+		return NULL;
+
+	texhash = R_GrassTexStringHash();
+	for (link = &r_grass_presence_caches; (cache = *link); )
+	{
+		if (cache->model != model)
+		{
+			link = &cache->next;
+			continue;
+		}
+
+		if (cache->firstsurface != model->firstmodelsurface ||
+			cache->numsurfaces != model->nummodelsurfaces)
+		{
+			*link = cache->next;
+			R_GrassFreePresenceCache(cache);
+			continue;
+		}
+
+		if (cache->texhash != texhash)
+		{
+			cache->texhash = texhash;
+			R_GrassRefreshPresenceCache(model, cache);
+		}
+		return cache;
+	}
+
+	if (!create)
+		return NULL;
+
+	cache = (grass_presence_cache_t *)calloc(1, sizeof(*cache));
+	if (!cache)
+		return NULL;
+
+	cache->model = model;
+	cache->firstsurface = model->firstmodelsurface;
+	cache->numsurfaces = model->nummodelsurfaces;
+	cache->texhash = texhash;
+	if (cache->numsurfaces > 0)
+	{
+		cache->surface_blade_flags = (byte *)calloc((size_t)cache->numsurfaces, sizeof(*cache->surface_blade_flags));
+		cache->surface_visframes = (int *)calloc((size_t)cache->numsurfaces, sizeof(*cache->surface_visframes));
+	}
+	R_GrassRefreshPresenceCache(model, cache);
+	cache->next = r_grass_presence_caches;
+	r_grass_presence_caches = cache;
+	return cache;
+}
+
+static qboolean R_GrassPresenceCacheHasBladeSurfaces (const grass_presence_cache_t *cache)
+{
+	return cache && cache->has_blade_surfaces;
+}
+
+static int R_GrassSurfacePresenceIndex (const grass_presence_cache_t *cache, const qmodel_t *model, const msurface_t *s)
+{
+	int index;
+
+	if (!cache || !model || !s)
+		return -1;
+
+	index = (int)(s - (model->surfaces + cache->firstsurface));
+	if (index < 0 || index >= cache->numsurfaces)
+		return -1;
+
+	return index;
+}
+
+static qboolean R_GrassSurfaceCanHaveBladesCached (const grass_presence_cache_t *cache, qmodel_t *model, const msurface_t *s)
+{
+	int index;
+
+	index = R_GrassSurfacePresenceIndex(cache, model, s);
+	if (index < 0)
+		return false;
+	if (!cache->surface_blade_flags)
+		return R_GrassSurfaceCanHaveBlades(s);
+
+	return cache->surface_blade_flags[index] != 0;
+}
+
+#ifndef SDL_THREADS_DISABLED
+static void R_GrassMarkSurfaceVisibleCached (grass_presence_cache_t *cache, qmodel_t *model, const msurface_t *s)
+{
+	int index;
+
+	index = R_GrassSurfacePresenceIndex(cache, model, s);
+	if (index < 0 || !cache->surface_visframes)
+		return;
+
+	cache->surface_visframes[index] = r_visframecount;
+}
+#endif
+
+static qboolean R_GrassSurfaceVisibleCached (const grass_presence_cache_t *cache, qmodel_t *model, const msurface_t *s, texchain_t chain, qboolean use_presence_vis)
+{
+	int index;
+
+	if (chain != chain_world)
+		return true;
+	if (!use_presence_vis && s->visframe == r_visframecount)
+		return true;
+
+	index = R_GrassSurfacePresenceIndex(cache, model, s);
+	return index >= 0 && cache->surface_visframes &&
+		cache->surface_visframes[index] == r_visframecount;
 }
 
 static unsigned int R_GrassSurfaceLightstyleHash (const msurface_t *s)
@@ -1910,6 +2199,35 @@ static void R_GrassClearBrushSubmodelBlockers (void)
 	r_grass_brush_blocker_worldmodel = NULL;
 }
 
+static void R_GrassFreePresenceCaches (void)
+{
+	grass_presence_cache_t *cache, *next;
+
+	for (cache = r_grass_presence_caches; cache; cache = next)
+	{
+		next = cache->next;
+		R_GrassFreePresenceCache(cache);
+	}
+
+	r_grass_presence_caches = NULL;
+}
+
+static void R_GrassRemovePresenceCache (qmodel_t *mod)
+{
+	grass_presence_cache_t **link, *cache;
+
+	for (link = &r_grass_presence_caches; (cache = *link); )
+	{
+		if (cache->model == mod)
+		{
+			*link = cache->next;
+			R_GrassFreePresenceCache(cache);
+		}
+		else
+			link = &cache->next;
+	}
+}
+
 static void R_GrassFreeAllModelCaches (void)
 {
 	grass_model_cache_t *cache, *next;
@@ -1923,6 +2241,7 @@ static void R_GrassFreeAllModelCaches (void)
 	}
 
 	r_grass_model_caches = NULL;
+	R_GrassFreePresenceCaches();
 	r_grass_cache_worldmodel = cl.worldmodel;
 	R_GrassClearBrushSubmodelBlockers();
 }
@@ -1936,6 +2255,8 @@ void R_GrassCache_Cleanup (qmodel_t *mod)
 		R_GrassFreeAllModelCaches();
 		return;
 	}
+
+	R_GrassRemovePresenceCache(mod);
 
 	for (link = &r_grass_model_caches; (cache = *link); )
 	{
@@ -2701,7 +3022,7 @@ static qboolean R_GrassEnsureSurfaceShaderVBO (qmodel_t *model, const msurface_t
 	return true;
 }
 
-static void R_GrassUploadShaderDlights (const msurface_t *s, const entity_t *ent)
+static void R_GrassUploadShaderDlights (const msurface_t *s, const entity_t *ent, qboolean force_scan_dlights)
 {
 	grass_dlight_list_t list;
 	float posradius[GRASS_SHADER_DLIGHTS * 4];
@@ -2711,7 +3032,7 @@ static void R_GrassUploadShaderDlights (const msurface_t *s, const entity_t *ent
 	if (grassGeomDLightCountLoc < 0)
 		return;
 
-	R_GrassBuildDlightList(s, ent, &list);
+	R_GrassBuildDlightList(s, ent, &list, force_scan_dlights);
 	count = list.count;
 	if (count > GRASS_SHADER_DLIGHTS)
 		count = GRASS_SHADER_DLIGHTS;
@@ -2739,7 +3060,7 @@ static void R_GrassUploadShaderDlights (const msurface_t *s, const entity_t *ent
 	}
 }
 
-static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *ent, const msurface_t *s, grass_surface_cache_t *cache, int cellstep, float baseheight, const vec3_t basecolor, const vec3_t tipcolor)
+static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *ent, const msurface_t *s, grass_surface_cache_t *cache, int cellstep, float baseheight, const vec3_t basecolor, const vec3_t tipcolor, qboolean force_scan_dlights)
 {
 	int lodindex, drawcount;
 	vec3_t normal, tangent, bitangent;
@@ -2760,7 +3081,7 @@ static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *en
 		GL_Uniform3fFunc(grassGeomStaticTangentLoc, tangent[0], tangent[1], tangent[2]);
 	if (grassGeomStaticCellWeightLoc >= 0)
 		GL_Uniform1fFunc(grassGeomStaticCellWeightLoc, (float)(cellstep * cellstep));
-	R_GrassUploadShaderDlights(s, ent);
+	R_GrassUploadShaderDlights(s, ent, force_scan_dlights);
 
 	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 	GL_BindBuffer(GL_ARRAY_BUFFER, cache->shader_vbo[lodindex]);
@@ -2789,7 +3110,7 @@ static qboolean R_DrawGrassSurfaceShaderVBO (qmodel_t *model, const entity_t *en
 	return true;
 }
 
-static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, const msurface_t *s, const grass_surface_cache_t *cache, float grassamount, float baseheight, float movement, const vec3_t vieworg, const grass_lod_params_t *lodparams, float surface_density_scale, const vec3_t basecolor, const vec3_t tipcolor, int mode)
+static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, const msurface_t *s, const grass_surface_cache_t *cache, float grassamount, float baseheight, float movement, const vec3_t vieworg, const grass_lod_params_t *lodparams, float surface_density_scale, const vec3_t basecolor, const vec3_t tipcolor, int mode, qboolean force_scan_dlights)
 {
 	int i, cellstep, colorindex;
 	float cellweight;
@@ -2803,7 +3124,7 @@ static void R_DrawGrassSurfaceBlades (qmodel_t *model, const entity_t *ent, cons
 	if (normal[2] < 0.35f)
 		return;
 	R_GrassBasisForSurface(s, normal, tangent, bitangent);
-	R_GrassBuildDlightList(s, ent, &dlights);
+	R_GrassBuildDlightList(s, ent, &dlights, force_scan_dlights);
 	lightcacheptr = R_GrassBeginLightCache();
 	if (mode == GRASS_BLADE_MODE_SHADER)
 	{
@@ -2894,14 +3215,18 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 	float density, grassamount, baseheight, grassdist, grasslod, movement, cellsize;
 	const grass_settings_t *settings;
 	grass_lod_params_t lodparams;
+	grass_presence_cache_t *presencecache;
 	grass_model_cache_t *modelcache;
 	msurface_t *s;
 	vec3_t grass_vieworg;
-	qboolean use_static_shader;
+	qboolean use_static_shader, use_scenecache_visibility, force_scan_dlights;
 
 	if (!R_GrassBladesActive() || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
 		return;
 	if (!model || !R_GrassEntityAllowsGrass(ent))
+		return;
+	presencecache = R_GrassGetPresenceCache(model, true);
+	if (!R_GrassPresenceCacheHasBladeSurfaces(presencecache))
 		return;
 
 	settings = R_GrassSettings();
@@ -2913,6 +3238,8 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 	grasslod = CLAMP(0.0f, settings->lod, 2.0f);
 	movement = CLAMP(0.0f, settings->movement, 2.0f);
 	cellsize = sqrtf(512.0f / q_max(0.01f, density));
+	use_scenecache_visibility = (chain == chain_world && r_grass_scenecache_visframe == r_visframecount);
+	force_scan_dlights = use_scenecache_visibility && !gl_flashblend.value;
 	R_GrassPointToEntitySpace(ent, r_refdef.vieworg, grass_vieworg);
 	R_GrassLODParams(grassdist, grasslod, &lodparams);
 	use_static_shader = (mode == GRASS_BLADE_MODE_SHADER && grassamount >= 0.999f &&
@@ -2967,7 +3294,9 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 		grass_surface_cache_t *surfacecache;
 		vec3_t surfacenormal;
 
-		if (chain == chain_world && s->visframe != r_visframecount)
+		if (!R_GrassSurfaceVisibleCached(presencecache, model, s, chain, use_scenecache_visibility))
+			continue;
+		if (!R_GrassSurfaceCanHaveBladesCached(presencecache, model, s))
 			continue;
 		if (!s->texinfo || !s->polys || (s->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE | SURF_DRAWFENCE)))
 			continue;
@@ -2992,7 +3321,7 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 		{
 			surface_cellstep = R_GrassCellStepForScale(surface_density_scale);
 			if (!R_GrassSurfaceHasAnimatedLightstyles(s) &&
-				R_DrawGrassSurfaceShaderVBO(model, ent, s, surfacecache, surface_cellstep, baseheight, basecolor, tipcolor))
+				R_DrawGrassSurfaceShaderVBO(model, ent, s, surfacecache, surface_cellstep, baseheight, basecolor, tipcolor, force_scan_dlights))
 				continue;
 
 			if (grassGeomStaticModeLoc >= 0)
@@ -3000,14 +3329,14 @@ static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain)
 			if (R_GrassEnsureVertexBatch())
 			{
 				R_GrassBeginVertexBatch();
-				R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode);
+				R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode, force_scan_dlights);
 				R_GrassEndVertexBatch();
 			}
 			if (grassGeomStaticModeLoc >= 0)
 				GL_Uniform1iFunc(grassGeomStaticModeLoc, 1);
 		}
 		else
-			R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode);
+			R_DrawGrassSurfaceBlades(model, ent, s, surfacecache, grassamount, baseheight, movement, grass_vieworg, &lodparams, surface_density_scale, basecolor, tipcolor, mode, force_scan_dlights);
 	}
 	if (!use_static_shader)
 		R_GrassEndVertexBatch();
@@ -4290,7 +4619,8 @@ void R_DrawTextureChains (qmodel_t *model, entity_t *ent, texchain_t chain)
 		R_EndTransparentDrawing (entalpha);
 		
 		R_DrawTextureChains_GLSL (model, ent, chain);
-		R_DrawGrassBlades(model, ent, chain);
+		if (chain != chain_world)
+			R_DrawGrassBlades(model, ent, chain);
 		return;
 	}
 
@@ -4407,7 +4737,8 @@ fullbrights:
 		glDepthMask (GL_TRUE);
 	}
 
-	R_DrawGrassBlades(model, ent, chain);
+	if (chain != chain_world)
+		R_DrawGrassBlades(model, ent, chain);
 }
 
 /*
@@ -4424,6 +4755,7 @@ void R_DrawWorld (void)
 #ifndef SDL_THREADS_DISABLED
 	RSceneCache_Draw(false);
 #endif
+	R_DrawGrassBlades(cl.worldmodel, NULL, chain_world);
 }
 
 /*
@@ -4815,6 +5147,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 	vec3_t offset;
 	unsigned int rowbytes = (cl.worldmodel->numleafs+7)>>3;
 	int e;
+	qboolean grass_blades_active;
 	static int settingconflict;
 
 	static int old_lightstylevalue[countof(d_lightstylevalue)];
@@ -4838,15 +5171,6 @@ static qboolean RSceneCache_Queue(byte *vis)
 		//r_lightmap would want to force the glsl, could be generic, but its a debug feature that we don't really care about.
 		if (settingconflict!=true)
 			settingconflict=true, Con_Printf("r_scenecache: Disabling due to conflicting settings\n");
-
-		if (rscenecache.thread)
-			RSceneCache_Shutdown();
-		return false;
-	}
-	else if (R_GrassBladesActive())
-	{
-		if (settingconflict != 2)
-			settingconflict = 2, Con_DPrintf("r_scenecache: Disabled while 3D grass blades are active\n");
 
 		if (rscenecache.thread)
 			RSceneCache_Shutdown();
@@ -4916,6 +5240,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 	//okay, now figure out which bmodels we can bake into the cache
 	bakesubmodels = alloca((cl.worldmodel->numsubmodels+7)>>3);
 	memset(bakesubmodels, 0, (cl.worldmodel->numsubmodels+7)>>3);
+	grass_blades_active = R_GrassBladesActive();
 	if (r_scenecache.value != 2 && r_drawentities.value)
 	for (e = 0; e < cl_numvisedicts; e++)
 	{
@@ -4929,6 +5254,9 @@ static qboolean RSceneCache_Queue(byte *vis)
 			ent->alpha!=0 ||	//transparent stuff would need extra batches, which gets awkward and misordered.
 			ent->effects)	//weird stuff like EF_ADDITIVE/EF_FULLBRIGHT. probably not used on submodels anyway.
 			continue;	//nope, can't bake it.
+		if (grass_blades_active && R_GrassEntityAllowsGrass(ent) &&
+			R_GrassPresenceCacheHasBladeSurfaces(R_GrassGetPresenceCache(ent->model, true)))
+			continue;	//keep grass-bearing bmodels in the normal entity path.
 		//okay, we want to bake this one.
 		m = ent->model->submodelidx;
 		bakesubmodels[m>>3] |= (1u<<(m&7));
