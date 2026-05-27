@@ -56,7 +56,7 @@ extern cvar_t r_remove_collinear_vertices;
 #endif
 
 //johnfitz
-extern cvar_t r_scenecache, r_lightmap_format;
+extern cvar_t r_scenecache, r_bmodelcache, r_lightmap_format;
 extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
 cvar_t r_brokenturbbias = {"r_brokenturbbias", "1", CVAR_ARCHIVE}; //replicates QS's bug where it ignores texture coord offsets for water (breaking curved water volumes). we do NOT ignore scales though.
 
@@ -572,6 +572,7 @@ void R_Init (void)
 	//johnfitz
 	//spike -- new cvars...
 	Cvar_RegisterVariable (&r_scenecache);
+	Cvar_RegisterVariable (&r_bmodelcache);	//tb -- cached EBO path for large moved opaque bmodels
 	Cvar_RegisterVariable (&r_lightmap_format);	//instead of qs's read-only r_lightmapwide cvar. can also select e5bgr9
 	Cvar_SetCompletion (&r_lightmap_format, &R_Lightmap_Format_Completion_f); // woods #iwtabcomplete
 	//spike

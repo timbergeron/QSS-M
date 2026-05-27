@@ -322,6 +322,7 @@ void Mod_ClearAll (void)
 			TexMgr_FreeTexturesForOwner (mod); //johnfitz
 			PScript_ClearSurfaceParticles(mod);
 			RSceneCache_Cleanup(mod);
+			R_BModelDrawCache_Cleanup(mod);
 			R_GrassCache_Cleanup(mod);
 		}
 	}
@@ -344,6 +345,7 @@ void Mod_ResetAll (void)
 			TexMgr_FreeTexturesForOwner (mod);
 			PScript_ClearSurfaceParticles(mod);
 			RSceneCache_Cleanup(mod);
+			R_BModelDrawCache_Cleanup(mod);
 			R_GrassCache_Cleanup(mod);
 		}
 		memset(mod, 0, sizeof(qmodel_t));

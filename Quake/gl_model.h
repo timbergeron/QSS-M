@@ -568,7 +568,9 @@ typedef struct qmodel_s
 //
 // additional model data
 //
-	cache_user_t	cache;		// only access through Mod_Extradata
+	void		*bmodel_drawcache;	//tb -- cached static index buffer for fast bmodel-entity drawing (see r_world.c)
+
+	cache_user_t	cache;		// only access through Mod_Extradata; must remain the last qmodel_t field (see Cache_Free)
 
 } qmodel_t;
 

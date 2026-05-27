@@ -457,6 +457,7 @@ void R_AnimateLight (void);
 void R_MarkSurfaces (void);
 qboolean R_CullBox (vec3_t emins, vec3_t emaxs);
 void R_StoreEfrags (efrag_t **ppefrag);
+void R_GetEntityBounds (const entity_t *e, vec3_t mins, vec3_t maxs);
 qboolean R_CullModelForEntity (entity_t *e);
 void R_RotateForEntity (vec3_t origin, vec3_t angles, entity_t *e);
 void R_MarkLights (dlight_t *light, vec3_t lightorg, int framecount, int num, mnode_t *node);
@@ -494,6 +495,9 @@ void GL_SubdivideSurface (msurface_t *fa);
 void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights);
 void R_RenderDynamicLightmaps (qmodel_t *model, msurface_t *fa);
 void R_UploadLightmaps (void);
+qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent);
+void R_BModelDrawCache_Cleanup (qmodel_t *mod);
+void R_BModelDrawCache_CleanupAll (void);
 
 void R_DrawWorld_ShowTris (void);
 void R_DrawBrushModel_ShowTris (entity_t *e);
