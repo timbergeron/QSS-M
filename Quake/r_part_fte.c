@@ -483,6 +483,9 @@ static qboolean pscript_mapdecal_surfaces_ready;
 static vec3_t pscript_mapdecal_tangent1;
 static vec3_t pscript_mapdecal_tangent2;
 static float pscript_mapdecal_rotate;
+#define MAPDECAL_FLIP_H 1
+#define MAPDECAL_FLIP_V 2
+static int pscript_mapdecal_flip;
 static int pscript_mapdecal_fragments;
 static qboolean pscript_mapdecal_trace_hit;
 static qboolean pscript_mapdecal_no_slots;
@@ -4005,7 +4008,7 @@ static void PScript_RemoveMapDecals(void)
 	}
 }
 
-static void PScript_SetupMapDecalSpawn(vec3_t angles, float rotate, vec3_t dir)
+static void PScript_SetupMapDecalSpawn(vec3_t angles, float rotate, int flip, vec3_t dir)
 {
 	vec3_t forward, right, up;
 
@@ -4014,6 +4017,7 @@ static void PScript_SetupMapDecalSpawn(vec3_t angles, float rotate, vec3_t dir)
 	VectorCopy(right, pscript_mapdecal_tangent1);
 	VectorCopy(up, pscript_mapdecal_tangent2);
 	pscript_mapdecal_rotate = rotate;
+	pscript_mapdecal_flip = flip;
 }
 
 static qboolean PScript_ProjectMapDecalAxis(const vec3_t axis, const vec3_t normal, vec3_t out)
@@ -4085,6 +4089,10 @@ static void PScript_FinalizeMapDecalTangents(const vec3_t normal, vec3_t tangent
 {
 	PScript_BuildMapDecalTangents(normal, tangent1, tangent2);
 	VectorScale(tangent2, -1, tangent2);
+	if (pscript_mapdecal_flip & MAPDECAL_FLIP_H)
+		VectorScale(tangent1, -1, tangent1);
+	if (pscript_mapdecal_flip & MAPDECAL_FLIP_V)
+		VectorScale(tangent2, -1, tangent2);
 	PScript_RotateMapDecalTangents(tangent1, tangent2);
 }
 
@@ -4102,14 +4110,14 @@ static void PScript_ReportMapDecalSpawn(vec3_t origin, const char *source, int r
 		Con_DPrintf("misc_decal %s at %.1f %.1f %.1f: %i fragments\n", source, origin[0], origin[1], origin[2], pscript_mapdecal_fragments);
 }
 
-static void PScript_RunMapDecalType(vec3_t origin, vec3_t angles, float rotate, int typenum)
+static void PScript_RunMapDecalType(vec3_t origin, vec3_t angles, float rotate, int flip, int typenum)
 {
 	vec3_t dir;
 
 	if (typenum < 0 || typenum >= numparticletypes)
 		return;
 
-	PScript_SetupMapDecalSpawn(angles, rotate, dir);
+	PScript_SetupMapDecalSpawn(angles, rotate, flip, dir);
 
 	pscript_mapdecal_fragments = 0;
 	pscript_mapdecal_trace_hit = false;
@@ -4120,7 +4128,7 @@ static void PScript_RunMapDecalType(vec3_t origin, vec3_t angles, float rotate, 
 	PScript_ReportMapDecalSpawn(origin, part_type[typenum].texname, 0);
 }
 
-static void PScript_RunSyntheticMapDecal(vec3_t origin, vec3_t angles, float rotate, int typenum, float scale, float alpha)
+static void PScript_RunSyntheticMapDecal(vec3_t origin, vec3_t angles, float rotate, int flip, int typenum, float scale, float alpha)
 {
 	part_type_t *ptype;
 	float oldscale, oldalpha, oldalphachange, olddie;
@@ -4139,7 +4147,7 @@ static void PScript_RunSyntheticMapDecal(vec3_t origin, vec3_t angles, float rot
 	ptype->alphachange = 0;
 	ptype->die = 0;
 
-	PScript_RunMapDecalType(origin, angles, rotate, typenum);
+	PScript_RunMapDecalType(origin, angles, rotate, flip, typenum);
 
 	ptype->scale = oldscale;
 	ptype->alpha = oldalpha;
@@ -4147,12 +4155,12 @@ static void PScript_RunSyntheticMapDecal(vec3_t origin, vec3_t angles, float rot
 	ptype->die = olddie;
 }
 
-static void PScript_RunMapDecal(vec3_t origin, vec3_t angles, float rotate, const char *effect)
+static void PScript_RunMapDecal(vec3_t origin, vec3_t angles, float rotate, int flip, const char *effect)
 {
 	vec3_t dir;
 	int result;
 
-	PScript_SetupMapDecalSpawn(angles, rotate, dir);
+	PScript_SetupMapDecalSpawn(angles, rotate, flip, dir);
 
 	pscript_mapdecal_fragments = 0;
 	pscript_mapdecal_trace_hit = false;
@@ -4163,12 +4171,28 @@ static void PScript_RunMapDecal(vec3_t origin, vec3_t angles, float rotate, cons
 	PScript_ReportMapDecalSpawn(origin, effect, result);
 }
 
+static int PScript_ParseMapDecalFlip(const char *value)
+{
+	if (!value || !*value || !q_strcasecmp(value, "0") || !q_strcasecmp(value, "none") || !q_strcasecmp(value, "off"))
+		return 0;
+	if (!q_strcasecmp(value, "horizontal") || !q_strcasecmp(value, "h") || !q_strcasecmp(value, "x"))
+		return MAPDECAL_FLIP_H;
+	if (!q_strcasecmp(value, "vertical") || !q_strcasecmp(value, "v") || !q_strcasecmp(value, "y"))
+		return MAPDECAL_FLIP_V;
+	if (!q_strcasecmp(value, "both") || !q_strcasecmp(value, "hv") || !q_strcasecmp(value, "vh") ||
+		!q_strcasecmp(value, "xy") || !q_strcasecmp(value, "yx"))
+		return MAPDECAL_FLIP_H | MAPDECAL_FLIP_V;
+
+	return atoi(value) & (MAPDECAL_FLIP_H | MAPDECAL_FLIP_V);
+}
+
 void PScript_SpawnMapDecals(void)
 {
 	const char *data;
 	char key[128], value[256], classname[64], effect[MAX_QPATH], texture[MAX_QPATH], blend[64];
 	vec3_t origin, angles;
 	float scale, alpha, rotate;
+	int flip;
 	qboolean has_origin, has_scale, has_alpha, has_blend;
 
 	if (!decals || !r_numdecals || !pscript_mapdecal_surfaces_ready)
@@ -4202,6 +4226,7 @@ void PScript_SpawnMapDecals(void)
 		scale = 64;
 		alpha = 1;
 		rotate = 0;
+		flip = 0;
 		has_origin = false;
 		has_scale = false;
 		has_alpha = false;
@@ -4240,6 +4265,8 @@ void PScript_SpawnMapDecals(void)
 				Con_DPrintf("misc_decal roll key ignored; use rotate\n");
 			else if (!strcmp(key, "rotate") || !strcmp(key, "rotation") || !strcmp(key, "rotate_clockwise") || !strcmp(key, "clockwise"))
 				rotate = atof(value);
+			else if (!strcmp(key, "flip") || !strcmp(key, "mirror"))
+				flip = PScript_ParseMapDecalFlip(value);
 			else if (!strcmp(key, "scale"))
 			{
 				scale = atof(value);
@@ -4275,7 +4302,7 @@ void PScript_SpawnMapDecals(void)
 		{
 			if (has_scale || has_alpha || has_blend)
 				Con_DPrintf("misc_decal effect \"%s\" ignores scale/alpha/blend keys\n", effect);
-			PScript_RunMapDecal(origin, angles, rotate, effect);
+			PScript_RunMapDecal(origin, angles, rotate, flip, effect);
 		}
 		else
 		{
@@ -4284,8 +4311,8 @@ void PScript_SpawnMapDecals(void)
 
 			PScript_ParseMapDecalBlend(blend, &blendmode, &premul);
 			typenum = PScript_GetSyntheticMapDecalType(texture, blendmode, premul);
-			Con_DPrintf("misc_decal tex \"%s\", org %.0f %.0f %.0f, ang %.0f %.0f %.0f, cw %.0f\n", texture, origin[0], origin[1], origin[2], angles[0], angles[1], angles[2], rotate);
-			PScript_RunSyntheticMapDecal(origin, angles, rotate, typenum, scale, alpha);
+			Con_DPrintf("misc_decal tex \"%s\", org %.0f %.0f %.0f, ang %.0f %.0f %.0f, cw %.0f, flip %i\n", texture, origin[0], origin[1], origin[2], angles[0], angles[1], angles[2], rotate, flip);
+			PScript_RunSyntheticMapDecal(origin, angles, rotate, flip, typenum, scale, alpha);
 		}
 	}
 }
