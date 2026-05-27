@@ -328,6 +328,11 @@ static void CL_PrintConnectingMessage(const char *host)
 	char local_verbose[NET_NAMELEN + sizeof(addressip)];
 	int numaddresses;
 	qhostaddr_t addresses[16];
+	qboolean is_local;
+
+	is_local = !strcmp(host, "local") || !strcmp(host, "localhost");
+	if (is_local && sv.active && svs.maxclients == 1)
+		return;
 
 	numaddresses = NET_ListAddresses(addresses, sizeof(addresses) / sizeof(addresses[0]));
 	if (numaddresses && !strstr(addresses[0], "["))
@@ -336,7 +341,7 @@ static void CL_PrintConnectingMessage(const char *host)
 		q_strlcat(addressip, addresses[0], sizeof(addressip));
 	}
 
-	if (!strcmp(host, "local") || !strcmp(host, "localhost"))
+	if (is_local)
 	{
 		q_strlcpy(local_verbose, host, sizeof(local_verbose));
 		q_strlcat(local_verbose, addressip, sizeof(local_verbose));
