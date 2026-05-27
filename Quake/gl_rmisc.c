@@ -1458,4 +1458,4 @@ void CL_RotateModel_CvarsInit(void)
 {
 	Cvar_RegisterVariable(&cl_rot);
 	CL_RotateModel_RebuildFromCvar(); // parse cl_rot once at client boot
-}}
+}
