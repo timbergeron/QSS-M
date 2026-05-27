@@ -888,6 +888,10 @@ void V_PolyBlend (void)
 	if (!gl_polyblend.value || !v_blend[3])
 		return;
 
+	if ((int)gl_polyblend.value != 2 && GLSLGamma_SoftEmuCanRemapBlend() &&
+		(v_blend[0] > 0.001f || v_blend[1] > 0.001f || v_blend[2] > 0.001f))
+		return;
+
 	GL_DisableMultitexture();
 
 	glDisable (GL_TEXTURE_2D);

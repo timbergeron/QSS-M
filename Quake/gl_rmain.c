@@ -155,6 +155,7 @@ extern int ogflagprecache, swapflagprecache, swapflagprecache2, swapflagprecache
 qboolean r_drawflat_cheatsafe, r_fullbright_cheatsafe, r_lightmap_cheatsafe, r_drawworld_cheatsafe; //johnfitz
 
 cvar_t	r_scale = {"r_scale", "1", CVAR_ARCHIVE};
+cvar_t	r_softemu = {"r_softemu", "0", CVAR_ARCHIVE};
 cvar_t	r_ambient = {"r_ambient", "0", CVAR_ARCHIVE}; // woods #rambient
 
 edict_t *bbox_focus = NULL;
@@ -174,11 +175,29 @@ static float r_lightningbeam_scroll = 0.0f; // woods #beamspoly
 static GLuint r_gamma_texture;
 static GLuint r_gamma_program;
 static int r_gamma_texture_width, r_gamma_texture_height;
+static GLuint r_softemu_lut_texture;
+static GLuint r_softemu_palette_texture;
+static qboolean r_softemu_lut_built;
+static unsigned int r_softemu_lut_palette_hash;
+static qboolean r_softemu_palette_texture_allocated;
+static qboolean r_softemu_palette_valid;
+static unsigned int r_softemu_palette_hash;
+static float r_softemu_palette_gamma;
+static float r_softemu_palette_contrast;
+static vec4_t r_softemu_palette_blend;
+
+#define SOFTEMU_LUT_BITS 6
+#define SOFTEMU_LUT_SIZE (1 << SOFTEMU_LUT_BITS)
+#define SOFTEMU_LUT_TEXWIDTH 512
+#define SOFTEMU_LUT_TEXHEIGHT 512
 
 // uniforms used in gamma shader
 static GLint  gammaLoc;
 static GLint  contrastLoc;
 static GLint  textureLoc;
+static GLint  softEmuModeLoc;
+static GLint  softEmuLUTLoc;
+static GLint  softEmuPaletteLoc;
 
 /*
 =============
@@ -188,8 +207,241 @@ GLSLGamma_DeleteTexture
 void GLSLGamma_DeleteTexture (void)
 {
 	glDeleteTextures (1, &r_gamma_texture);
+	glDeleteTextures (1, &r_softemu_lut_texture);
+	glDeleteTextures (1, &r_softemu_palette_texture);
 	r_gamma_texture = 0;
+	r_softemu_lut_texture = 0;
+	r_softemu_palette_texture = 0;
+	r_softemu_lut_built = false;
+	r_softemu_lut_palette_hash = 0;
+	r_softemu_palette_texture_allocated = false;
+	r_softemu_palette_valid = false;
+	r_softemu_palette_hash = 0;
 	r_gamma_program = 0; // deleted in R_DeleteShaders
+}
+
+static unsigned int GLSLGamma_SoftEmuPaletteHash (void)
+{
+	const byte *pal = (const byte *)d_8to24table;
+	unsigned int hash = 2166136261u;
+	int i;
+
+	for (i = 0; i < 256 * 4; i++)
+	{
+		hash ^= pal[i];
+		hash *= 16777619u;
+	}
+
+	return hash;
+}
+
+static int GLSLGamma_SoftEmuMode (void)
+{
+	return CLAMP(0, (int)r_softemu.value, 3);
+}
+
+static qboolean GLSLGamma_SoftEmuAvailable (void)
+{
+	return GLSLGamma_SoftEmuMode() > 0 && gl_glsl_gamma_able && gl_mtexable && gl_max_texture_units >= 3;
+}
+
+static qboolean GLSLGamma_SoftEmuApplyBlend (void)
+{
+	if (!gl_polyblend.value || v_blend[3] <= 0.0f)
+		return false;
+	if ((int)gl_polyblend.value == 2)
+		return false;
+	return v_blend[0] > 0.001f || v_blend[1] > 0.001f || v_blend[2] > 0.001f;
+}
+
+static qboolean GLSLGamma_EnsureSoftEmuLUT (void)
+{
+	byte *lutdata;
+	byte pal[256][3];
+	unsigned int palette_hash;
+	int r, g, b, i;
+
+	palette_hash = GLSLGamma_SoftEmuPaletteHash();
+	if (r_softemu_lut_built && r_softemu_lut_texture && r_softemu_lut_palette_hash == palette_hash)
+		return true;
+
+	lutdata = (byte *) malloc(SOFTEMU_LUT_TEXWIDTH * SOFTEMU_LUT_TEXHEIGHT);
+	if (!lutdata)
+	{
+		Con_Warning("softemu: couldn't allocate palette LUT\n");
+		return false;
+	}
+
+	for (i = 0; i < 256; i++)
+	{
+		byte *src = (byte *)&d_8to24table[i];
+		pal[i][0] = src[0];
+		pal[i][1] = src[1];
+		pal[i][2] = src[2];
+	}
+
+	for (b = 0; b < SOFTEMU_LUT_SIZE; b++)
+	{
+		int bb = (b * 255 + (SOFTEMU_LUT_SIZE - 1) / 2) / (SOFTEMU_LUT_SIZE - 1);
+		for (g = 0; g < SOFTEMU_LUT_SIZE; g++)
+		{
+			int gg = (g * 255 + (SOFTEMU_LUT_SIZE - 1) / 2) / (SOFTEMU_LUT_SIZE - 1);
+			for (r = 0; r < SOFTEMU_LUT_SIZE; r++)
+			{
+				int rr = (r * 255 + (SOFTEMU_LUT_SIZE - 1) / 2) / (SOFTEMU_LUT_SIZE - 1);
+				int best = 0;
+				int bestdist = INT_MAX;
+				int flat = r + g * SOFTEMU_LUT_SIZE + b * SOFTEMU_LUT_SIZE * SOFTEMU_LUT_SIZE;
+
+				for (i = 0; i < 256; i++)
+				{
+					int dr = rr - pal[i][0];
+					int dg = gg - pal[i][1];
+					int db = bb - pal[i][2];
+					int dist = dr * dr + dg * dg + db * db;
+
+					if (dist < bestdist)
+					{
+						bestdist = dist;
+						best = i;
+						if (!dist)
+							break;
+					}
+				}
+
+				lutdata[flat] = (byte)best;
+			}
+		}
+	}
+
+	if (!r_softemu_lut_texture)
+		glGenTextures(1, &r_softemu_lut_texture);
+	if (!r_softemu_lut_texture)
+	{
+		free(lutdata);
+		return false;
+	}
+
+	GL_SelectTexture(GL_TEXTURE1_ARB);
+	glBindTexture(GL_TEXTURE_2D, r_softemu_lut_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE8, SOFTEMU_LUT_TEXWIDTH, SOFTEMU_LUT_TEXHEIGHT, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, lutdata);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	GL_SelectTexture(GL_TEXTURE0_ARB);
+
+	free(lutdata);
+	r_softemu_lut_built = true;
+	r_softemu_lut_palette_hash = palette_hash;
+	return true;
+}
+
+static qboolean GLSLGamma_UpdateSoftEmuPalette (float gamma_value, float contrast_value);
+
+void GLSLGamma_SoftEmuPrecache (void)
+{
+	float gamma_value;
+	float contrast_value;
+
+	if (!GLSLGamma_SoftEmuAvailable())
+		return;
+	gamma_value = q_min(GAMMA_MAX, q_max(GAMMA_MIN-.3, vid_gamma.value));
+	contrast_value = q_min(2.0f, q_max(1.0f, vid_contrast.value));
+	if (!GLSLGamma_EnsureSoftEmuLUT())
+		return;
+	GLSLGamma_UpdateSoftEmuPalette(gamma_value, contrast_value);
+	GL_ClearBindings ();
+}
+
+static qboolean GLSLGamma_UpdateSoftEmuPalette (float gamma_value, float contrast_value)
+{
+	byte paldata[256 * 4];
+	qboolean blend = GLSLGamma_SoftEmuApplyBlend();
+	unsigned int palette_hash = GLSLGamma_SoftEmuPaletteHash();
+	vec4_t blendvalue = {0, 0, 0, 0};
+	qboolean dirty;
+	int i;
+
+	if (!r_softemu_palette_texture)
+		glGenTextures(1, &r_softemu_palette_texture);
+	if (!r_softemu_palette_texture)
+		return false;
+
+	if (blend)
+		memcpy(blendvalue, v_blend, sizeof(blendvalue));
+
+	dirty = !r_softemu_palette_valid ||
+		r_softemu_palette_hash != palette_hash ||
+		r_softemu_palette_gamma != gamma_value ||
+		r_softemu_palette_contrast != contrast_value ||
+		memcmp(r_softemu_palette_blend, blendvalue, sizeof(blendvalue));
+
+	if (!r_softemu_palette_texture_allocated)
+	{
+		GL_SelectTexture(GL_TEXTURE2_ARB);
+		glBindTexture(GL_TEXTURE_2D, r_softemu_palette_texture);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		GL_SelectTexture(GL_TEXTURE0_ARB);
+		r_softemu_palette_texture_allocated = true;
+		dirty = true;
+	}
+
+	if (!dirty)
+		return true;
+
+	for (i = 0; i < 256; i++)
+	{
+		byte *src = (byte *)&d_8to24table[i];
+		float r = src[0] / 255.0f;
+		float g = src[1] / 255.0f;
+		float b = src[2] / 255.0f;
+
+		if (blend)
+		{
+			float a = CLAMP(0.0f, v_blend[3], 1.0f);
+			r = r * (1.0f - a) + v_blend[0] * a;
+			g = g * (1.0f - a) + v_blend[1] * a;
+			b = b * (1.0f - a) + v_blend[2] * a;
+		}
+
+		r = powf(q_max(0.0f, r * contrast_value), gamma_value);
+		g = powf(q_max(0.0f, g * contrast_value), gamma_value);
+		b = powf(q_max(0.0f, b * contrast_value), gamma_value);
+
+		paldata[i * 4 + 0] = (byte)(CLAMP(0.0f, r, 1.0f) * 255.0f + 0.5f);
+		paldata[i * 4 + 1] = (byte)(CLAMP(0.0f, g, 1.0f) * 255.0f + 0.5f);
+		paldata[i * 4 + 2] = (byte)(CLAMP(0.0f, b, 1.0f) * 255.0f + 0.5f);
+		paldata[i * 4 + 3] = 255;
+	}
+
+	GL_SelectTexture(GL_TEXTURE2_ARB);
+	glBindTexture(GL_TEXTURE_2D, r_softemu_palette_texture);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, paldata);
+	GL_SelectTexture(GL_TEXTURE0_ARB);
+
+	r_softemu_palette_valid = true;
+	r_softemu_palette_hash = palette_hash;
+	r_softemu_palette_gamma = gamma_value;
+	r_softemu_palette_contrast = contrast_value;
+	memcpy(r_softemu_palette_blend, blendvalue, sizeof(r_softemu_palette_blend));
+	return true;
+}
+
+qboolean GLSLGamma_SoftEmuCanRemapBlend (void)
+{
+	unsigned int palette_hash;
+
+	if (!GLSLGamma_SoftEmuAvailable() || !r_softemu_lut_built || !r_softemu_lut_texture ||
+		!r_softemu_palette_texture_allocated || !r_softemu_palette_valid)
+		return false;
+
+	palette_hash = GLSLGamma_SoftEmuPaletteHash();
+	return r_softemu_lut_palette_hash == palette_hash && r_softemu_palette_hash == palette_hash;
 }
 
 /*
@@ -211,11 +463,52 @@ static void GLSLGamma_CreateShaders (void)
 		"#version 110\n"
 		"\n"
 		"uniform sampler2D GammaTexture;\n"
+		"uniform sampler2D SoftEmuLUT;\n"
+		"uniform sampler2D SoftEmuPalette;\n"
 		"uniform float GammaValue;\n"
 		"uniform float ContrastValue;\n"
+		"uniform int SoftEmuMode;\n"
+		"\n"
+		"float softemu_bayer8(void) {\n"
+		"	  vec2 p = mod(floor(gl_FragCoord.xy), 8.0);\n"
+		"	  float x = p.x;\n"
+		"	  float y = p.y;\n"
+		"	  float v = 0.0;\n"
+		"	  if (y < 1.0) {\n"
+		"	      if (x < 1.0) v = 0.0; else if (x < 2.0) v = 48.0; else if (x < 3.0) v = 12.0; else if (x < 4.0) v = 60.0; else if (x < 5.0) v = 3.0; else if (x < 6.0) v = 51.0; else if (x < 7.0) v = 15.0; else v = 63.0;\n"
+		"	  } else if (y < 2.0) {\n"
+		"	      if (x < 1.0) v = 32.0; else if (x < 2.0) v = 16.0; else if (x < 3.0) v = 44.0; else if (x < 4.0) v = 28.0; else if (x < 5.0) v = 35.0; else if (x < 6.0) v = 19.0; else if (x < 7.0) v = 47.0; else v = 31.0;\n"
+		"	  } else if (y < 3.0) {\n"
+		"	      if (x < 1.0) v = 8.0; else if (x < 2.0) v = 56.0; else if (x < 3.0) v = 4.0; else if (x < 4.0) v = 52.0; else if (x < 5.0) v = 11.0; else if (x < 6.0) v = 59.0; else if (x < 7.0) v = 7.0; else v = 55.0;\n"
+		"	  } else if (y < 4.0) {\n"
+		"	      if (x < 1.0) v = 40.0; else if (x < 2.0) v = 24.0; else if (x < 3.0) v = 36.0; else if (x < 4.0) v = 20.0; else if (x < 5.0) v = 43.0; else if (x < 6.0) v = 27.0; else if (x < 7.0) v = 39.0; else v = 23.0;\n"
+		"	  } else if (y < 5.0) {\n"
+		"	      if (x < 1.0) v = 2.0; else if (x < 2.0) v = 50.0; else if (x < 3.0) v = 14.0; else if (x < 4.0) v = 62.0; else if (x < 5.0) v = 1.0; else if (x < 6.0) v = 49.0; else if (x < 7.0) v = 13.0; else v = 61.0;\n"
+		"	  } else if (y < 6.0) {\n"
+		"	      if (x < 1.0) v = 34.0; else if (x < 2.0) v = 18.0; else if (x < 3.0) v = 46.0; else if (x < 4.0) v = 30.0; else if (x < 5.0) v = 33.0; else if (x < 6.0) v = 17.0; else if (x < 7.0) v = 45.0; else v = 29.0;\n"
+		"	  } else if (y < 7.0) {\n"
+		"	      if (x < 1.0) v = 10.0; else if (x < 2.0) v = 58.0; else if (x < 3.0) v = 6.0; else if (x < 4.0) v = 54.0; else if (x < 5.0) v = 9.0; else if (x < 6.0) v = 57.0; else if (x < 7.0) v = 5.0; else v = 53.0;\n"
+		"	  } else {\n"
+		"	      if (x < 1.0) v = 42.0; else if (x < 2.0) v = 26.0; else if (x < 3.0) v = 38.0; else if (x < 4.0) v = 22.0; else if (x < 5.0) v = 41.0; else if (x < 6.0) v = 25.0; else if (x < 7.0) v = 37.0; else v = 21.0;\n"
+		"	  }\n"
+		"	  return ((v + 0.5) / 64.0) - 0.5;\n"
+		"}\n"
 		"\n"
 		"void main(void) {\n"
 		"	  vec4 frag = texture2D(GammaTexture, gl_TexCoord[0].xy);\n"
+		"	  if (SoftEmuMode != 0) {\n"
+		"	      vec3 c = frag.rgb;\n"
+		"	      if (SoftEmuMode != 3)\n"
+		"	          c += vec3(softemu_bayer8() * (1.0 / 63.0));\n"
+		"	      c = clamp(c, 0.0, 1.0);\n"
+		"	      vec3 q = floor(c * 63.0 + 0.5);\n"
+		"	      float flat = q.r + q.g * 64.0 + q.b * 4096.0;\n"
+		"	      vec2 lutst = (vec2(mod(flat, 512.0), floor(flat / 512.0)) + 0.5) / vec2(512.0, 512.0);\n"
+		"	      float palindex = texture2D(SoftEmuLUT, lutst).r;\n"
+		"	      vec2 palst = vec2((palindex * 255.0 + 0.5) / 256.0, 0.5);\n"
+		"	      gl_FragColor = vec4(texture2D(SoftEmuPalette, palst).rgb, 1.0);\n"
+		"	      return;\n"
+		"	  }\n"
 		"	  frag.rgb = frag.rgb * ContrastValue;\n"
 		"	  gl_FragColor = vec4(pow(frag.rgb, vec3(GammaValue)), 1.0);\n"
 		"}\n";
@@ -229,6 +522,9 @@ static void GLSLGamma_CreateShaders (void)
 	gammaLoc = GL_GetUniformLocation (&r_gamma_program, "GammaValue");
 	contrastLoc = GL_GetUniformLocation (&r_gamma_program, "ContrastValue");
 	textureLoc = GL_GetUniformLocation (&r_gamma_program, "GammaTexture");
+	softEmuModeLoc = GL_GetUniformLocation (&r_gamma_program, "SoftEmuMode");
+	softEmuLUTLoc = GL_GetUniformLocation (&r_gamma_program, "SoftEmuLUT");
+	softEmuPaletteLoc = GL_GetUniformLocation (&r_gamma_program, "SoftEmuPalette");
 }
 
 /*
@@ -241,11 +537,32 @@ void GLSLGamma_GammaCorrect (void)
 	int tw=glwidth,th=glheight;
 	float smax, tmax;
 	float gamma_value; // woods #gammaclamp
+	float contrast_value;
+	int softemu_mode;
+	static qboolean softemu_warned;
 
+	softemu_mode = GLSLGamma_SoftEmuMode();
 	if (!gl_glsl_gamma_able)
+	{
+		if (softemu_mode && !softemu_warned)
+		{
+			Con_Warning("r_softemu requires GLSL gamma support\n");
+			softemu_warned = true;
+		}
 		return;
+	}
 
-	if (vid_gamma.value == 1 && vid_contrast.value == 1)
+	if (softemu_mode && (!gl_mtexable || gl_max_texture_units < 3))
+	{
+		if (!softemu_warned)
+		{
+			Con_Warning("r_softemu requires at least 3 texture units\n");
+			softemu_warned = true;
+		}
+		softemu_mode = 0;
+	}
+
+	if (!softemu_mode && vid_gamma.value == 1 && vid_contrast.value == 1)
 		return;
 
 // create render-to-texture texture if needed
@@ -256,6 +573,8 @@ void GLSLGamma_GammaCorrect (void)
 		r_gamma_texture_height = 0;
 	}
 	GL_DisableMultitexture();
+	if (gl_mtexable)
+		GL_SelectTexture(GL_TEXTURE0_ARB);
 	glBindTexture (GL_TEXTURE_2D, r_gamma_texture);
 
 	if (!gl_texture_NPOT)
@@ -283,15 +602,38 @@ void GLSLGamma_GammaCorrect (void)
 	}
 
 	gamma_value = q_min(GAMMA_MAX, q_max(GAMMA_MIN-.3, vid_gamma.value)); // woods #gammaclamp
+	contrast_value = q_min(2.0f, q_max(1.0f, vid_contrast.value));
+
+	if (softemu_mode)
+	{
+		if (!GLSLGamma_EnsureSoftEmuLUT() || !GLSLGamma_UpdateSoftEmuPalette(gamma_value, contrast_value))
+			softemu_mode = 0;
+	}
 
 // copy the framebuffer to the texture
+	if (gl_mtexable)
+		GL_SelectTexture(GL_TEXTURE0_ARB);
+	glBindTexture (GL_TEXTURE_2D, r_gamma_texture);
 	glCopyTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, glx, gly, glwidth, glheight);
 
 // draw the texture back to the framebuffer with a fragment shader
+	if (softemu_mode)
+	{
+		GL_SelectTexture(GL_TEXTURE1_ARB);
+		glBindTexture(GL_TEXTURE_2D, r_softemu_lut_texture);
+		GL_SelectTexture(GL_TEXTURE2_ARB);
+		glBindTexture(GL_TEXTURE_2D, r_softemu_palette_texture);
+		GL_SelectTexture(GL_TEXTURE0_ARB);
+		glBindTexture(GL_TEXTURE_2D, r_gamma_texture);
+	}
+
 	GL_UseProgramFunc (r_gamma_program);
 	GL_Uniform1fFunc (gammaLoc, gamma_value); // woods #gammaclamp
-	GL_Uniform1fFunc (contrastLoc, q_min(2.0f, q_max(1.0f, vid_contrast.value)));
+	GL_Uniform1fFunc (contrastLoc, contrast_value);
 	GL_Uniform1iFunc (textureLoc, 0); // use texture unit 0
+	GL_Uniform1iFunc (softEmuModeLoc, softemu_mode);
+	GL_Uniform1iFunc (softEmuLUTLoc, 1);
+	GL_Uniform1iFunc (softEmuPaletteLoc, 2);
 
 	glDisable (GL_ALPHA_TEST);
 	glDisable (GL_DEPTH_TEST);
@@ -313,6 +655,8 @@ void GLSLGamma_GammaCorrect (void)
 	glEnd ();
 
 	GL_UseProgramFunc (0);
+	if (gl_mtexable)
+		GL_SelectTexture(GL_TEXTURE0_ARB);
 
 // clear cached binding
 	GL_ClearBindings ();

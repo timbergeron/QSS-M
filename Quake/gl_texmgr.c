@@ -176,6 +176,30 @@ static glmode_t glmodes[] = {
 };
 #define NUM_GLMODES (int)Q_COUNTOF(glmodes)
 static int glmode_idx = 5; /* trilinear */
+#define GLMODE_NEAREST_LINEAR_MIPMAP 8
+
+static qboolean TexMgr_UsesSoftEmuFilterOverride (void)
+{
+	return gl_glsl_gamma_able && gl_mtexable && gl_max_texture_units >= 3 &&
+		(int)r_softemu.value >= 2 && glmode_idx != 0;
+}
+
+static int TexMgr_EffectiveTextureMode (void)
+{
+	if (TexMgr_UsesSoftEmuFilterOverride ())
+		return GLMODE_NEAREST_LINEAR_MIPMAP;
+	return glmode_idx;
+}
+
+static float TexMgr_EffectiveAnisotropy (void)
+{
+	const float SOFTEMU_ANISOTROPY = 8.0f;
+
+	if (TexMgr_UsesSoftEmuFilterOverride () && gl_texture_anisotropy.value < SOFTEMU_ANISOTROPY)
+		return q_min(SOFTEMU_ANISOTROPY, gl_max_anisotropy);
+
+	return gl_texture_anisotropy.value;
+}
 
 int TexMgr_GetTextureMode(void)
 {
@@ -205,6 +229,9 @@ TexMgr_SetFilterModes
 */
 static void TexMgr_SetFilterModes (gltexture_t *glt)
 {
+	int mode = TexMgr_EffectiveTextureMode ();
+	float anisotropy = TexMgr_EffectiveAnisotropy ();
+
 	GL_Bind (glt);
 
 	if (glt->flags & TEXPREF_NEAREST)
@@ -219,14 +246,14 @@ static void TexMgr_SetFilterModes (gltexture_t *glt)
 	}
 	else if (glt->flags & TEXPREF_MIPMAP)
 	{
-		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, glmodes[glmode_idx].magfilter);
-		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, glmodes[glmode_idx].minfilter);
-		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, gl_texture_anisotropy.value);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, glmodes[mode].magfilter);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, glmodes[mode].minfilter);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, anisotropy);
 	}
 	else
 	{
-		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, glmodes[glmode_idx].magfilter);
-		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, glmodes[glmode_idx].magfilter);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, glmodes[mode].magfilter);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, glmodes[mode].magfilter);
 	}
 
 	if (glt->flags & TEXPREF_CLAMP) // woods iw clamp
@@ -234,6 +261,15 @@ static void TexMgr_SetFilterModes (gltexture_t *glt)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	}
+}
+
+static void TexMgr_UpdateAllFilterModes (void)
+{
+	gltexture_t	*glt;
+
+	for (glt = active_gltextures; glt; glt = glt->next)
+		TexMgr_SetFilterModes (glt);
+	Sbar_Changed (); //sbar graphics need to be redrawn with new filter mode
 }
 
 /*
@@ -261,8 +297,9 @@ TexMgr_TextureMode_f -- called when gl_texturemode changes
 */
 static void TexMgr_TextureMode_f (cvar_t *var)
 {
-	gltexture_t	*glt;
 	int i;
+
+	(void)var;
 
 	for (i = 0; i < NUM_GLMODES; i++)
 	{
@@ -272,9 +309,7 @@ static void TexMgr_TextureMode_f (cvar_t *var)
 			if (glmode_idx != i)
 			{
 				glmode_idx = i;
-				for (glt = active_gltextures; glt; glt = glt->next)
-					TexMgr_SetFilterModes (glt);
-				Sbar_Changed (); //sbar graphics need to be redrawn with new filter mode
+				TexMgr_UpdateAllFilterModes ();
 				//FIXME: warpimages need to be redrawn, too.
 			}
 			return;
@@ -309,6 +344,8 @@ TexMgr_Anisotropy_f -- called when gl_texture_anisotropy changes
 */
 static void TexMgr_Anisotropy_f (cvar_t *var)
 {
+	(void)var;
+
 	if (gl_texture_anisotropy.value < 1)
 	{
 		Cvar_SetQuick (&gl_texture_anisotropy, "1");
@@ -319,18 +356,33 @@ static void TexMgr_Anisotropy_f (cvar_t *var)
 	}
 	else
 	{
-		gltexture_t	*glt;
-		for (glt = active_gltextures; glt; glt = glt->next)
-		{
-		/*  TexMgr_SetFilterModes (glt);*/
-		    if (glt->flags & TEXPREF_MIPMAP) {
-			GL_Bind (glt);
-			glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, glmodes[glmode_idx].magfilter);
-			glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, glmodes[glmode_idx].minfilter);
-			glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, gl_texture_anisotropy.value);
-		    }
-		}
+		TexMgr_UpdateAllFilterModes ();
 	}
+}
+
+/*
+===============
+TexMgr_SoftEmu_f -- called when r_softemu changes
+===============
+*/
+void TexMgr_SoftEmu_f (cvar_t *var)
+{
+	static qboolean old_filter_override;
+	int mode = CLAMP(0, (int)var->value, 3);
+	qboolean filter_override = TexMgr_UsesSoftEmuFilterOverride ();
+
+	if (var->value != mode)
+	{
+		Cvar_SetValueQuick (var, mode);
+		return;
+	}
+
+	if (filter_override != old_filter_override)
+		TexMgr_UpdateAllFilterModes ();
+
+	old_filter_override = filter_override;
+	if (mode > 0)
+		GLSLGamma_SoftEmuPrecache ();
 }
 
 static const char *const texmgr_imagedump_formats[] = { "jpg", "lmp", "png", "tga" };

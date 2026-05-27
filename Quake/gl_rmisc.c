@@ -57,6 +57,7 @@ extern cvar_t r_remove_collinear_vertices;
 
 //johnfitz
 extern cvar_t r_scenecache, r_bmodelcache, r_lightmap_format;
+extern cvar_t r_softemu;
 extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
 cvar_t r_brokenturbbias = {"r_brokenturbbias", "1", CVAR_ARCHIVE}; //replicates QS's bug where it ignores texture coord offsets for water (breaking curved water volumes). we do NOT ignore scales though.
 
@@ -392,6 +393,19 @@ static void R_Lightmap_Format_Completion_f (cvar_t* cvar, const char* partial)
 
 /*
 ===============
+R_SoftEmu_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void R_SoftEmu_Completion_f (cvar_t* cvar, const char* partial)
+{
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "winquake-ish", NULL);
+	Con_AddToTabList("2", partial, "chunky", NULL);
+	Con_AddToTabList("3", partial, "raw/no dither", NULL);
+}
+
+/*
+===============
 R_GrassTex_Completion_f -- woods #iwtabcomplete
 ===============
 */
@@ -587,6 +601,10 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_telealpha);
 	Cvar_RegisterVariable (&r_slimealpha);
 	Cvar_RegisterVariable (&r_scale);
+	Cvar_RegisterVariable (&r_softemu);
+	Cvar_SetCallback (&r_softemu, TexMgr_SoftEmu_f);
+	Cvar_SetCompletion (&r_softemu, R_SoftEmu_Completion_f); // woods #iwtabcomplete
+	TexMgr_SoftEmu_f (&r_softemu);
 	Cvar_SetCallback (&r_lavaalpha, R_SetLavaalpha_f);
 	Cvar_SetCallback (&r_telealpha, R_SetTelealpha_f);
 	Cvar_SetCallback (&r_slimealpha, R_SetSlimealpha_f);
@@ -1440,4 +1458,4 @@ void CL_RotateModel_CvarsInit(void)
 {
 	Cvar_RegisterVariable(&cl_rot);
 	CL_RotateModel_RebuildFromCvar(); // parse cl_rot once at client boot
-}
+}}

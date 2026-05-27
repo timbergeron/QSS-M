@@ -92,6 +92,7 @@ void TexMgr_FreeTexturesForOwner (qmodel_t *owner);
 void TexMgr_NewGame (void);
 void TexMgr_Init (void);
 int TexMgr_GetTextureMode(void);	//for menu use.
+void TexMgr_SoftEmu_f (cvar_t *var);
 void TexMgr_DeleteTextureObjects (void);
 enum srcformat TexMgr_FormatForCode (const char *code);	//returns SRC_EXTERNAL when not known.
 enum srcformat TexMgr_FormatForName (const char *name);	//returns SRC_EXTERNAL when not known.

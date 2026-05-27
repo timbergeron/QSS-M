@@ -186,6 +186,7 @@ extern	cvar_t	r_slimealpha;
 extern	cvar_t	r_dynamic;
 extern	cvar_t	r_novis;
 extern	cvar_t	r_scale;
+extern	cvar_t	r_softemu;
 extern	cvar_t	r_ambient; // woods #rambient
 
 extern	cvar_t	gl_clear;
@@ -561,6 +562,8 @@ void GL_ClearBufferBindings (void);
 
 void GLSLGamma_DeleteTexture (void);
 void GLSLGamma_GammaCorrect (void);
+void GLSLGamma_SoftEmuPrecache (void);
+qboolean GLSLGamma_SoftEmuCanRemapBlend (void);
 
 void R_ScaleView_DeleteTexture (void);
 void R_LightningBeam_DeleteTexture (void); // woods #beamspoly
