@@ -104,6 +104,7 @@ typedef struct particle_s
 #ifdef PSET_SCRIPT
 	void PScript_InitParticles (void);
 	void PScript_Shutdown (void);
+	void PScript_ShutdownGL (void);
 	void PScript_DrawParticles (void);
 	struct trailstate_s;
 	int PScript_ParticleTrail (vec3_t startpos, vec3_t end, int type, float timeinterval, int dlkey, vec3_t axis[3], struct trailstate_s **tsk);
@@ -130,6 +131,7 @@ typedef struct particle_s
 	#define PScript_EntParticleTrail(o,e,n) true
 	#define PScript_RunParticleEffect(o,d,p,c) true
 	#define PScript_RunParticleWeather(min,max,d,c,p,n) true
+	#define PScript_ShutdownGL()
 	#define PScript_ClearSurfaceParticles(m)
 	#define PScript_DelinkTrailstate(tsp)
 	#define PScript_MapDecalsReady(ready)

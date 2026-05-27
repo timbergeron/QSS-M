@@ -1025,6 +1025,7 @@ static void VID_Restart (void)
 
 	RSceneCache_Shutdown();
 	R_GrassShutdownGL();
+	PScript_ShutdownGL();
 	Sky_ResetGL();
 	TexMgr_DeleteTextureObjects ();
 	GLSLGamma_DeleteTexture ();

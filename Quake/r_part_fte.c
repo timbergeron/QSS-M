@@ -474,6 +474,8 @@ static cvar_t r_part_contentswitch = {"r_part_contentswitch", "1"};
 static cvar_t r_part_density = {"r_part_density", "1"};
 static cvar_t r_part_maxparticles = {"r_part_maxparticles", "65536"};
 static cvar_t r_part_maxdecals = {"r_part_maxdecals", "8192"};
+static cvar_t r_part_vbo = {"r_part_vbo", "1"};
+static cvar_t r_part_cullbehind = {"r_part_cullbehind", "1"};
 static cvar_t r_lightflicker = {"r_lightflicker", "1"};
 extern cvar_t r_particles; // woods (vk)
 
@@ -528,6 +530,61 @@ static unsigned int cl_numstrisvert;
 static unsigned int cl_maxstrisvert;
 static unsigned short *cl_strisidx;
 static unsigned int cl_numstrisidx;
+static GLuint cl_strisarrayvbo;
+static GLuint cl_strisidxvbo;
+
+void PScript_ShutdownGL(void)
+{
+	GLuint buffers[2];
+	GLsizei count = 0;
+
+	if (cl_strisarrayvbo)
+		buffers[count++] = cl_strisarrayvbo;
+	if (cl_strisidxvbo)
+		buffers[count++] = cl_strisidxvbo;
+
+	if (count && gl_vbo_able && GL_DeleteBuffersFunc)
+	{
+		GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+		GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+		GL_DeleteBuffersFunc(count, buffers);
+		GL_ClearBufferBindings();
+	}
+
+	cl_strisarrayvbo = 0;
+	cl_strisidxvbo = 0;
+}
+
+static qboolean PScript_EnsureParticleVBOs(void)
+{
+	GLuint buffers[2];
+
+	if (!r_part_vbo.value || !gl_vbo_able || !GL_GenBuffersFunc || !GL_BufferDataFunc || !GL_BufferSubDataFunc || !GL_DeleteBuffersFunc)
+		return false;
+
+	if (cl_strisarrayvbo && cl_strisidxvbo)
+		return true;
+
+	PScript_ShutdownGL();
+	memset(buffers, 0, sizeof(buffers));
+	GL_GenBuffersFunc(2, buffers);
+	if (!buffers[0] || !buffers[1])
+	{
+		GLsizei count = 0;
+		for (int i = 0; i < 2; i++)
+		{
+			if (buffers[i])
+				buffers[count++] = buffers[i];
+		}
+		if (count)
+			GL_DeleteBuffersFunc(count, buffers);
+		return false;
+	}
+
+	cl_strisarrayvbo = buffers[0];
+	cl_strisidxvbo = buffers[1];
+	return true;
+}
 static unsigned int cl_maxstrisidx;
 
 
@@ -3561,6 +3618,8 @@ void PScript_InitParticles (void)
 	Cvar_RegisterVariable(&r_part_density);
 	Cvar_RegisterVariable(&r_part_maxparticles);
 	Cvar_RegisterVariable(&r_part_maxdecals);
+	Cvar_RegisterVariable(&r_part_vbo);
+	Cvar_RegisterVariable(&r_part_cullbehind);
 	Cvar_RegisterVariable(&r_lightflicker);
 
 	Cmd_AddCommand("r_partredirect", P_PartRedirect_f);
@@ -3590,6 +3649,7 @@ static void PScript_ClearAllSurfaceParticles(void)
 void PScript_Shutdown (void)
 {
 	Cvar_SetCallback(&r_particledesc, NULL);
+	PScript_ShutdownGL();
 
 	CL_ClearTrailStates();
 
@@ -7562,6 +7622,43 @@ static qboolean PScript_IsParticleDead(const particle_t *p)
 	return p->die < particletime || (cls.demoplayback && cls.demospeed < 0.f && p->spawn > cl.mtime[0]);
 }
 
+static qboolean PScript_CullParticleDrawBehindView(const particle_t *p, const plooks_t *type)
+{
+	float viewdist, radius, velradius;
+
+	if (!r_part_cullbehind.value)
+		return false;
+
+	viewdist = (p->org[0] - r_origin[0])*vpn[0] + (p->org[1] - r_origin[1])*vpn[1]
+		+ (p->org[2] - r_origin[2])*vpn[2];
+
+	radius = p->scale;
+	if (radius < 0)
+		radius = -radius;
+
+	switch (type->type)
+	{
+	case PT_SPARK:
+		radius += (fabsf(p->vel[0]) + fabsf(p->vel[1]) + fabsf(p->vel[2])) * 0.1f;
+		break;
+	case PT_SPARKFAN:
+	case PT_TEXTUREDSPARK:
+		velradius = fabsf(p->vel[0]) + fabsf(p->vel[1]) + fabsf(p->vel[2]);
+		if (type->stretch > 0)
+			radius += velradius * type->stretch;
+		else if (type->stretch < 0)
+			radius += -type->stretch;
+		else
+			radius += velradius * 0.05f;
+		break;
+	default:
+		radius *= 2.0f;
+		break;
+	}
+
+	return viewdist < -(radius + 1.0f);
+}
+
 static qboolean PScript_IsDecalDead(const clippeddecal_t *d)
 {
 	if (d->mapdecal)
@@ -7868,7 +7965,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 		{
 			while ((p=type->particles))
 			{
-				if (scenetri && tdraw)
+				if (scenetri && tdraw && !PScript_CullParticleDrawBehindView(p, type->slooks))
 				{
 					if (cl_numstrisvert - scenetri->firstvert >= MAX_INDICIES-6)
 					{
@@ -8262,7 +8359,7 @@ static void PScript_DrawParticleTypes (float pframetime)
 			}
 #endif
 
-			if (scenetri && tdraw)
+			if (scenetri && tdraw && !PScript_CullParticleDrawBehindView(p, type->slooks))
 			{
 				if (cl_numstrisvert - scenetri->firstvert >= MAX_INDICIES-6)
 				{
@@ -8394,6 +8491,12 @@ endtype:
 
 	if (!cl_numstris)
 		return;
+	if (!cl_numstrisidx)
+	{
+		cl_numstris = 0;
+		cl_numstrisvert = 0;
+		return;
+	}
 
 	Fog_DisableGFog (); //additive stuff looks like arse. this stuff should really be done in a fragment shader, although we could also fake things here
 
@@ -8410,12 +8513,37 @@ endtype:
 	glDisable(GL_CULL_FACE);
 
 	//mess around with where glDrawElements gets its data from
-	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
-	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+	qboolean usevbo = PScript_EnsureParticleVBOs();
+	size_t vbovertofs = 0;
+	size_t vbotexofs = sizeof(*cl_strisvertv) * (size_t)cl_numstrisvert;
+	size_t vbocolorofs = vbotexofs + sizeof(*cl_strisvertt) * (size_t)cl_numstrisvert;
+	if (usevbo)
+	{
+		size_t vertbytes = sizeof(*cl_strisvertv) * (size_t)cl_numstrisvert;
+		size_t texbytes = sizeof(*cl_strisvertt) * (size_t)cl_numstrisvert;
+		size_t colorbytes = sizeof(*cl_strisvertc) * (size_t)cl_numstrisvert;
+		GL_BindBuffer(GL_ARRAY_BUFFER, cl_strisarrayvbo);
+		GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)(vertbytes + texbytes + colorbytes), NULL, GL_STREAM_DRAW);
+		GL_BufferSubDataFunc(GL_ARRAY_BUFFER, vbovertofs, vertbytes, cl_strisvertv);
+		GL_BufferSubDataFunc(GL_ARRAY_BUFFER, vbotexofs, texbytes, cl_strisvertt);
+		GL_BufferSubDataFunc(GL_ARRAY_BUFFER, vbocolorofs, colorbytes, cl_strisvertc);
+		GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, cl_strisidxvbo);
+		GL_BufferDataFunc(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(sizeof(*cl_strisidx) * (size_t)cl_numstrisidx), cl_strisidx, GL_STREAM_DRAW);
+	}
+	else
+	{
+		GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+	}
 	GL_ClientActiveTextureFunc (GL_TEXTURE0_ARB);
 	glEnableClientState (GL_VERTEX_ARRAY);
 	glEnableClientState (GL_TEXTURE_COORD_ARRAY);
 	glEnableClientState (GL_COLOR_ARRAY);
+
+	GLenum lastsrcf = 0;
+	GLenum lastdstf = 0;
+	qboolean textureenabled = true;
+	qboolean smoothlines = false;
 
 	for (o = 0; o < 3; o++)
 	{
@@ -8437,27 +8565,60 @@ endtype:
 
 		for (i = 0; i < cl_numstris; i++)
 		{
+			const GLvoid *indices;
+
 			if (factors[cl_stris[i].blendmode].order != o)
 				continue;
+			if (!cl_stris[i].numidx)
+				continue;
 
-			glBlendFunc(factors[cl_stris[i].blendmode].srcf, factors[cl_stris[i].blendmode].dstf);
-
-			glVertexPointer(3, GL_FLOAT, sizeof(*cl_strisvertv), cl_strisvertv + cl_stris[i].firstvert);
-			glTexCoordPointer(2, GL_FLOAT, sizeof(*cl_strisvertt), cl_strisvertt + cl_stris[i].firstvert);
-			glColorPointer(4, GL_FLOAT, sizeof(*cl_strisvertc), cl_strisvertc + cl_stris[i].firstvert);
-			if (cl_stris[i].beflags & BEF_LINES)
+			if (lastsrcf != factors[cl_stris[i].blendmode].srcf || lastdstf != factors[cl_stris[i].blendmode].dstf)
 			{
-				glDisable(GL_TEXTURE_2D);
-				glShadeModel(GL_SMOOTH);
-//				glDrawRangeElements(GL_LINES, 0, cl_stris[i].numvert, cl_stris[i].numidx, GL_UNSIGNED_SHORT, cl_strisidx + cl_stris[i].firstidx);
-				glDrawElements(GL_LINES, cl_stris[i].numidx, GL_UNSIGNED_SHORT, cl_strisidx + cl_stris[i].firstidx);
-				glEnable(GL_TEXTURE_2D);
+				lastsrcf = factors[cl_stris[i].blendmode].srcf;
+				lastdstf = factors[cl_stris[i].blendmode].dstf;
+				glBlendFunc(lastsrcf, lastdstf);
+			}
+
+			if (usevbo)
+			{
+				GL_BindBuffer(GL_ARRAY_BUFFER, cl_strisarrayvbo);
+				glVertexPointer(3, GL_FLOAT, sizeof(*cl_strisvertv), (const GLvoid *)(uintptr_t)(vbovertofs + (size_t)cl_stris[i].firstvert * sizeof(*cl_strisvertv)));
+				glTexCoordPointer(2, GL_FLOAT, sizeof(*cl_strisvertt), (const GLvoid *)(uintptr_t)(vbotexofs + (size_t)cl_stris[i].firstvert * sizeof(*cl_strisvertt)));
+				glColorPointer(4, GL_FLOAT, sizeof(*cl_strisvertc), (const GLvoid *)(uintptr_t)(vbocolorofs + (size_t)cl_stris[i].firstvert * sizeof(*cl_strisvertc)));
+				indices = (const GLvoid *)(uintptr_t)((size_t)cl_stris[i].firstidx * sizeof(*cl_strisidx));
 			}
 			else
 			{
+				glVertexPointer(3, GL_FLOAT, sizeof(*cl_strisvertv), cl_strisvertv + cl_stris[i].firstvert);
+				glTexCoordPointer(2, GL_FLOAT, sizeof(*cl_strisvertt), cl_strisvertt + cl_stris[i].firstvert);
+				glColorPointer(4, GL_FLOAT, sizeof(*cl_strisvertc), cl_strisvertc + cl_stris[i].firstvert);
+				indices = cl_strisidx + cl_stris[i].firstidx;
+			}
+			if (cl_stris[i].beflags & BEF_LINES)
+			{
+				if (textureenabled)
+				{
+					glDisable(GL_TEXTURE_2D);
+					textureenabled = false;
+				}
+				if (!smoothlines)
+				{
+					glShadeModel(GL_SMOOTH);
+					smoothlines = true;
+				}
+//				glDrawRangeElements(GL_LINES, 0, cl_stris[i].numvert, cl_stris[i].numidx, GL_UNSIGNED_SHORT, cl_strisidx + cl_stris[i].firstidx);
+				glDrawElements(GL_LINES, cl_stris[i].numidx, GL_UNSIGNED_SHORT, indices);
+			}
+			else
+			{
+				if (!textureenabled)
+				{
+					glEnable(GL_TEXTURE_2D);
+					textureenabled = true;
+				}
 				GL_Bind(cl_stris[i].texture);
 //				glDrawRangeElements(GL_TRIANGLES, 0, cl_stris[i].numvert, cl_stris[i].numidx, GL_UNSIGNED_SHORT, cl_strisidx + cl_stris[i].firstidx);
-				glDrawElements(GL_TRIANGLES, cl_stris[i].numidx, GL_UNSIGNED_SHORT, cl_strisidx + cl_stris[i].firstidx);
+				glDrawElements(GL_TRIANGLES, cl_stris[i].numidx, GL_UNSIGNED_SHORT, indices);
 			}
 		}
 	}
@@ -8471,6 +8632,8 @@ endtype:
 	glEnable(GL_CULL_FACE);
 	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	GL_PolygonOffset (OFFSET_NONE);
+	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
 	cl_numstris = 0;
 	cl_numstrisvert = 0;
 	cl_numstrisidx = 0;
