@@ -214,6 +214,11 @@ void R_DrawBrushModel (entity_t *e)
 	}
 	e->angles[0] = -e->angles[0];	// stupid quake bug
 
+	if (R_DrawBModelDrawCache (clmodel, e))
+	{
+		glPopMatrix ();
+		return;
+	}
 	R_ClearTextureChains (clmodel, chain_model);
 	for (i=0 ; i<clmodel->nummodelsurfaces ; i++, psurf++)
 	{
@@ -833,9 +838,12 @@ void GL_BuildLightmaps (void)
 */
 
 GLuint gl_bmodel_vbo = 0;
+unsigned int gl_bmodel_vbo_generation = 0;	//tb -- bumped whenever vbo_firstvert offsets change, to invalidate per-model draw caches
 
 void GL_DeleteBModelVertexBuffer (void)
 {
+	R_BModelDrawCache_CleanupAll ();
+
 	if (!(gl_vbo_able && gl_mtexable && gl_max_texture_units >= 3))
 		return;
 
@@ -938,6 +946,8 @@ void GL_BuildBModelVertexBuffer (void)
 	GL_BindBufferFunc (GL_ARRAY_BUFFER, gl_bmodel_vbo);
 	GL_BufferDataFunc (GL_ARRAY_BUFFER, (GLsizeiptr)varray_bytes, varray, GL_STATIC_DRAW);
 	free (varray);
+
+	gl_bmodel_vbo_generation++;	//tb -- vbo_firstvert offsets just changed; invalidate bmodel draw caches
 
 // invalidate the cached bindings
 	GL_ClearBufferBindings ();

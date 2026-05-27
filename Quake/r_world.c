@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t gl_fullbrights, r_drawflat, gl_overbright, r_oldskyleaf, r_showtris; //johnfitz
 extern cvar_t r_flatlightstyles;
 cvar_t r_scenecache = {"r_scenecache",""};	//spike, an attempt to cope with abusive maps a bit better.
+cvar_t r_bmodelcache = {"r_bmodelcache","1",CVAR_ARCHIVE};	//tb -- cache static index buffers for opaque moved bmodel entities.
 
 typedef struct grass_presence_cache_s grass_presence_cache_t;
 
@@ -36,6 +37,13 @@ static qboolean RSceneCache_Queue(byte *vis);
 static void RSceneCache_Draw(qboolean water);
 void RSceneCache_Shutdown(void);
 static qboolean R_GrassBladesActive (void);
+static float R_GrassAnimTime (void);
+static float R_GrassAmount (void);
+static float R_GrassMovement (void);
+static qboolean R_TextureUsesSurfaceGrass (const texture_t *t);
+static void R_SetGrassColorUniforms (const texture_t *t);
+static qboolean R_GrassEntityAllowsGrass (const entity_t *ent);
+static void R_DrawGrassBlades (qmodel_t *model, entity_t *ent, texchain_t chain);
 static qboolean R_GrassSurfaceCanHaveBlades (const msurface_t *s);
 static grass_presence_cache_t *R_GrassGetPresenceCache (qmodel_t *model, qboolean create);
 static qboolean R_GrassPresenceCacheHasBladeSurfaces (const grass_presence_cache_t *cache);
@@ -705,6 +713,576 @@ static struct
 	GLint skyfogcolor;
 } r_water[4];	//
 
+#ifndef vertAttrIndex
+#define vertAttrIndex 0
+#define texCoordsAttrIndex 1
+#define LMCoordsAttrIndex 2
+#endif
+
+typedef struct bmodel_drawbatch_s
+{
+	int				texture;
+	int				lightmap;
+	qboolean		underwater;
+	unsigned int	flags;
+	size_t			firstidx;
+	size_t			numidx;
+	unsigned int	*eboidx;
+} bmodel_drawbatch_t;
+
+typedef struct bmodel_drawcache_s
+{
+	qboolean			valid;
+	qboolean			unsupported;
+	unsigned int		generation;
+	int					lightmap_count;
+	unsigned int		brushpolys;
+	size_t				totalidx;
+	GLuint				ebo;
+	int					numbatches;
+	bmodel_drawbatch_t	*batches;
+	byte				used_lightstyles[(MAX_LIGHTSTYLES + 7) >> 3];
+	int					lightstyle_values[MAX_LIGHTSTYLES];
+	qboolean			has_cached_dlight;
+} bmodel_drawcache_t;
+
+extern unsigned int gl_bmodel_vbo_generation;
+
+static size_t R_BModelDrawCache_DenseIndex (int texture, int lightmap, int underwater, int lmaps)
+{
+	return ((size_t)texture * 2u + (size_t)underwater) * (size_t)lmaps + (size_t)lightmap;
+}
+
+static void R_BModelDrawCache_MarkLightstyles (bmodel_drawcache_t *cache, const msurface_t *surf)
+{
+	int maps;
+
+	for (maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+	{
+		unsigned short style = surf->styles[maps];
+		if (style >= MAX_LIGHTSTYLES)
+			continue;
+		cache->used_lightstyles[style >> 3] |= (1u << (style & 7));
+	}
+}
+
+static qboolean R_BModelDrawCache_UsesLightstyle (const bmodel_drawcache_t *cache, int style)
+{
+	return (cache->used_lightstyles[style >> 3] & (1u << (style & 7))) != 0;
+}
+
+static qboolean R_BModelDrawCache_SurfaceSupported (qmodel_t *model, msurface_t *surf)
+{
+	if (surf->numedges < 3)
+		return true;
+	if (surf->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_DRAWSKY | SURF_NOTEXTURE))
+		return false;
+	if (!surf->texinfo)
+		return false;
+	if ((unsigned int)surf->texinfo->materialidx >= (unsigned int)model->numtextures)
+		return false;
+	if (!model->textures[surf->texinfo->materialidx])
+		return false;
+	if ((unsigned int)surf->lightmaptexturenum >= (unsigned int)lightmap_count)
+		return false;
+	return true;
+}
+
+void R_BModelDrawCache_Cleanup (qmodel_t *mod)
+{
+	bmodel_drawcache_t *cache;
+
+	if (!mod)
+		return;
+	cache = (bmodel_drawcache_t *)mod->bmodel_drawcache;
+	if (!cache)
+		return;
+
+	if (cache->ebo && GL_DeleteBuffersFunc)
+		GL_DeleteBuffersFunc (1, &cache->ebo);
+	free (cache->batches);
+	free (cache);
+	mod->bmodel_drawcache = NULL;
+}
+
+void R_BModelDrawCache_CleanupAll (void)
+{
+	Mod_ForEachModel (R_BModelDrawCache_Cleanup);
+}
+
+static bmodel_drawcache_t *R_BModelDrawCache_Build (qmodel_t *model)
+{
+	bmodel_drawcache_t *cache;
+	unsigned int *counts = NULL;
+	unsigned int *fill = NULL;
+	unsigned int *indices = NULL;
+	int *batchmap = NULL;
+	size_t dense_count, totalidx, lightmaps_per_texture;
+	int i, j, tex, lm, uw, b;
+	msurface_t *surf;
+
+	R_BModelDrawCache_Cleanup (model);
+
+	cache = (bmodel_drawcache_t *)calloc (1, sizeof(*cache));
+	if (!cache)
+		return NULL;
+	model->bmodel_drawcache = cache;
+	cache->generation = gl_bmodel_vbo_generation;
+	cache->lightmap_count = lightmap_count;
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+		cache->lightstyle_values[i] = INT_MIN;
+
+	if (lightmap_count <= 0 || model->numtextures <= 0 || model->nummodelsurfaces <= 0)
+		return cache;
+
+	lightmaps_per_texture = (size_t)lightmap_count * 2u;
+	if ((size_t)model->numtextures > ((size_t)-1) / lightmaps_per_texture)
+		return cache;
+	dense_count = (size_t)model->numtextures * lightmaps_per_texture;
+	if (dense_count > ((size_t)-1) / sizeof(*counts))
+		return cache;
+
+	counts = (unsigned int *)calloc (dense_count, sizeof(*counts));
+	if (!counts)
+		return cache;
+
+	for (i = 0, surf = model->surfaces + model->firstmodelsurface; i < model->nummodelsurfaces; i++, surf++)
+	{
+		size_t dense;
+		unsigned int numidx;
+
+		if (surf->numedges < 3)
+			continue;
+		if (!R_BModelDrawCache_SurfaceSupported (model, surf))
+		{
+			cache->unsupported = true;
+			free (counts);
+			return cache;
+		}
+		if (surf->numedges > INT_MAX / 3 + 2)
+		{
+			cache->unsupported = true;
+			free (counts);
+			return cache;
+		}
+
+		tex = surf->texinfo->materialidx;
+		lm = surf->lightmaptexturenum;
+		uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
+		dense = R_BModelDrawCache_DenseIndex (tex, lm, uw, lightmap_count);
+		numidx = R_NumTriangleIndicesForSurf (surf);
+		if (numidx > (unsigned int)INT_MAX || counts[dense] > (unsigned int)INT_MAX - numidx)
+		{
+			cache->unsupported = true;
+			free (counts);
+			return cache;
+		}
+		counts[dense] += numidx;
+		cache->brushpolys++;
+		R_BModelDrawCache_MarkLightstyles (cache, surf);
+	}
+
+	for (i = 0, totalidx = 0; (size_t)i < dense_count; i++)
+	{
+		if (!counts[i])
+			continue;
+		if (cache->numbatches == INT_MAX || totalidx > (size_t)-1 - counts[i])
+		{
+			cache->unsupported = true;
+			free (counts);
+			return cache;
+		}
+		cache->numbatches++;
+		totalidx += counts[i];
+	}
+	cache->totalidx = totalidx;
+	if (!cache->numbatches || !totalidx)
+	{
+		free (counts);
+		return cache;
+	}
+	if (totalidx > ((size_t)-1) / sizeof(*indices))
+	{
+		cache->unsupported = true;
+		free (counts);
+		return cache;
+	}
+
+	cache->batches = (bmodel_drawbatch_t *)calloc ((size_t)cache->numbatches, sizeof(*cache->batches));
+	batchmap = (int *)malloc (dense_count * sizeof(*batchmap));
+	fill = (unsigned int *)calloc ((size_t)cache->numbatches, sizeof(*fill));
+	indices = (unsigned int *)malloc (totalidx * sizeof(*indices));
+	if (!cache->batches || !batchmap || !fill || !indices)
+	{
+		free (counts);
+		free (batchmap);
+		free (fill);
+		free (indices);
+		free (cache->batches);
+		cache->batches = NULL;
+		return cache;
+	}
+
+	for (i = 0; (size_t)i < dense_count; i++)
+		batchmap[i] = -1;
+
+	for (tex = 0, b = 0, totalidx = 0; tex < model->numtextures; tex++)
+	{
+		for (uw = 0; uw < 2; uw++)
+		{
+			for (lm = 0; lm < lightmap_count; lm++)
+			{
+				size_t dense = R_BModelDrawCache_DenseIndex (tex, lm, uw, lightmap_count);
+				bmodel_drawbatch_t *batch;
+
+				if (!counts[dense])
+					continue;
+				batchmap[dense] = b;
+				batch = &cache->batches[b++];
+				batch->texture = tex;
+				batch->lightmap = lm;
+				batch->underwater = uw != 0;
+				batch->firstidx = totalidx;
+				batch->numidx = counts[dense];
+				batch->eboidx = (unsigned int *)(uintptr_t)(totalidx * sizeof(*indices));
+				totalidx += counts[dense];
+			}
+		}
+	}
+
+	for (i = 0, surf = model->surfaces + model->firstmodelsurface; i < model->nummodelsurfaces; i++, surf++)
+	{
+		size_t dense;
+		unsigned int numidx;
+		bmodel_drawbatch_t *batch;
+
+		if (surf->numedges < 3)
+			continue;
+
+		tex = surf->texinfo->materialidx;
+		lm = surf->lightmaptexturenum;
+		uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
+		dense = R_BModelDrawCache_DenseIndex (tex, lm, uw, lightmap_count);
+		j = batchmap[dense];
+		if (j < 0)
+			continue;
+
+		batch = &cache->batches[j];
+		numidx = R_NumTriangleIndicesForSurf (surf);
+		R_TriangleIndicesForSurf (surf, indices + batch->firstidx + fill[j]);
+		fill[j] += numidx;
+		batch->flags |= surf->flags;
+	}
+
+	GL_GenBuffersFunc (1, &cache->ebo);
+	if (!cache->ebo)
+	{
+		free (counts);
+		free (batchmap);
+		free (fill);
+		free (indices);
+		free (cache->batches);
+		cache->batches = NULL;
+		cache->numbatches = 0;
+		cache->totalidx = 0;
+		return cache;
+	}
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo);
+	GL_BufferDataFunc (GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(cache->totalidx * sizeof(*indices)), indices, GL_STATIC_DRAW);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+	cache->valid = true;
+
+	free (counts);
+	free (batchmap);
+	free (fill);
+	free (indices);
+	return cache;
+}
+
+static bmodel_drawcache_t *R_BModelDrawCache_Get (qmodel_t *model)
+{
+	bmodel_drawcache_t *cache = (bmodel_drawcache_t *)model->bmodel_drawcache;
+
+	if (cache && (cache->generation != gl_bmodel_vbo_generation || cache->lightmap_count != lightmap_count))
+	{
+		R_BModelDrawCache_Cleanup (model);
+		cache = NULL;
+	}
+	if (!cache)
+		cache = R_BModelDrawCache_Build (model);
+	if (!cache || !cache->valid)
+		return NULL;
+	return cache;
+}
+
+static qboolean R_BModelDrawCache_LightstylesChanged (const bmodel_drawcache_t *cache)
+{
+	int i;
+
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+		if (R_BModelDrawCache_UsesLightstyle (cache, i) && cache->lightstyle_values[i] != d_lightstylevalue[i])
+			return true;
+	return false;
+}
+
+static void R_BModelDrawCache_StoreLightstyles (bmodel_drawcache_t *cache)
+{
+	int i;
+
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+		if (R_BModelDrawCache_UsesLightstyle (cache, i))
+			cache->lightstyle_values[i] = d_lightstylevalue[i];
+}
+
+static qboolean R_BModelDrawCache_HasActiveDlights (const entity_t *ent)
+{
+	int i;
+	vec3_t mins, maxs;
+
+	if (gl_flashblend.value || !r_dynamic.value || !ent)
+		return false;
+	R_GetEntityBounds (ent, mins, maxs);
+	for (i = 0; i < MAX_DLIGHTS; i++)
+	{
+		float radius, dist2 = 0.0f;
+		int axis;
+
+		if (cl_dlights[i].die < cl.time || !cl_dlights[i].radius)
+			continue;
+		radius = cl_dlights[i].radius;
+		for (axis = 0; axis < 3; axis++)
+		{
+			float delta = 0.0f;
+			if (cl_dlights[i].origin[axis] < mins[axis])
+				delta = mins[axis] - cl_dlights[i].origin[axis];
+			else if (cl_dlights[i].origin[axis] > maxs[axis])
+				delta = cl_dlights[i].origin[axis] - maxs[axis];
+			dist2 += delta * delta;
+		}
+		if (dist2 > radius * radius)
+			continue;
+		return true;
+	}
+	return false;
+}
+
+static void R_BModelDrawCache_UpdateSurfaceLightmap (qmodel_t *model, msurface_t *fa)
+{
+	byte *base;
+	int maps;
+	glRect_t *theRect;
+	int smax, tmax;
+
+	if (fa->flags & SURF_DRAWTILED)
+		return;
+
+	for (maps = 0; maps < MAXLIGHTMAPS && fa->styles[maps] != INVALID_LIGHTSTYLE; maps++)
+		if (d_lightstylevalue[fa->styles[maps]] != fa->cached_light[maps])
+			goto dynamic;
+
+	if (fa->dlightframe == r_framecount || fa->cached_dlight)
+	{
+dynamic:
+		if (r_dynamic.value)
+		{
+			struct lightmap_s *lm = &lightmaps[fa->lightmaptexturenum];
+			lm->modified = true;
+			theRect = &lm->rectchange;
+			if (fa->light_t < theRect->t) {
+				if (theRect->h)
+					theRect->h += theRect->t - fa->light_t;
+				theRect->t = fa->light_t;
+			}
+			if (fa->light_s < theRect->l) {
+				if (theRect->w)
+					theRect->w += theRect->l - fa->light_s;
+				theRect->l = fa->light_s;
+			}
+			smax = fa->extents[0]+1;
+			tmax = fa->extents[1]+1;
+			if ((theRect->w + theRect->l) < (fa->light_s + smax))
+				theRect->w = (fa->light_s-theRect->l)+smax;
+			if ((theRect->h + theRect->t) < (fa->light_t + tmax))
+				theRect->h = (fa->light_t-theRect->t)+tmax;
+			base = lm->pbodata;
+			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
+			R_BuildLightMap (model, fa, base, LMBLOCK_WIDTH*lightmap_bytes, currententity, r_framecount, cl_dlights);
+		}
+	}
+}
+
+static void R_BModelDrawCache_UpdateLightmaps (qmodel_t *model, bmodel_drawcache_t *cache)
+{
+	int i;
+	msurface_t *surf;
+	qboolean has_cached_dlight = false;
+
+	if (!r_dynamic.value)
+	{
+		cache->has_cached_dlight = false;
+		return;
+	}
+
+	for (i = 0, surf = model->surfaces + model->firstmodelsurface; i < model->nummodelsurfaces; i++, surf++)
+	{
+		if (surf->numedges < 3)
+			continue;
+		if (surf->flags & SURF_DRAWTILED)
+			continue;
+		if ((unsigned int)surf->lightmaptexturenum >= (unsigned int)lightmap_count)
+			continue;
+		R_BModelDrawCache_UpdateSurfaceLightmap (model, surf);
+		if (surf->cached_dlight)
+			has_cached_dlight = true;
+	}
+
+	cache->has_cached_dlight = has_cached_dlight;
+	R_BModelDrawCache_StoreLightstyles (cache);
+}
+
+qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
+{
+	bmodel_drawcache_t *cache;
+	const float entalpha = (ent != NULL) ? ENTALPHA_DECODE(ent->alpha) : 1.0f;
+	const int overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+	int i;
+	int lasttex = -1, lastlm = -1, lastcaustics = -1;
+	texture_t *t, *animt;
+	gltexture_t *fullbright = NULL;
+
+	if (!r_bmodelcache.value || !ent || !model || model->submodelof != cl.worldmodel)
+		return false;
+	if (!gl_vbo_able || !GL_GenBuffersFunc || !GL_BufferDataFunc || !GL_DeleteBuffersFunc || !gl_bmodel_vbo)
+		return false;
+	if (r_world_program == 0 || r_drawflat_cheatsafe || r_fullbright_cheatsafe || r_lightmap_cheatsafe)
+		return false;
+	if (!gl_cull.value || entalpha < 1.0f || ent->effects)
+		return false;
+
+	cache = R_BModelDrawCache_Get (model);
+	if (!cache)
+		return false;
+
+	if (R_BModelDrawCache_LightstylesChanged (cache) ||
+		R_BModelDrawCache_HasActiveDlights (ent) ||
+		cache->has_cached_dlight)
+	{
+		R_BModelDrawCache_UpdateLightmaps (model, cache);
+		R_UploadLightmaps ();
+	}
+
+	glDepthMask (GL_TRUE);
+	glDisable (GL_BLEND);
+	glEnable (GL_CULL_FACE);
+	GL_UseProgramFunc (r_world_program);
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo);
+
+	GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+
+	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+
+	GL_Uniform1iFunc (texLoc, 0);
+	GL_Uniform1iFunc (LMTexLoc, 1);
+	GL_Uniform1iFunc (fullbrightTexLoc, 2);
+	GL_Uniform1iFunc (causticsTexLoc, 3);
+	GL_Uniform1iFunc (useFullbrightTexLoc, 0);
+	GL_Uniform1iFunc (useOverbrightLoc, overbright);
+	GL_Uniform1iFunc (useCausticsTexLoc, 0);
+	GL_Uniform1iFunc (useGrassLoc, 0);
+	GL_Uniform1iFunc (useAlphaTestLoc, 0);
+	GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
+	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
+	GL_Uniform1fFunc (alphaLoc, 1.0f);
+	GL_Uniform1fFunc (clTimeLoc, cl.time);
+	GL_Uniform1fFunc (causticsOpacityLoc, gl_caustics.value);
+	GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount());
+	GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime());
+	GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement());
+	GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
+
+	for (i = 0; i < cache->numbatches; i++)
+	{
+		bmodel_drawbatch_t *batch = &cache->batches[i];
+		int usecaustics = batch->underwater && gl_caustics.value && underwatertexture;
+
+		t = model->textures[batch->texture];
+		if (!t)
+			continue;
+		animt = R_TextureAnimation (t, ent != NULL ? ent->frame : 0);
+
+		if (batch->texture != lasttex)
+		{
+			GL_SelectTexture (GL_TEXTURE0);
+			GL_Bind (animt->gltexture);
+
+			if (gl_fullbrights.value && (fullbright = animt->fullbright))
+			{
+				GL_SelectTexture (GL_TEXTURE2);
+				GL_Bind (fullbright);
+				GL_Uniform1iFunc (useFullbrightTexLoc, 1);
+			}
+			else
+				GL_Uniform1iFunc (useFullbrightTexLoc, 0);
+
+			if (R_TextureUsesSurfaceGrass(t) && R_GrassEntityAllowsGrass(ent))
+			{
+				GL_Uniform1iFunc (useGrassLoc, 1);
+				R_SetGrassColorUniforms(animt);
+			}
+			else
+				GL_Uniform1iFunc (useGrassLoc, 0);
+
+			lasttex = batch->texture;
+			lastlm = -1;
+		}
+
+		GL_Uniform1iFunc (useAlphaTestLoc, (batch->flags & SURF_DRAWFENCE) != 0);
+
+		if (batch->lightmap != lastlm)
+		{
+			GL_SelectTexture (GL_TEXTURE1);
+			GL_Bind (lightmaps[batch->lightmap].texture);
+			lastlm = batch->lightmap;
+		}
+
+		if (usecaustics != lastcaustics)
+		{
+			if (usecaustics)
+			{
+				GL_SelectTexture (GL_TEXTURE3);
+				GL_Bind (underwatertexture);
+			}
+			GL_Uniform1iFunc (useCausticsTexLoc, usecaustics);
+			lastcaustics = usecaustics;
+		}
+
+		glDrawElements (GL_TRIANGLES, (GLsizei)batch->numidx, GL_UNSIGNED_INT, batch->eboidx);
+		rs_brushpasses++;
+	}
+
+	rs_brushpolys += cache->brushpolys;
+
+	GL_Uniform1iFunc (useAlphaTestLoc, 0);
+	GL_Uniform1iFunc (useCausticsTexLoc, 0);
+	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_UseProgramFunc (0);
+	GL_SelectTexture (GL_TEXTURE0);
+	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	R_DrawGrassBlades (model, ent, chain_model);
+	return true;
+}
+
 static void GLWorld_DeleteShaderPrograms (void)
 {
 	int i;
@@ -766,9 +1344,6 @@ static void GLWorld_DeleteShaderPrograms (void)
 	}
 }
 
-#define vertAttrIndex 0
-#define texCoordsAttrIndex 1
-#define LMCoordsAttrIndex 2
 #define GRASS_BLADE_MODE_CPU 1
 #define GRASS_BLADE_MODE_SHADER 2
 #define GRASS_DENSITY_MAX 500.0f
