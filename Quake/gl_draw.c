@@ -402,25 +402,119 @@ qpic_t	*Draw_GetCachedPic (const char *path)
 Draw_CachePic
 ================
 */
-qpic_t	*Draw_TryCachePic (const char *path, unsigned int texflags)
+typedef struct
+{
+	searchpath_t	*search;
+	packfile_t	*file;
+} draw_packfile_ref_t;
+
+static qboolean Draw_FindPackFileByPakName (const char *pakname, const char *path, draw_packfile_ref_t *ref)
+{
+	searchpath_t	*search;
+	const char	*pakbase;
+	int		i;
+
+	pakbase = COM_SkipPath(pakname);
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		pack_t *pak = search->pack;
+
+		if (!pak || q_strcasecmp(COM_SkipPath(pak->filename), pakbase))
+			continue;
+
+		for (i = 0; i < pak->numfiles; i++)
+		{
+			if (strcmp(pak->files[i].name, path))
+				continue;
+
+			ref->search = search;
+			ref->file = &pak->files[i];
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static byte *Draw_LoadMallocPackFile (const char *path, const draw_packfile_ref_t *ref, size_t *size)
+{
+	byte	*buf;
+	int	len, nread;
+
+	if (size)
+		*size = 0;
+	if (!ref || !ref->search || !ref->search->pack || !ref->file)
+		return NULL;
+	if (ref->file->filelen < 0 || ref->file->filelen >= INT_MAX)
+		Sys_Error ("Draw_LoadMallocPackFile: invalid size for %s", path);
+
+	len = (int)ref->file->filelen;
+	buf = (byte *)malloc(len + 1);
+	if (!buf)
+		Sys_Error ("Draw_LoadMallocPackFile: not enough space for %s", path);
+
+	buf[len] = 0;
+
+	if (ref->file->deflatedsize)
+	{
+		FILE *f;
+
+		f = fopen(ref->search->pack->filename, "rb");
+		if (!f)
+		{
+			free(buf);
+			return NULL;
+		}
+		fseek(f, ref->file->filepos, SEEK_SET);
+		f = FSZIP_Deflate(f, ref->file->deflatedsize, ref->file->filelen, ref->file->name);
+		if (!f)
+		{
+			free(buf);
+			return NULL;
+		}
+		nread = (int)fread(buf, 1, len, f);
+		fclose(f);
+	}
+	else
+	{
+		Sys_FileSeek(ref->search->pack->handle, ref->file->filepos);
+		nread = Sys_FileRead(ref->search->pack->handle, buf, len);
+	}
+
+	if (nread != len)
+	{
+		free(buf);
+		Sys_Error ("Draw_LoadMallocPackFile: Error reading %s from %s",
+			path, COM_SkipPath(ref->search->pack->filename));
+	}
+
+	if (size)
+		*size = (size_t)len;
+	return buf;
+}
+
+static qpic_t	*Draw_TryCachePicEx (const char *cachename, const char *path, unsigned int texflags, qboolean allow_external, const draw_packfile_ref_t *packfile)
 {
 	cachepic_t	*pic;
 	int			i;
 	qpic_t		*dat;
 	glpic_t		gl;
+	byte		*indexed_source;
+	size_t		file_size = 0;
 	char newname[MAX_QPATH];
 
 	texflags |= (premul_hud?TEXPREF_PREMULTIPLY:0);
 
 	for (pic=menu_cachepics, i=0 ; i<menu_numcachepics ; pic++, i++)
 	{
-		if (!strcmp (path, pic->name))
+		if (!strcmp (cachename, pic->name))
 			return &pic->pic;
 	}
 	if (menu_numcachepics == MAX_CACHED_PICS)
 		Sys_Error ("menu_numcachepics == MAX_CACHED_PICS");
 	menu_numcachepics++;
-	strcpy (pic->name, path);
+	q_strlcpy (pic->name, cachename, sizeof(pic->name));
 
 	if (strcmp("lmp", COM_FileGetExtension(path)))
 	{
@@ -443,9 +537,16 @@ qpic_t	*Draw_TryCachePic (const char *path, unsigned int texflags)
 //
 // load the pic from disk
 //
-	dat = (qpic_t *)COM_LoadMallocFile (path, NULL);
+	dat = (qpic_t *)(packfile ? Draw_LoadMallocPackFile(path, packfile, &file_size) : COM_LoadMallocFile(path, NULL));
 	if (!dat)
+	{
+		pic->name[0] = 0;
+		menu_numcachepics--;
 		return NULL;
+	}
+	if (packfile && file_size < sizeof(int) * 2)
+		Sys_Error ("Draw_TryCachePicEx: %s from %s is too small for a qpic header",
+			path, COM_SkipPath(packfile->search->pack->filename));
 	SwapPic (dat);
 
 	// HACK HACK HACK --- we need to keep the bytes for
@@ -456,10 +557,11 @@ qpic_t	*Draw_TryCachePic (const char *path, unsigned int texflags)
 
 	pic->pic.width = dat->width;
 	pic->pic.height = dat->height;
+	indexed_source = dat->data;
 
 	//Spike -- if we're loading external images, and one exists, then use that instead (but with the sizes of the lmp).
 	COM_StripExtension(path, newname, sizeof(newname));
-	if (draw_load24bit && (gl.gltexture=TexMgr_LoadImage (NULL, path, 0, 0, SRC_EXTERNAL, NULL, newname, 0, texflags|TEXPREF_MIPMAP|TEXPREF_ALLOWMISSING|TEXPREF_CLAMP))) // woods iw add clamp
+	if (allow_external && draw_load24bit && (gl.gltexture=TexMgr_LoadImage (NULL, path, 0, 0, SRC_EXTERNAL, NULL, newname, 0, texflags|TEXPREF_MIPMAP|TEXPREF_ALLOWMISSING|TEXPREF_CLAMP))) // woods iw add clamp
 	{
 		gl.sl = 0;
 		gl.sh = (texflags&TEXPREF_PAD)?(float)gl.gltexture->source_width/(float)TexMgr_PadConditional(gl.gltexture->source_width):1;
@@ -468,8 +570,34 @@ qpic_t	*Draw_TryCachePic (const char *path, unsigned int texflags)
 	}
 	else
 	{
-		gl.gltexture = TexMgr_LoadImage (NULL, path, dat->width, dat->height, SRC_INDEXED, dat->data, path,
-										  sizeof(int)*2, texflags | TEXPREF_NOPICMIP | TEXPREF_CLAMP); //johnfitz -- TexMgr -- woods iw add clamp
+		const char *source_file = path;
+		src_offset_t source_offset = sizeof(int) * 2;
+
+		if (packfile)
+		{
+			size_t pixel_count;
+			size_t required_size;
+
+			if (!dat->width || !dat->height ||
+				dat->width > (unsigned int)INT_MAX ||
+				dat->height > (unsigned int)INT_MAX ||
+				dat->width > (unsigned int)INT_MAX / dat->height)
+				Sys_Error ("Draw_TryCachePicEx: invalid size for %s", path);
+
+			pixel_count = (size_t)dat->width * (size_t)dat->height;
+			required_size = sizeof(int) * 2 + pixel_count;
+			if (file_size < required_size)
+				Sys_Error ("Draw_TryCachePicEx: %s from %s is truncated",
+					path, COM_SkipPath(packfile->search->pack->filename));
+
+			indexed_source = (byte *)Z_Malloc ((int)pixel_count);
+			memcpy(indexed_source, dat->data, pixel_count);
+			source_file = "";
+			source_offset = (src_offset_t)indexed_source;
+		}
+
+		gl.gltexture = TexMgr_LoadImage (NULL, packfile ? cachename : path, dat->width, dat->height, SRC_INDEXED, indexed_source, source_file,
+										  source_offset, texflags | TEXPREF_NOPICMIP | TEXPREF_CLAMP | (packfile ? TEXPREF_OWNSOURCE : 0)); //johnfitz -- TexMgr -- woods iw add clamp
 		gl.sl = 0;
 		gl.sh = (texflags&TEXPREF_PAD)?(float)dat->width/(float)TexMgr_PadConditional(dat->width):1; //johnfitz
 		gl.tl = 0;
@@ -481,12 +609,47 @@ qpic_t	*Draw_TryCachePic (const char *path, unsigned int texflags)
 	return &pic->pic;
 }
 
+qpic_t	*Draw_TryCachePic (const char *path, unsigned int texflags)
+{
+	return Draw_TryCachePicEx(path, path, texflags, true, NULL);
+}
+
+static qpic_t	*Draw_TryCachePicPackageLmp (const char *path, const char *pakname, unsigned int texflags)
+{
+	char cachename[MAX_QPATH];
+	draw_packfile_ref_t pak_ref;
+	qpic_t *cached;
+
+	q_snprintf(cachename, sizeof(cachename), "%s#%s", path, COM_SkipPath(pakname));
+	cached = Draw_GetCachedPic(cachename);
+	if (cached)
+		return cached;
+
+	if (!Draw_FindPackFileByPakName(pakname, path, &pak_ref))
+		return NULL;
+
+	return Draw_TryCachePicEx(cachename, path, texflags, false, &pak_ref);
+}
+
 qpic_t	*Draw_CachePic (const char *path)
 {
 	qpic_t *pic = Draw_TryCachePic(path, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
 	if (!pic)
 		Sys_Error ("Draw_CachePic: failed to load %s", path);
 	return pic;
+}
+
+static qpic_t	*Draw_TryCacheConbackPackage (const char *pakname)
+{
+	return Draw_TryCachePicPackageLmp(char_hexen2 ? "gfx/menu/conback.lmp" : "gfx/conback.lmp",
+		pakname, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
+}
+
+static qboolean Draw_IsConbackPackageName (const char *name)
+{
+	const char *ext = COM_FileGetExtension(name);
+
+	return !q_strcasecmp(ext, "pak") || !q_strcasecmp(ext, "pk3");
 }
 
 /*
@@ -2082,114 +2245,129 @@ void Draw_ConsoleBackground (void)
 	if (use_default)
 	{
 		qpic_t *pic = NULL;
+		qboolean force_package = Draw_IsConbackPackageName(scr_conback.string);
 
-		/* Decide whether the user override is allowed. */
-		qboolean allow_user_img = false;
-		if (scr_conback.string[0])
+		if (force_package)
 		{
-			const char *ext = COM_FileGetExtension(scr_conback.string);
-			if (ext && !q_strcasecmp(ext, "lmp"))
+			pic = Draw_TryCacheConbackPackage(scr_conback.string);
+			if (!pic && !reported_missing)
 			{
-				allow_user_img = true; /* always allow .lmp */
-			}
-			else if (draw_load24bit)
-			{
-				allow_user_img = true; /* global hi-res allowed? */
-			}
-			else if (!reported_blocked)
-			{
-				Con_Printf("Console background ignored: gl_load24bit is 0 (only .lmp allowed).\n");
-				reported_blocked = true;
+				Con_Printf("Console background package not found: %s:%s\n",
+					scr_conback.string, char_hexen2 ? "gfx/menu/conback.lmp" : "gfx/conback.lmp");
+				reported_missing = true;
 			}
 		}
-
-		/* Try user-specified override first (if allowed & non-empty). */
-		if (allow_user_img)
+		else
 		{
-			char path[MAX_QPATH];
-			char temp_path[MAX_QPATH];
-			char base_path[MAX_QPATH];   /* original user string */
-			char base_nopfx[MAX_QPATH];  /* ext stripped copy    */
-			static const char *ext_full[] = { ".png", ".tga", ".jpg", ".jpeg", ".dds", ".pcx", ".lmp" };
-			static const char *ext_lmp[] = { ".lmp" };
-			const char **extensions = draw_load24bit ? ext_full : ext_lmp;
-			int num_extensions = draw_load24bit ? (int)Q_COUNTOF(ext_full) : 1;
-			int i;
-			qboolean found_file = false;
-
-			q_strlcpy(temp_path, scr_conback.string, sizeof(temp_path));
-			q_strlcpy(base_path, scr_conback.string, sizeof(base_path));
-			q_strlcpy(base_nopfx, scr_conback.string, sizeof(base_nopfx));
-
-			/* If user gave extension, try exactly that. */
-			if (COM_FileGetExtension(temp_path))
+			/* Decide whether the user override is allowed. */
+			qboolean allow_user_img = false;
+			if (scr_conback.string[0])
 			{
-				if (!Q_strncmp(temp_path, "gfx/", 4))
-					q_strlcpy(path, temp_path, sizeof(path));
-				else
-					q_snprintf(path, sizeof(path), "gfx/%s", temp_path);
-
-				if (COM_FileExists(path, NULL))
+				const char *ext = COM_FileGetExtension(scr_conback.string);
+				if (ext && !q_strcasecmp(ext, "lmp"))
 				{
-					pic = Draw_TryCachePic(path, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
-					found_file = true;
+					allow_user_img = true; /* always allow .lmp */
+				}
+				else if (draw_load24bit)
+				{
+					allow_user_img = true; /* global hi-res allowed? */
+				}
+				else if (!reported_blocked)
+				{
+					Con_Printf("Console background ignored: gl_load24bit is 0 (only .lmp allowed).\n");
+					reported_blocked = true;
 				}
 			}
 
-			/* No ext (or missing file)? Try allowed extensions. */
-			if (!pic)
+			/* Try user-specified override first (if allowed & non-empty). */
+			if (allow_user_img)
 			{
-				COM_StripExtension(base_nopfx, base_nopfx, sizeof(base_nopfx));
-				for (i = 0; i < num_extensions && !pic; i++)
+				char path[MAX_QPATH];
+				char temp_path[MAX_QPATH];
+				char base_path[MAX_QPATH];   /* original user string */
+				char base_nopfx[MAX_QPATH];  /* ext stripped copy    */
+				static const char *ext_full[] = { ".png", ".tga", ".jpg", ".jpeg", ".dds", ".pcx", ".lmp" };
+				static const char *ext_lmp[] = { ".lmp" };
+				const char **extensions = draw_load24bit ? ext_full : ext_lmp;
+				int num_extensions = draw_load24bit ? (int)Q_COUNTOF(ext_full) : 1;
+				int i;
+				qboolean found_file = false;
+
+				q_strlcpy(temp_path, scr_conback.string, sizeof(temp_path));
+				q_strlcpy(base_path, scr_conback.string, sizeof(base_path));
+				q_strlcpy(base_nopfx, scr_conback.string, sizeof(base_nopfx));
+
+				/* If user gave extension, try exactly that. */
+				if (COM_FileGetExtension(temp_path))
 				{
-					if (!Q_strncmp(base_nopfx, "gfx/", 4))
-						q_snprintf(path, sizeof(path), "%s%s", base_nopfx, extensions[i]);
+					if (!Q_strncmp(temp_path, "gfx/", 4))
+						q_strlcpy(path, temp_path, sizeof(path));
 					else
-						q_snprintf(path, sizeof(path), "gfx/%s%s", base_nopfx, extensions[i]);
+						q_snprintf(path, sizeof(path), "gfx/%s", temp_path);
 
 					if (COM_FileExists(path, NULL))
 					{
 						pic = Draw_TryCachePic(path, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
 						found_file = true;
-						break;
 					}
 				}
-			}
 
-			/* Inform user once (only when we actually searched). */
-			if (!found_file && !reported_missing)
-			{
-				char msg[1024];
-				size_t ofs = 0;
-
-				reported_missing = true; /* guard early */
-
-				ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs,
-					"Console background file not found: %s (tried: ",
-					scr_conback.string);
-
-				if (COM_FileGetExtension(base_path))
+				/* No ext (or missing file)? Try allowed extensions. */
+				if (!pic)
 				{
-					if (!Q_strncmp(base_path, "gfx/", 4))
-						ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "%s", base_path);
-					else
-						ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "gfx/%s", base_path);
-				}
-				else
-				{
-					for (i = 0; i < num_extensions; i++)
+					COM_StripExtension(base_nopfx, base_nopfx, sizeof(base_nopfx));
+					for (i = 0; i < num_extensions && !pic; i++)
 					{
-						if (i > 0)
-							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, ", ");
 						if (!Q_strncmp(base_nopfx, "gfx/", 4))
-							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "%s%s", base_nopfx, extensions[i]);
+							q_snprintf(path, sizeof(path), "%s%s", base_nopfx, extensions[i]);
 						else
-							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "gfx/%s%s", base_nopfx, extensions[i]);
+							q_snprintf(path, sizeof(path), "gfx/%s%s", base_nopfx, extensions[i]);
+
+						if (COM_FileExists(path, NULL))
+						{
+							pic = Draw_TryCachePic(path, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
+							found_file = true;
+							break;
+						}
 					}
 				}
-				q_snprintf(msg + ofs, sizeof(msg) - ofs, ")\n");
-				Con_Printf("%s", msg);
+
+				/* Inform user once (only when we actually searched). */
+				if (!found_file && !reported_missing)
+				{
+					char msg[1024];
+					size_t ofs = 0;
+
+					reported_missing = true; /* guard early */
+
+					ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs,
+						"Console background file not found: %s (tried: ",
+						scr_conback.string);
+
+					if (COM_FileGetExtension(base_path))
+					{
+						if (!Q_strncmp(base_path, "gfx/", 4))
+							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "%s", base_path);
+						else
+							ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "gfx/%s", base_path);
+					}
+					else
+					{
+						for (i = 0; i < num_extensions; i++)
+						{
+							if (i > 0)
+								ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, ", ");
+							if (!Q_strncmp(base_nopfx, "gfx/", 4))
+								ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "%s%s", base_nopfx, extensions[i]);
+							else
+								ofs += q_snprintf(msg + ofs, sizeof(msg) - ofs, "gfx/%s%s", base_nopfx, extensions[i]);
+						}
+					}
+					q_snprintf(msg + ofs, sizeof(msg) - ofs, ")\n");
+					Con_Printf("%s", msg);
+				}
 			}
+
 		}
 
 		/* Fallback to the engine default console background. */

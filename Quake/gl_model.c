@@ -90,6 +90,26 @@ static void Console_Color_Completion_f(cvar_t* cvar, const char* partial)
 
 /*
 ===============
+Console_Background_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void Console_Background_Completion_f(cvar_t* cvar, const char* partial)
+{
+	searchpath_t *search;
+
+	Con_AddToTabList("\"\"", partial, "default", NULL); // #demolistsort add arg
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (search->pack)
+			Con_AddToTabList(COM_SkipPath(search->pack->filename), partial, "package conback.lmp", NULL); // #demolistsort add arg
+	}
+
+	return;
+}
+
+/*
+===============
 R_ReplaceModels_Completion_f -- woods #iwtabcomplete
 ===============
 */
@@ -127,6 +147,7 @@ void Mod_Init (void)
 	Cvar_RegisterVariable (&scr_concolor); // woods #concolor
 	Cvar_SetCompletion (&scr_concolor, &Console_Color_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_conback); // woods #conback
+	Cvar_SetCompletion (&scr_conback, &Console_Background_Completion_f); // woods #iwtabcomplete
 
 
 	Cmd_AddCommand ("mcache", Mod_Print);

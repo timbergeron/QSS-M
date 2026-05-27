@@ -852,6 +852,16 @@ gltexture_t *TexMgr_NewTexture (void)
 
 static void GL_DeleteTexture (gltexture_t *texture);
 
+static void TexMgr_FreeOwnedSource (gltexture_t *glt)
+{
+	if ((glt->flags & TEXPREF_OWNSOURCE) && !glt->source_file[0] && glt->source_offset)
+		Z_Free ((void *)glt->source_offset);
+
+	glt->flags &= ~TEXPREF_OWNSOURCE;
+	glt->source_offset = 0;
+	glt->source_file[0] = 0;
+}
+
 //ericw -- workaround for preventing TexMgr_FreeTexture during TexMgr_ReloadImages
 static qboolean in_reload_images;
 
@@ -878,6 +888,7 @@ void TexMgr_FreeTexture (gltexture_t *kill)
 
 	if (active_gltextures == kill)
 	{
+		TexMgr_FreeOwnedSource(kill);
 		active_gltextures = kill->next;
 		kill->next = free_gltextures;
 		free_gltextures = kill;
@@ -891,6 +902,7 @@ void TexMgr_FreeTexture (gltexture_t *kill)
 	{
 		if (glt->next == kill)
 		{
+			TexMgr_FreeOwnedSource(kill);
 			glt->next = kill->next;
 			kill->next = free_gltextures;
 			free_gltextures = kill;
@@ -2135,6 +2147,8 @@ gltexture_t *TexMgr_LoadImage (qmodel_t *owner, const char *name, int width, int
 
 	if (!glt)
 		glt = TexMgr_NewTexture ();
+	else
+		TexMgr_FreeOwnedSource(glt);
 
 	// copy data
 	glt->owner = owner;
@@ -2450,7 +2464,7 @@ struct gltexture_s *TexMgr_ColormapTexture(struct gltexture_s *basetex, plcolour
 	q_strlcpy (glt->name, basetex->name, sizeof(glt->name));
 	glt->width = basetex->width;
 	glt->height = basetex->height;
-	glt->flags = basetex->flags|TEXPREF_OVERWRITE;
+	glt->flags = (basetex->flags & ~TEXPREF_OWNSOURCE)|TEXPREF_OVERWRITE;
 	glt->shirt = upper;
 	glt->pants = lower;
 	q_strlcpy (glt->source_file, basetex->source_file, sizeof(glt->source_file));
