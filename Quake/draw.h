@@ -52,6 +52,7 @@ void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha); // w
 void Draw_Character_Rotation (int x, int y, int num, int rotation); // woods #movementkeys
 void Draw_DebugChar (char num);
 void Draw_Pic (int x, int y, qpic_t *pic);
+void Draw_ScaledPic (int x, int y, qpic_t *pic, float scale); // woods #shownet
 void Draw_Pic_RGBA_Outline (int x, int y, qpic_t* pic, plcolour_t c, float alpha, float outlineThickness); // woods #varmatchclock
 void Draw_SubPic (float x, float y, float w, float h, qpic_t *pic, float s1, float t1, float s2, float t2);
 void Draw_TransPicTranslate (int x, int y, qpic_t *pic, plcolour_t top, plcolour_t bottom); //johnfitz -- more parameters

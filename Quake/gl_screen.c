@@ -4133,6 +4133,8 @@ SCR_DrawNet
 */
 void SCR_DrawNet (void)
 {
+	float scale;
+
 	scr_shownet.value = CLAMP(0, scr_shownet.value, 10);
 	
 	if (!scr_shownet.value)
@@ -4145,7 +4147,8 @@ void SCR_DrawNet (void)
 
 	GL_SetCanvas (CANVAS_DEFAULT2); // woods
 
-	Draw_Pic (scr_vrect.x+64, scr_vrect.y, scr_net);
+	scale = q_max(1.0f, q_min(scr_conscale.value, (float)glwidth / vid.conwidth) * 0.5f);
+	Draw_ScaledPic (scr_vrect.x+64, scr_vrect.y, scr_net, scale);
 }
 
 /*

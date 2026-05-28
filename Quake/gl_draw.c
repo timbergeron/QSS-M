@@ -1927,6 +1927,38 @@ void Draw_ScaledPicAlpha (int x, int y, qpic_t* pic, float scale, float alpha)
 
 /*
 =============
+Draw_ScaledPic -- woods #shownet
+=============
+*/
+void Draw_ScaledPic (int x, int y, qpic_t *pic, float scale)
+{
+	if (!pic || scale <= 0.0f)
+		return;
+
+	glpic_t		*gl;
+
+	if (scrap_dirty)
+		Scrap_Upload ();
+	gl = (glpic_t *)pic->data;
+
+	if ((uintptr_t)gl < 0x1000)
+		return;
+
+	GL_Bind (gl->gltexture);
+	glBegin (GL_QUADS);
+	glTexCoord2f (gl->sl, gl->tl);
+	glVertex2f (x, y);
+	glTexCoord2f (gl->sh, gl->tl);
+	glVertex2f (x + pic->width * scale, y);
+	glTexCoord2f (gl->sh, gl->th);
+	glVertex2f (x + pic->width * scale, y + pic->height * scale);
+	glTexCoord2f (gl->sl, gl->th);
+	glVertex2f (x, y + pic->height * scale);
+	glEnd ();
+}
+
+/*
+=============
 Draw_Pic -- johnfitz -- modified
 =============
 */
