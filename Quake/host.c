@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "bgmusic.h"
 #include "pmove.h"
+#include "f_modified.h"
 #include <setjmp.h>
 #include "time.h" // woods #cfgbackup
 
@@ -1881,6 +1882,8 @@ void Host_Init (void)
 	LOC_PQ_Init (); // rook / woods #pqteam (added PQ to name)
 	if (cls.state != ca_dedicated)
 		IPLog_Init ();		// JPG 1.05 - ip address logging // woods #iplog
+	if (cls.state != ca_dedicated)
+		FMod_Init ();
 
 #ifdef QSS_DATE	//avoid non-determinism.
 	Con_Printf ("Exe: " ENGINE_NAME_AND_VER "\n");
@@ -1891,9 +1894,13 @@ void Host_Init (void)
 
 	if (cls.state != ca_dedicated)
 	{
+		size_t colormap_len;
+
 		host_colormap = (byte *)COM_LoadHunkFile ("gfx/colormap.lmp", NULL);
+		colormap_len = (com_filesize > 0) ? (size_t)com_filesize : 0;
 		if (!host_colormap)
 			Sys_Error ("Couldn't load gfx/colormap.lmp");
+		FMod_CheckModel ("gfx/colormap.lmp", host_colormap, colormap_len);
 
 		V_Init ();
 		Chase_Init ();

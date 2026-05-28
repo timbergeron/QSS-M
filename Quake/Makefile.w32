@@ -323,6 +323,7 @@ OBJS := strlcat.o \
 	json.o \
 	mdfour.o \
 	fs_zip.o \
+	f_modified.o \
 	crc.o \
 	cvar.o \
 	cfgfile.o \

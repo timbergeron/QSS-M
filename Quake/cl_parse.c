@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_parse.c  -- parse a message received from the server
 
 #include "quakedef.h"
+#include "f_modified.h"
 #include "q_ctype.h" // woods #serveralias
 #include "bgmusic.h"
 #include "arch_def.h" // woods for f_system
@@ -3426,6 +3427,16 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			MSG_WriteByte (&cls.message, clc_stringcmd);
 			MSG_WriteString(&cls.message,va("say %s %s %d-bit", ENGINE_NAME_AND_VER, platform, bit)); // woods add bit, adapted from ironwail
 			cl.printversionresponse = realtime+20;
+		}
+	}
+
+	if (!cls.demoplayback && !cl.matchinp && *printtext == 1 && e-printtext > 14 && !strcmp(e-13, ": f_modified\n"))
+	{
+		if (realtime > cl.printmodifiedresponse)
+		{
+			MSG_WriteByte (&cls.message, clc_stringcmd);
+			MSG_WriteString(&cls.message, va("say %s", FMod_Response_Text()));
+			cl.printmodifiedresponse = realtime + 20;
 		}
 	}
 

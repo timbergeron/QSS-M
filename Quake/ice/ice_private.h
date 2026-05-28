@@ -152,29 +152,7 @@ typedef unsigned char qbyte;
 #define STRINGIFY(x) STRINGIFY2(x)
 
 //hash functions.
-#define DIGEST_MAXSIZE	(512/8)	//largest valid digest size, in bytes
-typedef struct
-{
-	unsigned int digestsize;
-	unsigned int contextsize;	//you need to alloca(te) this much memory...
-	void (*init) (void *context);
-	void (*process) (void *context, const void *data, size_t datasize);
-	void (*terminate) (unsigned char *digest, void *context);
-} hashfunc_t;
-//its annoying how many different types of hashes we need for different things.
-extern hashfunc_t hash_md5;			//required for turn, otherwise deprecated
-extern hashfunc_t hash_sha1;		//required for websockets. probably should be deprecated.
-extern hashfunc_t hash_sha2_224;	//potentially used by webrtc. probably should be deprecated.
-extern hashfunc_t hash_sha2_256;	//required for webrtc
-extern hashfunc_t hash_sha2_384;	//potentially used by webrtc
-extern hashfunc_t hash_sha2_512;	//potentially used by webrtc
-#define hash_certfp hash_sha2_256	//This is the hash function we're using to compute *fp serverinfo. we can detect 1/2-256/2-512 by sizes, but we need consistency to avoid confusion in clientside things too.
-
-//burried in the sha1 file, but kept generic.
-size_t CalcHMAC(const hashfunc_t *hashfunc, unsigned char *digest, size_t maxdigestsize,
-				 const unsigned char *data, size_t datalen,
-				 const unsigned char *key, size_t keylen);
-size_t CalcHash(const hashfunc_t *func, unsigned char *digest, size_t maxdigestsize, const unsigned char *string, size_t stringlen);	//simple helper.
+#include "../q_hash.h"
 
 typedef enum
 {

@@ -224,6 +224,7 @@ OBJS = strlcat.obj &
 	common.obj &
 	mdfour.obj &
 	fs_zip.obj &
+	f_modified.obj &
 	crc.obj &
 	cvar.obj &
 	cfgfile.obj &

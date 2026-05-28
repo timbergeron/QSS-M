@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //gl_texmgr.c -- fitzquake's texture manager. manages opengl texture images
 
 #include "quakedef.h"
+#include "f_modified.h"
 #include <time.h>
 
 static const int	gl_solid_format = 3;
@@ -1036,15 +1037,19 @@ TexMgr_LoadPalette -- johnfitz -- was VID_SetPalette, moved here, renamed, rewri
 */
 void TexMgr_LoadPalette (void)
 {
-	byte *pal, *src, *dst;
+	byte *pal, *palfile, *src, *dst;
 	int i, mark;
-	FILE *f;
+	qofs_t pal_len;
 
 	int fullbrights = 32;
 	int firstfullbright;
 	{
+		qofs_t colormap_len;
 		byte *colormap = COM_LoadMallocFile("gfx/colormap.lmp", NULL);
-		if (colormap && com_filesize == VID_GRADES*256+1)
+		colormap_len = colormap ? com_filesize : 0;
+		if (colormap)
+			FMod_CheckModel ("gfx/colormap.lmp", colormap, (colormap_len > 0) ? (size_t)colormap_len : 0);
+		if (colormap && colormap_len == VID_GRADES*256+1)
 		{
 			byte *darks = colormap + (VID_GRADES-1)*256;
 			fullbrights = 0;
@@ -1061,18 +1066,21 @@ void TexMgr_LoadPalette (void)
 	firstfullbright = 256-fullbrights;
 
 
-	COM_FOpenFile ("gfx/palette.lmp", &f, NULL);
-	if (!f)
+	palfile = COM_LoadMallocFile ("gfx/palette.lmp", NULL);
+	pal_len = palfile ? com_filesize : 0;
+	if (!palfile)
 		Sys_Error ("Couldn't load gfx/palette.lmp");
+	FMod_CheckModel ("gfx/palette.lmp", palfile, (pal_len > 0) ? (size_t)pal_len : 0);
+	if (pal_len < 768)
+	{
+		free(palfile);
+		Sys_Error("Couldn't read gfx/palette.lmp");
+	}
 
 	mark = Hunk_LowMark ();
 	pal = (byte *) Hunk_AllocNoFill (768);
-	if (fread (pal, 1, 768, f) != 768) // woods
-	{
-		fclose(f);
-		Sys_Error("Couldn't read gfx/palette.lmp");
-	}
-	fclose(f);
+	memcpy (pal, palfile, 768);
+	free (palfile);
 
 	//standard palette, 255 is transparent
 	dst = (byte *)d_8to24table;

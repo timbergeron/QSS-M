@@ -316,6 +316,7 @@ OBJS := strlcat.o \
 	common.o \
 	json.o \
 	fs_zip.o \
+	f_modified.o \
 	crc.o \
 	cvar.o \
 	cfgfile.o \

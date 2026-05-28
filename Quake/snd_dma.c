@@ -39,6 +39,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "snd_codec.h"
 #include "bgmusic.h"
+#include "f_modified.h"
 
 static void S_Play (void);
 static void S_PlayVol (void);
@@ -180,6 +181,36 @@ static void SND_Callback_snd_filterquality (cvar_t *var)
 
 /*
 ================
+S_FModCheckExtraSounds
+
+woods: ported from ezQuake (snd_main.c) -- some sounds in the f_modified table
+are not loaded during normal play, so check them explicitly at sound startup.
+================
+*/
+static void S_FModCheckExtraSounds (void)
+{
+	static const char *soundlist[] = {
+		"sound/misc/menu1.wav",
+		"sound/misc/menu2.wav",
+		"sound/misc/menu3.wav",
+		"sound/misc/basekey.wav",
+		"sound/misc/talk.wav",
+		"sound/doors/runeuse.wav",
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(soundlist)/sizeof(soundlist[0]); i++)
+	{
+		byte *data = COM_LoadMallocFile (soundlist[i], NULL);
+		if (!data)
+			continue;
+		FMod_CheckModel (soundlist[i], data, (size_t)com_filesize);
+		free (data);
+	}
+}
+
+/*
+================
 S_Startup
 ================
 */
@@ -198,6 +229,7 @@ void S_Startup (void)
 	{
 		Con_Printf("Audio: %d bit, %s, %d Hz\n", shm->samplebits,
 				(shm->channels == 2) ? "stereo" : "mono", shm->speed);
+		S_FModCheckExtraSounds (); // woods #f_modified
 	}
 	GetSoundtime();
 	paintedtime = soundtime;

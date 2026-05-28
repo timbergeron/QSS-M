@@ -1657,7 +1657,8 @@ static qboolean Cmd_IsPrintTriggerToken (const char *s)
 {
 	return !strcmp(s, "f_version") || !strcmp(s, "q_version") ||
 	       !strcmp(s, "f_system")  || !strcmp(s, "q_sysinfo") ||
-	       !strcmp(s, "f_config")  || !strcmp(s, "f_random");
+	       !strcmp(s, "f_config")  || !strcmp(s, "f_random") ||
+	       !strcmp(s, "f_modified");
 }
 
 /*

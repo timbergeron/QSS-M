@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // on the same machine.
 
 #include "quakedef.h"
+#include "f_modified.h"
 
 qmodel_t	*loadmodel;
 char	loadname[32];	// for hunk tags
@@ -431,6 +432,7 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 {
 	byte	*buf;
 	int	mod_type;
+	qofs_t model_filelen = 0;
 
 	if (!mod->needload)
 	{
@@ -465,6 +467,7 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 			buf = COM_LoadMallocFile (newname, & mod->path_id);
 			if (buf)
 			{
+				model_filelen = com_filesize;
 				if (COM_FileExists(mod->name, &origpathid))
 					if (origpathid > mod->path_id)
 					{
@@ -481,6 +484,8 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 		{
 			memcpy(diskname, mod->name, sizeof(mod->name));
 			buf = COM_LoadMallocFile (mod->name, & mod->path_id);
+			if (buf)
+				model_filelen = com_filesize;
 		}
 	}
 	if (!buf)
@@ -502,6 +507,8 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 		Mod_SetExtraFlags (mod); //johnfitz. spike -- moved this to be generic, because most of the flags are anyway.
 		return mod;
 	}
+	com_filesize = model_filelen;
+	FMod_CheckModel (mod->name, buf, (model_filelen > 0) ? (size_t)model_filelen : 0);
 
 //
 // allocate a new model

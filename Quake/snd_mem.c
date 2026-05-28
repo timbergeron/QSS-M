@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // snd_mem.c: sound caching
 
 #include "quakedef.h"
+#include "f_modified.h"
 #include "snd_codec.h"
 
 static int ResampleSfx_SafeOutcount (int outcount, int inlength, double stepscale)
@@ -158,9 +159,11 @@ S_LoadSound
 sfxcache_t *S_LoadSound (sfx_t *s)
 {
 	char	namebuffer[256];
+	char	fmod_name[256];
 	byte	*data;
 	wavinfo_t	info;
 	int		len;
+	qofs_t	sound_filelen;
 	double	stepscale;
 	sfxcache_t	*sc;
 
@@ -238,9 +241,16 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 
 //	Con_Printf ("loading %s\n",namebuffer);
 
+	sound_filelen = 0;
 	data = COM_LoadMallocFile(namebuffer, NULL);
+	if (data)
+		sound_filelen = com_filesize;
 	if (!data)
+	{
 		data = COM_LoadMallocFile(s->name, NULL);
+		if (data)
+			sound_filelen = com_filesize;
+	}
 
 	if (!data)
 	{
@@ -251,7 +261,13 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 		return NULL;
 	}
 
-	info = GetWavinfo (s->name, data, com_filesize);
+	if (!q_strncasecmp(s->name, "sound/", 6))
+		q_strlcpy(fmod_name, s->name, sizeof(fmod_name));
+	else
+		q_strlcpy(fmod_name, namebuffer, sizeof(fmod_name));
+	FMod_CheckModel (fmod_name, data, (sound_filelen > 0) ? (size_t)sound_filelen : 0);
+
+	info = GetWavinfo (s->name, data, sound_filelen);
 	if (info.channels != 1 && info.channels != 2)
 	{
 		Con_Printf ("%s is a stereo sample\n",s->name);
