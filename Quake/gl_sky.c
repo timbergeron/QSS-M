@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //gl_sky.c
 
 #include "quakedef.h"
+#include "q_ctype.h"
 
 #define	MAX_CLIP_VERTS 64
 
@@ -71,10 +72,221 @@ extern qboolean scr_disabled_for_loading;
 
 static void Sky_ApplyGlobalSkybox(void);
 static void Sky_GlobalSkyboxChanged(cvar_t *var);
+static void Sky_SetMapSkybox(const char *name);
+static qboolean Sky_HasAllSkyboxFaces(const char *name);
 
 #ifndef ARRAY_COUNT
 #define ARRAY_COUNT(arr)   (sizeof(arr) / sizeof((arr)[0]))
 #endif
+
+#define MAX_MAP_SKYBOX_CHOICES 16
+
+static qboolean Sky_IsNumberedSkyboxKey(const char *key, const char *prefix)
+{
+	const char *p;
+
+	if (!key || !prefix || !*key || !*prefix)
+		return false;
+
+	while (*prefix)
+	{
+		if (!*key)
+			return false;
+		if (q_tolower((unsigned char)*key) != q_tolower((unsigned char)*prefix))
+			return false;
+		key++;
+		prefix++;
+	}
+
+	if (!*key)
+		return false; // plain "sky" / "skybox" is handled separately
+
+	for (p = key; *p; p++)
+	{
+		if (!q_isdigit((unsigned char)*p))
+			return false;
+	}
+
+	return true;
+}
+
+// Recognises every worldspawn key that names a skybox (incl. numbered variants
+// like sky1 / skybox2). Shared with the skybox auto-downloader in cl_main.c so
+// the two stay in sync about what counts as a sky key.
+qboolean Sky_IsSkyboxWorldspawnKey(const char *key)
+{
+	if (!key || !*key)
+		return false;
+
+	if (!q_strcasecmp("sky", key) || !q_strcasecmp("skybox", key))
+		return true;
+
+	if (!q_strcasecmp("skyname", key) || !q_strcasecmp("qlsky", key)) //half-life / quake lives
+		return true;
+
+	if (Sky_IsNumberedSkyboxKey(key, "sky"))
+		return true;
+
+	if (Sky_IsNumberedSkyboxKey(key, "skybox"))
+		return true;
+
+	return false;
+}
+
+// True only for the numbered opt-in variants (sky1, skybox2, ...). The bare
+// aliases (sky/skybox/skyname/qlsky) are deliberately excluded so they keep
+// legacy last-wins behaviour unless they carry a multi-value list.
+static qboolean Sky_IsNumberedSkyboxWorldspawnKey(const char *key)
+{
+	return Sky_IsNumberedSkyboxKey(key, "sky") || Sky_IsNumberedSkyboxKey(key, "skybox");
+}
+
+// Counts how many whitespace/comma/semicolon separated tokens a value holds,
+// without allocating or warning. Used to decide whether a bare alias opts into
+// randomization (a list) or stays a single legacy value.
+static int Sky_CountSkyboxTokens(const char *value)
+{
+	const char *p = value;
+	int n = 0;
+
+	if (!p)
+		return 0;
+
+	while (*p)
+	{
+		while (*p && (q_isspace((unsigned char)*p) || *p == ',' || *p == ';'))
+			p++;
+		if (!*p)
+			break;
+		n++;
+		while (*p && !q_isspace((unsigned char)*p) && *p != ',' && *p != ';')
+			p++;
+	}
+
+	return n;
+}
+
+// Parses a worldspawn skybox value (space/comma/semicolon separated) and appends
+// each unique name (case-insensitive) to choices[], up to maxchoices. Returns the
+// new count. Shared by the render path (Sky_NewMap) and the auto-downloader
+// (CL_CheckDownloads) so both dedupe and cap identically.
+int Sky_AddMapSkyboxChoices(char choices[][MAX_QPATH], int count, int maxchoices, const char *value)
+{
+	char list[4096];
+	char *p;
+
+	if (!value || !value[0])
+		return count;
+
+	q_strlcpy(list, value, sizeof(list));
+	p = list;
+
+	while (*p)
+	{
+		char *start;
+		int i;
+
+		while (*p && (q_isspace((unsigned char)*p) || *p == ',' || *p == ';'))
+			p++;
+
+		if (!*p)
+			break;
+
+		start = p;
+
+		while (*p && !q_isspace((unsigned char)*p) && *p != ',' && *p != ';')
+			p++;
+
+		if (*p)
+			*p++ = 0;
+
+		if (!start[0])
+			continue;
+
+		if (strlen(start) >= MAX_QPATH)
+		{
+			Con_Warning("skybox name too long; ignoring random skybox entry\n");
+			continue;
+		}
+
+		for (i = 0; i < count; i++)
+		{
+			if (!q_strcasecmp(choices[i], start))
+				break;
+		}
+		if (i < count)
+			continue;
+
+		if (count >= maxchoices)
+		{
+			Con_Warning("too many random skyboxes; ignoring \"%s\"\n", start);
+			continue;
+		}
+
+		q_strlcpy(choices[count], start, MAX_QPATH);
+		count++;
+	}
+
+	return count;
+}
+
+static int Sky_RandomChoiceIndex(int count)
+{
+	unsigned seed;
+
+	if (count <= 1)
+		return 0;
+
+	seed = (unsigned)(Sys_DoubleTime() * 1000000.0);
+	seed ^= (unsigned)rand();
+
+	return (int)(seed % (unsigned)count);
+}
+
+// Picks one skybox out of the opt-in candidate pool gathered from worldspawn.
+//
+// Randomization is OPT-IN (see Sky_NewMap): it only happens when a map uses
+// numbered keys (sky1/skybox2/...) or gives a bare key a multi-value list. A
+// legacy map with single-valued sky/skybox/skyname/qlsky keys never reaches here
+// and keeps the old "last recognized key wins" precedence.
+//
+// We prefer choices whose faces are all present locally so we never render a
+// broken sky. The auto-downloader (CL_CheckDownloads) fetches *every* listed
+// skybox up front, so once downloads finish the whole list is local and the pick
+// randomizes across all of them. If downloads are disabled/failed we only pick
+// from what is actually on disk, which is the desired fallback.
+static void Sky_SetRandomMapSkybox(char choices[MAX_MAP_SKYBOX_CHOICES][MAX_QPATH], int count)
+{
+	int complete[MAX_MAP_SKYBOX_CHOICES];
+	int complete_count = 0;
+	int choice;
+	int i;
+
+	if (count <= 0)
+		return;
+
+	for (i = 0; i < count; i++)
+	{
+		if (Sky_HasAllSkyboxFaces(choices[i]))
+			complete[complete_count++] = i;
+	}
+
+	if (complete_count > 0)
+	{
+		choice = complete[Sky_RandomChoiceIndex(complete_count)];
+		if (complete_count != count)
+			Con_DPrintf("random skybox: using %d complete local choices out of %d listed\n", complete_count, count);
+	}
+	else
+	{
+		choice = Sky_RandomChoiceIndex(count);
+	}
+
+	Sky_SetMapSkybox(choices[choice]);
+
+	if (count > 1)
+		Con_DPrintf("random skybox: %s (%d of %d)\n", choices[choice], choice + 1, count);
+}
 
 static const int skytexorder[6] = {0,2,1,3,4,5}; //for skybox
 
@@ -2093,12 +2305,18 @@ void Sky_NewMap (void)
 {
 	char	key[128], value[4096];
 	char	skywind_value[4096];
+	char	skybox_choices[MAX_MAP_SKYBOX_CHOICES][MAX_QPATH];
+	char	legacy_skybox_name[MAX_QPATH];
 	const char	*data;
+	int		skybox_choice_count = 0;
+	qboolean	have_legacy_skybox = false;
 	qboolean	skywind_from_worldspawn = false;
 
 	skyfog = r_skyfog.value;
 	map_skybox_name[0] = 0;
 	skywind_value[0] = 0;
+	legacy_skybox_name[0] = 0;
+	memset(skybox_choices, 0, sizeof(skybox_choices));
 	Sky_ClearSkyboxOrientation();
 
 	//
@@ -2132,8 +2350,19 @@ void Sky_NewMap (void)
 			return; // error
 		q_strlcpy(value, com_token, sizeof(value));
 
-		if (!strcmp("sky", key))
-			Sky_SetMapSkybox(value);
+		if (Sky_IsSkyboxWorldspawnKey(key))
+		{
+			// Numbered keys (sky1/skybox2/...) and multi-value lists opt into
+			// random selection. A bare alias with a single value keeps legacy
+			// last-wins precedence instead of joining the random pool.
+			if (Sky_IsNumberedSkyboxWorldspawnKey(key) || Sky_CountSkyboxTokens(value) > 1)
+				skybox_choice_count = Sky_AddMapSkyboxChoices(skybox_choices, skybox_choice_count, MAX_MAP_SKYBOX_CHOICES, value);
+			else
+			{
+				q_strlcpy(legacy_skybox_name, value, sizeof(legacy_skybox_name));
+				have_legacy_skybox = true;
+			}
+		}
 		else if (!strcmp("skyrotate", key))
 			skybox_orientation[3] = (float)atof(value);
 		else if (!strcmp("skyaxis", key))
@@ -2167,13 +2396,14 @@ void Sky_NewMap (void)
 			q_strlcpy(skywind_value, value, sizeof(skywind_value));
 			skywind_from_worldspawn = true;
 		}
-#if 1 /* also accept non-standard keys */
-		else if (!strcmp("skyname", key)) //half-life
-			Sky_SetMapSkybox(value);
-		else if (!strcmp("qlsky", key)) //quake lives
-			Sky_SetMapSkybox(value);
-#endif
 	}
+
+	// Opt-in random pool takes precedence; otherwise honour the legacy single
+	// alias (last recognized key wins), matching pre-randomization behaviour.
+	if (skybox_choice_count > 0)
+		Sky_SetRandomMapSkybox(skybox_choices, skybox_choice_count);
+	else if (have_legacy_skybox)
+		Sky_SetMapSkybox(legacy_skybox_name);
 
 	Sky_ApplyGlobalSkybox();
 

@@ -3617,17 +3617,32 @@ qboolean CL_CheckDownload(const char *filename)
 	return true;
 }
 
+extern qboolean Sky_IsSkyboxWorldspawnKey(const char *key); // gl_sky.c, keeps key recognition in sync
+
+// Appends a worldspawn sky value to a space-separated accumulator. The value may
+// itself be a multi-skybox list ("a b c"); the downloader re-tokenizes the whole
+// buffer, so we just join raw values here.
+static void Sky_AppendSkyName(char *outbuf, size_t outsz, const char *value)
+{
+	if (!value || !value[0])
+		return;
+	if (outbuf[0])
+		q_strlcat(outbuf, " ", outsz);
+	q_strlcat(outbuf, value, outsz);
+}
+
 /*
 =============================================================================
  Sky_PeekSkyKeyFromBSP -- woods
 -----------------------------------------------------------------------------
-Looks for a worldspawn "sky" key in a map.
+Looks for worldspawn skybox keys in a map (sky/skyname/qlsky/skybox and the
+numbered variants, see Sky_IsSkyboxWorldspawnKey).
 Order of search
    1. Inside the BSP's entity lump
    2. If not found, an external entity file  maps/<mapname>.ent
 
-Returns true and puts the sky string in *outbuf  (truncated to outsz-1)
-if a key is found; otherwise returns false and leaves *outbuf empty.
+Returns true and puts a space-separated list of every sky name found in *outbuf
+(truncated to outsz-1); otherwise returns false and leaves *outbuf empty.
 =============================================================================
 */
 qboolean Sky_PeekSkyKeyFromBSP(const char* bspname,
@@ -3692,14 +3707,10 @@ qboolean Sky_PeekSkyKeyFromBSP(const char* bspname,
 				p = COM_Parse(p);
 				if (!p) break;
 
-				if (!q_strcasecmp(key, "sky") ||
-					!q_strcasecmp(key, "_sky") ||
-					!q_strcasecmp(key, "skyname") ||
-					!q_strcasecmp(key, "qlsky"))
+				if (Sky_IsSkyboxWorldspawnKey(key))
 				{
-					q_strlcpy(outbuf, com_token, outsz);
+					Sky_AppendSkyName(outbuf, outsz, com_token);
 					ok = true;
-					break;
 				}
 			}
 		}
@@ -3750,14 +3761,10 @@ try_external_ent:
 				p = COM_Parse(p);
 				if (!p) break;
 
-				if (!q_strcasecmp(key, "sky") ||
-					!q_strcasecmp(key, "_sky") ||
-					!q_strcasecmp(key, "skyname") ||
-					!q_strcasecmp(key, "qlsky"))
+				if (Sky_IsSkyboxWorldspawnKey(key))
 				{
-					q_strlcpy(outbuf, com_token, outsz);
+					Sky_AppendSkyName(outbuf, outsz, com_token);
 					ok = true;
-					break;
 				}
 			}
 			if (ok) break;
@@ -3775,6 +3782,7 @@ try_external_ent:
 extern qboolean Sky_DownloadsDisabled(void);
 extern qboolean Sky_DownloadSkybox(const char* name);
 extern void Sky_WarnMissingSkybox(const char* name);
+extern int Sky_AddMapSkyboxChoices(char choices[][MAX_QPATH], int count, int maxchoices, const char *value); // gl_sky.c, shared parse/dedupe
 
 //download+load models and sounds as needed, once complete let the server know we're ready for the next stage.
 //returning false will trigger nops.
@@ -3822,18 +3830,31 @@ qboolean CL_CheckDownloads(void)
 		&& cl.model_name[1][0]                    /* we know the BSP path  */
 		&& COM_FileExists(cl.model_name[1], NULL)) /* BSP already here      */
 	{
-		char skyname[64] = { 0 };
+		char skylist[1024] = { 0 };
 
-		if (Sky_PeekSkyKeyFromBSP(cl.model_name[1], skyname, sizeof(skyname))
-			&& skyname[0])
+		if (Sky_PeekSkyKeyFromBSP(cl.model_name[1], skylist, sizeof(skylist))
+			&& skylist[0]
+			&& !Sky_DownloadsDisabled())
 		{
-			qboolean try_skybox_download = !Sky_DownloadsDisabled();
+			/* worldspawn may list several skyboxes (random sky feature in
+			   gl_sky.c). Parse with the same dedupe/cap helper the render path
+			   uses, then download each unique one so the random pick always has a
+			   complete local set. Sky_DownloadSkybox no-ops on skyboxes already
+			   fully present. */
+			/* size >= MAX_MAP_SKYBOX_CHOICES in gl_sky.c so we pre-fetch every
+			   choice the render path might pick; helper caps at the size we pass */
+			char skychoices[16][MAX_QPATH];
+			int  skycount = Sky_AddMapSkyboxChoices(skychoices, 0,
+				(int)countof(skychoices), skylist);
 
-			/* Only try if any face is missing; Sky_DownloadSkybox itself
-			   skips mirrors that aren't in user/repo/branch form       */
-			if (try_skybox_download && !Sky_DownloadSkybox(skyname))
-				Sky_WarnMissingSkybox(skyname);
-			/* on failure we still fall through – we tried once */
+			for (i = 0; i < skycount; i++)
+			{
+				/* Only try if any face is missing; Sky_DownloadSkybox itself
+				   skips mirrors that aren't in user/repo/branch form */
+				if (!Sky_DownloadSkybox(skychoices[i]))
+					Sky_WarnMissingSkybox(skychoices[i]);
+				/* on failure we still fall through – we tried once */
+			}
 		}
 
 		cl.skybox_download++;      /* always advance so we never loop */
