@@ -26100,6 +26100,7 @@ typedef struct
 	char        date[32];
 	char        map[64];
 	char        players[256];
+	char        stats[64];
 	char        duration[16];
 	char        filesize[16];
 	qboolean    active;
@@ -26113,6 +26114,12 @@ typedef struct
 	char        players[256];
 	float       duration;
 	float       filesize_mb;
+	qboolean    singleplayer;
+	int         kills;
+	int         total_kills;
+	int         secrets;
+	int         total_secrets;
+	int         skill;          /* 0-3, or -1 if not present in the demo */
 } demoinfo_t;
 
 static void FormatDuration(float secs, char *out, size_t outlen)
@@ -26240,6 +26247,120 @@ static byte *M_LoadDemoInfoData(const char *name, int *length_out)
 	return CL_LoadDemoBuffer(name, length_out);
 }
 
+/* ------------------------------------------------------------------------
+   Bounds-checked demo message reader. The demo is a sequence of
+   length-prefixed blocks, so a mis-parse inside one block is contained:
+   we set ->error, abandon that block, and the next block's length prefix
+   re-syncs us. The walker only needs to reach the per-frame stats, which
+   the server always writes before the (protocol-dependent) entity data,
+   so we can stop a block at the first entity/sound/unhandled command.
+   ------------------------------------------------------------------------ */
+typedef struct
+{
+	const byte	*data;
+	int			pos;
+	int			end;
+	qboolean	error;
+} demoreader_t;
+
+static int DR_Byte(demoreader_t *r)
+{
+	if (r->error || r->pos + 1 > r->end) { r->error = true; return 0; }
+	return r->data[r->pos++];
+}
+static int DR_Short(demoreader_t *r)
+{
+	short v;
+	if (r->error || r->pos + 2 > r->end) { r->error = true; return 0; }
+	memcpy(&v, r->data + r->pos, 2); r->pos += 2;
+	return (short)LittleShort(v);
+}
+static int DR_Long(demoreader_t *r)
+{
+	int v;
+	if (r->error || r->pos + 4 > r->end) { r->error = true; return 0; }
+	memcpy(&v, r->data + r->pos, 4); r->pos += 4;
+	return LittleLong(v);
+}
+static float DR_Float(demoreader_t *r)
+{
+	float v;
+	if (r->error || r->pos + 4 > r->end) { r->error = true; return 0.0f; }
+	memcpy(&v, r->data + r->pos, 4); r->pos += 4;
+	return LittleFloat(v);
+}
+static void DR_Skip(demoreader_t *r, int n)
+{
+	if (r->error || n < 0 || r->pos + n > r->end) { r->error = true; return; }
+	r->pos += n;
+}
+static void DR_SkipString(demoreader_t *r)
+{
+	while (!r->error && r->pos < r->end && r->data[r->pos] != 0) r->pos++;
+	if (r->pos >= r->end) r->error = true; else r->pos++;
+}
+
+static int DR_CoordSize(unsigned int flags)
+{
+	if (flags & (PRFL_FLOATCOORD | PRFL_INT32COORD)) return 4;
+	if (flags & PRFL_24BITCOORD) return 3;
+	return 2;
+}
+static int DR_AngleSize(unsigned int flags)
+{
+	if (flags & PRFL_FLOATANGLE) return 4;
+	if (flags & PRFL_SHORTANGLE) return 2;
+	return 1;
+}
+
+static void DR_RecordStat(demoinfo_t *info, int *stat_kills, int *stat_secrets, int stat, int val)
+{
+	switch (stat)
+	{
+	case STAT_TOTALMONSTERS: info->total_kills = val; break;
+	case STAT_TOTALSECRETS:  info->total_secrets = val; break;
+	case STAT_MONSTERS:      if (val > *stat_kills)   *stat_kills = val; break;
+	case STAT_SECRETS:       if (val > *stat_secrets) *stat_secrets = val; break;
+	}
+}
+
+/* Parse svc_clientdata far enough to land on whatever follows it (the
+   per-frame stats live just after). Mirrors CL_ParseClientdata for the
+   NetQuake/FitzQuake/RMQ field layout; bit-driven, so no coords and no
+   protocolflags dependence. (DP7/BJP3 size a couple of fields differently,
+   but those are rare and a mis-size only abandons this one block.) */
+static void DR_SkipClientdata(demoreader_t *r)
+{
+	unsigned int bits = (unsigned short)DR_Short(r);
+	int i;
+
+	if (bits & SU_EXTEND1) bits |= (unsigned int)DR_Byte(r) << 16;
+	if (bits & SU_EXTEND2) bits |= (unsigned int)DR_Byte(r) << 24;
+
+	if (bits & SU_VIEWHEIGHT) DR_Byte(r);
+	if (bits & SU_IDEALPITCH) DR_Byte(r);
+	for (i = 0; i < 3; i++)
+	{
+		if (bits & (SU_PUNCH1 << i)) DR_Byte(r);
+		if (bits & (SU_VELOCITY1 << i)) DR_Byte(r);
+	}
+	DR_Long(r);				/* items (SU_ITEMS is forced on, so always sent) */
+	if (bits & SU_WEAPONFRAME) DR_Byte(r);
+	if (bits & SU_ARMOR) DR_Byte(r);
+	if (bits & SU_WEAPON) DR_Byte(r);
+	DR_Short(r);			/* health */
+	DR_Skip(r, 6);			/* ammo, shells, nails, rockets, cells, activeweapon */
+	if (bits & SU_WEAPON2) DR_Byte(r);
+	if (bits & SU_ARMOR2) DR_Byte(r);
+	if (bits & SU_AMMO2) DR_Byte(r);
+	if (bits & SU_SHELLS2) DR_Byte(r);
+	if (bits & SU_NAILS2) DR_Byte(r);
+	if (bits & SU_ROCKETS2) DR_Byte(r);
+	if (bits & SU_CELLS2) DR_Byte(r);
+	if (bits & SU_WEAPONFRAME2) DR_Byte(r);
+	if (bits & SU_WEAPONALPHA) DR_Byte(r);
+}
+
 static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 {
 	int length;
@@ -26251,8 +26372,18 @@ static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 	info->map[0] = info->players[0] = '\0';
 	info->duration = 0.0f;
 	info->filesize_mb = length / (1024.0f * 1024.0f);
+	info->singleplayer = false;
+	info->kills = info->total_kills = info->secrets = info->total_secrets = 0;
+	info->skill = -1;
 
 	int maxclients = 16;
+	qboolean maxclients_found = false;
+
+	/* single-player stat tracking: totals come from svc_updatestat during
+	   signon; current counts come either from svc_updatestat or from the
+	   svc_killedmonster/svc_foundsecret events that bump them client-side */
+	int stat_kills = 0, stat_secrets = 0;
+	int killed_events = 0, secret_events = 0;
 
 	int  player_peak_frags[32];
 	memset(player_peak_frags, 0x9D, sizeof(player_peak_frags));   /* -99 */
@@ -26268,161 +26399,300 @@ static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 	qboolean map_found = M_FindDemoMapNameInData(data, off, length,
 		info->map, sizeof(info->map));
 	float last_time = 0.0f;
+	float first_time = -1.0f;	/* server clock is absolute uptime, not demo-relative */
 	int frame_count = 0;
 
-	while (off < length - 16)
-	{
-		if (off + 4 > length) break;
+	int protocol = PROTOCOL_NETQUAKE;
+	unsigned int protocolflags = 0;
+	unsigned int pext2 = 0;
+	qboolean predinfo = false;
+	int coordsize = 2, anglesize = 1;
+	qboolean done = false;
 
-		int msg_len = LittleLong(*(int*)(data + off));
+	while (!done && off <= length - 16)
+	{
+		int msg_len, msg_end;
+		demoreader_t r;
+
+		memcpy(&msg_len, data + off, sizeof(msg_len));
+		msg_len = LittleLong(msg_len);
 		off += 4;
 
-		if (msg_len <= 0 || msg_len > 32768 || off + 12 + msg_len > length)
+		if (msg_len <= 0 || msg_len > MAX_MSGLEN || off + 12 + msg_len > length)
 			break;
 
 		off += 12;                    /* skip view angles */
-		int msg_end = off + msg_len;  /* inner loop bound */
+		msg_end = off + msg_len;
 
-		while (off < msg_end)
+		r.data = data; r.pos = off; r.end = msg_end; r.error = false;
+
+		while (r.pos < r.end && !r.error)
 		{
-			byte cmd = data[off++];
+			int cmd = DR_Byte(&r);
+			if (r.error) break;
+
+			/* An entity update (high bit set) means we've passed the
+			   per-frame stats the server writes earlier in the packet;
+			   the entity format is protocol/flag-dependent (and FTE-delta
+			   on modern demos), so stop here and re-sync on the next block. */
+			if (cmd & U_SIGNAL)
+				break;
 
 			switch (cmd)
 			{
+			case svc_bad:
+			case svc_nop:
+				break;
+
+			case svc_disconnect:
+				r.pos = r.end;
+				break;
+
+			case svc_time:
+				last_time = DR_Float(&r);
+				if (predinfo) DR_Skip(&r, 2);	/* PEXT2_PREDINFO move-ack short */
+				if (!r.error && first_time < 0.0f) first_time = last_time;
+				frame_count++;
+				break;
+
+			case svc_version:
+				DR_Long(&r);
+				break;
+
+			case svc_setview:
+				DR_Short(&r);
+				break;
+
 			case svc_print:
+				DR_SkipString(&r);
+				break;
+
 			case svc_stufftext:
-				off = SkipCStringOffset(data, off, msg_end);
+			{
+				int str_start = r.pos;
+				DR_SkipString(&r);
+
+				/* QSS forwards serverinfo cvars (incl. CVAR_SERVERINFO "skill")
+				   as a //fullserverinfo "\key\value..." stuffcmd; older demos
+				   simply lack this, leaving skill unknown. */
+				if (!r.error && info->skill < 0)
+				{
+					const char *s = (const char *)(data + str_start);
+					const char *pre = "//fullserverinfo ";
+					int prelen = (int)strlen(pre);
+					int avail = r.pos - 1 - str_start;	/* exclude null terminator */
+					if (avail > prelen && !strncmp(s, pre, prelen))
+					{
+						const char *q1 = memchr(s + prelen, '"', avail - prelen);
+						const char *q2 = q1 ? memchr(q1 + 1, '"', (s + avail) - (q1 + 1)) : NULL;
+						if (q1 && q2)
+						{
+							char infostr[1024], skillbuf[16];
+							int ilen = (int)(q2 - (q1 + 1));
+							if (ilen >= (int)sizeof(infostr)) ilen = sizeof(infostr) - 1;
+							memcpy(infostr, q1 + 1, ilen);
+							infostr[ilen] = '\0';
+							skillbuf[0] = '\0';
+							Info_GetKey(infostr, "skill", skillbuf, sizeof(skillbuf));
+							if (skillbuf[0])
+								info->skill = atoi(skillbuf);
+						}
+					}
+				}
+				break;
+			}
+
+			case svc_setangle:
+				DR_Skip(&r, 3 * anglesize);
 				break;
 
 			case svc_serverinfo:
 			{
-				int pos = off;
-				while (pos + 4 < msg_end)
+				int p = PROTOCOL_NETQUAKE;
+				for (;;)
 				{
-					int proto = LittleLong(*(int*)(data + pos));
-					pos += 4;
-
-					/* skip extension blocks -------------------------- */
-					if (proto == 0x80000001 || proto == 0x80000002      // QuakeSpasm/QSS
-						|| proto == 0x31544546 || proto == 0x32455446)    // 'FTE1' / 'FTE2'
-					{
-						pos += 4;           // skip associated flags/size field
-						continue;
-					}
-
-					/* FITZQUAKE (666) carries an extra flags int */
-					if (proto == 666)
-					{
-						int fitzFlags = LittleLong(*(int*)(data + pos));
-						Con_DPrintf("\n%i", fitzFlags);
-						pos += 4;           // you might want to store this if you care
-					}
-
-					/* now the next byte really *is* maxclients */
-					if (pos < msg_end)
-					{
-						maxclients = data[pos];
-						if (maxclients > 32) maxclients = 32;
-					}
+					p = DR_Long(&r);
+					if (r.error) break;
+					if (p == PROTOCOL_FTE_PEXT1) { DR_Long(&r); continue; }
+					if (p == PROTOCOL_FTE_PEXT2) { pext2 = (unsigned int)DR_Long(&r); continue; }
 					break;
 				}
-
-				if (!map_found)
+				if (!r.error)
 				{
-					for (int i = off; i < msg_end - 5; i++)
+					protocol = p;
+					if (protocol == PROTOCOL_RMQ)
+						protocolflags = (unsigned int)DR_Long(&r);
+					else if (protocol == PROTOCOL_VERSION_DP7)
+						protocolflags = PRFL_SHORTANGLE | PRFL_FLOATCOORD;
+					else
+						protocolflags = 0;
+					predinfo = (pext2 & PEXT2_PREDINFO) != 0;
+					coordsize = DR_CoordSize(protocolflags);
+					anglesize = DR_AngleSize(protocolflags);
+					if (predinfo)
+						DR_SkipString(&r);	/* server gamedir */
 					{
-						if (!memcmp(data + i, "maps/", 5))
+						int mc = DR_Byte(&r);
+						if (!r.error)
 						{
-							int j = i + 5;
-							while (j < msg_end && data[j] && data[j] != '/') j++;
-							int end = j;
-							for (; end < msg_end - 4; end++)
-								if (!memcmp(data + end, ".bsp", 4)) break;
-							if (end < msg_end - 4)
-							{
-								int nlen = end - (i + 5);
-								if (nlen >= (int)sizeof(info->map)) nlen = sizeof(info->map) - 1;
-								memcpy(info->map, data + i + 5, nlen);
-								info->map[nlen] = '\0';
-								char* ext = strstr(info->map, ".bsp");
-								if (ext) *ext = '\0';
-								map_found = true;
-								off = msg_end;           /* early skip */
-								goto msg_end_reached;
-							}
-							break;
+							if (mc < 1) mc = 1;
+							if (mc > 32) mc = 32;
+							maxclients = mc;
+							maxclients_found = true;
 						}
 					}
 				}
-				off = msg_end;         /* skip rest */
-				goto msg_end_reached;
+				/* the remainder is gametype + mapname + precache lists; the
+				   map name is recovered by the global scan above */
+				r.pos = r.end;
+				break;
 			}
 
-			case svc_updatename:
-				if (off < msg_end)
-				{
-					int pl = data[off++];
-					if (pl >= 0 && pl < maxclients)
-					{
-						int start = off;
-						off = SkipCStringOffset(data, off, msg_end);
-						int nlen = off - start - 1;
-						if (nlen > 0 && nlen < MAX_QPATH)
-						{
-							char tmp[MAX_QPATH];
-							memcpy(tmp, data + start, nlen); tmp[nlen] = '\0';
-
-							char clean[16]; q_strlcpy(clean, tmp, sizeof(clean));
-							size_t len = strlen(clean);
-							while (len && isspace((unsigned char)clean[len - 1])) clean[--len] = '\0';
-
-							if (len && strcmp(clean, "unconnected") &&
-								strncmp(clean, "Player ", 7))
-							{
-								q_strlcpy(player_names[pl], clean, sizeof(player_names[pl]));
-								player_has_name[pl] = true;
-							}
-						}
-					}
-					else off = SkipCStringOffset(data, off, msg_end);
-				}
+			case svc_lightstyle:
+				DR_Byte(&r);
+				DR_SkipString(&r);
 				break;
 
-			case svc_updatefrags:
-				if (off + 3 <= msg_end)
+			case svc_updatename:
+			{
+				int pl = DR_Byte(&r);
+				int start = r.pos;
+				DR_SkipString(&r);
+				if (!r.error && pl >= 0 && pl < maxclients)
 				{
-					int pl = data[off++];
-					int fr = LittleShort(*(int16_t*)(data + off));
-					off += 2;
-					if (pl >= 0 && pl < maxclients && fr > player_peak_frags[pl])
-						player_peak_frags[pl] = fr;
+					int nlen = r.pos - 1 - start;
+					if (nlen > 0 && nlen < MAX_QPATH)
+					{
+						char tmp[MAX_QPATH], clean[16];
+						size_t len;
+						memcpy(tmp, data + start, nlen); tmp[nlen] = '\0';
+						q_strlcpy(clean, tmp, sizeof(clean));
+						len = strlen(clean);
+						while (len && isspace((unsigned char)clean[len - 1])) clean[--len] = '\0';
+						if (len && strcmp(clean, "unconnected") &&
+							strncmp(clean, "Player ", 7))
+						{
+							q_strlcpy(player_names[pl], clean, sizeof(player_names[pl]));
+							player_has_name[pl] = true;
+						}
+					}
 				}
-				else goto msg_end_reached;
+				break;
+			}
+
+			case svc_updatefrags:
+			{
+				int pl = DR_Byte(&r);
+				int fr = DR_Short(&r);
+				if (!r.error && pl >= 0 && pl < maxclients && fr > player_peak_frags[pl])
+					player_peak_frags[pl] = fr;
+				break;
+			}
+
+			case svc_clientdata:
+				DR_SkipClientdata(&r);
+				break;
+
+			case svc_stopsound:
+				DR_Short(&r);
 				break;
 
 			case svc_updatecolors:
-				off += (off + 2 <= msg_end) ? 2 : 0;
+				DR_Skip(&r, 2);
+				break;
+
+			case svc_damage:
+				DR_Skip(&r, 2);					/* armor, blood */
+				DR_Skip(&r, 3 * coordsize);		/* hit origin */
 				break;
 
 			case svc_signonnum:
-				off += (off + 1 <= msg_end) ? 1 : 0;
+				DR_Byte(&r);
+				break;
+
+			case svc_setpause:
+				DR_Byte(&r);
+				break;
+
+			case svc_centerprint:
+				DR_SkipString(&r);
+				break;
+
+			case svc_finale:
+				DR_SkipString(&r);
+				done = true;	/* end of run; stats are final */
+				break;
+
+			case svc_cdtrack:
+				DR_Skip(&r, 2);
 				break;
 
 			case svc_intermission:
-				if (map_found) goto build_result;
+				done = true;	/* no payload; stats are final */
+				break;
+
+			case svc_updatestat:
+			{
+				int stat = DR_Byte(&r);
+				int val = DR_Long(&r);
+				if (!r.error) DR_RecordStat(info, &stat_kills, &stat_secrets, stat, val);
+				break;
+			}
+
+			case svcdp_updatestatbyte:
+			{
+				int stat = DR_Byte(&r);
+				int val = DR_Byte(&r);
+				if (!r.error) DR_RecordStat(info, &stat_kills, &stat_secrets, stat, val);
+				break;
+			}
+
+			case svcfte_updatestatfloat:
+			{
+				int stat = DR_Byte(&r);
+				float val = DR_Float(&r);
+				if (!r.error) DR_RecordStat(info, &stat_kills, &stat_secrets, stat, (int)val);
+				break;
+			}
+
+			case svcfte_updatestatstring:
+				DR_Byte(&r);
+				DR_SkipString(&r);
+				break;
+
+			case svcfte_updateentities:
+				/* FTE replacement-deltas carry no svc_time; the server clock is
+				   embedded at the head of this message, ahead of the entity
+				   deltas (which we don't decode). */
+				if (predinfo) DR_Skip(&r, 2);	/* input-sequence ack short */
+				last_time = DR_Float(&r);
+				if (!r.error && first_time < 0.0f) first_time = last_time;
+				frame_count++;
+				r.pos = r.end;
+				break;
+
+			case svc_killedmonster:
+				killed_events++;
+				break;
+
+			case svc_foundsecret:
+				secret_events++;
 				break;
 
 			default:
-				off = msg_end; /* unknown - skip rest */
+				/* sound/particle/baseline/temp-entity/fte-entities/etc. — these
+				   carry protocol-dependent data and always follow the stats, so
+				   abandon this block and re-sync on the next length-prefix. */
+				r.pos = r.end;
 				break;
 			}
+
+			if (done) break;
 		}
-	msg_end_reached:
-		off = msg_end;
-		if (++frame_count > 50000) break;
+
+		off = msg_end;	/* block framing always advances, so the loop terminates */
 	}
 
-build_result:
 {
 	struct { char name[MAX_QPATH]; int frags; } list[32];
 	int cnt = 0;
@@ -26448,20 +26718,41 @@ build_result:
 			}
 		}
 
-	qsort(list, cnt, sizeof(list[0]), CompareFrags);
+	/* Older/odd demos may not yield a maxclients from serverinfo; in that case
+	   fall back to the number of distinct named players we saw — a lone (or no)
+	   named client means single player. */
+	if (maxclients_found)
+		info->singleplayer = (maxclients == 1);
+	else
+		info->singleplayer = (cnt <= 1);
 
-	for (int i = 0; i < cnt; i++)
+	info->kills = q_max(stat_kills, killed_events);
+	info->secrets = q_max(stat_secrets, secret_events);
+
+	if (!info->singleplayer)
 	{
-		if (i) q_strlcat(info->players, ", ", sizeof(info->players));
-		char buf[MAX_QPATH];
-		q_snprintf(buf, sizeof(buf), "%s (%d)",
-			list[i].name, list[i].frags);
-		q_strlcat(info->players, buf, sizeof(info->players));
+		qsort(list, cnt, sizeof(list[0]), CompareFrags);
+
+		for (int i = 0; i < cnt; i++)
+		{
+			if (i) q_strlcat(info->players, ", ", sizeof(info->players));
+			char buf[MAX_QPATH];
+			q_snprintf(buf, sizeof(buf), "%s (%d)",
+				list[i].name, list[i].frags);
+			q_strlcat(info->players, buf, sizeof(info->players));
+		}
 	}
 
-	info->duration = last_time;
-	if (frame_count > 1000 && info->duration < 60.0f)
-		info->duration = frame_count / 40.0f;
+	/* The server clock is absolute uptime (it can start at any value when
+	   connecting to a long-running server), so the playable length is the
+	   span from the first frame to the last. Fall back to a frame-count
+	   estimate only if the stream yielded no time at all. */
+	if (first_time >= 0.0f && last_time > first_time)
+		info->duration = last_time - first_time;
+	else if (frame_count > 0)
+		info->duration = frame_count / 72.0f;
+	else
+		info->duration = 0.0f;
 	if (!info->map[0])
 		M_InferDemoMapName(name, info->map, sizeof(info->map));
 }
@@ -26507,6 +26798,38 @@ static const char *M_Demos_CurrentGameName(void)
 static qboolean M_Demos_CurrentGameIsId1(void)
 {
 	return !q_strcasecmp(M_Demos_CurrentGameName(), GAMENAME);
+}
+
+/* The attract-mode demos shipped in the official paks: id1 and Rogue both
+   use demo1..demo3 (disambiguated by gamedir / from_id1), Hipnotic uses
+   hipdemo1..hipdemo4. Returns the caption to show, or NULL. */
+static const char *M_Demos_OriginalIntroDemoLabel(const char *name, qboolean from_id1)
+{
+	const char *base = COM_SkipPath(name);
+	const char *game = M_Demos_CurrentGameName();
+	qboolean is_demo123 =
+		!q_strcasecmp(base, "demo1.dem") ||
+		!q_strcasecmp(base, "demo2.dem") ||
+		!q_strcasecmp(base, "demo3.dem");
+
+	/* id1 demos surfaced while playing a mod (the show-id1 toggle) */
+	if (from_id1)
+		return is_demo123 ? "original Quake intro demo" : NULL;
+
+	if (!q_strcasecmp(game, "hipnotic") &&
+		(!q_strcasecmp(base, "hipdemo1.dem") || !q_strcasecmp(base, "hipdemo2.dem") ||
+		 !q_strcasecmp(base, "hipdemo3.dem") || !q_strcasecmp(base, "hipdemo4.dem")))
+		return "original Hipnotic intro demo";
+
+	if (is_demo123)
+	{
+		if (M_Demos_CurrentGameIsId1())
+			return "original Quake intro demo";
+		if (!q_strcasecmp(game, "rogue"))
+			return "original Rogue intro demo";
+	}
+
+	return NULL;
 }
 
 static const char *M_Demos_PathBase(void)
@@ -27204,6 +27527,32 @@ static void M_Demos_ParseItem(demoitem_t *di)
         q_strlcpy(di->players, info.players, sizeof(di->players));
         FormatDuration(info.duration, di->duration, sizeof(di->duration));
         q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", info.filesize_mb);
+
+        di->stats[0] = '\0';
+        if (info.singleplayer)
+        {
+            static const char *skill_names[4] = { "Easy", "Normal", "Hard", "Nightmare" };
+            char buf[64];
+            buf[0] = '\0';
+            if (info.total_kills > 0 || info.kills > 0)
+                q_snprintf(buf, sizeof(buf), "Kills: %d/%d", info.kills, info.total_kills);
+            if (info.total_secrets > 0 || info.secrets > 0)
+            {
+                char sec[32];
+                q_snprintf(sec, sizeof(sec), "Secrets: %d/%d", info.secrets, info.total_secrets);
+                if (buf[0]) q_strlcat(buf, "  ", sizeof(buf));
+                q_strlcat(buf, sec, sizeof(buf));
+            }
+            if (info.skill >= 0)
+            {
+                char skl[24];
+                int s = info.skill < 4 ? info.skill : 3;
+                q_snprintf(skl, sizeof(skl), "Skill: %s", skill_names[s]);
+                if (buf[0]) q_strlcat(buf, "  ", sizeof(buf));
+                q_strlcat(buf, skl, sizeof(buf));
+            }
+            q_strlcpy(di->stats, buf[0] ? buf : "single player", sizeof(di->stats));
+        }
     }
     else
     {
@@ -27211,6 +27560,7 @@ static void M_Demos_ParseItem(demoitem_t *di)
         q_strlcpy(di->players, "n/a", sizeof(di->players));
         q_strlcpy(di->duration, "n/a", sizeof(di->duration));
         q_strlcpy(di->filesize, "n/a", sizeof(di->filesize));
+        di->stats[0] = '\0';
     }
     di->parsed = true;
 }
@@ -27302,6 +27652,7 @@ static qboolean M_Demos_ItemMatchesTerm(demoitem_t *di, const char *term, const 
 
 	if (di->parsed &&
 		((di->players[0] && unfun_match(term, di->players)) ||
+		 M_Demos_FieldMatchesTerm(di->stats, term) ||
 		 M_Demos_FieldMatchesTerm(di->duration, term) ||
 		 M_Demos_FieldMatchesTerm(di->filesize, term)))
 		return true;
@@ -27999,7 +28350,22 @@ void M_Demos_Draw (void)
             M_Print(x, current_y, va("Duration: %s", di->duration));
             current_y += 8;
         }
-        
+
+        if (di->stats[0])
+        {
+            M_PrintWhite(x, current_y, di->stats);
+            current_y += 8;
+        }
+
+        {
+            const char *introlabel = M_Demos_OriginalIntroDemoLabel(di->name, di->from_id1);
+            if (introlabel)
+            {
+                M_Print(x, current_y, introlabel);
+                current_y += 8;
+            }
+        }
+
         if (di->players[0])
         {
             // Handle player display with 40-character line wrapping
