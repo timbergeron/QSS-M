@@ -3620,15 +3620,10 @@ void DemoList_Init (void)
 	struct tm* tm;
 #endif
 	char		filestring[MAX_OSPATH];
-	char		ignorepakdir[32];
 	char		dateStr[80]; // To store the date string
 	searchpath_t	*search;
 	pack_t		*pak;
 	int		i;
-
-	// we don't want to list the demos in id1 pakfiles,
-	// because these are not "add-on" demos
-	q_snprintf (ignorepakdir, sizeof(ignorepakdir), "/%s/", GAMENAME);
 	
 	for (search = com_searchpaths; search; search = search->next)
 	{
@@ -3639,50 +3634,78 @@ void DemoList_Init (void)
 			{
 				q_snprintf(filestring, sizeof(filestring), "%s/demos/%s", search->filename, patterns[pattern_idx]); // woods #demosfolder
 				fhnd = FindFirstFile(filestring, &fdat);
-				if (fhnd == INVALID_HANDLE_VALUE)
-					continue;
-				do
+				if (fhnd != INVALID_HANDLE_VALUE)
 				{
-					// Convert the last-write time to local time
-					FileTimeToSystemTime(&fdat.ftLastWriteTime, &stUTC);
-					SystemTimeToTzSpecificLocalTime(NULL, &stUTC, &stLocal);
+					do
+					{
+						if (fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+							continue;
 
-					// Build a string showing the date
-					sprintf(dateStr, "%04d-%02d-%02d %02d:%02d:%02d",
-						stLocal.wYear, stLocal.wMonth, stLocal.wDay,
-						stLocal.wHour, stLocal.wMinute, stLocal.wSecond);
+						// Convert the last-write time to local time
+						FileTimeToSystemTime(&fdat.ftLastWriteTime, &stUTC);
+						SystemTimeToTzSpecificLocalTime(NULL, &stUTC, &stLocal);
 
-					FileList_Add(fdat.cFileName, dateStr, &demolist);
-				} while (FindNextFile(fhnd, &fdat));
-				FindClose(fhnd);
+						// Build a string showing the date
+						sprintf(dateStr, "%04d-%02d-%02d %02d:%02d:%02d",
+							stLocal.wYear, stLocal.wMonth, stLocal.wDay,
+							stLocal.wHour, stLocal.wMinute, stLocal.wSecond);
+
+						FileList_Add(fdat.cFileName, dateStr, &demolist);
+					} while (FindNextFile(fhnd, &fdat));
+					FindClose(fhnd);
+				}
+
+				q_snprintf(filestring, sizeof(filestring), "%s/%s", search->filename, patterns[pattern_idx]);
+				fhnd = FindFirstFile(filestring, &fdat);
+				if (fhnd != INVALID_HANDLE_VALUE)
+				{
+					do
+					{
+						char listname[MAX_QPATH];
+
+						if (fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+							continue;
+
+						FileTimeToSystemTime(&fdat.ftLastWriteTime, &stUTC);
+						SystemTimeToTzSpecificLocalTime(NULL, &stUTC, &stLocal);
+						sprintf(dateStr, "%04d-%02d-%02d %02d:%02d:%02d",
+							stLocal.wYear, stLocal.wMonth, stLocal.wDay,
+							stLocal.wHour, stLocal.wMinute, stLocal.wSecond);
+
+						q_snprintf(listname, sizeof(listname), "./%s", fdat.cFileName);
+						FileList_Add(listname, dateStr, &demolist);
+					} while (FindNextFile(fhnd, &fdat));
+					FindClose(fhnd);
+				}
 			}
 #else
 			q_snprintf (filestring, sizeof(filestring), "%s/demos/", search->filename); // woods #demosfolder
 			dir_p = opendir(filestring);
-			if (dir_p == NULL)
-				continue;
-			while ((dir_t = readdir(dir_p)) != NULL)
+			if (dir_p != NULL)
 			{
-				const char *ext = COM_FileGetExtension(dir_t->d_name);
-
-				if (q_strcasecmp(ext, "dem") != 0 && q_strcasecmp(ext, "dz") != 0)
-					continue;
-
-				char fullpath[MAX_OSPATH];
-
-				// Calculate the lengths
-				size_t filestring_len = strlen(filestring);
-
-				// Truncate dir_t->d_name to fit into fullpath
-				size_t max_dname_len = MAX_OSPATH - filestring_len - 1; // Subtract 1 for null terminator
-				char truncated_dname[max_dname_len + 1]; // +1 for null terminator
-				strncpy(truncated_dname, dir_t->d_name, max_dname_len);
-				truncated_dname[max_dname_len] = '\0'; // Ensure null termination
-
-				snprintf(fullpath, sizeof(fullpath), "%s%s", filestring, truncated_dname);
-
-				if (stat(fullpath, &file_stat) == 0)
+				while ((dir_t = readdir(dir_p)) != NULL)
 				{
+					const char *ext = COM_FileGetExtension(dir_t->d_name);
+
+					if (q_strcasecmp(ext, "dem") != 0 && q_strcasecmp(ext, "dz") != 0)
+						continue;
+
+					char fullpath[MAX_OSPATH];
+
+					// Calculate the lengths
+					size_t filestring_len = strlen(filestring);
+
+					// Truncate dir_t->d_name to fit into fullpath
+					size_t max_dname_len = MAX_OSPATH - filestring_len - 1; // Subtract 1 for null terminator
+					char truncated_dname[max_dname_len + 1]; // +1 for null terminator
+					strncpy(truncated_dname, dir_t->d_name, max_dname_len);
+					truncated_dname[max_dname_len] = '\0'; // Ensure null termination
+
+					snprintf(fullpath, sizeof(fullpath), "%s%s", filestring, truncated_dname);
+
+					if (stat(fullpath, &file_stat) < 0 || !S_ISREG(file_stat.st_mode))
+						continue;
+
 					tm = localtime(&file_stat.st_mtime);
 					if (tm) { // Check for NULL
 						snprintf(dateStr, sizeof(dateStr), "%04d-%02d-%02d %02d:%02d:%02d",
@@ -3693,27 +3716,66 @@ void DemoList_Init (void)
 						strncpy(dateStr, "Unknown Date", sizeof(dateStr) - 1);
 						dateStr[sizeof(dateStr) - 1] = '\0'; // Ensure null termination
 					}
-				}
-				else
-				{
-					strncpy(dateStr, "Unknown Date", sizeof(dateStr) - 1);
-					dateStr[sizeof(dateStr) - 1] = '\0'; // Ensure null termination
-		}
 
-				FileList_Add(dir_t->d_name, dateStr, &demolist);
+					FileList_Add(dir_t->d_name, dateStr, &demolist);
+				}
+				closedir(dir_p);
 			}
-			closedir(dir_p);
+
+			q_snprintf (filestring, sizeof(filestring), "%s/", search->filename);
+			dir_p = opendir(filestring);
+			if (dir_p != NULL)
+			{
+				while ((dir_t = readdir(dir_p)) != NULL)
+				{
+					char fullpath[MAX_OSPATH];
+					char listname[MAX_QPATH];
+					const char *ext = COM_FileGetExtension(dir_t->d_name);
+
+					if (q_strcasecmp(ext, "dem") != 0 && q_strcasecmp(ext, "dz") != 0)
+						continue;
+
+					q_snprintf(fullpath, sizeof(fullpath), "%s%s", filestring, dir_t->d_name);
+					if (stat(fullpath, &file_stat) < 0 || !S_ISREG(file_stat.st_mode))
+						continue;
+
+					tm = localtime(&file_stat.st_mtime);
+					if (tm)
+					{
+						snprintf(dateStr, sizeof(dateStr), "%04d-%02d-%02d %02d:%02d:%02d",
+							tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+							tm->tm_hour, tm->tm_min, tm->tm_sec);
+					}
+					else
+					{
+						strncpy(dateStr, "Unknown Date", sizeof(dateStr) - 1);
+						dateStr[sizeof(dateStr) - 1] = '\0';
+					}
+
+					q_snprintf(listname, sizeof(listname), "./%s", dir_t->d_name);
+					FileList_Add(listname, dateStr, &demolist);
+				}
+				closedir(dir_p);
+			}
 #endif
 		}
 		else //pakfile
 		{
-			if (!strstr(search->pack->filename, ignorepakdir))
-			{ //don't list standard id demos
-				for (i = 0, pak = search->pack; i < pak->numfiles; i++)
+			for (i = 0, pak = search->pack; i < pak->numfiles; i++)
+			{
+				const char *pakname = pak->files[i].name;
+				const char *ext = COM_FileGetExtension(pakname);
+				if (!q_strcasecmp(ext, "dem") || !q_strcasecmp(ext, "dz"))
 				{
-					const char *ext = COM_FileGetExtension(pak->files[i].name);
-					if (!q_strcasecmp(ext, "dem") || !q_strcasecmp(ext, "dz"))
-						FileList_Add(pak->files[i].name, "Unknown Date", &demolist);
+					char listname[MAX_QPATH];
+
+					if (!strchr(pakname, '/') && !strchr(pakname, '\\'))
+					{
+						q_snprintf(listname, sizeof(listname), "./%s", pakname);
+						FileList_Add(listname, "Unknown Date", &demolist);
+					}
+					else
+						FileList_Add(pakname, "Unknown Date", &demolist);
 				}
 			}
 		}

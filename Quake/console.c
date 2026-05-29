@@ -3335,6 +3335,8 @@ static void CompleteDemo_FormatDate(time_t mtime, char *out, size_t outlen)
 
 static const char *CompleteDemo_StripDemosPrefix(const char *name)
 {
+	if (name[0] == '.' && (name[1] == '/' || name[1] == '\\'))
+		name += 2;
 	if (!q_strncasecmp(name, "demos/", 6) || !q_strncasecmp(name, "demos\\", 6))
 		return name + 6;
 	return name;

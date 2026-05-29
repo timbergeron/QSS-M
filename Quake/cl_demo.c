@@ -2540,19 +2540,57 @@ static void CL_DemoBuildArchiveEntryName(const char *archive_path, char *out, si
 	COM_AddExtension(out, ".dem", outsize);
 }
 
+static const char *CL_DemoSkipExplicitRootPrefix(const char *name)
+{
+	if (name && name[0] == '.' && (name[1] == '/' || name[1] == '\\'))
+		return name + 2;
+	return name;
+}
+
+static qboolean CL_DemoPathHasUnsafeComponent(const char *name)
+{
+	const char *start;
+	size_t len;
+
+	if (!name)
+		return true;
+
+	while (*name)
+	{
+		while (*name == '/' || *name == '\\')
+			++name;
+
+		start = name;
+		while (*name && *name != '/' && *name != '\\')
+			++name;
+		len = (size_t)(name - start);
+
+		if ((len == 1 && start[0] == '.') ||
+			(len == 2 && start[0] == '.' && start[1] == '.'))
+			return true;
+	}
+
+	return false;
+}
+
 static qboolean CL_DemoTryOpenPath(const char *logical_name, const char *search_path, FILE **out_file, qofs_t *out_size, char *out_name, size_t out_name_size)
 {
 	const char *ext;
+	const char *open_path;
 
 	*out_file = NULL;
 	if (out_size)
 		*out_size = -1;
 
-	ext = COM_FileGetExtension(search_path);
+	open_path = CL_DemoSkipExplicitRootPrefix(search_path);
+	if (CL_DemoPathHasUnsafeComponent(open_path))
+		return false;
+
+	ext = COM_FileGetExtension(open_path);
 	if (!q_strcasecmp(ext, "dz"))
 	{
 #ifdef USE_ZLIB
-		if (CL_DZipOpenDemoArchive(search_path, out_file, out_size, NULL, 0))
+		if (CL_DZipOpenDemoArchive(open_path, out_file, out_size, NULL, 0))
 		{
 			q_strlcpy(out_name, logical_name, out_name_size);
 			return true;
@@ -2561,7 +2599,7 @@ static qboolean CL_DemoTryOpenPath(const char *logical_name, const char *search_
 		return false;
 	}
 
-	if (COM_FOpenFile(search_path, out_file, NULL) >= 0 && *out_file)
+	if (COM_FOpenFile(open_path, out_file, NULL) >= 0 && *out_file)
 	{
 		if (out_size)
 			*out_size = com_filesize;
@@ -2578,6 +2616,8 @@ static qboolean CL_DemoShouldTryDemosPrefix(const char *name)
 		return false;
 	if (name[0] == '/' || name[0] == '\\' || strchr(name, ':'))
 		return false;
+	if (name[0] == '.' && (name[1] == '/' || name[1] == '\\'))
+		return false;
 	if (!q_strncasecmp(name, "demos/", 6) || !q_strncasecmp(name, "demos\\", 6))
 		return false;
 	return strchr(name, '/') != NULL || strchr(name, '\\') != NULL;
@@ -2588,6 +2628,7 @@ byte *CL_LoadDemoBuffer(const char *name, int *length_out)
 	byte *data;
 	char path[MAX_OSPATH];
 	const char *ext;
+	const char *direct_name;
 	qboolean has_path;
 
 	if (length_out)
@@ -2597,7 +2638,11 @@ byte *CL_LoadDemoBuffer(const char *name, int *length_out)
 		return NULL;
 
 	ext = COM_FileGetExtension(name);
+	direct_name = CL_DemoSkipExplicitRootPrefix(name);
 	has_path = strchr(name, '/') != NULL || strchr(name, '\\') != NULL;
+
+	if (CL_DemoPathHasUnsafeComponent(direct_name))
+		return NULL;
 
 	if (!q_strcasecmp(ext, "dz"))
 	{
@@ -2610,7 +2655,7 @@ byte *CL_LoadDemoBuffer(const char *name, int *length_out)
 				return data;
 		}
 
-		return CL_DZipLoadDemoBuffer(name, length_out);
+		return CL_DZipLoadDemoBuffer(direct_name, length_out);
 #else
 		return NULL;
 #endif
@@ -2630,7 +2675,7 @@ byte *CL_LoadDemoBuffer(const char *name, int *length_out)
 			}
 		}
 
-		data = COM_LoadMallocFile(name, NULL);
+		data = COM_LoadMallocFile(direct_name, NULL);
 		if (data && length_out)
 			*length_out = (int)com_filesize;
 		return data;
@@ -2645,7 +2690,7 @@ byte *CL_LoadDemoBuffer(const char *name, int *length_out)
 		return data;
 	}
 
-	data = COM_LoadMallocFile(name, NULL);
+	data = COM_LoadMallocFile(direct_name, NULL);
 	if (data && length_out)
 		*length_out = (int)com_filesize;
 	return data;

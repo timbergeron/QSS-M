@@ -26901,6 +26901,11 @@ typedef struct
 	int		frames;
 } demo_frame_cache_entry_t;
 
+typedef struct
+{
+	qboolean	explicit_root;
+} demos_list_ctx_t;
+
 static demo_frame_cache_entry_t demo_frame_cache[DEMO_FRAME_CACHE_MAX];
 static int demo_frame_cache_count = 0;
 static int demo_frame_cache_next = 0;
@@ -26944,17 +26949,37 @@ static qboolean M_Demos_FrameCache_Lookup(const char *path, time_t mtime, size_t
 	return true;
 }
 
+static const char *M_Demos_SkipExplicitRootPrefix(const char *name)
+{
+	if (name && name[0] == '.' && (name[1] == '/' || name[1] == '\\'))
+		return name + 2;
+	return name;
+}
+
+static qboolean M_Demos_ListedFileIsRegular(const char *fname, searchpath_t *spath)
+{
+	char path[MAX_OSPATH];
+
+	if (!spath || spath->pack)
+		return true;
+
+	q_snprintf(path, sizeof(path), "%s/%s", spath->filename,
+		M_Demos_SkipExplicitRootPrefix(fname));
+	return (Sys_FileType(path) & FS_ENT_FILE) != 0;
+}
+
 static int M_Demos_CountFrames(const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
 {
 	char key[MAX_OSPATH];
+	const char *disk_name = M_Demos_SkipExplicitRootPrefix(fname);
 	int frames;
 
 	if (spath && spath->pack)
 		q_snprintf(key, sizeof(key), "%s|%s", spath->filename, fname);
 	else if (spath)
-		q_snprintf(key, sizeof(key), "%s/%s", spath->filename, fname);
+		q_snprintf(key, sizeof(key), "%s/%s", spath->filename, disk_name);
 	else
-		q_strlcpy(key, fname, sizeof(key));
+		q_strlcpy(key, disk_name, sizeof(key));
 
 	if (M_Demos_FrameCache_Lookup(key, mtime, fsize, &frames))
 		return frames;
@@ -26994,19 +27019,36 @@ static qboolean M_Demos_BelowMinFrames(const char *fname, time_t mtime, size_t f
 
 static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
 {
+	demos_list_ctx_t *list_ctx = (demos_list_ctx_t *)ctx;
+	char logical_name[MAX_QPATH];
+	char display_name[MAX_QPATH];
 	char date[32];
 	qboolean from_id1;
-
-	(void)ctx;
+	qboolean explicit_root = list_ctx && list_ctx->explicit_root &&
+		!strchr(fname, '/') && !strchr(fname, '\\');
 
 	if (!M_Demos_SearchPathAllowed(spath, &from_id1))
 		return true;
 
-	if (M_Demos_BelowMinFrames(fname, mtime, fsize, spath))
+	if (explicit_root)
+	{
+		q_snprintf(logical_name, sizeof(logical_name), "./%s", fname);
+		q_snprintf(display_name, sizeof(display_name), "../%s", fname);
+	}
+	else
+	{
+		q_strlcpy(logical_name, fname, sizeof(logical_name));
+		q_strlcpy(display_name, COM_SkipPath(fname), sizeof(display_name));
+	}
+
+	if (!M_Demos_ListedFileIsRegular(logical_name, spath))
+		return true;
+
+	if (M_Demos_BelowMinFrames(logical_name, mtime, fsize, spath))
 		return true;
 
 	M_Demos_FormatFileDate(mtime, date, sizeof(date));
-	M_Demos_AddEx(fname, date, COM_SkipPath(fname), from_id1);
+	M_Demos_AddEx(logical_name, date, display_name, from_id1);
 	return true;
 }
 
@@ -27393,6 +27435,7 @@ static void M_Demos_Refilter(void)
 
 static void M_Demos_RebuildForCurrentPath(void)
 {
+	demos_list_ctx_t root_ctx = { true };
 	char actual_folder[MAX_QPATH];
 
 	M_Demos_FreeItems();
@@ -27411,6 +27454,8 @@ static void M_Demos_RebuildForCurrentPath(void)
 	{
 		if (!actual_folder[0])
 		{
+			COM_ListAllFiles(&root_ctx, "*.dem", M_Demos_AddListedFile, 0, NULL);
+			COM_ListAllFiles(&root_ctx, "*.dz", M_Demos_AddListedFile, 0, NULL);
 			COM_ListAllFiles(NULL, "demos/*.dem", M_Demos_AddListedFile, 0, NULL);
 			COM_ListAllFiles(NULL, "demos/*.dz", M_Demos_AddListedFile, 0, NULL);
 		}
