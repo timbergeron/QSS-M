@@ -13042,12 +13042,19 @@ enum
 	PLAYERXRAY_COLOR_MATCH
 };
 
+enum
+{
+	PLAYERXRAY_RENDER_FILL = 0,
+	PLAYERXRAY_RENDER_OUTLINE
+};
+
 typedef struct
 {
 	float alpha;
 	float distance;
 	int target_mode;
 	int color_mode;
+	int render_mode;
 	int max_match_size;
 	plcolour_t enemy_color;
 	plcolour_t team_color;
@@ -13056,6 +13063,7 @@ typedef struct
 static enum playerxray_e
 {
 	PLAYERXRAY_TARGETS,
+	PLAYERXRAY_STYLE,
 	PLAYERXRAY_ALPHA,
 	PLAYERXRAY_DISTANCE,
 	PLAYERXRAY_COLORMODE,
@@ -13185,6 +13193,36 @@ static int M_PlayerXray_ParseColorModeToken(const char *token)
 	return -1;
 }
 
+static int M_PlayerXray_ParseRenderModeToken(const char *token)
+{
+	const char *value = token;
+	const char *eq = strchr(token, '=');
+	size_t keylen;
+
+	if (eq && eq[1])
+	{
+		keylen = (size_t)(eq - token);
+		if (!((keylen == 4 && !q_strncasecmp(token, "mode", keylen)) ||
+			(keylen == 5 && !q_strncasecmp(token, "style", keylen)) ||
+			(keylen == 6 && !q_strncasecmp(token, "render", keylen))))
+			return -1;
+		value = eq + 1;
+	}
+
+	if (!q_strcasecmp(value, "outline") ||
+		!q_strcasecmp(value, "outlines") ||
+		!q_strcasecmp(value, "ring"))
+		return PLAYERXRAY_RENDER_OUTLINE;
+
+	if (!q_strcasecmp(value, "fill") ||
+		!q_strcasecmp(value, "filled") ||
+		!q_strcasecmp(value, "body") ||
+		!q_strcasecmp(value, "solid"))
+		return PLAYERXRAY_RENDER_FILL;
+
+	return -1;
+}
+
 static int M_PlayerXray_ParseMatchSizeToken(const char *token)
 {
 	const char *value = token;
@@ -13239,6 +13277,7 @@ static void M_PlayerXray_GetSettings(playerxray_settings_t *settings)
 	settings->alpha = 1.0f;
 	settings->target_mode = PLAYERXRAY_TARGET_BOTH;
 	settings->color_mode = PLAYERXRAY_COLOR_SPLIT;
+	settings->render_mode = PLAYERXRAY_RENDER_FILL;
 	M_PlayerXray_DefaultColor(false, &settings->enemy_color);
 	M_PlayerXray_DefaultColor(true, &settings->team_color);
 
@@ -13276,6 +13315,13 @@ static void M_PlayerXray_GetSettings(playerxray_settings_t *settings)
 		if (parsed_mode >= 0)
 		{
 			settings->color_mode = parsed_mode;
+			continue;
+		}
+
+		parsed_mode = M_PlayerXray_ParseRenderModeToken(token);
+		if (parsed_mode >= 0)
+		{
+			settings->render_mode = parsed_mode;
 			continue;
 		}
 
@@ -13407,6 +13453,11 @@ static const char *M_PlayerXray_ColorModeLabel(int color_mode)
 	return (color_mode == PLAYERXRAY_COLOR_MATCH) ? "player colors" : "split";
 }
 
+static const char *M_PlayerXray_RenderModeLabel(int render_mode)
+{
+	return (render_mode == PLAYERXRAY_RENDER_OUTLINE) ? "outline" : "body";
+}
+
 static const char *M_PlayerXray_MatchSizeLabel(int max_match_size)
 {
 	switch (max_match_size)
@@ -13461,6 +13512,7 @@ static void M_PlayerXray_SetSettings(const playerxray_settings_t *settings)
 	char enemy_hex[16];
 	char team_hex[16];
 	char match_token[24] = "";
+	const char *style_token;
 	const char *target_token;
 
 	M_PlayerXray_ColorToHex(&settings->enemy_color, enemy_hex, sizeof(enemy_hex));
@@ -13483,10 +13535,13 @@ static void M_PlayerXray_SetSettings(const playerxray_settings_t *settings)
 	if (settings->max_match_size > 0)
 		q_snprintf(match_token, sizeof(match_token), " gametype=%d", settings->max_match_size);
 
-	q_snprintf(value, sizeof(value), "%.2f %.0f %s%s%s enemycolor=%s teamcolor=%s",
+	style_token = (settings->render_mode == PLAYERXRAY_RENDER_OUTLINE) ? " outline" : "";
+
+	q_snprintf(value, sizeof(value), "%.2f %.0f %s%s%s%s enemycolor=%s teamcolor=%s",
 		CLAMP(0.0f, settings->alpha, 1.0f),
 		q_max(0.0f, settings->distance),
 		target_token,
+		style_token,
 		(settings->color_mode == PLAYERXRAY_COLOR_MATCH) ? " pcolor" : "",
 		match_token,
 		enemy_hex,
@@ -14395,6 +14450,12 @@ static void M_PlayerXray_AdjustSetting(int dir)
 		M_PlayerXray_SetMenuTarget(&settings, target);
 		break;
 
+	case PLAYERXRAY_STYLE:
+		settings.render_mode = (settings.render_mode == PLAYERXRAY_RENDER_OUTLINE)
+			? PLAYERXRAY_RENDER_FILL
+			: PLAYERXRAY_RENDER_OUTLINE;
+		break;
+
 	case PLAYERXRAY_ALPHA:
 		settings.alpha = CLAMP(0.0f, settings.alpha + dir * 0.05f, 1.0f);
 		break;
@@ -14475,6 +14536,11 @@ void M_PlayerXray_Draw(void)
 			text = "         Targets";
 			value = M_PlayerXray_TargetLabel(M_PlayerXray_GetMenuTarget(&settings));
 			M_Print(178, y, value);
+			break;
+
+		case PLAYERXRAY_STYLE:
+			text = "           Style";
+			M_Print(178, y, M_PlayerXray_RenderModeLabel(settings.render_mode));
 			break;
 
 		case PLAYERXRAY_ALPHA:
@@ -26396,8 +26462,7 @@ static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 	while (off < length && data[off] != '\n') off++;
 	if (off < length) off++;
 
-	qboolean map_found = M_FindDemoMapNameInData(data, off, length,
-		info->map, sizeof(info->map));
+	M_FindDemoMapNameInData(data, off, length, info->map, sizeof(info->map));
 	float last_time = 0.0f;
 	float first_time = -1.0f;	/* server clock is absolute uptime, not demo-relative */
 	int frame_count = 0;

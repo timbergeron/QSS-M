@@ -519,7 +519,9 @@ void GLAlias_CreateShaders (void)
 R_ParseOutlineXrayParams -- woods #routline
 
 r_player_xray format:
-	"<hexcolor> <alpha> <distance> [targets] [pcolor] [gametype=1..5] [enemycolor=0xRRGGBB] [teamcolor=0xRRGGBB]"
+	"<hexcolor> <alpha> <distance> [targets] [outline] [pcolor] [gametype=1..5] [enemycolor=0xRRGGBB] [teamcolor=0xRRGGBB]"
+	"outline" draws only an xray outline around the hidden player instead
+	of filling the whole hidden body.
 	enemycolor/teamcolor defaults to gl_enemycolor/gl_teamcolor when omitted.
 	"pcolor" uses each target player's own shirt/pants colors and overrides
 	enemycolor/teamcolor + gl_enemycolor/gl_teamcolor.
@@ -535,6 +537,7 @@ Examples:
 	"0x00FF00 0.5 2048 both"
 	"0xFF0000 0.8 4096 both gametype=1"
 	"0xFF0000 0.8 4096 both gametype=5"
+	"0xFF0000 0.8 4096 both outline"
 	"pcolor 3072 both"
 	"0xFF0000 0.6 3072 both enemycolor=0xFF0000 teamcolor=0x00B7FF"
 	"0"
@@ -551,6 +554,12 @@ enum
 {
 	XRAY_COLOR_SPLIT = 0,
 	XRAY_COLOR_MATCH
+};
+
+enum
+{
+	XRAY_RENDER_FILL = 0,
+	XRAY_RENDER_OUTLINE
 };
 
 static int R_ParseOutlineXrayTargetToken(const char *token)
@@ -607,6 +616,36 @@ static int R_ParseOutlineXrayColorModeToken(const char *token)
 		!q_strcasecmp(value, "playercolor") ||
 		!q_strcasecmp(value, "playercolors"))
 		return XRAY_COLOR_MATCH;
+
+	return -1;
+}
+
+static int R_ParseOutlineXrayRenderModeToken(const char *token)
+{
+	const char *value = token;
+	const char *eq = strchr(token, '=');
+	size_t keylen;
+
+	if (eq && eq[1])
+	{
+		keylen = (size_t)(eq - token);
+		if (!((keylen == 4 && !q_strncasecmp(token, "mode", keylen)) ||
+			(keylen == 5 && !q_strncasecmp(token, "style", keylen)) ||
+			(keylen == 6 && !q_strncasecmp(token, "render", keylen))))
+			return -1;
+		value = eq + 1;
+	}
+
+	if (!q_strcasecmp(value, "outline") ||
+		!q_strcasecmp(value, "outlines") ||
+		!q_strcasecmp(value, "ring"))
+		return XRAY_RENDER_OUTLINE;
+
+	if (!q_strcasecmp(value, "fill") ||
+		!q_strcasecmp(value, "filled") ||
+		!q_strcasecmp(value, "body") ||
+		!q_strcasecmp(value, "solid"))
+		return XRAY_RENDER_FILL;
 
 	return -1;
 }
@@ -758,7 +797,7 @@ static int R_DetectBalancedTeamMatchSize(void)
 	return team_size;
 }
 
-static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t team_color, float *alpha, float *dist, int *target_mode, int *color_mode, int *max_match_size)
+static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t team_color, float *alpha, float *dist, int *target_mode, int *color_mode, int *max_match_size, int *render_mode)
 {
 	const char *text = r_player_xray.string;
 	qboolean saw_enemy_color = false;
@@ -782,6 +821,8 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 		*color_mode = XRAY_COLOR_SPLIT;
 	if (max_match_size)
 		*max_match_size = 0;
+	if (render_mode)
+		*render_mode = XRAY_RENDER_FILL;
 
 	if (!text || !*text)
 		return;
@@ -791,6 +832,7 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 		int parsed_target_mode;
 		int parsed_color_mode;
 		int parsed_match_size;
+		int parsed_render_mode;
 		char *endptr;
 		float value;
 
@@ -820,6 +862,14 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 		{
 			if (color_mode)
 				*color_mode = parsed_color_mode;
+			continue;
+		}
+
+		parsed_render_mode = R_ParseOutlineXrayRenderModeToken(token);
+		if (parsed_render_mode >= 0)
+		{
+			if (render_mode)
+				*render_mode = parsed_render_mode;
 			continue;
 		}
 
@@ -878,7 +928,7 @@ static void R_ParseOutlineXrayParams(vec3_t color, vec3_t enemy_color, vec3_t te
 R_IsAliasOutlineXray -- woods #routline
 =============
 */
-static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, float *alpha_fade)
+static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, float *alpha_fade, int *render_mode)
 {
 	char obs_buf[16], star_obs_buf[16];
 	const char *obs, *star_obs;
@@ -888,6 +938,7 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 	int target_mode;
 	int color_mode;
 	int max_match_size;
+	int parsed_render_mode;
 	vec3_t parsedColor;
 	vec3_t parsedEnemyColor;
 	vec3_t parsedTeamColor;
@@ -932,7 +983,7 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 			(star_obs[0] && q_strcasecmp(star_obs, "off")));
 	}
 
-	R_ParseOutlineXrayParams(parsedColor, parsedEnemyColor, parsedTeamColor, &parsedAlpha, &dist, &target_mode, &color_mode, &max_match_size);
+	R_ParseOutlineXrayParams(parsedColor, parsedEnemyColor, parsedTeamColor, &parsedAlpha, &dist, &target_mode, &color_mode, &max_match_size, &parsed_render_mode);
 	if (dist <= 0.0f)
 		return false;
 
@@ -993,6 +1044,8 @@ static qboolean R_IsAliasOutlineXray(entity_t *e, vec3_t color, float *alpha, fl
 	}
 	if (alpha)
 		*alpha = parsedAlpha;
+	if (render_mode)
+		*render_mode = parsed_render_mode;
 	if (alpha_fade)
 	{
 		float t = CLAMP(0.0f, distance_to_view / dist, 1.0f);
@@ -1303,7 +1356,8 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	vec3_t xrayColor = { 1.0f, 0.0f, 0.0f };
 	float xrayAlpha = 1.0f;
 	float xrayAlphaFade = 1.0f;
-	qboolean is_xray = R_IsAliasOutlineXray(e, xrayColor, &xrayAlpha, &xrayAlphaFade);
+	int xrayRenderMode = XRAY_RENDER_FILL;
+	qboolean is_xray = R_IsAliasOutlineXray(e, xrayColor, &xrayAlpha, &xrayAlphaFade, &xrayRenderMode);
 	GLuint outline_stencil_mask = (gl_laserpoint.value && GL_VIEWMODEL_STENCIL_BIT()) ? 0x01u : 0xFFu;
 
 	if (!is_xray && !(r_outline.value > 0 &&
@@ -1358,13 +1412,40 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 			return;
 	}
 
+	// Pick a dedicated xray stencil bit that is neither the alias mask bit
+	// (0x01) nor the viewmodel/laser bit. We use it as a coverage mask so the
+	// xray silhouette blends one flat translucent color per pixel instead of
+	// accumulating (darkening) where model geometry overlaps along the view ray.
+	// If no such bit is free, fall back to the legacy single-pass blend.
+	GLuint xray_bit = 0;
+	if (is_xray && gl_stencilbits)
+	{
+		GLuint vm_bit = GL_VIEWMODEL_STENCIL_BIT();
+		int bitnum;
+		for (bitnum = 1; bitnum < gl_stencilbits && bitnum < 32; ++bitnum)
+		{
+			GLuint b = 1u << bitnum;
+			if (b != vm_bit) // b is never 0x01: loop starts at 0x02
+			{
+				xray_bit = b;
+				break;
+			}
+		}
+	}
+
 	if (is_xray)
 	{
-		// Xray: skip stencil test entirely. The model behind the wall was never
-		// drawn, so stencil was never set for this entity — but stale stencil
-		// values from previously-drawn entities can block the outline. The
-		// GL_GREATER depth test alone is sufficient to draw behind geometry.
-		glDisable(GL_STENCIL_TEST);
+		// Xray draws the part of the model behind world geometry; GL_GREATER
+		// (below) selects those occluded fragments. With a dedicated bit we use
+		// the stencil as a coverage mask; otherwise skip the stencil test so
+		// stale values from earlier entities can't block the silhouette.
+		if (xray_bit)
+		{
+			glEnable(GL_STENCIL_TEST);
+			glStencilMask(xray_bit);
+		}
+		else
+			glDisable(GL_STENCIL_TEST);
 	}
 	else
 	{
@@ -1429,13 +1510,74 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 
 	GL_Uniform4fvFunc(glsl->outlineColorLoc, 1, outlineColor);
 
-	// Cull front faces to render back-facing triangles
-	glEnable(GL_CULL_FACE);
-	glCullFace(GL_FRONT);
+	if (is_xray && xray_bit && xrayRenderMode == XRAY_RENDER_OUTLINE)
+	{
+		// Xray-outline mode mirrors normal r_outline behavior: mark the
+		// expanded hidden shell, subtract the hidden body, then fill the
+		// remaining ring once per pixel.
+		glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 
-	// Render the outline
-	glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
-		e->model->meshindexesvboptr + paliashdr->eboofs);
+		GL_Uniform1fFunc(glsl->outlineWidthLoc, outlineWidth);
+		glEnable(GL_CULL_FACE);
+		glCullFace(GL_FRONT);
+		glStencilFunc(GL_ALWAYS, (GLint)xray_bit, (GLint)xray_bit);
+		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+		glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+			e->model->meshindexesvboptr + paliashdr->eboofs);
+
+		// Clear the original body out of the shell mask. The fill pass below
+		// redraws the same expanded shell and consumes the remaining mask.
+		GL_Uniform1fFunc(glsl->outlineWidthLoc, 0.0f);
+		glDisable(GL_CULL_FACE);
+		glStencilFunc(GL_EQUAL, (GLint)xray_bit, (GLint)xray_bit);
+		glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+		glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+			e->model->meshindexesvboptr + paliashdr->eboofs);
+
+		GL_Uniform1fFunc(glsl->outlineWidthLoc, outlineWidth);
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+		glEnable(GL_CULL_FACE);
+		glCullFace(GL_FRONT);
+		glStencilFunc(GL_EQUAL, (GLint)xray_bit, (GLint)xray_bit);
+		glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+		glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+			e->model->meshindexesvboptr + paliashdr->eboofs);
+	}
+	else
+	{
+		// Cull front faces to render back-facing triangles
+		glEnable(GL_CULL_FACE);
+		glCullFace(GL_FRONT);
+
+		if (is_xray && xray_bit)
+		{
+			// Coverage-mask fill (two passes, identical geometry/depth state so the
+			// same fragments rasterize in both). Pass 1: mark every occluded pixel
+			// in the xray bit with color writes disabled.
+			glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+			glStencilFunc(GL_ALWAYS, (GLint)xray_bit, (GLint)xray_bit);
+			glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+			glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+				e->model->meshindexesvboptr + paliashdr->eboofs);
+
+			// Pass 2: blend the color exactly once per marked pixel. The first
+			// depth-passing fragment clears the xray bit (GL_ZERO), so any later
+			// overlapping fragment for that pixel fails the stencil test and does
+			// not darken it again. Every marked pixel had a passing fragment in
+			// pass 1, so the identical pass 2 clears the bit; no residue.
+			glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+			glStencilFunc(GL_EQUAL, (GLint)xray_bit, (GLint)xray_bit);
+			glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+			glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+				e->model->meshindexesvboptr + paliashdr->eboofs);
+		}
+		else
+		{
+			// Legacy single-pass outline / xray fallback.
+			glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+				e->model->meshindexesvboptr + paliashdr->eboofs);
+		}
+	}
 
 	// Reset face culling
 	glCullFace(GL_BACK);
