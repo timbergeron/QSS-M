@@ -1191,8 +1191,10 @@ static float R_CalculateAliasModelRadius(aliashdr_t *paliashdr, entity_t *e, ler
 R_CalculateAliasModelOutlineWidth -- woods #routline
 =============
 */
-float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerpdata_t* lerpdata, qboolean is_xray)
+float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerpdata_t* lerpdata, qboolean is_xray, qboolean is_xray_outline)
 {
+	float outlineWidth;
+
 	if (!is_xray && (r_outline.value <= 0 ||
 		cl.viewent.model == e->model ||
 		nameInList(r_nooutline_list.string, e->model->name)))
@@ -1202,9 +1204,10 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 	float radius = R_CalculateAliasModelRadius(paliashdr, e, lerpdata, &isMD5Model);
 	float modelScale = 50.0f / radius;
 	float finalScale = modelScale / 1.5;
+	const float md5OutlineScale = 0.25f;
 	if (isMD5Model)
-		finalScale *= 0.25f; // MD5 models render larger in shell/outline space, so keep them in line with classic models
-	if (is_xray && modelScale < 1.0f)
+		finalScale *= md5OutlineScale; // MD5 models render larger in shell/outline space, so keep them in line with classic models
+	if (is_xray && modelScale < 1.0f && (!is_xray_outline || isMD5Model))
 		return 1.0f;
 
 	float cvarValue;
@@ -1213,7 +1216,16 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 	else
 		cvarValue = CLAMP(1.0f, r_outline.value, 5.0f);
 
-	return cvarValue * finalScale;
+	outlineWidth = cvarValue * finalScale;
+
+	// Filled xray and MD5 outline keep the old fixed minimum above. Classic
+	// outline-only xray should look more like the normal r_outline shell; when
+	// r_outline is off, scale from the MD5 fallback using the same proportion
+	// as the normal outline path.
+	if (is_xray_outline && r_outline.value <= 0.0f && !isMD5Model)
+		outlineWidth = q_max(outlineWidth, 1.0f / md5OutlineScale);
+
+	return outlineWidth;
 }
 
 /*
@@ -1398,7 +1410,8 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 			return;
 	}
 
-	float outlineWidth = R_CalculateAliasModelOutlineWidth(paliashdr, e, lerpdata, is_xray);
+	float outlineWidth = R_CalculateAliasModelOutlineWidth(paliashdr, e, lerpdata, is_xray,
+		is_xray && xrayRenderMode == XRAY_RENDER_OUTLINE);
 
 	if (outlineWidth <= 0.0f)
 		return;
