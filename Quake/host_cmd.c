@@ -37,6 +37,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <dirent.h>
 #endif
 #include <ctype.h> // woods #udplist
+#include <errno.h>
 
 #define MAX_SERVER_ADDRESS_LEN 256 // woods #udplist
 
@@ -7737,6 +7738,7 @@ LOAD / SAVE GAME
 */
 
 #define	SAVEGAME_VERSION	5
+#define	SAVEGAME_EXTENDED_HEADER	"// QuakeSpasm extended savegame"
 
 /*
 ===============
@@ -7781,6 +7783,87 @@ static void Host_InvalidateSave(const char* relname) // woods #autoload (iw)
 {
 	if (!strcmp(sv.lastsave, relname))
 		sv.lastsave[0] = '\0';
+}
+
+static qboolean Host_ParseSavegameModeValue (const char *line, const char *key, float *value)
+{
+	const char	*text;
+	char		*end;
+	double		parsed;
+	float		mode;
+	size_t		keylen = strlen(key);
+
+	if (strncmp(line, key, keylen) || line[keylen] != ' ')
+		return false;
+
+	text = line + keylen + 1;
+	while (*text == ' ' || *text == '\t')
+		text++;
+	if (!*text || *text == '\r' || *text == '\n')
+		return false;
+
+	errno = 0;
+	parsed = strtod(text, &end);
+	if (errno || end == text || !isfinite(parsed) ||
+		parsed < (double)INT_MIN || parsed >= (double)INT_MAX)
+		return false;
+
+	mode = (float)parsed;
+	if (!isfinite(mode) || mode < (float)INT_MIN || mode >= (float)INT_MAX)
+		return false;
+
+	while (*end == ' ' || *end == '\t' || *end == '\r')
+		end++;
+	if (*end != '\n' && *end != '\0')
+		return false;
+
+	*value = mode;
+	return true;
+}
+
+static void Host_LoadgameModeCvars (const char *data)
+{
+	const char	*ext = NULL;
+	const char	*next = data;
+	size_t		headerlen = strlen(SAVEGAME_EXTENDED_HEADER);
+	float		saved_coop;
+	float		saved_deathmatch;
+	qboolean	have_saved_coop = false;
+	qboolean	have_saved_deathmatch = false;
+
+	while ((next = strstr(next, SAVEGAME_EXTENDED_HEADER)) != NULL)
+	{
+		const char *after = next + headerlen;
+		qboolean comment_header =
+			(next >= data + 3 && !strncmp(next - 3, "/*\n", 3)) ||
+			(next >= data + 4 && !strncmp(next - 4, "/*\r\n", 4));
+
+		if (comment_header)
+		{
+			if (*after == '\r')
+				after++;
+			if (*after == '\n')
+				ext = after + 1;
+		}
+		next += headerlen;
+	}
+
+	while (ext && *ext && strncmp(ext, "*/", 2))
+	{
+		if (Host_ParseSavegameModeValue(ext, "sv.coop", &saved_coop))
+			have_saved_coop = true;
+		else if (Host_ParseSavegameModeValue(ext, "sv.deathmatch", &saved_deathmatch))
+			have_saved_deathmatch = true;
+
+		ext = strchr(ext, '\n');
+		if (ext)
+			ext++;
+	}
+
+	if (have_saved_deathmatch)
+		Cvar_SetValueQuick(&deathmatch, saved_deathmatch);
+	if (have_saved_coop)
+		Cvar_SetValueQuick(&coop, saved_coop);
 }
 
 /*
@@ -7892,8 +7975,9 @@ static void Host_Savegame_f (void)
 	//add extra info (lightstyles, precaches, etc) in a way that's supposed to be compatible with DP.
 	//sidenote - this provides extended lightstyles and support for late precaches
 	//it does NOT protect against spawnfunc precache changes - we would need to include makestatics here too (and optionally baselines, or just recalculate those).
-	fprintf(f, "/*\n");
-	fprintf(f, "// QuakeSpasm extended savegame\n");
+	fputs("/*\n" SAVEGAME_EXTENDED_HEADER "\n", f);
+	fprintf(f, "sv.coop %g\n", coop.value);
+	fprintf(f, "sv.deathmatch %g\n", deathmatch.value);
 	for (i = MAX_LIGHTSTYLES_VANILLA; i < MAX_LIGHTSTYLES; i++)
 	{
 		if (sv.lightstyles[i])
@@ -8034,6 +8118,9 @@ static void Host_Loadgame_f (void)
 	CL_Disconnect ();
 	if (sv.active)
 		Host_ShutdownServer (false);
+
+	// These cvars affect entity spawning, so restore them before rebuilding the map.
+	Host_LoadgameModeCvars(data);
 
 	PR_SwitchQCVM(&sv.qcvm);
 	SV_SpawnServer (mapname);
