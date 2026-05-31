@@ -7,9 +7,11 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 artifacts_dir="$repo_root/artifacts"
 binary="$repo_root/Quake/quakespasm-valgrind"
 supp_file="$script_dir/valgrind.supp"
-autoexec_dir="$repo_root/Quake/id1"
-autoexec_path="$autoexec_dir/autoexec.cfg"
-autoexec_backup=""
+client_cfg_dir="$repo_root/Quake/id1"
+client_cfg_name="ci_valgrind_client_$$.cfg"
+client_cfg_path="$client_cfg_dir/$client_cfg_name"
+server_cfg_name="ci_valgrind_server_$$.cfg"
+server_cfg_path=""
 stdin_stub="$artifacts_dir/stdin.txt"
 server_mod="crmod7"
 server_dir="$repo_root/Quake/$server_mod"
@@ -24,32 +26,25 @@ client_timeout=120s
 timeout_kill_after=15s
 
 mkdir -p "$artifacts_dir"
-rm -f "$combined_log" "$stdin_stub"
+rm -f "$combined_log" "$stdin_stub" "$artifacts_dir/valgrind.log" \
+  "$server_valgrind_log" "$server_stdout_log"
 printf "\n" > "$stdin_stub"
 
-if [ ! -x "$binary" ]; then
-  echo "Missing valgrind binary at $binary; run build-linux-valgrind.sh first." >&2
-  exit 1
-fi
-
-# Prepare a tiny autoexec so shareware builds still run scripted commands.
-mkdir -p "$autoexec_dir"
-
-if [ -f "$autoexec_path" ]; then
-  autoexec_backup="$(mktemp)"
-  cp "$autoexec_path" "$autoexec_backup"
-fi
-
 cleanup() {
-  rm -f "$autoexec_path"
-  if [ -n "$autoexec_backup" ] && [ -f "$autoexec_backup" ]; then
-    mv "$autoexec_backup" "$autoexec_path"
+  rm -f "$client_cfg_path"
+  if [ -n "$server_cfg_path" ]; then
+    rm -f "$server_cfg_path"
   fi
   if [ -n "$server_pid" ]; then
     kill "$server_pid" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
+
+if [ ! -x "$binary" ]; then
+  echo "Missing valgrind binary at $binary; run build-linux-valgrind.sh first." >&2
+  exit 1
+fi
 
 run_with_timeout() {
   timeout --signal=TERM --kill-after="$timeout_kill_after" "$@"
@@ -65,9 +60,31 @@ export QSS_NOSTDIN=1
 
 cd "$repo_root/Quake"
 
+# Prepare scripted client commands without touching autoexec.cfg. Dedicated
+# servers also exec autoexec.cfg at startup, so a shared autoexec can make the
+# server run client-only commands while it is still starting under Valgrind.
+mkdir -p "$client_cfg_dir"
+connect_command="connect la.quakeone.com:26002"
+if [ -f "$server_dir/progs.dat" ]; then
+  connect_command="connect 127.0.0.1:$server_port"
+fi
+cat > "$client_cfg_path" <<EOF
+map start
+wait 30
+$connect_command
+wait 300
+disconnect
+quit
+EOF
+
 # Optionally launch a local server using crmod7 if the progs.dat is present.
 if [ -f "$server_dir/progs.dat" ]; then
   echo "Starting local server with -game $server_mod on port $server_port"
+  server_cfg_path="$server_dir/$server_cfg_name"
+  cat > "$server_cfg_path" <<'EOF'
+wait 300
+quit
+EOF
   touch "$server_valgrind_log" "$server_stdout_log"
   if ! command -v valgrind >/dev/null 2>&1; then
     echo "Warning: valgrind not found; running server without it" >&2
@@ -78,12 +95,14 @@ if [ -f "$server_dir/progs.dat" ]; then
       -port "$server_port" \
       +map start \
       +sv_public 0 \
+      +exec "$server_cfg_name" \
       >"$server_stdout_log" 2>&1 &
   else
     run_with_timeout "$server_timeout" valgrind <"$stdin_stub" \
       --tool=memcheck \
       --leak-check=full \
       --show-leak-kinds=definite \
+      --errors-for-leak-kinds=definite \
       --track-origins=yes \
       --suppressions="$supp_file" \
       --error-exitcode=1 \
@@ -95,6 +114,7 @@ if [ -f "$server_dir/progs.dat" ]; then
       -port "$server_port" \
       +map start \
       +sv_public 0 \
+      +exec "$server_cfg_name" \
       >"$server_stdout_log" 2>&1 &
   fi
   server_pid=$!
@@ -102,21 +122,12 @@ else
   echo "Skipping local server: $server_dir/progs.dat not found"
 fi
 
-# Write autoexec after server decision so we can include/exclude local connect.
-cat > "$autoexec_path" <<'EOF'
-map start
-wait 30
-connect la.quakeone.com:26002
-wait 300
-disconnect
-quit
-EOF
-
 set +e
 run_with_timeout "$client_timeout" xvfb-run -a valgrind \
   --tool=memcheck \
   --leak-check=full \
   --show-leak-kinds=definite \
+  --errors-for-leak-kinds=definite \
   --track-origins=yes \
   --suppressions="$supp_file" \
   --error-exitcode=1 \
@@ -125,7 +136,7 @@ run_with_timeout "$client_timeout" xvfb-run -a valgrind \
   -basedir "$repo_root/Quake" \
   -heapsize 256000 \
   -zone 1024 \
-  +exec autoexec.cfg
+  +exec "$client_cfg_name"
 client_status=$?
 
 if [ -n "$server_pid" ]; then
@@ -136,17 +147,25 @@ fi
 
 set -e
 
+exit_status=0
 if is_timeout_status "$client_status"; then
   echo "Valgrind run timed out after $client_timeout" >&2
-  exit 124
+  exit_status=124
 elif [ "$client_status" -ne 0 ]; then
   echo "Valgrind reported errors (exit $client_status); see $artifacts_dir/valgrind.log" >&2
+  exit_status=1
 fi
 
 if is_timeout_status "$server_status"; then
   echo "Server valgrind timed out after $server_timeout" >&2
+  if [ "$exit_status" -eq 0 ]; then
+    exit_status=124
+  fi
 elif [ "$server_status" -ne 0 ]; then
   echo "Server valgrind reported errors (exit $server_status); see $server_valgrind_log" >&2
+  if [ "$exit_status" -eq 0 ]; then
+    exit_status=1
+  fi
 fi
 
 if [ -f "$artifacts_dir/valgrind.log" ]; then
@@ -182,4 +201,4 @@ if [ -f "$server_stdout_log" ]; then
   } >> "$combined_log"
 fi
 
-exit 0
+exit "$exit_status"

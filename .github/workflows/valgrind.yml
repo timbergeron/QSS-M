@@ -84,6 +84,7 @@ jobs:
         ./Misc/valgrind/run-valgrind.sh
 
     - name: Upload valgrind logs
+      if: always()
       uses: actions/upload-artifact@v7
       with:
         name: valgrind-logs
@@ -95,6 +96,7 @@ jobs:
         if-no-files-found: warn
 
     - name: Upload valgrind binary
+      if: always()
       uses: actions/upload-artifact@v7
       with:
         name: quakespasm-valgrind
