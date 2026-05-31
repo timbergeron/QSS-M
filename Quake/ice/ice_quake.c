@@ -268,7 +268,7 @@ static void QICE_Heartbeat(qice_connection_t *b)
 		if (sv_public.value > 0)
 			Datagram_GenerateGetInfoString(info+ofs, sizeof(info)-ofs);
 		else
-			*info = 0;	//try to hide by hiding the info.
+			info[ofs] = '\0';	//try to hide by sending an empty serverinfo payload.
 		QICE_SendBrokerFrame(b, info);
 	}
 
