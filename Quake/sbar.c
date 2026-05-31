@@ -1906,6 +1906,9 @@ static qpic_t *Sbar_PowerupFacePic (void)
 {
 	int items = cl.items;
 
+	if (cl.stats[STAT_HEALTH] <= 0)
+		return NULL;
+
 	if ((items & (IT_INVISIBILITY | IT_INVULNERABILITY | IT_QUAD))
 		== (IT_INVISIBILITY | IT_INVULNERABILITY | IT_QUAD)
 		&& sb_face_invis_quad_invuln)
