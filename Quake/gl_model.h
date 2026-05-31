@@ -539,6 +539,7 @@ typedef struct qmodel_s
 	texture_t	**textures;
 
 	byte		*visdata;
+	int			visdata_size;
 	void		*lightgrid;
 	byte		*lightdata;
 	size_t		lightdatasamples;

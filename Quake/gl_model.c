@@ -222,10 +222,19 @@ mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model)
 Mod_DecompressVis
 ===================
 */
+static void Mod_DecompressVis_VisError (qmodel_t *model, const char *reason)
+{
+	if (!model->viswarn)
+	{
+		model->viswarn = true;
+		Con_Warning ("Mod_DecompressVis: %s on model \"%s\"\n", reason, model->name);
+	}
+}
+
 static byte *Mod_DecompressVis (byte *in, qmodel_t *model)
 {
 	int		c;
-	byte	*out;
+	byte	*out, *inend;
 	byte	*outend;
 	int		row;
 
@@ -240,6 +249,18 @@ static byte *Mod_DecompressVis (byte *in, qmodel_t *model)
 	out = mod_decompressed;
 	outend = mod_decompressed + row;
 
+	if (in && model->visdata && model->visdata_size > 0)
+	{
+		inend = model->visdata + model->visdata_size;
+		if (in < model->visdata || in >= inend)
+		{
+			Mod_DecompressVis_VisError (model, "input offset out of range");
+			in = NULL;
+		}
+	}
+	else
+		inend = NULL;
+
 	if (!in)
 	{	// no vis info, so make all visible
 		while (row)
@@ -252,24 +273,41 @@ static byte *Mod_DecompressVis (byte *in, qmodel_t *model)
 
 	do
 	{
+		if (inend && in >= inend)
+		{
+			Mod_DecompressVis_VisError (model, "input underrun");
+			memset (out, 0xff, outend - out);
+			return mod_decompressed;
+		}
+
 		if (*in)
 		{
 			*out++ = *in++;
 			continue;
 		}
 
+		if (inend && in + 1 >= inend)
+		{
+			Mod_DecompressVis_VisError (model, "input underrun");
+			memset (out, 0xff, outend - out);
+			return mod_decompressed;
+		}
+
 		c = in[1];
 		in += 2;
+		if (!c)
+		{
+			Mod_DecompressVis_VisError (model, "zero run length");
+			memset (out, 0xff, outend - out);
+			return mod_decompressed;
+		}
 		if (c > row - (out - mod_decompressed))
-			c = row - (out - mod_decompressed);	//now that we're dynamically allocating pvs buffers, we have to be more careful to avoid heap overflows with buggy maps.
+			c = (int)(row - (out - mod_decompressed));	//now that we're dynamically allocating pvs buffers, we have to be more careful to avoid heap overflows with buggy maps.
 		while (c)
 		{
 			if (out == outend)
 			{
-				if(!model->viswarn) {
-					model->viswarn = true;
-					Con_Warning("Mod_DecompressVis: output overrun on model \"%s\"\n", model->name);
-				}
+				Mod_DecompressVis_VisError (model, "output overrun");
 				return mod_decompressed;
 			}
 			*out++ = 0;
@@ -303,6 +341,21 @@ byte *Mod_NoVisPVS (qmodel_t *model)
 		memset(mod_novis, 0xff, mod_novis_capacity);
 	}
 	return mod_novis;
+}
+
+static byte *Mod_LeafVisData (int visofs)
+{
+	if (visofs == -1)
+		return NULL;
+
+	if (!loadmodel->visdata || loadmodel->visdata_size <= 0 ||
+		visofs < 0 || visofs >= loadmodel->visdata_size)
+	{
+		Mod_DecompressVis_VisError (loadmodel, "leaf VIS offset out of range");
+		return NULL;
+	}
+
+	return loadmodel->visdata + visofs;
 }
 
 /*
@@ -1632,9 +1685,11 @@ static void Mod_LoadVisibility (lump_t *l)
 	if (!l->filelen)
 	{
 		loadmodel->visdata = NULL;
+		loadmodel->visdata_size = 0;
 		return;
 	}
-	loadmodel->visdata = (byte *) Hunk_AllocNameNoFill ( l->filelen, loadname);
+	loadmodel->visdata_size = l->filelen;
+	loadmodel->visdata = (byte *) Hunk_AllocNameNoFill (loadmodel->visdata_size, loadname);
 	memcpy (loadmodel->visdata, mod_base + l->fileofs, l->filelen);
 }
 
@@ -2460,10 +2515,7 @@ static void Mod_ProcessLeafs_S (dsleaf_t *in, int filelen)
 		out->nummarksurfaces = (unsigned short)LittleShort(in->nummarksurfaces); //johnfitz -- unsigned short
 
 		p = LittleLong(in->visofs);
-		if (p == -1)
-			out->compressed_vis = NULL;
-		else
-			out->compressed_vis = loadmodel->visdata + p;
+		out->compressed_vis = Mod_LeafVisData (p);
 		out->efrags = NULL;
 
 		for (j=0 ; j<4 ; j++)
@@ -2507,10 +2559,7 @@ static void Mod_ProcessLeafs_L1 (dl1leaf_t *in, int filelen)
 		out->nummarksurfaces = LittleLong(in->nummarksurfaces); //johnfitz -- unsigned short
 
 		p = LittleLong(in->visofs);
-		if (p == -1)
-			out->compressed_vis = NULL;
-		else
-			out->compressed_vis = loadmodel->visdata + p;
+		out->compressed_vis = Mod_LeafVisData (p);
 		out->efrags = NULL;
 
 		for (j=0 ; j<4 ; j++)
@@ -2554,10 +2603,7 @@ static void Mod_ProcessLeafs_L2 (dl2leaf_t *in, int filelen)
 		out->nummarksurfaces = LittleLong(in->nummarksurfaces); //johnfitz -- unsigned short
 
 		p = LittleLong(in->visofs);
-		if (p == -1)
-			out->compressed_vis = NULL;
-		else
-			out->compressed_vis = loadmodel->visdata + p;
+		out->compressed_vis = Mod_LeafVisData (p);
 		out->efrags = NULL;
 
 		for (j=0 ; j<4 ; j++)
@@ -3636,11 +3682,12 @@ static FILE *Mod_FindVisibilityExternal(void)
 	return f;
 }
 
-static byte *Mod_LoadVisibilityExternal(FILE* f)
+static byte *Mod_LoadVisibilityExternal(FILE* f, int *visdata_size)
 {
 	int	mark, filelen;
 	byte*	visdata;
 
+	*visdata_size = 0;
 	filelen = 0;
 	if (fread(&filelen, 1, 4, f) != 4) // woods
 		return NULL;
@@ -3654,6 +3701,7 @@ static byte *Mod_LoadVisibilityExternal(FILE* f)
 		Hunk_FreeToLowMark (mark);
 		return NULL;
 	}
+	*visdata_size = filelen;
 	return visdata;
 }
 
@@ -3748,7 +3796,7 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 			loadmodel->leafs = NULL;
 			loadmodel->numleafs = 0;
 			Con_DPrintf("found valid external .vis file for map\n");
-			loadmodel->visdata = Mod_LoadVisibilityExternal(fvis);
+			loadmodel->visdata = Mod_LoadVisibilityExternal(fvis, &loadmodel->visdata_size);
 			if (loadmodel->visdata) {
 				Mod_LoadLeafsExternal(fvis);
 			}
