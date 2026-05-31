@@ -1177,6 +1177,9 @@ void Random_f (void)
 	int i;
 	char sayCommand[MAXCMDLINE];
 	char argsString[MAXCMDLINE] = "";
+	const char *randomizePrefix = "say randomize: ";
+	const char *resultPrefix = "say result: ";
+	const size_t argsStringSize = sizeof(sayCommand) - strlen(randomizePrefix) - strlen("\n");
 
 	if (numArgs <= CMD_NAME_ARG + 1) // Command name + at least one option
 	{
@@ -1193,7 +1196,7 @@ void Random_f (void)
 	{
 		const char* arg = Cmd_Argv(i);
 
-		if (q_strlcat(argsString, arg, sizeof(argsString)) >= sizeof(argsString))
+		if (q_strlcat(argsString, arg, argsStringSize) >= argsStringSize)
 		{
 			Con_Printf ("\nToo many arguments for random command.\n\n");
 			return;
@@ -1201,7 +1204,7 @@ void Random_f (void)
 
 		if (i < numArgs - 1)
 		{
-			if (q_strlcat(argsString, ", ", sizeof(argsString)) >= sizeof(argsString))
+			if (q_strlcat(argsString, ", ", argsStringSize) >= argsStringSize)
 			{
 				Con_Printf ("\ntoo many arguments for random command.\n\n");
 				return;
@@ -1211,10 +1214,14 @@ void Random_f (void)
 
 	if (cls.state == ca_connected)
 	{
-		snprintf (sayCommand, sizeof(sayCommand), "say randomize: %s\n", argsString);
+		q_strlcpy (sayCommand, randomizePrefix, sizeof(sayCommand));
+		q_strlcat (sayCommand, argsString, sizeof(sayCommand));
+		q_strlcat (sayCommand, "\n", sizeof(sayCommand));
 		Cbuf_AddText (sayCommand);
 
-		snprintf (sayCommand, sizeof(sayCommand), "say result: %s\n", selectedArg);
+		q_strlcpy (sayCommand, resultPrefix, sizeof(sayCommand));
+		q_strlcat (sayCommand, selectedArg, sizeof(sayCommand));
+		q_strlcat (sayCommand, "\n", sizeof(sayCommand));
 		Cbuf_AddText (sayCommand);
 	}
 	else
