@@ -7,11 +7,11 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 artifacts_dir="$repo_root/artifacts"
 binary="$repo_root/Quake/quakespasm-valgrind"
 supp_file="$script_dir/valgrind.supp"
-client_cfg_dir="$repo_root/Quake/id1"
-client_cfg_name="ci_valgrind_client_$$.cfg"
-client_cfg_path="$client_cfg_dir/$client_cfg_name"
-server_cfg_name="ci_valgrind_server_$$.cfg"
-server_cfg_path=""
+client_game="ci_valgrind_client_$$"
+client_dir="$repo_root/Quake/$client_game"
+client_autoexec_path="$client_dir/autoexec.cfg"
+server_autoexec_path=""
+server_autoexec_backup=""
 stdin_stub="$artifacts_dir/stdin.txt"
 server_mod="crmod7"
 server_dir="$repo_root/Quake/$server_mod"
@@ -31,12 +31,18 @@ rm -f "$combined_log" "$stdin_stub" "$artifacts_dir/valgrind.log" \
 printf "\n" > "$stdin_stub"
 
 cleanup() {
-  rm -f "$client_cfg_path"
-  if [ -n "$server_cfg_path" ]; then
-    rm -f "$server_cfg_path"
-  fi
   if [ -n "$server_pid" ]; then
     kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+  case "$client_dir" in
+    "$repo_root/Quake/ci_valgrind_client_"*) rm -rf "$client_dir" ;;
+  esac
+  if [ -n "$server_autoexec_path" ]; then
+    rm -f "$server_autoexec_path"
+  fi
+  if [ -n "$server_autoexec_backup" ] && [ -f "$server_autoexec_backup" ]; then
+    mv "$server_autoexec_backup" "$server_autoexec_path"
   fi
 }
 trap cleanup EXIT
@@ -60,29 +66,31 @@ export QSS_NOSTDIN=1
 
 cd "$repo_root/Quake"
 
-# Prepare scripted client commands without touching autoexec.cfg. Dedicated
-# servers also exec autoexec.cfg at startup, so a shared autoexec can make the
-# server run client-only commands while it is still starting under Valgrind.
-mkdir -p "$client_cfg_dir"
-connect_command="connect la.quakeone.com:26002"
-if [ -f "$server_dir/progs.dat" ]; then
-  connect_command="connect 127.0.0.1:$server_port"
-fi
-cat > "$client_cfg_path" <<EOF
+# Drive the run through per-game autoexec files. In this tree +exec command-line
+# commands can be delayed behind quake.rc/startdemos, which makes CI time out.
+mkdir -p "$client_dir"
+cat > "$client_autoexec_path" <<'EOF'
 map start
-wait 30
-$connect_command
-wait 300
-disconnect
+wait
+wait
+wait
 quit
 EOF
 
 # Optionally launch a local server using crmod7 if the progs.dat is present.
 if [ -f "$server_dir/progs.dat" ]; then
   echo "Starting local server with -game $server_mod on port $server_port"
-  server_cfg_path="$server_dir/$server_cfg_name"
-  cat > "$server_cfg_path" <<'EOF'
-wait 300
+  server_autoexec_path="$server_dir/autoexec.cfg"
+  if [ -f "$server_autoexec_path" ]; then
+    server_autoexec_backup="$(mktemp)"
+    cp "$server_autoexec_path" "$server_autoexec_backup"
+  fi
+  cat > "$server_autoexec_path" <<'EOF'
+sv_public 0
+map start
+wait
+wait
+wait
 quit
 EOF
   touch "$server_valgrind_log" "$server_stdout_log"
@@ -93,9 +101,6 @@ EOF
       -game "$server_mod" \
       -dedicated 1 \
       -port "$server_port" \
-      +map start \
-      +sv_public 0 \
-      +exec "$server_cfg_name" \
       >"$server_stdout_log" 2>&1 &
   else
     run_with_timeout "$server_timeout" valgrind <"$stdin_stub" \
@@ -112,9 +117,6 @@ EOF
       -game "$server_mod" \
       -dedicated 1 \
       -port "$server_port" \
-      +map start \
-      +sv_public 0 \
-      +exec "$server_cfg_name" \
       >"$server_stdout_log" 2>&1 &
   fi
   server_pid=$!
@@ -134,9 +136,9 @@ run_with_timeout "$client_timeout" xvfb-run -a valgrind \
   --log-file="$artifacts_dir/valgrind.log" \
   ./quakespasm-valgrind \
   -basedir "$repo_root/Quake" \
+  -game "$client_game" \
   -heapsize 256000 \
-  -zone 1024 \
-  +exec "$client_cfg_name"
+  -zone 1024
 client_status=$?
 
 if [ -n "$server_pid" ]; then
