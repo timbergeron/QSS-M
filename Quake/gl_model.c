@@ -224,11 +224,11 @@ Mod_DecompressVis
 */
 static void Mod_DecompressVis_VisError (qmodel_t *model, const char *reason)
 {
-	if (!model->viswarn)
-	{
-		model->viswarn = true;
-		Con_Warning ("Mod_DecompressVis: %s on model \"%s\"\n", reason, model->name);
-	}
+	if (!developer.value || model->viswarn)
+		return;
+
+	model->viswarn = true;
+	Con_DPrintf ("Mod_DecompressVis: %s on model \"%s\"\n", reason, model->name);
 }
 
 static byte *Mod_DecompressVis (byte *in, qmodel_t *model)
