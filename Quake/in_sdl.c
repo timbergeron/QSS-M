@@ -334,18 +334,50 @@ extern cvar_t cl_bottomcolor; // woods
 
 static double originalMouseSpeed = -1.0;
 
+typedef kern_return_t (*IN_IOHIDGetAccelerationWithKeyFunc)(io_connect_t handle, CFStringRef key, double *acceleration);
+typedef kern_return_t (*IN_IOHIDSetAccelerationWithKeyFunc)(io_connect_t handle, CFStringRef key, double acceleration);
+
+static kern_return_t IN_IOHIDGetAccelerationWithKey(io_connect_t handle, CFStringRef key, double *acceleration)
+{
+	static IN_IOHIDGetAccelerationWithKeyFunc func = NULL;
+	static qboolean tried = false;
+
+	if (!tried)
+	{
+		func = (IN_IOHIDGetAccelerationWithKeyFunc)dlsym(RTLD_DEFAULT, "IOHIDGetAccelerationWithKey");
+		tried = true;
+	}
+
+	if (!func)
+		return kIOReturnUnsupported;
+
+	return func(handle, key, acceleration);
+}
+
+static kern_return_t IN_IOHIDSetAccelerationWithKey(io_connect_t handle, CFStringRef key, double acceleration)
+{
+	static IN_IOHIDSetAccelerationWithKeyFunc func = NULL;
+	static qboolean tried = false;
+
+	if (!tried)
+	{
+		func = (IN_IOHIDSetAccelerationWithKeyFunc)dlsym(RTLD_DEFAULT, "IOHIDSetAccelerationWithKey");
+		tried = true;
+	}
+
+	if (!func)
+		return kIOReturnUnsupported;
+
+	return func(handle, key, acceleration);
+}
+
 static io_connect_t IN_GetIOHandle(void)
 {
 	io_connect_t iohandle = MACH_PORT_NULL;
 	io_service_t iohidsystem = MACH_PORT_NULL;
-	mach_port_t masterport;
 	kern_return_t status;
 
-	status = IOMasterPort(MACH_PORT_NULL, &masterport);
-	if (status != KERN_SUCCESS)
-		return 0;
-
-	iohidsystem = IORegistryEntryFromPath(masterport, kIOServicePlane ":/IOResources/IOHIDSystem");
+	iohidsystem = IORegistryEntryFromPath(MACH_PORT_NULL, kIOServicePlane ":/IOResources/IOHIDSystem");
 	if (!iohidsystem)
 		return 0;
 
@@ -378,7 +410,7 @@ static void IN_ReenableOSXMouseAccel_AtExit(void)
 		{
 			double accel = (originalMouseSpeed == -1) ? 0.0 : originalMouseSpeed;
 			
-			if (IOHIDSetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), accel) != kIOReturnSuccess)
+			if (IN_IOHIDSetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), accel) != kIOReturnSuccess)
 			{
 				printf("RESTORE-FAIL %g\n", accel);
 				/* try the CG shim instead */
@@ -407,7 +439,7 @@ static void IN_ReenableOSXMouseAccel (void)
 		/* NEW: Restore to default (0.0) if originalMouseSpeed is -1 (save failed) */
 		double accel = (originalMouseSpeed == -1) ? 0.0 : originalMouseSpeed;
 		
-		if (IOHIDSetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), accel) != kIOReturnSuccess)
+		if (IN_IOHIDSetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), accel) != kIOReturnSuccess)
 		{
 			Con_DPrintf("RESTORE-FAIL %g\n", accel);
 			/* try the CG shim instead */
@@ -439,7 +471,7 @@ static void IN_ReenableOSXMouseAccelForFocus (void)
 		/* NEW: Restore to default (0.0) if originalMouseSpeed is -1 (save failed) */
 		double accel = (originalMouseSpeed == -1) ? 0.0 : originalMouseSpeed;
 		
-		if (IOHIDSetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), accel) != kIOReturnSuccess)
+		if (IN_IOHIDSetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), accel) != kIOReturnSuccess)
 		{
 			Con_DPrintf("RESTORE-FAIL %g\n", accel);
 			/* try the CG shim instead */
@@ -626,7 +658,7 @@ static void IN_DisableOSXMouseAccel (void)
 	io_connect_t mouseDev = IN_GetIOHandle();
 	if (mouseDev != 0)
 	{
-		kern_return_t kr = IOHIDGetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), &originalMouseSpeed);
+		kern_return_t kr = IN_IOHIDGetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), &originalMouseSpeed);
 
 		/* Fallback: if we lack permission try CGEventSource */
 		if (kr != kIOReturnSuccess) {
@@ -644,7 +676,7 @@ static void IN_DisableOSXMouseAccel (void)
 }
 			// Final fallback for macOS 15+ where CGS symbol is removed
 			else if (!fn) {
-				if (IOHIDGetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), &originalMouseSpeed) == kIOReturnSuccess) {
+				if (IN_IOHIDGetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), &originalMouseSpeed) == kIOReturnSuccess) {
 					Con_DPrintf("Saved accel %g (via IOKit fallback)\n", originalMouseSpeed);
 					kr = kIOReturnSuccess;
 				}
@@ -655,7 +687,7 @@ static void IN_DisableOSXMouseAccel (void)
 
 		if (kr == kIOReturnSuccess)
 {
-			if (IOHIDSetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), -1.0) != kIOReturnSuccess)
+			if (IN_IOHIDSetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), -1.0) != kIOReturnSuccess)
 			{
 				Cvar_Set("in_disablemacosxmouseaccel", "0");
 				Con_DPrintf("WARNING: Could not disable mouse acceleration (failed at IOHIDSetAccelerationWithKey).\n");
@@ -691,7 +723,7 @@ static void IN_RefreshOriginalAccel(void)
 	io_connect_t mouseDev = IN_GetIOHandle();
 	if (!mouseDev) return;
 	double accel;
-	if (IOHIDGetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), &accel) == kIOReturnSuccess)
+	if (IN_IOHIDGetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), &accel) == kIOReturnSuccess)
 		originalMouseSpeed = accel;
 	IOServiceClose(mouseDev);
 }
@@ -702,7 +734,7 @@ static void IN_DisableOSXMouseAccelOnly (void)
 	io_connect_t mouseDev = IN_GetIOHandle();
 	if (mouseDev != 0)
 	{
-		if (IOHIDSetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), -1.0) != kIOReturnSuccess)
+		if (IN_IOHIDSetAccelerationWithKey(mouseDev, CFSTR(kIOHIDMouseAccelerationType), -1.0) != kIOReturnSuccess)
 		{
 			Con_DPrintf("WARNING: Could not disable mouse acceleration (IOHIDSetAccelerationWithKey failed).\n");
 		}
