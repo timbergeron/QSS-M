@@ -9625,6 +9625,9 @@ static void Give_SetBaseWeapons (int ammo)
 
 static void Give_SetEverything (void)
 {
+	if (host_client)
+		host_client->give_infinite_ammo = false;
+
 	Give_SetBaseWeapons(999);
 	Give_SetAmmo(GIVE_AMMO_SHELLS, 100);
 	Give_SetAmmo(GIVE_AMMO_NAILS, 200);
@@ -9632,6 +9635,43 @@ static void Give_SetEverything (void)
 	Give_SetAmmo(GIVE_AMMO_CELLS, 200);
 	sv_player->v.health = sv_player->v.max_health = 250;
 	Give_SetArmor(200, true, "red");
+	Give_AddSigils(IT_SIGIL1 | IT_SIGIL2 | IT_SIGIL3 | IT_SIGIL4);
+}
+
+static void Give_SetInfiniteAmmoValues (void)
+{
+	Give_SetAmmo(GIVE_AMMO_SHELLS, 999);
+	Give_SetAmmo(GIVE_AMMO_NAILS, 999);
+	Give_SetAmmo(GIVE_AMMO_ROCKETS, 999);
+	Give_SetAmmo(GIVE_AMMO_CELLS, 999);
+	Give_SetAmmo(GIVE_AMMO_LAVA_NAILS, 999);
+	Give_SetAmmo(GIVE_AMMO_MULTI_ROCKETS, 999);
+	Give_SetAmmo(GIVE_AMMO_PLASMA_CELLS, 999);
+	sv_player->v.currentammo = 999;
+}
+
+void Host_GiveInfiniteAmmoRefill (client_t *client, edict_t *ent)
+{
+	edict_t *saved_player;
+
+	if (!client || !client->give_infinite_ammo || !ent || ent->free)
+		return;
+
+	saved_player = sv_player;
+	sv_player = ent;
+	Give_SetInfiniteAmmoValues();
+	sv_player = saved_player;
+}
+
+static void Give_SetInfinite (void)
+{
+	if (host_client)
+		host_client->give_infinite_ammo = true;
+
+	Give_SetBaseWeapons(999);
+	Give_SetInfiniteAmmoValues();
+	sv_player->v.health = sv_player->v.max_health = 999;
+	Give_SetArmor(999, true, "red");
 	Give_AddSigils(IT_SIGIL1 | IT_SIGIL2 | IT_SIGIL3 | IT_SIGIL4);
 }
 
@@ -10109,6 +10149,11 @@ static qboolean Give_GrantItem (const char *item, int amt, qboolean has_amount, 
 		Give_SetEverything();
 		msg = "EVERYTHING";
 	}
+	else if (!q_strcasecmp(item, "infinite"))
+	{
+		Give_SetInfinite();
+		msg = "INFINITE";
+	}
 	else
 		return false;
 
@@ -10262,7 +10307,7 @@ qboolean CompleteGive (const char* partial, void* unused) // woods #give+
 			/* runes / sigils ----------------------------------------- */
 			"sigils", "sigil1", "sigil2", "sigil3", "sigil4", "rune1", "rune2", "rune3", "rune4",
 			/* weapons & macros --------------------------------------- */
-			"weapons", "all",
+			"weapons", "all", "infinite",
 			/* individual weapons ------------------------------------- */
 			"axe", "shotgun", "sg", "supershotgun", "ssg", "nailgun", "ng", "supernailgun", "sng",
 			"grenadelauncher", "gl", "rocketlauncher", "rl", "lightninggun", "lg",

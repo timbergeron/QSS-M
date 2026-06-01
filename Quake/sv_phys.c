@@ -1384,6 +1384,8 @@ void SV_Physics_Client (edict_t	*ent, int num)
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->self = EDICT_TO_PROG(ent);
 	PR_ExecuteProgram (pr_global_struct->PlayerPostThink);
+
+	Host_GiveInfiniteAmmoRefill (&svs.clients[num-1], ent);
 }
 
 //============================================================================

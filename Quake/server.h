@@ -246,6 +246,7 @@ typedef struct client_s
 	qboolean		knowntoqc;			// putclientinserver was called
 	qboolean		csqcactive;			// its prepared to accept csqc entities.
 	int				powerup_warn_flags;	// woods - #resurrect #give powerup state flags
+	qboolean		give_infinite_ammo;	// woods - #give infinite
 	double			coop_goto_next_time; // woods #goto - realtime throttle
 	qboolean		modvote_motd_shown;	// one-time per connection join message
 	qboolean		modvote_motd_active;	// join centerprint currently active
@@ -343,6 +344,8 @@ extern	client_t	*host_client;
 extern	double		host_time;  // woods #smoothcam
 
 extern	edict_t		*sv_player;
+
+void Host_GiveInfiniteAmmoRefill (client_t *client, edict_t *ent);
 
 //===========================================================
 
