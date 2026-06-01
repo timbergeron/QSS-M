@@ -2008,7 +2008,7 @@ static int QICE_ResendReliable (qsocket_t *sock)
 {
 	neterr_t err;
 	struct icestate_s *ice = sock->driverdata2;
-	unsigned int length;
+	int length;
 	struct
 	{
 		unsigned int length;

@@ -2334,7 +2334,7 @@ void S_Voip_Transmit(unsigned char clc, sizebuf_t *buf)
 		case VOIP_RAW16:
 			len = s_voip.capturepos-encpos;	//amount of data to be eaten in this frame
 			len = q_min((unsigned int)len, sizeof(outbuf)-outpos);
-			len &= ~((s_voip.encframesize*2)-1);
+			len -= len % ((size_t)s_voip.encframesize * 2);
 			level += S_Voip_Preprocess(start, len/2, micamp);
 			memcpy(outbuf+outpos, start, len);	//'encode'
 			outpos += len;			//bytes written to output

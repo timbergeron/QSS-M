@@ -5,6 +5,7 @@
 //We have a hack for compat with netquake.io, so netquake.io can connect to us. that happens according to protocol. disable the defines below.
 
 #include "ice_private.h"
+#include <limits.h>
 
 #if 1
 	//both qss and fteqw just use websocket packets as an alternative to udp packets, including the initial ccreq etc handshake.
@@ -287,7 +288,7 @@ SOCKET TCP_OpenStream(netadr_t *addr, const char *remotename, qboolean nonagle)
 #else
 	int _true = 1;	//linux seems to expect an int? doesn't matter too much if its treated as a char on little-endian systems.
 #endif
-	int newsocket;
+	SOCKET newsocket;
 	size_t addrsize = 0;	//some systems insist on this being correct.
 //	struct sockaddr_storage loc;
 	int recvbufsize = (1<<19);//512kb
@@ -349,7 +350,7 @@ SOCKET TCP_OpenStream(netadr_t *addr, const char *remotename, qboolean nonagle)
 //		bind(newsocket, (struct sockaddr *)&loc, ((struct sockaddr_in*)&loc)->sin_family == AF_INET?sizeof(struct sockaddr_in):sizeof(struct sockaddr_in6));
 	}
 
-	if (connect(newsocket, &addr->sa, addrsize) == INVALID_SOCKET)
+	if (connect(newsocket, &addr->sa, (int)addrsize) == INVALID_SOCKET)
 	{
 		int err = NET_ERRNO();
 		if (err != NET_EWOULDBLOCK && err != NET_EINPROGRESS)
@@ -458,12 +459,17 @@ static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char 
 	} mask;
 	unsigned short ctrl = 0x8000 | (packettype<<8);	// FIN + opcode
 	uint64_t paylen = 0;
-	unsigned int payoffs = f->pendingsize;
+	int payoffs = f->pendingsize;
 //	int i;
 	if (!f->isserver)
 		ctrl |= 0x0080;	// MASK bit: only set when acting as client (RFC 6455)
 	if (!f->stream)
 		return;	//can't do anything anyway...
+	if (f->pendingsize < 0 || length > (size_t)INT_MAX || (size_t)f->pendingsize + length + 14 > (size_t)INT_MAX)
+	{
+		f->err = VFS_ERROR_UNSPECIFIED;
+		return;
+	}
 	switch((ctrl>>8) & 0xf)
 	{
 #if 0
@@ -488,7 +494,7 @@ static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char 
 		ctrl |= paylen;	//smol
 	if (ctrl&0x80)
 		payoffs += 4;	//mask
-	payoffs += paylen;
+	payoffs += (int)paylen;
 
 	if (f->pendingmax < f->pendingsize+payoffs)
 	{	//oh noes. wouldn't be space
@@ -529,7 +535,7 @@ static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char 
 		mask.i = f->mask;
 		//'re-randomise' it a bit
 		f->mask = (f->mask<<4) | (f->mask>>(32-4));
-		f->mask += (payoffs<<16) + paylen;
+		f->mask += ((unsigned int)payoffs << 16) + (unsigned int)paylen;
 
 		f->pending[payoffs++] = mask.b[0];
 		f->pending[payoffs++] = mask.b[1];
@@ -561,14 +567,15 @@ static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char 
 #endif
 	default: //raw data
 		memcpy(f->pending+payoffs, data, length);
-		payoffs += length;
+		payoffs += (int)length;
 		break;
 	}
 	if (ctrl&0x80)
 	{
-		unsigned char *buf = (unsigned char*)f->pending+payoffs-paylen;
+		int masklen = (int)paylen;
+		unsigned char *buf = (unsigned char*)f->pending+payoffs-masklen;
 		int i;
-		for (i = 0; i < paylen; i++)
+		for (i = 0; i < masklen; i++)
 			buf[i] ^= mask.b[i&3];
 	}
 	f->pendingsize = payoffs;
@@ -829,7 +836,7 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 					}
 
 					f->conpending = false;
-					f->readbufferofs = le-f->readbuffer;
+					f->readbufferofs = (int)(le-f->readbuffer);
 
 					if (f->serverwaiting)
 					{
@@ -950,8 +957,8 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 			size_t inlen = f->readbuffered-f->readbufferofs;
 
 			unsigned short ctrl = inbuffer[0]<<8 | inbuffer[1];
-			unsigned long paylen;
-			unsigned int payoffs = 2;
+			int paylen;
+			size_t payoffs = 2;
 			unsigned int mask = 0;
 
 			if (ctrl & 0x7000)
@@ -990,7 +997,7 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 					f->err = VFS_ERROR_UNSPECIFIED;	//abusively large...
 					break;
 				}
-				paylen = ullpaylen;
+				paylen = (int)ullpaylen;
 				payoffs += 8;
 			}
 			else if ((ctrl & 0x7f) == 126)
@@ -1023,9 +1030,9 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 				payoffs += 4;
 			}
 			/*if there isn't space, try again next time around*/
-			if (payoffs + paylen > inlen)
+			if (payoffs + (size_t)paylen > inlen)
 			{
-				if (payoffs + paylen > sizeof(f->readbuffer))
+				if (payoffs + (size_t)paylen > sizeof(f->readbuffer))
 				{
 					f->err = VFS_ERROR_UNSPECIFIED;	//payload is too big for our in buffer
 					break;
@@ -1043,7 +1050,7 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 			}
 
 			t = 0; //allow checking for new data again.
-			f->readbufferofs += payoffs + paylen;	//skip to end...
+			f->readbufferofs += (int)(payoffs + (size_t)paylen);	//skip to end...
 			switch((ctrl>>8) & 0xf)
 			{
 			case WS_PACKETTYPE_CLOSE:
@@ -1063,7 +1070,7 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 #ifdef NETQUAKE_IO_HACK
 				if (f->netquakeiohack)
 				{
-					if (bytestoread+3 >= paylen)
+					if (bytestoread >= 0 && bytestoread+3 >= paylen)
 					{	//caller passed a big enough buffer
 						char *d = f->readbuffer+f->readbufferofs-paylen;
 						memcpy((char*)buffer+4, d+1, paylen);
@@ -1085,7 +1092,7 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 				}
 				else
 #endif
-				if (bytestoread >= paylen)
+				if (bytestoread >= 0 && bytestoread >= paylen)
 				{	//caller passed a big enough buffer
 					memcpy(buffer, f->readbuffer+f->readbufferofs-paylen, paylen);
 					return paylen;
@@ -1192,7 +1199,7 @@ static icestream_t *Websocket_WrapStream(icestream_t *stream, const char *host, 
 
 	//send the hello, the weird way.
 	newf->pending = strdup(hello);
-	newf->conpending = newf->pendingsize = newf->pendingmax = strlen(newf->pending);
+	newf->conpending = newf->pendingsize = newf->pendingmax = (int)strlen(newf->pending);
 	WS_Flush(newf);
 
 	return &newf->funcs;
@@ -1328,7 +1335,7 @@ static int TURN_TCP_RecvPacket(struct icesocket_s *s, netadr_t *addr, void *msg_
 
 	if (n->send.avail)
 	{
-		err = n->f->WriteBytes(n->f, n->send.buf+n->send.offset, n->send.avail);
+		err = n->f->WriteBytes(n->f, n->send.buf+n->send.offset, (int)n->send.avail);
 		if (err >= 0)
 		{
 			n->send.avail -= err;
@@ -1358,7 +1365,7 @@ static int TURN_TCP_RecvPacket(struct icesocket_s *s, netadr_t *addr, void *msg_
 		}
 		else if (tried)
 			return 0;	//don't infinitely loop.
-		err = n->f->ReadBytes(n->f, n->recv.buf+n->recv.offset+n->recv.avail, sizeof(n->recv.buf) - (n->recv.offset+n->recv.avail));
+		err = n->f->ReadBytes(n->f, n->recv.buf+n->recv.offset+n->recv.avail, (int)(sizeof(n->recv.buf) - (n->recv.offset+n->recv.avail)));
 		if (err <= 0)
 			return err;
 		else
@@ -1381,14 +1388,14 @@ static neterr_t TURN_TCP_SendPacket (struct icesocket_s *s, const netadr_t *addr
 
 	if (!n->send.avail && msg_size < sizeof(n->send.buf))
 	{	//avoid copying if we have to
-		err = n->f->WriteBytes(n->f, msg_data, msg_size);
-		if (err >= 0 && err < msg_size)
+		err = n->f->WriteBytes(n->f, msg_data, (int)msg_size);
+		if (err >= 0 && (size_t)err < msg_size)
 		{	//but sometimes its partial.
 			msg_data = (const char*)msg_data + err;
 			msg_size -= err;
 			n->send.offset = 0;
 			memcpy(n->send.buf, msg_data, msg_size);
-			n->send.avail = msg_size;
+			n->send.avail = (unsigned int)msg_size;
 		}
 		if (!err)
 			return NETERR_CLOGGED;	//mostly so we don't spam while still doing tcp/tls handshakes.
@@ -1403,8 +1410,8 @@ static neterr_t TURN_TCP_SendPacket (struct icesocket_s *s, const netadr_t *addr
 			n->send.offset = 0;
 		}
 		memcpy(n->send.buf+n->send.offset, msg_data, msg_size);
-		n->send.avail += msg_size;
-		err = n->f->WriteBytes(n->f, n->send.buf+n->send.offset, n->send.avail);
+		n->send.avail += (unsigned int)msg_size;
+		err = n->f->WriteBytes(n->f, n->send.buf+n->send.offset, (int)n->send.avail);
 		if (err >= 0)
 		{
 			n->send.offset += err;
@@ -1465,7 +1472,7 @@ static int ICE_WSS_RecvPacket(struct icesocket_s *s, netadr_t *addr, void *msg_d
 {
 	struct icewsssocket_s *n = (struct icewsssocket_s*)s;
 
-	int sz = n->f->ReadBytes(n->f, msg_data, msg_maxsize);
+	int sz = n->f->ReadBytes(n->f, msg_data, (int)msg_maxsize);
 	if (sz >= 0)
 		*addr = n->adr;
 	return sz;
@@ -1478,7 +1485,7 @@ static neterr_t ICE_WSS_SendPacket (struct icesocket_s *s, const netadr_t *addr,
 		return NETERR_NOROUTE;
 
 	//our websocket code either accepts it all or rejects it all.
-	err = n->f->WriteBytes(n->f, msg_data, msg_size);
+	err = n->f->WriteBytes(n->f, msg_data, (int)msg_size);
 	if (err > 0)
 		return NETERR_SENT;
 	switch(err)

@@ -216,7 +216,7 @@ static void md5_update(void *ctx, const void *in, size_t sz)
 	}
 	//save off any extra data.
 	memcpy(hd->buf, in, sz);
-	hd->count = sz;
+	hd->count = (int32_t)sz;
 }
 
 /* The routine final terminates the message-digest computation and

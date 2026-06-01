@@ -251,7 +251,7 @@ dfunction_t *ED_FindFunction (const char *fn_name)
 
 const char *PR_GetFunctionName (func_t fnum)
 {
-	if (fnum <= 0 || fnum >= qcvm->progs->numfunctions)
+	if (fnum == 0 || fnum >= (func_t)qcvm->progs->numfunctions)
 		return "";
 
 	return PR_GetString(qcvm->functions[fnum].s_name);

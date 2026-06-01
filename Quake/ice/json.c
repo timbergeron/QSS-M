@@ -257,7 +257,7 @@ static int dehex(int chr, unsigned int *ret, int shift)
 	return 1;
 }
 
-static unsigned int utf8_encode(void *out, unsigned int unicode, int maxlen)
+static unsigned int utf8_encode(void *out, unsigned int unicode, size_t maxlen)
 {
 	unsigned int bcount = 1;
 	unsigned int lim = 0x80;
@@ -608,7 +608,7 @@ found:
 	}
 	return NULL;
 }
-json_t *JSON_GetIndexed(json_t *t, unsigned int idx)
+json_t *JSON_GetIndexed(json_t *t, size_t idx)
 {
 	if (t)
 	{

@@ -132,7 +132,7 @@ static void MDNS_ProcessPacket(qbyte *inmsg, size_t inmsgsize, netadr_t *source)
 						memcpy(o, questionstart, in-questionstart-4);
 						o += in-questionstart-4;
 						*o++ = ty>>8; *o++ = ty;
-						*o++ = a.class>>8; *o++ = a.class;
+						*o++ = (qbyte)(a.class>>8); *o++ = (qbyte)a.class;
 						*o++ = ttl>>24; *o++ = ttl>>16; *o++ = ttl>>8; *o++ = ttl>>0;
 						*o++ = sz>>8; *o++ = sz;
 						memcpy(o, ab, sz);
@@ -160,7 +160,7 @@ static void MDNS_ProcessPacket(qbyte *inmsg, size_t inmsgsize, netadr_t *source)
 					((struct sockaddr_in*)&dest)->sin_port = htons(5353);
 					((struct sockaddr_in*)&dest)->sin_addr.s_addr = inet_addr("224.0.0.251");	//or FF02::FB
 				}
-				sendto(mdns_socket, (void*)resp, o-resp, 0, (struct sockaddr*)&dest, sz);
+				sendto(mdns_socket, (void*)resp, (int)(o-resp), 0, (struct sockaddr*)&dest, sz);
 //				if (net_ice_debug.ival)
 //					Con_Printf(S_COLOR_GRAY"%s: Answering mdns (%s)\n", NET_AdrToString(resp, sizeof(resp), source), a.name);
 			}
@@ -368,7 +368,7 @@ static void MDNS_SendQuery(struct mdns_peer_s *peer)
 			dot = n + strlen(n);
 		if (dot == n)
 			return; //err... can't write a 0-length label.
-		*o++ = dot-n;
+		*o++ = (qbyte)(dot-n);
 		memcpy(o, n, dot-n); o += dot-n; n += dot-n;
 		if (!*n)
 			break;
@@ -379,7 +379,7 @@ static void MDNS_SendQuery(struct mdns_peer_s *peer)
 	*o++ = 0; *o++ = 1; //type: 'A' record
 	*o++ = 0; *o++ = 1; //class: 'IN'
 
-	sendto(mdns_socket, (void*)outmsg, o-outmsg, 0, (struct sockaddr*)&dest, sizeof(dest));
+	sendto(mdns_socket, (void*)outmsg, (int)(o-outmsg), 0, (struct sockaddr*)&dest, (int)sizeof(dest));
 	peer->tries++;
 	peer->nextretry = Sys_DoubleTime() + (50/1000.0);
 }

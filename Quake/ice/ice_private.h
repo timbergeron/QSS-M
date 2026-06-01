@@ -526,7 +526,7 @@ json_t *JSON_ParseNode(json_t *t, const char *namestart, const char *nameend, st
 
 json_t *JSON_FindChild(json_t *t, const char *child);
 size_t JSON_GetCount(json_t *t);
-json_t *JSON_GetIndexed(json_t *t, unsigned int idx);
+json_t *JSON_GetIndexed(json_t *t, size_t idx);
 json_t *JSON_FindIndexedChild(json_t *t, const char *child, unsigned int idx);
 
 void JSON_Destroy(json_t *t);

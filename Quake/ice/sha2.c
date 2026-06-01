@@ -440,43 +440,43 @@ sha2_final (void *context)
     }
 
 #if SHA2==256
-#define X(a) do { *p++ = hd->h##a >> 24; *p++ = hd->h##a >> 16;	      \
-                  *p++ = hd->h##a >> 8;  *p++ = hd->h##a; } while (0)
+#define X(a) do { *p++ = (byte)(hd->h##a >> 24); *p++ = (byte)(hd->h##a >> 16);	      \
+                  *p++ = (byte)(hd->h##a >> 8);  *p++ = (byte)hd->h##a; } while (0)
 
   /* append the 128 bit count */
-  hd->buf[56] = msb >> 24;
-  hd->buf[57] = msb >> 16;
-  hd->buf[58] = msb >> 8;
-  hd->buf[59] = msb;
+  hd->buf[56] = (byte)(msb >> 24);
+  hd->buf[57] = (byte)(msb >> 16);
+  hd->buf[58] = (byte)(msb >> 8);
+  hd->buf[59] = (byte)msb;
 
-  hd->buf[60] = lsb >> 24;
-  hd->buf[61] = lsb >> 16;
-  hd->buf[62] = lsb >> 8;
-  hd->buf[63] = lsb;
+  hd->buf[60] = (byte)(lsb >> 24);
+  hd->buf[61] = (byte)(lsb >> 16);
+  hd->buf[62] = (byte)(lsb >> 8);
+  hd->buf[63] = (byte)lsb;
 #else
-#define X(a) do { *p++ = hd->h##a >> 56; *p++ = hd->h##a >> 48;	      \
-                  *p++ = hd->h##a >> 40; *p++ = hd->h##a >> 32;	      \
-                  *p++ = hd->h##a >> 24; *p++ = hd->h##a >> 16;	      \
-                  *p++ = hd->h##a >> 8;  *p++ = hd->h##a; } while (0)
+#define X(a) do { *p++ = (byte)(hd->h##a >> 56); *p++ = (byte)(hd->h##a >> 48);	      \
+                  *p++ = (byte)(hd->h##a >> 40); *p++ = (byte)(hd->h##a >> 32);	      \
+                  *p++ = (byte)(hd->h##a >> 24); *p++ = (byte)(hd->h##a >> 16);	      \
+                  *p++ = (byte)(hd->h##a >> 8);  *p++ = (byte)hd->h##a; } while (0)
 
   /* append the 128 bit count */
-  hd->buf[112] = msb >> 56;
-  hd->buf[113] = msb >> 48;
-  hd->buf[114] = msb >> 40;
-  hd->buf[115] = msb >> 32;
-  hd->buf[116] = msb >> 24;
-  hd->buf[117] = msb >> 16;
-  hd->buf[118] = msb >> 8;
-  hd->buf[119] = msb;
+  hd->buf[112] = (byte)(msb >> 56);
+  hd->buf[113] = (byte)(msb >> 48);
+  hd->buf[114] = (byte)(msb >> 40);
+  hd->buf[115] = (byte)(msb >> 32);
+  hd->buf[116] = (byte)(msb >> 24);
+  hd->buf[117] = (byte)(msb >> 16);
+  hd->buf[118] = (byte)(msb >> 8);
+  hd->buf[119] = (byte)msb;
 
-  hd->buf[120] = lsb >> 56;
-  hd->buf[121] = lsb >> 48;
-  hd->buf[122] = lsb >> 40;
-  hd->buf[123] = lsb >> 32;
-  hd->buf[124] = lsb >> 24;
-  hd->buf[125] = lsb >> 16;
-  hd->buf[126] = lsb >> 8;
-  hd->buf[127] = lsb;
+  hd->buf[120] = (byte)(lsb >> 56);
+  hd->buf[121] = (byte)(lsb >> 48);
+  hd->buf[122] = (byte)(lsb >> 40);
+  hd->buf[123] = (byte)(lsb >> 32);
+  hd->buf[124] = (byte)(lsb >> 24);
+  hd->buf[125] = (byte)(lsb >> 16);
+  hd->buf[126] = (byte)(lsb >> 8);
+  hd->buf[127] = (byte)lsb;
 #endif
   transform (hd, hd->buf);
 

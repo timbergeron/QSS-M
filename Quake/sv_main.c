@@ -2830,6 +2830,8 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 	//try to avoid sounds getting lost. flickering entities are weird, but missing sounds+particles are just eerie.
 	maxsize -= client->datagram.cursize;
 	maxsize -= sv.datagram.cursize;
+	if (maxsize < 0)
+		maxsize = 0;
 
 	if (maxedict > client->limit_entities)
 		maxedict = client->limit_entities;
@@ -2901,7 +2903,7 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 		// assumed here.  And, for protocol 85 the max size is actually 24 bytes.
 		// For float coords and angles the limit is 40.
 		// FIXME: Use tighter limit according to protocol flags and send bits.
-		if (msg->cursize + 40 > msg->maxsize)
+		if (msg->cursize + 40 > maxsize)
 		{
 			//johnfitz -- less spammy overflow message
 			if (!dev_overflows.packetsize || dev_overflows.packetsize + CONSOLE_RESPAM_TIME < realtime )

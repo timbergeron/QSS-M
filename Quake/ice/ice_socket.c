@@ -392,7 +392,7 @@ static neterr_t ICEUDP_SendPacket (struct icesocket_s *s, const netadr_t *addr, 
 	else
 		return NETERR_NOROUTE;	//unsupported af...
 
-	r = sendto(s->sock, data, datasize, 0, &addr->sa, sasz);
+	r = sendto(s->sock, data, (int)datasize, 0, &addr->sa, sasz);
 	if (r < 0)
 	{
 		switch (NET_ERRNO())
@@ -427,7 +427,7 @@ static neterr_t ICEUDP_SendPacket (struct icesocket_s *s, const netadr_t *addr, 
 static int ICEUDP_RecvPacket (struct icesocket_s *s, netadr_t *addr, void *data, size_t datasize)
 {
 	socklen_t sasz = sizeof(addr->ss);
-	int r = recvfrom(s->sock, data, datasize, 0, &addr->sa, &sasz);
+	int r = recvfrom(s->sock, data, (int)datasize, 0, &addr->sa, &sasz);
 
 	if (r <= 0)
 	{
@@ -619,9 +619,9 @@ static int ICEUDP_GetAddresses(struct icesocket_s *s, netadr_t *addresses, size_
 
 		//if its bound to 'any' address, ask the system what addresses it actually accepts.
 		if      (adr.sa.sa_family == AF_INET && adr.in.sin_addr.s_addr == INADDR_ANY)
-			found = ICE_GetLocalAddress(adr.in.sin_port,   AF_INET, addresses, maxaddresses);
+			found = ICE_GetLocalAddress(adr.in.sin_port,   AF_INET, addresses, (int)maxaddresses);
 		else if (adr.sa.sa_family == AF_INET6 && !memcmp(&adr.in6.sin6_addr, &in6addr_any, sizeof(in6addr_any)))
-			found = ICE_GetLocalAddress(adr.in6.sin6_port, AF_INET6, addresses, maxaddresses);
+			found = ICE_GetLocalAddress(adr.in6.sin6_port, AF_INET6, addresses, (int)maxaddresses);
 
 		//and use the bound address (even if its 0.0.0.0) if we didn't grab a list from the system.
 		if (!found)

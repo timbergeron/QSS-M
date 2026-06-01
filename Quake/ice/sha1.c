@@ -122,10 +122,11 @@ static void SHA1Update(void *ctx, const void* data, size_t len)
 {
 	SHA1_CTX *context = ctx;
 	size_t i, j;
+	unsigned int bits = (unsigned int)(len << 3);
 
 	j = (context->count[0] >> 3) & 63;
-	if ((context->count[0] += len << 3) < (len << 3)) context->count[1]++;
-	context->count[1] += (len >> 29);
+	if ((context->count[0] += bits) < bits) context->count[1]++;
+	context->count[1] += (unsigned int)(len >> 29);
 	if ((j + len) > 63)
 	{
 		memcpy(&context->buffer[j], data, (i = 64-j));

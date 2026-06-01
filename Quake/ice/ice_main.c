@@ -536,7 +536,7 @@ static qboolean TURN_AddXorAddressAttrib(icebuf_t *buf, unsigned int attr, netad
 }
 static qboolean TURN_AddAuth(icebuf_t *buf, struct iceserver_s *srv)
 {	//adds auth info to a stun packet
-	unsigned short len;
+	size_t len;
 	qbyte integrity[DIGEST_MAXSIZE];
 	hashfunc_t *hash = &hash_sha1;
 	hashfunc_t *pwdhash = &hash_md5;
@@ -545,21 +545,21 @@ static qboolean TURN_AddAuth(icebuf_t *buf, struct iceserver_s *srv)
 		return false;
 	ICE_WriteShort(buf, BigShort(STUNATTR_USERNAME));
 	len = strlen(srv->user);
-	ICE_WriteShort(buf, BigShort(len));
+	ICE_WriteShort(buf, BigShort((unsigned short)len));
 	ICE_WriteData (buf, srv->user, len);
 	if (len&3)
 		ICE_WriteData (buf, "\0\0\0\0", 4-(len&3));
 
 	ICE_WriteShort(buf, BigShort(STUNATTR_REALM));
 	len = strlen(srv->realm);
-	ICE_WriteShort(buf, BigShort(len));
+	ICE_WriteShort(buf, BigShort((unsigned short)len));
 	ICE_WriteData (buf, srv->realm, len);
 	if (len&3)
 		ICE_WriteData (buf, "\0\0\0\0", 4-(len&3));
 
 	ICE_WriteShort(buf, BigShort(STUNATTR_NONCE));
 	len = strlen(srv->nonce);
-	ICE_WriteShort(buf, BigShort(len));
+	ICE_WriteShort(buf, BigShort((unsigned short)len));
 	ICE_WriteData (buf, srv->nonce, len);
 	if (len&3)
 		ICE_WriteData (buf, "\0\0\0\0", 4-(len&3));
@@ -594,7 +594,7 @@ static qboolean TURN_AddAuth(icebuf_t *buf, struct iceserver_s *srv)
 		ICE_WriteShort(buf, BigShort(STUNATTR_MSGINTEGRITIY_SHA1));
 	else
 		return false;	//not defined!
-	ICE_WriteShort(buf, BigShort(len));	//integrity length
+	ICE_WriteShort(buf, BigShort((unsigned short)len));	//integrity length
 	ICE_WriteData(buf, integrity, len);	//integrity data
 	return true;
 }
@@ -613,10 +613,10 @@ static const char *ICE_NetworkToName(struct icestate_s *ice, int network)
 	else if (network >= MAX_NETWORKS)
 	{
 		network -= MAX_NETWORKS;
-		if (network >= countof(ice->server))
+		if (network >= (int)countof(ice->server))
 		{	//a peer-reflexive address from poking a TURN server...
-			network -= countof(ice->server);
-			if (network < ice->servers)
+			network -= (int)countof(ice->server);
+			if ((unsigned int)network < ice->servers)
 				return "turn-reflexive";
 		}
 		else
@@ -668,7 +668,7 @@ static neterr_t TURN_Encapsulate(struct icestate_s *ice, netadr_t *to, const qby
 			return NETERR_NOROUTE;
 
 		ICE_WriteShort(&buf, BigShort(STUNATTR_DATA));
-		ICE_WriteShort(&buf, BigShort(datasize));
+		ICE_WriteShort(&buf, BigShort((unsigned short)datasize));
 		ICE_WriteData(&buf, data, datasize);
 		if (datasize&3)
 			ICE_WriteData(&buf, "\0\0\0\0", 4-(datasize&3));
@@ -917,7 +917,7 @@ retry_noroute:
 		//send via appropriate turn servers
 		if (rc->info.type == ICE_RELAY || rc->info.type == ICE_SRFLX)
 		{
-			for (i = 0; i < con->servers; i++)
+			for (i = 0; i < (int)con->servers; i++)
 			{
 				if (con->server[i].state!=TURN_ALLOCATED)
 					continue;	//not ready yet...
@@ -1022,7 +1022,7 @@ retry_noroute:
 
 		//username
 		ICE_WriteShort(&buf, BigShort(STUNATTR_USERNAME));	//USERNAME
-		ICE_WriteShort(&buf, BigShort(strlen(con->rufrag) + 1 + strlen(con->lufrag)));
+		ICE_WriteShort(&buf, BigShort((unsigned short)(strlen(con->rufrag) + 1 + strlen(con->lufrag))));
 		ICE_WriteData(&buf, con->rufrag, strlen(con->rufrag));
 		ICE_WriteChar(&buf, ':');
 		ICE_WriteData(&buf, con->lufrag, strlen(con->lufrag));
@@ -1073,7 +1073,7 @@ retry_noroute:
 
 		data[2] = ((buf.cursize+8-20)>>8)&0xff;	//dummy length
 		data[3] = ((buf.cursize+8-20)>>0)&0xff;
-		crc = crc32(0, data, buf.cursize)^0x5354554e;
+		crc = crc32(0, data, (unsigned int)buf.cursize)^0x5354554e;
 		ICE_WriteShort(&buf, BigShort(STUNATTR_FINGERPRINT));	//FINGERPRINT
 		ICE_WriteShort(&buf, BigShort(sizeof(crc)));
 		ICE_WriteLong(&buf, BigLong(crc));
@@ -1210,7 +1210,7 @@ static void ICE_ToStunServer(struct icestate_s *con, struct iceserver_s *srv)
 				srv->addr.type = NA_INVALID; //fail it.
 				return;
 			}
-			srv->connum = 1+MAX_NETWORKS+countof(con->server)+(srv-con->server);	//*sigh*
+			srv->connum = (int)(1+MAX_NETWORKS+countof(con->server)+(srv-con->server));	//*sigh*
 		}
 
 		if (srv->state==TURN_TERMINATING)
@@ -1304,7 +1304,7 @@ static void ICE_ToStunServer(struct icestate_s *con, struct iceserver_s *srv)
 	{
 		data[2] = ((buf.cursize+8-20)>>8)&0xff;	//dummy length
 		data[3] = ((buf.cursize+8-20)>>0)&0xff;
-		crc = crc32(0, data, buf.cursize)^0x5354554e;
+		crc = crc32(0, data, (unsigned int)buf.cursize)^0x5354554e;
 		ICE_WriteShort(&buf, BigShort(STUNATTR_FINGERPRINT));
 		ICE_WriteShort(&buf, BigShort(sizeof(crc)));
 		ICE_WriteLong(&buf, BigLong(crc));
@@ -1896,7 +1896,7 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 		if (oldstate != con->state && con->state == ICE_INACTIVE)
 		{	//forget our peer
 			struct icecandidate_s *c;
-			int i;
+			unsigned int i;
 			memset(&con->chosenpeer, 0, sizeof(con->chosenpeer));
 
 #ifdef HAVE_SCTP
@@ -2057,7 +2057,7 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 		}
 
 		okay = !strchr(host, '/');
-		if (con->servers == countof(con->server))
+		if (con->servers == (unsigned int)countof(con->server))
 			okay = false;
 		else if (okay)
 		{
@@ -2065,7 +2065,7 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 
 			//handily both stun and turn default to the same port numbers.
 			//FIXME: worker thread...
-			okay = NET_StringToAdr(host, tls?5349:3478, hostadr, 1);
+			okay = NET_StringToAdr(host, tls?5349:3478, hostadr, 1) != 0;
 			if (okay)
 			{
 				if (tls)
@@ -2187,7 +2187,7 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 		{
 			con->servers = 1;
 			con->server[0].con = link;
-			con->chosenpeer.connum = con->server[0].connum = 1+MAX_NETWORKS+countof(con->server)+0;	//send through our private socket instead of wrapping in TURN.
+			con->chosenpeer.connum = con->server[0].connum = (int)(1+MAX_NETWORKS+countof(con->server)+0);	//send through our private socket instead of wrapping in TURN.
 			con->server[0].addr = con->chosenpeer;
 		}
 
@@ -2502,7 +2502,8 @@ static qboolean ICE_Get(struct icestate_s *con, const char *prop, char *value, s
 
 	else if (!strcmp(prop, "status"))
 	{
-		int i, c;
+		unsigned int i;
+		int c;
 		*value = 0;
 		switch(con->state)
 		{
@@ -2603,7 +2604,7 @@ void ICE_Debug(struct icestate_s *con)
 	const char *addrclass;
 	struct icecandidate_s *can;
 	char buf[65536];
-	int i;
+	unsigned int i;
 	if (!con)
 	{	//recurse and show all that are registered.
 		for (con = icelist; con; con = con->next)
@@ -2974,7 +2975,7 @@ void ICE_Tick(void)
 					{
 						if ((signed int)(srv->peer[j].retry-curtime) < 0)
 						{
-							TURN_AuthorisePeer(con, srv, j);
+							TURN_AuthorisePeer(con, srv, (int)j);
 							srv->peer[j].retry = curtime + 2*1000;
 						}
 					}
@@ -3014,7 +3015,7 @@ void ICE_Tick(void)
 								if (best->reachable&(1<<i))
 								{
 									best->tried &= ~(1<<i);	//keep poking it...
-									nb.connum = i+1;
+									nb.connum = (int)(i+1);
 									break;
 								}
 							}
@@ -3126,7 +3127,7 @@ static struct icestate_s *ICE_DirectConnectedInternal(struct icemodule_s *module
 	struct icestate_s *con;
 	char peer[128];
 	q_strlcpy(peer, dtlsstate?"dtls://":"", sizeof(peer));
-	NET_AdrToString(peer+strlen(peer),sizeof(peer)-strlen(peer), adr);
+	NET_AdrToString(peer+strlen(peer), (int)(sizeof(peer)-strlen(peer)), adr);
 	con = ICE_Create(module, NULL, peer, 0, ICEP_SERVER);
 
 	con->chosenpeer = *adr;
@@ -3144,7 +3145,7 @@ static struct icestate_s *ICE_DirectConnectedInternal(struct icemodule_s *module
 	{
 		con->servers = 1;
 		con->server[0].con = link;
-		con->chosenpeer.connum = con->server[0].connum = 1+MAX_NETWORKS+countof(con->server)+0;	//send through our private socket instead of wrapping in TURN.
+		con->chosenpeer.connum = con->server[0].connum = (int)(1+MAX_NETWORKS+countof(con->server)+0);	//send through our private socket instead of wrapping in TURN.
 		con->server[0].addr = con->chosenpeer;
 		Con_DPrintf("%s: WebSocket connection\n", peer);
 	}
@@ -3560,7 +3561,7 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 			stunattr_t *attr = (stunattr_t*)(stun+1), *nonce=NULL, *realm=NULL;
 			int alen;
 			struct iceserver_s *s = NULL;
-			int i, j;
+			unsigned int i, j;
 			struct icestate_s *con;
 			char errmsg[128];
 			int err = 0;
@@ -3672,7 +3673,7 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 			int err = 0;
 			char errmsg[64];
 			struct iceserver_s *s = NULL;
-			int i;
+			size_t i;
 			struct icestate_s *con;
 			qboolean noncechanged = false;
 			unsigned int lifetime = 0;
@@ -3990,7 +3991,7 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 					{
 						qbyte key[20];
 						//the hmac is a bit weird. the header length includes the integrity attribute's length, but the checksum doesn't even consider the attribute header.
-						stun->msglen = BigShort(integritypos+sizeof(integrity) - (char*)stun - sizeof(*stun));
+						stun->msglen = BigShort((unsigned short)(integritypos+sizeof(integrity) - (char*)stun - sizeof(*stun)));
 						CalcHMAC(&hash_sha1, key, sizeof(key), (qbyte*)stun, integritypos-4 - (char*)stun, (qbyte*)con->lpwd, strlen(con->lpwd));
 						if (memcmp(key, integrity, sizeof(integrity)))
 						{
@@ -4136,7 +4137,7 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 			{
 				char *txt = "Role Conflict";
 				ICE_WriteShort(&buf, BigShort(STUNATTR_ERROR_CODE));
-				ICE_WriteShort(&buf, BigShort(4 + strlen(txt)));
+				ICE_WriteShort(&buf, BigShort((unsigned short)(4 + strlen(txt))));
 				ICE_WriteShort(&buf, 0);	//reserved
 				ICE_WriteByte(&buf, 0);		//class
 				ICE_WriteByte(&buf, error);	//code
@@ -4164,7 +4165,7 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 			}
 
 			ICE_WriteShort(&buf, BigShort(STUNATTR_USERNAME));	//USERNAME
-			ICE_WriteShort(&buf, BigShort(strlen(username)));
+			ICE_WriteShort(&buf, BigShort((unsigned short)strlen(username)));
 			ICE_WriteData(&buf, username, strlen(username));
 			while(buf.cursize&3)
 				ICE_WriteChar(&buf, 0);
@@ -4185,7 +4186,7 @@ static qboolean ICE_ProcessPacket (struct icemodule_s *module, struct icesocket_
 
 			data[2] = ((buf.cursize+8-20)>>8)&0xff;	//dummy length
 			data[3] = ((buf.cursize+8-20)>>0)&0xff;
-			crc = crc32(0, data, buf.cursize)^0x5354554e;
+			crc = crc32(0, data, (unsigned int)buf.cursize)^0x5354554e;
 			ICE_WriteShort(&buf, BigShort(STUNATTR_FINGERPRINT));	//FINGERPRINT
 			ICE_WriteShort(&buf, BigShort(sizeof(crc)));
 			ICE_WriteLong(&buf, BigLong(crc));
