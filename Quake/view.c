@@ -71,6 +71,7 @@ cvar_t	gl_cshiftpercent_damage = {"gl_cshiftpercent_damage", "100", CVAR_ARCHIVE
 cvar_t	gl_cshiftpercent_bonus = {"gl_cshiftpercent_bonus", "100", CVAR_ARCHIVE}; // QuakeSpasm
 cvar_t	gl_cshiftpercent_powerup = {"gl_cshiftpercent_powerup", "100", CVAR_ARCHIVE}; // QuakeSpasm
 cvar_t	gl_cshiftpercent_dead = {"gl_cshiftpercent_dead", "0", CVAR_ARCHIVE}; // woods #cdead
+cvar_t	gl_cshift_contents_auto = {"gl_cshift_contents_auto", "0", CVAR_ARCHIVE}; // woods #autocshift
 
 cvar_t	r_viewmodel_quake = {"r_viewmodel_quake", "0", CVAR_ARCHIVE};
 cvar_t	cl_demo_eyecam = {"cl_demo_eyecam", "0", CVAR_NONE}; // woods #demoeyecam
@@ -126,6 +127,18 @@ static void V_Viewheight_Completion_f (cvar_t *cvar, const char *partial)
 		q_snprintf (value, sizeof(value), "%d", i);
 		Con_AddToTabList (value, partial, type, NULL);
 	}
+}
+
+static void V_CShiftContentsAuto_Completion_f (cvar_t *cvar, const char *partial)
+{
+	(void)cvar;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "auto", NULL);
+	Con_AddToTabList("2", partial, "force", NULL);
 }
 
 /*
@@ -483,6 +496,69 @@ void V_BonusFlash_f (void)
 	}
 }
 
+static qboolean CShift_GetTextureLiquidColor (texliquid_t liquid_type, vec3_t color)
+{
+	double total = 0.0;
+	double sum[3] = {0.0, 0.0, 0.0};
+	int i;
+
+	if (!cl.worldmodel || !cl.worldmodel->textures)
+		return false;
+
+	for (i = 0; i < cl.worldmodel->numtextures; i++)
+	{
+		texture_t *tx = cl.worldmodel->textures[i];
+		double weight;
+
+		if (!tx || tx->liquid_type != liquid_type || !tx->liquid_color_valid)
+			continue;
+
+		weight = (double)tx->width * (double)tx->height;
+		if (weight <= 0.0)
+			weight = 1.0;
+
+		sum[0] += tx->liquid_color[0] * weight;
+		sum[1] += tx->liquid_color[1] * weight;
+		sum[2] += tx->liquid_color[2] * weight;
+		total += weight;
+	}
+
+	if (total <= 0.0)
+		return false;
+
+	color[0] = (float)(sum[0] / total);
+	color[1] = (float)(sum[1] / total);
+	color[2] = (float)(sum[2] / total);
+	return true;
+}
+
+static int CShift_ColorByte (float value)
+{
+	value = CLAMP(0.0f, value, 1.0f);
+	return (int)(value * 255.0f + 0.5f);
+}
+
+static void CShift_SetFromTextureColor (cshift_t *cshift, const vec3_t color)
+{
+	cshift->destcolor[0] = CShift_ColorByte(color[0]);
+	cshift->destcolor[1] = CShift_ColorByte(color[1]);
+	cshift->destcolor[2] = CShift_ColorByte(color[2]);
+}
+
+static void CShift_ApplyAutoLiquidColor (texliquid_t liquid_type, cshift_t *cshift, qboolean worldspawn_set)
+{
+	vec3_t color;
+
+	if (gl_cshift_contents_auto.value <= 0.0f)
+		return;
+	if (gl_cshift_contents_auto.value < 2.0f && worldspawn_set)
+		return;
+	if (!CShift_GetTextureLiquidColor(liquid_type, color))
+		return;
+
+	CShift_SetFromTextureColor(cshift, color);
+}
+
 /*
 =============
 CShift_ParseWorldspawn //infin -- woods tag
@@ -495,6 +571,9 @@ void CShift_ParseWorldspawn(void)
 {
 	char key[128], value[4096];
 	const char* data;
+	qboolean water_set = false;
+	qboolean slime_set = false;
+	qboolean lava_set = false;
 
 	// reset default cshift values
 	cshift_water = (cshift_t){ {130,80,50}, 128 };
@@ -528,20 +607,35 @@ void CShift_ParseWorldspawn(void)
 		{
 			sscanf(value, "%d %d %d", &cshift_water.destcolor[0], &cshift_water.destcolor[1], &cshift_water.destcolor[2]);
 			cshift_water.percent = 128;
+			water_set = true;
 		}
 
 		if (!strcmp("cshiftslime", key))
 		{
 			sscanf(value, "%d %d %d", &cshift_slime.destcolor[0], &cshift_slime.destcolor[1], &cshift_slime.destcolor[2]);
 			cshift_slime.percent = 150;
+			slime_set = true;
 		}
 
 		if (!strcmp("cshiftlava", key))
 		{
 			sscanf(value, "%d %d %d", &cshift_lava.destcolor[0], &cshift_lava.destcolor[1], &cshift_lava.destcolor[2]);
 			cshift_lava.percent = 150;
+			lava_set = true;
 		}
 	}
+
+	CShift_ApplyAutoLiquidColor(TEXLIQUID_WATER, &cshift_water, water_set);
+	CShift_ApplyAutoLiquidColor(TEXLIQUID_SLIME, &cshift_slime, slime_set);
+	CShift_ApplyAutoLiquidColor(TEXLIQUID_LAVA, &cshift_lava, lava_set);
+}
+
+static void V_CShiftContentsAuto_Callback_f (cvar_t *cvar)
+{
+	(void)cvar;
+
+	if (cl.worldmodel && cl.worldmodel->entities)
+		CShift_ParseWorldspawn();
 }
 
 /*
@@ -1672,6 +1766,9 @@ void V_Init (void)
 	Cvar_RegisterVariable (&gl_cshiftpercent_bonus); // QuakeSpasm
 	Cvar_RegisterVariable (&gl_cshiftpercent_powerup); // QuakeSpasm
 	Cvar_RegisterVariable (&gl_cshiftpercent_dead); // woods #cdead
+	Cvar_RegisterVariable (&gl_cshift_contents_auto); // woods #autocshift
+	Cvar_SetCompletion (&gl_cshift_contents_auto, &V_CShiftContentsAuto_Completion_f); // woods #autocshift
+	Cvar_SetCallback (&gl_cshift_contents_auto, &V_CShiftContentsAuto_Callback_f); // woods #autocshift
 
 	Cvar_RegisterVariable (&scr_ofsx);
 	Cvar_RegisterVariable (&scr_ofsy);

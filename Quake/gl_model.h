@@ -74,6 +74,13 @@ typedef enum {
 	chain_model = 1
 } texchain_t;
 
+typedef enum {
+	TEXLIQUID_NONE = 0,
+	TEXLIQUID_WATER,
+	TEXLIQUID_SLIME,
+	TEXLIQUID_LAVA
+} texliquid_t;
+
 typedef struct texture_s
 {
 	char				name[16];
@@ -84,6 +91,9 @@ typedef struct texture_s
 	qboolean			grass_detected; // woods #grass
 	qboolean			grass_color_valid; // woods #grass
 	vec3_t				grass_color; // woods #grass
+	texliquid_t			liquid_type; // woods #autocshift
+	qboolean			liquid_color_valid; // woods #autocshift
+	vec3_t				liquid_color; // woods #autocshift
 	struct msurface_s	*texturechains[2];	// for texture chains
 	int					anim_total;				// total tenths in sequence ( 0 = no)
 	int					anim_min, anim_max;		// time for this frame min <=time< max

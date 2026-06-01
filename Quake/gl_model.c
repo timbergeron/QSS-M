@@ -794,6 +794,223 @@ static qboolean Mod_CheckFullbrights (byte *pixels, int count)
 	return false;
 }
 
+static texliquid_t Mod_TextureLiquidType (const char *name)
+{
+	const char *checkname;
+
+	if (!name || !name[0])
+		return TEXLIQUID_NONE;
+
+	checkname = name;
+	if (checkname[0] != '*' && checkname[0] != '!')
+		return TEXLIQUID_NONE;
+	checkname++;
+
+	if (!q_strncasecmp(checkname, "lava", 4))
+		return TEXLIQUID_LAVA;
+	if (!q_strncasecmp(checkname, "slime", 5))
+		return TEXLIQUID_SLIME;
+	if (!q_strncasecmp(checkname, "tele", 4))
+		return TEXLIQUID_NONE;
+
+	return TEXLIQUID_WATER;
+}
+
+static qboolean Mod_IsLiquidColorPixel (byte r, byte g, byte b, byte a)
+{
+	int maxc = q_max((int)r, q_max((int)g, (int)b));
+
+	return a >= 128 && maxc >= 16;
+}
+
+typedef struct
+{
+	unsigned int count;
+	unsigned int sum_r;
+	unsigned int sum_g;
+	unsigned int sum_b;
+} liquid_color_bucket_t;
+
+static void Mod_AddLiquidColorBucket (liquid_color_bucket_t *bucket, const byte *rgba)
+{
+	bucket->count++;
+	bucket->sum_r += rgba[0];
+	bucket->sum_g += rgba[1];
+	bucket->sum_b += rgba[2];
+}
+
+static int Mod_BestLiquidColorBucket (const liquid_color_bucket_t *buckets, size_t bucket_count)
+{
+	double best_score = 0.0;
+	int best_bucket = -1;
+	size_t i;
+
+	for (i = 0; i < bucket_count; i++)
+	{
+		unsigned int count = buckets[i].count;
+		int r, g, b, value;
+		double score;
+
+		if (!count)
+			continue;
+
+		r = (int)((buckets[i].sum_r + count / 2) / count);
+		g = (int)((buckets[i].sum_g + count / 2) / count);
+		b = (int)((buckets[i].sum_b + count / 2) / count);
+		value = q_max(r, q_max(g, b));
+		score = (double)count * (64.0 + (double)value);
+
+		if (score > best_score)
+		{
+			best_score = score;
+			best_bucket = (int)i;
+		}
+	}
+
+	return best_bucket;
+}
+
+static void Mod_SetLiquidTextureColor (texture_t *tx, double rsum, double gsum, double bsum, size_t count)
+{
+	float peak, min_peak, scale;
+
+	if (!count)
+		return;
+
+	tx->liquid_color[0] = (float)(rsum / count) * (1.0f / 255.0f);
+	tx->liquid_color[1] = (float)(gsum / count) * (1.0f / 255.0f);
+	tx->liquid_color[2] = (float)(bsum / count) * (1.0f / 255.0f);
+
+	peak = q_max(tx->liquid_color[0], q_max(tx->liquid_color[1], tx->liquid_color[2]));
+	switch (tx->liquid_type)
+	{
+	case TEXLIQUID_LAVA:
+		min_peak = 0.78f;
+		break;
+	case TEXLIQUID_SLIME:
+		min_peak = 0.38f;
+		break;
+	default:
+		min_peak = 0.42f;
+		break;
+	}
+
+	if (peak > 0.001f && peak < min_peak)
+	{
+		scale = min_peak / peak;
+		tx->liquid_color[0] *= scale;
+		tx->liquid_color[1] *= scale;
+		tx->liquid_color[2] *= scale;
+	}
+
+	tx->liquid_color[0] = CLAMP(0.0f, tx->liquid_color[0], 1.0f);
+	tx->liquid_color[1] = CLAMP(0.0f, tx->liquid_color[1], 1.0f);
+	tx->liquid_color[2] = CLAMP(0.0f, tx->liquid_color[2], 1.0f);
+	tx->liquid_color_valid = true;
+}
+
+static void Mod_DetectLiquidTextureIndexed (texture_t *tx, const byte *data, unsigned int width, unsigned int height)
+{
+	size_t i, pixels, step, tested;
+	liquid_color_bucket_t buckets[256];
+	int best_index;
+	qboolean allow_fullbright = (tx->liquid_type == TEXLIQUID_LAVA); // lava lives in the fullbright palette range
+
+	if (!data || !width || !height)
+		return;
+
+	pixels = (size_t)width * (size_t)height;
+	step = pixels > 65536 ? pixels / 65536 : 1;
+	tested = 0;
+	best_index = -1;
+	memset(buckets, 0, sizeof(buckets));
+
+	for (i = 0; i < pixels; i += step)
+	{
+		byte index = data[i];
+		byte *rgba = (byte *)&d_8to24table[index];
+
+		if ((index > 223 && !allow_fullbright) || !Mod_IsLiquidColorPixel(rgba[0], rgba[1], rgba[2], rgba[3]))
+			continue;
+
+		tested++;
+		Mod_AddLiquidColorBucket(&buckets[index], rgba);
+	}
+
+	if (tested >= 8)
+	{
+		best_index = Mod_BestLiquidColorBucket(buckets, Q_COUNTOF(buckets));
+		if (best_index >= 0)
+			Mod_SetLiquidTextureColor(tx, buckets[best_index].sum_r, buckets[best_index].sum_g, buckets[best_index].sum_b, buckets[best_index].count);
+	}
+}
+
+static void Mod_DetectLiquidTextureRGBA (texture_t *tx, const byte *data, unsigned int width, unsigned int height)
+{
+	enum { bucket_count = 16 * 16 * 16 };
+	size_t i, pixels, step, tested;
+	liquid_color_bucket_t *buckets;
+	int best_bucket;
+
+	if (!data || !width || !height)
+		return;
+
+	buckets = (liquid_color_bucket_t *)calloc(bucket_count, sizeof(*buckets));
+	if (!buckets)
+		return;
+
+	pixels = (size_t)width * (size_t)height;
+	step = pixels > 65536 ? pixels / 65536 : 1;
+	tested = 0;
+	best_bucket = -1;
+
+	for (i = 0; i < pixels; i += step)
+	{
+		const byte *rgba = data + i * 4;
+		int bucket;
+
+		if (!Mod_IsLiquidColorPixel(rgba[0], rgba[1], rgba[2], rgba[3]))
+			continue;
+
+		tested++;
+		bucket = ((rgba[0] >> 4) << 8) | ((rgba[1] >> 4) << 4) | (rgba[2] >> 4);
+		Mod_AddLiquidColorBucket(&buckets[bucket], rgba);
+	}
+
+	if (tested >= 8)
+	{
+		best_bucket = Mod_BestLiquidColorBucket(buckets, bucket_count);
+		if (best_bucket >= 0)
+			Mod_SetLiquidTextureColor(tx, buckets[best_bucket].sum_r, buckets[best_bucket].sum_g, buckets[best_bucket].sum_b, buckets[best_bucket].count);
+	}
+
+	free(buckets);
+}
+
+static void Mod_DetectLiquidTexture (texture_t *tx, enum srcformat fmt, const byte *data, unsigned int width, unsigned int height)
+{
+	tx->liquid_type = Mod_TextureLiquidType(tx->name);
+	tx->liquid_color_valid = false;
+	tx->liquid_color[0] = 0.0f;
+	tx->liquid_color[1] = 0.0f;
+	tx->liquid_color[2] = 0.0f;
+
+	if (tx->liquid_type == TEXLIQUID_NONE)
+		return;
+
+	switch (fmt)
+	{
+	case SRC_INDEXED:
+		Mod_DetectLiquidTextureIndexed(tx, data, width, height);
+		break;
+	case SRC_RGBA:
+		Mod_DetectLiquidTextureRGBA(tx, data, width, height);
+		break;
+	default:
+		break;
+	}
+}
+
 static qboolean Mod_IsGrassGreenPixel (byte r, byte g, byte b, byte a)
 {
 	if (a < 128 || g < 36)
@@ -1287,6 +1504,7 @@ static void Mod_LoadTextures (lump_t *l)
 				if (data && !r_fastturb.value) //load external image // woods #fastturb
 				{
 					q_strlcpy (texturename, filename, sizeof(texturename));
+					Mod_DetectLiquidTexture(tx, rfmt, data, fwidth, fheight); // woods #autocshift
 					tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, fwidth, fheight,
 						rfmt, data, filename, 0, TEXPREF_MIPMAP); // woods #watermip
 				}
@@ -1294,6 +1512,7 @@ static void Mod_LoadTextures (lump_t *l)
 				{
 					q_snprintf (texturename, sizeof(texturename), "%s:%s", loadmodel->name, tx->name);
 					offset = (src_offset_t)(mt+1) - (src_offset_t)mod_base;
+					Mod_DetectLiquidTexture(tx, fmt, (byte *)(tx+1), imgwidth, imgheight); // woods #autocshift
 					tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, imgwidth, imgheight,
 						fmt, (byte *)(tx+1), loadmodel->name, offset, TEXPREF_MIPMAP); // woods #watermip
 				}
