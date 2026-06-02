@@ -755,8 +755,15 @@ char *FMod_Response_Text(void)
 
 	q_strlcpy(buf, "modified:", sizeof(buf));
 	teamfortress = FMod_IsTeamFortressMode();
+	count = 0;
 
-	for (i = count = 0; i < check_models_num; i++) {
+	if (cl_beams_polygons.value > 0) {
+		// Polygon beams replace the checked bolt model at render time.
+		q_strlcat (buf, " bolt", sizeof (buf));
+		count++;
+	}
+
+	for (i = 0; i < check_models_num; i++) {
 		relevent = (teamfortress && (check_models[i].flags & FMOD_TF)) ||
 			(!teamfortress && (check_models[i].flags & FMOD_DM));
 
