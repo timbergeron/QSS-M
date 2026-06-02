@@ -176,6 +176,7 @@ extern	vec3_t		listener_up;
 
 extern	cvar_t		sndspeed;
 extern	cvar_t		snd_mixspeed;
+extern	cvar_t		snd_surround;
 extern	cvar_t		snd_filterquality;
 extern	cvar_t		sfxvolume;
 extern	cvar_t		loadas8bit;

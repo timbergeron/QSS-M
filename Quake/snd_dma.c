@@ -39,7 +39,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "snd_codec.h"
 #include "bgmusic.h"
-#include "f_modified.h"
 
 static void S_Play (void);
 static void S_PlayVol (void);
@@ -123,6 +122,7 @@ cvar_t		loadas8bit = {"loadas8bit", "0", CVAR_NONE};
 
 cvar_t		sndspeed = {"sndspeed", "11025", CVAR_NONE};
 cvar_t		snd_mixspeed = {"snd_mixspeed", "44100", CVAR_ARCHIVE};
+cvar_t		snd_surround = {"snd_surround", "1", CVAR_ARCHIVE};
 
 cvar_t		snd_waterfx = {"snd_waterfx", "1", CVAR_ARCHIVE}; // woods #waterfx (ironwail)
 
@@ -179,34 +179,17 @@ static void SND_Callback_snd_filterquality (cvar_t *var)
 	}
 }
 
-/*
-================
-S_FModCheckExtraSounds
-
-woods: ported from ezQuake (snd_main.c) -- some sounds in the f_modified table
-are not loaded during normal play, so check them explicitly at sound startup.
-================
-*/
-static void S_FModCheckExtraSounds (void)
+static void SND_Callback_snd_surround (cvar_t *var)
 {
-	static const char *soundlist[] = {
-		"sound/misc/menu1.wav",
-		"sound/misc/menu2.wav",
-		"sound/misc/menu3.wav",
-		"sound/misc/basekey.wav",
-		"sound/misc/talk.wav",
-		"sound/doors/runeuse.wav",
-	};
-	size_t i;
+	(void) var;
 
-	for (i = 0; i < sizeof(soundlist)/sizeof(soundlist[0]); i++)
-	{
-		byte *data = COM_LoadMallocFile (soundlist[i], NULL);
-		if (!data)
-			continue;
-		FMod_CheckModel (soundlist[i], data, (size_t)com_filesize);
-		free (data);
-	}
+#if defined(USE_SDL2)
+	if (sound_started)
+		Con_Printf ("snd_surround will take effect after snd_restart\n");
+#else
+	if (sound_started)
+		Con_Printf ("snd_surround requires SDL2\n");
+#endif
 }
 
 /*
@@ -229,7 +212,6 @@ void S_Startup (void)
 	{
 		Con_Printf("Audio: %d bit, %s, %d Hz\n", shm->samplebits,
 				(shm->channels == 2) ? "stereo" : "mono", shm->speed);
-		S_FModCheckExtraSounds (); // woods #f_modified
 	}
 	GetSoundtime();
 	paintedtime = soundtime;
@@ -335,6 +317,7 @@ void S_Init (void)
 	Cvar_RegisterVariable(&_snd_mixahead);
 	Cvar_RegisterVariable(&sndspeed);
 	Cvar_RegisterVariable(&snd_mixspeed);
+	Cvar_RegisterVariable(&snd_surround);
 	Cvar_RegisterVariable(&snd_filterquality);
 	Cvar_RegisterVariable(&snd_waterfx); // woods #waterfx (ironwail)
 
@@ -374,6 +357,7 @@ void S_Init (void)
 
 	Cvar_SetCallback(&sfxvolume, SND_Callback_sfxvolume);
 	Cvar_SetCallback(&snd_filterquality, &SND_Callback_snd_filterquality);
+	Cvar_SetCallback(&snd_surround, &SND_Callback_snd_surround);
 
 	SND_InitScaletable ();
 
