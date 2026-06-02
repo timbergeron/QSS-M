@@ -306,9 +306,13 @@ static void R_FindTouchedLeafs (struct cl_static_entities_s *ent, mnode_t *node)
 
 void CL_LinkStaticEnt(struct cl_static_entities_s *ent)
 {
+	float scale;
+
 	ent->num_clusters = 0;
 	if (!ent->ent->model)
 		return;
+
+	scale = ENTSCALE_DECODE(ent->ent->netstate.scale);
 
 	//calc its bbox...
 	if (ent->ent->angles[0] || ent->ent->angles[1] || ent->ent->angles[2])
@@ -326,14 +330,14 @@ void CL_LinkStaticEnt(struct cl_static_entities_s *ent)
 		v1 = sqrt(DotProduct(max,max));
 		for (i=0 ; i<3 ; i++)
 		{
-			ent->absmin[i] = ent->ent->origin[i] - v1;
-			ent->absmax[i] = ent->ent->origin[i] + v1;
+			ent->absmin[i] = ent->ent->origin[i] - v1*scale;
+			ent->absmax[i] = ent->ent->origin[i] + v1*scale;
 		}
 	}
 	else
 	{	//simple
-		VectorAdd(ent->ent->origin, ent->ent->model->mins, ent->absmin);
-		VectorAdd(ent->ent->origin, ent->ent->model->maxs, ent->absmax);
+		VectorMA(ent->ent->origin, scale, ent->ent->model->mins, ent->absmin);
+		VectorMA(ent->ent->origin, scale, ent->ent->model->maxs, ent->absmax);
 	}
 
 	//for scenecache

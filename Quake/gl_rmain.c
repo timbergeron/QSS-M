@@ -807,16 +807,16 @@ qboolean R_CullBox (vec3_t emins, vec3_t emaxs)
 R_GetEntityBounds -- woods - factor out entity bounds from R_CullModelForEntity #alphasort
 ===============
 */
-void R_GetEntityBounds (const entity_t *e, vec3_t mins, vec3_t maxs)
+static void R_GetEntityBoundsForTransform (const entity_t *e, const vec3_t origin, const vec3_t angles, vec3_t mins, vec3_t maxs)
 {
 	vec_t scalefactor, *minbounds, *maxbounds;
 
-	if (e->angles[0] || e->angles[2]) //pitch or roll
+	if (angles[0] || angles[2]) //pitch or roll
 	{
 		minbounds = e->model->rmins;
 		maxbounds = e->model->rmaxs;
 	}
-	else if (e->angles[1]) //yaw
+	else if (angles[1]) //yaw
 	{
 		minbounds = e->model->ymins;
 		maxbounds = e->model->ymaxs;
@@ -832,14 +832,19 @@ void R_GetEntityBounds (const entity_t *e, vec3_t mins, vec3_t maxs)
 	{
 		VectorScale(minbounds, scalefactor, mins);
 		VectorScale(maxbounds, scalefactor, maxs);
-		VectorAdd(e->origin, mins, mins);
-		VectorAdd(e->origin, maxs, maxs);
+		VectorAdd(origin, mins, mins);
+		VectorAdd(origin, maxs, maxs);
 	}
 	else
 	{
-		VectorAdd (e->origin, minbounds, mins);
-		VectorAdd (e->origin, maxbounds, maxs);
+		VectorAdd (origin, minbounds, mins);
+		VectorAdd (origin, maxbounds, maxs);
 	}
+}
+
+void R_GetEntityBounds (const entity_t *e, vec3_t mins, vec3_t maxs)
+{
+	R_GetEntityBoundsForTransform (e, e->origin, e->angles, mins, maxs);
 }
 
 /*
@@ -852,6 +857,15 @@ qboolean R_CullModelForEntity (entity_t *e)
 	vec3_t mins, maxs;
 
 	R_GetEntityBounds (e, mins, maxs);
+
+	return R_CullBox (mins, maxs);
+}
+
+qboolean R_CullModelForEntityTransform (entity_t *e, const vec3_t origin, const vec3_t angles)
+{
+	vec3_t mins, maxs;
+
+	R_GetEntityBoundsForTransform (e, origin, angles, mins, maxs);
 
 	return R_CullBox (mins, maxs);
 }

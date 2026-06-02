@@ -3048,7 +3048,7 @@ void R_DrawAliasModel (entity_t *e)
 		//
 		// cull it
 		//
-		if (R_CullModelForEntity(e))
+		if (R_CullModelForEntityTransform(e, lerpdata.origin, lerpdata.angles))
 			return;
 
 		//
@@ -3549,9 +3549,6 @@ void GL_DrawAliasShadow (entity_t *e)
 	lerpdata_t	lerpdata;
 	float shade; // woods (R00k) : fade light based on ambientlight
 
-	if (R_CullModelForEntity(e))
-		return;
-
 	if (e == &cl.viewent || e->effects & EF_NOSHADOW || e->model->flags & MOD_NOSHADOW)
 		return;
 
@@ -3570,6 +3567,9 @@ void GL_DrawAliasShadow (entity_t *e)
 	paliashdr = (aliashdr_t *)Mod_Extradata (e->model);
 	R_SetupAliasFrame (paliashdr, e, &lerpdata);
 	R_SetupEntityTransform (e, &lerpdata);
+	if (R_CullModelForEntityTransform(e, lerpdata.origin, lerpdata.angles))
+		return;
+
 	R_LightPoint (e->origin);
 	shade = (((lightcolor[0] + lightcolor[1] + lightcolor[2]) / 3) / 128); // woods (R00k) : fade light based on ambientlight
 	lheight = currententity->origin[2] - lightspot[2];
@@ -3613,12 +3613,11 @@ void R_DrawAliasModel_ShowTris (entity_t *e)
 	lerpdata_t	lerpdata;
 	float	fovscale = 1.0f;
 
-	if (R_CullModelForEntity(e))
-		return;
-
 	paliashdr = (aliashdr_t *)Mod_Extradata (e->model);
 	R_SetupAliasFrame (paliashdr, e, &lerpdata);
 	R_SetupEntityTransform (e, &lerpdata);
+	if (R_CullModelForEntityTransform(e, lerpdata.origin, lerpdata.angles))
+		return;
 
 	if (e == &cl.viewent && r_refdef.basefov > 90.f && cl_gun_fovscale.value)
 		fovscale = 1.0f / tan(DEG2RAD(r_refdef.basefov / 2.0)) / cl_gun_fovscale.value;

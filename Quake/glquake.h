@@ -462,6 +462,7 @@ qboolean R_CullBox (vec3_t emins, vec3_t emaxs);
 void R_StoreEfrags (efrag_t **ppefrag);
 void R_GetEntityBounds (const entity_t *e, vec3_t mins, vec3_t maxs);
 qboolean R_CullModelForEntity (entity_t *e);
+qboolean R_CullModelForEntityTransform (entity_t *e, const vec3_t origin, const vec3_t angles);
 void R_RotateForEntity (vec3_t origin, vec3_t angles, entity_t *e);
 void R_MarkLights (dlight_t *light, vec3_t lightorg, int framecount, int num, mnode_t *node);
 
