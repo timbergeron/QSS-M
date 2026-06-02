@@ -326,6 +326,20 @@ static void Cl_Damagehue_Completion_f (cvar_t* cvar, const char* partial)
 	return;
 }
 
+/*
+===============
+GL_PowerupShells_Completion_f -- woods #iwtabcomplete #powershell
+===============
+*/
+static void GL_PowerupShells_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "shell+effects", NULL);
+	Con_AddToTabList("2", partial, "shell+items", NULL);
+}
+
 
 /*
 ===============
@@ -553,6 +567,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&gl_fullbrights);
 	Cvar_RegisterVariable (&gl_overbright);
 	Cvar_RegisterVariable (&gl_powerupshells); // woods #powershell
+	Cvar_SetCompletion (&gl_powerupshells, &GL_PowerupShells_Completion_f); // woods #iwtabcomplete #powershell
 	Cvar_RegisterVariable (&gl_powerupshells_alpha); // woods #powershell
 	Cvar_RegisterVariable (&gl_caustics); // woods #caustics
 	Cvar_RegisterVariable (&r_grass); // woods #grass

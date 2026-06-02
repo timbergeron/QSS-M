@@ -1616,7 +1616,6 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 
 	if (!r_coloredpowerupglow.value
 		|| gl_powerupshells.value <= 0.0f
-		|| gl_powerupshells.value > 1.0f
 		|| e != &cl.viewent
 		|| !(powerup_items & (IT_QUAD | IT_INVULNERABILITY))
 		|| chase_active.value)
@@ -1711,35 +1710,137 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 static void ApplyShellEffect(aliasglsl_t* glsl, float red, float green, float blue, float time, float alpha) // -- woods #powershell
 {
 	GL_Uniform1iFunc(glsl->useShellTexLoc, 1);
+	GL_SelectTexture(GL_TEXTURE0);
 	GL_SelectTexture(GL_TEXTURE3);
+	GL_ClearBindings();
 	GL_Bind(shelltexture);
 	GL_Uniform1fFunc(glsl->clTimeLoc, time);
 	GL_Uniform3fFunc(glsl->shellColorLoc, red, green, blue);
 	GL_Uniform1fFunc(glsl->shellAlphaLoc, alpha);
 }
 
-static void R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- woods #powershell
+static qboolean R_GetPowerupPickupShellColor(entity_t* e, vec3_t color) // -- woods #powershell
+{
+	if (gl_powerupshells.value < 2.0f || !e || !e->model)
+		return false;
+
+	if (!strcmp(e->model->name, "progs/quaddama.mdl"))
+	{
+		color[0] = 0.0f;
+		color[1] = 0.0f;
+		color[2] = 1.0f;
+		return true;
+	}
+
+	if (!strcmp(e->model->name, "progs/invulner.mdl"))
+	{
+		color[0] = 1.0f;
+		color[1] = 0.0f;
+		color[2] = 0.0f;
+		return true;
+	}
+
+	return false;
+}
+
+static float R_PowerupShellTextureAlpha(void) // -- woods #powershell
+{
+	float base = CLAMP(0.0f, gl_powerupshells.value, 1.0f);
+	const float kmax = 5.0f;
+	float alpha_knob = CLAMP(0.0f, gl_powerupshells_alpha.value, 1.0f);
+	float k = alpha_knob * kmax;
+
+	return 1.0f - powf(1.0f - base, k);
+}
+
+static void R_DrawPowerupPickupShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* lerpdata, entity_t* e) // -- woods #powershell
+{
+	vec3_t shellColor;
+	qboolean isMD5Model = false;
+	float modelRadius, inverseScale, shellScale, shellAlpha;
+	const float kmax = 5.0f;
+	float alpha_knob, k;
+
+	if (!r_coloredpowerupglow.value || !R_GetPowerupPickupShellColor(e, shellColor))
+		return;
+
+	modelRadius = R_CalculateAliasModelRadius(paliashdr, e, lerpdata, &isMD5Model);
+	inverseScale = 14.0f * pow(15.0f / modelRadius, 1.6f);
+	shellScale = CLAMP(0.08f, inverseScale, 8.0f);
+	if (isMD5Model)
+		shellScale *= 1.30f;
+
+	alpha_knob = CLAMP(0.0f, gl_powerupshells_alpha.value, 1.0f);
+	k = alpha_knob * kmax;
+	shellAlpha = CLAMP(0.0f, 0.1f * k, 1.0f);
+	if (shellAlpha <= 0.0001f)
+		return;
+
+	glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+	glEnable(GL_STENCIL_TEST);
+	glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+	glStencilMask(0x00);
+
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+	glDepthMask(GL_FALSE);
+	glDepthFunc(GL_LEQUAL);
+
+	GL_Uniform1iFunc(glsl->shellModeLoc, 2);
+	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 2);
+	GL_Uniform1fFunc(glsl->outlineWidthLoc, shellScale);
+	GL_Uniform4fFunc(glsl->outlineColorLoc, shellColor[0], shellColor[1], shellColor[2], shellAlpha);
+	GL_Uniform1fFunc(glsl->shellTimeLoc, 0);
+	GL_Uniform4fFunc(glsl->shellWaveParamsLoc, 0.0f, 0.0f, 0.0f, 0.0f);
+
+	glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+		e->model->meshindexesvboptr + paliashdr->eboofs);
+
+	glPopAttrib();
+
+	GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
+	GL_Uniform1iFunc(glsl->shellModeLoc, 0);
+}
+
+static qboolean R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- woods #powershell
 {
 	int powerup_items = cl.items | (M_LivePreview_UsePowerupShells() ? IT_QUAD : 0);
+	vec3_t pickup_shell_color;
 
 	GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
 
-	if (!r_coloredpowerupglow.value || gl_powerupshells.value <= 0.0f || e != &cl.viewent || chase_active.value)
-		return;
+	if (!r_coloredpowerupglow.value || gl_powerupshells.value <= 0.0f)
+		return false;
+
+	if (R_GetPowerupPickupShellColor(e, pickup_shell_color))
+	{
+		float shellAlpha;
+
+		if (!shelltexture)
+			return false;
+
+		shellAlpha = R_PowerupShellTextureAlpha();
+		if (shellAlpha <= 0.0001f)
+			return false;
+
+		ApplyShellEffect(glsl, pickup_shell_color[0], pickup_shell_color[1], pickup_shell_color[2], cl.time, shellAlpha);
+		return true;
+	}
+
+	if (e != &cl.viewent || chase_active.value)
+		return false;
 
 	if ((cl.time <= cl.faceanimtime || M_LivePreview_UseDamageTint()) && cl_damagehue.value)
 	{
 		if (e == &cl.viewent && !chase_active.value)
 		{
-			if (r_coloredpowerupglow.value && gl_powerupshells.value <= 1)
+			if (r_coloredpowerupglow.value)
 			{
-				float base = CLAMP(0.0f, gl_powerupshells.value, 1.0f);
-				const float kmax = 5.0f;
-				float alpha_knob = CLAMP(0.0f, gl_powerupshells_alpha.value, 1.0f);
-				float k = alpha_knob * kmax;
-				float shellAlpha = 1.0f - powf(1.0f - base, k);
+				float shellAlpha = R_PowerupShellTextureAlpha();
 				if (shellAlpha <= 0.0001f)
-					return;
+					return false;
 				plcolour_t dhvalue = CL_PLColours_Parse(cl_damagehuecolor.string);
 				byte* dhuecolor = CL_PLColours_ToRGB(&dhvalue);
 				
@@ -1749,6 +1850,7 @@ static void R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- wood
 				float blue = dhuecolor[2] / 255.0f * 0.7f;
 				
 				ApplyShellEffect(glsl, red, green, blue, cl.time, shellAlpha);
+				return true;
 			}
 		}
 	}
@@ -1756,15 +1858,11 @@ static void R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- wood
 	{
 		if (e == &cl.viewent && !chase_active.value)
 		{
-			if (r_coloredpowerupglow.value && gl_powerupshells.value <= 1)
+			if (r_coloredpowerupglow.value)
 			{
-				float base = CLAMP(0.0f, gl_powerupshells.value, 1.0f);
-				const float kmax = 5.0f;
-				float alpha_knob = CLAMP(0.0f, gl_powerupshells_alpha.value, 1.0f);
-				float k = alpha_knob * kmax;
-				float shellAlpha = 1.0f - powf(1.0f - base, k);  // saturating boost
+				float shellAlpha = R_PowerupShellTextureAlpha();
 				if (shellAlpha <= 0.0001f)
-					return;
+					return false;
 
 				if ((powerup_items & IT_QUAD) && (powerup_items & IT_INVULNERABILITY))
 					ApplyShellEffect(glsl, 1.0f, 0.0f, 1.0f, cl.time, shellAlpha);
@@ -1772,9 +1870,22 @@ static void R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- wood
 					ApplyShellEffect(glsl, 0.0f, 0.0f, 1.0f, cl.time, shellAlpha);
 				else if (powerup_items & IT_INVULNERABILITY)
 					ApplyShellEffect(glsl, 1.0f, 0.0f, 0.0f, cl.time, shellAlpha);
+				else
+					return false;
+				return true;
 			}
 		}
 	}
+
+	return false;
+}
+
+static void R_RestoreAliasShellTextureState(aliasglsl_t* glsl, struct skintextures_s tex) // -- woods #powershell
+{
+	GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
+	GL_SelectTexture(GL_TEXTURE3);
+	GL_Bind(tex.upper);
+	GL_SelectTexture(GL_TEXTURE0);
 }
 
 /*
@@ -1807,6 +1918,7 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 {
 	GLfloat	tints[3][4];
 	float	blend;
+	qboolean applied_shell;
 
 	if (!currententity->model) // woods -- flush guard
 		return;
@@ -2026,13 +2138,18 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 
 	R_BeginAliasOutlineRendering(glsl); // woods #routline
 
-	R_ApplyPowerupShellEffect(glsl, e); // woods #powershell
+	applied_shell = R_ApplyPowerupShellEffect(glsl, e); // woods #powershell
 
 // draw
 	glDrawElements (GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT, currententity->model->meshindexesvboptr+paliashdr->eboofs);
+	if (applied_shell)
+		R_RestoreAliasShellTextureState(glsl, tex); // woods #powershell
 
 	if (e != &cl.viewent)
+	{
+		R_DrawPowerupPickupShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
 		R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e); // woods #routline
+	}
 	else if (cl.items & (IT_QUAD | IT_INVULNERABILITY))
 		R_DrawViewmodelShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
 

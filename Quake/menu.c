@@ -10698,7 +10698,7 @@ void M_Graphics_Draw(void)
 			else if (gl_powerupshells.value == 1)
 				value = "shell+effects";
 			else
-				value = "light only";
+				value = "shell+items";
 			M_Print(178, y, value);
 			break;
 
