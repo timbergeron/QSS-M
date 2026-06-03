@@ -24002,6 +24002,10 @@ qboolean	searchComplete = false;
 double		searchCompleteTime;
 enum slistScope_e searchLastScope = SLIST_LAN;
 void ResetHostlist (void); // woods #resethostlist
+static void ServerList_StartApiFetch(void);
+static qboolean ServerList_ApiFetchHasPendingOrResults(void);
+static qboolean ServerList_ApiFetchIsLoading(void);
+static void ServerList_ApplyApiResults(void);
 
 void M_Menu_Search_f (enum slistScope_e scope)
 {
@@ -24013,6 +24017,8 @@ void M_Menu_Search_f (enum slistScope_e scope)
 	ResetHostlist(); // woods #resethostlist
 	slistScope = searchLastScope = scope;
 	searchComplete = false;
+	if (scope == SLIST_INTERNET)
+		ServerList_StartApiFetch();
 	NET_Slist_f();
 
 }
@@ -24032,6 +24038,8 @@ void M_Search_Draw (void)
 	if(slistInProgress)
 	{
 		NET_Poll();
+		if (searchLastScope == SLIST_INTERNET && ServerList_ApiFetchHasPendingOrResults())
+			M_Menu_ServerList_f ();
 		return;
 	}
 
@@ -24041,7 +24049,7 @@ void M_Search_Draw (void)
 		searchCompleteTime = realtime;
 	}
 
-	if (hostCacheCount)
+	if (hostCacheCount || (searchLastScope == SLIST_INTERNET && ServerList_ApiFetchHasPendingOrResults()))
 	{
 		M_Menu_ServerList_f ();
 		return;
@@ -24098,6 +24106,8 @@ static struct {
     int* order;
     int* filtered_indices;
     int servercount;
+	size_t hostcache_copied;
+	int pinged_count;
     int slist_first;
     qboolean pingSortDirty;
 	SDL_Thread* pingThreads[MAX_PING_THREADS];
@@ -24125,11 +24135,34 @@ enum {
 static volatile qboolean pingThreadsShouldExit = false;
 SDL_mutex* pingMutex = NULL;
 
+typedef enum
+{
+	SERVERLIST_API_IDLE,
+	SERVERLIST_API_LOADING,
+	SERVERLIST_API_READY,
+	SERVERLIST_API_ERROR
+} serverlistapistate_t;
+
+static struct
+{
+	SDL_mutex* mutex;
+	SDL_Thread* thread;
+	serverlistapistate_t state;
+	servertitem_t* items;
+	int count;
+} serverlistapi;
+
 int UDP_Ping_Host(const char* host);
 char *UDP_QueryPlayers(const char *host, int maxslots);
 
 static int ServersMenu_ResolveIndex(int displayIndex);
 static void SortServers(qboolean lockMutex);
+static void SortServersWithSelection(qboolean lockMutex, int selectedActual);
+static void M_ServerList_Refilter(void);
+static void M_ServerList_RefilterWithSelection(int selectedActual);
+static int ServerList_FindDuplicateItem(const servertitem_t* items, int count, const servertitem_t* candidate);
+static void ServerList_AppendHostCacheResults(void);
+static void CleanupPingThreads(void);
 
 static void ServerList_CopyTrimmedToken(const char* start, size_t len, char* out, size_t outsize)
 {
@@ -24266,8 +24299,241 @@ static void ServerList_MoveItem(servertitem_t* dst, servertitem_t* src)
 	memset(src, 0, sizeof(*src));
 }
 
+static qboolean ServerList_AppendMovedItem(servertitem_t** items, int* count, servertitem_t* src)
+{
+	servertitem_t* resizedItems;
+
+	if (!items || !count || !src)
+		return false;
+
+	resizedItems = (servertitem_t*)realloc(*items, sizeof(servertitem_t) * (*count + 1));
+	if (!resizedItems)
+	{
+		Con_DPrintf("Memory allocation failed.\n");
+		return false;
+	}
+
+	*items = resizedItems;
+	ServerList_MoveItem(&(*items)[*count], src);
+	(*count)++;
+	return true;
+}
+
+static int ServerList_FindDuplicateItem(const servertitem_t* items, int count, const servertitem_t* candidate)
+{
+	const char* candidateName;
+	const char* candidateBaseName;
+	qboolean candidateStarred;
+
+	if (!candidate)
+		return -1;
+
+	candidateName = candidate->name ? candidate->name : "";
+	candidateBaseName = candidate->name && candidate->name[0] == '*' ? candidate->name + 1 : candidateName;
+	candidateStarred = candidate->name && candidate->name[0] == '*';
+
+	for (int i = 0; i < count; i++)
+	{
+		const char* existingName = items[i].name ? items[i].name : "";
+		const char* existingBaseName = items[i].name && items[i].name[0] == '*' ? items[i].name + 1 : existingName;
+		qboolean existingStarred = items[i].name && items[i].name[0] == '*';
+
+		if (candidate->ip && items[i].ip && strcmp(candidate->ip, items[i].ip) == 0)
+			return i;
+
+		if ((candidateStarred || existingStarred) &&
+			!q_strcasecmp(candidateBaseName, existingBaseName) &&
+			candidate->map && items[i].map &&
+			!q_strcasecmp(candidate->map, items[i].map) &&
+			candidate->users == items[i].users &&
+			candidate->maxusers == items[i].maxusers)
+			return i;
+	}
+
+	return -1;
+}
+
+static qboolean ServerList_ShouldReplaceDuplicate(const servertitem_t* existing, const servertitem_t* candidate)
+{
+	qboolean existingStarred = existing && existing->name && existing->name[0] == '*';
+	qboolean candidateStarred = candidate && candidate->name && candidate->name[0] == '*';
+
+	return existingStarred && !candidateStarred;
+}
+
+static qboolean ServerList_AppendOrReplaceMovedItem(servertitem_t** items, int* count, servertitem_t* src, int* changedIndex)
+{
+	int duplicateIndex;
+	int appendIndex;
+
+	if (changedIndex)
+		*changedIndex = -1;
+
+	if (!items || !count || !src)
+		return false;
+
+	duplicateIndex = ServerList_FindDuplicateItem(*items, *count, src);
+	if (duplicateIndex >= 0)
+	{
+		if (ServerList_ShouldReplaceDuplicate(&(*items)[duplicateIndex], src))
+		{
+			ServerList_FreeItem(&(*items)[duplicateIndex]);
+			ServerList_MoveItem(&(*items)[duplicateIndex], src);
+			if (changedIndex)
+				*changedIndex = duplicateIndex;
+			return true;
+		}
+		return false;
+	}
+
+	appendIndex = *count;
+	if (!ServerList_AppendMovedItem(items, count, src))
+		return false;
+
+	if (changedIndex)
+		*changedIndex = appendIndex;
+	return true;
+}
+
+static void ServerList_RebuildOrderAndFilter(void)
+{
+	int selectedActual = ServersMenu_ResolveIndex(serversmenu.list.cursor);
+
+	free(serversmenu.order);
+	serversmenu.order = NULL;
+	serversmenu.list.numitems = serversmenu.servercount;
+
+	if (serversmenu.servercount > 0)
+	{
+		serversmenu.order = (int*)malloc(sizeof(int) * serversmenu.servercount);
+		if (serversmenu.order)
+		{
+			for (int i = 0; i < serversmenu.servercount; ++i)
+				serversmenu.order[i] = i;
+		}
+	}
+
+	if (serversmenu.servercount > 0)
+	{
+		if (serversmenu.list.cursor < 0)
+			serversmenu.list.cursor = 0;
+		else if (serversmenu.list.cursor >= serversmenu.servercount)
+			serversmenu.list.cursor = serversmenu.servercount - 1;
+	}
+	else
+	{
+		serversmenu.list.cursor = 0;
+		serversmenu.list.scroll = 0;
+	}
+
+	serversmenu.pingSortDirty = false;
+	SortServersWithSelection(false, selectedActual);
+
+	if (serversmenu.list.search.len > 0)
+		M_ServerList_RefilterWithSelection(selectedActual);
+	else if (serversmenu.list.viewsize > 0)
+		M_List_Rescroll(&serversmenu.list);
+}
+
+static void ServerList_ApiEnsureMutex(void)
+{
+	if (!serverlistapi.mutex)
+		serverlistapi.mutex = SDL_CreateMutex();
+}
+
+static void ServerList_ApiReapThread(qboolean wait)
+{
+	SDL_Thread* thread = NULL;
+
+	if (!serverlistapi.mutex)
+		return;
+
+	SDL_LockMutex(serverlistapi.mutex);
+	if (serverlistapi.thread &&
+		(wait || serverlistapi.state != SERVERLIST_API_LOADING))
+	{
+		thread = serverlistapi.thread;
+		serverlistapi.thread = NULL;
+	}
+	SDL_UnlockMutex(serverlistapi.mutex);
+
+	if (thread)
+		SDL_WaitThread(thread, NULL);
+}
+
+void M_ServerList_ShutdownApiFetch(void)
+{
+	SDL_mutex* mutex;
+
+	ServerList_ApiReapThread(true);
+
+	mutex = serverlistapi.mutex;
+	if (!mutex)
+		return;
+
+	SDL_LockMutex(mutex);
+	ServerList_FreeItems(serverlistapi.items, serverlistapi.count);
+	serverlistapi.items = NULL;
+	serverlistapi.count = 0;
+	serverlistapi.state = SERVERLIST_API_IDLE;
+	serverlistapi.thread = NULL;
+	SDL_UnlockMutex(mutex);
+
+	SDL_DestroyMutex(mutex);
+	serverlistapi.mutex = NULL;
+}
+
+static qboolean ServerList_CreateHostCacheItem(size_t index, servertitem_t* item)
+{
+	const char* serverName;
+	const char* serverIP;
+	const char* map;
+	char serverNameBuf[64];
+	unsigned char* ch;
+
+	if (!item)
+		return false;
+
+	memset(item, 0, sizeof(*item));
+
+	serverName = NET_SlistPrintServerInfo(index, SERVER_NAME);
+	serverIP = NET_SlistPrintServerInfo(index, SERVER_CNAME);
+	map = NET_SlistPrintServerInfo(index, SERVER_MAP);
+
+	if (!serverName)
+		serverName = "";
+	q_strlcpy(serverNameBuf, serverName, sizeof(serverNameBuf));
+	for (ch = (unsigned char*)serverNameBuf; *ch; ch++)
+		*ch = dequake[*ch];
+
+	if (!serverNameBuf[0] || ServerList_IsIgnored(serverNameBuf, serverIP))
+		return false;
+
+	item->name = strdup(serverNameBuf);
+	item->ip = strdup(serverIP);
+	item->users = atoi(NET_SlistPrintServerInfo(index, SERVER_USERS));
+	item->maxusers = atoi(NET_SlistPrintServerInfo(index, SERVER_MAX_USERS));
+	item->map = strdup(map ? map : "");
+	item->players = NULL;
+	item->active = true;
+	item->ping = -1;
+	item->lastPingTime = 0;
+	item->isLoading = false;
+
+	if (!item->name || !item->ip || !item->map)
+	{
+		ServerList_FreeItem(item);
+		return false;
+	}
+
+	return true;
+}
+
 void InitializePingMutex(void)
 {
+	if (pingMutex != NULL)
+		return;
+
 	pingMutex = SDL_CreateMutex();
 	if (pingMutex == NULL) {
 		Con_DPrintf("SDL_CreateMutex failed: %s\n", SDL_GetError());
@@ -24284,6 +24550,8 @@ void CleanupPingMutex(void)
 
 void PingSingleServer(int index)
 {
+	qboolean same_server;
+
 	if (index < 0 || index >= serversmenu.servercount)
 		return;
 
@@ -24292,6 +24560,11 @@ void PingSingleServer(int index)
 	int  users;
 
 	SDL_LockMutex(pingMutex);
+	if (!serversmenu.items || index >= serversmenu.servercount || !serversmenu.items[index].ip)
+	{
+		SDL_UnlockMutex(pingMutex);
+		return;
+	}
 	q_strlcpy(serverAddress, serversmenu.items[index].ip, sizeof(serverAddress));
 	previousPing = serversmenu.items[index].ping;
 	users = serversmenu.items[index].users;
@@ -24301,32 +24574,45 @@ void PingSingleServer(int index)
 	int ping = UDP_Ping_Host(serverAddress);
 
 	SDL_LockMutex(pingMutex);
-	if (ping >= 0)
+	same_server = (serversmenu.items && index < serversmenu.servercount &&
+		serversmenu.items[index].ip && !strcmp(serversmenu.items[index].ip, serverAddress));
+	if (same_server && ping >= 0)
 	{
 		serversmenu.items[index].ping = ping;
 	}
-	else if (previousPing >= 0)
+	else if (same_server && previousPing >= 0)
 	{
 		serversmenu.items[index].ping = previousPing;
 	}
-	else
+	else if (same_server)
 	{
 		serversmenu.items[index].ping = -1;  // -1 indicates "failed"
 	}
-	serversmenu.items[index].isLoading = false;  // Clear loading flag
+	if (same_server)
+		serversmenu.items[index].isLoading = false;  // Clear loading flag
 	SDL_UnlockMutex(pingMutex);
 
 	/* refresh player names on re-ping if server has players */
-	if (ping >= 0 && users > 0)
+	if (same_server && ping >= 0 && users > 0)
 	{
 		char *playernames = UDP_QueryPlayers(serverAddress, users);
-		SDL_LockMutex(pingMutex);
 		if (playernames)
 		{
-			free((void *)serversmenu.items[index].players);
-			serversmenu.items[index].players = playernames;
+			qboolean stored_players = false;
+
+			SDL_LockMutex(pingMutex);
+			if (serversmenu.items && index < serversmenu.servercount &&
+				serversmenu.items[index].ip && !strcmp(serversmenu.items[index].ip, serverAddress))
+			{
+				free((void *)serversmenu.items[index].players);
+				serversmenu.items[index].players = playernames;
+				stored_players = true;
+			}
+			SDL_UnlockMutex(pingMutex);
+
+			if (!stored_players)
+				free(playernames);
 		}
-		SDL_UnlockMutex(pingMutex);
 	}
 }
 
@@ -24364,6 +24650,20 @@ int PingSingleServerThread(void* data)
 	int index = (int)(intptr_t)data;
 	PingSingleServer(index);
 	return 0;
+}
+
+static void PingSweepThreadFinished(void)
+{
+	SDL_LockMutex(pingMutex);
+	if (serversmenu.initialPingThreadsRemaining > 0)
+		serversmenu.initialPingThreadsRemaining--;
+	if (serversmenu.initialPingThreadsRemaining <= 0)
+	{
+		serversmenu.initialPingThreadsRemaining = 0;
+		serversmenu.initialPingComplete = true;
+		serversmenu.pingSortDirty = true;
+	}
+	SDL_UnlockMutex(pingMutex);
 }
 
 void TriggerServerPing(int index)
@@ -24424,11 +24724,12 @@ int PingServers(void* data)
 			break;
 
 		SDL_LockMutex(pingMutex);
-		if (serversmenu.items && serversmenu.items[i].ip)
+		if (serversmenu.items && i < serversmenu.servercount && serversmenu.items[i].ip)
 		{
 			char serverAddress[256];
 			int users;
 			qboolean has_players_already;
+			qboolean same_server;
 			q_strlcpy(serverAddress, serversmenu.items[i].ip, sizeof(serverAddress));
 			users = serversmenu.items[i].users;
 			has_players_already = (serversmenu.items[i].players != NULL);
@@ -24437,18 +24738,32 @@ int PingServers(void* data)
 			int ping = UDP_Ping_Host(serverAddress);
 
 			SDL_LockMutex(pingMutex);
-			serversmenu.items[i].ping = (ping >= 0) ? ping : -1;
+			same_server = (serversmenu.items && i < serversmenu.servercount &&
+				serversmenu.items[i].ip && !strcmp(serversmenu.items[i].ip, serverAddress));
+			if (same_server)
+				serversmenu.items[i].ping = (ping >= 0) ? ping : -1;
 			SDL_UnlockMutex(pingMutex);
 
 			/* query player names if server responded to ping and has players */
-			if (ping >= 0 && users > 0 && !has_players_already)
+			if (same_server && ping >= 0 && users > 0 && !has_players_already)
 			{
 				char *playernames = UDP_QueryPlayers(serverAddress, users);
 				if (playernames)
 				{
+					qboolean stored_players = false;
+
 					SDL_LockMutex(pingMutex);
-					serversmenu.items[i].players = playernames;
+					if (serversmenu.items && i < serversmenu.servercount &&
+						serversmenu.items[i].ip && !strcmp(serversmenu.items[i].ip, serverAddress) &&
+						!serversmenu.items[i].players)
+					{
+						serversmenu.items[i].players = playernames;
+						stored_players = true;
+					}
 					SDL_UnlockMutex(pingMutex);
+
+					if (!stored_players)
+						free(playernames);
 				}
 			}
 		}
@@ -24460,24 +24775,19 @@ int PingServers(void* data)
 	}
 
 	free(data);
-
-	// Check if this is the last thread to finish
-	SDL_LockMutex(pingMutex);
-	if (serversmenu.initialPingThreadsRemaining > 0)
-		serversmenu.initialPingThreadsRemaining--;
-	if (serversmenu.initialPingThreadsRemaining <= 0)
-	{
-		serversmenu.initialPingThreadsRemaining = 0;
-		serversmenu.initialPingComplete = true;
-		serversmenu.pingSortDirty = true;
-	}
-	SDL_UnlockMutex(pingMutex);
+	PingSweepThreadFinished();
 
 	return 0;
 }
 
 void WaitForPingThreads(void)
 {
+	if (!pingMutex)
+	{
+		pingThreadsShouldExit = false;
+		return;
+	}
+
 	pingThreadsShouldExit = true; // Signal threads to exit
 
 	for (int i = 0; i < MAX_PING_THREADS; ++i)
@@ -24490,17 +24800,41 @@ void WaitForPingThreads(void)
 		}
 	}
 
-	pingThreadsShouldExit = false; // Reset the exit flag
-
 	SDL_LockMutex(pingMutex);
 	serversmenu.initialPingThreadsRemaining = 0;
 	serversmenu.initialPingComplete = true;
 	SDL_UnlockMutex(pingMutex);
 }
 
-void PingAllServers(void)
+static void JoinFinishedPingSweep(void)
 {
-	int servercount = serversmenu.servercount;
+	for (int i = 0; i < MAX_PING_THREADS; ++i)
+	{
+		SDL_Thread* t = serversmenu.pingThreads[i];
+		if (t)
+		{
+			SDL_WaitThread(t, NULL);
+			serversmenu.pingThreads[i] = NULL;
+		}
+	}
+}
+
+static void PingServerRange(int rangeStart, int rangeEnd)
+{
+	int servercount;
+	int desiredThreads;
+	int base;
+	int rem;
+	int start;
+
+	if (rangeStart < 0)
+		rangeStart = 0;
+	if (rangeEnd > serversmenu.servercount)
+		rangeEnd = serversmenu.servercount;
+	if (rangeEnd < rangeStart)
+		rangeEnd = rangeStart;
+
+	servercount = rangeEnd - rangeStart;
 
 	for (int i = 0; i < MAX_PING_THREADS; ++i)
 		serversmenu.pingThreads[i] = NULL;
@@ -24515,15 +24849,19 @@ void PingAllServers(void)
 		return;
 	}
 
-	int desiredThreads = MAX_PING_THREADS;
+	desiredThreads = MAX_PING_THREADS;
 	if (desiredThreads > servercount)
 		desiredThreads = servercount; // don't spawn more threads than servers
 
-	int base = servercount / desiredThreads;
-	int rem  = servercount % desiredThreads;
+	base = servercount / desiredThreads;
+	rem  = servercount % desiredThreads;
 
-	int launchedThreads = 0;
-	int start = 0;
+	SDL_LockMutex(pingMutex);
+	serversmenu.initialPingThreadsRemaining = desiredThreads;
+	serversmenu.initialPingComplete = false;
+	SDL_UnlockMutex(pingMutex);
+
+	start = rangeStart;
 	for (int i = 0; i < desiredThreads; ++i)
 	{
 		int count = base + (i < rem ? 1 : 0);
@@ -24533,6 +24871,7 @@ void PingAllServers(void)
 		if (!range)
 		{
 			Con_DPrintf("Memory allocation failed\n");
+			PingSweepThreadFinished();
 			continue;
 		}
 		range[0] = start;
@@ -24545,20 +24884,48 @@ void PingAllServers(void)
 		{
 			Con_DPrintf("SDL_CreateThread failed: %s\n", SDL_GetError());
 			free(range);
-		}
-		else
-		{
-			launchedThreads++;
+			PingSweepThreadFinished();
 		}
 
 		start = end;
 	}
+}
+
+static void ServerList_StartPendingPingSweep(void)
+{
+	qboolean complete;
+	int start;
+	int end;
+
+	if (!pingMutex)
+		return;
 
 	SDL_LockMutex(pingMutex);
-	serversmenu.initialPingThreadsRemaining = launchedThreads;
-	serversmenu.initialPingComplete = (launchedThreads == 0);
-	if (launchedThreads == 0)
-		serversmenu.pingSortDirty = true;
+	complete = serversmenu.initialPingComplete;
+	start = serversmenu.pinged_count;
+	end = serversmenu.servercount;
+	SDL_UnlockMutex(pingMutex);
+
+	if (!complete || start >= end)
+		return;
+
+	JoinFinishedPingSweep();
+	PingServerRange(start, end);
+
+	SDL_LockMutex(pingMutex);
+	if (serversmenu.pinged_count < end)
+		serversmenu.pinged_count = end;
+	SDL_UnlockMutex(pingMutex);
+}
+
+void PingAllServers(void)
+{
+	int servercount = serversmenu.servercount;
+
+	PingServerRange(0, servercount);
+
+	SDL_LockMutex(pingMutex);
+	serversmenu.pinged_count = servercount;
 	SDL_UnlockMutex(pingMutex);
 }
 
@@ -24712,6 +25079,7 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 		newItem->players = playerNamesLen > 0 ? strdup(playerNames) : NULL;
 		newItem->active = true;
 		newItem->ping = -1;
+		newItem->lastPingTime = 0;
 		newItem->isLoading = false;
 
 		(*actualServerCount)++;
@@ -24720,16 +25088,22 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 	JSON_Free(json);
 }
 
-void CurlServerList (servertitem_t** items, int* actualServerCount) 
+static qboolean CurlServerList (servertitem_t** items, int* actualServerCount)
 {
 	CURL* curl;
 	CURLcode res;
+	long http_code = 0;
 	struct MemoryStruct chunk;
 
 	chunk.memory = malloc(1);  // Initial allocation
 	chunk.size = 0;    // No data at this point
+	if (!chunk.memory)
+	{
+		Con_DPrintf("server list API: memory allocation failed\n");
+		return false;
+	}
+	chunk.memory[0] = '\0';
 
-	curl_global_init(CURL_GLOBAL_ALL);
 	curl = curl_easy_init();
 
 	if (curl) 
@@ -24737,19 +25111,226 @@ void CurlServerList (servertitem_t** items, int* actualServerCount)
 		curl_easy_setopt(curl, CURLOPT_URL, "https://servers.quakeone.com/api/servers/status");
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
-		curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+		curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 2L);
+		curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+		curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 2L);
+		curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 10L);
+		curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+		curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+		curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+		curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+		curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+#if CURL_AT_LEAST_VERSION(7, 85, 0)
+		curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+		curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+#else
+		curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+		curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+#endif
 
 		res = curl_easy_perform(curl);
-		if (res != CURLE_OK)
-			Con_DPrintf("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-		else
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+		if (res == CURLE_OK && http_code >= 200 && http_code < 300)
 			populateServersFromJSON(chunk.memory, items, actualServerCount);
+		else if (res != CURLE_OK)
+			Con_DPrintf("server list API: %s\n", curl_easy_strerror(res));
+		else
+			Con_DPrintf("server list API: HTTP %ld\n", http_code);
 
 		free(chunk.memory);
 		curl_easy_cleanup(curl);
+		return (res == CURLE_OK && http_code >= 200 && http_code < 300);
 	}
 
-	curl_global_cleanup();
+	free(chunk.memory);
+	Con_DPrintf("server list API: curl init failed\n");
+	return false;
+}
+
+static int ServerList_ApiFetchThread(void* unused)
+{
+	servertitem_t* items = NULL;
+	int count = 0;
+	qboolean ok;
+
+	(void)unused;
+
+	ok = CurlServerList(&items, &count);
+
+	ServerList_ApiEnsureMutex();
+	if (!serverlistapi.mutex)
+	{
+		ServerList_FreeItems(items, count);
+		return 0;
+	}
+
+	SDL_LockMutex(serverlistapi.mutex);
+	ServerList_FreeItems(serverlistapi.items, serverlistapi.count);
+	if (ok)
+	{
+		serverlistapi.items = items;
+		serverlistapi.count = count;
+		serverlistapi.state = SERVERLIST_API_READY;
+	}
+	else
+	{
+		ServerList_FreeItems(items, count);
+		serverlistapi.items = NULL;
+		serverlistapi.count = 0;
+		serverlistapi.state = SERVERLIST_API_ERROR;
+	}
+	SDL_UnlockMutex(serverlistapi.mutex);
+
+	return 0;
+}
+
+static void ServerList_StartApiFetch(void)
+{
+	SDL_Thread* thread;
+
+	ServerList_ApiReapThread(false);
+	ServerList_ApiEnsureMutex();
+	if (!serverlistapi.mutex)
+		return;
+
+	SDL_LockMutex(serverlistapi.mutex);
+	if (serverlistapi.state == SERVERLIST_API_LOADING)
+	{
+		SDL_UnlockMutex(serverlistapi.mutex);
+		return;
+	}
+
+	ServerList_FreeItems(serverlistapi.items, serverlistapi.count);
+	serverlistapi.items = NULL;
+	serverlistapi.count = 0;
+	serverlistapi.state = SERVERLIST_API_LOADING;
+	SDL_UnlockMutex(serverlistapi.mutex);
+
+	thread = SDL_CreateThread(ServerList_ApiFetchThread, "ServerListApiThread", NULL);
+	if (!thread)
+	{
+		ServerList_ApiEnsureMutex();
+		SDL_LockMutex(serverlistapi.mutex);
+		serverlistapi.state = SERVERLIST_API_ERROR;
+		SDL_UnlockMutex(serverlistapi.mutex);
+		Con_DPrintf("server list API: failed to create fetch thread: %s\n", SDL_GetError());
+		return;
+	}
+
+	SDL_LockMutex(serverlistapi.mutex);
+	serverlistapi.thread = thread;
+	SDL_UnlockMutex(serverlistapi.mutex);
+}
+
+static qboolean ServerList_TakeApiResults(servertitem_t** items, int* count)
+{
+	if (items)
+		*items = NULL;
+	if (count)
+		*count = 0;
+
+	ServerList_ApiEnsureMutex();
+	if (!serverlistapi.mutex)
+		return false;
+
+	SDL_LockMutex(serverlistapi.mutex);
+	if (serverlistapi.state != SERVERLIST_API_READY)
+	{
+		SDL_UnlockMutex(serverlistapi.mutex);
+		return false;
+	}
+
+	if (items)
+		*items = serverlistapi.items;
+	if (count)
+		*count = serverlistapi.count;
+	serverlistapi.items = NULL;
+	serverlistapi.count = 0;
+	serverlistapi.state = SERVERLIST_API_IDLE;
+	SDL_UnlockMutex(serverlistapi.mutex);
+	ServerList_ApiReapThread(false);
+
+	return true;
+}
+
+static qboolean ServerList_ApiFetchHasPendingOrResults(void)
+{
+	qboolean result = false;
+
+	ServerList_ApiEnsureMutex();
+	if (!serverlistapi.mutex)
+		return false;
+
+	SDL_LockMutex(serverlistapi.mutex);
+	result = (serverlistapi.state == SERVERLIST_API_LOADING ||
+		(serverlistapi.state == SERVERLIST_API_READY && serverlistapi.count > 0));
+	SDL_UnlockMutex(serverlistapi.mutex);
+
+	return result;
+}
+
+static qboolean ServerList_ApiFetchIsLoading(void)
+{
+	qboolean result = false;
+
+	ServerList_ApiEnsureMutex();
+	if (!serverlistapi.mutex)
+		return false;
+
+	SDL_LockMutex(serverlistapi.mutex);
+	result = (serverlistapi.state == SERVERLIST_API_LOADING);
+	SDL_UnlockMutex(serverlistapi.mutex);
+
+	return result;
+}
+
+static void ServerList_ApplyApiResults(void)
+{
+	servertitem_t* apiItems = NULL;
+	int apiCount = 0;
+	int added = 0;
+	qboolean locked = false;
+
+	if (searchLastScope != SLIST_INTERNET ||
+		!ServerList_TakeApiResults(&apiItems, &apiCount))
+		return;
+
+	if (apiCount <= 0)
+	{
+		ServerList_FreeItems(apiItems, apiCount);
+		return;
+	}
+
+	if (pingMutex)
+	{
+		SDL_LockMutex(pingMutex);
+		locked = true;
+	}
+
+	for (int i = 0; i < apiCount; i++)
+	{
+		int changedIndex;
+
+		if (ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &serversmenu.servercount, &apiItems[i], &changedIndex))
+		{
+			if (changedIndex >= 0 && changedIndex < serversmenu.pinged_count)
+				serversmenu.pinged_count = changedIndex;
+			added++;
+		}
+	}
+
+	if (added > 0)
+		ServerList_RebuildOrderAndFilter();
+
+	if (locked)
+		SDL_UnlockMutex(pingMutex);
+
+	if (added > 0)
+		TriggerServerPing(serversmenu.list.cursor);
+
+	ServerList_FreeItems(apiItems, apiCount);
 }
 
 static int CompareServers(const void* a, const void* b)
@@ -24814,9 +25395,11 @@ static int ServersMenu_ResolveIndex(int displayIndex)
         return serversmenu.order[displayIndex];
 }
 
-static void M_ServerList_Refilter(void)
+static void M_ServerList_RefilterWithSelection(int selectedActual)
 {
     int i;
+    int selectedDisplay = -1;
+
     VEC_CLEAR(serversmenu.filtered_indices);
 
     for (i = 0; i < serversmenu.servercount; i++)
@@ -24832,13 +25415,17 @@ static void M_ServerList_Refilter(void)
             q_strcasestr(server->map, serversmenu.list.search.text) ||
             q_strcasestr(server->ip, serversmenu.list.search.text))
         {
+            if (actual_idx == selectedActual)
+                selectedDisplay = (int)VEC_SIZE(serversmenu.filtered_indices);
             VEC_PUSH(serversmenu.filtered_indices, i);
         }
     }
 
-    serversmenu.list.numitems = VEC_SIZE(serversmenu.filtered_indices);
+    serversmenu.list.numitems = (int)VEC_SIZE(serversmenu.filtered_indices);
 
-    if (serversmenu.list.cursor >= serversmenu.list.numitems)
+    if (selectedDisplay >= 0)
+        serversmenu.list.cursor = selectedDisplay;
+    else if (serversmenu.list.cursor >= serversmenu.list.numitems)
         serversmenu.list.cursor = serversmenu.list.numitems - 1;
 
     if (serversmenu.list.cursor < 0 && serversmenu.list.numitems > 0)
@@ -24847,8 +25434,12 @@ static void M_ServerList_Refilter(void)
     M_List_CenterCursor(&serversmenu.list);
 }
 
+static void M_ServerList_Refilter(void)
+{
+    M_ServerList_RefilterWithSelection(ServersMenu_ResolveIndex(serversmenu.list.cursor));
+}
 
-static void SortServers(qboolean lockMutex)
+static void SortServersWithSelection(qboolean lockMutex, int selectedActual)
 {
         qboolean locked = false;
 
@@ -24865,8 +25456,6 @@ static void SortServers(qboolean lockMutex)
                         SDL_UnlockMutex(pingMutex);
                 return;
         }
-
-        int selectedActual = ServersMenu_ResolveIndex(serversmenu.list.cursor);
 
         if (serversmenu.servercount >= 2)
 		qsort(serversmenu.order, serversmenu.servercount, sizeof(serversmenu.order[0]), CompareServers);
@@ -24897,45 +25486,21 @@ static void SortServers(qboolean lockMutex)
                 SDL_UnlockMutex(pingMutex);
 }
 
+static void SortServers(qboolean lockMutex)
+{
+        SortServersWithSelection(lockMutex, ServersMenu_ResolveIndex(serversmenu.list.cursor));
+}
+
 void RemoveDuplicateServers (servertitem_t** items, int* actualServerCount) 
 {
 	int writeIndex = 0;
 	for (int i = 0; i < *actualServerCount; i++)
 	{
-		int duplicateIndex = -1;
-		const char* candidateName = (*items)[i].name ? (*items)[i].name : "";
-		const char* candidateBaseName = (*items)[i].name && (*items)[i].name[0] == '*' ? (*items)[i].name + 1 : candidateName;
-		qboolean candidateStarred = (*items)[i].name && (*items)[i].name[0] == '*';
-
-		for (int j = 0; j < writeIndex; j++)
-		{
-			const char* existingName = (*items)[j].name ? (*items)[j].name : "";
-			const char* existingBaseName = (*items)[j].name && (*items)[j].name[0] == '*' ? (*items)[j].name + 1 : existingName;
-			qboolean existingStarred = (*items)[j].name && (*items)[j].name[0] == '*';
-
-			if (strcmp((*items)[i].ip, (*items)[j].ip) == 0)
-			{
-				duplicateIndex = j;
-				break;
-			}
-
-			// Public search can surface the same ICE-capable server twice:
-			// once as an unsupported starred UDP listing and again as a normal broker/API listing.
-			if ((candidateStarred || existingStarred) &&
-				!q_strcasecmp(candidateBaseName, existingBaseName) &&
-				!q_strcasecmp((*items)[i].map, (*items)[j].map) &&
-				(*items)[i].users == (*items)[j].users &&
-				(*items)[i].maxusers == (*items)[j].maxusers)
-			{
-				duplicateIndex = j;
-				break;
-			}
-		}
+		int duplicateIndex = ServerList_FindDuplicateItem(*items, writeIndex, &(*items)[i]);
 
 		if (duplicateIndex >= 0)
 		{
-			qboolean existingStarred = (*items)[duplicateIndex].name && (*items)[duplicateIndex].name[0] == '*';
-			if (existingStarred && !candidateStarred)
+			if (ServerList_ShouldReplaceDuplicate(&(*items)[duplicateIndex], &(*items)[i]))
 			{
 				ServerList_FreeItem(&(*items)[duplicateIndex]);
 				ServerList_MoveItem(&(*items)[duplicateIndex], &(*items)[i]);
@@ -24959,71 +25524,34 @@ void RemoveDuplicateServers (servertitem_t** items, int* actualServerCount)
 
 void FetchAndSortServers (void) 
 {
+        servertitem_t* apiItems = NULL;
+        int apiCount = 0;
         ServerList_FreeItems(serversmenu.items, serversmenu.servercount);
         serversmenu.items = NULL;
         free(serversmenu.order);
         serversmenu.order = NULL;
         int actualServerCount = 0;
 
-	for (int i = 0; i < HOSTCACHESIZE; i++) // Fetch and add servers from the dp list
+	for (size_t i = 0; i < hostCacheCount; i++) // Fetch and add servers from the dp list
 	{
-		const char* serverName = NET_SlistPrintServerInfo(i, SERVER_NAME);
-		const char* serverIP = NET_SlistPrintServerInfo(i, SERVER_CNAME);
-		int users = atoi(NET_SlistPrintServerInfo(i, SERVER_USERS));
-		int maxusers = atoi(NET_SlistPrintServerInfo(i, SERVER_MAX_USERS));
-		const char* map = NET_SlistPrintServerInfo(i, SERVER_MAP);
-
-		unsigned char* ch; // woods dequake
-		for (ch = (unsigned char*)serverName; *ch; ch++)
-			*ch = dequake[*ch];
-
-		if (ServerList_IsIgnored(serverName, serverIP))
-			continue;
-
-		if (serverName && serverName[0] != '\0') 
-		{
-			servertitem_t* resizedItems = (servertitem_t*)realloc(serversmenu.items, sizeof(servertitem_t) * (actualServerCount + 1));
-			if (!resizedItems)
-			{
-				Con_DPrintf("Memory allocation failed.\n");
-				break;
-			}
-			serversmenu.items = resizedItems;
-
-			serversmenu.items[actualServerCount].name = strdup(serverName);
-			serversmenu.items[actualServerCount].ip = strdup(serverIP);
-			serversmenu.items[actualServerCount].users = users;
-			serversmenu.items[actualServerCount].maxusers = maxusers;
-			serversmenu.items[actualServerCount].map = strdup(map);
-			serversmenu.items[actualServerCount].players = NULL;
-			serversmenu.items[actualServerCount].active = true;
-			serversmenu.items[actualServerCount].ping = -1;
-			serversmenu.items[actualServerCount].isLoading = false;
-
-			actualServerCount++;
-		}
+		servertitem_t item;
+		if (ServerList_CreateHostCacheItem(i, &item) &&
+			!ServerList_AppendMovedItem(&serversmenu.items, &actualServerCount, &item))
+			ServerList_FreeItem(&item);
 	}
+	serversmenu.hostcache_copied = hostCacheCount;
 
-	if (searchLastScope == SLIST_INTERNET)
-	CurlServerList (&serversmenu.items, &actualServerCount);// fetch and add servers from the server.quakeone.com json API
+	if (searchLastScope == SLIST_INTERNET && ServerList_TakeApiResults(&apiItems, &apiCount))
+	{
+		for (int i = 0; i < apiCount; i++)
+			ServerList_AppendMovedItem(&serversmenu.items, &actualServerCount, &apiItems[i]);
+		ServerList_FreeItems(apiItems, apiCount);
+	}
 
 	RemoveDuplicateServers(&serversmenu.items, &actualServerCount);
 
         serversmenu.servercount = actualServerCount;
-        serversmenu.list.numitems = actualServerCount;
-
-        if (actualServerCount > 0)
-        {
-                serversmenu.order = (int*)malloc(sizeof(int) * actualServerCount);
-                if (serversmenu.order)
-                {
-                        for (int i = 0; i < actualServerCount; ++i)
-                                serversmenu.order[i] = i;
-                }
-        }
-
-	serversmenu.pingSortDirty = false;
-	SortServers(false);
+	ServerList_RebuildOrderAndFilter();
 
         if (serversmenu.list.cursor >= actualServerCount)
                 serversmenu.list.cursor = actualServerCount > 0 ? actualServerCount - 1 : 0;
@@ -25031,8 +25559,58 @@ void FetchAndSortServers (void)
 		serversmenu.slist_first = serversmenu.list.cursor;
 }
 
+static void ServerList_AppendHostCacheResults(void)
+{
+	int added = 0;
+	qboolean locked = false;
+
+	if (!hostCacheCount)
+		return;
+	if (serversmenu.hostcache_copied > hostCacheCount)
+		serversmenu.hostcache_copied = 0;
+	if (serversmenu.hostcache_copied == hostCacheCount)
+		return;
+
+	if (pingMutex)
+	{
+		SDL_LockMutex(pingMutex);
+		locked = true;
+	}
+
+	for (size_t i = serversmenu.hostcache_copied; i < hostCacheCount; i++)
+	{
+		servertitem_t item;
+		int changedIndex;
+
+		if (!ServerList_CreateHostCacheItem(i, &item))
+			continue;
+
+		if (!ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &serversmenu.servercount, &item, &changedIndex))
+		{
+			ServerList_FreeItem(&item);
+			continue;
+		}
+
+		if (changedIndex >= 0 && changedIndex < serversmenu.pinged_count)
+			serversmenu.pinged_count = changedIndex;
+		added++;
+	}
+	serversmenu.hostcache_copied = hostCacheCount;
+
+	if (added > 0)
+		ServerList_RebuildOrderAndFilter();
+
+	if (locked)
+		SDL_UnlockMutex(pingMutex);
+
+	if (added > 0)
+		TriggerServerPing(serversmenu.list.cursor);
+}
+
 void M_Menu_ServerList_f (void)
 {
+	CleanupPingThreads();
+
 	key_dest = key_menu;
 	m_state = m_slist;
 	IN_UpdateGrabs();
@@ -25041,22 +25619,20 @@ void M_Menu_ServerList_f (void)
 	serversmenu.list.cursor = -1;
 	serversmenu.list.scroll = 0;
 	serversmenu.list.numitems = 0;
-	serversmenu.servercount = 0;
 	serversmenu.scrollbar_grab = false;
 	serversmenu.initialPingComplete = false;
 	serversmenu.initialPingThreadsRemaining = 0;
 	serversmenu.pingQueueSize = 0;
 	serversmenu.pingThreadRunning = false;
 	pingThreadsShouldExit = false;
-
-	FetchAndSortServers();
-	InitializePingMutex();
-	PingAllServers();
-
 	serversmenu.list.viewsize = MAX_VIS_SERVERS;
 	memset(&serversmenu.list.search, 0, sizeof(serversmenu.list.search));
 	serversmenu.list.search.maxlen = 32;
 	VEC_CLEAR(serversmenu.filtered_indices);
+
+	FetchAndSortServers();
+	InitializePingMutex();
+	PingAllServers();
 
 	M_Ticker_Init(&serversmenu.ticker);
 
@@ -25068,15 +25644,18 @@ void M_ServerList_Draw (void)
 	int x, y, i, cols;
 	int firstvis, numvis;
 	const char* title;
+	qboolean loading;
 
 	x = 16;
 	y = 36;
 	cols = 36;
+	loading = (searchLastScope == SLIST_INTERNET &&
+		(slistInProgress || ServerList_ApiFetchIsLoading()));
 
 	switch (searchLastScope)
 	{
 	case SLIST_INTERNET:
-		title = "Servers (Public)";
+		title = loading ? "Servers (Public, loading)" : "Servers (Public)";
 		break;
 	case SLIST_LAN:
 		title = "Servers (Local)";
@@ -25089,6 +25668,11 @@ void M_ServerList_Draw (void)
         serversmenu.x = x;
         serversmenu.y = y;
         serversmenu.cols = cols;
+
+	if (searchLastScope == SLIST_INTERNET)
+		ServerList_AppendHostCacheResults();
+	ServerList_ApplyApiResults();
+	ServerList_StartPendingPingSweep();
 
         if (serversmenu.pingSortDirty)
                 SortServers(true);
@@ -25131,6 +25715,13 @@ void M_ServerList_Draw (void)
                 serversmenu.list.viewsize = 13;
 
         M_List_GetVisibleRange(&serversmenu.list, &firstvis, &numvis);
+	if (numvis <= 0)
+	{
+		if (loading)
+			M_PrintWhite(x, y, "Loading public servers...");
+		else
+			M_PrintWhite(x, y, "No Quake servers found");
+	}
         for (i = 0; i < numvis; i++) {
                 int idx = i + firstvis;
                 qboolean selected = (idx == serversmenu.list.cursor);
@@ -25348,21 +25939,42 @@ qboolean M_Servers_Match(int index, char initial)
         return q_tolower(name[0]) == initial;
 }
 
-void CleanupPingThreads()
+static void CleanupPingThreads(void)
 {
-	WaitForPingThreads();
+	SDL_Thread* queueThread = NULL;
 
-	if (serversmenu.pingThreadRunning)
+	if (!pingMutex)
 	{
-		pingThreadsShouldExit = true;
-		if (serversmenu.pingThread)
-		{
-			SDL_WaitThread(serversmenu.pingThread, NULL);
-			serversmenu.pingThread = NULL; // Set to NULL after joining
-		}
+		pingThreadsShouldExit = false;
+		serversmenu.pingThread = NULL;
+		serversmenu.pingThreadRunning = false;
+		serversmenu.pingQueueSize = 0;
+		return;
 	}
 
+	WaitForPingThreads();
+
+	pingThreadsShouldExit = true;
+	if (serversmenu.pingThread)
+	{
+		queueThread = serversmenu.pingThread;
+		serversmenu.pingThread = NULL;
+	}
+	if (queueThread)
+		SDL_WaitThread(queueThread, NULL);
+
+	SDL_LockMutex(pingMutex);
+	serversmenu.pingQueueSize = 0;
+	serversmenu.pingThreadRunning = false;
+	SDL_UnlockMutex(pingMutex);
+
 	CleanupPingMutex();
+	pingThreadsShouldExit = false;
+}
+
+void M_ServerList_ShutdownPingThreads(void)
+{
+	CleanupPingThreads();
 }
 
 void M_ServerList_Key(int key)
@@ -25427,7 +26039,7 @@ void M_ServerList_Key(int key)
 		return;
 	}
 
-	if (M_List_Key(&serversmenu.list, key))
+	if (serversmenu.list.numitems > 0 && M_List_Key(&serversmenu.list, key))
 	{
 		if (serversmenu.list.cursor != prev_cursor)
 			TriggerServerPing(serversmenu.list.cursor);
@@ -25435,7 +26047,7 @@ void M_ServerList_Key(int key)
 		return;
 	}
 
-		if (M_List_CycleMatch(&serversmenu.list, key, M_Servers_Match))
+		if (serversmenu.list.numitems > 0 && M_List_CycleMatch(&serversmenu.list, key, M_Servers_Match))
 		{
 			if (serversmenu.list.cursor != prev_cursor)
 				TriggerServerPing(serversmenu.list.cursor);
@@ -29228,10 +29840,14 @@ void M_ToggleMenu (int mode)
 	{
 		if (mode != 0 && m_state != m_main)
 		{
+			if (m_state == m_slist)
+				CleanupPingThreads();
 			M_Menu_Main_f ();
 			return;
 		}
 
+		if (m_state == m_slist)
+			CleanupPingThreads();
 		key_dest = key_game;
 		m_state = m_none;
 

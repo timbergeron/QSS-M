@@ -1279,6 +1279,8 @@ void NET_Shutdown (void)
 {
 	qsocket_t	*sock;
 
+	M_ServerList_ShutdownPingThreads();
+	M_ServerList_ShutdownApiFetch();
 	curl_global_cleanup(); // woods #libcurl
 
 	SetNetTime();

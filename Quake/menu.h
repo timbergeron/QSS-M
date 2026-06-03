@@ -130,6 +130,8 @@ void M_TextField_DrawHighlight(menu_textfield_t *tf, int x, int y);
 void M_TextField_DrawCursor(menu_textfield_t *tf, int x, int y);
 void M_Version_StartGitHubFetch(void);
 void M_Version_GetGitHubInfo(versionremoteinfo_t *release, versionremoteinfo_t *commit);
+void M_ServerList_ShutdownPingThreads(void);
+void M_ServerList_ShutdownApiFetch(void);
 qboolean M_Version_WaitForGitHubInfo(versionremoteinfo_t *release, versionremoteinfo_t *commit, Uint32 timeout_ms);
 #if defined(_WIN32) // woods #disablecaps via ironwail
 qboolean M_KeyBinding(void);
