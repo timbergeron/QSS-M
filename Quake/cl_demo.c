@@ -682,7 +682,7 @@ int CL_GetDemoTotalFrameCount(void)
 	return demo_total_frame_count;
 }
 
-int CL_CountDemoFramesInBuffer(const byte *data, int length)
+int CL_CountDemoFramesInBufferLimit(const byte *data, int length, int limit)
 {
 	int off = 0;
 	int count = 0;
@@ -708,12 +708,19 @@ int CL_CountDemoFramesInBuffer(const byte *data, int length)
 
 		off += 12 + msg_len;
 		count++;
+		if (limit > 0 && count >= limit)
+			break;
 	}
 
 	return count;
 }
 
-static int CL_CountDemoFramesInStream(FILE *f)
+int CL_CountDemoFramesInBuffer(const byte *data, int length)
+{
+	return CL_CountDemoFramesInBufferLimit(data, length, 0);
+}
+
+static int CL_CountDemoFramesInStreamLimit(FILE *f, int limit)
 {
 	int c;
 	int count = 0;
@@ -755,12 +762,14 @@ static int CL_CountDemoFramesInStream(FILE *f)
 		if (fseek(f, 12 + msg_len, SEEK_CUR) != 0)
 			break;
 		count++;
+		if (limit > 0 && count >= limit)
+			break;
 	}
 
 	return count;
 }
 
-int CL_CountDemoFramesInFile(const char *path)
+int CL_CountDemoFramesInFileLimit(const char *path, int limit)
 {
 	if (!path || !path[0])
 		return -1;
@@ -776,7 +785,7 @@ int CL_CountDemoFramesInFile(const char *path)
 			return -1;
 
 		if (CL_DZipExtractDemoArchiveOSPathToFile(path, out, NULL, NULL, 0))
-			frames = CL_CountDemoFramesInStream(out);
+			frames = CL_CountDemoFramesInStreamLimit(out, limit);
 
 		fclose(out);
 		return frames;
@@ -793,10 +802,15 @@ int CL_CountDemoFramesInFile(const char *path)
 		if (!f)
 			return -1;
 
-		frames = CL_CountDemoFramesInStream(f);
+		frames = CL_CountDemoFramesInStreamLimit(f, limit);
 		fclose(f);
 		return frames;
 	}
+}
+
+int CL_CountDemoFramesInFile(const char *path)
+{
+	return CL_CountDemoFramesInFileLimit(path, 0);
 }
 
 int CL_DemoMinFramesThreshold(qboolean *auto_delete)

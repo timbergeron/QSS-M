@@ -26159,6 +26159,13 @@ Demos Menu
 #define DEMOS_ID1_TEXT_X	(DEMOS_PATH_BOX_X + 8)
 #define DEMOS_ID1_TEXT_SCALE	0.8125f
 
+typedef enum
+{
+	DEMO_MINFRAMES_UNKNOWN,
+	DEMO_MINFRAMES_PASS,
+	DEMO_MINFRAMES_FAIL
+} demo_minframes_state_t;
+
 typedef struct
 {
 	char        name[MAX_QPATH];
@@ -26172,6 +26179,11 @@ typedef struct
 	qboolean    active;
 	qboolean    parsed;
 	qboolean    from_id1;
+	time_t      mtime;
+	size_t      fsize;
+	searchpath_t *source_searchpath;
+	demo_minframes_state_t minframes_state;
+	int         frame_count;
 } demoitem_t;
 	
 typedef struct
@@ -26848,6 +26860,9 @@ static struct
 	qboolean			show_id1;
 	int					bg_parse_cursor;       // next index to background-parse for searchable metadata
 	int					last_refilter_parsed;  // bg_parse_cursor value at last refilter (to detect new data)
+	int					minframes_threshold;
+	int					minframes_check_cursor;
+	int					minframes_hidden_since_refilter;
 } demosmenu;
 
 static const char *M_Demos_CurrentGameName(void)
@@ -27023,13 +27038,18 @@ static void M_Demos_FreeItems(void)
 	demosmenu.democount = 0;
 	demosmenu.bg_parse_cursor = 0;
 	demosmenu.last_refilter_parsed = 0;
+	demosmenu.minframes_check_cursor = 0;
+	demosmenu.minframes_hidden_since_refilter = 0;
 }
 
-static void M_Demos_AddEx(const char* name, const char* date, const char *display, qboolean from_id1)
+static void M_Demos_AddEx(const char* name, const char* date, const char *display,
+	qboolean from_id1, time_t mtime, size_t fsize, searchpath_t *spath)
 {
     demoitem_t tempDemo;
 	char display_with_source[MAX_QPATH + 8];
 	int i;
+
+	memset(&tempDemo, 0, sizeof(tempDemo));
 
 	if (!date)
 		date = "Unknown Date";
@@ -27052,11 +27072,18 @@ static void M_Demos_AddEx(const char* name, const char* date, const char *displa
 	q_strlcpy(tempDemo.date, date, sizeof(tempDemo.date));
 	M_InferDemoMapName(name, tempDemo.map, sizeof(tempDemo.map));
 	tempDemo.players[0] = '\0';
+	tempDemo.stats[0] = '\0';
 	tempDemo.duration[0] = '\0';
 	tempDemo.filesize[0] = '\0';
     tempDemo.active = false;
 	tempDemo.parsed = false;
 	tempDemo.from_id1 = from_id1;
+	tempDemo.mtime = mtime;
+	tempDemo.fsize = fsize;
+	tempDemo.source_searchpath = spath;
+	tempDemo.minframes_state = demosmenu.minframes_threshold > 0 ?
+		DEMO_MINFRAMES_UNKNOWN : DEMO_MINFRAMES_PASS;
+	tempDemo.frame_count = -1;
 
     int insertPos = demosmenu.democount;
 
@@ -27287,6 +27314,7 @@ typedef struct
 	time_t	mtime;
 	size_t	fsize;
 	int		frames;
+	qboolean exact;
 } demo_frame_cache_entry_t;
 
 typedef struct
@@ -27307,7 +27335,7 @@ static int M_Demos_FrameCache_Find(const char *path)
 	return -1;
 }
 
-static void M_Demos_FrameCache_Store(const char *path, time_t mtime, size_t fsize, int frames)
+static void M_Demos_FrameCache_Store(const char *path, time_t mtime, size_t fsize, int frames, qboolean exact)
 {
 	int slot = M_Demos_FrameCache_Find(path);
 	if (slot < 0)
@@ -27324,15 +27352,22 @@ static void M_Demos_FrameCache_Store(const char *path, time_t mtime, size_t fsiz
 	demo_frame_cache[slot].mtime = mtime;
 	demo_frame_cache[slot].fsize = fsize;
 	demo_frame_cache[slot].frames = frames;
+	demo_frame_cache[slot].exact = exact;
 }
 
-static qboolean M_Demos_FrameCache_Lookup(const char *path, time_t mtime, size_t fsize, int *frames_out)
+static qboolean M_Demos_FrameCache_Lookup(const char *path, time_t mtime, size_t fsize,
+	int min_frames, int *frames_out)
 {
 	int slot = M_Demos_FrameCache_Find(path);
 	if (slot < 0 ||
 		demo_frame_cache[slot].mtime != mtime ||
 		demo_frame_cache[slot].fsize != fsize)
 		return false;
+
+	if (!demo_frame_cache[slot].exact &&
+		(min_frames <= 0 || demo_frame_cache[slot].frames < min_frames))
+		return false;
+
 	*frames_out = demo_frame_cache[slot].frames;
 	return true;
 }
@@ -27356,11 +27391,13 @@ static qboolean M_Demos_ListedFileIsRegular(const char *fname, searchpath_t *spa
 	return (Sys_FileType(path) & FS_ENT_FILE) != 0;
 }
 
-static int M_Demos_CountFrames(const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
+static int M_Demos_CountFrames(const char *fname, time_t mtime, size_t fsize,
+	searchpath_t *spath, int min_frames)
 {
 	char key[MAX_OSPATH];
 	const char *disk_name = M_Demos_SkipExplicitRootPrefix(fname);
 	int frames;
+	qboolean exact;
 
 	if (spath && spath->pack)
 		q_snprintf(key, sizeof(key), "%s|%s", spath->filename, fname);
@@ -27369,11 +27406,11 @@ static int M_Demos_CountFrames(const char *fname, time_t mtime, size_t fsize, se
 	else
 		q_strlcpy(key, disk_name, sizeof(key));
 
-	if (M_Demos_FrameCache_Lookup(key, mtime, fsize, &frames))
+	if (M_Demos_FrameCache_Lookup(key, mtime, fsize, min_frames, &frames))
 		return frames;
 
 	if (spath && !spath->pack)
-		frames = CL_CountDemoFramesInFile(key);
+		frames = CL_CountDemoFramesInFileLimit(key, min_frames);
 	else
 	{
 		byte *data;
@@ -27384,25 +27421,100 @@ static int M_Demos_CountFrames(const char *fname, time_t mtime, size_t fsize, se
 			frames = -1;
 		else
 		{
-			frames = CL_CountDemoFramesInBuffer(data, length);
+			frames = CL_CountDemoFramesInBufferLimit(data, length, min_frames);
 			free(data);
 		}
 	}
 
-	M_Demos_FrameCache_Store(key, mtime, fsize, frames);
+	exact = (min_frames <= 0 || frames < min_frames);
+	M_Demos_FrameCache_Store(key, mtime, fsize, frames, exact);
 	return frames;
 }
 
-static qboolean M_Demos_BelowMinFrames(const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
+static qboolean M_Demos_CheckMinFrames(demoitem_t *di)
 {
-	int min_frames = CL_DemoMinFramesThreshold(NULL);
-	int frames;
+	int min_frames = demosmenu.minframes_threshold;
 
 	if (min_frames <= 0)
+	{
+		di->minframes_state = DEMO_MINFRAMES_PASS;
+		return false;
+	}
+
+	if (di->minframes_state != DEMO_MINFRAMES_UNKNOWN)
+		return di->minframes_state == DEMO_MINFRAMES_FAIL;
+
+	di->frame_count = M_Demos_CountFrames(di->name, di->mtime, di->fsize,
+		di->source_searchpath, min_frames);
+	di->minframes_state = (di->frame_count >= 0 && di->frame_count < min_frames) ?
+		DEMO_MINFRAMES_FAIL : DEMO_MINFRAMES_PASS;
+
+	return di->minframes_state == DEMO_MINFRAMES_FAIL;
+}
+
+#define DEMOS_MINFRAME_FILTER_BUDGET	4
+#define DEMOS_MINFRAME_REFILTER_BATCH	8
+
+static void M_Demos_ResetMinFramesFilter(void)
+{
+	int i;
+
+	demosmenu.minframes_threshold = CL_DemoMinFramesThreshold(NULL);
+	demosmenu.minframes_check_cursor = 0;
+	demosmenu.minframes_hidden_since_refilter = 0;
+	demosmenu.bg_parse_cursor = 0;
+	demosmenu.last_refilter_parsed = 0;
+
+	for (i = 0; i < demosmenu.democount; i++)
+	{
+		demosmenu.items[i].minframes_state = demosmenu.minframes_threshold > 0 ?
+			DEMO_MINFRAMES_UNKNOWN : DEMO_MINFRAMES_PASS;
+		demosmenu.items[i].frame_count = -1;
+	}
+}
+
+static qboolean M_Demos_SyncMinFramesThreshold(void)
+{
+	int current = CL_DemoMinFramesThreshold(NULL);
+
+	if (current == demosmenu.minframes_threshold)
 		return false;
 
-	frames = M_Demos_CountFrames(fname, mtime, fsize, spath);
-	return frames >= 0 && frames < min_frames;
+	M_Demos_ResetMinFramesFilter();
+	return true;
+}
+
+static qboolean M_Demos_TickMinFrameFilter(void)
+{
+	int processed = 0;
+	qboolean changed = false;
+
+	if (demosmenu.minframes_threshold <= 0)
+		return false;
+
+	while (processed < DEMOS_MINFRAME_FILTER_BUDGET &&
+		demosmenu.minframes_check_cursor < demosmenu.democount)
+	{
+		demoitem_t *di = &demosmenu.items[demosmenu.minframes_check_cursor++];
+
+		if (di->minframes_state != DEMO_MINFRAMES_UNKNOWN)
+			continue;
+
+		processed++;
+		if (M_Demos_CheckMinFrames(di))
+		{
+			changed = true;
+			demosmenu.minframes_hidden_since_refilter++;
+		}
+	}
+
+	return changed;
+}
+
+static qboolean M_Demos_MinFrameFilterDone(void)
+{
+	return demosmenu.minframes_threshold <= 0 ||
+		demosmenu.minframes_check_cursor >= demosmenu.democount;
 }
 
 static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
@@ -27432,11 +27544,8 @@ static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime
 	if (!M_Demos_ListedFileIsRegular(logical_name, spath))
 		return true;
 
-	if (M_Demos_BelowMinFrames(logical_name, mtime, fsize, spath))
-		return true;
-
 	M_Demos_FormatFileDate(mtime, date, sizeof(date));
-	M_Demos_AddEx(logical_name, date, display_name, from_id1);
+	M_Demos_AddEx(logical_name, date, display_name, from_id1, mtime, fsize, spath);
 	return true;
 }
 
@@ -27640,7 +27749,16 @@ static qboolean M_Demos_TickBackgroundParse(void)
 
     while (parsed < BUDGET && demosmenu.bg_parse_cursor < demosmenu.democount)
     {
-        demoitem_t *di = &demosmenu.items[demosmenu.bg_parse_cursor++];
+        demoitem_t *di = &demosmenu.items[demosmenu.bg_parse_cursor];
+
+		if (demosmenu.minframes_threshold > 0 &&
+			di->minframes_state == DEMO_MINFRAMES_UNKNOWN)
+			break;
+
+		demosmenu.bg_parse_cursor++;
+		if (di->minframes_state == DEMO_MINFRAMES_FAIL)
+			continue;
+
         if (!di->parsed)
         {
             M_Demos_ParseItem(di);
@@ -27765,6 +27883,9 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
     {
         demoitem_t *di = &demosmenu.items[i];
 
+		if (di->minframes_state == DEMO_MINFRAMES_FAIL)
+			continue;
+
         // Tooltip metadata (players/duration/filesize) is filled in by the
         // background parser in M_Demos_Draw.  Map starts with a filename
         // inference so common searches can match immediately, then the parser
@@ -27849,6 +27970,29 @@ static void M_Demos_Refilter(void)
     M_Demos_RefilterEx(false);
 }
 
+static const char *M_Demos_CommandName(const char *name);
+
+static qboolean M_Demos_AllowPlayByMinFrames(demoitem_t *di)
+{
+	M_Demos_SyncMinFramesThreshold();
+
+	if (demosmenu.minframes_threshold <= 0)
+		return true;
+
+	if (M_Demos_CheckMinFrames(di))
+	{
+		S_LocalSound("misc/menu3.wav");
+		Con_Printf("demo ^m%s^m is below cl_demo_minframes (%d/%d frames)\n",
+			M_Demos_CommandName(di->name), di->frame_count,
+			demosmenu.minframes_threshold);
+		M_Demos_RefilterEx(true);
+		demosmenu.minframes_hidden_since_refilter = 0;
+		return false;
+	}
+
+	return true;
+}
+
 static void M_Demos_RebuildForCurrentPath(void)
 {
 	demos_list_ctx_t root_ctx = { true };
@@ -27862,6 +28006,7 @@ static void M_Demos_RebuildForCurrentPath(void)
 	demosmenu.last_refilter_parsed = 0;
 	VEC_CLEAR(demosmenu.items);
 	VEC_CLEAR(demosmenu.filtered_indices);
+	M_Demos_ResetMinFramesFilter();
 
 	demosmenu.path_valid = M_Demos_FindFolder(demosmenu.path_suffix,
 		actual_folder, sizeof(actual_folder));
@@ -28276,6 +28421,20 @@ void M_Demos_Draw (void)
         M_Ticker_Update(&demosmenu.ticker);
     }
 
+	if (M_Demos_SyncMinFramesThreshold())
+		M_Demos_RefilterEx(true);
+
+	{
+		M_Demos_TickMinFrameFilter();
+		qboolean done = M_Demos_MinFrameFilterDone();
+		if (demosmenu.minframes_hidden_since_refilter > 0 &&
+			(demosmenu.minframes_hidden_since_refilter >= DEMOS_MINFRAME_REFILTER_BATCH || done))
+		{
+			M_Demos_RefilterEx(true);
+			demosmenu.minframes_hidden_since_refilter = 0;
+		}
+	}
+
     // Background-parse a few demos per frame so search can match tooltip
     // metadata without stalling on the first keystroke.  When a search is
     // active, refresh the filter as new metadata trickles in — preserve
@@ -28386,7 +28545,8 @@ void M_Demos_Draw (void)
         demoitem_t* di = &demosmenu.items[demo_idx];
 
         // Lazy parsing: only parse when item is selected for the first time
-        if (!di->parsed)
+        if (!di->parsed && (demosmenu.minframes_threshold <= 0 ||
+			di->minframes_state != DEMO_MINFRAMES_UNKNOWN))
             M_Demos_ParseItem(di);
         int info_y = y + demosmenu.list.viewsize * 8 + 4;
         qboolean at_bottom = (demosmenu.list.scroll + demosmenu.list.viewsize >= demosmenu.list.numitems);
@@ -28838,7 +28998,8 @@ void M_Demos_Key(int key)
         {
 			demoitem_t *demo = &demosmenu.items[demosmenu.filtered_indices[demosmenu.list.cursor]];
 
-			if (M_Demos_QueuePlayDemo(demo->name))
+			if (M_Demos_AllowPlayByMinFrames(demo) &&
+				M_Demos_QueuePlayDemo(demo->name))
 			{
 				M_Demos_RememberCurrentPath();
 				M_Menu_Main_f();
