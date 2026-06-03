@@ -31347,8 +31347,18 @@ enum demooptions_e
 	DEMOOPTIONS_DEMOREEL,
 	DEMOOPTIONS_EYECAM,
 	DEMOOPTIONS_BAR_TIMEOUT,
+	DEMOOPTIONS_MINFRAMES,
+	DEMOOPTIONS_MINFRAMES_DELETE,
 	DEMOOPTIONS_ITEMS
 } demooptions_cursor;
+
+static const int demoptions_minframes_presets[] = {0, 50, 100, 250, 500, 1000};
+
+static int M_DemoOptions_MinFramesAbs(void)
+{
+	int cur = (int)cl_demo_minframes.value;
+	return (cur < 0) ? -cur : cur;
+}
 
 static struct
 {
@@ -31377,6 +31387,10 @@ static const char* M_DemoOptions_GetItemText(int index)
 		return "Demo Eyecam";
 	case DEMOOPTIONS_BAR_TIMEOUT:
 		return "Demo Bar Timeout";
+	case DEMOOPTIONS_MINFRAMES:
+		return "Demo Min Frames";
+	case DEMOOPTIONS_MINFRAMES_DELETE:
+		return "Hide Short Demos";
 	default:
 		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
 		return buffer;
@@ -31427,6 +31441,18 @@ static const char* M_DemoOptions_GetValueText(int index)
 		else
 			q_snprintf(buffer, sizeof(buffer), "%.1f (seconds)", scr_demobar_timeout.value);
 		return buffer;
+	case DEMOOPTIONS_MINFRAMES:
+	{
+		int cur = M_DemoOptions_MinFramesAbs();
+		if (cur <= 0)
+			return "off (show all)";
+		q_snprintf(buffer, sizeof(buffer), "%d frames", cur);
+		return buffer;
+	}
+	case DEMOOPTIONS_MINFRAMES_DELETE:
+		if (M_DemoOptions_MinFramesAbs() <= 0)
+			return "n/a";
+		return (cl_demo_minframes.value < 0.0f) ? "hide & delete" : "hide only";
 	default:
 		return "";
 	}
@@ -31587,6 +31613,33 @@ static void M_DemoOptions_AdjustSliders(int dir)
 		Cvar_SetValueQuick(&scr_demobar_timeout, f);
 		M_LivePreview_WantAndKick (M_DemoOptions_LivePreviewId (), M_DemoOptions_RowY (demooptions_cursor));
 		break;
+	case DEMOOPTIONS_MINFRAMES:
+	{
+		const int count = (int)(sizeof(demoptions_minframes_presets) / sizeof(demoptions_minframes_presets[0]));
+		qboolean del = cl_demo_minframes.value < 0.0f;
+		int cur = M_DemoOptions_MinFramesAbs();
+		int idx, mag;
+
+		for (idx = 0; idx < count; idx++)
+			if (demoptions_minframes_presets[idx] >= cur)
+				break;
+		if (idx >= count)
+			idx = count - 1;
+
+		idx += (dir > 0) ? 1 : -1;
+		if (idx < 0)
+			idx = count - 1;
+		else if (idx >= count)
+			idx = 0;
+
+		mag = demoptions_minframes_presets[idx];
+		Cvar_SetValueQuick(&cl_demo_minframes, (del && mag > 0) ? -mag : mag);
+		break;
+	}
+	case DEMOOPTIONS_MINFRAMES_DELETE:
+		if (M_DemoOptions_MinFramesAbs() > 0)
+			Cvar_SetValueQuick(&cl_demo_minframes, -cl_demo_minframes.value);
+		break;
 	default:
 		break;
 	}
@@ -31645,6 +31698,14 @@ void M_DemoOptions_Draw(void)
 			break;
 		case DEMOOPTIONS_BAR_TIMEOUT:
 			text = "  Demo Bar Timeout";
+			value = M_DemoOptions_GetValueText(i);
+			break;
+		case DEMOOPTIONS_MINFRAMES:
+			text = "   Demo Min Frames";
+			value = M_DemoOptions_GetValueText(i);
+			break;
+		case DEMOOPTIONS_MINFRAMES_DELETE:
+			text = "  Hide Short Demos";
 			value = M_DemoOptions_GetValueText(i);
 			break;
 		default:
