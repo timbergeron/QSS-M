@@ -10155,7 +10155,7 @@ Graphics Menu
 
 extern cvar_t r_particles, gl_load24bit, r_replacemodels, r_lerpmodels, r_lerpmove, r_scale, r_outline,
 vid_gamma, vid_contrast, vid_fsaa, r_particledesc, gl_loadlitfiles, r_rocketlight, r_explosionlight,
-gl_powerupshells, gl_caustics;
+gl_powerupshells, gl_caustics, gl_cshift_contents_auto;
 
 static enum graphics_e
 {
@@ -10163,6 +10163,7 @@ static enum graphics_e
 	GRAPHICS_CONTRAST,
 	GRAPHICS_FILTERING,
 	GRAPHICS_ANTIALIASING,
+	GRAPHICS_SOFTEMU,
 	GRAPHICS_EXTERNALTEX,
 	GRAPHICS_REPLACEMENTMODELS,
 	GRAPHICS_ROCKETLIGHT,     // Added
@@ -10177,6 +10178,8 @@ static enum graphics_e
 	GRAPHICS_MODELOUTLINES,
 	GRAPHICS_POWERUPSHELLS,
 	GRAPHICS_WATERCAUSTICS,
+	GRAPHICS_WATERALPHA,
+	GRAPHICS_CSHIFTAUTO,
 	GRAPHICS_SKY,
 	GRAPHICS_COUNT
 } graphics_cursor;
@@ -10207,6 +10210,8 @@ static const char* M_Graphics_GetItemText(int index)
 		return "Texture Filtering";
 	case GRAPHICS_ANTIALIASING:
 		return "Screen Anti-Aliasing";
+	case GRAPHICS_SOFTEMU:
+		return "Software Emulation";
 	case GRAPHICS_EXTERNALTEX:
 		return "External Textures";
 	case GRAPHICS_REPLACEMENTMODELS:
@@ -10235,6 +10240,10 @@ static const char* M_Graphics_GetItemText(int index)
 		return "Powerup Shells";
 	case GRAPHICS_WATERCAUSTICS:
 		return "Water Caustics";
+	case GRAPHICS_WATERALPHA:
+		return "Liquid Alpha";
+	case GRAPHICS_CSHIFTAUTO:
+		return "Auto Liquid Tint";
 	case GRAPHICS_SKY:
 		return "Sky";
 	default:
@@ -10347,6 +10356,8 @@ static int M_Graphics_LivePreviewId(void)
 	case GRAPHICS_MODELOUTLINES:
 		return LP_GRAPHICS;
 	case GRAPHICS_WATERCAUSTICS:
+	case GRAPHICS_WATERALPHA:
+	case GRAPHICS_CSHIFTAUTO:
 		return (cl.inwater ||
 				(r_viewleaf &&
 				 (r_viewleaf->contents == CONTENTS_WATER ||
@@ -10371,13 +10382,24 @@ void M_Menu_Graphics_f(void)
 	IN_UpdateGrabs();
 }
 
+// Set all liquid alphas together so the slider controls water/lava/slime/teleporters
+// uniformly. lava/slime/tele default to 0 (follow r_wateralpha); we set them explicitly
+// so the chosen value applies even on maps where they were tuned separately.
+static void M_Graphics_SetLiquidAlpha(float f)
+{
+	Cvar_SetValueQuick(&r_wateralpha, f);
+	Cvar_SetValueQuick(&r_lavaalpha, f);
+	Cvar_SetValueQuick(&r_slimealpha, f);
+	Cvar_SetValueQuick(&r_telealpha, f);
+}
+
 static void M_Graphics_AdjustSliders(int dir)
 {
 	int m;
 	float f;
 	S_LocalSound("misc/menu3.wav");
 
-	M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 48 + graphics_cursor * 8);
+	M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 20 + graphics_cursor * 8);
 
 	switch (graphics_cursor)
 	{
@@ -10435,6 +10457,20 @@ static void M_Graphics_AdjustSliders(int dir)
 			if (current_index > 5) current_index = 0;
 
 			Cvar_SetValue("vid_fsaa", aa_values[current_index]);
+		}
+		break;
+
+		case GRAPHICS_SOFTEMU:
+		{
+			// Shader only distinguishes off / dithered (1,2) / banded (3),
+			// so cycle the three visually-distinct states.
+			static const int modes[] = {0, 1, 3};
+			int cur = (int)r_softemu.value;
+			int idx = (cur >= 3) ? 2 : (cur >= 1) ? 1 : 0;
+			idx += (dir > 0) ? 1 : -1;
+			if (idx < 0) idx = 2;
+			else if (idx > 2) idx = 0;
+			Cvar_SetValueQuick(&r_softemu, modes[idx]);
 		}
 		break;
 
@@ -10543,6 +10579,16 @@ static void M_Graphics_AdjustSliders(int dir)
 	}
 	break;
 
+	case GRAPHICS_WATERALPHA:
+		f = r_wateralpha.value + dir * 0.05f;
+		f = CLAMP(0, f, 1);
+		M_Graphics_SetLiquidAlpha(f);
+		break;
+
+	case GRAPHICS_CSHIFTAUTO:
+		Cvar_SetValueQuick(&gl_cshift_contents_auto, gl_cshift_contents_auto.value ? 0 : 1);
+		break;
+
 	case GRAPHICS_SKY:
 		M_Menu_Sky_f();
 		break;
@@ -10551,24 +10597,20 @@ static void M_Graphics_AdjustSliders(int dir)
 
 void M_Graphics_Draw(void)
 {
-	qpic_t* p;
 	enum graphics_e i;
 	float r;
 	int m;
 
 	M_Graphics_ClampCursor();
 
-	M_LivePreview_WantAt (M_Graphics_LivePreviewId (), 48 + graphics_cursor * 8);
-
-	p = Draw_CachePic("gfx/p_option.lmp");
-	M_DrawPic((320 - p->width) / 2, 4, p);
+	M_LivePreview_WantAt (M_Graphics_LivePreviewId (), 20 + graphics_cursor * 8);
 
 	const char* title = "Graphics Options";
-	M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
+	M_PrintWhite((320 - 8 * strlen(title)) / 2, 4, title);
 
 	for (i = 0; i < GRAPHICS_ITEMS; i++)
 	{
-		int y = 48 + 8 * i;
+		int y = 20 + 8 * i;
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
@@ -10608,6 +10650,17 @@ void M_Graphics_Draw(void)
 				value = "off";
 			else
 				value = va("%ix", (int)vid_fsaa.value);
+			M_Print(178, y, value);
+			break;
+
+		case GRAPHICS_SOFTEMU:
+			text = "Software Emulation";
+			if ((int)r_softemu.value <= 0)
+				value = "off";
+			else if ((int)r_softemu.value >= 3)
+				value = "8-bit (banded)";
+			else
+				value = "8-bit (dithered)";
 			M_Print(178, y, value);
 			break;
 
@@ -10708,6 +10761,17 @@ void M_Graphics_Draw(void)
 			M_DrawSlider(186, y, r, gl_caustics.value * 10.0f, "%.0f%%"); // Display as 0-100%
 			break;
 
+		case GRAPHICS_WATERALPHA:
+			text = "      Liquid Alpha";
+			r = CLAMP(0, r_wateralpha.value, 1);
+			M_DrawSlider(186, y, r, 100.f * r, "%.0f%%");
+			break;
+
+		case GRAPHICS_CSHIFTAUTO:
+			text = "  Auto Liquid Tint";
+			M_DrawCheckbox(178, y, gl_cshift_contents_auto.value != 0);
+			break;
+
 		case GRAPHICS_SKY:
 			text = "               Sky";
 			M_Print(178, y, "...");
@@ -10755,7 +10819,7 @@ void M_Graphics_Draw(void)
 
 	// cursor
 	{
-		int y = 48 + graphics_cursor * 8;
+		int y = 20 + graphics_cursor * 8;
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -10868,9 +10932,9 @@ void M_Graphics_Key(int k)
 			break;
 
 		// Check if click is in valid menu area
-		if (m_mousey >= 48 && m_mousey < 48 + (GRAPHICS_ITEMS * 8))
+		if (m_mousey >= 20 && m_mousey < 20 + (GRAPHICS_ITEMS * 8))
 		{
-			graphics_cursor = (m_mousey - 48) / 8;
+			graphics_cursor = (m_mousey - 20) / 8;
 
 			if (graphics_cursor == GRAPHICS_BRIGHTNESS ||
 				graphics_cursor == GRAPHICS_CONTRAST ||
@@ -10878,10 +10942,11 @@ void M_Graphics_Key(int k)
 				graphics_cursor == GRAPHICS_ROCKETLIGHT ||
 				graphics_cursor == GRAPHICS_EXPLOSIONLIGHT ||
 				graphics_cursor == GRAPHICS_MODELOUTLINES ||
-				graphics_cursor == GRAPHICS_WATERCAUSTICS)
+				graphics_cursor == GRAPHICS_WATERCAUSTICS ||
+				graphics_cursor == GRAPHICS_WATERALPHA)
 			{
 				graphics_slider_grab = true;
-				M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 48 + graphics_cursor * 8);
+				M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 20 + graphics_cursor * 8);
 			}
 			else
 			{
@@ -10937,7 +11002,7 @@ void M_Graphics_Mousemove(int cx, int cy)
 			return;
 		}
 
-		M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 48 + graphics_cursor * 8);
+		M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 20 + graphics_cursor * 8);
 
 		float f;
 		switch (graphics_cursor)
@@ -10978,9 +11043,15 @@ void M_Graphics_Mousemove(int cx, int cy)
 			Cvar_SetValue("gl_caustics", CLAMP(0, f, 10));
 			break;
 
+		case GRAPHICS_WATERALPHA:
+			f = M_MouseToSliderFraction(cx - 187);
+			M_Graphics_SetLiquidAlpha(CLAMP(0, f, 1));
+			break;
+
 			// Add empty cases for all other enum values to suppress warnings
 		case GRAPHICS_FILTERING:
 		case GRAPHICS_ANTIALIASING:
+		case GRAPHICS_SOFTEMU:
 		case GRAPHICS_EXTERNALTEX:
 		case GRAPHICS_REPLACEMENTMODELS:
 		case GRAPHICS_MODELLERP:
@@ -10990,6 +11061,7 @@ void M_Graphics_Mousemove(int cx, int cy)
 		case GRAPHICS_COLOREDLIGHTING:
 		case GRAPHICS_BRUSHSHADOW:
 		case GRAPHICS_POWERUPSHELLS:
+		case GRAPHICS_CSHIFTAUTO:
 		case GRAPHICS_SKY:
 		case GRAPHICS_COUNT:
 			break;
@@ -11005,7 +11077,7 @@ void M_Graphics_Mousemove(int cx, int cy)
 		return;
 
 	// Calculate which menu item the mouse is over
-	int item = (cy - 48) / 8;
+	int item = (cy - 20) / 8;
 
 	// Make sure the item is within valid range
 	if (item >= 0 && item < GRAPHICS_ITEMS)
@@ -12083,6 +12155,7 @@ static enum sound_e
 	SOUND_MUSICVOL,
 	SOUND_MUSICEXT,
 	SOUND_AUDIORATE,
+	SOUND_SURROUND,
 	SOUND_WATERFX,
 	SOUND_AMBIENTLEVEL,
 	SOUND_STOPSOUND,
@@ -12117,6 +12190,8 @@ static const char* M_Sound_GetItemText(int index)
 		return "External Music";
 	case SOUND_AUDIORATE:
 		return "Audio Rate";
+	case SOUND_SURROUND:
+		return "Surround Sound";
 	case SOUND_WATERFX:
 		return "Water FX";
 	case SOUND_AMBIENTLEVEL:
@@ -12212,6 +12287,11 @@ static void M_Sound_AdjustSliders(int dir)
 		}
 		break;
 
+	case SOUND_SURROUND:
+		Cvar_SetValueQuick(&snd_surround, snd_surround.value > 0 ? 0 : 1);
+		Cbuf_AddText("\nsnd_restart\n");
+		break;
+
 	case SOUND_WATERFX:
 		f = snd_waterfx.value + dir * 0.05f;
 		if (f < 0) f = 0;
@@ -12300,6 +12380,11 @@ void M_Sound_Draw(void)
 				value = va("%i hz", (int)snd_mixspeed.value);
 			if (value)
 				M_Print(178, y, value);
+			break;
+
+		case SOUND_SURROUND:
+			text = "    Surround Sound";
+			M_DrawCheckbox(178, y, snd_surround.value > 0);
 			break;
 
 		case SOUND_WATERFX:
@@ -12563,6 +12648,7 @@ void M_Sound_Mousemove(int cx, int cy)
 			// Add cases for unhandled enumerations to suppress warnings
 		case SOUND_MUSICEXT:
 		case SOUND_AUDIORATE:
+		case SOUND_SURROUND:
 		case SOUND_STOPSOUND:
 		case SOUND_MUTE:
 		case SOUND_VOIP:
@@ -12999,6 +13085,7 @@ static enum game_e
 	GAME_VIEWMODEL,      // Added
 	GAME_TEAMCOLOR,  // Added
 	GAME_ENEMYCOLOR, // Added
+	GAME_CTFMODELSWAP,
 	GAME_PLAYERXRAY,
 	GAME_TEXTURELESS,
 	GAME_COUNT
@@ -13736,6 +13823,8 @@ static const char* M_Game_GetItemText(int index)
 		return "Force Team Color";
 	case GAME_ENEMYCOLOR:
 		return "Force Enemy Color";
+	case GAME_CTFMODELSWAP:
+		return "3Wave CTF Models";
 	case GAME_PLAYERXRAY:
 		return "Player Xray";
 	case GAME_TEXTURELESS:
@@ -13927,6 +14016,10 @@ static void M_Game_AdjustSliders(int dir)
 		break;
 	case GAME_ENEMYCOLOR:
 		M_Game_AdjustColor(dir, false);
+		break;
+
+	case GAME_CTFMODELSWAP:
+		Cvar_SetValueQuick(&cl_ctf_pub_modelswap, cl_ctf_pub_modelswap.value ? 0 : 1);
 		break;
 
 	case GAME_PLAYERXRAY:
@@ -14127,6 +14220,11 @@ void M_Game_Draw(void)
 			M_Print(178, y, value);
 			if (strcmp(gl_enemycolor.string, "") != 0)
 				Draw_FillPlayer(178 + (strlen(value) * 8) + 4, y + 2, 6, 6, CL_PLColours_Parse(gl_enemycolor.string), 1.0);
+			break;
+
+		case GAME_CTFMODELSWAP:
+			text = "  3Wave CTF Models";
+			M_DrawCheckbox(178, y, cl_ctf_pub_modelswap.value != 0);
 			break;
 
 		case GAME_PLAYERXRAY:
@@ -14404,6 +14502,7 @@ void M_Game_Mousemove(int cx, int cy)
 		case GAME_SWAPROCKETS:
 		case GAME_DEADBODYFILTER:
 		case GAME_MM1MUTE:
+		case GAME_CTFMODELSWAP:
 		case GAME_PLAYERXRAY:
 		case GAME_COUNT:
 			// No action needed for these cases in mouse movement
