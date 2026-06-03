@@ -1616,6 +1616,7 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 
 	if (!r_coloredpowerupglow.value
 		|| gl_powerupshells.value <= 0.0f
+		|| !gl_stencilbits // woods #powershell -- no stencil buffer means no rim mask; skip rather than flood the whole model
 		|| e != &cl.viewent
 		|| !(powerup_items & (IT_QUAD | IT_INVULNERABILITY))
 		|| chase_active.value)
@@ -1761,8 +1762,8 @@ static void R_DrawPowerupPickupShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, l
 	const float kmax = 5.0f;
 	float alpha_knob, k;
 
-	if (!r_coloredpowerupglow.value || !R_GetPowerupPickupShellColor(e, shellColor))
-		return;
+	if (!r_coloredpowerupglow.value || !gl_stencilbits || !R_GetPowerupPickupShellColor(e, shellColor))
+		return; // woods #powershell -- no stencil buffer means no rim mask; skip rather than flood the whole model
 
 	modelRadius = R_CalculateAliasModelRadius(paliashdr, e, lerpdata, &isMD5Model);
 	inverseScale = 14.0f * pow(15.0f / modelRadius, 1.6f);

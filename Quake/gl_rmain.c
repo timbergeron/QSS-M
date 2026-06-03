@@ -1090,14 +1090,18 @@ R_Clear -- johnfitz -- rewritten and gutted
 void R_Clear (void)
 {
 	unsigned int clearbits;
-	GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
 
 	clearbits = GL_DEPTH_BUFFER_BIT;
 	// from mh -- if we get a stencil buffer, we should clear it, even though we don't use it
 	if (gl_stencilbits)
 	{
-		if (viewmodel_stencil_bit && gl_laserpoint.value)
-			glStencilMask(~0u);
+		// woods #powershell -- glClear honors the stencil write-mask, and other passes (the
+		// powerup shell, model outline, xray) leave it partial (often 0x00). On macOS GL-on-Metal
+		// that makes the per-frame stencil clear a no-op, so a freshly-reallocated (garbage)
+		// stencil buffer after a fullscreen<->windowed switch never gets wiped -- the buffer
+		// saturates to 0xFF and stencil-masked effects break (the viewmodel shell floods the gun).
+		// Always restore a full write-mask so glClear actually clears every bit.
+		glStencilMask(~0u);
 		clearbits |= GL_STENCIL_BUFFER_BIT;
 	}
 	if (gl_clear.value && !skyroom_drawn && r_refdef.drawworld)
@@ -2356,11 +2360,13 @@ void R_DrawShadows (void)
 			stencil_mask &= ~viewmodel_stencil_bit;
 		}
 
-		if (use_viewmodel_stencil)
-			glStencilMask(~0u);
+		// woods #powershell -- force a full write-mask so glClear actually wipes every stencil
+		// bit (it honors the mask); otherwise a partial mask left by an earlier pass turns this
+		// clear into a no-op and shadow volumes build on a dirty buffer. Then narrow to the
+		// shadow mask for the INCR writes below.
+		glStencilMask(~0u);
 		glClear(GL_STENCIL_BUFFER_BIT);
-		if (use_viewmodel_stencil)
-			glStencilMask(stencil_mask);
+		glStencilMask(stencil_mask);
 		glStencilFunc(GL_EQUAL, 0, ~0);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
 		glEnable(GL_STENCIL_TEST);
