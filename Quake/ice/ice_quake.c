@@ -89,6 +89,8 @@ typedef struct {
 
 	//broker connection state
 	icestream_t *broker;
+	netadr_t brokeraddr;
+	qboolean brokeraddr_valid;
 	double reconnecttimeout;
 	double heartbeat;	//timestamp for when to send the next heartbeat (for server browsers).
 	qboolean error;		//broker failed. may still have udp/tcp sockets listening for direct connections though.
@@ -151,6 +153,17 @@ static void QICE_Close(qice_connection_t *b)
 
 	Z_Free(b->clients);
 	Z_Free(b);
+}
+
+static void QICE_SetBrokerStunServer(qice_connection_t *b, struct icestate_s *ice)
+{
+	if (b->brokeraddr_valid)
+	{
+		char brokeraddr[128];
+		iceapi.Set(ice, "server", va("stun:%s", NET_AdrToString(brokeraddr, sizeof(brokeraddr), &b->brokeraddr)));
+	}
+	else
+		iceapi.Set(ice, "server", va("stun:%s:%i", b->brokername, b->brokerport));
 }
 
 static int QICE_PrepareBrokerFrame(int icemsg, int cl, char *data)	//returns offset.
@@ -487,7 +500,7 @@ static void QICE_FoundPeer(qice_connection_t *b, const char *peeraddr, int cl, s
 	if (!*ret)
 		return;	//some kind of error?!?
 
-	iceapi.Set(ice, "server", va("stun:%s:%i", b->brokername, b->brokerport));
+	QICE_SetBrokerStunServer(b, ice);
 
 	s = net_ice_servers.string;
 	while((s=COM_Parse(s)))
@@ -568,6 +581,7 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 		b->error = false;
 		*b->brokername = 0;
 		b->brokerport = 0;
+		b->brokeraddr_valid = false;
 		QICE_FreeBrokerLookup(b);
 		QICE_Heartbeat(b);
 		return false;
@@ -598,6 +612,7 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 		if (!*b->brokername)
 		{
 			QICE_FreeBrokerLookup(b);
+			b->brokeraddr_valid = false;
 			if (b->isserver)
 				QICE_Heartbeat(b);
 			return false;
@@ -616,6 +631,7 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 			if (strcmp(brokerctx->brokername, b->brokername) || brokerctx->brokerport != b->brokerport)
 			{
 				QICE_FreeBrokerLookup(b);
+				b->brokeraddr_valid = false;
 				if (b->isserver)
 					QICE_Heartbeat(b);
 				return false;
@@ -632,15 +648,19 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 			if (!brokerctx->okay)
 			{
 				Z_Free(brokerctx);
+				b->brokeraddr_valid = false;
 				b->reconnecttimeout = realtime + 30;
 				Con_Printf("rtc broker resolve for %s failed%s\n", b->brokername, b->isserver?" (retry: 30 secs)":"");
 				return false;
 			}
 			brokeraddr = brokerctx->addr;
+			b->brokeraddr = brokeraddr;
+			b->brokeraddr_valid = true;
 			Z_Free(brokerctx);
 		}
 		else
 		{
+			b->brokeraddr_valid = false;
 			brokerctx = Z_Malloc(sizeof(*brokerctx));
 			q_strlcpy(brokerctx->brokername, b->brokername, sizeof(brokerctx->brokername));
 			brokerctx->brokerport = b->brokerport;
@@ -684,6 +704,7 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 
 		if (!b->broker)
 		{
+			b->brokeraddr_valid = false;
 			b->reconnecttimeout = realtime + 30;
 			Con_Printf("rtc broker connection to %s failed%s\n", b->brokername, b->isserver?" (retry: 30 secs)":"");
 			return false;
@@ -699,6 +720,7 @@ handleerror:
 			b->broker->Close(b->broker);
 		b->broker = NULL;
 		QICE_FreeBrokerLookup(b);
+		b->brokeraddr_valid = false;
 		b->reconnecttimeout = realtime + 30;
 
 		/*for (cl = 0; cl < b->numclients; cl++)
@@ -1009,7 +1031,7 @@ handleerror:
 						iceapi.Set(probe, "timeout", "5000");	//probes are short-lived
 
 						//add STUN servers
-						iceapi.Set(probe, "server", va("stun:%s:%i", b->brokername, b->brokerport));
+						QICE_SetBrokerStunServer(b, probe);
 						for (s = relay; (s=COM_Parse(s)); )
 							iceapi.Set(probe, "server", com_token);
 						s = net_ice_servers.string;
@@ -1272,16 +1294,16 @@ static qice_connection_t *QICE_Setup(const char *address, qboolean isserver)
 	newcon->icemodule.ClosedState = QICE_Closed;
 
 	if (isserver && (shared_game_socket4 || shared_game_socket6))
-	{	//use the shared game sockets — each module gets its own wrapper (freed by CloseModule)
+	{	//use send-only wrappers for the shared game sockets; Datagram owns recv and forwards ICE packets.
 		if (shared_game_socket4)
 		{
-			struct icesocket_s *wrap = ICE_WrapExistingSocket(shared_game_socket4->sock, shared_game_socket4->af);
+			struct icesocket_s *wrap = ICE_WrapExistingSocketSendOnly(shared_game_socket4->sock, shared_game_socket4->af);
 			if (wrap)
 				newcon->icemodule.conn[0] = wrap;
 		}
 		if (shared_game_socket6)
 		{
-			struct icesocket_s *wrap = ICE_WrapExistingSocket(shared_game_socket6->sock, shared_game_socket6->af);
+			struct icesocket_s *wrap = ICE_WrapExistingSocketSendOnly(shared_game_socket6->sock, shared_game_socket6->af);
 			if (wrap)
 				newcon->icemodule.conn[1] = wrap;
 		}
