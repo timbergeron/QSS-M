@@ -806,15 +806,12 @@ static struct icestate_s *ICE_Create(struct icemodule_s *module, const char *con
 		}
 		if (con->dtlsfuncs && con->dtlsfuncs->GenTempCertificate && !con->cred.local.certsize)
 		{
-			Con_DPrintf("Generating dtls certificate...\n");
 			if (!con->dtlsfuncs->GenTempCertificate(NULL, &con->cred.local))
 			{
 				con->dtlsfuncs = NULL;
 				modeflags &= ~ICEF_ALLOW_WEBRTC;
-				Con_DPrintf("Failed\n");
+				Con_DPrintf("Failed to generate DTLS certificate\n");
 			}
-			else
-				Con_DPrintf("Done\n");
 		}
 		else
 		{	//failure if we can't do the whole dtls thing.
