@@ -2914,7 +2914,7 @@ void ICE_Tick(void)
 			}
 			else if ((signed int)(curtime-con->icetimeout) > 0)
 			{
-				Con_DPrintf(S_COLOR_GRAY"[%s]: brokerless ice timeout\n", con->friendlyname);
+				Con_DPrintf2(S_COLOR_GRAY"[%s]: brokerless ice timeout\n", con->friendlyname);
 				con->state = ICE_FAILED;	//will be destroyed on next tick
 			}
 		}
@@ -3134,7 +3134,7 @@ static struct icestate_s *ICE_DirectConnectedInternal(struct icemodule_s *module
 	{
 		con->dtlsfuncs = module->dtlsfuncs;
 		con->dtlsstate = dtlsstate;
-		Con_Printf("%s: Direct DTLS connection\n", peer);
+		Con_DPrintf2("%s: Direct DTLS connection\n", peer);
 	}
 	else
 #endif
@@ -3144,10 +3144,10 @@ static struct icestate_s *ICE_DirectConnectedInternal(struct icemodule_s *module
 		con->server[0].con = link;
 		con->chosenpeer.connum = con->server[0].connum = (int)(1+MAX_NETWORKS+countof(con->server)+0);	//send through our private socket instead of wrapping in TURN.
 		con->server[0].addr = con->chosenpeer;
-		Con_DPrintf("%s: WebSocket connection\n", peer);
+		Con_DPrintf2("%s: WebSocket connection\n", peer);
 	}
 	else
-		Con_DPrintf("%s: Direct connection\n", peer);
+		Con_DPrintf2("%s: Direct connection\n", peer);
 
 	con->brokerless = true;
 	con->icetimeout_ms = 5*1000;	//short timeout — game connections survive via data flow extending it

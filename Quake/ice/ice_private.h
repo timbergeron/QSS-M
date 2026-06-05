@@ -411,6 +411,7 @@ int q_vsnprintf(char *dst, size_t dstsize, const char *format, va_list args);
 int q_snprintf(char *dst, size_t dstsize, const char *format, ...);
 void Con_Printf(const char *fmt, ...);
 void Con_DPrintf(const char *fmt, ...);
+void Con_DPrintf2(const char *fmt, ...);
 char *va(const char *fmt, ...);
 void Cvar_Set(const char *n, const char*v);
 double Sys_DoubleTime(void);
