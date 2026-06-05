@@ -344,6 +344,7 @@ typedef struct icestream_s
 	int (*ReadBytes)  (struct icestream_s *file, void *buffer, int bytestoread);
 } icestream_t;
 icestream_t *ICE_OpenTCP(const char *name, int defaultport, qboolean assumetls/*used when no scheme specified*/); //opens a tcp:// or ws:SUBPROTO:// stream.
+icestream_t *ICE_OpenTCPResolved(const char *name, int defaultport, qboolean assumetls/*used when no scheme specified*/, const netadr_t *resolved);
 struct icesocket_s *TURN_TCP_EstablishConnection(const char *address, netadr_t *adr, qboolean usetls); //special tcp-backed socket for STUN/TURN responses (reads the STUN header to return individual 'packets' properly)
 struct icesocket_s *ICE_WSS_EstablishConnection(const char *address, netadr_t *adr, qboolean usetls);
 

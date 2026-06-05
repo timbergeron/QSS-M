@@ -108,6 +108,7 @@ typedef struct {
 	size_t numclients;
 
 	struct heartbeatctx_s *heartbeatctx;	//for non-broker heartbeats, now we're using this for dtls etc too.
+	struct brokerlookupctx_s *brokerctx;	//threaded broker dns lookup before the non-blocking tcp connect.
 } qice_connection_t;
 
 #ifdef ALLOW_UNSOLICITED_ICE
@@ -119,6 +120,8 @@ struct qice_userstate_s
 };
 #endif
 
+static void QICE_FreeBrokerLookup(qice_connection_t *b);
+
 static void QICE_Close(qice_connection_t *b)
 {
 	qsocket_t *s;
@@ -128,6 +131,7 @@ static void QICE_Close(qice_connection_t *b)
 		b->broker->Close(b->broker);
 		b->broker = NULL;
 	}
+	QICE_FreeBrokerLookup(b);
 
 	for (cl = 0; cl < b->numclients; cl++)
 		if (b->clients[cl].ice)
@@ -183,6 +187,19 @@ struct heartbeatctx_s
 	} result[MAX_MASTERS];
 };
 
+struct brokerlookupctx_s
+{
+	struct brokerlookupctx_s *next;
+	qboolean working;
+	qboolean okay;
+	void *thread;
+	char brokername[64];
+	int brokerport;
+	netadr_t addr;
+};
+
+static struct brokerlookupctx_s *orphanedbrokerlookups;
+
 static int DNSLookupThread(void *vctx)
 {
 	struct heartbeatctx_s *ctx = vctx;
@@ -216,6 +233,56 @@ static int DNSLookupThread(void *vctx)
 	ctx->working = false;	//done.
 	return true;
 }
+
+static int BrokerLookupThread(void *vctx)
+{
+	struct brokerlookupctx_s *ctx = vctx;
+
+	ctx->okay = NET_StringToAdr(ctx->brokername, ctx->brokerport, &ctx->addr, 1) > 0;
+	ctx->working = false;
+	return true;
+}
+
+static void QICE_CleanupBrokerLookups(void)
+{
+	struct brokerlookupctx_s **link = &orphanedbrokerlookups;
+	struct brokerlookupctx_s *ctx;
+
+	while ((ctx = *link))
+	{
+		if (ctx->working)
+		{
+			link = &ctx->next;
+			continue;
+		}
+		if (ctx->thread)
+			SDL_WaitThread(ctx->thread, NULL);
+		*link = ctx->next;
+		Z_Free(ctx);
+	}
+}
+
+static void QICE_FreeBrokerLookup(qice_connection_t *b)
+{
+	struct brokerlookupctx_s *ctx = b->brokerctx;
+
+	if (!ctx)
+		return;
+
+	b->brokerctx = NULL;
+	if (ctx->thread)
+	{
+		if (ctx->working)
+		{
+			ctx->next = orphanedbrokerlookups;
+			orphanedbrokerlookups = ctx;
+			return;
+		}
+		SDL_WaitThread(ctx->thread, NULL);
+	}
+	Z_Free(ctx);
+}
+
 extern void Datagram_GenerateGetInfoString(char *out, size_t outsize);
 extern qboolean Info_FindNextKey(const char *info, const char *prevkey, char *outkey, size_t outkeysize, char *outval, size_t outvalsize);
 static void QICE_Heartbeat(qice_connection_t *b)
@@ -486,6 +553,25 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 	const char *data;
 	char msgbuf[8192];
 	qboolean result = false;
+	netadr_t brokeraddr;
+	struct brokerlookupctx_s *brokerctx;
+
+	QICE_CleanupBrokerLookups();
+
+	if (b->isserver && !*sv_port_rtc.string)
+	{
+		if (b->broker)
+		{
+			b->broker->Close(b->broker);
+			b->broker = NULL;
+		}
+		b->error = false;
+		*b->brokername = 0;
+		b->brokerport = 0;
+		QICE_FreeBrokerLookup(b);
+		QICE_Heartbeat(b);
+		return false;
+	}
 
 	if (!b->broker && !b->error)
 	{
@@ -509,8 +595,65 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 				b->brokerport = PORT_ICEBROKER;
 		}
 
-		if (b->reconnecttimeout > realtime || !*b->brokername)
+		if (!*b->brokername)
 		{
+			QICE_FreeBrokerLookup(b);
+			if (b->isserver)
+				QICE_Heartbeat(b);
+			return false;
+		}
+
+		if (b->reconnecttimeout > realtime)
+		{
+			if (b->isserver)
+				QICE_Heartbeat(b);
+			return false;
+		}
+
+		if (b->brokerctx)
+		{
+			brokerctx = b->brokerctx;
+			if (strcmp(brokerctx->brokername, b->brokername) || brokerctx->brokerport != b->brokerport)
+			{
+				QICE_FreeBrokerLookup(b);
+				if (b->isserver)
+					QICE_Heartbeat(b);
+				return false;
+			}
+			if (brokerctx->working)
+			{
+				if (b->isserver)
+					QICE_Heartbeat(b);
+				return false;
+			}
+
+			SDL_WaitThread(brokerctx->thread, NULL);
+			b->brokerctx = NULL;
+			if (!brokerctx->okay)
+			{
+				Z_Free(brokerctx);
+				b->reconnecttimeout = realtime + 30;
+				Con_Printf("rtc broker resolve for %s failed%s\n", b->brokername, b->isserver?" (retry: 30 secs)":"");
+				return false;
+			}
+			brokeraddr = brokerctx->addr;
+			Z_Free(brokerctx);
+		}
+		else
+		{
+			brokerctx = Z_Malloc(sizeof(*brokerctx));
+			q_strlcpy(brokerctx->brokername, b->brokername, sizeof(brokerctx->brokername));
+			brokerctx->brokerport = b->brokerport;
+			brokerctx->working = true;
+			brokerctx->thread = SDL_CreateThread(BrokerLookupThread, "brokerdns", brokerctx);
+			if (!brokerctx->thread)
+			{
+				Z_Free(brokerctx);
+				b->reconnecttimeout = realtime + 30;
+				Con_Printf("rtc broker resolve thread for %s failed%s\n", b->brokername, b->isserver?" (retry: 30 secs)":"");
+				return false;
+			}
+			b->brokerctx = brokerctx;
 			if (b->isserver)
 				QICE_Heartbeat(b);
 			return false;
@@ -537,7 +680,7 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 			b->brokername,	//broker ip/name,
 			com_token,		//protocol/game
 			roomname);	//server name
-		b->broker = ICE_OpenTCP(url, b->brokerport, true);
+		b->broker = ICE_OpenTCPResolved(url, b->brokerport, true, &brokeraddr);
 
 		if (!b->broker)
 		{
@@ -555,6 +698,7 @@ handleerror:
 		if (b->broker)
 			b->broker->Close(b->broker);
 		b->broker = NULL;
+		QICE_FreeBrokerLookup(b);
 		b->reconnecttimeout = realtime + 30;
 
 		/*for (cl = 0; cl < b->numclients; cl++)
@@ -1958,7 +2102,7 @@ qboolean NQICE_SearchForHosts (qboolean xmit)
 
 	return false;	//no broadcasts here. we can't implement this.
 }
-qsocket_t *NQICE_Connect (const char *host)		//used by client (enables websocket connection). fails when not ice, fails when unable to resolve broker, otherwise succeeds pending broker failure.
+qsocket_t *NQICE_Connect (const char *host)		//used by client (enables websocket connection). fails when not ice, otherwise succeeds pending async broker failure.
 {
 	qice_connection_t *b;
 	qsocket_t *dest;
@@ -2356,6 +2500,7 @@ qsocket_t *NQICE_CheckNewConnections (void)
 #ifdef HAVE_DTLS
 	BrokerDTLS_Cleanup();	//expire old sessions
 #endif
+	QICE_CleanupBrokerLookups();
 
 	if (b)
 		QICE_UpdateBroker(b);
@@ -2945,6 +3090,7 @@ void NQICE_Listen (qboolean state)	//used by server (enables websocket connectio
 	qice_listening = state;
 	if (qice_listening)
 	{
+		QICE_CleanupBrokerLookups();
 		if (!qice_hostcon)
 		{
 			qice_hostcon = QICE_Setup(*sv_port_rtc.string?sv_port_rtc.string:NULL, true);
@@ -2956,6 +3102,7 @@ void NQICE_Listen (qboolean state)	//used by server (enables websocket connectio
 	{
 		QICE_Close(qice_hostcon);
 		qice_hostcon = NULL;
+		QICE_CleanupBrokerLookups();
 	}
 }
 
@@ -3155,6 +3302,7 @@ void NQICE_Shutdown (void)
 {
 	int i;
 	NQICE_Listen(false);	//just in case.
+	QICE_CleanupBrokerLookups();
 
 	nqice_fp_cache[0] = 0;	//clear cached fingerprint
 

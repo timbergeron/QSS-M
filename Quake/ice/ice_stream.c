@@ -1234,7 +1234,7 @@ static icestream_t *Websocket_AcceptStream(icestream_t *stream, const char *host
 	return &newf->funcs;
 }
 
-icestream_t *ICE_OpenTCP(const char *name, int defaultport, qboolean assumetls/*used when no scheme specified*/)
+static icestream_t *ICE_OpenTCPInternal(const char *name, int defaultport, qboolean assumetls/*used when no scheme specified*/, const netadr_t *resolved)
 {
 	icestream_t *f;
 	qboolean wanttls;
@@ -1291,7 +1291,9 @@ icestream_t *ICE_OpenTCP(const char *name, int defaultport, qboolean assumetls/*
 	}
 
 	//FIXME: should we be doing an any-connect type thing for eg when dns reports an unusable ipv6 address?
-	if (!NET_StringToAdr(host, defaultport, &addr, 1))
+	if (resolved)
+		addr = *resolved;
+	else if (!NET_StringToAdr(host, defaultport, &addr, 1))
 		return NULL;
 
 #ifndef HAVE_TLS
@@ -1310,6 +1312,16 @@ icestream_t *ICE_OpenTCP(const char *name, int defaultport, qboolean assumetls/*
 	if (proto)
 		f = Websocket_WrapStream(f, host, resource, proto);
 	return f;
+}
+
+icestream_t *ICE_OpenTCP(const char *name, int defaultport, qboolean assumetls/*used when no scheme specified*/)
+{
+	return ICE_OpenTCPInternal(name, defaultport, assumetls, NULL);
+}
+
+icestream_t *ICE_OpenTCPResolved(const char *name, int defaultport, qboolean assumetls/*used when no scheme specified*/, const netadr_t *resolved)
+{
+	return ICE_OpenTCPInternal(name, defaultport, assumetls, resolved);
 }
 
 

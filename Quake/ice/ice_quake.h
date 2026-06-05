@@ -26,7 +26,7 @@ int			NQICE_Init (void);
 void		NQICE_Listen (qboolean state);		//used by server (enables websocket connection).
 int			NQICE_QueryAddresses(qhostaddr_t *addresses, int maxaddresses);
 qboolean	NQICE_SearchForHosts (qboolean xmit);
-qsocket_t	*NQICE_Connect (const char *host);	//used by client (enables websocket connection). fails when not ice, fails when unable to resolve broker, otherwise succeeds pending broker failure.
+qsocket_t	*NQICE_Connect (const char *host);	//used by client (enables websocket connection). fails when not ice, otherwise succeeds pending async broker failure.
 qsocket_t	*NQICE_CheckNewConnections (void);	//used by server.
 void		NQICE_GetAnyMessages(void(*callback)(qsocket_t *));			//used by server.
 int			NQICE_GetMessage (qsocket_t *sock);	//used by client.
