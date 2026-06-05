@@ -1465,8 +1465,24 @@ qmodel_t *CL_ModelForIndex(int index)
 	return cl.model_precache[index];
 }
 
+static qboolean CL_QueueClientStringCommand(const char *command)
+{
+	size_t needed;
 
-static void CL_LoadCSProgs(void)
+	if (cls.state != ca_connected)
+		return false;
+	needed = 1 + strlen(command) + 1;
+	if (cls.message.cursize > cls.message.maxsize)
+		return false;
+	if (needed > (size_t)(cls.message.maxsize - cls.message.cursize))
+		return false;
+
+	MSG_WriteByte(&cls.message, clc_stringcmd);
+	MSG_WriteString(&cls.message, command);
+	return true;
+}
+
+static qboolean CL_LoadCSProgs(void)
 {
 	qboolean fullcsqc = false;
 	int i;
@@ -1512,7 +1528,7 @@ static void CL_LoadCSProgs(void)
 				{	//no simplecsqc entry points... abort entirely!
 					PR_ClearProgs(qcvm);
 					PR_SwitchQCVM(NULL);
-					return;
+					return true;
 				}
 				fullcsqc = false;
 				qcvm->nogameaccess = true;
@@ -1567,8 +1583,11 @@ static void CL_LoadCSProgs(void)
 			if (fullcsqc)
 			{
 				//let the server know.
-				MSG_WriteByte (&cls.message, clc_stringcmd);
-				MSG_WriteString (&cls.message, "enablecsqc");
+				if (!CL_QueueClientStringCommand("enablecsqc"))
+				{
+					PR_SwitchQCVM(NULL);
+					return false;
+				}
 			}
 		}
 		else
@@ -1584,6 +1603,7 @@ static void CL_LoadCSProgs(void)
 		SV_ClearWorld();
 	}
 	PR_SwitchQCVM(NULL);
+	return true;
 }
 
 void Host_RunCvarMigrations (void) // woods #migration
@@ -1677,12 +1697,12 @@ void _Host_Frame (double time)
 	{
 		if (CL_CheckDownloads())
 		{
-			CL_LoadCSProgs();
-
-			cl.sendprespawn = false;
-			MSG_WriteByte (&cls.message, clc_stringcmd);
-			MSG_WriteString (&cls.message, "prespawn");
-			vid.recalc_refdef = true;
+			if (CL_LoadCSProgs() &&
+				CL_QueueClientStringCommand("prespawn"))
+			{
+				cl.sendprespawn = false;
+				vid.recalc_refdef = true;
+			}
 		}
 		else if (!cls.message.cursize)
 			MSG_WriteByte (&cls.message, clc_nop);

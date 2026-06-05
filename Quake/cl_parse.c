@@ -4599,7 +4599,11 @@ void CL_ParseServerMessage (void)
 			break;
 
 		case svc_fog:
-			Fog_ParseServerMessage ();
+			/* PEXT1_CHUNKEDDOWNLOADS aliases svc_download to svc_fog. */
+			if (CL_Download_ShouldParseChunked())
+				CL_Download_Chunked();
+			else
+				Fog_ParseServerMessage ();
 			break;
 
 		case svc_spawnbaseline2: //PROTOCOL_FITZQUAKE

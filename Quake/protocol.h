@@ -58,11 +58,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //#define PEXT1_CUSTOMTEMPEFFECTS	0x00800000	//favour csqc instead.
 //#define PEXT1_SPLITSCREEN			0x00100000	//too much hassle for not enough users.
 //#define PEXT1_SHOWPIC				0x04000000	//favour csqc instead.
-//#define PEXT1_CHUNKEDDOWNLOADS	0x20000000	//favour DP's download protocol instead. its simpler and better established (though doesn't cope with packetloss so well).
+#define PEXT1_CHUNKEDDOWNLOADS		0x20000000	//chunked downloads using svc_download/nextdl.
 #define PEXT1_CSQC					0x40000000	//(full)csqc additions, required for csqc ents+events.
 #define PEXT1_ACCEPTED_CLIENT		(PEXT1_SUPPORTED_CLIENT|PEXT1_Q3BSP|PEXT1_Q2BSP|PEXT1_HLBSP)	//pext1 flags that we can accept from a server (aka: partial support)
-#define PEXT1_SUPPORTED_CLIENT		(PEXT1_CSQC)	//pext1 flags that we advertise to servers (aka: full support)
-#define PEXT1_SUPPORTED_SERVER		(PEXT1_CSQC)	//pext1 flags that we accept from clients.
+#define PEXT1_SUPPORTED_CLIENT		(PEXT1_CSQC|PEXT1_CHUNKEDDOWNLOADS)	//pext1 flags that we advertise to servers (aka: full support)
+#define PEXT1_SUPPORTED_SERVER		(PEXT1_CSQC|PEXT1_CHUNKEDDOWNLOADS)	//pext1 flags that we accept from clients.
 
 // PROTOCOL_FTE_PEXT2 flags
 #define PEXT2_PRYDONCURSOR			0x00000001	//a mouse cursor exposed to ssqc
@@ -332,6 +332,15 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define	svc_skybox				37	// [string] name
 #define svc_bf					40
 #define svc_fog					41	// [byte] density [byte] red [byte] green [byte] blue [float] time
+#define DLBLOCKSIZE					1024	//wire-protocol chunk size used by PEXT1_CHUNKEDDOWNLOADS.
+#define DL_CHUNK_HEADER_SIZE		5	// svc_download byte + 32-bit chunk number.
+#define DL_CHUNK_PACKET_SIZE		(DL_CHUNK_HEADER_SIZE + DLBLOCKSIZE)
+#define DL_LEGACY_HEADER_SIZE		7	// svcdp_downloaddata byte + offset + size.
+#define DL_MAX_CHUNK_QUEUE		64	//server-side queue for client nextdl requests.
+#define DLERR_FILENOTFOUND		-1
+#define DLERR_PERMISSIONS		-2
+#define DLERR_UNKNOWN			-3
+#define svc_download			svc_fog	// PEXT1_CHUNKEDDOWNLOADS; explicit alias, disambiguated by packet shape while downloading.
 #define svc_spawnbaseline2		42  // support for large modelindex, large framenum, alpha, using flags
 #define svc_spawnstatic2		43	// support for large modelindex, large framenum, alpha, using flags
 #define	svc_spawnstaticsound2	44	// [coord3] [short] samp [byte] vol [byte] aten

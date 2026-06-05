@@ -236,11 +236,15 @@ typedef struct client_s
 	{
 		char name[MAX_QPATH];
 		FILE *file;
+		qboolean chunked;
 		qboolean started;	//actually sending
 		unsigned int startpos;	//within the pak, so we don't break stuff when seeking
 		unsigned int size;
 		unsigned int sendpos;	//file offset we last tried sending
 		unsigned int ackpos;	//if they don't ack this properly, we restart sending from here instead.
+		unsigned int chunkqueue[DL_MAX_CHUNK_QUEUE];
+		unsigned int chunkqueue_head;
+		unsigned int chunkqueue_count;
 		//for more speed, the server should build a collection of blocks to track which parts were actually acked, thereby avoiding redundant resends, but in the intererest of simplicity...
 	} download;
 	qboolean		knowntoqc;			// putclientinserver was called

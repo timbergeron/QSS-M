@@ -138,6 +138,21 @@ qboolean Host_GetLastServer(char *name, size_t namesize);
 extern char lastconnected[3]; // woods #identify+
 extern qboolean netquakeio; // woods
 extern int retry_counter; // woods #ms
+
+static void DL_FreeBlocks(void)
+{
+	dlblock_t *b = cls.download.dlblocks;
+
+	while (b)
+	{
+		dlblock_t *next = b->next;
+		Z_Free(b);
+		b = next;
+	}
+	cls.download.dlblocks = NULL;
+}
+
+static void DLC_RequestDownloadChunks(void);
 extern int grenadecache, rocketcache; // woods #r2g
 extern qboolean pausedprint; // woods
 extern SDL_TimerID chatTimerID; // woods #chatinfo
@@ -619,6 +634,7 @@ void CL_Disconnect (void)
 	cls.netcon = NULL;
 	if (cls.download.file)
 		fclose(cls.download.file);
+	DL_FreeBlocks();
 	memset(&cls.download, 0, sizeof(cls.download));
 	cls.download.percent = -1.0f;
 	cl.intermission = 0;
@@ -2956,7 +2972,14 @@ void CL_InitWebDownloads(qboolean run_checks)
 
 static void CL_DownloadProgress_Begin(const char *filename)
 {
+	DL_FreeBlocks();
 	cls.download.active = true;
+	cls.download.chunked = false;
+	cls.download.completedbytes = 0;
+	cls.download.ratebytes = 0;
+	cls.download.rate = 0;
+	cls.download.ratetime = realtime;
+	cls.download.chunkedstaleuntil = 0;
 	cls.download.percent = -1.0f;
 	cls.download.received = 0.0;
 	cls.download.total = 0.0;
@@ -3152,6 +3175,405 @@ static qboolean CL_FinalizeDownloadFile(const char *relative_path, const char *t
 
 	CL_DownloadAddMapDesc(relative_path);
 	return true;
+}
+
+static qboolean DL_SendDownloadCommand(const char *command)
+{
+	size_t needed;
+
+	if (cls.state != ca_connected)
+		return false;
+	needed = 1 + strlen(command) + 1;
+	if (cls.message.cursize > cls.message.maxsize)
+		return false;
+	if (needed > (size_t)(cls.message.maxsize - cls.message.cursize))
+		return false;
+
+	MSG_WriteByte(&cls.message, clc_stringcmd);
+	MSG_WriteString(&cls.message, command);
+	return true;
+}
+
+static qboolean DL_SendLegacyDownloadAck(unsigned int start, unsigned int size)
+{
+	if (cls.state != ca_connected)
+		return false;
+	if (cls.message.cursize > cls.message.maxsize)
+		return false;
+	if (cls.message.cursize > cls.message.maxsize - DL_LEGACY_HEADER_SIZE)
+		return false;
+
+	MSG_WriteByte(&cls.message, clcdp_ackdownloaddata);
+	MSG_WriteLong(&cls.message, start);
+	MSG_WriteShort(&cls.message, size);
+	return true;
+}
+
+static qboolean DL_SendNextDownloadChunk(unsigned int chunk)
+{
+	char command[64];
+
+	q_snprintf(command, sizeof(command), "nextdl %u %.1f 0\n", chunk, cls.download.percent);
+	return DL_SendDownloadCommand(command);
+}
+
+static dlblock_t *DL_NewBlock(unsigned int start, unsigned int end, dlblock_state_t state)
+{
+	dlblock_t *b = (dlblock_t *)Z_Malloc((int)sizeof(*b));
+
+	b->start = start;
+	b->end = end;
+	b->state = state;
+	b->requesttime = 0;
+	b->next = NULL;
+	return b;
+}
+
+static qboolean DL_FileLengthExact(FILE *f, unsigned int size)
+{
+	long len, oldpos = ftell(f);
+
+	if (oldpos < 0 || fseek(f, 0, SEEK_END) != 0)
+		return false;
+	len = ftell(f);
+	if (fseek(f, oldpos, SEEK_SET) != 0)
+		return false;
+	return len >= 0 && (unsigned long)len == size;
+}
+
+static unsigned int DL_PeekLong(int pos)
+{
+	return (unsigned int)net_message.data[pos] |
+		((unsigned int)net_message.data[pos + 1] << 8) |
+		((unsigned int)net_message.data[pos + 2] << 16) |
+		((unsigned int)net_message.data[pos + 3] << 24);
+}
+
+static qboolean DL_LooksLikeChunkedStart(int pos)
+{
+	unsigned int sizeword;
+	int namepos, end;
+
+	if (pos + 8 >= net_message.cursize ||
+		DL_PeekLong(pos) != 0xffffffffu)
+		return false;
+
+	sizeword = DL_PeekLong(pos + 4);
+	if (sizeword == 0x80000000u)
+	{
+		unsigned int low, high;
+
+		if (pos + 16 >= net_message.cursize)
+			return false;
+		low = DL_PeekLong(pos + 8);
+		high = DL_PeekLong(pos + 12);
+		if (high != 0 || low > 0x7fffffffu)
+			return false;
+		namepos = pos + 16;
+	}
+	else
+	{
+		if (sizeword > 0x7fffffffu && sizeword < 0xfffffff0u)
+			return false;
+		namepos = pos + 8;
+	}
+
+	for (end = namepos; end < net_message.cursize && net_message.data[end]; end++)
+		;
+	if (end >= net_message.cursize)
+		return false;
+	if (!net_message.data[namepos])
+		return sizeword & 0x80000000u;
+	return !cls.download.current[0] ||
+		!strcmp((char *)&net_message.data[namepos], cls.download.current);
+}
+
+static qboolean DL_ChunkExpected(unsigned int chunk)
+{
+	unsigned int start, end, maxchunk;
+	dlblock_t *b;
+
+	if (!cls.download.active || !cls.download.chunked ||
+		!cls.download.file || !cls.download.size)
+		return false;
+
+	maxchunk = (cls.download.size - 1) / DLBLOCKSIZE;
+	if (chunk > maxchunk)
+		return false;
+
+	start = chunk * DLBLOCKSIZE;
+	end = start + DLBLOCKSIZE;
+	if (end > cls.download.size)
+		end = cls.download.size;
+
+	for (b = cls.download.dlblocks; b; b = b->next)
+	{
+		if (start < b->end && end > b->start)
+			return true;
+	}
+	return false;
+}
+
+static void DL_ClearChunkedState(qboolean delete_temp)
+{
+	if (cls.download.file)
+	{
+		fclose(cls.download.file);
+		cls.download.file = NULL;
+	}
+	if (delete_temp)
+		unlink(cls.download.temp);
+	DL_FreeBlocks();
+	cls.download.active = false;
+	cls.download.chunked = false;
+	cls.download.size = 0;
+	cls.download.completedbytes = 0;
+	cls.download.ratebytes = 0;
+	cls.download.rate = 0;
+	cls.download.ratetime = 0;
+	cls.download.chunkedstaleuntil = 0;
+	cls.download.percent = -1.0f;
+}
+
+static void DL_AbortChunked(qboolean tellserver)
+{
+	qboolean drain_stale = cls.download.chunked;
+
+	if (tellserver)
+		DL_SendDownloadCommand("nextdl -1 100 0\n");
+	DL_ClearChunkedState(true);
+	if (drain_stale)
+		cls.download.chunkedstaleuntil = realtime + 2.0;
+}
+
+static void DL_FinishChunked(void)
+{
+	qboolean finalized = false;
+
+	DL_SendDownloadCommand("nextdl -1 100 0\n");
+
+	if (!cls.download.file)
+	{
+		Con_Warning("Download of %s failed size verification\n", cls.download.current);
+		DL_ClearChunkedState(true);
+		cls.download.chunkedstaleuntil = realtime + 2.0;
+		return;
+	}
+
+	if (cls.download.dlblocks || cls.download.completedbytes != cls.download.size)
+	{
+		Con_Warning("Download of %s failed block completion verification\n", cls.download.current);
+		DL_ClearChunkedState(true);
+		cls.download.chunkedstaleuntil = realtime + 2.0;
+		return;
+	}
+
+	fflush(cls.download.file);
+	if (!DL_FileLengthExact(cls.download.file, cls.download.size))
+	{
+		Con_Warning("Download of %s failed size verification\n", cls.download.current);
+		DL_ClearChunkedState(true);
+		cls.download.chunkedstaleuntil = realtime + 2.0;
+		return;
+	}
+
+	fclose(cls.download.file);
+	cls.download.file = NULL;
+	DL_FreeBlocks();
+
+	if (CL_FinalizeDownloadFile(cls.download.current, cls.download.temp))
+	{
+		Con_SafePrintf("Downloaded %s: %u bytes\n", cls.download.current, cls.download.size);
+		finalized = true;
+	}
+	else
+	{
+		Con_Warning("Download of %s failed\n", cls.download.current);
+		unlink(cls.download.temp);
+	}
+
+	cls.download.active = false;
+	cls.download.chunked = false;
+	cls.download.completedbytes = 0;
+	cls.download.chunkedstaleuntil = realtime + 2.0;
+	cls.download.percent = finalized ? 100.0f : -1.0f;
+}
+
+qboolean CL_Download_ShouldParseChunked(void)
+{
+	const int stride = 1 + 4 + DLBLOCKSIZE;
+	unsigned int firstnum;
+	int start, remaining, pos;
+	qboolean chunkdata;
+
+	if (!(cl.protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS))
+		return false;
+
+	/* svc_download shares opcode 41 with svc_fog. Only claim it when the
+	 * surrounding packet shape matches chunked-download framing. */
+	start = msg_readcount - 1;
+	remaining = net_message.cursize - start;
+	if (start < 0)
+		return false;
+
+	chunkdata = remaining >= stride && !(remaining % stride);
+	for (pos = start; chunkdata && pos < net_message.cursize; pos += stride)
+	{
+		unsigned int chunknum;
+
+		if (net_message.data[pos] != svc_download)
+		{
+			chunkdata = false;
+			break;
+		}
+		chunknum = (unsigned int)net_message.data[pos + 1] |
+			((unsigned int)net_message.data[pos + 2] << 8) |
+			((unsigned int)net_message.data[pos + 3] << 16) |
+			((unsigned int)net_message.data[pos + 4] << 24);
+		if (chunknum & 0x80000000u)
+		{
+			chunkdata = false;
+			break;
+		}
+	}
+
+	if (cls.download.active && cls.download.chunked)
+	{
+		if (msg_readcount + 4 <= net_message.cursize)
+		{
+			firstnum = DL_PeekLong(msg_readcount);
+			if (firstnum == 0xffffffffu &&
+				DL_LooksLikeChunkedStart(msg_readcount))
+				return true;
+			if (!(firstnum & 0x80000000u) &&
+				remaining >= stride &&
+				DL_ChunkExpected(firstnum))
+				return true;
+		}
+		return chunkdata;
+	}
+
+	return cls.download.chunkedstaleuntil > realtime && chunkdata;
+}
+
+static unsigned int DL_MarkBlockReceived(unsigned int start, unsigned int end)
+{
+	dlblock_t *b = cls.download.dlblocks;
+	dlblock_t *prev = NULL;
+	unsigned int credited = 0;
+
+	while (b)
+	{
+		dlblock_t *next = b->next;
+		unsigned int overlap_start, overlap_end;
+
+		if (end <= b->start || start >= b->end)
+		{
+			prev = b;
+			b = next;
+			continue;
+		}
+
+		overlap_start = start > b->start ? start : b->start;
+		overlap_end = end < b->end ? end : b->end;
+		if (overlap_end > overlap_start)
+			credited += overlap_end - overlap_start;
+
+		if (start <= b->start && end >= b->end)
+		{
+			if (prev)
+				prev->next = next;
+			else
+				cls.download.dlblocks = next;
+			Z_Free(b);
+			b = next;
+			continue;
+		}
+		if (start <= b->start)
+		{
+			b->start = end;
+			b->state = DLB_MISSING;
+			b->requesttime = 0;
+			prev = b;
+			b = next;
+			continue;
+		}
+		if (end >= b->end)
+		{
+			b->end = start;
+			b->state = DLB_MISSING;
+			b->requesttime = 0;
+			prev = b;
+			b = next;
+			continue;
+		}
+
+		{
+			dlblock_t *tail = DL_NewBlock(end, b->end, DLB_MISSING);
+			tail->next = b->next;
+			b->end = start;
+			b->state = DLB_MISSING;
+			b->requesttime = 0;
+			b->next = tail;
+			prev = tail;
+			b = next;
+		}
+	}
+
+	return credited;
+}
+
+static void DLC_RequestDownloadChunks(void)
+{
+	enum { MAX_PENDING_CHUNKS = 32 };
+	const double retry_delay = 1.0;
+	dlblock_t *b;
+	int pending = 0;
+
+	if (!cls.download.active || !cls.download.chunked || !cls.download.file)
+		return;
+
+	for (b = cls.download.dlblocks; b; b = b->next)
+	{
+		if (b->state == DLB_PENDING)
+		{
+			if (realtime - b->requesttime >= retry_delay)
+			{
+				b->state = DLB_MISSING;
+				b->requesttime = 0;
+			}
+			else
+				pending++;
+		}
+	}
+
+	for (b = cls.download.dlblocks; b && pending < MAX_PENDING_CHUNKS; b = b->next)
+	{
+		unsigned int chunk, chunk_end;
+
+		if (b->state != DLB_MISSING)
+			continue;
+
+		chunk = b->start / DLBLOCKSIZE;
+		chunk_end = (chunk + 1) * DLBLOCKSIZE;
+		if (chunk_end > cls.download.size)
+			chunk_end = cls.download.size;
+
+		if (b->end > chunk_end)
+		{
+			dlblock_t *tail = DL_NewBlock(chunk_end, b->end, DLB_MISSING);
+			tail->next = b->next;
+			b->next = tail;
+			b->end = chunk_end;
+		}
+
+		if (!DL_SendNextDownloadChunk(chunk))
+			break;
+
+		b->state = DLB_PENDING;
+		b->requesttime = realtime;
+		pending++;
+	}
 }
 
 qboolean Curl_DownloadFile (const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name) // main curl function
@@ -3383,6 +3805,12 @@ void CL_ServerExtension_Download_f(void)
 //sent by the server to let us know when its finished sending the entire file
 void CL_Download_Finished_f(void)
 {
+	if (cls.download.chunked)
+	{
+		Con_DPrintf("Ignoring legacy download finish during chunked download\n");
+		return;
+	}
+
 	if (cls.download.file)
 	{
 		unsigned int size;
@@ -3445,6 +3873,7 @@ void CL_Download_Finished_f(void)
 cleanup:
 		fclose(cls.download.file);
 		cls.download.file = NULL;
+		DL_FreeBlocks();
 		if (hashokay)
 		{
 			if (CL_FinalizeDownloadFile(cls.download.current, cls.download.temp))
@@ -3465,21 +3894,29 @@ cleanup:
 	}
 
 	cls.download.active = false;
+	cls.download.chunked = false;
 }
 //sent by the server (or issued by the user) to stop the current download for any reason.
 void CL_StopDownload_f(void)
 {
 	if (!curl_download_active) // woods, add support for stopping curl downloads #webdl
 	{
+		if (cls.download.chunked)
+		{
+			DL_AbortChunked(cmd_source != src_server);
+			return;
+		}
 		if (cls.download.file)
 		{
 			fclose(cls.download.file);
 			cls.download.file = NULL;
 			unlink(cls.download.temp);
+			DL_FreeBlocks();
 
 			//		Con_SafePrintf("Download cancelled\n", cl.download_current, cl.download_size);
 		}
 		cls.download.active = false;
+		cls.download.chunked = false;
 
 	}
 	else
@@ -3495,17 +3932,32 @@ void CL_Download_Begin_f(void)
 		CL_StopDownload_f();
 
 	//cl_downloadbegin size "name"
+	DL_FreeBlocks();
+	cls.download.chunked = false;
+	cls.download.completedbytes = 0;
+	cls.download.chunkedstaleuntil = 0;
 	cls.download.size = strtoul(Cmd_Argv(1), NULL, 0);
 	CL_DownloadProgress_Update(0.0, (double)cls.download.size);
 
 	COM_CreatePath(cls.download.temp);
 	cls.download.file = fopen(cls.download.temp, "wb+");	//+ so we can read the data back to validate it
+	if (!cls.download.file)
+	{
+		Con_Warning("Unable to open download temp file for %s\n", cls.download.current);
+		cls.download.active = false;
+		cls.download.size = 0;
+		cls.download.percent = -1.0f;
+		return;
+	}
 
 	if ((double)cls.download.size > 5 * 1024 * 1024) // woods anything over 5mb suggest alternative download
 	Con_Printf("\nwarning: large file size items usually have additional assets, recommended download outside of QSSM\n\n");
 
-	MSG_WriteByte (&cls.message, clc_stringcmd);
-	MSG_WriteString (&cls.message, "sv_startdownload\n");
+	if (!DL_SendDownloadCommand("sv_startdownload\n"))
+	{
+		Con_Warning("Unable to request download start; command buffer is full\n");
+		CL_StopDownload_f();
+	}
 }
 
 void CL_Download_Data(void)
@@ -3517,19 +3969,167 @@ void CL_Download_Data(void)
 	data = MSG_ReadData(size);
 	if (msg_badread)
 		return;
+	if (cls.download.chunked)
+		return;
 	if (!cls.download.file)
 		return;	//demo started mid-record? something weird anyway
+	if (start > cls.download.size || size > cls.download.size - start)
+	{
+		Con_Warning("Download of %s received out-of-range data\n", cls.download.current);
+		CL_StopDownload_f();
+		return;
+	}
 
-	fseek(cls.download.file, start, SEEK_SET);
-	fwrite(data, 1, size, cls.download.file);
+	if (fseek(cls.download.file, start, SEEK_SET) != 0 ||
+		fwrite(data, 1, size, cls.download.file) != size)
+	{
+		Con_Warning("Download of %s failed while writing data\n", cls.download.current);
+		CL_StopDownload_f();
+		return;
+	}
 	CL_DownloadProgress_Update((double)(start + size), (double)cls.download.size);
 
 	Con_SafePrintf("Downloading %s (%.2f MB): %g%%\r", cls.download.current, (double)cls.download.size / (1024 * 1024), 100 * (start + size) / (double)cls.download.size); // woods add file size info
 
 	//should maybe use unreliables, but whatever, shouldn't matter too much, it'll still complete
-	MSG_WriteByte(&cls.message, clcdp_ackdownloaddata);
-	MSG_WriteLong(&cls.message, start);
-	MSG_WriteShort(&cls.message, size);
+	(void)DL_SendLegacyDownloadAck(start, size);
+}
+
+void CL_Download_Chunked(void)
+{
+	int chunknum = MSG_ReadLong();
+	byte *data;
+	unsigned int chunk, maxchunk, offset, wanted, credited;
+
+	if (chunknum == -1)
+	{
+		int size = MSG_ReadLong();
+		const char *name;
+
+		if ((unsigned int)size == 0x80000000u)
+		{
+			unsigned int low = MSG_ReadLong();
+			unsigned int high = MSG_ReadLong();
+
+			name = MSG_ReadString();
+			if (msg_badread || high != 0 || low > 0x7fffffffu)
+			{
+				Con_Warning("Server offered an unsupported large download\n");
+				DL_AbortChunked(true);
+				return;
+			}
+			size = (int)low;
+		}
+		else
+			name = MSG_ReadString();
+		if (msg_badread)
+			return;
+
+		if (size < 0)
+		{
+			Con_Warning("Server refused download of %s\n", name && name[0] ? name : cls.download.current);
+			DL_AbortChunked(false);
+			return;
+		}
+
+		if (!cls.download.active)
+		{
+			Con_DPrintf("Ignoring unexpected chunked download start for %s\n", name);
+			return;
+		}
+		if (name && name[0] && strcmp(name, cls.download.current))
+		{
+			Con_Warning("Server sent the wrong download (%s instead of %s)\n", name, cls.download.current);
+			DL_AbortChunked(true);
+			return;
+		}
+		if (cls.download.file)
+			DL_ClearChunkedState(true);
+		else
+			DL_FreeBlocks();
+		cls.download.active = true;
+		cls.download.chunked = true;
+		cls.download.size = (unsigned int)size;
+		cls.download.completedbytes = 0;
+		cls.download.ratebytes = 0;
+		cls.download.rate = 0;
+		cls.download.ratetime = realtime;
+		CL_DownloadProgress_Update(0.0, (double)cls.download.size);
+
+		COM_CreatePath(cls.download.temp);
+		cls.download.file = fopen(cls.download.temp, "wb+");
+		if (!cls.download.file)
+		{
+			Con_Warning("Unable to open download temp file for %s\n", cls.download.current);
+			DL_AbortChunked(true);
+			return;
+		}
+
+		if ((double)cls.download.size > 5 * 1024 * 1024)
+			Con_Printf("\nwarning: large file size items usually have additional assets, recommended download outside of QSSM\n\n");
+
+		if (cls.download.size)
+		{
+			cls.download.dlblocks = DL_NewBlock(0, cls.download.size, DLB_MISSING);
+			DLC_RequestDownloadChunks();
+		}
+		else
+			DL_FinishChunked();
+		return;
+	}
+
+	data = MSG_ReadData(DLBLOCKSIZE);
+	if (msg_badread)
+		return;
+	if (chunknum < 0 || !cls.download.active || !cls.download.chunked || !cls.download.file)
+		return;
+	if (!cls.download.size)
+		return;
+
+	chunk = (unsigned int)chunknum;
+	maxchunk = (cls.download.size - 1) / DLBLOCKSIZE;
+	if (chunk > maxchunk)
+		return;
+	offset = chunk * DLBLOCKSIZE;
+	wanted = cls.download.size - offset;
+	if (wanted > DLBLOCKSIZE)
+		wanted = DLBLOCKSIZE;
+
+	if (fseek(cls.download.file, offset, SEEK_SET) != 0 ||
+		fwrite(data, 1, wanted, cls.download.file) != wanted)
+	{
+		Con_Warning("Download of %s failed while writing chunk\n", cls.download.current);
+		DL_AbortChunked(true);
+		return;
+	}
+
+	credited = DL_MarkBlockReceived(offset, offset + wanted);
+	if (credited)
+	{
+		cls.download.completedbytes += credited;
+		if (cls.download.completedbytes > cls.download.size)
+			cls.download.completedbytes = cls.download.size;
+		cls.download.ratebytes += credited;
+		CL_DownloadProgress_Update((double)cls.download.completedbytes, (double)cls.download.size);
+	}
+
+	if (realtime > cls.download.ratetime + 1.0 ||
+		cls.download.completedbytes >= cls.download.size)
+	{
+		double dt = realtime - cls.download.ratetime;
+		if (dt <= 0)
+			dt = 1;
+		cls.download.rate = (int)(cls.download.ratebytes / dt);
+		cls.download.ratebytes = 0;
+		cls.download.ratetime = realtime;
+		Con_SafePrintf("Downloading %s (%.1f%%) %d KB/s\r",
+			cls.download.current, cls.download.percent, cls.download.rate / 1024);
+	}
+
+	if (!cls.download.dlblocks)
+		DL_FinishChunked();
+	else
+		DLC_RequestDownloadChunks();
 }
 
 //returns true if we should block waiting for a download, false if there's no point.
@@ -3597,23 +4197,30 @@ qboolean CL_CheckDownload(const char *filename)
 
 	if (allow_download.value == 2) // woods #ftehack
 	{
-		if (!cl.protocol_dpdownload && cl.protocol != 666) // woods, allow downloads on qecrx (nq physics, FTE server) -- hack
+		if (!cl.protocol_dpdownload && !(cl.protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS) && cl.protocol != 666) // woods, allow downloads on qecrx (nq physics, FTE server) -- hack
 			return false;	//can't download anyway
 		if (netquakeio)
 			return false;
 	}
 	else
 	{
-		if (!cl.protocol_dpdownload)
+		if (!cl.protocol_dpdownload && !(cl.protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS))
 			return false;	//can't download anyway
 	}
 
 	CL_DownloadProgress_Begin(filename);
+	cls.download.chunked = !!(cl.protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS);
 	q_snprintf (cls.download.temp, sizeof(cls.download.temp), "%s/%s.tmp", com_gamedir, filename);
 	if (!strstr(filename, ".loc")) // woods, don't show attempt
 		Con_Printf("Downloading %s...\r", filename);
-	MSG_WriteByte (&cls.message, clc_stringcmd);
-	MSG_WriteString (&cls.message, va("download \"%s\"\n", filename));
+	if (!DL_SendDownloadCommand(va("download \"%s\"\n", filename)))
+	{
+		Con_DPrintf("Download request for %s delayed; command buffer is full\n", filename);
+		cls.download.active = false;
+		cls.download.chunked = false;
+		cls.download.current[0] = '\0';
+		cls.download.percent = -1.0f;
+	}
 	return true;
 }
 
@@ -4141,6 +4748,9 @@ int CL_ReadFromServer (void)
 		cl.last_received_message = realtime;
 		CL_ParseServerMessage ();
 	} while (ret && cls.state == ca_connected);
+
+	if (cls.download.active && cls.download.chunked)
+		DLC_RequestDownloadChunks();
 
 //	if (cl_shownet.value)
 //		Con_Printf ("\n");

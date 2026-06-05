@@ -817,6 +817,19 @@ SV_ReadClientMessage
 Returns false if the client should be killed
 ===================
 */
+static qboolean SV_IsEngineDownloadCommand(const char *s)
+{
+	while (*s == ' ' || *s == '\t')
+		s++;
+
+#define IS_CMD(name) (!q_strncasecmp(s, name, sizeof(name) - 1) && \
+	((unsigned char)s[sizeof(name) - 1] <= ' '))
+
+	return IS_CMD("download") || IS_CMD("sv_startdownload") || IS_CMD("nextdl");
+
+#undef IS_CMD
+}
+
 qboolean SV_ReadClientMessage (void)
 {
 	int		ccmd;
@@ -854,7 +867,9 @@ qboolean SV_ReadClientMessage (void)
 			s = MSG_ReadString ();
 			if (!q_strncasecmp(s, "spawn", 5)) 
 				SV_CheckDuplicateNames(host_client); // woods #dupnames
-			if (q_strncasecmp(s, "spawn", 5) && q_strncasecmp(s, "begin", 5) && q_strncasecmp(s, "prespawn", 8) && qcvm->extfuncs.SV_ParseClientCommand)
+			if (SV_IsEngineDownloadCommand(s))
+				Cmd_ExecuteString(s, src_client);
+			else if (q_strncasecmp(s, "spawn", 5) && q_strncasecmp(s, "begin", 5) && q_strncasecmp(s, "prespawn", 8) && qcvm->extfuncs.SV_ParseClientCommand)
 			{	//the spawn/begin/prespawn are because of numerous mods that disobey the rules.
 				//at a minimum, we must be able to join the server, so that we can see any sprints/bprints (because dprint sucks, yes there's proper ways to deal with this, but moders don't always know them).
 				client_t *ohc = host_client;

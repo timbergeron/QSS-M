@@ -2396,12 +2396,14 @@ void SV_Pext_f(void)
 	if (!host_client->pextknown && !host_client->spawned)
 	{
 		int i;
-		int key;
-		int value;
-		for (i = 1; i < Cmd_Argc(); i+=2)
+		unsigned int key;
+		unsigned int value;
+		int argc = Cmd_Argc();
+
+		for (i = 1; i + 1 < argc; i+=2)
 		{
-			key = strtoul(Cmd_Argv(i), NULL, 0);
-			value = strtoul(Cmd_Argv(i+1), NULL, 0);
+			key = (unsigned int)strtoul(Cmd_Argv(i), NULL, 0);
+			value = (unsigned int)strtoul(Cmd_Argv(i+1), NULL, 0);
 
 			if (key == PROTOCOL_FTE_PEXT1)
 				host_client->protocol_pext1 = value & PEXT1_SUPPORTED_SERVER;
@@ -2602,6 +2604,7 @@ void SV_ConnectClient (int clientnum)
 	client->datagram.allowoverflow = true;		//simply ignored on overflow
 
 	client->pextknown = false;
+	client->protocol_pext1 = 0;
 	client->protocol_pext2 = 0;
 
 	if (sv.loadgame)
@@ -3390,9 +3393,9 @@ qboolean SV_SendClientDatagram (client_t *client)
 
 	msg.allowoverflow = false;
 	msg.data = buf;
-	msg.maxsize = q_min(sizeof(buf), client->limit_unreliable);
+	msg.maxsize = q_min((int)sizeof(buf), (int)client->limit_unreliable);
 	msg.cursize = 0;
-	if (client->download.file)
+	if (client->download.file && !client->download.chunked)
 		msg.maxsize /= 2;	//make sure there's space for download data
 
 	host_client = client;
@@ -3485,8 +3488,47 @@ qboolean SV_SendClientDatagram (client_t *client)
 
 	SV_VoiceSendPacket(client, &msg);
 
-	msg.maxsize = q_min(sizeof(buf), client->limit_unreliable);
-	Host_AppendDownloadData(client, &msg);
+	if (client->download.file && client->download.chunked && msg.cursize)
+	{
+		if (NET_SendUnreliableMessage(client->netconnection, &msg) == -1)
+		{
+			/* SV_DropClient uses host_client; keep the coupling explicit here. */
+			host_client = client;
+			SV_DropClient(false);
+			return false;
+		}
+		SZ_Clear(&msg);
+	}
+
+	if (client->download.file && client->download.chunked)
+	{
+		enum { MAX_CHUNKED_DOWNLOAD_PACKETS = 8 };
+		int dlpackets = 0;
+
+		while (client->download.chunkqueue_count && dlpackets < MAX_CHUNKED_DOWNLOAD_PACKETS)
+		{
+			qboolean appended;
+
+			msg.maxsize = q_min((int)sizeof(buf), (int)client->limit_unreliable);
+			msg.cursize = 0;
+			appended = Host_AppendDownloadData(client, &msg);
+			if (!appended)
+				break;
+			if (msg.cursize &&
+				NET_SendUnreliableMessage(client->netconnection, &msg) == -1)
+			{
+				host_client = client;
+				SV_DropClient(false);
+				return false;
+			}
+			SZ_Clear(&msg);
+			dlpackets++;
+		}
+		return true;
+	}
+
+	msg.maxsize = q_min((int)sizeof(buf), (int)client->limit_unreliable);
+	(void)Host_AppendDownloadData(client, &msg);
 
 
 // send the datagram

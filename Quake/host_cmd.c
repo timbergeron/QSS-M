@@ -10823,6 +10823,38 @@ void Host_Say_Rand_f(void) // woods JPG - proquake #sayrandom
 //=============================================================================
 //download stuff
 
+static void Host_CloseDownload(client_t *client)
+{
+	if (client->download.file)
+		fclose(client->download.file);
+	memset(&client->download, 0, sizeof(client->download));
+}
+
+static void Host_SendChunkedDownloadStart(client_t *client, int size_or_error, const char *name)
+{
+	char safe_name[MAX_QPATH];
+
+	/* QSS-M currently caps game-server downloads at 50 MB, so it sends plain
+	 * 32-bit sizes. The client parser still accepts FTE's 64-bit marker for
+	 * interoperability with other servers. */
+	q_strlcpy(safe_name, name ? name : "", sizeof(safe_name));
+	MSG_WriteByte(&client->message, svc_download);
+	MSG_WriteLong(&client->message, -1);
+	MSG_WriteLong(&client->message, size_or_error);
+	MSG_WriteString(&client->message, safe_name);
+	if (!client->spawned)
+		client->sendsignon = PRESPAWN_FLUSH;
+}
+
+static void Host_FailChunkedDownload(client_t *client)
+{
+	char name[MAX_QPATH];
+
+	q_strlcpy(name, client->download.name, sizeof(name));
+	Host_CloseDownload(client);
+	Host_SendChunkedDownloadStart(client, DLERR_UNKNOWN, name);
+}
+
 static void Host_Download_f(void)
 {
 	const char *fname = Cmd_Argv(1);
@@ -10838,64 +10870,100 @@ static void Host_Download_f(void)
 	}
 	else if (cmd_source == src_client)
 	{
+		int refusal_error = 0;
+
 		if (host_client->download.file)
 		{	//abort the current download if the previous didn't terminate properly.
 			SV_ClientPrintf("cancelling previous download\n");
 			MSG_WriteByte (&host_client->message, svc_stufftext);
 			MSG_WriteString (&host_client->message, "\nstopdownload\n");
-			fclose(host_client->download.file);
-			host_client->download.file = NULL;
+			Host_CloseDownload(host_client);
 		}
 
 		host_client->download.size = 0;
+		host_client->download.chunked = false;
 		host_client->download.started = false;
 		host_client->download.sendpos = 0;
 		host_client->download.ackpos = 0;
+		host_client->download.chunkqueue_head = 0;
+		host_client->download.chunkqueue_count = 0;
 		
 		fsize = -1;
 		if (!COM_DownloadNameOkay(fname))
+		{
 			SV_ClientPrintf("refusing download of %s - restricted filename\n", fname);
+			refusal_error = DLERR_PERMISSIONS;
+		}
 		else
 		{
 			fsize = COM_FOpenFile(fname, &host_client->download.file, NULL);
 			if (!host_client->download.file)
+			{
 				SV_ClientPrintf("server does not have file %s\n", fname);
+				refusal_error = DLERR_FILENOTFOUND;
+			}
 			else if (file_from_pak)
 			{
 				SV_ClientPrintf("refusing download of %s from inside pak\n", fname);
 				fclose(host_client->download.file);
 				host_client->download.file = NULL;
+				refusal_error = DLERR_PERMISSIONS;
 			}
 			else if (fsize < 0 || fsize > 50*1024*1024)
 			{
 				SV_ClientPrintf("refusing download of large file %s\n", fname);
 				fclose(host_client->download.file);
 				host_client->download.file = NULL;
+				refusal_error = DLERR_PERMISSIONS;
 			}
 		}
 
-		host_client->download.size = (unsigned int)fsize;
 		if (host_client->download.file)
 		{
-			host_client->download.startpos = ftell(host_client->download.file);
-			Con_Printf("downloading %s to %s\n", fname, host_client->name);
-			MSG_WriteByte (&host_client->message, svc_stufftext);
-			MSG_WriteString (&host_client->message, va("\ncl_downloadbegin %u \"%s\"\n", host_client->download.size, fname));
-			q_strlcpy(host_client->download.name, fname, sizeof(host_client->download.name));
+			long startpos = ftell(host_client->download.file);
+
+			if (startpos < 0)
+			{
+				SV_ClientPrintf("refusing download of %s - unable to seek file\n", fname);
+				Host_CloseDownload(host_client);
+				refusal_error = DLERR_UNKNOWN;
+			}
+			else
+			{
+				host_client->download.size = (unsigned int)fsize;
+				host_client->download.startpos = (unsigned int)startpos;
+				host_client->download.chunked =
+					(host_client->protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS) &&
+					host_client->limit_unreliable >= DL_CHUNK_PACKET_SIZE;
+				Con_Printf("downloading %s to %s\n", fname, host_client->name);
+				if (host_client->download.chunked)
+					Host_SendChunkedDownloadStart(host_client, (int)host_client->download.size, fname);
+				else
+				{
+					MSG_WriteByte (&host_client->message, svc_stufftext);
+					MSG_WriteString (&host_client->message, va("\ncl_downloadbegin %u \"%s\"\n", host_client->download.size, fname));
+				}
+				q_strlcpy(host_client->download.name, fname, sizeof(host_client->download.name));
+				refusal_error = 0;
+			}
 		}
-		else if (!COM_FileExists(fname, NULL) && strstr(fname, ".loc")) // woods, more info for .loc refusals
+		if (!host_client->download.file && refusal_error)
 		{
-			Con_Printf("%s attempted download of %s, server does not have file\n", host_client->name, fname);
-			MSG_WriteByte(&host_client->message, svc_stufftext);
-			MSG_WriteString(&host_client->message, "\nstopdownload\n");
+			if (refusal_error == DLERR_FILENOTFOUND && strstr(fname, ".loc")) // woods, more info for .loc refusals
+				Con_Printf("%s attempted download of %s, server does not have file\n", host_client->name, fname);
+			else
+				Con_Printf("refusing download of %s to %s\n", fname, host_client->name);
+
+			if (host_client->protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS)
+				Host_SendChunkedDownloadStart(host_client, refusal_error, fname);
+			else
+			{
+				MSG_WriteByte (&host_client->message, svc_stufftext);
+				MSG_WriteString (&host_client->message, "\nstopdownload\n");
+			}
 		}
-		else
-		{
-			Con_Printf("refusing download of %s to %s\n", fname, host_client->name);
-			MSG_WriteByte (&host_client->message, svc_stufftext);
-			MSG_WriteString (&host_client->message, "\nstopdownload\n");
-		}
-		host_client->sendsignon = PRESPAWN_FLUSH;	//override any keepalive issues. woods - switch to enum
+		if (!host_client->download.chunked || !host_client->spawned)
+			host_client->sendsignon = PRESPAWN_FLUSH;	//override any keepalive issues. woods - switch to enum
 	}
 }
 
@@ -10922,16 +10990,78 @@ static void Host_StartDownload_f(void)
 {
 	if (cmd_source != src_client)
 		return;
-	if (host_client->download.file)
+	if (host_client->download.file && !host_client->download.chunked)
 		host_client->download.started = true;
+	else if (host_client->download.file)
+		return;
 	else
 		SV_ClientPrintf("no download started\n");
 }
 //just writes download data onto the end of the outgoing unreliable buffer
-void Host_AppendDownloadData(client_t *client, sizebuf_t *buf)
+static void Host_PopDownloadChunk(client_t *client)
 {
-	if (buf->cursize+7 > buf->maxsize)
-		return;	//no space for anything
+	client->download.chunkqueue_head =
+		(client->download.chunkqueue_head + 1) % countof(client->download.chunkqueue);
+	client->download.chunkqueue_count--;
+}
+
+qboolean Host_AppendDownloadData(client_t *client, sizebuf_t *buf)
+{
+	if (buf->cursize > buf->maxsize - DL_LEGACY_HEADER_SIZE)
+		return false;	//no space for anything
+	if (client->download.file && client->download.chunked)
+	{
+		byte tbuf[DLBLOCKSIZE];
+		size_t got, wanted;
+		qboolean sent = false;
+		if (!client->download.size)
+		{
+			Host_CloseDownload(client);
+			return false;
+		}
+		while (client->download.chunkqueue_count)
+		{
+			unsigned int chunk =
+				client->download.chunkqueue[client->download.chunkqueue_head];
+			unsigned int maxchunk = (client->download.size - 1) / DLBLOCKSIZE;
+			unsigned int offset;
+
+			if (buf->cursize > buf->maxsize - DL_CHUNK_PACKET_SIZE)
+				break;
+
+			if (chunk > maxchunk)
+			{
+				Host_PopDownloadChunk(client);
+				continue;
+			}
+			offset = chunk * DLBLOCKSIZE;
+
+			if (fseek(client->download.file, client->download.startpos + offset, SEEK_SET) != 0)
+			{
+				Host_FailChunkedDownload(client);
+				return sent;
+			}
+
+			wanted = client->download.size - offset;
+			if (wanted > sizeof(tbuf))
+				wanted = sizeof(tbuf);
+			got = fread(tbuf, 1, wanted, client->download.file);
+			if (got != wanted)
+			{
+				Host_FailChunkedDownload(client);
+				return sent;
+			}
+			if (got < sizeof(tbuf))
+				memset(tbuf + got, 0, sizeof(tbuf) - got);
+
+			Host_PopDownloadChunk(client);
+			MSG_WriteByte(buf, svc_download);
+			MSG_WriteLong(buf, chunk);
+			SZ_Write(buf, tbuf, DLBLOCKSIZE);
+			sent = true;
+		}
+		return sent;
+	}
 	if (client->download.file && client->download.started)
 	{
 		byte tbuf[1024];	//keep small enough to fit within DTLS MTU after SCTP+netchan overhead
@@ -10939,10 +11069,10 @@ void Host_AppendDownloadData(client_t *client, sizebuf_t *buf)
 		//size might be 0 at eof, and that's needed to avoid failure if we drop the last few packets
 		if (size > sizeof(tbuf))
 			size = sizeof(tbuf);
-		if ((int)size > buf->maxsize-(buf->cursize+7))
-			size = (int)(buf->maxsize-(buf->cursize+7));	//don't overflow
+		if (size > (unsigned int)(buf->maxsize - buf->cursize - DL_LEGACY_HEADER_SIZE))
+			size = (unsigned int)(buf->maxsize - buf->cursize - DL_LEGACY_HEADER_SIZE);	//don't overflow
 
-		if (size && fread(tbuf, 1, size, host_client->download.file) < size)
+		if (size && fread(tbuf, 1, size, client->download.file) < size)
 			client->download.ackpos = client->download.sendpos = client->download.size;	//some kind of error...
 		else
 		{
@@ -10951,9 +11081,68 @@ void Host_AppendDownloadData(client_t *client, sizebuf_t *buf)
 			MSG_WriteShort(buf, size);
 			SZ_Write(buf, tbuf, size);
 			client->download.sendpos += size;
+			return true;
 		}
 	}
+	return false;
 }
+//parses incoming acks from the client, so we know which parts of the file the client actually received.
+static qboolean Host_DownloadChunkQueued(client_t *client, unsigned int chunk)
+{
+	unsigned int i;
+
+	for (i = 0; i < client->download.chunkqueue_count; i++)
+	{
+		unsigned int idx = (client->download.chunkqueue_head + i) % countof(client->download.chunkqueue);
+		if (client->download.chunkqueue[idx] == chunk)
+			return true;
+	}
+	return false;
+}
+
+static void Host_NextDownload_f(void)
+{
+	long chunknum;
+	unsigned int maxchunk;
+	unsigned int chunk, tail;
+	char *end;
+
+	if (cmd_source != src_client)
+		return;
+	if (!host_client->download.file || !host_client->download.chunked)
+		return;
+	if (Cmd_Argc() < 2)
+		return;
+
+	errno = 0;
+	chunknum = strtol(Cmd_Argv(1), &end, 0);
+	if (errno || end == Cmd_Argv(1) || *end)
+		return;
+	if (chunknum < 0)
+	{
+		Host_CloseDownload(host_client);
+		return;
+	}
+	if (!host_client->download.size)
+		return;
+	maxchunk = (host_client->download.size - 1) / DLBLOCKSIZE;
+	if ((unsigned long)chunknum > maxchunk)
+		return;
+
+	/* Keep one chunk per nextdl to avoid request amplification; the client can
+	 * pipeline separate nextdl commands. */
+	chunk = (unsigned int)chunknum;
+	if (host_client->download.chunkqueue_count >= countof(host_client->download.chunkqueue))
+		return;
+	if (Host_DownloadChunkQueued(host_client, chunk))
+		return;
+
+	tail = (host_client->download.chunkqueue_head +
+		host_client->download.chunkqueue_count) % countof(host_client->download.chunkqueue);
+	host_client->download.chunkqueue[tail] = chunk;
+	host_client->download.chunkqueue_count++;
+}
+
 //parses incoming acks from the client, so we know which parts of the file the client actually received.
 void Host_DownloadAck(client_t *client)
 {
@@ -11208,6 +11397,7 @@ void Host_InitCommands (void)
 	Cmd_AddCommand_ClientCommandQC ("resurrect", Host_Resurrect_f); // woods #resurrect
 	Cmd_AddCommand_ClientCommand ("download", Host_Download_f);
 	Cmd_AddCommand_ClientCommand ("sv_startdownload", Host_StartDownload_f);
+	Cmd_AddCommand_ClientCommand ("nextdl", Host_NextDownload_f);
 	Cmd_AddCommand_ClientCommand ("enablecsqc", Host_EnableCSQC_f);
 	Cmd_AddCommand_ClientCommand ("disablecsqc", Host_DisableCSQC_f);
 	Cmd_AddCommand_ClientCommand ("modvote", Host_Modvote_f);

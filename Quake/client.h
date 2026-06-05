@@ -136,6 +136,20 @@ ca_disconnected, 	// full screen console with no connection
 ca_connected		// valid netcon, talking to a server
 } cactive_t;
 
+typedef enum {
+	DLB_MISSING,
+	DLB_PENDING
+} dlblock_state_t;
+
+typedef struct dlblock_s
+{
+	unsigned int start;
+	unsigned int end;
+	dlblock_state_t state;
+	double requesttime;
+	struct dlblock_s *next;
+} dlblock_t;
+
 //
 // the client_static_t structure is persistant through an arbitrary number
 // of server connections
@@ -206,6 +220,13 @@ typedef struct
 		qboolean active;
 		unsigned int size;
 		FILE	*file;
+		qboolean chunked;
+		unsigned int completedbytes;
+		unsigned int ratebytes;
+		int		rate;
+		double	ratetime;
+		double	chunkedstaleuntil;
+		dlblock_t *dlblocks;
 		char	current[MAX_QPATH];	//also prevents us from repeatedly trying to download the same file
 		char	temp[MAX_OSPATH];		//the temp filename for the download, will be renamed to current
 		float	starttime;
@@ -609,6 +630,8 @@ void CL_BaseMove (usercmd_t *cmd, qboolean isfinal);
 void CL_FinishMove(usercmd_t *cmd, qboolean isfinal);
 
 void CL_Download_Data(void);
+void CL_Download_Chunked(void);
+qboolean CL_Download_ShouldParseChunked(void);
 qboolean CL_CheckDownloads(void);
 void CL_InitWebDownloads(qboolean run_checks);
 qboolean CL_QWMapListDownloadsAvailable(void);
