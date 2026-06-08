@@ -3553,7 +3553,9 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			}
 			else
 			{
-				if (!strncmp(buf2, "26.", 3))
+				if (!strncmp(buf2, "27.", 3))
+					os_codename = "macOS Golden Gate (2026)";
+				else if (!strncmp(buf2, "26.", 3))
 					os_codename = "macOS Tahoe (2025)";
 				else if (!strncmp(buf2, "15.", 3))
 					os_codename = "macOS Sequoia (2024)";
