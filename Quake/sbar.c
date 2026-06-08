@@ -2738,7 +2738,11 @@ void Sbar_DeathmatchOverlay (void)
 				notready = false;
 		}
 
-		if (k == cl.viewentity - 1) // #scoreboard
+		if (S_Voip_Speaking(k))	// spike -- speaking underlay, adjusted for QSS-M's centered scoreboard
+		{
+			Draw_Fill(x - 63, y, 328 + w, 10, ((k + 1) == cl.viewentity) ? 75 : 73, .8);
+		}
+		else if (k == cl.viewentity - 1) // #scoreboard
 		{
 			Draw_Fill(x - 63, y, 328 + w, 10, 20, .8);  // woods
 		}
@@ -2749,12 +2753,6 @@ void Sbar_DeathmatchOverlay (void)
 
 		Draw_Fill(x - 64, y, 1, 10, 0, 1);	//Border - Left // woods #scoreboard
 		Draw_Fill(x + 264 + w, y, 1, 10, 0, 1);	//Border - Right // woods #scoreboard
-
-	// draw background
-		if (S_Voip_Speaking(k))	//spike -- display an underlay for people who are speaking
-			Draw_Fill ( x, y, 320-x*2, 8, ((k+1)==cl.viewentity)?75:73, 1);
-		//else
-		//	Draw_Fill ( x, y, 320-x*2, 8, 0, 0.3);	//or darken it for readability. noisy backgrounds make text hard to read.
 
 		if (s->spectator == 1)	//2 is 'spectator-with-scores' (temporarily inactive players).
 		{
