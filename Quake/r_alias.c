@@ -127,6 +127,9 @@ static aliasglsl_t r_alias_glsl[ALIAS_GLSL_MODES];
 #define boneWeightAttrIndex pose2VertexAttrIndex
 #define boneIndexAttrIndex pose2NormalAttrIndex
 
+#define ALIAS_UPPER_TEXTURE_UNIT_INDEX 3
+#define ALIAS_EXTRA_SHELL_TEXTURE_UNIT_INDEX 4
+
 /*
 =============
 GLARB_GetXYZOffset
@@ -502,10 +505,10 @@ void GLAlias_CreateShaders (void)
 			GL_Uniform1iFunc (glsl->texLoc, 0);
 			GL_Uniform1iFunc (glsl->fullbrightTexLoc, 1);
 			GL_Uniform1iFunc (glsl->lowerTexLoc, 2);
-			GL_Uniform1iFunc (glsl->upperTexLoc, 3);
+			GL_Uniform1iFunc (glsl->upperTexLoc, ALIAS_UPPER_TEXTURE_UNIT_INDEX);
 			GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f); // woods #routline
 			GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0); // woods #routline
-			GL_Uniform1iFunc (glsl->shellTexLoc, 3);  // woods #powershell
+			GL_Uniform1iFunc (glsl->shellTexLoc, ALIAS_UPPER_TEXTURE_UNIT_INDEX);  // woods #powershell
 			GL_Uniform1iFunc(glsl->shellModeLoc, 0);  // woods #powershell
 			GL_Uniform1fFunc(glsl->shellTimeLoc, 0.0f);  // woods #powershell
 			GL_Uniform4fFunc(glsl->shellWaveParamsLoc, 0.1f, 4.0f, 0.0f, 0.0f);  // woods #powershell
@@ -1708,16 +1711,33 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 	GL_Uniform1iFunc(glsl->shellModeLoc, 0);
 }
 
-static void ApplyShellEffect(aliasglsl_t* glsl, float red, float green, float blue, float time, float alpha) // -- woods #powershell
+static qboolean R_AliasShellTextureUnit(struct skintextures_s tex, int *unit)
+{
+	if (tex.upper)
+	{
+		if (gl_max_texture_image_units <= ALIAS_EXTRA_SHELL_TEXTURE_UNIT_INDEX)
+			return false;
+		*unit = ALIAS_EXTRA_SHELL_TEXTURE_UNIT_INDEX;
+		return true;
+	}
+
+	if (gl_max_texture_image_units <= ALIAS_UPPER_TEXTURE_UNIT_INDEX)
+		return false;
+	*unit = ALIAS_UPPER_TEXTURE_UNIT_INDEX;
+	return true;
+}
+
+static void ApplyShellEffect(aliasglsl_t* glsl, float red, float green, float blue, float time, float alpha, int shell_unit) // -- woods #powershell
 {
 	GL_Uniform1iFunc(glsl->useShellTexLoc, 1);
-	GL_SelectTexture(GL_TEXTURE0);
-	GL_SelectTexture(GL_TEXTURE3);
+	GL_Uniform1iFunc(glsl->shellTexLoc, shell_unit);
+	GL_SelectTexture(GL_TEXTURE0_ARB + shell_unit);
 	GL_ClearBindings();
 	GL_Bind(shelltexture);
 	GL_Uniform1fFunc(glsl->clTimeLoc, time);
 	GL_Uniform3fFunc(glsl->shellColorLoc, red, green, blue);
 	GL_Uniform1fFunc(glsl->shellAlphaLoc, alpha);
+	GL_SelectTexture(GL_TEXTURE0);
 }
 
 static qboolean R_GetPowerupPickupShellColor(entity_t* e, vec3_t color) // -- woods #powershell
@@ -1805,28 +1825,30 @@ static void R_DrawPowerupPickupShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, l
 	GL_Uniform1iFunc(glsl->shellModeLoc, 0);
 }
 
-static qboolean R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- woods #powershell
+static qboolean R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e, struct skintextures_s tex, int *shell_unit) // -- woods #powershell
 {
 	int powerup_items = cl.items | (M_LivePreview_UsePowerupShells() ? IT_QUAD : 0);
 	vec3_t pickup_shell_color;
 
+	*shell_unit = -1;
 	GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
 
 	if (!r_coloredpowerupglow.value || gl_powerupshells.value <= 0.0f)
+		return false;
+	if (!shelltexture)
+		return false;
+	if (!R_AliasShellTextureUnit(tex, shell_unit))
 		return false;
 
 	if (R_GetPowerupPickupShellColor(e, pickup_shell_color))
 	{
 		float shellAlpha;
 
-		if (!shelltexture)
-			return false;
-
 		shellAlpha = R_PowerupShellTextureAlpha();
 		if (shellAlpha <= 0.0001f)
 			return false;
 
-		ApplyShellEffect(glsl, pickup_shell_color[0], pickup_shell_color[1], pickup_shell_color[2], cl.time, shellAlpha);
+		ApplyShellEffect(glsl, pickup_shell_color[0], pickup_shell_color[1], pickup_shell_color[2], cl.time, shellAlpha, *shell_unit);
 		return true;
 	}
 
@@ -1850,7 +1872,7 @@ static qboolean R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- 
 				float green = dhuecolor[1] / 255.0f * 0.7f;
 				float blue = dhuecolor[2] / 255.0f * 0.7f;
 				
-				ApplyShellEffect(glsl, red, green, blue, cl.time, shellAlpha);
+				ApplyShellEffect(glsl, red, green, blue, cl.time, shellAlpha, *shell_unit);
 				return true;
 			}
 		}
@@ -1866,11 +1888,11 @@ static qboolean R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- 
 					return false;
 
 				if ((powerup_items & IT_QUAD) && (powerup_items & IT_INVULNERABILITY))
-					ApplyShellEffect(glsl, 1.0f, 0.0f, 1.0f, cl.time, shellAlpha);
+					ApplyShellEffect(glsl, 1.0f, 0.0f, 1.0f, cl.time, shellAlpha, *shell_unit);
 				else if (powerup_items & IT_QUAD)
-					ApplyShellEffect(glsl, 0.0f, 0.0f, 1.0f, cl.time, shellAlpha);
+					ApplyShellEffect(glsl, 0.0f, 0.0f, 1.0f, cl.time, shellAlpha, *shell_unit);
 				else if (powerup_items & IT_INVULNERABILITY)
-					ApplyShellEffect(glsl, 1.0f, 0.0f, 0.0f, cl.time, shellAlpha);
+					ApplyShellEffect(glsl, 1.0f, 0.0f, 0.0f, cl.time, shellAlpha, *shell_unit);
 				else
 					return false;
 				return true;
@@ -1881,11 +1903,14 @@ static qboolean R_ApplyPowerupShellEffect(aliasglsl_t* glsl, entity_t* e) // -- 
 	return false;
 }
 
-static void R_RestoreAliasShellTextureState(aliasglsl_t* glsl, struct skintextures_s tex) // -- woods #powershell
+static void R_RestoreAliasShellTextureState(aliasglsl_t* glsl, int shell_unit) // -- woods #powershell
 {
 	GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
-	GL_SelectTexture(GL_TEXTURE3);
-	GL_Bind(tex.upper);
+	if (shell_unit >= 0)
+	{
+		GL_SelectTexture(GL_TEXTURE0_ARB + shell_unit);
+		GL_Bind(NULL);
+	}
 	GL_SelectTexture(GL_TEXTURE0);
 }
 
@@ -1920,6 +1945,7 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	GLfloat	tints[3][4];
 	float	blend;
 	qboolean applied_shell;
+	int shell_unit;
 
 	if (!currententity->model) // woods -- flush guard
 		return;
@@ -2139,12 +2165,12 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 
 	R_BeginAliasOutlineRendering(glsl); // woods #routline
 
-	applied_shell = R_ApplyPowerupShellEffect(glsl, e); // woods #powershell
+	applied_shell = R_ApplyPowerupShellEffect(glsl, e, tex, &shell_unit); // woods #powershell
 
 // draw
 	glDrawElements (GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT, currententity->model->meshindexesvboptr+paliashdr->eboofs);
 	if (applied_shell)
-		R_RestoreAliasShellTextureState(glsl, tex); // woods #powershell
+		R_RestoreAliasShellTextureState(glsl, shell_unit); // woods #powershell
 
 	if (e != &cl.viewent)
 	{

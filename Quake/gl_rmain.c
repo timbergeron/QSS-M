@@ -212,6 +212,7 @@ void GLSLGamma_DeleteTexture (void)
 	r_gamma_texture = 0;
 	r_softemu_lut_texture = 0;
 	r_softemu_palette_texture = 0;
+	GL_ClearBindings ();
 	r_softemu_lut_built = false;
 	r_softemu_lut_palette_hash = 0;
 	r_softemu_palette_texture_allocated = false;
@@ -242,7 +243,7 @@ static int GLSLGamma_SoftEmuMode (void)
 
 static qboolean GLSLGamma_SoftEmuAvailable (void)
 {
-	return GLSLGamma_SoftEmuMode() > 0 && gl_glsl_gamma_able && gl_mtexable && gl_max_texture_units >= 3;
+	return GLSLGamma_SoftEmuMode() > 0 && gl_glsl_gamma_able && gl_mtexable && gl_max_texture_image_units >= 3;
 }
 
 static qboolean GLSLGamma_SoftEmuApplyBlend (void)
@@ -330,6 +331,7 @@ static qboolean GLSLGamma_EnsureSoftEmuLUT (void)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	GL_SelectTexture(GL_TEXTURE0_ARB);
+	GL_ClearBindings ();
 
 	free(lutdata);
 	r_softemu_lut_built = true;
@@ -387,6 +389,7 @@ static qboolean GLSLGamma_UpdateSoftEmuPalette (float gamma_value, float contras
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		GL_SelectTexture(GL_TEXTURE0_ARB);
+		GL_ClearBindings ();
 		r_softemu_palette_texture_allocated = true;
 		dirty = true;
 	}
@@ -423,6 +426,7 @@ static qboolean GLSLGamma_UpdateSoftEmuPalette (float gamma_value, float contras
 	glBindTexture(GL_TEXTURE_2D, r_softemu_palette_texture);
 	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, paldata);
 	GL_SelectTexture(GL_TEXTURE0_ARB);
+	GL_ClearBindings ();
 
 	r_softemu_palette_valid = true;
 	r_softemu_palette_hash = palette_hash;
@@ -552,11 +556,11 @@ void GLSLGamma_GammaCorrect (void)
 		return;
 	}
 
-	if (softemu_mode && (!gl_mtexable || gl_max_texture_units < 3))
+	if (softemu_mode && (!gl_mtexable || gl_max_texture_image_units < 3))
 	{
 		if (!softemu_warned)
 		{
-			Con_Warning("r_softemu requires at least 3 texture units\n");
+			Con_Warning("r_softemu requires at least 3 shader texture units\n");
 			softemu_warned = true;
 		}
 		softemu_mode = 0;
@@ -695,6 +699,7 @@ void R_RenderSceneBlur(float alpha)
 
 	GL_DisableMultitexture();
 	glBindTexture(GL_TEXTURE_2D, sceneblur_texture);
+	GL_ClearBindings();
 
 	if (sceneblur_texture_width != tgt_w ||
 		sceneblur_texture_height != tgt_h)
@@ -756,6 +761,7 @@ void R_RenderSceneBlur(float alpha)
 	// Update history texture
 	glBindTexture(GL_TEXTURE_2D, sceneblur_texture);
 	glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, glx, gly, glwidth, glheight);
+	GL_ClearBindings();
 }
 
 
@@ -772,6 +778,7 @@ void R_MotionBlur_DeleteTexture (void) // woods #motionblur
 		sceneblur_texture = 0;
 		sceneblur_texture_width = 0;
 		sceneblur_texture_height = 0;
+		GL_ClearBindings ();
 	}
 }
 
@@ -2807,6 +2814,7 @@ void R_ScaleView_DeleteTexture (void)
 {
 	glDeleteTextures (1, &r_scaleview_texture);
 	r_scaleview_texture = 0;
+	GL_ClearBindings ();
 }
 
 /*

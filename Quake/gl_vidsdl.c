@@ -131,6 +131,7 @@ qboolean gl_texture_NPOT = false; //ericw
 qboolean gl_vbo_able = false; //ericw
 qboolean gl_glsl_able = false; //ericw
 GLint gl_max_texture_units = 0; //ericw
+GLint gl_max_texture_image_units = 0;
 qboolean gl_glsl_gamma_able = false; //ericw
 qboolean gl_glsl_alias_able = false; //ericw
 qboolean gl_glsl_water_able = false; //Spoike
@@ -1383,6 +1384,7 @@ static void GL_CheckExtensions (void)
 		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 2.0f);
 		glGetTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, &test2);
 		glDeleteTextures(1, &tex);
+		GL_ClearBindings ();
 
 		if (test1 == 1 && test2 == 2)
 		{
@@ -1495,6 +1497,9 @@ static void GL_CheckExtensions (void)
 		{
 			if (cls.state == ca_disconnected) // woods #supressvidmsgs
 				Con_Printf("FOUND: GLSL\n");
+			glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &gl_max_texture_image_units);
+			if (cls.state == ca_disconnected) // woods #supressvidmsgs
+				Con_Printf("GL_MAX_TEXTURE_IMAGE_UNITS: %d\n", (int)gl_max_texture_image_units);
 			gl_glsl_able = true;
 		}
 		else
@@ -1613,7 +1618,7 @@ static void GL_CheckExtensions (void)
     //
 	if (COM_CheckParm("-noglslalias"))
 		Con_Warning ("GLSL alias model rendering disabled at command line\n");
-	else if (gl_glsl_able && gl_vbo_able && gl_max_texture_units >= 3)
+	else if (gl_glsl_able && gl_vbo_able && gl_mtexable && gl_max_texture_image_units >= 4)
 	{
 		gl_glsl_alias_able = true;
 		if (cls.state == ca_disconnected) // woods #supressvidmsgs

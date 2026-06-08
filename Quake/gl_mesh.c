@@ -2163,7 +2163,8 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 		//but we do so anyway, because rerelease compat.
 		for (surf->numskins = 0; surf->numskins < MAX_SKINS; surf->numskins++)
 		{
-			unsigned int fwidth, fheight, f;
+			int fwidth, fheight;
+			unsigned int f;
 			enum srcformat fmt;
 			qboolean malloced;
 			void *data;
@@ -2172,7 +2173,7 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 			{
 				q_snprintf(texname, sizeof(texname), "progs/%s_%02u_%02u", com_token, surf->numskins, f);
 
-				data = Image_LoadImage (texname, (int*)&fwidth, (int*)&fheight, &fmt, &malloced);
+				data = Image_LoadImage (texname, &fwidth, &fheight, &fmt, &malloced);
 				//now load whatever we found
 				if (data) //load external image
 				{
@@ -2182,7 +2183,8 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 					surf->textures[surf->numskins][f].luma = NULL;
 					if (fmt == SRC_INDEXED)
 					{	//8bit base texture. use it for fullbrights.
-						for (j = 0; j < fwidth*fheight; j++)
+						size_t pixels = (size_t)fwidth * (size_t)fheight;
+						for (j = 0; j < pixels; j++)
 						{
 							if (((byte*)data)[j] > 223)
 							{

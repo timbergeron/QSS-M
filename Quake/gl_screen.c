@@ -7762,6 +7762,7 @@ void FXAA_VidFxaaChanged(cvar_t *v)
         if (fxaa.color_texture) {
             glDeleteTextures(1, &fxaa.color_texture);
             fxaa.color_texture = 0;
+            GL_ClearBindings();
         }
         
         if (fxaa.depth_renderbuffer) {
@@ -7804,6 +7805,7 @@ void FXAA_CvarChanged(cvar_t *v)
         if (fxaa.color_texture) {
             glDeleteTextures(1, &fxaa.color_texture);
             fxaa.color_texture = 0;
+            GL_ClearBindings();
         }
         
         if (fxaa.depth_renderbuffer) {
@@ -8090,6 +8092,7 @@ void FXAA_Shutdown(void)
     if (fxaa.color_texture) {
         glDeleteTextures(1, &fxaa.color_texture);
         fxaa.color_texture = 0;
+        GL_ClearBindings();
     }
     
     if (fxaa.depth_renderbuffer) {
@@ -8130,6 +8133,7 @@ static qboolean FXAA_CreateFramebuffer(int width, int height)
         if (fxaa.color_texture) {
             glDeleteTextures(1, &fxaa.color_texture);
             fxaa.color_texture = 0;
+            GL_ClearBindings();
         }
         
         if (fxaa.depth_renderbuffer) {
@@ -8147,6 +8151,7 @@ static qboolean FXAA_CreateFramebuffer(int width, int height)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        GL_ClearBindings();
         
         // Create depth-stencil renderbuffer (combined for outline/shell effects)
         GL_GenRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
@@ -8224,10 +8229,17 @@ void FXAA_EndFrame(void)
     GLint polygonMode[2];
     glGetIntegerv(GL_POLYGON_MODE, polygonMode);
     GLint activeTexture = GL_TEXTURE0;
+    GLint activeTextureBinding = 0;
+    GLint texture0Binding = 0;
     if (GL_SelectTextureFunc)
+    {
         glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
-    GLint boundTexture = 0;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &boundTexture);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &activeTextureBinding);
+        GL_SelectTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture0Binding);
+    }
+    else
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture0Binding);
         
     // Bind back buffer
     GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
@@ -8250,8 +8262,9 @@ void FXAA_EndFrame(void)
     
     // Bind texture and set uniforms
     if (GL_SelectTextureFunc)
-    GL_SelectTextureFunc(GL_TEXTURE0);
+        GL_SelectTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fxaa.color_texture);
+    GL_ClearBindings();
     
     if (prog == fxaa.program_fte) {
         GL_Uniform1iFunc(fxaa.u_tex_fte, 0);
@@ -8273,14 +8286,21 @@ void FXAA_EndFrame(void)
     
     // Cleanup
     GL_UseProgramFunc(0);
-    if (GL_SelectTextureFunc) {
+    if (GL_SelectTextureFunc)
+    {
+        GL_SelectTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)texture0Binding);
         if (activeTexture != GL_TEXTURE0)
-            GL_SelectTextureFunc((GLenum)activeTexture);
-        glBindTexture(GL_TEXTURE_2D, (GLuint)boundTexture);
-        if (activeTexture != GL_TEXTURE0)
-            GL_SelectTextureFunc(GL_TEXTURE0);
-    } else {
-        glBindTexture(GL_TEXTURE_2D, (GLuint)boundTexture);
+        {
+            GL_SelectTexture((GLenum)activeTexture);
+            glBindTexture(GL_TEXTURE_2D, (GLuint)activeTextureBinding);
+        }
+        GL_ClearBindings();
+    }
+    else
+    {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)texture0Binding);
+        GL_ClearBindings();
     }
     
     // Restore state
@@ -8291,8 +8311,8 @@ void FXAA_EndFrame(void)
     if (wasScissorTest) glEnable(GL_SCISSOR_TEST);
     if (!wasTexture2D)
         glDisable(GL_TEXTURE_2D);
-    if (GL_SelectTextureFunc && activeTexture != GL_TEXTURE0)
-        GL_SelectTextureFunc((GLenum)activeTexture);
+    if (GL_SelectTextureFunc)
+        GL_SelectTexture((GLenum)activeTexture);
     glPolygonMode(GL_FRONT, polygonMode[0]);
     glPolygonMode(GL_BACK, polygonMode[1]);
 }

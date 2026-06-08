@@ -229,6 +229,11 @@ extern PFNGLMULTITEXCOORD2FARBPROC  GL_MTexCoord2fFunc;
 extern PFNGLACTIVETEXTUREARBPROC    GL_SelectTextureFunc;
 extern PFNGLCLIENTACTIVETEXTUREARBPROC	GL_ClientActiveTextureFunc;
 extern GLint		gl_max_texture_units; //ericw
+extern GLint		gl_max_texture_image_units;
+
+#ifndef GL_MAX_TEXTURE_IMAGE_UNITS
+#define GL_MAX_TEXTURE_IMAGE_UNITS	0x8872
+#endif
 
 //johnfitz -- anisotropic filtering
 #define	GL_TEXTURE_MAX_ANISOTROPY_EXT		0x84FE

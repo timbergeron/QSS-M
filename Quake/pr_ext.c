@@ -7788,6 +7788,7 @@ static qboolean MenuPreviewFBO_Ensure(int w, int h)
 		{
 			glDeleteTextures(1, &preview_fbo.color_tex);
 			preview_fbo.color_tex = 0;
+			GL_ClearBindings();
 		}
 		if (preview_fbo.fbo)
 		{
@@ -7805,6 +7806,7 @@ static qboolean MenuPreviewFBO_Ensure(int w, int h)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		GL_ClearBindings();
 
 		GL_GenRenderbuffersFunc(1, &preview_fbo.depth_rb);
 		GL_BindRenderbufferFunc(GL_RENDERBUFFER, preview_fbo.depth_rb);
@@ -7826,6 +7828,7 @@ static qboolean MenuPreviewFBO_Ensure(int w, int h)
 			preview_fbo.depth_rb = 0;
 			glDeleteTextures(1, &preview_fbo.color_tex);
 			preview_fbo.color_tex = 0;
+			GL_ClearBindings();
 			return false;
 		}
 		GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
@@ -7858,6 +7861,7 @@ static void MenuPreview_DrawQuad(GLuint tex, float px, float py, float pw, float
 	glTexCoord2f(1, 0); glVertex2f(px + pw, py + ph);
 	glTexCoord2f(0, 0); glVertex2f(px, py + ph);
 	glEnd();
+	GL_ClearBindings();
 	if (!wasBlend) glDisable(GL_BLEND);
 	if (wasDepth)  glEnable(GL_DEPTH_TEST);
 	if (wasAlpha)  glEnable(GL_ALPHA_TEST);

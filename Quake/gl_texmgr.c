@@ -181,7 +181,7 @@ static int glmode_idx = 5; /* trilinear */
 
 static qboolean TexMgr_UsesSoftEmuFilterOverride (void)
 {
-	return gl_glsl_gamma_able && gl_mtexable && gl_max_texture_units >= 3 &&
+	return gl_glsl_gamma_able && gl_mtexable && gl_max_texture_image_units >= 3 &&
 		(int)r_softemu.value >= 2 && glmode_idx != 0;
 }
 
@@ -1020,6 +1020,7 @@ void TexMgr_DeleteTextureObjects (void)
 	{
 		GL_DeleteTexture (glt);
 	}
+	GL_ClearBindings ();
 }
 
 /*
@@ -2323,7 +2324,13 @@ void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants)
 	}
 	else if (glt->source_file[0] && !glt->source_offset)
 	{
-		data = Image_LoadImage (glt->source_file, (int *)&glt->source_width, (int *)&glt->source_height, &fmt, &malloced); //simple file
+		int width, height;
+		data = Image_LoadImage (glt->source_file, &width, &height, &fmt, &malloced); //simple file
+		if (data)
+		{
+			glt->source_width = (unsigned int)width;
+			glt->source_height = (unsigned int)height;
+		}
 	}
 	else if (!glt->source_file[0] && glt->source_offset)
 	{
@@ -2419,6 +2426,7 @@ void TexMgr_ReloadImages (void)
 	in_reload_images = true;
 
 	TexMgr_ColormapTexture_Free(NULL);	//just flush colourmapped cache instead of reloading them all unecessarily.
+	GL_ClearBindings ();
 
 	for (glt = active_gltextures; glt; glt = glt->next)
 	{
@@ -2557,7 +2565,7 @@ struct gltexture_s *TexMgr_ColormapTexture(struct gltexture_s *basetex, plcolour
 ================================================================================
 */
 
-static GLuint	currenttexture[4] = {GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE}; // to avoid unnecessary texture sets
+static GLuint	currenttexture[8] = {GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE, GL_UNUSED_TEXTURE}; // to avoid unnecessary texture sets
 static GLenum	currenttarget = GL_TEXTURE0_ARB;
 qboolean	mtexenabled = false;
 
@@ -2612,12 +2620,21 @@ GL_Bind -- johnfitz -- heavy revision
 */
 void GL_Bind (gltexture_t *texture)
 {
+	int unit = (int)(currenttarget - GL_TEXTURE0_ARB);
+
 	if (!texture)
 		texture = nulltexture;
 
-	if (texture->texnum != currenttexture[currenttarget - GL_TEXTURE0_ARB])
+	if (unit < 0 || unit >= (int)countof(currenttexture))
 	{
-		currenttexture[currenttarget - GL_TEXTURE0_ARB] = texture->texnum;
+		glBindTexture (GL_TEXTURE_2D, texture->texnum);
+		texture->visframe = r_framecount;
+		return;
+	}
+
+	if (texture->texnum != currenttexture[unit])
+	{
+		currenttexture[unit] = texture->texnum;
 		glBindTexture (GL_TEXTURE_2D, texture->texnum);
 		texture->visframe = r_framecount;
 	}

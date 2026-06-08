@@ -949,6 +949,7 @@ static void PolyBlend_CreateVignetteTexture (void)
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	GL_ClearBindings ();
 	free (data);
 
 	Con_DPrintf ("Vignette texture created (%dx%d)\n", size, size);
@@ -965,6 +966,7 @@ void PolyBlend_DeleteVignetteTexture (void)
 	{
 		glDeleteTextures (1, &polyblend_vignette_texture);
 		polyblend_vignette_texture = 0;
+		GL_ClearBindings ();
 	}
 	polyblend_program = 0; // deleted in R_DeleteShaders
 	polyblend_blendLoc = -1;
@@ -1067,6 +1069,7 @@ void V_PolyBlend (void)
 		glTexCoord2f (0, 1);
 		glVertex2f (0, 1);
 		glEnd ();
+		GL_ClearBindings ();
 		
 		glTexEnvi (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, prev_texenv_mode);
 		glDisable (GL_TEXTURE_2D);
