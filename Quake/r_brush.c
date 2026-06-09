@@ -126,15 +126,7 @@ void DrawGLTriangleFan (glpoly_t *p)
 
 static qboolean R_IsStaticEntity (const entity_t *e)
 {
-	int i;
-
-	for (i = 0; i < cl.num_statics; i++)
-	{
-		if (cl.static_entities[i].ent == e)
-			return true;
-	}
-
-	return false;
+	return e->is_static;
 }
 
 /*
@@ -838,6 +830,7 @@ void GL_BuildLightmaps (void)
 */
 
 GLuint gl_bmodel_vbo = 0;
+GLuint gl_bmodel_instance_vbo = 0;
 unsigned int gl_bmodel_vbo_generation = 0;	//tb -- bumped whenever vbo_firstvert offsets change, to invalidate per-model draw caches
 
 void GL_DeleteBModelVertexBuffer (void)
@@ -848,7 +841,10 @@ void GL_DeleteBModelVertexBuffer (void)
 		return;
 
 	GL_DeleteBuffersFunc (1, &gl_bmodel_vbo);
+	if (gl_bmodel_instance_vbo)
+		GL_DeleteBuffersFunc (1, &gl_bmodel_instance_vbo);
 	gl_bmodel_vbo = 0;
+	gl_bmodel_instance_vbo = 0;
 
 	GL_ClearBufferBindings ();
 }

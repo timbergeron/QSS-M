@@ -2174,6 +2174,7 @@ static void CL_ParseStatic (int version) //johnfitz -- added a parameter
 
 	ent->trailstate = NULL;
 	ent->emitstate = NULL;
+	ent->is_static = true;
 	ent->model = cl.model_precache[ent->baseline.modelindex];
 	ent->lerpflags |= LERP_RESETANIM; //johnfitz -- lerping
 	ent->frame = ent->baseline.frame;

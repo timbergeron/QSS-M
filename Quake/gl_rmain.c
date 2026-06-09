@@ -1430,7 +1430,9 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 {
 	int		i;
 	static sortable_entity_t sorted_ents[MAX_EDICTS];
+	static entity_t *brush_ents[MAX_EDICTS];
 	int num_sorted = 0;
+	int num_brush = 0;
 	int count = cl_numvisedicts;
 
 	//johnfitz -- optimized zero-check
@@ -1507,8 +1509,17 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 				if (!strcmp(currententity->model->name, "progs/flame.mdl") || !strcmp(currententity->model->name, "progs/flame2.mdl"))
 					continue;
 
+			if (!alphapass && currententity->model->type == mod_brush && num_brush < MAX_EDICTS)
+			{
+				brush_ents[num_brush++] = currententity;
+				continue;
+			}
+
 			R_DrawEntityModel(currententity);
 		}
+
+		if (!alphapass && num_brush > 0)
+			R_DrawBrushModelsInstanced(brush_ents, num_brush);
 	}
 	else
 	{
@@ -1525,8 +1536,17 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 				currententity->angles[0] *= 0.3; //johnfitz -- damp pitch
 			//johnfitz
 
+			if (!alphapass && currententity->model->type == mod_brush && num_brush < MAX_EDICTS)
+			{
+				brush_ents[num_brush++] = currententity;
+				continue;
+			}
+
 			R_DrawEntityModel(currententity);
 		}
+
+		if (!alphapass && num_brush > 0)
+			R_DrawBrushModelsInstanced(brush_ents, num_brush);
 	}
 }
 

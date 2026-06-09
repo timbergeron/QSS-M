@@ -135,6 +135,7 @@ GLint gl_max_texture_image_units = 0;
 qboolean gl_glsl_gamma_able = false; //ericw
 qboolean gl_glsl_alias_able = false; //ericw
 qboolean gl_glsl_water_able = false; //Spoike
+qboolean gl_bmodel_instancing_able = false;
 qboolean gl_fbo_able = false; // woods #fxaa FXAA framebuffer support
 int gl_stencilbits;
 GLint gl_hardware_maxsize;
@@ -170,6 +171,7 @@ QS_PFNGLGETATTRIBLOCATIONPROC GL_GetAttribLocationFunc = NULL; //ericw
 QS_PFNGLVERTEXATTRIBPOINTERPROC GL_VertexAttribPointerFunc = NULL; //ericw
 QS_PFNGLENABLEVERTEXATTRIBARRAYPROC GL_EnableVertexAttribArrayFunc = NULL; //ericw
 QS_PFNGLDISABLEVERTEXATTRIBARRAYPROC GL_DisableVertexAttribArrayFunc = NULL; //ericw
+QS_PFNGLVERTEXATTRIBDIVISORPROC GL_VertexAttribDivisorFunc = NULL; // brush instancing
 QS_PFNGLGETUNIFORMLOCATIONPROC GL_GetUniformLocationFunc = NULL; //ericw
 QS_PFNGLUNIFORM1IPROC GL_Uniform1iFunc = NULL; //ericw
 QS_PFNGLUNIFORM1FPROC GL_Uniform1fFunc = NULL; //ericw
@@ -178,6 +180,7 @@ QS_PFNGLUNIFORM3FPROC GL_Uniform3fFunc = NULL; //ericw
 QS_PFNGLUNIFORM4FPROC GL_Uniform4fFunc = NULL; //ericw
 QS_PFNGLUNIFORM4FVPROC GL_Uniform4fvFunc = NULL; //spike (for iqms)
 QS_PFNGLUNIFORM1IVPROC GL_Uniform1ivFunc = NULL; // woods #caustics
+QS_PFNGLDRAWELEMENTSINSTANCEDPROC GL_DrawElementsInstancedFunc = NULL; // brush instancing
 
 // woods #fxaa Framebuffer functions for FXAA
 PFNGLGENFRAMEBUFFERSPROC GL_GenFramebuffersFunc = NULL;
@@ -1041,6 +1044,7 @@ static void VID_Restart (void)
 	Wheel_ShutdownGL (); // weapon wheel program handle becomes invalid on context loss
 	R_DeleteShaders ();
 	GL_DeleteBModelVertexBuffer ();
+	R_DeleteBrushModelInstancingBuffers ();
 	GLMesh_DeleteVertexBuffers ();
 	FXAA_Shutdown (); // woods #fxaa
 
@@ -1518,6 +1522,40 @@ static void GL_CheckExtensions (void)
 	{
 		Con_Warning ("OpenGL version < 2, GLSL not available\n");
 	}
+
+	// Brush model instancing
+	//
+	gl_bmodel_instancing_able = false;
+	GL_DrawElementsInstancedFunc = NULL;
+	GL_VertexAttribDivisorFunc = NULL;
+	if (gl_glsl_able && gl_vbo_able &&
+		(gl_version_major >= 3 ||
+		 (GL_ParseExtensionList(gl_extensions, "GL_ARB_draw_instanced") &&
+		  GL_ParseExtensionList(gl_extensions, "GL_ARB_instanced_arrays"))))
+	{
+		GL_DrawElementsInstancedFunc = (QS_PFNGLDRAWELEMENTSINSTANCEDPROC) SDL_GL_GetProcAddress("glDrawElementsInstanced");
+		if (!GL_DrawElementsInstancedFunc)
+			GL_DrawElementsInstancedFunc = (QS_PFNGLDRAWELEMENTSINSTANCEDPROC) SDL_GL_GetProcAddress("glDrawElementsInstancedARB");
+
+		GL_VertexAttribDivisorFunc = (QS_PFNGLVERTEXATTRIBDIVISORPROC) SDL_GL_GetProcAddress("glVertexAttribDivisor");
+		if (!GL_VertexAttribDivisorFunc)
+			GL_VertexAttribDivisorFunc = (QS_PFNGLVERTEXATTRIBDIVISORPROC) SDL_GL_GetProcAddress("glVertexAttribDivisorARB");
+
+		if (GL_DrawElementsInstancedFunc && GL_VertexAttribDivisorFunc)
+		{
+			if (cls.state == ca_disconnected)
+				Con_Printf("FOUND: brush model instancing\n");
+			gl_bmodel_instancing_able = true;
+		}
+		else
+		{
+			Con_Warning ("brush model instancing not available\n");
+		}
+	}
+	else
+	{
+		Con_Warning ("brush model instancing not supported\n");
+	}
 	// GLSL gamma
 	//
 	if (COM_CheckParm("-noglslgamma"))
@@ -1839,6 +1877,7 @@ void	VID_Shutdown (void)
 		R_MotionBlur_DeleteTexture (); // woods #motionblur
 		VID_Gamma_Shutdown (); //johnfitz
 		FXAA_Shutdown(); // woods #fxaa
+		R_DeleteBrushModelInstancingBuffers ();
 		// Free custom cursor before tearing down video subsystem
 		if (custom_cursor)
 		{

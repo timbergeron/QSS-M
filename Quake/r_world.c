@@ -26,9 +26,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "view.h" // woods #fxaa
 
 extern cvar_t gl_fullbrights, r_drawflat, gl_overbright, r_oldskyleaf, r_showtris; //johnfitz
+extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
 extern cvar_t r_flatlightstyles;
 cvar_t r_scenecache = {"r_scenecache",""};	//spike, an attempt to cope with abusive maps a bit better.
 cvar_t r_bmodelcache = {"r_bmodelcache","1",CVAR_ARCHIVE};	//tb -- cache static index buffers for opaque moved bmodel entities.
+cvar_t gl_bmodel_instancing = {"gl_bmodel_instancing", "1", CVAR_ARCHIVE};
 
 typedef struct grass_presence_cache_s grass_presence_cache_t;
 
@@ -659,7 +661,9 @@ float GL_WaterAlphaForEntitySurface (entity_t *ent, msurface_t *s)
 
 
 static GLuint r_world_program;
+static GLuint r_world_instanced_program;
 extern GLuint gl_bmodel_vbo;
+extern GLuint gl_bmodel_instance_vbo;
 
 // uniforms used in frag shader
 static GLuint texLoc;
@@ -680,6 +684,27 @@ static GLint grassBaseColorLoc; // woods #grass
 static GLint grassTipColorLoc; // woods #grass
 static GLint grassMovementLoc; // woods #grass
 static GLint fogModeLoc;
+
+static GLint instTexLoc;
+static GLint instLMTexLoc;
+static GLint instFullbrightTexLoc;
+static GLint instCausticsTexLoc;
+static GLint instUseFullbrightTexLoc;
+static GLint instUseOverbrightLoc;
+static GLint instUseAlphaTestLoc;
+static GLint instUseCausticsTexLoc;
+static GLint instUseGrassLoc;
+static GLint instUseLightmapWideLoc;
+static GLint instUseLightmapOnlyLoc;
+static GLint instAlphaLoc;
+static GLint instClTimeLoc;
+static GLint instCausticsOpacityLoc;
+static GLint instGrassAmountLoc;
+static GLint instGrassTimeLoc;
+static GLint instGrassBaseColorLoc;
+static GLint instGrassTipColorLoc;
+static GLint instGrassMovementLoc;
+static GLint instFogModeLoc;
 static GLuint r_grass_program; // woods #grass
 static GLint grassGeomAmountLoc; // woods #grass
 static GLint grassGeomTimeLoc; // woods #grass
@@ -717,6 +742,10 @@ static struct
 #define vertAttrIndex 0
 #define texCoordsAttrIndex 1
 #define LMCoordsAttrIndex 2
+#define instMat0AttrIndex 3
+#define instMat1AttrIndex 4
+#define instMat2AttrIndex 5
+#define instMat3AttrIndex 6
 #endif
 
 typedef struct bmodel_drawbatch_s
@@ -1283,16 +1312,435 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 	return true;
 }
 
+typedef struct bmodel_instance_data_s
+{
+	float matrix[16];
+} bmodel_instance_data_t;
+
+static bmodel_instance_data_t *r_bmodel_instance_data;
+static entity_t **r_bmodel_group_ents;
+static int r_bmodel_instancing_capacity;
+
+void R_DeleteBrushModelInstancingBuffers (void)
+{
+	if (gl_bmodel_instance_vbo && GL_DeleteBuffersFunc)
+	{
+		GL_DeleteBuffersFunc (1, &gl_bmodel_instance_vbo);
+		gl_bmodel_instance_vbo = 0;
+		GL_ClearBufferBindings ();
+	}
+
+	free (r_bmodel_instance_data);
+	free (r_bmodel_group_ents);
+	r_bmodel_instance_data = NULL;
+	r_bmodel_group_ents = NULL;
+	r_bmodel_instancing_capacity = 0;
+}
+
+static qboolean R_ReserveBModelInstancingBuffers (int count)
+{
+	bmodel_instance_data_t *new_instances;
+	entity_t **new_ents;
+
+	if (count <= r_bmodel_instancing_capacity)
+		return true;
+
+	new_instances = (bmodel_instance_data_t *)realloc (r_bmodel_instance_data, (size_t)count * sizeof(*new_instances));
+	if (!new_instances)
+		return false;
+	r_bmodel_instance_data = new_instances;
+
+	new_ents = (entity_t **)realloc (r_bmodel_group_ents, (size_t)count * sizeof(*new_ents));
+	if (!new_ents)
+		return false;
+
+	r_bmodel_group_ents = new_ents;
+	r_bmodel_instancing_capacity = count;
+	return true;
+}
+
+static qboolean R_ModelHasActiveGrassBlades (qmodel_t *model)
+{
+	if (!R_GrassBladesActive())
+		return false;
+	return R_GrassPresenceCacheHasBladeSurfaces(R_GrassGetPresenceCache(model, true));
+}
+
+static qboolean R_CanInstanceBrushEntity (entity_t *ent, bmodel_drawcache_t **cache_out)
+{
+	qmodel_t *model;
+	bmodel_drawcache_t *cache;
+
+	if (cache_out)
+		*cache_out = NULL;
+	if (!gl_bmodel_instancing_able || !gl_bmodel_instancing.value || !r_world_instanced_program)
+		return false;
+	if (!r_bmodelcache.value || !gl_bmodel_vbo)
+		return false;
+	if (!gl_cull.value || r_drawflat_cheatsafe || r_fullbright_cheatsafe || r_lightmap_cheatsafe)
+		return false;
+	if (!ent || !(model = ent->model) || model->type != mod_brush || model->needload)
+		return false;
+	if (model->submodelof != cl.worldmodel || model->nummodelsurfaces <= 0)
+		return false;
+	if (skipsubmodels && (skipsubmodels[model->submodelidx >> 3] & (1u << (model->submodelidx & 7))))
+		return false;
+	if (ENTALPHA_DECODE(ent->alpha) < 1.0f || ent->effects)
+		return false;
+
+	cache = R_BModelDrawCache_Get(model);
+	if (!cache || cache->unsupported || cache->has_cached_dlight)
+		return false;
+	if (R_BModelDrawCache_HasActiveDlights(ent))
+		return false;
+
+	if (R_GrassEntityAllowsGrass(ent))
+	{
+		int i;
+
+		if (R_ModelHasActiveGrassBlades(model))
+			return false;
+		for (i = 0; i < cache->numbatches; i++)	//the instanced program doesn't implement the shader-grass tint
+		{
+			texture_t *t = model->textures[cache->batches[i].texture];
+			if (t && R_TextureUsesSurfaceGrass(t))
+				return false;
+		}
+	}
+
+	if (cache_out)
+		*cache_out = cache;
+	return true;
+}
+
+static int R_CompareInstancedBrushEntities (const void *lhs, const void *rhs)
+{
+	const entity_t *const *a = (const entity_t *const *)lhs;
+	const entity_t *const *b = (const entity_t *const *)rhs;
+	uintptr_t modela = (uintptr_t)(*a)->model;
+	uintptr_t modelb = (uintptr_t)(*b)->model;
+
+	if (modela < modelb)
+		return -1;
+	if (modela > modelb)
+		return 1;
+	if ((*a)->frame < (*b)->frame)
+		return -1;
+	if ((*a)->frame > (*b)->frame)
+		return 1;
+	if ((uintptr_t)(*a) < (uintptr_t)(*b))
+		return -1;
+	if ((uintptr_t)(*a) > (uintptr_t)(*b))
+		return 1;
+	return 0;
+}
+
+static void R_BuildBrushModelMatrix (const entity_t *ent, float *matrix)
+{
+	vec3_t angles;
+	vec3_t forward, right, up;
+	vec3_t origin;
+	float scale;
+	float zofs;
+
+	VectorCopy(ent->origin, origin);
+	if (gl_zfix.value && !ent->is_static)
+	{
+		origin[0] -= DIST_EPSILON;
+		origin[1] -= DIST_EPSILON;
+		origin[2] -= DIST_EPSILON;
+	}
+
+	VectorCopy(ent->angles, angles);
+	AngleVectors(angles, forward, right, up);
+
+	scale = 1.0f;
+	zofs = 0.0f;
+	if (ent->netstate.scale != ENTSCALE_DEFAULT)
+	{
+		scale = ENTSCALE_DECODE(ent->netstate.scale);
+
+		switch ((ent->netstate.drawflags >> 5) & 3)
+		{
+		case 0:
+			zofs = (ent->model->mins[2] + ent->model->maxs[2]) * 0.5f * (1.0f - scale);
+			break;
+		case 1:
+			zofs = ent->model->mins[2] * (1.0f - scale);
+			break;
+		case 2:
+			zofs = ent->model->maxs[2] * (1.0f - scale);
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (zofs != 0.0f)
+	{
+		origin[0] += up[0] * zofs;
+		origin[1] += up[1] * zofs;
+		origin[2] += up[2] * zofs;
+	}
+
+	matrix[0] = forward[0] * scale;
+	matrix[1] = forward[1] * scale;
+	matrix[2] = forward[2] * scale;
+	matrix[3] = 0.0f;
+
+	matrix[4] = -right[0] * scale;
+	matrix[5] = -right[1] * scale;
+	matrix[6] = -right[2] * scale;
+	matrix[7] = 0.0f;
+
+	matrix[8] = up[0] * scale;
+	matrix[9] = up[1] * scale;
+	matrix[10] = up[2] * scale;
+	matrix[11] = 0.0f;
+
+	matrix[12] = origin[0];
+	matrix[13] = origin[1];
+	matrix[14] = origin[2];
+	matrix[15] = 1.0f;
+}
+
+static void R_DrawBrushModelInstancedGroup (entity_t **ents, int count)
+{
+	bmodel_drawcache_t *cache;
+	const int overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+	qmodel_t *model;
+	texture_t *t, *animt;
+	gltexture_t *fullbright = NULL;
+	int frame;
+	int i;
+	int lasttex = -1, lastlm = -1, lastcaustics = -1;
+
+	if (count <= 1)
+	{
+		if (count == 1)
+			R_DrawBrushModel(ents[0]);
+		return;
+	}
+	if (!R_CanInstanceBrushEntity(ents[0], &cache) || !cache)
+	{
+		for (i = 0; i < count; i++)
+			R_DrawBrushModel(ents[i]);
+		return;
+	}
+	if (!R_ReserveBModelInstancingBuffers(count))
+	{
+		for (i = 0; i < count; i++)
+			R_DrawBrushModel(ents[i]);
+		return;
+	}
+
+	model = ents[0]->model;
+	frame = ents[0]->frame;
+
+	for (i = 0; i < count; i++)
+		R_BuildBrushModelMatrix(ents[i], r_bmodel_instance_data[i].matrix);
+
+	if (!gl_bmodel_instance_vbo)
+	{
+		GL_GenBuffersFunc(1, &gl_bmodel_instance_vbo);
+		GL_ClearBufferBindings();
+	}
+	if (!gl_bmodel_instance_vbo)
+	{
+		for (i = 0; i < count; i++)
+			R_DrawBrushModel(ents[i]);
+		return;
+	}
+
+	if (R_BModelDrawCache_LightstylesChanged(cache))
+	{
+		currententity = ents[0];
+		R_BModelDrawCache_UpdateLightmaps(model, cache);
+		R_UploadLightmaps();
+	}
+
+	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_instance_vbo);
+	GL_BufferDataFunc(GL_ARRAY_BUFFER, (GLsizeiptr)((size_t)count * sizeof(r_bmodel_instance_data[0])), r_bmodel_instance_data, GL_STREAM_DRAW);
+
+	glDepthMask(GL_TRUE);
+	glDisable(GL_BLEND);
+	glEnable(GL_CULL_FACE);
+	GL_UseProgramFunc(r_world_instanced_program);
+
+	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, cache->ebo);
+
+	GL_EnableVertexAttribArrayFunc(vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc(texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc(LMCoordsAttrIndex);
+	GL_VertexAttribPointerFunc(vertAttrIndex, 3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+	GL_VertexAttribPointerFunc(texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+	GL_VertexAttribPointerFunc(LMCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+
+	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_instance_vbo);
+	GL_EnableVertexAttribArrayFunc(instMat0AttrIndex);
+	GL_EnableVertexAttribArrayFunc(instMat1AttrIndex);
+	GL_EnableVertexAttribArrayFunc(instMat2AttrIndex);
+	GL_EnableVertexAttribArrayFunc(instMat3AttrIndex);
+	GL_VertexAttribPointerFunc(instMat0AttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof(r_bmodel_instance_data[0]), (void *)(sizeof(float) * 0));
+	GL_VertexAttribPointerFunc(instMat1AttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof(r_bmodel_instance_data[0]), (void *)(sizeof(float) * 4));
+	GL_VertexAttribPointerFunc(instMat2AttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof(r_bmodel_instance_data[0]), (void *)(sizeof(float) * 8));
+	GL_VertexAttribPointerFunc(instMat3AttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof(r_bmodel_instance_data[0]), (void *)(sizeof(float) * 12));
+	GL_VertexAttribDivisorFunc(instMat0AttrIndex, 1);
+	GL_VertexAttribDivisorFunc(instMat1AttrIndex, 1);
+	GL_VertexAttribDivisorFunc(instMat2AttrIndex, 1);
+	GL_VertexAttribDivisorFunc(instMat3AttrIndex, 1);
+
+	GL_Uniform1iFunc(instTexLoc, 0);
+	GL_Uniform1iFunc(instLMTexLoc, 1);
+	GL_Uniform1iFunc(instFullbrightTexLoc, 2);
+	GL_Uniform1iFunc(instCausticsTexLoc, 3);
+	GL_Uniform1iFunc(instUseFullbrightTexLoc, 0);
+	GL_Uniform1iFunc(instUseOverbrightLoc, overbright);
+	GL_Uniform1iFunc(instUseCausticsTexLoc, 0);
+	GL_Uniform1iFunc(instUseGrassLoc, 0);
+	GL_Uniform1iFunc(instUseAlphaTestLoc, 0);
+	GL_Uniform1iFunc(instUseLightmapWideLoc, wide10bits);
+	GL_Uniform1iFunc(instUseLightmapOnlyLoc, 0);
+	GL_Uniform1fFunc(instAlphaLoc, 1.0f);
+	GL_Uniform1fFunc(instClTimeLoc, cl.time);
+	GL_Uniform1fFunc(instCausticsOpacityLoc, gl_caustics.value);
+	GL_Uniform1fFunc(instGrassAmountLoc, 0.0f);
+	GL_Uniform1fFunc(instGrassTimeLoc, R_GrassAnimTime());
+	GL_Uniform1fFunc(instGrassMovementLoc, R_GrassMovement());
+	GL_Uniform1iFunc(instFogModeLoc, Fog_GetMode());
+
+	for (i = 0; i < cache->numbatches; i++)
+	{
+		bmodel_drawbatch_t *batch = &cache->batches[i];
+		int usecaustics = batch->underwater && gl_caustics.value && underwatertexture;
+
+		t = model->textures[batch->texture];
+		if (!t)
+			continue;
+		animt = R_TextureAnimation(t, frame);
+
+		if (batch->texture != lasttex)
+		{
+			GL_SelectTexture(GL_TEXTURE0);
+			GL_Bind(animt->gltexture);
+
+			if (gl_fullbrights.value && (fullbright = animt->fullbright))
+			{
+				GL_SelectTexture(GL_TEXTURE2);
+				GL_Bind(fullbright);
+				GL_Uniform1iFunc(instUseFullbrightTexLoc, 1);
+			}
+			else
+				GL_Uniform1iFunc(instUseFullbrightTexLoc, 0);
+
+			GL_Uniform1iFunc(instUseGrassLoc, 0);
+			lasttex = batch->texture;
+			lastlm = -1;
+		}
+
+		GL_Uniform1iFunc(instUseAlphaTestLoc, (batch->flags & SURF_DRAWFENCE) != 0);
+
+		if (batch->lightmap != lastlm)
+		{
+			GL_SelectTexture(GL_TEXTURE1);
+			GL_Bind(lightmaps[batch->lightmap].texture);
+			lastlm = batch->lightmap;
+		}
+
+		if (usecaustics != lastcaustics)
+		{
+			if (usecaustics)
+			{
+				GL_SelectTexture(GL_TEXTURE3);
+				GL_Bind(underwatertexture);
+			}
+			GL_Uniform1iFunc(instUseCausticsTexLoc, usecaustics);
+			lastcaustics = usecaustics;
+		}
+
+		GL_DrawElementsInstancedFunc(GL_TRIANGLES, (GLsizei)batch->numidx, GL_UNSIGNED_INT, batch->eboidx, count);
+		rs_brushpasses += count;
+	}
+
+	rs_brushpolys += cache->brushpolys * count;
+
+	GL_Uniform1iFunc(instUseAlphaTestLoc, 0);
+	GL_Uniform1iFunc(instUseCausticsTexLoc, 0);
+	GL_VertexAttribDivisorFunc(instMat0AttrIndex, 0);
+	GL_VertexAttribDivisorFunc(instMat1AttrIndex, 0);
+	GL_VertexAttribDivisorFunc(instMat2AttrIndex, 0);
+	GL_VertexAttribDivisorFunc(instMat3AttrIndex, 0);
+	GL_DisableVertexAttribArrayFunc(instMat0AttrIndex);
+	GL_DisableVertexAttribArrayFunc(instMat1AttrIndex);
+	GL_DisableVertexAttribArrayFunc(instMat2AttrIndex);
+	GL_DisableVertexAttribArrayFunc(instMat3AttrIndex);
+	GL_DisableVertexAttribArrayFunc(vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc(texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc(LMCoordsAttrIndex);
+
+	GL_UseProgramFunc(0);
+	GL_SelectTexture(GL_TEXTURE0);
+	GL_BindBuffer(GL_ARRAY_BUFFER, 0);
+	GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+void R_DrawBrushModelsInstanced (entity_t **ents, int count)
+{
+	int group_start, group_end, i, batchcount;
+
+	if (!count)
+		return;
+	if (!R_ReserveBModelInstancingBuffers(count))
+	{
+		for (i = 0; i < count; i++)
+			R_DrawBrushModel(ents[i]);
+		return;
+	}
+
+	qsort(ents, count, sizeof(*ents), R_CompareInstancedBrushEntities);
+
+	for (group_start = 0; group_start < count; group_start = group_end)
+	{
+		entity_t *ent;
+
+		ent = ents[group_start];
+		for (group_end = group_start + 1; group_end < count && ents[group_end]->model == ent->model && ents[group_end]->frame == ent->frame; group_end++)
+			;
+
+		batchcount = 0;
+		for (i = group_start; i < group_end; i++)
+		{
+			ent = ents[i];
+
+			if (!R_CanInstanceBrushEntity(ent, NULL))
+			{
+				R_DrawBrushModel(ent);
+				continue;
+			}
+			if (R_CullModelForEntity(ent))
+				continue;
+
+			r_bmodel_group_ents[batchcount++] = ent;
+		}
+
+		R_DrawBrushModelInstancedGroup(r_bmodel_group_ents, batchcount);
+	}
+}
+
 static void GLWorld_DeleteShaderPrograms (void)
 {
 	int i;
 
 	GL_DeleteProgramTracked(&r_world_program);
+	GL_DeleteProgramTracked(&r_world_instanced_program);
 	GL_DeleteProgramTracked(&r_grass_program);
 	for (i = 0; i < countof(r_water); i++)
 		GL_DeleteProgramTracked(&r_water[i].program);
 
 	r_world_program = 0;
+	r_world_instanced_program = 0;
 	texLoc = 0;
 	LMTexLoc = 0;
 	fullbrightTexLoc = 0;
@@ -1313,6 +1761,27 @@ static void GLWorld_DeleteShaderPrograms (void)
 	grassTipColorLoc = -1;
 	grassMovementLoc = -1;
 	fogModeLoc = -1;
+
+	instTexLoc = -1;
+	instLMTexLoc = -1;
+	instFullbrightTexLoc = -1;
+	instCausticsTexLoc = -1;
+	instUseFullbrightTexLoc = -1;
+	instUseOverbrightLoc = -1;
+	instUseAlphaTestLoc = -1;
+	instUseCausticsTexLoc = -1;
+	instUseGrassLoc = -1;
+	instUseLightmapWideLoc = -1;
+	instUseLightmapOnlyLoc = -1;
+	instAlphaLoc = -1;
+	instClTimeLoc = -1;
+	instCausticsOpacityLoc = -1;
+	instGrassAmountLoc = -1;
+	instGrassTimeLoc = -1;
+	instGrassBaseColorLoc = -1;
+	instGrassTipColorLoc = -1;
+	instGrassMovementLoc = -1;
+	instFogModeLoc = -1;
 
 	r_grass_program = 0;
 	grassGeomAmountLoc = -1;
@@ -4639,6 +5108,15 @@ void GLWorld_CreateShaders (void)
 		{ "TexCoords", texCoordsAttrIndex },
 		{ "LMCoords", LMCoordsAttrIndex }
 	};
+	const glsl_attrib_binding_t instancedBindings[] = {
+		{ "Vert", vertAttrIndex },
+		{ "TexCoords", texCoordsAttrIndex },
+		{ "LMCoords", LMCoordsAttrIndex },
+		{ "InstanceMat0", instMat0AttrIndex },
+		{ "InstanceMat1", instMat1AttrIndex },
+		{ "InstanceMat2", instMat2AttrIndex },
+		{ "InstanceMat3", instMat3AttrIndex }
+	};
 
 	// Driver bug workarounds:
 	// - "Intel(R) UHD Graphics 600" version "4.6.0 - Build 26.20.100.7263"
@@ -4661,6 +5139,30 @@ void GLWorld_CreateShaders (void)
 		"	tc_tex = TexCoords;\n"
 		"	tc_lm = LMCoords;\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * Vert;\n"
+		"	FogFragCoord = gl_Position.w;\n"
+		"}\n";
+	const GLchar *vertSourceInstanced = \
+		"#version 110\n"
+		"\n"
+		"attribute vec4 Vert;\n"
+		"attribute vec2 TexCoords;\n"
+		"attribute vec2 LMCoords;\n"
+		"attribute vec4 InstanceMat0;\n"
+		"attribute vec4 InstanceMat1;\n"
+		"attribute vec4 InstanceMat2;\n"
+		"attribute vec4 InstanceMat3;\n"
+		"\n"
+		"varying float FogFragCoord;\n"
+		"varying vec2 tc_tex;\n"
+		"varying vec2 tc_lm;\n"
+		"\n"
+		"void main()\n"
+		"{\n"
+		"	mat4 instance = mat4(InstanceMat0, InstanceMat1, InstanceMat2, InstanceMat3);\n"
+		"	vec4 worldVert = instance * Vert;\n"
+		"	tc_tex = TexCoords;\n"
+		"	tc_lm = LMCoords;\n"
+		"	gl_Position = gl_ModelViewProjectionMatrix * worldVert;\n"
 		"	FogFragCoord = gl_Position.w;\n"
 		"}\n";
 	
@@ -4873,6 +5375,44 @@ void GLWorld_CreateShaders (void)
 		GL_Uniform1iFunc (useGrassLoc, 0);
 		R_SetGrassColorUniforms(NULL);
 		GL_UseProgramFunc (0);
+	}
+
+	if (gl_bmodel_instancing_able)
+	{
+		r_world_instanced_program = GL_CreateProgram (vertSourceInstanced, fragSource, sizeof(instancedBindings)/sizeof(instancedBindings[0]), instancedBindings);
+		if (r_world_instanced_program != 0)
+		{
+			instTexLoc = GL_GetUniformLocation (&r_world_instanced_program, "Tex");
+			instLMTexLoc = GL_GetUniformLocation (&r_world_instanced_program, "LMTex");
+			instFullbrightTexLoc = GL_GetUniformLocation (&r_world_instanced_program, "FullbrightTex");
+			instCausticsTexLoc = GL_GetUniformLocation(&r_world_instanced_program, "CausticsTex"); // woods #caustics
+			instUseFullbrightTexLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseFullbrightTex");
+			instUseOverbrightLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseOverbright");
+			instUseAlphaTestLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseAlphaTest");
+			instUseCausticsTexLoc = GL_GetUniformLocation(&r_world_instanced_program, "UseCausticsTex"); // woods #caustics
+			instUseGrassLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseGrass"); // woods #grass
+			instUseLightmapWideLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseLightmapWide");
+			instUseLightmapOnlyLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseLightmapOnly");
+			instAlphaLoc = GL_GetUniformLocation (&r_world_instanced_program, "Alpha");
+			instClTimeLoc = GL_GetUniformLocation(&r_world_instanced_program, "ClTime"); // woods #caustics
+			instCausticsOpacityLoc = GL_GetUniformLocation(&r_world_instanced_program, "CausticsOpacity"); // woods #caustics
+			instGrassAmountLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassAmount"); // woods #grass
+			instGrassTimeLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassTime"); // woods #grass
+			instGrassBaseColorLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassBaseColor"); // woods #grass
+			instGrassTipColorLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassTipColor"); // woods #grass
+			instGrassMovementLoc = GL_GetUniformLocation (&r_world_instanced_program, "GrassMovement"); // woods #grass
+			instFogModeLoc = GL_GetUniformLocation (&r_world_instanced_program, "FogMode");
+
+			GL_UseProgramFunc (r_world_instanced_program);
+			GL_Uniform1iFunc (instTexLoc, 0);
+			GL_Uniform1iFunc (instLMTexLoc, 1);
+			GL_Uniform1iFunc (instFullbrightTexLoc, 2);
+			GL_Uniform1iFunc (instCausticsTexLoc, 3);
+			GL_Uniform1iFunc (instUseGrassLoc, 0);
+			GL_Uniform3fFunc (instGrassBaseColorLoc, 0.18f, 0.32f, 0.09f);
+			GL_Uniform3fFunc (instGrassTipColorLoc, 0.55f, 0.74f, 0.28f);
+			GL_UseProgramFunc (0);
+		}
 	}
 
 	GLGrass_CreateShaders();

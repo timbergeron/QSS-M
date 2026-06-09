@@ -207,6 +207,7 @@ extern	cvar_t	gl_powerupshells; // woods #powershell
 extern	cvar_t	gl_powerupshells_alpha; // woods #powershell
 extern	cvar_t	gl_motion_blur; // woods #motionblur
 extern	cvar_t	gl_finish;
+extern	cvar_t	gl_bmodel_instancing;
 
 extern	cvar_t	gl_playermip;
 
@@ -279,6 +280,7 @@ typedef GLint (APIENTRYP QS_PFNGLGETATTRIBLOCATIONPROC) (GLuint program, const G
 typedef void (APIENTRYP QS_PFNGLVERTEXATTRIBPOINTERPROC) (GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
 typedef void (APIENTRYP QS_PFNGLENABLEVERTEXATTRIBARRAYPROC) (GLuint index);
 typedef void (APIENTRYP QS_PFNGLDISABLEVERTEXATTRIBARRAYPROC) (GLuint index);
+typedef void (APIENTRYP QS_PFNGLVERTEXATTRIBDIVISORPROC) (GLuint index, GLuint divisor);
 typedef GLint (APIENTRYP QS_PFNGLGETUNIFORMLOCATIONPROC) (GLuint program, const GLchar *name);
 typedef void (APIENTRYP QS_PFNGLUNIFORM1IPROC) (GLint location, GLint v0);
 typedef void (APIENTRYP QS_PFNGLUNIFORM1FPROC) (GLint location, GLfloat v0);
@@ -287,6 +289,7 @@ typedef void (APIENTRYP QS_PFNGLUNIFORM3FPROC) (GLint location, GLfloat v0, GLfl
 typedef void (APIENTRYP QS_PFNGLUNIFORM4FPROC) (GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
 typedef void (APIENTRYP QS_PFNGLUNIFORM4FVPROC) (GLint location, GLsizei count, const GLfloat *value);
 typedef void (APIENTRYP QS_PFNGLUNIFORM1IVPROC) (GLint location, GLsizei count, const GLint* value); // woods #caustics
+typedef void (APIENTRYP QS_PFNGLDRAWELEMENTSINSTANCEDPROC) (GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei instancecount);
 typedef void (APIENTRYP QS_PFNGENERATEMIPMAP) (GLenum type);
 
 extern QS_PFNGLCREATESHADERPROC GL_CreateShaderFunc;
@@ -307,6 +310,7 @@ extern QS_PFNGLGETATTRIBLOCATIONPROC GL_GetAttribLocationFunc;
 extern QS_PFNGLVERTEXATTRIBPOINTERPROC GL_VertexAttribPointerFunc;
 extern QS_PFNGLENABLEVERTEXATTRIBARRAYPROC GL_EnableVertexAttribArrayFunc;
 extern QS_PFNGLDISABLEVERTEXATTRIBARRAYPROC GL_DisableVertexAttribArrayFunc;
+extern QS_PFNGLVERTEXATTRIBDIVISORPROC GL_VertexAttribDivisorFunc;
 extern QS_PFNGLGETUNIFORMLOCATIONPROC GL_GetUniformLocationFunc;
 extern QS_PFNGLUNIFORM1IPROC GL_Uniform1iFunc;
 extern QS_PFNGLUNIFORM1FPROC GL_Uniform1fFunc;
@@ -315,6 +319,7 @@ extern QS_PFNGLUNIFORM3FPROC GL_Uniform3fFunc;
 extern QS_PFNGLUNIFORM4FPROC GL_Uniform4fFunc;
 extern QS_PFNGLUNIFORM4FVPROC GL_Uniform4fvFunc;
 extern QS_PFNGLUNIFORM1IVPROC GL_Uniform1ivFunc; // woods #caustics
+extern QS_PFNGLDRAWELEMENTSINSTANCEDPROC GL_DrawElementsInstancedFunc;
 
 // woods -- Ffamebuffer function pointers for #fxaa
 extern PFNGLGENFRAMEBUFFERSPROC GL_GenFramebuffersFunc;
@@ -334,6 +339,7 @@ extern	qboolean	gl_glsl_able;
 extern	qboolean	gl_glsl_gamma_able;
 extern	qboolean	gl_glsl_alias_able;
 extern	qboolean	gl_glsl_water_able;
+extern	qboolean	gl_bmodel_instancing_able;
 extern	qboolean	gl_fbo_able; // woods #fxaa
 // ericw --
 
@@ -483,6 +489,8 @@ void R_UpdateWarpTextures (void);
 void R_DrawWorld (void);
 void R_DrawAliasModel (entity_t *e);
 void R_DrawBrushModel (entity_t *e);
+void R_DrawBrushModelsInstanced (entity_t **ents, int count);
+void R_DeleteBrushModelInstancingBuffers (void);
 void R_DrawSpriteModel (entity_t *e);
 mspriteframe_t *R_GetSpriteFrame (entity_t *currentent); // woods #alphasort
 
