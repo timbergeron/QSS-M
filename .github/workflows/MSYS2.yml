@@ -35,7 +35,6 @@ jobs:
           mingw-w64-${{ matrix.arch }}-pkgconf
           mingw-w64-${{ matrix.arch }}-gnutls
           mingw-w64-${{ matrix.arch }}-SDL2
-          mingw-w64-${{ matrix.arch }}-libmad
           mingw-w64-${{ matrix.arch }}-opus
           mingw-w64-${{ matrix.arch }}-libvorbis
           mingw-w64-${{ matrix.arch }}-zlib
