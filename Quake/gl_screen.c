@@ -7717,6 +7717,7 @@ typedef struct {
     GLuint framebuffer;
     GLuint color_texture;
     GLuint depth_renderbuffer;
+    const char *color_format_name;
     
     /* simple 5-tap shader (low / med) */
     GLuint program_simple;
@@ -7737,13 +7738,56 @@ typedef struct {
 
 static fxaa_t fxaa;
 
+typedef struct {
+    GLenum internal_format;
+    GLenum format;
+    GLenum type;
+    const char *name;
+    qboolean needs_packed_pixels;
+} fxaa_color_format_t;
+
+static const fxaa_color_format_t fxaa_color_formats[] = {
+    {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_10_10_10_2, "RGB10_A2", true},
+    {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, "RGBA8", false}
+};
+
 // FXAA function declarations
 void FXAA_Init(void);
 void FXAA_Shutdown(void);
 static GLuint FXAA_CreateShader_Simple(void);
 static GLuint FXAA_CreateShader_FTE(void);
+static void FXAA_DeleteFramebuffer(void);
+static qboolean FXAA_AttemptFramebuffer(int width, int height, const fxaa_color_format_t *color_format, GLenum *status, GLenum *error);
 static qboolean FXAA_CreateFramebuffer(int width, int height);
 void FXAA_VidFxaaChanged(cvar_t *v);
+
+/*
+===============
+FXAA_DeleteFramebuffer
+===============
+*/
+static void FXAA_DeleteFramebuffer(void)
+{
+    if (fxaa.framebuffer) {
+        GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+        GL_DeleteFramebuffersFunc(1, &fxaa.framebuffer);
+        fxaa.framebuffer = 0;
+    }
+
+    if (fxaa.color_texture) {
+        glDeleteTextures(1, &fxaa.color_texture);
+        fxaa.color_texture = 0;
+        GL_ClearBindings();
+    }
+
+    if (fxaa.depth_renderbuffer) {
+        GL_DeleteRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
+        fxaa.depth_renderbuffer = 0;
+    }
+
+    fxaa.width = fxaa.height = 0;
+    fxaa.color_format_name = NULL;
+}
 
 /*
 ===============
@@ -7759,25 +7803,8 @@ void FXAA_VidFxaaChanged(cvar_t *v)
 
     /* turn resources on/off just like before */
     // If FXAA was disabled, clean up resources
-    if (lvl == 0 && fxaa.initialized) {
-        if (fxaa.framebuffer) {
-            GL_DeleteFramebuffersFunc(1, &fxaa.framebuffer);
-            fxaa.framebuffer = 0;
-        }
-        
-        if (fxaa.color_texture) {
-            glDeleteTextures(1, &fxaa.color_texture);
-            fxaa.color_texture = 0;
-            GL_ClearBindings();
-        }
-        
-        if (fxaa.depth_renderbuffer) {
-            GL_DeleteRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
-            fxaa.depth_renderbuffer = 0;
-        }
-        
-        fxaa.width = fxaa.height = 0;
-    }
+    if (lvl == 0 && fxaa.initialized)
+        FXAA_DeleteFramebuffer();
 
     /* store current preset in the fxaa struct for fast access */
     fxaa.current = fxaa_presets[lvl];
@@ -7802,25 +7829,8 @@ FXAA_CvarChanged
 void FXAA_CvarChanged(cvar_t *v)
 {
     // If FXAA was disabled, clean up resources
-    if (v->value <= 0.0f && fxaa.initialized) {
-        if (fxaa.framebuffer) {
-            GL_DeleteFramebuffersFunc(1, &fxaa.framebuffer);
-            fxaa.framebuffer = 0;
-        }
-        
-        if (fxaa.color_texture) {
-            glDeleteTextures(1, &fxaa.color_texture);
-            fxaa.color_texture = 0;
-            GL_ClearBindings();
-        }
-        
-        if (fxaa.depth_renderbuffer) {
-            GL_DeleteRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
-            fxaa.depth_renderbuffer = 0;
-        }
-        
-        fxaa.width = fxaa.height = 0;
-    }
+    if (v->value <= 0.0f && fxaa.initialized)
+        FXAA_DeleteFramebuffer();
 }
 
 /*
@@ -8090,21 +8100,7 @@ void FXAA_Shutdown(void)
     if (!fxaa.initialized)
         return;
         
-    if (fxaa.framebuffer) {
-        GL_DeleteFramebuffersFunc(1, &fxaa.framebuffer);
-        fxaa.framebuffer = 0;
-    }
-    
-    if (fxaa.color_texture) {
-        glDeleteTextures(1, &fxaa.color_texture);
-        fxaa.color_texture = 0;
-        GL_ClearBindings();
-    }
-    
-    if (fxaa.depth_renderbuffer) {
-        GL_DeleteRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
-        fxaa.depth_renderbuffer = 0;
-    }
+    FXAA_DeleteFramebuffer();
     
     if (fxaa.program_simple) {
         GL_DeleteProgramFunc(fxaa.program_simple);
@@ -8121,69 +8117,130 @@ void FXAA_Shutdown(void)
 
 /*
 ===============
+FXAA_AttemptFramebuffer
+===============
+*/
+static qboolean FXAA_AttemptFramebuffer(int width, int height, const fxaa_color_format_t *color_format, GLenum *status, GLenum *error)
+{
+    GLuint framebuffer = 0;
+    GLuint color_texture = 0;
+    GLuint depth_renderbuffer = 0;
+
+    *status = 0;
+    *error = GL_NO_ERROR;
+    while (glGetError() != GL_NO_ERROR)
+        ;
+
+    // Create color texture
+    glGenTextures(1, &color_texture);
+    glBindTexture(GL_TEXTURE_2D, color_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, color_format->internal_format, width, height, 0, color_format->format, color_format->type, NULL);
+    *error = glGetError();
+    if (*error != GL_NO_ERROR)
+        goto fail;
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    GL_ClearBindings();
+
+    // Create depth-stencil renderbuffer (combined for outline/shell effects)
+    GL_GenRenderbuffersFunc(1, &depth_renderbuffer);
+    GL_BindRenderbufferFunc(GL_RENDERBUFFER, depth_renderbuffer);
+    GL_RenderbufferStorageFunc(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+    *error = glGetError();
+    if (*error != GL_NO_ERROR)
+        goto fail;
+
+    // Create framebuffer
+    GL_GenFramebuffersFunc(1, &framebuffer);
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, framebuffer);
+    GL_FramebufferTexture2DFunc(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_texture, 0);
+    GL_FramebufferRenderbufferFunc(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_renderbuffer);
+    GL_FramebufferRenderbufferFunc(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depth_renderbuffer);
+
+    *status = GL_CheckFramebufferStatusFunc(GL_FRAMEBUFFER);
+    if (*status != GL_FRAMEBUFFER_COMPLETE)
+        goto fail;
+
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+
+    fxaa.framebuffer = framebuffer;
+    fxaa.color_texture = color_texture;
+    fxaa.depth_renderbuffer = depth_renderbuffer;
+    fxaa.color_format_name = color_format->name;
+    fxaa.width = width;
+    fxaa.height = height;
+
+    return true;
+
+fail:
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+
+    if (framebuffer)
+        GL_DeleteFramebuffersFunc(1, &framebuffer);
+
+    if (depth_renderbuffer)
+        GL_DeleteRenderbuffersFunc(1, &depth_renderbuffer);
+
+    if (color_texture) {
+        glDeleteTextures(1, &color_texture);
+        GL_ClearBindings();
+    }
+
+    return false;
+}
+
+/*
+===============
 FXAA_CreateFramebuffer
 ===============
 */
 static qboolean FXAA_CreateFramebuffer(int width, int height)
 {
+    unsigned int i;
+
     if (!fxaa.initialized)
         return false;
         
     // Clean up old framebuffer if size changed
-    if (fxaa.width != width || fxaa.height != height) {
-        if (fxaa.framebuffer) {
-            GL_DeleteFramebuffersFunc(1, &fxaa.framebuffer);
-            fxaa.framebuffer = 0;
-        }
-        
-        if (fxaa.color_texture) {
-            glDeleteTextures(1, &fxaa.color_texture);
-            fxaa.color_texture = 0;
-            GL_ClearBindings();
-        }
-        
-        if (fxaa.depth_renderbuffer) {
-            GL_DeleteRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
-            fxaa.depth_renderbuffer = 0;
-        }
-    }
+    if (fxaa.width != width || fxaa.height != height)
+        FXAA_DeleteFramebuffer();
     
     if (!fxaa.framebuffer) {
-        // Create color texture
-        glGenTextures(1, &fxaa.color_texture);
-        glBindTexture(GL_TEXTURE_2D, fxaa.color_texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        GL_ClearBindings();
-        
-        // Create depth-stencil renderbuffer (combined for outline/shell effects)
-        GL_GenRenderbuffersFunc(1, &fxaa.depth_renderbuffer);
-        GL_BindRenderbufferFunc(GL_RENDERBUFFER, fxaa.depth_renderbuffer);
-        GL_RenderbufferStorageFunc(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
-        
-        // Create framebuffer
-        GL_GenFramebuffersFunc(1, &fxaa.framebuffer);
-        GL_BindFramebufferFunc(GL_FRAMEBUFFER, fxaa.framebuffer);
-        GL_FramebufferTexture2DFunc(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fxaa.color_texture, 0);
-        GL_FramebufferRenderbufferFunc(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fxaa.depth_renderbuffer);
-        GL_FramebufferRenderbufferFunc(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, fxaa.depth_renderbuffer);
-        
-        GLenum status = GL_CheckFramebufferStatusFunc(GL_FRAMEBUFFER);
-        if (status != GL_FRAMEBUFFER_COMPLETE) {
-            Con_DPrintf("FXAA: Framebuffer incomplete (status: 0x%x) - disabling\n", status);
+        GLenum status = 0;
+        GLenum error = GL_NO_ERROR;
+
+        for (i = 0; i < sizeof(fxaa_color_formats) / sizeof(fxaa_color_formats[0]); i++) {
+            const fxaa_color_format_t *color_format = &fxaa_color_formats[i];
+
+            /* gl_highbitdepth also covers vid_highbitdepth 0: a 10-bit FBO is
+               pointless (and not user-disableable) over an 8-bit backbuffer */
+            if (color_format->needs_packed_pixels && (!gl_packed_pixels || !gl_highbitdepth))
+                continue;
+
+            if (FXAA_AttemptFramebuffer(width, height, color_format, &status, &error)) {
+                Con_DPrintf2("FXAA: using %s framebuffer\n", fxaa.color_format_name);
+                break;
+            }
+
+            if (error != GL_NO_ERROR)
+                Con_DPrintf2("FXAA: %s framebuffer texture failed (error: 0x%x)\n", color_format->name, error);
+            else
+                Con_DPrintf2("FXAA: %s framebuffer incomplete (status: 0x%x)\n", color_format->name, status);
+        }
+
+        if (!fxaa.framebuffer) {
+            if (error != GL_NO_ERROR)
+                Con_DPrintf("FXAA: Framebuffer creation failed (error: 0x%x) - disabling\n", error);
+            else
+                Con_DPrintf("FXAA: Framebuffer incomplete (status: 0x%x) - disabling\n", status);
             SCR_CenterPrint("FXAA unavailable (driver bug)");
             Cvar_SetQuick(&vid_fxaa, "0");
             GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
             return false;
         }
-        
-        GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
-        
-        fxaa.width = width;
-        fxaa.height = height;
     }
     
     return true;
