@@ -5827,6 +5827,7 @@ void SCR_ScreenShot_f (void)
 	char	checkname[MAX_OSPATH];
 	int	quality;
 	qboolean	ok;
+	qboolean	blocked_sound;
 
 	// woods added time for demo output // woods #screenshots
 	char str[24];
@@ -5880,6 +5881,8 @@ void SCR_ScreenShot_f (void)
 		return;
 	}
 
+	blocked_sound = S_BlockSound ();
+
 	glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
 	glReadPixels (glx, gly, glwidth, glheight, GL_RGB, GL_UNSIGNED_BYTE, buffer);
 
@@ -5892,6 +5895,13 @@ void SCR_ScreenShot_f (void)
 		ok = Image_WriteJPG (imagename, buffer, glwidth, glheight, 24, quality, false);
 	else
 		ok = false;
+
+#if defined(_WIN32) || defined(__APPLE__)
+	SCR_ScreenShot_Clipboard_f();	// woods #screenshotcopy
+#endif
+
+	if (blocked_sound)
+		S_UnblockSound ();
 
 	if (ok)
 	{ 
@@ -5911,10 +5921,6 @@ void SCR_ScreenShot_f (void)
 	}
 	else
 		Con_Printf ("SCR_ScreenShot_f: Couldn't create %s\n", imagename);
-
-#if defined(_WIN32) || defined(__APPLE__)
-	SCR_ScreenShot_Clipboard_f();	// woods #screenshotcopy
-#endif
 
 	free (buffer);
 }

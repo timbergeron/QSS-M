@@ -26911,6 +26911,17 @@ typedef struct
 	int         skill;          /* 0-3, or -1 if not present in the demo */
 } demoinfo_t;
 
+static qboolean M_Demos_BlockSoundForIO(void)
+{
+	return S_BlockSound();
+}
+
+static void M_Demos_UnblockSoundForIO(qboolean blocked_sound)
+{
+	if (blocked_sound)
+		S_UnblockSound();
+}
+
 static void FormatDuration(float secs, char *out, size_t outlen)
 {
 	int m = (int)(secs / 60);
@@ -27978,7 +27989,9 @@ static void M_Demos_RebuildFolderList(void)
 {
 	searchpath_t *search;
 	char demos_path[MAX_OSPATH];
+	qboolean blocked_sound;
 
+	blocked_sound = M_Demos_BlockSoundForIO();
 	M_Demos_ClearFileList(&demosmenu.path_folders);
 
 	for (search = com_searchpaths; search; search = search->next)
@@ -27993,6 +28006,7 @@ static void M_Demos_RebuildFolderList(void)
 	}
 
 	M_Demos_ScanPakFolders();
+	M_Demos_UnblockSoundForIO(blocked_sound);
 }
 
 static void M_Demos_FormatFileDate(time_t mtime, char *out, size_t outlen)
@@ -28163,7 +28177,7 @@ static qboolean M_Demos_CheckMinFrames(demoitem_t *di)
 	return di->minframes_state == DEMO_MINFRAMES_FAIL;
 }
 
-#define DEMOS_MINFRAME_FILTER_BUDGET	4
+#define DEMOS_MINFRAME_FILTER_BUDGET	1
 #define DEMOS_MINFRAME_REFILTER_BATCH	8
 
 static void M_Demos_ResetMinFramesFilter(void)
@@ -28405,49 +28419,51 @@ extern filelist_item_t *FindLevelInList(filelist_item_t *list, const char *name)
 
 static void M_Demos_ParseItem(demoitem_t *di)
 {
-    demoinfo_t info;
-    if (Parse_DemoInfo(di->name, &info))
-    {
-        q_strlcpy(di->map, info.map, sizeof(di->map));
-        q_strlcpy(di->players, info.players, sizeof(di->players));
-        FormatDuration(info.duration, di->duration, sizeof(di->duration));
-        q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", info.filesize_mb);
+	demoinfo_t info;
+	qboolean parsed = Parse_DemoInfo(di->name, &info);
 
-        di->stats[0] = '\0';
-        if (info.singleplayer)
-        {
-            static const char *skill_names[4] = { "Easy", "Normal", "Hard", "Nightmare" };
-            char buf[64];
-            buf[0] = '\0';
-            if (info.total_kills > 0 || info.kills > 0)
-                q_snprintf(buf, sizeof(buf), "Kills: %d/%d", info.kills, info.total_kills);
-            if (info.total_secrets > 0 || info.secrets > 0)
-            {
-                char sec[32];
-                q_snprintf(sec, sizeof(sec), "Secrets: %d/%d", info.secrets, info.total_secrets);
-                if (buf[0]) q_strlcat(buf, "  ", sizeof(buf));
-                q_strlcat(buf, sec, sizeof(buf));
-            }
-            if (info.skill >= 0)
-            {
-                char skl[24];
-                int s = info.skill < 4 ? info.skill : 3;
-                q_snprintf(skl, sizeof(skl), "Skill: %s", skill_names[s]);
-                if (buf[0]) q_strlcat(buf, "  ", sizeof(buf));
-                q_strlcat(buf, skl, sizeof(buf));
-            }
-            q_strlcpy(di->stats, buf[0] ? buf : "single player", sizeof(di->stats));
-        }
-    }
-    else
-    {
-        q_strlcpy(di->map, "unknown", sizeof(di->map));
-        q_strlcpy(di->players, "n/a", sizeof(di->players));
-        q_strlcpy(di->duration, "n/a", sizeof(di->duration));
-        q_strlcpy(di->filesize, "n/a", sizeof(di->filesize));
-        di->stats[0] = '\0';
-    }
-    di->parsed = true;
+	if (parsed)
+	{
+		q_strlcpy(di->map, info.map, sizeof(di->map));
+		q_strlcpy(di->players, info.players, sizeof(di->players));
+		FormatDuration(info.duration, di->duration, sizeof(di->duration));
+		q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", info.filesize_mb);
+
+		di->stats[0] = '\0';
+		if (info.singleplayer)
+		{
+			static const char *skill_names[4] = { "Easy", "Normal", "Hard", "Nightmare" };
+			char buf[64];
+			buf[0] = '\0';
+			if (info.total_kills > 0 || info.kills > 0)
+				q_snprintf(buf, sizeof(buf), "Kills: %d/%d", info.kills, info.total_kills);
+			if (info.total_secrets > 0 || info.secrets > 0)
+			{
+				char sec[32];
+				q_snprintf(sec, sizeof(sec), "Secrets: %d/%d", info.secrets, info.total_secrets);
+				if (buf[0]) q_strlcat(buf, "  ", sizeof(buf));
+				q_strlcat(buf, sec, sizeof(buf));
+			}
+			if (info.skill >= 0)
+			{
+				char skl[24];
+				int s = info.skill < 4 ? info.skill : 3;
+				q_snprintf(skl, sizeof(skl), "Skill: %s", skill_names[s]);
+				if (buf[0]) q_strlcat(buf, "  ", sizeof(buf));
+				q_strlcat(buf, skl, sizeof(buf));
+			}
+			q_strlcpy(di->stats, buf[0] ? buf : "single player", sizeof(di->stats));
+		}
+	}
+	else
+	{
+		q_strlcpy(di->map, "unknown", sizeof(di->map));
+		q_strlcpy(di->players, "n/a", sizeof(di->players));
+		q_strlcpy(di->duration, "n/a", sizeof(di->duration));
+		q_strlcpy(di->filesize, "n/a", sizeof(di->filesize));
+		di->stats[0] = '\0';
+	}
+	di->parsed = true;
 }
 
 // Parse a small number of demos per frame so typed searches don't block.
@@ -28455,12 +28471,12 @@ static void M_Demos_ParseItem(demoitem_t *di)
 // dependent state like the filtered list).
 static qboolean M_Demos_TickBackgroundParse(void)
 {
-    const int BUDGET = 2;  // demos per frame; each Parse_DemoInfo can be I/O heavy
-    int parsed = 0;
+	const int BUDGET = 1;  // demos per frame; each Parse_DemoInfo can be I/O heavy
+	int parsed = 0;
 
-    while (parsed < BUDGET && demosmenu.bg_parse_cursor < demosmenu.democount)
-    {
-        demoitem_t *di = &demosmenu.items[demosmenu.bg_parse_cursor];
+	while (parsed < BUDGET && demosmenu.bg_parse_cursor < demosmenu.democount)
+	{
+		demoitem_t *di = &demosmenu.items[demosmenu.bg_parse_cursor];
 
 		if (demosmenu.minframes_threshold > 0 &&
 			di->minframes_state == DEMO_MINFRAMES_UNKNOWN)
@@ -28470,13 +28486,14 @@ static qboolean M_Demos_TickBackgroundParse(void)
 		if (di->minframes_state == DEMO_MINFRAMES_FAIL)
 			continue;
 
-        if (!di->parsed)
-        {
-            M_Demos_ParseItem(di);
-            parsed++;
-        }
-    }
-    return parsed > 0;
+		if (!di->parsed)
+		{
+			M_Demos_ParseItem(di);
+			parsed++;
+		}
+	}
+
+	return parsed > 0;
 }
 
 #define DEMOS_SEARCH_MAX_TERMS	8
@@ -28685,30 +28702,42 @@ static const char *M_Demos_CommandName(const char *name);
 
 static qboolean M_Demos_AllowPlayByMinFrames(demoitem_t *di)
 {
+	qboolean below_minframes;
+
 	M_Demos_SyncMinFramesThreshold();
 
 	if (demosmenu.minframes_threshold <= 0)
 		return true;
 
-	if (M_Demos_CheckMinFrames(di))
+	if (di->minframes_state == DEMO_MINFRAMES_UNKNOWN)
 	{
-		S_LocalSound("misc/menu3.wav");
-		Con_Printf("demo ^m%s^m is below cl_demo_minframes (%d/%d frames)\n",
-			M_Demos_CommandName(di->name), di->frame_count,
-			demosmenu.minframes_threshold);
-		M_Demos_RefilterEx(true);
-		demosmenu.minframes_hidden_since_refilter = 0;
-		return false;
-	}
+		qboolean blocked_sound = M_Demos_BlockSoundForIO();
 
-	return true;
+		below_minframes = M_Demos_CheckMinFrames(di);
+		M_Demos_UnblockSoundForIO(blocked_sound);
+	}
+	else
+		below_minframes = M_Demos_CheckMinFrames(di);
+
+	if (!below_minframes)
+		return true;
+
+	S_LocalSound("misc/menu3.wav");
+	Con_Printf("demo ^m%s^m is below cl_demo_minframes (%d/%d frames)\n",
+		M_Demos_CommandName(di->name), di->frame_count,
+		demosmenu.minframes_threshold);
+	M_Demos_RefilterEx(true);
+	demosmenu.minframes_hidden_since_refilter = 0;
+	return false;
 }
 
 static void M_Demos_RebuildForCurrentPath(void)
 {
 	demos_list_ctx_t root_ctx = { true };
 	char actual_folder[MAX_QPATH];
+	qboolean blocked_sound;
 
+	blocked_sound = M_Demos_BlockSoundForIO();
 	M_Demos_FreeItems();
 	demosmenu.list.cursor = -1;
 	demosmenu.list.scroll = 0;
@@ -28750,6 +28779,7 @@ static void M_Demos_RebuildForCurrentPath(void)
 
 	M_List_CenterCursor(&demosmenu.list);
 	M_Demos_UpdatePathHint();
+	M_Demos_UnblockSoundForIO(blocked_sound);
 }
 
 static void M_Demos_ClearRememberedPath(void)
@@ -28796,12 +28826,14 @@ static void M_Demos_ResetPathToRoot(void)
 
 static void M_Demos_Init(void)
 {
-    demosmenu.list.viewsize = MAX_VIS_DEMOS;
-    demosmenu.list.cursor = -1;
-    demosmenu.list.scroll = 0;
-    demosmenu.democount = 0;
-    demosmenu.scrollbar_grab = false;
-    VEC_CLEAR(demosmenu.items);
+	qboolean blocked_sound = M_Demos_BlockSoundForIO();
+
+	demosmenu.list.viewsize = MAX_VIS_DEMOS;
+	demosmenu.list.cursor = -1;
+	demosmenu.list.scroll = 0;
+	demosmenu.democount = 0;
+	demosmenu.scrollbar_grab = false;
+	VEC_CLEAR(demosmenu.items);
 	VEC_CLEAR(demosmenu.filtered_indices);
 	demosmenu.path_editing = false;
 	demosmenu.path_valid = true;
@@ -28811,8 +28843,8 @@ static void M_Demos_Init(void)
 	demosmenu.path_tabpartial[0] = '\0';
 	M_TextField_Init(&demosmenu.path_field, demosmenu.path_suffix, sizeof(demosmenu.path_suffix) - 1, false);
 
-    memset(&demosmenu.list.search, 0, sizeof(demosmenu.list.search));
-    demosmenu.list.search.maxlen = 32;
+	memset(&demosmenu.list.search, 0, sizeof(demosmenu.list.search));
+	demosmenu.list.search.maxlen = 32;
 
 	M_Ticker_Init (&demosmenu.ticker);
 
@@ -28829,6 +28861,7 @@ static void M_Demos_Init(void)
 		M_Demos_ResetPathToRoot();
 		M_Demos_RebuildForCurrentPath();
 	}
+	M_Demos_UnblockSoundForIO(blocked_sound);
 }
 
 void M_Menu_Demos_f (void)
@@ -29146,13 +29179,11 @@ void M_Demos_Draw (void)
 		}
 	}
 
-    // Background-parse a few demos per frame so search can match tooltip
-    // metadata without stalling on the first keystroke.  When a search is
-    // active, refresh the filter as new metadata trickles in — preserve
-    // the user's scroll/selection so results stream in without jumping.
+    // When search is active, background-parse a few demos per frame so metadata
+    // matches can stream in without making a single keystroke parse the whole list.
     // Coalesce refilters across several parses so very large demo libraries
     // don't pay an O(democount) sweep every couple of frames.
-    if (M_Demos_TickBackgroundParse() && demosmenu.list.search.len > 0)
+    if (demosmenu.list.search.len > 0 && M_Demos_TickBackgroundParse())
     {
         const int REFILTER_BATCH = 8;
         int new_parses = demosmenu.bg_parse_cursor - demosmenu.last_refilter_parsed;
@@ -29257,8 +29288,12 @@ void M_Demos_Draw (void)
 
         // Lazy parsing: only parse when item is selected for the first time
         if (!di->parsed && (demosmenu.minframes_threshold <= 0 ||
-			di->minframes_state != DEMO_MINFRAMES_UNKNOWN))
+            di->minframes_state != DEMO_MINFRAMES_UNKNOWN))
+        {
+            qboolean blocked_sound = M_Demos_BlockSoundForIO();
             M_Demos_ParseItem(di);
+            M_Demos_UnblockSoundForIO(blocked_sound);
+        }
         int info_y = y + demosmenu.list.viewsize * 8 + 4;
         qboolean at_bottom = (demosmenu.list.scroll + demosmenu.list.viewsize >= demosmenu.list.numitems);
         if (!at_bottom && M_List_GetOverflow(&demosmenu.list) > 0)

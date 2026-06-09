@@ -4130,6 +4130,7 @@ void SV_SpawnServer (const char *server)
 	scr_centertime_off = 0;
 
 	Con_DPrintf ("SpawnServer: %s\n",server);
+	S_StopAllSounds (true, false);
 	svs.changelevel_issued = false;		// now safe to issue another
 	Host_Modvote_Reset();
 	LOG_Maintenance();// deferred log roll at level changes

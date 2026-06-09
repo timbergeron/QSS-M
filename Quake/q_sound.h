@@ -103,7 +103,7 @@ void S_ClearPrecache (void);
 void S_BeginPrecaching (void);
 void S_EndPrecaching (void);
 
-void S_BlockSound (void);
+qboolean S_BlockSound (void);
 void S_UnblockSound (void);
 
 sfx_t *S_PrecacheSound (const char *sample);

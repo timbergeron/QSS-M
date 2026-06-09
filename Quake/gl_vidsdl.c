@@ -990,6 +990,7 @@ static void VID_Restart (void)
 {
 	int width, height, refreshrate, bpp;
 	qboolean fullscreen, validmode;
+	qboolean blocked_sound;
 
 	if (vid_locked || !vid_changed)
 		return;
@@ -1016,6 +1017,9 @@ static void VID_Restart (void)
 				width, height, bpp, refreshrate, fullscreen? "fullscreen" : "windowed");
 		return;
 	}
+
+	// Mute DMA output while SDL/GL mode changes block regular sound updates.
+	blocked_sound = S_BlockSound ();
 
 // ericw -- OS X, SDL1: textures, VBO's invalid after mode change
 //          OS X, SDL2: still valid after mode change
@@ -1065,9 +1069,12 @@ static void VID_Restart (void)
 //
 // update mouse grab
 //
-IN_UpdateGrabs();
-LoadCustomCursorImage (); // woods #customcursor
-Con_ReloadIBeamCursor (); // woods #customcursor - reload I-beam cursor for correct scaling
+	IN_UpdateGrabs();
+	LoadCustomCursorImage (); // woods #customcursor
+	Con_ReloadIBeamCursor (); // woods #customcursor - reload I-beam cursor for correct scaling
+
+	if (blocked_sound)
+		S_UnblockSound ();
 }
 
 /*

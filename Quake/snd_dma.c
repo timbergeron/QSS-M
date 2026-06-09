@@ -756,7 +756,10 @@ void S_ClearBuffer (void)
 
 	SNDDMA_LockBuffer ();
 	if (! shm->buffer)
+	{
+		SNDDMA_Submit ();
 		return;
+	}
 
 	s_rawend = 0;
 
@@ -1150,7 +1153,10 @@ static void S_Update_ (void)
 
 	SNDDMA_LockBuffer ();
 	if (! shm->buffer)
+	{
+		SNDDMA_Submit ();
 		return;
+	}
 
 // Updates DMA time
 	GetSoundtime();
@@ -1172,29 +1178,31 @@ static void S_Update_ (void)
 	SNDDMA_Submit ();
 }
 
-void S_BlockSound (void)
+qboolean S_BlockSound (void)
 {
 /* FIXME: do we really need the blocking at the
  * driver level?
  */
-	if (sound_started && snd_blocked == 0)	/* ++snd_blocked == 1 */
+	if (sound_started && snd_blocked == 0)
 	{
-		snd_blocked  = 1;
+		snd_blocked = 1;
 		S_ClearBuffer ();
 		if (shm)
 			SNDDMA_BlockSound();
+		return true;
 	}
+	return false;
 }
 
 void S_UnblockSound (void)
 {
 	if (!sound_started || !snd_blocked)
 		return;
-	if (snd_blocked == 1)			/* --snd_blocked == 0 */
+	if (snd_blocked == 1)
 	{
-		snd_blocked  = 0;
-		SNDDMA_UnblockSound();
 		S_ClearBuffer ();
+		snd_blocked = 0;
+		SNDDMA_UnblockSound();
 	}
 }
 
