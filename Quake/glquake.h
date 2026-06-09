@@ -499,6 +499,7 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *hdr);
 void R_RebuildAllLightmaps (void);
 
 int R_LightPoint (vec3_t p);
+int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise);
 
 void GL_SubdivideSurface (msurface_t *fa);
 void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights);

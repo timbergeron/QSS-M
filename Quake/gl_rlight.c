@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 extern cvar_t r_flatlightstyles; //johnfitz
 extern cvar_t r_dynamic;
+extern cvar_t r_aliaslightcache;
 
 extern cvar_t r_coloredpowerupglow; // woods #colorblends
 extern cvar_t gl_cshiftpercent; // woods #colorblends
@@ -707,12 +708,103 @@ LEGACY LIGHT SAMPLING
 vec3_t			lightspot;
 vec3_t			lightcolor; //johnfitz -- lit support via lordhavoc
 
+static int R_LightPointAverage (void)
+{
+    return ((lightcolor[0] + lightcolor[1] + lightcolor[2]) * (1.0f / 3.0f));
+}
+
+static void R_LightPointSetAmbient (vec3_t color)
+{
+    color[0] = color[1] = color[2] = CLAMP(0.0f, r_ambient.value, 255.0f);
+}
+
+static void R_LightPointStoreSample (aliaslight_sample_t *sample, int surfindex, int ds, int dt, double dsfrac, double dtfrac)
+{
+    if (!sample)
+        return;
+    sample->valid = false;
+    if (!cl.worldmodel || !cl.worldmodel->surfaces)
+        return;
+    if (surfindex < 0 || surfindex >= cl.worldmodel->numsurfaces)
+        return;
+
+    sample->valid = true;
+    sample->surfindex = surfindex;
+    sample->ds = ds;
+    sample->dt = dt;
+    sample->dsfrac = dsfrac;
+    sample->dtfrac = dtfrac;
+    VectorCopy (lightspot, sample->lightspot);
+}
+
+static void R_LightPointEvaluateSample (const aliaslight_sample_t *sample, vec3_t color)
+{
+    msurface_t    *surf;
+    int            ds, dt;
+    double        dsfrac, dtfrac;
+    int            maps, line3, r00 = 0, g00 = 0, b00 = 0, r01 = 0, g01 = 0, b01 = 0, r10 = 0, g10 = 0, b10 = 0, r11 = 0, g11 = 0, b11 = 0;
+    float        scale, e;
+
+    if (!sample || !sample->valid || !cl.worldmodel || !cl.worldmodel->surfaces)
+        return;
+    if (sample->surfindex < 0 || sample->surfindex >= cl.worldmodel->numsurfaces)
+        return;
+
+    surf = cl.worldmodel->surfaces + sample->surfindex;
+    if (!surf->samples)
+        return;
+    ds = sample->ds;
+    dt = sample->dt;
+    dsfrac = sample->dsfrac;
+    dtfrac = sample->dtfrac;
+
+    if (cl.worldmodel->flags & MOD_HDRLIGHTING)
+    {
+        static const float rgb9e5tab[32] = {    //multipliers for the 9-bit mantissa, according to the biased mantissa
+            //aka: pow(2, biasedexponent - bias-bits) where bias is 15 and bits is 9
+            1.0/(1<<24),    1.0/(1<<23),    1.0/(1<<22),    1.0/(1<<21),    1.0/(1<<20),    1.0/(1<<19),    1.0/(1<<18),    1.0/(1<<17),
+            1.0/(1<<16),    1.0/(1<<15),    1.0/(1<<14),    1.0/(1<<13),    1.0/(1<<12),    1.0/(1<<11),    1.0/(1<<10),    1.0/(1<<9),
+            1.0/(1<<8),        1.0/(1<<7),        1.0/(1<<6),        1.0/(1<<5),        1.0/(1<<4),        1.0/(1<<3),        1.0/(1<<2),        1.0/(1<<1),
+            1.0,            1.0*(1<<1),        1.0*(1<<2),        1.0*(1<<3),        1.0*(1<<4),        1.0*(1<<5),        1.0*(1<<6),        1.0*(1<<7),
+        };
+        uint32_t *lightmap = (uint32_t*)surf->samples + (dt * (surf->extents[0]+1) + ds);
+        line3 = (surf->extents[0]+1);
+        for (maps = 0;maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE;maps++)
+        {
+            scale = (1<<7) * (float) d_lightstylevalue[surf->styles[maps]] * 1.0f / 256.0f;
+            e = rgb9e5tab[lightmap[      0]>>27] * scale;r00 += ((lightmap[      0]>> 0)&0x1ff) * e;g00 += ((lightmap[      0]>> 9)&0x1ff) * e;b00 += ((lightmap[      0]>>18)&0x1ff) * e;
+            e = rgb9e5tab[lightmap[      1]>>27] * scale;r01 += ((lightmap[      1]>> 0)&0x1ff) * e;g01 += ((lightmap[      1]>> 9)&0x1ff) * e;b01 += ((lightmap[      1]>>18)&0x1ff) * e;
+            e = rgb9e5tab[lightmap[line3+0]>>27] * scale;r10 += ((lightmap[line3+0]>> 0)&0x1ff) * e;g10 += ((lightmap[line3+0]>> 9)&0x1ff) * e;b10 += ((lightmap[line3+0]>>18)&0x1ff) * e;
+            e = rgb9e5tab[lightmap[line3+1]>>27] * scale;r11 += ((lightmap[line3+1]>> 0)&0x1ff) * e;g11 += ((lightmap[line3+1]>> 9)&0x1ff) * e;b11 += ((lightmap[line3+1]>>18)&0x1ff) * e;
+            lightmap += (surf->extents[0]+1) * (surf->extents[1]+1);
+        }
+    }
+    else
+    {
+        byte *lightmap = (byte*)surf->samples + (dt * (surf->extents[0]+1) + ds)*3; // LordHavoc: *3 for color
+        line3 = (surf->extents[0]+1)*3;
+        for (maps = 0;maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE;maps++)
+        {
+            scale = (float) d_lightstylevalue[surf->styles[maps]] * 1.0f / 256.0f;
+            r00 += (float) lightmap[      0] * scale;g00 += (float) lightmap[      1] * scale;b00 += (float) lightmap[2] * scale;
+            r01 += (float) lightmap[      3] * scale;g01 += (float) lightmap[      4] * scale;b01 += (float) lightmap[5] * scale;
+            r10 += (float) lightmap[line3+0] * scale;g10 += (float) lightmap[line3+1] * scale;b10 += (float) lightmap[line3+2] * scale;
+            r11 += (float) lightmap[line3+3] * scale;g11 += (float) lightmap[line3+4] * scale;b11 += (float) lightmap[line3+5] * scale;
+            lightmap += (surf->extents[0]+1) * (surf->extents[1]+1)*3; // LordHavoc: *3 for colored lighting
+        }
+    }
+
+    color[0] += (float) ((int) ((((((r11-r10) * dsfrac) + r10)-(((r01-r00) * dsfrac) + r00)) * dtfrac) + (((r01-r00) * dsfrac) + r00)));
+    color[1] += (float) ((int) ((((((g11-g10) * dsfrac) + g10)-(((g01-g00) * dsfrac) + g00)) * dtfrac) + (((g01-g00) * dsfrac) + g00)));
+    color[2] += (float) ((int) ((((((b11-b10) * dsfrac) + b10)-(((b01-b00) * dsfrac) + b00)) * dtfrac) + (((b01-b00) * dsfrac) + b00)));
+}
+
 /*
 =============
 RecursiveLightPoint -- johnfitz -- replaced entire function for lit support via lordhavoc
 =============
 */
-int RecursiveLightPoint (vec3_t color, mnode_t *node, vec3_t rayorg, vec3_t start, vec3_t end, float *maxdist)
+static int RecursiveLightPointSample (vec3_t color, mnode_t *node, vec3_t rayorg, vec3_t start, vec3_t end, float *maxdist, aliaslight_sample_t *sample)
 {
 	float		front, back, frac;
 	vec3_t		mid;
@@ -735,7 +827,7 @@ loc0:
 
 	// LordHavoc: optimized recursion
 	if ((back < 0) == (front < 0))
-//		return RecursiveLightPoint (color, node->children[front < 0], rayorg, start, end, maxdist);
+//        return RecursiveLightPointSample (color, node->children[front < 0], rayorg, start, end, maxdist, sample);
 	{
 		node = node->children[front < 0];
 		goto loc0;
@@ -746,8 +838,8 @@ loc0:
 	mid[1] = start[1] + (end[1] - start[1])*frac;
 	mid[2] = start[2] + (end[2] - start[2])*frac;
 
-// go down front side
-	if (RecursiveLightPoint (color, node->children[front < 0], rayorg, start, mid, maxdist))
+    // go down front side
+    if (RecursiveLightPointSample (color, node->children[front < 0], rayorg, start, mid, maxdist, sample))
 		return true;	// hit something
 	else
 	{
@@ -810,56 +902,22 @@ loc0:
 
 			if (dist < *maxdist)
 			{
-				// LordHavoc: enhanced to interpolate lighting
-				int maps, line3, r00 = 0, g00 = 0, b00 = 0, r01 = 0, g01 = 0, b01 = 0, r10 = 0, g10 = 0, b10 = 0, r11 = 0, g11 = 0, b11 = 0;
-				float scale, e;
-
-				if (cl.worldmodel->flags & MOD_HDRLIGHTING)
-				{
-					static const float rgb9e5tab[32] = {	//multipliers for the 9-bit mantissa, according to the biased mantissa
-						//aka: pow(2, biasedexponent - bias-bits) where bias is 15 and bits is 9
-						1.0/(1<<24),	1.0/(1<<23),	1.0/(1<<22),	1.0/(1<<21),	1.0/(1<<20),	1.0/(1<<19),	1.0/(1<<18),	1.0/(1<<17),
-						1.0/(1<<16),	1.0/(1<<15),	1.0/(1<<14),	1.0/(1<<13),	1.0/(1<<12),	1.0/(1<<11),	1.0/(1<<10),	1.0/(1<<9),
-						1.0/(1<<8),		1.0/(1<<7),		1.0/(1<<6),		1.0/(1<<5),		1.0/(1<<4),		1.0/(1<<3),		1.0/(1<<2),		1.0/(1<<1),
-						1.0,			1.0*(1<<1),		1.0*(1<<2),		1.0*(1<<3),		1.0*(1<<4),		1.0*(1<<5),		1.0*(1<<6),		1.0*(1<<7),
-					};
-					uint32_t *lightmap = (uint32_t*)surf->samples + (dt * (surf->extents[0]+1) + ds);
-					line3 = (surf->extents[0]+1);
-					for (maps = 0;maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE;maps++)
-					{
-						scale = (1<<7) * (float) d_lightstylevalue[surf->styles[maps]] * 1.0f / 256.0f;
-						e = rgb9e5tab[lightmap[      0]>>27] * scale;r00 += ((lightmap[      0]>> 0)&0x1ff) * e;g00 += ((lightmap[      0]>> 9)&0x1ff) * e;b00 += ((lightmap[      0]>> 9)&0x1ff) * e;
-						e = rgb9e5tab[lightmap[      1]>>27] * scale;r01 += ((lightmap[      1]>> 0)&0x1ff) * e;g01 += ((lightmap[      1]>> 9)&0x1ff) * e;b01 += ((lightmap[      1]>> 9)&0x1ff) * e;
-						e = rgb9e5tab[lightmap[line3+0]>>27] * scale;r10 += ((lightmap[line3+0]>> 0)&0x1ff) * e;g10 += ((lightmap[line3+0]>> 9)&0x1ff) * e;b10 += ((lightmap[line3+0]>> 9)&0x1ff) * e;
-						e = rgb9e5tab[lightmap[line3+1]>>27] * scale;r11 += ((lightmap[line3+1]>> 0)&0x1ff) * e;g11 += ((lightmap[line3+1]>> 9)&0x1ff) * e;b11 += ((lightmap[line3+1]>> 9)&0x1ff) * e;
-						lightmap += (surf->extents[0]+1) * (surf->extents[1]+1);
-					}
-				}
-				else
-				{
-					byte *lightmap = (byte*)surf->samples + (dt * (surf->extents[0]+1) + ds)*3; // LordHavoc: *3 for color
-					line3 = (surf->extents[0]+1)*3;
-					for (maps = 0;maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE;maps++)
-					{
-						scale = (float) d_lightstylevalue[surf->styles[maps]] * 1.0f / 256.0f;
-						r00 += (float) lightmap[      0] * scale;g00 += (float) lightmap[      1] * scale;b00 += (float) lightmap[2] * scale;
-						r01 += (float) lightmap[      3] * scale;g01 += (float) lightmap[      4] * scale;b01 += (float) lightmap[5] * scale;
-						r10 += (float) lightmap[line3+0] * scale;g10 += (float) lightmap[line3+1] * scale;b10 += (float) lightmap[line3+2] * scale;
-						r11 += (float) lightmap[line3+3] * scale;g11 += (float) lightmap[line3+4] * scale;b11 += (float) lightmap[line3+5] * scale;
-						lightmap += (surf->extents[0]+1) * (surf->extents[1]+1)*3; // LordHavoc: *3 for colored lighting
-					}
-				}
-
-				color[0] += (float) ((int) ((((((r11-r10) * dsfrac) + r10)-(((r01-r00) * dsfrac) + r00)) * dtfrac) + (((r01-r00) * dsfrac) + r00)));
-				color[1] += (float) ((int) ((((((g11-g10) * dsfrac) + g10)-(((g01-g00) * dsfrac) + g00)) * dtfrac) + (((g01-g00) * dsfrac) + g00)));
-				color[2] += (float) ((int) ((((((b11-b10) * dsfrac) + b10)-(((b01-b00) * dsfrac) + b00)) * dtfrac) + (((b01-b00) * dsfrac) + b00)));
+                aliaslight_sample_t stack_sample;
+                aliaslight_sample_t *lightsample = sample ? sample : &stack_sample;
+                R_LightPointStoreSample (lightsample, node->firstsurface + (int)i, ds, dt, dsfrac, dtfrac);
+                R_LightPointEvaluateSample (lightsample, color);
 			}
 			return true; // success
 		}
 
 	// go down back side
-		return RecursiveLightPoint (color, node->children[front >= 0], rayorg, mid, end, maxdist);
+        return RecursiveLightPointSample (color, node->children[front >= 0], rayorg, mid, end, maxdist, sample);
 	}
+}
+
+static int RecursiveLightPoint (vec3_t color, mnode_t *node, vec3_t rayorg, vec3_t start, vec3_t end, float *maxdist)
+{
+    return RecursiveLightPointSample (color, node, rayorg, start, end, maxdist, NULL);
 }
 
 /*
@@ -886,8 +944,128 @@ int R_LightPoint (vec3_t p)
 		end[1] = p[1];
 		end[2] = p[2] - maxdist;
 
-		lightcolor[0] = lightcolor[1] = lightcolor[2] = CLAMP(0.0f, r_ambient.value, 255.0f);
+        R_LightPointSetAmbient (lightcolor);
 		RecursiveLightPoint (lightcolor, cl.worldmodel->nodes, p, p, end, &maxdist);
 	}
-	return ((lightcolor[0] + lightcolor[1] + lightcolor[2]) * (1.0f / 3.0f));
+    return R_LightPointAverage ();
+}
+
+static int R_LightPointTraceSample (vec3_t p, aliaslight_sample_t *sample)
+{
+    vec3_t        end;
+    float        maxdist = 8192.f; //johnfitz -- was 2048
+
+    if (sample)
+        memset (sample, 0, sizeof(*sample));
+
+    if (!cl.worldmodel || !cl.worldmodel->lightdata) // woods
+        return R_LightPoint (p);
+
+    if (cl.worldmodel->lightgrid && mod_lightgrid.value)
+        BSPX_LightGridValue(cl.worldmodel->lightgrid, p, lightcolor);
+    else
+    {
+        end[0] = p[0];
+        end[1] = p[1];
+        end[2] = p[2] - maxdist;
+
+        R_LightPointSetAmbient (lightcolor);
+        RecursiveLightPointSample (lightcolor, cl.worldmodel->nodes, p, p, end, &maxdist, sample);
+    }
+    return R_LightPointAverage ();
+}
+
+static int R_LightPointEvaluateCachedSample (const aliaslight_sample_t *sample)
+{
+    R_LightPointSetAmbient (lightcolor);
+    if (sample && sample->valid)
+    {
+        VectorCopy (sample->lightspot, lightspot);
+        R_LightPointEvaluateSample (sample, lightcolor);
+    }
+    return R_LightPointAverage ();
+}
+
+static int R_LightPointWithRaise (vec3_t p, float raise)
+{
+    int result;
+
+    result = R_LightPoint (p);
+    if (!result && raise)
+    {
+        vec3_t lpos;
+        VectorCopy (p, lpos);
+        lpos[2] += raise;
+        result = R_LightPoint (lpos);
+    }
+    return result;
+}
+
+static qboolean R_LightPointCacheEligible (entity_t *e, vec3_t p)
+{
+    if (!r_aliaslightcache.value || !e || !e->model)
+        return false;
+    if (!e->baseline.modelindex)
+        return false;
+    if (e->model->type != mod_alias)
+        return false;
+    if (e->effects & (EF_BRIGHTLIGHT|EF_DIMLIGHT|EF_RED|EF_BLUE|EF_GREEN))
+        return false;
+    if ((e->eflags & EFLAGS_VIEWMODEL) || e->netstate.tagentity)
+        return false;
+    if (!cl.worldmodel || !cl.worldmodel->lightdata)
+        return false;
+    if (cl.worldmodel->lightgrid && mod_lightgrid.value)
+        return false;
+    if (!VectorCompare (p, e->origin) || !VectorCompare (e->origin, e->baseline.origin))
+        return false;
+    return true;
+}
+
+int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise)
+{
+    aliaslight_cache_t *cache;
+    int result;
+
+    if (!R_LightPointCacheEligible (e, p))
+        return R_LightPointWithRaise (p, raise);
+
+    cache = &e->aliaslightcache;
+    if (!cache->valid
+        || cache->worldmodel != cl.worldmodel
+        || cache->worldsurfaces != cl.worldmodel->surfaces
+        || cache->worldlightdata != cl.worldmodel->lightdata
+        || cache->model != e->model
+        || !VectorCompare (cache->origin, p))
+    {
+        memset (cache, 0, sizeof(*cache));
+        cache->valid = true;
+        cache->worldmodel = cl.worldmodel;
+        cache->worldsurfaces = cl.worldmodel->surfaces;
+        cache->worldlightdata = cl.worldmodel->lightdata;
+        cache->model = e->model;
+        VectorCopy (p, cache->origin);
+        R_LightPointTraceSample (p, &cache->base);
+        if (!cache->base.valid)
+        {
+            cache->valid = false;
+            return R_LightPointWithRaise (p, raise);
+        }
+    }
+
+    result = R_LightPointEvaluateCachedSample (&cache->base);
+    if (!result && raise)
+    {
+        if (!cache->raised_valid)
+        {
+            vec3_t lpos;
+            VectorCopy (p, lpos);
+            lpos[2] += raise;
+            R_LightPointTraceSample (lpos, &cache->raised);
+            cache->raised_valid = true;
+        }
+        result = R_LightPointEvaluateCachedSample (&cache->raised);
+    }
+
+    return result;
 }

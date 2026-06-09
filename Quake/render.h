@@ -55,6 +55,28 @@ typedef vec_t vec3_t[3]; // woods #clmrotate
 
 qboolean CL_ApplyModelRotation(entity_t* ent, vec3_t angles, float time); // woods #clmrotate
 
+typedef struct aliaslight_sample_s
+{
+    qboolean                valid;
+    int                        surfindex;
+    int                        ds, dt;
+    double                    dsfrac, dtfrac;
+    vec3_t                    lightspot;
+} aliaslight_sample_t;
+
+typedef struct aliaslight_cache_s
+{
+    qboolean                valid;
+    struct qmodel_s            *worldmodel;
+    struct msurface_s        *worldsurfaces;
+    byte                    *worldlightdata;
+    struct qmodel_s            *model;
+    vec3_t                    origin;
+    aliaslight_sample_t        base;
+    aliaslight_sample_t        raised;
+    qboolean                raised_valid;
+} aliaslight_cache_t;
+
 typedef struct entity_s
 {
 	qboolean				forcelink;		// model changed
@@ -71,6 +93,7 @@ typedef struct entity_s
 	vec3_t					msg_angles[2];	// last two updates (0 is newest)
 	vec3_t					angles;
 	struct qmodel_s			*model;			// NULL = no model
+    aliaslight_cache_t        aliaslightcache;    // cached static alias model lightpoint
 	struct efrag_s			*efrag;			// linked list of efrags
 	int						frame;
 	float					syncbase;		// for client-side animations

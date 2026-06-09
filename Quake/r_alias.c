@@ -2801,16 +2801,7 @@ void R_SetupAliasLighting (entity_t	*e)
 		else
 		{
 			origin = e->origin;
-			// if the initial trace is completely black, try again from above
-			// this helps with models whose origin is slightly below ground level
-			// (e.g. some of the candles in the DOTM start map)
-			if (!R_LightPoint (origin))
-			{
-				vec3_t		lpos;
-				VectorCopy (origin, lpos);
-				lpos[2] += e->model->maxs[2] * 0.5f;
-				R_LightPoint (lpos);
-			}
+            R_LightPointCachedAlias (e, origin, e->model ? e->model->maxs[2] * 0.5f : 0.0f);
 		}
 
 		//add dlights
