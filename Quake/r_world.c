@@ -35,8 +35,10 @@ cvar_t gl_bmodel_instancing = {"gl_bmodel_instancing", "1", CVAR_ARCHIVE};
 typedef struct grass_presence_cache_s grass_presence_cache_t;
 
 byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
+#ifndef SDL_THREADS_DISABLED
 static qboolean RSceneCache_Queue(byte *vis);
 static void RSceneCache_Draw(qboolean water);
+#endif
 void RSceneCache_Shutdown(void);
 static qboolean R_GrassBladesActive (void);
 static float R_GrassAnimTime (void);
@@ -5532,15 +5534,10 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 
 		for (underwater = 0; underwater < 2; underwater++)
 		{
-		for (s = t->texturechains[chain]; s; s = s->texturechain)
-		{
+			for (s = t->texturechains[chain]; s; s = s->texturechain)
+			{
 				if ((!underwater && !(s->flags & SURF_UNDERWATER)) || (underwater && (s->flags & SURF_UNDERWATER)))
 				{
-						GL_SelectTexture(GL_TEXTURE0);
-						GL_Bind(animt->gltexture);
-						if (t->texturechains[chain]->flags & SURF_DRAWFENCE)
-							GL_Uniform1iFunc(useAlphaTestLoc, 1); // Flip alpha test back on
-
 					if (s->lightmaptexturenum != lastlightmap)
 						R_FlushBatch(underwater ? UNDER_WATER : ABOVE_WATER);
 
@@ -5917,6 +5914,10 @@ woods -- added #caustics support
 
 ================
 */
+#define RSCENECACHE_TEX_WORLD	1
+#define RSCENECACHE_TEX_WATER	2
+#define RSCENECACHE_TEX_SKY		4
+
 static struct
 {	//I'm tagging things as commented-volatile to mark the things that we depend upon before the sdl lock/unlock/wait calls.
 	SDL_Thread *thread;
@@ -5946,6 +5947,10 @@ static struct
 		unsigned int brushpolys;
 		unsigned int lightmaps;
 		unsigned int numtextures;
+		unsigned int drawtexturecount;
+		unsigned int *drawtextures;
+		byte *drawtextureflags;
+		qboolean hassky;
 
 		/*volatile*/ enum
 		{
@@ -5968,6 +5973,37 @@ static struct
 } rscenecache;
 byte *skipsubmodels;
 
+static qboolean RSceneCache_ReserveBatchIndices(struct rscenecachebath_s *batch, size_t addidx, const char *what)
+{
+	size_t needed, newmax;
+	void *new_idx;
+
+	if (addidx > (size_t)-1 - batch->numidx)
+	{
+		Con_Printf("RSceneCache_Thread: %s index count overflow\n", what);
+		return false;
+	}
+	needed = batch->numidx + addidx;
+	if (needed <= batch->maxidx)
+		return true;
+
+	newmax = (needed > (size_t)-1 - 4096) ? needed : needed + 4096;
+	if (newmax > (size_t)-1 / sizeof(*batch->idx))
+	{
+		Con_Printf("RSceneCache_Thread: %s index buffer too large\n", what);
+		return false;
+	}
+	new_idx = realloc(batch->idx, sizeof(*batch->idx) * newmax);
+	if (!new_idx)
+	{
+		Con_Printf("RSceneCache_Thread: Failed to realloc %s index buffer\n", what);
+		return false;
+	}
+
+	batch->idx = new_idx;
+	batch->maxidx = newmax;
+	return true;
+}
 
 static void RSceneCache_RenderDynamicLightmaps (struct rscenecache_s *cache, msurface_t *fa, int dlightframecount)
 {
@@ -6158,17 +6194,8 @@ static int RSceneCache_Thread(void *ctx)
 								        surf->texinfo->materialidx * cache->lightmaps * 2   /* texture bank  */
 								      + uw                    * cache->lightmaps            /* above / under */
 								      + (1 + surf->lightmaptexturenum)];                    /* lightmap slot */
-								if (batch->numidx+numidx > batch->maxidx)
-								{
-									void *new_idx;
-									batch->maxidx = batch->numidx+numidx + 4096;	//overestimate, because why not
-									new_idx = realloc(batch->idx, sizeof(*batch->idx)*batch->maxidx);
-									if (!new_idx) {
-										Con_Printf("RSceneCache_Thread: Failed to realloc index buffer\n");
-										continue; // Skip this surface if allocation fails
-								}
-									batch->idx = new_idx;
-								}
+								if (!RSceneCache_ReserveBatchIndices(batch, numidx, "world"))
+									continue;
 								idx = &batch->idx[batch->numidx];
 								batch->numidx += numidx;
 								for (e = 2; e < (unsigned int)surf->numedges; e++)
@@ -6208,6 +6235,11 @@ static int RSceneCache_Thread(void *ctx)
 						continue;	//ignore any buggy degenerate ones.
 					if ((unsigned)(surf->lightmaptexturenum+1) >= cache->lightmaps)
 						continue;	//wtf
+					if (!surf->texinfo) {
+						Con_DPrintf("RSceneCache: submodel surface %ld has NULL texinfo - skipping\n",
+							(long)(surf - cache->worldmodel->surfaces));
+						continue;
+					}
 					if ((unsigned int)surf->texinfo->materialidx >= cache->numtextures)
 						continue;	//should have been sanitised at load.
 					numidx = (surf->numedges-2)*3;
@@ -6216,17 +6248,8 @@ static int RSceneCache_Thread(void *ctx)
 					        surf->texinfo->materialidx * cache->lightmaps * 2   /* texture bank  */
 					      + uw                    * cache->lightmaps            /* above / under */
 					      + (1 + surf->lightmaptexturenum)];                    /* lightmap slot */
-					if (batch->numidx+numidx > batch->maxidx)
-					{
-						void *new_idx;
-						batch->maxidx = batch->numidx+numidx + 4096;	//overestimate, because why not
-						new_idx = realloc(batch->idx, sizeof(*batch->idx)*batch->maxidx);
-						if (!new_idx) {
-							Con_Printf("RSceneCache_Thread: Failed to realloc submodel index buffer\n");
-							continue; // Skip this surface if allocation fails
-						}
-						batch->idx = new_idx;
-					}
+					if (!RSceneCache_ReserveBatchIndices(batch, numidx, "submodel"))
+						continue;
 					idx = &batch->idx[batch->numidx];
 					batch->numidx += numidx;
 					for (e = 2; e < (unsigned int)surf->numedges; e++)
@@ -6385,6 +6408,11 @@ static qboolean RSceneCache_Queue(byte *vis)
 				building = cache;
 			continue;
 		}
+		if (cache->status == SCS_DISCARDED)
+			continue;
+		if (cache->lightmaps != (unsigned int)(lightmap_count + 1) ||
+			cache->numtextures != (unsigned int)cl.worldmodel->numtextures)
+			continue;
 
 		if (!memcmp(cache->pvs, vis, rowbytes))
 		{	//pvs matches. yay. we *could* check leaf, but that wouldn't handle detail brushes properly.
@@ -6496,8 +6524,8 @@ static qboolean RSceneCache_Queue(byte *vis)
 				cache == best)						//we're falling back on it...
 				continue;
 
-			if (cache->lightmaps != lightmap_count+1 ||
-				cache->numtextures != cl.worldmodel->numtextures)
+			if (cache->lightmaps != (unsigned int)(lightmap_count + 1) ||
+				cache->numtextures != (unsigned int)cl.worldmodel->numtextures)
 				continue;	//allocation sizes changed...
 
 			if (cache->status == SCS_DISCARDED)
@@ -6530,21 +6558,50 @@ static qboolean RSceneCache_Queue(byte *vis)
 			unsigned int e;
 			for (e = 0; e < cache->numtextures*cache->lightmaps*2; e++)
 				cache->batches[e].numidx = 0;
+			cache->drawtexturecount = 0;
+			cache->hassky = false;
+			if (cache->drawtextureflags)
+				memset(cache->drawtextureflags, 0, cache->numtextures * sizeof(*cache->drawtextureflags));
 		}
 		else
 		{	//allocate some new memory for it.
-			cache = calloc(1,
-				sizeof(*cache)-sizeof(cache->batches) +	//base structure
-				sizeof(*cache->batches)*cl.worldmodel->numtextures*(lightmap_count+1)*2 +	//trailing batch count...
-				rowbytes +	//pvs info thrown onto the end of the allocation because why not.
-				((cl.worldmodel->numsubmodels+7)>>3));
+			size_t batchcount, cachesize, numtextures, numlightmaps;
+
+			numtextures = (size_t)cl.worldmodel->numtextures;
+			numlightmaps = (size_t)(lightmap_count + 1);
+			if (numlightmaps && numtextures > ((size_t)-1) / numlightmaps / 2)
+				return false;
+			batchcount = numtextures * numlightmaps * 2;
+
+			cachesize = offsetof(struct rscenecache_s, batches);
+			if (batchcount > ((size_t)-1 - cachesize) / sizeof(*cache->batches))
+				return false;
+			cachesize += sizeof(*cache->batches) * batchcount;
+			if (numtextures > ((size_t)-1 - cachesize) / sizeof(*cache->drawtextures))
+				return false;
+			cachesize += sizeof(*cache->drawtextures) * numtextures;
+			if (numtextures > (size_t)-1 - cachesize)
+				return false;
+			cachesize += numtextures * sizeof(*cache->drawtextureflags);
+			if ((size_t)rowbytes > (size_t)-1 - cachesize)
+				return false;
+			cachesize += rowbytes;
+			if ((size_t)((cl.worldmodel->numsubmodels + 7) >> 3) > (size_t)-1 - cachesize)
+				return false;
+			cachesize += (cl.worldmodel->numsubmodels + 7) >> 3;
+
+			cache = calloc(1, cachesize);
+			if (!cache)
+				return false;
 					//link it, cos we might as well.
 			cache->next = rscenecache.cache;
 			rscenecache.cache = cache;
 
 			cache->lightmaps = lightmap_count+1;	//FIXME use texture arrays for the lightmaps, keep this at 2.
 			cache->numtextures = cl.worldmodel->numtextures;	//FIXME: merge textures into same-dimensions arrays
-			cache->pvs = (byte*)&cache->batches[cache->numtextures*cache->lightmaps*2];
+			cache->drawtextures = (unsigned int *)&cache->batches[batchcount];
+			cache->drawtextureflags = (byte *)(cache->drawtextures + cache->numtextures);
+			cache->pvs = cache->drawtextureflags + cache->numtextures;
 			cache->worldmodel = cl.worldmodel;
 			cache->cachedsubmodels = cache->pvs + rowbytes;
 			cache->numcachedsubmodels = cl.worldmodel->numsubmodels;
@@ -6629,6 +6686,51 @@ static void RSceneCache_Uncache(struct rscenecache_s *cache)
 	GL_DeleteBuffersFunc(1, &cache->ebo);
 	free(cache);
 }
+
+static qboolean RSceneCache_TextureIsSky(const texture_t *tex)
+{
+	return tex && tex->name[0] == 's' && tex->name[1] == 'k' && tex->name[2] == 'y';
+}
+
+static void RSceneCache_UpdateDrawTextureList(struct rscenecache_s *cache)
+{
+	size_t i, batchcount;
+
+	if (!cache || !cache->drawtextures || !cache->drawtextureflags)
+		return;
+
+	cache->drawtexturecount = 0;
+	cache->hassky = false;
+	memset(cache->drawtextureflags, 0, cache->numtextures * sizeof(*cache->drawtextureflags));
+
+	batchcount = (size_t)cache->numtextures * cache->lightmaps * 2;
+	for (i = 0; i < batchcount; i++)
+	{
+		unsigned int texnum;
+		byte flags;
+		texture_t *tex;
+
+		if (!cache->batches[i].numidx)
+			continue;
+
+		texnum = (unsigned int)(i / (cache->lightmaps * 2));
+		tex = cache->worldmodel->textures[texnum];
+		if (!tex)
+			continue;
+		flags = (tex->name[0] == '*') ? RSCENECACHE_TEX_WATER : RSCENECACHE_TEX_WORLD;
+
+		if (RSceneCache_TextureIsSky(tex))
+		{
+			flags |= RSCENECACHE_TEX_SKY;
+			cache->hassky = true;
+		}
+
+		if (!cache->drawtextureflags[texnum])
+			cache->drawtextures[cache->drawtexturecount++] = texnum;
+		cache->drawtextureflags[texnum] |= flags;
+	}
+}
+
 void RSceneCache_Cleanup(qmodel_t *mod)
 {
 	struct rscenecache_s **link, *cache;
@@ -6680,7 +6782,8 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 			GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, cache->ebo); // indices come from client memory!
 			GL_BufferDataFunc(GL_ELEMENT_ARRAY_BUFFER, numidx*sizeof(unsigned int), NULL,  GL_STATIC_DRAW);
 #ifdef USEMAPBUFFER
-			ebomem = GL_MapBufferFunc(GL_ELEMENT_ARRAY_BUFFER, GL_WRITE_ONLY);
+			if (GL_MapBufferFunc && GL_UnmapBufferFunc)
+				ebomem = GL_MapBufferFunc(GL_ELEMENT_ARRAY_BUFFER, GL_WRITE_ONLY);
 #endif
 		}
 		for (i = 0, numidx = 0; i < cache->numtextures*cache->lightmaps*2; i++)
@@ -6688,11 +6791,17 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 			if (gl_vbo_able)
 			{
 				cache->batches[i].eboidx = (unsigned int*)(numidx*sizeof(*cache->batches[i].idx));
+				if (cache->batches[i].numidx)
+				{
 #ifdef USEMAPBUFFER
-				memcpy(ebomem+(uintptr_t)cache->batches[i].eboidx, cache->batches[i].idx, cache->batches[i].numidx*sizeof(*cache->batches[i].idx));
+					if (ebomem)
+						memcpy(ebomem+(uintptr_t)cache->batches[i].eboidx, cache->batches[i].idx, cache->batches[i].numidx*sizeof(*cache->batches[i].idx));
+					else
+						GL_BufferSubDataFunc(GL_ELEMENT_ARRAY_BUFFER, numidx*sizeof(*cache->batches[i].idx), cache->batches[i].numidx*sizeof(*cache->batches[i].idx), cache->batches[i].idx);
 #else
-				GL_BufferSubDataFunc(GL_ELEMENT_ARRAY_BUFFER, numidx*sizeof(*cache->batches[i].idx), cache->batches[i].numidx*sizeof(*cache->batches[i].idx), cache->batches[i].idx);
+					GL_BufferSubDataFunc(GL_ELEMENT_ARRAY_BUFFER, numidx*sizeof(*cache->batches[i].idx), cache->batches[i].numidx*sizeof(*cache->batches[i].idx), cache->batches[i].idx);
 #endif
+				}
 				//leave the memory allocated to avoid all the reallocs if it gets reused. the cache will still need freeing later anyway.
 			}
 			else
@@ -6700,9 +6809,10 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 			numidx += cache->batches[i].numidx;
 		}
 #ifdef USEMAPBUFFER
-		if (gl_vbo_able)
+		if (gl_vbo_able && ebomem)
 			GL_UnmapBufferFunc(GL_ELEMENT_ARRAY_BUFFER);
 #endif
+		RSceneCache_UpdateDrawTextureList(cache);
 		cache->status = SCS_FINISHED;
 
 		for (i=0, cache = rscenecache.cache; cache; cache = cache->next)
@@ -6725,7 +6835,7 @@ static void RSceneCache_Draw(qboolean water)
 {
 	extern GLuint gl_bmodel_vbo;
 	struct rscenecache_s *cache = rscenecache.drawing;
-	unsigned int i, j;
+	unsigned int i, j, ti;
 	texture_t *tex;
 	int b;
 	int mode;
@@ -6734,6 +6844,7 @@ static void RSceneCache_Draw(qboolean water)
 	const int overbright = !!gl_overbright.value;
 	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
 	const float lightmapscale = (overbright ? 2.0f : 1.0f) * (wide10bits ? 4.0f : 1.0f);
+	const byte wantedtexture = water ? RSCENECACHE_TEX_WATER : RSCENECACHE_TEX_WORLD;
 
 	if (!cache)
 	{
@@ -6741,6 +6852,11 @@ static void RSceneCache_Draw(qboolean water)
 		return;
 	}
 	RSceneCache_Finish(cache);
+	if (cache->status != SCS_FINISHED)
+	{
+		skipsubmodels = NULL;
+		return;
+	}
 	skipsubmodels = cache->cachedsubmodels;
 
 	glDepthMask(GL_TRUE);
@@ -6772,12 +6888,13 @@ static void RSceneCache_Draw(qboolean water)
 		GL_SelectTexture(GL_TEXTURE0); // Switch back to default texture unit 0
 	}
 
-	for (i = 0; i < cache->numtextures; i++)
+	for (ti = 0; ti < cache->drawtexturecount; ti++)
 	{
+		i = cache->drawtextures[ti];
+		if (!(cache->drawtextureflags[i] & wantedtexture))
+			continue;
 		if (!cache->worldmodel->textures[i])
 			continue;	//stupid buggy shite.
-		if ((cache->worldmodel->textures[i]->name[0] == '*') != water)
-			continue;
 		b = false;
 		for (j = 0; j < cache->lightmaps * 2; j++)
 		{
@@ -6974,10 +7091,17 @@ qboolean RSceneCache_HasSky(void)
 
 	if (cache)
 	{
+		if (cache->status == SCS_DISCARDED)
+			return false;
+		if (cache->status == SCS_BUILDING)
+			return false;
+		if (cache->status == SCS_FINISHED)
+			return cache->hassky;
+
 		for (i = 0; i < cache->numtextures; i++)
 		{
 			tex = cache->worldmodel->textures[i];
-			if (!tex || !(tex->name[0]=='s'&&tex->name[1]=='k'&&tex->name[2]=='y'))
+			if (!RSceneCache_TextureIsSky(tex))
 				continue;	//we only want sky textures.
 			for (j = 0; j < cache->lightmaps * 2; j++)
 				if (cache->batches[i * cache->lightmaps * 2 + j].numidx)
@@ -6992,7 +7116,7 @@ qboolean RSceneCache_DrawSkySurfDepth(void)
 	struct rscenecache_s *cache = rscenecache.drawing;
 
 	extern GLuint gl_bmodel_vbo;
-	unsigned int i, j;
+	unsigned int i, j, ti;
 	texture_t *tex;
 	qboolean ret = false;
 
@@ -7001,11 +7125,19 @@ qboolean RSceneCache_DrawSkySurfDepth(void)
 	rscenecache.doingskybox = true;
 
 	RSceneCache_Finish(cache);
-
-	for (i = 0; i < cache->numtextures; i++)
+	if (cache->status != SCS_FINISHED)
 	{
+		rscenecache.doingskybox = false;
+		return false;
+	}
+
+	for (ti = 0; ti < cache->drawtexturecount; ti++)
+	{
+		i = cache->drawtextures[ti];
+		if (!(cache->drawtextureflags[i] & RSCENECACHE_TEX_SKY))
+			continue;
 		tex = cache->worldmodel->textures[i];
-		if (!tex || !(tex->name[0]=='s'&&tex->name[1]=='k'&&tex->name[2]=='y'))
+		if (!RSceneCache_TextureIsSky(tex))
 			continue;	//we only want sky textures.
 		for (j = 0; j < cache->lightmaps * 2; j++) // Optional: Changed loop bound for robustness
 		{
