@@ -7741,12 +7741,10 @@ typedef struct {
     GLenum format;
     GLenum type;
     const char *name;
-    qboolean needs_packed_pixels;
 } fxaa_color_format_t;
 
 static const fxaa_color_format_t fxaa_color_formats[] = {
-    {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_10_10_10_2, "RGB10_A2", true},
-    {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, "RGBA8", false}
+    {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, "RGBA8"}
 };
 
 // FXAA function declarations
@@ -8212,11 +8210,6 @@ static qboolean FXAA_CreateFramebuffer(int width, int height)
 
         for (i = 0; i < sizeof(fxaa_color_formats) / sizeof(fxaa_color_formats[0]); i++) {
             const fxaa_color_format_t *color_format = &fxaa_color_formats[i];
-
-            /* gl_highbitdepth also covers vid_highbitdepth 0: a 10-bit FBO is
-               pointless (and not user-disableable) over an 8-bit backbuffer */
-            if (color_format->needs_packed_pixels && (!gl_packed_pixels || !gl_highbitdepth))
-                continue;
 
             if (FXAA_AttemptFramebuffer(width, height, color_format, &status, &error)) {
                 Con_DPrintf2("FXAA: using %s framebuffer\n", fxaa.color_format_name);

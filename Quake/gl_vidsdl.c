@@ -122,7 +122,6 @@ qboolean	scr_skipupdate;
 
 qboolean gl_mtexable = false;
 qboolean gl_packed_pixels = false;
-qboolean gl_highbitdepth = false;	// default framebuffer has >= 10 bits per color channel
 qboolean gl_texture_env_combine = false; //johnfitz
 qboolean gl_texture_env_add = false; //johnfitz
 qboolean gl_swap_control = false; //johnfitz
@@ -217,7 +216,6 @@ static cvar_t	vid_bpp = {"vid_bpp", "16", CVAR_ARCHIVE};
 static cvar_t	vid_refreshrate = {"vid_refreshrate", "60", CVAR_ARCHIVE};
 static cvar_t	vid_vsync = {"vid_vsync", "0", CVAR_ARCHIVE};
 cvar_t	vid_fsaa = {"vid_fsaa", "0", CVAR_ARCHIVE}; // QuakeSpasm -- woods remove static
-static cvar_t	vid_highbitdepth = {"vid_highbitdepth", "1", CVAR_ARCHIVE}; // request 10-bit color for the default framebuffer
 cvar_t	vid_fxaa = {"vid_fxaa", "0", CVAR_ARCHIVE}; // // woods #fxaa anti-aliasing (0=off, 1=low, 2=medium, 3=high)
 static cvar_t	vid_desktopfullscreen = {"vid_desktopfullscreen", "0", CVAR_ARCHIVE}; // QuakeSpasm
 static cvar_t	vid_borderless = {"vid_borderless", "0", CVAR_ARCHIVE}; // QuakeSpasm
@@ -738,41 +736,6 @@ static qboolean VID_UseClosestFullscreenMode (int *width, int *height, int *refr
 
 /*
 ================
-VID_SetFramebufferColorBits
-
-Prefer a 10:10:10:2 default framebuffer for the normal render path. Drivers
-that cannot provide it fall back to the traditional 8-bit color buffer.
-================
-*/
-static void VID_SetFramebufferColorBits (int bpp, qboolean highprecision)
-{
-	if (bpp == 16)
-	{
-		SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 5);
-		SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 6);
-		SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 5);
-		SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
-	}
-	else if (highprecision)
-	{
-		SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 10);
-		SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 10);
-		SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 10);
-		SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 2);
-	}
-	else
-	{
-		/* alpha 0: the pre-10-bit code never requested destination alpha,
-		   and requiring it can reject otherwise usable visuals */
-		SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
-		SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
-		SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
-		SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
-	}
-}
-
-/*
-================
 VID_SetMode
 ================
 */
@@ -786,7 +749,6 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 #if defined(USE_SDL2)
 	int		previous_display;
 #endif
-	qboolean	highprecision_color;
 
 	// so Con_Printfs don't mess us up by forcing vid and snd updates
 	temp = scr_disabled_for_loading;
@@ -806,8 +768,6 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 		depthbits = 24;
 		stencilbits = 8;
 	}
-	highprecision_color = (bpp != 16) && vid_highbitdepth.value;
-	VID_SetFramebufferColorBits (bpp, highprecision_color);
 	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, depthbits);
 	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, stencilbits);
 
@@ -828,14 +788,7 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 		else if (!fullscreen)
 			flags |= SDL_WINDOW_RESIZABLE;
 
-create_sdl2_window:
 		draw_context = SDL_CreateWindow (caption, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
-		if (!draw_context && highprecision_color) {
-			VID_SetFramebufferColorBits (bpp, false);
-			highprecision_color = false;
-			Con_DPrintf("10-bit default framebuffer unavailable, using 8-bit color\n");
-			draw_context = SDL_CreateWindow (caption, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
-		}
 		if (!draw_context) { // scale back fsaa
 			SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
 			SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
@@ -851,20 +804,6 @@ create_sdl2_window:
 		}
 		if (!draw_context)
 			Sys_Error ("Couldn't create window: %s", SDL_GetError());
-
-		if (!gl_context) {
-			gl_context = SDL_GL_CreateContext(draw_context);
-			if (!gl_context && highprecision_color) {
-				VID_SetFramebufferColorBits (bpp, false);
-				highprecision_color = false;
-				Con_DPrintf("10-bit default framebuffer context unavailable, using 8-bit color\n");
-				SDL_DestroyWindow(draw_context);
-				draw_context = NULL;
-				goto create_sdl2_window;
-			}
-			if (!gl_context)
-				Sys_Error("Couldn't create GL context: %s", SDL_GetError());
-		}
 
 		previous_display = -1;
 	}
@@ -939,12 +878,6 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	bpp = SDL_VideoModeOK(width, height, bpp, flags);
 
 	draw_context = SDL_SetVideoMode(width, height, bpp, flags);
-	if (!draw_context && highprecision_color) {
-		VID_SetFramebufferColorBits (bpp, false);
-		highprecision_color = false;
-		Con_DPrintf("10-bit default framebuffer unavailable, using 8-bit color\n");
-		draw_context = SDL_SetVideoMode(width, height, bpp, flags);
-	}
 	if (!draw_context) { // scale back fsaa
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
@@ -966,22 +899,6 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	vid.width = VID_GetCurrentWidth();
 	vid.height = VID_GetCurrentHeight();
 #endif /* !defined(USE_SDL2) */
-
-	/* the SDL color size attributes are minimums, so check what we were
-	   actually granted; copy-to-texture paths pick their formats from this */
-	{
-		int redbits = 0, greenbits = 0, bluebits = 0;
-		SDL_GL_GetAttribute(SDL_GL_RED_SIZE, &redbits);
-		SDL_GL_GetAttribute(SDL_GL_GREEN_SIZE, &greenbits);
-		SDL_GL_GetAttribute(SDL_GL_BLUE_SIZE, &bluebits);
-		/* require the request too, so vid_highbitdepth 0 disables the 10-bit
-		   texture paths even while a kept window still has a 10-bit backbuffer */
-		gl_highbitdepth = highprecision_color && (redbits >= 10 && greenbits >= 10 && bluebits >= 10);
-		if (highprecision_color && !gl_highbitdepth)
-			Con_DPrintf("10-bit default framebuffer not granted, using %d/%d/%d-bit color\n", redbits, greenbits, bluebits);
-		else
-			Con_DPrintf("Framebuffer color bits: %d/%d/%d%s\n", redbits, greenbits, bluebits, gl_highbitdepth ? " (high bit depth)" : "");
-	}
 
 	vid.refreshrate = VID_GetCurrentRefreshRate();
 	vid.conwidth = vid.width & 0xFFFFFFF8;
@@ -2270,7 +2187,6 @@ void	VID_Init (void)
 					 "vid_bpp",
 					 "vid_vsync",
 					 "vid_fsaa",
-					 "vid_highbitdepth",
 					 "vid_desktopfullscreen",
 					 "vid_borderless",
 					 "gl_load24bit",	//including this here so we don't start up to the wrong setting.
@@ -2287,7 +2203,6 @@ void	VID_Init (void)
 	Cvar_RegisterVariable (&vid_bpp); //johnfitz
 	Cvar_RegisterVariable (&vid_vsync); //johnfitz
 	Cvar_RegisterVariable (&vid_fsaa); //QuakeSpasm
-	Cvar_RegisterVariable (&vid_highbitdepth);
 	Cvar_RegisterVariable (&vid_fxaa); // woods #fxaa
 	Cvar_RegisterVariable (&vid_desktopfullscreen); //QuakeSpasm
 	Cvar_RegisterVariable (&vid_borderless); //QuakeSpasm

@@ -370,7 +370,6 @@ void GL_PolygonOffset (int);
 #define GL_UNSIGNED_INT_10_10_10_2 0x8036
 #endif
 extern qboolean gl_packed_pixels;
-extern qboolean gl_highbitdepth;	// default framebuffer has >= 10 bits per color channel
 
 //johnfitz -- GL_EXT_texture_env_combine
 //the values for GL_ARB_ are identical

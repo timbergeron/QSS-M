@@ -595,11 +595,7 @@ void GLSLGamma_GammaCorrect (void)
 	{
 		r_gamma_texture_width = tw;
 		r_gamma_texture_height = th;
-		// match the backbuffer precision so the copy doesn't quantize a 10-bit frame to 8 bits
-		if (gl_highbitdepth && gl_packed_pixels)
-			glTexImage2D (GL_TEXTURE_2D, 0, GL_RGB10_A2, r_gamma_texture_width, r_gamma_texture_height, 0, GL_RGBA, GL_UNSIGNED_INT_10_10_10_2, NULL);
-		else
-			glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, r_gamma_texture_width, r_gamma_texture_height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, NULL);
+		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, r_gamma_texture_width, r_gamma_texture_height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, NULL);
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	}
@@ -716,8 +712,7 @@ void R_RenderSceneBlur(float alpha)
 		// Optional shrink heuristic: if window shrank a lot, reallocate.
 		sceneblur_texture_width = tgt_w;
 		sceneblur_texture_height = tgt_h;
-		// match the backbuffer precision so the copy doesn't quantize a 10-bit frame to 8 bits
-		glTexImage2D(GL_TEXTURE_2D, 0, (gl_highbitdepth && gl_packed_pixels) ? GL_RGB10_A2 : sceneblur_internal_format,
+		glTexImage2D(GL_TEXTURE_2D, 0, sceneblur_internal_format,
 			tgt_w, tgt_h, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -2905,11 +2900,7 @@ void R_ScaleView (void)
 			r_scaleview_texture_height = TexMgr_Pad(r_scaleview_texture_height);
 		}
 
-		// match the backbuffer precision so the copy doesn't quantize a 10-bit frame to 8 bits
-		if (gl_highbitdepth && gl_packed_pixels)
-			glTexImage2D (GL_TEXTURE_2D, 0, GL_RGB10_A2, r_scaleview_texture_width, r_scaleview_texture_height, 0, GL_RGBA, GL_UNSIGNED_INT_10_10_10_2, NULL);
-		else
-			glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, r_scaleview_texture_width, r_scaleview_texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, r_scaleview_texture_width, r_scaleview_texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	}
