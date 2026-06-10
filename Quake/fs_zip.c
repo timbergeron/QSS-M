@@ -745,6 +745,7 @@ pack_t *FSZIP_LoadArchive (const char *packfile)
 	}
 	pack->numfiles = numpackfiles;
 	pack->files = newfiles;
+	COM_BuildPackHash (pack);
 
 	//we don't need this stuff now.
 	Z_Free(zip.files);

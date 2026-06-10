@@ -26,8 +26,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "f_modified.h"
 #include <time.h>
 
-static const int	gl_solid_format = 3;
-static const int	gl_alpha_format = 4;
+//tb -- was legacy 3/4 (GL_RGB/GL_RGBA); sized GL_RGBA8 for both lets the
+//driver take the no-conversion upload path (the RGB internalformat made
+//Apple's GL strip alpha on the CPU for every texture upload at load time)
+static const int	gl_solid_format = GL_RGBA8;
+static const int	gl_alpha_format = GL_RGBA8;
 
 static cvar_t	gl_texturemode = {"gl_texturemode", "", CVAR_ARCHIVE};
 static cvar_t	gl_texture_anisotropy = {"gl_texture_anisotropy", "1", CVAR_ARCHIVE};
@@ -1729,6 +1732,175 @@ static byte *TexMgr_PreMultiply32(byte *in, size_t width, size_t height)
 	return result;
 }
 
+typedef struct texmip_job_s
+{
+	const byte	*src;
+	byte		*dst;
+	int		srcwidth;
+	int		srcheight;
+	int		dstwidth;
+	int		dstheight;
+	int		firstrow;
+	int		stride;
+} texmip_job_t;
+
+#define TEXMIP_MAX_THREADS	8
+#define TEXMIP_MIN_PIXELS_PER_THREAD	32768
+
+static qboolean TexMgr_IsPowerOfTwo (int v)
+{
+	return v > 0 && !(v & (v - 1));
+}
+
+static byte TexMgr_MipAvg2 (byte a, byte b)
+{
+	return (byte)(((int)a + (int)b) >> 1);
+}
+
+static byte TexMgr_MipAvg4 (byte a, byte b, byte c, byte d)
+{
+	int top = ((int)a + (int)b) >> 1;
+	int bottom = ((int)c + (int)d) >> 1;
+	return (byte)((top + bottom) >> 1);
+}
+
+static void TexMgr_GenerateMipRows (const texmip_job_t *job)
+{
+	int x, y;
+	const int srcwidth = job->srcwidth;
+	const int srcheight = job->srcheight;
+	const int dstwidth = job->dstwidth;
+	const qboolean mipw = srcwidth > 1;
+	const qboolean miph = srcheight > 1;
+
+	for (y = job->firstrow; y < job->dstheight; y += job->stride)
+	{
+		int sy = miph ? y * 2 : 0;
+		byte *out = job->dst + ((size_t)y * (size_t)dstwidth * 4u);
+
+		for (x = 0; x < dstwidth; x++, out += 4)
+		{
+			int sx = mipw ? x * 2 : 0;
+			const byte *p00 = job->src + (((size_t)sy * (size_t)srcwidth + (size_t)sx) * 4u);
+
+			if (mipw && miph)
+			{
+				const byte *p10 = p00 + 4;
+				const byte *p01 = p00 + (size_t)srcwidth * 4u;
+				const byte *p11 = p01 + 4;
+
+				out[0] = TexMgr_MipAvg4 (p00[0], p10[0], p01[0], p11[0]);
+				out[1] = TexMgr_MipAvg4 (p00[1], p10[1], p01[1], p11[1]);
+				out[2] = TexMgr_MipAvg4 (p00[2], p10[2], p01[2], p11[2]);
+				out[3] = TexMgr_MipAvg4 (p00[3], p10[3], p01[3], p11[3]);
+			}
+			else if (mipw)
+			{
+				const byte *p10 = p00 + 4;
+
+				out[0] = TexMgr_MipAvg2 (p00[0], p10[0]);
+				out[1] = TexMgr_MipAvg2 (p00[1], p10[1]);
+				out[2] = TexMgr_MipAvg2 (p00[2], p10[2]);
+				out[3] = TexMgr_MipAvg2 (p00[3], p10[3]);
+			}
+			else
+			{
+				const byte *p01 = p00 + (size_t)srcwidth * 4u;
+
+				out[0] = TexMgr_MipAvg2 (p00[0], p01[0]);
+				out[1] = TexMgr_MipAvg2 (p00[1], p01[1]);
+				out[2] = TexMgr_MipAvg2 (p00[2], p01[2]);
+				out[3] = TexMgr_MipAvg2 (p00[3], p01[3]);
+			}
+		}
+	}
+}
+
+static int TexMgr_MipThread (void *arg)
+{
+	TexMgr_GenerateMipRows ((const texmip_job_t *)arg);
+	return 0;
+}
+
+static void TexMgr_GenerateMipLevel (const unsigned *src, unsigned *dst, int srcwidth, int srcheight, int dstwidth, int dstheight)
+{
+	SDL_Thread	*threads[TEXMIP_MAX_THREADS];
+	texmip_job_t	jobs[TEXMIP_MAX_THREADS];
+	int		i, numthreads;
+	size_t		pixels = (size_t)dstwidth * (size_t)dstheight;
+
+	numthreads = q_max (1, SDL_GetCPUCount ());
+	numthreads = q_min (numthreads, TEXMIP_MAX_THREADS);
+	numthreads = q_min (numthreads, q_max (1, (int)(pixels / TEXMIP_MIN_PIXELS_PER_THREAD)));
+
+	for (i = 0; i < numthreads; i++)
+	{
+		jobs[i].src = (const byte *)src;
+		jobs[i].dst = (byte *)dst;
+		jobs[i].srcwidth = srcwidth;
+		jobs[i].srcheight = srcheight;
+		jobs[i].dstwidth = dstwidth;
+		jobs[i].dstheight = dstheight;
+		jobs[i].firstrow = i;
+		jobs[i].stride = numthreads;
+	}
+
+	if (numthreads <= 1)
+	{
+		TexMgr_GenerateMipRows (&jobs[0]);
+		return;
+	}
+
+	for (i = 1; i < numthreads; i++)
+	{
+		threads[i] = SDL_CreateThread (TexMgr_MipThread, "texmip", &jobs[i]);
+		if (!threads[i])
+			Con_DPrintf ("TexMgr_GenerateMipLevel: SDL_CreateThread failed: %s\n", SDL_GetError());
+	}
+	TexMgr_GenerateMipRows (&jobs[0]);
+	for (i = 1; i < numthreads; i++)
+	{
+		if (threads[i])
+			SDL_WaitThread (threads[i], NULL);
+		else
+			TexMgr_GenerateMipRows (&jobs[i]);
+	}
+}
+
+static void TexMgr_UploadMipChain (const gltexture_t *glt, unsigned *base, int internalformat)
+{
+	const unsigned	*src = base;
+	unsigned	*src_alloc = NULL;
+	int		width = glt->width;
+	int		height = glt->height;
+	int		miplevel = 1;
+
+	while (width > 1 || height > 1)
+	{
+		int dstwidth, dstheight, bytes;
+		unsigned *dst;
+
+		dstwidth = width > 1 ? width >> 1 : 1;
+		dstheight = height > 1 ? height >> 1 : 1;
+		bytes = TexMgr_CheckedHunkImageBytes (dstwidth, dstheight, 4, "TexMgr_UploadMipChain");
+		dst = (unsigned *) malloc (bytes);
+		if (!dst)
+			Sys_Error ("TexMgr_UploadMipChain: out of memory (%d bytes)", bytes);
+
+		TexMgr_GenerateMipLevel (src, dst, width, height, dstwidth, dstheight);
+		glTexImage2D (GL_TEXTURE_2D, miplevel, internalformat, dstwidth, dstheight, 0, GL_RGBA, GL_UNSIGNED_BYTE, dst);
+
+		free (src_alloc);
+		src_alloc = dst;
+		src = dst;
+		width = dstwidth;
+		height = dstheight;
+		miplevel++;
+	}
+
+	free (src_alloc);
+}
+
 /*
 ================
 TexMgr_LoadImage32 -- handles 32bit source data
@@ -1817,22 +1989,27 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 	// upload mipmaps
 	if (glt->flags & TEXPREF_MIPMAP && !(glt->flags & TEXPREF_WARPIMAGE)) // warp image mipmaps are generated later
 	{
-		mipwidth = glt->width;
-		mipheight = glt->height;
-
-		for (miplevel = 1; mipwidth > 1 || mipheight > 1; miplevel++)
+		if (TexMgr_IsPowerOfTwo (glt->width) && TexMgr_IsPowerOfTwo (glt->height))
+			TexMgr_UploadMipChain (glt, data, internalformat);
+		else
 		{
-			if (mipwidth > 1)
+			mipwidth = glt->width;
+			mipheight = glt->height;
+
+			for (miplevel = 1; mipwidth > 1 || mipheight > 1; miplevel++)
 			{
-				TexMgr_MipMapW (data, mipwidth, mipheight);
-				mipwidth >>= 1;
+				if (mipwidth > 1)
+				{
+					TexMgr_MipMapW (data, mipwidth, mipheight);
+					mipwidth >>= 1;
+				}
+				if (mipheight > 1)
+				{
+					TexMgr_MipMapH (data, mipwidth, mipheight);
+					mipheight >>= 1;
+				}
+				glTexImage2D (GL_TEXTURE_2D, miplevel, internalformat, mipwidth, mipheight, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
 			}
-			if (mipheight > 1)
-			{
-				TexMgr_MipMapH (data, mipwidth, mipheight);
-				mipheight >>= 1;
-			}
-			glTexImage2D (GL_TEXTURE_2D, miplevel, internalformat, mipwidth, mipheight, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
 		}
 	}
 
@@ -2176,7 +2353,29 @@ static void TexMgr_LoadLightmap (gltexture_t *glt, byte *data)
 TexMgr_LoadImage -- the one entry point for loading all textures
 ================
 */
+double texmgr_load_time;	//tb -- load profiling
+unsigned int texmgr_load_calls;
+
+static gltexture_t *TexMgr_LoadImage_impl (qmodel_t *owner, const char *name, int width, int height, enum srcformat format,
+			       byte *data, const char *source_file, src_offset_t source_offset, unsigned flags);
+
 gltexture_t *TexMgr_LoadImage (qmodel_t *owner, const char *name, int width, int height, enum srcformat format,
+			       byte *data, const char *source_file, src_offset_t source_offset, unsigned flags)
+{
+	double t;
+	gltexture_t *ret;
+
+	if (!developer.value)
+		return TexMgr_LoadImage_impl (owner, name, width, height, format, data, source_file, source_offset, flags);
+
+	t = Sys_DoubleTime ();
+	ret = TexMgr_LoadImage_impl (owner, name, width, height, format, data, source_file, source_offset, flags);
+	texmgr_load_time += Sys_DoubleTime () - t;
+	texmgr_load_calls++;
+	return ret;
+}
+
+static gltexture_t *TexMgr_LoadImage_impl (qmodel_t *owner, const char *name, int width, int height, enum srcformat format,
 			       byte *data, const char *source_file, src_offset_t source_offset, unsigned flags)
 {
 	unsigned short crc;

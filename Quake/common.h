@@ -388,7 +388,14 @@ typedef struct pack_s
 	int		numfiles;
 	time_t	mtime;
 	packfile_t	*files;
+
+	//tb -- hashed filename lookup, built once when the pack is loaded (COM_BuildPackHash)
+	int		*hash_chains;	// [hash_size] head index+1 into files[], 0 = empty bucket
+	int		*hash_next;	// [numfiles] next index+1 within the same bucket, 0 = end
+	unsigned int	hash_size;	// bucket count, power of two
 } pack_t;
+
+void COM_BuildPackHash (pack_t *pack);
 
 typedef struct searchpath_s
 {

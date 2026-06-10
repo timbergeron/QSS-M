@@ -39,7 +39,6 @@ qboolean lightmaps_skipupdates;
 struct lightmap_s	*lightmaps;
 int					lightmap_count;
 static int			last_lightmap_allocated;
-static int			*allocated;
 int LMBLOCK_WIDTH, LMBLOCK_HEIGHT;
 
 
@@ -360,13 +359,126 @@ dynamic:
 /*
 ========================
 AllocBlock -- returns a texture number and the position inside it
+
+tb -- rewritten as a skyline allocator.  The per-column scan was
+O(LMBLOCK_WIDTH * w) for every surface, which dominated lightmap build time
+on big maps (~120ms on ad_tears).  The skyline is kept as run-length
+segments of equal height; candidate positions only need to be evaluated at
+segment starts, and adjacent equal heights merge so the segment count stays
+tiny.
 ========================
 */
+typedef struct lmseg_s
+{
+	int	x;	// first column; the segment extends to the next segment's x (or LMBLOCK_WIDTH)
+	int	h;	// skyline height over those columns
+} lmseg_t;
+
+static lmseg_t	*lmsegs, *lmsegs_scratch;
+static int	lm_numsegs, lm_maxsegs;
+
+static void LM_ResetSkyline (void)
+{
+	if (!lmsegs)
+	{
+		lm_maxsegs = 1024;
+		lmsegs = (lmseg_t *) malloc (lm_maxsegs*sizeof(*lmsegs));
+		lmsegs_scratch = (lmseg_t *) malloc (lm_maxsegs*sizeof(*lmsegs));
+		if (!lmsegs || !lmsegs_scratch)
+			Sys_Error ("LM_ResetSkyline: out of memory");
+	}
+	lm_numsegs = 1;
+	lmsegs[0].x = 0;
+	lmsegs[0].h = 0;
+}
+
+static void LM_SkylinePlace (int x0, int w, int newh)
+{
+	int		x1 = x0 + w;
+	int		i, n, m, oldh_at_x1;
+	lmseg_t	*out;
+
+	if (lm_numsegs + 2 > lm_maxsegs)
+	{
+		int newmax = lm_maxsegs * 2;
+		lmseg_t *newsegs = (lmseg_t *) malloc (newmax*sizeof(*lmsegs));
+		lmseg_t *newscratch = (lmseg_t *) malloc (newmax*sizeof(*lmsegs_scratch));
+
+		if (!newsegs || !newscratch)
+		{
+			free (newsegs);
+			free (newscratch);
+			Sys_Error ("LM_SkylinePlace: out of memory");
+		}
+		memcpy (newsegs, lmsegs, lm_numsegs*sizeof(*lmsegs));
+		memcpy (newscratch, lmsegs_scratch, lm_numsegs*sizeof(*lmsegs_scratch));
+		free (lmsegs);
+		free (lmsegs_scratch);
+		lmsegs = newsegs;
+		lmsegs_scratch = newscratch;
+		lm_maxsegs = newmax;
+	}
+	out = lmsegs_scratch;
+	n = 0;
+
+	// old skyline height at column x1, for the segment we cut in half
+	oldh_at_x1 = 0;
+	for (i = 0; i < lm_numsegs; i++)
+	{
+		int ex = (i+1 < lm_numsegs) ? lmsegs[i+1].x : LMBLOCK_WIDTH;
+		if (lmsegs[i].x <= x1 && x1 < ex)
+		{
+			oldh_at_x1 = lmsegs[i].h;
+			break;
+		}
+	}
+
+	for (i = 0; i < lm_numsegs && lmsegs[i].x < x0; i++)
+	{
+		out[n].x = lmsegs[i].x;
+		out[n].h = lmsegs[i].h;
+		n++;
+	}
+	out[n].x = x0;
+	out[n].h = newh;
+	n++;
+	if (x1 < LMBLOCK_WIDTH)
+	{
+		out[n].x = x1;
+		out[n].h = oldh_at_x1;
+		n++;
+		for (i = 0; i < lm_numsegs; i++)
+		{
+			if (lmsegs[i].x <= x1)
+				continue;
+			out[n].x = lmsegs[i].x;
+			out[n].h = lmsegs[i].h;
+			n++;
+		}
+	}
+
+	// copy back, merging adjacent segments of equal height
+	m = 0;
+	for (i = 0; i < n; i++)
+	{
+		if (m && lmsegs[m-1].h == out[i].h)
+			continue;
+		lmsegs[m].x = out[i].x;
+		lmsegs[m].h = out[i].h;
+		m++;
+	}
+	lm_numsegs = m;
+}
+
 int AllocBlock (int w, int h, int *x, int *y)
 {
-	int		i, j;
-	int		best, best2;
+	int		s, e;
+	int		best, bestx;
 	int		texnum;
+
+	h = (h + 3) & ~3;	//tb -- quantize so segment tops align and merge; keeps the skyline flat and the scan short
+	if (h > LMBLOCK_HEIGHT)
+		h = LMBLOCK_HEIGHT;	// don't let quantization push a just-fitting block past the atlas
 
 	// ericw -- rather than searching starting at lightmap 0 every time,
 	// start at the last lightmap we allocated a surface in.
@@ -398,8 +510,8 @@ int AllocBlock (int w, int h, int *x, int *y)
 				if (!lightmaps[texnum].pbodata)
 					Sys_Error ("GL_BuildLightmaps: out of memory on %d bytes", 4*LMBLOCK_WIDTH*LMBLOCK_HEIGHT);
 			}
-			//as we're only tracking one texture, we don't need multiple copies of allocated any more.
-			memset(allocated, 0, sizeof(*allocated)*LMBLOCK_WIDTH);
+			//as we're only tracking one texture, we don't need multiple copies of the skyline any more.
+			LM_ResetSkyline ();
 
 			lightmaps[texnum].modified = true;
 			lightmaps[texnum].rectchange.l = 0;
@@ -408,30 +520,38 @@ int AllocBlock (int w, int h, int *x, int *y)
 			lightmaps[texnum].rectchange.w = LMBLOCK_WIDTH;
 		}
 		best = LMBLOCK_HEIGHT;
+		bestx = -1;
 
-		for (i=0 ; i<LMBLOCK_WIDTH-w ; i++)
+		for (s = 0; s < lm_numsegs; s++)
 		{
-			best2 = 0;
+			int pos = lmsegs[s].x;
+			int maxh = 0;
 
-			for (j=0 ; j<w ; j++)
+			if (pos > LMBLOCK_WIDTH - w)
+				break;
+			for (e = s; e < lm_numsegs && lmsegs[e].x < pos + w; e++)
 			{
-				if (allocated[i+j] >= best)
+				if (lmsegs[e].h >= best)
+				{
+					maxh = best;
 					break;
-				if (allocated[i+j] > best2)
-					best2 = allocated[i+j];
+				}
+				if (lmsegs[e].h > maxh)
+					maxh = lmsegs[e].h;
 			}
-			if (j == w)
-			{	// this is a valid spot
-				*x = i;
-				*y = best = best2;
+			if (maxh < best)
+			{
+				best = maxh;
+				bestx = pos;
 			}
 		}
 
-		if (best + h > LMBLOCK_HEIGHT)
+		if (bestx < 0 || best + h > LMBLOCK_HEIGHT)
 			continue;
 
-		for (i=0 ; i<w ; i++)
-			allocated[*x + i] = best + h;
+		*x = bestx;
+		*y = best;
+		LM_SkylinePlace (bestx, w, best + h);
 
 		last_lightmap_allocated = texnum;
 		return texnum;
@@ -450,6 +570,132 @@ static qmodel_t		*currentmodel;
 GL_CreateSurfaceLightmap
 ========================
 */
+
+//tb -- deferred lightmap fill: at level load GL_BuildLightmaps queues every
+//surface here after AllocBlock, then fills them all with worker threads.
+//R_BuildLightMap is thread-safe (stack blocklights, disjoint dest rects);
+//the lightmaps[] array must not be resized while workers run, so the fill
+//only starts after every AllocBlock call is done.
+typedef struct lm_filljob_s
+{
+	qmodel_t	*model;
+	msurface_t	*surf;
+	glpoly_t	*poly;	// non-NULL: build poly verts too (BuildSurfaceVerts)
+} lm_filljob_t;
+
+static lm_filljob_t	*lm_filljobs;
+static int		lm_numfilljobs, lm_maxfilljobs;
+static qboolean		lm_defer_fill;
+
+static void BuildSurfaceVerts (qmodel_t *model, msurface_t *fa, glpoly_t *poly);	//forward
+
+static void LM_ClearFillJobs (void)
+{
+	free (lm_filljobs);
+	lm_filljobs = NULL;
+	lm_numfilljobs = lm_maxfilljobs = 0;
+}
+
+typedef struct lm_fillctx_s
+{
+	int		first, stride;
+	entity_t	*ent;
+	int		framecount;
+	dlight_t	*lights;
+} lm_fillctx_t;
+
+static void LM_FillRange (const lm_fillctx_t *ctx)
+{
+	int i;
+	for (i = ctx->first; i < lm_numfilljobs; i += ctx->stride)
+	{
+		msurface_t *surf = lm_filljobs[i].surf;
+
+		if (lm_filljobs[i].poly)
+			BuildSurfaceVerts (lm_filljobs[i].model, surf, lm_filljobs[i].poly);
+
+		if (surf->lightmaptexturenum >= 0)
+		{
+			byte *base = lightmaps[surf->lightmaptexturenum].pbodata;
+			base += (surf->light_t * LMBLOCK_WIDTH + surf->light_s) * lightmap_bytes;
+			R_BuildLightMap (lm_filljobs[i].model, surf, base, LMBLOCK_WIDTH*lightmap_bytes, ctx->ent, ctx->framecount, ctx->lights);
+		}
+	}
+}
+
+static int LM_FillThread (void *arg)
+{
+	LM_FillRange ((const lm_fillctx_t *)arg);
+	return 0;
+}
+
+#define LM_MAX_FILL_THREADS	8
+#define LM_MIN_JOBS_PER_THREAD	64
+
+static void LM_QueueFillJob (qmodel_t *model, msurface_t *surf, glpoly_t *poly)
+{
+	if (lm_numfilljobs == lm_maxfilljobs)
+	{
+		lm_filljob_t *newjobs;
+		int newmax = lm_maxfilljobs ? lm_maxfilljobs*2 : 4096;
+
+		newjobs = (lm_filljob_t *) realloc (lm_filljobs, newmax*sizeof(*lm_filljobs));
+		if (!newjobs)
+			Sys_Error ("LM_QueueFillJob: out of memory (%d fill jobs)", newmax);
+		lm_filljobs = newjobs;
+		lm_maxfilljobs = newmax;
+	}
+	lm_filljobs[lm_numfilljobs].model = model;
+	lm_filljobs[lm_numfilljobs].surf = surf;
+	lm_filljobs[lm_numfilljobs].poly = poly;
+	lm_numfilljobs++;
+}
+
+static void LM_RunDeferredFill (void)
+{
+	SDL_Thread	*threads[LM_MAX_FILL_THREADS];
+	lm_fillctx_t	ctx[LM_MAX_FILL_THREADS];
+	int		i, numthreads;
+
+	numthreads = q_max (1, SDL_GetCPUCount ());
+	numthreads = q_min (numthreads, LM_MAX_FILL_THREADS);
+	numthreads = q_min (numthreads, q_max (1, lm_numfilljobs / LM_MIN_JOBS_PER_THREAD));
+
+	for (i = 0; i < numthreads; i++)
+	{
+		ctx[i].first = i;
+		ctx[i].stride = numthreads;
+		ctx[i].ent = currententity;
+		ctx[i].framecount = r_framecount;
+		ctx[i].lights = cl_dlights;
+	}
+
+	if (numthreads <= 1)
+	{
+		if (lm_numfilljobs)
+			LM_FillRange (&ctx[0]);
+	}
+	else
+	{
+		for (i = 1; i < numthreads; i++)
+		{
+			threads[i] = SDL_CreateThread (LM_FillThread, "lm_fill", &ctx[i]);
+			if (!threads[i])
+				Con_DPrintf ("LM_RunDeferredFill: SDL_CreateThread failed: %s\n", SDL_GetError());
+		}
+		LM_FillRange (&ctx[0]);
+		for (i = 1; i < numthreads; i++)
+		{
+			if (threads[i])
+				SDL_WaitThread (threads[i], NULL);
+			else
+				LM_FillRange (&ctx[i]);
+		}
+	}
+
+	LM_ClearFillJobs ();
+}
+
 void GL_CreateSurfaceLightmap (qmodel_t *model, msurface_t *surf)
 {
 	int		smax, tmax;
@@ -465,6 +711,10 @@ void GL_CreateSurfaceLightmap (qmodel_t *model, msurface_t *surf)
 	tmax = surf->extents[1]+1;
 
 	surf->lightmaptexturenum = AllocBlock (smax, tmax, &surf->light_s, &surf->light_t);
+
+	if (lm_defer_fill)
+		return;	// GL_BuildModel queues the fill; LM_RunDeferredFill does it on workers
+
 	base = lightmaps[surf->lightmaptexturenum].pbodata;
 	base += (surf->light_t * LMBLOCK_WIDTH + surf->light_s) * lightmap_bytes;
 	R_BuildLightMap (model, surf, base, LMBLOCK_WIDTH*lightmap_bytes, currententity, r_framecount, cl_dlights);
@@ -559,7 +809,18 @@ static void R_RemoveColinearVertices(glpoly_t* poly, float new_verts[][VERTEXSIZ
 BuildSurfaceDisplayList -- called at level load time
 ================
 */
-static void BuildSurfaceDisplayList (msurface_t *fa)
+static glpoly_t *AllocSurfacePoly (msurface_t *fa)
+{
+	glpoly_t *poly = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + (fa->numedges-4) * VERTEXSIZE*sizeof(float));
+	poly->next = fa->polys;
+	fa->polys = poly;
+	poly->numverts = fa->numedges;
+	return poly;
+}
+
+//tb -- the vertex math from BuildSurfaceDisplayList, split out so deferred
+//fill jobs can run it on worker threads (no Hunk_Alloc, no globals)
+static void BuildSurfaceVerts (qmodel_t *model, msurface_t *fa, glpoly_t *poly)
 {
 #ifdef MACBOOK_ARM_HACK // woods #collinear
 	extern cvar_t r_remove_collinear_vertices;
@@ -568,19 +829,9 @@ static void BuildSurfaceDisplayList (msurface_t *fa)
 	medge_t		*pedges, *r_pedge;
 	float		*vec;
 	float		s, t, s0, t0;
-	glpoly_t	*poly;
 
-// reconstruct the polygon
-	pedges = currentmodel->edges;
+	pedges = model->edges;
 	lnumverts = fa->numedges;
-
-	//
-	// draw texture
-	//
-	poly = (glpoly_t *) Hunk_Alloc (sizeof(glpoly_t) + (lnumverts-4) * VERTEXSIZE*sizeof(float));
-	poly->next = fa->polys;
-	fa->polys = poly;
-	poly->numverts = lnumverts;
 
 	if ((fa->flags & SURF_DRAWTURB) && r_brokenturbbias.value)
 	{
@@ -595,17 +846,17 @@ static void BuildSurfaceDisplayList (msurface_t *fa)
 
 	for (i=0 ; i<lnumverts ; i++)
 	{
-		lindex = currentmodel->surfedges[fa->firstedge + i];
+		lindex = model->surfedges[fa->firstedge + i];
 
 		if (lindex > 0)
 		{
 			r_pedge = &pedges[lindex];
-			vec = r_pcurrentvertbase[r_pedge->v[0]].position;
+			vec = model->vertexes[r_pedge->v[0]].position;
 		}
 		else
 		{
 			r_pedge = &pedges[-lindex];
-			vec = r_pcurrentvertbase[r_pedge->v[1]].position;
+			vec = model->vertexes[r_pedge->v[1]].position;
 		}
 		s = DotProduct (vec, fa->texinfo->vecs[0]) + s0;
 		s /= fa->texinfo->texture->width;
@@ -657,6 +908,15 @@ static void BuildSurfaceDisplayList (msurface_t *fa)
 		}
 	}
 #endif
+}
+
+static void BuildSurfaceDisplayList (msurface_t *fa)
+{
+	glpoly_t	*poly;
+
+	poly = AllocSurfacePoly (fa);
+	BuildSurfaceVerts (currentmodel, fa, poly);
+
 	//oldwater is lame. subdivide it now.
 	if ((fa->flags & SURF_DRAWTURB) && !gl_glsl_water_able)
 		GL_SubdivideSurface (fa);
@@ -674,9 +934,20 @@ void GL_BuildModel (qmodel_t *m)
 	currentmodel = m;
 	for (i=0 ; i<m->numsurfaces ; i++)
 	{
+		msurface_t *surf = m->surfaces + i;
 		//johnfitz -- rewritten to use SURF_DRAWTILED instead of the sky/water flags
-		GL_CreateSurfaceLightmap (m, m->surfaces + i);
-		BuildSurfaceDisplayList (m->surfaces + i);
+		GL_CreateSurfaceLightmap (m, surf);
+		if (lm_defer_fill && !((surf->flags & SURF_DRAWTURB) && !gl_glsl_water_able))
+		{
+			//tb -- allocate now (Hunk_Alloc isn't thread-safe), fill verts + lightmap on workers
+			LM_QueueFillJob (m, surf, AllocSurfacePoly (surf));
+		}
+		else
+		{
+			BuildSurfaceDisplayList (surf);	// legacy oldwater path needs serial GL_SubdivideSurface
+			if (lm_defer_fill)
+				LM_QueueFillJob (m, surf, NULL);
+		}
 		//johnfitz
 	}
 
@@ -697,8 +968,16 @@ void GL_BuildLightmaps (void)
 	int		i, j;
 	struct lightmap_s *lm;
 	qmodel_t	*m;
+	double	t_start, t_built, t_uploaded;
+	qboolean profile;
 
 	RSceneCache_Shutdown();	//make sure there's nothing poking them off-thread.
+
+	lm_defer_fill = false;	//tb -- drop any fill jobs orphaned by a Host_Error mid-build
+	LM_ClearFillJobs ();
+
+	profile = developer.value != 0;
+	t_start = profile ? Sys_DoubleTime () : 0;
 
 	r_framecount = 1; // no dlightcache
 
@@ -721,12 +1000,6 @@ void GL_BuildLightmaps (void)
 	lightmaps = NULL;
 	last_lightmap_allocated = 0;
 	lightmap_count = 0;
-	{
-		int *newallocated = realloc(allocated, sizeof(*allocated)*LMBLOCK_WIDTH);
-		if (!newallocated)
-			Sys_Error ("GL_BuildLightmaps: out of memory on %u bytes", (unsigned int)(sizeof(*allocated)*LMBLOCK_WIDTH));
-		allocated = newallocated;
-	}
 
 	if ((!q_strcasecmp(r_lightmap_format.string, "rgb9_e5") || !q_strcasecmp(r_lightmap_format.string, "e5bgr9") || !q_strcasecmp(r_lightmap_format.string, "rgb9e5")) && gl_texture_e5bgr9)
 		gl_lightmap_format = GL_RGB9_E5;
@@ -767,6 +1040,7 @@ void GL_BuildLightmaps (void)
 		Sys_Error ("GL_BuildLightmaps: bad lightmap format");
 	}
 
+	lm_defer_fill = true;	//tb -- queue surface fills, then run them on worker threads below
 	for (j=1 ; j<MAX_MODELS ; j++)
 	{
 		m = cl.model_precache[j];
@@ -781,6 +1055,18 @@ void GL_BuildLightmaps (void)
 			break;
 		GL_BuildModel(m);
 	}
+	lm_defer_fill = false;
+	if (profile)
+	{
+		double t_fill = Sys_DoubleTime ();
+		Con_DPrintf ("GL_BuildLightmaps: surfaces %.1fms\n", (t_fill-t_start)*1000.0);
+		LM_RunDeferredFill ();
+		Con_DPrintf ("GL_BuildLightmaps: fill %.1fms\n", (Sys_DoubleTime()-t_fill)*1000.0);
+	}
+	else
+		LM_RunDeferredFill ();
+
+	t_built = profile ? Sys_DoubleTime () : 0;
 
 	//
 	// upload all lightmaps that were filled
@@ -819,6 +1105,13 @@ void GL_BuildLightmaps (void)
 	if (i > 64)
 		Con_DWarning("%i lightmaps exceeds standard limit of 64.\n",i);
 	//johnfitz
+
+	if (profile)
+	{
+		t_uploaded = Sys_DoubleTime ();
+		Con_DPrintf ("GL_BuildLightmaps: build %.1fms upload %.1fms (%d lightmaps)\n",
+			(t_built-t_start)*1000.0, (t_uploaded-t_built)*1000.0, lightmap_count);
+	}
 }
 
 /*
@@ -863,9 +1156,14 @@ void GL_BuildBModelVertexBuffer (void)
 	int		i, j;
 	qmodel_t	*m;
 	float		*varray;
+	double		t_start;
+	qboolean	profile;
 
 	if (!(gl_vbo_able && gl_mtexable && gl_max_texture_units >= 3))
 		return;
+
+	profile = developer.value != 0;
+	t_start = profile ? Sys_DoubleTime () : 0;
 
 // ask GL for a name for our VBO
 	GL_DeleteBuffersFunc (1, &gl_bmodel_vbo);
@@ -947,6 +1245,10 @@ void GL_BuildBModelVertexBuffer (void)
 
 // invalidate the cached bindings
 	GL_ClearBufferBindings ();
+
+	if (profile)
+		Con_DPrintf ("GL_BuildBModelVertexBuffer: %.1fms (%u verts)\n",
+			(Sys_DoubleTime()-t_start)*1000.0, (unsigned int)numverts);
 }
 
 /*

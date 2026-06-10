@@ -2618,7 +2618,128 @@ If neither of file or handle is set, this
 can be used for detecting a file's presence.
 ===========
 */
+double com_findfile_time;	//tb -- load profiling
+unsigned int com_findfile_calls;
+
+/*
+===========
+COM_BuildPackHash -- tb
+
+Builds a chained hash over a pack's directory so COM_FindFile doesn't have
+to strcmp every entry of every pak for every lookup (misses scanned all of
+them).  Chains preserve ascending file order, so duplicate names resolve to
+the same entry the old linear scan found.
+===========
+*/
+static unsigned int COM_HashFileName (const char *name)
+{
+	unsigned int hash = 5381;
+	while (*name)
+		hash = (hash << 5) + hash + (unsigned char)*name++;
+	return hash;
+}
+
+void COM_BuildPackHash (pack_t *pack)
+{
+	int i;
+	unsigned int size;
+
+	if (!pack)
+		return;
+
+	if (pack->hash_chains)
+		Z_Free (pack->hash_chains);
+	if (pack->hash_next)
+		Z_Free (pack->hash_next);
+	pack->hash_chains = NULL;
+	pack->hash_next = NULL;
+	pack->hash_size = 0;
+
+	if (pack->numfiles <= 0)
+		return;
+
+	for (size = 1; size < (unsigned int)pack->numfiles; )
+	{
+		if (size > UINT_MAX / 2)
+			Sys_Error ("COM_BuildPackHash: too many pack files");
+		size <<= 1;
+	}
+	if (size > UINT_MAX / 2)
+		Sys_Error ("COM_BuildPackHash: too many pack files");
+	size <<= 1;	// keep load factor under 50%
+	if (size > (unsigned int)(INT_MAX / (int)sizeof(int)) || pack->numfiles > INT_MAX / (int)sizeof(int))
+		Sys_Error ("COM_BuildPackHash: too many pack files");
+
+	pack->hash_size = size;
+	pack->hash_chains = (int *) Z_Malloc ((int)(size * sizeof(int)));
+	pack->hash_next = (int *) Z_Malloc ((int)(pack->numfiles * sizeof(int)));
+
+	for (i = pack->numfiles - 1; i >= 0; i--)	// reverse, so chain heads keep the lowest index first
+	{
+		unsigned int bucket = COM_HashFileName (pack->files[i].name) & (size - 1);
+		pack->hash_next[i] = pack->hash_chains[bucket];
+		pack->hash_chains[bucket] = i + 1;
+	}
+}
+
+static void COM_FreePack (pack_t *pack)
+{
+	if (!pack)
+		return;
+
+	Sys_FileClose(pack->handle);
+	if (pack->hash_chains)
+		Z_Free(pack->hash_chains);
+	if (pack->hash_next)
+		Z_Free(pack->hash_next);
+	Z_Free(pack->files);
+	Z_Free(pack);
+}
+
+static int COM_FindPackFileIndex (pack_t *pak, const char *filename)
+{
+	int i = 0, idx;	// i is always set before the loop's continuation expression reads it; init quiets analyzers
+
+	if (pak->hash_chains && pak->hash_next && pak->hash_size)
+	{
+		idx = pak->hash_chains[COM_HashFileName (filename) & (pak->hash_size - 1)];
+		for ( ; idx; idx = pak->hash_next[i])
+		{
+			i = idx - 1;
+			if (strcmp(pak->files[i].name, filename) == 0)
+				return i;
+		}
+		return -1;
+	}
+
+	for (i = 0; i < pak->numfiles; i++)
+	{
+		if (strcmp(pak->files[i].name, filename) == 0)
+			return i;
+	}
+	return -1;
+}
+
+static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
+							unsigned int *path_id);
+
 static int COM_FindFile (const char *filename, int *handle, FILE **file,
+							unsigned int *path_id)
+{
+	double t;
+	int ret;
+
+	if (!developer.value)
+		return COM_FindFile_impl (filename, handle, file, path_id);
+
+	t = Sys_DoubleTime ();
+	ret = COM_FindFile_impl (filename, handle, file, path_id);
+	com_findfile_time += Sys_DoubleTime () - t;
+	com_findfile_calls++;
+	return ret;
+}
+
+static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 							unsigned int *path_id)
 {
 	searchpath_t	*search;
@@ -2640,10 +2761,9 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file,
 		if (search->pack)	/* look through all the pak file elements */
 		{
 			pak = search->pack;
-			for (i = 0; i < pak->numfiles; i++)
+			i = COM_FindPackFileIndex (pak, filename);
+			if (i >= 0)
 			{
-				if (strcmp(pak->files[i].name, filename) != 0)
-					continue;
 				// found it!
 				com_filesize = pak->files[i].filelen;
 				file_from_pak = 1;
@@ -3107,6 +3227,7 @@ static pack_t *COM_LoadPackFile (const char *packfile)
 	pack->handle = packhandle;
 	pack->numfiles = numpackfiles;
 	pack->files = newfiles;
+	COM_BuildPackHash (pack);
 
 	//Sys_Printf ("Added packfile %s (%i files)\n", packfile, numpackfiles);
 	return pack;
@@ -3504,11 +3625,7 @@ static qboolean COM_ShouldInsertBefore(searchpath_t *added, searchpath_t *existi
 static void COM_FreeSearchPath(searchpath_t *search)
 {
 	if (search->pack)
-	{
-		Sys_FileClose(search->pack->handle);
-		Z_Free(search->pack->files);
-		Z_Free(search->pack);
-	}
+		COM_FreePack(search->pack);
 
 	Z_Free(search);
 }
@@ -4039,11 +4156,7 @@ void COM_ResetGameDirectories(char *newgamedirs)
 	while (com_searchpaths != com_base_searchpaths)
 	{
 		if (com_searchpaths->pack)
-		{
-			Sys_FileClose (com_searchpaths->pack->handle);
-			Z_Free (com_searchpaths->pack->files);
-			Z_Free (com_searchpaths->pack);
-		}
+			COM_FreePack(com_searchpaths->pack);
 		search = com_searchpaths->next;
 		Z_Free (com_searchpaths);
 		com_searchpaths = search;
@@ -4996,9 +5109,7 @@ void COM_UnPAK_f(void)
 	FILE* f = fopen(pakpath, "rb");
 	if (!f) {
 		Con_Printf("ERROR: Could not open file for size check %s\n", pakpath);
-		Sys_FileClose(pack->handle);
-		Z_Free(pack->files);
-		Z_Free(pack);
+		COM_FreePack(pack);
 		return;
 	}
 
@@ -5012,9 +5123,7 @@ void COM_UnPAK_f(void)
 		Con_Printf("ERROR: PAK file too large (%.2f MB > %.2f MB max)\n",
 			(double)filesize / (1024.0 * 1024.0),
 			(double)PAK_MAX_SIZE / (1024.0 * 1024.0));
-		Sys_FileClose(pack->handle);
-		Z_Free(pack->files);
-		Z_Free(pack);
+		COM_FreePack(pack);
 		return;
 	}
 
@@ -5022,9 +5131,7 @@ void COM_UnPAK_f(void)
 	if (pack->numfiles > PAK_MAX_FILES) {
 		Con_Printf("ERROR: Too many files in PAK (%d > %d max)\n",
 			pack->numfiles, PAK_MAX_FILES);
-		Sys_FileClose(pack->handle);
-		Z_Free(pack->files);
-		Z_Free(pack);
+		COM_FreePack(pack);
 		return;
 	}
 
@@ -5131,9 +5238,7 @@ void COM_UnPAK_f(void)
 	}
 
 	// Clean up
-	Sys_FileClose(pack->handle);
-	Z_Free(pack->files);
-	Z_Free(pack);
+	COM_FreePack(pack);
 
 	Con_Printf("\r%80s\r", ""); // Clear progress line
 	if (success) {

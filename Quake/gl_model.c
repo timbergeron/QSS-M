@@ -481,11 +481,16 @@ Mod_LoadModel
 Loads a model into the cache
 ==================
 */
+double mod_load_total_time, mod_load_read_time;	//tb -- load profiling
+unsigned int mod_load_calls;
+
 static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 {
 	byte	*buf;
 	int	mod_type;
 	qofs_t model_filelen = 0;
+	double	t_start, t_read, t_done;
+	qboolean profile;
 
 	if (!mod->needload)
 	{
@@ -499,6 +504,9 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 	}
 
 	InvalidateTraceLineCache();
+
+	profile = developer.value != 0;
+	t_start = profile ? Sys_DoubleTime () : 0;
 
 //
 // load the file
@@ -561,6 +569,7 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 		return mod;
 	}
 	com_filesize = model_filelen;
+	t_read = profile ? Sys_DoubleTime () : 0;
 	FMod_CheckModel (mod->name, buf, (model_filelen > 0) ? (size_t)model_filelen : 0);
 
 //
@@ -656,6 +665,17 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 	}
 
 	Mod_SetExtraFlags (mod); //johnfitz. spike -- moved this to be generic, because most of the flags are anyway.
+
+	if (profile)
+	{
+		t_done = Sys_DoubleTime ();
+		mod_load_total_time += t_done - t_start;
+		mod_load_read_time += t_read - t_start;
+		mod_load_calls++;
+		if (t_done - t_start > 0.005)
+			Con_DPrintf ("Mod_LoadModel %s: read %.1fms parse %.1fms (%u bytes)\n",
+				mod->name, (t_read-t_start)*1000.0, (t_done-t_read)*1000.0, (unsigned int)model_filelen);
+	}
 
 	return mod;
 }
@@ -2252,15 +2272,52 @@ static void CalcSurfaceExtents (msurface_t *s, int lmshift)
 	}
 }
 
+#define MIN_FLOOR_NORMAL	0.7f	// matches MIN_STEP_NORMAL in pmove.c:37
+
+static void Mod_ResetMapSurfaceAreas (qmodel_t *mod)
+{
+	if (!mod)
+		return;
+
+	mod->total_surface_area = 0.0f;
+	mod->floor_surface_area = 0.0f;
+	mod->wall_surface_area = 0.0f;
+	mod->ceiling_surface_area = 0.0f;
+	mod->counted_faces = 0;
+}
+
+static qboolean Mod_IsToolTexture (const char *name)
+{
+	static const char *toolnames[] = {
+		"trigger", "clip", "skip", "hint", "null", "nodraw", "playerclip", "monsterclip"
+	};
+	size_t i;
+
+	if (!name || !*name)
+		return false;
+
+	for (i = 0; i < Q_COUNTOF(toolnames); ++i)
+	{
+		const size_t len = strlen(toolnames[i]);
+
+		if (!q_strncasecmp(name, toolnames[i], len))
+			return true;
+	}
+
+	return false;
+}
+
 /*
 =================
-Mod_CalcSurfaceBounds -- johnfitz -- calculate bounding box for per-surface frustum culling
+Mod_CalcSurfaceBoundsAndArea -- johnfitz -- calculate bounding box for per-surface frustum culling
 =================
 */
-static void Mod_CalcSurfaceBounds (msurface_t *s)
+static float Mod_CalcSurfaceBoundsAndArea (msurface_t *s, qboolean calcarea)
 {
+	double		sum[3] = {0.0, 0.0, 0.0};
+	double		v0[3] = {0.0, 0.0, 0.0};
 	int			i, e;
-	mvertex_t	*v;
+	mvertex_t	*v, *prev = NULL;
 
 	s->mins[0] = s->mins[1] = s->mins[2] = FLT_MAX;
 	s->maxs[0] = s->maxs[1] = s->maxs[2] = -FLT_MAX;
@@ -2286,7 +2343,68 @@ static void Mod_CalcSurfaceBounds (msurface_t *s)
 			s->maxs[1] = v->position[1];
 		if (s->maxs[2] < v->position[2])
 			s->maxs[2] = v->position[2];
+
+		if (calcarea)
+		{
+			if (i == 0)
+			{
+				v0[0] = v->position[0];
+				v0[1] = v->position[1];
+				v0[2] = v->position[2];
+			}
+			else if (i == 1)
+				prev = v;
+			else
+			{
+				double a[3], b[3];
+
+				a[0] = (double)prev->position[0] - v0[0];
+				a[1] = (double)prev->position[1] - v0[1];
+				a[2] = (double)prev->position[2] - v0[2];
+				b[0] = (double)v->position[0] - v0[0];
+				b[1] = (double)v->position[1] - v0[1];
+				b[2] = (double)v->position[2] - v0[2];
+
+				sum[0] += a[1] * b[2] - a[2] * b[1];
+				sum[1] += a[2] * b[0] - a[0] * b[2];
+				sum[2] += a[0] * b[1] - a[1] * b[0];
+				prev = v;
+			}
+		}
 	}
+
+	if (!calcarea || s->numedges < 3)
+		return 0.0f;
+
+	return (float)(0.5 * sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]));
+}
+
+static void Mod_AddMapSurfaceArea (msurface_t *surf, float area, double *total_area, double *floor_area, double *wall_area, double *ceiling_area, int *counted_faces)
+{
+	float nz;
+
+	if (area <= 0.0f)
+		return;
+	if (!surf->plane || (surf->flags & SURF_DRAWSKY))
+		return;
+	if (!surf->texinfo || !surf->texinfo->texture)
+		return;
+	if (Mod_IsToolTexture(surf->texinfo->texture->name))
+		return;
+
+	nz = surf->plane->normal[2];
+	if (surf->flags & SURF_PLANEBACK)
+		nz = -nz;
+
+	*total_area += area;
+	(*counted_faces)++;
+
+	if (nz > MIN_FLOOR_NORMAL)
+		*floor_area += area;
+	else if (nz < -MIN_FLOOR_NORMAL)
+		*ceiling_area += area;
+	else
+		*wall_area += area;
 }
 
 /*
@@ -2301,6 +2419,12 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 	msurface_t 	*out;
 	int			i, count, surfnum, lofs, shift;
 	int			planenum, side, texinfon;
+	int			world_first = 0, world_count = 0, world_end = 0;
+	double		total_area = 0.0, floor_area = 0.0, wall_area = 0.0, ceiling_area = 0.0;
+	int			counted_faces = 0;
+	qboolean	is_world_surface;
+	qboolean	calc_surface_area;
+	float		surface_area;
 
 	unsigned char *lmshift = NULL, defaultshift = 4;
 	unsigned int *lmoffset = NULL;
@@ -2388,6 +2512,19 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 
 	loadmodel->surfaces = out;
 	loadmodel->numsurfaces = count;
+	Mod_ResetMapSurfaceAreas(loadmodel);
+
+	if (loadmodel->submodels && loadmodel->numsubmodels > 0)
+	{
+		world_first = loadmodel->submodels[0].firstface;
+		world_count = loadmodel->submodels[0].numfaces;
+		if (world_count <= 0 || world_first < 0 || world_first > count || world_count > count - world_first)
+		{
+			world_first = 0;
+			world_count = 0;
+		}
+		world_end = world_first + world_count;
+	}
 
 	for (surfnum=0 ; surfnum<count ; surfnum++, out++)
 	{
@@ -2469,7 +2606,14 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 		else
 			CalcSurfaceExtents (out, shift);
 
-		Mod_CalcSurfaceBounds (out); //johnfitz -- for per-surface frustum culling
+		is_world_surface = world_count > 0 && surfnum >= world_first && surfnum < world_end;
+		calc_surface_area = is_world_surface && out->plane && out->texinfo && out->texinfo->texture;
+		if (calc_surface_area)
+		{
+			if (Mod_IsToolTexture(out->texinfo->texture->name))
+				calc_surface_area = false;
+		}
+		surface_area = Mod_CalcSurfaceBoundsAndArea (out, calc_surface_area); //johnfitz -- for per-surface frustum culling
 
 	// lighting info
 		if (loadmodel->bspversion == BSPVERSION_QUAKE64)
@@ -2523,7 +2667,16 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 			}
 		}
 		//johnfitz
+
+		if (calc_surface_area)
+			Mod_AddMapSurfaceArea (out, surface_area, &total_area, &floor_area, &wall_area, &ceiling_area, &counted_faces);
 	}
+
+	loadmodel->total_surface_area = (float)total_area;
+	loadmodel->floor_surface_area = (float)floor_area;
+	loadmodel->wall_surface_area = (float)wall_area;
+	loadmodel->ceiling_surface_area = (float)ceiling_area;
+	loadmodel->counted_faces = counted_faces;
 }
 
 /*
@@ -3259,140 +3412,6 @@ static float RadiusFromBounds (vec3_t mins, vec3_t maxs)
 	return VectorLength (corner);
 }
 
-#define MIN_FLOOR_NORMAL	0.7f	// matches MIN_STEP_NORMAL in pmove.c:37
-
-static mvertex_t *Mod_GetSurfaceVertex (qmodel_t *mod, msurface_t *surf, int vert)
-{
-	int edge = mod->surfedges[vert + surf->firstedge];
-
-	if (edge >= 0)
-		return &mod->vertexes[mod->edges[edge].v[0]];
-	else
-		return &mod->vertexes[mod->edges[-edge].v[1]];
-}
-
-static qboolean Mod_IsToolTexture (const char *name)
-{
-	static const char *toolnames[] = {
-		"trigger", "clip", "skip", "hint", "null", "nodraw", "playerclip", "monsterclip"
-	};
-	size_t i;
-
-	if (!name || !*name)
-		return false;
-
-	for (i = 0; i < Q_COUNTOF(toolnames); ++i)
-	{
-		const size_t len = strlen(toolnames[i]);
-
-		if (!q_strncasecmp(name, toolnames[i], len))
-			return true;
-	}
-
-	return false;
-}
-
-static float Mod_CalcSurfaceArea (msurface_t *surf, qmodel_t *mod)
-{
-	double sum[3] = {0.0, 0.0, 0.0};
-	double v0[3];
-	mvertex_t *base, *v1, *v2;
-	int i;
-
-	if (!surf || !mod || surf->numedges < 3)
-		return 0.0f;
-
-	base = Mod_GetSurfaceVertex(mod, surf, 0);
-	v0[0] = base->position[0];
-	v0[1] = base->position[1];
-	v0[2] = base->position[2];
-
-	for (i = 1; i < surf->numedges - 1; ++i)
-	{
-		double a[3], b[3];
-
-		v1 = Mod_GetSurfaceVertex(mod, surf, i);
-		v2 = Mod_GetSurfaceVertex(mod, surf, i + 1);
-
-		a[0] = (double)v1->position[0] - v0[0];
-		a[1] = (double)v1->position[1] - v0[1];
-		a[2] = (double)v1->position[2] - v0[2];
-		b[0] = (double)v2->position[0] - v0[0];
-		b[1] = (double)v2->position[1] - v0[1];
-		b[2] = (double)v2->position[2] - v0[2];
-
-		sum[0] += a[1] * b[2] - a[2] * b[1];
-		sum[1] += a[2] * b[0] - a[0] * b[2];
-		sum[2] += a[0] * b[1] - a[1] * b[0];
-	}
-
-	return (float)(0.5 * sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]));
-}
-
-static void Mod_CalcMapSurfaceAreas (qmodel_t *mod)
-{
-	double total_area = 0.0;
-	double floor_area = 0.0;
-	double wall_area = 0.0;
-	double ceiling_area = 0.0;
-	int counted_faces = 0;
-	int first, count, i;
-
-	if (!mod)
-		return;
-
-	mod->total_surface_area = 0.0f;
-	mod->floor_surface_area = 0.0f;
-	mod->wall_surface_area = 0.0f;
-	mod->ceiling_surface_area = 0.0f;
-	mod->counted_faces = 0;
-
-	if (!mod->submodels || mod->numsubmodels <= 0)
-		return;
-
-	first = mod->submodels[0].firstface;
-	count = mod->submodels[0].numfaces;
-	if (count <= 0 || first < 0 || first > mod->numsurfaces || count > mod->numsurfaces - first)
-		return;
-
-	for (i = 0; i < count; ++i)
-	{
-		float area, nz;
-		msurface_t *surf = &mod->surfaces[first + i];
-
-		if (!surf->plane || (surf->flags & SURF_DRAWSKY))
-			continue;
-		if (!surf->texinfo || !surf->texinfo->texture)
-			continue;
-		if (Mod_IsToolTexture(surf->texinfo->texture->name))
-			continue;
-
-		area = Mod_CalcSurfaceArea(surf, mod);
-		if (area <= 0.0f)
-			continue;
-
-		nz = surf->plane->normal[2];
-		if (surf->flags & SURF_PLANEBACK)
-			nz = -nz;
-
-		total_area += area;
-		counted_faces++;
-
-		if (nz > MIN_FLOOR_NORMAL)
-			floor_area += area;
-		else if (nz < -MIN_FLOOR_NORMAL)
-			ceiling_area += area;
-		else
-			wall_area += area;
-	}
-
-	mod->total_surface_area = (float)total_area;
-	mod->floor_surface_area = (float)floor_area;
-	mod->wall_surface_area = (float)wall_area;
-	mod->ceiling_surface_area = (float)ceiling_area;
-	mod->counted_faces = counted_faces;
-}
-
 static qboolean Mod_BSPLumpValid (size_t filesize, const lump_t *lump, size_t itemsize, int *count)
 {
 	if (!lump)
@@ -3994,16 +4013,49 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 
 // load into heap
 
+	{
+	extern double com_findfile_time, texmgr_load_time;
+	extern unsigned int com_findfile_calls, texmgr_load_calls;
+	qboolean profile = developer.value != 0;
+	double ff0 = 0, tm0 = 0;
+	unsigned int ffc0 = 0, tmc0 = 0;
+	double t0 = 0, t_geom = 0, t_tex = 0, t_light = 0, t_faces = 0;
+
+	if (profile)
+		t0 = Sys_DoubleTime ();
 	Mod_LoadVertexes (&header->lumps[LUMP_VERTEXES]);
 	Mod_LoadEdges (&header->lumps[LUMP_EDGES], bsp2);
 	Mod_LoadSurfedges (&header->lumps[LUMP_SURFEDGES]);
+	if (profile)
+	{
+		t_geom = Sys_DoubleTime ();
+		ff0 = com_findfile_time;
+		tm0 = texmgr_load_time;
+		ffc0 = com_findfile_calls;
+		tmc0 = texmgr_load_calls;
+	}
 	Mod_LoadTextures (&header->lumps[LUMP_TEXTURES]);
+	if (profile)
+	{
+		t_tex = Sys_DoubleTime ();
+		Con_DPrintf ("Mod_LoadTextures %s: findfile %.1fms (%u calls) texmgr %.1fms (%u calls)\n", mod->name,
+			(com_findfile_time-ff0)*1000.0, com_findfile_calls-ffc0, (texmgr_load_time-tm0)*1000.0, texmgr_load_calls-tmc0);
+	}
 	Mod_LoadLighting (&header->lumps[LUMP_LIGHTING]);
+	if (profile)
+		t_light = Sys_DoubleTime ();
 	Mod_LoadPlanes (&header->lumps[LUMP_PLANES]);
 	Mod_LoadTexinfo (&header->lumps[LUMP_TEXINFO]);
 	Mod_LoadEntities (&header->lumps[LUMP_ENTITIES]);	//Spike: moved this earlier, so that we can parse worldspawn keys earlier.
+	Mod_LoadSubmodels (&header->lumps[LUMP_MODELS]);	// faces use the world face range while loading
 	Mod_LoadFaces (&header->lumps[LUMP_FACES], bsp2);
+	if (profile)
+		t_faces = Sys_DoubleTime ();
 	Mod_LoadMarksurfaces (&header->lumps[LUMP_MARKSURFACES], bsp2);
+	if (profile)
+		Con_DPrintf ("Mod_LoadBrushModel %s: geom %.1fms tex %.1fms light %.1fms faces %.1fms\n",
+			mod->name, (t_geom-t0)*1000.0, (t_tex-t_geom)*1000.0, (t_light-t_tex)*1000.0, (t_faces-t_light)*1000.0);
+	}
 
 	if (mod->bspversion == BSPVERSION && external_vis.value/* && sv.modelname[0] && !q_strcasecmp(loadname, sv.name)*/) // woods allow vis load online
 	{
@@ -4031,16 +4083,29 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 	Mod_LoadVisibility (&header->lumps[LUMP_VISIBILITY]);
 	Mod_LoadLeafs (&header->lumps[LUMP_LEAFS], bsp2);
 visdone:
+	{
+	qboolean profile = developer.value != 0;
+	double t0 = 0, t_nodes = 0, t_wvis;
+
+	if (profile)
+		t0 = Sys_DoubleTime ();
 	Mod_LoadNodes (&header->lumps[LUMP_NODES], bsp2);
 	Mod_LoadClipnodes (&header->lumps[LUMP_CLIPNODES], bsp2);
-	Mod_LoadSubmodels (&header->lumps[LUMP_MODELS]);
 
 	Mod_MakeHull0 ();
 
 	mod->numframes = 2;		// regular and alternate animation
 
+	if (profile)
+		t_nodes = Sys_DoubleTime ();
 	Mod_CheckWaterVis();
-	Mod_CalcMapSurfaceAreas(mod);
+	if (profile)
+	{
+		t_wvis = Sys_DoubleTime ();
+		Con_DPrintf ("Mod_LoadBrushModel %s: nodes %.1fms watervis %.1fms\n",
+			mod->name, (t_nodes-t0)*1000.0, (t_wvis-t_nodes)*1000.0);
+	}
+	}
 
 //
 // set up the submodels (FIXME: this is confusing)

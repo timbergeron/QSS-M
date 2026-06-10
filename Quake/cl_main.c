@@ -4468,6 +4468,23 @@ qboolean CL_CheckDownloads(void)
 		return false;              /* block exactly like .loc stage   */
 	}
 
+	if (cl.model_download < cl.model_count || cl.sound_download < cl.sound_count)
+	{
+	extern double com_findfile_time, texmgr_load_time;
+	extern unsigned int com_findfile_calls, texmgr_load_calls;
+	qboolean profile = developer.value != 0;
+	double ff0 = 0, tm0 = 0, t0 = 0, t_models = 0;
+	unsigned int ffc0 = 0, tmc0 = 0;
+
+	if (profile)
+	{
+		ff0 = com_findfile_time;
+		tm0 = texmgr_load_time;
+		t0 = Sys_DoubleTime ();
+		ffc0 = com_findfile_calls;
+		tmc0 = texmgr_load_calls;
+	}
+
 	for (; cl.model_download < cl.model_count; )
 	{
 		if (cl.model_name[cl.model_download][0]) // woods
@@ -4485,6 +4502,15 @@ qboolean CL_CheckDownloads(void)
 		cl.model_download++;
 	}
 
+	if (profile)
+	{
+		t_models = Sys_DoubleTime ();
+		Con_DPrintf ("model precache: %.1fms (findfile %.1fms/%u texmgr %.1fms/%u)\n", (t_models-t0)*1000.0,
+			(com_findfile_time-ff0)*1000.0, com_findfile_calls-ffc0, (texmgr_load_time-tm0)*1000.0, texmgr_load_calls-tmc0);
+		ff0 = com_findfile_time;
+		ffc0 = com_findfile_calls;
+	}
+
 	for (; cl.sound_download < cl.sound_count; )
 	{
 		if (*cl.sound_name[cl.sound_download])
@@ -4496,6 +4522,11 @@ qboolean CL_CheckDownloads(void)
 			cl.suppress_precache_miss_warnings = false;
 		}
 		cl.sound_download++;
+	}
+
+	if (profile)
+		Con_DPrintf ("sound precache: %.1fms (findfile %.1fms/%u)\n", (Sys_DoubleTime()-t_models)*1000.0,
+			(com_findfile_time-ff0)*1000.0, com_findfile_calls-ffc0);
 	}
 
 	CL_MaybePrintLateWrongGameDirWarning();
@@ -4514,7 +4545,19 @@ qboolean CL_CheckDownloads(void)
 
 		//fixme: deal with skybox somehow
 
-		R_NewMap ();
+		if (developer.value)
+		{
+			extern double com_findfile_time, texmgr_load_time;
+			extern unsigned int com_findfile_calls, texmgr_load_calls;
+			double ff0 = com_findfile_time, tm0 = texmgr_load_time;
+			unsigned int ffc0 = com_findfile_calls, tmc0 = texmgr_load_calls;
+			double t_newmap = Sys_DoubleTime ();
+			R_NewMap ();
+			Con_DPrintf ("R_NewMap: %.1fms (findfile %.1fms/%u texmgr %.1fms/%u)\n", (Sys_DoubleTime()-t_newmap)*1000.0,
+				(com_findfile_time-ff0)*1000.0, com_findfile_calls-ffc0, (texmgr_load_time-tm0)*1000.0, texmgr_load_calls-tmc0);
+		}
+		else
+			R_NewMap ();
 
 #ifdef PSET_SCRIPT
 		//the protocol changing depending upon files found on the client's computer is of course a really shit way to design things

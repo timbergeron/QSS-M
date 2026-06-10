@@ -4389,7 +4389,23 @@ void SV_SpawnServer (const char *server)
 // serverflags are for cross level information (sigils)
 	pr_global_struct->serverflags = svs.serverflags;
 
+	if (developer.value)
+	{
+	extern double com_findfile_time, texmgr_load_time, mod_load_total_time, mod_load_read_time;
+	extern unsigned int com_findfile_calls, texmgr_load_calls, mod_load_calls;
+	double ff0 = com_findfile_time, tm0 = texmgr_load_time, ml0 = mod_load_total_time, mr0 = mod_load_read_time;
+	unsigned int ffc0 = com_findfile_calls, tmc0 = texmgr_load_calls, mlc0 = mod_load_calls;
+	double t0 = Sys_DoubleTime ();
+
 	ED_LoadFromFile (qcvm->worldmodel->entities);
+
+	Con_DPrintf ("ED_LoadFromFile: %.1fms (models %.1fms/%u read %.1fms findfile %.1fms/%u texmgr %.1fms/%u)\n",
+		(Sys_DoubleTime()-t0)*1000.0,
+		(mod_load_total_time-ml0)*1000.0, mod_load_calls-mlc0, (mod_load_read_time-mr0)*1000.0,
+		(com_findfile_time-ff0)*1000.0, com_findfile_calls-ffc0, (texmgr_load_time-tm0)*1000.0, texmgr_load_calls-tmc0);
+	}
+	else
+		ED_LoadFromFile (qcvm->worldmodel->entities);
 
 	SV_EnsureSinglePlayerStart(); // woods #spawn
 
