@@ -29,6 +29,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <setjmp.h>
 #include "time.h" // woods #cfgbackup
 
+#ifdef __APPLE__
+#define Host_Setjmp(env) _setjmp(env)
+#define Host_Longjmp(env, value) _longjmp(env, value)
+#else
+#define Host_Setjmp(env) setjmp(env)
+#define Host_Longjmp(env, value) longjmp(env, value)
+#endif
+
 void URI_Init(void); // woods #uri
 void URI_Shutdown(void); // woods #uri
 void URI_Frame(void); // woods #uri
@@ -183,7 +191,7 @@ void Host_EndGame (const char *message, ...)
 	else
 		CL_Disconnect ();
 
-	longjmp (host_abortserver, 1);
+	Host_Longjmp (host_abortserver, 1);
 }
 
 /*
@@ -234,7 +242,7 @@ void Host_Error (const char *error, ...)
 
 	inerror = false;
 
-	longjmp (host_abortserver, 1);
+	Host_Longjmp (host_abortserver, 1);
 }
 
 /*
@@ -1653,7 +1661,7 @@ void _Host_Frame (double time)
 	static double		time3 = 0;
 	int			pass1, pass2, pass3;
 
-	if (setjmp (host_abortserver) )
+	if (Host_Setjmp (host_abortserver) )
 		return;			// something bad happened, or the server disconnected
 
 // keep the random time dependent
@@ -1966,7 +1974,7 @@ void Host_Init (void)
 	host_initialized = true;
 	Con_Printf ("\n========= Quake Initialized =========\n\n");
 
-	if (setjmp (host_abortserver) )
+	if (Host_Setjmp (host_abortserver) )
 		return;			// something bad happened		
 	//okay... now we can do stuff that's allowed to Host_Error
 
@@ -1974,7 +1982,7 @@ void Host_Init (void)
 	Cbuf_AddText ("alias startmap_sp \"map start\"\n");
 	Cbuf_AddText ("alias startmap_dm \"map start\"\n");
 
-	if (setjmp (host_abortserver) )
+	if (Host_Setjmp (host_abortserver) )
 		return;			// don't do the above twice if the following Cbuf_Execute does bad things.
 
 	if (cls.state != ca_dedicated)
