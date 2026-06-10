@@ -5005,7 +5005,7 @@ qboolean R_CullSphere(vec3_t org, float radius)
 	return false;
 }
 
-int qglProject(float objx, float objy, float objz, float* model, float* proj, int* view, float* winx, float* winy, float* winz) {
+int qglProject(float objx, float objy, float objz, const float* model, const float* proj, const int* view, float* winx, float* winy, float* winz) {
 	int i, j;
 	float in[4], out[4];
 
@@ -5170,8 +5170,8 @@ static int SCR_FloorToInt(float x)
 
 void SCR_SetupAutoID(void)
 {
-	int		i, view[4];
-	float		model[16], project[16], winz;
+	int		i;
+	float		winz;
 	vec3_t origin, base_origin;
 	entity_t* state;
 	autoid_player_t* id;
@@ -5195,6 +5195,8 @@ void SCR_SetupAutoID(void)
 	//if (r_refdef.viewangles[ROLL] == 80) // dead, could rotate text?
 
 	if (!scr_autoid.value || cls.state != ca_connected || cl.intermission || qeintermission || crxintermission)
+		return;
+	if (!r_view_matrices_valid)
 		return;
 
 	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected) && !cls.demoplayback)
@@ -5233,10 +5235,6 @@ void SCR_SetupAutoID(void)
 			return;
 	}
 
-	glGetFloatv(GL_MODELVIEW_MATRIX, model);
-	glGetFloatv(GL_PROJECTION_MATRIX, project);
-	glGetIntegerv(GL_VIEWPORT, view);
-
 	for (i = 0; i < cl.maxclients; i++)
 	{
 		state = &cl.entities[1 + i];
@@ -5265,7 +5263,7 @@ void SCR_SetupAutoID(void)
 		id = &autoids[autoid_count];
 		id->player = &cl.scores[i];
 
-		if (qglProject(origin[0], origin[1], origin[2], model, project, view, &id->x, &id->y, &winz))
+		if (qglProject(origin[0], origin[1], origin[2], r_world_matrix, r_projection_matrix, r_viewport, &id->x, &id->y, &winz))
 			autoid_count++;
 	}
 }

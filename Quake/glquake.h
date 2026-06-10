@@ -156,6 +156,10 @@ extern	vec3_t	vup;
 extern	vec3_t	vpn;
 extern	vec3_t	vright;
 extern	vec3_t	r_origin;
+extern	mat4_t	r_world_matrix;
+extern	mat4_t	r_projection_matrix;
+extern	int		r_viewport[4];
+extern	qboolean	r_view_matrices_valid;
 
 //
 // screen size info

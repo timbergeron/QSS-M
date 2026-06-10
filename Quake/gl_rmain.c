@@ -46,6 +46,10 @@ vec3_t	vup;
 vec3_t	vpn;
 vec3_t	vright;
 vec3_t	r_origin;
+mat4_t	r_world_matrix;
+mat4_t	r_projection_matrix;
+int		r_viewport[4];
+qboolean	r_view_matrices_valid;
 
 float r_fovx, r_fovy; //johnfitz -- rendering fov may be different becuase of r_waterwarp and r_stereo
 
@@ -1035,34 +1039,39 @@ R_SetupGL
 void R_SetupGL (void)
 {
 	int scale;
+	int viewx, viewy, vieww, viewh;
 
 	//johnfitz -- rewrote this section
 	if (!r_refdef.drawworld)
 		scale = 1;	//don't rescale. we can't handle rescaling transparent parts.
 	else
 		scale =  CLAMP(1, (int)r_scale.value, 4); // ericw -- see R_ScaleView
-	glViewport (glx + r_refdef.vrect.x,
-				gly + glheight - r_refdef.vrect.y - r_refdef.vrect.height,
-				r_refdef.vrect.width / scale,
-				r_refdef.vrect.height / scale);
+	viewx = glx + r_refdef.vrect.x;
+	viewy = gly + glheight - r_refdef.vrect.y - r_refdef.vrect.height;
+	vieww = r_refdef.vrect.width / scale;
+	viewh = r_refdef.vrect.height / scale;
+	glViewport (viewx, viewy, vieww, viewh);
+	r_viewport[0] = viewx;
+	r_viewport[1] = viewy;
+	r_viewport[2] = vieww;
+	r_viewport[3] = viewh;
 	//johnfitz
 
 	#if 1	//Spike: these should be equivelent. gpus tend not to use doubles in favour of speed, so no loss there.
 	{
-		mat4_t mat;
 		// reduce near clip distance at high FOV's to avoid seeing through walls
 		const float w = 1.0f / tanf(r_fovx * (float)M_PI / 360.0f);
 		const float h = 1.0f / tanf(r_fovy * (float)M_PI / 360.0f);
 		const float d = 12.f * q_min(w, h);
 		const float nearclip = CLAMP(0.5f, d, (float)NEARCLIP);
 
-		Matrix4_ProjectionMatrix(r_fovx, r_fovy, nearclip, gl_farclip.value, false, frustum_skew, 0, mat);
+		Matrix4_ProjectionMatrix(r_fovx, r_fovy, nearclip, gl_farclip.value, false, frustum_skew, 0, r_projection_matrix);
 		glMatrixMode(GL_PROJECTION);
-		glLoadMatrixf(mat);
+		glLoadMatrixf(r_projection_matrix);
 
-		Matrix4_ViewMatrix(r_refdef.viewangles, r_refdef.vieworg, mat);
+		Matrix4_ViewMatrix(r_refdef.viewangles, r_refdef.vieworg, r_world_matrix);
 		glMatrixMode(GL_MODELVIEW);
-		glLoadMatrixf(mat);
+		glLoadMatrixf(r_world_matrix);
     }
 	#else
 	glMatrixMode(GL_PROJECTION);
@@ -1081,6 +1090,7 @@ void R_SetupGL (void)
     glRotatef (-r_refdef.viewangles[1],  0, 0, 1);
     glTranslatef (-r_refdef.vieworg[0],  -r_refdef.vieworg[1],  -r_refdef.vieworg[2]);
     #endif
+	r_view_matrices_valid = true;
 
 	//
 	// set drawing parms
@@ -2966,6 +2976,8 @@ void R_RenderView (void)
 {
 	static qboolean skyroom_visible;
 	double	time1, time2;
+
+	r_view_matrices_valid = false;
 
 	if (r_norefresh.value)
 		return;
