@@ -433,7 +433,9 @@ scroll the string inside a glscissor region -- woods added 5 pixel margins, etc
 void Sbar_DrawScrollString (int x, int y, int width, const char *str)
 {
 	float scale;
-	int strLen, totalLen, ofs, left;
+	double ofs;
+	float frac;
+	int strLen, totalLen, baseofs, left;
 
 	scale = CLAMP (1.0f, scr_sbarscale.value, (float)glwidth / 320.0f);
 	left = (x + 5) * scale;
@@ -444,15 +446,21 @@ void Sbar_DrawScrollString (int x, int y, int width, const char *str)
 	glScissor (left, 0, (width - 10) * scale, glheight);
 
 	strLen = strlen(str) * 8;
-	totalLen = strLen + 2 * 8;  // text width + " - " divider width
+	totalLen = strLen + 2 * 8;  // text width + " - " divider width (always > 0)
 
-	ofs = ((int)(realtime * 30)) % totalLen;
+	ofs = realtime * 30.0;
+	ofs -= floor (ofs / (double)totalLen) * (double)totalLen;
+	baseofs = (int)ofs;
+	frac = (float)(ofs - (double)baseofs);
 
 	char qfylbullet[2] = { 133, '\0' }; // woods -- quake font yellow '*'
 
-	Sbar_DrawString (x - ofs + 5, y, str);
-	Sbar_DrawString (x - ofs + 5 + strLen, y, qfylbullet);
-	Sbar_DrawString (x - ofs + 5 + totalLen, y, str);
+	glPushMatrix ();
+	glTranslatef (-frac, 0.0f, 0.0f);
+	Sbar_DrawString (x - baseofs + 5, y, str);
+	Sbar_DrawString (x - baseofs + 5 + strLen, y, qfylbullet);
+	Sbar_DrawString (x - baseofs + 5 + totalLen, y, str);
+	glPopMatrix ();
 
 	glDisable (GL_SCISSOR_TEST);
 }

@@ -1205,7 +1205,23 @@ void M_PrintHighlight(int x, int y, const char* str, const char* search, int sea
 		M_DrawCharacter(x + (pos + searchlen + i) * 8, y, match[i + searchlen] ^ 128);
 }
 
-// TODO: smooth scrolling
+static float M_ScrollPixelOffset(double time, int scrollspeed, int cycle_pixels, int *pixel_offset)
+{
+	double offset;
+
+	if (cycle_pixels <= 0)
+	{
+		*pixel_offset = 0;
+		return 0.0f;
+	}
+
+	offset = time * (double)scrollspeed;
+	offset -= floor(offset / (double)cycle_pixels) * (double)cycle_pixels;
+
+	*pixel_offset = (int)offset;
+	return (float)(offset - *pixel_offset);
+}
+
 void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qboolean color) // woods #modsmenu (iw)
 {
 	const int charwidth = 8;
@@ -1214,6 +1230,7 @@ void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qbo
 	int maxchars = maxwidth / charwidth;
 	int len = strlen(str);
 	char mask = color ? 128 : 0;
+	float frac;
 
 	if (len <= maxchars)
 	{
@@ -1229,10 +1246,11 @@ void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qbo
 
 	int total_chars = len + gap_len;
 	int cycle_pixels = total_chars * charwidth;
-	int pixel_offset = ((int)(time * scrollspeed)) % cycle_pixels;
-	if (pixel_offset < 0)
-		pixel_offset += cycle_pixels;
+	int pixel_offset;
+	frac = M_ScrollPixelOffset(time, scrollspeed, cycle_pixels, &pixel_offset);
 
+	glPushMatrix();
+	glTranslatef(-frac, 0.0f, 0.0f);
 	for (int pass = 0; pass < 2; ++pass)
 	{
 		int base_x = x - pixel_offset + pass * cycle_pixels;
@@ -1252,8 +1270,9 @@ void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qbo
 				ch = (unsigned char)" /// "[pos - len];
 
 			M_DrawCharacter(char_x, y, ch ^ mask);
+		}
 	}
-}
+	glPopMatrix();
 }
 
 void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str2, double time, qboolean name_red)
@@ -1294,10 +1313,11 @@ void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str
 	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
 	int total_chars = combined_len + gap_len;
 	int cycle_pixels = total_chars * charwidth;
-	int pixel_offset = cycle_pixels ? ((int)(time * scrollspeed)) % cycle_pixels : 0;
-	if (pixel_offset < 0)
-		pixel_offset += cycle_pixels;
+	int pixel_offset;
+	float frac = M_ScrollPixelOffset(time, scrollspeed, cycle_pixels, &pixel_offset);
 
+	glPushMatrix();
+	glTranslatef(-frac, 0.0f, 0.0f);
 	for (int pass = 0; pass < 2; ++pass)
 	{
 		int base_x = x - pixel_offset + pass * cycle_pixels;
@@ -1310,15 +1330,16 @@ void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str
 			if (char_x >= x + maxwidth)
 				break;
 
-		char c;
+			char c;
 			if (pos < combined_len)
 				c = combined[pos];
-		else
+			else
 				c = " /// "[pos - combined_len];
 
 			M_DrawCharacter(char_x, y, c);
+		}
 	}
-}
+	glPopMatrix();
 }
 
 void M_PrintHighlightScroll2(int x, int y, int maxwidth,
@@ -1413,10 +1434,11 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
 	int total_chars = combined_len + gap_len;
 	int cycle_pixels = total_chars * charwidth;
-	int pixel_offset = cycle_pixels ? ((int)(time * scrollspeed)) % cycle_pixels : 0;
-	if (pixel_offset < 0)
-		pixel_offset += cycle_pixels;
+	int pixel_offset;
+	float frac = M_ScrollPixelOffset(time, scrollspeed, cycle_pixels, &pixel_offset);
 
+	glPushMatrix();
+	glTranslatef(-frac, 0.0f, 0.0f);
 	for (int pass = 0; pass < 2; ++pass)
 	{
 		int base_x = x - pixel_offset + pass * cycle_pixels;
@@ -1425,49 +1447,50 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 			int char_x = base_x + pos * charwidth;
 
 			if (char_x + charwidth <= x)
-			continue;
+				continue;
 			if (char_x >= x + maxwidth)
 				break;
 
 			int drawch;
 			if (pos < combined_len)
 			{
-		char ch = combined[pos];
-		qboolean is_highlighted = false;
-		qboolean is_bronzed = false;
+				char ch = combined[pos];
+				qboolean is_highlighted = false;
+				qboolean is_bronzed = false;
 
 				if (pos < name_end)
 				{
 					if (pos < effective_len_str)
 					{
-				is_highlighted = (name_highlight_start != -1 &&
-					pos >= name_highlight_start &&
-					pos < name_highlight_end);
-				is_bronzed = !is_highlighted;
-			}
+						is_highlighted = (name_highlight_start != -1 &&
+							pos >= name_highlight_start &&
+							pos < name_highlight_end);
+						is_bronzed = !is_highlighted;
+					}
 					else
 					{
-				is_bronzed = true;
-			}
-		}
+						is_bronzed = true;
+					}
+				}
 				else
 				{
-			int desc_pos = pos - name_end;
-			is_highlighted = (desc_highlight_start != -1 &&
-				desc_pos >= desc_highlight_start &&
-				desc_pos < desc_highlight_end);
-		}
+					int desc_pos = pos - name_end;
+					is_highlighted = (desc_highlight_start != -1 &&
+						desc_pos >= desc_highlight_start &&
+						desc_pos < desc_highlight_end);
+				}
 
 				drawch = ch | (is_highlighted ? 0 : (is_bronzed ? 128 : 0));
-	}
+			}
 			else
 			{
 				drawch = ' ' | 128; // Gap
-}
+			}
 
 			M_DrawCharacter(char_x, y, drawch);
 		}
 	}
+	glPopMatrix();
 }
 
 void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const char* highlight, double time)
@@ -1498,12 +1521,13 @@ void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const c
 	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
 	int total_chars = len_str + gap_len;
 	int cycle_pixels = total_chars * charwidth;
-	int pixel_offset = cycle_pixels ? ((int)(time * scrollspeed)) % cycle_pixels : 0;
-	if (pixel_offset < 0)
-		pixel_offset += cycle_pixels;
+	int pixel_offset;
+	float frac = M_ScrollPixelOffset(time, scrollspeed, cycle_pixels, &pixel_offset);
 
+	glPushMatrix();
+	glTranslatef(-frac, 0.0f, 0.0f);
 	for (int pass = 0; pass < 2; ++pass)
-    {
+	{
 		int base_x = x - pixel_offset + pass * cycle_pixels;
 		for (int pos = 0; pos < total_chars; ++pos)
 		{
@@ -1516,7 +1540,7 @@ void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const c
 
 			int drawch;
 			if (pos < len_str)
-        {
+			{
 				char ch = name_str[pos];
 				qboolean is_highlighted = (name_highlight_start != -1 &&
 					pos >= name_highlight_start &&
@@ -1526,15 +1550,16 @@ void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const c
 					drawch = ch & 127; // Draw character in normal color (highlighted)
 				else
 					drawch = ch | 128; // Apply bronze effect for non-highlighted text
-            }
-        else
-        {
+			}
+			else
+			{
 				drawch = ' ' | 128; // Gap
-        }
+			}
 
 			M_DrawCharacter(char_x, y, drawch);
 		}
-    }
+	}
+	glPopMatrix();
 }
 
 //=============================================================================
@@ -3508,6 +3533,7 @@ static void M_DownloadMaps_DrawInstalledMap(int x, int y, int maxwidth, const ch
 	const int scrollspeed = 30;
 	plcolour_t white = CL_PLColours_Parse("0xffffff");
 	int maxchars, len, total_chars, cycle_pixels, pixel_offset, pass;
+	float frac;
 
 	if (!display_name || !display_name[0])
 		return;
@@ -3525,10 +3551,10 @@ static void M_DownloadMaps_DrawInstalledMap(int x, int y, int maxwidth, const ch
 
 	total_chars = len + gap_len;
 	cycle_pixels = total_chars * charwidth;
-	pixel_offset = cycle_pixels ? ((int)(time * scrollspeed)) % cycle_pixels : 0;
-	if (pixel_offset < 0)
-		pixel_offset += cycle_pixels;
+	frac = M_ScrollPixelOffset(time, scrollspeed, cycle_pixels, &pixel_offset);
 
+	glPushMatrix();
+	glTranslatef(-frac, 0.0f, 0.0f);
 	for (pass = 0; pass < 2; pass++)
 	{
 		int base_x = x - pixel_offset + pass * cycle_pixels;
@@ -3547,6 +3573,7 @@ static void M_DownloadMaps_DrawInstalledMap(int x, int y, int maxwidth, const ch
 			M_DrawCharacterRGBA(char_x, y, ch, white, 0.5f);
 		}
 	}
+	glPopMatrix();
 }
 
 static qboolean M_Maps_HasDownloadGap(void)
