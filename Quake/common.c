@@ -3483,24 +3483,41 @@ void COM_RemoveDownloadTempFiles(void)
 	COM_RemoveTempFilesInDir_r(com_gamedir);
 }
 
+static qboolean COM_PackageDirNameToPackageName(const char *pakdir, char *pakfile, size_t pakfile_size);
+
 static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile, const char *purename)
 {
 	searchpath_t *search;
 	pack_t *pak;
-	const char *ext = COM_FileGetExtension(pakfile);
+	char packagefile[MAX_OSPATH];
+	const char *mountfile = pakfile;
+	const char *ext;
+	char pakdir[MAX_OSPATH];
+
+	if (COM_PackageDirNameToPackageName(pakfile, packagefile, sizeof(packagefile)))
+	{
+		mountfile = packagefile;
+		q_strlcpy(pakdir, pakfile, sizeof(pakdir));
+	}
+	else
+		q_snprintf(pakdir, sizeof(pakdir), "%sdir", pakfile);
+
+	ext = COM_FileGetExtension(mountfile);
 
 	//don't add the same pak twice.
 	for (search = com_searchpaths; search; search = search->next)
 	{
 		if (search->pack)
-			if (!q_strcasecmp(pakfile, search->pack->filename))
+		{
+			if (!q_strcasecmp(mountfile, search->pack->filename))
 				return true;
+		}
+		else if (!q_strcasecmp(pakdir, search->filename))
+			return true;
 	}
 
 	{
 		struct stat sb;
-		char pakdir[MAX_OSPATH];
-		q_snprintf(pakdir, sizeof(pakdir), "%sdir", pakfile);
 		if (!stat(pakdir, &sb) && (sb.st_mode&S_IFMT)==S_IFDIR)
 		{
 			search = (searchpath_t *) Z_Malloc(sizeof(searchpath_t));
@@ -3519,10 +3536,10 @@ static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile, cons
 	if (!COM_IsPackageExtension(ext))
 		pak = NULL;
 	else if (!q_strcasecmp(ext, "pak"))
-		pak = COM_LoadPackFile (pakfile);
+		pak = COM_LoadPackFile (mountfile);
 	else
 	{
-		pak = FSZIP_LoadArchive(pakfile);
+		pak = FSZIP_LoadArchive(mountfile);
 		if (pak)
 			com_modified = true;	//would always be true, so we don't bother with crcs.
 	}
@@ -3532,12 +3549,12 @@ static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile, cons
 
 	{
 		struct stat s;
-		if (stat(pakfile, &s) >= 0)
+		if (stat(mountfile, &s) >= 0)
 			pak->mtime = s.st_mtime;
 	}
 
 	search = (searchpath_t *) Z_Malloc(sizeof(searchpath_t));
-	q_strlcpy(search->filename, pakfile, sizeof(search->filename));
+	q_strlcpy(search->filename, mountfile, sizeof(search->filename));
 	q_strlcpy(search->purename, purename, sizeof(search->purename));
 	search->path_id = basepath?basepath->path_id:0;
 	search->pack = pak;
@@ -3573,17 +3590,63 @@ static qboolean COM_AddEnumeratedPackage(void *ctx, const char *pakfile)
 	return COM_AddPackage(info->basepath, fullpakfile, purepakfile);
 }
 
+static qboolean COM_PackageDirNameToPackageName(const char *pakdir, char *pakfile, size_t pakfile_size)
+{
+	size_t len = strlen(pakdir);
+
+	if (len <= 3 || q_strcasecmp(pakdir + len - 3, "dir"))
+		return false;
+
+	len -= 3;
+	if (len >= pakfile_size)
+		return false;
+
+	memcpy(pakfile, pakdir, len);
+	pakfile[len] = 0;
+
+	return COM_IsPackageExtension(COM_FileGetExtension(pakfile));
+}
+
+static qboolean COM_AddEnumeratedPackageDir(void *ctx, const char *pakdir)
+{
+	packageenumctx_t *info = ctx;
+	char pakfile[MAX_OSPATH];
+	char fullpakdir[MAX_OSPATH];
+	char purepakfile[MAX_OSPATH];
+
+	if (!COM_PackageDirNameToPackageName(pakdir, pakfile, sizeof(pakfile)))
+		return true;
+
+	if (info->subdir && *info->subdir)
+	{
+		q_snprintf(fullpakdir, sizeof(fullpakdir), "%s/%s/%s", info->basepath->filename, info->subdir, pakdir);
+		q_snprintf(purepakfile, sizeof(purepakfile), "%s/%s/%s", info->basepath->purename, info->subdir, pakfile);
+	}
+	else
+	{
+		q_snprintf(fullpakdir, sizeof(fullpakdir), "%s/%s", info->basepath->filename, pakdir);
+		q_snprintf(purepakfile, sizeof(purepakfile), "%s/%s", info->basepath->purename, pakfile);
+	}
+
+	return COM_AddPackage(info->basepath, fullpakdir, purepakfile);
+}
+
 static void COM_ListPackageFiles(searchpath_t *basepath, const char *dirpath, const char *subdir)
 {
 	static const char *extensions[] = { "pak", "pk3", "pk4", "zip", "apk", "kpf" };
 	packageenumctx_t ctx;
+	char dirext[16];
 	size_t i;
 
 	ctx.basepath = basepath;
 	ctx.subdir = subdir;
 
 	for (i = 0; i < sizeof(extensions) / sizeof(extensions[0]); i++)
+	{
 		COM_ListSystemFiles(&ctx, dirpath, extensions[i], COM_AddEnumeratedPackage);
+		q_snprintf(dirext, sizeof(dirext), "%sdir", extensions[i]);
+		COM_ListSystemFiles(&ctx, dirpath, dirext, COM_AddEnumeratedPackageDir);
+	}
 }
 
 static int COM_ParsePakNumber(const char *purename)
@@ -3884,17 +3947,32 @@ static qboolean COM_AddGamePackageFile(searchpath_t *searchdir, const char *dir,
 {
 	char pakfile[MAX_OSPATH];
 	char purename[MAX_OSPATH];
+	char stripped[MAX_OSPATH];
+	const char *package_filename = filename;
 	qboolean found = false;
 
 	if (strchr(filename, '/') || strchr(filename, '\\') || strchr(filename, ':'))
 		return false;
 
-	q_snprintf(pakfile, sizeof(pakfile), "%s/%s", com_gamedir, filename);
-	q_snprintf(purename, sizeof(purename), "%s/%s", dir, filename);
+	if (COM_PackageDirNameToPackageName(filename, stripped, sizeof(stripped)))
+	{
+		q_snprintf(pakfile, sizeof(pakfile), "%s/%s", com_gamedir, filename);
+		q_snprintf(purename, sizeof(purename), "%s/%s", dir, stripped);
+		found |= COM_AddPackage(searchdir, pakfile, purename);
+
+		q_snprintf(pakfile, sizeof(pakfile), "%s/paks/%s", com_gamedir, filename);
+		q_snprintf(purename, sizeof(purename), "%s/paks/%s", dir, stripped);
+		found |= COM_AddPackage(searchdir, pakfile, purename);
+
+		return found;
+	}
+
+	q_snprintf(pakfile, sizeof(pakfile), "%s/%s", com_gamedir, package_filename);
+	q_snprintf(purename, sizeof(purename), "%s/%s", dir, package_filename);
 	found |= COM_AddPackage(searchdir, pakfile, purename);
 
-	q_snprintf(pakfile, sizeof(pakfile), "%s/paks/%s", com_gamedir, filename);
-	q_snprintf(purename, sizeof(purename), "%s/paks/%s", dir, filename);
+	q_snprintf(pakfile, sizeof(pakfile), "%s/paks/%s", com_gamedir, package_filename);
+	q_snprintf(purename, sizeof(purename), "%s/paks/%s", dir, package_filename);
 	found |= COM_AddPackage(searchdir, pakfile, purename);
 
 	return found;
@@ -3934,10 +4012,11 @@ COM_AddGameDirectory -- johnfitz -- modified based on topaz's tutorial, reworked
 //    - Non-existent files in pak.lst are skipped.
 //
 // 5. Unlisted Paks (unless -nowildpaks is specified)
-//    - Any .pak files not listed in pak.lst from the game directory and paks/
+//    - Any package files or loose package directories not listed in pak.lst
+//      from the game directory and paks/
 //    - Loaded in alphabetical order
-//    - Example: pak2.pak, custom.pak, etc.
-//    - Both .pak and .pk3 formats are included
+//    - Example: pak2.pak, custom.pak, custom.pk3dir, etc.
+//    - All supported package formats and matching *dir directories are included
 //    - Command-line parameter `-nowildpaks` skips loading these files.
 //
 // 6. #Directories Within Current Game Directory and Optional paks/ Folder
