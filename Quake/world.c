@@ -1233,7 +1233,7 @@ static void SV_ClipToLinks ( areanode_t *node, moveclip_t *clip )
 		if (clip->passedict && clip->passedict->v.size[0] && !touch->v.size[0])
 			continue;	// points never interact
 
-		if (pr_checkextension.value)
+		if (pr_checkextension.value && clip->passedict)
 		{
 			//corpses are nonsolid to slidebox
 			if (clip->passedict->v.solid == SOLID_SLIDEBOX && touch->v.solid == SOLID_EXT_CORPSE)

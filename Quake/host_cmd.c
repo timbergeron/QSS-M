@@ -1028,6 +1028,7 @@ void LoadMapDescriptionsFromJSON(filelist_item_t** extralevels_from_json)
 		if (!item) {
 			Con_DPrintf("Memory allocation failed\n");
 			FreeLevelList(*extralevels_from_json);
+			*extralevels_from_json = NULL;	//callers walk and re-free this list
 			JSON_Free(json);
 			return;
 		}

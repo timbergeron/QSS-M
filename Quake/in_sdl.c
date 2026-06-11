@@ -1253,7 +1253,9 @@ static void IN_MouseInfo_f(void)
 	const char* warp = SDL_GetHint(SDL_HINT_MOUSE_RELATIVE_MODE_WARP);
 	Con_Printf("  SDL Video Driver: %s\n", drv ? drv : "(unknown)");
 
-	if (!strcmp(drv, "windows"))
+	if (!drv)
+		Con_Printf("  Relative Mode Path: backend default (raw)\n");
+	else if (!strcmp(drv, "windows"))
 		Con_Printf("  Relative Mode Path: %s (Win RAWINPUT)\n",
 			(warp && warp[0] == '1') ? "Warp fallback - accelerated"
 			: "Raw");

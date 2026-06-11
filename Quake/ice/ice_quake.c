@@ -2070,8 +2070,11 @@ qboolean NQICE_SearchForHosts (qboolean xmit)
 		{
 			if (strncmp(buf, "HTTP/1.1 200 ", (sz>13)?13:sz))
 			{	//not http... or a weird error code that we can't handle. too lazy to do redirects.
-				lst->Close(lst);
-				lst = NULL;
+				if (lst)	//may have already been closed by a read error above
+				{
+					lst->Close(lst);
+					lst = NULL;
+				}
 				return true;
 			}
 			if (sz < 13)

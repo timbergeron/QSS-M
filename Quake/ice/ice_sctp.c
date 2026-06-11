@@ -295,7 +295,7 @@ neterr_t SCTP_Transmit(struct sctp_s *sctp, const void *data, size_t length)
 		pktlen += sizeof(*rsack);
 
 		rgap = (struct sctp_chunk_sack_gap_s*)&pkt[pktlen];
-		for (otsn = 0; otsn < sctp->i.htsn; otsn++)
+		for (otsn = 1; otsn <= sctp->i.htsn; otsn++)	//htsn is the offset of the highest tsn received; ctsn+0/+1 can never have bits set after the drain above.
 		{
 			uint32_t tsn = sctp->i.ctsn+otsn;
 			if (!(sctp->i.received[(tsn>>3)%sizeof(sctp->i.received)] & 1<<(tsn&7)))
@@ -313,7 +313,9 @@ neterr_t SCTP_Transmit(struct sctp_s *sctp, const void *data, size_t length)
 					break;	//might need fragmentation... just stop here.
 			}
 		}
-		for (otsn = 0, rgap = (struct sctp_chunk_sack_gap_s*)&pkt[pktlen]; otsn < rsack->gaps; otsn++)
+		rgap -= rsack->gaps;	//back to the first gap entry; pktlen already moved past them.
+		rsack->chunk.length = BigShort(sizeof(*rsack) + rsack->gaps*sizeof(*rgap));	//chunk length spans the gap blocks too.
+		for (otsn = 0; otsn < rsack->gaps; otsn++)
 		{
 			rgap[otsn].first = BigShort(rgap[otsn].first);
 			rgap[otsn].last = BigShort(rgap[otsn].last);

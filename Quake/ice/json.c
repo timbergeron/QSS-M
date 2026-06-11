@@ -12,7 +12,7 @@ static void JSON_Orphan(json_t *t)
 		if (p->arraymax)
 		{
 			size_t idx = atoi(t->name);
-			if (idx <= p->arraymax)
+			if (idx < p->arraymax)
 				p->array[idx] = NULL;
 			//FIXME: sibling links are screwed. be careful iterrating after a removal.
 		}

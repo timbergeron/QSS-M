@@ -2039,9 +2039,9 @@ const char *Mod_ParseWorldspawnKey(qmodel_t *mod, const char *wantkey, char *buf
 			if (com_token[0] == '}')
 				break; // end of worldspawn
 			if (com_token[0] == '_')
-				strcpy(foundkey, com_token + 1);
+				q_strlcpy(foundkey, com_token + 1, sizeof(foundkey));
 			else
-				strcpy(foundkey, com_token);
+				q_strlcpy(foundkey, com_token, sizeof(foundkey));
 			data = COM_Parse(data);
 			if (!data)
 				break; // error
@@ -2458,7 +2458,7 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 		Con_DWarning ("%i faces exceeds standard limit of 32767.\n", count);
 	//johnfitz
 
-	if (!mod_ignorelmscale.value)
+	if (!mod_ignorelmscale.value && count > 0)
 	{
 		decoupledlm = Q1BSPX_FindLump("DECOUPLED_LM", &lumpsize); //RGB packed data
 		if (decoupledlm && lumpsize == count*sizeof(*decoupledlm))

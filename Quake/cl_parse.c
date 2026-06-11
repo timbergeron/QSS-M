@@ -3534,6 +3534,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			char* SYSINFO_processor_description = NULL;
 			char* os_codename = NULL;
 			char* com_modelname = NULL;
+			char modelbuf[75] = "";
 
 			char buf[75];
 			char buf2[16];
@@ -3610,12 +3611,15 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			{
 				FILE* fmodelname = popen("/usr/libexec/PlistBuddy -c 'print 0:product-name' /dev/stdin <<< \"$(/usr/sbin/ioreg -ar -d1 -k product-name)\"", "r");
 
-				char buf10[75];
-				while (fgets(buf10, sizeof(buf10), fmodelname) != 0)
+				if (fmodelname)
+				{
+					if (!fgets(modelbuf, sizeof(modelbuf), fmodelname))
+						modelbuf[0] = '\0';
 					pclose(fmodelname);
+				}
 
-				if (strstr(buf10, "Mac")) // did it find a clean mac name, if so set var
-					com_modelname = buf10;
+				if (strstr(modelbuf, "Mac")) // did it find a clean mac name, if so set var
+					com_modelname = modelbuf;
 			}
 
 			else // if not a m1 mac, (About My Mac needs to have run ONCE by user to fill plist, or run it)
@@ -3624,57 +3628,80 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 
 				FILE* fmodelname = popen("/usr/libexec/PlistBuddy -c \"print :'CPU Names':$(system_profiler SPHardwareDataType | awk '/Serial/ {print $4}' | cut -c 9-)-en-US_US\" ~/Library/Preferences/com.apple.SystemProfiler.plist", "r");
 
-				char buf3[75];
-				while (fgets(buf3, sizeof(buf3), fmodelname) != 0)
+				if (fmodelname)
+				{
+					if (!fgets(modelbuf, sizeof(modelbuf), fmodelname))
+						modelbuf[0] = '\0';
 					pclose(fmodelname);
+				}
 
-				if (strstr(buf3, "Mac"))
+				if (strstr(modelbuf, "Mac"))
 
-					com_modelname = buf3;
+					com_modelname = modelbuf;
 
 				else // did it find a clean mac name, if so set var, else run About My Mac
 
 				{
 					FILE* fmodelname1 = popen("/usr/bin/open '/System/Library/CoreServices/Applications/About This Mac.app'; /bin/sleep 2", "r");
 
-					char buf4[75];
-					while (fgets(buf4, sizeof(buf4), fmodelname1) != 0)
+					if (fmodelname1)
+					{
+						char buf4[75];
+						while (fgets(buf4, sizeof(buf4), fmodelname1) != 0)
+							;
 						pclose(fmodelname1);
+					}
 
 					FILE* fmodelname2 = popen("/usr/bin/pkill -ail 'System Information'; /bin/sleep 2", "r");
 
-					char buf5[75];
-					while (fgets(buf5, sizeof(buf5), fmodelname2) != 0)
+					if (fmodelname2)
+					{
+						char buf5[75];
+						while (fgets(buf5, sizeof(buf5), fmodelname2) != 0)
+							;
 						pclose(fmodelname2);
+					}
 
 					FILE* fmodelname3 = popen("/usr/bin/killall cfprefsd; /bin/sleep 2", "r");
 
-					char buf6[75];
-					while (fgets(buf6, sizeof(buf6), fmodelname3) != 0)
+					if (fmodelname3)
+					{
+						char buf6[75];
+						while (fgets(buf6, sizeof(buf6), fmodelname3) != 0)
+							;
 						pclose(fmodelname3);
+					}
 
 					FILE* fmodelname = popen("/usr/libexec/PlistBuddy -c \"print :'CPU Names':$(system_profiler SPHardwareDataType | awk '/Serial/ {print $4}' | cut -c 9-)-en-US_US\" ~/Library/Preferences/com.apple.SystemProfiler.plist", "r");
 
-					char buf3[75];
-					while (fgets(buf3, sizeof(buf3), fmodelname) != 0)
+					if (fmodelname)
+					{
+						if (!fgets(modelbuf, sizeof(modelbuf), fmodelname))
+							modelbuf[0] = '\0';
 						pclose(fmodelname);
+					}
+					else
+						modelbuf[0] = '\0';
 
-					if (strstr(buf3, "Mac"))
-						com_modelname = buf3;
+					if (strstr(modelbuf, "Mac"))
+						com_modelname = modelbuf;
 
 					else // did it find a clean mac name, if so set var, else give generic simple name
 					{
-						char buf7[75];
+						size_t modellen = sizeof(modelbuf);
 
-						if (sysctlbyname("hw.model", &buf7, &buflen, NULL, 0) == -1)
+						if (sysctlbyname("hw.model", modelbuf, &modellen, NULL, 0) == -1)
 							com_modelname = "Cannot Find Mac Model Name"; // final fall back
 						else
-							com_modelname = buf7; // second to last fall back
+							com_modelname = modelbuf; // second to last fall back
 					}
 				}
 			}
 
-			com_modelname = strtok(com_modelname, "\n");
+			if (com_modelname == modelbuf)	//only strip newlines from the mutable buffer, never a string literal
+				com_modelname = strtok(modelbuf, "\n");
+			if (!com_modelname || !*com_modelname)
+				com_modelname = "Cannot Find Mac Model Name";
 
 			MSG_WriteByte(&cls.message, clc_stringcmd);
 			MSG_WriteString(&cls.message, va("say %s", com_modelname));

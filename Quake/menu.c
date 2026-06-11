@@ -3079,10 +3079,12 @@ void M_ScanSaves (void)
 		for (j = 0; j < NUM_BASIC_SPAWN_PARMS; j++)
 		{
 			if (fscanf(f, "%f\n", &time) != 1)
-			{
-				fclose(f);
-				continue;
-			}
+				break;
+		}
+		if (j < NUM_BASIC_SPAWN_PARMS)
+		{
+			fclose(f);
+			continue;
 		}
 
 		// Read skill
