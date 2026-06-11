@@ -52,6 +52,10 @@ struct qsockaddr
 #endif
 
 #define NET_PROTOCOL_VERSION	3
+#define NET_PACKETLOSS_WINDOW	256
+#if (NET_PACKETLOSS_WINDOW & (NET_PACKETLOSS_WINDOW - 1)) != 0
+#error NET_PACKETLOSS_WINDOW must be a power of two
+#endif
 
 /**
 
@@ -159,6 +163,10 @@ typedef struct qsocket_s
 
 	unsigned int	receiveSequence;
 	unsigned int	unreliableReceiveSequence;
+	byte		unreliableReceiveHistory[NET_PACKETLOSS_WINDOW];
+	unsigned int	unreliableReceiveHistoryIndex;
+	unsigned int	unreliableReceiveHistorySamples;
+	unsigned int	unreliableReceiveHistoryLosses;
 	int		receiveMessageLength;
 	byte		receiveMessage [NET_MAXMESSAGE];
 

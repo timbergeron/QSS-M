@@ -2247,6 +2247,8 @@ static void QICE_ProcessMessage(unsigned int length, struct icestate_s *ice, qso
 
 	if (length & NETFLAG_UNRELIABLE)
 	{
+		unsigned int count = 0;
+
 		if (sequence < sock->unreliableReceiveSequence)
 		{
 			Con_DPrintf("Got a stale datagram\n");
@@ -2254,9 +2256,10 @@ static void QICE_ProcessMessage(unsigned int length, struct icestate_s *ice, qso
 		}
 		if (sequence != sock->unreliableReceiveSequence)
 		{
-			unsigned int count = sequence - sock->unreliableReceiveSequence;
+			count = sequence - sock->unreliableReceiveSequence;
 			Con_DPrintf("Dropped %u datagram(s)\n", count);
 		}
+		NET_QSocketRecordUnreliableReceive(sock, count);
 		sock->unreliableReceiveSequence = sequence + 1;
 
 		SZ_Clear(newmsg);

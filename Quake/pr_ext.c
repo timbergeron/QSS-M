@@ -5898,7 +5898,9 @@ void PF_cl_playerkey_internal(int player, const char *key, qboolean retfloat)
 	else if (!strcmp(key, "ping"))
 		q_snprintf(buf, sizeof(buf), "%i", cl.scores[player].ping);
 	else if (!strcmp(key, "pl"))
-		ret = NULL;	//unknown
+		q_snprintf(buf, sizeof(buf), "%i", cl.scores[player].packetloss);
+	else if (!strcmp(key, "movementloss"))
+		q_snprintf(buf, sizeof(buf), "%i", cl.scores[player].movementloss);
 	else if (!strcmp(key, "entertime"))
 		q_snprintf(buf, sizeof(buf), "%g", cl.scores[player].entertime);
 	else if (!strcmp(key, "topcolor_rgb"))

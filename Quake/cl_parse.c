@@ -3258,7 +3258,10 @@ static qboolean CL_ParseSpecialPrints(const char *printtext)
 				if (strncmp(name_to_compare_with_n, n, e - n))
 					continue; // Names don't match
 
-				cl.scores[i++].ping = ping;
+				cl.scores[i].ping = ping;
+				cl.scores[i].packetloss = 0;
+				cl.scores[i].movementloss = 0;
+				i++;
 				cl.printplayer = i;
 				return true;
 			}
@@ -3274,6 +3277,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 	{
 		cl.printtype = PRINT_PINGS;
 		cl.printplayer = 0;
+		CL_ClearScoreboardPacketLoss();
 		return true;
 	}
 
@@ -4443,9 +4447,16 @@ void CL_ParseServerMessage (void)
 			}
 			q_strlcpy (cl.scores[i].name, str, MAX_SCOREBOARDNAME);
 			if (cl.scores[i].name[0])
+			{
 				Info_SetKey(cl.scores[i].userinfo, sizeof(cl.scores[i].userinfo), "name", cl.scores[i].name);
+			}
 			else
+			{
 				memset(cl.scores[i].userinfo, 0, sizeof(cl.scores[i].userinfo));
+				cl.scores[i].ping = 0;
+				cl.scores[i].packetloss = 0;
+				cl.scores[i].movementloss = 0;
+			}
 			CL_UpdateIgnoredChatSlot(i, cl.scores[i].name);
 			break;
 

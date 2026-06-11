@@ -181,6 +181,7 @@ qsocket_t *NET_NewQSocket (void)
 	sock->sendMessageLength = 0;
 	sock->receiveSequence = 0;
 	sock->unreliableReceiveSequence = 0;
+	NET_QSocketClearPacketLoss(sock);
 	sock->receiveMessageLength = 0;
 	sock->pending_max_datagram = 1024;
 	sock->proquake_angle_hack = false;
@@ -225,6 +226,69 @@ int NET_QSocketGetSequenceIn (const qsocket_t *s)
 int NET_QSocketGetSequenceOut (const qsocket_t *s)
 {	//returns the next unreliable sequence that will be sent
 	return s->unreliableSendSequence;
+}
+void NET_QSocketClearPacketLoss(qsocket_t *s)
+{
+	if (!s)
+		return;
+
+	memset(s->unreliableReceiveHistory, 0, sizeof(s->unreliableReceiveHistory));
+	s->unreliableReceiveHistoryIndex = 0;
+	s->unreliableReceiveHistorySamples = 0;
+	s->unreliableReceiveHistoryLosses = 0;
+}
+static void NET_QSocketAppendPacketLossSample(qsocket_t *s, qboolean lost)
+{
+	unsigned int old = 0;
+
+	if (!s)
+		return;
+
+	if (s->unreliableReceiveHistorySamples < NET_PACKETLOSS_WINDOW)
+		s->unreliableReceiveHistorySamples++;
+	else
+		old = s->unreliableReceiveHistory[s->unreliableReceiveHistoryIndex];
+
+	if (old && s->unreliableReceiveHistoryLosses > 0)
+		s->unreliableReceiveHistoryLosses--;
+
+	s->unreliableReceiveHistory[s->unreliableReceiveHistoryIndex] = lost ? 1 : 0;
+	if (lost)
+		s->unreliableReceiveHistoryLosses++;
+
+	s->unreliableReceiveHistoryIndex = (s->unreliableReceiveHistoryIndex + 1) & (NET_PACKETLOSS_WINDOW - 1);
+}
+void NET_QSocketRecordUnreliableReceive(qsocket_t *s, unsigned int dropped)
+{
+	unsigned int i;
+
+	if (!s)
+		return;
+
+	if (dropped >= NET_PACKETLOSS_WINDOW)
+	{
+		memset(s->unreliableReceiveHistory, 1, sizeof(s->unreliableReceiveHistory));
+		s->unreliableReceiveHistoryIndex = 0;
+		s->unreliableReceiveHistorySamples = NET_PACKETLOSS_WINDOW;
+		s->unreliableReceiveHistoryLosses = NET_PACKETLOSS_WINDOW;
+	}
+	else
+	{
+		for (i = 0; i < dropped; i++)
+			NET_QSocketAppendPacketLossSample(s, true);
+	}
+
+	NET_QSocketAppendPacketLossSample(s, false);
+}
+int NET_QSocketGetPacketLoss(const qsocket_t *s)
+{
+	unsigned int samples;
+
+	if (!s || s->unreliableReceiveHistoryLosses == 0 || s->unreliableReceiveHistorySamples == 0)
+		return 0;
+
+	samples = q_min(s->unreliableReceiveHistorySamples, NET_PACKETLOSS_WINDOW);
+	return CLAMP(0, (int)((s->unreliableReceiveHistoryLosses * 100 + samples - 1) / samples), 100);
 }
 double NET_QSocketGetTime (const qsocket_t *s)
 {

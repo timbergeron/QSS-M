@@ -5623,6 +5623,68 @@ static void CL_ServerExtension_Ignore_f(void)
 {
 	Con_DPrintf2("Ignoring stufftext: %s\n", Cmd_Argv(0));
 }
+
+void CL_ClearScoreboardPacketLoss(void)
+{
+	int i;
+
+	if (!cl.scores || cl.maxclients <= 0)
+		return;
+
+	for (i = 0; i < cl.maxclients && i < MAX_SCOREBOARD; i++)
+	{
+		cl.scores[i].packetloss = 0;
+		cl.scores[i].movementloss = 0;
+	}
+}
+
+static void CL_PingPLReport_Parse(int startslot, int firstarg)
+{
+	int arg;
+	int slot;
+	int argc;
+
+	if (!cl.scores || cl.maxclients <= 0 || startslot < 0)
+		return;
+
+	argc = Cmd_Argc();
+	slot = startslot;
+	for (arg = firstarg; arg + 1 < argc && slot < cl.maxclients && slot < MAX_SCOREBOARD; arg += 2, slot++)
+	{
+		char *end;
+		int ping = atoi(Cmd_Argv(arg));
+		int packetloss = (int)strtol(Cmd_Argv(arg + 1), &end, 0);
+		int movementloss = 0;
+
+		if (end && *end == ',')
+			movementloss = atoi(end + 1);
+
+		cl.scores[slot].ping = CLAMP(0, ping, 9999);
+		cl.scores[slot].packetloss = CLAMP(0, packetloss, 100);
+		cl.scores[slot].movementloss = CLAMP(0, movementloss, 100);
+	}
+
+	cl.pingplreport_received = true;
+	cl.pings_requested = 0;
+	cl.pings_unsupported = false;
+}
+
+static void CL_PingPLReport_f(void)
+{
+	CL_PingPLReport_Parse(0, 1);
+}
+
+static void CL_PingPLReport2_f(void)
+{
+	int startslot;
+
+	if (Cmd_Argc() < 2)
+		return;
+
+	startslot = atoi(Cmd_Argv(1));
+	CL_PingPLReport_Parse(startslot, 2);
+}
+
 static void CL_LegacyColor_f(void)
 {	//spike -- code to handle the legacy _cl_color cvar (we now use separate qw-style topcolor/bottomcolor userinfo cvars)
 	int col = atoi(Cmd_Argv(1));
@@ -6014,6 +6076,8 @@ void CL_Init (void)
 	Cmd_AddCommand_ServerCommand ("wps", CL_ServerExtension_Ignore_f); //ktx/cspree weapon stats
 	Cmd_AddCommand_ServerCommand ("it", CL_ServerExtension_ItemTimer_f); //cspree item timers -- woods #obstimers
 	Cmd_AddCommand_ServerCommand ("tinfo", CL_ServerExtension_TeamInfo_f); //ktx team info -- woods #teaminfo
+	Cmd_AddCommand_ServerCommand ("pingplreport", CL_PingPLReport_f);
+	Cmd_AddCommand_ServerCommand ("pingplreport2", CL_PingPLReport2_f);
 	Cmd_AddCommand_ServerCommand ("exectrigger", CL_ServerExtension_Ignore_f); //spike
 	Cmd_AddCommand_ServerCommand ("csqc_progname", CL_ServerExtension_Ignore_f); //spike
 	Cmd_AddCommand_ServerCommand ("csqc_progsize", CL_ServerExtension_Ignore_f); //spike

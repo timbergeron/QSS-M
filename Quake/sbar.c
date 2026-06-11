@@ -69,6 +69,41 @@ static qboolean Sbar_ShouldDrawMultiplayerScoreboard (void)
 	return cl.gametype == GAME_DEATHMATCH || cl.maxclients > 1;
 }
 
+static qboolean Sbar_ShouldRequestPingPL(void)
+{
+	if (cl.pings_unsupported)
+		return false;
+
+	return cl.protocol == PROTOCOL_VERSION_DP7 || cl.server == 1 || cl.modtype == 5;
+}
+
+static void Sbar_RequestScoreboardPings(void)
+{
+	const char *command = "ping";
+
+	if (Sbar_ShouldRequestPingPL())
+	{
+		if (!cl.pingplreport_received && cl.pings_requested >= 2)
+		{
+			cl.pings_unsupported = true;
+			CL_ClearScoreboardPacketLoss();
+		}
+
+		if (!cl.pings_unsupported)
+		{
+			command = "pings";
+			cl.pingplreport_received = false;
+			cl.pings_requested++;
+		}
+	}
+
+	if (!strcmp(command, "ping"))
+		CL_ClearScoreboardPacketLoss();
+
+	MSG_WriteByte (&cls.message, clc_stringcmd);
+	MSG_WriteString(&cls.message, command);
+}
+
 qpic_t		*rsb_invbar[2];
 qpic_t		*rsb_weapons[5];
 qpic_t		*rsb_items[2];
@@ -2649,6 +2684,7 @@ void Sbar_DeathmatchOverlay (void)
 	//qpic_t	*pic; // woods disabled
 	int	i, k, l;
 	int	x, y, f;
+	int	score_x;
 	int w, w2, y2; // woods for dynamic scoreboard
 	int	xofs, yofs; // woods #scoreboard
 	char	num[12];
@@ -2682,6 +2718,7 @@ void Sbar_DeathmatchOverlay (void)
 
 	x = xofs + 64 + w2; // woods #scoreboard
 	y2 = y = yofs - 20; // woods #smartstatus
+	score_x = x + 32;
 
 	//pic = Draw_CachePic ("gfx/ranking.lmp"); //woods #scoreboard (remove rankings logo)
 	//M_DrawPic ((320-pic->width)/2, 8, pic); woods #scoreboard
@@ -2700,12 +2737,12 @@ void Sbar_DeathmatchOverlay (void)
 
 	// woods for qrack +scoresbg #scoreboard
 
-	Draw_Fill (x - 64, y - 11, 328 + w, 10, 16, 1);		//inside
-	Draw_Fill (x - 64, y - 12, 329 + w, 1, 0, 1);		//Border - Top
+	Draw_Fill (x - 64, y - 11, 360 + w, 10, 16, 1);		//inside
+	Draw_Fill (x - 64, y - 12, 361 + w, 1, 0, 1);		//Border - Top
 	Draw_Fill (x - 64, y - 12, 1, 11, 0, 1);			//Border - Left
-	Draw_Fill (x + 264 + w, y - 12, 1, 11, 0, 1);		//Border - Right
-	Draw_Fill (x - 64, y - 1, 329 + w, 1, 0, 1);		//Border - Bottom
-	Draw_Fill (x - 64, y - 1, 329 + w, 1, 0, 1);		//Border - Top
+	Draw_Fill (x + 296 + w, y - 12, 1, 11, 0, 1);		//Border - Right
+	Draw_Fill (x - 64, y - 1, 361 + w, 1, 0, 1);		//Border - Bottom
+	Draw_Fill (x - 64, y - 1, 361 + w, 1, 0, 1);		//Border - Top
 
 	/*if (cl.matchinp) // woods -- match running 0 for CRCTF, 255 for CDMOD
 		Draw_String(x - 64, y - 10, "  ping  frags   name"); // woods
@@ -2748,39 +2785,39 @@ void Sbar_DeathmatchOverlay (void)
 
 		if (S_Voip_Speaking(k))	// spike -- speaking underlay, adjusted for QSS-M's centered scoreboard
 		{
-			Draw_Fill(x - 63, y, 328 + w, 10, ((k + 1) == cl.viewentity) ? 75 : 73, .8);
+			Draw_Fill(x - 63, y, 360 + w, 10, ((k + 1) == cl.viewentity) ? 75 : 73, .8);
 		}
 		else if (k == cl.viewentity - 1) // #scoreboard
 		{
-			Draw_Fill(x - 63, y, 328 + w, 10, 20, .8);  // woods
+			Draw_Fill(x - 63, y, 360 + w, 10, 20, .8);  // woods
 		}
 		else
 		{
-			Draw_Fill(x - 63, y, 328 + w, 10, 18, .8);  // woods
+			Draw_Fill(x - 63, y, 360 + w, 10, 18, .8);  // woods
 		}
 
 		Draw_Fill(x - 64, y, 1, 10, 0, 1);	//Border - Left // woods #scoreboard
-		Draw_Fill(x + 264 + w, y, 1, 10, 0, 1);	//Border - Right // woods #scoreboard
+		Draw_Fill(x + 296 + w, y, 1, 10, 0, 1);	//Border - Right // woods #scoreboard
 
 		if (s->spectator == 1)	//2 is 'spectator-with-scores' (temporarily inactive players).
 		{
-			M_PrintWhite (x, y, "spect");
+			M_PrintWhite (score_x, y, "spect");
 		}
 		else
 		{
-			Draw_FillPlayer ( x, y, 40, 4, s->shirt, 1); //johnfitz -- stretched overlays
-			Draw_FillPlayer ( x, y+4, 40, 4, s->pants, 1); //johnfitz -- stretched overlays
+			Draw_FillPlayer ( score_x, y, 40, 4, s->shirt, 1); //johnfitz -- stretched overlays
+			Draw_FillPlayer ( score_x, y+4, 40, 4, s->pants, 1); //johnfitz -- stretched overlays
 
 		// draw number
 			f = s->frags;
 			sprintf (num, "%3i",f);
 
-			Draw_Character ( x+8 , y, num[0]); //johnfitz -- stretched overlays
-			Draw_Character ( x+16 , y, num[1]); //johnfitz -- stretched overlays
-			Draw_Character ( x+24 , y, num[2]); //johnfitz -- stretched overlays
+			Draw_Character ( score_x+8 , y, num[0]); //johnfitz -- stretched overlays
+			Draw_Character ( score_x+16 , y, num[1]); //johnfitz -- stretched overlays
+			Draw_Character ( score_x+24 , y, num[2]); //johnfitz -- stretched overlays
 
 			if (k == cl.viewentity - 1)
-				Draw_Character ( x - 8, y, 12); //johnfitz -- stretched overlays
+				Draw_Character ( score_x + 48, y, 12); //johnfitz -- stretched overlays
 		}
 
 #if 0
@@ -2801,9 +2838,18 @@ void Sbar_DeathmatchOverlay (void)
 		}
 #endif
 
-		sprintf (num, "%4i", s->ping);
+		sprintf (num, "%4i", CLAMP(0, s->ping, 9999));
 		if (ct > 5) // woods don't print 0 print on connect
-		M_PrintWhite ((x-8*4)-22, y, num); //johnfitz -- was Draw_String, changed for stretched overlays // woods centered ping #scoreboard
+			M_PrintWhite ((x-8*4)-22, y, num); //johnfitz -- was Draw_String, changed for stretched overlays // woods centered ping #scoreboard
+
+		if (ct > 5 && s->packetloss > 0) // blank when clean -- 0 also means 'not measured' on servers without pings support
+		{
+			sprintf (num, "%3i", CLAMP(0, s->packetloss, 100));
+			if (s->packetloss >= 10)
+				M_Print (x - 10, y, num); // colored so chronic loss stands out
+			else
+				M_PrintWhite (x - 10, y, num);
+		}
 
 	// draw name
 		/*if (cl.matchinp) // match running 0 for CRCTF, 255 for CDMOD
@@ -2815,32 +2861,31 @@ void Sbar_DeathmatchOverlay (void)
 
 		if (cl_contentfilter.value == 2 && was_filtered) // woods #contentfilter
 		{
-			M_PrintWhite(x + 64, y, filtered_name);
+			M_PrintWhite(score_x + 64, y, filtered_name);
 		}
 		else {
-			M_PrintWhite(x + 64, y, s->name); //johnfitz -- was Draw_String, changed for stretched overlays // woods changed to white #scoreboard
+			M_PrintWhite(score_x + 64, y, s->name); //johnfitz -- was Draw_String, changed for stretched overlays // woods changed to white #scoreboard
 		}
 		
 		y += 10;
 	}
 
-	Draw_String(x - 64, y2 - 10, "  ping  frags   name"); // woods #smartstatus
+	Draw_String(x - 64, y2 - 10, "  ping  pl  frags   name"); // woods #smartstatus
 
 	if (flash() && notready && unready_count == 1 && AreTeamsEven()) // blink only if I'm the last to ready AND teams are even
-		M_Print(x + 192, y2 - 10, "status");
+		M_Print(score_x + 192, y2 - 10, "status");
 	else
 		Draw_String
-		(x + 192, y2 - 10, "status");
+		(score_x + 192, y2 - 10, "status");
 
-	Draw_Fill(x - 64, y, 329 + w, 1, 0, 1);	//Border - Bottom // woods #scoreboard
+	Draw_Fill(x - 64, y, 361 + w, 1, 0, 1);	//Border - Bottom // woods #scoreboard
 
 	GL_SetCanvas (CANVAS_SBAR); //johnfitz
 
 	if ((!cls.message.cursize && cl.expectingpingtimes < realtime) && (cls.signon >= SIGNONS))
 	{
 		cl.expectingpingtimes = realtime + 5;
-		MSG_WriteByte (&cls.message, clc_stringcmd);
-		MSG_WriteString(&cls.message, "ping");
+		Sbar_RequestScoreboardPings();
 	}
 }
 

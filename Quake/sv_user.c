@@ -817,7 +817,7 @@ SV_ReadClientMessage
 Returns false if the client should be killed
 ===================
 */
-static qboolean SV_IsEngineDownloadCommand(const char *s)
+static qboolean SV_IsEngineClientCommand(const char *s)
 {
 	while (*s == ' ' || *s == '\t')
 		s++;
@@ -825,7 +825,8 @@ static qboolean SV_IsEngineDownloadCommand(const char *s)
 #define IS_CMD(name) (!q_strncasecmp(s, name, sizeof(name) - 1) && \
 	((unsigned char)s[sizeof(name) - 1] <= ' '))
 
-	return IS_CMD("download") || IS_CMD("sv_startdownload") || IS_CMD("nextdl");
+	return IS_CMD("download") || IS_CMD("sv_startdownload") || IS_CMD("nextdl") ||
+		IS_CMD("pings");
 
 #undef IS_CMD
 }
@@ -867,7 +868,7 @@ qboolean SV_ReadClientMessage (void)
 			s = MSG_ReadString ();
 			if (!q_strncasecmp(s, "spawn", 5)) 
 				SV_CheckDuplicateNames(host_client); // woods #dupnames
-			if (SV_IsEngineDownloadCommand(s))
+			if (SV_IsEngineClientCommand(s))
 				Cmd_ExecuteString(s, src_client);
 			else if (q_strncasecmp(s, "spawn", 5) && q_strncasecmp(s, "begin", 5) && q_strncasecmp(s, "prespawn", 8) && qcvm->extfuncs.SV_ParseClientCommand)
 			{	//the spawn/begin/prespawn are because of numerous mods that disobey the rules.

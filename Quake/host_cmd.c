@@ -1515,7 +1515,7 @@ static void Host_Modvote_CenterPrintf(client_t *client, const char *fmt, ...)
 	MSG_WriteString(&client->message, msg);
 }
 
-static qboolean Host_Modvote_ClientSupportsPersistentCenterprint(client_t *client)
+static qboolean Host_ClientIsQSSM(client_t *client)
 {
 	char ver[64];
 
@@ -1524,6 +1524,11 @@ static qboolean Host_Modvote_ClientSupportsPersistentCenterprint(client_t *clien
 
 	Info_GetKey(client->userinfo, "*ver", ver, sizeof(ver));
 	return !q_strncasecmp(ver, "QSS-M", 5);
+}
+
+static qboolean Host_Modvote_ClientSupportsPersistentCenterprint(client_t *client)
+{
+	return Host_ClientIsQSSM(client);
 }
 
 static void Host_Modvote_SendJoinCenterprint(client_t *client)
@@ -7214,6 +7219,78 @@ static void Host_Ping_f (void)
 	}
 }
 
+#define PINGS_CHUNK_CLIENTS 32
+
+static int Host_ClientPingMS(client_t *client)
+{
+	int j;
+	float total;
+
+	if (!client || !client->spawned || !client->netconnection)
+		return 0;
+
+	total = 0;
+	for (j = 0; j < NUM_PING_TIMES; j++)
+		total += client->ping_times[j];
+	total /= NUM_PING_TIMES;
+
+	return CLAMP(0, (int)(total * 1000), 9999);
+}
+
+/*
+==================
+Host_Pings_f
+
+DarkPlaces/FTE-style scoreboard ping and packet-loss report.
+==================
+*/
+static void Host_Pings_f (void)
+{
+	int base;
+
+	if (cmd_source != src_client)
+	{
+		Cmd_ForwardToServer ();
+		return;
+	}
+
+	if (!host_client)
+		return;
+
+	for (base = 0; base < svs.maxclients; base += PINGS_CHUNK_CLIENTS)
+	{
+		char line[1024];
+		int i;
+		int end = q_min(base + PINGS_CHUNK_CLIENTS, svs.maxclients);
+
+		if (base == 0)
+			q_strlcpy(line, "pingplreport", sizeof(line));
+		else
+			q_snprintf(line, sizeof(line), "pingplreport2 %i", base);
+
+		for (i = base; i < end; i++)
+		{
+			char pair[32];
+			client_t *client = &svs.clients[i];
+			int ping = Host_ClientPingMS(client);
+			int packetloss = (client->spawned && client->netconnection) ? NET_QSocketGetPacketLoss(client->netconnection) : 0;
+
+			q_snprintf(pair, sizeof(pair), " %i %i", ping, packetloss);
+			q_strlcat(line, pair, sizeof(line));
+		}
+
+		q_strlcat(line, "\n", sizeof(line));
+		if (host_client->message.cursize + (int)strlen(line) + 2 < host_client->message.maxsize)
+		{
+			MSG_WriteByte(&host_client->message, svc_stufftext);
+			MSG_WriteString(&host_client->message, line);
+		}
+
+		if (!Host_ClientIsQSSM(host_client))
+			break;	/* only QSS-M clients know the pingplreport2 continuation chunks */
+	}
+}
+
 /*
 ===============================================================================
 
@@ -11389,6 +11466,7 @@ void Host_InitCommands (void)
 	Cmd_AddCommand_ClientCommand ("prespawn", Host_PreSpawn_f);
 	Cmd_AddCommand_ClientCommandQC ("kick", Host_Kick_f);
 	Cmd_AddCommand_ClientCommand ("ping", Host_Ping_f);
+	Cmd_AddCommand_ClientCommand ("pings", Host_Pings_f);
 	Cmd_AddCommand ("load", Host_Loadgame_f);
 	Cmd_AddCommand ("save", Host_Savegame_f);
 	Cmd_AddCommand_ClientCommandQC ("give", Host_Give_f);

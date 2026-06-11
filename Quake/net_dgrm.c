@@ -867,6 +867,7 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 
 	if (flags & NETFLAG_UNRELIABLE)
 	{
+		count = 0;
 		if (sequence < sock->unreliableReceiveSequence)
 		{
 			Con_DPrintf("Got a stale datagram\n");
@@ -878,6 +879,7 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 			droppedDatagrams += count;
 			Con_DPrintf("Dropped %u datagram(s) for %s\n", count, Datagram_SocketOwnerString(sock)); // woods #droplog
 		}
+		NET_QSocketRecordUnreliableReceive(sock, count);
 		sock->unreliableReceiveSequence = sequence + 1;
 
 		length -= NET_HEADERSIZE;
@@ -1137,6 +1139,7 @@ int	Datagram_GetMessage (qsocket_t *sock)
 
 		if (flags & NETFLAG_UNRELIABLE)
 		{
+			count = 0;
 			if (sequence < sock->unreliableReceiveSequence)
 			{
 				Con_DPrintf("Got a stale datagram\n");
@@ -1151,6 +1154,7 @@ int	Datagram_GetMessage (qsocket_t *sock)
 				cl.packetloss = count; // woods #scrpl
 				cl.pltotal = droppedDatagrams; // woods #scrpl
 			}
+			NET_QSocketRecordUnreliableReceive(sock, count);
 			sock->unreliableReceiveSequence = sequence + 1;
 
 			length -= NET_HEADERSIZE;

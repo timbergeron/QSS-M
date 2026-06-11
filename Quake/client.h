@@ -56,6 +56,8 @@ typedef struct
 	plcolour_t shirt;
 	plcolour_t pants;
 	int		ping;
+	int		packetloss;
+	int		movementloss;
 	int		addr;			// JPG - added this // woods for #iplog
 	int		spectator;	//support for fte's hybrid servers.
 						//FIXME: handle quakeworld's teams.
@@ -395,6 +397,9 @@ typedef struct
 	} printtype;
 	int printplayer;
 	float expectingpingtimes;
+	int pings_requested;
+	qboolean pingplreport_received;
+	qboolean pings_unsupported;
 	float expectingpltimes;  // woods #scrpl
 	float printversionresponse;
 	float printqsys; // woods #q_sysinfo (qrack)
@@ -645,6 +650,7 @@ void CL_UpdateTEnts (void);
 void CL_FreeState(void);
 void CL_ClearState (void);
 void CL_ClearTrailStates(void);
+void CL_ClearScoreboardPacketLoss(void);
 void CL_PrintWrongGameDirWarning(void);
 const char *CL_GetSafeUserinfoForClientSlot(int playernum);
 const char *CL_GetSafeViewEntityUserinfo(void);
