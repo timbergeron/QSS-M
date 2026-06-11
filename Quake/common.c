@@ -3864,9 +3864,17 @@ static void COM_AddGameDirectory(const char* dir); // woods #pakdirs
 
 qboolean AddHashedDirectories(void* ctx, const char* fname, time_t mtime, size_t fsize, searchpath_t* spath)
 {
-	if (*fname == '#') // Checking if the directory starts with #
+	const char *basename = COM_SkipPath(fname);
+	char combinedName[MAX_OSPATH];
+	char fullpath[MAX_OSPATH];
+
+	if (spath && *spath->purename && *basename == '#') // Checking if the directory starts with #
 	{
-		const char* combinedName = va("%s/%s", GAMENAME, fname);
+		q_snprintf(fullpath, sizeof(fullpath), "%s/%s", spath->filename, fname);
+		if (!(Sys_FileType(fullpath) & FS_ENT_DIRECTORY))
+			return true;
+
+		q_snprintf(combinedName, sizeof(combinedName), "%s/%s", spath->purename, fname);
 		COM_AddGameDirectory(combinedName);
 	}
 	return true; // Return true to continue processing
@@ -3932,11 +3940,11 @@ COM_AddGameDirectory -- johnfitz -- modified based on topaz's tutorial, reworked
 //    - Both .pak and .pk3 formats are included
 //    - Command-line parameter `-nowildpaks` skips loading these files.
 //
-// 6. #Directories Within Current Game Directory
+// 6. #Directories Within Current Game Directory and Optional paks/ Folder
 //    - Special directories that load as virtual paks
 //    - Files in #folders override pak files in the same game directory
 //    - Multiple #folders load in alphabetical order
-//    - Example: #textures, #models override paks in current directory
+//    - Example: #textures, #models, paks/#textures override paks in current directory
 //    - Useful for development and easy file overrides
 //    - Files in #directories can still be overridden by loose files in 
 //      later game directories.
@@ -4132,6 +4140,7 @@ _add_path:
 	}
 
 	COM_ListFiles(NULL, searchdir, "#*", AddHashedDirectories); // woods #pakdirs
+	COM_ListFiles(NULL, searchdir, "paks/#*", AddHashedDirectories); // woods #pakdirs
 
 	// then finally link the directory to the search path
 	//spike -- moved this last (also explicitly blocked loading progs.dat from system paths when running the demo)
