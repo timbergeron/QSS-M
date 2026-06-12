@@ -4390,7 +4390,7 @@ static void CL_DZipFreeDirectory(void)
 
 static int CL_DZipZRead(int inlen)
 {
-	int toread, bsize;
+	int toread, bsize, ret;
 
 	toread = CL_DZIP_P_BLOCKSIZE - inlen;
 	cl_dzip_zs.next_out = cl_dzip_inblk + inlen;
@@ -4409,11 +4409,11 @@ static int CL_DZipZRead(int inlen)
 			cl_dzip_zs.avail_in = bsize;
 		}
 
-		bsize = inflate(&cl_dzip_zs, Z_NO_FLUSH);
-		if (bsize == Z_DATA_ERROR)
-			return 0;
-		if (bsize == Z_STREAM_END)
+		ret = inflate(&cl_dzip_zs, Z_NO_FLUSH);
+		if (ret == Z_STREAM_END)
 			return 1;
+		if (ret != Z_OK)
+			return 0;
 	}
 
 	return 1;
@@ -5744,7 +5744,7 @@ static unsigned int CL_DZipDemUncompress(unsigned int maxsize)
 	if (cl_dzip_decode_type < 0)
 	{
 		cl_dzip_decode_type = -cl_dzip_decode_type;
-		while (cl_dzip_inblk[blocksize] != '\n' && blocksize < 12)
+		while (blocksize < 12 && cl_dzip_inblk[blocksize] != '\n')
 			++blocksize;
 
 		if (blocksize == 12)

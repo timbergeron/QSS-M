@@ -1668,6 +1668,42 @@ static qboolean Cmd_IsPrintTriggerToken (const char *s)
 	       !strcmp(s, "f_modified");
 }
 
+static char *Cmd_AppendChatChar (char *dst, char *end, int c)
+{
+	if (dst < end)
+		*dst++ = (char)c;
+	return dst;
+}
+
+static char *Cmd_AppendChatString (char *dst, char *end, const char *s)
+{
+	if (!s)
+		return dst;
+	while (*s && dst < end)
+		*dst++ = *s++;
+	return dst;
+}
+
+static char *Cmd_AppendChatFmt (char *dst, char *end, const char *fmt, ...) FUNC_PRINTF(3,4);
+static char *Cmd_AppendChatFmt (char *dst, char *end, const char *fmt, ...)
+{
+	va_list args;
+	int len;
+	size_t remaining;
+
+	if (dst >= end)
+		return end;
+
+	remaining = (size_t)(end - dst);
+	va_start(args, fmt);
+	len = q_vsnprintf(dst, remaining + 1, fmt, args);
+	va_end(args);
+
+	if (len < 0 || (size_t)len > remaining)
+		return end;
+	return dst + len;
+}
+
 /*
 ===================
 Cmd_ForwardToServer
@@ -1677,7 +1713,7 @@ Sends the entire command line over to the server
 */
 void Cmd_ForwardToServer (void)
 {
-	char* dst, buff[128];		// JPG - used for say/say_team formatting // woods #pqteam
+	char *dst, *end, buff[512];		// JPG - used for say/say_team formatting // woods #pqteam
 	const char* src; // woods add const
 	int minutes, seconds, match_time;	// JPG - used for %t // woods #pqteam
 	
@@ -1739,14 +1775,15 @@ void Cmd_ForwardToServer (void)
 
 		src = Cmd_Args();
 		dst = buff;
-		while (*src && dst - buff < 100)
+		end = buff + sizeof(buff) - 1;
+		while (*src && dst < end)
 		{
 			if (*src == '%')
 			{
 				switch (*++src)
 				{
 				case 'h':
-					dst += sprintf(dst, "%d", cl.stats[STAT_HEALTH]);
+					dst = Cmd_AppendChatFmt(dst, end, "%d", cl.stats[STAT_HEALTH]);
 					break;
 
 				case 'a':
@@ -1755,7 +1792,7 @@ void Cmd_ForwardToServer (void)
 					int first = 1;
 					int item;
 
-					dst += sprintf(dst, "%d", cl.stats[STAT_ARMOR]);
+					dst = Cmd_AppendChatFmt(dst, end, "%d", cl.stats[STAT_ARMOR]);
 					//R00k: added to show armor type					
 					if (cl.stats[STAT_ARMOR] > 0)
 					{
@@ -1764,10 +1801,10 @@ void Cmd_ForwardToServer (void)
 							if (*ch != ':' && (cl.items & item))
 							{
 								if (!first)
-									*dst++ = ',';
+									dst = Cmd_AppendChatChar(dst, end, ',');
 								first = 0;
 								while (*ch && *ch != ':')
-									*dst++ = *ch++;
+									dst = Cmd_AppendChatChar(dst, end, *ch++);
 							}
 							for (; *ch && *ch != ':'; ch++)
 								;
@@ -1787,164 +1824,164 @@ void Cmd_ForwardToServer (void)
 						case IT_SHOTGUN:
 							if (*++src == 't')
 							{
-								dst += sprintf(dst, "shells");
+								dst = Cmd_AppendChatString(dst, end, "shells");
 							}
 							else
 							{
 								if (cl.stats[STAT_SHELLS] < 5)
-									dst += sprintf(dst, "I need shells ");
+									dst = Cmd_AppendChatString(dst, end, "I need shells ");
 								else
-									dst += sprintf(dst, "%d shells", cl.stats[STAT_SHELLS]);
+									dst = Cmd_AppendChatFmt(dst, end, "%d shells", cl.stats[STAT_SHELLS]);
 							}
 							break;
 
 						case IT_SUPER_SHOTGUN:
 							if (*++src == 't')
 							{
-								dst += sprintf(dst, "shells");
+								dst = Cmd_AppendChatString(dst, end, "shells");
 							}
 							else
 							{
 								if (cl.stats[STAT_SHELLS] < 5)
-									dst += sprintf(dst, "I need shells ");
+									dst = Cmd_AppendChatString(dst, end, "I need shells ");
 								else
-									dst += sprintf(dst, "%d shells", cl.stats[STAT_SHELLS]);
+									dst = Cmd_AppendChatFmt(dst, end, "%d shells", cl.stats[STAT_SHELLS]);
 							}
 							break;
 
 						case IT_NAILGUN:
 							if (*++src == 't')
 							{
-								dst += sprintf(dst, "nails");
+								dst = Cmd_AppendChatString(dst, end, "nails");
 							}
 							else
 							{
 								if (cl.stats[STAT_NAILS] < 5)
-									dst += sprintf(dst, "I need nails ");
+									dst = Cmd_AppendChatString(dst, end, "I need nails ");
 								else
-									dst += sprintf(dst, "%d nails", cl.stats[STAT_NAILS]);
+									dst = Cmd_AppendChatFmt(dst, end, "%d nails", cl.stats[STAT_NAILS]);
 							}
 							break;
 
 						case IT_SUPER_NAILGUN:
 							if (*++src == 't')
 							{
-								dst += sprintf(dst, "nails");
+								dst = Cmd_AppendChatString(dst, end, "nails");
 							}
 							else
 							{
 								if (cl.stats[STAT_NAILS] < 5)
-									dst += sprintf(dst, "I need nails ");
+									dst = Cmd_AppendChatString(dst, end, "I need nails ");
 								else
-									dst += sprintf(dst, "%d nails", cl.stats[STAT_NAILS]);
+									dst = Cmd_AppendChatFmt(dst, end, "%d nails", cl.stats[STAT_NAILS]);
 							}
 							break;
 
 						case IT_GRENADE_LAUNCHER:
 							if (*++src == 't')
 							{
-								dst += sprintf(dst, "rockets");
+								dst = Cmd_AppendChatString(dst, end, "rockets");
 							}
 							else
 							{
 								if (cl.stats[STAT_ROCKETS] < 5)
-									dst += sprintf(dst, "%s", "I need rockets");
+									dst = Cmd_AppendChatString(dst, end, "I need rockets");
 								else
-									dst += sprintf(dst, "%d rockets", cl.stats[STAT_ROCKETS]);
+									dst = Cmd_AppendChatFmt(dst, end, "%d rockets", cl.stats[STAT_ROCKETS]);
 							}
 							break;
 
 						case IT_ROCKET_LAUNCHER:
 							if (*++src == 't')
 							{
-								dst += sprintf(dst, "rockets");
+								dst = Cmd_AppendChatString(dst, end, "rockets");
 							}
 							else
 							{
 								if (cl.stats[STAT_ROCKETS] < 5)
-									dst += sprintf(dst, "%s", "I need rockets");
+									dst = Cmd_AppendChatString(dst, end, "I need rockets");
 								else
-									dst += sprintf(dst, "%d rockets", cl.stats[STAT_ROCKETS]);
+									dst = Cmd_AppendChatFmt(dst, end, "%d rockets", cl.stats[STAT_ROCKETS]);
 							}
 							break;
 
 						case IT_LIGHTNING:
 							if (*++src == 't')
 							{
-								dst += sprintf(dst, "cells");
+								dst = Cmd_AppendChatString(dst, end, "cells");
 							}
 							else
 							{
 								if (cl.stats[STAT_CELLS] < 5)
-									dst += sprintf(dst, "I need cells");
+									dst = Cmd_AppendChatString(dst, end, "I need cells");
 								else
-									dst += sprintf(dst, "%d cells", cl.stats[STAT_CELLS]);
+									dst = Cmd_AppendChatFmt(dst, end, "%d cells", cl.stats[STAT_CELLS]);
 							}
 							break;
 
 						default:
 							if (*++src == 't')
 							{
-								dst += sprintf(dst, "nothing ");
+								dst = Cmd_AppendChatString(dst, end, "nothing ");
 							}
 							break;
 						}
 					}
 					else
-						dst += sprintf(dst, "%s", "I need RL");
+						dst = Cmd_AppendChatString(dst, end, "I need RL");
 					break;
 
 				case 'r':
 					if (cl.stats[STAT_HEALTH] > 0 && (cl.items & IT_ROCKET_LAUNCHER))
 					{
 						if (cl.stats[STAT_ROCKETS] < 5)
-							dst += sprintf(dst, "%s", "I need rockets");
+							dst = Cmd_AppendChatString(dst, end, "I need rockets");
 						else
-							dst += sprintf(dst, "%s", "I have RL");
+							dst = Cmd_AppendChatString(dst, end, "I have RL");
 					}
 					else
-						dst += sprintf(dst, "%s", "I need RL");
+						dst = Cmd_AppendChatString(dst, end, "I need RL");
 					break;
 
 				case 'l':
-					dst += sprintf(dst, "%s", LOC_GetLocation(cl.entities[cl.viewentity].origin));
+					dst = Cmd_AppendChatString(dst, end, LOC_GetLocation(cl.entities[cl.viewentity].origin));
 					break;
 
 				case 'd':
-					dst += sprintf(dst, "%s", LOC_GetLocation(cl.death_location));
+					dst = Cmd_AppendChatString(dst, end, LOC_GetLocation(cl.death_location));
 					break;
 				case 'D':
 					if (cl.stats[STAT_HEALTH] <= 0)
-					dst += sprintf(dst, "%s", "died");
+						dst = Cmd_AppendChatString(dst, end, "died");
 					break;
 
 				case 'c':
-					dst += sprintf(dst, "%d", cl.stats[STAT_CELLS]);
+					dst = Cmd_AppendChatFmt(dst, end, "%d", cl.stats[STAT_CELLS]);
 					break;
 
 				case 'x':
-					dst += sprintf(dst, "%d", cl.stats[STAT_ROCKETS]);
+					dst = Cmd_AppendChatFmt(dst, end, "%d", cl.stats[STAT_ROCKETS]);
 					break;
 
 				case 'R':
 					if (cl.items & IT_SIGIL1)
 					{
-						dst += sprintf(dst, "Resistance");
+						dst = Cmd_AppendChatString(dst, end, "Resistance");
 						break;
 					}
 					if (cl.items & IT_SIGIL2)
 					{
-						dst += sprintf(dst, "Strength");
+						dst = Cmd_AppendChatString(dst, end, "Strength");
 						break;
 					}
 					if (cl.items & IT_SIGIL3)
 					{
-						dst += sprintf(dst, "Haste");
+						dst = Cmd_AppendChatString(dst, end, "Haste");
 						break;
 					}
 					if (cl.items & IT_SIGIL4)
 					{
-						dst += sprintf(dst, "Regen");
+						dst = Cmd_AppendChatString(dst, end, "Regen");
 						break;
 					}
 					break;
@@ -1952,12 +1989,12 @@ void Cmd_ForwardToServer (void)
 				case 'F':
 					if (cl.items & IT_KEY1)
 					{
-						dst += sprintf(dst, "Blue Flag");
+						dst = Cmd_AppendChatString(dst, end, "Blue Flag");
 						break;
 					}
 					if (cl.items & IT_KEY2)
 					{
-						dst += sprintf(dst, "Red Flag");
+						dst = Cmd_AppendChatString(dst, end, "Red Flag");
 						break;
 					}
 					break;
@@ -1967,21 +2004,21 @@ void Cmd_ForwardToServer (void)
 					{
 						if (cl.items & IT_QUAD)
 						{
-							dst += sprintf(dst, "%s", "our quad");  // woods added our
+							dst = Cmd_AppendChatString(dst, end, "our quad");  // woods added our
 							if (cl.items & (IT_INVULNERABILITY | IT_INVISIBILITY))
-								*dst++ = '+';
+								dst = Cmd_AppendChatChar(dst, end, '+');
 						}
 						if (cl.items & IT_INVULNERABILITY)
 						{
-							dst += sprintf(dst, "%s", "our pent"); // woods added our
+							dst = Cmd_AppendChatString(dst, end, "our pent"); // woods added our
 							if (cl.items & IT_INVISIBILITY)
-								*dst++ = '+';
+								dst = Cmd_AppendChatChar(dst, end, '+');
 						}
 						if (cl.items & IT_INVISIBILITY)
-							dst += sprintf(dst, "%s", "our ring"); // woods added our
+							dst = Cmd_AppendChatString(dst, end, "our ring"); // woods added our
 
 						//						if (cl.items & IT_SUIT)
-							//						dst += sprintf(dst, "%s", "biosuit");//R00k lol "team Biosuit"
+							//						dst = Cmd_AppendChatString(dst, end, "biosuit");//R00k lol "team Biosuit"
 					}
 					break;
 
@@ -1997,10 +2034,10 @@ void Cmd_ForwardToServer (void)
 							if (*ch != ':' && (cl.items & item))
 							{
 								if (!first)
-									*dst++ = ',';
+									dst = Cmd_AppendChatChar(dst, end, ',');
 								first = 0;
 								while (*ch && *ch != ':')
-									*dst++ = *ch++;
+									dst = Cmd_AppendChatChar(dst, end, *ch++);
 							}
 							for (; *ch && *ch != ':'; ch++)
 								;
@@ -2010,7 +2047,7 @@ void Cmd_ForwardToServer (void)
 						}
 					}
 					if (first)
-						dst += sprintf(dst, "%s", "no weapons");
+						dst = Cmd_AppendChatString(dst, end, "no weapons");
 				}
 				break;
 
@@ -2026,10 +2063,10 @@ void Cmd_ForwardToServer (void)
 							if (*ch != ':' && (cl.items & item))
 							{
 								if (!first)
-									*dst++ = ' ';  // woods changed divider
+									dst = Cmd_AppendChatChar(dst, end, ' ');  // woods changed divider
 								first = 0;
 								while (*ch && *ch != ':')
-									*dst++ = *ch++;
+									dst = Cmd_AppendChatChar(dst, end, *ch++);
 							}
 							for (; *ch && *ch != ':'; ch++)
 								;
@@ -2038,8 +2075,8 @@ void Cmd_ForwardToServer (void)
 							ch++;
 						}
 					}
-					//	if (first)
-						//	dst += sprintf(dst, "%s", "nothing");  // woods changed to one word, easier to read
+				//	if (first)
+						//	dst = Cmd_AppendChatString(dst, end, "nothing");  // woods changed to one word, easier to read
 				}
 				break;
 				//R00k added W for weapon in hand based on pq_weapons.string
@@ -2054,7 +2091,7 @@ void Cmd_ForwardToServer (void)
 							if (*ch != ':' && (item == cl.stats[STAT_ACTIVEWEAPON]))
 							{
 								while (*ch && *ch != ':')
-									*dst++ = *ch++;
+									dst = Cmd_AppendChatChar(dst, end, *ch++);
 								break;
 							}
 							for (; *ch && *ch != ':'; ch++)
@@ -2065,11 +2102,11 @@ void Cmd_ForwardToServer (void)
 						}
 					}
 					else
-						dst += sprintf(dst, "%s", "no weapons");
+						dst = Cmd_AppendChatString(dst, end, "no weapons");
 					break;
 
 				case '%':
-					*dst++ = '%';
+					dst = Cmd_AppendChatChar(dst, end, '%');
 					break;
 
 				case 't':
@@ -2088,7 +2125,7 @@ void Cmd_ForwardToServer (void)
 						seconds = cl.time - 60 * minutes;
 						minutes &= 511;
 					}
-					dst += sprintf(dst, "%d:%02d", minutes, seconds);
+					dst = Cmd_AppendChatFmt(dst, end, "%d:%02d", minutes, seconds);
 					break;
 
 				case 'T':
@@ -2107,19 +2144,20 @@ void Cmd_ForwardToServer (void)
 						seconds = cl.time - 60 * minutes;
 						minutes &= 511;
 					}
-					dst += sprintf(dst, ":%02d", seconds);
+					dst = Cmd_AppendChatFmt(dst, end, ":%02d", seconds);
 					break;
 
 				default:
-					*dst++ = '%';
-					*dst++ = *src;
+					dst = Cmd_AppendChatChar(dst, end, '%');
+					if (*src)
+						dst = Cmd_AppendChatChar(dst, end, *src);
 					break;
 				}
 				if (*src)
 					src++;
 			}
 			else
-				*dst++ = *src++;
+				dst = Cmd_AppendChatChar(dst, end, *src++);
 		}
 		*dst = 0;
 

@@ -629,6 +629,7 @@ void SCTP_Decode(struct sctp_s *sctp, const void *msg_data, size_t msg_size, qbo
 			{
 				qboolean isack = c->type==SCTP_TYPE_INITACK;
 				const struct sctp_chunk_init_s *init = (const void*)c;
+				const qbyte *chunk_end = (const qbyte*)c + clen;
 				const struct {
 						uint16_t ptype;
 						uint16_t plen;
@@ -641,10 +642,19 @@ void SCTP_Decode(struct sctp_s *sctp, const void *msg_data, size_t msg_size, qbo
 				(void)BigShort(init->numoutstreams);
 				(void)BigShort(init->numinstreams);
 
-				while ((const qbyte*)p+sizeof(*p) <= (const qbyte*)c+clen)
+				while ((const qbyte*)p+sizeof(*p) <= chunk_end)
 				{
+					const qbyte *param = (const qbyte*)p;
+					size_t remaining = (size_t)(chunk_end - param);
+					size_t padded;
 					unsigned short ptype = BigShort(p->ptype);
 					unsigned short plen = BigShort(p->plen);
+					if (plen < sizeof(*p) || plen > remaining)
+					{
+						if (sctp->modeflags & ICEF_VERBOSE_PROBE)
+							Con_Printf(S_COLOR_GRAY"[%s]: SCTP: Malformed init parameter\n", sctp->friendlyname);
+						return;
+					}
 					switch(ptype)
 					{
 					case 7:	//init cookie
@@ -675,7 +685,8 @@ void SCTP_Decode(struct sctp_s *sctp, const void *msg_data, size_t msg_size, qbo
 						//otherwise parse the next as normal.
 						break;
 					}
-					p = (const void*)((const qbyte*)p + ((plen+3)&~3));
+					padded = (plen + 3) & ~3;
+					p = (const void*)(param + ((padded <= remaining) ? padded : remaining));
 				}
 
 				if (isack)

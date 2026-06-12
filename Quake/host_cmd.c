@@ -11226,17 +11226,31 @@ void Host_DownloadAck(client_t *client)
 {
 	unsigned int start = MSG_ReadLong();
 	unsigned int size = (unsigned short)MSG_ReadShort();
+	unsigned int end;
 
 	if (!client->download.started || !client->download.file)
 		return;
 
+	if (client->download.sendpos > client->download.size)
+		client->download.sendpos = client->download.size;
+	if (start > client->download.sendpos)
+		return;
+	if (size > client->download.sendpos - start)
+		return;
+
+	end = start + size;
+
 	if (client->download.ackpos < start)
 	{
 		client->download.sendpos = client->download.ackpos;//there was a gap, rewind to the known gap
-		fseek(client->download.file, host_client->download.startpos+client->download.sendpos, SEEK_SET);
+		if (fseek(client->download.file, client->download.startpos + client->download.sendpos, SEEK_SET) != 0)
+		{
+			Host_CloseDownload(client);
+			return;
+		}
 	}
-	else if (client->download.ackpos < start+size)
-		client->download.ackpos = start+size;	//no loss yet.
+	else if (client->download.ackpos < end)
+		client->download.ackpos = end;	//no loss yet.
 	//else FIXME: build a log of parts known to be acked to avoid resending them later, skip past them in acks
 
 	if (client->download.ackpos == client->download.size)
@@ -11248,25 +11262,29 @@ void Host_DownloadAck(client_t *client)
 		data = malloc(client->download.size);
 		if (data)
 		{
-			fseek(client->download.file, host_client->download.startpos, SEEK_SET);
-			size_t read_size = fread(data, 1, host_client->download.size, client->download.file); // woods
-			if (read_size != host_client->download.size)
+			if (fseek(client->download.file, client->download.startpos, SEEK_SET) != 0)
 			{
 				free(data);
-				fclose(client->download.file);
-				client->download.file = NULL;
+				Host_CloseDownload(client);
 				return;
 			}
-			hash = CRC_Block(data, host_client->download.size);
+			size_t read_size = fread(data, 1, client->download.size, client->download.file); // woods
+			if (read_size != client->download.size)
+			{
+				free(data);
+				Host_CloseDownload(client);
+				return;
+			}
+			hash = CRC_Block(data, client->download.size);
 			free(data);
 		}
 		fclose(client->download.file);
 		client->download.file = NULL;
 
-		MSG_WriteByte (&host_client->message, svc_stufftext);
-		MSG_WriteString (&host_client->message, va("cl_downloadfinished %u %u \"%s\"\n", client->download.size, hash, client->download.name));
+		MSG_WriteByte (&client->message, svc_stufftext);
+		MSG_WriteString (&client->message, va("cl_downloadfinished %u %u \"%s\"\n", client->download.size, hash, client->download.name));
 		*client->download.name = 0;
-		host_client->sendsignon = PRESPAWN_FLUSH;	//override any keepalive issues. woods - switch to enum
+		client->sendsignon = PRESPAWN_FLUSH;	//override any keepalive issues. woods - switch to enum
 	}
 }
 

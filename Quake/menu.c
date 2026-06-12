@@ -24223,6 +24223,17 @@ typedef struct {
 	qboolean isLoading;  // New flag to indicate loading state
 } servertitem_t;
 
+typedef struct {
+	char name[256];
+	char ip[256];
+	char map[64];
+	char players[512];
+	int users;
+	int maxusers;
+	int ping;
+	qboolean has_players;
+} servertitem_snapshot_t;
+
 static struct {
 	menulist_t list;
 	enum m_state_e prev;
@@ -24262,6 +24273,47 @@ enum {
 
 static volatile qboolean pingThreadsShouldExit = false;
 SDL_mutex* pingMutex = NULL;
+
+static qboolean ServerList_SnapshotItem(int actualIndex, servertitem_snapshot_t *snapshot)
+{
+	const servertitem_t *server;
+	qboolean locked = false;
+
+	if (!snapshot)
+		return false;
+	memset(snapshot, 0, sizeof(*snapshot));
+
+	if (pingMutex)
+	{
+		SDL_LockMutex(pingMutex);
+		locked = true;
+	}
+
+	if (!serversmenu.items || actualIndex < 0 || actualIndex >= serversmenu.servercount)
+	{
+		if (locked)
+			SDL_UnlockMutex(pingMutex);
+		return false;
+	}
+
+	server = &serversmenu.items[actualIndex];
+	q_strlcpy(snapshot->name, server->name ? server->name : "", sizeof(snapshot->name));
+	q_strlcpy(snapshot->ip, server->ip ? server->ip : "", sizeof(snapshot->ip));
+	q_strlcpy(snapshot->map, server->map ? server->map : "", sizeof(snapshot->map));
+	if (server->players && server->players[0])
+	{
+		q_strlcpy(snapshot->players, server->players, sizeof(snapshot->players));
+		snapshot->has_players = true;
+	}
+	snapshot->users = server->users;
+	snapshot->maxusers = server->maxusers;
+	snapshot->ping = server->ping;
+
+	if (locked)
+		SDL_UnlockMutex(pingMutex);
+
+	return true;
+}
 
 typedef enum
 {
@@ -24797,42 +24849,41 @@ static void PingSweepThreadFinished(void)
 void TriggerServerPing(int index)
 {
 	int actualIndex;
+	double currentTime;
 
-	SDL_LockMutex(pingMutex);
-	qboolean canPing = serversmenu.initialPingComplete;
-	actualIndex = ServersMenu_ResolveIndex(index);
-	SDL_UnlockMutex(pingMutex);
-
-	if (!canPing || actualIndex < 0)
+	if (!pingMutex)
 		return;
-
-	if (actualIndex < serversmenu.servercount)
+	SDL_LockMutex(pingMutex);
+	if (!serversmenu.initialPingComplete)
 	{
-		double currentTime = Sys_DoubleTime();
+		SDL_UnlockMutex(pingMutex);
+		return;
+	}
+	actualIndex = ServersMenu_ResolveIndex(index);
+	if (!serversmenu.items || actualIndex < 0 || actualIndex >= serversmenu.servercount)
+	{
+		SDL_UnlockMutex(pingMutex);
+		return;
+	}
 
-		if ((currentTime - serversmenu.items[actualIndex].lastPingTime) >= PING_COOLDOWN)
+	currentTime = Sys_DoubleTime();
+	if ((currentTime - serversmenu.items[actualIndex].lastPingTime) >= PING_COOLDOWN)
+	{
+		if (serversmenu.pingQueueSize < MAX_PING_QUEUE)
 		{
-			SDL_LockMutex(pingMutex);
-			if (serversmenu.pingQueueSize < MAX_PING_QUEUE)
-			{
-				serversmenu.pingQueue[serversmenu.pingQueueSize++] = actualIndex;
-				serversmenu.items[actualIndex].lastPingTime = currentTime;
-			}
-			if (!serversmenu.pingThreadRunning)
-			{
-				serversmenu.pingThread = SDL_CreateThread(ProcessPingQueue, "PingQueueThread", NULL);
-				if (serversmenu.pingThread == NULL)
-				{
-					Con_DPrintf("SDL_CreateThread failed: %s\n", SDL_GetError());
-				}
-				else
-				{
-					serversmenu.pingThreadRunning = true;
-				}
-			}
-			SDL_UnlockMutex(pingMutex);
+			serversmenu.pingQueue[serversmenu.pingQueueSize++] = actualIndex;
+			serversmenu.items[actualIndex].lastPingTime = currentTime;
 		}
 	}
+	if (serversmenu.pingQueueSize > 0 && !serversmenu.pingThreadRunning)
+	{
+		serversmenu.pingThread = SDL_CreateThread(ProcessPingQueue, "PingQueueThread", NULL);
+		if (serversmenu.pingThread == NULL)
+			Con_DPrintf("SDL_CreateThread failed: %s\n", SDL_GetError());
+		else
+			serversmenu.pingThreadRunning = true;
+	}
+	SDL_UnlockMutex(pingMutex);
 }
 
 int PingServers(void* data)
@@ -25850,48 +25901,48 @@ void M_ServerList_Draw (void)
 		else
 			M_PrintWhite(x, y, "No Quake servers found");
 	}
-        for (i = 0; i < numvis; i++) {
-                int idx = i + firstvis;
-                qboolean selected = (idx == serversmenu.list.cursor);
-                int actualIndex = ServersMenu_ResolveIndex(idx);
+	        for (i = 0; i < numvis; i++) {
+	                int idx = i + firstvis;
+	                qboolean selected = (idx == serversmenu.list.cursor);
+	                int actualIndex = ServersMenu_ResolveIndex(idx);
+	                servertitem_snapshot_t server;
 
-                if (actualIndex < 0 || actualIndex >= serversmenu.servercount)
-                        continue;
+	                if (!ServerList_SnapshotItem(actualIndex, &server))
+	                        continue;
 
-                const servertitem_t* server = &serversmenu.items[actualIndex];
-                qboolean isActive = false;
+	                qboolean isActive = false;
 
-                if (cls.state == ca_connected) // highlight if connected to a server in the list
-                {
-                        if (!strcmp(lastmphost, server->ip))
-                                isActive = true;
-                        else if (Valid_Domain(lastmphost))
-                                isActive = !strcmp((ResolveHostname(lastmphost)), server->ip);
-                        else if (Valid_IP(lastmphost))
-                                isActive = !strcmp(lastmphost, server->ip);
-                }
+	                if (cls.state == ca_connected) // highlight if connected to a server in the list
+	                {
+	                        if (!strcmp(lastmphost, server.ip))
+	                                isActive = true;
+	                        else if (Valid_Domain(lastmphost))
+	                                isActive = !strcmp((ResolveHostname(lastmphost)), server.ip);
+	                        else if (Valid_IP(lastmphost))
+	                                isActive = !strcmp(lastmphost, server.ip);
+	                }
 
-                char pingStrBuffer[8];
-                char* pingStrToPrint = pingStrBuffer;
+	                char pingStrBuffer[8];
+	                char* pingStrToPrint = pingStrBuffer;
 
-                if (server->ping == -1) {
-                        pingStrBuffer[0] = '\0';
-                }
-                else {
-                        q_snprintf(pingStrBuffer, sizeof(pingStrBuffer), "%3i", server->ping);
-                        while (*pingStrToPrint == ' ' && *pingStrToPrint != '\0') {
-                                pingStrToPrint++;
-                        }
-                }
+	                if (server.ping == -1) {
+	                        pingStrBuffer[0] = '\0';
+	                }
+	                else {
+	                        q_snprintf(pingStrBuffer, sizeof(pingStrBuffer), "%3i", server.ping);
+	                        while (*pingStrToPrint == ' ' && *pingStrToPrint != '\0') {
+	                                pingStrToPrint++;
+	                        }
+	                }
 
-		char plysStr[16];
-		q_snprintf(plysStr, sizeof(plysStr), "%u/%u", server->users, server->maxusers);
+			char plysStr[16];
+			q_snprintf(plysStr, sizeof(plysStr), "%d/%d", server.users, server.maxusers);
 
-                char linePrefixStr[32];
-		q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-16.16s  %-6.6s %-5s ",
-                        server->name,
-                        server->map,
-			plysStr);
+	                char linePrefixStr[32];
+			q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-16.16s  %-6.6s %-5s ",
+	                        server.name,
+	                        server.map,
+				plysStr);
 
                 int current_y_pos = y + i * 8;
                 int current_x_pos = x;
@@ -25907,13 +25958,13 @@ void M_ServerList_Draw (void)
                         M_Print(current_x_pos, current_y_pos, linePrefixStr);
                 }
 
-                int ping_display_x = current_x_pos + ((int)strlen(linePrefixStr) * 8);
+	                int ping_display_x = current_x_pos + ((int)strlen(linePrefixStr) * 8);
 
-                if (pingStrToPrint[0] != '\0') {
-                        int current_ping = server->ping;
-                        if (current_ping <= 60) {
-                                M_PrintWhite(ping_display_x, current_y_pos, pingStrToPrint); // Green for pings <= 60
-                        }
+	                if (pingStrToPrint[0] != '\0') {
+	                        int current_ping = server.ping;
+	                        if (current_ping <= 60) {
+	                                M_PrintWhite(ping_display_x, current_y_pos, pingStrToPrint); // Green for pings <= 60
+	                        }
                         else if (current_ping <= 120) {
                                 M_Print2(ping_display_x, current_y_pos, pingStrToPrint); // White for pings 61-120
                         }
@@ -25939,13 +25990,13 @@ void M_ServerList_Draw (void)
                                 m_mousex < plys_text_x + plys_text_w &&
                                 m_mousey >= current_y_pos &&
                                 m_mousey < current_y_pos + 8);
-                        qboolean tab_held = keydown[K_TAB];
+	                        qboolean tab_held = keydown[K_TAB];
 
-                        if ((hover_plys || tab_held) && server->players && server->players[0])
-                        {
-                                // Display player names with word-wrapping (like demos menu)
-                                char players_copy[512];
-                                q_strlcpy(players_copy, server->players, sizeof(players_copy));
+	                        if ((hover_plys || tab_held) && server.has_players)
+	                        {
+	                                // Display player names with word-wrapping (like demos menu)
+	                                char players_copy[512];
+	                                q_strlcpy(players_copy, server.players, sizeof(players_copy));
 
                                 char *pos = players_copy;
                                 char line_buffer[64];
@@ -26017,13 +26068,13 @@ void M_ServerList_Draw (void)
                                 }
                         }
                         else
-                        {
-                                char infoStr[40];
-                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server->name);
-                                M_PrintWhite(x, info_y, infoStr);
-                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server->ip);
-                                M_PrintWhite(x, info_y + 8, infoStr);
-                        }
+	                        {
+	                                char infoStr[40];
+	                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server.name);
+	                                M_PrintWhite(x, info_y, infoStr);
+	                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server.ip);
+	                                M_PrintWhite(x, info_y + 8, infoStr);
+	                        }
                 }
         }
 
