@@ -592,6 +592,7 @@ This is also called on Host_Error, so it shouldn't cause any errors
 */
 void CL_Disconnect (void)
 {
+	CL_AsyncDownload_Cancel();
 	NET_PortPingProbe_RequestAbort();
 	CL_CancelConnect();
 	CL_ClearTypingState();
@@ -2461,6 +2462,35 @@ qboolean stop_curl_download = false;
 qboolean curl_download_active = false;
 qboolean downloadedctf = false;
 
+typedef struct
+{
+	qboolean active;
+	qboolean done;
+	qboolean success;
+	qboolean aborted;
+	SDL_Thread *thread;
+	SDL_atomic_t abort_requested;
+	int url_count;
+	int current_url;
+	char filename[MAX_OSPATH];
+	char tmp_path[MAX_OSPATH];
+	char full_urls[2][MAX_URLPATH];
+	char source_urls[2][MAX_URLPATH];
+	char display_name[64];
+	char error[128];
+	double received;
+	double total;
+	long file_size;
+	long response_code;
+	CURLcode curl_result;
+	qboolean is_auto; // started by CL_CheckDownload during signon (falls back to in-protocol download on failure)
+} async_download_t;
+
+static async_download_t async_download;
+static SDL_mutex *async_download_mutex = NULL;
+static double async_download_last_progress_print = 0.0;
+static char async_download_auto_failed[MAX_OSPATH]; // last signon file whose web mirrors failed; CL_CheckDownload skips the mirrors for it and uses the in-protocol path instead
+
 typedef struct {
 	char* url;
 	int web;
@@ -2468,6 +2498,7 @@ typedef struct {
 
 SDL_Thread* currentWebCheckThread = NULL;
 SDL_Thread* currentWeb2CheckThread = NULL;
+SDL_Thread* currentQWMapListCheckThread = NULL;
 
 #define QW_MAPLIST_SOURCE_HOST "maps.quakeworld.nu"
 #define QW_MAPLIST_SOURCE_URL "https://maps.quakeworld.nu/all/"
@@ -2798,15 +2829,42 @@ static void QWMapListWebCheckStart(void)
 	qwmaplist_webcheck_started = true;
 	thread = webDownloadCheck(QW_MAPLIST_SOURCE_URL, 3);
 	if (thread != NULL)
-		SDL_DetachThread(thread);
+		currentQWMapListCheckThread = thread;
 	else
 		qwmaplist_webcheck_started = false;
 }
 
 static void QWMapListWebCheckReset(void)
 {
+	if (currentQWMapListCheckThread != NULL)
+	{
+		SDL_WaitThread(currentQWMapListCheckThread, NULL);
+		currentQWMapListCheckThread = NULL;
+	}
+
 	qwmaplist_webcheck = false;
 	qwmaplist_webcheck_started = false;
+}
+
+static void CL_WebDownloadChecks_Shutdown(void)
+{
+	if (currentWebCheckThread != NULL)
+	{
+		SDL_WaitThread(currentWebCheckThread, NULL);
+		currentWebCheckThread = NULL;
+	}
+
+	if (currentWeb2CheckThread != NULL)
+	{
+		SDL_WaitThread(currentWeb2CheckThread, NULL);
+		currentWeb2CheckThread = NULL;
+	}
+
+	if (currentQWMapListCheckThread != NULL)
+	{
+		SDL_WaitThread(currentQWMapListCheckThread, NULL);
+		currentQWMapListCheckThread = NULL;
+	}
 }
 
 void CL_QWMapListDownloadsRetry(void)
@@ -3029,7 +3087,7 @@ static void CL_DownloadProgress_UpdateMenuScreen(void)
 
 size_t Write_Data (void* ptr, size_t size, size_t nmemb, FILE* stream)
 {
-	return fwrite (ptr, size, nmemb, stream);
+	return fwrite (ptr, size, nmemb, stream) * size;
 }
 
 int Progress_Callback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
@@ -3239,6 +3297,23 @@ static qboolean DL_FileLengthExact(FILE *f, unsigned int size)
 	if (fseek(f, oldpos, SEEK_SET) != 0)
 		return false;
 	return len >= 0 && (unsigned long)len == size;
+}
+
+static qboolean DL_ParseUnsigned(const char *s, unsigned int *out)
+{
+	unsigned long value;
+	char *end;
+
+	if (!s || !*s || !out)
+		return false;
+
+	errno = 0;
+	value = strtoul(s, &end, 0);
+	if (errno == ERANGE || end == s || *end || value > UINT_MAX)
+		return false;
+
+	*out = (unsigned int)value;
+	return true;
 }
 
 static unsigned int DL_PeekLong(int pos)
@@ -3576,8 +3651,118 @@ static void DLC_RequestDownloadChunks(void)
 	}
 }
 
+static qboolean CL_BuildDownloadUrl(const char* url, const char* filename, qboolean is_skybox, char* full_url, size_t full_url_size)
+{
+	int full_url_len = -1;
+	const char* skipped_path;
+
+	if (!url || !url[0] || !filename || !filename[0] || !full_url || full_url_size == 0)
+		return false;
+
+	skipped_path = COM_SkipPath(filename);
+
+	if (IsGithubRepoPath(url))
+	{
+		char normalized_url[MAX_URLPATH];
+		char repo_base[MAX_URLPATH];
+
+		if (!NormalizeGithubRepoPath(url, normalized_url, sizeof(normalized_url)))
+			return false;
+
+		if ((size_t)q_snprintf(repo_base, sizeof(repo_base),
+			"https://raw.githubusercontent.com/%s/", normalized_url) >= sizeof(repo_base))
+			return false;
+
+		if (is_skybox && !strncmp(filename, "gfx/env/", 8))
+		{
+			full_url_len = q_snprintf(full_url, full_url_size,
+				"%sgfx/env/%s", repo_base, filename + 8);
+		}
+		else if (!strncmp(filename, "maps/", 5))
+		{
+			const char* base = COM_SkipPath(filename);
+			char directory[5];
+
+			if (isdigit((unsigned char)base[0]))
+				strcpy(directory, "0-9/");
+			else {
+				directory[0] = (char)toupper((unsigned char)base[0]);
+				directory[1] = '/';
+				directory[2] = '\0';
+			}
+
+			full_url_len = q_snprintf(full_url, full_url_size,
+				"%smaps/%s%s", repo_base, directory, base);
+		}
+		else
+		{
+			full_url_len = q_snprintf(full_url, full_url_size,
+				"%s%s", repo_base, filename);
+		}
+	}
+	else if (strstr(url, "github.io") && !strncmp(filename, "maps/", 5))
+	{
+		const char *githubio_host = url;
+		char directory[5];
+
+		if (!strncmp(githubio_host, "https://", 8))
+			githubio_host += 8;
+		else if (!strncmp(githubio_host, "http://", 7))
+			githubio_host += 7;
+
+		if (isdigit((unsigned char)skipped_path[0]))
+		{
+			strcpy(directory, "0-9/");
+		}
+		else {
+			directory[0] = toupper((unsigned char)skipped_path[0]);
+			directory[1] = '/';
+			directory[2] = '\0';
+		}
+
+		full_url_len = q_snprintf(full_url, full_url_size, "https://%s%smaps/%s/%s",
+			githubio_host, CL_DownloadUrlPathSeparator(githubio_host), directory, skipped_path);
+	}
+	else if (strstr(url, "maps.quakeworld.nu"))
+	{
+		if (!q_strcasecmp(COM_FileGetExtension(filename), "loc"))
+			full_url_len = q_snprintf(full_url, full_url_size, "https://%s/%s", "maps.quakeworld.nu", filename);
+		else
+			full_url_len = q_snprintf(full_url, full_url_size, "https://%s/%s", "maps.quakeworld.nu/all", skipped_path);
+	}
+	else if (strstr(url, "://"))
+		full_url_len = q_snprintf(full_url, full_url_size, "%s%s%s",
+			url, CL_DownloadUrlPathSeparator(url), filename);
+	else
+		full_url_len = q_snprintf(full_url, full_url_size, "https://%s%s%s",
+			url, CL_DownloadUrlPathSeparator(url), filename);
+
+	return full_url_len >= 0 && (size_t)full_url_len < full_url_size;
+}
+
+static void CL_CurlSetDownloadOptions(CURL *curl)
+{
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+#if CURL_AT_LEAST_VERSION(7, 85, 0)
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+#else
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+#endif
+}
+
 qboolean Curl_DownloadFile (const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name) // main curl function
 {
+	if (cls.download.active)	// don't stomp an in-flight async/protocol download's shared state
+		return false;
+
 	stop_curl_download = false;
 	CL_DownloadProgress_Begin(filename);
 	curl_download_active = true;
@@ -3590,94 +3775,7 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 	}
 
 	char full_url[MAX_URLPATH];
-	int full_url_len = -1;
-	const char* skipped_path = COM_SkipPath(filename);
-
-
-	if (IsGithubRepoPath(url))
-	{
-		/* Normalize the URL to include /main if needed */
-		char normalized_url[MAX_URLPATH];
-		if (!NormalizeGithubRepoPath(url, normalized_url, sizeof(normalized_url)))
-			goto url_too_long;
-
-		/* Build the common prefix once */
-		char repo_base[MAX_URLPATH];
-		if ((size_t)q_snprintf(repo_base, sizeof(repo_base),
-			"https://raw.githubusercontent.com/%s/", normalized_url) >= sizeof(repo_base))
-			goto url_too_long;
-
-		/* 1.  Skyboxes -> skyboxes/<face>.(tga|png|...) */
-		if (is_skybox && !strncmp(filename, "gfx/env/", 8))
-		{
-			/* skip the "gfx/env/" part */
-			full_url_len = q_snprintf(full_url, sizeof(full_url),
-				"%sgfx/env/%s", repo_base, filename + 8);
-		}
-		/* 2.  Maps -> maps/<A-Z or 0-9>/<basename>.bsp */
-		else if (!strncmp(filename, "maps/", 5))
-		{
-			const char* base = COM_SkipPath(filename);   /* DM4.bsp */
-			char directory[5];
-
-			if (isdigit((unsigned char)base[0]))
-				strcpy(directory, "0-9/");
-			else {
-				directory[0] = (char)toupper((unsigned char)base[0]);
-				directory[1] = '/';
-				directory[2] = '\0';
-			}
-
-            full_url_len = q_snprintf(full_url, sizeof(full_url),
-				"%smaps/%s%s", repo_base, directory, base);
-		}
-		/* 3.  Everything else -> branch/<original path> */
-		else
-		{
-            full_url_len = q_snprintf(full_url, sizeof(full_url),
-				"%s%s", repo_base, filename);
-		}
-	}
-
-    else if (strstr(url, "github.io") && !strncmp(filename, "maps/", 5)) // special case for github.io
-	{
-        const char *githubio_host = url;
-		char directory[5];
-
-        if (!strncmp(githubio_host, "https://", 8))
-            githubio_host += 8;
-        else if (!strncmp(githubio_host, "http://", 7))
-            githubio_host += 7;
-
-		if (isdigit((unsigned char)skipped_path[0]))
-		{
-			strcpy(directory, "0-9/"); // If the filename starts with a digit, use '#' directory
-		}
-		else {
-			directory[0] = toupper(skipped_path[0]); // Extract the first letter and make it uppercase
-			directory[1] = '/';
-			directory[2] = '\0';
-		}
-
-		full_url_len = q_snprintf(full_url, sizeof(full_url), "https://%s%smaps/%s/%s",
-			githubio_host, CL_DownloadUrlPathSeparator(githubio_host), directory, skipped_path); // Construct the URL with directory
-	}
-
-	else if (strstr(url, "maps.quakeworld.nu")) // special cases for maps.quakeworld.nu
-	{
-		if (!q_strcasecmp(COM_FileGetExtension(filename), "loc"))
-			full_url_len = q_snprintf(full_url, sizeof(full_url), "https://%s/%s", "maps.quakeworld.nu", filename);
-		else
-			full_url_len = q_snprintf(full_url, sizeof(full_url), "https://%s/%s", "maps.quakeworld.nu/all", skipped_path); // use secure https and skip path
-	}
-	else if (strstr(url, "://"))
-		full_url_len = q_snprintf(full_url, sizeof(full_url), "%s%s%s",
-			url, CL_DownloadUrlPathSeparator(url), filename);
-	else
-		full_url_len = q_snprintf(full_url, sizeof(full_url), "https://%s%s%s",
-			url, CL_DownloadUrlPathSeparator(url), filename); // use secure https
-
-	if (full_url_len < 0 || (size_t)full_url_len >= sizeof(full_url))
+	if (!CL_BuildDownloadUrl(url, filename, is_skybox, full_url, sizeof(full_url)))
 		goto url_too_long;
 
 	DownloadData dl_data;
@@ -3729,19 +3827,28 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 0L); // Timeout after x milliseconds, 1000 = 1 sec, 0L - not limit
 	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 500L); // Set minimum bytes per second (e.g., 500 bytes/sec)
 	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 10L); // Set time in seconds (e.g., 10 seconds)
+	CL_CurlSetDownloadOptions(curl);
 
 	CURLcode res = curl_easy_perform(curl);
 	long response_code = 0;
+	qboolean write_failed;
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+
+	write_failed = (fflush(fp) != 0 || ferror(fp));
 
 	// Get file size in bytes
 	fseek(fp, 0, SEEK_END); // Seek to end of file
 	long fileSizeBytes = ftell(fp); // Get current file pointer position, which is the size
+	if (fileSizeBytes < 0)
+		fileSizeBytes = 0;
 	float fileSizeKB = BYTES_TO_KB(fileSizeBytes);
 	float fileSizeMB = BYTES_TO_MB(fileSizeBytes);
 
 	fclose(fp);
 	curl_easy_cleanup(curl);
+
+	if (write_failed && res == CURLE_OK)
+		res = CURLE_WRITE_ERROR;
 
 	if (res != CURLE_OK || response_code != 200) 
 	{
@@ -3795,6 +3902,530 @@ url_too_long:
     return false;
 }
 
+static qboolean CL_AsyncDownload_EnsureMutex(void)
+{
+	if (async_download_mutex)
+		return true;
+
+	async_download_mutex = SDL_CreateMutex();
+	if (!async_download_mutex)
+	{
+		Con_Printf("Unable to initialize download worker mutex: %s\n", SDL_GetError());
+		return false;
+	}
+
+	return true;
+}
+
+static qboolean CL_AsyncDownload_IsActive(void)
+{
+	qboolean active = false;
+
+	if (!async_download_mutex)
+		return false;
+
+	SDL_LockMutex(async_download_mutex);
+	active = async_download.active;
+	SDL_UnlockMutex(async_download_mutex);
+
+	return active;
+}
+
+static void CL_AsyncDownload_FormatSize(long bytes, char *out, size_t outsize)
+{
+	float kb = BYTES_TO_KB(bytes);
+	float mb = BYTES_TO_MB(bytes);
+
+	if (mb >= 1.0f)
+		q_snprintf(out, outsize, "%.2f mb", mb);
+	else if (kb >= 1.0f)
+		q_snprintf(out, outsize, "%ld kb", (long)kb);
+	else
+		q_snprintf(out, outsize, "%ld bytes", bytes);
+}
+
+static void CL_AsyncDownload_PrintProgress(const char *filename, const char *source_url, const char *display_name, double received, double total)
+{
+	char source_limited[21];
+	const char *source;
+
+	if (!filename || !filename[0])
+		return;
+	if (received <= 10000.0 || !strcmp(COM_FileGetExtension(filename), "loc"))
+		return;
+	if (async_download_last_progress_print > 0.0 &&
+		realtime - async_download_last_progress_print < 0.5)
+		return;
+
+	async_download_last_progress_print = realtime;
+
+	source = (display_name && display_name[0]) ? display_name : source_url;
+	if (!source || !source[0])
+		source = "web";
+	q_strlcpy(source_limited, source, sizeof(source_limited));
+
+	if (total > 0.0)
+	{
+		char sizeStr[32];
+		int progress = (int)((received / total) * 100.0);
+
+		if (progress < 0)
+			progress = 0;
+		else if (progress > 100)
+			progress = 100;
+
+		CL_AsyncDownload_FormatSize((long)total, sizeStr, sizeof(sizeStr));
+		Con_Printf("DL %s (%s) %s ^m%d%%\r",
+			COM_SkipPath(filename), source_limited, sizeStr, progress);
+	}
+	else
+	{
+		Con_Printf("DL %s (%s) %.0f kb\r",
+			COM_SkipPath(filename), source_limited, BYTES_TO_KB(received));
+	}
+}
+
+static size_t CL_AsyncDownload_WriteData(void* ptr, size_t size, size_t nmemb, void* stream)
+{
+	return fwrite(ptr, size, nmemb, (FILE *)stream) * size;
+}
+
+static int CL_AsyncDownload_ProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+	(void)clientp;
+	(void)ultotal;
+	(void)ulnow;
+
+	if (SDL_AtomicGet(&async_download.abort_requested))
+		return 1;
+
+	SDL_LockMutex(async_download_mutex);
+	async_download.received = (double)dlnow;
+	async_download.total = (double)dltotal;
+	SDL_UnlockMutex(async_download_mutex);
+
+	return 0;
+}
+
+static int CL_AsyncDownload_Thread(void *unused)
+{
+	char full_urls[2][MAX_URLPATH];
+	char source_urls[2][MAX_URLPATH];
+	char tmp_path[MAX_OSPATH];
+	int url_count;
+	int i;
+	qboolean success = false;
+	qboolean aborted = false;
+	char error[128] = "";
+	long file_size = 0;
+	long response_code = 0;
+	CURLcode curl_result = CURLE_OK;
+
+	(void)unused;
+
+	SDL_LockMutex(async_download_mutex);
+	url_count = async_download.url_count;
+	for (i = 0; i < url_count && i < 2; i++)
+	{
+		q_strlcpy(full_urls[i], async_download.full_urls[i], sizeof(full_urls[i]));
+		q_strlcpy(source_urls[i], async_download.source_urls[i], sizeof(source_urls[i]));
+	}
+	q_strlcpy(tmp_path, async_download.tmp_path, sizeof(tmp_path));
+	SDL_UnlockMutex(async_download_mutex);
+
+	for (i = 0; i < url_count && i < 2; i++)
+	{
+		FILE *fp;
+		CURL *curl;
+		qboolean write_failed;
+
+		if (SDL_AtomicGet(&async_download.abort_requested))
+		{
+			aborted = true;
+			q_strlcpy(error, "Download cancelled", sizeof(error));
+			break;
+		}
+
+		SDL_LockMutex(async_download_mutex);
+		async_download.current_url = i;
+		async_download.received = 0.0;
+		async_download.total = 0.0;
+		async_download.file_size = 0;
+		async_download.response_code = 0;
+		async_download.curl_result = CURLE_OK;
+		async_download.error[0] = '\0';
+		SDL_UnlockMutex(async_download_mutex);
+
+		fp = fopen(tmp_path, "wb");
+		if (!fp)
+		{
+			q_snprintf(error, sizeof(error), "Unable to open temp file: %s", strerror(errno));
+			break;
+		}
+
+		curl = curl_easy_init();
+		if (!curl)
+		{
+			fclose(fp);
+			q_strlcpy(error, "Unable to initialize curl", sizeof(error));
+			break;
+		}
+
+		curl_easy_setopt(curl, CURLOPT_XFERINFODATA, NULL);
+		curl_easy_setopt(curl, CURLOPT_URL, full_urls[i]);
+		curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 1024L);
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CL_AsyncDownload_WriteData);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+		curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+		curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CL_AsyncDownload_ProgressCallback);
+		curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 0L);
+		curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 500L);
+		curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 10L);
+		CL_CurlSetDownloadOptions(curl);
+
+		curl_result = curl_easy_perform(curl);
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+
+		write_failed = (fflush(fp) != 0 || ferror(fp));
+
+		if (fseek(fp, 0, SEEK_END) == 0)
+			file_size = ftell(fp);
+		else
+			file_size = 0;
+		if (file_size < 0)
+			file_size = 0;
+
+		fclose(fp);
+		curl_easy_cleanup(curl);
+
+		if (write_failed && curl_result == CURLE_OK)
+			curl_result = CURLE_WRITE_ERROR;
+
+		if (SDL_AtomicGet(&async_download.abort_requested) || curl_result == CURLE_ABORTED_BY_CALLBACK)
+		{
+			aborted = true;
+			q_strlcpy(error, "Download cancelled", sizeof(error));
+			unlink(tmp_path);
+			break;
+		}
+
+		if (curl_result == CURLE_OK && response_code == 200)
+		{
+			success = true;
+			error[0] = '\0';
+			break;
+		}
+
+		unlink(tmp_path);
+		if (curl_result != CURLE_OK)
+			q_snprintf(error, sizeof(error), "%s: %s", source_urls[i], curl_easy_strerror(curl_result));
+		else
+			q_snprintf(error, sizeof(error), "%s: HTTP %ld", source_urls[i], response_code);
+	}
+
+	SDL_LockMutex(async_download_mutex);
+	async_download.done = true;
+	async_download.success = success;
+	async_download.aborted = aborted;
+	async_download.file_size = file_size;
+	async_download.response_code = response_code;
+	async_download.curl_result = curl_result;
+	q_strlcpy(async_download.error, error, sizeof(async_download.error));
+	SDL_UnlockMutex(async_download_mutex);
+
+	return 0;
+}
+
+static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, int url_count, qboolean is_skybox, const char *display_name, qboolean auto_download)
+{
+	char tmp_path[MAX_OSPATH];
+	char full_urls[2][MAX_URLPATH];
+	char source_urls[2][MAX_URLPATH];
+	int i, count = 0;
+	SDL_Thread *thread;
+
+	if (!filename || !filename[0] || !urls || url_count <= 0)
+		return false;
+
+	if (!CL_AsyncDownload_EnsureMutex())
+		return false;
+
+	if (CL_AsyncDownload_IsActive() || cls.download.active)
+	{
+		Con_Printf("A download is already active\n");
+		return false;
+	}
+
+	if ((size_t)q_snprintf(tmp_path, sizeof(tmp_path), "%s/%s.tmp", com_gamedir, filename) >= sizeof(tmp_path))
+	{
+		Con_Printf("Download path too long\n");
+		return false;
+	}
+
+	for (i = 0; i < url_count && count < 2; i++)
+	{
+		if (!urls[i] || !urls[i][0])
+			continue;
+		if (!CL_BuildDownloadUrl(urls[i], filename, is_skybox, full_urls[count], sizeof(full_urls[count])))
+		{
+			Con_DPrintf("Download URL is invalid or too long: %s\n", urls[i]);
+			continue;
+		}
+		q_strlcpy(source_urls[count], urls[i], sizeof(source_urls[count]));
+		count++;
+	}
+
+	if (count <= 0)
+	{
+		Con_Printf("No usable download URLs are configured\n");
+		return false;
+	}
+
+	COM_CreatePath(tmp_path);
+
+	SDL_LockMutex(async_download_mutex);
+	memset(&async_download, 0, sizeof(async_download));
+	async_download.active = true;
+	async_download.url_count = count;
+	async_download.current_url = 0;
+	async_download.is_auto = auto_download;
+	q_strlcpy(async_download.filename, filename, sizeof(async_download.filename));
+	q_strlcpy(async_download.tmp_path, tmp_path, sizeof(async_download.tmp_path));
+	if (display_name)
+		q_strlcpy(async_download.display_name, display_name, sizeof(async_download.display_name));
+	for (i = 0; i < count; i++)
+	{
+		q_strlcpy(async_download.full_urls[i], full_urls[i], sizeof(async_download.full_urls[i]));
+		q_strlcpy(async_download.source_urls[i], source_urls[i], sizeof(async_download.source_urls[i]));
+	}
+	SDL_AtomicSet(&async_download.abort_requested, 0);
+	SDL_UnlockMutex(async_download_mutex);
+
+	async_download_last_progress_print = 0.0;
+	CL_DownloadProgress_Begin(filename);
+
+	thread = SDL_CreateThread(CL_AsyncDownload_Thread, "DownloadThread", NULL);
+	if (!thread)
+	{
+		SDL_LockMutex(async_download_mutex);
+		async_download.active = false;
+		SDL_UnlockMutex(async_download_mutex);
+		cls.download.active = false;
+		if (!strcmp(cls.download.current, filename))
+			cls.download.current[0] = '\0';
+		async_download_last_progress_print = 0.0;
+		Con_Printf("Unable to start download worker: %s\n", SDL_GetError());
+		return false;
+	}
+
+	SDL_LockMutex(async_download_mutex);
+	async_download.thread = thread;
+	SDL_UnlockMutex(async_download_mutex);
+
+	return true;
+}
+
+static qboolean CL_AsyncDownload_RequestStop(void)
+{
+	qboolean active = false;
+	qboolean done = false;
+
+	if (!async_download_mutex)
+		return false;
+
+	SDL_LockMutex(async_download_mutex);
+	active = async_download.active;
+	done = async_download.done;
+	if (active && !done)
+		SDL_AtomicSet(&async_download.abort_requested, 1);
+	SDL_UnlockMutex(async_download_mutex);
+
+	if (!active)
+		return false;
+
+	if (!done)
+		Con_Printf("Stopping download...\n");
+
+	return true;
+}
+
+void CL_AsyncDownload_Frame(void)
+{
+	qboolean active, done, success, aborted, is_auto;
+	char filename[MAX_OSPATH];
+	char tmp_path[MAX_OSPATH];
+	char error[128];
+	char source_url[MAX_URLPATH];
+	char display_name[64];
+	double received, total;
+	long file_size;
+	SDL_Thread *thread = NULL;
+	int current_url;
+
+	if (!async_download_mutex)
+		return;
+
+	SDL_LockMutex(async_download_mutex);
+	active = async_download.active;
+	done = async_download.done;
+	success = async_download.success;
+	aborted = async_download.aborted;
+	is_auto = async_download.is_auto;
+	received = async_download.received;
+	total = async_download.total;
+	file_size = async_download.file_size;
+	current_url = async_download.current_url;
+	q_strlcpy(filename, async_download.filename, sizeof(filename));
+	q_strlcpy(tmp_path, async_download.tmp_path, sizeof(tmp_path));
+	q_strlcpy(error, async_download.error, sizeof(error));
+	q_strlcpy(display_name, async_download.display_name, sizeof(display_name));
+	if (current_url >= 0 && current_url < async_download.url_count)
+		q_strlcpy(source_url, async_download.source_urls[current_url], sizeof(source_url));
+	else
+		source_url[0] = '\0';
+
+	if (done)
+	{
+		thread = async_download.thread;
+		async_download.thread = NULL;
+	}
+	SDL_UnlockMutex(async_download_mutex);
+
+	if (!active)
+		return;
+
+	if (!done)
+	{
+		CL_DownloadProgress_Update(received, total);
+		CL_AsyncDownload_PrintProgress(filename, source_url, display_name, received, total);
+		return;
+	}
+
+	if (thread)
+		SDL_WaitThread(thread, NULL);
+
+	if (success)
+	{
+		qboolean finalized = CL_FinalizeDownloadFile(filename, tmp_path);
+		char sizeStr[32];
+		char tagbuf[64];
+		const char *src;
+
+		if (!finalized)
+		{
+			unlink(tmp_path);
+			Con_Printf("Download failed: %s\n", filename);
+			success = false;
+		}
+		else
+		{
+			CL_DownloadProgress_Update((double)file_size, (double)file_size);
+			CL_AsyncDownload_FormatSize(file_size, sizeStr, sizeof(sizeStr));
+			src = display_name[0] ? display_name : DL_DisplayTag(source_url, tagbuf, sizeof(tagbuf));
+			Con_Printf("Downloaded ^m%s^m (%s) from %s\n",
+				COM_SkipPath(filename), sizeStr, src);
+		}
+	}
+	else
+	{
+		unlink(tmp_path);
+		if (aborted)
+			Con_Printf("Download cancelled: %s\n", COM_SkipPath(filename));
+		else if (error[0])
+			Con_Printf("Download failed: %s (%s)\n", filename, error);
+		else
+			Con_Printf("Download failed: %s\n", filename);
+	}
+
+	if (is_auto && !success)
+	{
+		q_strlcpy(async_download_auto_failed, filename, sizeof(async_download_auto_failed));
+		if (!strcmp(filename, "paks/ctf.pak"))
+			downloadedctf = false; // let CL_CheckDownload rewrite star.mdl again so the protocol fallback requests the pak
+	}
+
+	SDL_LockMutex(async_download_mutex);
+	async_download.active = false;
+	async_download.done = false;
+	async_download.success = false;
+	async_download.aborted = false;
+	async_download.received = 0.0;
+	async_download.total = 0.0;
+	async_download.file_size = 0;
+	async_download.error[0] = '\0';
+	SDL_UnlockMutex(async_download_mutex);
+
+	cls.download.active = false;
+	cls.download.chunked = false;
+	cls.download.current[0] = '\0';
+	cls.download.percent = success ? 100.0f : -1.0f;
+	async_download_last_progress_print = 0.0;
+}
+
+static void CL_AsyncDownload_Stop(qboolean destroy_mutex)
+{
+	SDL_Thread *thread = NULL;
+	char tmp_path[MAX_OSPATH] = "";
+	qboolean active = false;
+
+	if (!async_download_mutex)
+		return;
+
+	SDL_LockMutex(async_download_mutex);
+	active = async_download.active;
+	if (active)
+	{
+		SDL_AtomicSet(&async_download.abort_requested, 1);
+		thread = async_download.thread;
+		async_download.thread = NULL;
+		q_strlcpy(tmp_path, async_download.tmp_path, sizeof(tmp_path));
+	}
+	SDL_UnlockMutex(async_download_mutex);
+
+	if (thread)
+		SDL_WaitThread(thread, NULL);
+
+	if (active && tmp_path[0])
+		unlink(tmp_path);
+
+	memset(&async_download, 0, sizeof(async_download));
+	async_download_last_progress_print = 0.0;
+	async_download_auto_failed[0] = '\0';
+
+	if (active)
+	{
+		if (cls.download.file)
+		{
+			fclose(cls.download.file);
+			cls.download.file = NULL;
+		}
+		DL_FreeBlocks();
+		cls.download.active = false;
+		cls.download.chunked = false;
+		cls.download.current[0] = '\0';
+		cls.download.percent = -1.0f;
+		cls.download.received = 0.0;
+		cls.download.total = 0.0;
+	}
+
+	if (destroy_mutex)
+	{
+		SDL_DestroyMutex(async_download_mutex);
+		async_download_mutex = NULL;
+	}
+}
+
+void CL_AsyncDownload_Cancel(void)
+{
+	CL_AsyncDownload_Stop(false);
+}
+
+void CL_AsyncDownload_Shutdown(void)
+{
+	CL_AsyncDownload_Stop(true);
+	CL_WebDownloadChecks_Shutdown();
+}
+
 //sent by the server to let us know that dp downloads can be used
 void CL_ServerExtension_Download_f(void)
 {
@@ -3805,6 +4436,12 @@ void CL_ServerExtension_Download_f(void)
 //sent by the server to let us know when its finished sending the entire file
 void CL_Download_Finished_f(void)
 {
+	if (CL_AsyncDownload_IsActive())
+	{
+		Con_DPrintf("Ignoring download finish during web download\n");
+		return;
+	}
+
 	if (cls.download.chunked)
 	{
 		Con_DPrintf("Ignoring legacy download finish during chunked download\n");
@@ -3823,8 +4460,12 @@ void CL_Download_Finished_f(void)
 			goto cleanup;
 		}
 
-		size = strtoul(Cmd_Argv(1), NULL, 0);
-		hash = strtoul(Cmd_Argv(2), NULL, 0);
+		if (!DL_ParseUnsigned(Cmd_Argv(1), &size) ||
+			!DL_ParseUnsigned(Cmd_Argv(2), &hash))
+		{
+			Con_Warning("Download finished with invalid size/hash\n");
+			goto cleanup;
+		}
 
 		if (!CL_DownloadNameIsValid(cls.download.current))
 		{
@@ -3899,6 +4540,9 @@ cleanup:
 //sent by the server (or issued by the user) to stop the current download for any reason.
 void CL_StopDownload_f(void)
 {
+	if (CL_AsyncDownload_RequestStop())
+		return;
+
 	if (!curl_download_active) // woods, add support for stopping curl downloads #webdl
 	{
 		if (cls.download.chunked)
@@ -3928,6 +4572,12 @@ void CL_Download_Begin_f(void)
 	if (!cls.download.active)
 		return;
 
+	if (CL_AsyncDownload_IsActive())
+	{
+		Con_DPrintf("Ignoring download begin during web download\n");
+		return;
+	}
+
 	if (cls.download.file)
 		CL_StopDownload_f();
 
@@ -3936,7 +4586,14 @@ void CL_Download_Begin_f(void)
 	cls.download.chunked = false;
 	cls.download.completedbytes = 0;
 	cls.download.chunkedstaleuntil = 0;
-	cls.download.size = strtoul(Cmd_Argv(1), NULL, 0);
+	if (Cmd_Argc() < 2 || !DL_ParseUnsigned(Cmd_Argv(1), &cls.download.size))
+	{
+		Con_Warning("Download begin with invalid size\n");
+		cls.download.active = false;
+		cls.download.size = 0;
+		cls.download.percent = -1.0f;
+		return;
+	}
 	CL_DownloadProgress_Update(0.0, (double)cls.download.size);
 
 	COM_CreatePath(cls.download.temp);
@@ -4035,6 +4692,11 @@ void CL_Download_Chunked(void)
 		if (!cls.download.active)
 		{
 			Con_DPrintf("Ignoring unexpected chunked download start for %s\n", name);
+			return;
+		}
+		if (CL_AsyncDownload_IsActive())
+		{
+			Con_DPrintf("Ignoring chunked download start during web download\n");
 			return;
 		}
 		if (name && name[0] && strcmp(name, cls.download.current))
@@ -4181,16 +4843,18 @@ qboolean CL_CheckDownload(const char *filename)
 	if ((size_t)q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, filename) >= sizeof(local_path))
 		return false;
 
-	if (webcheck && (cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0')) // only run if server is verified
+	if (strcmp(async_download_auto_failed, filename) != 0) // skip the mirrors if they already failed for this file
 	{
-		if (Curl_DownloadFile (cl_web_download_url.string, filename, local_path, false, NULL))
-			return false;
-	}
+		const char *urls[2];
+		int url_count = 0;
 
-	if (web2check && (cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0')) // only run if server is verified
-	{
-		if (Curl_DownloadFile (cl_web_download_url2.string, filename, local_path, false, NULL))
-			return false;
+		if (webcheck && cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0') // only run if server is verified
+			urls[url_count++] = cl_web_download_url.string;
+		if (web2check && cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0') // only run if server is verified
+			urls[url_count++] = cl_web_download_url2.string;
+
+		if (url_count > 0 && CL_AsyncDownload_Start(filename, urls, url_count, false, NULL, true))
+			return true; // block; on failure CL_AsyncDownload_Frame records it and we fall through to the server download next poll
 	}
 
 	// woods, if not available via web, try the server #webdl
@@ -4653,29 +5317,24 @@ static qboolean CL_ManualDownloadNormalizeName(const char *filename, char *out, 
     return false;
 }
 
-static qboolean CL_ManualDownloadTryMirror(cvar_t *url, qboolean mirror_active, const char *filename, const char *local_path, qboolean require_active_check)
+static qboolean CL_ManualDownloadAddMirror(const cvar_t *url, qboolean mirror_active, qboolean require_active_check, const char **urls, int *url_count, int max_urls)
 {
-    if (!url->string || !url->string[0])
-        return false;
-    if (require_active_check && !mirror_active)
-        return false;
+	if (!url->string || !url->string[0])
+		return false;
+	if (require_active_check && !mirror_active)
+		return false;
+	if (*url_count >= max_urls)
+		return false;
 
-    if (!require_active_check)
-        Con_Printf("Trying %s...\n", url->string);
-
-    return Curl_DownloadFile(url->string, filename, local_path, false, NULL);
-}
-
-static void CL_ManualDownloadClearCurrent(const char *filename)
-{
-    if (!strcmp(cls.download.current, filename))
-        cls.download.current[0] = '\0';
+	urls[(*url_count)++] = url->string;
+	return true;
 }
 
 void CL_ManualDownload_f (const char* filename)
 {
     char prefixedArg[MAX_OSPATH];
-    char local_path[MAX_OSPATH];
+    const char *urls[2];
+    int url_count = 0;
     qboolean require_active_check;
     qboolean isNeitherWebDownloadServerSet;
 
@@ -4687,8 +5346,11 @@ void CL_ManualDownload_f (const char* filename)
 
 	if (*filename == '*')
 		return;    //don't download these...
-	if (cls.download.active)
+	if (CL_AsyncDownload_IsActive() || cls.download.active)
+	{
+		Con_Printf("A download is already active\n");
 		return;    //block while we're already downloading something
+	}
 
 	if (!CL_ManualDownloadNormalizeName(filename, prefixedArg, sizeof(prefixedArg)))
 		return;
@@ -4733,26 +5395,16 @@ void CL_ManualDownload_f (const char* filename)
 
 	Con_Printf("Attempting download, if found you will see progress below...\n");
 
-	if ((size_t)q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, prefixedArg) >= sizeof(local_path))
+	CL_ManualDownloadAddMirror(&cl_web_download_url, webcheck, require_active_check, urls, &url_count, (int)countof(urls));
+	CL_ManualDownloadAddMirror(&cl_web_download_url2, web2check, require_active_check, urls, &url_count, (int)countof(urls));
+
+	if (url_count <= 0)
 	{
-		Con_Printf("Download path too long\n");
+		Con_Printf("No web download servers are active\n");
 		return;
 	}
 
-	if (CL_ManualDownloadTryMirror(&cl_web_download_url, webcheck, prefixedArg, local_path, require_active_check))
-	{
-		CL_ManualDownloadClearCurrent(prefixedArg);
-		return;
-	}
-
-	if (CL_ManualDownloadTryMirror(&cl_web_download_url2, web2check, prefixedArg, local_path, require_active_check))
-	{
-		CL_ManualDownloadClearCurrent(prefixedArg);
-		return;
-	}
-
-	Con_Printf("Download failed: %s\n", prefixedArg);
-	CL_ManualDownloadClearCurrent(prefixedArg);
+	CL_AsyncDownload_Start(prefixedArg, urls, url_count, false, NULL, false);
 }
 
 /*

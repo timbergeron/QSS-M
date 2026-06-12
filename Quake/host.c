@@ -1155,6 +1155,8 @@ void Host_ClearMemory (void)
 	extern edict_t *bbox_focus;
 	extern void SCR_ClearShowFieldsTracks(void);
 
+	CL_AsyncDownload_Cancel();
+
 	if (cl.qcvm.extfuncs.CSQC_Shutdown)
 	{
 		PR_SwitchQCVM(&cl.qcvm);
@@ -1700,6 +1702,7 @@ void _Host_Frame (double time)
 	NET_Poll();
 	NET_PortPingProbe_Frame();
 	URI_Frame(); // woods #uri
+	CL_AsyncDownload_Frame();
 
 	if (cl.sendprespawn)
 	{
@@ -2042,6 +2045,8 @@ void Host_Shutdown(void)
 	SV_CleanupTimer(); // woods #svtimer
 
 	Host_WriteConfiguration ();
+
+	CL_AsyncDownload_Shutdown();
 
 	URI_Shutdown(); // woods #uri -- shutdown async URI subsystem early to stop worker before network teardown
 
