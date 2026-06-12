@@ -797,12 +797,31 @@ static void R_RemoveColinearVertices(glpoly_t* poly, float new_verts[][VERTEXSIZ
 		v3_index = (v3_index + 1) % numverts;
 	}
 
-	if (new_numverts > 0) {
+	// never shrink below a renderable triangle; index/VBO code assumes >= 3 verts
+	if (new_numverts >= 3) {
 		memcpy(poly->verts, new_verts, new_numverts * sizeof(float) * VERTEXSIZE);
 		poly->numverts = new_numverts;
 	}
 }
 #endif
+
+/*
+================
+R_SurfaceVertCount -- woods #collinear
+
+Number of verts actually stored in the surface's poly (collinear removal may
+have shrunk it below numedges). Clamped to numedges so it never exceeds the
+per-surface space counted for the bmodel VBO. Every place that fans this
+surface into triangle indices must use this count, not numedges, or the fan
+picks up stale verts left behind by the compaction.
+================
+*/
+int R_SurfaceVertCount (const msurface_t *s)
+{
+	if (s->polys && s->polys->numverts < s->numedges)
+		return s->polys->numverts;
+	return s->numedges;
+}
 
 /*
 ================
@@ -1216,9 +1235,10 @@ void GL_BuildBModelVertexBuffer (void)
 		for (i=0 ; i<m->numsurfaces ; i++)
 		{
 			msurface_t *s = &m->surfaces[i];
+			size_t nv = (size_t)R_SurfaceVertCount (s);	// woods #collinear -- poly may hold fewer verts than numedges
 			s->vbo_firstvert = (int)varray_index;
-			memcpy (&varray[VERTEXSIZE * varray_index], s->polys->verts, VERTEXSIZE * sizeof(float) * (size_t)s->numedges);
-			varray_index += (size_t)s->numedges;
+			memcpy (&varray[VERTEXSIZE * varray_index], s->polys->verts, VERTEXSIZE * sizeof(float) * nv);
+			varray_index += nv;
 		}
 	}
 	for (j=1 ; j<MAX_MODELS ; j++)
@@ -1230,9 +1250,10 @@ void GL_BuildBModelVertexBuffer (void)
 		for (i=0 ; i<m->numsurfaces ; i++)
 		{
 			msurface_t *s = &m->surfaces[i];
+			size_t nv = (size_t)R_SurfaceVertCount (s);	// woods #collinear -- poly may hold fewer verts than numedges
 			s->vbo_firstvert = (int)varray_index;
-			memcpy (&varray[VERTEXSIZE * varray_index], s->polys->verts, VERTEXSIZE * sizeof(float) * (size_t)s->numedges);
-			varray_index += (size_t)s->numedges;
+			memcpy (&varray[VERTEXSIZE * varray_index], s->polys->verts, VERTEXSIZE * sizeof(float) * nv);
+			varray_index += nv;
 		}
 	}
 

@@ -514,6 +514,7 @@ int R_LightPoint (vec3_t p);
 int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise);
 
 void GL_SubdivideSurface (msurface_t *fa);
+int R_SurfaceVertCount (const msurface_t *s); // woods #collinear -- verts in polys after collinear removal (<= numedges)
 void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights);
 void R_RenderDynamicLightmaps (qmodel_t *model, msurface_t *fa);
 void R_UploadLightmaps (void);

@@ -1641,6 +1641,20 @@ void Host_RunCvarMigrations (void) // woods #migration
 		schema = 1;
 	}
 
+	if (schema < 2)
+	{
+#ifdef MACBOOK_ARM_HACK // woods #collinear
+		cv = Cvar_FindVar ("r_remove_collinear_vertices");
+		if (cv && !q_strcasecmp (cv->string, "0"))
+		{
+			Cvar_Set ("r_remove_collinear_vertices", "1");
+			Con_Printf ("Migrated r_remove_collinear_vertices to 1\n");
+		}
+#endif
+
+		schema = 2;
+	}
+
 	if (schema != original_schema)
 	{
 		Cvar_SetValue ("cl_migration_schema", (float)schema);

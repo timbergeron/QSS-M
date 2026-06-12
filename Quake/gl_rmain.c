@@ -134,7 +134,7 @@ cvar_t	r_nooutline_list = {"r_nooutline_list", "progs/bolt1.mdl,progs/bolt2.mdl,
 cvar_t	r_outline = {"r_outline", "0", CVAR_ARCHIVE}; // woods #routline
 cvar_t	r_player_xray = {"r_player_xray", "0xFF0000 1.0 0", CVAR_ARCHIVE}; // woods #routline
 #ifdef MACBOOK_ARM_HACK // woods #collinear
-cvar_t	r_remove_collinear_vertices = {"r_remove_collinear_vertices", "0", CVAR_ARCHIVE};
+cvar_t	r_remove_collinear_vertices = {"r_remove_collinear_vertices", "1", CVAR_ARCHIVE};
 #endif
 
 extern cvar_t	r_vfog;

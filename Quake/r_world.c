@@ -430,7 +430,7 @@ void R_DrawTextureChains_Glow (qmodel_t *model, entity_t *ent, texchain_t chain)
 
 static unsigned int R_NumTriangleIndicesForSurf (msurface_t *s)
 {
-	return 3 * (s->numedges - 2);
+	return 3 * (R_SurfaceVertCount (s) - 2);	// woods #collinear -- poly may hold fewer verts than numedges
 }
 
 /*
@@ -443,8 +443,8 @@ The number of indices it will write is given by R_NumTriangleIndicesForSurf.
 */
 static void R_TriangleIndicesForSurf (msurface_t *s, unsigned int *dest)
 {
-	int i;
-	for (i=2; i<s->numedges; i++)
+	int i, numverts = R_SurfaceVertCount (s);	// woods #collinear
+	for (i=2; i<numverts; i++)
 	{
 		*dest++ = s->vbo_firstvert;
 		*dest++ = s->vbo_firstvert + i - 1;
@@ -6188,7 +6188,8 @@ static int RSceneCache_Thread(void *ctx)
 								}
 								if ((unsigned int)surf->texinfo->materialidx >= cache->numtextures)
 									continue;	//should have been sanitised at load.
-								numidx = (surf->numedges-2)*3;
+								unsigned int vcount = (unsigned int)R_SurfaceVertCount (surf);	// woods #collinear
+								numidx = (vcount-2)*3;
 								int uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
 								batch = &cache->batches[
 								        surf->texinfo->materialidx * cache->lightmaps * 2   /* texture bank  */
@@ -6198,7 +6199,7 @@ static int RSceneCache_Thread(void *ctx)
 									continue;
 								idx = &batch->idx[batch->numidx];
 								batch->numidx += numidx;
-								for (e = 2; e < (unsigned int)surf->numedges; e++)
+								for (e = 2; e < vcount; e++)
 								{
 									*idx++ = surf->vbo_firstvert;
 									*idx++ = surf->vbo_firstvert + e-1;
@@ -6242,7 +6243,8 @@ static int RSceneCache_Thread(void *ctx)
 					}
 					if ((unsigned int)surf->texinfo->materialidx >= cache->numtextures)
 						continue;	//should have been sanitised at load.
-					numidx = (surf->numedges-2)*3;
+					unsigned int vcount = (unsigned int)R_SurfaceVertCount (surf);	// woods #collinear
+					numidx = (vcount-2)*3;
 					int uw = (surf->flags & SURF_UNDERWATER) ? 1 : 0;
 					batch = &cache->batches[
 					        surf->texinfo->materialidx * cache->lightmaps * 2   /* texture bank  */
@@ -6252,7 +6254,7 @@ static int RSceneCache_Thread(void *ctx)
 						continue;
 					idx = &batch->idx[batch->numidx];
 					batch->numidx += numidx;
-					for (e = 2; e < (unsigned int)surf->numedges; e++)
+					for (e = 2; e < vcount; e++)
 					{
 						*idx++ = surf->vbo_firstvert;
 						*idx++ = surf->vbo_firstvert + e-1;
