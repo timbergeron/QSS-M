@@ -455,6 +455,7 @@ void Host_Frame (double time);
 void Host_Quit_f (void);
 void Host_ClientCommands (const char *fmt, ...) FUNC_PRINTF(1,2);
 void Host_ShutdownServer (qboolean crash);
+qboolean Host_MapHasLevelStats (const char *mapname, int total_monsters, int total_secrets);
 void Host_WriteConfiguration (void);
 void Host_Resetdemos (void);
 

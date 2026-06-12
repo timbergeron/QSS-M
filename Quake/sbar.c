@@ -458,6 +458,19 @@ void Sbar_DrawString (int x, int y, const char *str)
 	Draw_String (x, y + 24, str);
 }
 
+static void Sbar_DrawMaskedRedString (int x, int y, const char *str)
+{
+	while (*str)
+	{
+		unsigned char ch = (unsigned char)*str;
+		if (ch < 128)
+			ch += 128;
+		Draw_Character (x, y + 24, ch);
+		str++;
+		x += 8;
+	}
+}
+
 /*
 ===============
 Sbar_DrawScrollString -- johnfitz
@@ -465,7 +478,7 @@ Sbar_DrawScrollString -- johnfitz
 scroll the string inside a glscissor region -- woods added 5 pixel margins, etc
 ===============
 */
-void Sbar_DrawScrollString (int x, int y, int width, const char *str)
+static void Sbar_DrawScrollStringEx (int x, int y, int width, const char *str, qboolean masked_red)
 {
 	float scale;
 	double ofs;
@@ -492,12 +505,31 @@ void Sbar_DrawScrollString (int x, int y, int width, const char *str)
 
 	glPushMatrix ();
 	glTranslatef (-frac, 0.0f, 0.0f);
-	Sbar_DrawString (x - baseofs + 5, y, str);
-	Sbar_DrawString (x - baseofs + 5 + strLen, y, qfylbullet);
-	Sbar_DrawString (x - baseofs + 5 + totalLen, y, str);
+	if (masked_red)
+	{
+		Sbar_DrawMaskedRedString (x - baseofs + 5, y, str);
+		Sbar_DrawMaskedRedString (x - baseofs + 5 + strLen, y, qfylbullet);
+		Sbar_DrawMaskedRedString (x - baseofs + 5 + totalLen, y, str);
+	}
+	else
+	{
+		Sbar_DrawString (x - baseofs + 5, y, str);
+		Sbar_DrawString (x - baseofs + 5 + strLen, y, qfylbullet);
+		Sbar_DrawString (x - baseofs + 5 + totalLen, y, str);
+	}
 	glPopMatrix ();
 
 	glDisable (GL_SCISSOR_TEST);
+}
+
+void Sbar_DrawScrollString (int x, int y, int width, const char *str)
+{
+	Sbar_DrawScrollStringEx (x, y, width, str, false);
+}
+
+static void Sbar_DrawScrollMaskedRedString (int x, int y, int width, const char *str)
+{
+	Sbar_DrawScrollStringEx (x, y, width, str, true);
 }
 
 /*
@@ -902,21 +934,37 @@ void Sbar_SoloScoreboard (void)
 	int	min, smin, cmin, ticks;
 	int	left, right;
 	int	len, ct, pl, st, mpc; // woods ct, pl
+	qboolean show_level_stats, show_map_description;
+
+	show_level_stats = Host_MapHasLevelStats (cl.mapname,
+		cl.stats[STAT_TOTALMONSTERS], cl.stats[STAT_TOTALSECRETS]);
+	show_map_description = cl.gametype != GAME_DEATHMATCH && !show_level_stats;
 
 	if (cl.gametype != GAME_DEATHMATCH)  // woods only in singleplayer
 	{
-		sprintf(str, "Kills: %i/%i", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
-		left = 8 + strlen(str) * 8;
-		Sbar_DrawString(8, 12, str);
-
-		sprintf(str, "Secrets: %i/%i", cl.stats[STAT_SECRETS], cl.stats[STAT_TOTALSECRETS]);
-		right = 312 - strlen(str) * 8;
-		Sbar_DrawString(right, 12, str);
-
-		if (!fitzmode)
+		if (show_level_stats)
 		{
-			q_snprintf(str, sizeof(str), "skill %i", (int)(skill.value + 0.5));
-			Sbar_DrawString((left + right) / 2 - strlen(str) * 4, 12, str);
+			sprintf(str, "Kills: %i/%i", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
+			left = 8 + strlen(str) * 8;
+			Sbar_DrawString(8, 12, str);
+
+			sprintf(str, "Secrets: %i/%i", cl.stats[STAT_SECRETS], cl.stats[STAT_TOTALSECRETS]);
+			right = 312 - strlen(str) * 8;
+			Sbar_DrawString(right, 12, str);
+
+			if (!fitzmode)
+			{
+				q_snprintf(str, sizeof(str), "skill %i", (int)(skill.value + 0.5));
+				Sbar_DrawString((left + right) / 2 - strlen(str) * 4, 12, str);
+			}
+		}
+		else if (cl.levelname[0] && Q_strcmp(cl.levelname, cl.mapname) != 0)
+		{
+			len = (int)strlen (cl.levelname);
+			if (len > 40)
+				Sbar_DrawScrollString (0, 12, 320, cl.levelname);
+			else
+				Sbar_DrawString (160 - len*4, 12, cl.levelname);
 		}
 	}
 
@@ -944,7 +992,11 @@ void Sbar_SoloScoreboard (void)
 
 	if (!fitzmode)
 	{ /* QuakeSpasm customization: */
-		if (cl.maxclients > 1)
+		if (show_map_description)
+		{
+			q_snprintf(str, sizeof(str), "%s", cl.mapname);
+		}
+		else if (cl.maxclients > 1)
 		{
 			char qfylwdot[2] = { 133, '\0' }; // woods  -- quake font yellow dot
 
@@ -954,7 +1006,7 @@ void Sbar_SoloScoreboard (void)
 				q_snprintf(str, sizeof(str), "%s %s %s ", cl.mapname, qfylwdot, lastmphost);
 		}
 		else
-		{ 
+		{
 			if (cl.levelname[0] && Q_strcmp(cl.levelname, cl.mapname) != 0)
 				q_snprintf (str, sizeof(str), "%s (%s)", cl.levelname, cl.mapname);
 			else
@@ -962,9 +1014,19 @@ void Sbar_SoloScoreboard (void)
 		}
 		len = strlen (str);
 		if (len > 40)
-			Sbar_DrawScrollString (0, 4, 320, str);
+		{
+			if (show_map_description)
+				Sbar_DrawScrollMaskedRedString (0, 4, 320, str);
+			else
+				Sbar_DrawScrollString (0, 4, 320, str);
+		}
 		else
-			Sbar_DrawString (160 - len*4, 4, str);
+		{
+			if (show_map_description)
+				Sbar_DrawMaskedRedString (160 - len*4, 4, str);
+			else
+				Sbar_DrawString (160 - len*4, 4, str);
+		}
 		return;
 	}
 	minutes = cl.time / 60;

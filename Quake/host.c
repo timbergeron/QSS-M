@@ -1367,14 +1367,19 @@ static qboolean Summary_IsKnownCTFMap (const char *mapname)
 		mapname[6] == '\0';
 }
 
-static qboolean Summary_HasLevelStats (const summary_t *s)
+qboolean Host_MapHasLevelStats (const char *mapname, int total_monsters, int total_secrets)
 {
 	// Known CTF maps are multiplayer maps, so don't show single-player stats
 	// even when the BSP contains monsters or secrets.
-	if (Summary_IsKnownCTFMap (s->map))
+	if (Summary_IsKnownCTFMap (mapname))
 		return false;
 
-	return s->stats.total_monsters > 0 || s->stats.total_secrets > 0;
+	return total_monsters > 0 || total_secrets > 0;
+}
+
+static qboolean Summary_HasLevelStats (const summary_t *s)
+{
+	return Host_MapHasLevelStats (s->map, s->stats.total_monsters, s->stats.total_secrets);
 }
 
 /*
