@@ -24,7 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 extern NSString *FQPrefCommandLineKey;
 
-@interface AppController : NSObject <NSTextFieldDelegate> {
+@interface AppController : NSObject <NSTextFieldDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate> {
     IBOutlet NSWindow *launcherWindow;
 
     NSTextField *launcherTitleLabel;
@@ -55,12 +55,19 @@ extern NSString *FQPrefCommandLineKey;
     BOOL rawMouseDragCompleted;
     BOOL rawMousePermissionPending;
 
+    NSWindow *keyboardShortcutsWindow;
+    NSSearchField *keyboardShortcutsSearchField;
+    NSTableView *keyboardShortcutsTableView;
+    NSArray *keyboardShortcutRows;
+    NSArray *filteredKeyboardShortcutRows;
+
     QuakeArguments *arguments;
 }
 
 - (IBAction)launchQuake:(id)sender;
 - (IBAction)cancel:(id)sender;
 - (IBAction)showAboutPanel:(id)sender;
+- (IBAction)showKeyboardShortcutsPanel:(id)sender;
 - (IBAction)openQuakeFolder:(id)sender;
 - (IBAction)openGithub:(id)sender;
 - (IBAction)openWebsite:(id)sender;

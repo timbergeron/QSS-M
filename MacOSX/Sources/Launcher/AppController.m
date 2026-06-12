@@ -56,6 +56,7 @@ static const CGFloat QSSChipHeight = 24.0f;
 static const CGFloat QSSLaunchOptionsBaseHeight = 112.0f;
 static const CGFloat QSSSettingsCardHeight = 102.0f;
 static const CGFloat QSSRawMouseSwitchRightInsetExtra = 8.0f;
+static const CGFloat QSSShortcutTableRightGutter = 18.0f;
 
 typedef struct {
     NSString *title;
@@ -143,6 +144,35 @@ static QSSPresetArgumentEntry QSSPresetArgumentEntries[] = {
     { @"+exec <cfg>", @"+exec " },
     { @"+developer 1", @"+developer 1" },
 };
+
+static NSString * const QSSShortcutRowHeaderKey = @"header";
+static NSString * const QSSShortcutRowTitleKey = @"title";
+static NSString * const QSSShortcutRowActionKey = @"action";
+static NSString * const QSSShortcutRowKeysKey = @"keys";
+static NSString * const QSSShortcutRowSearchKey = @"search";
+static NSString * const QSSShortcutActionColumnIdentifier = @"action";
+static NSString * const QSSShortcutKeysColumnIdentifier = @"keys";
+
+static NSDictionary *QSSKeyboardShortcutHeader(NSString *title)
+{
+    return @{
+        QSSShortcutRowHeaderKey: [NSNumber numberWithBool:YES],
+        QSSShortcutRowTitleKey: title,
+        QSSShortcutRowSearchKey: [title lowercaseString]
+    };
+}
+
+static NSDictionary *QSSKeyboardShortcutItem(NSString *category, NSString *action, NSString *keys)
+{
+    NSString *search = [[NSString stringWithFormat:@"%@ %@ %@", category, action, keys] lowercaseString];
+
+    return @{
+        QSSShortcutRowHeaderKey: [NSNumber numberWithBool:NO],
+        QSSShortcutRowActionKey: action,
+        QSSShortcutRowKeysKey: keys,
+        QSSShortcutRowSearchKey: search
+    };
+}
 
 static NSString *QSSLaunchOptionsDefaultHelperText(void)
 {
@@ -235,6 +265,175 @@ static NSColor *QSSLauncherTextInputColorForWindow(NSWindow *window, CGFloat alp
 static NSColor *QSSAboutLinkColor(void)
 {
     return [NSColor colorWithSRGBRed:139.0f/255.0f green:95.0f/255.0f blue:71.0f/255.0f alpha:1.0f];
+}
+
+static NSColor *QSSShortcutPillFillColorForWindow(NSWindow *window)
+{
+    if (QSSWindowUsesDarkAppearance(window))
+        return [NSColor colorWithCalibratedWhite:1.0f alpha:0.11f];
+
+    return [NSColor colorWithCalibratedWhite:0.0f alpha:0.08f];
+}
+
+static NSColor *QSSShortcutPillTextColorForWindow(NSWindow *window)
+{
+    return QSSSystemColorWithAlpha([NSColor labelColor], window,
+        [NSColor colorWithCalibratedWhite:0.16f alpha:1.0f], 0.82f);
+}
+
+static NSString *QSSTrimmedShortcutToken(NSString *token)
+{
+    return [token stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+static NSString *QSSShortcutCapitalizedWords(NSString *string)
+{
+    NSMutableString *capitalized;
+    NSCharacterSet *letters = [NSCharacterSet letterCharacterSet];
+    BOOL capitalizeNext = YES;
+
+    if (!string)
+        return @"";
+
+    capitalized = [NSMutableString stringWithCapacity:[string length]];
+    for (NSUInteger i = 0; i < [string length]; i++) {
+        unichar c = [string characterAtIndex:i];
+        NSString *character = [NSString stringWithCharacters:&c length:1];
+
+        if ([letters characterIsMember:c]) {
+            [capitalized appendString:capitalizeNext ? [character uppercaseString] : character];
+            capitalizeNext = NO;
+        } else {
+            [capitalized appendString:character];
+            capitalizeNext = YES;
+        }
+    }
+
+    return capitalized;
+}
+
+static NSString *QSSDisplayShortcutToken(NSString *token)
+{
+    NSString *trimmed = QSSTrimmedShortcutToken(token);
+    NSArray *parts = [trimmed componentsSeparatedByString:@"+"];
+    NSMutableArray *keyParts = [NSMutableArray array];
+    BOOL hasCommand = NO;
+    BOOL hasControl = NO;
+    BOOL hasOption = NO;
+    BOOL hasShift = NO;
+
+    if ([trimmed caseInsensitiveCompare:@"Alt/Option"] == NSOrderedSame)
+        return @"⌥";
+
+    for (NSString *rawPart in parts) {
+        NSString *part = QSSTrimmedShortcutToken(rawPart);
+
+        if ([part caseInsensitiveCompare:@"Cmd"] == NSOrderedSame ||
+            [part caseInsensitiveCompare:@"Command"] == NSOrderedSame) {
+            hasCommand = YES;
+        } else if ([part caseInsensitiveCompare:@"Ctrl"] == NSOrderedSame ||
+                   [part caseInsensitiveCompare:@"Control"] == NSOrderedSame) {
+            hasControl = YES;
+        } else if ([part caseInsensitiveCompare:@"Option"] == NSOrderedSame ||
+                   [part caseInsensitiveCompare:@"Alt"] == NSOrderedSame) {
+            hasOption = YES;
+        } else if ([part caseInsensitiveCompare:@"Shift"] == NSOrderedSame) {
+            hasShift = YES;
+        } else if ([part length] > 0) {
+            [keyParts addObject:part];
+        }
+    }
+
+    if (!hasCommand && !hasControl && !hasOption && !hasShift)
+        return trimmed;
+
+    NSMutableString *display = [NSMutableString string];
+    if (hasControl)
+        [display appendString:@"⌃"];
+    if (hasOption)
+        [display appendString:@"⌥"];
+    if (hasShift)
+        [display appendString:@"⇧"];
+    if (hasCommand)
+        [display appendString:@"⌘"];
+    [display appendString:[keyParts componentsJoinedByString:@"+"]];
+    return display;
+}
+
+static NSString *QSSShortcutDedupeSignature(NSString *token, BOOL *commandOnly, BOOL *controlOnly)
+{
+    NSString *trimmed = QSSTrimmedShortcutToken(token);
+    NSArray *parts = [trimmed componentsSeparatedByString:@"+"];
+    NSMutableArray *signatureParts = [NSMutableArray array];
+    NSMutableArray *keyParts = [NSMutableArray array];
+    BOOL hasCommand = NO;
+    BOOL hasControl = NO;
+    BOOL hasOption = NO;
+    BOOL hasShift = NO;
+
+    for (NSString *rawPart in parts) {
+        NSString *part = QSSTrimmedShortcutToken(rawPart);
+
+        if ([part caseInsensitiveCompare:@"Cmd"] == NSOrderedSame ||
+            [part caseInsensitiveCompare:@"Command"] == NSOrderedSame) {
+            hasCommand = YES;
+        } else if ([part caseInsensitiveCompare:@"Ctrl"] == NSOrderedSame ||
+                   [part caseInsensitiveCompare:@"Control"] == NSOrderedSame) {
+            hasControl = YES;
+        } else if ([part caseInsensitiveCompare:@"Option"] == NSOrderedSame ||
+                   [part caseInsensitiveCompare:@"Alt"] == NSOrderedSame) {
+            hasOption = YES;
+        } else if ([part caseInsensitiveCompare:@"Shift"] == NSOrderedSame) {
+            hasShift = YES;
+        } else if ([part length] > 0) {
+            [keyParts addObject:[part lowercaseString]];
+        }
+    }
+
+    if (commandOnly)
+        *commandOnly = hasCommand && !hasControl;
+    if (controlOnly)
+        *controlOnly = hasControl && !hasCommand;
+
+    if (!hasCommand && !hasControl)
+        return nil;
+
+    if (hasOption)
+        [signatureParts addObject:@"option"];
+    if (hasShift)
+        [signatureParts addObject:@"shift"];
+    [signatureParts addObjectsFromArray:keyParts];
+    return [signatureParts componentsJoinedByString:@"+"];
+}
+
+static NSArray *QSSDisplayShortcutTokensForKeys(NSString *keys)
+{
+    NSArray *parts = [keys componentsSeparatedByString:@" / "];
+    NSMutableArray *tokens = [NSMutableArray array];
+    NSMutableSet *commandSignatures = [NSMutableSet set];
+
+    for (NSString *part in parts) {
+        BOOL commandOnly = NO;
+        NSString *signature = QSSShortcutDedupeSignature(part, &commandOnly, NULL);
+
+        if (commandOnly && [signature length] > 0)
+            [commandSignatures addObject:signature];
+    }
+
+    for (NSString *part in parts) {
+        BOOL controlOnly = NO;
+        NSString *signature = QSSShortcutDedupeSignature(part, NULL, &controlOnly);
+        NSString *display;
+
+        if (controlOnly && [signature length] > 0 && [commandSignatures containsObject:signature])
+            continue;
+
+        display = QSSDisplayShortcutToken(part);
+        if ([display length] > 0)
+            [tokens addObject:display];
+    }
+
+    return tokens;
 }
 
 static BOOL QSSSupportsInputMonitoring(void)
@@ -913,6 +1112,164 @@ static NSImage *QSSHostAppIcon(void)
 
 @end
 
+@interface QSSShortcutHeaderView : NSView {
+    NSString *title;
+}
+
+- (void)setTitle:(NSString *)newTitle;
+
+@end
+
+@implementation QSSShortcutHeaderView
+
+- (void)setTitle:(NSString *)newTitle
+{
+    if (title == newTitle || [title isEqualToString:newTitle])
+        return;
+
+    [title release];
+    title = [newTitle copy];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)viewDidChangeEffectiveAppearance
+{
+    if (@available(macOS 10.14, *))
+        [super viewDidChangeEffectiveAppearance];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSDictionary *attributes;
+    NSFont *font;
+    NSColor *textColor;
+    NSSize textSize;
+    NSPoint textOrigin;
+
+    (void)dirtyRect;
+    if ([title length] == 0)
+        return;
+
+    font = [NSFont boldSystemFontOfSize:15.0f];
+    textColor = [NSColor labelColor];
+    attributes = @{
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: textColor
+    };
+    textSize = [title sizeWithAttributes:attributes];
+    textOrigin.x = 0.0f;
+    textOrigin.y = 10.0f;
+    if (textOrigin.y + textSize.height > NSHeight([self bounds]))
+        textOrigin.y = floorf((float)((NSHeight([self bounds]) - textSize.height) / 2.0f));
+
+    [title drawAtPoint:textOrigin withAttributes:attributes];
+}
+
+- (void)dealloc
+{
+    [title release];
+    [super dealloc];
+}
+
+@end
+
+@interface QSSShortcutKeysView : NSView {
+    NSArray *shortcutTokens;
+}
+
+- (void)setShortcutKeysString:(NSString *)keys;
+
+@end
+
+@implementation QSSShortcutKeysView
+
+- (void)setShortcutKeysString:(NSString *)keys
+{
+    NSArray *tokens = QSSDisplayShortcutTokensForKeys(keys ? keys : @"");
+
+    if ([tokens isEqualToArray:shortcutTokens])
+        return;
+
+    [shortcutTokens release];
+    shortcutTokens = [tokens copy];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)viewDidChangeEffectiveAppearance
+{
+    if (@available(macOS 10.14, *))
+        [super viewDidChangeEffectiveAppearance];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSDictionary *attributes;
+    NSMutableArray *tokenWidths;
+    NSColor *fillColor;
+    NSColor *textColor;
+    NSFont *font;
+    CGFloat totalWidth = 0.0f;
+    CGFloat gap = 7.0f;
+    CGFloat horizontalPadding = 9.0f;
+    CGFloat pillHeight = 22.0f;
+    CGFloat x;
+    CGFloat y;
+    NSRect bounds = [self bounds];
+
+    (void)dirtyRect;
+    if ([shortcutTokens count] == 0)
+        return;
+
+    font = [NSFont systemFontOfSize:13.0f weight:NSFontWeightMedium];
+    fillColor = QSSShortcutPillFillColorForWindow([self window]);
+    textColor = QSSShortcutPillTextColorForWindow([self window]);
+    attributes = @{
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: textColor
+    };
+
+    tokenWidths = [NSMutableArray arrayWithCapacity:[shortcutTokens count]];
+    for (NSString *token in shortcutTokens) {
+        NSSize textSize = [token sizeWithAttributes:attributes];
+        CGFloat width = ceilf((float)textSize.width) + horizontalPadding * 2.0f;
+
+        [tokenWidths addObject:[NSNumber numberWithDouble:width]];
+        totalWidth += width;
+    }
+
+    totalWidth += gap * ([shortcutTokens count] - 1);
+    x = floorf((float)(NSMaxX(bounds) - totalWidth - QSSShortcutTableRightGutter));
+    y = floorf((float)(NSMidY(bounds) - pillHeight / 2.0f));
+
+    for (NSUInteger i = 0; i < [shortcutTokens count]; i++) {
+        NSString *token = [shortcutTokens objectAtIndex:i];
+        CGFloat width = [[tokenWidths objectAtIndex:i] doubleValue];
+        NSRect pillRect = NSMakeRect(x, y, width, pillHeight);
+        NSSize textSize = [token sizeWithAttributes:attributes];
+        NSPoint textOrigin;
+
+        [fillColor setFill];
+        [[NSBezierPath bezierPathWithRoundedRect:pillRect
+                                         xRadius:pillHeight / 2.0f
+                                         yRadius:pillHeight / 2.0f] fill];
+
+        textOrigin.x = floorf((float)(NSMidX(pillRect) - textSize.width / 2.0f));
+        textOrigin.y = floorf((float)(NSMidY(pillRect) - textSize.height / 2.0f));
+        [token drawAtPoint:textOrigin withAttributes:attributes];
+        x += width + gap;
+    }
+}
+
+- (void)dealloc
+{
+    [shortcutTokens release];
+    [super dealloc];
+}
+
+@end
+
 @interface AppController ()
 - (NSText *)activeArgumentFieldEditor;
 - (NSString *)currentArgumentText;
@@ -1026,6 +1383,179 @@ static NSImage *QSSHostAppIcon(void)
 
 #pragma mark - Menu configuration
 
+- (NSArray *)keyboardShortcutRows
+{
+    NSMutableArray *rows;
+
+    if (keyboardShortcutRows)
+        return keyboardShortcutRows;
+
+    rows = [NSMutableArray array];
+
+    [rows addObject:QSSKeyboardShortcutHeader(@"App and System")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Show keyboard shortcuts", @"Cmd+/")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Toggle fullscreen", @"Option+Enter")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Minimize from fullscreen", @"Cmd+Tab")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Show command history", @"Cmd+Y / Ctrl+H")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Stop active download", @"Cmd+. / Ctrl+.")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Paste clipboard file", @"Cmd+V / Ctrl+V")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Mute or unmute sound", @"Cmd+M / Ctrl+M")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Increase UI scale", @"Cmd+Shift+Wheel Up / Ctrl+Shift+Wheel Up")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Decrease UI scale", @"Cmd+Shift+Wheel Down / Ctrl+Shift+Wheel Down")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Increase volume", @"Option+Shift+Wheel Up")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Decrease volume", @"Option+Shift+Wheel Down")];
+
+    [rows addObject:QSSKeyboardShortcutHeader(@"Movement")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Move forward", @"W / Up Arrow")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Move backward", @"S / Down Arrow")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Move left", @"A / ,")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Move right", @"D / .")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Turn left", @"Left Arrow")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Turn right", @"Right Arrow")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Strafe", @"Alt/Option")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Run", @"Shift")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Jump / swim up", @"Space / Mouse2 / Left Trigger")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Swim up", @"E")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Swim down", @"C")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Look up", @"Page Down")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Look down", @"Delete")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Center view", @"End")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Mouse look", @"Backslash")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Movement", @"Keyboard look", @"Insert")];
+
+    [rows addObject:QSSKeyboardShortcutHeader(@"Combat and Weapons")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Attack", @"Ctrl / Mouse1 / Right Trigger")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Next weapon", @"Slash / Wheel Down / Right Shoulder")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Previous weapon", @"Wheel Up / Left Shoulder")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Axe", @"1")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Shotgun", @"2")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Super Shotgun", @"3")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Nailgun", @"4")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Super Nailgun", @"5")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Grenade Launcher", @"6")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Rocket Launcher", @"7")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Thunderbolt", @"8")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Impulse 0", @"0")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Combat and Weapons", @"Weapon wheel", @"Y Button")];
+
+    [rows addObject:QSSKeyboardShortcutHeader(@"Menus and HUD")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Show scores", @"Tab")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Help", @"F1")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Save menu", @"F2")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Load menu", @"F3")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Options menu", @"F4")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Multiplayer menu", @"F5")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Quicksave", @"F6")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Quickload", @"F9")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Quit prompt", @"F10")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Screenshot", @"F12 / Print Screen")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Toggle zoom", @"F11")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Pause", @"Pause")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Main menu", @"Esc")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Larger view", @"+ / =")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Menus and HUD", @"Smaller view", @"-")];
+
+    [rows addObject:QSSKeyboardShortcutHeader(@"Console")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Toggle console", @"` / ~")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Force console", @"Shift+Esc")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Autocomplete", @"Tab")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Previous or next command", @"Up Arrow / Down Arrow")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Scroll console", @"Page Up / Page Down / Wheel")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Page console scroll", @"Ctrl+Page Up / Ctrl+Page Down")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Jump to top or bottom", @"Ctrl+Home / Ctrl+End")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Move cursor by word", @"Cmd+Left / Cmd+Right")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Adjust console height", @"Cmd+Up / Cmd+Down")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Extend selection", @"Shift+Arrow")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Delete previous or next word", @"Ctrl+Backspace / Ctrl+Delete")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Clear line", @"Cmd+U / Ctrl+U")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Paste text", @"Cmd+V / Ctrl+V / Shift+Insert")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Select all", @"Cmd+A")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Copy console", @"Cmd+C / Ctrl+C")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Console", @"Abort line", @"Ctrl+D")];
+
+    [rows addObject:QSSKeyboardShortcutHeader(@"Chat")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Chat", @"Open chat", @"T")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Chat", @"Send or cancel chat", @"Enter / Esc")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Chat", @"Send chat as team chat", @"Ctrl+Enter")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Chat", @"Delete previous word", @"Ctrl+Backspace")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Chat", @"Clear message", @"Ctrl+U")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Chat", @"Paste message", @"Ctrl+V")];
+
+    [rows addObject:QSSKeyboardShortcutHeader(@"Demo Playback")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Demo Playback", @"Pause or resume", @"Space")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Demo Playback", @"Increase speed", @"Up Arrow / Shift+.")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Demo Playback", @"Decrease speed", @"Down Arrow / Shift+,")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Demo Playback", @"Rewind or fast-forward", @"Left Arrow / Right Arrow")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Demo Playback", @"Fine rewind or fast-forward", @"Ctrl+Left / Ctrl+Right")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Demo Playback", @"Single-frame step while paused", @", / .")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Demo Playback", @"Seek to 10-90 percent", @"1-9")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Demo Playback", @"Restart demo", @"0 / Home")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Demo Playback", @"Jump to end", @"End")];
+    [rows addObject:QSSKeyboardShortcutItem(@"Demo Playback", @"Jump backward or forward 10 seconds", @"J / L")];
+
+    keyboardShortcutRows = [rows copy];
+    return keyboardShortcutRows;
+}
+
+- (NSArray *)keyboardShortcutSearchTerms
+{
+    NSString *text = [[keyboardShortcutsSearchField stringValue] lowercaseString];
+    NSArray *parts = [text componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSMutableArray *terms = [NSMutableArray array];
+
+    for (NSString *part in parts) {
+        if ([part length] > 0)
+            [terms addObject:part];
+    }
+
+    return terms;
+}
+
+- (BOOL)keyboardShortcutRow:(NSDictionary *)row matchesSearchTerms:(NSArray *)terms
+{
+    NSString *searchText = [row objectForKey:QSSShortcutRowSearchKey];
+
+    for (NSString *term in terms) {
+        if ([searchText rangeOfString:term].location == NSNotFound)
+            return NO;
+    }
+
+    return YES;
+}
+
+- (void)filterKeyboardShortcuts
+{
+    NSArray *terms = [self keyboardShortcutSearchTerms];
+    NSMutableArray *rows = [NSMutableArray array];
+    NSDictionary *pendingHeader = nil;
+
+    if ([terms count] == 0) {
+        [filteredKeyboardShortcutRows release];
+        filteredKeyboardShortcutRows = [[self keyboardShortcutRows] retain];
+        [keyboardShortcutsTableView reloadData];
+        return;
+    }
+
+    for (NSDictionary *row in [self keyboardShortcutRows]) {
+        if ([[row objectForKey:QSSShortcutRowHeaderKey] boolValue]) {
+            pendingHeader = row;
+            continue;
+        }
+
+        if ([self keyboardShortcutRow:row matchesSearchTerms:terms]) {
+            if (pendingHeader) {
+                [rows addObject:pendingHeader];
+                pendingHeader = nil;
+            }
+            [rows addObject:row];
+        }
+    }
+
+    [filteredKeyboardShortcutRows release];
+    filteredKeyboardShortcutRows = [rows copy];
+    [keyboardShortcutsTableView reloadData];
+}
+
 - (void)configureAboutMenu {
     NSMenu *mainMenu = [NSApp mainMenu];
     NSMenuItem *appMenuItem = ([mainMenu numberOfItems] > 0) ? [mainMenu itemAtIndex:0] : nil;
@@ -1040,6 +1570,47 @@ static NSImage *QSSHostAppIcon(void)
         [aboutItem setAction:@selector(showAboutPanel:)];
         [aboutItem setEnabled:YES];
     }
+}
+
+- (void)configureHelpMenu
+{
+    NSMenu *mainMenu = [NSApp mainMenu];
+    NSMenuItem *helpMenuItem;
+    NSMenu *helpMenu;
+    NSMenuItem *shortcutsItem;
+
+    if (!mainMenu)
+        return;
+
+    helpMenuItem = [mainMenu itemWithTitle:@"Help"];
+    if (!helpMenuItem) {
+        helpMenuItem = [[[NSMenuItem alloc] initWithTitle:@"Help" action:NULL keyEquivalent:@""] autorelease];
+        [mainMenu addItem:helpMenuItem];
+    }
+
+    helpMenu = [helpMenuItem submenu];
+    if (!helpMenu) {
+        helpMenu = [[[NSMenu alloc] initWithTitle:@"Help"] autorelease];
+        [helpMenuItem setSubmenu:helpMenu];
+    }
+
+    shortcutsItem = [helpMenu itemWithTitle:@"Keyboard Shortcuts..."];
+    if (!shortcutsItem) {
+        BOOL addSeparator = [helpMenu numberOfItems] > 0 && ![[helpMenu itemAtIndex:0] isSeparatorItem];
+
+        shortcutsItem = [[[NSMenuItem alloc] initWithTitle:@"Keyboard Shortcuts..."
+                                                    action:@selector(showKeyboardShortcutsPanel:)
+                                             keyEquivalent:@"/"] autorelease];
+        [helpMenu insertItem:shortcutsItem atIndex:0];
+        if (addSeparator)
+            [helpMenu insertItem:[NSMenuItem separatorItem] atIndex:1];
+    }
+
+    [shortcutsItem setTarget:self];
+    [shortcutsItem setAction:@selector(showKeyboardShortcutsPanel:)];
+    [shortcutsItem setKeyEquivalent:@"/"];
+    [shortcutsItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
+    [shortcutsItem setEnabled:YES];
 }
 
 - (void)configureQuitMenu {
@@ -1107,6 +1678,253 @@ static NSImage *QSSHostAppIcon(void)
         if (item)
             [mainMenu removeItem:item];
     }
+}
+
+#pragma mark - Keyboard shortcuts window
+
+- (NSTextField *)createShortcutLabelWithIdentifier:(NSString *)identifier
+{
+    NSTextField *field = [[[NSTextField alloc] initWithFrame:NSZeroRect] autorelease];
+
+    [field setIdentifier:identifier];
+    [field setBezeled:NO];
+    [field setDrawsBackground:NO];
+    [field setEditable:NO];
+    [field setSelectable:NO];
+    [field setLineBreakMode:NSLineBreakByTruncatingTail];
+    [[field cell] setUsesSingleLineMode:YES];
+
+    return field;
+}
+
+- (void)layoutKeyboardShortcutsTableColumns
+{
+    NSScrollView *scrollView = [keyboardShortcutsTableView enclosingScrollView];
+    NSTableColumn *actionColumn = [keyboardShortcutsTableView tableColumnWithIdentifier:QSSShortcutActionColumnIdentifier];
+    NSTableColumn *keysColumn = [keyboardShortcutsTableView tableColumnWithIdentifier:QSSShortcutKeysColumnIdentifier];
+    NSRect tableFrame;
+    CGFloat contentWidth;
+    CGFloat columnWidth;
+    CGFloat intercellWidth;
+    CGFloat keysWidth;
+    CGFloat actionWidth;
+
+    if (!scrollView || !actionColumn || !keysColumn)
+        return;
+
+    contentWidth = floorf((float)NSWidth([[scrollView contentView] bounds]));
+    if (contentWidth <= 0.0f)
+        return;
+
+    tableFrame = [keyboardShortcutsTableView frame];
+    tableFrame.size.width = contentWidth;
+    [keyboardShortcutsTableView setFrame:tableFrame];
+
+    intercellWidth = [keyboardShortcutsTableView intercellSpacing].width;
+    columnWidth = MAX(1.0f, contentWidth - QSSShortcutTableRightGutter);
+    keysWidth = floorf((float)MIN(360.0f, MAX(220.0f, columnWidth * 0.42f)));
+    if (keysWidth > columnWidth - 160.0f)
+        keysWidth = MAX(120.0f, columnWidth - 160.0f);
+
+    actionWidth = MAX(1.0f, columnWidth - keysWidth - intercellWidth);
+    [actionColumn setWidth:actionWidth];
+    [keysColumn setWidth:keysWidth];
+}
+
+- (void)createKeyboardShortcutsWindowIfNeeded
+{
+    NSRect frame = NSMakeRect(0.0f, 0.0f, 860.0f, 640.0f);
+    NSView *contentView;
+    NSTextField *titleField;
+    NSScrollView *scrollView;
+    NSTableColumn *actionColumn;
+    NSTableColumn *keysColumn;
+
+    if (keyboardShortcutsWindow)
+        return;
+
+    keyboardShortcutsWindow = [[NSWindow alloc] initWithContentRect:frame
+                                                          styleMask:(NSWindowStyleMaskTitled |
+                                                                     NSWindowStyleMaskClosable |
+                                                                     NSWindowStyleMaskResizable)
+                                                            backing:NSBackingStoreBuffered
+                                                              defer:NO];
+    [keyboardShortcutsWindow setTitle:@"Keyboard Shortcuts"];
+    [keyboardShortcutsWindow setDelegate:self];
+    [keyboardShortcutsWindow setReleasedWhenClosed:NO];
+    [keyboardShortcutsWindow setMinSize:NSMakeSize(640.0f, 420.0f)];
+
+    contentView = [keyboardShortcutsWindow contentView];
+
+    titleField = [[[NSTextField alloc] initWithFrame:NSMakeRect(24.0f, 586.0f, 812.0f, 32.0f)] autorelease];
+    [titleField setBezeled:NO];
+    [titleField setDrawsBackground:NO];
+    [titleField setEditable:NO];
+    [titleField setSelectable:NO];
+    [titleField setFont:[NSFont boldSystemFontOfSize:24.0f]];
+    [titleField setStringValue:@"Keyboard Shortcuts"];
+    [titleField setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
+    [contentView addSubview:titleField];
+
+    keyboardShortcutsSearchField = [[NSSearchField alloc] initWithFrame:NSMakeRect(24.0f, 538.0f, 812.0f, 32.0f)];
+    [keyboardShortcutsSearchField setPlaceholderString:@"Search Shortcuts"];
+    [keyboardShortcutsSearchField setDelegate:self];
+    [keyboardShortcutsSearchField setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
+    [contentView addSubview:keyboardShortcutsSearchField];
+
+    scrollView = [[[NSScrollView alloc] initWithFrame:NSMakeRect(24.0f, 24.0f, 812.0f, 492.0f)] autorelease];
+    [scrollView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+    [scrollView setHasVerticalScroller:YES];
+    [scrollView setHasHorizontalScroller:NO];
+    [scrollView setHorizontalScrollElasticity:NSScrollElasticityNone];
+    [scrollView setScrollerStyle:NSScrollerStyleOverlay];
+    [scrollView setAutohidesScrollers:YES];
+    [scrollView setBorderType:NSNoBorder];
+    [scrollView setDrawsBackground:NO];
+
+    keyboardShortcutsTableView = [[NSTableView alloc] initWithFrame:[[scrollView contentView] bounds]];
+    [keyboardShortcutsTableView setHeaderView:nil];
+    [keyboardShortcutsTableView setDelegate:self];
+    [keyboardShortcutsTableView setDataSource:self];
+    [keyboardShortcutsTableView setRowHeight:30.0f];
+    [keyboardShortcutsTableView setSelectionHighlightStyle:NSTableViewSelectionHighlightStyleNone];
+    [keyboardShortcutsTableView setColumnAutoresizingStyle:NSTableViewNoColumnAutoresizing];
+    [keyboardShortcutsTableView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+
+    actionColumn = [[[NSTableColumn alloc] initWithIdentifier:QSSShortcutActionColumnIdentifier] autorelease];
+    [actionColumn setWidth:440.0f];
+    [actionColumn setMinWidth:140.0f];
+    [actionColumn setResizingMask:NSTableColumnNoResizing];
+    [keyboardShortcutsTableView addTableColumn:actionColumn];
+
+    keysColumn = [[[NSTableColumn alloc] initWithIdentifier:QSSShortcutKeysColumnIdentifier] autorelease];
+    [keysColumn setWidth:350.0f];
+    [keysColumn setMinWidth:120.0f];
+    [keysColumn setResizingMask:NSTableColumnNoResizing];
+    [keyboardShortcutsTableView addTableColumn:keysColumn];
+
+    [scrollView setDocumentView:keyboardShortcutsTableView];
+    [self layoutKeyboardShortcutsTableColumns];
+    [contentView addSubview:scrollView];
+
+    [self filterKeyboardShortcuts];
+}
+
+- (NSDictionary *)keyboardShortcutRowAtIndex:(NSInteger)row
+{
+    if (row < 0 || row >= (NSInteger)[filteredKeyboardShortcutRows count])
+        return nil;
+
+    return [filteredKeyboardShortcutRows objectAtIndex:(NSUInteger)row];
+}
+
+- (void)windowDidResize:(NSNotification *)notification
+{
+    if ([notification object] == keyboardShortcutsWindow)
+        [self layoutKeyboardShortcutsTableColumns];
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
+{
+    if (tableView != keyboardShortcutsTableView)
+        return 0;
+
+    return (NSInteger)[filteredKeyboardShortcutRows count];
+}
+
+- (BOOL)tableView:(NSTableView *)tableView isGroupRow:(NSInteger)row
+{
+    (void)tableView;
+    (void)row;
+    return NO;
+}
+
+- (BOOL)tableView:(NSTableView *)tableView shouldSelectRow:(NSInteger)row
+{
+    NSDictionary *shortcutRow;
+
+    if (tableView != keyboardShortcutsTableView)
+        return YES;
+
+    shortcutRow = [self keyboardShortcutRowAtIndex:row];
+    return ![[shortcutRow objectForKey:QSSShortcutRowHeaderKey] boolValue];
+}
+
+- (CGFloat)tableView:(NSTableView *)tableView heightOfRow:(NSInteger)row
+{
+    NSDictionary *shortcutRow;
+
+    if (tableView != keyboardShortcutsTableView)
+        return 30.0f;
+
+    shortcutRow = [self keyboardShortcutRowAtIndex:row];
+    if ([[shortcutRow objectForKey:QSSShortcutRowHeaderKey] boolValue])
+        return 44.0f;
+
+    return 30.0f;
+}
+
+- (NSView *)tableView:(NSTableView *)tableView
+   viewForTableColumn:(NSTableColumn *)tableColumn
+                  row:(NSInteger)row
+{
+    NSDictionary *shortcutRow;
+    BOOL header;
+    NSString *columnIdentifier;
+    NSString *identifier;
+    NSTextField *field;
+    QSSShortcutHeaderView *headerView;
+    QSSShortcutKeysView *keysView;
+
+    if (tableView != keyboardShortcutsTableView)
+        return nil;
+
+    shortcutRow = [self keyboardShortcutRowAtIndex:row];
+    header = [[shortcutRow objectForKey:QSSShortcutRowHeaderKey] boolValue];
+    columnIdentifier = [tableColumn identifier];
+    identifier = header ?
+        [NSString stringWithFormat:@"KeyboardShortcutHeaderCell.%@", columnIdentifier] :
+        columnIdentifier;
+
+    if (header && [columnIdentifier isEqualToString:QSSShortcutActionColumnIdentifier]) {
+        headerView = [tableView makeViewWithIdentifier:identifier owner:self];
+        if (!headerView) {
+            headerView = [[[QSSShortcutHeaderView alloc] initWithFrame:NSZeroRect] autorelease];
+            [headerView setIdentifier:identifier];
+        }
+
+        [headerView setTitle:QSSShortcutCapitalizedWords([shortcutRow objectForKey:QSSShortcutRowTitleKey])];
+        return headerView;
+    }
+
+    if (!header && [columnIdentifier isEqualToString:QSSShortcutKeysColumnIdentifier]) {
+        keysView = [tableView makeViewWithIdentifier:identifier owner:self];
+        if (!keysView) {
+            keysView = [[[QSSShortcutKeysView alloc] initWithFrame:NSZeroRect] autorelease];
+            [keysView setIdentifier:identifier];
+        }
+
+        [keysView setShortcutKeysString:[shortcutRow objectForKey:QSSShortcutRowKeysKey]];
+        return keysView;
+    }
+
+    field = [tableView makeViewWithIdentifier:identifier owner:self];
+    if (!field)
+        field = [self createShortcutLabelWithIdentifier:identifier];
+
+    if (header) {
+        [field setFont:[NSFont boldSystemFontOfSize:15.0f]];
+        [field setTextColor:[NSColor labelColor]];
+        [field setAlignment:NSTextAlignmentLeft];
+        [field setStringValue:@""];
+    } else {
+        [field setFont:[NSFont systemFontOfSize:14.0f]];
+        [field setTextColor:[NSColor labelColor]];
+        [field setAlignment:NSTextAlignmentLeft];
+        [field setStringValue:QSSShortcutCapitalizedWords([shortcutRow objectForKey:QSSShortcutRowActionKey])];
+    }
+
+    return field;
 }
 
 #pragma mark - Launcher window layout
@@ -2167,6 +2985,11 @@ doCommandBySelector:(SEL)commandSelector
 {
     NSString *value;
 
+    if ([notification object] == keyboardShortcutsSearchField) {
+        [self filterKeyboardShortcuts];
+        return;
+    }
+
     if ([notification object] != argumentTextField)
         return;
 
@@ -2616,6 +3439,7 @@ doCommandBySelector:(SEL)commandSelector
     (void)aNotification;
 
     [self configureAboutMenu];
+    [self configureHelpMenu];
     [self configureQuitMenu];
     [self configureFileMenu];
     [self removeUnusedMenus];
@@ -2854,6 +3678,17 @@ doCommandBySelector:(SEL)commandSelector
         [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
+- (IBAction)showKeyboardShortcutsPanel:(id)sender {
+    (void)sender;
+
+    [self createKeyboardShortcutsWindowIfNeeded];
+    [self layoutKeyboardShortcutsTableColumns];
+    [keyboardShortcutsWindow center];
+    [keyboardShortcutsWindow makeKeyAndOrderFront:self];
+    [keyboardShortcutsWindow makeFirstResponder:keyboardShortcutsSearchField];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
 - (IBAction)openWebsite:(id)sender {
     (void)sender;
     NSURL *url = [NSURL URLWithString:@"https://qssm.quakeone.com/"];
@@ -2878,6 +3713,12 @@ doCommandBySelector:(SEL)commandSelector
     [addArgumentButton release];
     [presetArgumentsMenu release];
     [argumentChips release];
+    [keyboardShortcutsWindow setDelegate:nil];
+    [keyboardShortcutsWindow release];
+    [keyboardShortcutsSearchField release];
+    [keyboardShortcutsTableView release];
+    [keyboardShortcutRows release];
+    [filteredKeyboardShortcutRows release];
     [launchButton release];
     [cancelButton release];
     [super dealloc];
