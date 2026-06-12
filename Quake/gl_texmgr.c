@@ -810,15 +810,25 @@ static void TexMgr_Imagedump_f (void)
 
 	if (filter)
 	{
+		Con_SafePrintf("dumped %i textures containing '%s' to ", count, filter);
 		if (cl_contentfilter.value) // woods #contentfilter
-			Con_Printf("dumped %i textures containing '%s' to %s/%s.\n", count, filter, COM_SkipPath(com_gamedir), subdir);
+			Con_LinkPrintf(dirname, "%s/%s", COM_SkipPath(com_gamedir), subdir);
 		else
-			Con_Printf("dumped %i textures containing '%s' to %s\n", count, filter, dirname);
+			Con_LinkPrintf(dirname, "%s", dirname);
+		Con_SafePrintf(".\n");
 	}
 	else if (cl_contentfilter.value) // woods #contentfilter
-		Con_Printf("dumped %i textures to %s/%s.\n", count, COM_SkipPath(com_gamedir), subdir);
+	{
+		Con_SafePrintf("dumped %i textures to ", count);
+		Con_LinkPrintf(dirname, "%s/%s", COM_SkipPath(com_gamedir), subdir);
+		Con_SafePrintf(".\n");
+	}
 	else
-		Con_Printf("dumped %i textures to %s\n", count, dirname);
+	{
+		Con_SafePrintf("dumped %i textures to ", count);
+		Con_LinkPrintf(dirname, "%s", dirname);
+		Con_SafePrintf("\n");
+	}
 }
 
 /*

@@ -139,7 +139,8 @@ static const double DOUBLECLICK_TIME = 0.5;
 static qboolean     con_cursor_was_active = false;
 static qboolean     con_blockselectionuntilrelease = false;
 
-static void Con_SetHotLink(conlink_t* link) { con_hotlink = link; }
+static qboolean Con_LinksEnabled(void) { return true; } // also in fullscreen; the file browser from a click may open behind an exclusive-fullscreen window
+static void Con_SetHotLink(conlink_t* link) { con_hotlink = Con_LinksEnabled() ? link : NULL; }
 static void Con_ClearSelection(void) { memset(&con_selection, 0, sizeof(con_selection)); }
 static void Con_EnterCursorMode(void);
 static void Con_LeaveCursorMode(void);
@@ -149,7 +150,7 @@ extern double host_frametime;
 extern float scr_con_current;
 
 #define CON_VEC_PUSH(vec, val) do { \
-    size_t __n = *(size_t*)((vec)?((char*)(vec) - sizeof(size_t)):NULL); \
+    size_t __n = (vec) ? ((size_t *)(vec))[-1] : 0; \
     size_t __newn = __n + 1; \
     size_t __bytes = sizeof(size_t) + __newn * sizeof(*(vec)); \
     size_t *__hdr = (size_t*)realloc((vec)?((char*)(vec) - sizeof(size_t)):NULL, __bytes); \
@@ -160,6 +161,17 @@ extern float scr_con_current;
 } while(0)
 #define CON_VEC_SIZE(vec) ((vec)?(((size_t*)(vec))[-1]):0)
 #define CON_VEC_CLEAR(vec) do { if (vec) { free(((size_t*)(vec))-1); (vec)=NULL; } } while(0)
+
+static void Con_ClearLinks(void)
+{
+	size_t	i, n;
+
+	n = CON_VEC_SIZE(con_links);
+	for (i = 0; i < n; i++)
+		free(con_links[i]);
+	CON_VEC_CLEAR(con_links);
+	con_hotlink = NULL;
+}
 
 void Char_Console2(int key); // woods #ezsay add leading space for mode 2
 void Key_Console(int key); // woods con_clear_input_on_toggle
@@ -353,9 +365,7 @@ static void Con_Clear_f (void)
 	con_backscroll = 0; //johnfitz -- if console is empty, being scrolled up is confusing
 
 	// woods #conselection - also clear link/selection tables
-    for (size_t i = 0; i < CON_VEC_SIZE(con_links); ++i) free(con_links[i]);
-    CON_VEC_CLEAR(con_links);
-    Con_SetHotLink(NULL);
+    Con_ClearLinks();
     Con_ClearSelection();
 }
 
@@ -439,9 +449,17 @@ static void Con_Dump_f (void)
 
 	fclose (f);
 	if (cl_contentfilter.value) // woods #contentfilter
-		Con_Printf("Dumped console text to %s/%s.\n", COM_SkipPath(com_gamedir), relname);
+	{
+		Con_SafePrintf("Dumped console text to ");
+		Con_LinkPrintf(name, "%s/%s", COM_SkipPath(com_gamedir), relname);
+		Con_SafePrintf(".\n");
+	}
 	else
-		Con_Printf("Dumped console text to %s.\n", name);
+	{
+		Con_SafePrintf("Dumped console text to ");
+		Con_LinkPrintf(name, "%s", name);
+		Con_SafePrintf(".\n");
+	}
 }
 
 /*
@@ -497,8 +515,32 @@ static size_t Con_StrLen (int line)
 static void Con_ScreenToCanvas (int x, int y, int *outx, int *outy)
 {
     int lines = vid.conheight - (int)(scr_con_current * vid.conheight / glheight);
-    float px = (x - glx) * (float)vid.conwidth / glwidth;
-    float py = (y - gly) * (float)vid.conheight / glheight + lines;
+    float fx = (float)x, fy = (float)y;
+    float px, py;
+
+#if defined(USE_SDL2)
+    {
+        /* High-DPI backends report mouse events in window points while the
+           console canvas maps GL drawable pixels (see Draw_WindowToCanvas) */
+        SDL_Window *window = (SDL_Window *)VID_GetWindow();
+        int window_w = 0, window_h = 0, drawable_w = 0, drawable_h = 0;
+
+        if (window)
+        {
+            SDL_GetWindowSize(window, &window_w, &window_h);
+            SDL_GL_GetDrawableSize(window, &drawable_w, &drawable_h);
+        }
+        if (window_w > 0 && window_h > 0 && drawable_w > 0 && drawable_h > 0 &&
+            (window_w != drawable_w || window_h != drawable_h))
+        {
+            fx = fx * (float)drawable_w / (float)window_w;
+            fy = fy * (float)drawable_h / (float)window_h;
+        }
+    }
+#endif
+
+    px = (fx - glx) * (float)vid.conwidth / glwidth;
+    py = (fy - gly) * (float)vid.conheight / glheight + lines;
     *outx = (int)(px + 0.5f);
     *outy = (int)(py + 0.5f);
 }
@@ -540,9 +582,38 @@ static int Con_OfsCompare (const conofs_t *a, const conofs_t *b)
     return a->col - b->col;
 }
 
-static qboolean Con_OfsInRange (const conofs_t *o, const conofs_t *b, const conofs_t *e)
+static void Con_PruneLinks(void)
 {
-    return Con_OfsCompare(o,b) >= 0 && Con_OfsCompare(o,e) < 0;
+	conofs_t	first;
+	size_t		i, keep, n;
+
+	n = CON_VEC_SIZE(con_links);
+	if (!n)
+		return;
+
+	first.line = con_current - con_totallines + 1;
+	first.col = 0;
+
+	for (i = 0; i < n; i++)
+	{
+		if (Con_OfsCompare(&con_links[i]->end, &first) > 0)
+			break;
+		if (con_hotlink == con_links[i])
+			con_hotlink = NULL;
+		free(con_links[i]);
+	}
+
+	if (!i)
+		return;
+
+	keep = n - i;
+	if (keep)
+	{
+		memmove(con_links, con_links + i, keep * sizeof(*con_links));
+		((size_t *)con_links)[-1] = keep;
+	}
+	else
+		CON_VEC_CLEAR(con_links);
 }
 
 static qboolean Con_CanvasToOffset (int x, int y, conofs_t *ofs, contest_t mode)
@@ -609,6 +680,7 @@ static conlink_t *Con_GetLinkAtOfs (const conofs_t *ofs)
 static conlink_t *Con_GetLinkAtPixel (int x, int y)
 {
     conofs_t ofs;
+    if (!Con_LinksEnabled()) return NULL;
     if (!Con_ScreenToOffset(x,y,&ofs,CT_INSIDE)) return NULL;
     return Con_GetLinkAtOfs(&ofs);
 }
@@ -829,6 +901,8 @@ static void Con_SetMouseState (conmouse_t state)
         Con_SetHotLink(NULL);
         break;
     case CMS_NOTPRESSED:
+        if (con_mousestate != CMS_DRAGGING && Con_LinksEnabled() && con_hotlink && !Sys_Explore(con_hotlink->path))
+            S_LocalSound("misc/menu2.wav");
         con_scrolldelta = 0.f; con_scrollspeed = 0.f;
         break;
     default: break;
@@ -843,7 +917,7 @@ static void Con_Mousemove (int x, int y)
         Con_SetHotLink(Con_GetLinkAtPixel(x,y));
         /* Show appropriate cursor while console is active */
         if (Con_CursorActive()) {
-            if (con_hotlink)           Con_SetCursor(con_cursor_hand);
+            if (con_hotlink)           Con_SetCursor(con_cursor_hand ? con_cursor_hand : con_cursor_arrow);
             else if (inside)           Con_SetCursor(con_cursor_ibeam);
             else                       Con_SetCursor(con_cursor_arrow);
         }
@@ -1126,6 +1200,12 @@ static void Con_MessageMode2_f (void)
 	SetChatInfo (CIF_CHAT); // woods #chatinfo
 }
 
+static void Con_RecalcOffset (conofs_t *ofs, int oldcurrent)
+{
+	ofs->col = q_min (ofs->col, con_linewidth);
+	ofs->line += con_totallines - 1 - oldcurrent;
+}
+
 /*
 ================
 Con_CheckResize
@@ -1175,10 +1255,18 @@ void Con_CheckResize (void)
 
 	Hunk_FreeToLowMark (mark); //johnfitz
 
+	for (i = 0; i < (int) CON_VEC_SIZE(con_links); i++)
+	{
+		conlink_t *link = con_links[i];
+		Con_RecalcOffset(&link->begin, con_current);
+		Con_RecalcOffset(&link->end, con_current);
+	}
+
 	Con_ClearNotify ();
 
 	con_backscroll = 0;
 	con_current = con_totallines - 1;
+	Con_PruneLinks();
 }
 
 
@@ -1264,6 +1352,13 @@ void Con_ReloadIBeamCursor (void)
     con_cursor_ibeam = LoadCustomIBeamCursor();
     if (old_cursor)
         SDL_FreeCursor(old_cursor);
+
+    /* the Con_Init attempts run before SDL video init and fail, leaving these
+       NULL all session; (re)create them here now that video is up */
+    if (!con_cursor_arrow)
+        con_cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
+    if (!con_cursor_hand)
+        con_cursor_hand = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
 }
 
 
@@ -1284,6 +1379,7 @@ static void Con_Linefeed (void)
 	con_x = 0;
 	con_current++;
 	Q_memset (&con_text[(con_current%con_totallines)*con_linewidth], ' ', con_linewidth);
+	Con_PruneLinks();
 }
 
 #define ishex(c) ((c>='0' && c<= '9') || (c>='a' && c<='f') || (c>='A' && c<='F'))
@@ -2465,6 +2561,67 @@ void Con_DPrintf2 (const char *fmt, ...)
 		va_end (argptr);
 		Con_Printf ("%s", msg);
 	}
+}
+
+/*
+==================
+Con_LinkPrintf
+
+Prints text that opens a link when clicked in windowed mode
+==================
+*/
+void Con_LinkPrintf (const char *addr, const char *fmt, ...)
+{
+	conlink_t	*link;
+	size_t		len;
+	va_list		argptr;
+	char		msg[MAXPRINTMSG];
+
+	va_start (argptr, fmt);
+	q_vsnprintf (msg, sizeof(msg), fmt, argptr);
+	va_end (argptr);
+
+	if (!addr || !addr[0] || !Con_LinksEnabled() || !con_initialized || cls.state == ca_dedicated)
+	{
+		Con_SafePrintf ("%s", msg);
+		return;
+	}
+
+	len = strlen (addr);
+	link = (conlink_t *) malloc (sizeof(conlink_t) + len + 1);
+	if (!link)
+		Sys_Error ("Con_LinkPrintf: out of memory on %" SDL_PRIu64 " bytes", (uint64_t)(sizeof(conlink_t) + len + 1));
+
+	memcpy (link + 1, addr, len + 1);
+	link->path = (const char *)(link + 1);
+	link->begin.col = con_x;
+	link->begin.line = con_current + (con_x == 0 && msg[0] ? 1 : 0);
+	link->end = link->begin;
+
+	Con_SafePrintf ("%s", msg);
+
+	link->end.line = con_current;
+	link->end.col = con_x;
+
+	while (Con_OfsCompare(&link->begin, &link->end) < 0)
+	{
+		const char *text = Con_GetLine(link->begin.line);
+		if ((text[link->begin.col] & 0x7f) != ' ')
+			break;
+		if (++link->begin.col == con_linewidth)
+		{
+			link->begin.col = 0;
+			link->begin.line++;
+		}
+	}
+
+	if (Con_OfsCompare(&link->begin, &link->end) >= 0)
+	{
+		free(link);
+		return;
+	}
+
+	CON_VEC_PUSH(con_links, link);
 }
 
 
@@ -6172,12 +6329,14 @@ void Con_DrawConsole (int lines, qboolean drawinput)
 	int	i, x, y, j, sb, rows;
 	const char	*text;
 	const char	*ver = ENGINE_NAME_AND_VER;
+	qboolean links_enabled;
 
 	if (lines <= 0)
 		return;
 
 	con_vislines = lines * vid.conheight / glheight;
 	GL_SetCanvas (CANVAS_CONSOLE);
+	links_enabled = Con_LinksEnabled();
 
     Con_UpdateMouseState(); // woods #conselection - update selection/hover each frame while console is up
 
@@ -6210,10 +6369,14 @@ void Con_DrawConsole (int lines, qboolean drawinput)
                ofs.line = j;
 		for (x = 0; x < con_linewidth; x++) // woods #conselection
                {
+                       conlink_t *drawlink;
                        char c = text[x];
                        ofs.col = x;
+                       drawlink = links_enabled ? Con_GetLinkAtOfs(&ofs) : NULL;
+                       if (drawlink)
+                               c |= 0x80;
                        /* underline hot link */
-                       if (con_hotlink && Con_OfsInRange(&ofs,&con_hotlink->begin,&con_hotlink->end))
+                       if (drawlink && drawlink == con_hotlink)
                                Draw_Character ((x + 1)<<3, y + 2, '_' | (c & 0x80));
                        Draw_Character ((x + 1)<<3, y, c);
                }

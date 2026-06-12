@@ -775,6 +775,7 @@ void Host_WriteConfigurationToFile (const char* name)
 	FILE	*f;
 	char	write_name[MAX_QPATH];
 	char	config_dir[MAX_OSPATH];
+	char	fullpath[MAX_OSPATH];
 
 // dedicated servers initialize the host but don't parse and set the
 // config.cfg cvars
@@ -787,7 +788,8 @@ void Host_WriteConfigurationToFile (const char* name)
 			Sys_mkdir(config_dir);
 		}
 
-		f = fopen (va("%s/%s", com_gamedir, write_name), "w");
+		q_snprintf(fullpath, sizeof(fullpath), "%s/%s", com_gamedir, write_name);
+		f = fopen (fullpath, "w");
 		if (!f)
 		{
 			Con_Printf ("Couldn't write %s.\n", write_name);
@@ -816,7 +818,9 @@ void Host_WriteConfigurationToFile (const char* name)
 
 		fclose (f);
 
-		Con_Printf("Wrote %s.\n", write_name);
+		Con_SafePrintf("Wrote ");
+		Con_LinkPrintf(fullpath, "%s", write_name);
+		Con_SafePrintf(".\n");
 	}
 }
 

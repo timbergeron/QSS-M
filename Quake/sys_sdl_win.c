@@ -167,6 +167,87 @@ int Sys_FileType (const char *path)
 	return FS_ENT_FILE;
 }
 
+static qboolean Sys_FileURLCharIsSafe (unsigned char c)
+{
+	return (c >= 'A' && c <= 'Z') ||
+	       (c >= 'a' && c <= 'z') ||
+	       (c >= '0' && c <= '9') ||
+	       c == '/' || c == ':' || c == '-' || c == '.' || c == '_' || c == '~';
+}
+
+static qboolean Sys_BuildFileURL (const char *path, char *url, size_t urlsize)
+{
+	static const char	hex[] = "0123456789ABCDEF";
+	const unsigned char	*src;
+	const char		*prefix;
+	char			*dst, *end;
+	qboolean		unc;
+
+	if (!path)
+		return false;
+
+	unc = (path[0] == '\\' || path[0] == '/') && (path[1] == '\\' || path[1] == '/');
+	prefix = unc ? "file://" : "file:///";
+	if (q_strlcpy(url, prefix, urlsize) >= urlsize)
+		return false;
+
+	dst = url + strlen(url);
+	end = url + urlsize;
+	src = (const unsigned char *)path + (unc ? 2 : 0);
+	while (*src)
+	{
+		unsigned char c = *src++;
+		if (c == '\\')
+			c = '/';
+		if (Sys_FileURLCharIsSafe(c))
+		{
+			if (dst + 1 >= end)
+				return false;
+			*dst++ = (char)c;
+		}
+		else
+		{
+			if (dst + 3 >= end)
+				return false;
+			*dst++ = '%';
+			*dst++ = hex[c >> 4];
+			*dst++ = hex[c & 15];
+		}
+	}
+	*dst = '\0';
+	return true;
+}
+
+qboolean Sys_Explore (const char *path)
+{
+	char	url[MAX_OSPATH * 3 + 8];
+	char	dir[MAX_OSPATH];
+	char	*slash, *backslash, *s;
+	int	type;
+
+	type = Sys_FileType (path);
+	if (type == FS_ENT_NONE)
+		return false;
+
+	q_strlcpy (dir, path, sizeof(dir));
+	if (!(type & FS_ENT_DIRECTORY))
+	{
+		slash = Q_strrchr (dir, '/');
+		backslash = Q_strrchr (dir, '\\');
+		s = (backslash && (!slash || backslash > slash)) ? backslash : slash;
+		if (!s)
+			return false;
+		if (s == dir || (s == dir + 2 && dir[1] == ':'))
+			s[1] = '\0';
+		else
+			*s = '\0';
+	}
+
+	if (!Sys_BuildFileURL(dir, url, sizeof(url)))
+		return false;
+	return SDL_OpenURL (url) == 0;
+}
+
 static char	cwd[1024];
 
 static void Sys_GetBasedir (char *argv0, char *dst, size_t dstsize)

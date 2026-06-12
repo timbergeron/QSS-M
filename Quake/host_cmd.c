@@ -8009,12 +8009,14 @@ static void Host_Savegame_f (void)
 
 	q_strlcpy(relname, Cmd_Argv(1), sizeof(relname)); // woods #autoload (iw)
 	COM_AddExtension(relname, ".sav", sizeof(relname));
-	Con_Printf("Saving game to ^m%s^m...\n", relname);
 
 	q_snprintf(name, sizeof(name), "%s/saves", com_gamedir); // woods - Create saves directory if it doesn't exist
 	Sys_mkdir(name);
 
 	q_snprintf(name, sizeof(name), "%s/saves/%s", com_gamedir, relname); // woods - save to saves subdirectory
+	Con_SafePrintf("Saving game to ");
+	Con_LinkPrintf(name, "%s", relname);
+	Con_SafePrintf("...\n");
 
 	f = fopen (name, "w");
 	if (!f)
@@ -8139,7 +8141,6 @@ static void Host_Loadgame_f (void)
 
 	q_strlcpy(relname, Cmd_Argv(1), sizeof(relname)); // woods #autoload (iw)
 	COM_AddExtension(relname, ".sav", sizeof(relname));
-	Con_Printf("Loading game from ^m%s^m...\n", relname);
 
 // we can't call SCR_BeginLoadingPlaque, because too much stack space has
 // been used.  The menu calls it before stuffing loadgame command
@@ -8163,6 +8164,9 @@ static void Host_Loadgame_f (void)
 		SCR_EndLoadingPlaque ();
 		return;
 	}
+	Con_SafePrintf("Loading game from ");
+	Con_LinkPrintf(name, "%s", relname);
+	Con_SafePrintf("...\n");
 
 	data = start;
 	data = COM_ParseIntNewline (data, &version);

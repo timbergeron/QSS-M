@@ -3565,7 +3565,9 @@ void CL_Record_f (void)
 	Cvar_SetROM(cl_recordingdemo.name, name);
 	q_strlcpy(cls.demofilename, name, sizeof(cls.demofilename)); // user-visible final target
 
-	Con_Printf ("demo recording\n");
+	Con_SafePrintf("Recording to ");
+	Con_LinkPrintf(name, "%s", name);
+	Con_SafePrintf(".\n");
 	cls.demofile = fopen (demo_record_to_dzip ? demo_record_raw_path : name, "wb");
 	if (!cls.demofile)
 	{

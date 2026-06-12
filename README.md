@@ -26,6 +26,7 @@ JPG, r00k, Spoike for QSS and FTEQW, Ozkan Sezer & Eric Wasylishen (Quakespasm),
 **Console, Commands, and Completion**
 
 - Console text selection, copy support, selected-text highlighting, and word-by-word cursor movement
+- Windowed-mode clickable console links for generated files and folders
 - Fading console notifications
 - Multi-column tab-completion output
 - Search-match highlighting in console output, tab completion, menus, and texture filters

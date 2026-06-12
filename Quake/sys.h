@@ -60,6 +60,9 @@ FUNC_NORETURN void Sys_Error (const char *error, ...) FUNC_PRINTF(1,2);
 void Sys_Printf (const char *fmt, ...) FUNC_PRINTF(1,2);
 // send text to the console
 
+qboolean Sys_Explore (const char *path);
+// shows path in file browser
+
 double Sys_DoubleTime (void);
 
 const char *Sys_ConsoleInput (void);

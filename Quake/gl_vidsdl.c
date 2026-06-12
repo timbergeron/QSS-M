@@ -3497,6 +3497,9 @@ void VID_UpdateCursor(void)
 	SDL_Cursor *nc;
 
 	qcvm_t *vm;
+	if (key_dest == key_console || (con_forcedup && key_dest != key_menu))
+		return;
+
 	if (key_dest == key_menu)
 		vm = &cls.menu_qcvm;
 	else if (key_dest == key_game)

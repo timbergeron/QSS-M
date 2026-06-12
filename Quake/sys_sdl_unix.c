@@ -436,6 +436,75 @@ void Sys_mkdir (const char *path)
 	}
 }
 
+static qboolean Sys_FileURLCharIsSafe (unsigned char c)
+{
+	return (c >= 'A' && c <= 'Z') ||
+	       (c >= 'a' && c <= 'z') ||
+	       (c >= '0' && c <= '9') ||
+	       c == '/' || c == '-' || c == '.' || c == '_' || c == '~';
+}
+
+static qboolean Sys_BuildFileURL (const char *path, char *url, size_t urlsize)
+{
+	static const char	hex[] = "0123456789ABCDEF";
+	const unsigned char	*src;
+	char			*dst, *end;
+
+	if (!path || q_strlcpy(url, "file://", urlsize) >= urlsize)
+		return false;
+
+	dst = url + strlen(url);
+	end = url + urlsize;
+	for (src = (const unsigned char *)path; *src; src++)
+	{
+		unsigned char c = *src;
+		if (Sys_FileURLCharIsSafe(c))
+		{
+			if (dst + 1 >= end)
+				return false;
+			*dst++ = (char)c;
+		}
+		else
+		{
+			if (dst + 3 >= end)
+				return false;
+			*dst++ = '%';
+			*dst++ = hex[c >> 4];
+			*dst++ = hex[c & 15];
+		}
+	}
+	*dst = '\0';
+	return true;
+}
+
+qboolean Sys_Explore (const char *path)
+{
+	char	url[MAX_OSPATH * 3 + 8];
+	char	dir[MAX_OSPATH];
+	char	*s;
+	int	type;
+
+	type = Sys_FileType (path);
+	if (type == FS_ENT_NONE)
+		return false;
+
+	q_strlcpy (dir, path, sizeof(dir));
+	if (!(type & FS_ENT_DIRECTORY))
+	{
+		s = Q_strrchr (dir, '/');
+		if (!s)
+			return false;
+		if (s == dir)
+			s[1] = '\0';
+		else
+			*s = '\0';
+	}
+
+	if (!Sys_BuildFileURL(dir, url, sizeof(url)))
+		return false;
+	return SDL_OpenURL (url) == 0;
+}
+
 static const char errortxt1[] = "\nERROR-OUT BEGIN\n\n";
 static const char errortxt2[] = "\nQUAKE ERROR: ";
 static const char sys_console_reset_seq[] = "\033[0m\033[?1l\033[?7h\033[?25h\033[?1000l\033[?1002l\033[?1003l\033[?1004l\033[?1005l\033[?1006l\033[?1015l\033[?1049l\033[?2004l";
