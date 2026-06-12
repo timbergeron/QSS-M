@@ -55,6 +55,7 @@ enum m_state_e {
 	m_console,
 	m_colorpicker,
 	m_extras,
+	m_shortcuts,
 	m_version,
 	m_startup,
 	m_demooptions,

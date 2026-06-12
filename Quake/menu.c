@@ -115,6 +115,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_ModelViewer_f (void);
 		void M_Menu_ColorPicker_f (void);
 		void M_Menu_Extras_f (void);
+		void M_Menu_Shortcuts_f (void);
 		void M_Menu_Version_f (void);
 		void M_Menu_ResetConfig_f(void); // woods #resetconfig
 	void M_Menu_Mods_f(void); // woods #modsmenu (iw)
@@ -162,6 +163,7 @@ void M_Main_Draw (void);
 		void M_ModelViewer_Draw (void);
 		void M_ColorPicker_Draw (void);
 		void M_Extras_Draw (void);
+		void M_Shortcuts_Draw (void);
 		void M_Version_Draw (void);
 		void M_ResetConfig_Draw(void); // woods #resetconfig
 			void M_Crosshair_Draw (void);
@@ -212,6 +214,7 @@ void M_Main_Key (int key);
 		void M_ModelViewer_Key (int key);
 		void M_ColorPicker_Key (int key);
 		void M_Extras_Key (int key);
+		void M_Shortcuts_Key (int key);
 		void M_Version_Key (int key);
 		void M_ResetConfig_Key(int key); // woods #resetconfig
 			void M_Crosshair_Key (int key);
@@ -266,6 +269,7 @@ void M_Main_Key (int key);
 		void M_ModelViewer_Mousemove(int cx, int cy);
 		void M_ColorPicker_Mousemove(int cx, int cy);
 		void M_Extras_Mousemove(int cx, int cy);
+		void M_Shortcuts_Mousemove(int cx, int cy);
 		void M_Version_Mousemove(int cx, int cy);
 		void M_ResetConfig_Mousemove(int cx, int cy); // woods #resetconfig
 	//void M_Gamepad_Mousemove (int cx, int cy);
@@ -18134,6 +18138,7 @@ static enum extras_e
 	EXTRAS_HINTS,
 	EXTRAS_LIVEPREVIEW,
 	EXTRAS_MODELVIEWER,
+	EXTRAS_SHORTCUTS,
 	EXTRAS_VERSION,
 	EXTRAS_COUNT
 } extras_cursor;
@@ -18183,6 +18188,8 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 		return "Live Preview";
 	case EXTRAS_MODELVIEWER:
 		return "Model Viewer";
+	case EXTRAS_SHORTCUTS:
+		return "Keyboard Shortcuts";
 	case EXTRAS_VERSION:
 		return "Version Info";
 	default:
@@ -18316,6 +18323,9 @@ static void M_Extras_AdjustSliders (int dir)
 	case EXTRAS_MODELVIEWER:
 		M_Menu_ModelViewer_f();
 		break;
+	case EXTRAS_SHORTCUTS:
+		M_Menu_Shortcuts_f();
+		break;
 	case EXTRAS_VERSION:
 		M_Menu_Version_f();
 		break;
@@ -18437,6 +18447,11 @@ void M_Extras_Draw(void)
 
 		case EXTRAS_MODELVIEWER:
 			text = "      Model Viewer";
+			value = "...";
+			break;
+
+		case EXTRAS_SHORTCUTS:
+			text = "Keyboard Shortcuts";
 			value = "...";
 			break;
 
@@ -18595,7 +18610,7 @@ void M_Extras_Key(int k)
 		break;
 
 	case K_MWHEELDOWN:
-		if (extras_cursor != EXTRAS_VERSION)
+		if (extras_cursor != EXTRAS_SHORTCUTS && extras_cursor != EXTRAS_VERSION)
 			M_Extras_AdjustSliders(-1);
 		break;
 
@@ -18604,7 +18619,7 @@ void M_Extras_Key(int k)
 		break;
 
 	case K_MWHEELUP:
-		if (extras_cursor != EXTRAS_VERSION)
+		if (extras_cursor != EXTRAS_SHORTCUTS && extras_cursor != EXTRAS_VERSION)
 			M_Extras_AdjustSliders(1);
 		break;
 	}
@@ -18625,6 +18640,603 @@ void M_Extras_Mousemove(int cx, int cy)
 		// Update cursor position regardless of search state
 		extras_cursor = item;
 	}
+}
+
+/*
+==================
+Keyboard Shortcuts Menu
+==================
+*/
+
+#define MAX_VIS_SHORTCUTS	17
+
+typedef struct
+{
+	char		text[160];
+	char		keys[96];
+	char		search[256];
+	qboolean	is_header;
+} shortcutline_t;
+
+static struct
+{
+	menulist_t		list;
+	int				x, y, cols;
+	int				prev_cursor;
+	qboolean		scrollbar_grab;
+	menuticker_t	ticker;
+	shortcutline_t	*lines;
+	int				*filtered_indices;
+	char			status_message[64];
+	char			current_category[64];
+	double			status_time;
+} shortcutmenu;
+
+static void M_Shortcuts_Refilter(void);
+static qboolean M_Shortcuts_IsSelectableDisplayIndex(int index);
+
+static void M_Shortcuts_AddLine(const char* text, qboolean is_header)
+{
+	shortcutline_t line;
+
+	q_strlcpy(line.text, text, sizeof(line.text));
+	line.keys[0] = '\0';
+	q_strlcpy(line.search, text, sizeof(line.search));
+	line.is_header = is_header;
+	VEC_PUSH(shortcutmenu.lines, line);
+}
+
+static void M_Shortcuts_AddHeader(const char* text)
+{
+	if (VEC_SIZE(shortcutmenu.lines) > 0)
+		M_Shortcuts_AddLine("", false);
+
+	q_strlcpy(shortcutmenu.current_category, text, sizeof(shortcutmenu.current_category));
+	M_Shortcuts_AddLine(text, true);
+	M_Shortcuts_AddLine("", false);
+}
+
+static void M_Shortcuts_AddShortcut(const char* action, const char* keys)
+{
+	shortcutline_t line;
+
+	q_strlcpy(line.text, action, sizeof(line.text));
+	q_strlcpy(line.keys, keys, sizeof(line.keys));
+	q_snprintf(line.search, sizeof(line.search), "%s %s %s",
+		shortcutmenu.current_category, action, keys);
+	line.is_header = false;
+	VEC_PUSH(shortcutmenu.lines, line);
+}
+
+static qboolean M_Shortcuts_IsSelectableDisplayIndex(int index)
+{
+	int line_idx;
+
+	if (index < 0 || index >= VEC_SIZE(shortcutmenu.filtered_indices))
+		return false;
+
+	line_idx = shortcutmenu.filtered_indices[index];
+	if (line_idx < 0 || line_idx >= VEC_SIZE(shortcutmenu.lines))
+		return false;
+
+	return shortcutmenu.lines[line_idx].keys[0] != '\0';
+}
+
+static const shortcutline_t* M_Shortcuts_SelectedLine(void)
+{
+	int line_idx;
+
+	if (shortcutmenu.list.numitems <= 0 ||
+		shortcutmenu.list.cursor < 0 ||
+		shortcutmenu.list.cursor >= shortcutmenu.list.numitems)
+		return NULL;
+
+	line_idx = shortcutmenu.filtered_indices[shortcutmenu.list.cursor];
+	if (line_idx < 0 || line_idx >= VEC_SIZE(shortcutmenu.lines))
+		return NULL;
+
+	return &shortcutmenu.lines[line_idx];
+}
+
+static void M_Shortcuts_EnsureSelectableCursor(int dir)
+{
+	if (shortcutmenu.list.numitems <= 0)
+		return;
+
+	if (M_Shortcuts_IsSelectableDisplayIndex(shortcutmenu.list.cursor))
+		return;
+
+	if (!M_List_SelectNextActive(&shortcutmenu.list, shortcutmenu.list.cursor, dir, true))
+	{
+		shortcutmenu.list.cursor = 0;
+		shortcutmenu.list.scroll = 0;
+	}
+}
+
+static void M_Shortcuts_EnsureSelectableCursorForKey(int key)
+{
+	switch (key)
+	{
+	case K_UPARROW:
+	case K_KP_UPARROW:
+		M_Shortcuts_EnsureSelectableCursor(-1);
+		break;
+
+	case K_END:
+	case K_KP_END:
+		M_Shortcuts_EnsureSelectableCursor(-1);
+		break;
+
+	default:
+		M_Shortcuts_EnsureSelectableCursor(1);
+		break;
+	}
+}
+
+static void M_Shortcuts_Refilter(void)
+{
+	int i;
+
+	VEC_CLEAR(shortcutmenu.filtered_indices);
+
+	for (i = 0; i < VEC_SIZE(shortcutmenu.lines); i++)
+	{
+		if (shortcutmenu.list.search.len == 0 ||
+			q_strcasestr(shortcutmenu.lines[i].search, shortcutmenu.list.search.text))
+		{
+			VEC_PUSH(shortcutmenu.filtered_indices, i);
+		}
+	}
+
+	shortcutmenu.list.numitems = VEC_SIZE(shortcutmenu.filtered_indices);
+
+	if (shortcutmenu.list.numitems <= 0)
+	{
+		shortcutmenu.list.cursor = 0;
+		shortcutmenu.list.scroll = 0;
+		return;
+	}
+
+	if (shortcutmenu.list.cursor >= shortcutmenu.list.numitems)
+		shortcutmenu.list.cursor = shortcutmenu.list.numitems - 1;
+
+	if (shortcutmenu.list.cursor < 0)
+		shortcutmenu.list.cursor = 0;
+
+	M_Shortcuts_EnsureSelectableCursor(1);
+	M_List_CenterCursor(&shortcutmenu.list);
+}
+
+static void M_Shortcuts_CopyToClipboard(void)
+{
+	size_t total = 1;
+	int i;
+	char* copy;
+
+	if (VEC_SIZE(shortcutmenu.lines) <= 0)
+		return;
+
+	for (i = 0; i < VEC_SIZE(shortcutmenu.lines); i++)
+		total += strlen(shortcutmenu.lines[i].text) + strlen(shortcutmenu.lines[i].keys) + 3;
+
+	copy = (char*)SDL_malloc(total);
+	if (!copy)
+		return;
+
+	copy[0] = '\0';
+	for (i = 0; i < VEC_SIZE(shortcutmenu.lines); i++)
+	{
+		q_strlcat(copy, shortcutmenu.lines[i].text, total);
+		if (shortcutmenu.lines[i].keys[0])
+		{
+			q_strlcat(copy, "\t", total);
+			q_strlcat(copy, shortcutmenu.lines[i].keys, total);
+		}
+		q_strlcat(copy, "\n", total);
+	}
+
+	if (SDL_SetClipboardText(copy) < 0)
+		q_strlcpy(shortcutmenu.status_message, "Clipboard copy failed", sizeof(shortcutmenu.status_message));
+	else
+	{
+		q_strlcpy(shortcutmenu.status_message, "Copied keyboard shortcuts", sizeof(shortcutmenu.status_message));
+		M_TextField_PlayCopySound();
+	}
+
+	shortcutmenu.status_time = realtime;
+	SDL_free(copy);
+}
+
+static void M_Shortcuts_Init(void)
+{
+	shortcutmenu.list.cursor = 0;
+	shortcutmenu.list.scroll = 0;
+	shortcutmenu.list.viewsize = MAX_VIS_SHORTCUTS;
+	shortcutmenu.list.numitems = 0;
+	shortcutmenu.list.isactive_fn = M_Shortcuts_IsSelectableDisplayIndex;
+	memset(&shortcutmenu.list.search, 0, sizeof(shortcutmenu.list.search));
+	shortcutmenu.list.search.maxlen = 32;
+
+	shortcutmenu.prev_cursor = -1;
+	shortcutmenu.scrollbar_grab = false;
+	shortcutmenu.status_message[0] = '\0';
+	shortcutmenu.current_category[0] = '\0';
+	shortcutmenu.status_time = 0.0;
+
+	VEC_CLEAR(shortcutmenu.lines);
+	VEC_CLEAR(shortcutmenu.filtered_indices);
+	M_Ticker_Init(&shortcutmenu.ticker);
+
+	M_Shortcuts_AddHeader("App and System");
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+	M_Shortcuts_AddShortcut("Show keyboard shortcuts", "Cmd+/");
+#endif
+	M_Shortcuts_AddShortcut("Toggle fullscreen", "Option+Enter");
+	M_Shortcuts_AddShortcut("Minimize from fullscreen", "Cmd+Tab");
+	M_Shortcuts_AddShortcut("Show command history", "Cmd+Y / Ctrl+H");
+	M_Shortcuts_AddShortcut("Stop active download", "Cmd+. / Ctrl+.");
+	M_Shortcuts_AddShortcut("Paste clipboard file", "Cmd+V / Ctrl+V");
+	M_Shortcuts_AddShortcut("Mute or unmute sound", "Cmd+M / Ctrl+M");
+	M_Shortcuts_AddShortcut("Increase UI scale", "Cmd+Shift+Wheel Up / Ctrl+Shift+Wheel Up");
+	M_Shortcuts_AddShortcut("Decrease UI scale", "Cmd+Shift+Wheel Down / Ctrl+Shift+Wheel Down");
+	M_Shortcuts_AddShortcut("Increase volume", "Option+Shift+Wheel Up");
+	M_Shortcuts_AddShortcut("Decrease volume", "Option+Shift+Wheel Down");
+
+	M_Shortcuts_AddHeader("Movement");
+	M_Shortcuts_AddShortcut("Move forward", "W / Up Arrow");
+	M_Shortcuts_AddShortcut("Move backward", "S / Down Arrow");
+	M_Shortcuts_AddShortcut("Move left", "A / ,");
+	M_Shortcuts_AddShortcut("Move right", "D / .");
+	M_Shortcuts_AddShortcut("Turn left", "Left Arrow");
+	M_Shortcuts_AddShortcut("Turn right", "Right Arrow");
+	M_Shortcuts_AddShortcut("Strafe", "Alt/Option");
+	M_Shortcuts_AddShortcut("Run", "Shift");
+	M_Shortcuts_AddShortcut("Jump / swim up", "Space / Mouse2 / Left Trigger");
+	M_Shortcuts_AddShortcut("Swim up", "E");
+	M_Shortcuts_AddShortcut("Swim down", "C");
+	M_Shortcuts_AddShortcut("Look up", "Page Down");
+	M_Shortcuts_AddShortcut("Look down", "Delete");
+	M_Shortcuts_AddShortcut("Center view", "End");
+	M_Shortcuts_AddShortcut("Mouse look", "Backslash");
+	M_Shortcuts_AddShortcut("Keyboard look", "Insert");
+
+	M_Shortcuts_AddHeader("Combat and Weapons");
+	M_Shortcuts_AddShortcut("Attack", "Ctrl / Mouse1 / Right Trigger");
+	M_Shortcuts_AddShortcut("Next weapon", "Slash / Wheel Down / Right Shoulder");
+	M_Shortcuts_AddShortcut("Previous weapon", "Wheel Up / Left Shoulder");
+	M_Shortcuts_AddShortcut("Axe", "1");
+	M_Shortcuts_AddShortcut("Shotgun", "2");
+	M_Shortcuts_AddShortcut("Super Shotgun", "3");
+	M_Shortcuts_AddShortcut("Nailgun", "4");
+	M_Shortcuts_AddShortcut("Super Nailgun", "5");
+	M_Shortcuts_AddShortcut("Grenade Launcher", "6");
+	M_Shortcuts_AddShortcut("Rocket Launcher", "7");
+	M_Shortcuts_AddShortcut("Thunderbolt", "8");
+	M_Shortcuts_AddShortcut("Impulse 0", "0");
+	M_Shortcuts_AddShortcut("Weapon wheel", "Y Button");
+
+	M_Shortcuts_AddHeader("Menus and HUD");
+	M_Shortcuts_AddShortcut("Show scores", "Tab");
+	M_Shortcuts_AddShortcut("Help", "F1");
+	M_Shortcuts_AddShortcut("Save menu", "F2");
+	M_Shortcuts_AddShortcut("Load menu", "F3");
+	M_Shortcuts_AddShortcut("Options menu", "F4");
+	M_Shortcuts_AddShortcut("Multiplayer menu", "F5");
+	M_Shortcuts_AddShortcut("Quicksave", "F6");
+	M_Shortcuts_AddShortcut("Quickload", "F9");
+	M_Shortcuts_AddShortcut("Quit prompt", "F10");
+	M_Shortcuts_AddShortcut("Screenshot", "F12 / Print Screen");
+	M_Shortcuts_AddShortcut("Toggle zoom", "F11");
+	M_Shortcuts_AddShortcut("Pause", "Pause");
+	M_Shortcuts_AddShortcut("Main menu", "Esc");
+	M_Shortcuts_AddShortcut("Larger view", "+ / =");
+	M_Shortcuts_AddShortcut("Smaller view", "-");
+
+	M_Shortcuts_AddHeader("Console");
+	M_Shortcuts_AddShortcut("Toggle console", "` / ~");
+	M_Shortcuts_AddShortcut("Force console", "Shift+Esc");
+	M_Shortcuts_AddShortcut("Autocomplete", "Tab");
+	M_Shortcuts_AddShortcut("Previous or next command", "Up Arrow / Down Arrow");
+	M_Shortcuts_AddShortcut("Scroll console", "Page Up / Page Down / Wheel");
+	M_Shortcuts_AddShortcut("Page console scroll", "Ctrl+Page Up / Ctrl+Page Down");
+	M_Shortcuts_AddShortcut("Jump to top or bottom", "Ctrl+Home / Ctrl+End");
+	M_Shortcuts_AddShortcut("Move cursor by word", "Cmd+Left / Cmd+Right");
+	M_Shortcuts_AddShortcut("Adjust console height", "Cmd+Up / Cmd+Down");
+	M_Shortcuts_AddShortcut("Extend selection", "Shift+Arrow");
+	M_Shortcuts_AddShortcut("Delete previous or next word", "Ctrl+Backspace / Ctrl+Delete");
+	M_Shortcuts_AddShortcut("Clear line", "Cmd+U / Ctrl+U");
+	M_Shortcuts_AddShortcut("Paste text", "Cmd+V / Ctrl+V / Shift+Insert");
+	M_Shortcuts_AddShortcut("Select all", "Cmd+A");
+	M_Shortcuts_AddShortcut("Copy console", "Cmd+C / Ctrl+C");
+	M_Shortcuts_AddShortcut("Abort line", "Ctrl+D");
+
+	M_Shortcuts_AddHeader("Chat");
+	M_Shortcuts_AddShortcut("Open chat", "T");
+	M_Shortcuts_AddShortcut("Send or cancel chat", "Enter / Esc");
+	M_Shortcuts_AddShortcut("Send chat as team chat", "Ctrl+Enter");
+	M_Shortcuts_AddShortcut("Delete previous word", "Ctrl+Backspace");
+	M_Shortcuts_AddShortcut("Clear message", "Ctrl+U");
+	M_Shortcuts_AddShortcut("Paste message", "Ctrl+V");
+
+	M_Shortcuts_AddHeader("Demo Playback");
+	M_Shortcuts_AddShortcut("Pause or resume", "Space");
+	M_Shortcuts_AddShortcut("Increase speed", "Up Arrow / Shift+.");
+	M_Shortcuts_AddShortcut("Decrease speed", "Down Arrow / Shift+,");
+	M_Shortcuts_AddShortcut("Rewind or fast-forward", "Left Arrow / Right Arrow");
+	M_Shortcuts_AddShortcut("Fine rewind or fast-forward", "Ctrl+Left / Ctrl+Right");
+	M_Shortcuts_AddShortcut("Single-frame step while paused", ", / .");
+	M_Shortcuts_AddShortcut("Seek to 10-90 percent", "1-9");
+	M_Shortcuts_AddShortcut("Restart demo", "0 / Home");
+	M_Shortcuts_AddShortcut("Jump to end", "End");
+	M_Shortcuts_AddShortcut("Jump backward or forward 10 seconds", "J / L");
+
+	M_Shortcuts_Refilter();
+}
+
+void M_Menu_Shortcuts_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_shortcuts;
+	m_entersound = true;
+
+	M_Shortcuts_Init();
+	IN_UpdateGrabs();
+}
+
+void M_Shortcuts_Draw(void)
+{
+	int x, y, cols;
+	int firstvis, numvis, i;
+	int saved_viewsize;
+	qboolean show_status;
+
+	x = 16;
+	y = 32;
+	cols = 36;
+
+	shortcutmenu.x = x;
+	shortcutmenu.y = y;
+	shortcutmenu.cols = cols;
+
+	if (!keydown[K_MOUSE1])
+		shortcutmenu.scrollbar_grab = false;
+
+	if (shortcutmenu.prev_cursor != shortcutmenu.list.cursor)
+	{
+		shortcutmenu.prev_cursor = shortcutmenu.list.cursor;
+		M_Ticker_Init(&shortcutmenu.ticker);
+	}
+	else
+	{
+		M_Ticker_Update(&shortcutmenu.ticker);
+	}
+
+	Draw_String(x, y - 28, "Keyboard Shortcuts");
+	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
+
+	saved_viewsize = shortcutmenu.list.viewsize;
+	if (shortcutmenu.list.search.len > 0 && shortcutmenu.list.viewsize > 14)
+	{
+		shortcutmenu.list.viewsize = 14;
+		M_List_Rescroll(&shortcutmenu.list);
+	}
+
+	if (shortcutmenu.list.numitems > 0)
+	{
+		M_List_GetVisibleRange(&shortcutmenu.list, &firstvis, &numvis);
+		for (i = 0; i < numvis; i++)
+		{
+			const int draw_idx = i + firstvis;
+			const int line_idx = shortcutmenu.filtered_indices[draw_idx];
+			shortcutline_t* line = &shortcutmenu.lines[line_idx];
+			const int item_y = y + i * 8;
+			const int maxchars = cols - 2;
+			const int maxwidth = maxchars * 8;
+			const qboolean selected = (draw_idx == shortcutmenu.list.cursor);
+			const qboolean selectable = line->keys[0] != '\0';
+			const qboolean matched = (shortcutmenu.list.search.len > 0 &&
+				q_strcasestr(line->text, shortcutmenu.list.search.text) != NULL);
+			const qboolean needs_scroll = ((int)strlen(line->text) > maxchars);
+
+			if (line->is_header)
+			{
+				M_PrintWhite(x, item_y, line->text);
+			}
+			else if (matched)
+			{
+				if (needs_scroll)
+					M_PrintHighlightScroll(x, item_y, maxwidth, line->text,
+						shortcutmenu.list.search.text,
+						selected ? shortcutmenu.ticker.scroll_time : 0.0);
+				else
+					M_PrintHighlight(x, item_y, line->text,
+						shortcutmenu.list.search.text,
+						shortcutmenu.list.search.len);
+			}
+			else if (needs_scroll)
+			{
+				M_PrintScroll(x, item_y, maxwidth, line->text,
+					selected ? shortcutmenu.ticker.scroll_time : 0.0, true);
+			}
+			else
+			{
+				M_Print(x, item_y, line->text);
+			}
+
+			if (selected && selectable)
+				M_DrawCharacter(x - 8, item_y, 12 + ((int)(realtime * 4) & 1));
+		}
+	}
+	else
+	{
+		M_PrintWhite(x, y, "No matching lines");
+	}
+
+	if (M_List_GetOverflow(&shortcutmenu.list) > 0)
+	{
+		M_List_DrawScrollbar(&shortcutmenu.list, x + cols * 8 - 8, y);
+
+		if (shortcutmenu.list.scroll > 0)
+			M_DrawEllipsisBar(x, y - 8, cols);
+		if (shortcutmenu.list.scroll + shortcutmenu.list.viewsize < shortcutmenu.list.numitems)
+			M_DrawEllipsisBar(x, y + shortcutmenu.list.viewsize * 8, cols);
+	}
+
+	show_status = shortcutmenu.status_message[0] && (realtime - shortcutmenu.status_time) < 2.0;
+	if (!show_status)
+	{
+		const shortcutline_t* selected_line = M_Shortcuts_SelectedLine();
+		if (selected_line && selected_line->keys[0])
+			M_PrintScroll(x, y + shortcutmenu.list.viewsize * 8 + 12,
+				cols * 8, selected_line->keys,
+				shortcutmenu.ticker.scroll_time, false);
+	}
+
+	if (shortcutmenu.list.search.len > 0)
+	{
+		int cursor_x = 24 + 8 * shortcutmenu.list.search.len;
+		M_DrawTextBox(16, 176, 32, 1);
+		M_PrintHighlight(24, 184, shortcutmenu.list.search.text,
+			shortcutmenu.list.search.text,
+			shortcutmenu.list.search.len);
+		if (shortcutmenu.list.numitems == 0)
+			M_DrawCharacter(cursor_x, 184, 11 ^ 128);
+		else
+			M_DrawCharacter(cursor_x, 184, 10);
+	}
+
+	if (show_status)
+		M_PrintWhite(x, shortcutmenu.list.search.len > 0 ? 200 : 184, shortcutmenu.status_message);
+
+	shortcutmenu.list.viewsize = saved_viewsize;
+}
+
+void M_Shortcuts_Key(int key)
+{
+	if (M_TextField_HasShortcutModifier() && (key == 'c' || key == 'C'))
+	{
+		M_Shortcuts_CopyToClipboard();
+		return;
+	}
+
+	if (keydown[K_CTRL])
+	{
+		if ((key == 'u' || key == 'U') && shortcutmenu.list.search.len > 0)
+		{
+			shortcutmenu.list.search.len = 0;
+			shortcutmenu.list.search.text[0] = 0;
+			shortcutmenu.list.cursor = 0;
+			shortcutmenu.list.scroll = 0;
+			M_Shortcuts_Refilter();
+			return;
+		}
+		else if (key == K_BACKSPACE && shortcutmenu.list.search.len > 0)
+		{
+			M_DeletePrevWord(&shortcutmenu.list.search);
+			shortcutmenu.list.cursor = 0;
+			shortcutmenu.list.scroll = 0;
+			M_Shortcuts_Refilter();
+			return;
+		}
+	}
+
+	if (key >= 32 && key < 127)
+	{
+		if (shortcutmenu.list.search.len < shortcutmenu.list.search.maxlen)
+		{
+			shortcutmenu.list.search.text[shortcutmenu.list.search.len++] = key;
+			shortcutmenu.list.search.text[shortcutmenu.list.search.len] = 0;
+			shortcutmenu.list.cursor = 0;
+			shortcutmenu.list.scroll = 0;
+			M_Shortcuts_Refilter();
+		}
+		return;
+	}
+
+	if (key == K_BACKSPACE && shortcutmenu.list.search.len > 0)
+	{
+		shortcutmenu.list.search.text[--shortcutmenu.list.search.len] = 0;
+		shortcutmenu.list.cursor = 0;
+		shortcutmenu.list.scroll = 0;
+		M_Shortcuts_Refilter();
+		return;
+	}
+
+	if (shortcutmenu.scrollbar_grab)
+	{
+		switch (key)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			shortcutmenu.scrollbar_grab = false;
+			break;
+		}
+		return;
+	}
+
+	if (shortcutmenu.list.numitems > 0 && M_List_Key(&shortcutmenu.list, key))
+	{
+		M_Shortcuts_EnsureSelectableCursorForKey(key);
+		return;
+	}
+
+	if (M_Ticker_Key(&shortcutmenu.ticker, key))
+		return;
+
+	switch (key)
+	{
+	case K_ESCAPE:
+		if (shortcutmenu.list.search.len > 0)
+		{
+			shortcutmenu.list.search.len = 0;
+			shortcutmenu.list.search.text[0] = 0;
+			shortcutmenu.list.cursor = 0;
+			shortcutmenu.list.scroll = 0;
+			M_Shortcuts_Refilter();
+			return;
+		}
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Menu_Extras_f();
+		break;
+
+	case K_MOUSE1:
+		if (shortcutmenu.list.numitems > 0)
+		{
+			int x = m_mousex - shortcutmenu.x - (shortcutmenu.cols - 1) * 8;
+			int y = m_mousey - shortcutmenu.y;
+			if (x >= -8 && M_List_UseScrollbar(&shortcutmenu.list, y))
+			{
+				shortcutmenu.scrollbar_grab = true;
+				M_Shortcuts_Mousemove(m_mousex, m_mousey);
+			}
+		}
+		break;
+
+	default:
+		break;
+	}
+}
+
+void M_Shortcuts_Mousemove(int cx, int cy)
+{
+	cy -= shortcutmenu.y;
+
+	if (shortcutmenu.scrollbar_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			shortcutmenu.scrollbar_grab = false;
+			return;
+		}
+		M_List_UseScrollbar(&shortcutmenu.list, cy);
+	}
+
+	if (shortcutmenu.list.numitems > 0)
+		M_List_Mousemove(&shortcutmenu.list, cy);
 }
 
 /*
@@ -29939,6 +30551,7 @@ static struct
 	{"menu_pakloading", M_Menu_PakLoading_f},
 	{"menu_modelviewer", M_Menu_ModelViewer_f},
 	{"menu_misc", M_Menu_Extras_f},
+	{"menu_shortcuts", M_Menu_Shortcuts_f},
 	{"menu_version", M_Menu_Version_f},
 	{"menu_config", M_Menu_ResetConfig_f},
 	{"menu_video", M_Menu_Video_f},
@@ -30302,6 +30915,10 @@ void M_Draw (void)
 		M_Extras_Draw ();
 		break;
 
+	case m_shortcuts:
+		M_Shortcuts_Draw();
+		break;
+
 	case m_version:
 		M_Version_Draw();
 		break;
@@ -30446,6 +31063,7 @@ static qboolean M_HasSearchField (void)
 	case m_hud:
 	case m_console:
 	case m_extras:
+	case m_shortcuts:
 	case m_version:
 	case m_startup:
 	case m_demooptions:
@@ -30652,6 +31270,10 @@ void M_Keydown (int key, qboolean repeat)
 
 	case m_extras:
 		M_Extras_Key (key);
+		return;
+
+	case m_shortcuts:
+		M_Shortcuts_Key(key);
 		return;
 
 	case m_version:
@@ -30905,6 +31527,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_extras:
 		M_Extras_Mousemove(x, y);
+		return;
+
+	case m_shortcuts:
+		M_Shortcuts_Mousemove(x, y);
 		return;
 
 	case m_version:
