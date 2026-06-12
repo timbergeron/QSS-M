@@ -632,7 +632,7 @@ void CL_UpdateTEnts (void)
 		{
 			VectorCopy (cl.entities[cl.viewentity].origin, b->start);
 			if (!chase_active.value)
-				b->start[2] += bound(-7, v_viewheight.value, 4);
+				b->start[2] += cl.crouch + bound(-7, v_viewheight.value, 4);
 
 			// begin woods for truelightning #truelight
 

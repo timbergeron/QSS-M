@@ -1262,7 +1262,7 @@ static qboolean CL_LerpEntity(entity_t *ent, vec3_t org, vec3_t ang, float frac)
 		cl.onground = pmove.onground;
 		cl.inwater = pmove.waterlevel>=2;
 
-		//FIXME: add stair-smoothing support
+		// Stair smoothing is applied after relinking so temp entities share cl.crouch.
 		//FIXME: add error correction
 
 		return true;	//if we're predicting, don't let its old position linger as interpolation. should be less laggy that way, or something.
@@ -2405,6 +2405,82 @@ void CL_RelinkEntities (void)
 			cl_visedicts[cl_numvisedicts] = ent;
 			cl_numvisedicts++;
 		}
+	}
+}
+
+/*
+===============
+CL_CalcCrouch
+
+Smooth out stair step ups / fast elevator rises before temp entities update.
+===============
+*/
+static void CL_CalcCrouch (void)
+{
+	entity_t	*ent;
+	static	vec3_t	oldorigin = {0, 0, 0};
+	static	float	oldz = 0;
+	static	float	extracrouch = 0;
+	static	float	crouchspeed = 80;
+	float		steptime;
+	vec3_t		odiff;
+
+	if (!cl.entities || cl.viewentity < 1 || cl.viewentity >= cl.num_entities)
+	{
+		cl.crouch = 0;
+		return;
+	}
+
+	ent = &cl.entities[cl.viewentity];
+
+	steptime = cl.time - cl.oldtime;
+	if (steptime < 0)
+		steptime = 0;
+
+	VectorSubtract (ent->origin, oldorigin, odiff);
+	if (DotProduct (odiff, odiff) > 48 * 48)
+	{
+		oldz = ent->origin[2];
+		extracrouch = 0;
+		crouchspeed = 80;
+		cl.crouch = 0;
+		VectorCopy (ent->origin, oldorigin);
+		return;
+	}
+	VectorCopy (ent->origin, oldorigin);
+
+	if (!noclip_anglehack && cl.onground && ent->origin[2] - oldz > 0)
+	{
+		if (ent->origin[2] - oldz > 20)
+		{
+			if (crouchspeed < 160)
+			{
+				extracrouch = ent->origin[2] - oldz - steptime * 200 - 15;
+				extracrouch = q_min (extracrouch, 5);
+			}
+			crouchspeed = 160;
+		}
+
+		oldz += steptime * crouchspeed;
+		if (oldz > ent->origin[2])
+			oldz = ent->origin[2];
+		if (ent->origin[2] - oldz > 12 + extracrouch)
+			oldz = ent->origin[2] - 12 - extracrouch;
+
+		extracrouch -= steptime * 200;
+		if (extracrouch < 0)
+			extracrouch = 0;
+
+		cl.crouch = oldz - ent->origin[2];
+	}
+	else
+	{
+		oldz = ent->origin[2];
+		cl.crouch += steptime * 150;
+		if (cl.crouch > 0)
+			cl.crouch = 0;
+		crouchspeed = 80;
+		extracrouch = 0;
 	}
 }
 
@@ -5452,6 +5528,7 @@ int CL_ReadFromServer (void)
 
 	PR_SwitchQCVM(&cl.qcvm);
 	CL_RelinkEntities ();
+	CL_CalcCrouch ();
 	CL_UpdateTEnts ();
 	PR_SwitchQCVM(NULL);
 
