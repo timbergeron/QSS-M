@@ -139,7 +139,7 @@ static const double DOUBLECLICK_TIME = 0.5;
 static qboolean     con_cursor_was_active = false;
 static qboolean     con_blockselectionuntilrelease = false;
 
-static qboolean Con_LinksEnabled(void) { return true; } // also in fullscreen; the file browser from a click may open behind an exclusive-fullscreen window
+static qboolean Con_LinksEnabled(void) { return modestate == MS_WINDOWED; }
 static void Con_SetHotLink(conlink_t* link) { con_hotlink = Con_LinksEnabled() ? link : NULL; }
 static void Con_ClearSelection(void) { memset(&con_selection, 0, sizeof(con_selection)); }
 static void Con_EnterCursorMode(void);
@@ -1344,7 +1344,7 @@ void Con_Init (void)
 	// woods #conselection
     con_cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
     con_cursor_ibeam = LoadCustomIBeamCursor();
-    con_cursor_hand  = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
+    con_cursor_hand  = LoadCustomLinkCursor();
     con_cursor_current = NULL;
 	// woods #conselection - start hidden; Con_UpdateMouseState/EnterCursorMode enables when console is open
     SDL_ShowCursor(SDL_DISABLE);
@@ -1352,24 +1352,33 @@ void Con_Init (void)
 
 
 /*
-===============
+======================
 Con_ReloadIBeamCursor -- woods #customcursor
-Reload the I-beam cursor when video mode changes, so it scales correctly
-===============
+Reload console cursors when video mode changes, so they scale correctly.
+======================
 */
 void Con_ReloadIBeamCursor (void)
 {
-    SDL_Cursor *old_cursor = con_cursor_ibeam;
+    SDL_Cursor *old_ibeam = con_cursor_ibeam;
+    SDL_Cursor *old_hand = con_cursor_hand;
+
     con_cursor_ibeam = LoadCustomIBeamCursor();
-    if (old_cursor)
-        SDL_FreeCursor(old_cursor);
+    con_cursor_hand = LoadCustomLinkCursor();
+
+    if (con_cursor_current == old_ibeam)
+        Con_SetCursor(con_cursor_ibeam);
+    else if (con_cursor_current == old_hand)
+        Con_SetCursor(con_cursor_hand);
+
+    if (old_ibeam)
+        SDL_FreeCursor(old_ibeam);
+    if (old_hand)
+        SDL_FreeCursor(old_hand);
 
     /* the Con_Init attempts run before SDL video init and fail, leaving these
        NULL all session; (re)create them here now that video is up */
     if (!con_cursor_arrow)
         con_cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
-    if (!con_cursor_hand)
-        con_cursor_hand = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
 }
 
 
@@ -2592,7 +2601,7 @@ void Con_LinkPrintf (const char *addr, const char *fmt, ...)
 	q_vsnprintf (msg, sizeof(msg), fmt, argptr);
 	va_end (argptr);
 
-	if (!addr || !addr[0] || !Con_LinksEnabled() || !con_initialized || cls.state == ca_dedicated)
+	if (!addr || !addr[0] || !con_initialized || cls.state == ca_dedicated)
 	{
 		Con_SafePrintf ("%s", msg);
 		return;

@@ -100,7 +100,7 @@ void Con_Scroll (int lines);
 void Con_SelectAll (void);
 void Con_MoveSelection (int dir_x, int dir_y);
 qboolean Con_CopySelectionToClipboard (void);
-void Con_ReloadIBeamCursor (void); // woods #customcursor
+void Con_ReloadIBeamCursor (void); // woods #customcursor - reload console cursors
 
 //
 // debuglog

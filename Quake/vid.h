@@ -103,6 +103,7 @@ SDL_Cursor *VID_GetGameCursorHandle(void);
 void VID_SetCursorHandle(SDL_Cursor *cursor); // woods #customcursor
 void LoadCustomCursorImage (void); // woods #customcursor
 SDL_Cursor *LoadCustomIBeamCursor (void); // woods #customcursor
+SDL_Cursor *LoadCustomLinkCursor (void); // woods #customcursor
 void VID_SetCursor(qcvm_t *vm, const char *cursorname, float hotspot[2], float cursorscale);
 
 #endif	/* __VID_DEFS_H */

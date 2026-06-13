@@ -1075,7 +1075,7 @@ static void VID_Restart (void)
 //
 	IN_UpdateGrabs();
 	LoadCustomCursorImage (); // woods #customcursor
-	Con_ReloadIBeamCursor (); // woods #customcursor - reload I-beam cursor for correct scaling
+	Con_ReloadIBeamCursor (); // woods #customcursor - reload console cursors for correct scaling
 
 	if (blocked_sound)
 		S_UnblockSound ();
@@ -3684,36 +3684,32 @@ void LoadCustomCursorImage (void)
 	if (malloced) free(cursorData);
 }
 
-/*
-===================
-LoadCustomIBeamCursor -- woods #customcursor
-Returns a custom I-beam cursor for console selection, or NULL if not found
-===================
-*/
-SDL_Cursor *LoadCustomIBeamCursor (void)
+static SDL_Cursor *LoadCustomSystemCursor (const char *asset, const char *label, SDL_SystemCursor fallback, int hotx, int hoty)
 {
 	int width, height;
 	enum srcformat fmt;
 	qboolean malloced;
+	char asset_png[MAX_QPATH];
 	SDL_Cursor *cursor = NULL;
 
 	if (!scr_customcursor.value)
-		return SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+		return SDL_CreateSystemCursor(fallback);
 
-	if (!COM_FileExists("gfx/qssmicursor.png", NULL))
+	q_snprintf(asset_png, sizeof(asset_png), "%s.png", asset);
+	if (!COM_FileExists(asset_png, NULL))
 	{
-		Con_DPrintf("No I-beam cursor image found, using system cursor\n");
-		return SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+		Con_DPrintf("No %s cursor image found, using system cursor\n", label);
+		return SDL_CreateSystemCursor(fallback);
 	}
 
-	byte* cursorData = Image_LoadImage("gfx/qssmicursor", &width, &height, &fmt, &malloced);
+	byte* cursorData = Image_LoadImage(asset, &width, &height, &fmt, &malloced);
 	if (!cursorData)
 	{
-		Con_DPrintf("Failed to load I-beam cursor image\n");
-		return SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+		Con_DPrintf("Failed to load %s cursor image\n", label);
+		return SDL_CreateSystemCursor(fallback);
 	}
 
-	Con_DPrintf("Loaded I-beam cursor image: %dx%d\n", width, height);
+	Con_DPrintf("Loaded %s cursor image: %dx%d\n", label, width, height);
 
 	const int baseWidth = 40, baseHeight = 40;
 	const int baseResolutionWidth = 1920, baseResolutionHeight = 1080;
@@ -3730,9 +3726,9 @@ SDL_Cursor *LoadCustomIBeamCursor (void)
 
 	if (!surface)
 	{
-		Con_DPrintf("Failed to create I-beam cursor surface\n");
+		Con_DPrintf("Failed to create %s cursor surface\n", label);
 		if (malloced) free(cursorData);
-		return SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+		return SDL_CreateSystemCursor(fallback);
 	}
 
 	if (width != targetWidth || height != targetHeight)
@@ -3740,32 +3736,66 @@ SDL_Cursor *LoadCustomIBeamCursor (void)
 		SDL_Surface* scaledSurface = SDL_CreateRGBSurfaceWithFormat(0, targetWidth, targetHeight, 32, SDL_PIXELFORMAT_RGBA32);
 		if (SDL_BlitScaled(surface, NULL, scaledSurface, NULL) < 0)
 		{
-			Con_DPrintf("Failed to scale I-beam cursor: %s\n", SDL_GetError());
+			Con_DPrintf("Failed to scale %s cursor: %s\n", label, SDL_GetError());
 			SDL_FreeSurface(surface);
 			SDL_FreeSurface(scaledSurface);
 			if (malloced) free(cursorData);
-			return SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+			return SDL_CreateSystemCursor(fallback);
 		}
 		SDL_FreeSurface(surface);
 		surface = scaledSurface;
 	}
 
-	// Hotspot at center-middle for I-beam cursor
-	cursor = SDL_CreateColorCursor(surface, surface->w / 2, surface->h / 2);
-	if (cursor)
+	if (hotx < 0 || hoty < 0)
 	{
-		Con_DPrintf("Custom I-beam cursor created successfully\n");
+		hotx = surface->w / 2;
+		hoty = surface->h / 2;
 	}
 	else
 	{
-		Con_DPrintf("Failed to create custom I-beam cursor: %s\n", SDL_GetError());
-		cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+		hotx = (hotx * surface->w) / width;
+		hoty = (hoty * surface->h) / height;
+		hotx = SDL_clamp(hotx, 0, surface->w - 1);
+		hoty = SDL_clamp(hoty, 0, surface->h - 1);
+	}
+
+	cursor = SDL_CreateColorCursor(surface, hotx, hoty);
+	if (cursor)
+	{
+		Con_DPrintf("Custom %s cursor created successfully\n", label);
+	}
+	else
+	{
+		Con_DPrintf("Failed to create custom %s cursor: %s\n", label, SDL_GetError());
+		cursor = SDL_CreateSystemCursor(fallback);
 	}
 
 	SDL_FreeSurface(surface);
 	if (malloced) free(cursorData);
 
 	return cursor;
+}
+
+/*
+===================
+LoadCustomIBeamCursor -- woods #customcursor
+Returns a custom I-beam cursor for console selection, or a system fallback.
+===================
+*/
+SDL_Cursor *LoadCustomIBeamCursor (void)
+{
+	return LoadCustomSystemCursor("gfx/qssmicursor", "I-beam", SDL_SYSTEM_CURSOR_IBEAM, -1, -1);
+}
+
+/*
+===================
+LoadCustomLinkCursor -- woods #customcursor
+Returns a custom hand cursor for console links, or a system fallback.
+===================
+*/
+SDL_Cursor *LoadCustomLinkCursor (void)
+{
+	return LoadCustomSystemCursor("gfx/qssmlinkcursor", "link", SDL_SYSTEM_CURSOR_HAND, 64, 2);
 }
 
 void VID_Minimize (void) // woods for mac command-tab
