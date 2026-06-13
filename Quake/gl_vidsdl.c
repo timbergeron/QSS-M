@@ -3492,17 +3492,14 @@ static void VID_Menu_f (void)
 	VID_Menu_RebuildRateList ();
 }
 
-void VID_UpdateCursor(void)
+static SDL_Cursor *VID_GetCursorForDest(keydest_t dest)
 {
 	SDL_Cursor *nc;
-
 	qcvm_t *vm;
-	if (key_dest == key_console || (con_forcedup && key_dest != key_menu))
-		return;
 
-	if (key_dest == key_menu)
+	if (dest == key_menu)
 		vm = &cls.menu_qcvm;
-	else if (key_dest == key_game)
+	else if (dest == key_game)
 		vm = &cl.qcvm;
 	else
 		vm = NULL;
@@ -3512,13 +3509,29 @@ void VID_UpdateCursor(void)
 	if (!nc && custom_cursor && scr_customcursor.value)
 		nc = custom_cursor;
 
-	if (key_dest == key_menu && (M_WantsIBeamCursor() || VID_MenuWantsTextCursor()))
+	if (dest == key_menu && (M_WantsIBeamCursor() || VID_MenuWantsTextCursor()))
 	{
 		SDL_Cursor *text_cursor = VID_GetMenuTextCursor();
 		if (text_cursor)
 			nc = text_cursor;
 	}
 
+	return nc;
+}
+
+SDL_Cursor *VID_GetGameCursorHandle(void)
+{
+	return VID_GetCursorForDest(key_game);
+}
+
+void VID_UpdateCursor(void)
+{
+	SDL_Cursor *nc;
+
+	if (key_dest == key_console || (con_forcedup && key_dest != key_menu))
+		return;
+
+	nc = VID_GetCursorForDest(key_dest);
 	VID_SetCursorHandle(nc);
 }
 

@@ -677,14 +677,6 @@ static conlink_t *Con_GetLinkAtOfs (const conofs_t *ofs)
     return NULL;
 }
 
-static conlink_t *Con_GetLinkAtPixel (int x, int y)
-{
-    conofs_t ofs;
-    if (!Con_LinksEnabled()) return NULL;
-    if (!Con_ScreenToOffset(x,y,&ofs,CT_INSIDE)) return NULL;
-    return Con_GetLinkAtOfs(&ofs);
-}
-
 static qboolean Con_CursorActive (void)
 {
     return (key_dest == key_console) || (con_forcedup && key_dest != key_menu);
@@ -698,6 +690,13 @@ static void Con_SetCursor(SDL_Cursor *cur)
     VID_SetCursorHandle(cur);
     con_cursor_current = cur;
 }
+
+static void Con_SetNeutralCursor(void)
+{
+    SDL_Cursor *game_cursor = VID_GetGameCursorHandle();
+    Con_SetCursor(game_cursor ? game_cursor : con_cursor_arrow);
+}
+
 static qboolean Con_HasSelection (void) { return Con_OfsCompare(&con_selection.begin,&con_selection.end)!=0; }
 
 /* Enter/leave routines to avoid cursor flicker between console/menu/game */
@@ -913,18 +912,30 @@ static void Con_SetMouseState (conmouse_t state)
 static void Con_Mousemove (int x, int y)
 {
     if (con_mousestate == CMS_NOTPRESSED) {
-        conofs_t ofs; qboolean inside = Con_ScreenToOffset(x,y,&ofs,CT_INSIDE);
-        Con_SetHotLink(Con_GetLinkAtPixel(x,y));
+        conofs_t ofs;
+        int cx, cy;
+        qboolean inside;
+
+        Con_ScreenToCanvas(x,y,&cx,&cy);
+        inside = Con_CanvasToOffset(cx,cy,&ofs,CT_INSIDE);
+        Con_SetHotLink(inside ? Con_GetLinkAtOfs(&ofs) : NULL);
         /* Show appropriate cursor while console is active */
         if (Con_CursorActive()) {
             if (con_hotlink)           Con_SetCursor(con_cursor_hand ? con_cursor_hand : con_cursor_arrow);
             else if (inside)           Con_SetCursor(con_cursor_ibeam);
-            else                       Con_SetCursor(con_cursor_arrow);
+            else                       Con_SetNeutralCursor();
         }
     } else {
+        conofs_t ofs;
         int cx, cy, delta; float frac;
+        qboolean inside;
         Con_ScreenToCanvas(x,y,&cx,&cy);
+        inside = Con_CanvasToOffset(cx,cy,&ofs,CT_INSIDE);
         Con_CanvasToOffset(cx,cy,&con_mouseselection.end,CT_NEAREST);
+        if (Con_CursorActive()) {
+            if (inside)                Con_SetCursor(con_cursor_ibeam);
+            else                       Con_SetNeutralCursor();
+        }
         Con_ApplyMouseSelection();
         if (Con_OfsCompare(&con_mouseselection.begin,&con_mouseselection.end) != 0)
             Con_SetMouseState(CMS_DRAGGING);

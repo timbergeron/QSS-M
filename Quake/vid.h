@@ -99,6 +99,7 @@ void	VID_SetWindowCaption(const char *newcaption);
 void	VID_SetWindowTitle(const char* title); // github.com/andrei-drexler/ironwail (Show game summary in window title)
 
 void VID_UpdateCursor(void);
+SDL_Cursor *VID_GetGameCursorHandle(void);
 void VID_SetCursorHandle(SDL_Cursor *cursor); // woods #customcursor
 void LoadCustomCursorImage (void); // woods #customcursor
 SDL_Cursor *LoadCustomIBeamCursor (void); // woods #customcursor
