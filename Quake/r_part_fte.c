@@ -474,7 +474,12 @@ static cvar_t r_part_contentswitch = {"r_part_contentswitch", "1"};
 static cvar_t r_part_density = {"r_part_density", "1"};
 static cvar_t r_part_maxparticles = {"r_part_maxparticles", "65536"};
 static cvar_t r_part_maxdecals = {"r_part_maxdecals", "8192"};
+// woods -- default off on Apple: AppleMetalOpenGLRenderer flushes glBufferSubData synchronously per call (slower than client arrays for particles)
+#ifdef __APPLE__
+static cvar_t r_part_vbo = {"r_part_vbo", "0"};
+#else
 static cvar_t r_part_vbo = {"r_part_vbo", "1"};
+#endif
 static cvar_t r_part_cullbehind = {"r_part_cullbehind", "1"};
 static cvar_t r_lightflicker = {"r_lightflicker", "1"};
 extern cvar_t r_particles; // woods (vk)
