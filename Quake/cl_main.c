@@ -5702,6 +5702,9 @@ void CL_Viewpos_f (void)
 	if (cls.state != ca_connected)
 		return;
 
+	if (!cl.entities || cl.viewentity < 1 || cl.viewentity >= cl.num_entities)
+		return; // matches the cl.entities[cl.viewentity] guards elsewhere (entity 0 is world); also covers pre-spawn when cl.entities is NULL
+
 	// player position
 	q_snprintf (buf, sizeof (buf),
 		"(%.0f %.0f %.0f) %.0f %.0f %.0f",
