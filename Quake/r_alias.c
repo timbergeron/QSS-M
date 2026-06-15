@@ -3551,6 +3551,139 @@ qboolean GL_DrawAliasShadowCheck (entity_t* e) // woods check for shadows not on
 
 /*
 =============
+GL_DrawAliasShadow_GLSL -- woods #shadowglsl
+
+Shadow variant of GL_DrawAliasFrame_GLSL: one draw call from the static mesh
+VBOs with pose lerping in the vertex shader, instead of the fixed-function
+path's per-vertex CPU lerp into client arrays (which stalls badly on Apple's
+GL-on-Metal driver). LightColor rgb is 0 so the skin multiplies out to black;
+binding the real skin keeps MF_HOLEY alpha holes in the shadow.
+=============
+*/
+static void GL_DrawAliasShadow_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, lerpdata_t lerpdata, entity_t *e, float shadowalpha)
+{
+	const GLfloat zerotints[3][4] = {{0,0,0,0},{0,0,0,0},{0,0,0,0}};
+	float	blend;
+	int		anim, skinnum;
+	gltexture_t *skin;
+
+	if (lerpdata.pose1 != lerpdata.pose2)
+		blend = lerpdata.blend;
+	else
+		blend = 0;
+
+	// Only HOLEY models need the real skin (so the alpha test can punch the
+	// model's transparent texels out of the shadow). For everything else bind an
+	// opaque texture: the frag shader does result.a *= texture.a, so a skin whose
+	// base texture carries <1 alpha (soft-alpha md3/md5 skins) would otherwise
+	// modulate the shadow's opacity. notexture is 2x2 fully-opaque; its RGB is
+	// irrelevant here because LightColor.rgb is 0.
+	if (e->model->flags & MF_HOLEY)
+	{
+		anim = (int)(cl.time*10) & 3;
+		skinnum = e->skinnum;
+		if ((skinnum >= paliashdr->numskins) || (skinnum < 0))
+			skinnum = 0;
+		if (paliashdr->numskins <= 0)
+			skin = notexture;
+		else
+			skin = paliashdr->textures[skinnum][anim].base;
+	}
+	else
+		skin = notexture;
+
+	GL_UseProgramFunc (glsl->program);
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, e->model->meshvbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, e->model->meshindexesvbo);
+
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose1VertexAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose2VertexAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose1NormalAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose2NormalAttrIndex);
+
+	switch(paliashdr->poseverttype)
+	{
+	case PV_QUAKE1:
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, e->model->meshvboptr+paliashdr->vbostofs);
+
+		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (meshxyz_mdl_t), GLARB_GetXYZOffset_MDL (paliashdr, lerpdata.pose1));
+		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (meshxyz_mdl_t), GLARB_GetXYZOffset_MDL (paliashdr, lerpdata.pose2));
+		// GL_TRUE to normalize the signed bytes to [-1 .. 1]
+		GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl_t), GLARB_GetNormalOffset_MDL (paliashdr, lerpdata.pose1));
+		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl_t), GLARB_GetNormalOffset_MDL (paliashdr, lerpdata.pose2));
+		break;
+	case PV_QUAKEFORGE:
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, e->model->meshvboptr+paliashdr->vbostofs);
+
+		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof (meshxyz_mdl16_t), GLARB_GetXYZOffset_MDLQF (paliashdr, lerpdata.pose1));
+		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE, sizeof (meshxyz_mdl16_t), GLARB_GetXYZOffset_MDLQF (paliashdr, lerpdata.pose2));
+		GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl16_t), GLARB_GetNormalOffset_MDLQF (paliashdr, lerpdata.pose1));
+		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_mdl16_t), GLARB_GetNormalOffset_MDLQF (paliashdr, lerpdata.pose2));
+		break;
+	case PV_QUAKE3:
+		GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0, e->model->meshvboptr+paliashdr->vbostofs);
+
+		GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_SHORT, GL_FALSE, sizeof (meshxyz_md3_t), GLARB_GetXYZOffset_MD3 (paliashdr, lerpdata.pose1));
+		GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_SHORT, GL_FALSE, sizeof (meshxyz_md3_t), GLARB_GetXYZOffset_MD3 (paliashdr, lerpdata.pose2));
+		GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_md3_t), GLARB_GetNormalOffset_MD3 (paliashdr, lerpdata.pose1));
+		GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE, sizeof (meshxyz_md3_t), GLARB_GetNormalOffset_MD3 (paliashdr, lerpdata.pose2));
+		break;
+	case PV_IQM:
+		{
+			const iqmvert_t *pose = (const iqmvert_t*)(e->model->meshvboptr+paliashdr->vbovertofs + (paliashdr->numverts_vbo * 0 * sizeof (iqmvert_t)));
+
+			GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->xyz);
+			GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->norm);
+			GL_VertexAttribPointerFunc (boneWeightAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->weight);
+			GL_VertexAttribPointerFunc (boneIndexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof (iqmvert_t), pose->idx);
+			GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->st);
+
+			GL_EnableVertexAttribArrayFunc (vertColoursAttrIndex);
+			GL_VertexAttribPointerFunc (vertColoursAttrIndex, 4, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), pose->rgba);
+		}
+		break;
+	}
+
+	GL_SelectTexture (GL_TEXTURE0);
+	GL_Bind (skin);
+
+	if (glsl->blendLoc != -1)
+		GL_Uniform1fFunc (glsl->blendLoc, blend);
+	if (glsl->bonesLoc != -1)
+		GL_Uniform4fvFunc (glsl->bonesLoc, paliashdr->numbones*3, lerpdata.bonestate->mat);
+	GL_Uniform3fFunc (glsl->shadevectorLoc, shadevector[0], shadevector[1], shadevector[2]);
+	// the fragment shader applies gl_Color.a twice (result *= gl_Color, then
+	// result.a *= gl_Color.a), so pass the square root to land on shadowalpha
+	GL_Uniform4fFunc (glsl->lightColorLoc, 0, 0, 0, sqrt(shadowalpha));
+	GL_Uniform1iFunc (glsl->useFullbrightTexLoc, 0);
+	GL_Uniform1fFunc (glsl->useOverbrightLoc, 0);
+	GL_Uniform1iFunc (glsl->useAlphaTestLoc, (e->model->flags & MF_HOLEY) ? 1 : 0);
+	GL_Uniform4fvFunc (glsl->colorTintLoc, 3, (const GLfloat*)zerotints);
+	GL_Uniform1iFunc (glsl->fogModeLoc, Fog_GetMode());
+	GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
+	GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
+	GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
+	GL_Uniform1iFunc (glsl->shellModeLoc, 0);
+
+	glDrawElements (GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT, e->model->meshindexesvboptr+paliashdr->eboofs);
+
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose1VertexAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose2VertexAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose1NormalAttrIndex);
+	GL_DisableVertexAttribArrayFunc (pose2NormalAttrIndex);
+	GL_DisableVertexAttribArrayFunc (vertColoursAttrIndex);
+
+	GL_UseProgramFunc (0);
+	GL_SelectTexture (GL_TEXTURE0);
+
+	rs_aliaspasses += paliashdr->numtris;
+}
+
+/*
+=============
 GL_DrawAliasShadow -- johnfitz -- rewritten
 
 TODO: orient shadow onto "lightplane" (a global mplane_t*)
@@ -3566,6 +3699,8 @@ void GL_DrawAliasShadow (entity_t *e)
 	aliashdr_t	*paliashdr;
 	lerpdata_t	lerpdata;
 	float shade; // woods (R00k) : fade light based on ambientlight
+	aliasglsl_t	*glsl; // woods #shadowglsl
+	float		shadowalpha; // woods #shadowglsl
 
 	if (e == &cl.viewent || e->effects & EF_NOSHADOW || e->model->flags & MOD_NOSHADOW)
 		return;
@@ -3588,7 +3723,7 @@ void GL_DrawAliasShadow (entity_t *e)
 	if (R_CullModelForEntityTransform(e, lerpdata.origin, lerpdata.angles))
 		return;
 
-	R_LightPoint (e->origin);
+	R_LightPointCachedAlias (e, e->origin, 0); // woods #shadowglsl -- reuse the static-entity light cache instead of re-tracing
 	shade = (((lightcolor[0] + lightcolor[1] + lightcolor[2]) / 3) / 128); // woods (R00k) : fade light based on ambientlight
 	lheight = currententity->origin[2] - lightspot[2];
 
@@ -3608,11 +3743,20 @@ void GL_DrawAliasShadow (entity_t *e)
 	glDepthMask(GL_FALSE);
 	glEnable (GL_BLEND);
 	GL_DisableMultitexture ();
-	glDisable (GL_TEXTURE_2D);
-	shading = false;
-	glColor4f(0,0,0,entalpha * shade * r_shadows.value); // woods (R00k) : fade light based on ambientlight
-	GL_DrawAliasFrame (paliashdr, lerpdata);
-	glEnable (GL_TEXTURE_2D);
+	shadowalpha = CLAMP (0.0f, entalpha * shade * r_shadows.value, 1.0f); // woods (R00k) : fade light based on ambientlight
+	glsl = &r_alias_glsl[(paliashdr->poseverttype==PV_IQM&&lerpdata.bonestate)?ALIAS_GLSL_SKELETAL:ALIAS_GLSL_BASIC]; // woods #shadowglsl
+	if (glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones || !lerpdata.bonestate))
+	{
+		GL_DrawAliasShadow_GLSL (glsl, paliashdr, lerpdata, e, shadowalpha);
+	}
+	else
+	{
+		glDisable (GL_TEXTURE_2D);
+		shading = false;
+		glColor4f(0,0,0,shadowalpha);
+		GL_DrawAliasFrame (paliashdr, lerpdata);
+		glEnable (GL_TEXTURE_2D);
+	}
 	glDisable (GL_BLEND);
 	glDepthMask(GL_TRUE);
 
