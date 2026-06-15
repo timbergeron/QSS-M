@@ -299,6 +299,18 @@ void R_DrawBrushModel_ShowTris (entity_t *e)
 =============================================================
 */
 
+// woods #lmbands -- shared by all three dynamic-lightmap dirty paths
+// (R_RenderDynamicLightmaps here, plus the bmodel-drawcache and scenecache copies
+// in r_world.c). Marks every 1/64th-height band the surface's rows fall in.
+void R_LightmapMarkDirtyBands (struct lightmap_s *lm, int light_t, int tmax)
+{
+	int bandheight = (LMBLOCK_HEIGHT + 63) >> 6;
+	int b0 = light_t / bandheight;
+	int b1 = (light_t + tmax - 1) / bandheight;
+	for (; b0 <= b1; b0++)
+		lm->dirtybands |= 1ull << b0;
+}
+
 /*
 ================
 R_RenderDynamicLightmaps
@@ -349,6 +361,7 @@ dynamic:
 				theRect->w = (fa->light_s-theRect->l)+smax;
 			if ((theRect->h + theRect->t) < (fa->light_t + tmax))
 				theRect->h = (fa->light_t-theRect->t)+tmax;
+			R_LightmapMarkDirtyBands (lm, fa->light_t, tmax); // woods #lmbands
 			base = lm->pbodata;
 			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
 			R_BuildLightMap (model, fa, base, LMBLOCK_WIDTH*lightmap_bytes, currententity, r_framecount, cl_dlights);
@@ -518,6 +531,7 @@ int AllocBlock (int w, int h, int *x, int *y)
 			lightmaps[texnum].rectchange.t = 0;
 			lightmaps[texnum].rectchange.h = LMBLOCK_HEIGHT;
 			lightmaps[texnum].rectchange.w = LMBLOCK_WIDTH;
+			lightmaps[texnum].dirtybands = ~0ull; // woods #lmbands
 		}
 		best = LMBLOCK_HEIGHT;
 		bestx = -1;
@@ -1098,6 +1112,7 @@ void GL_BuildLightmaps (void)
 		lm->rectchange.t = LMBLOCK_HEIGHT;
 		lm->rectchange.w = 0;
 		lm->rectchange.h = 0;
+		lm->dirtybands = 0; // woods #lmbands
 
 		//johnfitz -- use texture manager
 		sprintf(name, "lightmap%07i",i);
@@ -1609,41 +1624,96 @@ R_UploadLightmap -- johnfitz -- uploads the modified lightmap to opengl if neces
 assumes lightmap texture is already bound
 ===============
 */
+static void R_UploadLightmapRows (struct lightmap_s *lm, int t, int h) // woods #lmbands
+{
+	const byte *src = lm->pbohandle ? (byte*)NULL : lm->pbodata; // PBO path uploads from a buffer offset
+	src += (size_t)t*LMBLOCK_WIDTH*lightmap_bytes;
+
+	if (gl_lightmap_format == GL_RGB9_E5)
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, t, LMBLOCK_WIDTH, h, GL_RGB,
+				GL_UNSIGNED_INT_5_9_9_9_REV, src);
+	else if (gl_lightmap_format == GL_RGB10_A2)
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, t, LMBLOCK_WIDTH, h, GL_RGBA,
+				GL_UNSIGNED_INT_10_10_10_2, src);
+	else
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, t, LMBLOCK_WIDTH, h, gl_lightmap_format,
+				GL_UNSIGNED_BYTE, src);
+}
+
+// woods #lmbands -- past this many separate dirty runs, one merged upload
+// covering the whole dirty span beats issuing a glTexSubImage2D per run (each
+// is a driver round-trip; on Apple's GL-on-Metal it's a sync flush).
+#define LM_MAX_UPLOAD_RUNS 4
+
 static void R_UploadLightmap(int lmap)
 {
 	struct lightmap_s *lm = &lightmaps[lmap];
+	int bandheight, b, b0; // woods #lmbands
+	int runs, lo, hi;
+	unsigned long long bands;
 
 	if (!lm->modified)
 		return;
 
 	lm->modified = false;
 
-	if (lm->pbohandle)
+	bands = lm->dirtybands;
+	bandheight = (LMBLOCK_HEIGHT + 63) >> 6;
+
+	// woods #lmbands -- count contiguous runs and the dirty bounding span first,
+	// so we can collapse a heavily-fragmented mask into a single upload
+	runs = 0; lo = 64; hi = -1;
+	for (b = 0; b < 64; b++)
 	{
+		if (!((bands >> b) & 1))
+			continue;
+		if (b < lo) lo = b;
+		hi = b;
+		if (b == 0 || !((bands >> (b-1)) & 1))
+			runs++;
+	}
+	if (hi < 0)
+	{
+		lm->dirtybands = 0;
+		return; // nothing dirty (modified flag without bands; shouldn't happen)
+	}
+
+	if (lm->pbohandle)
 		GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, lm->pbohandle);
-		if (gl_lightmap_format == GL_RGB9_E5)
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, GL_RGB,
-					GL_UNSIGNED_INT_5_9_9_9_REV, (byte*)NULL+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
-		else if (gl_lightmap_format == GL_RGB10_A2)
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, GL_RGBA,
-					GL_UNSIGNED_INT_10_10_10_2, (byte*)NULL+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
-		else
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, gl_lightmap_format,
-					GL_UNSIGNED_BYTE, (byte*)NULL+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
-		GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+
+	if (runs > LM_MAX_UPLOAD_RUNS)
+	{
+		// merged: one upload spanning [lo..hi]
+		int t = lo*bandheight;
+		int h = q_min((hi+1)*bandheight, LMBLOCK_HEIGHT) - t;
+		if (h > 0)
+			R_UploadLightmapRows(lm, t, h);
 	}
 	else
 	{
-		if (gl_lightmap_format == GL_RGB9_E5)
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, GL_RGB,
-					GL_UNSIGNED_INT_5_9_9_9_REV, lm->pbodata+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
-		else if (gl_lightmap_format == GL_RGB10_A2)
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, GL_RGBA,
-					GL_UNSIGNED_INT_10_10_10_2, lm->pbodata+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
-		else
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, lm->rectchange.t, LMBLOCK_WIDTH, lm->rectchange.h, gl_lightmap_format,
-					GL_UNSIGNED_BYTE, lm->pbodata+lm->rectchange.t*LMBLOCK_WIDTH*lightmap_bytes);
+		// upload each contiguous run of dirty bands separately
+		for (b = lo; b <= hi; )
+		{
+			int t, h;
+			if (!((bands >> b) & 1))
+			{
+				b++;
+				continue;
+			}
+			b0 = b;
+			while (b <= hi && ((bands >> b) & 1))
+				b++;
+			t = b0*bandheight;
+			h = q_min(b*bandheight, LMBLOCK_HEIGHT) - t;
+			if (h > 0)
+				R_UploadLightmapRows(lm, t, h);
+		}
 	}
+
+	if (lm->pbohandle)
+		GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+
+	lm->dirtybands = 0;
 	lm->rectchange.l = LMBLOCK_WIDTH;
 	lm->rectchange.t = LMBLOCK_HEIGHT;
 	lm->rectchange.h = 0;
@@ -1692,6 +1762,7 @@ void R_UploadLightmaps (void)
 			lightmaps[lmap].rectchange.t = LMBLOCK_HEIGHT;
 			lightmaps[lmap].rectchange.h = 0;
 			lightmaps[lmap].rectchange.w = 0;
+			lightmaps[lmap].dirtybands = 0; // woods #lmbands
 		}
 		else
 		{
@@ -1788,6 +1859,7 @@ void R_RebuildAllLightmaps (void)
 		lightmaps[i].rectchange.t = LMBLOCK_HEIGHT;
 		lightmaps[i].rectchange.h = 0;
 		lightmaps[i].rectchange.w = 0;
+		lightmaps[i].dirtybands = 0; // woods #lmbands -- whole texture just uploaded
 	}
 }
 

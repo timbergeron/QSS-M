@@ -1135,6 +1135,7 @@ dynamic:
 				theRect->w = (fa->light_s-theRect->l)+smax;
 			if ((theRect->h + theRect->t) < (fa->light_t + tmax))
 				theRect->h = (fa->light_t-theRect->t)+tmax;
+			R_LightmapMarkDirtyBands (lm, fa->light_t, tmax); // woods #lmbands
 			base = lm->pbodata;
 			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
 			R_BuildLightMap (model, fa, base, LMBLOCK_WIDTH*lightmap_bytes, currententity, r_framecount, cl_dlights);
@@ -6046,6 +6047,7 @@ dynamic:
 				theRect->w = (fa->light_s-theRect->l)+smax;
 			if ((theRect->h + theRect->t) < (fa->light_t + tmax))
 				theRect->h = (fa->light_t-theRect->t)+tmax;
+			R_LightmapMarkDirtyBands (lm, fa->light_t, tmax); // woods #lmbands
 			base = lm->pbodata;
 			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
 			R_BuildLightMap (cache->worldmodel, fa, base, LMBLOCK_WIDTH*lightmap_bytes, &r_worldentity, dlightframecount, cache->dlights);
