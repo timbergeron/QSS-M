@@ -4817,6 +4817,7 @@ Mod_SetExtraFlags -- johnfitz -- set up extra flags that aren't in the mdl
 void Mod_SetExtraFlags (qmodel_t *mod)
 {
 	extern cvar_t r_nolerp_list, r_noshadow_list;
+	extern cvar_t r_model_light_desat_list, r_nooutline_list; // woods #desat #routline
 
 	if (!mod)
 		return;
@@ -4832,6 +4833,12 @@ void Mod_SetExtraFlags (qmodel_t *mod)
 		// noshadow flag
 		if (nameInList(r_noshadow_list.string, mod->name))
 			mod->flags |= MOD_NOSHADOW;
+
+		// list memberships the render loop would otherwise re-parse per frame
+		if (nameInList(r_model_light_desat_list.string, mod->name)) // woods #desat
+			mod->flags |= MOD_DESATLISTED;
+		if (nameInList(r_nooutline_list.string, mod->name)) // woods #routline
+			mod->flags |= MOD_NOOUTLINE;
 
 		// fullbright hack (TODO: make this a cvar list)
 		if (!strcmp (mod->name, "progs/flame2.mdl") ||

@@ -583,6 +583,7 @@ void R_Init (void)
     Cvar_RegisterVariable (&r_aliaslightcache);
 	Cvar_RegisterVariable (&r_model_light_desat); // woods #dedat
 	Cvar_RegisterVariable (&r_model_light_desat_list); // woods #dedat
+	Cvar_SetCallback (&r_model_light_desat_list, R_Model_ExtraFlags_List_f); // woods #desat -- keeps MOD_DESATLISTED current
 	Cvar_SetCompletion (&r_model_light_desat_list, &Con_ModelName_List_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&r_lerpmodels);
 	Cvar_RegisterVariable (&r_lerpmove);
@@ -593,6 +594,7 @@ void R_Init (void)
 	Cvar_SetCallback (&r_noshadow_list, R_Model_ExtraFlags_List_f);
 	Cvar_SetCompletion (&r_noshadow_list, &Con_ModelName_List_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable(&r_nooutline_list); // woods #routline
+	Cvar_SetCallback (&r_nooutline_list, R_Model_ExtraFlags_List_f); // woods #routline -- keeps MOD_NOOUTLINE current
 	Cvar_SetCompletion(&r_nooutline_list, &Con_ModelName_List_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable(&r_outline); // woods #routline
 	Cvar_RegisterVariable(&r_player_xray); // woods #routline

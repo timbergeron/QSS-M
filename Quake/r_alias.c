@@ -1200,7 +1200,7 @@ float R_CalculateAliasModelOutlineWidth(aliashdr_t* paliashdr, entity_t* e, lerp
 
 	if (!is_xray && (r_outline.value <= 0 ||
 		cl.viewent.model == e->model ||
-		nameInList(r_nooutline_list.string, e->model->name)))
+		(e->model->flags & MOD_NOOUTLINE)))
 		return 0.0f;
 
 	qboolean isMD5Model = false;
@@ -1377,7 +1377,7 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 
 	if (!is_xray && !(r_outline.value > 0 &&
 		!(cl.viewent.model == e->model) &&
-		!(nameInList(r_nooutline_list.string, e->model->name))))
+		!(e->model->flags & MOD_NOOUTLINE)))
 		return;
 
 	if (!strcmp(e->model->name, "progs/eyes.mdl"))
@@ -2822,7 +2822,7 @@ void R_SetupAliasLighting (entity_t	*e)
 		if (r_model_light_desat.value && e->model)
 		{
 			int desat_val = (int)r_model_light_desat.value;
-			qboolean listed = nameInList(r_model_light_desat_list.string, e->model->name);
+			qboolean listed = !!(e->model->flags & MOD_DESATLISTED);
 
 			/*  +1 / +2 → only models in list
 			 *  -1 / -2 → list OR the view-model                              */

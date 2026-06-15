@@ -467,6 +467,9 @@ typedef enum {mod_brush, mod_sprite, mod_alias, mod_ext_invalid} modtype_t;
 #define MOD_EMITFORWARDS 4096	//particle effect is emitted forwards, rather than downwards. why down? good question.
 //spike
 #define MOD_HDRLIGHTING (1u<<13)	//spike -- light samples are in e5bgr9 format. int aligned.
+//woods -- precomputed list memberships so the render loop doesn't re-parse list cvars per entity per frame
+#define MOD_DESATLISTED	(1u<<15)	//model is on r_models_light_desat_list
+#define MOD_NOOUTLINE	(1u<<16)	//model is on r_nooutline_list
 
 typedef struct qmodel_s
 {
