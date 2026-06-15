@@ -2993,6 +2993,10 @@ Load/Save Menu
 int		load_cursor;		// 0 < load_cursor < MAX_SAVEGAMES
 
 #define	MAX_SAVEGAMES		20	/* johnfitz -- increased from 12 */
+#define	SAVEGAME_KILLS_COLUMN		22	/* Host_SavegameComment puts "kills:" at this column. */
+#define	SAVEGAME_MENU_COMMENT_CHARS	79
+#define	SAVEGAME_MENU_COMMENT_BUFFER	(SAVEGAME_MENU_COMMENT_CHARS + 1)
+#define	SAVEGAME_MENU_COMMENT_SCAN	"%" QS_STRINGIFY(SAVEGAME_MENU_COMMENT_CHARS) "s\n"
 char	m_filenames[MAX_SAVEGAMES][SAVEGAME_COMMENT_LENGTH+1];
 int		loadable[MAX_SAVEGAMES];
 
@@ -3015,17 +3019,71 @@ static int save_compare(const void* a, const void* b) // Comparison function for
 	// Sort loadable saves first, then by timestamp (newest first)
 	if (sa->loadable != sb->loadable)
 		return sb->loadable - sa->loadable;
-	return (sb->timestamp - sa->timestamp);
+	if (sa->timestamp < sb->timestamp)
+		return 1;
+	if (sa->timestamp > sb->timestamp)
+		return -1;
+	return 0;
+}
+
+static void M_NormalizeSavegameComment (char display[SAVEGAME_COMMENT_LENGTH + 1], const char *comment)
+{
+	char	text[SAVEGAME_MENU_COMMENT_BUFFER];
+	char	*kills;
+	char	*slash;
+	char	*title_end;
+	size_t	title_len;
+	int	j;
+
+	q_strlcpy(text, comment, sizeof(text));
+	for (j = 0; text[j]; j++)
+	{
+		if (text[j] == '_')
+			text[j] = ' ';
+	}
+
+	memset(display, ' ', SAVEGAME_COMMENT_LENGTH);
+	display[SAVEGAME_COMMENT_LENGTH] = '\0';
+
+	kills = strstr(text, "kills:");
+	if (!kills)
+	{
+		q_strlcpy(display, text, SAVEGAME_COMMENT_LENGTH + 1);
+		return;
+	}
+
+	title_end = kills;
+	while (title_end > text && title_end[-1] == ' ')
+		title_end--;
+
+	title_len = (size_t)(title_end - text);
+	if (title_len > SAVEGAME_KILLS_COLUMN)
+		title_len = SAVEGAME_KILLS_COLUMN;
+	memcpy(display, text, title_len);
+	q_strlcpy(display + SAVEGAME_KILLS_COLUMN, kills, SAVEGAME_COMMENT_LENGTH - SAVEGAME_KILLS_COLUMN + 1);
+
+	// Fix the kills pattern - handle both single and double spaces after slash.
+	slash = strchr(display + SAVEGAME_KILLS_COLUMN, '/');
+	if (slash && slash[1] == ' ')
+	{
+		if (slash[2] == ' ')
+			memmove(slash + 1, slash + 3, strlen(slash + 3) + 1);
+		else
+			memmove(slash + 1, slash + 2, strlen(slash + 2) + 1);
+	}
 }
 
 void M_ScanSaves (void)
 {
 	int	i, j;
 	char	name[MAX_OSPATH];
+	char	comment[SAVEGAME_MENU_COMMENT_BUFFER];
 	FILE	*f;
 	int	version;
 	float time;
 	char mapname[MAX_QPATH];
+	char saved_gamedir[MAX_QPATH];
+	qboolean remaster_save;
 #ifdef _WIN32
 	struct _stat st;
 #else
@@ -3071,10 +3129,26 @@ void M_ScanSaves (void)
 			}
 		}
 
-		// Read version and name
-		if (fscanf (f, "%i\n", &version) != 1 || // woods
-			fscanf (f, "%79s\n", name) != 1)
+		// Read version and comment. Kex rerelease saves include a gamedir line after the version.
+		saved_gamedir[0] = '\0';
+		if (fscanf (f, "%i\n", &version) != 1 ||
+			(version != SAVEGAME_VERSION && version != SAVEGAME_VERSION_KEX))
 		{
+			fclose(f);
+			continue;
+		}
+		remaster_save = (version == SAVEGAME_VERSION_KEX);
+		if ((remaster_save && fscanf (f, "%63s\n", saved_gamedir) != 1) ||
+			fscanf (f, SAVEGAME_MENU_COMMENT_SCAN, comment) != 1)
+		{
+			fclose(f);
+			continue;
+		}
+
+		if (remaster_save && !COM_GameDirMatches(saved_gamedir))
+		{
+			q_snprintf(save_entries[i].name, sizeof(save_entries[i].name),
+				"wrong gamedir: %s", saved_gamedir[0] ? saved_gamedir : "(unknown)");
 			fclose(f);
 			continue;
 		}
@@ -3104,28 +3178,7 @@ void M_ScanSaves (void)
 			q_strlcpy (save_entries[i].mapname, mapname, sizeof(save_entries[i].mapname));
 		}
 
-		q_strlcpy (save_entries[i].name, name, SAVEGAME_COMMENT_LENGTH + 1);
-
-	// change _ back to space
-		for (j = 0; j < SAVEGAME_COMMENT_LENGTH; j++)
-		{
-			if (save_entries[i].name[j] == '_')
-				save_entries[i].name[j] = ' ';
-		}
-
-		// Fix the kills pattern - handle both single and double spaces after slash
-		char* kills = strstr(save_entries[i].name, "kills:");
-		if (kills)
-		{
-			char* slash = strchr(kills, '/');
-			if (slash && slash[1] == ' ')
-			{
-				if (slash[2] == ' ')  // Double space case
-					memmove(slash + 1, slash + 3, strlen(slash + 3) + 1);
-				else  // Single space case
-					memmove(slash + 1, slash + 2, strlen(slash + 2) + 1);
-	}
-}
+		M_NormalizeSavegameComment(save_entries[i].name, comment);
 
 		save_entries[i].loadable = true;
 		fclose(f);

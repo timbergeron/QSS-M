@@ -892,7 +892,7 @@ void ED_WriteGlobals (FILE *f)
 ED_ParseGlobals
 =============
 */
-const char *ED_ParseGlobals (const char *data)
+const char *ED_ParseGlobals (const char *data, qboolean quiet_unknowns)
 {
 	char	keyname[64];
 	ddef_t	*key;
@@ -919,7 +919,10 @@ const char *ED_ParseGlobals (const char *data)
 		key = ED_FindGlobal (keyname);
 		if (!key)
 		{
-			Con_Printf ("'%s' is not a global\n", keyname);
+			if (quiet_unknowns)
+				Con_DPrintf ("'%s' is not a global\n", keyname);
+			else
+				Con_Printf ("'%s' is not a global\n", keyname);
 			continue;
 		}
 

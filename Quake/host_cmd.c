@@ -7815,7 +7815,6 @@ LOAD / SAVE GAME
 ===============================================================================
 */
 
-#define	SAVEGAME_VERSION	5
 #define	SAVEGAME_EXTENDED_HEADER	"// QuakeSpasm extended savegame"
 
 /*
@@ -8108,8 +8107,11 @@ static void Host_Loadgame_f (void)
 	char	name[MAX_OSPATH];
 	char	relname[MAX_OSPATH]; // woods #autoload (iw)
 	char	mapname[MAX_QPATH];
+	char	saved_gamedir[MAX_QPATH];
+	char	current_gamedir[MAX_OSPATH];
 	float	time, tfloat;
 	const char	*data;
+	const char	*game;
 	int	i;
 	edict_t	*ent;
 	int	entnum;
@@ -8170,7 +8172,29 @@ static void Host_Loadgame_f (void)
 
 	data = start;
 	data = COM_ParseIntNewline (data, &version);
-	if (version != SAVEGAME_VERSION)
+	if (version == SAVEGAME_VERSION_KEX)
+	{
+		data = COM_ParseStringNewline (data);	// Kex rerelease saves store the gamedir after the version.
+		q_strlcpy(saved_gamedir, com_token, sizeof(saved_gamedir));
+		if (!COM_GameDirMatches(saved_gamedir))
+		{
+			game = COM_GetGameNames(false);
+			if (!*game)
+				game = COM_GetGameNames(true);
+			q_strlcpy(current_gamedir, game, sizeof(current_gamedir));
+
+			free (start);
+			start = NULL;
+			Con_Printf("ERROR: save is for gamedir \"%s\", current gamedir is \"%s\".\n",
+				saved_gamedir[0] ? saved_gamedir : "(unknown)", current_gamedir);
+			Con_Printf("Use \"game %s\" before loading this save.\n",
+				saved_gamedir[0] ? saved_gamedir : GAMENAME);
+			SCR_EndLoadingPlaque ();
+			return;
+		}
+		Con_SafePrintf("Loading remaster save.\n");
+	}
+	else if (version != SAVEGAME_VERSION)
 	{
 		free (start);
 		start = NULL;
@@ -8320,7 +8344,7 @@ static void Host_Loadgame_f (void)
 
 		if (entnum == -1)
 		{	// parse the global vars
-			data = ED_ParseGlobals (data);
+			data = ED_ParseGlobals (data, version == SAVEGAME_VERSION_KEX);
 		}
 		else
 		{	// parse an edict

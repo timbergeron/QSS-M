@@ -128,6 +128,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define	MAX_SOUNDS			2048	// johnfitz -- was 256
 #define	MAX_PARTICLETYPES	2048
 
+#define	SAVEGAME_VERSION		5
+#define	SAVEGAME_VERSION_KEX	6
 #define	SAVEGAME_COMMENT_LENGTH	39
 
 #define	MAX_LIGHTSTYLES_VANILLA	64
