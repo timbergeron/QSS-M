@@ -30,6 +30,7 @@ extern cvar_t r_coloredpowerupglow; // woods
 extern cvar_t r_model_light_desat; // woods - #desat
 extern cvar_t r_model_light_desat_list; // woods - #desat
 extern cvar_t r_outline; // woods #obmodelslist #routline
+extern cvar_t r_outline_minpixels; // woods #routline
 extern cvar_t r_nooutline_list; // woods #routline
 extern cvar_t r_player_xray; // woods #routline
 
@@ -1418,6 +1419,29 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 
 	if (outlineWidth <= 0.0f)
 		return;
+
+	// woods #routline -- skip the extra outline draw when it would project to less
+	// than r_outline_minpixels on screen. The outline expands the silhouette by
+	// outlineWidth world units; a world length L at view-space depth d covers
+	// L*vrect.height/(2*d*tan(fovy/2)) pixels. Sub-pixel outlines are invisible but
+	// still cost a full second pass per entity -- a big deal in detail-dense maps
+	// at open vistas. Use the lerped render origin and the forward-axis depth (vpn)
+	// rather than Euclidean distance so peripheral entities aren't over-culled.
+	// Never culls xray (a see-through-walls highlight that must show at any size).
+	if (!is_xray && r_outline_minpixels.value > 0.0f)
+	{
+		vec3_t delta;
+		float depth, tanHalfFov;
+		VectorSubtract (lerpdata->origin, r_refdef.vieworg, delta);
+		depth = DotProduct (delta, vpn);
+		tanHalfFov = tan (DEG2RAD (r_refdef.fov_y) * 0.5f);
+		if (depth > 1.0f && tanHalfFov > 0.0f)
+		{
+			float px = outlineWidth * (float)r_refdef.vrect.height / (2.0f * depth * tanHalfFov);
+			if (px < r_outline_minpixels.value)
+				return;
+		}
+	}
 
 	// Fade out outline as view enters entity bounds (noclip/fly only)
 	float boundsFade = 1.0f;

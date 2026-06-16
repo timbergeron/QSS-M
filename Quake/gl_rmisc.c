@@ -51,6 +51,7 @@ extern cvar_t r_nolerp_list;
 extern cvar_t r_noshadow_list;
 extern cvar_t r_nooutline_list; // woods #routline
 extern cvar_t r_outline; // woods #routline
+extern cvar_t r_outline_minpixels; // woods #routline
 extern cvar_t r_player_xray; // woods #routline
 #ifdef MACBOOK_ARM_HACK // woods #collinear
 extern cvar_t r_remove_collinear_vertices;
@@ -597,6 +598,7 @@ void R_Init (void)
 	Cvar_SetCallback (&r_nooutline_list, R_Model_ExtraFlags_List_f); // woods #routline -- keeps MOD_NOOUTLINE current
 	Cvar_SetCompletion(&r_nooutline_list, &Con_ModelName_List_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable(&r_outline); // woods #routline
+	Cvar_RegisterVariable(&r_outline_minpixels); // woods #routline
 	Cvar_RegisterVariable(&r_player_xray); // woods #routline
 	Cvar_SetCompletion (&r_player_xray, &R_Player_Xray_Completion_f); // woods #iwtabcomplete
 #ifdef MACBOOK_ARM_HACK // woods #collinear
