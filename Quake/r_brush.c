@@ -1626,8 +1626,10 @@ assumes lightmap texture is already bound
 */
 static void R_UploadLightmapRows (struct lightmap_s *lm, int t, int h) // woods #lmbands
 {
-	const byte *src = lm->pbohandle ? (byte*)NULL : lm->pbodata; // PBO path uploads from a buffer offset
-	src += (size_t)t*LMBLOCK_WIDTH*lightmap_bytes;
+	size_t offset = (size_t)t*LMBLOCK_WIDTH*lightmap_bytes;
+	// PBO path: src is a byte offset into the bound buffer; non-PBO: a client pointer
+	const GLvoid *src = lm->pbohandle ? (const GLvoid*)(uintptr_t)offset
+									  : (const GLvoid*)(lm->pbodata + offset);
 
 	if (gl_lightmap_format == GL_RGB9_E5)
 		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, t, LMBLOCK_WIDTH, h, GL_RGB,
@@ -1642,8 +1644,14 @@ static void R_UploadLightmapRows (struct lightmap_s *lm, int t, int h) // woods 
 
 // woods #lmbands -- past this many separate dirty runs, one merged upload
 // covering the whole dirty span beats issuing a glTexSubImage2D per run (each
-// is a driver round-trip; on Apple's GL-on-Metal it's a sync flush).
+// is a driver round-trip; on Apple's GL-on-Metal it's a sync flush). On Apple
+// the per-call sync flush dominates the extra bytes, so always merge (0); on
+// async drivers fewer uploaded bytes win, so only merge heavy fragmentation.
+#ifdef __APPLE__
+#define LM_MAX_UPLOAD_RUNS 0
+#else
 #define LM_MAX_UPLOAD_RUNS 4
+#endif
 
 static void R_UploadLightmap(int lmap)
 {
