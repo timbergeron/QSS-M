@@ -25072,6 +25072,224 @@ static void ServerList_CopyTrimmedToken(const char* start, size_t len, char* out
 	out[len] = 0;
 }
 
+static int ServerList_HexValue(int c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c + (10 - 'a');
+	if (c >= 'A' && c <= 'F')
+		return c + (10 - 'A');
+	return -1;
+}
+
+static qboolean ServerList_ReadUtf8CodePoint(const unsigned char* src, uint32_t* codepoint, int* bytes)
+{
+	uint32_t c;
+
+	if (!src || !*src || !codepoint || !bytes)
+		return false;
+
+	if (src[0] < 0x80)
+	{
+		*codepoint = src[0];
+		*bytes = 1;
+		return true;
+	}
+
+	if ((src[0] & 0xe0) == 0xc0 && src[1] &&
+		(src[1] & 0xc0) == 0x80)
+	{
+		c = ((uint32_t)(src[0] & 0x1f) << 6) |
+			(uint32_t)(src[1] & 0x3f);
+		if (c >= 0x80)
+		{
+			*codepoint = c;
+			*bytes = 2;
+			return true;
+		}
+	}
+
+	if ((src[0] & 0xf0) == 0xe0 && src[1] && src[2] &&
+		(src[1] & 0xc0) == 0x80 &&
+		(src[2] & 0xc0) == 0x80)
+	{
+		c = ((uint32_t)(src[0] & 0x0f) << 12) |
+			((uint32_t)(src[1] & 0x3f) << 6) |
+			(uint32_t)(src[2] & 0x3f);
+		if (c >= 0x800)
+		{
+			*codepoint = c;
+			*bytes = 3;
+			return true;
+		}
+	}
+
+	if ((src[0] & 0xf8) == 0xf0 && src[1] && src[2] && src[3] &&
+		(src[1] & 0xc0) == 0x80 &&
+		(src[2] & 0xc0) == 0x80 &&
+		(src[3] & 0xc0) == 0x80)
+	{
+		c = ((uint32_t)(src[0] & 0x07) << 18) |
+			((uint32_t)(src[1] & 0x3f) << 12) |
+			((uint32_t)(src[2] & 0x3f) << 6) |
+			(uint32_t)(src[3] & 0x3f);
+		if (c >= 0x10000 && c < 0x110000)
+		{
+			*codepoint = c;
+			*bytes = 4;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void ServerList_AppendPlainQuakeChar(char** out, char* end, int ch)
+{
+	unsigned char plain;
+
+	if (*out >= end)
+		return;
+
+	if (ch == '\t' || ch == '\n' || ch == '\r')
+		ch = ' ';
+
+	plain = (unsigned char)dequake[(unsigned char)ch];
+	if (!q_isprint(plain))
+		plain = ' ';
+
+	*(*out)++ = (char)plain;
+}
+
+static void ServerList_AppendPlainCodePoint(char** out, char* end, uint32_t codepoint)
+{
+	if (codepoint >= 0xe000 && codepoint <= 0xe0ff)
+		ServerList_AppendPlainQuakeChar(out, end, codepoint & 0xff);
+	else if (codepoint >= 0x20 && codepoint <= 0x7e)
+		ServerList_AppendPlainQuakeChar(out, end, (int)codepoint);
+	else if (codepoint == '\t' || codepoint == '\n' || codepoint == '\r')
+		ServerList_AppendPlainQuakeChar(out, end, ' ');
+	else
+		ServerList_AppendPlainQuakeChar(out, end, '?');
+}
+
+static qboolean ServerList_ParseCaretCodePoint(const unsigned char** src, uint32_t* codepoint)
+{
+	const unsigned char* s = *src;
+	int c;
+
+	if (s[1] == 'U' &&
+		q_isxdigit(s[2]) && q_isxdigit(s[3]) &&
+		q_isxdigit(s[4]) && q_isxdigit(s[5]))
+	{
+		*codepoint = (ServerList_HexValue(s[2]) << 12) |
+			(ServerList_HexValue(s[3]) << 8) |
+			(ServerList_HexValue(s[4]) << 4) |
+			ServerList_HexValue(s[5]);
+		*src += 6;
+		return true;
+	}
+
+	if (s[1] != '{')
+		return false;
+
+	s += 2;
+	c = 0;
+	while (*s && *s != '}')
+	{
+		int hex = ServerList_HexValue(*s);
+		if (hex < 0)
+			return false;
+		c = (c << 4) | hex;
+		s++;
+	}
+
+	if (*s != '}')
+		return false;
+
+	*codepoint = (uint32_t)c;
+	*src = s + 1;
+	return true;
+}
+
+static void ServerList_CopyDisplayText(const char* src, char* dst, size_t dstsize)
+{
+	const unsigned char* in = (const unsigned char*)src;
+	char* out = dst;
+	char* end;
+
+	if (!dstsize)
+		return;
+	dst[0] = 0;
+	if (!src)
+		return;
+
+	end = dst + dstsize - 1;
+	while (*in && out < end)
+	{
+		uint32_t codepoint;
+		int bytes;
+
+		if (in[0] == '^' && in[1])
+		{
+			const unsigned char* caret = in;
+
+			if (in[1] == '^')
+			{
+				ServerList_AppendPlainQuakeChar(&out, end, '^');
+				in += 2;
+				continue;
+			}
+
+			if ((in[1] >= '0' && in[1] <= '9') ||
+				in[1] == 'h' || in[1] == 'b' ||
+				in[1] == 'd' || in[1] == 's' ||
+				in[1] == 'r' || in[1] == 'a' ||
+				in[1] == 'm' || in[1] == 'g')
+			{
+				in += 2;
+				continue;
+			}
+
+			if (in[1] == 'x' &&
+				q_isxdigit(in[2]) && q_isxdigit(in[3]) && q_isxdigit(in[4]))
+			{
+				in += 5;
+				continue;
+			}
+
+			if (in[1] == '&' &&
+				(q_isxdigit(in[2]) || in[2] == '-') &&
+				(q_isxdigit(in[3]) || in[3] == '-'))
+			{
+				in += 4;
+				continue;
+			}
+
+			if (ServerList_ParseCaretCodePoint(&caret, &codepoint))
+			{
+				ServerList_AppendPlainCodePoint(&out, end, codepoint);
+				in = caret;
+				continue;
+			}
+		}
+
+		if (ServerList_ReadUtf8CodePoint(in, &codepoint, &bytes))
+		{
+			ServerList_AppendPlainCodePoint(&out, end, codepoint);
+			in += bytes;
+		}
+		else
+		{
+			ServerList_AppendPlainQuakeChar(&out, end, *in);
+			in++;
+		}
+	}
+
+	*out = 0;
+}
+
 static void ServerList_GetBaseName(const char* name, char* out, size_t outsize)
 {
 	if (!name)
@@ -25378,7 +25596,6 @@ static qboolean ServerList_CreateHostCacheItem(size_t index, servertitem_t* item
 	const char* serverIP;
 	const char* map;
 	char serverNameBuf[64];
-	unsigned char* ch;
 
 	if (!item)
 		return false;
@@ -25391,9 +25608,7 @@ static qboolean ServerList_CreateHostCacheItem(size_t index, servertitem_t* item
 
 	if (!serverName)
 		serverName = "";
-	q_strlcpy(serverNameBuf, serverName, sizeof(serverNameBuf));
-	for (ch = (unsigned char*)serverNameBuf; *ch; ch++)
-		*ch = dequake[*ch];
+	ServerList_CopyDisplayText(serverName, serverNameBuf, sizeof(serverNameBuf));
 
 	if (!serverNameBuf[0] || ServerList_IsIgnored(serverNameBuf, serverIP))
 		return false;
@@ -25878,6 +26093,8 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 		const double* port = JSON_FindNumber(serverEntry, "port");
 		const char* timestamp = JSON_FindString(serverEntry, "timestamp");
 		const char* lastQuery = JSON_FindString(serverEntry, "lastQuery");
+		char displayName[256];
+		char displayMap[64];
 
 		const jsonentry_t* playersArray = JSON_Find(serverEntry, "players", JSON_ARRAY);
 
@@ -25892,9 +26109,13 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 				const char* pname = JSON_FindString(playerEntry, "name");
 				if (pname && pname[0])
 				{
+					char playerName[128];
 					// trim trailing spaces
-					int plen = (int)strlen(pname);
-					while (plen > 0 && pname[plen - 1] == ' ')
+					int plen;
+
+					ServerList_CopyDisplayText(pname, playerName, sizeof(playerName));
+					plen = (int)strlen(playerName);
+					while (plen > 0 && playerName[plen - 1] == ' ')
 						plen--;
 					if (plen > 0 && playerNamesLen + plen + 2 < (int)sizeof(playerNames))
 					{
@@ -25903,7 +26124,7 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 							playerNames[playerNamesLen++] = ',';
 							playerNames[playerNamesLen++] = ' ';
 						}
-						memcpy(playerNames + playerNamesLen, pname, plen);
+						memcpy(playerNames + playerNamesLen, playerName, plen);
 						playerNamesLen += plen;
 						playerNames[playerNamesLen] = '\0';
 					}
@@ -25916,6 +26137,12 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 		setStatusFlagBasedOnTimestamp(timestamp, lastQuery, &status);
 
 		if (!status || !name || !address || !port || !gameId || (*gameId != 0 && (*gameId != 5 || !parameters || !strstr(parameters, "fte")))) continue; // Skip if essential info is missing or server is down
+		ServerList_CopyDisplayText(name, displayName, sizeof(displayName));
+		ServerList_CopyDisplayText(map ? map : "Unknown", displayMap, sizeof(displayMap));
+		if (!displayName[0])
+			q_strlcpy(displayName, "Unknown", sizeof(displayName));
+		if (!displayMap[0])
+			q_strlcpy(displayMap, "Unknown", sizeof(displayMap));
 
 		servertitem_t* resizedItems = realloc(*items, sizeof(servertitem_t) * (*actualServerCount + 1));
 		if (!resizedItems) {
@@ -25951,19 +26178,19 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 		else
 			q_snprintf(addressWithPort, addressLength, "%s:%d", address, (int)*port);
 
-		if (ServerList_IsIgnored(name, addressWithPort))
+		if (ServerList_IsIgnored(displayName, addressWithPort))
 		{
 			free(addressWithPort);
 			continue;
 		}
 
 		servertitem_t* newItem = &(*items)[*actualServerCount];
-		newItem->name = strdup(name ? name : "Unknown");
+		newItem->name = strdup(displayName);
                 newItem->ip = strdup(addressWithPort);
                 free(addressWithPort);
 		newItem->users = numPlayers;
 		newItem->maxusers = maxPlayers ? (int)*maxPlayers : 0;
-		newItem->map = strdup(map ? map : "Unknown");
+		newItem->map = strdup(displayMap);
 		newItem->players = playerNamesLen > 0 ? strdup(playerNames) : NULL;
 		newItem->active = true;
 		newItem->ping = -1;
