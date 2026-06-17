@@ -5685,8 +5685,8 @@ void CL_Tracepos_f (void)
 {
 	vec3_t	v, w;
 
-	if (cls.state != ca_connected)
-		return;
+	if (cls.state != ca_connected || cls.signon < SIGNONS || !cl.worldmodel)
+		return;	// TraceLine needs a spawned world (ca_connected can be mid-signon)
 
 	VectorMA(r_refdef.vieworg, 8192.0, vpn, v);
 	TraceLine(r_refdef.vieworg, v, 0, w);

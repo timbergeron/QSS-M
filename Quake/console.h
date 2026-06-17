@@ -82,6 +82,7 @@ const char *Con_DequakePartial (const char *partial, char *dst, size_t dstsize);
 void Con_AddNameToTabList (const char *name, const char *partial, const char *match_partial); // woods -- add a player/history name to the tab list
 qboolean Con_Match (const char* str, const char* partial); // woods #iwtabcomplete
 void Con_LogCenterPrint (const char *str);
+void Con_UpdateCenterPrint (void);	// woods #centerlog -- main-thread flush of a deferred centerprint
 
 qboolean QWMapList_LoadOnce (void);
 void QWMapList_Reload (void);

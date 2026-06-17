@@ -2052,6 +2052,8 @@ void _Host_Frame (double time)
 	Cbuf_Execute ();
 	CL_ConnectFrame();
 
+	Con_UpdateCenterPrint ();	// woods #centerlog -- flush deferred centerprint (main thread)
+
 	NET_Poll();
 	NET_PortPingProbe_Frame();
 	URI_Frame(); // woods #uri

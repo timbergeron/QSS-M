@@ -2716,7 +2716,6 @@ static int con_centerprint_start = -1;
 static int con_centerprint_end = -1;
 static qboolean centerprint_pending = false;
 static char centerprint_pending_text[MAXPRINTMSG];
-static SDL_TimerID centerprint_timer_id = 0;
 
 /*
 ================
@@ -2770,31 +2769,24 @@ static void Con_ExecuteCenterPrint(const char* str)
 		}
 	}
 
-	// Clean up timer when centerprint is executed
-	if (centerprint_timer_id)
-	{
-		SDL_RemoveTimer(centerprint_timer_id);
-		centerprint_timer_id = 0;
-	}
 	centerprint_pending = false;
 }
 
 /*
 ================
-CenterPrint_TimerCallback -- Check if notifications have cleared - woods #centerlog
+Con_UpdateCenterPrint -- main-thread poll for a deferred centerprint - woods #centerlog
+Runs once per frame on the MAIN thread. This must never be driven from an SDL timer
+thread: Con_ExecuteCenterPrint -> Con_Printf can reach SCR_UpdateScreen/OpenGL, and GL
+calls off the main thread crash (EXC_BAD_ACCESS in glMatrixMode).
 ================
 */
-static Uint32 CenterPrint_TimerCallback(Uint32 interval, void* param)
+void Con_UpdateCenterPrint(void)
 {
-	if (!centerprint_pending)  // Add early exit
-		return 0;
+	if (!centerprint_pending)
+		return;
 
 	if (!Con_HasActiveNotifications())
-	{
 		Con_ExecuteCenterPrint(centerprint_pending_text);
-		return 0;  // Don't repeat
-	}
-	return 100;  // Check again in 100ms
 }
 
 /*
@@ -2819,28 +2811,10 @@ void Con_LogCenterPrint (const char *str)
 	q_strlcpy(centerprint_pending_text, str, sizeof(centerprint_pending_text));
 	centerprint_pending = true;
 
-	// Cancel any existing timer
-	if (centerprint_timer_id)
-	{
-		SDL_RemoveTimer(centerprint_timer_id);
-		centerprint_timer_id = 0;  // Add null assignment
-	}
-
-	// If no notifications are active, print immediately.
+	// If no notifications are active, print immediately; otherwise leave it pending
+	// for Con_UpdateCenterPrint() to flush from the main thread once they clear.
 	if (!Con_HasActiveNotifications())
-	{
 		Con_ExecuteCenterPrint(str);
-	}
-	else
-	{
-		// Start a timer to periodically check if notifications have cleared.
-		centerprint_timer_id = SDL_AddTimer(100, CenterPrint_TimerCallback, NULL);
-		if (!centerprint_timer_id)
-	{
-			// If timer creation fails, fall back to executing immediately.
-			Con_ExecuteCenterPrint(str);
-	}
-}
 }
 
 qboolean Con_IsRedirected(void)

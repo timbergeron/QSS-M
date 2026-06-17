@@ -800,8 +800,8 @@ void R_TimeRefresh_f (void)
 	int		i;
 	float		start, stop, time;
 
-	if (cls.state != ca_connected)
-	{
+	if (cls.state != ca_connected || cls.signon < SIGNONS || !cl.worldmodel)
+	{	// R_RenderView needs a spawned world (ca_connected can be mid-signon)
 		Con_Printf("Not connected to a server\n");
 		return;
 	}
