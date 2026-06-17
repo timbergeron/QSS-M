@@ -553,6 +553,8 @@ void StoreEntityNameAndLocation (void)
             }
         }
         if (!found) {
+            if (nameTrackerCount >= MAX_ENTITIES)
+                continue;
             strncpy(nameTracker[nameTrackerCount].name, originalName, MAX_NAME_LENGTH - 1);
             nameTracker[nameTrackerCount].name[MAX_NAME_LENGTH - 1] = '\0'; // Ensure null termination
             nameTracker[nameTrackerCount].count = 1;
@@ -785,8 +787,9 @@ void TP_AddLoc (const char* locname) // woods #locext
 {
     vec3_t location;
 
-    // We need to be up and running.
-    if (cls.state != ca_connected) {
+    // We need to be up and running with a spawned view entity (matches TP_RemoveLoc_f /
+    // CL_Viewpos_f; ca_connected alone can be a loadgame/signon transient with no valid viewentity).
+    if (cls.state != ca_connected || !cl.entities || cl.viewentity < 1 || cl.viewentity >= cl.num_entities) {
         Con_Printf("need to be active to add a location.\n");
         return;
     }
@@ -804,6 +807,13 @@ static void TP_AddLoc_f (void) // woods #locext
     
     if (Cmd_Argc() == 2 && strcmp(Cmd_Argv(1), "auto") == 0) // check if the user wants to add locations automatically
     {
+        // StoreEntityNameAndLocation() switches to sv.qcvm and walks server edicts, so it needs a live local server
+        if (!sv.active || !sv.qcvm.edicts || sv.qcvm.num_edicts <= 1)
+        {
+            Con_Printf("need to be active to add locations automatically.\n");
+            return;
+        }
+
         StoreEntityNameAndLocation();
 
         for (int i = 0; i < entityCount; i++)
@@ -827,9 +837,13 @@ static void TP_AddLoc_f (void) // woods #locext
 
     // Concatenate all arguments from index 1 onward to form the location name
     for (int i = 1; i < Cmd_Argc(); i++) {
-        strcat(locname, Cmd_Argv(i));
-        if (i < Cmd_Argc() - 1) {
-            strcat(locname, " "); // Add space between arguments
+        if (i > 1 && q_strlcat(locname, " ", sizeof(locname)) >= sizeof(locname)) {
+            Con_Printf("location name too long\n");
+            return;
+        }
+        if (q_strlcat(locname, Cmd_Argv(i), sizeof(locname)) >= sizeof(locname)) {
+            Con_Printf("location name too long\n");
+            return;
         }
     }
 
