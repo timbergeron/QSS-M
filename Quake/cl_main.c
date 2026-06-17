@@ -3247,6 +3247,13 @@ static qboolean CL_DownloadNameIsValid(const char *relative_path)
 	return COM_DownloadNameOkay(relative_path) || COM_DownloadPackageNameOkay(relative_path);
 }
 
+static qboolean CL_DownloadNameIsLoc(const char *relative_path)
+{
+	return relative_path &&
+		!q_strncasecmp(relative_path, "locs/", 5) &&
+		!q_strcasecmp(COM_FileGetExtension(relative_path), "loc");
+}
+
 static void CL_DownloadAddMapDesc(const char *relative_path)
 {
 	if (!q_strcasecmp(COM_FileGetExtension(relative_path), "bsp"))
@@ -4390,7 +4397,8 @@ void CL_AsyncDownload_Frame(void)
 		if (!finalized)
 		{
 			unlink(tmp_path);
-			Con_Printf("Download failed: %s\n", filename);
+			if (!is_auto || !CL_DownloadNameIsLoc(filename))
+				Con_Printf("Download failed: %s\n", filename);
 			success = false;
 		}
 		else
@@ -4407,10 +4415,13 @@ void CL_AsyncDownload_Frame(void)
 		unlink(tmp_path);
 		if (aborted)
 			Con_Printf("Download cancelled: %s\n", COM_SkipPath(filename));
-		else if (error[0])
-			Con_Printf("Download failed: %s (%s)\n", filename, error);
-		else
-			Con_Printf("Download failed: %s\n", filename);
+		else if (!is_auto || !CL_DownloadNameIsLoc(filename))
+		{
+			if (error[0])
+				Con_Printf("Download failed: %s (%s)\n", filename, error);
+			else
+				Con_Printf("Download failed: %s\n", filename);
+		}
 	}
 
 	if (is_auto && !success)
@@ -4760,7 +4771,9 @@ void CL_Download_Chunked(void)
 
 		if (size < 0)
 		{
-			Con_Warning("Server refused download of %s\n", name && name[0] ? name : cls.download.current);
+			const char *refused_name = name && name[0] ? name : cls.download.current;
+			if (!CL_DownloadNameIsLoc(refused_name))
+				Con_Warning("Server refused download of %s\n", refused_name);
 			DL_AbortChunked(false);
 			return;
 		}
