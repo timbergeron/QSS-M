@@ -117,6 +117,45 @@ extern char demoplaying[MAX_OSPATH]; // woods for window title
 
 void SV_Next_Map_f(void); // woods #maprotation
 
+#define NETFPS_PROBE_DEFAULT_SECONDS	5.0
+#define NETFPS_PROBE_MIN_SECONDS		1.0
+#define NETFPS_PROBE_MAX_SECONDS		30.0
+#define NETFPS_PROBE_DEFAULT_TARGET		72.0
+#define NETFPS_PROBE_MIN_TARGET			10.0
+#define NETFPS_PROBE_MAX_TARGET			150.0
+#define NETFPS_PROBE_MAX_SAMPLES		32768
+
+typedef struct
+{
+	qboolean	active;
+	double		start_time;
+	double		last_frame_time;
+	double		duration;
+	double		target_netfps;
+	int			frames;
+	int			intervals;
+	double		sum_dt;
+	double		min_dt;
+	double		max_dt;
+	int			sample_count;
+	qboolean	sample_limit_hit;
+	double		samples[NETFPS_PROBE_MAX_SAMPLES];
+} netfps_probe_t;
+
+typedef struct
+{
+	int			value;
+	int			sends;
+	double		effective_netfps;
+	double		avg_send_dt;
+	double		min_send_dt;
+	double		max_send_dt;
+	double		avg_late;
+	double		max_late;
+} netfps_probe_eval_t;
+
+static netfps_probe_t netfps_probe;
+
 /*
 ================
 Max_Edicts_f -- johnfitz
@@ -161,6 +200,295 @@ static void Max_Fps_f (cvar_t *var)
 		if (var->value > 72)
 			Con_Warning ("host_maxfps above 72 breaks physics.\n");
 	}
+}
+
+/*
+================
+Host_NetfpsProbe
+
+Samples rendered host-frame cadence and simulates the renderer/network
+isolation accumulator to suggest a negative host_maxfps value.
+================
+*/
+static void Host_NetfpsProbe_Usage (void)
+{
+	Con_Printf ("usage: netfps_probe [seconds] [target_netfps]\n");
+	Con_Printf ("       netfps_probe stop\n");
+	Con_Printf ("Defaults: %.0f seconds, %.0f target netfps.\n",
+				NETFPS_PROBE_DEFAULT_SECONDS, NETFPS_PROBE_DEFAULT_TARGET);
+}
+
+static int Host_NetfpsProbe_CompareDouble (const void *a, const void *b)
+{
+	double da = *(const double *)a;
+	double db = *(const double *)b;
+
+	if (da < db)
+		return -1;
+	if (da > db)
+		return 1;
+	return 0;
+}
+
+static void Host_NetfpsProbe_Evaluate (int value, netfps_probe_eval_t *eval)
+{
+	double interval = 1.0 / value;
+	double accum = 0.0;
+	double total = 0.0;
+	double send_sum = 0.0;
+	double late_sum = 0.0;
+	int i;
+
+	memset (eval, 0, sizeof(*eval));
+	eval->value = value;
+
+	for (i = 0; i < netfps_probe.sample_count; i++)
+	{
+		double dt = netfps_probe.samples[i];
+
+		total += dt;
+		accum += dt;
+		if (accum >= interval)
+		{
+			double late = accum - interval;
+
+			eval->sends++;
+			send_sum += accum;
+			late_sum += late;
+			if (!eval->min_send_dt || accum < eval->min_send_dt)
+				eval->min_send_dt = accum;
+			if (accum > eval->max_send_dt)
+				eval->max_send_dt = accum;
+			if (late > eval->max_late)
+				eval->max_late = late;
+			accum = 0.0;
+		}
+	}
+
+	if (total > 0.0)
+		eval->effective_netfps = eval->sends / total;
+	if (eval->sends > 0)
+	{
+		eval->avg_send_dt = send_sum / eval->sends;
+		eval->avg_late = late_sum / eval->sends;
+	}
+}
+
+static qboolean Host_NetfpsProbe_EvalBetter (const netfps_probe_eval_t *candidate, const netfps_probe_eval_t *best)
+{
+	if (!candidate->sends)
+		return false;
+	if (!best->sends)
+		return true;
+	if (candidate->effective_netfps > best->effective_netfps + 0.25)
+		return true;
+	if (candidate->effective_netfps < best->effective_netfps - 0.25)
+		return false;
+	if (candidate->max_late < best->max_late - 0.00025)
+		return true;
+	if (candidate->max_late > best->max_late + 0.00025)
+		return false;
+	return candidate->avg_late < best->avg_late;
+}
+
+static qboolean Host_NetfpsProbe_EvalCloser (const netfps_probe_eval_t *candidate, const netfps_probe_eval_t *best, double target)
+{
+	double candidate_diff, best_diff;
+
+	if (!candidate->sends)
+		return false;
+	if (!best->sends)
+		return true;
+
+	candidate_diff = fabs (candidate->effective_netfps - target);
+	best_diff = fabs (best->effective_netfps - target);
+
+	if (candidate_diff < best_diff - 0.25)
+		return true;
+	if (candidate_diff > best_diff + 0.25)
+		return false;
+	if (candidate->max_late < best->max_late - 0.00025)
+		return true;
+	if (candidate->max_late > best->max_late + 0.00025)
+		return false;
+	return candidate->value < best->value;
+}
+
+static void Host_NetfpsProbe_Report (void)
+{
+	double avg_dt, avgfps, minfps, maxfps, p95_dt = 0.0, p95fps = 0.0;
+	double target;
+	int target_value, safe_target, i;
+	netfps_probe_eval_t requested, safe, closest, candidate;
+
+	if (netfps_probe.intervals < 10 || netfps_probe.sum_dt <= 0.0 || netfps_probe.sample_count < 10)
+	{
+		Con_Printf ("netfps_probe: not enough frame samples; try again while the game is rendering normally.\n");
+		return;
+	}
+
+	avg_dt = netfps_probe.sum_dt / netfps_probe.intervals;
+	avgfps = netfps_probe.intervals / netfps_probe.sum_dt;
+	minfps = (netfps_probe.max_dt > 0.0) ? 1.0 / netfps_probe.max_dt : 0.0;
+	maxfps = (netfps_probe.min_dt > 0.0) ? 1.0 / netfps_probe.min_dt : 0.0;
+	target = CLAMP (NETFPS_PROBE_MIN_TARGET, netfps_probe.target_netfps, NETFPS_PROBE_MAX_TARGET);
+	target_value = CLAMP ((int)NETFPS_PROBE_MIN_TARGET, Q_rint(target), (int)NETFPS_PROBE_MAX_TARGET);
+	safe_target = q_min (target_value, 72);
+
+	Host_NetfpsProbe_Evaluate (target_value, &requested);
+	memset (&safe, 0, sizeof(safe));
+	for (i = (int)NETFPS_PROBE_MIN_TARGET; i <= safe_target; i++)
+	{
+		Host_NetfpsProbe_Evaluate (i, &candidate);
+		if (Host_NetfpsProbe_EvalBetter (&candidate, &safe))
+			safe = candidate;
+	}
+	memset (&closest, 0, sizeof(closest));
+	for (i = (int)NETFPS_PROBE_MIN_TARGET; i <= (int)NETFPS_PROBE_MAX_TARGET; i++)
+	{
+		Host_NetfpsProbe_Evaluate (i, &candidate);
+		if (Host_NetfpsProbe_EvalCloser (&candidate, &closest, target))
+			closest = candidate;
+	}
+
+	qsort (netfps_probe.samples, netfps_probe.sample_count, sizeof(netfps_probe.samples[0]), Host_NetfpsProbe_CompareDouble);
+	p95_dt = netfps_probe.samples[(int)(0.95 * (netfps_probe.sample_count - 1))];
+	if (p95_dt > 0.0)
+		p95fps = 1.0 / p95_dt;
+
+	Con_Printf ("\nnetfps_probe result\n");
+	Con_Printf ("netfps_probe: sampled %.1f seconds, %d frames.\n",
+				netfps_probe.sum_dt, netfps_probe.frames);
+	Con_Printf ("netfps_probe: render avg %.1f fps (%.2f ms).\n",
+				avgfps, avg_dt * 1000.0);
+	Con_Printf ("netfps_probe: render floor %.1f fps 95%%, worst %.1f fps, peak %.1f fps.\n",
+				p95fps, minfps, maxfps);
+
+	Con_Printf ("\nnetfps_probe: requested host_maxfps -%d estimates %.1f netfps.\n",
+				target_value, requested.effective_netfps);
+	Con_Printf ("netfps_probe: requested avg send %.2f ms, max late %.2f ms.\n",
+				requested.avg_send_dt * 1000.0, requested.max_late * 1000.0);
+
+	Con_Printf ("\n");
+	Con_Printf ("netfps_probe: conservative command: host_maxfps -%d\n", safe.value);
+	Con_Printf ("netfps_probe: conservative estimate: %.1f netfps.\n",
+				safe.effective_netfps);
+	Con_Printf ("netfps_probe: conservative avg send %.2f ms, max late %.2f ms.\n",
+				safe.avg_send_dt * 1000.0, safe.max_late * 1000.0);
+	if (closest.value != safe.value)
+	{
+		Con_Printf ("\n");
+		Con_Printf ("netfps_probe: closest-to-target command: host_maxfps -%d\n", closest.value);
+		Con_Printf ("netfps_probe: closest estimate: %.1f netfps.\n",
+					closest.effective_netfps);
+		Con_Printf ("netfps_probe: closest avg send %.2f ms, max late %.2f ms.\n",
+					closest.avg_send_dt * 1000.0, closest.max_late * 1000.0);
+		if (closest.value > 72)
+			Con_Printf ("netfps_probe: note: closest-to-target is above 72 and can affect Quake physics; use conservative for normal play.\n");
+	}
+	if (safe.effective_netfps < target - 0.5)
+	{
+		Con_Printf ("\n");
+		Con_Printf ("netfps_probe: note: values up to 72 cannot cleanly reach %.1f netfps with this render cadence.\n", target);
+	}
+	if (netfps_probe.sample_limit_hit)
+		Con_Printf ("netfps_probe: note: sample buffer filled; result used the first %d intervals.\n", NETFPS_PROBE_MAX_SAMPLES);
+	Con_Printf ("\nnetfps_probe: final recommendation: ^mhost_maxfps^m -^g%d^d\n", safe.value);
+	Con_Printf ("\n");
+}
+
+static void Host_NetfpsProbe_Frame (void)
+{
+	double now, dt;
+
+	if (!netfps_probe.active)
+		return;
+
+	now = realtime;
+	if (netfps_probe.last_frame_time > 0.0)
+	{
+		dt = now - netfps_probe.last_frame_time;
+		if (dt > 0.0 && dt < 1.0)
+		{
+			netfps_probe.intervals++;
+			netfps_probe.sum_dt += dt;
+			if (netfps_probe.sample_count < NETFPS_PROBE_MAX_SAMPLES)
+				netfps_probe.samples[netfps_probe.sample_count++] = dt;
+			else
+				netfps_probe.sample_limit_hit = true;
+			if (!netfps_probe.min_dt || dt < netfps_probe.min_dt)
+				netfps_probe.min_dt = dt;
+			if (dt > netfps_probe.max_dt)
+				netfps_probe.max_dt = dt;
+		}
+	}
+	netfps_probe.last_frame_time = now;
+	netfps_probe.frames++;
+
+	if (now - netfps_probe.start_time >= netfps_probe.duration)
+	{
+		netfps_probe.active = false;
+		Host_NetfpsProbe_Report ();
+	}
+}
+
+static void Host_NetfpsProbe_f (void)
+{
+	int argc = Cmd_Argc ();
+	double duration = NETFPS_PROBE_DEFAULT_SECONDS;
+	double target = NETFPS_PROBE_DEFAULT_TARGET;
+
+	if (argc >= 2 &&
+		(!q_strcasecmp (Cmd_Argv(1), "stop") ||
+		 !q_strcasecmp (Cmd_Argv(1), "cancel")))
+	{
+		if (netfps_probe.active)
+		{
+			netfps_probe.active = false;
+			Con_Printf ("netfps_probe: stopped.\n");
+		}
+		else
+			Con_Printf ("netfps_probe: not running.\n");
+		return;
+	}
+
+	if (argc > 3 ||
+		(argc >= 2 && (!q_strcasecmp (Cmd_Argv(1), "?") ||
+					   !q_strcasecmp (Cmd_Argv(1), "help"))))
+	{
+		Host_NetfpsProbe_Usage ();
+		return;
+	}
+
+	if (cls.state != ca_connected || cls.signon != SIGNONS || cls.demoplayback || cls.timedemo)
+	{
+		Con_Printf ("netfps_probe: run this after connecting and entering a map.\n");
+		if (cls.demoplayback || cls.timedemo)
+			Con_Printf ("netfps_probe: demo playback/timedemo timing is not useful for netfps calibration.\n");
+		return;
+	}
+
+	if (argc >= 2)
+		duration = Q_atof (Cmd_Argv(1));
+	if (argc >= 3)
+		target = Q_atof (Cmd_Argv(2));
+
+	if (duration <= 0.0 || target <= 0.0)
+	{
+		Host_NetfpsProbe_Usage ();
+		return;
+	}
+
+	memset (&netfps_probe, 0, sizeof(netfps_probe));
+	netfps_probe.active = true;
+	netfps_probe.start_time = realtime;
+	netfps_probe.duration = CLAMP (NETFPS_PROBE_MIN_SECONDS, duration, NETFPS_PROBE_MAX_SECONDS);
+	netfps_probe.target_netfps = CLAMP (NETFPS_PROBE_MIN_TARGET, target, NETFPS_PROBE_MAX_TARGET);
+
+	Con_Printf ("netfps_probe: sampling %.1f seconds for %.1f target netfps\n",
+				netfps_probe.duration, netfps_probe.target_netfps);
+	if (host_maxfps.value > 0)
+		Con_Printf ("netfps_probe: host_maxfps is currently capping render fps; this will be included in the measurement.\n");
 }
 
 /*
@@ -640,6 +968,7 @@ void Host_InitLocal (void)
 	Cmd_AddCommand ("svnextmap", SV_Next_Map_f); // woods #maprotation
 	Cmd_AddCommand ("startup", Host_Startup_f); // woods #onload
 	Cmd_AddCommand ("host_cvar_migrate", Host_RunCvarMigrations); // woods #migration
+	Cmd_AddCommand ("netfps_probe", Host_NetfpsProbe_f);
 
 	Host_InitCommands ();
 
@@ -1704,6 +2033,7 @@ void _Host_Frame (double time)
 		}
 		return;			// don't run too fast, or packets will flood out
 	}
+	Host_NetfpsProbe_Frame ();
 	if (!isDedicated) // woods  -- don't call the input functions in dedicated servers (vkquake)
 	{ 
 		// get new key events
