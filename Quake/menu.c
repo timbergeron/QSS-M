@@ -23112,6 +23112,8 @@ void M_Bookmarks_Key(int key)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	enter:
+		if (!bookmarksmenu.items || bookmarksmenu.list.numitems <= 0)
+			break;	// nothing to connect to (empty bookmark list) -- avoid items[cursor] NULL deref
 		m_return_state = m_state;
 		m_return_onerror = true;
 		key_dest = key_game;
