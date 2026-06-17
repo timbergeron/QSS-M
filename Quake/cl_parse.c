@@ -60,7 +60,7 @@ extern char videoc[40];		// woods #q_sysinfo (qrack)
 qboolean	endscoreprint = false; // woods pq_confilter+
 extern qboolean pausedprint; // woods
 
-extern Uint32 exec_dm_cfg (Uint32 interval, void* param); // woods #execdelay
+extern void CL_DeferredExecConfig (void *cfgname); // woods #execdelay
 server_alias_t* server_aliases = NULL; // woods #serveralias
 
 static void CL_AddClientsideModelPrecache (const char *name, int *precache_index)
@@ -2852,7 +2852,7 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 				{
 					cl.modtype = 3; // woods #modtype [crmod server check]
 					if (COM_ConfigFileExists("dm.cfg", NULL))
-						SDL_AddTimer(2000, exec_dm_cfg, NULL); // 2 sec delay after connect #execdelay
+						Host_DeferCall(2.0, CL_DeferredExecConfig, (void *)"dm.cfg"); // delayed exec after connect #execdelay
 					strncpy(cl.observer, "n", sizeof(cl.observer)); // woods #observer set to no on join
 				}
 				if ((!strcmp(string, "classic mode\n")) || (!strcmp(string, "FFA mode\n")))  // woods

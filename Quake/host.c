@@ -2002,6 +2002,76 @@ void Host_RunCvarMigrations (void) // woods #migration
 
 /*
 ==================
+Main-thread deferred calls
+
+Replaces SDL_AddTimer for callbacks that touch engine state (Cbuf, console,
+client globals). SDL timer callbacks run on a separate thread, so doing that
+work there races the main thread and can crash (e.g. Con_Printf -> SCR_UpdateScreen
+-> OpenGL off-thread). These run from _Host_Frame on the main thread instead.
+
+Host_DeferCall returns a handle (0 if the table is full). Cancellation is by
+handle and is ABA-safe: a stale handle never matches a reused slot, so it just
+no-ops. The callback owns its param (free it in the callback); cancellation does
+not free it.
+==================
+*/
+#define HOST_MAX_DEFERS	32
+typedef struct {
+	qboolean	active;
+	int		id;
+	double		due;
+	void		(*fn)(void *);
+	void		*param;
+} hostdefer_t;
+static hostdefer_t	host_defers[HOST_MAX_DEFERS];
+static int		host_defer_nextid = 1;
+
+int Host_DeferCall (double delay_seconds, void (*fn)(void *), void *param)
+{
+	int i;
+	for (i = 0; i < HOST_MAX_DEFERS; i++)
+		if (!host_defers[i].active)
+		{
+			host_defers[i].active = true;
+			host_defers[i].id = host_defer_nextid++;
+			if (host_defer_nextid <= 0)
+				host_defer_nextid = 1;
+			host_defers[i].due = realtime + delay_seconds;
+			host_defers[i].fn = fn;
+			host_defers[i].param = param;
+			return host_defers[i].id;
+		}
+	return 0;	// table full -- drop rather than risk corruption
+}
+
+void Host_CancelDeferredCall (int handle)
+{
+	int i;
+	if (handle <= 0)
+		return;
+	for (i = 0; i < HOST_MAX_DEFERS; i++)
+		if (host_defers[i].active && host_defers[i].id == handle)
+		{
+			host_defers[i].active = false;
+			return;
+		}
+}
+
+static void Host_RunDeferredCalls (void)	// main thread, once per frame
+{
+	int i;
+	for (i = 0; i < HOST_MAX_DEFERS; i++)
+		if (host_defers[i].active && realtime >= host_defers[i].due)
+		{
+			void (*fn)(void *) = host_defers[i].fn;
+			void *param = host_defers[i].param;
+			host_defers[i].active = false;	// clear before calling (callback may re-arm)
+			fn (param);
+		}
+}
+
+/*
+==================
 Host_Frame
 
 Runs all active servers
@@ -2053,6 +2123,7 @@ void _Host_Frame (double time)
 	CL_ConnectFrame();
 
 	Con_UpdateCenterPrint ();	// woods #centerlog -- flush deferred centerprint (main thread)
+	Host_RunDeferredCalls ();	// run main-thread deferred calls (replaces unsafe SDL_AddTimer work)
 
 	NET_Poll();
 	NET_PortPingProbe_Frame();

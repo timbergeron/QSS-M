@@ -155,8 +155,7 @@ static void DL_FreeBlocks(void)
 static void DLC_RequestDownloadChunks(void);
 extern int grenadecache, rocketcache; // woods #r2g
 extern qboolean pausedprint; // woods
-extern SDL_TimerID chatTimerID; // woods #chatinfo
-extern qboolean isChatTimerRunning; // woods #chatinfo
+extern int chat_setinfo_defer; // woods #chatinfo
 static qboolean prediction_msg_shown = false; // woods #prednotify
 
 static void CL_ClearTypingState(void)
@@ -165,12 +164,8 @@ static void CL_ClearTypingState(void)
 
 	Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "chat", "0");
 
-	if (isChatTimerRunning)
-	{
-		SDL_RemoveTimer(chatTimerID);
-		isChatTimerRunning = false;
-		chatTimerID = 0;
-	}
+	Host_CancelDeferredCall(chat_setinfo_defer); // woods #chatinfo
+	chat_setinfo_defer = 0;
 
 	if (!cl.scores || cl.maxclients <= 0)
 		return;
@@ -715,22 +710,9 @@ void CL_SendInitialUserinfo(void *ctx, const char *key, const char *val)
 	MSG_WriteString (&cls.message, va("setinfo \"%s\" \"%s\"\n", key, val));
 }
 
-Uint32 exec_connect_cfg (Uint32 interval, void* param) // woods #execdelay
+void CL_DeferredExecConfig (void *cfgname) // woods #execdelay -- runs on the main thread via Host_DeferCall
 {
-	COM_ExecConfigFile("connect.cfg"); // exec some configs based on serverinfo, hybrid uses userinfo
-	return 0; // only exec once
-}
-
-Uint32 exec_ctf_cfg (Uint32 interval, void* param) // woods #execdelay
-{
-	COM_ExecConfigFile("ctf.cfg"); // exec some configs based on serverinfo, hybrid uses userinfo
-	return 0; // only exec once
-}
-
-Uint32 exec_dm_cfg (Uint32 interval, void* param) // woods #execdelay
-{
-	COM_ExecConfigFile("dm.cfg"); // exec some configs based on serverinfo, hybrid uses userinfo
-	return 0; // only exec once
+	COM_ExecConfigFile ((const char *)cfgname); // exec some configs based on serverinfo, hybrid uses userinfo
 }
 
 static qboolean CL_ServerinfoIsCTFPug (void)
@@ -834,7 +816,7 @@ void CL_SignonReply (void)
 		strncpy(cl.observer, "n", sizeof(cl.observer));
 
 		if (COM_ConfigFileExists("connect.cfg", NULL))
-			SDL_AddTimer(900, exec_connect_cfg, NULL); // 2 sec delay after connect #execdelay
+			Host_DeferCall(0.9, CL_DeferredExecConfig, (void *)"connect.cfg"); // delayed exec after connect #execdelay
 
 		const char* val;
 		const char* val2;
@@ -870,13 +852,13 @@ void CL_SignonReply (void)
 		{
 			cl.modetype = 1;
 			if (COM_ConfigFileExists("ctf.cfg", NULL))
-				SDL_AddTimer(1000, exec_ctf_cfg, NULL); // 2 sec delay after connect #execdelay
+				Host_DeferCall(1.0, CL_DeferredExecConfig, (void *)"ctf.cfg"); // delayed exec after connect #execdelay
 		}
 		if (!strcmp(val, "dm") || !strcmp(val, "ffa"))
 		{
 			cl.modetype = 2;
 			if (COM_ConfigFileExists("dm.cfg", NULL))
-				SDL_AddTimer(1000, exec_dm_cfg, NULL); // 2 sec delay after connect #execdelay
+				Host_DeferCall(1.0, CL_DeferredExecConfig, (void *)"dm.cfg"); // delayed exec after connect #execdelay
 		}
 		if (!q_strcasecmp(val, "ra") || !q_strcasecmp(val, "rocketarena"))
 			cl.modetype = 3;

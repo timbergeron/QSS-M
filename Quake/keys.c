@@ -1175,9 +1175,8 @@ woods #chatinfo -- deletct chat typing and set userinfo chat key, with a 3 secon
 ====================
 */
 
-SDL_TimerID chatTimerID = 0;
-qboolean isChatTimerRunning = false; // Track whether the timer is running
-#define CHAT_TIMER_DELAY 3000 // 3000ms = 3 second delay
+int chat_setinfo_defer = 0; // woods #chatinfo -- main-thread deferred-call handle (replaces SDL timer)
+#define CHAT_TIMER_DELAY 3.0 // seconds -- delay before resetting chat userinfo to 0
 
 void ExecuteSetInfoChat()
 {
@@ -1185,12 +1184,10 @@ void ExecuteSetInfoChat()
 		SetChatInfo (0);
 }
 
-Uint32 ChatTimerCallback(Uint32 interval, void* param)
+static void ChatSetInfo_Deferred(void *param) // woods #chatinfo -- runs on the main thread via Host_DeferCall
 {
-	ExecuteSetInfoChat(); // function to execute the delayed code
-	chatTimerID = 0; // the timer has run
-	isChatTimerRunning = false;
-	return 0; // stop the timer after it's called once
+	chat_setinfo_defer = 0; // the deferred call has run
+	ExecuteSetInfoChat();
 }
 
 void Char_Console(int key) // woods -- added detection for when typing in console to set chat to 1 for multiplayer games
@@ -1253,17 +1250,11 @@ void Char_Console(int key) // woods -- added detection for when typing in consol
 		Con_TabComplete (TABCOMPLETE_AUTOHINT);
 	}
 
-	if (cl_say.value) // woods #chatinfo --3 second delay to set chat to 0
+	if (cl_say.value) // woods #chatinfo -- delay before setting chat to 0
 	{
-		if (isChatTimerRunning) // kill the existing timer if a new char event happens -- woods #chatinfo
-		{
-			SDL_RemoveTimer(chatTimerID);
-			isChatTimerRunning = false;
-		}
-
-		chatTimerID = SDL_AddTimer(CHAT_TIMER_DELAY, ChatTimerCallback, NULL); // woods #chatinfo
-		if (chatTimerID != 0)
-			isChatTimerRunning = true;
+		// restart the countdown on each keystroke (cancel is a safe no-op if already fired)
+		Host_CancelDeferredCall(chat_setinfo_defer);
+		chat_setinfo_defer = Host_DeferCall(CHAT_TIMER_DELAY, ChatSetInfo_Deferred, NULL);
 	}
 }
 

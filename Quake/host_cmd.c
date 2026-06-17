@@ -10761,7 +10761,7 @@ int unfun_match(const char* s1, char* s2) // woods add const
 	return false;
 }
 
-unsigned int Send_Identify_Command (unsigned int interval, void* param) // woods -- #identify+
+static void Send_Identify_Deferred (void *param) // woods -- #identify+ -- runs on the main thread via Host_DeferCall
 {
 	char* lastconnected = (char*)param;
 
@@ -10771,7 +10771,7 @@ unsigned int Send_Identify_Command (unsigned int interval, void* param) // woods
 
 	Con_Printf("\n");
 	Cbuf_AddText(va("identify %s\n\n", lastconnected));
-	return 0;
+	SDL_free(lastconnected); // free the SDL_strdup copy made when scheduling
 }
 
 /* JPG 1.05
@@ -10802,8 +10802,14 @@ void Host_Identify_f(void)
 		{ 
 			Cbuf_AddText("status\n\n");
 			Con_Printf("identifying the ^mlast connected^m player\n\n");
-			char* lastconnected_copy =  SDL_strdup(lastconnected); // copy of lastconnected to pass to the callback function
-			SDL_AddTimer(750, Send_Identify_Command, lastconnected_copy);
+			char* lastconnected_copy =  SDL_strdup(lastconnected); // copy of lastconnected, freed by the deferred call
+			if (!lastconnected_copy)
+				Con_Printf("identify deferred command unavailable\n");
+			else if (!Host_DeferCall(0.75, Send_Identify_Deferred, lastconnected_copy))
+			{
+				SDL_free(lastconnected_copy); // defer table full -- free now so we don't leak
+				Con_Printf("identify deferred command unavailable\n");
+			}
 		}
 		else
 			Con_Printf("cannot identify ^mlast connected^m player (not found)\n\n");

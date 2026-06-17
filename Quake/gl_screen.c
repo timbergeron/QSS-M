@@ -96,7 +96,6 @@ void Sbar_DrawCharacter(int x, int y, int num); // woods #matchhud
 void Sbar_SortFrags_Obs(void); // woods #observerhud
 void Sound_Toggle_Mute_On_f(void); // woods #usermute -- adapted from Fitzquake Mark V
 
-Uint32 HintTimer_Callback(Uint32 interval, void* param); // woods #qssmhints
 void Print_Hints_f(void); // woods #qssmhints
 extern qboolean netquakeio; // woods
 
@@ -4220,11 +4219,12 @@ char* hints[] = {
 char* random_hint;
 int num_hints = sizeof(hints) / sizeof(hints[0]);
 
-Uint32 HintTimer_Callback (Uint32 interval, void* param)
+static int hint_defer = 0; // woods #qssmhints -- main-thread deferred-call handle (replaces SDL timer)
+
+static void Hint_Deferred (void *param) // woods #qssmhints -- runs on the main thread, re-arms itself
 {
-	int index = rand() % num_hints;
-	random_hint = hints[index];
-	return interval;
+	random_hint = hints[rand() % num_hints];
+	hint_defer = Host_DeferCall(6.0, Hint_Deferred, NULL);
 }
 
 /*
@@ -4254,8 +4254,6 @@ void SCR_DrawPause2(void)
 	char hint[80];
 	qboolean hint_preview = M_LivePreview_UsePausedHints () && !cls.demoplayback;
 	qboolean show_hints = ((cl.match_pause_time > 0 && !cls.demoplayback) || pausedprint || hint_preview);
-	static SDL_TimerID hint_timer_id = 0;
-
 	GL_SetCanvas(CANVAS_MENU2); //johnfitz
 
 	pic = Draw_CachePic("gfx/pause.lmp");
@@ -4273,10 +4271,10 @@ void SCR_DrawPause2(void)
 		}
 		else
 		{
-			if (!timerstarted) // only start timer once
+			if (!timerstarted) // only start once
 			{
 				random_hint = hints[rand() % num_hints];
-				hint_timer_id = SDL_AddTimer(6000, HintTimer_Callback, NULL);
+				hint_defer = Host_DeferCall(6.0, Hint_Deferred, NULL);
 				timerstarted = true;
 			}
 
@@ -4289,8 +4287,8 @@ void SCR_DrawPause2(void)
 	{ 
 		if (timerstarted)
 		{
-			SDL_RemoveTimer(hint_timer_id);
-			hint_timer_id = 0;
+			Host_CancelDeferredCall(hint_defer);
+			hint_defer = 0;
 		}
 		timerstarted = false;
 	}

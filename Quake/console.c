@@ -179,8 +179,7 @@ extern qboolean	endscoreprint; // woods -- don't filter end scores pq_confilter+
 char lastconnected[3]; // woods -- #identify+
 char lc[3]; // woods -- #identify+
 int retry_counter = 0; // woods #ms
-extern SDL_TimerID chatTimerID; // woods #chatinfo
-extern qboolean isChatTimerRunning; // woods #chatinfo
+extern int chat_setinfo_defer; // woods #chatinfo
 
 #define BIRTHDAY_DURATION 30000 // 30 seconds in ms -- woods #qbday
 extern qboolean pak0; // pak0 present  -- woods #qbday
@@ -334,15 +333,11 @@ void Con_ToggleConsole_f (void)
 		Char_Console2(32);
 
 	if (cl_say.value) // woods #chatinfo
-	{ 
+	{
 		SetChatInfo (0);
 
-		if (isChatTimerRunning) // woods #chatinfo
-		{
-			SDL_RemoveTimer(chatTimerID);
-			isChatTimerRunning = false;
-			chatTimerID = 0;
-		}
+		Host_CancelDeferredCall(chat_setinfo_defer); // woods #chatinfo
+		chat_setinfo_defer = 0;
 	}
 
 	cl.expectingpingtimes = realtime + 1; // woods
@@ -1621,11 +1616,10 @@ static void Con_UpdateLastchatCounter(void) // woods #like
 	}
 }
 
-Uint32 RideDelayCallback(Uint32 interval, void* param) // runequake changelevel hack
+static void RideDelay_Deferred(void *param) // runequake changelevel hack -- runs on the main thread via Host_DeferCall
 {
 	strncpy(cl.observer, "y", sizeof(cl.observer));
 	cl.modtype = 6;
-	return 0; // 0 means the timer won't repeat
 }
 
 /*
@@ -1659,7 +1653,7 @@ static void Con_Print (const char *txt)
 
 		if (cl.time < 600 && strstr(txt, "Now riding "))
 		{
-			SDL_AddTimer(2000, RideDelayCallback, NULL);
+			Host_DeferCall(2.0, RideDelay_Deferred, NULL);
 		}
 
 		if (cl.modtype == 6) // runequake observer detection
