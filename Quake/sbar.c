@@ -471,6 +471,25 @@ static void Sbar_DrawMaskedRedString (int x, int y, const char *str)
 	}
 }
 
+// woods -- draw a string with text inside parentheses masked (the map bsp name)
+static void Sbar_DrawStringMaskedParens (int x, int y, const char *str)
+{
+	qboolean masked = false;
+	while (*str)
+	{
+		unsigned char ch = (unsigned char)*str;
+		if (ch == ')')
+			masked = false;
+		if (masked && ch < 128)
+			ch += 128;
+		Draw_Character (x, y + 24, ch);
+		if (ch == '(')
+			masked = true;
+		str++;
+		x += 8;
+	}
+}
+
 /*
 ===============
 Sbar_DrawScrollString -- johnfitz
@@ -478,7 +497,7 @@ Sbar_DrawScrollString -- johnfitz
 scroll the string inside a glscissor region -- woods added 5 pixel margins, etc
 ===============
 */
-static void Sbar_DrawScrollStringEx (int x, int y, int width, const char *str, qboolean masked_red)
+static void Sbar_DrawScrollStringEx (int x, int y, int width, const char *str, void (*drawfn)(int, int, const char *))
 {
 	float scale;
 	double ofs;
@@ -505,18 +524,9 @@ static void Sbar_DrawScrollStringEx (int x, int y, int width, const char *str, q
 
 	glPushMatrix ();
 	glTranslatef (-frac, 0.0f, 0.0f);
-	if (masked_red)
-	{
-		Sbar_DrawMaskedRedString (x - baseofs + 5, y, str);
-		Sbar_DrawMaskedRedString (x - baseofs + 5 + strLen, y, qfylbullet);
-		Sbar_DrawMaskedRedString (x - baseofs + 5 + totalLen, y, str);
-	}
-	else
-	{
-		Sbar_DrawString (x - baseofs + 5, y, str);
-		Sbar_DrawString (x - baseofs + 5 + strLen, y, qfylbullet);
-		Sbar_DrawString (x - baseofs + 5 + totalLen, y, str);
-	}
+	drawfn (x - baseofs + 5, y, str);
+	drawfn (x - baseofs + 5 + strLen, y, qfylbullet);
+	drawfn (x - baseofs + 5 + totalLen, y, str);
 	glPopMatrix ();
 
 	glDisable (GL_SCISSOR_TEST);
@@ -524,12 +534,17 @@ static void Sbar_DrawScrollStringEx (int x, int y, int width, const char *str, q
 
 void Sbar_DrawScrollString (int x, int y, int width, const char *str)
 {
-	Sbar_DrawScrollStringEx (x, y, width, str, false);
+	Sbar_DrawScrollStringEx (x, y, width, str, Sbar_DrawString);
 }
 
 static void Sbar_DrawScrollMaskedRedString (int x, int y, int width, const char *str)
 {
-	Sbar_DrawScrollStringEx (x, y, width, str, true);
+	Sbar_DrawScrollStringEx (x, y, width, str, Sbar_DrawMaskedRedString);
+}
+
+static void Sbar_DrawScrollMaskedParensString (int x, int y, int width, const char *str)
+{
+	Sbar_DrawScrollStringEx (x, y, width, str, Sbar_DrawStringMaskedParens);
 }
 
 /*
@@ -992,6 +1007,8 @@ void Sbar_SoloScoreboard (void)
 
 	if (!fitzmode)
 	{ /* QuakeSpasm customization: */
+		qboolean maskparens = false; // woods -- mask the map bsp name in ()
+
 		if (show_map_description)
 		{
 			q_snprintf(str, sizeof(str), "%s", cl.mapname);
@@ -1001,14 +1018,20 @@ void Sbar_SoloScoreboard (void)
 			char qfylwdot[2] = { 133, '\0' }; // woods  -- quake font yellow dot
 
 			if (cl.levelname[0] && Q_strcmp(cl.levelname, cl.mapname) != 0)
+			{
 				q_snprintf(str, sizeof(str), "%s (%s) %s %s ", cl.levelname, cl.mapname, qfylwdot, lastmphost);
+				maskparens = true;
+			}
 			else
 				q_snprintf(str, sizeof(str), "%s %s %s ", cl.mapname, qfylwdot, lastmphost);
 		}
 		else
 		{
 			if (cl.levelname[0] && Q_strcmp(cl.levelname, cl.mapname) != 0)
+			{
 				q_snprintf (str, sizeof(str), "%s (%s)", cl.levelname, cl.mapname);
+				maskparens = true;
+			}
 			else
 				q_snprintf (str, sizeof(str), "%s", cl.mapname);
 		}
@@ -1017,6 +1040,8 @@ void Sbar_SoloScoreboard (void)
 		{
 			if (show_map_description)
 				Sbar_DrawScrollMaskedRedString (0, 4, 320, str);
+			else if (maskparens)
+				Sbar_DrawScrollMaskedParensString (0, 4, 320, str);
 			else
 				Sbar_DrawScrollString (0, 4, 320, str);
 		}
@@ -1024,6 +1049,8 @@ void Sbar_SoloScoreboard (void)
 		{
 			if (show_map_description)
 				Sbar_DrawMaskedRedString (160 - len*4, 4, str);
+			else if (maskparens)
+				Sbar_DrawStringMaskedParens (160 - len*4, 4, str);
 			else
 				Sbar_DrawString (160 - len*4, 4, str);
 		}
