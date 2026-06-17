@@ -6149,6 +6149,53 @@ static int M_Options_LivePreviewId(void)
 	return LP_NONE;
 }
 
+static int M_Options_MenuScaleMax(void)
+{
+	int max_scale = q_min(glwidth / 320, glheight / 200);
+	return q_max(1, max_scale);
+}
+
+static float M_Options_MenuScaleFraction(float value)
+{
+	int max_scale = M_Options_MenuScaleMax();
+
+	if (max_scale <= 1)
+		return 0.0f;
+
+	return CLAMP(0.0f, (value - 1.0f) / (float)(max_scale - 1), 1.0f);
+}
+
+static int M_Options_MenuScaleFromFraction(float fraction)
+{
+	int max_scale = M_Options_MenuScaleMax();
+
+	fraction = CLAMP(0.0f, fraction, 1.0f);
+	return (int)(fraction * (max_scale - 1) + 1.5f);
+}
+
+static int M_ConsoleScaleMax(void)
+{
+	return q_max(1, vid.width / 320);
+}
+
+static float M_ConsoleScaleFraction(float value)
+{
+	int max_scale = M_ConsoleScaleMax();
+
+	if (max_scale <= 1)
+		return 0.0f;
+
+	return CLAMP(0.0f, (value - 1.0f) / (float)(max_scale - 1), 1.0f);
+}
+
+static float M_ConsoleScaleFromFraction(float fraction)
+{
+	int max_scale = M_ConsoleScaleMax();
+
+	fraction = CLAMP(0.0f, fraction, 1.0f);
+	return fraction * (max_scale - 1) + 1.0f;
+}
+
 void M_Menu_Options_f (void)
 {
 	key_dest = key_menu;
@@ -6171,7 +6218,7 @@ void M_AdjustSliders (int dir)
 	case OPT_MENUSCALE:
 		S_LocalSound ("misc/menu3.wav");
 		f = scr_menuscale.value + dir;
-		if (f > 6) f = 6;
+		if (f > M_Options_MenuScaleMax()) f = M_Options_MenuScaleMax();
 		else if (f < 1) f = 1;
 		Cvar_SetValue("scr_menuscale", f);
 		break;
@@ -6241,8 +6288,7 @@ qboolean M_SetSliderValue(int option, float f) // woods #mousemenu
 	switch (option)
 	{
 	case OPT_MENUSCALE:
-		f = f * 5.0f + 1.0f;  // Convert 0-1 range to 1-6
-		f = (int)f;  // Round to nearest integer
+		f = M_Options_MenuScaleFromFraction(f);
 		Cvar_SetValue("scr_menuscale", f);
 		return true;
 	default:
@@ -6280,13 +6326,12 @@ qboolean M_SliderClick(int cx, int cy) // woods #mousemenu
 	if (options_cursor == OPT_MENUSCALE)
 	{
 		float f = M_MouseToSliderFraction(cx);
-		f = f * 5.0f + 1.0f;
-			f = (int)f;
-			pending_scale_value = f;  // Store initial value
-			slider_grab = true;
-			S_LocalSound("misc/menu3.wav");
-			return true;
-		}
+		f = M_Options_MenuScaleFromFraction(f);
+		pending_scale_value = f;  // Store initial value
+		slider_grab = true;
+		S_LocalSound("misc/menu3.wav");
+		return true;
+	}
 
 	slider_grab = true;
 	S_LocalSound("misc/menu3.wav");
@@ -6364,12 +6409,12 @@ void M_Options_Draw (void)
 			text = "            Menu Scale";
 			if (slider_grab && options_cursor == OPT_MENUSCALE)
 			{
-				r = (pending_scale_value - 1) / 5;
+				r = M_Options_MenuScaleFraction(pending_scale_value);
 				M_DrawSlider(220, y, r, pending_scale_value, "%.0f");
 			}
 			else
 			{
-				r = (scr_menuscale.value - 1) / 5;
+				r = M_Options_MenuScaleFraction(scr_menuscale.value);
 				M_DrawSlider(220, y, r, scr_menuscale.value, "%.0f");
 			}
 			break;
@@ -6692,8 +6737,7 @@ void M_Options_Mousemove(int cx, int cy) // woods #mousemenu
 		if (options_cursor == OPT_MENUSCALE)
 		{
 			float f = M_MouseToSliderFraction(cx - 220);
-			f = f * 5.0f + 1.0f;  // Convert 0-1 range to 1-6
-			f = (int)f;  // Round to nearest integer
+			f = M_Options_MenuScaleFromFraction(f);
 			pending_scale_value = f;  // Store the value but don't apply it yet
 			return;
 		}
@@ -15112,7 +15156,7 @@ static void M_HUD_AdjustSliders(int dir)
 	case HUD_CONSOLEFONT:
 		f = scr_conscale.value + dir * 0.5;
 		if (f < 1) f = 1;
-		else if (f > 6) f = 6;
+		else if (f > M_ConsoleScaleMax()) f = M_ConsoleScaleMax();
 		Cvar_SetValue("scr_conscale", f);
 		break;
 
@@ -15268,7 +15312,7 @@ void M_HUD_Draw(void)
 
 		case HUD_CONSOLEFONT:
 			text = " Console Font Size";
-			r = (scr_conscale.value - 1) / 5.0; // Scale to 1-6 range
+			r = M_ConsoleScaleFraction(scr_conscale.value);
 			M_DrawSlider(186, y, r, scr_conscale.value, "%.1f");
 			break;
 
@@ -15694,8 +15738,7 @@ void M_HUD_Mousemove(int cx, int cy)
 
 		case HUD_CONSOLEFONT:
 			f = M_MouseToSliderFraction(cx - 187);
-			f = f * 5.0 + 1.0;
-			f = CLAMP(1.0, f, 6.0);
+			f = M_ConsoleScaleFromFraction(f);
 			Cvar_SetValue("scr_conscale", f);
 			break;
 
@@ -16827,7 +16870,7 @@ static void M_Console_AdjustSliders(int dir)
 	{
 	case CONSOLE_FONTSIZE:
 		f = scr_conscale.value + dir;
-		if (f > 6) f = 6;
+		if (f > M_ConsoleScaleMax()) f = M_ConsoleScaleMax();
 		else if (f < 1) f = 1;
 		Cvar_SetValue("scr_conscale", f);
 		break;
@@ -16904,7 +16947,7 @@ void M_Console_Draw(void)
 		{
 		case CONSOLE_FONTSIZE:
 			text = "       Font Size";
-			r = (scr_conscale.value - 1) / 5;
+			r = M_ConsoleScaleFraction(scr_conscale.value);
 			M_DrawSlider(186, y, r, scr_conscale.value, "%.0f");
 			break;
 
@@ -17278,9 +17321,9 @@ void M_Console_Mousemove(int cx, int cy)
 		switch (console_cursor)
 		{
 		case CONSOLE_FONTSIZE:
-			f = 1.f + M_MouseToSliderFraction(cx - 187) * 5.f;
+			f = M_ConsoleScaleFromFraction(M_MouseToSliderFraction(cx - 187));
 			f = (int)f;  // Round to nearest integer
-			Cvar_SetValue("scr_conscale", CLAMP(1, f, 6));
+			Cvar_SetValue("scr_conscale", CLAMP(1, f, M_ConsoleScaleMax()));
 			break;
 
 		case CONSOLE_HEIGHT:
