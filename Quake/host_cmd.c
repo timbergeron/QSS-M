@@ -10567,6 +10567,8 @@ static void Host_Viewframe_f (void)
 	if (m)
 	{
 		f = atoi(Cmd_Argv(1));
+		if (f < 0)
+			f = 0;
 		if (f >= m->numframes)
 			f = m->numframes - 1;
 
@@ -11444,7 +11446,7 @@ void Host_User_f(void)
 		{
 			i = atoi(Cmd_Argv(1));
 
-			if (i >= cl.maxclients)
+			if (i < 0 || i >= cl.maxclients)
 				return;	//not a valid slot.
 
 			Con_Printf("User %i (%s):\n", i, cl.scores[i].name);

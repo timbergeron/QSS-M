@@ -6096,7 +6096,7 @@ static void CL_ServerExtension_TeamInfo_f(void) // woods #teaminfo
 	unsigned int items = strtoul(Cmd_Argv(7), NULL, 0);
 	float speed = atof(Cmd_Argv(8));
 
-	if (pidx < cl.maxclients)
+	if (pidx >= 0 && pidx < cl.maxclients)
 	{
 		scoreboard_t* player = &cl.scores[pidx];
 		player->tinfo.time = cl.time + 5;
