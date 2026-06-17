@@ -1944,7 +1944,10 @@ void Cmd_ForwardToServer (void)
 					break;
 
 				case 'l':
-					dst = Cmd_AppendChatString(dst, end, LOC_GetLocation(cl.entities[cl.viewentity].origin));
+					// guard cl.entities[cl.viewentity] like CL_Viewpos_f: ca_connected can
+					// coexist with a NULL/short cl.entities during signon
+					if (cl.entities && cl.viewentity >= 1 && cl.viewentity < cl.num_entities)
+						dst = Cmd_AppendChatString(dst, end, LOC_GetLocation(cl.entities[cl.viewentity].origin));
 					break;
 
 				case 'd':

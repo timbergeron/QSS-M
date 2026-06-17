@@ -1092,7 +1092,11 @@ static void TP_RemoveClosestLoc (vec3_t location) // woods #locext
 static void TP_RemoveLoc_f (void) // woods #locext
 {
     if (Cmd_Argc() == 1) {
-
+            if (cls.state != ca_connected || !cl.entities || cl.viewentity < 1 || cl.viewentity >= cl.num_entities)
+            {	// match the cl.entities[cl.viewentity] guards in CL_Viewpos_f; covers pre-spawn when cl.entities is NULL
+                Con_Printf("need to be active to remove a location.\n");
+                return;
+            }
             TP_RemoveClosestLoc(cl.entities[cl.viewentity].origin);
     }
     else {
