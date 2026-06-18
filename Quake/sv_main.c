@@ -1447,7 +1447,9 @@ invisible:
 			ents[numents].state.velocity[2] = ent->v.velocity[2]*8;
 		}
 		/*TODO: other players *should* provide movetype+msec+v_angle+movement+velocity info so they can be extrapolated by fancy clients*/
-		else if (ents[numents].state.alpha == ENTALPHA_ZERO && !ent->v.effects)	//don't send invisible entities unless they have effects
+		// Don't send invisible entities unless they have normal or scripted effects.
+		else if (ents[numents].state.alpha == ENTALPHA_ZERO && !ent->v.effects &&
+			!ents[numents].state.traileffectnum && !ents[numents].state.emiteffectnum)
 			continue;
 		val = GetEdictFieldValue(ent, qcvm->extfields.exteriormodeltoclient);
 		if (val && val->edict == proged)
