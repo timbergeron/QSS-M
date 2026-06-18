@@ -1805,6 +1805,38 @@ VID_SetWindowTitle(title);
 	}
 }
 
+/*
+==================
+Host_UpdateDockBadge - woods
+
+Reflect download activity on the macOS dock icon as a Chrome-style progress
+ring. Clears once the download finishes. No-op on platforms without a dock tile.
+==================
+*/
+static void Host_UpdateDockBadge(void)
+{
+	extern qboolean curl_download_active;	// cl_main.c #webdl
+	static int last = -1;	// last percent sent (-1 = hidden / not downloading)
+	int pct;
+
+	if (cls.download.active || curl_download_active)
+	{
+		float p = cls.download.percent;
+		pct = (p >= 0.f && p <= 100.f) ? (int)(p + 0.5f) : 0;	// 0 = active, size unknown
+	}
+	else
+		pct = -1;	// not downloading
+
+	if (pct > 100)
+		pct = 100;
+
+	if (pct != last)	// only touch the dock tile when the value changes
+	{
+		last = pct;
+		Sys_SetDockProgress(pct < 0 ? -1.f : pct / 100.f);
+	}
+}
+
 //used for cl.qcvm.GetModel (so ssqc+csqc can share builtins)
 qmodel_t *CL_ModelForIndex(int index)
 {
@@ -2237,6 +2269,7 @@ void _Host_Frame (double time)
 
 	CDAudio_Update();
 	UpdateWindowTitle(); // github.com/andrei-drexler/ironwail (Show game summary in window title)
+	Host_UpdateDockBadge(); // woods -- show download progress on the dock icon
 
 	if (host_speeds.value)
 	{

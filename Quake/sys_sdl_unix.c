@@ -1872,6 +1872,14 @@ void Sys_SendKeyEvents (void)
 	IN_SendKeyEvents();
 }
 
+#ifndef __APPLE__
+// macOS provides a real implementation in SDLMain.m (dock icon progress ring).
+void Sys_SetDockProgress (float fraction)
+{
+	(void)fraction;
+}
+#endif
+
 #ifdef __APPLE__
 #include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>

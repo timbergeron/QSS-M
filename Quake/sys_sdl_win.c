@@ -1542,6 +1542,11 @@ void Sys_SendKeyEvents (void)
 	IN_SendKeyEvents();
 }
 
+void Sys_SetDockProgress (float fraction)
+{
+	(void)fraction;	// no dock icon on Windows
+}
+
 #if defined(_WIN32) // woods #disablecaps via ironwail
 void Sys_ActivateKeyFilter (qboolean active)
 {
