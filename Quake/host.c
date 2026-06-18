@@ -1809,8 +1809,9 @@ VID_SetWindowTitle(title);
 ==================
 Host_UpdateDockBadge - woods
 
-Reflect download activity on the macOS dock icon as a Chrome-style progress
-ring. Clears once the download finishes. No-op on platforms without a dock tile.
+Reflect download activity in the platform shell UI: a Chrome-style ring on
+the macOS Dock icon, or the native Windows taskbar progress strip.
+Clears once the download finishes. No-op on platforms without support.
 ==================
 */
 static void Host_UpdateDockBadge(void)
@@ -2269,7 +2270,7 @@ void _Host_Frame (double time)
 
 	CDAudio_Update();
 	UpdateWindowTitle(); // github.com/andrei-drexler/ironwail (Show game summary in window title)
-	Host_UpdateDockBadge(); // woods -- show download progress on the dock icon
+	Host_UpdateDockBadge(); // woods -- show download progress in the platform shell UI
 
 	if (host_speeds.value)
 	{

@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 #include <windows.h>
 #include <mmsystem.h>
+#include <objbase.h>
 
 #include "quakedef.h"
 
@@ -43,6 +44,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #else
 #include "SDL.h"
 #endif
+#if defined(USE_SDL2)
+#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
+#include <SDL2/SDL_syswm.h>
+#else
+#include "SDL_syswm.h"
+#endif
+#endif
 
 
 qboolean		isDedicated;
@@ -51,6 +59,50 @@ cvar_t		sys_throttle = {"sys_throttle", "0.02", CVAR_ARCHIVE};
 
 static HANDLE		hinput, houtput;
 static qboolean		use_vtp = false; // ANSI virtual terminal processing available
+
+#if defined(USE_SDL2)
+typedef enum {
+	QSS_TBPF_NOPROGRESS = 0,
+	QSS_TBPF_INDETERMINATE = 0x1,
+	QSS_TBPF_NORMAL = 0x2
+} qss_tbpflag_t;
+
+typedef struct qss_ITaskbarList3 qss_ITaskbarList3;
+typedef struct qss_ITaskbarList3Vtbl {
+	HRESULT (STDMETHODCALLTYPE *QueryInterface)(qss_ITaskbarList3 *self, REFIID riid, void **ppvObject);
+	ULONG (STDMETHODCALLTYPE *AddRef)(qss_ITaskbarList3 *self);
+	ULONG (STDMETHODCALLTYPE *Release)(qss_ITaskbarList3 *self);
+	HRESULT (STDMETHODCALLTYPE *HrInit)(qss_ITaskbarList3 *self);
+	HRESULT (STDMETHODCALLTYPE *AddTab)(qss_ITaskbarList3 *self, HWND hwnd);
+	HRESULT (STDMETHODCALLTYPE *DeleteTab)(qss_ITaskbarList3 *self, HWND hwnd);
+	HRESULT (STDMETHODCALLTYPE *ActivateTab)(qss_ITaskbarList3 *self, HWND hwnd);
+	HRESULT (STDMETHODCALLTYPE *SetActiveAlt)(qss_ITaskbarList3 *self, HWND hwnd);
+	HRESULT (STDMETHODCALLTYPE *MarkFullscreenWindow)(qss_ITaskbarList3 *self, HWND hwnd, BOOL fFullscreen);
+	HRESULT (STDMETHODCALLTYPE *SetProgressValue)(qss_ITaskbarList3 *self, HWND hwnd, ULONGLONG ullCompleted, ULONGLONG ullTotal);
+	HRESULT (STDMETHODCALLTYPE *SetProgressState)(qss_ITaskbarList3 *self, HWND hwnd, qss_tbpflag_t tbpFlags);
+} qss_ITaskbarList3Vtbl;
+struct qss_ITaskbarList3 {
+	const qss_ITaskbarList3Vtbl *lpVtbl;
+};
+
+typedef HRESULT (WINAPI *qss_CoInitializeEx_f)(LPVOID pvReserved, DWORD dwCoInit);
+typedef void (WINAPI *qss_CoUninitialize_f)(void);
+typedef HRESULT (WINAPI *qss_CoCreateInstance_f)(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD dwClsContext, REFIID riid, LPVOID *ppv);
+
+static const CLSID qss_CLSID_TaskbarList =
+	{0x56fdf344, 0xfd6d, 0x11d0, {0x95, 0x8a, 0x00, 0x60, 0x97, 0xc9, 0xa0, 0x90}};
+static const IID qss_IID_ITaskbarList3 =
+	{0xea1afb91, 0x9e28, 0x4b86, {0x90, 0xe9, 0x9e, 0x9f, 0x8a, 0x5e, 0xef, 0xaf}};
+
+static HMODULE taskbar_ole32;
+static qss_CoUninitialize_f taskbar_CoUninitialize;
+static qss_ITaskbarList3 *taskbar_list;
+static qboolean taskbar_init_attempted;
+static qboolean taskbar_com_initialized;
+static HWND taskbar_hwnd;
+
+static void Sys_ShutdownTaskbarProgress(void);
+#endif
 
 static size_t	sys_handles_max;	/* spike -- removed limit, was 32 (johnfitz -- was 10) */
 static FILE		**sys_handles;
@@ -526,6 +578,10 @@ void Sys_Error (const char *error, ...)
 	PR_SwitchQCVM(NULL);
 
 	Con_Redirect(NULL);
+
+#if defined(USE_SDL2)
+	Sys_ShutdownTaskbarProgress();
+#endif
 
 	if (isDedicated)
 		WriteFile (houtput, errortxt1, strlen(errortxt1), &dummy, NULL);
@@ -1192,6 +1248,10 @@ void Sys_Printf (const char *fmt, ...)
 
 void Sys_Quit (void)
 {
+#if defined(USE_SDL2)
+	Sys_ShutdownTaskbarProgress();
+#endif
+
 	Host_Shutdown();
 
 	if (isDedicated)
@@ -1542,9 +1602,161 @@ void Sys_SendKeyEvents (void)
 	IN_SendKeyEvents();
 }
 
+#if defined(USE_SDL2)
+static void Sys_UnloadTaskbarOle32(void)
+{
+	taskbar_CoUninitialize = NULL;
+
+	if (taskbar_ole32)
+	{
+		FreeLibrary(taskbar_ole32);
+		taskbar_ole32 = NULL;
+	}
+}
+
+static HWND Sys_TaskbarProgressWindow(void)
+{
+	SDL_Window *window;
+	SDL_SysWMinfo wmInfo;
+
+	if (isDedicated)
+		return NULL;
+
+	window = (SDL_Window *)VID_GetWindow();
+	if (!window)
+		return NULL;
+
+	SDL_VERSION(&wmInfo.version);
+	if (!SDL_GetWindowWMInfo(window, &wmInfo))
+		return NULL;
+
+	return wmInfo.info.win.window;
+}
+
+static qboolean Sys_InitTaskbarProgress(void)
+{
+	qss_CoInitializeEx_f pCoInitializeEx;
+	qss_CoCreateInstance_f pCoCreateInstance;
+	HRESULT hr;
+
+	if (taskbar_init_attempted)
+		return taskbar_list != NULL;
+	taskbar_init_attempted = true;
+
+	taskbar_ole32 = LoadLibraryA("ole32.dll");
+	if (!taskbar_ole32)
+		return false;
+
+	pCoInitializeEx = (qss_CoInitializeEx_f)GetProcAddress(taskbar_ole32, "CoInitializeEx");
+	taskbar_CoUninitialize = (qss_CoUninitialize_f)GetProcAddress(taskbar_ole32, "CoUninitialize");
+	pCoCreateInstance = (qss_CoCreateInstance_f)GetProcAddress(taskbar_ole32, "CoCreateInstance");
+	if (!pCoInitializeEx || !taskbar_CoUninitialize || !pCoCreateInstance)
+	{
+		Sys_UnloadTaskbarOle32();
+		return false;
+	}
+
+	hr = pCoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+	if (SUCCEEDED(hr))
+		taskbar_com_initialized = true;
+	else if (hr != RPC_E_CHANGED_MODE)
+	{
+		Sys_UnloadTaskbarOle32();
+		return false;
+	}
+
+	hr = pCoCreateInstance(&qss_CLSID_TaskbarList, NULL, CLSCTX_INPROC_SERVER,
+		&qss_IID_ITaskbarList3, (LPVOID *)&taskbar_list);
+	if (FAILED(hr) || !taskbar_list)
+	{
+		Sys_ShutdownTaskbarProgress();
+		taskbar_init_attempted = true;
+		return false;
+	}
+
+	hr = taskbar_list->lpVtbl->HrInit(taskbar_list);
+	if (FAILED(hr))
+	{
+		Sys_ShutdownTaskbarProgress();
+		taskbar_init_attempted = true;
+		return false;
+	}
+
+	return true;
+}
+
+static void Sys_ShutdownTaskbarProgress(void)
+{
+	if (taskbar_list)
+	{
+		if (taskbar_hwnd)
+			taskbar_list->lpVtbl->SetProgressState(taskbar_list, taskbar_hwnd, QSS_TBPF_NOPROGRESS);
+		taskbar_list->lpVtbl->Release(taskbar_list);
+		taskbar_list = NULL;
+	}
+
+	taskbar_hwnd = NULL;
+	taskbar_init_attempted = false;
+
+	if (taskbar_com_initialized && taskbar_CoUninitialize)
+	{
+		taskbar_CoUninitialize();
+		taskbar_com_initialized = false;
+	}
+
+	Sys_UnloadTaskbarOle32();
+}
+#endif
+
 void Sys_SetDockProgress (float fraction)
 {
-	(void)fraction;	// no dock icon on Windows
+#if defined(USE_SDL2)
+	HWND hwnd;
+	ULONGLONG completed;
+	const ULONGLONG total = 1000;
+
+	if (isDedicated)
+		return;
+
+	if (fraction < 0.0f && !taskbar_list)
+		return;
+
+	if (!Sys_InitTaskbarProgress())
+		return;
+
+	hwnd = Sys_TaskbarProgressWindow();
+	if (!hwnd && fraction < 0.0f)
+		hwnd = taskbar_hwnd;
+	if (!hwnd)
+		return;
+
+	if (fraction < 0.0f)
+	{
+		taskbar_list->lpVtbl->SetProgressState(taskbar_list, hwnd, QSS_TBPF_NOPROGRESS);
+		taskbar_hwnd = NULL;
+		return;
+	}
+
+	taskbar_hwnd = hwnd;
+
+	if (fraction <= 0.0f)
+	{
+		taskbar_list->lpVtbl->SetProgressState(taskbar_list, hwnd, QSS_TBPF_INDETERMINATE);
+		return;
+	}
+
+	if (fraction > 1.0f)
+		fraction = 1.0f;
+
+	completed = (ULONGLONG)(fraction * (float)total + 0.5f);
+	if (completed < 1)
+		completed = 1;
+
+	taskbar_list->lpVtbl->SetProgressState(taskbar_list, hwnd, QSS_TBPF_NORMAL);
+	taskbar_list->lpVtbl->SetProgressValue(taskbar_list, hwnd, completed, total);
+#else
+	(void)fraction;
+#endif
 }
 
 #if defined(_WIN32) // woods #disablecaps via ironwail

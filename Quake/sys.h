@@ -76,9 +76,9 @@ void Sys_SendKeyEvents (void);
 // Perform Key_Event () callbacks until the input que is empty
 
 void Sys_SetDockProgress (float fraction);
-// macOS: draw a Chrome-style download progress ring on the dock icon.
-// fraction 0..1 shows the ring; a negative value clears it.
-// No-op on other platforms.
+// Show platform download progress: macOS Dock badge or Windows taskbar strip.
+// fraction 0..1 shows progress; a negative value clears it.
+// No-op on other platforms or when the shell API is unavailable.
 
 #if defined(_WIN32) // woods #disablecaps via ironwail
 void Sys_ActivateKeyFilter (qboolean active);
