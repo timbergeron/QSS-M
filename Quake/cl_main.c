@@ -211,6 +211,7 @@ void CL_ClearTrailStates(void)
 	{
 		PScript_DelinkTrailstate(&(cl_beams[i].trailstate));
 	}
+	CL_ClearSpriteEffects();
 }
 
 void CL_FreeState(void)
@@ -1024,6 +1025,7 @@ dlight_t *CL_AllocDlight (int key)
 			{
 				memset (dl, 0, sizeof(*dl));
 				dl->key = key;
+				dl->style = -1;
 				dl->color[0] = dl->color[1] = dl->color[2] = 1; //johnfitz -- lit support via lordhavoc
 				dl->spawn = cl.mtime[0] - 0.001; // woods (iw) #democontrols
 				return dl;
@@ -1039,6 +1041,7 @@ dlight_t *CL_AllocDlight (int key)
 		{
 			memset (dl, 0, sizeof(*dl));
 			dl->key = key;
+			dl->style = -1;
 			dl->color[0] = dl->color[1] = dl->color[2] = 1; //johnfitz -- lit support via lordhavoc
 			dl->spawn = cl.mtime[0] - 0.001; // woods (iw) #democontrols
 			return dl;
@@ -1048,6 +1051,7 @@ dlight_t *CL_AllocDlight (int key)
 	dl = &cl_dlights[0];
 	memset (dl, 0, sizeof(*dl));
 	dl->key = key;
+	dl->style = -1;
 	dl->color[0] = dl->color[1] = dl->color[2] = 1; //johnfitz -- lit support via lordhavoc
 	dl->spawn = cl.mtime[0] - 0.001; // woods (iw) #democontrols
 	return dl;
@@ -1079,6 +1083,16 @@ void CL_DecayLights (void)
 		dl->radius -= time*dl->decay;
 		if (dl->radius < 0)
 			dl->radius = 0;
+
+		dl->color[0] -= time*dl->channelfade[0];
+		dl->color[1] -= time*dl->channelfade[1];
+		dl->color[2] -= time*dl->channelfade[2];
+		if (dl->color[0] < 0)
+			dl->color[0] = 0;
+		if (dl->color[1] < 0)
+			dl->color[1] = 0;
+		if (dl->color[2] < 0)
+			dl->color[2] = 0;
 	}
 }
 

@@ -115,8 +115,21 @@ void AddLightBlend (float r, float g, float b, float a2)
 	v_blend[2] = v_blend[2]*(1-a2) + b*a2;
 }
 
+float R_DlightStyleScale (const dlight_t *light)
+{
+	if (light->style < 0 || light->style >= MAX_LIGHTSTYLES)
+		return 1.0f;
+
+	return d_lightstylevalue[light->style] * (1.0f / 256.0f);
+}
+
 void R_RenderDlight (dlight_t *light) // woods colored flashblend #colorblends
 {
+	float stylescale = R_DlightStyleScale(light);
+
+	if (stylescale <= 0.0f)
+		return;
+
 	if (r_coloredpowerupglow.value <= 0.0f)
 	{
 	int		i, j;
@@ -130,17 +143,17 @@ void R_RenderDlight (dlight_t *light) // woods colored flashblend #colorblends
 	if (VectorLength (v) < rad)
 	{	// view is inside the dlight
 		if (light->color[0]==1 && light->color[1]==1 && light->color[2]==1)
-			AddLightBlend (1.0, 0.5, 0.0, light->radius * 0.0003);
+			AddLightBlend (1.0, 0.5, 0.0, light->radius * 0.0003 * stylescale);
 		else
-			AddLightBlend (light->color[0], light->color[1], light->color[2], light->radius * 0.0003);
+			AddLightBlend (light->color[0], light->color[1], light->color[2], light->radius * 0.0003 * stylescale);
 		return;
 	}
 
 	glBegin (GL_TRIANGLE_FAN);
 	if (light->color[0]==1 && light->color[1]==1 && light->color[2]==1)	//if its default full-white, show it with an orange tint instead to replicate expected QS behaviour without breaking coloured dlights.
-		glColor3f (0.2f, 0.1f, 0.0);
+		glColor3f (0.2f * stylescale, 0.1f * stylescale, 0.0);
 	else
-		glColor3f (light->color[0]*.2f, light->color[1]*.2f, light->color[2]*.2f);
+		glColor3f (light->color[0]*.2f * stylescale, light->color[1]*.2f * stylescale, light->color[2]*.2f * stylescale);
 	for (i=0 ; i<3 ; i++)
 		v[i] = light->origin[i] - vpn[i]*rad;
 	glVertex3fv (v);
@@ -219,7 +232,7 @@ void R_RenderDlight (dlight_t *light) // woods colored flashblend #colorblends
 					blend_scale *= life_frac;
 				}
 
-				float alpha = light->radius * BASE_BLEND_SCALE * blend_scale;
+				float alpha = light->radius * BASE_BLEND_SCALE * blend_scale * stylescale;
 				if (alpha > 1.0f) alpha = 1.0f;
 				else if (alpha < 0.0f) alpha = 0.0f;
 
@@ -248,6 +261,9 @@ void R_RenderDlight (dlight_t *light) // woods colored flashblend #colorblends
 		{
 			disc_r = 0.2f; disc_g = 0.1f; disc_b = 0.0f;
 		}
+		disc_r *= stylescale;
+		disc_g *= stylescale;
+		disc_b *= stylescale;
 
 		glBegin(GL_TRIANGLE_FAN);
 		glColor3f(disc_r, disc_g, disc_b);
@@ -434,7 +450,7 @@ void R_PushDlights (void)
 			continue;
 		}
 
-		if (l->die < cl.time || !l->radius)
+		if (l->die < cl.time || !l->radius || R_DlightStyleScale(l) <= 0.0f)
 			continue;
 		R_MarkLights (l, l->origin, r_framecount, i, cl.worldmodel->nodes);
 	}

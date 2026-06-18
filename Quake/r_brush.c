@@ -179,7 +179,8 @@ void R_DrawBrushModel (entity_t *e)
 		for (k=0 ; k<MAX_DLIGHTS ; k++)
 		{
 			if ((cl_dlights[k].die < cl.time) ||
-				(!cl_dlights[k].radius))
+				(!cl_dlights[k].radius) ||
+				(R_DlightStyleScale(&cl_dlights[k]) <= 0.0f))
 				continue;
 
 			VectorSubtract(cl_dlights[k].origin, e->origin, lightorg);
@@ -1302,7 +1303,7 @@ static void R_AddDynamicLights (msurface_t *surf, unsigned *blocklights, entity_
 	int			i;
 	int			smax, tmax;
 	//johnfitz -- lit support via lordhavoc
-	float		cred, cgreen, cblue, brightness;
+	float		cred, cgreen, cblue, brightness, stylescale;
 	unsigned	*bl;
 	//johnfitz
 	vec3_t		lightofs;	//Spike: light surfaces based upon where they are now instead of their default position.
@@ -1316,6 +1317,9 @@ static void R_AddDynamicLights (msurface_t *surf, unsigned *blocklights, entity_
 			continue;		// not lit by this light
 
 		rad = lights[lnum].radius;
+		stylescale = R_DlightStyleScale(&lights[lnum]);
+		if (stylescale <= 0.0f)
+			continue;
 		if (currentent->currentangles[0] || currentent->currentangles[1] || currentent->currentangles[2])
 		{
 			vec3_t temp, axis[3];
@@ -1345,9 +1349,9 @@ static void R_AddDynamicLights (msurface_t *surf, unsigned *blocklights, entity_
 
 		//johnfitz -- lit support via lordhavoc
 		bl = blocklights;
-		cred = lights[lnum].color[0] * 256.0f;
-		cgreen = lights[lnum].color[1] * 256.0f;
-		cblue = lights[lnum].color[2] * 256.0f;
+		cred = lights[lnum].color[0] * 256.0f * stylescale;
+		cgreen = lights[lnum].color[1] * 256.0f * stylescale;
+		cblue = lights[lnum].color[2] * 256.0f * stylescale;
 		//johnfitz
 		for (t = 0 ; t<tmax ; t++)
 		{

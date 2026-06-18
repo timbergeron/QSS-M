@@ -445,6 +445,7 @@ extern int lightmap_count;	//allocated lightmaps
 // path that sets lm->modified+rectchange (r_brush.c R_RenderDynamicLightmaps,
 // r_world.c bmodel-drawcache + scenecache), or R_UploadLightmap drops the upload.
 void R_LightmapMarkDirtyBands (struct lightmap_s *lm, int light_t, int tmax);
+float R_DlightStyleScale (const dlight_t *light);
 
 extern qboolean r_drawflat_cheatsafe, r_fullbright_cheatsafe, r_lightmap_cheatsafe, r_drawworld_cheatsafe; //johnfitz
 

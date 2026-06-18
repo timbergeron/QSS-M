@@ -108,6 +108,8 @@ typedef struct
 	float	decay;				// drop this each second
 	float	minlight;			// don't add when contributing less
 	int		key;
+	int		style;				// lightstyle index, or -1 for unstyled
+	vec3_t	channelfade;		// scripted particle light RGB fade per second
 	vec3_t	color;				//johnfitz -- lit support via lordhavoc
 } dlight_t;
 
@@ -649,6 +651,17 @@ void CL_ParseEffect (qboolean big);
 void CL_UpdateBeam (struct qmodel_s *m, const char *trailname, const char *impactname, int ent, float *start, float *end);
 void CL_ParseTEnt (void);
 void CL_UpdateTEnts (void);
+void CL_ClearSpriteEffects (void);
+
+#define SPRITE_EFFECT_ADDITIVE		(1u<<0)
+#define SPRITE_EFFECT_TRANSLUCENT	(1u<<1)
+#define SPRITE_EFFECT_FULLBRIGHT	(1u<<2)
+#define SPRITE_EFFECT_NOSHADOW		(1u<<3)
+
+void CL_SpawnSpriteEffect (vec3_t org, vec3_t dir, vec3_t orientationup, struct qmodel_s *model,
+						   int startframe, int framecount, float framerate, float alpha,
+						   float scale, float randspin, float gravity, int traileffect,
+						   unsigned int renderflags, int skinnum, float red, float green, float blue);
 
 void CL_FreeState(void);
 void CL_ClearState (void);

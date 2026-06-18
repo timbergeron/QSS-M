@@ -2804,7 +2804,7 @@ R_SetupAliasLighting -- johnfitz -- broken out from R_DrawAliasModel and rewritt
 void R_SetupAliasLighting (entity_t	*e)
 {
 	vec3_t		dist;
-	float		add;
+	float		add, stylescale;
 	int			i;
 	int		quantizedangle;
 	float		radiansangle;
@@ -2812,6 +2812,19 @@ void R_SetupAliasLighting (entity_t	*e)
 
 	plcolour_t dhvalue = CL_PLColours_Parse(cl_damagehuecolor.string); // woods #damage
 	byte* dhuecolor = CL_PLColours_ToRGB(&dhvalue); // woods #damage
+
+	if (e->effects & EF_FULLBRIGHT)
+	{
+		lightcolor[0] = lightcolor[1] = lightcolor[2] = 200.0f;
+		shadevector[0] = shadevector[1] = shadevector[2] = 0.0f;
+		shadedots = r_avertexnormal_dots[0];
+		VectorScale (lightcolor, 1.0f / 200.0f, lightcolor);
+
+		lightcolor[0] *= e->netstate.colormod[0] / 32.0;
+		lightcolor[1] *= e->netstate.colormod[1] / 32.0;
+		lightcolor[2] *= e->netstate.colormod[2] / 32.0;
+		return;
+	}
 
 	if (!r_refdef.drawworld)
 		lightcolor[0] = lightcolor[1] = lightcolor[2] = 255;
@@ -2833,8 +2846,11 @@ void R_SetupAliasLighting (entity_t	*e)
 		{
 			if (cl_dlights[i].die >= cl.time || (cl_dlights[i].spawn > cl.mtime[0] && cls.demoplayback)) // woods (iw) #democontrols
 			{
+				stylescale = R_DlightStyleScale(&cl_dlights[i]);
+				if (stylescale <= 0.0f)
+					continue;
 				VectorSubtract (origin, cl_dlights[i].origin, dist);
-				add = cl_dlights[i].radius - VectorLength(dist);
+				add = (cl_dlights[i].radius - VectorLength(dist)) * stylescale;
 				if (add > 0)
 					VectorMA (lightcolor, add, cl_dlights[i].color, lightcolor);
 			}
@@ -3146,6 +3162,8 @@ void R_DrawAliasModel (entity_t *e)
 		glHint (GL_PERSPECTIVE_CORRECTION_HINT, GL_FASTEST);
 	overbright = gl_overbright_models.value;
 	shading = true;
+	if (e->effects & EF_FULLBRIGHT)
+		overbright = false;
 
 	//
 	// set up for alpha blending
@@ -3374,6 +3392,29 @@ void R_DrawAliasModel (entity_t *e)
 		else if (glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones||!lerpdata.bonestate))
 		{
 			GL_DrawAliasFrame_GLSL (glsl, paliashdr, lerpdata, tex, e);
+		}
+		else if (e->effects & EF_FULLBRIGHT)
+		{
+			GL_Bind (tex.base);
+			glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+			shading = false;
+			glColor4f(lightcolor[0], lightcolor[1], lightcolor[2], entalpha);
+			GL_DrawAliasFrame (paliashdr, lerpdata);
+			if (tex.luma)
+			{
+				glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+				GL_Bind(tex.luma);
+				glEnable(GL_BLEND);
+				glBlendFunc (GL_ONE, GL_ONE);
+				glDepthMask(GL_FALSE);
+				glColor3f(entalpha,entalpha,entalpha);
+				Fog_StartAdditive ();
+				GL_DrawAliasFrame (paliashdr, lerpdata);
+				Fog_StopAdditive ();
+				glDepthMask(GL_TRUE);
+				glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+				glDisable(GL_BLEND);
+			}
 		}
 		else if (overbright)
 		{

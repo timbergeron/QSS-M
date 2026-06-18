@@ -1078,7 +1078,7 @@ static qboolean R_BModelDrawCache_HasActiveDlights (const entity_t *ent)
 		float radius, dist2 = 0.0f;
 		int axis;
 
-		if (cl_dlights[i].die < cl.time || !cl_dlights[i].radius)
+		if (cl_dlights[i].die < cl.time || !cl_dlights[i].radius || R_DlightStyleScale(&cl_dlights[i]) <= 0.0f)
 			continue;
 		radius = cl_dlights[i].radius;
 		for (axis = 0; axis < 3; axis++)
@@ -2522,13 +2522,16 @@ static void R_GrassBuildDlightList (const msurface_t *s, const entity_t *ent, gr
 		dlight_t *light;
 		grass_dlight_t *dst;
 		vec3_t lightorg;
-		float cull_radius;
+		float cull_radius, stylescale;
 
 		if (use_dlightbits && !(s->dlightbits[lnum >> 5] & (1U << (lnum & 31))))
 			continue;
 
 		light = &cl_dlights[lnum];
 		if (light->die < cl.time || (light->spawn > cl.mtime[0] && cls.demoplayback) || !light->radius)
+			continue;
+		stylescale = R_DlightStyleScale(light);
+		if (stylescale <= 0.0f)
 			continue;
 		cull_radius = light->radius - light->minlight;
 		if (cull_radius <= 0.0f)
@@ -2542,7 +2545,7 @@ static void R_GrassBuildDlightList (const msurface_t *s, const entity_t *ent, gr
 
 		dst = &list->lights[list->count++];
 		VectorCopy(lightorg, dst->origin);
-		VectorCopy(light->color, dst->color);
+		VectorScale(light->color, stylescale, dst->color);
 		dst->radius = light->radius;
 		dst->minlight = light->minlight;
 		dst->cull_radius2 = cull_radius * cull_radius;
@@ -6116,12 +6119,34 @@ static qboolean RSceneCache_HasActiveDlights(const dlight_t *lights, size_t coun
 
 	for (i = 0; i < count; ++i)
 	{
-		if (lights[i].die < time || !lights[i].radius)
+		if (lights[i].die < time || !lights[i].radius || R_DlightStyleScale(&lights[i]) <= 0.0f)
 			continue;
 		return true;
 	}
 
 	return false;
+}
+
+static void RSceneCache_CopyDlights(dlight_t *dst, const dlight_t *src, size_t count)
+{
+	size_t i;
+
+	memcpy(dst, src, sizeof(*dst) * count);
+	for (i = 0; i < count; i++)
+	{
+		float stylescale = R_DlightStyleScale(&dst[i]);
+
+		if (stylescale <= 0.0f)
+		{
+			dst[i].radius = 0;
+			dst[i].style = -1;
+			continue;
+		}
+
+		if (stylescale != 1.0f)
+			VectorScale(dst[i].color, stylescale, dst[i].color);
+		dst[i].style = -1;
+	}
 }
 
 static int RSceneCache_Thread(void *ctx)
@@ -6156,7 +6181,8 @@ static int RSceneCache_Thread(void *ctx)
 				for (j = 0; j < countof(cache->dlights); j++)
 				{
 					if ((cache->dlights[j].die < cache->time) ||
-						(!cache->dlights[j].radius))
+						(!cache->dlights[j].radius) ||
+						(R_DlightStyleScale(&cache->dlights[j]) <= 0.0f))
 						continue;
 					//FIXME: no model context passed
 					R_MarkLights (&cache->dlights[j], cache->dlights[j].origin, dlightframecount, j, cache->worldmodel->nodes);
@@ -6224,7 +6250,8 @@ static int RSceneCache_Thread(void *ctx)
 					for (j = 0; j < countof(cache->dlights); j++)
 					{
 						if ((cache->dlights[j].die < cache->time) ||
-							(!cache->dlights[j].radius))
+							(!cache->dlights[j].radius) ||
+							(R_DlightStyleScale(&cache->dlights[j]) <= 0.0f))
 							continue;
 						//FIXME: no model context passed
 						R_MarkLights (&cache->dlights[j], cache->dlights[j].origin, dlightframecount, j, cache->worldmodel->nodes + sub->headnode[0]);
@@ -6492,7 +6519,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 						continue;
 					}
 					
-					if (l->die < cl.time || !l->radius)
+					if (l->die < cl.time || !l->radius || R_DlightStyleScale(l) <= 0.0f)
 						continue;
 
 					have_active_dlights = true;
@@ -6616,7 +6643,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 		cache->hostframe = host_framecount;
 		memcpy(cache->pvs, vis, rowbytes);
 		memcpy(cache->cachedsubmodels, bakesubmodels, ((cl.worldmodel->numsubmodels+7)>>3));
-		memcpy(cache->dlights, cl_dlights, sizeof(cache->dlights));
+		RSceneCache_CopyDlights(cache->dlights, cl_dlights, countof(cache->dlights));
 		cache->time = cl.time;
 
 		//create the worker if it doesn't exist...

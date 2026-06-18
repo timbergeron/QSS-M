@@ -58,6 +58,99 @@ void CL_Beam_CalculatePositions(const beam_t *b, vec3_t start, vec3_t end) // wo
 	VectorCopy(b->end, end);
 }
 
+#define MAX_SPRITE_EFFECTS 128
+
+typedef struct
+{
+	qboolean	active;
+	vec3_t		origin;
+	vec3_t		oldorigin;
+	vec3_t		velocity;
+	vec3_t		angles;
+	vec3_t		avel;
+	vec3_t		rgb;
+	qmodel_t	*model;
+	int			firstframe;
+	int			numframes;
+	int			skinnum;
+	int			traileffect;
+	unsigned int renderflags;
+	float		gravity;
+	float		startalpha;
+	float		endalpha;
+	float		scale;
+	float		start;
+	float		framerate;
+	struct trailstate_s *trailstate;
+} sprite_effect_t;
+
+static sprite_effect_t cl_sprite_effects[MAX_SPRITE_EFFECTS];
+static int cl_sprite_effects_running;
+static double cl_sprite_effect_overflow_time;
+
+static float CL_TEntRandomFloat (void)
+{
+	return rand() * (1.0f / RAND_MAX);
+}
+
+static float CL_TEntRandomSigned (void)
+{
+	return rand() * (2.0f / RAND_MAX) - 1.0f;
+}
+
+static void CL_ClearSpriteEffect (sprite_effect_t *effect)
+{
+	PScript_DelinkTrailstate(&effect->trailstate);
+	memset(effect, 0, sizeof(*effect));
+	effect->traileffect = P_INVALID;
+}
+
+void CL_ClearSpriteEffects (void)
+{
+	int i;
+
+	for (i = 0; i < cl_sprite_effects_running; i++)
+		PScript_DelinkTrailstate(&cl_sprite_effects[i].trailstate);
+
+	memset(cl_sprite_effects, 0, sizeof(cl_sprite_effects));
+	cl_sprite_effects_running = 0;
+}
+
+static sprite_effect_t *CL_AllocSpriteEffect (vec3_t org)
+{
+	int i;
+	sprite_effect_t *effect;
+
+	for (i = 0; i < cl_sprite_effects_running; i++)
+		if (!cl_sprite_effects[i].active)
+			break;
+
+	if (i == MAX_SPRITE_EFFECTS)
+	{
+		i = 0;
+		if (!cl_sprite_effect_overflow_time || cl_sprite_effect_overflow_time + CONSOLE_RESPAM_TIME < realtime)
+		{
+			Con_Printf ("Sprite effect list overflow!\n");
+			cl_sprite_effect_overflow_time = realtime;
+		}
+	}
+	else if (i == cl_sprite_effects_running)
+		cl_sprite_effects_running++;
+
+	effect = &cl_sprite_effects[i];
+	CL_ClearSpriteEffect(effect);
+
+	effect->active = true;
+	VectorCopy(org, effect->origin);
+	VectorCopy(org, effect->oldorigin);
+	effect->start = cl.time;
+	effect->startalpha = 1;
+	effect->scale = 1;
+	effect->framerate = 10;
+
+	return effect;
+}
+
 static sfx_t			*cl_sfx_wizhit;
 static sfx_t			*cl_sfx_knighthit;
 static sfx_t			*cl_sfx_tink1;
@@ -179,13 +272,64 @@ static void CL_ParseBeam (qmodel_t *m, const char *trailname, const char *impact
 	CL_UpdateBeam (m, trailname, impactname, ent, start, end);
 }
 
-void CL_SpawnSpriteEffect(vec3_t org/*, vec3_t dir, vec3_t orientationup*/, qmodel_t *model, int startframe, int framecount, float framerate/*, float alpha, float scale, float randspin, float gravity, int traileffect, unsigned int renderflags, int skinnum*/)
+void CL_SpawnSpriteEffect(vec3_t org, vec3_t dir, vec3_t orientationup, qmodel_t *model,
+						  int startframe, int framecount, float framerate, float alpha,
+						  float scale, float randspin, float gravity, int traileffect,
+						  unsigned int renderflags, int skinnum, float red, float green, float blue)
 {
+	sprite_effect_t *effect;
+
+	if (!model)
+		return;
+
 	if (startframe < 0)
 		startframe = framecount = 0;
 	if (!framecount)
 		framecount = model->numframes;
-	Con_DPrintf("CL_SpawnSpriteEffect: not implemented\n");
+
+	effect = CL_AllocSpriteEffect(org);
+	effect->model = model;
+	effect->firstframe = startframe;
+	effect->numframes = framecount;
+	effect->framerate = framerate ? framerate : 10;
+	effect->skinnum = skinnum;
+	effect->traileffect = traileffect;
+	effect->scale = scale > 0 ? scale : 1;
+	effect->gravity = gravity;
+	effect->renderflags = renderflags;
+	effect->rgb[0] = red;
+	effect->rgb[1] = green;
+	effect->rgb[2] = blue;
+
+	if (model->type == mod_sprite || alpha < 0)
+		effect->endalpha = fabs(alpha);
+	effect->startalpha = fabs(alpha);
+
+	if (randspin)
+	{
+		effect->angles[0] = CL_TEntRandomFloat() * 360;
+		effect->angles[1] = CL_TEntRandomFloat() * 360;
+		effect->angles[2] = CL_TEntRandomFloat() * 360;
+		effect->avel[0] = CL_TEntRandomSigned() * randspin;
+		effect->avel[1] = CL_TEntRandomSigned() * randspin;
+		effect->avel[2] = CL_TEntRandomSigned() * randspin;
+	}
+
+	if (orientationup)
+	{
+		effect->angles[0] = acos(CLAMP(-1.0f, orientationup[2], 1.0f)) / M_PI * 180;
+		if (orientationup[0])
+			effect->angles[1] = atan2(orientationup[1], orientationup[0]) / M_PI * 180;
+		else if (orientationup[1] > 0)
+			effect->angles[1] = 90;
+		else if (orientationup[1] < 0)
+			effect->angles[1] = 270;
+		else
+			effect->angles[1] = 0;
+	}
+
+	if (dir)
+		VectorCopy(dir, effect->velocity);
 }
 
 /*
@@ -322,7 +466,8 @@ void CL_ParseTEnt (void)
 		if (type==TEFTE_EXPLOSION_SPRITE)
 		{
 			qmodel_t *mod = Mod_ForName ("progs/s_explod.spr", false);
-			CL_SpawnSpriteEffect(pos/*, NULL, NULL*/, mod, 0, 0, 10/*, mod->type==mod_sprite?-1:1, 1, 0, 0, P_INVALID, 0, 0*/);
+			if (mod)
+				CL_SpawnSpriteEffect(pos, NULL, NULL, mod, 0, 0, 10, mod->type==mod_sprite ? -1 : 1, 1, 0, 0, P_INVALID, 0, 0, 1.0f, 1.0f, 1.0f);
 		}
 		break;
 
@@ -574,7 +719,8 @@ void CL_ParseEffect (qboolean big)
 	framerate = MSG_ReadByte();
 
 	mod = cl.model_precache[modelindex];
-	CL_SpawnSpriteEffect(org/*, NULL, NULL*/, mod, startframe, framecount, framerate/*, mod->type==mod_sprite?-1:1, 1, 0, 0, P_INVALID, 0, 0*/);
+	if (mod)
+		CL_SpawnSpriteEffect(org, NULL, NULL, mod, startframe, framecount, framerate, mod->type==mod_sprite ? -1 : 1, 1, 0, 0, P_INVALID, 0, 0, 1.0f, 1.0f, 1.0f);
 }
 
 /*
@@ -600,6 +746,134 @@ entity_t *CL_NewTempEntity (void)
 	return ent;
 }
 
+static void CL_UpdateSpriteEffects (float frametime)
+{
+	int i;
+	int lastactive;
+	sprite_effect_t *effect;
+	entity_t *ent;
+	vec3_t pos, normal;
+	float f, alpha, scale;
+	int frame, firstframe, numframes;
+
+	lastactive = -1;
+
+	for (i = 0, effect = cl_sprite_effects; i < cl_sprite_effects_running; i++, effect++)
+	{
+		if (!effect->active)
+			continue;
+
+		lastactive = i;
+
+		if (!effect->model)
+		{
+			CL_ClearSpriteEffect(effect);
+			continue;
+		}
+
+		firstframe = effect->firstframe;
+		numframes = effect->numframes;
+		if (firstframe < 0)
+		{
+			firstframe = 0;
+			numframes = effect->model->numframes;
+		}
+		else if (!numframes)
+			numframes = effect->model->numframes - firstframe;
+
+		if (numframes <= 0 || firstframe >= effect->model->numframes)
+		{
+			CL_ClearSpriteEffect(effect);
+			continue;
+		}
+
+		f = effect->framerate * (cl.time - effect->start);
+		frame = (int)f;
+		scale = 1;
+
+		if (effect->endalpha && frame == numframes)
+		{
+			scale = 1 - (f - frame);
+			frame = numframes - 1;
+		}
+		else if (frame >= numframes || frame < 0)
+		{
+			CL_ClearSpriteEffect(effect);
+			continue;
+		}
+
+		ent = CL_NewTempEntity();
+		if (!ent)
+			return;
+
+		if (effect->gravity)
+		{
+			VectorMA(effect->origin, frametime, effect->velocity, pos);
+			if ((effect->velocity[0] || effect->velocity[1] || effect->velocity[2]) && cl.worldmodel)
+			{
+				normal[0] = normal[1] = normal[2] = 0;
+				if (CL_TraceLine(effect->origin, pos, ent->origin, normal, NULL) < 1)
+				{
+					float bounce = DotProduct(effect->velocity, normal) * -1.5f;
+					VectorMA(effect->velocity, bounce, normal, effect->velocity);
+					VectorScale(effect->velocity, 0.9f, effect->velocity);
+					if (normal[2] > 0.7f && DotProduct(effect->velocity, effect->velocity) < 100)
+					{
+						effect->velocity[0] = effect->velocity[1] = effect->velocity[2] = 0;
+						effect->avel[0] = effect->avel[1] = effect->avel[2] = 0;
+					}
+				}
+				else
+					effect->velocity[2] -= effect->gravity * frametime;
+				VectorCopy(ent->origin, effect->origin);
+			}
+			else
+			{
+				VectorCopy(pos, ent->origin);
+				VectorCopy(pos, effect->origin);
+			}
+		}
+		else
+			VectorMA(effect->origin, f, effect->velocity, ent->origin);
+
+		VectorMA(effect->angles, frametime, effect->avel, effect->angles);
+		VectorCopy(effect->angles, ent->angles);
+		ent->model = effect->model;
+		ent->skinnum = effect->skinnum;
+		ent->frame = CLAMP(0, firstframe + frame, effect->model->numframes - 1);
+		ent->effects = 0;
+		if (effect->renderflags & SPRITE_EFFECT_ADDITIVE)
+			ent->effects |= EF_ADDITIVE;
+		if (effect->renderflags & SPRITE_EFFECT_FULLBRIGHT)
+			ent->effects |= EF_FULLBRIGHT;
+		if (effect->renderflags & SPRITE_EFFECT_NOSHADOW)
+			ent->effects |= EF_NOSHADOW;
+		ent->netstate.colormod[0] = (byte)CLAMP(0.0f, effect->rgb[0] * 32.0f, 255.0f);
+		ent->netstate.colormod[1] = (byte)CLAMP(0.0f, effect->rgb[1] * 32.0f, 255.0f);
+		ent->netstate.colormod[2] = (byte)CLAMP(0.0f, effect->rgb[2] * 32.0f, 255.0f);
+
+		alpha = (1.0f - f / numframes) * (effect->startalpha - effect->endalpha) + effect->endalpha;
+		alpha = CLAMP(0.0f, alpha, 1.0f);
+		if ((effect->renderflags & SPRITE_EFFECT_TRANSLUCENT) && alpha >= 1.0f)
+			alpha = 0.99f;
+		if (alpha < 1.0f)
+			ent->alpha = ENTALPHA_ENCODE(alpha);
+
+		scale *= effect->scale;
+		if (scale > 0)
+			ent->netstate.scale = (byte)CLAMP(1.0f, scale * ENTSCALE_DEFAULT, 255.0f);
+
+		VectorCopy(ent->origin, ent->previousorigin);
+		VectorCopy(ent->origin, ent->currentorigin);
+
+		if (effect->traileffect != P_INVALID)
+			PScript_ParticleTrail(effect->oldorigin, ent->origin, effect->traileffect, frametime, 0, NULL, &effect->trailstate);
+		VectorCopy(ent->origin, effect->oldorigin);
+	}
+
+	cl_sprite_effects_running = lastactive + 1;
+}
+
 
 /*
 =================
@@ -620,6 +894,8 @@ void CL_UpdateTEnts (void)
 
 	if (cl.paused)
 		srand ((int) (cl.time * 1000)); //johnfitz -- freeze beams when paused
+
+	CL_UpdateSpriteEffects(host_frametime);
 
 // update lightning
 	for (i=0, b=cl_beams ; i< MAX_BEAMS ; i++, b++)

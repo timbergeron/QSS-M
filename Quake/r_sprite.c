@@ -100,6 +100,11 @@ void R_DrawSpriteModel (entity_t *e)
 	float			*s_up, *s_right;
 	float			angle, sr, cr;
 	float			scale = ENTSCALE_DECODE(e->netstate.scale);
+	float			entalpha = ENTALPHA_DECODE(e->alpha);
+	qboolean		blend;
+
+	if (entalpha <= 0.0f)
+		return;
 
 	frame = R_GetSpriteFrame (e);
 	psprite = (msprite_t *) currententity->model->cache.data;
@@ -163,7 +168,7 @@ void R_DrawSpriteModel (entity_t *e)
 	if (psprite->type == SPR_ORIENTED)
 		GL_PolygonOffset (OFFSET_DECAL);
 
-	glColor3f (e->netstate.colormod[0]/32.0,e->netstate.colormod[0]/32.0,e->netstate.colormod[0]/32.0);
+	glColor4f (e->netstate.colormod[0]/32.0,e->netstate.colormod[1]/32.0,e->netstate.colormod[2]/32.0, entalpha);
 
 	GL_DisableMultitexture();
 
@@ -171,13 +176,17 @@ void R_DrawSpriteModel (entity_t *e)
 
 	glEnable (GL_ALPHA_TEST);
 
-	glAlphaFunc(GL_GREATER, 0.1); // woods #extsprites
+	glAlphaFunc(GL_GREATER, 0.1f * entalpha); // woods #extsprites
 
-	if (frame->gltexture->flags & TEXPREF_ALPHA) // woods #extsprites
+	blend = (frame->gltexture->flags & TEXPREF_ALPHA) || entalpha < 1.0f || (e->effects & EF_ADDITIVE);
+	if (blend) // woods #extsprites
 	{
 		glDepthMask(GL_FALSE);
 		glEnable(GL_BLEND);
-		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		if (e->effects & EF_ADDITIVE)
+			glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+		else
+			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	}
 
 	glBegin (GL_TRIANGLE_FAN); //was GL_QUADS, but changed to support r_showtris
@@ -206,13 +215,14 @@ void R_DrawSpriteModel (entity_t *e)
 	glDisable (GL_ALPHA_TEST);
 	glAlphaFunc(GL_GREATER, 0.666); // woods #extsprites
 
-	if (frame->gltexture->flags & TEXPREF_ALPHA) // woods #extsprites
+	if (blend) // woods #extsprites
 	{
 		glDepthMask(GL_TRUE);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		glDisable(GL_BLEND);
 	}
 
-	glColor3f (1, 1, 1);
+	glColor4f (1, 1, 1, 1);
 
 	//johnfitz: offset decals
 	if (psprite->type == SPR_ORIENTED)
