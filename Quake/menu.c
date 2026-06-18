@@ -25180,6 +25180,7 @@ static qboolean ServerList_ParseCaretCodePoint(const unsigned char** src, uint32
 {
 	const unsigned char* s = *src;
 	int c;
+	int ndigits;
 
 	if (s[1] == 'U' &&
 		q_isxdigit(s[2]) && q_isxdigit(s[3]) &&
@@ -25198,16 +25199,17 @@ static qboolean ServerList_ParseCaretCodePoint(const unsigned char** src, uint32
 
 	s += 2;
 	c = 0;
+	ndigits = 0;
 	while (*s && *s != '}')
 	{
 		int hex = ServerList_HexValue(*s);
-		if (hex < 0)
+		if (hex < 0 || ++ndigits > 6) // bound digit count to avoid signed shift overflow
 			return false;
 		c = (c << 4) | hex;
 		s++;
 	}
 
-	if (*s != '}')
+	if (*s != '}' || !ndigits || c > 0x10FFFF) // require >=1 digit, reject out-of-range codepoints
 		return false;
 
 	*codepoint = (uint32_t)c;
@@ -26062,6 +26064,13 @@ static size_t WriteMemoryCallback (void* contents, size_t size, size_t nmemb, vo
 void setStatusFlagBasedOnTimestamp (const char* timestamp, const char* lastQuery, qboolean* status)
 {
 	char bufTimestamp[20], bufLastQuery[20]; // Extract time components up to seconds
+
+	if (!timestamp || !lastQuery) // guard malformed/incomplete JSON entries
+	{
+		*status = false;
+		return;
+	}
+
 	Q_strncpy(bufTimestamp, timestamp, 19);
 	bufTimestamp[19] = '\0';
 	Q_strncpy(bufLastQuery, lastQuery, 19);
