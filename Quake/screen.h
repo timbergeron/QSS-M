@@ -40,6 +40,7 @@ void SCR_CenterPrint (const char *str);
 
 void SCR_BeginLoadingPlaque (void);
 void SCR_EndLoadingPlaque (void);
+void SCR_ShowSaving (void);
 
 int SCR_ModalMessage (const char *text, float timeout); //johnfitz -- added timeout
 
@@ -95,6 +96,7 @@ typedef enum {
 	CANVAS_SCORES, // woods #observerhud
 	CANVAS_BOTTOMRIGHT,
 	CANVAS_TOPRIGHT,
+	CANVAS_TOPRIGHT_SMALL,
 	CANVAS_TOPRIGHT2, // woods #matchhud
 	CANVAS_TOPRIGHT3, // woods #matchhud
 	CANVAS_TOPRIGHT4, // woods #hud_diff

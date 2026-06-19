@@ -41,6 +41,7 @@ void Sys_FileSeek (int handle, qofs_t position);
 int Sys_FileRead (int handle, void *dest, int count);
 int Sys_FileWrite (int handle,const void *data, int count);
 void Sys_mkdir (const char *path);
+qboolean Sys_GetFileTime (const char *path, time_t *out);
 
 int Sys_FileType (const char *path);
 /* returns an FS entity type, i.e. FS_ENT_FILE or FS_ENT_DIRECTORY.
@@ -74,6 +75,8 @@ void Sys_Sleep (unsigned long msecs);
 
 void Sys_SendKeyEvents (void);
 // Perform Key_Event () callbacks until the input que is empty
+
+int Sys_remove (const char *path);
 
 void Sys_SetDockProgress (float fraction);
 // Show platform download progress: macOS Dock badge or Windows taskbar strip.

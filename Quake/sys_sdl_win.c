@@ -136,6 +136,11 @@ qofs_t Sys_filelength (FILE *f)
 	return end;
 }
 
+int Sys_remove (const char *path)
+{
+	return remove (path);
+}
+
 qofs_t Sys_FileOpenRead (const char *path, int *hndl)
 {
 	FILE	*f;
@@ -217,6 +222,30 @@ int Sys_FileType (const char *path)
 		return FS_ENT_DIRECTORY;
 
 	return FS_ENT_FILE;
+}
+
+qboolean Sys_GetFileTime (const char *path, time_t *out)
+{
+	HANDLE		handle;
+	FILETIME	filetime;
+	qboolean	ret;
+
+	handle = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	if (handle == INVALID_HANDLE_VALUE)
+		return false;
+
+	ret = (GetFileTime(handle, NULL, NULL, &filetime) != FALSE);
+	CloseHandle(handle);
+
+	if (ret)
+	{
+		LARGE_INTEGER li;
+		li.LowPart = filetime.dwLowDateTime;
+		li.HighPart = filetime.dwHighDateTime;
+		*out = (time_t)(li.QuadPart / 10000000LL - 11644473600LL);
+	}
+
+	return ret;
 }
 
 static qboolean Sys_FileURLCharIsSafe (unsigned char c)

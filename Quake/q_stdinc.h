@@ -265,6 +265,16 @@ typedef ptrdiff_t	ssize_t;
 #define inline __inline
 #endif	/* _MSC_VER */
 
+#if defined(_MSC_VER)
+#define THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+#define THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__)
+#define THREAD_LOCAL __thread
+#else
+#error TLS not supported
+#endif
+
 /*==========================================================================*/
 
 #endif	/* QSTDINC_H */

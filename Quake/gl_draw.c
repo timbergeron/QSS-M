@@ -3209,6 +3209,11 @@ void GL_SetCanvas (canvastype newcanvas)
 		glOrtho (0, 320, 200, 0, -99999, 99999);
 		glViewport (glx+glwidth-320*s, gly+glheight-200*s, 320*s, 200*s);
 		break;
+	case CANVAS_TOPRIGHT_SMALL:
+		s = CLAMP (1.0, scr_sbarscale.value - 1.0, q_min ((float)glwidth / 320.0, (float)glheight / 200.0));
+		glOrtho (0, 320, 200, 0, -99999, 99999);
+		glViewport (glx+glwidth-320*s, gly+glheight-200*s, 320*s, 200*s);
+		break;
 	case CANVAS_TOPRIGHT2: // woods for upper right match clock placement #matchhud
 		s = ((float)glwidth / vid.conwidth) * 2; //use console scale
 		glOrtho(0, 320, 200, 0, -99999, 99999);

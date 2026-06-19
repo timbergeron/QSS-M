@@ -91,6 +91,11 @@ qofs_t Sys_filelength (FILE *f)
 	return end;
 }
 
+int Sys_remove (const char *path)
+{
+	return remove (path);
+}
+
 qofs_t Sys_FileOpenRead (const char *path, int *hndl)
 {
 	FILE	*f;
@@ -175,6 +180,17 @@ int Sys_FileType (const char *path)
 		return FS_ENT_FILE;
 
 	return FS_ENT_NONE;
+}
+
+qboolean Sys_GetFileTime (const char *path, time_t *out)
+{
+	struct stat st;
+
+	if (stat(path, &st) != 0)
+		return false;
+
+	*out = st.st_mtime;
+	return true;
 }
 
 

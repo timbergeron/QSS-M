@@ -1638,7 +1638,7 @@ static void Con_Print (const char *txt)
 	static int	cr;
 	int		mask;
 	qboolean	gold_digits;
-	qboolean	boundary;
+	qboolean	boundary, skipnotify;
 	static int fixline = 0; // woods #confilter
 
 	//con_backscroll = 0; //johnfitz -- better console scrolling
@@ -1909,6 +1909,13 @@ static void Con_Print (const char *txt)
 		mask = 0;
 	gold_digits = false;
 
+	skipnotify = false;
+	if (!Q_strncmp (txt, "[skipnotify]", 12))
+	{
+		skipnotify = true;
+		txt += 12;
+	}
+
 	boundary = true;
 
 	while ( (c = *txt) )
@@ -2058,7 +2065,7 @@ static void Con_Print (const char *txt)
 			Con_Linefeed ();
 		// mark time for transparent overlay
 			if (con_current >= 0)
-				con_times[con_current % NUM_CON_TIMES] = realtime;
+				con_times[con_current % NUM_CON_TIMES] = skipnotify ? 0 : realtime;
 		}
 
 		switch (c)
@@ -2088,6 +2095,22 @@ static void Con_Print (const char *txt)
 			break;
 		}
 	}
+}
+
+/*
+================
+Con_StripControlPrefixes
+================
+*/
+static const char *Con_StripControlPrefixes (const char *txt)
+{
+	if (txt[0] == 1 || txt[0] == 2)
+		txt++;
+
+	if (!Q_strncmp (txt, "[skipnotify]", 12))
+		txt += 12;
+
+	return txt;
 }
 
 #if defined(_WIN32) // woods #debuglogsize
@@ -2453,10 +2476,10 @@ void Con_Printf (const char *fmt, ...)
 	va_end(argptr);
 
 	if (con_redirect_flush)
-		q_strlcat(con_redirect_buffer, msg, sizeof(con_redirect_buffer));
+		q_strlcat(con_redirect_buffer, Con_StripControlPrefixes(msg), sizeof(con_redirect_buffer));
 
 // also echo to debugging console
-	Sys_Printf ("%s", msg);
+	Sys_Printf ("%s", Con_StripControlPrefixes(msg));
 
 	unsigned char* ch; // woods dequake
 	for (ch = (unsigned char*)demsg; *ch; ch++)
@@ -2464,7 +2487,7 @@ void Con_Printf (const char *fmt, ...)
 
 	// log all messages to file
 	if (con_debuglog)
-		Con_DebugLog(demsg); // woods dequake
+		Con_DebugLog(Con_StripControlPrefixes(demsg)); // woods dequake
 
 	if (!con_initialized)
 		return;

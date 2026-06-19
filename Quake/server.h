@@ -111,6 +111,17 @@ typedef struct
 	char		lastsave[MAX_OSPATH]; // woods #autoload (iw)
 	qboolean	autoloading; // woods #autoload (iw)
 
+	struct
+	{
+		float	secret_boost;
+		float	prev_health;
+		int		prev_secrets;
+		double	time;
+		double	hurt_time;
+		double	shoot_time;
+		double	cheat;
+	}			autosave; // woods #autosave (iw)
+
 	qboolean skyroom_pos_known;
 	vec4_t skyroom_pos;
 

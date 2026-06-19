@@ -80,6 +80,8 @@ cvar_t	host_maxfps = {"host_maxfps", "250", CVAR_ARCHIVE}; //johnfitz
 cvar_t	host_timescale = {"host_timescale", "0", CVAR_NONE}; //johnfitz
 cvar_t	max_edicts = {"max_edicts", "15000", CVAR_NONE}; //johnfitz //ericw -- changed from 2048 to 8192, removed CVAR_ARCHIVE
 cvar_t	cl_nocsqc = {"cl_nocsqc", "0", CVAR_NONE};	//spike -- blocks the loading of any csqc modules
+cvar_t	sv_autosave = {"sv_autosave", "1", CVAR_ARCHIVE}; // woods #autosave (iw)
+cvar_t	sv_autosave_interval = {"sv_autosave_interval", "30", CVAR_ARCHIVE}; // woods #autosave (iw)
 
 cvar_t	sys_ticrate = {"sys_ticrate","0.05",CVAR_NOTIFY|CVAR_SERVERINFO}; // dedicated server -- woods
 cvar_t	serverprofile = {"serverprofile","0",CVAR_NONE};
@@ -1489,6 +1491,7 @@ void Host_ClearMemory (void)
 	extern void SCR_ClearShowFieldsTracks(void);
 
 	CL_AsyncDownload_Cancel();
+	Host_WaitForSaveThread();
 
 	if (cl.qcvm.extfuncs.CSQC_Shutdown)
 	{
@@ -1599,6 +1602,81 @@ void Host_GetConsoleCommands (void)
 
 /*
 ==================
+Host_CheckAutosave
+==================
+*/
+static void Host_CheckAutosave (void)
+{
+	float	health_change, speed, elapsed, interval, score;
+
+	interval = fabsf(sv_autosave_interval.value);
+	if (!sv_autosave.value || interval <= 0.f || svs.maxclients != 1 || !svs.clients ||
+		!svs.clients[0].active || !svs.clients[0].spawned || !sv_player || sv_player->free ||
+		sv_player->v.health <= 0.f || cl.intermission)
+		return;
+
+	if (cls.signon == SIGNONS)
+	{
+		if (pr_global_struct->found_secrets != sv.autosave.prev_secrets)
+		{
+			sv.autosave.prev_secrets = pr_global_struct->found_secrets;
+			sv.autosave.secret_boost = 1.f;
+		}
+		else
+			sv.autosave.secret_boost = q_max (0.f, sv.autosave.secret_boost - host_frametime / 1.5f);
+	}
+
+	if (!sv.autosave.prev_health)
+		sv.autosave.prev_health = sv_player->v.health;
+	health_change = sv_player->v.health - sv.autosave.prev_health;
+	if (health_change < 0.f)
+		if (health_change < -3.f || sv_player->v.health < 100.f || sv_player->v.watertype == CONTENTS_SLIME || sv_player->v.watertype == CONTENTS_LAVA)
+			sv.autosave.hurt_time = qcvm->time;
+	sv.autosave.prev_health = sv_player->v.health;
+
+	if (sv_player->v.button0)
+		sv.autosave.shoot_time = qcvm->time;
+
+	if (sv_player->v.movetype == MOVETYPE_NOCLIP || (int)sv_player->v.flags & (FL_GODMODE|FL_NOTARGET))
+	{
+		sv.autosave.cheat += host_frametime;
+		return;
+	}
+
+	if (qcvm->time - sv.autosave.hurt_time < 3.f)
+		return;
+
+	if (qcvm->time - sv.autosave.shoot_time < 3.f)
+		return;
+
+	speed = VectorLength (sv_player->v.velocity);
+	if (speed > 100.f)
+		return;
+
+	if ((int)sv_player->v.movetype == MOVETYPE_NONE)
+		return;
+
+	elapsed = qcvm->time - sv.autosave.time - sv.autosave.cheat;
+	if (elapsed < 3.f)
+		return;
+
+	score = elapsed / interval;
+	score *= q_min (100.f, (sv_player->v.health + sv_player->v.armortype * sv_player->v.armorvalue)) / 100.f;
+	score += q_max (0.f, health_change) / 100.f;
+	score -= (speed / 100.f) * 0.25f;
+	score += sv.autosave.secret_boost * 0.25f;
+	score += CLAMP (0.f, 1.f - (qcvm->time - sv_player->v.teleport_time) / 1.5f, 1.f) * 0.5f;
+
+	if (score < 1.f)
+		return;
+
+	sv.autosave.time = qcvm->time;
+	sv.autosave.cheat = 0;
+	Cbuf_AddText (va ("save \"autosave/%s\" 0\n", sv.name));
+}
+
+/*
+==================
 Host_ServerFrame
 ==================
 */
@@ -1649,6 +1727,8 @@ void Host_ServerFrame (void)
 
 // send all messages to the clients
 	SV_SendClientMessages ();
+
+	Host_CheckAutosave ();
 }
 
 typedef struct summary_s {
@@ -2509,6 +2589,8 @@ void Host_Shutdown(void)
 	CL_AsyncDownload_Shutdown();
 
 	URI_Shutdown(); // woods #uri -- shutdown async URI subsystem early to stop worker before network teardown
+
+	Host_ShutdownSave ();
 
 	Host_BackupConfiguration (); // woods #cfgbackup
 

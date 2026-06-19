@@ -405,6 +405,124 @@ const char *PR_UglyValueString (int type, eval_t *val)
 
 /*
 ============
+PR_GetSaveString
+
+Same as PR_GetString, except it uses known strings from a saved snapshot
+instead of the current VM state.
+============
+*/
+static const char *PR_GetSaveString (savedata_t *save, int num)
+{
+	if (num >= 0 && num < qcvm->stringssize)
+		return qcvm->strings + num;
+	else if (num < 0 && num >= -save->numknownstrings)
+	{
+		if (!save->knownstrings[-1 - num])
+		{
+			SDL_AtomicCAS (&save->abort, 0, -1);
+			return "";
+		}
+		return save->knownstrings[-1 - num];
+	}
+	else
+	{
+		SDL_AtomicCAS (&save->abort, 0, -1);
+		return "";
+	}
+}
+
+/*
+============
+PR_UglySaveValueString
+
+Same as PR_UglyValueString, except it uses data from a saved snapshot
+instead of the current VM state.
+============
+*/
+static const char *PR_UglySaveValueString (savedata_t *save, int type, eval_t *val)
+{
+	static char	line[1024];
+	ddef_t		*def;
+	dfunction_t	*f;
+	int			entnum;
+
+	type &= ~DEF_SAVEGLOBAL;
+
+	switch (type)
+	{
+	case ev_string:
+		q_snprintf (line, sizeof(line), "%s", PR_GetSaveString(save, val->string));
+		break;
+	case ev_entity:
+		if (val->edict < 0 || val->edict % qcvm->edict_size)
+		{
+			SDL_AtomicCAS (&save->abort, 0, -1);
+			q_snprintf (line, sizeof(line), "0");
+			break;
+		}
+		entnum = val->edict / qcvm->edict_size;
+		if (entnum >= save->num_edicts)
+		{
+			SDL_AtomicCAS (&save->abort, 0, -1);
+			q_snprintf (line, sizeof(line), "0");
+			break;
+		}
+		q_snprintf (line, sizeof(line), "%i", entnum);
+		break;
+	case ev_function:
+		if (val->function >= (func_t)qcvm->progs->numfunctions)
+		{
+			SDL_AtomicCAS (&save->abort, 0, -1);
+			line[0] = '\0';
+			break;
+		}
+		f = qcvm->functions + val->function;
+		q_snprintf (line, sizeof(line), "%s", PR_GetSaveString(save, f->s_name));
+		break;
+	case ev_field:
+		def = ED_FieldAtOfs ( val->_int );
+		if (!def)
+		{
+			SDL_AtomicCAS (&save->abort, 0, -1);
+			line[0] = '\0';
+			break;
+		}
+		q_snprintf (line, sizeof(line), "%s", PR_GetSaveString(save, def->s_name));
+		break;
+	case ev_void:
+		q_snprintf (line, sizeof(line), "void");
+		break;
+	case ev_float:
+		q_snprintf (line, sizeof(line), "%f", val->_float);
+		break;
+	case ev_ext_integer:
+		sprintf (line, "%i", val->_int);
+		break;
+	case ev_ext_uint32:
+		sprintf (line, "%u", val->_uint32);
+		break;
+	case ev_ext_sint64:
+		sprintf (line, "%"PRIi64, val->_sint64);
+		break;
+	case ev_ext_uint64:
+		sprintf (line, "%"PRIu64, val->_uint64);
+		break;
+	case ev_ext_double:
+		q_snprintf (line, sizeof(line), "%f", val->_double);
+		break;
+	case ev_vector:
+		q_snprintf (line, sizeof(line), "%f %f %f", val->vector[0], val->vector[1], val->vector[2]);
+		break;
+	default:
+		q_snprintf (line, sizeof(line), "bad type %i", type);
+		break;
+	}
+
+	return line;
+}
+
+/*
+============
 PR_GlobalString
 
 Returns a string with a description and the contents of a global,
@@ -744,6 +862,46 @@ void ED_Write (FILE *f, edict_t *ed)
 	fprintf (f, "}\n");
 }
 
+/*
+=============
+ED_WriteSave
+
+For background savegames
+=============
+*/
+void ED_WriteSave (savedata_t *save, edict_t *ed)
+{
+	ddef_t	*d;
+	int		*v;
+	int		i;
+
+	fprintf (save->file, "{ // #%d\n", SAVE_NUM_FOR_EDICT (save, ed));
+
+	if (ed->free)
+	{
+		fprintf (save->file, "}\n");
+		return;
+	}
+
+	for (i = 1; i < qcvm->progs->numfielddefs; i++)
+	{
+		d = &qcvm->fielddefs[i];
+		if (!ED_IsRelevantField(ed, d))
+			continue;
+
+		v = (int *)((char *)&ed->v + d->ofs*4);
+		fprintf (save->file, "\"%s\" ", PR_GetSaveString(save, d->s_name));
+		fprintf (save->file, "\"%s\"\n", PR_UglySaveValueString(save, d->type, (eval_t *)v));
+	}
+
+	//johnfitz -- save entity alpha manually when progs.dat doesn't know about alpha
+	if (qcvm->extfields.alpha<0 && ed->alpha != ENTALPHA_DEFAULT)
+		fprintf (save->file, "\"alpha\" \"%f\"\n", ENTALPHA_TOSAVE(ed->alpha));
+	//johnfitz
+
+	fprintf (save->file, "}\n");
+}
+
 void ED_PrintNum (int ent)
 {
 	ED_Print (EDICT_NUM(ent));
@@ -885,6 +1043,30 @@ void ED_WriteGlobals (FILE *f)
 		fprintf (f, "\"%s\"\n", PR_UglyValueString(type, (eval_t *)&qcvm->globals[def->ofs]));
 	}
 	fprintf (f, "}\n");
+}
+
+void ED_WriteSaveGlobals (savedata_t *save)
+{
+	ddef_t		*def;
+	int			i;
+	int			type;
+
+	fprintf (save->file, "{\n");
+	for (i = 0; i < qcvm->progs->numglobaldefs; i++)
+	{
+		def = &qcvm->globaldefs[i];
+		type = def->type;
+		if ( !(def->type & DEF_SAVEGLOBAL) )
+			continue;
+		type &= ~DEF_SAVEGLOBAL;
+
+		if (type != ev_string && type != ev_float && type != ev_ext_double && type != ev_ext_integer && type != ev_ext_uint32 && type != ev_ext_sint64 && type != ev_ext_uint64 && type != ev_entity)
+			continue;
+
+		fprintf (save->file, "\"%s\" ", PR_GetSaveString(save, def->s_name));
+		fprintf (save->file, "\"%s\"\n", PR_UglySaveValueString(save, type, (eval_t *)&save->globals[def->ofs]));
+	}
+	fprintf (save->file, "}\n");
 }
 
 /*
@@ -1519,8 +1701,8 @@ void ED_LoadFromFile (const char *data)
 
 
 #ifndef PR_SwitchQCVM
-qcvm_t *qcvm;
-globalvars_t	*pr_global_struct;
+THREAD_LOCAL qcvm_t *qcvm;
+THREAD_LOCAL globalvars_t	*pr_global_struct;
 void PR_SwitchQCVM(qcvm_t *nvm)
 {
 	if (qcvm && nvm)
@@ -1992,6 +2174,28 @@ int NUM_FOR_EDICT(edict_t *e)
 	return b;
 }
 
+int SAVE_NUM_FOR_EDICT (savedata_t *save, edict_t *e)
+{
+	ptrdiff_t	ofs;
+	int			b;
+
+	ofs = (byte *)e - (byte *)save->edicts;
+	if (ofs < 0 || ofs % qcvm->edict_size)
+	{
+		SDL_AtomicCAS (&save->abort, 0, -1);
+		return 0;
+	}
+
+	b = ofs / qcvm->edict_size;
+	if (b < 0 || b >= save->num_edicts)
+	{
+		SDL_AtomicCAS (&save->abort, 0, -1);
+		return 0;
+	}
+
+	return b;
+}
+
 //===========================================================================
 
 
@@ -2099,3 +2303,188 @@ int PR_AllocString (int size, char **ptr)
 	return -1 - i;
 }
 
+//===========================================================================
+
+static qboolean PR_IsValidSaveString (const char *p)
+{
+	return p != NULL;
+}
+
+static size_t SaveData_MultiplySize (size_t count, size_t size)
+{
+	if (count && size > (size_t)-1 / count)
+		Sys_Error ("SaveData_Fill: snapshot size overflow");
+	return count * size;
+}
+
+static void SaveData_AddBufferSize (size_t *size, size_t add)
+{
+	if (add > (size_t)-1 - *size)
+		Sys_Error ("SaveData_Fill: snapshot size overflow");
+	*size += add;
+}
+
+static void SaveData_AddStringSize (size_t *size, const char *str)
+{
+	if (str)
+		SaveData_AddBufferSize (size, strlen(str) + 1);
+}
+
+static size_t SaveData_AlignOffset (size_t ofs)
+{
+	size_t align = sizeof(void *) - 1;
+	return (ofs + align) & ~align;
+}
+
+static void SaveData_CheckBufferSpace (savedata_t *save, size_t ofs, size_t len)
+{
+	if (ofs > save->buffersize || len > save->buffersize - ofs)
+		Sys_Error ("SaveData_Fill: snapshot buffer overflow (%" SDL_PRIu64 " + %" SDL_PRIu64 " > %" SDL_PRIu64 ")",
+			(uint64_t) ofs, (uint64_t) len, (uint64_t) save->buffersize);
+}
+
+static const char *SaveData_CopyString (savedata_t *save, size_t *ofs, const char *str)
+{
+	char	*dst;
+	size_t	len;
+
+	if (!str)
+		return NULL;
+
+	len = strlen(str) + 1;
+	SaveData_CheckBufferSpace (save, *ofs, len);
+	dst = (char *)save->buffer + *ofs;
+	memcpy (dst, str, len);
+	*ofs += len;
+	return dst;
+}
+
+void SaveData_Init (savedata_t *save)
+{
+	memset (save, 0, sizeof (*save));
+	save->buffersize = 48 * 1024 * 1024; // ad_sepulcher needs roughly 32 MB
+	save->buffer = (byte *) malloc (save->buffersize);
+	if (!save->buffer)
+		Sys_Error ("SaveData_Init: couldn't allocate %" SDL_PRIu64 " bytes", (uint64_t) save->buffersize);
+}
+
+void SaveData_Clear (savedata_t *save)
+{
+	if (save->file)
+		fclose (save->file);
+	free (save->buffer);
+	memset (save, 0, sizeof (*save));
+}
+
+void SaveData_Fill (savedata_t *save)
+{
+	int		i;
+	size_t	ofs, size;
+	size_t	knownstrings_size, globals_size, edicts_size;
+
+	if (NUM_TOTAL_SPAWN_PARMS > SAVEDATA_SPAWN_PARMS)
+		Sys_Error ("SaveData_Fill: %d spawn parms exceed snapshot capacity %d", NUM_TOTAL_SPAWN_PARMS, SAVEDATA_SPAWN_PARMS);
+
+	Host_SavegameComment (save->comment);
+
+	q_strlcpy (save->mapname, sv.name, sizeof (save->mapname));
+	memset (save->spawn_parms, 0, sizeof (save->spawn_parms));
+	for (i = 0; i < NUM_TOTAL_SPAWN_PARMS; i++)
+		save->spawn_parms[i] = svs.clients->spawn_parms[i];
+	save->skill = current_skill;
+	save->time = qcvm->time;
+	save->serverflags = svs.serverflags;
+	save->coop = coop.value;
+	save->deathmatch = deathmatch.value;
+
+	knownstrings_size = SaveData_MultiplySize ((size_t) qcvm->numknownstrings, sizeof (*save->knownstrings));
+	globals_size = SaveData_MultiplySize ((size_t) qcvm->progs->numglobals, sizeof (*save->globals));
+	edicts_size = SaveData_MultiplySize ((size_t) qcvm->edict_size, (size_t) qcvm->num_edicts);
+
+	size = knownstrings_size;
+	SaveData_AddBufferSize (&size, globals_size);
+	SaveData_AddBufferSize (&size, sizeof(void *) - 1);
+	SaveData_AddBufferSize (&size, edicts_size);
+
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+		SaveData_AddStringSize (&size, sv.lightstyles[i]);
+	for (i = 0; i < MAX_MODELS; i++)
+		SaveData_AddStringSize (&size, sv.model_precache[i]);
+	for (i = 0; i < MAX_SOUNDS; i++)
+		SaveData_AddStringSize (&size, sv.sound_precache[i]);
+	for (i = 0; i < MAX_PARTICLETYPES; i++)
+		SaveData_AddStringSize (&size, sv.particle_precache[i]);
+
+	for (i = 0; i < qcvm->numknownstrings; i++)
+	{
+		const char *str = qcvm->knownstrings[i];
+		if (PR_IsValidSaveString (str))
+			SaveData_AddStringSize (&size, str);
+	}
+
+	if (size > save->buffersize)
+	{
+		save->buffersize = size;
+		SaveData_AddBufferSize (&save->buffersize, size / 2);
+		save->buffer = (byte *) realloc (save->buffer, save->buffersize);
+		if (!save->buffer)
+			Sys_Error ("SaveData_Fill: failed to allocate %" SDL_PRIu64 " bytes", (uint64_t) save->buffersize);
+	}
+
+	ofs = 0;
+
+	SaveData_CheckBufferSpace (save, ofs, knownstrings_size);
+	save->knownstrings = (const char **) (save->buffer + ofs);
+	ofs += knownstrings_size;
+	save->numknownstrings = qcvm->numknownstrings;
+
+	SaveData_CheckBufferSpace (save, ofs, globals_size);
+	save->globals = (float *) (save->buffer + ofs);
+	ofs += globals_size;
+	memcpy (save->globals, qcvm->globals, globals_size);
+
+	ofs = SaveData_AlignOffset (ofs);
+	SaveData_CheckBufferSpace (save, ofs, edicts_size);
+	save->edicts = (edict_t *) (save->buffer + ofs);
+	ofs += edicts_size;
+	memcpy (save->edicts, qcvm->edicts, edicts_size);
+	save->num_edicts = qcvm->num_edicts;
+
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+		save->lightstyles[i] = SaveData_CopyString (save, &ofs, sv.lightstyles[i]);
+	for (i = 0; i < MAX_MODELS; i++)
+		save->model_precache[i] = SaveData_CopyString (save, &ofs, sv.model_precache[i]);
+	for (i = 0; i < MAX_SOUNDS; i++)
+		save->sound_precache[i] = SaveData_CopyString (save, &ofs, sv.sound_precache[i]);
+	for (i = 0; i < MAX_PARTICLETYPES; i++)
+		save->particle_precache[i] = SaveData_CopyString (save, &ofs, sv.particle_precache[i]);
+
+	for (i = 0; i < qcvm->numknownstrings; i++)
+	{
+		const char *str = qcvm->knownstrings[i];
+		if (PR_IsValidSaveString (str))
+			save->knownstrings[i] = SaveData_CopyString (save, &ofs, str);
+		else
+			save->knownstrings[i] = NULL;
+	}
+}
+
+void SaveData_WriteHeader (savedata_t *save)
+{
+	int i;
+
+	fprintf (save->file, "%i\n", SAVEGAME_VERSION);
+	fprintf (save->file, "%s\n", save->comment);
+
+	for (i = 0; i < NUM_BASIC_SPAWN_PARMS; i++)
+		fprintf (save->file, "%f\n", save->spawn_parms[i]);
+
+	fprintf (save->file, "%d\n", save->skill);
+	fprintf (save->file, "%s\n", save->mapname);
+	fprintf (save->file, "%f\n", save->time);
+
+	for (i = 0; i < MAX_LIGHTSTYLES_VANILLA; i++)
+		fprintf (save->file, "%s\n", save->lightstyles[i] ? save->lightstyles[i] : "m");
+
+	ED_WriteSaveGlobals (save);
+}

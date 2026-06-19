@@ -58,6 +58,7 @@ JPG, r00k, Spoike for QSS and FTEQW, Ozkan Sezer & Eric Wasylishen (Quakespasm),
 - Underwater sound filter (`snd_waterfx`)
 - `nomonsters 1` support when starting maps
 - Savegame pitch-angle correction
+- Background savegame writing from a main-thread snapshot, keeping large-map saves from stalling gameplay
 
 **Rendering, Debugging, and Compatibility**
 

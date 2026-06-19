@@ -80,12 +80,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "q_stdinc.h"
 
-#if defined(_MSC_VER)
-#define THREAD_LOCAL __declspec(thread)
-#else
-#define THREAD_LOCAL _Thread_local
-#endif
-
 // !!! if this is changed, it must be changed in d_ifacea.h too !!!
 #define CACHE_SIZE	32	// used to align key data structures
 
@@ -326,9 +320,6 @@ typedef struct
 #include "crc.h"
 
 #include "snd_voip.h"
-#include "progs.h"
-#include "server.h"
-
 #include "platform.h"
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
 #if defined(USE_SDL2)
@@ -348,6 +339,9 @@ typedef struct
 #ifndef APIENTRY
 #define	APIENTRY
 #endif
+
+#include "progs.h"
+#include "server.h"
 
 #include "console.h"
 #include "wad.h"
@@ -463,6 +457,10 @@ qboolean Host_MapHasLevelStats (const char *mapname, int total_monsters, int tot
 void Host_WriteConfiguration (void);
 void Host_Resetdemos (void);
 
+void Host_SavegameComment (char text[SAVEGAME_COMMENT_LENGTH + 1]);
+void Host_WaitForSaveThread (void);
+void Host_ShutdownSave (void);
+qboolean Host_IsSaving (void);
 void Host_SaveConfiguration (void); // woods #cfgsave
 void Host_BackupConfiguration (void); // woods #cfgbackup
 

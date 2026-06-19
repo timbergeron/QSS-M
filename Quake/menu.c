@@ -27,6 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <zlib.h>
 #include "json.h" // woods #serversmenu
 #include <sys/stat.h>
+#include <time.h>
 
 #ifdef USE_CODEC_FLAC
 #include <FLAC/format.h>
@@ -115,6 +116,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_ModelViewer_f (void);
 		void M_Menu_ColorPicker_f (void);
 		void M_Menu_Extras_f (void);
+		void M_Menu_Saving_f (void);
 		void M_Menu_Shortcuts_f (void);
 		void M_Menu_Version_f (void);
 		void M_Menu_ResetConfig_f(void); // woods #resetconfig
@@ -163,6 +165,7 @@ void M_Main_Draw (void);
 		void M_ModelViewer_Draw (void);
 		void M_ColorPicker_Draw (void);
 		void M_Extras_Draw (void);
+		void M_Saving_Draw (void);
 		void M_Shortcuts_Draw (void);
 		void M_Version_Draw (void);
 		void M_ResetConfig_Draw(void); // woods #resetconfig
@@ -214,6 +217,7 @@ void M_Main_Key (int key);
 		void M_ModelViewer_Key (int key);
 		void M_ColorPicker_Key (int key);
 		void M_Extras_Key (int key);
+		void M_Saving_Key (int key);
 		void M_Shortcuts_Key (int key);
 		void M_Version_Key (int key);
 		void M_ResetConfig_Key(int key); // woods #resetconfig
@@ -269,6 +273,7 @@ void M_Main_Key (int key);
 		void M_ModelViewer_Mousemove(int cx, int cy);
 		void M_ColorPicker_Mousemove(int cx, int cy);
 		void M_Extras_Mousemove(int cx, int cy);
+		void M_Saving_Mousemove(int cx, int cy);
 		void M_Shortcuts_Mousemove(int cx, int cy);
 		void M_Version_Mousemove(int cx, int cy);
 		void M_ResetConfig_Mousemove(int cx, int cy); // woods #resetconfig
@@ -2997,19 +3002,43 @@ int		load_cursor;		// 0 < load_cursor < MAX_SAVEGAMES
 #define	SAVEGAME_MENU_COMMENT_CHARS	79
 #define	SAVEGAME_MENU_COMMENT_BUFFER	(SAVEGAME_MENU_COMMENT_CHARS + 1)
 #define	SAVEGAME_MENU_COMMENT_SCAN	"%" QS_STRINGIFY(SAVEGAME_MENU_COMMENT_CHARS) "s\n"
+#define	SAVEGAME_MENU_SLOTS			(MAX_SAVEGAMES - 1)
+#define	MAX_AUTOSAVE_MENU_ENTRIES	64
+#define	MAX_SAVEGAME_MENU_ENTRIES	(SAVEGAME_MENU_SLOTS + MAX_AUTOSAVE_MENU_ENTRIES)
+#define	LOADGAME_SEPARATOR_INDEX		-1
+#define	LOADGAME_LIST_X				16
+#define	LOADGAME_LIST_Y				32
+#define	LOADGAME_LIST_COLS			36
+#define	LOADGAME_LIST_ROWS			15
+#define	LOADGAME_INFO_Y				164
+#define	LOADGAME_SEARCH_BOX_Y		176
+#define	LOADGAME_SEARCH_TEXT_Y		184
 char	m_filenames[MAX_SAVEGAMES][SAVEGAME_COMMENT_LENGTH+1];
 int		loadable[MAX_SAVEGAMES];
 
 typedef struct {
 	char name[SAVEGAME_COMMENT_LENGTH + 1];
+	char loadname[MAX_OSPATH];
 	char date[32];
 	char mapname[MAX_QPATH];
 	time_t timestamp;
 	qboolean loadable;
+	qboolean autosave;
 	int original_index;
 } save_entry_t;
 
-static save_entry_t save_entries[MAX_SAVEGAMES];
+static save_entry_t save_entries[MAX_SAVEGAME_MENU_ENTRIES];
+static int save_entries_count;
+
+static struct
+{
+	menulist_t	list;
+	int			filtered_indices[MAX_SAVEGAME_MENU_ENTRIES + 1];
+	int			prev_cursor;
+	int			x, y, cols;
+	qboolean	scrollbar_grab;
+	menuticker_t ticker;
+} loadmenu;
 
 static int save_compare(const void* a, const void* b) // Comparison function for qsort
 {
@@ -3019,11 +3048,22 @@ static int save_compare(const void* a, const void* b) // Comparison function for
 	// Sort loadable saves first, then by timestamp (newest first)
 	if (sa->loadable != sb->loadable)
 		return sb->loadable - sa->loadable;
+	if (sa->autosave != sb->autosave)
+		return sb->autosave - sa->autosave;
 	if (sa->timestamp < sb->timestamp)
 		return 1;
 	if (sa->timestamp > sb->timestamp)
 		return -1;
 	return 0;
+}
+
+static void M_ClearSaveEntry (save_entry_t *entry, int original_index)
+{
+	memset(entry, 0, sizeof(*entry));
+	strcpy(entry->name, "--- UNUSED SLOT ---");
+	entry->original_index = original_index;
+	if (original_index >= 0)
+		q_snprintf(entry->loadname, sizeof(entry->loadname), "s%i", original_index);
 }
 
 static void M_NormalizeSavegameComment (char display[SAVEGAME_COMMENT_LENGTH + 1], const char *comment)
@@ -3073,10 +3113,10 @@ static void M_NormalizeSavegameComment (char display[SAVEGAME_COMMENT_LENGTH + 1
 	}
 }
 
-void M_ScanSaves (void)
+static qboolean M_ReadSaveEntry (save_entry_t *entry, const char *path, const char *loadname,
+	int original_index, qboolean autosave)
 {
-	int	i, j;
-	char	name[MAX_OSPATH];
+	int	j;
 	char	comment[SAVEGAME_MENU_COMMENT_BUFFER];
 	FILE	*f;
 	int	version;
@@ -3090,102 +3130,328 @@ void M_ScanSaves (void)
 	struct stat st;
 #endif
 
-	for (i = 0; i < MAX_SAVEGAMES; i++)
-	{
-		save_entries[i].name[0] = 0;
-		save_entries[i].date[0] = 0;
-		save_entries[i].timestamp = 0;
-		save_entries[i].loadable = false;
-		save_entries[i].original_index = i;
-		q_strlcpy(save_entries[i].mapname, "", sizeof(save_entries[i].mapname));
+	M_ClearSaveEntry(entry, original_index);
+	q_strlcpy(entry->loadname, loadname, sizeof(entry->loadname));
+	entry->autosave = autosave;
 
-		q_snprintf (name, sizeof(name), "%s/saves/s%i.sav", com_gamedir, i);
-		f = fopen (name, "r");
-		if (!f)
-		{
-			q_snprintf(name, sizeof(name), "%s/s%i.sav", com_gamedir, i); // legacy
-			f = fopen(name, "r");
-		}
+	f = fopen (path, "r");
+	if (!f)
+		return false;
 
-		if (!f)
-		{
-			strcpy (save_entries[i].name, "--- UNUSED SLOT ---");
-			continue;
-		}
-
-		// Get file modification time
+	// Get file modification time
 #ifdef _WIN32
-		if (_stat(name, &st) == 0)
+	if (_stat(path, &st) == 0)
 #else
-		if (stat(name, &st) == 0)
+	if (stat(path, &st) == 0)
 #endif
+	{
+		struct tm* timeinfo = localtime(&st.st_mtime);
+		if (timeinfo)
 		{
-			struct tm* timeinfo = localtime(&st.st_mtime);
-			if (timeinfo)
+			strftime(entry->date, sizeof(entry->date),
+				"%Y-%m-%d %H:%M", timeinfo);
+			entry->timestamp = st.st_mtime;
+		}
+	}
+
+	// Read version and comment. Kex rerelease saves include a gamedir line after the version.
+	saved_gamedir[0] = '\0';
+	if (fscanf (f, "%i\n", &version) != 1 ||
+		(version != SAVEGAME_VERSION && version != SAVEGAME_VERSION_KEX))
+	{
+		fclose(f);
+		return false;
+	}
+	remaster_save = (version == SAVEGAME_VERSION_KEX);
+	if ((remaster_save && fscanf (f, "%63s\n", saved_gamedir) != 1) ||
+		fscanf (f, SAVEGAME_MENU_COMMENT_SCAN, comment) != 1)
+	{
+		fclose(f);
+		return false;
+	}
+
+	if (remaster_save && !COM_GameDirMatches(saved_gamedir))
+	{
+		q_snprintf(entry->name, sizeof(entry->name),
+			"wrong gamedir: %s", saved_gamedir[0] ? saved_gamedir : "(unknown)");
+		fclose(f);
+		return true;
+	}
+
+	// Read spawn parms (skip them)
+	for (j = 0; j < NUM_BASIC_SPAWN_PARMS; j++)
+	{
+		if (fscanf(f, "%f\n", &time) != 1)
+			break;
+	}
+	if (j < NUM_BASIC_SPAWN_PARMS)
+	{
+		fclose(f);
+		return false;
+	}
+
+	// Read skill
+	if (fscanf(f, "%f\n", &time) != 1)
+	{
+		fclose(f);
+		return false;
+	}
+
+	// Read map name
+	if (fscanf(f, "%63s\n", mapname) == 1)
+		q_strlcpy (entry->mapname, mapname, sizeof(entry->mapname));
+
+	M_NormalizeSavegameComment(entry->name, comment);
+
+	entry->loadable = true;
+	fclose(f);
+	return true;
+}
+
+typedef struct {
+	int count;
+} autosave_scan_t;
+
+static qboolean M_AddAutosaveEntry (void *ctx, const char *fname)
+{
+	autosave_scan_t *scan = (autosave_scan_t *)ctx;
+	save_entry_t *entry;
+	char path[MAX_OSPATH];
+	char base[MAX_OSPATH];
+	char loadname[MAX_OSPATH];
+
+	if (scan->count >= MAX_SAVEGAME_MENU_ENTRIES)
+		return false;
+	if (!fname[0] || fname[0] == '.' || strchr(fname, '/') || strchr(fname, '\\'))
+		return true;
+
+	COM_StripExtension(fname, base, sizeof(base));
+	q_snprintf(path, sizeof(path), "%s/saves/autosave/%s", com_gamedir, fname);
+	q_snprintf(loadname, sizeof(loadname), "autosave/%s", base);
+
+	entry = &save_entries[scan->count];
+	if (M_ReadSaveEntry(entry, path, loadname, -1, true))
+		scan->count++;
+
+	return true;
+}
+
+void M_ScanSaves (qboolean include_autosaves)
+{
+	int	i;
+	char	name[MAX_OSPATH];
+	char	loadname[MAX_OSPATH];
+	autosave_scan_t scan;
+
+	for (i = 0; i < MAX_SAVEGAME_MENU_ENTRIES; i++)
+		M_ClearSaveEntry(&save_entries[i], -1);
+
+	scan.count = 0;
+	for (i = 0; i < SAVEGAME_MENU_SLOTS; i++)
+	{
+		save_entry_t numbered_entry;
+
+		q_snprintf(loadname, sizeof(loadname), "s%i", i);
+		q_snprintf(name, sizeof(name), "%s/saves/%s.sav", com_gamedir, loadname);
+		if (!M_ReadSaveEntry(&numbered_entry, name, loadname, i, false))
+		{
+			q_snprintf(name, sizeof(name), "%s/%s.sav", com_gamedir, loadname); // legacy
+			if (!M_ReadSaveEntry(&numbered_entry, name, loadname, i, false))
 			{
-				strftime(save_entries[i].date, sizeof(save_entries[i].date),
-					"%Y-%m-%d %H:%M", timeinfo);
-				save_entries[i].timestamp = st.st_mtime;
+				if (!include_autosaves && scan.count < SAVEGAME_MENU_SLOTS)
+					M_ClearSaveEntry(&save_entries[scan.count++], i);
+				continue;
 			}
 		}
 
-		// Read version and comment. Kex rerelease saves include a gamedir line after the version.
-		saved_gamedir[0] = '\0';
-		if (fscanf (f, "%i\n", &version) != 1 ||
-			(version != SAVEGAME_VERSION && version != SAVEGAME_VERSION_KEX))
-		{
-			fclose(f);
-			continue;
-		}
-		remaster_save = (version == SAVEGAME_VERSION_KEX);
-		if ((remaster_save && fscanf (f, "%63s\n", saved_gamedir) != 1) ||
-			fscanf (f, SAVEGAME_MENU_COMMENT_SCAN, comment) != 1)
-		{
-			fclose(f);
-			continue;
-		}
+		if (scan.count < MAX_SAVEGAME_MENU_ENTRIES)
+			save_entries[scan.count++] = numbered_entry;
+	}
 
-		if (remaster_save && !COM_GameDirMatches(saved_gamedir))
-		{
-			q_snprintf(save_entries[i].name, sizeof(save_entries[i].name),
-				"wrong gamedir: %s", saved_gamedir[0] ? saved_gamedir : "(unknown)");
-			fclose(f);
-			continue;
-		}
-
-		// Read spawn parms (skip them)
-		for (j = 0; j < NUM_BASIC_SPAWN_PARMS; j++)
-		{
-			if (fscanf(f, "%f\n", &time) != 1)
-				break;
-		}
-		if (j < NUM_BASIC_SPAWN_PARMS)
-		{
-			fclose(f);
-			continue;
-		}
-
-		// Read skill
-		if (fscanf(f, "%f\n", &time) != 1)
-		{
-			fclose(f);
-			continue;
-		}
-
-		// Read map name
-		if (fscanf(f, "%63s\n", mapname) == 1)
-		{
-			q_strlcpy (save_entries[i].mapname, mapname, sizeof(save_entries[i].mapname));
-		}
-
-		M_NormalizeSavegameComment(save_entries[i].name, comment);
-
-		save_entries[i].loadable = true;
-		fclose(f);
+	if (include_autosaves)
+	{
+		q_snprintf(name, sizeof(name), "%s/saves/autosave", com_gamedir);
+		COM_ListSystemFiles(&scan, name, "sav", M_AddAutosaveEntry);
 	}
 
 	// Sort the entries
-	qsort(save_entries, MAX_SAVEGAMES - 1, sizeof(save_entry_t), save_compare);
+	qsort(save_entries, scan.count, sizeof(save_entry_t), save_compare);
+	save_entries_count = scan.count;
+
+	while (scan.count < SAVEGAME_MENU_SLOTS)
+		M_ClearSaveEntry(&save_entries[scan.count++], -1);
+
+}
+
+static qboolean M_Load_EntryIsPresent(int index)
+{
+	return index >= 0 && index < save_entries_count &&
+		strcmp(save_entries[index].name, "--- UNUSED SLOT ---");
+}
+
+static qboolean M_Load_EntryMatchesSearch(int index)
+{
+	save_entry_t *entry;
+	const char *search = loadmenu.list.search.text;
+
+	if (!M_Load_EntryIsPresent(index))
+		return false;
+
+	if (loadmenu.list.search.len <= 0)
+		return true;
+
+	entry = &save_entries[index];
+	return q_strcasestr(entry->name, search) ||
+		q_strcasestr(entry->mapname, search) ||
+		q_strcasestr(entry->date, search) ||
+		q_strcasestr(entry->loadname, search) ||
+		(entry->autosave && q_strcasestr("auto autosave auto save", search));
+}
+
+static qboolean M_Load_IsSelectableDisplayIndex(int index)
+{
+	int entry_index;
+
+	if (index < 0 || index >= loadmenu.list.numitems)
+		return false;
+
+	entry_index = loadmenu.filtered_indices[index];
+	if (entry_index == LOADGAME_SEPARATOR_INDEX)
+		return false;
+
+	return save_entries[entry_index].loadable;
+}
+
+static save_entry_t* M_Load_SelectedEntry(void)
+{
+	int entry_index;
+
+	if (loadmenu.list.numitems <= 0 ||
+		loadmenu.list.cursor < 0 ||
+		loadmenu.list.cursor >= loadmenu.list.numitems)
+		return NULL;
+
+	entry_index = loadmenu.filtered_indices[loadmenu.list.cursor];
+	if (entry_index == LOADGAME_SEPARATOR_INDEX)
+		return NULL;
+
+	if (!save_entries[entry_index].loadable)
+		return NULL;
+
+	return &save_entries[entry_index];
+}
+
+static qboolean M_Load_EnsureSelectableCursor(int dir)
+{
+	if (loadmenu.list.numitems <= 0)
+		return false;
+
+	if (M_Load_IsSelectableDisplayIndex(loadmenu.list.cursor))
+		return true;
+
+	if (M_List_SelectNextActive(&loadmenu.list, loadmenu.list.cursor, dir, true))
+		return true;
+
+	loadmenu.list.cursor = 0;
+	loadmenu.list.scroll = 0;
+	return false;
+}
+
+static void M_Load_EnsureSelectableCursorForKey(int key)
+{
+	switch (key)
+	{
+	case K_UPARROW:
+	case K_KP_UPARROW:
+	case K_LEFTARROW:
+	case K_KP_LEFTARROW:
+	case K_PGUP:
+	case K_KP_PGUP:
+	case K_END:
+	case K_KP_END:
+		M_Load_EnsureSelectableCursor(-1);
+		break;
+
+	default:
+		M_Load_EnsureSelectableCursor(1);
+		break;
+	}
+}
+
+static void M_Load_Refilter(void)
+{
+	int i, count = 0;
+	qboolean have_autosaves = false;
+	qboolean have_regular_saves = false;
+
+	for (i = 0; i < save_entries_count; i++)
+	{
+		if (!M_Load_EntryMatchesSearch(i))
+			continue;
+		if (save_entries[i].autosave)
+			have_autosaves = true;
+		else
+			have_regular_saves = true;
+	}
+
+	for (i = 0; i < save_entries_count; i++)
+	{
+		if (save_entries[i].autosave && M_Load_EntryMatchesSearch(i))
+			loadmenu.filtered_indices[count++] = i;
+	}
+
+	if (have_autosaves && have_regular_saves)
+		loadmenu.filtered_indices[count++] = LOADGAME_SEPARATOR_INDEX;
+
+	for (i = 0; i < save_entries_count; i++)
+	{
+		if (!save_entries[i].autosave && M_Load_EntryMatchesSearch(i))
+			loadmenu.filtered_indices[count++] = i;
+	}
+
+	loadmenu.list.numitems = count;
+	if (loadmenu.list.numitems <= 0)
+	{
+		loadmenu.list.cursor = 0;
+		loadmenu.list.scroll = 0;
+		return;
+	}
+
+	if (loadmenu.list.cursor >= loadmenu.list.numitems)
+		loadmenu.list.cursor = loadmenu.list.numitems - 1;
+	if (loadmenu.list.cursor < 0)
+		loadmenu.list.cursor = 0;
+
+	M_Load_EnsureSelectableCursor(1);
+	M_List_CenterCursor(&loadmenu.list);
+}
+
+static void M_Load_MoveCursor(int dir)
+{
+	if (loadmenu.list.numitems <= 0)
+		return;
+
+	S_LocalSound("misc/menu1.wav");
+	M_List_SelectNextActive(&loadmenu.list, loadmenu.list.cursor + dir, dir, true);
+}
+
+static void M_Load_Init(void)
+{
+	loadmenu.list.cursor = 0;
+	loadmenu.list.scroll = 0;
+	loadmenu.list.viewsize = LOADGAME_LIST_ROWS;
+	loadmenu.list.numitems = 0;
+	loadmenu.list.isactive_fn = M_Load_IsSelectableDisplayIndex;
+	memset(&loadmenu.list.search, 0, sizeof(loadmenu.list.search));
+	loadmenu.list.search.maxlen = 32;
+	loadmenu.prev_cursor = -1;
+	loadmenu.x = LOADGAME_LIST_X;
+	loadmenu.y = LOADGAME_LIST_Y;
+	loadmenu.cols = LOADGAME_LIST_COLS;
+	loadmenu.scrollbar_grab = false;
+	M_Ticker_Init(&loadmenu.ticker);
+
+	M_Load_Refilter();
 }
 
 void M_Menu_Load_f (void)
@@ -3194,7 +3460,9 @@ void M_Menu_Load_f (void)
 	m_state = m_load;
 
 	key_dest = key_menu;
-	M_ScanSaves ();
+	Host_WaitForSaveThread ();
+	M_ScanSaves (true);
+	M_Load_Init();
 
 	IN_UpdateGrabs();
 }
@@ -3213,7 +3481,8 @@ void M_Menu_Save_f (void)
 
 	key_dest = key_menu;
 	IN_UpdateGrabs();
-	M_ScanSaves ();
+	Host_WaitForSaveThread ();
+	M_ScanSaves (false);
 }
 
 
@@ -3222,30 +3491,150 @@ static void M_DrawSaveSlots (const char* title_pic)
 	qpic_t* p = Draw_CachePic(title_pic);
 	M_DrawPic((320 - p->width) / 2, 4, p);
 
-	for (int i = 0; i < MAX_SAVEGAMES - 1; i++)
+	for (int i = 0; i < SAVEGAME_MENU_SLOTS; i++)
 	{
-		M_Print(16, 32 + 8 * i, save_entries[i].name);
+		if (save_entries[i].autosave)
+			M_PrintWhite(16, 32 + 8 * i, save_entries[i].name);
+		else
+			M_Print(16, 32 + 8 * i, save_entries[i].name);
 	}
 
 	// Draw date info in last slot position with white text
 	if (save_entries[load_cursor].loadable)
 	{
 		char info[128];
-		M_Print(16, 32 + 8 * (MAX_SAVEGAMES - 1) + 4, "last save:");
+		M_Print(16, 32 + 8 * SAVEGAME_MENU_SLOTS + 4,
+			save_entries[load_cursor].autosave ? "auto save:" : "last save:");
 		q_snprintf(info, sizeof(info), "%s (%s)",
 			save_entries[load_cursor].date,
 			save_entries[load_cursor].mapname);
-		M_PrintWhite(100, 32 + 8 * (MAX_SAVEGAMES - 1) + 4, info);
+		M_PrintWhite(100, 32 + 8 * SAVEGAME_MENU_SLOTS + 4, info);
 	}
 
 // line cursor
-	if (load_cursor < MAX_SAVEGAMES - 1)
+	if (load_cursor < SAVEGAME_MENU_SLOTS)
 		M_DrawCharacter(8, 32 + load_cursor * 8, 12 + ((int)(realtime * 4) & 1));
 }
 
 void M_Load_Draw (void)
 {
-	M_DrawSaveSlots ("gfx/p_load.lmp");
+	qpic_t* p;
+	int firstvis, numvis, i;
+	save_entry_t *selected;
+
+	loadmenu.x = LOADGAME_LIST_X;
+	loadmenu.y = LOADGAME_LIST_Y;
+	loadmenu.cols = LOADGAME_LIST_COLS;
+
+	if (!keydown[K_MOUSE1])
+		loadmenu.scrollbar_grab = false;
+
+	if (loadmenu.prev_cursor != loadmenu.list.cursor)
+	{
+		loadmenu.prev_cursor = loadmenu.list.cursor;
+		M_Ticker_Init(&loadmenu.ticker);
+	}
+	else
+	{
+		M_Ticker_Update(&loadmenu.ticker);
+	}
+
+	p = Draw_CachePic("gfx/p_load.lmp");
+	M_DrawPic((320 - p->width) / 2, 4, p);
+
+	if (loadmenu.list.numitems > 0)
+	{
+		M_List_GetVisibleRange(&loadmenu.list, &firstvis, &numvis);
+		for (i = 0; i < numvis; i++)
+		{
+			const int draw_idx = i + firstvis;
+			const int entry_idx = loadmenu.filtered_indices[draw_idx];
+			const int item_y = loadmenu.y + i * 8;
+			const int maxchars = loadmenu.cols - 2;
+			const int maxwidth = maxchars * 8;
+			const qboolean selected_row = (draw_idx == loadmenu.list.cursor &&
+				M_Load_IsSelectableDisplayIndex(draw_idx));
+			qboolean matched, needs_scroll;
+			save_entry_t *entry;
+
+			if (entry_idx == LOADGAME_SEPARATOR_INDEX)
+				continue;
+
+			entry = &save_entries[entry_idx];
+			matched = (loadmenu.list.search.len > 0 &&
+				q_strcasestr(entry->name, loadmenu.list.search.text) != NULL);
+			needs_scroll = ((int)strlen(entry->name) > maxchars);
+
+			if (entry->autosave)
+			{
+				if (needs_scroll)
+					M_PrintScroll(loadmenu.x, item_y, maxwidth, entry->name,
+						selected_row ? loadmenu.ticker.scroll_time : 0.0, false);
+				else
+					M_PrintWhite(loadmenu.x, item_y, entry->name);
+			}
+			else if (matched)
+			{
+				if (needs_scroll)
+					M_PrintHighlightScroll(loadmenu.x, item_y, maxwidth,
+						entry->name, loadmenu.list.search.text,
+						selected_row ? loadmenu.ticker.scroll_time : 0.0);
+				else
+					M_PrintHighlight(loadmenu.x, item_y, entry->name,
+						loadmenu.list.search.text,
+						loadmenu.list.search.len);
+			}
+			else if (needs_scroll)
+			{
+				M_PrintScroll(loadmenu.x, item_y, maxwidth, entry->name,
+					selected_row ? loadmenu.ticker.scroll_time : 0.0, true);
+			}
+			else
+			{
+				M_Print(loadmenu.x, item_y, entry->name);
+			}
+
+			if (selected_row)
+				M_DrawCharacter(loadmenu.x - 8, item_y, 12 + ((int)(realtime * 4) & 1));
+		}
+	}
+	else
+	{
+		M_PrintWhite(loadmenu.x, loadmenu.y,
+			save_entries_count > 0 ? "No matching saves" : "No saved games");
+	}
+
+	if (M_List_GetOverflow(&loadmenu.list) > 0)
+	{
+		M_List_DrawScrollbar(&loadmenu.list, loadmenu.x + loadmenu.cols * 8 - 8, loadmenu.y);
+
+		if (loadmenu.list.scroll > 0)
+			M_DrawEllipsisBar(loadmenu.x, loadmenu.y - 8, loadmenu.cols);
+		if (loadmenu.list.scroll + loadmenu.list.viewsize < loadmenu.list.numitems)
+			M_DrawEllipsisBar(loadmenu.x, loadmenu.y + loadmenu.list.viewsize * 8, loadmenu.cols);
+	}
+
+	selected = M_Load_SelectedEntry();
+	if (selected)
+	{
+		char info[128];
+		M_Print(16, LOADGAME_INFO_Y, selected->autosave ? "auto save:" : "last save:");
+		q_snprintf(info, sizeof(info), "%s (%s)", selected->date, selected->mapname);
+		M_PrintWhite(100, LOADGAME_INFO_Y, info);
+	}
+
+	if (loadmenu.list.search.len > 0)
+	{
+		int cursor_x = 24 + 8 * loadmenu.list.search.len;
+		M_DrawTextBox(16, LOADGAME_SEARCH_BOX_Y, 32, 1);
+		M_PrintHighlight(24, LOADGAME_SEARCH_TEXT_Y, loadmenu.list.search.text,
+			loadmenu.list.search.text,
+			loadmenu.list.search.len);
+		if (loadmenu.list.numitems == 0)
+			M_DrawCharacter(cursor_x, LOADGAME_SEARCH_TEXT_Y, 11 ^ 128);
+		else
+			M_DrawCharacter(cursor_x, LOADGAME_SEARCH_TEXT_Y, 10 + ((int)(realtime * 4) & 1));
+	}
 }
 
 void M_Save_Draw (void)
@@ -3256,21 +3645,106 @@ void M_Save_Draw (void)
 
 void M_Load_Key (int k)
 {
+	save_entry_t *selected;
+
+	if (keydown[K_CTRL])
+	{
+		if ((k == 'u' || k == 'U') && loadmenu.list.search.len > 0)
+		{
+			loadmenu.list.search.len = 0;
+			loadmenu.list.search.text[0] = 0;
+			loadmenu.list.cursor = 0;
+			loadmenu.list.scroll = 0;
+			M_Load_Refilter();
+			return;
+		}
+		else if (k == K_BACKSPACE && loadmenu.list.search.len > 0)
+		{
+			M_DeletePrevWord(&loadmenu.list.search);
+			loadmenu.list.cursor = 0;
+			loadmenu.list.scroll = 0;
+			M_Load_Refilter();
+			return;
+		}
+	}
+
+	if (k >= 32 && k < 127)
+	{
+		if (loadmenu.list.search.len < loadmenu.list.search.maxlen)
+		{
+			loadmenu.list.search.text[loadmenu.list.search.len++] = k;
+			loadmenu.list.search.text[loadmenu.list.search.len] = 0;
+			loadmenu.list.cursor = 0;
+			loadmenu.list.scroll = 0;
+			M_Load_Refilter();
+		}
+		return;
+	}
+
+	if (k == K_BACKSPACE && loadmenu.list.search.len > 0)
+	{
+		loadmenu.list.search.text[--loadmenu.list.search.len] = 0;
+		loadmenu.list.cursor = 0;
+		loadmenu.list.scroll = 0;
+		M_Load_Refilter();
+		return;
+	}
+
+	if (loadmenu.scrollbar_grab)
+	{
+		switch (k)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			loadmenu.scrollbar_grab = false;
+			break;
+		}
+		return;
+	}
+
+	if (loadmenu.list.numitems > 0 && M_List_Key(&loadmenu.list, k))
+	{
+		M_Load_EnsureSelectableCursorForKey(k);
+		return;
+	}
+
 	switch (k)
 	{
 	case K_ESCAPE:
+		if (loadmenu.list.search.len > 0)
+		{
+			loadmenu.list.search.len = 0;
+			loadmenu.list.search.text[0] = 0;
+			loadmenu.list.cursor = 0;
+			loadmenu.list.scroll = 0;
+			M_Load_Refilter();
+			return;
+		}
 	case K_BBUTTON:
 	case K_MOUSE4: // woods #mousemenu
 	case K_MOUSE2:
 		M_Menu_SinglePlayer_f ();
 		break;
 
+	case K_LEFTARROW:
+	case K_KP_LEFTARROW:
+		M_Load_MoveCursor(-1);
+		break;
+
+	case K_RIGHTARROW:
+	case K_KP_RIGHTARROW:
+		M_Load_MoveCursor(1);
+		break;
+
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
-	case K_MOUSE1: // woods #mousemenu
+	enter:
+		selected = M_Load_SelectedEntry();
 		S_LocalSound ("misc/menu2.wav");
-		if (!save_entries[load_cursor].loadable)
+		if (!selected)
 			return;
 		m_state = m_none;
 		key_dest = key_game;
@@ -3281,23 +3755,24 @@ void M_Load_Key (int k)
 		SCR_BeginLoadingPlaque ();
 
 	// issue the load command
-		Cbuf_AddText (va ("load s%i\n", save_entries[load_cursor].original_index));
+		Cbuf_AddText (va ("load \"%s\"\n", selected->loadname));
 		return;
 
-	case K_DOWNARROW:
-	case K_RIGHTARROW:
-		S_LocalSound("misc/menu1.wav");
-		load_cursor++;
-		if (load_cursor >= MAX_SAVEGAMES - 1)
-			load_cursor = 0;
-		break;
+	case K_MOUSE1: // woods #mousemenu
+		if (loadmenu.list.numitems > 0)
+		{
+			int x = m_mousex - loadmenu.x - (loadmenu.cols - 1) * 8;
+			int y = m_mousey - loadmenu.y;
+			if (x >= -8 && M_List_UseScrollbar(&loadmenu.list, y))
+			{
+				loadmenu.scrollbar_grab = true;
+				M_Load_Mousemove(m_mousex, m_mousey);
+				break;
+			}
+		}
+		goto enter;
 
-	case K_UPARROW:
-	case K_LEFTARROW:
-		S_LocalSound ("misc/menu1.wav");
-		load_cursor--;
-		if (load_cursor < 0)
-			load_cursor = MAX_SAVEGAMES - 2;
+	default:
 		break;
 	}
 }
@@ -3329,14 +3804,14 @@ void M_Save_Key (int k)
 		S_LocalSound ("misc/menu1.wav");
 		load_cursor--;
 		if (load_cursor < 0)
-			load_cursor = MAX_SAVEGAMES - 2;
+			load_cursor = SAVEGAME_MENU_SLOTS - 1;
 		break;
 
 	case K_DOWNARROW:
 	case K_RIGHTARROW:
 		S_LocalSound ("misc/menu1.wav");
 		load_cursor++;
-		if (load_cursor >= MAX_SAVEGAMES - 1)
+		if (load_cursor >= SAVEGAME_MENU_SLOTS)
 			load_cursor = 0;
 		break;
 	}
@@ -3344,12 +3819,29 @@ void M_Save_Key (int k)
 
 void M_Load_Mousemove(int cx, int cy) // woods #mousemenu
 {
-	M_UpdateCursor(cy, 32, 8, MAX_SAVEGAMES-1, &load_cursor);
+	cy -= loadmenu.y;
+	(void)cx;
+
+	if (loadmenu.scrollbar_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			loadmenu.scrollbar_grab = false;
+			return;
+		}
+		M_List_UseScrollbar(&loadmenu.list, cy);
+	}
+
+	if (m_mousey >= LOADGAME_INFO_Y)
+		return;
+
+	if (loadmenu.list.numitems > 0)
+		M_List_Mousemove(&loadmenu.list, cy);
 }
 
 void M_Save_Mousemove(int cx, int cy) // woods #mousemenu
 {
-	M_UpdateCursor(cy, 32, 8, MAX_SAVEGAMES-1, &load_cursor);
+	M_UpdateCursor(cy, 32, 8, SAVEGAME_MENU_SLOTS, &load_cursor);
 }
 
 /*
@@ -4471,6 +4963,8 @@ Skill Menu (iw)
 int				m_skill_cursor;
 qboolean		m_skill_usegfx;
 qboolean		m_skill_usecustomtitle;
+qboolean		m_skill_canresume;
+time_t			m_skill_lastplayed;
 int				m_skill_numoptions;
 char			m_skill_mapname[MAX_QPATH];
 char			m_skill_maptitle[1024];
@@ -4485,20 +4979,99 @@ void M_SetSkillMenuMap(const char* name)
 		q_strlcpy(m_skill_maptitle, name, sizeof(m_skill_maptitle));
 }
 
+static void M_DescribeDuration(char *out, size_t outsize, double seconds)
+{
+	const double minute = 60.0;
+	const double hour = 60.0 * minute;
+	const double day = 24.0 * hour;
+	const double week = 7.0 * day;
+	const double month = 30.436875 * day;
+	const double year = 365.2425 * day;
+	const char	*unit;
+	int			count;
+
+	if (seconds < 0.0)
+		seconds = -seconds;
+
+	if (seconds < 1.0)
+	{
+		q_strlcpy(out, "moments", outsize);
+		return;
+	}
+	else if (seconds < minute)
+	{
+		count = (int)seconds;
+		unit = "second";
+	}
+	else if (seconds < 90.0 * minute)
+	{
+		count = (int)(seconds / minute);
+		unit = "minute";
+	}
+	else if (seconds < day)
+	{
+		count = (int)(seconds / hour);
+		unit = "hour";
+	}
+	else if (seconds < week)
+	{
+		count = (int)(seconds / day);
+		unit = "day";
+	}
+	else if (seconds < month)
+	{
+		count = (int)(seconds / week);
+		unit = "week";
+	}
+	else if (seconds < year)
+	{
+		count = (int)(seconds / month);
+		unit = "month";
+	}
+	else
+	{
+		count = (int)(seconds / year);
+		unit = "year";
+	}
+
+	q_snprintf(out, outsize, "%i %s%s", count, unit, count == 1 ? "" : "s");
+}
+
 void M_Menu_Skill_f(void)
 {
+	char autosave[MAX_OSPATH];
+
+	m_skill_canresume = false;
+	m_skill_lastplayed = 0;
+	Host_WaitForSaveThread ();
+	q_snprintf(autosave, sizeof(autosave), "%s/saves/autosave/%s.sav", com_gamedir, m_skill_mapname);
+	if (Sys_FileType(autosave) & FS_ENT_FILE)
+	{
+		time_t now, lastplayed;
+		m_skill_canresume = true;
+		time(&now);
+		if (Sys_GetFileTime(autosave, &lastplayed) && lastplayed <= now)
+			m_skill_lastplayed = lastplayed;
+	}
+
 	key_dest = key_menu;
 	m_skill_prevmenu = m_state;
 	m_state = m_skill;
 	m_entersound = true;
 	M_Ticker_Init(&m_skill_ticker);
 
-
+	if (m_skill_canresume)
+	{
+		m_skill_cursor = 4;
+	}
+	else
+	{
 		// Select current skill level initially if there's no autosave
 		m_skill_cursor = (int)skill.value;
 		m_skill_cursor = CLAMP(0, m_skill_cursor, 3);
+	}
 	
-	m_skill_numoptions = 4;
+	m_skill_numoptions = 4 + m_skill_canresume;
 }
 
 void M_Skill_Draw(void)
@@ -4507,7 +5080,7 @@ void M_Skill_Draw(void)
 	qpic_t* p;
 
 	M_DrawTransPic(16, 4, Draw_CachePic("gfx/qplaque.lmp"));
-	p = Draw_CachePic(m_skill_usecustomtitle ? "gfx/p_skill.lmp" : "gfx/ttl_sgl.lmp");
+	p = Draw_CachePic(m_skill_usecustomtitle && !m_skill_canresume ? "gfx/p_skill.lmp" : "gfx/ttl_sgl.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
 
 	x = 72;
@@ -4540,6 +5113,23 @@ void M_Skill_Draw(void)
 		if (m_skill_cursor < 4)
 			M_DrawArrowCursor(x - 16, y + m_skill_cursor * 16 + 4);
 		y += 4 * 16;
+	}
+
+	if (m_skill_canresume)
+	{
+		y += 8;
+		M_Print(x, y, "Resume last game");
+		if (m_skill_lastplayed)
+		{
+			char	duration[32];
+			time_t	now;
+
+			time(&now);
+			M_DescribeDuration(duration, sizeof(duration), difftime(now, m_skill_lastplayed));
+			M_Print(x, y + 8, va("from %s ago", duration));
+		}
+		if (m_skill_cursor == 4)
+			M_DrawArrowCursor(x - 16, y);
 	}
 }
 
@@ -4622,12 +5212,19 @@ void M_Skill_Key(int key)
 		key_dest = key_game;
 		if (sv.active)
 			Cbuf_AddText("disconnect\n");
-		// Fresh start
-		Cbuf_AddText(va("skill %d\n", m_skill_cursor));
-		Cbuf_AddText("maxplayers 1\n");
-		Cbuf_AddText("deathmatch 0\n"); //johnfitz
-		Cbuf_AddText("coop 0\n"); //johnfitz
-		Cbuf_AddText(va("map \"%s\"\n", m_skill_mapname));
+		if (m_skill_cursor == 4)
+		{
+			Cbuf_AddText(va("load \"autosave/%s\"\n", m_skill_mapname));
+		}
+		else
+		{
+			// Fresh start
+			Cbuf_AddText(va("skill %d\n", m_skill_cursor));
+			Cbuf_AddText("maxplayers 1\n");
+			Cbuf_AddText("deathmatch 0\n"); //johnfitz
+			Cbuf_AddText("coop 0\n"); //johnfitz
+			Cbuf_AddText(va("map \"%s\"\n", m_skill_mapname));
+		}
 		break;
 	}
 }
@@ -4637,7 +5234,10 @@ void M_Skill_Mousemove(int cx, int cy)
 	int ybase = 48;
 	int itemheight = m_skill_usegfx ? 20 : 16;
 
-	M_UpdateCursor(cy, ybase, itemheight, 4, &m_skill_cursor);
+	if (m_skill_numoptions > 4 && cy > ybase + 4 * itemheight + 8 / 2)
+		m_skill_cursor = 4;
+	else
+		M_UpdateCursor(cy, ybase, itemheight, 4, &m_skill_cursor);
 
 }
 
@@ -18218,7 +18818,7 @@ Misc Menu
 
 extern cvar_t pr_checkextension, r_replacemodels, gl_load24bit, cl_nopext, r_lerpmodels, r_lerpmove,
 sys_throttle, r_particles, sv_nqplayerphysics, cl_nopred, cl_autodemo, cl_smartspawn, cl_bobbing, cl_onload,
-cl_pong, scr_hints, cl_portpingprobe_enable;
+cl_pong, scr_hints, cl_portpingprobe_enable, sv_autoload, sv_autosave, sv_autosave_interval;
 
 static enum extras_e
 {
@@ -18235,6 +18835,7 @@ static enum extras_e
 	EXTRAS_HINTS,
 	EXTRAS_LIVEPREVIEW,
 	EXTRAS_MODELVIEWER,
+	EXTRAS_SAVING,
 	EXTRAS_SHORTCUTS,
 	EXTRAS_VERSION,
 	EXTRAS_COUNT
@@ -18285,6 +18886,8 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 		return "Live Preview";
 	case EXTRAS_MODELVIEWER:
 		return "Model Viewer";
+	case EXTRAS_SAVING:
+		return "Saving";
 	case EXTRAS_SHORTCUTS:
 		return "Keyboard Shortcuts";
 	case EXTRAS_VERSION:
@@ -18313,6 +18916,9 @@ static int M_Extras_RowY(int item)
 {
 	return 48 + item * 8;
 }
+
+#define EXTRAS_SEARCH_BOX_Y	176
+#define EXTRAS_SEARCH_TEXT_Y	184
 
 static int M_Extras_LivePreviewId(void)
 {
@@ -18419,6 +19025,9 @@ static void M_Extras_AdjustSliders (int dir)
 		break;
 	case EXTRAS_MODELVIEWER:
 		M_Menu_ModelViewer_f();
+		break;
+	case EXTRAS_SAVING:
+		M_Menu_Saving_f();
 		break;
 	case EXTRAS_SHORTCUTS:
 		M_Menu_Shortcuts_f();
@@ -18547,6 +19156,11 @@ void M_Extras_Draw(void)
 			value = "...";
 			break;
 
+		case EXTRAS_SAVING:
+			text = "            Saving";
+			value = "...";
+			break;
+
 		case EXTRAS_SHORTCUTS:
 			text = "Keyboard Shortcuts";
 			value = "...";
@@ -18596,15 +19210,15 @@ void M_Extras_Draw(void)
 	// Draw search box if search is active
 	if (extrasmenu.search.len > 0)
 	{
-		M_DrawTextBox(16, 170, 32, 1);
-		M_PrintHighlight(24, 178, extrasmenu.search.text,
+		M_DrawTextBox(16, EXTRAS_SEARCH_BOX_Y, 32, 1);
+		M_PrintHighlight(24, EXTRAS_SEARCH_TEXT_Y, extrasmenu.search.text,
 			extrasmenu.search.text,
 			extrasmenu.search.len);
 		int cursor_x = 24 + 8 * extrasmenu.search.len;
 		if (numberOfExtrasItems == 0)
-			M_DrawCharacter(cursor_x, 178, 11 ^ 128);
+			M_DrawCharacter(cursor_x, EXTRAS_SEARCH_TEXT_Y, 11 ^ 128);
 		else
-			M_DrawCharacter(cursor_x, 178, 10 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(cursor_x, EXTRAS_SEARCH_TEXT_Y, 10 + ((int)(realtime * 4) & 1));
 	}
 }
 
@@ -18707,7 +19321,8 @@ void M_Extras_Key(int k)
 		break;
 
 	case K_MWHEELDOWN:
-		if (extras_cursor != EXTRAS_SHORTCUTS && extras_cursor != EXTRAS_VERSION)
+		if (extras_cursor != EXTRAS_MODELVIEWER && extras_cursor != EXTRAS_SAVING &&
+			extras_cursor != EXTRAS_SHORTCUTS && extras_cursor != EXTRAS_VERSION)
 			M_Extras_AdjustSliders(-1);
 		break;
 
@@ -18716,7 +19331,8 @@ void M_Extras_Key(int k)
 		break;
 
 	case K_MWHEELUP:
-		if (extras_cursor != EXTRAS_SHORTCUTS && extras_cursor != EXTRAS_VERSION)
+		if (extras_cursor != EXTRAS_MODELVIEWER && extras_cursor != EXTRAS_SAVING &&
+			extras_cursor != EXTRAS_SHORTCUTS && extras_cursor != EXTRAS_VERSION)
 			M_Extras_AdjustSliders(1);
 		break;
 	}
@@ -18725,7 +19341,7 @@ void M_Extras_Key(int k)
 void M_Extras_Mousemove(int cx, int cy)
 {
 	// Don't process mouse movement if it's in the search box area
-	if (extrasmenu.search.len > 0 && cy >= 170)
+	if (extrasmenu.search.len > 0 && cy >= EXTRAS_SEARCH_BOX_Y)
 		return;
 
 	// Calculate which menu item the mouse is over
@@ -18736,6 +19352,283 @@ void M_Extras_Mousemove(int cx, int cy)
 	{
 		// Update cursor position regardless of search state
 		extras_cursor = item;
+	}
+}
+
+/*
+==================
+Saving Menu
+==================
+*/
+
+enum saving_e
+{
+	SAVING_AUTOLOAD,
+	SAVING_AUTOSAVE,
+	SAVING_AUTOSAVE_INTERVAL,
+	SAVING_INDICATOR,
+	SAVING_ITEMS
+} saving_cursor;
+
+#define SAVING_ROW_Y(item) (48 + (item) * 8)
+#define SAVING_AUTOSAVE_INTERVAL_DEFAULT	30
+#define SAVING_AUTOSAVE_INTERVAL_STEP		5
+
+static int M_Saving_AutoloadMode(void)
+{
+	if (sv_autoload.value <= 0.f)
+		return 0;
+	if (sv_autoload.value < 2.f)
+		return 1;
+	if (sv_autoload.value < 3.f)
+		return 2;
+	return 3;
+}
+
+static const char* M_Saving_AutoloadText(void)
+{
+	switch (M_Saving_AutoloadMode())
+	{
+	case 0:
+		return "off";
+	case 1:
+		return "prompt";
+	case 2:
+		return "death only";
+	case 3:
+		return "always";
+	default:
+		return "unknown";
+	}
+}
+
+static const char* M_Saving_AutosaveText(void)
+{
+	if (!sv_autosave.value)
+		return "off";
+	if (fabsf(sv_autosave_interval.value) <= 0.f)
+		return "on, interval off";
+	return "on";
+}
+
+static float M_Saving_IntervalValue(void)
+{
+	return fabsf(sv_autosave_interval.value);
+}
+
+static qboolean M_Saving_IndicatorEnabled(void)
+{
+	return sv_autosave_interval.value < 0.f;
+}
+
+static void M_Saving_SetIntervalValue(float interval)
+{
+	if (interval > 0.f && M_Saving_IndicatorEnabled())
+		interval = -interval;
+	Cvar_SetValueQuick(&sv_autosave_interval, interval);
+}
+
+static void M_Saving_SetIndicator(qboolean enabled)
+{
+	float interval = M_Saving_IntervalValue();
+
+	if (interval <= 0.f)
+		interval = SAVING_AUTOSAVE_INTERVAL_DEFAULT;
+
+	Cvar_SetValueQuick(&sv_autosave_interval, enabled ? -interval : interval);
+}
+
+static const char* M_Saving_IntervalText(void)
+{
+	float interval = M_Saving_IntervalValue();
+	int seconds;
+
+	if (interval <= 0.f)
+		return "off";
+
+	seconds = Q_rint(interval);
+	if ((float)seconds == interval)
+		return va("%d sec", seconds);
+
+	return va("%.1f sec", interval);
+}
+
+static void M_Saving_MoveCursor(int delta)
+{
+	saving_cursor = (enum saving_e)M_Menu_ClampCursorValue((int)saving_cursor + delta, SAVING_ITEMS);
+}
+
+void M_Menu_Saving_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_saving;
+	m_entersound = true;
+	saving_cursor = 0;
+
+	IN_UpdateGrabs();
+}
+
+static void M_Saving_AdjustSliders(int dir)
+{
+	float interval;
+	int m;
+
+	S_LocalSound("misc/menu3.wav");
+
+	switch (saving_cursor)
+	{
+	case SAVING_AUTOLOAD:
+		m = M_Saving_AutoloadMode() + dir;
+		if (m < 0)
+			m = 3;
+		else if (m > 3)
+			m = 0;
+		Cvar_SetValueQuick(&sv_autoload, m);
+		break;
+
+	case SAVING_AUTOSAVE:
+		if (sv_autosave.value)
+			Cvar_SetValueQuick(&sv_autosave, 0);
+		else
+		{
+			Cvar_SetValueQuick(&sv_autosave, 1);
+			if (M_Saving_IntervalValue() <= 0.f)
+				M_Saving_SetIntervalValue(SAVING_AUTOSAVE_INTERVAL_DEFAULT);
+		}
+		break;
+
+	case SAVING_AUTOSAVE_INTERVAL:
+		interval = M_Saving_IntervalValue();
+		if (interval <= 0.f)
+			m = (dir > 0) ? SAVING_AUTOSAVE_INTERVAL_STEP : 0;
+		else
+		{
+			m = Q_rint(interval) + dir * SAVING_AUTOSAVE_INTERVAL_STEP;
+			if (m < SAVING_AUTOSAVE_INTERVAL_STEP)
+				m = 0;
+		}
+		M_Saving_SetIntervalValue(m);
+		break;
+
+	case SAVING_INDICATOR:
+		M_Saving_SetIndicator(!M_Saving_IndicatorEnabled());
+		break;
+
+	default:
+		break;
+	}
+}
+
+void M_Saving_Draw(void)
+{
+	qpic_t* p;
+	int i;
+
+	saving_cursor = (enum saving_e)M_Menu_ClampCursorValue((int)saving_cursor, SAVING_ITEMS);
+
+	p = Draw_CachePic("gfx/p_option.lmp");
+	M_DrawPic((320 - p->width) / 2, 4, p);
+
+	{
+		const char* title = "Saving";
+		M_PrintWhite((320 - 8 * strlen(title)) / 2, 32, title);
+	}
+
+	for (i = 0; i < SAVING_ITEMS; i++)
+	{
+		int y = SAVING_ROW_Y(i);
+		const char* text = NULL;
+		const char* value = NULL;
+
+		switch (i)
+		{
+		case SAVING_AUTOLOAD:
+			text = "         Auto Load";
+			value = M_Saving_AutoloadText();
+			break;
+
+		case SAVING_AUTOSAVE:
+			text = "         Auto Save";
+			value = M_Saving_AutosaveText();
+			break;
+
+		case SAVING_AUTOSAVE_INTERVAL:
+			text = "Auto Save Interval";
+			value = M_Saving_IntervalText();
+			break;
+
+		case SAVING_INDICATOR:
+			text = " Saving Indicator";
+			value = M_Saving_IndicatorEnabled() ? "on" : "off";
+			break;
+
+		default:
+			break;
+		}
+
+		if (text)
+			M_Print(0, y, text);
+
+		if (value)
+			M_Print(178, y, value);
+	}
+
+	M_DrawCharacter(168, SAVING_ROW_Y(saving_cursor), 12 + ((int)(realtime * 4) & 1));
+}
+
+void M_Saving_Key(int k)
+{
+	switch (k)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Menu_Extras_f();
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+	case K_MOUSE1:
+		m_entersound = true;
+		M_Saving_AdjustSliders(1);
+		break;
+
+	case K_UPARROW:
+		S_LocalSound("misc/menu1.wav");
+		M_Saving_MoveCursor(-1);
+		break;
+
+	case K_DOWNARROW:
+		S_LocalSound("misc/menu1.wav");
+		M_Saving_MoveCursor(1);
+		break;
+
+	case K_LEFTARROW:
+	case K_MWHEELDOWN:
+		M_Saving_AdjustSliders(-1);
+		break;
+
+	case K_RIGHTARROW:
+	case K_MWHEELUP:
+		M_Saving_AdjustSliders(1);
+		break;
+
+	default:
+		break;
+	}
+}
+
+void M_Saving_Mousemove(int cx, int cy)
+{
+	int item = (cy - SAVING_ROW_Y(0)) / 8;
+	(void)cx;
+
+	if (item >= 0 && item < SAVING_ITEMS &&
+		cy >= SAVING_ROW_Y(0) && cy < SAVING_ROW_Y(SAVING_ITEMS))
+	{
+		saving_cursor = (enum saving_e)item;
 	}
 }
 
@@ -30885,6 +31778,7 @@ static struct
 	{"menu_demooptions", M_Menu_DemoOptions_f},
 	{"menu_pakloading", M_Menu_PakLoading_f},
 	{"menu_modelviewer", M_Menu_ModelViewer_f},
+	{"menu_saving", M_Menu_Saving_f},
 	{"menu_misc", M_Menu_Extras_f},
 	{"menu_shortcuts", M_Menu_Shortcuts_f},
 	{"menu_version", M_Menu_Version_f},
@@ -31250,6 +32144,10 @@ void M_Draw (void)
 		M_Extras_Draw ();
 		break;
 
+	case m_saving:
+		M_Saving_Draw();
+		break;
+
 	case m_shortcuts:
 		M_Shortcuts_Draw();
 		break;
@@ -31387,6 +32285,7 @@ static qboolean M_HasSearchField (void)
 	switch (m_state)
 	{
 	case m_options:
+	case m_load:
 	case m_maps:
 	case m_downloadmaps:
 	case m_keys:
@@ -31605,6 +32504,10 @@ void M_Keydown (int key, qboolean repeat)
 
 	case m_extras:
 		M_Extras_Key (key);
+		return;
+
+	case m_saving:
+		M_Saving_Key(key);
 		return;
 
 	case m_shortcuts:
@@ -31862,6 +32765,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_extras:
 		M_Extras_Mousemove(x, y);
+		return;
+
+	case m_saving:
+		M_Saving_Mousemove(x, y);
 		return;
 
 	case m_shortcuts:

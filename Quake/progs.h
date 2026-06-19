@@ -126,10 +126,47 @@ void ED_LoadFromFile (const char *data);
 edict_t *EDICT_NUM(int);
 int NUM_FOR_EDICT(edict_t*);
 
+#define	SAVEDATA_SPAWN_PARMS	64
+
+typedef struct savedata_s
+{
+	FILE			*file;
+	SDL_atomic_t	abort;			// < 0 = error, > 0 = aborted by user
+	char			path[MAX_OSPATH];
+	char			comment[SAVEGAME_COMMENT_LENGTH+1];
+	char			mapname[MAX_QPATH];
+	double			time;
+	float			spawn_parms[SAVEDATA_SPAWN_PARMS];
+	int				skill;
+	int				serverflags;
+	float			coop;
+	float			deathmatch;
+	int				numknownstrings;
+	const char		**knownstrings;
+	int				num_edicts;
+	edict_t			*edicts;
+	float			*globals;
+	const char		*lightstyles[MAX_LIGHTSTYLES];
+	const char		*model_precache[MAX_MODELS];
+	const char		*sound_precache[MAX_SOUNDS];
+	const char		*particle_precache[MAX_PARTICLETYPES];
+	byte			*buffer;
+	size_t			buffersize;
+} savedata_t;
+
+int SAVE_NUM_FOR_EDICT (savedata_t *save, edict_t *e);
+void ED_WriteSave (savedata_t *save, edict_t *ed);
+void ED_WriteSaveGlobals (savedata_t *save);
+void SaveData_Init (savedata_t *save);
+void SaveData_Clear (savedata_t *save);
+void SaveData_Fill (savedata_t *save);
+void SaveData_WriteHeader (savedata_t *save);
+
 #define	NEXT_EDICT(e)		((edict_t *)( (byte *)e + qcvm->edict_size))
 
 #define	EDICT_TO_PROG(e)	(int)((byte *)e - (byte *)qcvm->edicts)
 #define PROG_TO_EDICT(e)	((edict_t *)((byte *)qcvm->edicts + e))
+#define SAVE_PROG_TO_EDICT(s, e)	((edict_t *)((byte *)(s)->edicts + e))
 
 #define	G_FLOAT(o)		(qcvm->globals[o])
 #define	G_INT(o)		(*(int *)&qcvm->globals[o])
@@ -455,14 +492,14 @@ struct qcvm_s
 #undef QCEXTGLOBAL_INT
 #undef QCEXTGLOBAL_UINT64
 };
-extern globalvars_t	*pr_global_struct;
+extern THREAD_LOCAL globalvars_t	*pr_global_struct;
 
 #if 0
 extern qcvm_t ssqcvm;
 #define qcvm (&ssqcvm)
 #define PR_SwitchQCVM(n)
 #else
-extern qcvm_t *qcvm;
+extern THREAD_LOCAL qcvm_t *qcvm;
 void PR_SwitchQCVM(qcvm_t *nvm);
 #endif
 

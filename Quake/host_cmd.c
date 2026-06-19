@@ -7457,7 +7457,9 @@ Host_AutoLoad -- woods #autoload (iw)
 */
 static qboolean Host_AutoLoad(void)
 {
-	if (!sv_autoload.value || !sv.lastsave[0] || svs.maxclients != 1 || cl.intermission)
+	if (!sv_autoload.value || !sv.lastsave[0] || svs.maxclients != 1 || !svs.clients ||
+		!svs.clients[0].active || !svs.clients[0].spawned || !sv_player || sv_player->free ||
+		cl.intermission)
 		return false;
 
 	if (sv_autoload.value < 2.f)
@@ -7817,6 +7819,14 @@ LOAD / SAVE GAME
 
 #define	SAVEGAME_EXTENDED_HEADER	"// QuakeSpasm extended savegame"
 
+static savedata_t		save_data;
+static qboolean			save_pending;
+static SDL_Thread		*save_thread;
+static SDL_mutex		*save_mutex;
+static SDL_cond			*save_finished_condition;
+static SDL_cond			*save_pending_condition;
+static qboolean			save_report_done;
+
 /*
 ===============
 Host_SavegameComment
@@ -7824,7 +7834,7 @@ Host_SavegameComment
 Writes a SAVEGAME_COMMENT_LENGTH character comment describing the current
 ===============
 */
-static void Host_SavegameComment (char text[SAVEGAME_COMMENT_LENGTH + 1])
+void Host_SavegameComment (char text[SAVEGAME_COMMENT_LENGTH + 1])
 {
 	int		i;
 	char	kills[20];
@@ -7860,6 +7870,202 @@ static void Host_InvalidateSave(const char* relname) // woods #autoload (iw)
 {
 	if (!strcmp(sv.lastsave, relname))
 		sv.lastsave[0] = '\0';
+}
+
+static void Host_CheckSaveResult (void)
+{
+	int abort = SDL_AtomicGet (&save_data.abort);
+
+	if (abort)
+	{
+		if (sv.lastsave[0])
+		{
+			sv.lastsave[0] = '\0';
+			if (abort < 0)
+				Con_Printf ("Save error.\n");
+		}
+		save_report_done = false;
+	}
+	else if (save_report_done)
+	{
+		save_report_done = false;
+		Con_Printf ("done.\n");
+	}
+}
+
+static void Host_AbortSave (void)
+{
+	SDL_AtomicCAS (&save_data.abort, 0, 1);
+	save_report_done = false;
+}
+
+void Host_ShutdownSave (void)
+{
+	if (!save_mutex)
+		return;
+
+	SDL_LockMutex (save_mutex);
+	while (save_pending)
+		SDL_CondWait (save_finished_condition, save_mutex);
+	save_pending = true;
+	save_data.file = NULL;
+	SDL_CondSignal (save_pending_condition);
+	SDL_UnlockMutex (save_mutex);
+
+	SDL_WaitThread (save_thread, NULL);
+	save_thread = NULL;
+
+	SDL_DestroyCond (save_finished_condition);
+	save_finished_condition = NULL;
+
+	SDL_DestroyCond (save_pending_condition);
+	save_pending_condition = NULL;
+
+	SDL_DestroyMutex (save_mutex);
+	save_mutex = NULL;
+
+	SaveData_Clear (&save_data);
+}
+
+void Host_WaitForSaveThread (void)
+{
+	if (!save_mutex)
+		return;
+
+	SDL_LockMutex (save_mutex);
+	while (save_pending)
+		SDL_CondWait (save_finished_condition, save_mutex);
+	SDL_UnlockMutex (save_mutex);
+
+	Host_CheckSaveResult ();
+}
+
+qboolean Host_IsSaving (void)
+{
+	qboolean saving;
+
+	if (!save_mutex)
+		return false;
+
+	SDL_LockMutex (save_mutex);
+	saving = save_pending;
+	SDL_UnlockMutex (save_mutex);
+
+	if (saving)
+		return true;
+
+	Host_CheckSaveResult ();
+
+	return false;
+}
+
+static void Host_WriteSavegameExtendedData (savedata_t *save)
+{
+	int	i;
+
+	fputs("/*\n" SAVEGAME_EXTENDED_HEADER "\n", save->file);
+	fprintf(save->file, "sv.coop %g\n", save->coop);
+	fprintf(save->file, "sv.deathmatch %g\n", save->deathmatch);
+	for (i = MAX_LIGHTSTYLES_VANILLA; i < MAX_LIGHTSTYLES; i++)
+	{
+		if (save->lightstyles[i])
+			fprintf (save->file, "sv.lightstyles %i \"%s\"\n", i, save->lightstyles[i]);
+	}
+	for (i = 1; i < MAX_MODELS; i++)
+	{
+		if (save->model_precache[i])
+			fprintf (save->file, "sv.model_precache %i \"%s\"\n", i, save->model_precache[i]);
+	}
+	for (i = 1; i < MAX_SOUNDS; i++)
+	{
+		if (save->sound_precache[i])
+			fprintf (save->file, "sv.sound_precache %i \"%s\"\n", i, save->sound_precache[i]);
+	}
+	for (i = 1; i < MAX_PARTICLETYPES; i++)
+	{
+		if (save->particle_precache[i])
+			fprintf (save->file, "sv.particle_precache %i \"%s\"\n", i, save->particle_precache[i]);
+	}
+
+	fprintf (save->file, "sv.serverflags %i\n", save->serverflags);
+	for (i = NUM_BASIC_SPAWN_PARMS ; i < NUM_TOTAL_SPAWN_PARMS ; i++)
+	{
+		if (save->spawn_parms[i])
+			fprintf (save->file, "spawnparm %i \"%f\"\n", i+1, save->spawn_parms[i]);
+	}
+
+	fprintf(save->file, "*/\n");
+}
+
+static int Host_BackgroundSave (void *param)
+{
+	savedata_t	*save = (savedata_t *) param;
+
+	while (true)
+	{
+		edict_t		*ed;
+		int			i;
+		qboolean	abort = false;
+
+		SDL_LockMutex (save_mutex);
+		while (!save_pending)
+			SDL_CondWait (save_pending_condition, save_mutex);
+		SDL_UnlockMutex (save_mutex);
+
+		if (!save->file)
+			break;
+
+		PR_SwitchQCVM (&sv.qcvm);
+		SaveData_WriteHeader (save);
+		if (SDL_AtomicGet (&save->abort))
+			abort = true;
+		for (i = 0, ed = save->edicts; !abort && i < save->num_edicts; i++, ed = NEXT_EDICT (ed))
+		{
+			ED_WriteSave (save, ed);
+			if (SDL_AtomicGet (&save->abort))
+				abort = true;
+		}
+		if (!abort)
+		{
+			fprintf (save->file, "// %d edicts\n", save->num_edicts);
+			Host_WriteSavegameExtendedData (save);
+			if (fflush (save->file))
+			{
+				SDL_AtomicCAS (&save->abort, 0, -1);
+				abort = true;
+			}
+		}
+		PR_SwitchQCVM (NULL);
+
+		if (fclose (save->file) && !abort)
+		{
+			SDL_AtomicCAS (&save->abort, 0, -1);
+			abort = true;
+		}
+		save->file = NULL;
+		if (abort)
+			Sys_remove (save->path);
+
+		SDL_LockMutex (save_mutex);
+		save_pending = false;
+		SDL_CondSignal (save_finished_condition);
+		SDL_UnlockMutex (save_mutex);
+	}
+
+	return 0;
+}
+
+static void Host_InitSaveThread (void)
+{
+	save_mutex = SDL_CreateMutex ();
+	save_finished_condition = SDL_CreateCond ();
+	save_pending_condition = SDL_CreateCond ();
+	if (!save_mutex || !save_finished_condition || !save_pending_condition)
+		Sys_Error ("Host_InitSaveThread: %s", SDL_GetError ());
+	SaveData_Init (&save_data);
+	save_thread = SDL_CreateThread (Host_BackgroundSave, "SaveThread", &save_data);
+	if (!save_thread)
+		Sys_Error ("Host_InitSaveThread: %s", SDL_GetError ());
 }
 
 static qboolean Host_ParseSavegameModeValue (const char *line, const char *key, float *value)
@@ -7953,9 +8159,10 @@ static void Host_Savegame_f (void)
 	
 	char	relname[MAX_OSPATH]; // woods #autoload (iw)
 	char	name[MAX_OSPATH];
+	char	dir[MAX_OSPATH];
+	const char	*skipnotify;
 	FILE	*f;
 	int	i;
-	char	comment[SAVEGAME_COMMENT_LENGTH+1];
 
 	if (cmd_source != src_command)
 		return;
@@ -7984,7 +8191,7 @@ static void Host_Savegame_f (void)
 		return;
 	}
 
-	if (Cmd_Argc() != 2)
+	if (Cmd_Argc() < 2)
 	{
 		Con_Printf ("save <savename> : save a game\n");
 		return;
@@ -8009,13 +8216,34 @@ static void Host_Savegame_f (void)
 	q_strlcpy(relname, Cmd_Argv(1), sizeof(relname)); // woods #autoload (iw)
 	COM_AddExtension(relname, ".sav", sizeof(relname));
 
-	q_snprintf(name, sizeof(name), "%s/saves", com_gamedir); // woods - Create saves directory if it doesn't exist
-	Sys_mkdir(name);
+	q_snprintf(dir, sizeof(dir), "%s/saves", com_gamedir); // woods - Create saves directory if it doesn't exist
+	Sys_mkdir(dir);
+	if (!q_strncasecmp (relname, "autosave/", 9) || !q_strncasecmp (relname, "autosave\\", 9))
+	{
+		q_snprintf(dir, sizeof(dir), "%s/saves/autosave", com_gamedir);
+		Sys_mkdir(dir);
+	}
 
 	q_snprintf(name, sizeof(name), "%s/saves/%s", com_gamedir, relname); // woods - save to saves subdirectory
-	Con_SafePrintf("Saving game to ");
-	Con_LinkPrintf(name, "%s", relname);
-	Con_SafePrintf("...\n");
+	skipnotify = (Cmd_Argc () < 3 || atof (Cmd_Argv (2))) ? "" : "[skipnotify]";
+	Con_SafePrintf("%sSaving game to ", skipnotify);
+	Con_LinkPrintf(name, "%s%s", skipnotify, relname);
+	Con_SafePrintf("%s...\n", skipnotify);
+
+	if (!strcmp (relname, sv.lastsave) && Host_IsSaving ())
+	{
+		Host_AbortSave ();
+		SDL_LockMutex (save_mutex);
+		while (save_pending)
+			SDL_CondWait (save_finished_condition, save_mutex);
+		SDL_UnlockMutex (save_mutex);
+	}
+
+	Host_WaitForSaveThread ();
+
+	PR_SwitchQCVM(&sv.qcvm);
+	SaveData_Fill (&save_data);
+	PR_SwitchQCVM(NULL);
 
 	f = fopen (name, "w");
 	if (!f)
@@ -8024,74 +8252,16 @@ static void Host_Savegame_f (void)
 		return;
 	}
 
-	PR_SwitchQCVM(&sv.qcvm);
+	SDL_LockMutex (save_mutex);
+	q_strlcpy (save_data.path, name, sizeof (save_data.path));
+	save_data.file = f;
+	SDL_AtomicSet (&save_data.abort, 0);
+	save_report_done = !skipnotify[0];
+	save_pending = true;
+	SDL_CondSignal (save_pending_condition);
+	SDL_UnlockMutex (save_mutex);
 
-	fprintf (f, "%i\n", SAVEGAME_VERSION);
-	Host_SavegameComment (comment);
-	fprintf (f, "%s\n", comment);
-	for (i = 0; i < NUM_BASIC_SPAWN_PARMS; i++)
-		fprintf (f, "%f\n", svs.clients->spawn_parms[i]);
-	fprintf (f, "%d\n", current_skill);
-	fprintf (f, "%s\n", sv.name);
-	fprintf (f, "%f\n", qcvm->time);
-
-// write the light styles
-	for (i = 0; i < MAX_LIGHTSTYLES_VANILLA; i++)
-	{
-		if (sv.lightstyles[i])
-			fprintf (f, "%s\n", sv.lightstyles[i]);
-		else
-			fprintf (f,"m\n");
-	}
-
-	ED_WriteGlobals (f);
-	for (i = 0; i < qcvm->num_edicts; i++)
-	{
-		ED_Write (f, EDICT_NUM(i));
-		fflush (f);
-	}
-
-	//add extra info (lightstyles, precaches, etc) in a way that's supposed to be compatible with DP.
-	//sidenote - this provides extended lightstyles and support for late precaches
-	//it does NOT protect against spawnfunc precache changes - we would need to include makestatics here too (and optionally baselines, or just recalculate those).
-	fputs("/*\n" SAVEGAME_EXTENDED_HEADER "\n", f);
-	fprintf(f, "sv.coop %g\n", coop.value);
-	fprintf(f, "sv.deathmatch %g\n", deathmatch.value);
-	for (i = MAX_LIGHTSTYLES_VANILLA; i < MAX_LIGHTSTYLES; i++)
-	{
-		if (sv.lightstyles[i])
-			fprintf (f, "sv.lightstyles %i \"%s\"\n", i, sv.lightstyles[i]);
-	}
-	for (i = 1; i < MAX_MODELS; i++)
-	{
-		if (sv.model_precache[i])
-			fprintf (f, "sv.model_precache %i \"%s\"\n", i, sv.model_precache[i]);
-	}
-	for (i = 1; i < MAX_SOUNDS; i++)
-	{
-		if (sv.sound_precache[i])
-			fprintf (f, "sv.sound_precache %i \"%s\"\n", i, sv.sound_precache[i]);
-	}
-	for (i = 1; i < MAX_PARTICLETYPES; i++)
-	{
-		if (sv.particle_precache[i])
-			fprintf (f, "sv.particle_precache %i \"%s\"\n", i, sv.particle_precache[i]);
-	}
-
-	fprintf (f, "sv.serverflags %i\n", svs.serverflags);
-	for (i = NUM_BASIC_SPAWN_PARMS ; i < NUM_TOTAL_SPAWN_PARMS ; i++)
-	{
-		if (svs.clients->spawn_parms[i])
-			fprintf (f, "spawnparm %i \"%f\"\n", i+1, svs.clients->spawn_parms[i]);
-	}
-
-	fprintf(f, "*/\n");
-
-
-	fclose (f);
-	Con_Printf ("done.\n");
-	PR_SwitchQCVM(NULL);
-
+	SCR_ShowSaving ();
 	q_strlcpy(sv.lastsave, relname, sizeof(sv.lastsave));
 }
 
@@ -8143,6 +8313,7 @@ static void Host_Loadgame_f (void)
 
 	q_strlcpy(relname, Cmd_Argv(1), sizeof(relname)); // woods #autoload (iw)
 	COM_AddExtension(relname, ".sav", sizeof(relname));
+	Host_WaitForSaveThread ();
 
 // we can't call SCR_BeginLoadingPlaque, because too much stack space has
 // been used.  The menu calls it before stuffing loadgame command
@@ -8301,7 +8472,7 @@ static void Host_Loadgame_f (void)
 					ext = COM_Parse(ext);
 					idx = atoi(com_token);
 					ext = COM_Parse(ext);
-					if (idx >= 1 && idx < MAX_MODELS)
+					if (idx >= 1 && idx < MAX_SOUNDS)
 						sv.sound_precache[idx] = (const char *)Hunk_Strdup (com_token, "sound_precache");
 				}
 				else if (!strcmp(com_token, "sv.particle_precache"))
@@ -8374,6 +8545,7 @@ static void Host_Loadgame_f (void)
 
 	qcvm->num_edicts = entnum;
 	qcvm->time = time;
+	sv.autosave.time = time;
 
 	free (start);
 	start = NULL;
@@ -11494,6 +11666,8 @@ Host_InitCommands
 void Host_InitCommands (void)
 {
 #define Cmd_AddCommand_ClientCommandQC(cmd,fnc) Cmd_AddCommand2(cmd,fnc,src_client,true)
+
+	Host_InitSaveThread ();
 
 	Cmd_AddCommand ("maps", Host_Maps_f); //johnfitz
 	Cmd_AddCommand ("mods", Host_Mods_f); //johnfitz

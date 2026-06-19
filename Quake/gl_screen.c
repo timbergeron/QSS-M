@@ -4316,6 +4316,45 @@ void SCR_DrawLoading (void)
 	scr_tileclear_updates = 0; //johnfitz
 }
 
+/*
+==============
+SCR_DrawSaving
+==============
+*/
+static double	scr_saving_show_until;
+extern cvar_t	sv_autosave_interval;
+
+void SCR_ShowSaving (void)
+{
+	double	until = realtime + 0.5;
+
+	if (scr_saving_show_until < until)
+		scr_saving_show_until = until;
+}
+
+void SCR_DrawSaving (void)
+{
+	int x, y;
+	qboolean saving;
+
+	saving = Host_IsSaving ();
+	if (sv_autosave_interval.value >= 0.f)
+		return;
+
+	if (saving)
+		SCR_ShowSaving ();
+	else if (realtime >= scr_saving_show_until)
+		return;
+
+	GL_SetCanvas (CANVAS_TOPRIGHT_SMALL);
+
+	x = 320 - 16 - draw_disc->width;
+	y = 8;
+	Draw_Pic (x, y, draw_disc);
+
+	scr_tileclear_updates = 0;
+}
+
 void renderCircle (float cx, float cy, float r, int num_segments, float line_width) // woods #crosshair
 {
 	glLineWidth(line_width);
@@ -7681,6 +7720,7 @@ void SCR_UpdateScreen (void)
 		if (realtime < scr_volume_display_time)
 			SCR_DrawVolumeSlider ();
 		M_Draw ();
+		SCR_DrawSaving ();
 	}
 
 	V_UpdateBlend (); //johnfitz -- V_UpdatePalette cleaned up and renamed
