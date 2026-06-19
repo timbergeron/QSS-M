@@ -4745,7 +4745,7 @@ void CL_ParseServerMessage (void)
 			break;
 
 		case svcdp_downloaddata:
-			if (allow_download.value == 2) // woods #ftehack
+			if (allow_download.value >= 2) // woods #ftehack (3 also ignores gamedir mismatch)
 			{
 				if (cl.protocol != PROTOCOL_VERSION_DP7 && !cl.protocol_dpdownload && cl.protocol != 666) // woods, allow downloads on qecrx (nq physics, FTE server) -- hack
 					Host_Error("Received svcdp_downloaddata but extension not active");

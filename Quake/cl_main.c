@@ -4900,7 +4900,7 @@ qboolean CL_CheckDownload(const char *filename)
 		return false;	//don't download these...
 	if (cls.download.active)
 		return true;	//block while we're already downloading something
-	if (cl.wronggamedir)
+	if (cl.wronggamedir && allow_download.value != 3) // woods, allow_download 3 forces downloads even on a gamedir mismatch
 		return false;	//don't download them into the wrong place. this may be awkward for id1 content though (if such a thing logically exists... like custom maps).
 	if (*cls.download.current && !strcmp(cls.download.current, filename))
 		return false;	//if the previous download failed, don't endlessly retry.
@@ -4956,7 +4956,7 @@ qboolean CL_CheckDownload(const char *filename)
 
 	// woods, if not available via web, try the server #webdl
 
-	if (allow_download.value == 2) // woods #ftehack
+	if (allow_download.value >= 2) // woods #ftehack (3 also ignores gamedir mismatch above)
 	{
 		if (!cl.protocol_dpdownload && !(cl.protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS) && cl.protocol != 666) // woods, allow downloads on qecrx (nq physics, FTE server) -- hack
 			return false;	//can't download anyway
