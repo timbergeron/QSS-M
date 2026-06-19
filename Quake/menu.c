@@ -19560,7 +19560,7 @@ void M_Saving_Draw(void)
 			break;
 
 		case SAVING_INDICATOR:
-			text = " Saving Indicator";
+			text = "  Saving Indicator";
 			value = M_Saving_IndicatorEnabled() ? "on" : "off";
 			break;
 
