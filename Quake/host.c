@@ -1615,6 +1615,11 @@ static void Host_CheckAutosave (void)
 		sv_player->v.health <= 0.f || cl.intermission)
 		return;
 
+	// woods -- don't autosave on deathmatch maps (no monsters/secrets, or known CTF maps);
+	// same singleplayer-content test the solo scoreboard uses to show skill/kills/secrets
+	if (!Host_MapHasLevelStats (cl.mapname, cl.stats[STAT_TOTALMONSTERS], cl.stats[STAT_TOTALSECRETS]))
+		return;
+
 	if (cls.signon == SIGNONS)
 	{
 		if (pr_global_struct->found_secrets != sv.autosave.prev_secrets)
