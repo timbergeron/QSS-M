@@ -973,13 +973,16 @@ void Sbar_SoloScoreboard (void)
 				Sbar_DrawString((left + right) / 2 - strlen(str) * 4, 12, str);
 			}
 		}
-		else if (cl.levelname[0] && Q_strcmp(cl.levelname, cl.mapname) != 0)
+		else
 		{
-			len = (int)strlen (cl.levelname);
+			// woods -- 2nd line shows the worldspawn description; if the map has
+			// none, fall back to the bsp name so the line isn't left blank
+			const char *desc = (cl.levelname[0] && Q_strcmp(cl.levelname, cl.mapname) != 0) ? cl.levelname : cl.mapname;
+			len = (int)strlen (desc);
 			if (len > 40)
-				Sbar_DrawScrollString (0, 12, 320, cl.levelname);
+				Sbar_DrawScrollString (0, 12, 320, desc);
 			else
-				Sbar_DrawString (160 - len*4, 12, cl.levelname);
+				Sbar_DrawString (160 - len*4, 12, desc);
 		}
 	}
 
