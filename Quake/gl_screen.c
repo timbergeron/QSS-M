@@ -941,8 +941,8 @@ SCR_LoadPics -- johnfitz
 */
 void SCR_LoadPics (void)
 {
-	scr_net = Draw_PicFromWad ("net");
-	scr_turtle = Draw_PicFromWad ("turtle");
+	scr_net = Draw_PicFromWad2 ("net", TEXPREF_NEAREST | TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
+	scr_turtle = Draw_PicFromWad2 ("turtle", TEXPREF_NEAREST | TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
 }
 
 /*
