@@ -923,7 +923,10 @@ void SV_PushMove (edict_t *pusher, float movetime)
 			{
 				check->v.origin[2] += DIST_EPSILON;
 				if (!SV_TestEntityPosition (check))
+				{
+					SV_LinkEdict (check, false);
 					continue;
+				}
 			}
 
 			VectorCopy (entorig, check->v.origin);
