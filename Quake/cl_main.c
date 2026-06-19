@@ -2518,6 +2518,8 @@ Note: Ensure correct configuration of the map repository URL.
 #define BYTES_TO_KB(bytes) ((bytes) / 1024.0f)
 #define BYTES_TO_MB(bytes) ((bytes) / (1024.0 * 1024.0))
 
+static void CL_AsyncDownload_FormatSize(long bytes, char *out, size_t outsize);
+
 typedef struct 
 {
 	char filename[MAX_OSPATH];
@@ -3537,7 +3539,9 @@ static void DL_FinishChunked(void)
 
 	if (CL_FinalizeDownloadFile(cls.download.current, cls.download.temp))
 	{
-		Con_SafePrintf("Downloaded %s: %u bytes\n", cls.download.current, cls.download.size);
+		char sizeStr[32];
+		CL_AsyncDownload_FormatSize((long)cls.download.size, sizeStr, sizeof(sizeStr));
+		Con_SafePrintf("Downloaded %s (%s)\n", cls.download.current, sizeStr);
 		finalized = true;
 	}
 	else
@@ -4608,7 +4612,9 @@ cleanup:
 		{
 			if (CL_FinalizeDownloadFile(cls.download.current, cls.download.temp))
 			{
-				Con_SafePrintf("Downloaded %s: %u bytes\n", cls.download.current, cls.download.size);
+				char sizeStr[32];
+				CL_AsyncDownload_FormatSize((long)cls.download.size, sizeStr, sizeof(sizeStr));
+				Con_SafePrintf("Downloaded %s (%s)\n", cls.download.current, sizeStr);
 			}
 			else
 			{
@@ -4735,7 +4741,7 @@ void CL_Download_Data(void)
 	}
 	CL_DownloadProgress_Update((double)(start + size), (double)cls.download.size);
 
-	Con_SafePrintf("Downloading %s (%.2f MB): %g%%\r", cls.download.current, (double)cls.download.size / (1024 * 1024), 100 * (start + size) / (double)cls.download.size); // woods add file size info
+	Con_SafePrintf("Downloading %s (%.2f MB): ^m%d%%\r", cls.download.current, (double)cls.download.size / (1024 * 1024), (int)(100 * (start + size) / (double)cls.download.size)); // woods add file size info
 
 	//should maybe use unreliables, but whatever, shouldn't matter too much, it'll still complete
 	(void)DL_SendLegacyDownloadAck(start, size);
@@ -4875,8 +4881,8 @@ void CL_Download_Chunked(void)
 		cls.download.rate = (int)(cls.download.ratebytes / dt);
 		cls.download.ratebytes = 0;
 		cls.download.ratetime = realtime;
-		Con_SafePrintf("Downloading %s (%.1f%%) %d KB/s\r",
-			cls.download.current, cls.download.percent, cls.download.rate / 1024);
+		Con_SafePrintf("Downloading %s ^m%d%%^m - ^g%d^g KB/s\r",
+			cls.download.current, (int)cls.download.percent, cls.download.rate / 1024);
 	}
 
 	if (!cls.download.dlblocks)
