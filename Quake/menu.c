@@ -29525,7 +29525,7 @@ static struct
 	qboolean			path_valid;
 	qboolean			show_id1;
 	int					bg_parse_cursor;       // next index to background-parse for searchable metadata
-	int					last_refilter_parsed;  // bg_parse_cursor value at last refilter (to detect new data)
+	int					bg_parse_refilter_count; // parsed metadata entries since last search refilter
 	int					minframes_threshold;
 	int					minframes_check_cursor;
 	int					minframes_hidden_since_refilter;
@@ -29705,7 +29705,7 @@ static void M_Demos_FreeItems(void)
 	}
 	demosmenu.democount = 0;
 	demosmenu.bg_parse_cursor = 0;
-	demosmenu.last_refilter_parsed = 0;
+	demosmenu.bg_parse_refilter_count = 0;
 	demosmenu.minframes_check_cursor = 0;
 	demosmenu.minframes_hidden_since_refilter = 0;
 }
@@ -30203,6 +30203,96 @@ static qboolean M_Demos_JSONReadULLString(const jsonentry_t *entry, const char *
 	return true;
 }
 
+static int M_Demos_HexValue(char c)
+{
+	if ((unsigned int)(c - '0') < 10)
+		return c - '0';
+	if ((unsigned int)(c - 'a') < 6)
+		return c + (10 - 'a');
+	if ((unsigned int)(c - 'A') < 6)
+		return c + (10 - 'A');
+	return -1;
+}
+
+static void M_Demos_EncodeHexString(const char *src, char *hex, size_t hex_size)
+{
+	static const char digits[] = "0123456789abcdef";
+	size_t i, j;
+
+	for (i = 0, j = 0; src[i] && j + 2 < hex_size; i++)
+	{
+		unsigned char c = (unsigned char)src[i];
+		hex[j++] = digits[c >> 4];
+		hex[j++] = digits[c & 0x0f];
+	}
+
+	hex[j] = '\0';
+}
+
+static qboolean M_Demos_DecodeHexString(const char *hex, char *dst, size_t dst_size)
+{
+	size_t i, j;
+
+	if (!hex || !dst || !dst_size)
+		return false;
+
+	for (i = 0, j = 0; hex[i]; i += 2)
+	{
+		int hi, lo;
+		char c;
+
+		if (!hex[i + 1] || j + 1 >= dst_size)
+			return false;
+
+		hi = M_Demos_HexValue(hex[i]);
+		lo = M_Demos_HexValue(hex[i + 1]);
+		if (hi < 0 || lo < 0)
+			return false;
+
+		c = (char)((hi << 4) | lo);
+		if (!c)
+			return false;
+		dst[j++] = c;
+	}
+
+	dst[j] = '\0';
+	return true;
+}
+
+static qboolean M_Demos_DecodeLegacyJSONStringBytes(const char *src, char *dst, size_t dst_size)
+{
+	const unsigned char *in;
+	size_t out;
+
+	if (!src || !dst || !dst_size)
+		return false;
+
+	in = (const unsigned char *)src;
+	out = 0;
+
+	while (*in)
+	{
+		if (out + 1 >= dst_size)
+			return false;
+
+		if ((in[0] & 0xe0) == 0xc0 && (in[1] & 0xc0) == 0x80)
+		{
+			unsigned int codepoint = ((in[0] & 0x1f) << 6) | (in[1] & 0x3f);
+			if (codepoint >= 0x80 && codepoint <= 0xff)
+			{
+				dst[out++] = (char)codepoint;
+				in += 2;
+				continue;
+			}
+		}
+
+		dst[out++] = (char)*in++;
+	}
+
+	dst[out] = '\0';
+	return true;
+}
+
 static qboolean M_Demos_MetadataCacheReadIdentity(const jsonentry_t *entry,
 	time_t *mtime, size_t *fsize)
 {
@@ -30229,13 +30319,15 @@ static qboolean M_Demos_MetadataCacheLoadEntry(const jsonentry_t *json_entry)
 {
 	const char *key;
 	const char *map;
-	const char *players;
+	const char *players_hex;
+	const char *legacy_players;
 	demo_metadata_cache_entry_t *entry;
 	demoinfo_t info;
 	time_t mtime;
 	size_t fsize;
 	qboolean parsed;
 	qboolean parse_ok = false;
+	qboolean rewrite = false;
 	qboolean frame_valid;
 	qboolean frame_exact = false;
 	int frame_count = -1;
@@ -30266,12 +30358,26 @@ static qboolean M_Demos_MetadataCacheLoadEntry(const jsonentry_t *json_entry)
 		else
 		{
 			map = JSON_FindString(json_entry, "map");
-			players = JSON_FindString(json_entry, "players");
-			if (!map || !players)
+			if (!map)
 				return false;
 
 			q_strlcpy(info.map, map, sizeof(info.map));
-			q_strlcpy(info.players, players, sizeof(info.players));
+			players_hex = JSON_FindString(json_entry, "players_hex");
+			legacy_players = JSON_FindString(json_entry, "players");
+			if (players_hex)
+			{
+				if (!M_Demos_DecodeHexString(players_hex, info.players, sizeof(info.players)))
+					return false;
+			}
+			else if (legacy_players)
+			{
+				if (!M_Demos_DecodeLegacyJSONStringBytes(legacy_players, info.players, sizeof(info.players)))
+					return false;
+				rewrite = true;
+			}
+			else
+				return false;
+
 			if (!M_Demos_JSONReadFloat(json_entry, "duration", &info.duration) ||
 				!M_Demos_JSONReadFloat(json_entry, "filesize_mb", &info.filesize_mb) ||
 				!M_Demos_JSONReadBool(json_entry, "singleplayer", &info.singleplayer) ||
@@ -30307,6 +30413,8 @@ static qboolean M_Demos_MetadataCacheLoadEntry(const jsonentry_t *json_entry)
 	entry->frame_count_valid = frame_valid;
 	entry->frame_count = frame_valid ? frame_count : -1;
 	entry->frame_exact = frame_valid && frame_exact;
+	if (rewrite)
+		M_Demos_MetadataCacheMarkDirty();
 
 	return true;
 }
@@ -30437,7 +30545,7 @@ static void M_Demos_MetadataCache_SaveIfDirty(void)
 	{
 		char *escaped_key;
 		char *escaped_map;
-		char *escaped_players;
+		char players_hex[sizeof(entry->info.players) * 2 + 1];
 		const char *map = entry->parse_ok ? entry->info.map : "";
 		const char *players = entry->parse_ok ? entry->info.players : "";
 
@@ -30446,12 +30554,11 @@ static void M_Demos_MetadataCache_SaveIfDirty(void)
 
 		escaped_key = JSON_EscapeString(entry->key);
 		escaped_map = JSON_EscapeString(map);
-		escaped_players = JSON_EscapeString(players);
-		if (!escaped_key || !escaped_map || !escaped_players)
+		M_Demos_EncodeHexString(players, players_hex, sizeof(players_hex));
+		if (!escaped_key || !escaped_map)
 		{
 			free(escaped_key);
 			free(escaped_map);
-			free(escaped_players);
 			ok = false;
 			break;
 		}
@@ -30469,7 +30576,7 @@ static void M_Demos_MetadataCache_SaveIfDirty(void)
 				fprintf(file, "      \"parsed\": %s,\n", M_Demos_JSONBool(entry->parse_known)) < 0 ||
 				fprintf(file, "      \"parse_ok\": %s,\n", M_Demos_JSONBool(entry->parse_ok)) < 0 ||
 				fprintf(file, "      \"map\": \"%s\",\n", escaped_map) < 0 ||
-				fprintf(file, "      \"players\": \"%s\",\n", escaped_players) < 0 ||
+				fprintf(file, "      \"players_hex\": \"%s\",\n", players_hex) < 0 ||
 				fprintf(file, "      \"duration\": %.9g,\n", entry->parse_ok ? (double)entry->info.duration : 0.0) < 0 ||
 				fprintf(file, "      \"filesize_mb\": %.9g,\n", entry->parse_ok ? (double)entry->info.filesize_mb : 0.0) < 0 ||
 				fprintf(file, "      \"singleplayer\": %s,\n", M_Demos_JSONBool(entry->parse_ok && entry->info.singleplayer)) < 0 ||
@@ -30488,7 +30595,6 @@ static void M_Demos_MetadataCache_SaveIfDirty(void)
 
 		free(escaped_key);
 		free(escaped_map);
-		free(escaped_players);
 	}
 
 	if (ok)
@@ -30711,7 +30817,7 @@ static void M_Demos_ResetMinFramesFilter(void)
 	demosmenu.minframes_check_cursor = 0;
 	demosmenu.minframes_hidden_since_refilter = 0;
 	demosmenu.bg_parse_cursor = 0;
-	demosmenu.last_refilter_parsed = 0;
+	demosmenu.bg_parse_refilter_count = 0;
 
 	for (i = 0; i < demosmenu.democount; i++)
 	{
@@ -31044,28 +31150,131 @@ static void M_Demos_ParseItem(demoitem_t *di)
 // Parse a small number of demos per frame so typed searches don't block.
 // Returns true if anything was parsed this call (so caller can refresh
 // dependent state like the filtered list).
-static qboolean M_Demos_TickBackgroundParse(void)
+typedef enum
 {
-	const int BUDGET = 1;  // demos per frame; each Parse_DemoInfo can be I/O heavy
-	int parsed = 0;
+	DEMO_BACKGROUND_PARSE_NONE,
+	DEMO_BACKGROUND_PARSE_CHECKED,
+	DEMO_BACKGROUND_PARSE_PARSED
+} demo_background_parse_result_t;
 
-	while (parsed < BUDGET && demosmenu.bg_parse_cursor < demosmenu.democount)
+static demo_background_parse_result_t M_Demos_TryBackgroundParseDemo(int demo_idx,
+	qboolean allow_minframes_check)
+{
+	demoitem_t *di;
+
+	if (demo_idx < 0 || demo_idx >= demosmenu.democount)
+		return DEMO_BACKGROUND_PARSE_NONE;
+
+	di = &demosmenu.items[demo_idx];
+	if (di->parsed || di->minframes_state == DEMO_MINFRAMES_FAIL)
+		return DEMO_BACKGROUND_PARSE_NONE;
+
+	if (demosmenu.minframes_threshold > 0 &&
+		di->minframes_state == DEMO_MINFRAMES_UNKNOWN)
+	{
+		if (!allow_minframes_check)
+			return DEMO_BACKGROUND_PARSE_NONE;
+
+		if (M_Demos_CheckMinFrames(di))
+		{
+			demosmenu.minframes_hidden_since_refilter++;
+			return DEMO_BACKGROUND_PARSE_CHECKED;
+		}
+
+		return DEMO_BACKGROUND_PARSE_CHECKED;
+	}
+
+	if (di->minframes_state == DEMO_MINFRAMES_FAIL || di->parsed)
+		return DEMO_BACKGROUND_PARSE_NONE;
+
+	M_Demos_ParseItem(di);
+	return DEMO_BACKGROUND_PARSE_PARSED;
+}
+
+static demo_background_parse_result_t M_Demos_TryBackgroundParseDisplay(int display_idx)
+{
+	if (display_idx < 0 || display_idx >= demosmenu.list.numitems ||
+		!demosmenu.filtered_indices)
+		return DEMO_BACKGROUND_PARSE_NONE;
+
+	return M_Demos_TryBackgroundParseDemo(demosmenu.filtered_indices[display_idx], true);
+}
+
+static demo_background_parse_result_t M_Demos_TickPriorityBackgroundParse(void)
+{
+	demo_background_parse_result_t result;
+	int firstvis, numvis;
+	int i;
+
+	if (demosmenu.list.numitems <= 0)
+		return DEMO_BACKGROUND_PARSE_NONE;
+
+	M_List_GetVisibleRange(&demosmenu.list, &firstvis, &numvis);
+
+	if (M_List_IsItemVisible(&demosmenu.list, demosmenu.list.cursor))
+	{
+		result = M_Demos_TryBackgroundParseDisplay(demosmenu.list.cursor);
+		if (result != DEMO_BACKGROUND_PARSE_NONE)
+			return result;
+	}
+
+	for (i = 0; i < numvis; i++)
+	{
+		int display_idx = firstvis + i;
+
+		if (display_idx == demosmenu.list.cursor)
+			continue;
+
+		result = M_Demos_TryBackgroundParseDisplay(display_idx);
+		if (result != DEMO_BACKGROUND_PARSE_NONE)
+			return result;
+	}
+
+	return M_Demos_TryBackgroundParseDisplay(demosmenu.list.cursor);
+}
+
+static demo_background_parse_result_t M_Demos_TickSequentialBackgroundParse(void)
+{
+	while (demosmenu.bg_parse_cursor < demosmenu.democount)
 	{
 		demoitem_t *di = &demosmenu.items[demosmenu.bg_parse_cursor];
+		demo_background_parse_result_t result;
+		int demo_idx;
 
 		if (demosmenu.minframes_threshold > 0 &&
 			di->minframes_state == DEMO_MINFRAMES_UNKNOWN)
 			break;
 
-		demosmenu.bg_parse_cursor++;
-		if (di->minframes_state == DEMO_MINFRAMES_FAIL)
-			continue;
+		demo_idx = demosmenu.bg_parse_cursor++;
+		result = M_Demos_TryBackgroundParseDemo(demo_idx, false);
+		if (result != DEMO_BACKGROUND_PARSE_NONE)
+			return result;
+	}
 
-		if (!di->parsed)
-		{
-			M_Demos_ParseItem(di);
-			parsed++;
-		}
+	return DEMO_BACKGROUND_PARSE_NONE;
+}
+
+static qboolean M_Demos_TickBackgroundParse(void)
+{
+	const int BUDGET = 1;  // demos per frame; each Parse_DemoInfo can be I/O heavy
+	int parsed = 0;
+
+	while (parsed < BUDGET)
+	{
+		demo_background_parse_result_t result;
+
+		result = M_Demos_TickPriorityBackgroundParse();
+		if (result == DEMO_BACKGROUND_PARSE_NONE)
+			result = M_Demos_TickSequentialBackgroundParse();
+
+		if (result == DEMO_BACKGROUND_PARSE_NONE)
+			break;
+
+		if (result == DEMO_BACKGROUND_PARSE_CHECKED)
+			break;
+
+		parsed++;
+		demosmenu.bg_parse_refilter_count++;
 	}
 
 	if (parsed > 0)
@@ -31226,7 +31435,7 @@ static void M_Demos_RefilterEx(qboolean preserve_view)
         }
     }
 
-    demosmenu.last_refilter_parsed = demosmenu.bg_parse_cursor;
+    demosmenu.bg_parse_refilter_count = 0;
     demosmenu.list.numitems = VEC_SIZE(demosmenu.filtered_indices);
 
     // Try to relocate the previously-selected demo in the new filter set so
@@ -31326,7 +31535,7 @@ static void M_Demos_RebuildForCurrentPath(void)
 	demosmenu.list.scroll = 0;
 	demosmenu.democount = 0;
 	demosmenu.bg_parse_cursor = 0;
-	demosmenu.last_refilter_parsed = 0;
+	demosmenu.bg_parse_refilter_count = 0;
 	VEC_CLEAR(demosmenu.items);
 	VEC_CLEAR(demosmenu.filtered_indices);
 	M_Demos_ResetMinFramesFilter();
@@ -31772,9 +31981,8 @@ void M_Demos_Draw (void)
         if (demosmenu.list.search.len > 0 && parsed)
         {
             const int REFILTER_BATCH = 8;
-            int new_parses = demosmenu.bg_parse_cursor - demosmenu.last_refilter_parsed;
             qboolean done = (demosmenu.bg_parse_cursor >= demosmenu.democount);
-            if (new_parses >= REFILTER_BATCH || done)
+            if (demosmenu.bg_parse_refilter_count >= REFILTER_BATCH || done)
                 M_Demos_RefilterEx(true);
         }
     }
@@ -31872,15 +32080,6 @@ void M_Demos_Draw (void)
     {
         int demo_idx = demosmenu.filtered_indices[demosmenu.list.cursor];
         demoitem_t* di = &demosmenu.items[demo_idx];
-
-        // Lazy parsing: only parse when item is selected for the first time
-        if (!di->parsed && (demosmenu.minframes_threshold <= 0 ||
-            di->minframes_state != DEMO_MINFRAMES_UNKNOWN))
-        {
-            qboolean blocked_sound = M_Demos_BlockSoundForIO();
-            M_Demos_ParseItem(di);
-            M_Demos_UnblockSoundForIO(blocked_sound);
-        }
         int info_y = y + demosmenu.list.viewsize * 8 + 4;
         qboolean at_bottom = (demosmenu.list.scroll + demosmenu.list.viewsize >= demosmenu.list.numitems);
         if (!at_bottom && M_List_GetOverflow(&demosmenu.list) > 0)
