@@ -4338,6 +4338,7 @@ void CL_AsyncDownload_Frame(void)
 	char display_name[64];
 	double received, total;
 	long file_size;
+	long response_code;
 	SDL_Thread *thread = NULL;
 	int current_url;
 
@@ -4353,6 +4354,7 @@ void CL_AsyncDownload_Frame(void)
 	received = async_download.received;
 	total = async_download.total;
 	file_size = async_download.file_size;
+	response_code = async_download.response_code;
 	current_url = async_download.current_url;
 	q_strlcpy(filename, async_download.filename, sizeof(filename));
 	q_strlcpy(tmp_path, async_download.tmp_path, sizeof(tmp_path));
@@ -4411,7 +4413,11 @@ void CL_AsyncDownload_Frame(void)
 		unlink(tmp_path);
 		if (aborted)
 			Con_Printf("Download cancelled: %s\n", COM_SkipPath(filename));
-		else if (!is_auto || !CL_DownloadNameIsLoc(filename))
+		// auto-downloads probe optional files; a 404 just means the mirror
+		// doesn't have it, which is expected and shouldn't spam the console
+		else if (is_auto && (response_code == 404 || CL_DownloadNameIsLoc(filename)))
+			Con_DPrintf("Download failed: %s (%s)\n", filename, error[0] ? error : "not found");
+		else
 		{
 			if (error[0])
 				Con_Printf("Download failed: %s (%s)\n", filename, error);
