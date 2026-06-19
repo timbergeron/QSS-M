@@ -406,9 +406,11 @@ void Sbar_DrawSubPicAlpha(int x, int y, qpic_t* pic, int ofsx, int ofsy, int w, 
 {
 	glDisable(GL_ALPHA_TEST);
 	glEnable(GL_BLEND);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE); // woods -- modulate so vertex alpha is honored (other 2D draws leave env on GL_REPLACE)
 	glColor4f(1, 1, 1, alpha);
 	Draw_SubPic_QW(x, y + 24, pic, ofsx, ofsy, w, h);
 	glColor4f(1, 1, 1, 1); // ericw -- changed from glColor3f to work around intel 855 bug with "r_oldwater 0" and "scr_sbaralpha 0"
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 	glDisable(GL_BLEND);
 	glEnable(GL_ALPHA_TEST);
 }
@@ -430,9 +432,11 @@ void Sbar_DrawPicAlpha (int x, int y, qpic_t *pic, float alpha)
 	{
 		glDisable (GL_ALPHA_TEST);
 		glEnable (GL_BLEND);
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE); // woods -- modulate so vertex alpha is honored (other 2D draws leave env on GL_REPLACE)
 		glColor4f(1,1,1,alpha);
 		Draw_Pic (x, y + 24, pic);
 		glColor4f(1,1,1,1); // ericw -- changed from glColor3f to work around intel 855 bug with "r_oldwater 0" and "scr_sbaralpha 0"
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 		glDisable (GL_BLEND);
 		glEnable (GL_ALPHA_TEST);
 	}
