@@ -10824,14 +10824,32 @@ void Host_Identify_f(void)
 		return;
 	}
 
-	i = Q_atoi(Cmd_Argv(1)) - 1;
-	if (i == -1)
+	// woods -- only treat the argument as a player slot number when it is
+	// entirely numeric; a name that merely starts with a digit (e.g.
+	// "1-1? u bitch") would otherwise be parsed by Q_atoi as a slot number
+	// and identify the wrong player. Names fall through to a name match.
+	const char *arg = Cmd_Argv(1);
+	const char *ch;
+	qboolean is_slotnum = (arg[0] != '\0' && Cmd_Argc() == 2);
+	for (ch = arg; *ch; ch++)
 	{
+		if (*ch < '0' || *ch > '9')
+		{
+			is_slotnum = false;
+			break;
+		}
+	}
+
+	if (is_slotnum)
+		i = Q_atoi(arg) - 1;
+	else
+	{
+		const char *namearg = Cmd_Args(); // full name, including any spaces
 		if (sv.active)
 		{
 			for (i = 0; i < svs.maxclients; i++)
 			{
-				if (svs.clients[i].active && unfun_match(Cmd_Argv(1), svs.clients[i].name))
+				if (svs.clients[i].active && unfun_match(namearg, svs.clients[i].name))
 					break;
 			}
 		}
@@ -10839,7 +10857,7 @@ void Host_Identify_f(void)
 		{
 			for (i = 0; i < cl.maxclients; i++)
 			{
-				if (unfun_match(Cmd_Argv(1), cl.scores[i].name))
+				if (unfun_match(namearg, cl.scores[i].name))
 					break;
 			}
 		}
