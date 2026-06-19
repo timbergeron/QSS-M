@@ -703,6 +703,7 @@ void CL_JumpDemo_f (void);
 int CL_GetDemoFrameCount(void); // woods #demoframes
 int CL_GetDemoTotalFrameCount(void); // woods #demoframes
 byte *CL_LoadDemoBuffer(const char *name, int *length_out);
+byte *CL_LoadDemoBufferFromFile(const char *path, int *length_out);
 int CL_CountDemoFramesInBufferLimit(const byte *data, int length, int limit);
 int CL_CountDemoFramesInBuffer(const byte *data, int length);
 int CL_CountDemoFramesInFileLimit(const char *path, int limit);

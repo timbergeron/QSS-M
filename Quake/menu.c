@@ -26,6 +26,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <curl/curl.h> // woods #serversmenu
 #include <zlib.h>
 #include "json.h" // woods #serversmenu
+#include <errno.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -28813,6 +28815,7 @@ typedef struct
 	time_t      mtime;
 	size_t      fsize;
 	searchpath_t *source_searchpath;
+	char        cache_key[MAX_OSPATH];
 	demo_minframes_state_t minframes_state;
 	int         frame_count;
 } demoitem_t;
@@ -28829,7 +28832,17 @@ typedef struct
 	int         secrets;
 	int         total_secrets;
 	int         skill;          /* 0-3, or -1 if not present in the demo */
+	int         frame_count;
 } demoinfo_t;
+
+typedef struct demo_metadata_cache_entry_s demo_metadata_cache_entry_t;
+
+static qboolean M_Demos_BuildCacheKey(char *key, size_t key_size, const char *fname, searchpath_t *spath);
+static void M_Demos_MetadataCache_Load(void);
+static void M_Demos_MetadataCache_SaveIfDirty(void);
+static void M_Demos_MetadataCache_MaybeFlush(void);
+static qboolean M_Demos_MetadataCache_ApplyToItem(demoitem_t *di);
+static const char *M_Demos_SkipExplicitRootPrefix(const char *name);
 
 static qboolean M_Demos_BlockSoundForIO(void)
 {
@@ -28962,8 +28975,17 @@ static int CompareFrags(const void* a, const void* b)
 	return pb->frags - pa->frags;
 }
 
-static byte *M_LoadDemoInfoData(const char *name, int *length_out)
+static byte *M_LoadDemoInfoData(const char *name, searchpath_t *spath, int *length_out)
 {
+	char path[MAX_OSPATH];
+
+	if (spath && !spath->pack)
+	{
+		if (!M_Demos_BuildCacheKey(path, sizeof(path), name, spath))
+			return NULL;
+		return CL_LoadDemoBufferFromFile(path, length_out);
+	}
+
 	return CL_LoadDemoBuffer(name, length_out);
 }
 
@@ -29081,10 +29103,10 @@ static void DR_SkipClientdata(demoreader_t *r)
 	if (bits & SU_WEAPONALPHA) DR_Byte(r);
 }
 
-static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
+static qboolean Parse_DemoInfo(const char* name, searchpath_t *spath, demoinfo_t* info)
 {
 	int length;
-	byte* data = M_LoadDemoInfoData(name, &length);
+	byte* data = M_LoadDemoInfoData(name, spath, &length);
 	if (!data) return false;
 
 	if (length <= 0) { free(data); return false; }
@@ -29095,6 +29117,7 @@ static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 	info->singleplayer = false;
 	info->kills = info->total_kills = info->secrets = info->total_secrets = 0;
 	info->skill = -1;
+	info->frame_count = 0;
 
 	int maxclients = 16;
 	qboolean maxclients_found = false;
@@ -29474,6 +29497,7 @@ static qboolean Parse_DemoInfo(const char* name, demoinfo_t* info)
 		info->duration = 0.0f;
 	if (!info->map[0])
 		M_InferDemoMapName(name, info->map, sizeof(info->map));
+	info->frame_count = frame_count;
 }
 
 free(data);
@@ -29667,6 +29691,8 @@ static void M_Demos_ClearFileList(filelist_item_t **list)
 
 static void M_Demos_FreeItems(void)
 {
+	M_Demos_MetadataCache_SaveIfDirty();
+
 	if (demosmenu.items)
 	{
 		Vec_Free((void**)&demosmenu.items);
@@ -29726,6 +29752,11 @@ static void M_Demos_AddEx(const char* name, const char* date, const char *displa
 	tempDemo.minframes_state = demosmenu.minframes_threshold > 0 ?
 		DEMO_MINFRAMES_UNKNOWN : DEMO_MINFRAMES_PASS;
 	tempDemo.frame_count = -1;
+	// Key off tempDemo.name, not the raw name param: di->name is truncated to
+	// MAX_QPATH and that truncated form is what CountFrames/ParseItem feed back
+	// into the cache, so the key must be derived from the same string.
+	M_Demos_BuildCacheKey(tempDemo.cache_key, sizeof(tempDemo.cache_key), tempDemo.name, spath);
+	M_Demos_MetadataCache_ApplyToItem(&tempDemo);
 
     int insertPos = demosmenu.democount;
 
@@ -29951,70 +29982,647 @@ static void M_Demos_FormatFileDate(time_t mtime, char *out, size_t outlen)
 		tm->tm_hour, tm->tm_min, tm->tm_sec);
 }
 
-#define DEMO_FRAME_CACHE_MAX	512
-
-typedef struct
-{
-	char	path[MAX_OSPATH];
-	time_t	mtime;
-	size_t	fsize;
-	int		frames;
-	qboolean exact;
-} demo_frame_cache_entry_t;
-
 typedef struct
 {
 	qboolean	explicit_root;
 } demos_list_ctx_t;
 
-static demo_frame_cache_entry_t demo_frame_cache[DEMO_FRAME_CACHE_MAX];
-static int demo_frame_cache_count = 0;
-static int demo_frame_cache_next = 0;
+#define DEMOS_METADATA_CACHE_FILENAME			"demos_metadata_cache.json"
+#define DEMOS_METADATA_CACHE_SCHEMA_VERSION		1
+#define DEMOS_METADATA_CACHE_PARSER_VERSION		1
+#define DEMOS_METADATA_CACHE_MAX_FILE_SIZE		(16 * 1024 * 1024)
+#define DEMOS_METADATA_CACHE_HASH_BUCKETS		4096
+#define DEMOS_METADATA_CACHE_FLUSH_DIRTY		200
 
-static int M_Demos_FrameCache_Find(const char *path)
+struct demo_metadata_cache_entry_s
 {
-	int i;
-	for (i = 0; i < demo_frame_cache_count; i++)
-		if (!strcmp(demo_frame_cache[i].path, path))
-			return i;
-	return -1;
+	char key[MAX_OSPATH];
+	time_t mtime;
+	size_t fsize;
+	qboolean parse_known;
+	qboolean parse_ok;
+	demoinfo_t info;
+	qboolean frame_count_valid;
+	int frame_count;
+	qboolean frame_exact;
+	demo_metadata_cache_entry_t *next;
+	demo_metadata_cache_entry_t *hash_next;
+};
+
+static demo_metadata_cache_entry_t *demo_metadata_cache_entries;
+static demo_metadata_cache_entry_t *demo_metadata_cache_hash[DEMOS_METADATA_CACHE_HASH_BUCKETS];
+static qboolean demo_metadata_cache_loaded;
+static qboolean demo_metadata_cache_dirty;
+static int demo_metadata_cache_dirty_count;
+
+static const char *M_Demos_JSONBool(qboolean value)
+{
+	return value ? "true" : "false";
 }
 
-static void M_Demos_FrameCache_Store(const char *path, time_t mtime, size_t fsize, int frames, qboolean exact)
+static qboolean M_Demos_MetadataCachePath(char *path, size_t path_size)
 {
-	int slot = M_Demos_FrameCache_Find(path);
-	if (slot < 0)
+	int result = q_snprintf(path, path_size, "%s/id1/backups/%s", com_basedir, DEMOS_METADATA_CACHE_FILENAME);
+
+	if (result < 0 || (size_t)result >= path_size)
 	{
-		if (demo_frame_cache_count < DEMO_FRAME_CACHE_MAX)
-			slot = demo_frame_cache_count++;
+		if (path_size)
+			path[0] = '\0';
+		return false;
+	}
+
+	return true;
+}
+
+static qboolean M_Demos_MetadataCacheEnsureDir(void)
+{
+	char path[MAX_OSPATH];
+	int result;
+
+	result = q_snprintf(path, sizeof(path), "%s/id1", com_basedir);
+	if (result < 0 || (size_t)result >= sizeof(path))
+		return false;
+	Sys_mkdir(path);
+
+	result = q_snprintf(path, sizeof(path), "%s/id1/backups", com_basedir);
+	if (result < 0 || (size_t)result >= sizeof(path))
+		return false;
+	Sys_mkdir(path);
+	return true;
+}
+
+static qboolean M_Demos_BuildCacheKey(char *key, size_t key_size, const char *fname, searchpath_t *spath)
+{
+	const char *disk_name;
+	int result;
+
+	if (!key_size)
+		return false;
+	if (!fname)
+	{
+		key[0] = '\0';
+		return false;
+	}
+
+	disk_name = M_Demos_SkipExplicitRootPrefix(fname);
+
+	if (spath && spath->pack)
+		result = q_snprintf(key, key_size, "%s|%s", spath->filename, fname);
+	else if (spath)
+		result = q_snprintf(key, key_size, "%s/%s", spath->filename, disk_name);
+	else if (q_strlcpy(key, disk_name, key_size) >= key_size)
+	{
+		key[0] = '\0';
+		return false;
+	}
+	else
+		return true;
+
+	if (result < 0 || (size_t)result >= key_size)
+	{
+		key[0] = '\0';
+		return false;
+	}
+
+	return true;
+}
+
+static demo_metadata_cache_entry_t *M_Demos_MetadataCacheFind(const char *key)
+{
+	demo_metadata_cache_entry_t *entry;
+	unsigned bucket;
+
+	if (!key || !key[0])
+		return NULL;
+
+	bucket = COM_HashString(key) % DEMOS_METADATA_CACHE_HASH_BUCKETS;
+	for (entry = demo_metadata_cache_hash[bucket]; entry; entry = entry->hash_next)
+	{
+		if (!strcmp(entry->key, key))
+			return entry;
+	}
+
+	return NULL;
+}
+
+static demo_metadata_cache_entry_t *M_Demos_MetadataCacheAlloc(const char *key)
+{
+	demo_metadata_cache_entry_t *entry;
+	unsigned bucket;
+
+	entry = (demo_metadata_cache_entry_t *)calloc(1, sizeof(*entry));
+	if (!entry)
+		return NULL;
+
+	q_strlcpy(entry->key, key, sizeof(entry->key));
+	entry->info.skill = -1;
+	entry->info.frame_count = 0;
+	entry->frame_count = -1;
+
+	bucket = COM_HashString(entry->key) % DEMOS_METADATA_CACHE_HASH_BUCKETS;
+	entry->hash_next = demo_metadata_cache_hash[bucket];
+	demo_metadata_cache_hash[bucket] = entry;
+
+	entry->next = demo_metadata_cache_entries;
+	demo_metadata_cache_entries = entry;
+	return entry;
+}
+
+static demo_metadata_cache_entry_t *M_Demos_MetadataCacheUpsert(const char *key)
+{
+	demo_metadata_cache_entry_t *entry = M_Demos_MetadataCacheFind(key);
+
+	if (entry)
+		return entry;
+
+	return M_Demos_MetadataCacheAlloc(key);
+}
+
+static qboolean M_Demos_MetadataCacheEntryMatches(const demo_metadata_cache_entry_t *entry,
+	time_t mtime, size_t fsize)
+{
+	return entry && entry->mtime == mtime && entry->fsize == fsize;
+}
+
+static void M_Demos_MetadataCacheMarkDirty(void)
+{
+	demo_metadata_cache_dirty = true;
+	demo_metadata_cache_dirty_count++;
+}
+
+static qboolean M_Demos_JSONReadBool(const jsonentry_t *entry, const char *name, qboolean *out)
+{
+	const qboolean *value = JSON_FindBoolean(entry, name);
+
+	if (!value)
+		return false;
+
+	*out = *value;
+	return true;
+}
+
+static qboolean M_Demos_JSONReadInt(const jsonentry_t *entry, const char *name,
+	int min_value, int max_value, int *out)
+{
+	const double *value = JSON_FindNumber(entry, name);
+
+	if (!value || !isfinite(*value) || *value < min_value || *value > max_value)
+		return false;
+
+	*out = (int)*value;
+	return true;
+}
+
+static qboolean M_Demos_JSONReadFloat(const jsonentry_t *entry, const char *name, float *out)
+{
+	const double *value = JSON_FindNumber(entry, name);
+
+	if (!value || !isfinite(*value))
+		return false;
+
+	*out = (float)*value;
+	return true;
+}
+
+static qboolean M_Demos_JSONReadULLString(const jsonentry_t *entry, const char *name,
+	unsigned long long *out)
+{
+	const char *str = JSON_FindString(entry, name);
+	char *end;
+	unsigned long long value;
+
+	if (!str || !str[0])
+		return false;
+
+	errno = 0;
+	value = strtoull(str, &end, 10);
+	if (errno != 0 || end == str || *end != '\0')
+		return false;
+
+	*out = value;
+	return true;
+}
+
+static qboolean M_Demos_MetadataCacheReadIdentity(const jsonentry_t *entry,
+	time_t *mtime, size_t *fsize)
+{
+	unsigned long long mtime64;
+	unsigned long long fsize64;
+	time_t mt;
+	size_t fs;
+
+	if (!M_Demos_JSONReadULLString(entry, "mtime", &mtime64) ||
+		!M_Demos_JSONReadULLString(entry, "fsize", &fsize64))
+		return false;
+
+	mt = (time_t)mtime64;
+	fs = (size_t)fsize64;
+	if ((unsigned long long)mt != mtime64 || (unsigned long long)fs != fsize64)
+		return false;
+
+	*mtime = mt;
+	*fsize = fs;
+	return true;
+}
+
+static qboolean M_Demos_MetadataCacheLoadEntry(const jsonentry_t *json_entry)
+{
+	const char *key;
+	const char *map;
+	const char *players;
+	demo_metadata_cache_entry_t *entry;
+	demoinfo_t info;
+	time_t mtime;
+	size_t fsize;
+	qboolean parsed;
+	qboolean parse_ok = false;
+	qboolean frame_valid;
+	qboolean frame_exact = false;
+	int frame_count = -1;
+
+	if (!json_entry || json_entry->type != JSON_OBJECT)
+		return false;
+
+	key = JSON_FindString(json_entry, "key");
+	if (!key || !key[0] || strlen(key) >= MAX_OSPATH)
+		return false;
+
+	if (!M_Demos_MetadataCacheReadIdentity(json_entry, &mtime, &fsize) ||
+		!M_Demos_JSONReadBool(json_entry, "parsed", &parsed) ||
+		!M_Demos_JSONReadBool(json_entry, "frame_count_valid", &frame_valid))
+		return false;
+
+	memset(&info, 0, sizeof(info));
+	info.skill = -1;
+	info.frame_count = 0;
+
+	if (parsed)
+	{
+		if (!M_Demos_JSONReadBool(json_entry, "parse_ok", &parse_ok))
+			return false;
+
+		if (!parse_ok)
+			parsed = false;
 		else
 		{
-			slot = demo_frame_cache_next;
-			demo_frame_cache_next = (demo_frame_cache_next + 1) % DEMO_FRAME_CACHE_MAX;
+			map = JSON_FindString(json_entry, "map");
+			players = JSON_FindString(json_entry, "players");
+			if (!map || !players)
+				return false;
+
+			q_strlcpy(info.map, map, sizeof(info.map));
+			q_strlcpy(info.players, players, sizeof(info.players));
+			if (!M_Demos_JSONReadFloat(json_entry, "duration", &info.duration) ||
+				!M_Demos_JSONReadFloat(json_entry, "filesize_mb", &info.filesize_mb) ||
+				!M_Demos_JSONReadBool(json_entry, "singleplayer", &info.singleplayer) ||
+				!M_Demos_JSONReadInt(json_entry, "kills", 0, INT_MAX, &info.kills) ||
+				!M_Demos_JSONReadInt(json_entry, "total_kills", 0, INT_MAX, &info.total_kills) ||
+				!M_Demos_JSONReadInt(json_entry, "secrets", 0, INT_MAX, &info.secrets) ||
+				!M_Demos_JSONReadInt(json_entry, "total_secrets", 0, INT_MAX, &info.total_secrets) ||
+				!M_Demos_JSONReadInt(json_entry, "skill", -1, INT_MAX, &info.skill) ||
+				!M_Demos_JSONReadInt(json_entry, "parser_frame_count", 0, INT_MAX, &info.frame_count))
+				return false;
 		}
 	}
-	q_strlcpy(demo_frame_cache[slot].path, path, sizeof(demo_frame_cache[slot].path));
-	demo_frame_cache[slot].mtime = mtime;
-	demo_frame_cache[slot].fsize = fsize;
-	demo_frame_cache[slot].frames = frames;
-	demo_frame_cache[slot].exact = exact;
+
+	if (frame_valid)
+	{
+		if (!M_Demos_JSONReadInt(json_entry, "frame_count", -1, INT_MAX, &frame_count) ||
+			!M_Demos_JSONReadBool(json_entry, "frame_exact", &frame_exact))
+			return false;
+	}
+
+	if (!parsed && !frame_valid)
+		return false;
+
+	entry = M_Demos_MetadataCacheUpsert(key);
+	if (!entry)
+		return false;
+
+	entry->mtime = mtime;
+	entry->fsize = fsize;
+	entry->parse_known = parsed;
+	entry->parse_ok = parsed && parse_ok;
+	entry->info = info;
+	entry->frame_count_valid = frame_valid;
+	entry->frame_count = frame_valid ? frame_count : -1;
+	entry->frame_exact = frame_valid && frame_exact;
+
+	return true;
 }
 
-static qboolean M_Demos_FrameCache_Lookup(const char *path, time_t mtime, size_t fsize,
-	int min_frames, int *frames_out)
+static void M_Demos_MetadataCacheLoadFromText(const char *text)
 {
-	int slot = M_Demos_FrameCache_Find(path);
-	if (slot < 0 ||
-		demo_frame_cache[slot].mtime != mtime ||
-		demo_frame_cache[slot].fsize != fsize)
+	json_t *json;
+	const jsonentry_t *entries;
+	const jsonentry_t *entry;
+	int schema_version;
+	int parser_version;
+
+	json = JSON_Parse(text);
+	if (!json || !json->root || json->root->type != JSON_OBJECT)
+	{
+		if (json)
+			JSON_Free(json);
+		return;
+	}
+
+	if (!M_Demos_JSONReadInt(json->root, "schema_version", 1, INT_MAX, &schema_version) ||
+		!M_Demos_JSONReadInt(json->root, "parser_version", 1, INT_MAX, &parser_version) ||
+		schema_version != DEMOS_METADATA_CACHE_SCHEMA_VERSION ||
+		parser_version != DEMOS_METADATA_CACHE_PARSER_VERSION)
+	{
+		JSON_Free(json);
+		return;
+	}
+
+	entries = JSON_Find(json->root, "entries", JSON_ARRAY);
+	if (!entries)
+	{
+		JSON_Free(json);
+		return;
+	}
+
+	for (entry = entries->firstchild; entry; entry = entry->next)
+		M_Demos_MetadataCacheLoadEntry(entry);
+
+	JSON_Free(json);
+}
+
+static void M_Demos_MetadataCache_Load(void)
+{
+	char path[MAX_OSPATH];
+	FILE *file;
+	long file_size;
+	char *text;
+
+	if (demo_metadata_cache_loaded)
+		return;
+
+	demo_metadata_cache_loaded = true;
+	if (!M_Demos_MetadataCachePath(path, sizeof(path)))
+		return;
+
+	file = fopen(path, "rb");
+	if (!file)
+		return;
+
+	if (fseek(file, 0, SEEK_END) != 0)
+	{
+		fclose(file);
+		return;
+	}
+	file_size = ftell(file);
+	rewind(file);
+
+	if (file_size <= 0 || file_size > DEMOS_METADATA_CACHE_MAX_FILE_SIZE)
+	{
+		fclose(file);
+		return;
+	}
+
+	text = (char *)malloc((size_t)file_size + 1);
+	if (!text)
+	{
+		fclose(file);
+		return;
+	}
+
+	if (fread(text, 1, (size_t)file_size, file) != (size_t)file_size)
+	{
+		free(text);
+		fclose(file);
+		return;
+	}
+
+	text[file_size] = '\0';
+	fclose(file);
+
+	M_Demos_MetadataCacheLoadFromText(text);
+	free(text);
+}
+
+static void M_Demos_MetadataCache_SaveIfDirty(void)
+{
+	char path[MAX_OSPATH];
+	char tmp_path[MAX_OSPATH];
+	FILE *file;
+	demo_metadata_cache_entry_t *entry;
+	qboolean ok = true;
+	qboolean first = true;
+	int result;
+
+	if (!demo_metadata_cache_loaded || !demo_metadata_cache_dirty)
+		return;
+
+	if (!M_Demos_MetadataCacheEnsureDir())
+		return;
+	if (!M_Demos_MetadataCachePath(path, sizeof(path)))
+		return;
+	result = q_snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+	if (result < 0 || (size_t)result >= sizeof(tmp_path))
+		return;
+
+	file = fopen(tmp_path, "w");
+	if (!file)
+		return;
+
+	if (fprintf(file, "{\n") < 0 ||
+		fprintf(file, "  \"schema_version\": %d,\n", DEMOS_METADATA_CACHE_SCHEMA_VERSION) < 0 ||
+		fprintf(file, "  \"parser_version\": %d,\n", DEMOS_METADATA_CACHE_PARSER_VERSION) < 0 ||
+		fprintf(file, "  \"entries\": [\n") < 0)
+		ok = false;
+
+	for (entry = demo_metadata_cache_entries; ok && entry; entry = entry->next)
+	{
+		char *escaped_key;
+		char *escaped_map;
+		char *escaped_players;
+		const char *map = entry->parse_ok ? entry->info.map : "";
+		const char *players = entry->parse_ok ? entry->info.players : "";
+
+		if (!entry->parse_known && !entry->frame_count_valid)
+			continue;
+
+		escaped_key = JSON_EscapeString(entry->key);
+		escaped_map = JSON_EscapeString(map);
+		escaped_players = JSON_EscapeString(players);
+		if (!escaped_key || !escaped_map || !escaped_players)
+		{
+			free(escaped_key);
+			free(escaped_map);
+			free(escaped_players);
+			ok = false;
+			break;
+		}
+
+		if (!first && fprintf(file, ",\n") < 0)
+			ok = false;
+		first = false;
+
+		if (ok)
+		{
+			if (fprintf(file, "    {\n") < 0 ||
+				fprintf(file, "      \"key\": \"%s\",\n", escaped_key) < 0 ||
+				fprintf(file, "      \"mtime\": \"%lld\",\n", (long long)entry->mtime) < 0 ||
+				fprintf(file, "      \"fsize\": \"%llu\",\n", (unsigned long long)entry->fsize) < 0 ||
+				fprintf(file, "      \"parsed\": %s,\n", M_Demos_JSONBool(entry->parse_known)) < 0 ||
+				fprintf(file, "      \"parse_ok\": %s,\n", M_Demos_JSONBool(entry->parse_ok)) < 0 ||
+				fprintf(file, "      \"map\": \"%s\",\n", escaped_map) < 0 ||
+				fprintf(file, "      \"players\": \"%s\",\n", escaped_players) < 0 ||
+				fprintf(file, "      \"duration\": %.9g,\n", entry->parse_ok ? (double)entry->info.duration : 0.0) < 0 ||
+				fprintf(file, "      \"filesize_mb\": %.9g,\n", entry->parse_ok ? (double)entry->info.filesize_mb : 0.0) < 0 ||
+				fprintf(file, "      \"singleplayer\": %s,\n", M_Demos_JSONBool(entry->parse_ok && entry->info.singleplayer)) < 0 ||
+				fprintf(file, "      \"kills\": %d,\n", entry->parse_ok ? entry->info.kills : 0) < 0 ||
+				fprintf(file, "      \"total_kills\": %d,\n", entry->parse_ok ? entry->info.total_kills : 0) < 0 ||
+				fprintf(file, "      \"secrets\": %d,\n", entry->parse_ok ? entry->info.secrets : 0) < 0 ||
+				fprintf(file, "      \"total_secrets\": %d,\n", entry->parse_ok ? entry->info.total_secrets : 0) < 0 ||
+				fprintf(file, "      \"skill\": %d,\n", entry->parse_ok ? entry->info.skill : -1) < 0 ||
+				fprintf(file, "      \"parser_frame_count\": %d,\n", entry->parse_ok ? entry->info.frame_count : 0) < 0 ||
+				fprintf(file, "      \"frame_count_valid\": %s,\n", M_Demos_JSONBool(entry->frame_count_valid)) < 0 ||
+				fprintf(file, "      \"frame_count\": %d,\n", entry->frame_count_valid ? entry->frame_count : -1) < 0 ||
+				fprintf(file, "      \"frame_exact\": %s\n", M_Demos_JSONBool(entry->frame_count_valid && entry->frame_exact)) < 0 ||
+				fprintf(file, "    }") < 0)
+				ok = false;
+		}
+
+		free(escaped_key);
+		free(escaped_map);
+		free(escaped_players);
+	}
+
+	if (ok)
+	{
+		if (!first && fprintf(file, "\n") < 0)
+			ok = false;
+		if (fprintf(file, "  ]\n}\n") < 0)
+			ok = false;
+	}
+
+	if (fclose(file) != 0)
+		ok = false;
+
+	if (!ok)
+	{
+		remove(tmp_path);
+		return;
+	}
+
+#ifdef _WIN32
+	remove(path);
+#endif
+	if (rename(tmp_path, path) != 0)
+	{
+		remove(tmp_path);
+		return;
+	}
+
+	demo_metadata_cache_dirty = false;
+	demo_metadata_cache_dirty_count = 0;
+}
+
+static void M_Demos_MetadataCache_MaybeFlush(void)
+{
+	if (demo_metadata_cache_dirty_count >= DEMOS_METADATA_CACHE_FLUSH_DIRTY)
+		M_Demos_MetadataCache_SaveIfDirty();
+}
+
+static demo_metadata_cache_entry_t *M_Demos_MetadataCacheFindValid(const char *key,
+	time_t mtime, size_t fsize)
+{
+	demo_metadata_cache_entry_t *entry = M_Demos_MetadataCacheFind(key);
+
+	if (!M_Demos_MetadataCacheEntryMatches(entry, mtime, fsize))
+		return NULL;
+
+	return entry;
+}
+
+static qboolean M_Demos_MetadataCacheLookupFrames(const char *key, time_t mtime,
+	size_t fsize, int min_frames, int *frames_out)
+{
+	demo_metadata_cache_entry_t *entry = M_Demos_MetadataCacheFindValid(key, mtime, fsize);
+
+	if (!entry || !entry->frame_count_valid)
 		return false;
 
-	if (!demo_frame_cache[slot].exact &&
-		(min_frames <= 0 || demo_frame_cache[slot].frames < min_frames))
+	if (!entry->frame_exact &&
+		(min_frames <= 0 || entry->frame_count < min_frames))
 		return false;
 
-	*frames_out = demo_frame_cache[slot].frames;
+	*frames_out = entry->frame_count;
 	return true;
+}
+
+static void M_Demos_MetadataCacheUpdateFrame(const char *key, time_t mtime, size_t fsize,
+	int frames, qboolean exact)
+{
+	demo_metadata_cache_entry_t *entry;
+	qboolean identity_changed;
+
+	if (!key || !key[0])
+		return;
+
+	entry = M_Demos_MetadataCacheUpsert(key);
+	if (!entry)
+		return;
+
+	identity_changed = !M_Demos_MetadataCacheEntryMatches(entry, mtime, fsize);
+	if (identity_changed)
+	{
+		entry->parse_known = false;
+		entry->parse_ok = false;
+		memset(&entry->info, 0, sizeof(entry->info));
+		entry->info.skill = -1;
+		entry->info.frame_count = 0;
+	}
+
+	entry->mtime = mtime;
+	entry->fsize = fsize;
+	entry->frame_count_valid = true;
+	entry->frame_count = frames;
+	entry->frame_exact = exact;
+	M_Demos_MetadataCacheMarkDirty();
+	M_Demos_MetadataCache_MaybeFlush();
+}
+
+static void M_Demos_MetadataCacheUpdateParse(const demoitem_t *di, qboolean parsed,
+	const demoinfo_t *info)
+{
+	demo_metadata_cache_entry_t *entry;
+	qboolean identity_changed;
+
+	if (!di || !di->cache_key[0])
+		return;
+	if (!parsed || !info)
+		return;
+
+	entry = M_Demos_MetadataCacheUpsert(di->cache_key);
+	if (!entry)
+		return;
+
+	identity_changed = !M_Demos_MetadataCacheEntryMatches(entry, di->mtime, di->fsize);
+	if (identity_changed)
+	{
+		entry->frame_count_valid = false;
+		entry->frame_count = -1;
+		entry->frame_exact = false;
+	}
+
+	entry->mtime = di->mtime;
+	entry->fsize = di->fsize;
+	entry->parse_known = true;
+	entry->parse_ok = true;
+	entry->info = *info;
+	if (info->frame_count >= 0)
+	{
+		entry->frame_count_valid = true;
+		entry->frame_count = info->frame_count;
+		entry->frame_exact = true;
+	}
+
+	M_Demos_MetadataCacheMarkDirty();
+	M_Demos_MetadataCache_MaybeFlush();
 }
 
 static const char *M_Demos_SkipExplicitRootPrefix(const char *name)
@@ -30040,18 +30648,13 @@ static int M_Demos_CountFrames(const char *fname, time_t mtime, size_t fsize,
 	searchpath_t *spath, int min_frames)
 {
 	char key[MAX_OSPATH];
-	const char *disk_name = M_Demos_SkipExplicitRootPrefix(fname);
 	int frames;
 	qboolean exact;
 
-	if (spath && spath->pack)
-		q_snprintf(key, sizeof(key), "%s|%s", spath->filename, fname);
-	else if (spath)
-		q_snprintf(key, sizeof(key), "%s/%s", spath->filename, disk_name);
-	else
-		q_strlcpy(key, disk_name, sizeof(key));
+	if (!M_Demos_BuildCacheKey(key, sizeof(key), fname, spath))
+		return -1;
 
-	if (M_Demos_FrameCache_Lookup(key, mtime, fsize, min_frames, &frames))
+	if (M_Demos_MetadataCacheLookupFrames(key, mtime, fsize, min_frames, &frames))
 		return frames;
 
 	if (spath && !spath->pack)
@@ -30072,7 +30675,7 @@ static int M_Demos_CountFrames(const char *fname, time_t mtime, size_t fsize,
 	}
 
 	exact = (min_frames <= 0 || frames < min_frames);
-	M_Demos_FrameCache_Store(key, mtime, fsize, frames, exact);
+	M_Demos_MetadataCacheUpdateFrame(key, mtime, fsize, frames, exact);
 	return frames;
 }
 
@@ -30337,53 +30940,105 @@ static void M_Demos_UpdatePathHint(void)
 extern int unfun_match(const char *s1, char *s2);  // host_cmd.c — Quake-special-aware substring match (used by name/identify/tell)
 extern filelist_item_t *FindLevelInList(filelist_item_t *list, const char *name);  // host_cmd.c #mapdescriptions
 
+static void M_Demos_ApplyInfoToItem(demoitem_t *di, const demoinfo_t *info)
+{
+	q_strlcpy(di->map, info->map, sizeof(di->map));
+	q_strlcpy(di->players, info->players, sizeof(di->players));
+	FormatDuration(info->duration, di->duration, sizeof(di->duration));
+	q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", info->filesize_mb);
+
+	di->stats[0] = '\0';
+	if (info->singleplayer)
+	{
+		static const char *skill_names[4] = { "Easy", "Normal", "Hard", "Nightmare" };
+		char buf[64];
+		buf[0] = '\0';
+		if (info->total_kills > 0 || info->kills > 0)
+			q_snprintf(buf, sizeof(buf), "Kills: %d/%d", info->kills, info->total_kills);
+		if (info->total_secrets > 0 || info->secrets > 0)
+		{
+			char sec[32];
+			q_snprintf(sec, sizeof(sec), "Secrets: %d/%d", info->secrets, info->total_secrets);
+			if (buf[0]) q_strlcat(buf, "  ", sizeof(buf));
+			q_strlcat(buf, sec, sizeof(buf));
+		}
+		if (info->skill >= 0)
+		{
+			char skl[24];
+			int s = info->skill < 4 ? info->skill : 3;
+			q_snprintf(skl, sizeof(skl), "Skill: %s", skill_names[s]);
+			if (buf[0]) q_strlcat(buf, "  ", sizeof(buf));
+			q_strlcat(buf, skl, sizeof(buf));
+		}
+		q_strlcpy(di->stats, buf[0] ? buf : "single player", sizeof(di->stats));
+	}
+}
+
+static void M_Demos_ApplyParseFailureToItem(demoitem_t *di)
+{
+	q_strlcpy(di->map, "unknown", sizeof(di->map));
+	q_strlcpy(di->players, "n/a", sizeof(di->players));
+	q_strlcpy(di->duration, "n/a", sizeof(di->duration));
+	q_strlcpy(di->filesize, "n/a", sizeof(di->filesize));
+	di->stats[0] = '\0';
+}
+
+static void M_Demos_ApplyCachedFrameCount(demoitem_t *di, const demo_metadata_cache_entry_t *entry)
+{
+	int min_frames = demosmenu.minframes_threshold;
+
+	if (!entry || !entry->frame_count_valid)
+		return;
+
+	if (!entry->frame_exact && (min_frames <= 0 || entry->frame_count < min_frames))
+		return;
+
+	di->frame_count = entry->frame_count;
+	if (min_frames <= 0)
+		di->minframes_state = DEMO_MINFRAMES_PASS;
+	else if (entry->frame_count >= 0 && entry->frame_count < min_frames)
+		di->minframes_state = DEMO_MINFRAMES_FAIL;
+	else
+		di->minframes_state = DEMO_MINFRAMES_PASS;
+}
+
+static qboolean M_Demos_MetadataCache_ApplyToItem(demoitem_t *di)
+{
+	demo_metadata_cache_entry_t *entry;
+
+	if (!di || !di->cache_key[0])
+		return false;
+
+	entry = M_Demos_MetadataCacheFindValid(di->cache_key, di->mtime, di->fsize);
+	if (!entry)
+		return false;
+
+	M_Demos_ApplyCachedFrameCount(di, entry);
+
+	if (!entry->parse_known)
+		return false;
+
+	if (entry->parse_ok)
+		M_Demos_ApplyInfoToItem(di, &entry->info);
+	else
+		M_Demos_ApplyParseFailureToItem(di);
+
+	di->parsed = true;
+	return true;
+}
+
 static void M_Demos_ParseItem(demoitem_t *di)
 {
 	demoinfo_t info;
-	qboolean parsed = Parse_DemoInfo(di->name, &info);
+	qboolean parsed = Parse_DemoInfo(di->name, di->source_searchpath, &info);
 
 	if (parsed)
-	{
-		q_strlcpy(di->map, info.map, sizeof(di->map));
-		q_strlcpy(di->players, info.players, sizeof(di->players));
-		FormatDuration(info.duration, di->duration, sizeof(di->duration));
-		q_snprintf(di->filesize, sizeof(di->filesize), "%.1f mb", info.filesize_mb);
-
-		di->stats[0] = '\0';
-		if (info.singleplayer)
-		{
-			static const char *skill_names[4] = { "Easy", "Normal", "Hard", "Nightmare" };
-			char buf[64];
-			buf[0] = '\0';
-			if (info.total_kills > 0 || info.kills > 0)
-				q_snprintf(buf, sizeof(buf), "Kills: %d/%d", info.kills, info.total_kills);
-			if (info.total_secrets > 0 || info.secrets > 0)
-			{
-				char sec[32];
-				q_snprintf(sec, sizeof(sec), "Secrets: %d/%d", info.secrets, info.total_secrets);
-				if (buf[0]) q_strlcat(buf, "  ", sizeof(buf));
-				q_strlcat(buf, sec, sizeof(buf));
-			}
-			if (info.skill >= 0)
-			{
-				char skl[24];
-				int s = info.skill < 4 ? info.skill : 3;
-				q_snprintf(skl, sizeof(skl), "Skill: %s", skill_names[s]);
-				if (buf[0]) q_strlcat(buf, "  ", sizeof(buf));
-				q_strlcat(buf, skl, sizeof(buf));
-			}
-			q_strlcpy(di->stats, buf[0] ? buf : "single player", sizeof(di->stats));
-		}
-	}
+		M_Demos_ApplyInfoToItem(di, &info);
 	else
-	{
-		q_strlcpy(di->map, "unknown", sizeof(di->map));
-		q_strlcpy(di->players, "n/a", sizeof(di->players));
-		q_strlcpy(di->duration, "n/a", sizeof(di->duration));
-		q_strlcpy(di->filesize, "n/a", sizeof(di->filesize));
-		di->stats[0] = '\0';
-	}
+		M_Demos_ApplyParseFailureToItem(di);
+
 	di->parsed = true;
+	M_Demos_MetadataCacheUpdateParse(di, parsed, parsed ? &info : NULL);
 }
 
 // Parse a small number of demos per frame so typed searches don't block.
@@ -30411,6 +31066,14 @@ static qboolean M_Demos_TickBackgroundParse(void)
 			M_Demos_ParseItem(di);
 			parsed++;
 		}
+	}
+
+	if (parsed > 0)
+	{
+		if (demosmenu.bg_parse_cursor >= demosmenu.democount)
+			M_Demos_MetadataCache_SaveIfDirty();
+		else
+			M_Demos_MetadataCache_MaybeFlush();
 	}
 
 	return parsed > 0;
@@ -30747,6 +31410,8 @@ static void M_Demos_ResetPathToRoot(void)
 static void M_Demos_Init(void)
 {
 	qboolean blocked_sound = M_Demos_BlockSoundForIO();
+
+	M_Demos_MetadataCache_Load();
 
 	demosmenu.list.viewsize = MAX_VIS_DEMOS;
 	demosmenu.list.cursor = -1;
@@ -31099,17 +31764,19 @@ void M_Demos_Draw (void)
 		}
 	}
 
-    // When search is active, background-parse a few demos per frame so metadata
-    // matches can stream in without making a single keystroke parse the whole list.
-    // Coalesce refilters across several parses so very large demo libraries
-    // don't pay an O(democount) sweep every couple of frames.
-    if (demosmenu.list.search.len > 0 && M_Demos_TickBackgroundParse())
+    // Background-parse a few demos per frame so metadata fills the cache without
+    // blocking one frame. Search refilters are coalesced because they sweep the
+    // full visible demo set.
     {
-        const int REFILTER_BATCH = 8;
-        int new_parses = demosmenu.bg_parse_cursor - demosmenu.last_refilter_parsed;
-        qboolean done = (demosmenu.bg_parse_cursor >= demosmenu.democount);
-        if (new_parses >= REFILTER_BATCH || done)
-            M_Demos_RefilterEx(true);
+        qboolean parsed = M_Demos_TickBackgroundParse();
+        if (demosmenu.list.search.len > 0 && parsed)
+        {
+            const int REFILTER_BATCH = 8;
+            int new_parses = demosmenu.bg_parse_cursor - demosmenu.last_refilter_parsed;
+            qboolean done = (demosmenu.bg_parse_cursor >= demosmenu.democount);
+            if (new_parses >= REFILTER_BATCH || done)
+                M_Demos_RefilterEx(true);
+        }
     }
 
 	M_TextField_CheckMouseRelease();
@@ -31650,6 +32317,7 @@ void M_Demos_Key(int key)
     case K_BBUTTON:
     case K_MOUSE4: // woods #mousemenu
     case K_MOUSE2:
+        M_Demos_MetadataCache_SaveIfDirty();
         if (demosmenu.prev == m_options)
             M_Menu_Options_f();
         else
@@ -31668,6 +32336,7 @@ void M_Demos_Key(int key)
 				M_Demos_QueuePlayDemo(demo->name))
 			{
 				M_Demos_RememberCurrentPath();
+				M_Demos_MetadataCache_SaveIfDirty();
 				M_Menu_Main_f();
 			}
         }

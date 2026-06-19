@@ -61,6 +61,7 @@ static qboolean CL_DZipOpenDemoArchive(const char *archive_path, FILE **out_demo
 static qboolean CL_DZipExtractDemoArchiveOSPathToFile(const char *archive_path, FILE *out, qofs_t *out_size, char *out_entry_name, size_t out_entry_name_size);
 static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *archive_path, const char *entry_name);
 static byte *CL_DZipLoadDemoBuffer(const char *archive_path, int *length_out);
+static byte *CL_DZipLoadDemoBufferOSPath(const char *archive_path, int *length_out);
 #endif
 
 /*
@@ -2707,6 +2708,65 @@ byte *CL_LoadDemoBuffer(const char *name, int *length_out)
 	data = COM_LoadMallocFile(direct_name, NULL);
 	if (data && length_out)
 		*length_out = (int)com_filesize;
+	return data;
+}
+
+byte *CL_LoadDemoBufferFromFile(const char *path, int *length_out)
+{
+	const char *ext;
+	FILE *file;
+	long file_size;
+	byte *data;
+
+	if (length_out)
+		*length_out = -1;
+
+	if (!path || !path[0])
+		return NULL;
+
+	ext = COM_FileGetExtension(path);
+	if (!q_strcasecmp(ext, "dz"))
+	{
+#ifdef USE_ZLIB
+		return CL_DZipLoadDemoBufferOSPath(path, length_out);
+#else
+		return NULL;
+#endif
+	}
+
+	file = fopen(path, "rb");
+	if (!file)
+		return NULL;
+
+	if (fseek(file, 0, SEEK_END) != 0)
+	{
+		fclose(file);
+		return NULL;
+	}
+	file_size = ftell(file);
+	if (file_size <= 0 || file_size > INT_MAX || fseek(file, 0, SEEK_SET) != 0)
+	{
+		fclose(file);
+		return NULL;
+	}
+
+	data = (byte *)malloc((size_t)file_size);
+	if (!data)
+	{
+		fclose(file);
+		return NULL;
+	}
+
+	if (fread(data, 1, (size_t)file_size, file) != (size_t)file_size)
+	{
+		free(data);
+		fclose(file);
+		return NULL;
+	}
+
+	fclose(file);
+	if (length_out)
+		*length_out = (int)file_size;
 	return data;
 }
 
@@ -6196,11 +6256,12 @@ done:
 	return ok;
 }
 
-static byte *CL_DZipLoadDemoBuffer(const char *archive_path, int *length_out)
+static byte *CL_DZipLoadDemoBufferEx(const char *archive_path, int *length_out, qboolean os_path)
 {
 	FILE *out;
 	byte *data = NULL;
 	qofs_t size = -1;
+	qboolean extracted;
 
 	if (length_out)
 		*length_out = -1;
@@ -6209,7 +6270,12 @@ static byte *CL_DZipLoadDemoBuffer(const char *archive_path, int *length_out)
 	if (!out)
 		return NULL;
 
-	if (!CL_DZipExtractDemoArchiveToFile(archive_path, out, &size, NULL, 0))
+	if (os_path)
+		extracted = CL_DZipExtractDemoArchiveOSPathToFile(archive_path, out, &size, NULL, 0);
+	else
+		extracted = CL_DZipExtractDemoArchiveToFile(archive_path, out, &size, NULL, 0);
+
+	if (!extracted)
 	{
 		fclose(out);
 		return NULL;
@@ -6241,6 +6307,16 @@ static byte *CL_DZipLoadDemoBuffer(const char *archive_path, int *length_out)
 	if (length_out)
 		*length_out = (int)size;
 	return data;
+}
+
+static byte *CL_DZipLoadDemoBuffer(const char *archive_path, int *length_out)
+{
+	return CL_DZipLoadDemoBufferEx(archive_path, length_out, false);
+}
+
+static byte *CL_DZipLoadDemoBufferOSPath(const char *archive_path, int *length_out)
+{
+	return CL_DZipLoadDemoBufferEx(archive_path, length_out, true);
 }
 
 static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *archive_path, const char *entry_name)
