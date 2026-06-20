@@ -596,7 +596,7 @@ void GLSLGamma_GammaCorrect (void);
 void GLSLGamma_SoftEmuPrecache (void);
 qboolean GLSLGamma_SoftEmuCanRemapBlend (void);
 
-void R_ScaleView_DeleteTexture (void);
+void R_WarpScaleView_DeleteTexture (void);
 void R_LightningBeam_DeleteTexture (void); // woods #beamspoly
 
 void R_MotionBlur_DeleteTexture (void); // woods #motionblur

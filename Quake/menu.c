@@ -10891,7 +10891,7 @@ Graphics Menu
 ==================
 */
 
-extern cvar_t r_particles, gl_load24bit, r_replacemodels, r_lerpmodels, r_lerpmove, r_scale, r_outline,
+extern cvar_t r_particles, gl_load24bit, r_replacemodels, r_lerpmodels, r_lerpmove, r_scale, r_outline, r_waterwarp,
 vid_gamma, vid_contrast, vid_fsaa, r_particledesc, gl_loadlitfiles, r_rocketlight, r_explosionlight,
 gl_powerupshells, gl_caustics, gl_cshift_contents_auto;
 
@@ -10916,6 +10916,7 @@ static enum graphics_e
 	GRAPHICS_MODELOUTLINES,
 	GRAPHICS_POWERUPSHELLS,
 	GRAPHICS_WATERCAUSTICS,
+	GRAPHICS_WATERWARP,
 	GRAPHICS_WATERALPHA,
 	GRAPHICS_CSHIFTAUTO,
 	GRAPHICS_SKY,
@@ -10923,6 +10924,10 @@ static enum graphics_e
 } graphics_cursor;
 
 #define GRAPHICS_ITEMS (GRAPHICS_COUNT)
+#define GRAPHICS_ROW_HEIGHT 8
+#define GRAPHICS_DEFAULT_Y 20
+#define GRAPHICS_MIN_Y 12
+#define GRAPHICS_BOTTOM_Y 188
 int numberOfGraphicsItems = GRAPHICS_ITEMS;
 
 static struct
@@ -10933,6 +10938,22 @@ static struct
 		int len;
 	} search;
 } graphicsmenu;
+
+static int M_Graphics_FirstY(void)
+{
+	int y = GRAPHICS_BOTTOM_Y - (GRAPHICS_ITEMS - 1) * GRAPHICS_ROW_HEIGHT;
+
+	if (y > GRAPHICS_DEFAULT_Y)
+		return GRAPHICS_DEFAULT_Y;
+	if (y < GRAPHICS_MIN_Y)
+		return GRAPHICS_MIN_Y;
+	return y;
+}
+
+static int M_Graphics_ItemY(int index)
+{
+	return M_Graphics_FirstY() + GRAPHICS_ROW_HEIGHT * index;
+}
 
 static const char* M_Graphics_GetItemText(int index)
 {
@@ -10978,6 +10999,8 @@ static const char* M_Graphics_GetItemText(int index)
 		return "Powerup Shells";
 	case GRAPHICS_WATERCAUSTICS:
 		return "Water Caustics";
+	case GRAPHICS_WATERWARP:
+		return "Underwater FX";
 	case GRAPHICS_WATERALPHA:
 		return "Liquid Alpha";
 	case GRAPHICS_CSHIFTAUTO:
@@ -11095,6 +11118,7 @@ static int M_Graphics_LivePreviewId(void)
 	case GRAPHICS_MODELOUTLINES:
 		return LP_GRAPHICS;
 	case GRAPHICS_WATERCAUSTICS:
+	case GRAPHICS_WATERWARP:
 	case GRAPHICS_WATERALPHA:
 	case GRAPHICS_CSHIFTAUTO:
 		return (cl.inwater ||
@@ -11138,7 +11162,7 @@ static void M_Graphics_AdjustSliders(int dir)
 	float f;
 	S_LocalSound("misc/menu3.wav");
 
-	M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 20 + graphics_cursor * 8);
+	M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), M_Graphics_ItemY(graphics_cursor));
 
 	switch (graphics_cursor)
 	{
@@ -11318,6 +11342,14 @@ static void M_Graphics_AdjustSliders(int dir)
 	}
 	break;
 
+	case GRAPHICS_WATERWARP:
+		m = CLAMP(0, (int)r_waterwarp.value, 2);
+		m += (dir > 0) ? 1 : -1;
+		if (m < 0) m = 2;
+		else if (m > 2) m = 0;
+		Cvar_SetValueQuick(&r_waterwarp, m);
+		break;
+
 	case GRAPHICS_WATERALPHA:
 		f = r_wateralpha.value + dir * 0.05f;
 		f = CLAMP(0, f, 1);
@@ -11342,14 +11374,14 @@ void M_Graphics_Draw(void)
 
 	M_Graphics_ClampCursor();
 
-	M_LivePreview_WantAt (M_Graphics_LivePreviewId (), 20 + graphics_cursor * 8);
+	M_LivePreview_WantAt (M_Graphics_LivePreviewId (), M_Graphics_ItemY(graphics_cursor));
 
 	const char* title = "Graphics Options";
 	M_PrintWhite((320 - 8 * strlen(title)) / 2, 4, title);
 
 	for (i = 0; i < GRAPHICS_ITEMS; i++)
 	{
-		int y = 20 + 8 * i;
+		int y = M_Graphics_ItemY(i);
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
@@ -11500,6 +11532,17 @@ void M_Graphics_Draw(void)
 			M_DrawSlider(186, y, r, gl_caustics.value * 10.0f, "%.0f%%"); // Display as 0-100%
 			break;
 
+		case GRAPHICS_WATERWARP:
+			text = "    Underwater FX";
+			if ((int)r_waterwarp.value <= 0)
+				value = "off";
+			else if ((int)r_waterwarp.value == 1)
+				value = "classic";
+			else
+				value = "glQuake";
+			M_Print(178, y, value);
+			break;
+
 		case GRAPHICS_WATERALPHA:
 			text = "      Liquid Alpha";
 			r = CLAMP(0, r_wateralpha.value, 1);
@@ -11558,7 +11601,7 @@ void M_Graphics_Draw(void)
 
 	// cursor
 	{
-		int y = 20 + graphics_cursor * 8;
+		int y = M_Graphics_ItemY(graphics_cursor);
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -11671,9 +11714,12 @@ void M_Graphics_Key(int k)
 			break;
 
 		// Check if click is in valid menu area
-		if (m_mousey >= 20 && m_mousey < 20 + (GRAPHICS_ITEMS * 8))
 		{
-			graphics_cursor = (m_mousey - 20) / 8;
+			int first_y = M_Graphics_FirstY();
+			if (m_mousey < first_y || m_mousey >= first_y + (GRAPHICS_ITEMS * GRAPHICS_ROW_HEIGHT))
+				break;
+
+			graphics_cursor = (m_mousey - first_y) / GRAPHICS_ROW_HEIGHT;
 
 			if (graphics_cursor == GRAPHICS_BRIGHTNESS ||
 				graphics_cursor == GRAPHICS_CONTRAST ||
@@ -11685,7 +11731,7 @@ void M_Graphics_Key(int k)
 				graphics_cursor == GRAPHICS_WATERALPHA)
 			{
 				graphics_slider_grab = true;
-				M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 20 + graphics_cursor * 8);
+				M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), M_Graphics_ItemY(graphics_cursor));
 			}
 			else
 			{
@@ -11741,7 +11787,7 @@ void M_Graphics_Mousemove(int cx, int cy)
 			return;
 		}
 
-		M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), 20 + graphics_cursor * 8);
+		M_LivePreview_WantAndKick (M_Graphics_LivePreviewId (), M_Graphics_ItemY(graphics_cursor));
 
 		float f;
 		switch (graphics_cursor)
@@ -11800,6 +11846,7 @@ void M_Graphics_Mousemove(int cx, int cy)
 		case GRAPHICS_COLOREDLIGHTING:
 		case GRAPHICS_BRUSHSHADOW:
 		case GRAPHICS_POWERUPSHELLS:
+		case GRAPHICS_WATERWARP:
 		case GRAPHICS_CSHIFTAUTO:
 		case GRAPHICS_SKY:
 		case GRAPHICS_COUNT:
@@ -11816,7 +11863,7 @@ void M_Graphics_Mousemove(int cx, int cy)
 		return;
 
 	// Calculate which menu item the mouse is over
-	int item = (cy - 20) / 8;
+	int item = (cy - M_Graphics_FirstY()) / GRAPHICS_ROW_HEIGHT;
 
 	// Make sure the item is within valid range
 	if (item >= 0 && item < GRAPHICS_ITEMS)

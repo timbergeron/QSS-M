@@ -52,6 +52,7 @@ int		r_viewport[4];
 qboolean	r_view_matrices_valid;
 
 float r_fovx, r_fovy; //johnfitz -- rendering fov may be different becuase of r_waterwarp and r_stereo
+static qboolean water_warp;
 
 extern byte* SV_FatPVS (vec3_t org, qmodel_t* worldmodel); // woods #iwshowbboxes
 extern qboolean SV_EdictInPVS (edict_t* test, byte* pvs); // woods #iwshowbboxes
@@ -167,6 +168,8 @@ cvar_t	r_ambient = {"r_ambient", "0", CVAR_ARCHIVE}; // woods #rambient
 edict_t *bbox_focus = NULL;
 
 void LaserSight(void);
+static qboolean R_WarpScaleView_EnsureShader (void);
+static float R_WaterWarpTime (void);
 
 
 //==============================================================================
@@ -1041,7 +1044,7 @@ void R_SetupGL (void)
 	if (!r_refdef.drawworld)
 		scale = 1;	//don't rescale. we can't handle rescaling transparent parts.
 	else
-		scale =  CLAMP(1, (int)r_scale.value, 4); // ericw -- see R_ScaleView
+		scale =  CLAMP(1, (int)r_scale.value, 4); // ericw -- see R_WarpScaleView
 	viewx = glx + r_refdef.vrect.x;
 	viewy = gly + glheight - r_refdef.vrect.y - r_refdef.vrect.height;
 	vieww = r_refdef.vrect.width / scale;
@@ -1201,13 +1204,23 @@ void R_SetupView (void)
 	//johnfitz -- calculate r_fovx and r_fovy here
 	r_fovx = r_refdef.fov_x;
 	r_fovy = r_refdef.fov_y;
-	if (r_waterwarp.value)
+	water_warp = false;
+	if ((int)r_waterwarp.value > 0)
 	{
 		if (viewcontents == CONTENTS_WATER || viewcontents == CONTENTS_SLIME || viewcontents == CONTENTS_LAVA)
 		{
-			//variance is a percentage of width, where width = 2 * tan(fov / 2) otherwise the effect is too dramatic at high FOV and too subtle at low FOV.  what a mess!
-			r_fovx = atan(tan(DEG2RAD(r_refdef.fov_x) / 2) * (0.97 + sin(cl.time * 1.5) * 0.03)) * 2 / M_PI_DIV_180;
-			r_fovy = atan(tan(DEG2RAD(r_refdef.fov_y) / 2) * (1.03 - sin(cl.time * 1.5) * 0.03)) * 2 / M_PI_DIV_180;
+			if ((int)r_waterwarp.value == 1 && R_WarpScaleView_EnsureShader ())
+			{
+				water_warp = true;
+			}
+			else
+			{
+				float warp_time = R_WaterWarpTime ();
+
+				//variance is a percentage of width, where width = 2 * tan(fov / 2) otherwise the effect is too dramatic at high FOV and too subtle at low FOV.  what a mess!
+				r_fovx = atan(tan(DEG2RAD(r_refdef.fov_x) / 2) * (0.97 + sin(warp_time * 1.5) * 0.03)) * 2 / M_PI_DIV_180;
+				r_fovy = atan(tan(DEG2RAD(r_refdef.fov_y) / 2) * (1.03 - sin(warp_time * 1.5) * 0.03)) * 2 / M_PI_DIV_180;
+			}
 		}
 	}
 	//johnfitz
@@ -2834,24 +2847,132 @@ void R_RenderScene (void)
 	LOC_ShowLocs(); // woods #locext
 }
 
-static GLuint r_scaleview_texture;
-static int r_scaleview_texture_width, r_scaleview_texture_height;
+static GLuint r_warpscale_texture;
+static int r_warpscale_texture_width, r_warpscale_texture_height;
+static GLuint r_warpscale_program;
+static GLint r_warpscale_textureLoc = -1;
+static GLint r_warpscale_paramsLoc = -1;
+static GLint r_warpscale_aspectLoc = -1;
+static qboolean r_warpscale_shader_failed;
 
 /*
 =============
-R_ScaleView_DeleteTexture
+R_WarpScaleView_CanTryWarp
 =============
 */
-void R_ScaleView_DeleteTexture (void)
+static qboolean R_WarpScaleView_CanTryWarp (void)
 {
-	glDeleteTextures (1, &r_scaleview_texture);
-	r_scaleview_texture = 0;
+	return gl_glsl_able && GL_UseProgramFunc && !r_warpscale_shader_failed;
+}
+
+/*
+=============
+R_WarpScaleView_DeleteTexture
+=============
+*/
+void R_WarpScaleView_DeleteTexture (void)
+{
+	glDeleteTextures (1, &r_warpscale_texture);
+	r_warpscale_texture = 0;
+	r_warpscale_program = 0; // deleted in R_DeleteShaders
+	r_warpscale_textureLoc = -1;
+	r_warpscale_paramsLoc = -1;
+	r_warpscale_aspectLoc = -1;
+	r_warpscale_shader_failed = false;
 	GL_ClearBindings ();
 }
 
 /*
+=============
+R_WarpScaleView_CreateShaders
+=============
+*/
+static qboolean R_WarpScaleView_CreateShaders (void)
+{
+	const GLchar *vertSource = \
+		"#version 110\n"
+		"\n"
+		"void main(void) {\n"
+		"	gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0);\n"
+		"	gl_TexCoord[0] = gl_MultiTexCoord0;\n"
+		"}\n";
+
+	const GLchar *fragSource = \
+		"#version 110\n"
+		"\n"
+		"uniform sampler2D WarpScaleTexture;\n"
+		"uniform vec4 WarpScale; // xy=UV scale z=warp amplitude w=time\n"
+		"uniform float WarpAspect;\n"
+		"\n"
+		"void main(void) {\n"
+		"	vec2 uv = gl_TexCoord[0].xy;\n"
+		"	if (WarpScale.z > 0.0) {\n"
+		"		float aspect = max(WarpAspect, 0.0001);\n"
+		"		vec2 warp_amp = vec2(WarpScale.z, WarpScale.z * aspect);\n"
+		"		uv = warp_amp + uv * (1.0 - 2.0 * warp_amp);\n"
+		"		uv += warp_amp * sin(vec2(uv.y / aspect, uv.x) * (3.14159265 * 8.0) + WarpScale.w);\n"
+		"	}\n"
+		"	gl_FragColor = texture2D(WarpScaleTexture, uv * WarpScale.xy);\n"
+		"}\n";
+
+	GLuint program, tracked;
+	GLint textureLoc, paramsLoc, aspectLoc;
+
+	if (!R_WarpScaleView_CanTryWarp ())
+		return false;
+
+	program = GL_CreateProgram (vertSource, fragSource, 0, NULL);
+	if (!program)
+	{
+		r_warpscale_shader_failed = true;
+		return false;
+	}
+
+	tracked = program;
+	textureLoc = GL_GetUniformLocation (&program, "WarpScaleTexture");
+	paramsLoc = GL_GetUniformLocation (&program, "WarpScale");
+	aspectLoc = GL_GetUniformLocation (&program, "WarpAspect");
+	if (!program)
+	{
+		GL_DeleteProgramTracked (&tracked);
+		r_warpscale_shader_failed = true;
+		return false;
+	}
+
+	r_warpscale_program = program;
+	r_warpscale_textureLoc = textureLoc;
+	r_warpscale_paramsLoc = paramsLoc;
+	r_warpscale_aspectLoc = aspectLoc;
+	return true;
+}
+
+/*
+=============
+R_WarpScaleView_EnsureShader
+=============
+*/
+static qboolean R_WarpScaleView_EnsureShader (void)
+{
+	if (!R_WarpScaleView_CanTryWarp ())
+		return false;
+	if (!r_warpscale_program)
+		R_WarpScaleView_CreateShaders ();
+	return r_warpscale_program != 0;
+}
+
+/*
+=============
+R_WaterWarpTime
+=============
+*/
+static float R_WaterWarpTime (void)
+{
+	return (key_dest == key_menu || cl.paused) ? (float)realtime : cl.time;
+}
+
+/*
 ================
-R_ScaleView
+R_WarpScaleView
 
 The r_scale cvar allows rendering the 3D view at 1/2, 1/3, or 1/4 resolution.
 This function scales the reduced resolution 3D view back up to fill 
@@ -2859,11 +2980,12 @@ r_refdef.vrect. This is for emulating a low-resolution pixellated look,
 or possibly as a perforance boost on slow graphics cards.
 ================
 */
-void R_ScaleView (void)
+void R_WarpScaleView (void)
 {
 	float smax, tmax;
 	int scale;
 	int srcx, srcy, srcw, srch;
+	qboolean use_warp_shader;
 
 	// copied from R_SetupGL()
 	scale = CLAMP(1, (int)r_scale.value, 4);
@@ -2872,42 +2994,48 @@ void R_ScaleView (void)
 	srcw = r_refdef.vrect.width / scale;
 	srch = r_refdef.vrect.height / scale;
 
-	if (scale == 1 || !r_refdef.drawworld)
+	if (!r_refdef.drawworld || (scale == 1 && !water_warp))
+		return;
+
+	use_warp_shader = water_warp && r_warpscale_program;
+	if (water_warp && !use_warp_shader && scale == 1)
 		return;
 
 	// make sure texture unit 0 is selected
 	GL_DisableMultitexture ();
 
 	// create (if needed) and bind the render-to-texture texture
-	if (!r_scaleview_texture)
+	if (!r_warpscale_texture)
 	{
-		glGenTextures (1, &r_scaleview_texture);
+		glGenTextures (1, &r_warpscale_texture);
 
-		r_scaleview_texture_width = 0;
-		r_scaleview_texture_height = 0;
+		r_warpscale_texture_width = 0;
+		r_warpscale_texture_height = 0;
 	}
-	glBindTexture (GL_TEXTURE_2D, r_scaleview_texture);
+	glBindTexture (GL_TEXTURE_2D, r_warpscale_texture);
 
 	// resize render-to-texture texture if needed
-	if (r_scaleview_texture_width < srcw
-		|| r_scaleview_texture_height < srch)
+	if (r_warpscale_texture_width < srcw
+		|| r_warpscale_texture_height < srch)
 	{
-		r_scaleview_texture_width = srcw;
-		r_scaleview_texture_height = srch;
+		r_warpscale_texture_width = srcw;
+		r_warpscale_texture_height = srch;
 
 		if (!gl_texture_NPOT)
 		{
-			r_scaleview_texture_width = TexMgr_Pad(r_scaleview_texture_width);
-			r_scaleview_texture_height = TexMgr_Pad(r_scaleview_texture_height);
+			r_warpscale_texture_width = TexMgr_Pad(r_warpscale_texture_width);
+			r_warpscale_texture_height = TexMgr_Pad(r_warpscale_texture_height);
 		}
 
-		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, r_scaleview_texture_width, r_scaleview_texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, r_warpscale_texture_width, r_warpscale_texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	}
 
 	// copy the framebuffer to the texture
-	glBindTexture (GL_TEXTURE_2D, r_scaleview_texture);
+	glBindTexture (GL_TEXTURE_2D, r_warpscale_texture);
 	glCopyTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, srcx, srcy, srcw, srch);
 
 	// draw the texture back to the framebuffer
@@ -2924,19 +3052,32 @@ void R_ScaleView (void)
 	glLoadIdentity ();
 
 	// correction factor if we lack NPOT textures, normally these are 1.0f
-	smax = srcw/(float)r_scaleview_texture_width;
-	tmax = srch/(float)r_scaleview_texture_height;
+	smax = srcw/(float)r_warpscale_texture_width;
+	tmax = srch/(float)r_warpscale_texture_height;
+
+	if (use_warp_shader)
+	{
+		float aspect = (r_refdef.vrect.height > 0) ? r_refdef.vrect.width/(float)r_refdef.vrect.height : 1.0f;
+
+		GL_UseProgramFunc (r_warpscale_program);
+		GL_Uniform1iFunc (r_warpscale_textureLoc, 0);
+		GL_Uniform4fFunc (r_warpscale_paramsLoc, smax, tmax, 1.0f/256.0f, R_WaterWarpTime ());
+		GL_Uniform1fFunc (r_warpscale_aspectLoc, aspect);
+	}
 
 	glBegin (GL_QUADS);
 	glTexCoord2f (0, 0);
 	glVertex2f (-1, -1);
-	glTexCoord2f (smax, 0);
+	glTexCoord2f (use_warp_shader ? 1.0f : smax, 0);
 	glVertex2f (1, -1);
-	glTexCoord2f (smax, tmax);
+	glTexCoord2f (use_warp_shader ? 1.0f : smax, use_warp_shader ? 1.0f : tmax);
 	glVertex2f (1, 1);
-	glTexCoord2f (0, tmax);
+	glTexCoord2f (0, use_warp_shader ? 1.0f : tmax);
 	glVertex2f (-1, 1);
 	glEnd ();
+
+	if (use_warp_shader)
+		GL_UseProgramFunc (0);
 
 	// clear cached binding
 	GL_ClearBindings ();
@@ -3093,7 +3234,7 @@ void R_RenderView (void)
 		R_RenderSceneBlur(gl_motion_blur.value);
 	}
 
-	R_ScaleView ();
+	R_WarpScaleView ();
 
 	//johnfitz -- modified r_speeds output
 	time2 = Sys_DoubleTime ();

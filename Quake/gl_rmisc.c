@@ -342,6 +342,20 @@ static void GL_PowerupShells_Completion_f (cvar_t* cvar, const char* partial)
 	Con_AddToTabList("2", partial, "shell+items", NULL);
 }
 
+/*
+===============
+R_WaterWarp_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void R_WaterWarp_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "classic", NULL);
+	Con_AddToTabList("2", partial, "glQuake", NULL);
+}
+
 
 /*
 ===============
@@ -556,6 +570,7 @@ void R_Init (void)
 	Cvar_SetCallback (&r_clearcolor, R_SetClearColor_f);
 	Cvar_RegisterVariable (&r_brokenturbbias);
 	Cvar_RegisterVariable (&r_waterwarp);
+	Cvar_SetCompletion (&r_waterwarp, &R_WaterWarp_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&r_drawflat);
 	Cvar_RegisterVariable (&r_flatlightstyles);
 	Cvar_RegisterVariable (&r_oldskyleaf);

@@ -1037,7 +1037,7 @@ static void VID_Restart (void)
 	Sky_ResetGL();
 	TexMgr_DeleteTextureObjects ();
 	GLSLGamma_DeleteTexture ();
-	R_ScaleView_DeleteTexture ();
+	R_WarpScaleView_DeleteTexture ();
 	R_LightningBeam_DeleteTexture (); // woods #beamspoly
 	R_MotionBlur_DeleteTexture (); // woods #motionblur
 	Draw_ShutdownGL (); // rounded-fill program handle becomes invalid on context loss

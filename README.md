@@ -63,6 +63,7 @@ JPG, r00k, Spoike for QSS and FTEQW, Ozkan Sezer & Eric Wasylishen (Quakespasm),
 **Rendering, Debugging, and Compatibility**
 
 - Centerprint background styles (`scr_centerprintbg`)
+- Classic screen-space underwater warp (`r_waterwarp 1`), with the GLQuake fov-wobble retained as an option (`r_waterwarp 2`)
 - Sky wind support (`r_skywind`)
 - `r_showbboxes` model-type coloring and filtering
 - PVS-aware entity checks for more accurate bounding-box debug overlays
