@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "bgmusic.h"
 #include "q_ctype.h" // woods #modsmenu (iw)
+#include "q_hash.h"
 #include <curl/curl.h> // woods #serversmenu
 #include <zlib.h>
 #include "json.h" // woods #serversmenu
@@ -58,6 +59,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #ifdef _WIN32
 #include <sys/types.h>
+#include <direct.h>
 #else
 #include <unistd.h>
 #include <dirent.h>
@@ -123,6 +125,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_Version_f (void);
 		void M_Menu_ResetConfig_f(void); // woods #resetconfig
 	void M_Menu_Mods_f(void); // woods #modsmenu (iw)
+	void M_Menu_DownloadMods_f(void);
 	void M_Menu_Demos_f (void); // woods #demosmenu
 	void M_Menu_Help_f (void);
 	void M_Menu_Quit_f (void);
@@ -174,6 +177,7 @@ void M_Main_Draw (void);
 			void M_Crosshair_Draw (void);
 		void M_Console_Draw (void);
 	void M_Mods_Draw(void); // woods #modsmenu (iw)
+	void M_DownloadMods_Draw(void);
 	void M_Demos_Draw (void); // woods #demosmenu
 	void M_Help_Draw (void);
 	void M_Quit_Draw (void);
@@ -226,6 +230,7 @@ void M_Main_Key (int key);
 			void M_Crosshair_Key (int key);
 		void M_Console_Key (int key);
 	void M_Mods_Key (int key);
+	void M_DownloadMods_Key(int key);
 	void M_Demos_Key (int key);
 	void M_Demos_Char (int key);
 	qboolean M_Demos_TextEntry (void);
@@ -281,6 +286,7 @@ void M_Main_Key (int key);
 		void M_ResetConfig_Mousemove(int cx, int cy); // woods #resetconfig
 	//void M_Gamepad_Mousemove (int cx, int cy);
 	void M_Mods_Mousemove(int cx, int cy);
+	void M_DownloadMods_Mousemove(int cx, int cy);
 	void M_Demos_Mousemove(int cx, int cy);
 	//void M_Help_Mousemove (int cx, int cy);
 	//void M_Quit_Mousemove (int cx, int cy);
@@ -28187,12 +28193,14 @@ Mods Menu (iw)
 */
 
 #define MAX_VIS_MODS	19
+#define DOWNLOAD_MODS_LABEL	"Downloads"
 
 typedef struct
 {
 	const char* name;
 	char		description[64];
 	qboolean	active;
+	qboolean	download_menu;
 } moditem_t;
 
 static struct
@@ -28239,6 +28247,34 @@ static qboolean M_Mods_IsActive(const char* game)
 	}
 
 	return false;
+}
+
+static int M_Mods_DescriptionX(int x)
+{
+	return x + q_min(max_word_length + 1, 13) * 8;
+}
+
+static void M_Mods_DrawDownloadMenuPrompt(int x, int y, const char *highlight, int highlight_len)
+{
+	if (highlight_len > 0)
+		M_PrintHighlight(x, y, DOWNLOAD_MODS_LABEL, highlight, highlight_len);
+	else
+		M_Print(x, y, DOWNLOAD_MODS_LABEL);
+
+	M_PrintWhite(M_Mods_DescriptionX(x), y, "...");
+}
+
+static void M_Mods_AddDownloadMenu(void)
+{
+	moditem_t mod;
+
+	mod.name = DOWNLOAD_MODS_LABEL;
+	q_strlcpy(mod.description, "...", sizeof(mod.description));
+	mod.active = true;
+	mod.download_menu = true;
+
+	VEC_PUSH(modsmenu.items, mod);
+	modsmenu.modcount = (int)VEC_SIZE(modsmenu.items);
 }
 
 static void M_Mods_Add(const char* name)
@@ -28296,6 +28332,7 @@ static void M_Mods_Add(const char* name)
 	
 	moditem_t mod;
 	mod.name = name;
+	mod.download_menu = false;
 	
 	// Special case: Auto-detect known mods by scanning PAK files
 	{
@@ -28435,7 +28472,7 @@ static void M_Mods_Add(const char* name)
 				fclose(pakfile);
 			}
 		}
-		
+
 		// Set description based on detected mod
 		if (found_ad_signature)
 		{
@@ -28458,11 +28495,7 @@ static void M_Mods_Add(const char* name)
 			mod.description[0] = '\0'; // No description yet
 		}
 	}
-	
-	
-	
-	
-	
+
 	// Read description from descript.ion file
 	{
 		char desc_path[MAX_OSPATH];
@@ -28485,11 +28518,11 @@ static void M_Mods_Add(const char* name)
 			// mod.description[0] = '\0';  // Don't clear - preserve auto-detected description
 		}
 	}
-	
+
 	mod.active = M_Mods_IsActive(name);
 	if (mod.active && modsmenu.list.cursor == -1)
 		modsmenu.list.cursor = modsmenu.modcount;
-	
+
 	// Ensure there's enough space for one more item
 	VEC_PUSH(modsmenu.items, mod);
 
@@ -28497,15 +28530,23 @@ static void M_Mods_Add(const char* name)
 	modsmenu.modcount++;
 }
 
+static void M_Mods_UpdateViewsize(void)
+{
+	modsmenu.list.viewsize = (modsmenu.list.search.len == 0) ?
+		MAX_VIS_MODS - 1 : MAX_VIS_MODS;
+}
+
 static void M_Mods_Refilter(void)
 {
 	int i;
+
+	M_Mods_UpdateViewsize();
 	VEC_CLEAR(modsmenu.filtered_indices);
 
 	for (i = 0; i < modsmenu.modcount; i++)
 	{
-		if (modsmenu.list.search.len == 0 || 
-			q_strcasestr(modsmenu.items[i].name, modsmenu.list.search.text) || 
+		if (modsmenu.list.search.len == 0 ||
+			q_strcasestr(modsmenu.items[i].name, modsmenu.list.search.text) ||
 			q_strcasestr(modsmenu.items[i].description, modsmenu.list.search.text))
 		{
 			VEC_PUSH(modsmenu.filtered_indices, i);
@@ -28527,7 +28568,6 @@ static void M_Mods_Init(void)
 {
 	filelist_item_t* item;
 
-	modsmenu.list.viewsize = MAX_VIS_MODS;
 	modsmenu.list.cursor = -1;
 	modsmenu.list.scroll = 0;
 	modsmenu.list.numitems = 0;
@@ -28538,8 +28578,12 @@ static void M_Mods_Init(void)
 
 	memset(&modsmenu.list.search, 0, sizeof(modsmenu.list.search));
 	modsmenu.list.search.maxlen = 32;
+	M_Mods_UpdateViewsize();
 
 	M_Ticker_Init(&modsmenu.ticker);
+
+	if (CL_Q1ToolsDownloadsAvailable())
+		M_Mods_AddDownloadMenu();
 
 	for (item = modlist; item; item = item->next)
 		M_Mods_Add(item->name);
@@ -28553,6 +28597,19 @@ static void M_Mods_Init(void)
 		modsmenu.list.cursor = 0;
 
 	M_List_CenterCursor(&modsmenu.list);
+}
+
+static qboolean M_Mods_HasDownloadGap(void)
+{
+	return modsmenu.list.search.len == 0 &&
+		modsmenu.list.scroll == 0 &&
+		modsmenu.list.numitems > 1 &&
+		modsmenu.items[modsmenu.filtered_indices[0]].download_menu;
+}
+
+static qboolean M_Mods_MouseYInDownloadGap(int yrel)
+{
+	return M_Mods_HasDownloadGap() && yrel >= 8 && yrel < 16;
 }
 
 void M_Menu_Mods_f(void)
@@ -28592,31 +28649,53 @@ void M_Mods_Draw(void)
 	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
 
 	M_List_GetVisibleRange(&modsmenu.list, &firstvis, &numvis);
-	for (i = 0; i < numvis; i++) 
+	for (i = 0; i < numvis; i++)
 	{
 		int idx = i + firstvis;
 		int mod_idx = modsmenu.filtered_indices[idx];
 		qboolean selected = (idx == modsmenu.list.cursor);
+		int row = i;
+		int item_y;
+
+		if (M_Mods_HasDownloadGap() && i > 0)
+			row++;
+		item_y = y + row * 8;
 
 		if (modsmenu.list.search.len > 0)
 		{
-			M_PrintHighlightScroll2(x, y + i * 8, (cols - 2) * 8,
-				modsmenu.items[mod_idx].name,
-				modsmenu.items[mod_idx].description,
-				modsmenu.list.search.text,
-				selected ? modsmenu.ticker.scroll_time : 0.0);
+			if (modsmenu.items[mod_idx].download_menu)
+			{
+				M_Mods_DrawDownloadMenuPrompt(x, item_y,
+					modsmenu.list.search.text,
+					modsmenu.list.search.len);
+			}
+			else
+			{
+				M_PrintHighlightScroll2(x, item_y, (cols - 2) * 8,
+					modsmenu.items[mod_idx].name,
+					modsmenu.items[mod_idx].description,
+					modsmenu.list.search.text,
+					selected ? modsmenu.ticker.scroll_time : 0.0);
+			}
 		}
 		else
 		{
-			M_PrintScroll2(x, y + i * 8, (cols - 2) * 8,
-				modsmenu.items[mod_idx].name,
-				modsmenu.items[mod_idx].description,
-				selected ? modsmenu.ticker.scroll_time : 0.0,
-				!modsmenu.items[mod_idx].active);
+			if (modsmenu.items[mod_idx].download_menu)
+			{
+				M_Mods_DrawDownloadMenuPrompt(x, item_y, NULL, 0);
+			}
+			else
+			{
+				M_PrintScroll2(x, item_y, (cols - 2) * 8,
+					modsmenu.items[mod_idx].name,
+					modsmenu.items[mod_idx].description,
+					selected ? modsmenu.ticker.scroll_time : 0.0,
+					!modsmenu.items[mod_idx].active);
+			}
 		}
 
 		if (selected)
-			M_DrawCharacter(x - 8, y + i * 8, 12 + ((int)(realtime * 4) & 1));
+			M_DrawCharacter(x - 8, item_y, 12 + ((int)(realtime * 4) & 1));
 	}
 
 	if (M_List_GetOverflow(&modsmenu.list) > 0)
@@ -28626,7 +28705,7 @@ void M_Mods_Draw(void)
 		if (modsmenu.list.scroll > 0)
 			M_DrawEllipsisBar(x, y - 8, cols);
 		if (modsmenu.list.scroll + modsmenu.list.viewsize < modsmenu.list.numitems)
-			M_DrawEllipsisBar(x, y + modsmenu.list.viewsize * 8, cols);
+			M_DrawEllipsisBar(x, y + (modsmenu.list.viewsize + (M_Mods_HasDownloadGap() ? 1 : 0)) * 8, cols);
 	}
 
 	if (modsmenu.list.search.len > 0) // Draw search box if search is active
@@ -28651,7 +28730,7 @@ qboolean M_Mods_Match(int index, char initial)
 
 void M_Mods_Key(int key)
 {
-	
+
 	int x, y; // woods #mousemenu
 
 	if (keydown[K_CTRL])
@@ -28695,7 +28774,7 @@ void M_Mods_Key(int key)
 		}
 		return;
 	}
-	
+
 	if (M_List_Key(&modsmenu.list, key))
 		return;
 
@@ -28739,6 +28818,11 @@ void M_Mods_Key(int key)
 		if (modsmenu.list.numitems > 0)
 		{
 			int mod_idx = modsmenu.filtered_indices[modsmenu.list.cursor];
+			if (modsmenu.items[mod_idx].download_menu)
+			{
+				M_Menu_DownloadMods_f();
+				break;
+			}
 			Cbuf_AddText(va("game \"%s\"\n", modsmenu.items[mod_idx].name));
 			M_Menu_Main_f();
 		}
@@ -28748,7 +28832,14 @@ void M_Mods_Key(int key)
 		x = m_mousex - modsmenu.x - (modsmenu.cols - 1) * 8;
 		y = m_mousey - modsmenu.y;
 		if (x < -8 || !M_List_UseScrollbar(&modsmenu.list, y))
+		{
+			if (M_Mods_MouseYInDownloadGap(y))
+			{
+				S_LocalSound ("misc/menu3.wav");
+				break;
+			}
 			goto enter;
+		}
 		modsmenu.scrollbar_grab = true;
 		M_Mods_Mousemove(m_mousex, m_mousey);
 
@@ -28772,7 +28863,2873 @@ void M_Mods_Mousemove(int cx, int cy) // woods #mousemenu
 		// Note: no return, we also update the cursor
 	}
 
+	if (M_Mods_MouseYInDownloadGap(cy))
+		return;
+	if (M_Mods_HasDownloadGap() && cy >= 16)
+		cy -= 8;
+
 	M_List_Mousemove(&modsmenu.list, cy);
+}
+
+/*
+==================
+Download Mods Menu
+==================
+*/
+
+#define MAX_VIS_DOWNLOAD_MODS	17
+#define DOWNLOAD_MODS_LIST_X	8
+#define DOWNLOAD_MODS_LIST_Y	32
+#define DOWNLOAD_MODS_LIST_COLS	38
+#define DOWNLOAD_MODS_NAME_CHARS	27
+#define DOWNLOAD_MODS_DETAIL_CHARS \
+	(DOWNLOAD_MODS_LIST_COLS - DOWNLOAD_MODS_NAME_CHARS - 3)
+#define DOWNLOAD_MODS_SEPARATOR_INDEX	-1
+#define DOWNLOAD_MODS_MAX_URL	1024
+#define DOWNLOAD_MODS_MAX_MANIFEST_BYTES	((curl_off_t)1024 * 1024)
+#define DOWNLOAD_MODS_MAX_SPLIT_PART_BYTES	((curl_off_t)2 * 1024 * 1024 * 1024)
+#define DOWNLOAD_MODS_MAX_ARCHIVE_BYTES		((curl_off_t)3 * 1024 * 1024 * 1024)
+#define DOWNLOAD_MODS_QBJ3_ZIP_FILENAME		"qbj3_1.3.zip"
+#define DOWNLOAD_MODS_QBJ3_PART_AAA_URL \
+	"https://github.com/q1tools/q1tools.github.io/releases/download/qbj3-1.3/qbj3_1.3.zip.part-aaa"
+#define DOWNLOAD_MODS_QBJ3_PART_AAB_URL \
+	"https://github.com/q1tools/q1tools.github.io/releases/download/qbj3-1.3/qbj3_1.3.zip.part-aab"
+#define DOWNLOAD_MODS_QBJ3_PART_AAA_SHA256 \
+	"8b442fe7da4d4ab426bc43e4eb5e72985bef9f36b221c0d65fc13e1d48ed2915"
+#define DOWNLOAD_MODS_QBJ3_PART_AAB_SHA256 \
+	"934a78404654431b43ea78a45d2d6ecb5152ebf77bab581103b4b484edc9b26c"
+#define DOWNLOAD_MODS_QBJ3_ZIP_SHA256 \
+	"bdfd7313ea4231695c56bceac8f098f7cfe89a86f7398b7a212eb2e193006904"
+#define DOWNLOAD_MODS_AD_URL \
+	"https://github.com/q1tools/q1tools.github.io/releases/download/ad-v1.80p1/ad_v1_80p1final.zip"
+#define DOWNLOAD_MODS_QBJ1_URL \
+	"https://github.com/q1tools/q1tools.github.io/releases/download/qbj1-1.0.5/qbj_1.05.zip"
+#define DOWNLOAD_MODS_QBJ2_URL \
+	"https://github.com/q1tools/q1tools.github.io/releases/download/qbj2-1.2/qbj2_1.2.zip"
+#define DOWNLOAD_MODS_SJ2_URL \
+	"https://github.com/q1tools/q1tools.github.io/releases/download/sj2/sewerjam2.zip"
+#define DOWNLOAD_MODS_BONK_URL \
+	"https://github.com/q1tools/q1tools.github.io/releases/download/bonk-1.0/bonkjam.zip"
+#define DOWNLOAD_MODS_AGJAM_URL \
+	"https://github.com/q1tools/q1tools.github.io/releases/download/agjam-1.2/antigravityjam1.2.zip"
+
+typedef enum
+{
+	DOWNLOADMOD_SPLIT_ZIP,
+	DOWNLOADMOD_SPLIT_MANIFEST,
+	DOWNLOADMOD_SINGLE_ZIP
+} downloadmodtype_t;
+
+typedef struct
+{
+	downloadmodtype_t type;
+	char		id[32];
+	char		name[64];
+	char		version[32];
+	char		size[32];
+	char		description[96];
+	char		install_dir[MAX_QPATH];
+	char		url[DOWNLOAD_MODS_MAX_URL];
+	char		sha256[65];
+	qboolean	installed;
+} downloadmoditem_t;
+
+static struct
+{
+	menulist_t			list;
+	enum m_state_e		prev;
+	int					x, y, cols;
+	int					itemcount;
+	int					prev_cursor;
+	int					exit_prompt_cursor;
+	menuticker_t		ticker;
+	qboolean			scrollbar_grab;
+	qboolean			exit_prompt;
+	char				message[96];
+	double				message_time;
+	downloadmoditem_t	*items;
+	int					*filtered_indices;
+} downloadmodsmenu;
+
+typedef enum
+{
+	DOWNLOADMOD_EXIT_BACKGROUND,
+	DOWNLOADMOD_EXIT_CANCEL,
+	DOWNLOADMOD_EXIT_COUNT
+} downloadmodexitchoice_t;
+
+static const downloadmoditem_t downloadmods_builtin[] =
+{
+	/* Update each URL and SHA-256 together; split ZIP entries also need
+	 * hashes for every custom part and for the final joined ZIP. */
+	{
+		DOWNLOADMOD_SPLIT_ZIP,
+		"qbj3",
+		"Quake Brutalist Jam III",
+		"1.3",
+		"2.6 GB",
+		"GitHub split ZIP release",
+		"qbj3",
+		"",
+		DOWNLOAD_MODS_QBJ3_ZIP_SHA256,
+		false
+	},
+	{
+		DOWNLOADMOD_SINGLE_ZIP,
+		"ad",
+		"Arcane Dimensions",
+		"1.80p1",
+		"306 MB",
+		"Single ZIP release",
+		"ad",
+		DOWNLOAD_MODS_AD_URL,
+		"7ad993da6c760c446ca31fad71e9f5b6c9eee99b6354f161aa746b572fe70a7d",
+		false
+	},
+	{
+		DOWNLOADMOD_SINGLE_ZIP,
+		"qbj1",
+		"Quake Brutalist Jam I",
+		"1.0.5",
+		"480 MB",
+		"Single ZIP release",
+		"qbj",
+		DOWNLOAD_MODS_QBJ1_URL,
+		"afdd6d54821214c3cf7e8178793c21c3c37afe19c349f3dab9f1f7347e6a1449",
+		false
+	},
+	{
+		DOWNLOADMOD_SINGLE_ZIP,
+		"qbj2",
+		"Quake Brutalist Jam II",
+		"1.2",
+		"480 MB",
+		"Single ZIP release",
+		"qbj2",
+		DOWNLOAD_MODS_QBJ2_URL,
+		"abd642cf88df0c53756768dae023a73955e643adc12afbf5802dec011e90bef8",
+		false
+	},
+	{
+		DOWNLOADMOD_SINGLE_ZIP,
+		"sj2",
+		"Sewer Jam 2",
+		"",
+		"232 MB",
+		"Single ZIP release",
+		"sewerjam2",
+		DOWNLOAD_MODS_SJ2_URL,
+		"ff4a1016f152ecaa2ab0007e164de4cb8fda4e60f36acd9bca16e6581a180f8c",
+		false
+	},
+	{
+		DOWNLOADMOD_SINGLE_ZIP,
+		"bonk",
+		"Bonk Jam",
+		"1.0",
+		"358 MB",
+		"Single ZIP release",
+		"bonkjam",
+		DOWNLOAD_MODS_BONK_URL,
+		"5157acb20be50e453ae38335c5cbc60cff2a09457855f153b44dbff6b6c35ced",
+		false
+	},
+	{
+		DOWNLOADMOD_SINGLE_ZIP,
+		"agjam",
+		"Antigravity Jam",
+		"1.2",
+		"126 MB",
+		"Single ZIP release",
+		"antigravityjam",
+		DOWNLOAD_MODS_AGJAM_URL,
+		"685c20c5e9d82615afbe3f1828d521823fb1e2f5df3a5de09f069ec99a1aea90",
+		false
+	}
+};
+
+static void M_DownloadMods_SetMessage(const char *message)
+{
+	q_strlcpy(downloadmodsmenu.message, message, sizeof(downloadmodsmenu.message));
+	downloadmodsmenu.message_time = realtime;
+}
+
+static void M_DownloadMods_Add(const downloadmoditem_t *item)
+{
+	if (!item)
+		return;
+
+	VEC_PUSH(downloadmodsmenu.items, *item);
+	downloadmodsmenu.itemcount = (int)VEC_SIZE(downloadmodsmenu.items);
+}
+
+static qboolean M_DownloadMods_InstallDirNameOkay(const char *name);
+static qboolean M_DownloadMods_PathLooksInstalled(const char *path);
+
+static qboolean M_DownloadMods_ProbeInstalledAt(const downloadmoditem_t *item,
+	const char *root, const char *prefix)
+{
+	char game_path[MAX_OSPATH];
+
+	if (!root || !*root)
+		return false;
+
+	if (prefix && *prefix)
+	{
+		if ((size_t)q_snprintf(game_path, sizeof(game_path), "%s/%s/%s",
+			root, prefix, item->install_dir) >= sizeof(game_path))
+			return false;
+	}
+	else if ((size_t)q_snprintf(game_path, sizeof(game_path), "%s/%s",
+		root, item->install_dir) >= sizeof(game_path))
+		return false;
+
+	return M_DownloadMods_PathLooksInstalled(game_path);
+}
+
+static qboolean M_DownloadMods_ProbeInstalled(const downloadmoditem_t *item)
+{
+	static const char *prefixes[] = { "", "games", "mods" };
+	size_t i;
+
+	if (!item || !M_DownloadMods_InstallDirNameOkay(item->install_dir))
+		return false;
+
+	for (i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++)
+	{
+		if (M_DownloadMods_ProbeInstalledAt(item, com_basedir, prefixes[i]))
+			return true;
+		if (host_parms && host_parms->userdir != host_parms->basedir &&
+			M_DownloadMods_ProbeInstalledAt(item, host_parms->userdir, prefixes[i]))
+			return true;
+	}
+
+	return false;
+}
+
+static void M_DownloadMods_RefreshInstalledCache(void)
+{
+	int i;
+
+	for (i = 0; i < downloadmodsmenu.itemcount; i++)
+		downloadmodsmenu.items[i].installed =
+			M_DownloadMods_ProbeInstalled(&downloadmodsmenu.items[i]);
+}
+
+static qboolean M_DownloadMods_IsInstalled(const downloadmoditem_t *item)
+{
+	return item && item->installed;
+}
+
+static qboolean M_DownloadMods_ItemMatchesSearch(const downloadmoditem_t *item)
+{
+	if (!item)
+		return false;
+
+	if (downloadmodsmenu.list.search.len == 0)
+		return true;
+
+	return q_strcasestr(item->name, downloadmodsmenu.list.search.text) ||
+		q_strcasestr(item->version, downloadmodsmenu.list.search.text) ||
+		q_strcasestr(item->description, downloadmodsmenu.list.search.text) ||
+		q_strcasestr(item->id, downloadmodsmenu.list.search.text);
+}
+
+static int M_DownloadMods_CompareItems(const void *a, const void *b)
+{
+	int ia = *(const int *)a;
+	int ib = *(const int *)b;
+	const downloadmoditem_t *item_a = &downloadmodsmenu.items[ia];
+	const downloadmoditem_t *item_b = &downloadmodsmenu.items[ib];
+	int result;
+
+	result = q_strcasecmp(item_a->name, item_b->name);
+	if (result)
+		return result;
+
+	result = q_strcasecmp(item_a->version, item_b->version);
+	if (result)
+		return result;
+
+	return q_strcasecmp(item_a->id, item_b->id);
+}
+
+static qboolean M_DownloadMods_IsSelectableDisplayIndex(int index)
+{
+	int item_idx;
+
+	if (index < 0 || index >= downloadmodsmenu.list.numitems)
+		return false;
+
+	item_idx = downloadmodsmenu.filtered_indices[index];
+	return item_idx != DOWNLOAD_MODS_SEPARATOR_INDEX;
+}
+
+static qboolean M_DownloadMods_EnsureSelectableCursor(int dir)
+{
+	if (downloadmodsmenu.list.numitems <= 0)
+		return false;
+
+	if (M_DownloadMods_IsSelectableDisplayIndex(downloadmodsmenu.list.cursor))
+		return true;
+
+	if (M_List_SelectNextActive(&downloadmodsmenu.list,
+		downloadmodsmenu.list.cursor, dir, true))
+		return true;
+
+	downloadmodsmenu.list.cursor = 0;
+	downloadmodsmenu.list.scroll = 0;
+	return false;
+}
+
+static void M_DownloadMods_EnsureSelectableCursorForKey(int key)
+{
+	switch (key)
+	{
+	case K_UPARROW:
+	case K_KP_UPARROW:
+	case K_PGUP:
+	case K_KP_PGUP:
+	case K_END:
+	case K_KP_END:
+		M_DownloadMods_EnsureSelectableCursor(-1);
+		break;
+
+	default:
+		M_DownloadMods_EnsureSelectableCursor(1);
+		break;
+	}
+}
+
+static void M_DownloadMods_Refilter(void)
+{
+	int i;
+	char selected_id[sizeof(downloadmodsmenu.items[0].id)] = "";
+	int *download_indices = NULL;
+	int *installed_indices = NULL;
+
+	if (downloadmodsmenu.filtered_indices &&
+		downloadmodsmenu.list.cursor >= 0 &&
+		downloadmodsmenu.list.cursor < downloadmodsmenu.list.numitems)
+	{
+		int selected_idx =
+			downloadmodsmenu.filtered_indices[downloadmodsmenu.list.cursor];
+		if (selected_idx != DOWNLOAD_MODS_SEPARATOR_INDEX &&
+			selected_idx >= 0 &&
+			selected_idx < downloadmodsmenu.itemcount)
+		{
+			q_strlcpy(selected_id, downloadmodsmenu.items[selected_idx].id,
+				sizeof(selected_id));
+		}
+	}
+
+	VEC_CLEAR(downloadmodsmenu.filtered_indices);
+
+	for (i = 0; i < downloadmodsmenu.itemcount; i++)
+	{
+		downloadmoditem_t *item = &downloadmodsmenu.items[i];
+
+		if (!M_DownloadMods_ItemMatchesSearch(item))
+			continue;
+
+		if (M_DownloadMods_IsInstalled(item))
+			VEC_PUSH(installed_indices, i);
+		else
+			VEC_PUSH(download_indices, i);
+	}
+
+	if (VEC_SIZE(download_indices) > 1)
+		qsort(download_indices, VEC_SIZE(download_indices),
+			sizeof(download_indices[0]), M_DownloadMods_CompareItems);
+	if (VEC_SIZE(installed_indices) > 1)
+		qsort(installed_indices, VEC_SIZE(installed_indices),
+			sizeof(installed_indices[0]), M_DownloadMods_CompareItems);
+
+	for (i = 0; i < (int)VEC_SIZE(download_indices); i++)
+		VEC_PUSH(downloadmodsmenu.filtered_indices, download_indices[i]);
+
+	if (VEC_SIZE(download_indices) > 0 && VEC_SIZE(installed_indices) > 0)
+		VEC_PUSH(downloadmodsmenu.filtered_indices, DOWNLOAD_MODS_SEPARATOR_INDEX);
+
+	for (i = 0; i < (int)VEC_SIZE(installed_indices); i++)
+		VEC_PUSH(downloadmodsmenu.filtered_indices, installed_indices[i]);
+
+	VEC_FREE(download_indices);
+	VEC_FREE(installed_indices);
+
+	downloadmodsmenu.list.numitems = (int)VEC_SIZE(downloadmodsmenu.filtered_indices);
+
+	if (selected_id[0])
+	{
+		for (i = 0; i < downloadmodsmenu.list.numitems; i++)
+		{
+			int item_idx = downloadmodsmenu.filtered_indices[i];
+			if (item_idx == DOWNLOAD_MODS_SEPARATOR_INDEX)
+				continue;
+			if (!q_strcasecmp(downloadmodsmenu.items[item_idx].id, selected_id))
+			{
+				downloadmodsmenu.list.cursor = i;
+				break;
+			}
+		}
+	}
+
+	if (downloadmodsmenu.list.numitems <= 0)
+	{
+		downloadmodsmenu.list.cursor = -1;
+		downloadmodsmenu.list.scroll = 0;
+		return;
+	}
+
+	if (downloadmodsmenu.list.cursor >= downloadmodsmenu.list.numitems)
+		downloadmodsmenu.list.cursor = downloadmodsmenu.list.numitems - 1;
+	if (downloadmodsmenu.list.cursor < 0)
+		downloadmodsmenu.list.cursor = 0;
+
+	M_DownloadMods_EnsureSelectableCursor(1);
+	M_List_CenterCursor(&downloadmodsmenu.list);
+}
+
+static void M_DownloadMods_Init(void)
+{
+	size_t i;
+
+	downloadmodsmenu.scrollbar_grab = false;
+	downloadmodsmenu.exit_prompt = false;
+	downloadmodsmenu.exit_prompt_cursor = DOWNLOADMOD_EXIT_BACKGROUND;
+	downloadmodsmenu.prev_cursor = -2;
+	downloadmodsmenu.list.viewsize = MAX_VIS_DOWNLOAD_MODS;
+	downloadmodsmenu.list.cursor = -1;
+	downloadmodsmenu.list.scroll = 0;
+	downloadmodsmenu.list.numitems = 0;
+	downloadmodsmenu.list.isactive_fn = M_DownloadMods_IsSelectableDisplayIndex;
+	downloadmodsmenu.itemcount = 0;
+	downloadmodsmenu.message[0] = '\0';
+	downloadmodsmenu.message_time = 0.0;
+	VEC_CLEAR(downloadmodsmenu.items);
+	VEC_CLEAR(downloadmodsmenu.filtered_indices);
+
+	memset(&downloadmodsmenu.list.search, 0, sizeof(downloadmodsmenu.list.search));
+	downloadmodsmenu.list.search.maxlen = 32;
+
+	M_Ticker_Init(&downloadmodsmenu.ticker);
+
+	for (i = 0; i < countof(downloadmods_builtin); i++)
+		M_DownloadMods_Add(&downloadmods_builtin[i]);
+
+	M_DownloadMods_RefreshInstalledCache();
+	M_DownloadMods_Refilter();
+
+	if (downloadmodsmenu.list.cursor == -1)
+		downloadmodsmenu.list.cursor = 0;
+
+	M_DownloadMods_EnsureSelectableCursor(1);
+	M_List_CenterCursor(&downloadmodsmenu.list);
+}
+
+void M_Menu_DownloadMods_f(void)
+{
+	key_dest = key_menu;
+	downloadmodsmenu.prev = m_state;
+	m_state = m_downloadmods;
+	m_entersound = true;
+	M_DownloadMods_Init();
+}
+
+static downloadmoditem_t *M_DownloadMods_SelectedItem(void)
+{
+	if (downloadmodsmenu.list.numitems <= 0 ||
+		downloadmodsmenu.list.cursor < 0 ||
+		downloadmodsmenu.list.cursor >= downloadmodsmenu.list.numitems)
+		return NULL;
+
+	{
+		int item_idx = downloadmodsmenu.filtered_indices[downloadmodsmenu.list.cursor];
+		if (item_idx == DOWNLOAD_MODS_SEPARATOR_INDEX)
+			return NULL;
+		return &downloadmodsmenu.items[item_idx];
+	}
+}
+
+typedef enum
+{
+	DOWNLOADMOD_INSTALL_NONE,
+	DOWNLOADMOD_INSTALL_MANIFEST,
+	DOWNLOADMOD_INSTALL_ARCHIVE
+} downloadmodinstallstage_t;
+
+typedef struct
+{
+	char	url[DOWNLOAD_MODS_MAX_URL];
+	char	sha256[65];
+	char	filename[MAX_QPATH];
+	char	temp_path[MAX_OSPATH];
+} downloadmodpart_t;
+
+typedef struct
+{
+	qboolean	active;
+	qboolean	downloading;
+	qboolean	done;
+	qboolean	success;
+	qboolean	aborted;
+	SDL_Thread	*thread;
+	char		url[DOWNLOAD_MODS_MAX_URL];
+	char		temp_path[MAX_OSPATH];
+	char		display_name[64];
+	char		error[128];
+	double		received;
+	double		total;
+	curl_off_t	max_bytes;
+	qofs_t		file_size;
+	long		response_code;
+	CURLcode	curl_result;
+} downloadmodtransfer_t;
+
+static struct
+{
+	qboolean					active;
+	downloadmodinstallstage_t	stage;
+	downloadmoditem_t			item;
+	downloadmodpart_t			*parts;
+	int							part_index;
+	char						stage_dir[MAX_OSPATH];
+	char						joined_zip[MAX_OSPATH];
+	char						status[96];
+	double						last_progress_print;
+	SDL_mutex					*mutex;
+	SDL_atomic_t				abort_requested;
+	SDL_atomic_t				size_exceeded;
+	downloadmodtransfer_t		transfer;
+} downloadmodinstall;
+
+extern qboolean stop_curl_download;
+extern qboolean curl_download_active;
+
+static qboolean M_DownloadMods_InstallDirNameOkay(const char *name)
+{
+	if (!name || !*name)
+		return false;
+	if (!strcmp(name, ".") || strstr(name, "..") ||
+		strchr(name, '/') || strchr(name, '\\') || strchr(name, ':'))
+		return false;
+	return true;
+}
+
+static void M_DownloadMods_SetInstallStatus(const char *status)
+{
+	if (downloadmodinstall.mutex)
+		SDL_LockMutex(downloadmodinstall.mutex);
+	q_strlcpy(downloadmodinstall.status, status ? status : "",
+		sizeof(downloadmodinstall.status));
+	if (downloadmodinstall.mutex)
+		SDL_UnlockMutex(downloadmodinstall.mutex);
+	if (status && *status)
+		M_DownloadMods_SetMessage(status);
+}
+
+static void M_DownloadMods_SetWorkerStatus(const char *status)
+{
+	if (downloadmodinstall.mutex)
+		SDL_LockMutex(downloadmodinstall.mutex);
+	q_strlcpy(downloadmodinstall.status, status ? status : "",
+		sizeof(downloadmodinstall.status));
+	if (downloadmodinstall.mutex)
+		SDL_UnlockMutex(downloadmodinstall.mutex);
+}
+
+static void M_DownloadMods_SetWorkerStage(downloadmodinstallstage_t stage)
+{
+	if (downloadmodinstall.mutex)
+		SDL_LockMutex(downloadmodinstall.mutex);
+	downloadmodinstall.stage = stage;
+	if (downloadmodinstall.mutex)
+		SDL_UnlockMutex(downloadmodinstall.mutex);
+}
+
+static void M_DownloadMods_SetWorkerPartIndex(int part_index)
+{
+	if (downloadmodinstall.mutex)
+		SDL_LockMutex(downloadmodinstall.mutex);
+	downloadmodinstall.part_index = part_index;
+	if (downloadmodinstall.mutex)
+		SDL_UnlockMutex(downloadmodinstall.mutex);
+}
+
+static int M_DownloadMods_CopyPartIndex(void)
+{
+	int part_index;
+
+	if (downloadmodinstall.mutex)
+		SDL_LockMutex(downloadmodinstall.mutex);
+	part_index = downloadmodinstall.part_index;
+	if (downloadmodinstall.mutex)
+		SDL_UnlockMutex(downloadmodinstall.mutex);
+
+	return part_index;
+}
+
+static qboolean M_DownloadMods_CopyInstallStateForItem(const downloadmoditem_t *item,
+	downloadmodinstallstage_t *stage, char *status, size_t status_size)
+{
+	qboolean active = false;
+
+	if (status && status_size)
+		status[0] = '\0';
+	if (!item)
+		return false;
+
+	if (downloadmodinstall.mutex)
+		SDL_LockMutex(downloadmodinstall.mutex);
+	active = downloadmodinstall.active &&
+		!q_strcasecmp(downloadmodinstall.item.id, item->id);
+	if (active)
+	{
+		if (stage)
+			*stage = downloadmodinstall.stage;
+		if (status && status_size)
+			q_strlcpy(status, downloadmodinstall.status, status_size);
+	}
+	if (downloadmodinstall.mutex)
+		SDL_UnlockMutex(downloadmodinstall.mutex);
+
+	return active;
+}
+
+static void M_DownloadMods_FormatSize(double bytes, char *out, size_t outsize)
+{
+	double kb, mb;
+
+	if (bytes < 0.0)
+		bytes = 0.0;
+	kb = bytes / 1024.0;
+	mb = bytes / (1024.0 * 1024.0);
+
+	if (mb >= 1.0)
+		q_snprintf(out, outsize, "%.2f mb", mb);
+	else if (kb >= 1.0)
+		q_snprintf(out, outsize, "%.0f kb", kb);
+	else
+		q_snprintf(out, outsize, "%.0f bytes", bytes);
+}
+
+static qboolean M_DownloadMods_UrlAllowed(const char *url)
+{
+	return url && !q_strncasecmp(url, "https://", 8);
+}
+
+static void M_DownloadMods_FileNameFromUrl(const char *url, char *out, size_t outsize)
+{
+	const char *base, *end;
+	size_t len;
+
+	if (!url || !*url)
+	{
+		q_strlcpy(out, "download.zip", outsize);
+		return;
+	}
+
+	base = COM_SkipPath(url);
+	end = base;
+	while (*end && *end != '?' && *end != '#')
+		end++;
+	len = (size_t)(end - base);
+	if (len <= 0)
+		q_strlcpy(out, "download.zip", outsize);
+	else
+	{
+		if (len >= outsize)
+			len = outsize - 1;
+		memcpy(out, base, len);
+		out[len] = '\0';
+	}
+}
+
+static qboolean M_DownloadMods_BuildTempPath(const char *suffix, char *out, size_t outsize)
+{
+	char safe_suffix[MAX_QPATH];
+	char path_copy[MAX_OSPATH];
+	const char *s;
+	char *d;
+	size_t len;
+	int part_index;
+
+	for (s = suffix, d = safe_suffix; s && *s && d < safe_suffix + sizeof(safe_suffix) - 1; s++)
+	{
+		if (*s == '/' || *s == '\\' || *s == ':' || *s == '?' || *s == '#')
+			*d++ = '_';
+		else
+			*d++ = *s;
+	}
+	*d = '\0';
+	if (!safe_suffix[0])
+		q_strlcpy(safe_suffix, "download.tmp", sizeof(safe_suffix));
+
+	part_index = M_DownloadMods_CopyPartIndex();
+	len = q_snprintf(out, outsize, "%s/qssm-downloads/%s-%d-%d-%s",
+		com_basedir, downloadmodinstall.item.id, host_framecount,
+		part_index, safe_suffix);
+	if (len >= outsize)
+		return false;
+
+	q_strlcpy(path_copy, out, sizeof(path_copy));
+	COM_CreatePath(path_copy);
+	return true;
+}
+
+static qboolean M_DownloadMods_BuildStageDir(void)
+{
+	size_t len;
+
+	len = q_snprintf(downloadmodinstall.stage_dir,
+		sizeof(downloadmodinstall.stage_dir),
+		"%s/qssm-downloads/%s-stage-%d",
+		com_basedir, downloadmodinstall.item.id, host_framecount);
+	if (len >= sizeof(downloadmodinstall.stage_dir))
+	{
+		downloadmodinstall.stage_dir[0] = '\0';
+		return false;
+	}
+	return true;
+}
+
+static qboolean M_DownloadMods_EnsureMutex(void)
+{
+	if (downloadmodinstall.mutex)
+		return true;
+
+	downloadmodinstall.mutex = SDL_CreateMutex();
+	if (!downloadmodinstall.mutex)
+	{
+		Con_Printf("Unable to initialize mod download mutex: %s\n", SDL_GetError());
+		return false;
+	}
+	return true;
+}
+
+static size_t M_DownloadMods_WriteData(void *ptr, size_t size, size_t nmemb, void *stream)
+{
+	return fwrite(ptr, size, nmemb, (FILE *)stream) * size;
+}
+
+static int M_DownloadMods_ProgressCallback(void *clientp, curl_off_t dltotal,
+	curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+	curl_off_t max_bytes = 0;
+
+	(void)clientp;
+	(void)ultotal;
+	(void)ulnow;
+
+	if (stop_curl_download || SDL_AtomicGet(&downloadmodinstall.abort_requested))
+		return 1;
+
+	if (downloadmodinstall.mutex)
+	{
+		SDL_LockMutex(downloadmodinstall.mutex);
+		max_bytes = downloadmodinstall.transfer.max_bytes;
+		downloadmodinstall.transfer.received = (double)dlnow;
+		downloadmodinstall.transfer.total = (double)dltotal;
+		SDL_UnlockMutex(downloadmodinstall.mutex);
+	}
+
+	if (max_bytes > 0 &&
+		((dltotal > 0 && dltotal > max_bytes) || dlnow > max_bytes))
+	{
+		SDL_AtomicSet(&downloadmodinstall.size_exceeded, 1);
+		return 1;
+	}
+
+	return 0;
+}
+
+static void M_DownloadMods_CurlOptions(CURL *curl)
+{
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+#if CURL_AT_LEAST_VERSION(7, 85, 0)
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+#else
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+}
+
+static qboolean M_DownloadMods_CancelRequested(void)
+{
+	return stop_curl_download || SDL_AtomicGet(&downloadmodinstall.abort_requested);
+}
+
+static void M_DownloadMods_BeginSharedDownloadProgress(const char *display_name);
+
+static qboolean M_DownloadMods_RunTransfer(const char *url, const char *temp_path,
+	const char *display_name, curl_off_t max_bytes, qofs_t *file_size,
+	qboolean *aborted, char *error, size_t error_size)
+{
+	qboolean success = false;
+	long response_code = 0;
+	qofs_t local_file_size = 0;
+	CURLcode result = CURLE_OK;
+	FILE *fp;
+	CURL *curl;
+	qboolean write_failed;
+
+	if (file_size)
+		*file_size = 0;
+	if (aborted)
+		*aborted = false;
+	if (error && error_size > 0)
+		error[0] = '\0';
+
+	if (!M_DownloadMods_UrlAllowed(url))
+	{
+		q_snprintf(error, error_size, "Invalid download URL");
+		return false;
+	}
+
+	SDL_LockMutex(downloadmodinstall.mutex);
+	downloadmodinstall.transfer.downloading = true;
+	downloadmodinstall.transfer.received = 0.0;
+	downloadmodinstall.transfer.total = 0.0;
+	downloadmodinstall.transfer.file_size = 0;
+	downloadmodinstall.transfer.response_code = 0;
+	downloadmodinstall.transfer.curl_result = CURLE_OK;
+	downloadmodinstall.transfer.max_bytes = max_bytes;
+	q_strlcpy(downloadmodinstall.transfer.url, url, sizeof(downloadmodinstall.transfer.url));
+	q_strlcpy(downloadmodinstall.transfer.temp_path, temp_path,
+		sizeof(downloadmodinstall.transfer.temp_path));
+	q_strlcpy(downloadmodinstall.transfer.display_name, display_name,
+		sizeof(downloadmodinstall.transfer.display_name));
+	downloadmodinstall.transfer.error[0] = '\0';
+	SDL_AtomicSet(&downloadmodinstall.size_exceeded, 0);
+	SDL_UnlockMutex(downloadmodinstall.mutex);
+
+	/* cls.download (read by the renderer) is owned by the main thread; the
+	 * Frame mirror initializes it when it observes this transfer start. */
+
+	fp = fopen(temp_path, "wb");
+	if (!fp)
+	{
+		q_snprintf(error, error_size, "Unable to open temp file: %s", strerror(errno));
+		goto done;
+	}
+
+	curl = curl_easy_init();
+	if (!curl)
+	{
+		fclose(fp);
+		q_strlcpy(error, "Unable to initialize curl", error_size);
+		goto done;
+	}
+
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 1024L);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, M_DownloadMods_WriteData);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, M_DownloadMods_ProgressCallback);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 0L);
+	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 500L);
+	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 10L);
+	if (max_bytes > 0)
+		curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, max_bytes);
+	M_DownloadMods_CurlOptions(curl);
+
+	result = curl_easy_perform(curl);
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+	write_failed = (fflush(fp) != 0 || ferror(fp));
+	if (fseek(fp, 0, SEEK_END) == 0)
+		local_file_size = ftell(fp);
+	if (local_file_size < 0)
+		local_file_size = 0;
+
+	fclose(fp);
+	curl_easy_cleanup(curl);
+
+	if (write_failed && result == CURLE_OK)
+		result = CURLE_WRITE_ERROR;
+
+	if (SDL_AtomicGet(&downloadmodinstall.size_exceeded) ||
+		result == CURLE_FILESIZE_EXCEEDED)
+	{
+		char sizeStr[32];
+		M_DownloadMods_FormatSize(max_bytes, sizeStr, sizeof(sizeStr));
+		q_snprintf(error, error_size, "Download exceeded %s limit", sizeStr);
+		unlink(temp_path);
+	}
+	else if (M_DownloadMods_CancelRequested() ||
+		result == CURLE_ABORTED_BY_CALLBACK)
+	{
+		if (aborted)
+			*aborted = true;
+		q_strlcpy(error, "Download cancelled", error_size);
+		unlink(temp_path);
+	}
+	else if (result == CURLE_OK && response_code >= 200 && response_code < 300)
+	{
+		success = true;
+	}
+	else if (result != CURLE_OK)
+	{
+		q_snprintf(error, error_size, "%s", curl_easy_strerror(result));
+		unlink(temp_path);
+	}
+	else
+	{
+		q_snprintf(error, error_size, "HTTP %ld", response_code);
+		unlink(temp_path);
+	}
+
+done:
+	SDL_LockMutex(downloadmodinstall.mutex);
+	downloadmodinstall.transfer.downloading = false;
+	downloadmodinstall.transfer.response_code = response_code;
+	downloadmodinstall.transfer.file_size = local_file_size;
+	downloadmodinstall.transfer.curl_result = result;
+	if (error)
+		q_strlcpy(downloadmodinstall.transfer.error, error,
+			sizeof(downloadmodinstall.transfer.error));
+	SDL_UnlockMutex(downloadmodinstall.mutex);
+
+	if (file_size)
+		*file_size = local_file_size;
+	return success;
+}
+
+static void M_DownloadMods_BeginSharedDownloadProgress(const char *display_name)
+{
+	cls.download.active = true;
+	cls.download.chunked = false;
+	cls.download.completedbytes = 0;
+	cls.download.ratebytes = 0;
+	cls.download.rate = 0;
+	cls.download.ratetime = realtime;
+	cls.download.chunkedstaleuntil = 0;
+	cls.download.percent = -1.0f;
+	cls.download.received = 0.0;
+	cls.download.total = 0.0;
+	cls.download.starttime = (float)realtime;
+	cls.download.current[0] = '\0';
+	q_strlcpy(cls.download.current, display_name, sizeof(cls.download.current));
+}
+
+static int M_DownloadMods_InstallThread(void *unused);
+
+static qboolean M_DownloadMods_StartWorker(void)
+{
+	SDL_Thread *thread;
+
+	if (cls.download.active || curl_download_active)
+	{
+		M_DownloadMods_SetInstallStatus("another download is active");
+		Con_Printf("A download is already active\n");
+		return false;
+	}
+
+	if (!M_DownloadMods_EnsureMutex())
+		return false;
+
+	SDL_LockMutex(downloadmodinstall.mutex);
+	memset(&downloadmodinstall.transfer, 0, sizeof(downloadmodinstall.transfer));
+	downloadmodinstall.transfer.active = true;
+	SDL_AtomicSet(&downloadmodinstall.abort_requested, 0);
+	SDL_AtomicSet(&downloadmodinstall.size_exceeded, 0);
+	SDL_UnlockMutex(downloadmodinstall.mutex);
+
+	stop_curl_download = false;
+	curl_download_active = true;
+
+	thread = SDL_CreateThread(M_DownloadMods_InstallThread, "ModInstall", NULL);
+	if (!thread)
+	{
+		SDL_LockMutex(downloadmodinstall.mutex);
+		downloadmodinstall.transfer.active = false;
+		SDL_UnlockMutex(downloadmodinstall.mutex);
+		cls.download.active = false;
+		curl_download_active = false;
+		q_snprintf(downloadmodinstall.status, sizeof(downloadmodinstall.status),
+			"install thread failed");
+		Con_Printf("Unable to start mod install worker: %s\n", SDL_GetError());
+		return false;
+	}
+
+	SDL_LockMutex(downloadmodinstall.mutex);
+	downloadmodinstall.transfer.thread = thread;
+	SDL_UnlockMutex(downloadmodinstall.mutex);
+	return true;
+}
+
+static qboolean M_DownloadMods_SHA256StringOkay(const char *sha)
+{
+	int i;
+
+	if (!sha || !*sha)
+		return true;
+	if (strlen(sha) != 64)
+		return false;
+	for (i = 0; i < 64; i++)
+		if (!q_isxdigit((unsigned char)sha[i]))
+			return false;
+	return true;
+}
+
+static qboolean M_DownloadMods_VerifySHA256(const char *path, const char *expected)
+{
+	FILE *f;
+	void *ctx;
+	byte buffer[65536];
+	byte digest[32];
+	char actual[65];
+	size_t readbytes, i;
+
+	if (!expected || !*expected)
+		return true;
+	if (!M_DownloadMods_SHA256StringOkay(expected))
+	{
+		Con_Printf("Invalid expected SHA-256 for %s\n", downloadmodinstall.item.name);
+		return false;
+	}
+
+	f = fopen(path, "rb");
+	if (!f)
+	{
+		Con_Printf("Unable to open downloaded file for SHA-256: %s\n", path);
+		return false;
+	}
+
+	ctx = malloc(hash_sha2_256.contextsize);
+	if (!ctx)
+	{
+		fclose(f);
+		return false;
+	}
+
+	hash_sha2_256.init(ctx);
+	while ((readbytes = fread(buffer, 1, sizeof(buffer), f)) > 0)
+	{
+		if (M_DownloadMods_CancelRequested())
+		{
+			free(ctx);
+			fclose(f);
+			return false;
+		}
+		hash_sha2_256.process(ctx, buffer, readbytes);
+	}
+	hash_sha2_256.terminate(digest, ctx);
+
+	free(ctx);
+	if (ferror(f))
+	{
+		fclose(f);
+		return false;
+	}
+	fclose(f);
+
+	for (i = 0; i < sizeof(digest); i++)
+		q_snprintf(actual + i * 2, sizeof(actual) - i * 2, "%02x", digest[i]);
+
+	if (q_strcasecmp(actual, expected))
+	{
+		Con_Printf("SHA-256 mismatch for %s\nexpected: %s\nactual:   %s\n",
+			COM_SkipPath(path), expected, actual);
+		return false;
+	}
+
+	return true;
+}
+
+static qboolean M_DownloadMods_PathLooksInstalled(const char *path)
+{
+	char check[MAX_OSPATH];
+	int pak_num;
+
+	q_snprintf(check, sizeof(check), "%s/progs.dat", path);
+	if (Sys_FileType(check) & FS_ENT_FILE)
+		return true;
+
+	for (pak_num = 0; pak_num < 10; pak_num++)
+	{
+		q_snprintf(check, sizeof(check), "%s/pak%d.pak", path, pak_num);
+		if (Sys_FileType(check) & FS_ENT_FILE)
+			return true;
+	}
+
+	for (pak_num = 0; pak_num < 10; pak_num++)
+	{
+		q_snprintf(check, sizeof(check), "%s/paks/pak%d.pak", path, pak_num);
+		if (Sys_FileType(check) & FS_ENT_FILE)
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean M_DownloadMods_ResolvedUnderMods(const char *resolved)
+{
+	return resolved &&
+		(!q_strncasecmp(resolved, "mods/", 5) ||
+		 !q_strncasecmp(resolved, "mods\\", 5));
+}
+
+static qboolean M_DownloadMods_ModListNameCounts(const char *name)
+{
+	return name && *name &&
+		q_strcasecmp(name, GAMENAME) &&
+		q_strcasecmp(name, "id1");
+}
+
+static qboolean M_DownloadMods_PreferModsFolder(void)
+{
+	filelist_item_t *item;
+	int mods_count = 0;
+	int other_count = 0;
+
+	/* Keep installs predictable on mixed layouts: prefer mods/ only when
+	 * most existing non-id game dirs already resolve there. */
+	for (item = modlist; item; item = item->next)
+	{
+		char resolved[MAX_OSPATH];
+
+		if (!M_DownloadMods_ModListNameCounts(item->name))
+			continue;
+		if (!COM_ResolveGameDir(item->name, resolved, sizeof(resolved)))
+			continue;
+
+		if (M_DownloadMods_ResolvedUnderMods(resolved))
+			mods_count++;
+		else
+			other_count++;
+	}
+
+	return mods_count > other_count;
+}
+
+static qboolean M_DownloadMods_BuildInstallTarget(char *target, size_t target_size)
+{
+	if (M_DownloadMods_PreferModsFolder())
+	{
+		char mods_dir[MAX_OSPATH];
+
+		if ((size_t)q_snprintf(mods_dir, sizeof(mods_dir),
+			"%s/mods", com_basedir) >= sizeof(mods_dir))
+			return false;
+		Sys_mkdir(mods_dir);
+		if (!(Sys_FileType(mods_dir) & FS_ENT_DIRECTORY))
+			return false;
+
+		return (size_t)q_snprintf(target, target_size, "%s/%s",
+			mods_dir, downloadmodinstall.item.install_dir) < target_size;
+	}
+
+	return (size_t)q_snprintf(target, target_size, "%s/%s",
+		com_basedir, downloadmodinstall.item.install_dir) < target_size;
+}
+
+static qboolean M_DownloadMods_Rmdir(const char *path)
+{
+#ifdef _WIN32
+	return _rmdir(path) == 0 || errno == ENOENT;
+#else
+	return rmdir(path) == 0 || errno == ENOENT;
+#endif
+}
+
+static qboolean M_DownloadMods_PathInStagingRoot(const char *path)
+{
+	char staging_root[MAX_OSPATH];
+	size_t root_len;
+
+	if (!path || !*path)
+		return false;
+
+	if ((size_t)q_snprintf(staging_root, sizeof(staging_root),
+		"%s/qssm-downloads/", com_basedir) >= sizeof(staging_root))
+		return false;
+
+	root_len = strlen(staging_root);
+#ifdef _WIN32
+	return !q_strncasecmp(path, staging_root, root_len);
+#else
+	return !strncmp(path, staging_root, root_len);
+#endif
+}
+
+static qboolean M_DownloadMods_RemoveTree(const char *path)
+{
+#ifdef _WIN32
+	int type;
+#else
+	struct stat st;
+#endif
+
+	if (!M_DownloadMods_PathInStagingRoot(path))
+		return false;
+
+#ifdef _WIN32
+	type = Sys_FileType(path);
+	if (type & FS_ENT_FILE)
+		return remove(path) == 0 || errno == ENOENT;
+	if (!(type & FS_ENT_DIRECTORY))
+		return true;
+#else
+	if (lstat(path, &st) != 0)
+		return errno == ENOENT;
+	if (!S_ISDIR(st.st_mode))
+		return remove(path) == 0 || errno == ENOENT;
+#endif
+
+#ifdef _WIN32
+	{
+		WIN32_FIND_DATA fdat;
+		HANDLE fhnd;
+		char searchpath[MAX_OSPATH];
+
+		if ((size_t)q_snprintf(searchpath, sizeof(searchpath), "%s/*", path) >=
+			sizeof(searchpath))
+			return false;
+
+		fhnd = FindFirstFile(searchpath, &fdat);
+		if (fhnd != INVALID_HANDLE_VALUE)
+		{
+			do
+			{
+				char child[MAX_OSPATH];
+
+				if (!strcmp(fdat.cFileName, ".") || !strcmp(fdat.cFileName, ".."))
+					continue;
+				if ((size_t)q_snprintf(child, sizeof(child), "%s/%s",
+					path, fdat.cFileName) >= sizeof(child))
+				{
+					FindClose(fhnd);
+					return false;
+				}
+				if ((fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+					!(fdat.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+				{
+					if (!M_DownloadMods_RemoveTree(child))
+					{
+						FindClose(fhnd);
+						return false;
+					}
+				}
+				else if (remove(child) != 0 && errno != ENOENT)
+				{
+					FindClose(fhnd);
+					return false;
+				}
+			} while (FindNextFile(fhnd, &fdat));
+
+			FindClose(fhnd);
+		}
+	}
+#else
+	{
+		DIR *dir_p;
+		struct dirent *dir_t;
+
+		dir_p = opendir(path);
+		if (dir_p)
+		{
+			while ((dir_t = readdir(dir_p)) != NULL)
+			{
+				char child[MAX_OSPATH];
+
+				if (!strcmp(dir_t->d_name, ".") || !strcmp(dir_t->d_name, ".."))
+					continue;
+				if ((size_t)q_snprintf(child, sizeof(child), "%s/%s",
+					path, dir_t->d_name) >= sizeof(child))
+				{
+					closedir(dir_p);
+					return false;
+				}
+				if (!M_DownloadMods_RemoveTree(child))
+				{
+					closedir(dir_p);
+					return false;
+				}
+			}
+			closedir(dir_p);
+		}
+	}
+#endif
+
+	return M_DownloadMods_Rmdir(path);
+}
+
+static qboolean M_DownloadMods_FindNestedInstallDir(char *out, size_t outsize)
+{
+#ifdef _WIN32
+	WIN32_FIND_DATA fdat;
+	HANDLE fhnd;
+	char searchpath[MAX_OSPATH];
+
+	q_snprintf(searchpath, sizeof(searchpath), "%s/*", downloadmodinstall.stage_dir);
+	fhnd = FindFirstFile(searchpath, &fdat);
+	if (fhnd == INVALID_HANDLE_VALUE)
+		return false;
+
+	do
+	{
+		char candidate[MAX_OSPATH];
+
+		if (!(fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			continue;
+		if (!strcmp(fdat.cFileName, ".") || !strcmp(fdat.cFileName, ".."))
+			continue;
+
+		q_snprintf(candidate, sizeof(candidate), "%s/%s/%s",
+			downloadmodinstall.stage_dir, fdat.cFileName,
+			downloadmodinstall.item.install_dir);
+		if (Sys_FileType(candidate) & FS_ENT_DIRECTORY)
+		{
+			FindClose(fhnd);
+			q_strlcpy(out, candidate, outsize);
+			return true;
+		}
+	} while (FindNextFile(fhnd, &fdat));
+
+	FindClose(fhnd);
+#else
+	DIR *dir_p;
+	struct dirent *dir_t;
+
+	dir_p = opendir(downloadmodinstall.stage_dir);
+	if (!dir_p)
+		return false;
+
+	while ((dir_t = readdir(dir_p)) != NULL)
+	{
+		char child[MAX_OSPATH];
+		char candidate[MAX_OSPATH];
+		struct stat st;
+
+		if (!strcmp(dir_t->d_name, ".") || !strcmp(dir_t->d_name, ".."))
+			continue;
+
+		q_snprintf(child, sizeof(child), "%s/%s",
+			downloadmodinstall.stage_dir, dir_t->d_name);
+		if (stat(child, &st) != 0 || !S_ISDIR(st.st_mode))
+			continue;
+
+		q_snprintf(candidate, sizeof(candidate), "%s/%s",
+			child, downloadmodinstall.item.install_dir);
+		if (Sys_FileType(candidate) & FS_ENT_DIRECTORY)
+		{
+			closedir(dir_p);
+			q_strlcpy(out, candidate, outsize);
+			return true;
+		}
+	}
+
+	closedir(dir_p);
+#endif
+	return false;
+}
+
+static void M_DownloadMods_RemoveTempFiles(void)
+{
+	size_t i;
+
+	for (i = 0; i < VEC_SIZE(downloadmodinstall.parts); i++)
+	{
+		if (downloadmodinstall.parts[i].temp_path[0] &&
+			M_DownloadMods_PathInStagingRoot(downloadmodinstall.parts[i].temp_path))
+		{
+			unlink(downloadmodinstall.parts[i].temp_path);
+			downloadmodinstall.parts[i].temp_path[0] = '\0';
+		}
+	}
+
+	if (downloadmodinstall.joined_zip[0] &&
+		M_DownloadMods_PathInStagingRoot(downloadmodinstall.joined_zip))
+	{
+		unlink(downloadmodinstall.joined_zip);
+		downloadmodinstall.joined_zip[0] = '\0';
+	}
+}
+
+static void M_DownloadMods_FinishInstall(qboolean success, const char *message)
+{
+	if (success)
+		S_LocalSound("misc/menu2.wav");
+	else
+	{
+		if (downloadmodinstall.stage_dir[0])
+			M_DownloadMods_RemoveTree(downloadmodinstall.stage_dir);
+		S_LocalSound("misc/menu3.wav");
+	}
+
+	M_DownloadMods_RemoveTempFiles();
+	M_DownloadMods_SetInstallStatus(message);
+	downloadmodinstall.active = false;
+	M_DownloadMods_SetWorkerStage(DOWNLOADMOD_INSTALL_NONE);
+	M_DownloadMods_SetWorkerPartIndex(0);
+	VEC_CLEAR(downloadmodinstall.parts);
+	if (success)
+		M_DownloadMods_RefreshInstalledCache();
+	M_DownloadMods_Refilter();
+}
+
+static qboolean M_DownloadMods_FinalizeStagedInstall(void)
+{
+	char target[MAX_OSPATH];
+	char candidate[MAX_OSPATH];
+	char source[MAX_OSPATH];
+	qboolean source_is_stage = false;
+	int target_type;
+
+	if (!M_DownloadMods_InstallDirNameOkay(downloadmodinstall.item.install_dir))
+	{
+		Con_Printf("Invalid install directory for %s: %s\n",
+			downloadmodinstall.item.name, downloadmodinstall.item.install_dir);
+		return false;
+	}
+
+	if (!M_DownloadMods_BuildInstallTarget(target, sizeof(target)))
+		return false;
+
+	target_type = Sys_FileType(target);
+	if (target_type & (FS_ENT_FILE | FS_ENT_DIRECTORY))
+	{
+		Con_Printf("Install target already exists: %s\n", target);
+		return false;
+	}
+
+	q_snprintf(candidate, sizeof(candidate), "%s/%s",
+		downloadmodinstall.stage_dir, downloadmodinstall.item.install_dir);
+	if (Sys_FileType(candidate) & FS_ENT_DIRECTORY)
+		q_strlcpy(source, candidate, sizeof(source));
+	else if (M_DownloadMods_FindNestedInstallDir(source, sizeof(source)))
+	{
+		/* source was filled by helper */
+	}
+	else if (M_DownloadMods_PathLooksInstalled(downloadmodinstall.stage_dir))
+	{
+		q_strlcpy(source, downloadmodinstall.stage_dir, sizeof(source));
+		source_is_stage = true;
+	}
+	else
+	{
+		Con_Printf("Archive for %s did not contain expected mod directory \"%s\"\n",
+			downloadmodinstall.item.name, downloadmodinstall.item.install_dir);
+		return false;
+	}
+
+	if (rename(source, target) != 0)
+	{
+		Con_Printf("Failed to move installed mod to %s: %s\n",
+			target, strerror(errno));
+		return false;
+	}
+
+	if (!source_is_stage)
+		M_DownloadMods_RemoveTree(downloadmodinstall.stage_dir);
+
+	FileList_Add(downloadmodinstall.item.install_dir, NULL, &modlist);
+	Con_Printf("Installed %s to %s\n", downloadmodinstall.item.name, target);
+	return true;
+}
+
+static qboolean M_DownloadMods_AddPart(const char *url,
+	const char *sha256, const char *filename)
+{
+	downloadmodpart_t part;
+
+	if (!url || !*url || !M_DownloadMods_UrlAllowed(url))
+		return false;
+	if (!sha256 || !*sha256 || !M_DownloadMods_SHA256StringOkay(sha256))
+	{
+		Con_Printf("Download part missing valid SHA-256: %s\n",
+			filename && *filename ? filename : url);
+		return false;
+	}
+
+	memset(&part, 0, sizeof(part));
+	q_strlcpy(part.url, url, sizeof(part.url));
+	q_strlcpy(part.sha256, sha256, sizeof(part.sha256));
+	if (filename && *filename)
+		q_strlcpy(part.filename, filename, sizeof(part.filename));
+	else
+		M_DownloadMods_FileNameFromUrl(url, part.filename, sizeof(part.filename));
+
+	VEC_PUSH(downloadmodinstall.parts, part);
+	return true;
+}
+
+static qboolean M_DownloadMods_AddManifestPart(const char *url,
+	const char *sha256, const char *filename)
+{
+	return M_DownloadMods_AddPart(url, sha256, filename);
+}
+
+static qboolean M_DownloadMods_AddGitHubQBJ3Parts(void)
+{
+	return M_DownloadMods_AddPart(DOWNLOAD_MODS_QBJ3_PART_AAA_URL,
+		DOWNLOAD_MODS_QBJ3_PART_AAA_SHA256, "qbj3_1.3.zip.part-aaa") &&
+		M_DownloadMods_AddPart(DOWNLOAD_MODS_QBJ3_PART_AAB_URL,
+			DOWNLOAD_MODS_QBJ3_PART_AAB_SHA256, "qbj3_1.3.zip.part-aab");
+}
+
+static qboolean M_DownloadMods_ParseManifestArray(const jsonentry_t *array,
+	const char *base_url)
+{
+	const jsonentry_t *entry;
+	qboolean added = false;
+	qboolean rejected = false;
+
+	if (!array || array->type != JSON_ARRAY)
+		return false;
+
+	for (entry = array->firstchild; entry; entry = entry->next)
+	{
+		const char *url, *sha, *filename;
+		char joined_url[DOWNLOAD_MODS_MAX_URL];
+
+		if (entry->type != JSON_OBJECT)
+		{
+			rejected = true;
+			continue;
+		}
+
+		url = JSON_FindString(entry, "url");
+		if (!url)
+			url = JSON_FindString(entry, "download_url");
+		if (!url)
+			url = JSON_FindString(entry, "browser_download_url");
+		sha = JSON_FindString(entry, "sha256");
+		if (!sha)
+			sha = JSON_FindString(entry, "sha-256");
+		filename = JSON_FindString(entry, "filename");
+		if (!filename)
+			filename = JSON_FindString(entry, "name");
+
+		if ((!url || !*url) && base_url && *base_url && filename && *filename)
+		{
+			q_snprintf(joined_url, sizeof(joined_url), "%s%s%s",
+				base_url, (base_url[strlen(base_url) - 1] == '/') ? "" : "/", filename);
+			url = joined_url;
+		}
+
+		if (M_DownloadMods_AddManifestPart(url, sha, filename))
+			added = true;
+		else
+			rejected = true;
+	}
+
+	if (rejected)
+	{
+		VEC_CLEAR(downloadmodinstall.parts);
+		return false;
+	}
+
+	return added;
+}
+
+static qboolean M_DownloadMods_ParseManifest(const char *path)
+{
+	FILE *f;
+	long len;
+	char *text;
+	json_t *json;
+	const jsonentry_t *array;
+	const char *base_url;
+	qboolean ok = false;
+
+	f = fopen(path, "rb");
+	if (!f)
+		return false;
+	if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 ||
+		fseek(f, 0, SEEK_SET) != 0)
+	{
+		fclose(f);
+		return false;
+	}
+	if (len > 1024 * 1024)
+	{
+		fclose(f);
+		Con_Printf("Manifest too large: %s\n", path);
+		return false;
+	}
+
+	text = (char *)malloc((size_t)len + 1);
+	if (!text)
+	{
+		fclose(f);
+		return false;
+	}
+	if (fread(text, 1, (size_t)len, f) != (size_t)len)
+	{
+		free(text);
+		fclose(f);
+		return false;
+	}
+	text[len] = '\0';
+	fclose(f);
+
+	json = JSON_Parse(text);
+	free(text);
+	if (!json || !json->root || json->root->type != JSON_OBJECT)
+		goto cleanup;
+
+	base_url = JSON_FindString(json->root, "base_url");
+	if (!base_url)
+		base_url = JSON_FindString(json->root, "url_base");
+
+	array = JSON_Find(json->root, "parts", JSON_ARRAY);
+	ok = M_DownloadMods_ParseManifestArray(array, base_url);
+	if (!ok)
+	{
+		array = JSON_Find(json->root, "files", JSON_ARRAY);
+		ok = M_DownloadMods_ParseManifestArray(array, base_url);
+	}
+	if (!ok)
+	{
+		array = JSON_Find(json->root, "archives", JSON_ARRAY);
+		ok = M_DownloadMods_ParseManifestArray(array, base_url);
+	}
+	if (!ok)
+	{
+		array = JSON_Find(json->root, "downloads", JSON_ARRAY);
+		ok = M_DownloadMods_ParseManifestArray(array, base_url);
+	}
+
+cleanup:
+	if (json)
+		JSON_Free(json);
+	return ok;
+}
+
+static qboolean M_DownloadMods_JoinSplitParts(const char *joined_path)
+{
+	byte buffer[65536];
+	FILE *out;
+	size_t i;
+
+	out = fopen(joined_path, "wb");
+	if (!out)
+	{
+		Con_Printf("Unable to create joined ZIP: %s\n", strerror(errno));
+		return false;
+	}
+
+	for (i = 0; i < VEC_SIZE(downloadmodinstall.parts); i++)
+	{
+		FILE *in;
+		size_t readbytes;
+
+		if (!downloadmodinstall.parts[i].temp_path[0])
+		{
+			Con_Printf("Missing split part path for %s\n",
+				downloadmodinstall.parts[i].filename);
+			fclose(out);
+			unlink(joined_path);
+			return false;
+		}
+
+		in = fopen(downloadmodinstall.parts[i].temp_path, "rb");
+		if (!in)
+		{
+			Con_Printf("Unable to open split part %s: %s\n",
+				downloadmodinstall.parts[i].filename, strerror(errno));
+			fclose(out);
+			unlink(joined_path);
+			return false;
+		}
+
+		while ((readbytes = fread(buffer, 1, sizeof(buffer), in)) > 0)
+		{
+			if (M_DownloadMods_CancelRequested())
+			{
+				fclose(in);
+				fclose(out);
+				unlink(joined_path);
+				return false;
+			}
+			if (fwrite(buffer, 1, readbytes, out) != readbytes)
+			{
+				Con_Printf("Unable to write joined ZIP: %s\n", strerror(errno));
+				fclose(in);
+				fclose(out);
+				unlink(joined_path);
+				return false;
+			}
+		}
+
+		if (ferror(in))
+		{
+			Con_Printf("Unable to read split part %s\n",
+				downloadmodinstall.parts[i].filename);
+			fclose(in);
+			fclose(out);
+			unlink(joined_path);
+			return false;
+		}
+
+		fclose(in);
+	}
+
+	if (fflush(out) != 0 || ferror(out))
+	{
+		Con_Printf("Unable to flush joined ZIP: %s\n", strerror(errno));
+		fclose(out);
+		unlink(joined_path);
+		return false;
+	}
+
+	fclose(out);
+	return true;
+}
+
+static qboolean M_DownloadMods_WorkerCancelled(char *error, size_t error_size,
+	qboolean *aborted)
+{
+	if (!M_DownloadMods_CancelRequested())
+		return false;
+
+	if (aborted)
+		*aborted = true;
+	q_strlcpy(error, "Download cancelled", error_size);
+	return true;
+}
+
+static qboolean M_DownloadMods_RunArchivePart(downloadmodpart_t *part,
+	char *error, size_t error_size, qboolean *aborted)
+{
+	char temp_path[MAX_OSPATH];
+	char status[96];
+	curl_off_t max_bytes;
+	qofs_t file_size = 0;
+	int part_index;
+
+	if (!part)
+	{
+		q_strlcpy(error, "install state error", error_size);
+		return false;
+	}
+
+	if (!M_DownloadMods_BuildTempPath(part->filename, temp_path, sizeof(temp_path)))
+	{
+		q_strlcpy(error, "download path too long", error_size);
+		return false;
+	}
+	q_strlcpy(part->temp_path, temp_path, sizeof(part->temp_path));
+
+	part_index = M_DownloadMods_CopyPartIndex();
+	q_snprintf(status, sizeof(status), "downloading %d/%d",
+		part_index + 1, (int)VEC_SIZE(downloadmodinstall.parts));
+	M_DownloadMods_SetWorkerStatus(status);
+	M_DownloadMods_SetWorkerStage(DOWNLOADMOD_INSTALL_ARCHIVE);
+	max_bytes = (downloadmodinstall.item.type == DOWNLOADMOD_SPLIT_ZIP) ?
+		DOWNLOAD_MODS_MAX_SPLIT_PART_BYTES : DOWNLOAD_MODS_MAX_ARCHIVE_BYTES;
+
+	if (!M_DownloadMods_RunTransfer(part->url, temp_path, part->filename,
+		max_bytes, &file_size, aborted, error, error_size))
+		return false;
+
+	if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+		return false;
+
+	M_DownloadMods_SetWorkerStatus("verifying...");
+	if (!M_DownloadMods_VerifySHA256(temp_path, part->sha256))
+	{
+		unlink(temp_path);
+		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+			return false;
+		q_strlcpy(error, "SHA-256 failed", error_size);
+		return false;
+	}
+
+	if (downloadmodinstall.item.type == DOWNLOADMOD_SPLIT_ZIP)
+		return true;
+
+	if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+	{
+		unlink(temp_path);
+		return false;
+	}
+
+	M_DownloadMods_SetWorkerStatus("extracting...");
+	if (!ZIP_Extract(temp_path, downloadmodinstall.stage_dir))
+	{
+		unlink(temp_path);
+		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+			return false;
+		q_strlcpy(error, "extract failed", error_size);
+		return false;
+	}
+
+	if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+	{
+		unlink(temp_path);
+		return false;
+	}
+
+	unlink(temp_path);
+	return true;
+}
+
+static qboolean M_DownloadMods_FinalizeSplitZipWorker(char *error,
+	size_t error_size, qboolean *aborted)
+{
+	char joined_path[MAX_OSPATH];
+
+	if (!M_DownloadMods_BuildTempPath(DOWNLOAD_MODS_QBJ3_ZIP_FILENAME,
+		joined_path, sizeof(joined_path)))
+	{
+		q_strlcpy(error, "joined ZIP path too long", error_size);
+		return false;
+	}
+	q_strlcpy(downloadmodinstall.joined_zip, joined_path,
+		sizeof(downloadmodinstall.joined_zip));
+
+	if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+		return false;
+
+	M_DownloadMods_SetWorkerStatus("joining split ZIP...");
+	if (!M_DownloadMods_JoinSplitParts(joined_path))
+	{
+		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+			return false;
+		q_strlcpy(error, "join failed", error_size);
+		return false;
+	}
+
+	M_DownloadMods_SetWorkerStatus("verifying ZIP...");
+	if (!M_DownloadMods_VerifySHA256(joined_path, downloadmodinstall.item.sha256))
+	{
+		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+			return false;
+		q_strlcpy(error, "ZIP SHA-256 failed", error_size);
+		return false;
+	}
+
+	if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+		return false;
+
+	M_DownloadMods_SetWorkerStatus("extracting...");
+	if (!ZIP_Extract(joined_path, downloadmodinstall.stage_dir))
+	{
+		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+			return false;
+		q_strlcpy(error, "extract failed", error_size);
+		return false;
+	}
+
+	if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+		return false;
+
+	return true;
+}
+
+static qboolean M_DownloadMods_RunManifestWorker(char *error, size_t error_size,
+	qboolean *aborted)
+{
+	char temp_path[MAX_OSPATH];
+	char filename[MAX_QPATH];
+	qofs_t file_size = 0;
+
+	M_DownloadMods_FileNameFromUrl(downloadmodinstall.item.url, filename, sizeof(filename));
+	if (!M_DownloadMods_BuildTempPath(filename, temp_path, sizeof(temp_path)))
+	{
+		q_strlcpy(error, "manifest path too long", error_size);
+		return false;
+	}
+
+	M_DownloadMods_SetWorkerStatus("downloading manifest");
+	M_DownloadMods_SetWorkerStage(DOWNLOADMOD_INSTALL_MANIFEST);
+	if (!M_DownloadMods_RunTransfer(downloadmodinstall.item.url, temp_path, filename,
+		DOWNLOAD_MODS_MAX_MANIFEST_BYTES, &file_size, aborted, error, error_size))
+		return false;
+
+	if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+	{
+		unlink(temp_path);
+		return false;
+	}
+
+	VEC_CLEAR(downloadmodinstall.parts);
+	if (!M_DownloadMods_ParseManifest(temp_path) ||
+		VEC_SIZE(downloadmodinstall.parts) <= 0)
+	{
+		unlink(temp_path);
+		q_strlcpy(error, "manifest parse failed", error_size);
+		return false;
+	}
+
+	unlink(temp_path);
+	return true;
+}
+
+static qboolean M_DownloadMods_RunInstallWorker(char *error, size_t error_size,
+	qboolean *aborted)
+{
+	int i;
+
+	if (downloadmodinstall.item.type == DOWNLOADMOD_SPLIT_MANIFEST &&
+		!M_DownloadMods_RunManifestWorker(error, error_size, aborted))
+		return false;
+
+	if (VEC_SIZE(downloadmodinstall.parts) <= 0)
+	{
+		q_strlcpy(error, "install state error", error_size);
+		return false;
+	}
+
+	for (i = 0; i < (int)VEC_SIZE(downloadmodinstall.parts); i++)
+	{
+		M_DownloadMods_SetWorkerPartIndex(i);
+		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+			return false;
+		if (!M_DownloadMods_RunArchivePart(&downloadmodinstall.parts[i],
+			error, error_size, aborted))
+			return false;
+	}
+
+	M_DownloadMods_SetWorkerPartIndex((int)VEC_SIZE(downloadmodinstall.parts));
+	if (downloadmodinstall.item.type == DOWNLOADMOD_SPLIT_ZIP)
+		return M_DownloadMods_FinalizeSplitZipWorker(error, error_size, aborted);
+
+	return true;
+}
+
+static void M_DownloadMods_SetWorkerDone(qboolean success, qboolean aborted,
+	const char *message)
+{
+	SDL_LockMutex(downloadmodinstall.mutex);
+	downloadmodinstall.transfer.downloading = false;
+	downloadmodinstall.transfer.done = true;
+	downloadmodinstall.transfer.success = success;
+	downloadmodinstall.transfer.aborted = aborted;
+	q_strlcpy(downloadmodinstall.transfer.error, message ? message : "",
+		sizeof(downloadmodinstall.transfer.error));
+	SDL_UnlockMutex(downloadmodinstall.mutex);
+}
+
+static int M_DownloadMods_InstallThread(void *unused)
+{
+	char message[128] = "";
+	qboolean aborted = false;
+	qboolean success;
+
+	(void)unused;
+
+	success = M_DownloadMods_RunInstallWorker(message, sizeof(message), &aborted);
+	if (success)
+		M_DownloadMods_SetWorkerStatus("finalizing...");
+	M_DownloadMods_SetWorkerDone(success, aborted,
+		message[0] ? message : (success ? "" : "install failed"));
+	return 0;
+}
+
+void M_DownloadMods_Frame(void)
+{
+	qboolean active, downloading, done, success, aborted;
+	char error[128];
+	char display_name[64];
+	double received, total;
+	qofs_t file_size;
+	SDL_Thread *thread = NULL;
+
+	if (!downloadmodinstall.active || !downloadmodinstall.mutex)
+		return;
+
+	SDL_LockMutex(downloadmodinstall.mutex);
+	active = downloadmodinstall.transfer.active;
+	downloading = downloadmodinstall.transfer.downloading;
+	done = downloadmodinstall.transfer.done;
+	success = downloadmodinstall.transfer.success;
+	aborted = downloadmodinstall.transfer.aborted;
+	received = downloadmodinstall.transfer.received;
+	total = downloadmodinstall.transfer.total;
+	file_size = downloadmodinstall.transfer.file_size;
+	q_strlcpy(error, downloadmodinstall.transfer.error, sizeof(error));
+	q_strlcpy(display_name, downloadmodinstall.transfer.display_name, sizeof(display_name));
+	if (done)
+	{
+		thread = downloadmodinstall.transfer.thread;
+		downloadmodinstall.transfer.thread = NULL;
+	}
+	SDL_UnlockMutex(downloadmodinstall.mutex);
+
+	if (!active)
+		return;
+
+	if (!done)
+	{
+		if (!downloading)
+		{
+			cls.download.percent = -1.0f;
+			return;
+		}
+
+		if (!cls.download.active || strcmp(cls.download.current, display_name))
+			M_DownloadMods_BeginSharedDownloadProgress(display_name);
+
+		cls.download.received = received > 0.0 ? received : 0.0;
+		cls.download.total = total > 0.0 ? total : 0.0;
+		if (cls.download.total > 0.0)
+			cls.download.percent = (float)((cls.download.received * 100.0) /
+				cls.download.total);
+		else
+			cls.download.percent = -1.0f;
+
+		if (received > 10000.0 && realtime - downloadmodinstall.last_progress_print >= 0.5)
+		{
+			downloadmodinstall.last_progress_print = realtime;
+			if (total > 0.0)
+			{
+				char sizeStr[32];
+				int progress = (int)((received / total) * 100.0);
+				if (progress < 0)
+					progress = 0;
+				else if (progress > 100)
+					progress = 100;
+				M_DownloadMods_FormatSize(total, sizeStr, sizeof(sizeStr));
+				Con_Printf("DL %s (%s) %s ^m%d%%\r",
+					display_name, downloadmodinstall.item.name, sizeStr, progress);
+			}
+			else
+			{
+				Con_Printf("DL %s (%s) %.0f kb\r",
+					display_name, downloadmodinstall.item.name, received / 1024.0);
+			}
+		}
+		return;
+	}
+
+	if (thread)
+		SDL_WaitThread(thread, NULL);
+
+	SDL_LockMutex(downloadmodinstall.mutex);
+	downloadmodinstall.transfer.active = false;
+	downloadmodinstall.transfer.downloading = false;
+	downloadmodinstall.transfer.done = false;
+	SDL_UnlockMutex(downloadmodinstall.mutex);
+
+	cls.download.active = false;
+	cls.download.chunked = false;
+	cls.download.current[0] = '\0';
+	cls.download.percent = -1.0f;
+	cls.download.received = 0.0;
+	cls.download.total = 0.0;
+	curl_download_active = false;
+	stop_curl_download = false;
+
+	if (!success)
+	{
+		if (aborted)
+			M_DownloadMods_FinishInstall(false, "download cancelled");
+		else if (error[0])
+			M_DownloadMods_FinishInstall(false, error);
+		else
+			M_DownloadMods_FinishInstall(false, "install failed");
+		return;
+	}
+
+	{
+		char sizeStr[32];
+		M_DownloadMods_FormatSize(file_size, sizeStr, sizeof(sizeStr));
+		if (display_name[0] && file_size > 0)
+			Con_Printf("Downloaded ^m%s^m (%s)\n", display_name, sizeStr);
+	}
+
+	if (M_DownloadMods_FinalizeStagedInstall())
+	{
+		char status[96];
+		q_snprintf(status, sizeof(status), "installed %s",
+			downloadmodinstall.item.install_dir);
+		M_DownloadMods_FinishInstall(true, status);
+	}
+	else
+		M_DownloadMods_FinishInstall(false, "install failed");
+}
+
+void M_DownloadMods_Shutdown(void)
+{
+	SDL_mutex *mutex = downloadmodinstall.mutex;
+	SDL_Thread *thread = NULL;
+	qboolean active;
+
+	if (!mutex)
+		return;
+
+	SDL_LockMutex(mutex);
+	active = downloadmodinstall.active || downloadmodinstall.transfer.active;
+	if (active)
+	{
+		SDL_AtomicSet(&downloadmodinstall.abort_requested, 1);
+		thread = downloadmodinstall.transfer.thread;
+		downloadmodinstall.transfer.thread = NULL;
+	}
+	SDL_UnlockMutex(mutex);
+
+	if (active)
+		stop_curl_download = true;
+	if (thread)
+		SDL_WaitThread(thread, NULL);
+
+	if (active && downloadmodinstall.stage_dir[0])
+		M_DownloadMods_RemoveTree(downloadmodinstall.stage_dir);
+	M_DownloadMods_RemoveTempFiles();
+	VEC_FREE(downloadmodinstall.parts);
+
+	cls.download.active = false;
+	cls.download.chunked = false;
+	cls.download.current[0] = '\0';
+	cls.download.percent = -1.0f;
+	cls.download.received = 0.0;
+	cls.download.total = 0.0;
+	curl_download_active = false;
+	stop_curl_download = false;
+
+	SDL_DestroyMutex(mutex);
+	memset(&downloadmodinstall, 0, sizeof(downloadmodinstall));
+}
+
+static const char *M_DownloadMods_InstallDetail(const downloadmoditem_t *item,
+	char *buffer, size_t buffer_size)
+{
+	char status[sizeof(downloadmodinstall.status)];
+	downloadmodinstallstage_t stage = DOWNLOADMOD_INSTALL_NONE;
+
+	if (!M_DownloadMods_CopyInstallStateForItem(item, &stage,
+		status, sizeof(status)))
+		return NULL;
+
+	if (stage == DOWNLOADMOD_INSTALL_ARCHIVE && cls.download.percent >= 0.0f)
+	{
+		q_snprintf(buffer, buffer_size, "%d%%", (int)(cls.download.percent + 0.5f));
+		return buffer;
+	}
+
+	if (status[0])
+	{
+		q_strlcpy(buffer, status, buffer_size);
+		return buffer;
+	}
+
+	q_strlcpy(buffer, "working...", buffer_size);
+	return buffer;
+}
+
+static qboolean M_DownloadMods_StartInstall(downloadmoditem_t *item)
+{
+	SDL_mutex *mutex;
+	downloadmodpart_t *parts;
+	downloadmodpart_t part;
+
+	if (!item)
+		return false;
+
+	if (downloadmodinstall.active)
+	{
+		M_DownloadMods_SetMessage("mod install already active");
+		S_LocalSound("misc/menu3.wav");
+		return false;
+	}
+
+	if (!M_DownloadMods_InstallDirNameOkay(item->install_dir))
+	{
+		M_DownloadMods_SetMessage("invalid install directory");
+		S_LocalSound("misc/menu3.wav");
+		return false;
+	}
+
+	mutex = downloadmodinstall.mutex;
+	parts = downloadmodinstall.parts;
+	VEC_CLEAR(parts);
+	memset(&downloadmodinstall, 0, sizeof(downloadmodinstall));
+	downloadmodinstall.mutex = mutex;
+	downloadmodinstall.parts = parts;
+	downloadmodinstall.active = true;
+	downloadmodinstall.item = *item;
+	M_DownloadMods_SetWorkerStage(DOWNLOADMOD_INSTALL_NONE);
+	downloadmodinstall.last_progress_print = 0.0;
+
+	if (!M_DownloadMods_BuildStageDir())
+	{
+		M_DownloadMods_FinishInstall(false, "stage path too long");
+		return false;
+	}
+
+	if (item->type == DOWNLOADMOD_SPLIT_MANIFEST)
+	{
+		Con_Printf("Downloading manifest for %s %s:\n%s\n",
+			item->name, item->version, item->url);
+		if (!M_DownloadMods_StartWorker())
+		{
+			M_DownloadMods_FinishInstall(false,
+				downloadmodinstall.status[0] ? downloadmodinstall.status : "download failed");
+			return false;
+		}
+		return true;
+	}
+
+	if (item->type == DOWNLOADMOD_SPLIT_ZIP)
+	{
+		if (!item->sha256[0] || !M_DownloadMods_SHA256StringOkay(item->sha256))
+		{
+			M_DownloadMods_FinishInstall(false, "missing ZIP SHA-256");
+			return false;
+		}
+		if (!M_DownloadMods_AddGitHubQBJ3Parts())
+		{
+			M_DownloadMods_FinishInstall(false, "split ZIP setup failed");
+			return false;
+		}
+		M_DownloadMods_SetWorkerPartIndex(0);
+
+		Con_Printf("Downloading split ZIP for %s %s:\n%s\n%s\n",
+			item->name, item->version,
+			DOWNLOAD_MODS_QBJ3_PART_AAA_URL,
+			DOWNLOAD_MODS_QBJ3_PART_AAB_URL);
+		Con_Printf("Expected final ZIP SHA-256: %s\n", item->sha256);
+
+		if (!M_DownloadMods_StartWorker())
+		{
+			M_DownloadMods_FinishInstall(false,
+				downloadmodinstall.status[0] ? downloadmodinstall.status : "download failed");
+			return false;
+		}
+		return true;
+	}
+
+	memset(&part, 0, sizeof(part));
+	if (!item->sha256[0] || !M_DownloadMods_SHA256StringOkay(item->sha256))
+	{
+		M_DownloadMods_FinishInstall(false, "missing SHA-256");
+		return false;
+	}
+	q_strlcpy(part.url, item->url, sizeof(part.url));
+	q_strlcpy(part.sha256, item->sha256, sizeof(part.sha256));
+	M_DownloadMods_FileNameFromUrl(item->url, part.filename, sizeof(part.filename));
+	VEC_PUSH(downloadmodinstall.parts, part);
+	M_DownloadMods_SetWorkerPartIndex(0);
+
+	Con_Printf("Downloading ZIP for %s %s:\n%s\n",
+		item->name, item->version, item->url);
+	if (item->sha256[0])
+		Con_Printf("Expected SHA-256: %s\n", item->sha256);
+
+	if (!M_DownloadMods_StartWorker())
+	{
+		M_DownloadMods_FinishInstall(false,
+			downloadmodinstall.status[0] ? downloadmodinstall.status : "download failed");
+		return false;
+	}
+	return true;
+}
+
+static void M_DownloadMods_StartSelected(void)
+{
+	downloadmoditem_t *item = M_DownloadMods_SelectedItem();
+	qboolean was_installed;
+
+	if (!item)
+	{
+		S_LocalSound("misc/menu3.wav");
+		return;
+	}
+
+	was_installed = item->installed;
+	item->installed = M_DownloadMods_ProbeInstalled(item);
+	if (item->installed != was_installed)
+		M_DownloadMods_Refilter();
+	if (M_DownloadMods_IsInstalled(item))
+	{
+		Cbuf_AddText(va("game \"%s\"\n", item->install_dir));
+		M_Menu_Main_f();
+		return;
+	}
+
+	M_DownloadMods_StartInstall(item);
+}
+
+static qboolean M_DownloadMods_InstallBusy(void)
+{
+	qboolean active = false;
+	qboolean done = false;
+
+	if (!downloadmodinstall.active)
+		return false;
+	if (!downloadmodinstall.mutex)
+		return true;
+
+	SDL_LockMutex(downloadmodinstall.mutex);
+	active = downloadmodinstall.transfer.active;
+	done = downloadmodinstall.transfer.done;
+	SDL_UnlockMutex(downloadmodinstall.mutex);
+	return active && !done;
+}
+
+static void M_DownloadMods_RequestCancel(void)
+{
+	if (!downloadmodinstall.active)
+		return;
+
+	SDL_AtomicSet(&downloadmodinstall.abort_requested, 1);
+	stop_curl_download = true;
+	M_DownloadMods_SetInstallStatus("cancelling...");
+}
+
+static void M_DownloadMods_LeaveToMods(void)
+{
+	downloadmodsmenu.exit_prompt = false;
+	M_Menu_Mods_f();
+}
+
+static void M_DownloadMods_ApplyExitPrompt(void)
+{
+	if (downloadmodsmenu.exit_prompt_cursor == DOWNLOADMOD_EXIT_CANCEL)
+		M_DownloadMods_RequestCancel();
+	M_DownloadMods_LeaveToMods();
+}
+
+static void M_DownloadMods_DrawExitPrompt(void)
+{
+	int box_x = 24;
+	int box_y = 68;
+	int text_x = 48;
+	int option_x = 64;
+	int option_y = box_y + 36;
+	int cursor_y = option_y + downloadmodsmenu.exit_prompt_cursor * 8;
+
+	M_DrawTextBox(box_x, box_y, 32, 6);
+	M_PrintWhite(text_x, box_y + 12, "download is active");
+	M_Print(text_x, box_y + 20, "leave menu or cancel it?");
+	M_Print(option_x, option_y, "download in background");
+	M_Print(option_x, option_y + 8, "cancel download");
+	M_DrawCharacter(option_x - 8, cursor_y,
+		12 + ((int)(realtime * 4) & 1));
+}
+
+static qboolean M_DownloadMods_ExitPromptKey(int key)
+{
+	if (!downloadmodsmenu.exit_prompt)
+		return false;
+
+	switch (key)
+	{
+	case K_UPARROW:
+	case K_LEFTARROW:
+	case K_MWHEELUP:
+		downloadmodsmenu.exit_prompt_cursor =
+			(downloadmodsmenu.exit_prompt_cursor + DOWNLOADMOD_EXIT_COUNT - 1) %
+			DOWNLOADMOD_EXIT_COUNT;
+		S_LocalSound("misc/menu1.wav");
+		return true;
+
+	case K_DOWNARROW:
+	case K_RIGHTARROW:
+	case K_MWHEELDOWN:
+		downloadmodsmenu.exit_prompt_cursor =
+			(downloadmodsmenu.exit_prompt_cursor + 1) % DOWNLOADMOD_EXIT_COUNT;
+		S_LocalSound("misc/menu1.wav");
+		return true;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		M_DownloadMods_ApplyExitPrompt();
+		return true;
+
+	case K_MOUSE1:
+		if (m_mousex >= 56 && m_mousex < 240 &&
+			m_mousey >= 104 && m_mousey < 120)
+			downloadmodsmenu.exit_prompt_cursor = (m_mousey - 104) / 8;
+		M_DownloadMods_ApplyExitPrompt();
+		return true;
+
+	case 'c':
+	case 'C':
+		downloadmodsmenu.exit_prompt_cursor = DOWNLOADMOD_EXIT_CANCEL;
+		M_DownloadMods_ApplyExitPrompt();
+		return true;
+
+	case 'b':
+	case 'B':
+		downloadmodsmenu.exit_prompt_cursor = DOWNLOADMOD_EXIT_BACKGROUND;
+		M_DownloadMods_ApplyExitPrompt();
+		return true;
+
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		downloadmodsmenu.exit_prompt_cursor = DOWNLOADMOD_EXIT_BACKGROUND;
+		M_DownloadMods_ApplyExitPrompt();
+		return true;
+
+	default:
+		return true;
+	}
+}
+
+typedef enum
+{
+	DOWNLOADMOD_DETAIL_NORMAL,
+	DOWNLOADMOD_DETAIL_SIZE,
+	DOWNLOADMOD_DETAIL_INSTALLED,
+	DOWNLOADMOD_DETAIL_PROGRESS
+} downloadmoddetailstyle_t;
+
+static plcolour_t M_DownloadMods_Color(byte r, byte g, byte b)
+{
+	plcolour_t c;
+
+	c.type = 2;
+	c.rgb[0] = r;
+	c.rgb[1] = g;
+	c.rgb[2] = b;
+	c.basic = 0;
+	return c;
+}
+
+static void M_DownloadMods_PrintRGBAScroll(int x, int y, int maxwidth,
+	const char *str, double time, plcolour_t color, float alpha, qboolean mask)
+{
+	const int charwidth = 8;
+	const int gap_len = 5;
+	const int scrollspeed = 30;
+	int maxchars = maxwidth / charwidth;
+	int len = (int)strlen(str);
+	int mask_offset = mask ? 128 : 0;
+	int total_chars, cycle_pixels, pixel_offset, pass;
+	float frac;
+
+	if (len <= maxchars)
+	{
+		M_PrintRGBA(x, y, str, color, alpha, mask);
+		return;
+	}
+
+	if (!len)
+		return;
+
+	total_chars = len + gap_len;
+	cycle_pixels = total_chars * charwidth;
+	frac = M_ScrollPixelOffset(time, scrollspeed, cycle_pixels, &pixel_offset);
+
+	glPushMatrix();
+	glTranslatef(-frac, 0.0f, 0.0f);
+	for (pass = 0; pass < 2; pass++)
+	{
+		int base_x = x - pixel_offset + pass * cycle_pixels;
+		int pos;
+
+		for (pos = 0; pos < total_chars; pos++)
+		{
+			int char_x = base_x + pos * charwidth;
+			int ch;
+
+			if (char_x + charwidth <= x)
+				continue;
+			if (char_x >= x + maxwidth)
+				break;
+
+			if (pos < len)
+				ch = (unsigned char)str[pos];
+			else
+				ch = (unsigned char)" /// "[pos - len];
+
+			M_DrawCharacterRGBA(char_x, y, ch + mask_offset, color, alpha);
+		}
+	}
+	glPopMatrix();
+}
+
+static void M_DownloadMods_PrintMaskedAlpha(int x, int y, const char *str, float alpha)
+{
+	plcolour_t white;
+
+	if (alpha >= 1.0f)
+	{
+		M_Print(x, y, str);
+		return;
+	}
+
+	white = M_DownloadMods_Color(255, 255, 255);
+	M_PrintRGBA(x, y, str, white, alpha, true);
+}
+
+static void M_DownloadMods_PrintGoldProgress(int x, int y, const char *str, float alpha)
+{
+	plcolour_t white = M_DownloadMods_Color(255, 255, 255);
+
+	while (*str)
+	{
+		int ch = (unsigned char)*str++;
+		int glyph = (ch >= '0' && ch <= '9') ? ch - 30 : ch + 128;
+
+		if (alpha >= 1.0f)
+			M_DrawCharacter(x, y, glyph);
+		else
+			M_DrawCharacterRGBA(x, y, glyph, white, alpha);
+		x += 8;
+	}
+}
+
+static void M_DownloadMods_DrawDetail(int x, int y, const char *detail,
+	downloadmoddetailstyle_t style, qboolean dim, qboolean search_active)
+{
+	plcolour_t white = M_DownloadMods_Color(255, 255, 255);
+	float alpha = dim ? 0.5f : 1.0f;
+
+	if (style == DOWNLOADMOD_DETAIL_PROGRESS)
+	{
+		M_DownloadMods_PrintGoldProgress(x, y, detail, alpha);
+		return;
+	}
+
+	if (style == DOWNLOADMOD_DETAIL_SIZE ||
+		style == DOWNLOADMOD_DETAIL_INSTALLED)
+	{
+		M_DownloadMods_PrintMaskedAlpha(x, y, detail, alpha);
+		return;
+	}
+
+	if (dim)
+	{
+		M_PrintRGBA(x, y, detail, white, alpha, false);
+		return;
+	}
+
+	if (search_active && q_strcasestr(detail, downloadmodsmenu.list.search.text))
+		M_PrintHighlight(x, y, detail, downloadmodsmenu.list.search.text,
+			downloadmodsmenu.list.search.len);
+	else
+		M_PrintWhite(x, y, detail);
+}
+
+static void M_DownloadMods_DrawRow(int x, int y, const downloadmoditem_t *item,
+	const char *detail, downloadmoddetailstyle_t detail_style,
+	qboolean installed, qboolean selected, qboolean search_active)
+{
+	int name_width = DOWNLOAD_MODS_NAME_CHARS * 8;
+	int detail_x = x + (DOWNLOAD_MODS_NAME_CHARS + 2) * 8;
+	char name_text[sizeof(item->name) + sizeof(item->version) + 2];
+	char detail_text[DOWNLOAD_MODS_DETAIL_CHARS + 1];
+	plcolour_t white = M_DownloadMods_Color(255, 255, 255);
+
+	if (item->version[0])
+		q_snprintf(name_text, sizeof(name_text), "%s %s",
+			item->name, item->version);
+	else
+		q_strlcpy(name_text, item->name, sizeof(name_text));
+	q_strlcpy(detail_text, detail, sizeof(detail_text));
+
+	if (installed)
+	{
+		M_DownloadMods_PrintRGBAScroll(x, y, name_width, name_text,
+			selected ? downloadmodsmenu.ticker.scroll_time : 0.0,
+			white, 0.5f, false);
+	}
+	else if (search_active)
+	{
+		if ((int)strlen(name_text) <= DOWNLOAD_MODS_NAME_CHARS)
+		{
+			M_PrintHighlight(x, y, name_text,
+				downloadmodsmenu.list.search.text,
+				downloadmodsmenu.list.search.len);
+		}
+		else
+		{
+			M_PrintHighlightScroll(x, y, name_width, name_text,
+				downloadmodsmenu.list.search.text,
+				selected ? downloadmodsmenu.ticker.scroll_time : 0.0);
+		}
+
+		M_DownloadMods_DrawDetail(detail_x, y, detail_text, detail_style,
+			installed, search_active);
+	}
+	else
+	{
+		M_PrintScroll(x, y, name_width, name_text,
+			selected ? downloadmodsmenu.ticker.scroll_time : 0.0, false);
+	}
+
+	if (!search_active || installed)
+	{
+		M_DownloadMods_DrawDetail(detail_x, y, detail_text, detail_style,
+			installed, search_active);
+	}
+}
+
+void M_DownloadMods_Draw(void)
+{
+	int x, y, i, cols;
+	int firstvis, numvis;
+	qboolean message_active = false;
+	downloadmoditem_t *selected_item;
+
+	x = DOWNLOAD_MODS_LIST_X;
+	y = DOWNLOAD_MODS_LIST_Y;
+	cols = DOWNLOAD_MODS_LIST_COLS;
+
+	downloadmodsmenu.x = x;
+	downloadmodsmenu.y = y;
+	downloadmodsmenu.cols = cols;
+
+	if (!keydown[K_MOUSE1])
+		downloadmodsmenu.scrollbar_grab = false;
+
+	if (downloadmodsmenu.prev_cursor != downloadmodsmenu.list.cursor)
+	{
+		downloadmodsmenu.prev_cursor = downloadmodsmenu.list.cursor;
+		M_Ticker_Init(&downloadmodsmenu.ticker);
+	}
+	else
+		M_Ticker_Update(&downloadmodsmenu.ticker);
+
+	Draw_String(x, y - 28, DOWNLOAD_MODS_LABEL);
+	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
+
+	if (downloadmodsmenu.message[0])
+	{
+		if (realtime - downloadmodsmenu.message_time < 3.0)
+			message_active = true;
+		else
+			downloadmodsmenu.message[0] = '\0';
+	}
+
+	if (downloadmodsmenu.itemcount <= 0)
+		M_Print(x, y, "No downloads configured");
+
+	M_List_GetVisibleRange(&downloadmodsmenu.list, &firstvis, &numvis);
+	for (i = 0; i < numvis; i++)
+	{
+		int idx = i + firstvis;
+		int item_idx = downloadmodsmenu.filtered_indices[idx];
+		downloadmoditem_t *item;
+		qboolean selected;
+		qboolean installed;
+		char active_detail[DOWNLOAD_MODS_DETAIL_CHARS + 1];
+		const char *detail;
+		downloadmoddetailstyle_t detail_style = DOWNLOADMOD_DETAIL_NORMAL;
+
+		if (item_idx == DOWNLOAD_MODS_SEPARATOR_INDEX)
+			continue;
+
+		item = &downloadmodsmenu.items[item_idx];
+		selected = (idx == downloadmodsmenu.list.cursor);
+		installed = M_DownloadMods_IsInstalled(item);
+		detail = M_DownloadMods_InstallDetail(item,
+			active_detail, sizeof(active_detail));
+
+		if (detail && detail[0] && detail[strlen(detail) - 1] == '%')
+			detail_style = DOWNLOADMOD_DETAIL_PROGRESS;
+		else if (installed)
+			detail_style = DOWNLOADMOD_DETAIL_INSTALLED;
+		else if (!detail)
+			detail_style = DOWNLOADMOD_DETAIL_SIZE;
+
+		M_DownloadMods_DrawRow(x, y + i * 8, item,
+			detail ? detail : (installed ? "installed" : item->size),
+			detail_style, installed, selected,
+			downloadmodsmenu.list.search.len > 0);
+
+		if (selected && M_DownloadMods_IsSelectableDisplayIndex(idx))
+			M_DrawCharacter(x - 8, y + i * 8, 12 + ((int)(realtime * 4) & 1));
+	}
+
+	if (M_List_GetOverflow(&downloadmodsmenu.list) > 0)
+	{
+		M_List_DrawScrollbar(&downloadmodsmenu.list, x + cols * 8 - 4, y);
+
+		if (downloadmodsmenu.list.scroll > 0)
+			M_DrawEllipsisBar(x, y - 8, cols);
+		if (downloadmodsmenu.list.scroll + downloadmodsmenu.list.viewsize < downloadmodsmenu.list.numitems)
+			M_DrawEllipsisBar(x, y + downloadmodsmenu.list.viewsize * 8, cols);
+	}
+
+	selected_item = M_DownloadMods_SelectedItem();
+	if (downloadmodsmenu.list.search.len == 0 && selected_item)
+	{
+		char tooltip_status[sizeof(downloadmodinstall.status)];
+		const char *tooltip = NULL;
+
+		if (message_active)
+			tooltip = downloadmodsmenu.message;
+		else if (M_DownloadMods_CopyInstallStateForItem(selected_item, NULL,
+			tooltip_status, sizeof(tooltip_status)) && tooltip_status[0])
+			tooltip = tooltip_status;
+		else if (M_DownloadMods_IsInstalled(selected_item))
+			tooltip = "installed - enter to play";
+		else
+			tooltip = selected_item->description;
+
+		if (tooltip)
+			M_PrintWhite(x, y + downloadmodsmenu.list.viewsize * 8 + 16, tooltip);
+	}
+
+	if (downloadmodsmenu.list.search.len > 0)
+	{
+		M_DrawTextBox(16, 176, 32, 1);
+		M_PrintHighlight(24, 184, downloadmodsmenu.list.search.text,
+			downloadmodsmenu.list.search.text,
+			downloadmodsmenu.list.search.len);
+		{
+			int cursor_x = 24 + 8 * downloadmodsmenu.list.search.len;
+			if (downloadmodsmenu.list.numitems == 0)
+				M_DrawCharacter(cursor_x, 184, 11 ^ 128);
+			else
+				M_DrawCharacter(cursor_x, 184, 10 + ((int)(realtime * 4) & 1));
+		}
+	}
+
+	if (downloadmodsmenu.exit_prompt)
+		M_DownloadMods_DrawExitPrompt();
+}
+
+qboolean M_DownloadMods_Match(int index, char initial)
+{
+	int item_idx = downloadmodsmenu.filtered_indices[index];
+
+	if (item_idx == DOWNLOAD_MODS_SEPARATOR_INDEX)
+		return false;
+
+	return q_tolower(downloadmodsmenu.items[item_idx].name[0]) == initial;
+}
+
+void M_DownloadMods_Key(int key)
+{
+	int x, y;
+
+	if (M_DownloadMods_ExitPromptKey(key))
+		return;
+
+	if (keydown[K_CTRL])
+	{
+		if ((key == 'u' || key == 'U') && downloadmodsmenu.list.search.len > 0)
+		{
+			downloadmodsmenu.list.search.len = 0;
+			downloadmodsmenu.list.search.text[0] = 0;
+			M_DownloadMods_Refilter();
+			return;
+		}
+		else if (key == K_BACKSPACE && downloadmodsmenu.list.search.len > 0)
+		{
+			M_DeletePrevWord(&downloadmodsmenu.list.search);
+			M_DownloadMods_Refilter();
+			return;
+		}
+	}
+
+	if (key >= 32 && key < 127)
+	{
+		if (downloadmodsmenu.list.search.len < downloadmodsmenu.list.search.maxlen)
+		{
+			downloadmodsmenu.list.search.text[downloadmodsmenu.list.search.len++] = key;
+			downloadmodsmenu.list.search.text[downloadmodsmenu.list.search.len] = 0;
+			M_DownloadMods_Refilter();
+			return;
+		}
+	}
+
+	if (downloadmodsmenu.scrollbar_grab)
+	{
+		switch (key)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			downloadmodsmenu.scrollbar_grab = false;
+			break;
+		}
+		return;
+	}
+
+	if (M_List_Key(&downloadmodsmenu.list, key))
+	{
+		M_DownloadMods_EnsureSelectableCursorForKey(key);
+		return;
+	}
+
+	if (M_List_CycleMatch(&downloadmodsmenu.list, key, M_DownloadMods_Match))
+		return;
+
+	if (M_Ticker_Key(&downloadmodsmenu.ticker, key))
+		return;
+
+	switch (key)
+	{
+	case K_ESCAPE:
+		if (downloadmodsmenu.list.search.len > 0)
+		{
+			downloadmodsmenu.list.search.len = 0;
+			downloadmodsmenu.list.search.text[0] = 0;
+			M_DownloadMods_Refilter();
+			return;
+		}
+		/* fall through */
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		if (M_DownloadMods_InstallBusy())
+		{
+			downloadmodsmenu.exit_prompt = true;
+			downloadmodsmenu.exit_prompt_cursor = DOWNLOADMOD_EXIT_BACKGROUND;
+			S_LocalSound("misc/menu1.wav");
+			return;
+		}
+		M_Menu_Mods_f();
+		break;
+
+	case K_BACKSPACE:
+		if (downloadmodsmenu.list.search.len > 0)
+		{
+			downloadmodsmenu.list.search.text[--downloadmodsmenu.list.search.len] = 0;
+			M_DownloadMods_Refilter();
+			return;
+		}
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+	enter:
+		M_DownloadMods_StartSelected();
+		break;
+
+	case K_MOUSE1:
+		x = m_mousex - downloadmodsmenu.x - (downloadmodsmenu.cols - 1) * 8;
+		y = m_mousey - downloadmodsmenu.y;
+		if (x < -8 || !M_List_UseScrollbar(&downloadmodsmenu.list, y))
+		{
+			M_List_Mousemove(&downloadmodsmenu.list, y);
+			goto enter;
+		}
+		downloadmodsmenu.scrollbar_grab = true;
+		M_DownloadMods_Mousemove(m_mousex, m_mousey);
+		break;
+
+	default:
+		break;
+	}
+}
+
+void M_DownloadMods_Mousemove(int cx, int cy)
+{
+	cy -= downloadmodsmenu.y;
+
+	if (downloadmodsmenu.scrollbar_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			downloadmodsmenu.scrollbar_grab = false;
+			return;
+		}
+		M_List_UseScrollbar(&downloadmodsmenu.list, cy);
+	}
+
+	M_List_Mousemove(&downloadmodsmenu.list, cy);
 }
 
 /*
@@ -28819,7 +31776,7 @@ typedef struct
 	demo_minframes_state_t minframes_state;
 	int         frame_count;
 } demoitem_t;
-	
+
 typedef struct
 {
 	char        map[64];
@@ -32659,6 +35616,7 @@ static struct
 	{"menu_namemaker", M_Menu_NameMaker_f}, // woods #namemaker
 	{"namemaker", M_Shortcut_NameMaker_f}, // woods #namemaker
 	{"menu_mods", M_Menu_Mods_f}, // woods
+	{"menu_downloadmods", M_Menu_DownloadMods_f},
 	{"menu_demos", M_Menu_Demos_f}, // woods
 	{"menu_maps", M_Menu_Maps_f}, // woods
 	{"menu_downloadmaps", M_Menu_DownloadMaps_f},
@@ -33092,6 +36050,10 @@ void M_Draw (void)
 		M_Mods_Draw();
 		break;
 
+	case m_downloadmods:
+		M_DownloadMods_Draw();
+		break;
+
 	case m_demos: // woods #demosmenu
 		M_Demos_Draw ();
 		break;
@@ -33173,6 +36135,7 @@ static qboolean M_HasSearchField (void)
 	case m_modelviewer:
 	case m_slist:
 	case m_mods:
+	case m_downloadmods:
 	case m_demos:
 		return true;
 	default:
@@ -33454,6 +36417,10 @@ void M_Keydown (int key, qboolean repeat)
 		M_Mods_Key(key);
 		return;
 
+	case m_downloadmods:
+		M_DownloadMods_Key(key);
+		return;
+
 	case m_demos: // woods #demosmenu
 		M_Demos_Key (key);
 		return;
@@ -33669,6 +36636,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_mods:
 		M_Mods_Mousemove(x, y);
+		return;
+
+	case m_downloadmods:
+		M_DownloadMods_Mousemove(x, y);
 		return;
 
 	case m_demos:
