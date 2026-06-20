@@ -2739,6 +2739,81 @@ static qboolean GithubExtractUserRepo(const char *in,
     return true;
 }
 
+static qboolean CL_DownloadUrlUsesQ1ToolsRepo(const char *url)
+{
+	char normalized[MAX_URLPATH];
+	char user[64], repo[64];
+	const char *host, *path, *end;
+	size_t host_len;
+
+	if (!url || !*url)
+		return false;
+
+	if (IsGithubRepoPath(url))
+	{
+		return NormalizeGithubRepoPath(url, normalized, sizeof(normalized)) &&
+			GithubExtractUserRepo(normalized, user, sizeof(user), repo, sizeof(repo)) &&
+			!q_strcasecmp(user, "q1tools") &&
+			!q_strcasecmp(repo, "q1tools.github.io");
+	}
+
+	host = url;
+	if (!q_strncasecmp(host, "https://", 8))
+		host += 8;
+	else if (!q_strncasecmp(host, "http://", 7))
+		host += 7;
+
+	end = host;
+	while (*end && *end != '/' && *end != ':' && *end != '?' && *end != '#')
+		++end;
+	host_len = end - host;
+
+	if (host_len == strlen("q1tools.github.io") &&
+		!q_strncasecmp(host, "q1tools.github.io", host_len))
+		return true;
+
+	if (host_len != strlen("github.com") ||
+		q_strncasecmp(host, "github.com", host_len))
+		return false;
+
+	path = end;
+	if (*path == ':')
+	{
+		while (*path && *path != '/' && *path != '?' && *path != '#')
+			++path;
+	}
+
+	{
+		const char q1tools_path[] = "/q1tools/q1tools.github.io";
+		size_t q1tools_path_len = sizeof(q1tools_path) - 1;
+
+		return !q_strncasecmp(path, q1tools_path, q1tools_path_len) &&
+			(path[q1tools_path_len] == '\0' ||
+			 path[q1tools_path_len] == '/' ||
+			 path[q1tools_path_len] == '?' ||
+			 path[q1tools_path_len] == '#');
+	}
+}
+
+qboolean CL_Q1ToolsDownloadsAvailable(void)
+{
+	qboolean url1_q1tools = CL_DownloadUrlUsesQ1ToolsRepo(cl_web_download_url.string);
+	qboolean url2_q1tools = CL_DownloadUrlUsesQ1ToolsRepo(cl_web_download_url2.string);
+
+	if (cls.state == ca_dedicated)
+		return false;
+
+	return (url1_q1tools && webcheck) || (url2_q1tools && web2check);
+}
+
+static qboolean CL_WebDownloadShouldCheckAtStartup(const char *url,
+	const char *default_string)
+{
+	return url && *url &&
+		(!strcmp(url, default_string) ||
+		 CL_DownloadUrlUsesQ1ToolsRepo(url));
+}
+
 
 int checkWebsite (void* ptr)  // ping the potential websites in advance
 {
@@ -3057,7 +3132,8 @@ void WebCheckInit (void) // runs at launch in CL_Init if default values
 
 	if (!checked_web && webearly == NULL &&
 		cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0' &&
-		!strcmp(cl_web_download_url.string, cl_web_download_url.default_string))
+		CL_WebDownloadShouldCheckAtStartup(cl_web_download_url.string,
+			cl_web_download_url.default_string))
 	{
 		WebCheckCallback_f(&cl_web_download_url);
 		checked_web = true;
@@ -3065,7 +3141,8 @@ void WebCheckInit (void) // runs at launch in CL_Init if default values
 
 	if (!checked_web2 && web2early == NULL &&
 		cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0' &&
-		!strcmp(cl_web_download_url2.string, cl_web_download_url2.default_string))
+		CL_WebDownloadShouldCheckAtStartup(cl_web_download_url2.string,
+			cl_web_download_url2.default_string))
 	{
 		Web2CheckCallback_f(&cl_web_download_url2);
 		checked_web2 = true;
@@ -3843,7 +3920,7 @@ static void CL_CurlSetDownloadOptions(CURL *curl)
 
 qboolean Curl_DownloadFile (const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name) // main curl function
 {
-	if (cls.download.active)	// don't stomp an in-flight async/protocol download's shared state
+	if (cls.download.active || curl_download_active)	// don't stomp an in-flight download's shared state
 		return false;
 
 	stop_curl_download = false;
@@ -4233,7 +4310,7 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 	if (!CL_AsyncDownload_EnsureMutex())
 		return false;
 
-	if (CL_AsyncDownload_IsActive() || cls.download.active)
+	if (CL_AsyncDownload_IsActive() || cls.download.active || curl_download_active)
 	{
 		Con_Printf("A download is already active\n");
 		return false;
@@ -4898,7 +4975,7 @@ qboolean CL_CheckDownload(const char *filename)
 		return false;	//no point downloading if we're the server...
 	if (*filename == '*')
 		return false;	//don't download these...
-	if (cls.download.active)
+	if (cls.download.active || curl_download_active)
 		return true;	//block while we're already downloading something
 	if (cl.wronggamedir && allow_download.value != 3) // woods, allow_download 3 forces downloads even on a gamedir mismatch
 		return false;	//don't download them into the wrong place. this may be awkward for id1 content though (if such a thing logically exists... like custom maps).
@@ -5443,7 +5520,7 @@ void CL_ManualDownload_f (const char* filename)
 
 	if (*filename == '*')
 		return;    //don't download these...
-	if (CL_AsyncDownload_IsActive() || cls.download.active)
+	if (CL_AsyncDownload_IsActive() || cls.download.active || curl_download_active)
 	{
 		Con_Printf("A download is already active\n");
 		return;    //block while we're already downloading something

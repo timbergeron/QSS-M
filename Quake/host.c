@@ -2247,6 +2247,7 @@ void _Host_Frame (double time)
 	NET_PortPingProbe_Frame();
 	URI_Frame(); // woods #uri
 	CL_AsyncDownload_Frame();
+	M_DownloadMods_Frame();
 
 	if (cl.sendprespawn)
 	{
@@ -2590,6 +2591,8 @@ void Host_Shutdown(void)
 	SV_CleanupTimer(); // woods #svtimer
 
 	Host_WriteConfiguration ();
+
+	M_DownloadMods_Shutdown();
 
 	CL_AsyncDownload_Shutdown();
 

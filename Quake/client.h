@@ -644,6 +644,7 @@ void CL_InitWebDownloads(qboolean run_checks);
 void CL_AsyncDownload_Cancel(void);
 void CL_AsyncDownload_Frame(void);
 void CL_AsyncDownload_Shutdown(void);
+qboolean CL_Q1ToolsDownloadsAvailable(void);
 qboolean CL_QWMapListDownloadsAvailable(void);
 void CL_QWMapListDownloadsRetry(void);
 
