@@ -28971,12 +28971,14 @@ Download Mods Menu
 #define DOWNLOAD_MODS_MAX_ARCHIVE_BYTES		((curl_off_t)3 * 1024 * 1024 * 1024)
 #define DOWNLOAD_MODS_MAX_PARTS				16
 #define DOWNLOAD_MODS_MAX_RELEASES_BYTES	(8 * 1024 * 1024)
+#define DOWNLOAD_MODS_MAX_TAG_FALLBACKS		16
 /* Throttle repeated menu opens for the same source in one engine session without
  * letting an old cache file hide newly-published releases for minutes. */
 #define DOWNLOAD_MODS_FETCH_THROTTLE_SECONDS	(2 * 60)
-/* The mod list is built entirely from the GitHub Releases API of the repo named
- * by cl_web_download_url ("user/repo"); the releases URL and the asset-download
- * URL prefix are derived from it at runtime (see M_DownloadMods_RepoUrls). */
+/* The mod list is built from the GitHub Releases API of the repo named by
+ * cl_web_download_url ("user/repo"), with a tags fallback for releases that the
+ * list endpoint temporarily omits. The API URL and the asset-download URL
+ * prefix are derived at runtime (see M_DownloadMods_RepoUrls). */
 
 typedef enum
 {
@@ -29028,11 +29030,12 @@ static struct
 	int					*filtered_indices;
 } downloadmodsmenu;
 
-/* Background fetch of the GitHub Releases list. The worker thread only performs
- * the network GET and hands the raw JSON text to the main thread, which parses
- * and merges the releases. The same merge path is reused to seed the list from a
- * local cache on open. The releases API URL is resolved from cl_web_download_url
- * before the worker starts and captured here so the thread reads no cvars. */
+/* Background fetch of the GitHub Releases list and supplemental source data. The
+ * worker thread only performs network GETs and hands raw JSON text to the main
+ * thread, which parses and merges releases. The same merge path is reused to seed
+ * the list from local caches on open. Source URLs are resolved from
+ * cl_web_download_url before the worker starts and captured here so the thread
+ * reads no cvars. */
 static struct
 {
 	SDL_Thread			*thread;
@@ -29044,6 +29047,7 @@ static struct
 	char				last_api_url[DOWNLOAD_MODS_MAX_URL];
 	char				last_mods_url[DOWNLOAD_MODS_MAX_URL];
 	char				*json;		/* releases response text, owned by main thread once done */
+	char				*tag_releases_json; /* fallback /releases/tags/<tag> array */
 	char				*mods_json;	/* mods/ contents response text, owned by main thread once done */
 	char				api_url[DOWNLOAD_MODS_MAX_URL];	/* releases API URL for the worker */
 	char				mods_url[DOWNLOAD_MODS_MAX_URL];	/* mods/ contents API URL for the worker ("" = skip) */
@@ -32269,16 +32273,285 @@ static char *M_DownloadMods_FetchUrl(const char *url, char *error,
 	return out;
 }
 
+static qboolean M_DownloadMods_AppendText(char **out, size_t *len,
+	size_t *cap, const char *text, size_t text_len)
+{
+	char *new_out;
+	size_t needed, new_cap;
+
+	if (!out || !len || !cap || !text)
+		return false;
+	if (text_len > (size_t)-1 - *len - 1)
+		return false;
+
+	needed = *len + text_len + 1;
+	if (needed > *cap)
+	{
+		new_cap = (*cap > 0) ? *cap : 1024;
+		while (new_cap < needed)
+		{
+			if (new_cap > (size_t)-1 / 2)
+				return false;
+			new_cap *= 2;
+		}
+
+		new_out = (char *)realloc(*out, new_cap);
+		if (!new_out)
+			return false;
+		*out = new_out;
+		*cap = new_cap;
+	}
+
+	memcpy(*out + *len, text, text_len);
+	*len += text_len;
+	(*out)[*len] = '\0';
+	return true;
+}
+
+static qboolean M_DownloadMods_ApiBaseFromReleasesUrl(const char *api_url,
+	char *out, size_t outsize)
+{
+	const char *releases;
+	size_t len;
+
+	if (!api_url || !out || outsize == 0)
+		return false;
+
+	releases = strstr(api_url, "/releases");
+	if (!releases)
+		return false;
+
+	len = (size_t)(releases - api_url);
+	if (len == 0 || len >= outsize)
+		return false;
+
+	memcpy(out, api_url, len);
+	out[len] = '\0';
+	return true;
+}
+
+static qboolean M_DownloadMods_TagsUrlFromReleasesUrl(const char *api_url,
+	char *out, size_t outsize)
+{
+	char base[DOWNLOAD_MODS_MAX_URL];
+
+	if (!M_DownloadMods_ApiBaseFromReleasesUrl(api_url, base, sizeof(base)))
+		return false;
+
+	return (size_t)q_snprintf(out, outsize, "%s/tags?per_page=100", base) <
+		outsize;
+}
+
+static qboolean M_DownloadMods_UrlCharUnreserved(unsigned char c)
+{
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+		(c >= '0' && c <= '9') || c == '-' || c == '.' ||
+		c == '_' || c == '~';
+}
+
+static qboolean M_DownloadMods_UrlEscapePathComponent(const char *in,
+	char *out, size_t outsize)
+{
+	static const char hex[] = "0123456789ABCDEF";
+	size_t pos = 0;
+
+	if (!in || !out || outsize == 0)
+		return false;
+
+	while (*in)
+	{
+		unsigned char c = (unsigned char)*in++;
+
+		if (M_DownloadMods_UrlCharUnreserved(c))
+		{
+			if (pos + 1 >= outsize)
+				return false;
+			out[pos++] = (char)c;
+		}
+		else
+		{
+			if (pos + 3 >= outsize)
+				return false;
+			out[pos++] = '%';
+			out[pos++] = hex[c >> 4];
+			out[pos++] = hex[c & 15];
+		}
+	}
+
+	out[pos] = '\0';
+	return true;
+}
+
+static qboolean M_DownloadMods_ReleaseTagUrlFromReleasesUrl(
+	const char *api_url, const char *tag, char *out, size_t outsize)
+{
+	char base[DOWNLOAD_MODS_MAX_URL];
+	char escaped_tag[DOWNLOAD_MODS_MAX_URL];
+
+	if (!M_DownloadMods_ApiBaseFromReleasesUrl(api_url, base, sizeof(base)))
+		return false;
+	if (!M_DownloadMods_UrlEscapePathComponent(tag, escaped_tag,
+		sizeof(escaped_tag)))
+		return false;
+
+	return (size_t)q_snprintf(out, outsize, "%s/releases/tags/%s",
+		base, escaped_tag) < outsize;
+}
+
+static qboolean M_DownloadMods_ReleaseTagSeen(const jsonentry_t *releases,
+	const char *tag)
+{
+	const jsonentry_t *release;
+
+	if (!releases || !tag)
+		return false;
+
+	for (release = releases->firstchild; release; release = release->next)
+	{
+		const char *release_tag;
+
+		if (release->type != JSON_OBJECT)
+			continue;
+		release_tag = JSON_FindString(release, "tag_name");
+		if (release_tag && !strcmp(release_tag, tag))
+			return true;
+	}
+
+	return false;
+}
+
+/* GitHub's releases list can lag or omit freshly-created releases even though
+ * /releases/tags/<tag> already resolves. Use the tags list as a bounded fallback
+ * source and return a JSON array of individually fetched release objects. */
+static char *M_DownloadMods_FetchTagFallbackJson(const char *releases_text,
+	const char *api_url, char *error, size_t error_size)
+{
+	char tags_url[DOWNLOAD_MODS_MAX_URL];
+	char tag_url[DOWNLOAD_MODS_MAX_URL];
+	char fetch_error[128];
+	char *tags_text = NULL;
+	char *release_text = NULL;
+	char *out = NULL;
+	size_t out_len = 0;
+	size_t out_cap = 0;
+	json_t *releases_json = NULL;
+	json_t *tags_json = NULL;
+	json_t *release_json = NULL;
+	const jsonentry_t *tag_entry;
+	int fetched = 0;
+	qboolean ok = false;
+
+	if (!releases_text || !*releases_text || !api_url || !*api_url)
+		return NULL;
+	if (!M_DownloadMods_TagsUrlFromReleasesUrl(api_url, tags_url,
+		sizeof(tags_url)))
+		return NULL;
+
+	releases_json = JSON_Parse(releases_text);
+	if (!releases_json || !releases_json->root ||
+		releases_json->root->type != JSON_ARRAY)
+		goto done;
+
+	fetch_error[0] = '\0';
+	tags_text = M_DownloadMods_FetchUrl(tags_url, fetch_error,
+		sizeof(fetch_error));
+	if (!tags_text)
+	{
+		if (error && error_size && fetch_error[0])
+			q_strlcpy(error, fetch_error, error_size);
+		goto done;
+	}
+
+	tags_json = JSON_Parse(tags_text);
+	if (!tags_json || !tags_json->root || tags_json->root->type != JSON_ARRAY)
+		goto done;
+
+	if (!M_DownloadMods_AppendText(&out, &out_len, &out_cap, "[", 1))
+		goto done;
+
+	for (tag_entry = tags_json->root->firstchild; tag_entry;
+		tag_entry = tag_entry->next)
+	{
+		const char *tag_name;
+
+		if (tag_entry->type != JSON_OBJECT)
+			continue;
+		tag_name = JSON_FindString(tag_entry, "name");
+		if (!tag_name || !*tag_name)
+			continue;
+		if (M_DownloadMods_ReleaseTagSeen(releases_json->root, tag_name))
+			continue;
+		if (fetched >= DOWNLOAD_MODS_MAX_TAG_FALLBACKS)
+			break;
+		if (!M_DownloadMods_ReleaseTagUrlFromReleasesUrl(api_url, tag_name,
+			tag_url, sizeof(tag_url)))
+			continue;
+
+		fetch_error[0] = '\0';
+		release_text = M_DownloadMods_FetchUrl(tag_url, fetch_error,
+			sizeof(fetch_error));
+		if (!release_text)
+			continue;
+
+		release_json = JSON_Parse(release_text);
+		if (release_json && release_json->root &&
+			release_json->root->type == JSON_OBJECT &&
+			JSON_FindString(release_json->root, "tag_name") &&
+			JSON_Find(release_json->root, "assets", JSON_ARRAY))
+		{
+			if (fetched > 0 &&
+				!M_DownloadMods_AppendText(&out, &out_len, &out_cap,
+					",", 1))
+				goto done;
+			if (!M_DownloadMods_AppendText(&out, &out_len, &out_cap,
+				release_text, strlen(release_text)))
+				goto done;
+			fetched++;
+		}
+
+		JSON_Free(release_json);
+		release_json = NULL;
+		free(release_text);
+		release_text = NULL;
+	}
+
+	if (!M_DownloadMods_AppendText(&out, &out_len, &out_cap, "]", 1))
+		goto done;
+	ok = true;
+
+done:
+	if (release_json)
+		JSON_Free(release_json);
+	if (release_text)
+		free(release_text);
+	if (tags_json)
+		JSON_Free(tags_json);
+	if (tags_text)
+		free(tags_text);
+	if (releases_json)
+		JSON_Free(releases_json);
+	if (!ok || fetched <= 0)
+	{
+		free(out);
+		out = NULL;
+	}
+	return out;
+}
+
 static int M_DownloadMods_FetchThread(void *unused)
 {
 	char error[sizeof(downloadmodsfetch.error)];
 	char *json = NULL;
+	char *tag_releases_json = NULL;
 	char *mods_json = NULL;
 
 	(void)unused;
 	error[0] = '\0';
 
 	json = M_DownloadMods_FetchUrl(downloadmodsfetch.api_url, error, sizeof(error));
+	if (json)
+		tag_releases_json = M_DownloadMods_FetchTagFallbackJson(json,
+			downloadmodsfetch.api_url, NULL, 0);
 
 	/* The mods/ directory is optional: a repo without one (404) just yields no
 	 * tree mods and never fails the release fetch. */
@@ -32292,6 +32565,7 @@ static int M_DownloadMods_FetchThread(void *unused)
 
 	SDL_LockMutex(downloadmodsfetch.mutex);
 	downloadmodsfetch.json = json;
+	downloadmodsfetch.tag_releases_json = tag_releases_json;
 	downloadmodsfetch.mods_json = mods_json;
 	downloadmodsfetch.success = (json != NULL);
 	q_strlcpy(downloadmodsfetch.error, json ? "" : error, sizeof(downloadmodsfetch.error));
@@ -32303,6 +32577,7 @@ static int M_DownloadMods_FetchThread(void *unused)
 static qboolean M_DownloadMods_SeedFromCache(void)
 {
 	char *cache = M_DownloadMods_ReadCache("modreleases.json");
+	char *tag_cache = M_DownloadMods_ReadCache("modtagreleases.json");
 	char *mods = M_DownloadMods_ReadCache("modslist.json");
 	qboolean valid = false;
 
@@ -32311,6 +32586,12 @@ static qboolean M_DownloadMods_SeedFromCache(void)
 		if (M_DownloadMods_MergeReleasesJson(cache, NULL))
 			valid = true;
 		free(cache);
+	}
+	if (tag_cache)
+	{
+		if (M_DownloadMods_MergeReleasesJson(tag_cache, NULL))
+			valid = true;
+		free(tag_cache);
 	}
 	if (mods)
 	{
@@ -32364,6 +32645,7 @@ static void M_DownloadMods_StartFetch(void)
 	downloadmodsfetch.done = false;
 	downloadmodsfetch.success = false;
 	downloadmodsfetch.json = NULL;
+	downloadmodsfetch.tag_releases_json = NULL;
 	downloadmodsfetch.mods_json = NULL;
 	downloadmodsfetch.error[0] = '\0';
 
@@ -32384,6 +32666,7 @@ static void M_DownloadMods_StartFetch(void)
 static void M_DownloadMods_PollFetch(void)
 {
 	char *json;
+	char *tag_releases_json;
 	char *mods_json;
 	int added = 0;
 	qboolean done, success;
@@ -32395,6 +32678,7 @@ static void M_DownloadMods_PollFetch(void)
 	done = downloadmodsfetch.done;
 	success = downloadmodsfetch.success;
 	json = downloadmodsfetch.json;
+	tag_releases_json = downloadmodsfetch.tag_releases_json;
 	mods_json = downloadmodsfetch.mods_json;
 	SDL_UnlockMutex(downloadmodsfetch.mutex);
 
@@ -32428,6 +32712,20 @@ static void M_DownloadMods_PollFetch(void)
 	else if (!success && downloadmodsfetch.error[0])
 		Con_DPrintf("Mod release fetch failed: %s\n", downloadmodsfetch.error);
 
+	/* Fallback releases are individually fetched from tags missing in the
+	 * releases list, then validated by the same merge path as the primary list. */
+	if (tag_releases_json)
+	{
+		int tag_added = 0;
+		if (M_DownloadMods_MergeReleasesJson(tag_releases_json, &tag_added))
+		{
+			M_DownloadMods_WriteCache(tag_releases_json, "modtagreleases.json");
+			added += tag_added;
+		}
+		else
+			Con_DPrintf("No installable releases in tag fallback\n");
+	}
+
 	/* The mods/ directory is optional and best-effort. */
 	if (mods_json)
 	{
@@ -32443,10 +32741,13 @@ static void M_DownloadMods_PollFetch(void)
 
 	if (json)
 		free(json);
+	if (tag_releases_json)
+		free(tag_releases_json);
 	if (mods_json)
 		free(mods_json);
 
 	downloadmodsfetch.json = NULL;
+	downloadmodsfetch.tag_releases_json = NULL;
 	downloadmodsfetch.mods_json = NULL;
 	downloadmodsfetch.active = false;
 
@@ -32463,6 +32764,7 @@ static void M_DownloadMods_ShutdownFetch(void)
 	SDL_mutex *mutex = downloadmodsfetch.mutex;
 	SDL_Thread *thread = NULL;
 	char *json = NULL;
+	char *tag_releases_json = NULL;
 	char *mods_json = NULL;
 
 	if (!mutex)
@@ -32478,8 +32780,10 @@ static void M_DownloadMods_ShutdownFetch(void)
 
 	SDL_LockMutex(mutex);
 	json = downloadmodsfetch.json;
+	tag_releases_json = downloadmodsfetch.tag_releases_json;
 	mods_json = downloadmodsfetch.mods_json;
 	downloadmodsfetch.json = NULL;
+	downloadmodsfetch.tag_releases_json = NULL;
 	downloadmodsfetch.mods_json = NULL;
 	downloadmodsfetch.active = false;
 	downloadmodsfetch.done = false;
@@ -32489,6 +32793,8 @@ static void M_DownloadMods_ShutdownFetch(void)
 
 	if (json)
 		free(json);
+	if (tag_releases_json)
+		free(tag_releases_json);
 	if (mods_json)
 		free(mods_json);
 
