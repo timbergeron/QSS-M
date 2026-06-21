@@ -1659,15 +1659,6 @@ qboolean	Cmd_ExecuteString (const char *text, cmd_source_t src)
 	return true;
 }
 
-// woods #matchinp -- chat tokens whose auto-responses spam during matches
-static qboolean Cmd_IsPrintTriggerToken (const char *s)
-{
-	return !strcmp(s, "f_version") || !strcmp(s, "q_version") ||
-	       !strcmp(s, "f_system")  || !strcmp(s, "q_sysinfo") ||
-	       !strcmp(s, "f_config")  || !strcmp(s, "f_random") ||
-	       !strcmp(s, "f_modified");
-}
-
 static char *Cmd_AppendChatChar (char *dst, char *end, int c)
 {
 	if (dst < end)
@@ -1736,26 +1727,6 @@ void Cmd_ForwardToServer (void)
 				Con_Printf("\nchanging ^mobserver^m key is not allowed\n\n");
 				return;
 			}
-		}
-	}
-
-	// woods #matchinp -- block f_/q_ chat triggers during a match
-	// only the exact one-token form (say f_xxx / say_team f_xxx) auto-triggers the
-	// receiver's suffix match, so tighten the gate to match that.
-	if (cl.matchinp)
-	{
-		const char *tok = NULL;
-		if (Cmd_Argc() == 2 &&
-			(!q_strcasecmp(Cmd_Argv(0), "say") || !q_strcasecmp(Cmd_Argv(0), "say_team")))
-			tok = Cmd_Argv(1);
-		else if (Cmd_Argc() == 3 && !q_strcasecmp(Cmd_Argv(0), "cmd") &&
-			(!q_strcasecmp(Cmd_Argv(1), "say") || !q_strcasecmp(Cmd_Argv(1), "say_team")))
-			tok = Cmd_Argv(2);
-
-		if (tok && Cmd_IsPrintTriggerToken(tok))
-		{
-			Con_Printf("\x02%s\x02 is disabled during a match\n", tok);
-			return;
 		}
 	}
 
