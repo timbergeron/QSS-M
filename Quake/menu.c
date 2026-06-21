@@ -28971,7 +28971,9 @@ Download Mods Menu
 #define DOWNLOAD_MODS_MAX_ARCHIVE_BYTES		((curl_off_t)3 * 1024 * 1024 * 1024)
 #define DOWNLOAD_MODS_MAX_PARTS				16
 #define DOWNLOAD_MODS_MAX_RELEASES_BYTES	(8 * 1024 * 1024)
-#define DOWNLOAD_MODS_FETCH_THROTTLE_SECONDS	(10 * 60)
+/* Throttle repeated menu opens for the same source in one engine session without
+ * letting an old cache file hide newly-published releases for minutes. */
+#define DOWNLOAD_MODS_FETCH_THROTTLE_SECONDS	(2 * 60)
 /* The mod list is built entirely from the GitHub Releases API of the repo named
  * by cl_web_download_url ("user/repo"); the releases URL and the asset-download
  * URL prefix are derived from it at runtime (see M_DownloadMods_RepoUrls). */
@@ -29038,7 +29040,9 @@ static struct
 	qboolean			active;		/* a fetch has been started */
 	qboolean			done;		/* worker finished, result not yet consumed */
 	qboolean			success;
-	qboolean			cache_seeded_valid;
+	time_t				last_fetch_time; /* process-local rate limit */
+	char				last_api_url[DOWNLOAD_MODS_MAX_URL];
+	char				last_mods_url[DOWNLOAD_MODS_MAX_URL];
 	char				*json;		/* releases response text, owned by main thread once done */
 	char				*mods_json;	/* mods/ contents response text, owned by main thread once done */
 	char				api_url[DOWNLOAD_MODS_MAX_URL];	/* releases API URL for the worker */
@@ -29322,10 +29326,9 @@ static void M_DownloadMods_Init(void)
 
 	M_Ticker_Init(&downloadmodsmenu.ticker);
 
-	/* The list is sourced entirely from the GitHub Releases API: seed any
-	 * previously-cached releases instantly, then kick off a live fetch unless
-	 * the cache already reflects a recent success. */
-	downloadmodsfetch.cache_seeded_valid = M_DownloadMods_SeedFromCache();
+	/* Seed cached releases instantly, then kick off a live fetch unless this
+	 * engine session already checked recently. */
+	M_DownloadMods_SeedFromCache();
 	M_DownloadMods_StartFetch();
 
 	M_DownloadMods_RefreshInstalledCache();
@@ -32158,31 +32161,6 @@ static qboolean M_DownloadMods_CachePathNamed(char *out, size_t outsize,
 		com_basedir, name) < outsize;
 }
 
-static qboolean M_DownloadMods_CacheFileFresh(const char *name)
-{
-	char path[MAX_OSPATH];
-	struct stat st;
-	time_t now;
-
-	if (!M_DownloadMods_CachePathNamed(path, sizeof(path), name) ||
-		stat(path, &st) != 0)
-		return false;
-
-	now = time(NULL);
-	if (now == (time_t)-1)
-		return false;
-
-	return difftime(now, st.st_mtime) < DOWNLOAD_MODS_FETCH_THROTTLE_SECONDS;
-}
-
-static qboolean M_DownloadMods_CacheIsFresh(void)
-{
-	/* Either source's cache being recent throttles the next fetch, so a repo
-	 * with only releases or only a mods/ directory is still rate-limited. */
-	return M_DownloadMods_CacheFileFresh("modreleases.json") ||
-		M_DownloadMods_CacheFileFresh("modslist.json");
-}
-
 /* Persist the last good listing so it can seed the menu instantly on the next
  * open, even offline or if the API is rate-limited. */
 static void M_DownloadMods_WriteCache(const char *text, const char *name)
@@ -32345,10 +32323,11 @@ static qboolean M_DownloadMods_SeedFromCache(void)
 
 static void M_DownloadMods_StartFetch(void)
 {
+	time_t now;
+	double age;
+
 	if (downloadmodsfetch.active)
 		return; /* a fetch is already running or its result is pending */
-	if (downloadmodsfetch.cache_seeded_valid && M_DownloadMods_CacheIsFresh())
-		return;
 
 	/* Resolve the releases API URL for the configured repo up front so the
 	 * worker thread touches no cvars. If cl_web_download_url is not a GitHub
@@ -32364,6 +32343,17 @@ static void M_DownloadMods_StartFetch(void)
 	if (!M_DownloadMods_RepoContentsUrl(downloadmodsfetch.mods_url,
 		sizeof(downloadmodsfetch.mods_url)))
 		downloadmodsfetch.mods_url[0] = '\0';
+
+	now = time(NULL);
+	if (downloadmodsfetch.last_fetch_time != (time_t)0 &&
+		now != (time_t)-1 &&
+		!q_strcasecmp(downloadmodsfetch.last_api_url, downloadmodsfetch.api_url) &&
+		!q_strcasecmp(downloadmodsfetch.last_mods_url, downloadmodsfetch.mods_url))
+	{
+		age = difftime(now, downloadmodsfetch.last_fetch_time);
+		if (age >= 0.0 && age < DOWNLOAD_MODS_FETCH_THROTTLE_SECONDS)
+			return;
+	}
 
 	if (!downloadmodsfetch.mutex)
 		downloadmodsfetch.mutex = SDL_CreateMutex();
@@ -32381,6 +32371,14 @@ static void M_DownloadMods_StartFetch(void)
 		SDL_CreateThread(M_DownloadMods_FetchThread, "ModReleasesFetch", NULL);
 	if (!downloadmodsfetch.thread)
 		downloadmodsfetch.active = false;
+	else if (now != (time_t)-1)
+	{
+		downloadmodsfetch.last_fetch_time = now;
+		q_strlcpy(downloadmodsfetch.last_api_url, downloadmodsfetch.api_url,
+			sizeof(downloadmodsfetch.last_api_url));
+		q_strlcpy(downloadmodsfetch.last_mods_url, downloadmodsfetch.mods_url,
+			sizeof(downloadmodsfetch.last_mods_url));
+	}
 }
 
 static void M_DownloadMods_PollFetch(void)
@@ -32423,7 +32421,6 @@ static void M_DownloadMods_PollFetch(void)
 		{
 			/* Only overwrite the cache with verified-good live data. */
 			M_DownloadMods_WriteCache(json, "modreleases.json");
-			downloadmodsfetch.cache_seeded_valid = true;
 		}
 		else
 			Con_DPrintf("Mod release fetch returned invalid JSON\n");
