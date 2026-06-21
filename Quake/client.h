@@ -645,6 +645,9 @@ void CL_AsyncDownload_Cancel(void);
 void CL_AsyncDownload_Frame(void);
 void CL_AsyncDownload_Shutdown(void);
 qboolean CL_Q1ToolsDownloadsAvailable(void);
+qboolean CL_GithubReleasesUrls(const char *repopath, char *api_url, size_t api_sz, char *asset_prefix, size_t prefix_sz);
+qboolean CL_GithubContentsUrl(const char *repopath, const char *subdir, char *out, size_t outsize);
+qboolean CL_GithubRawPrefix(const char *repopath, char *out, size_t outsize);
 qboolean CL_QWMapListDownloadsAvailable(void);
 void CL_QWMapListDownloadsRetry(void);
 

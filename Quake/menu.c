@@ -4680,7 +4680,7 @@ void M_DownloadMaps_Draw(void)
 	else
 		M_Ticker_Update(&downloadmapsmenu.ticker);
 
-	Draw_String(x, y - 28, DOWNLOAD_MAPS_LABEL);
+	Draw_String(x, y - 28, "Map Downloads");
 	if (downloadmapsmenu.message[0])
 	{
 		if (realtime - downloadmapsmenu.message_time < 2.5)
@@ -21042,6 +21042,7 @@ Version Menu
 
 #define MAX_VIS_VERSION	17
 #define VERSION_GITHUB_URL "https://api.github.com/repos/timbergeron/QSS-M/releases/latest"
+#define VERSION_GITHUB_MAX_RESPONSE_BYTES	(8 * 1024 * 1024)
 
 typedef struct
 {
@@ -21077,6 +21078,8 @@ typedef struct
 {
 	char	*memory;
 	size_t	size;
+	size_t	max_size;
+	qboolean too_large;
 } versionhttpmem_t;
 
 #define VERSION_GITHUB_RELEASE_URL VERSION_GITHUB_URL
@@ -21121,9 +21124,24 @@ static void M_Version_RemoteInfo_Init(versionremoteinfo_t* info, int state)
 
 static size_t M_Version_GitHubWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
 {
-	size_t realsize = size * nmemb;
+	size_t realsize;
 	versionhttpmem_t* mem = (versionhttpmem_t*)userp;
-	char* ptr = (char*)realloc(mem->memory, mem->size + realsize + 1);
+	char* ptr;
+
+	if (size && nmemb > (size_t)-1 / size)
+	{
+		mem->too_large = true;
+		return 0;
+	}
+	realsize = size * nmemb;
+	if (realsize > (size_t)-1 - mem->size - 1 ||
+		(mem->max_size && mem->size + realsize > mem->max_size))
+	{
+		mem->too_large = true;
+		return 0;
+	}
+
+	ptr = (char*)realloc(mem->memory, mem->size + realsize + 1);
 
 	if (!ptr)
 		return 0;
@@ -21136,7 +21154,7 @@ static size_t M_Version_GitHubWriteCallback(void* contents, size_t size, size_t 
 	return realsize;
 }
 
-static qboolean M_Version_GitHubHttpGet(const char* url, versionhttpmem_t* mem, char* error, size_t errorsz)
+static qboolean M_Version_GitHubHttpGet(const char* url, versionhttpmem_t* mem, char* error, size_t errorsz, size_t max_bytes)
 {
 	CURL* curl;
 	CURLcode res;
@@ -21144,6 +21162,8 @@ static qboolean M_Version_GitHubHttpGet(const char* url, versionhttpmem_t* mem, 
 
 	mem->memory = (char*)malloc(1);
 	mem->size = 0;
+	mem->max_size = max_bytes;
+	mem->too_large = false;
 	if (!mem->memory)
 	{
 		q_strlcpy(error, "out of memory", errorsz);
@@ -21174,6 +21194,8 @@ static qboolean M_Version_GitHubHttpGet(const char* url, versionhttpmem_t* mem, 
 	curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+	if (max_bytes)
+		curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)max_bytes);
 #if CURL_AT_LEAST_VERSION(7, 85, 0)
 	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
 	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
@@ -21186,9 +21208,12 @@ static qboolean M_Version_GitHubHttpGet(const char* url, versionhttpmem_t* mem, 
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 	curl_easy_cleanup(curl);
 
+	if (res == CURLE_FILESIZE_EXCEEDED)
+		mem->too_large = true;
 	if (res != CURLE_OK)
 	{
-		q_strlcpy(error, curl_easy_strerror(res), errorsz);
+		q_strlcpy(error, mem->too_large ? "response too large" :
+			curl_easy_strerror(res), errorsz);
 		free(mem->memory);
 		mem->memory = NULL;
 		return false;
@@ -21270,7 +21295,8 @@ static void M_Version_GitHubFetchRelease(versionremoteinfo_t* info)
 	versionhttpmem_t mem = {0};
 
 	M_Version_RemoteInfo_Init(info, VERSIONGITHUB_ERROR);
-	if (!M_Version_GitHubHttpGet(VERSION_GITHUB_RELEASE_URL, &mem, info->error, sizeof(info->error)))
+	if (!M_Version_GitHubHttpGet(VERSION_GITHUB_RELEASE_URL, &mem,
+		info->error, sizeof(info->error), VERSION_GITHUB_MAX_RESPONSE_BYTES))
 		return;
 
 	{
@@ -21318,7 +21344,8 @@ static void M_Version_GitHubFetchCommit(versionremoteinfo_t* info)
 	char rawurl[256];
 
 	M_Version_RemoteInfo_Init(info, VERSIONGITHUB_ERROR);
-	if (!M_Version_GitHubHttpGet(VERSION_GITHUB_COMMIT_URL, &mem, info->error, sizeof(info->error)))
+	if (!M_Version_GitHubHttpGet(VERSION_GITHUB_COMMIT_URL, &mem,
+		info->error, sizeof(info->error), VERSION_GITHUB_MAX_RESPONSE_BYTES))
 		return;
 
 	{
@@ -21351,7 +21378,8 @@ static void M_Version_GitHubFetchCommit(versionremoteinfo_t* info)
 
 	free(mem.memory);
 
-	if (!M_Version_GitHubHttpGet(rawurl, &filemem, info->error, sizeof(info->error)))
+	if (!M_Version_GitHubHttpGet(rawurl, &filemem,
+		info->error, sizeof(info->error), VERSION_GITHUB_MAX_RESPONSE_BYTES))
 		return;
 
 	if (!M_Version_ParseQuakedefVersion(filemem.memory, info->version, sizeof(info->version), &info->comparison))
@@ -28240,7 +28268,7 @@ Mods Menu (iw)
 */
 
 #define MAX_VIS_MODS	19
-#define DOWNLOAD_MODS_LABEL	"Downloads"
+#define DOWNLOAD_MODS_LABEL	"Download"
 
 typedef struct
 {
@@ -28925,40 +28953,28 @@ Download Mods Menu
 */
 
 #define MAX_VIS_DOWNLOAD_MODS	17
-#define DOWNLOAD_MODS_LIST_X	8
+#define DOWNLOAD_MODS_LIST_X	16
 #define DOWNLOAD_MODS_LIST_Y	32
-#define DOWNLOAD_MODS_LIST_COLS	38
-#define DOWNLOAD_MODS_NAME_CHARS	27
+/* Match the local mods menu's width: cols 36 with the last 2 columns reserved
+ * for the scrollbar, giving a 34-char content budget (name + 1 gap + detail) so
+ * neither column draws under the scrollbar when the list overflows. */
+#define DOWNLOAD_MODS_LIST_COLS	36
+#define DOWNLOAD_MODS_SCROLLBAR_COLS	2
+#define DOWNLOAD_MODS_NAME_CHARS	24
 #define DOWNLOAD_MODS_DETAIL_CHARS \
-	(DOWNLOAD_MODS_LIST_COLS - DOWNLOAD_MODS_NAME_CHARS - 3)
+	(DOWNLOAD_MODS_LIST_COLS - DOWNLOAD_MODS_SCROLLBAR_COLS \
+		- DOWNLOAD_MODS_NAME_CHARS - 1)
 #define DOWNLOAD_MODS_SEPARATOR_INDEX	-1
 #define DOWNLOAD_MODS_MAX_URL	1024
 #define DOWNLOAD_MODS_MAX_MANIFEST_BYTES	((curl_off_t)1024 * 1024)
 #define DOWNLOAD_MODS_MAX_SPLIT_PART_BYTES	((curl_off_t)2 * 1024 * 1024 * 1024)
 #define DOWNLOAD_MODS_MAX_ARCHIVE_BYTES		((curl_off_t)3 * 1024 * 1024 * 1024)
-#define DOWNLOAD_MODS_QBJ3_ZIP_FILENAME		"qbj3_1.3.zip"
-#define DOWNLOAD_MODS_QBJ3_PART_AAA_URL \
-	"https://github.com/q1tools/q1tools.github.io/releases/download/qbj3-1.3/qbj3_1.3.zip.part-aaa"
-#define DOWNLOAD_MODS_QBJ3_PART_AAB_URL \
-	"https://github.com/q1tools/q1tools.github.io/releases/download/qbj3-1.3/qbj3_1.3.zip.part-aab"
-#define DOWNLOAD_MODS_QBJ3_PART_AAA_SHA256 \
-	"8b442fe7da4d4ab426bc43e4eb5e72985bef9f36b221c0d65fc13e1d48ed2915"
-#define DOWNLOAD_MODS_QBJ3_PART_AAB_SHA256 \
-	"934a78404654431b43ea78a45d2d6ecb5152ebf77bab581103b4b484edc9b26c"
-#define DOWNLOAD_MODS_QBJ3_ZIP_SHA256 \
-	"bdfd7313ea4231695c56bceac8f098f7cfe89a86f7398b7a212eb2e193006904"
-#define DOWNLOAD_MODS_AD_URL \
-	"https://github.com/q1tools/q1tools.github.io/releases/download/ad-v1.80p1/ad_v1_80p1final.zip"
-#define DOWNLOAD_MODS_QBJ1_URL \
-	"https://github.com/q1tools/q1tools.github.io/releases/download/qbj1-1.0.5/qbj_1.05.zip"
-#define DOWNLOAD_MODS_QBJ2_URL \
-	"https://github.com/q1tools/q1tools.github.io/releases/download/qbj2-1.2/qbj2_1.2.zip"
-#define DOWNLOAD_MODS_SJ2_URL \
-	"https://github.com/q1tools/q1tools.github.io/releases/download/sj2/sewerjam2.zip"
-#define DOWNLOAD_MODS_BONK_URL \
-	"https://github.com/q1tools/q1tools.github.io/releases/download/bonk-1.0/bonkjam.zip"
-#define DOWNLOAD_MODS_AGJAM_URL \
-	"https://github.com/q1tools/q1tools.github.io/releases/download/agjam-1.2/antigravityjam1.2.zip"
+#define DOWNLOAD_MODS_MAX_PARTS				16
+#define DOWNLOAD_MODS_MAX_RELEASES_BYTES	(8 * 1024 * 1024)
+#define DOWNLOAD_MODS_FETCH_THROTTLE_SECONDS	(10 * 60)
+/* The mod list is built entirely from the GitHub Releases API of the repo named
+ * by cl_web_download_url ("user/repo"); the releases URL and the asset-download
+ * URL prefix are derived from it at runtime (see M_DownloadMods_RepoUrls). */
 
 typedef enum
 {
@@ -28979,6 +28995,18 @@ typedef struct
 	char		url[DOWNLOAD_MODS_MAX_URL];
 	char		sha256[65];
 	qboolean	installed;
+	/* Transient, per fetch cycle: set once an id has been written by the
+	 * current merge so a later, lower-priority entry (an older release in the
+	 * same response, or a mods/ zip colliding with a release) can't overwrite
+	 * it. Cleared before each live merge so live data still replaces the cache
+	 * seed. Not persisted. */
+	qboolean	refreshed;
+	/* Dynamic split releases fetched from the GitHub Releases API store their
+	 * ordered part URLs here (part_count > 0); builtin/single entries leave
+	 * part_count at 0 and use url/sha256 above. */
+	int			part_count;
+	char		part_url[DOWNLOAD_MODS_MAX_PARTS][DOWNLOAD_MODS_MAX_URL];
+	char		part_sha256[DOWNLOAD_MODS_MAX_PARTS][65];
 } downloadmoditem_t;
 
 static struct
@@ -28998,102 +29026,37 @@ static struct
 	int					*filtered_indices;
 } downloadmodsmenu;
 
+/* Background fetch of the GitHub Releases list. The worker thread only performs
+ * the network GET and hands the raw JSON text to the main thread, which parses
+ * and merges the releases. The same merge path is reused to seed the list from a
+ * local cache on open. The releases API URL is resolved from cl_web_download_url
+ * before the worker starts and captured here so the thread reads no cvars. */
+static struct
+{
+	SDL_Thread			*thread;
+	SDL_mutex			*mutex;
+	qboolean			active;		/* a fetch has been started */
+	qboolean			done;		/* worker finished, result not yet consumed */
+	qboolean			success;
+	qboolean			cache_seeded_valid;
+	char				*json;		/* releases response text, owned by main thread once done */
+	char				*mods_json;	/* mods/ contents response text, owned by main thread once done */
+	char				api_url[DOWNLOAD_MODS_MAX_URL];	/* releases API URL for the worker */
+	char				mods_url[DOWNLOAD_MODS_MAX_URL];	/* mods/ contents API URL for the worker ("" = skip) */
+	char				error[128];
+} downloadmodsfetch;
+
+static void M_DownloadMods_StartFetch(void);
+static void M_DownloadMods_PollFetch(void);
+static qboolean M_DownloadMods_SeedFromCache(void);
+static void M_DownloadMods_ShutdownFetch(void);
+
 typedef enum
 {
 	DOWNLOADMOD_EXIT_BACKGROUND,
 	DOWNLOADMOD_EXIT_CANCEL,
 	DOWNLOADMOD_EXIT_COUNT
 } downloadmodexitchoice_t;
-
-static const downloadmoditem_t downloadmods_builtin[] =
-{
-	/* Update each URL and SHA-256 together; split ZIP entries also need
-	 * hashes for every custom part and for the final joined ZIP. */
-	{
-		DOWNLOADMOD_SPLIT_ZIP,
-		"qbj3",
-		"Quake Brutalist Jam III",
-		"1.3",
-		"2.6 GB",
-		"GitHub split ZIP release",
-		"qbj3",
-		"",
-		DOWNLOAD_MODS_QBJ3_ZIP_SHA256,
-		false
-	},
-	{
-		DOWNLOADMOD_SINGLE_ZIP,
-		"ad",
-		"Arcane Dimensions",
-		"1.80p1",
-		"306 MB",
-		"Single ZIP release",
-		"ad",
-		DOWNLOAD_MODS_AD_URL,
-		"7ad993da6c760c446ca31fad71e9f5b6c9eee99b6354f161aa746b572fe70a7d",
-		false
-	},
-	{
-		DOWNLOADMOD_SINGLE_ZIP,
-		"qbj1",
-		"Quake Brutalist Jam I",
-		"1.0.5",
-		"480 MB",
-		"Single ZIP release",
-		"qbj",
-		DOWNLOAD_MODS_QBJ1_URL,
-		"afdd6d54821214c3cf7e8178793c21c3c37afe19c349f3dab9f1f7347e6a1449",
-		false
-	},
-	{
-		DOWNLOADMOD_SINGLE_ZIP,
-		"qbj2",
-		"Quake Brutalist Jam II",
-		"1.2",
-		"480 MB",
-		"Single ZIP release",
-		"qbj2",
-		DOWNLOAD_MODS_QBJ2_URL,
-		"abd642cf88df0c53756768dae023a73955e643adc12afbf5802dec011e90bef8",
-		false
-	},
-	{
-		DOWNLOADMOD_SINGLE_ZIP,
-		"sj2",
-		"Sewer Jam 2",
-		"",
-		"232 MB",
-		"Single ZIP release",
-		"sewerjam2",
-		DOWNLOAD_MODS_SJ2_URL,
-		"ff4a1016f152ecaa2ab0007e164de4cb8fda4e60f36acd9bca16e6581a180f8c",
-		false
-	},
-	{
-		DOWNLOADMOD_SINGLE_ZIP,
-		"bonk",
-		"Bonk Jam",
-		"1.0",
-		"358 MB",
-		"Single ZIP release",
-		"bonkjam",
-		DOWNLOAD_MODS_BONK_URL,
-		"5157acb20be50e453ae38335c5cbc60cff2a09457855f153b44dbff6b6c35ced",
-		false
-	},
-	{
-		DOWNLOADMOD_SINGLE_ZIP,
-		"agjam",
-		"Antigravity Jam",
-		"1.2",
-		"126 MB",
-		"Single ZIP release",
-		"antigravityjam",
-		DOWNLOAD_MODS_AGJAM_URL,
-		"685c20c5e9d82615afbe3f1828d521823fb1e2f5df3a5de09f069ec99a1aea90",
-		false
-	}
-};
 
 static void M_DownloadMods_SetMessage(const char *message)
 {
@@ -29339,8 +29302,6 @@ static void M_DownloadMods_Refilter(void)
 
 static void M_DownloadMods_Init(void)
 {
-	size_t i;
-
 	downloadmodsmenu.scrollbar_grab = false;
 	downloadmodsmenu.exit_prompt = false;
 	downloadmodsmenu.exit_prompt_cursor = DOWNLOADMOD_EXIT_BACKGROUND;
@@ -29361,8 +29322,11 @@ static void M_DownloadMods_Init(void)
 
 	M_Ticker_Init(&downloadmodsmenu.ticker);
 
-	for (i = 0; i < countof(downloadmods_builtin); i++)
-		M_DownloadMods_Add(&downloadmods_builtin[i]);
+	/* The list is sourced entirely from the GitHub Releases API: seed any
+	 * previously-cached releases instantly, then kick off a live fetch unless
+	 * the cache already reflects a recent success. */
+	downloadmodsfetch.cache_seeded_valid = M_DownloadMods_SeedFromCache();
+	M_DownloadMods_StartFetch();
 
 	M_DownloadMods_RefreshInstalledCache();
 	M_DownloadMods_Refilter();
@@ -29442,6 +29406,7 @@ static struct
 	int							part_index;
 	char						stage_dir[MAX_OSPATH];
 	char						joined_zip[MAX_OSPATH];
+	char						joined_name[MAX_QPATH];
 	char						status[96];
 	double						last_progress_print;
 	SDL_mutex					*mutex;
@@ -29517,12 +29482,15 @@ static int M_DownloadMods_CopyPartIndex(void)
 }
 
 static qboolean M_DownloadMods_CopyInstallStateForItem(const downloadmoditem_t *item,
-	downloadmodinstallstage_t *stage, char *status, size_t status_size)
+	downloadmodinstallstage_t *stage, char *status, size_t status_size,
+	qboolean *downloading)
 {
 	qboolean active = false;
 
 	if (status && status_size)
 		status[0] = '\0';
+	if (downloading)
+		*downloading = false;
 	if (!item)
 		return false;
 
@@ -29536,6 +29504,8 @@ static qboolean M_DownloadMods_CopyInstallStateForItem(const downloadmoditem_t *
 			*stage = downloadmodinstall.stage;
 		if (status && status_size)
 			q_strlcpy(status, downloadmodinstall.status, status_size);
+		if (downloading)
+			*downloading = downloadmodinstall.transfer.downloading;
 	}
 	if (downloadmodinstall.mutex)
 		SDL_UnlockMutex(downloadmodinstall.mutex);
@@ -29560,9 +29530,51 @@ static void M_DownloadMods_FormatSize(double bytes, char *out, size_t outsize)
 		q_snprintf(out, outsize, "%.0f bytes", bytes);
 }
 
+/* Resolve the GitHub Releases API URL and asset-download prefix for the repo in
+ * cl_web_download_url ("user/repo"). Either output may be NULL. Returns false
+ * when the cvar is unset or not a GitHub repo path, meaning the menu has no
+ * source. */
+static qboolean M_DownloadMods_RepoUrls(char *api_url, size_t api_sz,
+	char *asset_prefix, size_t prefix_sz)
+{
+	extern cvar_t cl_web_download_url;
+	return CL_GithubReleasesUrls(cl_web_download_url.string,
+		api_url, api_sz, asset_prefix, prefix_sz);
+}
+
+/* Contents API URL for the repo's "mods" directory, the source of small tree
+ * mods installed under a folder named after each zip. */
+static qboolean M_DownloadMods_RepoContentsUrl(char *out, size_t outsize)
+{
+	extern cvar_t cl_web_download_url;
+	return CL_GithubContentsUrl(cl_web_download_url.string, "mods", out, outsize);
+}
+
 static qboolean M_DownloadMods_UrlAllowed(const char *url)
 {
 	return url && !q_strncasecmp(url, "https://", 8);
+}
+
+/* Accept only HTTPS downloads that belong to the configured repo: either a
+ * release asset (github.com/<repo>/releases/download/) or a tree asset
+ * (raw.githubusercontent.com/<repo>/), used for the mods/ directory. */
+static qboolean M_DownloadMods_RepoAssetUrlAllowed(const char *url)
+{
+	extern cvar_t cl_web_download_url;
+	char prefix[DOWNLOAD_MODS_MAX_URL];
+
+	if (!M_DownloadMods_UrlAllowed(url))
+		return false;
+
+	if (M_DownloadMods_RepoUrls(NULL, 0, prefix, sizeof(prefix)) &&
+		!q_strncasecmp(url, prefix, strlen(prefix)))
+		return true;
+
+	if (CL_GithubRawPrefix(cl_web_download_url.string, prefix, sizeof(prefix)) &&
+		!q_strncasecmp(url, prefix, strlen(prefix)))
+		return true;
+
+	return false;
 }
 
 static void M_DownloadMods_FileNameFromUrl(const char *url, char *out, size_t outsize)
@@ -29939,14 +29951,12 @@ static qboolean M_DownloadMods_VerifySHA256(const char *path, const char *expect
 		return true;
 	if (!M_DownloadMods_SHA256StringOkay(expected))
 	{
-		Con_Printf("Invalid expected SHA-256 for %s\n", downloadmodinstall.item.name);
 		return false;
 	}
 
 	f = fopen(path, "rb");
 	if (!f)
 	{
-		Con_Printf("Unable to open downloaded file for SHA-256: %s\n", path);
 		return false;
 	}
 
@@ -29983,8 +29993,6 @@ static qboolean M_DownloadMods_VerifySHA256(const char *path, const char *expect
 
 	if (q_strcasecmp(actual, expected))
 	{
-		Con_Printf("SHA-256 mismatch for %s\nexpected: %s\nactual:   %s\n",
-			COM_SkipPath(path), expected, actual);
 		return false;
 	}
 
@@ -30000,9 +30008,17 @@ static qboolean M_DownloadMods_PathLooksInstalled(const char *path)
 	if (Sys_FileType(check) & FS_ENT_FILE)
 		return true;
 
+	/* A maps/ directory marks a playable mappack even without progs/paks. */
+	q_snprintf(check, sizeof(check), "%s/maps", path);
+	if (Sys_FileType(check) & FS_ENT_DIRECTORY)
+		return true;
+
 	for (pak_num = 0; pak_num < 10; pak_num++)
 	{
 		q_snprintf(check, sizeof(check), "%s/pak%d.pak", path, pak_num);
+		if (Sys_FileType(check) & FS_ENT_FILE)
+			return true;
+		q_snprintf(check, sizeof(check), "%s/pak%d.pk3", path, pak_num);
 		if (Sys_FileType(check) & FS_ENT_FILE)
 			return true;
 	}
@@ -30010,6 +30026,9 @@ static qboolean M_DownloadMods_PathLooksInstalled(const char *path)
 	for (pak_num = 0; pak_num < 10; pak_num++)
 	{
 		q_snprintf(check, sizeof(check), "%s/paks/pak%d.pak", path, pak_num);
+		if (Sys_FileType(check) & FS_ENT_FILE)
+			return true;
+		q_snprintf(check, sizeof(check), "%s/paks/pak%d.pk3", path, pak_num);
 		if (Sys_FileType(check) & FS_ENT_FILE)
 			return true;
 	}
@@ -30057,8 +30076,12 @@ static qboolean M_DownloadMods_PreferModsFolder(void)
 	return mods_count > other_count;
 }
 
-static qboolean M_DownloadMods_BuildInstallTarget(char *target, size_t target_size)
+static qboolean M_DownloadMods_BuildInstallTargetForItem(
+	const downloadmoditem_t *item, char *target, size_t target_size)
 {
+	if (!item || !M_DownloadMods_InstallDirNameOkay(item->install_dir))
+		return false;
+
 	if (M_DownloadMods_PreferModsFolder())
 	{
 		char mods_dir[MAX_OSPATH];
@@ -30071,11 +30094,37 @@ static qboolean M_DownloadMods_BuildInstallTarget(char *target, size_t target_si
 			return false;
 
 		return (size_t)q_snprintf(target, target_size, "%s/%s",
-			mods_dir, downloadmodinstall.item.install_dir) < target_size;
+			mods_dir, item->install_dir) < target_size;
 	}
 
 	return (size_t)q_snprintf(target, target_size, "%s/%s",
-		com_basedir, downloadmodinstall.item.install_dir) < target_size;
+		com_basedir, item->install_dir) < target_size;
+}
+
+static qboolean M_DownloadMods_BuildInstallTarget(char *target, size_t target_size)
+{
+	return M_DownloadMods_BuildInstallTargetForItem(&downloadmodinstall.item,
+		target, target_size);
+}
+
+static qboolean M_DownloadMods_TargetExists(const downloadmoditem_t *item,
+	qboolean *looks_installed)
+{
+	char target[MAX_OSPATH];
+	int target_type;
+
+	if (looks_installed)
+		*looks_installed = false;
+	if (!M_DownloadMods_BuildInstallTargetForItem(item, target, sizeof(target)))
+		return false;
+
+	target_type = Sys_FileType(target);
+	if (!(target_type & (FS_ENT_FILE | FS_ENT_DIRECTORY)))
+		return false;
+
+	if (looks_installed && (target_type & FS_ENT_DIRECTORY))
+		*looks_installed = M_DownloadMods_PathLooksInstalled(target);
+	return true;
 }
 
 static qboolean M_DownloadMods_Rmdir(const char *path)
@@ -30279,6 +30328,92 @@ static qboolean M_DownloadMods_FindNestedInstallDir(char *out, size_t outsize)
 	return false;
 }
 
+static qboolean M_DownloadMods_FindSingleInstalledDir(char *out, size_t outsize)
+{
+	char found[MAX_OSPATH] = "";
+	int matches = 0;
+#ifdef _WIN32
+	WIN32_FIND_DATA fdat;
+	HANDLE fhnd;
+	char searchpath[MAX_OSPATH];
+
+	q_snprintf(searchpath, sizeof(searchpath), "%s/*", downloadmodinstall.stage_dir);
+	fhnd = FindFirstFile(searchpath, &fdat);
+	if (fhnd == INVALID_HANDLE_VALUE)
+		return false;
+
+	do
+	{
+		char child[MAX_OSPATH];
+
+		if (!(fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+			(fdat.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+			continue;
+		if (!strcmp(fdat.cFileName, ".") || !strcmp(fdat.cFileName, ".."))
+			continue;
+
+		if ((size_t)q_snprintf(child, sizeof(child), "%s/%s",
+			downloadmodinstall.stage_dir, fdat.cFileName) >= sizeof(child))
+		{
+			FindClose(fhnd);
+			return false;
+		}
+		if (M_DownloadMods_PathLooksInstalled(child))
+		{
+			if (++matches == 1)
+				q_strlcpy(found, child, sizeof(found));
+			else
+				break;
+		}
+	} while (FindNextFile(fhnd, &fdat));
+
+	FindClose(fhnd);
+#else
+	DIR *dir_p;
+	struct dirent *dir_t;
+
+	dir_p = opendir(downloadmodinstall.stage_dir);
+	if (!dir_p)
+		return false;
+
+	while ((dir_t = readdir(dir_p)) != NULL)
+	{
+		char child[MAX_OSPATH];
+		struct stat st;
+
+		if (!strcmp(dir_t->d_name, ".") || !strcmp(dir_t->d_name, ".."))
+			continue;
+
+		if ((size_t)q_snprintf(child, sizeof(child), "%s/%s",
+			downloadmodinstall.stage_dir, dir_t->d_name) >= sizeof(child))
+		{
+			closedir(dir_p);
+			return false;
+		}
+		if (stat(child, &st) != 0 || !S_ISDIR(st.st_mode))
+			continue;
+
+		if (M_DownloadMods_PathLooksInstalled(child))
+		{
+			if (++matches == 1)
+				q_strlcpy(found, child, sizeof(found));
+			else
+				break;
+		}
+	}
+
+	closedir(dir_p);
+#endif
+
+	if (matches == 1)
+	{
+		q_strlcpy(out, found, outsize);
+		return true;
+	}
+
+	return false;
+}
+
 static void M_DownloadMods_RemoveTempFiles(void)
 {
 	size_t i;
@@ -30356,6 +30491,10 @@ static qboolean M_DownloadMods_FinalizeStagedInstall(void)
 	{
 		/* source was filled by helper */
 	}
+	else if (M_DownloadMods_FindSingleInstalledDir(source, sizeof(source)))
+	{
+		/* source was filled by helper */
+	}
 	else if (M_DownloadMods_PathLooksInstalled(downloadmodinstall.stage_dir))
 	{
 		q_strlcpy(source, downloadmodinstall.stage_dir, sizeof(source));
@@ -30390,16 +30529,17 @@ static qboolean M_DownloadMods_AddPart(const char *url,
 
 	if (!url || !*url || !M_DownloadMods_UrlAllowed(url))
 		return false;
-	if (!sha256 || !*sha256 || !M_DownloadMods_SHA256StringOkay(sha256))
+	/* A hash is optional (auto-discovered releases have none); but if one is
+	 * supplied it must be well formed. */
+	if (sha256 && *sha256 && !M_DownloadMods_SHA256StringOkay(sha256))
 	{
-		Con_Printf("Download part missing valid SHA-256: %s\n",
-			filename && *filename ? filename : url);
 		return false;
 	}
 
 	memset(&part, 0, sizeof(part));
 	q_strlcpy(part.url, url, sizeof(part.url));
-	q_strlcpy(part.sha256, sha256, sizeof(part.sha256));
+	if (sha256)
+		q_strlcpy(part.sha256, sha256, sizeof(part.sha256));
 	if (filename && *filename)
 		q_strlcpy(part.filename, filename, sizeof(part.filename));
 	else
@@ -30413,14 +30553,6 @@ static qboolean M_DownloadMods_AddManifestPart(const char *url,
 	const char *sha256, const char *filename)
 {
 	return M_DownloadMods_AddPart(url, sha256, filename);
-}
-
-static qboolean M_DownloadMods_AddGitHubQBJ3Parts(void)
-{
-	return M_DownloadMods_AddPart(DOWNLOAD_MODS_QBJ3_PART_AAA_URL,
-		DOWNLOAD_MODS_QBJ3_PART_AAA_SHA256, "qbj3_1.3.zip.part-aaa") &&
-		M_DownloadMods_AddPart(DOWNLOAD_MODS_QBJ3_PART_AAB_URL,
-			DOWNLOAD_MODS_QBJ3_PART_AAB_SHA256, "qbj3_1.3.zip.part-aab");
 }
 
 static qboolean M_DownloadMods_ParseManifestArray(const jsonentry_t *array,
@@ -30500,7 +30632,6 @@ static qboolean M_DownloadMods_ParseManifest(const char *path)
 	if (len > 1024 * 1024)
 	{
 		fclose(f);
-		Con_Printf("Manifest too large: %s\n", path);
 		return false;
 	}
 
@@ -30561,7 +30692,6 @@ static qboolean M_DownloadMods_JoinSplitParts(const char *joined_path)
 	out = fopen(joined_path, "wb");
 	if (!out)
 	{
-		Con_Printf("Unable to create joined ZIP: %s\n", strerror(errno));
 		return false;
 	}
 
@@ -30572,8 +30702,6 @@ static qboolean M_DownloadMods_JoinSplitParts(const char *joined_path)
 
 		if (!downloadmodinstall.parts[i].temp_path[0])
 		{
-			Con_Printf("Missing split part path for %s\n",
-				downloadmodinstall.parts[i].filename);
 			fclose(out);
 			unlink(joined_path);
 			return false;
@@ -30582,36 +30710,31 @@ static qboolean M_DownloadMods_JoinSplitParts(const char *joined_path)
 		in = fopen(downloadmodinstall.parts[i].temp_path, "rb");
 		if (!in)
 		{
-			Con_Printf("Unable to open split part %s: %s\n",
-				downloadmodinstall.parts[i].filename, strerror(errno));
 			fclose(out);
 			unlink(joined_path);
 			return false;
 		}
 
 		while ((readbytes = fread(buffer, 1, sizeof(buffer), in)) > 0)
-		{
-			if (M_DownloadMods_CancelRequested())
 			{
-				fclose(in);
-				fclose(out);
-				unlink(joined_path);
-				return false;
+				if (M_DownloadMods_CancelRequested())
+				{
+					fclose(in);
+					fclose(out);
+					unlink(joined_path);
+					return false;
+				}
+				if (fwrite(buffer, 1, readbytes, out) != readbytes)
+				{
+					fclose(in);
+					fclose(out);
+					unlink(joined_path);
+					return false;
+				}
 			}
-			if (fwrite(buffer, 1, readbytes, out) != readbytes)
-			{
-				Con_Printf("Unable to write joined ZIP: %s\n", strerror(errno));
-				fclose(in);
-				fclose(out);
-				unlink(joined_path);
-				return false;
-			}
-		}
 
 		if (ferror(in))
 		{
-			Con_Printf("Unable to read split part %s\n",
-				downloadmodinstall.parts[i].filename);
 			fclose(in);
 			fclose(out);
 			unlink(joined_path);
@@ -30623,7 +30746,6 @@ static qboolean M_DownloadMods_JoinSplitParts(const char *joined_path)
 
 	if (fflush(out) != 0 || ferror(out))
 	{
-		Con_Printf("Unable to flush joined ZIP: %s\n", strerror(errno));
 		fclose(out);
 		unlink(joined_path);
 		return false;
@@ -30643,6 +30765,16 @@ static qboolean M_DownloadMods_WorkerCancelled(char *error, size_t error_size,
 		*aborted = true;
 	q_strlcpy(error, "Download cancelled", error_size);
 	return true;
+}
+
+static void M_DownloadMods_CopyExtractError(char *error, size_t error_size)
+{
+	const char *zip_error = ZIP_ExtractError();
+
+	if (zip_error && zip_error[0])
+		q_strlcpy(error, zip_error, error_size);
+	else
+		q_strlcpy(error, "extract failed", error_size);
 }
 
 static qboolean M_DownloadMods_RunArchivePart(downloadmodpart_t *part,
@@ -30682,14 +30814,17 @@ static qboolean M_DownloadMods_RunArchivePart(downloadmodpart_t *part,
 	if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
 		return false;
 
-	M_DownloadMods_SetWorkerStatus("verifying...");
-	if (!M_DownloadMods_VerifySHA256(temp_path, part->sha256))
+	if (part->sha256[0])
 	{
-		unlink(temp_path);
-		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+		M_DownloadMods_SetWorkerStatus("verify");
+		if (!M_DownloadMods_VerifySHA256(temp_path, part->sha256))
+		{
+			unlink(temp_path);
+			if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+				return false;
+			q_strlcpy(error, "SHA-256 failed", error_size);
 			return false;
-		q_strlcpy(error, "SHA-256 failed", error_size);
-		return false;
+		}
 	}
 
 	if (downloadmodinstall.item.type == DOWNLOADMOD_SPLIT_ZIP)
@@ -30701,13 +30836,13 @@ static qboolean M_DownloadMods_RunArchivePart(downloadmodpart_t *part,
 		return false;
 	}
 
-	M_DownloadMods_SetWorkerStatus("extracting...");
-	if (!ZIP_Extract(temp_path, downloadmodinstall.stage_dir))
+	M_DownloadMods_SetWorkerStatus("extract");
+	if (!ZIP_ExtractQuiet(temp_path, downloadmodinstall.stage_dir))
 	{
 		unlink(temp_path);
 		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
 			return false;
-		q_strlcpy(error, "extract failed", error_size);
+		M_DownloadMods_CopyExtractError(error, error_size);
 		return false;
 	}
 
@@ -30725,8 +30860,10 @@ static qboolean M_DownloadMods_FinalizeSplitZipWorker(char *error,
 	size_t error_size, qboolean *aborted)
 {
 	char joined_path[MAX_OSPATH];
+	const char *joined_name = downloadmodinstall.joined_name[0] ?
+		downloadmodinstall.joined_name : "download.zip";
 
-	if (!M_DownloadMods_BuildTempPath(DOWNLOAD_MODS_QBJ3_ZIP_FILENAME,
+	if (!M_DownloadMods_BuildTempPath(joined_name,
 		joined_path, sizeof(joined_path)))
 	{
 		q_strlcpy(error, "joined ZIP path too long", error_size);
@@ -30738,7 +30875,7 @@ static qboolean M_DownloadMods_FinalizeSplitZipWorker(char *error,
 	if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
 		return false;
 
-	M_DownloadMods_SetWorkerStatus("joining split ZIP...");
+	M_DownloadMods_SetWorkerStatus("joining");
 	if (!M_DownloadMods_JoinSplitParts(joined_path))
 	{
 		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
@@ -30747,24 +30884,27 @@ static qboolean M_DownloadMods_FinalizeSplitZipWorker(char *error,
 		return false;
 	}
 
-	M_DownloadMods_SetWorkerStatus("verifying ZIP...");
-	if (!M_DownloadMods_VerifySHA256(joined_path, downloadmodinstall.item.sha256))
+	if (downloadmodinstall.item.sha256[0])
 	{
-		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+		M_DownloadMods_SetWorkerStatus("verify");
+		if (!M_DownloadMods_VerifySHA256(joined_path, downloadmodinstall.item.sha256))
+		{
+			if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
+				return false;
+			q_strlcpy(error, "ZIP SHA-256 failed", error_size);
 			return false;
-		q_strlcpy(error, "ZIP SHA-256 failed", error_size);
-		return false;
+		}
 	}
 
 	if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
 		return false;
 
-	M_DownloadMods_SetWorkerStatus("extracting...");
-	if (!ZIP_Extract(joined_path, downloadmodinstall.stage_dir))
+	M_DownloadMods_SetWorkerStatus("extract");
+	if (!ZIP_ExtractQuiet(joined_path, downloadmodinstall.stage_dir))
 	{
 		if (M_DownloadMods_WorkerCancelled(error, error_size, aborted))
 			return false;
-		q_strlcpy(error, "extract failed", error_size);
+		M_DownloadMods_CopyExtractError(error, error_size);
 		return false;
 	}
 
@@ -30788,7 +30928,7 @@ static qboolean M_DownloadMods_RunManifestWorker(char *error, size_t error_size,
 		return false;
 	}
 
-	M_DownloadMods_SetWorkerStatus("downloading manifest");
+	M_DownloadMods_SetWorkerStatus("manifest");
 	M_DownloadMods_SetWorkerStage(DOWNLOADMOD_INSTALL_MANIFEST);
 	if (!M_DownloadMods_RunTransfer(downloadmodinstall.item.url, temp_path, filename,
 		DOWNLOAD_MODS_MAX_MANIFEST_BYTES, &file_size, aborted, error, error_size))
@@ -30868,7 +31008,7 @@ static int M_DownloadMods_InstallThread(void *unused)
 
 	success = M_DownloadMods_RunInstallWorker(message, sizeof(message), &aborted);
 	if (success)
-		M_DownloadMods_SetWorkerStatus("finalizing...");
+		M_DownloadMods_SetWorkerStatus("final");
 	M_DownloadMods_SetWorkerDone(success, aborted,
 		message[0] ? message : (success ? "" : "install failed"));
 	return 0;
@@ -31004,7 +31144,10 @@ void M_DownloadMods_Shutdown(void)
 	qboolean active;
 
 	if (!mutex)
+	{
+		M_DownloadMods_ShutdownFetch();
 		return;
+	}
 
 	SDL_LockMutex(mutex);
 	active = downloadmodinstall.active || downloadmodinstall.transfer.active;
@@ -31037,6 +31180,8 @@ void M_DownloadMods_Shutdown(void)
 
 	SDL_DestroyMutex(mutex);
 	memset(&downloadmodinstall, 0, sizeof(downloadmodinstall));
+
+	M_DownloadMods_ShutdownFetch();
 }
 
 static const char *M_DownloadMods_InstallDetail(const downloadmoditem_t *item,
@@ -31044,14 +31189,22 @@ static const char *M_DownloadMods_InstallDetail(const downloadmoditem_t *item,
 {
 	char status[sizeof(downloadmodinstall.status)];
 	downloadmodinstallstage_t stage = DOWNLOADMOD_INSTALL_NONE;
+	qboolean downloading = false;
 
 	if (!M_DownloadMods_CopyInstallStateForItem(item, &stage,
-		status, sizeof(status)))
+		status, sizeof(status), &downloading))
 		return NULL;
 
-	if (stage == DOWNLOADMOD_INSTALL_ARCHIVE && cls.download.percent >= 0.0f)
+	if (stage == DOWNLOADMOD_INSTALL_ARCHIVE && downloading && cls.download.active)
 	{
-		q_snprintf(buffer, buffer_size, "%d%%", (int)(cls.download.percent + 0.5f));
+		/* Show a percentage for the whole transfer; during the connect phase
+		 * (before a total is known) percent is -1, so clamp it to 0% rather
+		 * than briefly flashing the "downloading..." status text. Once the
+		 * transfer is done, show worker statuses such as verifying/extracting. */
+		float percent = cls.download.percent;
+		if (percent < 0.0f)
+			percent = 0.0f;
+		q_snprintf(buffer, buffer_size, "%d%%", (int)(percent + 0.5f));
 		return buffer;
 	}
 
@@ -31061,7 +31214,10 @@ static const char *M_DownloadMods_InstallDetail(const downloadmoditem_t *item,
 		return buffer;
 	}
 
-	q_strlcpy(buffer, "working...", buffer_size);
+	/* Active install with no status yet (worker thread still spinning up just
+	 * after the click): show 0%% so the row never flashes a placeholder before
+	 * the download begins. */
+	q_strlcpy(buffer, "0%", buffer_size);
 	return buffer;
 }
 
@@ -31070,6 +31226,8 @@ static qboolean M_DownloadMods_StartInstall(downloadmoditem_t *item)
 	SDL_mutex *mutex;
 	downloadmodpart_t *parts;
 	downloadmodpart_t part;
+	char target[MAX_OSPATH];
+	int target_type;
 
 	if (!item)
 		return false;
@@ -31099,6 +31257,20 @@ static qboolean M_DownloadMods_StartInstall(downloadmoditem_t *item)
 	M_DownloadMods_SetWorkerStage(DOWNLOADMOD_INSTALL_NONE);
 	downloadmodinstall.last_progress_print = 0.0;
 
+	if (!M_DownloadMods_BuildInstallTarget(target, sizeof(target)))
+	{
+		M_DownloadMods_FinishInstall(false, "target path too long");
+		return false;
+	}
+
+	target_type = Sys_FileType(target);
+	if (target_type & (FS_ENT_FILE | FS_ENT_DIRECTORY))
+	{
+		Con_Printf("Install target already exists: %s\n", target);
+		M_DownloadMods_FinishInstall(false, "target exists");
+		return false;
+	}
+
 	if (!M_DownloadMods_BuildStageDir())
 	{
 		M_DownloadMods_FinishInstall(false, "stage path too long");
@@ -31120,23 +31292,51 @@ static qboolean M_DownloadMods_StartInstall(downloadmoditem_t *item)
 
 	if (item->type == DOWNLOADMOD_SPLIT_ZIP)
 	{
-		if (!item->sha256[0] || !M_DownloadMods_SHA256StringOkay(item->sha256))
+		/* A malformed hash is fatal; an empty one (auto-discovered release)
+		 * just skips verification. */
+		if (item->sha256[0] && !M_DownloadMods_SHA256StringOkay(item->sha256))
 		{
-			M_DownloadMods_FinishInstall(false, "missing ZIP SHA-256");
+			M_DownloadMods_FinishInstall(false, "invalid ZIP SHA-256");
 			return false;
 		}
-		if (!M_DownloadMods_AddGitHubQBJ3Parts())
-		{
-			M_DownloadMods_FinishInstall(false, "split ZIP setup failed");
-			return false;
-		}
-		M_DownloadMods_SetWorkerPartIndex(0);
 
-		Con_Printf("Downloading split ZIP for %s %s:\n%s\n%s\n",
-			item->name, item->version,
-			DOWNLOAD_MODS_QBJ3_PART_AAA_URL,
-			DOWNLOAD_MODS_QBJ3_PART_AAB_URL);
-		Con_Printf("Expected final ZIP SHA-256: %s\n", item->sha256);
+		if (item->part_count <= 0)
+		{
+			M_DownloadMods_FinishInstall(false, "split ZIP has no parts");
+			return false;
+		}
+
+		/* Build parts from the release's asset URLs and derive the joined ZIP
+		 * name from the first part filename. */
+		{
+			int p;
+			char *cut;
+
+			M_DownloadMods_FileNameFromUrl(item->part_url[0],
+				downloadmodinstall.joined_name, sizeof(downloadmodinstall.joined_name));
+			cut = strstr(downloadmodinstall.joined_name, ".part-");
+			if (cut)
+				*cut = '\0';
+			if (!downloadmodinstall.joined_name[0])
+				q_strlcpy(downloadmodinstall.joined_name, "download.zip",
+					sizeof(downloadmodinstall.joined_name));
+
+			for (p = 0; p < item->part_count; p++)
+			{
+				if (!M_DownloadMods_AddPart(item->part_url[p],
+					item->part_sha256[p], NULL))
+				{
+					M_DownloadMods_FinishInstall(false, "split ZIP setup failed");
+					return false;
+				}
+				Con_Printf("Downloading split part for %s %s:\n%s\n",
+					item->name, item->version, item->part_url[p]);
+			}
+		}
+
+		M_DownloadMods_SetWorkerPartIndex(0);
+		if (item->sha256[0])
+			Con_Printf("Expected final ZIP SHA-256: %s\n", item->sha256);
 
 		if (!M_DownloadMods_StartWorker())
 		{
@@ -31148,9 +31348,11 @@ static qboolean M_DownloadMods_StartInstall(downloadmoditem_t *item)
 	}
 
 	memset(&part, 0, sizeof(part));
-	if (!item->sha256[0] || !M_DownloadMods_SHA256StringOkay(item->sha256))
+	/* Empty hash means an auto-discovered release (no verification); a present
+	 * but malformed hash is still rejected. */
+	if (item->sha256[0] && !M_DownloadMods_SHA256StringOkay(item->sha256))
 	{
-		M_DownloadMods_FinishInstall(false, "missing SHA-256");
+		M_DownloadMods_FinishInstall(false, "invalid SHA-256");
 		return false;
 	}
 	q_strlcpy(part.url, item->url, sizeof(part.url));
@@ -31194,6 +31396,12 @@ static void M_DownloadMods_StartSelected(void)
 		M_Menu_Main_f();
 		return;
 	}
+	if (M_DownloadMods_TargetExists(item, NULL))
+	{
+		M_DownloadMods_SetMessage("target exists");
+		S_LocalSound("misc/menu3.wav");
+		return;
+	}
 
 	M_DownloadMods_StartInstall(item);
 }
@@ -31222,7 +31430,7 @@ static void M_DownloadMods_RequestCancel(void)
 
 	SDL_AtomicSet(&downloadmodinstall.abort_requested, 1);
 	stop_curl_download = true;
-	M_DownloadMods_SetInstallStatus("cancelling...");
+	M_DownloadMods_SetInstallStatus("cancel");
 }
 
 static void M_DownloadMods_LeaveToMods(void)
@@ -31459,7 +31667,7 @@ static void M_DownloadMods_DrawRow(int x, int y, const downloadmoditem_t *item,
 	qboolean installed, qboolean selected, qboolean search_active)
 {
 	int name_width = DOWNLOAD_MODS_NAME_CHARS * 8;
-	int detail_x = x + (DOWNLOAD_MODS_NAME_CHARS + 2) * 8;
+	int detail_x = x + (DOWNLOAD_MODS_NAME_CHARS + 1) * 8;
 	char name_text[sizeof(item->name) + sizeof(item->version) + 2];
 	char detail_text[DOWNLOAD_MODS_DETAIL_CHARS + 1];
 	plcolour_t white = M_DownloadMods_Color(255, 255, 255);
@@ -31508,6 +31716,789 @@ static void M_DownloadMods_DrawRow(int x, int y, const downloadmoditem_t *item,
 	}
 }
 
+/*
+================================================================================
+
+GitHub Releases auto-discovery
+
+Builds the entire mod list from the GitHub Releases API of the repo named by
+cl_web_download_url, on a background thread, so nothing is hand-coded and any
+GitHub repo's releases can be used. Each release becomes an item with an install
+directory derived from its tag, a name from the release title, and a SHA-256
+taken from GitHub's per-asset digest. Assets without an API digest are still
+allowed, but only when they are HTTPS downloads under that repo's releases asset
+prefix. The list is seeded from a local cache for instant display, then this
+same merge path refreshes it from the live fetch (replacing matching ids).
+
+================================================================================
+*/
+
+static qboolean M_DownloadMods_NameEndsWith(const char *name, const char *suffix)
+{
+	size_t ln, ls;
+
+	if (!name || !suffix)
+		return false;
+	ln = strlen(name);
+	ls = strlen(suffix);
+	return ln >= ls && q_strcasecmp(name + ln - ls, suffix) == 0;
+}
+
+static qboolean M_DownloadMods_SplitPartBaseName(const char *name,
+	char *out, size_t outsize)
+{
+	const char *cut;
+	size_t len;
+
+	if (!name || !*name || !out || outsize == 0)
+		return false;
+
+	cut = strstr(name, ".part-");
+	if (!cut || cut == name)
+		return false;
+
+	len = (size_t)(cut - name);
+	if (len >= outsize)
+		return false;
+
+	memcpy(out, name, len);
+	out[len] = '\0';
+	return true;
+}
+
+static qboolean M_DownloadMods_SHA256FromDigest(const char *digest,
+	char *out, size_t outsize)
+{
+	if (out && outsize)
+		out[0] = '\0';
+	if (!digest || !out || outsize < 65)
+		return false;
+	if (q_strncasecmp(digest, "sha256:", 7))
+		return false;
+	digest += 7;
+	if (!*digest || !M_DownloadMods_SHA256StringOkay(digest))
+		return false;
+	q_strlcpy(out, digest, outsize);
+	return true;
+}
+
+static void M_DownloadMods_FormatSizeShort(double bytes, char *out, size_t outsize)
+{
+	double gb = bytes / (1024.0 * 1024.0 * 1024.0);
+	double mb = bytes / (1024.0 * 1024.0);
+	double kb = bytes / 1024.0;
+
+	if (gb >= 1.0)
+		q_snprintf(out, outsize, "%.1f GB", gb);
+	else if (mb >= 1.0)
+		q_snprintf(out, outsize, "%.0f MB", mb);
+	else
+		q_snprintf(out, outsize, "%.0f KB", kb);
+}
+
+/* Derive a stable id (install-directory name + dedupe key) from a release tag by
+ * stripping a trailing "-<version>" segment, where <version> begins with an
+ * optional 'v'/'V' then a digit. So "qbj3-1.3" -> "qbj3", "ad-v1.80p1" -> "ad",
+ * "terra-firma-1.2" -> "terra-firma"; a tag with no version suffix (e.g.
+ * "sewerjam" or "half-life") is used as-is. */
+static void M_DownloadMods_IdFromTag(const char *tag, char *out, size_t outsize)
+{
+	size_t len, cut;
+	const char *dash;
+
+	if (!out || outsize == 0)
+		return;
+	out[0] = '\0';
+	if (!tag || !*tag)
+		return;
+
+	len = strlen(tag);
+	dash = strrchr(tag, '-');
+	if (dash && dash != tag)
+	{
+		const char *v = dash + 1;
+		if (*v == 'v' || *v == 'V')
+			v++;
+		if (*v >= '0' && *v <= '9')
+			len = (size_t)(dash - tag);	/* drop trailing -<version> */
+	}
+
+	cut = len < outsize - 1 ? len : outsize - 1;
+	memcpy(out, tag, cut);
+	out[cut] = '\0';
+}
+
+static qboolean M_DownloadMods_BuildItemFromRelease(const jsonentry_t *release,
+	downloadmoditem_t *out)
+{
+	const char *tag = JSON_FindString(release, "tag_name");
+	const char *relname = JSON_FindString(release, "name");
+	const jsonentry_t *assets = JSON_Find(release, "assets", JSON_ARRAY);
+	const jsonentry_t *asset;
+	const char *part_names[DOWNLOAD_MODS_MAX_PARTS];
+	const char *part_urls[DOWNLOAD_MODS_MAX_PARTS];
+	char part_shas[DOWNLOAD_MODS_MAX_PARTS][65];
+	const char *single_url = NULL;
+	char single_sha[65] = "";
+	int num_parts = 0;
+	qboolean part_overflow = false;
+	qboolean part_mismatch = false;
+	qboolean use_split;
+	double part_bytes = 0.0;
+	double single_bytes = 0.0;
+	char part_base[MAX_QPATH] = "";
+	char id[sizeof(out->id)];
+	int i, j;
+
+	if (!tag || !*tag || !assets)
+		return false;
+
+	for (asset = assets->firstchild; asset; asset = asset->next)
+	{
+		const char *aname, *aurl;
+		const char *adigest;
+		const double *asize;
+		char asset_sha[65];
+
+		if (asset->type != JSON_OBJECT)
+			continue;
+
+		aname = JSON_FindString(asset, "name");
+		aurl = JSON_FindString(asset, "browser_download_url");
+		adigest = JSON_FindString(asset, "digest");
+		asize = JSON_FindNumber(asset, "size");
+		if (!aname || !aurl || !M_DownloadMods_RepoAssetUrlAllowed(aurl))
+			continue;
+		M_DownloadMods_SHA256FromDigest(adigest, asset_sha, sizeof(asset_sha));
+
+		if (strstr(aname, ".part-"))
+		{
+			char asset_part_base[MAX_QPATH];
+
+			if (!M_DownloadMods_SplitPartBaseName(aname,
+				asset_part_base, sizeof(asset_part_base)))
+				continue;
+			if (part_base[0] && strcmp(part_base, asset_part_base))
+			{
+				part_mismatch = true;
+				continue;
+			}
+			if (!part_base[0])
+				q_strlcpy(part_base, asset_part_base, sizeof(part_base));
+
+			if (num_parts < DOWNLOAD_MODS_MAX_PARTS)
+			{
+				part_names[num_parts] = aname;
+				part_urls[num_parts] = aurl;
+				q_strlcpy(part_shas[num_parts], asset_sha,
+					sizeof(part_shas[num_parts]));
+				num_parts++;
+				if (asize)
+					part_bytes += *asize;
+			}
+			else
+				part_overflow = true;
+		}
+		else if (!single_url && M_DownloadMods_NameEndsWith(aname, ".zip"))
+		{
+			single_url = aurl;
+			q_strlcpy(single_sha, asset_sha, sizeof(single_sha));
+			if (asize)
+				single_bytes += *asize;
+		}
+	}
+
+	use_split = (num_parts > 1 && !part_overflow && !part_mismatch);
+	if (!single_url && !use_split)
+		return false; /* source-only or otherwise no installable archive */
+
+	memset(out, 0, sizeof(*out));
+	M_DownloadMods_IdFromTag(tag, id, sizeof(id));
+	if (!id[0])
+		return false;
+
+	q_strlcpy(out->id, id, sizeof(out->id));
+	/* The release name already carries the version (e.g. "... Jam III 1.3"), so
+	 * leave version empty to avoid the menu drawing it twice. */
+	q_strlcpy(out->name, (relname && *relname) ? relname : tag, sizeof(out->name));
+	q_strlcpy(out->install_dir, id, sizeof(out->install_dir));
+	q_strlcpy(out->description, "GitHub release", sizeof(out->description));
+	M_DownloadMods_FormatSizeShort(use_split ? part_bytes : single_bytes,
+		out->size, sizeof(out->size));
+
+	if (use_split)
+	{
+		/* Order the parts lexically (.part-aaa, .part-aab, ...). */
+		for (i = 0; i < num_parts - 1; i++)
+			for (j = i + 1; j < num_parts; j++)
+				if (strcmp(part_names[j], part_names[i]) < 0)
+				{
+					const char *tn = part_names[i];
+					const char *tu = part_urls[i];
+					char ts[65];
+
+					q_strlcpy(ts, part_shas[i], sizeof(ts));
+					part_names[i] = part_names[j];
+					part_urls[i] = part_urls[j];
+					q_strlcpy(part_shas[i], part_shas[j], sizeof(part_shas[i]));
+					q_strlcpy(part_shas[j], ts, sizeof(part_shas[j]));
+					part_names[j] = tn;
+					part_urls[j] = tu;
+				}
+
+		out->type = DOWNLOADMOD_SPLIT_ZIP;
+		out->part_count = num_parts;
+		for (i = 0; i < num_parts; i++)
+		{
+			q_strlcpy(out->part_url[i], part_urls[i], sizeof(out->part_url[i]));
+			q_strlcpy(out->part_sha256[i], part_shas[i],
+				sizeof(out->part_sha256[i]));
+		}
+	}
+	else
+	{
+		out->type = DOWNLOADMOD_SINGLE_ZIP;
+		q_strlcpy(out->url, single_url, sizeof(out->url));
+		q_strlcpy(out->sha256, single_sha, sizeof(out->sha256));
+	}
+
+	return true;
+}
+
+/* Parse a releases JSON document and append every release not already listed
+ * (matched by id). Runs on the main thread; returns false when the document is
+ * not the expected releases array. */
+static qboolean M_DownloadMods_MergeReleasesJson(const char *text, int *added_out)
+{
+	json_t *json;
+	const jsonentry_t *release;
+	int added = 0;
+	int installable = 0;
+
+	if (added_out)
+		*added_out = 0;
+	if (!text || !*text)
+		return false;
+
+	json = JSON_Parse(text);
+	if (!json)
+		return false;
+
+	if (!json->root || json->root->type != JSON_ARRAY)
+	{
+		JSON_Free(json);
+		return false;
+	}
+
+	for (release = json->root->firstchild; release; release = release->next)
+	{
+		downloadmoditem_t item;
+		int j;
+		qboolean known = false;
+
+		if (release->type != JSON_OBJECT)
+			continue;
+		if (!M_DownloadMods_BuildItemFromRelease(release, &item))
+			continue;
+		if (!M_DownloadMods_InstallDirNameOkay(item.install_dir))
+			continue;
+		installable++;
+
+		/* The menu is seeded from the cached release list, then refreshed by a
+		 * live fetch. When an id already exists (from the cache seed), replace
+		 * it with the freshly parsed release so a re-uploaded asset's URL/hash/
+		 * size update within the session; the recomputed install state is
+		 * preserved. Otherwise append the newly discovered release. */
+		for (j = 0; j < downloadmodsmenu.itemcount; j++)
+			if (!q_strcasecmp(downloadmodsmenu.items[j].id, item.id))
+			{
+				known = true;
+				break;
+			}
+
+		if (known)
+		{
+			/* Keep the first writer of this id this cycle: newest release (the
+			 * API lists newest first) and releases over mods/ fallbacks. A
+			 * cache-seeded entry (refreshed == false) is still replaced by live
+			 * data. */
+			if (downloadmodsmenu.items[j].refreshed)
+				continue;
+			item.installed = downloadmodsmenu.items[j].installed;
+			item.refreshed = true;
+			downloadmodsmenu.items[j] = item;
+			continue;
+		}
+
+		item.refreshed = true;
+		M_DownloadMods_Add(&item);
+		added++;
+	}
+
+	JSON_Free(json);
+	if (installable <= 0)
+		return false;
+	if (added_out)
+		*added_out = added;
+	return true;
+}
+
+/* Parse a GitHub Contents API directory listing (the repo's "mods" folder) and
+ * append every .zip file as a single-ZIP mod whose install directory is the
+ * zip's basename. These tree assets expose no content SHA-256 (only a git blob
+ * sha), so they install unverified like loose web-download files; the URL is
+ * still gated to the configured repo. Merges/dedupes by id like the release
+ * path, so the cache seed is refreshed by the live fetch. */
+static qboolean M_DownloadMods_MergeModsContentsJson(const char *text,
+	int *added_out)
+{
+	json_t *json;
+	const jsonentry_t *entry;
+	int added = 0;
+	int installable = 0;
+
+	if (added_out)
+		*added_out = 0;
+	if (!text || !*text)
+		return false;
+
+	json = JSON_Parse(text);
+	if (!json)
+		return false;
+	if (!json->root || json->root->type != JSON_ARRAY)
+	{
+		JSON_Free(json);
+		return false;
+	}
+
+	for (entry = json->root->firstchild; entry; entry = entry->next)
+	{
+		const char *name, *type, *dlurl;
+		const double *size;
+		downloadmoditem_t item;
+		char base[sizeof(item.id)];
+		size_t blen;
+		int j;
+		qboolean known = false;
+
+		if (entry->type != JSON_OBJECT)
+			continue;
+
+		type = JSON_FindString(entry, "type");
+		name = JSON_FindString(entry, "name");
+		dlurl = JSON_FindString(entry, "download_url");
+		size = JSON_FindNumber(entry, "size");
+
+		if (!type || strcmp(type, "file"))
+			continue;
+		if (!name || !M_DownloadMods_NameEndsWith(name, ".zip"))
+			continue;
+		if (!dlurl || !M_DownloadMods_RepoAssetUrlAllowed(dlurl))
+			continue;
+
+		/* Folder/id/name is the zip basename (drop the ".zip"). */
+		blen = strlen(name) - 4;
+		if (blen == 0 || blen >= sizeof(base))
+			continue;
+		memcpy(base, name, blen);
+		base[blen] = '\0';
+
+		memset(&item, 0, sizeof(item));
+		item.type = DOWNLOADMOD_SINGLE_ZIP;
+		q_strlcpy(item.id, base, sizeof(item.id));
+		q_strlcpy(item.name, base, sizeof(item.name));
+		q_strlcpy(item.install_dir, base, sizeof(item.install_dir));
+		q_strlcpy(item.description, "GitHub repo mod", sizeof(item.description));
+		q_strlcpy(item.url, dlurl, sizeof(item.url));
+		if (size)
+			M_DownloadMods_FormatSizeShort(*size, item.size, sizeof(item.size));
+
+		if (!M_DownloadMods_InstallDirNameOkay(item.install_dir))
+			continue;
+		installable++;
+
+		for (j = 0; j < downloadmodsmenu.itemcount; j++)
+			if (!q_strcasecmp(downloadmodsmenu.items[j].id, item.id))
+			{
+				known = true;
+				break;
+			}
+
+		if (known)
+		{
+			/* Keep the first writer of this id this cycle: newest release (the
+			 * API lists newest first) and releases over mods/ fallbacks. A
+			 * cache-seeded entry (refreshed == false) is still replaced by live
+			 * data. */
+			if (downloadmodsmenu.items[j].refreshed)
+				continue;
+			item.installed = downloadmodsmenu.items[j].installed;
+			item.refreshed = true;
+			downloadmodsmenu.items[j] = item;
+			continue;
+		}
+
+		item.refreshed = true;
+		M_DownloadMods_Add(&item);
+		added++;
+	}
+
+	JSON_Free(json);
+	if (installable <= 0)
+		return false;
+	if (added_out)
+		*added_out = added;
+	return true;
+}
+
+static qboolean M_DownloadMods_CachePathNamed(char *out, size_t outsize,
+	const char *name)
+{
+	return (size_t)q_snprintf(out, outsize, "%s/id1/backups/%s",
+		com_basedir, name) < outsize;
+}
+
+static qboolean M_DownloadMods_CacheFileFresh(const char *name)
+{
+	char path[MAX_OSPATH];
+	struct stat st;
+	time_t now;
+
+	if (!M_DownloadMods_CachePathNamed(path, sizeof(path), name) ||
+		stat(path, &st) != 0)
+		return false;
+
+	now = time(NULL);
+	if (now == (time_t)-1)
+		return false;
+
+	return difftime(now, st.st_mtime) < DOWNLOAD_MODS_FETCH_THROTTLE_SECONDS;
+}
+
+static qboolean M_DownloadMods_CacheIsFresh(void)
+{
+	/* Either source's cache being recent throttles the next fetch, so a repo
+	 * with only releases or only a mods/ directory is still rate-limited. */
+	return M_DownloadMods_CacheFileFresh("modreleases.json") ||
+		M_DownloadMods_CacheFileFresh("modslist.json");
+}
+
+/* Persist the last good listing so it can seed the menu instantly on the next
+ * open, even offline or if the API is rate-limited. */
+static void M_DownloadMods_WriteCache(const char *text, const char *name)
+{
+	char dir[MAX_OSPATH];
+	char path[MAX_OSPATH];
+	char tmp_path[MAX_OSPATH];
+	FILE *f;
+	size_t len;
+	qboolean ok;
+
+	if (!text || !*text)
+		return;
+
+	q_snprintf(dir, sizeof(dir), "%s/id1/backups", com_basedir);
+	Sys_mkdir(dir);
+
+	if (!M_DownloadMods_CachePathNamed(path, sizeof(path), name))
+		return;
+	if ((size_t)q_snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path) >=
+		sizeof(tmp_path))
+		return;
+
+	f = fopen(tmp_path, "wb");
+	if (!f)
+		return;
+
+	len = strlen(text);
+	ok = (fwrite(text, 1, len, f) == len);
+	if (fclose(f) != 0)
+		ok = false;
+	if (!ok)
+	{
+		remove(tmp_path);
+		return;
+	}
+
+#ifdef _WIN32
+	remove(path);
+#endif
+	if (rename(tmp_path, path) != 0)
+		remove(tmp_path);
+}
+
+/* Returns a malloc'd copy of the named cache JSON, or NULL. Caller frees. */
+static char *M_DownloadMods_ReadCache(const char *name)
+{
+	char path[MAX_OSPATH];
+	FILE *f;
+	long len;
+	char *buf;
+
+	if (!M_DownloadMods_CachePathNamed(path, sizeof(path), name))
+		return NULL;
+
+	f = fopen(path, "rb");
+	if (!f)
+		return NULL;
+
+	if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) <= 0 ||
+		len > DOWNLOAD_MODS_MAX_RELEASES_BYTES || fseek(f, 0, SEEK_SET) != 0)
+	{
+		fclose(f);
+		return NULL;
+	}
+
+	buf = (char *)malloc((size_t)len + 1);
+	if (!buf)
+	{
+		fclose(f);
+		return NULL;
+	}
+
+	if (fread(buf, 1, (size_t)len, f) != (size_t)len)
+	{
+		free(buf);
+		fclose(f);
+		return NULL;
+	}
+	buf[len] = '\0';
+	fclose(f);
+	return buf;
+}
+
+/* GET a URL and return a malloc'd copy of the response body, or NULL. */
+static char *M_DownloadMods_FetchUrl(const char *url, char *error,
+	size_t error_size)
+{
+	versionhttpmem_t mem;
+	char *out = NULL;
+
+	memset(&mem, 0, sizeof(mem));
+	if (M_Version_GitHubHttpGet(url, &mem, error, error_size,
+		DOWNLOAD_MODS_MAX_RELEASES_BYTES) && mem.memory)
+	{
+		size_t len = strlen(mem.memory);
+		out = (char *)malloc(len + 1);
+		if (out)
+			memcpy(out, mem.memory, len + 1);
+		else
+			q_strlcpy(error, "out of memory", error_size);
+	}
+
+	if (mem.memory)
+		free(mem.memory);
+	return out;
+}
+
+static int M_DownloadMods_FetchThread(void *unused)
+{
+	char error[sizeof(downloadmodsfetch.error)];
+	char *json = NULL;
+	char *mods_json = NULL;
+
+	(void)unused;
+	error[0] = '\0';
+
+	json = M_DownloadMods_FetchUrl(downloadmodsfetch.api_url, error, sizeof(error));
+
+	/* The mods/ directory is optional: a repo without one (404) just yields no
+	 * tree mods and never fails the release fetch. */
+	if (downloadmodsfetch.mods_url[0])
+	{
+		char mods_error[sizeof(error)];
+		mods_error[0] = '\0';
+		mods_json = M_DownloadMods_FetchUrl(downloadmodsfetch.mods_url,
+			mods_error, sizeof(mods_error));
+	}
+
+	SDL_LockMutex(downloadmodsfetch.mutex);
+	downloadmodsfetch.json = json;
+	downloadmodsfetch.mods_json = mods_json;
+	downloadmodsfetch.success = (json != NULL);
+	q_strlcpy(downloadmodsfetch.error, json ? "" : error, sizeof(downloadmodsfetch.error));
+	downloadmodsfetch.done = true;
+	SDL_UnlockMutex(downloadmodsfetch.mutex);
+	return 0;
+}
+
+static qboolean M_DownloadMods_SeedFromCache(void)
+{
+	char *cache = M_DownloadMods_ReadCache("modreleases.json");
+	char *mods = M_DownloadMods_ReadCache("modslist.json");
+	qboolean valid = false;
+
+	if (cache)
+	{
+		if (M_DownloadMods_MergeReleasesJson(cache, NULL))
+			valid = true;
+		free(cache);
+	}
+	if (mods)
+	{
+		if (M_DownloadMods_MergeModsContentsJson(mods, NULL))
+			valid = true;
+		free(mods);
+	}
+	return valid;
+}
+
+static void M_DownloadMods_StartFetch(void)
+{
+	if (downloadmodsfetch.active)
+		return; /* a fetch is already running or its result is pending */
+	if (downloadmodsfetch.cache_seeded_valid && M_DownloadMods_CacheIsFresh())
+		return;
+
+	/* Resolve the releases API URL for the configured repo up front so the
+	 * worker thread touches no cvars. If cl_web_download_url is not a GitHub
+	 * repo path there is no source to fetch from. */
+	if (!M_DownloadMods_RepoUrls(downloadmodsfetch.api_url,
+		sizeof(downloadmodsfetch.api_url), NULL, 0))
+	{
+		M_DownloadMods_SetMessage("set cl_web_download_url to a GitHub user/repo");
+		return;
+	}
+
+	/* Optional second source: the repo's mods/ directory. "" means skip it. */
+	if (!M_DownloadMods_RepoContentsUrl(downloadmodsfetch.mods_url,
+		sizeof(downloadmodsfetch.mods_url)))
+		downloadmodsfetch.mods_url[0] = '\0';
+
+	if (!downloadmodsfetch.mutex)
+		downloadmodsfetch.mutex = SDL_CreateMutex();
+	if (!downloadmodsfetch.mutex)
+		return;
+
+	downloadmodsfetch.active = true;
+	downloadmodsfetch.done = false;
+	downloadmodsfetch.success = false;
+	downloadmodsfetch.json = NULL;
+	downloadmodsfetch.mods_json = NULL;
+	downloadmodsfetch.error[0] = '\0';
+
+	downloadmodsfetch.thread =
+		SDL_CreateThread(M_DownloadMods_FetchThread, "ModReleasesFetch", NULL);
+	if (!downloadmodsfetch.thread)
+		downloadmodsfetch.active = false;
+}
+
+static void M_DownloadMods_PollFetch(void)
+{
+	char *json;
+	char *mods_json;
+	int added = 0;
+	qboolean done, success;
+
+	if (!downloadmodsfetch.active || !downloadmodsfetch.mutex)
+		return;
+
+	SDL_LockMutex(downloadmodsfetch.mutex);
+	done = downloadmodsfetch.done;
+	success = downloadmodsfetch.success;
+	json = downloadmodsfetch.json;
+	mods_json = downloadmodsfetch.mods_json;
+	SDL_UnlockMutex(downloadmodsfetch.mutex);
+
+	if (!done)
+		return;
+
+	if (downloadmodsfetch.thread)
+	{
+		SDL_WaitThread(downloadmodsfetch.thread, NULL);
+		downloadmodsfetch.thread = NULL;
+	}
+
+	/* Clear the per-cycle priority flags so live data replaces the cache seed,
+	 * then re-establish them as the live releases (priority) and mods/ merge. */
+	{
+		int k;
+		for (k = 0; k < downloadmodsmenu.itemcount; k++)
+			downloadmodsmenu.items[k].refreshed = false;
+	}
+
+	if (success && json)
+	{
+		if (M_DownloadMods_MergeReleasesJson(json, &added))
+		{
+			/* Only overwrite the cache with verified-good live data. */
+			M_DownloadMods_WriteCache(json, "modreleases.json");
+			downloadmodsfetch.cache_seeded_valid = true;
+		}
+		else
+			Con_DPrintf("Mod release fetch returned invalid JSON\n");
+	}
+	else if (!success && downloadmodsfetch.error[0])
+		Con_DPrintf("Mod release fetch failed: %s\n", downloadmodsfetch.error);
+
+	/* The mods/ directory is optional and best-effort. */
+	if (mods_json)
+	{
+		int mods_added = 0;
+		if (M_DownloadMods_MergeModsContentsJson(mods_json, &mods_added))
+		{
+			M_DownloadMods_WriteCache(mods_json, "modslist.json");
+			added += mods_added;
+		}
+		else
+			Con_DPrintf("No installable mods in mods/ (or invalid listing)\n");
+	}
+
+	if (json)
+		free(json);
+	if (mods_json)
+		free(mods_json);
+
+	downloadmodsfetch.json = NULL;
+	downloadmodsfetch.mods_json = NULL;
+	downloadmodsfetch.active = false;
+
+	if (added > 0)
+	{
+		M_DownloadMods_RefreshInstalledCache();
+		M_DownloadMods_Refilter();
+		M_DownloadMods_EnsureSelectableCursor(1);
+	}
+}
+
+static void M_DownloadMods_ShutdownFetch(void)
+{
+	SDL_mutex *mutex = downloadmodsfetch.mutex;
+	SDL_Thread *thread = NULL;
+	char *json = NULL;
+	char *mods_json = NULL;
+
+	if (!mutex)
+		return;
+
+	SDL_LockMutex(mutex);
+	thread = downloadmodsfetch.thread;
+	downloadmodsfetch.thread = NULL;
+	SDL_UnlockMutex(mutex);
+
+	if (thread)
+		SDL_WaitThread(thread, NULL);
+
+	SDL_LockMutex(mutex);
+	json = downloadmodsfetch.json;
+	mods_json = downloadmodsfetch.mods_json;
+	downloadmodsfetch.json = NULL;
+	downloadmodsfetch.mods_json = NULL;
+	downloadmodsfetch.active = false;
+	downloadmodsfetch.done = false;
+	downloadmodsfetch.success = false;
+	downloadmodsfetch.error[0] = '\0';
+	SDL_UnlockMutex(mutex);
+
+	if (json)
+		free(json);
+	if (mods_json)
+		free(mods_json);
+
+	SDL_DestroyMutex(mutex);
+	memset(&downloadmodsfetch, 0, sizeof(downloadmodsfetch));
+}
+
 void M_DownloadMods_Draw(void)
 {
 	int x, y, i, cols;
@@ -31526,6 +32517,8 @@ void M_DownloadMods_Draw(void)
 	if (!keydown[K_MOUSE1])
 		downloadmodsmenu.scrollbar_grab = false;
 
+	M_DownloadMods_PollFetch();
+
 	if (downloadmodsmenu.prev_cursor != downloadmodsmenu.list.cursor)
 	{
 		downloadmodsmenu.prev_cursor = downloadmodsmenu.list.cursor;
@@ -31534,7 +32527,7 @@ void M_DownloadMods_Draw(void)
 	else
 		M_Ticker_Update(&downloadmodsmenu.ticker);
 
-	Draw_String(x, y - 28, DOWNLOAD_MODS_LABEL);
+	Draw_String(x, y - 28, "Mod Downloads");
 	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
 
 	if (downloadmodsmenu.message[0])
@@ -31546,7 +32539,14 @@ void M_DownloadMods_Draw(void)
 	}
 
 	if (downloadmodsmenu.itemcount <= 0)
-		M_Print(x, y, "No downloads configured");
+	{
+		if (downloadmodsfetch.active)
+			M_Print(x, y, "Fetching mod list...");
+		else if (downloadmodsfetch.error[0])
+			M_Print(x, y, va("Mod list unavailable: %s", downloadmodsfetch.error));
+		else
+			M_Print(x, y, "No downloads available");
+	}
 
 	M_List_GetVisibleRange(&downloadmodsmenu.list, &firstvis, &numvis);
 	for (i = 0; i < numvis; i++)
@@ -31556,6 +32556,7 @@ void M_DownloadMods_Draw(void)
 		downloadmoditem_t *item;
 		qboolean selected;
 		qboolean installed;
+		qboolean target_exists;
 		char active_detail[DOWNLOAD_MODS_DETAIL_CHARS + 1];
 		const char *detail;
 		downloadmoddetailstyle_t detail_style = DOWNLOADMOD_DETAIL_NORMAL;
@@ -31568,16 +32569,22 @@ void M_DownloadMods_Draw(void)
 		installed = M_DownloadMods_IsInstalled(item);
 		detail = M_DownloadMods_InstallDetail(item,
 			active_detail, sizeof(active_detail));
+		target_exists = !installed && !detail &&
+			M_DownloadMods_TargetExists(item, NULL);
 
 		if (detail && detail[0] && detail[strlen(detail) - 1] == '%')
 			detail_style = DOWNLOADMOD_DETAIL_PROGRESS;
 		else if (installed)
 			detail_style = DOWNLOADMOD_DETAIL_INSTALLED;
+		else if (target_exists)
+			detail_style = DOWNLOADMOD_DETAIL_INSTALLED;
 		else if (!detail)
 			detail_style = DOWNLOADMOD_DETAIL_SIZE;
 
 		M_DownloadMods_DrawRow(x, y + i * 8, item,
-			detail ? detail : (installed ? "installed" : item->size),
+			detail ? detail :
+				(installed ? "installed" :
+					target_exists ? "target exists" : item->size),
 			detail_style, installed, selected,
 			downloadmodsmenu.list.search.len > 0);
 
@@ -31587,7 +32594,7 @@ void M_DownloadMods_Draw(void)
 
 	if (M_List_GetOverflow(&downloadmodsmenu.list) > 0)
 	{
-		M_List_DrawScrollbar(&downloadmodsmenu.list, x + cols * 8 - 4, y);
+		M_List_DrawScrollbar(&downloadmodsmenu.list, x + cols * 8 - 8, y);
 
 		if (downloadmodsmenu.list.scroll > 0)
 			M_DrawEllipsisBar(x, y - 8, cols);
@@ -31601,15 +32608,20 @@ void M_DownloadMods_Draw(void)
 		char tooltip_status[sizeof(downloadmodinstall.status)];
 		const char *tooltip = NULL;
 
+		/* Transient messages take priority, then a state-driven action hint. The
+		 * live progress percentage is drawn on the row itself, so the hint here
+		 * is just the relevant key: cancel while this item is downloading/
+		 * installing, play when installed, otherwise download. No descriptive
+		 * tooltip (e.g. "GitHub release") or "target exists" on plain selection. */
 		if (message_active)
 			tooltip = downloadmodsmenu.message;
 		else if (M_DownloadMods_CopyInstallStateForItem(selected_item, NULL,
-			tooltip_status, sizeof(tooltip_status)) && tooltip_status[0])
-			tooltip = tooltip_status;
+			tooltip_status, sizeof(tooltip_status), NULL))
+			tooltip = "escape to cancel";
 		else if (M_DownloadMods_IsInstalled(selected_item))
 			tooltip = "installed - enter to play";
 		else
-			tooltip = selected_item->description;
+			tooltip = "enter to download";
 
 		if (tooltip)
 			M_PrintWhite(x, y + downloadmodsmenu.list.viewsize * 8 + 16, tooltip);

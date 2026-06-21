@@ -330,6 +330,8 @@ const char *COM_FileGetExtension (const char *in); /* doesn't return NULL */
 void COM_ExtractExtension (const char *in, char *out, size_t outsize);
 void COM_CreatePath (char *path);
 qboolean ZIP_Extract(const char *zipfile, const char *outdir);
+qboolean ZIP_ExtractQuiet(const char *zipfile, const char *outdir);
+const char *ZIP_ExtractError(void);
 
 char *va (const char *format, ...) FUNC_PRINTF(1,2);
 // does a varargs printf into a temp buffer

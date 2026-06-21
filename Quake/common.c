@@ -4574,6 +4574,10 @@ static qboolean COM_SameDirs(const char *dir1, const char *dir2)
 #define ZIP_CD_SIGNATURE    0x02014b50
 #define ZIP_LFH_SIGNATURE   0x04034b50
 
+#define ZIP_METHOD_STORE       0
+#define ZIP_METHOD_DEFLATE     8
+#define ZIP_METHOD_DEFLATE64   9
+
 #define ARCHIVE_MAX_SIZE       (1024ULL * 1024ULL * 1024ULL)  // 1GB max archive size
 #define ARCHIVE_MAX_FILE_SIZE  (100ULL * 1024ULL * 1024ULL)   // 100MB max per file
 #define ARCHIVE_MAX_FILES      65535                 // Maximum number of files
@@ -4617,7 +4621,89 @@ static qofs_t ZIP_Tell(FILE *file)
 #define ZIP_MAX_FILENAME     ARCHIVE_MAX_FILENAME
 #define MAX_PATH_DEPTH       ARCHIVE_MAX_PATH_DEPTH
 
- /*
+static void Archive_Printf(qboolean quiet, const char *fmt, ...)
+{
+	va_list argptr;
+	char msg[4096];
+
+	if (quiet)
+		return;
+
+	va_start(argptr, fmt);
+	q_vsnprintf(msg, sizeof(msg), fmt, argptr);
+	va_end(argptr);
+
+	Con_Printf("%s", msg);
+}
+
+static char zip_extract_error[256];
+
+const char *ZIP_ExtractError(void)
+{
+	return zip_extract_error;
+}
+
+static void ZIP_SetExtractError(qboolean quiet, const char *fmt, ...)
+{
+	va_list argptr;
+
+	va_start(argptr, fmt);
+	q_vsnprintf(zip_extract_error, sizeof(zip_extract_error), fmt, argptr);
+	va_end(argptr);
+
+	if (!quiet)
+		Con_Printf("ERROR: %s\n", zip_extract_error);
+}
+
+static void Archive_DPrintf(qboolean quiet, const char *fmt, ...)
+{
+	va_list argptr;
+	char msg[4096];
+
+	if (quiet || !developer.value)
+		return;
+
+	va_start(argptr, fmt);
+	q_vsnprintf(msg, sizeof(msg), fmt, argptr);
+	va_end(argptr);
+
+	Con_SafePrintf("%s", msg);
+}
+
+static void Archive_NormalizeSlashes(char *path)
+{
+	if (!path)
+		return;
+	for (; *path; path++)
+		if (*path == '\\')
+			*path = '/';
+}
+
+static qboolean Archive_PathStartsWithDir(const char *path, const char *dir)
+{
+	size_t dir_len;
+
+	if (!path || !dir || !*dir)
+		return false;
+
+	dir_len = strlen(dir);
+	while (dir_len > 1 && dir[dir_len - 1] == '/')
+		dir_len--;
+
+	if (dir_len == 1 && dir[0] == '/')
+		return path[0] == '/';
+
+#ifdef _WIN32
+	if (q_strncasecmp(path, dir, dir_len))
+#else
+	if (strncmp(path, dir, dir_len))
+#endif
+		return false;
+
+	return path[dir_len] == '\0' || path[dir_len] == '/';
+}
+
+/*
 ======================================
 ZIP_ValidatePath
 
@@ -4625,111 +4711,122 @@ Path Validation and Directory Creation
 ======================================
 */
 
-static qboolean ValidatePath(const char* filename, const char* outdir, size_t max_filename, const char* type)
+static qboolean ValidatePath(const char* filename, const char* outdir,
+	size_t max_filename, const char* type, qboolean quiet)
 {
 	const char* p;
 	int depth = 0;
 	char resolved_path[MAX_OSPATH];
+	char clean_outdir[MAX_OSPATH];
 	char clean_path[MAX_OSPATH];
-
-	// Check for NULL or empty filename
-	if (!filename || !filename[0]) {
-		Con_Printf("WARNING: Empty filename rejected\n");
-		return false;
-	}
-
-	// Check filename length
-	if (strlen(filename) >= max_filename) {
-		Con_Printf("WARNING: %s filename too long: %s\n", type, filename);
-		return false;
-	}
-
-	// Normalize path separators to forward slashes
 	size_t clean_len = 0;
+	int resolved_len;
+
+	if (!filename || !filename[0]) {
+		Archive_Printf(quiet, "WARNING: Empty filename rejected\n");
+		return false;
+	}
+	if (!outdir || !outdir[0] || strlen(outdir) >= sizeof(clean_outdir)) {
+		Archive_Printf(quiet, "WARNING: Invalid output directory\n");
+		return false;
+	}
+
+	if (strlen(filename) >= max_filename) {
+		Archive_Printf(quiet, "WARNING: %s filename too long: %s\n",
+			type, filename);
+		return false;
+	}
+
 	for (p = filename; *p && clean_len < sizeof(clean_path) - 1; p++) {
-		if (*p == '\\') {
+		if (*p == '\\')
 			clean_path[clean_len++] = '/';
-		}
-		else {
+		else
 			clean_path[clean_len++] = *p;
-		}
+	}
+	if (*p) {
+		Archive_Printf(quiet, "WARNING: %s filename too long: %s\n",
+			type, filename);
+		return false;
 	}
 	clean_path[clean_len] = '\0';
+	q_strlcpy(clean_outdir, outdir, sizeof(clean_outdir));
+	Archive_NormalizeSlashes(clean_outdir);
 
-	// Check for dangerous characters
-	if (strstr(clean_path, "..") ||    // Directory traversal
-		strstr(clean_path, ":") ||     // Windows drive letter
-		strstr(clean_path, "|") ||     // Command injection
-		strstr(clean_path, ";") ||     // Command injection
-		strstr(clean_path, ">") ||     // Redirection
-		strstr(clean_path, "<")) {     // Redirection
-		Con_Printf("WARNING: Invalid characters in filename: %s\n", filename);
+	if (strstr(clean_path, "..") ||
+		strstr(clean_path, ":") ||
+		strstr(clean_path, "|") ||
+		strstr(clean_path, ";") ||
+		strstr(clean_path, ">") ||
+		strstr(clean_path, "<")) {
+		Archive_Printf(quiet, "WARNING: Invalid characters in filename: %s\n",
+			filename);
 		return false;
 	}
 
-	// Check for absolute paths
 	if (clean_path[0] == '/') {
-		Con_Printf("WARNING: Absolute path rejected: %s\n", filename);
+		Archive_Printf(quiet, "WARNING: Absolute path rejected: %s\n", filename);
 		return false;
 	}
 
-	// Check directory depth
 	for (p = clean_path; *p; p++) {
 		if (*p == '/') {
 			depth++;
 			if (depth > MAX_PATH_DEPTH) {
-				Con_Printf("WARNING: Directory depth exceeds maximum: %s\n", filename);
+				Archive_Printf(quiet,
+					"WARNING: Directory depth exceeds maximum: %s\n", filename);
 				return false;
 			}
 		}
 	}
 
-	// Check for control characters
 	for (p = clean_path; *p; p++) {
 		if ((unsigned char)*p < 32) {
-			Con_Printf("WARNING: Control character in filename: %s\n", filename);
+			Archive_Printf(quiet, "WARNING: Control character in filename: %s\n",
+				filename);
 			return false;
 		}
 	}
 
-	// Construct and verify full path
-	q_snprintf(resolved_path, sizeof(resolved_path), "%s/%s", outdir, clean_path);
-
-	// Ensure the final path stays within outdir
-	if (strstr(resolved_path, "..") || !strstr(resolved_path, outdir)) {
-		Con_Printf("WARNING: Path escapes output directory: %s\n", filename);
+	resolved_len = q_snprintf(resolved_path, sizeof(resolved_path), "%s/%s",
+		clean_outdir, clean_path);
+	if (resolved_len < 0 || (size_t)resolved_len >= sizeof(resolved_path)) {
+		Archive_Printf(quiet, "WARNING: Resolved path too long: %s\n", filename);
+		return false;
+	}
+	Archive_NormalizeSlashes(resolved_path);
+	if (strstr(resolved_path, "..") ||
+		!Archive_PathStartsWithDir(resolved_path, clean_outdir)) {
+		Archive_Printf(quiet, "WARNING: Path escapes output directory: %s\n",
+			filename);
 		return false;
 	}
 
 	return true;
 }
 
-#define ZIP_ValidatePath(filename, outdir) ValidatePath(filename, outdir, ZIP_MAX_FILENAME, "ZIP")
-#define PAK_ValidatePath(filename, outdir) ValidatePath(filename, outdir, PAK_MAX_FILENAME, "PAK")
+#define ZIP_ValidatePath(filename, outdir, quiet) ValidatePath(filename, outdir, ZIP_MAX_FILENAME, "ZIP", quiet)
+#define PAK_ValidatePath(filename, outdir) ValidatePath(filename, outdir, PAK_MAX_FILENAME, "PAK", false)
 
-static void CreateDirectoryPath(const char* path)
+static void CreateDirectoryPath(const char* path, qboolean quiet)
 {
 	char temp[MAX_OSPATH];
 	char* p;
 	size_t len;
 
-	// Make a temporary copy
 	len = strlen(path);
 	if (len >= sizeof(temp)) {
-		Con_Printf("ERROR: Path too long\n");
+		Archive_Printf(quiet, "ERROR: Path too long\n");
 		return;
 	}
 	strcpy(temp, path);
 
-	// Create each directory in the path
 	for (p = temp + 1; *p; p++) {
 		if (*p == '/' || *p == '\\') {
-			*p = 0;  // Temporarily terminate
+			*p = 0;
 			Sys_mkdir(temp);
-			*p = '/';  // Restore slash (always use forward slash)
+			*p = '/';
 		}
 	}
-	// Create the final directory
 	Sys_mkdir(temp);
 }
 
@@ -4741,13 +4838,15 @@ Extraction Function
 ===================
 */
 
-qboolean ZIP_Extract(const char* zipfile, const char* outdir)
+static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
+	qboolean quiet)
 {
-	Con_DPrintf("Extracting %s to %s\n", zipfile, outdir);
+	Archive_DPrintf(quiet, "Extracting %s to %s\n", zipfile, outdir);
+	zip_extract_error[0] = 0;
 
 	FILE* zip = fopen(zipfile, "rb");
 	if (!zip) {
-		Con_Printf("ERROR: Could not open ZIP file\n");
+		Archive_Printf(quiet, "ERROR: Could not open ZIP file\n");
 		return false;
 	}
 
@@ -4757,14 +4856,15 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 		(filesize = ZIP_Tell(zip)) < ZIP_EOCD_SIZE ||
 		ZIP_Seek(zip, 0, SEEK_SET) != 0)
 	{
-		Con_Printf("ERROR: Could not determine ZIP file size\n");
+		Archive_Printf(quiet, "ERROR: Could not determine ZIP file size\n");
 		fclose(zip);
 		return false;
 	}
 
 	// Check archive size
 	if (filesize > ZIP_MAX_SIZE) {
-		Con_Printf("ERROR: Archive too large (%.2f MB > %.2f MB max)\n",
+		ZIP_SetExtractError(quiet,
+			"archive too large (%.0f MB > %.0f MB max)",
 			filesize / (1024.0 * 1024.0),
 			ZIP_MAX_SIZE / (1024.0 * 1024.0));
 		fclose(zip);
@@ -4773,13 +4873,13 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 
 	char mutable_outdir[MAX_OSPATH];
 	if (strlen(outdir) >= sizeof(mutable_outdir)) {
-		Con_Printf("ERROR: Output directory path too long\n");
+		Archive_Printf(quiet, "ERROR: Output directory path too long\n");
 		fclose(zip);
 		return false;
 	}
 	strcpy(mutable_outdir, outdir);
 
-	CreateDirectoryPath(mutable_outdir);
+	CreateDirectoryPath(mutable_outdir, quiet);
 
 	// Look for ZIP end of central directory
 	unsigned char buffer[ZIP_EOCD_SIZE];
@@ -4801,19 +4901,19 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 	}
 
 	if (pos < min_eocd_pos) {
-		Con_Printf("ERROR: Could not find ZIP central directory\n");
+		Archive_Printf(quiet, "ERROR: Could not find ZIP central directory\n");
 		fclose(zip);
 		return false;
 	}
 
 	// Read central directory info
 	if (ZIP_Seek(zip, pos, SEEK_SET) != 0) {
-		Con_Printf("ERROR: Could not seek to ZIP central directory\n");
+		Archive_Printf(quiet, "ERROR: Could not seek to ZIP central directory\n");
 		fclose(zip);
 		return false;
 	}
 	if (fread(buffer, 1, ZIP_EOCD_SIZE, zip) != ZIP_EOCD_SIZE) {
-		Con_Printf("ERROR: Could not read central directory\n");
+		Archive_Printf(quiet, "ERROR: Could not read central directory\n");
 		fclose(zip);
 		return false;
 	}
@@ -4824,7 +4924,7 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 
 	// Check number of files
 	if (total_entries > ZIP_MAX_FILES) {
-		Con_Printf("ERROR: Too many files (%d > %d max)\n",
+		Archive_Printf(quiet, "ERROR: Too many files (%d > %d max)\n",
 			total_entries, ZIP_MAX_FILES);
 		fclose(zip);
 		return false;
@@ -4832,7 +4932,7 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 
 	// Go to start of central directory
 	if (ZIP_Seek(zip, cd_offset, SEEK_SET) != 0) {
-		Con_Printf("ERROR: Could not seek to central directory\n");
+		Archive_Printf(quiet, "ERROR: Could not seek to central directory\n");
 		fclose(zip);
 		return false;
 	}
@@ -4845,51 +4945,122 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 
 	// Calculate total size for progress tracking
 	qofs_t initial_pos = ZIP_Tell(zip);
+	qboolean preflight_ok = true;
 	if (initial_pos < 0) {
-		Con_Printf("ERROR: Could not read central directory position\n");
+		Archive_Printf(quiet, "ERROR: Could not read central directory position\n");
 		fclose(zip);
 		return false;
 	}
 	for (int i = 0; i < total_entries; i++) {
 		unsigned int cd_sig;
-		if (fread(&cd_sig, 1, 4, zip) != 4) break;
+		if (fread(&cd_sig, 1, 4, zip) != 4) {
+			preflight_ok = false;
+			break;
+		}
+		if (cd_sig != ZIP_CD_SIGNATURE) {
+			preflight_ok = false;
+			break;
+		}
 
 		unsigned char header[42];
-		if (fread(header, 1, 42, zip) != 42) break;
+		if (fread(header, 1, 42, zip) != 42) {
+			preflight_ok = false;
+			break;
+		}
 
+		unsigned short general_flags = header[4] | (header[5] << 8);
+		unsigned short compression_method = header[6] | (header[7] << 8);
 		unsigned int size = header[16] | (header[17] << 8) |
 			(header[18] << 16) | (header[19] << 24);
 		total_bytes += size;
 
-		// Skip name, extra, and comment
 		unsigned short name_len = header[24] | (header[25] << 8);
 		unsigned short extra_len = header[26] | (header[27] << 8);
 		unsigned short comment_len = header[28] | (header[29] << 8);
-		if (ZIP_Seek(zip, name_len + extra_len + comment_len, SEEK_CUR) != 0)
-			break;
-	}
+		unsigned int external_attrs = header[34] | (header[35] << 8) |
+			(header[36] << 16) | (header[37] << 24);
+		char filename[MAX_OSPATH];
 
-	// Return to start of central directory
-	if (ZIP_Seek(zip, initial_pos, SEEK_SET) != 0) {
-		Con_Printf("ERROR: Could not seek to central directory\n");
+		if (name_len >= sizeof(filename)) {
+			Archive_Printf(quiet, "ERROR: Filename too long\n");
+			fclose(zip);
+			return false;
+		}
+		if (fread(filename, 1, name_len, zip) != name_len) {
+			Archive_Printf(quiet,
+				"ERROR: Could not read filename from central directory\n");
+			fclose(zip);
+			return false;
+		}
+		filename[name_len] = 0;
+
+		if (!ZIP_ValidatePath(filename, outdir, quiet)) {
+			Archive_Printf(quiet, "ERROR: Invalid filename rejected: %s\n", filename);
+			fclose(zip);
+			return false;
+		}
+		if (general_flags & 1) {
+			Archive_Printf(quiet, "ERROR: Encrypted ZIP entry rejected: %s\n",
+				filename);
+			fclose(zip);
+			return false;
+		}
+#ifndef _WIN32
+		if ((((external_attrs >> 16) & S_IFMT) == S_IFLNK)) {
+			Archive_Printf(quiet, "ERROR: Symlink ZIP entry rejected: %s\n",
+				filename);
+			fclose(zip);
+			return false;
+		}
+#endif
+		if (compression_method == ZIP_METHOD_DEFLATE64) {
+			ZIP_SetExtractError(quiet,
+				"ZIP uses unsupported Deflate64 compression: %s",
+				filename);
+			fclose(zip);
+			return false;
+		}
+		else if (compression_method != ZIP_METHOD_STORE &&
+			compression_method != ZIP_METHOD_DEFLATE) {
+			ZIP_SetExtractError(quiet,
+				"unsupported ZIP compression method %u: %s",
+				compression_method, filename);
+			fclose(zip);
+			return false;
+		}
+
+		if (ZIP_Seek(zip, extra_len + comment_len, SEEK_CUR) != 0) {
+			preflight_ok = false;
+			break;
+		}
+	}
+	if (!preflight_ok) {
+		Archive_Printf(quiet, "ERROR: Could not preflight central directory\n");
 		fclose(zip);
 		return false;
 	}
 
-	Con_Printf("\n"); // Add newline before progress starts
+	// Return to start of central directory
+	if (ZIP_Seek(zip, initial_pos, SEEK_SET) != 0) {
+		Archive_Printf(quiet, "ERROR: Could not seek to central directory\n");
+		fclose(zip);
+		return false;
+	}
+
+	Archive_Printf(quiet, "\n"); // Add newline before progress starts
 
 	// Process each file in the central directory
 	for (int i = 0; i < total_entries; i++) {
 		// Read signature first
 		unsigned int cd_sig;
 		if (fread(&cd_sig, 1, 4, zip) != 4) {
-			Con_Printf("ERROR: Could not read central directory signature\n");
+			Archive_Printf(quiet, "ERROR: Could not read central directory signature\n");
 			success = false;
 			break;
 		}
 
 		if (cd_sig != ZIP_CD_SIGNATURE) {
-			Con_Printf("ERROR: Invalid central directory signature\n");
+			Archive_Printf(quiet, "ERROR: Invalid central directory signature\n");
 			success = false;
 			break;
 		}
@@ -4897,7 +5068,7 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 		// Read rest of fixed-size central directory header
 		unsigned char cd_header[42];  // 46 - 4 (already read signature)
 		if (fread(cd_header, 1, 42, zip) != 42) {
-			Con_Printf("ERROR: Could not read central directory header\n");
+			Archive_Printf(quiet, "ERROR: Could not read central directory header\n");
 			success = false;
 			break;
 		}
@@ -4915,13 +5086,14 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 		// Read filename
 		char filename[MAX_OSPATH];
 		if (name_length >= sizeof(filename)) {
-			Con_Printf("ERROR: Filename too long\n");
+			Archive_Printf(quiet, "ERROR: Filename too long\n");
 			success = false;
 			break;
 		}
 
 		if (fread(filename, 1, name_length, zip) != name_length) {
-			Con_Printf("ERROR: Could not read filename from central directory\n");
+			Archive_Printf(quiet,
+				"ERROR: Could not read filename from central directory\n");
 			success = false;
 			break;
 		}
@@ -4929,7 +5101,7 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 
 		// Skip extra field and comment in central directory
 		if (ZIP_Seek(zip, extra_length + comment_length, SEEK_CUR) != 0) {
-			Con_Printf("ERROR: Could not skip extra/comment fields\n");
+			Archive_Printf(quiet, "ERROR: Could not skip extra/comment fields\n");
 			success = false;
 			break;
 		}
@@ -4938,8 +5110,8 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 		qofs_t current_pos = ZIP_Tell(zip);
 
 		// Add security checks here
-		if (!ZIP_ValidatePath(filename, outdir)) {
-			Con_Printf("ERROR: Invalid filename rejected: %s\n", filename);
+		if (!ZIP_ValidatePath(filename, outdir, quiet)) {
+			Archive_Printf(quiet, "ERROR: Invalid filename rejected: %s\n", filename);
 			success = false;
 			ZIP_Seek(zip, current_pos, SEEK_SET);
 			continue;
@@ -4947,7 +5119,8 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 
 		// Check file size
 		if (compressed_size > ZIP_MAX_FILE_SIZE) {
-			Con_Printf("ERROR: File too large: %s (%.2f MB > %.2f MB max)\n",
+			ZIP_SetExtractError(quiet,
+				"file too large: %s (%.0f MB > %.0f MB max)",
 				filename,
 				compressed_size / (1024.0 * 1024.0),
 				ZIP_MAX_FILE_SIZE / (1024.0 * 1024.0));
@@ -4958,7 +5131,7 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 
 		// Go to local file header
 		if (ZIP_Seek(zip, local_header_offset, SEEK_SET) != 0) {
-			Con_Printf("ERROR: Could not seek to local header\n");
+			Archive_Printf(quiet, "ERROR: Could not seek to local header\n");
 			success = false;
 			break;
 		}
@@ -4966,7 +5139,7 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 		// Read and verify local file header signature
 		unsigned int lfh_sig;
 		if (fread(&lfh_sig, 1, 4, zip) != 4 || lfh_sig != ZIP_LFH_SIGNATURE) {
-			Con_Printf("ERROR: Invalid local file header signature\n");
+			Archive_Printf(quiet, "ERROR: Invalid local file header signature\n");
 			success = false;
 			break;
 		}
@@ -4974,7 +5147,7 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 		// Skip rest of local header
 		unsigned char lfh[26];
 		if (fread(lfh, 1, 26, zip) != 26) {
-			Con_Printf("ERROR: Could not read local file header\n");
+			Archive_Printf(quiet, "ERROR: Could not read local file header\n");
 			success = false;
 			break;
 		}
@@ -4984,7 +5157,7 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 		unsigned short local_extra_length = lfh[24] | (lfh[25] << 8);
 
 		if (ZIP_Seek(zip, local_name_length + local_extra_length, SEEK_CUR) != 0) {
-			Con_Printf("ERROR: Could not skip local header name/extra\n");
+			Archive_Printf(quiet, "ERROR: Could not skip local header name/extra\n");
 			success = false;
 			break;
 		}
@@ -5002,7 +5175,7 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 		char* last_slash = strrchr(dirpath, '/');
 		if (last_slash) {
 			*last_slash = 0;
-			CreateDirectoryPath(dirpath);
+			CreateDirectoryPath(dirpath, quiet);
 			*last_slash = '/';
 		}
 
@@ -5016,13 +5189,13 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 		// Open output file
 		FILE* outfile = fopen(outpath, "wb");
 		if (!outfile) {
-			Con_Printf("ERROR: Could not create file %s\n", outpath);
+			Archive_Printf(quiet, "ERROR: Could not create file %s\n", outpath);
 			success = false;
 			ZIP_Seek(zip, current_pos, SEEK_SET);
 			continue;
 		}
 
-		Con_DPrintf("Extracting %s\n", filename);
+		Archive_DPrintf(quiet, "Extracting %s\n", filename);
 
 		// Extract file content based on compression method
 		qboolean extract_success = true;
@@ -5047,36 +5220,68 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 
 			if (inflateInit2(&strm, -MAX_WBITS) == Z_OK) {
 				size_t remaining = compressed_size;
-				do {
+				qofs_t total_out = 0;
+				qboolean stream_end = false;
+				while (remaining > 0 && extract_success && !stream_end) {
 					size_t to_read = q_min(remaining, ZIP_CHUNK);
 					size_t bytes_read = fread(in, 1, to_read, zip);
-					strm.avail_in = (uInt)bytes_read;
-					if (strm.avail_in == 0) break;
 
+					if (bytes_read != to_read) {
+						extract_success = false;
+						break;
+					}
+
+					strm.avail_in = (uInt)bytes_read;
 					remaining -= bytes_read;
 					strm.next_in = in;
 
+					// Drain every byte this input chunk can produce. inflate may
+					// need several calls with a fresh output buffer even after
+					// avail_in hits 0 (it still has buffered output to flush);
+					// keep going while it completely fills the output buffer so
+					// trailing data isn't lost when output ends on a chunk
+					// boundary.
 					do {
 						strm.avail_out = ZIP_CHUNK;
 						strm.next_out = out;
 						int ret = inflate(&strm, Z_NO_FLUSH);
 
-						if (ret != Z_OK && ret != Z_STREAM_END) {
+						if (ret == Z_STREAM_END)
+							stream_end = true;
+						else if (ret == Z_BUF_ERROR)
+							break;  // no progress possible; need next input chunk
+						else if (ret != Z_OK) {
 							extract_success = false;
 							break;
 						}
 
 						size_t have = ZIP_CHUNK - strm.avail_out;
-						if (fwrite(out, 1, have, outfile) != have) {
+						if (have > 0 && fwrite(out, 1, have, outfile) != have) {
 							extract_success = false;
 							break;
 						}
-					} while (strm.avail_out == 0);
 
-				} while (remaining > 0 && extract_success);
+						// Guard against decompression bombs: the central-directory
+						// cap only bounds the compressed size, so also cap the
+						// inflated output per file.
+						total_out += have;
+						if (total_out > ZIP_MAX_FILE_SIZE) {
+							ZIP_SetExtractError(quiet,
+								"decompressed size limit exceeded for %s", filename);
+							extract_success = false;
+							break;
+						}
+					} while (strm.avail_out == 0 && !stream_end);
+
+				}
+
+				if (extract_success && !stream_end)
+					extract_success = false;
 
 				inflateEnd(&strm);
 			}
+			else
+				extract_success = false;
 		}
 		else {
 			extract_success = false;
@@ -5085,7 +5290,11 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 		fclose(outfile);
 		if (!extract_success) {
 			remove(outpath);  // Delete failed file
-			Con_DPrintf("ERROR: Failed to extract %s\n", filename);
+			/* Keep a more specific reason (e.g. decompressed-size limit) if one
+			 * was already recorded for this file. */
+			if (!zip_extract_error[0])
+				ZIP_SetExtractError(quiet, "failed to extract %s", filename);
+			Archive_DPrintf(quiet, "ERROR: Failed to extract %s\n", filename);
 			success = false;
 		}
 		else {
@@ -5095,7 +5304,8 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 				float current_progress = (float)processed_bytes / total_bytes * 100;
 				// Only show progress if it's increased by at least 5% or at 100%
 				if (current_progress - last_progress >= 5.0f || current_progress == 100.0f) {
-					Con_Printf("\rprogress: ^m%.1f%%^m", current_progress);
+					Archive_Printf(quiet, "\rprogress: ^m%.1f%%^m",
+						current_progress);
 					last_progress = current_progress;
 				}
 			}
@@ -5103,7 +5313,7 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 
 		// Return to central directory position
 		if (ZIP_Seek(zip, current_pos, SEEK_SET) != 0) {
-			Con_Printf("ERROR: Could not return to central directory\n");
+			Archive_Printf(quiet, "ERROR: Could not return to central directory\n");
 			success = false;
 			break;
 		}
@@ -5111,16 +5321,42 @@ qboolean ZIP_Extract(const char* zipfile, const char* outdir)
 
 	// At the end of the function, replace the success message with:
 	if (files_extracted > 0) {
-		Con_Printf("\rsuccessfully unpacked ^m%d^m files (%.2f MB)\n\n",
+		Archive_Printf(quiet,
+			"\rsuccessfully unpacked ^m%d^m files (%.2f MB)\n\n",
 			files_extracted,
 			total_bytes / (1024.0 * 1024.0));
 	}
 	else {
-		Con_Printf("\rno files extracted%s\n\n", success ? "" : " due to errors");
+		Archive_Printf(quiet, "\rno files extracted%s\n\n",
+			success ? "" : " due to errors");
 	}
 
 	fclose(zip);
 	return success && files_extracted > 0;
+}
+
+static qboolean ZIP_ExtractInternal(const char* zipfile, const char* outdir,
+	qboolean quiet)
+{
+	qboolean ok = ZIP_ExtractInternalBody(zipfile, outdir, quiet);
+
+	/* Guarantee a reason on failure: many early returns only print (suppressed
+	 * in quiet mode) without recording an error, which would leave callers such
+	 * as the mod downloader with a blank message. */
+	if (!ok && !zip_extract_error[0])
+		ZIP_SetExtractError(quiet, "could not extract %s", zipfile);
+
+	return ok;
+}
+
+qboolean ZIP_Extract(const char* zipfile, const char* outdir)
+{
+	return ZIP_ExtractInternal(zipfile, outdir, false);
+}
+
+qboolean ZIP_ExtractQuiet(const char* zipfile, const char* outdir)
+{
+	return ZIP_ExtractInternal(zipfile, outdir, true);
 }
 
 /*

@@ -2795,6 +2795,112 @@ static qboolean CL_DownloadUrlUsesQ1ToolsRepo(const char *url)
 	}
 }
 
+/*
+==============================================================================
+* CL_GithubReleasesUrls
+*     Builds the GitHub Releases API URL and the asset-download URL prefix for a
+*     "user/repo[/branch...]" path such as cl_web_download_url. Either output may
+*     be NULL. Returns false if the value is not a GitHub repo path or an output
+*     buffer is too small.
+==============================================================================
+*/
+qboolean CL_GithubReleasesUrls(const char *repopath,
+	char *api_url, size_t api_sz,
+	char *asset_prefix, size_t prefix_sz)
+{
+	char user[64], repo[64];
+
+	if (!GithubExtractUserRepo(repopath, user, sizeof(user), repo, sizeof(repo)))
+		return false;
+
+	if (api_url && api_sz &&
+		(size_t)q_snprintf(api_url, api_sz,
+			"https://api.github.com/repos/%s/%s/releases?per_page=100",
+			user, repo) >= api_sz)
+		return false;
+
+	if (asset_prefix && prefix_sz &&
+		(size_t)q_snprintf(asset_prefix, prefix_sz,
+			"https://github.com/%s/%s/releases/download/",
+			user, repo) >= prefix_sz)
+		return false;
+
+	return true;
+}
+
+/*
+==============================================================================
+* CL_GithubContentsUrl
+*     Builds the GitHub Contents API URL for a subdirectory of a
+*     "user/repo[/branch]" path, e.g.
+*     "https://api.github.com/repos/USER/REPO/contents/SUBDIR[?ref=BRANCH]".
+*     A branch is only added when the path supplies one explicitly; with a bare
+*     "user/repo" the ref is omitted so GitHub uses the repo's default branch
+*     (which need not be "main"). Returns false on a non-repo path or overflow.
+==============================================================================
+*/
+qboolean CL_GithubContentsUrl(const char *repopath, const char *subdir,
+	char *out, size_t outsize)
+{
+	char user[64], repo[64], branch[128];
+	const char *s1, *s2;
+	size_t blen;
+	qboolean have_branch = false;
+
+	if (!subdir || !*subdir)
+		return false;
+	if (!GithubExtractUserRepo(repopath, user, sizeof(user), repo, sizeof(repo)))
+		return false;
+
+	/* An explicit branch is the third path segment of the original value, i.e.
+	 * the text after the second '/'. Don't use NormalizeGithubRepoPath here: it
+	 * fabricates "/main", which would wrongly pin repos whose default differs.
+	 * Only this single segment is used as the ref; a branch containing '/'
+	 * isn't supported (it is ambiguous with the cvar's branch/subpath form used
+	 * elsewhere), and such repos should rely on the default branch instead. */
+	s1 = strchr(repopath, '/');
+	s2 = s1 ? strchr(s1 + 1, '/') : NULL;
+	if (s2 && s2[1])
+	{
+		blen = strcspn(s2 + 1, "/");
+		if (blen > 0 && blen < sizeof(branch))
+		{
+			memcpy(branch, s2 + 1, blen);
+			branch[blen] = '\0';
+			have_branch = true;
+		}
+	}
+
+	if (have_branch)
+		return (size_t)q_snprintf(out, outsize,
+			"https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
+			user, repo, subdir, branch) < outsize;
+
+	return (size_t)q_snprintf(out, outsize,
+		"https://api.github.com/repos/%s/%s/contents/%s",
+		user, repo, subdir) < outsize;
+}
+
+/*
+==============================================================================
+* CL_GithubRawPrefix
+*     Builds the raw.githubusercontent.com URL prefix for a "user/repo" path,
+*     e.g. "https://raw.githubusercontent.com/USER/REPO/", for validating that a
+*     tree-asset download URL belongs to the configured repo. Returns false on
+*     error.
+==============================================================================
+*/
+qboolean CL_GithubRawPrefix(const char *repopath, char *out, size_t outsize)
+{
+	char user[64], repo[64];
+
+	if (!GithubExtractUserRepo(repopath, user, sizeof(user), repo, sizeof(repo)))
+		return false;
+
+	return (size_t)q_snprintf(out, outsize,
+		"https://raw.githubusercontent.com/%s/%s/", user, repo) < outsize;
+}
+
 qboolean CL_Q1ToolsDownloadsAvailable(void)
 {
 	qboolean url1_q1tools = CL_DownloadUrlUsesQ1ToolsRepo(cl_web_download_url.string);
