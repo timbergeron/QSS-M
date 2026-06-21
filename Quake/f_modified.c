@@ -513,8 +513,6 @@ void FMod_Init (void)
 {
 	int lastid;
 
-	Cmd_AddCommand("f_modified", FMod_Response);
-
 	memset (check_models, 0, sizeof (check_models));
 	check_models_num = 0;
 	fmod_teamfortress = false;
@@ -770,7 +768,7 @@ char *FMod_Response_Text(void)
 		if (check_models[i].checked && check_models[i].modified && relevent ) {
 			if (strlen (buf) < 240) {
 				if (check_models[i].variant)
-					q_strlcat (buf, va(" %s(%s)", COM_SkipPath (check_models[i].name), check_models[i].variant), sizeof (buf));
+					q_strlcat (buf, va(" %s (%s)", COM_SkipPath (check_models[i].name), check_models[i].variant), sizeof (buf));
 				else
 					q_strlcat (buf, va(" %s", COM_SkipPath (check_models[i].name)), sizeof (buf));
 				count++;
@@ -785,9 +783,4 @@ char *FMod_Response_Text(void)
 		q_strlcpy (buf, "all models ok", sizeof (buf));
 
 	return buf;
-}
-
-void FMod_Response (void)
-{
-	Cbuf_AddText (va ("%s %s\n", cls.state == ca_disconnected ? "echo" : "say", FMod_Response_Text()));
 }
