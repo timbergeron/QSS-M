@@ -2795,6 +2795,114 @@ static qboolean CL_DownloadUrlUsesQ1ToolsRepo(const char *url)
 	}
 }
 
+static qboolean CL_ModDownloadRepoPathOkay(const char *url)
+{
+	const char *segment;
+	const char *p;
+	int slash_count = 0;
+
+	if (!IsGithubRepoPath(url))
+		return false;
+
+	segment = url;
+	for (p = url; ; p++)
+	{
+		if (*p == '/' || *p == '\0')
+		{
+			size_t len = (size_t)(p - segment);
+
+			if (len == 0 ||
+				(len == 1 && segment[0] == '.') ||
+				(len == 2 && segment[0] == '.' && segment[1] == '.'))
+				return false;
+			if (*p == '\0')
+				break;
+			if (++slash_count > 2)
+				return false;
+			segment = p + 1;
+			continue;
+		}
+
+		if (!isalnum((unsigned char)*p) &&
+			*p != '.' && *p != '-' && *p != '_')
+			return false;
+	}
+
+	return slash_count == 1 || slash_count == 2;
+}
+
+/* Resolve a cl_web_download_url[2] value to a "user/repo[/branch]" download repo.
+ * Any GitHub repo path is accepted, not just q1tools, so a third party can host
+ * their own moddownloads.json + release assets and point the cvar at it. Full
+ * URL forms (https://...) are not converted; use the bare "user/repo" path. */
+static qboolean CL_ModDownloadRepoFromUrl(const char *url, char *out, size_t outsize)
+{
+	if (!out || outsize == 0)
+		return false;
+
+	if (!CL_ModDownloadRepoPathOkay(url))
+		return false;
+
+	return q_strlcpy(out, url, outsize) < outsize;
+}
+
+static qboolean CL_ModDownloadRepoSelect(char *out, size_t outsize,
+	qboolean require_available)
+{
+	char url1_repo[MAX_URLPATH];
+	char url2_repo[MAX_URLPATH];
+	qboolean url1_valid_repo;
+	qboolean url2_valid_repo;
+
+	if (out && outsize == 0)
+		return false;
+
+	url1_valid_repo = CL_ModDownloadRepoFromUrl(cl_web_download_url.string,
+		url1_repo, sizeof(url1_repo));
+	url2_valid_repo = CL_ModDownloadRepoFromUrl(cl_web_download_url2.string,
+		url2_repo, sizeof(url2_repo));
+
+	if (url1_valid_repo && webcheck)
+		return !out || q_strlcpy(out, url1_repo, outsize) < outsize;
+	if (url2_valid_repo && web2check)
+		return !out || q_strlcpy(out, url2_repo, outsize) < outsize;
+	if (require_available)
+	{
+		if (out)
+			out[0] = '\0';
+		return false;
+	}
+	if (url1_valid_repo)
+		return !out || q_strlcpy(out, url1_repo, outsize) < outsize;
+	if (url2_valid_repo)
+		return !out || q_strlcpy(out, url2_repo, outsize) < outsize;
+
+	if (out)
+		out[0] = '\0';
+	return false;
+}
+
+qboolean CL_ModDownloadRepo(char *out, size_t outsize)
+{
+	if (!out || outsize == 0)
+		return false;
+
+	return CL_ModDownloadRepoSelect(out, outsize, false);
+}
+
+/* True when the active download repo is the canonical q1tools site. The bundled
+ * bootstrap mod list is q1tools-specific, so it is only seeded for that repo;
+ * any other configured repo starts empty and waits for its own manifest. */
+qboolean CL_DownloadRepoIsQ1Tools(void)
+{
+	char repo[MAX_URLPATH];
+
+	if (!CL_ModDownloadRepo(repo, sizeof(repo)))
+		return false;
+
+	return CL_DownloadUrlUsesQ1ToolsRepo(repo);
+}
+
 /*
 ==============================================================================
 * CL_GithubReleasesUrls
@@ -2901,23 +3009,66 @@ qboolean CL_GithubRawPrefix(const char *repopath, char *out, size_t outsize)
 		"https://raw.githubusercontent.com/%s/%s/", user, repo) < outsize;
 }
 
-qboolean CL_Q1ToolsDownloadsAvailable(void)
+/*
+==============================================================================
+* CL_GithubRawFileUrl
+*     Builds the raw.githubusercontent.com URL for a file in a
+*     "user/repo[/branch]" path, e.g.
+*     "https://raw.githubusercontent.com/USER/REPO/REF/SUBPATH". Uses the
+*     explicit branch from the path when present, otherwise "HEAD" (which raw
+*     resolves to the repo's default branch). Returns false on a non-repo path
+*     or overflow.
+==============================================================================
+*/
+qboolean CL_GithubRawFileUrl(const char *repopath, const char *subpath,
+	char *out, size_t outsize)
 {
-	qboolean url1_q1tools = CL_DownloadUrlUsesQ1ToolsRepo(cl_web_download_url.string);
-	qboolean url2_q1tools = CL_DownloadUrlUsesQ1ToolsRepo(cl_web_download_url2.string);
+	char user[64], repo[64], branch[128];
+	const char *s1, *s2, *ref = "HEAD";
+	size_t blen;
 
+	if (!subpath || !*subpath)
+		return false;
+	if (!GithubExtractUserRepo(repopath, user, sizeof(user), repo, sizeof(repo)))
+		return false;
+
+	/* An explicit branch is the third path segment (after the second '/'), the
+	 * same convention CL_GithubContentsUrl uses. */
+	s1 = strchr(repopath, '/');
+	s2 = s1 ? strchr(s1 + 1, '/') : NULL;
+	if (s2 && s2[1])
+	{
+		blen = strcspn(s2 + 1, "/");
+		if (blen > 0 && blen < sizeof(branch))
+		{
+			memcpy(branch, s2 + 1, blen);
+			branch[blen] = '\0';
+			ref = branch;
+		}
+	}
+
+	return (size_t)q_snprintf(out, outsize,
+		"https://raw.githubusercontent.com/%s/%s/%s/%s",
+		user, repo, ref, subpath) < outsize;
+}
+
+qboolean CL_ModDownloadsAvailable(void)
+{
 	if (cls.state == ca_dedicated)
 		return false;
 
-	return (url1_q1tools && webcheck) || (url2_q1tools && web2check);
+	return CL_ModDownloadRepoSelect(NULL, 0, true);
 }
 
 static qboolean CL_WebDownloadShouldCheckAtStartup(const char *url,
 	const char *default_string)
 {
+	/* Auto-ping the default source and any GitHub repo path at boot so the mod
+	 * downloads menu can resolve its reachability without the user re-setting
+	 * the cvar. */
 	return url && *url &&
 		(!strcmp(url, default_string) ||
-		 CL_DownloadUrlUsesQ1ToolsRepo(url));
+		 IsGithubRepoPath(url));
 }
 
 
