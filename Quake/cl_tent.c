@@ -904,11 +904,10 @@ void CL_UpdateTEnts (void)
 			continue;
 
 	// if coming from the player, update the start position
-		if (b->entity == cl.viewentity && cl.entities)
+		if (b->entity == cl.viewentity && cl.entities && !chase_active.value)
 		{
 			VectorCopy (cl.entities[cl.viewentity].origin, b->start);
-			if (!chase_active.value)
-				b->start[2] += cl.crouch + bound(-7, v_viewheight.value, 4);
+			b->start[2] += cl.crouch + bound(-7, v_viewheight.value, 4);
 
 			// begin woods for truelightning #truelight
 
@@ -921,7 +920,7 @@ void CL_UpdateTEnts (void)
 				f = q_max(0, q_min(1, cl_truelightning.value));
 
 				VectorSubtract(playerbeam_end, cl.entities[cl.viewentity].origin, v);
-				v[2] -= 22;		// adjust for view height
+				v[2] -= cl.crouch;
 
 				vectoangles(v, ang);
 
@@ -945,7 +944,9 @@ void CL_UpdateTEnts (void)
 
 				VectorCopy(cl.entities[cl.viewentity].origin, org);
 
-				org[2] += 16;
+				org[2] += cl.crouch;
+				org[2] += bound(0, cl_lightning_zadjust.value, 16);
+				org[2] += bound(-7, v_viewheight.value, 4);
 
 				VectorAdd(org, forward, b->end);
 
