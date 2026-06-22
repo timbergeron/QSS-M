@@ -19186,7 +19186,7 @@ void M_Extras_Draw(void)
 			{
 			case 0: value = "off"; break;
 			case 1: value = "all maps"; break;
-			case 2: value = "crx matches only"; break;
+			case 2: value = "crmod matches only"; break;
 			case 3: value = "all maps (online)"; break;
 			case 4: value = "all maps (split)"; break;
 			default: value = "unknown"; break;
