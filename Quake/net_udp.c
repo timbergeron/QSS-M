@@ -360,6 +360,7 @@ int UDP_Write (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr
 {
 	int	ret;
 	socklen_t addrsize;
+
 	if (addr->qsa_family == AF_INET)
 		addrsize = sizeof(struct sockaddr_in);
 	else if (addr->qsa_family == AF_INET6)
@@ -378,6 +379,15 @@ int UDP_Write (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr
 		int err = SOCKETERRNO;
 		if (err == NET_EWOULDBLOCK)
 			return 0;
+#ifdef NET_ENOBUFS
+		//transient out-of-buffer condition; drop this packet rather than
+		//treating it as a lost connection (matches FTE/DP/ezQuake behaviour)
+		if (err == NET_ENOBUFS)
+		{
+			Con_DPrintf ("UDP_Write, sendto: %s (%s)\n", socketerror(err), UDP_AddrToString(addr, false));
+			return 0;
+		}
+#endif
 		if (err == ENETUNREACH || err == EADDRNOTAVAIL)
 		{	//this happens a lot on hosts that have no ipv6 route tables set up (Docker, poopy ISPs, etc)
 			static qboolean nospam;if (!nospam) nospam=true,

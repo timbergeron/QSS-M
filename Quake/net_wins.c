@@ -442,6 +442,15 @@ int WINS_Write (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *add
 		int err = SOCKETERRNO;
 		if (err == NET_EWOULDBLOCK)
 			return 0;
+#ifdef NET_ENOBUFS
+		//transient out-of-buffer condition; drop this packet rather than
+		//treating it as a lost connection (matches FTE/DP/ezQuake behaviour)
+		if (err == NET_ENOBUFS)
+		{
+			Con_DPrintf ("WINS_Write, sendto: %s\n", socketerror(err));
+			return 0;
+		}
+#endif
 		Con_SafePrintf ("WINS_Write, sendto: %s\n", socketerror(err));
 	}
 	return ret;

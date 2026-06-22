@@ -88,6 +88,9 @@ typedef int	socklen_t;			/* defining as signed int to match the old api */
 #define NET_EADDRNOTAVAIL	EADDRNOTAVAIL
 #define NET_EACCES			EACCES
 #define NET_ENETUNREACH		ENETUNREACH
+#if defined(ENOBUFS)
+#define NET_ENOBUFS			ENOBUFS
+#endif
 
 #define	socketerror(x)	strerror((x))
 
@@ -139,6 +142,9 @@ typedef unsigned int	in_addr_t;	/* u_int32_t */
 #define	NET_EWOULDBLOCK		EWOULDBLOCK
 #define	NET_ECONNREFUSED	ECONNREFUSED
 #define	NET_EINTR			EINTR
+#if defined(ENOBUFS)
+#define NET_ENOBUFS			ENOBUFS
+#endif
 
 #define	socketerror(x)	strerror((x))
 /* there is h_errno but no hstrerror() */
@@ -179,6 +185,7 @@ typedef SOCKET	sys_socket_t;
 #define	SOCKETERRNO	WSAGetLastError()
 #define	NET_EWOULDBLOCK		WSAEWOULDBLOCK
 #define	NET_ECONNREFUSED	WSAECONNREFUSED
+#define NET_ENOBUFS			WSAENOBUFS
 /* must #include "wsaerror.h" for this : */
 #define	socketerror(x)	__WSAE_StrError((x))
 
