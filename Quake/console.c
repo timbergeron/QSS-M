@@ -637,12 +637,6 @@ static qboolean Con_CanvasToOffset (int x, int y, conofs_t *ofs, contest_t mode)
     return ret;
 }
 
-static qboolean Con_ScreenToOffset (int x, int y, conofs_t *ofs, contest_t mode)
-{
-    Con_ScreenToCanvas(x,y,&x,&y);
-    return Con_CanvasToOffset(x,y,ofs,mode);
-}
-
 static void Con_GetCurrentRange (conofs_t *b, conofs_t *e)
 {
     b->line = con_current - con_totallines + 1; b->col = 0;

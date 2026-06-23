@@ -309,6 +309,7 @@ OBJS := strlcat.o \
 	keys.o \
 	location.o \
 	menu.o \
+	update.o \
 	sbar.o \
 	view.o \
 	wad.o \

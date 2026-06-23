@@ -22,6 +22,7 @@
 		664D989619CF6B78000D395C /* host.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78170D2EEA5400CB2E4C /* host.c */; };
 		664D989719CF6B78000D395C /* mathlib.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78180D2EEA5400CB2E4C /* mathlib.c */; };
 		664D989819CF6B78000D395C /* menu.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78190D2EEA5400CB2E4C /* menu.c */; };
+		85D17E7620261A1A00100001 /* update.c in Sources */ = {isa = PBXBuildFile; fileRef = 85D17E7720261A1A00100001 /* update.c */; };
 		664D989919CF6B78000D395C /* pr_cmds.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A781A0D2EEA5400CB2E4C /* pr_cmds.c */; };
 		664D989A19CF6B78000D395C /* pr_edict.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A781B0D2EEA5400CB2E4C /* pr_edict.c */; };
 		664D989B19CF6B78000D395C /* pr_exec.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A781C0D2EEA5400CB2E4C /* pr_exec.c */; };
@@ -238,6 +239,7 @@
 		483A77F00D2EE97700CB2E4C /* quakedef.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = quakedef.h; path = ../Quake/quakedef.h; sourceTree = SOURCE_ROOT; };
 		483A77F10D2EE97700CB2E4C /* sbar.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = sbar.h; path = ../Quake/sbar.h; sourceTree = SOURCE_ROOT; };
 		483A77F20D2EE97700CB2E4C /* sys.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = sys.h; path = ../Quake/sys.h; sourceTree = SOURCE_ROOT; };
+		85D17E7820261A1A00100001 /* update.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = update.h; path = ../Quake/update.h; sourceTree = SOURCE_ROOT; };
 		483A77F30D2EE97700CB2E4C /* view.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = view.h; path = ../Quake/view.h; sourceTree = SOURCE_ROOT; };
 		483A77F40D2EE97700CB2E4C /* wad.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = wad.h; path = ../Quake/wad.h; sourceTree = SOURCE_ROOT; };
 		483A77F50D2EE97700CB2E4C /* world.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = world.h; path = ../Quake/world.h; sourceTree = SOURCE_ROOT; };
@@ -275,6 +277,7 @@
 		483A78170D2EEA5400CB2E4C /* host.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = host.c; path = ../Quake/host.c; sourceTree = SOURCE_ROOT; };
 		483A78180D2EEA5400CB2E4C /* mathlib.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = mathlib.c; path = ../Quake/mathlib.c; sourceTree = SOURCE_ROOT; };
 		483A78190D2EEA5400CB2E4C /* menu.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = menu.c; path = ../Quake/menu.c; sourceTree = SOURCE_ROOT; };
+		85D17E7720261A1A00100001 /* update.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = update.c; path = ../Quake/update.c; sourceTree = SOURCE_ROOT; };
 		483A781A0D2EEA5400CB2E4C /* pr_cmds.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = pr_cmds.c; path = ../Quake/pr_cmds.c; sourceTree = SOURCE_ROOT; };
 		483A781B0D2EEA5400CB2E4C /* pr_edict.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = pr_edict.c; path = ../Quake/pr_edict.c; sourceTree = SOURCE_ROOT; };
 		483A781C0D2EEA5400CB2E4C /* pr_exec.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = pr_exec.c; path = ../Quake/pr_exec.c; sourceTree = SOURCE_ROOT; };
@@ -620,6 +623,7 @@
 				483A78180D2EEA5400CB2E4C /* mathlib.c */,
 				668A0111277D0BE8009D9427 /* mdfour.c */,
 				483A78190D2EEA5400CB2E4C /* menu.c */,
+				85D17E7720261A1A00100001 /* update.c */,
 				48895DB80D4914A000849ABF /* pl_osx.m */,
 				CE9FFE452AF78E4B00E53854 /* pmove.c */,
 				CE9FFE472AF78E4B00E53854 /* pmovetst.c */,
@@ -770,6 +774,7 @@
 				483A77F10D2EE97700CB2E4C /* sbar.h */,
 				48A7C1F914AA34940011B754 /* strl_fn.h */,
 				483A77F20D2EE97700CB2E4C /* sys.h */,
+				85D17E7820261A1A00100001 /* update.h */,
 				483A77F30D2EE97700CB2E4C /* view.h */,
 				483A77F40D2EE97700CB2E4C /* wad.h */,
 				483A77F50D2EE97700CB2E4C /* world.h */,
@@ -947,6 +952,7 @@
 				664D989619CF6B78000D395C /* host.c in Sources */,
 				664D989719CF6B78000D395C /* mathlib.c in Sources */,
 				664D989819CF6B78000D395C /* menu.c in Sources */,
+				85D17E7620261A1A00100001 /* update.c in Sources */,
 				664D989919CF6B78000D395C /* pr_cmds.c in Sources */,
 				664D989A19CF6B78000D395C /* pr_edict.c in Sources */,
 				85C58F442B9D79580010F658 /* json.c in Sources */,

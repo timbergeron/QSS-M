@@ -78,6 +78,20 @@ void Sys_SendKeyEvents (void);
 
 int Sys_remove (const char *path);
 
+qboolean Sys_GetExecutablePath(char *out, size_t outsize);
+unsigned long Sys_GetProcessId(void);
+qboolean Sys_MakeExecutable(const char *path);
+qboolean Sys_LaunchUpdateHelper(const char *helper_path,
+	const char *helper_arg, const char *manifest_path, char *error,
+	size_t error_size);
+qboolean Sys_LaunchProgram(const char *exe_path, const char *working_dir,
+	char *error, size_t error_size);
+qboolean Sys_RunUpdateSelfTest(const char *exe_path, const char *working_dir,
+	const char *selftest_arg, unsigned int timeout_ms, char *error,
+	size_t error_size);
+qboolean Sys_UpdateWaitForParentExit(uintptr_t wait_token,
+	unsigned long fallback_pid, unsigned int timeout_ms);
+
 void Sys_SetDockProgress (float fraction);
 // Show platform download progress: macOS Dock badge or Windows taskbar strip.
 // fraction 0..1 shows progress; a negative value clears it.

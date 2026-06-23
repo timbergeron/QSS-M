@@ -32,7 +32,7 @@ USE_ZLIB=0
 CFLAGS_BASE = -zq -wx -bm -bt=nt -5s -sg -otexan -fp5 -fpi87 -ei -j -zp8
 # newer OpenWatcom versions enable W303 by default
 CFLAGS_BASE+= -wcd=303
-CFLAGS = $(CFLAGS_BASE)
+CFLAGS = $(CFLAGS_BASE) -DNO_UPDATER
 
 !ifneq USE_SDL2 1
 SDL_CFLAGS = -I../Windows/SDL/include
@@ -217,6 +217,7 @@ OBJS = strlcat.obj &
 	console.obj &
 	keys.obj &
 	menu.obj &
+	update.obj &
 	sbar.obj &
 	view.obj &
 	wad.obj &

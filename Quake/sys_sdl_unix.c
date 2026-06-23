@@ -32,8 +32,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <libgen.h>	/* dirname() and basename() */
 #endif
 #include <sys/stat.h>
+#include <sys/select.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <fcntl.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #ifdef DO_USERDIRS
 #include <pwd.h>
 #endif
@@ -94,6 +99,521 @@ qofs_t Sys_filelength (FILE *f)
 int Sys_remove (const char *path)
 {
 	return remove (path);
+}
+
+qboolean Sys_GetExecutablePath(char *out, size_t outsize)
+{
+	if (!out || outsize == 0)
+		return false;
+
+#if defined(__linux__)
+	{
+		ssize_t len = readlink("/proc/self/exe", out, outsize - 1);
+		if (len > 0 && (size_t)len < outsize)
+		{
+			out[len] = '\0';
+			return true;
+		}
+	}
+#elif defined(__APPLE__)
+	{
+		char raw[MAX_OSPATH];
+		uint32_t size = (uint32_t)sizeof(raw);
+
+		/* _NSGetExecutablePath may return a relative path containing ".." or
+		 * unresolved symlinks; canonicalize it so callers get a stable
+		 * absolute path. realpath(path, NULL) avoids a PATH_MAX buffer. */
+		if (_NSGetExecutablePath(raw, &size) == 0)
+		{
+			char *resolved = realpath(raw, NULL);
+
+			if (resolved)
+			{
+				qboolean ok = q_strlcpy(out, resolved, outsize) < outsize;
+
+				free(resolved);
+				if (ok)
+					return true;
+			}
+			if (q_strlcpy(out, raw, outsize) < outsize)
+				return true;
+		}
+	}
+#endif
+
+	out[0] = '\0';
+	return false;
+}
+
+unsigned long Sys_GetProcessId(void)
+{
+	return (unsigned long)getpid();
+}
+
+qboolean Sys_MakeExecutable(const char *path)
+{
+	struct stat st;
+
+	if (!path || stat(path, &st) != 0)
+		return false;
+
+	return chmod(path, st.st_mode | S_IXUSR | S_IXGRP | S_IXOTH) == 0;
+}
+
+static void Sys_PathDirName(const char *path, char *out, size_t outsize)
+{
+	const char *slash;
+	size_t len;
+
+	if (out && outsize)
+		out[0] = '\0';
+	if (!path || !*path || !out || !outsize)
+		return;
+
+	slash = strrchr(path, '/');
+	if (!slash)
+	{
+		q_strlcpy(out, ".", outsize);
+		return;
+	}
+
+	len = (size_t)(slash - path);
+	if (len == 0)
+		len = 1;
+	if (len >= outsize)
+		len = outsize - 1;
+	memcpy(out, path, len);
+	out[len] = '\0';
+}
+
+qboolean Sys_LaunchUpdateHelper(const char *helper_path,
+	const char *helper_arg, const char *manifest_path, char *error,
+	size_t error_size)
+{
+	pid_t pid;
+	int status_pipe[2] = {-1, -1};
+	int parent_pipe[2] = {-1, -1};
+	char helper_dir[MAX_OSPATH];
+	char helper_exec[MAX_OSPATH];
+	const char *helper_name;
+	int child_errno = 0;
+	ssize_t nread;
+
+	if (error && error_size)
+		error[0] = '\0';
+
+	Sys_PathDirName(helper_path, helper_dir, sizeof(helper_dir));
+	helper_name = strrchr(helper_path, '/');
+	helper_name = helper_name ? helper_name + 1 : helper_path;
+	if ((size_t)q_snprintf(helper_exec, sizeof(helper_exec), "./%s",
+		helper_name) >= sizeof(helper_exec))
+	{
+		q_strlcpy(error, "helper executable path too long", error_size);
+		return false;
+	}
+
+	if (pipe(status_pipe) != 0)
+	{
+		q_snprintf(error, error_size, "pipe failed: %s", strerror(errno));
+		return false;
+	}
+	if (fcntl(status_pipe[1], F_SETFD, FD_CLOEXEC) == -1)
+	{
+		q_snprintf(error, error_size, "fcntl failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		return false;
+	}
+	if (pipe(parent_pipe) != 0)
+	{
+		q_snprintf(error, error_size, "pipe failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		return false;
+	}
+	if (fcntl(parent_pipe[1], F_SETFD, FD_CLOEXEC) == -1)
+	{
+		q_snprintf(error, error_size, "fcntl failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		close(parent_pipe[0]);
+		close(parent_pipe[1]);
+		return false;
+	}
+
+	pid = fork();
+	if (pid < 0)
+	{
+		q_snprintf(error, error_size, "fork failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		close(parent_pipe[0]);
+		close(parent_pipe[1]);
+		return false;
+	}
+	if (pid == 0)
+	{
+		char parent_token[32];
+		ssize_t written;
+
+		close(status_pipe[0]);
+		close(parent_pipe[1]);
+		setsid();
+		if (helper_dir[0] && chdir(helper_dir) != 0)
+		{
+			child_errno = errno;
+			written = write(status_pipe[1], &child_errno,
+				sizeof(child_errno));
+			(void)written;
+			_exit(126);
+		}
+		q_snprintf(parent_token, sizeof(parent_token), "%d",
+			parent_pipe[0]);
+		execl(helper_exec, helper_path, helper_arg, manifest_path,
+			parent_token, (char *)NULL);
+		child_errno = errno;
+		written = write(status_pipe[1], &child_errno,
+			sizeof(child_errno));
+		(void)written;
+		_exit(127);
+	}
+
+	close(status_pipe[1]);
+	close(parent_pipe[0]);
+	do
+	{
+		nread = read(status_pipe[0], &child_errno, sizeof(child_errno));
+	} while (nread < 0 && errno == EINTR);
+	close(status_pipe[0]);
+
+	if (nread > 0)
+	{
+		close(parent_pipe[1]);
+		waitpid(pid, NULL, 0);
+		q_snprintf(error, error_size, "exec update helper failed: %s",
+			strerror(child_errno));
+		return false;
+	}
+	if (nread < 0)
+	{
+		close(parent_pipe[1]);
+		q_snprintf(error, error_size,
+			"unable to verify update helper start: %s", strerror(errno));
+		return false;
+	}
+
+	return true;
+}
+
+qboolean Sys_LaunchProgram(const char *exe_path, const char *working_dir,
+	char *error, size_t error_size)
+{
+	pid_t pid;
+	int status_pipe[2] = {-1, -1};
+	int child_errno = 0;
+	ssize_t nread;
+
+	if (error && error_size)
+		error[0] = '\0';
+
+	if (pipe(status_pipe) != 0)
+	{
+		q_snprintf(error, error_size, "pipe failed: %s", strerror(errno));
+		return false;
+	}
+	if (fcntl(status_pipe[1], F_SETFD, FD_CLOEXEC) == -1)
+	{
+		q_snprintf(error, error_size, "fcntl failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		return false;
+	}
+
+	pid = fork();
+	if (pid < 0)
+	{
+		q_snprintf(error, error_size, "fork failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		return false;
+	}
+	if (pid == 0)
+	{
+		ssize_t written;
+
+		close(status_pipe[0]);
+		if (working_dir && *working_dir && chdir(working_dir) != 0)
+		{
+			child_errno = errno;
+			written = write(status_pipe[1], &child_errno,
+				sizeof(child_errno));
+			(void)written;
+			_exit(126);
+		}
+		execl(exe_path, exe_path, (char *)NULL);
+		child_errno = errno;
+		written = write(status_pipe[1], &child_errno,
+			sizeof(child_errno));
+		(void)written;
+		_exit(127);
+	}
+
+	close(status_pipe[1]);
+	do
+	{
+		nread = read(status_pipe[0], &child_errno, sizeof(child_errno));
+	} while (nread < 0 && errno == EINTR);
+	close(status_pipe[0]);
+
+	if (nread > 0)
+	{
+		waitpid(pid, NULL, 0);
+		q_snprintf(error, error_size, "exec launch failed: %s",
+			strerror(child_errno));
+		return false;
+	}
+	if (nread < 0)
+	{
+		q_snprintf(error, error_size,
+			"unable to verify launch: %s", strerror(errno));
+		return false;
+	}
+
+	return true;
+}
+
+qboolean Sys_RunUpdateSelfTest(const char *exe_path, const char *working_dir,
+	const char *selftest_arg, unsigned int timeout_ms, char *error,
+	size_t error_size)
+{
+	pid_t pid;
+	int status_pipe[2] = {-1, -1};
+	int child_errno = 0;
+	ssize_t nread;
+	unsigned int waited = 0;
+	int status = 0;
+
+	if (error && error_size)
+		error[0] = '\0';
+	if (!exe_path || !*exe_path || !selftest_arg || !*selftest_arg)
+	{
+		q_strlcpy(error, "invalid self-test command", error_size);
+		return false;
+	}
+
+	if (pipe(status_pipe) != 0)
+	{
+		q_snprintf(error, error_size, "pipe failed: %s", strerror(errno));
+		return false;
+	}
+	if (fcntl(status_pipe[1], F_SETFD, FD_CLOEXEC) == -1)
+	{
+		q_snprintf(error, error_size, "fcntl failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		return false;
+	}
+
+	pid = fork();
+	if (pid < 0)
+	{
+		q_snprintf(error, error_size, "fork failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		return false;
+	}
+	if (pid == 0)
+	{
+		ssize_t written;
+
+		close(status_pipe[0]);
+		if (working_dir && *working_dir && chdir(working_dir) != 0)
+		{
+			child_errno = errno;
+			written = write(status_pipe[1], &child_errno,
+				sizeof(child_errno));
+			(void)written;
+			_exit(126);
+		}
+		execl(exe_path, exe_path, selftest_arg, (char *)NULL);
+		child_errno = errno;
+		written = write(status_pipe[1], &child_errno,
+			sizeof(child_errno));
+		(void)written;
+		_exit(127);
+	}
+
+	close(status_pipe[1]);
+	do
+	{
+		nread = read(status_pipe[0], &child_errno, sizeof(child_errno));
+	} while (nread < 0 && errno == EINTR);
+	close(status_pipe[0]);
+
+	if (nread > 0)
+	{
+		waitpid(pid, NULL, 0);
+		q_snprintf(error, error_size, "exec self-test failed: %s",
+			strerror(child_errno));
+		return false;
+	}
+	if (nread < 0)
+	{
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		q_snprintf(error, error_size,
+			"unable to verify self-test start: %s", strerror(errno));
+		return false;
+	}
+
+	for (;;)
+	{
+		pid_t result;
+
+		do
+		{
+			result = waitpid(pid, &status, WNOHANG);
+		} while (result < 0 && errno == EINTR);
+
+		if (result == pid)
+			break;
+		if (result < 0)
+		{
+			q_snprintf(error, error_size, "self-test wait failed: %s",
+				strerror(errno));
+			return false;
+		}
+		if (waited >= timeout_ms)
+		{
+			kill(pid, SIGKILL);
+			waitpid(pid, NULL, 0);
+			q_strlcpy(error, "self-test timed out", error_size);
+			return false;
+		}
+		{
+			unsigned int step = q_min(100, timeout_ms - waited);
+
+			usleep(step * 1000);
+			waited += step;
+		}
+	}
+
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+	{
+		q_snprintf(error, error_size, "self-test exited with status %d",
+			WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+		return false;
+	}
+
+	return true;
+}
+
+static qboolean Sys_ProcessExitedOrZombie(pid_t pid)
+{
+	if (kill(pid, 0) != 0)
+		return errno == ESRCH;
+
+#if defined(__linux__)
+	{
+		char path[64];
+		char statbuf[256];
+		char *end_name;
+		FILE *f;
+
+		q_snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
+		f = fopen(path, "r");
+		if (!f)
+			return false;
+		if (!fgets(statbuf, sizeof(statbuf), f))
+		{
+			fclose(f);
+			return false;
+		}
+		fclose(f);
+
+		end_name = strrchr(statbuf, ')');
+		if (end_name && end_name[1] == ' ' &&
+			(end_name[2] == 'Z' || end_name[2] == 'X'))
+			return true;
+	}
+#endif
+
+	return false;
+}
+
+static qboolean Sys_UpdateWaitForParentFd(int fd, unsigned int timeout_ms)
+{
+	unsigned int waited = 0;
+
+	if (fd < 0)
+		return false;
+
+	while (waited < timeout_ms)
+	{
+		fd_set readfds;
+		struct timeval tv;
+		unsigned int step = q_min(100, timeout_ms - waited);
+		int result;
+
+		FD_ZERO(&readfds);
+		FD_SET(fd, &readfds);
+		tv.tv_sec = 0;
+		tv.tv_usec = step * 1000;
+
+		result = select(fd + 1, &readfds, NULL, NULL, &tv);
+		if (result > 0 && FD_ISSET(fd, &readfds))
+		{
+			char buffer[64];
+			ssize_t nread;
+
+			do
+			{
+				nread = read(fd, buffer, sizeof(buffer));
+			} while (nread < 0 && errno == EINTR);
+
+			if (nread == 0)
+			{
+				close(fd);
+				return true;
+			}
+			if (nread < 0)
+			{
+				close(fd);
+				return false;
+			}
+		}
+		else if (result < 0 && errno != EINTR)
+		{
+			close(fd);
+			return false;
+		}
+		if (result >= 0)
+			waited += step;
+	}
+
+	close(fd);
+	return false;
+}
+
+qboolean Sys_UpdateWaitForParentExit(uintptr_t wait_token,
+	unsigned long fallback_pid, unsigned int timeout_ms)
+{
+	unsigned int waited;
+
+	if (wait_token > 0 && wait_token <= (uintptr_t)INT_MAX)
+		return Sys_UpdateWaitForParentFd((int)wait_token, timeout_ms);
+
+	if (!fallback_pid)
+		return true;
+
+	for (waited = 0; waited < timeout_ms; waited += 100)
+	{
+		if (Sys_ProcessExitedOrZombie((pid_t)fallback_pid))
+			return true;
+		usleep(100000);
+	}
+
+	return Sys_ProcessExitedOrZombie((pid_t)fallback_pid);
 }
 
 qofs_t Sys_FileOpenRead (const char *path, int *hndl)

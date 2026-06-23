@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
+#include "update.h"
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
 #if defined(USE_SDL2)
 #include <SDL2/SDL.h>
@@ -82,6 +83,11 @@ int main(int argc, char *argv[])
 	int		t;
 	double		time, oldtime, newtime;
 
+	if (argc >= 2 && M_Update_IsSelfTestArg(argv[1]))
+		return 0;
+	if (argc >= 2 && M_Update_IsHelperArg(argv[1]))
+		return M_UpdateHelperMain(argc, argv);
+
 	host_parms = &parms;
 	parms.basedir = ".";
 
@@ -93,6 +99,7 @@ int main(int argc, char *argv[])
 	COM_InitArgv(parms.argc, parms.argv);
 
 	isDedicated = (COM_CheckParm("-dedicated") != 0);
+	M_Update_RecoverAtStartup();
 
 	Sys_InitSDL ();
 
@@ -121,6 +128,8 @@ int main(int argc, char *argv[])
 
 	Sys_Printf("Host_Init\n");
 	Host_Init();
+	M_Update_ConfirmStartup();
+	M_Update_PruneStagingAtStartup();
 	if (isDedicated)
 		Sys_InstallDedicatedSignalHandlers ();
 

@@ -6012,6 +6012,76 @@ void SCR_EndLoadingPlaque (void)
 const char	*scr_notifystring;
 qboolean	scr_drawdialog;
 
+static int SCR_NotifyLineVisibleLength(const char *start)
+{
+	int i;
+	int visible_length = 0;
+
+	for (i = 0; start[i] && start[i] != '\n' && i < 40; i++)
+	{
+		if (start[i] == '^' && i + 1 < 40 &&
+			(start[i + 1] == 'm' || start[i + 1] == 'g' ||
+			start[i + 1] == 'd'))
+		{
+			i++;
+			continue;
+		}
+		if (start[i] == '^' && i + 1 < 40 &&
+			start[i + 1] != 'm' && start[i + 1] != 'g' &&
+			start[i + 1] != 'd')
+		{
+			continue;
+		}
+		visible_length++;
+	}
+
+	return visible_length;
+}
+
+static void SCR_DrawNotifyStringBox(int y)
+{
+	const char *start = scr_notifystring;
+	int lines = 0;
+	int max_visible = 0;
+	int box_width;
+	int box_x;
+
+	while (*start)
+	{
+		int visible_length = SCR_NotifyLineVisibleLength(start);
+		if (visible_length > max_visible)
+			max_visible = visible_length;
+		lines++;
+
+		while (*start && *start != '\n')
+			start++;
+		if (*start == '\n')
+			start++;
+	}
+
+	if (lines <= 0)
+		return;
+
+	box_width = max_visible + 4;
+	if (box_width < 12)
+		box_width = 12;
+	if (box_width > 38)
+		box_width = 38;
+	if (box_width & 1)
+		box_width++;
+	box_x = (320 - (box_width + 2) * 8) / 2;
+	if (box_x < 0)
+		box_x = 0;
+
+	M_DrawTextBox(box_x, y - 12, box_width, lines + 1);
+}
+
+static qboolean SCR_NotifyStringWantsBox(void)
+{
+	return scr_notifystring &&
+		strstr(scr_notifystring, "Install ^mQSS-M") != NULL;
+}
+
 void SCR_DrawNotifyString (void) // woods add ^m/^g support
 {
 	const char	*start;
@@ -6025,6 +6095,8 @@ void SCR_DrawNotifyString (void) // woods add ^m/^g support
 	start = scr_notifystring;
 
 	y = 200 * 0.35; //johnfitz -- stretched overlays
+	if (SCR_NotifyStringWantsBox())
+		SCR_DrawNotifyStringBox(y);
 
 	while (*start)
 	{
@@ -8409,4 +8481,4 @@ void FXAA_EndFrame(void)
         GL_SelectTexture((GLenum)activeTexture);
     glPolygonMode(GL_FRONT, polygonMode[0]);
     glPolygonMode(GL_BACK, polygonMode[1]);
-}
+}}

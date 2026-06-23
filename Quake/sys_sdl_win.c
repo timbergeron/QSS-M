@@ -29,6 +29,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <objbase.h>
 
 #include "quakedef.h"
+#include "q_ctype.h"
 
 #include <sys/types.h>
 #include <errno.h>
@@ -139,6 +140,397 @@ qofs_t Sys_filelength (FILE *f)
 int Sys_remove (const char *path)
 {
 	return remove (path);
+}
+
+qboolean Sys_GetExecutablePath(char *out, size_t outsize)
+{
+	DWORD len;
+
+	if (!out || outsize == 0)
+		return false;
+
+	len = GetModuleFileNameA(NULL, out, (DWORD)outsize);
+	if (len > 0 && (size_t)len < outsize)
+		return true;
+
+	out[0] = '\0';
+	return false;
+}
+
+unsigned long Sys_GetProcessId(void)
+{
+	return (unsigned long)GetCurrentProcessId();
+}
+
+qboolean Sys_MakeExecutable(const char *path)
+{
+	(void)path;
+	return true;
+}
+
+static void Sys_PathDirName(const char *path, char *out, size_t outsize)
+{
+	const char *slash, *backslash, *last;
+	size_t len;
+
+	if (out && outsize)
+		out[0] = '\0';
+	if (!path || !*path || !out || !outsize)
+		return;
+
+	slash = strrchr(path, '/');
+	backslash = strrchr(path, '\\');
+	last = slash;
+	if (!last || (backslash && backslash > last))
+		last = backslash;
+	if (!last)
+	{
+		q_strlcpy(out, ".", outsize);
+		return;
+	}
+
+	len = (size_t)(last - path);
+	if (len == 2 && q_isalpha((unsigned char)path[0]) &&
+		path[1] == ':' && (path[2] == '/' || path[2] == '\\'))
+		len = 3;
+	if (len == 0)
+		len = 1;
+	if (len >= outsize)
+		len = outsize - 1;
+	memcpy(out, path, len);
+	out[len] = '\0';
+}
+
+static qboolean Sys_AppendQuotedArg(char *cmdline, size_t cmdline_size,
+	const char *arg)
+{
+	const char *s;
+	size_t len;
+	size_t backslashes = 0;
+
+	len = strlen(cmdline);
+	if (len + 2 >= cmdline_size)
+		return false;
+	if (len)
+		cmdline[len++] = ' ';
+	cmdline[len++] = '"';
+	cmdline[len] = '\0';
+
+	for (s = arg; s && *s; s++)
+	{
+		if (*s == '\\')
+		{
+			backslashes++;
+			continue;
+		}
+		if (*s == '"')
+		{
+			while (backslashes > 0)
+			{
+				backslashes--;
+				if (len + 2 >= cmdline_size)
+					return false;
+				cmdline[len++] = '\\';
+				cmdline[len++] = '\\';
+			}
+			backslashes = 0;
+			if (len + 2 >= cmdline_size)
+				return false;
+			cmdline[len++] = '\\';
+			cmdline[len++] = '"';
+		}
+		else
+		{
+			while (backslashes > 0)
+			{
+				backslashes--;
+				if (len + 1 >= cmdline_size)
+					return false;
+				cmdline[len++] = '\\';
+			}
+			backslashes = 0;
+			if (len + 1 >= cmdline_size)
+				return false;
+			cmdline[len++] = *s;
+		}
+		cmdline[len] = '\0';
+	}
+
+	while (backslashes > 0)
+	{
+		backslashes--;
+		if (len + 2 >= cmdline_size)
+			return false;
+		cmdline[len++] = '\\';
+		cmdline[len++] = '\\';
+	}
+	if (len + 1 >= cmdline_size)
+		return false;
+	cmdline[len++] = '"';
+	cmdline[len] = '\0';
+	return true;
+}
+
+static qboolean Sys_CreateProcessCommand(const char *exe_path,
+	const char *arg, const char *working_dir, char *error, size_t error_size)
+{
+	STARTUPINFOA si;
+	PROCESS_INFORMATION pi;
+	char cmdline[MAX_OSPATH * 3];
+
+	if (error && error_size)
+		error[0] = '\0';
+
+	memset(&si, 0, sizeof(si));
+	memset(&pi, 0, sizeof(pi));
+	si.cb = sizeof(si);
+	cmdline[0] = '\0';
+
+	if (!Sys_AppendQuotedArg(cmdline, sizeof(cmdline), exe_path) ||
+		(arg && *arg && !Sys_AppendQuotedArg(cmdline, sizeof(cmdline), arg)))
+	{
+		q_strlcpy(error, "command line too long", error_size);
+		return false;
+	}
+
+	if (!CreateProcessA(exe_path, cmdline, NULL, NULL, FALSE,
+		CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS, NULL,
+		(working_dir && *working_dir) ? working_dir : NULL, &si, &pi))
+	{
+		q_snprintf(error, error_size, "CreateProcess failed: %lu",
+			(unsigned long)GetLastError());
+		return false;
+	}
+
+	CloseHandle(pi.hThread);
+	CloseHandle(pi.hProcess);
+	return true;
+}
+
+qboolean Sys_LaunchUpdateHelper(const char *helper_path,
+	const char *helper_arg, const char *manifest_path, char *error,
+	size_t error_size)
+{
+	/* Pass the manifest as a single argv token; the helper splits only argv[1]
+	 * and argv[2], so preserve spaces by creating the final command line here. */
+	{
+		STARTUPINFOEXA si;
+		PROCESS_INFORMATION pi;
+		HANDLE parent_handle = NULL;
+		LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
+		SIZE_T attrs_size = 0;
+		DWORD create_flags = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS |
+			EXTENDED_STARTUPINFO_PRESENT;
+		char cmdline[MAX_OSPATH * 4];
+		char helper_dir[MAX_OSPATH];
+		char parent_token[32];
+		qboolean ok = false;
+
+		memset(&si, 0, sizeof(si));
+		memset(&pi, 0, sizeof(pi));
+		si.StartupInfo.cb = sizeof(si);
+		cmdline[0] = '\0';
+		Sys_PathDirName(helper_path, helper_dir, sizeof(helper_dir));
+
+		/*
+		 * The game process has pak files open. Do not use broad handle
+		 * inheritance here, or the helper inherits those pak handles and then
+		 * blocks its own replacement preflight. Restrict inheritance to only
+		 * the duplicated parent process wait handle.
+		 */
+		if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(),
+			GetCurrentProcess(), &parent_handle, SYNCHRONIZE, TRUE, 0))
+		{
+			q_snprintf(error, error_size, "DuplicateHandle failed: %lu",
+				(unsigned long)GetLastError());
+			return false;
+		}
+		q_snprintf(parent_token, sizeof(parent_token), "%llu",
+			(unsigned long long)(uintptr_t)parent_handle);
+
+		InitializeProcThreadAttributeList(NULL, 1, 0, &attrs_size);
+		if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || attrs_size == 0)
+		{
+			q_snprintf(error, error_size,
+				"InitializeProcThreadAttributeList sizing failed: %lu",
+				(unsigned long)GetLastError());
+			CloseHandle(parent_handle);
+			return false;
+		}
+		attrs = (LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(),
+			0, attrs_size);
+		if (!attrs)
+		{
+			q_strlcpy(error, "unable to allocate process attribute list",
+				error_size);
+			CloseHandle(parent_handle);
+			return false;
+		}
+		if (!InitializeProcThreadAttributeList(attrs, 1, 0, &attrs_size))
+		{
+			q_snprintf(error, error_size,
+				"InitializeProcThreadAttributeList failed: %lu",
+				(unsigned long)GetLastError());
+			HeapFree(GetProcessHeap(), 0, attrs);
+			CloseHandle(parent_handle);
+			return false;
+		}
+		if (!UpdateProcThreadAttribute(attrs, 0,
+			PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &parent_handle,
+			sizeof(parent_handle), NULL, NULL))
+		{
+			q_snprintf(error, error_size,
+				"UpdateProcThreadAttribute failed: %lu",
+				(unsigned long)GetLastError());
+			DeleteProcThreadAttributeList(attrs);
+			HeapFree(GetProcessHeap(), 0, attrs);
+			CloseHandle(parent_handle);
+			return false;
+		}
+		si.lpAttributeList = attrs;
+
+		if (!Sys_AppendQuotedArg(cmdline, sizeof(cmdline), helper_path) ||
+			!Sys_AppendQuotedArg(cmdline, sizeof(cmdline), helper_arg) ||
+			!Sys_AppendQuotedArg(cmdline, sizeof(cmdline), manifest_path) ||
+			!Sys_AppendQuotedArg(cmdline, sizeof(cmdline), parent_token))
+		{
+			q_strlcpy(error, "helper command line too long", error_size);
+			goto done;
+		}
+
+		if (!CreateProcessA(helper_path, cmdline, NULL, NULL, TRUE,
+			create_flags, NULL, helper_dir[0] ? helper_dir : NULL,
+			&si.StartupInfo, &pi))
+		{
+			q_snprintf(error, error_size, "CreateProcess failed: %lu",
+				(unsigned long)GetLastError());
+			goto done;
+		}
+
+		ok = true;
+		CloseHandle(parent_handle);
+		parent_handle = NULL;
+		CloseHandle(pi.hThread);
+		CloseHandle(pi.hProcess);
+
+done:
+		DeleteProcThreadAttributeList(attrs);
+		HeapFree(GetProcessHeap(), 0, attrs);
+		if (parent_handle)
+			CloseHandle(parent_handle);
+		if (!ok)
+			return false;
+	}
+
+	return true;
+}
+
+qboolean Sys_LaunchProgram(const char *exe_path, const char *working_dir,
+	char *error, size_t error_size)
+{
+	return Sys_CreateProcessCommand(exe_path, NULL, working_dir, error,
+		error_size);
+}
+
+qboolean Sys_RunUpdateSelfTest(const char *exe_path, const char *working_dir,
+	const char *selftest_arg, unsigned int timeout_ms, char *error,
+	size_t error_size)
+{
+	STARTUPINFOA si;
+	PROCESS_INFORMATION pi;
+	char cmdline[MAX_OSPATH * 3];
+	DWORD wait_result;
+	DWORD exit_code = 1;
+
+	if (error && error_size)
+		error[0] = '\0';
+	if (!exe_path || !*exe_path || !selftest_arg || !*selftest_arg)
+	{
+		q_strlcpy(error, "invalid self-test command", error_size);
+		return false;
+	}
+
+	memset(&si, 0, sizeof(si));
+	memset(&pi, 0, sizeof(pi));
+	si.cb = sizeof(si);
+	cmdline[0] = '\0';
+
+	if (!Sys_AppendQuotedArg(cmdline, sizeof(cmdline), exe_path) ||
+		!Sys_AppendQuotedArg(cmdline, sizeof(cmdline), selftest_arg))
+	{
+		q_strlcpy(error, "self-test command line too long", error_size);
+		return false;
+	}
+
+	if (!CreateProcessA(exe_path, cmdline, NULL, NULL, FALSE,
+		CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS, NULL,
+		(working_dir && *working_dir) ? working_dir : NULL, &si, &pi))
+	{
+		q_snprintf(error, error_size, "CreateProcess self-test failed: %lu",
+			(unsigned long)GetLastError());
+		return false;
+	}
+
+	CloseHandle(pi.hThread);
+	wait_result = WaitForSingleObject(pi.hProcess, timeout_ms);
+	if (wait_result == WAIT_TIMEOUT)
+	{
+		TerminateProcess(pi.hProcess, 1);
+		WaitForSingleObject(pi.hProcess, 1000);
+		CloseHandle(pi.hProcess);
+		q_strlcpy(error, "self-test timed out", error_size);
+		return false;
+	}
+	if (wait_result != WAIT_OBJECT_0)
+	{
+		q_snprintf(error, error_size, "self-test wait failed: %lu",
+			(unsigned long)GetLastError());
+		CloseHandle(pi.hProcess);
+		return false;
+	}
+	if (!GetExitCodeProcess(pi.hProcess, &exit_code))
+	{
+		q_snprintf(error, error_size, "self-test exit code failed: %lu",
+			(unsigned long)GetLastError());
+		CloseHandle(pi.hProcess);
+		return false;
+	}
+	CloseHandle(pi.hProcess);
+
+	if (exit_code != 0)
+	{
+		q_snprintf(error, error_size, "self-test exited with status %lu",
+			(unsigned long)exit_code);
+		return false;
+	}
+
+	return true;
+}
+
+qboolean Sys_UpdateWaitForParentExit(uintptr_t wait_token,
+	unsigned long fallback_pid, unsigned int timeout_ms)
+{
+	HANDLE process;
+	DWORD result;
+
+	if (wait_token)
+	{
+		process = (HANDLE)wait_token;
+		result = WaitForSingleObject(process, timeout_ms);
+		CloseHandle(process);
+		return result == WAIT_OBJECT_0;
+	}
+
+	if (!fallback_pid)
+		return true;
+
+	process = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)fallback_pid);
+	if (!process)
+		return GetLastError() == ERROR_INVALID_PARAMETER;
+
+	result = WaitForSingleObject(process, timeout_ms);
+	CloseHandle(process);
+	return result == WAIT_OBJECT_0;
 }
 
 qofs_t Sys_FileOpenRead (const char *path, int *hndl)

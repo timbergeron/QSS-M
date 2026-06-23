@@ -4977,8 +4977,6 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 		unsigned short name_len = header[24] | (header[25] << 8);
 		unsigned short extra_len = header[26] | (header[27] << 8);
 		unsigned short comment_len = header[28] | (header[29] << 8);
-		unsigned int external_attrs = header[34] | (header[35] << 8) |
-			(header[36] << 16) | (header[37] << 24);
 		char filename[MAX_OSPATH];
 
 		if (name_len >= sizeof(filename)) {
@@ -5006,11 +5004,18 @@ static qboolean ZIP_ExtractInternalBody(const char* zipfile, const char* outdir,
 			return false;
 		}
 #ifndef _WIN32
-		if ((((external_attrs >> 16) & S_IFMT) == S_IFLNK)) {
-			Archive_Printf(quiet, "ERROR: Symlink ZIP entry rejected: %s\n",
-				filename);
-			fclose(zip);
-			return false;
+		{
+			unsigned int external_attrs =
+				((unsigned int)header[34]) |
+				((unsigned int)header[35] << 8) |
+				((unsigned int)header[36] << 16) |
+				((unsigned int)header[37] << 24);
+			if ((((external_attrs >> 16) & S_IFMT) == S_IFLNK)) {
+				Archive_Printf(quiet, "ERROR: Symlink ZIP entry rejected: %s\n",
+					filename);
+				fclose(zip);
+				return false;
+			}
 		}
 #endif
 		if (compression_method == ZIP_METHOD_DEFLATE64) {

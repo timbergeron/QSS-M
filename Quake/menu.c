@@ -27,6 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <curl/curl.h> // woods #serversmenu
 #include <zlib.h>
 #include "json.h" // woods #serversmenu
+#include "update.h"
 #include <errno.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -21064,8 +21065,7 @@ Version Menu
 */
 
 #define MAX_VIS_VERSION	17
-#define VERSION_GITHUB_URL "https://api.github.com/repos/timbergeron/QSS-M/releases/latest"
-#define VERSION_GITHUB_MAX_RESPONSE_BYTES	(8 * 1024 * 1024)
+#define VERSION_GITHUB_URL VERSION_GITHUB_RELEASE_URL
 
 typedef struct
 {
@@ -21097,38 +21097,8 @@ static struct
 
 static void M_Version_Refilter(void);
 
-typedef struct
-{
-	char	*memory;
-	size_t	size;
-	size_t	max_size;
-	qboolean too_large;
-} versionhttpmem_t;
-
-#define VERSION_GITHUB_RELEASE_URL VERSION_GITHUB_URL
 #define VERSION_GITHUB_COMMIT_URL "https://api.github.com/repos/timbergeron/QSS-M/commits?path=Quake/quakedef.h&per_page=1"
 #define VERSION_GITHUB_QUAKEDEF_URL_FMT "https://raw.githubusercontent.com/timbergeron/QSS-M/%s/Quake/quakedef.h"
-
-static int M_Version_Compare(int l_major, int l_minor, int l_patch,
-	int r_major, int r_minor, int r_patch)
-{
-	if (l_major != r_major)
-		return (l_major > r_major) ? 1 : -1;
-	if (l_minor != r_minor)
-		return (l_minor > r_minor) ? 1 : -1;
-	if (l_patch != r_patch)
-		return (l_patch > r_patch) ? 1 : -1;
-	return 0;
-}
-
-static int M_Version_ParseTag(const char* tag, int* major, int* minor, int* patch)
-{
-	if (!tag)
-		return 0;
-	if (*tag == 'v' || *tag == 'V')
-		tag++;
-	return sscanf(tag, "%d.%d.%d", major, minor, patch) == 3;
-}
 
 static void M_Version_GitHubEnsureMutex(void)
 {
@@ -21143,114 +21113,6 @@ static void M_Version_RemoteInfo_Init(versionremoteinfo_t* info, int state)
 	info->version[0] = '\0';
 	info->detail[0] = '\0';
 	info->error[0] = '\0';
-}
-
-static size_t M_Version_GitHubWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
-{
-	size_t realsize;
-	versionhttpmem_t* mem = (versionhttpmem_t*)userp;
-	char* ptr;
-
-	if (size && nmemb > (size_t)-1 / size)
-	{
-		mem->too_large = true;
-		return 0;
-	}
-	realsize = size * nmemb;
-	if (realsize > (size_t)-1 - mem->size - 1 ||
-		(mem->max_size && mem->size + realsize > mem->max_size))
-	{
-		mem->too_large = true;
-		return 0;
-	}
-
-	ptr = (char*)realloc(mem->memory, mem->size + realsize + 1);
-
-	if (!ptr)
-		return 0;
-
-	mem->memory = ptr;
-	memcpy(mem->memory + mem->size, contents, realsize);
-	mem->size += realsize;
-	mem->memory[mem->size] = '\0';
-
-	return realsize;
-}
-
-static qboolean M_Version_GitHubHttpGet(const char* url, versionhttpmem_t* mem, char* error, size_t errorsz, size_t max_bytes)
-{
-	CURL* curl;
-	CURLcode res;
-	long http_code = 0;
-
-	mem->memory = (char*)malloc(1);
-	mem->size = 0;
-	mem->max_size = max_bytes;
-	mem->too_large = false;
-	if (!mem->memory)
-	{
-		q_strlcpy(error, "out of memory", errorsz);
-		return false;
-	}
-	mem->memory[0] = '\0';
-
-	curl = curl_easy_init();
-	if (!curl)
-	{
-		q_strlcpy(error, "curl init failed", errorsz);
-		free(mem->memory);
-		mem->memory = NULL;
-		return false;
-	}
-
-	curl_easy_setopt(curl, CURLOPT_URL, url);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, M_Version_GitHubWriteCallback);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, mem);
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 3L);
-	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 10L);
-	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-	curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
-	curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-	if (max_bytes)
-		curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)max_bytes);
-#if CURL_AT_LEAST_VERSION(7, 85, 0)
-	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
-	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
-#else
-	curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
-	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
-#endif
-
-	res = curl_easy_perform(curl);
-	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-	curl_easy_cleanup(curl);
-
-	if (res == CURLE_FILESIZE_EXCEEDED)
-		mem->too_large = true;
-	if (res != CURLE_OK)
-	{
-		q_strlcpy(error, mem->too_large ? "response too large" :
-			curl_easy_strerror(res), errorsz);
-		free(mem->memory);
-		mem->memory = NULL;
-		return false;
-	}
-
-	if (http_code < 200 || http_code >= 300)
-	{
-		q_snprintf(error, errorsz, "HTTP %ld", http_code);
-		free(mem->memory);
-		mem->memory = NULL;
-		return false;
-	}
-
-	return true;
 }
 
 static qboolean M_Version_ParseQuakedefInt(const char* text, const char* macro, int* out)
@@ -21308,8 +21170,8 @@ static qboolean M_Version_ParseQuakedefVersion(const char* text, char* out, size
 
 	M_Version_ParseQuakedefSuffix(text, suffix, sizeof(suffix));
 	q_snprintf(out, outsz, "%d.%d.%d%s", major, minor, patch, suffix);
-	*comparison = M_Version_Compare(QSSM_VER_MAJOR, QSSM_VER_MINOR, QSSM_VER_PATCH,
-		major, minor, patch);
+	*comparison = M_Version_CompareToCurrent(major, minor, patch, suffix,
+		false);
 	return true;
 }
 
@@ -21335,6 +21197,8 @@ static void M_Version_GitHubFetchRelease(versionremoteinfo_t* info)
 
 		{
 			const char* latest_tag = JSON_FindString(json->root, "tag_name");
+			const qboolean* prerelease = JSON_FindBoolean(json->root,
+				"prerelease");
 			if (!latest_tag || !latest_tag[0])
 			{
 				JSON_Free(json);
@@ -21345,12 +21209,8 @@ static void M_Version_GitHubFetchRelease(versionremoteinfo_t* info)
 
 			q_strlcpy(info->version, latest_tag, sizeof(info->version));
 
-			{
-				int major, minor, patch;
-				if (M_Version_ParseTag(latest_tag, &major, &minor, &patch))
-					info->comparison = M_Version_Compare(QSSM_VER_MAJOR, QSSM_VER_MINOR, QSSM_VER_PATCH,
-						major, minor, patch);
-			}
+			info->comparison = M_Version_CompareTagToCurrent(latest_tag,
+				prerelease ? *prerelease : false);
 		}
 
 		info->state = VERSIONGITHUB_READY;
@@ -21546,6 +21406,8 @@ static void M_Version_UpdateGitHubLines(void)
 	{
 		if (release.comparison == 0)
 			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s (you have this)", release.version);
+		else if (release.comparison == 2)
+			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s (unknown channel)", release.version);
 		else if (release.comparison > 0)
 			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s (you have newer)", release.version);
 		else if (release.comparison < 0)
@@ -21567,6 +21429,9 @@ static void M_Version_UpdateGitHubLines(void)
 	{
 		if (commit.comparison == 0)
 			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s (you have this)",
+				commit.version, commit.detail[0] ? commit.detail : "unknown");
+		else if (commit.comparison == 2)
+			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s (unknown channel)",
 				commit.version, commit.detail[0] ? commit.detail : "unknown");
 		else if (commit.comparison > 0)
 			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s (you have newer)",
@@ -29948,24 +29813,6 @@ static int M_DownloadMods_ProgressCallback(void *clientp, curl_off_t dltotal,
 	return 0;
 }
 
-static void M_DownloadMods_CurlOptions(CURL *curl)
-{
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-	curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
-	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-#if CURL_AT_LEAST_VERSION(7, 85, 0)
-	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
-	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
-#else
-	curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
-	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
-#endif
-}
-
 static qboolean M_DownloadMods_CancelRequested(void)
 {
 	return stop_curl_download || SDL_AtomicGet(&downloadmodinstall.abort_requested);
@@ -30044,7 +29891,7 @@ static qboolean M_DownloadMods_RunTransfer(const char *url, const char *temp_pat
 	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 10L);
 	if (max_bytes > 0)
 		curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, max_bytes);
-	M_DownloadMods_CurlOptions(curl);
+	M_Update_CurlOptions(curl);
 
 	result = curl_easy_perform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
@@ -30186,63 +30033,11 @@ static qboolean M_DownloadMods_SHA256StringOkay(const char *sha)
 
 static qboolean M_DownloadMods_VerifySHA256(const char *path, const char *expected)
 {
-	FILE *f;
-	void *ctx;
-	byte buffer[65536];
-	byte digest[32];
-	char actual[65];
-	size_t readbytes, i;
-
-	if (!expected || !*expected)
-		return true;
 	if (!M_DownloadMods_SHA256StringOkay(expected))
-	{
 		return false;
-	}
 
-	f = fopen(path, "rb");
-	if (!f)
-	{
-		return false;
-	}
-
-	ctx = malloc(hash_sha2_256.contextsize);
-	if (!ctx)
-	{
-		fclose(f);
-		return false;
-	}
-
-	hash_sha2_256.init(ctx);
-	while ((readbytes = fread(buffer, 1, sizeof(buffer), f)) > 0)
-	{
-		if (M_DownloadMods_CancelRequested())
-		{
-			free(ctx);
-			fclose(f);
-			return false;
-		}
-		hash_sha2_256.process(ctx, buffer, readbytes);
-	}
-	hash_sha2_256.terminate(digest, ctx);
-
-	free(ctx);
-	if (ferror(f))
-	{
-		fclose(f);
-		return false;
-	}
-	fclose(f);
-
-	for (i = 0; i < sizeof(digest); i++)
-		q_snprintf(actual + i * 2, sizeof(actual) - i * 2, "%02x", digest[i]);
-
-	if (q_strcasecmp(actual, expected))
-	{
-		return false;
-	}
-
-	return true;
+	return M_VerifySHA256File(path, expected, true,
+		M_DownloadMods_CancelRequested);
 }
 
 static qboolean M_DownloadMods_PathLooksInstalled(const char *path)
@@ -37017,9 +36812,15 @@ static void M_MenuRestart_f (void)
 
 void M_Init (void)
 {
+	cmd_function_t *update_cmd;
+
 	Cmd_AddCommand ("togglemenu", M_ToggleMenu_f);
 	Cmd_AddCommand ("menu_cmd", MQC_Command_f);
 	Cmd_AddCommand ("menu_restart", M_MenuRestart_f);	//qss still loads progs on hunk, so we can't do this safely.
+	Cmd_AddCommand ("update", M_Update_f);
+	update_cmd = Cmd_FindCommand("update");
+	if (update_cmd)
+		update_cmd->completion = M_Update_Completion_f;
 
 	Cvar_RegisterVariable (&ui_live_preview);
 

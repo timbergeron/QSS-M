@@ -1407,6 +1407,7 @@ cmd_function_t *Cmd_AddCommand2 (const char *cmd_name, xcommand_t function, cmd_
 		cmd->dynamic = false;
 	}
 	cmd->function = function;
+	cmd->completion = NULL;
 	cmd->srctype = srctype;
 	cmd->qcinterceptable = qcinterceptable;
 
