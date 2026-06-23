@@ -35,7 +35,7 @@ set "UPDATER_SELF=%~f0"
 set "UPDATER_PS1=%TEMP%\qssm_updater_%RANDOM%_%RANDOM%.ps1"
 set "QSSM_UPDATER_LAUNCHER_NAME=%~nx0"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$self=$env:UPDATER_SELF; $out=$env:UPDATER_PS1; $marker='__QSSM_UPDATER_POWERSHELL_PAYLOAD_BELOW__'; $lines=[IO.File]::ReadAllLines($self); $idx=[Array]::IndexOf($lines,$marker); if ($idx -lt 0) { [Console]::Error.WriteLine('Embedded PowerShell payload marker was not found.'); exit 1 }; if ($idx -ge ($lines.Length - 1)) { [Console]::Error.WriteLine('Embedded PowerShell payload is empty.'); exit 1 }; $payload=$lines[($idx + 1)..($lines.Length - 1)]; $enc=New-Object System.Text.UTF8Encoding $false; [IO.File]::WriteAllLines($out,$payload,$enc)"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$self=$env:UPDATER_SELF; $out=$env:UPDATER_PS1; $marker='__QSSM_UPDATER_POWERSHELL_PAYLOAD_BELOW__'; $lines=[IO.File]::ReadAllLines($self); $idx=[Array]::IndexOf($lines,$marker); if ($idx -lt 0) { [Console]::Error.WriteLine('Embedded PowerShell payload marker was not found.'); exit 1 }; if ($idx -ge ($lines.Length - 1)) { [Console]::Error.WriteLine('Embedded PowerShell payload is empty.'); exit 1 }; $payload=$lines[($idx + 1)..($lines.Length - 1)]; $enc=New-Object System.Text.UTF8Encoding $true; [IO.File]::WriteAllLines($out,$payload,$enc)"
 if errorlevel 1 (
     color 0C
     echo ❌ [ERROR] Could not unpack the embedded updater code.
