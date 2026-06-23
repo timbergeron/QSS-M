@@ -8481,4 +8481,4 @@ void FXAA_EndFrame(void)
         GL_SelectTexture((GLenum)activeTexture);
     glPolygonMode(GL_FRONT, polygonMode[0]);
     glPolygonMode(GL_BACK, polygonMode[1]);
-}}
+}
