@@ -17359,6 +17359,9 @@ static enum console_e
 	CONSOLE_CONCOLOR,
 	CONSOLE_CONTENTFILTER,
 	CONSOLE_TYPING,
+	CONSOLE_SAVE_HISTORY,
+	CONSOLE_CLEAR_CONSOLE,
+	CONSOLE_CLEAR_HISTORY,
 	CONSOLE_COUNT
 } console_cursor;
 
@@ -17430,6 +17433,8 @@ static int M_Console_GetItemY(int index)
 	if (index >= CONSOLE_CONBACK)
 		y += 8;
 	if (index >= CONSOLE_CONCOLOR)
+		y += 8;
+	if (index >= CONSOLE_CLEAR_CONSOLE)
 		y += 8;
 
 	return y;
@@ -17639,6 +17644,12 @@ static const char* M_Console_GetItemText(int index)
 		return "Content Filter";
 	case CONSOLE_TYPING:
 		return "Typing Status";
+	case CONSOLE_SAVE_HISTORY:
+		return "Save History";
+	case CONSOLE_CLEAR_CONSOLE:
+		return "Clear Console";
+	case CONSOLE_CLEAR_HISTORY:
+		return "Clear History";
 	default:
 		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
 		return buffer;
@@ -17703,7 +17714,9 @@ static void M_Console_AdjustSliders(int dir)
 	float f;
 	int val;
 
-	if (console_cursor == CONSOLE_CONBACK)
+	if (console_cursor == CONSOLE_CONBACK ||
+		console_cursor == CONSOLE_CLEAR_CONSOLE ||
+		console_cursor == CONSOLE_CLEAR_HISTORY)
 		return;
 
 	S_LocalSound("misc/menu3.wav");
@@ -17754,8 +17767,34 @@ static void M_Console_AdjustSliders(int dir)
 	case CONSOLE_TYPING:
 		Cvar_SetValue("con_typing", !con_typing.value);
 		break;
+	case CONSOLE_SAVE_HISTORY:
+		Cvar_SetValue("con_savehistory", !Cvar_VariableValue("con_savehistory"));
+		break;
 	default:
 		break;
+	}
+}
+
+static void M_Console_ActivateItem(void)
+{
+	if (M_Console_GetFieldForCursor())
+		M_Console_BeginFieldEdit();
+	else if (M_Console_IsSliderItem())
+		M_Console_StartSliderGrab();
+	else
+	{
+		switch (console_cursor)
+		{
+		case CONSOLE_CLEAR_CONSOLE:
+			Cbuf_AddText("clear\n");
+			break;
+		case CONSOLE_CLEAR_HISTORY:
+			Cbuf_AddText("clearhistory\n");
+			break;
+		default:
+			M_Console_AdjustSliders(1);
+			break;
+		}
 	}
 }
 
@@ -17849,6 +17888,21 @@ void M_Console_Draw(void)
 		case CONSOLE_TYPING:
 			text = "   Typing Status";
 			M_DrawCheckbox(178, y, con_typing.value != 0);
+			break;
+
+		case CONSOLE_SAVE_HISTORY:
+			text = "    Save History";
+			M_DrawCheckbox(178, y, Cvar_VariableValue("con_savehistory") != 0);
+			break;
+
+		case CONSOLE_CLEAR_CONSOLE:
+			text = "   Clear Console";
+			M_Print(178, y, "clear");
+			break;
+
+		case CONSOLE_CLEAR_HISTORY:
+			text = "   Clear History";
+			M_Print(178, y, "clearhistory");
 			break;
 
 		default:
@@ -18059,12 +18113,7 @@ void M_Console_Key(int k)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 		m_entersound = true;
-		if (M_Console_GetFieldForCursor())
-			M_Console_BeginFieldEdit();
-		else if (M_Console_IsSliderItem ())
-			M_Console_StartSliderGrab ();
-		else
-			M_Console_AdjustSliders(1);
+		M_Console_ActivateItem();
 		break;
 
 	case K_MOUSE1:
@@ -18088,10 +18137,8 @@ void M_Console_Key(int k)
 						if (field)
 							M_Console_MouseClickField(field, m_mousex);
 					}
-				else if (M_Console_IsSliderItem ())
-					M_Console_StartSliderGrab ();
 				else
-					M_Console_AdjustSliders(1);
+					M_Console_ActivateItem();
 			}
 		}
 		break;

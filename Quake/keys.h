@@ -276,6 +276,7 @@ int Key_GetChatMsgLen (void);
 
 void History_Init (void);
 void History_Shutdown (void);
+qboolean History_IsSaving (void);
 void History_StoreCommand (const char *line); // woods #serverhistory
 qboolean History_GetPrevious (const char *current, char *out, size_t out_size); // woods #serverhistory
 qboolean History_GetNext (const char *current, char *out, size_t out_size); // woods #serverhistory

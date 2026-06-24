@@ -40,6 +40,10 @@ int		edit_line = 0;
 int		history_line = 0;
 static qboolean history_initialized = false; // woods #serverhistory
 static char history_saved_current[MAXCMDLINE]; // woods #serverhistory
+static qboolean history_controls_registered = false;
+
+static cvar_t con_savehistory = {"con_savehistory", "1", CVAR_ARCHIVE}; // woods #historyprivacy
+static qboolean History_SaveHistoryEnabled (void);
 
 keydest_t	key_dest;
 
@@ -864,10 +868,13 @@ void Key_Console (int key)
 		Cbuf_AddText ("\n");
 		Con_Printf ("%s\n", workline);
 
-		// If the last two lines are identical, skip storing this line in history 
-		// by not incrementing edit_line
-		if (strcmp(workline, key_lines[(edit_line - 1) & (CMDLINES - 1)]))
-			edit_line = (edit_line + 1) & (CMDLINES - 1);
+		if (History_SaveHistoryEnabled())
+		{
+			// If the last two lines are identical, skip storing this line in history
+			// by not incrementing edit_line
+			if (strcmp(workline, key_lines[(edit_line - 1) & (CMDLINES - 1)]))
+				edit_line = (edit_line + 1) & (CMDLINES - 1);
+		}
 
 		history_line = edit_line;
 		key_lines[edit_line][0] = ']';
@@ -1850,25 +1857,120 @@ void Key_WriteBindings (FILE *f)
 }
 
 
-void History_Init (void)
+static qboolean History_SaveHistoryEnabled (void)
 {
-	int i, c;
-	FILE *hf;
+	return con_savehistory.value != 0;
+}
 
-	if (history_initialized) // woods #serverhistory
-		return;
+static qboolean History_GetPath (char *path, size_t path_size)
+{
+	int len;
 
-	history_initialized = true; // woods #serverhistory
-	history_saved_current[0] = 0; // woods #serverhistory
+	if (!path || !path_size)
+		return false;
+
+	path[0] = 0;
+	if (!host_parms || !host_parms->userdir || !host_parms->userdir[0])
+		len = q_snprintf(path, path_size, "%s", HISTORY_FILE_NAME);
+	else
+		len = q_snprintf(path, path_size, "%s/%s", host_parms->userdir, HISTORY_FILE_NAME);
+
+	if (len < 0 || (size_t)len >= path_size)
+	{
+		path[0] = 0;
+		return false;
+	}
+
+	return true;
+}
+
+static void History_ClearMemory (void)
+{
+	int i;
 
 	for (i = 0; i < CMDLINES; i++)
 	{
 		key_lines[i][0] = ']';
 		key_lines[i][1] = 0;
 	}
-	key_linepos = 1;
 
-	hf = fopen(va("%s/%s", host_parms->userdir, HISTORY_FILE_NAME), "rt");
+	edit_line = 0;
+	history_line = 0;
+	key_linepos = 1;
+	history_saved_current[0] = 0; // woods #serverhistory
+}
+
+static void History_RemoveFile (void)
+{
+	char path[MAX_OSPATH];
+
+	if (History_GetPath(path, sizeof(path)))
+		Sys_remove(path);
+}
+
+static void History_Clear (qboolean remove_file)
+{
+	History_ClearMemory();
+
+	if (remove_file)
+		History_RemoveFile();
+}
+
+static void History_Clear_f (void)
+{
+	History_Clear(true);
+	Con_Printf("Console command history cleared.\n");
+}
+
+static void History_SaveHistory_Callback (cvar_t *var)
+{
+	if (!var->value)
+		History_Clear(true);
+}
+
+static void History_RegisterControls (void)
+{
+	if (history_controls_registered)
+		return;
+
+	Cvar_RegisterVariable(&con_savehistory);
+	Cvar_SetCallback(&con_savehistory, History_SaveHistory_Callback);
+	Cmd_AddCommand("clearhistory", History_Clear_f);
+
+	history_controls_registered = true;
+}
+
+qboolean History_IsSaving (void)
+{
+	History_RegisterControls();
+
+	return History_SaveHistoryEnabled();
+}
+
+void History_Init (void)
+{
+	int i, c;
+	FILE *hf;
+	char path[MAX_OSPATH];
+
+	History_RegisterControls();
+
+	if (history_initialized) // woods #serverhistory
+		return;
+
+	history_initialized = true; // woods #serverhistory
+	History_ClearMemory();
+
+	if (!History_SaveHistoryEnabled())
+	{
+		History_RemoveFile();
+		return;
+	}
+
+	if (!History_GetPath(path, sizeof(path)))
+		return;
+
+	hf = fopen(path, "rt");
 	if (hf != NULL)
 	{
 		do
@@ -1904,11 +2006,26 @@ void History_Shutdown (void)
 {
 	int i;
 	FILE *hf;
+	char path[MAX_OSPATH];
 
 	if (!history_initialized) // woods #serverhistory
 		return;
 
-	hf = fopen(va("%s/%s", host_parms->userdir, HISTORY_FILE_NAME), "wt");
+	if (!History_SaveHistoryEnabled())
+	{
+		History_Clear(true);
+		history_initialized = false; // woods #serverhistory
+		return;
+	}
+
+	if (!History_GetPath(path, sizeof(path)))
+	{
+		history_initialized = false; // woods #serverhistory
+		history_saved_current[0] = 0; // woods #serverhistory
+		return;
+	}
+
+	hf = fopen(path, "wt");
 	if (hf != NULL)
 	{
 		i = edit_line;
@@ -1942,6 +2059,9 @@ void History_StoreCommand (const char *line) // woods #serverhistory
 	if (!history_initialized)
 		return;
 
+	if (!History_SaveHistoryEnabled())
+		return;
+
 	if (!line)
 		line = "";
 
@@ -1973,7 +2093,7 @@ qboolean History_GetPrevious (const char *current, char *out, size_t out_size) /
 {
 	int history_line_last;
 
-	if (!history_initialized || !out || !out_size)
+	if (!history_initialized || !History_SaveHistoryEnabled() || !out || !out_size)
 		return false;
 
 	if (history_line == edit_line)
@@ -1997,7 +2117,7 @@ qboolean History_GetPrevious (const char *current, char *out, size_t out_size) /
 
 qboolean History_GetNext (const char *current, char *out, size_t out_size) // woods #serverhistory
 {
-	if (!history_initialized || !out || !out_size)
+	if (!history_initialized || !History_SaveHistoryEnabled() || !out || !out_size)
 		return false;
 
 	(void)current;
@@ -2027,6 +2147,7 @@ void Key_Init (void)
 {
 	int	i;
 
+	History_RegisterControls();
 	History_Init ();
 
 	key_blinktime = realtime; //johnfitz

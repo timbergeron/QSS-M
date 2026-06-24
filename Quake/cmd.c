@@ -1001,12 +1001,22 @@ void Cmd_PrintTxt_f(void)
 Cmd_History_f -- woods #history
 ====================
 */
-void Cmd_History_f(void)
+static void Cmd_PrintConsoleHistory (void)
 {
-	const char* secondary = NULL;
+	if (!History_IsSaving())
+	{
+		Con_Printf("console history is disabled (con_savehistory 0)\n");
+		return;
+	}
 
 	History_Shutdown();
 	History_Init();
+	Cmd_ExecuteString("printtxt history.txt\n", src_command);
+}
+
+void Cmd_History_f(void)
+{
+	const char* secondary = NULL;
 
 	if (Cmd_Argc() >= 2)
 	{
@@ -1020,7 +1030,7 @@ void Cmd_History_f(void)
 	
 		if (!strcmp(secondary, "console") || !strcmp(secondary, "-c") || !strcmp(secondary, "c"))
 		{
-			Cmd_ExecuteString("printtxt history.txt\n", src_command);
+			Cmd_PrintConsoleHistory();
 			return;
 		}
 
@@ -1029,16 +1039,20 @@ void Cmd_History_f(void)
 			Con_Printf("\n^mserver history:\n");
 			Cmd_ExecuteString("printtxt id1/backups/servers.txt\n", src_command);
 			Con_Printf("^mconsole history:\n");
-			Cmd_ExecuteString("printtxt history.txt\n", src_command);
+			Cmd_PrintConsoleHistory();
 			return;
 		}
 	}
 
 	Con_Printf("\n");
-	Con_Printf("usage: history <option>\n\n");
+	Con_Printf("usage: history <option>\n");
+	Con_Printf("options:\n\n");
 	Con_Printf("all, -a, a      show all history\n");
 	Con_Printf("console, -c, c  console history\n");
 	Con_Printf("servers, -s, s  server connection history\n");
+	Con_Printf("\nrelated controls:\n");
+	Con_Printf("clearhistory    clear console history\n");
+	Con_Printf("con_savehistory save console history (0/1)\n");
 	
 	Con_Printf("\n");
 
