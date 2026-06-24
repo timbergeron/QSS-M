@@ -8002,6 +8002,12 @@ typedef struct
 	keydevicemask_t devicemask;
 } defaultbind_t;
 
+#define KEYBIND_CUSTOM_MARKER	"*"
+#define QUICKSAVE	"echo Quicksaving...; wait; save quick"
+#define QUICKLOAD	"echo Quickloading...; wait; load quick"
+
+// The marker pair brackets the gameplay/weapon section where bindlist.lst
+// entries may override default labels instead of being suppressed as duplicates.
 static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 {
 	{"+forward",		"Move forward",			KDM_KEYBOARD_AND_MOUSE},
@@ -8022,6 +8028,7 @@ static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 	{"+zoom",			"Quick zoom",			KDM_ANY},
 	{"+gyroaction",		"Gyro switch",			KDM_GAMEPAD},
 	{"+altmodifier",	"Alt modifier",			KDM_GAMEPAD},
+	{KEYBIND_CUSTOM_MARKER, "",		KDM_NONE},
 	{"+attack",			"Attack",				KDM_ANY},
 	{"+weaponwheel",	"Weapon wheel",			KDM_ANY},
 	{"impulse 10",		"Next weapon",			KDM_ANY},
@@ -8036,6 +8043,16 @@ static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 	{"impulse 8",		"Thunderbolt",			KDM_ANY},
 	{"impulse 225",		"Laser Cannon",			KDM_ANY},
 	{"impulse 226",		"Mjolnir",				KDM_ANY},
+	{KEYBIND_CUSTOM_MARKER, "",		KDM_NONE},
+	{QUICKSAVE,			"Quick save",			KDM_ANY},
+	{QUICKLOAD,			"Quick load",			KDM_ANY},
+	{"menu_load",		"Load menu",			KDM_ANY},
+	{"menu_save",		"Save menu",			KDM_ANY},
+	{"menu_multiplayer",	"Multiplayer menu",		KDM_ANY},
+	{"menu_options",	"Options menu",			KDM_ANY},
+	{"screenshot",		"Screenshot",			KDM_ANY},
+	{"+showscores",		"Show score",			KDM_ANY},
+	{"messagemode",		"Text chat",			KDM_KEYBOARD_AND_MOUSE},
 };
 #define	NUMQUAKECOMMANDS	(sizeof(quakebindnames)/sizeof(quakebindnames[0]))
 
@@ -8089,15 +8106,44 @@ static keydevicemask_t M_Keys_GetTabAtPoint(int x, int y)
 	return x < 160 ? KDM_KEYBOARD_AND_MOUSE : KDM_GAMEPAD;
 }
 
+static void M_Keys_CopyBindName (bindname_t *bindname, const char *cmd, const char *desc, keydevicemask_t devicemask)
+{
+	bindname->cmd = (char *)Z_Malloc(strlen(cmd) + 1);
+	strcpy(bindname->cmd, cmd);
+	bindname->desc = (char *)Z_Malloc(strlen(desc) + 1);
+	strcpy(bindname->desc, desc);
+	bindname->devicemask = devicemask;
+}
+
 static void M_Keys_AddBindName (const char *cmd, const char *desc, keydevicemask_t devicemask)
 {
 	bindnames = (bindname_t *)Z_Realloc(bindnames, sizeof(bindname_t) * (numbindnames + 1));
-	bindnames[numbindnames].cmd = (char *)Z_Malloc(strlen(cmd) + 1);
-	strcpy(bindnames[numbindnames].cmd, cmd);
-	bindnames[numbindnames].desc = (char *)Z_Malloc(strlen(desc) + 1);
-	strcpy(bindnames[numbindnames].desc, desc);
-	bindnames[numbindnames].devicemask = devicemask;
+	M_Keys_CopyBindName(&bindnames[numbindnames], cmd, desc, devicemask);
 	numbindnames++;
+}
+
+static void M_Keys_ClearBindNames (void)
+{
+	int i;
+
+	for (i = 0; i < numbindnames; i++)
+	{
+		Z_Free(bindnames[i].cmd);
+		Z_Free(bindnames[i].desc);
+	}
+	Z_Free(bindnames);
+	bindnames = NULL;
+	numbindnames = 0;
+}
+
+static qboolean M_Keys_IsCustomMarker (const char *cmd)
+{
+	return cmd[0] == KEYBIND_CUSTOM_MARKER[0] && cmd[1] == '\0';
+}
+
+static qboolean M_Keys_IsHipnoticOnlyCommand (const char *cmd)
+{
+	return !strcmp(cmd, "impulse 225") || !strcmp(cmd, "impulse 226");
 }
 
 static const defaultbind_t *M_Keys_FindDefaultBind (const char *cmd)
@@ -8106,6 +8152,8 @@ static const defaultbind_t *M_Keys_FindDefaultBind (const char *cmd)
 
 	for (i = 0; i < NUMQUAKECOMMANDS; i++)
 	{
+		if (M_Keys_IsCustomMarker(quakebindnames[i].cmd))
+			continue;
 		if (!strcmp(quakebindnames[i].cmd, cmd))
 			return &quakebindnames[i];
 	}
@@ -8126,55 +8174,172 @@ static qboolean M_Keys_HasCommand (const char *cmd)
 	return false;
 }
 
-static void M_Keys_AddMissingControllerBinds (void)
+static qboolean M_Keys_ShouldSuppressCustomBind (const char *cmd)
 {
 	int i;
+	qboolean filter_enabled = true;
+
+	if (!cmd[0])
+		return true;
 
 	for (i = 0; i < NUMQUAKECOMMANDS; i++)
 	{
-		if (quakebindnames[i].devicemask != KDM_GAMEPAD)
-			continue;
-		if (M_Keys_HasCommand(quakebindnames[i].cmd))
-			continue;
+		const defaultbind_t *defaultbind = &quakebindnames[i];
 
-		M_Keys_AddBindName(quakebindnames[i].cmd, quakebindnames[i].desc, quakebindnames[i].devicemask);
+		if (M_Keys_IsCustomMarker(defaultbind->cmd))
+		{
+			filter_enabled = !filter_enabled;
+			continue;
+		}
+
+		if (!filter_enabled)
+			continue;
+		if (!strcmp(defaultbind->cmd, cmd))
+			return true;
 	}
+
+	return false;
 }
 
-void M_Keys_Populate(void) // woods #mousemenu -- modified 
+static qboolean M_Keys_IsDeprecatedBindCommand (const char *cmd)
+{
+	static const char *const deprecated[] =
+	{
+		"+klook",
+		"+mlook",
+	};
+	int i;
+
+	for (i = 0; i < Q_COUNTOF(deprecated); i++)
+	{
+		if (!strcmp(deprecated[i], cmd))
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean M_Keys_CustomCommandSupported (const char *cmd, const char *desc)
+{
+	if (!cmd[0])
+		return false;
+
+	COM_Parse(cmd);
+	if (!Cmd_Exists(com_token) && !Cmd_AliasExists(com_token) && !Cvar_FindVar(com_token))
+	{
+		Con_DPrintf("Skipping unsupported key binding: \"%s\" = \"%s\"\n", desc, cmd);
+		return false;
+	}
+
+	if (M_Keys_IsDeprecatedBindCommand(cmd))
+	{
+		Con_DPrintf("Skipping deprecated key binding: \"%s\" = \"%s\"\n", desc, cmd);
+		return false;
+	}
+
+	return true;
+}
+
+static void M_Keys_AddBindNameUnique (const char *cmd, const char *desc, keydevicemask_t devicemask)
+{
+	if (!cmd[0] || M_Keys_HasCommand(cmd))
+		return;
+
+	M_Keys_AddBindName(cmd, desc, devicemask);
+}
+
+static void M_Keys_AddDefaultBind (const defaultbind_t *defaultbind)
+{
+	if (!hipnotic && M_Keys_IsHipnoticOnlyCommand(defaultbind->cmd))
+		return;
+
+	M_Keys_AddBindNameUnique(defaultbind->cmd, defaultbind->desc, defaultbind->devicemask);
+}
+
+static void M_Keys_LoadCustomBindList (bindname_t **custombinds, int *numcustombinds)
 {
 	FILE* file;
 	char line[1024];
-	if (numbindnames) return;
 
-	// Try to open the file
-	if (COM_FOpenFile("bindlist.lst", &file, NULL) >= 0 && file) 
+	*custombinds = NULL;
+	*numcustombinds = 0;
+
+	if (COM_FOpenFile("bindlist.lst", &file, NULL) < 0 || !file)
+		return;
+
+	while (fgets(line, sizeof(line), file))
 	{
-		while (fgets(line, sizeof(line), file))
+		const char* cmd, * desc;
+		const defaultbind_t *defaultbind;
+
+		Cmd_TokenizeString(line);
+		cmd = Cmd_Argv(0);
+		desc = Cmd_Argv(1);
+
+		if (!cmd[0] || !desc[0] || (cmd[0] == '-' && cmd[1] == '\0'))
+			continue;
+		if (M_Keys_ShouldSuppressCustomBind(cmd))
+			continue;
+		if (!M_Keys_CustomCommandSupported(cmd, desc))
+			continue;
+
+		defaultbind = M_Keys_FindDefaultBind(cmd);
+		*custombinds = (bindname_t *)Z_Realloc(*custombinds, sizeof(bindname_t) * (*numcustombinds + 1));
+		M_Keys_CopyBindName(&(*custombinds)[*numcustombinds], cmd, desc, defaultbind ? defaultbind->devicemask : KDM_ANY);
+		(*numcustombinds)++;
+	}
+
+	fclose(file);
+}
+
+static void M_Keys_FreeCustomBindList (bindname_t *custombinds, int numcustombinds)
+{
+	int i;
+
+	for (i = 0; i < numcustombinds; i++)
+	{
+		Z_Free(custombinds[i].cmd);
+		Z_Free(custombinds[i].desc);
+	}
+	Z_Free(custombinds);
+}
+
+static void M_Keys_AddCustomBindList (bindname_t *custombinds, int numcustombinds)
+{
+	int i;
+
+	for (i = 0; i < numcustombinds; i++)
+		M_Keys_AddBindNameUnique(custombinds[i].cmd, custombinds[i].desc, custombinds[i].devicemask);
+}
+
+static void M_Keys_Populate(void) // woods #mousemenu -- modified
+{
+	bindname_t *custombinds;
+	int numcustombinds;
+	qboolean added_custom_entries = false;
+	int i;
+
+	M_Keys_ClearBindNames();
+	M_Keys_LoadCustomBindList(&custombinds, &numcustombinds);
+
+	for (i = 0; i < NUMQUAKECOMMANDS; i++)
+	{
+		const defaultbind_t *defaultbind = &quakebindnames[i];
+
+		if (M_Keys_IsCustomMarker(defaultbind->cmd))
 		{
-			const char* cmd, * desc;
-			const defaultbind_t *defaultbind;
-			Cmd_TokenizeString(line);
-			cmd = Cmd_Argv(0);
-			desc = Cmd_Argv(1);
-
-			if (*cmd)
+			if (!added_custom_entries)
 			{
-				defaultbind = M_Keys_FindDefaultBind(cmd);
-				M_Keys_AddBindName(cmd, desc, defaultbind ? defaultbind->devicemask : KDM_ANY);
+				M_Keys_AddCustomBindList(custombinds, numcustombinds);
+				added_custom_entries = true;
 			}
+			continue;
 		}
-		fclose(file);
-		if (numbindnames)
-			M_Keys_AddMissingControllerBinds();
+
+		M_Keys_AddDefaultBind(defaultbind);
 	}
 
-	// Fallback to default bindings if no bindings were loaded from the file
-	if (!numbindnames)
-	{
-		for (int i = 0; i < NUMQUAKECOMMANDS; i++)
-			M_Keys_AddBindName(quakebindnames[i].cmd, quakebindnames[i].desc, quakebindnames[i].devicemask);
-	}
+	M_Keys_FreeCustomBindList(custombinds, numcustombinds);
 }
 
 void M_Keys_UpdateFilter(void)
