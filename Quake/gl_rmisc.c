@@ -473,10 +473,10 @@ R_Grass_Completion_f -- woods #iwtabcomplete
 ===============
 */
 #define R_GRASS_VALUE_OFF "0"
-#define R_GRASS_VALUE_HIGH "2,20,18,2048,0.1,1"
-#define R_GRASS_VALUE_DEFAULT "2,0.35,18,1024,0.35,1"
-#define R_GRASS_ARGS_TUNING "blades density height dist movement lod"
-#define R_GRASS_USAGE_TUNING "<blades>,<density>,<height>,<dist>,<movement>,<lod>"
+#define R_GRASS_VALUE_HIGH "1,2,20,18,2048,0.1,1,0.5"
+#define R_GRASS_VALUE_DEFAULT "1,2,0.35,18,1024,0.35,1,0.5"
+#define R_GRASS_ARGS_TUNING "amount blades density height dist movement lod gustscale"
+#define R_GRASS_USAGE_TUNING "<amount>,<blades>,<density>,<height>,<dist>,<movement>,<lod>,<gustscale>"
 
 static void R_Grass_Completion_f (cvar_t* cvar, const char* partial)
 {
@@ -505,12 +505,14 @@ static void R_Grass_Help_f (cvar_t *cvar)
 	Con_Printf("      high-density example: r_grass %s\n", R_GRASS_VALUE_HIGH);
 	Con_Printf("\n");
 	Con_Printf("args:\n");
+	Con_Printf("  amount    grass opacity/coverage amount, clamped 0..1\n");
 	Con_Printf("  blades    0 flat texture grass, 1 CPU blades, 2 shader blades\n");
 	Con_Printf("  density   blade placement density, clamped 0..500\n");
 	Con_Printf("  height    blade height in units, clamped 1..96\n");
 	Con_Printf("  dist      draw/fade distance, clamped 0..8192\n");
 	Con_Printf("  movement  wind amount, clamped 0..2\n");
 	Con_Printf("  lod       distance thinning, clamped 0..2\n");
+	Con_Printf("  gustscale travelling gust frequency, clamped 0..8\n");
 	Con_Printf("\n");
 }
 
