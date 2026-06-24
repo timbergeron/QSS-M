@@ -2149,6 +2149,7 @@ void Cmd_ForwardToServer (void)
 				dst = Cmd_AppendChatChar(dst, end, *src++);
 		}
 		*dst = 0;
+		Chat_HistoryStore(buff);
 
 		if (!strcmp(Cmd_Argv(1), "f_version")) // woods make f_version print for legacy clients
 		{

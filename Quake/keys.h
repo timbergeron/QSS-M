@@ -273,6 +273,7 @@ void Key_WriteBindings (FILE *f);
 void Key_EndChat (void);
 const char *Key_GetChatBuffer (void);
 int Key_GetChatMsgLen (void);
+void Chat_HistoryStore (const char *text);
 
 void History_Init (void);
 void History_Shutdown (void);

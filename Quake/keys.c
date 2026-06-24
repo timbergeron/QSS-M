@@ -1270,6 +1270,12 @@ void Char_Console(int key) // woods -- added detection for when typing in consol
 qboolean	chat_team = false;
 static char	chat_buffer[MAX_CHAT_SIZE_EX]; // woods limit chat to 100 server limit (legacy is 45)  #chatlimit
 static int	chat_bufferlen = 0;
+#define CHAT_HISTORY_LINES 32
+#define CHAT_HISTORY_PAGE_LINES 5
+static char chat_history[CHAT_HISTORY_LINES][MAX_CHAT_SIZE_EX];
+static int chat_history_count = 0;
+static int chat_history_line = -1;
+static char chat_history_saved_current[MAX_CHAT_SIZE_EX];
 
 const char *Key_GetChatBuffer (void)
 {
@@ -1281,11 +1287,155 @@ int Key_GetChatMsgLen (void)
 	return chat_bufferlen;
 }
 
+static void Chat_HistoryResetBrowse (void)
+{
+	chat_history_line = -1;
+	chat_history_saved_current[0] = 0;
+}
+
+static void Chat_SetBuffer (const char *text)
+{
+	q_strlcpy (chat_buffer, text ? text : "", sizeof(chat_buffer));
+	chat_bufferlen = (int)strlen(chat_buffer);
+}
+
+static void Chat_HistorySaveDraft (void)
+{
+	if (chat_history_line < 0)
+		q_strlcpy(chat_history_saved_current, chat_buffer,
+			sizeof(chat_history_saved_current));
+}
+
+static qboolean Chat_HistoryNormalize (const char *text, char *out, size_t out_size)
+{
+	const unsigned char *start;
+	const unsigned char *end;
+	size_t len = 0;
+
+	if (!out || !out_size)
+		return false;
+	out[0] = 0;
+	if (!text)
+		return false;
+
+	start = (const unsigned char *)text;
+	while (*start && q_isspace(*start))
+		start++;
+
+	end = start + strlen((const char *)start);
+	while (end > start && q_isspace(end[-1]))
+		end--;
+
+	if (end - start >= 2 && start[0] == '"' && end[-1] == '"')
+	{
+		start++;
+		end--;
+		while (start < end && q_isspace(*start))
+			start++;
+		while (end > start && q_isspace(end[-1]))
+			end--;
+	}
+
+	while (start < end && len + 1 < out_size)
+	{
+		unsigned char c = *start++;
+
+		/* The chat box replays history through say "..."; COM_Parse has no
+		 * escape syntax for embedded quotes, so don't store unsafe entries. */
+		if (c == '"')
+			return false;
+		if (c == '\r' || c == '\n' || c == '\b' || c == '\t')
+			c = ' ';
+		out[len++] = (char)c;
+	}
+	while (len > 0 && q_isspace((unsigned char)out[len - 1]))
+		len--;
+	out[len] = 0;
+
+	return len > 0;
+}
+
+void Chat_HistoryStore (const char *text)
+{
+	char normalized[MAX_CHAT_SIZE_EX];
+
+	if (!Chat_HistoryNormalize(text, normalized, sizeof(normalized)))
+		return;
+
+	Chat_HistoryResetBrowse ();
+	if (chat_history_count > 0 &&
+		!strcmp(chat_history[chat_history_count - 1], normalized))
+		return;
+
+	if (chat_history_count == CHAT_HISTORY_LINES)
+	{
+		memmove(chat_history, chat_history + 1,
+			sizeof(chat_history[0]) * (CHAT_HISTORY_LINES - 1));
+		chat_history_count--;
+	}
+
+	q_strlcpy(chat_history[chat_history_count], normalized,
+		sizeof(chat_history[0]));
+	chat_history_count++;
+}
+
+static void Chat_HistoryBrowse (int direction)
+{
+	int line;
+
+	if (chat_history_count <= 0)
+		return;
+
+	if (direction < 0)
+	{
+		Chat_HistorySaveDraft ();
+		line = chat_history_line < 0 ? -direction - 1 :
+			chat_history_line - direction;
+		if (line >= chat_history_count)
+			line = chat_history_count - 1;
+		chat_history_line = line;
+	}
+	else
+	{
+		if (chat_history_line < 0)
+			return;
+		line = chat_history_line - direction;
+		if (line < 0)
+		{
+			Chat_SetBuffer(chat_history_saved_current);
+			Chat_HistoryResetBrowse ();
+			return;
+		}
+		chat_history_line = line;
+	}
+
+	Chat_SetBuffer(chat_history[chat_history_count - 1 - chat_history_line]);
+}
+
+static void Chat_HistoryOldest (void)
+{
+	if (chat_history_count <= 0)
+		return;
+
+	Chat_HistorySaveDraft ();
+	chat_history_line = chat_history_count - 1;
+	Chat_SetBuffer(chat_history[0]);
+}
+
+static void Chat_HistoryEnd (void)
+{
+	if (chat_history_line < 0)
+		return;
+
+	Chat_SetBuffer(chat_history_saved_current);
+	Chat_HistoryResetBrowse ();
+}
+
 void Key_EndChat (void)
 {
 	key_dest = key_game;
-	chat_bufferlen = 0;
-	chat_buffer[0] = 0;
+	Chat_SetBuffer("");
+	Chat_HistoryResetBrowse ();
 	SetChatInfo (0); // woods #chatinfo
 }
 
@@ -1313,6 +1463,7 @@ void PasteToMessage (void) // woods zircon (baker)
 
 			memmove (chat_buffer + chatpos + i, chat_buffer + chatpos, sizeof (chat_buffer) - chatpos - i);
 			memcpy (chat_buffer + chatpos, cbd, i);
+			Chat_HistoryResetBrowse ();
 		}
 		chat_bufferlen = (unsigned int)strlen (chat_buffer);
 	}
@@ -1338,6 +1489,38 @@ void Key_Message (int key)
 		Key_EndChat ();
 		return;
 
+	case K_UPARROW:
+	case K_KP_UPARROW:
+	case K_DPAD_UP:
+		Chat_HistoryBrowse (-1);
+		return;
+
+	case K_DOWNARROW:
+	case K_KP_DOWNARROW:
+	case K_DPAD_DOWN:
+		Chat_HistoryBrowse (1);
+		return;
+
+	case K_PGUP:
+	case K_KP_PGUP:
+		Chat_HistoryBrowse (-CHAT_HISTORY_PAGE_LINES);
+		return;
+
+	case K_PGDN:
+	case K_KP_PGDN:
+		Chat_HistoryBrowse (CHAT_HISTORY_PAGE_LINES);
+		return;
+
+	case K_HOME:
+	case K_KP_HOME:
+		Chat_HistoryOldest ();
+		return;
+
+	case K_END:
+	case K_KP_END:
+		Chat_HistoryEnd ();
+		return;
+
 	case K_BACKSPACE:
 		if (keydown[K_CTRL]) // woods delete entire words
 		{
@@ -1351,6 +1534,7 @@ void Key_Message (int key)
 			// Update buffer length
 			chat_bufferlen = startPos;
 			chat_buffer[chat_bufferlen] = '\0';
+			Chat_HistoryResetBrowse ();
 		}
 		else 
 		{
@@ -1358,6 +1542,7 @@ void Key_Message (int key)
 			{
 				chat_bufferlen--;
 				chat_buffer[chat_bufferlen] = '\0';
+				Chat_HistoryResetBrowse ();
 			}
 		}
 		return;
@@ -1366,8 +1551,8 @@ void Key_Message (int key)
 	case 'u':
 		if (keydown[K_CTRL])
 		{
-			chat_buffer[0] = 0; // Clear the chat buffer
-			chat_bufferlen = 0;
+			Chat_SetBuffer("");
+			Chat_HistoryResetBrowse ();
 			return;
 		}
 
@@ -1386,6 +1571,7 @@ void Char_Message (int key)
 	if (chat_bufferlen == sizeof(chat_buffer) - 1)
 		return; // all full
 
+	Chat_HistoryResetBrowse ();
 	chat_buffer[chat_bufferlen++] = key;
 	chat_buffer[chat_bufferlen] = 0;
 }
