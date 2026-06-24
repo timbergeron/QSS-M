@@ -17939,13 +17939,15 @@ void M_Console_Draw(void)
 			M_LivePreview_EndIsolate ();
 	}
 
+	// Position the hint below the last menu item so it doesn't overlap
+	int hint_y = M_Console_GetItemY(CONSOLE_CLEAR_HISTORY) + 18;
 	if (console_field_editing)
 	{
 		const char* hint = "Enter applies, Esc cancels";
-		M_PrintRGBA((320 - (int)strlen(hint) * 8) / 2, 144, hint, CL_PLColours_Parse("0xffffff"), 0.5f, false);
+		M_PrintRGBA((320 - (int)strlen(hint) * 8) / 2, hint_y, hint, CL_PLColours_Parse("0xffffff"), 0.5f, false);
 	}
 	else if (console_cursor == CONSOLE_CONCOLOR)
-		M_PrintRGBA(74, 144, "+shift for RGB colors", CL_PLColours_Parse("0xffffff"), 0.6f, false);
+		M_PrintRGBA(74, hint_y, "+shift for RGB colors", CL_PLColours_Parse("0xffffff"), 0.6f, false);
 
 	// Draw search box if search is active
 	if (consolemenu.search.len > 0)
