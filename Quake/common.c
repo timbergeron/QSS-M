@@ -2582,7 +2582,11 @@ void COM_CreatePath (char *path)
 
 	for (ofs = path + 1; *ofs; ofs++)
 	{
-		if (*ofs == '/' || *ofs == '\\')
+		if (*ofs == '/'
+#ifdef _WIN32
+		    || *ofs == '\\'	// backslash is a path separator only on Windows
+#endif
+		   )
 		{	// create the directory
 			char sep = *ofs;
 			*ofs = 0;
