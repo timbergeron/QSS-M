@@ -205,6 +205,7 @@ void M_Update_PruneStagingAtStartup(void) {}
 #if !defined(PLATFORM_HAIKU)
 #include <sys/statvfs.h>
 #endif
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -255,6 +256,7 @@ Update Command
 #define UPDATE_METADATA_SIG_ASSET	"qssm-update.json.sig"
 #define UPDATE_METADATA_MAX_BYTES	(32 * 1024)
 #define UPDATE_METADATA_SIG_MAX_BYTES	4096
+#define UPDATE_MACOS_BUNDLE_EXECUTABLE	"QSS-M"
 #ifndef UPDATE_METADATA_REQUIRED
 #define UPDATE_METADATA_REQUIRED	0
 #endif
@@ -319,8 +321,21 @@ typedef struct
 	char		display_name[64];
 } updatedownload_t;
 
+typedef enum
+{
+	UPDATE_APPLY_FILE = 0,
+	UPDATE_APPLY_TREE = 1
+} updateapplykind_t;
+
+typedef enum
+{
+	UPDATE_RELAUNCH_PROGRAM = 0,
+	UPDATE_RELAUNCH_APP_BUNDLE = 1
+} updaterelaunchkind_t;
+
 typedef struct
 {
+	updateapplykind_t kind;
 	char		src[64];
 	char		dst[64];
 	char		sha256[65];
@@ -339,6 +354,7 @@ typedef struct
 	char			log_path[MAX_OSPATH];
 	char			recovery_manifest[MAX_OSPATH];
 	char			relaunch_dst[64];
+	updaterelaunchkind_t relaunch_kind;
 	qboolean		complete;
 	qboolean		startup_attempted;
 	qboolean		startup_confirmed;
@@ -357,6 +373,10 @@ typedef struct
 } updateapplylock_t;
 
 static qboolean M_Update_RootFileNameOkay(const char *name);
+static qboolean M_Update_BundleExecutablePath(const char *bundle_path,
+	char *out, size_t outsize);
+static void M_Update_RemoveManifestRecoveryDir(
+	const updateapplymanifest_t *manifest);
 static updateapplylock_t update_startup_lock;
 static qboolean update_startup_lock_initialized = false;
 static qboolean update_startup_lock_active = false;
@@ -2119,20 +2139,69 @@ static qboolean M_Update_RunningFromManagedPackage(const char *live_dir,
 	return false;
 }
 
-static qboolean M_Update_GetLiveInstallPaths(char *current_exe,
-	size_t current_exe_size, char *live_dir, size_t live_dir_size,
-	char *live_exe_name, size_t live_exe_name_size, char *error,
-	size_t error_size)
+static qboolean M_Update_MacOSBundleNameOkay(const char *name)
+{
+	size_t len;
+
+	if (!M_Update_RootFileNameOkay(name))
+		return false;
+	len = strlen(name);
+	return len > 4 && !q_strcasecmp(name + len - 4, ".app");
+}
+
+static qboolean M_Update_DeriveLiveInstallPaths(const char *current_exe,
+	char *live_dir, size_t live_dir_size, char *live_exe_name,
+	size_t live_exe_name_size, char *error, size_t error_size)
 {
 	const char *base;
 
-	if (!Sys_GetExecutablePath(current_exe, current_exe_size))
+#if defined(__APPLE__)
+	char macos_dir[MAX_OSPATH];
+	char contents_dir[MAX_OSPATH];
+	char bundle_dir[MAX_OSPATH];
+	char install_dir[MAX_OSPATH];
+
+	M_Update_PathDirName(current_exe, macos_dir, sizeof(macos_dir));
+	if (q_strcasecmp(M_Update_PathBaseName(macos_dir), "MacOS"))
 	{
-		q_strlcpy(error, "unable to determine current executable path",
+		q_strlcpy(error,
+			"macOS portable updater requires running from a .app bundle",
 			error_size);
 		return false;
 	}
-
+	M_Update_PathDirName(macos_dir, contents_dir, sizeof(contents_dir));
+	if (q_strcasecmp(M_Update_PathBaseName(contents_dir), "Contents"))
+	{
+		q_strlcpy(error,
+			"macOS app bundle layout is not recognized", error_size);
+		return false;
+	}
+	M_Update_PathDirName(contents_dir, bundle_dir, sizeof(bundle_dir));
+	base = M_Update_PathBaseName(bundle_dir);
+	if (!M_Update_MacOSBundleNameOkay(base))
+	{
+		q_strlcpy(error, "macOS app bundle name is not safe to update",
+			error_size);
+		return false;
+	}
+	M_Update_PathDirName(bundle_dir, install_dir, sizeof(install_dir));
+	if (!install_dir[0] ||
+		q_strlcpy(live_dir, install_dir, live_dir_size) >= live_dir_size)
+	{
+		q_strlcpy(error, "macOS install path is too long to update",
+			error_size);
+		return false;
+	}
+	if (live_exe_name && live_exe_name_size &&
+		q_strlcpy(live_exe_name, base, live_exe_name_size) >=
+		live_exe_name_size)
+	{
+		q_strlcpy(error, "macOS app bundle name is too long to update",
+			error_size);
+		return false;
+	}
+	return true;
+#else
 	M_Update_PathDirName(current_exe, live_dir, live_dir_size);
 	base = M_Update_PathBaseName(current_exe);
 	if (!M_Update_RootFileNameOkay(base))
@@ -2141,13 +2210,34 @@ static qboolean M_Update_GetLiveInstallPaths(char *current_exe,
 			error_size);
 		return false;
 	}
-	if (q_strlcpy(live_exe_name, base, live_exe_name_size) >=
+	if (live_exe_name && live_exe_name_size &&
+		q_strlcpy(live_exe_name, base, live_exe_name_size) >=
 		live_exe_name_size)
 	{
 		q_strlcpy(error, "current executable name is too long to update",
 			error_size);
 		return false;
 	}
+	return true;
+#endif
+}
+
+static qboolean M_Update_GetLiveInstallPaths(char *current_exe,
+	size_t current_exe_size, char *live_dir, size_t live_dir_size,
+	char *live_exe_name, size_t live_exe_name_size, char *error,
+	size_t error_size)
+{
+	if (!Sys_GetExecutablePath(current_exe, current_exe_size))
+	{
+		q_strlcpy(error, "unable to determine current executable path",
+			error_size);
+		return false;
+	}
+
+	if (!M_Update_DeriveLiveInstallPaths(current_exe, live_dir,
+		live_dir_size, live_exe_name, live_exe_name_size, error,
+		error_size))
+		return false;
 
 	if (M_Update_RunningFromManagedPackage(live_dir, error, error_size))
 		return false;
@@ -2233,7 +2323,8 @@ static qboolean M_Update_PlatformInstallSupported(const char *platform)
 {
 	return !strcmp(platform, "linux64") ||
 		!strcmp(platform, "win64") ||
-		!strcmp(platform, "win32");
+		!strcmp(platform, "win32") ||
+		!strcmp(platform, "macos");
 }
 
 #ifdef _WIN32
@@ -2418,6 +2509,17 @@ static qboolean M_Update_FileExists(const char *dir, const char *name)
 	return (Sys_FileType(path) & FS_ENT_FILE) != 0;
 }
 
+static qboolean M_Update_DirectoryExists(const char *dir, const char *name)
+{
+	char path[MAX_OSPATH];
+
+	if ((size_t)q_snprintf(path, sizeof(path), "%s/%s", dir, name) >=
+		sizeof(path))
+		return false;
+
+	return (Sys_FileType(path) & FS_ENT_DIRECTORY) != 0;
+}
+
 static qboolean M_Update_RequireFile(const char *dir, const char *name,
 	char *error, size_t error_size)
 {
@@ -2426,6 +2528,152 @@ static qboolean M_Update_RequireFile(const char *dir, const char *name,
 
 	q_snprintf(error, error_size, "staged package missing %s", name);
 	return false;
+}
+
+static qboolean M_Update_RequireDirectory(const char *dir, const char *name,
+	char *error, size_t error_size)
+{
+	if (M_Update_DirectoryExists(dir, name))
+		return true;
+
+	q_snprintf(error, error_size, "staged package missing %s", name);
+	return false;
+}
+
+static qboolean M_Update_ValidateMacOSBundleInExtract(const char *extract_dir,
+	const char *bundle_name, char *error, size_t error_size)
+{
+	char info_plist[MAX_OSPATH];
+	char executable[MAX_OSPATH];
+
+	if (!M_Update_RequireDirectory(extract_dir, bundle_name, error,
+		error_size))
+		return false;
+	if ((size_t)q_snprintf(info_plist, sizeof(info_plist),
+		"%s/Contents/Info.plist", bundle_name) >= sizeof(info_plist) ||
+		(size_t)q_snprintf(executable, sizeof(executable),
+		"%s/Contents/MacOS/%s", bundle_name,
+		UPDATE_MACOS_BUNDLE_EXECUTABLE) >= sizeof(executable))
+	{
+		q_strlcpy(error, "staged app bundle path too long", error_size);
+		return false;
+	}
+
+	return M_Update_RequireFile(extract_dir, info_plist, error,
+		error_size) &&
+		M_Update_RequireFile(extract_dir, executable, error, error_size);
+}
+
+static qboolean M_Update_FindMacOSBundleInExtract(const char *extract_dir,
+	char *bundle_name, size_t bundle_name_size, char *error,
+	size_t error_size)
+{
+	char found[64] = "";
+
+	/* New packages use QSS-M.app; existing releases may use versioned names. */
+#ifdef _WIN32
+	char pattern[MAX_OSPATH];
+	WIN32_FIND_DATAA data;
+	HANDLE find;
+
+	if ((size_t)q_snprintf(pattern, sizeof(pattern), "%s/*",
+		extract_dir) >= sizeof(pattern))
+	{
+		q_strlcpy(error, "staged package path too long", error_size);
+		return false;
+	}
+
+	find = FindFirstFileA(pattern, &data);
+	if (find != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+				!M_Update_MacOSBundleNameOkay(data.cFileName))
+				continue;
+			if (found[0])
+			{
+				FindClose(find);
+				q_strlcpy(error,
+					"staged package contains multiple macOS app bundles",
+					error_size);
+				return false;
+			}
+			if (q_strlcpy(found, data.cFileName, sizeof(found)) >=
+				sizeof(found))
+			{
+				FindClose(find);
+				q_strlcpy(error, "staged app bundle name too long",
+					error_size);
+				return false;
+			}
+		} while (FindNextFileA(find, &data));
+		FindClose(find);
+	}
+#else
+	DIR *dir;
+	struct dirent *entry;
+
+	dir = opendir(extract_dir);
+	if (!dir)
+	{
+		q_snprintf(error, error_size,
+			"unable to inspect staged package: %s", strerror(errno));
+		return false;
+	}
+
+	while ((entry = readdir(dir)) != NULL)
+	{
+		char path[MAX_OSPATH];
+
+		if (!M_Update_MacOSBundleNameOkay(entry->d_name))
+			continue;
+		if (!M_Update_JoinPath(path, sizeof(path), extract_dir,
+			entry->d_name))
+		{
+			closedir(dir);
+			q_strlcpy(error, "staged app bundle path too long",
+				error_size);
+			return false;
+		}
+		if (!(Sys_FileType(path) & FS_ENT_DIRECTORY))
+			continue;
+		if (found[0])
+		{
+			closedir(dir);
+			q_strlcpy(error,
+				"staged package contains multiple macOS app bundles",
+				error_size);
+			return false;
+		}
+		if (q_strlcpy(found, entry->d_name, sizeof(found)) >=
+			sizeof(found))
+		{
+			closedir(dir);
+			q_strlcpy(error, "staged app bundle name too long",
+				error_size);
+			return false;
+		}
+	}
+	closedir(dir);
+#endif
+
+	if (!found[0])
+	{
+		q_strlcpy(error, "staged package missing macOS .app bundle",
+			error_size);
+		return false;
+	}
+	if (bundle_name && bundle_name_size &&
+		q_strlcpy(bundle_name, found, bundle_name_size) >=
+		bundle_name_size)
+	{
+		q_strlcpy(error, "staged app bundle name too long", error_size);
+		return false;
+	}
+
+	return M_Update_ValidateMacOSBundleInExtract(extract_dir, found, error,
+		error_size);
 }
 
 static qboolean M_Update_ValidateExtracted(const updatereleaseinfo_t *info,
@@ -2471,10 +2719,14 @@ static qboolean M_Update_ValidateExtracted(const updatereleaseinfo_t *info,
 
 	if (!strcmp(info->platform, "macos"))
 	{
-		q_strlcpy(error,
-			"macOS bundle staging is not enabled until the signed .app swap/quarantine path is implemented",
+		char bundle_name[64];
+
+		return M_Update_FindMacOSBundleInExtract(extract_dir,
+			bundle_name, sizeof(bundle_name), error, error_size) &&
+			M_Update_RequireFile(extract_dir, "qssm.pak", error,
+			error_size) &&
+			M_Update_RequireFile(extract_dir, "quakespasm.pak", error,
 			error_size);
-		return false;
 	}
 
 	q_snprintf(error, error_size, "unsupported update platform: %s",
@@ -2535,12 +2787,21 @@ static const char *const update_win_files[] =
 	NULL
 };
 
+static const char *const update_macos_files[] =
+{
+	"qssm.pak",
+	"quakespasm.pak",
+	NULL
+};
+
 static const char *const *M_Update_FileListForPlatform(const char *platform)
 {
 	if (!strcmp(platform, "linux64"))
 		return update_linux64_files;
 	if (!strcmp(platform, "win64") || !strcmp(platform, "win32"))
 		return update_win_files;
+	if (!strcmp(platform, "macos"))
+		return update_macos_files;
 	return NULL;
 }
 
@@ -2640,9 +2901,9 @@ static qboolean M_Update_CopyHelperRuntimeFiles(const char *platform,
 	return true;
 }
 
-static qboolean M_Update_AddApplyFile(updateapplymanifest_t *manifest,
-	const char *src, const char *dst, qboolean executable, char *error,
-	size_t error_size)
+static qboolean M_Update_AddApplyEntry(updateapplymanifest_t *manifest,
+	updateapplykind_t kind, const char *src, const char *dst,
+	qboolean executable, char *error, size_t error_size)
 {
 	updateapplyfile_t *file;
 
@@ -2660,6 +2921,7 @@ static qboolean M_Update_AddApplyFile(updateapplymanifest_t *manifest,
 
 	file = &manifest->files[manifest->num_files++];
 	memset(file, 0, sizeof(*file));
+	file->kind = kind;
 	if (q_strlcpy(file->src, src, sizeof(file->src)) >=
 		sizeof(file->src) ||
 		q_strlcpy(file->dst, dst, sizeof(file->dst)) >= sizeof(file->dst))
@@ -2670,6 +2932,28 @@ static qboolean M_Update_AddApplyFile(updateapplymanifest_t *manifest,
 	}
 	file->executable = executable;
 	return true;
+}
+
+static qboolean M_Update_AddApplyFile(updateapplymanifest_t *manifest,
+	const char *src, const char *dst, qboolean executable, char *error,
+	size_t error_size)
+{
+	return M_Update_AddApplyEntry(manifest, UPDATE_APPLY_FILE, src, dst,
+		executable, error, error_size);
+}
+
+static qboolean M_Update_AddApplyTree(updateapplymanifest_t *manifest,
+	const char *src, const char *dst, char *error, size_t error_size)
+{
+	if (!M_Update_MacOSBundleNameOkay(src) ||
+		!M_Update_MacOSBundleNameOkay(dst))
+	{
+		q_snprintf(error, error_size, "invalid update bundle mapping: %s",
+			src ? src : "(null)");
+		return false;
+	}
+	return M_Update_AddApplyEntry(manifest, UPDATE_APPLY_TREE, src, dst,
+		false, error, error_size);
 }
 
 static qboolean M_Update_IsWindowsImageFile(const char *name)
@@ -2719,6 +3003,36 @@ static qboolean M_Update_ParseManifestBool(const char *value, qboolean *out)
 	return false;
 }
 
+static const char *M_Update_RelaunchKindName(updaterelaunchkind_t kind)
+{
+	switch (kind)
+	{
+	case UPDATE_RELAUNCH_APP_BUNDLE:
+		return "app_bundle";
+	case UPDATE_RELAUNCH_PROGRAM:
+	default:
+		return "program";
+	}
+}
+
+static qboolean M_Update_ParseRelaunchKind(const char *value,
+	updaterelaunchkind_t *out)
+{
+	if (!value || !out)
+		return false;
+	if (!strcmp(value, "program"))
+	{
+		*out = UPDATE_RELAUNCH_PROGRAM;
+		return true;
+	}
+	if (!strcmp(value, "app_bundle"))
+	{
+		*out = UPDATE_RELAUNCH_APP_BUNDLE;
+		return true;
+	}
+	return false;
+}
+
 static qboolean M_Update_ParseManifestUnsignedLong(const char *value,
 	unsigned long *out)
 {
@@ -2758,6 +3072,90 @@ static qboolean M_Update_BuildApplyFileList(updateapplymanifest_t *manifest,
 	const char *package_exe = M_Update_PackageExecutableName(platform);
 	const char *const *files = M_Update_FileListForPlatform(platform);
 	int i;
+
+	if (!strcmp(platform, "macos"))
+	{
+		char macos_bundle_name[64];
+
+		if (!M_Update_MacOSBundleNameOkay(live_exe_name))
+		{
+			q_strlcpy(error,
+				"current macOS app bundle name is not safe to update",
+				error_size);
+			return false;
+		}
+		if (!M_Update_FindMacOSBundleInExtract(extract_dir,
+			macos_bundle_name, sizeof(macos_bundle_name), error,
+			error_size))
+			return false;
+		for (i = 0; files && files[i]; i++)
+		{
+			if (!M_Update_FileExists(extract_dir, files[i]))
+			{
+				q_snprintf(error, error_size,
+					"staged package missing %s", files[i]);
+				return false;
+			}
+			if (!M_Update_AddApplyFile(manifest, files[i], files[i],
+				false, error, error_size))
+				return false;
+		}
+		if (!M_Update_AddApplyTree(manifest, macos_bundle_name,
+			live_exe_name, error, error_size))
+			return false;
+		{
+			updateapplyfile_t *bundle_file =
+				&manifest->files[manifest->num_files - 1];
+			char bundle_path[MAX_OSPATH];
+			char bundle_exe[MAX_OSPATH];
+
+			if (!M_Update_JoinPath(bundle_path, sizeof(bundle_path),
+				extract_dir, bundle_file->src) ||
+				!M_Update_BundleExecutablePath(bundle_path,
+				bundle_exe, sizeof(bundle_exe)))
+			{
+				q_strlcpy(error, "staged app bundle path too long",
+					error_size);
+				return false;
+			}
+			if (!M_Update_SHA256FileHex(bundle_exe,
+				bundle_file->sha256,
+				sizeof(bundle_file->sha256)))
+			{
+				q_snprintf(error, error_size,
+					"unable to hash staged app executable: %s",
+					bundle_file->src);
+				return false;
+			}
+		}
+		for (i = 0; i < manifest->num_files; i++)
+		{
+			char src_path[MAX_OSPATH];
+
+			if (manifest->files[i].kind != UPDATE_APPLY_FILE)
+				continue;
+			if (!M_Update_JoinPath(src_path, sizeof(src_path),
+				extract_dir, manifest->files[i].src))
+			{
+				q_strlcpy(error, "staged source path too long",
+					error_size);
+				return false;
+			}
+			if (!M_Update_SHA256FileHex(src_path,
+				manifest->files[i].sha256,
+				sizeof(manifest->files[i].sha256)))
+			{
+				q_snprintf(error, error_size,
+					"unable to hash staged file: %s",
+					manifest->files[i].src);
+				return false;
+			}
+		}
+		q_strlcpy(manifest->relaunch_dst, live_exe_name,
+			sizeof(manifest->relaunch_dst));
+		manifest->relaunch_kind = UPDATE_RELAUNCH_APP_BUNDLE;
+		return true;
+	}
 
 	if (!package_exe || !files)
 	{
@@ -2847,16 +3245,30 @@ static qboolean M_Update_WriteApplyManifest(const updateapplymanifest_t *manifes
 		fprintf(f, "recovery_manifest=%s\n",
 			manifest->recovery_manifest);
 	fprintf(f, "relaunch_dst=%s\n", manifest->relaunch_dst);
+	fprintf(f, "relaunch_kind=%s\n",
+		M_Update_RelaunchKindName(manifest->relaunch_kind));
 	fprintf(f, "complete=%d\n", manifest->complete ? 1 : 0);
 	fprintf(f, "startup_attempted=%d\n",
 		manifest->startup_attempted ? 1 : 0);
 	fprintf(f, "startup_confirmed=%d\n",
 		manifest->startup_confirmed ? 1 : 0);
 	for (i = 0; i < manifest->num_files; i++)
-		fprintf(f, "file=%s|%s|%d|%d|%d|%s\n", manifest->files[i].src,
-			manifest->files[i].dst, manifest->files[i].executable ? 1 : 0,
-			manifest->files[i].backup_exists ? 1 : 0,
-			manifest->files[i].applied ? 1 : 0, manifest->files[i].sha256);
+	{
+		if (manifest->files[i].kind == UPDATE_APPLY_TREE)
+			fprintf(f, "tree=%s|%s|%d|%d|%s\n",
+				manifest->files[i].src,
+				manifest->files[i].dst,
+				manifest->files[i].backup_exists ? 1 : 0,
+				manifest->files[i].applied ? 1 : 0,
+				manifest->files[i].sha256);
+		else
+			fprintf(f, "file=%s|%s|%d|%d|%d|%s\n",
+				manifest->files[i].src, manifest->files[i].dst,
+				manifest->files[i].executable ? 1 : 0,
+				manifest->files[i].backup_exists ? 1 : 0,
+				manifest->files[i].applied ? 1 : 0,
+				manifest->files[i].sha256);
+	}
 
 	{
 		char flush_error[256] = "";
@@ -2937,6 +3349,7 @@ static qboolean M_Update_ReadApplyFileLine(updateapplymanifest_t *manifest,
 
 	file = &manifest->files[manifest->num_files++];
 	memset(file, 0, sizeof(*file));
+	file->kind = UPDATE_APPLY_FILE;
 	if (q_strlcpy(file->src, fields[0], sizeof(file->src)) >=
 		sizeof(file->src) ||
 		q_strlcpy(file->dst, fields[1], sizeof(file->dst)) >=
@@ -2972,6 +3385,80 @@ static qboolean M_Update_ReadApplyFileLine(updateapplymanifest_t *manifest,
 			return false;
 		}
 		q_strlcpy(file->sha256, fields[5], sizeof(file->sha256));
+	}
+	return true;
+}
+
+static qboolean M_Update_ReadApplyTreeLine(updateapplymanifest_t *manifest,
+	const char *value)
+{
+	char line[256];
+	char *fields[5];
+	char *cursor;
+	updateapplyfile_t *file;
+	int num_fields = 0;
+	int i;
+	qboolean bool_value;
+
+	if (manifest->num_files >= UPDATE_MAX_APPLY_FILES)
+		return false;
+	if (q_strlcpy(line, value, sizeof(line)) >= sizeof(line))
+		return false;
+
+	cursor = line;
+	for (;;)
+	{
+		char *separator;
+
+		if (num_fields >= (int)(sizeof(fields) / sizeof(fields[0])))
+			return false;
+		fields[num_fields++] = cursor;
+		separator = strchr(cursor, '|');
+		if (!separator)
+			break;
+		*separator++ = '\0';
+		cursor = separator;
+	}
+
+	if ((num_fields != 4 && num_fields != 5) ||
+		!M_Update_MacOSBundleNameOkay(fields[0]) ||
+		!M_Update_MacOSBundleNameOkay(fields[1]))
+		return false;
+	for (i = 0; i < manifest->num_files; i++)
+		if (!q_strcasecmp(manifest->files[i].dst, fields[1]))
+			return false;
+
+	file = &manifest->files[manifest->num_files++];
+	memset(file, 0, sizeof(*file));
+	file->kind = UPDATE_APPLY_TREE;
+	if (q_strlcpy(file->src, fields[0], sizeof(file->src)) >=
+		sizeof(file->src) ||
+		q_strlcpy(file->dst, fields[1], sizeof(file->dst)) >=
+		sizeof(file->dst))
+	{
+		manifest->num_files--;
+		return false;
+	}
+	if (!M_Update_ParseManifestBool(fields[2], &bool_value))
+	{
+		manifest->num_files--;
+		return false;
+	}
+	file->backup_exists = bool_value;
+	if (!M_Update_ParseManifestBool(fields[3], &bool_value))
+	{
+		manifest->num_files--;
+		return false;
+	}
+	file->applied = bool_value;
+	if (num_fields >= 5)
+	{
+		if (fields[4][0] && !M_Update_SHA256StringOkay(fields[4]))
+		{
+			manifest->num_files--;
+			return false;
+		}
+		q_strlcpy(file->sha256, fields[4], sizeof(file->sha256));
 	}
 	return true;
 }
@@ -3036,6 +3523,10 @@ static qboolean M_Update_ReadApplyManifest(const char *manifest_path,
 			!M_Update_CopyManifestValue(manifest->relaunch_dst,
 			sizeof(manifest->relaunch_dst), value))
 			goto invalid_value;
+		else if (!strcmp(line, "relaunch_kind") &&
+			!M_Update_ParseRelaunchKind(value,
+			&manifest->relaunch_kind))
+			goto invalid_value;
 		else if (!strcmp(line, "complete"))
 		{
 			qboolean bool_value;
@@ -3068,6 +3559,14 @@ static qboolean M_Update_ReadApplyManifest(const char *manifest_path,
 				error_size);
 			return false;
 		}
+		else if (!strcmp(line, "tree") &&
+			!M_Update_ReadApplyTreeLine(manifest, value))
+		{
+			fclose(f);
+			q_strlcpy(error, "invalid update manifest tree entry",
+				error_size);
+			return false;
+		}
 	}
 
 	fclose(f);
@@ -3075,6 +3574,9 @@ static qboolean M_Update_ReadApplyManifest(const char *manifest_path,
 		!manifest->backup_dir[0] || manifest->num_files <= 0 ||
 		(manifest->relaunch_dst[0] &&
 		!M_Update_RootFileNameOkay(manifest->relaunch_dst)) ||
+		(manifest->relaunch_kind == UPDATE_RELAUNCH_APP_BUNDLE &&
+		(!manifest->relaunch_dst[0] ||
+		!M_Update_MacOSBundleNameOkay(manifest->relaunch_dst))) ||
 		((manifest->startup_attempted || manifest->startup_confirmed) &&
 		!manifest->complete) ||
 		(manifest->startup_confirmed && !manifest->startup_attempted))
@@ -3397,19 +3899,218 @@ static void M_Update_HelperLogFileDiag(FILE *log, const char *label,
 #endif
 }
 
+static const char *M_Update_ApplyKindName(updateapplykind_t kind)
+{
+	switch (kind)
+	{
+	case UPDATE_APPLY_TREE:
+		return "tree";
+	case UPDATE_APPLY_FILE:
+	default:
+		return "file";
+	}
+}
+
+static qboolean M_Update_ManifestHasTree(
+	const updateapplymanifest_t *manifest)
+{
+	int i;
+
+	for (i = 0; i < manifest->num_files; i++)
+		if (manifest->files[i].kind == UPDATE_APPLY_TREE)
+			return true;
+	return false;
+}
+
+static qboolean M_Update_MoveTreeAtomic(const char *src, const char *dst,
+	char *error, size_t error_size)
+{
+	if (Sys_FileType(dst))
+	{
+		q_snprintf(error, error_size, "tree target already exists: %s",
+			dst);
+		return false;
+	}
+
+#ifdef _WIN32
+	if (MoveFileExA(src, dst, MOVEFILE_WRITE_THROUGH))
+		return true;
+	q_snprintf(error, error_size, "unable to move tree %s -> %s: %lu (%s)",
+		src, dst, (unsigned long)GetLastError(),
+		M_Update_WinErrorName(GetLastError()));
+	return false;
+#else
+	if (rename(src, dst) == 0)
+	{
+		M_Update_SyncDirectoryForPath(src);
+		M_Update_SyncDirectoryForPath(dst);
+		return true;
+	}
+	if (errno == EXDEV)
+		q_snprintf(error, error_size,
+			"unable to move tree across filesystems: %s", dst);
+	else
+		q_snprintf(error, error_size, "unable to move tree %s -> %s: %s",
+			src, dst, strerror(errno));
+	return false;
+#endif
+}
+
+static qboolean M_Update_RemoveApplyPath(const updateapplyfile_t *file,
+	const char *path, char *error, size_t error_size)
+{
+	int type = Sys_FileType(path);
+
+	if (!type)
+		return true;
+	if (file->kind == UPDATE_APPLY_TREE)
+	{
+		if (!(type & FS_ENT_DIRECTORY))
+		{
+			q_snprintf(error, error_size,
+				"live target is not a directory: %s", file->dst);
+			return false;
+		}
+		if (!M_Update_RemoveTree(path))
+		{
+			q_snprintf(error, error_size,
+				"unable to remove directory tree: %s", path);
+			return false;
+		}
+		return true;
+	}
+
+	if (M_Update_RemoveFile(path) != 0 && errno != ENOENT)
+	{
+		q_snprintf(error, error_size, "unable to remove file: %s", path);
+		return false;
+	}
+	return true;
+}
+
+static qboolean M_Update_BackupApplyEntry(updateapplyfile_t *file,
+	const char *live_path, const char *backup_path, char *error,
+	size_t error_size)
+{
+	int live_type = Sys_FileType(live_path);
+
+	if (file->kind == UPDATE_APPLY_TREE)
+	{
+		if (!(live_type & FS_ENT_DIRECTORY))
+			return true;
+		if (Sys_FileType(backup_path) && !M_Update_RemoveTree(backup_path))
+		{
+			q_snprintf(error, error_size,
+				"unable to remove stale backup tree: %s", backup_path);
+			return false;
+		}
+		if (!M_Update_MoveTreeAtomic(live_path, backup_path, error,
+			error_size))
+			return false;
+		file->backup_exists = true;
+		return true;
+	}
+
+	if (live_type & FS_ENT_FILE)
+	{
+		if (!M_Update_CopyFileAtomic(live_path, backup_path,
+			file->executable, error, error_size))
+			return false;
+		file->backup_exists = true;
+	}
+	return true;
+}
+
+static qboolean M_Update_ApplyEntry(const updateapplyfile_t *file,
+	const char *src_path, const char *live_path, char *error,
+	size_t error_size)
+{
+	if (file->kind == UPDATE_APPLY_TREE)
+	{
+		if (!M_Update_RemoveApplyPath(file, live_path, error, error_size))
+			return false;
+		return M_Update_MoveTreeAtomic(src_path, live_path, error,
+			error_size);
+	}
+	return M_Update_CopyFileAtomic(src_path, live_path, file->executable,
+		error, error_size);
+}
+
+static qboolean M_Update_RestoreApplyEntry(const updateapplyfile_t *file,
+	const char *live_path, const char *backup_path, char *error,
+	size_t error_size)
+{
+	if (file->backup_exists)
+	{
+		if (file->kind == UPDATE_APPLY_TREE)
+		{
+			if (!M_Update_RemoveApplyPath(file, live_path, error,
+				error_size))
+				return false;
+			return M_Update_MoveTreeAtomic(backup_path, live_path,
+				error, error_size);
+		}
+		return M_Update_CopyFileAtomic(backup_path, live_path,
+			file->executable, error, error_size);
+	}
+
+	return M_Update_RemoveApplyPath(file, live_path, error, error_size);
+}
+
+static qboolean M_Update_HelperPreflightStorage(
+	const updateapplymanifest_t *manifest, FILE *log, char *error,
+	size_t error_size)
+{
+#ifndef _WIN32
+	struct stat live_st;
+	struct stat extract_st;
+
+	if (!M_Update_ManifestHasTree(manifest))
+		return true;
+	if (stat(manifest->live_dir, &live_st) != 0)
+	{
+		q_snprintf(error, error_size, "unable to stat install root: %s",
+			strerror(errno));
+		return false;
+	}
+	if (stat(manifest->extract_dir, &extract_st) != 0)
+	{
+		q_snprintf(error, error_size, "unable to stat staging root: %s",
+			strerror(errno));
+		return false;
+	}
+	if (live_st.st_dev != extract_st.st_dev)
+	{
+		q_strlcpy(error,
+			"bundle staging and install root are on different filesystems",
+			error_size);
+		M_Update_HelperLog(log,
+			"preflight failed: tree move would cross filesystems\n");
+		return false;
+	}
+#else
+	(void)manifest;
+	(void)log;
+	(void)error;
+	(void)error_size;
+#endif
+	return true;
+}
+
 static qboolean M_Update_HelperPreflightTargets(
 	const updateapplymanifest_t *manifest, FILE *log, char *error,
 	size_t error_size)
 {
 	int i;
 
-	M_Update_HelperLog(log, "preflight: checking %d target file(s)\n",
+	M_Update_HelperLog(log, "preflight: checking %d update item(s)\n",
 		manifest->num_files);
 	for (i = 0; i < manifest->num_files; i++)
 	{
 		char src_path[MAX_OSPATH];
 		char live_path[MAX_OSPATH];
 		int live_type;
+		int src_type;
 
 		if (!M_Update_JoinPath(src_path, sizeof(src_path),
 			manifest->extract_dir, manifest->files[i].src) ||
@@ -3421,7 +4122,34 @@ static qboolean M_Update_HelperPreflightTargets(
 			return false;
 		}
 
-		if (!(Sys_FileType(src_path) & FS_ENT_FILE))
+		src_type = Sys_FileType(src_path);
+		if (manifest->files[i].kind == UPDATE_APPLY_TREE)
+		{
+			if (!(src_type & FS_ENT_DIRECTORY))
+			{
+				q_snprintf(error, error_size,
+					"staged tree missing: %s",
+					manifest->files[i].src);
+				M_Update_HelperLog(log,
+					"preflight failed for %s: %s\n",
+					manifest->files[i].dst, error);
+				M_Update_HelperLogFileDiag(log, "staged-src",
+					src_path);
+				return false;
+			}
+			if (!M_Update_ValidateMacOSBundleInExtract(
+				manifest->extract_dir, manifest->files[i].src,
+				error, error_size))
+			{
+				M_Update_HelperLog(log,
+					"preflight failed for %s: %s\n",
+					manifest->files[i].dst, error);
+				M_Update_HelperLogFileDiag(log, "staged-src",
+					src_path);
+				return false;
+			}
+		}
+		else if (!(src_type & FS_ENT_FILE))
 		{
 			q_snprintf(error, error_size, "staged file missing: %s",
 				manifest->files[i].src);
@@ -3432,7 +4160,21 @@ static qboolean M_Update_HelperPreflightTargets(
 		}
 
 		live_type = Sys_FileType(live_path);
-		if (live_type && !(live_type & FS_ENT_FILE))
+		if (manifest->files[i].kind == UPDATE_APPLY_TREE)
+		{
+			if (live_type && !(live_type & FS_ENT_DIRECTORY))
+			{
+				q_snprintf(error, error_size,
+					"live target is not a directory: %s",
+					manifest->files[i].dst);
+				M_Update_HelperLog(log,
+					"preflight failed for %s: %s\n",
+					manifest->files[i].dst, error);
+				M_Update_HelperLogFileDiag(log, "live", live_path);
+				return false;
+			}
+		}
+		else if (live_type && !(live_type & FS_ENT_FILE))
 		{
 			q_snprintf(error, error_size,
 				"live target is not a regular file: %s",
@@ -3444,7 +4186,8 @@ static qboolean M_Update_HelperPreflightTargets(
 		}
 
 #ifdef _WIN32
-		if (live_type & FS_ENT_FILE)
+		if (manifest->files[i].kind == UPDATE_APPLY_FILE &&
+			(live_type & FS_ENT_FILE))
 		{
 			DWORD err = ERROR_SUCCESS;
 			DWORD waited_ms = 0;
@@ -3535,8 +4278,8 @@ static qboolean M_Update_HelperRestore(updateapplymanifest_t *manifest,
 		if (manifest->files[i].backup_exists)
 		{
 			char restore_error[256] = "";
-			if (!M_Update_CopyFileAtomic(backup_path, live_path,
-				manifest->files[i].executable, restore_error,
+			if (!M_Update_RestoreApplyEntry(&manifest->files[i],
+				live_path, backup_path, restore_error,
 				sizeof(restore_error)))
 			{
 				M_Update_HelperLog(log, "restore failed for %s: %s\n",
@@ -3544,11 +4287,19 @@ static qboolean M_Update_HelperRestore(updateapplymanifest_t *manifest,
 				ok = false;
 			}
 		}
-		else if (M_Update_RemoveFile(live_path) != 0 && errno != ENOENT)
+		else
 		{
-			M_Update_HelperLog(log, "remove failed during restore for %s\n",
-				live_path);
-			ok = false;
+			char restore_error[256] = "";
+
+			if (!M_Update_RestoreApplyEntry(&manifest->files[i],
+				live_path, backup_path, restore_error,
+				sizeof(restore_error)))
+			{
+				M_Update_HelperLog(log,
+					"remove failed during restore for %s: %s\n",
+					live_path, restore_error);
+				ok = false;
+			}
 		}
 	}
 
@@ -3558,16 +4309,26 @@ static qboolean M_Update_HelperRestore(updateapplymanifest_t *manifest,
 	return ok;
 }
 
+static void M_Update_RecordRollbackComplete(qboolean restored,
+	qboolean *rollback_complete)
+{
+	if (restored && rollback_complete)
+		*rollback_complete = true;
+}
+
 static qboolean M_Update_HelperApply(updateapplymanifest_t *manifest,
-	FILE *log, char *error, size_t error_size)
+	FILE *log, char *error, size_t error_size, qboolean *rollback_complete)
 {
 	int i;
 	char probe_error[256] = "";
 
+	if (rollback_complete)
+		*rollback_complete = false;
+
 	M_Update_HelperLog(log, "apply: live_dir=%s\n", manifest->live_dir);
 	M_Update_HelperLog(log, "apply: extract_dir=%s\n", manifest->extract_dir);
 	M_Update_HelperLog(log, "apply: backup_dir=%s\n", manifest->backup_dir);
-	M_Update_HelperLog(log, "apply: %d file(s) to replace\n",
+	M_Update_HelperLog(log, "apply: %d update item(s) to replace\n",
 		manifest->num_files);
 	if (M_Update_DirectoryWritable(manifest->live_dir, probe_error,
 		sizeof(probe_error)))
@@ -3576,6 +4337,8 @@ static qboolean M_Update_HelperApply(updateapplymanifest_t *manifest,
 		M_Update_HelperLog(log, "apply: live_dir create-file probe FAILED: %s\n",
 			probe_error);
 
+	if (!M_Update_HelperPreflightStorage(manifest, log, error, error_size))
+		return false;
 	if (!M_Update_HelperPreflightTargets(manifest, log, error, error_size))
 		return false;
 
@@ -3601,19 +4364,64 @@ static qboolean M_Update_HelperApply(updateapplymanifest_t *manifest,
 			manifest->backup_dir, manifest->files[i].dst))
 		{
 			q_strlcpy(error, "update path too long", error_size);
-			M_Update_HelperRestore(manifest, i, log, error, error_size);
+			M_Update_RecordRollbackComplete(
+				M_Update_HelperRestore(manifest, i, log, error,
+				error_size), rollback_complete);
 			return false;
 		}
 
-		if (!(Sys_FileType(src_path) & FS_ENT_FILE))
+		if (manifest->files[i].kind == UPDATE_APPLY_TREE)
+		{
+			if (!(Sys_FileType(src_path) & FS_ENT_DIRECTORY))
+			{
+				q_snprintf(error, error_size, "staged tree missing: %s",
+					manifest->files[i].src);
+				M_Update_RecordRollbackComplete(
+					M_Update_HelperRestore(manifest, i, log, error,
+					error_size), rollback_complete);
+				return false;
+			}
+			if (manifest->files[i].sha256[0])
+			{
+				char bundle_exe[MAX_OSPATH];
+
+				if (!M_Update_BundleExecutablePath(src_path,
+					bundle_exe, sizeof(bundle_exe)))
+				{
+					q_strlcpy(error,
+						"staged app executable path too long",
+						error_size);
+					M_Update_RecordRollbackComplete(
+						M_Update_HelperRestore(manifest, i, log,
+						error, error_size), rollback_complete);
+					return false;
+				}
+				if (!M_VerifySHA256File(bundle_exe,
+					manifest->files[i].sha256, false, NULL))
+				{
+					q_snprintf(error, error_size,
+						"staged app executable failed verification: %s",
+						manifest->files[i].src);
+					M_Update_HelperLog(log, "%s\n", error);
+					M_Update_RecordRollbackComplete(
+						M_Update_HelperRestore(manifest, i, log,
+						error, error_size), rollback_complete);
+					return false;
+				}
+			}
+		}
+		else if (!(Sys_FileType(src_path) & FS_ENT_FILE))
 		{
 			q_snprintf(error, error_size, "staged file missing: %s",
 				manifest->files[i].src);
-			M_Update_HelperRestore(manifest, i, log, error, error_size);
+			M_Update_RecordRollbackComplete(
+				M_Update_HelperRestore(manifest, i, log, error,
+				error_size), rollback_complete);
 			return false;
 		}
 
-		if (manifest->files[i].sha256[0] &&
+		if (manifest->files[i].kind == UPDATE_APPLY_FILE &&
+			manifest->files[i].sha256[0] &&
 			!M_VerifySHA256File(src_path, manifest->files[i].sha256, false,
 			NULL))
 		{
@@ -3621,50 +4429,58 @@ static qboolean M_Update_HelperApply(updateapplymanifest_t *manifest,
 				"staged file failed verification: %s",
 				manifest->files[i].src);
 			M_Update_HelperLog(log, "%s\n", error);
-			M_Update_HelperRestore(manifest, i, log, error, error_size);
+			M_Update_RecordRollbackComplete(
+				M_Update_HelperRestore(manifest, i, log, error,
+				error_size), rollback_complete);
 			return false;
 		}
 
-		if (Sys_FileType(live_path) & FS_ENT_FILE)
+		if (Sys_FileType(live_path))
 		{
-			if (!M_Update_CopyFileAtomic(live_path, backup_path,
-				manifest->files[i].executable, error, error_size))
+			if (!M_Update_BackupApplyEntry(&manifest->files[i],
+				live_path, backup_path, error, error_size))
 			{
 				M_Update_HelperLog(log, "backup failed for %s: %s\n",
 					manifest->files[i].dst, error);
 				M_Update_HelperLogFileDiag(log, "live", live_path);
 				M_Update_HelperLogFileDiag(log, "backup-dst", backup_path);
-				M_Update_HelperRestore(manifest, i, log, error, error_size);
+				M_Update_RecordRollbackComplete(
+					M_Update_HelperRestore(manifest, i, log, error,
+					error_size), rollback_complete);
 				return false;
 			}
-			manifest->files[i].backup_exists = true;
 			if (!M_Update_WriteRecoveryManifest(manifest, log, error,
 				error_size))
 			{
-				M_Update_HelperRestore(manifest, i, log, error,
-					error_size);
+				M_Update_RecordRollbackComplete(
+					M_Update_HelperRestore(manifest, i + 1, log,
+					error, error_size), rollback_complete);
 				return false;
 			}
 		}
 
-		M_Update_HelperLog(log, "applying %s -> %s\n",
+		M_Update_HelperLog(log, "applying %s %s -> %s\n",
+			M_Update_ApplyKindName(manifest->files[i].kind),
 			manifest->files[i].src, manifest->files[i].dst);
 		manifest->files[i].applied = true;
 		if (!M_Update_WriteRecoveryManifest(manifest, log, error,
 			error_size))
 		{
-			M_Update_HelperRestore(manifest, i + 1, log, error,
-				error_size);
+			M_Update_RecordRollbackComplete(
+				M_Update_HelperRestore(manifest, i + 1, log, error,
+				error_size), rollback_complete);
 			return false;
 		}
-		if (!M_Update_CopyFileAtomic(src_path, live_path,
-			manifest->files[i].executable, error, error_size))
+		if (!M_Update_ApplyEntry(&manifest->files[i], src_path,
+			live_path, error, error_size))
 		{
 			M_Update_HelperLog(log, "apply failed for %s: %s\n",
 				manifest->files[i].dst, error);
 			M_Update_HelperLogFileDiag(log, "live", live_path);
 			M_Update_HelperLogFileDiag(log, "staged-src", src_path);
-			M_Update_HelperRestore(manifest, i + 1, log, error, error_size);
+			M_Update_RecordRollbackComplete(
+				M_Update_HelperRestore(manifest, i + 1, log, error,
+				error_size), rollback_complete);
 			return false;
 		}
 	}
@@ -3674,8 +4490,9 @@ static qboolean M_Update_HelperApply(updateapplymanifest_t *manifest,
 	manifest->startup_confirmed = false;
 	if (!M_Update_WriteRecoveryManifest(manifest, log, error, error_size))
 	{
-		M_Update_HelperRestore(manifest, manifest->num_files, log, error,
-			error_size);
+		M_Update_RecordRollbackComplete(
+			M_Update_HelperRestore(manifest, manifest->num_files, log,
+			error, error_size), rollback_complete);
 		return false;
 	}
 
@@ -3694,7 +4511,11 @@ static qboolean M_Update_RestoreAppliedFiles(updateapplymanifest_t *manifest,
 		char backup_path[MAX_OSPATH];
 
 		if (!manifest->files[i].applied)
-			continue;
+		{
+			if (!(manifest->files[i].kind == UPDATE_APPLY_TREE &&
+				manifest->files[i].backup_exists))
+				continue;
+		}
 		if (!M_Update_JoinPath(live_path, sizeof(live_path),
 			manifest->live_dir, manifest->files[i].dst) ||
 			!M_Update_JoinPath(backup_path, sizeof(backup_path),
@@ -3708,8 +4529,8 @@ static qboolean M_Update_RestoreAppliedFiles(updateapplymanifest_t *manifest,
 		{
 			char restore_error[256] = "";
 
-			if (!M_Update_CopyFileAtomic(backup_path, live_path,
-				manifest->files[i].executable, restore_error,
+			if (!M_Update_RestoreApplyEntry(&manifest->files[i],
+				live_path, backup_path, restore_error,
 				sizeof(restore_error)))
 			{
 				M_Update_HelperLog(log, "startup restore failed for %s: %s\n",
@@ -3717,11 +4538,19 @@ static qboolean M_Update_RestoreAppliedFiles(updateapplymanifest_t *manifest,
 				ok = false;
 			}
 		}
-		else if (M_Update_RemoveFile(live_path) != 0 && errno != ENOENT)
+		else
 		{
-			M_Update_HelperLog(log, "startup restore remove failed for %s\n",
-				live_path);
-			ok = false;
+			char restore_error[256] = "";
+
+			if (!M_Update_RestoreApplyEntry(&manifest->files[i],
+				live_path, backup_path, restore_error,
+				sizeof(restore_error)))
+			{
+				M_Update_HelperLog(log,
+					"startup restore remove failed for %s: %s\n",
+					live_path, restore_error);
+				ok = false;
+			}
 		}
 	}
 
@@ -3881,8 +4710,14 @@ static qboolean M_Update_ManifestHasAppliedImage(
 	int i;
 
 	for (i = 0; i < manifest->num_files; i++)
+	{
 		if (manifest->files[i].applied && manifest->files[i].executable)
 			return true;
+		if (manifest->files[i].kind == UPDATE_APPLY_TREE &&
+			(manifest->files[i].applied ||
+			manifest->files[i].backup_exists))
+			return true;
+	}
 	return false;
 }
 
@@ -4016,8 +4851,22 @@ static void M_Update_ReleaseStartupLock(void)
 	}
 }
 
-static qboolean M_Update_LaunchRestoredBuild(
-	const updateapplymanifest_t *manifest, char *error, size_t error_size)
+static qboolean M_Update_BundleExecutablePath(const char *bundle_path,
+	char *out, size_t outsize)
+{
+	char contents[MAX_OSPATH];
+	char macos[MAX_OSPATH];
+
+	return M_Update_JoinPath(contents, sizeof(contents), bundle_path,
+		"Contents") &&
+		M_Update_JoinPath(macos, sizeof(macos), contents, "MacOS") &&
+		M_Update_JoinPath(out, outsize, macos,
+		UPDATE_MACOS_BUNDLE_EXECUTABLE);
+}
+
+static qboolean M_Update_ManifestRelaunchPath(
+	const updateapplymanifest_t *manifest, qboolean selftest, char *out,
+	size_t outsize, char *error, size_t error_size)
 {
 	char relaunch_path[MAX_OSPATH];
 
@@ -4029,8 +4878,144 @@ static qboolean M_Update_LaunchRestoredBuild(
 			error_size);
 		return false;
 	}
+
+	if (manifest->relaunch_kind == UPDATE_RELAUNCH_APP_BUNDLE && selftest)
+	{
+		if (!M_Update_BundleExecutablePath(relaunch_path, out, outsize))
+		{
+			q_strlcpy(error, "app bundle executable path is too long",
+				error_size);
+			return false;
+		}
+		return true;
+	}
+
+	if (q_strlcpy(out, relaunch_path, outsize) >= outsize)
+	{
+		q_strlcpy(error, "relaunch path is too long", error_size);
+		return false;
+	}
+	return true;
+}
+
+static qboolean M_Update_LaunchAppBundle(const char *bundle_path,
+	char *error, size_t error_size)
+{
+#if defined(__APPLE__)
+	pid_t pid;
+	int status_pipe[2] = {-1, -1};
+	int child_errno = 0;
+	ssize_t nread;
+	int status = 0;
+
+	if (pipe(status_pipe) != 0)
+	{
+		q_snprintf(error, error_size, "pipe failed: %s", strerror(errno));
+		return false;
+	}
+	if (fcntl(status_pipe[1], F_SETFD, FD_CLOEXEC) == -1)
+	{
+		q_snprintf(error, error_size, "fcntl failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		return false;
+	}
+
+	pid = fork();
+	if (pid < 0)
+	{
+		q_snprintf(error, error_size, "fork failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		return false;
+	}
+	if (pid == 0)
+	{
+		ssize_t written;
+
+		close(status_pipe[0]);
+		execl("/usr/bin/open", "open", bundle_path, (char *)NULL);
+		child_errno = errno;
+		written = write(status_pipe[1], &child_errno,
+			sizeof(child_errno));
+		(void)written;
+		_exit(127);
+	}
+
+	close(status_pipe[1]);
+	do
+	{
+		nread = read(status_pipe[0], &child_errno, sizeof(child_errno));
+	} while (nread < 0 && errno == EINTR);
+	close(status_pipe[0]);
+
+	if (nread > 0)
+	{
+		waitpid(pid, NULL, 0);
+		q_snprintf(error, error_size, "open launch failed: %s",
+			strerror(child_errno));
+		return false;
+	}
+	if (nread < 0)
+	{
+		q_snprintf(error, error_size,
+			"unable to verify open launch: %s", strerror(errno));
+		return false;
+	}
+
+	{
+		pid_t result;
+
+		do
+		{
+			result = waitpid(pid, &status, 0);
+		} while (result < 0 && errno == EINTR);
+		if (result != pid)
+		{
+			q_snprintf(error, error_size, "open wait failed: %s",
+				strerror(errno));
+			return false;
+		}
+	}
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+	{
+		q_snprintf(error, error_size, "open launch failed with status %d",
+			WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+		return false;
+	}
+	return true;
+#else
+	(void)bundle_path;
+	q_strlcpy(error, "app bundle launch is only supported on macOS",
+		error_size);
+	return false;
+#endif
+}
+
+static qboolean M_Update_LaunchManifestTarget(
+	const updateapplymanifest_t *manifest, char *error, size_t error_size)
+{
+	char relaunch_path[MAX_OSPATH];
+
+	if (!M_Update_ManifestRelaunchPath(manifest, false, relaunch_path,
+		sizeof(relaunch_path), error, error_size))
+		return false;
+	if (manifest->relaunch_kind == UPDATE_RELAUNCH_APP_BUNDLE)
+		return M_Update_LaunchAppBundle(relaunch_path, error, error_size);
 	return Sys_LaunchProgram(relaunch_path, manifest->live_dir, error,
 		error_size);
+}
+
+static qboolean M_Update_LaunchRestoredBuild(
+	const updateapplymanifest_t *manifest, char *error, size_t error_size)
+{
+	if (!manifest->relaunch_dst[0])
+	{
+		q_strlcpy(error, "restored executable path is unavailable",
+			error_size);
+		return false;
+	}
+	return M_Update_LaunchManifestTarget(manifest, error, error_size);
 }
 
 void M_Update_RecoverAtStartup(void)
@@ -4045,7 +5030,9 @@ void M_Update_RecoverAtStartup(void)
 
 	if (!Sys_GetExecutablePath(current_exe, sizeof(current_exe)))
 		return;
-	M_Update_PathDirName(current_exe, live_dir, sizeof(live_dir));
+	if (!M_Update_DeriveLiveInstallPaths(current_exe, live_dir,
+		sizeof(live_dir), NULL, 0, error, sizeof(error)))
+		return;
 	if (!M_Update_BuildRecoveryPaths(live_dir, recovery_dir,
 		sizeof(recovery_dir), manifest_path, sizeof(manifest_path)))
 		return;
@@ -4208,7 +5195,9 @@ void M_Update_ConfirmStartup(void)
 
 	if (!Sys_GetExecutablePath(current_exe, sizeof(current_exe)))
 		return;
-	M_Update_PathDirName(current_exe, live_dir, sizeof(live_dir));
+	if (!M_Update_DeriveLiveInstallPaths(current_exe, live_dir,
+		sizeof(live_dir), NULL, 0, error, sizeof(error)))
+		return;
 	if (!M_Update_BuildRecoveryPaths(live_dir, recovery_dir,
 		sizeof(recovery_dir), manifest_path, sizeof(manifest_path)))
 		return;
@@ -4282,6 +5271,7 @@ static qboolean M_Update_PrepareApplyHelper(const updatereleaseinfo_t *info,
 	char backup_dir[MAX_OSPATH];
 	char log_path[MAX_OSPATH];
 	char recovery_manifest[MAX_OSPATH];
+	qboolean helper_runs_from_live_image = !strcmp(info->platform, "macos");
 	const char *helper_name =
 #ifdef _WIN32
 		"qssm-helper.exe";
@@ -4308,10 +5298,8 @@ static qboolean M_Update_PrepareApplyHelper(const updatereleaseinfo_t *info,
 
 	if (!M_Update_JoinPath(helper_dir, sizeof(helper_dir), absolute_stage_dir,
 		UPDATE_HELPER_DIR) ||
-		!M_Update_JoinPath(helper_path, helper_path_size, helper_dir,
-		helper_name) ||
 		!M_Update_JoinPath(manifest_path, manifest_path_size,
-			absolute_stage_dir, UPDATE_HELPER_MANIFEST) ||
+		absolute_stage_dir, UPDATE_HELPER_MANIFEST) ||
 		!M_Update_JoinPath(recovery_dir, sizeof(recovery_dir),
 			live_dir, UPDATE_RECOVERY_DIR) ||
 		!M_Update_JoinPath(backup_dir, sizeof(backup_dir),
@@ -4325,15 +5313,34 @@ static qboolean M_Update_PrepareApplyHelper(const updatereleaseinfo_t *info,
 		return false;
 	}
 
-	if (!M_Update_CreateDirectoryPath(helper_dir, error, error_size))
-		return false;
-
-	if (!M_Update_CopyFileAtomic(current_exe, helper_path, true, error,
-		error_size))
-		return false;
-	if (!M_Update_CopyHelperRuntimeFiles(info->platform, live_dir, extract_dir,
-		helper_dir, error, error_size))
-		return false;
+	if (helper_runs_from_live_image)
+	{
+		/* Keep @executable_path/../Frameworks valid for bundled macOS
+		 * frameworks such as SDL2 while the helper process starts. */
+		if (q_strlcpy(helper_path, current_exe, helper_path_size) >=
+			helper_path_size)
+		{
+			q_strlcpy(error, "update helper path too long", error_size);
+			return false;
+		}
+	}
+	else
+	{
+		if (!M_Update_JoinPath(helper_path, helper_path_size, helper_dir,
+			helper_name))
+		{
+			q_strlcpy(error, "update helper path too long", error_size);
+			return false;
+		}
+		if (!M_Update_CreateDirectoryPath(helper_dir, error, error_size))
+			return false;
+		if (!M_Update_CopyFileAtomic(current_exe, helper_path, true, error,
+			error_size))
+			return false;
+		if (!M_Update_CopyHelperRuntimeFiles(info->platform, live_dir,
+			extract_dir, helper_dir, error, error_size))
+			return false;
+	}
 
 	manifest.parent_pid = Sys_GetProcessId();
 	if (q_strlcpy(manifest.live_dir, live_dir, sizeof(manifest.live_dir)) >=
@@ -4364,11 +5371,11 @@ int M_UpdateHelperMain(int argc, char **argv)
 {
 	updateapplymanifest_t manifest;
 	char error[512] = "";
-	char relaunch_path[MAX_OSPATH];
 	char fallback_log_path[MAX_OSPATH] = "";
 	FILE *log = NULL;
 	updateapplylock_t apply_lock;
 	qboolean success;
+	qboolean rollback_complete = false;
 
 	if (argc < 3 || strcmp(argv[1], UPDATE_HELPER_ARG))
 		return 2;
@@ -4453,10 +5460,13 @@ int M_UpdateHelperMain(int argc, char **argv)
 		return 1;
 	}
 
-	success = M_Update_HelperApply(&manifest, log, error, sizeof(error));
+	success = M_Update_HelperApply(&manifest, log, error, sizeof(error),
+		&rollback_complete);
 	if (!success)
 	{
 		M_Update_ReleaseApplyLock(&apply_lock);
+		if (rollback_complete && M_Update_ManifestHasTree(&manifest))
+			M_Update_RemoveManifestRecoveryDir(&manifest);
 		M_Update_HelperLog(log, "update failed: %s\n", error);
 		if (log)
 			fclose(log);
@@ -4465,15 +5475,25 @@ int M_UpdateHelperMain(int argc, char **argv)
 	}
 
 	M_Update_HelperLog(log, "update applied successfully\n");
-	if (manifest.relaunch_dst[0] &&
-		M_Update_JoinPath(relaunch_path, sizeof(relaunch_path),
-		manifest.live_dir, manifest.relaunch_dst))
+	if (manifest.relaunch_dst[0])
 	{
+		char selftest_path[MAX_OSPATH];
 		char selftest_error[512] = "";
+		qboolean selftest_ok = false;
 
-		if (!Sys_RunUpdateSelfTest(relaunch_path, manifest.live_dir,
-			UPDATE_SELFTEST_ARG, UPDATE_SELFTEST_TIMEOUT_MS,
-			selftest_error, sizeof(selftest_error)))
+		if (M_Update_ManifestRelaunchPath(&manifest, true, selftest_path,
+			sizeof(selftest_path), selftest_error,
+			sizeof(selftest_error)))
+		{
+			/* For app bundles this direct exec validates the signed Mach-O
+			 * and embedded framework load path before LaunchServices opens it. */
+			selftest_ok = Sys_RunUpdateSelfTest(selftest_path,
+				manifest.live_dir, UPDATE_SELFTEST_ARG,
+				UPDATE_SELFTEST_TIMEOUT_MS, selftest_error,
+				sizeof(selftest_error));
+		}
+
+		if (!selftest_ok)
 		{
 			char rollback_error[512] = "";
 			qboolean rollback_ok;
@@ -4502,9 +5522,8 @@ int M_UpdateHelperMain(int argc, char **argv)
 					"self-test rollback restored previous files\n");
 				M_Update_ReleaseApplyLock(&apply_lock);
 				M_Update_RemoveManifestRecoveryDir(&manifest);
-				if (!Sys_LaunchProgram(relaunch_path,
-					manifest.live_dir, rollback_error,
-					sizeof(rollback_error)))
+				if (!M_Update_LaunchManifestTarget(&manifest,
+					rollback_error, sizeof(rollback_error)))
 				{
 					M_Update_HelperLog(log,
 						"restored build relaunch failed: %s\n",
@@ -4528,12 +5547,15 @@ int M_UpdateHelperMain(int argc, char **argv)
 			return 1;
 		}
 
-		if (!Sys_LaunchProgram(relaunch_path, manifest.live_dir, error,
+		/* Release before relaunch so startup recovery/confirmation can take
+		 * the same lock in the new process. */
+		M_Update_ReleaseApplyLock(&apply_lock);
+		if (!M_Update_LaunchManifestTarget(&manifest, error,
 			sizeof(error)))
 			M_Update_HelperLog(log, "relaunch failed: %s\n", error);
 	}
-
-	M_Update_ReleaseApplyLock(&apply_lock);
+	else
+		M_Update_ReleaseApplyLock(&apply_lock);
 	if (log)
 		fclose(log);
 	return 0;
@@ -5319,6 +6341,120 @@ static void M_Update_CopyExtractError(char *error, size_t error_size)
 		q_strlcpy(error, "extract failed", error_size);
 }
 
+static qboolean M_Update_ExtractWithDitto(const char *zip_path,
+	const char *extract_dir, char *error, size_t error_size)
+{
+#if defined(__APPLE__)
+	pid_t pid;
+	int status_pipe[2] = {-1, -1};
+	int child_errno = 0;
+	ssize_t nread;
+	int status = 0;
+
+	if (pipe(status_pipe) != 0)
+	{
+		q_snprintf(error, error_size, "pipe failed: %s", strerror(errno));
+		return false;
+	}
+	if (fcntl(status_pipe[1], F_SETFD, FD_CLOEXEC) == -1)
+	{
+		q_snprintf(error, error_size, "fcntl failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		return false;
+	}
+
+	pid = fork();
+	if (pid < 0)
+	{
+		q_snprintf(error, error_size, "fork failed: %s", strerror(errno));
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		return false;
+	}
+	if (pid == 0)
+	{
+		ssize_t written;
+
+		close(status_pipe[0]);
+		execl("/usr/bin/ditto", "ditto", "-x", "-k", zip_path,
+			extract_dir, (char *)NULL);
+		child_errno = errno;
+		written = write(status_pipe[1], &child_errno,
+			sizeof(child_errno));
+		(void)written;
+		_exit(127);
+	}
+
+	close(status_pipe[1]);
+	do
+	{
+		nread = read(status_pipe[0], &child_errno, sizeof(child_errno));
+	} while (nread < 0 && errno == EINTR);
+	close(status_pipe[0]);
+
+	if (nread > 0)
+	{
+		waitpid(pid, NULL, 0);
+		q_snprintf(error, error_size, "ditto exec failed: %s",
+			strerror(child_errno));
+		return false;
+	}
+	if (nread < 0)
+	{
+		q_snprintf(error, error_size,
+			"unable to verify ditto start: %s", strerror(errno));
+		return false;
+	}
+
+	{
+		pid_t result;
+
+		do
+		{
+			result = waitpid(pid, &status, 0);
+		} while (result < 0 && errno == EINTR);
+		if (result != pid)
+		{
+			q_snprintf(error, error_size, "ditto wait failed: %s",
+				strerror(errno));
+			return false;
+		}
+	}
+
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+	{
+		q_snprintf(error, error_size, "ditto extract failed with status %d",
+			WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+		return false;
+	}
+	return true;
+#else
+	(void)zip_path;
+	(void)extract_dir;
+	q_strlcpy(error, "ditto extraction is only supported on macOS",
+		error_size);
+	return false;
+#endif
+}
+
+static qboolean M_Update_ExtractArchive(const updatereleaseinfo_t *info,
+	const char *zip_path, const char *extract_dir, char *error,
+	size_t error_size)
+{
+	if (!M_Update_CreateDirectoryPath(extract_dir, error, error_size))
+		return false;
+	if (!strcmp(info->platform, "macos"))
+		return M_Update_ExtractWithDitto(zip_path, extract_dir, error,
+			error_size);
+	if (!ZIP_ExtractQuiet(zip_path, extract_dir))
+	{
+		M_Update_CopyExtractError(error, error_size);
+		return false;
+	}
+	return true;
+}
+
 static qboolean M_Update_PreflightRelease(const updatereleaseinfo_t *info,
 	qboolean force, char *error, size_t error_size)
 {
@@ -5330,14 +6466,9 @@ static qboolean M_Update_PreflightRelease(const updatereleaseinfo_t *info,
 	}
 	if (!M_Update_PlatformInstallSupported(info->platform))
 	{
-		if (!strcmp(info->platform, "macos"))
-			q_strlcpy(error,
-				"macOS updater staging is deferred until signed .app bundle swap/quarantine handling is implemented",
-				error_size);
-		else
-			q_snprintf(error, error_size,
-				"portable updater install is not enabled for platform %s",
-				info->platform);
+		q_snprintf(error, error_size,
+			"portable updater install is not enabled for platform %s",
+			info->platform);
 		return false;
 	}
 	if (!M_Update_CheckPlatformCompatibility(info, error, error_size))
@@ -5429,11 +6560,9 @@ static qboolean M_Update_PrepareRelease(const updatereleaseinfo_t *info,
 	}
 
 	Con_Printf("Extracting to %s\n", extract_dir);
-	if (!ZIP_ExtractQuiet(zip_path, extract_dir))
-	{
-		M_Update_CopyExtractError(error, error_size);
+	if (!M_Update_ExtractArchive(info, zip_path, extract_dir, error,
+		error_size))
 		return false;
-	}
 
 	Con_Printf("Validating staged package...\n");
 	if (!M_Update_ValidateExtracted(info, extract_dir, error, error_size))
