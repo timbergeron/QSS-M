@@ -8024,6 +8024,7 @@ static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 	{"+lookup",			"Look up",				KDM_KEYBOARD_AND_MOUSE},
 	{"+lookdown",		"Look down",			KDM_KEYBOARD_AND_MOUSE},
 	{"centerview",		"Center view",			KDM_ANY},
+	{"levelview",		"Level view",			KDM_ANY},
 	{"zoom_in",			"Toggle zoom",			KDM_ANY},
 	{"+zoom",			"Quick zoom",			KDM_ANY},
 	{"+gyroaction",		"Gyro switch",			KDM_GAMEPAD},

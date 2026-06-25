@@ -239,6 +239,13 @@ void V_StopPitchDrift (void)
 	cl.pitchvel = 0;
 }
 
+static void V_LevelView_f (void)
+{
+	V_StopPitchDrift ();
+	cl.driftmove = 0;
+	cl.viewangles[PITCH] = 0;
+}
+
 /*
 ===============
 V_DriftPitch
@@ -1692,6 +1699,7 @@ void V_Init (void)
 	Cmd_AddCommand ("v_cshift", V_cshift_f);
 	Cmd_AddCommand ("bf", V_BonusFlash_f);
 	Cmd_AddCommand ("centerview", V_StartPitchDrift);
+	Cmd_AddCommand ("levelview", V_LevelView_f);
 
 	Cvar_RegisterVariable (&v_centermove);
 	Cvar_RegisterVariable (&v_centerspeed);
