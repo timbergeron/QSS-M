@@ -1128,7 +1128,7 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 	demoscrub_cursor = IN_DemoScrubCursorVisible();
 	demoscrub_cursor_was_visible = demoscrub_cursor;
 
-	wantcursor = (key_dest == key_console)
+	wantcursor = (key_dest == key_console || key_dest == key_message)
 	          || ((key_dest == key_game && CL_IsActiveObserver() && !obs_cursor_hidden)
 	              || (key_dest == key_menu&&!bind_grab))
 	          || gamecodecursor || demoscrub_cursor || !windowhasfocus;
@@ -1141,7 +1141,7 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 	if (pong_active) // woods #pong
 		freemouse = true;
 
-	needevents = (!wantcursor) || key_dest == key_game || key_dest == key_console; // woods #conselection
+	needevents = (!wantcursor) || key_dest == key_game || key_dest == key_console || key_dest == key_message; // woods #conselection
 
 	if (isDedicated)
 		return;
@@ -1184,7 +1184,7 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 
 	if (wantcursor)
 	{
-		if (key_dest != key_console)
+		if (key_dest != key_console && key_dest != key_message)
 		{
 			VID_UpdateCursor(); // menu/game cursor
 		}

@@ -3528,7 +3528,7 @@ void VID_UpdateCursor(void)
 {
 	SDL_Cursor *nc;
 
-	if (key_dest == key_console || (con_forcedup && key_dest != key_menu))
+	if (key_dest == key_console || key_dest == key_message || (con_forcedup && key_dest != key_menu))
 		return;
 
 	nc = VID_GetCursorForDest(key_dest);
@@ -3672,7 +3672,7 @@ void LoadCustomCursorImage (void)
 	custom_cursor = SDL_CreateColorCursor(surface, hotX, hotY);
 	if (custom_cursor)
 	{
-		VID_SetCursorHandle(custom_cursor);
+		VID_UpdateCursor();
 		Con_DPrintf("Custom cursor set successfully\n");
 	}
 	else

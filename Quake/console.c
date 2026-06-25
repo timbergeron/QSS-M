@@ -46,6 +46,18 @@ static SDL_Cursor *con_cursor_current = NULL; // woods #conselection
 static SDL_Cursor *con_cursor_saved = NULL; // woods #conselection
 static int         con_cursor_saved_visible = SDL_DISABLE; // woods #conselection
 
+typedef struct
+{
+	qboolean valid;
+	int x, y;
+	int ofs;
+	int width_chars;
+} chatmousearea_t;
+
+static chatmousearea_t chat_mouse_area;
+static qboolean chat_mouse_down = false;
+static qboolean chat_mouse_selecting = false;
+
 int 		con_linewidth;
 
 float		con_cursorspeed = 4;
@@ -686,6 +698,149 @@ static void Con_SetNeutralCursor(void)
     Con_SetCursor(game_cursor ? game_cursor : con_cursor_arrow);
 }
 
+static qboolean Con_ChatMouseToCursorPos (int canvas_x, int canvas_y, qboolean nearest, int *pos)
+{
+	int cell;
+
+	if (!pos || !chat_mouse_area.valid || chat_mouse_area.width_chars <= 0)
+		return false;
+
+	if (!nearest)
+	{
+		if (canvas_x < chat_mouse_area.x ||
+			canvas_x > chat_mouse_area.x + chat_mouse_area.width_chars * CHARSIZE ||
+			canvas_y < chat_mouse_area.y ||
+			canvas_y >= chat_mouse_area.y + CHARSIZE)
+			return false;
+	}
+
+	cell = (canvas_x - chat_mouse_area.x + CHARSIZE / 2) / CHARSIZE;
+	cell = CLAMP(0, cell, chat_mouse_area.width_chars);
+	*pos = CLAMP(0, chat_mouse_area.ofs + cell, Key_GetChatMsgLen());
+	return true;
+}
+
+static qboolean Con_ChatMousePosition (qboolean nearest, int *pos)
+{
+	int window_x, window_y, canvas_x, canvas_y;
+
+	SDL_GetMouseState (&window_x, &window_y);
+	Con_ScreenToCanvas (window_x, window_y, &canvas_x, &canvas_y);
+	return Con_ChatMouseToCursorPos (canvas_x, canvas_y, nearest, pos);
+}
+
+static qboolean Con_ChatMouseDragPosition (int *pos)
+{
+	int window_x, window_y, canvas_x, canvas_y;
+	int right, len;
+
+	if (!pos || !chat_mouse_area.valid || chat_mouse_area.width_chars <= 0)
+		return false;
+
+	SDL_GetMouseState (&window_x, &window_y);
+	Con_ScreenToCanvas (window_x, window_y, &canvas_x, &canvas_y);
+
+	len = Key_GetChatMsgLen();
+	right = chat_mouse_area.x + chat_mouse_area.width_chars * CHARSIZE;
+	if (canvas_x < chat_mouse_area.x && chat_mouse_area.ofs > 0)
+	{
+		*pos = chat_mouse_area.ofs - 1;
+		return true;
+	}
+	if (canvas_x > right && chat_mouse_area.ofs + chat_mouse_area.width_chars < len)
+	{
+		*pos = CLAMP(0, chat_mouse_area.ofs + chat_mouse_area.width_chars + 1, len);
+		return true;
+	}
+
+	return Con_ChatMouseToCursorPos (canvas_x, canvas_y, true, pos);
+}
+
+static void Con_ChatComputeView (int chat_max, const char **text, int *cursor, int *ofs, int *visible)
+{
+	int chat_len, chat_cursor, chat_ofs, chat_visible;
+
+	chat_len = Key_GetChatMsgLen();
+	chat_cursor = Key_GetChatCursorPos();
+
+	chat_ofs = 0;
+	if (chat_cursor > chat_max)
+		chat_ofs = chat_cursor - chat_max;
+	if (chat_cursor < chat_ofs)
+		chat_ofs = chat_cursor;
+	if (chat_ofs > chat_len)
+		chat_ofs = chat_len;
+
+	chat_visible = chat_len - chat_ofs;
+	if (chat_visible > chat_max)
+		chat_visible = chat_max;
+
+	if (text)
+		*text = Key_GetChatBuffer();
+	if (cursor)
+		*cursor = chat_cursor;
+	if (ofs)
+		*ofs = chat_ofs;
+	if (visible)
+		*visible = chat_visible;
+}
+
+static void Con_UpdateChatMouseState (void)
+{
+	int pos;
+	qboolean inside;
+
+	if (key_dest != key_message)
+	{
+		chat_mouse_down = false;
+		chat_mouse_selecting = false;
+		return;
+	}
+
+	inside = Con_ChatMousePosition (false, &pos);
+	if (chat_mouse_down && chat_mouse_selecting)
+	{
+		if (Con_ChatMouseDragPosition (&pos))
+			Key_SetChatCursorPos (pos, true);
+		Con_SetCursor (con_cursor_ibeam ? con_cursor_ibeam : con_cursor_arrow);
+	}
+	else if (inside)
+		Con_SetCursor (con_cursor_ibeam ? con_cursor_ibeam : con_cursor_arrow);
+	else
+		Con_SetNeutralCursor ();
+}
+
+qboolean Con_ChatMouseButton (qboolean down)
+{
+	int pos;
+	qboolean inside;
+
+	if (key_dest != key_message)
+		return false;
+
+	inside = Con_ChatMousePosition (false, &pos);
+	if (down)
+	{
+		chat_mouse_down = true;
+		chat_mouse_selecting = inside;
+		if (inside)
+		{
+			Key_SetChatCursorPos (pos, keydown[K_SHIFT]);
+			Con_SetCursor (con_cursor_ibeam ? con_cursor_ibeam : con_cursor_arrow);
+		}
+	}
+	else
+	{
+		if (chat_mouse_down && chat_mouse_selecting &&
+			Con_ChatMouseDragPosition (&pos))
+			Key_SetChatCursorPos (pos, true);
+		chat_mouse_down = false;
+		chat_mouse_selecting = false;
+	}
+
+	return true;
+}
+
 static qboolean Con_HasSelection (void) { return Con_OfsCompare(&con_selection.begin,&con_selection.end)!=0; }
 
 /* Enter/leave routines to avoid cursor flicker between console/menu/game */
@@ -1183,6 +1338,7 @@ static void Con_MessageMode_f (void)
 		return;
 	chat_team = false;
 	key_dest = key_message;
+	IN_UpdateGrabs();
 	SetChatInfo (CIF_CHAT); // woods #chatinfo
 }
 
@@ -1197,6 +1353,7 @@ static void Con_MessageMode2_f (void)
 		return;
 	chat_team = true;
 	key_dest = key_message;
+	IN_UpdateGrabs();
 	SetChatInfo (CIF_CHAT); // woods #chatinfo
 }
 
@@ -6027,6 +6184,7 @@ void Con_DrawNotify (void)
 	const char	*text;
 	float	alpha; // woods #confade
 	int		maxlines = CLAMP (0, con_notifylines.value, NUM_CON_TIMES); // woods from proquake 493 #notifylines
+	extern	qpic_t *pic_ins; //johnfitz -- thin insert cursor
 
 	GL_SetCanvas (CANVAS_CONSOLE); //johnfitz
 	v = vid.conheight + con_notifyposition.value; // woods #notifyposition
@@ -6056,34 +6214,67 @@ void Con_DrawNotify (void)
 		scr_tileclear_updates = 0; //johnfitz
 	}
 
+	if (key_dest != key_message)
+	{
+		chat_mouse_area.valid = false;
+		chat_mouse_down = false;
+		chat_mouse_selecting = false;
+	}
+
 	if (key_dest == key_message)
 	{
+		int chat_x, chat_cursor, chat_ofs, chat_visible, chat_max;
+		int sel_start, sel_end;
+
 		clearnotify = 0;
 
 		if (chat_team)
 		{
 			Draw_String (8, v, "say_team:");
-			x = 11;
+			chat_x = 11;
 		}
 		else
 		{
 			Draw_String (8, v, "say:");
-			x = 6;
+			chat_x = 6;
 		}
 
-		text = Key_GetChatBuffer();
-		i = Key_GetChatMsgLen();
-		if (i > con_linewidth - x - 1)
-			text += i - con_linewidth + x + 1;
+		chat_max = con_linewidth - chat_x - 1;
+		if (chat_max < 1)
+			chat_max = 1;
+		Con_ChatComputeView (chat_max, NULL, NULL, &chat_ofs, NULL);
 
-		while (*text)
+		chat_mouse_area.valid = true;
+		chat_mouse_area.x = chat_x << 3;
+		chat_mouse_area.y = v;
+		chat_mouse_area.ofs = chat_ofs;
+		chat_mouse_area.width_chars = chat_max;
+
+		Con_UpdateChatMouseState ();
+
+		Con_ChatComputeView (chat_max, &text, &chat_cursor, &chat_ofs, &chat_visible);
+		chat_mouse_area.ofs = chat_ofs;
+
+		if (Key_GetChatSelection (&sel_start, &sel_end))
 		{
-			Draw_Character (x<<3, v, *text);
-			x++;
-			text++;
+			sel_start = CLAMP(chat_ofs, sel_start, chat_ofs + chat_visible);
+			sel_end = CLAMP(chat_ofs, sel_end, chat_ofs + chat_visible);
+			if (sel_end > sel_start)
+				Draw_Fill ((chat_x + sel_start - chat_ofs) << 3, v,
+					(sel_end - sel_start) << 3, 8, 170, 0.4f);
 		}
 
-		Draw_CharacterRGBA (x<<3, v, 10 + ((int)(realtime*con_cursorspeed)&1), Draw_GetConcharsCursorColor(), 1.0f); // woods #cursorcolor
+		x = chat_x;
+		text += chat_ofs;
+		for (i = 0; i < chat_visible; i++)
+		{
+			Draw_Character (x << 3, v, text[i]);
+			x++;
+		}
+
+		x = chat_x + chat_cursor - chat_ofs;
+		if (!((int)((realtime-key_blinktime)*con_cursorspeed) & 1))
+			Draw_PicRGBA (x << 3, v, pic_ins, Draw_GetConcharsCursorColor(), 1.0f); // woods #cursorcolor
 		v += 8;
 
 		scr_tileclear_updates = 0; //johnfitz

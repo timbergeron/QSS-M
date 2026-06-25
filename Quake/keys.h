@@ -273,6 +273,9 @@ void Key_WriteBindings (FILE *f);
 void Key_EndChat (void);
 const char *Key_GetChatBuffer (void);
 int Key_GetChatMsgLen (void);
+int Key_GetChatCursorPos (void);
+qboolean Key_GetChatSelection (int *start, int *end);
+void Key_SetChatCursorPos (int pos, qboolean selecting);
 void Chat_HistoryStore (const char *text);
 
 void History_Init (void);

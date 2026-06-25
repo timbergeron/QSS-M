@@ -1270,12 +1270,16 @@ void Char_Console(int key) // woods -- added detection for when typing in consol
 qboolean	chat_team = false;
 static char	chat_buffer[MAX_CHAT_SIZE_EX]; // woods limit chat to 100 server limit (legacy is 45)  #chatlimit
 static int	chat_bufferlen = 0;
+static int	chat_cursorpos = 0;
+static int	chat_selection_anchor = -1;
 #define CHAT_HISTORY_LINES 32
 #define CHAT_HISTORY_PAGE_LINES 5
 static char chat_history[CHAT_HISTORY_LINES][MAX_CHAT_SIZE_EX];
 static int chat_history_count = 0;
 static int chat_history_line = -1;
 static char chat_history_saved_current[MAX_CHAT_SIZE_EX];
+
+static void Chat_HistoryResetBrowse (void);
 
 const char *Key_GetChatBuffer (void)
 {
@@ -1285,6 +1289,189 @@ const char *Key_GetChatBuffer (void)
 int Key_GetChatMsgLen (void)
 {
 	return chat_bufferlen;
+}
+
+int Key_GetChatCursorPos (void)
+{
+	return chat_cursorpos;
+}
+
+qboolean Key_GetChatSelection (int *start, int *end)
+{
+	int a, b;
+
+	if (chat_selection_anchor < 0 || chat_selection_anchor == chat_cursorpos)
+		return false;
+
+	a = chat_selection_anchor;
+	b = chat_cursorpos;
+	if (a > b)
+	{
+		int t = a;
+		a = b;
+		b = t;
+	}
+
+	if (start)
+		*start = a;
+	if (end)
+		*end = b;
+	return true;
+}
+
+static void Chat_ClearSelection (void)
+{
+	chat_selection_anchor = -1;
+}
+
+static void Chat_ClampEditState (void)
+{
+	if (chat_bufferlen < 0)
+		chat_bufferlen = 0;
+	if (chat_bufferlen >= (int)sizeof(chat_buffer))
+		chat_bufferlen = (int)sizeof(chat_buffer) - 1;
+	if (chat_cursorpos < 0)
+		chat_cursorpos = 0;
+	if (chat_cursorpos > chat_bufferlen)
+		chat_cursorpos = chat_bufferlen;
+	if (chat_selection_anchor > chat_bufferlen)
+		chat_selection_anchor = chat_bufferlen;
+	if (chat_selection_anchor == chat_cursorpos)
+		Chat_ClearSelection ();
+}
+
+static qboolean Chat_CommandOrCtrlDown (void)
+{
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+	return keydown[K_COMMAND] || keydown[K_CTRL];
+#else
+	return keydown[K_CTRL];
+#endif
+}
+
+static int Chat_FindWordBoundary (int pos, int dir)
+{
+	if (dir < 0)
+	{
+		while (pos > 0 && Key_IsWordSeparator (chat_buffer[pos - 1]))
+			pos--;
+		while (pos > 0 && !Key_IsWordSeparator (chat_buffer[pos - 1]))
+			pos--;
+	}
+	else
+	{
+		while (pos < chat_bufferlen && !Key_IsWordSeparator (chat_buffer[pos]))
+			pos++;
+		while (pos < chat_bufferlen && Key_IsWordSeparator (chat_buffer[pos]))
+			pos++;
+	}
+
+	return pos;
+}
+
+static void Chat_MoveCursor (int pos, qboolean selecting)
+{
+	pos = CLAMP(0, pos, chat_bufferlen);
+
+	if (selecting)
+	{
+		if (chat_selection_anchor < 0)
+			chat_selection_anchor = chat_cursorpos;
+		chat_cursorpos = pos;
+		if (chat_selection_anchor == chat_cursorpos)
+			Chat_ClearSelection ();
+	}
+	else
+	{
+		chat_cursorpos = pos;
+		Chat_ClearSelection ();
+	}
+
+	key_blinktime = realtime;
+}
+
+void Key_SetChatCursorPos (int pos, qboolean selecting)
+{
+	Chat_MoveCursor (pos, selecting);
+}
+
+static qboolean Chat_DeleteRange (int start, int end)
+{
+	if (start > end)
+	{
+		int t = start;
+		start = end;
+		end = t;
+	}
+
+	start = CLAMP(0, start, chat_bufferlen);
+	end = CLAMP(0, end, chat_bufferlen);
+	if (start == end)
+		return false;
+
+	memmove (chat_buffer + start, chat_buffer + end, chat_bufferlen - end + 1);
+	chat_bufferlen -= end - start;
+	chat_cursorpos = start;
+	Chat_ClearSelection ();
+	Chat_HistoryResetBrowse ();
+	key_blinktime = realtime;
+	return true;
+}
+
+static qboolean Chat_DeleteSelection (void)
+{
+	int start, end;
+
+	if (!Key_GetChatSelection (&start, &end))
+		return false;
+	return Chat_DeleteRange (start, end);
+}
+
+static qboolean Chat_CopySelectionToClipboard (void)
+{
+	int start, end, len;
+	char copy[MAX_CHAT_SIZE_EX];
+
+	if (!Key_GetChatSelection (&start, &end))
+		return false;
+
+	len = end - start;
+	if (len <= 0)
+		return false;
+	if (len >= (int)sizeof(copy))
+		len = (int)sizeof(copy) - 1;
+
+	memcpy(copy, chat_buffer + start, len);
+	copy[len] = 0;
+	return SDL_SetClipboardText(copy) == 0;
+}
+
+static qboolean Chat_InsertText (const char *text, int len)
+{
+	int maxlen, avail;
+
+	if (!text || len <= 0)
+		return false;
+
+	Chat_DeleteSelection ();
+
+	maxlen = (int)sizeof(chat_buffer) - 1;
+	avail = maxlen - chat_bufferlen;
+	if (len > avail)
+		len = avail;
+	if (len <= 0)
+		return false;
+
+	memmove (chat_buffer + chat_cursorpos + len,
+		chat_buffer + chat_cursorpos,
+		chat_bufferlen - chat_cursorpos + 1);
+	memcpy (chat_buffer + chat_cursorpos, text, len);
+	chat_bufferlen += len;
+	chat_cursorpos += len;
+	Chat_ClearSelection ();
+	Chat_HistoryResetBrowse ();
+	key_blinktime = realtime;
+	return true;
 }
 
 static void Chat_HistoryResetBrowse (void)
@@ -1297,6 +1484,8 @@ static void Chat_SetBuffer (const char *text)
 {
 	q_strlcpy (chat_buffer, text ? text : "", sizeof(chat_buffer));
 	chat_bufferlen = (int)strlen(chat_buffer);
+	chat_cursorpos = chat_bufferlen;
+	Chat_ClearSelection ();
 }
 
 static void Chat_HistorySaveDraft (void)
@@ -1437,6 +1626,7 @@ void Key_EndChat (void)
 	Chat_SetBuffer("");
 	Chat_HistoryResetBrowse ();
 	SetChatInfo (0); // woods #chatinfo
+	IN_UpdateGrabs();
 }
 
 void PasteToMessage (void) // woods zircon (baker)
@@ -1448,24 +1638,24 @@ void PasteToMessage (void) // woods zircon (baker)
 		p = cbd;
 		while (*p)
 		{
-			if (*p == '\r' && *(p + 1) == '\n') { *p++ = ';'; *p++ = ' '; }
-			else if (*p == '\n' || *p == '\r' || *p == '\b') { *p++ = ';'; }
+			if (*p == '\r' && *(p + 1) == '\n')
+			{
+				*p++ = ';';
+				*p++ = ' ';
+				continue;
+			}
+			else if (*p == '\n' || *p == '\r' || *p == '\b')
+			{
+				*p++ = ';';
+				continue;
+			}
 			p++;
 		}
 
 		i = (int)strlen (cbd);
-		if (i + chat_bufferlen >= sizeof (chat_buffer))
-			i = sizeof (chat_buffer) - chat_bufferlen - 1;
-		if (i > 0)
-		{
-			int chatpos = chat_bufferlen;
-			cbd[i] = 0;
-
-			memmove (chat_buffer + chatpos + i, chat_buffer + chatpos, sizeof (chat_buffer) - chatpos - i);
-			memcpy (chat_buffer + chatpos, cbd, i);
-			Chat_HistoryResetBrowse ();
-		}
-		chat_bufferlen = (unsigned int)strlen (chat_buffer);
+		Chat_InsertText (cbd, i);
+		Chat_ClampEditState ();
+		Z_Free(cbd);
 	}
 }
 
@@ -1513,67 +1703,118 @@ void Key_Message (int key)
 
 	case K_HOME:
 	case K_KP_HOME:
-		Chat_HistoryOldest ();
+		if (keydown[K_CTRL])
+			Chat_HistoryOldest ();
+		else
+			Chat_MoveCursor (0, keydown[K_SHIFT]);
 		return;
 
 	case K_END:
 	case K_KP_END:
-		Chat_HistoryEnd ();
+		if (keydown[K_CTRL])
+			Chat_HistoryEnd ();
+		else
+			Chat_MoveCursor (chat_bufferlen, keydown[K_SHIFT]);
+		return;
+
+	case K_LEFTARROW:
+	case K_KP_LEFTARROW:
+	case K_DPAD_LEFT:
+		if (Chat_CommandOrCtrlDown ())
+			Chat_MoveCursor (Chat_FindWordBoundary (chat_cursorpos, -1), keydown[K_SHIFT]);
+		else
+			Chat_MoveCursor (chat_cursorpos - 1, keydown[K_SHIFT]);
+		return;
+
+	case K_RIGHTARROW:
+	case K_KP_RIGHTARROW:
+	case K_DPAD_RIGHT:
+		if (Chat_CommandOrCtrlDown ())
+			Chat_MoveCursor (Chat_FindWordBoundary (chat_cursorpos, 1), keydown[K_SHIFT]);
+		else
+			Chat_MoveCursor (chat_cursorpos + 1, keydown[K_SHIFT]);
 		return;
 
 	case K_BACKSPACE:
-		if (keydown[K_CTRL]) // woods delete entire words
+		if (Chat_DeleteSelection ())
+			return;
+		if (Chat_CommandOrCtrlDown ()) // woods delete entire words
 		{
-			int startPos = chat_bufferlen;
+			int startPos = chat_cursorpos;
 			// move the cursor to the left, stopping at word boundaries
 			while (startPos > 0 && Key_IsWordSeparator (chat_buffer[startPos - 1]))
 				startPos--;
 			while (startPos > 0 && !Key_IsWordSeparator (chat_buffer[startPos - 1]))
 				startPos--;
 
-			// Update buffer length
-			chat_bufferlen = startPos;
-			chat_buffer[chat_bufferlen] = '\0';
-			Chat_HistoryResetBrowse ();
+			Chat_DeleteRange (startPos, chat_cursorpos);
 		}
 		else 
 		{
-			if (chat_bufferlen > 0) 
-			{
-				chat_bufferlen--;
-				chat_buffer[chat_bufferlen] = '\0';
-				Chat_HistoryResetBrowse ();
-			}
+			Chat_DeleteRange (chat_cursorpos - 1, chat_cursorpos);
 		}
+		return;
+
+	case K_DEL:
+	case K_KP_DEL:
+		if (Chat_DeleteSelection ())
+			return;
+		if (Chat_CommandOrCtrlDown ())
+			Chat_DeleteRange (chat_cursorpos, Chat_FindWordBoundary (chat_cursorpos, 1));
+		else
+			Chat_DeleteRange (chat_cursorpos, chat_cursorpos + 1);
 		return;
 
 	case 'U': // woods delete entire line
 	case 'u':
-		if (keydown[K_CTRL])
+		if (Chat_CommandOrCtrlDown ())
 		{
 			Chat_SetBuffer("");
 			Chat_HistoryResetBrowse ();
 			return;
 		}
+		break;
 
 	case 'V':
 	case 'v':
-		if (keydown[K_CTRL]) 
+		if (Chat_CommandOrCtrlDown ())
 		{
 			PasteToMessage ();
 			return;
 		}
+		break;
+
+	case 'C':
+	case 'c':
+		if (Chat_CommandOrCtrlDown ())
+		{
+			Chat_CopySelectionToClipboard ();
+			return;
+		}
+		break;
+
+	case 'A':
+	case 'a':
+		if (Chat_CommandOrCtrlDown ())
+		{
+			chat_selection_anchor = 0;
+			chat_cursorpos = chat_bufferlen;
+			if (chat_bufferlen == 0)
+				Chat_ClearSelection ();
+			key_blinktime = realtime;
+			return;
+		}
+		break;
 	}
 }
 
 void Char_Message (int key)
 {
-	if (chat_bufferlen == sizeof(chat_buffer) - 1)
-		return; // all full
+	char text[2];
 
-	Chat_HistoryResetBrowse ();
-	chat_buffer[chat_bufferlen++] = key;
-	chat_buffer[chat_bufferlen] = 0;
+	text[0] = key;
+	text[1] = 0;
+	Chat_InsertText (text, 1);
 }
 
 //============================================================================
@@ -2554,6 +2795,12 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 	if (key < 0 || key >= MAX_KEYS)
 		return;
 
+	if (key_dest == key_message && key == K_MOUSE1 && (down || !keydown[key]))
+	{
+		Con_ChatMouseButton (down);
+		return;
+	}
+
     /* woods #conselection Swallow left+middle click ONLY while the console is active.
        Do NOT swallow right-click (K_MOUSE2) so it can toggle the menu
        from the console. Do NOT swallow wheel so it can be used in game. */
@@ -3107,6 +3354,7 @@ Key_UpdateForDest
 void Key_UpdateForDest (void)
 {
 	static qboolean forced = false;
+	static keydest_t last_dest = key_game;
 
 	if (cls.state == ca_dedicated)
 		return;
@@ -3134,5 +3382,10 @@ void Key_UpdateForDest (void)
 		forced = false;
 		break;
 	}
-}
 
+	if (key_dest != last_dest)
+	{
+		last_dest = key_dest;
+		IN_UpdateGrabs();
+	}
+}
