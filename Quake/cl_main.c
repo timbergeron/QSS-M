@@ -36,12 +36,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <curl/curl.h> // woods #webdl
 #include "cfgfile.h" // woods #webdl
 #include "q_ctype.h" // woods #entcopy
+#include <time.h>
 
 void CL_RotateModel_OnChange(cvar_t* var); // woods #clmrotate
 void CL_RotateModel_f(void); // woods #clmrotate
 void CL_RotateModel_RebuildFromCvar(void); // woods #clmrotate
 void CL_RotateModel_Cvar_Completion_f(cvar_t* cvar, const char* partial); // woods #clmrotate
 void CL_DemoMark_f(void); // woods #demomark
+static void CL_OptionalDownloadCache_ClearPending(void);
 
 // we need to declare some mouse variables here, because the menu system
 // references them even when on a unix system.
@@ -604,6 +606,7 @@ void CL_Disconnect (void)
 // stop sounds (especially looping!)
 	S_StopAllSounds (true, false);
 	BGM_Pause ();
+	CL_OptionalDownloadCache_ClearPending();
 
 // if running a local server, shut it down
 	if (cls.demoplayback)
@@ -2558,6 +2561,7 @@ typedef struct
 	long file_size;
 	long response_code;
 	CURLcode curl_result;
+	web_download_result_t result;
 	qboolean is_auto; // started by CL_CheckDownload during signon (falls back to in-protocol download on failure)
 } async_download_t;
 
@@ -3587,6 +3591,277 @@ static qboolean CL_DownloadNameIsLoc(const char *relative_path)
 		!q_strcasecmp(COM_FileGetExtension(relative_path), "loc");
 }
 
+#define OPTIONAL_DOWNLOAD_CACHE_FILENAME				"optional_download_cache.json"
+#define OPTIONAL_DOWNLOAD_CACHE_SCHEMA_VERSION		1
+#define OPTIONAL_DOWNLOAD_CACHE_MAX_FILE_SIZE		(1024 * 1024)
+#define OPTIONAL_DOWNLOAD_CACHE_MAX_SOURCE			2048
+#define OPTIONAL_DOWNLOAD_CACHE_MISS_RETRY_SECONDS	(30 * 24 * 60 * 60)
+#define OPTIONAL_DOWNLOAD_CACHE_TRANSIENT_SECONDS	(30 * 60)
+
+typedef struct optional_download_pending_s
+{
+	char filename[MAX_QPATH];
+	char source[OPTIONAL_DOWNLOAD_CACHE_MAX_SOURCE];
+	web_download_result_t web_result;
+} optional_download_pending_t;
+
+static com_negative_cache_t optional_download_cache;
+static optional_download_pending_t optional_download_pending;
+
+static qboolean CL_OptionalDownloadCache_Validate(const char *filename, const char *source, void *ctx)
+{
+	(void)ctx;
+	return CL_DownloadNameIsLoc(filename) && source && source[0];
+}
+
+static const com_negative_cache_config_t optional_download_cache_config =
+{
+	OPTIONAL_DOWNLOAD_CACHE_FILENAME,
+	OPTIONAL_DOWNLOAD_CACHE_SCHEMA_VERSION,
+	OPTIONAL_DOWNLOAD_CACHE_MAX_FILE_SIZE,
+	"filename",
+	"source",
+	MAX_QPATH,
+	OPTIONAL_DOWNLOAD_CACHE_MAX_SOURCE,
+	NULL,
+	NULL,
+	CL_OptionalDownloadCache_Validate,
+	NULL
+};
+
+static qboolean CL_WebDownloadResultIsPersistentMiss(web_download_result_t result)
+{
+	return result == WEB_DOWNLOAD_RESULT_NOT_FOUND ||
+		result == WEB_DOWNLOAD_RESULT_INVALID;
+}
+
+static qboolean CL_ServerDownloadAvailable(void)
+{
+	if (allow_download.value >= 2) // woods #ftehack (3 also ignores gamedir mismatch above)
+	{
+		if (!cl.protocol_dpdownload && !(cl.protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS) && cl.protocol != 666)
+			return false;
+		if (netquakeio)
+			return false;
+	}
+	else
+	{
+		if (!cl.protocol_dpdownload && !(cl.protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS))
+			return false;
+	}
+
+	return true;
+}
+
+static qboolean CL_OptionalDownloadCache_SourceKey(char *source, size_t source_size)
+{
+	const char *web1 = "";
+	const char *web2 = "";
+	const char *server = "none";
+	qboolean has_web = false;
+	qboolean has_server = CL_ServerDownloadAvailable();
+	int result;
+
+	if (!source || source_size == 0)
+		return false;
+
+	if (webcheck && cl_web_download_url.string && cl_web_download_url.string[0])
+	{
+		web1 = cl_web_download_url.string;
+		has_web = true;
+	}
+	if (web2check && cl_web_download_url2.string && cl_web_download_url2.string[0])
+	{
+		web2 = cl_web_download_url2.string;
+		has_web = true;
+	}
+
+	if (has_server)
+	{
+		const char *trueaddress = cls.netcon ? NET_QSocketGetTrueAddressString(cls.netcon) : NULL;
+		if (trueaddress && trueaddress[0])
+			server = trueaddress;
+		else if (lastmphost[0])
+			server = lastmphost;
+		else
+			server = "unknown";
+	}
+
+	if (!has_web && !has_server)
+	{
+		source[0] = '\0';
+		return false;
+	}
+
+	result = q_snprintf(source, source_size, "web1=%s;web2=%s;server=%s", web1, web2, server);
+	if (result < 0 || (size_t)result >= source_size)
+	{
+		source[0] = '\0';
+		return false;
+	}
+
+	return true;
+}
+
+static qboolean CL_OptionalDownloadCache_PendingMatches(const char *filename, const char *source)
+{
+	return optional_download_pending.filename[0] &&
+		!strcmp(optional_download_pending.filename, filename) &&
+		!strcmp(optional_download_pending.source, source);
+}
+
+static void CL_OptionalDownloadCache_ClearPending(void)
+{
+	memset(&optional_download_pending, 0, sizeof(optional_download_pending));
+}
+
+static void CL_OptionalDownloadCache_ClearPendingIfMatch(const char *filename, const char *source)
+{
+	if (CL_OptionalDownloadCache_PendingMatches(filename, source))
+		CL_OptionalDownloadCache_ClearPending();
+}
+
+static void CL_OptionalDownloadCache_Update(const char *filename, const char *source,
+	com_negative_cache_result_t result, time_t now)
+{
+	if (!COM_NegativeCache_Update(&optional_download_cache,
+		&optional_download_cache_config,
+		filename, source, result, now,
+		OPTIONAL_DOWNLOAD_CACHE_MISS_RETRY_SECONDS,
+		OPTIONAL_DOWNLOAD_CACHE_TRANSIENT_SECONDS))
+	{
+		return;
+	}
+
+	COM_NegativeCache_SaveIfDirty(&optional_download_cache,
+		&optional_download_cache_config);
+}
+
+static qboolean CL_OptionalDownloadCache_ShouldSkip(const char *filename)
+{
+	char source[OPTIONAL_DOWNLOAD_CACHE_MAX_SOURCE];
+	time_t now = time(NULL);
+	time_t next_retry;
+
+	if (!CL_DownloadNameIsLoc(filename) || now == (time_t)-1)
+		return false;
+	if (!CL_OptionalDownloadCache_SourceKey(source, sizeof(source)))
+		return false;
+
+	if (!COM_NegativeCache_ShouldSkip(&optional_download_cache,
+		&optional_download_cache_config, filename, source, now, &next_retry))
+	{
+		return false;
+	}
+
+	Con_DPrintf("optional download cache: skipping %s until %lld\n",
+		filename, (long long)next_retry);
+	return true;
+}
+
+static void CL_OptionalDownloadCache_NoteWebFailure(const char *filename, web_download_result_t web_result)
+{
+	char source[OPTIONAL_DOWNLOAD_CACHE_MAX_SOURCE];
+
+	if (!CL_DownloadNameIsLoc(filename) ||
+		(web_result != WEB_DOWNLOAD_RESULT_NOT_FOUND &&
+		 web_result != WEB_DOWNLOAD_RESULT_TRANSIENT &&
+		 web_result != WEB_DOWNLOAD_RESULT_INVALID))
+	{
+		return;
+	}
+	if (!CL_OptionalDownloadCache_SourceKey(source, sizeof(source)))
+		return;
+
+	q_strlcpy(optional_download_pending.filename, filename, sizeof(optional_download_pending.filename));
+	q_strlcpy(optional_download_pending.source, source, sizeof(optional_download_pending.source));
+	optional_download_pending.web_result = web_result;
+}
+
+static com_negative_cache_result_t CL_OptionalDownloadCache_ResultForServerMissing(const char *filename, const char *source)
+{
+	if (CL_OptionalDownloadCache_PendingMatches(filename, source) &&
+		!CL_WebDownloadResultIsPersistentMiss(optional_download_pending.web_result))
+	{
+		return COM_NEGATIVE_CACHE_TRANSIENT;
+	}
+
+	return COM_NEGATIVE_CACHE_MISSING;
+}
+
+static void CL_OptionalDownloadCache_RecordNoServerFallback(const char *filename)
+{
+	char source[OPTIONAL_DOWNLOAD_CACHE_MAX_SOURCE];
+	com_negative_cache_result_t result;
+
+	if (!CL_DownloadNameIsLoc(filename) ||
+		!CL_OptionalDownloadCache_SourceKey(source, sizeof(source)) ||
+		!CL_OptionalDownloadCache_PendingMatches(filename, source))
+	{
+		return;
+	}
+
+	result = CL_WebDownloadResultIsPersistentMiss(optional_download_pending.web_result) ?
+		COM_NEGATIVE_CACHE_MISSING :
+		COM_NEGATIVE_CACHE_TRANSIENT;
+	CL_OptionalDownloadCache_Update(filename, source, result, time(NULL));
+	CL_OptionalDownloadCache_ClearPendingIfMatch(filename, source);
+}
+
+static void CL_OptionalDownloadCache_RecordServerFailure(const char *filename,
+	com_negative_cache_result_t server_result)
+{
+	char source[OPTIONAL_DOWNLOAD_CACHE_MAX_SOURCE];
+	com_negative_cache_result_t result;
+
+	if (!CL_DownloadNameIsLoc(filename) ||
+		!CL_OptionalDownloadCache_SourceKey(source, sizeof(source)))
+	{
+		return;
+	}
+
+	result = (server_result == COM_NEGATIVE_CACHE_MISSING) ?
+		CL_OptionalDownloadCache_ResultForServerMissing(filename, source) :
+		COM_NEGATIVE_CACHE_TRANSIENT;
+	CL_OptionalDownloadCache_Update(filename, source, result, time(NULL));
+	CL_OptionalDownloadCache_ClearPendingIfMatch(filename, source);
+}
+
+static void CL_OptionalDownloadCache_RecordServerMissing(const char *filename)
+{
+	CL_OptionalDownloadCache_RecordServerFailure(filename,
+		COM_NEGATIVE_CACHE_MISSING);
+}
+
+static void CL_OptionalDownloadCache_RecordServerTransient(const char *filename)
+{
+	CL_OptionalDownloadCache_RecordServerFailure(filename,
+		COM_NEGATIVE_CACHE_TRANSIENT);
+}
+
+static void CL_OptionalDownloadCache_RecordCurrentServerTransient(void)
+{
+	if (cls.download.active && CL_DownloadNameIsLoc(cls.download.current))
+		CL_OptionalDownloadCache_RecordServerTransient(cls.download.current);
+}
+
+static void CL_OptionalDownloadCache_RemoveCurrent(const char *filename)
+{
+	char source[OPTIONAL_DOWNLOAD_CACHE_MAX_SOURCE];
+
+	if (!CL_DownloadNameIsLoc(filename) ||
+		!CL_OptionalDownloadCache_SourceKey(source, sizeof(source)))
+	{
+		return;
+	}
+
+	COM_NegativeCache_Remove(&optional_download_cache,
+		&optional_download_cache_config, filename, source);
+	COM_NegativeCache_SaveIfDirty(&optional_download_cache,
+		&optional_download_cache_config);
+	CL_OptionalDownloadCache_ClearPendingIfMatch(filename, source);
+}
+
 static void CL_DownloadAddMapDesc(const char *relative_path)
 {
 	if (!q_strcasecmp(COM_FileGetExtension(relative_path), "bsp"))
@@ -3648,6 +3923,7 @@ static qboolean CL_FinalizeDownloadFile(const char *relative_path, const char *t
 		COM_AddDownloadedPackage(relative_path);
 
 	CL_DownloadAddMapDesc(relative_path);
+	CL_OptionalDownloadCache_RemoveCurrent(relative_path);
 	return true;
 }
 
@@ -3846,6 +4122,7 @@ static void DL_FinishChunked(void)
 	if (!cls.download.file)
 	{
 		Con_Warning("Download of %s failed size verification\n", cls.download.current);
+		CL_OptionalDownloadCache_RecordCurrentServerTransient();
 		DL_ClearChunkedState(true);
 		cls.download.chunkedstaleuntil = realtime + 2.0;
 		return;
@@ -3854,6 +4131,7 @@ static void DL_FinishChunked(void)
 	if (cls.download.dlblocks || cls.download.completedbytes != cls.download.size)
 	{
 		Con_Warning("Download of %s failed block completion verification\n", cls.download.current);
+		CL_OptionalDownloadCache_RecordCurrentServerTransient();
 		DL_ClearChunkedState(true);
 		cls.download.chunkedstaleuntil = realtime + 2.0;
 		return;
@@ -3863,6 +4141,7 @@ static void DL_FinishChunked(void)
 	if (!DL_FileLengthExact(cls.download.file, cls.download.size))
 	{
 		Con_Warning("Download of %s failed size verification\n", cls.download.current);
+		CL_OptionalDownloadCache_RecordCurrentServerTransient();
 		DL_ClearChunkedState(true);
 		cls.download.chunkedstaleuntil = realtime + 2.0;
 		return;
@@ -3882,6 +4161,7 @@ static void DL_FinishChunked(void)
 	else
 	{
 		Con_Warning("Download of %s failed\n", cls.download.current);
+		CL_OptionalDownloadCache_RecordCurrentServerTransient();
 		unlink(cls.download.temp);
 	}
 
@@ -4176,10 +4456,21 @@ static void CL_CurlSetDownloadOptions(CURL *curl)
 #endif
 }
 
-qboolean Curl_DownloadFile (const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name) // main curl function
+static void CL_SetWebDownloadResult(web_download_result_t *result_out, web_download_result_t result)
+{
+	if (result_out)
+		*result_out = result;
+}
+
+qboolean Curl_DownloadFile (const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name, web_download_result_t *result_out) // main curl function
 {
 	if (cls.download.active || curl_download_active)	// don't stomp an in-flight download's shared state
+	{
+		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_NONE);
 		return false;
+	}
+
+	CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_NONE);
 
 	stop_curl_download = false;
 	CL_DownloadProgress_Begin(filename);
@@ -4189,6 +4480,7 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 	{
 		cls.download.active = false;
 		curl_download_active = false;
+		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_INVALID);
 		return false;
 	}
 
@@ -4212,6 +4504,7 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
     {
         cls.download.active = false;
         curl_download_active = false;
+		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_TRANSIENT);
 		return false;
     }
 
@@ -4221,6 +4514,7 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
         curl_easy_cleanup(curl);
         cls.download.active = false;
         curl_download_active = false;
+		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_INVALID);
         return false;
     }
 
@@ -4232,6 +4526,7 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 		curl_easy_cleanup(curl);
 		cls.download.active = false;
 		curl_download_active = false;
+		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_TRANSIENT);
 		return false;
 	}
 
@@ -4273,6 +4568,10 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 		unlink(tmp_path); // Delete the temporary file in case of an error
 		cls.download.active = false;
 		curl_download_active = false;
+		if (res == CURLE_OK && (response_code == 404 || response_code == 410))
+			CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_NOT_FOUND);
+		else
+			CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_TRANSIENT);
 
 		if (res != CURLE_OK) 
 			Con_DPrintf("Error downloading file: CURL error %s\n", curl_easy_strerror(res));
@@ -4287,11 +4586,13 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 		unlink(tmp_path); // Also delete the temporary file in case renaming fails
 		cls.download.active = false;
 		curl_download_active = false;
+		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_TRANSIENT);
 		return false;
 	}
 	CL_DownloadProgress_Update((double)fileSizeBytes, (double)fileSizeBytes);
 	cls.download.active = false;
 	curl_download_active = false;
+	CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_SUCCESS);
 
 	char sizeStr[32];
 
@@ -4314,10 +4615,11 @@ qboolean Curl_DownloadFile (const char* url, const char* filename, const char* l
 	return true; // File successfully downloaded
 
 url_too_long:
-    Con_DPrintf("Download URL is invalid or too long: %s\n", url ? url : "(null)");
-    cls.download.active = false;
-    curl_download_active = false;
-    return false;
+	Con_DPrintf("Download URL is invalid or too long: %s\n", url ? url : "(null)");
+	cls.download.active = false;
+	curl_download_active = false;
+	CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_INVALID);
+	return false;
 }
 
 static qboolean CL_AsyncDownload_EnsureMutex(void)
@@ -4434,10 +4736,14 @@ static int CL_AsyncDownload_Thread(void *unused)
 	int i;
 	qboolean success = false;
 	qboolean aborted = false;
+	qboolean saw_transient = false;
 	char error[128] = "";
 	long file_size = 0;
 	long response_code = 0;
 	CURLcode curl_result = CURLE_OK;
+	web_download_result_t result = WEB_DOWNLOAD_RESULT_NONE;
+	int attempt_count = 0;
+	int not_found_count = 0;
 
 	(void)unused;
 
@@ -4471,6 +4777,7 @@ static int CL_AsyncDownload_Thread(void *unused)
 		async_download.file_size = 0;
 		async_download.response_code = 0;
 		async_download.curl_result = CURLE_OK;
+		async_download.result = WEB_DOWNLOAD_RESULT_NONE;
 		async_download.error[0] = '\0';
 		SDL_UnlockMutex(async_download_mutex);
 
@@ -4478,6 +4785,8 @@ static int CL_AsyncDownload_Thread(void *unused)
 		if (!fp)
 		{
 			q_snprintf(error, sizeof(error), "Unable to open temp file: %s", strerror(errno));
+			result = WEB_DOWNLOAD_RESULT_TRANSIENT;
+			saw_transient = true;
 			break;
 		}
 
@@ -4485,7 +4794,10 @@ static int CL_AsyncDownload_Thread(void *unused)
 		if (!curl)
 		{
 			fclose(fp);
+			unlink(tmp_path);
 			q_strlcpy(error, "Unable to initialize curl", sizeof(error));
+			result = WEB_DOWNLOAD_RESULT_TRANSIENT;
+			saw_transient = true;
 			break;
 		}
 
@@ -4527,18 +4839,35 @@ static int CL_AsyncDownload_Thread(void *unused)
 			break;
 		}
 
+		attempt_count++;
 		if (curl_result == CURLE_OK && response_code == 200)
 		{
 			success = true;
+			result = WEB_DOWNLOAD_RESULT_SUCCESS;
 			error[0] = '\0';
 			break;
 		}
+
+		if (curl_result == CURLE_OK && (response_code == 404 || response_code == 410))
+			not_found_count++;
+		else
+			saw_transient = true;
 
 		unlink(tmp_path);
 		if (curl_result != CURLE_OK)
 			q_snprintf(error, sizeof(error), "%s: %s", source_urls[i], curl_easy_strerror(curl_result));
 		else
 			q_snprintf(error, sizeof(error), "%s: HTTP %ld", source_urls[i], response_code);
+	}
+
+	if (!success)
+	{
+		if (aborted)
+			result = WEB_DOWNLOAD_RESULT_NONE;
+		else if (attempt_count > 0 && not_found_count == attempt_count && !saw_transient)
+			result = WEB_DOWNLOAD_RESULT_NOT_FOUND;
+		else if (attempt_count > 0 || saw_transient)
+			result = WEB_DOWNLOAD_RESULT_TRANSIENT;
 	}
 
 	SDL_LockMutex(async_download_mutex);
@@ -4548,25 +4877,32 @@ static int CL_AsyncDownload_Thread(void *unused)
 	async_download.file_size = file_size;
 	async_download.response_code = response_code;
 	async_download.curl_result = curl_result;
+	async_download.result = result;
 	q_strlcpy(async_download.error, error, sizeof(async_download.error));
 	SDL_UnlockMutex(async_download_mutex);
 
 	return 0;
 }
 
-static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, int url_count, qboolean is_skybox, const char *display_name, qboolean auto_download)
+static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, int url_count, qboolean is_skybox, const char *display_name, qboolean auto_download, web_download_result_t *result_out)
 {
 	char tmp_path[MAX_OSPATH];
 	char full_urls[2][MAX_URLPATH];
 	char source_urls[2][MAX_URLPATH];
 	int i, count = 0;
+	qboolean saw_invalid_url = false;
 	SDL_Thread *thread;
+
+	CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_NONE);
 
 	if (!filename || !filename[0] || !urls || url_count <= 0)
 		return false;
 
 	if (!CL_AsyncDownload_EnsureMutex())
+	{
+		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_TRANSIENT);
 		return false;
+	}
 
 	if (CL_AsyncDownload_IsActive() || cls.download.active || curl_download_active)
 	{
@@ -4577,6 +4913,7 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 	if ((size_t)q_snprintf(tmp_path, sizeof(tmp_path), "%s/%s.tmp", com_gamedir, filename) >= sizeof(tmp_path))
 	{
 		Con_Printf("Download path too long\n");
+		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_INVALID);
 		return false;
 	}
 
@@ -4587,6 +4924,7 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 		if (!CL_BuildDownloadUrl(urls[i], filename, is_skybox, full_urls[count], sizeof(full_urls[count])))
 		{
 			Con_DPrintf("Download URL is invalid or too long: %s\n", urls[i]);
+			saw_invalid_url = true;
 			continue;
 		}
 		q_strlcpy(source_urls[count], urls[i], sizeof(source_urls[count]));
@@ -4596,6 +4934,8 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 	if (count <= 0)
 	{
 		Con_Printf("No usable download URLs are configured\n");
+		if (saw_invalid_url)
+			CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_INVALID);
 		return false;
 	}
 
@@ -4633,6 +4973,7 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 			cls.download.current[0] = '\0';
 		async_download_last_progress_print = 0.0;
 		Con_Printf("Unable to start download worker: %s\n", SDL_GetError());
+		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_TRANSIENT);
 		return false;
 	}
 
@@ -4677,7 +5018,7 @@ void CL_AsyncDownload_Frame(void)
 	char display_name[64];
 	double received, total;
 	long file_size;
-	long response_code;
+	web_download_result_t download_result;
 	SDL_Thread *thread = NULL;
 	int current_url;
 
@@ -4693,7 +5034,7 @@ void CL_AsyncDownload_Frame(void)
 	received = async_download.received;
 	total = async_download.total;
 	file_size = async_download.file_size;
-	response_code = async_download.response_code;
+	download_result = async_download.result;
 	current_url = async_download.current_url;
 	q_strlcpy(filename, async_download.filename, sizeof(filename));
 	q_strlcpy(tmp_path, async_download.tmp_path, sizeof(tmp_path));
@@ -4737,6 +5078,7 @@ void CL_AsyncDownload_Frame(void)
 			if (!is_auto || !CL_DownloadNameIsLoc(filename))
 				Con_Printf("Download failed: %s\n", filename);
 			success = false;
+			download_result = WEB_DOWNLOAD_RESULT_TRANSIENT;
 		}
 		else
 		{
@@ -4754,7 +5096,7 @@ void CL_AsyncDownload_Frame(void)
 			Con_Printf("Download cancelled: %s\n", COM_SkipPath(filename));
 		// auto-downloads probe optional files; a 404 just means the mirror
 		// doesn't have it, which is expected and shouldn't spam the console
-		else if (is_auto && (response_code == 404 || CL_DownloadNameIsLoc(filename)))
+		else if (is_auto && (download_result == WEB_DOWNLOAD_RESULT_NOT_FOUND || CL_DownloadNameIsLoc(filename)))
 			Con_DPrintf("Download failed: %s (%s)\n", filename, error[0] ? error : "not found");
 		else
 		{
@@ -4767,6 +5109,8 @@ void CL_AsyncDownload_Frame(void)
 
 	if (is_auto && !success)
 	{
+		if (!aborted && CL_DownloadNameIsLoc(filename))
+			CL_OptionalDownloadCache_NoteWebFailure(filename, download_result);
 		q_strlcpy(async_download_auto_failed, filename, sizeof(async_download_auto_failed));
 		if (!strcmp(filename, "paks/ctf.pak"))
 			downloadedctf = false; // let CL_CheckDownload rewrite star.mdl again so the protocol fallback requests the pak
@@ -4780,6 +5124,7 @@ void CL_AsyncDownload_Frame(void)
 	async_download.received = 0.0;
 	async_download.total = 0.0;
 	async_download.file_size = 0;
+	async_download.result = WEB_DOWNLOAD_RESULT_NONE;
 	async_download.error[0] = '\0';
 	SDL_UnlockMutex(async_download_mutex);
 
@@ -4954,12 +5299,14 @@ cleanup:
 			else
 			{
 				Con_Warning("Download of %s failed\n", cls.download.current);
+				CL_OptionalDownloadCache_RecordCurrentServerTransient();
 				unlink(cls.download.temp);
 			}
 		}
 		else
 		{
 			Con_Warning("Download of %s failed\n", cls.download.current);
+			CL_OptionalDownloadCache_RecordCurrentServerTransient();
 			unlink(cls.download.temp);	//kill the temp
 		}
 	}
@@ -4972,6 +5319,12 @@ void CL_StopDownload_f(void)
 {
 	if (CL_AsyncDownload_RequestStop())
 		return;
+
+	if (cmd_source == src_server && cls.download.active && !cls.download.file &&
+		CL_DownloadNameIsLoc(cls.download.current))
+	{
+		CL_OptionalDownloadCache_RecordServerMissing(cls.download.current);
+	}
 
 	if (!curl_download_active) // woods, add support for stopping curl downloads #webdl
 	{
@@ -5019,6 +5372,7 @@ void CL_Download_Begin_f(void)
 	if (Cmd_Argc() < 2 || !DL_ParseUnsigned(Cmd_Argv(1), &cls.download.size))
 	{
 		Con_Warning("Download begin with invalid size\n");
+		CL_OptionalDownloadCache_RecordCurrentServerTransient();
 		cls.download.active = false;
 		cls.download.size = 0;
 		cls.download.percent = -1.0f;
@@ -5031,6 +5385,7 @@ void CL_Download_Begin_f(void)
 	if (!cls.download.file)
 	{
 		Con_Warning("Unable to open download temp file for %s\n", cls.download.current);
+		CL_OptionalDownloadCache_RecordCurrentServerTransient();
 		cls.download.active = false;
 		cls.download.size = 0;
 		cls.download.percent = -1.0f;
@@ -5063,6 +5418,7 @@ void CL_Download_Data(void)
 	if (start > cls.download.size || size > cls.download.size - start)
 	{
 		Con_Warning("Download of %s received out-of-range data\n", cls.download.current);
+		CL_OptionalDownloadCache_RecordCurrentServerTransient();
 		CL_StopDownload_f();
 		return;
 	}
@@ -5071,6 +5427,7 @@ void CL_Download_Data(void)
 		fwrite(data, 1, size, cls.download.file) != size)
 	{
 		Con_Warning("Download of %s failed while writing data\n", cls.download.current);
+		CL_OptionalDownloadCache_RecordCurrentServerTransient();
 		CL_StopDownload_f();
 		return;
 	}
@@ -5102,6 +5459,7 @@ void CL_Download_Chunked(void)
 			if (msg_badread || high != 0 || low > 0x7fffffffu)
 			{
 				Con_Warning("Server offered an unsupported large download\n");
+				CL_OptionalDownloadCache_RecordCurrentServerTransient();
 				DL_AbortChunked(true);
 				return;
 			}
@@ -5115,6 +5473,13 @@ void CL_Download_Chunked(void)
 		if (size < 0)
 		{
 			const char *refused_name = name && name[0] ? name : cls.download.current;
+			if (CL_DownloadNameIsLoc(refused_name))
+			{
+				if (size == DLERR_UNKNOWN)
+					CL_OptionalDownloadCache_RecordServerTransient(refused_name);
+				else
+					CL_OptionalDownloadCache_RecordServerMissing(refused_name);
+			}
 			if (!CL_DownloadNameIsLoc(refused_name))
 				Con_Warning("Server refused download of %s\n", refused_name);
 			DL_AbortChunked(false);
@@ -5134,6 +5499,7 @@ void CL_Download_Chunked(void)
 		if (name && name[0] && strcmp(name, cls.download.current))
 		{
 			Con_Warning("Server sent the wrong download (%s instead of %s)\n", name, cls.download.current);
+			CL_OptionalDownloadCache_RecordCurrentServerTransient();
 			DL_AbortChunked(true);
 			return;
 		}
@@ -5155,6 +5521,7 @@ void CL_Download_Chunked(void)
 		if (!cls.download.file)
 		{
 			Con_Warning("Unable to open download temp file for %s\n", cls.download.current);
+			CL_OptionalDownloadCache_RecordCurrentServerTransient();
 			DL_AbortChunked(true);
 			return;
 		}
@@ -5193,6 +5560,7 @@ void CL_Download_Chunked(void)
 		fwrite(data, 1, wanted, cls.download.file) != wanted)
 	{
 		Con_Warning("Download of %s failed while writing chunk\n", cls.download.current);
+		CL_OptionalDownloadCache_RecordCurrentServerTransient();
 		DL_AbortChunked(true);
 		return;
 	}
@@ -5248,6 +5616,7 @@ qboolean CL_CheckDownload(const char *filename)
 
 	char local_path[MAX_OSPATH]; // Define the max path length	
 	char modified_filename[MAX_OSPATH];
+	qboolean is_loc;
 
 	if (!strcmp(filename, "progs/star.mdl") && downloadedctf == false) // since we don't download files inside a pak, lets download the pak for ctf
 	{
@@ -5272,6 +5641,10 @@ qboolean CL_CheckDownload(const char *filename)
 	if (COM_FileExists(filename, NULL))
 		return false;
 
+	is_loc = CL_DownloadNameIsLoc(filename);
+	if (is_loc && CL_OptionalDownloadCache_ShouldSkip(filename))
+		return false;
+
 	if ((size_t)q_snprintf(local_path, sizeof(local_path), "%s/%s", com_gamedir, filename) >= sizeof(local_path))
 		return false;
 
@@ -5279,29 +5652,34 @@ qboolean CL_CheckDownload(const char *filename)
 	{
 		const char *urls[2];
 		int url_count = 0;
+		web_download_result_t start_result = WEB_DOWNLOAD_RESULT_NONE;
 
 		if (webcheck && cl_web_download_url.string != NULL && cl_web_download_url.string[0] != '\0') // only run if server is verified
 			urls[url_count++] = cl_web_download_url.string;
 		if (web2check && cl_web_download_url2.string != NULL && cl_web_download_url2.string[0] != '\0') // only run if server is verified
 			urls[url_count++] = cl_web_download_url2.string;
 
-		if (url_count > 0 && CL_AsyncDownload_Start(filename, urls, url_count, false, NULL, true))
-			return true; // block; on failure CL_AsyncDownload_Frame records it and we fall through to the server download next poll
+		if (url_count > 0)
+		{
+			if (CL_AsyncDownload_Start(filename, urls, url_count, false, NULL, true, &start_result))
+				return true; // block; on failure CL_AsyncDownload_Frame records it and we fall through to the server download next poll
+
+			if (start_result != WEB_DOWNLOAD_RESULT_NONE)
+			{
+				q_strlcpy(async_download_auto_failed, filename, sizeof(async_download_auto_failed));
+				if (is_loc)
+					CL_OptionalDownloadCache_NoteWebFailure(filename, start_result);
+			}
+		}
 	}
 
 	// woods, if not available via web, try the server #webdl
 
-	if (allow_download.value >= 2) // woods #ftehack (3 also ignores gamedir mismatch above)
+	if (!CL_ServerDownloadAvailable())
 	{
-		if (!cl.protocol_dpdownload && !(cl.protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS) && cl.protocol != 666) // woods, allow downloads on qecrx (nq physics, FTE server) -- hack
-			return false;	//can't download anyway
-		if (netquakeio)
-			return false;
-	}
-	else
-	{
-		if (!cl.protocol_dpdownload && !(cl.protocol_pext1 & PEXT1_CHUNKEDDOWNLOADS))
-			return false;	//can't download anyway
+		if (is_loc)
+			CL_OptionalDownloadCache_RecordNoServerFallback(filename);
+		return false;	//can't download anyway
 	}
 
 	CL_DownloadProgress_Begin(filename);
@@ -5836,7 +6214,7 @@ void CL_ManualDownload_f (const char* filename)
 		return;
 	}
 
-	CL_AsyncDownload_Start(prefixedArg, urls, url_count, false, NULL, false);
+	CL_AsyncDownload_Start(prefixedArg, urls, url_count, false, NULL, false, NULL);
 }
 
 /*

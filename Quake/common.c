@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 #include "bgmusic.h"
+#include "json.h"
 #include <errno.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -2594,6 +2595,515 @@ void COM_CreatePath (char *path)
 			*ofs = sep;
 		}
 	}
+}
+
+struct com_negative_cache_entry_s
+{
+	char *key1;
+	char *key2;
+	com_negative_cache_result_t result;
+	time_t last_checked;
+	time_t next_retry;
+	struct com_negative_cache_entry_s *next;
+};
+
+static const char *COM_NegativeCache_ResultName(com_negative_cache_result_t result)
+{
+	return result == COM_NEGATIVE_CACHE_MISSING ? "missing" : "transient";
+}
+
+static qboolean COM_NegativeCache_ParseResult(const char *text, com_negative_cache_result_t *result)
+{
+	if (!text || !result)
+		return false;
+	if (!strcmp(text, "missing"))
+	{
+		*result = COM_NEGATIVE_CACHE_MISSING;
+		return true;
+	}
+	if (!strcmp(text, "transient"))
+	{
+		*result = COM_NEGATIVE_CACHE_TRANSIENT;
+		return true;
+	}
+	return false;
+}
+
+static qboolean COM_NegativeCache_ReadTime(const jsonentry_t *entry, const char *name, time_t *out)
+{
+	const char *text;
+	char *end;
+	long long value;
+	time_t converted;
+
+	if (!entry || !name || !out)
+		return false;
+
+	text = JSON_FindString(entry, name);
+	if (!text || !text[0])
+		return false;
+
+	errno = 0;
+	value = strtoll(text, &end, 10);
+	if (end == text || *end != '\0' || errno == ERANGE || value < 0)
+		return false;
+
+	converted = (time_t)value;
+	if ((long long)converted != value)
+		return false;
+
+	*out = converted;
+	return true;
+}
+
+static qboolean COM_NegativeCache_Path(const com_negative_cache_config_t *config,
+	char *path, size_t path_size)
+{
+	int result;
+
+	if (!config || !config->filename || !path || path_size == 0)
+		return false;
+
+	result = q_snprintf(path, path_size, "%s/id1/backups/%s",
+		com_basedir, config->filename);
+	if (result < 0 || (size_t)result >= path_size)
+	{
+		path[0] = '\0';
+		return false;
+	}
+
+	return true;
+}
+
+static qboolean COM_NegativeCache_KeysOkay(const com_negative_cache_config_t *config,
+	const char *key1, const char *key2)
+{
+	if (!config || !key1 || !key1[0] || !key2 || !key2[0])
+		return false;
+	if (config->max_key1_len && strlen(key1) >= config->max_key1_len)
+		return false;
+	if (config->max_key2_len && strlen(key2) >= config->max_key2_len)
+		return false;
+	if (config->validate && !config->validate(key1, key2, config->validate_ctx))
+		return false;
+
+	return true;
+}
+
+static char *COM_NegativeCache_CopyString(const char *text)
+{
+	char *copy;
+	size_t len;
+
+	if (!text)
+		return NULL;
+
+	len = strlen(text);
+	copy = (char *)malloc(len + 1);
+	if (!copy)
+		return NULL;
+
+	memcpy(copy, text, len + 1);
+	return copy;
+}
+
+void COM_NegativeCache_Free(com_negative_cache_t *cache)
+{
+	com_negative_cache_entry_t *entry;
+
+	if (!cache)
+		return;
+
+	entry = cache->entries;
+	while (entry)
+	{
+		com_negative_cache_entry_t *next = entry->next;
+		free(entry->key1);
+		free(entry->key2);
+		free(entry);
+		entry = next;
+	}
+
+	cache->entries = NULL;
+	cache->loaded = false;
+	cache->dirty = false;
+}
+
+static com_negative_cache_entry_t *COM_NegativeCache_FindEntry(com_negative_cache_t *cache,
+	const char *key1, const char *key2)
+{
+	com_negative_cache_entry_t *entry;
+
+	if (!cache || !key1 || !key1[0] || !key2 || !key2[0])
+		return NULL;
+
+	for (entry = cache->entries; entry; entry = entry->next)
+	{
+		if (!strcmp(entry->key1, key1) && !strcmp(entry->key2, key2))
+			return entry;
+	}
+
+	return NULL;
+}
+
+static com_negative_cache_entry_t *COM_NegativeCache_AddEntry(com_negative_cache_t *cache,
+	const com_negative_cache_config_t *config, const char *key1, const char *key2)
+{
+	com_negative_cache_entry_t *entry;
+
+	if (!cache || !COM_NegativeCache_KeysOkay(config, key1, key2))
+		return NULL;
+
+	entry = (com_negative_cache_entry_t *)calloc(1, sizeof(*entry));
+	if (!entry)
+		return NULL;
+
+	entry->key1 = COM_NegativeCache_CopyString(key1);
+	entry->key2 = COM_NegativeCache_CopyString(key2);
+	if (!entry->key1 || !entry->key2)
+	{
+		free(entry->key1);
+		free(entry->key2);
+		free(entry);
+		return NULL;
+	}
+
+	entry->next = cache->entries;
+	cache->entries = entry;
+	return entry;
+}
+
+static com_negative_cache_entry_t *COM_NegativeCache_UpsertEntry(com_negative_cache_t *cache,
+	const com_negative_cache_config_t *config, const char *key1, const char *key2)
+{
+	com_negative_cache_entry_t *entry = COM_NegativeCache_FindEntry(cache, key1, key2);
+
+	if (entry)
+		return entry;
+
+	return COM_NegativeCache_AddEntry(cache, config, key1, key2);
+}
+
+static void COM_NegativeCache_LoadEntry(com_negative_cache_t *cache,
+	const com_negative_cache_config_t *config, const jsonentry_t *json_entry)
+{
+	const char *key1;
+	const char *key2;
+	const char *result_text;
+	com_negative_cache_result_t result;
+	time_t last_checked;
+	time_t next_retry;
+	com_negative_cache_entry_t *entry;
+
+	if (!cache || !config || !json_entry || json_entry->type != JSON_OBJECT)
+		return;
+
+	key1 = JSON_FindString(json_entry, config->key1_name);
+	key2 = JSON_FindString(json_entry, config->key2_name);
+	result_text = JSON_FindString(json_entry, "result");
+	if (!COM_NegativeCache_KeysOkay(config, key1, key2) ||
+		!COM_NegativeCache_ParseResult(result_text, &result) ||
+		!COM_NegativeCache_ReadTime(json_entry, "last_checked", &last_checked) ||
+		!COM_NegativeCache_ReadTime(json_entry, "next_retry", &next_retry))
+	{
+		return;
+	}
+
+	entry = COM_NegativeCache_UpsertEntry(cache, config, key1, key2);
+	if (!entry)
+		return;
+
+	entry->result = result;
+	entry->last_checked = last_checked;
+	entry->next_retry = next_retry;
+}
+
+static void COM_NegativeCache_LoadFromText(com_negative_cache_t *cache,
+	const com_negative_cache_config_t *config, const char *text)
+{
+	json_t *json;
+	const jsonentry_t *entries;
+	const jsonentry_t *entry;
+	const double *schema_version;
+	const char *metadata_value;
+
+	if (!cache || !config || !text)
+		return;
+
+	json = JSON_Parse(text);
+	if (!json || !json->root || json->root->type != JSON_OBJECT)
+	{
+		if (json)
+			JSON_Free(json);
+		return;
+	}
+
+	schema_version = JSON_FindNumber(json->root, "schema_version");
+	if (!schema_version || *schema_version != (double)config->schema_version)
+	{
+		JSON_Free(json);
+		return;
+	}
+
+	if (config->metadata_name)
+	{
+		metadata_value = JSON_FindString(json->root, config->metadata_name);
+		if (!metadata_value || !config->metadata_value ||
+			strcmp(metadata_value, config->metadata_value))
+		{
+			JSON_Free(json);
+			return;
+		}
+	}
+
+	entries = JSON_Find(json->root, "entries", JSON_ARRAY);
+	if (!entries)
+	{
+		JSON_Free(json);
+		return;
+	}
+
+	for (entry = entries->firstchild; entry; entry = entry->next)
+		COM_NegativeCache_LoadEntry(cache, config, entry);
+
+	JSON_Free(json);
+}
+
+static void COM_NegativeCache_Load(com_negative_cache_t *cache,
+	const com_negative_cache_config_t *config)
+{
+	char path[MAX_OSPATH];
+	FILE *file;
+	long len;
+	char *text;
+
+	if (!cache || !config || cache->loaded)
+		return;
+
+	cache->loaded = true;
+	if (!COM_NegativeCache_Path(config, path, sizeof(path)))
+		return;
+
+	file = fopen(path, "rb");
+	if (!file)
+		return;
+	if (fseek(file, 0, SEEK_END) != 0)
+	{
+		fclose(file);
+		return;
+	}
+	len = ftell(file);
+	rewind(file);
+	if (len <= 0 || len > config->max_file_size)
+	{
+		fclose(file);
+		return;
+	}
+
+	text = (char *)malloc((size_t)len + 1);
+	if (!text)
+	{
+		fclose(file);
+		return;
+	}
+	if (fread(text, 1, (size_t)len, file) != (size_t)len)
+	{
+		free(text);
+		fclose(file);
+		return;
+	}
+	text[len] = '\0';
+	fclose(file);
+
+	COM_NegativeCache_LoadFromText(cache, config, text);
+	free(text);
+}
+
+qboolean COM_NegativeCache_ShouldSkip(com_negative_cache_t *cache,
+	const com_negative_cache_config_t *config, const char *key1, const char *key2,
+	time_t now, time_t *next_retry)
+{
+	com_negative_cache_entry_t *entry;
+
+	if (next_retry)
+		*next_retry = 0;
+	if (now == (time_t)-1 || !COM_NegativeCache_KeysOkay(config, key1, key2))
+		return false;
+
+	COM_NegativeCache_Load(cache, config);
+	entry = COM_NegativeCache_FindEntry(cache, key1, key2);
+	if (!entry || entry->next_retry <= now)
+		return false;
+
+	if (next_retry)
+		*next_retry = entry->next_retry;
+	return true;
+}
+
+qboolean COM_NegativeCache_Update(com_negative_cache_t *cache,
+	const com_negative_cache_config_t *config, const char *key1, const char *key2,
+	com_negative_cache_result_t result, time_t now, time_t missing_retry_seconds,
+	time_t transient_retry_seconds)
+{
+	com_negative_cache_entry_t *entry;
+	time_t retry_seconds;
+
+	if (now == (time_t)-1 || !COM_NegativeCache_KeysOkay(config, key1, key2))
+		return false;
+
+	COM_NegativeCache_Load(cache, config);
+	entry = COM_NegativeCache_UpsertEntry(cache, config, key1, key2);
+	if (!entry)
+		return false;
+
+	retry_seconds = (result == COM_NEGATIVE_CACHE_MISSING) ?
+		missing_retry_seconds :
+		transient_retry_seconds;
+	entry->result = result;
+	entry->last_checked = now;
+	entry->next_retry = now + retry_seconds;
+	cache->dirty = true;
+	return true;
+}
+
+void COM_NegativeCache_Remove(com_negative_cache_t *cache,
+	const com_negative_cache_config_t *config, const char *key1, const char *key2)
+{
+	com_negative_cache_entry_t *entry;
+	com_negative_cache_entry_t *prev = NULL;
+
+	if (!cache || !COM_NegativeCache_KeysOkay(config, key1, key2))
+		return;
+
+	COM_NegativeCache_Load(cache, config);
+	entry = cache->entries;
+	while (entry)
+	{
+		if (!strcmp(entry->key1, key1) && !strcmp(entry->key2, key2))
+		{
+			if (prev)
+				prev->next = entry->next;
+			else
+				cache->entries = entry->next;
+			free(entry->key1);
+			free(entry->key2);
+			free(entry);
+			cache->dirty = true;
+			return;
+		}
+
+		prev = entry;
+		entry = entry->next;
+	}
+}
+
+void COM_NegativeCache_SaveIfDirty(com_negative_cache_t *cache,
+	const com_negative_cache_config_t *config)
+{
+	char path[MAX_OSPATH];
+	char tmp_path[MAX_OSPATH];
+	FILE *file;
+	com_negative_cache_entry_t *entry;
+	qboolean ok = true;
+	qboolean first = true;
+	int result;
+
+	if (!cache || !config || !cache->loaded || !cache->dirty)
+		return;
+	if (!COM_NegativeCache_Path(config, path, sizeof(path)))
+		return;
+
+	result = q_snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+	if (result < 0 || (size_t)result >= sizeof(tmp_path))
+		return;
+
+	COM_CreatePath(tmp_path);
+	file = fopen(tmp_path, "w");
+	if (!file)
+		return;
+
+	if (fprintf(file, "{\n") < 0 ||
+		fprintf(file, "  \"schema_version\": %d,\n", config->schema_version) < 0)
+	{
+		ok = false;
+	}
+	if (ok && config->metadata_name)
+	{
+		char *escaped_metadata = JSON_EscapeString(config->metadata_value ? config->metadata_value : "");
+		if (!escaped_metadata)
+			ok = false;
+		else
+		{
+			if (fprintf(file, "  \"%s\": \"%s\",\n", config->metadata_name, escaped_metadata) < 0)
+				ok = false;
+			free(escaped_metadata);
+		}
+	}
+	if (ok && fprintf(file, "  \"entries\": [\n") < 0)
+		ok = false;
+
+	for (entry = cache->entries; ok && entry; entry = entry->next)
+	{
+		char *escaped_key1 = JSON_EscapeString(entry->key1);
+		char *escaped_key2 = JSON_EscapeString(entry->key2);
+
+		if (!escaped_key1 || !escaped_key2)
+		{
+			free(escaped_key1);
+			free(escaped_key2);
+			ok = false;
+			break;
+		}
+
+		if (!first && fprintf(file, ",\n") < 0)
+			ok = false;
+		first = false;
+
+		if (ok)
+		{
+			if (fprintf(file, "    {\n") < 0 ||
+				fprintf(file, "      \"%s\": \"%s\",\n", config->key1_name, escaped_key1) < 0 ||
+				fprintf(file, "      \"%s\": \"%s\",\n", config->key2_name, escaped_key2) < 0 ||
+				fprintf(file, "      \"result\": \"%s\",\n", COM_NegativeCache_ResultName(entry->result)) < 0 ||
+				fprintf(file, "      \"last_checked\": \"%lld\",\n", (long long)entry->last_checked) < 0 ||
+				fprintf(file, "      \"next_retry\": \"%lld\"\n", (long long)entry->next_retry) < 0 ||
+				fprintf(file, "    }") < 0)
+			{
+				ok = false;
+			}
+		}
+
+		free(escaped_key1);
+		free(escaped_key2);
+	}
+
+	if (ok)
+	{
+		if (!first && fprintf(file, "\n") < 0)
+			ok = false;
+		if (fprintf(file, "  ]\n}\n") < 0)
+			ok = false;
+	}
+
+	if (fclose(file) != 0)
+		ok = false;
+
+	if (!ok)
+	{
+		remove(tmp_path);
+		return;
+	}
+
+#ifdef _WIN32
+	remove(path);
+#endif
+	if (rename(tmp_path, path) != 0)
+	{
+		remove(tmp_path);
+		return;
+	}
+
+	cache->dirty = false;
 }
 
 /*

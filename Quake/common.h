@@ -422,6 +422,57 @@ extern	char	com_gamedir[MAX_OSPATH];
 extern	int	file_from_pak;	// global indicating that file came from a pak
 const char *COM_GetMissingPakHint(void);
 
+typedef enum web_download_result_e
+{
+	WEB_DOWNLOAD_RESULT_NONE,
+	WEB_DOWNLOAD_RESULT_SUCCESS,
+	WEB_DOWNLOAD_RESULT_NOT_FOUND,
+	WEB_DOWNLOAD_RESULT_TRANSIENT,
+	WEB_DOWNLOAD_RESULT_INVALID
+} web_download_result_t;
+
+typedef enum com_negative_cache_result_e
+{
+	COM_NEGATIVE_CACHE_MISSING,
+	COM_NEGATIVE_CACHE_TRANSIENT
+} com_negative_cache_result_t;
+
+typedef struct com_negative_cache_entry_s com_negative_cache_entry_t;
+
+typedef struct com_negative_cache_s
+{
+	com_negative_cache_entry_t *entries;
+	qboolean loaded;
+	qboolean dirty;
+} com_negative_cache_t;
+
+typedef qboolean (*com_negative_cache_validate_fn)(const char *key1, const char *key2, void *ctx);
+
+typedef struct com_negative_cache_config_s
+{
+	const char *filename;
+	int schema_version;
+	long max_file_size;
+	const char *key1_name;
+	const char *key2_name;
+	size_t max_key1_len;
+	size_t max_key2_len;
+	const char *metadata_name;
+	const char *metadata_value;
+	com_negative_cache_validate_fn validate;
+	void *validate_ctx;
+} com_negative_cache_config_t;
+
+void COM_NegativeCache_Free(com_negative_cache_t *cache);
+qboolean COM_NegativeCache_ShouldSkip(com_negative_cache_t *cache, const com_negative_cache_config_t *config,
+	const char *key1, const char *key2, time_t now, time_t *next_retry);
+qboolean COM_NegativeCache_Update(com_negative_cache_t *cache, const com_negative_cache_config_t *config,
+	const char *key1, const char *key2, com_negative_cache_result_t result, time_t now,
+	time_t missing_retry_seconds, time_t transient_retry_seconds);
+void COM_NegativeCache_Remove(com_negative_cache_t *cache, const com_negative_cache_config_t *config,
+	const char *key1, const char *key2);
+void COM_NegativeCache_SaveIfDirty(com_negative_cache_t *cache, const com_negative_cache_config_t *config);
+
 void COM_ListSystemFiles(void *ctx, const char *gamedir, const char *ext, qboolean (*cb)(void *ctx, const char *fname));
 void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter);
 const char *COM_GetGameNames(qboolean full);
