@@ -118,6 +118,13 @@ typedef struct
 } aliasglsl_t;
 static aliasglsl_t r_alias_glsl[ALIAS_GLSL_MODES];
 
+// tb -- Alias programs created during a vid_restart performed while disconnected
+// can render models black or with garbage skinning after the next map loads.
+// We record whether the current programs were compiled in that suspect state so
+// R_NewMap can recompile them once.
+qboolean gl_alias_shaders_compiled_disconnected = false;
+qboolean gl_alias_shaders_compiling_disconnected_restart = false;
+
 #define pose1VertexAttrIndex 0
 #define pose1NormalAttrIndex 1
 #define pose2VertexAttrIndex 2
@@ -516,6 +523,11 @@ void GLAlias_CreateShaders (void)
 			GL_UseProgramFunc (0);
 		}
 	}
+
+	if (gl_alias_shaders_compiling_disconnected_restart)
+		gl_alias_shaders_compiled_disconnected = true;
+	else if (cls.state == ca_connected)
+		gl_alias_shaders_compiled_disconnected = false;
 }
 
 /*

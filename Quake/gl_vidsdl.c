@@ -1053,7 +1053,9 @@ static void VID_Restart (void)
 //
 	VID_SetMode (width, height, refreshrate, bpp, fullscreen);
 
+	gl_alias_shaders_compiling_disconnected_restart = (cls.state == ca_disconnected);
 	GL_Init ();
+	gl_alias_shaders_compiling_disconnected_restart = false;
 	TexMgr_ReloadImages ();
 	GL_BuildBModelVertexBuffer ();
 	GLMesh_LoadVertexBuffers ();

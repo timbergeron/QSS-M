@@ -792,6 +792,13 @@ void R_NewMap (void)
 #endif
 	//ericw -- no longer load alias models into a VBO here, it's done in Mod_LoadAliasModel
 
+	// tb -- Alias programs created during a vid_restart performed while disconnected
+	// can render models black or with garbage skinning after the next map loads.
+	// Recompile once now that a map is loaded, matching the in-game mode-toggle path
+	// that fixes it.
+	if (gl_alias_shaders_compiled_disconnected)
+		GLAlias_CreateShaders ();
+
 	r_framecount = 0; //johnfitz -- paranoid?
 	r_visframecount = 0; //johnfitz -- paranoid?
 
@@ -842,7 +849,10 @@ void D_FlushCaches (void)
 {
 }
 
-static GLuint gl_programs[16];
+// Includes lazy postprocess/menu programs plus temporary alias shader replacements
+// until the next full R_DeleteShaders() teardown.
+#define MAX_GLSL_PROGRAMS 64
+static GLuint gl_programs[MAX_GLSL_PROGRAMS];
 static int gl_num_programs;
 
 static qboolean GL_CheckShader (GLuint shader)
