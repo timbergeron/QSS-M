@@ -192,9 +192,47 @@ jobs:
         Write-Host "===== Package archive contents ====="
         tar -tf $packageZip
 
+    - name: Prepare MSYS2 debug logs
+      if: always()
+      shell: pwsh
+      run: |
+        $packageName = "QSS-M-${{ matrix.platform }}"
+        $packageZip = "Quake/$packageName.zip"
+        $logRoot = "artifact/logs/$packageName-logs"
+        $buildLog = "Quake/build-${{ matrix.platform }}.log"
+
+        Remove-Item $logRoot -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+
+        if (Test-Path $buildLog) {
+          Copy-Item $buildLog $logRoot
+        }
+        if (Test-Path "Quake") {
+          Get-ChildItem "Quake" -File |
+            Sort-Object FullName |
+            Select-Object -ExpandProperty FullName |
+            Set-Content "$logRoot/quake-files.txt"
+        }
+        if (Test-Path $packageZip) {
+          tar -tf $packageZip | Set-Content "$logRoot/$packageName-zip-contents.txt"
+        }
+
+        Write-Host "===== Log artifact tree ====="
+        Get-ChildItem "artifact/logs" -Recurse -File -ErrorAction SilentlyContinue |
+          Sort-Object FullName |
+          ForEach-Object { $_.FullName }
+
     - name: Upload package artifact
       uses: actions/upload-artifact@v7
       with:
         path: Quake/QSS-M-${{ matrix.platform }}.zip
         if-no-files-found: error
         archive: false
+
+    - name: Upload MSYS2 debug logs
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: QSS-M-${{ matrix.platform }}-logs
+        path: artifact/logs/QSS-M-${{ matrix.platform }}-logs
+        if-no-files-found: warn

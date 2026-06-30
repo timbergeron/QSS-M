@@ -51,7 +51,7 @@ PLATFORM_PRESETS = {
         "label": "macOS universal",
         "workflow_name": "macOS CI (Xcode)",
         "job_name": "arm64-universal",
-        "artifact_name_hint": "QSS-M_MacOS.zip",
+        "artifact_name_hint": "QSS-M-macOS.zip",
         "launch_glob": "*.app",
     },
     "linux": {

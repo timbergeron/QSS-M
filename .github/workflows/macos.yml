@@ -105,6 +105,9 @@ jobs:
           echo "=== PATH after brew shellenv ==="
           echo "$PATH" | tr ':' '\n'
           echo ""
+          echo "=== Removing unused Homebrew runner taps ==="
+          brew untap aws/tap >/dev/null 2>&1 || true
+          echo ""
           echo "=== Installing packages ==="
           brew install autoconf automake libtool autoconf-archive pkg-config
           echo ""
@@ -154,6 +157,7 @@ jobs:
 
     - name: Build
       run: |
+          set -o pipefail
           echo "=== Build step starting ==="
           eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
           echo "PATH: $PATH"
@@ -164,11 +168,48 @@ jobs:
           echo ""
           cd MacOSX
           echo "=== Running build-macos.sh ==="
-          ./build-macos.sh
+          build_rc=0
+          ./build-macos.sh 2>&1 | tee build-macos.log || build_rc=$?
+          if [ "$build_rc" -ne 0 ]; then
+            echo "Build failed with rc=$build_rc. Tail of log follows:"
+            tail -n 400 build-macos.log || true
+            exit "$build_rc"
+          fi
+
+    - name: Prepare macOS debug logs
+      if: always()
+      run: |
+          set -euxo pipefail
+          package_zip="MacOSX/build/Release/QSS-M-macOS.zip"
+          log_root="artifact/logs/QSS-M-macOS-logs"
+
+          rm -rf "$log_root"
+          mkdir -p "$log_root"
+
+          if [ -f MacOSX/build-macos.log ]; then
+            cp MacOSX/build-macos.log "$log_root/"
+          fi
+          if [ -d MacOSX/build/Release ]; then
+            find MacOSX/build/Release -maxdepth 2 -type f | sort > "$log_root/release-files.txt"
+          fi
+          if [ -f "$package_zip" ]; then
+            unzip -l "$package_zip" > "$log_root/QSS-M-macOS-zip-contents.txt"
+          fi
+
+          echo "===== Log artifact tree ====="
+          find artifact/logs -maxdepth 3 -type f | sort
 
     - name: Upload macOS artifact
       uses: actions/upload-artifact@v7
       with:
-        path: MacOSX/build/Release/QSS-M_MacOS.zip
+        path: MacOSX/build/Release/QSS-M-macOS.zip
         if-no-files-found: error
         archive: false
+
+    - name: Upload macOS debug logs
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: QSS-M-macOS-logs
+        path: artifact/logs/QSS-M-macOS-logs
+        if-no-files-found: warn

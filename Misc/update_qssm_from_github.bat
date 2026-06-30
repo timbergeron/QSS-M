@@ -113,7 +113,7 @@ $PlatformPresets = @{
         Label = 'macOS universal'
         WorkflowName = 'macOS CI (Xcode)'
         JobName = 'arm64-universal'
-        ArtifactNameHint = 'QSS-M_MacOS.zip'
+        ArtifactNameHint = 'QSS-M-macOS.zip'
         LaunchGlob = '*.app'
     }
     linux = @{

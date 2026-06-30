@@ -69,9 +69,40 @@ jobs:
           exit 1
         fi
 
+    - name: Prepare Linux debug logs
+      if: always()
+      run: |
+        set -euxo pipefail
+        package_zip="Quake/QSS-M-l64.zip"
+        log_root="artifact/logs/QSS-M-l64-logs"
+
+        rm -rf "$log_root"
+        mkdir -p "$log_root"
+
+        if [ -f build-linux.log ]; then
+          cp build-linux.log "$log_root/"
+        fi
+        if [ -d Quake ]; then
+          find Quake -maxdepth 1 -type f | sort > "$log_root/quake-files.txt"
+        fi
+        if [ -f "$package_zip" ]; then
+          unzip -l "$package_zip" > "$log_root/QSS-M-l64-zip-contents.txt"
+        fi
+
+        echo "===== Log artifact tree ====="
+        find artifact/logs -maxdepth 3 -type f | sort
+
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
         path: Quake/QSS-M-l64.zip
         if-no-files-found: error
         archive: false
+
+    - name: Upload Linux debug logs
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: QSS-M-l64-logs
+        path: artifact/logs/QSS-M-l64-logs
+        if-no-files-found: warn

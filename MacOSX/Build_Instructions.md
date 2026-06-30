@@ -75,7 +75,7 @@ This helper script:
 - Runs `setup-vcpkg.sh`
 - Builds the `QSS-M` target in `Release`
 - Writes `build/Release/Quakespasm-Spiked-Revision.txt`
-- Packages the release output as `build/Release/QSS-M_MacOS.zip`
+- Packages the release output as `build/Release/QSS-M-macOS.zip`
 
 Direct Xcode command-line builds also work:
 
