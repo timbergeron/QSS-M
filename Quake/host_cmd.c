@@ -7256,6 +7256,194 @@ static int Host_ClientPingMS(client_t *client)
 	return CLAMP(0, (int)(total * 1000), 9999);
 }
 
+#define NETDROPS_MIN_WINDOW_SECS 5.0
+#define NETDROPS_REMOTE_TRUNCATE_RESERVE 128
+
+typedef struct netdrops_client_s
+{
+	int slot;
+	const char *name;
+	int ping;
+	int packetloss;
+	unsigned int map_drops;
+	double map_drops_per_min;
+	double sort_drops_per_min;
+	unsigned int total_drops;
+	int connected_secs;
+	qboolean rate_valid;
+} netdrops_client_t;
+
+static int Host_NetDropsSortClass(const netdrops_client_t *client)
+{
+	if (client->rate_valid && client->map_drops == 0)
+		return 0;
+	if (!client->rate_valid && client->map_drops == 0)
+		return 1;
+	return 2;
+}
+
+static int Host_NetDropsCompare(const void *lhs, const void *rhs)
+{
+	const netdrops_client_t *a = (const netdrops_client_t *)lhs;
+	const netdrops_client_t *b = (const netdrops_client_t *)rhs;
+	int class_a = Host_NetDropsSortClass(a);
+	int class_b = Host_NetDropsSortClass(b);
+
+	if (class_a != class_b)
+		return class_a - class_b;
+
+	if (a->sort_drops_per_min < b->sort_drops_per_min)
+		return -1;
+	if (a->sort_drops_per_min > b->sort_drops_per_min)
+		return 1;
+
+	if (a->map_drops != b->map_drops)
+		return a->map_drops < b->map_drops ? -1 : 1;
+	if (a->total_drops != b->total_drops)
+		return a->total_drops < b->total_drops ? -1 : 1;
+	if (a->connected_secs != b->connected_secs)
+		return a->connected_secs > b->connected_secs ? -1 : 1;
+	return a->slot - b->slot;
+}
+
+static qboolean Host_NetDropsPrint(qboolean remote, size_t reserve, const char *fmt, ...) FUNC_PRINTF(3,4);
+static qboolean Host_NetDropsPrint(qboolean remote, size_t reserve, const char *fmt, ...)
+{
+	char text[1024];
+	va_list ap;
+
+	va_start(ap, fmt);
+	q_vsnprintf(text, sizeof(text), fmt, ap);
+	va_end(ap);
+
+	if (remote)
+	{
+		size_t needed;
+
+		if (!host_client)
+			return false;
+
+		needed = strlen(text) + 2 + reserve; /* svc_print byte plus trailing NUL */
+		if ((size_t)host_client->message.cursize + needed > (size_t)host_client->message.maxsize)
+			return false;
+
+		MSG_WriteByte(&host_client->message, svc_print);
+		MSG_WriteString(&host_client->message, text);
+	}
+	else
+		Con_Printf("%s", text);
+
+	return true;
+}
+
+static void Host_NetDropsFormatTime(int seconds, char *buffer, size_t buffer_size)
+{
+	int minutes;
+	int hours;
+
+	if (seconds < 0)
+		seconds = 0;
+
+	minutes = seconds / 60;
+	seconds -= minutes * 60;
+	hours = minutes / 60;
+	minutes -= hours * 60;
+
+	q_snprintf(buffer, buffer_size, "%i:%02i:%02i", hours, minutes, seconds);
+}
+
+/*
+==================
+Host_NetDrops_f
+
+Server-side dropped-packet summary, ranked best to worst by map drops per minute.
+==================
+*/
+static void Host_NetDrops_f(void)
+{
+	netdrops_client_t clients[MAX_SCOREBOARD];
+	int count = 0;
+	int i;
+	qboolean remote = (cmd_source == src_client);
+
+	if (!remote)
+	{
+		if (!sv.active)
+		{
+			Cmd_ForwardToServer();
+			return;
+		}
+	}
+	else if (!host_client)
+		return;
+
+	for (i = 0; i < svs.maxclients && i < MAX_SCOREBOARD; i++)
+	{
+		client_t *client = &svs.clients[i];
+		double map_window_secs;
+		double sort_window_secs;
+
+		if (!client->active || !client->netconnection)
+			continue;
+
+		clients[count].slot = i;
+		clients[count].name = client->name;
+		clients[count].ping = Host_ClientPingMS(client);
+		clients[count].packetloss = NET_QSocketGetPacketLoss(client->netconnection);
+		clients[count].map_drops = NET_QSocketGetUnreliableReceiveMapDrops(client->netconnection);
+		clients[count].total_drops = NET_QSocketGetUnreliableReceiveTotalDrops(client->netconnection);
+		clients[count].connected_secs = (int)(net_time - NET_QSocketGetTime(client->netconnection));
+		map_window_secs = NET_QSocketGetUnreliableReceiveMapDropWindowSecs(client->netconnection);
+		clients[count].rate_valid = map_window_secs >= NETDROPS_MIN_WINDOW_SECS;
+		clients[count].map_drops_per_min = clients[count].rate_valid
+			? (clients[count].map_drops * 60.0) / map_window_secs
+			: 0.0;
+		sort_window_secs = clients[count].rate_valid ? map_window_secs : NETDROPS_MIN_WINDOW_SECS;
+		clients[count].sort_drops_per_min = (clients[count].map_drops * 60.0) / sort_window_secs;
+		count++;
+	}
+
+	if (!count)
+	{
+		Host_NetDropsPrint(remote, 0, "No connected network clients.\n");
+		return;
+	}
+
+	qsort(clients, count, sizeof(clients[0]), Host_NetDropsCompare);
+
+	if (!Host_NetDropsPrint(remote, 0, "netdrops: best to worst by map drops/min (<%.0fs map window uses %.0fs floor)\n",
+		NETDROPS_MIN_WINDOW_SECS, NETDROPS_MIN_WINDOW_SECS))
+		return;
+	if (!Host_NetDropsPrint(remote, 0, "#   name             ping pl%% mapdrops drops/min totaldrops connected\n"))
+		return;
+	for (i = 0; i < count; i++)
+	{
+		char rate[16];
+		char connected[16];
+		size_t reserve = remote && i + 1 < count ? NETDROPS_REMOTE_TRUNCATE_RESERVE : 0;
+
+		if (clients[i].rate_valid)
+			q_snprintf(rate, sizeof(rate), "%.2f", clients[i].map_drops_per_min);
+		else
+			q_snprintf(rate, sizeof(rate), "<%.0fs", NETDROPS_MIN_WINDOW_SECS);
+		Host_NetDropsFormatTime(clients[i].connected_secs, connected, sizeof(connected));
+
+		if (!Host_NetDropsPrint(remote, reserve, "%-3i %-16.16s %4i %3i %8u %9s %10u %s\n",
+			i + 1,
+			clients[i].name,
+			clients[i].ping,
+			clients[i].packetloss,
+			clients[i].map_drops,
+			rate,
+			clients[i].total_drops,
+			connected))
+		{
+			Host_NetDropsPrint(remote, 0, "netdrops: output truncated after %i/%i clients\n", i, count);
+			break;
+		}
+	}
+}
+
 /*
 ==================
 Host_Pings_f
@@ -11828,6 +12016,7 @@ void Host_InitCommands (void)
 	Cmd_AddCommand_ClientCommandQC ("kick", Host_Kick_f);
 	Cmd_AddCommand_ClientCommand ("ping", Host_Ping_f);
 	Cmd_AddCommand_ClientCommand ("pings", Host_Pings_f);
+	Cmd_AddCommand_ClientCommand ("netdrops", Host_NetDrops_f);
 	Cmd_AddCommand ("load", Host_Loadgame_f);
 	Cmd_AddCommand ("save", Host_Savegame_f);
 	Cmd_AddCommand_ClientCommandQC ("give", Host_Give_f);

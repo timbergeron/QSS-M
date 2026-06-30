@@ -75,6 +75,7 @@ void NET_QSocketClearUnreliableReceiveMapDrops(struct qsocket_s *sock);
 void NET_QSocketRecordUnreliableReceive(struct qsocket_s *sock, unsigned int dropped);
 unsigned int NET_QSocketGetUnreliableReceiveMapDrops(const struct qsocket_s *sock);
 unsigned int NET_QSocketGetUnreliableReceiveTotalDrops(const struct qsocket_s *sock);
+double NET_QSocketGetUnreliableReceiveMapDropWindowSecs(const struct qsocket_s *sock);
 int NET_QSocketGetPacketLoss(const struct qsocket_s *sock);
 const char *NET_QSocketGetOwnerString(const struct qsocket_s *sock);
 void NET_QSocketSetMSS(struct qsocket_s *s, int mss);

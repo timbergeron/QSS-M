@@ -184,6 +184,7 @@ qsocket_t *NET_NewQSocket (void)
 	NET_QSocketClearPacketLoss(sock);
 	sock->unreliableReceiveDroppedMap = 0;
 	sock->unreliableReceiveDroppedTotal = 0;
+	sock->unreliableReceiveDroppedMapStart = net_time;
 	sock->receiveMessageLength = 0;
 	sock->pending_max_datagram = 1024;
 	sock->proquake_angle_hack = false;
@@ -243,7 +244,10 @@ void NET_QSocketClearPacketLoss(qsocket_t *s)
 void NET_QSocketClearUnreliableReceiveMapDrops(qsocket_t *s)
 {
 	if (s)
+	{
 		s->unreliableReceiveDroppedMap = 0;
+		s->unreliableReceiveDroppedMapStart = net_time;
+	}
 }
 
 static void NET_QSocketAppendPacketLossSample(qsocket_t *s, qboolean lost)
@@ -301,6 +305,17 @@ unsigned int NET_QSocketGetUnreliableReceiveMapDrops(const qsocket_t *s)
 unsigned int NET_QSocketGetUnreliableReceiveTotalDrops(const qsocket_t *s)
 {
 	return s ? s->unreliableReceiveDroppedTotal : 0;
+}
+
+double NET_QSocketGetUnreliableReceiveMapDropWindowSecs(const qsocket_t *s)
+{
+	double elapsed;
+
+	if (!s)
+		return 0.0;
+
+	elapsed = net_time - s->unreliableReceiveDroppedMapStart;
+	return elapsed > 0.0 ? elapsed : 0.0;
 }
 
 int NET_QSocketGetPacketLoss(const qsocket_t *s)

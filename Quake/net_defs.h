@@ -169,6 +169,7 @@ typedef struct qsocket_s
 	unsigned int	unreliableReceiveHistoryLosses;
 	unsigned int	unreliableReceiveDroppedMap;
 	unsigned int	unreliableReceiveDroppedTotal;
+	double		unreliableReceiveDroppedMapStart;
 	int		receiveMessageLength;
 	byte		receiveMessage [NET_MAXMESSAGE];
 
