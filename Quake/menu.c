@@ -28684,11 +28684,34 @@ void M_ServerList_ShutdownPingThreads(void)
 	CleanupPingThreads();
 }
 
+static void M_ServerList_CopySelectedAddress(void)
+{
+	int actualIndex = ServersMenu_ResolveIndex(serversmenu.list.cursor);
+	servertitem_snapshot_t server;
+
+	if (actualIndex < 0 || !ServerList_SnapshotItem(actualIndex, &server) || !server.ip[0])
+		return;
+
+	if (SDL_SetClipboardText(server.ip) < 0)
+	{
+		Con_Printf("Clipboard copy failed: %s\n", SDL_GetError());
+		return;
+	}
+
+	M_TextField_PlayCopySound();
+}
+
 void M_ServerList_Key(int key)
 {
 
 	int x, y; // woods #mousemenu
 	int prev_cursor = serversmenu.list.cursor;
+
+	if (M_TextField_HasShortcutModifier() && (key == 'c' || key == 'C'))
+	{
+		M_ServerList_CopySelectedAddress();
+		return;
+	}
 
 	
 	// Handle Ctrl+U or Ctrl+Backspace first
