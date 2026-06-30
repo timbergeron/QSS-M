@@ -5424,7 +5424,7 @@ void M_MultiPlayer_Draw (void)
                 f += 8;
                 M_Print(f, conn_y + 8, "currently connected to:");
 
-                if (realtime - cl.last_received_message > scr_shownet.value)
+                if (realtime - cl.last_received_message > 5.0)
                         M_PrintRGBA(f, conn_y + 16, lastmphost, CL_PLColours_Parse("0xffffff"), 0.2f, false);
                 else
                         M_PrintWhite(f, conn_y + 16, lastmphost);
