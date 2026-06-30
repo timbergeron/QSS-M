@@ -1306,18 +1306,28 @@ static void NET_Stats_f (void)
 // recognize ip:port (based on ProQuake)
 static const char *Strip_Port (const char *host)
 {
-	static char	noport[MAX_QPATH];
-			/* array size as in Host_Connect_f() */
+	static char	noport[NET_NAMELEN];
 	char		*p;
+	char		*close_bracket;
 	int		port;
 
 	if (!host || !*host)
 		return host;
 	q_strlcpy (noport, host, sizeof(noport));
-	if ((p = Q_strrchr(noport, ':')) == NULL)
-		return host;
-	if (strchr(p, ']'))
-		return host;	//[::] should not be considered port 0
+	if (noport[0] == '[')
+	{
+		close_bracket = strchr(noport, ']');
+		if (!close_bracket || close_bracket[1] != ':')
+			return host;
+		p = close_bracket + 1;
+	}
+	else
+	{
+		if ((p = Q_strrchr(noport, ':')) == NULL)
+			return host;
+		if (strchr(noport, ':') != p)
+			return host;
+	}
 	*p++ = '\0';
 	port = Q_atoi (p);
 	if (port > 0 && port < 65536 && port != net_hostport)

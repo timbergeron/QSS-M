@@ -6568,6 +6568,32 @@ static void Host_Resurrect_f (void)
 
 /*
 ==================
+Host_ParsePort -- woods #connectfilter
+==================
+*/
+static qboolean Host_ParsePort(const char* text, int* portout)
+{
+	long port;
+	char* end;
+
+	if (!text || !*text || !portout)
+		return false;
+
+	for (const char* p = text; *p; ++p)
+		if (!q_isdigit((unsigned char)*p))
+			return false;
+
+	errno = 0;
+	port = strtol(text, &end, 10);
+	if (errno || end == text || *end || port <= 0 || port > 65535)
+		return false;
+
+	*portout = (int)port;
+	return true;
+}
+
+/*
+==================
 ParseServerAddress -- woods #udplist
 ==================
 */
@@ -6584,8 +6610,11 @@ static qboolean ParseServerAddress(const char* input, char* hostbuf, size_t host
 		default_port = 26000;
 	*portout = default_port;
 
+	if (strlen(input) >= MAX_SERVER_ADDRESS_LEN)
+		return false;
+
 	if (*input == '[')
-{
+	{
 		const char* end = strchr(input, ']');
 		size_t len;
 
@@ -6613,12 +6642,7 @@ static qboolean ParseServerAddress(const char* input, char* hostbuf, size_t host
 		if (!*portpart)
 			return false;
 
-		for (const char* p = portpart; *p; ++p)
-			if (!isdigit((unsigned char)*p))
-				return false;
-
-		*portout = atoi(portpart);
-		if (*portout <= 0 || *portout > 65535)
+		if (!Host_ParsePort(portpart, portout))
 			return false;
 
 		return true;
@@ -6640,18 +6664,12 @@ static qboolean ParseServerAddress(const char* input, char* hostbuf, size_t host
 		if (colon_count == 1 && last_colon)
 		{
 			size_t len;
-			const char* p;
 
 			portpart = last_colon + 1;
 			if (!*portpart)
 				return false;
 
-			for (p = portpart; *p; ++p)
-				if (!isdigit((unsigned char)*p))
-					return false;
-
-			*portout = atoi(portpart);
-			if (*portout <= 0 || *portout > 65535)
+			if (!Host_ParsePort(portpart, portout))
 				return false;
 
 			len = (size_t)(last_colon - input);
@@ -7705,62 +7723,158 @@ retry:
 	}
 }
 
-qboolean Valid_IP(const char* ip_str) // woods #connectfilter
+static qboolean Host_ValidationHost(const char* address, char* host, size_t hostsize)
 {
-	int count = 0;
-	for (int i = 0; i < strlen(ip_str); i++)
-		if (ip_str[i] == '.')
-			count++;
+	int port;
 
-	if (count != 3) // three periods
+	if (!ParseServerAddress(address, host, hostsize, &port))
 		return false;
+	if (strlen(host) >= NET_NAMELEN)
+		return false;
+	return host[0] != '\0';
+}
 
-	int num1, num2, num3, num4;
-	if (sscanf(ip_str, "%d.%d.%d.%d", &num1, &num2, &num3, &num4) != 4) // four numbers
-		return false;
+static qboolean Host_ValidIPv4Literal(const char* host)
+{
+	const char* p = host;
 
-	if (num1 < 0 || num1 > 255 || num2 < 0 || num2 > 255 || num3 < 0 || num3 > 255 || num4 < 0 || num4 > 255)  // 0-255 numbers
-		return false;
+	for (int octet = 0; octet < 4; ++octet)
+	{
+		int value = 0;
+		int digits = 0;
+
+		if (!q_isdigit((unsigned char)*p))
+			return false;
+
+		while (q_isdigit((unsigned char)*p))
+		{
+			value = value * 10 + (*p - '0');
+			if (++digits > 3 || value > 255)
+				return false;
+			p++;
+		}
+
+		if (octet < 3)
+		{
+			if (*p != '.')
+				return false;
+			p++;
+		}
+		else if (*p)
+			return false;
+	}
 
 	return true;
 }
 
+static qboolean Host_ValidIPv6Literal(const char* host)
+{
+	struct addrinfo hints;
+	struct addrinfo* result = NULL;
+	int ret;
+
+	if (!strchr(host, ':'))
+		return false;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET6;
+	hints.ai_socktype = SOCK_DGRAM;
+#ifdef AI_NUMERICHOST
+	hints.ai_flags = AI_NUMERICHOST;
+#endif
+
+	ret = getaddrinfo(host, NULL, &hints, &result);
+	if (result)
+		freeaddrinfo(result);
+
+	return ret == 0;
+}
+
+qboolean Valid_IP(const char* ip_str) // woods #connectfilter
+{
+	char host[MAX_SERVER_ADDRESS_LEN];
+
+	if (!Host_ValidationHost(ip_str, host, sizeof(host)))
+		return false;
+
+	return Host_ValidIPv4Literal(host) || Host_ValidIPv6Literal(host);
+}
+
+static qboolean Host_ValidDomainName(const char* host)
+{
+	size_t len;
+	size_t label_len = 0;
+	const char* label_start = host;
+	qboolean saw_dot = false;
+	qboolean label_has_alpha = false;
+	qboolean has_alpha = false;
+
+	if (!host || !*host)
+		return false;
+
+	len = strlen(host);
+	if (host[len - 1] == '.')
+	{
+		if (len == 1)
+			return false;
+		len--;
+	}
+	if (len > 253)
+		return false;
+
+	for (size_t i = 0; i <= len; ++i)
+	{
+		const char c = (i == len) ? '\0' : host[i];
+
+		if (i == len || c == '.')
+		{
+			if (label_len == 0 || label_len > 63)
+				return false;
+			if (*label_start == '-' || host[i - 1] == '-')
+				return false;
+
+			if (label_has_alpha)
+				has_alpha = true;
+			if (c == '.')
+				saw_dot = true;
+
+			label_start = host + i + 1;
+			label_len = 0;
+			label_has_alpha = false;
+			continue;
+		}
+
+		if (!q_isalnum((unsigned char)c) && c != '-')
+			return false;
+
+		if (q_isalpha((unsigned char)c))
+			label_has_alpha = true;
+
+		label_len++;
+	}
+
+	return saw_dot && has_alpha;
+}
 
 qboolean Valid_Domain(const char* domain_str) // woods #connectfilter
 {
-	int count = 0;
-	for (int i = 0; i < strlen(domain_str); i++)  // count the periods
-	{
-		if (domain_str[i] == '.') {
-			count++;
-		}
-	}
+	char host[MAX_SERVER_ADDRESS_LEN];
 
-	if (count < 1 || count > 4)  // adjust for international domains
+	if (!Host_ValidationHost(domain_str, host, sizeof(host)))
 		return false;
 
-	return true;
+	if (Host_ValidIPv4Literal(host) || Host_ValidIPv6Literal(host))
+		return false;
+
+	return Host_ValidDomainName(host);
 }
 
-qboolean Valid_Port(char* address) // woods #connectfilter
+qboolean Valid_Port(const char* address) // woods #connectfilter
 {
-	char* port_start = strchr(address, ':');
-	if (port_start != NULL) 
-	{
-		int port_len = strlen(port_start + 1);
-		if (port_len == 5)
-		{
-			for (int i = 0; i < port_len; i++) 
-			{
-				if (!isdigit(*(port_start + i + 1))) 
-					return false;
-			}
-			return true;
-		}
-		else 
-			return false;
-	}
-	return true;
+	char host[MAX_SERVER_ADDRESS_LEN];
+	int port;
+
+	return ParseServerAddress(address, host, sizeof(host), &port);
 }
 
 /*
