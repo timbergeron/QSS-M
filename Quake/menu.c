@@ -25967,7 +25967,9 @@ void M_Search_Draw (void)
 		searchCompleteTime = realtime;
 	}
 
-	if (hostCacheCount || (searchLastScope == SLIST_INTERNET && ServerList_ApiFetchHasPendingOrResults()))
+	if (hostCacheCount ||
+		(searchLastScope == SLIST_INTERNET &&
+			(M_Bookmarks_CountPinned() > 0 || ServerList_ApiFetchHasPendingOrResults())))
 	{
 		M_Menu_ServerList_f ();
 		return;
@@ -25994,6 +25996,7 @@ Server List Menu
 #define MAX_VIS_SERVERS 17
 #define PING_COOLDOWN 2.0
 #define MAX_PING_QUEUE 5
+#define SERVERLIST_UNAVAILABLE_ALPHA 0.35f
 
 // number of worker threads used for the initial server ping sweep
 #ifndef MAX_PING_THREADS
@@ -26011,7 +26014,17 @@ typedef struct {
 	qboolean active;
 	double lastPingTime;
 	qboolean isLoading;  // New flag to indicate loading state
+	qboolean pinned_bookmark;
+	int pinned_rank;
+	qboolean known_available;
+	qboolean ping_tested;
 } servertitem_t;
+
+static qboolean ServerList_IsUnavailableBookmark(const servertitem_t* server)
+{
+	return server && server->pinned_bookmark && server->ping_tested &&
+		server->ping < 0 && !server->known_available;
+}
 
 typedef struct {
 	char name[256];
@@ -26022,6 +26035,7 @@ typedef struct {
 	int maxusers;
 	int ping;
 	qboolean has_players;
+	qboolean unavailable_bookmark;
 } servertitem_snapshot_t;
 
 static struct {
@@ -26098,6 +26112,7 @@ static qboolean ServerList_SnapshotItem(int actualIndex, servertitem_snapshot_t 
 	snapshot->users = server->users;
 	snapshot->maxusers = server->maxusers;
 	snapshot->ping = server->ping;
+	snapshot->unavailable_bookmark = ServerList_IsUnavailableBookmark(server);
 
 	if (locked)
 		SDL_UnlockMutex(pingMutex);
@@ -26130,6 +26145,10 @@ static void SortServers(qboolean lockMutex);
 static void SortServersWithSelection(qboolean lockMutex, int selectedActual);
 static void M_ServerList_Refilter(void);
 static void M_ServerList_RefilterWithSelection(int selectedActual);
+qboolean M_Servers_Match(int index, char initial);
+static void ServerList_FreeItem(servertitem_t* item);
+static void ServerList_Rescroll(void);
+static void ServerList_CenterCursor(void);
 static int ServerList_FindDuplicateItem(const servertitem_t* items, int count, const servertitem_t* candidate);
 static void ServerList_AppendHostCacheResults(void);
 static void CleanupPingThreads(void);
@@ -26411,6 +26430,138 @@ static void ServerList_GetHostOnly(const char* address, char* out, size_t outsiz
 	ServerList_CopyTrimmedToken(start, end - start, out, outsize);
 }
 
+typedef struct
+{
+	char host[256];
+	int port;
+} serverlistaddress_t;
+
+static qboolean ServerList_ParsePortText(const char* port, const char* end, int* out)
+{
+	long value = 0;
+
+	if (!port || !*port)
+		return false;
+
+	if (!end)
+		end = port + strlen(port);
+
+	if (port >= end)
+		return false;
+
+	while (port < end)
+	{
+		if (!q_isdigit((unsigned char)*port))
+			return false;
+		value = value * 10 + (*port - '0');
+		if (value > 65535)
+			return false;
+		port++;
+	}
+
+	if (out)
+		*out = (int)value;
+	return true;
+}
+
+static qboolean ServerList_ParseAddress(const char* address, serverlistaddress_t* parsed)
+{
+	const char* host_start;
+	const char* host_end;
+	const char* address_end;
+	const char* port_start = NULL;
+	const char* port_end = NULL;
+	const char* last_colon;
+	const char* first_colon;
+	size_t host_len;
+
+	if (!parsed)
+		return false;
+
+	memset(parsed, 0, sizeof(*parsed));
+	parsed->port = DEFAULTnet_hostport;
+
+	if (!address || !*address)
+		return false;
+
+	while (*address == ' ' || *address == '\t')
+		address++;
+
+	host_start = address;
+	host_end = address + strlen(address);
+	while (host_end > host_start &&
+		(host_end[-1] == ' ' || host_end[-1] == '\t'))
+		host_end--;
+	address_end = host_end;
+
+	if (host_start >= host_end)
+		return false;
+
+	if (*host_start == '[')
+	{
+		const char* bracket = memchr(host_start, ']', host_end - host_start);
+		const char* after;
+
+		if (!bracket || bracket == host_start + 1)
+			return false;
+
+		after = bracket + 1;
+		host_start++;
+		host_end = bracket;
+		if (after < address_end)
+		{
+			if (*after != ':')
+				return false;
+			port_start = after + 1;
+			port_end = address_end;
+		}
+	}
+	else
+	{
+		first_colon = memchr(host_start, ':', host_end - host_start);
+		last_colon = first_colon ? memchr(first_colon + 1, ':', host_end - first_colon - 1) : NULL;
+		if (first_colon && !last_colon)
+		{
+			port_start = first_colon + 1;
+			port_end = address_end;
+			host_end = first_colon;
+		}
+	}
+
+	host_len = host_end - host_start;
+	if (host_len == 0)
+		return false;
+	if (host_len >= sizeof(parsed->host))
+		return false;
+
+	memcpy(parsed->host, host_start, host_len);
+	parsed->host[host_len] = '\0';
+
+	if (port_start && !ServerList_ParsePortText(port_start, port_end, &parsed->port))
+		return false;
+
+	return parsed->host[0] != '\0';
+}
+
+static qboolean ServerList_AddressMatches(const char* a, const char* b)
+{
+	serverlistaddress_t parsed_a;
+	serverlistaddress_t parsed_b;
+
+	if (!a || !b || !*a || !*b)
+		return false;
+
+	if (!q_strcasecmp(a, b))
+		return true;
+
+	if (!ServerList_ParseAddress(a, &parsed_a) ||
+		!ServerList_ParseAddress(b, &parsed_b))
+		return false;
+
+	return !q_strcasecmp(parsed_a.host, parsed_b.host) &&
+		parsed_a.port == parsed_b.port;
+}
+
 static qboolean ServerList_IsIgnored(const char* name, const char* ip)
 {
 	const char* list = net_master_ignore.string;
@@ -26449,6 +26600,53 @@ static qboolean ServerList_IsIgnored(const char* name, const char* ip)
 	}
 
 	return false;
+}
+
+static int ServerList_PinnedRank(const servertitem_t* server)
+{
+	if (!server || !server->pinned_bookmark)
+		return -1;
+
+	return server->pinned_rank;
+}
+
+static int ServerList_SortGroup(const servertitem_t* server)
+{
+	if (!server || !server->pinned_bookmark)
+		return 1;
+	return 0;
+}
+
+static qboolean ServerList_CreatePinnedBookmarkItem(const pinnedbookmark_t* bookmark, int rank, servertitem_t* item)
+{
+	if (!bookmark || !item || !bookmark->name[0] || !bookmark->alias[0])
+		return false;
+
+	memset(item, 0, sizeof(*item));
+
+	item->name = strdup(bookmark->alias);
+	item->ip = strdup(bookmark->name);
+	item->map = strdup("");
+	item->players = NULL;
+	item->users = 0;
+	item->maxusers = 0;
+	item->active = true;
+	item->ping = -1;
+	item->lastPingTime = 0;
+	item->isLoading = false;
+	item->pinned_bookmark = true;
+	item->pinned_rank = rank;
+	item->known_available = (cls.state == ca_connected &&
+		ServerList_AddressMatches(bookmark->name, lastmphost));
+	item->ping_tested = false;
+
+	if (!item->name || !item->ip || !item->map)
+	{
+		ServerList_FreeItem(item);
+		return false;
+	}
+
+	return true;
 }
 
 static void ServerList_FreeItem(servertitem_t* item)
@@ -26528,7 +26726,8 @@ static int ServerList_FindDuplicateItem(const servertitem_t* items, int count, c
 		const char* existingBaseName = items[i].name && items[i].name[0] == '*' ? items[i].name + 1 : existingName;
 		qboolean existingStarred = items[i].name && items[i].name[0] == '*';
 
-		if (candidate->ip && items[i].ip && strcmp(candidate->ip, items[i].ip) == 0)
+		if (candidate->ip && items[i].ip &&
+			ServerList_AddressMatches(candidate->ip, items[i].ip))
 			return i;
 
 		if ((candidateStarred || existingStarred) &&
@@ -26551,6 +26750,30 @@ static qboolean ServerList_ShouldReplaceDuplicate(const servertitem_t* existing,
 	return existingStarred && !candidateStarred;
 }
 
+static void ServerList_MergeLiveDetailsIntoPinned(servertitem_t* pinned, servertitem_t* live)
+{
+	if (!pinned || !live || !pinned->pinned_bookmark)
+		return;
+
+	free((void *)pinned->map);
+	free((void *)pinned->players);
+
+	pinned->map = live->map;
+	pinned->players = live->players;
+	live->map = NULL;
+	live->players = NULL;
+
+	pinned->users = live->users;
+	pinned->maxusers = live->maxusers;
+	if (live->ping >= 0)
+		pinned->ping = live->ping;
+	pinned->active = live->active;
+	pinned->isLoading = live->isLoading;
+	pinned->known_available = pinned->known_available || live->known_available;
+	if (live->lastPingTime > pinned->lastPingTime)
+		pinned->lastPingTime = live->lastPingTime;
+}
+
 static qboolean ServerList_AppendOrReplaceMovedItem(servertitem_t** items, int* count, servertitem_t* src, int* changedIndex)
 {
 	int duplicateIndex;
@@ -26565,6 +26788,14 @@ static qboolean ServerList_AppendOrReplaceMovedItem(servertitem_t** items, int* 
 	duplicateIndex = ServerList_FindDuplicateItem(*items, *count, src);
 	if (duplicateIndex >= 0)
 	{
+		if ((*items)[duplicateIndex].pinned_bookmark && !src->pinned_bookmark)
+		{
+			ServerList_MergeLiveDetailsIntoPinned(&(*items)[duplicateIndex], src);
+			ServerList_FreeItem(src);
+			if (changedIndex)
+				*changedIndex = duplicateIndex;
+			return true;
+		}
 		if (ServerList_ShouldReplaceDuplicate(&(*items)[duplicateIndex], src))
 		{
 			ServerList_FreeItem(&(*items)[duplicateIndex]);
@@ -26622,7 +26853,7 @@ static void ServerList_RebuildOrderAndFilter(void)
 	if (serversmenu.list.search.len > 0)
 		M_ServerList_RefilterWithSelection(selectedActual);
 	else if (serversmenu.list.viewsize > 0)
-		M_List_Rescroll(&serversmenu.list);
+		ServerList_Rescroll();
 }
 
 static void ServerList_ApiEnsureMutex(void)
@@ -26706,6 +26937,10 @@ static qboolean ServerList_CreateHostCacheItem(size_t index, servertitem_t* item
 	item->ping = -1;
 	item->lastPingTime = 0;
 	item->isLoading = false;
+	item->pinned_bookmark = false;
+	item->pinned_rank = -1;
+	item->known_available = true;
+	item->ping_tested = false;
 
 	if (!item->name || !item->ip || !item->map)
 	{
@@ -26738,6 +26973,7 @@ void CleanupPingMutex(void)
 void PingSingleServer(int index)
 {
 	qboolean same_server;
+	qboolean was_unavailable;
 
 	if (index < 0 || index >= serversmenu.servercount)
 		return;
@@ -26755,6 +26991,7 @@ void PingSingleServer(int index)
 	q_strlcpy(serverAddress, serversmenu.items[index].ip, sizeof(serverAddress));
 	previousPing = serversmenu.items[index].ping;
 	users = serversmenu.items[index].users;
+	was_unavailable = ServerList_IsUnavailableBookmark(&serversmenu.items[index]);
 	serversmenu.items[index].isLoading = true;  // Set loading flag
 	SDL_UnlockMutex(pingMutex);
 
@@ -26776,7 +27013,12 @@ void PingSingleServer(int index)
 		serversmenu.items[index].ping = -1;  // -1 indicates "failed"
 	}
 	if (same_server)
+	{
+		serversmenu.items[index].ping_tested = true;
 		serversmenu.items[index].isLoading = false;  // Clear loading flag
+		if (was_unavailable != ServerList_IsUnavailableBookmark(&serversmenu.items[index]))
+			serversmenu.pingSortDirty = true;
+	}
 	SDL_UnlockMutex(pingMutex);
 
 	/* refresh player names on re-ping if server has players */
@@ -26916,9 +27158,11 @@ int PingServers(void* data)
 			int users;
 			qboolean has_players_already;
 			qboolean same_server;
+			qboolean was_unavailable;
 			q_strlcpy(serverAddress, serversmenu.items[i].ip, sizeof(serverAddress));
 			users = serversmenu.items[i].users;
 			has_players_already = (serversmenu.items[i].players != NULL);
+			was_unavailable = ServerList_IsUnavailableBookmark(&serversmenu.items[i]);
 			SDL_UnlockMutex(pingMutex);
 
 			int ping = UDP_Ping_Host(serverAddress);
@@ -26927,7 +27171,12 @@ int PingServers(void* data)
 			same_server = (serversmenu.items && i < serversmenu.servercount &&
 				serversmenu.items[i].ip && !strcmp(serversmenu.items[i].ip, serverAddress));
 			if (same_server)
+			{
 				serversmenu.items[i].ping = (ping >= 0) ? ping : -1;
+				serversmenu.items[i].ping_tested = true;
+				if (was_unavailable != ServerList_IsUnavailableBookmark(&serversmenu.items[i]))
+					serversmenu.pingSortDirty = true;
+			}
 			SDL_UnlockMutex(pingMutex);
 
 			/* query player names if server responded to ping and has players */
@@ -27275,6 +27524,7 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 		}
 
 		servertitem_t* newItem = &(*items)[*actualServerCount];
+		memset(newItem, 0, sizeof(*newItem));
 		newItem->name = strdup(displayName);
                 newItem->ip = strdup(addressWithPort);
                 free(addressWithPort);
@@ -27286,6 +27536,18 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 		newItem->ping = -1;
 		newItem->lastPingTime = 0;
 		newItem->isLoading = false;
+		newItem->pinned_bookmark = false;
+		newItem->pinned_rank = -1;
+		newItem->known_available = true;
+		newItem->ping_tested = false;
+
+		if (!newItem->name || !newItem->ip || !newItem->map ||
+			(playerNamesLen > 0 && !newItem->players))
+		{
+			ServerList_FreeItem(newItem);
+			Con_DPrintf("server list API: memory allocation failed\n");
+			continue;
+		}
 
 		(*actualServerCount)++;
 	}
@@ -27544,7 +27806,26 @@ static int CompareServers(const void* a, const void* b)
         int indexB = *(const int*)b;
         const servertitem_t* serverA = &serversmenu.items[indexA];
         const servertitem_t* serverB = &serversmenu.items[indexB];
+	int pinA = ServerList_PinnedRank(serverA);
+	int pinB = ServerList_PinnedRank(serverB);
+	int groupA = ServerList_SortGroup(serverA);
+	int groupB = ServerList_SortGroup(serverB);
 	int res = 0;
+
+	if (groupA != groupB)
+		return groupA - groupB;
+
+	if (pinA >= 0 && pinB >= 0)
+	{
+		qboolean unavailableA = ServerList_IsUnavailableBookmark(serverA);
+		qboolean unavailableB = ServerList_IsUnavailableBookmark(serverB);
+
+		if (unavailableA != unavailableB)
+			return unavailableA ? 1 : -1;
+	}
+
+	if (pinA >= 0 && pinB >= 0 && pinA != pinB)
+		return pinA - pinB;
 
 	switch (serversmenu.sort_mode) {
 	case SORT_NAME:
@@ -27576,6 +27857,185 @@ static int CompareServers(const void* a, const void* b)
 }
 
 	return serversmenu.sort_descending ? -res : res;
+}
+
+static int ServerList_DisplayPinnedCount(void)
+{
+	int count = 0;
+
+	for (int i = 0; i < serversmenu.list.numitems; ++i)
+	{
+		int actualIndex = ServersMenu_ResolveIndex(i);
+		if (actualIndex < 0 || actualIndex >= serversmenu.servercount ||
+			ServerList_PinnedRank(&serversmenu.items[actualIndex]) < 0)
+			break;
+		count++;
+	}
+
+	return count;
+}
+
+static qboolean ServerList_HasPinnedSeparator(int pinnedCount)
+{
+	return pinnedCount > 0 && pinnedCount < serversmenu.list.numitems;
+}
+
+static int ServerList_RowCapacity(void)
+{
+	int rows = serversmenu.list.viewsize;
+
+	if (serversmenu.list.search.len > 0 && rows > 13)
+		rows = 13;
+
+	return q_max(rows, 1);
+}
+
+static void ServerList_GetVisibleLayout(int* rows, int* itemViewsize,
+	int* pinnedCount, qboolean* separatorVisible)
+{
+	int row_capacity = ServerList_RowCapacity();
+	int pinned_count = ServerList_DisplayPinnedCount();
+	qboolean show_separator;
+
+	show_separator = ServerList_HasPinnedSeparator(pinned_count) &&
+		serversmenu.list.scroll < pinned_count &&
+		pinned_count < serversmenu.list.scroll + row_capacity;
+
+	if (rows)
+		*rows = row_capacity;
+	if (itemViewsize)
+		*itemViewsize = q_max(row_capacity - (show_separator ? 1 : 0), 1);
+	if (pinnedCount)
+		*pinnedCount = pinned_count;
+	if (separatorVisible)
+		*separatorVisible = show_separator;
+}
+
+static void ServerList_ClampScroll(void)
+{
+	/* The separator consumes a row only while it is visible. A scrollbar drag
+	 * can cross that boundary, so clamp once for each possible layout state. */
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		int item_viewsize;
+		int max_scroll;
+
+		ServerList_GetVisibleLayout(NULL, &item_viewsize, NULL, NULL);
+		max_scroll = q_max(serversmenu.list.numitems - item_viewsize, 0);
+		serversmenu.list.scroll = CLAMP(0, serversmenu.list.scroll, max_scroll);
+	}
+}
+
+static void ServerList_Rescroll(void)
+{
+	int item_viewsize;
+	int saved_viewsize = serversmenu.list.viewsize;
+
+	ServerList_GetVisibleLayout(NULL, &item_viewsize, NULL, NULL);
+	serversmenu.list.viewsize = item_viewsize;
+	M_List_Rescroll(&serversmenu.list);
+	serversmenu.list.viewsize = saved_viewsize;
+	ServerList_ClampScroll();
+}
+
+static void ServerList_CenterCursor(void)
+{
+	int pinned_count = ServerList_DisplayPinnedCount();
+	int item_viewsize = ServerList_RowCapacity();
+	int saved_viewsize = serversmenu.list.viewsize;
+
+	/* Use the conservative capacity so centering cannot leave the cursor in
+	 * the row occupied by the pinned/unpinned separator. */
+	if (ServerList_HasPinnedSeparator(pinned_count))
+		item_viewsize = q_max(item_viewsize - 1, 1);
+
+	serversmenu.list.viewsize = item_viewsize;
+	M_List_CenterCursor(&serversmenu.list);
+	serversmenu.list.viewsize = saved_viewsize;
+	ServerList_ClampScroll();
+}
+
+static qboolean ServerList_MouseOverPinnedSeparator(int yrel,
+	int rows, int pinnedCount, qboolean separatorVisible)
+{
+	int separator_row;
+
+	if (!separatorVisible || yrel < 0 || yrel >= rows * 8)
+		return false;
+
+	separator_row = pinnedCount - serversmenu.list.scroll;
+	return yrel >= separator_row * 8 && yrel < (separator_row + 1) * 8;
+}
+
+static qboolean ServerList_ListKey(int key)
+{
+	int item_viewsize;
+	int saved_viewsize = serversmenu.list.viewsize;
+	qboolean handled;
+
+	ServerList_GetVisibleLayout(NULL, &item_viewsize, NULL, NULL);
+
+	serversmenu.list.viewsize = item_viewsize;
+	handled = M_List_Key(&serversmenu.list, key);
+	serversmenu.list.viewsize = saved_viewsize;
+	ServerList_ClampScroll();
+
+	return handled;
+}
+
+static qboolean ServerList_ListCycleMatch(int key)
+{
+	int item_viewsize;
+	int saved_viewsize = serversmenu.list.viewsize;
+	qboolean handled;
+
+	ServerList_GetVisibleLayout(NULL, &item_viewsize, NULL, NULL);
+
+	serversmenu.list.viewsize = item_viewsize;
+	handled = M_List_CycleMatch(&serversmenu.list, key, M_Servers_Match);
+	serversmenu.list.viewsize = saved_viewsize;
+	ServerList_ClampScroll();
+
+	return handled;
+}
+
+static qboolean ServerList_UseScrollbar(int yrel)
+{
+	int item_viewsize;
+	int saved_viewsize = serversmenu.list.viewsize;
+	qboolean used;
+
+	ServerList_GetVisibleLayout(NULL, &item_viewsize, NULL, NULL);
+
+	serversmenu.list.viewsize = item_viewsize;
+	used = M_List_UseScrollbar(&serversmenu.list, yrel);
+	serversmenu.list.viewsize = saved_viewsize;
+	ServerList_ClampScroll();
+
+	return used;
+}
+
+static void ServerList_MousemoveList(int yrel)
+{
+	int rows, item_viewsize, pinned_count;
+	qboolean separator_visible;
+	int saved_viewsize = serversmenu.list.viewsize;
+
+	ServerList_GetVisibleLayout(&rows, &item_viewsize, &pinned_count, &separator_visible);
+
+	if (ServerList_MouseOverPinnedSeparator(yrel, rows, pinned_count, separator_visible))
+		return;
+
+	if (separator_visible)
+	{
+		int separator_row = pinned_count - serversmenu.list.scroll;
+		if (yrel >= (separator_row + 1) * 8)
+			yrel -= 8;
+	}
+
+	serversmenu.list.viewsize = item_viewsize;
+	M_List_Mousemove(&serversmenu.list, yrel);
+	serversmenu.list.viewsize = saved_viewsize;
 }
 
 static int ServersMenu_ResolveIndex(int displayIndex)
@@ -27636,7 +28096,7 @@ static void M_ServerList_RefilterWithSelection(int selectedActual)
     if (serversmenu.list.cursor < 0 && serversmenu.list.numitems > 0)
         serversmenu.list.cursor = 0;
 
-    M_List_CenterCursor(&serversmenu.list);
+    ServerList_CenterCursor();
 }
 
 static void M_ServerList_Refilter(void)
@@ -27682,8 +28142,10 @@ static void SortServersWithSelection(qboolean lockMutex, int selectedActual)
                 serversmenu.list.cursor = CLAMP(0, serversmenu.list.cursor, serversmenu.servercount - 1);
         }
 
-        if (serversmenu.list.viewsize > 0)
-                M_List_Rescroll(&serversmenu.list);
+        if (serversmenu.list.search.len > 0)
+                M_ServerList_RefilterWithSelection(selectedActual);
+        else if (serversmenu.list.viewsize > 0)
+                ServerList_Rescroll();
 
         serversmenu.pingSortDirty = false;
 
@@ -27705,7 +28167,12 @@ void RemoveDuplicateServers (servertitem_t** items, int* actualServerCount)
 
 		if (duplicateIndex >= 0)
 		{
-			if (ServerList_ShouldReplaceDuplicate(&(*items)[duplicateIndex], &(*items)[i]))
+			if ((*items)[duplicateIndex].pinned_bookmark && !(*items)[i].pinned_bookmark)
+			{
+				ServerList_MergeLiveDetailsIntoPinned(&(*items)[duplicateIndex], &(*items)[i]);
+				ServerList_FreeItem(&(*items)[i]);
+			}
+			else if (ServerList_ShouldReplaceDuplicate(&(*items)[duplicateIndex], &(*items)[i]))
 			{
 				ServerList_FreeItem(&(*items)[duplicateIndex]);
 				ServerList_MoveItem(&(*items)[duplicateIndex], &(*items)[i]);
@@ -27736,12 +28203,25 @@ void FetchAndSortServers (void)
         free(serversmenu.order);
         serversmenu.order = NULL;
         int actualServerCount = 0;
+	pinnedbookmark_t pinned[MAX_PINNED_BOOKMARKS];
+	int pinned_count = (searchLastScope == SLIST_INTERNET) ?
+		M_Bookmarks_GetPinned(pinned, MAX_PINNED_BOOKMARKS) : 0;
+
+	for (int i = 0; i < pinned_count; ++i)
+	{
+		servertitem_t item;
+
+		if (ServerList_CreatePinnedBookmarkItem(&pinned[i], i, &item) &&
+			!ServerList_AppendMovedItem(&serversmenu.items, &actualServerCount, &item))
+			ServerList_FreeItem(&item);
+	}
 
 	for (size_t i = 0; i < hostCacheCount; i++) // Fetch and add servers from the dp list
 	{
 		servertitem_t item;
+
 		if (ServerList_CreateHostCacheItem(i, &item) &&
-			!ServerList_AppendMovedItem(&serversmenu.items, &actualServerCount, &item))
+			!ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &actualServerCount, &item, NULL))
 			ServerList_FreeItem(&item);
 	}
 	serversmenu.hostcache_copied = hostCacheCount;
@@ -27749,7 +28229,7 @@ void FetchAndSortServers (void)
 	if (searchLastScope == SLIST_INTERNET && ServerList_TakeApiResults(&apiItems, &apiCount))
 	{
 		for (int i = 0; i < apiCount; i++)
-			ServerList_AppendMovedItem(&serversmenu.items, &actualServerCount, &apiItems[i]);
+			ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &actualServerCount, &apiItems[i], NULL);
 		ServerList_FreeItems(apiItems, apiCount);
 	}
 
@@ -27841,13 +28321,15 @@ void M_Menu_ServerList_f (void)
 
 	M_Ticker_Init(&serversmenu.ticker);
 
-	M_List_CenterCursor(&serversmenu.list);
+	ServerList_CenterCursor();
 }
 
 void M_ServerList_Draw (void)
 {
 	int x, y, i, cols;
 	int firstvis, numvis;
+	int list_rows, item_viewsize, pinned_count;
+	qboolean separator_visible;
 	const char* title;
 	qboolean loading;
 
@@ -27879,8 +28361,9 @@ void M_ServerList_Draw (void)
 	ServerList_ApplyApiResults();
 	ServerList_StartPendingPingSweep();
 
-        if (serversmenu.pingSortDirty)
-                SortServers(true);
+	if (serversmenu.pingSortDirty)
+		SortServers(true);
+	ServerList_ClampScroll();
 
         if (!keydown[K_MOUSE1])
                 serversmenu.scrollbar_grab = false;
@@ -27915,10 +28398,9 @@ void M_ServerList_Draw (void)
 	if (serversmenu.sort_mode == SORT_PING) M_PrintWhite(x + 31 * 8, header_y, hdr_ping);
 	else M_Print(x + 31 * 8, header_y, hdr_ping);
 
-        // Reduce visible items when search is active to make room for search box and tooltip
         int saved_viewsize = serversmenu.list.viewsize;
-        if (serversmenu.list.search.len > 0 && serversmenu.list.viewsize > 13)
-                serversmenu.list.viewsize = 13;
+	ServerList_GetVisibleLayout(&list_rows, &item_viewsize, &pinned_count, &separator_visible);
+	serversmenu.list.viewsize = item_viewsize;
 
         M_List_GetVisibleRange(&serversmenu.list, &firstvis, &numvis);
 	if (numvis <= 0)
@@ -27930,6 +28412,7 @@ void M_ServerList_Draw (void)
 	}
 	        for (i = 0; i < numvis; i++) {
 	                int idx = i + firstvis;
+			int row = i;
 	                qboolean selected = (idx == serversmenu.list.cursor);
 	                int actualIndex = ServersMenu_ResolveIndex(idx);
 	                servertitem_snapshot_t server;
@@ -27941,12 +28424,12 @@ void M_ServerList_Draw (void)
 
 	                if (cls.state == ca_connected) // highlight if connected to a server in the list
 	                {
-	                        if (!strcmp(lastmphost, server.ip))
+	                        if (ServerList_AddressMatches(lastmphost, server.ip))
 	                                isActive = true;
 	                        else if (Valid_Domain(lastmphost))
-	                                isActive = !strcmp((ResolveHostname(lastmphost)), server.ip);
+	                                isActive = ServerList_AddressMatches(ResolveHostname(lastmphost), server.ip);
 	                        else if (Valid_IP(lastmphost))
-	                                isActive = !strcmp(lastmphost, server.ip);
+	                                isActive = ServerList_AddressMatches(lastmphost, server.ip);
 	                }
 
 	                char pingStrBuffer[8];
@@ -27963,7 +28446,10 @@ void M_ServerList_Draw (void)
 	                }
 
 			char plysStr[16];
-			q_snprintf(plysStr, sizeof(plysStr), "%d/%d", server.users, server.maxusers);
+			if (server.unavailable_bookmark)
+				plysStr[0] = '\0';  // unreachable bookmark has no live player count
+			else
+				q_snprintf(plysStr, sizeof(plysStr), "%d/%d", server.users, server.maxusers);
 
 	                char linePrefixStr[32];
 			q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-16.16s  %-6.6s %-5s ",
@@ -27971,10 +28457,17 @@ void M_ServerList_Draw (void)
 	                        server.map,
 				plysStr);
 
-                int current_y_pos = y + i * 8;
+		if (separator_visible && idx >= pinned_count)
+			row++;
+
+                int current_y_pos = y + row * 8;
                 int current_x_pos = x;
 
-                if (serversmenu.list.search.len > 0) {
+                if (server.unavailable_bookmark) {
+			M_PrintRGBA(current_x_pos, current_y_pos, linePrefixStr,
+				CL_PLColours_Parse("0xffffff"), SERVERLIST_UNAVAILABLE_ALPHA, true);
+                }
+                else if (serversmenu.list.search.len > 0) {
                         M_PrintHighlight(current_x_pos, current_y_pos, linePrefixStr,
                                 serversmenu.list.search.text, serversmenu.list.search.len);
                 }
@@ -28010,7 +28503,7 @@ void M_ServerList_Draw (void)
 
                 if (selected)
                 {
-                        int info_y = y + serversmenu.list.viewsize * 8 + 12;
+                        int info_y = y + list_rows * 8 + 12;
                         int plys_text_x = x + 25 * 8;
                         int plys_text_w = (int)strlen(plysStr) * 8;
                         qboolean hover_plys = (m_mousex >= plys_text_x &&
@@ -28098,9 +28591,17 @@ void M_ServerList_Draw (void)
 	                        {
 	                                char infoStr[40];
 	                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server.name);
-	                                M_PrintWhite(x, info_y, infoStr);
+					if (server.unavailable_bookmark)
+						M_PrintRGBA(x, info_y, infoStr, CL_PLColours_Parse("0xffffff"),
+							SERVERLIST_UNAVAILABLE_ALPHA, false);
+					else
+						M_PrintWhite(x, info_y, infoStr);
 	                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server.ip);
-	                                M_PrintWhite(x, info_y + 8, infoStr);
+					if (server.unavailable_bookmark)
+						M_PrintRGBA(x, info_y + 8, infoStr, CL_PLColours_Parse("0xffffff"),
+							SERVERLIST_UNAVAILABLE_ALPHA, false);
+					else
+						M_PrintWhite(x, info_y + 8, infoStr);
 	                        }
                 }
         }
@@ -28111,7 +28612,7 @@ void M_ServerList_Draw (void)
 		if (serversmenu.list.scroll > 0)
 			M_DrawEllipsisBar(x, y - 8, cols);
 		if (serversmenu.list.scroll + serversmenu.list.viewsize < serversmenu.list.numitems)
-			M_DrawEllipsisBar(x, y + serversmenu.list.viewsize * 8, cols);
+			M_DrawEllipsisBar(x, y + list_rows * 8, cols);
 	}
 
 	// Restore viewsize
@@ -28245,7 +28746,7 @@ void M_ServerList_Key(int key)
 		return;
 	}
 
-	if (serversmenu.list.numitems > 0 && M_List_Key(&serversmenu.list, key))
+	if (serversmenu.list.numitems > 0 && ServerList_ListKey(key))
 	{
 		if (serversmenu.list.cursor != prev_cursor)
 			TriggerServerPing(serversmenu.list.cursor);
@@ -28253,7 +28754,7 @@ void M_ServerList_Key(int key)
 		return;
 	}
 
-		if (serversmenu.list.numitems > 0 && M_List_CycleMatch(&serversmenu.list, key, M_Servers_Match))
+		if (serversmenu.list.numitems > 0 && ServerList_ListCycleMatch(key))
 		{
 			if (serversmenu.list.cursor != prev_cursor)
 				TriggerServerPing(serversmenu.list.cursor);
@@ -28332,10 +28833,19 @@ void M_ServerList_Key(int key)
 		}
 		x = m_mousex - serversmenu.x - (serversmenu.cols - 1) * 8;
 		y = m_mousey - serversmenu.y;
-		if (x < -8 || !M_List_UseScrollbar(&serversmenu.list, y))
+		{
+			int list_rows, pinned_count;
+			qboolean separator_visible;
+
+			ServerList_GetVisibleLayout(&list_rows, NULL, &pinned_count, &separator_visible);
+
+			if (ServerList_MouseOverPinnedSeparator(y, list_rows, pinned_count, separator_visible))
+				return;
+		}
+		if (x < -8 || !ServerList_UseScrollbar(y))
 			goto enter;
 		serversmenu.scrollbar_grab = true;
-		M_Mods_Mousemove(m_mousex, m_mousey);
+		M_ServerList_Mousemove(m_mousex, m_mousey);
 
 }
 	default:
@@ -28355,11 +28865,11 @@ void M_ServerList_Mousemove(int cx, int cy) // woods
 			serversmenu.scrollbar_grab = false;
 			return;
 		}
-		M_List_UseScrollbar(&serversmenu.list, cy);
+		ServerList_UseScrollbar(cy);
 		// Note: no return, we also update the cursor
 	}
 
-	M_List_Mousemove(&serversmenu.list, cy);
+	ServerList_MousemoveList(cy);
 
 	if (serversmenu.list.cursor != prev_cursor)
 		TriggerServerPing(serversmenu.list.cursor);
