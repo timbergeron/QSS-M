@@ -7370,6 +7370,8 @@ static void Host_NetDrops_f(void)
 	{
 		if (!sv.active)
 		{
+			if (cls.state == ca_connected && !cls.demoplayback)
+				cls.netdrops_request_time = realtime;
 			Cmd_ForwardToServer();
 			return;
 		}
@@ -7405,7 +7407,7 @@ static void Host_NetDrops_f(void)
 
 	if (!count)
 	{
-		Host_NetDropsPrint(remote, 0, "No connected network clients.\n");
+		Host_NetDropsPrint(remote, 0, "netdrops: no connected network clients\n");
 		return;
 	}
 

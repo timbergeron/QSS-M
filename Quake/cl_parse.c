@@ -4360,6 +4360,9 @@ void CL_ParseServerMessage (void)
 			char filtered_buffer[MAXCMDLINE];
 			s = MSG_ReadString();
 
+			if (cls.netdrops_request_time && !q_strncasecmp(s, "netdrops:", 9)) // woods - server answered our forwarded netdrops
+				cls.netdrops_request_time = 0;
+
 			if (CL_ShouldIgnoreChatPrint(s))
 				break;
 

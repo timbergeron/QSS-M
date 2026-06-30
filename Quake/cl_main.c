@@ -595,6 +595,7 @@ void CL_Disconnect (void)
 	NET_PortPingProbe_RequestAbort();
 	CL_CancelConnect();
 	CL_ClearTypingState();
+	cls.netdrops_request_time = 0; // woods - drop any pending netdrops timeout
 
 	// Idempotent with CL_StopPlayback; needed for non-demo disconnect paths.
 	Cvar_MapLock_RestoreAll ();
@@ -6256,6 +6257,12 @@ int CL_ReadFromServer (void)
 
 	if (cls.download.active && cls.download.chunked)
 		DLC_RequestDownloadChunks();
+
+	if (cls.netdrops_request_time && realtime - cls.netdrops_request_time > 2.0) // woods - no netdrops reply received
+	{
+		cls.netdrops_request_time = 0;
+		Con_Printf("netdrops: no response from server\n");
+	}
 
 //	if (cl_shownet.value)
 //		Con_Printf ("\n");

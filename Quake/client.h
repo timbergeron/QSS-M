@@ -245,6 +245,8 @@ typedef struct
 
 	unsigned	map_crc_quick_server; // woods #mapcrc - quick CRC advertised by server
 	unsigned	map_crc_full_server; // woods #mapcrc - full CRC advertised by server
+
+	double	netdrops_request_time; // woods - realtime a forwarded netdrops was sent; 0 = none pending
 } client_static_t;
 
 extern client_static_t	cls;
