@@ -2406,6 +2406,10 @@ void SV_Pext_f(void)
 		int i;
 		unsigned int key;
 		unsigned int value;
+		unsigned int raw_pext1 = 0;
+		unsigned int raw_pext2 = 0;
+		qboolean saw_pext1 = false;
+		qboolean saw_pext2 = false;
 		int argc = Cmd_Argc();
 
 		for (i = 1; i + 1 < argc; i+=2)
@@ -2414,14 +2418,31 @@ void SV_Pext_f(void)
 			value = (unsigned int)strtoul(Cmd_Argv(i+1), NULL, 0);
 
 			if (key == PROTOCOL_FTE_PEXT1)
+			{
+				raw_pext1 = value;
+				saw_pext1 = true;
 				host_client->protocol_pext1 = value & PEXT1_SUPPORTED_SERVER;
+			}
 			else if (key == PROTOCOL_FTE_PEXT2)
+			{
+				raw_pext2 = value;
+				saw_pext2 = true;
 				host_client->protocol_pext2 = value & PEXT2_SUPPORTED_SERVER;
+			}
 			//else some other extension that we don't know
 		}
 
 		host_client->pextknown = true;
 		SV_SendServerinfo(host_client);
+
+		if (saw_pext1 || saw_pext2)
+			Con_DPrintf("Client %s pext: raw 0x%08x/0x%08x accepted 0x%08x/0x%08x\n",
+				NET_QSocketGetOwnerString(host_client->netconnection),
+				raw_pext1, raw_pext2,
+				host_client->protocol_pext1, host_client->protocol_pext2);
+		else
+			Con_DPrintf("Client %s pext: no known extension pairs\n",
+				NET_QSocketGetOwnerString(host_client->netconnection));
 	}
 }
 
@@ -3899,6 +3920,9 @@ void SV_SendClientMessages (void)
 		// changes level
 		if (host_client->message.overflowed)
 		{
+			Con_DPrintf("Client %s reliable message overflowed (%d/%d bytes), dropping\n",
+				NET_QSocketGetOwnerString(host_client->netconnection),
+				host_client->message.cursize, host_client->message.maxsize);
 			SZ_Clear(&host_client->message);
 			SV_DropClient (false);
 			continue;

@@ -845,7 +845,9 @@ qboolean SV_ReadClientMessage (void)
 
 		if (msg_badread)
 		{
-			Sys_Printf ("SV_ReadClientMessage: badread\n");
+			Con_DPrintf ("SV_ReadClientMessage: badread from %s at byte %d/%d\n",
+				NET_QSocketGetOwnerString(host_client->netconnection),
+				msg_readcount, net_message.cursize);
 			return false;
 		}
 
@@ -857,7 +859,9 @@ qboolean SV_ReadClientMessage (void)
 			return true;	//msg_badread, meaning we just hit eof.
 
 		default:
-			Sys_Printf ("SV_ReadClientMessage: unknown command char\n");
+			Con_DPrintf ("SV_ReadClientMessage: unknown command char %d from %s at byte %d/%d\n",
+				ccmd, NET_QSocketGetOwnerString(host_client->netconnection),
+				msg_readcount - 1, net_message.cursize);
 			return false;
 
 		case clc_nop:
