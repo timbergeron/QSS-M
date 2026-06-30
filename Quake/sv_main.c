@@ -4125,6 +4125,21 @@ This is called at the start of each level
 ================
 */
 extern float		scr_centertime_off;
+static void SV_ClearClientMapDropCounts(void)
+{
+	int i;
+	client_t *client;
+
+	if (!svs.clients)
+		return;
+
+	for (i = 0, client = svs.clients; i < svs.maxclients; i++, client++)
+	{
+		if (client->netconnection)
+			NET_QSocketClearUnreliableReceiveMapDrops(client->netconnection);
+	}
+}
+
 void SV_SpawnServer (const char *server)
 {
 	static char	dummy[8] = { 0,0,0,0,0,0,0,0 };
@@ -4150,6 +4165,7 @@ void SV_SpawnServer (const char *server)
 //
 	if (sv.active)
 		SV_SendReconnect ();
+	SV_ClearClientMapDropCounts();
 
 //
 // make cvars consistant

@@ -2230,7 +2230,7 @@ static int QICE_ResendReliable (qsocket_t *sock)
 	return -1;	//fatal
 }
 
-static void QICE_ProcessMessage(unsigned int length, struct icestate_s *ice, qsocket_t *sock, const void *data, size_t datasize, sizebuf_t *newmsg)
+static void QICE_ProcessMessage(unsigned int length, struct icestate_s *ice, qsocket_t *sock, const void *data, size_t datasize, sizebuf_t *newmsg, qboolean log_server_drops)
 {
 	unsigned int sequence;
 
@@ -2260,9 +2260,21 @@ static void QICE_ProcessMessage(unsigned int length, struct icestate_s *ice, qso
 		if (sequence != sock->unreliableReceiveSequence)
 		{
 			count = sequence - sock->unreliableReceiveSequence;
-			Con_DPrintf("Dropped %u datagram(s)\n", count);
 		}
 		NET_QSocketRecordUnreliableReceive(sock, count);
+		if (count)
+		{
+			if (log_server_drops)
+			{
+				Con_DPrintf("Dropped %u datagram(s) for %s (map total: %u, connected total: %u)\n",
+					count,
+					NET_QSocketGetOwnerString(sock),
+					NET_QSocketGetUnreliableReceiveMapDrops(sock),
+					NET_QSocketGetUnreliableReceiveTotalDrops(sock));
+			}
+			else
+				Con_DPrintf("Dropped %u datagram(s)\n", count);
+		}
 		sock->unreliableReceiveSequence = sequence + 1;
 
 		SZ_Clear(newmsg);
@@ -2471,7 +2483,7 @@ static qboolean QICE_GotS2CMessage (struct icestate_s *ice, const void *data, si
 		qice_msgqueue[qice_msgqueuesize].data = Z_Malloc(qice_msgqueue[qice_msgqueuesize].maxsize);
 		SZ_Clear(&qice_msgqueue[qice_msgqueuesize]);	//paranoia
 	}
-	QICE_ProcessMessage(header, ice, b->qsock, data, datasize, &qice_msgqueue[qice_msgqueuesize]);
+	QICE_ProcessMessage(header, ice, b->qsock, data, datasize, &qice_msgqueue[qice_msgqueuesize], false);
 	if (qice_msgqueue[qice_msgqueuesize].cursize)
 		qice_msgqueuesize++;
 	return true;
@@ -2887,7 +2899,7 @@ static qboolean QICE_GotC2SMessage (struct icestate_s *ice, const void *data, si
 	s->lastMessageTime = net_time;
 
 	SZ_Clear(&net_message);
-	QICE_ProcessMessage(header, ice, s, data, datasize, &net_message);
+	QICE_ProcessMessage(header, ice, s, data, datasize, &net_message, true);
 	if (net_message.cursize && qice_servercb)
 		qice_servercb(s);
 	return !s->disconnected;

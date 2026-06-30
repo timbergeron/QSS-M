@@ -182,6 +182,8 @@ qsocket_t *NET_NewQSocket (void)
 	sock->receiveSequence = 0;
 	sock->unreliableReceiveSequence = 0;
 	NET_QSocketClearPacketLoss(sock);
+	sock->unreliableReceiveDroppedMap = 0;
+	sock->unreliableReceiveDroppedTotal = 0;
 	sock->receiveMessageLength = 0;
 	sock->pending_max_datagram = 1024;
 	sock->proquake_angle_hack = false;
@@ -237,6 +239,13 @@ void NET_QSocketClearPacketLoss(qsocket_t *s)
 	s->unreliableReceiveHistorySamples = 0;
 	s->unreliableReceiveHistoryLosses = 0;
 }
+
+void NET_QSocketClearUnreliableReceiveMapDrops(qsocket_t *s)
+{
+	if (s)
+		s->unreliableReceiveDroppedMap = 0;
+}
+
 static void NET_QSocketAppendPacketLossSample(qsocket_t *s, qboolean lost)
 {
 	unsigned int old = 0;
@@ -265,6 +274,9 @@ void NET_QSocketRecordUnreliableReceive(qsocket_t *s, unsigned int dropped)
 	if (!s)
 		return;
 
+	s->unreliableReceiveDroppedMap += dropped;
+	s->unreliableReceiveDroppedTotal += dropped;
+
 	if (dropped >= NET_PACKETLOSS_WINDOW)
 	{
 		memset(s->unreliableReceiveHistory, 1, sizeof(s->unreliableReceiveHistory));
@@ -280,6 +292,17 @@ void NET_QSocketRecordUnreliableReceive(qsocket_t *s, unsigned int dropped)
 
 	NET_QSocketAppendPacketLossSample(s, false);
 }
+
+unsigned int NET_QSocketGetUnreliableReceiveMapDrops(const qsocket_t *s)
+{
+	return s ? s->unreliableReceiveDroppedMap : 0;
+}
+
+unsigned int NET_QSocketGetUnreliableReceiveTotalDrops(const qsocket_t *s)
+{
+	return s ? s->unreliableReceiveDroppedTotal : 0;
+}
+
 int NET_QSocketGetPacketLoss(const qsocket_t *s)
 {
 	unsigned int samples;
@@ -300,6 +323,25 @@ const char *NET_QSocketGetTrueAddressString (const qsocket_t *s)
 {
 	return s->trueaddress;
 }
+
+const char *NET_QSocketGetOwnerString(const qsocket_t *s)
+{
+	int i;
+
+	if (s && svs.clients && svs.maxclients)
+	{
+		for (i = 0; i < svs.maxclients; i++)
+		{
+			client_t *cl = &svs.clients[i];
+
+			if (cl->netconnection == s)
+				return cl->name[0] ? cl->name : NET_QSocketGetTrueAddressString(s);
+		}
+	}
+
+	return s ? NET_QSocketGetTrueAddressString(s) : "unknown";
+}
+
 const char *NET_QSocketGetMaskedAddressString (const qsocket_t *s)
 {
 	return s->maskedaddress;

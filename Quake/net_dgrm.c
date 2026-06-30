@@ -163,22 +163,13 @@ static char *StrAddr (struct qsockaddr *addr)
 	return buf;
 }
 
-static const char *Datagram_SocketOwnerString(const qsocket_t *sock) // woods #droplog
+static void Datagram_LogDroppedDatagrams(qsocket_t *sock, unsigned int count) // woods #droplog
 {
-	int i;
-
-	if (sock && svs.clients && svs.maxclients)
-	{
-		for (i = 0; i < svs.maxclients; i++)
-		{
-			client_t *cl = &svs.clients[i];
-
-			if (cl->netconnection == sock)
-				return cl->name[0] ? cl->name : NET_QSocketGetTrueAddressString(sock);
-		}
-	}
-
-	return sock ? NET_QSocketGetTrueAddressString(sock) : "unknown";
+	Con_DPrintf("Dropped %u datagram(s) for %s (map total: %u, connected total: %u)\n",
+		count,
+		NET_QSocketGetOwnerString(sock),
+		NET_QSocketGetUnreliableReceiveMapDrops(sock),
+		NET_QSocketGetUnreliableReceiveTotalDrops(sock));
 }
 
 static void cl_portpingprobe_enable_completion(cvar_t *var, const char *partial)
@@ -877,9 +868,10 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 		{
 			count = sequence - sock->unreliableReceiveSequence;
 			droppedDatagrams += count;
-			Con_DPrintf("Dropped %u datagram(s) for %s\n", count, Datagram_SocketOwnerString(sock)); // woods #droplog
 		}
 		NET_QSocketRecordUnreliableReceive(sock, count);
+		if (count)
+			Datagram_LogDroppedDatagrams(sock, count);
 		sock->unreliableReceiveSequence = sequence + 1;
 
 		length -= NET_HEADERSIZE;
@@ -1150,7 +1142,7 @@ int	Datagram_GetMessage (qsocket_t *sock)
 			{
 				count = sequence - sock->unreliableReceiveSequence;
 				droppedDatagrams += count;
-				Con_DPrintf("Dropped %u datagram(s) for %s\n", count, Datagram_SocketOwnerString(sock)); // woods #droplog
+				Con_DPrintf("Dropped %u datagram(s) for %s\n", count, NET_QSocketGetOwnerString(sock)); // woods #droplog
 				cl.packetloss = count; // woods #scrpl
 				cl.pltotal = droppedDatagrams; // woods #scrpl
 			}
