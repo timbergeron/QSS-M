@@ -28788,8 +28788,11 @@ void M_ServerList_Key(int key)
 	enter:
 	{
 		int actualIndex = ServersMenu_ResolveIndex(serversmenu.list.cursor);
+		servertitem_snapshot_t server;
 
-		if (actualIndex < 0 || actualIndex >= serversmenu.servercount)
+		if (actualIndex < 0 || actualIndex >= serversmenu.servercount ||
+			!ServerList_SnapshotItem(actualIndex, &server) ||
+			server.unavailable_bookmark)
 		{
 			break;
 		}
