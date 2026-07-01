@@ -22766,6 +22766,7 @@ Quit Menu
 
 int		msgNumber;
 enum m_state_e	m_quit_prevstate;
+keydest_t	m_quit_prevkeydest;
 qboolean	wasInMenus;
 
 void M_Menu_Quit_f (void)
@@ -22773,12 +22774,29 @@ void M_Menu_Quit_f (void)
 	if (m_state == m_quit)
 		return;
 	wasInMenus = (key_dest == key_menu);
+	m_quit_prevkeydest = key_dest;
 	key_dest = key_menu;
 	m_quit_prevstate = m_state;
 	m_state = m_quit;
 	m_entersound = true;
 	msgNumber = rand()&7;
 
+	IN_UpdateGrabs();
+}
+
+static void M_Quit_Confirm (void)
+{
+	key_dest = m_quit_prevkeydest;
+	m_state = m_quit_prevstate;
+	IN_UpdateGrabs();
+	Host_Quit_Confirmed_f ();
+}
+
+static void M_Quit_Cancel (void)
+{
+	key_dest = m_quit_prevkeydest;
+	m_state = m_quit_prevstate;
+	m_entersound = true;
 	IN_UpdateGrabs();
 }
 
@@ -22789,22 +22807,11 @@ void M_Quit_Key (int key)
 	{
 	case K_ESCAPE:
 	case K_BBUTTON:
-		if (wasInMenus)
-		{
-			m_state = m_quit_prevstate;
-			m_entersound = true;
-		}
-		else
-		{
-			key_dest = key_game;
-			m_state = m_none;
-			IN_UpdateGrabs();
-		}
+		M_Quit_Cancel ();
 		break;
 
 	case K_ABUTTON:
-		key_dest = key_console;
-		Host_Quit_f ();
+		M_Quit_Confirm ();
 		break;
 
 	default:
@@ -22819,24 +22826,12 @@ void M_Quit_Char (int key)
 	{
 	case 'n':
 	case 'N':
-		if (wasInMenus)
-		{
-			m_state = m_quit_prevstate;
-			m_entersound = true;
-		}
-		else
-		{
-			key_dest = key_game;
-			m_state = m_none;
-			IN_UpdateGrabs();
-		}
+		M_Quit_Cancel ();
 		break;
 
 	case 'y':
 	case 'Y':
-		key_dest = key_console;
-		Host_Quit_f ();
-		IN_UpdateGrabs();
+		M_Quit_Confirm ();
 		break;
 
 	default:
@@ -37874,10 +37869,7 @@ void M_Draw (void)
 		if (/*!fitzmode || */(cl.matchinp != 1 || cl.notobserver != 1 || cl.teamcolor[0] == 0) || cls.demoplayback) // woods #matchquit
 		{ /* QuakeSpasm customization: */
 			/* Quit now! S.A. */
-			key_dest = key_console;
-			m_state = m_none;
-			IN_UpdateGrabs();
-			Cbuf_AddText ("quit\n");
+			M_Quit_Confirm ();
 			break;
 		}
 		M_Quit_Draw ();

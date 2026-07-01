@@ -603,14 +603,19 @@ static void Host_Unignore_f(void)
 Host_Quit_f
 ==================
 */
+static qboolean host_quit_confirmed = false;
+
 void Host_Quit_f (void)
 {
 	static qboolean quit_in_progress = false;
+	qboolean confirmed = host_quit_confirmed;
 
-	if (key_dest == key_console && cls.state != ca_dedicated && !cls.menu_qcvm.progs && cl.matchinp) // woods #matchquit
+	host_quit_confirmed = false;
+
+	if (!confirmed && key_dest == key_console && cls.state != ca_dedicated && !cls.menu_qcvm.progs && cl.matchinp) // woods #matchquit
 		M_Menu_Quit_f ();
 	
-	if (key_dest != key_console && cls.state != ca_dedicated && !cls.menu_qcvm.progs)
+	if (!confirmed && key_dest != key_console && cls.state != ca_dedicated && !cls.menu_qcvm.progs)
 	{
 		M_Menu_Quit_f ();
 		return;
@@ -629,6 +634,12 @@ void Host_Quit_f (void)
 		remove(va("%s/id1/backups/name.txt", com_basedir));
 
 	Sys_Quit ();
+}
+
+void Host_Quit_Confirmed_f (void)
+{
+	host_quit_confirmed = true;
+	Host_Quit_f ();
 }
 
 //==============================================================================

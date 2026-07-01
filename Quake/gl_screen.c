@@ -6289,7 +6289,9 @@ static float SCR_FadeSmoothStep (float t)
 ==================
 SCR_UpdateStartupFade
 
-Draws a non-blocking fade-from-black on the first normal rendered frames.
+Draws a non-blocking fade-from-black from the first drawable startup frames.
+The fade holds at black until host init completes so startup console flushes
+do not appear before the fade begins.
 scr_fade sets the startup/quit fade duration in seconds; 0 disables both.
 ==================
 */
@@ -6300,8 +6302,8 @@ static void SCR_UpdateStartupFade (void)
 
 	if (scr_quitfade_running)
 		return;
-	if (cls.state == ca_dedicated || cls.timedemo || !host_initialized ||
-		scr_skipupdate || scr_disabled_for_loading || VID_IsMinimized())
+	if (cls.state == ca_dedicated || cls.timedemo || scr_skipupdate ||
+		scr_disabled_for_loading || VID_IsMinimized())
 		return;
 
 	duration = SCR_FadeDuration ();
@@ -6313,7 +6315,7 @@ static void SCR_UpdateStartupFade (void)
 			return;
 
 		scr_startfade_active = true;
-		scr_startfade_start = Sys_DoubleTime ();
+		scr_startfade_start = host_initialized ? Sys_DoubleTime () : 0.0;
 		scr_fade_alpha = 1.0f;
 	}
 
@@ -6326,6 +6328,15 @@ static void SCR_UpdateStartupFade (void)
 		scr_fade_alpha = 0.0f;
 		return;
 	}
+
+	if (!host_initialized)
+	{
+		scr_fade_alpha = 1.0f;
+		return;
+	}
+
+	if (scr_startfade_start == 0.0)
+		scr_startfade_start = Sys_DoubleTime ();
 
 	now = Sys_DoubleTime ();
 	t = (float)((now - scr_startfade_start) / duration);
