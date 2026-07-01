@@ -232,7 +232,13 @@ cvar_t		vid_contrast = {"contrast", "1", CVAR_ARCHIVE}; //QuakeSpasm, MarkV
 //
 //==========================================================================
 
+#if defined(__APPLE__)
+#define	USE_GAMMA_RAMPS			1
+#define	VID_PREFER_HARDWARE_GAMMA	1
+#else
 #define	USE_GAMMA_RAMPS			0
+#define	VID_PREFER_HARDWARE_GAMMA	0
+#endif
 
 #if USE_GAMMA_RAMPS
 static unsigned short vid_gamma_red[256];
@@ -247,6 +253,22 @@ static unsigned short vid_sysgamma_blue[256];
 static qboolean	gammaworks = false;	// whether hw-gamma works
 static int fsaa;
 
+static qboolean VID_GLSLGammaAllowed (void)
+{
+	return gl_glsl_able && !COM_CheckParm("-noglslgamma");
+}
+
+static qboolean VID_PreferHardwareGamma (void)
+{
+#if VID_PREFER_HARDWARE_GAMMA
+	return COM_CheckParm("-glslgamma") == 0;
+#else
+	return false;
+#endif
+}
+
+static void VID_Gamma_Apply (void);
+
 /*
 ================
 VID_Gamma_SetGamma -- apply gamma correction
@@ -259,6 +281,7 @@ static void VID_Gamma_SetGamma (void)
 
 	if (draw_context && gammaworks)
 	{
+#if !USE_GAMMA_RAMPS
 		float	value;
 
 		if (vid_gamma.value > (1.0f / GAMMA_MAX))
@@ -268,6 +291,7 @@ static void VID_Gamma_SetGamma (void)
 
 		if (value < GAMMA_MIN) // woods #gammaclamp
 			value = GAMMA_MIN;
+#endif
 
 #if defined(USE_SDL2)
 # if USE_GAMMA_RAMPS
@@ -296,9 +320,6 @@ VID_Gamma_Restore -- restore system gamma
 */
 static void VID_Gamma_Restore (void)
 {
-	if (gl_glsl_gamma_able)
-		return;
-
 	if (draw_context && gammaworks)
 	{
 #if defined(USE_SDL2)
@@ -357,16 +378,11 @@ static void VID_Gamma_f (cvar_t *var)
 
 /*
 ================
-VID_Gamma_Init -- call on init
+VID_Gamma_Apply -- probe and apply gamma correction
 ================
 */
-static void VID_Gamma_Init (void)
+static void VID_Gamma_Apply (void)
 {
-	Cvar_RegisterVariable (&vid_gamma);
-	Cvar_RegisterVariable (&vid_contrast);
-	Cvar_SetCallback (&vid_gamma, VID_Gamma_f);
-	Cvar_SetCallback (&vid_contrast, VID_Gamma_f);
-
 	if (gl_glsl_gamma_able)
 		return;
 
@@ -389,7 +405,33 @@ static void VID_Gamma_Init (void)
 #endif /* USE_SDL2 */
 
 	if (!gammaworks)
-		Con_SafePrintf("gamma adjustment not available\n");
+	{
+		if (VID_GLSLGammaAllowed ())
+		{
+			gl_glsl_gamma_able = true;
+			if (cls.state == ca_disconnected) // woods #supressvidmsgs
+				Con_SafePrintf("hardware gamma not available, using GLSL gamma\n");
+		}
+		else
+			Con_SafePrintf("gamma adjustment not available\n");
+	}
+	else
+		VID_Gamma_f (NULL);
+}
+
+/*
+================
+VID_Gamma_Init -- call on init
+================
+*/
+static void VID_Gamma_Init (void)
+{
+	Cvar_RegisterVariable (&vid_gamma);
+	Cvar_RegisterVariable (&vid_contrast);
+	Cvar_SetCallback (&vid_gamma, VID_Gamma_f);
+	Cvar_SetCallback (&vid_contrast, VID_Gamma_f);
+
+	VID_Gamma_Apply ();
 }
 
 /*
@@ -1023,6 +1065,7 @@ static void VID_Restart (void)
 
 	// Mute DMA output while SDL/GL mode changes block regular sound updates.
 	blocked_sound = S_BlockSound ();
+	VID_Gamma_Restore ();
 
 // ericw -- OS X, SDL1: textures, VBO's invalid after mode change
 //          OS X, SDL2: still valid after mode change
@@ -1056,6 +1099,7 @@ static void VID_Restart (void)
 	gl_alias_shaders_compiling_disconnected_restart = (cls.state == ca_disconnected);
 	GL_Init ();
 	gl_alias_shaders_compiling_disconnected_restart = false;
+	VID_Gamma_Apply ();
 	TexMgr_ReloadImages ();
 	GL_BuildBModelVertexBuffer ();
 	GLMesh_LoadVertexBuffers ();
@@ -1562,6 +1606,12 @@ static void GL_CheckExtensions (void)
 	//
 	if (COM_CheckParm("-noglslgamma"))
 		Con_Warning ("GLSL gamma disabled at command line\n");
+	else if (VID_PreferHardwareGamma ())
+	{
+		gl_glsl_gamma_able = false;
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("Using hardware gamma when available\n");
+	}
 	else if (gl_glsl_able)
 	{
 		gl_glsl_gamma_able = true;
