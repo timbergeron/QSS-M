@@ -1304,6 +1304,41 @@ void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qbo
 	glPopMatrix();
 }
 
+#define MENU_VALUE_X 178
+#define MENU_SLIDER_X 186
+#define MENU_CURSOR_X 168
+#define MENU_CVAR_HINT_WIDTH (17 * 8)
+
+static qboolean M_CvarHintActive(qboolean selected, cvar_t *cv)
+{
+	return selected && keydown[K_CTRL] && cv != NULL &&
+		cv->name != NULL && cv->string != NULL;
+}
+
+static qboolean M_TextHintActive(qboolean selected, const char *text)
+{
+	return selected && keydown[K_CTRL] && text != NULL && text[0] != '\0';
+}
+
+static void M_DrawHintValue(int x, int y, int maxwidth, const char *hint)
+{
+	if (hint == NULL || hint[0] == '\0')
+		return;
+
+	M_PrintScroll(x, y, maxwidth, hint, realtime, false);
+}
+
+static void M_DrawCvarHintValue(int x, int y, int maxwidth, cvar_t *cv)
+{
+	char hint[128];
+
+	if (cv == NULL || cv->name == NULL || cv->string == NULL)
+		return;
+
+	q_snprintf(hint, sizeof(hint), "%s %s", cv->name, cv->string);
+	M_DrawHintValue(x, y, maxwidth, hint);
+}
+
 void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str2, double time, qboolean name_red)
 {
 	int maxchars = maxwidth / 8;
@@ -6857,6 +6892,27 @@ void M_AdjustSliders (int dir)
 	}
 }
 
+#define OPTIONS_VALUE_X 220
+#define OPTIONS_CVAR_HINT_WIDTH (12 * 8)
+
+static cvar_t *M_Options_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case OPT_MENUSCALE:	return &scr_menuscale;
+	default:			return NULL;
+	}
+}
+
+static const char *M_Options_GetItemHintText(int index)
+{
+	switch (index)
+	{
+	case OPT_CONSOLE:		return "cmd toggleconsole";
+	default:				return NULL;
+	}
+}
+
 void M_DrawSlider (int x, int y, float range, float value, const char* format)
 {
 	int	i;
@@ -6990,6 +7046,10 @@ void M_Options_Draw (void)
 		const char* text = NULL;
 		int y = M_Options_RowY (i);
 		qboolean isolated = M_LivePreview_IsolateY (y);
+		cvar_t *cvar_hint = M_Options_GetItemCvar(i);
+		const char *text_hint = M_Options_GetItemHintText(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == options_cursor, cvar_hint);
+		qboolean show_text_hint = M_TextHintActive(i == options_cursor, text_hint);
 
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -7039,15 +7099,17 @@ void M_Options_Draw (void)
 			break;
 		case OPT_MENUSCALE:
 			text = "            Menu Scale";
+			if (show_cvar_hint)
+				break;
 			if (slider_grab && options_cursor == OPT_MENUSCALE)
 			{
 				r = M_Options_MenuScaleFraction(pending_scale_value);
-				M_DrawSlider(220, y, r, pending_scale_value, "%.0f");
+				M_DrawSlider(OPTIONS_VALUE_X, y, r, pending_scale_value, "%.0f");
 			}
 			else
 			{
 				r = M_Options_MenuScaleFraction(scr_menuscale.value);
-				M_DrawSlider(220, y, r, scr_menuscale.value, "%.0f");
+				M_DrawSlider(OPTIONS_VALUE_X, y, r, scr_menuscale.value, "%.0f");
 			}
 			break;
 		case OPT_CONSOLE:
@@ -7071,6 +7133,11 @@ void M_Options_Draw (void)
 			{
 				M_Print(16, y, text);
 			}
+
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(OPTIONS_VALUE_X, y, OPTIONS_CVAR_HINT_WIDTH, cvar_hint);
+			else if (show_text_hint)
+				M_DrawHintValue(OPTIONS_VALUE_X, y, OPTIONS_CVAR_HINT_WIDTH, text_hint);
 		}
 
 		if (isolated)
@@ -9296,6 +9363,39 @@ static const char* M_Mouse_GetItemText(int index)
 	}
 }
 
+static cvar_t *M_Mouse_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case MOUSE_SPEED:		return &sensitivity;
+	case MOUSE_INVERT:		return &m_pitch;
+	case MOUSE_CUSTOMCURSOR:	return &scr_customcursor;
+#ifdef MACOS_X_ACCELERATION_HACK
+	case MOUSE_ACCELERATION:	return &in_disablemacosxmouseaccel;
+#endif
+	default:				return NULL;
+	}
+}
+
+static const char *M_Mouse_GetItemHintText(int index)
+{
+	static char buffer[80];
+
+	switch (index)
+	{
+	case MOUSE_ALWAYSMLOOK:
+		q_snprintf(buffer, sizeof(buffer), "in_mlook %d", !!(in_mlook.state & 1));
+		return buffer;
+	case MOUSE_PITCHMODE:
+		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
+			cl_minpitch.name, cl_minpitch.string,
+			cl_maxpitch.name, cl_maxpitch.string);
+		return buffer;
+	default:
+		return NULL;
+	}
+}
+
 static void M_Mouse_UpdateSearch(void)
 {
 	mouse_cursor = (enum mouse_e)M_Menu_UpdateSearchCursor(
@@ -9388,23 +9488,31 @@ void M_Mouse_Draw(void)
 		int y = 48 + 8 * i;
 		const char* text = NULL;
 		const char* value = NULL;
+		cvar_t *cvar_hint = M_Mouse_GetItemCvar(i);
+		const char *text_hint = M_Mouse_GetItemHintText(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == mouse_cursor, cvar_hint);
+		qboolean show_text_hint = M_TextHintActive(i == mouse_cursor, text_hint);
+		qboolean show_hint = show_cvar_hint || show_text_hint;
 
 		switch (i)
 		{
 		case MOUSE_SPEED:
 			text = "     Sensitivity";
 			r = (sensitivity.value - 1) / 19;
-			M_DrawSlider(186, y, r, sensitivity.value, "%.1f");
+			if (!show_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, sensitivity.value, "%.1f");
 			break;
 
 		case MOUSE_INVERT:
 			text = "    Invert Mouse";
-			M_DrawCheckbox(178, y, m_pitch.value < 0);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, m_pitch.value < 0);
 			break;
 
 		case MOUSE_ALWAYSMLOOK:
 			text = "      Mouse Look";
-			M_DrawCheckbox(178, y, in_mlook.state & 1);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, in_mlook.state & 1);
 			break;
 
 		case MOUSE_PITCHMODE:
@@ -9414,16 +9522,17 @@ void M_Mouse_Draw(void)
 				value = "qs (straight up/down)";
 			else
 				value = "traditional ";
-			M_Print(178, y, value);
 			break;
 		case MOUSE_CUSTOMCURSOR:
 			text = "   Custom Cursor";
-			M_DrawCheckbox(178, y, scr_customcursor.value);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, scr_customcursor.value);
 			break;
 #ifdef MACOS_X_ACCELERATION_HACK
 		case MOUSE_ACCELERATION:
 			text = "    Acceleration";
-			M_DrawCheckbox(178, y, !in_disablemacosxmouseaccel.value);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, !in_disablemacosxmouseaccel.value);
 			break;
 #endif
 		default:
@@ -9443,6 +9552,13 @@ void M_Mouse_Draw(void)
 			{
 				M_Print(16, y, text);
 			}
+
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+			else if (show_text_hint)
+				M_DrawHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, text_hint);
+			else if (value)
+				M_Print(MENU_VALUE_X, y, value);
 		}
 	}
 
@@ -9779,6 +9895,32 @@ static const char *M_Controller_GetItemText(int index)
 	default:
 		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
 		return buffer;
+	}
+}
+
+static cvar_t *M_Controller_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case CONTROLLER_DEVICE:			return &joy_device;
+	case CONTROLLER_SENSX:			return &joy_sensitivity_yaw;
+	case CONTROLLER_SENSY:			return &joy_sensitivity_pitch;
+	case CONTROLLER_INVERT:			return &joy_invert;
+	case CONTROLLER_LOOK_STICK:		return &joy_swapmovelook;
+	case CONTROLLER_EXPONENT_LOOK:	return &joy_exponent;
+	case CONTROLLER_EXPONENT_MOVE:	return &joy_exponent_move;
+	case CONTROLLER_DEADZONE_LOOK:	return &joy_deadzone_look;
+	case CONTROLLER_DEADZONE_MOVE:	return &joy_deadzone_move;
+	case CONTROLLER_TRIGGER_THRESH:	return &joy_deadzone_trigger;
+	case CONTROLLER_RUMBLE:			return &joy_rumble;
+	case CONTROLLER_GYRO_ENABLE:	return &gyro_enable;
+	case CONTROLLER_FLICK_STICK:	return &joy_flick;
+	case CONTROLLER_GYRO_MODE:		return &gyro_mode;
+	case CONTROLLER_GYRO_AXIS:		return &gyro_turning_axis;
+	case CONTROLLER_GYRO_SENSX:		return &gyro_yawsensitivity;
+	case CONTROLLER_GYRO_SENSY:		return &gyro_pitchsensitivity;
+	case CONTROLLER_GYRO_NOISE:		return &gyro_noise_thresh;
+	default:						return NULL;
 	}
 }
 
@@ -10414,67 +10556,83 @@ void M_Controller_Draw(void)
 		int y;
 		int display_index;
 		qboolean enabled;
+		qboolean selected;
+		cvar_t *cvar_hint;
+		qboolean show_cvar_hint;
 
 		if (!M_Controller_IsOptionVisible(i))
 			continue;
 
 		display_index = visible_index - controller_scroll;
+		selected = visible_index == controller_cursor;
 		visible_index++;
 		if (display_index < 0 || display_index >= CONTROLLER_MAX_VISIBLE)
 			continue;
 
 		y = CONTROLLER_TOP_Y + 8 * display_index;
 		enabled = M_Controller_IsOptionEnabled(i);
+		cvar_hint = M_Controller_GetItemCvar(i);
+		show_cvar_hint = M_CvarHintActive(selected && enabled, cvar_hint);
 
 		M_Controller_PrintMaybeDim(16, y, M_Controller_GetItemText(i), enabled);
 
 		switch (i)
 		{
 		case CONTROLLER_DEVICE:
-			M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetDeviceLabel(), enabled);
+			if (!show_cvar_hint)
+				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetDeviceLabel(), enabled);
 			break;
 
 		case CONTROLLER_SENSX:
 			r = (joy_sensitivity_yaw.value - MIN_JOY_SENS) / (MAX_JOY_SENS - MIN_JOY_SENS);
-			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_sensitivity_yaw.value, "%.0f", enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_sensitivity_yaw.value, "%.0f", enabled);
 			break;
 
 		case CONTROLLER_SENSY:
 			r = (joy_sensitivity_pitch.value - MIN_JOY_SENS) / (MAX_JOY_SENS - MIN_JOY_SENS);
-			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_sensitivity_pitch.value, "%.0f", enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_sensitivity_pitch.value, "%.0f", enabled);
 			break;
 
 		case CONTROLLER_INVERT:
-			M_Controller_DrawCheckboxMaybeDim(CONTROLLER_VALUE_X, y, joy_invert.value, enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawCheckboxMaybeDim(CONTROLLER_VALUE_X, y, joy_invert.value, enabled);
 			break;
 
 		case CONTROLLER_LOOK_STICK:
-			M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, joy_swapmovelook.value ? "Left" : "Right", enabled);
+			if (!show_cvar_hint)
+				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, joy_swapmovelook.value ? "Left" : "Right", enabled);
 			break;
 
 		case CONTROLLER_EXPONENT_LOOK:
 			r = (joy_exponent.value - MIN_JOY_EXPONENT) / (MAX_JOY_EXPONENT - MIN_JOY_EXPONENT);
-			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_exponent.value, "%.1f", enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_exponent.value, "%.1f", enabled);
 			break;
 
 		case CONTROLLER_EXPONENT_MOVE:
 			r = (joy_exponent_move.value - MIN_JOY_EXPONENT) / (MAX_JOY_EXPONENT - MIN_JOY_EXPONENT);
-			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_exponent_move.value, "%.1f", enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_exponent_move.value, "%.1f", enabled);
 			break;
 
 		case CONTROLLER_DEADZONE_LOOK:
 			r = (joy_deadzone_look.value - MIN_STICK_DEADZONE) / (MAX_STICK_DEADZONE - MIN_STICK_DEADZONE);
-			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_deadzone_look.value * 100.f, "%.0f%%", enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_deadzone_look.value * 100.f, "%.0f%%", enabled);
 			break;
 
 		case CONTROLLER_DEADZONE_MOVE:
 			r = (joy_deadzone_move.value - MIN_STICK_DEADZONE) / (MAX_STICK_DEADZONE - MIN_STICK_DEADZONE);
-			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_deadzone_move.value * 100.f, "%.0f%%", enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_deadzone_move.value * 100.f, "%.0f%%", enabled);
 			break;
 
 		case CONTROLLER_TRIGGER_THRESH:
 			r = (joy_deadzone_trigger.value - MIN_TRIGGER_DEADZONE) / (MAX_TRIGGER_DEADZONE - MIN_TRIGGER_DEADZONE);
-			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_deadzone_trigger.value * 100.f, "%.0f%%", enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_deadzone_trigger.value * 100.f, "%.0f%%", enabled);
 			break;
 
 		case CONTROLLER_TEST:
@@ -10489,42 +10647,49 @@ void M_Controller_Draw(void)
 			else
 			{
 				r = (joy_rumble.value - MIN_RUMBLE) / (MAX_RUMBLE - MIN_RUMBLE);
-				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_rumble.value * 100.f, "%.0f%%", enabled);
+				if (!show_cvar_hint)
+					M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_rumble.value * 100.f, "%.0f%%", enabled);
 			}
 			break;
 
 		case CONTROLLER_GYRO_ENABLE:
 			if (!IN_HasGyro())
 				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, "Unavailable", false);
-			else
+			else if (!show_cvar_hint)
 				M_Controller_DrawCheckboxMaybeDim(CONTROLLER_VALUE_X, y, gyro_enable.value, enabled);
 			break;
 
 		case CONTROLLER_FLICK_STICK:
-			M_Controller_DrawCheckboxMaybeDim(CONTROLLER_VALUE_X, y, joy_flick.value, enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawCheckboxMaybeDim(CONTROLLER_VALUE_X, y, joy_flick.value, enabled);
 			break;
 
 		case CONTROLLER_GYRO_MODE:
-			M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetGyroModeLabel(), enabled);
+			if (!show_cvar_hint)
+				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetGyroModeLabel(), enabled);
 			break;
 
 		case CONTROLLER_GYRO_AXIS:
-			M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetGyroAxisLabel(), enabled);
+			if (!show_cvar_hint)
+				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, M_Controller_GetGyroAxisLabel(), enabled);
 			break;
 
 		case CONTROLLER_GYRO_SENSX:
 			r = (gyro_yawsensitivity.value - MIN_GYRO_SENS) / (MAX_GYRO_SENS - MIN_GYRO_SENS);
-			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, gyro_yawsensitivity.value, "%.1f", enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, gyro_yawsensitivity.value, "%.1f", enabled);
 			break;
 
 		case CONTROLLER_GYRO_SENSY:
 			r = (gyro_pitchsensitivity.value - MIN_GYRO_SENS) / (MAX_GYRO_SENS - MIN_GYRO_SENS);
-			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, gyro_pitchsensitivity.value, "%.1f", enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, gyro_pitchsensitivity.value, "%.1f", enabled);
 			break;
 
 		case CONTROLLER_GYRO_NOISE:
 			r = (gyro_noise_thresh.value - MIN_GYRO_NOISE_THRESH) / (MAX_GYRO_NOISE_THRESH - MIN_GYRO_NOISE_THRESH);
-			M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, gyro_noise_thresh.value, "%.1f", enabled);
+			if (!show_cvar_hint)
+				M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, gyro_noise_thresh.value, "%.1f", enabled);
 			break;
 
 		case CONTROLLER_CALIBRATE:
@@ -10534,6 +10699,9 @@ void M_Controller_Draw(void)
 		default:
 			break;
 		}
+
+		if (show_cvar_hint)
+			M_DrawCvarHintValue(CONTROLLER_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
 	}
 
 	if (visible_count > max_visible)
@@ -11118,6 +11286,8 @@ static enum graphics_e
 #define GRAPHICS_DEFAULT_Y 20
 #define GRAPHICS_MIN_Y 12
 #define GRAPHICS_BOTTOM_Y 188
+#define GRAPHICS_VALUE_X 178
+#define GRAPHICS_SLIDER_X 186
 int numberOfGraphicsItems = GRAPHICS_ITEMS;
 
 static struct
@@ -11200,6 +11370,82 @@ static const char* M_Graphics_GetItemText(int index)
 	default:
 		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
 		return buffer;
+	}
+}
+
+static cvar_t *M_Graphics_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case GRAPHICS_BRIGHTNESS:			return &vid_gamma;
+	case GRAPHICS_CONTRAST:				return &vid_contrast;
+	case GRAPHICS_ANTIALIASING:			return &vid_fsaa;
+	case GRAPHICS_SOFTEMU:				return &r_softemu;
+	case GRAPHICS_EXTERNALTEX:			return &gl_load24bit;
+	case GRAPHICS_REPLACEMENTMODELS:	return &r_replacemodels;
+	case GRAPHICS_ROCKETLIGHT:			return &r_rocketlight;
+	case GRAPHICS_EXPLOSIONLIGHT:		return &r_explosionlight;
+	case GRAPHICS_RENDERSCALE:			return &r_scale;
+	case GRAPHICS_CLASSICPARTICLES:		return &r_particles;
+	case GRAPHICS_ALIASSHADOW:			return &r_shadows;
+	case GRAPHICS_BRUSHSHADOW:			return &r_shadows_bmodels;
+	case GRAPHICS_CUSTOMPARTICLES:		return &r_particledesc;
+	case GRAPHICS_COLOREDLIGHTING:		return &gl_loadlitfiles;
+	case GRAPHICS_MODELOUTLINES:		return &r_outline;
+	case GRAPHICS_POWERUPSHELLS:		return &gl_powerupshells;
+	case GRAPHICS_WATERCAUSTICS:		return &gl_caustics;
+	case GRAPHICS_WATERWARP:			return &r_waterwarp;
+	case GRAPHICS_CSHIFTAUTO:			return &gl_cshift_contents_auto;
+	default:							return NULL;
+	}
+}
+
+static const char *M_Graphics_GetItemHintText(int index)
+{
+	static char buffer[160];
+
+	switch (index)
+	{
+	case GRAPHICS_FILTERING:
+	{
+		cvar_t *texturemode = Cvar_FindVar("gl_texturemode");
+		cvar_t *anisotropy = Cvar_FindVar("gl_texture_anisotropy");
+
+		if (texturemode && anisotropy)
+		{
+			q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
+				texturemode->name, texturemode->string,
+				anisotropy->name, anisotropy->string);
+			return buffer;
+		}
+		if (texturemode)
+		{
+			q_snprintf(buffer, sizeof(buffer), "%s %s",
+				texturemode->name, texturemode->string);
+			return buffer;
+		}
+		if (anisotropy)
+		{
+			q_snprintf(buffer, sizeof(buffer), "%s %s",
+				anisotropy->name, anisotropy->string);
+			return buffer;
+		}
+		return NULL;
+	}
+	case GRAPHICS_MODELLERP:
+		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
+			r_lerpmodels.name, r_lerpmodels.string,
+			r_lerpmove.name, r_lerpmove.string);
+		return buffer;
+	case GRAPHICS_WATERALPHA:
+		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s %s %s %s %s",
+			r_wateralpha.name, r_wateralpha.string,
+			r_lavaalpha.name, r_lavaalpha.string,
+			r_slimealpha.name, r_slimealpha.string,
+			r_telealpha.name, r_telealpha.string);
+		return buffer;
+	default:
+		return NULL;
 	}
 }
 
@@ -11575,6 +11821,11 @@ void M_Graphics_Draw(void)
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
+		cvar_t *cvar_hint = M_Graphics_GetItemCvar(i);
+		const char *text_hint = M_Graphics_GetItemHintText(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == graphics_cursor, cvar_hint);
+		qboolean show_text_hint = M_TextHintActive(i == graphics_cursor, text_hint);
+		qboolean show_hint = show_cvar_hint || show_text_hint;
 
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -11584,13 +11835,15 @@ void M_Graphics_Draw(void)
 		case GRAPHICS_BRIGHTNESS:
 			text = "        Brightness";
 			r = (1.0 - vid_gamma.value) / 0.5;
-			M_DrawSlider(186, y, r, 10.f * r, "%.0f");
+			if (!show_hint)
+				M_DrawSlider(GRAPHICS_SLIDER_X, y, r, 10.f * r, "%.0f");
 			break;
 
 		case GRAPHICS_CONTRAST:
 			text = "          Contrast";
 			r = vid_contrast.value - 1.0;
-			M_DrawSlider(186, y, r, 10.f * r, "%.0f");
+			if (!show_hint)
+				M_DrawSlider(GRAPHICS_SLIDER_X, y, r, 10.f * r, "%.0f");
 			break;
 		
 		case GRAPHICS_FILTERING:
@@ -11602,7 +11855,6 @@ void M_Graphics_Draw(void)
 			case 1: value = "linear"; break;
 			default: value = va("aniso %i", m); break;
 			}
-			M_Print(178, y, value);
 			break;
 
 		case GRAPHICS_ANTIALIASING:
@@ -11611,7 +11863,6 @@ void M_Graphics_Draw(void)
 				value = "off";
 			else
 				value = va("%ix", (int)vid_fsaa.value);
-			M_Print(178, y, value);
 			break;
 
 		case GRAPHICS_SOFTEMU:
@@ -11622,65 +11873,70 @@ void M_Graphics_Draw(void)
 				value = "8-bit (banded)";
 			else
 				value = "8-bit (dithered)";
-			M_Print(178, y, value);
 			break;
 
 		case GRAPHICS_EXTERNALTEX:
 			text = " External Textures";
-			M_DrawCheckbox(178, y, !!gl_load24bit.value);
+			if (!show_hint)
+				M_DrawCheckbox(GRAPHICS_VALUE_X, y, !!gl_load24bit.value);
 			break;
 
 		case GRAPHICS_REPLACEMENTMODELS:
 			text = "     Custom Models";
-			M_DrawCheckbox(178, y, !!*r_replacemodels.string);
+			if (!show_hint)
+				M_DrawCheckbox(GRAPHICS_VALUE_X, y, !!*r_replacemodels.string);
 			break;
 
 		case GRAPHICS_ROCKETLIGHT:
 			text = "      Rocket Light";
 			r = r_rocketlight.value / 100.0;
-			M_DrawSlider(186, y, r, r_rocketlight.value, "%.0f%%");
+			if (!show_hint)
+				M_DrawSlider(GRAPHICS_SLIDER_X, y, r, r_rocketlight.value, "%.0f%%");
 			break;
 
 		case GRAPHICS_EXPLOSIONLIGHT:
 			text = "   Explosion Light";
 			r = r_explosionlight.value / 100.0;
-			M_DrawSlider(186, y, r, r_explosionlight.value, "%.0f%%");
+			if (!show_hint)
+				M_DrawSlider(GRAPHICS_SLIDER_X, y, r, r_explosionlight.value, "%.0f%%");
 			break;
 
 		case GRAPHICS_MODELLERP:
 			text = "Smooth Model Anims";
-			M_DrawCheckbox(178, y, !!r_lerpmodels.value && !!r_lerpmove.value);
+			if (!show_hint)
+				M_DrawCheckbox(GRAPHICS_VALUE_X, y, !!r_lerpmodels.value && !!r_lerpmove.value);
 			break;
 
 		case GRAPHICS_RENDERSCALE:
 			text = "      Render Scale";
 			if (r_scale.value == 1)
-				M_Print(178, y, "native (1/1)");
+				value = "native (1/1)";
 			else if (r_scale.value == 2)
-				M_Print(178, y, "half (1/2)");
+				value = "half (1/2)";
 			else if (r_scale.value == 3)
-				M_Print(178, y, "third (1/3)");
+				value = "third (1/3)";
 			else if (r_scale.value == 4)
-				M_Print(178, y, "quarter (1/4)");
+				value = "quarter (1/4)";
 			else
-				M_Print(178, y, "unknown");
+				value = "unknown";
 			break;
 
 		case GRAPHICS_CLASSICPARTICLES:
 			text = " Classic Particles";
 			value = r_particles.value == 1 ? "round (winquake)" : "square (glquake)";
-			M_Print(178, y, value);
 			break;
 
 		case GRAPHICS_ALIASSHADOW:
 			text = "           Shadows";
 			r = r_shadows.value;
-			M_DrawSlider(186, y, r, r_shadows.value, "%.1f");
+			if (!show_hint)
+				M_DrawSlider(GRAPHICS_SLIDER_X, y, r, r_shadows.value, "%.1f");
 			break;
 
 		case GRAPHICS_BRUSHSHADOW:
 			text = "     Brush Shadows";
-			M_DrawCheckbox(178, y, r_shadows_bmodels.value != 0);
+			if (!show_hint)
+				M_DrawCheckbox(GRAPHICS_VALUE_X, y, r_shadows_bmodels.value != 0);
 			break;
 
 		case GRAPHICS_CUSTOMPARTICLES:
@@ -11691,18 +11947,19 @@ void M_Graphics_Draw(void)
 				value = "classic+qssm";
 			else
 				value = "off (classic)";
-			M_Print(178, y, value);
 			break;
 
 		case GRAPHICS_COLOREDLIGHTING:
 			text = "  Colored Lighting";
-			M_DrawCheckbox(178, y, gl_loadlitfiles.value != 0);
+			if (!show_hint)
+				M_DrawCheckbox(GRAPHICS_VALUE_X, y, gl_loadlitfiles.value != 0);
 			break;
 
 		case GRAPHICS_MODELOUTLINES:
 			text = "    Model Outlines";
 			r = r_outline.value / 5.0; // Normalize to 0-1 range for slider (max value is 5)
-			M_DrawSlider(186, y, r, r_outline.value, "%.0f");
+			if (!show_hint)
+				M_DrawSlider(GRAPHICS_SLIDER_X, y, r, r_outline.value, "%.0f");
 			break;
 
 		case GRAPHICS_POWERUPSHELLS:
@@ -11713,13 +11970,13 @@ void M_Graphics_Draw(void)
 				value = "shell+effects";
 			else
 				value = "shell+items";
-			M_Print(178, y, value);
 			break;
 
 		case GRAPHICS_WATERCAUSTICS:
 			text = "    Water Caustics"; // Adjust spacing as needed
 			r = gl_caustics.value / 10.0f; // Normalize 0-10 value to 0-1 for slider
-			M_DrawSlider(186, y, r, gl_caustics.value * 10.0f, "%.0f%%"); // Display as 0-100%
+			if (!show_hint)
+				M_DrawSlider(GRAPHICS_SLIDER_X, y, r, gl_caustics.value * 10.0f, "%.0f%%"); // Display as 0-100%
 			break;
 
 		case GRAPHICS_WATERWARP:
@@ -11730,23 +11987,24 @@ void M_Graphics_Draw(void)
 				value = "classic";
 			else
 				value = "glQuake";
-			M_Print(178, y, value);
 			break;
 
 		case GRAPHICS_WATERALPHA:
 			text = "      Liquid Alpha";
 			r = CLAMP(0, r_wateralpha.value, 1);
-			M_DrawSlider(186, y, r, 100.f * r, "%.0f%%");
+			if (!show_hint)
+				M_DrawSlider(GRAPHICS_SLIDER_X, y, r, 100.f * r, "%.0f%%");
 			break;
 
 		case GRAPHICS_CSHIFTAUTO:
 			text = "  Auto Liquid Tint";
-			M_DrawCheckbox(178, y, gl_cshift_contents_auto.value != 0);
+			if (!show_hint)
+				M_DrawCheckbox(GRAPHICS_VALUE_X, y, gl_cshift_contents_auto.value != 0);
 			break;
 
 		case GRAPHICS_SKY:
 			text = "               Sky";
-			M_Print(178, y, "...");
+			value = "...";
 			break;
 
 		default:
@@ -11767,8 +12025,12 @@ void M_Graphics_Draw(void)
 				M_Print(0, y, text);
 			}
 
-			if (value)
-				M_Print(178, y, value);
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(GRAPHICS_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+			else if (show_text_hint)
+				M_DrawHintValue(GRAPHICS_VALUE_X, y, MENU_CVAR_HINT_WIDTH, text_hint);
+			else if (value)
+				M_Print(GRAPHICS_VALUE_X, y, value);
 		}
 
 		if (isolated)
@@ -12200,6 +12462,23 @@ static cvar_t *M_Sky_QualityCvar(void)
 	return cached;
 }
 
+static cvar_t *M_Sky_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case SKY_FASTSKY:			return &r_fastsky;
+	case SKY_FASTSKY_COLOR:		return &r_fastskycolor;
+	case SKY_QUALITY:			return M_Sky_QualityCvar();
+	case SKY_ALPHA:				return &r_skyalpha;
+	case SKY_FOG:				return &r_skyfog;
+	case SKY_SPEED:				return &r_skyspeed;
+	case SKY_ALLOW_DOWNLOAD:	return &allow_download_sky;
+	case SKY_GLOBALSKY:			return &r_globalsky;
+	case SKY_WIND:				return &r_skywind;
+	default:					return NULL;
+	}
+}
+
 static void M_Sky_ClampCursor(void)
 {
 	sky_cursor = (enum sky_e)M_Menu_ClampCursorValue((int)sky_cursor, SKY_ITEMS);
@@ -12415,6 +12694,9 @@ void M_Sky_Draw(void)
 		int y = M_Sky_GetItemY(i);
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char *text = NULL;
+		const char *value = NULL;
+		cvar_t *cvar_hint = M_Sky_GetItemCvar(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == sky_cursor && !sky_field_editing, cvar_hint);
 
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -12428,33 +12710,29 @@ void M_Sky_Draw(void)
 			text = "          Fast Sky";
 			if (mode < 0) mode = 0;
 			if (mode > 2) mode = 2;
-			M_Print(178, y, labels[mode]);
+			value = labels[mode];
 			break;
 		}
 
 		case SKY_FASTSKY_COLOR:
 		{
 			const char *val = r_fastskycolor.string;
-			const char *display;
 			text = "    Fast Sky Color";
 			if (!val[0])
 			{
-				display = "off";
-				M_Print(178, y, display);
+				value = "off";
 			}
 			else if (sky_rgb_active)
 			{
-				display = val;
-				M_Print(178, y, display);
+				value = val;
 			}
 			else
 			{
 				plcolour_t color = CL_PLColours_Parse(val);
-				display = (color.type == 2) ? val : va("%d", color.basic);
-				M_Print(178, y, display);
+				value = (color.type == 2) ? val : va("%d", color.basic);
 			}
-			if (val[0])
-				Draw_FillPlayer(178 + (strlen(display) * 8) + 4, y + 2, 6, 6,
+			if (!show_cvar_hint && val[0])
+				Draw_FillPlayer(MENU_VALUE_X + (strlen(value) * 8) + 4, y + 2, 6, 6,
 					CL_PLColours_Parse(val), 1.0);
 			break;
 		}
@@ -12466,35 +12744,40 @@ void M_Sky_Draw(void)
 			{
 				float v = CLAMP(4, q->value, 32);
 				r = (v - 4) / (32 - 4);
-				M_DrawSlider(186, y, r, v, "%.0f");
+				if (!show_cvar_hint)
+					M_DrawSlider(MENU_SLIDER_X, y, r, v, "%.0f");
 			}
 			else
 			{
-				M_Print(178, y, "n/a");
+				value = "n/a";
 			}
 			break;
 
 		case SKY_ALPHA:
 			text = "         Sky Alpha";
 			r = r_skyalpha.value;
-			M_DrawSlider(186, y, r, r * 100.0f, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, r * 100.0f, "%.0f%%");
 			break;
 
 		case SKY_FOG:
 			text = "           Sky Fog";
 			r = r_skyfog.value;
-			M_DrawSlider(186, y, r, r * 100.0f, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, r * 100.0f, "%.0f%%");
 			break;
 
 		case SKY_SPEED:
 			text = "         Sky Speed";
 			r = r_skyspeed.value / 10.0f;
-			M_DrawSlider(186, y, r, r_skyspeed.value, "%.2f");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, r_skyspeed.value, "%.2f");
 			break;
 
 		case SKY_ALLOW_DOWNLOAD:
 			text = "  Skybox Downloads";
-			M_DrawCheckbox(178, y, allow_download_sky.value != 0);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, allow_download_sky.value != 0);
 			break;
 
 		case SKY_GLOBALSKY:
@@ -12504,6 +12787,9 @@ void M_Sky_Draw(void)
 			int sel_begin, sel_end;
 
 			text = "        Global Sky";
+			if (show_cvar_hint)
+				break;
+
 			M_DrawTextBox(SKY_GLOBALSKY_BOX_X, y - 8, SKY_GLOBALSKY_BOX_WIDTH, 1);
 
 			if (M_TextField_GetSelection(field, &sel_begin, &sel_end))
@@ -12556,7 +12842,7 @@ void M_Sky_Draw(void)
 
 		case SKY_WIND:
 			text = "           Skywind";
-			M_Print(178, y, "...");
+			value = "...";
 			break;
 
 		default:
@@ -12564,7 +12850,14 @@ void M_Sky_Draw(void)
 		}
 
 		if (text)
+		{
 			M_Print(0, y, text);
+
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+			else if (value)
+				M_Print(MENU_VALUE_X, y, value);
+		}
 
 		if (isolated)
 			M_LivePreview_EndIsolate ();
@@ -12865,6 +13158,15 @@ static void M_Skywind_KickLivePreview(void)
 	M_LivePreview_WantAndKick (M_Skywind_LivePreviewId (), 48 + skywind_cursor * 8);
 }
 
+static const char *M_Skywind_GetHintText(float dist, float yaw, float period, float pitch)
+{
+	static char buffer[96];
+
+	q_snprintf(buffer, sizeof(buffer), "r_skywind %g %g %g %g",
+		dist, yaw, period, pitch);
+	return buffer;
+}
+
 static void M_Skywind_Adjust(int dir)
 {
 	float dist, yaw, period, pitch;
@@ -12939,6 +13241,8 @@ void M_Skywind_Draw(void)
 		int y = 48 + 8 * i;
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char *text = NULL;
+		const char *text_hint = M_Skywind_GetHintText(dist, yaw, period, pitch);
+		qboolean show_text_hint = M_TextHintActive(i == skywind_cursor, text_hint);
 
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -12948,25 +13252,29 @@ void M_Skywind_Draw(void)
 		case SKYWIND_STRENGTH:
 			text = "          Strength";
 			r = (dist + 2.0f) / 4.0f; // map -2..2 to 0..1
-			M_DrawSlider(186, y, r, dist, "%.2f");
+			if (!show_text_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, dist, "%.2f");
 			break;
 
 		case SKYWIND_DIRECTION:
 			text = "         Direction";
 			r = yaw / 360.0f;
-			M_DrawSlider(186, y, r, yaw, "%.0f\xf8"); // degree sign glyph
+			if (!show_text_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, yaw, "%.0f\xf8"); // degree sign glyph
 			break;
 
 		case SKYWIND_PITCH:
 			text = "             Pitch";
 			r = (pitch + 90.0f) / 180.0f;
-			M_DrawSlider(186, y, r, pitch, "%.0f\xf8");
+			if (!show_text_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, pitch, "%.0f\xf8");
 			break;
 
 		case SKYWIND_PERIOD:
 			text = "            Period";
 			r = (period - 1.0f) / (120.0f - 1.0f);
-			M_DrawSlider(186, y, r, period, "%.0fs");
+			if (!show_text_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, period, "%.0fs");
 			break;
 
 		default:
@@ -12974,7 +13282,11 @@ void M_Skywind_Draw(void)
 		}
 
 		if (text)
+		{
 			M_Print(0, y, text);
+			if (show_text_hint)
+				M_DrawHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, text_hint);
+		}
 
 		if (isolated)
 			M_LivePreview_EndIsolate ();
@@ -13184,6 +13496,22 @@ static const char* M_Sound_GetItemText(int index)
 	}
 }
 
+static cvar_t *M_Sound_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case SOUND_VOLUME:		return &sfxvolume;
+	case SOUND_MUSICVOL:	return &bgmvolume;
+	case SOUND_MUSICEXT:	return &bgm_extmusic;
+	case SOUND_AUDIORATE:	return &snd_mixspeed;
+	case SOUND_SURROUND:	return &snd_surround;
+	case SOUND_WATERFX:	return &snd_waterfx;
+	case SOUND_AMBIENTLEVEL:return &ambient_level;
+	case SOUND_STOPSOUND:	return &cl_ambient;
+	default:				return NULL;
+	}
+}
+
 static void M_Sound_UpdateSearch(void)
 {
 	sound_cursor = (enum sound_e)M_Menu_UpdateSearchCursor(
@@ -13322,24 +13650,29 @@ void M_Sound_Draw(void)
 		const char* text = NULL;
 		const char* value = NULL;
 		float r;
+		cvar_t *cvar_hint = M_Sound_GetItemCvar(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == sound_cursor, cvar_hint);
 
 		switch (i)
 		{
 		case SOUND_VOLUME:
 			text = "      Sound Volume";
 			r = sfxvolume.value;
-			M_DrawSlider(186, y, r, 100.f * sfxvolume.value, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, 100.f * sfxvolume.value, "%.0f%%");
 			break;
 
 		case SOUND_MUSICVOL:
 			text = "      Music Volume";
 			r = bgmvolume.value;
-			M_DrawSlider(186, y, r, 100.f * bgmvolume.value, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, 100.f * bgmvolume.value, "%.0f%%");
 			break;
 
 		case SOUND_MUSICEXT:
 			text = "    External Music";
-			M_DrawCheckbox(178, y, bgm_extmusic.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, bgm_extmusic.value);
 			break;
 
 		case SOUND_AUDIORATE:
@@ -13354,45 +13687,47 @@ void M_Sound_Draw(void)
 				value = "11025 hz (WinQuake)";
 			else
 				value = va("%i hz", (int)snd_mixspeed.value);
-			if (value)
-				M_Print(178, y, value);
 			break;
 
 		case SOUND_SURROUND:
 			text = "    Surround Sound";
-			M_DrawCheckbox(178, y, snd_surround.value > 0);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, snd_surround.value > 0);
 			break;
 
 		case SOUND_WATERFX:
 			text = "          Water FX";
 			r = snd_waterfx.value;
-			M_DrawSlider(186, y, r, 100.f * snd_waterfx.value, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, 100.f * snd_waterfx.value, "%.0f%%");
 			break;
 
 		case SOUND_AMBIENTLEVEL:
 			text = "     Ambient Level";
 			r = ambient_level.value;
-			M_DrawSlider(186, y, r, 100.f * ambient_level.value, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, 100.f * ambient_level.value, "%.0f%%");
 			break;
 
 		case SOUND_STOPSOUND:
 			text = "        Stop Sound";
-			M_DrawCheckbox(178, y, cl_ambient.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, cl_ambient.value);
 			break;
 		case SOUND_MUTE:
 		{
 			text = "              Mute";
 			// If mute is 'y', sound is off. If 'n' or anything else, sound is on
 			if (mute[0] == 'y')
-				M_Print(178, y, "on");
+				value = "on";
 			else
-				M_Print(178, y, "off");
+				value = "off";
 		}
 		break;
 
 		case SOUND_VOIP:
 			text = "              VoIP";
-			M_Print(178, y, "...");
+			value = "...";
 			break;
 
 		default:
@@ -13412,6 +13747,11 @@ void M_Sound_Draw(void)
 			{
 				M_Print(0, y, text);
 			}
+
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+			else if (value)
+				M_Print(MENU_VALUE_X, y, value);
 		}
 	}
 
@@ -13686,6 +14026,26 @@ static enum voip_e
 
 static qboolean voip_slider_grab;
 
+static cvar_t *M_Voip_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case VOIP_SEND:			return &cl_voip_send;
+	case VOIP_PLAYVOL:		return &cl_voip_play;
+	case VOIP_MICVOL:		return &cl_voip_capturingvol;
+	case VOIP_MICAMP:		return &cl_voip_micamp;
+	case VOIP_VADTHRESH:	return &cl_voip_vad_threshhold;
+	case VOIP_VADDELAY:		return &cl_voip_vad_delay;
+	case VOIP_DUCKING:		return &cl_voip_ducking;
+	case VOIP_NOISEFILTER:	return &cl_voip_noisefilter;
+	case VOIP_AUTOGAIN:		return &cl_voip_autogain;
+	case VOIP_SHOWMETER:	return &cl_voip_showmeter;
+	case VOIP_BITRATE:		return &cl_voip_bitrate;
+	case VOIP_TEST:			return &cl_voip_test;
+	default:				return NULL;
+	}
+}
+
 void M_Menu_Voip_f(void)
 {
 	key_dest = key_menu;
@@ -13810,77 +14170,89 @@ void M_Voip_Draw(void)
 	{
 		int y = 48 + 8 * i;
 		const char *text = NULL;
+		const char *value = NULL;
 		float r;
 		int idx;
+		cvar_t *cvar_hint = M_Voip_GetItemCvar(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == voip_cursor, cvar_hint);
 
 		switch (i)
 		{
 		case VOIP_SEND:
 			text = "              Mode";
 			idx = (int)cl_voip_send.value;
-			M_Print(178, y, (idx >= 0 && idx < 3) ? sendlabels[idx] : va("%d", idx));
+			value = (idx >= 0 && idx < 3) ? sendlabels[idx] : va("%d", idx);
 			break;
 
 		case VOIP_PLAYVOL:
 			text = "       Play Volume";
 			r = cl_voip_play.value;
-			M_DrawSlider(186, y, r, 100.f * cl_voip_play.value, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, 100.f * cl_voip_play.value, "%.0f%%");
 			break;
 
 		case VOIP_MICVOL:
 			text = "        Mic Volume";
 			r = cl_voip_capturingvol.value;
-			M_DrawSlider(186, y, r, 100.f * cl_voip_capturingvol.value, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, 100.f * cl_voip_capturingvol.value, "%.0f%%");
 			break;
 
 		case VOIP_MICAMP:
 			text = "       Mic Amplify";
 			r = cl_voip_micamp.value / 8.f;
-			M_DrawSlider(186, y, r, cl_voip_micamp.value, "%.2fx");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, cl_voip_micamp.value, "%.2fx");
 			break;
 
 		case VOIP_VADTHRESH:
 			text = "     VAD Threshold";
 			r = cl_voip_vad_threshhold.value / 100.f;
-			M_DrawSlider(186, y, r, cl_voip_vad_threshhold.value, "%.0f");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, cl_voip_vad_threshhold.value, "%.0f");
 			break;
 
 		case VOIP_VADDELAY:
 			text = "         VAD Delay";
 			r = cl_voip_vad_delay.value / 5.f;
-			M_DrawSlider(186, y, r, cl_voip_vad_delay.value, "%.2fs");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, cl_voip_vad_delay.value, "%.2fs");
 			break;
 
 		case VOIP_DUCKING:
 			text = "           Ducking";
 			r = cl_voip_ducking.value;
-			M_DrawSlider(186, y, r, 100.f * cl_voip_ducking.value, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, 100.f * cl_voip_ducking.value, "%.0f%%");
 			break;
 
 		case VOIP_NOISEFILTER:
 			text = "      Noise Filter";
-			M_DrawCheckbox(178, y, cl_voip_noisefilter.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, cl_voip_noisefilter.value);
 			break;
 
 		case VOIP_AUTOGAIN:
 			text = "         Auto Gain";
-			M_DrawCheckbox(178, y, cl_voip_autogain.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, cl_voip_autogain.value);
 			break;
 
 		case VOIP_SHOWMETER:
 			text = "        Show Meter";
 			idx = (int)cl_voip_showmeter.value;
-			M_Print(178, y, (idx >= 0 && idx < 3) ? meterlabels[idx] : va("%d", idx));
+			value = (idx >= 0 && idx < 3) ? meterlabels[idx] : va("%d", idx);
 			break;
 
 		case VOIP_BITRATE:
 			text = "           Bitrate";
-			M_Print(178, y, va("%d bps", (int)cl_voip_bitrate.value));
+			value = va("%d bps", (int)cl_voip_bitrate.value);
 			break;
 
 		case VOIP_TEST:
 			text = "          Mic Test";
-			M_DrawCheckbox(178, y, cl_voip_test.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, cl_voip_test.value);
 			break;
 
 		default:
@@ -13888,7 +14260,14 @@ void M_Voip_Draw(void)
 		}
 
 		if (text)
+		{
 			M_Print(0, y, text);
+
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+			else if (value)
+				M_Print(MENU_VALUE_X, y, value);
+		}
 	}
 
 	M_DrawCharacter(168, 48 + voip_cursor * 8, 12 + ((int)(realtime * 4) & 1));
@@ -14811,6 +15190,72 @@ static const char* M_Game_GetItemText(int index)
 	}
 }
 
+static cvar_t *M_Game_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case GAME_ROLLANGLE:		return &cl_rollangle;
+	case GAME_FOV:				return &scr_fov;
+	case GAME_FLASHES:			return &gl_cshiftpercent;
+	case GAME_WEAPONBOB:		return &cl_bob;
+	case GAME_DAMAGETINT:		return &cl_damagehue;
+	case GAME_CONSOLECHAT:		return &cl_say;
+	case GAME_SWAPROCKETS:		return &cl_r2g;
+	case GAME_TRUELIGHTNING:	return &cl_truelightning;
+	case GAME_STRAIGHTSHAFT:	return &cl_beams_polygons;
+	case GAME_DEADBODYFILTER:	return &cl_deadbodyfilter;
+	case GAME_MM1MUTE:			return &con_mm1mute;
+	case GAME_VIEWMODEL:		return &r_drawviewmodel;
+	case GAME_TEAMCOLOR:		return &gl_teamcolor;
+	case GAME_ENEMYCOLOR:		return &gl_enemycolor;
+	case GAME_CTFMODELSWAP:		return &cl_ctf_pub_modelswap;
+	case GAME_PLAYERXRAY:		return &r_player_xray;
+	default:					return NULL;
+	}
+}
+
+static const char *M_Game_GetItemHintText(int index)
+{
+	static char buffer[160];
+	cvar_t *alwaysrun;
+
+	switch (index)
+	{
+	case GAME_ALWAYSRUN:
+		alwaysrun = Cvar_FindVar("cl_alwaysrun");
+		if (alwaysrun)
+		{
+			q_snprintf(buffer, sizeof(buffer), "%s %s %s %s %s %s",
+				alwaysrun->name, alwaysrun->string,
+				cl_forwardspeed.name, cl_forwardspeed.string,
+				cl_backspeed.name, cl_backspeed.string);
+			return buffer;
+		}
+		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
+			cl_forwardspeed.name, cl_forwardspeed.string,
+			cl_backspeed.name, cl_backspeed.string);
+		return buffer;
+	case GAME_DAMAGEKICK:
+		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s %s %s",
+			v_kicktime.name, v_kicktime.string,
+			v_kickroll.name, v_kickroll.string,
+			v_kickpitch.name, v_kickpitch.string);
+		return buffer;
+	case GAME_AUTOSWITCH:
+		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
+			w_switch.name, w_switch.string,
+			b_switch.name, b_switch.string);
+		return buffer;
+	case GAME_TEXTURELESS:
+		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
+			gl_max_size.name, gl_max_size.string,
+			gl_load24bit.name, gl_load24bit.string);
+		return buffer;
+	default:
+		return NULL;
+	}
+}
+
 static void M_Game_UpdateSearch(void)
 {
 	game_cursor = (enum game_e)M_Menu_UpdateSearchCursor(
@@ -15062,6 +15507,11 @@ void M_Game_Draw(void)
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
+		cvar_t *cvar_hint = M_Game_GetItemCvar(i);
+		const char *text_hint = M_Game_GetItemHintText(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == game_cursor, cvar_hint);
+		qboolean show_text_hint = M_TextHintActive(i == game_cursor, text_hint);
+		qboolean show_hint = show_cvar_hint || show_text_hint;
 
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -15077,34 +15527,38 @@ void M_Game_Draw(void)
 				value = "traditional";
 			else
 				value = "off (slow)";
-			M_Print(178, y, value);
 			break;
 
 		case GAME_ROLLANGLE:
 			text = " Strafe Angle Tilt";
-			M_DrawCheckbox(178, y, cl_rollangle.value != 0);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, cl_rollangle.value != 0);
 			break;
 
 		case GAME_FOV:
 			text = "     Field of View";
 			r = (scr_fov.value - 60) / 70.0;  // 70 is range (130-60)
-			M_DrawSlider(186, y, r, scr_fov.value, "%.0f");
+			if (!show_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, scr_fov.value, "%.0f");
 			break;
 
 		case GAME_FLASHES:
 			text = "    Screen Flashes";
 			r = gl_cshiftpercent.value / 100.0;
-			M_DrawSlider(186, y, r, gl_cshiftpercent.value, "%.0f%%");
+			if (!show_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, gl_cshiftpercent.value, "%.0f%%");
 			break;
 
 		case GAME_WEAPONBOB:
 			text = "        Weapon Bob";
-			M_DrawCheckbox(178, y, cl_bob.value != 0);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, cl_bob.value != 0);
 			break;
 
 		case GAME_DAMAGEKICK:
 			text = "       Damage Kick";
-			M_DrawCheckbox(178, y, (v_kickroll.value != 0 || v_kickpitch.value != 0));
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, (v_kickroll.value != 0 || v_kickpitch.value != 0));
 			break;
 
 		case GAME_DAMAGETINT:
@@ -15115,12 +15569,12 @@ void M_Game_Draw(void)
 				value = "weapon";
 			else
 				value = "weapon+crosshair";
-			M_Print(178, y, value);
 			break;
 
 		case GAME_AUTOSWITCH:
 			text = "   Gun Auto Switch";
-			M_DrawCheckbox(178, y, w_switch.value != 0);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, w_switch.value != 0);
 			break;
 
 		case GAME_CONSOLECHAT:
@@ -15131,39 +15585,44 @@ void M_Game_Draw(void)
 				value = "console";
 			else
 				value = "console+space";
-			M_Print(178, y, value);
 			break;
 
 		case GAME_SWAPROCKETS:
 			text = "  R2G Swap Rockets";
-			M_DrawCheckbox(178, y, cl_r2g.value != 0);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, cl_r2g.value != 0);
 			break;
 
 		case GAME_TRUELIGHTNING:
 			text = "    True Lightning";
 			r = cl_truelightning.value / 100.0;
-			M_DrawSlider(186, y, r, cl_truelightning.value, "%.0f%%");
+			if (!show_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, cl_truelightning.value, "%.0f%%");
 			break;
 
 		case GAME_STRAIGHTSHAFT:
 			text = "    Straight Shaft";
 			r = CLAMP(0.0f, cl_beams_polygons.value, 10.0f) / 10.0f;
-			M_DrawSlider(186, y, r, CLAMP(0.0f, cl_beams_polygons.value, 10.0f), "%.1f");
+			if (!show_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, CLAMP(0.0f, cl_beams_polygons.value, 10.0f), "%.1f");
 			break;
 
 		case GAME_DEADBODYFILTER:
 			text = "   Deadbody Filter";
-			M_DrawCheckbox(178, y, cl_deadbodyfilter.value != 0);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, cl_deadbodyfilter.value != 0);
 			break;
 		case GAME_MM1MUTE:
 			text = "     Mute MM1 Chat";
-			M_DrawCheckbox(178, y, con_mm1mute.value != 0);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, con_mm1mute.value != 0);
 			break;
 
 		case GAME_VIEWMODEL:
 			text = " Visible Gun Model";
 			r = r_drawviewmodel.value;  // Already 0-1, no need to divide
-			M_DrawSlider(186, y, r, r_drawviewmodel.value * 100, "%.0f%%");  // Multiply by 100 just for display
+			if (!show_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, r_drawviewmodel.value * 100, "%.0f%%");  // Multiply by 100 just for display
 			break;
 
 		case GAME_TEAMCOLOR:
@@ -15177,9 +15636,8 @@ void M_Game_Draw(void)
 				plcolour_t color = CL_PLColours_Parse(gl_teamcolor.string);
 				value = (color.type == 2) ? va("%s", gl_teamcolor.string) : va("%d", color.basic);
 			}
-			M_Print(178, y, value);
-			if (strcmp(gl_teamcolor.string, "") != 0)
-				Draw_FillPlayer(178 + (strlen(value) * 8) + 4, y + 2, 6, 6, CL_PLColours_Parse(gl_teamcolor.string), 1.0);
+			if (!show_hint && strcmp(gl_teamcolor.string, "") != 0)
+				Draw_FillPlayer(MENU_VALUE_X + (strlen(value) * 8) + 4, y + 2, 6, 6, CL_PLColours_Parse(gl_teamcolor.string), 1.0);
 			break;
 
 		case GAME_ENEMYCOLOR:
@@ -15193,25 +15651,25 @@ void M_Game_Draw(void)
 				plcolour_t color = CL_PLColours_Parse(gl_enemycolor.string);
 				value = (color.type == 2) ? va("%s", gl_enemycolor.string) : va("%d", color.basic);
 			}
-			M_Print(178, y, value);
-			if (strcmp(gl_enemycolor.string, "") != 0)
-				Draw_FillPlayer(178 + (strlen(value) * 8) + 4, y + 2, 6, 6, CL_PLColours_Parse(gl_enemycolor.string), 1.0);
+			if (!show_hint && strcmp(gl_enemycolor.string, "") != 0)
+				Draw_FillPlayer(MENU_VALUE_X + (strlen(value) * 8) + 4, y + 2, 6, 6, CL_PLColours_Parse(gl_enemycolor.string), 1.0);
 			break;
 
 		case GAME_CTFMODELSWAP:
 			text = "  3Wave CTF Models";
-			M_DrawCheckbox(178, y, cl_ctf_pub_modelswap.value != 0);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, cl_ctf_pub_modelswap.value != 0);
 			break;
 
 		case GAME_PLAYERXRAY:
 			text = "       Player Xray";
 			value = M_PlayerXray_SummaryValue();
-			M_Print(178, y, value);
 			break;
 
 		case GAME_TEXTURELESS:
 			text = "       Textureless"; // Adjusted spacing
-			M_DrawCheckbox(178, y, gl_max_size.value == 1.0f);
+			if (!show_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, gl_max_size.value == 1.0f);
 			break;
 
 		default:
@@ -15231,6 +15689,13 @@ void M_Game_Draw(void)
 			{
 				M_Print(0, y, text);
 			}
+
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+			else if (show_text_hint)
+				M_DrawHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, text_hint);
+			else if (value)
+				M_Print(MENU_VALUE_X, y, value);
 		}
 
 		if (isolated)
@@ -15604,54 +16069,56 @@ void M_PlayerXray_Draw(void)
 		int y = 48 + 8 * i;
 		const char *text = NULL;
 		const char *value = NULL;
+		qboolean show_cvar_hint = M_CvarHintActive(i == playerxray_cursor, &r_player_xray);
 
 		switch (i)
 		{
 		case PLAYERXRAY_TARGETS:
 			text = "         Targets";
 			value = M_PlayerXray_TargetLabel(M_PlayerXray_GetMenuTarget(&settings));
-			M_Print(178, y, value);
 			break;
 
 		case PLAYERXRAY_STYLE:
 			text = "           Style";
-			M_Print(178, y, M_PlayerXray_RenderModeLabel(settings.render_mode));
+			value = M_PlayerXray_RenderModeLabel(settings.render_mode);
 			break;
 
 		case PLAYERXRAY_ALPHA:
 			text = "         Opacity";
 			r = settings.alpha;
-			M_DrawSlider(186, y, r, settings.alpha * 100.0f, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, settings.alpha * 100.0f, "%.0f%%");
 			break;
 
 		case PLAYERXRAY_DISTANCE:
 			text = "           Range";
 			r = settings.distance / 8192.0f;
-			M_DrawSlider(186, y, r, settings.distance, "%.0f");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, settings.distance, "%.0f");
 			break;
 
 		case PLAYERXRAY_COLORMODE:
 			text = "      Color Mode";
-			M_Print(178, y, M_PlayerXray_ColorModeLabel(settings.color_mode));
+			value = M_PlayerXray_ColorModeLabel(settings.color_mode);
 			break;
 
 		case PLAYERXRAY_ENEMYCOLOR:
 			text = "     Enemy Color";
 			value = M_PlayerXray_ColorValue(&settings.enemy_color, playerxray_enemy_rgb_active);
-			M_Print(178, y, value);
-			Draw_FillPlayer(178 + (strlen(value) * 8) + 4, y + 2, 6, 6, settings.enemy_color, 1.0f);
+			if (!show_cvar_hint)
+				Draw_FillPlayer(MENU_VALUE_X + (strlen(value) * 8) + 4, y + 2, 6, 6, settings.enemy_color, 1.0f);
 			break;
 
 		case PLAYERXRAY_TEAMCOLOR:
 			text = "      Team Color";
 			value = M_PlayerXray_ColorValue(&settings.team_color, playerxray_team_rgb_active);
-			M_Print(178, y, value);
-			Draw_FillPlayer(178 + (strlen(value) * 8) + 4, y + 2, 6, 6, settings.team_color, 1.0f);
+			if (!show_cvar_hint)
+				Draw_FillPlayer(MENU_VALUE_X + (strlen(value) * 8) + 4, y + 2, 6, 6, settings.team_color, 1.0f);
 			break;
 
 		case PLAYERXRAY_MATCHSIZE:
 			text = "      Match Size";
-			M_Print(178, y, M_PlayerXray_MatchSizeLabel(settings.max_match_size));
+			value = M_PlayerXray_MatchSizeLabel(settings.max_match_size);
 			break;
 
 		default:
@@ -15659,7 +16126,14 @@ void M_PlayerXray_Draw(void)
 		}
 
 		if (text)
+		{
 			M_Print(16, y, text);
+
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, &r_player_xray);
+			else if (value)
+				M_Print(MENU_VALUE_X, y, value);
+		}
 	}
 
 	M_DrawCharacter(168, 48 + playerxray_cursor * 8, 12 + ((int)(realtime * 4) & 1));
@@ -15882,6 +16356,30 @@ static const char* M_HUD_GetItemText(int index)
 	}
 }
 
+static cvar_t *M_HUD_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case HUD_SCALE:				return &scr_sbarscale;
+	case HUD_SCRSIZE:			return &scr_viewsize;
+	case HUD_SBALPHA:			return &scr_sbaralpha;
+	case HUD_SBARSTYLE:			return &scr_sbar;
+	case HUD_SHOWFPS:			return &scr_showfps;
+	case HUD_MATCHSCORES:		return &scr_match_hud;
+	case HUD_MATCHCLOCK:		return &scr_matchclock;
+	case HUD_SHOWPING:			return &scr_ping;
+	case HUD_SHOWCLOCK:			return &scr_clock;
+	case HUD_SHOWSPEED:			return &scr_showspeed;
+	case HUD_SHOWSCORES:		return &scr_showscores;
+	case HUD_AUTOID:			return &scr_autoid;
+	case HUD_MOVEKEYS:			return &scr_movekeys;
+	case HUD_CONSOLEFONT:		return &scr_conscale;
+	case HUD_OBSITEMS:			return &scr_obsitems;
+	case HUD_SCOREBOARD_SORT:	return &scr_scoreboard_teamsort;
+	default:					return NULL;
+	}
+}
+
 static int M_HUD_LivePreviewId(void)
 {
 	switch (hud_cursor)
@@ -16025,7 +16523,6 @@ void M_HUD_Draw(void)
 {
 	qpic_t* p;
 	float r, l;
-	const char* value;
 
 	p = Draw_CachePic("gfx/p_option.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
@@ -16040,6 +16537,9 @@ void M_HUD_Draw(void)
 		int y = 48 + 8 * i;
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
+		const char* value = NULL;
+		cvar_t *cvar_hint = M_HUD_GetItemCvar(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == hud_cursor, cvar_hint);
 
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -16056,19 +16556,22 @@ void M_HUD_Draw(void)
 			r = l > 0 ? (scr_sbarscale.value - 1) / l : 0;  // Changed from conscale to sbarscale
 			if (hud_slider_grab && hud_cursor == HUD_SCALE)
 				r = target_hud_scale_frac;
-			M_DrawSlider(186, y, r, scr_sbarscale.value, "%.1f");  // Changed from conscale to sbarscale
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, scr_sbarscale.value, "%.1f");  // Changed from conscale to sbarscale
 			break;
 
 		case HUD_SCRSIZE:
 			text = "       Screen Size";
 			r = (scr_viewsize.value - 30) / (130 - 30);
-			M_DrawSlider(186, y, r, scr_viewsize.value, "%.0f");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, scr_viewsize.value, "%.0f");
 			break;
 
 		case HUD_SBALPHA:
 			text = "   Statusbar Alpha";
 			r = scr_sbaralpha.value;
-			M_DrawSlider(186, y, r, 100.0f * r, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, 100.0f * r, "%.0f%%");
 			break;
 
 		case HUD_SBARSTYLE:
@@ -16080,27 +16583,30 @@ void M_HUD_Draw(void)
 			case 3: value = "modern/remaster"; break;
 			default: value = "unknown"; break;
 			}
-			M_Print(178, y, value);
 			break;
 
 		case HUD_SHOWFPS:
 			text = "          Show FPS";
-			M_DrawCheckbox(178, y, scr_showfps.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, scr_showfps.value);
 			break;
 
 		case HUD_MATCHSCORES:
 			text = " Show Match Scores";
-			M_DrawCheckbox(178, y, scr_match_hud.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, scr_match_hud.value);
 			break;
 
 		case HUD_MATCHCLOCK:
 			text = "       Match Clock";
-			M_DrawCheckbox(178, y, scr_matchclock.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, scr_matchclock.value);
 			break;
 
 		case HUD_SHOWPING:
 			text = "         Show Ping";
-			M_DrawCheckbox(178, y, scr_ping.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, scr_ping.value);
 			break;
 
 		case HUD_SHOWCLOCK:
@@ -16118,7 +16624,6 @@ void M_HUD_Draw(void)
 			case 8: value = "score/24hr"; break;
 			default: value = "unknown"; break;
 			}
-			M_Print(178, y, value);
 			break;
 
 		case HUD_SHOWSPEED:
@@ -16130,12 +16635,12 @@ void M_HUD_Draw(void)
 			case 2: value = "visual meter"; break;
 			default: value = "unknown"; break;
 			}
-			M_Print(178, y, value);
 			break;
 
 		case HUD_SHOWSCORES:
 			text = "       Show Scores";
-			M_DrawCheckbox(178, y, scr_showscores.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, scr_showscores.value);
 			break;
 
 		case HUD_AUTOID:
@@ -16147,23 +16652,25 @@ void M_HUD_Draw(void)
 			case 2: value = "on+prewar+pmode"; break;
 			default: value = "Unknown"; break;
 			}
-			M_Print(178, y, value);
 			break;
 
 		case HUD_MOVEKEYS:
 			text = "     Movement Keys";
-			M_DrawCheckbox(178, y, scr_movekeys.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, scr_movekeys.value);
 			break;
 
 		case HUD_CONSOLEFONT:
 			text = " Console Font Size";
 			r = M_ConsoleScaleFraction(scr_conscale.value);
-			M_DrawSlider(186, y, r, scr_conscale.value, "%.1f");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, scr_conscale.value, "%.1f");
 			break;
 
 		case HUD_OBSITEMS:
 			text = "    Observer Items";
-			M_DrawCheckbox(178, y, scr_obsitems.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, scr_obsitems.value);
 			break;
 
 		case HUD_SCOREBOARD_SORT:
@@ -16174,7 +16681,6 @@ void M_HUD_Draw(void)
 			case 1: value = "teams totals"; break;
 			default: value = "frag totals"; break;
 			}
-			M_Print(178, y, value);
 			break;
 
 		}
@@ -16192,6 +16698,11 @@ void M_HUD_Draw(void)
 			{
 				M_Print(0, y, text);
 			}
+
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+			else if (value)
+				M_Print(MENU_VALUE_X, y, value);
 		}
 
 		if (isolated)
@@ -16899,6 +17410,21 @@ static const char* M_Crosshair_GetItemText(int index)
 	}
 }
 
+static cvar_t *M_Crosshair_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case CROSSHAIR_TOGGLE:	return &crosshair;
+	case CROSSHAIR_ALPHA:	return &scr_crosshairalpha;
+	case CROSSHAIR_COLOR:	return &scr_crosshaircolor;
+	case CROSSHAIR_OUTLINE:	return &scr_crosshairoutline;
+	case CROSSHAIR_SCALE:	return &scr_crosshairscale;
+	case CROSSHAIR_X:		return &scr_crosshair_x;
+	case CROSSHAIR_Y:		return &scr_crosshair_y;
+	default:				return NULL;
+	}
+}
+
 void M_Menu_Crosshair_f(void)
 {
 	key_dest = key_menu;
@@ -17016,6 +17542,8 @@ void M_Crosshair_Draw(void)
 		int y = 48 + 8 * i;
 		const char* text = NULL;
 		const char* value = NULL;
+		cvar_t *cvar_hint = M_Crosshair_GetItemCvar(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == crosshair_cursor, cvar_hint);
 
 		switch (i)
 		{
@@ -17025,12 +17553,12 @@ void M_Crosshair_Draw(void)
 				value = "Off";
 			else
 				value = va("Style %d", (int)crosshair.value);
-			M_Print(178, y, value);
 			break;
 		case CROSSHAIR_ALPHA:
 			text = "           Alpha";
 			r = scr_crosshairalpha.value;
-			M_DrawSlider(186, y, r, scr_crosshairalpha.value, "%.1f");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, scr_crosshairalpha.value, "%.1f");
 			break;
 
 		case CROSSHAIR_COLOR:
@@ -17047,7 +17575,6 @@ void M_Crosshair_Draw(void)
 				else  // Basic color
 					value = va("%d", color.basic);
 			}
-			M_Print(178, y, value);
 			break;
 		case CROSSHAIR_COLOR_PICKER:
 			text = "    Color Picker";
@@ -17077,13 +17604,15 @@ void M_Crosshair_Draw(void)
 
 		case CROSSHAIR_OUTLINE:
 			text = "         Outline";
-			M_DrawCheckbox(178, y, scr_crosshairoutline.value);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, scr_crosshairoutline.value);
 			break;
 
 		case CROSSHAIR_SCALE:
 			text = "           Scale";
 			r = (scr_crosshairscale.value - 1.0f) / 9.0f;  // Map 1-10 to 0-1 for slider
-			M_DrawSlider(186, y, r, scr_crosshairscale.value, "%.1f");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, scr_crosshairscale.value, "%.1f");
 			break;
 
 		case CROSSHAIR_X:
@@ -17095,7 +17624,8 @@ void M_Crosshair_Draw(void)
 					display_x_val = 0.0f;     // Convert to positive zero
 				}
 				r = (current_x_val + 10.0f) / 20.0f; // Slider position based on actual cvar value
-				M_DrawSlider(186, y, r, display_x_val, "%.0f"); // Display corrected value
+				if (!show_cvar_hint)
+					M_DrawSlider(MENU_SLIDER_X, y, r, display_x_val, "%.0f"); // Display corrected value
 			}
 			break;
 		case CROSSHAIR_Y:
@@ -17107,7 +17637,8 @@ void M_Crosshair_Draw(void)
 					display_y_val = 0.0f;     // Convert to positive zero
 				}
 				r = (current_y_val + 10.0f) / 20.0f; // Slider position based on actual cvar value
-				M_DrawSlider(186, y, r, display_y_val, "%.0f"); // Display corrected value
+				if (!show_cvar_hint)
+					M_DrawSlider(MENU_SLIDER_X, y, r, display_y_val, "%.0f"); // Display corrected value
 			}
 			break;
 
@@ -17128,6 +17659,11 @@ void M_Crosshair_Draw(void)
 			{
 				M_Print(16, y, text);
 			}
+
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+			else if (value)
+				M_Print(MENU_VALUE_X, y, value);
 		}
 
 	}
@@ -17657,6 +18193,33 @@ static const char* M_Console_GetItemText(int index)
 	}
 }
 
+static cvar_t *M_Console_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case CONSOLE_FONTSIZE:		return &scr_conscale;
+	case CONSOLE_HEIGHT:			return &scr_consize;
+	case CONSOLE_SPEED:			return &scr_conspeed;
+	case CONSOLE_TRANSPARENCY:	return &scr_conalpha;
+	case CONSOLE_CONBACK:		return &scr_conback;
+	case CONSOLE_CONCOLOR:		return &scr_concolor;
+	case CONSOLE_CONTENTFILTER:	return &cl_contentfilter;
+	case CONSOLE_TYPING:			return &con_typing;
+	case CONSOLE_SAVE_HISTORY:	return Cvar_FindVar("con_savehistory");
+	default:					return NULL;
+	}
+}
+
+static const char *M_Console_GetItemHintText(int index)
+{
+	switch (index)
+	{
+	case CONSOLE_CLEAR_CONSOLE:	return "cmd clear";
+	case CONSOLE_CLEAR_HISTORY:	return "cmd clearhistory";
+	default:					return NULL;
+	}
+}
+
 static int M_Console_LivePreviewId(void)
 {
 	switch (console_cursor)
@@ -17805,7 +18368,6 @@ void M_Console_Draw(void)
 	float r;
 	enum console_e i;
 	const char* filter_text;
-	const char* value;
 
 	M_TextField_CheckMouseRelease();
 	console_cursor = (enum console_e)M_Menu_ClampCursorValue((int)console_cursor, CONSOLE_ITEMS);
@@ -17823,6 +18385,11 @@ void M_Console_Draw(void)
 		int y = M_Console_GetItemY(i);
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
+		const char* value = NULL;
+		cvar_t *cvar_hint = M_Console_GetItemCvar(i);
+		const char *text_hint = M_Console_GetItemHintText(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == console_cursor && !console_field_editing, cvar_hint);
+		qboolean show_text_hint = M_TextHintActive(i == console_cursor && !console_field_editing, text_hint);
 
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -17832,30 +18399,35 @@ void M_Console_Draw(void)
 		case CONSOLE_FONTSIZE:
 			text = "       Font Size";
 			r = M_ConsoleScaleFraction(scr_conscale.value);
-			M_DrawSlider(186, y, r, scr_conscale.value, "%.0f");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, scr_conscale.value, "%.0f");
 			break;
 
 		case CONSOLE_HEIGHT:
 			text = "          Height";
 			r = scr_consize.value;
-			M_DrawSlider(186, y, r, scr_consize.value * 100, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, scr_consize.value * 100, "%.0f%%");
 			break;
 
 		case CONSOLE_SPEED:
 			text = "           Speed";
 			r = (scr_conspeed.value - 100) / 9900;  // Simplified calculation
-			M_DrawSlider(186, y, r, scr_conspeed.value, "%.0f");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, scr_conspeed.value, "%.0f");
 			break;
 
 		case CONSOLE_TRANSPARENCY:
 			text = "    Transparency";
 			r = scr_conalpha.value;
-			M_DrawSlider(186, y, r, scr_conalpha.value * 100, "%.0f%%");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, scr_conalpha.value * 100, "%.0f%%");
 			break;
 
 		case CONSOLE_CONBACK:
 			text = "Background Image";
-			M_Console_DrawField(y, &console_conback_field, "default");
+			if (!show_cvar_hint)
+				M_Console_DrawField(y, &console_conback_field, "default");
 			break;
 
 		case CONSOLE_CONCOLOR:
@@ -17869,9 +18441,8 @@ void M_Console_Draw(void)
 				plcolour_t color = CL_PLColours_Parse(scr_concolor.string);
 				value = (color.type == 2) ? va("%s", scr_concolor.string) : va("%d", color.basic);
 			}
-			M_Print(178, y, value);
-			if (strcmp(scr_concolor.string, "") != 0)
-				Draw_FillPlayer(178 + (strlen(value) * 8) + 4, y + 2, 6, 6, CL_PLColours_Parse(scr_concolor.string), 1.0f);
+			if (!show_cvar_hint && strcmp(scr_concolor.string, "") != 0)
+				Draw_FillPlayer(MENU_VALUE_X + (strlen(value) * 8) + 4, y + 2, 6, 6, CL_PLColours_Parse(scr_concolor.string), 1.0f);
 			break;
 
 		case CONSOLE_CONTENTFILTER:
@@ -17883,27 +18454,29 @@ void M_Console_Draw(void)
 			case 2: filter_text = "full"; break;
 			default: filter_text = "unknown"; break;
 			}
-			M_Print(178, y, filter_text);
+			value = filter_text;
 			break;
 
 		case CONSOLE_TYPING:
 			text = "   Typing Status";
-			M_DrawCheckbox(178, y, con_typing.value != 0);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, con_typing.value != 0);
 			break;
 
 		case CONSOLE_SAVE_HISTORY:
 			text = "    Save History";
-			M_DrawCheckbox(178, y, Cvar_VariableValue("con_savehistory") != 0);
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, Cvar_VariableValue("con_savehistory") != 0);
 			break;
 
 		case CONSOLE_CLEAR_CONSOLE:
 			text = "   Clear Console";
-			M_Print(178, y, "clear");
+			value = "clear";
 			break;
 
 		case CONSOLE_CLEAR_HISTORY:
 			text = "   Clear History";
-			M_Print(178, y, "clearhistory");
+			value = "clearhistory";
 			break;
 
 		default:
@@ -17923,6 +18496,13 @@ void M_Console_Draw(void)
 			{
 				M_Print(16, y, text);
 			}
+
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+			else if (show_text_hint)
+				M_DrawHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, text_hint);
+			else if (value)
+				M_Print(MENU_VALUE_X, y, value);
 		}
 
 		if (isolated)
@@ -19192,6 +19772,40 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 	}
 }
 
+static cvar_t *M_Extras_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case EXTRAS_YIELD:			return &sys_throttle;
+	case EXTRAS_NETEXTENSIONS:	return &cl_nopext;
+	case EXTRAS_QCEXTENSIONS:	return &pr_checkextension;
+	case EXTRAS_AUTODEMO:		return &cl_autodemo;
+	case EXTRAS_PORTPINGPROBE:	return &cl_portpingprobe_enable;
+	case EXTRAS_SPAWNTRAINER:	return &cl_smartspawn;
+	case EXTRAS_ITEMBOB:		return &cl_bobbing;
+	case EXTRAS_PONG:			return &cl_pong;
+	case EXTRAS_HINTS:			return &scr_hints;
+	case EXTRAS_LIVEPREVIEW:	return &ui_live_preview;
+	default:					return NULL;
+	}
+}
+
+static const char *M_Extras_GetItemHintText(int index)
+{
+	static char buffer[128];
+
+	switch (index)
+	{
+	case EXTRAS_PREDICTION:
+		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
+			cl_nopred.name, cl_nopred.string,
+			sv_nqplayerphysics.name, sv_nqplayerphysics.string);
+		return buffer;
+	default:
+		return NULL;
+	}
+}
+
 static void M_Extras_UpdateSearch(void)
 {
 	extras_cursor = (enum extras_e)M_Menu_UpdateSearchCursor(
@@ -19213,6 +19827,8 @@ static int M_Extras_RowY(int item)
 
 #define EXTRAS_SEARCH_BOX_Y	176
 #define EXTRAS_SEARCH_TEXT_Y	184
+#define EXTRAS_VALUE_X			168
+#define EXTRAS_CVAR_HINT_WIDTH	(19 * 8)
 
 static int M_Extras_LivePreviewId(void)
 {
@@ -19355,6 +19971,10 @@ void M_Extras_Draw(void)
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
+		cvar_t *cvar_hint = M_Extras_GetItemCvar(i);
+		const char *text_hint = M_Extras_GetItemHintText(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == extras_cursor, cvar_hint);
+		qboolean show_text_hint = M_TextHintActive(i == extras_cursor, text_hint);
 
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -19483,7 +20103,12 @@ void M_Extras_Draw(void)
 				M_Print(8, y, text);
 			}
 
-			M_Print(168, y, value);
+			if (show_cvar_hint)
+				M_DrawCvarHintValue(EXTRAS_VALUE_X, y, EXTRAS_CVAR_HINT_WIDTH, cvar_hint);
+			else if (show_text_hint)
+				M_DrawHintValue(EXTRAS_VALUE_X, y, EXTRAS_CVAR_HINT_WIDTH, text_hint);
+			else if (value)
+				M_Print(EXTRAS_VALUE_X, y, value);
 		}
 
 		if (isolated)
@@ -19752,6 +20377,18 @@ static void M_Saving_MoveCursor(int delta)
 	saving_cursor = (enum saving_e)M_Menu_ClampCursorValue((int)saving_cursor + delta, SAVING_ITEMS);
 }
 
+static cvar_t *M_Saving_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case SAVING_AUTOLOAD:			return &sv_autoload;
+	case SAVING_AUTOSAVE:			return &sv_autosave;
+	case SAVING_AUTOSAVE_INTERVAL:
+	case SAVING_INDICATOR:			return &sv_autosave_interval;
+	default:						return NULL;
+	}
+}
+
 void M_Menu_Saving_f(void)
 {
 	key_dest = key_menu;
@@ -19833,6 +20470,8 @@ void M_Saving_Draw(void)
 		int y = SAVING_ROW_Y(i);
 		const char* text = NULL;
 		const char* value = NULL;
+		cvar_t *cvar_hint = M_Saving_GetItemCvar(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == saving_cursor, cvar_hint);
 
 		switch (i)
 		{
@@ -19863,8 +20502,10 @@ void M_Saving_Draw(void)
 		if (text)
 			M_Print(0, y, text);
 
-		if (value)
-			M_Print(178, y, value);
+		if (show_cvar_hint)
+			M_DrawCvarHintValue(MENU_VALUE_X, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+		else if (value)
+			M_Print(MENU_VALUE_X, y, value);
 	}
 
 	M_DrawCharacter(168, SAVING_ROW_Y(saving_cursor), 12 + ((int)(realtime * 4) & 1));
@@ -38776,6 +39417,17 @@ static const char* M_Startup_GetItemText(int index)
 	}
 }
 
+static cvar_t *M_Startup_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case STARTUP_SCREEN:		return &cl_onload;
+	case STARTUP_FADE:			return &scr_fade;
+	case STARTUP_DEMO_ATTRACT:	return &cl_demoreel;
+	default:					return NULL;
+	}
+}
+
 static void M_Startup_ClampCursor(void)
 {
 	int cursor = (int)startup_cursor;
@@ -38941,6 +39593,8 @@ void M_Startup_Draw(void)
 		int y = 48 + 8 * i;
 		const char* text = NULL;
 		const char* value = NULL;
+		cvar_t *cvar_hint = M_Startup_GetItemCvar(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == startup_cursor, cvar_hint);
 
 		switch (i)
 		{
@@ -39001,7 +39655,9 @@ void M_Startup_Draw(void)
 				M_Print(0, y, text);
 			}
 		}
-		if (value)
+		if (show_cvar_hint)
+			M_DrawCvarHintValue(183, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+		else if (value)
 			M_Print(183, y, value);
 	}
 
@@ -39240,6 +39896,22 @@ static const char* M_DemoOptions_GetValueText(int index)
 	}
 }
 
+static cvar_t *M_DemoOptions_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case DEMOOPTIONS_DEMOEYES:			return &cl_demoeyes;
+	case DEMOOPTIONS_FORMAT:				return &cl_demo_format;
+	case DEMOOPTIONS_AUTODEMO:			return &cl_autodemo;
+	case DEMOOPTIONS_DEMOREEL:			return &cl_demoreel;
+	case DEMOOPTIONS_EYECAM:				return &cl_demo_eyecam;
+	case DEMOOPTIONS_BAR_TIMEOUT:		return &scr_demobar_timeout;
+	case DEMOOPTIONS_MINFRAMES:
+	case DEMOOPTIONS_MINFRAMES_DELETE:	return &cl_demo_minframes;
+	default:							return NULL;
+	}
+}
+
 static void M_DemoOptions_ClampCursor(void)
 {
 	int cursor = (int)demooptions_cursor;
@@ -39451,6 +40123,8 @@ void M_DemoOptions_Draw(void)
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
+		cvar_t *cvar_hint = M_DemoOptions_GetItemCvar(i);
+		qboolean show_cvar_hint = M_CvarHintActive(i == demooptions_cursor, cvar_hint);
 
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -39460,7 +40134,8 @@ void M_DemoOptions_Draw(void)
 		case DEMOOPTIONS_DEMOEYES:
 			text = "         Demo Eyes";
 			r = CLAMP(0.0f, cl_demoeyes.value, 1.0f);
-			M_DrawSlider(186, y, r, r, "%.1f");
+			if (!show_cvar_hint)
+				M_DrawSlider(MENU_SLIDER_X, y, r, r, "%.1f");
 			break;
 		case DEMOOPTIONS_FORMAT:
 			text = "       Demo Format";
@@ -39508,7 +40183,9 @@ void M_DemoOptions_Draw(void)
 				M_Print(0, y, text);
 			}
 		}
-		if (value)
+		if (show_cvar_hint)
+			M_DrawCvarHintValue(183, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+		else if (value)
 			M_Print(183, y, value);
 
 		if (isolated)

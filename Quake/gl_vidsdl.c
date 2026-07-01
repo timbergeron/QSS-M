@@ -2522,6 +2522,39 @@ static SDL_Cursor *VID_GetMenuTextCursor(void)
 	return menu_text_cursor;
 }
 
+#define VID_MENU_VALUE_X 184
+#define VID_MENU_CVAR_HINT_WIDTH (17 * 8)
+
+static qboolean VID_Menu_CvarHintActive(qboolean selected, cvar_t *cv)
+{
+	return selected && keydown[K_CTRL] && cv != NULL &&
+		cv->name != NULL && cv->string != NULL;
+}
+
+static qboolean VID_Menu_TextHintActive(qboolean selected, const char *text)
+{
+	return selected && keydown[K_CTRL] && text != NULL && text[0] != '\0';
+}
+
+static void VID_Menu_DrawHintValue(int x, int y, int maxwidth, const char *hint)
+{
+	if (hint == NULL || hint[0] == '\0')
+		return;
+
+	M_PrintScroll(x, y, maxwidth, hint, realtime, false);
+}
+
+static void VID_Menu_DrawCvarHintValue(int x, int y, int maxwidth, cvar_t *cv)
+{
+	char hint[128];
+
+	if (cv == NULL || cv->name == NULL || cv->string == NULL)
+		return;
+
+	q_snprintf(hint, sizeof(hint), "%s %s", cv->name, cv->string);
+	VID_Menu_DrawHintValue(x, y, maxwidth, hint);
+}
+
 static void VID_FPS_UpdateCvar(void)
 {
 	int value;
@@ -2892,6 +2925,39 @@ static const char* VID_Menu_GetItemText(int index)
 		return "Test Changes";
 	case VID_OPT_APPLY:
 		return "Apply Changes";
+	default:
+		return NULL;
+	}
+}
+
+static cvar_t *VID_Menu_GetItemCvar(int index)
+{
+	switch (index)
+	{
+	case VID_OPT_BPP:			return &vid_bpp;
+	case VID_OPT_REFRESHRATE:	return &vid_refreshrate;
+	case VID_OPT_VSYNC:			return &vid_vsync;
+	case VID_OPT_FPSLIMIT:		return &host_maxfps;
+	default:					return NULL;
+	}
+}
+
+static const char *VID_Menu_GetItemHintText(int index)
+{
+	static char buffer[96];
+
+	switch (index)
+	{
+	case VID_OPT_MODE:
+		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
+			vid_width.name, vid_width.string,
+			vid_height.name, vid_height.string);
+		return buffer;
+	case VID_OPT_FULLSCREEN:
+		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
+			vid_fullscreen.name, vid_fullscreen.string,
+			vid_borderless.name, vid_borderless.string);
+		return buffer;
 	default:
 		return NULL;
 	}
@@ -3327,6 +3393,10 @@ static void VID_MenuDraw (void)
 		y = VID_Menu_GetItemY(i);
 		const char* text = NULL;
 		const char* value = NULL;
+		cvar_t *cvar_hint = VID_Menu_GetItemCvar(i);
+		const char *text_hint = VID_Menu_GetItemHintText(i);
+		qboolean show_cvar_hint = VID_Menu_CvarHintActive(video_options_cursor == i, cvar_hint);
+		qboolean show_text_hint = VID_Menu_TextHintActive(video_options_cursor == i, text_hint);
 
 		switch (i)
 		{
@@ -3405,7 +3475,15 @@ static void VID_MenuDraw (void)
 		}
 
 		// Draw the value portion
-		if (i == VID_OPT_FPSLIMIT)
+		if (show_cvar_hint)
+		{
+			VID_Menu_DrawCvarHintValue(VID_MENU_VALUE_X, y, VID_MENU_CVAR_HINT_WIDTH, cvar_hint);
+		}
+		else if (show_text_hint)
+		{
+			VID_Menu_DrawHintValue(VID_MENU_VALUE_X, y, VID_MENU_CVAR_HINT_WIDTH, text_hint);
+		}
+		else if (i == VID_OPT_FPSLIMIT)
 		{
 			M_DrawTextBox(180, y - 8, 5, 1);
 			M_TextField_DrawHighlight(&fps_field, VID_FPS_TEXT_X, y);
@@ -3429,7 +3507,7 @@ static void VID_MenuDraw (void)
 		}
 		else if (i == VID_OPT_VSYNC && gl_swap_control)
 		{
-			M_DrawCheckbox(184, y, (int)vid_vsync.value);
+			M_DrawCheckbox(VID_MENU_VALUE_X, y, (int)vid_vsync.value);
 		}
 		else if (value)
 		{
@@ -3441,7 +3519,7 @@ static void VID_MenuDraw (void)
 			}
 			else
 			{
-				M_Print(184, y, value);
+				M_Print(VID_MENU_VALUE_X, y, value);
 			}
 		}
 

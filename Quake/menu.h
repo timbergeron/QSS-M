@@ -151,6 +151,7 @@ void M_Print2 (int cx, int cy, const char* str); // woods #speed yellow numbers
 void M_DrawCharacterRGBA (int cx, int line, int num, plcolour_t c, float alpha); // woods
 void M_PrintRGBA (int cx, int cy, const char* str, plcolour_t c, float alpha, qboolean mask); // woods
 void M_PrintWhite (int cx, int cy, const char *str);
+void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qboolean color);
 
 void M_Draw (void);
 void M_DrawCharacter (int cx, int line, int num);
