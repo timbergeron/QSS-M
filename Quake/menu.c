@@ -1251,14 +1251,24 @@ static float M_ScrollPixelOffset(double time, int scrollspeed, int cycle_pixels,
 	return (float)(offset - *pixel_offset);
 }
 
+#define MENU_SCROLL_SEPARATOR_LEN 3
+#define MENU_SCROLL_SEPARATOR_DOT 133
+
+static int M_ScrollSeparatorChar(int index, int mask)
+{
+	if (index == 1)
+		return MENU_SCROLL_SEPARATOR_DOT;
+	return ' ' | mask;
+}
+
 void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qboolean color) // woods #modsmenu (iw)
 {
 	const int charwidth = 8;
-	const int gap_len = 5;
+	const int gap_len = MENU_SCROLL_SEPARATOR_LEN;
 	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
 	int maxchars = maxwidth / charwidth;
 	int len = strlen(str);
-	char mask = color ? 128 : 0;
+	int mask = color ? 128 : 0;
 	float frac;
 
 	if (len <= maxchars)
@@ -1296,9 +1306,11 @@ void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qbo
 			if (pos < len)
 				ch = (unsigned char)str[pos];
 			else
-				ch = (unsigned char)" /// "[pos - len];
+				ch = M_ScrollSeparatorChar(pos - len, mask);
 
-			M_DrawCharacter(char_x, y, ch ^ mask);
+			if (pos < len)
+				ch ^= mask;
+			M_DrawCharacter(char_x, y, ch);
 		}
 	}
 	glPopMatrix();
@@ -1373,7 +1385,7 @@ void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str
 	}
 
 	const int charwidth = 8;
-	const int gap_len = 5;
+	const int gap_len = MENU_SCROLL_SEPARATOR_LEN;
 	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
 	int total_chars = combined_len + gap_len;
 	int cycle_pixels = total_chars * charwidth;
@@ -1394,11 +1406,11 @@ void M_PrintScroll2(int x, int y, int maxwidth, const char* str, const char* str
 			if (char_x >= x + maxwidth)
 				break;
 
-			char c;
+			int c;
 			if (pos < combined_len)
 				c = combined[pos];
 			else
-				c = " /// "[pos - combined_len];
+				c = M_ScrollSeparatorChar(pos - combined_len, 0);
 
 			M_DrawCharacter(char_x, y, c);
 		}
@@ -1494,7 +1506,7 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 
 	// Scrolling display
 	const int charwidth = 8;
-	const int gap_len = 5;
+	const int gap_len = MENU_SCROLL_SEPARATOR_LEN;
 	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
 	int total_chars = combined_len + gap_len;
 	int cycle_pixels = total_chars * charwidth;
@@ -1548,7 +1560,7 @@ void M_PrintHighlightScroll2(int x, int y, int maxwidth,
 			}
 			else
 			{
-				drawch = ' ' | 128; // Gap
+				drawch = M_ScrollSeparatorChar(pos - combined_len, 128);
 			}
 
 			M_DrawCharacter(char_x, y, drawch);
@@ -1581,7 +1593,7 @@ void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const c
     }
 
 	const int charwidth = 8;
-	const int gap_len = 5;
+	const int gap_len = MENU_SCROLL_SEPARATOR_LEN;
 	const int scrollspeed = 30; // pixels per second, matches Sbar_DrawScrollString
 	int total_chars = len_str + gap_len;
 	int cycle_pixels = total_chars * charwidth;
@@ -1617,7 +1629,7 @@ void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const c
 			}
 			else
 			{
-				drawch = ' ' | 128; // Gap
+				drawch = M_ScrollSeparatorChar(pos - len_str, 128);
 			}
 
 			M_DrawCharacter(char_x, y, drawch);
@@ -4145,7 +4157,7 @@ static void M_DownloadMaps_DrawActiveDownload(int x, int y, int maxwidth, const 
 static void M_DownloadMaps_DrawInstalledMap(int x, int y, int maxwidth, const char *display_name, double time)
 {
 	const int charwidth = 8;
-	const int gap_len = 5;
+	const int gap_len = MENU_SCROLL_SEPARATOR_LEN;
 	const int scrollspeed = 30;
 	plcolour_t white = CL_PLColours_Parse("0xffffff");
 	int maxchars, len, total_chars, cycle_pixels, pixel_offset, pass;
@@ -4185,7 +4197,7 @@ static void M_DownloadMaps_DrawInstalledMap(int x, int y, int maxwidth, const ch
 			if (char_x >= x + maxwidth)
 				break;
 
-			ch = (pos < len) ? (unsigned char)display_name[pos] : (unsigned char)" /// "[pos - len];
+			ch = (pos < len) ? (unsigned char)display_name[pos] : M_ScrollSeparatorChar(pos - len, 0);
 			M_DrawCharacterRGBA(char_x, y, ch, white, 0.5f);
 		}
 	}
@@ -33023,7 +33035,7 @@ static void M_DownloadMods_PrintRGBAScroll(int x, int y, int maxwidth,
 	const char *str, double time, plcolour_t color, float alpha, qboolean mask)
 {
 	const int charwidth = 8;
-	const int gap_len = 5;
+	const int gap_len = MENU_SCROLL_SEPARATOR_LEN;
 	const int scrollspeed = 30;
 	int maxchars = maxwidth / charwidth;
 	int len = (int)strlen(str);
@@ -33064,9 +33076,11 @@ static void M_DownloadMods_PrintRGBAScroll(int x, int y, int maxwidth,
 			if (pos < len)
 				ch = (unsigned char)str[pos];
 			else
-				ch = (unsigned char)" /// "[pos - len];
+				ch = M_ScrollSeparatorChar(pos - len, 0);
 
-			M_DrawCharacterRGBA(char_x, y, ch + mask_offset, color, alpha);
+			if (pos < len)
+				ch += mask_offset;
+			M_DrawCharacterRGBA(char_x, y, ch, color, alpha);
 		}
 	}
 	glPopMatrix();
