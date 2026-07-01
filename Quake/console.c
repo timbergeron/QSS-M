@@ -2538,28 +2538,6 @@ roll_fallback:
 
 /*
 ================
-LOG_Maintenance
-
-Runs deferred log maintenance (e.g., roll at level change or quit).
-================
-*/
-void LOG_Maintenance(void)
-{
-    if (!con_debuglog || log_cap <= 0)
-        return;
-
-    LOG_Lock();
-    if (log_fd != -1 && log_roll_pending) {
-        LOG_UpdateSize_Locked();
-        if (log_size > log_cap)
-            LOG_RollTail_Locked(rollover_banner);
-        log_roll_pending = false;
-    }
-    LOG_Unlock();
-}
-
-/*
-================
 Con_DebugLog
 ================
 */
@@ -2582,6 +2560,7 @@ void Con_DebugLog(const char *msg)
 
 	if (log_cap > 0) {
 		if (log_size + (log_off_t)msg_len > log_cap)
+			/* Defer tail-copy truncation to shutdown; avoid runtime hitches. */
 			log_roll_pending = true;
 	}
 

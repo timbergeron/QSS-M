@@ -110,7 +110,6 @@ void Con_ReloadIBeamCursor (void); // woods #customcursor - reload console curso
 void LOG_Init (quakeparms_t *parms);
 void LOG_Close (void);
 void Con_DebugLog (const char *msg);
-void LOG_Maintenance (void);
 
 #endif	/* __CONSOLE_H */
 
