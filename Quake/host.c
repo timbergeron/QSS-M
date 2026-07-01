@@ -119,7 +119,7 @@ extern char demoplaying[MAX_OSPATH]; // woods for window title
 
 void SV_Next_Map_f(void); // woods #maprotation
 
-#define NETFPS_PROBE_DEFAULT_SECONDS	5.0
+#define NETFPS_PROBE_DEFAULT_SECONDS	10.0
 #define NETFPS_PROBE_MIN_SECONDS		1.0
 #define NETFPS_PROBE_MAX_SECONDS		30.0
 #define NETFPS_PROBE_DEFAULT_TARGET		72.0
@@ -152,6 +152,8 @@ typedef struct
 	double		avg_send_dt;
 	double		min_send_dt;
 	double		max_send_dt;
+	double		send_jitter;		// stddev of send spacing; low = smooth move cadence on the server
+	double		min_window_netfps;	// worst ~1s window; how the value holds up during fps dips
 	double		avg_late;
 	double		max_late;
 } netfps_probe_eval_t;
@@ -238,24 +240,32 @@ static void Host_NetfpsProbe_Evaluate (int value, netfps_probe_eval_t *eval)
 	double accum = 0.0;
 	double total = 0.0;
 	double send_sum = 0.0;
+	double send_sq_sum = 0.0;
 	double late_sum = 0.0;
+	double window_time = 0.0;
+	int window_sends = 0;
 	int i;
 
 	memset (eval, 0, sizeof(*eval));
 	eval->value = value;
+	eval->min_window_netfps = -1.0;
 
 	for (i = 0; i < netfps_probe.sample_count; i++)
 	{
-		double dt = netfps_probe.samples[i];
+		// the engine clamps each frame's accumulator contribution to 0.2s
+		double dt = q_min (netfps_probe.samples[i], 0.2);
 
 		total += dt;
 		accum += dt;
+		window_time += dt;
 		if (accum >= interval)
 		{
 			double late = accum - interval;
 
 			eval->sends++;
+			window_sends++;
 			send_sum += accum;
+			send_sq_sum += accum * accum;
 			late_sum += late;
 			if (!eval->min_send_dt || accum < eval->min_send_dt)
 				eval->min_send_dt = accum;
@@ -265,14 +275,34 @@ static void Host_NetfpsProbe_Evaluate (int value, netfps_probe_eval_t *eval)
 				eval->max_late = late;
 			accum = 0.0;
 		}
+		if (window_time >= 1.0)
+		{
+			double rate = window_sends / window_time;
+			if (eval->min_window_netfps < 0.0 || rate < eval->min_window_netfps)
+				eval->min_window_netfps = rate;
+			window_time = 0.0;
+			window_sends = 0;
+		}
+	}
+	if (window_time >= 0.5)
+	{
+		double rate = window_sends / window_time;
+		if (eval->min_window_netfps < 0.0 || rate < eval->min_window_netfps)
+			eval->min_window_netfps = rate;
 	}
 
 	if (total > 0.0)
 		eval->effective_netfps = eval->sends / total;
+	if (eval->min_window_netfps < 0.0)
+		eval->min_window_netfps = eval->effective_netfps;
 	if (eval->sends > 0)
 	{
+		double variance;
+
 		eval->avg_send_dt = send_sum / eval->sends;
 		eval->avg_late = late_sum / eval->sends;
+		variance = send_sq_sum / eval->sends - eval->avg_send_dt * eval->avg_send_dt;
+		eval->send_jitter = (variance > 0.0) ? sqrt (variance) : 0.0;
 	}
 }
 
@@ -282,15 +312,30 @@ static qboolean Host_NetfpsProbe_EvalBetter (const netfps_probe_eval_t *candidat
 		return false;
 	if (!best->sends)
 		return true;
+	// rate the candidate holds through fps dips beats a higher but flaky average
+	if (candidate->min_window_netfps > best->min_window_netfps + 0.5)
+		return true;
+	if (candidate->min_window_netfps < best->min_window_netfps - 0.5)
+		return false;
 	if (candidate->effective_netfps > best->effective_netfps + 0.25)
 		return true;
 	if (candidate->effective_netfps < best->effective_netfps - 0.25)
+		return false;
+	// steadier send pacing is easier on the server than a marginally higher rate
+	if (candidate->send_jitter < best->send_jitter - 0.0001)
+		return true;
+	if (candidate->send_jitter > best->send_jitter + 0.0001)
 		return false;
 	if (candidate->max_late < best->max_late - 0.00025)
 		return true;
 	if (candidate->max_late > best->max_late + 0.00025)
 		return false;
-	return candidate->avg_late < best->avg_late;
+	if (candidate->avg_late < best->avg_late - 0.00025)
+		return true;
+	if (candidate->avg_late > best->avg_late + 0.00025)
+		return false;
+	// prefer the value whose nominal rate matches what it actually delivers
+	return candidate->value < best->value;
 }
 
 static qboolean Host_NetfpsProbe_EvalCloser (const netfps_probe_eval_t *candidate, const netfps_probe_eval_t *best, double target)
@@ -308,6 +353,10 @@ static qboolean Host_NetfpsProbe_EvalCloser (const netfps_probe_eval_t *candidat
 	if (candidate_diff < best_diff - 0.25)
 		return true;
 	if (candidate_diff > best_diff + 0.25)
+		return false;
+	if (candidate->send_jitter < best->send_jitter - 0.0001)
+		return true;
+	if (candidate->send_jitter > best->send_jitter + 0.0001)
 		return false;
 	if (candidate->max_late < best->max_late - 0.00025)
 		return true;
@@ -366,25 +415,25 @@ static void Host_NetfpsProbe_Report (void)
 	Con_Printf ("netfps_probe: render floor %.1f fps 95%%, worst %.1f fps, peak %.1f fps.\n",
 				p95fps, minfps, maxfps);
 
-	Con_Printf ("\nnetfps_probe: requested host_maxfps -%d estimates %.1f netfps.\n",
-				target_value, requested.effective_netfps);
-	Con_Printf ("netfps_probe: requested avg send %.2f ms, max late %.2f ms.\n",
-				requested.avg_send_dt * 1000.0, requested.max_late * 1000.0);
+	Con_Printf ("\nnetfps_probe: requested host_maxfps -%d estimates %.1f netfps (%.1f in worst second).\n",
+				target_value, requested.effective_netfps, requested.min_window_netfps);
+	Con_Printf ("netfps_probe: requested avg send %.2f ms, jitter %.2f ms, max late %.2f ms.\n",
+				requested.avg_send_dt * 1000.0, requested.send_jitter * 1000.0, requested.max_late * 1000.0);
 
 	Con_Printf ("\n");
 	Con_Printf ("netfps_probe: conservative command: host_maxfps -%d\n", safe.value);
-	Con_Printf ("netfps_probe: conservative estimate: %.1f netfps.\n",
-				safe.effective_netfps);
-	Con_Printf ("netfps_probe: conservative avg send %.2f ms, max late %.2f ms.\n",
-				safe.avg_send_dt * 1000.0, safe.max_late * 1000.0);
+	Con_Printf ("netfps_probe: conservative estimate: %.1f netfps (%.1f in worst second).\n",
+				safe.effective_netfps, safe.min_window_netfps);
+	Con_Printf ("netfps_probe: conservative avg send %.2f ms, jitter %.2f ms, max late %.2f ms.\n",
+				safe.avg_send_dt * 1000.0, safe.send_jitter * 1000.0, safe.max_late * 1000.0);
 	if (closest.value != safe.value)
 	{
 		Con_Printf ("\n");
 		Con_Printf ("netfps_probe: closest-to-target command: host_maxfps -%d\n", closest.value);
-		Con_Printf ("netfps_probe: closest estimate: %.1f netfps.\n",
-					closest.effective_netfps);
-		Con_Printf ("netfps_probe: closest avg send %.2f ms, max late %.2f ms.\n",
-					closest.avg_send_dt * 1000.0, closest.max_late * 1000.0);
+		Con_Printf ("netfps_probe: closest estimate: %.1f netfps (%.1f in worst second).\n",
+					closest.effective_netfps, closest.min_window_netfps);
+		Con_Printf ("netfps_probe: closest avg send %.2f ms, jitter %.2f ms, max late %.2f ms.\n",
+					closest.avg_send_dt * 1000.0, closest.send_jitter * 1000.0, closest.max_late * 1000.0);
 		if (closest.value > 72)
 			Con_Printf ("netfps_probe: note: closest-to-target is above 72 and can affect Quake physics; use conservative for normal play.\n");
 	}
@@ -489,6 +538,7 @@ static void Host_NetfpsProbe_f (void)
 
 	Con_Printf ("netfps_probe: sampling %.1f seconds for %.1f target netfps\n",
 				netfps_probe.duration, netfps_probe.target_netfps);
+	Con_Printf ("netfps_probe: move and fight normally while sampling; an idle probe overestimates what your fps can sustain.\n");
 	if (host_maxfps.value > 0)
 		Con_Printf ("netfps_probe: host_maxfps is currently capping render fps; this will be included in the measurement.\n");
 }
