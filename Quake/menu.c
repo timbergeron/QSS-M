@@ -26726,6 +26726,7 @@ static struct {
 	SDL_Thread* pingThread;
 	int sort_mode;
 	qboolean sort_descending;
+	double copy_message_until;
 } serversmenu;
 
 enum {
@@ -28973,6 +28974,7 @@ void M_Menu_ServerList_f (void)
 	serversmenu.initialPingThreadsRemaining = 0;
 	serversmenu.pingQueueSize = 0;
 	serversmenu.pingThreadRunning = false;
+	serversmenu.copy_message_until = 0.0;
 	pingThreadsShouldExit = false;
 	serversmenu.list.viewsize = MAX_VIS_SERVERS;
 	memset(&serversmenu.list.search, 0, sizeof(serversmenu.list.search));
@@ -28994,6 +28996,7 @@ void M_ServerList_Draw (void)
 	int firstvis, numvis;
 	int list_rows, item_viewsize, pinned_count;
 	qboolean separator_visible;
+	qboolean copy_message_active;
 	const char* title;
 	qboolean loading;
 
@@ -29002,6 +29005,9 @@ void M_ServerList_Draw (void)
 	cols = 36;
 	loading = (searchLastScope == SLIST_INTERNET &&
 		(slistInProgress || ServerList_ApiFetchIsLoading()));
+	copy_message_active = (realtime < serversmenu.copy_message_until);
+	if (!copy_message_active)
+		serversmenu.copy_message_until = 0.0;
 
 	switch (searchLastScope)
 	{
@@ -29176,7 +29182,11 @@ void M_ServerList_Draw (void)
                                 m_mousey < current_y_pos + 8);
 	                        qboolean tab_held = keydown[K_TAB];
 
-	                        if ((hover_plys || tab_held) && server.has_players)
+				if (copy_message_active)
+				{
+					M_PrintWhite(x, info_y, "copied!");
+				}
+	                        else if ((hover_plys || tab_held) && server.has_players)
 	                        {
 	                                // Display player names with word-wrapping (like demos menu)
 	                                char players_copy[512];
@@ -29363,6 +29373,7 @@ static void M_ServerList_CopySelectedAddress(void)
 	}
 
 	M_TextField_PlayCopySound();
+	serversmenu.copy_message_until = realtime + 1.0;
 }
 
 void M_ServerList_Key(int key)
