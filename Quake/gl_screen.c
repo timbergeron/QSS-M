@@ -149,6 +149,7 @@ cvar_t		scr_obscenterprint = {"scr_obscenterprint", "0",CVAR_ARCHIVE}; // woods
 cvar_t		scr_obsitems = {"scr_obsitems", "1",CVAR_ARCHIVE}; // woods
 cvar_t		scr_hints = {"scr_hints", "1",CVAR_ARCHIVE}; // woods #qssmhints
 cvar_t		scr_customcursor = {"scr_customcursor", "1", CVAR_ARCHIVE}; // woods #customcursor
+cvar_t		scr_fade = {"scr_fade", "0.15", CVAR_ARCHIVE}; // woods #fade -- startup/quit fade secs; 0 disables
 //johnfitz
 cvar_t		scr_usekfont = {"scr_usekfont", "0", CVAR_NONE}; // 2021 re-release
 cvar_t		cl_predict = { "cl_predict", "0", CVAR_NONE }; // 2021 re-release
@@ -198,6 +199,14 @@ vrect_t		scr_vrect;
 qboolean	scr_disabled_for_loading;
 qboolean	scr_drawloading;
 float		scr_disabled_time;
+static float scr_fade_alpha = 0.0f;
+static qboolean scr_startfade_checked = false;
+static qboolean scr_startfade_active = false;
+static double scr_startfade_start = 0.0;
+static qboolean scr_quitfade_running = false;
+
+#define SCR_FADE_MAX_SECONDS		2.0f
+#define SCR_QUIT_FADE_FRAME_MSEC	8
 
 int	scr_tileclear_updates = 0; //johnfitz
 
@@ -1038,6 +1047,23 @@ static void MatchClock_Completion_f(cvar_t* cvar, const char* partial)
 }
 
 /*
+===============
+Fade_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void Fade_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("0.15", partial, "default", NULL);
+	Con_AddToTabList("0.3", partial, "medium", NULL);
+	Con_AddToTabList("0.5", partial, "slow", NULL);
+	Con_AddToTabList("1", partial, "very slow", NULL);
+	Con_AddToTabList("2", partial, "max", NULL);
+}
+
+/*
 ==================
 SCR_CustomCursor_f -- woods #customcursor
 Keep OS cursor assets in sync with scr_customcursor changes.
@@ -1106,6 +1132,8 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_customcursor); // woods #customcursor
 	Cvar_SetCallback (&scr_customcursor, SCR_CustomCursor_f); // woods #customcursor
 	SCR_CustomCursor_f(&scr_customcursor); // woods #customcursor - load cursors with current setting
+	Cvar_RegisterVariable (&scr_fade); // woods #fade
+	Cvar_SetCompletion (&scr_fade, &Fade_Completion_f); // woods #iwtabcomplete
 	//johnfitz
 	Cvar_RegisterVariable(&scr_demobar_timeout); // woods (iw) #democontrols
 	Cvar_RegisterVariable (&scr_usekfont); // 2021 re-release
@@ -6237,6 +6265,138 @@ int SCR_ModalMessage (const char *text, float timeout) //johnfitz -- timeout
 }
 
 /*
+==================
+SCR_FadeDuration
+==================
+*/
+static float SCR_FadeDuration (void)
+{
+	return CLAMP (0.0f, scr_fade.value, SCR_FADE_MAX_SECONDS);
+}
+
+/*
+==================
+SCR_FadeSmoothStep
+==================
+*/
+static float SCR_FadeSmoothStep (float t)
+{
+	t = CLAMP (0.0f, t, 1.0f);
+	return t * t * (3.0f - 2.0f * t);
+}
+
+/*
+==================
+SCR_UpdateStartupFade
+
+Draws a non-blocking fade-from-black on the first normal rendered frames.
+scr_fade sets the startup/quit fade duration in seconds; 0 disables both.
+==================
+*/
+static void SCR_UpdateStartupFade (void)
+{
+	double now;
+	float duration, t;
+
+	if (scr_quitfade_running)
+		return;
+	if (cls.state == ca_dedicated || cls.timedemo || !host_initialized ||
+		scr_skipupdate || scr_disabled_for_loading || VID_IsMinimized())
+		return;
+
+	duration = SCR_FadeDuration ();
+
+	if (!scr_startfade_checked)
+	{
+		scr_startfade_checked = true;
+		if (duration <= 0.0f)
+			return;
+
+		scr_startfade_active = true;
+		scr_startfade_start = Sys_DoubleTime ();
+		scr_fade_alpha = 1.0f;
+	}
+
+	if (!scr_startfade_active)
+		return;
+
+	if (duration <= 0.0f)
+	{
+		scr_startfade_active = false;
+		scr_fade_alpha = 0.0f;
+		return;
+	}
+
+	now = Sys_DoubleTime ();
+	t = (float)((now - scr_startfade_start) / duration);
+	if (t >= 1.0f)
+	{
+		scr_startfade_active = false;
+		scr_fade_alpha = 0.0f;
+		return;
+	}
+
+	scr_fade_alpha = 1.0f - SCR_FadeSmoothStep (t);
+}
+
+/*
+==================
+SCR_QuitFade
+
+Draws a short fade-to-black before the normal client shutdown path.
+scr_fade sets the startup/quit fade duration in seconds; 0 disables both.
+==================
+*/
+void SCR_QuitFade (void)
+{
+	double	start, now;
+	float	duration;
+
+	if (scr_quitfade_running)
+		return;
+	if (cls.state == ca_dedicated || cls.timedemo)
+		return;
+	if (!host_initialized || !scr_initialized || scr_skipupdate || scr_disabled_for_loading || VID_IsMinimized())
+		return;
+
+	duration = SCR_FadeDuration ();
+	if (duration <= 0.0f)
+		return;
+
+	scr_quitfade_running = true;
+	scr_startfade_active = false;
+	start = Sys_DoubleTime ();
+
+	for (;;)
+	{
+		float t;
+
+		now = Sys_DoubleTime ();
+		t = CLAMP (0.0f, (float)((now - start) / duration), 1.0f);
+		scr_fade_alpha = SCR_FadeSmoothStep (t);
+		S_SetMasterVolumeScale (1.0f - scr_fade_alpha);
+
+		SCR_UpdateScreen ();
+		S_ExtraUpdate ();
+		Sys_SendKeyEvents ();
+
+		if (t >= 1.0f)
+			break;
+
+		Sys_Sleep (SCR_QUIT_FADE_FRAME_MSEC);
+	}
+
+	scr_fade_alpha = 1.0f;
+	// Host_Quit_f calls this immediately before Sys_Quit, so the mute is
+	// intentionally not restored.
+	S_SetMasterVolumeScale (0.0f);
+	SCR_UpdateScreen ();
+	S_ExtraUpdate ();
+	scr_fade_alpha = 0.0f;
+	scr_quitfade_running = false;
+}
+
+/*
 =================
 Pong -- woods #pong
 =================
@@ -7796,6 +7956,9 @@ void SCR_UpdateScreen (void)
 	}
 
 	V_UpdateBlend (); //johnfitz -- V_UpdatePalette cleaned up and renamed
+	SCR_UpdateStartupFade ();
+	if (scr_fade_alpha > 0.0f)
+		Draw_FadeScreen_Alpha (scr_fade_alpha);
 
 	GLSLGamma_GammaCorrect ();
 

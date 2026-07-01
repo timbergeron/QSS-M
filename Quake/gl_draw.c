@@ -2869,6 +2869,7 @@ void Draw_FadeScreen_Alpha (float alpha)
 	GL_SetCanvas (CANVAS_DEFAULT);
 
 	glEnable (GL_BLEND);
+	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glDisable (GL_ALPHA_TEST);
 	glDisable (GL_TEXTURE_2D);
 	glColor4f (0, 0, 0, alpha);
@@ -2896,6 +2897,7 @@ void Draw_FadeScreen_Rect_Alpha (float x0, float y0, float x1, float y1, float a
 	GL_SetCanvas (CANVAS_DEFAULT);
 
 	glEnable (GL_BLEND);
+	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glDisable (GL_ALPHA_TEST);
 	glDisable (GL_TEXTURE_2D);
 	glColor4f (0, 0, 0, alpha);

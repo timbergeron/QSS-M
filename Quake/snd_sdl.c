@@ -47,6 +47,67 @@ static int	device_channels = 2;
 static SDL_AudioDeviceID	sdl_audiodevice;
 #endif
 
+static int SND_Scaled16 (int sample, int scale)
+{
+	return (sample * scale) >> 8;
+}
+
+
+static int SND_ScaledU8 (int sample, int scale)
+{
+	int centered = sample - 128;
+
+	return CLAMP (0, ((centered * scale) >> 8) + 128, 255);
+}
+
+static int SND_ScaledS8 (int sample, int scale)
+{
+	return CLAMP (-128, (sample * scale) >> 8, 127);
+}
+
+static void SND_CopyScaled (Uint8 *dst, const Uint8 *src, int len)
+{
+	int scale = snd_mastervolume_scale;
+
+	if (scale >= 256)
+	{
+		memcpy (dst, src, len);
+		return;
+	}
+	if (scale <= 0)
+	{
+		memset (dst, (shm->samplebits == 8 && !shm->signed8) ? 128 : 0, len);
+		return;
+	}
+
+	if (shm->samplebits == 16)
+	{
+		const short *in = (const short *)src;
+		short *out = (short *)dst;
+		int samples = len / (int)sizeof(*out);
+		int i;
+
+		for (i = 0; i < samples; i++)
+			out[i] = (short)SND_Scaled16 (in[i], scale);
+	}
+	else if (!shm->signed8)
+	{
+		int i;
+
+		for (i = 0; i < len; i++)
+			dst[i] = (Uint8)SND_ScaledU8 (src[i], scale);
+	}
+	else
+	{
+		const signed char *in = (const signed char *)src;
+		signed char *out = (signed char *)dst;
+		int i;
+
+		for (i = 0; i < len; i++)
+			out[i] = (signed char)SND_ScaledS8 (in[i], scale);
+	}
+}
+
 #if defined(USE_SDL2)
 static int SND_GetPreferredOutputChannels (void)
 {
@@ -173,7 +234,7 @@ static void SDLCALL paint_audio (void *unused, Uint8 *stream, int len)
 			len2 = len - len1;
 		}
 
-		memcpy(stream, shm->buffer + pos, len1);
+		SND_CopyScaled(stream, shm->buffer + pos, len1);
 
 		if (len2 <= 0)
 		{
@@ -181,7 +242,7 @@ static void SDLCALL paint_audio (void *unused, Uint8 *stream, int len)
 		}
 		else
 		{	/* wraparound? */
-			memcpy(stream + len1, shm->buffer, len2);
+			SND_CopyScaled(stream + len1, shm->buffer, len2);
 			shm->samplepos = (len2 / (shm->samplebits / 8));
 		}
 
@@ -199,6 +260,7 @@ static void SDLCALL paint_audio (void *unused, Uint8 *stream, int len)
 		int	in_samples = buffersize / bps;	/* total samples in the ring */
 		int	frame_bytes = device_channels * bps;
 		int	out_frames = len / frame_bytes;
+		int scale = snd_mastervolume_scale;
 		int	f, sp, l, r;
 
 		memset(stream, silence, len);
@@ -216,6 +278,11 @@ static void SDLCALL paint_audio (void *unused, Uint8 *stream, int len)
 					sp = 0;
 				l = in[sp];
 				r = in[(sp + 1) % in_samples];
+				if (scale < 256)
+				{
+					l = (scale <= 0) ? 0 : SND_Scaled16 (l, scale);
+					r = (scale <= 0) ? 0 : SND_Scaled16 (r, scale);
+				}
 				out = SND_Upmix16 (out, l, r, device_channels);
 				sp += SND_MIX_CHANNELS;
 				if (sp >= in_samples)
@@ -234,6 +301,11 @@ static void SDLCALL paint_audio (void *unused, Uint8 *stream, int len)
 					sp = 0;
 				l = in[sp];
 				r = in[(sp + 1) % in_samples];
+				if (scale < 256)
+				{
+					l = (scale <= 0) ? 128 : SND_ScaledU8 (l, scale);
+					r = (scale <= 0) ? 128 : SND_ScaledU8 (r, scale);
+				}
 				out = SND_Upmix8 (out, l, r, device_channels);
 				sp += SND_MIX_CHANNELS;
 				if (sp >= in_samples)

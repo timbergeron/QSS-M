@@ -605,7 +605,8 @@ Host_Quit_f
 */
 void Host_Quit_f (void)
 {
-	
+	static qboolean quit_in_progress = false;
+
 	if (key_dest == key_console && cls.state != ca_dedicated && !cls.menu_qcvm.progs && cl.matchinp) // woods #matchquit
 		M_Menu_Quit_f ();
 	
@@ -614,6 +615,13 @@ void Host_Quit_f (void)
 		M_Menu_Quit_f ();
 		return;
 	}
+
+	if (quit_in_progress)
+		return;
+	quit_in_progress = true;
+
+	SCR_QuitFade ();
+
 	CL_Disconnect ();
 	Host_ShutdownServer(false);
 

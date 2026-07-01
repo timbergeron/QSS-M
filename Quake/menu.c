@@ -37875,7 +37875,10 @@ void M_Draw (void)
 		{ /* QuakeSpasm customization: */
 			/* Quit now! S.A. */
 			key_dest = key_console;
-			Host_Quit_f ();
+			m_state = m_none;
+			IN_UpdateGrabs();
+			Cbuf_AddText ("quit\n");
+			break;
 		}
 		M_Quit_Draw ();
 		break;
@@ -38656,6 +38659,7 @@ enum startup_e
 	STARTUP_PAK_TOGGLE,
 	STARTUP_PAK_LOADING,
 	STARTUP_SCREEN,
+	STARTUP_FADE,
 	STARTUP_DEMO_ATTRACT,
 	STARTUP_ITEMS
 } startup_cursor;
@@ -38696,6 +38700,7 @@ static struct
 } pakmenu;
 static qboolean paklist_exists = false;
 static qboolean pak_reorder_enabled = false;
+static const float startup_fade_values[] = {0.0f, 0.15f, 0.3f, 0.5f, 1.0f, 2.0f};
 
 // Forward declarations
 void M_Menu_PakLoading_f(void);
@@ -38710,6 +38715,53 @@ static void M_Pak_SaveList(void);
 static void M_Pak_DeleteList(void);
 static void M_Pak_BuildList(void);
 
+static int M_Startup_FadeIndex(void)
+{
+	int i, best;
+	float best_delta;
+
+	best = 0;
+	best_delta = fabsf(scr_fade.value - startup_fade_values[0]);
+
+	for (i = 1; i < (int)countof(startup_fade_values); i++)
+	{
+		float delta = fabsf(scr_fade.value - startup_fade_values[i]);
+		if (delta < best_delta)
+		{
+			best = i;
+			best_delta = delta;
+		}
+	}
+
+	return best;
+}
+
+static void M_Startup_AdjustFade(int dir)
+{
+	int index = M_Startup_FadeIndex();
+
+	index += (dir > 0) ? 1 : -1;
+	if (index < 0)
+		index = (int)countof(startup_fade_values) - 1;
+	else if (index >= (int)countof(startup_fade_values))
+		index = 0;
+
+	Cvar_SetValueQuick(&scr_fade, startup_fade_values[index]);
+}
+
+static const char* M_Startup_FadeValueText(void)
+{
+	float value = scr_fade.value;
+
+	if (value <= 0.0f)
+		return "off";
+	if (fabsf(value - Q_rint(value)) < 0.005f)
+		return va("%d sec", (int)Q_rint(value));
+	if (value < 1.0f)
+		return va("%.2f sec", value);
+	return va("%.1f sec", value);
+}
+
 static const char* M_Startup_GetItemText(int index)
 {
 	static char buffer[64];
@@ -38718,6 +38770,8 @@ static const char* M_Startup_GetItemText(int index)
 	{
 	case STARTUP_SCREEN:
 		return "Start-up Screen";
+	case STARTUP_FADE:
+		return "Startup/Quit Fade";
 	case STARTUP_DEMO_ATTRACT:
 		return "Start Demo Attract";
 	case STARTUP_PAK_LOADING:
@@ -38866,6 +38920,9 @@ void M_Startup_AdjustSliders(int dir)
 			m = 0;
 		Cvar_SetValueQuick(&cl_demoreel, m);
 		break;
+	case STARTUP_FADE:
+		M_Startup_AdjustFade(dir);
+		break;
 	case STARTUP_PAK_LOADING:
 		M_Menu_PakLoading_f();
 		break;
@@ -38920,6 +38977,10 @@ void M_Startup_Draw(void)
 				value = "history";
 			else
 				value = "custom";
+			break;
+		case STARTUP_FADE:
+			text = "Startup/Quit Fade";
+			value = M_Startup_FadeValueText();
 			break;
 		case STARTUP_DEMO_ATTRACT:
 			text = "Start Demo Attract";

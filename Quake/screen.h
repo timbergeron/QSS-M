@@ -41,6 +41,7 @@ void SCR_CenterPrint (const char *str);
 void SCR_BeginLoadingPlaque (void);
 void SCR_EndLoadingPlaque (void);
 void SCR_ShowSaving (void);
+void SCR_QuitFade (void);
 
 int SCR_ModalMessage (const char *text, float timeout); //johnfitz -- added timeout
 
@@ -132,6 +133,7 @@ extern	cvar_t		scr_crosshaircolor; // woods #crosshair
 extern	cvar_t		scr_matchclockscale; // woods #varmatchclock
 extern	cvar_t		scr_centerprintbg; // woods #centerprintbg (iw)
 extern	cvar_t		scr_demobar_timeout; // woods #democontrols
+extern	cvar_t		scr_fade; // woods #fade
 //johnfitz
 
 extern int scr_tileclear_updates; //johnfitz

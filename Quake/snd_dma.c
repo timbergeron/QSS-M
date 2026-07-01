@@ -144,6 +144,15 @@ static	cvar_t	_snd_mixahead = {"_snd_mixahead", "0.1", CVAR_ARCHIVE};
 
 extern char mute[2]; // woods #usermute #mute
 
+// Intentionally plain volatile: main thread writes a transient fade scale read
+// by the SDL audio callback.
+volatile int snd_mastervolume_scale = 256;
+
+void S_SetMasterVolumeScale (float scale)
+{
+	snd_mastervolume_scale = (int)(CLAMP (0.0f, scale, 1.0f) * 256.0f);
+}
+
 static void S_SoundInfo_f (void)
 {
 	if (!sound_started || !shm)
