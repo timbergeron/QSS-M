@@ -219,6 +219,9 @@ void M_Main_Key (int key);
 		void M_PlayerXray_Key (int key);
 	void M_HUD_Key (int key);
 		void M_Startup_Key (int key);
+		void M_Startup_Char (int key);
+		qboolean M_Startup_TextEntry (void);
+		qboolean M_Startup_MouseInCustomField (void);
 		void M_DemoOptions_Key (int key);
 		void M_PakLoading_Key (int key);
 		void M_ModelViewer_Key (int key);
@@ -1338,6 +1341,19 @@ static void M_DrawHintValue(int x, int y, int maxwidth, const char *hint)
 		return;
 
 	M_PrintScroll(x, y, maxwidth, hint, realtime, false);
+}
+
+static void M_AppendCvarHintPair(char *buffer, size_t buffer_size, const cvar_t *cv)
+{
+	char pair[128];
+
+	if (buffer_size <= 0 || cv == NULL || cv->name == NULL || cv->string == NULL)
+		return;
+
+	q_snprintf(pair, sizeof(pair), "%s %s", cv->name, cv->string);
+	if (buffer[0])
+		q_strlcat(buffer, ", ", buffer_size);
+	q_strlcat(buffer, pair, buffer_size);
 }
 
 static void M_DrawCvarHintValue(int x, int y, int maxwidth, cvar_t *cv)
@@ -9399,9 +9415,9 @@ static const char *M_Mouse_GetItemHintText(int index)
 		q_snprintf(buffer, sizeof(buffer), "in_mlook %d", !!(in_mlook.state & 1));
 		return buffer;
 	case MOUSE_PITCHMODE:
-		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
-			cl_minpitch.name, cl_minpitch.string,
-			cl_maxpitch.name, cl_maxpitch.string);
+		buffer[0] = '\0';
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &cl_minpitch);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &cl_maxpitch);
 		return buffer;
 	default:
 		return NULL;
@@ -11297,7 +11313,7 @@ static enum graphics_e
 #define GRAPHICS_ROW_HEIGHT 8
 #define GRAPHICS_DEFAULT_Y 20
 #define GRAPHICS_MIN_Y 12
-#define GRAPHICS_BOTTOM_Y 188
+#define GRAPHICS_BOTTOM_Y 192
 #define GRAPHICS_VALUE_X 178
 #define GRAPHICS_SLIDER_X 186
 int numberOfGraphicsItems = GRAPHICS_ITEMS;
@@ -11425,9 +11441,9 @@ static const char *M_Graphics_GetItemHintText(int index)
 
 		if (texturemode && anisotropy)
 		{
-			q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
-				texturemode->name, texturemode->string,
-				anisotropy->name, anisotropy->string);
+			buffer[0] = '\0';
+			M_AppendCvarHintPair(buffer, sizeof(buffer), texturemode);
+			M_AppendCvarHintPair(buffer, sizeof(buffer), anisotropy);
 			return buffer;
 		}
 		if (texturemode)
@@ -11445,16 +11461,16 @@ static const char *M_Graphics_GetItemHintText(int index)
 		return NULL;
 	}
 	case GRAPHICS_MODELLERP:
-		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
-			r_lerpmodels.name, r_lerpmodels.string,
-			r_lerpmove.name, r_lerpmove.string);
+		buffer[0] = '\0';
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &r_lerpmodels);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &r_lerpmove);
 		return buffer;
 	case GRAPHICS_WATERALPHA:
-		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s %s %s %s %s",
-			r_wateralpha.name, r_wateralpha.string,
-			r_lavaalpha.name, r_lavaalpha.string,
-			r_slimealpha.name, r_slimealpha.string,
-			r_telealpha.name, r_telealpha.string);
+		buffer[0] = '\0';
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &r_wateralpha);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &r_lavaalpha);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &r_slimealpha);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &r_telealpha);
 		return buffer;
 	default:
 		return NULL;
@@ -11825,7 +11841,7 @@ void M_Graphics_Draw(void)
 	M_LivePreview_WantAt (M_Graphics_LivePreviewId (), M_Graphics_ItemY(graphics_cursor));
 
 	const char* title = "Graphics Options";
-	M_PrintWhite((320 - 8 * strlen(title)) / 2, 4, title);
+	M_PrintWhite((320 - 8 * strlen(title)) / 2, 0, title);
 
 	for (i = 0; i < GRAPHICS_ITEMS; i++)
 	{
@@ -13174,7 +13190,7 @@ static const char *M_Skywind_GetHintText(float dist, float yaw, float period, fl
 {
 	static char buffer[96];
 
-	q_snprintf(buffer, sizeof(buffer), "r_skywind %g %g %g %g",
+	q_snprintf(buffer, sizeof(buffer), "r_skywind %g, %g, %g, %g",
 		dist, yaw, period, pitch);
 	return buffer;
 }
@@ -15237,31 +15253,31 @@ static const char *M_Game_GetItemHintText(int index)
 		alwaysrun = Cvar_FindVar("cl_alwaysrun");
 		if (alwaysrun)
 		{
-			q_snprintf(buffer, sizeof(buffer), "%s %s %s %s %s %s",
-				alwaysrun->name, alwaysrun->string,
-				cl_forwardspeed.name, cl_forwardspeed.string,
-				cl_backspeed.name, cl_backspeed.string);
+			buffer[0] = '\0';
+			M_AppendCvarHintPair(buffer, sizeof(buffer), alwaysrun);
+			M_AppendCvarHintPair(buffer, sizeof(buffer), &cl_forwardspeed);
+			M_AppendCvarHintPair(buffer, sizeof(buffer), &cl_backspeed);
 			return buffer;
 		}
-		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
-			cl_forwardspeed.name, cl_forwardspeed.string,
-			cl_backspeed.name, cl_backspeed.string);
+		buffer[0] = '\0';
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &cl_forwardspeed);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &cl_backspeed);
 		return buffer;
 	case GAME_DAMAGEKICK:
-		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s %s %s",
-			v_kicktime.name, v_kicktime.string,
-			v_kickroll.name, v_kickroll.string,
-			v_kickpitch.name, v_kickpitch.string);
+		buffer[0] = '\0';
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &v_kicktime);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &v_kickroll);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &v_kickpitch);
 		return buffer;
 	case GAME_AUTOSWITCH:
-		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
-			w_switch.name, w_switch.string,
-			b_switch.name, b_switch.string);
+		buffer[0] = '\0';
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &w_switch);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &b_switch);
 		return buffer;
 	case GAME_TEXTURELESS:
-		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
-			gl_max_size.name, gl_max_size.string,
-			gl_load24bit.name, gl_load24bit.string);
+		buffer[0] = '\0';
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &gl_max_size);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &gl_load24bit);
 		return buffer;
 	default:
 		return NULL;
@@ -15726,7 +15742,7 @@ void M_Game_Draw(void)
 	}
 
 	if (game_cursor == GAME_TEAMCOLOR || game_cursor == GAME_ENEMYCOLOR)
-		M_PrintRGBA(74, 176, "+shift for RGB colors", CL_PLColours_Parse("0xffffff"), 0.6f, false);
+		M_PrintRGBA(74, 188, "+shift for RGB colors", CL_PLColours_Parse("0xffffff"), 0.6f, false);
 
 	// Draw search box if search is active
 	if (gamemenu.search.len > 0)
@@ -19809,9 +19825,9 @@ static const char *M_Extras_GetItemHintText(int index)
 	switch (index)
 	{
 	case EXTRAS_PREDICTION:
-		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
-			cl_nopred.name, cl_nopred.string,
-			sv_nqplayerphysics.name, sv_nqplayerphysics.string);
+		buffer[0] = '\0';
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &cl_nopred);
+		M_AppendCvarHintPair(buffer, sizeof(buffer), &sv_nqplayerphysics);
 		return buffer;
 	default:
 		return NULL;
@@ -39162,6 +39178,9 @@ void M_Charinput (int key)
 	case m_resetconfig:
 		M_ResetConfig_Char(key);
 		return;
+	case m_startup:
+		M_Startup_Char(key);
+		return;
 	case m_gameoptions:
 		M_GameOptions_Char(key);
 		return;
@@ -39193,6 +39212,8 @@ qboolean M_TextEntry (void)
 		return M_Demos_TextEntry();
 	case m_resetconfig:
 		return M_ResetConfig_TextEntry();
+	case m_startup:
+		return M_Startup_TextEntry();
 	case m_gameoptions:
 		return M_GameOptions_TextEntry();
 	default:
@@ -39218,6 +39239,9 @@ qboolean M_WantsIBeamCursor(void)
 
 	if (m_state == m_resetconfig)
 		return M_ResetConfig_MouseInSearchBox();
+
+	if (m_state == m_startup)
+		return M_Startup_MouseInCustomField();
 
 	return M_TextEntry();
 }
@@ -39306,10 +39330,16 @@ enum startup_e
 	STARTUP_PAK_TOGGLE,
 	STARTUP_PAK_LOADING,
 	STARTUP_SCREEN,
+	STARTUP_CUSTOM_COMMAND,
 	STARTUP_FADE,
 	STARTUP_DEMO_ATTRACT,
 	STARTUP_ITEMS
 } startup_cursor;
+
+#define STARTUP_CUSTOM_COMMAND_MAX 127
+#define STARTUP_CUSTOM_BOX_X 128
+#define STARTUP_CUSTOM_BOX_WIDTH 22
+#define STARTUP_CUSTOM_TEXT_X (STARTUP_CUSTOM_BOX_X + 8)
 
 static struct
 {
@@ -39318,6 +39348,12 @@ static struct
 		char text[32];
 		int len;
 	} search;
+	char custom_command[STARTUP_CUSTOM_COMMAND_MAX + 1];
+	char committed_custom[STARTUP_CUSTOM_COMMAND_MAX + 1];
+	char safe_onload[STARTUP_CUSTOM_COMMAND_MAX + 1];
+	menu_textfield_t custom_field;
+	qboolean custom_editing;
+	qboolean custom_mode;
 } startupmenu;
 
 int numberOfStartupItems = STARTUP_ITEMS;
@@ -39349,6 +39385,25 @@ static qboolean paklist_exists = false;
 static qboolean pak_reorder_enabled = false;
 static const float startup_fade_values[] = {0.0f, 0.15f, 0.3f, 0.5f, 1.0f, 2.0f};
 
+typedef struct
+{
+	const char *value;
+	const char *label;
+} startup_onload_choice_t;
+
+static const startup_onload_choice_t startup_onload_choices[] =
+{
+	{"menu", "main menu"},
+	{"browser", "server browser"},
+	{"bookmarks", "bookmarks"},
+	{"save", "load game"},
+	{"history", "history"},
+	{"console", "console"},
+	{"demo", "demos"}
+};
+
+#define STARTUP_ONLOAD_CUSTOM ((int)countof(startup_onload_choices))
+
 // Forward declarations
 void M_Menu_PakLoading_f(void);
 void M_PakLoading_Draw(void);
@@ -39358,9 +39413,246 @@ void M_Startup_AdjustSliders(int dir);
 void M_Startup_Mousemove(int cx, int cy);
 void M_Startup_Draw(void);
 void M_Startup_Key(int k);
+void M_Startup_Char(int k);
+qboolean M_Startup_TextEntry(void);
+qboolean M_Startup_MouseInCustomField(void);
 static void M_Pak_SaveList(void);
 static void M_Pak_DeleteList(void);
 static void M_Pak_BuildList(void);
+
+static int M_Startup_OnloadChoiceIndex(const char *value)
+{
+	int i;
+
+	if (value == NULL || value[0] == '\0' || !q_strcasecmp(value, "menu"))
+		return 0;
+
+	for (i = 1; i < (int)countof(startup_onload_choices); i++)
+	{
+		if (!q_strcasecmp(value, startup_onload_choices[i].value))
+			return i;
+	}
+
+	return STARTUP_ONLOAD_CUSTOM;
+}
+
+static qboolean M_Startup_CustomCommandHasText(void)
+{
+	const char *s = startupmenu.custom_command;
+
+	while (*s)
+	{
+		if (!q_isspace(*s))
+			return true;
+		s++;
+	}
+
+	return false;
+}
+
+static void M_Startup_SetSafeOnload(const char *value)
+{
+	if (value == NULL || value[0] == '\0')
+		value = "menu";
+	q_strlcpy(startupmenu.safe_onload, value, sizeof(startupmenu.safe_onload));
+}
+
+static qboolean M_Startup_IsItemVisible(int item)
+{
+	return item != STARTUP_CUSTOM_COMMAND || startupmenu.custom_mode;
+}
+
+static int M_Startup_VisibleCount(void)
+{
+	int i, count = 0;
+
+	for (i = 0; i < STARTUP_ITEMS; i++)
+	{
+		if (M_Startup_IsItemVisible(i))
+			count++;
+	}
+
+	return count;
+}
+
+static int M_Startup_VisibleIndex(int item)
+{
+	int i, index = 0;
+
+	if (!M_Startup_IsItemVisible(item))
+		return -1;
+
+	for (i = 0; i < item; i++)
+	{
+		if (M_Startup_IsItemVisible(i))
+			index++;
+	}
+
+	return index;
+}
+
+static int M_Startup_ItemY(int item)
+{
+	int index = M_Startup_VisibleIndex(item);
+
+	if (index < 0)
+		return -9999;
+	return 48 + index * 8;
+}
+
+static int M_Startup_ItemAtY(int cy)
+{
+	int i;
+
+	for (i = 0; i < STARTUP_ITEMS; i++)
+	{
+		int y;
+
+		if (!M_Startup_IsItemVisible(i))
+			continue;
+
+		y = M_Startup_ItemY(i);
+		if (cy >= y && cy < y + 8)
+			return i;
+	}
+
+	return -1;
+}
+
+static int M_Startup_CustomCommandViewStart(const menu_textfield_t *field)
+{
+	int len = (int)strlen(field->text);
+
+	if (len <= STARTUP_CUSTOM_BOX_WIDTH)
+		return 0;
+	return CLAMP(0, field->cursor - STARTUP_CUSTOM_BOX_WIDTH, len - STARTUP_CUSTOM_BOX_WIDTH);
+}
+
+qboolean M_Startup_MouseInCustomField(void)
+{
+	int y;
+
+	if (m_state != m_startup || !startupmenu.custom_mode)
+		return false;
+
+	y = M_Startup_ItemY(STARTUP_CUSTOM_COMMAND);
+	return M_TextField_MouseInRow(m_mousey, y) &&
+		m_mousex >= STARTUP_CUSTOM_BOX_X &&
+		m_mousex <= STARTUP_CUSTOM_BOX_X + (STARTUP_CUSTOM_BOX_WIDTH + 2) * 8;
+}
+
+static void M_Startup_InitCustomField(void)
+{
+	M_TextField_Init(&startupmenu.custom_field, startupmenu.custom_command,
+		STARTUP_CUSTOM_COMMAND_MAX, false);
+}
+
+static void M_Startup_BeginCustomEdit(void)
+{
+	if (!startupmenu.custom_mode)
+		startupmenu.custom_mode = true;
+
+	startupmenu.custom_editing = true;
+	M_TextField_ClampCursor(&startupmenu.custom_field);
+}
+
+static void M_Startup_RestoreCommittedCustom(void)
+{
+	if (startupmenu.committed_custom[0])
+	{
+		q_strlcpy(startupmenu.custom_command, startupmenu.committed_custom,
+			sizeof(startupmenu.custom_command));
+		Cvar_Set("cl_onload", startupmenu.committed_custom);
+		startupmenu.custom_mode = true;
+	}
+	else
+	{
+		q_strlcpy(startupmenu.custom_command, "",
+			sizeof(startupmenu.custom_command));
+		Cvar_Set("cl_onload", startupmenu.safe_onload[0] ? startupmenu.safe_onload : "menu");
+		startupmenu.custom_mode = false;
+		startup_cursor = STARTUP_SCREEN;
+	}
+
+	startupmenu.custom_editing = false;
+	M_Startup_InitCustomField();
+}
+
+static qboolean M_Startup_CommitCustomEdit(void)
+{
+	if (!M_Startup_CustomCommandHasText())
+	{
+		M_Startup_RestoreCommittedCustom();
+		return false;
+	}
+
+	Cvar_Set("cl_onload", startupmenu.custom_command);
+	q_strlcpy(startupmenu.committed_custom, startupmenu.custom_command,
+		sizeof(startupmenu.committed_custom));
+	M_Startup_SetSafeOnload(startupmenu.custom_command);
+	startupmenu.custom_mode = true;
+	startupmenu.custom_editing = false;
+	M_TextField_ClearSelection(&startupmenu.custom_field);
+	M_TextField_ClampCursor(&startupmenu.custom_field);
+	return true;
+}
+
+static void M_Startup_CancelCustomEdit(void)
+{
+	M_Startup_RestoreCommittedCustom();
+}
+
+static void M_Startup_SelectOnloadChoice(int choice)
+{
+	if (choice == STARTUP_ONLOAD_CUSTOM)
+	{
+		if (!startupmenu.custom_mode)
+			M_Startup_SetSafeOnload(cl_onload.string);
+
+		startupmenu.custom_mode = true;
+		startupmenu.custom_editing = false;
+		if (!startupmenu.custom_command[0] && startupmenu.committed_custom[0])
+			q_strlcpy(startupmenu.custom_command, startupmenu.committed_custom,
+				sizeof(startupmenu.custom_command));
+		M_Startup_InitCustomField();
+		return;
+	}
+
+	choice = CLAMP(0, choice, STARTUP_ONLOAD_CUSTOM - 1);
+	startupmenu.custom_mode = false;
+	startupmenu.custom_editing = false;
+	Cvar_Set("cl_onload", startup_onload_choices[choice].value);
+	M_Startup_SetSafeOnload(startup_onload_choices[choice].value);
+}
+
+static void M_Startup_AdjustOnloadChoice(int dir)
+{
+	int choice = startupmenu.custom_mode
+		? STARTUP_ONLOAD_CUSTOM
+		: M_Startup_OnloadChoiceIndex(cl_onload.string);
+	int count = STARTUP_ONLOAD_CUSTOM + 1;
+
+	choice += (dir > 0) ? 1 : -1;
+	if (choice < 0)
+		choice = count - 1;
+	else if (choice >= count)
+		choice = 0;
+
+	M_Startup_SelectOnloadChoice(choice);
+}
+
+static const char *M_Startup_OnloadValueText(void)
+{
+	int choice;
+
+	if (startupmenu.custom_mode)
+		return "custom";
+
+	choice = M_Startup_OnloadChoiceIndex(cl_onload.string);
+	if (choice >= 0 && choice < STARTUP_ONLOAD_CUSTOM)
+		return startup_onload_choices[choice].label;
+	return "custom";
+}
 
 static int M_Startup_FadeIndex(void)
 {
@@ -39417,6 +39709,8 @@ static const char* M_Startup_GetItemText(int index)
 	{
 	case STARTUP_SCREEN:
 		return "Start-up Screen";
+	case STARTUP_CUSTOM_COMMAND:
+		return "Custom Command";
 	case STARTUP_FADE:
 		return "Startup/Quit Fade";
 	case STARTUP_DEMO_ATTRACT:
@@ -39445,6 +39739,7 @@ static cvar_t *M_Startup_GetItemCvar(int index)
 static void M_Startup_ClampCursor(void)
 {
 	int cursor = (int)startup_cursor;
+	int i;
 
 	if (cursor < 0 || cursor >= STARTUP_ITEMS)
 	{
@@ -39453,17 +39748,52 @@ static void M_Startup_ClampCursor(void)
 			cursor += STARTUP_ITEMS;
 		startup_cursor = (enum startup_e)cursor;
 	}
+
+	if (M_Startup_IsItemVisible(startup_cursor))
+	{
+		numberOfStartupItems = M_Startup_VisibleCount();
+		return;
+	}
+
+	cursor = (int)startup_cursor;
+	for (i = 0; i < STARTUP_ITEMS; i++)
+	{
+		if (M_Startup_IsItemVisible(cursor))
+		{
+			startup_cursor = (enum startup_e)cursor;
+			numberOfStartupItems = M_Startup_VisibleCount();
+			return;
+		}
+		cursor++;
+		if (cursor >= STARTUP_ITEMS)
+			cursor = 0;
+	}
+
+	startup_cursor = STARTUP_SCREEN;
+	numberOfStartupItems = M_Startup_VisibleCount();
 }
 
 static void M_Startup_MoveCursor(int delta)
 {
 	int cursor = (int)startup_cursor + delta;
+	int i;
 
-	cursor %= STARTUP_ITEMS;
-	if (cursor < 0)
-		cursor += STARTUP_ITEMS;
+	M_Startup_ClampCursor();
+	cursor = (int)startup_cursor;
 
-	startup_cursor = (enum startup_e)cursor;
+	for (i = 0; i < STARTUP_ITEMS; i++)
+	{
+		cursor += delta;
+		cursor %= STARTUP_ITEMS;
+		if (cursor < 0)
+			cursor += STARTUP_ITEMS;
+
+		if (M_Startup_IsItemVisible(cursor))
+		{
+			startup_cursor = (enum startup_e)cursor;
+			return;
+		}
+	}
 }
 
 static void M_Startup_SearchUpdate(void)
@@ -39475,6 +39805,8 @@ static void M_Startup_SearchUpdate(void)
 	for (i = 0; i < STARTUP_ITEMS; i++)
 	{
 		const char* text = M_Startup_GetItemText(i);
+		if (!M_Startup_IsItemVisible(i))
+			continue;
 		if (q_strcasestr(text, startupmenu.search.text))
 		{
 			startup_cursor = (enum startup_e)i;
@@ -39487,6 +39819,8 @@ static void M_Startup_SearchUpdate(void)
 // Startup Functions
 void M_Menu_Startup_f(void)
 {
+	int choice;
+
 	key_dest = key_menu;
 	m_state = m_startup;
 	m_entersound = true;
@@ -39494,7 +39828,27 @@ void M_Menu_Startup_f(void)
 	startupmenu.cursor = 0;
 	startupmenu.search.len = 0;
 	startupmenu.search.text[0] = 0;
-	numberOfStartupItems = STARTUP_ITEMS;
+	startupmenu.custom_editing = false;
+
+	choice = M_Startup_OnloadChoiceIndex(cl_onload.string);
+	if (choice == STARTUP_ONLOAD_CUSTOM)
+	{
+		startupmenu.custom_mode = true;
+		q_strlcpy(startupmenu.custom_command, cl_onload.string,
+			sizeof(startupmenu.custom_command));
+		q_strlcpy(startupmenu.committed_custom, cl_onload.string,
+			sizeof(startupmenu.committed_custom));
+		M_Startup_SetSafeOnload(cl_onload.string);
+	}
+	else
+	{
+		startupmenu.custom_mode = false;
+		startupmenu.custom_command[0] = '\0';
+		startupmenu.committed_custom[0] = '\0';
+		M_Startup_SetSafeOnload(cl_onload.string);
+	}
+	M_Startup_InitCustomField();
+	numberOfStartupItems = M_Startup_VisibleCount();
 
 	/* Check current pak.lst presence to seed toggle state */
 	{
@@ -39533,42 +39887,12 @@ void M_Startup_AdjustSliders(int dir)
 		}
 		break;
 	case STARTUP_SCREEN:
-		if (dir > 0) {
-			if (!strcmp(cl_onload.string, "") || !strcmp(cl_onload.string, "menu"))
-				Cvar_Set("cl_onload", "browser");
-			else if (!strcmp(cl_onload.string, "browser"))
-				Cvar_Set("cl_onload", "bookmarks");
-			else if (!strcmp(cl_onload.string, "bookmarks"))
-				Cvar_Set("cl_onload", "save");
-			else if (!strcmp(cl_onload.string, "save"))
-				Cvar_Set("cl_onload", "history");
-			else if (!strcmp(cl_onload.string, "history"))
-				Cvar_Set("cl_onload", "console");
-			else if (!strcmp(cl_onload.string, "console"))
-				Cvar_Set("cl_onload", "demo");
-			else if (!strcmp(cl_onload.string, "demo"))
-				Cvar_Set("cl_onload", "menu");
-			else  
-				Cvar_Set("cl_onload", "menu");
-		}
-		else {
-			if (!strcmp(cl_onload.string, "") || !strcmp(cl_onload.string, "menu"))
-				Cvar_Set("cl_onload", "demo");
-			else if (!strcmp(cl_onload.string, "demo"))
-				Cvar_Set("cl_onload", "console");
-			else if (!strcmp(cl_onload.string, "console"))
-				Cvar_Set("cl_onload", "history");
-			else if (!strcmp(cl_onload.string, "history"))
-				Cvar_Set("cl_onload", "save");
-			else if (!strcmp(cl_onload.string, "save"))
-				Cvar_Set("cl_onload", "bookmarks");
-			else if (!strcmp(cl_onload.string, "bookmarks"))
-				Cvar_Set("cl_onload", "browser");
-			else if (!strcmp(cl_onload.string, "browser"))
-				Cvar_Set("cl_onload", "menu");
-			else  
-				Cvar_Set("cl_onload", "menu");
-		}
+		M_Startup_AdjustOnloadChoice(dir);
+		numberOfStartupItems = M_Startup_VisibleCount();
+		M_Startup_ClampCursor();
+		break;
+	case STARTUP_CUSTOM_COMMAND:
+		M_Startup_BeginCustomEdit();
 		break;
 	case STARTUP_DEMO_ATTRACT:
 		m = cl_demoreel.value + dir;
@@ -39589,11 +39913,57 @@ void M_Startup_AdjustSliders(int dir)
 	}
 }
 
+static void M_Startup_DrawCustomField(int y)
+{
+	menu_textfield_t *field = &startupmenu.custom_field;
+	int view_start = M_Startup_CustomCommandViewStart(field);
+	int sel_begin, sel_end;
+
+	M_DrawTextBox(STARTUP_CUSTOM_BOX_X, y - 8, STARTUP_CUSTOM_BOX_WIDTH, 1);
+
+	if (M_TextField_GetSelection(field, &sel_begin, &sel_end))
+	{
+		int visible_begin = CLAMP(view_start, sel_begin,
+			view_start + STARTUP_CUSTOM_BOX_WIDTH);
+		int visible_end = CLAMP(view_start, sel_end,
+			view_start + STARTUP_CUSTOM_BOX_WIDTH);
+
+		if (visible_begin < visible_end)
+		{
+			Draw_Fill(STARTUP_CUSTOM_TEXT_X + (visible_begin - view_start) * 8, y,
+				(visible_end - visible_begin) * 8, 8, 170, 0.4f);
+		}
+	}
+
+	if (field->text[0])
+	{
+		char visible_text[STARTUP_CUSTOM_BOX_WIDTH + 1];
+
+		q_strlcpy(visible_text, field->text + view_start, sizeof(visible_text));
+		M_PrintWhite(STARTUP_CUSTOM_TEXT_X, y, visible_text);
+	}
+	else
+	{
+		M_PrintRGBA(STARTUP_CUSTOM_TEXT_X, y, "command or args",
+			CL_PLColours_Parse("0xffffff"), 0.5f, false);
+	}
+
+	if (startupmenu.custom_editing)
+	{
+		menu_textfield_t visible_field = *field;
+
+		visible_field.cursor = CLAMP(0, field->cursor - view_start,
+			STARTUP_CUSTOM_BOX_WIDTH);
+		M_TextField_DrawCursor(&visible_field, STARTUP_CUSTOM_TEXT_X, y);
+	}
+}
+
 void M_Startup_Draw(void)
 {
 	qpic_t* p;
 	enum startup_e i;
 
+	M_TextField_CheckMouseRelease();
 	M_Startup_ClampCursor();
 
 	p = Draw_CachePic("gfx/p_option.lmp");
@@ -39604,11 +39974,17 @@ void M_Startup_Draw(void)
 
 	for (i = 0; i < STARTUP_ITEMS; i++)
 	{
-		int y = 48 + 8 * i;
+		int y;
 		const char* text = NULL;
 		const char* value = NULL;
 		cvar_t *cvar_hint = M_Startup_GetItemCvar(i);
-		qboolean show_cvar_hint = M_CvarHintActive(i == startup_cursor, cvar_hint);
+		qboolean show_cvar_hint;
+
+		if (!M_Startup_IsItemVisible(i))
+			continue;
+
+		y = M_Startup_ItemY(i);
+		show_cvar_hint = M_CvarHintActive(i == startup_cursor && !startupmenu.custom_editing, cvar_hint);
 
 		switch (i)
 		{
@@ -39621,22 +39997,10 @@ void M_Startup_Draw(void)
 			break;
 		case STARTUP_SCREEN:
 			text = "   Start-up Screen";
-			if (!strcmp(cl_onload.string, "") || !strcmp(cl_onload.string, "menu"))
-				value = "main menu";
-			else if (!strcmp(cl_onload.string, "console"))
-				value = "console";
-			else if (!strcmp(cl_onload.string, "demo"))
-				value = "demos";
-			else if (!strcmp(cl_onload.string, "browser"))
-				value = "server browser";
-			else if (!strcmp(cl_onload.string, "bookmarks"))
-				value = "bookmarks";
-			else if (!strcmp(cl_onload.string, "save"))
-				value = "load game";
-			else if (!strcmp(cl_onload.string, "history"))
-				value = "history";
-			else
-				value = "custom";
+			value = M_Startup_OnloadValueText();
+			break;
+		case STARTUP_CUSTOM_COMMAND:
+			text = " Custom Command";
 			break;
 		case STARTUP_FADE:
 			text = "Startup/Quit Fade";
@@ -39658,7 +40022,7 @@ void M_Startup_Draw(void)
 		if (text)
 		{
 			if (startupmenu.search.len > 0 &&
-				q_strcasestr(text, startupmenu.search.text))
+				q_strcasestr(M_Startup_GetItemText(i), startupmenu.search.text))
 			{
 				M_PrintHighlight(0, y, text,
 					startupmenu.search.text,
@@ -39671,11 +40035,13 @@ void M_Startup_Draw(void)
 		}
 		if (show_cvar_hint)
 			M_DrawCvarHintValue(183, y, MENU_CVAR_HINT_WIDTH, cvar_hint);
+		else if (i == STARTUP_CUSTOM_COMMAND)
+			M_Startup_DrawCustomField(y);
 		else if (value)
 			M_Print(183, y, value);
 	}
 
-	M_DrawCharacter(172, 48 + startup_cursor * 8, 12 + ((int)(realtime * 4) & 1));
+	M_DrawCharacter(172, M_Startup_ItemY(startup_cursor), 12 + ((int)(realtime * 4) & 1));
 
 	if (startupmenu.search.len > 0)
 	{
@@ -39691,6 +40057,8 @@ void M_Startup_Draw(void)
 			for (i = 0; i < STARTUP_ITEMS; i++)
 			{
 				const char* text = M_Startup_GetItemText(i);
+				if (!M_Startup_IsItemVisible(i))
+					continue;
 				if (text && q_strcasestr(text, startupmenu.search.text))
 				{
 					match = true;
@@ -39707,6 +40075,62 @@ void M_Startup_Draw(void)
 
 void M_Startup_Key(int k)
 {
+	if (startupmenu.custom_editing)
+	{
+		if (M_TextField_Key(&startupmenu.custom_field, k))
+			return;
+
+		switch (k)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			M_Startup_CancelCustomEdit();
+			return;
+
+		case K_ENTER:
+		case K_KP_ENTER:
+		case K_ABUTTON:
+			S_LocalSound("misc/menu3.wav");
+			M_Startup_CommitCustomEdit();
+			return;
+
+		case K_UPARROW:
+			if (M_Startup_CommitCustomEdit())
+			{
+				S_LocalSound("misc/menu1.wav");
+				M_Startup_MoveCursor(-1);
+			}
+			return;
+
+		case K_DOWNARROW:
+			if (M_Startup_CommitCustomEdit())
+			{
+				S_LocalSound("misc/menu1.wav");
+				M_Startup_MoveCursor(1);
+			}
+			return;
+
+		case K_MOUSE1:
+			if (M_Startup_MouseInCustomField())
+			{
+				int view_start = M_Startup_CustomCommandViewStart(&startupmenu.custom_field);
+				M_TextField_MouseClick(&startupmenu.custom_field, m_mousex,
+					STARTUP_CUSTOM_TEXT_X - view_start * 8);
+				return;
+			}
+			if (!M_Startup_CommitCustomEdit())
+				return;
+			break;
+
+		default:
+			return;
+		}
+	}
+
+	M_Startup_ClampCursor();
+
 	switch (k)
 	{
 	case K_ESCAPE:
@@ -39718,17 +40142,38 @@ void M_Startup_Key(int k)
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
-	case K_MOUSE1:
 		m_entersound = true;
-		if (startup_cursor == STARTUP_PAK_LOADING)
+		if (startup_cursor == STARTUP_CUSTOM_COMMAND)
+			M_Startup_BeginCustomEdit();
+		else
+			M_Startup_AdjustSliders(1);
+		break;
+	case K_MOUSE1:
+	{
+		int item = M_Startup_ItemAtY(m_mousey);
+
+		if (item < 0)
+			break;
+
+		startup_cursor = (enum startup_e)item;
+		m_entersound = true;
+
+		if (startup_cursor == STARTUP_CUSTOM_COMMAND)
 		{
-			M_Menu_PakLoading_f();
+			M_Startup_BeginCustomEdit();
+			if (M_Startup_MouseInCustomField())
+			{
+				int view_start = M_Startup_CustomCommandViewStart(&startupmenu.custom_field);
+				M_TextField_MouseClick(&startupmenu.custom_field, m_mousex,
+					STARTUP_CUSTOM_TEXT_X - view_start * 8);
+			}
 		}
 		else
 		{
 			M_Startup_AdjustSliders(1);
 		}
 		break;
+	}
 	case K_UPARROW:
 		S_LocalSound("misc/menu1.wav");
 		M_Startup_MoveCursor(-1);
@@ -39738,20 +40183,24 @@ void M_Startup_Key(int k)
 		M_Startup_MoveCursor(1);
 		break;
 	case K_LEFTARROW:
-		M_Startup_AdjustSliders(-1);
+		if (startup_cursor != STARTUP_CUSTOM_COMMAND)
+			M_Startup_AdjustSliders(-1);
 		break;
 
 	case K_MWHEELDOWN:
-		if (startup_cursor != STARTUP_PAK_LOADING)
+		if (startup_cursor != STARTUP_PAK_LOADING &&
+			startup_cursor != STARTUP_CUSTOM_COMMAND)
 			M_Startup_AdjustSliders(-1);
 		break;
 
 	case K_RIGHTARROW:
-		M_Startup_AdjustSliders(1);
+		if (startup_cursor != STARTUP_CUSTOM_COMMAND)
+			M_Startup_AdjustSliders(1);
 		break;
 
 	case K_MWHEELUP:
-		if (startup_cursor != STARTUP_PAK_LOADING)
+		if (startup_cursor != STARTUP_PAK_LOADING &&
+			startup_cursor != STARTUP_CUSTOM_COMMAND)
 			M_Startup_AdjustSliders(1);
 		break;
 	case K_BACKSPACE:
@@ -39772,17 +40221,35 @@ void M_Startup_Key(int k)
 	}
 }
 
+void M_Startup_Char(int k)
+{
+	if (startupmenu.custom_editing)
+		M_TextField_Char(&startupmenu.custom_field, k);
+}
+
+qboolean M_Startup_TextEntry(void)
+{
+	return startupmenu.custom_editing;
+}
+
 void M_Startup_Mousemove(int cx, int cy)
 {
-	int item = (cy - 48) / 8;
-	if (item >= 0 && item < STARTUP_ITEMS)
+	int item;
+
+	if (M_TextField_IsDraggingField(&startupmenu.custom_field))
 	{
-		startup_cursor = item;
+		M_TextField_MouseDrag(cx);
+		return;
 	}
+
+	if (startupmenu.custom_editing)
+		return;
+
+	item = M_Startup_ItemAtY(cy);
+	if (item >= 0)
+		startup_cursor = (enum startup_e)item;
 	else
-	{
 		M_Startup_ClampCursor();
-	}
 }
 
 /*

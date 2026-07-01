@@ -2544,6 +2544,19 @@ static void VID_Menu_DrawHintValue(int x, int y, int maxwidth, const char *hint)
 	M_PrintScroll(x, y, maxwidth, hint, realtime, false);
 }
 
+static void VID_Menu_AppendCvarHintPair(char *buffer, size_t buffer_size, const cvar_t *cv)
+{
+	char pair[128];
+
+	if (buffer_size <= 0 || cv == NULL || cv->name == NULL || cv->string == NULL)
+		return;
+
+	q_snprintf(pair, sizeof(pair), "%s %s", cv->name, cv->string);
+	if (buffer[0])
+		q_strlcat(buffer, ", ", buffer_size);
+	q_strlcat(buffer, pair, buffer_size);
+}
+
 static void VID_Menu_DrawCvarHintValue(int x, int y, int maxwidth, cvar_t *cv)
 {
 	char hint[128];
@@ -2949,14 +2962,14 @@ static const char *VID_Menu_GetItemHintText(int index)
 	switch (index)
 	{
 	case VID_OPT_MODE:
-		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
-			vid_width.name, vid_width.string,
-			vid_height.name, vid_height.string);
+		buffer[0] = '\0';
+		VID_Menu_AppendCvarHintPair(buffer, sizeof(buffer), &vid_width);
+		VID_Menu_AppendCvarHintPair(buffer, sizeof(buffer), &vid_height);
 		return buffer;
 	case VID_OPT_FULLSCREEN:
-		q_snprintf(buffer, sizeof(buffer), "%s %s %s %s",
-			vid_fullscreen.name, vid_fullscreen.string,
-			vid_borderless.name, vid_borderless.string);
+		buffer[0] = '\0';
+		VID_Menu_AppendCvarHintPair(buffer, sizeof(buffer), &vid_fullscreen);
+		VID_Menu_AppendCvarHintPair(buffer, sizeof(buffer), &vid_borderless);
 		return buffer;
 	default:
 		return NULL;
