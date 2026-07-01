@@ -463,6 +463,13 @@ static cvar_t r_bloodstains = {"r_bloodstains", "1"};
 static cvar_t r_decal_noperpendicular = {"r_decal_noperpendicular", "1"};
 static cvar_t r_part_mapdecals = {"r_part_mapdecals", "1", CVAR_ARCHIVE};
 cvar_t r_particledesc = {"r_particledesc", "classic", CVAR_ARCHIVE};
+/* particle config parse cache -- a full re-parse of the r_particledesc configs
+costs 100ms+ per map load, so PScript_Startup skips it when the resulting state
+would be identical to what's already loaded (see PScript_NeedsConfigReload) */
+static char pscript_loaded_desc[1024];	// r_particledesc value the current state was parsed from ("" = force reload)
+static qboolean pscript_loaded_mapcfg;	// current state includes a per-map config, so it can't be reused for another map
+static qboolean pscript_extra_configs;	// configs were added outside the desc parse (e.g. dp effectinfo), so state is map/server specific
+static qboolean pscript_in_desc_parse;	// inside R_ParticleDesc_Callback's parse
 static cvar_t r_part_rain_quantity = {"r_part_rain_quantity", "1"};
 static cvar_t r_particle_tracelimit = {"r_particle_tracelimit", "0x7fffffff"};
 static cvar_t r_part_sparks = {"r_part_sparks", "1"};
@@ -1350,6 +1357,11 @@ static void P_LoadTexture(part_type_t *ptype, qboolean warn)
 
 	for (i = 0; i < ptype->nummodels; i++)
 		ptype->models[i].model = NULL;
+
+	if (!warn && ptype->looks.texture)
+		return;	// per-map refresh: textures are texmgr-owned and survive map changes.
+				// Without this, types with missing texture files re-scan the whole
+				// search path every map load. The parse path (warn=true) always resolves.
 
 	if (*ptype->texname)
 	{
@@ -3735,6 +3747,108 @@ void PScript_Shutdown (void)
 	//FIXME: clear static ent trailstates, delta ent trailstates, beam trailstates
 }
 
+/*
+called between maps (CL_ClearState). drops everything that references the old
+map/entities/models but keeps the parsed particle types and config list, so
+the next map's PScript_Startup can skip the expensive full config re-parse
+when nothing changed (see PScript_NeedsConfigReload)
+*/
+void PScript_MapCleanup (void)
+{
+	int i, j;
+
+	if (!part_type)
+		return;
+
+	CL_ClearTrailStates();
+
+	while (pscript_mapdecal_type_cache)
+	{
+		mapdecal_type_cache_t *cache = pscript_mapdecal_type_cache;
+		pscript_mapdecal_type_cache = cache->next;
+		Z_Free(cache);
+	}
+	pscript_mapdecal_type_count = 0;
+
+	// kill all live particles/decals/beams and forget per-type runtime chains
+	// and (freed-with-the-map) model pointers. textures are texmgr-owned and
+	// survive; PScript_ClearParticles refreshes them at R_NewMap.
+	if (particles && r_numparticles)
+	{
+		free_particles = &particles[0];
+		for (i=0 ; i<r_numparticles ; i++)
+			particles[i].next = &particles[i+1];
+		particles[r_numparticles-1].next = NULL;
+	}
+	if (decals && r_numdecals)
+	{
+		free_decals = &decals[0];
+		for (i=0 ; i<r_numdecals ; i++)
+		{
+			decals[i].mapdecal = false;
+			decals[i].next = &decals[i+1];
+		}
+		decals[r_numdecals-1].next = NULL;
+	}
+	if (beams && r_numbeams)
+	{
+		free_beams = &beams[0];
+		for (i=0 ; i<r_numbeams ; i++)
+		{
+			beams[i].p = NULL;
+			beams[i].flags = BS_DEAD;
+			beams[i].next = &beams[i+1];
+		}
+		beams[r_numbeams-1].next = NULL;
+	}
+	for (i = 0; i < numparticletypes; i++)
+	{
+		part_type[i].clippeddecals = NULL;
+		part_type[i].particles = NULL;
+		part_type[i].beams = NULL;
+		for (j = 0; j < part_type[i].nummodels; j++)
+			part_type[i].models[j].model = NULL;
+	}
+	part_run_list = NULL;
+
+	pscript_mapdecal_surfaces_ready = false;
+	pscript_mapdecal_spawn = false;
+	pscript_mapdecal_no_slots = false;
+
+	PScript_ClearAllSurfaceParticles();
+}
+
+/*
+returns false when the currently loaded particle state already matches what a
+full R_ParticleDesc_Callback parse would produce for the new map, so the
+(expensive) re-parse can be skipped
+*/
+static qboolean PScript_NeedsConfigReload (void)
+{
+	char base[MAX_QPATH];
+
+	if (!part_type || !numparticletypes)
+		return true;	//nothing loaded yet
+	if (!*pscript_loaded_desc || strcmp(pscript_loaded_desc, r_particledesc.string))
+		return true;	//desc changed (or never parsed)
+	if (pscript_extra_configs || pscript_loaded_mapcfg)
+		return true;	//state contains map/server-specific configs
+	if (cls.state == ca_connected && cl.model_precache[1])
+	{	//would the full parse pick up a per-map config this time?
+		COM_FileBase(cl.model_precache[1]->name, base, sizeof(base));
+		if (COM_FileExists(va("particles/map_%s.cfg", base), NULL))
+			return true;
+		if (COM_FileExists(va("map_%s.cfg", base), NULL))
+			return true;
+	}
+	return false;
+}
+
+void PScript_InvalidateConfigCache (void)
+{
+	pscript_loaded_desc[0] = 0;	// e.g. gamedir change: same names may resolve to different files
+}
+
 qboolean PScript_Startup (void)
 {
 	int newmaxp, newmaxd;
@@ -3775,7 +3889,13 @@ qboolean PScript_Startup (void)
 
 		Cvar_SetCallback(&r_particledesc, R_ParticleDesc_Callback);
 	}
-	r_particledesc.callback(&r_particledesc);
+	if (PScript_NeedsConfigReload())
+		r_particledesc.callback(&r_particledesc);
+	else
+	{	// state already matches; just refresh the per-map bits the callback would have done
+		r_plooksdirty = true;
+		CL_RegisterParticles();
+	}
 
 	return true;
 }
@@ -4426,6 +4546,8 @@ static qboolean P_LoadParticleSet(char *name, qboolean implicit, qboolean showwa
 	if (!strcmp(name, "classic"))
 	{
 #ifdef PSET_CLASSIC
+		if (!pscript_in_desc_parse)
+			pscript_extra_configs = true;	// state no longer matches a pure r_particledesc parse; force a full reload next map
 		if (fallback)
 			fallback->ShutdownParticles();
 		fallback = &pe_classic;
@@ -4443,6 +4565,12 @@ static qboolean P_LoadParticleSet(char *name, qboolean implicit, qboolean showwa
 		file = (char*)COM_LoadMallocFile(va("%s.cfg", name), NULL);
 	if (file)
 	{
+		// only an actual parse dirties the state; missing configs just get
+		// negatively cached in loadedconfigs and change nothing. implicit
+		// (namespaced, on-demand) configs are additive and inert for maps that
+		// don't reference them, so they can survive a skipped re-parse too.
+		if (!pscript_in_desc_parse && !implicit)
+			pscript_extra_configs = true;
 		PScript_ParseParticleEffectFile(name, implicit, file, com_filesize);
 		free(file);
 	}
@@ -4453,6 +4581,8 @@ static qboolean P_LoadParticleSet(char *name, qboolean implicit, qboolean showwa
 		{
 			//FIXME: we're loading this too early to deal with per-map stuff.
 			//FIXME: wait until after particle precache info has been received, and only reload if the loaded configs actually changed.
+			if (!pscript_in_desc_parse)
+				pscript_extra_configs = true;
 			P_ImportEffectInfo_Name(name);
 			return true;
 		}
@@ -4512,6 +4642,7 @@ static void R_ParticleDesc_Callback(struct cvar_s *var)
 {
 	const char *c;
 
+	pscript_in_desc_parse = true;
 	R_Particles_KillAllEffects();
 	r_plooksdirty = true;
 
@@ -4521,13 +4652,19 @@ static void R_ParticleDesc_Callback(struct cvar_s *var)
 			P_LoadParticleSet(com_token, false, true);
 	}
 
+	pscript_loaded_mapcfg = false;
 	if (cls.state == ca_connected && cl.model_precache[1])
 	{
 		//per-map configs. because we can.
 		memcpy(com_token, "map_", 4);
 		COM_FileBase(cl.model_precache[1]->name, com_token+4, sizeof(com_token)-4);
-		P_LoadParticleSet(com_token, false, false);
+		pscript_loaded_mapcfg = P_LoadParticleSet(com_token, false, false);
 	}
+
+	// remember what this state was built from so identical map loads can skip the re-parse
+	q_strlcpy(pscript_loaded_desc, var->string, sizeof(pscript_loaded_desc));
+	pscript_extra_configs = false;
+	pscript_in_desc_parse = false;
 
 	//make sure nothing is stale.
 	CL_RegisterParticles();

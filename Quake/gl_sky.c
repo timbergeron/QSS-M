@@ -47,6 +47,7 @@ char	skybox_name[1024]; //name of current skybox, or "" if no skybox
 qboolean externalskyloaded; // woods #fastsky2
 
 static gltexture_t	*skybox_textures[6];
+static qboolean	skybox_complete; // all 6 faces loaded; allows reuse across map changes
 static gltexture_t	*solidskytexture, *alphaskytexture;
 
 static const char	*suf[6];
@@ -2029,14 +2030,17 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 	char	filename[MAX_OSPATH];
 	qboolean nonefound = true;
 
-	if (strcmp(skybox_name, name) == 0)
-	{
+	if (strcmp(skybox_name, name) == 0 && skybox_complete)
+	{	//no change. the textures survive map changes (NULL texmgr owner), so a
+		//matching fully-loaded skybox skips the expensive 6-face reload here.
+		//partial skyboxes fall through so newly downloaded faces get picked up.
 		Skywind_LoadConfig();
-		return; //no change
+		return;
 	}
 	Skywind_Clear();
 	Sky_FreeCubemap();
 	skybox_cubemap_attempted = false;
+	skybox_complete = false;
 
 	//purge old textures
 	for (i=0; i<6; i++)
@@ -2088,7 +2092,9 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 		if (data[i])
 		{
 			q_snprintf (filename, sizeof(filename), "gfx/env/%s%s", name, suf[i]);
-			skybox_textures[i] = TexMgr_LoadImage (cl.worldmodel, filename, width[i], height[i], fmt[i], data[i], filename, 0, TEXPREF_NONE);
+			//NULL owner so the faces survive map unloads and can be reused when
+			//the next map wants the same skybox (freed explicitly on change)
+			skybox_textures[i] = TexMgr_LoadImage (NULL, filename, width[i], height[i], fmt[i], data[i], filename, 0, TEXPREF_NONE);
 			nonefound = false;
 		}
 		else
@@ -2120,6 +2126,7 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 	}
 
 	q_strlcpy(skybox_name, name, sizeof(skybox_name));
+	skybox_complete = (numloaded == 6);
 	Skywind_LoadConfig();
 }
 
@@ -2411,7 +2418,7 @@ Sky_ClearAll
 Called on map unload/game change to avoid keeping pointers to freed data
 =================
 */
-void Sky_ClearAll (void)
+static void Sky_ClearInternal (qboolean purge_skybox)
 {
 	int i;
 
@@ -2419,19 +2426,48 @@ void Sky_ClearAll (void)
 	externalskyloaded = false; // woods #fastsky2
 	skyflatcolor_avg[0] = skyflatcolor_avg[1] = skyflatcolor_avg[2] = 0.0f;
 	Sky_InvalidateFlatColorAverage (); // also resets skyflatcolor[] via Sky_ApplyFlatColor
-	skybox_name[0] = 0;
 	map_skybox_name[0] = 0;
 	pending_skybox_name[0] = 0;
 	skybox_download_pending = false;
 	Sky_ClearSkyboxOrientation();
-	for (i=0; i<6; i++)
-		skybox_textures[i] = NULL;
 	solidskytexture = NULL;
 	alphaskytexture = NULL;
 	Skywind_Clear();
-	Sky_FreeCubemap();
-	skybox_cubemap_attempted = false;
+
+	if (purge_skybox)
+	{
+		skybox_name[0] = 0;
+		skybox_complete = false;
+		for (i=0; i<6; i++)
+		{
+			if (skybox_textures[i] && skybox_textures[i] != notexture)
+				TexMgr_FreeTexture (skybox_textures[i]);
+			skybox_textures[i] = NULL;
+		}
+		Sky_FreeCubemap();
+		skybox_cubemap_attempted = false;
+	}
+
 	Cvar_SetQuick (&r_skyfog, r_skyfog.default_string);
+}
+
+void Sky_ClearAll (void)
+{
+	Sky_ClearInternal (true);
+}
+
+/*
+=================
+Sky_NewMapClear
+
+Called on map unload. Clears per-map sky state but keeps the loaded skybox
+faces/cubemap (they have no texmgr owner) so a map change that wants the same
+skybox skips the 6-face reload in Sky_LoadSkyBoxInternal.
+=================
+*/
+void Sky_NewMapClear (void)
+{
+	Sky_ClearInternal (false);
 }
 
 void Sky_ResetGL (void)

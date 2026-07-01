@@ -1557,7 +1557,7 @@ void Host_ClearMemory (void)
 	Con_DPrintf ("Clearing memory\n");
 	D_FlushCaches ();
 	Mod_ClearAll ();
-	Sky_ClearAll();
+	Sky_NewMapClear(); // keeps the loaded skybox for reuse; full purge happens on game change
 	S_ClearPrecache ();
 /* host_hunklevel MUST be set at this point */
 	Hunk_FreeToLowMark (host_hunklevel);
@@ -2308,6 +2308,7 @@ void _Host_Frame (double time)
 			{
 				cl.sendprespawn = false;
 				vid.recalc_refdef = true;
+				CL_ConnectTimingMark("prespawn sent (precache done)");
 			}
 		}
 		else if (!cls.message.cursize)

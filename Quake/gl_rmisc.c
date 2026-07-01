@@ -768,6 +768,10 @@ R_NewMap
 void R_NewMap (void)
 {
 	int		i;
+	double t0, tprev;
+	qboolean profile = developer.value != 0;
+#define RNEWMAP_MARK(name) do { if (profile) { double tnow = Sys_DoubleTime(); Con_DPrintf("R_NewMap %s: %.1fms\n", name, (tnow-tprev)*1000.0); tprev = tnow; } } while (0)
+	t0 = tprev = Sys_DoubleTime();
 
 	for (i=0 ; i<256 ; i++)
 		d_lightstylevalue[i] = 264;		// normal light value
@@ -779,17 +783,21 @@ void R_NewMap (void)
 
 	r_viewleaf = NULL;
 	R_ClearParticles ();
+	RNEWMAP_MARK("classic particles");
 #ifdef PSET_SCRIPT
 	PScript_MapDecalsReady(false);
 	PScript_ClearParticles();
 #endif
+	RNEWMAP_MARK("pscript clear");
 
 	GL_BuildLightmaps ();
+	RNEWMAP_MARK("lightmaps");
 	GL_BuildBModelVertexBuffer ();
 #ifdef PSET_SCRIPT
 	PScript_MapDecalsReady(true);
 	PScript_SpawnMapDecals();
 #endif
+	RNEWMAP_MARK("vbo+decals");
 	//ericw -- no longer load alias models into a VBO here, it's done in Mod_LoadAliasModel
 
 	// tb -- Alias programs created during a vid_restart performed while disconnected
@@ -803,11 +811,18 @@ void R_NewMap (void)
 	r_visframecount = 0; //johnfitz -- paranoid?
 
 	Sky_NewMap (); //johnfitz -- skybox in worldspawn
+	RNEWMAP_MARK("sky");
 	Fog_NewMap (); //johnfitz -- global fog in worldspawn
 	R_ParseWorldspawn (); //ericw -- wateralpha, lavaalpha, telealpha, slimealpha in worldspawn
 	CShift_ParseWorldspawn (); //infin -- cshiftwater, cshiftslime, cshiftlava in worldspawn // woods tag
+	RNEWMAP_MARK("worldspawn");
 
 	LOC_LoadLocations ();//ProQuake   rook / woods #pqteam
+	RNEWMAP_MARK("locs");
+
+	if (profile)
+		Con_DPrintf("R_NewMap total: %.1fms\n", (Sys_DoubleTime()-t0)*1000.0);
+#undef RNEWMAP_MARK
 
 	load_subdivide_size = gl_subdivide_size.value; //johnfitz -- is this the right place to set this?
 }

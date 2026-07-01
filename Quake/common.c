@@ -4929,6 +4929,7 @@ static void COM_Game_f (void)
 		Cache_Flush ();
 		Mod_ResetAll();
 		Sky_ClearAll();
+		PScript_InvalidateConfigCache();
 		if (!isDedicated)
 			Draw_ReloadTextures(true);
 		ExtraMaps_NewGame ();

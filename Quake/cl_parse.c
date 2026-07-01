@@ -1403,6 +1403,7 @@ static void CL_ParseServerInfo (void)
 	char protname[64];
 
 	Con_DPrintf ("Serverinfo packet received.\n");
+	CL_ConnectTimingMark ("serverinfo received");
 
 	if (cl_autodemo.value && cls.demorecording && !cls.demoplayback)
 		Cbuf_AddText("stop\n");
@@ -1691,6 +1692,7 @@ static void CL_ParseServerInfo (void)
 		CL_PrintWrongGameDirWarning();
 
 	S_Voip_MapChange();
+	CL_ConnectTimingMark ("serverinfo parsed");
 }
 
 /*

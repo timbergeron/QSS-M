@@ -117,6 +117,8 @@ typedef struct particle_s
 	int PScript_RunParticleEffect (vec3_t org, vec3_t dir, int color, int count);
 	void PScript_DelinkTrailstate(struct trailstate_s **tsk);
 	void PScript_ClearParticles (void);
+	void PScript_MapCleanup (void);	//between maps: drops map/entity references but keeps parsed configs
+	void PScript_InvalidateConfigCache (void);	//call when the same config names may resolve to different files (gamedir change)
 	void PScript_MapDecalsReady (qboolean ready);
 	void PScript_SpawnMapDecals (void);
 	void PScript_UpdateModelEffects(qmodel_t *mod);
@@ -132,6 +134,7 @@ typedef struct particle_s
 	#define PScript_RunParticleEffect(o,d,p,c) true
 	#define PScript_RunParticleWeather(min,max,d,c,p,n) true
 	#define PScript_ShutdownGL()
+	#define PScript_InvalidateConfigCache()
 	#define PScript_ClearSurfaceParticles(m)
 	#define PScript_DelinkTrailstate(tsp)
 	#define PScript_MapDecalsReady(ready)
@@ -557,6 +560,7 @@ void GL_MakeAliasModelDisplayLists (qmodel_t *m, aliashdr_t *hdr);
 
 void Sky_Init (void);
 void Sky_ClearAll (void);
+void Sky_NewMapClear (void);
 void Sky_DrawSky (void);
 void Sky_NewMap (void);
 void Skywind_SetupFrame(void);

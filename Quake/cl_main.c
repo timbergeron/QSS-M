@@ -272,7 +272,7 @@ void CL_ClearState (void)
 
 	cl.viewent.netstate = nullentitystate;
 #ifdef PSET_SCRIPT
-	PScript_Shutdown();
+	PScript_MapCleanup();	//keeps parsed particle configs; full PScript_Shutdown only at engine shutdown
 #endif
 
 	RSceneCache_Shutdown();
@@ -300,6 +300,44 @@ static void CL_ClearConnectReturnState(void)
 {
 	m_return_onerror = false;
 	m_return_reason[0] = '\0';
+}
+
+/*
+connect timing diagnostics (developer 1) -- marks wall-clock phases of the
+connect sequence so slow connects can be attributed (dns/handshake, signon
+data transfer, precache/load, first update)
+*/
+static double cl_conntime_start; // nonzero while a connect is being timed
+static double cl_conntime_last;
+
+void CL_ConnectTimingBegin (void)
+{
+	cl_conntime_start = cl_conntime_last = Sys_DoubleTime ();
+}
+
+void CL_ConnectTimingMark (const char *phase)
+{
+	double now;
+	if (!cl_conntime_start)
+		return;
+	now = Sys_DoubleTime ();
+	Con_DPrintf ("connect timing: %-24s +%7.1fms  (total %7.1fms)\n",
+		phase, (now - cl_conntime_last) * 1000.0, (now - cl_conntime_start) * 1000.0);
+	cl_conntime_last = now;
+}
+
+static void CL_ConnectTimingCancel (void)
+{
+	cl_conntime_start = 0;
+	cl_conntime_last = 0;
+}
+
+void CL_ConnectTimingEnd (void)
+{
+	if (!cl_conntime_start)
+		return;
+	CL_ConnectTimingMark ("in game");
+	CL_ConnectTimingCancel();
 }
 
 void CL_MarkNextConnectFromMenu(void)
@@ -430,6 +468,7 @@ static void CL_MaybePrintLateWrongGameDirWarning(void)
 
 static void CL_FinalizeConnection(struct qsocket_s *netcon, const char *host)
 {
+	CL_ConnectTimingMark("handshake accepted");
 	CL_ClearConnectReturnState();
 	cls.netcon = netcon;
 	Con_DPrintf("CL_EstablishConnection: connected to %s\n", host);
@@ -459,6 +498,7 @@ static void CL_CancelConnectInternal(qboolean clear_return_state)
 	NET_DatagramConnectCancel();
 	cl_pending_connect.active = false;
 	cl_pending_connect.host[0] = '\0';
+	CL_ConnectTimingCancel();
 
 	if (clear_return_state)
 		CL_ClearConnectReturnState();
@@ -533,6 +573,7 @@ qboolean CL_BeginConnect(const char *host)
 	CL_CancelConnectInternal(false);
 	CL_Disconnect();
 	CL_PrintConnectingMessage(target);
+	CL_ConnectTimingBegin();
 
 	immediate = NET_ConnectNoSlist(target, true);
 	if (immediate)
@@ -543,6 +584,7 @@ qboolean CL_BeginConnect(const char *host)
 
 	if (!NET_DatagramConnectStart(connect_target))
 	{
+		CL_ConnectTimingCancel();
 		CL_PrintConnectFailureHints();
 		return false;
 	}
@@ -577,6 +619,7 @@ void CL_ConnectFrame(void)
 	if (reason && *reason)
 		Con_Printf("%s\n", reason);
 
+	CL_ConnectTimingCancel();
 	CL_PrintConnectFailureHints();
 	cl_pending_connect.host[0] = '\0';
 }
@@ -591,6 +634,7 @@ This is also called on Host_Error, so it shouldn't cause any errors
 */
 void CL_Disconnect (void)
 {
+	CL_ConnectTimingCancel();
 	CL_AsyncDownload_Cancel();
 	NET_PortPingProbe_RequestAbort();
 	CL_CancelConnect();
@@ -695,10 +739,12 @@ void CL_EstablishConnection (const char *host)
 	CL_CancelConnectInternal(false);
 	CL_Disconnect ();
 	CL_PrintConnectingMessage(target);
+	CL_ConnectTimingBegin();
 
 	netcon = NET_Connect(target);
 	if (!netcon)
 	{
+		CL_ConnectTimingCancel();
 		CL_PrintConnectFailureHints();
 		Host_Error("connect failed");
 	}
@@ -765,6 +811,7 @@ void CL_SignonReply (void)
 	switch (cls.signon)
 	{
 	case 1:
+		CL_ConnectTimingMark("signon 1 received");
 		MSG_WriteByte (&cls.message, clc_stringcmd);
 		MSG_WriteString (&cls.message, va("name \"%s\"\n", cl_name.string));
 
@@ -774,6 +821,7 @@ void CL_SignonReply (void)
 		break;
 
 	case 2:
+		CL_ConnectTimingMark("signon 2 (baselines)");
 
 		MSG_WriteByte (&cls.message, clc_stringcmd);
 		MSG_WriteString (&cls.message, va("color %i %i\n", (int)cl_topcolor.value, (int)cl_bottomcolor.value));
@@ -787,12 +835,14 @@ void CL_SignonReply (void)
 		break;
 
 	case 3:
+		CL_ConnectTimingMark("signon 3 (spawninfo)");
 		MSG_WriteByte (&cls.message, clc_stringcmd);
 		MSG_WriteString (&cls.message, "begin");
 		Cache_Report ();		// print remaining memory
 		break;
 
 	case 4:
+		CL_ConnectTimingEnd();
 		cl.spawntime = cl.mtime[0];
 		SCR_EndLoadingPlaque ();		// allow normal screen updates
 

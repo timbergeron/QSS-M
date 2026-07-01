@@ -744,6 +744,9 @@ void V_SetContentsColor (int contents);
 //
 void CL_InitTEnts (void);
 void CL_SignonReply (void);
+void CL_ConnectTimingBegin (void);
+void CL_ConnectTimingMark (const char *phase);
+void CL_ConnectTimingEnd (void);
 float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int *ent);
 
 //
