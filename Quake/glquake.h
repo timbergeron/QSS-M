@@ -119,6 +119,7 @@ typedef struct particle_s
 	void PScript_ClearParticles (void);
 	void PScript_MapCleanup (void);	//between maps: drops map/entity references but keeps parsed configs
 	void PScript_InvalidateConfigCache (void);	//call when the same config names may resolve to different files (gamedir change)
+	void PScript_InvalidateTextures (void);	//call after TexMgr_NewGame purges textures; particle types re-resolve theirs lazily
 	void PScript_MapDecalsReady (qboolean ready);
 	void PScript_SpawnMapDecals (void);
 	void PScript_UpdateModelEffects(qmodel_t *mod);
@@ -135,6 +136,7 @@ typedef struct particle_s
 	#define PScript_RunParticleWeather(min,max,d,c,p,n) true
 	#define PScript_ShutdownGL()
 	#define PScript_InvalidateConfigCache()
+	#define PScript_InvalidateTextures()
 	#define PScript_ClearSurfaceParticles(m)
 	#define PScript_DelinkTrailstate(tsp)
 	#define PScript_MapDecalsReady(ready)

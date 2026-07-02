@@ -775,17 +775,19 @@ void Draw_NewGame (void)
 qboolean Draw_ReloadTextures(qboolean force)
 {
 	extern cvar_t gl_load24bit;
-	if (draw_load24bit != !!gl_load24bit.value)
-		force = true;
-
-	if (draw_load24bit != !!gl_load24bit_hud.value) // woods #24bithud
+	// compare against the same effective state Draw_LoadPics computes; comparing the
+	// cvars individually forced a full texture purge on every call when they differed
+	// (e.g. gl_load24bit 0 + gl_load24bit_hud 1) // woods #24bithud
+	if (draw_load24bit != (gl_load24bit.value > 0 && gl_load24bit_hud.value != 0))
 		force = true;
 
 	if (force)
 	{
 		TexMgr_NewGame ();
 		Draw_NewGame ();
-
+#ifdef PSET_SCRIPT
+		PScript_InvalidateTextures ();	//particle types' texture pointers dangle after TexMgr_NewGame
+#endif
 
 		Cache_Flush ();
 		Mod_ResetAll();

@@ -3806,6 +3806,8 @@ void PScript_MapCleanup (void)
 		part_type[i].clippeddecals = NULL;
 		part_type[i].particles = NULL;
 		part_type[i].beams = NULL;
+		part_type[i].nexttorun = NULL;
+		part_type[i].state &= ~PS_INRUNLIST;	//else types active on the old map can never relink into part_run_list
 		for (j = 0; j < part_type[i].nummodels; j++)
 			part_type[i].models[j].model = NULL;
 	}
@@ -3847,6 +3849,19 @@ static qboolean PScript_NeedsConfigReload (void)
 void PScript_InvalidateConfigCache (void)
 {
 	pscript_loaded_desc[0] = 0;	// e.g. gamedir change: same names may resolve to different files
+}
+
+/*
+called after TexMgr_NewGame frees all non-persistent textures (gl_load24bit*
+change, gamedir switch): the types' texture pointers now dangle, so drop them
+and let the next PScript_ClearParticles P_LoadTexture pass re-resolve from disk
+*/
+void PScript_InvalidateTextures (void)
+{
+	int i;
+	for (i = 0; i < numparticletypes; i++)
+		part_type[i].looks.texture = NULL;
+	r_plooksdirty = true;
 }
 
 qboolean PScript_Startup (void)
