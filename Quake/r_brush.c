@@ -41,6 +41,13 @@ int					lightmap_count;
 static int			last_lightmap_allocated;
 int LMBLOCK_WIDTH, LMBLOCK_HEIGHT;
 
+// woods #lmrect -- scratch stream PBO for dynamic lightmap uploads. Writing
+// texels straight from client memory makes Apple's GL-on-Metal block in
+// prepareResourceForCPUAccess until the GPU stops reading the texture (a full
+// pipeline sync per touched atlas per frame); staging through an orphaned PBO
+// turns the update into a GPU-side blit instead.
+static GLuint lm_scratchpbo; // reset by GL_BuildLightmaps on map load / video restart
+
 
 /*
 ===============
@@ -300,16 +307,51 @@ void R_DrawBrushModel_ShowTris (entity_t *e)
 =============================================================
 */
 
-// woods #lmbands -- shared by all three dynamic-lightmap dirty paths
+// woods #lmrect -- shared by all three dynamic-lightmap dirty paths
 // (R_RenderDynamicLightmaps here, plus the bmodel-drawcache and scenecache copies
-// in r_world.c). Marks every 1/64th-height band the surface's rows fall in.
-void R_LightmapMarkDirtyBands (struct lightmap_s *lm, int light_t, int tmax)
+// in r_world.c). Accumulates the surface's exact texel rect, growing whichever
+// existing rect wastes the least area once the list fills.
+void R_LightmapMarkDirtyRect (struct lightmap_s *lm, int light_s, int light_t, int smax, int tmax)
 {
-	int bandheight = (LMBLOCK_HEIGHT + 63) >> 6;
-	int b0 = light_t / bandheight;
-	int b1 = (light_t + tmax - 1) / bandheight;
-	for (; b0 <= b1; b0++)
-		lm->dirtybands |= 1ull << b0;
+	int l = light_s, t = light_t, r = light_s + smax, b = light_t + tmax;
+	int i, best, bestwaste;
+
+	if (l < 0) l = 0;
+	if (t < 0) t = 0;
+	if (r > LMBLOCK_WIDTH) r = LMBLOCK_WIDTH;
+	if (b > LMBLOCK_HEIGHT) b = LMBLOCK_HEIGHT;
+	if (r <= l || b <= t)
+		return;
+
+	best = -1; bestwaste = INT_MAX;
+	for (i = 0; i < lm->numdirtyrects; i++)
+	{
+		glRect_t *dr = &lm->dirtyrects[i];
+		int ul = q_min(l, (int)dr->l), ut = q_min(t, (int)dr->t);
+		int ur = q_max(r, dr->l + dr->w), ub = q_max(b, dr->t + dr->h);
+		int waste = (ur-ul)*(ub-ut) - dr->w*dr->h - (r-l)*(b-t);
+		if (waste < bestwaste)
+		{
+			bestwaste = waste;
+			best = i;
+		}
+	}
+	// merge when the grown rect adds little dead area (or we're out of slots);
+	// adjacent surfaces of the same dlight typically collapse into one rect.
+	if (best >= 0 && (bestwaste <= 4096 || lm->numdirtyrects == LM_DIRTYRECTS))
+	{
+		glRect_t *dr = &lm->dirtyrects[best];
+		int ul = q_min(l, (int)dr->l), ut = q_min(t, (int)dr->t);
+		int ur = q_max(r, dr->l + dr->w), ub = q_max(b, dr->t + dr->h);
+		dr->l = ul; dr->t = ut;
+		dr->w = ur-ul; dr->h = ub-ut;
+	}
+	else
+	{
+		glRect_t *dr = &lm->dirtyrects[lm->numdirtyrects++];
+		dr->l = l; dr->t = t;
+		dr->w = r-l; dr->h = b-t;
+	}
 }
 
 /*
@@ -362,7 +404,7 @@ dynamic:
 				theRect->w = (fa->light_s-theRect->l)+smax;
 			if ((theRect->h + theRect->t) < (fa->light_t + tmax))
 				theRect->h = (fa->light_t-theRect->t)+tmax;
-			R_LightmapMarkDirtyBands (lm, fa->light_t, tmax); // woods #lmbands
+			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect
 			base = lm->pbodata;
 			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
 			R_BuildLightMap (model, fa, base, LMBLOCK_WIDTH*lightmap_bytes, currententity, r_framecount, cl_dlights);
@@ -532,7 +574,11 @@ int AllocBlock (int w, int h, int *x, int *y)
 			lightmaps[texnum].rectchange.t = 0;
 			lightmaps[texnum].rectchange.h = LMBLOCK_HEIGHT;
 			lightmaps[texnum].rectchange.w = LMBLOCK_WIDTH;
-			lightmaps[texnum].dirtybands = ~0ull; // woods #lmbands
+			lightmaps[texnum].numdirtyrects = 1; // woods #lmrect -- whole texture dirty
+			lightmaps[texnum].dirtyrects[0].l = 0;
+			lightmaps[texnum].dirtyrects[0].t = 0;
+			lightmaps[texnum].dirtyrects[0].w = LMBLOCK_WIDTH;
+			lightmaps[texnum].dirtyrects[0].h = LMBLOCK_HEIGHT;
 		}
 		best = LMBLOCK_HEIGHT;
 		bestx = -1;
@@ -1007,6 +1053,14 @@ void GL_BuildLightmaps (void)
 
 	RSceneCache_Shutdown();	//make sure there's nothing poking them off-thread.
 
+	// woods #lmrect -- the upload scratch PBO belongs to the (possibly recreated) GL context
+	if (lm_scratchpbo)
+	{
+		if (GL_DeleteBuffersFunc)
+			GL_DeleteBuffersFunc(1, &lm_scratchpbo);
+		lm_scratchpbo = 0;
+	}
+
 	lm_defer_fill = false;	//tb -- drop any fill jobs orphaned by a Host_Error mid-build
 	LM_ClearFillJobs ();
 
@@ -1113,7 +1167,7 @@ void GL_BuildLightmaps (void)
 		lm->rectchange.t = LMBLOCK_HEIGHT;
 		lm->rectchange.w = 0;
 		lm->rectchange.h = 0;
-		lm->dirtybands = 0; // woods #lmbands
+		lm->numdirtyrects = 0; // woods #lmrect
 
 		//johnfitz -- use texture manager
 		sprintf(name, "lightmap%07i",i);
@@ -1628,104 +1682,111 @@ R_UploadLightmap -- johnfitz -- uploads the modified lightmap to opengl if neces
 assumes lightmap texture is already bound
 ===============
 */
-static void R_UploadLightmapRows (struct lightmap_s *lm, int t, int h) // woods #lmbands
+static void R_TexSubImageLightmap (int x, int t, int w, int h, const GLvoid *src) // woods #lmrect
 {
-	size_t offset = (size_t)t*LMBLOCK_WIDTH*lightmap_bytes;
-	// PBO path: src is a byte offset into the bound buffer; non-PBO: a client pointer
-	const GLvoid *src = lm->pbohandle ? (const GLvoid*)(uintptr_t)offset
-									  : (const GLvoid*)(lm->pbodata + offset);
-
 	if (gl_lightmap_format == GL_RGB9_E5)
-		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, t, LMBLOCK_WIDTH, h, GL_RGB,
+		glTexSubImage2D(GL_TEXTURE_2D, 0, x, t, w, h, GL_RGB,
 				GL_UNSIGNED_INT_5_9_9_9_REV, src);
 	else if (gl_lightmap_format == GL_RGB10_A2)
-		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, t, LMBLOCK_WIDTH, h, GL_RGBA,
+		glTexSubImage2D(GL_TEXTURE_2D, 0, x, t, w, h, GL_RGBA,
 				GL_UNSIGNED_INT_10_10_10_2, src);
 	else
-		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, t, LMBLOCK_WIDTH, h, gl_lightmap_format,
+		glTexSubImage2D(GL_TEXTURE_2D, 0, x, t, w, h, gl_lightmap_format,
 				GL_UNSIGNED_BYTE, src);
 }
 
-// woods #lmbands -- past this many separate dirty runs, one merged upload
-// covering the whole dirty span beats issuing a glTexSubImage2D per run (each
-// is a driver round-trip; on Apple's GL-on-Metal it's a sync flush). On Apple
-// the per-call sync flush dominates the extra bytes, so always merge (0); on
-// async drivers fewer uploaded bytes win, so only merge heavy fragmentation.
-#ifdef __APPLE__
-#define LM_MAX_UPLOAD_RUNS 0
-#else
-#define LM_MAX_UPLOAD_RUNS 4
-#endif
+static void R_UploadLightmapRows (struct lightmap_s *lm, int x, int t, int w, int h) // woods #lmbands #lmrect
+{
+	size_t offset = ((size_t)t*LMBLOCK_WIDTH + x)*lightmap_bytes;
+
+	if (lm->pbohandle)
+	{	// persistently-mapped PBO, bound by the caller: src is a byte offset; rows use the atlas stride
+		if (w != LMBLOCK_WIDTH)
+			glPixelStorei(GL_UNPACK_ROW_LENGTH, LMBLOCK_WIDTH);
+		R_TexSubImageLightmap(x, t, w, h, (const GLvoid*)(uintptr_t)offset);
+		if (w != LMBLOCK_WIDTH)
+			glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+		return;
+	}
+
+	if (gl_vbo_able && GL_GenBuffersFunc && GL_BufferDataFunc && GL_MapBufferFunc && GL_UnmapBufferFunc)
+	{
+		size_t rowbytes = (size_t)w*lightmap_bytes;
+		byte *dst;
+
+		if (!lm_scratchpbo)
+			GL_GenBuffersFunc(1, &lm_scratchpbo);
+		if (lm_scratchpbo)
+		{
+			GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, lm_scratchpbo);
+			GL_BufferDataFunc(GL_PIXEL_UNPACK_BUFFER_ARB, rowbytes*h, NULL, GL_STREAM_DRAW);	//orphan; never stalls
+			dst = (byte *)GL_MapBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, GL_WRITE_ONLY);
+			if (dst)
+			{
+				const byte *srcrow = lm->pbodata + offset;
+				int r;
+				for (r = 0; r < h; r++, dst += rowbytes, srcrow += (size_t)LMBLOCK_WIDTH*lightmap_bytes)
+					memcpy(dst, srcrow, rowbytes);
+				GL_UnmapBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB);
+				R_TexSubImageLightmap(x, t, w, h, NULL);	//rows are packed tight, ROW_LENGTH stays 0
+				GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+				return;
+			}
+			GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+		}
+	}
+
+	// fallback: direct client-memory upload
+	if (w != LMBLOCK_WIDTH)
+		glPixelStorei(GL_UNPACK_ROW_LENGTH, LMBLOCK_WIDTH);
+	R_TexSubImageLightmap(x, t, w, h, (const GLvoid*)(lm->pbodata + offset));
+	if (w != LMBLOCK_WIDTH)
+		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+}
 
 static void R_UploadLightmap(int lmap)
 {
 	struct lightmap_s *lm = &lightmaps[lmap];
-	int bandheight, b, b0; // woods #lmbands
-	int runs, lo, hi;
-	unsigned long long bands;
+	int i, n; // woods #lmrect
 
 	if (!lm->modified)
 		return;
 
 	lm->modified = false;
 
-	bands = lm->dirtybands;
-	bandheight = (LMBLOCK_HEIGHT + 63) >> 6;
-
-	// woods #lmbands -- count contiguous runs and the dirty bounding span first,
-	// so we can collapse a heavily-fragmented mask into a single upload
-	runs = 0; lo = 64; hi = -1;
-	for (b = 0; b < 64; b++)
+	n = lm->numdirtyrects;
+	if (n <= 0)
 	{
-		if (!((bands >> b) & 1))
-			continue;
-		if (b < lo) lo = b;
-		hi = b;
-		if (b == 0 || !((bands >> (b-1)) & 1))
-			runs++;
+		lm->numdirtyrects = 0;
+		return; // nothing dirty (modified flag without rects; shouldn't happen)
 	}
-	if (hi < 0)
-	{
-		lm->dirtybands = 0;
-		return; // nothing dirty (modified flag without bands; shouldn't happen)
-	}
+	if (n > LM_DIRTYRECTS)
+		n = LM_DIRTYRECTS;
 
 	if (lm->pbohandle)
 		GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, lm->pbohandle);
 
-	if (runs > LM_MAX_UPLOAD_RUNS)
+	// woods #lmrect -- upload each accumulated dirty rect; bytes stay
+	// proportional to the texels actually rebuilt rather than full-width bands
+	// of the (up to 512x16384) atlas, which made per-frame dlight updates cost
+	// megabytes of texture traffic on Apple's GL-on-Metal.
+	for (i = 0; i < n; i++)
 	{
-		// merged: one upload spanning [lo..hi]
-		int t = lo*bandheight;
-		int h = q_min((hi+1)*bandheight, LMBLOCK_HEIGHT) - t;
-		if (h > 0)
-			R_UploadLightmapRows(lm, t, h);
-	}
-	else
-	{
-		// upload each contiguous run of dirty bands separately
-		for (b = lo; b <= hi; )
-		{
-			int t, h;
-			if (!((bands >> b) & 1))
-			{
-				b++;
-				continue;
-			}
-			b0 = b;
-			while (b <= hi && ((bands >> b) & 1))
-				b++;
-			t = b0*bandheight;
-			h = q_min(b*bandheight, LMBLOCK_HEIGHT) - t;
-			if (h > 0)
-				R_UploadLightmapRows(lm, t, h);
-		}
+		int x = lm->dirtyrects[i].l, t = lm->dirtyrects[i].t;
+		int w = lm->dirtyrects[i].w, h = lm->dirtyrects[i].h;
+		if (x >= LMBLOCK_WIDTH || t >= LMBLOCK_HEIGHT)
+			continue;
+		w = q_min(w, LMBLOCK_WIDTH - x);
+		h = q_min(h, LMBLOCK_HEIGHT - t);
+		if (w <= 0 || h <= 0)
+			continue;
+		R_UploadLightmapRows(lm, x, t, w, h);
 	}
 
 	if (lm->pbohandle)
 		GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
 
-	lm->dirtybands = 0;
+	lm->numdirtyrects = 0;
 	lm->rectchange.l = LMBLOCK_WIDTH;
 	lm->rectchange.t = LMBLOCK_HEIGHT;
 	lm->rectchange.h = 0;
@@ -1774,7 +1835,7 @@ void R_UploadLightmaps (void)
 			lightmaps[lmap].rectchange.t = LMBLOCK_HEIGHT;
 			lightmaps[lmap].rectchange.h = 0;
 			lightmaps[lmap].rectchange.w = 0;
-			lightmaps[lmap].dirtybands = 0; // woods #lmbands
+			lightmaps[lmap].numdirtyrects = 0; // woods #lmrect
 		}
 		else
 		{
@@ -1871,7 +1932,7 @@ void R_RebuildAllLightmaps (void)
 		lightmaps[i].rectchange.t = LMBLOCK_HEIGHT;
 		lightmaps[i].rectchange.h = 0;
 		lightmaps[i].rectchange.w = 0;
-		lightmaps[i].dirtybands = 0; // woods #lmbands -- whole texture just uploaded
+		lightmaps[i].numdirtyrects = 0; // woods #lmrect -- whole texture just uploaded
 	}
 }
 

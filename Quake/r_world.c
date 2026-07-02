@@ -1139,7 +1139,7 @@ dynamic:
 				theRect->w = (fa->light_s-theRect->l)+smax;
 			if ((theRect->h + theRect->t) < (fa->light_t + tmax))
 				theRect->h = (fa->light_t-theRect->t)+tmax;
-			R_LightmapMarkDirtyBands (lm, fa->light_t, tmax); // woods #lmbands
+			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect
 			base = lm->pbodata;
 			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
 			R_BuildLightMap (model, fa, base, LMBLOCK_WIDTH*lightmap_bytes, currententity, r_framecount, cl_dlights);
@@ -5966,6 +5966,17 @@ static struct
 	/*volatile*/ struct rscenecache_s *processing;
 	/*volatile*/ qboolean processed;	//lightmaps need updating
 
+	// woods #scenecachedlights -- lightweight per-frame worker job that patches
+	// dlight lightmaps in place so active dlights don't force full cache rebuilds.
+	struct
+	{
+		/*volatile*/ struct rscenecache_s *cache;	//job target; non-NULL while queued/running. worker owns the fields below while set.
+		dlight_t dlights[countof(cl_dlights)];
+		double time;
+		int framecount;
+	} dlightjob;
+	/*volatile*/ qboolean haslitsurfs;	//worker-maintained: lightmaps still contain dlight contributions needing cleanup
+
 	struct rscenecache_s *drawing;
 	qboolean doingskybox;
 
@@ -5999,6 +6010,8 @@ static struct
 		GLuint ebo;
 		dlight_t dlights[countof(cl_dlights)];	//added this here so the cache at least gets consistent lighting without having to fight the main thread.
 		double time;	//for killing old lights...
+		msurface_t **litsurfs;	// woods #scenecachedlights -- surfs this build lit with dlights (worker-owned while building, merged into the main-thread list afterwards)
+		size_t numlitsurfs, maxlitsurfs;
 		struct rscenecachebath_s
 		{
 			unsigned int *idx;
@@ -6042,7 +6055,77 @@ static qboolean RSceneCache_ReserveBatchIndices(struct rscenecachebath_s *batch,
 	return true;
 }
 
-static void RSceneCache_RenderDynamicLightmaps (struct rscenecache_s *cache, msurface_t *fa, int dlightframecount)
+// woods #scenecachedlights -- surfaces whose lightmaps currently contain dynamic
+// light contributions, so a moving/dying dlight can be cleared incrementally
+// instead of forcing a full scenecache rebuild every frame. Owned by the worker
+// thread (dlight jobs and full builds both run there); the main thread only
+// touches it with the worker drained (RSceneCache_ResetDlightTracking).
+static msurface_t **rscenecache_litsurfs;
+static size_t rscenecache_numlitsurfs, rscenecache_maxlitsurfs;
+static qmodel_t *rscenecache_litsurfs_model;
+
+static qboolean RSceneCache_LitSurfsReserve (msurface_t ***surfs, size_t *max, size_t needed)
+{
+	msurface_t **grown;
+	size_t newmax;
+	if (needed <= *max)
+		return true;
+	newmax = *max ? *max*2 : 256;
+	if (newmax < needed)
+		newmax = needed;
+	grown = realloc(*surfs, newmax * sizeof(*grown));
+	if (!grown)
+		return false;
+	*surfs = grown;
+	*max = newmax;
+	return true;
+}
+
+static void RSceneCache_ResetDlightTracking (qmodel_t *mod)
+{	//main thread. surf pointers die with their model, so drop them before the
+	//model does - but only once the worker can't be touching the list.
+	if (rscenecache.thread)
+	{
+		SDL_LockMutex(rscenecache.mutex);
+		while (rscenecache.dlightjob.cache)
+			SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+		if (!mod || rscenecache_litsurfs_model == mod)
+		{
+			rscenecache_numlitsurfs = 0;
+			rscenecache_litsurfs_model = NULL;
+			rscenecache.haslitsurfs = false;
+		}
+		SDL_UnlockMutex(rscenecache.mutex);
+	}
+	else if (!mod || rscenecache_litsurfs_model == mod)
+	{
+		rscenecache_numlitsurfs = 0;
+		rscenecache_litsurfs_model = NULL;
+		rscenecache.haslitsurfs = false;
+	}
+}
+
+static void RSceneCache_MergeLitSurfs (struct rscenecache_s *cache)
+{	//worker thread: adopt the surfs this cache's build lit into the tracking
+	//list, so a later dlight job can clear them once the lights move or die.
+	if (cache->numlitsurfs)
+	{
+		if (rscenecache_litsurfs_model != cache->worldmodel)
+		{
+			rscenecache_numlitsurfs = 0;
+			rscenecache_litsurfs_model = cache->worldmodel;
+		}
+		if (RSceneCache_LitSurfsReserve(&rscenecache_litsurfs, &rscenecache_maxlitsurfs, rscenecache_numlitsurfs + cache->numlitsurfs))
+		{
+			memcpy(rscenecache_litsurfs + rscenecache_numlitsurfs, cache->litsurfs, cache->numlitsurfs * sizeof(*cache->litsurfs));
+			rscenecache_numlitsurfs += cache->numlitsurfs;
+			rscenecache.haslitsurfs = true;
+		}
+	}
+	cache->numlitsurfs = 0;
+}
+
+static void RSceneCache_RenderDynamicLightmaps (struct rscenecache_s *cache, msurface_t *fa, int dlightframecount, qboolean track)
 {
 	static entity_t r_worldentity;	//so the dlight stuff doesn't bug out.
 	byte		*base;
@@ -6083,10 +6166,14 @@ dynamic:
 				theRect->w = (fa->light_s-theRect->l)+smax;
 			if ((theRect->h + theRect->t) < (fa->light_t + tmax))
 				theRect->h = (fa->light_t-theRect->t)+tmax;
-			R_LightmapMarkDirtyBands (lm, fa->light_t, tmax); // woods #lmbands
+			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect
 			base = lm->pbodata;
 			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
 			R_BuildLightMap (cache->worldmodel, fa, base, LMBLOCK_WIDTH*lightmap_bytes, &r_worldentity, dlightframecount, cache->dlights);
+			// woods #scenecachedlights -- remember dlight-lit surfaces so they can be cleared later without another full rebuild
+			if (track && fa->cached_dlight &&
+				RSceneCache_LitSurfsReserve(&cache->litsurfs, &cache->maxlitsurfs, cache->numlitsurfs+1))
+				cache->litsurfs[cache->numlitsurfs++] = fa;
 		}
 	}
 }
@@ -6146,20 +6233,6 @@ static qboolean RSceneCache_UsedLightstylesChanged(const int *old_vals, const in
 	return false;
 }
 
-static qboolean RSceneCache_HasActiveDlights(const dlight_t *lights, size_t count, double time)
-{
-	size_t i;
-
-	for (i = 0; i < count; ++i)
-	{
-		if (lights[i].die < time || !lights[i].radius || R_DlightStyleScale(&lights[i]) <= 0.0f)
-			continue;
-		return true;
-	}
-
-	return false;
-}
-
 static void RSceneCache_CopyDlights(dlight_t *dst, const dlight_t *src, size_t count)
 {
 	size_t i;
@@ -6182,6 +6255,218 @@ static void RSceneCache_CopyDlights(dlight_t *dst, const dlight_t *src, size_t c
 	}
 }
 
+// woods #scenecachedlights -- mirrors R_MarkLights (gl_rlight.c), but also
+// records each surface the first time it gets marked this frame so the
+// in-place dlight path knows exactly which lightmaps to rebuild (and later
+// clear). Worker thread only. Keep the traversal in sync with R_MarkLights.
+static void RSceneCache_MarkDlightSurfs (qmodel_t *model, dlight_t *light, vec3_t lightorg, int framecount, int num, mnode_t *node)
+{
+	mplane_t	*splitplane;
+	msurface_t	*surf;
+	vec3_t		impact;
+	float		dist, facedist, l, maxdist;
+	unsigned int i;
+	int			 j, s, t;
+
+start:
+
+	if (node->contents < 0)
+		return;
+
+	splitplane = node->plane;
+	if (splitplane->type < 3)
+		dist = lightorg[splitplane->type] - splitplane->dist;
+	else
+		dist = DotProduct (lightorg, splitplane->normal) - splitplane->dist;
+
+	if (dist > light->radius)
+	{
+		node = node->children[0];
+		goto start;
+	}
+	if (dist < -light->radius)
+	{
+		node = node->children[1];
+		goto start;
+	}
+
+	maxdist = light->radius*light->radius;
+
+	if (node->firstsurface >= 0 &&
+		node->firstsurface + node->numsurfaces <= (unsigned int)model->numsurfaces)
+	{
+		// mark the polygons
+		surf = model->surfaces + node->firstsurface;
+		for (i=0 ; i<node->numsurfaces ; i++, surf++)
+		{
+			if (!surf->plane
+				|| surf->plane < model->planes
+				|| surf->plane >= model->planes + model->numplanes)
+				continue;           /* skip this surface, process the rest */
+
+			facedist = DotProduct(lightorg, surf->plane->normal)
+				- surf->plane->dist;
+
+			for (j=0 ; j<3 ; j++)
+				impact[j] = lightorg[j] - surf->plane->normal[j]*facedist;
+			// clamp center of light to corner and check brightness
+			l = DotProduct (impact, surf->lmvecs[0]) + surf->lmvecs[0][3];
+			s = l;if (s < 0) s = 0;else if (s > surf->extents[0]) s = surf->extents[0];
+			s = l - s;
+			l = DotProduct (impact, surf->lmvecs[1]) + surf->lmvecs[1][3];
+			t = l;if (t < 0) t = 0;else if (t > surf->extents[1]) t = surf->extents[1];
+			t = l - t;
+			// compare to minimum light
+			if ((s*s+t*t+facedist*facedist) < maxdist)
+			{
+				if (surf->dlightframe != framecount) // not dynamic until now
+				{
+					surf->dlightbits[num >> 5] = 1U << (num & 31);
+					surf->dlightframe = framecount;
+					if (!(surf->flags & SURF_DRAWTILED) &&
+						RSceneCache_LitSurfsReserve(&rscenecache_litsurfs, &rscenecache_maxlitsurfs, rscenecache_numlitsurfs+1))
+						rscenecache_litsurfs[rscenecache_numlitsurfs++] = surf;
+				}
+				else // already dynamic
+					surf->dlightbits[num >> 5] |= 1U << (num & 31);
+			}
+		}
+	}
+
+	if (node->children[0]->contents >= 0)
+		RSceneCache_MarkDlightSurfs (model, light, lightorg, framecount, num, node->children[0]);
+	if (node->children[1]->contents >= 0)
+		RSceneCache_MarkDlightSurfs (model, light, lightorg, framecount, num, node->children[1]);
+}
+
+/*
+================
+RSceneCache_RunDlightJob -- woods #scenecachedlights
+
+The scenecache used to be invalidated (and fully rebuilt by the worker thread,
+with a complete EBO re-upload) every frame that any dlight was active, which
+made powerup glows, rockets and muzzle flashes disproportionately expensive.
+The cache geometry doesn't change with dlights though - only the shared
+lightmap texels do - so patch just those, still on the worker thread (the
+per-surface R_BuildLightMap work is too heavy for the main thread), and leave
+the cache alone.
+
+Worker thread. The job fields and the litsurfs list are ours while
+rscenecache.dlightjob.cache is set.
+================
+*/
+static qboolean RSceneCache_RunDlightJob (struct rscenecache_s *cache)
+{
+	size_t s, prevcount, out;
+	unsigned int i, j;
+	dlight_t *l;
+	msurface_t *surf;
+	qboolean changed = false;
+	int framecount = rscenecache.dlightjob.framecount;
+
+	if (rscenecache_litsurfs_model != cache->worldmodel)
+	{
+		rscenecache_numlitsurfs = 0;
+		rscenecache_litsurfs_model = cache->worldmodel;
+	}
+
+	//refresh the cache's dlight snapshot so the lightmap rebuilds see current positions
+	memcpy (cache->dlights, rscenecache.dlightjob.dlights, sizeof(cache->dlights));
+	cache->time = rscenecache.dlightjob.time;
+
+	prevcount = rscenecache_numlitsurfs;
+
+	if (!gl_flashblend.value)
+	{
+		for (i = 0; i < countof(cache->dlights); i++)
+		{
+			l = &cache->dlights[i];
+			if (l->die < cache->time || !l->radius)
+				continue;
+			RSceneCache_MarkDlightSurfs (cache->worldmodel, l, l->origin, framecount, i, cache->worldmodel->nodes);
+			for (j = 0; j < cache->numcachedsubmodels; j++)
+				if (cache->cachedsubmodels[j>>3] & (1u<<(j&7)))
+					RSceneCache_MarkDlightSurfs (cache->worldmodel, l, l->origin, framecount, i, cache->worldmodel->nodes + cache->worldmodel->submodels[j].headnode[0]);
+		}
+	}
+
+	//clear surfaces that were lit before but weren't re-marked this frame
+	for (s = 0; s < prevcount; s++)
+	{
+		surf = rscenecache_litsurfs[s];
+		if (surf->dlightframe == framecount)
+			continue;	//still lit; also present in the freshly-marked tail below.
+		if (!surf->cached_dlight)
+			continue;	//already clean.
+		if ((unsigned int)(surf->lightmaptexturenum+1) >= cache->lightmaps)
+			continue;
+		RSceneCache_RenderDynamicLightmaps (cache, surf, framecount, false);
+		changed = true;
+	}
+	//rebuild the surfaces the lights currently touch, compacting them to the list head
+	for (out = 0, s = prevcount; s < rscenecache_numlitsurfs; s++)
+	{
+		surf = rscenecache_litsurfs[s];
+		if ((unsigned int)(surf->lightmaptexturenum+1) >= cache->lightmaps)
+			continue;
+		RSceneCache_RenderDynamicLightmaps (cache, surf, framecount, false);
+		rscenecache_litsurfs[out++] = surf;
+		changed = true;
+	}
+	rscenecache_numlitsurfs = out;
+	rscenecache.haslitsurfs = (out != 0);
+
+	return changed;
+}
+
+// woods #scenecachedlights -- main thread: hand the worker a dlight-update job
+// for the cache we're about to draw. Caller ensures no full build is queued or
+// in flight, so the worker only ever touches the surf dlight fields and the
+// lightmap staging memory from one place at a time.
+static void RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache)
+{
+	static int lastframe = -1;
+	unsigned int i;
+	dlight_t *l;
+	qboolean active = false;
+
+	if (!cache || cache->worldmodel != cl.worldmodel || !r_dynamic.value || !rscenecache.thread)
+		return;
+	if (lastframe == host_framecount)
+		return;	//skyrooms/splitscreen queue several scenes per frame; once is enough.
+	lastframe = host_framecount;
+
+	// don't spawn dlights before their time when rewinding demos (matches R_PushDlights)
+	for (i = 0, l = cl_dlights; i < countof(cl_dlights); i++, l++)
+		if (l->spawn > cl.mtime[0] && cls.demoplayback)
+			l->die = 0.f;
+
+	if (!gl_flashblend.value)
+	{
+		for (i = 0, l = cl_dlights; i < countof(cl_dlights); i++, l++)
+		{
+			if (l->die < cl.time || !l->radius || R_DlightStyleScale(l) <= 0.0f)
+				continue;
+			active = true;
+			break;
+		}
+	}
+
+	if (!active && !rscenecache.haslitsurfs)
+		return;	//nothing to light, nothing to clear.
+
+	SDL_LockMutex(rscenecache.mutex);
+	if (!rscenecache.processing && !rscenecache.dlightjob.cache)
+	{
+		RSceneCache_CopyDlights (rscenecache.dlightjob.dlights, cl_dlights, countof(cl_dlights));
+		rscenecache.dlightjob.time = cl.time;
+		rscenecache.dlightjob.framecount = r_framecount;
+		rscenecache.dlightjob.cache = cache;
+		SDL_CondSignal(rscenecache.wt_cond);
+	}
+	SDL_UnlockMutex(rscenecache.mutex);
+}
+
 static int RSceneCache_Thread(void *ctx)
 {
 	unsigned int i, j, e;
@@ -6200,10 +6485,23 @@ static int RSceneCache_Thread(void *ctx)
 	SDL_CondSignal(rscenecache.rt_cond);	//wake the parent thread. its waiting for us.
 	while (!rscenecache.die)
 	{
-		if (!rscenecache.processing)	//might have been posted+signaled to us while we were busy on the last one.
+		if (!rscenecache.processing && !rscenecache.dlightjob.cache)	//might have been posted+signaled to us while we were busy on the last one.
 			SDL_CondWait(rscenecache.wt_cond, rscenecache.mutex);
 		cache = rscenecache.processing;
 		rscenecache.processing = NULL;	//accepted!
+		if (!cache && rscenecache.dlightjob.cache)
+		{	// woods #scenecachedlights -- lightweight job: patch dlight lightmaps in place, no rebuild.
+			struct rscenecache_s *jobcache = rscenecache.dlightjob.cache;
+			qboolean changed;
+			SDL_UnlockMutex(rscenecache.mutex);
+			changed = RSceneCache_RunDlightJob(jobcache);
+			SDL_LockMutex(rscenecache.mutex);
+			if (changed)
+				rscenecache.processed = true;	//get RSceneCache_Finish to upload the dirty regions.
+			rscenecache.dlightjob.cache = NULL;
+			SDL_CondSignal(rscenecache.rt_cond);
+			continue;
+		}
 		SDL_UnlockMutex(rscenecache.mutex);
 		if (cache)
 		{
@@ -6267,7 +6565,7 @@ static int RSceneCache_Thread(void *ctx)
 									*idx++ = surf->vbo_firstvert + e;
 								}
 
-								RSceneCache_RenderDynamicLightmaps(cache, surf, dlightframecount);
+								RSceneCache_RenderDynamicLightmaps(cache, surf, dlightframecount, true);
 							}
 						}
 				}
@@ -6323,11 +6621,15 @@ static int RSceneCache_Thread(void *ctx)
 						*idx++ = surf->vbo_firstvert + e;
 					}
 
-					RSceneCache_RenderDynamicLightmaps(cache, surf, dlightframecount);
+					RSceneCache_RenderDynamicLightmaps(cache, surf, dlightframecount, true);
 				}
 			}
 
 			cache->brushpolys = bpolys;
+
+			// woods #scenecachedlights -- keep tracking what this build lit so a
+			// later dlight job can clear it once the lights move or die.
+			RSceneCache_MergeLitSurfs(cache);
 
 			SDL_LockMutex(rscenecache.mutex);
 			rscenecache.processed = true;
@@ -6350,6 +6652,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 	unsigned int rowbytes = (cl.worldmodel->numleafs+7)>>3;
 	int e;
 	qboolean grass_blades_active;
+	qboolean queuedbuild = false;	// woods #scenecachedlights
 	static int settingconflict;
 
 	static int old_lightstylevalue[countof(d_lightstylevalue)];
@@ -6538,32 +6841,9 @@ static qboolean RSceneCache_Queue(byte *vis)
 				old_lightstylevalue[0] = INT_MIN;	//something that'll force a regen pretty soon...
 				cache = NULL;	//make sure its rebuilt (can still use the best while it computes).
 			}
-			else if (r_dynamic.value)
-			{
-				qboolean have_active_dlights = false;
-				dlight_t *l = cl_dlights;
-				size_t i;
-
-				for (i=0 ; i<MAX_DLIGHTS ; i++, l++)
-				{
-					if (l->spawn > cl.mtime[0] && cls.demoplayback) // woods (iw) #democontrols
-					{
-						l->die = 0.f;
-						continue;
-					}
-					
-					if (l->die < cl.time || !l->radius || R_DlightStyleScale(l) <= 0.0f)
-						continue;
-
-					have_active_dlights = true;
-					cache = NULL;
-					break;
-				}
-
-				if (!have_active_dlights && best &&
-					RSceneCache_HasActiveDlights(best->dlights, countof(best->dlights), best->time))
-					cache = NULL;
-			}
+			//woods #scenecachedlights -- dlights no longer invalidate the cache (which forced
+			//a full rebuild + EBO upload every frame while a quad/pent glow, rocket or muzzle
+			//flash was live); RSceneCache_QueueDlightUpdate below patches the lightmaps in place.
 		}
 	}
 
@@ -6572,6 +6852,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 		struct rscenecache_s *oldest = NULL;
 		unsigned int oldestage = 3, a;
 
+		queuedbuild = true;	// woods #scenecachedlights -- worker will own surf dlight state this frame
 		memcpy(old_lightstylevalue, d_lightstylevalue, sizeof(old_lightstylevalue));
 
 		SDL_LockMutex(rscenecache.mutex);
@@ -6730,6 +7011,11 @@ static qboolean RSceneCache_Queue(byte *vis)
 	rscenecache.drawing = cache;
 	rscenecache.doingskybox = false;
 
+	//woods #scenecachedlights -- with no rebuild queued or in flight, have the
+	//worker patch active dlights into the shared lightmaps instead of rebuilding.
+	if (cache && !queuedbuild && !building && cache->status != SCS_BUILDING)
+		RSceneCache_QueueDlightUpdate (cache);
+
 	return !!cache;
 }
 static void RSceneCache_Uncache(struct rscenecache_s *cache)
@@ -6744,6 +7030,16 @@ static void RSceneCache_Uncache(struct rscenecache_s *cache)
 	}
 	if (rscenecache.drawing == cache)
 		rscenecache.drawing = NULL;
+	// woods #scenecachedlights -- a dlight job may still be reading this cache
+	if (rscenecache.thread && rscenecache.dlightjob.cache == cache)
+	{
+		SDL_LockMutex(rscenecache.mutex);
+		while (rscenecache.dlightjob.cache == cache)
+			SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+		SDL_UnlockMutex(rscenecache.mutex);
+	}
+	if (cache->litsurfs)
+		free(cache->litsurfs);
 	for (i = 0; i < cache->numtextures*cache->lightmaps*2; i++)
 		if (cache->batches[i].idx)
 			free(cache->batches[i].idx);
@@ -6811,6 +7107,8 @@ void RSceneCache_Cleanup(qmodel_t *mod)
 		else
 			link = &cache->next;
 	}
+
+	RSceneCache_ResetDlightTracking(mod);	// woods #scenecachedlights -- the surf pointers die with the model
 }
 static void RSceneCache_Finish(struct rscenecache_s *cache)
 {
@@ -7260,6 +7558,7 @@ void RSceneCache_Shutdown(void)
 		rscenecache.wt_cond = NULL;
 		rscenecache.rt_cond = NULL;
 		rscenecache.mutex = NULL;
+		rscenecache.dlightjob.cache = NULL;	// woods #scenecachedlights -- worker may have died with a job still queued
 	}
 	rscenecache.drawing = NULL;
 	skipsubmodels = NULL;

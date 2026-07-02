@@ -430,11 +430,14 @@ struct lightmap_s
 	glpoly_t	*polys;
 	qboolean	modified;
 	glRect_t	rectchange;
-	// woods #lmbands -- 64 dirty bands across LMBLOCK_HEIGHT. The single merged
-	// rect forces a full-width upload spanning every dirty surface; with one tall
-	// atlas, two flickering surfaces at opposite ends meant re-uploading nearly the
-	// whole texture each frame. Bands keep uploads proportional to what changed.
-	unsigned long long	dirtybands;
+	// woods #lmrect -- exact dirty-texel rects, merged as the list fills. The old
+	// row-band tracking uploaded full-width 256-row bands of the 512x16384 atlas;
+	// scattered dlight/lightstyle surfaces merged into multi-megabyte uploads per
+	// frame on Apple's GL-on-Metal. Rects keep uploads proportional to the texels
+	// actually rebuilt.
+#define LM_DIRTYRECTS 8
+	glRect_t	dirtyrects[LM_DIRTYRECTS];
+	int			numdirtyrects;
 
 	// PBO use allows us to simply copy the lightmap data into a texture on-gpu, reducing stutters. It'll be writethrough though, so we need to keep things cache-friendly.
 	//the data ptr points to a persistently mapped buffer so we can paint it from other threads while the main thread is doing other work so other than creation+upload we can just treat it like regular memory with slightly different cache properties.
@@ -444,10 +447,10 @@ struct lightmap_s
 extern struct lightmap_s *lightmaps;
 extern int lightmap_count;	//allocated lightmaps
 
-// woods #lmbands -- mark the dirty bands a surface touches; MUST be called by every
+// woods #lmrect -- mark the dirty rect a surface touches; MUST be called by every
 // path that sets lm->modified+rectchange (r_brush.c R_RenderDynamicLightmaps,
 // r_world.c bmodel-drawcache + scenecache), or R_UploadLightmap drops the upload.
-void R_LightmapMarkDirtyBands (struct lightmap_s *lm, int light_t, int tmax);
+void R_LightmapMarkDirtyRect (struct lightmap_s *lm, int light_s, int light_t, int smax, int tmax);
 float R_DlightStyleScale (const dlight_t *light);
 
 extern qboolean r_drawflat_cheatsafe, r_fullbright_cheatsafe, r_lightmap_cheatsafe, r_drawworld_cheatsafe; //johnfitz
