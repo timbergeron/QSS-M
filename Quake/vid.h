@@ -90,6 +90,7 @@ void VID_SyncCvars (void);
 void VID_Toggle (void);
 
 void VID_OnResize (int width, int height); // github.com/andrei-drexler/ironwail (Enable resizing)
+void VID_Gamma_Reapply (void);
 
 void *VID_GetWindow (void);
 qboolean VID_HasMouseOrInputFocus (void);

@@ -6032,6 +6032,7 @@ SCR_EndLoadingPlaque
 void SCR_EndLoadingPlaque (void)
 {
 	scr_disabled_for_loading = false;
+	VID_Gamma_Reapply ();
 	Con_ClearNotify ();
 }
 

@@ -376,6 +376,14 @@ static void VID_Gamma_f (cvar_t *var)
 	VID_Gamma_SetGamma ();
 }
 
+void VID_Gamma_Reapply (void)
+{
+	// macOS can restore the window ramp during focus/display transitions.
+	if (!vid_initialized)
+		return;
+	VID_Gamma_f (NULL);
+}
+
 /*
 ================
 VID_Gamma_Apply -- probe and apply gamma correction

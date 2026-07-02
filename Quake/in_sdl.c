@@ -5008,6 +5008,7 @@ void IN_SendKeyEvents (void)
 #endif
 				//S_UnblockSound();
 				windowhasfocus=true;
+				VID_Gamma_Reapply();
 				BGM_Resume(); // woods #usermute  - music
 				if (!strcmp(mute, "y")) // woods #usermute
 					Sound_Toggle_Mute_On_f(); // woods #mute -- adapted from Fitzquake Mark V
@@ -5108,6 +5109,15 @@ void IN_SendKeyEvents (void)
 			else if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
 			{
 				VID_OnResize (event.window.data1, event.window.data2); // github.com/andrei-drexler/ironwail (Enable resizing)
+			}
+			else if (event.window.event == SDL_WINDOWEVENT_RESTORED ||
+				event.window.event == SDL_WINDOWEVENT_SHOWN ||
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+				event.window.event == SDL_WINDOWEVENT_DISPLAY_CHANGED || // ramp was applied to the old display
+#endif
+				event.window.event == SDL_WINDOWEVENT_EXPOSED)
+			{
+				VID_Gamma_Reapply();
 			}
 			else if (event.window.event == SDL_WINDOWEVENT_ENTER)
 			{
