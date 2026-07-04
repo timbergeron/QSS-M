@@ -5854,6 +5854,35 @@ static qboolean Host_MassacreBoss(edict_t *ent, int damage_func, qboolean gib)
 	return false;
 }
 
+static qboolean Host_MassacreIsMonster(const edict_t *ent)
+{
+	const char *classname;
+
+	if (!ent || ent->free || !((int)ent->v.flags & FL_MONSTER))
+		return false;
+	if (ent->v.health <= 0.0f || ent->v.takedamage <= 0.0f)
+		return false;
+
+	classname = PR_GetString(ent->v.classname);
+	if (!classname || !classname[0])
+		return true;
+
+	if (!strncmp(classname, "monster_", 8))
+		return true;
+
+	/* Rogue r2m8's time machine is a damageable item with FL_MONSTER set.
+	   Killing it through massacre fires the finale camera script instead of
+	   just clearing the real monster count. */
+	if (!strncmp(classname, "item_", 5) ||
+		!strncmp(classname, "func_", 5) ||
+		!strncmp(classname, "trigger_", 8) ||
+		!strncmp(classname, "info_", 5) ||
+		!strncmp(classname, "path_", 5))
+		return false;
+
+	return true;
+}
+
 static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833c
 {
 	const qboolean gib = (Cmd_Argc() > 1);   /* any 2nd arg toggles gibs */
@@ -5883,9 +5912,7 @@ static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833
 			count++;
 			continue;
 		}
-		if (ent->free || !((int)ent->v.flags & FL_MONSTER))
-			continue;
-		if (ent->v.health <= 0.0f || ent->v.takedamage <= 0.0f)
+		if (!Host_MassacreIsMonster(ent))
 			continue;
 
 		Host_DoDamage(func, ent, gib);
