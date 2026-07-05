@@ -5767,6 +5767,11 @@ static qboolean Host_EdictClassnameIs(const edict_t *ent, const char *classname)
 		&& !strcmp(PR_GetString(ent->v.classname), classname);
 }
 
+static qboolean Host_EdictStringIs(string_t value, const char *string)
+{
+	return value && string && !strcmp(PR_GetString(value), string);
+}
+
 static int Host_FindEntityGlobalOffset(const char *name)
 {
 	ddef_t *def = ED_FindGlobal(name);
@@ -5783,14 +5788,18 @@ static void Host_SetEntityGlobal(int ofs, edict_t *ent)
 		G_INT(ofs) = ent ? EDICT_TO_PROG(ent) : 0;
 }
 
-static void Host_DoDamage(int func, edict_t* target, qboolean gib)
+static qboolean Host_DoDamage(int func, edict_t* target, qboolean gib)
 {
-	const float health = target->v.health;
+	float health;
 	const int old_self = pr_global_struct->self;
 	const int old_other = pr_global_struct->other;
 
+	if (!target || target->free)
+		return false;
+
+	health = target->v.health;
 	if (health <= 0.0f || target->v.takedamage <= 0.0f) // Skip corpses or invulnerable entities
-		return;
+		return false;
 
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->self = EDICT_TO_PROG(sv_player);
@@ -5807,18 +5816,18 @@ static void Host_DoDamage(int func, edict_t* target, qboolean gib)
 
 	pr_global_struct->self = old_self;
 	pr_global_struct->other = old_other;
+
+	return true;
 }
 
-static qboolean Host_RunEntityFunction(const char *funcname, edict_t *self, edict_t *other)
+static qboolean Host_RunEdictFunction(func_t func, edict_t *self, edict_t *other)
 {
-	dfunction_t *func;
 	const int old_self = pr_global_struct->self;
 	const int old_other = pr_global_struct->other;
 	const int activator_ofs = Host_FindEntityGlobalOffset("activator");
 	const int old_activator = (activator_ofs >= 0) ? G_INT(activator_ofs) : 0;
 
-	func = ED_FindFunction(funcname);
-	if (!func)
+	if (!func || !self || self->free)
 		return false;
 
 	pr_global_struct->time = qcvm->time;
@@ -5826,7 +5835,7 @@ static qboolean Host_RunEntityFunction(const char *funcname, edict_t *self, edic
 	pr_global_struct->other = other ? EDICT_TO_PROG(other) : 0;
 	Host_SetEntityGlobal(activator_ofs, other);
 
-	PR_ExecuteProgram((func_t)(func - qcvm->functions));
+	PR_ExecuteProgram(func);
 
 	pr_global_struct->self = old_self;
 	pr_global_struct->other = old_other;
@@ -5834,6 +5843,17 @@ static qboolean Host_RunEntityFunction(const char *funcname, edict_t *self, edic
 		G_INT(activator_ofs) = old_activator;
 
 	return true;
+}
+
+static qboolean Host_RunEntityFunction(const char *funcname, edict_t *self, edict_t *other)
+{
+	dfunction_t *func;
+
+	func = ED_FindFunction(funcname);
+	if (!func)
+		return false;
+
+	return Host_RunEdictFunction((func_t)(func - qcvm->functions), self, other);
 }
 
 static qboolean Host_MassacreBoss(edict_t *ent, int damage_func, qboolean gib)
@@ -5847,27 +5867,34 @@ static qboolean Host_MassacreBoss(edict_t *ent, int damage_func, qboolean gib)
 			return false;
 
 		ent->v.flags = (int)ent->v.flags | FL_MONSTER;
-		Host_DoDamage(damage_func, ent, gib);
-		return true;
+		return Host_DoDamage(damage_func, ent, gib);
 	}
 
 	return false;
+}
+
+static qboolean Host_MassacreClassnameIsMonster(const char *classname)
+{
+	return classname && !strncmp(classname, "monster_", 8);
 }
 
 static qboolean Host_MassacreIsMonster(const edict_t *ent)
 {
 	const char *classname;
 
-	if (!ent || ent->free || !((int)ent->v.flags & FL_MONSTER))
-		return false;
-	if (ent->v.health <= 0.0f || ent->v.takedamage <= 0.0f)
+	if (!ent || ent->free || ent->v.health <= 0.0f)
 		return false;
 
 	classname = PR_GetString(ent->v.classname);
-	if (!classname || !classname[0])
+	if (Host_MassacreClassnameIsMonster(classname))
 		return true;
 
-	if (!strncmp(classname, "monster_", 8))
+	if (!((int)ent->v.flags & FL_MONSTER))
+		return false;
+	if (ent->v.takedamage <= 0.0f)
+		return false;
+
+	if (!classname || !classname[0])
 		return true;
 
 	/* Rogue r2m8's time machine is a damageable item with FL_MONSTER set.
@@ -5883,11 +5910,82 @@ static qboolean Host_MassacreIsMonster(const edict_t *ent)
 	return true;
 }
 
+static qboolean Host_MassacrePrepareMonster(edict_t *ent)
+{
+	const char *classname;
+
+	if (!ent || ent->free || ent->v.health <= 0.0f)
+		return false;
+
+	if (((int)ent->v.flags & FL_MONSTER) && ent->v.takedamage > 0.0f)
+		return true;
+
+	classname = PR_GetString(ent->v.classname);
+	/* Targetname monsters can sit dormant until their use function runs. */
+	if (Host_MassacreClassnameIsMonster(classname) && ent->v.use)
+		Host_RunEdictFunction(ent->v.use, ent, sv_player);
+
+	return ent && !ent->free && ent->v.health > 0.0f && ent->v.takedamage > 0.0f;
+}
+
+static void Host_MassacreUseCounterToZero(edict_t *ent, int count_ofs)
+{
+	eval_t *count;
+	float old_count;
+	int guard = 64;
+
+	while (ent && !ent->free && ent->v.use && guard-- > 0)
+	{
+		count = GetEdictFieldValue(ent, count_ofs);
+		if (!count || count->_float <= 0.0f)
+			break;
+
+		old_count = count->_float;
+		if (!Host_RunEdictFunction(ent->v.use, ent, sv_player))
+			break;
+		count = ent->free ? NULL : GetEdictFieldValue(ent, count_ofs);
+		if (ent->free || !count || count->_float >= old_count)
+			break;
+	}
+}
+
+static void Host_MassacreFinishMGEndBossCounters(void)
+{
+	size_t i;
+	int count_ofs;
+
+	if (q_strcasecmp(sv.name, "mgend"))
+		return;
+
+	count_ofs = ED_FindFieldOffset("count");
+	if (count_ofs < 0)
+		return;
+
+	/* mgend's Chthon fight advances doors through staged boss_counter uses. */
+	for (i = 1; i < qcvm->num_edicts; ++i)
+	{
+		edict_t *ent = EDICT_NUM((int)i);
+		eval_t *count;
+
+		if (ent->free)
+			continue;
+		if (!Host_EdictClassnameIs(ent, "trigger_counter"))
+			continue;
+		if (!Host_EdictStringIs(ent->v.targetname, "boss_counter"))
+			continue;
+		count = GetEdictFieldValue(ent, count_ofs);
+		if (!count || count->_float <= 0.0f)
+			continue;
+
+		Host_MassacreUseCounterToZero(ent, count_ofs);
+	}
+}
+
 static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833c
 {
 	const qboolean gib = (Cmd_Argc() > 1);   /* any 2nd arg toggles gibs */
 	int            func;
-	size_t         i, total;
+	size_t         i;
 	int            count = 0;
 
 	/* Forward if typed on the host console of a listen server. */
@@ -5901,8 +5999,7 @@ static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833
 	if ((func = Host_GetDamageFunction()) == -1)
 		return;
 
-	total = qcvm->num_edicts;
-	for (i = 1; i < total; ++i)                /* edict 0 = world */
+	for (i = 1; i < qcvm->num_edicts; ++i)     /* edict 0 = world */
 	{
 		edict_t* ent = EDICT_NUM((int)i);
 		if (ent->free)
@@ -5914,10 +6011,13 @@ static void Host_Massacre_f (void) // alexey-lysiuk/quakespasm-exp/commit/af0833
 		}
 		if (!Host_MassacreIsMonster(ent))
 			continue;
+		if (!Host_MassacrePrepareMonster(ent))
+			continue;
 
-		Host_DoDamage(func, ent, gib);
-		count++;
+		if (Host_DoDamage(func, ent, gib))
+			count++;
 	}
+	Host_MassacreFinishMGEndBossCounters();
 
 	SV_ClientPrintf("Massacred all %d monster%s (%s)\n",
 		count, count == 1 ? "" : "s", gib ? "gibbed" : "no gibs");
