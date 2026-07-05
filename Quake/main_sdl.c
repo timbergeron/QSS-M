@@ -39,7 +39,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 
 extern cvar_t sv_idlesleep; // woods #idlespeep
-extern cvar_t cl_pong; // woods #pong
 
 void Host_Reconnect_Con_f (void);
 
@@ -203,7 +202,7 @@ int main(int argc, char *argv[])
 	while (1)
 	{
 		/* If we have no input focus at all, sleep a bit */
-		if ((!listening && !VID_HasMouseOrInputFocus()) || (cl.paused && !cl_pong.value)) // woods #listens #pong
+		if ((!listening && !VID_HasMouseOrInputFocus()) || (cl.paused && !Pong_Enabled())) // woods #listens #pong
 		{
 			if (sys_throttle.value >= 0)
 				SDL_Delay(16);

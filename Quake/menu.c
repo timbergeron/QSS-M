@@ -19720,7 +19720,7 @@ Misc Menu
 
 extern cvar_t pr_checkextension, r_replacemodels, gl_load24bit, cl_nopext, r_lerpmodels, r_lerpmove,
 sys_throttle, r_particles, sv_nqplayerphysics, cl_nopred, cl_autodemo, cl_smartspawn, cl_bobbing, cl_onload,
-cl_pong, scr_hints, cl_portpingprobe_enable, sv_autoload, sv_autosave, sv_autosave_interval;
+scr_hints, cl_portpingprobe_enable, sv_autoload, sv_autosave, sv_autosave_interval;
 
 static enum extras_e
 {
@@ -19943,8 +19943,8 @@ static void M_Extras_AdjustSliders (int dir)
 		M_Menu_Options_f();           // Return to Options menu
 		break;
 	case EXTRAS_PONG: // Added Quake Pong toggle
-		Cvar_SetValueQuick(&cl_pong, !cl_pong.value);
-		if (cl_pong.value)
+		Pong_ToggleEnabled();
+		if (Pong_Enabled())
 			M_LivePreview_WantAndKick (M_Extras_LivePreviewId (), M_Extras_RowY (extras_cursor));
 		else
 			M_LivePreview_Reset();
@@ -20080,7 +20080,7 @@ void M_Extras_Draw(void)
 
 		case EXTRAS_PONG: // Added Quake Pong display
 			text = "        Quake Pong";
-			value = cl_pong.value ? "on" : "off";
+			value = Pong_Enabled() ? "on" : "off";
 			break;
 
 		case EXTRAS_HINTS: // Added Paused Hints display

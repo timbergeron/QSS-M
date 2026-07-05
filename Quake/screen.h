@@ -46,7 +46,14 @@ void SCR_QuitFade (void);
 int SCR_ModalMessage (const char *text, float timeout); //johnfitz -- added timeout
 
 void Pong_Init (void); // woods #pong
+void Pong_Update (void);
+void Pong_Draw (void);
 void Pong_MouseMove (int x, int y); // woods #pong
+qboolean Pong_Enabled (void);
+void Pong_ToggleEnabled (void);
+void Pong_ToggleFreeze (void);
+
+extern cvar_t cl_pong;
 
 extern	float		scr_con_current;
 extern	float		scr_conlines;		// lines of console to display

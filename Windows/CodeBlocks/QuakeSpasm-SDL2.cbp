@@ -145,6 +145,9 @@
 		<Unit filename="..\..\Quake\gl_screen.c">
 			<Option compilerVar="CC" />
 		</Unit>
+		<Unit filename="..\..\Quake\pong.c">
+			<Option compilerVar="CC" />
+		</Unit>
 		<Unit filename="..\..\Quake\gl_sky.c">
 			<Option compilerVar="CC" />
 		</Unit>

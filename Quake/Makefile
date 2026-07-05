@@ -274,6 +274,7 @@ GLOBJS = \
 	r_part_fte.o \
 	r_world.o \
 	gl_screen.o \
+	pong.o \
 	gl_sky.o \
 	gl_warp.o \
 	$(SYSOBJ_GL_VID) \

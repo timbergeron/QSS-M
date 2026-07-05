@@ -87,6 +87,9 @@
     <ClCompile Include="..\..\Quake\gl_screen.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Quake\pong.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\Quake\gl_sky.c">
       <Filter>Source Files</Filter>
     </ClCompile>

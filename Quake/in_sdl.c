@@ -300,8 +300,6 @@ char	normalname2[32]; // woods #smartafk
 extern	char mute[2]; // woods for mute to memory #usermute
 
 qboolean windowhasfocus = true;	//just in case sdl fails to tell us... // woods #pong -- remove static
-extern cvar_t cl_pong; // woods #pong
-extern void Pong_ToggleFreeze(void); // woods #pong
 static qboolean	textmode;
 static keydevice_t lastactivetype = KD_NONE;
 extern qboolean	bind_grab;	//from the menu code, so that we regrab the mouse in order to pass inputs through
@@ -1115,7 +1113,8 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 	qboolean freemouse;		//the OS should have a free cursor too...
 	qboolean needevents;	//whether we want to receive events still
 
-	qboolean pong_active = cl_pong.value && (cl.paused || cl.match_pause_time > 0) && key_dest == key_game; // woods #pong active?
+	qboolean pong_active = Pong_Enabled() && !cls.demoplayback &&
+		(cl.paused || cl.match_pause_time > 0) && key_dest == key_game; // woods #pong active?
 	qboolean gamecodecursor = (key_dest == key_game && cl.qcvm.cursorforced) || (key_dest == key_menu && cls.menu_qcvm.cursorforced);
 	qboolean demoscrub_eligible = IN_DemoScrubEligible();
 	qboolean demoscrub_cursor;
@@ -2712,7 +2711,8 @@ void IN_MouseMove(usercmd_t *cmd)
 {
 	float	dmx, dmy, raw_dx, raw_dy;
 	float		sens; // woods #zoom (ironwail)
-	qboolean pong_active = cl_pong.value && (cl.paused || cl.match_pause_time); // woods #pong
+	qboolean pong_active = Pong_Enabled() && !cls.demoplayback &&
+		(cl.paused || cl.match_pause_time); // woods #pong
 
 #ifdef __APPLE__
 	// Add HID raw mouse movement if available
@@ -5241,7 +5241,8 @@ void IN_SendKeyEvents (void)
 
 				if (event.button.state == SDL_PRESSED && // woods #pong
 					event.button.button == SDL_BUTTON_LEFT &&
-					cl_pong.value && (cl.paused || cl.match_pause_time) &&
+					Pong_Enabled() && !cls.demoplayback &&
+					(cl.paused || cl.match_pause_time) &&
 					key_dest == key_game)
 				 {
 				Pong_ToggleFreeze();

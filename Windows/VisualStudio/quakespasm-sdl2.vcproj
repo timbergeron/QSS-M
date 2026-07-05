@@ -424,6 +424,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\Quake\pong.c"
+				>
+			</File>
+			<File
 				RelativePath="..\..\Quake\gl_sky.c"
 				>
 			</File>
