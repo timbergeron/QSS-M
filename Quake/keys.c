@@ -3035,6 +3035,12 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 #endif
 		return;
 
+	if (down && !wasdown && key_dest == key_game && (key == 'c' || key == 'C') && keydown[K_CTRL])
+	{
+		if (TexturePointer_Copy(keydown[K_SHIFT]))
+			return;
+	}
+
 // handle escape specialy, so the user can never unbind it
 	if (key == K_ESCAPE)
 	{

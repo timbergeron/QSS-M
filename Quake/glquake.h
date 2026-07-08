@@ -582,6 +582,7 @@ extern vec4_t skyroom_orientation;
 void TexMgr_RecalcWarpImageSize (void);
 
 enum {FILLED_POLYGON, OUTLINED_POLYGON}; // woods #texturepointer
+qboolean TexturePointer_Copy (qboolean copy_image);
 
 void R_ClearTextureChains (qmodel_t *mod, texchain_t chain);
 void R_ChainSurface (msurface_t *surf, texchain_t chain);

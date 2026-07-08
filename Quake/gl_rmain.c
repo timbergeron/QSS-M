@@ -2065,6 +2065,133 @@ void TexturePointer_Init (void)
 	Cmd_AddCommand("tool_texturepointer", Texture_Pointer_f);
 }
 
+static qboolean TexturePointer_Active (void)
+{
+	return texturepointer_on && cls.signon == SIGNONS && cl.worldmodel && texturepointer.surf;
+}
+
+static void TexturePointer_CopySound (void)
+{
+	const char *sound_file = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
+
+	S_LocalSound(sound_file);
+}
+
+static void TexturePointer_CopyName (char *out, size_t outsize)
+{
+	const char *name = texturepointer.short_name;
+
+	if (!name || !name[0])
+		name = texturepointer.explicit_name;
+	if (!name || !name[0])
+		name = texturepointer.texturename;
+
+	name = COM_SkipPath(COM_SkipColon(name));
+	COM_StripExtension(name, out, outsize);
+	if (!out[0])
+		q_strlcpy(out, texturepointer.texturename, outsize);
+}
+
+#if defined(_WIN32) || defined(__APPLE__)
+static void TexturePointer_FlipImage (byte *buffer, int width, int height)
+{
+	int		rowbytes = width * 4;
+	byte	*temp;
+	int		i;
+
+	temp = (byte *) malloc(rowbytes);
+	if (!temp)
+		return;
+
+	for (i = 0; i < height / 2; i++)
+	{
+		byte *top = buffer + i * rowbytes;
+		byte *bottom = buffer + (height - 1 - i) * rowbytes;
+
+		memcpy(temp, top, rowbytes);
+		memcpy(top, bottom, rowbytes);
+		memcpy(bottom, temp, rowbytes);
+	}
+
+	free(temp);
+}
+
+static qboolean TexturePointer_CopyImage (const char *copyname)
+{
+	gltexture_t	*glt = texturepointer.glt;
+	byte		*buffer;
+	size_t		buffersize;
+
+	if (!glt || !glt->width || !glt->height)
+	{
+		Con_Printf("no texture image to copy\n");
+		return true;
+	}
+
+	if (glt->width > (unsigned int)INT_MAX || glt->height > (unsigned int)INT_MAX ||
+		(size_t)glt->width > (SIZE_MAX / (size_t)glt->height) / 4)
+	{
+		Con_Printf("texture image is too large to copy\n");
+		return true;
+	}
+
+	buffersize = (size_t)glt->width * (size_t)glt->height * 4;
+	if (buffersize > (size_t)INT_MAX)
+	{
+		Con_Printf("texture image is too large to copy\n");
+		return true;
+	}
+
+	buffer = (byte *) malloc(buffersize);
+	if (!buffer)
+	{
+		Con_Printf("texture image copy failed: out of memory\n");
+		return true;
+	}
+
+	GL_Bind(glt);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, buffer);
+	TexturePointer_FlipImage(buffer, (int)glt->width, (int)glt->height);
+	Sys_Image_BGRA_To_Clipboard(buffer, (int)glt->width, (int)glt->height, (int)buffersize);
+	free(buffer);
+
+	TexturePointer_CopySound();
+	Con_Printf("copied texture image: ^m%s^m (%ux%u)\n", copyname, glt->width, glt->height);
+	return true;
+}
+#endif
+
+qboolean TexturePointer_Copy (qboolean copy_image)
+{
+	char copyname[MAX_QPATH];
+
+	if (!TexturePointer_Active())
+		return false;
+
+	TexturePointer_CopyName(copyname, sizeof(copyname));
+
+	if (copy_image)
+	{
+#if defined(_WIN32) || defined(__APPLE__)
+		return TexturePointer_CopyImage(copyname);
+#else
+		Con_Printf("texture image clipboard is not available in this build\n");
+		return true;
+#endif
+	}
+
+	if (SDL_SetClipboardText(copyname) < 0)
+	{
+		Con_Printf("Clipboard copy failed: %s\n", SDL_GetError());
+		return true;
+	}
+
+	TexturePointer_CopySound();
+	Con_Printf("copied texture name: ^m%s^m\n", copyname);
+	return true;
+}
+
 void TexturePointer_CheckChange (texturepointer_t* test)
 {	
 	// This next IF checks if there is a surface and if the name is different than before ...
