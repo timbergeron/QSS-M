@@ -376,12 +376,36 @@ static void VID_Gamma_f (cvar_t *var)
 	VID_Gamma_SetGamma ();
 }
 
+static double vid_gamma_burst_deadline;	// reapply repeatedly until this time
+static double vid_gamma_burst_next;
+
 void VID_Gamma_Reapply (void)
 {
 	// macOS can restore the window ramp during focus/display transitions.
 	if (!vid_initialized)
 		return;
 	VID_Gamma_f (NULL);
+	// macOS restores the transfer table asynchronously (the unminimize/focus
+	// animation finishes after the SDL event), which can clobber the ramp we
+	// just set -- keep re-asserting it briefly via VID_Gamma_Frame.
+	vid_gamma_burst_deadline = realtime + 3.0;
+	vid_gamma_burst_next = realtime + 0.25;
+}
+
+void VID_Gamma_Frame (void)
+{
+	if (!vid_initialized || vid_gamma_burst_deadline <= 0.0)
+		return;
+	if (realtime >= vid_gamma_burst_deadline)
+	{
+		vid_gamma_burst_deadline = 0.0;
+		return;
+	}
+	if (realtime >= vid_gamma_burst_next)
+	{
+		vid_gamma_burst_next = realtime + 0.25;
+		VID_Gamma_f (NULL);
+	}
 }
 
 void VID_Gamma_ApplyToBuffer (byte *buffer, size_t pixel_count, int bytes_per_pixel)

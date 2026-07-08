@@ -7335,6 +7335,7 @@ void SCR_UpdateScreen (void)
 	if (!scr_initialized || !con_initialized)
 		return;				// not initialized yet
 
+	VID_Gamma_Frame (); // macOS clobbers the hw ramp asynchronously after focus/restore events
 
 	GL_BeginRendering (&glx, &gly, &glwidth, &glheight);
 

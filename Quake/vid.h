@@ -91,6 +91,7 @@ void VID_Toggle (void);
 
 void VID_OnResize (int width, int height); // github.com/andrei-drexler/ironwail (Enable resizing)
 void VID_Gamma_Reapply (void);
+void VID_Gamma_Frame (void);
 void VID_Gamma_ApplyToBuffer (byte *buffer, size_t pixel_count, int bytes_per_pixel);
 
 void *VID_GetWindow (void);
