@@ -384,6 +384,31 @@ void VID_Gamma_Reapply (void)
 	VID_Gamma_f (NULL);
 }
 
+void VID_Gamma_ApplyToBuffer (byte *buffer, size_t pixel_count, int bytes_per_pixel)
+{
+#if USE_GAMMA_RAMPS
+	size_t i;
+
+	if (!buffer || pixel_count == 0 || bytes_per_pixel < 3)
+		return;
+	if (!draw_context || !gammaworks || gl_glsl_gamma_able)
+		return;
+	if (vid_gamma.value == 1.0f && vid_contrast.value == 1.0f)
+		return;
+
+	for (i = 0; i < pixel_count; i++, buffer += bytes_per_pixel)
+	{
+		buffer[0] = (byte)(vid_gamma_red[buffer[0]] >> 8);
+		buffer[1] = (byte)(vid_gamma_green[buffer[1]] >> 8);
+		buffer[2] = (byte)(vid_gamma_blue[buffer[2]] >> 8);
+	}
+#else
+	(void)buffer;
+	(void)pixel_count;
+	(void)bytes_per_pixel;
+#endif
+}
+
 /*
 ================
 VID_Gamma_Apply -- probe and apply gamma correction

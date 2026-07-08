@@ -5808,6 +5808,7 @@ void SCR_ScreenShot_Clipboard_f(void)
 
 	//get data
 	glReadPixels(glx, gly, glwidth, glheight, GL_BGRA_EXT, GL_UNSIGNED_BYTE, buffer);
+	VID_Gamma_ApplyToBuffer(buffer, (size_t)glwidth * (size_t)glheight, 4);
 
 	// We are upside down flip it
 	FlipBuffer(buffer, glwidth, glheight, 4 /* bytes per pixel */);
@@ -5853,6 +5854,7 @@ void SCR_ScreenShot_Clipboard_f(void) {
 
 	// Get data from OpenGL buffer
 	glReadPixels(glx, gly, width, height, GL_BGRA, GL_UNSIGNED_BYTE, buffer);
+	VID_Gamma_ApplyToBuffer(buffer, (size_t)width * (size_t)height, 4);
 
 	// Flip the image vertically
 	FlipBuffer(buffer, width, height, 4 /* bytes per pixel */);
@@ -5945,6 +5947,7 @@ void SCR_ScreenShot_f (void)
 
 	glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
 	glReadPixels (glx, gly, glwidth, glheight, GL_RGB, GL_UNSIGNED_BYTE, buffer);
+	VID_Gamma_ApplyToBuffer(buffer, (size_t)glwidth * (size_t)glheight, 3);
 
 // now write the file
 	if (!q_strncasecmp (ext, "png", sizeof(ext)))
