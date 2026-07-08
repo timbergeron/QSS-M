@@ -753,6 +753,53 @@ static neterr_t ICE_SendPacket(struct icestate_s *con, const void *data, size_t 
 	return err;
 }
 
+#ifdef HAVE_DTLS
+//temp certificate generation does synchronous RSA keygen (can take hundreds of ms),
+//and ICE_Create runs on the server frame (browser offers/probes/retries), where that
+//delay can stall live traffic. generate one throwaway identity per process and copy
+//it into each state instead.
+static struct dtlslocalcred_s ice_tempcred;
+static qboolean (*ice_tempcred_gen)(const char *subject, struct dtlslocalcred_s *cred);
+qboolean ICE_CacheTempCredential(const dtlsfuncs_t *funcs)
+{
+	if (!funcs || !funcs->GenTempCertificate)
+		return false;
+	if (ice_tempcred_gen != funcs->GenTempCertificate)
+	{	//first use (or a different backend): generate and keep it.
+		unsigned int start = Sys_Milliseconds();
+		free(ice_tempcred.cert);
+		free(ice_tempcred.key);
+		memset(&ice_tempcred, 0, sizeof(ice_tempcred));
+		ice_tempcred_gen = NULL;
+		if (!funcs->GenTempCertificate(NULL, &ice_tempcred))
+			return false;
+		ice_tempcred_gen = funcs->GenTempCertificate;
+		//once per process; unconditional so pre-developer-1 server boots still show the keygen cost
+		Con_Printf("Generated temp DTLS identity in %ums\n", Sys_Milliseconds()-start);
+	}
+	return ice_tempcred.certsize && ice_tempcred.keysize;
+}
+static qboolean ICE_CopyTempCredential(const dtlsfuncs_t *funcs, struct dtlslocalcred_s *out)
+{
+	void *cert, *key;
+	if (!ICE_CacheTempCredential(funcs))
+		return false;
+	cert = malloc(ice_tempcred.certsize);
+	key = malloc(ice_tempcred.keysize);
+	if (!cert || !key)
+	{
+		free(cert);
+		free(key);
+		return false;
+	}
+	out->cert = memcpy(cert, ice_tempcred.cert, ice_tempcred.certsize);
+	out->certsize = ice_tempcred.certsize;
+	out->key = memcpy(key, ice_tempcred.key, ice_tempcred.keysize);
+	out->keysize = ice_tempcred.keysize;
+	return true;
+}
+#endif
+
 static struct icestate_s *ICE_Create(struct icemodule_s *module, const char *conname, const char *peername, unsigned int modeflags, enum iceproto_e proto)
 {
 	struct icestate_s *con;
@@ -806,7 +853,7 @@ static struct icestate_s *ICE_Create(struct icemodule_s *module, const char *con
 		}
 		if (con->dtlsfuncs && con->dtlsfuncs->GenTempCertificate && !con->cred.local.certsize)
 		{
-			if (!con->dtlsfuncs->GenTempCertificate(NULL, &con->cred.local))
+			if (!ICE_CopyTempCredential(con->dtlsfuncs, &con->cred.local))
 			{
 				con->dtlsfuncs = NULL;
 				modeflags &= ~ICEF_ALLOW_WEBRTC;

@@ -3131,6 +3131,11 @@ void NQICE_Listen (qboolean state)	//used by server (enables websocket connectio
 	if (qice_listening)
 	{
 		QICE_CleanupBrokerLookups();
+#ifdef HAVE_DTLS
+		//pre-generate the shared DTLS identity now (slow RSA keygen) rather than
+		//on the server frame when the first browser offer arrives.
+		ICE_CacheTempCredential(ICE_DTLS_InitServer());
+#endif
 		if (!qice_hostcon)
 		{
 			qice_hostcon = QICE_Setup(*sv_port_rtc.string?sv_port_rtc.string:NULL, true);

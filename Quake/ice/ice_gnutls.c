@@ -589,6 +589,11 @@ static int SSL_DoHandshake(gnutlsstream_t *file)
 			gnutls_alert_description_t desc = qgnutls_alert_get(file->session);
 			Con_DPrintf(CON_ERROR"GNU%sTLS: %s: %s(%i)\n", file->datagram?"D":"", file->certname, qgnutls_alert_get_name(desc), desc);
 		}
+		else if (err == GNUTLS_E_PREMATURE_TERMINATION || err == GNUTLS_E_SESSION_EOF)
+		{	//routine on public servers: health checks and port scanners open a TCP
+			//connection to the wss listener and hang up mid-handshake. developer 2+ only.
+			Con_DPrintf2(CON_ERROR"GNU%sTLS: %s: %s(%i)\n", file->datagram?"D":"", file->certname, qgnutls_strerror(err), err);
+		}
 		else
 		{
 			//we didn't like the peer.

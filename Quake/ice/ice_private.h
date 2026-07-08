@@ -458,6 +458,7 @@ typedef struct dtlsfuncs_s
 } dtlsfuncs_t;
 const dtlsfuncs_t *ICE_DTLS_InitServer(void);
 const dtlsfuncs_t *ICE_DTLS_InitClient(void);
+qboolean ICE_CacheTempCredential(const dtlsfuncs_t *funcs);	//pre-generates the shared temp DTLS identity (slow RSA keygen) so ice states can copy it cheaply
 #endif
 #ifdef HAVE_TLS
 icestream_t *ICE_OpenTLS(const char *hostname, icestream_t *source, qboolean isserver);

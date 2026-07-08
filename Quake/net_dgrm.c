@@ -1018,8 +1018,11 @@ void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 					{
 						s->lastMessageTime = net_time;
 						callback(s);	//the server needs to parse that packet.
-						break;
 					}
+					//the address matched an active client either way — acks, stale
+					//datagrams and duplicate reliables are already fully handled by
+					//Datagram_ProcessPacket and must not leak into the ICE stack below.
+					break;
 				}
 			}
 			if (!s)
