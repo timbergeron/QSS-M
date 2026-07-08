@@ -7187,10 +7187,31 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 
 	if (rscenecache.processed)
 	{	//make sure lightmaps are updated when we can.
-		rscenecache.processed = false;
-		lightmaps_skipupdates = false;
-		R_UploadLightmaps();
-		lightmaps_skipupdates = true;
+		// woods #scenecachedlights -- the worker writes lightmap staging bytes
+		// and dirty rects (dlight jobs and builds) with no lock against
+		// R_UploadLightmap's read-and-zero of the same rect lists, and a dlight
+		// job queued earlier this frame is often still running here. If the
+		// upload zeroes rects the job marked, those texels never reach the GPU;
+		// when that job was the clearing rebuild after a light died, the glow
+		// stays baked into the texture permanently (the staging copy is already
+		// clean, so nothing ever re-dirties it). Only upload while the worker is
+		// idle - jobs don't stack, so a deferred upload lands next frame.
+		qboolean idle;
+		struct rscenecache_s *c;
+		SDL_LockMutex(rscenecache.mutex);
+		idle = !rscenecache.processing && !rscenecache.dlightjob.cache;
+		for (c = rscenecache.cache; idle && c; c = c->next)
+			if (c->status == SCS_BUILDING)
+				idle = false;
+		if (idle)
+			rscenecache.processed = false;
+		SDL_UnlockMutex(rscenecache.mutex);
+		if (idle)
+		{
+			lightmaps_skipupdates = false;
+			R_UploadLightmaps();
+			lightmaps_skipupdates = true;
+		}
 	}
 }
 static void RSceneCache_Draw(qboolean water)
