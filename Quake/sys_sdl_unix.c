@@ -2435,7 +2435,7 @@ void Sys_Image_BGRA_To_Clipboard(byte* buffer, int width, int height, int buffer
 		32,                     // bits per pixel
 		width * 4,              // bytes per row
 		colorSpace,
-		kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst,
+		kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst, // woods #screenshotcopy -- ignore framebuffer alpha (menu fade lowers dst alpha, premultiplied-first would render it dimmed)
 		provider,
 		NULL,
 		false,
