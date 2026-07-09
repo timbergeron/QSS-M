@@ -1105,7 +1105,6 @@ static void R_BModelDrawCache_UpdateSurfaceLightmap (qmodel_t *model, msurface_t
 {
 	byte *base;
 	int maps;
-	glRect_t *theRect;
 	int smax, tmax;
 
 	if (fa->flags & SURF_DRAWTILED)
@@ -1121,28 +1120,12 @@ dynamic:
 		if (r_dynamic.value)
 		{
 			struct lightmap_s *lm = &lightmaps[fa->lightmaptexturenum];
-			lm->modified = true;
-			theRect = &lm->rectchange;
-			if (fa->light_t < theRect->t) {
-				if (theRect->h)
-					theRect->h += theRect->t - fa->light_t;
-				theRect->t = fa->light_t;
-			}
-			if (fa->light_s < theRect->l) {
-				if (theRect->w)
-					theRect->w += theRect->l - fa->light_s;
-				theRect->l = fa->light_s;
-			}
 			smax = fa->extents[0]+1;
 			tmax = fa->extents[1]+1;
-			if ((theRect->w + theRect->l) < (fa->light_s + smax))
-				theRect->w = (fa->light_s-theRect->l)+smax;
-			if ((theRect->h + theRect->t) < (fa->light_t + tmax))
-				theRect->h = (fa->light_t-theRect->t)+tmax;
-			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect
 			base = lm->pbodata;
 			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
 			R_BuildLightMap (model, fa, base, LMBLOCK_WIDTH*lightmap_bytes, currententity, r_framecount, cl_dlights);
+			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect -- after the bytes, see its comment
 		}
 	}
 }
@@ -6130,7 +6113,6 @@ static void RSceneCache_RenderDynamicLightmaps (struct rscenecache_s *cache, msu
 	static entity_t r_worldentity;	//so the dlight stuff doesn't bug out.
 	byte		*base;
 	int			maps;
-	glRect_t    *theRect;
 	int smax, tmax;
 
 	if (fa->flags & SURF_DRAWTILED) //johnfitz -- not a lightmapped surface
@@ -6148,28 +6130,12 @@ dynamic:
 		if (r_dynamic.value)
 		{
 			struct lightmap_s *lm = &lightmaps[fa->lightmaptexturenum];
-			lm->modified = true;
-			theRect = &lm->rectchange;
-			if (fa->light_t < theRect->t) {
-				if (theRect->h)
-					theRect->h += theRect->t - fa->light_t;
-				theRect->t = fa->light_t;
-			}
-			if (fa->light_s < theRect->l) {
-				if (theRect->w)
-					theRect->w += theRect->l - fa->light_s;
-				theRect->l = fa->light_s;
-			}
 			smax = fa->extents[0]+1;
 			tmax = fa->extents[1]+1;
-			if ((theRect->w + theRect->l) < (fa->light_s + smax))
-				theRect->w = (fa->light_s-theRect->l)+smax;
-			if ((theRect->h + theRect->t) < (fa->light_t + tmax))
-				theRect->h = (fa->light_t-theRect->t)+tmax;
-			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect
 			base = lm->pbodata;
 			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
 			R_BuildLightMap (cache->worldmodel, fa, base, LMBLOCK_WIDTH*lightmap_bytes, &r_worldentity, dlightframecount, cache->dlights);
+			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect -- after the bytes, see its comment
 			// woods #scenecachedlights -- remember dlight-lit surfaces so they can be cleared later without another full rebuild
 			if (track && fa->cached_dlight &&
 				RSceneCache_LitSurfsReserve(&cache->litsurfs, &cache->maxlitsurfs, cache->numlitsurfs+1))
@@ -7187,31 +7153,23 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 
 	if (rscenecache.processed)
 	{	//make sure lightmaps are updated when we can.
-		// woods #scenecachedlights -- the worker writes lightmap staging bytes
-		// and dirty rects (dlight jobs and builds) with no lock against
-		// R_UploadLightmap's read-and-zero of the same rect lists, and a dlight
-		// job queued earlier this frame is often still running here. If the
-		// upload zeroes rects the job marked, those texels never reach the GPU;
-		// when that job was the clearing rebuild after a light died, the glow
-		// stays baked into the texture permanently (the staging copy is already
-		// clean, so nothing ever re-dirties it). Only upload while the worker is
-		// idle - jobs don't stack, so a deferred upload lands next frame.
-		qboolean idle;
-		struct rscenecache_s *c;
+		// woods #scenecachedlights -- safe to run every frame, even while a
+		// worker job is mid-flight: R_LightmapMarkDirtyRect only publishes a
+		// rect after its staging bytes are written, and R_UploadLightmap
+		// snapshots-and-clears the rect lists under the same lock, so a
+		// concurrent upload takes the finished surfaces and leaves the rest
+		// marked for the next frame. (An earlier fix deferred this upload until
+		// the worker went idle, but with a dlight near the view a job is in
+		// flight nearly every frame, so uploads starved and lighting visibly
+		// trailed the glow.) Clear processed before uploading - the worker sets
+		// it after marking, so a set we overlap with just means one redundant
+		// upload next frame rather than a lost one.
 		SDL_LockMutex(rscenecache.mutex);
-		idle = !rscenecache.processing && !rscenecache.dlightjob.cache;
-		for (c = rscenecache.cache; idle && c; c = c->next)
-			if (c->status == SCS_BUILDING)
-				idle = false;
-		if (idle)
-			rscenecache.processed = false;
+		rscenecache.processed = false;
 		SDL_UnlockMutex(rscenecache.mutex);
-		if (idle)
-		{
-			lightmaps_skipupdates = false;
-			R_UploadLightmaps();
-			lightmaps_skipupdates = true;
-		}
+		lightmaps_skipupdates = false;
+		R_UploadLightmaps();
+		lightmaps_skipupdates = true;
 	}
 }
 static void RSceneCache_Draw(qboolean water)

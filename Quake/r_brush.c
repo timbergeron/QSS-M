@@ -47,6 +47,7 @@ int LMBLOCK_WIDTH, LMBLOCK_HEIGHT;
 // pipeline sync per touched atlas per frame); staging through an orphaned PBO
 // turns the update into a GPU-side blit instead.
 static GLuint lm_scratchpbo; // reset by GL_BuildLightmaps on map load / video restart
+static SDL_mutex *lm_dirty_mutex; // woods #lmrect -- guards modified/rectchange/dirtyrects between the scenecache worker and the main thread's uploads
 
 
 /*
@@ -311,10 +312,17 @@ void R_DrawBrushModel_ShowTris (entity_t *e)
 // (R_RenderDynamicLightmaps here, plus the bmodel-drawcache and scenecache copies
 // in r_world.c). Accumulates the surface's exact texel rect, growing whichever
 // existing rect wastes the least area once the list fills.
+// Sets lm->modified and grows lm->rectchange too, all under lm_dirty_mutex so the
+// scenecache worker's marks can't be lost to R_UploadLightmap's concurrent
+// snapshot-and-clear. Call this AFTER R_BuildLightMap has written the staging
+// bytes: a rect must never be visible to the uploader before its texels are
+// complete, or the upload consumes the mark and the finished bytes never reach
+// the GPU (permanent stale glow when that was a dying dlight's clearing rebuild).
 void R_LightmapMarkDirtyRect (struct lightmap_s *lm, int light_s, int light_t, int smax, int tmax)
 {
 	int l = light_s, t = light_t, r = light_s + smax, b = light_t + tmax;
 	int i, best, bestwaste;
+	glRect_t *theRect;
 
 	if (l < 0) l = 0;
 	if (t < 0) t = 0;
@@ -322,6 +330,25 @@ void R_LightmapMarkDirtyRect (struct lightmap_s *lm, int light_s, int light_t, i
 	if (b > LMBLOCK_HEIGHT) b = LMBLOCK_HEIGHT;
 	if (r <= l || b <= t)
 		return;
+
+	SDL_LockMutex (lm_dirty_mutex);
+
+	lm->modified = true;
+	theRect = &lm->rectchange;
+	if (t < theRect->t) {
+		if (theRect->h)
+			theRect->h += theRect->t - t;
+		theRect->t = t;
+	}
+	if (l < theRect->l) {
+		if (theRect->w)
+			theRect->w += theRect->l - l;
+		theRect->l = l;
+	}
+	if ((theRect->w + theRect->l) < r)
+		theRect->w = r - theRect->l;
+	if ((theRect->h + theRect->t) < b)
+		theRect->h = b - theRect->t;
 
 	best = -1; bestwaste = INT_MAX;
 	for (i = 0; i < lm->numdirtyrects; i++)
@@ -352,6 +379,8 @@ void R_LightmapMarkDirtyRect (struct lightmap_s *lm, int light_s, int light_t, i
 		dr->l = l; dr->t = t;
 		dr->w = r-l; dr->h = b-t;
 	}
+
+	SDL_UnlockMutex (lm_dirty_mutex);
 }
 
 /*
@@ -364,7 +393,6 @@ void R_RenderDynamicLightmaps (qmodel_t *model, msurface_t *fa)
 {
 	byte		*base;
 	int			maps;
-	glRect_t    *theRect;
 	int smax, tmax;
 
 	if (fa->flags & SURF_DRAWTILED) //johnfitz -- not a lightmapped surface
@@ -386,28 +414,12 @@ dynamic:
 		if (r_dynamic.value)
 		{
 			struct lightmap_s *lm = &lightmaps[fa->lightmaptexturenum];
-			lm->modified = true;
-			theRect = &lm->rectchange;
-			if (fa->light_t < theRect->t) {
-				if (theRect->h)
-					theRect->h += theRect->t - fa->light_t;
-				theRect->t = fa->light_t;
-			}
-			if (fa->light_s < theRect->l) {
-				if (theRect->w)
-					theRect->w += theRect->l - fa->light_s;
-				theRect->l = fa->light_s;
-			}
 			smax = fa->extents[0]+1;
 			tmax = fa->extents[1]+1;
-			if ((theRect->w + theRect->l) < (fa->light_s + smax))
-				theRect->w = (fa->light_s-theRect->l)+smax;
-			if ((theRect->h + theRect->t) < (fa->light_t + tmax))
-				theRect->h = (fa->light_t-theRect->t)+tmax;
-			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect
 			base = lm->pbodata;
 			base += fa->light_t * LMBLOCK_WIDTH * lightmap_bytes + fa->light_s * lightmap_bytes;
 			R_BuildLightMap (model, fa, base, LMBLOCK_WIDTH*lightmap_bytes, currententity, r_framecount, cl_dlights);
+			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect -- after the bytes, see its comment
 		}
 	}
 }
@@ -1052,6 +1064,9 @@ void GL_BuildLightmaps (void)
 	qboolean profile;
 
 	RSceneCache_Shutdown();	//make sure there's nothing poking them off-thread.
+
+	if (!lm_dirty_mutex)
+		lm_dirty_mutex = SDL_CreateMutex(); // woods #lmrect -- safe here: worker just shut down, so first use is single-threaded
 
 	// woods #lmrect -- the upload scratch PBO belongs to the (possibly recreated) GL context
 	if (lm_scratchpbo)
@@ -1747,21 +1762,35 @@ static void R_UploadLightmapRows (struct lightmap_s *lm, int x, int t, int w, in
 static void R_UploadLightmap(int lmap)
 {
 	struct lightmap_s *lm = &lightmaps[lmap];
-	int i, n; // woods #lmrect
+	glRect_t rects[LM_DIRTYRECTS]; // woods #lmrect
+	int i, n;
 
 	if (!lm->modified)
 		return;
 
+	// woods #lmrect -- snapshot-and-clear under the same lock
+	// R_LightmapMarkDirtyRect appends under, so a mark from the scenecache
+	// worker either lands before the snapshot (uploaded now, its staging bytes
+	// are complete because marks happen after R_BuildLightMap) or after the
+	// clear (stays in the list for the next upload). Without this, clearing the
+	// list mid-job dropped the worker's marks and left dead dlights baked into
+	// the GPU texture.
+	SDL_LockMutex(lm_dirty_mutex);
 	lm->modified = false;
-
 	n = lm->numdirtyrects;
-	if (n <= 0)
-	{
-		lm->numdirtyrects = 0;
-		return; // nothing dirty (modified flag without rects; shouldn't happen)
-	}
 	if (n > LM_DIRTYRECTS)
 		n = LM_DIRTYRECTS;
+	if (n > 0)
+		memcpy(rects, lm->dirtyrects, n * sizeof(rects[0]));
+	lm->numdirtyrects = 0;
+	lm->rectchange.l = LMBLOCK_WIDTH;
+	lm->rectchange.t = LMBLOCK_HEIGHT;
+	lm->rectchange.h = 0;
+	lm->rectchange.w = 0;
+	SDL_UnlockMutex(lm_dirty_mutex);
+
+	if (n <= 0)
+		return; // nothing dirty (modified flag without rects; shouldn't happen)
 
 	if (lm->pbohandle)
 		GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, lm->pbohandle);
@@ -1772,8 +1801,8 @@ static void R_UploadLightmap(int lmap)
 	// megabytes of texture traffic on Apple's GL-on-Metal.
 	for (i = 0; i < n; i++)
 	{
-		int x = lm->dirtyrects[i].l, t = lm->dirtyrects[i].t;
-		int w = lm->dirtyrects[i].w, h = lm->dirtyrects[i].h;
+		int x = rects[i].l, t = rects[i].t;
+		int w = rects[i].w, h = rects[i].h;
 		if (x >= LMBLOCK_WIDTH || t >= LMBLOCK_HEIGHT)
 			continue;
 		w = q_min(w, LMBLOCK_WIDTH - x);
@@ -1785,12 +1814,6 @@ static void R_UploadLightmap(int lmap)
 
 	if (lm->pbohandle)
 		GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
-
-	lm->numdirtyrects = 0;
-	lm->rectchange.l = LMBLOCK_WIDTH;
-	lm->rectchange.t = LMBLOCK_HEIGHT;
-	lm->rectchange.h = 0;
-	lm->rectchange.w = 0;
 
 	rs_dynamiclightmaps++;
 }

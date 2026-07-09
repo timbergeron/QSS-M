@@ -449,9 +449,11 @@ struct lightmap_s
 extern struct lightmap_s *lightmaps;
 extern int lightmap_count;	//allocated lightmaps
 
-// woods #lmrect -- mark the dirty rect a surface touches; MUST be called by every
-// path that sets lm->modified+rectchange (r_brush.c R_RenderDynamicLightmaps,
-// r_world.c bmodel-drawcache + scenecache), or R_UploadLightmap drops the upload.
+// woods #lmrect -- mark the dirty rect a surface touches; sets lm->modified and
+// rectchange too, under a lock shared with R_UploadLightmap's snapshot-and-clear
+// so scenecache-worker marks can't be lost. Every dynamic-lightmap path
+// (r_brush.c R_RenderDynamicLightmaps, r_world.c bmodel-drawcache + scenecache)
+// must call this AFTER R_BuildLightMap writes the staging bytes, never before.
 void R_LightmapMarkDirtyRect (struct lightmap_s *lm, int light_s, int light_t, int smax, int tmax);
 float R_DlightStyleScale (const dlight_t *light);
 
