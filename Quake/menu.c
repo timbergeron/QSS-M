@@ -21923,12 +21923,15 @@ Misc Menu
 
 extern cvar_t pr_checkextension, r_replacemodels, gl_load24bit, cl_nopext, r_lerpmodels, r_lerpmove,
 sys_throttle, r_particles, sv_nqplayerphysics, cl_nopred, cl_autodemo, cl_smartspawn, cl_bobbing, cl_onload,
-scr_hints, cl_portpingprobe_enable, sv_autoload, sv_autosave, sv_autosave_interval;
+scr_hints, cl_portpingprobe_enable, sv_autoload, sv_autosave, sv_autosave_interval, allow_download,
+net_connectattempts;
 
 static enum extras_e
 {
 	EXTRAS_YIELD,
 	EXTRAS_NETEXTENSIONS,
+	EXTRAS_DOWNLOADPOLICY,
+	EXTRAS_CONNECTRETRIES,
 	EXTRAS_QCEXTENSIONS,
 	EXTRAS_PREDICTION,
 	EXTRAS_AUTODEMO,
@@ -21952,12 +21955,15 @@ int numberOfExtrasItems = EXTRAS_ITEMS; // woods #mousemenu
 
 static struct
 {
-	int cursor;
-	struct {
-		char text[32];
-		int len;
-	} search;
+	menulist_t list;
+	int x, y, cols;
+	qboolean scrollbar_grab;
 } extrasmenu;
+
+#define MAX_VIS_EXTRAS 16
+#define MAX_VIS_EXTRAS_SEARCH 14
+#define EXTRAS_CONNECT_RETRIES_MIN 1
+#define EXTRAS_CONNECT_RETRIES_MAX 5
 
 static const char* M_Extras_GetItemText(int index) // Add this helper function
 {
@@ -21969,6 +21975,10 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 		return "System Throttle";
 	case EXTRAS_NETEXTENSIONS:
 		return "Protocol Exts";
+	case EXTRAS_DOWNLOADPOLICY:
+		return "Download Policy";
+	case EXTRAS_CONNECTRETRIES:
+		return "Connection Retries";
 	case EXTRAS_QCEXTENSIONS:
 		return "QC Extensions";
 	case EXTRAS_PREDICTION:
@@ -22009,6 +22019,8 @@ static cvar_t *M_Extras_GetItemCvar(int index)
 	{
 	case EXTRAS_YIELD:			return &sys_throttle;
 	case EXTRAS_NETEXTENSIONS:	return &cl_nopext;
+	case EXTRAS_DOWNLOADPOLICY:	return &allow_download;
+	case EXTRAS_CONNECTRETRIES:	return &net_connectattempts;
 	case EXTRAS_QCEXTENSIONS:	return &pr_checkextension;
 	case EXTRAS_AUTODEMO:		return &cl_autodemo;
 	case EXTRAS_PORTPINGPROBE:	return &cl_portpingprobe_enable;
@@ -22041,25 +22053,30 @@ static void M_Extras_UpdateSearch(void)
 {
 	extras_cursor = (enum extras_e)M_Menu_UpdateSearchCursor(
 		EXTRAS_ITEMS, (int)extras_cursor, &numberOfExtrasItems,
-		M_Extras_GetItemText, extrasmenu.search.text, extrasmenu.search.len);
+		M_Extras_GetItemText, extrasmenu.list.search.text, extrasmenu.list.search.len);
+	extrasmenu.list.viewsize = extrasmenu.list.search.len > 0 ? MAX_VIS_EXTRAS_SEARCH : MAX_VIS_EXTRAS;
+	extrasmenu.list.cursor = (int)extras_cursor;
+	M_List_Rescroll(&extrasmenu.list);
 }
 
 static void M_Extras_MoveCursor(int delta)
 {
 	extras_cursor = (enum extras_e)M_Menu_MoveSearchCursor(
 		EXTRAS_ITEMS, numberOfExtrasItems, (int)extras_cursor, delta,
-		M_Extras_GetItemText, extrasmenu.search.text, extrasmenu.search.len);
+		M_Extras_GetItemText, extrasmenu.list.search.text, extrasmenu.list.search.len);
+	extrasmenu.list.cursor = (int)extras_cursor;
+	M_List_AutoScroll(&extrasmenu.list);
 }
 
 static int M_Extras_RowY(int item)
 {
-	return 48 + item * 8;
+	return 48 + (item - extrasmenu.list.scroll) * 8;
 }
 
 #define EXTRAS_SEARCH_BOX_Y	176
 #define EXTRAS_SEARCH_TEXT_Y	184
 #define EXTRAS_VALUE_X			168
-#define EXTRAS_CVAR_HINT_WIDTH	(19 * 8)
+#define EXTRAS_CVAR_HINT_WIDTH	(17 * 8)
 
 static int M_Extras_LivePreviewId(void)
 {
@@ -22082,9 +22099,17 @@ void M_Menu_Extras_f(void)
 	m_state = m_extras;
 	m_entersound = true;
 	extras_cursor = 0;
-	extrasmenu.cursor = 0;
-	extrasmenu.search.len = 0;
-	extrasmenu.search.text[0] = 0;
+	extrasmenu.list.cursor = 0;
+	extrasmenu.list.scroll = 0;
+	extrasmenu.list.viewsize = MAX_VIS_EXTRAS;
+	extrasmenu.list.numitems = EXTRAS_ITEMS;
+	extrasmenu.list.search.len = 0;
+	extrasmenu.list.search.maxlen = sizeof(extrasmenu.list.search.text) - 1;
+	extrasmenu.list.search.text[0] = 0;
+	extrasmenu.x = 16;
+	extrasmenu.y = 48;
+	extrasmenu.cols = 36;
+	extrasmenu.scrollbar_grab = false;
 	numberOfExtrasItems = EXTRAS_ITEMS;
 	M_LivePreview_Reset();
 
@@ -22108,6 +22133,23 @@ static void M_Extras_AdjustSliders (int dir)
 		break;
 	case EXTRAS_NETEXTENSIONS:
 		Cvar_SetValueQuick (&cl_nopext, !cl_nopext.value);
+		break;
+	case EXTRAS_DOWNLOADPOLICY:
+		m = allow_download.value <= 0.f ? 0 : allow_download.value < 2.f ? 1 : allow_download.value < 3.f ? 2 : 3;
+		if (m > 2)
+			m = dir < 0 ? 2 : 0;
+		else
+		{
+			m += dir;
+			if (m < 0) m = 2;
+			if (m > 2) m = 0;
+		}
+		Cvar_SetValueQuick (&allow_download, m);
+		break;
+	case EXTRAS_CONNECTRETRIES:
+		m = (int)net_connectattempts.value + dir;
+		Cvar_SetValueQuick (&net_connectattempts,
+			CLAMP(EXTRAS_CONNECT_RETRIES_MIN, m, EXTRAS_CONNECT_RETRIES_MAX));
 		break;
 	case EXTRAS_QCEXTENSIONS:
 		Cvar_SetValueQuick (&pr_checkextension, !pr_checkextension.value);
@@ -22184,9 +22226,12 @@ static void M_Extras_AdjustSliders (int dir)
 void M_Extras_Draw(void)
 {
 	qpic_t* p;
-	enum extras_e i;
+	int firstvis, numvis, row;
 
 	extras_cursor = (enum extras_e)M_Menu_ClampCursorValue((int)extras_cursor, EXTRAS_ITEMS);
+	extrasmenu.list.viewsize = extrasmenu.list.search.len > 0 ? MAX_VIS_EXTRAS_SEARCH : MAX_VIS_EXTRAS;
+	extrasmenu.list.cursor = (int)extras_cursor;
+	M_List_Rescroll(&extrasmenu.list);
 
 	p = Draw_CachePic("gfx/p_option.lmp");
 	M_DrawPic((320 - p->width) / 2, 4, p);
@@ -22196,9 +22241,23 @@ void M_Extras_Draw(void)
 
 	M_LivePreview_WantAt (M_Extras_LivePreviewId (), M_Extras_RowY (extras_cursor));
 
-	for (i = 0; i < EXTRAS_ITEMS; i++)
+	M_List_GetVisibleRange(&extrasmenu.list, &firstvis, &numvis);
+	if (M_List_GetOverflow(&extrasmenu.list) > 0)
 	{
-		int y = M_Extras_RowY (i);
+		M_List_DrawScrollbar(&extrasmenu.list,
+			extrasmenu.x + extrasmenu.cols * 8 - 8, extrasmenu.y);
+		if (extrasmenu.list.scroll > 0)
+			M_DrawEllipsisBar(extrasmenu.x, extrasmenu.y - 8, extrasmenu.cols);
+		if (extrasmenu.list.scroll + extrasmenu.list.viewsize < extrasmenu.list.numitems)
+			M_DrawEllipsisBar(extrasmenu.x,
+				extrasmenu.y + extrasmenu.list.viewsize * 8, extrasmenu.cols);
+	}
+
+	for (row = 0; row < numvis; row++)
+	{
+		enum extras_e i = (enum extras_e)(firstvis + row);
+		int y = extrasmenu.y + row * 8;
+		int m;
 		qboolean isolated = M_LivePreview_IsolateY (y);
 		const char* text = NULL;
 		const char* value = NULL;
@@ -22230,6 +22289,24 @@ void M_Extras_Draw(void)
 			value = cl_nopext.value ? "blocked" : "enabled";
 			break;
 
+		case EXTRAS_DOWNLOADPOLICY:
+			text = " Download Policy";
+			if (allow_download.value <= 0.f)
+				value = "off";
+			else if (allow_download.value < 2.f)
+				value = "strict";
+			else if (allow_download.value < 3.f)
+				value = "compatible";
+			else
+				value = "forced (console)";
+			break;
+
+		case EXTRAS_CONNECTRETRIES:
+			text = "Connection Retries";
+			m = q_max(EXTRAS_CONNECT_RETRIES_MIN, (int)net_connectattempts.value);
+			value = va("%d attempt%s", m, m == 1 ? "" : "s");
+			break;
+
 		case EXTRAS_QCEXTENSIONS:
 			text = "     QC Extensions";
 			value = pr_checkextension.value ? "enabled" : "blocked";
@@ -22238,11 +22315,11 @@ void M_Extras_Draw(void)
 		case EXTRAS_PREDICTION:
 			text = "        Prediction";
 			if (!cl_nopred.value && !sv_nqplayerphysics.value)
-				value = "on (override ssqc)";
+				value = "on (trump ssqc)";
 			else if (!cl_nopred.value && sv_nqplayerphysics.value)
-				value = "on (compat phys)";
+				value = "on (compat phy)";
 			else if (cl_nopred.value && !sv_nqplayerphysics.value)
-				value = "off (override ssqc)";
+				value = "off (trump ssqc)";
 			else
 				value = "off";
 			break;
@@ -22253,9 +22330,9 @@ void M_Extras_Draw(void)
 			{
 			case 0: value = "off"; break;
 			case 1: value = "all maps"; break;
-			case 2: value = "crmod matches only"; break;
-			case 3: value = "all maps (online)"; break;
-			case 4: value = "all maps (split)"; break;
+			case 2: value = "crmod matches"; break;
+			case 3: value = "all maps (mp)"; break;
+			case 4: value = "all maps (cut)"; break;
 			default: value = "unknown"; break;
 			}
 			break;
@@ -22322,12 +22399,12 @@ void M_Extras_Draw(void)
 
 		if (text)
 		{
-			if (extrasmenu.search.len > 0 &&
-				q_strcasestr(text, extrasmenu.search.text))
+			if (extrasmenu.list.search.len > 0 &&
+				q_strcasestr(text, extrasmenu.list.search.text))
 			{
 				M_PrintHighlight(8, y, text,
-					extrasmenu.search.text,
-					extrasmenu.search.len);
+					extrasmenu.list.search.text,
+					extrasmenu.list.search.len);
 			}
 			else
 			{
@@ -22358,13 +22435,13 @@ void M_Extras_Draw(void)
 	}
 
 	// Draw search box if search is active
-	if (extrasmenu.search.len > 0)
+	if (extrasmenu.list.search.len > 0)
 	{
 		M_DrawTextBox(16, EXTRAS_SEARCH_BOX_Y, 32, 1);
-		M_PrintHighlight(24, EXTRAS_SEARCH_TEXT_Y, extrasmenu.search.text,
-			extrasmenu.search.text,
-			extrasmenu.search.len);
-		int cursor_x = 24 + 8 * extrasmenu.search.len;
+		M_PrintHighlight(24, EXTRAS_SEARCH_TEXT_Y, extrasmenu.list.search.text,
+			extrasmenu.list.search.text,
+			extrasmenu.list.search.len);
+		int cursor_x = 24 + 8 * extrasmenu.list.search.len;
 		if (numberOfExtrasItems == 0)
 			M_DrawCharacter(cursor_x, EXTRAS_SEARCH_TEXT_Y, 11 ^ 128);
 		else
@@ -22374,12 +22451,28 @@ void M_Extras_Draw(void)
 
 void M_Extras_Key(int k)
 {
+	int x, y;
+
+	if (extrasmenu.scrollbar_grab)
+	{
+		switch (k)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			extrasmenu.scrollbar_grab = false;
+			break;
+		}
+		return;
+	}
+
 	if (k == K_ESCAPE)
 	{
-		if (extrasmenu.search.len > 0)
+		if (extrasmenu.list.search.len > 0)
 		{
-			extrasmenu.search.len = 0;
-			extrasmenu.search.text[0] = 0;
+			extrasmenu.list.search.len = 0;
+			extrasmenu.list.search.text[0] = 0;
 			M_Extras_UpdateSearch();
 			return;
 		}
@@ -22393,42 +22486,37 @@ void M_Extras_Key(int k)
 	}
 	else if (keydown[K_CTRL])
 	{
-		if ((k == 'u' || k == 'U') && extrasmenu.search.len > 0)
+		if ((k == 'u' || k == 'U') && extrasmenu.list.search.len > 0)
 		{
 			// Clear entire search with Ctrl+U
-			extrasmenu.search.len = 0;
-			extrasmenu.search.text[0] = 0;
+			extrasmenu.list.search.len = 0;
+			extrasmenu.list.search.text[0] = 0;
 			M_Extras_UpdateSearch();
 			return;
 		}
-		else if (k == K_BACKSPACE && extrasmenu.search.len > 0)
+		else if (k == K_BACKSPACE && extrasmenu.list.search.len > 0)
 		{
 			// Delete previous word with Ctrl+Backspace
-			listsearch_t temp;
-			temp.len = extrasmenu.search.len;
-			Q_strcpy(temp.text, extrasmenu.search.text);
-			M_DeletePrevWord(&temp);
-			Q_strcpy(extrasmenu.search.text, temp.text);
-			extrasmenu.search.len = temp.len;
+			M_DeletePrevWord(&extrasmenu.list.search);
 			M_Extras_UpdateSearch();
 			return;
 		}
 	}
 	else if (k == K_BACKSPACE)
 	{
-		if (extrasmenu.search.len > 0)
+		if (extrasmenu.list.search.len > 0)
 		{
-			extrasmenu.search.text[--extrasmenu.search.len] = 0;
+			extrasmenu.list.search.text[--extrasmenu.list.search.len] = 0;
 			M_Extras_UpdateSearch();
 			return;
 		}
 	}
 	else if (k >= 32 && k < 127)
 	{
-		if (extrasmenu.search.len < sizeof(extrasmenu.search.text) - 1)
+		if (extrasmenu.list.search.len < extrasmenu.list.search.maxlen)
 		{
-			extrasmenu.search.text[extrasmenu.search.len++] = k;
-			extrasmenu.search.text[extrasmenu.search.len] = 0;
+			extrasmenu.list.search.text[extrasmenu.list.search.len++] = k;
+			extrasmenu.list.search.text[extrasmenu.list.search.len] = 0;
 			M_Extras_UpdateSearch();
 			return;
 		}
@@ -22451,9 +22539,23 @@ void M_Extras_Key(int k)
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
-	case K_MOUSE1:
 		m_entersound = true;
 		M_Extras_AdjustSliders(1);
+		break;
+
+	case K_MOUSE1:
+		x = m_mousex - extrasmenu.x - (extrasmenu.cols - 1) * 8;
+		y = m_mousey - extrasmenu.y;
+		if (x >= -8 && M_List_UseScrollbar(&extrasmenu.list, y))
+		{
+			extrasmenu.scrollbar_grab = true;
+			M_Extras_Mousemove(m_mousex, m_mousey);
+		}
+		else
+		{
+			m_entersound = true;
+			M_Extras_AdjustSliders(1);
+		}
 		break;
 
 	case K_UPARROW:
@@ -22471,9 +22573,9 @@ void M_Extras_Key(int k)
 		break;
 
 	case K_MWHEELDOWN:
-		if (extras_cursor != EXTRAS_MODELVIEWER && extras_cursor != EXTRAS_SAVING &&
-			extras_cursor != EXTRAS_SHORTCUTS && extras_cursor != EXTRAS_VERSION)
-			M_Extras_AdjustSliders(-1);
+		extrasmenu.list.cursor = (int)extras_cursor;
+		M_List_Key(&extrasmenu.list, k);
+		extras_cursor = (enum extras_e)extrasmenu.list.cursor;
 		break;
 
 	case K_RIGHTARROW:
@@ -22481,9 +22583,9 @@ void M_Extras_Key(int k)
 		break;
 
 	case K_MWHEELUP:
-		if (extras_cursor != EXTRAS_MODELVIEWER && extras_cursor != EXTRAS_SAVING &&
-			extras_cursor != EXTRAS_SHORTCUTS && extras_cursor != EXTRAS_VERSION)
-			M_Extras_AdjustSliders(1);
+		extrasmenu.list.cursor = (int)extras_cursor;
+		M_List_Key(&extrasmenu.list, k);
+		extras_cursor = (enum extras_e)extrasmenu.list.cursor;
 		break;
 	}
 }
@@ -22491,18 +22593,22 @@ void M_Extras_Key(int k)
 void M_Extras_Mousemove(int cx, int cy)
 {
 	// Don't process mouse movement if it's in the search box area
-	if (extrasmenu.search.len > 0 && cy >= EXTRAS_SEARCH_BOX_Y)
+	if (extrasmenu.list.search.len > 0 && cy >= EXTRAS_SEARCH_BOX_Y)
 		return;
 
-	// Calculate which menu item the mouse is over
-	int item = (cy - 48) / 8;
-
-	// Make sure the item is within valid range and mouse is in the menu area
-	if (item >= 0 && item < EXTRAS_ITEMS && cy >= 48 && cy < 48 + (EXTRAS_ITEMS * 8))
+	cy -= extrasmenu.y;
+	if (extrasmenu.scrollbar_grab)
 	{
-		// Update cursor position regardless of search state
-		extras_cursor = item;
+		if (!keydown[K_MOUSE1])
+		{
+			extrasmenu.scrollbar_grab = false;
+			return;
+		}
+		M_List_UseScrollbar(&extrasmenu.list, cy);
 	}
+
+	M_List_Mousemove(&extrasmenu.list, cy);
+	extras_cursor = (enum extras_e)extrasmenu.list.cursor;
 }
 
 /*
