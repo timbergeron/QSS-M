@@ -169,6 +169,7 @@ void PMSV_SetMoveStats(edict_t *plent, float *fstat, int *istat);	//so client ha
 void PMSV_UpdateMovevars(void);
 void PF_sv_pmove(void);
 void PMSV_UpdateMovevars(void);
+qboolean PM_BunnyFrictionEnabled(void);
 void PM_Register(void);
 #define VectorClear(v) ((v)[0] = (v)[1] = (v)[2] = 0)
 #define VectorSet(r,x,y,z) do{(r)[0] = x; (r)[1] = y;(r)[2] = z;}while(0)

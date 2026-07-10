@@ -1706,7 +1706,6 @@ void SV_Init (void)
 	extern	cvar_t	sv_adminnick;			// woods (darkpaces) #adminnick
 	extern	cvar_t	sv_map_rotation;		// woods #maprotation
 	extern	cvar_t	sv_defaultmap;		// woods #mapchangeprotect
-	extern	cvar_t	sv_bunnyhopqw; // woods #qwbunnyhop
 	extern	cvar_t	sv_fullpitch; // woods #pqfullpitch
 	extern	cvar_t	sv_mapcrc; // woods #mapcrc
 	extern	cvar_t	sv_nopunchangle;
@@ -1738,7 +1737,6 @@ void SV_Init (void)
 	Cvar_RegisterVariable (&sv_autosave); // woods #autosave (iw)
 	Cvar_RegisterVariable (&sv_autosave_interval); // woods #autosave (iw)
 	Cvar_RegisterVariable (&sv_nqplayerphysics);	//spike
-	Cvar_RegisterVariable (&sv_bunnyhopqw); // woods #qwbunnyhop
 	Cvar_RegisterVariable (&sv_fullpitch); // woods
 
 

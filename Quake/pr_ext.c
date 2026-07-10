@@ -2004,7 +2004,7 @@ static void PF_both_pmove(edict_t *e)
 }
 
 static cvar_t pm_bunnyspeedcap = {"pm_bunnyspeedcap", "",	CVAR_SERVERINFO};		//reduces strafejumps to maxspeed instead of endlessly accelerating
-static cvar_t pm_bunnyfriction = {"pm_bunnyfriction", "1",	CVAR_SERVERINFO};	//forces nq's frame of friction
+static cvar_t pm_bunnyfriction = {"pm_bunnyfriction", "1",	CVAR_ARCHIVE | CVAR_SERVERINFO};	//forces nq's frame of friction
 static cvar_t pm_ktjump = {"pm_ktjump", "",	CVAR_SERVERINFO};
 static cvar_t pm_slidefix = {"pm_slidefix", "1",	CVAR_SERVERINFO};				//don't bump when going down slopes.
 static cvar_t pm_airstep = {"pm_airstep", "",	CVAR_SERVERINFO};					//allow stepping up stairs when eg jumping
@@ -2026,6 +2026,12 @@ static cvar_t sv_airaccelerate = {"sv_airaccelerate", "-1"};
 static cvar_t sv_wateraccelerate = {"sv_wateraccelerate", "-1"};
 static cvar_t sv_waterfriction = {"sv_waterfriction", "4"};
 static cvar_t sv_spectatormaxspeed = {"sv_spectatormaxspeed", "500"};
+
+qboolean PM_BunnyFrictionEnabled(void)
+{
+	return pm_bunnyfriction.value != 0;
+}
+
 void PM_Register(void)
 {
 	PM_Init();

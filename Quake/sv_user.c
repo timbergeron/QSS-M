@@ -46,7 +46,6 @@ usercmd_t	cmd;
 cvar_t	sv_idealpitchscale = {"sv_idealpitchscale","0.8",CVAR_NONE};
 cvar_t	sv_altnoclip = {"sv_altnoclip","1",CVAR_ARCHIVE}; //johnfitz
 cvar_t	sv_nqplayerphysics = {"sv_nqplayerphysics", "1", CVAR_ARCHIVE | CVAR_SERVERINFO }; //spike. set to 0 for prediction to work. name comes from fte. -- woods, add serverinfo #prednotify
-cvar_t	sv_bunnyhopqw = {"sv_bunnyhopqw","0",CVAR_ARCHIVE}; // woods #qwbunnyhop quakespasm-shalrathy 76a1f96
 cvar_t	sv_fullpitch = {"sv_fullpitch","1",CVAR_ARCHIVE| CVAR_SERVERINFO}; // woods -- 1 is qs default, 0 limits server to og nq default #pqfullpitch
 
 qboolean SV_RunThink (edict_t *ent);
@@ -411,7 +410,7 @@ void SV_AirMove (qboolean prevonground)
 	{	// noclip
 		VectorCopy (wishvel, velocity);
 	}
-	else if (onground && !(sv_bunnyhopqw.value && !prevonground)) // woods #qwbunnyhop
+	else if (onground && (PM_BunnyFrictionEnabled () || prevonground)) // woods #qwbunnyhop
 	{
 		SV_UserFriction ();
 		SV_Accelerate (wishspeed, wishdir);
