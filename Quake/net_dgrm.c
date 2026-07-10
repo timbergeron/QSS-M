@@ -25,6 +25,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "q_stdinc.h"
 #include "arch_def.h"
 #include "net_sys.h"
+#ifdef _WIN32
+#include "wsaerror.h"
+#endif
 #include "quakedef.h"
 #include "net_defs.h"
 #include "ice/ice_quake.h"
@@ -55,6 +58,7 @@ cvar_t com_protocolname = {"com_protocolname", "FTE-Quake DarkPlaces-Quake"};
 cvar_t password = {"password", ""};	//this is super-lame and limited to numbers, so when not numeric we hash it and use that instead. there's no nonces though.
 cvar_t cl_portpingprobe_enable = {"cl_portpingprobe_enable", "0", CVAR_ARCHIVE};
 cvar_t cl_portpingprobe_probes = {"cl_portpingprobe_probes", "500", CVAR_ARCHIVE};
+cvar_t cl_portpingprobe_port_probes = {"cl_portpingprobe_port_probes", "5", CVAR_ARCHIVE};
 cvar_t cl_portpingprobe_delay = {"cl_portpingprobe_delay", "0", CVAR_ARCHIVE};
 cvar_t net_masters[] = 
 {
@@ -106,16 +110,49 @@ static struct heartbeatctx_s {	//thread context used to avoid stalls on dns look
 	} result[countof(net_masters)*MAX_NET_DRIVERS];
 } *heartbeatctx;
 
+#define PORTPINGPROBE_FINALISTS 8
+#define PORTPINGPROBE_MAX_PORT_PROBES 5
+#define PORTPINGPROBE_TIMEOUT 1.0
+#define PORTPINGPROBE_SELECT_SLICE 0.05
+
+typedef enum
+{
+	PORTPINGPROBE_QUERY_NONE = 0,
+	PORTPINGPROBE_QUERY_GETINFO,
+	PORTPINGPROBE_QUERY_SERVER_INFO
+} portpingprobe_query_t;
+
+typedef struct portpingprobe_candidate_s
+{
+	int port;
+	double discovery_rtt;
+	double samples[PORTPINGPROBE_MAX_PORT_PROBES];
+	int replies;
+	double median_rtt;
+	double jitter;
+	sys_socket_t socket;
+} portpingprobe_candidate_t;
+
 typedef struct portpingprobe_ctx_s
 {
 	SDL_Thread *thread;
 	int num_probes;
+	int port_probes;
+	int total_work;
+	unsigned long delay_ms;
 	int landriver;
 	char connect_addr[NET_NAMELEN];
 	struct qsockaddr target_addr;
 	byte serverinfo_packet[4 + 1 + sizeof("QUAKE") + 1];
+	portpingprobe_query_t query;
+	portpingprobe_candidate_t *candidates;
+	int responsive_ports;
+	int finalist_count;
 	int best_port;
 	double best_rtt;
+	double best_jitter;
+	int best_replies;
+	sys_socket_t best_socket;
 } portpingprobe_ctx_t;
 
 static const byte portpingprobe_getinfo_packet[] = {0xFF, 0xFF, 0xFF, 0xFF, 'g', 'e', 't', 'i', 'n', 'f', 'o', '\n'};
@@ -126,6 +163,8 @@ static SDL_atomic_t portpingprobe_abort_requested = {0};
 static SDL_atomic_t portpingprobe_worker_running = {0};
 static SDL_atomic_t portpingprobe_progress = {0};
 static int net_probe_clientport = 0;
+static int net_probe_clientlandriver = -1;
+static sys_socket_t net_probe_clientsocket = INVALID_SOCKET;
 
 static struct
 {
@@ -136,19 +175,29 @@ static struct
 	struct qsockaddr target_addr;
 	int best_port;
 	double best_rtt;
+	double best_jitter;
+	int best_replies;
+	int port_probes;
+	int responsive_ports;
+	qboolean has_socket;
+	sys_socket_t best_socket;
 } portpingprobe_result = {0};
 static int portpingprobe_last_percent = -1;
 static qboolean portpingprobe_console_inline = false;
 
 static void cl_portpingprobe_enable_completion(cvar_t *var, const char *partial);
 static void cl_portpingprobe_probes_completion(cvar_t *var, const char *partial);
+static void cl_portpingprobe_port_probes_completion(cvar_t *var, const char *partial);
 static void cl_portpingprobe_delay_completion(cvar_t *var, const char *partial);
 static void cl_portpingprobe_enable_changed(cvar_t *var);
 static void cl_portpingprobe_probes_changed(cvar_t *var);
+static void cl_portpingprobe_port_probes_changed(cvar_t *var);
 static void cl_portpingprobe_delay_changed(cvar_t *var);
-static double NET_PortPingProbeSingle(const portpingprobe_ctx_t *ctx, int source_port);
+static double NET_PortPingProbeSingle(const portpingprobe_ctx_t *ctx, int source_port, portpingprobe_query_t query);
 static int NET_PortPingProbeWorker(void *data);
 static void NET_PortPingProbe_ClearResult(void);
+static void NET_PortPingProbe_ClearPendingSocket(void);
+static void NET_PortPingProbe_FreeContext(portpingprobe_ctx_t *ctx);
 static void NET_PortPingProbe_Shutdown(void);
 
 
@@ -187,6 +236,13 @@ static void cl_portpingprobe_probes_completion(cvar_t *var, const char *partial)
 	Con_AddToTabList("1000", partial, "max", NULL);
 }
 
+static void cl_portpingprobe_port_probes_completion(cvar_t *var, const char *partial)
+{
+	Con_AddToTabList("1", partial, "fastest", NULL);
+	Con_AddToTabList("3", partial, "balanced", NULL);
+	Con_AddToTabList("5", partial, "most reliable", NULL);
+}
+
 static void cl_portpingprobe_delay_completion(cvar_t *var, const char *partial)
 {
 	Con_AddToTabList("0", partial, "no delay", NULL);
@@ -206,6 +262,17 @@ static void cl_portpingprobe_probes_changed(cvar_t *var)
 		return;
 
 	Con_Printf("cl_portpingprobe_probes must be between 1 and 1000\n");
+	Cvar_SetValueQuick(var, (float)clamped);
+}
+
+static void cl_portpingprobe_port_probes_changed(cvar_t *var)
+{
+	const int clamped = CLAMP(1, (int)var->value, PORTPINGPROBE_MAX_PORT_PROBES);
+
+	if ((int)var->value == clamped)
+		return;
+
+	Con_Printf("cl_portpingprobe_port_probes must be between 1 and %d\n", PORTPINGPROBE_MAX_PORT_PROBES);
 	Cvar_SetValueQuick(var, (float)clamped);
 }
 
@@ -230,6 +297,7 @@ static void cl_portpingprobe_enable_changed(cvar_t *var)
 	if (status == PORTPINGPROBE_COMPLETED || status == PORTPINGPROBE_IDLE)
 	{
 		NET_PortPingProbe_ClearResult();
+		NET_PortPingProbe_ClearPendingSocket();
 		net_probe_clientport = 0;
 		portpingprobe_last_percent = -1;
 		portpingprobe_console_inline = false;
@@ -254,11 +322,11 @@ int NET_PortPingProbe_GetProgress(void)
 
 	if (NET_PortPingProbe_GetStatus() == PORTPINGPROBE_COMPLETED)
 		return 100;
-	if (NET_PortPingProbe_GetStatus() != PORTPINGPROBE_PROBING || !portpingprobe_ctx || portpingprobe_ctx->num_probes <= 0)
+	if (NET_PortPingProbe_GetStatus() != PORTPINGPROBE_PROBING || !portpingprobe_ctx || portpingprobe_ctx->total_work <= 0)
 		return 0;
 
 	progress_count = SDL_AtomicGet(&portpingprobe_progress);
-	return CLAMP(0, (progress_count * 100) / portpingprobe_ctx->num_probes, 100);
+	return CLAMP(0, (progress_count * 100) / portpingprobe_ctx->total_work, 100);
 }
 
 void NET_PortPingProbe_RequestAbort(void)
@@ -274,13 +342,78 @@ void NET_PortPingProbe_RequestAbort(void)
 
 static void NET_PortPingProbe_ClearResult(void)
 {
+	if (portpingprobe_result.has_socket &&
+		portpingprobe_result.best_socket != INVALID_SOCKET &&
+		portpingprobe_result.landriver >= 0 &&
+		portpingprobe_result.landriver < net_numlandrivers)
+	{
+		net_landrivers[portpingprobe_result.landriver].Close_Socket(portpingprobe_result.best_socket);
+	}
+
 	portpingprobe_result.valid = false;
 	portpingprobe_result.has_target = false;
+	portpingprobe_result.has_socket = false;
 	portpingprobe_result.connect_addr[0] = '\0';
 	portpingprobe_result.landriver = -1;
 	memset(&portpingprobe_result.target_addr, 0, sizeof(portpingprobe_result.target_addr));
 	portpingprobe_result.best_port = 0;
 	portpingprobe_result.best_rtt = 0;
+	portpingprobe_result.best_jitter = 0;
+	portpingprobe_result.best_replies = 0;
+	portpingprobe_result.port_probes = 0;
+	portpingprobe_result.responsive_ports = 0;
+	portpingprobe_result.best_socket = INVALID_SOCKET;
+}
+
+static void NET_PortPingProbe_ClearPendingSocket(void)
+{
+	if (net_probe_clientsocket != INVALID_SOCKET &&
+		net_probe_clientlandriver >= 0 &&
+		net_probe_clientlandriver < net_numlandrivers)
+	{
+		net_landrivers[net_probe_clientlandriver].Close_Socket(net_probe_clientsocket);
+	}
+
+	net_probe_clientsocket = INVALID_SOCKET;
+	net_probe_clientlandriver = -1;
+	net_probe_clientport = 0;
+}
+
+static sys_socket_t NET_PortPingProbe_TakePendingSocket(int landriver, int *source_port)
+{
+	sys_socket_t sock = INVALID_SOCKET;
+
+	if (source_port)
+		*source_port = 0;
+	if (landriver != net_probe_clientlandriver)
+		return INVALID_SOCKET;
+
+	if (source_port)
+		*source_port = net_probe_clientport;
+	sock = net_probe_clientsocket;
+	net_probe_clientsocket = INVALID_SOCKET;
+	net_probe_clientlandriver = -1;
+	net_probe_clientport = 0;
+	return sock;
+}
+
+static void NET_PortPingProbe_FreeContext(portpingprobe_ctx_t *ctx)
+{
+	if (!ctx)
+		return;
+
+	if (ctx->best_socket != INVALID_SOCKET &&
+		ctx->landriver >= 0 && ctx->landriver < net_numlandrivers)
+	{
+		net_landrivers[ctx->landriver].Close_Socket(ctx->best_socket);
+		ctx->best_socket = INVALID_SOCKET;
+	}
+	if (ctx->candidates)
+	{
+		Z_Free(ctx->candidates);
+		ctx->candidates = NULL;
+	}
+	Z_Free(ctx);
 }
 
 qboolean NET_PortPingProbe_ConsumeCompleted(const char *connect_addr)
@@ -336,114 +469,346 @@ qboolean NET_PortPingProbe_ConsumeCompleted(const char *connect_addr)
 		}
 	}
 
+	NET_PortPingProbe_ClearPendingSocket();
 	net_probe_clientport = portpingprobe_result.best_port > 0 ? portpingprobe_result.best_port : 0;
+	net_probe_clientlandriver = portpingprobe_result.landriver;
+	if (portpingprobe_result.has_socket)
+	{
+		net_probe_clientsocket = portpingprobe_result.best_socket;
+		portpingprobe_result.has_socket = false;
+		portpingprobe_result.best_socket = INVALID_SOCKET;
+	}
 	NET_PortPingProbe_ClearResult();
 	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
 	return true;
 }
 
-static double NET_PortPingProbeSingle(const portpingprobe_ctx_t *ctx, int source_port)
+static double NET_PortPingProbeTime(void)
+{
+	return SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
+}
+
+static qboolean NET_PortPingProbeReplyValid(const portpingprobe_ctx_t *ctx,
+	const struct qsockaddr *recvaddr, const byte *data, int length, portpingprobe_query_t query)
+{
+	int control;
+
+	if (!ctx || !recvaddr || !data || length < 5)
+		return false;
+	if (net_landrivers[ctx->landriver].AddrCompare((struct qsockaddr *)recvaddr,
+		(struct qsockaddr *)&ctx->target_addr) != 0)
+		return false;
+
+	if (query == PORTPINGPROBE_QUERY_GETINFO)
+	{
+		static const byte header[] = {0xff, 0xff, 0xff, 0xff};
+		static const char response[] = "infoResponse\n";
+
+		return length >= (int)(sizeof(header) + sizeof(response) - 1) &&
+			!memcmp(data, header, sizeof(header)) &&
+			!memcmp(data + sizeof(header), response, sizeof(response) - 1);
+	}
+
+	if (query != PORTPINGPROBE_QUERY_SERVER_INFO)
+		return false;
+
+	memcpy(&control, data, sizeof(control));
+	control = BigLong(control);
+	return (control & (~NETFLAG_LENGTH_MASK)) == (int)NETFLAG_CTL &&
+		(control & NETFLAG_LENGTH_MASK) == length && data[4] == CCREP_SERVER_INFO;
+}
+
+static double NET_PortPingProbeSocket(const portpingprobe_ctx_t *ctx, sys_socket_t sock,
+	portpingprobe_query_t query)
 {
 	net_landriver_t *ldrv;
 	struct qsockaddr recvaddr;
 	byte recvbuf[2048];
+	const byte *packet;
+	int packet_size;
 	double start_time;
-	double elapsed;
+
+	if (!ctx || sock == INVALID_SOCKET)
+		return -1;
+
+	ldrv = &net_landrivers[ctx->landriver];
+	if (query == PORTPINGPROBE_QUERY_GETINFO)
+	{
+		packet = portpingprobe_getinfo_packet;
+		packet_size = sizeof(portpingprobe_getinfo_packet);
+	}
+	else if (query == PORTPINGPROBE_QUERY_SERVER_INFO)
+	{
+		packet = ctx->serverinfo_packet;
+		packet_size = sizeof(ctx->serverinfo_packet);
+	}
+	else
+	{
+		return -1;
+	}
+
+	/* Drain any delayed response before starting a new timed sample. */
+	while (ldrv->Read(sock, recvbuf, sizeof(recvbuf), &recvaddr) > 0)
+		;
+
+	start_time = NET_PortPingProbeTime();
+	if (ldrv->Write(sock, (byte *)packet, packet_size, (struct qsockaddr *)&ctx->target_addr) == -1)
+		return -1;
+
+	for (;;)
+	{
+		double now = NET_PortPingProbeTime();
+		double remaining = PORTPINGPROBE_TIMEOUT - (now - start_time);
+		double wait_time;
+		fd_set readfds;
+		struct timeval timeout;
+		int selected;
+		int ret;
+
+		if (SDL_AtomicGet(&portpingprobe_abort_requested) || remaining <= 0)
+			return -1;
+
+		wait_time = q_min(remaining, PORTPINGPROBE_SELECT_SLICE);
+		timeout.tv_sec = (long)wait_time;
+		timeout.tv_usec = (long)((wait_time - timeout.tv_sec) * 1000000.0);
+		if (timeout.tv_sec == 0 && timeout.tv_usec <= 0)
+			timeout.tv_usec = 1;
+
+		FD_ZERO(&readfds);
+		FD_SET(sock, &readfds);
+#ifdef _WIN32
+		selected = selectsocket(0, &readfds, NULL, NULL, &timeout);
+#else
+		selected = selectsocket((int)(sock + 1), &readfds, NULL, NULL, &timeout);
+#endif
+		if (selected == SOCKET_ERROR)
+		{
+			int err = SOCKETERRNO;
+#ifdef _WIN32
+			if (err == WSAEINTR)
+#else
+			if (err == EINTR)
+#endif
+				continue;
+			Con_DPrintf("Port ping probe select failed: %s\n", socketerror(err));
+			return -1;
+		}
+		if (selected == 0 || !FD_ISSET(sock, &readfds))
+			continue;
+
+		ret = ldrv->Read(sock, recvbuf, sizeof(recvbuf), &recvaddr);
+		if (ret < 0)
+			return -1;
+		if (ret > 0 && NET_PortPingProbeReplyValid(ctx, &recvaddr, recvbuf, ret, query))
+			return NET_PortPingProbeTime() - start_time;
+	}
+}
+
+static double NET_PortPingProbeSingle(const portpingprobe_ctx_t *ctx, int source_port,
+	portpingprobe_query_t query)
+{
 	sys_socket_t sock;
-	qboolean fallback_sent = false;
-	int ret;
+	double rtt;
 
 	if (!ctx)
 		return -1;
 
-	ldrv = &net_landrivers[ctx->landriver];
-	sock = ldrv->Open_Socket(source_port);
+	sock = net_landrivers[ctx->landriver].Open_Socket(source_port);
 	if (sock == INVALID_SOCKET)
 		return -1;
+	rtt = NET_PortPingProbeSocket(ctx, sock, query);
+	net_landrivers[ctx->landriver].Close_Socket(sock);
+	return rtt;
+}
 
-	if (ldrv->Write(sock, (byte *)portpingprobe_getinfo_packet, sizeof(portpingprobe_getinfo_packet), (struct qsockaddr *)&ctx->target_addr) == -1)
-	{
-		ldrv->Close_Socket(sock);
-		return -1;
-	}
+static portpingprobe_query_t NET_PortPingProbeDetectQuery(const portpingprobe_ctx_t *ctx)
+{
+	if (NET_PortPingProbeSingle(ctx, 0, PORTPINGPROBE_QUERY_GETINFO) >= 0)
+		return PORTPINGPROBE_QUERY_GETINFO;
+	if (!SDL_AtomicGet(&portpingprobe_abort_requested) &&
+		NET_PortPingProbeSingle(ctx, 0, PORTPINGPROBE_QUERY_SERVER_INFO) >= 0)
+		return PORTPINGPROBE_QUERY_SERVER_INFO;
+	return PORTPINGPROBE_QUERY_NONE;
+}
 
-	start_time = Sys_DoubleTime();
+static int NET_PortPingProbeCompareDouble(const void *left, const void *right)
+{
+	const double a = *(const double *)left;
+	const double b = *(const double *)right;
+	return a < b ? -1 : a > b ? 1 : 0;
+}
 
-	while ((elapsed = (Sys_DoubleTime() - start_time)) < 1.0)
-	{
-		if (SDL_AtomicGet(&portpingprobe_abort_requested))
-			break;
+static void NET_PortPingProbeCalculateStats(portpingprobe_candidate_t *candidate)
+{
+	double sorted[PORTPINGPROBE_MAX_PORT_PROBES];
+	double deviations[PORTPINGPROBE_MAX_PORT_PROBES];
+	int middle;
+	int i;
 
-		// Some active servers ignore connectionless getinfo but answer
-		// CCREQ_SERVER_INFO. Try that as a fallback after a short delay.
-		if (!fallback_sent && elapsed >= 0.25)
-		{
-			ldrv->Write(sock, (byte *)ctx->serverinfo_packet, sizeof(ctx->serverinfo_packet), (struct qsockaddr *)&ctx->target_addr);
-			fallback_sent = true;
-		}
+	if (!candidate || candidate->replies <= 0)
+		return;
 
-		ret = ldrv->Read(sock, recvbuf, sizeof(recvbuf), &recvaddr);
-		if (ret > 0)
-		{
-			// Accept replies from the same host even if source port differs.
-			if (ldrv->AddrCompare(&recvaddr, (struct qsockaddr *)&ctx->target_addr) != -1)
-			{
-				ldrv->Close_Socket(sock);
-				return Sys_DoubleTime() - start_time;
-			}
-		}
-		else if (ret < 0)
-			break;
+	memcpy(sorted, candidate->samples, candidate->replies * sizeof(sorted[0]));
+	qsort(sorted, candidate->replies, sizeof(sorted[0]), NET_PortPingProbeCompareDouble);
+	middle = candidate->replies / 2;
+	candidate->median_rtt = (candidate->replies & 1)
+		? sorted[middle]
+		: (sorted[middle - 1] + sorted[middle]) * 0.5;
 
-		Sys_Sleep(1);
-	}
-
-	ldrv->Close_Socket(sock);
-	return -1;
+	for (i = 0; i < candidate->replies; i++)
+		deviations[i] = fabs(candidate->samples[i] - candidate->median_rtt);
+	qsort(deviations, candidate->replies, sizeof(deviations[0]), NET_PortPingProbeCompareDouble);
+	candidate->jitter = (candidate->replies & 1)
+		? deviations[middle]
+		: (deviations[middle - 1] + deviations[middle]) * 0.5;
 }
 
 static int NET_PortPingProbeWorker(void *data)
 {
 	portpingprobe_ctx_t *ctx = data;
-	unsigned int random_state;
+	int finalists[PORTPINGPROBE_FINALISTS];
+	int progress = 0;
+	int best_index = -1;
+	double best_score = 0;
+	int required_replies;
+	int round;
 	int i;
 
 	if (!ctx)
 		return 0;
 
-	random_state = (unsigned int)(Sys_DoubleTime() * 1000000.0) ^ (unsigned int)(uintptr_t)SDL_ThreadID();
+	ctx->query = NET_PortPingProbeDetectQuery(ctx);
+	if (ctx->query == PORTPINGPROBE_QUERY_NONE)
+		goto finished;
+	Con_DPrintf("Port ping probe using %s replies\n",
+		ctx->query == PORTPINGPROBE_QUERY_GETINFO ? "getinfo" : "NetQuake server-info");
 
 	for (i = 0; i < ctx->num_probes; i++)
 	{
-		double rtt;
-		int source_port;
+		portpingprobe_candidate_t *candidate = &ctx->candidates[i];
+		int position;
+		int move;
 
 		if (SDL_AtomicGet(&portpingprobe_abort_requested))
-			break;
+			goto finished;
 
-		random_state = random_state * 1664525u + 1013904223u;
-		source_port = 1024 + (int)(random_state % 64512u); // [1024..65535]
-		rtt = NET_PortPingProbeSingle(ctx, source_port);
-
-		if (rtt >= 0 && (ctx->best_rtt < 0 || rtt < ctx->best_rtt))
+		candidate->discovery_rtt = NET_PortPingProbeSingle(ctx, candidate->port, ctx->query);
+		SDL_AtomicSet(&portpingprobe_progress, ++progress);
+		if (candidate->discovery_rtt >= 0)
 		{
-			ctx->best_port = source_port;
-			ctx->best_rtt = rtt;
+			ctx->responsive_ports++;
+			for (position = 0; position < ctx->finalist_count; position++)
+			{
+				if (candidate->discovery_rtt < ctx->candidates[finalists[position]].discovery_rtt)
+					break;
+			}
+			if (position < PORTPINGPROBE_FINALISTS)
+			{
+				if (ctx->finalist_count < PORTPINGPROBE_FINALISTS)
+					ctx->finalist_count++;
+				for (move = ctx->finalist_count - 1; move > position; move--)
+					finalists[move] = finalists[move - 1];
+				finalists[position] = i;
+			}
 		}
 
-		SDL_AtomicSet(&portpingprobe_progress, i + 1);
+		if (ctx->delay_ms > 0)
+			Sys_Sleep(ctx->delay_ms);
+	}
 
-		if (SDL_AtomicGet(&portpingprobe_abort_requested))
-			break;
+	for (i = 0; i < ctx->finalist_count; i++)
+	{
+		portpingprobe_candidate_t *candidate = &ctx->candidates[finalists[i]];
+		candidate->socket = net_landrivers[ctx->landriver].Open_Socket(candidate->port);
+	}
 
-		if (cl_portpingprobe_delay.value > 0)
-			Sys_Sleep((unsigned long)cl_portpingprobe_delay.value);
+	/* Rotate the starting candidate each round so temporal changes do not favor one port. */
+	for (round = 0; round < ctx->port_probes; round++)
+	{
+		int offset;
+		for (offset = 0; offset < ctx->finalist_count; offset++)
+		{
+			int slot = (offset + round) % ctx->finalist_count;
+			portpingprobe_candidate_t *candidate = &ctx->candidates[finalists[slot]];
+			double rtt = -1;
+
+			if (SDL_AtomicGet(&portpingprobe_abort_requested))
+				goto finished;
+			if (candidate->socket != INVALID_SOCKET)
+				rtt = NET_PortPingProbeSocket(ctx, candidate->socket, ctx->query);
+			if (rtt >= 0 && candidate->replies < PORTPINGPROBE_MAX_PORT_PROBES)
+				candidate->samples[candidate->replies++] = rtt;
+			SDL_AtomicSet(&portpingprobe_progress, ++progress);
+
+			if (ctx->delay_ms > 0)
+				Sys_Sleep(ctx->delay_ms);
+		}
+	}
+
+	required_replies = (ctx->port_probes * 4 + 4) / 5; /* at least 80 percent */
+	for (i = 0; i < ctx->finalist_count; i++)
+	{
+		int index = finalists[i];
+		portpingprobe_candidate_t *candidate = &ctx->candidates[index];
+		double score;
+
+		if (candidate->replies < required_replies)
+		{
+			Con_DPrintf("Port probe finalist %d rejected: %d/%d replies\n",
+				candidate->port, candidate->replies, ctx->port_probes);
+			continue;
+		}
+		NET_PortPingProbeCalculateStats(candidate);
+		score = candidate->median_rtt + candidate->jitter;
+		Con_DPrintf("Port probe finalist %d: discovery %.2f ms, median %.2f ms, jitter %.2f ms (%d/%d replies)\n",
+			candidate->port, candidate->discovery_rtt * 1000.0,
+			candidate->median_rtt * 1000.0, candidate->jitter * 1000.0,
+			candidate->replies, ctx->port_probes);
+		if (best_index < 0 || score < best_score ||
+			(score == best_score && candidate->replies > ctx->candidates[best_index].replies))
+		{
+			best_index = index;
+			best_score = score;
+		}
+	}
+
+	if (best_index >= 0)
+	{
+		portpingprobe_candidate_t *best = &ctx->candidates[best_index];
+		ctx->best_port = best->port;
+		ctx->best_rtt = best->median_rtt;
+		ctx->best_jitter = best->jitter;
+		ctx->best_replies = best->replies;
+		ctx->best_socket = best->socket;
+		best->socket = INVALID_SOCKET;
+	}
+
+finished:
+	if (ctx->candidates)
+	{
+		for (i = 0; i < ctx->num_probes; i++)
+		{
+			if (ctx->candidates[i].socket != INVALID_SOCKET)
+			{
+				net_landrivers[ctx->landriver].Close_Socket(ctx->candidates[i].socket);
+				ctx->candidates[i].socket = INVALID_SOCKET;
+			}
+		}
 	}
 
 	if (SDL_AtomicGet(&portpingprobe_abort_requested))
+	{
+		if (ctx->best_socket != INVALID_SOCKET)
+		{
+			net_landrivers[ctx->landriver].Close_Socket(ctx->best_socket);
+			ctx->best_socket = INVALID_SOCKET;
+		}
 		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_ABORT);
+	}
 	else
+	{
 		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_COMPLETED);
+	}
 
 	SDL_AtomicSet(&portpingprobe_worker_running, 0);
 	return 0;
@@ -453,8 +818,10 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 {
 	portpingprobe_ctx_t *ctx;
 	struct qsockaddr resolved_addr;
+	unsigned int random_state;
 	int landriver = -1;
 	int num_probes;
+	int port_probes;
 	int control;
 	int i;
 
@@ -483,8 +850,12 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 	}
 
 	num_probes = CLAMP(1, (int)cl_portpingprobe_probes.value, 1000);
+	port_probes = CLAMP(1, (int)cl_portpingprobe_port_probes.value, PORTPINGPROBE_MAX_PORT_PROBES);
 	ctx = Z_Malloc(sizeof(*ctx));
 	ctx->num_probes = num_probes;
+	ctx->port_probes = port_probes;
+	ctx->total_work = num_probes + q_min(num_probes, PORTPINGPROBE_FINALISTS) * port_probes;
+	ctx->delay_ms = cl_portpingprobe_delay.value > 0 ? (unsigned long)cl_portpingprobe_delay.value : 0;
 	ctx->landriver = landriver;
 	ctx->target_addr = resolved_addr;
 	control = BigLong(NETFLAG_CTL | ((int)sizeof(ctx->serverinfo_packet) & NETFLAG_LENGTH_MASK));
@@ -492,12 +863,41 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 	ctx->serverinfo_packet[4] = CCREQ_SERVER_INFO;
 	memcpy(ctx->serverinfo_packet + 5, "QUAKE", sizeof("QUAKE"));
 	ctx->serverinfo_packet[5 + sizeof("QUAKE")] = NET_PROTOCOL_VERSION;
+	ctx->query = PORTPINGPROBE_QUERY_NONE;
+	ctx->candidates = Z_Malloc(num_probes * sizeof(*ctx->candidates));
+	ctx->responsive_ports = 0;
+	ctx->finalist_count = 0;
 	ctx->best_port = 0;
 	ctx->best_rtt = -1;
+	ctx->best_jitter = 0;
+	ctx->best_replies = 0;
+	ctx->best_socket = INVALID_SOCKET;
 	q_strlcpy(ctx->connect_addr, connect_addr, sizeof(ctx->connect_addr));
 	ctx->thread = NULL;
 
+	/* Generate without replacement so every discovery probe covers a new port. */
+	random_state = (unsigned int)(NET_PortPingProbeTime() * 1000000.0) ^ (unsigned int)(uintptr_t)ctx;
+	for (i = 0; i < num_probes; i++)
+	{
+		int candidate_port;
+		int previous;
+		do
+		{
+			random_state = random_state * 1664525u + 1013904223u;
+			candidate_port = 1024 + (int)(random_state % 64512u);
+			for (previous = 0; previous < i; previous++)
+			{
+				if (ctx->candidates[previous].port == candidate_port)
+					break;
+			}
+		} while (previous != i);
+		ctx->candidates[i].port = candidate_port;
+		ctx->candidates[i].discovery_rtt = -1;
+		ctx->candidates[i].socket = INVALID_SOCKET;
+	}
+
 	NET_PortPingProbe_ClearResult();
+	NET_PortPingProbe_ClearPendingSocket();
 	SDL_AtomicSet(&portpingprobe_abort_requested, 0);
 	SDL_AtomicSet(&portpingprobe_progress, 0);
 	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_PROBING);
@@ -511,12 +911,13 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 		Con_Printf("NET_PortPingProbe_Start: failed to create worker thread\n");
 		SDL_AtomicSet(&portpingprobe_worker_running, 0);
 		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
-		Z_Free(ctx);
+		NET_PortPingProbe_FreeContext(ctx);
 		return false;
 	}
 
 	portpingprobe_ctx = ctx;
-	Con_Printf("Probing %s to find best source port (%d probes)\n", connect_addr, num_probes);
+	Con_Printf("Probing %s to find best source port (%d unique ports, %d confirmation probes on up to %d finalists)\n",
+		connect_addr, num_probes, port_probes, PORTPINGPROBE_FINALISTS);
 	return true;
 }
 
@@ -566,11 +967,25 @@ void NET_PortPingProbe_Frame(void)
 		portpingprobe_result.target_addr = ctx->target_addr;
 		portpingprobe_result.best_port = ctx->best_port;
 		portpingprobe_result.best_rtt = ctx->best_rtt;
+		portpingprobe_result.best_jitter = ctx->best_jitter;
+		portpingprobe_result.best_replies = ctx->best_replies;
+		portpingprobe_result.port_probes = ctx->port_probes;
+		portpingprobe_result.responsive_ports = ctx->responsive_ports;
+		portpingprobe_result.has_socket = ctx->best_socket != INVALID_SOCKET;
+		portpingprobe_result.best_socket = ctx->best_socket;
+		ctx->best_socket = INVALID_SOCKET;
 
 		if (ctx->best_port > 0)
-			Con_Printf("Port probe completed: best source port %d (%.2f ms)\n", ctx->best_port, ctx->best_rtt * 1000.0);
+		{
+			Con_Printf("Port probe completed: source port %d, median %.2f ms, jitter %.2f ms (%d/%d replies, %d responsive ports)\n",
+				ctx->best_port, ctx->best_rtt * 1000.0, ctx->best_jitter * 1000.0,
+				ctx->best_replies, ctx->port_probes, ctx->responsive_ports);
+		}
 		else
-			Con_Printf("Port probe completed: no responsive source port found, falling back to OS-assigned source port\n");
+		{
+			Con_Printf("Port probe completed: no stable source port found (%d responsive), falling back to OS-assigned source port\n",
+				ctx->responsive_ports);
+		}
 
 		Cbuf_AddText(va("connect \"%s\"\n", ctx->connect_addr));
 	}
@@ -583,7 +998,7 @@ void NET_PortPingProbe_Frame(void)
 		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
 	}
 
-	Z_Free(ctx);
+	NET_PortPingProbe_FreeContext(ctx);
 	SDL_AtomicSet(&portpingprobe_abort_requested, 0);
 	SDL_AtomicSet(&portpingprobe_progress, 0);
 	portpingprobe_last_percent = -1;
@@ -606,11 +1021,11 @@ static void NET_PortPingProbe_Shutdown(void)
 			ctx->thread = NULL;
 		}
 
-		Z_Free(ctx);
+		NET_PortPingProbe_FreeContext(ctx);
 	}
 
 	NET_PortPingProbe_ClearResult();
-	net_probe_clientport = 0;
+	NET_PortPingProbe_ClearPendingSocket();
 	SDL_AtomicSet(&portpingprobe_abort_requested, 0);
 	SDL_AtomicSet(&portpingprobe_worker_running, 0);
 	SDL_AtomicSet(&portpingprobe_progress, 0);
@@ -1632,19 +2047,22 @@ int Datagram_Init (void)
 
 	Cvar_RegisterVariable(&cl_portpingprobe_enable);
 	Cvar_RegisterVariable(&cl_portpingprobe_probes);
+	Cvar_RegisterVariable(&cl_portpingprobe_port_probes);
 	Cvar_RegisterVariable(&cl_portpingprobe_delay);
 	Cvar_SetCompletion(&cl_portpingprobe_enable, cl_portpingprobe_enable_completion);
 	Cvar_SetCompletion(&cl_portpingprobe_probes, cl_portpingprobe_probes_completion);
+	Cvar_SetCompletion(&cl_portpingprobe_port_probes, cl_portpingprobe_port_probes_completion);
 	Cvar_SetCompletion(&cl_portpingprobe_delay, cl_portpingprobe_delay_completion);
 	Cvar_SetCallback(&cl_portpingprobe_enable, cl_portpingprobe_enable_changed);
 	Cvar_SetCallback(&cl_portpingprobe_probes, cl_portpingprobe_probes_changed);
+	Cvar_SetCallback(&cl_portpingprobe_port_probes, cl_portpingprobe_port_probes_changed);
 	Cvar_SetCallback(&cl_portpingprobe_delay, cl_portpingprobe_delay_changed);
 	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
 	SDL_AtomicSet(&portpingprobe_abort_requested, 0);
 	SDL_AtomicSet(&portpingprobe_worker_running, 0);
 	SDL_AtomicSet(&portpingprobe_progress, 0);
 	NET_PortPingProbe_ClearResult();
-	net_probe_clientport = 0;
+	NET_PortPingProbe_ClearPendingSocket();
 
 	if (safemode || COM_CheckParm("-nolan"))
 		return -1;
@@ -2927,10 +3345,11 @@ static qsocket_t *_Datagram_Connect (struct qsockaddr *serveraddr)
 	int probe_port_override;
 	qboolean allowgetchallenge = true;
 
-	probe_port_override = net_probe_clientport;
-	newsock = INVALID_SOCKET;
+	newsock = NET_PortPingProbe_TakePendingSocket(net_landriverlevel, &probe_port_override);
+	if (newsock != INVALID_SOCKET)
+		Con_DPrintf("Port ping probe: reusing confirmed source port %d socket\n", probe_port_override);
 
-	if (probe_port_override > 0)
+	if (newsock == INVALID_SOCKET && probe_port_override > 0)
 	{
 		newsock = dfunc.Open_Socket(probe_port_override);
 		if (newsock == INVALID_SOCKET)
@@ -2940,7 +3359,6 @@ static qsocket_t *_Datagram_Connect (struct qsockaddr *serveraddr)
 	if (newsock == INVALID_SOCKET)
 		newsock = dfunc.Open_Socket(0);
 
-	net_probe_clientport = 0;
 	if (newsock == INVALID_SOCKET)
 		return NULL;
 
@@ -3308,6 +3726,8 @@ static void Datagram_ConnectAsyncReleaseSocket(void)
 
 static void Datagram_ConnectAsyncFinalizeFailure(void)
 {
+	NET_PortPingProbe_ClearPendingSocket();
+
 	if (*datagram_connect_ctx.reason)
 		q_strlcpy(m_return_reason, datagram_connect_ctx.reason, sizeof(m_return_reason));
 	else
@@ -3459,10 +3879,12 @@ net_connect_result_t NET_DatagramConnectFrame(qsocket_t **outsock, const char **
 			int probe_port_override;
 
 			net_landriverlevel = datagram_connect_ctx.landriver;
-			probe_port_override = net_probe_clientport;
-			datagram_connect_ctx.newsock = INVALID_SOCKET;
+			datagram_connect_ctx.newsock = NET_PortPingProbe_TakePendingSocket(
+				datagram_connect_ctx.landriver, &probe_port_override);
+			if (datagram_connect_ctx.newsock != INVALID_SOCKET)
+				Con_DPrintf("Port ping probe: reusing confirmed source port %d socket\n", probe_port_override);
 
-			if (probe_port_override > 0)
+			if (datagram_connect_ctx.newsock == INVALID_SOCKET && probe_port_override > 0)
 			{
 				datagram_connect_ctx.newsock = dfunc.Open_Socket(probe_port_override);
 				if (datagram_connect_ctx.newsock == INVALID_SOCKET)
@@ -3472,7 +3894,6 @@ net_connect_result_t NET_DatagramConnectFrame(qsocket_t **outsock, const char **
 			if (datagram_connect_ctx.newsock == INVALID_SOCKET)
 				datagram_connect_ctx.newsock = dfunc.Open_Socket(0);
 
-			net_probe_clientport = 0;
 			if (datagram_connect_ctx.newsock == INVALID_SOCKET)
 			{
 				Datagram_ConnectAsyncSetReason("Open socket failed");
@@ -3618,6 +4039,7 @@ datagram_async_accept:
 
 				Con_Printf("Connection accepted\n");
 				m_return_onerror = false;
+				NET_PortPingProbe_ClearPendingSocket();
 				datagram_connect_ctx.active = false;
 				datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_IDLE;
 				datagram_connect_ctx.newsock = INVALID_SOCKET;
@@ -3699,6 +4121,7 @@ qsocket_t *Datagram_Connect (const char *host)
 			}
 		}
 	}
+	NET_PortPingProbe_ClearPendingSocket();
 	if (!resolved)
 		Con_SafePrintf("Could not resolve %s\n", host);
 	return ret;
