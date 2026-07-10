@@ -80,6 +80,7 @@ extern qboolean Valid_Domain(const char* domain_str); // woods #serversmenu
 extern cvar_t net_master_ignore;
 
 void M_Menu_Main_f (void);
+void M_Menu_ModMenu_f (void);
 	void M_Menu_SinglePlayer_f (void);
 		void M_Menu_Load_f (void);
 		void M_Menu_Save_f (void);
@@ -132,6 +133,7 @@ void M_Menu_Main_f (void);
 	void M_Menu_Quit_f (void);
 
 void M_Main_Draw (void);
+void M_ModMenu_Draw (void);
 	void M_SinglePlayer_Draw (void);
 		void M_Load_Draw (void);
 		void M_Save_Draw (void);
@@ -184,6 +186,7 @@ void M_Main_Draw (void);
 	void M_Quit_Draw (void);
 
 void M_Main_Key (int key);
+void M_ModMenu_Key (int key);
 	void M_SinglePlayer_Key (int key);
 		void M_Load_Key (int key);
 		void M_Save_Key (int key);
@@ -245,6 +248,7 @@ void M_Main_Key (int key);
 	// woods #mousemenu
 	
 	void M_Main_Mousemove(int cx, int cy);
+	void M_ModMenu_Mousemove (int cx, int cy);
 	void M_SinglePlayer_Mousemove(int cx, int cy);
 		void M_Load_Mousemove(int cx, int cy);
 		void M_Save_Mousemove(int cx, int cy);
@@ -314,6 +318,9 @@ static void M_GameOptions_ClearTypedLevel(void);
 
 void FileList_Subtract(const char* name, filelist_item_t** list); // woods #historymenu
 void FileList_Add(const char* name, const char* data, filelist_item_t** list);
+void LoadMapDescriptionsFromJSON(filelist_item_t** extralevels_from_json);
+void FreeLevelList(filelist_item_t* list);
+filelist_item_t* FindLevelInList(filelist_item_t* list, const char* name);
 
 static qboolean has_custom_progs = false; // woods #botdetect
 qboolean progs_check_done = false; // woods #botdetect
@@ -326,6 +333,7 @@ qboolean progs_check_done = false; // woods #botdetect
 //=============================================================================
 
 cvar_t ui_live_preview = {"ui_live_preview", "1", CVAR_ARCHIVE};
+cvar_t cl_modmenu = {"cl_modmenu", "1", CVAR_ARCHIVE};
 extern cvar_t gl_cshiftpercent;
 
 typedef enum {
@@ -2901,6 +2909,2200 @@ void M_Main_Mousemove(int cx, int cy) // woods #mousemenu
 		++m_main_cursor;
 	if (m_main_cursor >= MAIN_DEMOS && !m_main_demos)
 		++m_main_cursor;
+}
+
+/*
+==================
+Mod Command Menu
+==================
+*/
+
+typedef enum
+{
+	MODMENU_COMMAND,
+	MODMENU_SUBMENU,
+	MODMENU_SUBMENU_DM_MODES,
+	MODMENU_SUBMENU_VOTES,
+	MODMENU_SUBMENU_MAPS,
+	MODMENU_SUBMENU_MISC,
+	MODMENU_SUBMENU_TIMELIMIT,
+	MODMENU_SUBMENU_FRAGLIMIT,
+	MODMENU_MAIN,
+	MODMENU_QUIT,
+	MODMENU_BACK
+} modmenu_action_t;
+
+#define MODMENU_VISIBLE_CTF_MATCH		(1ULL << 0)
+#define MODMENU_VISIBLE_NOT_CTF_MATCH	(1ULL << 1)
+#define MODMENU_VISIBLE_DM_MATCH		(1ULL << 2)
+#define MODMENU_VISIBLE_NOT_DM_MATCH	(1ULL << 3)
+#define MODMENU_VISIBLE_TEAM_MATCH		(1ULL << 4)
+#define MODMENU_VISIBLE_NOT_TEAM_MATCH	(1ULL << 5)
+#define MODMENU_VISIBLE_CA_ARENA		(1ULL << 6)
+#define MODMENU_VISIBLE_NOT_CA_ARENA	(1ULL << 7)
+#define MODMENU_VISIBLE_DMM4_MODE		(1ULL << 8)
+#define MODMENU_VISIBLE_NOT_DMM4_MODE	(1ULL << 9)
+#define MODMENU_VISIBLE_RA_MODE		(1ULL << 10)
+#define MODMENU_VISIBLE_NOT_RA_MODE		(1ULL << 11)
+#define MODMENU_VISIBLE_CTF_MODE		(1ULL << 12)
+#define MODMENU_VISIBLE_NOT_CTF_MODE	(1ULL << 13)
+#define MODMENU_VISIBLE_DM_MODE		(1ULL << 14)
+#define MODMENU_VISIBLE_NOT_DM_MODE		(1ULL << 15)
+#define MODMENU_CURRENT_PRACTICE		(1ULL << 16)
+#define MODMENU_CURRENT_NORMAL		(1ULL << 17)
+#define MODMENU_CURRENT_MATCH			(1ULL << 18)
+#define MODMENU_CURRENT_DM_MODE		(1ULL << 19)
+#define MODMENU_CURRENT_CTF_MODE		(1ULL << 20)
+#define MODMENU_CURRENT_DMM4_MODE		(1ULL << 21)
+#define MODMENU_CURRENT_CTF_DMM4_MODE	(1ULL << 22)
+#define MODMENU_CURRENT_CA_MODE		(1ULL << 23)
+#define MODMENU_CURRENT_RA_MODE		(1ULL << 24)
+#define MODMENU_CURRENT_WIPEOUT_MODE	(1ULL << 25)
+#define MODMENU_CURRENT_AIRSHOT_MODE	(1ULL << 26)
+#define MODMENU_CURRENT_HH_MODE		(1ULL << 27)
+#define MODMENU_CURRENT_EYECAM		(1ULL << 28)
+#define MODMENU_CURRENT_CHASECAM		(1ULL << 29)
+#define MODMENU_CURRENT_FLY_OBSERVER	(1ULL << 30)
+#define MODMENU_VISIBLE_PLAYER_READY	(1ULL << 31)
+#define MODMENU_VISIBLE_PLAYER_NOT_READY (1ULL << 32)
+#define MODMENU_VISIBLE_AIRSHOT_MODE	(1ULL << 33)
+#define MODMENU_VISIBLE_NOT_AIRSHOT_MODE (1ULL << 34)
+#define MODMENU_CURRENT_OBSERVER_MASK	(MODMENU_CURRENT_EYECAM | MODMENU_CURRENT_CHASECAM | \
+										 MODMENU_CURRENT_FLY_OBSERVER)
+#define MODMENU_CURRENT_MASK			(MODMENU_CURRENT_PRACTICE | MODMENU_CURRENT_NORMAL | \
+										 MODMENU_CURRENT_MATCH | MODMENU_CURRENT_DM_MODE | \
+										 MODMENU_CURRENT_CTF_MODE | MODMENU_CURRENT_DMM4_MODE | \
+										 MODMENU_CURRENT_CTF_DMM4_MODE | MODMENU_CURRENT_CA_MODE | \
+										 MODMENU_CURRENT_RA_MODE | MODMENU_CURRENT_WIPEOUT_MODE | \
+										 MODMENU_CURRENT_AIRSHOT_MODE | MODMENU_CURRENT_HH_MODE)
+#define MODMENU_VISIBLE_MATCH_MASK		(MODMENU_VISIBLE_CTF_MATCH | MODMENU_VISIBLE_NOT_CTF_MATCH | \
+										 MODMENU_VISIBLE_DM_MATCH | MODMENU_VISIBLE_NOT_DM_MATCH | \
+										 MODMENU_VISIBLE_TEAM_MATCH | MODMENU_VISIBLE_NOT_TEAM_MATCH | \
+										 MODMENU_VISIBLE_CA_ARENA | MODMENU_VISIBLE_NOT_CA_ARENA | \
+										 MODMENU_VISIBLE_DMM4_MODE | MODMENU_VISIBLE_NOT_DMM4_MODE | \
+										 MODMENU_VISIBLE_RA_MODE | MODMENU_VISIBLE_NOT_RA_MODE | \
+										 MODMENU_VISIBLE_AIRSHOT_MODE | MODMENU_VISIBLE_NOT_AIRSHOT_MODE | \
+										 MODMENU_VISIBLE_CTF_MODE | MODMENU_VISIBLE_NOT_CTF_MODE | \
+										 MODMENU_VISIBLE_DM_MODE | MODMENU_VISIBLE_NOT_DM_MODE)
+#define MODMENU_VISIBLE_CONDITION_MASK	(MODMENU_VISIBLE_MATCH_MASK | MODMENU_VISIBLE_PLAYER_READY | \
+										 MODMENU_VISIBLE_PLAYER_NOT_READY)
+
+typedef struct
+{
+	const char *label;
+	const char *command;
+	modmenu_action_t action;
+	unsigned long long flags;
+	int group;
+	int shortcut;
+} modmenu_item_t;
+
+typedef struct
+{
+	const char *title;
+	qboolean (*is_active)(void);
+	const modmenu_item_t *items;
+	int num_items;
+	const char *mode_title;
+	const modmenu_item_t *mode_items;
+	int num_mode_items;
+	const char *dm_mode_title;
+	const modmenu_item_t *dm_mode_items;
+	int num_dm_mode_items;
+	const char *votes_title;
+	const modmenu_item_t *votes_items;
+	int num_votes_items;
+	const char *misc_title;
+	const modmenu_item_t *misc_items;
+	int num_misc_items;
+	const char *timelimit_title;
+	const modmenu_item_t *timelimit_items;
+	int num_timelimit_items;
+	const char *fraglimit_title;
+	const modmenu_item_t *fraglimit_items;
+	int num_fraglimit_items;
+	const char *custom_file;
+} modmenu_definition_t;
+
+#define MODMENU_MAX_CUSTOM_ITEMS 32
+#define MODMENU_CUSTOM_LABEL_LEN 32
+#define MODMENU_CUSTOM_COMMAND_LEN 128
+#define MODMENU_CUSTOM_TITLE_LEN 32
+#define MODMENU_FIRST_Y 56
+#define MODMENU_ITEM_HEIGHT 8
+#define MODMENU_CURRENT_MODE_GAP 16
+#define MODMENU_MODE_FIRST_Y 56
+#define MODMENU_MODE_ITEM_HEIGHT 8
+#define MODMENU_MAX_VISIBLE_ITEMS 32
+#define MODMENU_GROUP_GAP 8
+#define MODMENU_MAX_MAP_ALIASES 2048
+#define MODMENU_MAP_FIRST_Y 56
+#define MODMENU_MAP_ITEM_HEIGHT 8
+#define MODMENU_MAP_LABEL_X 16
+#define MODMENU_MAP_CURSOR_X 8
+#define MODMENU_MAP_COLS 36
+#define MODMENU_MAP_VIEW_ROWS 13
+#define MODMENU_MAP_SEARCH_BOX_X 16
+#define MODMENU_MAP_SEARCH_BOX_Y 176
+#define MODMENU_MAP_SEARCH_TEXT_X 24
+#define MODMENU_MAP_SEARCH_TEXT_Y 184
+
+#define MODMENU_GROUP_DEFAULT 0
+#define MODMENU_GROUP_JOIN 1
+#define MODMENU_GROUP_READY 2
+#define MODMENU_GROUP_OBSERVER 3
+#define MODMENU_GROUP_MODE 4
+#define MODMENU_GROUP_MAIN 5
+#define MODMENU_GROUP_BACK 6
+#define MODMENU_GROUP_MODE_PLAYMODE 7
+#define MODMENU_GROUP_MISC 8
+#define MODMENU_GROUP_MISC_ACTION 9
+#define MODMENU_GROUP_LIMIT 10
+
+static int modmenu_cursor;
+static int modmenu_mode_cursor;
+static int modmenu_dm_mode_cursor;
+static int modmenu_votes_cursor;
+static int modmenu_misc_cursor;
+static int modmenu_timelimit_cursor;
+static int modmenu_fraglimit_cursor;
+static qboolean modmenu_in_modes;
+static qboolean modmenu_in_dm_modes;
+static qboolean modmenu_in_votes;
+static qboolean modmenu_in_maps;
+static qboolean modmenu_in_misc;
+static qboolean modmenu_in_timelimit;
+static qboolean modmenu_in_fraglimit;
+static const modmenu_item_t *modmenu_visible_items[MODMENU_MAX_VISIBLE_ITEMS];
+
+typedef struct
+{
+	qboolean active;
+	const modmenu_definition_t *definition;
+	char title[MODMENU_CUSTOM_TITLE_LEN + 1];
+	char mode_title[MODMENU_CUSTOM_TITLE_LEN + 1];
+	modmenu_item_t items[MODMENU_MAX_CUSTOM_ITEMS];
+	modmenu_item_t mode_items[MODMENU_MAX_CUSTOM_ITEMS];
+	char item_labels[MODMENU_MAX_CUSTOM_ITEMS][MODMENU_CUSTOM_LABEL_LEN + 1];
+	char item_commands[MODMENU_MAX_CUSTOM_ITEMS][MODMENU_CUSTOM_COMMAND_LEN + 2];
+	char mode_item_labels[MODMENU_MAX_CUSTOM_ITEMS][MODMENU_CUSTOM_LABEL_LEN + 1];
+	char mode_item_commands[MODMENU_MAX_CUSTOM_ITEMS][MODMENU_CUSTOM_COMMAND_LEN + 2];
+	int num_items;
+	int num_mode_items;
+} modmenu_custom_t;
+
+static modmenu_custom_t modmenu_custom;
+
+typedef struct
+{
+	menulist_t list;
+	char aliases[MODMENU_MAX_MAP_ALIASES][MAX_ALIAS_NAME];
+	char descriptions[MODMENU_MAX_MAP_ALIASES][sizeof(((filelist_item_t *)0)->data)];
+	int filtered_indices[MODMENU_MAX_MAP_ALIASES];
+	int num_aliases;
+	int max_alias_len;
+	qboolean scrollbar_grab;
+} modmenu_mapmenu_t;
+
+static modmenu_mapmenu_t modmenu_mapmenu;
+
+extern server_alias_t *server_aliases;
+
+static qboolean M_ModMenu_Connected(void)
+{
+	return cl_modmenu.value != 0 &&
+		cls.state == ca_connected &&
+		cls.signon == SIGNONS &&
+		!cls.demoplayback;
+}
+
+static qboolean M_ModMenu_PathContainsCRMod(const char *path)
+{
+	const char *name;
+
+	if (!path || !path[0])
+		return false;
+
+	name = COM_SkipPath(path);
+	return name && q_strcasestr(name, "crmod");
+}
+
+static qboolean M_ModMenu_IsCRMod7(void)
+{
+	char mod[64], modname[64];
+
+	if (!M_ModMenu_Connected())
+		return false;
+
+	Info_GetKey(cl.serverinfo, "mod", mod, sizeof(mod));
+	Info_GetKey(cl.serverinfo, "modname", modname, sizeof(modname));
+
+	return cl.modtype == 3 ||
+		q_strcasestr(mod, "crmod") ||
+		q_strcasestr(modname, "crmod") ||
+		M_ModMenu_PathContainsCRMod(cl.server_gamedir) ||
+		M_ModMenu_PathContainsCRMod(com_gamedir);
+}
+
+static void M_ModMenu_GetCRMod7MatchState(qboolean *ctf_match, qboolean *dm_match, qboolean *team_match,
+	qboolean *ca_arena, qboolean *dmm4_mode, qboolean *ra_mode, qboolean *airshot_mode,
+	qboolean *ctf_mode, qboolean *dm_mode)
+{
+	char mode[32] = "", playmode[32] = "";
+
+	Info_GetKey(cl.serverinfo, "mode", mode, sizeof(mode));
+	Info_GetKey(cl.serverinfo, "playmode", playmode, sizeof(playmode));
+
+	*ctf_mode = !q_strcasecmp(mode, "ctf");
+	*dm_mode = !q_strcasecmp(mode, "dm");
+	*ctf_match = *ctf_mode && !q_strcasecmp(playmode, "match");
+	*dm_match = *dm_mode && !q_strcasecmp(playmode, "match");
+	*team_match = *ctf_match || *dm_match;
+	*ca_arena = !q_strcasecmp(mode, "ca") ||
+		!q_strcasecmp(mode, "clanarena") ||
+		!q_strcasecmp(mode, "wipeout");
+	*dmm4_mode = !q_strcasecmp(mode, "dmm4") ||
+		!q_strcasecmp(mode, "ctfdmm4");
+	*ra_mode = !q_strcasecmp(mode, "ra") ||
+		!q_strcasecmp(mode, "rocketarena") ||
+		!q_strcasecmp(mode, "rocket_arena");
+	*airshot_mode = !q_strcasecmp(mode, "airshot");
+}
+
+static const modmenu_item_t modmenu_crmod7_items[] =
+{
+	{"Join", "ready\n", MODMENU_COMMAND, MODMENU_VISIBLE_NOT_TEAM_MATCH | MODMENU_VISIBLE_NOT_CA_ARENA | MODMENU_VISIBLE_NOT_DMM4_MODE | MODMENU_VISIBLE_NOT_RA_MODE | MODMENU_VISIBLE_NOT_AIRSHOT_MODE, MODMENU_GROUP_JOIN, 'j'},
+	{"Leave", "observer\n", MODMENU_COMMAND, MODMENU_VISIBLE_NOT_TEAM_MATCH | MODMENU_VISIBLE_NOT_CA_ARENA | MODMENU_VISIBLE_NOT_DMM4_MODE | MODMENU_VISIBLE_NOT_RA_MODE | MODMENU_VISIBLE_NOT_AIRSHOT_MODE, MODMENU_GROUP_JOIN, 'l'},
+	{"Join", "impulse 1\n", MODMENU_COMMAND, MODMENU_VISIBLE_DMM4_MODE, MODMENU_GROUP_JOIN, 'j'},
+	{"Leave Game", "impulse 2\n", MODMENU_COMMAND, MODMENU_VISIBLE_DMM4_MODE, MODMENU_GROUP_JOIN, 'l'},
+	{"Join", "impulse 1\n", MODMENU_COMMAND, MODMENU_VISIBLE_RA_MODE, MODMENU_GROUP_JOIN, 'j'},
+	{"Leave Game", "impulse 2\n", MODMENU_COMMAND, MODMENU_VISIBLE_RA_MODE, MODMENU_GROUP_JOIN, 'l'},
+	{"Join", "impulse 1\n", MODMENU_COMMAND, MODMENU_VISIBLE_AIRSHOT_MODE, MODMENU_GROUP_JOIN, 'j'},
+	{"Leave Game", "impulse 2\n", MODMENU_COMMAND, MODMENU_VISIBLE_AIRSHOT_MODE, MODMENU_GROUP_JOIN, 'l'},
+	{"Join Red", "notready\nred\n", MODMENU_COMMAND, MODMENU_VISIBLE_TEAM_MATCH, MODMENU_GROUP_JOIN, 'r'},
+	{"Join Blue", "notready\nblue\n", MODMENU_COMMAND, MODMENU_VISIBLE_TEAM_MATCH, MODMENU_GROUP_JOIN, 'b'},
+	{"Join Yellow", "notready\n;color 12;w5;ready;\n", MODMENU_COMMAND, MODMENU_VISIBLE_DM_MATCH, MODMENU_GROUP_JOIN, 'y'},
+	{"Join Blue", "impulse 1\n", MODMENU_COMMAND, MODMENU_VISIBLE_CA_ARENA, MODMENU_GROUP_JOIN, 'b'},
+	{"Join Red", "impulse 2\n", MODMENU_COMMAND, MODMENU_VISIBLE_CA_ARENA, MODMENU_GROUP_JOIN, 'r'},
+	{"Join Yellow", "impulse 3\n", MODMENU_COMMAND, MODMENU_VISIBLE_CA_ARENA, MODMENU_GROUP_JOIN, 'y'},
+	{"Join Green", "impulse 4\n", MODMENU_COMMAND, MODMENU_VISIBLE_CA_ARENA, MODMENU_GROUP_JOIN, 'g'},
+	{"Leave", "impulse 5\n", MODMENU_COMMAND, MODMENU_VISIBLE_CA_ARENA, MODMENU_GROUP_JOIN, 'l'},
+	{"Ready", "ready\n", MODMENU_COMMAND, MODMENU_VISIBLE_TEAM_MATCH | MODMENU_VISIBLE_PLAYER_NOT_READY, MODMENU_GROUP_READY, 0},
+	{"Not Ready", "notready\n", MODMENU_COMMAND, MODMENU_VISIBLE_TEAM_MATCH | MODMENU_VISIBLE_PLAYER_READY, MODMENU_GROUP_READY, 'n'},
+	{"Eyecam", "eyecam\n", MODMENU_COMMAND, MODMENU_CURRENT_EYECAM, MODMENU_GROUP_OBSERVER, 'e'},
+	{"Chasecam", "chase\n", MODMENU_COMMAND, MODMENU_CURRENT_CHASECAM, MODMENU_GROUP_OBSERVER, 'h'},
+	{"Fly", "flyme\n", MODMENU_COMMAND, MODMENU_CURRENT_FLY_OBSERVER, MODMENU_GROUP_OBSERVER, 'f'},
+	{"Votes", NULL, MODMENU_SUBMENU_VOTES, 0, MODMENU_GROUP_MODE, 'v'},
+	{"Go To Main Menu", NULL, MODMENU_MAIN, 0, MODMENU_GROUP_MAIN, 'm'},
+	{"Quit", NULL, MODMENU_QUIT, 0, MODMENU_GROUP_MAIN, 'q'},
+};
+
+static const modmenu_item_t modmenu_crmod7_vote_items[] =
+{
+	{"Mode", NULL, MODMENU_SUBMENU, 0, MODMENU_GROUP_MODE, 'c'},
+	{"Map", NULL, MODMENU_SUBMENU_MAPS, 0, MODMENU_GROUP_MODE, 'v'},
+	{"Misc", NULL, MODMENU_SUBMENU_MISC, 0, MODMENU_GROUP_MODE, 'o'},
+	{"Back", NULL, MODMENU_BACK, 0, MODMENU_GROUP_BACK, 'b'},
+};
+
+static const modmenu_item_t modmenu_crmod7_mode_items[] =
+{
+	{"Practice", "practice\n", MODMENU_COMMAND, MODMENU_VISIBLE_DM_MODE | MODMENU_CURRENT_PRACTICE, MODMENU_GROUP_MODE_PLAYMODE, 0},
+	{"FFA", "normal\n", MODMENU_COMMAND, MODMENU_VISIBLE_DM_MODE | MODMENU_CURRENT_NORMAL, MODMENU_GROUP_MODE_PLAYMODE, 0},
+	{"Match", "match\n", MODMENU_COMMAND, MODMENU_VISIBLE_DM_MODE | MODMENU_CURRENT_MATCH, MODMENU_GROUP_MODE_PLAYMODE, 0},
+	{"Practice", "practice\n", MODMENU_COMMAND, MODMENU_VISIBLE_CTF_MODE | MODMENU_CURRENT_PRACTICE, MODMENU_GROUP_MODE_PLAYMODE, 0},
+	{"Normal/Public", "normal\n", MODMENU_COMMAND, MODMENU_VISIBLE_CTF_MODE | MODMENU_CURRENT_NORMAL, MODMENU_GROUP_MODE_PLAYMODE, 0},
+	{"Match", "match\n", MODMENU_COMMAND, MODMENU_VISIBLE_CTF_MODE | MODMENU_CURRENT_MATCH, MODMENU_GROUP_MODE_PLAYMODE, 0},
+	{"Deathmatch", "dm\n", MODMENU_COMMAND, MODMENU_CURRENT_DM_MODE, MODMENU_GROUP_MODE, 0},
+	{"Capture The Flag", "ctf\n", MODMENU_COMMAND, MODMENU_CURRENT_CTF_MODE, MODMENU_GROUP_MODE, 0},
+	{"DMM4", "dmm4\n", MODMENU_COMMAND, MODMENU_CURRENT_DMM4_MODE, MODMENU_GROUP_MODE, 0},
+	{"CTF DMM4", "ctfdmm4\n", MODMENU_COMMAND, MODMENU_CURRENT_CTF_DMM4_MODE, MODMENU_GROUP_MODE, 0},
+	{"Clan Arena", "ca\n", MODMENU_COMMAND, MODMENU_CURRENT_CA_MODE, MODMENU_GROUP_MODE, 0},
+	{"Rocket Arena", "ra\n", MODMENU_COMMAND, MODMENU_CURRENT_RA_MODE, MODMENU_GROUP_MODE, 0},
+	{"Wipeout", "wipeout\n", MODMENU_COMMAND, MODMENU_CURRENT_WIPEOUT_MODE, MODMENU_GROUP_MODE, 0},
+	{"Airshot", "airshot\n", MODMENU_COMMAND, MODMENU_CURRENT_AIRSHOT_MODE, MODMENU_GROUP_MODE, 0},
+	{"Head Hunters", "hh\n", MODMENU_COMMAND, MODMENU_CURRENT_HH_MODE, MODMENU_GROUP_MODE, 0},
+	{"Back", NULL, MODMENU_BACK, 0, MODMENU_GROUP_BACK, 'b'},
+};
+
+static const modmenu_item_t modmenu_crmod7_dm_mode_items[] =
+{
+	{"Practice", "practice\n", MODMENU_COMMAND, 0, MODMENU_GROUP_MODE, 0},
+	{"FFA", "normal\n", MODMENU_COMMAND, 0, MODMENU_GROUP_MODE, 0},
+	{"Match", "match\n", MODMENU_COMMAND, 0, MODMENU_GROUP_MODE, 0},
+	{"Back", NULL, MODMENU_BACK, 0, MODMENU_GROUP_BACK, 'b'},
+};
+
+static const modmenu_item_t modmenu_crmod7_misc_items[] =
+{
+	{"Pause", "timerstop\n", MODMENU_COMMAND, 0, MODMENU_GROUP_MISC_ACTION, 'p'},
+	{"Unpause", "timerstart\n", MODMENU_COMMAND, 0, MODMENU_GROUP_MISC_ACTION, 'u'},
+	{"Abort Match", "abortmatch\n", MODMENU_COMMAND, 0, MODMENU_GROUP_MISC_ACTION, 'a'},
+	{"Timelimit", NULL, MODMENU_SUBMENU_TIMELIMIT, 0, MODMENU_GROUP_LIMIT, 't'},
+	{"Fraglimit", NULL, MODMENU_SUBMENU_FRAGLIMIT, 0, MODMENU_GROUP_LIMIT, 'f'},
+	{"Back", NULL, MODMENU_BACK, 0, MODMENU_GROUP_BACK, 'b'},
+};
+
+static const modmenu_item_t modmenu_crmod7_timelimit_items[] =
+{
+	{"5 Minutes", "cmd timeset 5\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"10 Minutes", "cmd timeset 10\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"15 Minutes", "cmd timeset 15\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"20 Minutes", "cmd timeset 20\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"25 Minutes", "cmd timeset 25\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"30 Minutes", "cmd timeset 30\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"3 Minutes", "cmd timeset 3\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"No Timelimit", "cmd timeset 0\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"Back", NULL, MODMENU_BACK, 0, MODMENU_GROUP_BACK, 'b'},
+};
+
+static const modmenu_item_t modmenu_crmod7_fraglimit_items[] =
+{
+	{"5 Frags", "cmd fraglimit 5\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"10 Frags", "cmd fraglimit 10\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"15 Frags", "cmd fraglimit 15\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"20 Frags", "cmd fraglimit 20\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"25 Frags", "cmd fraglimit 25\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"35 Frags", "cmd fraglimit 35\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"50 Frags", "cmd fraglimit 50\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"75 Frags", "cmd fraglimit 75\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"100 Frags", "cmd fraglimit 100\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"No Fraglimit", "cmd fraglimit 0\n", MODMENU_COMMAND, 0, MODMENU_GROUP_LIMIT, 0},
+	{"Back", NULL, MODMENU_BACK, 0, MODMENU_GROUP_BACK, 'b'},
+};
+
+static const modmenu_definition_t modmenu_definitions[] =
+{
+	{
+		"CRMod^g7^g", M_ModMenu_IsCRMod7,
+		modmenu_crmod7_items, countof(modmenu_crmod7_items),
+		"CRMod^g7^g Modes", modmenu_crmod7_mode_items, countof(modmenu_crmod7_mode_items),
+		"DM Modes", modmenu_crmod7_dm_mode_items, countof(modmenu_crmod7_dm_mode_items),
+		"Votes", modmenu_crmod7_vote_items, countof(modmenu_crmod7_vote_items),
+		"Misc", modmenu_crmod7_misc_items, countof(modmenu_crmod7_misc_items),
+		"Timelimit", modmenu_crmod7_timelimit_items, countof(modmenu_crmod7_timelimit_items),
+		"Fraglimit", modmenu_crmod7_fraglimit_items, countof(modmenu_crmod7_fraglimit_items),
+		"modmenu/crmod7.lst"
+	},
+};
+
+static qboolean M_ModMenu_MapListItemActive(int index)
+{
+	return index >= 0 && index < modmenu_mapmenu.list.numitems;
+}
+
+static qboolean M_ModMenu_IsAllDigits(const char *text)
+{
+	if (!text || !text[0])
+		return false;
+
+	for (; *text; text++)
+		if (!q_isdigit((unsigned char)*text))
+			return false;
+
+	return true;
+}
+
+static qboolean M_ModMenu_IsNonMapCmdAlias(const char *name)
+{
+	static const char *const nonmap_aliases[] =
+	{
+		"shownick", "eyecam", "afkon", "afkoff",
+		"itemstats", "dstats", "wtstats", "itstats", "altents",
+		"last", "lastscores", "pos_save", "pos_move", "pos_show",
+		"pos_origin", "pos_angles",
+		"normal", "practice", "match", "dm", "ctf", "wipeout",
+		"ca", "ra", "dmm4", "ctfdmm4", "airshot", "hh",
+		"timeset", "suggest", "powerupdrop", "leavemealone",
+		"prediction", "markdemo", "qwsucks", "q14ever"
+	};
+	int i;
+
+	for (i = 0; i < countof(nonmap_aliases); i++)
+		if (!q_strcasecmp(name, nonmap_aliases[i]))
+			return true;
+
+	return false;
+}
+
+static const char *M_ModMenu_SkipAliasSpaces(const char *text)
+{
+	while (*text && q_isspace((unsigned char)*text))
+		text++;
+
+	return text;
+}
+
+static qboolean M_ModMenu_AliasValueIsCmdSelf(const char *name, const char *value)
+{
+	char target[MAX_ALIAS_NAME];
+	const char *p;
+	size_t len = 0;
+
+	if (!name || !name[0] || !value)
+		return false;
+
+	p = M_ModMenu_SkipAliasSpaces(value);
+	if (q_strncasecmp(p, "cmd", 3) || (p[3] && !q_isspace((unsigned char)p[3])))
+		return false;
+
+	p = M_ModMenu_SkipAliasSpaces(p + 3);
+	while (*p && !q_isspace((unsigned char)*p) && *p != ';')
+	{
+		if (len + 1 < sizeof(target))
+			target[len++] = *p;
+		p++;
+	}
+	target[len] = 0;
+
+	if (!target[0] || q_strcasecmp(target, name))
+		return false;
+
+	p = M_ModMenu_SkipAliasSpaces(p);
+	if (*p == ';')
+		p = M_ModMenu_SkipAliasSpaces(p + 1);
+
+	return *p == 0;
+}
+
+static qboolean M_ModMenu_MapAliasAlreadyAdded(const char *name)
+{
+	int i;
+
+	for (i = 0; i < modmenu_mapmenu.num_aliases; i++)
+		if (!q_strcasecmp(modmenu_mapmenu.aliases[i], name))
+			return true;
+
+	return false;
+}
+
+static qboolean M_ModMenu_IsMapAlias(const char *name)
+{
+	const char *value;
+
+	if (!name || !name[0] || M_ModMenu_IsAllDigits(name) ||
+		M_ModMenu_IsNonMapCmdAlias(name))
+		return false;
+
+	value = Cmd_GetAliasValue(name);
+	return M_ModMenu_AliasValueIsCmdSelf(name, value);
+}
+
+static int M_ModMenu_MapAliasCompare(const void *a, const void *b)
+{
+	return q_strcasecmp((const char *)a, (const char *)b);
+}
+
+static qboolean M_ModMenu_MapAliasMatches(int index)
+{
+	return modmenu_mapmenu.list.search.len <= 0 ||
+		(q_strcasestr(modmenu_mapmenu.aliases[index], modmenu_mapmenu.list.search.text) != NULL) ||
+		(modmenu_mapmenu.descriptions[index][0] &&
+			q_strcasestr(modmenu_mapmenu.descriptions[index], modmenu_mapmenu.list.search.text) != NULL);
+}
+
+static void M_ModMenu_Maps_LoadDescriptions(void)
+{
+	filelist_item_t *json_levels = NULL;
+	int i;
+
+	for (i = 0; i < modmenu_mapmenu.num_aliases; i++)
+		modmenu_mapmenu.descriptions[i][0] = '\0';
+
+	LoadMapDescriptionsFromJSON(&json_levels);
+
+	for (i = 0; i < modmenu_mapmenu.num_aliases; i++)
+	{
+		filelist_item_t *level = FindLevelInList(json_levels, modmenu_mapmenu.aliases[i]);
+
+		if (!level || !level->data[0] || !q_strcasecmp(level->data, "empty-description"))
+			continue;
+
+		q_strlcpy(modmenu_mapmenu.descriptions[i], level->data,
+			sizeof(modmenu_mapmenu.descriptions[i]));
+	}
+
+	FreeLevelList(json_levels);
+}
+
+static void M_ModMenu_Maps_Refilter(qboolean preserve_selection)
+{
+	char selected[MAX_ALIAS_NAME] = "";
+	int i, old_cursor;
+
+	old_cursor = modmenu_mapmenu.list.cursor;
+	if (preserve_selection && old_cursor >= 0 && old_cursor < modmenu_mapmenu.list.numitems)
+	{
+		int alias_index = modmenu_mapmenu.filtered_indices[old_cursor];
+		q_strlcpy(selected, modmenu_mapmenu.aliases[alias_index], sizeof(selected));
+	}
+
+	modmenu_mapmenu.list.numitems = 0;
+	for (i = 0; i < modmenu_mapmenu.num_aliases; i++)
+	{
+		if (!M_ModMenu_MapAliasMatches(i))
+			continue;
+		modmenu_mapmenu.filtered_indices[modmenu_mapmenu.list.numitems++] = i;
+	}
+
+	if (modmenu_mapmenu.list.numitems <= 0)
+	{
+		modmenu_mapmenu.list.cursor = 0;
+		modmenu_mapmenu.list.scroll = 0;
+		return;
+	}
+
+	modmenu_mapmenu.list.cursor = CLAMP(0, old_cursor, modmenu_mapmenu.list.numitems - 1);
+	if (selected[0])
+	{
+		for (i = 0; i < modmenu_mapmenu.list.numitems; i++)
+		{
+			int alias_index = modmenu_mapmenu.filtered_indices[i];
+			if (!q_strcasecmp(selected, modmenu_mapmenu.aliases[alias_index]))
+			{
+				modmenu_mapmenu.list.cursor = i;
+				break;
+			}
+		}
+	}
+
+	M_List_Rescroll(&modmenu_mapmenu.list);
+}
+
+static void M_ModMenu_Maps_Rebuild(void)
+{
+	server_alias_t *alias;
+
+	modmenu_mapmenu.num_aliases = 0;
+	modmenu_mapmenu.max_alias_len = 0;
+	for (alias = server_aliases; alias && modmenu_mapmenu.num_aliases < MODMENU_MAX_MAP_ALIASES; alias = alias->next)
+	{
+		if (!M_ModMenu_IsMapAlias(alias->name) ||
+			M_ModMenu_MapAliasAlreadyAdded(alias->name))
+			continue;
+
+		q_strlcpy(modmenu_mapmenu.aliases[modmenu_mapmenu.num_aliases++],
+			alias->name, sizeof(modmenu_mapmenu.aliases[0]));
+	}
+
+	qsort(modmenu_mapmenu.aliases, modmenu_mapmenu.num_aliases,
+		sizeof(modmenu_mapmenu.aliases[0]), M_ModMenu_MapAliasCompare);
+
+	for (int i = 0; i < modmenu_mapmenu.num_aliases; i++)
+		modmenu_mapmenu.max_alias_len = q_max(modmenu_mapmenu.max_alias_len,
+			(int)strlen(modmenu_mapmenu.aliases[i]));
+
+	M_ModMenu_Maps_LoadDescriptions();
+	M_ModMenu_Maps_Refilter(false);
+}
+
+static void M_ModMenu_Maps_Open(void)
+{
+	modmenu_in_modes = false;
+	modmenu_in_dm_modes = false;
+	modmenu_in_maps = true;
+	modmenu_in_misc = false;
+	modmenu_in_timelimit = false;
+	modmenu_in_fraglimit = false;
+
+	modmenu_mapmenu.scrollbar_grab = false;
+	modmenu_mapmenu.list.cursor = 0;
+	modmenu_mapmenu.list.scroll = 0;
+	modmenu_mapmenu.list.viewsize = MODMENU_MAP_VIEW_ROWS;
+	modmenu_mapmenu.list.isactive_fn = M_ModMenu_MapListItemActive;
+	modmenu_mapmenu.list.search.len = 0;
+	modmenu_mapmenu.list.search.maxlen = MAX_ALIAS_NAME - 1;
+	modmenu_mapmenu.list.search.text[0] = 0;
+
+	M_ModMenu_Maps_Rebuild();
+}
+
+static const modmenu_definition_t *M_ModMenu_CurrentDefinition(void)
+{
+	int i;
+
+	for (i = 0; i < countof(modmenu_definitions); i++)
+		if (modmenu_definitions[i].is_active())
+			return &modmenu_definitions[i];
+
+	return NULL;
+}
+
+static qboolean M_ModMenu_ShouldOpen(void)
+{
+	return M_ModMenu_CurrentDefinition() != NULL;
+}
+
+static void M_ModMenu_CustomClear(const modmenu_definition_t *menu)
+{
+	memset(&modmenu_custom, 0, sizeof(modmenu_custom));
+	modmenu_custom.definition = menu;
+	q_strlcpy(modmenu_custom.title, menu->title, sizeof(modmenu_custom.title));
+	if (menu->mode_title)
+		q_strlcpy(modmenu_custom.mode_title, menu->mode_title, sizeof(modmenu_custom.mode_title));
+}
+
+static char *M_ModMenu_TrimLine(char *line)
+{
+	char *end;
+
+	while (*line && (byte)*line <= ' ')
+		line++;
+
+	end = line + strlen(line);
+	while (end > line && (byte)end[-1] <= ' ')
+		*--end = 0;
+
+	return line;
+}
+
+typedef struct
+{
+	char *cursor;
+	qboolean error;
+} modmenu_parser_t;
+
+static qboolean M_ModMenu_ParseLineToken(modmenu_parser_t *parser, char *out, size_t out_size)
+{
+	char *p = parser->cursor;
+	size_t len = 0;
+
+	if (!out_size)
+	{
+		parser->error = true;
+		return false;
+	}
+
+	out[0] = 0;
+	while (*p && (byte)*p <= ' ')
+		p++;
+
+	if (!*p || *p == '#' || (*p == '/' && p[1] == '/'))
+	{
+		parser->cursor = p;
+		return false;
+	}
+
+	if (*p == '"')
+	{
+		p++;
+		while (*p && *p != '"')
+		{
+			if (*p == '\\' && p[1])
+				p++;
+			if (len + 1 >= out_size)
+			{
+				parser->error = true;
+				return false;
+			}
+			out[len++] = *p;
+			p++;
+		}
+		if (*p != '"')
+		{
+			parser->error = true;
+			return false;
+		}
+		p++;
+		if (*p && (byte)*p > ' ' && *p != '#' && !(*p == '/' && p[1] == '/'))
+		{
+			parser->error = true;
+			return false;
+		}
+	}
+	else
+	{
+		while (*p && (byte)*p > ' ')
+		{
+			if (*p == '#' || (*p == '/' && p[1] == '/'))
+				break;
+			if (len + 1 >= out_size)
+			{
+				parser->error = true;
+				return false;
+			}
+			out[len++] = *p;
+			p++;
+		}
+	}
+
+	out[len] = 0;
+	parser->cursor = p;
+	return out[0] != 0;
+}
+
+static qboolean M_ModMenu_ParseLineEnd(modmenu_parser_t *parser)
+{
+	char extra[2];
+
+	return !M_ModMenu_ParseLineToken(parser, extra, sizeof(extra)) && !parser->error;
+}
+
+static void M_ModMenu_CustomAppendNewline(char *command, size_t command_size)
+{
+	size_t len = strlen(command);
+
+	if (len > 0 && command[len - 1] != '\n')
+		q_strlcat(command, "\n", command_size);
+}
+
+static qboolean M_ModMenu_CustomAddItem(qboolean modes, const char *label, const char *command,
+	modmenu_action_t action, unsigned long long flags, int shortcut)
+{
+	modmenu_item_t *items;
+	char (*labels)[MODMENU_CUSTOM_LABEL_LEN + 1];
+	char (*commands)[MODMENU_CUSTOM_COMMAND_LEN + 2];
+	int *num_items;
+	int index;
+
+	if (!label || !label[0])
+		return false;
+	if (action == MODMENU_COMMAND && (!command || !command[0]))
+		return false;
+
+	if (modes)
+	{
+		items = modmenu_custom.mode_items;
+		labels = modmenu_custom.mode_item_labels;
+		commands = modmenu_custom.mode_item_commands;
+		num_items = &modmenu_custom.num_mode_items;
+	}
+	else
+	{
+		items = modmenu_custom.items;
+		labels = modmenu_custom.item_labels;
+		commands = modmenu_custom.item_commands;
+		num_items = &modmenu_custom.num_items;
+	}
+
+	if (*num_items >= MODMENU_MAX_CUSTOM_ITEMS)
+		return false;
+
+	index = (*num_items)++;
+	q_strlcpy(labels[index], label, sizeof(labels[index]));
+	items[index].label = labels[index];
+	items[index].action = action;
+	items[index].flags = flags;
+	items[index].group = MODMENU_GROUP_DEFAULT;
+	items[index].shortcut = shortcut ? q_tolower(shortcut) : 0;
+	items[index].command = NULL;
+
+	if (action == MODMENU_COMMAND)
+	{
+		q_strlcpy(commands[index], command, sizeof(commands[index]));
+		M_ModMenu_CustomAppendNewline(commands[index], sizeof(commands[index]));
+		items[index].command = commands[index];
+	}
+	else
+		commands[index][0] = 0;
+
+	return true;
+}
+
+static qboolean M_ModMenu_ParseConditionFlag(const char *token, unsigned long long *flags)
+{
+	if (!q_strcasecmp(token, "ctfmatch"))
+		*flags |= MODMENU_VISIBLE_CTF_MATCH;
+	else if (!q_strcasecmp(token, "notctfmatch") || !q_strcasecmp(token, "nonctfmatch"))
+		*flags |= MODMENU_VISIBLE_NOT_CTF_MATCH;
+	else if (!q_strcasecmp(token, "dmmatch"))
+		*flags |= MODMENU_VISIBLE_DM_MATCH;
+	else if (!q_strcasecmp(token, "notdmmatch") || !q_strcasecmp(token, "nondmmatch"))
+		*flags |= MODMENU_VISIBLE_NOT_DM_MATCH;
+	else if (!q_strcasecmp(token, "teammatch"))
+		*flags |= MODMENU_VISIBLE_TEAM_MATCH;
+	else if (!q_strcasecmp(token, "notteammatch") || !q_strcasecmp(token, "nonteammatch"))
+		*flags |= MODMENU_VISIBLE_NOT_TEAM_MATCH;
+	else if (!q_strcasecmp(token, "caarena") || !q_strcasecmp(token, "camode") || !q_strcasecmp(token, "wipeout"))
+		*flags |= MODMENU_VISIBLE_CA_ARENA;
+	else if (!q_strcasecmp(token, "notcaarena") || !q_strcasecmp(token, "noncaarena") ||
+		!q_strcasecmp(token, "notcamode") || !q_strcasecmp(token, "noncamode") ||
+		!q_strcasecmp(token, "notwipeout") || !q_strcasecmp(token, "nonwipeout"))
+		*flags |= MODMENU_VISIBLE_NOT_CA_ARENA;
+	else if (!q_strcasecmp(token, "dmm4") || !q_strcasecmp(token, "dmm4mode") ||
+		!q_strcasecmp(token, "ctfdmm4"))
+		*flags |= MODMENU_VISIBLE_DMM4_MODE;
+	else if (!q_strcasecmp(token, "notdmm4") || !q_strcasecmp(token, "nondmm4") ||
+		!q_strcasecmp(token, "notdmm4mode") || !q_strcasecmp(token, "nondmm4mode") ||
+		!q_strcasecmp(token, "notctfdmm4") || !q_strcasecmp(token, "nonctfdmm4"))
+		*flags |= MODMENU_VISIBLE_NOT_DMM4_MODE;
+	else if (!q_strcasecmp(token, "ra") || !q_strcasecmp(token, "ramode") ||
+		!q_strcasecmp(token, "rocketarena") || !q_strcasecmp(token, "rocket_arena"))
+		*flags |= MODMENU_VISIBLE_RA_MODE;
+	else if (!q_strcasecmp(token, "notra") || !q_strcasecmp(token, "nonra") ||
+		!q_strcasecmp(token, "notramode") || !q_strcasecmp(token, "nonramode") ||
+		!q_strcasecmp(token, "notrocketarena") || !q_strcasecmp(token, "nonrocketarena") ||
+		!q_strcasecmp(token, "notrocket_arena") || !q_strcasecmp(token, "nonrocket_arena"))
+		*flags |= MODMENU_VISIBLE_NOT_RA_MODE;
+	else if (!q_strcasecmp(token, "airshot") || !q_strcasecmp(token, "airshotmode"))
+		*flags |= MODMENU_VISIBLE_AIRSHOT_MODE;
+	else if (!q_strcasecmp(token, "notairshot") || !q_strcasecmp(token, "nonairshot") ||
+		!q_strcasecmp(token, "notairshotmode") || !q_strcasecmp(token, "nonairshotmode"))
+		*flags |= MODMENU_VISIBLE_NOT_AIRSHOT_MODE;
+	else if (!q_strcasecmp(token, "ctfmode"))
+		*flags |= MODMENU_VISIBLE_CTF_MODE;
+	else if (!q_strcasecmp(token, "notctfmode") || !q_strcasecmp(token, "nonctfmode"))
+		*flags |= MODMENU_VISIBLE_NOT_CTF_MODE;
+	else if (!q_strcasecmp(token, "dmmode"))
+		*flags |= MODMENU_VISIBLE_DM_MODE;
+	else if (!q_strcasecmp(token, "notdmmode") || !q_strcasecmp(token, "nondmmode"))
+		*flags |= MODMENU_VISIBLE_NOT_DM_MODE;
+	else if (!q_strcasecmp(token, "ready") || !q_strcasecmp(token, "playerready"))
+		*flags |= MODMENU_VISIBLE_PLAYER_READY;
+	else if (!q_strcasecmp(token, "notready") || !q_strcasecmp(token, "playernotready") ||
+		!q_strcasecmp(token, "unready"))
+		*flags |= MODMENU_VISIBLE_PLAYER_NOT_READY;
+	else
+		return false;
+
+	return true;
+}
+
+static qboolean M_ModMenu_ParseItemOptions(modmenu_parser_t *parser, unsigned long long *flags, int *shortcut)
+{
+	char token[64], value[64];
+
+	while (M_ModMenu_ParseLineToken(parser, token, sizeof(token)))
+	{
+		if (M_ModMenu_ParseConditionFlag(token, flags))
+			continue;
+		else if (!q_strcasecmp(token, "shortcut"))
+		{
+			if (!M_ModMenu_ParseLineToken(parser, value, sizeof(value)) || !value[0])
+				return false;
+			*shortcut = value[0];
+		}
+		else if (!q_strcasecmp(token, "if"))
+		{
+			if (!M_ModMenu_ParseLineToken(parser, value, sizeof(value)) ||
+				!M_ModMenu_ParseConditionFlag(value, flags))
+				return false;
+		}
+		else
+			return false;
+	}
+
+	return !parser->error;
+}
+
+static qboolean M_ModMenu_ParseCustomLine(char *line, qboolean *modes)
+{
+	char token[64], label[MODMENU_CUSTOM_LABEL_LEN + 1], command[MODMENU_CUSTOM_COMMAND_LEN + 1];
+	modmenu_parser_t parser = {M_ModMenu_TrimLine(line), false};
+	unsigned long long flags = 0;
+	int shortcut = 0;
+
+	if (!M_ModMenu_ParseLineToken(&parser, token, sizeof(token)))
+		return !parser.error;
+
+	if (!q_strcasecmp(token, "section"))
+	{
+		if (!M_ModMenu_ParseLineToken(&parser, token, sizeof(token)))
+			return false;
+		if (!q_strcasecmp(token, "main"))
+			*modes = false;
+		else if (!q_strcasecmp(token, "mode") || !q_strcasecmp(token, "modes"))
+			*modes = true;
+		else
+			return false;
+		return M_ModMenu_ParseLineEnd(&parser);
+	}
+
+	if (!q_strcasecmp(token, "title"))
+	{
+		if (!M_ModMenu_ParseLineToken(&parser, label, sizeof(label)))
+			return false;
+		q_strlcpy(*modes ? modmenu_custom.mode_title : modmenu_custom.title, label,
+			*modes ? sizeof(modmenu_custom.mode_title) : sizeof(modmenu_custom.title));
+		return M_ModMenu_ParseLineEnd(&parser);
+	}
+
+	if (!q_strcasecmp(token, "mode_title"))
+	{
+		if (!M_ModMenu_ParseLineToken(&parser, label, sizeof(label)))
+			return false;
+		q_strlcpy(modmenu_custom.mode_title, label, sizeof(modmenu_custom.mode_title));
+		return M_ModMenu_ParseLineEnd(&parser);
+	}
+
+	if (!q_strcasecmp(token, "item"))
+	{
+		if (!M_ModMenu_ParseLineToken(&parser, label, sizeof(label)) ||
+			!M_ModMenu_ParseLineToken(&parser, command, sizeof(command)) ||
+			!M_ModMenu_ParseItemOptions(&parser, &flags, &shortcut))
+			return false;
+		return M_ModMenu_CustomAddItem(*modes, label, command, MODMENU_COMMAND, flags, shortcut);
+	}
+
+	if (!q_strcasecmp(token, "submenu"))
+	{
+		modmenu_action_t action = MODMENU_SUBMENU;
+		qboolean action_set = false;
+
+		if (!M_ModMenu_ParseLineToken(&parser, label, sizeof(label)))
+			return false;
+		while (M_ModMenu_ParseLineToken(&parser, command, sizeof(command)))
+		{
+			modmenu_action_t parsed_action;
+
+			if (!q_strcasecmp(command, "mode") || !q_strcasecmp(command, "modes"))
+				parsed_action = MODMENU_SUBMENU;
+			else if (!q_strcasecmp(command, "votes") || !q_strcasecmp(command, "vote"))
+				parsed_action = MODMENU_SUBMENU_VOTES;
+			else if (!q_strcasecmp(command, "map") || !q_strcasecmp(command, "maps") ||
+				!q_strcasecmp(command, "votemap") || !q_strcasecmp(command, "vote_map"))
+				parsed_action = MODMENU_SUBMENU_MAPS;
+			else if (!q_strcasecmp(command, "misc") || !q_strcasecmp(command, "misc_options"))
+				parsed_action = MODMENU_SUBMENU_MISC;
+			else if (!q_strcasecmp(command, "timelimit") || !q_strcasecmp(command, "timeset"))
+				parsed_action = MODMENU_SUBMENU_TIMELIMIT;
+			else if (!q_strcasecmp(command, "fraglimit"))
+				parsed_action = MODMENU_SUBMENU_FRAGLIMIT;
+			else if (M_ModMenu_ParseConditionFlag(command, &flags))
+				continue;
+			else if (!q_strcasecmp(command, "shortcut"))
+			{
+				if (!M_ModMenu_ParseLineToken(&parser, command, sizeof(command)) || !command[0])
+					return false;
+				shortcut = command[0];
+				continue;
+			}
+			else if (!q_strcasecmp(command, "if"))
+			{
+				if (!M_ModMenu_ParseLineToken(&parser, command, sizeof(command)) ||
+					!M_ModMenu_ParseConditionFlag(command, &flags))
+					return false;
+				continue;
+			}
+			else
+				return false;
+
+			if (action_set && action != parsed_action)
+				return false;
+			action = parsed_action;
+			action_set = true;
+		}
+		return !parser.error && action_set &&
+			M_ModMenu_CustomAddItem(false, label, NULL, action, flags, shortcut);
+	}
+
+	if (!q_strcasecmp(token, "mainmenu"))
+	{
+		if (!M_ModMenu_ParseLineToken(&parser, label, sizeof(label)) ||
+			!M_ModMenu_ParseItemOptions(&parser, &flags, &shortcut))
+			return false;
+		return M_ModMenu_CustomAddItem(*modes, label, NULL, MODMENU_MAIN, flags, shortcut);
+	}
+
+	if (!q_strcasecmp(token, "back"))
+	{
+		if (!M_ModMenu_ParseLineToken(&parser, label, sizeof(label)) ||
+			!M_ModMenu_ParseItemOptions(&parser, &flags, &shortcut))
+			return false;
+		return M_ModMenu_CustomAddItem(*modes, label, NULL, MODMENU_BACK, flags, shortcut);
+	}
+
+	return false;
+}
+
+static void M_ModMenu_LoadCustom(const modmenu_definition_t *menu)
+{
+	char *data, *line, *next;
+	int line_number = 0;
+	qboolean modes = false, parse_error = false;
+
+	M_ModMenu_CustomClear(menu);
+
+	if (!menu->custom_file || !menu->custom_file[0])
+		return;
+
+	data = (char *)COM_LoadMallocFile(menu->custom_file, NULL);
+	if (!data)
+		return;
+
+	for (line = data; line && *line; line = next)
+	{
+		next = strchr(line, '\n');
+		if (next)
+			*next++ = 0;
+		line_number++;
+
+		if (!M_ModMenu_ParseCustomLine(line, &modes))
+		{
+			Con_Printf("Ignoring invalid mod menu line %i in %s\n", line_number, menu->custom_file);
+			parse_error = true;
+			break;
+		}
+	}
+
+	if (!parse_error && modmenu_custom.num_items > 0)
+		modmenu_custom.active = true;
+	else
+		M_ModMenu_CustomClear(menu);
+
+	free(data);
+}
+
+static qboolean M_ModMenu_UsingCustom(const modmenu_definition_t *menu)
+{
+	return modmenu_custom.active && modmenu_custom.definition == menu;
+}
+
+static qboolean M_ModMenu_OnlyConnectedClient(void)
+{
+	int i, connected = 0;
+
+	if (!cl.scores || cl.maxclients <= 0)
+		return false;
+
+	for (i = 0; i < cl.maxclients; i++)
+	{
+		if (!cl.scores[i].name[0])
+			continue;
+		if (++connected > 1)
+			return false;
+	}
+
+	return connected == 1;
+}
+
+static qboolean M_ModMenu_ObserverModeIs(const char *mode);
+
+static qboolean M_ModMenu_ItemVisible(const modmenu_item_t *item)
+{
+	qboolean ctf_match, dm_match, team_match, ca_arena, dmm4_mode, ra_mode, airshot_mode, ctf_mode, dm_mode;
+	qboolean player_ready;
+
+	if (item->flags & MODMENU_CURRENT_OBSERVER_MASK)
+	{
+		if ((item->flags & (MODMENU_CURRENT_EYECAM | MODMENU_CURRENT_CHASECAM)) &&
+			M_ModMenu_OnlyConnectedClient())
+			return false;
+		if ((item->flags & MODMENU_CURRENT_EYECAM) && M_ModMenu_ObserverModeIs("eyecam"))
+			return false;
+		if ((item->flags & MODMENU_CURRENT_CHASECAM) &&
+			(M_ModMenu_ObserverModeIs("chase") || M_ModMenu_ObserverModeIs("chasecam")))
+			return false;
+		if ((item->flags & MODMENU_CURRENT_FLY_OBSERVER) && M_ModMenu_ObserverModeIs("fly"))
+			return false;
+	}
+
+	if (!(item->flags & MODMENU_VISIBLE_CONDITION_MASK))
+		return true;
+
+	M_ModMenu_GetCRMod7MatchState(&ctf_match, &dm_match, &team_match,
+		&ca_arena, &dmm4_mode, &ra_mode, &airshot_mode, &ctf_mode, &dm_mode);
+
+	if ((item->flags & MODMENU_VISIBLE_CTF_MATCH) && !ctf_match)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_NOT_CTF_MATCH) && ctf_match)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_DM_MATCH) && !dm_match)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_NOT_DM_MATCH) && dm_match)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_TEAM_MATCH) && !team_match)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_NOT_TEAM_MATCH) && team_match)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_CA_ARENA) && !ca_arena)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_NOT_CA_ARENA) && ca_arena)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_DMM4_MODE) && !dmm4_mode)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_NOT_DMM4_MODE) && dmm4_mode)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_RA_MODE) && !ra_mode)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_NOT_RA_MODE) && ra_mode)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_AIRSHOT_MODE) && !airshot_mode)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_NOT_AIRSHOT_MODE) && airshot_mode)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_CTF_MODE) && !ctf_mode)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_NOT_CTF_MODE) && ctf_mode)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_DM_MODE) && !dm_mode)
+		return false;
+	if ((item->flags & MODMENU_VISIBLE_NOT_DM_MODE) && dm_mode)
+		return false;
+
+	if (item->flags & (MODMENU_VISIBLE_PLAYER_READY | MODMENU_VISIBLE_PLAYER_NOT_READY))
+	{
+		player_ready = CL_LocalPlayerHasReadyStatus();
+		if ((item->flags & MODMENU_VISIBLE_PLAYER_READY) && !player_ready)
+			return false;
+		if ((item->flags & MODMENU_VISIBLE_PLAYER_NOT_READY) && player_ready)
+			return false;
+	}
+
+	return true;
+}
+
+static qboolean M_ModMenu_PlaymodeIsNormal(const char *playmode)
+{
+	return !q_strcasecmp(playmode, "normal") ||
+		!q_strcasecmp(playmode, "public") ||
+		!q_strcasecmp(playmode, "pug") ||
+		!q_strcasecmp(playmode, "ffa");
+}
+
+static const char *M_ModMenu_PlaymodeLabel(const char *mode, const char *playmode)
+{
+	if (!q_strcasecmp(playmode, "practice"))
+		return "Practice";
+	if (!q_strcasecmp(playmode, "match"))
+		return "Match";
+	if (!q_strcasecmp(mode, "dm") && M_ModMenu_PlaymodeIsNormal(playmode))
+		return "FFA";
+	if (!q_strcasecmp(mode, "ctf") && M_ModMenu_PlaymodeIsNormal(playmode))
+		return "Normal/Public";
+	if (playmode[0])
+		return playmode;
+	return "Unknown";
+}
+
+static const char *M_ModMenu_ModeLabel(const char *mode)
+{
+	if (!q_strcasecmp(mode, "dm"))
+		return "DM";
+	if (!q_strcasecmp(mode, "ctf"))
+		return "CTF";
+	if (!q_strcasecmp(mode, "dmm4"))
+		return "DMM4";
+	if (!q_strcasecmp(mode, "ctfdmm4"))
+		return "CTF DMM4";
+	if (!q_strcasecmp(mode, "ca") || !q_strcasecmp(mode, "clanarena"))
+		return "Clan Arena";
+	if (!q_strcasecmp(mode, "ra") || !q_strcasecmp(mode, "rocketarena") ||
+		!q_strcasecmp(mode, "rocket_arena"))
+		return "Rocket Arena";
+	if (!q_strcasecmp(mode, "wipeout"))
+		return "Wipeout";
+	if (!q_strcasecmp(mode, "airshot"))
+		return "Airshot";
+	if (!q_strcasecmp(mode, "hh") || !q_strcasecmp(mode, "headhunter") ||
+		!q_strcasecmp(mode, "headhunters"))
+		return "Head Hunters";
+	if (mode[0])
+		return mode;
+	return "Unknown";
+}
+
+static void M_ModMenu_CurrentModeText(char *text, size_t text_size)
+{
+	char mode[32] = "", playmode[32] = "";
+	const char *mode_label;
+
+	Info_GetKey(cl.serverinfo, "mode", mode, sizeof(mode));
+	Info_GetKey(cl.serverinfo, "playmode", playmode, sizeof(playmode));
+
+	mode_label = M_ModMenu_ModeLabel(mode);
+	if (!q_strcasecmp(mode, "dm") || !q_strcasecmp(mode, "ctf"))
+		q_snprintf(text, text_size, "Mode: %s %c %s",
+			mode_label, MENU_SCROLL_SEPARATOR_DOT,
+			M_ModMenu_PlaymodeLabel(mode, playmode));
+	else
+		q_snprintf(text, text_size, "Mode: %s", mode_label);
+}
+
+static qboolean M_ModMenu_ObserverModeIs(const char *mode)
+{
+	char observer[16], star_observer[16];
+	const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
+	const char *obs = Info_GetKey(userinfo, "observer", observer, sizeof(observer));
+	const char *star_obs = Info_GetKey(userinfo, "*observer", star_observer, sizeof(star_observer));
+
+	return !q_strcasecmp(obs, mode) || !q_strcasecmp(star_obs, mode);
+}
+
+static qboolean M_ModMenu_ItemDimmed(const modmenu_item_t *item)
+{
+	char mode[32] = "", playmode[32] = "";
+
+	if (!(item->flags & MODMENU_CURRENT_MASK))
+		return false;
+
+	Info_GetKey(cl.serverinfo, "mode", mode, sizeof(mode));
+	Info_GetKey(cl.serverinfo, "playmode", playmode, sizeof(playmode));
+
+	if ((item->flags & MODMENU_CURRENT_PRACTICE) && !q_strcasecmp(playmode, "practice"))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_NORMAL) && M_ModMenu_PlaymodeIsNormal(playmode))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_MATCH) && !q_strcasecmp(playmode, "match"))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_DM_MODE) && !q_strcasecmp(mode, "dm"))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_CTF_MODE) && !q_strcasecmp(mode, "ctf"))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_DMM4_MODE) && !q_strcasecmp(mode, "dmm4"))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_CTF_DMM4_MODE) && !q_strcasecmp(mode, "ctfdmm4"))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_CA_MODE) &&
+		(!q_strcasecmp(mode, "ca") || !q_strcasecmp(mode, "clanarena")))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_RA_MODE) &&
+		(!q_strcasecmp(mode, "ra") || !q_strcasecmp(mode, "rocketarena") ||
+			!q_strcasecmp(mode, "rocket_arena")))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_WIPEOUT_MODE) && !q_strcasecmp(mode, "wipeout"))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_AIRSHOT_MODE) && !q_strcasecmp(mode, "airshot"))
+		return true;
+	if ((item->flags & MODMENU_CURRENT_HH_MODE) &&
+		(!q_strcasecmp(mode, "hh") || !q_strcasecmp(mode, "headhunter") ||
+			!q_strcasecmp(mode, "headhunters")))
+		return true;
+
+	return false;
+}
+
+static int M_ModMenu_ModeItemCount(const modmenu_definition_t *menu)
+{
+	if (M_ModMenu_UsingCustom(menu))
+		return modmenu_custom.num_mode_items;
+	return menu->num_mode_items;
+}
+
+static int M_ModMenu_DMModeItemCount(const modmenu_definition_t *menu)
+{
+	if (M_ModMenu_UsingCustom(menu))
+		return 0;
+	return menu->num_dm_mode_items;
+}
+
+static int M_ModMenu_VotesItemCount(const modmenu_definition_t *menu)
+{
+	return menu->num_votes_items;
+}
+
+static int M_ModMenu_MiscItemCount(const modmenu_definition_t *menu)
+{
+	return menu->num_misc_items;
+}
+
+static int M_ModMenu_TimelimitItemCount(const modmenu_definition_t *menu)
+{
+	return menu->num_timelimit_items;
+}
+
+static int M_ModMenu_FraglimitItemCount(const modmenu_definition_t *menu)
+{
+	return menu->num_fraglimit_items;
+}
+
+static qboolean M_ModMenu_InSubmenu(void)
+{
+	return modmenu_in_modes || modmenu_in_dm_modes || modmenu_in_maps ||
+		modmenu_in_votes || modmenu_in_misc || modmenu_in_timelimit || modmenu_in_fraglimit;
+}
+
+static const modmenu_item_t **M_ModMenu_CurrentItems(const modmenu_definition_t *menu, int *num_items)
+{
+	const modmenu_item_t *source_items;
+	int i, source_count;
+	qboolean custom = M_ModMenu_UsingCustom(menu);
+
+	if (modmenu_in_modes && M_ModMenu_ModeItemCount(menu) > 0)
+	{
+		source_items = custom ? modmenu_custom.mode_items : menu->mode_items;
+		source_count = custom ? modmenu_custom.num_mode_items : menu->num_mode_items;
+	}
+	else if (modmenu_in_dm_modes && M_ModMenu_DMModeItemCount(menu) > 0)
+	{
+		source_items = menu->dm_mode_items;
+		source_count = menu->num_dm_mode_items;
+	}
+	else if (modmenu_in_misc && M_ModMenu_MiscItemCount(menu) > 0)
+	{
+		source_items = menu->misc_items;
+		source_count = menu->num_misc_items;
+	}
+	else if (modmenu_in_timelimit && M_ModMenu_TimelimitItemCount(menu) > 0)
+	{
+		source_items = menu->timelimit_items;
+		source_count = menu->num_timelimit_items;
+	}
+	else if (modmenu_in_fraglimit && M_ModMenu_FraglimitItemCount(menu) > 0)
+	{
+		source_items = menu->fraglimit_items;
+		source_count = menu->num_fraglimit_items;
+	}
+	else if (modmenu_in_votes && M_ModMenu_VotesItemCount(menu) > 0)
+	{
+		source_items = menu->votes_items;
+		source_count = menu->num_votes_items;
+	}
+	else
+	{
+		modmenu_in_modes = false;
+		modmenu_in_dm_modes = false;
+		modmenu_in_votes = false;
+		modmenu_in_maps = false;
+		modmenu_in_misc = false;
+		modmenu_in_timelimit = false;
+		modmenu_in_fraglimit = false;
+		source_items = custom ? modmenu_custom.items : menu->items;
+		source_count = custom ? modmenu_custom.num_items : menu->num_items;
+	}
+
+	*num_items = 0;
+	for (i = 0; i < source_count && *num_items < countof(modmenu_visible_items); i++)
+	{
+		if (!M_ModMenu_ItemVisible(&source_items[i]))
+			continue;
+		modmenu_visible_items[(*num_items)++] = &source_items[i];
+	}
+
+	return modmenu_visible_items;
+}
+
+static int *M_ModMenu_CurrentCursor(void)
+{
+	if (modmenu_in_modes)
+		return &modmenu_mode_cursor;
+	if (modmenu_in_dm_modes)
+		return &modmenu_dm_mode_cursor;
+	if (modmenu_in_misc)
+		return &modmenu_misc_cursor;
+	if (modmenu_in_timelimit)
+		return &modmenu_timelimit_cursor;
+	if (modmenu_in_fraglimit)
+		return &modmenu_fraglimit_cursor;
+	if (modmenu_in_votes)
+		return &modmenu_votes_cursor;
+	return &modmenu_cursor;
+}
+
+static int M_ModMenu_ItemGapAfter(const modmenu_definition_t *menu, const modmenu_item_t **items,
+	int num_items, int index)
+{
+	if (M_ModMenu_UsingCustom(menu) || index < 0 || index >= num_items - 1)
+		return 0;
+	if (items[index]->group == MODMENU_GROUP_DEFAULT || items[index + 1]->group == MODMENU_GROUP_DEFAULT)
+		return 0;
+	if (items[index]->group == items[index + 1]->group)
+		return 0;
+
+	return MODMENU_GROUP_GAP;
+}
+
+static int M_ModMenu_ItemY(const modmenu_definition_t *menu, const modmenu_item_t **items,
+	int num_items, int first_y, int item_height, int index)
+{
+	int i, y = first_y;
+
+	for (i = 0; i < index && i < num_items; i++)
+		y += item_height + M_ModMenu_ItemGapAfter(menu, items, num_items, i);
+
+	return y;
+}
+
+static void M_ModMenu_UpdateMouseCursor(const modmenu_definition_t *menu, const modmenu_item_t **items,
+	int num_items, int first_y, int item_height, int mouse_y, int *cursor)
+{
+	int gap, i, y = first_y;
+
+	if (num_items <= 0 || mouse_y < first_y)
+	{
+		*cursor = 0;
+		return;
+	}
+
+	for (i = 0; i < num_items; i++)
+	{
+		if (mouse_y < y + item_height)
+		{
+			*cursor = i;
+			return;
+		}
+
+		y += item_height;
+		gap = M_ModMenu_ItemGapAfter(menu, items, num_items, i);
+		if (mouse_y < y + gap)
+		{
+			*cursor = i;
+			return;
+		}
+		y += gap;
+	}
+
+	*cursor = num_items - 1;
+}
+
+static int M_ModMenu_LabelX(const modmenu_item_t **items, int num_items)
+{
+	int i, max_chars = (int)strlen("no menu items");
+
+	for (i = 0; i < num_items; i++)
+		max_chars = q_max(max_chars, (int)strlen(items[i]->label));
+
+	return q_max(32, (320 - max_chars * 8) / 2);
+}
+
+static int M_ModMenu_TitleVisibleLength(const char *title)
+{
+	int len = 0;
+
+	while (*title)
+	{
+		if (title[0] == '^' && q_tolower(title[1]) == 'g')
+		{
+			title += 2;
+			continue;
+		}
+		len++;
+		title++;
+	}
+
+	return len;
+}
+
+static void M_ModMenu_PrintTitle(int y, const char *title)
+{
+	int x = (320 - M_ModMenu_TitleVisibleLength(title) * 8) / 2;
+	qboolean gold_digits = false;
+
+	while (*title)
+	{
+		char ch[2];
+
+		if (title[0] == '^' && q_tolower(title[1]) == 'g')
+		{
+			gold_digits = !gold_digits;
+			title += 2;
+			continue;
+		}
+
+		ch[0] = *title++;
+		ch[1] = 0;
+		if (gold_digits && ch[0] >= '0' && ch[0] <= '9')
+			M_Print2(x, y, ch);
+		else
+			M_PrintWhite(x, y, ch);
+		x += 8;
+	}
+}
+
+static void M_ModMenu_PrintModeHeader(int y, const char *text)
+{
+	int x = (320 - (int)strlen(text) * 8) / 2;
+
+	while (*text)
+	{
+		unsigned char c = (unsigned char)*text++;
+
+		if (c == MENU_SCROLL_SEPARATOR_DOT)
+			M_DrawCharacter(x, y, c);
+		else
+			M_DrawCharacter(x, y, c + 128);
+		x += 8;
+	}
+}
+
+static void M_ModMenu_ClearSubmenus(void)
+{
+	modmenu_in_modes = false;
+	modmenu_in_dm_modes = false;
+	modmenu_in_votes = false;
+	modmenu_in_maps = false;
+	modmenu_in_misc = false;
+	modmenu_in_timelimit = false;
+	modmenu_in_fraglimit = false;
+}
+
+static void M_ModMenu_Back(void)
+{
+	if (modmenu_in_timelimit || modmenu_in_fraglimit)
+	{
+		modmenu_in_timelimit = false;
+		modmenu_in_fraglimit = false;
+		modmenu_in_misc = true;
+	}
+	else if (modmenu_in_modes || modmenu_in_dm_modes || modmenu_in_misc)
+	{
+		if (modmenu_in_votes)
+		{
+			modmenu_in_modes = false;
+			modmenu_in_dm_modes = false;
+			modmenu_in_misc = false;
+			modmenu_in_maps = false;
+		}
+		else
+			M_ModMenu_ClearSubmenus();
+	}
+	else
+		M_ModMenu_ClearSubmenus();
+}
+
+static void M_ModMenu_Close(void)
+{
+	M_ModMenu_ClearSubmenus();
+	modmenu_mapmenu.scrollbar_grab = false;
+	key_dest = key_game;
+	m_state = m_none;
+	cls.demonum = m_save_demonum;
+	IN_UpdateGrabs();
+}
+
+void M_Menu_ModMenu_f (void)
+{
+	const modmenu_definition_t *menu = M_ModMenu_CurrentDefinition();
+	int num_items;
+
+	if (!menu)
+	{
+		M_Menu_Main_f();
+		return;
+	}
+
+	M_ModMenu_LoadCustom(menu);
+
+	if (key_dest != key_menu)
+	{
+		m_save_demonum = cls.demonum;
+		cls.demonum = -1;
+	}
+
+	key_dest = key_menu;
+	m_state = m_modmenu;
+	m_entersound = true;
+	M_ModMenu_ClearSubmenus();
+	modmenu_mapmenu.scrollbar_grab = false;
+
+	M_ModMenu_CurrentItems(menu, &num_items);
+	if (modmenu_cursor < 0 || modmenu_cursor >= num_items)
+		modmenu_cursor = 0;
+
+	IN_UpdateGrabs();
+}
+
+static void M_ModMenu_Maps_Draw(void)
+{
+	menulist_t *list = &modmenu_mapmenu.list;
+	int firstvis, i, numvis;
+
+	if (!keydown[K_MOUSE1])
+		modmenu_mapmenu.scrollbar_grab = false;
+
+	M_PrintWhite((320 - (int)strlen("Map") * 8) / 2, 28, "Map");
+	M_DrawQuakeBar(80, 40, 20);
+
+	M_List_GetVisibleRange(list, &firstvis, &numvis);
+	for (i = 0; i < numvis; i++)
+	{
+		int idx = firstvis + i;
+		int alias_index = modmenu_mapmenu.filtered_indices[idx];
+		const char *alias = modmenu_mapmenu.aliases[alias_index];
+		const char *description = modmenu_mapmenu.descriptions[alias_index];
+		qboolean selected = (idx == list->cursor);
+		int y = MODMENU_MAP_FIRST_Y + i * MODMENU_MAP_ITEM_HEIGHT;
+
+		if (description[0])
+		{
+			int old_max_word_length = max_word_length;
+
+			max_word_length = modmenu_mapmenu.max_alias_len;
+			if (list->search.len > 0)
+				M_PrintHighlightScroll2(MODMENU_MAP_LABEL_X, y,
+					(MODMENU_MAP_COLS - 2) * 8, alias, description,
+					list->search.text, selected ? realtime : 0.0);
+			else
+				M_PrintScroll2(MODMENU_MAP_LABEL_X, y, (MODMENU_MAP_COLS - 2) * 8,
+					alias, description, selected ? realtime : 0.0, !selected);
+			max_word_length = old_max_word_length;
+		}
+		else if (list->search.len > 0)
+		{
+			if ((int)strlen(alias) <= MODMENU_MAP_COLS - 2)
+				M_PrintHighlight(MODMENU_MAP_LABEL_X, y, alias,
+					list->search.text, list->search.len);
+			else
+				M_PrintHighlightScroll(MODMENU_MAP_LABEL_X, y,
+					(MODMENU_MAP_COLS - 2) * 8, alias, list->search.text,
+					selected ? realtime : 0.0);
+		}
+		else if ((int)strlen(alias) <= MODMENU_MAP_COLS - 2)
+		{
+			if (selected)
+				M_PrintWhite(MODMENU_MAP_LABEL_X, y, alias);
+			else
+				M_Print(MODMENU_MAP_LABEL_X, y, alias);
+		}
+		else
+		{
+			M_PrintScroll(MODMENU_MAP_LABEL_X, y, (MODMENU_MAP_COLS - 2) * 8,
+				alias, selected ? realtime : 0.0, selected ? 0 : 1);
+		}
+
+		if (selected)
+			M_DrawCharacter(MODMENU_MAP_CURSOR_X, y, 12 + ((int)(realtime * 4) & 1));
+	}
+
+	if (modmenu_mapmenu.num_aliases == 0)
+		M_Print(MODMENU_MAP_LABEL_X, MODMENU_MAP_FIRST_Y, "no map aliases");
+	else if (list->numitems == 0)
+		M_Print(MODMENU_MAP_LABEL_X, MODMENU_MAP_FIRST_Y, "no matching maps");
+
+	if (M_List_GetOverflow(list) > 0)
+	{
+		M_List_DrawScrollbar(list,
+			MODMENU_MAP_LABEL_X + MODMENU_MAP_COLS * 8 - 8, MODMENU_MAP_FIRST_Y);
+
+		if (list->scroll > 0)
+			M_DrawEllipsisBar(MODMENU_MAP_LABEL_X, MODMENU_MAP_FIRST_Y - 8,
+				MODMENU_MAP_COLS);
+		if (list->scroll + list->viewsize < list->numitems)
+			M_DrawEllipsisBar(MODMENU_MAP_LABEL_X,
+				MODMENU_MAP_FIRST_Y + list->viewsize * 8, MODMENU_MAP_COLS);
+	}
+
+	if (list->search.len > 0)
+	{
+		int cursor_x = MODMENU_MAP_SEARCH_TEXT_X + 8 * list->search.len;
+
+		M_DrawTextBox(MODMENU_MAP_SEARCH_BOX_X, MODMENU_MAP_SEARCH_BOX_Y, 32, 1);
+		M_PrintHighlight(MODMENU_MAP_SEARCH_TEXT_X, MODMENU_MAP_SEARCH_TEXT_Y,
+			list->search.text, list->search.text, list->search.len);
+		if (list->numitems == 0)
+			M_DrawCharacter(cursor_x, MODMENU_MAP_SEARCH_TEXT_Y, 11 ^ 128);
+		else
+			M_DrawCharacter(cursor_x, MODMENU_MAP_SEARCH_TEXT_Y,
+				10 + ((int)(realtime * 4) & 1));
+	}
+}
+
+void M_ModMenu_Draw (void)
+{
+	const modmenu_definition_t *menu = M_ModMenu_CurrentDefinition();
+	const modmenu_item_t **items;
+	const char *title;
+	char current_mode[64];
+	int cursor_x, first_y, i, item_height, label_x;
+	int *cursor, num_items, y;
+
+	if (!menu)
+	{
+		M_Menu_Main_f();
+		return;
+	}
+
+	if (modmenu_in_maps)
+	{
+		M_ModMenu_Maps_Draw();
+		return;
+	}
+
+	items = M_ModMenu_CurrentItems(menu, &num_items);
+	cursor = M_ModMenu_CurrentCursor();
+	if (*cursor < 0 || *cursor >= num_items)
+		*cursor = 0;
+
+	if (modmenu_in_misc && menu->misc_title)
+		title = menu->misc_title;
+	else if (modmenu_in_timelimit && menu->timelimit_title)
+		title = menu->timelimit_title;
+	else if (modmenu_in_fraglimit && menu->fraglimit_title)
+		title = menu->fraglimit_title;
+	else if (modmenu_in_dm_modes && menu->dm_mode_title)
+		title = menu->dm_mode_title;
+	else if (modmenu_in_modes)
+		title = M_ModMenu_UsingCustom(menu) && modmenu_custom.mode_title[0] ?
+			modmenu_custom.mode_title : (menu->mode_title ? menu->mode_title : menu->title);
+	else if (modmenu_in_votes && menu->votes_title)
+		title = menu->votes_title;
+	else if (M_ModMenu_UsingCustom(menu))
+		title = modmenu_custom.title;
+	else
+		title = menu->title;
+	first_y = M_ModMenu_InSubmenu() ? MODMENU_MODE_FIRST_Y : MODMENU_FIRST_Y;
+	if (!M_ModMenu_InSubmenu())
+		first_y += MODMENU_CURRENT_MODE_GAP;
+	item_height = M_ModMenu_InSubmenu() ? MODMENU_MODE_ITEM_HEIGHT : MODMENU_ITEM_HEIGHT;
+	label_x = M_ModMenu_LabelX(items, num_items);
+	cursor_x = label_x - 16;
+
+	M_ModMenu_PrintTitle(28, title);
+	M_DrawQuakeBar(80, 40, 20);
+	if (!M_ModMenu_InSubmenu())
+	{
+		M_ModMenu_CurrentModeText(current_mode, sizeof(current_mode));
+		M_ModMenu_PrintModeHeader(MODMENU_FIRST_Y, current_mode);
+	}
+
+	if (num_items <= 0)
+	{
+		M_Print(label_x, first_y, "no menu items");
+		return;
+	}
+
+	for (i = 0; i < num_items; i++)
+	{
+		qboolean dimmed = M_ModMenu_ItemDimmed(items[i]);
+
+		y = M_ModMenu_ItemY(menu, items, num_items, first_y, item_height, i);
+		if (dimmed)
+			M_PrintRGBA(label_x, y, items[i]->label, CL_PLColours_Parse("0xffffff"),
+				0.5f, i != *cursor);
+		else if (i == *cursor)
+			M_PrintWhite(label_x, y, items[i]->label);
+		else
+			M_Print(label_x, y, items[i]->label);
+	}
+
+	M_DrawCharacter(cursor_x, M_ModMenu_ItemY(menu, items, num_items, first_y, item_height, *cursor),
+		12 + ((int)(realtime * 4) & 1));
+}
+
+static void M_ModMenu_Select(void)
+{
+	const modmenu_definition_t *menu = M_ModMenu_CurrentDefinition();
+	const modmenu_item_t **items;
+	const modmenu_item_t *item;
+	int *cursor, num_items;
+
+	if (!menu)
+	{
+		M_Menu_Main_f();
+		return;
+	}
+
+	items = M_ModMenu_CurrentItems(menu, &num_items);
+	cursor = M_ModMenu_CurrentCursor();
+	if (num_items <= 0)
+	{
+		S_LocalSound("misc/menu3.wav");
+		return;
+	}
+	if (*cursor < 0 || *cursor >= num_items)
+		*cursor = 0;
+
+	item = items[*cursor];
+	if (M_ModMenu_ItemDimmed(item))
+	{
+		S_LocalSound("misc/menu3.wav");
+		return;
+	}
+
+	switch (item->action)
+	{
+	case MODMENU_MAIN:
+		M_ModMenu_ClearSubmenus();
+		M_Menu_Main_f();
+		return;
+
+	case MODMENU_QUIT:
+		M_ModMenu_Close();
+		Host_Quit_Confirmed_f();
+		return;
+
+	case MODMENU_SUBMENU:
+		if (M_ModMenu_ModeItemCount(menu) > 0)
+		{
+			modmenu_in_modes = true;
+			modmenu_in_dm_modes = false;
+			modmenu_in_maps = false;
+			modmenu_in_misc = false;
+			modmenu_in_timelimit = false;
+			modmenu_in_fraglimit = false;
+			if (modmenu_mode_cursor < 0 || modmenu_mode_cursor >= M_ModMenu_ModeItemCount(menu))
+				modmenu_mode_cursor = 0;
+			S_LocalSound("misc/menu2.wav");
+		}
+		else
+			S_LocalSound("misc/menu3.wav");
+		return;
+
+	case MODMENU_SUBMENU_DM_MODES:
+		if (M_ModMenu_DMModeItemCount(menu) > 0)
+		{
+			modmenu_in_modes = false;
+			modmenu_in_dm_modes = true;
+			modmenu_in_maps = false;
+			modmenu_in_misc = false;
+			modmenu_in_timelimit = false;
+			modmenu_in_fraglimit = false;
+			if (modmenu_dm_mode_cursor < 0 || modmenu_dm_mode_cursor >= M_ModMenu_DMModeItemCount(menu))
+				modmenu_dm_mode_cursor = 0;
+			S_LocalSound("misc/menu2.wav");
+		}
+		else
+			S_LocalSound("misc/menu3.wav");
+		return;
+
+	case MODMENU_SUBMENU_VOTES:
+		if (M_ModMenu_VotesItemCount(menu) > 0)
+		{
+			modmenu_in_modes = false;
+			modmenu_in_dm_modes = false;
+			modmenu_in_votes = true;
+			modmenu_in_maps = false;
+			modmenu_in_misc = false;
+			modmenu_in_timelimit = false;
+			modmenu_in_fraglimit = false;
+			if (modmenu_votes_cursor < 0 || modmenu_votes_cursor >= M_ModMenu_VotesItemCount(menu))
+				modmenu_votes_cursor = 0;
+			S_LocalSound("misc/menu2.wav");
+		}
+		else
+			S_LocalSound("misc/menu3.wav");
+		return;
+
+	case MODMENU_SUBMENU_MAPS:
+		M_ModMenu_Maps_Open();
+		S_LocalSound("misc/menu2.wav");
+		return;
+
+	case MODMENU_SUBMENU_MISC:
+		if (M_ModMenu_MiscItemCount(menu) > 0)
+		{
+			modmenu_in_modes = false;
+			modmenu_in_dm_modes = false;
+			modmenu_in_maps = false;
+			modmenu_in_misc = true;
+			modmenu_in_timelimit = false;
+			modmenu_in_fraglimit = false;
+			if (modmenu_misc_cursor < 0 || modmenu_misc_cursor >= M_ModMenu_MiscItemCount(menu))
+				modmenu_misc_cursor = 0;
+			S_LocalSound("misc/menu2.wav");
+		}
+		else
+			S_LocalSound("misc/menu3.wav");
+		return;
+
+	case MODMENU_SUBMENU_TIMELIMIT:
+		if (M_ModMenu_TimelimitItemCount(menu) > 0)
+		{
+			modmenu_in_modes = false;
+			modmenu_in_dm_modes = false;
+			modmenu_in_maps = false;
+			modmenu_in_misc = false;
+			modmenu_in_timelimit = true;
+			modmenu_in_fraglimit = false;
+			if (modmenu_timelimit_cursor < 0 ||
+				modmenu_timelimit_cursor >= M_ModMenu_TimelimitItemCount(menu))
+				modmenu_timelimit_cursor = 0;
+			S_LocalSound("misc/menu2.wav");
+		}
+		else
+			S_LocalSound("misc/menu3.wav");
+		return;
+
+	case MODMENU_SUBMENU_FRAGLIMIT:
+		if (M_ModMenu_FraglimitItemCount(menu) > 0)
+		{
+			modmenu_in_modes = false;
+			modmenu_in_dm_modes = false;
+			modmenu_in_maps = false;
+			modmenu_in_misc = false;
+			modmenu_in_timelimit = false;
+			modmenu_in_fraglimit = true;
+			if (modmenu_fraglimit_cursor < 0 ||
+				modmenu_fraglimit_cursor >= M_ModMenu_FraglimitItemCount(menu))
+				modmenu_fraglimit_cursor = 0;
+			S_LocalSound("misc/menu2.wav");
+		}
+		else
+			S_LocalSound("misc/menu3.wav");
+		return;
+
+	case MODMENU_BACK:
+		M_ModMenu_Back();
+		S_LocalSound("misc/menu2.wav");
+		return;
+
+	case MODMENU_COMMAND:
+		M_ModMenu_Close();
+		S_LocalSound("misc/menu2.wav");
+		if (item->command)
+			Cbuf_AddText(item->command);
+		return;
+	}
+}
+
+static void M_ModMenu_Maps_Select(void)
+{
+	menulist_t *list = &modmenu_mapmenu.list;
+	const char *alias;
+	int alias_index;
+
+	if (list->numitems <= 0 || list->cursor < 0 || list->cursor >= list->numitems)
+	{
+		S_LocalSound("misc/menu3.wav");
+		return;
+	}
+
+	alias_index = modmenu_mapmenu.filtered_indices[list->cursor];
+	alias = modmenu_mapmenu.aliases[alias_index];
+	M_ModMenu_Close();
+	S_LocalSound("misc/menu2.wav");
+	Cbuf_AddText(alias);
+	Cbuf_AddText("\n");
+}
+
+static void M_ModMenu_Maps_Key(int key)
+{
+	menulist_t *list = &modmenu_mapmenu.list;
+	int x, y;
+
+	if (keydown[K_CTRL])
+	{
+		if ((key == 'u' || key == 'U') && list->search.len > 0)
+		{
+			list->search.len = 0;
+			list->search.text[0] = 0;
+			M_ModMenu_Maps_Refilter(true);
+			return;
+		}
+		else if (key == K_BACKSPACE && list->search.len > 0)
+		{
+			M_DeletePrevWord(&list->search);
+			M_ModMenu_Maps_Refilter(true);
+			return;
+		}
+	}
+
+	if (key >= 32 && key < 127)
+	{
+		if (list->search.len < list->search.maxlen)
+		{
+			list->search.text[list->search.len++] = key;
+			list->search.text[list->search.len] = 0;
+			M_ModMenu_Maps_Refilter(true);
+		}
+		return;
+	}
+
+	if (key == K_BACKSPACE)
+	{
+		if (list->search.len > 0)
+		{
+			list->search.text[--list->search.len] = 0;
+			M_ModMenu_Maps_Refilter(true);
+		}
+		return;
+	}
+
+	if (modmenu_mapmenu.scrollbar_grab)
+	{
+		switch (key)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			modmenu_mapmenu.scrollbar_grab = false;
+			break;
+		}
+		return;
+	}
+
+	if (list->numitems > 0 && M_List_Key(list, key))
+		return;
+
+	switch (key)
+	{
+	case K_ESCAPE:
+		if (list->search.len > 0)
+		{
+			list->search.len = 0;
+			list->search.text[0] = 0;
+			M_ModMenu_Maps_Refilter(true);
+			return;
+		}
+		/* fall through */
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		modmenu_in_maps = false;
+		S_LocalSound("misc/menu2.wav");
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		M_ModMenu_Maps_Select();
+		break;
+
+	case K_MOUSE1:
+		x = m_mousex - MODMENU_MAP_LABEL_X - (MODMENU_MAP_COLS - 1) * 8;
+		y = m_mousey - MODMENU_MAP_FIRST_Y;
+		if (x >= -8 && M_List_UseScrollbar(list, y))
+		{
+			modmenu_mapmenu.scrollbar_grab = true;
+			M_ModMenu_Mousemove(m_mousex, m_mousey);
+		}
+		else if (m_mousey >= MODMENU_MAP_FIRST_Y &&
+			m_mousey < MODMENU_MAP_FIRST_Y + MODMENU_MAP_VIEW_ROWS * MODMENU_MAP_ITEM_HEIGHT)
+		{
+			M_ModMenu_Maps_Select();
+		}
+		break;
+	}
+}
+
+static qboolean M_ModMenu_SelectShortcut(int key, const modmenu_item_t **items, int num_items, int *cursor)
+{
+	int i, shortcut;
+
+	shortcut = q_tolower(key);
+	for (i = 0; i < num_items; i++)
+	{
+		if (!items[i]->shortcut || items[i]->shortcut != shortcut)
+			continue;
+
+		*cursor = i;
+		S_LocalSound("misc/menu1.wav");
+		return true;
+	}
+
+	return false;
+}
+
+void M_ModMenu_Key (int key)
+{
+	const modmenu_definition_t *menu = M_ModMenu_CurrentDefinition();
+	const modmenu_item_t **items;
+	int *cursor, num_items;
+
+	if (!menu)
+	{
+		M_Menu_Main_f();
+		return;
+	}
+
+	if (modmenu_in_maps)
+	{
+		M_ModMenu_Maps_Key(key);
+		return;
+	}
+
+	items = M_ModMenu_CurrentItems(menu, &num_items);
+	cursor = M_ModMenu_CurrentCursor();
+	if (*cursor < 0 || *cursor >= num_items)
+		*cursor = 0;
+
+	switch (key)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		if (M_ModMenu_InSubmenu())
+		{
+			M_ModMenu_Back();
+			S_LocalSound("misc/menu2.wav");
+		}
+		else
+			M_ModMenu_Close();
+		break;
+
+	case K_DOWNARROW:
+	case K_KP_DOWNARROW:
+		if (num_items <= 0)
+			break;
+		S_LocalSound("misc/menu1.wav");
+		if (++(*cursor) >= num_items)
+			*cursor = 0;
+		break;
+
+	case K_UPARROW:
+	case K_KP_UPARROW:
+		if (num_items <= 0)
+			break;
+		S_LocalSound("misc/menu1.wav");
+		if (--(*cursor) < 0)
+			*cursor = num_items - 1;
+		break;
+
+	case 'b':
+	case 'B':
+		if (M_ModMenu_InSubmenu())
+		{
+			M_ModMenu_Back();
+			S_LocalSound("misc/menu2.wav");
+			break;
+		}
+		M_ModMenu_SelectShortcut(key, items, num_items, cursor);
+		break;
+
+	case 'c':
+	case 'C':
+	case 'e':
+	case 'E':
+	case 'f':
+	case 'F':
+	case 'h':
+	case 'H':
+	case 'j':
+	case 'J':
+	case 'm':
+	case 'M':
+	case 'r':
+	case 'R':
+		M_ModMenu_SelectShortcut(key, items, num_items, cursor);
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+	case K_MOUSE1:
+		M_ModMenu_Select();
+		break;
+
+	default:
+		if (key >= 32 && key < 127)
+			M_ModMenu_SelectShortcut(key, items, num_items, cursor);
+		break;
+	}
+}
+
+static void M_ModMenu_Maps_Mousemove(int cx, int cy)
+{
+	menulist_t *list = &modmenu_mapmenu.list;
+
+	cy -= MODMENU_MAP_FIRST_Y;
+	if (modmenu_mapmenu.scrollbar_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			modmenu_mapmenu.scrollbar_grab = false;
+			return;
+		}
+		M_List_UseScrollbar(list, cy);
+	}
+
+	M_List_Mousemove(list, cy);
+}
+
+void M_ModMenu_Mousemove (int cx, int cy)
+{
+	const modmenu_definition_t *menu = M_ModMenu_CurrentDefinition();
+	const modmenu_item_t **items;
+	int *cursor, first_y, item_height, num_items;
+
+	if (!menu)
+		return;
+
+	if (modmenu_in_maps)
+	{
+		M_ModMenu_Maps_Mousemove(cx, cy);
+		return;
+	}
+
+	items = M_ModMenu_CurrentItems(menu, &num_items);
+	cursor = M_ModMenu_CurrentCursor();
+	first_y = M_ModMenu_InSubmenu() ? MODMENU_MODE_FIRST_Y : MODMENU_FIRST_Y;
+	if (!M_ModMenu_InSubmenu())
+		first_y += MODMENU_CURRENT_MODE_GAP;
+	item_height = M_ModMenu_InSubmenu() ? MODMENU_MODE_ITEM_HEIGHT : MODMENU_ITEM_HEIGHT;
+
+	M_ModMenu_UpdateMouseCursor(menu, items, num_items, first_y, item_height, cy, cursor);
 }
 
 /*
@@ -38058,6 +40260,7 @@ static struct
 } menucommands[] =
 {
 	{"menu_main", M_Menu_Main_f},
+	{"menu_modmenu", M_Menu_ModMenu_f},
 	{"menu_singleplayer", M_Menu_SinglePlayer_f},
 	{"menu_load", M_Menu_Load_f},
 	{"menu_save", M_Menu_Save_f},
@@ -38223,7 +40426,10 @@ void M_ToggleMenu (int mode)
 	}
 	else
 	{
-		M_Menu_Main_f ();
+		if (M_ModMenu_ShouldOpen())
+			M_Menu_ModMenu_f();
+		else
+			M_Menu_Main_f ();
 	}
 }
 static void M_ToggleMenu_f (void)
@@ -38251,6 +40457,7 @@ void M_Init (void)
 		update_cmd->completion = M_Update_Completion_f;
 
 	Cvar_RegisterVariable (&ui_live_preview);
+	Cvar_RegisterVariable (&cl_modmenu);
 
 	if (!MQC_Init())
 		MQC_Shutdown();
@@ -38363,6 +40570,10 @@ void M_Draw (void)
 
 	case m_main:
 		M_Main_Draw ();
+		break;
+
+	case m_modmenu:
+		M_ModMenu_Draw();
 		break;
 
 	case m_singleplayer:
@@ -38622,6 +40833,7 @@ static qboolean M_HasSearchField (void)
 	case m_mods:
 	case m_downloadmods:
 	case m_demos:
+	case m_modmenu:
 		return true;
 	default:
 		return false;
@@ -38732,6 +40944,10 @@ void M_Keydown (int key, qboolean repeat)
 
 	case m_main:
 		M_Main_Key (key);
+		return;
+
+	case m_modmenu:
+		M_ModMenu_Key(key);
 		return;
 
 	case m_singleplayer:
@@ -38958,6 +41174,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_main:
 		M_Main_Mousemove(x, y);
+		return;
+
+	case m_modmenu:
+		M_ModMenu_Mousemove(x, y);
 		return;
 
 	case m_singleplayer:

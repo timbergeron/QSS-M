@@ -681,6 +681,8 @@ void CL_PrintWrongGameDirWarning(void);
 const char *CL_GetSafeUserinfoForClientSlot(int playernum);
 const char *CL_GetSafeViewEntityUserinfo(void);
 const char *CL_GetSafeRealViewEntityUserinfo(void);
+qboolean CL_ScoreboardNameHasReadyStatus(const char *name);
+qboolean CL_LocalPlayerHasReadyStatus(void);
 struct qmodel_s *CL_CTFPugTranslateModel(struct qmodel_s *model);
 qboolean CL_CTFPugSwapEntityModel(entity_t *ent);
 

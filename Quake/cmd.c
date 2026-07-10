@@ -603,6 +603,18 @@ qboolean Cmd_AliasExists (const char *aliasname)
 	return false;
 }
 
+const char *Cmd_GetAliasValue (const char *aliasname)
+{
+	cmdalias_t *a;
+
+	for (a=cmd_alias ; a ; a=a->next)
+	{
+		if (!q_strcasecmp (aliasname, a->name))
+			return a->value;
+	}
+	return NULL;
+}
+
 /*
 ===============
 Cmd_Unaliasall_f -- johnfitz

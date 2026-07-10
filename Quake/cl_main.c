@@ -197,6 +197,23 @@ const char *CL_GetSafeRealViewEntityUserinfo(void)
 	return CL_GetSafeUserinfoForClientSlot(cl.realviewentity - 1);
 }
 
+qboolean CL_ScoreboardNameHasReadyStatus(const char *name)
+{
+	static const char qfReady[6] = { 210, 229, 225, 228, 249, '\0' };
+
+	return name && (strstr(name, qfReady) || strstr(name, "Ready"));
+}
+
+qboolean CL_LocalPlayerHasReadyStatus(void)
+{
+	int playernum = cl.realviewentity - 1;
+
+	if (!cl.scores || cl.maxclients <= 0 || playernum < 0 || playernum >= cl.maxclients)
+		return false;
+
+	return CL_ScoreboardNameHasReadyStatus(cl.scores[playernum].name);
+}
+
 void CL_ClearTrailStates(void)
 {
 	int i;

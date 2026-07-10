@@ -115,6 +115,7 @@ void Cmd_RemoveCommand (cmd_function_t *cmd);
 #define Cmd_AddCommand_Console Cmd_AddCommand	//to make the disabiguation more obvious
 
 qboolean Cmd_AliasExists (const char *aliasname);
+const char *Cmd_GetAliasValue (const char *aliasname);
 qboolean Cmd_Exists (const char *cmd_name);
 // used by the cvar code to check for cvar / command name overlap
 

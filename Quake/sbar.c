@@ -2860,14 +2860,12 @@ void Sbar_DeathmatchOverlay (void)
 			filtered_name[sizeof(filtered_name) - 1] = '\0';
 		}
 
-		char qfReady[6] = { 210, 229, 225, 228, 249, '\0' }; // quake font red 'Ready'
-
 		if (cl.modtype == 1 || cl.modtype == 4) // woods -- dynamic status flash scoreboard label if not ready #smartstatus
 		{
 			if (!cl.teamgame)
 				notready = false;
 
-			qboolean is_ready = (strstr(s->name, qfReady) || strstr(s->name, "Ready"));
+			qboolean is_ready = CL_ScoreboardNameHasReadyStatus(s->name);
 
 			if (cl.teamgame && !cl.matchinp && !s->spectator && s->frags != -99 && s->pants.basic >= 1 && !is_ready)
 				unready_count++;
