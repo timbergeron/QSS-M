@@ -161,7 +161,8 @@ typedef enum
 	NETERR_DISCONNECTED,
 	NETERR_MTU,
 	NETERR_NOROUTE,
-	NETERR_NQIO	//haxx...
+	NETERR_NQIO,	//WebQuake reliable message needs reframing without fragmentation.
+	NETERR_NQACK	//WebSocket reliably delivered the complete WebQuake message.
 } neterr_t;
 
 typedef enum {

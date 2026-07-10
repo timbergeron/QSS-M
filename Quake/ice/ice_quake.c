@@ -24,6 +24,7 @@ So, |=0x80 to avoid ambiguity with lower layers, so long as any rtp is in-band. 
 #include "../arch_def.h"
 #include "../net_sys.h"
 #include "../net_defs.h"
+#include "../net_ws.h"
 
 #include "ice_private.h"
 #include "ice_quake.h"
@@ -86,6 +87,7 @@ typedef struct {
 	char gamename[64];		//what we're trying to register as/for with the broker
 	qboolean isserver;
 	qboolean issecure;		//connecting over tls only.
+	qboolean usedefaultbroker;	//refresh brokername from net_ice_broker instead of using an explicit/direct route.
 
 	//broker connection state
 	icestream_t *broker;
@@ -593,8 +595,9 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 		char *url;
 		char *c;
 
-		// Re-read the broker cvar in case it was changed by autoexec.cfg
-		// after the initial QICE_Setup during NET_Init
+		// Default-broker connections may be created before autoexec.cfg is read.
+		// Direct and explicit-broker connections must retain the route selected by QICE_Setup.
+		if (b->usedefaultbroker)
 		{
 			const char *broker = net_ice_broker.string;
 			if (!strncmp(broker, "ws://", 5))
@@ -1061,6 +1064,7 @@ static void QICE_Closed(struct icemodule_s *module, struct icestate_s *ice)
 	qice_connection_t *b = (qice_connection_t*)module;
 	qsocket_t *s;
 	int i;
+	qboolean clientstate = (b->ice == ice);
 
 	struct qice_userstate_s *u = ICE_GetUserPtr(ice);
 	if (u)
@@ -1077,14 +1081,18 @@ static void QICE_Closed(struct icemodule_s *module, struct icestate_s *ice)
 		if (s->driverdata == b)
 		if (s->driverdata2 == ice)
 		{
-			s->driverdata = NULL;	//detach from the module, should start reporting errors causing any other state to close.
+			if (!clientstate)
+				s->driverdata = NULL;	//the shared server module outlives this client state.
 			s->driverdata2 = NULL;	//detach from ice state as its no longer valid.
 		}
 	}
 
 	//and any broker state.
-	if (b->ice == ice)
+	if (clientstate)
+	{
 		b->ice = NULL;
+		b->error = true;	//make the client socket report the closed direct connection.
+	}
 	for (i = 0; i < b->numclients; i++)
 	{
 		if (b->clients[i].ice == ice)
@@ -1222,11 +1230,13 @@ static qice_connection_t *QICE_Setup(const char *address, qboolean isserver)
 	};
 
 	newcon = Z_Malloc(sizeof(*newcon));
+	newcon->usedefaultbroker = false;
 
 	if (address)
 	{
 		if (*address=='/' || !*address)
 		{	//had a leading slash. use the default broker for it.
+			newcon->usedefaultbroker = true;
 			q_strlcpy(newcon->brokername, "", sizeof(newcon->brokername));
 			newcon->issecure = true;
 
@@ -1258,6 +1268,7 @@ static qice_connection_t *QICE_Setup(const char *address, qboolean isserver)
 
 		if (!*newcon->brokername)
 		{	//broker name was omitted. use the default.
+			newcon->usedefaultbroker = true;
 			q_strlcpy(newcon->brokername, net_ice_broker.string, sizeof(newcon->brokername));	//fallback.
 			for (i = 0; i < countof(schemes)-1; i++)
 			{
@@ -2144,7 +2155,7 @@ qsocket_t *NQICE_Connect (const char *host)		//used by client (enables websocket
 		direct = true;	//plain text...
 	else if (!strncmp(host, "dtls://", 7))
 		direct = true;	//direct dtls connection (hopefully with `?fp=b64` on the end
-	else if (!strncmp(host, "ws://", 5) || !strncmp(host, "wss://", 6))
+	else if (NET_WebSocketSchemeLength(host, NULL))
 		direct = true;	//direct websocket address (fixme: add #fp=? )
 	else
 		return NULL;
@@ -2157,7 +2168,12 @@ qsocket_t *NQICE_Connect (const char *host)		//used by client (enables websocket
 		{
 			b = QICE_Setup(NULL, false);
 			b->ice = iceapi.Create(&b->icemodule, NULL, NULL, ICEF_INITIATOR, ICEP_CLIENT);
-			iceapi.Set(b->ice, "peer", host);
+			if (!b->ice || !iceapi.Set(b->ice, "peer", host))
+			{
+				QICE_Close(b);
+				NET_FreeQSocket(dest);
+				return NULL;
+			}
 		}
 		else
 		{	//just broker. ice state will be set up once the broker tells us we have a peer.
@@ -2223,6 +2239,23 @@ static int QICE_ResendReliable (qsocket_t *sock)
 		}
 		Con_Printf("MTU error\n");
 		return -1;
+	}
+	else if (err == NETERR_NQACK)
+	{	//WebSockets reliably deliver complete WebQuake messages without NetQuake ACK packets.
+		sock->sendSequence++;
+		sock->sendMessageLength -= length;
+		if (sock->sendMessageLength > 0)
+		{
+			memmove(sock->sendMessage, sock->sendMessage + length, sock->sendMessageLength);
+			sock->sendNext = true;
+		}
+		else
+		{
+			sock->sendMessageLength = 0;
+			sock->canSend = true;
+		}
+		sock->lastSendTime = net_time;
+		return 1;
 	}
 	sock->lastSendTime = net_time;
 	if (err == NETERR_SENT)
@@ -2502,6 +2535,8 @@ int NQICE_GetMessage (qsocket_t *sock)
 	qice_msgqueueofs = 0;
 	while(qice_msgqueuesize)
 		SZ_Clear(&qice_msgqueue[--qice_msgqueuesize]);
+	if (!b)
+		return -1;	//the ICE close callback detached this socket.
 
 	QICE_UpdateBroker(b);	//keep the broker going.
 
@@ -3388,7 +3423,15 @@ void NQICE_Shutdown (void)
 
 
 
-#if defined(__linux__) || defined(__bsd__) || defined(__POSIX__)/*NOT true, but a better guess than failing completely*/
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+qboolean Sys_RandomBytes(unsigned char *out, int len)
+{
+	if (!out || len < 0)
+		return false;
+	arc4random_buf(out, (size_t)len);
+	return true;
+}
+#elif defined(__linux__) || defined(__bsd__) || defined(__POSIX__)/*NOT true, but a better guess than failing completely*/
 #include <fcntl.h>
 qboolean Sys_RandomBytes(unsigned char *out, int len)
 {

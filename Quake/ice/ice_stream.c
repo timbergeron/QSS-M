@@ -22,6 +22,16 @@
 
 	//WARNING: netquake.io cannot support fragmentation.
 	#define NETQUAKE_IO_HACK "quake"	//note: netquake.io claims 'quake' but instead of tunnelling quake's 'datagram' packets over websockets it instead does its own headers and skips handshakes etc.
+	/* This standalone stream layer cannot include Quake's net_defs.h; keep this
+	 * wire-format subset synchronized with NET_HEADERSIZE and NETFLAG_* there. */
+	#define WS_NQ_HEADERSIZE (2 * sizeof(unsigned int))
+	#define WS_NQFLAG_LENGTH_MASK 0x0000ffffu
+	#define WS_NQFLAG_DATA 0x00010000u
+	#define WS_NQFLAG_ACK 0x00020000u
+	#define WS_NQFLAG_EOM 0x00080000u
+	#define WS_NQFLAG_UNRELIABLE 0x00100000u
+	#define WS_NQFLAG_CTL 0x80000000u
+	#define WS_NQ_CCREP_ACCEPT 0x81
 #elif 0
 	//some sort of emscripten-specific mess.
 	#define WEBSOCKET_SUBPROTOCOL "binary"
@@ -35,24 +45,27 @@
 //abstraction over tcp
 static int TCP_IsStillConnecting(SOCKET sock)
 {
+	int error = 0;
+	socklen_t errorsize = sizeof(error);
 #ifdef HAVE_POLL
 	//poll has no arbitrary fd limit. use it instead of select where possible.
 	struct pollfd ourfd[1];
+	int result;
 	ourfd[0].fd = sock;
 	ourfd[0].events = POLLOUT;
 	ourfd[0].revents = 0;
-	if (!poll(ourfd, countof(ourfd), 0))
-	{
-		if (ourfd[0].revents & POLLERR)
-			return VFS_ERROR_UNSPECIFIED;
-		if (ourfd[0].revents & POLLHUP)
-			return VFS_ERROR_REFUSED;
+	result = poll(ourfd, countof(ourfd), 0);
+	if (result == 0)
 		return true;	//no events yet.
-	}
+	if (result < 0)
+		return NET_ERRNO() == NET_EINTR ? true : VFS_ERROR_UNSPECIFIED;
+	if (ourfd[0].revents & POLLNVAL)
+		return VFS_ERROR_UNSPECIFIED;
 #else
 	//okay on windows where sock+1 is ignored, has issues when lots of other fds are already open (for any reason).
 	fd_set fdw, fdx;
 	struct timeval timeout;
+	int result;
 	timeout.tv_sec = 0;
 	timeout.tv_usec = 0;
 	FD_ZERO(&fdw);
@@ -60,17 +73,23 @@ static int TCP_IsStillConnecting(SOCKET sock)
 	FD_ZERO(&fdx);
 	FD_SET(sock, &fdx);
 	//check if we can actually write to it yet, without generating weird errors...
-	if (!select((int)sock+1, NULL, &fdw, &fdx, &timeout))
+	result = select((int)sock+1, NULL, &fdw, &fdx, &timeout);
+	if (result == 0)
 		return true;
+	if (result < 0)
+		return NET_ERRNO() == NET_EINTR ? true : VFS_ERROR_UNSPECIFIED;
 #endif
 
-	//if we get here then its writable(read: connected) or failed.
-
-//	int error = NET_ENOTCONN;
-//	socklen_t sz = sizeof(error);
-//	if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &sz))
-//		error = NET_ENOTCONN;
-	return false;
+	// Writable means either connected or failed; SO_ERROR distinguishes the two.
+	if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&error, &errorsize) != 0)
+		return VFS_ERROR_UNSPECIFIED;
+	if (!error)
+		return false;
+	if (error == NET_ECONNREFUSED)
+		return VFS_ERROR_REFUSED;
+	if (error == NET_ETIMEDOUT)
+		return VFS_ERROR_NORESPONSE;
+	return VFS_ERROR_UNSPECIFIED;
 }
 typedef struct {
 	icestream_t funcs;
@@ -402,11 +421,15 @@ typedef struct {
 	qboolean isserver;		//permanent: true if we accepted the connection (server role, must not mask)
 	const char *protocol;	//protocol we're asking for.
 	int conpending;			//waiting for the proper handshake response, don't send past this to avoid issues on errors. we do accept new data to be sent though, while its still handshaking.
-	unsigned int mask;		//xor masking, to make it harder to exploit buggy shit that's parsing streams (like magic packets or w/e).
+	char expectedaccept[64];	//Sec-WebSocket-Accept expected from the peer during a client handshake.
+	unsigned char maskpool[256];
+	int maskbytesremaining;
 
 #ifdef NETQUAKE_IO_HACK
-	qboolean netquakeiohack;
-	unsigned int netquakeiobug;
+	qboolean webquake;
+	qboolean webquakeacceptpending;
+	unsigned int webquake_reliable_sequence;
+	unsigned int webquake_unreliable_sequence;
 #endif
 
 	char readbuffer[65536];
@@ -450,7 +473,23 @@ static void WS_Flush (websocket_t *f)
 		f->stream = NULL;
 	}
 }
-static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char *data, size_t length)
+static void WS_NextMask(websocket_t *f, unsigned char mask[4])
+{
+	int offset;
+
+	if (f->maskbytesremaining < 4)
+	{
+		Sys_RandomBytes(f->maskpool, (int)sizeof(f->maskpool));
+		f->maskbytesremaining = (int)sizeof(f->maskpool);
+	}
+	offset = (int)sizeof(f->maskpool) - f->maskbytesremaining;
+	memcpy(mask, f->maskpool + offset, 4);
+	f->maskbytesremaining -= 4;
+}
+
+static void WS_AppendParts(websocket_t *f, unsigned packettype,
+	const unsigned char *data1, size_t length1,
+	const unsigned char *data2, size_t length2)
 {
 	union
 	{
@@ -459,8 +498,15 @@ static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char 
 	} mask;
 	unsigned short ctrl = 0x8000 | (packettype<<8);	// FIN + opcode
 	uint64_t paylen = 0;
+	size_t length;
 	int payoffs = f->pendingsize;
 //	int i;
+	if (length1 > (size_t)-1 - length2 || (length1 && !data1) || (length2 && !data2))
+	{
+		f->err = VFS_ERROR_UNSPECIFIED;
+		return;
+	}
+	length = length1 + length2;
 	if (!f->isserver)
 		ctrl |= 0x0080;	// MASK bit: only set when acting as client (RFC 6455)
 	if (!f->stream)
@@ -506,8 +552,16 @@ static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char 
 		}
 		if (f->pendingmax < f->pendingsize + payoffs)
 		{	//still too big. make the buffer bigger.
-			f->pendingmax = f->pendingsize + payoffs;
-			f->pending = realloc(f->pending, f->pendingmax);
+			int pendingmax = f->pendingsize + payoffs;
+			char *pending = realloc(f->pending, pendingmax);
+
+			if (!pending)
+			{
+				f->err = VFS_ERROR_UNSPECIFIED;
+				return;
+			}
+			f->pending = pending;
+			f->pendingmax = pendingmax;
 		}
 	}
 
@@ -532,10 +586,7 @@ static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char 
 	}
 	if (ctrl&0x80)
 	{
-		mask.i = f->mask;
-		//'re-randomise' it a bit
-		f->mask = (f->mask<<4) | (f->mask>>(32-4));
-		f->mask += ((unsigned int)payoffs << 16) + (unsigned int)paylen;
+		WS_NextMask(f, mask.b);
 
 		f->pending[payoffs++] = mask.b[0];
 		f->pending[payoffs++] = mask.b[1];
@@ -566,8 +617,16 @@ static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char 
 		break;
 #endif
 	default: //raw data
-		memcpy(f->pending+payoffs, data, length);
-		payoffs += (int)length;
+		if (length1)
+		{
+			memcpy(f->pending + payoffs, data1, length1);
+			payoffs += (int)length1;
+		}
+		if (length2)
+		{
+			memcpy(f->pending + payoffs, data2, length2);
+			payoffs += (int)length2;
+		}
 		break;
 	}
 	if (ctrl&0x80)
@@ -582,6 +641,11 @@ static void WS_Append (websocket_t *f, unsigned packettype, const unsigned char 
 
 	//try flushing it now. note: tls packet sizes can leak.
 	WS_Flush(f);
+}
+
+static void WS_Append(websocket_t *f, unsigned packettype, const unsigned char *data, size_t length)
+{
+	WS_AppendParts(f, packettype, data, length, NULL, 0);
 }
 static qboolean WS_Close (struct icestream_s *file)
 {
@@ -655,6 +719,53 @@ static char *HTTP_GetToken(char **input)
 	*t = 0;
 	return in;
 }
+
+size_t Base64_EncodeBlock(const qbyte *in, size_t length, char *out, size_t outsize);
+static qboolean WS_MakeAcceptKey(const char *key, char *out, size_t outsize)
+{
+	unsigned char sha1digest[20];
+	char padkey[512];
+	int length;
+
+	if (!key || !*key || !out || !outsize)
+		return false;
+	length = q_snprintf(padkey, sizeof(padkey), "%s258EAFA5-E914-47DA-95CA-C5AB0DC85B11", key);
+	if (length < 0 || length >= (int)sizeof(padkey))
+		return false;
+	Base64_EncodeBlock(sha1digest,
+		CalcHash(&hash_sha1, sha1digest, sizeof(sha1digest), (const qbyte*)padkey, length),
+		out, outsize);
+	return out[0] != '\0';
+}
+
+#ifdef NETQUAKE_IO_HACK
+static unsigned int WS_ReadBigLong(const unsigned char *data)
+{
+	return ((unsigned int)data[0] << 24) |
+		((unsigned int)data[1] << 16) |
+		((unsigned int)data[2] << 8) |
+		(unsigned int)data[3];
+}
+
+static int WS_WriteWebQuakeAccept(void *buffer, int buffersize)
+{
+	unsigned char accept[12] = {0};
+	unsigned int header;
+
+	if (buffersize < (int)sizeof(accept))
+		return VFS_ERROR_UNSPECIFIED;
+
+	header = BigLong(WS_NQFLAG_CTL | sizeof(accept));
+	memcpy(accept, &header, sizeof(header));
+	accept[4] = WS_NQ_CCREP_ACCEPT;
+	/* WebQuake does not negotiate ProQuake's 16-bit client angles. */
+	accept[9] = 0;
+	accept[10] = 0;
+	accept[11] = 0;
+	memcpy(buffer, accept, sizeof(accept));
+	return sizeof(accept);
+}
+#endif
 
 static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread)
 {
@@ -766,42 +877,41 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 					prot = l+23;
 				else if (!q_strncasecmp(l, "Host:", 5))
 					host = l+5;
-				if (le[0] == '\n' && le[1] == '\r' && le[2] == '\n')
+				if (e - le >= 3 && le[0] == '\n' && le[1] == '\r' && le[2] == '\n')
 				{
 					qboolean connnection_upgrade = false;
 					qboolean upgrade_websocket = false;
-					char acceptkey[20*2];
-					unsigned char sha1digest[20];
-					char padkey[512];
+					char acceptkey[20*2] = "";
+					char *keytoken = NULL;
 
 					le += 3;
 
 					while(con)
 					{
 						l = HTTP_GetToken(&con);
-						if (!strcmp(l, "Upgrade"))
+						if (!q_strcasecmp(l, "Upgrade"))
 							connnection_upgrade = true;
 					}
 					while(upg)
 					{
 						l = HTTP_GetToken(&upg);
-						if (!strcmp(l, "websocket"))
+						if (!q_strcasecmp(l, "websocket"))
 							upgrade_websocket = true;
 					}
 
 					if (accept)
 						accept = HTTP_GetToken(&accept);
-
-					//server needs this to reply, client needs this to verify the server isn't just echoing weirdly.
-					l = key;
-					q_snprintf(padkey, sizeof(padkey), "%s258EAFA5-E914-47DA-95CA-C5AB0DC85B11", HTTP_GetToken(&l));
-					Base64_EncodeBlock(sha1digest, CalcHash(&hash_sha1, sha1digest, sizeof(sha1digest), (const qbyte*)padkey, strlen(padkey)), acceptkey, sizeof(acceptkey));
+					if (key)
+						keytoken = HTTP_GetToken(&key);
+					if (f->serverwaiting && keytoken)
+						WS_MakeAcceptKey(keytoken, acceptkey, sizeof(acceptkey));
 
 					if (!connnection_upgrade)
 						f->err = VFS_ERROR_UNSPECIFIED;	//wrong connection state...
 					else if (!upgrade_websocket)
 						f->err = VFS_ERROR_UNSPECIFIED;	//wrong type of upgrade...
-					else if(f->serverwaiting?!key:(!accept /*|| strcmp(accept, acceptkey) -- FIXME*/)) //client 'needs' to verify it.
+					else if (f->serverwaiting ? !acceptkey[0] :
+						(!accept || strcmp(accept, f->expectedaccept)))
 						f->err = VFS_ERROR_UNSPECIFIED;	//wrong hash
 					else
 					{
@@ -824,6 +934,13 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 #ifdef NETQUAKE_IO_HACK
 						if (!prot && netquakeio)
 							prot = NETQUAKE_IO_HACK;
+						if (!f->serverwaiting && prot && !strcmp(prot, NETQUAKE_IO_HACK))
+						{
+							f->webquake = true;
+							f->webquakeacceptpending = true;
+							/* Drop raw NetQuake probes queued before the selected protocol was known. */
+							f->pendingsize = f->pendingofs;
+						}
 #endif
 						if (!prot)
 						{
@@ -837,6 +954,15 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 
 					f->conpending = false;
 					f->readbufferofs = (int)(le-f->readbuffer);
+
+#ifdef NETQUAKE_IO_HACK
+					if (!f->serverwaiting && f->webquakeacceptpending)
+					{
+						f->webquakeacceptpending = false;
+						Con_DPrintf("websocket connection using WebQuake framing\n");
+						return WS_WriteWebQuakeAccept(buffer, bytestoread);
+					}
+#endif
 
 					if (f->serverwaiting)
 					{
@@ -942,7 +1068,14 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 				l = le+1;
 			}
 			if (f->conpending)
+			{
+				if (f->readbuffered >= (int)sizeof(f->readbuffer))
+				{
+					f->err = VFS_ERROR_UNSPECIFIED;	//unbounded or unterminated HTTP headers.
+					break;
+				}
 				continue;
+			}
 			if (f->err)
 				break;
 			//try and read the next thing.
@@ -960,10 +1093,32 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 			int paylen;
 			size_t payoffs = 2;
 			unsigned int mask = 0;
+			unsigned int opcode = (ctrl >> 8) & 0xf;
+			qboolean final = (ctrl & 0x8000) != 0;
+			qboolean masked = (ctrl & 0x0080) != 0;
 
 			if (ctrl & 0x7000)
 			{
 				f->err = VFS_ERROR_UNSPECIFIED;	//reserved bits set
+				break;
+			}
+			else if ((f->isserver && !masked) || (!f->isserver && masked))
+			{
+				f->err = VFS_ERROR_UNSPECIFIED;	//clients must mask; servers must not.
+				break;
+			}
+			else if (opcode == WS_PACKETTYPE_CONTINUATION ||
+				(opcode != WS_PACKETTYPE_TEXTFRAME && opcode != WS_PACKETTYPE_BINARYFRAME &&
+				 opcode != WS_PACKETTYPE_CLOSE && opcode != WS_PACKETTYPE_PING &&
+				 opcode != WS_PACKETTYPE_PONG))
+			{
+				f->err = VFS_ERROR_UNSPECIFIED;	//fragmentation and unknown opcodes are unsupported.
+				break;
+			}
+			else if ((!final && (opcode == WS_PACKETTYPE_TEXTFRAME || opcode == WS_PACKETTYPE_BINARYFRAME)) ||
+				(opcode >= WS_PACKETTYPE_CLOSE && (!final || (ctrl & 0x7f) > 125)))
+			{
+				f->err = VFS_ERROR_UNSPECIFIED;
 				break;
 			}
 			else if ((ctrl & 0x7f) == 127)
@@ -1018,6 +1173,11 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 			{
 				paylen = ctrl & 0x7f;
 			}
+			if (opcode == WS_PACKETTYPE_CLOSE && paylen == 1)
+			{
+				f->err = VFS_ERROR_UNSPECIFIED;
+				break;
+			}
 			if (ctrl & 0x80)
 			{
 				if (payoffs + 4 > inlen)
@@ -1040,7 +1200,7 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 				continue;	//need more data
 			}
 
-			if (mask)
+			if (masked)
 			{
 				int i;
 				for (i = 0; i < paylen; i++)
@@ -1056,7 +1216,8 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 			case WS_PACKETTYPE_CLOSE:
 				if (!f->err)
 				{
-					WS_Flush(f);
+					WS_Append(f, WS_PACKETTYPE_CLOSE,
+						(unsigned char*)f->readbuffer + f->readbufferofs - paylen, paylen);
 					f->err = VFS_ERROR_EOF;
 					if (f->pendingofs < f->pendingsize)
 						return VFS_ERROR_EOF;	//nothing more to read (might still have some to flush).
@@ -1068,27 +1229,41 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 			case WS_PACKETTYPE_TEXTFRAME:	//we don't distinguish. use utf-8 data if you wanted that.
 			case WS_PACKETTYPE_BINARYFRAME:	//actual data
 #ifdef NETQUAKE_IO_HACK
-				if (f->netquakeiohack)
+				if (f->webquake)
 				{
-					if (bytestoread >= 0 && bytestoread+3 >= paylen)
-					{	//caller passed a big enough buffer
-						char *d = f->readbuffer+f->readbufferofs-paylen;
-						memcpy((char*)buffer+4, d+1, paylen);
-						paylen += 3;	//swapping a 1 byte header for 4.
-						if (*d == 0)
-						{
-							*(int*)buffer = BigLong((1u<<20) | paylen);
-							((int*)buffer)[1] = BigLong(++f->netquakeiobug);	//overwrite the sequence numbers to work around netquake.io bugs.
-						}
-						else if (*d == 1)
-							*(int*)buffer = BigLong((1u<<16) | (1u<<19) | paylen);
-						else if (*d == 2)
-							*(int*)buffer = BigLong((1u<<17) | paylen);
-						else
-							continue;	//don't know what it is, don't bother reading it.
-						return paylen;
+					const unsigned char *packet = (const unsigned char *)f->readbuffer + f->readbufferofs - paylen;
+					unsigned char *out = (unsigned char *)buffer;
+					unsigned int header;
+					unsigned int sequence;
+					int output_length;
+
+					if (paylen < 1 || (packet[0] != 1 && packet[0] != 2))
+					{
+						f->err = VFS_ERROR_UNSPECIFIED;
+						break;
 					}
-					Con_Printf("websocket connection received %u-byte package. only %i requested\n", 3+(unsigned)paylen, bytestoread);
+					output_length = WS_NQ_HEADERSIZE + paylen - 1;
+					if (output_length > WS_NQFLAG_LENGTH_MASK || bytestoread < output_length)
+					{
+						Con_Printf("websocket connection received %u-byte WebQuake package. only %i requested\n", (unsigned)output_length, bytestoread);
+						f->err = VFS_ERROR_UNSPECIFIED;
+						break;
+					}
+
+					if (packet[0] == 1)
+					{
+						header = BigLong(WS_NQFLAG_DATA | WS_NQFLAG_EOM | output_length);
+						sequence = BigLong(f->webquake_reliable_sequence++);
+					}
+					else
+					{
+						header = BigLong(WS_NQFLAG_UNRELIABLE | output_length);
+						sequence = BigLong(f->webquake_unreliable_sequence++);
+					}
+					memcpy(out, &header, sizeof(header));
+					memcpy(out + sizeof(header), &sequence, sizeof(sequence));
+					memcpy(out + WS_NQ_HEADERSIZE, packet + 1, paylen - 1);
+					return output_length;
 				}
 				else
 #endif
@@ -1126,38 +1301,47 @@ static int WS_ReadBytes (struct icestream_s *file, void *buffer, int bytestoread
 static int WS_WriteBytes (struct icestream_s *file, const void *buffer, int bytestowrite)
 {	//websockets are a pseudo-packet protocol, so queue one packet at a time. there may still be extra data queued at a lower level.
 	websocket_t *f = (websocket_t *)file;
+	int inputsize = bytestowrite;
 	if (!f->stream)
 		return f->err;
+	if (!buffer || bytestowrite < 0)
+		return VFS_ERROR_UNSPECIFIED;
 	if (f->pendingsize-f->pendingofs > 8192 || f->serverwaiting)
 		return VFS_ERROR_TRYLATER;	//something pending... don't queue excessively.
 
 #ifdef NETQUAKE_IO_HACK
-	if (f->netquakeiohack)
+	if (f->webquake)
 	{
-		unsigned int flags = ntohl(*(const int*)buffer);
-		char *hackbuf = (char*)buffer + 3;
-		buffer = hackbuf;
-		bytestowrite-=3;
-		if (flags & (1u<<16))	//reliable
+		unsigned int flags;
+		unsigned char marker;
+		int payloadsize;
+
+		if (bytestowrite < WS_NQ_HEADERSIZE)
+			return VFS_ERROR_UNSPECIFIED;
+		flags = WS_ReadBigLong((const unsigned char *)buffer);
+		payloadsize = bytestowrite - WS_NQ_HEADERSIZE;
+		if (flags & WS_NQFLAG_DATA)	//reliable
 		{
-			if (!(flags & (1u<<19)))	//reliable without end-of-message... we'd need to merge it...
+			if (!(flags & WS_NQFLAG_EOM))	//reliable without end-of-message... we'd need to merge it...
 				return VFS_ERROR_NETQUAKEIO;
-			*hackbuf = 1;
+			marker = 1;
 		}
-		else if (flags & (1u<<17))	//reliable ack
-			*hackbuf = 2;
-		else if (flags & (1u<<20))	//unreliable
-			*hackbuf = 0;
+		else if (flags & WS_NQFLAG_ACK)
+			return inputsize;	//WebSockets do not need NetQuake reliable acks.
+		else if (flags & WS_NQFLAG_UNRELIABLE)
+			marker = 2;
 		else
-			return bytestowrite;	//drop it.
+			return inputsize;	//drop connectionless/control packets.
+		WS_AppendParts(f, WS_PACKETTYPE_BINARYFRAME, &marker, 1,
+			(const unsigned char *)buffer + WS_NQ_HEADERSIZE, payloadsize);
+		return f->err ? f->err : inputsize;
 	}
 #endif
 
 	//okay, we're taking this packet. all or nothing.
 	WS_Append(f, WS_PACKETTYPE_BINARYFRAME, buffer, bytestowrite);
-	return bytestowrite;
+	return f->err ? f->err : inputsize;
 }
-size_t Base64_EncodeBlock(const qbyte *in, size_t length, char *out, size_t outsize);
 static icestream_t *Websocket_WrapStream(icestream_t *stream, const char *host, const char *resource, const char *proto)
 {	//this is kinda messy. Websocket_WrapStream(FS_OpenSSL(FS_WrapTCPSocket(TCP_OpenStream())))... *sigh*. wss uris kinda require all the extra layers.
 
@@ -1167,6 +1351,11 @@ static icestream_t *Websocket_WrapStream(icestream_t *stream, const char *host, 
 	char b64key[(16*4)/3+4];	// +4 for base64 padding + null terminator
 	if (!stream)
 		return NULL;
+	if (!host || !proto)
+	{
+		stream->Close(stream);
+		return NULL;
+	}
 	Sys_RandomBytes(key, sizeof(key));
 	Base64_EncodeBlock(key, sizeof(key), b64key, sizeof(b64key));
 
@@ -1188,7 +1377,11 @@ static icestream_t *Websocket_WrapStream(icestream_t *stream, const char *host, 
 					proto, b64key);
 
 	newf = calloc(1, sizeof(*newf) + strlen(host));
-	Sys_RandomBytes((void*)&newf->mask, sizeof(newf->mask));
+	if (!newf)
+	{
+		stream->Close(stream);
+		return NULL;
+	}
 	newf->stream = stream;
 	newf->funcs.Close = WS_Close;
 	newf->funcs.ReadBytes = WS_ReadBytes;
@@ -1196,9 +1389,23 @@ static icestream_t *Websocket_WrapStream(icestream_t *stream, const char *host, 
 
 	newf->protocol = strdup(proto);
 	newf->serverwaiting = false;
+	if (!newf->protocol || !WS_MakeAcceptKey(b64key, newf->expectedaccept, sizeof(newf->expectedaccept)))
+	{
+		newf->stream->Close(newf->stream);
+		free((void *)newf->protocol);
+		free(newf);
+		return NULL;
+	}
 
 	//send the hello, the weird way.
 	newf->pending = strdup(hello);
+	if (!newf->pending)
+	{
+		newf->stream->Close(newf->stream);
+		free((void *)newf->protocol);
+		free(newf);
+		return NULL;
+	}
 	newf->conpending = newf->pendingsize = newf->pendingmax = (int)strlen(newf->pending);
 	WS_Flush(newf);
 
@@ -1211,9 +1418,18 @@ static icestream_t *Websocket_AcceptStream(icestream_t *stream, const char *host
 	websocket_t *newf;
 	if (!stream)
 		return NULL;
+	if (!host || !proto)
+	{
+		stream->Close(stream);
+		return NULL;
+	}
 
 	newf = calloc(1, sizeof(*newf) + strlen(host));
-	Sys_RandomBytes((void*)&newf->mask, sizeof(newf->mask));
+	if (!newf)
+	{
+		stream->Close(stream);
+		return NULL;
+	}
 	newf->stream = stream;
 	newf->funcs.Close = WS_Close;
 	newf->funcs.ReadBytes = WS_ReadBytes;
@@ -1221,9 +1437,17 @@ static icestream_t *Websocket_AcceptStream(icestream_t *stream, const char *host
 
 	newf->pendingmax = 65536;
 	newf->pending = malloc(newf->pendingmax);
+	newf->protocol = strdup(proto);
+	if (!newf->pending || !newf->protocol)
+	{
+		newf->stream->Close(newf->stream);
+		free(newf->pending);
+		free((void *)newf->protocol);
+		free(newf);
+		return NULL;
+	}
 	newf->pendingsize = 0;
 	newf->conpending = 1;
-	newf->protocol = strdup(proto);
 	newf->serverwaiting = true;
 	newf->isserver = true;
 #ifdef HAVE_TLS
@@ -1483,6 +1707,8 @@ struct icewsssocket_s
 static int ICE_WSS_RecvPacket(struct icesocket_s *s, netadr_t *addr, void *msg_data, size_t msg_maxsize)
 {
 	struct icewsssocket_s *n = (struct icewsssocket_s*)s;
+	if (!n->f || !addr || !msg_data || msg_maxsize > INT_MAX)
+		return VFS_ERROR_UNSPECIFIED;
 
 	int sz = n->f->ReadBytes(n->f, msg_data, (int)msg_maxsize);
 	if (sz >= 0)
@@ -1493,13 +1719,27 @@ static neterr_t ICE_WSS_SendPacket (struct icesocket_s *s, const netadr_t *addr,
 {
 	int err;
 	struct icewsssocket_s *n = (struct icewsssocket_s*)s;
+#ifdef NETQUAKE_IO_HACK
+	qboolean webquake_reliable = false;
+#endif
 	if (!NET_CompareAdr(addr, &n->adr))
 		return NETERR_NOROUTE;
+	if (!msg_data || msg_size > INT_MAX)
+		return NETERR_MTU;
+
+#ifdef NETQUAKE_IO_HACK
+	if (((websocket_t *)n->f)->webquake && msg_size >= WS_NQ_HEADERSIZE)
+		webquake_reliable = (WS_ReadBigLong((const unsigned char *)msg_data) & WS_NQFLAG_DATA) != 0;
+#endif
 
 	//our websocket code either accepts it all or rejects it all.
 	err = n->f->WriteBytes(n->f, msg_data, (int)msg_size);
 	if (err > 0)
+#ifdef NETQUAKE_IO_HACK
+		return webquake_reliable ? NETERR_NQACK : NETERR_SENT;
+#else
 		return NETERR_SENT;
+#endif
 	switch(err)
 	{
 	case VFS_ERROR_TRYLATER:	return NETERR_CLOGGED;
@@ -1523,6 +1763,20 @@ static void ICE_WSS_Close(struct icesocket_s *con)
 struct icesocket_s *ICE_WSS_EstablishConnection(const char *address, netadr_t *adr, qboolean usetls)
 {	//we're the client
 	struct icewsssocket_s *n = calloc(1, sizeof(*n));
+	if (!n || !address || !adr)
+	{
+		free(n);
+		return NULL;
+	}
+
+#ifndef HAVE_TLS
+	if (usetls)
+	{
+		free(n);
+		return NULL;
+	}
+#endif
+
 	n->f = FS_WrapTCPSocket(TCP_OpenStream(adr, address, true), true, address);
 
 #ifdef HAVE_TLS
@@ -1549,6 +1803,12 @@ struct icesocket_s *ICE_WS_ServerConnection(SOCKET sock, netadr_t *adr)
 {	//we're the server. new tcp socket was connected. don't know if its ice or not yet.
 	char peer[128];
 	struct icewsssocket_s *n = calloc(1, sizeof(*n));
+	if (!n || !adr)
+	{
+		free(n);
+		closesocket(sock);
+		return NULL;
+	}
 	NET_AdrToString(peer,sizeof(peer), adr);
 	n->f = FS_WrapTCPSocket(sock, false, peer);
 

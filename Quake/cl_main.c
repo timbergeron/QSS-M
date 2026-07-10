@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "bgmusic.h"
 #include "pmove.h"
+#include "net_ws.h"
 
 #include "arch_def.h"
 #ifdef PLATFORM_UNIX
@@ -543,6 +544,8 @@ static qboolean CL_HandlePortPingProbe(const char *target)
 
 	is_local = !q_strcasecmp(target, "local") || !q_strcasecmp(target, "localhost");
 	if (is_local)
+		return false;
+	if (NET_WebSocketSchemeLength(target, NULL))
 		return false;
 
 	probe_status = NET_PortPingProbe_GetStatus();

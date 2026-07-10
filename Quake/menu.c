@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "bgmusic.h"
+#include "net_ws.h"
 #include "q_ctype.h" // woods #modsmenu (iw)
 #include "q_hash.h"
 #include <curl/curl.h> // woods #serversmenu
@@ -28863,6 +28864,11 @@ Server List Menu
 #define PING_COOLDOWN 2.0
 #define MAX_PING_QUEUE 5
 #define SERVERLIST_UNAVAILABLE_ALPHA 0.35f
+#define TESLA_QUAKE_NAME "Tesla Quake"
+#define TESLA_QUAKE_ADDRESS "wss://quake.0effort.io"
+#define TESLA_QUAKE_STATUS_URL "https://tq.0effort.io/api/live"
+#define TESLA_QUAKE_HOUSE_BOTS 7
+#define SERVERLIST_MAX_RESPONSE_BYTES (4 * 1024 * 1024)
 
 // number of worker threads used for the initial server ping sweep
 #ifndef MAX_PING_THREADS
@@ -29025,6 +29031,7 @@ static int ServerList_FindDuplicateItem(const servertitem_t* items, int count, c
 static void RemoveDuplicateServers(servertitem_t** items, int* actualServerCount);
 static void ServerList_AppendHostCacheResults(void);
 static void CleanupPingThreads(void);
+static qboolean ServerList_RefreshTeslaItem(servertitem_t* item);
 
 static void ServerList_CopyTrimmedToken(const char* start, size_t len, char* out, size_t outsize)
 {
@@ -29623,7 +29630,8 @@ static qboolean ServerList_ShouldReplaceDuplicate(const servertitem_t* existing,
 	qboolean existingStarred = existing && existing->name && existing->name[0] == '*';
 	qboolean candidateStarred = candidate && candidate->name && candidate->name[0] == '*';
 
-	return existingStarred && !candidateStarred;
+	return (existingStarred && !candidateStarred) ||
+		(existing && candidate && !existing->known_available && candidate->known_available);
 }
 
 static void ServerList_MergeLiveDetailsIntoPinned(servertitem_t* pinned, servertitem_t* live)
@@ -29856,6 +29864,7 @@ void PingSingleServer(int index)
 {
 	qboolean same_server;
 	qboolean was_unavailable;
+	qboolean is_tesla;
 
 	if (index < 0 || index >= serversmenu.servercount)
 		return;
@@ -29875,6 +29884,51 @@ void PingSingleServer(int index)
 	previousPing = serversmenu.items[index].ping;
 	users = serversmenu.items[index].users;
 	was_unavailable = ServerList_IsUnavailableBookmark(&serversmenu.items[index]);
+	is_tesla = !q_strcasecmp(serverAddress, TESLA_QUAKE_ADDRESS);
+	if (is_tesla)
+	{
+		servertitem_t refreshed;
+		qboolean refresh_ok;
+
+		serversmenu.items[index].isLoading = true;
+		SDL_UnlockMutex(pingMutex);
+
+		memset(&refreshed, 0, sizeof(refreshed));
+		refresh_ok = ServerList_RefreshTeslaItem(&refreshed);
+
+		SDL_LockMutex(pingMutex);
+		same_server = (serversmenu.items && index < serversmenu.servercount &&
+			serversmenu.items[index].ip && !strcmp(serversmenu.items[index].ip, serverAddress));
+		if (same_server && refresh_ok)
+		{
+			free((void*)serversmenu.items[index].map);
+			free((void*)serversmenu.items[index].players);
+			serversmenu.items[index].map = refreshed.map;
+			serversmenu.items[index].players = refreshed.players;
+			refreshed.map = NULL;
+			refreshed.players = NULL;
+			serversmenu.items[index].users = refreshed.users;
+			serversmenu.items[index].maxusers = refreshed.maxusers;
+			serversmenu.items[index].ping = refreshed.ping;
+			serversmenu.items[index].known_available = true;
+			serversmenu.pingSortDirty = true;
+		}
+		if (same_server)
+		{
+			serversmenu.items[index].ping_tested = true;
+			serversmenu.items[index].isLoading = false;
+		}
+		SDL_UnlockMutex(pingMutex);
+		ServerList_FreeItem(&refreshed);
+		return;
+	}
+	if (NET_WebSocketSchemeLength(serverAddress, NULL))
+	{
+		serversmenu.items[index].ping_tested = true;
+		serversmenu.items[index].isLoading = false;
+		SDL_UnlockMutex(pingMutex);
+		return;
+	}
 	serversmenu.items[index].isLoading = true;  // Set loading flag
 	SDL_UnlockMutex(pingMutex);
 
@@ -30054,6 +30108,16 @@ int PingServers(void* data)
 			has_players_already = (serversmenu.items[i].players != NULL);
 			was_unavailable = ServerList_IsUnavailableBookmark(&serversmenu.items[i]);
 			SDL_UnlockMutex(pingMutex);
+
+			if (NET_WebSocketSchemeLength(serverAddress, NULL))
+			{
+				SDL_LockMutex(pingMutex);
+				if (serversmenu.items && i < serversmenu.servercount &&
+					serversmenu.items[i].ip && !strcmp(serversmenu.items[i].ip, serverAddress))
+					serversmenu.items[i].ping_tested = true;
+				SDL_UnlockMutex(pingMutex);
+				continue;
+			}
 
 			int ping = UDP_Ping_HostResolved(serverAddress, resolvedAddress, sizeof(resolvedAddress));
 
@@ -30320,12 +30384,20 @@ struct MemoryStruct
 {
 	char* memory;
 	size_t size;
+	size_t max_size;
 };
 
 static size_t WriteMemoryCallback (void* contents, size_t size, size_t nmemb, void* userp)
 {
-	size_t realSize = size * nmemb;
 	struct MemoryStruct* mem = (struct MemoryStruct*)userp;
+	size_t realSize;
+
+	if (!mem || (size && nmemb > (size_t)-1 / size))
+		return 0;
+	realSize = size * nmemb;
+	if ((mem->max_size && (mem->size > mem->max_size || realSize > mem->max_size - mem->size)) ||
+		mem->size == (size_t)-1 || realSize > (size_t)-1 - mem->size - 1)
+		return 0;
 
 	char* ptr = realloc(mem->memory, mem->size + realSize + 1);
 	if (!ptr) {
@@ -30339,6 +30411,239 @@ static size_t WriteMemoryCallback (void* contents, size_t size, size_t nmemb, vo
 	mem->memory[mem->size] = 0;
 
 	return realSize;
+}
+
+static qboolean ServerList_CurlFetch(const char* url, long timeout,
+	size_t maxResponseBytes, struct MemoryStruct* chunk, double* connectTime)
+{
+	CURL* curl;
+	CURLcode res;
+	long httpCode = 0;
+
+	if (!url || !chunk)
+		return false;
+	memset(chunk, 0, sizeof(*chunk));
+	chunk->memory = malloc(1);
+	chunk->max_size = maxResponseBytes;
+	if (!chunk->memory)
+		return false;
+	chunk->memory[0] = '\0';
+	if (connectTime)
+		*connectTime = 0.0;
+
+	curl = curl_easy_init();
+	if (!curl)
+	{
+		free(chunk->memory);
+		chunk->memory = NULL;
+		return false;
+	}
+
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)chunk);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 2L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout);
+	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 2L);
+	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 10L);
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+#if CURL_AT_LEAST_VERSION(7, 85, 0)
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+#else
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+
+	res = curl_easy_perform(curl);
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+	if (connectTime && res == CURLE_OK)
+	{
+		double nameLookupTime = 0.0;
+		curl_easy_getinfo(curl, CURLINFO_CONNECT_TIME, connectTime);
+		curl_easy_getinfo(curl, CURLINFO_NAMELOOKUP_TIME, &nameLookupTime);
+		if (*connectTime >= nameLookupTime)
+			*connectTime -= nameLookupTime;
+	}
+	curl_easy_cleanup(curl);
+
+	if (res == CURLE_OK && httpCode >= 200 && httpCode < 300)
+		return true;
+	if (res != CURLE_OK)
+		Con_DPrintf("server list fetch %s: %s\n", url, curl_easy_strerror(res));
+	else
+		Con_DPrintf("server list fetch %s: HTTP %ld\n", url, httpCode);
+	free(chunk->memory);
+	chunk->memory = NULL;
+	chunk->size = 0;
+	return false;
+}
+
+static int ServerList_JsonPlayerCount(const double* value)
+{
+	if (!value || !isfinite(*value) || *value <= 0.0)
+		return 0;
+	if (*value >= MAX_SCOREBOARD)
+		return MAX_SCOREBOARD;
+	return (int)*value;
+}
+
+static qboolean ServerList_UpdateTeslaItem(const char* jsonText, double connectTime,
+	servertitem_t* item)
+{
+	const jsonentry_t* playersArray;
+	const qboolean* online;
+	const qboolean* godfather;
+	const double* currentPlayers;
+	const double* maxPlayers;
+	const char* map;
+	json_t* json;
+	char displayMap[64];
+	char playerNames[512] = "";
+	char* newMap;
+	char* newPlayers;
+	int playerNamesLen = 0;
+	int listedPlayers = 0;
+	int humanPlayers;
+
+	if (!jsonText || !item)
+		return false;
+	json = JSON_Parse(jsonText);
+	if (!json || !json->root || json->root->type != JSON_OBJECT)
+	{
+		if (json)
+			JSON_Free(json);
+		return false;
+	}
+
+	online = JSON_FindBoolean(json->root, "online");
+	if (!online || !*online)
+	{
+		JSON_Free(json);
+		return false;
+	}
+
+	map = JSON_FindString(json->root, "map");
+	godfather = JSON_FindBoolean(json->root, "godfather");
+	currentPlayers = JSON_FindNumber(json->root, "currentPlayers");
+	maxPlayers = JSON_FindNumber(json->root, "maxPlayers");
+	ServerList_CopyDisplayText(map ? map : "Unknown", displayMap, sizeof(displayMap));
+	if (!displayMap[0])
+		q_strlcpy(displayMap, "Unknown", sizeof(displayMap));
+
+	playersArray = JSON_Find(json->root, "players", JSON_ARRAY);
+	if (playersArray)
+	{
+		const jsonentry_t* playerEntry;
+		for (playerEntry = playersArray->firstchild; playerEntry; playerEntry = playerEntry->next)
+		{
+			const char* name = JSON_FindString(playerEntry, "name");
+			char displayName[128];
+			int len;
+
+			listedPlayers++;
+			if (!name || !*name)
+				continue;
+			ServerList_CopyDisplayText(name, displayName, sizeof(displayName));
+			len = (int)strlen(displayName);
+			while (len > 0 && displayName[len - 1] == ' ')
+				len--;
+			if (!len || playerNamesLen + len + (playerNamesLen ? 2 : 0) >= (int)sizeof(playerNames))
+				continue;
+			if (playerNamesLen)
+			{
+				playerNames[playerNamesLen++] = ',';
+				playerNames[playerNamesLen++] = ' ';
+			}
+			memcpy(playerNames + playerNamesLen, displayName, len);
+			playerNamesLen += len;
+			playerNames[playerNamesLen] = '\0';
+		}
+	}
+
+	newMap = strdup(displayMap);
+	newPlayers = playerNames[0] ? strdup(playerNames) : NULL;
+	if (!newMap || (playerNames[0] && !newPlayers))
+	{
+		free(newMap);
+		free(newPlayers);
+		JSON_Free(json);
+		return false;
+	}
+	free((void*)item->map);
+	free((void*)item->players);
+	item->map = newMap;
+	item->players = newPlayers;
+	humanPlayers = ServerList_JsonPlayerCount(currentPlayers);
+	if (listedPlayers > humanPlayers)
+		humanPlayers = listedPlayers;
+	item->users = q_max(humanPlayers, TESLA_QUAKE_HOUSE_BOTS);
+	item->maxusers = ServerList_JsonPlayerCount(maxPlayers);
+	if (godfather && *godfather && item->users < item->maxusers)
+		item->users++;
+	if (item->maxusers > 0 && item->users > item->maxusers)
+		item->users = item->maxusers;
+	if (isfinite(connectTime) && connectTime >= 0.0 &&
+		connectTime < (double)INT_MAX / 1000.0)
+		item->ping = (int)(connectTime * 1000.0 + 0.5);
+	item->known_available = true;
+	JSON_Free(json);
+	return true;
+}
+
+static qboolean ServerList_InitTeslaItem(servertitem_t* item)
+{
+	if (!item || ServerList_IsIgnored(TESLA_QUAKE_NAME, TESLA_QUAKE_ADDRESS))
+		return false;
+	memset(item, 0, sizeof(*item));
+	item->name = strdup(TESLA_QUAKE_NAME);
+	item->ip = strdup(TESLA_QUAKE_ADDRESS);
+	item->map = strdup("Unknown");
+	item->maxusers = 16;
+	item->ping = -1;
+	item->active = true;
+	item->pinned_rank = -1;
+	item->ping_tested = true;
+	if (!item->name || !item->ip || !item->map)
+	{
+		ServerList_FreeItem(item);
+		return false;
+	}
+	return true;
+}
+
+static qboolean ServerList_CreateTeslaItem(servertitem_t* item)
+{
+	if (!ServerList_InitTeslaItem(item))
+		return false;
+	ServerList_RefreshTeslaItem(item);
+	return true;
+}
+
+static qboolean ServerList_RefreshTeslaItem(servertitem_t* item)
+{
+	struct MemoryStruct chunk;
+	double connectTime = 0.0;
+	qboolean updated = false;
+
+	if (!item)
+		return false;
+
+	if (ServerList_CurlFetch(TESLA_QUAKE_STATUS_URL, 4L, 64 * 1024,
+		&chunk, &connectTime))
+	{
+		updated = ServerList_UpdateTeslaItem(chunk.memory, connectTime, item);
+		if (!updated)
+			Con_DPrintf("Tesla Quake status: invalid response\n");
+		free(chunk.memory);
+	}
+	return updated;
 }
 
 void setStatusFlagBasedOnTimestamp (const char* timestamp, const char* lastQuery, qboolean* status)
@@ -30509,63 +30814,14 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 
 static qboolean CurlServerList (servertitem_t** items, int* actualServerCount)
 {
-	CURL* curl;
-	CURLcode res;
-	long http_code = 0;
 	struct MemoryStruct chunk;
 
-	chunk.memory = malloc(1);  // Initial allocation
-	chunk.size = 0;    // No data at this point
-	if (!chunk.memory)
-	{
-		Con_DPrintf("server list API: memory allocation failed\n");
+	if (!ServerList_CurlFetch("https://servers.quakeone.com/api/servers/status",
+		5L, SERVERLIST_MAX_RESPONSE_BYTES, &chunk, NULL))
 		return false;
-	}
-	chunk.memory[0] = '\0';
-
-	curl = curl_easy_init();
-
-	if (curl) 
-	{
-		curl_easy_setopt(curl, CURLOPT_URL, "https://servers.quakeone.com/api/servers/status");
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
-		curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 2L);
-		curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-		curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 2L);
-		curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 10L);
-		curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-		curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-		curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-		curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
-		curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
-		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-#if CURL_AT_LEAST_VERSION(7, 85, 0)
-		curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
-		curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
-#else
-		curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
-		curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
-#endif
-
-		res = curl_easy_perform(curl);
-		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-		if (res == CURLE_OK && http_code >= 200 && http_code < 300)
-			populateServersFromJSON(chunk.memory, items, actualServerCount);
-		else if (res != CURLE_OK)
-			Con_DPrintf("server list API: %s\n", curl_easy_strerror(res));
-		else
-			Con_DPrintf("server list API: HTTP %ld\n", http_code);
-
-		free(chunk.memory);
-		curl_easy_cleanup(curl);
-		return (res == CURLE_OK && http_code >= 200 && http_code < 300);
-	}
-
+	populateServersFromJSON(chunk.memory, items, actualServerCount);
 	free(chunk.memory);
-	Con_DPrintf("server list API: curl init failed\n");
-	return false;
+	return true;
 }
 
 static int ServerList_ApiFetchThread(void* unused)
@@ -30577,6 +30833,17 @@ static int ServerList_ApiFetchThread(void* unused)
 	(void)unused;
 
 	ok = CurlServerList(&items, &count);
+	{
+		servertitem_t tesla;
+
+		if (ServerList_CreateTeslaItem(&tesla))
+		{
+			if (!ServerList_AppendOrReplaceMovedItem(&items, &count, &tesla, NULL))
+				ServerList_FreeItem(&tesla);
+			else
+				ok = true;
+		}
+	}
 
 	ServerList_ApiEnsureMutex();
 	if (!serverlistapi.mutex)
@@ -31166,6 +31433,15 @@ void FetchAndSortServers (void)
 		if (ServerList_CreatePinnedBookmarkItem(&pinned[i], i, &item) &&
 			!ServerList_AppendMovedItem(&serversmenu.items, &actualServerCount, &item))
 			ServerList_FreeItem(&item);
+	}
+
+	if (searchLastScope == SLIST_INTERNET)
+	{
+		servertitem_t tesla;
+
+		if (ServerList_InitTeslaItem(&tesla) &&
+			!ServerList_AppendOrReplaceMovedItem(&serversmenu.items, &actualServerCount, &tesla, NULL))
+			ServerList_FreeItem(&tesla);
 	}
 
 	for (size_t i = 0; i < hostCacheCount; i++) // Fetch and add servers from the dp list

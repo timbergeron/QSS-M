@@ -45,6 +45,7 @@ So, |=0x80 to avoid ambiguity with lower layers, so long as any rtp is in-band. 
 */
 
 #include "ice_private.h"
+#include "../net_ws.h"
 
 #ifdef SUPPORT_ICE
 
@@ -747,7 +748,7 @@ static neterr_t ICE_SendPacket(struct icestate_s *con, const void *data, size_t 
 
 	//only extend the timeout when data was actually sent — failed/clogged sends
 	//must not keep dead connections alive or they linger until TCP retransmit gives up
-	if (err == NETERR_SENT)
+	if (err == NETERR_SENT || err == NETERR_NQACK)
 		con->icetimeout = Sys_Milliseconds() + (con->icetimeout_ms ? con->icetimeout_ms : 30*1000);
 
 	return err;
@@ -2206,23 +2207,36 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 /*		else if (!strncmp(value, "tls://", 6) || !strncmp(value, "tcp://", 6))
 			//link = qizmo framing?
 			return false;*/
-		else if (!strncmp(value, "wss://", 6) || !strncmp(value, "ws://", 5))
+		else
 		{
-			qboolean sec = (value[2]=='s');
-			value += 5+sec;
-			if (!NET_StringToAdr(value, 0, &con->chosenpeer, 1))
-				return false;
-			link = ICE_WSS_EstablishConnection(value, &con->chosenpeer, sec);
-			if (!link)
-				return false;
+			qboolean sec;
+			size_t schemelen = NET_WebSocketSchemeLength(value, &sec);
+
+			if (schemelen)
+			{
+				value += schemelen;
+				if (!NET_StringToAdr(value, sec ? 443 : 80, &con->chosenpeer, 1))
+					return false;
+				link = ICE_WSS_EstablishConnection(value, &con->chosenpeer, sec);
+				if (!link)
+					return false;
+			}
+			else if (!strncmp(value, "udp://", 6))
+				value += 6;
+			else if (strstr(value, "://"))
+				return false;	//some unknown scheme.
 		}
-		else if (!strncmp(value, "udp://", 6))
-			value += 6;
-		else if (strstr(value, "://"))
-			return false;	//some unknown scheme.
 
 		if (!link && !NET_StringToAdr(value, 0, &con->chosenpeer, 1))
 			return false;
+
+		con->rc = calloc(1, sizeof(*con->rc));
+		if (!con->rc)
+		{
+			if (link)
+				link->CloseSocket(link);
+			return false;
+		}
 
 		con->brokerless = true;
 		con->state = ICE_CONNECTED;
@@ -2236,7 +2250,6 @@ static qboolean ICE_Set(struct icestate_s *con, const char *prop, const char *va
 		}
 
 		//so we match up inbound packets properly.
-		con->rc = calloc(1, sizeof(*con->rc));
 		con->rc->peer = con->chosenpeer;
 		NET_BaseAdrToString(con->rc->info.addr, sizeof(con->rc->info.addr), &con->chosenpeer);
 		con->rc->info.port = NET_AdrToPort(&con->chosenpeer);
@@ -2984,7 +2997,7 @@ void ICE_Tick(void)
 				srv = &con->server[i];
 				if (srv->con)
 				{
-					char buf[8192];
+					char buf[65536];	//direct WebSocket frames can carry a full NetQuake message plus its header.
 					int msgsize;
 					netadr_t from;
 					while ((msgsize = srv->con->RecvPacket(srv->con, &from, buf, sizeof(buf)))>0)

@@ -27,6 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "arch_def.h" // woods for #iplog
 #include "net_sys.h" // woods for #iplog
 #include "net_defs.h" // woods for #iplog
+#include "net_ws.h"
 #include <time.h> // woods #demolistsort
 #include <sys/stat.h> // woods #demolistsort
 #include "bgmusic.h" // woods #musiclist
@@ -8250,6 +8251,23 @@ qboolean Valid_Port(const char* address) // woods #connectfilter
 	return ParseServerAddress(address, host, sizeof(host), &port);
 }
 
+static qboolean Host_ValidWebSocketAddress(const char *address)
+{
+	const char *authority;
+	size_t schemelen;
+
+	schemelen = NET_WebSocketSchemeLength(address, NULL);
+	if (!schemelen)
+		return false;
+	authority = address + schemelen;
+
+	/* The direct ICE WebSocket transport currently connects at the root path. */
+	if (!*authority || strpbrk(authority, "/?#"))
+		return false;
+
+	return ((Valid_Domain(authority) || Valid_IP(authority)) && Valid_Port(authority));
+}
+
 /*
 =====================
 Host_Connect_f
@@ -8277,7 +8295,8 @@ static void Host_Connect_f (void)
 	else
 	{
 		is_local = !q_strcasecmp(name, "local") || !q_strcasecmp(name, "localhost");
-		if ((((Valid_Domain(name)) || (Valid_IP(name))) && (Valid_Port(name))) || is_local) // woods #connectfilter -- avoid client lockup if possible
+		if ((((Valid_Domain(name)) || (Valid_IP(name))) && (Valid_Port(name))) ||
+			Host_ValidWebSocketAddress(name) || is_local) // woods #connectfilter -- avoid client lockup if possible
 		{
 			strcpy(lastcattempt, name); // woods verbose connection info
 			if (CL_BeginConnect(name))
