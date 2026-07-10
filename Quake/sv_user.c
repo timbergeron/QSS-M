@@ -39,7 +39,6 @@ float	*origin;
 float	*velocity;
 
 qboolean	onground;
-qboolean	prevonground; // woods #qwbunnyhop
 vec3_t velocitybeforethink; // woods #qwbunnyhop
 
 usercmd_t	cmd;
@@ -372,7 +371,7 @@ static void SV_UpdateSpeedInfo (void) // woods #speedometer
 SV_AirMove
 ===================
 */
-void SV_AirMove (void)
+void SV_AirMove (qboolean prevonground)
 {
 	int			i;
 	vec3_t		wishvel, wishdir;
@@ -434,12 +433,14 @@ the angle fields specify an exact angular motion in degrees
 void SV_ClientThink (void)
 {
 	vec3_t		v_angle;
+	qboolean	prevonground;
 
 	if (sv_player->v.movetype == MOVETYPE_NONE)
 		return;
 
-	prevonground = onground; // woods #qwbunnyhop
+	prevonground = host_client->nq_onground; // woods #qwbunnyhop
 	onground = (int)sv_player->v.flags & FL_ONGROUND;
+	host_client->nq_onground = onground;
 
 	origin = sv_player->v.origin;
 	velocity = sv_player->v.velocity;
@@ -494,7 +495,7 @@ void SV_ClientThink (void)
 	else if ((sv_player->v.waterlevel >= 2||sv_player->onladder) && sv_player->v.movetype != MOVETYPE_NOCLIP)
 		SV_WaterMove ();
 	else
-		SV_AirMove ();
+		SV_AirMove (prevonground);
 	//johnfitz
 
 	SV_UpdateSpeedInfo (); // woods #speedometer
