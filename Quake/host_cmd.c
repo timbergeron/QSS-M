@@ -6923,7 +6923,22 @@ static qboolean SendPingPacket(sys_socket_t sock, const struct sockaddr* addr, s
 Socket_Ping_Host -- woods #udplist
 ==================
 */
-static int Socket_Ping_Host(const char* host, int port)
+static void FormatResolvedServerAddress(const struct sockaddr* addr, socklen_t addrlen,
+	int port, char* out, size_t outsize)
+{
+	char numeric[NI_MAXHOST];
+
+	if (!out || !outsize || !addr ||
+		getnameinfo(addr, addrlen, numeric, sizeof(numeric), NULL, 0, NI_NUMERICHOST) != 0)
+		return;
+
+	if (strchr(numeric, ':'))
+		q_snprintf(out, outsize, "[%s]:%d", numeric, port);
+	else
+		q_snprintf(out, outsize, "%s:%d", numeric, port);
+}
+
+static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, size_t resolvedsize)
 {
 	struct addrinfo hints;
 	struct addrinfo* res = NULL;
@@ -6936,6 +6951,9 @@ static int Socket_Ping_Host(const char* host, int port)
 	static const unsigned char qw_status[] = { 0xFF, 0xFF, 0xFF, 0xFF, 's', 't', 'a', 't', 'u', 's', '\n' };
 	static const unsigned char dp_getchallenge[] = { 0xFF, 0xFF, 0xFF, 0xFF, 'g', 'e', 't', 'c', 'h', 'a', 'l', 'l', 'e', 'n', 'g', 'e', '\n' };
 	int ret;
+
+	if (resolved && resolvedsize)
+		resolved[0] = '\0';
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_socktype = SOCK_DGRAM;
@@ -6960,6 +6978,9 @@ static int Socket_Ping_Host(const char* host, int port)
 	for (rp = res; rp; rp = rp->ai_next)
 	{
 		sys_socket_t sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (resolved && resolvedsize && !resolved[0])
+			FormatResolvedServerAddress(rp->ai_addr, (socklen_t)rp->ai_addrlen,
+				port, resolved, resolvedsize);
 		if (sock == INVALID_SOCKET)
 		{
 			Con_DPrintf("socket() failed: %s\n", socketerror(SOCKETERRNO));
@@ -7106,11 +7127,20 @@ static int Socket_Ping_Host(const char* host, int port)
 		closesocket(sock);
 
 		if (ping_result >= 0)
+		{
+			FormatResolvedServerAddress(rp->ai_addr, (socklen_t)rp->ai_addrlen,
+				port, resolved, resolvedsize);
 			break;
+		}
 	}
 
 	freeaddrinfo(res);
 	return ping_result;
+}
+
+static int Socket_Ping_Host(const char* host, int port)
+{
+	return Socket_Ping_HostResolved(host, port, NULL, 0);
 }
 
 /*
@@ -7118,15 +7148,22 @@ static int Socket_Ping_Host(const char* host, int port)
 UDP_Ping_Host -- woods #udplist
 ==================
 */
-int UDP_Ping_Host(const char* host)
+int UDP_Ping_HostResolved(const char* host, char* resolved, size_t resolvedsize)
 {
 	char hostbuf[MAX_SERVER_ADDRESS_LEN];
 	int port;
 
+	if (resolved && resolvedsize)
+		resolved[0] = '\0';
 	if (!ParseServerAddress(host, hostbuf, sizeof(hostbuf), &port))
 		return -1;
 
-	return Socket_Ping_Host(hostbuf, port);
+	return Socket_Ping_HostResolved(hostbuf, port, resolved, resolvedsize);
+}
+
+int UDP_Ping_Host(const char* host)
+{
+	return UDP_Ping_HostResolved(host, NULL, 0);
 }
 
 /*

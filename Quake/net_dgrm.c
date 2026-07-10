@@ -2483,6 +2483,16 @@ static struct
 } *hostlist;
 size_t hostlist_count;
 size_t hostlist_max;
+
+static qboolean Datagram_IsSupportedNetQuakeProtocol(int protocol)
+{
+	return protocol == PROTOCOL_NETQUAKE ||
+		protocol == PROTOCOL_FITZQUAKE ||
+		protocol == PROTOCOL_RMQ ||
+		protocol == PROTOCOL_VERSION_BJP3 ||
+		protocol == PROTOCOL_VERSION_DP7;
+}
+
 static void _Datagram_AddPossibleHost(struct qsockaddr *addr, qboolean master)
 {
 	size_t u;
@@ -2583,7 +2593,10 @@ void Datagram_AddHostCacheInfo(struct qsockaddr *readaddr, const char *cname, co
 			connectprotocol = atoi(tmp);
 	}
 
-	supported = (connectprotocol == NET_PROTOCOL_VERSION && (t&(PT_NETQUAKE|PT_DARKPLACES|PT_QUAKETV)));
+	/* "protocol" is the control protocol; "nqprotocol" is the game protocol. */
+	supported = ((connectprotocol == NET_PROTOCOL_VERSION ||
+		((t & PT_NETQUAKE) && Datagram_IsSupportedNetQuakeProtocol(connectprotocol))) &&
+		(t & (PT_NETQUAKE | PT_DARKPLACES | PT_QUAKETV)));
 
 	// Broker-fed entries should already contain a complete public listing.
 	// Ignore malformed/unsupported summaries instead of filling the browser with junk rows.

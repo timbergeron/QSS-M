@@ -28872,6 +28872,7 @@ Server List Menu
 typedef struct {
 	const char* name;
 	const char* ip;
+	char resolved_ip[256];
 	int users;
 	int maxusers;
 	const char* map;
@@ -28901,6 +28902,7 @@ typedef struct {
 	int maxusers;
 	int ping;
 	qboolean has_players;
+	qboolean pinned_bookmark;
 	qboolean unavailable_bookmark;
 } servertitem_snapshot_t;
 
@@ -28926,6 +28928,7 @@ static struct {
 	int pingQueueSize;
 	qboolean pingThreadRunning;
 	SDL_Thread* pingThread;
+	qboolean resolvedDedupePending;
 	int sort_mode;
 	qboolean sort_descending;
 	double copy_message_until;
@@ -28979,6 +28982,7 @@ static qboolean ServerList_SnapshotItem(int actualIndex, servertitem_snapshot_t 
 	snapshot->users = server->users;
 	snapshot->maxusers = server->maxusers;
 	snapshot->ping = server->ping;
+	snapshot->pinned_bookmark = server->pinned_bookmark;
 	snapshot->unavailable_bookmark = ServerList_IsUnavailableBookmark(server);
 
 	if (locked)
@@ -29005,6 +29009,7 @@ static struct
 } serverlistapi;
 
 int UDP_Ping_Host(const char* host);
+int UDP_Ping_HostResolved(const char* host, char* resolved, size_t resolvedsize);
 char *UDP_QueryPlayers(const char *host, int maxslots);
 
 static int ServersMenu_ResolveIndex(int displayIndex);
@@ -29017,6 +29022,7 @@ static void ServerList_FreeItem(servertitem_t* item);
 static void ServerList_Rescroll(void);
 static void ServerList_CenterCursor(void);
 static int ServerList_FindDuplicateItem(const servertitem_t* items, int count, const servertitem_t* candidate);
+static void RemoveDuplicateServers(servertitem_t** items, int* actualServerCount);
 static void ServerList_AppendHostCacheResults(void);
 static void CleanupPingThreads(void);
 
@@ -29596,6 +29602,9 @@ static int ServerList_FindDuplicateItem(const servertitem_t* items, int count, c
 		if (candidate->ip && items[i].ip &&
 			ServerList_AddressMatches(candidate->ip, items[i].ip))
 			return i;
+		if (candidate->resolved_ip[0] && items[i].resolved_ip[0] &&
+			ServerList_AddressMatches(candidate->resolved_ip, items[i].resolved_ip))
+			return i;
 
 		if ((candidateStarred || existingStarred) &&
 			!q_strcasecmp(candidateBaseName, existingBaseName) &&
@@ -29636,6 +29645,8 @@ static void ServerList_MergeLiveDetailsIntoPinned(servertitem_t* pinned, servert
 		pinned->ping = live->ping;
 	pinned->active = live->active;
 	pinned->isLoading = live->isLoading;
+	if (live->resolved_ip[0])
+		q_strlcpy(pinned->resolved_ip, live->resolved_ip, sizeof(pinned->resolved_ip));
 	pinned->known_available = pinned->known_available || live->known_available;
 	if (live->lastPingTime > pinned->lastPingTime)
 		pinned->lastPingTime = live->lastPingTime;
@@ -29683,10 +29694,8 @@ static qboolean ServerList_AppendOrReplaceMovedItem(servertitem_t** items, int* 
 	return true;
 }
 
-static void ServerList_RebuildOrderAndFilter(void)
+static void ServerList_RebuildOrderAndFilterWithSelection(int selectedActual)
 {
-	int selectedActual = ServersMenu_ResolveIndex(serversmenu.list.cursor);
-
 	free(serversmenu.order);
 	serversmenu.order = NULL;
 	serversmenu.list.numitems = serversmenu.servercount;
@@ -29721,6 +29730,12 @@ static void ServerList_RebuildOrderAndFilter(void)
 		M_ServerList_RefilterWithSelection(selectedActual);
 	else if (serversmenu.list.viewsize > 0)
 		ServerList_Rescroll();
+}
+
+static void ServerList_RebuildOrderAndFilter(void)
+{
+	ServerList_RebuildOrderAndFilterWithSelection(
+		ServersMenu_ResolveIndex(serversmenu.list.cursor));
 }
 
 static void ServerList_ApiEnsureMutex(void)
@@ -29846,6 +29861,7 @@ void PingSingleServer(int index)
 		return;
 
 	char serverAddress[256];
+	char resolvedAddress[256];
 	int  previousPing;
 	int  users;
 
@@ -29862,7 +29878,7 @@ void PingSingleServer(int index)
 	serversmenu.items[index].isLoading = true;  // Set loading flag
 	SDL_UnlockMutex(pingMutex);
 
-	int ping = UDP_Ping_Host(serverAddress);
+	int ping = UDP_Ping_HostResolved(serverAddress, resolvedAddress, sizeof(resolvedAddress));
 
 	SDL_LockMutex(pingMutex);
 	same_server = (serversmenu.items && index < serversmenu.servercount &&
@@ -29881,6 +29897,12 @@ void PingSingleServer(int index)
 	}
 	if (same_server)
 	{
+		if (resolvedAddress[0] && strcmp(serversmenu.items[index].resolved_ip, resolvedAddress))
+		{
+			q_strlcpy(serversmenu.items[index].resolved_ip, resolvedAddress,
+				sizeof(serversmenu.items[index].resolved_ip));
+			serversmenu.resolvedDedupePending = true;
+		}
 		serversmenu.items[index].ping_tested = true;
 		serversmenu.items[index].isLoading = false;  // Clear loading flag
 		if (was_unavailable != ServerList_IsUnavailableBookmark(&serversmenu.items[index]))
@@ -30022,6 +30044,7 @@ int PingServers(void* data)
 		if (serversmenu.items && i < serversmenu.servercount && serversmenu.items[i].ip)
 		{
 			char serverAddress[256];
+			char resolvedAddress[256];
 			int users;
 			qboolean has_players_already;
 			qboolean same_server;
@@ -30032,13 +30055,19 @@ int PingServers(void* data)
 			was_unavailable = ServerList_IsUnavailableBookmark(&serversmenu.items[i]);
 			SDL_UnlockMutex(pingMutex);
 
-			int ping = UDP_Ping_Host(serverAddress);
+			int ping = UDP_Ping_HostResolved(serverAddress, resolvedAddress, sizeof(resolvedAddress));
 
 			SDL_LockMutex(pingMutex);
 			same_server = (serversmenu.items && i < serversmenu.servercount &&
 				serversmenu.items[i].ip && !strcmp(serversmenu.items[i].ip, serverAddress));
 			if (same_server)
 			{
+				if (resolvedAddress[0] && strcmp(serversmenu.items[i].resolved_ip, resolvedAddress))
+				{
+					q_strlcpy(serversmenu.items[i].resolved_ip, resolvedAddress,
+						sizeof(serversmenu.items[i].resolved_ip));
+					serversmenu.resolvedDedupePending = true;
+				}
 				serversmenu.items[i].ping = (ping >= 0) ? ping : -1;
 				serversmenu.items[i].ping_tested = true;
 				if (was_unavailable != ServerList_IsUnavailableBookmark(&serversmenu.items[i]))
@@ -30193,6 +30222,56 @@ static void PingServerRange(int rangeStart, int rangeEnd)
 	}
 }
 
+static void ServerList_ApplyResolvedDedupe(void)
+{
+	char selectedIp[256] = "";
+	char selectedResolved[256] = "";
+	int selectedActual;
+	int oldCount;
+	int newSelected = -1;
+
+	SDL_LockMutex(pingMutex);
+	if (!serversmenu.resolvedDedupePending)
+	{
+		SDL_UnlockMutex(pingMutex);
+		return;
+	}
+
+	selectedActual = ServersMenu_ResolveIndex(serversmenu.list.cursor);
+	if (serversmenu.items && selectedActual >= 0 && selectedActual < serversmenu.servercount)
+	{
+		q_strlcpy(selectedIp, serversmenu.items[selectedActual].ip ?
+			serversmenu.items[selectedActual].ip : "",
+			sizeof(selectedIp));
+		q_strlcpy(selectedResolved, serversmenu.items[selectedActual].resolved_ip,
+			sizeof(selectedResolved));
+	}
+
+	oldCount = serversmenu.servercount;
+	RemoveDuplicateServers(&serversmenu.items, &serversmenu.servercount);
+	serversmenu.resolvedDedupePending = false;
+
+	if (serversmenu.servercount != oldCount)
+	{
+		for (int i = 0; i < serversmenu.servercount; ++i)
+		{
+			if ((selectedIp[0] && serversmenu.items[i].ip &&
+				ServerList_AddressMatches(selectedIp, serversmenu.items[i].ip)) ||
+				(selectedResolved[0] && serversmenu.items[i].resolved_ip[0] &&
+				ServerList_AddressMatches(selectedResolved, serversmenu.items[i].resolved_ip)))
+			{
+				newSelected = i;
+				break;
+			}
+		}
+
+		serversmenu.pinged_count = serversmenu.servercount;
+		serversmenu.pingQueueSize = 0;
+		ServerList_RebuildOrderAndFilterWithSelection(newSelected);
+	}
+	SDL_UnlockMutex(pingMutex);
+}
+
 static void ServerList_StartPendingPingSweep(void)
 {
 	qboolean complete;
@@ -30208,10 +30287,16 @@ static void ServerList_StartPendingPingSweep(void)
 	end = serversmenu.servercount;
 	SDL_UnlockMutex(pingMutex);
 
-	if (!complete || start >= end)
+	if (!complete)
 		return;
 
 	JoinFinishedPingSweep();
+	if (start >= end)
+	{
+		ServerList_ApplyResolvedDedupe();
+		return;
+	}
+
 	PingServerRange(start, end);
 
 	SDL_LockMutex(pingMutex);
@@ -31025,7 +31110,7 @@ static void SortServers(qboolean lockMutex)
         SortServersWithSelection(lockMutex, ServersMenu_ResolveIndex(serversmenu.list.cursor));
 }
 
-void RemoveDuplicateServers (servertitem_t** items, int* actualServerCount) 
+static void RemoveDuplicateServers(servertitem_t** items, int* actualServerCount)
 {
 	int writeIndex = 0;
 	for (int i = 0; i < *actualServerCount; i++)
@@ -31176,6 +31261,7 @@ void M_Menu_ServerList_f (void)
 	serversmenu.initialPingThreadsRemaining = 0;
 	serversmenu.pingQueueSize = 0;
 	serversmenu.pingThreadRunning = false;
+	serversmenu.resolvedDedupePending = false;
 	serversmenu.copy_message_until = 0.0;
 	pingThreadsShouldExit = false;
 	serversmenu.list.viewsize = MAX_VIS_SERVERS;
@@ -31324,16 +31410,21 @@ void M_ServerList_Draw (void)
 				q_snprintf(plysStr, sizeof(plysStr), "%d/%d", server.users, server.maxusers);
 
 	                char linePrefixStr[32];
-			q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-16.16s  %-6.6s %-5s ",
-	                        server.name,
-	                        server.map,
-				plysStr);
+			if (server.pinned_bookmark)
+				q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-14.14s  %-6.6s %-5s ",
+					server.name, server.map, plysStr);
+			else
+				q_snprintf(linePrefixStr, sizeof(linePrefixStr), "%-16.16s  %-6.6s %-5s ",
+					server.name, server.map, plysStr);
 
 		if (separator_visible && idx >= pinned_count)
 			row++;
 
                 int current_y_pos = y + row * 8;
-                int current_x_pos = x;
+                int current_x_pos = x + (server.pinned_bookmark ? 16 : 0);
+
+		if (server.pinned_bookmark)
+			Draw_Character_Rotation(x, current_y_pos, 141, 90);
 
                 if (server.unavailable_bookmark) {
 			M_PrintRGBA(current_x_pos, current_y_pos, linePrefixStr,
