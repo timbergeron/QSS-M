@@ -196,16 +196,22 @@ mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model)
 	mnode_t		*node;
 	float		d;
 	mplane_t	*plane;
+	int		remaining;
 
-	if (!model || !model->nodes)
+	if (!model || !model->nodes || model->numnodes <= 0 ||
+		model->hulls[0].firstclipnode < 0 ||
+		model->hulls[0].firstclipnode >= model->numnodes)
 		Sys_Error ("Mod_PointInLeaf: bad model");
 
 	node = model->nodes + model->hulls[0].firstclipnode;
-	while (1)
+	remaining = model->numnodes + 1;
+	while (node && remaining-- > 0)
 	{
 		if (node->contents < 0)
 			return (mleaf_t *)node;
 		plane = node->plane;
+		if (!plane)
+			break;
 		d = DotProduct (p,plane->normal) - plane->dist;
 		if (d > 0)
 			node = node->children[0];
@@ -213,6 +219,9 @@ mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model)
 			node = node->children[1];
 	}
 
+	if (model->leafs)
+		return model->leafs;	// malformed tree: use the solid leaf
+	Sys_Error ("Mod_PointInLeaf: bad node tree");
 	return NULL;	// never reached
 }
 
@@ -3870,23 +3879,29 @@ typedef struct vispatch_s
 } vispatch_t;
 #define VISPATCH_HEADER_LEN 36
 
-static FILE *Mod_FindVisibilityExternal(void)
+static FILE *Mod_FindVisibilityExternal(int *entrylen)
 {
 	vispatch_t header;
 	char visfilename[MAX_QPATH];
+	char mapname[sizeof(header.mapname) + 1];
 	const char* shortname;
 	unsigned int path_id;
 	FILE *f;
-	long pos;
-	size_t r;
+	long basepos;
+	int filesize;
+	size_t offset;
+
+	*entrylen = 0;
 
 	q_snprintf(visfilename, sizeof(visfilename), "maps/%s.vis", loadname);
-	if (COM_FOpenFile(visfilename, &f, &path_id) < 0)
+	filesize = COM_FOpenFile(visfilename, &f, &path_id);
+	if (filesize < 0)
 	{
 		Con_DPrintf("%s not found, trying ", visfilename);
 		q_snprintf(visfilename, sizeof(visfilename), "%s.vis", COM_SkipPath(com_gamedir));
 		Con_DPrintf("%s\n", visfilename);
-		if (COM_FOpenFile(visfilename, &f, &path_id) < 0)
+		filesize = COM_FOpenFile(visfilename, &f, &path_id);
+		if (filesize < 0)
 		{
 			Con_DPrintf("external vis not found\n");
 			return NULL;
@@ -3902,70 +3917,160 @@ static FILE *Mod_FindVisibilityExternal(void)
 	Con_DPrintf("Found external VIS %s\n", visfilename);
 
 	shortname = COM_SkipPath(loadmodel->name);
-	pos = 0;
-	while ((r = fread(&header, 1, VISPATCH_HEADER_LEN, f)) == VISPATCH_HEADER_LEN)
+	basepos = ftell(f);
+	if (basepos < 0)
 	{
-		header.filelen = LittleLong(header.filelen);
-		if (header.filelen <= 0) {	/* bad entry -- don't trust the rest. */
+		fclose(f);
+		Con_Warning("Ignoring external VIS %s: couldn't determine file position.\n", visfilename);
+		return NULL;
+	}
+
+	for (offset = 0; offset + VISPATCH_HEADER_LEN <= (size_t)filesize; )
+	{
+		if (fseek(f, basepos + (long)offset, SEEK_SET) != 0 ||
+			fread(&header, 1, VISPATCH_HEADER_LEN, f) != VISPATCH_HEADER_LEN)
+		{
 			fclose(f);
+			Con_Warning("Ignoring external VIS %s: couldn't read an entry header.\n", visfilename);
 			return NULL;
 		}
-		if (!q_strcasecmp(header.mapname, shortname))
-			break;
-		pos += header.filelen + VISPATCH_HEADER_LEN;
-		fseek(f, pos, SEEK_SET);
-	}
-	if (r != VISPATCH_HEADER_LEN) {
-		fclose(f);
-		Con_DPrintf("%s not found in %s\n", shortname, visfilename);
-		return NULL;
+
+		header.filelen = LittleLong(header.filelen);
+		if (header.filelen <= 0 ||
+			(size_t)header.filelen > (size_t)filesize - offset - VISPATCH_HEADER_LEN)
+		{	/* bad entry -- don't trust the rest. */
+			fclose(f);
+			Con_Warning("Ignoring external VIS %s: invalid entry length.\n", visfilename);
+			return NULL;
+		}
+
+		memcpy(mapname, header.mapname, sizeof(header.mapname));
+		mapname[sizeof(header.mapname)] = '\0';
+		if (!q_strcasecmp(mapname, shortname))
+		{
+			*entrylen = header.filelen;
+			return f;
+		}
+
+		offset += VISPATCH_HEADER_LEN + (size_t)header.filelen;
 	}
 
-	return f;
+	fclose(f);
+	Con_DPrintf("%s not found in %s\n", shortname, visfilename);
+	return NULL;
 }
 
-static byte *Mod_LoadVisibilityExternal(FILE* f, int *visdata_size)
+static qboolean Mod_ExternalLeafsMatchBSP(const dsleaf_t *leafs, int leaflen,
+	const lump_t *bspleaflump, int vislen)
 {
-	int	mark, filelen;
-	byte*	visdata;
+	const dsleaf_t *bspleafs;
+	int i, count;
 
-	*visdata_size = 0;
-	filelen = 0;
-	if (fread(&filelen, 1, 4, f) != 4) // woods
-		return NULL;
-	filelen = LittleLong(filelen);
-	if (filelen <= 0) return NULL;
-	Con_DPrintf("...%d bytes visibility data\n", filelen);
-	mark = Hunk_LowMark ();
-	visdata = (byte *) Hunk_AllocNameNoFill (filelen, "EXT_VIS");
-	if (!fread(visdata, filelen, 1, f))
+	if (leaflen != (int)bspleaflump->filelen || leaflen <= 0 ||
+		leaflen % (int)sizeof(*leafs))
 	{
-		Hunk_FreeToLowMark (mark);
-		return NULL;
+		Con_Warning("Ignoring external VIS for %s: leaf count does not match the BSP; using BSP visibility.\n",
+			loadmodel->name);
+		return false;
 	}
-	*visdata_size = filelen;
-	return visdata;
+
+	bspleafs = (const dsleaf_t *)(mod_base + bspleaflump->fileofs);
+	count = leaflen / sizeof(*leafs);
+	if (!loadmodel->submodels || loadmodel->numsubmodels <= 0 ||
+		count <= loadmodel->submodels[0].visleafs)
+	{
+		Con_Warning("Ignoring external VIS for %s: world leaf count is inconsistent; using BSP visibility.\n",
+			loadmodel->name);
+		return false;
+	}
+
+	for (i = 0; i < count; i++)
+	{
+		int visofs = LittleLong(leafs[i].visofs);
+		unsigned int firstmark = (unsigned short)LittleShort(leafs[i].firstmarksurface);
+		unsigned int nummarks = (unsigned short)LittleShort(leafs[i].nummarksurfaces);
+
+		if (leafs[i].contents != bspleafs[i].contents ||
+			memcmp(leafs[i].mins, bspleafs[i].mins, sizeof(leafs[i].mins)) ||
+			memcmp(leafs[i].maxs, bspleafs[i].maxs, sizeof(leafs[i].maxs)) ||
+			leafs[i].firstmarksurface != bspleafs[i].firstmarksurface ||
+			leafs[i].nummarksurfaces != bspleafs[i].nummarksurfaces)
+		{
+			Con_Warning("Ignoring external VIS for %s: leaf %d does not match the BSP; using BSP visibility.\n",
+				loadmodel->name, i);
+			return false;
+		}
+		if (visofs < -1 || visofs >= vislen)
+		{
+			Con_Warning("Ignoring external VIS for %s: leaf %d has an invalid VIS offset; using BSP visibility.\n",
+				loadmodel->name, i);
+			return false;
+		}
+		if (firstmark > (unsigned int)loadmodel->nummarksurfaces ||
+			nummarks > (unsigned int)loadmodel->nummarksurfaces - firstmark)
+		{
+			Con_Warning("Ignoring external VIS for %s: leaf %d has invalid marksurfaces; using BSP visibility.\n",
+				loadmodel->name, i);
+			return false;
+		}
+	}
+
+	return true;
 }
 
-static void Mod_LoadLeafsExternal(FILE* f)
+static qboolean Mod_LoadVisibilityExternal(FILE *f, int entrylen, lump_t *bspleaflump)
 {
-	int	mark, filelen;
-	void*	in;
+	byte *visdata, *hunkvisdata;
+	dsleaf_t *leafdata;
+	int vislen, leaflen;
+	qboolean diagnosed, valid;
 
-	filelen = 0;
-	if (fread(&filelen, 1, 4, f) != 4) // woods
-		return;
-	filelen = LittleLong(filelen);
-	if (filelen <= 0) return;
-	Con_DPrintf("...%d bytes leaf data\n", filelen);
-	mark = Hunk_LowMark ();
-	in = Hunk_AllocNameNoFill (filelen, "EXT_LEAF");
-	if (!fread(in, filelen, 1, f))
+	visdata = NULL;
+	leafdata = NULL;
+	diagnosed = false;
+	valid = false;
+	if (entrylen < 2 * (int)sizeof(int) ||
+		fread(&vislen, 1, sizeof(vislen), f) != sizeof(vislen))
+		goto done;
+	vislen = LittleLong(vislen);
+	if (vislen <= 0 || vislen > entrylen - 2 * (int)sizeof(int))
+		goto done;
+
+	Con_DPrintf("...%d bytes visibility data\n", vislen);
+	visdata = (byte *)malloc(vislen);
+	if (!visdata || fread(visdata, 1, vislen, f) != (size_t)vislen)
+		goto done;
+	if (fread(&leaflen, 1, sizeof(leaflen), f) != sizeof(leaflen))
+		goto done;
+	leaflen = LittleLong(leaflen);
+	if (leaflen <= 0 || leaflen != entrylen - 2 * (int)sizeof(int) - vislen)
+		goto done;
+
+	Con_DPrintf("...%d bytes leaf data\n", leaflen);
+	leafdata = (dsleaf_t *)malloc(leaflen);
+	if (!leafdata || fread(leafdata, 1, leaflen, f) != (size_t)leaflen)
+		goto done;
+	if (!Mod_ExternalLeafsMatchBSP(leafdata, leaflen, bspleaflump, vislen))
 	{
-		Hunk_FreeToLowMark (mark);
-		return;
+		diagnosed = true;
+		goto done;
 	}
-	Mod_ProcessLeafs_S((dsleaf_t *)in, filelen);
+
+	hunkvisdata = (byte *)Hunk_AllocNameNoFill(vislen, "EXT_VIS");
+	memcpy(hunkvisdata, visdata, vislen);
+	loadmodel->viswarn = false;
+	loadmodel->visdata = hunkvisdata;
+	loadmodel->visdata_size = vislen;
+	Mod_ProcessLeafs_S(leafdata, leaflen);
+	valid = true;
+
+done:
+	free(leafdata);
+	free(visdata);
+	if (!valid && !diagnosed)
+		Con_Warning("External VIS data for %s is invalid; using BSP visibility.\n",
+			loadmodel->name);
+	return valid;
 }
 
 /*
@@ -4064,23 +4169,17 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 	if (mod->bspversion == BSPVERSION && external_vis.value/* && sv.modelname[0] && !q_strcasecmp(loadname, sv.name)*/) // woods allow vis load online
 	{
 		FILE* fvis;
+		int entrylen;
 		Con_DPrintf("trying to open external vis file\n");
-		fvis = Mod_FindVisibilityExternal();
+		fvis = Mod_FindVisibilityExternal(&entrylen);
 		if (fvis) {
-			int mark = Hunk_LowMark();
-			loadmodel->leafs = NULL;
-			loadmodel->numleafs = 0;
-			Con_DPrintf("found valid external .vis file for map\n");
-			loadmodel->visdata = Mod_LoadVisibilityExternal(fvis, &loadmodel->visdata_size);
-			if (loadmodel->visdata) {
-				Mod_LoadLeafsExternal(fvis);
-			}
+			qboolean valid = Mod_LoadVisibilityExternal(fvis, entrylen,
+				&header->lumps[LUMP_LEAFS]);
 			fclose(fvis);
-			if (loadmodel->visdata && loadmodel->leafs && loadmodel->numleafs) {
+			if (valid) {
+				Con_DPrintf("found valid external .vis file for map\n");
 				goto visdone;
 			}
-			Hunk_FreeToLowMark(mark);
-			Con_DPrintf("External VIS data failed, using standard vis.\n");
 		}
 	}
 
