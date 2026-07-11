@@ -1944,9 +1944,10 @@ VID_SetWindowTitle(title);
 ==================
 Host_UpdateDockBadge - woods
 
-Reflect download activity in the platform shell UI: a Chrome-style ring on
-the macOS Dock icon, or the native Windows taskbar progress strip.
-Clears once the download finishes. No-op on platforms without support.
+Reflect download and port-ping-probe activity in the platform shell UI: a
+Chrome-style ring on the macOS Dock icon, or the native Windows taskbar
+progress strip. Downloads take priority if both are active. Clears once the
+activity finishes. No-op on platforms without support.
 ==================
 */
 static void Host_UpdateDockBadge(void)
@@ -1960,8 +1961,12 @@ static void Host_UpdateDockBadge(void)
 		float p = cls.download.percent;
 		pct = (p >= 0.f && p <= 100.f) ? (int)(p + 0.5f) : 0;	// 0 = active, size unknown
 	}
+	else if (NET_PortPingProbe_GetStatus() == PORTPINGPROBE_PROBING)
+	{
+		pct = NET_PortPingProbe_GetProgress();	// 0 = active, no probe completed yet
+	}
 	else
-		pct = -1;	// not downloading
+		pct = -1;	// no shell-visible background activity
 
 	if (pct > 100)
 		pct = 100;
