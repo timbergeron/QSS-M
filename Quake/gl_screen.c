@@ -7339,6 +7339,8 @@ void SCR_UpdateScreen (void)
 
 	GL_BeginRendering (&glx, &gly, &glwidth, &glheight);
 
+	GLSLGamma_BeginFrame (); // render into the scene FBO so gamma needs no backbuffer copy
+
 	if (cl.worldmodel && cl.qcvm.worldmodel && cl.qcvm.extfuncs.CSQC_UpdateView)
 	{
 		float s = CLAMP (1.0, scr_sbarscale.value, (float)glwidth / 320.0);
@@ -7566,7 +7568,7 @@ FXAA_DeleteFramebuffer
 static void FXAA_DeleteFramebuffer(void)
 {
     if (fxaa.framebuffer) {
-        GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+        GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO()); // may be called mid-frame on resize
         GL_DeleteFramebuffersFunc(1, &fxaa.framebuffer);
         fxaa.framebuffer = 0;
     }
@@ -7961,7 +7963,7 @@ static qboolean FXAA_AttemptFramebuffer(int width, int height, const fxaa_color_
     if (*status != GL_FRAMEBUFFER_COMPLETE)
         goto fail;
 
-    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO());
 
     fxaa.framebuffer = framebuffer;
     fxaa.color_texture = color_texture;
@@ -7973,7 +7975,7 @@ static qboolean FXAA_AttemptFramebuffer(int width, int height, const fxaa_color_
     return true;
 
 fail:
-    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO());
 
     if (framebuffer)
         GL_DeleteFramebuffersFunc(1, &framebuffer);
@@ -8030,7 +8032,7 @@ static qboolean FXAA_CreateFramebuffer(int width, int height)
                 Con_DPrintf("FXAA: Framebuffer incomplete (status: 0x%x) - disabling\n", status);
             SCR_CenterPrint("FXAA unavailable (driver bug)");
             Cvar_SetQuick(&vid_fxaa, "0");
-            GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+            GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO());
             return false;
         }
     }
@@ -8096,8 +8098,8 @@ void FXAA_EndFrame(void)
     else
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture0Binding);
         
-    // Bind back buffer
-    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+    // Bind the frame's output target (gamma scene FBO when active, else back buffer)
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO());
     glViewport(0, 0, glwidth, glheight);
     
     // Clear and set up for fullscreen quad

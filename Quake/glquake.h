@@ -606,6 +606,8 @@ void GL_BindBuffer (GLenum target, GLuint buffer);
 void GL_ClearBufferBindings (void);
 
 void GLSLGamma_DeleteTexture (void);
+void GLSLGamma_BeginFrame (void);
+GLuint GLSLGamma_SceneFBO (void);
 void GLSLGamma_GammaCorrect (void);
 void GLSLGamma_SoftEmuPrecache (void);
 qboolean GLSLGamma_SoftEmuCanRemapBlend (void);

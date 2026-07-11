@@ -7829,7 +7829,7 @@ static qboolean MenuPreviewFBO_Ensure(int w, int h)
 
 		if (GL_CheckFramebufferStatusFunc(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
 		{
-			GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+			GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO()); // runs mid-frame; the gamma scene FBO may be the frame's target
 			GL_DeleteFramebuffersFunc(1, &preview_fbo.fbo);
 			preview_fbo.fbo = 0;
 			GL_DeleteRenderbuffersFunc(1, &preview_fbo.depth_rb);
@@ -7839,7 +7839,7 @@ static qboolean MenuPreviewFBO_Ensure(int w, int h)
 			GL_ClearBindings();
 			return false;
 		}
-		GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+		GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO());
 
 		preview_fbo.w = w;
 		preview_fbo.h = h;
@@ -8174,8 +8174,8 @@ static void DrawSpinningModelToMenuPixelsInternal(const char* modelname,
 		g_menu_vm_scale_override = prev_override;
 		glx = old_glx; gly = old_gly; glwidth = old_glw; glheight = old_glh;
 
-		/* Back to default FB and draw textured quad in pixel space */
-		GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+		/* Back to the frame's output target and draw textured quad in pixel space */
+		GL_BindFramebufferFunc(GL_FRAMEBUFFER, GLSLGamma_SceneFBO());
 		glViewport(oldVP[0], oldVP[1], oldVP[2], oldVP[3]);
 		/* Convert back to CANVAS_MENU virtual units for the textured quad */
 		float s = q_min((float)glwidth / 320.0f, (float)glheight / 200.0f);

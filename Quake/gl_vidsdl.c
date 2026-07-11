@@ -42,6 +42,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 //ericw -- for putting the driver into multithreaded mode
 #ifdef __APPLE__
+#include <CoreGraphics/CoreGraphics.h>
 #include <OpenGL/OpenGL.h>
 #endif
 
@@ -252,6 +253,7 @@ static unsigned short vid_sysgamma_blue[256];
 
 static qboolean	gammaworks = false;	// whether hw-gamma works
 static int fsaa;
+static int fsaa_obtained;	// samples the context actually got (VID_SetMode)
 
 static qboolean VID_GLSLGammaAllowed (void)
 {
@@ -261,7 +263,16 @@ static qboolean VID_GLSLGammaAllowed (void)
 static qboolean VID_PreferHardwareGamma (void)
 {
 #if VID_PREFER_HARDWARE_GAMMA
-	return COM_CheckParm("-glslgamma") == 0;
+	// Without an FBO the GLSL gamma pass must copy the default framebuffer,
+	// which stalls Apple's GL and costs a large chunk of the frame.  With one
+	// the pass is effectively free, so only fall back to hardware ramps when
+	// the scene FBO is unavailable (or would silently drop MSAA the context
+	// actually obtained -- a failed MSAA request doesn't count).
+	if (COM_CheckParm("-glslgamma"))
+		return false;
+	if (COM_CheckParm("-hwgamma"))
+		return true;
+	return !gl_fbo_able || !gl_texture_NPOT || fsaa_obtained > 0;
 #else
 	return false;
 #endif
@@ -376,8 +387,147 @@ static void VID_Gamma_f (cvar_t *var)
 	VID_Gamma_SetGamma ();
 }
 
-static double vid_gamma_burst_deadline;	// reapply repeatedly until this time
+static double vid_gamma_burst_deadline;	// monitor rapidly until this time
 static double vid_gamma_burst_next;
+
+#if defined(__APPLE__) && USE_GAMMA_RAMPS && defined(USE_SDL2)
+#define VID_GAMMA_BURST_INTERVAL	0.05
+#define VID_GAMMA_IDLE_INTERVAL		0.25
+
+static CGDirectDisplayID vid_gamma_display = kCGNullDirectDisplay;
+static int vid_gamma_display_index = -1;
+static int vid_gamma_mismatch_streak;
+static double vid_gamma_last_mismatch;
+
+/* SDL's Cocoa backend exposes these same CoreGraphics bounds publicly. */
+static qboolean VID_Gamma_DisplayBoundsMatch (CGDirectDisplayID display, const SDL_Rect *bounds)
+{
+	CGRect display_bounds = CGDisplayBounds (display);
+
+	return (int)display_bounds.origin.x == bounds->x &&
+		(int)display_bounds.origin.y == bounds->y &&
+		(int)display_bounds.size.width == bounds->w &&
+		(int)display_bounds.size.height == bounds->h;
+}
+
+/*
+================
+VID_Gamma_GetDisplay
+
+SDL caches the last ramp passed to SDL_SetWindowGammaRamp, so
+SDL_GetWindowGammaRamp cannot tell us when macOS has replaced the actual
+display transfer table.  Resolve SDL's display by its CoreGraphics bounds so
+the lookup does not depend on the ordering or filtering of either display
+list.  The cached ID is revalidated to handle window moves and hot-plugging.
+================
+*/
+static qboolean VID_Gamma_GetDisplay (CGDirectDisplayID *display)
+{
+	CGDirectDisplayID *displays;
+	CGDisplayCount count, i;
+	CGError error;
+	SDL_Rect bounds;
+	const char *driver;
+	int display_index;
+
+	if (!display || !draw_context)
+		return false;
+
+	driver = SDL_GetCurrentVideoDriver ();
+	if (!driver || strcmp (driver, "cocoa"))
+		return false;
+
+	display_index = SDL_GetWindowDisplayIndex (draw_context);
+	if (display_index < 0 || SDL_GetDisplayBounds (display_index, &bounds) != 0)
+		return false;
+
+	if (display_index == vid_gamma_display_index &&
+		vid_gamma_display != kCGNullDirectDisplay &&
+		CGDisplayIsOnline (vid_gamma_display) &&
+		VID_Gamma_DisplayBoundsMatch (vid_gamma_display, &bounds))
+	{
+		*display = vid_gamma_display;
+		return true;
+	}
+
+	vid_gamma_display = kCGNullDirectDisplay;
+	vid_gamma_display_index = -1;
+
+	error = CGGetOnlineDisplayList (0, NULL, &count);
+	if (error != kCGErrorSuccess || !count)
+		return false;
+
+	displays = (CGDirectDisplayID *)SDL_malloc ((size_t)count * sizeof(*displays));
+	if (!displays)
+		return false;
+
+	error = CGGetOnlineDisplayList (count, displays, &count);
+	if (error == kCGErrorSuccess)
+	{
+		for (i = 0; i < count; i++)
+		{
+			// SDL omits the secondary members of a mirrored display set.
+			if (CGDisplayMirrorsDisplay (displays[i]) != kCGNullDirectDisplay)
+				continue;
+			if (VID_Gamma_DisplayBoundsMatch (displays[i], &bounds))
+			{
+				vid_gamma_display = displays[i];
+				vid_gamma_display_index = display_index;
+				*display = displays[i];
+				break;
+			}
+		}
+	}
+	SDL_free (displays);
+
+	return vid_gamma_display != kCGNullDirectDisplay;
+}
+
+static CGGammaValue VID_Gamma_ExpectedSample (const unsigned short *ramp,
+	uint32_t sample, uint32_t sample_count)
+{
+	CGGammaValue position, fraction;
+	uint32_t lower, upper;
+
+	position = sample * 255.0f / (sample_count - 1);
+	lower = (uint32_t)position;
+	upper = lower < 255 ? lower + 1 : lower;
+	fraction = position - lower;
+
+	return ((1.0f - fraction) * ramp[lower] + fraction * ramp[upper]) / 65535.0f;
+}
+
+/*
+================
+VID_Gamma_RampMatches
+================
+*/
+static qboolean VID_Gamma_RampMatches (void)
+{
+	CGGammaValue red[256], green[256], blue[256];
+	CGGammaValue expected_red, expected_green, expected_blue;
+	CGDirectDisplayID display;
+	uint32_t count, i;
+	const CGGammaValue tolerance = 1.5f / 65535.0f;
+
+	if (!VID_Gamma_GetDisplay (&display) ||
+		CGGetDisplayTransferByTable (display, (uint32_t)countof(red),
+		red, green, blue, &count) != kCGErrorSuccess || count < 2)
+		return true; // do not hammer the setter when the state cannot be queried
+
+	for (i = 0; i < count; i++)
+	{
+		expected_red = VID_Gamma_ExpectedSample (vid_gamma_red, i, count);
+		expected_green = VID_Gamma_ExpectedSample (vid_gamma_green, i, count);
+		expected_blue = VID_Gamma_ExpectedSample (vid_gamma_blue, i, count);
+		if (fabsf (red[i] - expected_red) > tolerance ||
+			fabsf (green[i] - expected_green) > tolerance ||
+			fabsf (blue[i] - expected_blue) > tolerance)
+			return false;
+	}
+	return true;
+}
+#endif
 
 void VID_Gamma_Reapply (void)
 {
@@ -387,14 +537,55 @@ void VID_Gamma_Reapply (void)
 	VID_Gamma_f (NULL);
 	// macOS restores the transfer table asynchronously (the unminimize/focus
 	// animation finishes after the SDL event), which can clobber the ramp we
-	// just set -- keep re-asserting it briefly via VID_Gamma_Frame.
+	// just set -- monitor it closely for a short time via VID_Gamma_Frame.
 	vid_gamma_burst_deadline = realtime + 3.0;
+#if defined(__APPLE__) && USE_GAMMA_RAMPS && defined(USE_SDL2)
+	vid_gamma_mismatch_streak = 0;	// a real transition deserves a fresh burst
+	vid_gamma_burst_next = realtime + VID_GAMMA_BURST_INTERVAL;
+#else
 	vid_gamma_burst_next = realtime + 0.25;
+#endif
 }
 
 void VID_Gamma_Frame (void)
 {
-	if (!vid_initialized || vid_gamma_burst_deadline <= 0.0)
+	if (!vid_initialized)
+		return;
+
+#if defined(__APPLE__) && USE_GAMMA_RAMPS && defined(USE_SDL2)
+	if (!draw_context || !gammaworks || gl_glsl_gamma_able ||
+		!(SDL_GetWindowFlags (draw_context) & SDL_WINDOW_INPUT_FOCUS))
+		return;
+
+	// Poll quickly while Cocoa transitions settle, then retain a cheap periodic
+	// check so a late or unannounced reset cannot leave the game dark.
+	if (realtime < vid_gamma_burst_next)
+		return;
+	vid_gamma_burst_next = realtime +
+		(realtime < vid_gamma_burst_deadline ? VID_GAMMA_BURST_INTERVAL : VID_GAMMA_IDLE_INTERVAL);
+
+	if (!VID_Gamma_RampMatches ())
+	{
+		VID_Gamma_SetGamma ();
+		// Repeated mismatches mean another gamma owner (f.lux, calibration
+		// loaders) keeps rewriting the table, or the OS resamples it beyond
+		// our tolerance -- back off instead of fighting at burst rate.
+		vid_gamma_last_mismatch = realtime;
+		if (++vid_gamma_mismatch_streak <= 8)
+		{
+			vid_gamma_burst_deadline = realtime + 3.0;
+			vid_gamma_burst_next = realtime + VID_GAMMA_BURST_INTERVAL;
+		}
+		else
+			vid_gamma_burst_next = realtime + 2.0;
+	}
+	// an alternating conflict (we set, they set) produces matching polls in
+	// between -- only forgive the streak after a sustained quiet period
+	else if (vid_gamma_mismatch_streak && realtime - vid_gamma_last_mismatch > 10.0)
+		vid_gamma_mismatch_streak = 0;
+	return;
+#else
+	if (vid_gamma_burst_deadline <= 0.0)
 		return;
 	if (realtime >= vid_gamma_burst_deadline)
 	{
@@ -406,6 +597,7 @@ void VID_Gamma_Frame (void)
 		vid_gamma_burst_next = realtime + 0.25;
 		VID_Gamma_f (NULL);
 	}
+#endif
 }
 
 void VID_Gamma_ApplyToBuffer (byte *buffer, size_t pixel_count, int bytes_per_pixel)
@@ -844,7 +1036,6 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 	Uint32	flags;
 	char		caption[50];
 	int		depthbits, stencilbits;
-	int		fsaa_obtained;
 #if defined(USE_SDL2)
 	int		previous_display;
 #endif
@@ -1659,29 +1850,9 @@ static void GL_CheckExtensions (void)
 	{
 		Con_Warning ("brush model instancing not supported\n");
 	}
-	// GLSL gamma
-	//
-	if (COM_CheckParm("-noglslgamma"))
-		Con_Warning ("GLSL gamma disabled at command line\n");
-	else if (VID_PreferHardwareGamma ())
-	{
-		gl_glsl_gamma_able = false;
-		if (cls.state == ca_disconnected) // woods #supressvidmsgs
-			Con_Printf("Using hardware gamma when available\n");
-	}
-	else if (gl_glsl_able)
-	{
-		gl_glsl_gamma_able = true;
-		if (cls.state == ca_disconnected) // woods #supressvidmsgs
-			Con_Printf("Enabled: GLSL gamma\n");
-	}
-	else
-	{
-		Con_Warning ("GLSL gamma not available, using hardware gamma\n");
-	}
 	// GLSL alias model rendering
 	//
-    
+
     // woods framebuffer Objects for #fxaa
 
     if (gl_version_major >= 3 || GL_ParseExtensionList(gl_extensions, "GL_ARB_framebuffer_object") ||
@@ -1745,7 +1916,29 @@ static void GL_CheckExtensions (void)
     {
         Con_Warning ("Framebuffer Objects not supported\n");
     }
-    
+
+	// GLSL gamma -- decided after FBO detection so VID_PreferHardwareGamma
+	// can require scene-FBO support on macOS
+	//
+	if (COM_CheckParm("-noglslgamma"))
+		Con_Warning ("GLSL gamma disabled at command line\n");
+	else if (VID_PreferHardwareGamma ())
+	{
+		gl_glsl_gamma_able = false;
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("Using hardware gamma when available\n");
+	}
+	else if (gl_glsl_able)
+	{
+		gl_glsl_gamma_able = true;
+		if (cls.state == ca_disconnected) // woods #supressvidmsgs
+			Con_Printf("Enabled: GLSL gamma\n");
+	}
+	else
+	{
+		Con_Warning ("GLSL gamma not available, using hardware gamma\n");
+	}
+
     // glBlendFuncSeparate for FXAA transparency fix
     if (gl_version_major >= 2 || GL_ParseExtensionList(gl_extensions, "GL_EXT_blend_func_separate"))
     {

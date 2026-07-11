@@ -184,6 +184,10 @@ static float r_lightningbeam_scroll = 0.0f; // woods #beamspoly
 static GLuint r_gamma_texture;
 static GLuint r_gamma_program;
 static int r_gamma_texture_width, r_gamma_texture_height;
+static GLuint r_gamma_fbo;
+static GLuint r_gamma_depth_renderbuffer;
+static qboolean r_gamma_fbo_active;	// scene FBO bound for the current frame
+static qboolean r_gamma_fbo_failed;	// creation failed; use the copy path until vid_restart
 static GLuint r_softemu_lut_texture;
 static GLuint r_softemu_palette_texture;
 static qboolean r_softemu_lut_built;
@@ -215,6 +219,19 @@ GLSLGamma_DeleteTexture
 */
 void GLSLGamma_DeleteTexture (void)
 {
+	if (r_gamma_fbo)
+	{
+		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+		GL_DeleteFramebuffersFunc (1, &r_gamma_fbo);
+		r_gamma_fbo = 0;
+	}
+	if (r_gamma_depth_renderbuffer)
+	{
+		GL_DeleteRenderbuffersFunc (1, &r_gamma_depth_renderbuffer);
+		r_gamma_depth_renderbuffer = 0;
+	}
+	r_gamma_fbo_active = false;
+	r_gamma_fbo_failed = false;
 	glDeleteTextures (1, &r_gamma_texture);
 	glDeleteTextures (1, &r_softemu_lut_texture);
 	glDeleteTextures (1, &r_softemu_palette_texture);
@@ -542,6 +559,138 @@ static void GLSLGamma_CreateShaders (void)
 
 /*
 =============
+GLSLGamma_NeedsPostPass -- mirrors GLSLGamma_GammaCorrect's early-outs
+=============
+*/
+static qboolean GLSLGamma_NeedsPostPass (void)
+{
+	if (!gl_glsl_gamma_able)
+		return false;
+	if (GLSLGamma_SoftEmuMode () && gl_mtexable && gl_max_texture_image_units >= 3)
+		return true;
+	return vid_gamma.value != 1 || vid_contrast.value != 1;
+}
+
+/*
+=============
+GLSLGamma_CreateFBO -- scene framebuffer whose color attachment is r_gamma_texture
+
+Rendering the frame into an FBO lets GLSLGamma_GammaCorrect skip the
+glCopyTexSubImage2D from the default framebuffer, which stalls Apple's GL.
+=============
+*/
+static qboolean GLSLGamma_CreateFBO (int width, int height)
+{
+	GLenum status;
+
+	if (r_gamma_fbo_failed)
+		return false;
+
+	if (r_gamma_fbo && (r_gamma_texture_width != width || r_gamma_texture_height != height))
+	{
+		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+		GL_DeleteFramebuffersFunc (1, &r_gamma_fbo);
+		r_gamma_fbo = 0;
+		if (r_gamma_depth_renderbuffer)
+		{
+			GL_DeleteRenderbuffersFunc (1, &r_gamma_depth_renderbuffer);
+			r_gamma_depth_renderbuffer = 0;
+		}
+	}
+
+	if (r_gamma_fbo)
+		return true;
+
+	if (!r_gamma_texture)
+		glGenTextures (1, &r_gamma_texture);
+
+	GL_DisableMultitexture ();
+	if (gl_mtexable)
+		GL_SelectTexture (GL_TEXTURE0_ARB);
+	glBindTexture (GL_TEXTURE_2D, r_gamma_texture);
+	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, NULL);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	r_gamma_texture_width = width;
+	r_gamma_texture_height = height;
+	GL_ClearBindings ();
+
+	GL_GenRenderbuffersFunc (1, &r_gamma_depth_renderbuffer);
+	GL_BindRenderbufferFunc (GL_RENDERBUFFER, r_gamma_depth_renderbuffer);
+	GL_RenderbufferStorageFunc (GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+
+	GL_GenFramebuffersFunc (1, &r_gamma_fbo);
+	GL_BindFramebufferFunc (GL_FRAMEBUFFER, r_gamma_fbo);
+	GL_FramebufferTexture2DFunc (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, r_gamma_texture, 0);
+	GL_FramebufferRenderbufferFunc (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, r_gamma_depth_renderbuffer);
+	GL_FramebufferRenderbufferFunc (GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, r_gamma_depth_renderbuffer);
+
+	status = GL_CheckFramebufferStatusFunc (GL_FRAMEBUFFER);
+	if (status != GL_FRAMEBUFFER_COMPLETE)
+	{
+		Con_Warning ("GLSL gamma framebuffer incomplete (status 0x%x), using framebuffer copy\n", status);
+		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+		GL_DeleteFramebuffersFunc (1, &r_gamma_fbo);
+		r_gamma_fbo = 0;
+		GL_DeleteRenderbuffersFunc (1, &r_gamma_depth_renderbuffer);
+		r_gamma_depth_renderbuffer = 0;
+		r_gamma_fbo_failed = true;
+		return false;
+	}
+
+	return true;
+}
+
+/*
+=============
+GLSLGamma_BeginFrame -- called right after GL_BeginRendering
+
+Binds the scene FBO for the whole frame (3D + 2D) when the gamma post-pass
+will run, so GammaCorrect can source it directly instead of copying the
+default framebuffer.
+=============
+*/
+void GLSLGamma_BeginFrame (void)
+{
+	if (r_gamma_fbo_active)	// frame aborted mid-render (Host_Error); restore default target
+	{
+		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+		r_gamma_fbo_active = false;
+	}
+
+	if (!gl_fbo_able || !gl_texture_NPOT || !GLSLGamma_NeedsPostPass ())
+		return;
+
+	if (!GLSLGamma_CreateFBO (glwidth, glheight))
+		return;
+
+	GL_BindFramebufferFunc (GL_FRAMEBUFFER, r_gamma_fbo);
+	glViewport (0, 0, glwidth, glheight);
+	{
+		byte *rgb = (byte *)(d_8to24table + ((int)r_clearcolor.value & 0xFF));
+		glClearColor (rgb[0]/255.0f, rgb[1]/255.0f, rgb[2]/255.0f, 1.0f);
+	}
+	glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	r_gamma_fbo_active = true;
+}
+
+/*
+=============
+GLSLGamma_SceneFBO
+
+The render target other post-effects (FXAA, menu previews) must restore
+instead of framebuffer 0 while the gamma scene FBO is active.
+=============
+*/
+GLuint GLSLGamma_SceneFBO (void)
+{
+	return r_gamma_fbo_active ? r_gamma_fbo : 0;
+}
+
+/*
+=============
 GLSLGamma_GammaCorrect
 =============
 */
@@ -553,6 +702,9 @@ void GLSLGamma_GammaCorrect (void)
 	float contrast_value;
 	int softemu_mode;
 	static qboolean softemu_warned;
+	qboolean fbo_active = r_gamma_fbo_active;
+
+	r_gamma_fbo_active = false;
 
 	softemu_mode = GLSLGamma_SoftEmuMode();
 	if (!gl_glsl_gamma_able)
@@ -575,7 +727,9 @@ void GLSLGamma_GammaCorrect (void)
 		softemu_mode = 0;
 	}
 
-	if (!softemu_mode && vid_gamma.value == 1 && vid_contrast.value == 1)
+	// when the scene FBO is active the frame lives in r_gamma_texture and
+	// must be drawn to the default framebuffer regardless of the settings
+	if (!fbo_active && !softemu_mode && vid_gamma.value == 1 && vid_contrast.value == 1)
 		return;
 
 // create render-to-texture texture if needed
@@ -623,11 +777,14 @@ void GLSLGamma_GammaCorrect (void)
 			softemu_mode = 0;
 	}
 
-// copy the framebuffer to the texture
+// get the frame into the texture
 	if (gl_mtexable)
 		GL_SelectTexture(GL_TEXTURE0_ARB);
 	glBindTexture (GL_TEXTURE_2D, r_gamma_texture);
-	glCopyTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, glx, gly, glwidth, glheight);
+	if (fbo_active)	// scene was rendered into r_gamma_texture via the FBO
+		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+	else
+		glCopyTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, glx, gly, glwidth, glheight);
 
 // draw the texture back to the framebuffer with a fragment shader
 	if (softemu_mode)
