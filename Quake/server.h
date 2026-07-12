@@ -120,6 +120,7 @@ typedef struct
 		double	hurt_time;
 		double	shoot_time;
 		double	cheat;
+		qboolean nomonsters_warned;
 	}			autosave; // woods #autosave (iw)
 
 	qboolean skyroom_pos_known;

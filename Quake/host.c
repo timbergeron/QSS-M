@@ -1691,6 +1691,16 @@ static void Host_CheckAutosave (void)
 	if (!Host_MapHasLevelStats (cl.mapname, cl.stats[STAT_TOTALMONSTERS], cl.stats[STAT_TOTALSECRETS]))
 		return;
 
+	if (sv.nomonsters)
+	{
+		if (!sv.autosave.nomonsters_warned)
+		{
+			Con_Printf ("Can't save when using \"nomonsters\".\n");
+			sv.autosave.nomonsters_warned = true;
+		}
+		return;
+	}
+
 	if (cls.signon == SIGNONS)
 	{
 		if (pr_global_struct->found_secrets != sv.autosave.prev_secrets)
