@@ -30,6 +30,7 @@ extern	cvar_t	sv_friction;
 cvar_t	sv_edgefriction = {"edgefriction", "2", CVAR_NONE};
 extern	cvar_t	sv_stopspeed;
 extern	cvar_t	cl_noclip_speed; // woods #fastnoclip
+extern	kbutton_t	in_jump; // woods #fastnoclip
 
 static	vec3_t		forward, right, up;
 
@@ -54,7 +55,8 @@ speed_info_t speed_info = { -1, -1, -1 }; // woods #speedometer
 
 static qboolean SV_FastNoclipActive(void) // woods #fastnoclip
 {
-	if (!sv_player->v.button2 || cl_noclip_speed.value <= 0)
+	// The local modifier is intentionally omitted from the QuakeC button bits.
+	if (!(in_jump.state & 1) || cl_noclip_speed.value <= 0)
 		return false;
 	if (!host_client || !host_client->netconnection)
 		return false;

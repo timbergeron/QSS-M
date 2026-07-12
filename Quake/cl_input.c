@@ -64,6 +64,15 @@ int			in_impulse;
 
 extern edict_t* sv_player; // woods #fastnoclip
 
+static qboolean CL_LocalFastNoclipEnabled(void) // woods #fastnoclip
+{
+	if (cl_noclip_speed.value <= 0)
+		return false;
+	if (!sv.active || !svs.clients || !svs.clients->spawned || !sv_player || sv_player->free)
+		return false;
+	return sv_player->v.movetype == MOVETYPE_NOCLIP;
+}
+
 // JPG 1.05 - translate +jump to +moveup under water
 //extern cvar_t	pq_moveup;
 
@@ -102,7 +111,8 @@ void KeyDown (kbutton_t *b)
 		k = -1;		// typed manually at the console for continuous down
 
 	// JPG 1.05 - if jump is pressed underwater, translate it to a moveup
-	if (b == &in_jump /*&& pq_moveup.value*/ && cl.stats[STAT_HEALTH] > 0 && cl.inwater)
+	// Local noclip keeps jump as its speed modifier, even inside liquid leaves.
+	if (b == &in_jump /*&& pq_moveup.value*/ && cl.stats[STAT_HEALTH] > 0 && cl.inwater && !CL_LocalFastNoclipEnabled())
 		b = &in_up;
 
 	if (k == b->down[0] || k == b->down[1])
@@ -364,11 +374,9 @@ cvar_t	cl_smartspawn = {"cl_smartspawn", "0", CVAR_ARCHIVE}; // woods #spawntrai
 
 static qboolean CL_FastNoclipActive(void) // woods #fastnoclip
 {
-	if (!(in_jump.state & 1) || cl_noclip_speed.value <= 0)
+	if (!(in_jump.state & 1))
 		return false;
-	if (!sv.active || !svs.clients || !svs.clients->spawned || !sv_player || sv_player->free)
-		return false;
-	return sv_player->v.movetype == MOVETYPE_NOCLIP;
+	return CL_LocalFastNoclipEnabled();
 }
 
 /*
@@ -570,7 +578,8 @@ void CL_FinishMove(usercmd_t *cmd, qboolean isfinal)
 		{
 			if (i == 0 && cl.stats[STAT_HEALTH] <= 0 && cl_smartspawn.value) // special case for in_attack
 				bits = 0;
-			else
+			// Fast noclip consumes jump locally; do not expose it to QuakeC as a gameplay jump.
+			else if (i != 1 || !CL_FastNoclipActive())
 				bits |= 1<<i;
 				
 			if (isfinal)
