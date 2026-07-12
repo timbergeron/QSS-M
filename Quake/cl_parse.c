@@ -2191,6 +2191,491 @@ static void CL_ParseStatic (int version) //johnfitz -- added a parameter
 }
 
 /*
+=============================================================================
+
+			CLIENT-SIDE LIGHT_CANDLE COMPATIBILITY
+
+Arcane Dimensions, Copper, and progs_dump share the light_candle classname,
+but use different models and mapper keys.  Servers whose QC does not implement
+the classname cannot safely precache those optional models for every client.
+Build purely local static entities from the BSP entity lump instead.  A server
+that does provide any candle model suppresses this fallback, preventing double
+rendering when the native mod is in use.
+
+=============================================================================
+*/
+
+typedef enum
+{
+	CLCANDLE_NONE,
+	CLCANDLE_AD,
+	CLCANDLE_COPPER,
+	CLCANDLE_PROGSDUMP,
+	CLCANDLE_CUSTOM
+} clcandle_family_t;
+
+typedef struct
+{
+	vec3_t	origin;
+	vec3_t	angles;
+	char	model[MAX_QPATH];
+	float	lip;
+	float	alpha;
+	float	scale;
+	int		spawnflags;
+	int		height;
+	int		width;
+	int		t_width;
+	int		frame;
+	int		skin;
+	qboolean has_origin;
+	qboolean has_model;
+	qboolean has_lip;
+	qboolean has_height;
+	qboolean has_width;
+	qboolean has_t_width;
+	qboolean has_frame;
+	qboolean has_alpha;
+	qboolean has_scale;
+} clcandle_def_t;
+
+static const char *clcandle_ad_models[] =
+{
+	"progs/misc_candle1.mdl",
+	"progs/misc_candle2.mdl",
+	"progs/misc_candle3.mdl"
+};
+
+static const char *clcandle_copper_models[] =
+{
+	"progs/candle1.mdl",
+	"progs/candle2.mdl",
+	"progs/candle3.mdl"
+};
+
+static const char *clcandle_progsdump_model = "progs/candle.mdl";
+
+static qboolean CL_CandleServerPrecachedModel (const char *name)
+{
+	int i;
+
+	for (i = 1; i < cl.model_count; i++)
+	{
+		if (!q_strcasecmp (cl.model_name[i], name))
+			return true;
+	}
+	return false;
+}
+
+static qboolean CL_CandleServerProvidesModels (void)
+{
+	int i;
+
+	for (i = 1; i < cl.model_count; i++)
+	{
+		if (q_strcasestr (COM_SkipPath (cl.model_name[i]), "candle"))
+			return true;
+	}
+	return false;
+}
+
+static qboolean CL_CandleModelAvailable (const char *name, qboolean samepath)
+{
+	unsigned int path_id;
+
+	if (!COM_FileExists (name, &path_id))
+		return false;
+	return !samepath || path_id == cl.worldmodel->path_id;
+}
+
+static qboolean CL_CandleFamilyAvailable (clcandle_family_t family, qboolean samepath)
+{
+	int i;
+
+	switch (family)
+	{
+	case CLCANDLE_AD:
+		for (i = 0; i < (int)Q_COUNTOF (clcandle_ad_models); i++)
+			if (CL_CandleModelAvailable (clcandle_ad_models[i], samepath))
+				return true;
+		break;
+	case CLCANDLE_COPPER:
+		for (i = 0; i < (int)Q_COUNTOF (clcandle_copper_models); i++)
+			if (CL_CandleModelAvailable (clcandle_copper_models[i], samepath))
+				return true;
+		break;
+	case CLCANDLE_PROGSDUMP:
+		return CL_CandleModelAvailable (clcandle_progsdump_model, samepath);
+	default:
+		break;
+	}
+	return false;
+}
+
+static clcandle_family_t CL_CandleFamilyForModel (const char *name)
+{
+	int i;
+
+	for (i = 0; i < (int)Q_COUNTOF (clcandle_ad_models); i++)
+		if (!q_strcasecmp (name, clcandle_ad_models[i]))
+			return CLCANDLE_AD;
+	for (i = 0; i < (int)Q_COUNTOF (clcandle_copper_models); i++)
+		if (!q_strcasecmp (name, clcandle_copper_models[i]))
+			return CLCANDLE_COPPER;
+	if (!q_strcasecmp (name, clcandle_progsdump_model))
+		return CLCANDLE_PROGSDUMP;
+	return CLCANDLE_CUSTOM;
+}
+
+static clcandle_family_t CL_CandleChooseFamily (const clcandle_def_t *def)
+{
+	clcandle_family_t family;
+
+	if (def->has_model)
+		return CL_CandleFamilyForModel (def->model);
+
+	// These keys uniquely identify the AD and Copper conventions.
+	if (def->has_t_width || def->has_lip)
+		return CLCANDLE_AD;
+	if (def->has_width || (def->spawnflags & 4))
+		return CLCANDLE_COPPER;
+
+	// Prefer assets packaged alongside the map over inherited search paths.
+	for (family = CLCANDLE_AD; family <= CLCANDLE_PROGSDUMP; family++)
+		if (CL_CandleFamilyAvailable (family, true))
+			return family;
+
+	// An AD random height is also a unique convention.
+	if (def->has_height && def->height < 0)
+		return CLCANDLE_AD;
+
+	// Finally use whichever supported family is installed.  This ordering
+	// matches the richer mapper convention before falling back to one model.
+	for (family = CLCANDLE_AD; family <= CLCANDLE_PROGSDUMP; family++)
+		if (CL_CandleFamilyAvailable (family, false))
+			return family;
+
+	return CLCANDLE_NONE;
+}
+
+static unsigned int CL_CandleHash (const clcandle_def_t *def, int entnum, unsigned int salt)
+{
+	unsigned int hash = COM_HashBlock (def->origin, sizeof(def->origin));
+
+	hash ^= (unsigned int)entnum * 0x9e3779b9u;
+	hash ^= salt + (hash << 6) + (hash >> 2);
+	return hash;
+}
+
+static int CL_CandleVariant (const clcandle_def_t *def, int entnum, unsigned int salt)
+{
+	return 1 + (int)(CL_CandleHash (def, entnum, salt) % 3);
+}
+
+static qboolean CL_CandleInhibited (const clcandle_def_t *def)
+{
+	if (cl.gametype == GAME_DEATHMATCH)
+		return (def->spawnflags & SPAWNFLAG_NOT_DEATHMATCH) != 0;
+
+	// A remote cooperative server does not transmit its skill setting.  Only
+	// apply skill inhibition when this client can know the authoritative value.
+	if (cl.maxclients == 1)
+	{
+		if (current_skill == 0 && (def->spawnflags & SPAWNFLAG_NOT_EASY))
+			return true;
+		if (current_skill == 1 && (def->spawnflags & SPAWNFLAG_NOT_MEDIUM))
+			return true;
+		if (current_skill >= 2 && (def->spawnflags & SPAWNFLAG_NOT_HARD))
+			return true;
+	}
+	return false;
+}
+
+static void CL_CandleResolve (clcandle_def_t *def, int entnum,
+	clcandle_family_t family, const char **modelname, int *frame)
+{
+	int height, width;
+
+	*modelname = NULL;
+	*frame = def->has_frame ? def->frame : 0;
+
+	if (def->has_model)
+		*modelname = def->model;
+
+	switch (family)
+	{
+	case CLCANDLE_AD:
+		height = def->height;
+		if (height < 0)
+			height = CL_CandleVariant (def, entnum, 0x41444854u);
+		if (height != 1 && height != 2)
+			height = 3;
+		if (!*modelname)
+			*modelname = clcandle_ad_models[height - 1];
+
+		width = def->t_width;
+		if (width < 0)
+			width = CL_CandleVariant (def, entnum, 0x41445744u);
+		else if (!width || width > 3)
+			width = 1;
+		*frame = (width - 1) * 2 + ((def->spawnflags & 2) ? 0 : 1);
+
+		def->origin[2] -= def->has_lip ? def->lip : 16.0f;
+		if (def->angles[1] <= 0)
+			def->angles[1] = (float)(CL_CandleHash (def, entnum, 0x41445941u) % 360);
+		break;
+
+	case CLCANDLE_COPPER:
+		height = def->height;
+		if (!height)
+			height = 1 + (int)fmod (fabs (fmod (def->origin[0], 11.0f) +
+			fmod (def->origin[1], 7.0f) - def->origin[2]), 3.0f);
+		if (height < 1 || height > 3)
+			return;
+		if (!*modelname)
+			*modelname = clcandle_copper_models[height - 1];
+
+		width = def->width;
+		if (!width)
+			width = 1 + (int)fmod (fabs (fmod (def->origin[0], 5.0f) +
+				fmod (def->origin[1], 13.0f) - def->origin[2]), 3.0f);
+		if (width == 1)
+			*frame = 4;
+		else if (width == 3)
+			*frame = 2;
+		else
+			*frame = 0;
+		if (!(def->spawnflags & 1))
+			(*frame)++;
+
+		if (!def->angles[0] && !def->angles[1] && !def->angles[2])
+			def->angles[1] = (float)((int)fmod (fabs (fmod (def->origin[0], 17.0f) +
+				fmod (def->origin[1], 23.0f) - def->origin[2]), 10.0f) * 36);
+		break;
+
+	case CLCANDLE_PROGSDUMP:
+		if (!*modelname)
+			*modelname = clcandle_progsdump_model;
+		break;
+
+	case CLCANDLE_CUSTOM:
+		break;
+
+	default:
+		return;
+	}
+}
+
+static entity_t *CL_CandleAllocStatic (void)
+{
+	entity_t *ent;
+	int i = cl.num_statics;
+
+	if (i >= cl.max_static_entities)
+	{
+		int ec = 64;
+		struct cl_static_entities_s *newstatics = realloc (cl.static_entities,
+			sizeof(*newstatics) * (cl.max_static_entities + ec));
+		entity_t *newents = Hunk_Alloc (sizeof(*newents) * ec);
+		if (!newstatics || !newents)
+			Host_Error ("Too many static entities");
+		cl.static_entities = newstatics;
+		while (ec--)
+			cl.static_entities[cl.max_static_entities++].ent = newents++;
+	}
+
+	ent = cl.static_entities[i].ent;
+	memset (ent, 0, sizeof(*ent));
+	cl.static_entities[i].num_clusters = 0;
+	cl.num_statics++;
+	return ent;
+}
+
+static qboolean CL_CandleSpawn (clcandle_def_t *def, int entnum,
+	clcandle_family_t family)
+{
+	const char *modelname;
+	qmodel_t *model;
+	entity_t *ent;
+	int frame;
+
+	CL_CandleResolve (def, entnum, family, &modelname, &frame);
+	if (!modelname || !modelname[0])
+		return false;
+	if (CL_CandleServerPrecachedModel (modelname))
+		return false;
+	if (!COM_FileExists (modelname, NULL))
+		return false;
+
+	model = Mod_ForName (modelname, false);
+	if (!model)
+		return false;
+
+	ent = CL_CandleAllocStatic ();
+	ent->baseline = nullentitystate;
+	ent->baseline.frame = frame;
+	ent->baseline.skin = def->skin;
+	ent->baseline.alpha = def->has_alpha ?
+		ENTALPHA_ENCODE (CLAMP (0.0f, def->alpha, 1.0f)) : ENTALPHA_DEFAULT;
+	ent->baseline.scale = def->has_scale ?
+		ENTSCALE_ENCODE (CLAMP (1.0f / ENTSCALE_DEFAULT, def->scale,
+			255.0f / ENTSCALE_DEFAULT)) : ENTSCALE_DEFAULT;
+	VectorCopy (def->origin, ent->baseline.origin);
+	VectorCopy (def->angles, ent->baseline.angles);
+
+	ent->netstate = ent->baseline;
+	ent->is_static = true;
+	ent->is_client_candle = true;
+	ent->model = model;
+	ent->lerpflags = LERP_RESETANIM;
+	ent->frame = ent->baseline.frame;
+	ent->skinnum = ent->baseline.skin;
+	ent->alpha = ent->baseline.alpha;
+	ent->syncbase = (CL_CandleHash (def, entnum, 0x43414e44u) & 0xffff) / 65536.0f;
+	VectorCopy (ent->baseline.origin, ent->origin);
+	VectorCopy (ent->baseline.angles, ent->angles);
+	CL_LinkStaticEnt (&cl.static_entities[cl.num_statics - 1]);
+	InvalidateTraceLineCache ();
+	return true;
+}
+
+void CL_SpawnClientLightCandles (void)
+{
+	const char *data;
+	char key[128], value[1024], classname[64];
+	clcandle_def_t def;
+	clcandle_family_t family;
+	int found = 0, spawned = 0, missing = 0, inhibited = 0, entnum = 0;
+
+	if (!cl.worldmodel || !cl.worldmodel->entities)
+		return;
+	if (cl.light_candles_initialized)
+		return;
+	cl.light_candles_initialized = true;
+	if (CL_CandleServerProvidesModels ())
+	{
+		Con_DPrintf ("light_candle: server provides candle models; client fallback disabled\n");
+		return;
+	}
+
+	data = cl.worldmodel->entities;
+	while (1)
+	{
+		data = COM_Parse (data);
+		if (!data)
+			break;
+		if (com_token[0] != '{')
+		{
+			Con_DPrintf ("light_candle: malformed entity lump\n");
+			return;
+		}
+
+		memset (&def, 0, sizeof(def));
+		def.scale = 1.0f;
+		classname[0] = 0;
+		entnum++;
+
+		while (1)
+		{
+			data = COM_Parse (data);
+			if (!data)
+				return;
+			if (com_token[0] == '}')
+				break;
+			q_strlcpy (key, com_token, sizeof(key));
+
+			data = COM_Parse (data);
+			if (!data)
+				return;
+			q_strlcpy (value, com_token, sizeof(value));
+
+			if (!strcmp (key, "classname"))
+				q_strlcpy (classname, value, sizeof(classname));
+			else if (!strcmp (key, "origin"))
+			{
+				if (sscanf (value, "%f %f %f", &def.origin[0], &def.origin[1], &def.origin[2]) == 3)
+					def.has_origin = true;
+			}
+			else if (!strcmp (key, "angles"))
+				sscanf (value, "%f %f %f", &def.angles[0], &def.angles[1], &def.angles[2]);
+			else if (!strcmp (key, "angle"))
+			{
+				VectorCopy (vec3_origin, def.angles);
+				def.angles[1] = Q_atof (value);
+			}
+			else if (!strcmp (key, "model") || !strcmp (key, "mdl"))
+			{
+				q_strlcpy (def.model, value, sizeof(def.model));
+				def.has_model = def.model[0] != 0;
+			}
+			else if (!strcmp (key, "spawnflags"))
+				def.spawnflags = Q_atoi (value);
+			else if (!strcmp (key, "height"))
+			{
+				def.height = Q_atoi (value);
+				def.has_height = true;
+			}
+			else if (!strcmp (key, "width"))
+			{
+				def.width = Q_atoi (value);
+				def.has_width = true;
+			}
+			else if (!strcmp (key, "t_width"))
+			{
+				def.t_width = Q_atoi (value);
+				def.has_t_width = true;
+			}
+			else if (!strcmp (key, "lip"))
+			{
+				def.lip = Q_atof (value);
+				def.has_lip = true;
+			}
+			else if (!strcmp (key, "frame"))
+			{
+				def.frame = Q_atoi (value);
+				def.has_frame = true;
+			}
+			else if (!strcmp (key, "skin"))
+				def.skin = Q_atoi (value);
+			else if (!strcmp (key, "alpha"))
+			{
+				def.alpha = Q_atof (value);
+				def.has_alpha = true;
+			}
+			else if (!strcmp (key, "scale"))
+			{
+				def.scale = Q_atof (value);
+				def.has_scale = true;
+			}
+		}
+
+		if (strcmp (classname, "light_candle"))
+			continue;
+		found++;
+		if (!def.has_origin)
+		{
+			missing++;
+			continue;
+		}
+		if (CL_CandleInhibited (&def))
+		{
+			inhibited++;
+			continue;
+		}
+
+		family = CL_CandleChooseFamily (&def);
+		if (family != CLCANDLE_NONE && CL_CandleSpawn (&def, entnum, family))
+			spawned++;
+		else
+			missing++;
+	}
+
+	if (found)
+		Con_DPrintf ("light_candle: %d found, %d client models spawned, %d unavailable, %d inhibited\n",
+			found, spawned, missing, inhibited);
+}
+
+/*
 ===================
 CL_ParseStaticSound
 ===================

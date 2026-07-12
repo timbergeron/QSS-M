@@ -151,6 +151,7 @@ cvar_t	r_slimealpha = {"r_slimealpha","0",CVAR_ARCHIVE};
 cvar_t	trace_any = {"trace_any","0",CVAR_NONE}; // woods #tracers
 cvar_t	trace_any_contains = {"trace_any_contains","item_artifact_super_damage",CVAR_NONE}; // woods #tracers
 cvar_t	r_drawflame = {"r_drawflame","1",CVAR_ARCHIVE}; // woods #drawflame
+cvar_t	r_drawcandle = {"r_drawcandle","1",CVAR_ARCHIVE};
 cvar_t	r_alphasort = {"r_alphasort", "1", CVAR_ARCHIVE}; // woods #alphasort
 
 float	map_wateralpha, map_lavaalpha, map_telealpha, map_slimealpha;

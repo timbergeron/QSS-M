@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern cvar_t gl_fullbrights, r_drawflat, gl_overbright, r_oldskyleaf, r_showtris; //johnfitz
 extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
 extern cvar_t r_flatlightstyles;
+extern cvar_t r_drawcandle;
 cvar_t r_scenecache = {"r_scenecache",""};	//spike, an attempt to cope with abusive maps a bit better.
 cvar_t r_bmodelcache = {"r_bmodelcache","1",CVAR_ARCHIVE};	//tb -- cache static index buffers for opaque moved bmodel entities.
 cvar_t gl_bmodel_instancing = {"gl_bmodel_instancing", "1", CVAR_ARCHIVE};
@@ -6656,6 +6657,9 @@ static qboolean RSceneCache_Queue(byte *vis)
 	{
 		struct cl_static_entities_s *test = &cl.static_entities[e];
 		entity_t *pent = test->ent;
+
+		if (pent->is_client_candle && !r_drawcandle.value)
+			continue;
 
 		if (pent->model && cl_numvisedicts < cl_maxvisedicts)
 		{

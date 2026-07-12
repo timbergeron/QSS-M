@@ -105,6 +105,7 @@ typedef struct entity_s
 	int						dlightframe;	// dynamic lighting
 	int						dlightbits;
 	qboolean				is_static;		// true for static entities stored in cl.static_entities
+	qboolean				is_client_candle;	// client-side light_candle decoration
 
 // FIXME: could turn these into a union
 	struct mnode_s			*topnode;		// for bmodels, first world node

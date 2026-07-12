@@ -354,6 +354,7 @@ typedef struct
 	} *static_entities; //spike -- was static
 	int			max_static_entities;
 	int			num_statics;
+	qboolean	light_candles_initialized;
 
 	int			cdtrack, looptrack;	// cd audio
 
@@ -727,6 +728,7 @@ int CL_DemoMinFramesThreshold(qboolean *auto_delete);
 //
 void CL_ParseServerMessage (void);
 void CL_RegisterParticles(void);
+void CL_SpawnClientLightCandles (void);
 //void CL_NewTranslation (int slot);
 
 //
@@ -763,6 +765,4 @@ void TraceLine (vec3_t start, vec3_t end, float pushoff, vec3_t impact);
 void Chase_UpdateForClient (void);	//johnfitz
 void Chase_UpdateForDrawing (void);	//johnfitz
 qboolean Chase_GetPlayerModelAngleOffset (entity_t *e, vec3_t out);
-
 #endif	/* _CLIENT_H_ */
-

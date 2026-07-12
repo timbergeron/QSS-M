@@ -3326,6 +3326,10 @@ void CL_Record_Prespawn(void)
 	//static ents
 	for (idx = 1; idx < cl.num_statics; idx++)
 	{
+		// Client-only map decorations are rebuilt from the BSP entity lump.
+		// They have no server model index and must not enter a demo signon.
+		if (!cl.static_entities[idx].ent->baseline.modelindex)
+			continue;
 		MSG_WriteStaticOrBaseLine(&net_message, -1, &cl.static_entities[idx].ent->baseline, cl.protocol_pext2, cl.protocol, cl.protocolflags);
 
 		if (net_message.cursize > 4096)

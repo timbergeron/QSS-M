@@ -66,6 +66,7 @@ cvar_t r_brokenturbbias = {"r_brokenturbbias", "1", CVAR_ARCHIVE}; //replicates 
 extern cvar_t trace_any; // woods #tracers
 extern cvar_t trace_any_contains; // woods #tracers
 extern cvar_t r_drawflame; // woods #drawflame
+extern cvar_t r_drawcandle;
 
 extern gltexture_t *playertextures[MAX_SCOREBOARD]; //johnfitz
 
@@ -543,6 +544,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_pos);
 	Cvar_RegisterVariable (&r_drawflame); // woods #drawflame
 	Cvar_SetCallback (&r_drawflame, ClearParticles_f); // woods #drawflame
+	Cvar_RegisterVariable (&r_drawcandle);
 	Cvar_RegisterVariable (&r_alphasort); // woods #alphasort
 
 	Cvar_RegisterVariable (&gl_finish);

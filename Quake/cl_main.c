@@ -884,6 +884,7 @@ void CL_SignonReply (void)
 
 	case 3:
 		CL_ConnectTimingMark("signon 3 (spawninfo)");
+		CL_SpawnClientLightCandles ();
 		MSG_WriteByte (&cls.message, clc_stringcmd);
 		MSG_WriteString (&cls.message, "begin");
 		Cache_Report ();		// print remaining memory
@@ -6165,6 +6166,7 @@ qboolean CL_CheckDownloads(void)
 		InvalidateTraceLineCache();
 		CL_LinkStaticEnt(&cl.static_entities[i]);
 	}
+	CL_SpawnClientLightCandles ();
 	return true;
 }
 
