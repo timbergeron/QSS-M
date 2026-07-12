@@ -313,6 +313,8 @@ typedef struct
 static cl_pending_connect_t cl_pending_connect = {false, {0}};
 static char cl_lasthost[NET_NAMELEN];
 static qboolean cl_next_connect_from_menu = false;
+static qboolean cl_portpingprobe_reconnecting = false;
+static char cl_portpingprobe_pending_host[NET_NAMELEN];
 
 static void CL_ClearConnectReturnState(void)
 {
@@ -506,17 +508,35 @@ static void CL_FinalizeConnection(struct qsocket_s *netcon, const char *host)
 	Log_Last_Server_f();
 	Write_Log(host, SERVERLIST);
 	ServerList_Rebuild();
+
+	if (cl_portpingprobe_reconnecting)
+	{
+		cl_portpingprobe_reconnecting = false;
+		cl_portpingprobe_pending_host[0] = '\0';
+	}
+	else if (NET_PortPingProbe_GetMode() == 1 &&
+		q_strcasecmp(host, "local") && q_strcasecmp(host, "localhost") &&
+		!NET_WebSocketSchemeLength(host, NULL))
+	{
+		q_strlcpy(cl_portpingprobe_pending_host, host,
+			sizeof(cl_portpingprobe_pending_host));
+	}
 }
 
 static void CL_CancelConnectInternal(qboolean clear_return_state)
 {
+	qboolean was_pending;
+
 	if (!cl_pending_connect.active && !NET_DatagramConnectPending())
 		return;
 
+	was_pending = cl_pending_connect.active || NET_DatagramConnectPending();
 	NET_DatagramConnectCancel();
 	cl_pending_connect.active = false;
 	cl_pending_connect.host[0] = '\0';
 	CL_ConnectTimingCancel();
+	if (was_pending)
+		cl_portpingprobe_reconnecting = false;
 
 	if (clear_return_state)
 		CL_ClearConnectReturnState();
@@ -547,6 +567,9 @@ static qboolean CL_HandlePortPingProbe(const char *target)
 		return false;
 	if (NET_WebSocketSchemeLength(target, NULL))
 		return false;
+	if (NET_PortPingProbe_GetMode() == 1 &&
+		NET_PortPingProbe_GetStatus() == PORTPINGPROBE_IDLE)
+		return false;
 
 	probe_status = NET_PortPingProbe_GetStatus();
 	if (probe_status == PORTPINGPROBE_IDLE)
@@ -563,6 +586,8 @@ static qboolean CL_HandlePortPingProbe(const char *target)
 	{
 		if (!NET_PortPingProbe_ConsumeCompleted(target))
 			return NET_PortPingProbe_Start(target);
+		if (NET_PortPingProbe_GetMode() == 1)
+			cl_portpingprobe_reconnecting = true;
 	}
 
 	return false;
@@ -604,6 +629,7 @@ qboolean CL_BeginConnect(const char *host)
 
 	if (!NET_DatagramConnectStart(connect_target))
 	{
+		cl_portpingprobe_reconnecting = false;
 		CL_ConnectTimingCancel();
 		CL_PrintConnectFailureHints();
 		return false;
@@ -640,6 +666,7 @@ void CL_ConnectFrame(void)
 		Con_Printf("%s\n", reason);
 
 	CL_ConnectTimingCancel();
+	cl_portpingprobe_reconnecting = false;
 	CL_PrintConnectFailureHints();
 	cl_pending_connect.host[0] = '\0';
 }
@@ -656,6 +683,7 @@ void CL_Disconnect (void)
 {
 	CL_ConnectTimingCancel();
 	CL_AsyncDownload_Cancel();
+	cl_portpingprobe_pending_host[0] = '\0';
 	NET_PortPingProbe_RequestAbort();
 	CL_CancelConnect();
 	CL_ClearTypingState();
@@ -1014,6 +1042,16 @@ void CL_SignonReply (void)
 			cls.map_crc_quick_server = 0;
 			cls.map_crc_full_server = 0;
 			Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "*mapmismatch", "");
+		}
+
+		if (cl_portpingprobe_pending_host[0])
+		{
+			if (NET_PortPingProbe_GetMode() == 1 &&
+				NET_PortPingProbe_GetStatus() == PORTPINGPROBE_IDLE)
+			{
+				NET_PortPingProbe_Start(cl_portpingprobe_pending_host);
+			}
+			cl_portpingprobe_pending_host[0] = '\0';
 		}
 
 		break;

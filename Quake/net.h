@@ -168,6 +168,7 @@ typedef enum
 } portpingprobe_status_t;
 
 qboolean NET_PortPingProbe_IsEnabled(void);
+int NET_PortPingProbe_GetMode(void);
 portpingprobe_status_t NET_PortPingProbe_GetStatus(void);
 int NET_PortPingProbe_GetProgress(void);
 qboolean NET_PortPingProbe_Start(const char *connect_addr);

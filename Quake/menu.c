@@ -22170,7 +22170,10 @@ static void M_Extras_AdjustSliders (int dir)
 		Cvar_SetValue("cl_autodemo", m);
 		break;
 	case EXTRAS_PORTPINGPROBE:
-		Cvar_SetValueQuick(&cl_portpingprobe_enable, !cl_portpingprobe_enable.value);
+		m = (int)cl_portpingprobe_enable.value + dir;
+		if (m < 0) m = 2;
+		if (m > 2) m = 0;
+		Cvar_SetValueQuick(&cl_portpingprobe_enable, m);
 		break;
 	case EXTRAS_SPAWNTRAINER:
 		Cvar_SetValue("cl_smartspawn", !cl_smartspawn.value);
@@ -22339,7 +22342,13 @@ void M_Extras_Draw(void)
 
 		case EXTRAS_PORTPINGPROBE:
 			text = "   Port Ping Probe";
-			value = cl_portpingprobe_enable.value ? "on" : "off";
+			switch ((int)cl_portpingprobe_enable.value)
+			{
+			case 0: value = "off"; break;
+			case 1: value = "connected"; break;
+			case 2: value = "pre-connect"; break;
+			default: value = "unknown"; break;
+			}
 			break;
 
 		case EXTRAS_SPAWNTRAINER:

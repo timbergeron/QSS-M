@@ -241,7 +241,8 @@ static void Datagram_LogDroppedDatagrams(qsocket_t *sock, unsigned int count) //
 static void cl_portpingprobe_enable_completion(cvar_t *var, const char *partial)
 {
 	Con_AddToTabList("0", partial, "disabled", NULL);
-	Con_AddToTabList("1", partial, "enabled", NULL);
+	Con_AddToTabList("1", partial, "connect, probe, reconnect", NULL);
+	Con_AddToTabList("2", partial, "probe before connecting", NULL);
 }
 
 static void cl_portpingprobe_probes_completion(cvar_t *var, const char *partial)
@@ -305,6 +306,14 @@ static void cl_portpingprobe_delay_changed(cvar_t *var)
 static void cl_portpingprobe_enable_changed(cvar_t *var)
 {
 	portpingprobe_status_t status;
+	const int clamped = CLAMP(0, (int)var->value, 2);
+
+	if (var->value != (float)clamped)
+	{
+		Con_Printf("cl_portpingprobe_enable must be 0, 1, or 2\n");
+		Cvar_SetValueQuick(var, (float)clamped);
+		return;
+	}
 
 	if (var->value != 0)
 		return;
@@ -326,6 +335,11 @@ static void cl_portpingprobe_enable_changed(cvar_t *var)
 qboolean NET_PortPingProbe_IsEnabled(void)
 {
 	return cl_portpingprobe_enable.value != 0;
+}
+
+int NET_PortPingProbe_GetMode(void)
+{
+	return CLAMP(0, (int)cl_portpingprobe_enable.value, 2);
 }
 
 portpingprobe_status_t NET_PortPingProbe_GetStatus(void)
