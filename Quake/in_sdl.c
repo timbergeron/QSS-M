@@ -3512,7 +3512,9 @@ static qboolean IN_InstallExternalFile(const char *source_path, const char *sour
 			dest_exists = (Sys_FileType(dest_path) & FS_ENT_FILE) != 0;
 			if (dest_exists)
 			{
-				Con_Printf("Using existing file at %s/%s\n", COM_SkipPath(com_gamedir), relative_path);
+				Con_SafePrintf("Using existing file at ");
+				Con_LinkPrintf(dest_path, "%s/%s", COM_SkipPath(com_gamedir), relative_path);
+				Con_SafePrintf("\n");
 			}
 			else
 			{
@@ -3522,7 +3524,9 @@ static qboolean IN_InstallExternalFile(const char *source_path, const char *sour
 				if (!IN_CopyExternalFile(normalized_path, dest_path))
 					return false;
 
-				Con_Printf("Copied %s to %s/%s\n", source_desc, COM_SkipPath(com_gamedir), relative_path);
+				Con_Printf("Copied %s to ", source_desc);
+				Con_LinkPrintf(dest_path, "%s/%s", COM_SkipPath(com_gamedir), relative_path);
+				Con_Printf("\n");
 			}
 
 			/* Also copy .lit file if installing a .bsp */
@@ -3541,11 +3545,15 @@ static qboolean IN_InstallExternalFile(const char *source_path, const char *sour
 						{
 							if (Sys_FileType(lit_dest) & FS_ENT_FILE)
 							{
-								Con_Printf("Using existing .lit file in %s/maps/\n", COM_SkipPath(com_gamedir));
+								Con_SafePrintf("Using existing .lit file at ");
+								Con_LinkPrintf(lit_dest, "%s/maps/%s", COM_SkipPath(com_gamedir), COM_SkipPath(lit_dest));
+								Con_SafePrintf("\n");
 							}
 							else if (IN_CopyExternalFile(lit_source, lit_dest))
 							{
-								Con_Printf("Copied .lit file to %s/maps/\n", COM_SkipPath(com_gamedir));
+								Con_SafePrintf("Copied .lit file to ");
+								Con_LinkPrintf(lit_dest, "%s/maps/%s", COM_SkipPath(com_gamedir), COM_SkipPath(lit_dest));
+								Con_SafePrintf("\n");
 							}
 						}
 					}
@@ -4159,7 +4167,9 @@ static qboolean IN_CopyExternalFileToMapPath(const char *source_path, const char
 	{
 		if (using_existing)
 			*using_existing = true;
-		Con_Printf("Using existing file at %s/%s\n", COM_SkipPath(com_gamedir), relative_path);
+		Con_SafePrintf("Using existing file at ");
+		Con_LinkPrintf(dest_path, "%s/%s", COM_SkipPath(com_gamedir), relative_path);
+		Con_SafePrintf("\n");
 		return true;
 	}
 
@@ -4169,7 +4179,9 @@ static qboolean IN_CopyExternalFileToMapPath(const char *source_path, const char
 	if (!IN_CopyExternalFile(normalized_path, dest_path))
 		return false;
 
-	Con_Printf("Copied %s to %s/%s\n", source_desc, COM_SkipPath(com_gamedir), relative_path);
+	Con_Printf("Copied %s to ", source_desc);
+	Con_LinkPrintf(dest_path, "%s/%s", COM_SkipPath(com_gamedir), relative_path);
+	Con_Printf("\n");
 	return true;
 }
 

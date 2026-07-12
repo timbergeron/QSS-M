@@ -742,7 +742,11 @@ qboolean TP_SaveLocFile (const char* path, qboolean quiet) // woods #locext
     free(buf);
 
     if (!quiet) {
-        Con_Printf("locations saved to %s.\n", locname);
+        char fullpath[MAX_OSPATH];
+        q_snprintf(fullpath, sizeof(fullpath), "%s/%s", com_gamedir, locname);
+        Con_SafePrintf("locations saved to ");
+        Con_LinkPrintf(fullpath, "%s", locname);
+        Con_SafePrintf(".\n");
     }
 
     return true;

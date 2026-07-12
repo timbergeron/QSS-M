@@ -6606,9 +6606,13 @@ static void M_Update_Prepare_f(qboolean force)
 	}
 
 	Con_Printf("\n^mUpdate package prepared and verified^m\n");
-	Con_Printf("%-18s %s\n", "Staging dir", stage_dir);
-	Con_Printf("%-18s %s\n", "ZIP", zip_path);
-	Con_Printf("%-18s %s\n", "Extracted", extract_dir);
+	Con_Printf("%-18s ", "Staging dir");
+	Con_LinkPrintf(stage_dir, "%s", stage_dir);
+	Con_Printf("\n%-18s ", "ZIP");
+	Con_LinkPrintf(zip_path, "%s", zip_path);
+	Con_Printf("\n%-18s ", "Extracted");
+	Con_LinkPrintf(extract_dir, "%s", extract_dir);
+	Con_Printf("\n");
 	Con_Printf("No live QSS-M files were changed.\n");
 }
 

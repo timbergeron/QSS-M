@@ -691,6 +691,8 @@ void IPLog_Dump (void)
 
 	IPLog_DumpTree(iplog_head, f);
 	fclose(f);
-	Con_Printf("Wrote iplog.txt\n");
+	Con_SafePrintf("Wrote ");
+	Con_LinkPrintf(IPLog_GetTxtPath(), "iplog.txt");
+	Con_SafePrintf("\n");
 }
 

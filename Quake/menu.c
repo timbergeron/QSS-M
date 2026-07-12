@@ -34682,7 +34682,9 @@ static qboolean M_DownloadMods_FinalizeStagedInstall(void)
 		M_DownloadMods_RemoveTree(downloadmodinstall.stage_dir);
 
 	FileList_Add(downloadmodinstall.item.install_dir, NULL, &modlist);
-	Con_Printf("Installed %s to %s\n", downloadmodinstall.item.name, target);
+	Con_Printf("Installed %s to ", downloadmodinstall.item.name);
+	Con_LinkPrintf(target, "%s", target);
+	Con_Printf("\n");
 	return true;
 }
 
@@ -43743,7 +43745,10 @@ static void M_Pak_DeleteList(void)
 
 	q_snprintf(listpath, sizeof(listpath), "%s/pak.lst", com_gamedir);
 	if (!remove(listpath))
-		Con_Printf("pak.lst deleted. Using default load order.\n");
+	{
+		Con_LinkPrintf(com_gamedir, "pak.lst");
+		Con_SafePrintf(" deleted. Using default load order.\n");
+	}
 	paklist_exists = false;
 	pak_reorder_enabled = false;
 }
@@ -43771,7 +43776,8 @@ static void M_Pak_SaveList(void)
 	fclose(f);
 	paklist_exists = true;
 	
-	Con_Printf("pak.lst saved. Restart game to apply changes.\n");
+	Con_LinkPrintf(listpath, "pak.lst");
+	Con_SafePrintf(" saved. Restart game to apply changes.\n");
 }
 
 void M_PakLoading_Draw(void)

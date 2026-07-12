@@ -6682,8 +6682,10 @@ void CL_Entdump_f(void)
 		q_snprintf(full, sizeof(full), "%s/%s", com_gamedir, entfilename);
 		COM_CreatePath(full); /* ensure "<gamedir>/maps/" exists */
 		COM_WriteFile(entfilename, cl.worldmodel->entities, strlen(cl.worldmodel->entities));
-		Con_Printf("saved entities from maps/%s.bsp (%s) to ^m%s^m\n",
-			cl.mapname, GetBspVersionString(cl.worldmodel->bspversion), entfilename);
+		Con_Printf("saved entities from maps/%s.bsp (%s) to ",
+			cl.mapname, GetBspVersionString(cl.worldmodel->bspversion));
+		Con_LinkPrintf(full, "^m%s^m", entfilename);
+		Con_Printf("\n");
 		return;
 	}
 
@@ -6721,8 +6723,10 @@ void CL_Entdump_f(void)
 		q_snprintf(full, sizeof(full), "%s/%s", com_gamedir, entfilename);
 		COM_CreatePath(full);
 		COM_WriteFile(entfilename, cl.worldmodel->entities, strlen(cl.worldmodel->entities));
-		Con_Printf("saved entities from maps/%s.bsp (%s) to ^m%s^m\n",
-			cleaned_mapname, GetBspVersionString(cl.worldmodel->bspversion), entfilename);
+		Con_Printf("saved entities from maps/%s.bsp (%s) to ",
+			cleaned_mapname, GetBspVersionString(cl.worldmodel->bspversion));
+		Con_LinkPrintf(full, "^m%s^m", entfilename);
+		Con_Printf("\n");
 		return;
 	}
 
@@ -6841,7 +6845,9 @@ void CL_Entdump_f(void)
 	}
 
 	COM_WriteFile(entfilename, entities_data, text_length);
-	Con_Printf("saved entities from %s (%s) to ^m%s^m\n", bspfilename, bspversion, entfilename);
+	Con_Printf("saved entities from %s (%s) to ", bspfilename, bspversion);
+	Con_LinkPrintf(full, "^m%s^m", entfilename);
+	Con_Printf("\n");
 
 	free(buffer);
 }

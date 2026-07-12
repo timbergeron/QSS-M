@@ -2513,8 +2513,10 @@ static void COM_Path_f (void)
 			else
 				q_snprintf(size_str, sizeof(size_str), "~%.0f KB", size_mb * 1024.0f);
 
-			Con_Printf("^m%2d^m       pak      ^m%4d^m    %-9s  %s\n",
-				priority, s->pack->numfiles, size_str, relative_path);
+			Con_Printf("^m%2d^m       pak      ^m%4d^m    %-9s  ",
+				priority, s->pack->numfiles, size_str);
+			Con_LinkPrintf(s->pack->filename, "%s", relative_path);
+			Con_Printf("\n");
 
 			total_paks++;
 			total_files += s->pack->numfiles;
@@ -2524,8 +2526,9 @@ static void COM_Path_f (void)
 			// Directory entry - show the actual search path directory name
 			q_snprintf(relative_path, sizeof(relative_path), "%s/", s->purename);
 
-			Con_Printf("^m%2d^m       dir      ----     -         %s\n",
-				priority, relative_path);
+			Con_Printf("^m%2d^m       dir      ----     -         ", priority);
+			Con_LinkPrintf(s->filename, "%s", relative_path);
+			Con_Printf("\n");
 			total_dirs++;
 		}
 		priority++;
@@ -5998,7 +6001,9 @@ void COM_UnPAK_f(void)
 	COM_StripExtension(outdir, outdir, sizeof(outdir));
 	Sys_mkdir(outdir);
 
-	Con_Printf("\nunpacking ^m%s^m to %s\n", pakname, outdir);
+	Con_Printf("\nunpacking ^m%s^m to ", pakname);
+	Con_LinkPrintf(outdir, "%s", outdir);
+	Con_Printf("\n");
 
 	// Handle PK3/KPF (ZIP-based) files
 	if (!q_strcasecmp(ext, "pk3") || !q_strcasecmp(ext, "kpf")) {

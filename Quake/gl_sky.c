@@ -1344,7 +1344,9 @@ static void Skywind_Save_f(void)
 
 	fclose(f);
 
-	Con_Printf("Saved sky wind config \"%s\"\n", relpath);
+	Con_SafePrintf("Saved sky wind config \"");
+	Con_LinkPrintf(filepath, "%s", relpath);
+	Con_SafePrintf("\"\n");
 }
 
 static void Skywind_LookDir_f(void)

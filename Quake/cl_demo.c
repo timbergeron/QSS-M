@@ -3080,7 +3080,9 @@ static void CL_RenameDemoWithMatchSuffixes(void)
 	if (rename(cls.demofilename, renamed) == 0)
 	{
 		q_strlcpy(cls.demofilename, renamed, sizeof(cls.demofilename));
-		Con_Printf("renamed demo to %s\n", COM_SkipPath(renamed));
+		Con_SafePrintf("renamed demo to ");
+		Con_LinkPrintf(renamed, "%s", COM_SkipPath(renamed));
+		Con_SafePrintf("\n");
 	}
 	else
 	{
@@ -3141,8 +3143,10 @@ void CL_Stop_f (void)
 			}
 			else
 			{
-				Con_Printf("WARNING: failed to write %s, raw demo kept at %s\n",
-					COM_SkipPath(archived_path), demo_record_raw_path);
+				Con_Printf("WARNING: failed to write %s, raw demo kept at ",
+					COM_SkipPath(archived_path));
+				Con_LinkPrintf(demo_record_raw_path, "%s", demo_record_raw_path);
+				Con_Printf("\n");
 				q_strlcpy(cls.demofilename, demo_record_raw_path, sizeof(cls.demofilename));
 				completed = false;
 			}
@@ -3169,7 +3173,11 @@ void CL_Stop_f (void)
 	cls.demo_record_frame_count = 0;
 
 	if (completed && !deleted_short)
-		Con_Printf ("completed demo\n");
+	{
+		Con_SafePrintf ("completed demo ");
+		Con_LinkPrintf (cls.demofilename, "%s", COM_SkipPath(cls.demofilename));
+		Con_SafePrintf ("\n");
+	}
 
 	Cvar_SetROM(cl_recordingdemo.name, "");
 	CL_ResetDemoRecordingPaths();
