@@ -1853,6 +1853,10 @@ void SCR_DrawMatchClock(void)
 	seconds = match_time - 60 * minutes;
 	teamscores = cl.teamgame;
 	show_round_hud = SCR_GetRoundHudString(round_num, sizeof(round_num));
+	// Wipeout uses the ProQuake match-time fields for a contextual respawn
+	// countdown.  Prefer it to the round indicator while the mod supplies one.
+	if (cl.modetype == 6 && (cl.minutes || cl.seconds))
+		show_round_hud = false;
 
 	if (scr_viewsize.value >= 130)
 		return;
