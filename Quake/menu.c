@@ -22293,7 +22293,7 @@ void M_Extras_Draw(void)
 			break;
 
 		case EXTRAS_DOWNLOADPOLICY:
-			text = " Download Policy";
+			text = "   Download Policy";
 			if (allow_download.value <= 0.f)
 				value = "off";
 			else if (allow_download.value < 2.f)
