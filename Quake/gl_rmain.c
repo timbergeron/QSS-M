@@ -133,7 +133,7 @@ cvar_t	r_nolerp_list = {"r_nolerp_list", "progs/flame.mdl,progs/flame2.mdl,progs
 cvar_t	r_noshadow_list = {"r_noshadow_list", "progs/flame2.mdl,progs/flame.mdl,progs/bolt1.mdl,progs/bolt2.mdl,progs/bolt3.mdl,progs/laser.mdl", CVAR_ARCHIVE};
 cvar_t	r_nooutline_list = {"r_nooutline_list", "progs/bolt1.mdl,progs/bolt2.mdl,progs/bolt3.mdl,progs/bit.mdl, progs/star.mdl", CVAR_ARCHIVE}; // woods #routline
 cvar_t	r_outline = {"r_outline", "0", CVAR_ARCHIVE}; // woods #routline
-cvar_t	r_outline_minpixels = {"r_outline_minpixels", "1", CVAR_ARCHIVE}; // woods #routline -- skip the per-entity outline pass when its projected width is below this many pixels (sub-pixel outlines are invisible but still cost a full extra draw); 0 disables the cull
+cvar_t	r_outline_minpixels = {"r_outline_minpixels", "1", CVAR_ARCHIVE}; // woods #routline -- fade from four times this projected width, then skip the per-entity outline pass below it; 0 disables fade/cull
 cvar_t	r_player_xray = {"r_player_xray", "0xFF0000 1.0 0", CVAR_ARCHIVE}; // woods #routline
 #ifdef MACBOOK_ARM_HACK // woods #collinear
 cvar_t	r_remove_collinear_vertices = {"r_remove_collinear_vertices", "1", CVAR_ARCHIVE};

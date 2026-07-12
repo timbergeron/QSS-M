@@ -1384,6 +1384,7 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	vec3_t xrayColor = { 1.0f, 0.0f, 0.0f };
 	float xrayAlpha = 1.0f;
 	float xrayAlphaFade = 1.0f;
+	float distanceFade = 1.0f;
 	int xrayRenderMode = XRAY_RENDER_FILL;
 	qboolean is_xray = R_IsAliasOutlineXray(e, xrayColor, &xrayAlpha, &xrayAlphaFade, &xrayRenderMode);
 	GLuint outline_stencil_mask = (gl_laserpoint.value && GL_VIEWMODEL_STENCIL_BIT()) ? 0x01u : 0xFFu;
@@ -1432,8 +1433,9 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	if (outlineWidth <= 0.0f)
 		return;
 
-	// woods #routline -- skip the extra outline draw when it would project to less
-	// than r_outline_minpixels on screen. The outline expands the silhouette by
+	// woods #routline -- fade the outline as its projected width drops from four times
+	// r_outline_minpixels to the cutoff, then skip the extra draw below it. The
+	// outline expands the silhouette by
 	// outlineWidth world units; a world length L at view-space depth d covers
 	// L*vrect.height/(2*d*tan(fovy/2)) pixels. Sub-pixel outlines are invisible but
 	// still cost a full second pass per entity -- a big deal in detail-dense maps
@@ -1450,8 +1452,15 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 		if (depth > 1.0f && tanHalfFov > 0.0f)
 		{
 			float px = outlineWidth * (float)r_refdef.vrect.height / (2.0f * depth * tanHalfFov);
-			if (px < r_outline_minpixels.value)
+			if (px <= r_outline_minpixels.value)
 				return;
+
+			// Fade across a broad range, with zero slope at both ends, so distant
+			// outlines ease in without a perceptible first visible step.
+			distanceFade = CLAMP(0.0f,
+				(px - r_outline_minpixels.value) / (3.0f * r_outline_minpixels.value), 1.0f);
+			distanceFade = distanceFade * distanceFade * distanceFade *
+				(distanceFade * (distanceFade * 6.0f - 15.0f) + 10.0f);
 		}
 	}
 
@@ -1557,8 +1566,8 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 		outlineColor[3] = 0.2f; // Change alpha component
 	}
 
-	// Apply bounds proximity fade
-	outlineColor[3] *= boundsFade;
+	// Apply distance and bounds proximity fades
+	outlineColor[3] *= distanceFade * boundsFade;
 
 	GL_Uniform4fvFunc(glsl->outlineColorLoc, 1, outlineColor);
 
