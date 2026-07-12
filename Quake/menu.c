@@ -41945,7 +41945,8 @@ qboolean M_WantsIBeamCursor(void)
 		return true;
 
 	if (m_state == m_namemaker)
-		return namemaker_edit_active;
+		return m_mousex >= 120 && m_mousex <= 120 + 18 * 8 &&
+			M_TextField_MouseInRow(m_mousey, 16);
 
 	if (m_state == m_demos)
 		return M_Demos_TextEntry() &&
