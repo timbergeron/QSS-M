@@ -139,6 +139,7 @@ typedef struct
 	double		sum_dt;
 	double		min_dt;
 	double		max_dt;
+	int			clamped_intervals;
 	int			sample_count;
 	qboolean	sample_limit_hit;
 	double		samples[NETFPS_PROBE_MAX_SAMPLES];
@@ -241,6 +242,7 @@ static void Host_NetfpsProbe_Evaluate (int value, netfps_probe_eval_t *eval)
 	double total = 0.0;
 	double send_sum = 0.0;
 	double send_sq_sum = 0.0;
+	double send_elapsed = 0.0;
 	double late_sum = 0.0;
 	double window_time = 0.0;
 	int window_sends = 0;
@@ -252,32 +254,39 @@ static void Host_NetfpsProbe_Evaluate (int value, netfps_probe_eval_t *eval)
 
 	for (i = 0; i < netfps_probe.sample_count; i++)
 	{
+		double wall_dt = netfps_probe.samples[i];
 		// the engine clamps each frame's accumulator contribution to 0.2s
-		double dt = q_min (netfps_probe.samples[i], 0.2);
+		double accum_dt = q_min (wall_dt, 0.2);
 
-		total += dt;
-		accum += dt;
-		window_time += dt;
+		// Keep wall time separate: a hitch still delays the next move even
+		// though the isolation accumulator advances by at most 0.2 seconds.
+		total += wall_dt;
+		send_elapsed += wall_dt;
+		accum += accum_dt;
+		window_time += wall_dt;
 		if (accum >= interval)
 		{
 			double late = accum - interval;
 
 			eval->sends++;
 			window_sends++;
-			send_sum += accum;
-			send_sq_sum += accum * accum;
+			send_sum += send_elapsed;
+			send_sq_sum += send_elapsed * send_elapsed;
 			late_sum += late;
-			if (!eval->min_send_dt || accum < eval->min_send_dt)
-				eval->min_send_dt = accum;
-			if (accum > eval->max_send_dt)
-				eval->max_send_dt = accum;
+			if (!eval->min_send_dt || send_elapsed < eval->min_send_dt)
+				eval->min_send_dt = send_elapsed;
+			if (send_elapsed > eval->max_send_dt)
+				eval->max_send_dt = send_elapsed;
 			if (late > eval->max_late)
 				eval->max_late = late;
 			accum = 0.0;
+			send_elapsed = 0.0;
 		}
 		if (window_time >= 1.0)
 		{
-			double rate = window_sends / window_time;
+			// A single interval spanning a full second necessarily contains
+			// a one-second window with no sends, even if one occurs at its end.
+			double rate = (wall_dt >= 1.0) ? 0.0 : window_sends / window_time;
 			if (eval->min_window_netfps < 0.0 || rate < eval->min_window_netfps)
 				eval->min_window_netfps = rate;
 			window_time = 0.0;
@@ -443,7 +452,12 @@ static void Host_NetfpsProbe_Report (void)
 		Con_Printf ("netfps_probe: note: values up to 72 cannot cleanly reach %.1f netfps with this render cadence.\n", target);
 	}
 	if (netfps_probe.sample_limit_hit)
-		Con_Printf ("netfps_probe: note: sample buffer filled; result used the first %d intervals.\n", NETFPS_PROBE_MAX_SAMPLES);
+		Con_Printf ("netfps_probe: note: sample buffer filled; result uses the first %d intervals.\n", NETFPS_PROBE_MAX_SAMPLES);
+	if (netfps_probe.clamped_intervals)
+		Con_Printf ("netfps_probe: note: %d frame %s exceeded 200 ms; the recommendation includes %s.\n",
+					netfps_probe.clamped_intervals,
+					netfps_probe.clamped_intervals == 1 ? "interval" : "intervals",
+					netfps_probe.clamped_intervals == 1 ? "it" : "them");
 	Con_Printf ("\nnetfps_probe: final recommendation: ^mhost_maxfps^m -^g%d^d\n", safe.value);
 	Con_Printf ("\n");
 }
@@ -454,19 +468,24 @@ static void Host_NetfpsProbe_Frame (void)
 
 	if (!netfps_probe.active)
 		return;
+	if (cls.state != ca_connected || cls.signon != SIGNONS || cls.demoplayback || cls.timedemo)
+	{
+		netfps_probe.active = false;
+		Con_Printf ("netfps_probe: canceled because the connection or map changed.\n");
+		return;
+	}
 
 	now = realtime;
 	if (netfps_probe.last_frame_time > 0.0)
 	{
 		dt = now - netfps_probe.last_frame_time;
-		if (dt > 0.0 && dt < 1.0)
+		if (dt > 0.0)
 		{
 			netfps_probe.intervals++;
 			netfps_probe.sum_dt += dt;
-			if (netfps_probe.sample_count < NETFPS_PROBE_MAX_SAMPLES)
-				netfps_probe.samples[netfps_probe.sample_count++] = dt;
-			else
-				netfps_probe.sample_limit_hit = true;
+			netfps_probe.samples[netfps_probe.sample_count++] = dt;
+			if (dt > 0.2)
+				netfps_probe.clamped_intervals++;
 			if (!netfps_probe.min_dt || dt < netfps_probe.min_dt)
 				netfps_probe.min_dt = dt;
 			if (dt > netfps_probe.max_dt)
@@ -476,8 +495,10 @@ static void Host_NetfpsProbe_Frame (void)
 	netfps_probe.last_frame_time = now;
 	netfps_probe.frames++;
 
-	if (now - netfps_probe.start_time >= netfps_probe.duration)
+	if (netfps_probe.sample_count >= NETFPS_PROBE_MAX_SAMPLES ||
+		now - netfps_probe.start_time >= netfps_probe.duration)
 	{
+		netfps_probe.sample_limit_hit = netfps_probe.sample_count >= NETFPS_PROBE_MAX_SAMPLES;
 		netfps_probe.active = false;
 		Host_NetfpsProbe_Report ();
 	}
@@ -524,7 +545,7 @@ static void Host_NetfpsProbe_f (void)
 	if (argc >= 3)
 		target = Q_atof (Cmd_Argv(2));
 
-	if (duration <= 0.0 || target <= 0.0)
+	if (!isfinite (duration) || !isfinite (target) || duration <= 0.0 || target <= 0.0)
 	{
 		Host_NetfpsProbe_Usage ();
 		return;
