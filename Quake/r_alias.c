@@ -40,6 +40,36 @@ extern qboolean IsOneVsOneMatch(void); // woods #routline
 extern void R_GetEntityBounds(const entity_t *e, vec3_t mins, vec3_t maxs); // woods #routline
 void Matrix3x4_RM_Transform4(const float* matrix, const float* vector, float* product); // woods #routline
 
+typedef enum alias_outline_phase_e
+{
+	ALIAS_OUTLINE_PHASE_NORMAL,
+	ALIAS_OUTLINE_PHASE_MASK,
+	ALIAS_OUTLINE_PHASE_RING,
+	ALIAS_OUTLINE_PHASE_SCRUB
+} alias_outline_phase_t;
+
+static alias_outline_phase_t r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
+static qboolean r_alias_outline_collecting;
+static entity_t *r_deferred_alias_outlines[MAX_EDICTS];
+static int r_num_deferred_alias_outlines;
+
+static qboolean R_QueueDeferredAliasOutline(entity_t *e)
+{
+	int i;
+
+	for (i = 0; i < r_num_deferred_alias_outlines; ++i)
+		if (r_deferred_alias_outlines[i] == e)
+			return true;
+
+	if (r_num_deferred_alias_outlines < countof(r_deferred_alias_outlines))
+	{
+		r_deferred_alias_outlines[r_num_deferred_alias_outlines++] = e;
+		return true;
+	}
+
+	return false;
+}
+
 cvar_t	gl_lightning_alpha = {"gl_lightning_alpha","1"}; // woods #lightalpha
 
 const float	r_avertexnormals[NUMVERTEXNORMALS][3] = {
@@ -1387,7 +1417,9 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	float distanceFade = 1.0f;
 	int xrayRenderMode = XRAY_RENDER_FILL;
 	qboolean is_xray = R_IsAliasOutlineXray(e, xrayColor, &xrayAlpha, &xrayAlphaFade, &xrayRenderMode);
-	GLuint outline_stencil_mask = (gl_laserpoint.value && GL_VIEWMODEL_STENCIL_BIT()) ? 0x01u : 0xFFu;
+	GLuint outline_stencil_mask = r_alias_outline_phase == ALIAS_OUTLINE_PHASE_RING
+		? 0x01u
+		: ((gl_laserpoint.value && GL_VIEWMODEL_STENCIL_BIT()) ? 0x01u : 0xFFu);
 
 	if (!is_xray && !(r_outline.value > 0 &&
 		!(cl.viewent.model == e->model) &&
@@ -1471,6 +1503,16 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 		boundsFade = R_GetEntityBoundsFadeFactor(e);
 		if (boundsFade <= 0.0f)
 			return;
+	}
+
+	// Opaque normal outlines are replayed after every opaque entity fill. Queue
+	// once per entity here, after all the ordinary outline eligibility checks,
+	// while leaving xray and translucent outlines in their original draw order.
+	if (!is_xray && r_alias_outline_collecting && entalpha >= 1.0f &&
+		r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL && gl_stencilbits &&
+		R_QueueDeferredAliasOutline(e))
+	{
+		return;
 	}
 
 	// Pick a dedicated xray stencil bit that is neither the alias mask bit
@@ -2208,24 +2250,57 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	GL_Uniform4fvFunc(glsl->colorTintLoc, countof(tints), tints[0]);	//colourmapping and glowmod.
 	GL_Uniform1iFunc (glsl->fogModeLoc, Fog_GetMode());
 
-	R_BeginAliasOutlineRendering(glsl); // woods #routline
-
-	applied_shell = R_ApplyPowerupShellEffect(glsl, e, tex, &shell_unit); // woods #powershell
-
-// draw
-	glDrawElements (GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT, currententity->model->meshindexesvboptr+paliashdr->eboofs);
-	if (applied_shell)
-		R_RestoreAliasShellTextureState(glsl, shell_unit); // woods #powershell
-
-	if (e != &cl.viewent)
+	if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_NORMAL)
 	{
-		R_DrawPowerupPickupShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
-		R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e); // woods #routline
-	}
-	else if (cl.items & (IT_QUAD | IT_INVULNERABILITY))
-		R_DrawViewmodelShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
+		R_BeginAliasOutlineRendering(glsl); // woods #routline
 
-	R_EndAliasOutlineRendering(); // woods #routline
+		applied_shell = R_ApplyPowerupShellEffect(glsl, e, tex, &shell_unit); // woods #powershell
+
+		// draw
+		glDrawElements (GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT, currententity->model->meshindexesvboptr+paliashdr->eboofs);
+		if (applied_shell)
+			R_RestoreAliasShellTextureState(glsl, shell_unit); // woods #powershell
+
+		if (e != &cl.viewent)
+		{
+			R_DrawPowerupPickupShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
+			R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e); // woods #routline
+		}
+		else if (cl.items & (IT_QUAD | IT_INVULNERABILITY))
+			R_DrawViewmodelShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
+
+		R_EndAliasOutlineRendering(); // woods #routline
+	}
+	else
+	{
+		glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+			GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
+		glEnable(GL_DEPTH_TEST);
+		glEnable(GL_STENCIL_TEST);
+		glDepthFunc(GL_LEQUAL);
+		glDepthMask(GL_FALSE);
+
+		if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_RING)
+		{
+			R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e);
+		}
+		else
+		{
+			GL_Uniform1fFunc(glsl->outlineWidthLoc, 0.0f);
+			GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
+			GL_Uniform1iFunc(glsl->shellModeLoc, 0);
+			GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
+			glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+			glStencilFunc(GL_ALWAYS,
+				r_alias_outline_phase == ALIAS_OUTLINE_PHASE_MASK ? 1 : 0, 0x01);
+			glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+			glStencilMask(0x01);
+			glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+				currententity->model->meshindexesvboptr + paliashdr->eboofs);
+		}
+
+		glPopAttrib();
+	}
 
 // clean up
 	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
@@ -3371,7 +3446,12 @@ void R_DrawAliasModel (entity_t *e)
 		//
 		// draw it
 		//
-		if (r_drawflat_cheatsafe)
+		if (r_alias_outline_phase != ALIAS_OUTLINE_PHASE_NORMAL)
+		{
+			if (glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones || !lerpdata.bonestate))
+				GL_DrawAliasFrame_GLSL(glsl, paliashdr, lerpdata, tex, e);
+		}
+		else if (r_drawflat_cheatsafe)
 		{
 			glDisable (GL_TEXTURE_2D);
 			GL_DrawAliasFrame (paliashdr, lerpdata);
@@ -3597,6 +3677,70 @@ cleanup:
 	if (e->effects & EF_ADDITIVE)
 		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glPopMatrix ();
+}
+
+/*
+=============
+R_BeginDeferredAliasOutlines
+
+Collect opaque normal alias outlines during the entity fill pass. Xray and
+translucent outlines are intentionally never queued.
+=============
+*/
+void R_BeginDeferredAliasOutlines(void)
+{
+	r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
+	r_num_deferred_alias_outlines = 0;
+	r_alias_outline_collecting = true;
+}
+
+/*
+=============
+R_DrawDeferredAliasOutlines
+
+Replay each opaque alias as one multi-surface stencil unit after all opaque
+fills: mask every surface, draw every surface's ring, then scrub every surface.
+=============
+*/
+void R_DrawDeferredAliasOutlines(void)
+{
+	int i;
+
+	r_alias_outline_collecting = false;
+
+	// Normal alias fills stamped 0x01 while their immediate powerup/xray work
+	// ran. Remove that now-stale shared mask without touching the viewmodel bit,
+	// even when no normal outline was queued, so it cannot leak into the later
+	// translucent entity pass.
+	if (gl_stencilbits)
+	{
+		glPushAttrib(GL_ENABLE_BIT | GL_STENCIL_BUFFER_BIT);
+		glDisable(GL_SCISSOR_TEST);
+		glClearStencil(0);
+		glStencilMask(0x01);
+		glClear(GL_STENCIL_BUFFER_BIT);
+		glPopAttrib();
+	}
+
+	if (!r_num_deferred_alias_outlines)
+		return;
+
+	for (i = 0; i < r_num_deferred_alias_outlines; ++i)
+	{
+		currententity = r_deferred_alias_outlines[i];
+
+		r_alias_outline_phase = ALIAS_OUTLINE_PHASE_MASK;
+		R_DrawAliasModel(currententity);
+
+		r_alias_outline_phase = ALIAS_OUTLINE_PHASE_RING;
+		R_DrawAliasModel(currententity);
+
+		r_alias_outline_phase = ALIAS_OUTLINE_PHASE_SCRUB;
+		R_DrawAliasModel(currententity);
+	}
+
+	r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
+	r_num_deferred_alias_outlines = 0;
 }
 
 //johnfitz -- values for shadow matrix

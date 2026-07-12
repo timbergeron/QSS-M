@@ -1613,6 +1613,7 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 	int		i;
 	static sortable_entity_t sorted_ents[MAX_EDICTS];
 	static entity_t *brush_ents[MAX_EDICTS];
+	entity_t *viewmodel_ent = NULL;
 	int num_sorted = 0;
 	int num_brush = 0;
 	int count = cl_numvisedicts;
@@ -1623,6 +1624,9 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 
 	if (!r_drawentities.value)
 		return;
+
+	if (!alphapass)
+		R_BeginDeferredAliasOutlines();
 
 	//johnfitz -- sprites are not a special case
 	
@@ -1691,6 +1695,15 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 				if (!strcmp(currententity->model->name, "progs/flame.mdl") || !strcmp(currententity->model->name, "progs/flame2.mdl"))
 					continue;
 
+			// The expanded viewmodel powerup shell writes color but not depth. Hold
+			// the opaque default viewmodel until every opaque world fill and deferred
+			// world-alias outline is complete so background bmodels cannot overpaint it.
+			if (!alphapass && currententity == &cl.viewent)
+			{
+				viewmodel_ent = currententity;
+				continue;
+			}
+
 			if (!alphapass && currententity->model->type == mod_brush && num_brush < MAX_EDICTS)
 			{
 				brush_ents[num_brush++] = currententity;
@@ -1718,6 +1731,12 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 				currententity->angles[0] *= 0.3; //johnfitz -- damp pitch
 			//johnfitz
 
+			if (!alphapass && currententity == &cl.viewent)
+			{
+				viewmodel_ent = currententity;
+				continue;
+			}
+
 			if (!alphapass && currententity->model->type == mod_brush && num_brush < MAX_EDICTS)
 			{
 				brush_ents[num_brush++] = currententity;
@@ -1729,6 +1748,17 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 
 		if (!alphapass && num_brush > 0)
 			R_DrawBrushModelsInstanced(brush_ents, num_brush);
+	}
+
+	if (!alphapass)
+	{
+		R_DrawDeferredAliasOutlines();
+
+		if (viewmodel_ent)
+		{
+			currententity = viewmodel_ent;
+			R_DrawEntityModel(currententity);
+		}
 	}
 }
 

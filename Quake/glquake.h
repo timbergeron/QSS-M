@@ -513,6 +513,8 @@ void R_UpdateWarpTextures (void);
 
 void R_DrawWorld (void);
 void R_DrawAliasModel (entity_t *e);
+void R_BeginDeferredAliasOutlines (void);
+void R_DrawDeferredAliasOutlines (void);
 void R_DrawBrushModel (entity_t *e);
 void R_DrawBrushModelsInstanced (entity_t **ents, int count);
 void R_DeleteBrushModelInstancingBuffers (void);
