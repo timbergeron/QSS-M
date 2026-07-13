@@ -46,12 +46,24 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | Library            | Version        | Source (MSYS2 package)                     |
 |--------------------|----------------|--------------------------------------------|
 | libFLAC            | 1.5.0          | `mingw-w64-{x86_64,i686}-flac-1.5.0`       |
+| libopus            | 1.6.1          | `mingw-w64-{x86_64,i686}-opus-1.6.1`       |
+| libopusfile        | 0.12           | `mingw-w64-{x86_64,i686}-opusfile-0.12`    |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
 | libwinpthread      | 12.0.0.r747    | `mingw-w64-{x86_64,i686}-libwinpthread-git`|
 | libgcc (x86 only)  | gcc 16.1.0     | `mingw-w64-i686-gcc-libs`                  |
 
-The MSVC import libraries (`libFLAC.dll.a` for MinGW, `libFLAC.lib` for MSVC)
+Note: modern libopus/libopusfile also import `libgcc_s_dw2-1.dll` on x86 — the
+same DLL FLAC needs, so no additional runtime file. `libopusfile.dll` needs
+`libogg-0.dll` + `libopus-0.dll`; it does **not** need `libopusurl-0.dll` (HTTP
+streaming is unused, so that DLL is intentionally not vendored).
+
+The Windows import libraries (`libFLAC.dll.a` for MinGW, `libFLAC.lib` for MSVC)
 target `libFLAC.dll` and were generated with `dlltool` from the shipped DLL.
+Import libraries can be kept when the DLL name and required exported symbols
+remain ABI-compatible. That was verified for this opus/opusfile update, so the
+existing import libraries were retained. The hand-patched opus headers, which
+use `<opus/...>` include paths to match the `-Iinclude` build flag, were also
+kept as-is.
 
 ## Updating a codec DLL
 

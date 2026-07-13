@@ -780,7 +780,7 @@ void Host_Version_f(void)
 		const char* opus_ver = opus_get_version_string();
 		const char* version = strstr(opus_ver, "libopus ");
 		Con_Printf("%-24s %s\n", "libopus", version ? version + 8 : opus_ver);
-#define LIBOPUSFILE_VERSION "0.10" // hard coded
+#define LIBOPUSFILE_VERSION "0.12" // hard coded
 		Con_Printf("%-24s %s\n", "libopusfile", LIBOPUSFILE_VERSION);
 	}
 #endif

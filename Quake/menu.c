@@ -24899,6 +24899,9 @@ static void M_Version_Init(void)
 		const char* opus_ver = opus_get_version_string();
 		const char* version = strstr(opus_ver, "libopus ");
 		M_Version_AddLine(va("  libopus        %s", version ? version + 8 : opus_ver), false);
+#define LIBOPUSFILE_VERSION "0.12" // hard coded
+		M_Version_AddLine(va("  libopusfile    %s", LIBOPUSFILE_VERSION), false);
+#undef LIBOPUSFILE_VERSION
 	}
 #endif
 #if defined(USE_CODEC_OPUS) || defined(USE_CODEC_VORBIS) // these use ogg
