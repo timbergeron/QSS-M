@@ -292,6 +292,8 @@ OBJS := strlcat.o \
 	$(SYSOBJ_CDA) \
 	$(SYSOBJ_NET) \
 	$(ICEOBJS) \
+	net_address.o \
+	net_hostname_cache.o \
 	net_dgrm.o \
 	net_loop.o \
 	net_main.o \

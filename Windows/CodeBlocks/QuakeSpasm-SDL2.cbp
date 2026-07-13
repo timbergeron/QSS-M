@@ -209,6 +209,14 @@
 		</Unit>
 		<Unit filename="..\..\Quake\modelgen.h" />
 		<Unit filename="..\..\Quake\net.h" />
+		<Unit filename="..\..\Quake\net_address.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="..\..\Quake\net_address.h" />
+		<Unit filename="..\..\Quake\net_hostname_cache.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="..\..\Quake\net_hostname_cache.h" />
 		<Unit filename="..\..\Quake\net_defs.h" />
 		<Unit filename="..\..\Quake\net_dgrm.c">
 			<Option compilerVar="CC" />

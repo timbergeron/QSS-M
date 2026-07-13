@@ -197,6 +197,8 @@ OBJS = strlcat.obj &
 	$(SYSOBJ_SND) &
 	$(SYSOBJ_CDA) &
 	$(SYSOBJ_NET) &
+	net_address.obj &
+	net_hostname_cache.obj &
 	net_dgrm.obj &
 	net_loop.obj &
 	net_main.obj &
