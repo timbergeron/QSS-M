@@ -48,7 +48,7 @@ jobs:
         path: |
           ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
           ${{ env.VCPKG_DOWNLOADS }}
-        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-${{ hashFiles('MacOSX/setup-vcpkg.sh', 'MacOSX/custom-triplets/*.cmake', 'MacOSX/vcpkg-patches/*.patch') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-${{ hashFiles('MacOSX/setup-vcpkg.sh', 'MacOSX/custom-triplets/*.cmake') }}
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-
           ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-

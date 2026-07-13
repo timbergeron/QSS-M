@@ -1,13 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
-SCRIPT_DIR="$(
-  CDPATH= cd -- "$(dirname -- "$0")" && pwd
-)"
-
 VCPKG_REPO_URL="${VCPKG_REPO_URL:-https://github.com/microsoft/vcpkg}"
 # Pin vcpkg so CI and local builds do not float with upstream master.
 VCPKG_COMMIT="${VCPKG_COMMIT:-c27eeddba73f608f10605d80bc0144c1166f8fb7}"
+GNUTLS_VERSION="3.8.13"
+GNUTLS_SHA512="71bf189a836fd18d58b9e995d4bfcecdb0aae6129dfd44247b98422b2f127dd868f9905d28fad2ca05afd919a0e6b3c8eebb6b95804067d3a8dab31ebdc72453"
+LIBTASN1_VERSION="4.21.0"
+LIBTASN1_SHA512="6a581c4c072b168bf29a0dec7e59a9329a798e392b7d1033791d0e3166a5d1164e2a7065373a84018d500a01563657900c318b1fd437c227c3174b754f9998d3"
+NETTLE_VERSION="3.10.2"
+NETTLE_REF="nettle_3.10.2_release_20250626"
+NETTLE_SHA512="adb6f0ba6b4b7c64a27dc554a6cbdf9cbdbbacaedbf535daed3ac54cb2bebab503ecac4d8890d17469d510042c35e66c4c4aa9fd56a08e01c20db1e0bdb2bd07"
 
 echo "=== setup-vcpkg.sh starting ==="
 echo "PWD: $(pwd)"
@@ -101,33 +104,91 @@ ensure_pinned_vcpkg_checkout() {
     git -C ./vcpkg checkout --force --detach FETCH_HEAD
 }
 
-apply_local_vcpkg_patches() {
-    local nettle_port_dir="./vcpkg/ports/nettle"
-    local nettle_patch_src="$SCRIPT_DIR/vcpkg-patches/nettle-gnu23-prototypes.patch"
-    local nettle_patch_dst="$nettle_port_dir/qssm-macos-gnu23-prototypes.patch"
-    local nettle_portfile="$nettle_port_dir/portfile.cmake"
-    local tmp_portfile
+replace_port_value() {
+    local file="$1"
+    local old="$2"
+    local new="$3"
 
-    cp "$nettle_patch_src" "$nettle_patch_dst"
-
-    if ! grep -q 'qssm-macos-gnu23-prototypes.patch' "$nettle_portfile"; then
-        tmp_portfile="$(mktemp "${TMPDIR:-/tmp}/qssm-nettle-portfile.XXXXXX")"
-        awk '
-            { print }
-            !done && /msvc-support\.patch/ {
-                print "        qssm-macos-gnu23-prototypes.patch"
-                done = 1
-            }
-        ' "$nettle_portfile" > "$tmp_portfile"
-        mv "$tmp_portfile" "$nettle_portfile"
-    fi
-
-    if ! grep -q 'qssm-macos-gnu23-prototypes.patch' "$nettle_portfile"; then
-        echo "Failed to inject local nettle patch into vcpkg portfile"
+    if grep -Fq "$old" "$file"; then
+        OLD_VALUE="$old" NEW_VALUE="$new" perl -0pi -e \
+            's/\Q$ENV{OLD_VALUE}\E/$ENV{NEW_VALUE}/g' "$file"
+    elif ! grep -Fq "$new" "$file"; then
+        echo "Expected value not found in $file: $old"
         exit 1
     fi
+}
 
-    echo "Applied local nettle port patch: qssm-macos-gnu23-prototypes.patch"
+apply_crypto_port_overrides() {
+    local gnutls_port="./vcpkg/ports/libgnutls"
+    local libtasn1_port="./vcpkg/ports/libtasn1"
+    local nettle_port="./vcpkg/ports/nettle"
+
+    # Remove the compatibility patch used by Nettle 3.10. The fixes are
+    # upstream in 3.10.2, and this also migrates existing local checkouts.
+    replace_port_value "$nettle_port/portfile.cmake" \
+        '        qssm-macos-gnu23-prototypes.patch' ''
+    rm -f "$nettle_port/qssm-macos-gnu23-prototypes.patch"
+
+    replace_port_value "$gnutls_port/vcpkg.json" \
+        '"version": "3.8.12"' "\"version\": \"$GNUTLS_VERSION\""
+    replace_port_value "$gnutls_port/portfile.cmake" \
+        '332a8e5200461517c7f08515e3aaab0bec6222747422e33e9e7d25d35613e3d0695a803fce226bd6a83f723054f551328bd99dcf0573e142be777dcf358e1a3b' \
+        "$GNUTLS_SHA512"
+
+    replace_port_value "$libtasn1_port/vcpkg.json" \
+        '"version": "4.19.0"' "\"version\": \"$LIBTASN1_VERSION\""
+    replace_port_value "$libtasn1_port/vcpkg.json" \
+        '  "port-version": 3,' ''
+    # libtasn1 4.21.0 includes the gnulib fortify guards carried by this
+    # older vcpkg patch, so applying it again fails as already integrated.
+    replace_port_value "$libtasn1_port/portfile.cmake" \
+        '        clang-fortify.patch # ported from https://git.savannah.gnu.org/cgit/gnulib.git/commit/?id=522aea1093a598246346b3e1c426505c344fe19a' ''
+    replace_port_value "$libtasn1_port/portfile.cmake" \
+        '        "${SOURCE_PATH}/doc/COPYING.LESSER"' \
+        '        "${SOURCE_PATH}/COPYING.LESSERv2"'
+    replace_port_value "$libtasn1_port/portfile.cmake" \
+        '        "${SOURCE_PATH}/doc/COPYING"' ''
+    replace_port_value "$libtasn1_port/portfile.cmake" \
+        '287f5eddfb5e21762d9f14d11997e56b953b980b2b03a97ed4cd6d37909bda1ed7d2cdff9da5d270a21d863ab7e54be6b85c05f1075ac5d8f0198997cf335ef4' \
+        "$LIBTASN1_SHA512"
+
+    replace_port_value "$nettle_port/vcpkg.json" \
+        '"version": "3.10"' "\"version\": \"$NETTLE_VERSION\""
+    replace_port_value "$nettle_port/vcpkg.json" \
+        '  "port-version": 1,' ''
+    replace_port_value "$nettle_port/portfile.cmake" \
+        'nettle_3.10_release_20240616' "$NETTLE_REF"
+    replace_port_value "$nettle_port/portfile.cmake" \
+        '8767e4f0c34ce76ead5d66f06f97e6b184d439fa94f848ee440196fafde3da2ea7cfc54f9bd8f9ab6a99929b0d14b3d5a28857e05d954551e94b619598c17659' \
+        "$NETTLE_SHA512"
+
+    echo "Using macOS crypto ports: GnuTLS $GNUTLS_VERSION, libtasn1 $LIBTASN1_VERSION, Nettle $NETTLE_VERSION"
+}
+
+remove_stale_crypto_packages() {
+    local spec
+    local installed_version
+    local expected_version
+    local -a stale_specs=()
+
+    while read -r spec installed_version _; do
+        case "${spec%%:*}" in
+            libgnutls) expected_version="$GNUTLS_VERSION" ;;
+            libtasn1) expected_version="$LIBTASN1_VERSION" ;;
+            nettle) expected_version="$NETTLE_VERSION" ;;
+            *) continue ;;
+        esac
+
+        installed_version="${installed_version%%#*}"
+        if [ "$installed_version" != "$expected_version" ]; then
+            stale_specs+=("$spec")
+        fi
+    done < <(./vcpkg/vcpkg list)
+
+    if [ "${#stale_specs[@]}" -gt 0 ]; then
+        echo "Removing stale crypto packages: ${stale_specs[*]}"
+        ./vcpkg/vcpkg remove --recurse "${stale_specs[@]}"
+    fi
 }
 
 if [ ! -d "./vcpkg/.git" ] || [ ! -f "./vcpkg/bootstrap-vcpkg.sh" ]; then
@@ -142,7 +203,7 @@ if [ "$current_vcpkg_commit" != "$VCPKG_COMMIT" ]; then
     current_vcpkg_commit="$(git -C ./vcpkg rev-parse HEAD 2>/dev/null || true)"
 fi
 
-apply_local_vcpkg_patches
+apply_crypto_port_overrides
 
 # If the repo exists but the tool binary does not, bootstrap it.
 if [ ! -x "./vcpkg/vcpkg" ]; then
@@ -150,6 +211,7 @@ if [ ! -x "./vcpkg/vcpkg" ]; then
 fi
 
 echo "Using vcpkg checkout: $current_vcpkg_commit"
+remove_stale_crypto_packages
 
 ./vcpkg/vcpkg install --overlay-triplets=custom-triplets --triplet=x64-osx-1013 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
 ./vcpkg/vcpkg install --overlay-triplets=custom-triplets --triplet=arm64-osx-11 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls

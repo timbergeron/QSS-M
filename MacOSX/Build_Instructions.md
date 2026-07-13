@@ -13,7 +13,7 @@ Current repo layout:
 - `Resources/Info.plist`: app bundle metadata.
 - `Resources/Base.lproj/Launcher.xib`: launcher UI source. Xcode compiles this into `Launcher.nib` at build time.
 - `Resources/QuakeSpasm.icns`: app icon.
-- `SDL2.framework`, `codecs/`, `custom-triplets/`, and `vcpkg-patches/`: repo-managed macOS build inputs.
+- `SDL2.framework`, `codecs/`, and `custom-triplets/`: repo-managed macOS build inputs.
 - `vcpkg/`, `libs_universal/`, and `build/`: generated locally by the helper scripts and ignored by git.
 
 ## Output
@@ -56,7 +56,7 @@ What this script does:
 
 - Pins `vcpkg` to a known commit instead of following upstream `master`
 - Recreates `MacOSX/vcpkg/` if the checkout is missing or at the wrong commit
-- Applies the local nettle patch from `vcpkg-patches/`
+- Overrides the pinned crypto ports with the checked versions and archive hashes in `setup-vcpkg.sh`
 - Builds static dependencies for `x64-osx-1013` and `arm64-osx-11`
 - Combines those per-arch libraries into universal archives under `libs_universal/`
 
