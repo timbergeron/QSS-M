@@ -49,6 +49,7 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | libopus            | 1.6.1          | `mingw-w64-{x86_64,i686}-opus-1.6.1`       |
 | libopusfile        | 0.12           | `mingw-w64-{x86_64,i686}-opusfile-0.12`    |
 | libxmp             | 4.7.1          | `mingw-w64-{x86_64,i686}-libxmp-4.7.1`     |
+| libmikmod          | 3.3.13         | `mingw-w64-{x86_64,i686}-libmikmod-3.3.13` |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
 | libwinpthread      | 12.0.0.r747    | `mingw-w64-{x86_64,i686}-libwinpthread-git`|
 | libgcc (x86 only)  | gcc 16.1.0     | `mingw-w64-i686-gcc-libs`                  |
@@ -64,6 +65,15 @@ libxmp's version is reported from the `XMP_VERSION` macro in `include/xmp.h`, so
 that header **must** be refreshed alongside the DLL (host.c/menu.c pick it up
 automatically). The macOS `xmp.h` is a separate platform-specific copy and
 should only be updated alongside the macOS libxmp build, not to match Windows.
+
+Note: libmikmod is disabled in the MinGW and `Makefile.darwin` builds
+(`USE_CODEC_MIKMOD=0`), where libxmp handles module playback. It remains enabled
+in the MSVC project and macOS Xcode target; macOS uses its separate dylib and
+header. The Windows 3.3.13 DLL is built with DirectSound/WinMM output drivers, so
+it imports `dsound.dll` / `user32.dll` / `winmm.dll` (all system DLLs) — these
+are inert here: `snd_mikmod.c` registers only `drv_nos` and decodes via
+`VC_WriteBytes`. Version is header-driven (`LIBMIKMOD_VERSION_*` in
+`include/mikmod.h`); on x86 it needs the shared `libgcc_s_dw2-1.dll`.
 
 The Windows import libraries (`libFLAC.dll.a` for MinGW, `libFLAC.lib` for MSVC)
 target `libFLAC.dll` and were generated with `dlltool` from the shipped DLL.
