@@ -48,6 +48,7 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | libFLAC            | 1.5.0          | `mingw-w64-{x86_64,i686}-flac-1.5.0`       |
 | libopus            | 1.6.1          | `mingw-w64-{x86_64,i686}-opus-1.6.1`       |
 | libopusfile        | 0.12           | `mingw-w64-{x86_64,i686}-opusfile-0.12`    |
+| libvorbis          | 1.3.7          | `mingw-w64-{x86_64,i686}-libvorbis-1.3.7`  |
 | libxmp             | 4.7.1          | `mingw-w64-{x86_64,i686}-libxmp-4.7.1`     |
 | libmikmod          | 3.3.13         | `mingw-w64-{x86_64,i686}-libmikmod-3.3.13` |
 | libmpg123          | 1.33.5         | `mingw-w64-{x86_64,i686}-mpg123-1.33.5`    |
