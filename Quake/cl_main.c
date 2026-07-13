@@ -1191,7 +1191,12 @@ void CL_DecayLights (void)
 	dl = cl_dlights;
 	for (i=0 ; i<MAX_DLIGHTS ; i++, dl++)
 	{
-		if (dl->die < cl.time || (dl->spawn > cl.mtime[0] && cls.demoplayback) || !dl->radius) // woods (iw) #democontrols
+		if (dl->die < cl.time) // match FTE: expired lights lose their radius, so a stale slot can never relight surfaces
+		{
+			dl->radius = 0;
+			continue;
+		}
+		if ((dl->spawn > cl.mtime[0] && cls.demoplayback) || !dl->radius) // woods (iw) #democontrols
 			continue;
 
 		dl->radius -= time*dl->decay;

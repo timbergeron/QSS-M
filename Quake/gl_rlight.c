@@ -411,11 +411,10 @@ start:
 			{
 				if (surf->dlightframe != framecount) // not dynamic until now
 				{
-					surf->dlightbits[num >> 5] = 1U << (num & 31);
+					memset (surf->dlightbits, 0, sizeof(surf->dlightbits)); // clear every word, not just this light's - stale bits in the other word kept expired lights baked in
 					surf->dlightframe = framecount;
 				}
-				else // already dynamic
-					surf->dlightbits[num >> 5] |= 1U << (num & 31);
+				surf->dlightbits[num >> 5] |= 1U << (num & 31);
 			}
 		}
 	}
