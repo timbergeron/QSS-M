@@ -50,6 +50,7 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | libopusfile        | 0.12           | `mingw-w64-{x86_64,i686}-opusfile-0.12`    |
 | libxmp             | 4.7.1          | `mingw-w64-{x86_64,i686}-libxmp-4.7.1`     |
 | libmikmod          | 3.3.13         | `mingw-w64-{x86_64,i686}-libmikmod-3.3.13` |
+| libmpg123          | 1.33.5         | `mingw-w64-{x86_64,i686}-mpg123-1.33.5`    |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
 | libwinpthread      | 12.0.0.r747    | `mingw-w64-{x86_64,i686}-libwinpthread-git`|
 | libgcc (x86 only)  | gcc 16.1.0     | `mingw-w64-i686-gcc-libs`                  |
@@ -74,6 +75,18 @@ it imports `dsound.dll` / `user32.dll` / `winmm.dll` (all system DLLs) — these
 are inert here: `snd_mikmod.c` registers only `drv_nos` and decodes via
 `VC_WriteBytes`. Version is header-driven (`LIBMIKMOD_VERSION_*` in
 `include/mikmod.h`); on x86 it needs the shared `libgcc_s_dw2-1.dll`.
+
+Note: libmpg123 is **not linked by default** — MP3 decoding uses libmad
+(`MP3LIB=mad` in the makefiles, `libmad` in the MSVC project); libmpg123 is only
+used with `MP3LIB=mpg123`, which the makefiles signal to the C code by defining
+`-DMP3LIB_MPG123`. The version surfaces (`Quake/host.c`, `Quake/menu.c`) use that
+define to pick the mad vs mpg123 branch and report the mpg123 version at runtime
+via `mpg123_distversion()` (guarded by `MPG123_API_VERSION >= 48`, since that
+function only exists from mpg123 1.32; older headers fall back to printing the
+API version) — so no version string needs manual bumping. mpg123
+1.32+ split `fmt123.h` out of `mpg123.h`, so both headers are vendored together.
+The DLL imports `SHLWAPI.dll` (system) and, on x86, the shared
+`libgcc_s_dw2-1.dll`.
 
 The Windows import libraries (`libFLAC.dll.a` for MinGW, `libFLAC.lib` for MSVC)
 target `libFLAC.dll` and were generated with `dlltool` from the shipped DLL.

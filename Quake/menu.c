@@ -57,7 +57,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 
 #ifdef USE_CODEC_MP3
+#if defined(MP3LIB_MPG123)
+#include <mpg123.h>
+#else
 #include <mad.h>
+#endif
 #endif
 
 #ifdef _WIN32
@@ -24928,11 +24932,19 @@ static void M_Version_Init(void)
 	M_Version_AddLine(va("  libxmp         %s", XMP_VERSION), false);
 #endif
 #ifdef USE_CODEC_MP3
+#if defined(MP3LIB_MPG123)
+#if MPG123_API_VERSION >= 48	/* mpg123_distversion() added in mpg123 1.32 */
+	M_Version_AddLine(va("  libmpg123      %s", mpg123_distversion(NULL, NULL, NULL)), false);
+#else
+	M_Version_AddLine(va("  libmpg123      api %d", MPG123_API_VERSION), false);
+#endif
+#else
 	M_Version_AddLine(va("  libmad         %d.%d.%d%s",
 		MAD_VERSION_MAJOR,
 		MAD_VERSION_MINOR,
 		MAD_VERSION_PATCH,
 		MAD_VERSION_EXTRA), false);
+#endif
 #endif
 
 	M_Version_AddLine("", false);

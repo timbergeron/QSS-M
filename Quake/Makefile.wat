@@ -62,6 +62,7 @@ lib_mp3dec=$(LIBCODEC)mad.lib
 !ifeq MP3LIB mpg123
 mp3_obj=snd_mpg123
 lib_mp3dec=$(LIBCODEC)mpg123.lib
+CFLAGS+= -DMP3LIB_MPG123
 !endif
 !ifeq VORBISLIB vorbis
 cpp_vorbisdec=

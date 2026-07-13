@@ -722,7 +722,11 @@ void	Host_FindMaxClients (void)
 #endif
 
 #ifdef USE_CODEC_MP3
+#if defined(MP3LIB_MPG123)
+#include <mpg123.h>
+#else
 #include <mad.h>
+#endif
 #endif
 
 #define HOST_VERSION_GITHUB_TIMEOUT_MS 2000
@@ -814,16 +818,19 @@ void Host_Version_f(void)
 
 	// MP3 libraries
 #ifdef USE_CODEC_MP3
-	if (MAD_VERSION_MINOR) {
-		Con_Printf("%-24s %d.%d.%d%s\n", "libmad",
-			MAD_VERSION_MAJOR,
-			MAD_VERSION_MINOR,
-			MAD_VERSION_PATCH,
-			MAD_VERSION_EXTRA);
-	}
-	else {
-		Con_Printf("%-24s %s\n", "libmpg123", "1.22.4");
-	}
+#if defined(MP3LIB_MPG123)
+#if MPG123_API_VERSION >= 48	/* mpg123_distversion() added in mpg123 1.32 */
+	Con_Printf("%-24s %s\n", "libmpg123", mpg123_distversion(NULL, NULL, NULL));
+#else
+	Con_Printf("%-24s api %d\n", "libmpg123", MPG123_API_VERSION);
+#endif
+#else
+	Con_Printf("%-24s %d.%d.%d%s\n", "libmad",
+		MAD_VERSION_MAJOR,
+		MAD_VERSION_MINOR,
+		MAD_VERSION_PATCH,
+		MAD_VERSION_EXTRA);
+#endif
 #endif
 
 	Con_Printf("\n^mGitHub QSS-M Versions^m\n\n");

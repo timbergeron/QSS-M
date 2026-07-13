@@ -151,6 +151,7 @@ endif
 ifeq ($(MP3LIB),mpg123)
 mp3_obj=snd_mpg123
 lib_mp3dec=-lmpg123
+CFLAGS+= -DMP3LIB_MPG123
 endif
 ifeq ($(VORBISLIB),vorbis)
 cpp_vorbisdec=
