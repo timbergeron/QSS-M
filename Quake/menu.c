@@ -24901,6 +24901,13 @@ static void M_Version_Init(void)
 		M_Version_AddLine(va("  libopus        %s", version ? version + 8 : opus_ver), false);
 	}
 #endif
+#if defined(USE_CODEC_OPUS) || defined(USE_CODEC_VORBIS) // these use ogg
+	{
+#define LIBOGG_VERSION "1.3.6" // hard coded (libogg exposes no runtime version)
+		M_Version_AddLine(va("  libogg         %s", LIBOGG_VERSION), false);
+#undef LIBOGG_VERSION
+	}
+#endif
 #ifdef USE_CODEC_VORBIS
 	{
 		const char* vorbis_ver = vorbis_version_string();

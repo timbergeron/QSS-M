@@ -130,8 +130,18 @@ jobs:
           Write-Error "Executable file not found in $compiledir"
         }
 
-        # Copy remaining files
-        Copy-Item "$compiledir\*.dll" $zipdir
+        # Stage runtime DLLs explicitly from the repo. The vcxproj post-build event
+        # (which copies these) is disabled in CI via PostBuildEventUseInBuild=false,
+        # because $(SolutionDir) is unreliable when building the bare .vcxproj, so the
+        # codec/SDL2/curl/zlib DLLs must be staged here instead.
+        $short = $env:PLATFORM_SHORT
+        $sdlDir = if ($short -eq "x64") { "Windows\SDL2\lib64" } else { "Windows\SDL2\lib" }
+        Copy-Item "Windows\codecs\$short\*.dll" $zipdir
+        Copy-Item "$sdlDir\SDL2.dll" $zipdir
+        Copy-Item "Windows\curl\lib\$short\libcurl.dll" $zipdir
+        Copy-Item "Windows\zlib\$short\zlib1.dll" $zipdir
+        # Also grab anything the linker itself emitted into the build dir (normally none).
+        Copy-Item "$compiledir\*.dll" $zipdir -ErrorAction SilentlyContinue
         Copy-Item "Quake\qssm.pak" $zipdir
         Copy-Item "Quake\gamecontrollerdb.txt" $zipdir
         Copy-Item "Quakespasm.html" $zipdir
@@ -140,9 +150,12 @@ jobs:
         Copy-Item "LICENSE.txt" $zipdir
         Write-Host "Archive staging contents:"
         Get-ChildItem $zipdir
-        foreach ($requiredFile in @("gamecontrollerdb.txt")) {
+        $requiredFiles = @("gamecontrollerdb.txt", "SDL2.dll", "libcurl.dll", "zlib1.dll", "libFLAC.dll", "libwinpthread-1.dll", "libogg-0.dll")
+        # 32-bit libFLAC.dll additionally needs the dwarf2 libgcc runtime.
+        if ($short -eq "x86") { $requiredFiles += "libgcc_s_dw2-1.dll" }
+        foreach ($requiredFile in $requiredFiles) {
           if (-not (Test-Path (Join-Path $zipdir $requiredFile))) {
-            throw "Required controller support file missing from archive staging: $requiredFile"
+            throw "Required runtime file missing from archive staging: $requiredFile"
           }
         }
 
