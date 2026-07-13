@@ -30,6 +30,8 @@ Git Date:     $(git show --no-patch --no-notes --pretty='%ai' HEAD)
 Compile Date: $(date)
 EOF
 
+cp "$SCRIPT_DIR/../Quake/gamecontrollerdb.txt" build/Release/
+
 # zip the files in `build/Release` to create the final archive for distribution
 cd build/Release
 rm -f QSS-M-macOS.zip

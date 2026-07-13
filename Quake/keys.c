@@ -2811,6 +2811,35 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
         return;
     }
 
+	// woods #touchpadmenu: the gamepad touchpad click selects the hovered menu
+	// item. Fold it into K_MOUSE1 at the source (before keydown[] is set) so the
+	// menu's slider drags and release checks stay consistent. A latch keeps the
+	// up event paired even if key_dest changes mid-press. Left as the bindable
+	// K_TOUCHPAD in-game and while grabbing a bind.
+	{
+		extern qboolean bind_grab;
+		extern cvar_t joy_enable, joy_touchpad;
+		static qboolean touchpad_menu_click = false;
+
+		if (key == K_TOUCHPAD)
+		{
+			if (down)
+			{
+				if (key_dest == key_menu && !bind_grab &&
+					joy_enable.value && joy_touchpad.value)
+				{
+					touchpad_menu_click = true;
+					key = K_MOUSE1;
+				}
+			}
+			else if (touchpad_menu_click)
+			{
+				touchpad_menu_click = false;
+				key = K_MOUSE1;
+			}
+		}
+	}
+
 	if (key == K_CTRL) // woods #saymodifier
 	{
 		if (down)

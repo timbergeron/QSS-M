@@ -167,7 +167,7 @@ jobs:
             exit 1
           fi
           mv quakespasm.exe QSS-M-w64.exe
-          zip -9j QSS-M-w64.zip ../Windows/codecs/x64/*.dll ../Windows/curl/lib/x64/libcurl.dll ../Windows/zlib/x64/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL2/lib64/SDL2.dll ../QSS-M-Revision.txt QSS-M-w64.exe "${gnutls_runtime[@]}"
+          zip -9j QSS-M-w64.zip ../Windows/codecs/x64/*.dll ../Windows/curl/lib/x64/libcurl.dll ../Windows/zlib/x64/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak gamecontrollerdb.txt ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL2/lib64/SDL2.dll ../QSS-M-Revision.txt QSS-M-w64.exe "${gnutls_runtime[@]}"
         else
           make -f Makefile.w32 USE_SDL2=1 SDL_CONFIG=sdl2-config PKG_CONFIG="$PKG_CONFIG" -j8 2>&1 | tee build-w32.log
           if grep -q "gnutls not found via pkg-config" build-w32.log; then
@@ -175,7 +175,7 @@ jobs:
             exit 1
           fi
           mv quakespasm.exe QSS-M-w32.exe
-          zip -9j QSS-M-w32.zip ../Windows/codecs/x86/*.dll ../Windows/curl/lib/x86/libcurl.dll ../Windows/zlib/x86/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL2/lib/SDL2.dll ../QSS-M-Revision.txt QSS-M-w32.exe "${gnutls_runtime[@]}"
+          zip -9j QSS-M-w32.zip ../Windows/codecs/x86/*.dll ../Windows/curl/lib/x86/libcurl.dll ../Windows/zlib/x86/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak gamecontrollerdb.txt ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL2/lib/SDL2.dll ../QSS-M-Revision.txt QSS-M-w32.exe "${gnutls_runtime[@]}"
         fi
 
     - name: Verify package artifact
@@ -190,7 +190,13 @@ jobs:
         Write-Host "===== Package archive ====="
         Get-Item $packageZip | Format-List FullName,Length
         Write-Host "===== Package archive contents ====="
-        tar -tf $packageZip
+        $archiveContents = tar -tf $packageZip
+        $archiveContents
+        foreach ($requiredFile in @("gamecontrollerdb.txt")) {
+          if ($archiveContents -notcontains $requiredFile) {
+            throw "Required controller support file missing from archive: $requiredFile"
+          }
+        }
 
     - name: Prepare MSYS2 debug logs
       if: always()

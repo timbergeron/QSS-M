@@ -29,6 +29,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <zlib.h>
 #include "json.h" // woods #serversmenu
 #include "update.h"
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -12019,7 +12020,7 @@ extern cvar_t joy_device;
 extern cvar_t joy_deadzone_look, joy_deadzone_move, joy_deadzone_trigger;
 extern cvar_t joy_sensitivity_yaw, joy_sensitivity_pitch;
 extern cvar_t joy_invert, joy_exponent, joy_exponent_move, joy_swapmovelook;
-extern cvar_t joy_flick, joy_rumble;
+extern cvar_t joy_flick, joy_rumble, joy_rumble_triggers, joy_touchpad;
 extern cvar_t gyro_enable, gyro_mode, gyro_turning_axis;
 extern cvar_t gyro_yawsensitivity, gyro_pitchsensitivity, gyro_noise_thresh;
 
@@ -12060,7 +12061,9 @@ static enum controller_e
 	CONTROLLER_TRIGGER_THRESH,
 	CONTROLLER_SPACE_BEFORE_RUMBLE,
 	CONTROLLER_RUMBLE,
+	CONTROLLER_TRIGGER_RUMBLE,
 	CONTROLLER_SPACE_AFTER_RUMBLE,
+	CONTROLLER_TOUCHPAD,
 	CONTROLLER_GYRO_ENABLE,
 	CONTROLLER_FLICK_STICK,
 	CONTROLLER_GYRO_MODE,
@@ -12113,6 +12116,10 @@ static const char *M_Controller_GetItemText(int index)
 		return " Controller Test";
 	case CONTROLLER_RUMBLE:
 		return "       Vibration";
+	case CONTROLLER_TRIGGER_RUMBLE:
+		return "    Trigger Vibe";
+	case CONTROLLER_TOUCHPAD:
+		return " Touchpad Cursor";
 	case CONTROLLER_GYRO_ENABLE:
 		return "            Gyro";
 	case CONTROLLER_FLICK_STICK:
@@ -12150,6 +12157,8 @@ static cvar_t *M_Controller_GetItemCvar(int index)
 	case CONTROLLER_DEADZONE_MOVE:	return &joy_deadzone_move;
 	case CONTROLLER_TRIGGER_THRESH:	return &joy_deadzone_trigger;
 	case CONTROLLER_RUMBLE:			return &joy_rumble;
+	case CONTROLLER_TRIGGER_RUMBLE:	return &joy_rumble_triggers;
+	case CONTROLLER_TOUCHPAD:		return &joy_touchpad;
 	case CONTROLLER_GYRO_ENABLE:	return &gyro_enable;
 	case CONTROLLER_FLICK_STICK:	return &joy_flick;
 	case CONTROLLER_GYRO_MODE:		return &gyro_mode;
@@ -12173,6 +12182,7 @@ static qboolean M_Controller_IsSlider(int option)
 	case CONTROLLER_DEADZONE_MOVE:
 	case CONTROLLER_TRIGGER_THRESH:
 	case CONTROLLER_RUMBLE:
+	case CONTROLLER_TRIGGER_RUMBLE:
 	case CONTROLLER_GYRO_SENSX:
 	case CONTROLLER_GYRO_SENSY:
 	case CONTROLLER_GYRO_NOISE:
@@ -12213,6 +12223,10 @@ static qboolean M_Controller_IsOptionEnabled(int option)
 	{
 	case CONTROLLER_RUMBLE:
 		return IN_HasRumble();
+	case CONTROLLER_TRIGGER_RUMBLE:
+		return IN_HasTriggerRumble();
+	case CONTROLLER_TOUCHPAD:
+		return IN_HasTouchpad();
 
 	case CONTROLLER_GYRO_ENABLE:
 	case CONTROLLER_FLICK_STICK:
@@ -12562,6 +12576,14 @@ static void M_Controller_AdjustSliders(int dir)
 		Cvar_SetValueQuick(&joy_rumble, CLAMP(MIN_RUMBLE, joy_rumble.value + dir * 0.05f, MAX_RUMBLE));
 		break;
 
+	case CONTROLLER_TRIGGER_RUMBLE:
+		Cvar_SetValueQuick(&joy_rumble_triggers, CLAMP(MIN_RUMBLE, joy_rumble_triggers.value + dir * 0.05f, MAX_RUMBLE));
+		break;
+
+	case CONTROLLER_TOUCHPAD:
+		Cvar_SetValueQuick(&joy_touchpad, !joy_touchpad.value);
+		break;
+
 	case CONTROLLER_GYRO_ENABLE:
 		Cvar_SetValueQuick(&gyro_enable, !gyro_enable.value);
 		break;
@@ -12636,6 +12658,10 @@ static qboolean M_Controller_SetSliderValue(int option, float frac)
 
 	case CONTROLLER_RUMBLE:
 		Cvar_SetValueQuick(&joy_rumble, MIN_RUMBLE + frac * (MAX_RUMBLE - MIN_RUMBLE));
+		return true;
+
+	case CONTROLLER_TRIGGER_RUMBLE:
+		Cvar_SetValueQuick(&joy_rumble_triggers, MIN_RUMBLE + frac * (MAX_RUMBLE - MIN_RUMBLE));
 		return true;
 
 	case CONTROLLER_GYRO_SENSX:
@@ -12887,6 +12913,26 @@ void M_Controller_Draw(void)
 				if (!show_cvar_hint)
 					M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_rumble.value * 100.f, "%.0f%%", enabled);
 			}
+			break;
+
+		case CONTROLLER_TRIGGER_RUMBLE:
+			if (!IN_HasTriggerRumble())
+			{
+				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, "Unavailable", false);
+			}
+			else
+			{
+				r = (joy_rumble_triggers.value - MIN_RUMBLE) / (MAX_RUMBLE - MIN_RUMBLE);
+				if (!show_cvar_hint)
+					M_Controller_DrawSliderMaybeDim(CONTROLLER_SLIDER_X, y, r, joy_rumble_triggers.value * 100.f, "%.0f%%", enabled);
+			}
+			break;
+
+		case CONTROLLER_TOUCHPAD:
+			if (!IN_HasTouchpad())
+				M_Controller_PrintMaybeDim(CONTROLLER_VALUE_X, y, "Unavailable", false);
+			else if (!show_cvar_hint)
+				M_Controller_DrawCheckboxMaybeDim(CONTROLLER_VALUE_X, y, joy_touchpad.value, enabled);
 			break;
 
 		case CONTROLLER_GYRO_ENABLE:
@@ -13212,6 +13258,19 @@ static const char *M_Controller_Test_GamepadTypeLabel(void)
 	}
 }
 
+static const char *M_Controller_Test_PowerLabel(void)
+{
+	switch (IN_GetGamepadPower())
+	{
+	case GAMEPAD_POWER_EMPTY:	return "Empty";
+	case GAMEPAD_POWER_LOW:		return "Low";
+	case GAMEPAD_POWER_MEDIUM:	return "Mid";
+	case GAMEPAD_POWER_FULL:	return "Full";
+	case GAMEPAD_POWER_WIRED:	return "Wired";
+	default:					return "?";
+	}
+}
+
 static void M_Controller_Test_AppendHeldKey(char *dst, size_t dstsize, int keynum, const char *label)
 {
 	const char *name;
@@ -13297,7 +13356,7 @@ static void M_Controller_Test_DrawHints(int y, qboolean dim)
 	}
 	else
 	{
-		show_rumble = IN_HasRumble();
+		show_rumble = IN_HasRumble() || IN_HasTriggerRumble();
 		show_gyro = IN_HasGyro();
 	}
 
@@ -13380,6 +13439,7 @@ void M_Controller_Test_Draw(void)
 
 	{
 		const char *device_label = M_Controller_GetDeviceLabel();
+		gamepadpower_t power = IN_GetGamepadPower();
 
 		M_Print(16, 48, "Device");
 		M_Controller_Test_DrawStatusValue(72, 48, device_label, true, false);
@@ -13387,32 +13447,46 @@ void M_Controller_Test_Draw(void)
 		M_Print(16, 56, "Type");
 		M_Controller_Test_DrawStatusValueRA(152, 56, has_pad ? M_Controller_Test_GamepadTypeLabel() : "--", has_pad, false);
 
-		M_Print(160, 56, "Rumble");
-		M_Controller_Test_DrawStatusValueRA(240, 56, has_pad ? (IN_HasRumble() ? "Yes" : "No") : "--", has_pad && IN_HasRumble(), false);
+		M_Print(160, 56, "Power");
+		M_Controller_Test_DrawStatusValueRA(240, 56, has_pad ? M_Controller_Test_PowerLabel() : "--",
+			has_pad && power != GAMEPAD_POWER_UNKNOWN,
+			power == GAMEPAD_POWER_EMPTY || power == GAMEPAD_POWER_LOW);
 
 		M_Print(248, 56, "Gyro");
 		M_Controller_Test_DrawStatusValueRA(312, 56, has_pad ? (IN_HasGyro() ? "Yes" : "No") : "--", has_pad && IN_HasGyro(), false);
+
+		M_Print(16, 64, "Rumble");
+		M_Controller_Test_DrawStatusValueRA(96, 64,
+			has_pad ? (IN_HasRumble() ? "Yes" : "No") : "--", has_pad && IN_HasRumble(), false);
+
+		M_Print(104, 64, "Triggers");
+		M_Controller_Test_DrawStatusValueRA(192, 64,
+			has_pad ? (IN_HasTriggerRumble() ? "Yes" : "No") : "--", has_pad && IN_HasTriggerRumble(), false);
+
+		M_Print(200, 64, "Touchpad");
+		M_Controller_Test_DrawStatusValueRA(312, 64,
+			has_pad ? (IN_HasTouchpad() ? "Yes" : "No") : "--", has_pad && IN_HasTouchpad(), false);
 	}
 
-	M_Controller_Test_DrawStickBox(24, 72, "Move", movex, movey, joy_deadzone_move.value, dim);
-	M_Controller_Test_DrawStickBox(112, 72, "Look", lookx, looky, joy_deadzone_look.value, dim);
+	M_Controller_Test_DrawStickBox(24, 80, "Move", movex, movey, joy_deadzone_move.value, dim);
+	M_Controller_Test_DrawStickBox(112, 80, "Look", lookx, looky, joy_deadzone_look.value, dim);
 
 	q_snprintf(value, sizeof(value), "X%+.1f Y%+.1f", movex, movey);
-	M_Controller_Test_DimPrint(56 - 4 * (int)strlen(value), 120, value, dim);
+	M_Controller_Test_DimPrint(56 - 4 * (int)strlen(value), 128, value, dim);
 	q_snprintf(value, sizeof(value), "X%+.1f Y%+.1f", lookx, looky);
-	M_Controller_Test_DimPrint(144 - 4 * (int)strlen(value), 120, value, dim);
+	M_Controller_Test_DimPrint(144 - 4 * (int)strlen(value), 128, value, dim);
 
 	{
 		qboolean lt_active = !dim && trigleft  > joy_deadzone_trigger.value;
 		qboolean rt_active = !dim && trigright > joy_deadzone_trigger.value;
 
-		if (lt_active) M_PrintWhite(40, 136, "Left Trigger");
-		else           M_Controller_Test_DimPrint(40, 136, "Left Trigger", dim);
-		M_Controller_DrawSliderMaybeDim(176, 136, trigleft,  trigleft  * 100.f, "%.0f%%", !dim);
+		if (lt_active) M_PrintWhite(40, 144, "Left Trigger");
+		else           M_Controller_Test_DimPrint(40, 144, "Left Trigger", dim);
+		M_Controller_DrawSliderMaybeDim(176, 144, trigleft,  trigleft  * 100.f, "%.0f%%", !dim);
 
-		if (rt_active) M_PrintWhite(40, 144, "Right Trigger");
-		else           M_Controller_Test_DimPrint(40, 144, "Right Trigger", dim);
-		M_Controller_DrawSliderMaybeDim(176, 144, trigright, trigright * 100.f, "%.0f%%", !dim);
+		if (rt_active) M_PrintWhite(40, 152, "Right Trigger");
+		else           M_Controller_Test_DimPrint(40, 152, "Right Trigger", dim);
+		M_Controller_DrawSliderMaybeDim(176, 152, trigright, trigright * 100.f, "%.0f%%", !dim);
 	}
 
 	if (IN_HasGyro())
@@ -13421,18 +13495,18 @@ void M_Controller_Test_Draw(void)
 		gyro = IN_GetRawGyroMagnitude();
 		r = CLAMP(0.f, gyro / 180.f, 1.f);
 		gyro_active = gyro > gyro_noise_thresh.value;
-		if (gyro_active) M_PrintWhite(40, 152, "Gyro");
-		else             M_Controller_Test_DimPrint(40, 152, "Gyro", dim);
-		M_Controller_DrawSliderMaybeDim(176, 152, r, gyro, "%.0f", !dim);
+		if (gyro_active) M_PrintWhite(40, 160, "Gyro");
+		else             M_Controller_Test_DimPrint(40, 160, "Gyro", dim);
+		M_Controller_DrawSliderMaybeDim(176, 160, r, gyro, "%.0f", !dim);
 	}
 	else
 	{
-		M_Controller_Test_DimPrint(40, 152, "Gyro", dim);
-		M_Controller_Test_DimPrint(176, 152, "Unavailable", dim);
+		M_Controller_Test_DimPrint(40, 160, "Gyro", dim);
+		M_Controller_Test_DimPrint(176, 160, "Unavailable", dim);
 	}
 
-	M_Controller_Test_DrawHeldButtons(168, dim);
-	M_Controller_Test_DrawHints(184, dim);
+	M_Controller_Test_DrawHeldButtons(176, dim);
+	M_Controller_Test_DrawHints(192, dim);
 }
 
 void M_Controller_Test_Key(int key)
@@ -13447,7 +13521,7 @@ void M_Controller_Test_Key(int key)
 			S_LocalSound("misc/menu2.wav");
 			M_Menu_Controller_f();
 		}
-		else if (IN_HasRumble())
+		else if (IN_HasRumble() || IN_HasTriggerRumble())
 		{
 			S_LocalSound("misc/menu3.wav");
 			IN_TestRumble();
@@ -41491,13 +41565,11 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 {
 	if (bind_grab)
 		return;
-	
-	vrect_t bounds, viewport;
 
-	Draw_GetMenuTransform(&bounds, &viewport);
-
-	m_mousex = x = bounds.x + (int)((x - viewport.x) * bounds.width / (float)viewport.width + 0.5f);
-	m_mousey = y = bounds.y + (int)((y - viewport.y) * bounds.height / (float)viewport.height + 0.5f);
+	if (!Draw_WindowToCanvas(CANVAS_MENU, x, y, &x, &y))
+		return;
+	m_mousex = x;
+	m_mousey = y;
 
 	switch (m_state)
 	{

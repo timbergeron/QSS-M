@@ -52,6 +52,16 @@ typedef enum gamepadtype_t
 	GAMEPAD_NINTENDO,
 } gamepadtype_t;
 
+typedef enum gamepadpower_t
+{
+	GAMEPAD_POWER_UNKNOWN,
+	GAMEPAD_POWER_EMPTY,
+	GAMEPAD_POWER_LOW,
+	GAMEPAD_POWER_MEDIUM,
+	GAMEPAD_POWER_FULL,
+	GAMEPAD_POWER_WIRED,
+} gamepadpower_t;
+
 qboolean IN_HasGyro (void);
 float IN_GetRawGyroMagnitude (void);
 void IN_StartGyroCalibration (void);
@@ -66,10 +76,13 @@ void IN_GetRawMoveAxis (float *x, float *y);
 void IN_GetRawTriggerAxis (float *left, float *right);
 
 qboolean IN_HasRumble (void);
+qboolean IN_HasTriggerRumble (void);
+qboolean IN_HasTouchpad (void);
 void IN_TestRumble (void);
 qboolean IN_HasGamepad (void);
 const char *IN_GetGamepadName (void);
 gamepadtype_t IN_GetGamepadType (void);
+gamepadpower_t IN_GetGamepadPower (void);
 int IN_GetLastActiveDeviceType (void);
 
 

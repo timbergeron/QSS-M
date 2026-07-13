@@ -87,6 +87,12 @@ jobs:
         fi
         if [ -f "$package_zip" ]; then
           unzip -l "$package_zip" > "$log_root/QSS-M-l64-zip-contents.txt"
+          for required_file in gamecontrollerdb.txt; do
+            unzip -Z1 "$package_zip" | grep -Fx "$required_file" >/dev/null || {
+              echo "Required controller support file missing from archive: $required_file"
+              exit 1
+            }
+          done
         fi
 
         echo "===== Log artifact tree ====="

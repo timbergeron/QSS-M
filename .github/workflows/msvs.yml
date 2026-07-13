@@ -133,12 +133,18 @@ jobs:
         # Copy remaining files
         Copy-Item "$compiledir\*.dll" $zipdir
         Copy-Item "Quake\qssm.pak" $zipdir
+        Copy-Item "Quake\gamecontrollerdb.txt" $zipdir
         Copy-Item "Quakespasm.html" $zipdir
         Copy-Item "Quakespasm.txt" $zipdir
         Copy-Item "Quakespasm-Music.txt" $zipdir
         Copy-Item "LICENSE.txt" $zipdir
         Write-Host "Archive staging contents:"
         Get-ChildItem $zipdir
+        foreach ($requiredFile in @("gamecontrollerdb.txt")) {
+          if (-not (Test-Path (Join-Path $zipdir $requiredFile))) {
+            throw "Required controller support file missing from archive staging: $requiredFile"
+          }
+        }
 
     - name: Prepare MSBuild Logs
       if: always()

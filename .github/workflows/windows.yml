@@ -376,6 +376,12 @@ jobs:
 
         echo "===== Package archive contents ====="
         unzip -l "$package_zip"
+        for required_file in gamecontrollerdb.txt; do
+          unzip -Z1 "$package_zip" | grep -Fx "$required_file" >/dev/null || {
+            echo "Required controller support file missing from archive: $required_file"
+            exit 1
+          }
+        done
         echo "===== Log artifact tree ====="
         find artifact/logs -maxdepth 3 -type f | sort
 

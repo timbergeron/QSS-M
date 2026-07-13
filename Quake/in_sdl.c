@@ -509,6 +509,8 @@ cvar_t	joy_flick_deadzone = { "joy_flick_deadzone", "0.9", CVAR_ARCHIVE };
 cvar_t	joy_flick_noise_thresh = { "joy_flick_noise_thresh", "2.0", CVAR_ARCHIVE };
 cvar_t	joy_flick_adjust_speed = { "joy_flick_adjust_speed", "30.0", CVAR_ARCHIVE };
 cvar_t	joy_rumble = { "joy_rumble", "0.3", CVAR_ARCHIVE };
+cvar_t	joy_rumble_triggers = { "joy_rumble_triggers", "0", CVAR_ARCHIVE };
+cvar_t	joy_touchpad = { "joy_touchpad", "1", CVAR_ARCHIVE };
 cvar_t	joy_enable = { "joy_enable", "1", CVAR_ARCHIVE };
 cvar_t	joy_device = { "joy_device", "0", CVAR_ARCHIVE };
 cvar_t	joy_always_active = { "joy_always_active", "0", CVAR_ARCHIVE };
@@ -530,6 +532,11 @@ static SDL_GameController *joy_active_controller = NULL;
 static gamepadtype_t joy_active_type = GAMEPAD_NONE;
 static char joy_active_name[256];
 static qboolean joy_has_rumble = false;
+static qboolean joy_has_trigger_rumble = false;
+static qboolean joy_has_touchpad = false;
+static gamepadpower_t joy_power = GAMEPAD_POWER_UNKNOWN;
+static qboolean joy_warned_low_power = false;
+static qboolean joy_warned_empty_power = false;
 
 static void IN_LoadControllerMappings(void);
 static qboolean IN_UseController(int device_index);
@@ -1411,13 +1418,85 @@ qboolean IN_HasRumble (void)
 #endif
 }
 
+qboolean IN_HasTriggerRumble (void)
+{
+#if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2, 0, 18)
+	return joy_has_trigger_rumble;
+#else
+	return false;
+#endif
+}
+
+qboolean IN_HasTouchpad (void)
+{
+#if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2, 0, 14)
+	return joy_has_touchpad;
+#else
+	return false;
+#endif
+}
+
+gamepadpower_t IN_GetGamepadPower (void)
+{
+#if defined(USE_SDL2)
+	return joy_power;
+#else
+	return GAMEPAD_POWER_UNKNOWN;
+#endif
+}
+
+#if defined(USE_SDL2)
+static gamepadpower_t IN_TranslateGamepadPower (SDL_JoystickPowerLevel level)
+{
+	switch (level)
+	{
+	case SDL_JOYSTICK_POWER_EMPTY:	return GAMEPAD_POWER_EMPTY;
+	case SDL_JOYSTICK_POWER_LOW:		return GAMEPAD_POWER_LOW;
+	case SDL_JOYSTICK_POWER_MEDIUM:	return GAMEPAD_POWER_MEDIUM;
+	case SDL_JOYSTICK_POWER_FULL:		return GAMEPAD_POWER_FULL;
+	case SDL_JOYSTICK_POWER_WIRED:	return GAMEPAD_POWER_WIRED;
+	default:						return GAMEPAD_POWER_UNKNOWN;
+	}
+}
+
+static void IN_UpdateGamepadPower (SDL_JoystickPowerLevel level, qboolean notify)
+{
+	qboolean warn_empty;
+	qboolean warn_low;
+
+	joy_power = IN_TranslateGamepadPower(level);
+	if (joy_power == GAMEPAD_POWER_MEDIUM || joy_power == GAMEPAD_POWER_FULL ||
+		joy_power == GAMEPAD_POWER_WIRED)
+	{
+		joy_warned_low_power = false;
+		joy_warned_empty_power = false;
+	}
+
+	warn_empty = notify && joy_power == GAMEPAD_POWER_EMPTY && !joy_warned_empty_power;
+	warn_low = notify && joy_power == GAMEPAD_POWER_LOW && !joy_warned_low_power;
+	if (warn_empty || warn_low)
+	{
+		Con_Warning("%s battery is %s\n", joy_active_name[0] ? joy_active_name : "Gamepad",
+			joy_power == GAMEPAD_POWER_EMPTY ? "empty" : "low");
+		joy_warned_low_power = true;
+		if (warn_empty)
+			joy_warned_empty_power = true;
+	}
+}
+#endif
+
 void IN_TestRumble (void)
 {
 #if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2, 0, 9)
-	if (joy_active_controller && joy_has_rumble)
+	if (joy_active_controller && (joy_has_rumble || joy_has_trigger_rumble))
 	{
 		joy_rumble_test_end = Sys_DoubleTime() + 0.2;
-		SDL_GameControllerRumble(joy_active_controller, 0x6000, 0xffff, 200);
+		if (joy_has_rumble)
+			SDL_GameControllerRumble(joy_active_controller, 0x6000, 0xffff, 200);
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+		if (joy_has_trigger_rumble)
+			SDL_GameControllerRumbleTriggers(joy_active_controller, 0xb000, 0xffff, 200);
+#endif
 	}
 #endif
 }
@@ -1524,6 +1603,10 @@ void IN_StartGyroCalibration (void)
 #if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2, 0, 9)
 	if (joy_has_rumble)
 		SDL_GameControllerRumble(joy_active_controller, 0, 0, 100);
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+	if (joy_has_trigger_rumble)
+		SDL_GameControllerRumbleTriggers(joy_active_controller, 0, 0, 100);
+#endif
 #endif
 
 	gyro_accum[0] = 0.f;
@@ -1636,6 +1719,8 @@ void IN_Init (void)
 	Cvar_RegisterVariable(&joy_flick_noise_thresh);
 	Cvar_RegisterVariable(&joy_flick_adjust_speed);
 	Cvar_RegisterVariable(&joy_rumble);
+	Cvar_RegisterVariable(&joy_rumble_triggers);
+	Cvar_RegisterVariable(&joy_touchpad);
 	Cvar_RegisterVariable(&joy_enable);
 	Cvar_RegisterVariable(&joy_device);
 	Cvar_SetCallback(&joy_device, Joy_Device_f);
@@ -2043,169 +2128,115 @@ static void IN_LoadControllerMappingsFromDir(const char *dir)
 		return;
 
 	q_snprintf(controllerdb, sizeof(controllerdb), "%s/gamecontrollerdb.txt", dir);
+	if (!(Sys_FileType(controllerdb) & FS_ENT_FILE))
+		return;
 	nummappings = SDL_GameControllerAddMappingsFromFile(controllerdb);
-	if (nummappings > 0)
+	if (nummappings < 0)
+		Con_Warning("couldn't load controller mappings from %s: %s\n",
+			controllerdb, SDL_GetError());
+	else if (nummappings > 0)
 		Con_Printf("%d mappings loaded from %s\n", nummappings, controllerdb);
+}
+
+static void IN_LoadControllerSearchPathMappings(searchpath_t *search)
+{
+	searchpath_t *prev;
+
+	if (!search)
+		return;
+
+	// SDL replaces an existing GUID mapping with the last one loaded. Walk the
+	// Quake search path from lowest to highest priority so mod/user mappings win.
+	IN_LoadControllerSearchPathMappings(search->next);
+
+	if (search->pack || !search->filename[0])
+		return;
+	if (!q_strcasecmp(search->filename, com_basedir))
+		return;
+
+	// Only load the highest-priority occurrence of a repeated directory.
+	for (prev = com_searchpaths; prev != search; prev = prev->next)
+	{
+		if (!prev->pack && !q_strcasecmp(prev->filename, search->filename))
+			return;
+	}
+
+	IN_LoadControllerMappingsFromDir(search->filename);
 }
 
 static void IN_LoadControllerMappings(void)
 {
-	searchpath_t *search, *prev;
 	const char *userdir = host_parms ? host_parms->userdir : NULL;
 
 	// This also backs gamecontrollerdb_reload for picking up mappings after searchpath changes.
 	IN_LoadControllerMappingsFromDir(com_basedir);
+	IN_LoadControllerSearchPathMappings(com_searchpaths);
 
+	// A loose database in the user root is the final, highest-priority override.
 	if (userdir && *userdir && q_strcasecmp(userdir, com_basedir))
 		IN_LoadControllerMappingsFromDir(userdir);
-
-	for (search = com_searchpaths; search; search = search->next)
-	{
-		if (search->pack || !search->filename[0])
-			continue;
-		if (!q_strcasecmp(search->filename, com_basedir))
-			continue;
-		if (userdir && *userdir && !q_strcasecmp(search->filename, userdir))
-			continue;
-
-		for (prev = com_searchpaths; prev != search; prev = prev->next)
-		{
-			if (!prev->pack && !q_strcasecmp(prev->filename, search->filename))
-				break;
-		}
-		if (prev != search)
-			continue;
-
-		IN_LoadControllerMappingsFromDir(search->filename);
-	}
 }
 
-static void IN_ReloadControllerMappings_f(void)
+static void IN_ClearActiveControllerState(void)
 {
-	int desired_device;
-	qboolean had_active_controller;
+	joy_active_instanceid = -1;
+	joy_active_device = -1;
+	joy_active_type = GAMEPAD_NONE;
+	joy_active_name[0] = '\0';
+	gyro_present = false;
+	gyro_yaw = 0.f;
+	gyro_pitch = 0.f;
+	gyro_raw_mag = 0.f;
+	gyro_center_frac = 0.f;
+	gyro_center_amount = 0.f;
+	joy_has_rumble = false;
+	joy_has_trigger_rumble = false;
+	joy_has_touchpad = false;
+	joy_power = GAMEPAD_POWER_UNKNOWN;
+	joy_warned_low_power = false;
+	joy_warned_empty_power = false;
+	joy_rumble_test_end = 0.0;
+	gyro_button_pressed = false;
+	updates_countdown = 0;
+	IN_ResetFlickState();
+	IN_ResetJoystickState();
+}
 
-	if (!(SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER))
-	{
-		Con_Printf("Controller subsystem is not initialized\n");
+static void IN_CloseActiveController(qboolean announce)
+{
+	if (!joy_active_controller)
 		return;
-	}
 
-	desired_device = (int)joy_device.value;
-	had_active_controller = joy_active_controller != NULL;
-
-	if (had_active_controller)
-	{
 #if SDL_VERSION_ATLEAST(2, 0, 9)
-		if (joy_has_rumble)
-			SDL_GameControllerRumble(joy_active_controller, 0, 0, 100);
+	if (joy_has_rumble)
+		SDL_GameControllerRumble(joy_active_controller, 0, 0, 100);
+#endif
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+	if (joy_has_trigger_rumble)
+		SDL_GameControllerRumbleTriggers(joy_active_controller, 0, 0, 100);
+#endif
 #if SDL_VERSION_ATLEAST(2, 0, 14)
-		if (SDL_GameControllerHasLED(joy_active_controller))
-			SDL_GameControllerSetLED(joy_active_controller, 0, 0, 0);
+	if (SDL_GameControllerHasLED(joy_active_controller))
+		SDL_GameControllerSetLED(joy_active_controller, 0, 0, 0);
 #endif
-#endif
-		SDL_GameControllerClose(joy_active_controller);
-		joy_active_controller = NULL;
-		joy_active_instanceid = -1;
-		joy_active_device = -1;
-		joy_active_type = GAMEPAD_NONE;
-		joy_active_name[0] = '\0';
-		gyro_present = false;
-		gyro_yaw = 0.f;
-		gyro_pitch = 0.f;
-		gyro_raw_mag = 0.f;
-		gyro_center_frac = 0.f;
-		gyro_center_amount = 0.f;
-		joy_has_rumble = false;
-		gyro_button_pressed = false;
-		updates_countdown = 0;
-		IN_ResetFlickState();
-		IN_ResetJoystickState();
-	}
 
-	IN_LoadControllerMappings();
-	Con_Printf("Controller mappings reloaded\n");
-
-	if (had_active_controller)
-		Cvar_SetValueQuick(&joy_device, desired_device);
-
-	IN_SetupJoystick();
+	if (announce)
+		Con_Printf("Gamepad removed: %s\n", joy_active_name);
+	SDL_GameControllerClose(joy_active_controller);
+	joy_active_controller = NULL;
+	IN_ClearActiveControllerState();
 }
 
-static qboolean IN_UseController(int device_index)
+static void IN_RefreshActiveControllerInfo(void)
 {
-	SDL_GameController *gamecontroller;
 	const char *controllername;
 
-	if (device_index == joy_active_device)
-		return true;
+	if (!joy_active_controller)
+		return;
 
-	if (joy_active_controller)
-	{
-#if SDL_VERSION_ATLEAST(2, 0, 9)
-		if (joy_has_rumble)
-			SDL_GameControllerRumble(joy_active_controller, 0, 0, 100);
-#if SDL_VERSION_ATLEAST(2, 0, 14)
-		if (SDL_GameControllerHasLED(joy_active_controller))
-			SDL_GameControllerSetLED(joy_active_controller, 0, 0, 0);
-#endif
-#endif
-		SDL_GameControllerClose(joy_active_controller);
-
-		if (device_index == -1)
-			Con_Printf("Gamepad removed: %s\n", joy_active_name);
-
-		joy_active_controller = NULL;
-		joy_active_instanceid = -1;
-		joy_active_device = -1;
-		joy_active_type = GAMEPAD_NONE;
-		joy_active_name[0] = '\0';
-		Cvar_SetValueQuick(&joy_device, -1);
-		gyro_present = false;
-		gyro_yaw = 0.f;
-		gyro_pitch = 0.f;
-		gyro_raw_mag = 0.f;
-		gyro_center_frac = 0.f;
-		gyro_center_amount = 0.f;
-		joy_has_rumble = false;
-		gyro_button_pressed = false;
-		updates_countdown = 0;
-		IN_ResetFlickState();
-	}
-
-	IN_ResetJoystickState();
-
-	if (device_index == -1)
-		return true;
-
-	if (device_index < 0 || device_index >= SDL_NumJoysticks())
-		return false;
-
-	if (!SDL_IsGameController(device_index))
-	{
-		const char *joyname = SDL_JoystickNameForIndex(device_index);
-		Con_Warning("joystick missing controller mappings: %s\n",
-			joyname != NULL ? joyname : "NULL");
-		return false;
-	}
-
-	gamecontroller = SDL_GameControllerOpen(device_index);
-	if (!gamecontroller)
-	{
-		Con_Warning("couldn't open gamepad device %d\n", device_index);
-		return false;
-	}
-
-	controllername = SDL_GameControllerName(gamecontroller);
-	if (!controllername)
-		controllername = "[Unknown gamepad]";
-	Con_Printf("Using gamepad: %s\n", controllername);
-
-	joy_active_controller = gamecontroller;
-	joy_active_instanceid = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gamecontroller));
-	joy_active_device = device_index;
-	Cvar_SetValueQuick(&joy_device, device_index);
-	q_strlcpy(joy_active_name, controllername, sizeof(joy_active_name));
+	controllername = SDL_GameControllerName(joy_active_controller);
+	q_strlcpy(joy_active_name, controllername ? controllername : "[Unknown gamepad]",
+		sizeof(joy_active_name));
 
 #if SDL_VERSION_ATLEAST(2, 0, 12)
 	switch (SDL_GameControllerGetType(joy_active_controller))
@@ -2237,14 +2268,132 @@ static qboolean IN_UseController(int device_index)
 	joy_active_type = GAMEPAD_XBOX;
 #endif
 
+	joy_has_touchpad = false;
 #if SDL_VERSION_ATLEAST(2, 0, 14)
 	if (SDL_GameControllerHasLED(joy_active_controller))
 		SDL_GameControllerSetLED(joy_active_controller, 80, 20, 0);
-
+	joy_has_touchpad = SDL_GameControllerGetNumTouchpads(joy_active_controller) > 0;
 	if (SDL_GameControllerHasSensor(joy_active_controller, SDL_SENSOR_GYRO) &&
 		!SDL_GameControllerSetSensorEnabled(joy_active_controller, SDL_SENSOR_GYRO, SDL_TRUE))
 	{
 		gyro_present = true;
+	}
+	else
+#endif
+	{
+		gyro_present = false;
+		gyro_yaw = 0.f;
+		gyro_pitch = 0.f;
+		gyro_raw_mag = 0.f;
+		gyro_center_frac = 0.f;
+		gyro_center_amount = 0.f;
+		updates_countdown = 0;
+	}
+
+	joy_has_rumble = false;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+	joy_has_rumble = SDL_GameControllerHasRumble(joy_active_controller);
+#elif SDL_VERSION_ATLEAST(2, 0, 9)
+	joy_has_rumble = SDL_GameControllerRumble(joy_active_controller, 0, 0, 0) == 0;
+#endif
+	joy_has_trigger_rumble = false;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+	joy_has_trigger_rumble = SDL_GameControllerHasRumbleTriggers(joy_active_controller);
+#endif
+	IN_UpdateGamepadPower(SDL_JoystickCurrentPowerLevel(
+		SDL_GameControllerGetJoystick(joy_active_controller)), joy_enable.value != 0.f);
+}
+
+static void IN_ReloadControllerMappings_f(void)
+{
+	int desired_device;
+	SDL_JoystickID desired_instanceid;
+	qboolean had_active_controller;
+
+	if (!(SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER))
+	{
+		Con_Printf("Controller subsystem is not initialized\n");
+		return;
+	}
+
+	desired_device = (int)joy_device.value;
+	desired_instanceid = joy_active_instanceid;
+	had_active_controller = joy_active_controller != NULL;
+
+	if (had_active_controller)
+		IN_CloseActiveController(false);
+
+	IN_LoadControllerMappings();
+	Con_Printf("Controller mappings reloaded\n");
+
+	if (had_active_controller)
+	{
+		int i, count = SDL_NumJoysticks();
+
+		for (i = 0; i < count; i++)
+		{
+			if (SDL_JoystickGetDeviceInstanceID(i) == desired_instanceid)
+			{
+				desired_device = i;
+				break;
+			}
+		}
+		Cvar_SetValueQuick(&joy_device, desired_device);
+	}
+
+	IN_SetupJoystick();
+}
+
+static qboolean IN_UseController(int device_index)
+{
+	SDL_GameController *gamecontroller;
+
+	if (device_index == joy_active_device && joy_active_controller &&
+		SDL_GameControllerGetAttached(joy_active_controller) &&
+		device_index >= 0 && device_index < SDL_NumJoysticks() &&
+		SDL_JoystickGetDeviceInstanceID(device_index) == joy_active_instanceid)
+	{
+		if ((int)joy_device.value != device_index)
+			Cvar_SetValueQuick(&joy_device, device_index);
+		return true;
+	}
+
+	if (joy_active_controller)
+		IN_CloseActiveController(device_index == -1);
+	else
+		IN_ResetJoystickState();
+
+	if (device_index == -1)
+		return true;
+
+	if (device_index < 0 || device_index >= SDL_NumJoysticks())
+		return false;
+
+	if (!SDL_IsGameController(device_index))
+	{
+		const char *joyname = SDL_JoystickNameForIndex(device_index);
+		Con_Warning("joystick missing controller mappings: %s\n",
+			joyname != NULL ? joyname : "NULL");
+		return false;
+	}
+
+	gamecontroller = SDL_GameControllerOpen(device_index);
+	if (!gamecontroller)
+	{
+		Con_Warning("couldn't open gamepad device %d\n", device_index);
+		return false;
+	}
+
+	joy_active_controller = gamecontroller;
+	joy_active_instanceid = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gamecontroller));
+	joy_active_device = device_index;
+	Cvar_SetValueQuick(&joy_device, device_index);
+	IN_RefreshActiveControllerInfo();
+	Con_Printf("Using gamepad: %s\n", joy_active_name);
+
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+	if (gyro_present)
+	{
 #if SDL_VERSION_ATLEAST(2, 0, 16)
 		Con_Printf("Gyro sensor enabled at %g Hz\n",
 			SDL_GameControllerGetSensorDataRate(joy_active_controller, SDL_SENSOR_GYRO));
@@ -2258,19 +2407,45 @@ static qboolean IN_UseController(int device_index)
 	}
 #endif
 
-#if SDL_VERSION_ATLEAST(2, 0, 9)
-	joy_has_rumble = SDL_GameControllerHasRumble(joy_active_controller);
-#endif
-
 	return true;
 }
 
 static void IN_SetupJoystick(void)
 {
 	int count = SDL_NumJoysticks();
-	int device_index = CLAMP(-1, (int)joy_device.value, count - 1);
+	int device_index;
+	int i;
 
-	IN_UseController(device_index);
+	if (count < 0)
+	{
+		Con_Warning("couldn't enumerate joystick devices: %s\n", SDL_GetError());
+		if (joy_active_controller && !SDL_GameControllerGetAttached(joy_active_controller))
+			IN_UseController(-1);
+		return;
+	}
+
+	device_index = CLAMP(-1, (int)joy_device.value, count - 1);
+
+	if (device_index == -1)
+	{
+		IN_UseController(-1);
+		return;
+	}
+
+	// Device indices include raw joysticks that do not have a controller
+	// mapping. Prefer the configured index, then fall back to the first usable
+	// game controller so an unmapped joystick cannot block plug-and-play.
+	if (SDL_IsGameController(device_index) && IN_UseController(device_index))
+		return;
+	for (i = 0; i < count; i++)
+	{
+		if (i != device_index && SDL_IsGameController(i) && IN_UseController(i))
+			return;
+	}
+
+	// Preserve the existing diagnostic when only an unmapped joystick exists.
+	if (!SDL_IsGameController(device_index))
+		IN_UseController(device_index);
 }
 
 static qboolean IN_RemapJoystick(void)
@@ -2451,14 +2626,27 @@ void IN_Commands (void)
 	joy_axisstate = newaxisstate;
 
 #if SDL_VERSION_ATLEAST(2, 0, 9)
-	if (joy_has_rumble && !IN_IsCalibratingGyro() && Sys_DoubleTime() >= joy_rumble_test_end && joy_rumble.value > 0.f && IN_JoyActive())
+	if ((joy_has_rumble || joy_has_trigger_rumble) && !IN_IsCalibratingGyro() &&
+		Sys_DoubleTime() >= joy_rumble_test_end && IN_JoyActive())
 	{
-		float strength = CLAMP(0.f, joy_rumble.value, 1.f) * 0xffff;
 		float lofreq = GetClampedFraction(S_GetLoFreqLevel(), 0.067f, 0.45f);
 		float hifreq = GetClampedFraction(S_GetHiFreqLevel(), 0.061f, 0.45f);
 
 		hifreq *= hifreq;
-		SDL_GameControllerRumble(joy_active_controller, lofreq * strength, hifreq * strength, 100);
+		if (joy_has_rumble && joy_rumble.value > 0.f)
+		{
+			float strength = CLAMP(0.f, joy_rumble.value, 1.f) * 0xffff;
+			SDL_GameControllerRumble(joy_active_controller, lofreq * strength, hifreq * strength, 100);
+		}
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+		if (joy_has_trigger_rumble && joy_rumble_triggers.value > 0.f)
+		{
+			float strength = CLAMP(0.f, joy_rumble_triggers.value, 1.f) * 0xffff;
+			float level = q_max(lofreq, hifreq);
+			SDL_GameControllerRumbleTriggers(joy_active_controller,
+				level * strength, level * strength, 100);
+		}
+#endif
 	}
 #endif
 #endif
@@ -5318,7 +5506,39 @@ void IN_SendKeyEvents (void)
 			break;
 
 #if defined(USE_SDL2)
+		case SDL_JOYDEVICEADDED:
+			// Raw joysticks share SDL's device-index namespace with gamepads.
+			// Keep the selected gamepad index synchronized even when the changed
+			// device itself has no controller mapping.
+			if (joy_active_controller)
+				IN_RemapJoystick();
+			break;
+		case SDL_JOYDEVICEREMOVED:
+			if (joy_active_controller && !IN_RemapJoystick())
+				IN_SetupJoystick();
+			break;
 #if SDL_VERSION_ATLEAST(2, 0, 14)
+		case SDL_CONTROLLERTOUCHPADDOWN:
+		case SDL_CONTROLLERTOUCHPADMOTION:
+			if (event.ctouchpad.which == joy_active_instanceid &&
+				event.ctouchpad.touchpad == 0 && event.ctouchpad.finger == 0 &&
+				joy_enable.value && joy_touchpad.value && key_dest == key_menu)
+			{
+				SDL_Window *window = (SDL_Window *)VID_GetWindow();
+				int width = 0, height = 0;
+
+				if (window)
+					SDL_GetWindowSize(window, &width, &height);
+				if (width > 0 && height > 0)
+				{
+					M_Mousemove((int)(CLAMP(0.f, event.ctouchpad.x, 1.f) * (width - 1)),
+						(int)(CLAMP(0.f, event.ctouchpad.y, 1.f) * (height - 1)));
+					lastactivetype = KD_GAMEPAD;
+				}
+			}
+			break;
+		case SDL_CONTROLLERTOUCHPADUP:
+			break;
 		case SDL_CONTROLLERSENSORUPDATE:
 			if (event.csensor.sensor == SDL_SENSOR_GYRO && event.csensor.which == joy_active_instanceid)
 			{
@@ -5339,15 +5559,32 @@ void IN_SendKeyEvents (void)
 			}
 			break;
 #endif
+#if SDL_VERSION_ATLEAST(2, 24, 0)
+		case SDL_JOYBATTERYUPDATED:
+			if (event.jbattery.which == joy_active_instanceid)
+				IN_UpdateGamepadPower(event.jbattery.level, joy_enable.value != 0.f);
+			break;
+#endif
 		case SDL_CONTROLLERDEVICEADDED:
-			if (!IN_RemapJoystick())
-				IN_UseController(event.cdevice.which);
+			if (!IN_RemapJoystick() && (int)joy_device.value >= 0)
+				IN_SetupJoystick();
 			break;
 		case SDL_CONTROLLERDEVICEREMOVED:
-		case SDL_CONTROLLERDEVICEREMAPPED:
 			if (!IN_RemapJoystick())
 				IN_SetupJoystick();
 			break;
+		case SDL_CONTROLLERDEVICEREMAPPED:
+			if (!IN_RemapJoystick())
+				IN_SetupJoystick();
+			else if (event.cdevice.which == joy_active_instanceid)
+				IN_RefreshActiveControllerInfo();
+			break;
+#if SDL_VERSION_ATLEAST(2, 30, 0)
+		case SDL_CONTROLLERSTEAMHANDLEUPDATED:
+			if (event.cdevice.which == joy_active_instanceid)
+				IN_RefreshActiveControllerInfo();
+			break;
+#endif
 #if SDL_VERSION_ATLEAST(2, 0, 5)
 		case SDL_DROPBEGIN:
 			IN_ClearDropBatch();
