@@ -48,6 +48,7 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 | libFLAC            | 1.5.0          | `mingw-w64-{x86_64,i686}-flac-1.5.0`       |
 | libopus            | 1.6.1          | `mingw-w64-{x86_64,i686}-opus-1.6.1`       |
 | libopusfile        | 0.12           | `mingw-w64-{x86_64,i686}-opusfile-0.12`    |
+| libxmp             | 4.7.1          | `mingw-w64-{x86_64,i686}-libxmp-4.7.1`     |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
 | libwinpthread      | 12.0.0.r747    | `mingw-w64-{x86_64,i686}-libwinpthread-git`|
 | libgcc (x86 only)  | gcc 16.1.0     | `mingw-w64-i686-gcc-libs`                  |
@@ -56,6 +57,13 @@ Note: modern libopus/libopusfile also import `libgcc_s_dw2-1.dll` on x86 — the
 same DLL FLAC needs, so no additional runtime file. `libopusfile.dll` needs
 `libogg-0.dll` + `libopus-0.dll`; it does **not** need `libopusurl-0.dll` (HTTP
 streaming is unused, so that DLL is intentionally not vendored).
+
+Note: libxmp 4.7.x also picked up the x86 `libgcc_s_dw2-1.dll` dependency (4.6.x
+was self-contained), again already covered by the FLAC vendoring. Unlike opus,
+libxmp's version is reported from the `XMP_VERSION` macro in `include/xmp.h`, so
+that header **must** be refreshed alongside the DLL (host.c/menu.c pick it up
+automatically). The macOS `xmp.h` is a separate platform-specific copy and
+should only be updated alongside the macOS libxmp build, not to match Windows.
 
 The Windows import libraries (`libFLAC.dll.a` for MinGW, `libFLAC.lib` for MSVC)
 target `libFLAC.dll` and were generated with `dlltool` from the shipped DLL.
