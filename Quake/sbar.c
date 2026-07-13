@@ -1022,15 +1022,20 @@ void Sbar_SoloScoreboard (void)
 		}
 		else if (cl.maxclients > 1)
 		{
+			char display_address[MAX_SERVER_ADDRESS_LEN];
 			char qfylwdot[2] = { 133, '\0' }; // woods  -- quake font yellow dot
+			NET_HostnameCache_FormatDisplay(lastmphost, net_hostport,
+				display_address, sizeof(display_address));
 
 			if (cl.levelname[0] && Q_strcmp(cl.levelname, cl.mapname) != 0)
 			{
-				q_snprintf(str, sizeof(str), "%s (%s) %s %s ", cl.levelname, cl.mapname, qfylwdot, lastmphost);
+				q_snprintf(str, sizeof(str), "%s (%s) %s %s ", cl.levelname,
+					cl.mapname, qfylwdot, display_address);
 				maskparens = true;
 			}
 			else
-				q_snprintf(str, sizeof(str), "%s %s %s ", cl.mapname, qfylwdot, lastmphost);
+				q_snprintf(str, sizeof(str), "%s %s %s ", cl.mapname,
+					qfylwdot, display_address);
 		}
 		else
 		{

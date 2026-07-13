@@ -34,6 +34,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define	NET_NAMELEN		128	//Spike: extended this for dtls fingerprint info etc.
 
+#include "net_address.h"
+#include "net_hostname_cache.h"
+
 #define NET_MAXMESSAGE		65535	/* ericw -- was 32000 */
 
 extern int		DEFAULTnet_hostport;
@@ -64,6 +67,7 @@ const char *NET_ResolveCacheName(const char *host);
 // maps a cached server display name to its canonical connect string when available
 
 double NET_QSocketGetTime (const struct qsocket_s *sock);
+const char *NET_QSocketGetResolvedAddressString (const struct qsocket_s *sock);
 const char *NET_QSocketGetTrueAddressString (const struct qsocket_s *sock);
 const char *NET_QSocketGetMaskedAddressString (const struct qsocket_s *sock);
 const char *NET_QSocketGetMaskedAddressStringForDisplay (const struct qsocket_s *sock);

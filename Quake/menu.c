@@ -75,9 +75,6 @@ void (*vid_menumousefn)(int cx, int cy); // woods #mousemenu
 enum m_state_e m_state;
 int m_mousex, m_mousey; // woods #mousemenu
 
-const char* ResolveHostname(const char* hostname); // woods #serversmenu
-extern qboolean Valid_IP(const char* ip_str); // woods #serversmenu
-extern qboolean Valid_Domain(const char* domain_str); // woods #serversmenu
 extern cvar_t net_master_ignore;
 
 void M_Menu_Main_f (void);
@@ -7655,9 +7652,6 @@ void M_MultiPlayer_Draw (void)
 	M_DrawTransPic (72, 32, Draw_CachePic ("gfx/mp_menu.lmp") );
 
 	f = (int)(realtime * 10)%6;
-	i = 24;
-	if (strlen(lastmphost) > i)
-		i = (strlen(lastmphost));
 
 	// Draw cursor - use rotating Q for base items, rotated arrow for pinned items
 	if (m_multiplayer_cursor < MULTIPLAYER_BASE_ITEMS)
@@ -7678,23 +7672,35 @@ void M_MultiPlayer_Draw (void)
 			M_Print(96, y, pinned[i].alias);
 	}
 
-        // Draw "currently connected to" below pinned bookmarks
-        if (cl.maxclients > 1 && cls.state == ca_connected && !cls.demoplayback)
-        {
-                int conn_y = M_MultiPlayer_FirstPinnedY() + pinned_count * MULTIPLAYER_PINNED_SPACING + MULTIPLAYER_PINNED_OFFSET_Y;
-                int box_width = strlen(lastmphost);
-                if (box_width < 24)
-                        box_width = 24;
-                f = (320 - 26 * 8) / 2;
-                M_DrawTextBox(f, conn_y, box_width, 2);
-                f += 8;
-                M_Print(f, conn_y + 8, "currently connected to:");
+	// Draw "currently connected to" below pinned bookmarks
+	if (cl.maxclients > 1 && cls.state == ca_connected && !cls.demoplayback)
+	{
+		char display_address[MAX_SERVER_ADDRESS_LEN];
+		char display_line[39];
+		int conn_y = M_MultiPlayer_FirstPinnedY() +
+			pinned_count * MULTIPLAYER_PINNED_SPACING + MULTIPLAYER_PINNED_OFFSET_Y;
+		int box_width;
 
-                if (realtime - cl.last_received_message > 5.0)
-                        M_PrintRGBA(f, conn_y + 16, lastmphost, CL_PLColours_Parse("0xffffff"), 0.2f, false);
-                else
-                        M_PrintWhite(f, conn_y + 16, lastmphost);
-        }
+		NET_HostnameCache_FormatDisplay(lastmphost, net_hostport,
+			display_address, sizeof(display_address));
+		if (strlen(display_address) >= sizeof(display_line))
+			q_snprintf(display_line, sizeof(display_line), "%.35s...", display_address);
+		else
+			q_strlcpy(display_line, display_address, sizeof(display_line));
+		box_width = strlen(display_line);
+		if (box_width < 24)
+			box_width = 24;
+		f = (320 - (box_width + 2) * 8) / 2;
+		M_DrawTextBox(f, conn_y, box_width, 2);
+		f += 8;
+		M_Print(f, conn_y + 8, "currently connected to:");
+
+		if (realtime - cl.last_received_message > 5.0)
+			M_PrintRGBA(f, conn_y + 16, display_line,
+				CL_PLColours_Parse("0xffffff"), 0.2f, false);
+		else
+			M_PrintWhite(f, conn_y + 16, display_line);
+	}
 
 	if (ipxAvailable || ipv4Available || ipv6Available)
 		return;
@@ -26667,8 +26673,7 @@ History Menu
 
 typedef struct
 {
-	const char* name;
-	qboolean	active;
+	char		connect_address[MAX_SERVER_ADDRESS_LEN];
 } historyitem_t;
 
 static struct
@@ -26685,23 +26690,23 @@ static struct
 
 static qboolean M_History_IsActive(const char* server)
 {
-	return cls.state == ca_connected && cls.signon == SIGNONS && !strcmp(lastmphost, server);
+	return cls.state == ca_connected && cls.signon == SIGNONS &&
+		NET_HostnameCache_AddressesMatch(lastmphost, server, net_hostport);
 }
 
 static void M_History_Add(const char* name)
 {
 	historyitem_t history;
-		history.name = name;
-		history.active = M_History_IsActive(name);
+	qboolean active;
+	q_strlcpy(history.connect_address, name, sizeof(history.connect_address));
+	active = M_History_IsActive(name);
 
-		if (history.active && historymenu.list.cursor == -1)
-			historymenu.list.cursor = historymenu.list.numitems;
+	if (active && historymenu.list.cursor == -1)
+		historymenu.list.cursor = historymenu.list.numitems;
 
-		// Ensure there's enough space for one more item
-		VEC_PUSH(historymenu.items, history);
-
-		historymenu.items[historymenu.list.numitems] = history;
-		historymenu.list.numitems++;
+	// Ensure there's enough space for one more item
+	VEC_PUSH(historymenu.items, history);
+	historymenu.list.numitems++;
 }
 
 static void M_History_Init(void)
@@ -26767,52 +26772,18 @@ void M_History_Draw(void)
 	for (i = 0; i < numvis; i++)
 	{
 		int idx = i + firstvis;
+		char display_address[MAX_SERVER_ADDRESS_LEN];
 		qboolean selected = (idx == historymenu.list.cursor);
+		qboolean active = M_History_IsActive(historymenu.items[idx].connect_address);
+		NET_HostnameCache_FormatDisplay(historymenu.items[idx].connect_address,
+			net_hostport, display_address, sizeof(display_address));
 
-		historyitem_t history;
-		history.active = false;
-
-		const char* lastmphostWithoutPort = COM_StripPort(lastmphost);
-		const char* HistoryEntryWithoutPort = COM_StripPort(historymenu.items[idx].name);
-		const char* ResolvedLastmphostWithoutPort = COM_StripPort(ResolveHostname(lastmphost));
-
-		char portStr[10];
-		q_snprintf(portStr, sizeof(portStr), "%d", DEFAULTnet_hostport);
-
-		if (cls.state == ca_connected && lanConfig_port == DEFAULTnet_hostport) // highlight if connected to a server in the list
-		{
-			qboolean hasNonStandardPort = (strstr(lastmphost, ":") && !strstr(lastmphost, portStr)) ||
-				(strstr(historymenu.items[idx].name, ":") && !strstr(historymenu.items[idx].name, portStr));
-			
-			if (hasNonStandardPort) // ports > 26000
-			{
-				if (!strcmp(historymenu.items[idx].name, lastmphost)) // exact match
-					history.active = true;
-
-				if (!strcmp(historymenu.items[idx].name, ResolveHostname(lastmphost))) // exact match but convert name to ip
-					history.active = true;
-			}
-			else
-			{
-				if (!strcmp(HistoryEntryWithoutPort, lastmphostWithoutPort)) // treat 26000 and blank portthe same
-					history.active = true;
-
-				if (!strcmp(HistoryEntryWithoutPort, ResolvedLastmphostWithoutPort)) // convert name to ip
-					history.active = true;
-			}
-		}
-		else
-			history.active = false;
-
-		M_PrintScroll(x, y + i * 8, (cols - 2) * 8, historymenu.items[idx].name, selected ? historymenu.ticker.scroll_time : 0.0, !history.active);
+		M_PrintScroll(x, y + i * 8, (cols - 2) * 8,
+			display_address,
+			selected ? historymenu.ticker.scroll_time : 0.0, !active);
 
 		if (selected)
 			M_DrawCharacter(x - 8, y + i * 8, 12 + ((int)(realtime * 4) & 1));
-
-		if (lastmphostWithoutPort) free((void*)lastmphostWithoutPort);
-		if (HistoryEntryWithoutPort) free((void*)HistoryEntryWithoutPort);
-		if (ResolvedLastmphostWithoutPort) free((void*)ResolvedLastmphostWithoutPort);
-
 	}
 
 	if (M_List_GetOverflow(&historymenu.list) > 0)
@@ -26829,7 +26800,11 @@ void M_History_Draw(void)
 
 qboolean M_History_Match(int index, char initial)
 {
-	return q_tolower(historymenu.items[index].name[0]) == initial;
+	char display_address[MAX_SERVER_ADDRESS_LEN];
+
+	NET_HostnameCache_FormatDisplay(historymenu.items[index].connect_address,
+		net_hostport, display_address, sizeof(display_address));
+	return q_tolower(display_address[0]) == initial;
 }
 
 void M_History_Key(int key)
@@ -26878,7 +26853,8 @@ void M_History_Key(int key)
 		m_state = m_none;
 		IN_UpdateGrabs();
 		CL_MarkNextConnectFromMenu();
-		Cbuf_AddText(va("connect \"%s\"\n", historymenu.items[historymenu.list.cursor].name));
+		Cbuf_AddText(va("connect \"%s\"\n",
+			historymenu.items[historymenu.list.cursor].connect_address));
 		break;
 
 	case K_MOUSE1: // woods #mousemenu
@@ -26893,7 +26869,7 @@ void M_History_Key(int key)
 	case K_BACKSPACE:
 		if (historymenu.items != NULL && keydown[K_CTRL])
 		{
-			FileList_Subtract(historymenu.items[historymenu.list.cursor].name, &serverlist);
+			FileList_Subtract(historymenu.items[historymenu.list.cursor].connect_address, &serverlist);
 			Write_List(serverlist, SERVERLIST);
 			M_Menu_History_f();
 		}
@@ -26957,7 +26933,8 @@ static struct
 
 static qboolean M_Bookmarks_IsActive(const char* server)
 {
-	return cls.state == ca_connected && cls.signon == SIGNONS && !strcmp(lastmphost, server);
+	return cls.state == ca_connected && cls.signon == SIGNONS &&
+		NET_HostnameCache_AddressesMatch(lastmphost, server, net_hostport);
 }
 
 static void M_Bookmarks_Add(const char* name, const char* data)
@@ -27054,43 +27031,11 @@ void M_Bookmarks_Draw(void)
 	{
 		int idx = i + firstvis;
 		qboolean selected = (idx == bookmarksmenu.list.cursor);
+		qboolean active = M_Bookmarks_IsActive(bookmarksmenu.items[idx].name);
 
-		bookmarksitem_t bookmarks;
-		bookmarks.active = false;
-
-		const char* lastmphostWithoutPort = COM_StripPort(lastmphost);
-		const char* HistoryEntryWithoutPort = COM_StripPort(bookmarksmenu.items[idx].name);
-		const char* ResolvedLastmphostWithoutPort = COM_StripPort(ResolveHostname(lastmphost));
-
-		char portStr[10];
-		q_snprintf(portStr, sizeof(portStr), "%d", DEFAULTnet_hostport);
-
-		if (cls.state == ca_connected && lanConfig_port == DEFAULTnet_hostport) // highlight if connected to a server in the list
-		{
-			qboolean hasNonStandardPort = (strstr(lastmphost, ":") && !strstr(lastmphost, portStr)) ||
-				(strstr(bookmarksmenu.items[idx].name, ":") && !strstr(bookmarksmenu.items[idx].name, portStr));
-
-			if (hasNonStandardPort) // ports > 26000
-			{
-				if (!strcmp(bookmarksmenu.items[idx].name, lastmphost)) // exact match
-					bookmarks.active = true;
-
-				if (!strcmp(bookmarksmenu.items[idx].name, ResolveHostname(lastmphost))) // exact match but convert name to ip
-					bookmarks.active = true;
-			}
-			else
-			{
-				if (!strcmp(HistoryEntryWithoutPort, lastmphostWithoutPort)) // treat 26000 and blank portthe same
-					bookmarks.active = true;
-
-				if (!strcmp(HistoryEntryWithoutPort, ResolvedLastmphostWithoutPort)) // convert name to ip
-					bookmarks.active = true;
-			}
-		}
-		else
-			bookmarks.active = false;
-
-		M_PrintScroll(x, y + i * 8, (cols - 2) * 8, bookmarksmenu.items[idx].alias, selected ? bookmarksmenu.ticker.scroll_time : 0.0, !bookmarks.active);
+		M_PrintScroll(x, y + i * 8, (cols - 2) * 8,
+			bookmarksmenu.items[idx].alias,
+			selected ? bookmarksmenu.ticker.scroll_time : 0.0, !active);
 
 		// Show pin indicator for pinned bookmarks
 		if (bookmarksmenu.items[idx].pinned)
@@ -27103,15 +27048,14 @@ void M_Bookmarks_Draw(void)
 		if (selected)
 			M_DrawCharacter(x - 8, y + i * 8, 12 + ((int)(realtime * 4) & 1));
 
+		char serverAddress[MAX_SERVER_ADDRESS_LEN];
 		char serverStr[40];
-		q_snprintf(serverStr, sizeof(serverStr), "%-34.34s", bookmarksmenu.items[idx].name);
+		NET_HostnameCache_FormatDisplay(bookmarksmenu.items[idx].name, net_hostport,
+			serverAddress, sizeof(serverAddress));
+		q_snprintf(serverStr, sizeof(serverStr), "%-34.34s", serverAddress);
 
 		if (selected)
 			M_PrintWhite(x, y + bookmarksmenu.list.viewsize * 8 + 12, serverStr);
-
-		if (lastmphostWithoutPort) free((void*)lastmphostWithoutPort);
-		if (HistoryEntryWithoutPort) free((void*)HistoryEntryWithoutPort);
-		if (ResolvedLastmphostWithoutPort) free((void*)ResolvedLastmphostWithoutPort);
 
 	}
 
@@ -29053,6 +28997,7 @@ static struct {
 	int sort_mode;
 	qboolean sort_descending;
 	double copy_message_until;
+	unsigned int hostname_cache_generation;
 } serversmenu;
 
 enum {
@@ -29425,123 +29370,10 @@ static void ServerList_GetHostOnly(const char* address, char* out, size_t outsiz
 	ServerList_CopyTrimmedToken(start, end - start, out, outsize);
 }
 
-typedef struct
-{
-	char host[256];
-	int port;
-} serverlistaddress_t;
-
-static qboolean ServerList_ParsePortText(const char* port, const char* end, int* out)
-{
-	long value = 0;
-
-	if (!port || !*port)
-		return false;
-
-	if (!end)
-		end = port + strlen(port);
-
-	if (port >= end)
-		return false;
-
-	while (port < end)
-	{
-		if (!q_isdigit((unsigned char)*port))
-			return false;
-		value = value * 10 + (*port - '0');
-		if (value > 65535)
-			return false;
-		port++;
-	}
-
-	if (out)
-		*out = (int)value;
-	return true;
-}
-
-static qboolean ServerList_ParseAddress(const char* address, serverlistaddress_t* parsed)
-{
-	const char* host_start;
-	const char* host_end;
-	const char* address_end;
-	const char* port_start = NULL;
-	const char* port_end = NULL;
-	const char* last_colon;
-	const char* first_colon;
-	size_t host_len;
-
-	if (!parsed)
-		return false;
-
-	memset(parsed, 0, sizeof(*parsed));
-	parsed->port = DEFAULTnet_hostport;
-
-	if (!address || !*address)
-		return false;
-
-	while (*address == ' ' || *address == '\t')
-		address++;
-
-	host_start = address;
-	host_end = address + strlen(address);
-	while (host_end > host_start &&
-		(host_end[-1] == ' ' || host_end[-1] == '\t'))
-		host_end--;
-	address_end = host_end;
-
-	if (host_start >= host_end)
-		return false;
-
-	if (*host_start == '[')
-	{
-		const char* bracket = memchr(host_start, ']', host_end - host_start);
-		const char* after;
-
-		if (!bracket || bracket == host_start + 1)
-			return false;
-
-		after = bracket + 1;
-		host_start++;
-		host_end = bracket;
-		if (after < address_end)
-		{
-			if (*after != ':')
-				return false;
-			port_start = after + 1;
-			port_end = address_end;
-		}
-	}
-	else
-	{
-		first_colon = memchr(host_start, ':', host_end - host_start);
-		last_colon = first_colon ? memchr(first_colon + 1, ':', host_end - first_colon - 1) : NULL;
-		if (first_colon && !last_colon)
-		{
-			port_start = first_colon + 1;
-			port_end = address_end;
-			host_end = first_colon;
-		}
-	}
-
-	host_len = host_end - host_start;
-	if (host_len == 0)
-		return false;
-	if (host_len >= sizeof(parsed->host))
-		return false;
-
-	memcpy(parsed->host, host_start, host_len);
-	parsed->host[host_len] = '\0';
-
-	if (port_start && !ServerList_ParsePortText(port_start, port_end, &parsed->port))
-		return false;
-
-	return parsed->host[0] != '\0';
-}
-
 static qboolean ServerList_AddressMatches(const char* a, const char* b)
 {
-	serverlistaddress_t parsed_a;
-	serverlistaddress_t parsed_b;
+	net_endpoint_t parsed_a;
+	net_endpoint_t parsed_b;
 
 	if (!a || !b || !*a || !*b)
 		return false;
@@ -29549,12 +29381,11 @@ static qboolean ServerList_AddressMatches(const char* a, const char* b)
 	if (!q_strcasecmp(a, b))
 		return true;
 
-	if (!ServerList_ParseAddress(a, &parsed_a) ||
-		!ServerList_ParseAddress(b, &parsed_b))
+	if (!NET_ParseEndpoint(a, DEFAULTnet_hostport, &parsed_a) ||
+		!NET_ParseEndpoint(b, DEFAULTnet_hostport, &parsed_b))
 		return false;
 
-	return !q_strcasecmp(parsed_a.host, parsed_b.host) &&
-		parsed_a.port == parsed_b.port;
+	return NET_EndpointEqual(&parsed_a, &parsed_b);
 }
 
 static qboolean ServerList_IsIgnored(const char* name, const char* ip)
@@ -29632,7 +29463,7 @@ static qboolean ServerList_CreatePinnedBookmarkItem(const pinnedbookmark_t* book
 	item->pinned_bookmark = true;
 	item->pinned_rank = rank;
 	item->known_available = (cls.state == ca_connected &&
-		ServerList_AddressMatches(bookmark->name, lastmphost));
+		NET_HostnameCache_AddressesMatch(bookmark->name, lastmphost, net_hostport));
 	item->ping_tested = false;
 
 	if (!item->name || !item->ip || !item->map)
@@ -31408,11 +31239,15 @@ static void M_ServerList_RefilterWithSelection(int selectedActual)
             continue;
 
         const servertitem_t* server = &serversmenu.items[actual_idx];
+		char display_address[MAX_SERVER_ADDRESS_LEN];
+		NET_HostnameCache_FormatDisplay(server->ip, net_hostport,
+			display_address, sizeof(display_address));
         
         if (serversmenu.list.search.len == 0 ||
             q_strcasestr(server->name, serversmenu.list.search.text) ||
             q_strcasestr(server->map, serversmenu.list.search.text) ||
-            q_strcasestr(server->ip, serversmenu.list.search.text))
+			q_strcasestr(server->ip, serversmenu.list.search.text) ||
+			q_strcasestr(display_address, serversmenu.list.search.text))
         {
             if (actual_idx == selectedActual)
                 selectedDisplay = (int)VEC_SIZE(serversmenu.filtered_indices);
@@ -31674,6 +31509,7 @@ void M_ServerList_Draw (void)
 	int x, y, i, cols;
 	int firstvis, numvis;
 	int list_rows, item_viewsize, pinned_count;
+	unsigned int hostname_cache_generation;
 	qboolean separator_visible;
 	qboolean copy_message_active;
 	const char* title;
@@ -31687,6 +31523,13 @@ void M_ServerList_Draw (void)
 	copy_message_active = (realtime < serversmenu.copy_message_until);
 	if (!copy_message_active)
 		serversmenu.copy_message_until = 0.0;
+	hostname_cache_generation = NET_HostnameCache_Generation();
+	if (hostname_cache_generation != serversmenu.hostname_cache_generation)
+	{
+		serversmenu.hostname_cache_generation = hostname_cache_generation;
+		if (serversmenu.list.search.len > 0)
+			M_ServerList_Refilter();
+	}
 
 	switch (searchLastScope)
 	{
@@ -31771,15 +31614,9 @@ void M_ServerList_Draw (void)
 
 	                qboolean isActive = false;
 
-	                if (cls.state == ca_connected) // highlight if connected to a server in the list
-	                {
-	                        if (ServerList_AddressMatches(lastmphost, server.ip))
-	                                isActive = true;
-	                        else if (Valid_Domain(lastmphost))
-	                                isActive = ServerList_AddressMatches(ResolveHostname(lastmphost), server.ip);
-	                        else if (Valid_IP(lastmphost))
-	                                isActive = ServerList_AddressMatches(lastmphost, server.ip);
-	                }
+	                if (cls.state == ca_connected)
+						isActive = NET_HostnameCache_AddressesMatch(lastmphost,
+							server.ip, net_hostport);
 
 	                char pingStrBuffer[8];
 	                char* pingStrToPrint = pingStrBuffer;
@@ -31945,8 +31782,10 @@ void M_ServerList_Draw (void)
                                         M_PrintWhite(x, current_y, line_buffer);
                                 }
                         }
-                        else
+	                        else
 	                        {
+					char displayAddress[MAX_SERVER_ADDRESS_LEN];
+					qboolean friendly;
 	                                char infoStr[40];
 	                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server.name);
 					if (server.unavailable_bookmark)
@@ -31954,12 +31793,24 @@ void M_ServerList_Draw (void)
 							SERVERLIST_UNAVAILABLE_ALPHA, false);
 					else
 						M_PrintWhite(x, info_y, infoStr);
-	                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server.ip);
+					friendly = NET_HostnameCache_FormatDisplay(server.ip,
+						net_hostport, displayAddress, sizeof(displayAddress));
+	                                q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", displayAddress);
 					if (server.unavailable_bookmark)
 						M_PrintRGBA(x, info_y + 8, infoStr, CL_PLColours_Parse("0xffffff"),
 							SERVERLIST_UNAVAILABLE_ALPHA, false);
 					else
 						M_PrintWhite(x, info_y + 8, infoStr);
+					if (friendly && serversmenu.list.search.len == 0)
+					{
+						q_snprintf(infoStr, sizeof(infoStr), "%-34.34s", server.ip);
+						if (server.unavailable_bookmark)
+							M_PrintRGBA(x, info_y + 16, infoStr,
+								CL_PLColours_Parse("0xffffff"),
+								SERVERLIST_UNAVAILABLE_ALPHA, false);
+						else
+							M_PrintWhite(x, info_y + 16, infoStr);
+					}
 	                        }
                 }
         }

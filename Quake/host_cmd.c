@@ -40,8 +40,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <ctype.h> // woods #udplist
 #include <errno.h>
 
-#define MAX_SERVER_ADDRESS_LEN 256 // woods #udplist
-
 extern cvar_t	pausable;
 extern cvar_t	nomonsters; // woods #nomonsters (ironwail)
 
@@ -57,8 +55,6 @@ cvar_t sv_adminnick = {"sv_adminnick", "server admin", CVAR_ARCHIVE}; // woods (
 cvar_t sv_modvote = {"sv_modvote", "0", CVAR_ARCHIVE | CVAR_SERVERINFO};
 extern char lastconnected[3]; // woods -- #identify+
 extern qboolean ctrlpressed; // woods #saymodifier
-extern qboolean Valid_IP(const char* ip_str); // woods #icmp
-extern qboolean Valid_Domain(const char* domain_str); // woods #icmp
 
 void CL_ManualDownload_f (const char* filename); // woods #manualdownload
 extern char unfun[129];
@@ -2205,7 +2201,6 @@ void ServerList_Rebuild(void)
 
 void ServerList_Init(void)
 {
-	int i;
 	char	name[MAX_OSPATH];
 
 	q_snprintf(name, sizeof(name), "%s/id1", com_basedir); //  make an id1 folder if it doesnt exist already #smartafk
@@ -2222,15 +2217,18 @@ void ServerList_Init(void)
 
 	char buffer[256];
 	while (fgets(buffer, sizeof(buffer), file) != NULL) {
+		char *start = buffer;
+		char *end;
 
-		for (i = 0;; i++) {
-			if (buffer[i] == '\n') {
-				buffer[i] = '\0';
-				break;
-			}
-		}
-
-		FileList_Add(buffer, NULL, &serverlist); // woods #demolistsort add arg
+		buffer[strcspn(buffer, "\r\n")] = '\0';
+		while (*start && q_isspace((unsigned char)*start))
+			start++;
+		end = start + strlen(start);
+		while (end > start && q_isspace((unsigned char)end[-1]))
+			*--end = '\0';
+		if (!*start)
+			continue;
+		FileList_Add(start, NULL, &serverlist); // woods #demolistsort add arg
 	}
 	fclose(file);
 }
@@ -6715,39 +6713,13 @@ static void Host_Resurrect_f (void)
 
 /*
 ==================
-Host_ParsePort -- woods #connectfilter
-==================
-*/
-static qboolean Host_ParsePort(const char* text, int* portout)
-{
-	long port;
-	char* end;
-
-	if (!text || !*text || !portout)
-		return false;
-
-	for (const char* p = text; *p; ++p)
-		if (!q_isdigit((unsigned char)*p))
-			return false;
-
-	errno = 0;
-	port = strtol(text, &end, 10);
-	if (errno || end == text || *end || port <= 0 || port > 65535)
-		return false;
-
-	*portout = (int)port;
-	return true;
-}
-
-/*
-==================
 ParseServerAddress -- woods #udplist
 ==================
 */
 static qboolean ParseServerAddress(const char* input, char* hostbuf, size_t hostbufsize, int* portout)
 {
+	net_endpoint_t endpoint;
 	int default_port;
-	const char* portpart;
 
 	if (!input || !*input || !hostbuf || !hostbufsize || !portout)
 		return false;
@@ -6755,99 +6727,16 @@ static qboolean ParseServerAddress(const char* input, char* hostbuf, size_t host
 	default_port = (net_hostport > 0 && net_hostport <= 65535) ? net_hostport : DEFAULTnet_hostport;
 	if (default_port <= 0 || default_port > 65535)
 		default_port = 26000;
-	*portout = default_port;
-
-	if (strlen(input) >= MAX_SERVER_ADDRESS_LEN)
+	/* Diagnostic commands reject malformed endpoints before invoking the resolver. */
+	if (!NET_ParseEndpoint(input, default_port, &endpoint))
+		return false;
+	if (strlen(endpoint.host) + 1 > hostbufsize)
 		return false;
 
-	if (*input == '[')
-	{
-		const char* end = strchr(input, ']');
-		size_t len;
-
-		if (!end)
-			return false;
-
-		if (end <= input + 1)
-			return false;
-
-		len = (size_t)(end - (input + 1));
-		if (len + 1 > hostbufsize)
-			return false;
-
-		memcpy(hostbuf, input + 1, len);
-		hostbuf[len] = '\0';
-
-		portpart = end + 1;
-		if (*portpart == '\0')
-			return true;
-
-		if (*portpart != ':')
-			return false;
-
-		portpart++;
-		if (!*portpart)
-			return false;
-
-		if (!Host_ParsePort(portpart, portout))
-			return false;
-
-		return true;
-	}
-	else
-	{
-		int colon_count = 0;
-		const char* last_colon = NULL;
-
-		for (const char* p = input; *p; ++p)
-		{
-			if (*p == ':')
-			{
-				colon_count++;
-				last_colon = p;
-			}
-		}
-
-		if (colon_count == 1 && last_colon)
-		{
-			size_t len;
-
-			portpart = last_colon + 1;
-			if (!*portpart)
-				return false;
-
-			if (!Host_ParsePort(portpart, portout))
-				return false;
-
-			len = (size_t)(last_colon - input);
-			if (len == 0 || len + 1 > hostbufsize)
-				return false;
-
-			memcpy(hostbuf, input, len);
-			hostbuf[len] = '\0';
-			return true;
-		}
-
-		if (colon_count > 1)
-		{
-			size_t len = strlen(input);
-			if (len + 1 > hostbufsize)
-				return false;
-
-			q_strlcpy(hostbuf, input, hostbufsize);
-			return true;
-	}
-
-		{
-			size_t len = strlen(input);
-			if (len + 1 > hostbufsize)
-				return false;
-
-			q_strlcpy(hostbuf, input, hostbufsize);
-			return true;
-		}
-		}
-	}
+	q_strlcpy(hostbuf, endpoint.host, hostbufsize);
+	*portout = endpoint.port;
+	return true;
+}
 
 static size_t BuildNetQuakePingQuery(unsigned char* buffer, size_t bufsize) // woods #udplist
 {
@@ -8095,152 +7984,6 @@ retry:
 		if (cls.state == ca_disconnected)//if a server crash; can create an endless loop error here CLIENTS arent disconnected just in limbo. :(
 			goto retry;
 	}
-}
-
-static qboolean Host_ValidationHost(const char* address, char* host, size_t hostsize)
-{
-	int port;
-
-	if (!ParseServerAddress(address, host, hostsize, &port))
-		return false;
-	if (strlen(host) >= NET_NAMELEN)
-		return false;
-	return host[0] != '\0';
-}
-
-static qboolean Host_ValidIPv4Literal(const char* host)
-{
-	const char* p = host;
-
-	for (int octet = 0; octet < 4; ++octet)
-	{
-		int value = 0;
-		int digits = 0;
-
-		if (!q_isdigit((unsigned char)*p))
-			return false;
-
-		while (q_isdigit((unsigned char)*p))
-		{
-			value = value * 10 + (*p - '0');
-			if (++digits > 3 || value > 255)
-				return false;
-			p++;
-		}
-
-		if (octet < 3)
-		{
-			if (*p != '.')
-				return false;
-			p++;
-		}
-		else if (*p)
-			return false;
-	}
-
-	return true;
-}
-
-static qboolean Host_ValidIPv6Literal(const char* host)
-{
-	struct addrinfo hints;
-	struct addrinfo* result = NULL;
-	int ret;
-
-	if (!strchr(host, ':'))
-		return false;
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET6;
-	hints.ai_socktype = SOCK_DGRAM;
-#ifdef AI_NUMERICHOST
-	hints.ai_flags = AI_NUMERICHOST;
-#endif
-
-	ret = getaddrinfo(host, NULL, &hints, &result);
-	if (result)
-		freeaddrinfo(result);
-
-	return ret == 0;
-}
-
-qboolean Valid_IP(const char* ip_str) // woods #connectfilter
-{
-	char host[MAX_SERVER_ADDRESS_LEN];
-
-	if (!Host_ValidationHost(ip_str, host, sizeof(host)))
-		return false;
-
-	return Host_ValidIPv4Literal(host) || Host_ValidIPv6Literal(host);
-}
-
-static qboolean Host_ValidDomainName(const char* host)
-{
-	size_t len;
-	size_t label_len = 0;
-	const char* label_start = host;
-	qboolean saw_dot = false;
-	qboolean label_has_alpha = false;
-	qboolean has_alpha = false;
-
-	if (!host || !*host)
-		return false;
-
-	len = strlen(host);
-	if (host[len - 1] == '.')
-	{
-		if (len == 1)
-			return false;
-		len--;
-	}
-	if (len > 253)
-		return false;
-
-	for (size_t i = 0; i <= len; ++i)
-	{
-		const char c = (i == len) ? '\0' : host[i];
-
-		if (i == len || c == '.')
-		{
-			if (label_len == 0 || label_len > 63)
-				return false;
-			if (*label_start == '-' || host[i - 1] == '-')
-				return false;
-
-			if (label_has_alpha)
-				has_alpha = true;
-			if (c == '.')
-				saw_dot = true;
-
-			label_start = host + i + 1;
-			label_len = 0;
-			label_has_alpha = false;
-			continue;
-		}
-
-		if (!q_isalnum((unsigned char)c) && c != '-')
-			return false;
-
-		if (q_isalpha((unsigned char)c))
-			label_has_alpha = true;
-
-		label_len++;
-	}
-
-	return saw_dot && has_alpha;
-}
-
-qboolean Valid_Domain(const char* domain_str) // woods #connectfilter
-{
-	char host[MAX_SERVER_ADDRESS_LEN];
-
-	if (!Host_ValidationHost(domain_str, host, sizeof(host)))
-		return false;
-
-	if (Host_ValidIPv4Literal(host) || Host_ValidIPv6Literal(host))
-		return false;
-
-	return Host_ValidDomainName(host);
 }
 
 qboolean Valid_Port(const char* address) // woods #connectfilter

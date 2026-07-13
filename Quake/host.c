@@ -1826,6 +1826,7 @@ typedef struct summary_s {
 		int		total_secrets;
 	}			stats;
 	char		map[countof(cl.mapname)];
+	char		server[MAX_SERVER_ADDRESS_LEN];
 } summary_t;
 
 /*
@@ -1838,6 +1839,7 @@ static void GetGameSummary(summary_t* s)
 	if (cls.state != ca_connected || cls.signon != SIGNONS)
 	{
 		s->map[0] = 0;
+		s->server[0] = 0;
 		memset(&s->stats, 0, sizeof(s->stats));
 	}
 	else
@@ -1848,6 +1850,11 @@ static void GetGameSummary(summary_t* s)
 		s->stats.total_monsters = cl.stats[STAT_TOTALMONSTERS];
 		s->stats.secrets = cl.stats[STAT_SECRETS];
 		s->stats.total_secrets = cl.stats[STAT_TOTALSECRETS];
+		if (cl.gametype == GAME_DEATHMATCH && !cls.demoplayback)
+			NET_HostnameCache_FormatDisplay(lastmphost, net_hostport,
+				s->server, sizeof(s->server));
+		else
+			s->server[0] = 0;
 	}
 }
 
@@ -1899,7 +1906,8 @@ static void UpdateWindowTitle(void)
 
 	GetGameSummary(&current);
 	if (!cls.demoplayback || (cl.gametype != GAME_DEATHMATCH && cls.state != ca_connected)) // woods 
-		if (!strcmp(current.map, last.map) && !memcmp(&current.stats, &last.stats, sizeof(current.stats)))
+		if (!strcmp(current.map, last.map) && !strcmp(current.server, last.server) &&
+			!memcmp(&current.stats, &last.stats, sizeof(current.stats)))
 			return;
 	last = current;
 
@@ -1920,9 +1928,9 @@ static void UpdateWindowTitle(void)
 		if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected) && !cls.demoplayback) // woods added connected server
 {
     if (ln[0] != '\0' && Q_strcmp(ln, current.map) != 0)
-        q_snprintf(title, sizeof(title), "%s  |  %s (%s)  -  " ENGINE_NAME_AND_VER, lastmphost, ln, current.map);
+        q_snprintf(title, sizeof(title), "%s  |  %s (%s)  -  " ENGINE_NAME_AND_VER, current.server, ln, current.map);
     else
-        q_snprintf(title, sizeof(title), "%s  |  %s  -  " ENGINE_NAME_AND_VER, lastmphost, current.map);
+        q_snprintf(title, sizeof(title), "%s  |  %s  -  " ENGINE_NAME_AND_VER, current.server, current.map);
 }
 else if (cls.demoplayback) // woods added demofile
 {
@@ -2540,6 +2548,8 @@ void Host_Init (void)
 	PR_Init ();
 	Mod_Init ();
 	NET_Init ();
+	if (cls.state != ca_dedicated)
+		NET_HostnameCache_Init();
 	SV_Init ();
 	URI_Init(); // woods #uri
 
@@ -2693,6 +2703,7 @@ void Host_Shutdown(void)
 
 	COM_RemoveDownloadTempFiles();
 
+	NET_HostnameCache_Shutdown();
 	NET_Shutdown ();
 
 	if (cls.state != ca_dedicated)

@@ -39,6 +39,8 @@
 		664D98A619CF6B78000D395C /* cl_parse.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783D0D2EEAAB00CB2E4C /* cl_parse.c */; };
 		664D98A719CF6B78000D395C /* cl_tent.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783E0D2EEAAB00CB2E4C /* cl_tent.c */; };
 		664D98A819CF6B78000D395C /* net_main.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783F0D2EEAAB00CB2E4C /* net_main.c */; };
+		D15A00010000000000000001 /* net_address.c in Sources */ = {isa = PBXBuildFile; fileRef = D15A00110000000000000001 /* net_address.c */; };
+		D15A00020000000000000002 /* net_hostname_cache.c in Sources */ = {isa = PBXBuildFile; fileRef = D15A00120000000000000002 /* net_hostname_cache.c */; };
 		664D98A919CF6B78000D395C /* sv_main.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78410D2EEAAB00CB2E4C /* sv_main.c */; };
 		664D98AA19CF6B78000D395C /* sv_move.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78420D2EEAAB00CB2E4C /* sv_move.c */; };
 		664D98AB19CF6B78000D395C /* sv_phys.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78430D2EEAAB00CB2E4C /* sv_phys.c */; };
@@ -295,6 +297,10 @@
 		483A783D0D2EEAAB00CB2E4C /* cl_parse.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_parse.c; path = ../Quake/cl_parse.c; sourceTree = SOURCE_ROOT; };
 		483A783E0D2EEAAB00CB2E4C /* cl_tent.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_tent.c; path = ../Quake/cl_tent.c; sourceTree = SOURCE_ROOT; };
 		483A783F0D2EEAAB00CB2E4C /* net_main.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = net_main.c; path = ../Quake/net_main.c; sourceTree = SOURCE_ROOT; };
+		D15A00110000000000000001 /* net_address.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = net_address.c; path = ../Quake/net_address.c; sourceTree = SOURCE_ROOT; };
+		D15A00120000000000000002 /* net_hostname_cache.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = net_hostname_cache.c; path = ../Quake/net_hostname_cache.c; sourceTree = SOURCE_ROOT; };
+		D15A00130000000000000003 /* net_address.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = net_address.h; path = ../Quake/net_address.h; sourceTree = SOURCE_ROOT; };
+		D15A00140000000000000004 /* net_hostname_cache.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = net_hostname_cache.h; path = ../Quake/net_hostname_cache.h; sourceTree = SOURCE_ROOT; };
 		483A78410D2EEAAB00CB2E4C /* sv_main.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = sv_main.c; path = ../Quake/sv_main.c; sourceTree = SOURCE_ROOT; };
 		483A78420D2EEAAB00CB2E4C /* sv_move.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = sv_move.c; path = ../Quake/sv_move.c; sourceTree = SOURCE_ROOT; };
 		483A78430D2EEAAB00CB2E4C /* sv_phys.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = sv_phys.c; path = ../Quake/sv_phys.c; sourceTree = SOURCE_ROOT; };
@@ -737,6 +743,8 @@
 				48728D280D3004A70004D61B /* net_dgrm.c */,
 				48728D2A0D3004A80004D61B /* net_loop.c */,
 				483A783F0D2EEAAB00CB2E4C /* net_main.c */,
+				D15A00110000000000000001 /* net_address.c */,
+				D15A00120000000000000002 /* net_hostname_cache.c */,
 				48134A1612102F400015BF15 /* net_udp.c */,
 				CA61141FFF62E21E619A2EF2 /* sha1.c */,
 				DA2E4F9FDA027A4AA2499356 /* sha2.c */,
@@ -803,7 +811,9 @@
 				554BBA0D192C3FA3E15D9B12 /* ice_private.h */,
 				FD07DF922782B4CB005CB9D9 /* iplog.h */,
 				483A77FA0D2EE9A900CB2E4C /* net.h */,
+				D15A00130000000000000003 /* net_address.h */,
 				48134A1512102F400015BF15 /* net_defs.h */,
+				D15A00140000000000000004 /* net_hostname_cache.h */,
 				48728D290D3004A80004D61B /* net_dgrm.h */,
 				48728D2B0D3004A80004D61B /* net_loop.h */,
 				48134A1712102F400015BF15 /* net_udp.h */,
@@ -980,6 +990,8 @@
 				C441A37E9342D9F68C4F222D /* ice_socket.c in Sources */,
 				A8F116C73FF5181967B275CF /* ice_stream.c in Sources */,
 				664D98A819CF6B78000D395C /* net_main.c in Sources */,
+				D15A00010000000000000001 /* net_address.c in Sources */,
+				D15A00020000000000000002 /* net_hostname_cache.c in Sources */,
 				664D98A919CF6B78000D395C /* sv_main.c in Sources */,
 				664D98AA19CF6B78000D395C /* sv_move.c in Sources */,
 				668A011C277D0C30009D9427 /* snd_voip.c in Sources */,

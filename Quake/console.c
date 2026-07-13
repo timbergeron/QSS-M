@@ -3566,6 +3566,32 @@ static qboolean CompleteFileList (const char* partial, void* param) // woods #iw
 	return true;
 }
 
+static qboolean CompleteServerHistory(const char *partial, void *unused)
+{
+	filelist_item_t *file;
+	(void)unused;
+
+	if (Cmd_Argc() != 2)
+		return false;
+	for (file = serverlist; file; file = file->next)
+	{
+		char display[MAX_SERVER_ADDRESS_LEN];
+		qboolean friendly;
+
+		if (!file->name[0])
+			continue;
+		friendly = NET_HostnameCache_FormatDisplay(file->name,
+			net_hostport, display, sizeof(display));
+
+		if (friendly && Con_Match(display, partial))
+			Con_AddToTabListMatched(file->name, partial, display, NULL, display);
+		else
+			Con_AddToTabList(file->name, partial,
+				friendly ? display : "history", NULL);
+	}
+	return true;
+}
+
 static qboolean CompleteClassnames (const char* partial, void* unused) // woods #iwtabcomplete #iwshowbboxes
 {
 	extern edict_t* sv_player;
@@ -5703,10 +5729,10 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "sky",					CompleteFileList,		&skylist },
 	{ "skywind",				CompleteSkywind,		NULL },
 	{ "exec",					CompleteFileList,		&execlist },
-	{ "connect",				CompleteFileList,		&serverlist },
-	{ "test",					CompleteFileList,		&serverlist },
-	{ "test2",					CompleteFileList,		&serverlist },
-	{ "ping",					CompleteFileList,		&serverlist },
+	{ "connect",				CompleteServerHistory,	NULL },
+	{ "test",					CompleteServerHistory,	NULL },
+	{ "test2",					CompleteServerHistory,	NULL },
+	{ "ping",					CompleteServerHistory,	NULL },
 	{ "open",					CompleteFileList,		&folderlist },
 	{ "music",					CompleteFileList,		&musiclist },
 	{ "printtxt",				CompleteFileList,		&textlist },

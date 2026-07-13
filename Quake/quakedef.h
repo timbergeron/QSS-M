@@ -282,6 +282,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define	SOUND_CHANNELS		8
 
 #define	SERVERLIST	"servers.txt"	// woods for server history + tab complete #serverlist
+#define	SERVERHOSTNAMES	"server_hostnames.json" /* successful hostname-to-endpoint cache */
 #define	BOOKMARKSLIST		"bookmarks.json"	// woods #bookmarksjson
 #define	BOOKMARKSLIST_LEGACY	"bookmarks.txt"		// woods #bookmarksjson - old filename for migration
 #define	BOOKMARK_DATA_LENGTH	50	// woods #bookmarksjson - max length of bookmark data field

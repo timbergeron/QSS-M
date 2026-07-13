@@ -174,6 +174,7 @@ typedef struct qsocket_s
 	byte		receiveMessage [NET_MAXMESSAGE];
 
 	struct qsockaddr	addr;
+	char		resolvedaddress[NET_NAMELEN]; /* numeric control endpoint before handshake redirect */
 	char		trueaddress[NET_NAMELEN];	//lazy address string
 	char		maskedaddress[NET_NAMELEN];	//addresses for this player that may be displayed publically
 

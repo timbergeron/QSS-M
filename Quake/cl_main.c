@@ -397,7 +397,7 @@ static const char *CL_PrepareConnectHost(const char *host)
 static void CL_PrintConnectingMessage(const char *host)
 {
 	char addressip[70] = {'\0'};
-	char local_verbose[NET_NAMELEN + sizeof(addressip)];
+	char local_verbose[MAX_SERVER_ADDRESS_LEN * 2];
 	int numaddresses;
 	qhostaddr_t addresses[16];
 	qboolean is_local;
@@ -420,10 +420,20 @@ static void CL_PrintConnectingMessage(const char *host)
 	}
 	else
 	{
-		q_strlcpy(local_verbose, host, sizeof(local_verbose));
+		net_endpoint_t endpoint;
+		char numeric_target[MAX_SERVER_ADDRESS_LEN];
+
+		if (NET_ParseEndpoint(host, net_hostport, &endpoint) &&
+			NET_FormatEndpoint(&endpoint, true, numeric_target, sizeof(numeric_target)))
+		{
+			NET_HostnameCache_FormatDetailedDisplay(numeric_target, net_hostport,
+				local_verbose, sizeof(local_verbose));
+		}
+		else
+			q_strlcpy(local_verbose, host, sizeof(local_verbose));
 	}
 
-	if (!strstr(host, ":"))
+	if (is_local && !strstr(host, ":"))
 		Con_Printf("connecting to ^m%s:%i\n", local_verbose, net_hostport);
 	else
 		Con_Printf("connecting to ^m%s\n", local_verbose);
@@ -504,6 +514,7 @@ static void CL_FinalizeConnection(struct qsocket_s *netcon, const char *host)
 	cls.signon = 0;
 	MSG_WriteByte(&cls.message, clc_nop);
 
+	NET_HostnameCache_RecordSuccessfulConnection(host, netcon);
 	q_strlcpy(lastmphost, host, sizeof(lastmphost));
 	Log_Last_Server_f();
 	Write_Log(host, SERVERLIST);

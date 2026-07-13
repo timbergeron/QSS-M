@@ -60,7 +60,7 @@ cvar_t cl_portpingprobe_enable = {"cl_portpingprobe_enable", "0", CVAR_ARCHIVE};
 cvar_t cl_portpingprobe_probes = {"cl_portpingprobe_probes", "500", CVAR_ARCHIVE};
 cvar_t cl_portpingprobe_port_probes = {"cl_portpingprobe_port_probes", "5", CVAR_ARCHIVE};
 cvar_t cl_portpingprobe_delay = {"cl_portpingprobe_delay", "0", CVAR_ARCHIVE};
-cvar_t net_masters[] = 
+cvar_t net_masters[] =
 {
 	{"net_master1", ""},
 	{"net_master2", ""},
@@ -962,6 +962,7 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 {
 	portpingprobe_ctx_t *ctx;
 	portpingprobe_endpoint_t endpoints[MAX_NET_DRIVERS];
+	char display_addr[MAX_SERVER_ADDRESS_LEN * 2];
 	unsigned int random_state;
 	int endpoint_count = 0;
 	int num_probes;
@@ -1067,8 +1068,10 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 	}
 
 	portpingprobe_ctx = ctx;
+	NET_HostnameCache_FormatDetailedDisplay(connect_addr, net_hostport,
+		display_addr, sizeof(display_addr));
 	Con_Printf("Probing %s across %d network endpoint%s to find best source port (%d unique ports, %d confirmation probes on up to %d finalists)\n",
-		connect_addr, endpoint_count, endpoint_count == 1 ? "" : "s",
+		display_addr, endpoint_count, endpoint_count == 1 ? "" : "s",
 		num_probes, port_probes, PORTPINGPROBE_FINALISTS);
 	return true;
 }
@@ -1112,6 +1115,9 @@ void NET_PortPingProbe_Frame(void)
 
 	if (status == PORTPINGPROBE_COMPLETED)
 	{
+		char display_addr[MAX_SERVER_ADDRESS_LEN * 2];
+		NET_HostnameCache_FormatDetailedDisplay(ctx->connect_addr, net_hostport,
+			display_addr, sizeof(display_addr));
 		portpingprobe_result.valid = true;
 		portpingprobe_result.has_target = ctx->landriver >= 0 &&
 			ctx->landriver < net_numlandrivers && ctx->query != PORTPINGPROBE_QUERY_NONE;
@@ -1135,7 +1141,7 @@ void NET_PortPingProbe_Frame(void)
 		else if (ctx->best_port > 0)
 		{
 			Con_Printf("Port probe completed for %s via %s: source port %d, median %.2f ms, jitter %.2f ms (%d/%d replies, %d responsive ports)\n",
-				net_landrivers[ctx->landriver].AddrToString(&ctx->target_addr, false),
+				display_addr,
 				net_landrivers[ctx->landriver].name,
 				ctx->best_port, ctx->best_rtt * 1000.0, ctx->best_jitter * 1000.0,
 				ctx->best_replies, ctx->port_probes, ctx->responsive_ports);
@@ -1143,7 +1149,7 @@ void NET_PortPingProbe_Frame(void)
 		else
 		{
 			Con_Printf("Port probe completed for %s via %s: no stable source port found (%d responsive), falling back to OS-assigned source port\n",
-				net_landrivers[ctx->landriver].AddrToString(&ctx->target_addr, false),
+				display_addr,
 				net_landrivers[ctx->landriver].name, ctx->responsive_ports);
 		}
 
@@ -1876,35 +1882,19 @@ static void NET_Stats_f (void)
 // recognize ip:port (based on ProQuake)
 static const char *Strip_Port (const char *host)
 {
-	static char	noport[NET_NAMELEN];
-	char		*p;
-	char		*close_bracket;
-	int		port;
+	static char	noport[MAX_SERVER_ADDRESS_LEN];
+	net_endpoint_t endpoint;
 
 	if (!host || !*host)
 		return host;
-	q_strlcpy (noport, host, sizeof(noport));
-	if (noport[0] == '[')
+	if (!NET_ParseEndpoint(host, net_hostport, &endpoint))
+		return host;
+	if (endpoint.port_explicit && endpoint.port != net_hostport)
 	{
-		close_bracket = strchr(noport, ']');
-		if (!close_bracket || close_bracket[1] != ':')
-			return host;
-		p = close_bracket + 1;
-	}
-	else
-	{
-		if ((p = Q_strrchr(noport, ':')) == NULL)
-			return host;
-		if (strchr(noport, ':') != p)
-			return host;
-	}
-	*p++ = '\0';
-	port = Q_atoi (p);
-	if (port > 0 && port < 65536 && port != net_hostport)
-	{
-		net_hostport = port;
+		net_hostport = endpoint.port;
 		Con_SafePrintf("Port set to %d\n", net_hostport);
 	}
+	q_strlcpy(noport, endpoint.host, sizeof(noport));
 	return noport;
 }
 
@@ -3245,7 +3235,7 @@ void ResetHostlist (void) // woods #resethostlist
 }
 
 static qboolean _Datagram_SearchForHosts (qboolean xmit)
-{	
+{
 	int		ret;
 	size_t	n;
 	size_t	i;
@@ -3527,6 +3517,8 @@ static qsocket_t *_Datagram_Connect (struct qsockaddr *serveraddr)
 		goto ErrorReturn2;
 	sock->socket = newsock;
 	sock->landriver = net_landriverlevel;
+	q_strlcpy(sock->resolvedaddress, dfunc.AddrToString(serveraddr, false),
+		sizeof(sock->resolvedaddress));
 
 	// connect to the host
 	if (dfunc.Connect (newsock, serveraddr) == -1)
@@ -4099,6 +4091,9 @@ net_connect_result_t NET_DatagramConnectFrame(qsocket_t **outsock, const char **
 			datagram_connect_ctx.sock->socket = datagram_connect_ctx.newsock;
 			datagram_connect_ctx.sock->landriver = datagram_connect_ctx.landriver;
 			datagram_connect_ctx.sock->proquake_angle_hack = true;
+			q_strlcpy(datagram_connect_ctx.sock->resolvedaddress,
+				dfunc.AddrToString(&datagram_connect_ctx.serveraddr, false),
+				sizeof(datagram_connect_ctx.sock->resolvedaddress));
 
 			if (dfunc.Connect(datagram_connect_ctx.newsock, &datagram_connect_ctx.serveraddr) == -1)
 			{
@@ -4347,42 +4342,4 @@ int Datagram_QueryAddresses(qhostaddr_t *addresses, int maxaddresses)
 	}
 	net_landriverlevel = save_landriverlevel;
 	return result;
-}
-
-extern qboolean Valid_Domain(const char* domain_str);
-
-const char* ResolveHostname (const char* hostname) // woods #serversmenu
-{
-	
-	if (!Valid_Domain(hostname))
-	{
-		Con_DPrintf("Invalid domain: %s\n", hostname);
-		return hostname;
-	}
-	
-	static char resolvedIP[NET_NAMELEN] = { 0 }; // Buffer to store the resolved IP address as a string
-	struct qsockaddr sendaddr;
-	int resolved = 0;
-
-	// Attempt to resolve the hostname with each initialized network driver
-	for (net_landriverlevel = 0; net_landriverlevel < net_numlandrivers; net_landriverlevel++) {
-		if (!net_landrivers[net_landriverlevel].initialized)
-			continue;
-
-		if (dfunc.GetAddrFromName(hostname, &sendaddr) != -1) 
-		{
-			resolved = 1; // Mark as resolved
-			strncpy(resolvedIP, dfunc.AddrToString(&sendaddr, false), sizeof(resolvedIP) - 1);
-			resolvedIP[sizeof(resolvedIP) - 1] = '\0'; // Ensure null-termination
-			break; // Stop iterating once resolved
-		}
-	}
-
-	if (!resolved) 
-	{
-		Con_DPrintf("Could not resolve %s\n", hostname);
-		return hostname;
-	}
-
-	return resolvedIP;
 }

@@ -167,6 +167,7 @@ qsocket_t *NET_NewQSocket (void)
 	sock->isvirtual = false;
 	sock->disconnected = false;
 	sock->connecttime = net_time;
+	sock->resolvedaddress[0] = '\0';
 	Q_strcpy (sock->trueaddress,"UNSET ADDRESS");
 	Q_strcpy (sock->maskedaddress,"UNSET ADDRESS");
 	sock->driver = net_driverlevel;
@@ -337,6 +338,11 @@ double NET_QSocketGetTime (const qsocket_t *s)
 const char *NET_QSocketGetTrueAddressString (const qsocket_t *s)
 {
 	return s->trueaddress;
+}
+
+const char *NET_QSocketGetResolvedAddressString (const qsocket_t *s)
+{
+	return s ? s->resolvedaddress : "";
 }
 
 const char *NET_QSocketGetOwnerString(const qsocket_t *s)
@@ -779,10 +785,13 @@ qsocket_t *NET_Connect (const char *host)
 
 	if (host == NULL)
 	{
+		char display_address[MAX_SERVER_ADDRESS_LEN * 2];
 		if (hostCacheCount != 1)
 			return NULL;
 		host = hostcache[0].cname;
-		Con_Printf("Connecting to...\n%s @ %s\n\n", hostcache[0].name, host);
+		NET_HostnameCache_FormatDetailedDisplay(host, net_hostport,
+			display_address, sizeof(display_address));
+		Con_Printf("Connecting to...\n%s @ %s\n\n", hostcache[0].name, display_address);
 	}
 
 	if (hostCacheCount)
@@ -1299,6 +1308,10 @@ void NET_Init (void)
 {
 	int			i;
 	qsocket_t	*s;
+
+#ifndef NDEBUG
+	NET_Address_RunSelfTests();
+#endif
 
 	i = COM_CheckParm ("-port");
 	if (!i)

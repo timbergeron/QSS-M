@@ -1790,24 +1790,6 @@ const char* COM_SkipColon (const char* str)
 
 /*
 ============
-COM_StripPort -- woods #historymenu
-============
-*/
-const char* COM_StripPort (const char* str)
-{
-	const char* colon = strchr(str, ':');
-	size_t length = colon ? (colon - str) : strlen(str);
-	char* newStr = malloc(length + 1);
-	if (newStr)
-	{
-		strncpy(newStr, str, length);
-		newStr[length] = '\0';
-	}
-	return newStr;
-}
-
-/*
-============
 COM_FileGetExtension - doesn't return NULL
 ============
 */
@@ -7691,8 +7673,8 @@ void Write_Log (const char* log_message, const char* filename)
 	// Iterate through each line of the file
 	while (fgets(line, sizeof(line), log_file))
 	{
-		// Trim newline character
-		line[strcspn(line, "\n")] = 0;
+		// Accept history files written with either Unix or Windows line endings.
+		line[strcspn(line, "\r\n")] = 0;
 
 		// Check if the log message already exists in the file
 		if (strcmp(line, log_message) == 0) 
