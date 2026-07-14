@@ -575,6 +575,26 @@ static int buttonremap[] =
 	K_MOUSE5
 };
 
+/* SDL accumulates high-resolution wheel motion into the integer x/y fields.
+ * Preserve the number of completed vertical steps when translating them to
+ * Quake's digital wheel keys. */
+static void IN_EmitWheelKeySteps(int steps)
+{
+	while (steps > 0)
+	{
+		Key_Event(K_MWHEELUP, true);
+		Key_Event(K_MWHEELUP, false);
+		steps--;
+	}
+
+	while (steps < 0)
+	{
+		Key_Event(K_MWHEELDOWN, true);
+		Key_Event(K_MWHEELDOWN, false);
+		steps++;
+	}
+}
+
 /* total accumulated mouse movement since last frame */
 static int	total_dx, total_dy = 0;
 static float gyro_yaw = 0.f, gyro_pitch = 0.f, gyro_raw_mag = 0.f;
@@ -1067,11 +1087,8 @@ static qboolean IN_DemoScrubHandleWheel(const SDL_Event *event)
 	if (!inside_hit && !hover_active)
 		return false;
 
-	if (event->wheel.y > 0)
-		seconds = 1.0f;
-	else if (event->wheel.y < 0)
-		seconds = -1.0f;
-	else
+	seconds = (float)event->wheel.y;
+	if (seconds == 0.0f)
 		return false;
 
 	if (!CL_DemoSeekRelativeSeconds(seconds))
@@ -5462,22 +5479,21 @@ void IN_SendKeyEvents (void)
 				break;
 			if (Wheel_IsOpen ())
 			{
-				if (event.wheel.y > 0)
+				int steps = event.wheel.y;
+
+				while (steps > 0)
+				{
 					Wheel_ScrollSelection (-1);
-				else if (event.wheel.y < 0)
+					steps--;
+				}
+				while (steps < 0)
+				{
 					Wheel_ScrollSelection (1);
+					steps++;
+				}
 				break;
 			}
-			if (event.wheel.y > 0)
-			{
-				Key_Event(K_MWHEELUP, true);
-				Key_Event(K_MWHEELUP, false);
-			}
-			else if (event.wheel.y < 0)
-			{
-				Key_Event(K_MWHEELDOWN, true);
-				Key_Event(K_MWHEELDOWN, false);
-			}
+			IN_EmitWheelKeySteps(event.wheel.y);
 			break;
 #endif
 
