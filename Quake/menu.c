@@ -24669,6 +24669,51 @@ void M_Version_StartGitHubFetch(void)
 	SDL_DetachThread(thread);
 }
 
+void M_Version_FormatRemoteInfo(const versionremoteinfo_t* info, qboolean commit,
+    const char* pending, char* out, size_t outsize)
+{
+    char version[96];
+    const char* status = NULL;
+
+    if (info->state == VERSIONGITHUB_LOADING || info->state == VERSIONGITHUB_IDLE)
+    {
+        q_strlcpy(out, pending, outsize);
+        return;
+    }
+
+    if (info->state == VERSIONGITHUB_ERROR)
+    {
+        q_snprintf(out, outsize, "error (%s)",
+            info->error[0] ? info->error : "unavailable");
+        return;
+    }
+    if (info->state != VERSIONGITHUB_READY)
+    {
+        q_strlcpy(out, "unavailable", outsize);
+        return;
+    }
+
+    if (commit)
+        q_snprintf(version, sizeof(version), "%s @ %s", info->version,
+            info->detail[0] ? info->detail : "unknown");
+    else
+        q_strlcpy(version, info->version, sizeof(version));
+
+    if (info->comparison == 0)
+        status = "you have this";
+    else if (info->comparison == 2)
+        status = "unknown channel";
+    else if (info->comparison > 0)
+        status = "you have newer";
+    else if (info->comparison < 0)
+        status = "update available";
+
+    if (status)
+        q_snprintf(out, outsize, "%s (%s)", version, status);
+    else
+        q_strlcpy(out, version, outsize);
+}
+
 static void M_Version_UpdateGitHubLines(void)
 {
 	char release_text[sizeof(versionmenu.lines[0].text)];
@@ -24684,55 +24729,15 @@ static void M_Version_UpdateGitHubLines(void)
 
 	M_Version_GetGitHubInfo(&release, &commit);
 
-	if (release.state == VERSIONGITHUB_LOADING || release.state == VERSIONGITHUB_IDLE)
 	{
-		q_strlcpy(release_text, "  Latest release  checking...", sizeof(release_text));
+        char value[sizeof(release_text)];
+        M_Version_FormatRemoteInfo(&release, false, "checking...", value, sizeof(value));
+        q_snprintf(release_text, sizeof(release_text), "  Latest release  %s", value);
 	}
-	else if (release.state == VERSIONGITHUB_READY)
 	{
-		if (release.comparison == 0)
-			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s (you have this)", release.version);
-		else if (release.comparison == 2)
-			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s (unknown channel)", release.version);
-		else if (release.comparison > 0)
-			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s (you have newer)", release.version);
-		else if (release.comparison < 0)
-			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s (update available)", release.version);
-		else
-			q_snprintf(release_text, sizeof(release_text), "  Latest release  %s", release.version);
-	}
-	else
-	{
-		q_snprintf(release_text, sizeof(release_text), "  Latest release  error (%s)",
-			release.error[0] ? release.error : "unavailable");
-	}
-
-	if (commit.state == VERSIONGITHUB_LOADING || commit.state == VERSIONGITHUB_IDLE)
-	{
-		q_strlcpy(commit_text, "  Latest commit   checking...", sizeof(commit_text));
-	}
-	else if (commit.state == VERSIONGITHUB_READY)
-	{
-		if (commit.comparison == 0)
-			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s (you have this)",
-				commit.version, commit.detail[0] ? commit.detail : "unknown");
-		else if (commit.comparison == 2)
-			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s (unknown channel)",
-				commit.version, commit.detail[0] ? commit.detail : "unknown");
-		else if (commit.comparison > 0)
-			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s (you have newer)",
-				commit.version, commit.detail[0] ? commit.detail : "unknown");
-		else if (commit.comparison < 0)
-			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s (update available)",
-				commit.version, commit.detail[0] ? commit.detail : "unknown");
-		else
-			q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s @ %s",
-				commit.version, commit.detail[0] ? commit.detail : "unknown");
-	}
-	else
-	{
-		q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   error (%s)",
-			commit.error[0] ? commit.error : "unavailable");
+        char value[sizeof(commit_text)];
+        M_Version_FormatRemoteInfo(&commit, true, "checking...", value, sizeof(value));
+        q_snprintf(commit_text, sizeof(commit_text), "  Latest commit   %s", value);
 	}
 
 	if (strcmp(versionmenu.lines[versionmenu.github_release_line_index].text, release_text))
@@ -24757,6 +24762,105 @@ static const char* M_Version_GetGLString(GLenum name)
 {
 	const char* value = (const char*)glGetString(name);
 	return value ? value : "unavailable";
+}
+
+const char* M_Version_SectionName(versionsection_t section)
+{
+    static const char* names[VERSIONSECTION_COUNT] = {
+        "Application Information",
+        "Renderer Information",
+        "Library Versions"
+    };
+
+    return (section >= 0 && section < VERSIONSECTION_COUNT) ? names[section] : "Version Information";
+}
+
+void M_Version_EnumerateLocal(versionlocalcallback_t callback, void* userdata)
+{
+    SDL_version sdl_linked;
+    char value[160];
+
+    if (!callback)
+        return;
+
+    SDL_GetVersion(&sdl_linked);
+
+    q_snprintf(value, sizeof(value), "%1.2f", VERSION);
+    callback(VERSIONSECTION_APPLICATION, "Quake", value, userdata);
+    callback(VERSIONSECTION_APPLICATION, "QuakeSpasm", QUAKESPASM_VER_STRING, userdata);
+    callback(VERSIONSECTION_APPLICATION, "QuakeSpasm-Spiked", QSS_VER, userdata);
+    callback(VERSIONSECTION_APPLICATION, "QSS-M", QSSM_VER_STRING, userdata);
+#ifdef QSS_VERSION
+    callback(VERSIONSECTION_APPLICATION, "QSS Git Description", QS_STRINGIFY(QSS_VERSION), userdata);
+#endif
+#ifdef QSS_REVISION
+    callback(VERSIONSECTION_APPLICATION, "QSS Git Revision", QS_STRINGIFY(QSS_REVISION), userdata);
+#endif
+#ifdef QSS_DATE
+    callback(VERSIONSECTION_APPLICATION, "Build Date", QS_STRINGIFY(QSS_DATE), userdata);
+#else
+    q_snprintf(value, sizeof(value), "%s %s", __DATE__, __TIME__);
+    callback(VERSIONSECTION_APPLICATION, "Build Date", value, userdata);
+#endif
+    q_snprintf(value, sizeof(value), "%s %d-bit", SDL_GetPlatform(), (int)sizeof(void*) * 8);
+    callback(VERSIONSECTION_APPLICATION, "Platform", value, userdata);
+
+    callback(VERSIONSECTION_RENDERER, "Vendor", M_Version_GetGLString(GL_VENDOR), userdata);
+    callback(VERSIONSECTION_RENDERER, "Renderer", M_Version_GetGLString(GL_RENDERER), userdata);
+    callback(VERSIONSECTION_RENDERER, "Version", M_Version_GetGLString(GL_VERSION), userdata);
+
+    callback(VERSIONSECTION_LIBRARIES, "SDL compiled", Q_SDL_COMPILED_VERSION_STRING, userdata);
+    q_snprintf(value, sizeof(value), "%d.%d.%d", sdl_linked.major, sdl_linked.minor, sdl_linked.patch);
+    callback(VERSIONSECTION_LIBRARIES, "SDL linked", value, userdata);
+    callback(VERSIONSECTION_LIBRARIES, "zlib", zlibVersion(), userdata);
+#ifdef LIBCURL_VERSION
+    callback(VERSIONSECTION_LIBRARIES, "libcurl", LIBCURL_VERSION, userdata);
+#endif
+#ifdef USE_CODEC_FLAC
+    callback(VERSIONSECTION_LIBRARIES, "libFLAC", FLAC__VERSION_STRING, userdata);
+#endif
+#ifdef USE_CODEC_OPUS
+    {
+        const char* opus_ver = opus_get_version_string();
+        const char* version = strstr(opus_ver, "libopus ");
+        callback(VERSIONSECTION_LIBRARIES, "libopus", version ? version + 8 : opus_ver, userdata);
+        callback(VERSIONSECTION_LIBRARIES, "libopusfile", "0.12", userdata);
+    }
+#endif
+#if defined(USE_CODEC_OPUS) || defined(USE_CODEC_VORBIS)
+    callback(VERSIONSECTION_LIBRARIES, "libogg", "1.3.6", userdata);
+#endif
+#ifdef USE_CODEC_VORBIS
+    {
+        const char* vorbis_ver = vorbis_version_string();
+        const char* version = strstr(vorbis_ver, "libVorbis ");
+        const char* display = version ? version + 10 : vorbis_ver;
+        callback(VERSIONSECTION_LIBRARIES, "libvorbis", display, userdata);
+        callback(VERSIONSECTION_LIBRARIES, "libvorbisfile", display, userdata);
+    }
+#endif
+#ifdef USE_CODEC_MIKMOD
+    q_snprintf(value, sizeof(value), "%ld.%ld.%ld", LIBMIKMOD_VERSION_MAJOR,
+        LIBMIKMOD_VERSION_MINOR, LIBMIKMOD_REVISION);
+    callback(VERSIONSECTION_LIBRARIES, "libmikmod", value, userdata);
+#endif
+#ifdef USE_CODEC_XMP
+    callback(VERSIONSECTION_LIBRARIES, "libxmp", XMP_VERSION, userdata);
+#endif
+#ifdef USE_CODEC_MP3
+#if defined(MP3LIB_MPG123)
+#if MPG123_API_VERSION >= 48
+    callback(VERSIONSECTION_LIBRARIES, "libmpg123", mpg123_distversion(NULL, NULL, NULL), userdata);
+#else
+    q_snprintf(value, sizeof(value), "api %d", MPG123_API_VERSION);
+    callback(VERSIONSECTION_LIBRARIES, "libmpg123", value, userdata);
+#endif
+#else
+    q_snprintf(value, sizeof(value), "%d.%d.%d%s", MAD_VERSION_MAJOR,
+        MAD_VERSION_MINOR, MAD_VERSION_PATCH, MAD_VERSION_EXTRA);
+    callback(VERSIONSECTION_LIBRARIES, "libmad", value, userdata);
+#endif
+#endif
 }
 
 static void M_Version_AddLine(const char* text, qboolean is_header)
@@ -24836,9 +24940,30 @@ static void M_Version_CopyToClipboard(void)
 	SDL_free(copy);
 }
 
+typedef struct
+{
+    int section;
+} versionmenu_build_t;
+
+static void M_Version_AddLocalEntry(versionsection_t section, const char* label,
+    const char* value, void* userdata)
+{
+    versionmenu_build_t* build = (versionmenu_build_t*)userdata;
+
+    if (build->section != section)
+    {
+        if (build->section >= 0)
+            M_Version_AddLine("", false);
+        M_Version_AddLine(M_Version_SectionName(section), true);
+        build->section = section;
+    }
+
+    M_Version_AddLine(va("  %-20s %s", label, value), false);
+}
+
 static void M_Version_Init(void)
 {
-	SDL_version sdl_linked;
+    versionmenu_build_t build = {-1};
 
 	versionmenu.list.cursor = 0;
 	versionmenu.list.scroll = 0;
@@ -24859,93 +24984,7 @@ static void M_Version_Init(void)
 	VEC_CLEAR(versionmenu.filtered_indices);
 
 	M_Ticker_Init(&versionmenu.ticker);
-	SDL_GetVersion(&sdl_linked);
-
-	M_Version_AddLine("Application Information", true);
-	M_Version_AddLine(va("  Quake          %1.2f", VERSION), false);
-	M_Version_AddLine(va("  QuakeSpasm     %s", QUAKESPASM_VER_STRING), false);
-	M_Version_AddLine(va("  QSS            %s", QSS_VER), false);
-	M_Version_AddLine(va("  QSS-M          %s", QSSM_VER_STRING), false);
-
-#ifdef QSS_VERSION
-	M_Version_AddLine(va("  QSS Git Desc   %s", QS_STRINGIFY(QSS_VERSION)), false);
-#endif
-#ifdef QSS_REVISION
-	M_Version_AddLine(va("  QSS Git Rev    %s", QS_STRINGIFY(QSS_REVISION)), false);
-#endif
-#ifdef QSS_DATE
-	M_Version_AddLine(va("  Build Date     %s", QS_STRINGIFY(QSS_DATE)), false);
-#else
-	M_Version_AddLine(va("  Build Date     %s %s", __DATE__, __TIME__), false);
-#endif
-
-	M_Version_AddLine(va("  Platform       %s %d-bit", SDL_GetPlatform(), (int)sizeof(void*) * 8), false);
-
-	M_Version_AddLine("", false);
-	M_Version_AddLine("Renderer Information", true);
-	M_Version_AddLine(va("  Vendor         %s", M_Version_GetGLString(GL_VENDOR)), false);
-	M_Version_AddLine(va("  Renderer       %s", M_Version_GetGLString(GL_RENDERER)), false);
-	M_Version_AddLine(va("  Version        %s", M_Version_GetGLString(GL_VERSION)), false);
-
-	M_Version_AddLine("", false);
-	M_Version_AddLine("Library Versions", true);
-	M_Version_AddLine(va("  SDL compiled   %s", Q_SDL_COMPILED_VERSION_STRING), false);
-	M_Version_AddLine(va("  SDL linked     %d.%d.%d", sdl_linked.major, sdl_linked.minor, sdl_linked.patch), false);
-	M_Version_AddLine(va("  zlib           %s", zlibVersion()), false);
-#ifdef LIBCURL_VERSION
-	M_Version_AddLine(va("  libcurl        %s", LIBCURL_VERSION), false);
-#endif
-#ifdef USE_CODEC_FLAC
-	M_Version_AddLine(va("  libFLAC        %s", FLAC__VERSION_STRING), false);
-#endif
-#ifdef USE_CODEC_OPUS
-	{
-		const char* opus_ver = opus_get_version_string();
-		const char* version = strstr(opus_ver, "libopus ");
-		M_Version_AddLine(va("  libopus        %s", version ? version + 8 : opus_ver), false);
-#define LIBOPUSFILE_VERSION "0.12" // hard coded
-		M_Version_AddLine(va("  libopusfile    %s", LIBOPUSFILE_VERSION), false);
-#undef LIBOPUSFILE_VERSION
-	}
-#endif
-#if defined(USE_CODEC_OPUS) || defined(USE_CODEC_VORBIS) // these use ogg
-	{
-#define LIBOGG_VERSION "1.3.6" // hard coded (libogg exposes no runtime version)
-		M_Version_AddLine(va("  libogg         %s", LIBOGG_VERSION), false);
-#undef LIBOGG_VERSION
-	}
-#endif
-#ifdef USE_CODEC_VORBIS
-	{
-		const char* vorbis_ver = vorbis_version_string();
-		const char* version = strstr(vorbis_ver, "libVorbis ");
-		M_Version_AddLine(va("  libvorbis      %s", version ? version + 10 : vorbis_ver), false);
-	}
-#endif
-#ifdef USE_CODEC_MIKMOD
-	M_Version_AddLine(va("  libmikmod      %ld.%ld.%ld",
-		LIBMIKMOD_VERSION_MAJOR,
-		LIBMIKMOD_VERSION_MINOR,
-		LIBMIKMOD_REVISION), false);
-#endif
-#ifdef USE_CODEC_XMP
-	M_Version_AddLine(va("  libxmp         %s", XMP_VERSION), false);
-#endif
-#ifdef USE_CODEC_MP3
-#if defined(MP3LIB_MPG123)
-#if MPG123_API_VERSION >= 48	/* mpg123_distversion() added in mpg123 1.32 */
-	M_Version_AddLine(va("  libmpg123      %s", mpg123_distversion(NULL, NULL, NULL)), false);
-#else
-	M_Version_AddLine(va("  libmpg123      api %d", MPG123_API_VERSION), false);
-#endif
-#else
-	M_Version_AddLine(va("  libmad         %d.%d.%d%s",
-		MAD_VERSION_MAJOR,
-		MAD_VERSION_MINOR,
-		MAD_VERSION_PATCH,
-		MAD_VERSION_EXTRA), false);
-#endif
-#endif
+    M_Version_EnumerateLocal(M_Version_AddLocalEntry, &build);
 
 	M_Version_AddLine("", false);
 	M_Version_AddLine("GitHub QSS-M Versions", true);

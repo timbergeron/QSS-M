@@ -695,189 +695,46 @@ void	Host_FindMaxClients (void)
 		Cvar_SetQuick (&deathmatch, "0");
 }
 
-// 1. System/Standard
-#include <zlib.h>
-#include <curl/curl.h>
-
-// 2. Audio codecs
-#ifdef USE_CODEC_FLAC
-#include <FLAC/format.h>
-#endif
-
-#ifdef USE_CODEC_MIKMOD
-#include <mikmod.h>
-#endif
-
-#ifdef USE_CODEC_OPUS
-#include <opus/opus_defines.h>
-#include <opus/opusfile.h>
-#endif
-
-#ifdef USE_CODEC_VORBIS
-#include <vorbis/codec.h>
-#endif
-
-#ifdef USE_CODEC_XMP
-#include <xmp.h>
-#endif
-
-#ifdef USE_CODEC_MP3
-#if defined(MP3LIB_MPG123)
-#include <mpg123.h>
-#else
-#include <mad.h>
-#endif
-#endif
-
 #define HOST_VERSION_GITHUB_TIMEOUT_MS 2000
+
+typedef struct
+{
+    int section;
+} host_version_print_t;
+
+static void Host_Version_PrintLocal(versionsection_t section, const char* label,
+    const char* value, void* userdata)
+{
+    host_version_print_t* print = (host_version_print_t*)userdata;
+
+    if (print->section != section)
+    {
+        Con_Printf("\n^m%s^m\n\n", M_Version_SectionName(section));
+        print->section = section;
+    }
+
+    Con_Printf("%-24s %s\n", label, value);
+}
 
 void Host_Version_f(void)
 {
-	SDL_version sdl_linked;
 	versionremoteinfo_t release;
 	versionremoteinfo_t commit;
 	qboolean github_complete;
+    host_version_print_t print = {-1};
+    char release_text[160];
+    char commit_text[160];
 
-	SDL_GetVersion(&sdl_linked);
 	github_complete = M_Version_WaitForGitHubInfo(&release, &commit, HOST_VERSION_GITHUB_TIMEOUT_MS);
-
-	// Application Section
-	Con_Printf("\n^mApplication Information^m\n\n");
-	Con_Printf("%-24s %1.2f\n", "Quake", VERSION);
-	Con_Printf("%-24s %s\n", "QuakeSpasm", QUAKESPASM_VER_STRING);
-	Con_Printf("%-24s %s\n", "QuakeSpasm-Spiked", QSS_VER);
-	Con_Printf("%-24s %s\n", "QSS-M", QSSM_VER_STRING);
-
-#ifdef QSS_VERSION
-	Con_Printf("%-24s %s\n", "QSS Git Description", QS_STRINGIFY(QSS_VERSION));
-#endif
-#ifdef QSS_REVISION
-	Con_Printf("%-24s %s\n", "QSS Git Revision", QS_STRINGIFY(QSS_REVISION));
-#endif
-
-#ifdef QSS_DATE
-	Con_Printf("%-24s %s\n", "Build Date", QS_STRINGIFY(QSS_DATE));
-#else
-	Con_Printf("%-24s %s %s\n", "Build Date", __TIME__, __DATE__);
-#endif
-
-	Con_Printf("%-24s %s %d-bit\n", "Platform", SDL_GetPlatform(), (int)sizeof(void*) * 8);
-
-	Con_Printf("\n^mLibrary Versions^m\n\n");
-
-	Con_Printf("%-24s %s (compiled)\n", "SDL", Q_SDL_COMPILED_VERSION_STRING);
-	Con_Printf("%-24s %d.%d.%d (linked)\n", "", sdl_linked.major, sdl_linked.minor, sdl_linked.patch);
-
-	// Core libraries
-	Con_Printf("%-24s %s\n", "zlib", zlibVersion());
-#ifdef LIBCURL_VERSION
-	Con_Printf("%-24s %s\n", "libcurl", LIBCURL_VERSION);
-#endif
-
-	// Audio codec libraries
-#ifdef USE_CODEC_FLAC
-	Con_Printf("%-24s %s\n", "libFLAC", FLAC__VERSION_STRING);
-#endif
-
-#ifdef USE_CODEC_OPUS
-	{
-		const char* opus_ver = opus_get_version_string();
-		const char* version = strstr(opus_ver, "libopus ");
-		Con_Printf("%-24s %s\n", "libopus", version ? version + 8 : opus_ver);
-#define LIBOPUSFILE_VERSION "0.12" // hard coded
-		Con_Printf("%-24s %s\n", "libopusfile", LIBOPUSFILE_VERSION);
-	}
-#endif
-
-#if defined(USE_CODEC_OPUS) || defined(USE_CODEC_VORBIS) // these use ogg
-#define LIBOGG_VERSION "1.3.6" // hard coded
-	Con_Printf("%-24s %s\n", "libogg", LIBOGG_VERSION);
-#endif
-
-#ifdef USE_CODEC_VORBIS
-	{
-		const char* vorbis_ver = vorbis_version_string();
-		const char* version = strstr(vorbis_ver, "libVorbis ");
-		if (version) {
-			Con_Printf("%-24s %s\n", "libvorbis", version + 10);
-			Con_Printf("%-24s %s\n", "libvorbisfile", version + 10);
-		}
-	}
-#endif
-
-#ifdef USE_CODEC_MIKMOD
-	Con_Printf("%-24s %ld.%ld.%ld\n", "libmikmod",
-		LIBMIKMOD_VERSION_MAJOR,
-		LIBMIKMOD_VERSION_MINOR,
-		LIBMIKMOD_REVISION);
-#endif
-
-#ifdef USE_CODEC_XMP
-	Con_Printf("%-24s %s\n", "libxmp", XMP_VERSION);
-#endif
-
-	// MP3 libraries
-#ifdef USE_CODEC_MP3
-#if defined(MP3LIB_MPG123)
-#if MPG123_API_VERSION >= 48	/* mpg123_distversion() added in mpg123 1.32 */
-	Con_Printf("%-24s %s\n", "libmpg123", mpg123_distversion(NULL, NULL, NULL));
-#else
-	Con_Printf("%-24s api %d\n", "libmpg123", MPG123_API_VERSION);
-#endif
-#else
-	Con_Printf("%-24s %d.%d.%d%s\n", "libmad",
-		MAD_VERSION_MAJOR,
-		MAD_VERSION_MINOR,
-		MAD_VERSION_PATCH,
-		MAD_VERSION_EXTRA);
-#endif
-#endif
+    M_Version_EnumerateLocal(Host_Version_PrintLocal, &print);
 
 	Con_Printf("\n^mGitHub QSS-M Versions^m\n\n");
-
-	if (release.state == VERSIONGITHUB_LOADING || release.state == VERSIONGITHUB_IDLE)
-	{
-		Con_Printf("%-24s %s\n", "Latest release", github_complete ? "checking..." : "timeout");
-	}
-	else if (release.state == VERSIONGITHUB_READY)
-	{
-		if (release.comparison == 0)
-			Con_Printf("%-24s %s (you have this)\n", "Latest release", release.version);
-		else if (release.comparison > 0)
-			Con_Printf("%-24s %s (you have newer)\n", "Latest release", release.version);
-		else if (release.comparison < 0)
-			Con_Printf("%-24s %s (update available)\n", "Latest release", release.version);
-		else
-			Con_Printf("%-24s %s\n", "Latest release", release.version);
-	}
-	else
-	{
-		Con_Printf("%-24s error (%s)\n", "Latest release",
-			release.error[0] ? release.error : "unavailable");
-	}
-
-	if (commit.state == VERSIONGITHUB_LOADING || commit.state == VERSIONGITHUB_IDLE)
-	{
-		Con_Printf("%-24s %s\n", "Latest commit", github_complete ? "checking..." : "timeout");
-	}
-	else if (commit.state == VERSIONGITHUB_READY)
-	{
-		const char* sha = commit.detail[0] ? commit.detail : "unknown";
-
-		if (commit.comparison == 0)
-			Con_Printf("%-24s %s @ %s (you have this)\n", "Latest commit", commit.version, sha);
-		else if (commit.comparison > 0)
-			Con_Printf("%-24s %s @ %s (you have newer)\n", "Latest commit", commit.version, sha);
-		else if (commit.comparison < 0)
-			Con_Printf("%-24s %s @ %s (update available)\n", "Latest commit", commit.version, sha);
-		else
-			Con_Printf("%-24s %s @ %s\n", "Latest commit", commit.version, sha);
-	}
-	else
-	{
-		Con_Printf("%-24s error (%s)\n", "Latest commit",
-			commit.error[0] ? commit.error : "unavailable");
-	}
+    M_Version_FormatRemoteInfo(&release, false,
+        github_complete ? "checking..." : "timeout", release_text, sizeof(release_text));
+    M_Version_FormatRemoteInfo(&commit, true,
+        github_complete ? "checking..." : "timeout", commit_text, sizeof(commit_text));
+    Con_Printf("%-24s %s\n", "Latest release", release_text);
+    Con_Printf("%-24s %s\n", "Latest commit", commit_text);
 
 	Con_Printf("\n");
 }

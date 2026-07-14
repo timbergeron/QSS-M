@@ -118,4 +118,5 @@ kept as-is.
    - `.github/workflows/msvs.yml` — the required-runtime-file assertion in the
      "Prepare archive" step.
    - Hardcoded version strings (libraries without a runtime version API):
-     `Quake/host.c` (`version` command) and `Quake/menu.c` (version menu).
+     the shared `M_Version_EnumerateLocal()` collector in `Quake/menu.c`, which
+     feeds both the `version` command and version menu.

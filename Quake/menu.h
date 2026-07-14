@@ -101,6 +101,17 @@ typedef struct
 	char		error[96];
 } versionremoteinfo_t;
 
+typedef enum
+{
+    VERSIONSECTION_APPLICATION,
+    VERSIONSECTION_RENDERER,
+    VERSIONSECTION_LIBRARIES,
+    VERSIONSECTION_COUNT
+} versionsection_t;
+
+typedef void (*versionlocalcallback_t)(versionsection_t section,
+    const char *label, const char *value, void *userdata);
+
 //
 // menus
 //
@@ -134,6 +145,10 @@ void M_TextField_DrawHighlight(menu_textfield_t *tf, int x, int y);
 void M_TextField_DrawCursor(menu_textfield_t *tf, int x, int y);
 void M_Version_StartGitHubFetch(void);
 void M_Version_GetGitHubInfo(versionremoteinfo_t *release, versionremoteinfo_t *commit);
+const char *M_Version_SectionName(versionsection_t section);
+void M_Version_EnumerateLocal(versionlocalcallback_t callback, void *userdata);
+void M_Version_FormatRemoteInfo(const versionremoteinfo_t *info, qboolean commit,
+    const char *pending, char *out, size_t outsize);
 void M_ServerList_ShutdownPingThreads(void);
 void M_ServerList_ShutdownApiFetch(void);
 qboolean M_Version_WaitForGitHubInfo(versionremoteinfo_t *release, versionremoteinfo_t *commit, Uint32 timeout_ms);
