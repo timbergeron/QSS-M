@@ -88,18 +88,15 @@
 		664D98D319CF6B78000D395C /* snd_vorbis.c in Sources */ = {isa = PBXBuildFile; fileRef = 4818B0B212D5BA1A006DD66E /* snd_vorbis.c */; };
 		664D98D419CF6B78000D395C /* snd_wave.c in Sources */ = {isa = PBXBuildFile; fileRef = 4818B0B412D5BA1A006DD66E /* snd_wave.c */; };
 		664D98D519CF6B78000D395C /* snd_mp3.c in Sources */ = {isa = PBXBuildFile; fileRef = 4854B1B01340C646004C9F45 /* snd_mp3.c */; };
-		664D98D619CF6B78000D395C /* snd_mikmod.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78640D2EEAF000CB2E4C /* snd_mikmod.c */; };
 		664D98D719CF6B78000D395C /* snd_umx.c in Sources */ = {isa = PBXBuildFile; fileRef = 4818B0B012D5BA1A006DD66E /* snd_umx.c */; };
 		664D98D819CF6B78000D395C /* cfgfile.c in Sources */ = {isa = PBXBuildFile; fileRef = B021C20714A5FF7E003F18D6 /* cfgfile.c */; };
 		664D98D919CF6B78000D395C /* strlcat.c in Sources */ = {isa = PBXBuildFile; fileRef = 48A7C1FA14AA34940011B754 /* strlcat.c */; };
 		664D98DA19CF6B78000D395C /* strlcpy.c in Sources */ = {isa = PBXBuildFile; fileRef = 48A7C1FB14AA34940011B754 /* strlcpy.c */; };
 		664D98DB19CF6B78000D395C /* snd_opus.c in Sources */ = {isa = PBXBuildFile; fileRef = 4885A84A179740A0000EC703 /* snd_opus.c */; };
 		664D98DC19CF6B78000D395C /* snd_flac.c in Sources */ = {isa = PBXBuildFile; fileRef = 482812FF179C3F13004E1D61 /* snd_flac.c */; };
-		664D98E519CF6B78000D395C /* libmikmod.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = F5F5DE80017CB4370103A810 /* libmikmod.dylib */; };
 		664D98E619CF6B78000D395C /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 488EF23614B83A370021DD41 /* IOKit.framework */; };
 		664D98E919CF6B78000D395C /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1058C7A1FEA54F0111CA2CBB /* Cocoa.framework */; };
 		664D98EA19CF6B78000D395C /* OpenGL.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 002F3C0009D093BD00EBEB88 /* OpenGL.framework */; };
-		664D98F519CF6B78000D395C /* libmikmod.dylib in Copy Libraries */ = {isa = PBXBuildFile; fileRef = F5F5DE80017CB4370103A810 /* libmikmod.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		668A0110277D0BD6009D9427 /* pr_ext.c in Sources */ = {isa = PBXBuildFile; fileRef = 668A010E277D0BD6009D9427 /* pr_ext.c */; };
 		668A0113277D0BE8009D9427 /* mdfour.c in Sources */ = {isa = PBXBuildFile; fileRef = 668A0111277D0BE8009D9427 /* mdfour.c */; };
 		668A0116277D0BFB009D9427 /* fs_zip.c in Sources */ = {isa = PBXBuildFile; fileRef = 668A0114277D0BFB009D9427 /* fs_zip.c */; };
@@ -128,7 +125,7 @@
 		E20E9F2EB9F085F115BA87C4 /* sha1.c in Sources */ = {isa = PBXBuildFile; fileRef = CA61141FFF62E21E619A2EF2 /* sha1.c */; };
 		7394D93821B8ED996863EF66 /* sha2.c in Sources */ = {isa = PBXBuildFile; fileRef = DA2E4F9FDA027A4AA2499356 /* sha2.c */; };
 		85F640312C9E1EE300615B7F /* macos_instructions.html in CopyFiles */ = {isa = PBXBuildFile; fileRef = 85F640302C9E1EE300615B7F /* macos_instructions.html */; };
-		932AE8F92944103F0062F917 /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 932AE8F3294410200062F917 /* libopus.a */; };
+		932AE8F92944103F0062F917 /* libopus.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 93C700622944122600FDFB9D /* libopus.a */; };
 		93B34FA22946BA0300FB5B72 /* libmad.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 93B34FA02946BA0300FB5B72 /* libmad.a */; };
 		93B34FA32946BA0300FB5B72 /* libFLAC.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 93B34FA12946BA0300FB5B72 /* libFLAC.a */; };
 		93C700632944122600FDFB9D /* libvorbis.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 93C7005C2944122500FDFB9D /* libvorbis.a */; };
@@ -136,7 +133,7 @@
 		93C700662944122600FDFB9D /* libopusfile.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 93C7005F2944122600FDFB9D /* libopusfile.a */; };
 		93C700672944122600FDFB9D /* libz.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 93C700602944122600FDFB9D /* libz.a */; };
 		93C700682944122600FDFB9D /* libogg.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 93C700612944122600FDFB9D /* libogg.a */; };
-		93F78A142946BC0200800F54 /* libvorbisfile.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 932AE8F5294410200062F917 /* libvorbisfile.a */; };
+		93F78A142946BC0200800F54 /* libvorbisfile.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 93C7005E2944122500FDFB9D /* libvorbisfile.a */; };
 		93F78A1D2946BD5B00800F54 /* SDL2.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 664D990519CF6E16000D395C /* SDL2.framework */; };
 		93F78A1E2946BD5B00800F54 /* SDL2.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 664D990519CF6E16000D395C /* SDL2.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FD07DF942782B4E3005CB9D9 /* iplog.c in Sources */ = {isa = PBXBuildFile; fileRef = FD07DF932782B4E3005CB9D9 /* iplog.c */; };
@@ -144,17 +141,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		664D98ED19CF6B78000D395C /* Copy Libraries */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 6;
-			files = (
-				664D98F519CF6B78000D395C /* libmikmod.dylib in Copy Libraries */,
-			);
-			name = "Copy Libraries";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		66991C001DBAB3F500C373C0 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -389,7 +375,6 @@
 		66991C041DBAB47000C373C0 /* Quakespasm.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = Quakespasm.html; path = ../Quakespasm.html; sourceTree = "<group>"; };
 		66991C051DBAB47000C373C0 /* Quakespasm.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = Quakespasm.txt; path = ../Quakespasm.txt; sourceTree = "<group>"; };
 		66991C061DBAB48000C373C0 /* quakespasm.pak */ = {isa = PBXFileReference; lastKnownFileType = file; name = quakespasm.pak; path = ../Quake/quakespasm.pak; sourceTree = "<group>"; };
-		850566DF2A6071DD00C2FCA3 /* libxmp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libxmp.a; path = libs_universal/libxmp.a; sourceTree = "<group>"; };
 		850566E02A6071F200C2FCA3 /* libxmp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libxmp.a; path = libs_universal/libxmp.a; sourceTree = "<group>"; };
 		8558644D2B8421770016F8F6 /* qssm.pak */ = {isa = PBXFileReference; lastKnownFileType = file; name = qssm.pak; path = ../Quake/qssm.pak; sourceTree = "<group>"; };
 		85AC9B2A2A70521E00228EF3 /* pmove.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = pmove.c; path = ../Quake/pmove.c; sourceTree = "<group>"; };
@@ -412,16 +397,7 @@
 		1329232458DEB5D3C89A2781 /* ice_quake.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ice_quake.h; path = ../Quake/ice/ice_quake.h; sourceTree = "<group>"; };
 		554BBA0D192C3FA3E15D9B12 /* ice_private.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ice_private.h; path = ../Quake/ice/ice_private.h; sourceTree = "<group>"; };
 		85F640302C9E1EE300615B7F /* macos_instructions.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = macos_instructions.html; path = readme/macos_instructions.html; sourceTree = "<group>"; };
-		85F94F5A2A606C26005D9F52 /* libmad.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libmad.a; path = libs_universal/libmad.a; sourceTree = "<group>"; };
-		85F94F5B2A606C31005D9F52 /* libFLAC.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libFLAC.a; path = libs_universal/libFLAC.a; sourceTree = "<group>"; };
 		8D1107310486CEB800E47090 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		932AE8F12944101F0062F917 /* libopusfile.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libopusfile.a; path = libs_universal/libopusfile.a; sourceTree = "<group>"; };
-		932AE8F2294410200062F917 /* libvorbisenc.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libvorbisenc.a; path = libs_universal/libvorbisenc.a; sourceTree = "<group>"; };
-		932AE8F3294410200062F917 /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libopus.a; path = libs_universal/libopus.a; sourceTree = "<group>"; };
-		932AE8F4294410200062F917 /* libvorbis.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libvorbis.a; path = libs_universal/libvorbis.a; sourceTree = "<group>"; };
-		932AE8F5294410200062F917 /* libvorbisfile.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libvorbisfile.a; path = libs_universal/libvorbisfile.a; sourceTree = "<group>"; };
-		932AE8F6294410200062F917 /* libogg.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libogg.a; path = libs_universal/libogg.a; sourceTree = "<group>"; };
-		932AE8F7294410200062F917 /* libz.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libz.a; path = libs_universal/libz.a; sourceTree = "<group>"; };
 		93B34FA02946BA0300FB5B72 /* libmad.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libmad.a; path = libs_universal/libmad.a; sourceTree = "<group>"; };
 		93B34FA12946BA0300FB5B72 /* libFLAC.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libFLAC.a; path = libs_universal/libFLAC.a; sourceTree = "<group>"; };
 		93C7005C2944122500FDFB9D /* libvorbis.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libvorbis.a; path = libs_universal/libvorbis.a; sourceTree = "<group>"; };
@@ -433,10 +409,6 @@
 		93C700622944122600FDFB9D /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libopus.a; path = libs_universal/libopus.a; sourceTree = "<group>"; };
 		B021C20714A5FF7E003F18D6 /* cfgfile.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cfgfile.c; path = ../Quake/cfgfile.c; sourceTree = SOURCE_ROOT; };
 		B021C20814A5FF7E003F18D6 /* cfgfile.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = cfgfile.h; path = ../Quake/cfgfile.h; sourceTree = SOURCE_ROOT; };
-		CE9FFE452AF78E4B00E53854 /* pmove.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = pmove.c; path = ../Quake/pmove.c; sourceTree = "<group>"; };
-		CE9FFE462AF78E4B00E53854 /* pmove.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = pmove.h; path = ../Quake/pmove.h; sourceTree = "<group>"; };
-		CE9FFE472AF78E4B00E53854 /* pmovetst.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = pmovetst.c; path = ../Quake/pmovetst.c; sourceTree = "<group>"; };
-		F5F5DE80017CB4370103A810 /* libmikmod.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libmikmod.dylib; path = codecs/lib/libmikmod.dylib; sourceTree = "<group>"; };
 		FD07DF922782B4CB005CB9D9 /* iplog.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = iplog.h; path = ../Quake/iplog.h; sourceTree = "<group>"; };
 		FD07DF932782B4E3005CB9D9 /* iplog.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = iplog.c; path = ../Quake/iplog.c; sourceTree = "<group>"; };
 		FD07DF952782B4FE005CB9D9 /* location.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = location.h; path = ../Quake/location.h; sourceTree = "<group>"; };
@@ -448,7 +420,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				664D98E519CF6B78000D395C /* libmikmod.dylib in Frameworks */,
 				850566E12A6071F200C2FCA3 /* libxmp.a in Frameworks */,
 				932AE8F92944103F0062F917 /* libopus.a in Frameworks */,
 				93C700662944122600FDFB9D /* libopusfile.a in Frameworks */,
@@ -500,18 +471,7 @@
 		29B97314FDCFA39411CA2CEA /* QuakeSpasm */ = {
 			isa = PBXGroup;
 			children = (
-				F5F5DE80017CB4370103A810 /* libmikmod.dylib */,
-				93B34FA12946BA0300FB5B72 /* libFLAC.a */,
-				93B34FA02946BA0300FB5B72 /* libmad.a */,
-				93C700612944122600FDFB9D /* libogg.a */,
-				93C700622944122600FDFB9D /* libopus.a */,
-				850566E02A6071F200C2FCA3 /* libxmp.a */,
-				93C7005F2944122600FDFB9D /* libopusfile.a */,
-				93C7005C2944122500FDFB9D /* libvorbis.a */,
-				93C7005D2944122500FDFB9D /* libvorbisenc.a */,
-				93C7005E2944122500FDFB9D /* libvorbisfile.a */,
-				93C700602944122600FDFB9D /* libz.a */,
-				48243B060D33ED0A00C29F8F /* MacOSX */,
+				48243B060D33ED0A00C29F8F /* macOS */,
 				483A77D80D2EE8C500CB2E4C /* Quake */,
 				29B97317FDCFA39411CA2CEA /* Resources */,
 				29B97323FDCFA39411CA2CEA /* Frameworks */,
@@ -538,28 +498,28 @@
 		29B97323FDCFA39411CA2CEA /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				85F94F5A2A606C26005D9F52 /* libmad.a */,
-				85F94F5B2A606C31005D9F52 /* libFLAC.a */,
-				850566DF2A6071DD00C2FCA3 /* libxmp.a */,
-				932AE8F6294410200062F917 /* libogg.a */,
-				932AE8F3294410200062F917 /* libopus.a */,
-				932AE8F12944101F0062F917 /* libopusfile.a */,
-				932AE8F4294410200062F917 /* libvorbis.a */,
-				932AE8F2294410200062F917 /* libvorbisenc.a */,
-				932AE8F5294410200062F917 /* libvorbisfile.a */,
-				932AE8F7294410200062F917 /* libz.a */,
+				93B34FA12946BA0300FB5B72 /* libFLAC.a */,
+				93B34FA02946BA0300FB5B72 /* libmad.a */,
+				93C700612944122600FDFB9D /* libogg.a */,
+				93C700622944122600FDFB9D /* libopus.a */,
+				850566E02A6071F200C2FCA3 /* libxmp.a */,
+				93C7005F2944122600FDFB9D /* libopusfile.a */,
+				93C7005C2944122500FDFB9D /* libvorbis.a */,
+				93C7005D2944122500FDFB9D /* libvorbisenc.a */,
+				93C7005E2944122500FDFB9D /* libvorbisfile.a */,
+				93C700602944122600FDFB9D /* libz.a */,
 				1058C7A0FEA54F0111CA2CBB /* Linked Frameworks */,
 				1058C7A2FEA54F0111CA2CBB /* Other Frameworks */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
-		48243B060D33ED0A00C29F8F /* MacOSX */ = {
+		48243B060D33ED0A00C29F8F /* macOS */ = {
 			isa = PBXGroup;
 			children = (
 				A1B2C3D40102030405060708 /* Sources */,
 			);
-			name = MacOSX;
+			name = macOS;
 			sourceTree = "<group>";
 		};
 		A1B2C3D40102030405060708 /* Sources */ = {
@@ -633,8 +593,6 @@
 				483A78190D2EEA5400CB2E4C /* menu.c */,
 				85D17E7720261A1A00100001 /* update.c */,
 				48895DB80D4914A000849ABF /* pl_osx.m */,
-				CE9FFE452AF78E4B00E53854 /* pmove.c */,
-				CE9FFE472AF78E4B00E53854 /* pmovetst.c */,
 				483A781A0D2EEA5400CB2E4C /* pr_cmds.c */,
 				483A781B0D2EEA5400CB2E4C /* pr_edict.c */,
 				483A781C0D2EEA5400CB2E4C /* pr_exec.c */,
@@ -775,7 +733,6 @@
 				483A77EB0D2EE97700CB2E4C /* mathlib.h */,
 				483A77EC0D2EE97700CB2E4C /* menu.h */,
 				4846EB500D329BEB00A108DE /* platform.h */,
-				CE9FFE462AF78E4B00E53854 /* pmove.h */,
 				483A77ED0D2EE97700CB2E4C /* pr_comp.h */,
 				483A77EE0D2EE97700CB2E4C /* progdefs.h */,
 				483A77EF0D2EE97700CB2E4C /* progs.h */,
@@ -894,7 +851,6 @@
 				664D988919CF6B78000D395C /* Resources */,
 				664D988D19CF6B78000D395C /* Sources */,
 				664D98DD19CF6B78000D395C /* Frameworks */,
-				664D98ED19CF6B78000D395C /* Copy Libraries */,
 				66991C001DBAB3F500C373C0 /* CopyFiles */,
 				93F78A1F2946BD5B00800F54 /* Embed Frameworks */,
 				85D17E7520261A1A00100001 /* Sync Version from quakedef.h */,
@@ -1046,7 +1002,6 @@
 				664D98D319CF6B78000D395C /* snd_vorbis.c in Sources */,
 				664D98D419CF6B78000D395C /* snd_wave.c in Sources */,
 				664D98D519CF6B78000D395C /* snd_mp3.c in Sources */,
-				664D98D619CF6B78000D395C /* snd_mikmod.c in Sources */,
 				668A0113277D0BE8009D9427 /* mdfour.c in Sources */,
 				85AC9B2C2A70521E00228EF3 /* pmove.c in Sources */,
 				664D98D719CF6B78000D395C /* snd_umx.c in Sources */,
@@ -1091,7 +1046,7 @@
 					USE_CODEC_WAVE,
 					USE_CODEC_FLAC,
 					USE_CODEC_OPUS,
-					USE_CODEC_MIKMOD,
+					USE_CODEC_XMP,
 					USE_CODEC_UMX,
 					SDL_FRAMEWORK,
 					USE_ZLIB,
@@ -1099,7 +1054,6 @@
 					GNUTLS_STATIC,
 				);
 				HEADER_SEARCH_PATHS = (
-					codecs/include,
 					"vcpkg/installed/x64-osx-1013/include",
 					"vcpkg/installed/x64-osx-1013/include/opus",
 					"vcpkg/installed/arm64-osx-11/include",
@@ -1111,11 +1065,9 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)",
-					"$(SRCROOT)/codecs/lib",
 					"$(PROJECT_DIR)/libs_universal",
 					"$(PROJECT_DIR)/vcpkg/installed/x64-osx-1013/lib",
 					"$(PROJECT_DIR)/vcpkg/installed/arm64-osx-11/lib",
-					"$(PROJECT_DIR)/codecs/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 10.13;
 				OTHER_LDFLAGS = (
@@ -1162,7 +1114,7 @@
 					USE_CODEC_WAVE,
 					USE_CODEC_FLAC,
 					USE_CODEC_OPUS,
-					USE_CODEC_MIKMOD,
+					USE_CODEC_XMP,
 					USE_CODEC_UMX,
 					SDL_FRAMEWORK,
 					USE_ZLIB,
@@ -1171,7 +1123,6 @@
 				);
 				"GCC_WARN_64_TO_32_BIT_CONVERSION[arch=*64]" = NO;
 				HEADER_SEARCH_PATHS = (
-					codecs/include,
 					"vcpkg/installed/x64-osx-1013/include",
 					"vcpkg/installed/x64-osx-1013/include/opus",
 					"vcpkg/installed/arm64-osx-11/include",
@@ -1183,11 +1134,9 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)",
-					"$(SRCROOT)/codecs/lib",
 					"$(PROJECT_DIR)/libs_universal",
 					"$(PROJECT_DIR)/vcpkg/installed/x64-osx-1013/lib",
 					"$(PROJECT_DIR)/vcpkg/installed/arm64-osx-11/lib",
-					"$(PROJECT_DIR)/codecs/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 10.13;
 				OTHER_CFLAGS = "";
@@ -1243,7 +1192,6 @@
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = (
-					codecs/include,
 					"vcpkg/installed/x64-osx-1013/include",
 					"vcpkg/installed/x64-osx-1013/include/opus",
 					"vcpkg/installed/arm64-osx-11/include",
@@ -1285,7 +1233,7 @@
 					USE_CODEC_WAVE,
 					USE_CODEC_FLAC,
 					USE_CODEC_OPUS,
-					USE_CODEC_MIKMOD,
+					USE_CODEC_XMP,
 					USE_CODEC_UMX,
 					SDL_FRAMEWORK,
 					USE_ZLIB,
@@ -1294,7 +1242,6 @@
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = (
-					codecs/include,
 					"vcpkg/installed/x64-osx-1013/include",
 					"vcpkg/installed/x64-osx-1013/include/opus",
 					"vcpkg/installed/arm64-osx-11/include",

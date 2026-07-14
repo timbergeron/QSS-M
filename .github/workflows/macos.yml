@@ -48,7 +48,7 @@ jobs:
         path: |
           ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
           ${{ env.VCPKG_DOWNLOADS }}
-        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-${{ hashFiles('MacOSX/setup-vcpkg.sh', 'MacOSX/custom-triplets/*.cmake') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-${{ hashFiles('macOS/setup-vcpkg.sh', 'macOS/custom-triplets/*.cmake') }}
         restore-keys: |
           ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-${{ steps.vcpkg-cache.outputs.image_os }}-${{ steps.vcpkg-cache.outputs.image_version }}-${{ steps.vcpkg-cache.outputs.xcode_hash }}-
           ${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ env.VCPKG_CACHE_REV }}-
@@ -84,6 +84,7 @@ jobs:
           echo "libtoolize: $(command -v libtoolize 2>/dev/null || echo 'NOT FOUND')"
           echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
           echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
+          echo "perl: $(command -v perl 2>/dev/null || echo 'NOT FOUND')"
           echo "git: $(command -v git 2>/dev/null || echo 'NOT FOUND')"
           echo "lipo: $(command -v lipo 2>/dev/null || echo 'NOT FOUND')"
           echo "xcodebuild: $(command -v xcodebuild 2>/dev/null || echo 'NOT FOUND')"
@@ -138,7 +139,7 @@ jobs:
           echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
           echo ""
           echo "=== setup-vcpkg.sh will check these ==="
-          for cmd in git lipo autoconf automake pkg-config; do
+          for cmd in git lipo autoconf automake pkg-config perl; do
             if command -v "$cmd" >/dev/null 2>&1; then
               echo "  $cmd: OK ($(command -v $cmd))"
             else
@@ -166,7 +167,7 @@ jobs:
           echo "glibtoolize: $(command -v glibtoolize 2>/dev/null || echo 'NOT FOUND')"
           echo "pkg-config: $(command -v pkg-config 2>/dev/null || echo 'NOT FOUND')"
           echo ""
-          cd MacOSX
+          cd macOS
           echo "=== Running build-macos.sh ==="
           build_rc=0
           ./build-macos.sh 2>&1 | tee build-macos.log || build_rc=$?
@@ -180,17 +181,17 @@ jobs:
       if: always()
       run: |
           set -euxo pipefail
-          package_zip="MacOSX/build/Release/QSS-M-macOS.zip"
+          package_zip="macOS/build/Release/QSS-M-macOS.zip"
           log_root="artifact/logs/QSS-M-macOS-logs"
 
           rm -rf "$log_root"
           mkdir -p "$log_root"
 
-          if [ -f MacOSX/build-macos.log ]; then
-            cp MacOSX/build-macos.log "$log_root/"
+          if [ -f macOS/build-macos.log ]; then
+            cp macOS/build-macos.log "$log_root/"
           fi
-          if [ -d MacOSX/build/Release ]; then
-            find MacOSX/build/Release -maxdepth 2 -type f | sort > "$log_root/release-files.txt"
+          if [ -d macOS/build/Release ]; then
+            find macOS/build/Release -maxdepth 2 -type f | sort > "$log_root/release-files.txt"
           fi
           if [ -f "$package_zip" ]; then
             unzip -l "$package_zip" > "$log_root/QSS-M-macOS-zip-contents.txt"
@@ -208,7 +209,7 @@ jobs:
     - name: Upload macOS artifact
       uses: actions/upload-artifact@v7
       with:
-        path: MacOSX/build/Release/QSS-M-macOS.zip
+        path: macOS/build/Release/QSS-M-macOS.zip
         if-no-files-found: error
         archive: false
 

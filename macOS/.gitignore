@@ -2,3 +2,4 @@ build/
 vcpkg/
 libs_universal/
 **/xcuserdata/
+**/xcshareddata/IDEWorkspaceChecks.plist

@@ -1,2 +1,0 @@
-libmikmod-3.3.12. only the "nosound" driver (drv_nos) is included:
-we only need/register/use drv_nos here and nothing else.

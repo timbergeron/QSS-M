@@ -65,13 +65,12 @@ Note: libxmp 4.7.x also picked up the x86 `libgcc_s_dw2-1.dll` dependency (4.6.x
 was self-contained), again already covered by the FLAC vendoring. Unlike opus,
 libxmp's version is reported from the `XMP_VERSION` macro in `include/xmp.h`, so
 that header **must** be refreshed alongside the DLL (host.c/menu.c pick it up
-automatically). The macOS `xmp.h` is a separate platform-specific copy and
-should only be updated alongside the macOS libxmp build, not to match Windows.
+automatically). macOS also uses libxmp, built from its vcpkg baseline with the
+matching vcpkg header rather than a separate platform-specific copy.
 
-Note: libmikmod is disabled in the MinGW and `Makefile.darwin` builds
-(`USE_CODEC_MIKMOD=0`), where libxmp handles module playback. It remains enabled
-in the MSVC project and macOS Xcode target; macOS uses its separate dylib and
-header. The Windows 3.3.13 DLL is built with DirectSound/WinMM output drivers, so
+Note: libmikmod is disabled in the MinGW and macOS builds, where libxmp handles
+module playback. It remains enabled in the MSVC project. The Windows 3.3.13 DLL
+is built with DirectSound/WinMM output drivers, so
 it imports `dsound.dll` / `user32.dll` / `winmm.dll` (all system DLLs) — these
 are inert here: `snd_mikmod.c` registers only `drv_nos` and decodes via
 `VC_WriteBytes`. Version is header-driven (`LIBMIKMOD_VERSION_*` in
@@ -110,8 +109,7 @@ kept as-is.
    x86_64-w64-mingw32-dlltool -d flac.def -D libFLAC.dll -l x64/libFLAC.lib
    ```
 3. Verify the dependency closure (see above) and vendor any new transitive deps.
-4. Update the copies of the public headers in `include/` (and the mirror in
-   `MacOSX/codecs/include/`) if the ABI/version changed.
+4. Update the public headers in `include/` if the ABI/version changed.
 5. Keep these manifests in sync — packaging globs `codecs/*/*.dll`, but these
    lists are explicit:
    - `Quake/update.c` — `update_win_files[]` and `update_win_helper_runtime_files[]`

@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(
+    CDPATH= cd -- "$(dirname -- "$0")" && pwd
+)"
+cd "$SCRIPT_DIR"
+
 VCPKG_REPO_URL="${VCPKG_REPO_URL:-https://github.com/microsoft/vcpkg}"
 # Pin vcpkg so CI and local builds do not float with upstream master.
 VCPKG_COMMIT="${VCPKG_COMMIT:-c27eeddba73f608f10605d80bc0144c1166f8fb7}"
@@ -29,11 +34,11 @@ fi
 
 echo ""
 echo "=== Checking required commands ==="
-required_cmds=(git lipo autoconf automake pkg-config)
+required_cmds=(git lipo autoconf automake pkg-config perl)
 missing=()
 for cmd in "${required_cmds[@]}"; do
     if command -v "$cmd" >/dev/null 2>&1; then
-        echo "  $cmd: OK ($(command -v $cmd))"
+        echo "  $cmd: OK ($(command -v "$cmd"))"
     else
         echo "  $cmd: NOT FOUND"
         missing+=("$cmd")
@@ -48,8 +53,8 @@ if ! command -v libtoolize >/dev/null 2>&1; then
     echo "  libtoolize not found, checking for glibtoolize..."
     if command -v glibtoolize >/dev/null 2>&1; then
         echo "  glibtoolize found at $(command -v glibtoolize), creating shim..."
-        shim_dir="$(pwd)/.tool-shims"
-        mkdir -p "$shim_dir"
+        shim_dir="$(mktemp -d "${TMPDIR:-/tmp}/qssm-tool-shims.XXXXXX")"
+        trap 'rm -rf "$shim_dir"' EXIT
         cat > "$shim_dir/libtoolize" <<'EOF'
 #!/bin/sh
 exec glibtoolize "$@"
@@ -212,6 +217,39 @@ fi
 
 echo "Using vcpkg checkout: $current_vcpkg_commit"
 remove_stale_crypto_packages
+
+# git.lysator.liu.se (nettle's canonical host) suffers periodic outages that
+# fail the build at the nettle source download. The GitHub mirror gnutls/nettle
+# publishes byte-identical archives of the same tag (same SHA512 the port pins),
+# so pre-seed vcpkg's download cache from there. Best-effort: on any problem we
+# leave the cache untouched and let vcpkg fall back to its default source.
+prefetch_nettle_source() {
+    # CI overrides the download dir via VCPKG_DOWNLOADS; honor it so the seed
+    # lands where vcpkg actually looks (defaults to the in-tree vcpkg/downloads).
+    local downloads="${VCPKG_DOWNLOADS:-./vcpkg/downloads}"
+    local filename="nettle-nettle-${NETTLE_REF}.tar.gz"
+    local dest="${downloads}/${filename}"
+    local url="https://github.com/gnutls/nettle/archive/refs/tags/${NETTLE_REF}.tar.gz"
+
+    if [ -f "$dest" ] && [ "$(shasum -a 512 "$dest" | awk '{print $1}')" = "$NETTLE_SHA512" ]; then
+        echo "Nettle source already cached (SHA512 OK); skipping mirror prefetch."
+        return 0
+    fi
+
+    mkdir -p "$downloads"
+    local tmp="${downloads}/.nettle-mirror.$$.tar.gz"
+    echo "Prefetching nettle source from GitHub mirror (git.lysator.liu.se fallback)..."
+    if curl -fsSL --retry 3 --max-time 180 -o "$tmp" "$url" \
+        && [ "$(shasum -a 512 "$tmp" | awk '{print $1}')" = "$NETTLE_SHA512" ]; then
+        mv -f "$tmp" "$dest"
+        echo "  cached $filename from GitHub mirror (SHA512 verified)."
+    else
+        rm -f "$tmp"
+        echo "  GitHub mirror unavailable or hash mismatch; using vcpkg default source."
+    fi
+    return 0
+}
+prefetch_nettle_source || true
 
 ./vcpkg/vcpkg install --overlay-triplets=custom-triplets --triplet=x64-osx-1013 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
 ./vcpkg/vcpkg install --overlay-triplets=custom-triplets --triplet=arm64-osx-11 zlib libogg opus opusfile libvorbis libmad libflac libxmp libgnutls
