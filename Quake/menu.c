@@ -20342,7 +20342,7 @@ Console Menu
 ==================
 */
 
-extern cvar_t scr_conscale, scr_consize, scr_conspeed, scr_conalpha, cl_contentfilter, con_typing, con_clear_input_on_toggle, scr_conback, scr_concolor;
+extern cvar_t scr_conscale, scr_consize, scr_conspeed, scr_conalpha, cl_contentfilter, con_typing, con_autohint, con_clear_input_on_toggle, scr_conback, scr_concolor;
 
 static enum console_e
 {
@@ -20354,6 +20354,7 @@ static enum console_e
 	CONSOLE_CONCOLOR,
 	CONSOLE_CONTENTFILTER,
 	CONSOLE_TYPING,
+	CONSOLE_AUTOHINT,
 	CONSOLE_CLEAR_ON_TOGGLE,
 	CONSOLE_SAVE_HISTORY,
 	CONSOLE_CLEAR_CONSOLE,
@@ -20638,6 +20639,8 @@ static const char* M_Console_GetItemText(int index)
 		return "Content Filter";
 	case CONSOLE_TYPING:
 		return "Typing Status";
+	case CONSOLE_AUTOHINT:
+		return "Auto Hints";
 	case CONSOLE_CLEAR_ON_TOGGLE:
 		return "Clear On Toggle";
 	case CONSOLE_SAVE_HISTORY:
@@ -20664,6 +20667,7 @@ static cvar_t *M_Console_GetItemCvar(int index)
 	case CONSOLE_CONCOLOR:		return &scr_concolor;
 	case CONSOLE_CONTENTFILTER:	return &cl_contentfilter;
 	case CONSOLE_TYPING:			return &con_typing;
+	case CONSOLE_AUTOHINT:		return &con_autohint;
 	case CONSOLE_CLEAR_ON_TOGGLE:	return &con_clear_input_on_toggle;
 	case CONSOLE_SAVE_HISTORY:	return Cvar_FindVar("con_savehistory");
 	default:					return NULL;
@@ -20790,6 +20794,9 @@ static void M_Console_AdjustSliders(int dir)
 
 	case CONSOLE_TYPING:
 		Cvar_SetValue("con_typing", !con_typing.value);
+		break;
+	case CONSOLE_AUTOHINT:
+		Cvar_SetValue("con_autohint", !con_autohint.value);
 		break;
 	case CONSOLE_CLEAR_ON_TOGGLE:
 		Cvar_SetValue("con_clear_input_on_toggle", !con_clear_input_on_toggle.value);
@@ -20925,6 +20932,11 @@ void M_Console_Draw(void)
 			if (!show_cvar_hint)
 				M_DrawCheckbox(MENU_VALUE_X, y, con_typing.value != 0);
 			break;
+		case CONSOLE_AUTOHINT:
+			text = "      Auto Hints";
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, con_autohint.value != 0);
+			break;
 
 		case CONSOLE_CLEAR_ON_TOGGLE:
 			text = " Clear On Toggle";
@@ -20996,7 +21008,7 @@ void M_Console_Draw(void)
 		const char* hint = "Enter applies, Esc cancels";
 		M_PrintRGBA((320 - (int)strlen(hint) * 8) / 2, hint_y, hint, CL_PLColours_Parse("0xffffff"), 0.5f, false);
 	}
-	else if (console_cursor == CONSOLE_CONCOLOR)
+	else if (consolemenu.search.len == 0 && console_cursor == CONSOLE_CONCOLOR)
 		M_PrintRGBA(74, hint_y, "+shift for RGB colors", CL_PLColours_Parse("0xffffff"), 0.6f, false);
 
 	// Draw search box if search is active

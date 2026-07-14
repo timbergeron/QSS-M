@@ -101,8 +101,15 @@ cvar_t		con_notifydiscord = {"con_notifydiscord", "", CVAR_ARCHIVE}; // woods #d
 cvar_t		con_typing = {"con_typing", "1", CVAR_ARCHIVE}; // woods #typing...
 cvar_t		con_cursorcolor = {"con_cursorcolor", "0", CVAR_ARCHIVE}; // woods #cursorcolor (0=white, 1=red, 2=gold)
 cvar_t		con_clear_input_on_toggle = {"con_clear_input_on_toggle", "0", CVAR_ARCHIVE}; // R00k, erase console input line when toggling the console
+cvar_t		con_autohint = {"con_autohint", "1", CVAR_ARCHIVE}; // show inline console completion hints
 
 static void QWMapList_f(void);
+
+static void Con_Autohint_Callback (cvar_t *var)
+{
+	if (!var->value)
+		key_tabhint[0] = '\0';
+}
 
 char		con_lastcenterstring[1024]; //johnfitz
 
@@ -1477,8 +1484,10 @@ void Con_Init (void)
 	Cvar_RegisterVariable (&con_typing); // woods #typing...
 	Cvar_RegisterVariable (&con_cursorcolor); // woods #cursorcolor
 	Cvar_RegisterVariable (&con_clear_input_on_toggle); // R00k
+	Cvar_RegisterVariable (&con_autohint);
 	Cvar_SetCompletion (&con_cursorcolor, &Con_CursorColor_Completion_f); // woods #iwtabcomplete
 	Cvar_SetCallback (&con_notifydiscord, &ConNotifyDiscord_Callback); // woods #discord
+	Cvar_SetCallback (&con_autohint, &Con_Autohint_Callback);
 
 
 	Cmd_AddCommand ("toggleconsole", Con_ToggleConsole_f);
@@ -6024,6 +6033,8 @@ void Con_TabComplete (tabcomplete_t mode)
 	if (mode == TABCOMPLETE_AUTOHINT)
 	{
 		key_tabpartial[0] = '\0';
+		if (!con_autohint.value)
+			return;
 
 		if (key_lines[edit_line][1] == ' ') // woods no auto hints if leading space for chatting from console
 			return;
