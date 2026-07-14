@@ -1,0 +1,130 @@
+[
+  {
+    "name": "SDL2",
+    "vendored": "2.32.10",
+    "dlls": ["Windows/SDL2/lib/SDL2.dll", "Windows/SDL2/lib64/SDL2.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-SDL2", "baseline": "2.32.10-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-SDL2", "baseline": "2.32.10-1" }
+    ]
+  },
+  {
+    "name": "libcurl",
+    "vendored": "8.21.0",
+    "dlls": ["Windows/curl/lib/x86/libcurl.dll", "Windows/curl/lib/x64/libcurl.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-curl", "baseline": "8.21.0-2" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-curl", "baseline": "8.21.0-2" }
+    ]
+  },
+  {
+    "name": "zlib",
+    "vendored": "1.3.2",
+    "dlls": ["Windows/zlib/x86/zlib1.dll", "Windows/zlib/x64/zlib1.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-zlib", "baseline": "1.3.2-2" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-zlib", "baseline": "1.3.2-2" }
+    ]
+  },
+  {
+    "name": "libFLAC",
+    "vendored": "1.5.0",
+    "dlls": ["Windows/codecs/x86/libFLAC.dll", "Windows/codecs/x64/libFLAC.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-flac", "baseline": "1.5.0-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-flac", "baseline": "1.5.0-1" }
+    ]
+  },
+  {
+    "name": "libmad",
+    "vendored": "0.15.1b",
+    "dlls": ["Windows/codecs/x86/libmad-0.dll", "Windows/codecs/x64/libmad-0.dll"],
+    "packages": [
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libmad", "baseline": "0.15.1b-5" }
+    ]
+  },
+  {
+    "name": "libmikmod",
+    "vendored": "3.3.13",
+    "dlls": ["Windows/codecs/x86/libmikmod-3.dll", "Windows/codecs/x64/libmikmod-3.dll"],
+    "packages": [
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libmikmod", "baseline": "3.3.13-1" }
+    ]
+  },
+  {
+    "name": "libmpg123",
+    "vendored": "1.33.5",
+    "dlls": ["Windows/codecs/x86/libmpg123-0.dll", "Windows/codecs/x64/libmpg123-0.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-mpg123", "baseline": "1.33.5-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-mpg123", "baseline": "1.33.5-1" }
+    ]
+  },
+  {
+    "name": "libogg",
+    "vendored": "1.3.6",
+    "dlls": ["Windows/codecs/x86/libogg-0.dll", "Windows/codecs/x64/libogg-0.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-libogg", "baseline": "1.3.6-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libogg", "baseline": "1.3.6-1" }
+    ]
+  },
+  {
+    "name": "libopus",
+    "vendored": "1.6.1",
+    "dlls": ["Windows/codecs/x86/libopus-0.dll", "Windows/codecs/x64/libopus-0.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-opus", "baseline": "1.6.1-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-opus", "baseline": "1.6.1-1" }
+    ]
+  },
+  {
+    "name": "libopusfile",
+    "vendored": "0.12",
+    "dlls": ["Windows/codecs/x86/libopusfile-0.dll", "Windows/codecs/x64/libopusfile-0.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-opusfile", "baseline": "0.12-4" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-opusfile", "baseline": "0.12-4" }
+    ]
+  },
+  {
+    "name": "libvorbis",
+    "vendored": "1.3.7",
+    "dlls": [
+      "Windows/codecs/x86/libvorbis-0.dll",
+      "Windows/codecs/x86/libvorbisfile-3.dll",
+      "Windows/codecs/x64/libvorbis-0.dll",
+      "Windows/codecs/x64/libvorbisfile-3.dll"
+    ],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-libvorbis", "baseline": "1.3.7-2" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libvorbis", "baseline": "1.3.7-2" }
+    ]
+  },
+  {
+    "name": "libxmp",
+    "vendored": "4.7.1",
+    "dlls": ["Windows/codecs/x86/libxmp.dll", "Windows/codecs/x64/libxmp.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-libxmp", "baseline": "4.7.1-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libxmp", "baseline": "4.7.1-1" }
+    ]
+  },
+  {
+    "name": "winpthreads",
+    "vendored": "12.0.0.r747",
+    "dlls": ["Windows/codecs/x86/libwinpthread-1.dll", "Windows/codecs/x64/libwinpthread-1.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-winpthreads", "baseline": "14.0.0.r179.g24aaa6147-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-winpthreads", "baseline": "14.0.0.r179.g24aaa6147-1" }
+    ]
+  },
+  {
+    "name": "libgcc",
+    "vendored": "16.1.0",
+    "dlls": ["Windows/codecs/x86/libgcc_s_dw2-1.dll"],
+    "packages": [
+      { "repository": "mingw32", "name": "mingw-w64-i686-gcc-libs", "baseline": "16.1.0-5" }
+    ]
+  }
+]

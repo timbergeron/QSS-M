@@ -1,0 +1,126 @@
+name: Windows dependency update watch
+
+on:
+  push:
+    paths:
+      - ".github/dependency-watch.json"
+      - ".github/scripts/check-msys2-dependencies.js"
+      - ".github/scripts/check-msys2-dependencies.test.js"
+      - ".github/scripts/notify-dependency-updates.js"
+      - ".github/scripts/notify-dependency-updates.test.js"
+      - ".github/workflows/dependency-watch.yml"
+  pull_request:
+    paths:
+      - ".github/dependency-watch.json"
+      - ".github/scripts/check-msys2-dependencies.js"
+      - ".github/scripts/check-msys2-dependencies.test.js"
+      - ".github/scripts/notify-dependency-updates.js"
+      - ".github/scripts/notify-dependency-updates.test.js"
+      - ".github/workflows/dependency-watch.yml"
+  schedule:
+    # Daily at 15:23 UTC. Avoid the top of the hour, when schedules may queue.
+    - cron: "23 15 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test dependency monitor
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+
+      - name: Run unit tests
+        run: node --test .github/scripts/*.test.js
+
+      - name: Validate manifest and DLL coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("fs");
+          const { validateManifest } = require("./.github/scripts/check-msys2-dependencies.js");
+          const manifest = JSON.parse(fs.readFileSync(".github/dependency-watch.json", "utf8"));
+          validateManifest(manifest, ".");
+          console.log("Dependency manifest covers every DLL in the monitored packaging directories.");
+          NODE
+
+  check:
+    name: Check MSYS2 DLL packages
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    concurrency:
+      group: dependency-update-watch
+      cancel-in-progress: false
+    env:
+      NOTIFY_USER: ${{ vars.DEPENDENCY_NOTIFY_USER || github.repository_owner }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+
+      - name: Download current MSYS2 package indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for repository in mingw32 mingw64; do
+            database="$RUNNER_TEMP/$repository.db"
+            extracted="$RUNNER_TEMP/$repository-db"
+            mkdir -p "$extracted"
+            curl --fail --location --silent --show-error \
+              --retry 5 --retry-all-errors --connect-timeout 15 --max-time 120 \
+              --output "$database" \
+              "https://repo.msys2.org/mingw/$repository/$repository.db"
+            test -s "$database"
+            tar -xf "$database" -C "$extracted"
+            test -n "$(find "$extracted" -mindepth 2 -maxdepth 2 -name desc -print -quit)"
+          done
+
+      - name: Compare bundled and available packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/check-msys2-dependencies.js \
+            .github/dependency-watch.json \
+            . \
+            "$RUNNER_TEMP/dependency-updates.json" \
+            "mingw32=$RUNNER_TEMP/mingw32-db" \
+            "mingw64=$RUNNER_TEMP/mingw64-db"
+
+      - name: Open notification issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          UPDATES_FILE: ${{ runner.temp }}/dependency-updates.json
+        with:
+          retries: 3
+          script: |
+            const fs = require("fs");
+            const notify = require("./.github/scripts/notify-dependency-updates.js");
+            const updates = JSON.parse(fs.readFileSync(process.env.UPDATES_FILE, "utf8"));
+            await notify({
+              github,
+              context,
+              core,
+              updates,
+              notifyUser: process.env.NOTIFY_USER,
+            });
