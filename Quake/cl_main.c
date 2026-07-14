@@ -81,7 +81,7 @@ cvar_t	cl_demoreel = {"cl_demoreel", "1", CVAR_ARCHIVE};
 cvar_t	cl_beams_polygons = {"cl_beams_polygons", "0", CVAR_ARCHIVE}; // woods #beamspoly
 cvar_t	cl_truelightning = {"cl_truelightning", "0",CVAR_ARCHIVE}; // woods for #truelight
 cvar_t	cl_lightning_zadjust = {"cl_lightning_zadjust", "16", CVAR_ARCHIVE}; // woods for #truelight
-cvar_t	cl_say = {"cl_say","0", CVAR_ARCHIVE}; // woods #ezsay
+cvar_t	cl_chatmode = {"cl_chatmode","0", CVAR_ARCHIVE}; // woods #ezsay
 cvar_t  cl_afk = {"cl_afk", "0", CVAR_ARCHIVE }; // woods #smartafk
 cvar_t  cl_idle = {"cl_idle", "0", CVAR_NONE }; // woods #smartafk
 cvar_t  r_rocketlight = {"r_rocketlight", "0", CVAR_ARCHIVE }; // woods #rocketlight
@@ -7615,7 +7615,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_truelightning); // woods for #truelight
 	Cvar_RegisterVariable (&cl_lightning_zadjust); // woods for #truelight
 	Cvar_RegisterVariable (&gl_lightning_alpha); // woods for lighting alpha #lightalpha
-	Cvar_RegisterVariable (&cl_say); // woods for #ezsay
+	Cvar_RegisterVariable (&cl_chatmode); // woods for #ezsay
 	Cvar_RegisterVariable (&cl_afk); // woods #smartafk
 	Cvar_RegisterVariable (&cl_idle); // woods #smartafk
 	Cvar_RegisterVariable (&r_rocketlight); // woods #rocketlight

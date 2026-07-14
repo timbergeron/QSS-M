@@ -16868,7 +16868,7 @@ Game Menu
 */
 
 extern cvar_t cl_rollangle, scr_fov, gl_cshiftpercent, cl_bob, v_kicktime, v_kickroll, v_kickpitch, r_drawviewmodel,
-cl_damagehue, w_switch, b_switch, cl_say, cl_r2g, cl_truelightning, cl_beams_polygons, cl_deadbodyfilter, con_mm1mute,
+cl_damagehue, w_switch, b_switch, cl_chatmode, cl_r2g, cl_truelightning, cl_beams_polygons, cl_deadbodyfilter, con_mm1mute,
 gl_max_size, gl_load24bit, r_player_xray;
 
 enum
@@ -17657,7 +17657,7 @@ static cvar_t *M_Game_GetItemCvar(int index)
 	case GAME_FLASHES:			return &gl_cshiftpercent;
 	case GAME_WEAPONBOB:		return &cl_bob;
 	case GAME_DAMAGETINT:		return &cl_damagehue;
-	case GAME_CONSOLECHAT:		return &cl_say;
+	case GAME_CONSOLECHAT:		return &cl_chatmode;
 	case GAME_SWAPROCKETS:		return &cl_r2g;
 	case GAME_TRUELIGHTNING:	return &cl_truelightning;
 	case GAME_STRAIGHTSHAFT:	return &cl_beams_polygons;
@@ -17854,9 +17854,9 @@ static void M_Game_AdjustSliders(int dir)
 
 	case GAME_CONSOLECHAT:
 	{
-		int current = cl_say.value;
+		int current = cl_chatmode.value;
 		current = (current + 3 + dir) % 3;  // Cycle through 0,1,2
-		Cvar_SetValue("cl_say", current);
+		Cvar_SetValue("cl_chatmode", current);
 	}
 	break;
 
@@ -18037,9 +18037,9 @@ void M_Game_Draw(void)
 
 		case GAME_CONSOLECHAT:
 			text = "      Console Chat";
-			if (cl_say.value == 0)
+			if (cl_chatmode.value == 0)
 				value = "off";
-			else if (cl_say.value == 1)
+			else if (cl_chatmode.value == 1)
 				value = "console";
 			else
 				value = "console+space";

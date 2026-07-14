@@ -112,10 +112,14 @@ void CFG_ReadCvars (const char **vars, int num_vars)
 char* CFG_ReadCvarValue (const char* var_name) // woods -- same as CFG_ReadCvars, but lets get a single cvar value #webdl
 {
 	char buff[1024];
+	char* line;
 	char* tmp;
+	size_t name_len;
 
 	if (!cfg_file || !var_name)
 		return NULL;
+
+	name_len = strlen(var_name);
 
 	while (FS_fgets(buff, sizeof(buff), cfg_file)) {
 		// Remove end-of-line characters and replace tabs with spaces
@@ -136,10 +140,15 @@ char* CFG_ReadCvarValue (const char* var_name) // woods -- same as CFG_ReadCvars
 			// Remove the ending quotation mark
 			buff[len - 1] = '\0';
 
+			// Cvar_WriteVariables prefixes user-defined/seta cvars with "seta ".
+			line = buff;
+			if (!strncmp(line, "seta ", 5))
+				line += 5;
+
 			// More accurate check for the variable name
-			if (strncmp(buff, var_name, strlen(var_name)) == 0 && buff[strlen(var_name)] == ' ') {
+			if (strncmp(line, var_name, name_len) == 0 && line[name_len] == ' ') {
 				// Find the start of the value
-				tmp = strchr(buff, '\"');
+				tmp = strchr(line, '\"');
 				if (tmp) {
 					// Allocate memory for the value
 					char* value = (char*)malloc(strlen(tmp + 1) + 1);
@@ -222,4 +231,3 @@ int CFG_OpenConfig (const char *cfg_name)
 
 	return 0;
 }
-

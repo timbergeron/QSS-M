@@ -748,7 +748,7 @@ void Char_Console2(int key) // woods #ezsay add leading space for mode 2
 	char* workline = key_lines[edit_line];
 	int max;
 
-	if (cl_say.value && (cls.state == ca_connected && cl.gametype == GAME_DEATHMATCH))
+	if (cl_chatmode.value && (cls.state == ca_connected && cl.gametype == GAME_DEATHMATCH))
 		if ((cl.modtype == 1) || (cl.modtype == 4))
 			max = MAX_CHAT_SIZE_EX;
 		else
@@ -855,7 +855,7 @@ void Key_Console (int key)
 	switch (key)
 	{
 	case K_ENTER:
-		if (cls.state == ca_connected && !CheckForCommand() && (cl_say.value == 1 || cl_say.value == 2 || (cl_say.value == 3 && key_lines[edit_line][1] == ' '))) // woods don't have to type "say " every time you wanna say something #ezsay (joequake)
+		if (cls.state == ca_connected && !CheckForCommand() && (cl_chatmode.value == 1 || cl_chatmode.value == 2 || (cl_chatmode.value == 3 && key_lines[edit_line][1] == ' '))) // woods don't have to type "say " every time you wanna say something #ezsay (joequake)
 		{
 				Cbuf_AddText("say ");
 				key_tabhint[0] = '\0';
@@ -883,7 +883,7 @@ void Key_Console (int key)
 		key_tabhint[0] = '\0'; // woods #iwtabcomplete
 		if (cls.state == ca_disconnected)
 			SCR_UpdateScreen (); // force an update, because the command may take some time
-		if (cl_say.value == 2 || cl_say.value == 3) // woods #ezsay add leading space for mode 2
+		if (cl_chatmode.value == 2 || cl_chatmode.value == 3) // woods #ezsay add leading space for mode 2
 			Char_Console2(32);
 		return;
 
@@ -1187,7 +1187,7 @@ int chat_setinfo_defer = 0; // woods #chatinfo -- main-thread deferred-call hand
 
 void ExecuteSetInfoChat()
 {
-	if (cl_say.value)
+	if (cl_chatmode.value)
 		SetChatInfo (0);
 }
 
@@ -1203,7 +1203,7 @@ void Char_Console(int key) // woods -- added detection for when typing in consol
 	char *workline = key_lines[edit_line];
 	int max;
 
-	if (cl_say.value) // woods #chatinfo
+	if (cl_chatmode.value) // woods #chatinfo
 	{
 		char tmp[3];
 		int chat;
@@ -1215,7 +1215,7 @@ void Char_Console(int key) // woods -- added detection for when typing in consol
 			SetChatInfo(CIF_CHAT);
 	}
 
-	if (cl_say.value && (cls.state == ca_connected && cl.gametype == GAME_DEATHMATCH))
+	if (cl_chatmode.value && (cls.state == ca_connected && cl.gametype == GAME_DEATHMATCH))
 		if ((cl.modtype == 1) || (cl.modtype == 4))
 			max = MAX_CHAT_SIZE_EX;
 		else
@@ -1257,7 +1257,7 @@ void Char_Console(int key) // woods -- added detection for when typing in consol
 		Con_TabComplete (TABCOMPLETE_AUTOHINT);
 	}
 
-	if (cl_say.value) // woods #chatinfo -- delay before setting chat to 0
+	if (cl_chatmode.value) // woods #chatinfo -- delay before setting chat to 0
 	{
 		// restart the countdown on each keystroke (cancel is a safe no-op if already fired)
 		Host_CancelDeferredCall(chat_setinfo_defer);

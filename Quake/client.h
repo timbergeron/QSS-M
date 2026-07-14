@@ -538,7 +538,7 @@ extern	cvar_t	cl_beams_polygons; // woods #beamspoly
 extern	cvar_t	cl_truelightning; // woods for truelightning #truelight
 extern	cvar_t	cl_lightning_zadjust; // woods for truelightning #truelight
 extern	cvar_t	gl_lightning_alpha; // woods transparent lightning #lightalpha
-extern	cvar_t	cl_say; // woods #ezsay
+extern	cvar_t	cl_chatmode; // woods #ezsay
 extern	cvar_t	cl_afk; // woods #smartafk
 extern  cvar_t	cl_idle;  // woods #damage
 extern  cvar_t	cl_smartspawn; // woods #spawntrainer

@@ -349,10 +349,10 @@ void Con_ToggleConsole_f (void)
        Con_SetHotLink(NULL); // woods #conselection - clear hover/selection on toggle to avoid stale state
        Con_ClearSelection();
 
-	if ((key_linepos == 1) && (cl_say.value == 2 || cl_say.value == 3)) // woods #ezsay add leading space for mode 2
+	if ((key_linepos == 1) && (cl_chatmode.value == 2 || cl_chatmode.value == 3)) // woods #ezsay add leading space for mode 2
 		Char_Console2(32);
 
-	if (cl_say.value) // woods #chatinfo
+	if (cl_chatmode.value) // woods #chatinfo
 	{
 		SetChatInfo (0);
 

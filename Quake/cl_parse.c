@@ -3902,7 +3902,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			MSG_WriteByte(&cls.message, clc_stringcmd);
 			MSG_WriteString(&cls.message, va("say cross %s, vmodel %s, hud %s, particles %s", crosshair.string, r_drawviewmodel.string, hud, particles));
 			MSG_WriteByte(&cls.message, clc_stringcmd);
-			MSG_WriteString(&cls.message, va("say textures %s, +forward %s, chat %s, ecolor %s", textures, key, cl_say.string, ecolor));
+			MSG_WriteString(&cls.message, va("say textures %s, +forward %s, chat %s, ecolor %s", textures, key, cl_chatmode.string, ecolor));
 			cl.printconfig = realtime + 20;
 		}
 	}

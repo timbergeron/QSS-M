@@ -4216,7 +4216,7 @@ char* hints[] = {
 	"dragging a demo into windowed mode plays the demo",
 	"arrow keys, scroll wheel, and pgup/pgdn adjust demo speed",
 	"ctrl-u clears the console line",
-	"cl_say allows you to tyle chat into the console",
+	"cl_chatmode allows you to type chat into the console",
 	"connect last or reconnect will connect to last server",
 	"connect + tab will autocomplete server history",
 	"send a direct message by typing tell + first letters of name",

@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "bgmusic.h"
 #include "pmove.h"
 #include "f_modified.h"
+#include "cfgfile.h"
 #include <setjmp.h>
 #include "time.h" // woods #cfgbackup
 
@@ -2114,6 +2115,38 @@ void Host_RunCvarMigrations (void) // woods #migration
 		}
 
 		schema = 3;
+	}
+
+	if (schema < 4)
+	{
+		char	*legacy_chatmode = NULL;
+		char	*current_chatmode = NULL;
+
+		// woods #migration -- cl_say is no longer registered, so read its old
+		// archived value directly. Prefer an explicit cl_chatmode setting when a
+		// config contains both names.
+		if (CFG_OpenConfig ("config.cfg") == 0)
+		{
+			legacy_chatmode = CFG_ReadCvarValue ("cl_say");
+			current_chatmode = CFG_ReadCvarValue ("cl_chatmode");
+			CFG_CloseConfig ();
+		}
+
+		if (legacy_chatmode && !current_chatmode)
+		{
+			Cvar_Set ("cl_chatmode", legacy_chatmode);
+			Con_Printf ("Migrated cl_say to cl_chatmode\n");
+		}
+
+		// "seta cl_say" creates a temporary user cvar while the old config is
+		// executing. Do not archive that placeholder back into the new config.
+		cv = Cvar_FindVar ("cl_say");
+		if (cv && (cv->flags & CVAR_USERDEFINED))
+			cv->flags &= ~(CVAR_ARCHIVE | CVAR_SETA);
+
+		free (legacy_chatmode);
+		free (current_chatmode);
+		schema = 4;
 	}
 
 	if (schema != original_schema)
