@@ -20342,7 +20342,7 @@ Console Menu
 ==================
 */
 
-extern cvar_t scr_conscale, scr_consize, scr_conspeed, scr_conalpha, cl_contentfilter, con_typing, scr_conback, scr_concolor;
+extern cvar_t scr_conscale, scr_consize, scr_conspeed, scr_conalpha, cl_contentfilter, con_typing, con_clear_input_on_toggle, scr_conback, scr_concolor;
 
 static enum console_e
 {
@@ -20354,6 +20354,7 @@ static enum console_e
 	CONSOLE_CONCOLOR,
 	CONSOLE_CONTENTFILTER,
 	CONSOLE_TYPING,
+	CONSOLE_CLEAR_ON_TOGGLE,
 	CONSOLE_SAVE_HISTORY,
 	CONSOLE_CLEAR_CONSOLE,
 	CONSOLE_CLEAR_HISTORY,
@@ -20426,8 +20427,6 @@ static int M_Console_GetItemY(int index)
 	int y = 48 + index * 8;
 
 	if (index >= CONSOLE_CONBACK)
-		y += 8;
-	if (index >= CONSOLE_CONCOLOR)
 		y += 8;
 	if (index >= CONSOLE_CLEAR_CONSOLE)
 		y += 8;
@@ -20639,6 +20638,8 @@ static const char* M_Console_GetItemText(int index)
 		return "Content Filter";
 	case CONSOLE_TYPING:
 		return "Typing Status";
+	case CONSOLE_CLEAR_ON_TOGGLE:
+		return "Clear On Toggle";
 	case CONSOLE_SAVE_HISTORY:
 		return "Save History";
 	case CONSOLE_CLEAR_CONSOLE:
@@ -20663,6 +20664,7 @@ static cvar_t *M_Console_GetItemCvar(int index)
 	case CONSOLE_CONCOLOR:		return &scr_concolor;
 	case CONSOLE_CONTENTFILTER:	return &cl_contentfilter;
 	case CONSOLE_TYPING:			return &con_typing;
+	case CONSOLE_CLEAR_ON_TOGGLE:	return &con_clear_input_on_toggle;
 	case CONSOLE_SAVE_HISTORY:	return Cvar_FindVar("con_savehistory");
 	default:					return NULL;
 	}
@@ -20788,6 +20790,9 @@ static void M_Console_AdjustSliders(int dir)
 
 	case CONSOLE_TYPING:
 		Cvar_SetValue("con_typing", !con_typing.value);
+		break;
+	case CONSOLE_CLEAR_ON_TOGGLE:
+		Cvar_SetValue("con_clear_input_on_toggle", !con_clear_input_on_toggle.value);
 		break;
 	case CONSOLE_SAVE_HISTORY:
 		Cvar_SetValue("con_savehistory", !Cvar_VariableValue("con_savehistory"));
@@ -20919,6 +20924,12 @@ void M_Console_Draw(void)
 			text = "   Typing Status";
 			if (!show_cvar_hint)
 				M_DrawCheckbox(MENU_VALUE_X, y, con_typing.value != 0);
+			break;
+
+		case CONSOLE_CLEAR_ON_TOGGLE:
+			text = " Clear On Toggle";
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, con_clear_input_on_toggle.value != 0);
 			break;
 
 		case CONSOLE_SAVE_HISTORY:

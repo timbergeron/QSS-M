@@ -100,6 +100,7 @@ cvar_t		con_coldirection = { "con_coldirection", "0", CVAR_ARCHIVE}; // woods #c
 cvar_t		con_notifydiscord = {"con_notifydiscord", "", CVAR_ARCHIVE}; // woods #discord
 cvar_t		con_typing = {"con_typing", "1", CVAR_ARCHIVE}; // woods #typing...
 cvar_t		con_cursorcolor = {"con_cursorcolor", "0", CVAR_ARCHIVE}; // woods #cursorcolor (0=white, 1=red, 2=gold)
+cvar_t		con_clear_input_on_toggle = {"con_clear_input_on_toggle", "0", CVAR_ARCHIVE}; // R00k, erase console input line when toggling the console
 
 static void QWMapList_f(void);
 
@@ -186,7 +187,6 @@ static void Con_ClearLinks(void)
 }
 
 void Char_Console2(int key); // woods #ezsay add leading space for mode 2
-void Key_Console(int key); // woods con_clear_input_on_toggle
 extern qboolean	endscoreprint; // woods -- don't filter end scores pq_confilter+
 char lastconnected[3]; // woods -- #identify+
 char lc[3]; // woods -- #identify+
@@ -311,13 +311,14 @@ extern int history_line; //johnfitz
 
 void Con_ToggleConsole_f (void)
 {
+	if (con_clear_input_on_toggle.value)
+	{
+		key_lines[edit_line][1] = 0;
+		key_linepos = 1;
+	}
+
 	if (key_dest == key_console/* || (key_dest == key_game && con_forcedup)*/)
 	{
-		//key_lines[edit_line][1] = 0;	// clear any typing -- woods con_clear_input_on_toggle from Qrack (R00k)
-		//key_linepos = 1; // woods con_clear_input_on_toggle from Qrack (R00k)
-
-		Key_Console(K_BACKSPACE); // woods con_clear_input_on_toggle
-
 		con_backscroll = 0; //johnfitz -- toggleconsole should return you to the bottom of the scrollback
 		history_line = edit_line; //johnfitz -- it should also return you to the bottom of the command history
 
@@ -1475,6 +1476,7 @@ void Con_Init (void)
 	Cvar_RegisterVariable (&con_notifydiscord); // woods #discord
 	Cvar_RegisterVariable (&con_typing); // woods #typing...
 	Cvar_RegisterVariable (&con_cursorcolor); // woods #cursorcolor
+	Cvar_RegisterVariable (&con_clear_input_on_toggle); // R00k
 	Cvar_SetCompletion (&con_cursorcolor, &Con_CursorColor_Completion_f); // woods #iwtabcomplete
 	Cvar_SetCallback (&con_notifydiscord, &ConNotifyDiscord_Callback); // woods #discord
 
