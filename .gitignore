@@ -15,3 +15,7 @@ out
 # Build artifacts
 *.o
 *.d
+/Quake/quakespasm
+/Quake/quakespasm.exe
+/Quake/QSS-M
+/Quake/debug.txt
