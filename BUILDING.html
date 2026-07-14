@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QSS-M — Build From Source</title>
+<meta name="description" content="Caveman-proof, copy-paste instructions to build QSS-M (Quakespasm Spiked Multiplayer) on Linux, macOS, and Windows.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMiIgZmlsbD0iIzIxMWYxYyIvPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDgwIDg0KSBzY2FsZSgwLjY4NSkiIGZpbGw9IiNkOWIzODIiPjxwYXRoIGQ9Ik00MTYgMzk4LjljNTguNS00MS4xIDk2LTEwNC4xIDk2LTE3NC45QzUxMiAxMDAuMyAzOTcuNCAwIDI1NiAwUzAgMTAwLjMgMCAyMjRjMCA3MC43IDM3LjUgMTMzLjggOTYgMTc0LjljMCAuNCAwIC43IDAgMS4xbDAgNjRjMCAyNi41IDIxLjUgNDggNDggNDhsNDggMCAwLTQ4YzAtOC44IDcuMi0xNiAxNi0xNnMxNiA3LjIgMTYgMTZsMCA0OCA2NCAwIDAtNDhjMC04LjggNy4yLTE2IDE2LTE2czE2IDcuMiAxNiAxNmwwIDQ4IDQ4IDBjMjYuNSAwIDQ4LTIxLjUgNDgtNDhsMC02NGMwLS40IDAtLjcgMC0xLjF6TTk2IDI1NmE2NCA2NCAwIDEgMSAxMjggMEE2NCA2NCAwIDEgMSA5NiAyNTZ6bTI1Ni02NGE2NCA2NCAwIDEgMSAwIDEyOCA2NCA2NCAwIDEgMSAwLTEyOHoiLz48L2c+PC9zdmc+">
+<style>
+  :root {
+    color-scheme: dark light;
+    /* warm charcoal ground, Quake tan/gold, teal action accent */
+    --ground:      #2b2926;
+    --ground-2:    #211f1c;
+    --panel:       #323029;
+    --panel-2:     #3a382f;
+    --line:        #494537;
+    --ink:         #ece7db;
+    --ink-soft:    #b8b0a0;
+    --muted:       #8c8474;
+    --gold:        #c19a6b;
+    --gold-bright: #d9b382;
+    --gold-deep:   #987b5b;
+    --amber:       #d8c53a;
+    --teal:        #12d99b;
+    --teal-deep:   #0fae7d;
+    --code-bg:     #1a1815;
+    --code-ink:    #e4dccb;
+    --shadow:      0 18px 40px -20px rgba(0,0,0,.75);
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --ground:      #efe9dd;
+    --ground-2:    #e6dfd0;
+    --panel:       #faf6ec;
+    --panel-2:     #f3ecdb;
+    --line:        #d8ccb2;
+    --ink:         #2c281f;
+    --ink-soft:    #55503f;
+    --muted:       #837a63;
+    --gold:        #9a6f3c;
+    --gold-bright: #86602f;
+    --gold-deep:   #a37c4d;
+    --amber:       #9a7d0a;
+    --teal:        #0a8f66;
+    --teal-deep:   #0a7d5a;
+    --code-bg:     #241f18;
+    --code-ink:    #e4dccb;
+    --shadow:      0 16px 34px -22px rgba(60,45,20,.45);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--ground);
+    color: var(--ink);
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--gold-bright); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ::selection { background: var(--gold-deep); color: #fff; }
+  :focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; border-radius: 3px; }
+
+  /* ---------- top nav ---------- */
+  header.nav {
+    position: sticky; top: 0; z-index: 40;
+    display: flex; align-items: center; gap: 20px;
+    padding: 0 clamp(16px, 4vw, 40px); height: 60px;
+    background: color-mix(in srgb, var(--ground-2) 88%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; font-weight: 800; letter-spacing: .12em; }
+  .brand .q { color: var(--gold-bright); }
+  .brand .tag { font-size: .66rem; letter-spacing: .28em; color: var(--muted); text-transform: uppercase; }
+  nav.jump { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
+  nav.jump a {
+    font-size: .74rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 700;
+    color: var(--ink-soft); padding: 7px 12px; border-radius: 7px; border: 1px solid transparent;
+  }
+  nav.jump a:hover { color: var(--ink); background: var(--panel); border-color: var(--line); text-decoration: none; }
+  .theme-btn {
+    font: inherit; font-size: .74rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    cursor: pointer; color: var(--ink-soft); background: var(--panel); border: 1px solid var(--line);
+    padding: 7px 12px; border-radius: 7px;
+  }
+  .theme-btn:hover { color: var(--ink); }
+
+  /* ---------- layout ---------- */
+  main { max-width: 940px; margin: 0 auto; padding: 0 clamp(16px, 4vw, 40px) 100px; }
+  section { scroll-margin-top: 76px; }
+
+  /* ---------- hero ---------- */
+  .hero {
+    position: relative; overflow: hidden;
+    margin: clamp(24px, 5vw, 52px) 0 44px;
+    padding: clamp(30px, 5vw, 52px);
+    border: 1px solid var(--line); border-radius: 16px;
+    background:
+      radial-gradient(120% 140% at 88% -10%, color-mix(in srgb, var(--gold-deep) 30%, transparent), transparent 55%),
+      linear-gradient(180deg, var(--panel), var(--ground-2));
+    box-shadow: var(--shadow);
+  }
+  .hero::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+    background-image: repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 1px, transparent 1px 5px);
+    mask-image: linear-gradient(90deg, transparent, #000 40%, #000 60%, transparent);
+  }
+  .eyebrow { font-size: .72rem; letter-spacing: .34em; text-transform: uppercase; color: var(--gold); font-weight: 700; margin: 0 0 14px; }
+  .hero h1 {
+    margin: 0 0 14px; font-size: clamp(2.3rem, 7vw, 4rem); line-height: .96; font-weight: 800;
+    letter-spacing: -.01em; text-wrap: balance;
+  }
+  .hero h1 .m { color: var(--gold-bright); }
+  .hero p.lede { margin: 0; max-width: 60ch; font-size: 1.08rem; color: var(--ink-soft); }
+  .hero .meta { margin-top: 26px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip {
+    font-size: .74rem; font-weight: 700; letter-spacing: .06em;
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel-2) 70%, transparent); color: var(--ink-soft);
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .chip b { color: var(--ink); font-weight: 700; }
+
+  /* ---------- inline FontAwesome glyphs (matches qssm.quakeone.com) ---------- */
+  .ic { width: 1em; height: 1em; fill: currentColor; flex: none; vertical-align: -.125em; }
+  .chip .ic { color: var(--gold); font-size: 1.05rem; }
+  .ord .ic { width: 20px; height: 20px; }
+  .callout .mark .ic { width: 1.3rem; height: 1.3rem; display: block; }
+
+  /* ---------- callout ---------- */
+  .callout {
+    display: flex; gap: 14px; align-items: flex-start;
+    padding: 18px 20px; margin: 0 0 44px; border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--line));
+    background: color-mix(in srgb, var(--amber) 9%, var(--panel));
+  }
+  .callout .mark { flex: none; font-size: 1.3rem; line-height: 1.4; color: var(--amber); }
+  .callout h3 { margin: 0 0 4px; font-size: 1rem; letter-spacing: .02em; }
+  .callout p { margin: 0; color: var(--ink-soft); font-size: .95rem; }
+  .callout code { color: var(--gold-bright); }
+
+  /* ---------- section headings ---------- */
+  .sec-head { display: flex; align-items: center; gap: 16px; margin: 56px 0 8px; }
+  .sec-head .ord {
+    flex: none; width: 40px; height: 40px; display: grid; place-items: center;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+    font-family: var(--mono); font-size: .82rem; font-weight: 700; color: var(--gold);
+  }
+  .sec-head h2 { margin: 0; font-size: clamp(1.5rem, 4vw, 2rem); letter-spacing: -.01em; }
+  .sec-sub { margin: 4px 0 24px 56px; color: var(--muted); font-size: .95rem; }
+  @media (max-width: 560px) { .sec-sub { margin-left: 0; } }
+
+  .card {
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background: linear-gradient(180deg, var(--panel), var(--ground-2));
+    box-shadow: var(--shadow); margin-bottom: 22px;
+  }
+  .card > .body { padding: clamp(18px, 3vw, 26px); }
+  .step-label {
+    display: inline-flex; align-items: center; gap: 8px; margin: 22px 0 8px;
+    font-size: .74rem; letter-spacing: .18em; text-transform: uppercase; font-weight: 800; color: var(--gold);
+  }
+  .step-label:first-child { margin-top: 0; }
+  .step-label .n {
+    width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--gold-deep); color: #fff; font-size: .7rem; letter-spacing: 0;
+  }
+  .card p { color: var(--ink-soft); margin: 0 0 4px; }
+  .card p.result {
+    margin-top: 12px; padding: 10px 14px; border-radius: 9px; font-size: .92rem;
+    background: color-mix(in srgb, var(--teal) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--teal) 32%, var(--line)); color: var(--ink);
+  }
+  .card p.result b { color: var(--teal); }
+  .card p.result code { color: var(--gold-bright); }
+
+  /* ---------- code blocks ---------- */
+  .code {
+    position: relative; margin: 8px 0 6px; border-radius: 10px; overflow: hidden;
+    border: 1px solid #000; background: var(--code-bg);
+  }
+  .code pre {
+    margin: 0; padding: 16px 54px 16px 18px; overflow-x: auto;
+    font-family: var(--mono); font-size: .86rem; line-height: 1.7; color: var(--code-ink);
+    tab-size: 4;
+  }
+  .code pre .c { color: #7f8a6a; }           /* comment */
+  .code pre .p { color: var(--gold-bright); } /* prompt / emphasis */
+  .copy {
+    position: absolute; top: 9px; right: 9px; z-index: 2;
+    font: inherit; font-size: .68rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    cursor: pointer; color: var(--ink-soft); background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.14); padding: 5px 10px; border-radius: 7px;
+    transition: color .15s, background .15s, border-color .15s;
+  }
+  .copy:hover { color: var(--ink); background: rgba(255,255,255,.1); }
+  .copy.done { color: var(--teal); border-color: var(--teal-deep); }
+
+  /* ---------- distro tabs ---------- */
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+  .tab {
+    font: inherit; font-size: .8rem; font-weight: 700; letter-spacing: .02em; cursor: pointer;
+    color: var(--ink-soft); background: var(--panel-2); border: 1px solid var(--line);
+    padding: 8px 15px; border-radius: 999px;
+  }
+  .tab:hover { color: var(--ink); }
+  .tab[aria-selected="true"] { color: #1b1a15; background: var(--gold-bright); border-color: var(--gold-bright); }
+  .panel[hidden] { display: none; }
+
+  /* ---------- footer ---------- */
+  footer {
+    max-width: 940px; margin: 0 auto; padding: 32px clamp(16px, 4vw, 40px) 60px;
+    border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem;
+    display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: center;
+  }
+  footer a { color: var(--ink-soft); }
+  footer .grow { flex: 1 1 auto; }
+</style>
+</head>
+<body>
+
+<!-- FontAwesome Free 6 glyphs (CC BY 4.0) inlined so the page has no external deps -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="ic-ubuntu" viewBox="0 0 576 512"><path d="M469.2 75A75.6 75.6 0 1 0 317.9 75a75.6 75.6 0 1 0 151.2 0zM154.2 240.7A75.6 75.6 0 1 0 3 240.7a75.6 75.6 0 1 0 151.2 0zM57 346C75.6 392.9 108 433 150 461.1s91.5 42.6 142 41.7c-14.7-18.6-22.9-41.5-23.2-65.2c-6.8-.9-13.3-2.1-19.5-3.4c-26.8-5.7-51.9-17.3-73.6-34s-39.3-38.1-51.7-62.5c-20.9 9.9-44.5 12.8-67.1 8.2zm395.1 89.8a75.6 75.6 0 1 0 -151.2 0 75.6 75.6 0 1 0 151.2 0zM444 351.6c18.5 14.8 31.6 35.2 37.2 58.2c33.3-41.3 52.6-92.2 54.8-145.2s-12.5-105.4-42.2-149.4c-8.6 21.5-24 39.6-43.8 51.6c15.4 28.6 22.9 60.8 21.9 93.2s-10.7 64-28 91.6zM101.1 135.4c12.4 2.7 24.3 7.5 35.1 14.3c16.6-24.2 38.9-44.1 64.8-58S255.8 70.4 285.2 70c.2-5.9 .9-11.9 2-17.7c3.6-16.7 11.1-32.3 21.8-45.5c-47.7-3.8-95.4 6-137.6 28.5S94.3 91.7 70.8 133.4c2.7-.2 5.3-.3 8-.3c7.5 0 15 .8 22.4 2.3z"/></symbol>
+  <symbol id="ic-apple" viewBox="0 0 384 512"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/></symbol>
+  <symbol id="ic-windows" viewBox="0 0 448 512"><path d="M0 93.7l183.6-25.3v177.4H0V93.7zm0 324.6l183.6 25.3V268.4H0v149.9zm203.8 28L448 480V268.4H203.8v177.9zm0-380.6v180.1H448V32L203.8 65.7z"/></symbol>
+  <symbol id="ic-warning" viewBox="0 0 512 512"><path d="M256 32c14.2 0 27.3 7.5 34.5 19.8l216 368c7.3 12.4 7.3 27.7 .2 40.1S486.3 480 472 480L40 480c-14.3 0-27.6-7.7-34.7-20.1s-7-27.8 .2-40.1l216-368C228.7 39.5 241.8 32 256 32zm0 128c-13.3 0-24 10.7-24 24l0 112c0 13.3 10.7 24 24 24s24-10.7 24-24l0-112c0-13.3-10.7-24-24-24zm32 224a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"/></symbol>
+</svg>
+
+<header class="nav">
+  <span class="brand"><span class="q">QSS-M</span><span class="tag">Build Guide</span></span>
+  <nav class="jump">
+    <a href="#prereq">Prereqs</a>
+    <a href="#linux">Linux</a>
+    <a href="#macos">macOS</a>
+    <a href="#windows">Windows</a>
+  </nav>
+  <button class="theme-btn" id="themeBtn" type="button" aria-label="Toggle light and dark theme">Dark</button>
+</header>
+
+<main>
+
+  <section class="hero">
+    <p class="eyebrow">Quakespasm Spiked · Multiplayer</p>
+    <h1>Build <span class="m">QSS-M</span><br>from source.</h1>
+    <p class="lede">Copy-paste, caveman-proof instructions for every platform &mdash; Linux (all the popular distros), macOS, and Windows. These are the exact same recipes our GitHub Actions CI runs, so if it builds here, it builds for you.</p>
+    <div class="meta">
+      <span class="chip"><svg class="ic"><use href="#ic-ubuntu"/></svg> <b>Linux</b> · one script</span>
+      <span class="chip"><svg class="ic"><use href="#ic-apple"/></svg> <b>macOS</b> · universal</span>
+      <span class="chip"><svg class="ic"><use href="#ic-windows"/></svg> <b>Windows</b> · MSYS2 / VS</span>
+      <span class="chip">📦 <a href="https://github.com/timbergeron/QSS-M">GitHub source</a></span>
+    </div>
+  </section>
+
+  <!-- PREREQ -->
+  <section id="prereq">
+    <div class="callout">
+      <span class="mark" aria-hidden="true"><svg class="ic"><use href="#ic-warning"/></svg></span>
+      <div>
+        <h3>You need the retail Quake data first</h3>
+        <p>QSS-M is the <em>engine</em> only. It cannot run without <code>pak0.pak</code> and <code>pak1.pak</code> from a registered copy of Quake, placed in an <code>id1</code> folder next to the binary. Buy Quake on <a href="https://store.steampowered.com/app/2310/Quake/">Steam</a> (files live in <code>steamapps/common/Quake/Id1</code>) or dig out the original CD.</p>
+      </div>
+    </div>
+
+    <div class="sec-head">
+      <span class="ord" aria-hidden="true">0</span>
+      <h2>Get the code</h2>
+    </div>
+    <p class="sec-sub">Every platform below starts the same way. Clone once, then jump to your OS.</p>
+    <div class="card"><div class="body">
+      <div class="code">
+        <button class="copy" type="button">Copy</button>
+        <pre><span class="p">git</span> clone https://github.com/timbergeron/QSS-M.git
+<span class="p">cd</span> QSS-M</pre>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- LINUX -->
+  <section id="linux">
+    <div class="sec-head">
+      <span class="ord" aria-hidden="true"><svg class="ic"><use href="#ic-ubuntu"/></svg></span>
+      <h2>Linux</h2>
+    </div>
+    <p class="sec-sub">Install the dev libraries for your distro, then run the one build script. Pick your family:</p>
+
+    <div class="card"><div class="body">
+      <div class="tabs" role="tablist" aria-label="Linux distribution">
+        <button class="tab" role="tab" aria-selected="true"  data-panel="deb">Debian / Ubuntu / Mint</button>
+        <button class="tab" role="tab" aria-selected="false" data-panel="fed">Fedora / RHEL / Rocky</button>
+        <button class="tab" role="tab" aria-selected="false" data-panel="arch">Arch / Manjaro</button>
+        <button class="tab" role="tab" aria-selected="false" data-panel="suse">openSUSE</button>
+      </div>
+
+      <div class="panel" id="deb">
+        <div class="step-label"><span class="n">1</span>Install dependencies</div>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">sudo</span> apt-get update
+<span class="p">sudo</span> apt-get install -y build-essential pkg-config libsdl2-dev \
+  libgnutls28-dev libmad0-dev libopus-dev libopusfile-dev \
+  libvorbis-dev zlib1g-dev libcurl4-openssl-dev zip</pre></div>
+      </div>
+
+      <div class="panel" id="fed" hidden>
+        <div class="step-label"><span class="n">1</span>Install dependencies</div>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">sudo</span> dnf install -y gcc make pkgconf-pkg-config SDL2-devel gnutls-devel \
+  libmad-devel opus-devel opusfile-devel libvorbis-devel zlib-devel \
+  libcurl-devel zip</pre></div>
+        <p><span class="c" style="color:var(--muted)"># If dnf can't find libmad/opusfile, enable RPM Fusion (free) first:</span></p>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">sudo</span> dnf install -y \
+  https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm</pre></div>
+      </div>
+
+      <div class="panel" id="arch" hidden>
+        <div class="step-label"><span class="n">1</span>Install dependencies</div>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">sudo</span> pacman -S --needed base-devel sdl2 gnutls libmad \
+  opus opusfile libvorbis zlib curl zip</pre></div>
+      </div>
+
+      <div class="panel" id="suse" hidden>
+        <div class="step-label"><span class="n">1</span>Install dependencies</div>
+        <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">sudo</span> zypper install -y gcc make pkgconf-pkg-config libSDL2-devel \
+  gnutls-devel libmad-devel libopus-devel opusfile-devel \
+  libvorbis-devel zlib-devel libcurl-devel zip</pre></div>
+      </div>
+
+      <div class="step-label"><span class="n">2</span>Build &amp; package</div>
+      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">./build-linux.sh</span></pre></div>
+      <p class="result"><b>Done.</b> You get the <code>QSS-M-l64</code> binary and a ready-to-ship <code>Quake/QSS-M-l64.zip</code>. Drop your <code>id1</code> folder beside the binary and run it.</p>
+
+      <div class="step-label">Prefer to drive make yourself?</div>
+      <p>Skip the script and compile directly &mdash; handy for quick dev iteration. The <code>QSS_LDFLAGS</code> below is required on GCC&nbsp;10+ (Ubuntu&nbsp;22.04+, current Fedora/Arch); without it the link fails with &ldquo;multiple definition&rdquo; errors:</p>
+      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">cd</span> Quake
+<span class="p">make</span> USE_SDL2=1 QSS_LDFLAGS="-Wl,--allow-multiple-definition" -j8</pre></div>
+    </div></div>
+  </section>
+
+  <!-- macOS -->
+  <section id="macos">
+    <div class="sec-head">
+      <span class="ord" aria-hidden="true"><svg class="ic"><use href="#ic-apple"/></svg></span>
+      <h2>macOS</h2>
+    </div>
+    <p class="sec-sub">Builds a <strong>Universal</strong> app (Intel&nbsp;+&nbsp;Apple&nbsp;Silicon) via Xcode. Audio and TLS libraries are compiled statically with vcpkg on the first run.</p>
+
+    <div class="card"><div class="body">
+      <div class="step-label"><span class="n">1</span>Install Xcode + build tools</div>
+      <p>Install <strong>Xcode</strong> from the App Store (the full IDE, not just the command-line tools), then the Homebrew helpers the crypto libraries need:</p>
+      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">brew</span> install autoconf automake libtool pkg-config autoconf-archive</pre></div>
+
+      <div class="step-label"><span class="n">2</span>Build &amp; package</div>
+      <p>One command does everything &mdash; it runs <code>setup-vcpkg.sh</code> to fetch and compile the static deps, then builds and zips the app. <strong>Run it as your normal user, never with <code>sudo</code>.</strong></p>
+      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">cd</span> macOS
+<span class="p">./build-macos.sh</span></pre></div>
+      <p><span class="c" style="color:var(--muted)"># The first run pulls a pinned vcpkg checkout and builds every static dep
+# (GnuTLS, Nettle, Opus, Vorbis, FLAC, ...) for both x86_64 and arm64 &mdash; go get a coffee.
+# Later builds reuse the vcpkg cache and are much faster.</span></p>
+      <p class="result"><b>Done.</b> Your universal <code>QSS-M.app</code> and <code>QSS-M-macOS.zip</code> land in <code>macOS/build/Release/</code>.</p>
+
+      <div class="step-label">Working in Xcode directly?</div>
+      <p>If you skip the script and build the target yourself, run the dependency setup once first &mdash; otherwise the static libraries won't exist:</p>
+      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">cd</span> macOS
+<span class="p">./setup-vcpkg.sh</span>            <span class="c" style="color:var(--muted)"># builds libs_universal/ for both arches</span>
+<span class="p">xcodebuild</span> -project QuakeSpasm.xcodeproj -target QSS-M -configuration Release</pre></div>
+    </div></div>
+  </section>
+
+  <!-- WINDOWS -->
+  <section id="windows">
+    <div class="sec-head">
+      <span class="ord" aria-hidden="true"><svg class="ic"><use href="#ic-windows"/></svg></span>
+      <h2>Windows</h2>
+    </div>
+    <p class="sec-sub">Two proven paths. <strong>MSYS2</strong> is the easiest &mdash; it mirrors our CI exactly. Visual Studio is there if you'd rather stay in the IDE.</p>
+
+    <div class="card"><div class="body">
+      <div class="step-label" style="color:var(--teal)">Recommended · MSYS2 (MinGW-w64)</div>
+
+      <div class="step-label"><span class="n">1</span>Install MSYS2</div>
+      <p>Grab the installer from <a href="https://www.msys2.org">msys2.org</a>. From the Start menu open the <strong>&ldquo;MSYS2 MINGW64&rdquo;</strong> shell (the blue one &mdash; not the plain UCRT/MSYS shell).</p>
+
+      <div class="step-label"><span class="n">2</span>Install the toolchain &amp; libraries</div>
+      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">pacman</span> -S --needed git make zip \
+  mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gnutls \
+  mingw-w64-x86_64-SDL2 mingw-w64-x86_64-opus mingw-w64-x86_64-libvorbis \
+  mingw-w64-x86_64-zlib mingw-w64-x86_64-curl</pre></div>
+
+      <div class="step-label"><span class="n">3</span>Clone &amp; build (64-bit)</div>
+      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">git</span> clone https://github.com/timbergeron/QSS-M.git
+<span class="p">cd</span> QSS-M/Quake
+<span class="p">make</span> -f Makefile.w64 USE_SDL2=1 SDL_CONFIG=sdl2-config -j8</pre></div>
+      <p class="result"><b>Done.</b> Out comes <code>Quake/quakespasm.exe</code>. Keep the SDL2/codec DLLs from the <code>Windows/</code> folder beside it (the CI build scripts do this for you when packaging).</p>
+
+      <div class="step-label">Want a 32-bit build?</div>
+      <p>Open the <strong>MSYS2 MINGW32</strong> shell instead, install the matching <code>mingw-w64-i686-*</code> packages, and build with <code>Makefile.w32</code>.</p>
+
+      <hr style="border:none;border-top:1px solid var(--line);margin:26px 0">
+
+      <div class="step-label" style="color:var(--gold)">Alternative · Visual Studio 2022</div>
+      <p>Open <code>Windows/VisualStudio/quakespasm.sln</code>, select <strong>Release / x64</strong>, and hit Build. Or from a Developer prompt:</p>
+      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">msbuild</span> Windows\VisualStudio\quakespasm-sdl2.vcxproj ^
+  -p:Configuration=Release -p:Platform=x64</pre></div>
+    </div></div>
+  </section>
+
+  <!-- CI note -->
+  <section>
+    <div class="sec-head">
+      <span class="ord" aria-hidden="true">✓</span>
+      <h2>Stuck? Read the CI</h2>
+    </div>
+    <p class="sec-sub">Every command on this page comes straight from the automated build recipes. If something drifts, the workflows are the source of truth:</p>
+    <div class="card"><div class="body">
+      <p style="margin:0">
+        <a href="https://github.com/timbergeron/QSS-M/blob/qsrebase/.github/workflows/linux.yml">linux.yml</a> ·
+        <a href="https://github.com/timbergeron/QSS-M/blob/qsrebase/.github/workflows/macos.yml">macos.yml</a> ·
+        <a href="https://github.com/timbergeron/QSS-M/blob/qsrebase/.github/workflows/MSYS2.yml">MSYS2.yml</a> ·
+        <a href="https://github.com/timbergeron/QSS-M/blob/qsrebase/.github/workflows/msvs.yml">msvs.yml</a>
+        &nbsp;&mdash;&nbsp; plus the <code>build-linux.sh</code>, <code>build-w64.sh</code>, and <code>macOS/build-macos.sh</code> scripts in the repo root.
+      </p>
+    </div></div>
+  </section>
+
+</main>
+
+<footer>
+  <span class="grow">QSS-M &mdash; Quakespasm Spiked Multiplayer. GPL-2.0 &mdash; see <code>LICENSE.txt</code>.</span>
+  <a href="https://qssm.quakeone.com">qssm.quakeone.com</a>
+  <a href="https://github.com/timbergeron/QSS-M">GitHub</a>
+  <a href="https://discord.quakeone.com">Discord</a>
+</footer>
+
+<script>
+  // --- theme toggle (defaults to dark, honors OS, remembers choice) ---
+  (function () {
+    var root = document.documentElement, btn = document.getElementById('themeBtn');
+    function set(mode) {
+      root.setAttribute('data-theme', mode);
+      btn.textContent = mode === 'dark' ? 'Dark' : 'Light';
+      try { localStorage.setItem('qssm-theme', mode); } catch (e) {}
+    }
+    var saved;
+    try { saved = localStorage.getItem('qssm-theme'); } catch (e) {}
+    set(saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+    btn.addEventListener('click', function () {
+      set(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    });
+  })();
+
+  // --- distro tabs ---
+  document.querySelectorAll('.tabs').forEach(function (group) {
+    var tabs = group.querySelectorAll('.tab');
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        tabs.forEach(function (t) {
+          var on = t === tab;
+          t.setAttribute('aria-selected', on);
+          document.getElementById(t.dataset.panel).hidden = !on;
+        });
+      });
+    });
+  });
+
+  // --- copy buttons (with a fallback for file:// and other insecure contexts
+  //     where navigator.clipboard is unavailable) ---
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve, reject) {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      ok ? resolve() : reject();
+    });
+  }
+
+  document.querySelectorAll('.code .copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.classList.contains('done')) return;   // ignore rapid re-clicks
+      var code = btn.parentElement.querySelector('pre').innerText;
+      var old = btn.textContent;
+      copyText(code).then(function () {
+        btn.textContent = 'Copied'; btn.classList.add('done');
+        setTimeout(function () { btn.textContent = old; btn.classList.remove('done'); }, 1400);
+      }).catch(function () {
+        btn.textContent = 'Copy failed';
+        setTimeout(function () { btn.textContent = old; }, 1400);
+      });
+    });
+  });
+</script>
+</body>
+</html>
