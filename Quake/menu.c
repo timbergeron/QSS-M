@@ -1330,6 +1330,40 @@ void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qbo
 	glPopMatrix();
 }
 
+// Prints str within maxwidth, appending "..." when it has to be cut off.
+void M_PrintTruncated(int x, int y, int maxwidth, const char* str, qboolean color)
+{
+	int	maxchars = maxwidth / 8;
+	int	len = (int)strlen(str);
+	char	buf[256];
+	int	keep;
+
+	if (len <= maxchars)
+	{
+		if (color)
+			M_Print(x, y, str);
+		else
+			M_PrintWhite(x, y, str);
+		return;
+	}
+
+	keep = maxchars - 3;
+	if (keep < 0)
+		keep = 0;
+	if (keep > (int)sizeof(buf) - 4)
+		keep = (int)sizeof(buf) - 4;
+	memcpy(buf, str, keep);
+	buf[keep + 0] = '.';
+	buf[keep + 1] = '.';
+	buf[keep + 2] = '.';
+	buf[keep + 3] = '\0';
+
+	if (color)
+		M_Print(x, y, buf);
+	else
+		M_PrintWhite(x, y, buf);
+}
+
 #define MENU_VALUE_X 178
 #define MENU_SLIDER_X 186
 #define MENU_CURSOR_X 168
@@ -5286,7 +5320,7 @@ Load/Save Menu
 int		load_cursor;		// 0 < load_cursor < MAX_SAVEGAMES
 
 #define	MAX_SAVEGAMES		20	/* johnfitz -- increased from 12 */
-#define	SAVEGAME_KILLS_COLUMN		22	/* Host_SavegameComment puts "kills:" at this column. */
+#define	SAVEGAME_KILLS_FIELD		9	/* fixed column width for "k:437/437" */
 #define	SAVEGAME_MENU_COMMENT_CHARS	79
 #define	SAVEGAME_MENU_COMMENT_BUFFER	(SAVEGAME_MENU_COMMENT_CHARS + 1)
 #define	SAVEGAME_MENU_COMMENT_SCAN	"%" QS_STRINGIFY(SAVEGAME_MENU_COMMENT_CHARS) "s\n"
@@ -5306,10 +5340,14 @@ int		loadable[MAX_SAVEGAMES];
 
 typedef struct {
 	char name[SAVEGAME_COMMENT_LENGTH + 1];
+	int kills_count, kills_total;
+	qboolean has_kills;
 	char loadname[MAX_OSPATH];
 	char date[32];
 	char mapname[MAX_QPATH];
 	time_t timestamp;
+	int skill;
+	float leveltime;
 	qboolean loadable;
 	qboolean autosave;
 	int original_index;
@@ -5349,19 +5387,24 @@ static void M_ClearSaveEntry (save_entry_t *entry, int original_index)
 {
 	memset(entry, 0, sizeof(*entry));
 	strcpy(entry->name, "--- UNUSED SLOT ---");
+	entry->skill = -1;	// unknown until read; keeps stale slots from showing "skill: easy"
 	entry->original_index = original_index;
 	if (original_index >= 0)
 		q_snprintf(entry->loadname, sizeof(entry->loadname), "s%i", original_index);
 }
 
-static void M_NormalizeSavegameComment (char display[SAVEGAME_COMMENT_LENGTH + 1], const char *comment)
+// Splits a raw savegame comment ("Level name        kills:  N/  M") into a
+// trimmed title and parsed kill counts, kept as separate fields so the menu can
+// lay them out as independent, non-overlapping columns.
+static void M_NormalizeSavegameComment (save_entry_t *entry, const char *comment)
 {
 	char	text[SAVEGAME_MENU_COMMENT_BUFFER];
-	char	*kills;
-	char	*slash;
+	char	*k;
 	char	*title_end;
-	size_t	title_len;
+	int	monsters, total;
 	int	j;
+
+	entry->has_kills = false;
 
 	q_strlcpy(text, comment, sizeof(text));
 	for (j = 0; text[j]; j++)
@@ -5370,35 +5413,39 @@ static void M_NormalizeSavegameComment (char display[SAVEGAME_COMMENT_LENGTH + 1
 			text[j] = ' ';
 	}
 
-	memset(display, ' ', SAVEGAME_COMMENT_LENGTH);
-	display[SAVEGAME_COMMENT_LENGTH] = '\0';
-
-	kills = strstr(text, "kills:");
-	if (!kills)
+	k = strstr(text, "kills:");
+	if (k)
 	{
-		q_strlcpy(display, text, SAVEGAME_COMMENT_LENGTH + 1);
-		return;
+		if (sscanf(k, "kills:%d/%d", &monsters, &total) == 2)
+		{
+			entry->kills_count = monsters;
+			entry->kills_total = total;
+			entry->has_kills = true;
+		}
+		title_end = k;
+	}
+	else
+	{
+		title_end = text + strlen(text);
 	}
 
-	title_end = kills;
+	// Trim trailing spaces off the title portion.
 	while (title_end > text && title_end[-1] == ' ')
 		title_end--;
 
-	title_len = (size_t)(title_end - text);
-	if (title_len > SAVEGAME_KILLS_COLUMN)
-		title_len = SAVEGAME_KILLS_COLUMN;
-	memcpy(display, text, title_len);
-	q_strlcpy(display + SAVEGAME_KILLS_COLUMN, kills, SAVEGAME_COMMENT_LENGTH - SAVEGAME_KILLS_COLUMN + 1);
+	j = (int)(title_end - text);
+	if (j > SAVEGAME_COMMENT_LENGTH)
+		j = SAVEGAME_COMMENT_LENGTH;
+	memcpy(entry->name, text, j);
+	entry->name[j] = '\0';
+}
 
-	// Fix the kills pattern - handle both single and double spaces after slash.
-	slash = strchr(display + SAVEGAME_KILLS_COLUMN, '/');
-	if (slash && slash[1] == ' ')
-	{
-		if (slash[2] == ' ')
-			memmove(slash + 1, slash + 3, strlen(slash + 3) + 1);
-		else
-			memmove(slash + 1, slash + 2, strlen(slash + 2) + 1);
-	}
+// Formats the kill count. Uses a short "K:" label for the list column and the
+// full "kills:" label for the wider detail line.
+static void M_FormatKills (char *buf, size_t size, const save_entry_t *entry, qboolean shortform)
+{
+	q_snprintf(buf, size, "%s%d/%d", shortform ? "k:" : "kills: ",
+		entry->kills_count, entry->kills_total);
 }
 
 static qboolean M_ReadSaveEntry (save_entry_t *entry, const char *path, const char *loadname,
@@ -5478,18 +5525,23 @@ static qboolean M_ReadSaveEntry (save_entry_t *entry, const char *path, const ch
 		return false;
 	}
 
-	// Read skill
+	// Read skill (stored as a float since 1.06-era saves)
 	if (fscanf(f, "%f\n", &time) != 1)
 	{
 		fclose(f);
 		return false;
 	}
+	entry->skill = (int)(time + 0.1f);
 
 	// Read map name
 	if (fscanf(f, "%63s\n", mapname) == 1)
 		q_strlcpy (entry->mapname, mapname, sizeof(entry->mapname));
 
-	M_NormalizeSavegameComment(entry->name, comment);
+	// Read the elapsed level time (optional; older/foreign saves may lack it)
+	if (fscanf(f, "%f\n", &time) == 1)
+		entry->leveltime = time;
+
+	M_NormalizeSavegameComment(entry, comment);
 
 	entry->loadable = true;
 	fclose(f);
@@ -5781,22 +5833,46 @@ static void M_DrawSaveSlots (const char* title_pic)
 
 	for (int i = 0; i < SAVEGAME_MENU_SLOTS; i++)
 	{
-		if (save_entries[i].autosave)
-			M_PrintWhite(16, 32 + 8 * i, save_entries[i].name);
+		save_entry_t *entry = &save_entries[i];
+		const int slot_y = 32 + 8 * i;
+		const int slot_cols = 36;	// list starts at x=16 (col 2); 38 usable, keep a margin
+		const int kills_col = slot_cols - SAVEGAME_KILLS_FIELD;
+		int title_chars = entry->has_kills ? kills_col : slot_cols;
+
+		if (title_chars < 1)
+			title_chars = 1;
+
+		if ((int)strlen(entry->name) > title_chars)
+			M_PrintTruncated(16, slot_y, title_chars * 8, entry->name, !entry->autosave);
+		else if (entry->autosave)
+			M_PrintWhite(16, slot_y, entry->name);
 		else
-			M_Print(16, 32 + 8 * i, save_entries[i].name);
+			M_Print(16, slot_y, entry->name);
+
+		if (entry->has_kills)
+		{
+			int kills_x = 16 + kills_col * 8;
+			char kbuf[16];
+			M_FormatKills(kbuf, sizeof(kbuf), entry, true);
+			if (entry->autosave)
+				M_PrintWhite(kills_x, slot_y, kbuf);
+			else
+				M_Print(kills_x, slot_y, kbuf);
+		}
 	}
 
 	// Draw date info in last slot position with white text
 	if (save_entries[load_cursor].loadable)
 	{
 		char info[128];
-		M_Print(16, 32 + 8 * SAVEGAME_MENU_SLOTS + 4,
+		const int info_y = 32 + 8 * SAVEGAME_MENU_SLOTS + 4;
+		M_Print(16, info_y,
 			save_entries[load_cursor].autosave ? "auto save:" : "last save:");
 		q_snprintf(info, sizeof(info), "%s (%s)",
 			save_entries[load_cursor].date,
 			save_entries[load_cursor].mapname);
-		M_PrintWhite(100, 32 + 8 * SAVEGAME_MENU_SLOTS + 4, info);
+		// Match the load menu: keep the info line within the list width.
+		M_PrintTruncated(100, info_y, (16 + 36 * 8) - 100, info, false);
 	}
 
 // line cursor
@@ -5839,32 +5915,34 @@ void M_Load_Draw (void)
 			const int entry_idx = loadmenu.filtered_indices[draw_idx];
 			const int item_y = loadmenu.y + i * 8;
 			const int maxchars = loadmenu.cols - 2;
-			const int maxwidth = maxchars * 8;
 			const qboolean selected_row = (draw_idx == loadmenu.list.cursor &&
 				M_Load_IsSelectableDisplayIndex(draw_idx));
 			qboolean matched, needs_scroll;
 			save_entry_t *entry;
+			int kills_col, title_chars, title_width;
 
 			if (entry_idx == LOADGAME_SEPARATOR_INDEX)
 				continue;
 
 			entry = &save_entries[entry_idx];
+
+			// Draw the kills count in a fixed column so every "k:" label lines
+			// up, and give the title all the space to its left (real level names
+			// are short enough to leave a natural gap before the column).
+			kills_col = maxchars - SAVEGAME_KILLS_FIELD;
+			title_chars = entry->has_kills ? kills_col : maxchars;
+			if (title_chars < 1)
+				title_chars = 1;
+			title_width = title_chars * 8;
+
 			matched = (loadmenu.list.search.len > 0 &&
 				q_strcasestr(entry->name, loadmenu.list.search.text) != NULL);
-			needs_scroll = ((int)strlen(entry->name) > maxchars);
+			needs_scroll = ((int)strlen(entry->name) > title_chars);
 
-			if (entry->autosave)
+			if (matched)
 			{
 				if (needs_scroll)
-					M_PrintScroll(loadmenu.x, item_y, maxwidth, entry->name,
-						selected_row ? loadmenu.ticker.scroll_time : 0.0, false);
-				else
-					M_PrintWhite(loadmenu.x, item_y, entry->name);
-			}
-			else if (matched)
-			{
-				if (needs_scroll)
-					M_PrintHighlightScroll(loadmenu.x, item_y, maxwidth,
+					M_PrintHighlightScroll(loadmenu.x, item_y, title_width,
 						entry->name, loadmenu.list.search.text,
 						selected_row ? loadmenu.ticker.scroll_time : 0.0);
 				else
@@ -5874,12 +5952,33 @@ void M_Load_Draw (void)
 			}
 			else if (needs_scroll)
 			{
-				M_PrintScroll(loadmenu.x, item_y, maxwidth, entry->name,
-					selected_row ? loadmenu.ticker.scroll_time : 0.0, true);
+				// Cut off with an ellipsis while idle; scroll the full title
+				// once the row is selected.
+				if (selected_row)
+					M_PrintScroll(loadmenu.x, item_y, title_width, entry->name,
+						loadmenu.ticker.scroll_time, !entry->autosave);
+				else
+					M_PrintTruncated(loadmenu.x, item_y, title_width,
+						entry->name, !entry->autosave);
+			}
+			else if (entry->autosave)
+			{
+				M_PrintWhite(loadmenu.x, item_y, entry->name);
 			}
 			else
 			{
 				M_Print(loadmenu.x, item_y, entry->name);
+			}
+
+			if (entry->has_kills)
+			{
+				const int kills_x = loadmenu.x + kills_col * 8;
+				char kbuf[16];
+				M_FormatKills(kbuf, sizeof(kbuf), entry, true);
+				if (entry->autosave)
+					M_PrintWhite(kills_x, item_y, kbuf);
+				else
+					M_Print(kills_x, item_y, kbuf);
 			}
 
 			if (selected_row)
@@ -5905,10 +6004,54 @@ void M_Load_Draw (void)
 	selected = M_Load_SelectedEntry();
 	if (selected)
 	{
-		char info[128];
+		const int info_x = 100;
+		const int info_width = (loadmenu.x + loadmenu.cols * 8 - 8) - info_x;
 		M_Print(16, LOADGAME_INFO_Y, selected->autosave ? "auto save:" : "last save:");
-		q_snprintf(info, sizeof(info), "%s (%s)", selected->date, selected->mapname);
-		M_PrintWhite(100, LOADGAME_INFO_Y, info);
+
+		if (loadmenu.list.search.len == 0)
+		{
+			// Stack the details on their own lines (date, then map, then the
+			// skill/kills stats). There's room below only when not filtering,
+			// since the search box would otherwise sit here.
+			char stats[64];
+			int y = LOADGAME_INFO_Y;
+
+			M_PrintWhite(info_x, y, selected->date);
+			y += 8;
+
+			if (selected->mapname[0])
+			{
+				M_PrintScroll(info_x, y, info_width, selected->mapname,
+					loadmenu.ticker.scroll_time, false);
+				y += 8;
+			}
+
+			stats[0] = '\0';
+			if (selected->skill >= 0 && selected->skill <= 3)
+			{
+				static const char * const skillnames[] = { "easy", "normal", "hard", "nightmare" };
+				q_strlcat(stats, "skill: ", sizeof(stats));
+				q_strlcat(stats, skillnames[selected->skill], sizeof(stats));
+			}
+			if (selected->has_kills)
+			{
+				char kbuf[16];
+				if (stats[0])
+					q_strlcat(stats, "   ", sizeof(stats));
+				M_FormatKills(kbuf, sizeof(kbuf), selected, false);
+				q_strlcat(stats, kbuf, sizeof(stats));
+			}
+			if (stats[0])
+				M_PrintScroll(info_x, y, info_width, stats,
+					loadmenu.ticker.scroll_time, false);
+		}
+		else
+		{
+			// Compact single line while the search box occupies the space below.
+			char line[128];
+			q_snprintf(line, sizeof(line), "%s  %s", selected->date, selected->mapname);
+			M_PrintTruncated(info_x, LOADGAME_INFO_Y, info_width, line, false);
+		}
 	}
 
 	if (loadmenu.list.search.len > 0)

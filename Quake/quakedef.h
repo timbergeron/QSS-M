@@ -124,7 +124,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define	SAVEGAME_VERSION		5
 #define	SAVEGAME_VERSION_KEX	6
-#define	SAVEGAME_COMMENT_LENGTH	39
+#define	SAVEGAME_COMMENT_LENGTH	63	/* was 39; widened so long level names survive in the save comment (QSS-M reads on the "kills:" token, not a fixed offset) */
 
 #define	MAX_LIGHTSTYLES_VANILLA	64
 #define	MAX_STYLESTRING		64
