@@ -2069,6 +2069,53 @@ void Host_RunCvarMigrations (void) // woods #migration
 		schema = 2;
 	}
 
+	if (schema < 3)
+	{
+		// woods #routline -- pick up the clientside candle models added to
+		// the r_nooutline_list/r_noshadow_list defaults without clobbering
+		// user customizations.
+		static const char *const candles[] = {
+			"progs/candle.mdl", "progs/candle1.mdl", "progs/candle2.mdl",
+			"progs/candle3.mdl", "progs/misc_candle1.mdl",
+			"progs/misc_candle2.mdl", "progs/misc_candle3.mdl",
+		};
+		static const char *const lists[] = { "r_nooutline_list", "r_noshadow_list" };
+		extern qboolean nameInList (const char *list, const char *name);
+		int	l;
+
+		for (l = 0; l < (int)Q_COUNTOF(lists); l++)
+		{
+			cv = Cvar_FindVar (lists[l]);
+			if (cv)
+			{
+				char	list[2048];
+				size_t	len;
+				int	i;
+				qboolean added = false;
+
+				q_strlcpy (list, cv->string, sizeof(list));
+				len = strlen (list);
+				for (i = 0; i < (int)Q_COUNTOF(candles); i++)
+				{
+					if (nameInList (list, candles[i]))
+						continue;
+					if (len && len + 1 + strlen (candles[i]) < sizeof(list))
+						list[len++] = ',';
+					q_strlcpy (list + len, candles[i], sizeof(list) - len);
+					len += strlen (candles[i]);
+					added = true;
+				}
+				if (added)
+				{
+					Cvar_Set (lists[l], list);
+					Con_Printf ("Migrated %s: added candle models\n", lists[l]);
+				}
+			}
+		}
+
+		schema = 3;
+	}
+
 	if (schema != original_schema)
 	{
 		Cvar_SetValue ("cl_migration_schema", (float)schema);
