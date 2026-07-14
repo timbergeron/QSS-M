@@ -2081,7 +2081,7 @@ void Sys_Quit (void)
 
 double Sys_DoubleTime (void)
 {
-	return SDL_GetTicks() / 1000.0;
+	return SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
 }
 
 static void safe_write(int fd, const void* buf, size_t count) // woods #arrowkeys

@@ -54,7 +54,7 @@ int ctfpubhookweaponprecache = 0; // woods #ctfpubmodels
 int grenadecache = -1, rocketcache = -1; // woods #r2g
 
 
-extern int	maptime; // woods connected map time #maptime
+extern Uint64	maptime; // woods connected map time #maptime
 extern char videosetg[50];	// woods #q_sysinfo (qrack)
 extern char videoc[40];		// woods #q_sysinfo (qrack)
 qboolean	endscoreprint = false; // woods pq_confilter+

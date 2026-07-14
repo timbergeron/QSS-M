@@ -48,7 +48,7 @@ cvar_t sv_autoload = {"sv_autoload", "2", CVAR_ARCHIVE}; // woods #autoload (iw)
 
 int	current_skill;
 
-double		mpservertime;	// woods #servertime
+Uint64		mpservertime;	// woods #servertime
 extern		char afk_name[16]; // woods #smartafk
 
 cvar_t sv_adminnick = {"sv_adminnick", "server admin", CVAR_ARCHIVE}; // woods (darkpaces) #adminnick
@@ -8046,7 +8046,7 @@ static void Host_Connect_f (void)
 			{
 				probe_status = NET_PortPingProbe_GetStatus();
 				if (probe_status != PORTPINGPROBE_PROBING && probe_status != PORTPINGPROBE_ABORT)
-					mpservertime = SDL_GetTicks(); // woods #servertime
+					mpservertime = SDL_GetTicks64(); // woods #servertime
 			}
 		}
 		else
@@ -8085,29 +8085,16 @@ Writes a SAVEGAME_COMMENT_LENGTH character comment describing the current
 */
 void Host_SavegameComment (char text[SAVEGAME_COMMENT_LENGTH + 1])
 {
-	int		i, len, maxtitle;
-	char	kills[24];
+	int		i;
+	char	kills[20];
 	char	*p;
 
 	for (i = 0; i < SAVEGAME_COMMENT_LENGTH; i++)
 		text[i] = ' ';
 	text[SAVEGAME_COMMENT_LENGTH] = '\0';
 
-	q_snprintf (kills, sizeof(kills), "kills:%3i/%3i",
-		cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
-	len = (int) strlen(kills);
-	if (len > SAVEGAME_COMMENT_LENGTH)
-		len = SAVEGAME_COMMENT_LENGTH;
-
-// Give the level name all the room to the left of the (right-aligned) kills
-// column instead of a fixed 22 chars, so longer names like "Restless
-// Sentimentality" are stored in full. The menu parses on the "kills:" token,
-// not a fixed offset, so the variable layout loads fine.
-	maxtitle = SAVEGAME_COMMENT_LENGTH - len - 1;
-	if (maxtitle < 0)
-		maxtitle = 0;
 	i = (int) strlen(cl.levelname);
-	if (i > maxtitle) i = maxtitle;
+	if (i > 22) i = 22;
 	memcpy (text, cl.levelname, (size_t)i);
 
 // Remove CR/LFs from level name to avoid broken saves, e.g. with autumn_sp map:
@@ -8117,7 +8104,8 @@ void Host_SavegameComment (char text[SAVEGAME_COMMENT_LENGTH + 1])
 	while ((p = strchr(text, '\r')) != NULL)
 		*p = ' ';
 
-	memcpy (text + SAVEGAME_COMMENT_LENGTH - len, kills, (size_t)len);
+	sprintf (kills,"kills:%3i/%3i", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
+	memcpy (text+22, kills, strlen(kills));
 
 // convert space to _ to make stdio happy
 	for (i = 0; i < SAVEGAME_COMMENT_LENGTH; i++)

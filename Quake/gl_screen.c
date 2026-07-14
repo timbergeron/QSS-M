@@ -77,7 +77,7 @@ console is:
 int			glx, gly, glwidth, glheight;
 
 int ct; // woods connected map time #maptime
-extern int	maptime; // woods connected map time #maptime
+extern Uint64	maptime; // woods connected map time #maptime
 extern qboolean	sb_showscores; // woods
 extern int	fragsort[MAX_SCOREBOARD]; // woods #scrping
 extern int	scoreboardlines; // woods #scrping
@@ -1661,7 +1661,7 @@ void SCR_ShowPing(void)
 	if (scr_viewsize.value >= 130)
 		return;
 
-	ct = (SDL_GetTicks() - maptime) / 1000; // woods connected map time #maptime
+	ct = (int)((SDL_GetTicks64() - maptime) / 1000); // woods connected map time #maptime
 
 	if (cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected) {
 
@@ -1730,7 +1730,7 @@ SCR_ShowPL -- added by woods #scrpl
 void SCR_ShowPL(void)
 {
 	static int lastPL = 0;
-	static int lastPLTime = 0;
+	static Uint32 lastPLTime = 0;
 	char			num[12];
 
 	int clampedSbar = CLAMP(1, (int)scr_sbar.value, 3);
@@ -1741,7 +1741,7 @@ void SCR_ShowPL(void)
 	if (!scr_ping.value)
 		return;
 
-	ct = (SDL_GetTicks() - maptime) / 1000; // woods connected map time #maptime
+	ct = (int)((SDL_GetTicks64() - maptime) / 1000); // woods connected map time #maptime
 
 	if (cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected)
 	{
@@ -1755,7 +1755,7 @@ void SCR_ShowPL(void)
 		}
 
 		// Determine if the stored value should be displayed
-		int elapsedTime = SDL_GetTicks() - lastPLTime;
+		Uint32 elapsedTime = SDL_GetTicks() - lastPLTime;
 		if (elapsedTime < 3000) { // Show for 1 second
 
 			int	x, y;

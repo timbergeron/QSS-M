@@ -28,7 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // enabled speed as a negative value while disabled so it survives restarts.
 cvar_t cl_pong = {"cl_pong", "2", CVAR_ARCHIVE};
 
-extern int maptime;
+extern Uint64 maptime;
 
 /*
 =================
@@ -79,7 +79,7 @@ typedef struct {
 	int screen_height;
 	int player_score;
 	int ai_score;
-	int map_start_time;
+	Uint64 map_start_time;
 	qpic_t* pause_pic;
 	double last_update_time;
 	double player_paddle_flash_time;

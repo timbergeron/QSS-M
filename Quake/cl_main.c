@@ -133,7 +133,7 @@ extern qboolean m_return_onerror;
 extern char m_return_reason[32];
 
 char			lastmphost[NET_NAMELEN]; // woods - connected server address
-int				maptime;		// woods connected map time #maptime
+Uint64			maptime;		// woods connected map time #maptime
 
 void Log_Last_Server_f(void); // woods #connectlast (Qrack) -- write last server to file memory
 void Host_ConnectToLastServer_f(void); // woods use #connectlast for smarter reconnect
@@ -917,7 +917,7 @@ void CL_SignonReply (void)
 		}
 		if (VID_HasMouseOrInputFocus())
 			key_dest = key_game; // woods exit console on server connect
-		maptime = SDL_GetTicks(); // woods connected map time #maptime
+		maptime = SDL_GetTicks64(); // woods connected map time #maptime
 
 		if (registered.value == 0) // woods #pak0only
 			Con_Printf("\n^mWarning:^m emulating shareware mode, install pak1.pak assets to enable all client features\n\n");

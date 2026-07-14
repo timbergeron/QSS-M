@@ -27,8 +27,8 @@ extern	qboolean premul_hud;
 extern qpic_t *Draw_ExternalPicFromWadBase (const char *base_name, const char *replacement_name);
 int		sb_updates;		// if >= vid.numpages, no update needed
 
-extern int	maptime; // woods connected map time #maptime
-extern double  mpservertime;	// woods #servertime
+extern Uint64 maptime; // woods connected map time #maptime
+extern Uint64 mpservertime;	// woods #servertime
 extern char mute[2];			// woods for mute to memory #usermute
 extern qboolean muted;			// woods #usermute
 int	fragsort[MAX_SCOREBOARD]; // woods #scrping
@@ -950,9 +950,10 @@ void Sbar_SoloScoreboard (void)
 {
 	char	str[256];
 	int minutes, seconds, tens, units;
-	int	min, smin, cmin, ticks;
+	int	min, smin, cmin;
 	int	left, right;
-	int	len, ct, pl, st, mpc; // woods ct, pl
+	int	len, pl;
+	Uint64 ticks;
 	qboolean show_level_stats, show_map_description;
 
 	show_level_stats = Host_MapHasLevelStats (cl.mapname,
@@ -993,15 +994,12 @@ void Sbar_SoloScoreboard (void)
 	else // woods add various times + PL
 	{
 
-		ticks = SDL_GetTicks();
-		ct = ticks - maptime; // map connected time
-		st = ticks - mpservertime;
-		mpc = ticks / 1000; // client open time
+		ticks = SDL_GetTicks64();
 		pl = cl.pltotal;
 		
-		min = ct / 60000;
-		smin = st / 60000;
-		cmin = mpc / 60;
+		min = (int)((ticks - maptime) / 60000); // map connected time
+		smin = (int)((ticks - mpservertime) / 60000);
+		cmin = (int)(ticks / 60000); // client open time
 
 		sprintf(str, "Map %i  Server %i  QSSM %i  PL %i", min, smin, cmin, pl);
 
@@ -2719,8 +2717,8 @@ void Sbar_IntermissionNumber (int x, int y, int num, int digits, int color)
 
 qboolean flash () // woods #smartstatus
 {
-	unsigned int ticks = SDL_GetTicks();
-	unsigned int half_seconds = ticks / 750;
+	Uint64 ticks = SDL_GetTicks64();
+	Uint64 half_seconds = ticks / 750;
 	return half_seconds % 2 == 0;
 }
 
@@ -2791,7 +2789,7 @@ void Sbar_DeathmatchOverlay (void)
 	char	num[12];
 	//charshortname[16]; // woods for dynamic scoreboard during match, don't show ready
 	scoreboard_t	*s;
-	int ct = (SDL_GetTicks() - maptime)/1000; // woods connected map time #maptime
+	int ct = (int)((SDL_GetTicks64() - maptime) / 1000); // woods connected map time #maptime
 	qboolean notready = false; // woods #smartstatus
 	int unready_count = 0; // woods #smartstatus - count of unready team players
 

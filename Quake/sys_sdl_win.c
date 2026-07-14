@@ -1692,11 +1692,7 @@ qboolean Sys_HasDedicatedQuitRequest (void)
 
 double Sys_DoubleTime (void)
 {
-#if 1
 	return SDL_GetPerformanceCounter() / (long double)SDL_GetPerformanceFrequency();
-#else
-	return SDL_GetTicks() / 1000.0;
-#endif
 }
 
 static void Dedicated_RedrawInputLine(const char* text, int textlen, int cursor_pos, int previous_len)
