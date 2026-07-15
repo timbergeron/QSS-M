@@ -47,6 +47,8 @@ void Sound_Toggle_Mute_f(void) // woods #mute -- adapted from Fitzquake Mark V
 		Con_Printf("Mute: ^mOFF\n"); // OFF
 }
 
+
+
 void Sound_Toggle_Mute_Off_f(void) // woods #mute -- adapted from Fitzquake Mark V
 {
 	muted = false;
@@ -486,9 +488,11 @@ void S_PaintChannels (int endtime)
 		ch = snd_channels;
 		for (i = 0; i < total_channels; i++, ch++)
 		{
+			if (!S_SoundPreview_ShouldMixChannel(i))
+				continue;
 			if (!ch->sfx)
 				continue;
-			if (!ch->leftvol && !ch->rightvol)
+			if (!ch->leftvol && !ch->rightvol && !ch->advance_silently)
 				continue;
 			sc = S_LoadSound (ch->sfx);
 			if (!sc)
@@ -518,9 +522,10 @@ void S_PaintChannels (int endtime)
 			// if at end of loop, restart
 				if (ltime >= ch->end)
 				{
-					if (sc->loopstart >= 0)
+					if (ch->looping == SND_LOOP_FORCE ||
+						(ch->looping == SND_LOOP_DEFAULT && sc->loopstart >= 0))
 					{
-						ch->pos = sc->loopstart;
+						ch->pos = ch->looping == SND_LOOP_FORCE ? 0 : sc->loopstart;
 						ch->end = ltime + sc->length - ch->pos;
 					}
 					else

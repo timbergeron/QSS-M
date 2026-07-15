@@ -81,6 +81,8 @@ snd_stream_t *S_CodecOpenStreamExt (const char *filename, qboolean loop);
 void S_CodecCloseStream (snd_stream_t *stream);
 int S_CodecReadStream (snd_stream_t *stream, int bytes, void *buffer);
 int S_CodecRewindStream (snd_stream_t *stream);
+qboolean S_CodecCanSeekStream (const snd_stream_t *stream);
+int S_CodecSeekStream (snd_stream_t *stream, int64_t sample);
 int S_CodecJumpToOrder (snd_stream_t *stream, int to);
 
 snd_stream_t *S_CodecUtilOpen(const char *filename, snd_codec_t *codec, qboolean loop);
@@ -103,6 +105,7 @@ void S_CodecUtilClose(snd_stream_t **stream);
 int S_CodecIsAvailable (unsigned int type);
 	/* return 1 if available, 0 if codec failed init
 	 * or -1 if no such codec is present. */
+qboolean S_CodecExtensionAvailable (const char *extension);
 
 #endif	/* _SND_CODEC_H_ */
 

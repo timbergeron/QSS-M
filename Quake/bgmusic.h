@@ -39,6 +39,39 @@ void BGM_Resume (void);
 
 void BGM_PlayCDtrack (byte track, qboolean looping);
 
+typedef enum
+{
+	BGM_PREVIEW_STOPPED,
+	BGM_PREVIEW_PLAYING,
+	BGM_PREVIEW_PAUSED,
+	BGM_PREVIEW_FAILED
+} bgm_preview_status_t;
+
+typedef struct
+{
+	bgm_preview_status_t status;
+	char name[MAX_QPATH];
+	char error[96];
+	int64_t position_samples;
+	int64_t total_samples;
+	int rate;
+	int bits;
+	int channels;
+	qboolean loop;
+	qboolean seekable;
+	float gain;
+} bgm_preview_state_t;
+
+qboolean BGM_Preview_Play(const char *filename, float gain, qboolean loop);
+void BGM_Preview_Stop(void);
+void BGM_Preview_Release(void);
+void BGM_Preview_SetPaused(qboolean paused);
+void BGM_Preview_SetLoop(qboolean loop);
+void BGM_Preview_SetGain(float gain);
+qboolean BGM_Preview_Seek(double fraction);
+void BGM_Preview_GetState(bgm_preview_state_t *state);
+void BGM_Preview_SetExclusive(qboolean exclusive);
+
 typedef enum _bgm_player // woods moved from bgmusic.c #musiclist
 {
     BGM_NONE = -1,

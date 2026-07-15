@@ -298,9 +298,19 @@ static int mp3_madseek(snd_stream_t *stream, unsigned long offset)
 	while (1)	/* Read data from the MP3 file */
 	{
 		int bytes_read, padding = 0;
-		size_t leftover = p->Stream.bufend - p->Stream.next_frame;
+		size_t leftover = 0;
 
-		memcpy(p->mp3_buffer, p->Stream.this_frame, leftover);
+		/* libmad initializes these pointers to NULL.  Pointer subtraction on
+		 * the first refill after the decoder reset is undefined, even though
+		 * the intended leftover length is zero. */
+		if (p->Stream.next_frame && p->Stream.bufend &&
+			p->Stream.next_frame <= p->Stream.bufend)
+			leftover = p->Stream.bufend - p->Stream.next_frame;
+
+		if (leftover > MP3_BUFFER_SIZE)
+			return -1;
+		if (leftover)
+			memmove(p->mp3_buffer, p->Stream.this_frame, leftover);
 		bytes_read = FS_fread(p->mp3_buffer + leftover, (size_t) 1,
 					MP3_BUFFER_SIZE - leftover, &stream->fh);
 		if (bytes_read <= 0)
@@ -316,7 +326,7 @@ static int mp3_madseek(snd_stream_t *stream, unsigned long offset)
 
 		while (1)	/* Decode frame headers */
 		{
-			static unsigned short samples;
+			unsigned short samples;
 			p->Stream.error = MAD_ERROR_NONE;
 
 			/* Not an audio frame */
@@ -413,6 +423,13 @@ static qboolean S_MP3_CodecOpenStream (snd_stream_t *stream)
 	}
 	else
 	{
+		mp3_priv_t *p = (mp3_priv_t *)stream->priv;
+		if (p->Frame.header.bitrate > 0)
+		{
+			int64_t samples = (int64_t)stream->fh.length * 8 * stream->info.rate /
+				p->Frame.header.bitrate;
+			stream->info.samples = (int)q_min(samples, (int64_t)INT_MAX);
+		}
 		return true;
 	}
 	free(stream->priv);
@@ -442,6 +459,13 @@ static int S_MP3_CodecRewindStream (snd_stream_t *stream)
 	return mp3_madseek(stream, 0);
 }
 
+static int S_MP3_CodecSeekStream (snd_stream_t *stream, int64_t sample)
+{
+	if (sample < 0 || sample > ULONG_MAX / q_max(1, stream->info.channels))
+		return -1;
+	return mp3_madseek(stream, (unsigned long)sample * stream->info.channels);
+}
+
 snd_codec_t mp3_codec =
 {
 	CODECTYPE_MP3,
@@ -452,6 +476,7 @@ snd_codec_t mp3_codec =
 	S_MP3_CodecOpenStream,
 	S_MP3_CodecReadStream,
 	S_MP3_CodecRewindStream,
+	S_MP3_CodecSeekStream,
 	NULL, /* jump */
 	S_MP3_CodecCloseStream,
 	NULL

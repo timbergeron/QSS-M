@@ -120,6 +120,15 @@ static qboolean S_XMP_CodecOpenStream (snd_stream_t *stream)
 
 	/* interpolation type, default is XMP_INTERP_LINEAR */
 	xmp_set_player(c, XMP_PLAYER_INTERP, XMP_INTERP_SPLINE);
+	{
+		struct xmp_frame_info info;
+		xmp_get_frame_info(c, &info);
+		if (info.total_time > 0)
+		{
+			int64_t samples = (int64_t)info.total_time * stream->info.rate / 1000;
+			stream->info.samples = (int)q_min(samples, (int64_t)INT_MAX);
+		}
+	}
 
 	return true;
 
@@ -169,6 +178,22 @@ static int S_XMP_CodecRewindStream (snd_stream_t *stream)
 	return 0;
 }
 
+static int S_XMP_CodecSeekStream (snd_stream_t *stream, int64_t sample)
+{
+	int64_t milliseconds;
+	int ret;
+
+	if (sample < 0 || stream->info.rate <= 0)
+		return -1;
+	milliseconds = sample * 1000 / stream->info.rate;
+	ret = xmp_seek_time((xmp_context)stream->priv,
+		(int)q_min(milliseconds, (int64_t)INT_MAX));
+	if (ret < 0)
+		return ret;
+	xmp_play_buffer((xmp_context)stream->priv, NULL, 0, 0);
+	return 0;
+}
+
 snd_codec_t xmp_codec =
 {
 	CODECTYPE_MOD,
@@ -179,6 +204,7 @@ snd_codec_t xmp_codec =
 	S_XMP_CodecOpenStream,
 	S_XMP_CodecReadStream,
 	S_XMP_CodecRewindStream,
+	S_XMP_CodecSeekStream,
 	S_XMP_CodecJumpToOrder,
 	S_XMP_CodecCloseStream,
 	NULL

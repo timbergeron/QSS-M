@@ -166,6 +166,15 @@ static qboolean S_MP3_CodecOpenStream (snd_stream_t *stream)
 	}
 
 	stream->info.rate = rate;
+	{
+		#if (MPG123_API_VERSION >= 49)
+		int64_t samples = mpg123_length64(priv->handle);
+		#else
+		off_t samples = mpg123_length(priv->handle);
+		#endif
+		if (samples > 0)
+			stream->info.samples = (int)q_min((int64_t)samples, (int64_t)INT_MAX);
+	}
 
 	switch (encoding) {
 	case MPG123_ENC_UNSIGNED_8:
@@ -248,6 +257,16 @@ static int S_MP3_CodecRewindStream (snd_stream_t *stream)
 	return (int) res;
 }
 
+static int S_MP3_CodecSeekStream (snd_stream_t *stream, int64_t sample)
+{
+	mp3_priv_t *priv = (mp3_priv_t *)stream->priv;
+	#if (MPG123_API_VERSION >= 49)
+	return mpg123_seek64(priv->handle, sample, SEEK_SET) >= 0 ? 0 : -1;
+	#else
+	return mpg123_seek(priv->handle, (off_t)sample, SEEK_SET) >= 0 ? 0 : -1;
+	#endif
+}
+
 snd_codec_t mp3_codec =
 {
 	CODECTYPE_MP3,
@@ -258,6 +277,7 @@ snd_codec_t mp3_codec =
 	S_MP3_CodecOpenStream,
 	S_MP3_CodecReadStream,
 	S_MP3_CodecRewindStream,
+	S_MP3_CodecSeekStream,
 	NULL, /* jump */
 	S_MP3_CodecCloseStream,
 	NULL

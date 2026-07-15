@@ -113,6 +113,266 @@ static int	num_sfx;
 static sfx_t	*ambient_sfx[NUM_AMBIENTS];
 
 static qboolean	sound_started = false;
+static cvar_t nosound;
+
+#define SOUND_PREVIEW_ENTNUM       (-7777)
+#define SOUND_PREVIEW_ENTCHANNEL   (-2) /* non-spatial, like voice audio */
+#define SOUND_PREVIEW_CHANNEL      (NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS)
+#define FIRST_STATIC_SOUND_CHANNEL (SOUND_PREVIEW_CHANNEL + 1)
+
+static sfx_t sound_preview_sfx;
+static sound_preview_state_t sound_preview;
+static qboolean sound_preview_exclusive;
+
+qboolean S_SoundPreview_ShouldMixChannel(int channel)
+{
+	return !sound_preview_exclusive || channel == SOUND_PREVIEW_CHANNEL;
+}
+
+void S_SoundPreview_SetExclusive(qboolean exclusive)
+{
+	if (sound_preview_exclusive == exclusive)
+		return;
+	sound_preview_exclusive = exclusive;
+
+	/* Drop gameplay one-shots and flush already mixed audio at both edges of
+	 * audition mode. Looping statics remain registered and restart cleanly. */
+	if (sound_started)
+		S_StopAllSounds(true, true);
+}
+
+static channel_t *S_SoundPreview_Channel(void)
+{
+	channel_t *channel;
+
+	if (!snd_channels || total_channels <= SOUND_PREVIEW_CHANNEL)
+		return NULL;
+	channel = &snd_channels[SOUND_PREVIEW_CHANNEL];
+	return channel->sfx == &sound_preview_sfx ? channel : NULL;
+}
+
+static void S_SoundPreview_StopChannel(void)
+{
+	channel_t *channel = S_SoundPreview_Channel();
+	if (channel)
+	{
+		channel->sfx = NULL;
+		channel->end = 0;
+	}
+}
+
+static channel_t *S_SoundPreview_StartChannel(sfxcache_t *cache, int position)
+{
+	channel_t *channel;
+
+	if (!cache || cache->length <= 0 || !snd_channels ||
+		total_channels <= SOUND_PREVIEW_CHANNEL)
+		return NULL;
+
+	channel = &snd_channels[SOUND_PREVIEW_CHANNEL];
+	memset(channel, 0, sizeof(*channel));
+	channel->sfx = &sound_preview_sfx;
+	channel->pos = CLAMP(0, position, cache->length - 1);
+	channel->end = paintedtime + cache->length - channel->pos;
+	channel->looping = sound_preview.loop ? SND_LOOP_FORCE : SND_LOOP_DISABLE;
+	channel->master_vol = (int)(sound_preview.gain * 255.0f);
+	channel->advance_silently = true;
+	channel->entnum = SOUND_PREVIEW_ENTNUM;
+	channel->entchannel = SOUND_PREVIEW_ENTCHANNEL;
+	VectorCopy(listener_origin, channel->origin);
+	SND_Spatialize(channel);
+	return channel;
+}
+
+static void S_SoundPreview_Clear(void)
+{
+	S_SoundPreview_StopChannel();
+	if (sound_preview_sfx.cache.data)
+		Cache_Free(&sound_preview_sfx.cache, false);
+	memset(&sound_preview_sfx, 0, sizeof(sound_preview_sfx));
+	memset(&sound_preview, 0, sizeof(sound_preview));
+	sound_preview.gain = 1.0f;
+}
+
+void S_SoundPreview_Release(void)
+{
+	S_SoundPreview_Clear();
+	S_SoundPreview_SetExclusive(false);
+}
+
+qboolean S_SoundPreview_Play(const char *name, float gain, qboolean loop)
+{
+	sfxcache_t *cache;
+	channel_t *channel;
+
+	/* Starting another preview must preserve the browser's exclusive mode. */
+	S_SoundPreview_Clear();
+	sound_preview.gain = isfinite(gain) ? CLAMP(0.0f, gain, 1.0f) : 1.0f;
+	sound_preview.loop = loop;
+	if (!sound_started || nosound.value)
+	{
+		sound_preview.status = SOUND_PREVIEW_FAILED;
+		q_strlcpy(sound_preview.error, "audio unavailable", sizeof(sound_preview.error));
+		return false;
+	}
+	if (!name || !*name || strlen(name) >= sizeof(sound_preview_sfx.name))
+	{
+		sound_preview.status = SOUND_PREVIEW_FAILED;
+		q_strlcpy(sound_preview.error, "invalid sound path", sizeof(sound_preview.error));
+		return false;
+	}
+
+	q_strlcpy(sound_preview_sfx.name, name, sizeof(sound_preview_sfx.name));
+	q_strlcpy(sound_preview.name, name, sizeof(sound_preview.name));
+	cache = S_LoadSound(&sound_preview_sfx);
+	if (!cache)
+	{
+		sound_preview.status = SOUND_PREVIEW_FAILED;
+		q_strlcpy(sound_preview.error, "load failed", sizeof(sound_preview.error));
+		return false;
+	}
+	sound_preview.length = cache->length;
+	sound_preview.rate = cache->speed;
+	sound_preview.bits = cache->width * 8;
+	sound_preview.source_looped = cache->loopstart >= 0;
+	sound_preview.seekable = true;
+
+	channel = S_SoundPreview_StartChannel(cache, 0);
+	if (!channel)
+	{
+		sound_preview.status = SOUND_PREVIEW_FAILED;
+		q_strlcpy(sound_preview.error, "no mixer channel", sizeof(sound_preview.error));
+		return false;
+	}
+	sound_preview.status = SOUND_PREVIEW_PLAYING;
+	return true;
+}
+
+void S_SoundPreview_Stop(void)
+{
+	S_SoundPreview_StopChannel();
+	sound_preview.position = 0;
+	sound_preview.error[0] = 0;
+	sound_preview.status = SOUND_PREVIEW_STOPPED;
+}
+
+void S_SoundPreview_SetPaused(qboolean paused)
+{
+	channel_t *channel;
+	sfxcache_t *cache;
+
+	if (paused)
+	{
+		if (sound_preview.status != SOUND_PREVIEW_PLAYING)
+			return;
+		channel = S_SoundPreview_Channel();
+		if (!channel)
+		{
+			sound_preview.position = sound_preview.length;
+			sound_preview.status = SOUND_PREVIEW_STOPPED;
+			return;
+		}
+		sound_preview.position = channel->pos;
+		S_SoundPreview_StopChannel();
+		sound_preview.status = SOUND_PREVIEW_PAUSED;
+		return;
+	}
+	if (sound_preview.status != SOUND_PREVIEW_PAUSED || !sound_preview_sfx.name[0])
+		return;
+	cache = S_LoadSound(&sound_preview_sfx);
+	if (!cache)
+	{
+		sound_preview.status = SOUND_PREVIEW_FAILED;
+		q_strlcpy(sound_preview.error, "reload failed", sizeof(sound_preview.error));
+		return;
+	}
+	channel = S_SoundPreview_StartChannel(cache, sound_preview.position);
+	if (!channel)
+	{
+		sound_preview.status = SOUND_PREVIEW_FAILED;
+		q_strlcpy(sound_preview.error, "preview channel unavailable", sizeof(sound_preview.error));
+		return;
+	}
+	sound_preview.status = SOUND_PREVIEW_PLAYING;
+}
+
+void S_SoundPreview_SetLoop(qboolean loop)
+{
+	channel_t *channel;
+	sound_preview.loop = loop;
+	channel = S_SoundPreview_Channel();
+	if (channel)
+		channel->looping = loop ? SND_LOOP_FORCE : SND_LOOP_DISABLE;
+}
+
+void S_SoundPreview_SetGain(float gain)
+{
+	channel_t *channel;
+	if (!isfinite(gain))
+		return;
+	sound_preview.gain = CLAMP(0.0f, gain, 1.0f);
+	channel = S_SoundPreview_Channel();
+	if (channel)
+	{
+		channel->master_vol = (int)(sound_preview.gain * 255.0f);
+		SND_Spatialize(channel);
+	}
+}
+
+qboolean S_SoundPreview_Seek(double fraction)
+{
+	qboolean playing;
+	sfxcache_t *cache;
+	int position;
+
+	if (!isfinite(fraction) || !sound_preview.seekable ||
+		(sound_preview.status != SOUND_PREVIEW_PLAYING &&
+		 sound_preview.status != SOUND_PREVIEW_PAUSED) || sound_preview.length <= 0)
+		return false;
+
+	fraction = CLAMP(0.0, fraction, 1.0);
+	position = (int)(fraction * (sound_preview.length - 1) + 0.5);
+	playing = sound_preview.status == SOUND_PREVIEW_PLAYING;
+	cache = S_LoadSound(&sound_preview_sfx);
+	if (!cache)
+	{
+		sound_preview.status = SOUND_PREVIEW_FAILED;
+		q_strlcpy(sound_preview.error, "reload failed", sizeof(sound_preview.error));
+		return false;
+	}
+
+	sound_preview.position = CLAMP(0, position, cache->length - 1);
+	if (playing)
+	{
+		S_SoundPreview_StopChannel();
+		if (!S_SoundPreview_StartChannel(cache, sound_preview.position))
+		{
+			sound_preview.status = SOUND_PREVIEW_FAILED;
+			q_strlcpy(sound_preview.error, "preview channel unavailable", sizeof(sound_preview.error));
+			return false;
+		}
+	}
+	return true;
+}
+
+void S_SoundPreview_GetState(sound_preview_state_t *state)
+{
+	channel_t *channel;
+	if (!state)
+		return;
+	channel = S_SoundPreview_Channel();
+	if (sound_preview.status == SOUND_PREVIEW_PLAYING)
+	{
+		if (channel)
+			sound_preview.position = channel->pos;
+		else
+		{
+			sound_preview.position = sound_preview.length;
+			sound_preview.status = SOUND_PREVIEW_STOPPED;
+		}
+	}
+	*state = sound_preview;
+}
 
 cvar_t		bgmvolume = {"bgmvolume", "1", CVAR_ARCHIVE};
 cvar_t		sfxvolume = {"volume", "0.7", CVAR_ARCHIVE};
@@ -168,6 +428,58 @@ static void S_SoundInfo_f (void)
 	Con_Printf("%5d submission_chunk\n", shm->submission_chunk);
 	Con_Printf("%5d total_channels\n", total_channels);
 	Con_Printf("%p dma buffer\n", shm->buffer);
+}
+
+static void S_SoundPreview_f(void)
+{
+	const char *arg;
+	sound_preview_state_t state;
+
+	if (Cmd_Argc() < 2)
+	{
+		Con_Printf("usage: sfx_preview <path>|pause|resume|stop|info|loop 0|1|gain 0..1|seek 0..1\n");
+		return;
+	}
+	arg = Cmd_Argv(1);
+	if (!q_strcasecmp(arg, "pause"))
+		S_SoundPreview_SetPaused(true);
+	else if (!q_strcasecmp(arg, "resume"))
+		S_SoundPreview_SetPaused(false);
+	else if (!q_strcasecmp(arg, "stop"))
+		S_SoundPreview_Stop();
+	else if (!q_strcasecmp(arg, "loop"))
+	{
+		if (Cmd_Argc() != 3)
+			Con_Printf("usage: sfx_preview loop 0|1\n");
+		else
+			S_SoundPreview_SetLoop(atof(Cmd_Argv(2)) != 0.0f);
+	}
+	else if (!q_strcasecmp(arg, "gain"))
+	{
+		if (Cmd_Argc() != 3)
+			Con_Printf("usage: sfx_preview gain 0..1\n");
+		else
+			S_SoundPreview_SetGain(atof(Cmd_Argv(2)));
+	}
+	else if (!q_strcasecmp(arg, "seek"))
+	{
+		if (Cmd_Argc() != 3)
+			Con_Printf("usage: sfx_preview seek 0..1\n");
+		else if (!S_SoundPreview_Seek(atof(Cmd_Argv(2))))
+			Con_Printf("sfx preview is not seekable\n");
+	}
+	else if (!q_strcasecmp(arg, "info"))
+	{
+		S_SoundPreview_GetState(&state);
+		Con_Printf("sfx preview: %s, %d/%d samples, %d Hz %d-bit, gain %.0f%%, loop %s",
+			state.name[0] ? state.name : "none", state.position, state.length,
+			state.rate, state.bits, state.gain * 100.0f, state.loop ? "on" : "off");
+		if (state.error[0])
+			Con_Printf(" (%s)", state.error);
+		Con_Printf("\n");
+	}
+	else
+		S_SoundPreview_Play(arg, sound_preview.gain, sound_preview.loop);
 }
 
 
@@ -237,6 +549,7 @@ void S_Restart_f(void)
 
 	if (!snd_initialized)
 		return;
+	S_SoundPreview_Release();
 
 	oldspeed = shm ? shm->speed : 0;
 
@@ -343,6 +656,7 @@ void S_Init (void)
 	Cmd_AddCommand("stopsound", S_StopAllSoundsC);
 	Cmd_AddCommand("soundlist", S_SoundList);
 	Cmd_AddCommand("soundinfo", S_SoundInfo_f);
+	Cmd_AddCommand("sfx_preview", S_SoundPreview_f);
 	Cmd_AddCommand("snd_restart", S_Restart_f);
 	Cmd_AddCommand("mute", Sound_Toggle_Mute_f); // woods #usermute
 
@@ -372,6 +686,7 @@ void S_Init (void)
 
 	known_sfx = (sfx_t *) Hunk_AllocName (MAX_SFX*sizeof(sfx_t), "sfx_t");
 	num_sfx = 0;
+	sound_preview.gain = 1.0f;
 
 	snd_initialized = true;
 
@@ -398,6 +713,7 @@ void S_Shutdown (void)
 {
 	if (!sound_started)
 		return;
+	S_SoundPreview_Release();
 
 	sound_started = 0;
 	snd_blocked = 0;
@@ -719,7 +1035,7 @@ void S_StopAllSounds (qboolean clear, qboolean keep_statics)
 
 	if (!keep_statics)
 	{
-		total_channels = MAX_DYNAMIC_CHANNELS + NUM_AMBIENTS;	// no statics
+		total_channels = FIRST_STATIC_SOUND_CHANNEL;	// ambience, dynamics, and preview; no statics
 		if (max_channels != total_channels + 64)
 		{	//shrink it if needed
 			max_channels = total_channels + 64;
@@ -737,7 +1053,7 @@ void S_StopAllSounds (qboolean clear, qboolean keep_statics)
 			if (snd_channels[i].sfx)
 				sc = S_LoadSound (snd_channels[i].sfx);
 
-			if (i < NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS || !sc || sc->loopstart == -1)
+			if (i < FIRST_STATIC_SOUND_CHANNEL || !sc || sc->loopstart == -1)
 				memset (&snd_channels[i], 0, sizeof (channel_t));
 			else
 			{
@@ -1052,7 +1368,7 @@ void S_Update (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 	// try to combine static sounds with a previous channel of the same
 	// sound effect so we don't mix five torches every frame
 
-		if (i >= MAX_DYNAMIC_CHANNELS + NUM_AMBIENTS)
+		if (i >= FIRST_STATIC_SOUND_CHANNEL)
 		{
 		// see if it can just use the last one
 			if (combine && combine->sfx == ch->sfx)
@@ -1063,8 +1379,8 @@ void S_Update (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 				continue;
 			}
 		// search for one
-			combine = snd_channels + MAX_DYNAMIC_CHANNELS + NUM_AMBIENTS;
-			for (j = MAX_DYNAMIC_CHANNELS + NUM_AMBIENTS; j < i; j++, combine++)
+			combine = snd_channels + FIRST_STATIC_SOUND_CHANNEL;
+			for (j = FIRST_STATIC_SOUND_CHANNEL; j < i; j++, combine++)
 			{
 				if (combine->sfx == ch->sfx)
 					break;
@@ -1337,6 +1653,7 @@ void S_ClearPrecache (void)
 
 	if (!snd_initialized || !known_sfx)
 		return;
+	S_SoundPreview_Release();
 
 	S_StopAllSounds (true, false);
 

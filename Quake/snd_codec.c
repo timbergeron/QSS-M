@@ -52,6 +52,8 @@ void S_CodecRegister(snd_codec_t *codec)
 	codecs = codec;
 }
 
+
+
 /*
 =================
 S_CodecInit
@@ -275,6 +277,18 @@ int S_CodecRewindStream (snd_stream_t *stream)
 	return stream->codec->codec_rewind(stream);
 }
 
+qboolean S_CodecCanSeekStream (const snd_stream_t *stream)
+{
+	return stream && stream->codec && stream->codec->codec_seek;
+}
+
+int S_CodecSeekStream (snd_stream_t *stream, int64_t sample)
+{
+	if (!S_CodecCanSeekStream(stream) || sample < 0)
+		return -1;
+	return stream->codec->codec_seek(stream, sample);
+}
+
 int S_CodecJumpToOrder (snd_stream_t *stream, int to)
 {
 	if (stream->codec->codec_jump) {
@@ -337,5 +351,19 @@ int S_CodecIsAvailable (unsigned int type)
 		codec = codec->next;
 	}
 	return -1;
+}
+
+qboolean S_CodecExtensionAvailable (const char *extension)
+{
+	snd_codec_t *codec;
+
+	if (!extension || !*extension)
+		return false;
+
+	for (codec = codecs; codec; codec = codec->next)
+		if (codec->initialized && !q_strcasecmp(extension, codec->ext))
+			return true;
+
+	return false;
 }
 

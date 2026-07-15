@@ -63,6 +63,7 @@ enum m_state_e {
 	m_demooptions,
 	m_pakloading,
 	m_modelviewer,
+	m_audiobrowser,
 	m_mods, // woods #modsmenu (iw)
 	m_downloadmods,
 	m_demos, // woods #demosmenu
@@ -161,6 +162,14 @@ void MQC_Shutdown(void);
 void M_Menu_Main_f (void);
 void M_Menu_Options_f (void);
 void M_Menu_Quit_f (void);
+void M_Menu_Extras_f (void);
+void M_Menu_AudioBrowser_f (void);
+void M_AudioBrowser_Close (void);
+void M_AudioBrowser_CloseIfInactive (void);
+void M_AudioBrowser_Draw (void);
+void M_AudioBrowser_Key (int key);
+void M_AudioBrowser_Mousemove (int cx, int cy);
+void M_AudioBrowser_MouseClick (int x, int y);
 
 void M_Print (int cx, int cy, const char *str);
 void M_Print2 (int cx, int cy, const char* str); // woods #speed yellow numbers
@@ -171,6 +180,7 @@ void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qbo
 
 void M_Draw (void);
 void M_DrawCharacter (int cx, int line, int num);
+void M_DrawQuakeBar(int x, int y, int cols);
 
 // Live preview (ported from Ironwail ui_live_preview).
 // Previewing submenus track their selected previewable item internally, then

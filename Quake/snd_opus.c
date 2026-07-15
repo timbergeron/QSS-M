@@ -138,6 +138,11 @@ static qboolean S_OPUS_CodecOpenStream (snd_stream_t *stream)
 	/* op_read() yields 16-bit output using native endian ordering: */
 	stream->info.bits = 16;
 	stream->info.width = 2;
+	{
+		opus_int64 samples = op_pcm_total(opFile, -1);
+		if (samples > 0)
+			stream->info.samples = (int)q_min(samples, (opus_int64)INT_MAX);
+	}
 
 	return true;
 _fail:
@@ -192,6 +197,11 @@ static int S_OPUS_CodecRewindStream (snd_stream_t *stream)
 	return op_pcm_seek ((OggOpusFile *)stream->priv, 0);
 }
 
+static int S_OPUS_CodecSeekStream (snd_stream_t *stream, int64_t sample)
+{
+	return op_pcm_seek((OggOpusFile *)stream->priv, (opus_int64)sample);
+}
+
 snd_codec_t opus_codec =
 {
 	CODECTYPE_OPUS,
@@ -202,6 +212,7 @@ snd_codec_t opus_codec =
 	S_OPUS_CodecOpenStream,
 	S_OPUS_CodecReadStream,
 	S_OPUS_CodecRewindStream,
+	S_OPUS_CodecSeekStream,
 	NULL, /* jump */
 	S_OPUS_CodecCloseStream,
 	NULL

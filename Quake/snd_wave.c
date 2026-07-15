@@ -247,6 +247,21 @@ static int S_WAV_CodecRewindStream (snd_stream_t *stream)
 	return 0;
 }
 
+static int S_WAV_CodecSeekStream (snd_stream_t *stream, int64_t sample)
+{
+	int64_t offset;
+	int framebytes;
+
+	if (sample < 0 || sample >= stream->info.samples ||
+		stream->info.width <= 0 || stream->info.channels <= 0)
+		return -1;
+	framebytes = stream->info.width * stream->info.channels;
+	if (sample > LONG_MAX / framebytes)
+		return -1;
+	offset = sample * framebytes;
+	return FS_fseek(&stream->fh, (long)offset, SEEK_SET);
+}
+
 static qboolean S_WAV_CodecInitialize (void)
 {
 	return true;
@@ -266,6 +281,7 @@ snd_codec_t wav_codec =
 	S_WAV_CodecOpenStream,
 	S_WAV_CodecReadStream,
 	S_WAV_CodecRewindStream,
+	S_WAV_CodecSeekStream,
 	NULL, /* jump */
 	S_WAV_CodecCloseStream,
 	NULL

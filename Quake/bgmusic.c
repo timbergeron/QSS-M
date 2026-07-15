@@ -60,6 +60,223 @@ static music_handler_t *music_handlers = NULL;
 #define CDRIPTYPE(x)	(((x) & CDRIP_TYPES) != 0)
 
 static snd_stream_t *bgmstream = NULL;
+static snd_stream_t *bgmpreviewstream = NULL;
+static bgm_preview_state_t bgmpreview;
+static qboolean bgmpreview_resume_background;
+static qboolean bgmpreview_resume_cd;
+static qboolean bgmpreview_exclusive;
+
+static void BGM_Preview_PauseBackground(void)
+{
+	if (bgmstream && bgmstream->status == STREAM_PLAY)
+	{
+		bgmstream->status = STREAM_PAUSE;
+		bgmstream->volume = 0.f;
+		bgmpreview_resume_background = true;
+	}
+	if (CDAudio_IsPlaying())
+	{
+		CDAudio_Pause();
+		bgmpreview_resume_cd = true;
+	}
+	s_rawend = 0;
+}
+
+
+
+static void BGM_Preview_ResumeBackground(void)
+{
+	if (bgmpreview_resume_background && bgmstream &&
+		bgmstream->status == STREAM_PAUSE)
+		BGM_Resume();
+	if (bgmpreview_resume_cd)
+		CDAudio_Resume();
+	bgmpreview_resume_background = false;
+	bgmpreview_resume_cd = false;
+	s_rawend = 0;
+}
+
+static void BGM_Preview_Close(qboolean resume_background)
+{
+	qboolean had_preview = bgmpreviewstream != NULL;
+
+	if (bgmpreviewstream)
+	{
+		bgmpreviewstream->status = STREAM_NONE;
+		S_CodecCloseStream(bgmpreviewstream);
+		bgmpreviewstream = NULL;
+	}
+	if (had_preview)
+		s_rawend = 0;
+	if (resume_background && !bgmpreview_exclusive)
+		BGM_Preview_ResumeBackground();
+	else if (!resume_background && !bgmpreview_exclusive)
+	{
+		if (bgmpreview_resume_cd)
+			CDAudio_Stop();
+		bgmpreview_resume_background = false;
+		bgmpreview_resume_cd = false;
+	}
+	bgmpreview.status = BGM_PREVIEW_STOPPED;
+}
+
+void BGM_Preview_SetExclusive(qboolean exclusive)
+{
+	if (bgmpreview_exclusive == exclusive)
+		return;
+	bgmpreview_exclusive = exclusive;
+	if (exclusive)
+		BGM_Preview_PauseBackground();
+	else if (!bgmpreviewstream)
+		BGM_Preview_ResumeBackground();
+}
+
+void BGM_Preview_Stop(void)
+{
+	BGM_Preview_Close(true);
+	bgmpreview.error[0] = 0;
+}
+
+void BGM_Preview_Release(void)
+{
+	/* Clear exclusivity before closing so any suspended map stream resumes. */
+	bgmpreview_exclusive = false;
+	BGM_Preview_Close(true);
+	memset(&bgmpreview, 0, sizeof(bgmpreview));
+	bgmpreview.gain = 1.0f;
+}
+
+qboolean BGM_Preview_Play(const char *filename, float gain, qboolean loop)
+{
+	music_handler_t *handler;
+	const char *ext;
+	char path[MAX_QPATH];
+
+	BGM_Preview_Close(true);
+	memset(&bgmpreview, 0, sizeof(bgmpreview));
+	bgmpreview.gain = isfinite(gain) ? CLAMP(0.0f, gain, 1.0f) : 1.0f;
+	bgmpreview.loop = loop;
+	if (!filename || !*filename)
+		goto invalid;
+	q_strlcpy(bgmpreview.name, filename, sizeof(bgmpreview.name));
+	ext = COM_FileGetExtension(filename);
+	for (handler = music_handlers; handler; handler = handler->next)
+		if (handler->is_available && !q_strcasecmp(ext, handler->ext))
+			break;
+	if (!handler)
+		goto unsupported;
+	if ((size_t)q_snprintf(path, sizeof(path), "%s/%s", handler->dir, filename) >= sizeof(path))
+		goto toolong;
+	bgmpreviewstream = S_CodecOpenStreamType(path, handler->type, loop);
+	if (!bgmpreviewstream)
+		goto failed;
+	if (bgmpreviewstream->info.rate <= 0 || bgmpreviewstream->info.rate > 384000 ||
+		(bgmpreviewstream->info.width != 1 && bgmpreviewstream->info.width != 2) ||
+		(bgmpreviewstream->info.channels != 1 && bgmpreviewstream->info.channels != 2))
+	{
+		S_CodecCloseStream(bgmpreviewstream);
+		bgmpreviewstream = NULL;
+		goto invalidstream;
+	}
+
+	BGM_Preview_PauseBackground();
+	bgmpreview.rate = bgmpreviewstream->info.rate;
+	bgmpreview.bits = bgmpreviewstream->info.bits ? bgmpreviewstream->info.bits : bgmpreviewstream->info.width * 8;
+	bgmpreview.channels = bgmpreviewstream->info.channels;
+	bgmpreview.total_samples = q_max(0, bgmpreviewstream->info.samples);
+	bgmpreview.seekable = bgmpreview.total_samples > 0 && S_CodecCanSeekStream(bgmpreviewstream);
+	bgmpreview.status = BGM_PREVIEW_PLAYING;
+	return true;
+
+invalid:
+	q_strlcpy(bgmpreview.error, "invalid music path", sizeof(bgmpreview.error));
+	goto error;
+unsupported:
+	q_strlcpy(bgmpreview.error, "unsupported music format", sizeof(bgmpreview.error));
+	goto error;
+toolong:
+	q_strlcpy(bgmpreview.error, "music path too long", sizeof(bgmpreview.error));
+	goto error;
+failed:
+	q_strlcpy(bgmpreview.error, "stream open failed", sizeof(bgmpreview.error));
+	goto error;
+invalidstream:
+	q_strlcpy(bgmpreview.error, "invalid stream metadata", sizeof(bgmpreview.error));
+error:
+	bgmpreview.status = BGM_PREVIEW_FAILED;
+	return false;
+}
+
+void BGM_Preview_SetPaused(qboolean paused)
+{
+	if (!bgmpreviewstream)
+		return;
+	if (paused && bgmpreviewstream->status == STREAM_PLAY)
+	{
+		bgmpreviewstream->status = STREAM_PAUSE;
+		bgmpreview.status = BGM_PREVIEW_PAUSED;
+	}
+	else if (!paused && bgmpreviewstream->status == STREAM_PAUSE)
+	{
+		bgmpreviewstream->status = STREAM_PLAY;
+		bgmpreview.status = BGM_PREVIEW_PLAYING;
+	}
+}
+
+void BGM_Preview_SetLoop(qboolean loop)
+{
+	bgmpreview.loop = loop;
+	if (bgmpreviewstream)
+		bgmpreviewstream->loop = loop;
+}
+
+void BGM_Preview_SetGain(float gain)
+{
+	if (isfinite(gain))
+		bgmpreview.gain = CLAMP(0.0f, gain, 1.0f);
+}
+
+qboolean BGM_Preview_Seek(double fraction)
+{
+	int64_t sample;
+
+	if (!isfinite(fraction) || !bgmpreviewstream || !bgmpreview.seekable ||
+		bgmpreview.total_samples <= 0)
+		return false;
+	fraction = CLAMP(0.0, fraction, 1.0);
+	sample = (int64_t)(fraction * (bgmpreview.total_samples - 1) + 0.5);
+	if (S_CodecSeekStream(bgmpreviewstream, sample) != 0)
+		return false;
+	bgmpreview.position_samples = sample;
+	s_rawend = 0;
+	return true;
+}
+
+void BGM_Preview_GetState(bgm_preview_state_t *state)
+{
+	int64_t queued;
+
+	if (!state)
+		return;
+	*state = bgmpreview;
+	if (!bgmpreviewstream || state->rate <= 0 || !shm || shm->speed <= 0)
+		return;
+
+	/* position_samples tracks source frames decoded into the raw ring. Convert
+	 * the mixer-rate frames that are queued but not heard back to source-rate
+	 * frames before exposing the playhead to the UI. */
+	queued = q_max(0, s_rawend - paintedtime);
+	queued = (int64_t)(queued * ((double)state->rate / shm->speed) + 0.5);
+	state->position_samples -= queued;
+	if (state->loop && state->total_samples > 0)
+	{
+		state->position_samples %= state->total_samples;
+		if (state->position_samples < 0)
+			state->position_samples += state->total_samples;
+	}
+	else
+		state->position_samples = CLAMP(0, state->position_samples, state->total_samples);
+}
 
 static void BGM_Play_f (void)
 {
@@ -114,6 +331,59 @@ static void BGM_Stop_f (void)
 	BGM_Stop();
 }
 
+static void BGM_Preview_f(void)
+{
+	const char *arg;
+	bgm_preview_state_t state;
+
+	if (Cmd_Argc() < 2)
+	{
+		Con_Printf("usage: music_preview <path>|pause|resume|stop|info|loop 0|1|gain 0..1|seek 0..1\n");
+		return;
+	}
+	arg = Cmd_Argv(1);
+	if (!q_strcasecmp(arg, "pause"))
+		BGM_Preview_SetPaused(true);
+	else if (!q_strcasecmp(arg, "resume"))
+		BGM_Preview_SetPaused(false);
+	else if (!q_strcasecmp(arg, "stop"))
+		BGM_Preview_Stop();
+	else if (!q_strcasecmp(arg, "loop"))
+	{
+		if (Cmd_Argc() != 3)
+			Con_Printf("usage: music_preview loop 0|1\n");
+		else
+			BGM_Preview_SetLoop(atof(Cmd_Argv(2)) != 0.0f);
+	}
+	else if (!q_strcasecmp(arg, "gain"))
+	{
+		if (Cmd_Argc() != 3)
+			Con_Printf("usage: music_preview gain 0..1\n");
+		else
+			BGM_Preview_SetGain(atof(Cmd_Argv(2)));
+	}
+	else if (!q_strcasecmp(arg, "seek"))
+	{
+		if (Cmd_Argc() != 3)
+			Con_Printf("usage: music_preview seek 0..1\n");
+		else if (!BGM_Preview_Seek(atof(Cmd_Argv(2))))
+			Con_Printf("music preview is not seekable\n");
+	}
+	else if (!q_strcasecmp(arg, "info"))
+	{
+		BGM_Preview_GetState(&state);
+		Con_Printf("music preview: %s, %lld/%lld samples, %d Hz %d-bit %dch, gain %.0f%%, loop %s",
+			state.name[0] ? state.name : "none", (long long)state.position_samples,
+			(long long)state.total_samples, state.rate, state.bits, state.channels,
+			state.gain * 100.0f, state.loop ? "on" : "off");
+		if (state.error[0])
+			Con_Printf(" (%s)", state.error);
+		Con_Printf("\n");
+	}
+	else
+		BGM_Preview_Play(arg, bgmpreview.gain, bgmpreview.loop);
+}
+
 static void BGM_Jump_f (void)
 {
 	if (Cmd_Argc() != 2) {
@@ -135,12 +405,14 @@ qboolean BGM_Init (void)
 	Cmd_AddCommand("music_resume", BGM_Resume_f);
 	Cmd_AddCommand("music_loop", BGM_Loop_f);
 	Cmd_AddCommand("music_stop", BGM_Stop_f);
+	Cmd_AddCommand("music_preview", BGM_Preview_f);
 	Cmd_AddCommand("music_jump", BGM_Jump_f);
 
 	if (COM_CheckParm("-noextmusic") != 0)
 		no_extmusic = true;
 
 	bgmloop = true;
+	bgmpreview.gain = 1.0f;
 
 	for (i = 0; wanted_handlers[i].type != CODECTYPE_NONE; i++)
 	{
@@ -177,6 +449,7 @@ qboolean BGM_Init (void)
 
 void BGM_Shutdown (void)
 {
+	BGM_Preview_Release();
 	BGM_Stop();
 /* sever our connections to
  * midi_drv and snd_codec */
@@ -229,6 +502,7 @@ void BGM_Play (const char *filename)
 	const char *ext;
 	music_handler_t *handler;
 
+	BGM_Preview_Close(false);
 	BGM_Stop();
 
 	if (music_handlers == NULL)
@@ -244,6 +518,8 @@ void BGM_Play (const char *filename)
 	if (! *ext)	/* try all things */
 	{
 		BGM_Play_noext(filename, ANY_CODECTYPE);
+		if (bgmpreview_exclusive)
+			BGM_Preview_PauseBackground();
 		return;
 	}
 
@@ -269,7 +545,11 @@ void BGM_Play (const char *filename)
 	case BGM_STREAMER:
 		bgmstream = S_CodecOpenStreamType(tmp, handler->type, bgmloop);
 		if (bgmstream)
+		{
+			if (bgmpreview_exclusive)
+				BGM_Preview_PauseBackground();
 			return;		/* success */
+		}
 		break;
 	case BGM_NONE:
 	default:
@@ -294,19 +574,27 @@ void BGM_PlayCDtrack (byte track, qboolean looping)
 	music_handler_t *handler;
 
 	/* if replaying the same track, just resume playing instead of stopping and restarting*/
+	BGM_Preview_Close(false);
 	if (bgmstream)
 	{
 		q_snprintf (tmp, sizeof (tmp), "%s/track%02d.%s", MUSIC_DIRNAME, track, bgmstream->codec->ext);
 		if (strcmp (tmp, bgmstream->name) == 0)
 		{
-			BGM_Resume ();
+			if (!bgmpreview_exclusive)
+				BGM_Resume ();
+			else
+				BGM_Preview_PauseBackground();
 			return;
 		}
 	}
 
 	BGM_Stop();
 	if (CDAudio_Play(track, looping) == 0)
+	{
+		if (bgmpreview_exclusive)
+			BGM_Preview_PauseBackground();
 		return;			/* success */
+	}
 
 	if (music_handlers == NULL)
 		return;
@@ -351,11 +639,21 @@ void BGM_PlayCDtrack (byte track, qboolean looping)
 		bgmstream = S_CodecOpenStreamType(tmp, type, bgmloop);
 		if (! bgmstream)
 			Con_Printf("Couldn't handle music file %s\n", tmp);
+		else if (bgmpreview_exclusive)
+			BGM_Preview_PauseBackground();
 	}
 }
 
 void BGM_Stop (void)
 {
+	BGM_Preview_Close(false);
+	if (bgmpreview_exclusive)
+	{
+		if (bgmpreview_resume_cd)
+			CDAudio_Stop();
+		bgmpreview_resume_background = false;
+		bgmpreview_resume_cd = false;
+	}
 	if (bgmstream)
 	{
 		bgmstream->status = STREAM_NONE;
@@ -367,6 +665,8 @@ void BGM_Stop (void)
 
 void BGM_Pause (void)
 {
+	if (bgmpreviewstream || bgmpreview_exclusive)
+		bgmpreview_resume_background = false;
 	if (bgmstream)
 	{
 		if (bgmstream->status == STREAM_PLAY)
@@ -379,6 +679,8 @@ void BGM_Pause (void)
 
 void BGM_Resume (void)
 {
+	if (bgmpreview_exclusive)
+		return;
 	if (bgmstream)
 	{
 		if (bgmstream->status == STREAM_PAUSE)
@@ -386,7 +688,8 @@ void BGM_Resume (void)
 	}
 }
 
-static void BGM_UpdateStream (void)
+static qboolean BGM_UpdateStream(snd_stream_t *stream, qboolean loop, float gain,
+	qboolean preview)
 {
 	qboolean did_rewind = false;
 	int	res;	/* Number of bytes read. */
@@ -395,12 +698,12 @@ static void BGM_UpdateStream (void)
 	int	fileBytes;
 	byte	raw[16384];
 
-	if (muted || bgmstream->status != STREAM_PLAY) // woods #usermute #mute
-		return;
+	if (muted || stream->status != STREAM_PLAY) // woods #usermute #mute
+		return true;
 
 	/* don't bother playing anything if musicvolume is 0 */
 	if (bgmvolume.value <= 0)
-		return;
+		return true;
 
 	/* see how many samples should be copied into the raw buffer */
 	if (s_rawend < paintedtime)
@@ -411,75 +714,76 @@ static void BGM_UpdateStream (void)
 		bufferSamples = MAX_RAW_SAMPLES - (s_rawend - paintedtime);
 
 		/* ramp up volume after stream was paused */
-		if (bgmstream->volume < 1.f)
+		if (stream->volume < 1.f)
 		{
-			bgmstream->volume += bufferSamples / (bgmstream->info.rate * 1.f);
-			bgmstream->volume = q_min (1.f, bgmstream->volume);
+			stream->volume += bufferSamples / (stream->info.rate * 1.f);
+			stream->volume = q_min (1.f, stream->volume);
 		}
 
 		/* decide how much data needs to be read from the file */
-		fileSamples = bufferSamples * bgmstream->info.rate / shm->speed;
+		fileSamples = bufferSamples * stream->info.rate / shm->speed;
 		if (!fileSamples)
-			return;
+			return true;
 
 		/* our max buffer size */
-		fileBytes = fileSamples * (bgmstream->info.width * bgmstream->info.channels);
+		fileBytes = fileSamples * (stream->info.width * stream->info.channels);
 		if (fileBytes > (int) sizeof(raw))
 		{
 			fileBytes = (int) sizeof(raw);
 			fileSamples = fileBytes /
-					  (bgmstream->info.width * bgmstream->info.channels);
+					  (stream->info.width * stream->info.channels);
 		}
 
 		/* Read */
-		res = S_CodecReadStream(bgmstream, fileBytes, raw);
+		res = S_CodecReadStream(stream, fileBytes, raw);
 		if (res < fileBytes)
 		{
 			fileBytes = res;
-			fileSamples = res / (bgmstream->info.width * bgmstream->info.channels);
+			fileSamples = res / (stream->info.width * stream->info.channels);
 		}
 
 		if (res > 0)	/* data: add to raw buffer */
 		{
-			S_RawSamples(fileSamples, bgmstream->info.rate,
-							bgmstream->info.width,
-							bgmstream->info.channels,
-							raw, bgmvolume.value * bgmstream->volume);
+			S_RawSamples(fileSamples, stream->info.rate,
+							stream->info.width,
+							stream->info.channels,
+							raw, bgmvolume.value * stream->volume * gain);
+			if (preview)
+				bgmpreview.position_samples += fileSamples;
 			did_rewind = false;
 		}
 		else if (res == 0)	/* EOF */
 		{
-			if (bgmloop)
+			if (loop)
 			{
 				if (did_rewind)
 				{
 					Con_Printf("Stream keeps returning EOF.\n");
-					BGM_Stop();
-					return;
+					return false;
 				}
 
-				res = S_CodecRewindStream(bgmstream);
+				res = S_CodecRewindStream(stream);
 				if (res != 0)
 				{
 					Con_Printf("Stream seek error (%i), stopping.\n", res);
-					BGM_Stop();
-					return;
+					return false;
 				}
+				if (preview)
+					bgmpreview.position_samples = 0;
 				did_rewind = true;
 			}
 			else
 			{
-				BGM_Stop();
-				return;
+				return false;
 			}
 		}
 		else	/* res < 0: some read error */
 		{
 			Con_Printf("Stream read error (%i), stopping.\n", res);
-			BGM_Stop();
-			return;
+			return false;
 		}
 	}
+	return true;
 }
 
 void BGM_Update (void)
@@ -492,7 +796,15 @@ void BGM_Update (void)
 			Cvar_SetQuick (&bgmvolume, "1");
 		old_volume = bgmvolume.value;
 	}
-	if (bgmstream)
-		BGM_UpdateStream ();
+	if (bgmpreviewstream)
+	{
+		if (!BGM_UpdateStream(bgmpreviewstream, bgmpreview.loop, bgmpreview.gain, true))
+			BGM_Preview_Close(true);
+	}
+	else if (bgmstream && !bgmpreview_exclusive)
+	{
+		if (!BGM_UpdateStream(bgmstream, bgmloop, 1.0f, false))
+			BGM_Stop();
+	}
 }
 

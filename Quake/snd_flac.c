@@ -219,6 +219,8 @@ flac_meta_func (const FLAC__StreamDecoder *decoder,
 		ff->info->width = ff->info->bits / 8;
 		ff->info->channels = metadata->data.stream_info.channels;
 		ff->info->blocksize = metadata->data.stream_info.max_blocksize;
+		ff->info->samples = (int)q_min(metadata->data.stream_info.total_samples,
+			(FLAC__uint64)INT_MAX);
 		ff->info->dataofs = 0;	/* got the STREAMINFO metadata */
 	}
 }
@@ -371,6 +373,14 @@ static int S_FLAC_CodecRewindStream (snd_stream_t *stream)
 	return -1;
 }
 
+static int S_FLAC_CodecSeekStream (snd_stream_t *stream, int64_t sample)
+{
+	flacfile_t *ff = (flacfile_t *)stream->priv;
+
+	ff->pos = ff->size = 0;
+	return FLAC__stream_decoder_seek_absolute(ff->decoder, (FLAC__uint64)sample) ? 0 : -1;
+}
+
 snd_codec_t flac_codec =
 {
 	CODECTYPE_FLAC,
@@ -381,6 +391,7 @@ snd_codec_t flac_codec =
 	S_FLAC_CodecOpenStream,
 	S_FLAC_CodecReadStream,
 	S_FLAC_CodecRewindStream,
+	S_FLAC_CodecSeekStream,
 	NULL, /* jump */
 	S_FLAC_CodecCloseStream,
 	NULL

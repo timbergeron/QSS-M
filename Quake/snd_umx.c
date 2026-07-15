@@ -404,6 +404,7 @@ snd_codec_t umx_codec =
 	S_UMX_CodecOpenStream,
 	S_UMX_CodecReadStream,
 	S_UMX_CodecRewindStream,
+	NULL, /* seek */
 	NULL, /* jump */
 	S_UMX_CodecCloseStream,
 	NULL

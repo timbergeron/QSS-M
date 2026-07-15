@@ -2276,6 +2276,9 @@ void _Host_Frame (double time)
 
 // process console commands
 	Cbuf_Execute ();
+	/* Audio-browser isolation must not depend on the menu draw path running.
+	 * Run after commands so scripted menu transitions release it immediately. */
+	M_AudioBrowser_CloseIfInactive();
 	CL_ConnectFrame();
 
 	Con_UpdateCenterPrint ();	// woods #centerlog -- flush deferred centerprint (main thread)

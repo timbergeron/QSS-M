@@ -69,13 +69,44 @@ typedef struct
 	int	rightvol;		/* 0-255 volume					*/
 	int	end;			/* end time in global paintsamples		*/
 	int	pos;			/* sample position in sfx			*/
-	int	looping;		/* where to loop, -1 = no looping		*/
+	int	looping;		/* SND_LOOP_* policy, NEVER a sample position	*/
 	int	entnum;			/* to allow overriding a specific sound		*/
 	int	entchannel;
 	vec3_t	origin;			/* origin of sound effect			*/
 	vec_t	dist_mult;		/* distance multiplier (attenuation/clipK)	*/
 	int	master_vol;		/* 0-255 master volume				*/
+	qboolean advance_silently;	/* keep timeline moving at zero channel gain	*/
 } channel_t;
+
+/* channel_t.looping is a policy enum despite its legacy name. Zero must keep
+ * the historical sfxcache_t.loopstart behavior for memset-initialized channels;
+ * never store a loop sample offset in this field. */
+#define SND_LOOP_DEFAULT 0
+#define SND_LOOP_FORCE   1
+#define SND_LOOP_DISABLE (-1)
+
+typedef enum
+{
+	SOUND_PREVIEW_STOPPED,
+	SOUND_PREVIEW_PLAYING,
+	SOUND_PREVIEW_PAUSED,
+	SOUND_PREVIEW_FAILED
+} sound_preview_status_t;
+
+typedef struct
+{
+	sound_preview_status_t status;
+	char name[MAX_QPATH];
+	char error[96];
+	int position;
+	int length;
+	int rate;
+	int bits;
+	qboolean source_looped;
+	qboolean loop;
+	qboolean seekable;
+	float gain;
+} sound_preview_state_t;
 
 #define WAV_FORMAT_PCM	1
 
@@ -103,6 +134,16 @@ void S_SetMasterVolumeScale (float scale);
 void S_ClearPrecache (void);
 void S_BeginPrecaching (void);
 void S_EndPrecaching (void);
+qboolean S_SoundPreview_Play (const char *name, float gain, qboolean loop);
+void S_SoundPreview_Stop (void);
+void S_SoundPreview_SetPaused (qboolean paused);
+void S_SoundPreview_SetLoop (qboolean loop);
+void S_SoundPreview_SetGain (float gain);
+qboolean S_SoundPreview_Seek (double fraction);
+void S_SoundPreview_GetState (sound_preview_state_t *state);
+void S_SoundPreview_Release (void);
+void S_SoundPreview_SetExclusive (qboolean exclusive);
+qboolean S_SoundPreview_ShouldMixChannel (int channel);
 
 qboolean S_BlockSound (void);
 void S_UnblockSound (void);
@@ -155,9 +196,10 @@ void SNDDMA_UnblockSound(void);
 #define	MAX_DYNAMIC_CHANNELS	128 /* johnfitz -- was 8   */
 
 extern	channel_t	*snd_channels;
-/* 0 to MAX_DYNAMIC_CHANNELS-1	= normal entity sounds
- * MAX_DYNAMIC_CHANNELS to MAX_DYNAMIC_CHANNELS + NUM_AMBIENTS -1 = water, etc
- * MAX_DYNAMIC_CHANNELS + NUM_AMBIENTS to total_channels = static sounds
+/* 0 to NUM_AMBIENTS - 1 = water, wind, etc.
+ * NUM_AMBIENTS to NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS - 1 = entity sounds
+ * The audio browser reserves the following channel.
+ * Remaining channels up to total_channels are static sounds.
  */
 
 extern	volatile dma_t	*shm;

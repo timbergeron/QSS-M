@@ -212,6 +212,7 @@ snd_codec_t mikmod_codec =
 	S_MIKMOD_CodecOpenStream,
 	S_MIKMOD_CodecReadStream,
 	S_MIKMOD_CodecRewindStream,
+	NULL, /* seek */
 	S_MIKMOD_CodecJumpToOrder,
 	S_MIKMOD_CodecCloseStream,
 	NULL

@@ -81,6 +81,14 @@ static qboolean S_MODPLUG_CodecOpenStream (snd_stream_t *stream)
 	ModPlug_Seek((ModPlugFile*)stream->priv, 0);
 	/* default volume (128) sounds rather low? */
 	ModPlug_SetMasterVolume((ModPlugFile*)stream->priv, 384);	/* 0-512 */
+	{
+		int length = ModPlug_GetLength((ModPlugFile *)stream->priv);
+		if (length > 0)
+		{
+			int64_t samples = (int64_t)length * stream->info.rate / 1000;
+			stream->info.samples = (int)q_min(samples, (int64_t)INT_MAX);
+		}
+	}
 	return true;
 }
 
@@ -107,6 +115,18 @@ static int S_MODPLUG_CodecRewindStream (snd_stream_t *stream)
 	return 0;
 }
 
+static int S_MODPLUG_CodecSeekStream (snd_stream_t *stream, int64_t sample)
+{
+	int64_t milliseconds;
+
+	if (sample < 0 || stream->info.rate <= 0)
+		return -1;
+	milliseconds = sample * 1000 / stream->info.rate;
+	ModPlug_Seek((ModPlugFile *)stream->priv,
+		(int)q_min(milliseconds, (int64_t)INT_MAX));
+	return 0;
+}
+
 snd_codec_t modplug_codec =
 {
 	CODECTYPE_MOD,
@@ -117,6 +137,7 @@ snd_codec_t modplug_codec =
 	S_MODPLUG_CodecOpenStream,
 	S_MODPLUG_CodecReadStream,
 	S_MODPLUG_CodecRewindStream,
+	S_MODPLUG_CodecSeekStream,
 	S_MODPLUG_CodecJumpToOrder,
 	S_MODPLUG_CodecCloseStream,
 	NULL

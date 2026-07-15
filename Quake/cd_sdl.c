@@ -152,8 +152,15 @@ void CDAudio_Stop(void)
 	if (!cd_handle || !enabled)
 		return;
 
-	if (!playing)
+	if (!playing && !wasPlaying)
 		return;
+	if (!playing)
+	{
+		wasPlaying = false;
+		pausetime = -1.0;
+		endOfTrack = -1.0;
+		return;
+	}
 
 #ifdef __linux__
 	/* Don't really stop, but just pause: On some devices, the CDROMSTOP
@@ -207,6 +214,11 @@ void CDAudio_Resume(void)
 	playing = true;
 	endOfTrack += realtime - pausetime;
 	pausetime = -1.0;
+}
+
+qboolean CDAudio_IsPlaying(void)
+{
+	return playing;
 }
 
 static int get_first_audiotrk (void)

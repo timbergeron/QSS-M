@@ -29,6 +29,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <zlib.h>
 #include "json.h" // woods #serversmenu
 #include "update.h"
+#include "snd_codec.h"
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
@@ -123,6 +124,7 @@ void M_Menu_ModMenu_f (void);
 		void M_Menu_DemoOptions_f (void);
 		void M_Menu_PakLoading_f (void);
 		void M_Menu_ModelViewer_f (void);
+		void M_Menu_AudioBrowser_f (void);
 		void M_Menu_ColorPicker_f (void);
 		void M_Menu_Extras_f (void);
 		void M_Menu_Saving_f (void);
@@ -174,6 +176,7 @@ void M_ModMenu_Draw (void);
 		void M_DemoOptions_Draw (void);
 		void M_PakLoading_Draw (void);
 		void M_ModelViewer_Draw (void);
+		void M_AudioBrowser_Draw (void);
 		void M_ColorPicker_Draw (void);
 		void M_Extras_Draw (void);
 		void M_Saving_Draw (void);
@@ -231,6 +234,7 @@ void M_ModMenu_Key (int key);
 		void M_DemoOptions_Key (int key);
 		void M_PakLoading_Key (int key);
 		void M_ModelViewer_Key (int key);
+		void M_AudioBrowser_Key (int key);
 		void M_ColorPicker_Key (int key);
 		void M_Extras_Key (int key);
 		void M_Saving_Key (int key);
@@ -289,6 +293,7 @@ void M_ModMenu_Key (int key);
 		void M_DemoOptions_Mousemove (int cx, int cy);
 		void M_PakLoading_Mousemove (int cx, int cy);
 		void M_ModelViewer_Mousemove(int cx, int cy);
+		void M_AudioBrowser_Mousemove(int cx, int cy);
 		void M_ColorPicker_Mousemove(int cx, int cy);
 		void M_Extras_Mousemove(int cx, int cy);
 		void M_Saving_Mousemove(int cx, int cy);
@@ -15894,6 +15899,8 @@ Sound Menu
 
 extern cvar_t cl_ambient, ambient_level, snd_waterfx;
 extern char mute[2];
+extern qboolean muted;
+void Sound_Toggle_Mute_Off_f(void);
 
 static enum sound_e
 {
@@ -15906,6 +15913,7 @@ static enum sound_e
 	SOUND_AMBIENTLEVEL,
 	SOUND_STOPSOUND,
 	SOUND_MUTE,
+	SOUND_AUDIOBROWSER,
 	SOUND_VOIP,
 	SOUND_COUNT
 } sound_cursor;
@@ -15946,6 +15954,8 @@ static const char* M_Sound_GetItemText(int index)
 		return "Stop Sound";
 	case SOUND_MUTE:
 		return "Mute";
+	case SOUND_AUDIOBROWSER:
+		return "Audio Browser";
 	case SOUND_VOIP:
 		return "VoIP";
 	default:
@@ -16079,6 +16089,10 @@ static void M_Sound_AdjustSliders(int dir)
 			q_snprintf(mute, sizeof(mute), "n");  // Set to not muted (will show "on")
 		break;
 
+	case SOUND_AUDIOBROWSER:
+		M_Menu_AudioBrowser_f();
+		break;
+
 	case SOUND_VOIP:
 		M_Menu_Voip_f();
 		break;
@@ -16182,6 +16196,11 @@ void M_Sound_Draw(void)
 				value = "off";
 		}
 		break;
+
+		case SOUND_AUDIOBROWSER:
+			text = "     Audio Browser";
+			value = "...";
+			break;
 
 		case SOUND_VOIP:
 			text = "              VoIP";
@@ -16367,7 +16386,7 @@ void M_Sound_Key(int k)
 		break;
 
 	case K_MWHEELDOWN:
-		if (sound_cursor != SOUND_VOIP)
+		if (sound_cursor != SOUND_AUDIOBROWSER && sound_cursor != SOUND_VOIP)
 			M_Sound_AdjustSliders(-1);
 		break;
 
@@ -16376,7 +16395,7 @@ void M_Sound_Key(int k)
 		break;
 
 	case K_MWHEELUP:
-		if (sound_cursor != SOUND_VOIP)
+		if (sound_cursor != SOUND_AUDIOBROWSER && sound_cursor != SOUND_VOIP)
 			M_Sound_AdjustSliders(1);
 		break;
 	}
@@ -16425,6 +16444,7 @@ void M_Sound_Mousemove(int cx, int cy)
 		case SOUND_SURROUND:
 		case SOUND_STOPSOUND:
 		case SOUND_MUTE:
+		case SOUND_AUDIOBROWSER:
 		case SOUND_VOIP:
 		case SOUND_COUNT:
 			// No action needed for these cases in mouse movement
@@ -40921,6 +40941,7 @@ static struct
 	{"menu_demooptions", M_Menu_DemoOptions_f},
 	{"menu_pakloading", M_Menu_PakLoading_f},
 	{"menu_modelviewer", M_Menu_ModelViewer_f},
+	{"menu_audiobrowser", M_Menu_AudioBrowser_f},
 	{"menu_saving", M_Menu_Saving_f},
 	{"menu_misc", M_Menu_Extras_f},
 	{"menu_shortcuts", M_Menu_Shortcuts_f},
@@ -41038,6 +41059,8 @@ void M_ToggleMenu (int mode)
 
 	if (key_dest == key_menu)
 	{
+		if (m_state == m_audiobrowser)
+			M_AudioBrowser_Close();
 		if (mode != 0 && m_state != m_main)
 		{
 			if (m_state == m_slist)
@@ -41080,6 +41103,1243 @@ static void M_MenuRestart_f (void)
 		MQC_Shutdown();
 }
 
+/*
+===============================================================================
+
+	AUDIO BROWSER
+
+===============================================================================
+*/
+
+typedef enum
+{
+	AUDIO_CATALOG_SOUNDS,
+	AUDIO_CATALOG_MUSIC
+} audio_catalog_kind_t;
+
+typedef struct
+{
+	char path[MAX_QPATH];
+	char source[50];
+	unsigned int priority;
+} audio_catalog_item_t;
+
+typedef struct
+{
+	audio_catalog_item_t *items;
+	int count;
+} audio_catalog_t;
+
+#define AUDIO_CATALOG_MAX_DEPTH 16
+
+static qboolean AudioCatalog_ExtensionSupported(audio_catalog_kind_t kind, const char *name)
+{
+	const char *ext = COM_FileGetExtension(name);
+
+	if (!*ext)
+		return false;
+	if (kind == AUDIO_CATALOG_MUSIC)
+	{
+		int i;
+		for (i = 0; wanted_handlers[i].ext; ++i)
+			if (wanted_handlers[i].is_available > 0 &&
+				!q_strcasecmp(ext, wanted_handlers[i].ext))
+				return true;
+		return false;
+	}
+	if (kind == AUDIO_CATALOG_SOUNDS && !q_strcasecmp(ext, "wav"))
+		return true;
+	if (!S_CodecExtensionAvailable(ext))
+		return false;
+	return !q_strcasecmp(ext, "ogg") || !q_strcasecmp(ext, "mp3") ||
+		!q_strcasecmp(ext, "opus") || !q_strcasecmp(ext, "flac");
+}
+
+static void AudioCatalog_SourceLabel(searchpath_t *search, char *out, size_t outsize)
+{
+	const char *source;
+
+	if (search->pack)
+		source = search->purename[0] ? search->purename : search->pack->filename;
+	else
+		source = search->purename[0] ? search->purename : search->filename;
+	q_strlcpy(out, COM_SkipPath(source), outsize);
+}
+
+static void AudioCatalog_Add(audio_catalog_t *catalog, audio_catalog_kind_t kind,
+	const char *path, const char *source, unsigned int priority)
+{
+	audio_catalog_item_t item;
+	size_t pathlen;
+
+	if (!path || !*path)
+		return;
+	pathlen = strlen(path);
+	if (pathlen >= sizeof(item.path) ||
+		(kind == AUDIO_CATALOG_MUSIC &&
+			pathlen >= MAX_QPATH - (sizeof("music/") - 1)) ||
+		!AudioCatalog_ExtensionSupported(kind, path))
+		return;
+
+	memset(&item, 0, sizeof(item));
+	q_strlcpy(item.path, path, sizeof(item.path));
+	q_strlcpy(item.source, source && *source ? source : "unknown", sizeof(item.source));
+	item.priority = priority;
+	VEC_PUSH(catalog->items, item);
+	catalog->count = (int)VEC_SIZE(catalog->items);
+}
+
+static qboolean AudioCatalog_Join(char *out, size_t outsize, const char *prefix, const char *name)
+{
+	if (prefix && *prefix)
+	{
+		int result = q_snprintf(out, outsize, "%s/%s", prefix, name);
+		return result >= 0 && (size_t)result < outsize;
+	}
+	return q_strlcpy(out, name, outsize) < outsize;
+}
+
+static qboolean AudioCatalog_JoinFull(char *out, size_t outsize, const char *base,
+	const char *relative)
+{
+	int result;
+
+	if (relative && *relative)
+		result = q_snprintf(out, outsize, "%s/%s", base, relative);
+	else
+		result = q_snprintf(out, outsize, "%s", base);
+	return result >= 0 && (size_t)result < outsize;
+}
+
+#ifdef _WIN32
+static void AudioCatalog_ScanDir(audio_catalog_t *catalog, audio_catalog_kind_t kind,
+	const char *base, const char *relative, const char *source, unsigned int priority,
+	int depth)
+{
+	WIN32_FIND_DATA data;
+	HANDLE find;
+	char directory[MAX_OSPATH], pattern[MAX_OSPATH], child[MAX_QPATH];
+
+	if (depth > AUDIO_CATALOG_MAX_DEPTH)
+		return;
+	if (!AudioCatalog_JoinFull(directory, sizeof(directory), base, relative) ||
+		(size_t)q_snprintf(pattern, sizeof(pattern), "%s/*", directory) >= sizeof(pattern))
+		return;
+	find = FindFirstFile(pattern, &data);
+	if (find == INVALID_HANDLE_VALUE)
+		return;
+	do
+	{
+		if (!strcmp(data.cFileName, ".") || !strcmp(data.cFileName, "..") ||
+			!AudioCatalog_Join(child, sizeof(child), relative, data.cFileName))
+			continue;
+		if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			AudioCatalog_ScanDir(catalog, kind, base, child, source, priority, depth + 1);
+		else
+			AudioCatalog_Add(catalog, kind, child, source, priority);
+	} while (FindNextFile(find, &data));
+	FindClose(find);
+}
+#else
+static void AudioCatalog_ScanDir(audio_catalog_t *catalog, audio_catalog_kind_t kind,
+	const char *base, const char *relative, const char *source, unsigned int priority,
+	int depth)
+{
+	DIR *dir;
+	struct dirent *entry;
+	struct stat st;
+	char directory[MAX_OSPATH], fullpath[MAX_OSPATH], child[MAX_QPATH];
+
+	if (depth > AUDIO_CATALOG_MAX_DEPTH)
+		return;
+	if (!AudioCatalog_JoinFull(directory, sizeof(directory), base, relative))
+		return;
+	dir = opendir(directory);
+	if (!dir)
+		return;
+	while ((entry = readdir(dir)) != NULL)
+	{
+		if (entry->d_name[0] == '.' ||
+			!AudioCatalog_Join(child, sizeof(child), relative, entry->d_name))
+			continue;
+		if (!AudioCatalog_JoinFull(fullpath, sizeof(fullpath), base, child))
+			continue;
+		if (stat(fullpath, &st) < 0)
+			continue;
+		if (S_ISDIR(st.st_mode))
+			AudioCatalog_ScanDir(catalog, kind, base, child, source, priority, depth + 1);
+		else if (S_ISREG(st.st_mode))
+			AudioCatalog_Add(catalog, kind, child, source, priority);
+	}
+	closedir(dir);
+}
+#endif
+
+static int AudioCatalog_Compare(const void *a, const void *b)
+{
+	const char *left = ((const audio_catalog_item_t *)a)->path;
+	const char *right = ((const audio_catalog_item_t *)b)->path;
+	int result = q_strnaturalcmp(left, right);
+
+	return result ? result : strcmp(left, right);
+}
+
+static int AudioCatalog_CompareForDedup(const void *a, const void *b)
+{
+	const audio_catalog_item_t *left = (const audio_catalog_item_t *)a;
+	const audio_catalog_item_t *right = (const audio_catalog_item_t *)b;
+	int result = q_strcasecmp(left->path, right->path);
+
+	if (result)
+		return result;
+	if (left->priority != right->priority)
+		return left->priority < right->priority ? -1 : 1;
+	return strcmp(left->path, right->path);
+}
+
+static void AudioCatalog_Deduplicate(audio_catalog_t *catalog)
+{
+	int read, write;
+
+	if (catalog->count < 2)
+		return;
+	qsort(catalog->items, catalog->count, sizeof(catalog->items[0]),
+		AudioCatalog_CompareForDedup);
+	for (read = write = 0; read < catalog->count; ++read)
+	{
+		if (write > 0 && !q_strcasecmp(catalog->items[read].path,
+			catalog->items[write - 1].path))
+			continue;
+		if (write != read)
+			catalog->items[write] = catalog->items[read];
+		write++;
+	}
+	VEC_HEADER(catalog->items).size = write;
+	catalog->count = write;
+}
+
+static void AudioCatalog_Clear(audio_catalog_t *catalog)
+{
+	if (!catalog)
+		return;
+	VEC_FREE(catalog->items);
+	catalog->count = 0;
+}
+
+static void AudioCatalog_Build(audio_catalog_kind_t kind, audio_catalog_t *catalog)
+{
+	searchpath_t *search;
+	const char *root = kind == AUDIO_CATALOG_SOUNDS ? "sound" : "music";
+	char source[50];
+	unsigned int priority = 0;
+
+	if (!catalog)
+		return;
+	AudioCatalog_Clear(catalog);
+	if (kind != AUDIO_CATALOG_SOUNDS && kind != AUDIO_CATALOG_MUSIC)
+		return;
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		AudioCatalog_SourceLabel(search, source, sizeof(source));
+		if (search->pack)
+		{
+			int i;
+			const size_t rootlen = strlen(root);
+			for (i = 0; i < search->pack->numfiles; ++i)
+			{
+				const char *name = search->pack->files[i].name;
+				if (!q_strncasecmp(name, root, rootlen) && name[rootlen] == '/')
+					AudioCatalog_Add(catalog, kind, name + rootlen + 1, source, priority);
+			}
+		}
+		else
+		{
+			char base[MAX_OSPATH];
+			if (AudioCatalog_JoinFull(base, sizeof(base), search->filename, root))
+				AudioCatalog_ScanDir(catalog, kind, base, "", source, priority, 0);
+		}
+		priority++;
+	}
+	AudioCatalog_Deduplicate(catalog);
+	if (catalog->count > 1)
+		qsort(catalog->items, catalog->count, sizeof(catalog->items[0]), AudioCatalog_Compare);
+}
+
+static void AudioCatalog_List_f(void)
+{
+	audio_catalog_t catalog = {0};
+	audio_catalog_kind_t kind;
+	const char *filter = Cmd_Argc() >= 3 ? Cmd_Argv(2) : "";
+	int i, shown = 0;
+
+	if (Cmd_Argc() < 2)
+	{
+		Con_Printf("usage: audiofiles sounds|music [filter]\n");
+		return;
+	}
+	if (!q_strcasecmp(Cmd_Argv(1), "sounds"))
+		kind = AUDIO_CATALOG_SOUNDS;
+	else if (!q_strcasecmp(Cmd_Argv(1), "music"))
+		kind = AUDIO_CATALOG_MUSIC;
+	else
+	{
+		Con_Printf("usage: audiofiles sounds|music [filter]\n");
+		return;
+	}
+	AudioCatalog_Build(kind, &catalog);
+	for (i = 0; i < catalog.count; ++i)
+	{
+		if (*filter && !q_strcasestr(catalog.items[i].path, filter) &&
+			!q_strcasestr(catalog.items[i].source, filter))
+			continue;
+		Con_Printf("%-12s %s\n", catalog.items[i].source, catalog.items[i].path);
+		shown++;
+	}
+	Con_Printf("%d of %d %s\n", shown, catalog.count,
+		kind == AUDIO_CATALOG_SOUNDS ? "sounds" : "music tracks");
+	AudioCatalog_Clear(&catalog);
+}
+
+static void AudioCatalog_InitCommands(void)
+{
+	Cmd_AddCommand("audiofiles", AudioCatalog_List_f);
+}
+
+#define AUDIO_LIST_X 16
+#define AUDIO_LIST_Y 24
+#define AUDIO_LIST_COLS 18
+#define AUDIO_LIST_ROWS 16
+#define AUDIO_PANEL_X 176
+#define AUDIO_PANEL_W 128
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+#define AUDIO_COPY_HINT "Cmd-C Copy"
+#else
+#define AUDIO_COPY_HINT "Ctrl-C Copy"
+#endif
+
+extern int m_mousex, m_mousey;
+
+static struct
+{
+	audio_catalog_kind_t kind;
+	audio_catalog_t catalog;
+	int *filtered;
+	int cursor, scroll;
+	char search[33];
+	int searchlen;
+	float gain;
+	qboolean loop;
+	qboolean autoplay;
+	qboolean open;
+	qboolean scrollbar_grab;
+	qboolean progress_grab;
+	qboolean gain_grab;
+	qboolean scrub_was_playing;
+	double scrub_fraction;
+	double scrub_seek_time;
+	qboolean visual_active;
+	double visual_position;
+	double visual_time;
+	int64_t visual_source;
+	audio_catalog_kind_t visual_kind;
+	char visual_name[MAX_QPATH];
+	char status[96];
+	double status_time;
+} audiomenu;
+
+static qboolean M_Audio_HasShortcutModifier(void)
+{
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+	return keydown[K_COMMAND] || keydown[K_CTRL];
+#else
+	return keydown[K_CTRL];
+#endif
+}
+
+static audio_catalog_item_t *M_Audio_Selected(void)
+{
+	if (audiomenu.cursor < 0 || audiomenu.cursor >= (int)VEC_SIZE(audiomenu.filtered))
+		return NULL;
+	return &audiomenu.catalog.items[audiomenu.filtered[audiomenu.cursor]];
+}
+
+static void M_Audio_Clamp(void)
+{
+	int count = (int)VEC_SIZE(audiomenu.filtered);
+	if (count <= 0)
+	{
+		audiomenu.cursor = audiomenu.scroll = 0;
+		return;
+	}
+	audiomenu.cursor = CLAMP(0, audiomenu.cursor, count - 1);
+	if (audiomenu.cursor < audiomenu.scroll)
+		audiomenu.scroll = audiomenu.cursor;
+	if (audiomenu.cursor >= audiomenu.scroll + AUDIO_LIST_ROWS)
+		audiomenu.scroll = audiomenu.cursor - AUDIO_LIST_ROWS + 1;
+	audiomenu.scroll = CLAMP(0, audiomenu.scroll, q_max(0, count - AUDIO_LIST_ROWS));
+}
+
+static void M_Audio_Refilter(void)
+{
+	int i;
+	VEC_CLEAR(audiomenu.filtered);
+	for (i = 0; i < audiomenu.catalog.count; ++i)
+		if (!audiomenu.searchlen ||
+			q_strcasestr(audiomenu.catalog.items[i].path, audiomenu.search) ||
+			q_strcasestr(audiomenu.catalog.items[i].source, audiomenu.search))
+			VEC_PUSH(audiomenu.filtered, i);
+	M_Audio_Clamp();
+}
+
+static void M_Audio_Stop(void)
+{
+	if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+		S_SoundPreview_Stop();
+	else
+		BGM_Preview_Stop();
+}
+
+static void M_Audio_Play(void)
+{
+	audio_catalog_item_t *item = M_Audio_Selected();
+	if (!item)
+		return;
+	if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+	{
+		BGM_Preview_Stop();
+		S_SoundPreview_Play(item->path, audiomenu.gain, audiomenu.loop);
+	}
+	else
+	{
+		S_SoundPreview_Stop();
+		BGM_Preview_Play(item->path, audiomenu.gain, audiomenu.loop);
+	}
+}
+
+static void M_Audio_Rebuild(void)
+{
+	AudioCatalog_Build(audiomenu.kind, &audiomenu.catalog);
+	audiomenu.cursor = audiomenu.scroll = 0;
+	M_Audio_Refilter();
+}
+
+static void M_Audio_SwitchKind(void)
+{
+	M_Audio_Stop();
+	audiomenu.kind = audiomenu.kind == AUDIO_CATALOG_SOUNDS ?
+		AUDIO_CATALOG_MUSIC : AUDIO_CATALOG_SOUNDS;
+	M_Audio_Rebuild();
+}
+
+static void M_Audio_Move(int delta)
+{
+	int count = (int)VEC_SIZE(audiomenu.filtered);
+	int previous;
+
+	if (!count)
+		return;
+	previous = audiomenu.cursor;
+	audiomenu.cursor = CLAMP(0, audiomenu.cursor + delta, count - 1);
+	M_Audio_Clamp();
+	if (audiomenu.autoplay && audiomenu.cursor != previous)
+		M_Audio_Play();
+}
+
+static void M_Audio_SetLoop(qboolean loop)
+{
+	audiomenu.loop = loop;
+	S_SoundPreview_SetLoop(loop);
+	BGM_Preview_SetLoop(loop);
+}
+
+static void M_Audio_SetGain(float gain)
+{
+	if (muted || mute[0] == 'y')
+	{
+		q_snprintf(mute, sizeof(mute), "n");
+		Sound_Toggle_Mute_Off_f();
+	}
+	audiomenu.gain = CLAMP(0.0f, gain, 1.0f);
+	S_SoundPreview_SetGain(audiomenu.gain);
+	BGM_Preview_SetGain(audiomenu.gain);
+}
+
+static void M_Audio_UpdateGainSlider(int x)
+{
+	M_Audio_SetGain((float)(x - AUDIO_PANEL_X - 1) / (AUDIO_PANEL_W - 2));
+}
+
+static void M_Audio_TogglePause(void)
+{
+	if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+	{
+		sound_preview_state_t state;
+		S_SoundPreview_GetState(&state);
+		if (state.status == SOUND_PREVIEW_PLAYING)
+			S_SoundPreview_SetPaused(true);
+		else if (state.status == SOUND_PREVIEW_PAUSED)
+			S_SoundPreview_SetPaused(false);
+		else
+			M_Audio_Play();
+	}
+	else
+	{
+		bgm_preview_state_t state;
+		BGM_Preview_GetState(&state);
+		if (state.status == BGM_PREVIEW_PLAYING)
+			BGM_Preview_SetPaused(true);
+		else if (state.status == BGM_PREVIEW_PAUSED)
+			BGM_Preview_SetPaused(false);
+		else
+			M_Audio_Play();
+	}
+}
+
+static qboolean M_Audio_SeekFraction(double fraction)
+{
+	qboolean result;
+
+	fraction = CLAMP(0.0, fraction, 1.0);
+	result = audiomenu.kind == AUDIO_CATALOG_SOUNDS ?
+		S_SoundPreview_Seek(fraction) : BGM_Preview_Seek(fraction);
+	if (result)
+	{
+		/* Keep the interpolated playhead anchored to the decoder's confirmed
+		 * post-seek position. Invalidating it here made the next draw treat the
+		 * active preview like a newly opened file and restart the bar at zero. */
+		if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+		{
+			sound_preview_state_t state;
+
+			S_SoundPreview_GetState(&state);
+			audiomenu.visual_position = state.position;
+			audiomenu.visual_source = state.position;
+			audiomenu.visual_active = state.status == SOUND_PREVIEW_PLAYING ||
+				state.status == SOUND_PREVIEW_PAUSED;
+			q_strlcpy(audiomenu.visual_name, state.name,
+				sizeof(audiomenu.visual_name));
+		}
+		else
+		{
+			bgm_preview_state_t state;
+
+			BGM_Preview_GetState(&state);
+			audiomenu.visual_position = state.position_samples;
+			audiomenu.visual_source = state.position_samples;
+			audiomenu.visual_active = state.status == BGM_PREVIEW_PLAYING ||
+				state.status == BGM_PREVIEW_PAUSED;
+			q_strlcpy(audiomenu.visual_name, state.name,
+				sizeof(audiomenu.visual_name));
+		}
+		audiomenu.visual_time = realtime;
+		audiomenu.visual_kind = audiomenu.kind;
+	}
+	return result;
+}
+
+static qboolean M_Audio_GetSeekPosition(double *position, double *total)
+{
+	if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+	{
+		sound_preview_state_t state;
+		S_SoundPreview_GetState(&state);
+		if (!state.seekable || state.length <= 0 ||
+			(state.status != SOUND_PREVIEW_PLAYING && state.status != SOUND_PREVIEW_PAUSED))
+			return false;
+		*position = state.position;
+		*total = state.length;
+		if (audiomenu.visual_active && audiomenu.visual_kind == audiomenu.kind &&
+			!q_strcasecmp(audiomenu.visual_name, state.name))
+			*position = audiomenu.visual_position;
+		return true;
+	}
+	else
+	{
+		bgm_preview_state_t state;
+		BGM_Preview_GetState(&state);
+		if (!state.seekable || state.rate <= 0 || state.total_samples <= 0 ||
+			(state.status != BGM_PREVIEW_PLAYING && state.status != BGM_PREVIEW_PAUSED))
+			return false;
+		*position = state.position_samples;
+		*total = state.total_samples;
+		if (audiomenu.visual_active && audiomenu.visual_kind == audiomenu.kind &&
+			!q_strcasecmp(audiomenu.visual_name, state.name))
+			*position = audiomenu.visual_position;
+		return true;
+	}
+}
+
+static qboolean M_Audio_SeekRelativeSeconds(double seconds)
+{
+	double position, total, rate;
+
+	if (!M_Audio_GetSeekPosition(&position, &total))
+		return false;
+	if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+	{
+		sound_preview_state_t state;
+		S_SoundPreview_GetState(&state);
+		rate = state.rate;
+	}
+	else
+	{
+		bgm_preview_state_t state;
+		BGM_Preview_GetState(&state);
+		rate = state.rate;
+	}
+	if (rate <= 0.0)
+		return false;
+	return M_Audio_SeekFraction((position + seconds * rate) / total);
+}
+
+static qboolean M_Audio_SeekDigit(int digit)
+{
+	double position, total;
+
+	if (!M_Audio_GetSeekPosition(&position, &total))
+		return false;
+	return M_Audio_SeekFraction(digit * 0.1);
+}
+
+static void M_Audio_UpdateScrub(int x)
+{
+	audiomenu.scrub_fraction = CLAMP(0.0,
+		(double)(x - AUDIO_PANEL_X - 1) / (AUDIO_PANEL_W - 2), 1.0);
+	if (audiomenu.progress_grab &&
+		(audiomenu.scrub_seek_time == 0.0 || realtime - audiomenu.scrub_seek_time >= 0.05))
+	{
+		if (!M_Audio_SeekFraction(audiomenu.scrub_fraction))
+		{
+			q_strlcpy(audiomenu.status, "Unable to seek this audio file",
+				sizeof(audiomenu.status));
+			audiomenu.status_time = realtime;
+		}
+		audiomenu.scrub_seek_time = realtime;
+	}
+}
+
+static void M_Audio_BeginScrub(int x)
+{
+	qboolean playing = false;
+	qboolean seekable = false;
+
+	if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+	{
+		sound_preview_state_t state;
+		S_SoundPreview_GetState(&state);
+		playing = state.status == SOUND_PREVIEW_PLAYING;
+		seekable = state.seekable && state.length > 0 &&
+			(playing || state.status == SOUND_PREVIEW_PAUSED);
+	}
+	else
+	{
+		bgm_preview_state_t state;
+		BGM_Preview_GetState(&state);
+		playing = state.status == BGM_PREVIEW_PLAYING;
+		seekable = state.seekable && state.total_samples > 0 &&
+			(playing || state.status == BGM_PREVIEW_PAUSED);
+	}
+	if (!seekable)
+		return;
+	if (playing)
+	{
+		if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+			S_SoundPreview_SetPaused(true);
+		else
+			BGM_Preview_SetPaused(true);
+	}
+
+	audiomenu.progress_grab = true;
+	audiomenu.scrub_was_playing = playing;
+	audiomenu.scrub_seek_time = 0.0;
+	M_Audio_UpdateScrub(x);
+}
+
+static void M_Audio_EndScrub(void)
+{
+	qboolean resume;
+	qboolean sought;
+
+	if (!audiomenu.progress_grab)
+		return;
+	resume = audiomenu.scrub_was_playing;
+	audiomenu.progress_grab = false;
+	sought = M_Audio_SeekFraction(audiomenu.scrub_fraction);
+	if (!sought)
+	{
+		q_strlcpy(audiomenu.status, "Unable to seek this audio file",
+			sizeof(audiomenu.status));
+		audiomenu.status_time = realtime;
+	}
+	if (resume && sought)
+	{
+		if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+			S_SoundPreview_SetPaused(false);
+		else
+			BGM_Preview_SetPaused(false);
+	}
+}
+
+static void M_Audio_Copy(void)
+{
+	audio_catalog_item_t *item = M_Audio_Selected();
+	char command[MAX_QPATH + 32];
+	size_t i;
+	if (!item)
+		return;
+	for (i = 0; item->path[i]; ++i)
+	{
+		if (item->path[i] == '"' || (unsigned char)item->path[i] < 32)
+		{
+			q_strlcpy(audiomenu.status, "Cannot copy unsafe filename", sizeof(audiomenu.status));
+			audiomenu.status_time = realtime;
+			return;
+		}
+	}
+	q_snprintf(command, sizeof(command), "%s \"%s\"",
+		audiomenu.kind == AUDIO_CATALOG_SOUNDS ? "play" : "music", item->path);
+	if (SDL_SetClipboardText(command) < 0)
+		q_strlcpy(audiomenu.status, "Clipboard copy failed", sizeof(audiomenu.status));
+	else
+		q_snprintf(audiomenu.status, sizeof(audiomenu.status), "Copied: %s", command);
+	audiomenu.status_time = realtime;
+}
+
+void M_AudioBrowser_Close(void)
+{
+	if (!audiomenu.open)
+		return;
+	audiomenu.open = false;
+	S_SoundPreview_Release();
+	BGM_Preview_Release();
+	AudioCatalog_Clear(&audiomenu.catalog);
+	VEC_FREE(audiomenu.filtered);
+}
+
+void M_Menu_AudioBrowser_f(void)
+{
+	M_AudioBrowser_Close();
+	S_SoundPreview_Release();
+	BGM_Preview_Release();
+	memset(&audiomenu, 0, sizeof(audiomenu));
+	audiomenu.open = true;
+	audiomenu.kind = AUDIO_CATALOG_SOUNDS;
+	audiomenu.gain = 0.8f;
+	BGM_Preview_SetExclusive(true);
+	S_SoundPreview_SetExclusive(true);
+	M_Audio_Rebuild();
+	key_dest = key_menu;
+	m_state = m_audiobrowser;
+	m_entersound = false;
+	IN_UpdateGrabs();
+}
+
+void M_AudioBrowser_CloseIfInactive(void)
+{
+	if (audiomenu.open && m_state == m_audiobrowser && key_dest == key_menu &&
+		!cls.menu_qcvm.extfuncs.m_draw)
+	{
+		/* Recovery paths may release engine-side preview state while the menu
+		 * remains open. Reassert audition isolation once per host frame. */
+		S_SoundPreview_SetExclusive(true);
+		BGM_Preview_SetExclusive(true);
+	}
+	else if (audiomenu.open)
+		M_AudioBrowser_Close();
+	else
+	{
+		/* Fail safe against stale engine-side flags even if menu state was reset. */
+		S_SoundPreview_SetExclusive(false);
+		BGM_Preview_SetExclusive(false);
+	}
+}
+
+static void M_Audio_FormatTime(char *out, size_t size, double seconds)
+{
+	int value;
+
+	if (!isfinite(seconds) || seconds <= 0.0)
+		value = 0;
+	else if (seconds >= (double)INT_MAX)
+		value = INT_MAX;
+	else
+		value = (int)seconds;
+	q_snprintf(out, size, "%d:%02d", value / 60, value % 60);
+}
+
+static double M_Audio_SmoothPosition(const char *name, int64_t source, int64_t total,
+	int rate, qboolean playing, qboolean paused, qboolean loop)
+{
+	double now = realtime;
+	double dt = q_max(0.0, now - audiomenu.visual_time);
+	qboolean active = playing || paused;
+	qboolean changed = !audiomenu.visual_active ||
+		audiomenu.visual_kind != audiomenu.kind ||
+		q_strcasecmp(audiomenu.visual_name, name);
+
+	if (!active || rate <= 0)
+	{
+		audiomenu.visual_active = false;
+		audiomenu.visual_position = q_max(0.0, (double)source);
+	}
+	else if (changed || (!loop && source < audiomenu.visual_source))
+	{
+		audiomenu.visual_active = true;
+		audiomenu.visual_position = 0.0;
+	}
+	else if (playing)
+	{
+		double reported_limit = (double)source + rate * 0.05;
+
+		audiomenu.visual_position += dt * rate;
+		if (!loop)
+			audiomenu.visual_position = q_min(audiomenu.visual_position, reported_limit);
+	}
+
+	if (total > 0)
+	{
+		if (loop && audiomenu.visual_position >= total)
+			audiomenu.visual_position = fmod(audiomenu.visual_position, (double)total);
+		else
+			audiomenu.visual_position = q_min(audiomenu.visual_position, (double)total);
+	}
+	audiomenu.visual_position = q_max(0.0, audiomenu.visual_position);
+	audiomenu.visual_time = now;
+	audiomenu.visual_source = source;
+	audiomenu.visual_kind = audiomenu.kind;
+	q_strlcpy(audiomenu.visual_name, name, sizeof(audiomenu.visual_name));
+	return audiomenu.visual_position;
+}
+
+void M_AudioBrowser_Draw(void)
+{
+	const char *bottom_hints = "Tab Mode  F2 Auto  F3 Loop  " AUDIO_COPY_HINT;
+	audio_catalog_item_t *selected = M_Audio_Selected();
+	int count = (int)VEC_SIZE(audiomenu.filtered);
+	int i;
+	float progress = 0.0f;
+	qboolean preview_active = false;
+	qboolean preview_playing = false;
+	qboolean progress_known = false;
+	plcolour_t progress_color = Draw_GetConcharsCursorColorByIndex(2);
+	char elapsed[16] = "0:00", total[16] = "--:--", detail[96] = "Stopped";
+	char format[64] = "";
+	char active[MAX_QPATH] = "";
+
+	if (audiomenu.progress_grab && !keydown[K_MOUSE1])
+		M_Audio_EndScrub();
+	if (audiomenu.gain_grab && !keydown[K_MOUSE1])
+		audiomenu.gain_grab = false;
+
+	if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+		M_PrintWhite(72, 8, "Sounds");
+	else
+		M_Print(72, 8, "Sounds");
+	if (audiomenu.kind == AUDIO_CATALOG_MUSIC)
+		M_PrintWhite(176, 8, "Music");
+	else
+		M_Print(176, 8, "Music");
+
+	for (i = 0; i < AUDIO_LIST_ROWS && audiomenu.scroll + i < count; ++i)
+	{
+		int index = audiomenu.scroll + i;
+		audio_catalog_item_t *item = &audiomenu.catalog.items[audiomenu.filtered[index]];
+		const char *label = COM_SkipPath(item->path);
+		if (index == audiomenu.cursor)
+			M_DrawCharacter(AUDIO_LIST_X - 8, AUDIO_LIST_Y + i * 8, 12 + ((int)(realtime * 4) & 1));
+		if (audiomenu.searchlen && (int)strlen(label) <= AUDIO_LIST_COLS &&
+			q_strcasestr(label, audiomenu.search))
+			M_PrintHighlight(AUDIO_LIST_X, AUDIO_LIST_Y + i * 8, label,
+				audiomenu.search, audiomenu.searchlen);
+		else
+			M_PrintScroll(AUDIO_LIST_X, AUDIO_LIST_Y + i * 8, AUDIO_LIST_COLS * 8,
+				label, index == audiomenu.cursor ? realtime : 0.0, true);
+	}
+	if (!count)
+		M_PrintWhite(AUDIO_LIST_X, AUDIO_LIST_Y, audiomenu.catalog.count ? "No matches" : "No audio files");
+
+	if (count > AUDIO_LIST_ROWS)
+	{
+		int track_h = AUDIO_LIST_ROWS * 8;
+		int thumb_h = q_max(8, track_h * AUDIO_LIST_ROWS / count);
+		int thumb_y = AUDIO_LIST_Y + (track_h - thumb_h) * audiomenu.scroll / (count - AUDIO_LIST_ROWS);
+		Draw_Fill(164, AUDIO_LIST_Y, 2, track_h, 0, 0.35f);
+		Draw_FillPlayer(163, thumb_y, 4, thumb_h, progress_color, 0.9f);
+	}
+
+	if (audiomenu.kind == AUDIO_CATALOG_SOUNDS)
+	{
+		sound_preview_state_t state;
+		double position;
+		S_SoundPreview_GetState(&state);
+		position = audiomenu.progress_grab ? audiomenu.scrub_fraction * state.length :
+			M_Audio_SmoothPosition(state.name, state.position, state.length,
+				state.rate, state.status == SOUND_PREVIEW_PLAYING,
+				state.status == SOUND_PREVIEW_PAUSED, state.loop);
+		if (state.length > 0)
+		{
+			progress_known = true;
+			progress = CLAMP(0.0f, (float)(position / state.length), 1.0f);
+			M_Audio_FormatTime(elapsed, sizeof(elapsed), position / q_max(1, state.rate));
+			M_Audio_FormatTime(total, sizeof(total), (double)state.length / q_max(1, state.rate));
+			q_snprintf(format, sizeof(format), "%dHz %dbit", state.rate, state.bits);
+		}
+		q_strlcpy(detail, state.status == SOUND_PREVIEW_PLAYING ? "Playing" :
+			state.status == SOUND_PREVIEW_PAUSED ? "Paused" :
+			state.status == SOUND_PREVIEW_FAILED ? state.error : "Stopped", sizeof(detail));
+		preview_active = state.status == SOUND_PREVIEW_PLAYING ||
+			state.status == SOUND_PREVIEW_PAUSED;
+		preview_playing = state.status == SOUND_PREVIEW_PLAYING;
+		if (preview_active)
+			q_strlcpy(active, state.name, sizeof(active));
+	}
+	else
+	{
+		bgm_preview_state_t state;
+		double position;
+		BGM_Preview_GetState(&state);
+		position = audiomenu.progress_grab ? audiomenu.scrub_fraction * state.total_samples :
+			M_Audio_SmoothPosition(state.name, state.position_samples,
+				state.total_samples, state.rate, state.status == BGM_PREVIEW_PLAYING,
+				state.status == BGM_PREVIEW_PAUSED, state.loop);
+		if (state.rate > 0)
+		{
+			if (state.total_samples > 0)
+			{
+				progress_known = true;
+				progress = CLAMP(0.0f, (float)(position / state.total_samples), 1.0f);
+			}
+			M_Audio_FormatTime(elapsed, sizeof(elapsed), position / state.rate);
+			if (state.total_samples > 0)
+				M_Audio_FormatTime(total, sizeof(total), (double)state.total_samples / state.rate);
+			q_snprintf(format, sizeof(format), "%dHz %dbit %dch", state.rate,
+				state.bits, state.channels);
+		}
+		q_strlcpy(detail, state.status == BGM_PREVIEW_PLAYING ? "Playing" :
+			state.status == BGM_PREVIEW_PAUSED ? "Paused" :
+			state.status == BGM_PREVIEW_FAILED ? state.error : "Stopped", sizeof(detail));
+		preview_active = state.status == BGM_PREVIEW_PLAYING ||
+			state.status == BGM_PREVIEW_PAUSED;
+		preview_playing = state.status == BGM_PREVIEW_PLAYING;
+		if (preview_active)
+			q_strlcpy(active, state.name, sizeof(active));
+	}
+
+	M_PrintWhite(AUDIO_PANEL_X, 40, detail);
+	Draw_Fill(AUDIO_PANEL_X, 56, AUDIO_PANEL_W, 8, 0, 0.5f);
+	if (preview_active && progress_known)
+		Draw_FillPlayer(AUDIO_PANEL_X + 1, 58,
+			q_max(1, (int)((AUDIO_PANEL_W - 2) * progress)),
+			4, progress_color, 0.9f);
+	else if (preview_active)
+	{
+		int marker_w = 16;
+		int marker_x = preview_playing ?
+			(int)(realtime * 40.0) % (AUDIO_PANEL_W - marker_w - 2) : 0;
+		Draw_FillPlayer(AUDIO_PANEL_X + 1 + marker_x, 57,
+			marker_w, 6, progress_color, 0.9f);
+	}
+	if (preview_active && progress_known)
+	{
+		int handle_x = AUDIO_PANEL_X + 1 +
+			(int)((AUDIO_PANEL_W - 2) * progress + 0.5f);
+		Tools_DrawPickerMarker(handle_x + 0.5f, 60.0f, 3,
+			progress_color, progress_color);
+	}
+	M_Print(AUDIO_PANEL_X, 68, va("%s / %s", elapsed, total));
+	if (*active)
+		M_PrintScroll(AUDIO_PANEL_X, 76, AUDIO_PANEL_W, COM_SkipPath(active), realtime, false);
+	M_PrintWhite(AUDIO_PANEL_X, 92, "Enter Play");
+	M_Print(AUDIO_PANEL_X, 100, "Space Pause");
+	M_Print(AUDIO_PANEL_X, 108, "Del Stop");
+	M_Print(AUDIO_PANEL_X, 116, va("Loop     %s", audiomenu.loop ? "on" : "off"));
+	M_Print(AUDIO_PANEL_X, 124, va("Autoplay %s", audiomenu.autoplay ? "on" : "off"));
+	if (muted)
+	{
+		M_Print(AUDIO_PANEL_X, 132, "Volume < ");
+		M_PrintWhite(AUDIO_PANEL_X + 9 * 8, 132, "muted");
+		M_Print(AUDIO_PANEL_X + 14 * 8, 132, " >");
+	}
+	else
+		M_Print(AUDIO_PANEL_X, 132, va("Volume < %.0f%% >", audiomenu.gain * 100.0f));
+	Draw_Fill(AUDIO_PANEL_X, 142, AUDIO_PANEL_W, 4, 0, 0.5f);
+	Draw_FillPlayer(AUDIO_PANEL_X + 1, 143,
+		q_max(1, (int)((AUDIO_PANEL_W - 2) * audiomenu.gain)),
+		2, progress_color, 0.9f);
+	Tools_DrawPickerMarker(AUDIO_PANEL_X + 1 +
+		(AUDIO_PANEL_W - 2) * audiomenu.gain + 0.5f, 144.0f, 2,
+		progress_color, progress_color);
+	if (*format)
+		M_PrintScroll(AUDIO_PANEL_X, 148, AUDIO_PANEL_W, format, realtime, false);
+
+	if (selected)
+	{
+		M_PrintScroll(16, 156, 288, selected->path, realtime, false);
+		M_PrintScroll(16, 164, 288, selected->source, realtime, true);
+	}
+	if (audiomenu.searchlen)
+	{
+		M_DrawTextBox(16, 172, 32, 1);
+		M_PrintHighlight(24, 180, audiomenu.search, audiomenu.search, audiomenu.searchlen);
+		M_DrawCharacter(24 + audiomenu.searchlen * 8, 180, 10 + ((int)(realtime * 4) & 1));
+	}
+	else if (audiomenu.status[0] && realtime - audiomenu.status_time < 2.0)
+		M_PrintScroll(16, 184, 288, audiomenu.status, realtime, false);
+	else
+		M_Print((320 - (int)strlen(bottom_hints) * 8) / 2, 184, bottom_hints);
+}
+
+void M_AudioBrowser_Key(int key)
+{
+	if (M_Audio_HasShortcutModifier() && (key == 'c' || key == 'C'))
+	{
+		M_Audio_Copy();
+		return;
+	}
+	if (keydown[K_CTRL] && (key == 'u' || key == 'U'))
+	{
+		audiomenu.searchlen = 0;
+		audiomenu.search[0] = 0;
+		audiomenu.cursor = audiomenu.scroll = 0;
+		M_Audio_Refilter();
+		return;
+	}
+	if (keydown[K_CTRL] && key == K_BACKSPACE && audiomenu.searchlen)
+	{
+		while (audiomenu.searchlen && audiomenu.search[audiomenu.searchlen - 1] == ' ')
+			audiomenu.searchlen--;
+		while (audiomenu.searchlen && audiomenu.search[audiomenu.searchlen - 1] != ' ')
+			audiomenu.searchlen--;
+		audiomenu.search[audiomenu.searchlen] = 0;
+		audiomenu.cursor = audiomenu.scroll = 0;
+		M_Audio_Refilter();
+		return;
+	}
+	if (key == ' ')
+	{
+		M_Audio_TogglePause();
+		return;
+	}
+	if (key == '+' || key == '=')
+	{
+		M_Audio_SetGain(audiomenu.gain + 0.05f);
+		return;
+	}
+	if (key == '-')
+	{
+		M_Audio_SetGain(audiomenu.gain - 0.05f);
+		return;
+	}
+	if (key >= '0' && key <= '9' && M_Audio_SeekDigit(key - '0'))
+		return;
+	if (key == ',' && M_Audio_SeekRelativeSeconds(-1.0))
+		return;
+	if (key == '.' && M_Audio_SeekRelativeSeconds(1.0))
+		return;
+	if (key >= 32 && key < 127)
+	{
+		if (audiomenu.searchlen < (int)sizeof(audiomenu.search) - 1)
+		{
+			audiomenu.search[audiomenu.searchlen++] = key;
+			audiomenu.search[audiomenu.searchlen] = 0;
+			audiomenu.cursor = audiomenu.scroll = 0;
+			M_Audio_Refilter();
+		}
+		return;
+	}
+	if (key == K_BACKSPACE && audiomenu.searchlen)
+	{
+		audiomenu.search[--audiomenu.searchlen] = 0;
+		audiomenu.cursor = audiomenu.scroll = 0;
+		M_Audio_Refilter();
+		return;
+	}
+	switch (key)
+	{
+	case K_ESCAPE:
+		if (audiomenu.searchlen)
+		{
+			audiomenu.searchlen = 0;
+			audiomenu.search[0] = 0;
+			M_Audio_Refilter();
+			return;
+		}
+		/* No active search: Escape leaves the browser. */
+	case K_BBUTTON:
+	case K_MOUSE2:
+	case K_MOUSE4:
+		M_AudioBrowser_Close();
+		M_Menu_Sound_f();
+		return;
+	case K_TAB:
+		M_Audio_SwitchKind(); return;
+	case K_ENTER:
+	case K_KP_ENTER:
+		M_Audio_Play(); return;
+	case K_ABUTTON:
+		M_Audio_TogglePause(); return;
+	case K_DEL:
+	case K_XBUTTON:
+		M_Audio_Stop(); return;
+	case K_YBUTTON:
+		M_Audio_SetLoop(!audiomenu.loop); return;
+	case K_LSHOULDER:
+	case K_RSHOULDER:
+		M_Audio_SwitchKind(); return;
+	case K_MOUSE1:
+		M_AudioBrowser_MouseClick(m_mousex, m_mousey); return;
+	case K_F2:
+		audiomenu.autoplay = !audiomenu.autoplay; return;
+	case K_F3:
+		M_Audio_SetLoop(!audiomenu.loop); return;
+	case K_UPARROW:
+	case K_MWHEELUP:
+		M_Audio_Move(-1); return;
+	case K_DOWNARROW:
+	case K_MWHEELDOWN:
+		M_Audio_Move(1); return;
+	case K_LEFTARROW:
+		M_Audio_SeekRelativeSeconds(-5.0); return;
+	case K_RIGHTARROW:
+		M_Audio_SeekRelativeSeconds(5.0); return;
+	case K_PGUP:
+		M_Audio_Move(-AUDIO_LIST_ROWS); return;
+	case K_PGDN:
+		M_Audio_Move(AUDIO_LIST_ROWS); return;
+	case K_HOME:
+		audiomenu.cursor = audiomenu.scroll = 0;
+		M_Audio_Clamp();
+		if (audiomenu.autoplay)
+			M_Audio_Play();
+		return;
+	case K_END:
+		audiomenu.cursor = q_max(0, (int)VEC_SIZE(audiomenu.filtered) - 1);
+		M_Audio_Clamp();
+		if (audiomenu.autoplay)
+			M_Audio_Play();
+		return;
+	default:
+		return;
+	}
+}
+
+void M_AudioBrowser_Mousemove(int cx, int cy)
+{
+	int row;
+
+	if (audiomenu.progress_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			M_Audio_EndScrub();
+			return;
+		}
+		M_Audio_UpdateScrub(cx);
+		return;
+	}
+
+	if (audiomenu.gain_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			audiomenu.gain_grab = false;
+			return;
+		}
+		M_Audio_UpdateGainSlider(cx);
+		return;
+	}
+
+	if (audiomenu.scrollbar_grab)
+	{
+		int count = (int)VEC_SIZE(audiomenu.filtered);
+		int track_h, thumb_h, range, relative;
+
+		if (!keydown[K_MOUSE1])
+		{
+			audiomenu.scrollbar_grab = false;
+			return;
+		}
+		if (count <= AUDIO_LIST_ROWS)
+		{
+			audiomenu.scrollbar_grab = false;
+			M_Audio_Clamp();
+			return;
+		}
+
+		track_h = AUDIO_LIST_ROWS * 8;
+		thumb_h = q_max(8, track_h * AUDIO_LIST_ROWS / count);
+		range = track_h - thumb_h;
+		relative = cy - AUDIO_LIST_Y - thumb_h / 2;
+		audiomenu.scroll = (int)(relative * (float)(count - AUDIO_LIST_ROWS) /
+			q_max(1, range) + 0.5f);
+		audiomenu.scroll = CLAMP(0, audiomenu.scroll, count - AUDIO_LIST_ROWS);
+		audiomenu.cursor = audiomenu.scroll;
+		return;
+	}
+
+	if (cx < AUDIO_LIST_X - 8 || cx >= AUDIO_LIST_X + AUDIO_LIST_COLS * 8 ||
+		cy < AUDIO_LIST_Y || cy >= AUDIO_LIST_Y + AUDIO_LIST_ROWS * 8)
+		return;
+	row = (cy - AUDIO_LIST_Y) / 8 + audiomenu.scroll;
+	if (row >= 0 && row < (int)VEC_SIZE(audiomenu.filtered))
+		audiomenu.cursor = row;
+}
+
+void M_AudioBrowser_MouseClick(int x, int y)
+{
+	int count = (int)VEC_SIZE(audiomenu.filtered);
+
+	if (y >= 4 && y < 20 && x >= 56 && x < 248)
+	{
+		if ((x < 160 && audiomenu.kind != AUDIO_CATALOG_SOUNDS) ||
+			(x >= 160 && audiomenu.kind != AUDIO_CATALOG_MUSIC))
+			M_Audio_SwitchKind();
+		return;
+	}
+	if (x >= AUDIO_PANEL_X && x < AUDIO_PANEL_X + AUDIO_PANEL_W &&
+		y >= 54 && y < 66)
+	{
+		M_Audio_BeginScrub(x);
+		return;
+	}
+	if (x >= AUDIO_PANEL_X && x < AUDIO_PANEL_X + AUDIO_PANEL_W &&
+		y >= 140 && y < 148)
+	{
+		audiomenu.gain_grab = true;
+		M_Audio_UpdateGainSlider(x);
+		return;
+	}
+	if (x >= 160 && x < 172 && y >= AUDIO_LIST_Y &&
+		y < AUDIO_LIST_Y + AUDIO_LIST_ROWS * 8 && count > AUDIO_LIST_ROWS)
+	{
+		audiomenu.scrollbar_grab = true;
+		M_AudioBrowser_Mousemove(x, y);
+		if (audiomenu.autoplay)
+			M_Audio_Play();
+		return;
+	}
+	if (x >= AUDIO_LIST_X - 8 && x < AUDIO_LIST_X + AUDIO_LIST_COLS * 8 &&
+		y >= AUDIO_LIST_Y && y < AUDIO_LIST_Y + AUDIO_LIST_ROWS * 8)
+	{
+		M_AudioBrowser_Mousemove(x, y);
+		M_Audio_Play();
+		return;
+	}
+	if (x >= AUDIO_PANEL_X && y >= 92 && y < 100)
+		M_Audio_Play();
+	else if (x >= AUDIO_PANEL_X && y >= 100 && y < 108)
+		M_Audio_TogglePause();
+	else if (x >= AUDIO_PANEL_X && y >= 108 && y < 116)
+		M_Audio_Stop();
+	else if (x >= AUDIO_PANEL_X && y >= 116 && y < 124)
+		M_Audio_SetLoop(!audiomenu.loop);
+	else if (x >= AUDIO_PANEL_X && y >= 124 && y < 132)
+		audiomenu.autoplay = !audiomenu.autoplay;
+	else if (x >= AUDIO_PANEL_X && y >= 132 && y < 140)
+		M_Audio_SetGain(audiomenu.gain + (x < AUDIO_PANEL_X + AUDIO_PANEL_W / 2 ? -0.05f : 0.05f));
+}
+
+
 void M_Init (void)
 {
 	cmd_function_t *update_cmd;
@@ -41094,6 +42354,7 @@ void M_Init (void)
 
 	Cvar_RegisterVariable (&ui_live_preview);
 	Cvar_RegisterVariable (&cl_modmenu);
+	AudioCatalog_InitCommands();
 
 	if (!MQC_Init())
 		MQC_Shutdown();
@@ -41334,6 +42595,10 @@ void M_Draw (void)
 		M_ModelViewer_Draw();
 		break;
 
+	case m_audiobrowser:
+		M_AudioBrowser_Draw();
+		break;
+
 	case m_video:
 		M_Video_Draw ();
 		break;
@@ -41465,6 +42730,7 @@ static qboolean M_HasSearchField (void)
 	case m_demooptions:
 	case m_pakloading:
 	case m_modelviewer:
+	case m_audiobrowser:
 	case m_slist:
 	case m_mods:
 	case m_downloadmods:
@@ -41704,6 +42970,10 @@ void M_Keydown (int key, qboolean repeat)
 
 	case m_modelviewer:
 		M_ModelViewer_Key(key);
+		return;
+
+	case m_audiobrowser:
+		M_AudioBrowser_Key(key);
 		return;
 
 	case m_video:
@@ -41971,6 +43241,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_modelviewer:
 		M_ModelViewer_Mousemove(x, y);
+		return;
+
+	case m_audiobrowser:
+		M_AudioBrowser_Mousemove(x, y);
 		return;
 
 	case m_mods:

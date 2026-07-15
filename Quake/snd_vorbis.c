@@ -123,6 +123,11 @@ static qboolean S_VORBIS_CodecOpenStream (snd_stream_t *stream)
 	stream->info.channels = ovf_info->channels;
 	stream->info.bits = VORBIS_SAMPLEBITS;
 	stream->info.width = VORBIS_SAMPLEWIDTH;
+	{
+		ogg_int64_t samples = ov_pcm_total(ovFile, -1);
+		if (samples > 0)
+			stream->info.samples = (int)q_min(samples, (ogg_int64_t)INT_MAX);
+	}
 
 	return true;
 _fail:
@@ -186,6 +191,11 @@ static int S_VORBIS_CodecRewindStream (snd_stream_t *stream)
 	return ov_time_seek ((OggVorbis_File *)stream->priv, 0);
 }
 
+static int S_VORBIS_CodecSeekStream (snd_stream_t *stream, int64_t sample)
+{
+	return ov_pcm_seek((OggVorbis_File *)stream->priv, (ogg_int64_t)sample);
+}
+
 snd_codec_t vorbis_codec =
 {
 	CODECTYPE_VORBIS,
@@ -196,6 +206,7 @@ snd_codec_t vorbis_codec =
 	S_VORBIS_CodecOpenStream,
 	S_VORBIS_CodecReadStream,
 	S_VORBIS_CodecRewindStream,
+	S_VORBIS_CodecSeekStream,
 	NULL, /* jump */
 	S_VORBIS_CodecCloseStream,
 	NULL

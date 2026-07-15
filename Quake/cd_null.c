@@ -25,6 +25,8 @@ int CDAudio_Play(byte track, qboolean looping)
 	return -1;
 }
 
+
+
 void CDAudio_Stop(void)
 {
 }
@@ -35,6 +37,11 @@ void CDAudio_Pause(void)
 
 void CDAudio_Resume(void)
 {
+}
+
+qboolean CDAudio_IsPlaying(void)
+{
+	return false;
 }
 
 void CDAudio_Update(void)
