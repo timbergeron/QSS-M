@@ -62,11 +62,114 @@ qpic_t		*sb_face_invis_quad_invuln;
 
 qboolean	sb_showscores;
 
+#define SCOREBOARD_ROW_HEIGHT       10
+#define SCOREBOARD_HEADER_HEIGHT    12
+#define SCOREBOARD_FOOTER_HEIGHT    11
+#define SCOREBOARD_CANVAS_MARGIN     4
+#define SCOREBOARD_WHEEL_ROWS        3
+#define SCOREBOARD_STANDARD_ROWS    16
+
+static int scoreboard_scroll_offset;
+static int scoreboard_page_rows;
+static int scoreboard_max_scroll;
+static int scoreboard_last_draw_frame = -2;
+static qboolean scoreboard_intermission_active;
+static qboolean scoreboard_scrollable;
+static qboolean scoreboard_consumed_keys[MAX_KEYS];
+
 int		sb_lines;			// scan lines to draw
 
 static qboolean Sbar_ShouldDrawMultiplayerScoreboard (void)
 {
 	return cl.gametype == GAME_DEATHMATCH || cl.maxclients > 1;
+}
+
+static void Sbar_ResetScoreboardScroll (void)
+{
+	scoreboard_scroll_offset = 0;
+}
+
+
+static qboolean Sbar_NativeScoreboardAcceptsInput (void)
+{
+	if (cl.intermission)
+		return cl.intermission == 1;
+	if (sb_showscores)
+		return true;
+
+	// A CSQC HUD without its own scores falls back to the native scoreboard
+	// while dead.
+	return cl.qcvm.extfuncs.CSQC_DrawHud &&
+		!cl.qcvm.extfuncs.CSQC_DrawScores && cl.stats[STAT_HEALTH] <= 0;
+}
+
+void Sbar_ScoreboardFrame (void)
+{
+	qboolean intermission_active = cl.intermission == 1;
+
+	if (intermission_active && !scoreboard_intermission_active)
+		Sbar_ResetScoreboardScroll();
+	scoreboard_intermission_active = intermission_active;
+
+	// Sbar_DeathmatchOverlay sets this again only if the native scoreboard is
+	// actually rendered during this screen update.
+	scoreboard_scrollable = false;
+}
+
+qboolean Sbar_HandleScoreboardKey (int key, qboolean down)
+{
+	int amount;
+
+	if (key < 0 || key >= MAX_KEYS)
+		return false;
+
+	if (!down && scoreboard_consumed_keys[key])
+	{
+		scoreboard_consumed_keys[key] = false;
+		return true;
+	}
+
+	if (!down || key_dest != key_game || !Sbar_NativeScoreboardAcceptsInput() ||
+		!scoreboard_scrollable ||
+		!Sbar_ShouldDrawMultiplayerScoreboard() ||
+		host_framecount - scoreboard_last_draw_frame > 1)
+		return false;
+
+	switch (key)
+	{
+	case K_MWHEELUP:
+		amount = -SCOREBOARD_WHEEL_ROWS;
+		break;
+	case K_MWHEELDOWN:
+		amount = SCOREBOARD_WHEEL_ROWS;
+		break;
+	case K_PGUP:
+	case K_KP_PGUP:
+		amount = -q_max(1, scoreboard_page_rows - 1);
+		break;
+	case K_PGDN:
+	case K_KP_PGDN:
+		amount = q_max(1, scoreboard_page_rows - 1);
+		break;
+	case K_HOME:
+	case K_KP_HOME:
+		scoreboard_scroll_offset = 0;
+		amount = 0;
+		break;
+	case K_END:
+	case K_KP_END:
+		scoreboard_scroll_offset = scoreboard_max_scroll;
+		amount = 0;
+		break;
+	default:
+		return false;
+	}
+
+	scoreboard_scroll_offset = CLAMP(0,
+		scoreboard_scroll_offset + amount, scoreboard_max_scroll);
+	scoreboard_consumed_keys[key] = true;
+	Sbar_Changed();
+	return true;
 }
 
 static qboolean Sbar_ShouldRequestPingPL(void)
@@ -155,6 +258,7 @@ void Sbar_ShowScores (void)
 	Sbar_CSQCCommand();
 	if (sb_showscores)
 		return;
+	Sbar_ResetScoreboardScroll();
 	sb_showscores = true;
 	sb_updates = 0;
 }
@@ -2778,6 +2882,84 @@ void Sbar_IntermissionText (int x, int y, const char *str, int color)
 Sbar_DeathmatchOverlay
 ==================
 */
+typedef struct scoreboard_layout_s
+{
+	int row_y;
+	int first_row;
+	int last_row;
+	int visible_rows;
+	int max_scroll;
+	qboolean scrollable;
+} scoreboard_layout_t;
+
+static scoreboard_layout_t Sbar_ScoreboardLayout (int total_rows, int legacy_y)
+{
+	scoreboard_layout_t layout;
+	int legacy_top = legacy_y - SCOREBOARD_HEADER_HEIGHT;
+	int legacy_bottom = legacy_y + total_rows * SCOREBOARD_ROW_HEIGHT + 1;
+	int capacity;
+	int panel_height;
+
+	memset(&layout, 0, sizeof(layout));
+
+	if (total_rows <= SCOREBOARD_STANDARD_ROWS &&
+		legacy_top >= 0 && legacy_bottom <= vid.conheight)
+	{
+		layout.row_y = legacy_y;
+		layout.visible_rows = total_rows;
+	}
+	else
+	{
+		capacity = q_min(SCOREBOARD_STANDARD_ROWS,
+			q_max(1, (vid.conheight - 2 * SCOREBOARD_CANVAS_MARGIN -
+				SCOREBOARD_HEADER_HEIGHT - 1) / SCOREBOARD_ROW_HEIGHT));
+		layout.scrollable = total_rows > capacity;
+		if (layout.scrollable)
+		{
+			capacity = q_min(SCOREBOARD_STANDARD_ROWS - 1,
+				q_max(1, (vid.conheight - 2 * SCOREBOARD_CANVAS_MARGIN -
+					SCOREBOARD_HEADER_HEIGHT - SCOREBOARD_FOOTER_HEIGHT) /
+					SCOREBOARD_ROW_HEIGHT));
+		}
+		layout.visible_rows = q_min(total_rows, capacity);
+		panel_height = SCOREBOARD_HEADER_HEIGHT +
+			layout.visible_rows * SCOREBOARD_ROW_HEIGHT +
+			(layout.scrollable ? SCOREBOARD_FOOTER_HEIGHT : 1);
+		{
+			int min_row_y = SCOREBOARD_HEADER_HEIGHT;
+			int max_row_y = vid.conheight - panel_height + SCOREBOARD_HEADER_HEIGHT;
+
+			/* Preserve the legacy anchor whenever possible. If the legacy panel
+			 * would clip, move it only far enough to fit on screen. */
+			if (max_row_y < min_row_y)
+				layout.row_y = min_row_y;
+			else
+				layout.row_y = CLAMP(min_row_y, legacy_y, max_row_y);
+		}
+	}
+
+	layout.max_scroll = q_max(0, total_rows - layout.visible_rows);
+	scoreboard_scroll_offset = CLAMP(0, scoreboard_scroll_offset, layout.max_scroll);
+	layout.first_row = layout.scrollable ? scoreboard_scroll_offset : 0;
+	layout.last_row = q_min(total_rows, layout.first_row + layout.visible_rows);
+	return layout;
+}
+
+static void Sbar_BeginScoreboardClip (int y, int height)
+{
+	float scale = (float)glwidth / vid.conwidth;
+	int top = CLAMP(0, (int)floor(y * scale), glheight);
+	int bottom = CLAMP(0, (int)ceil((y + height) * scale), glheight);
+
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(glx, gly + glheight - bottom, glwidth, q_max(0, bottom - top));
+}
+
+static void Sbar_EndScoreboardClip (void)
+{
+	glDisable(GL_SCISSOR_TEST);
+}
+
 void Sbar_DeathmatchOverlay (void)
 {
 	//qpic_t	*pic; // woods disabled
@@ -2789,6 +2971,7 @@ void Sbar_DeathmatchOverlay (void)
 	char	num[12];
 	//charshortname[16]; // woods for dynamic scoreboard during match, don't show ready
 	scoreboard_t	*s;
+	scoreboard_layout_t layout;
 	int ct = (int)((SDL_GetTicks64() - maptime) / 1000); // woods connected map time #maptime
 	qboolean notready = false; // woods #smartstatus
 	int unready_count = 0; // woods #smartstatus - count of unready team players
@@ -2816,7 +2999,6 @@ void Sbar_DeathmatchOverlay (void)
 	yofs = (vid.conheight - 200) >> 1; // woods #scoreboard
 
 	x = xofs + 64 + w2; // woods #scoreboard
-	y2 = y = yofs - 20; // woods #smartstatus
 	score_x = x + 32;
 
 	//pic = Draw_CachePic ("gfx/ranking.lmp"); //woods #scoreboard (remove rankings logo)
@@ -2833,6 +3015,31 @@ void Sbar_DeathmatchOverlay (void)
 
 // draw the text
 	l = scoreboardlines;
+	layout = Sbar_ScoreboardLayout(l, yofs - 20);
+	y2 = y = layout.row_y;
+	scoreboard_page_rows = layout.visible_rows;
+	scoreboard_max_scroll = layout.max_scroll;
+	scoreboard_scrollable = layout.scrollable;
+	scoreboard_last_draw_frame = host_framecount;
+
+	// Smart-status information describes the entire scoreboard, not merely the
+	// visible page.
+	if ((cl.modtype == 1 || cl.modtype == 4) && cl.teamgame)
+	{
+		for (i = 0; i < l; i++)
+		{
+			qboolean is_ready;
+
+			k = fragsort[i];
+			s = &cl.scores[k];
+			is_ready = CL_ScoreboardNameHasReadyStatus(s->name);
+			if (!cl.matchinp && !s->spectator && s->frags != -99 &&
+				s->pants.basic >= 1 && !is_ready)
+				unready_count++;
+			if (k == cl.realviewentity - 1 && !cl.matchinp && cl.notobserver)
+				notready = !is_ready;
+		}
+	}
 
 	// woods for qrack +scoresbg #scoreboard
 
@@ -2847,12 +3054,13 @@ void Sbar_DeathmatchOverlay (void)
 		Draw_String(x - 64, y - 10, "  ping  frags   name"); // woods
 	else*/
 
-	for (i = 0; i < l; i++)
+	if (layout.scrollable)
+		Sbar_BeginScoreboardClip(y, layout.visible_rows * SCOREBOARD_ROW_HEIGHT);
+
+	for (i = layout.first_row; i < layout.last_row; i++)
 	{
 		k = fragsort[i];
 		s = &cl.scores[k];
-		if (!s->name[0])
-			continue;
 
 		char filtered_name[32];
 		qboolean was_filtered = false;
@@ -2861,23 +3069,6 @@ void Sbar_DeathmatchOverlay (void)
 		{
 			was_filtered = WordFilter_Check(s->name, filtered_name, sizeof(filtered_name));
 			filtered_name[sizeof(filtered_name) - 1] = '\0';
-		}
-
-		if (cl.modtype == 1 || cl.modtype == 4) // woods -- dynamic status flash scoreboard label if not ready #smartstatus
-		{
-			if (!cl.teamgame)
-				notready = false;
-
-			qboolean is_ready = CL_ScoreboardNameHasReadyStatus(s->name);
-
-			if (cl.teamgame && !cl.matchinp && !s->spectator && s->frags != -99 && s->pants.basic >= 1 && !is_ready)
-				unready_count++;
-
-			if ((k == cl.realviewentity - 1) && cl.teamgame && !cl.matchinp && cl.notobserver && !is_ready)
-				notready = true;
-
-			if ((k == cl.realviewentity - 1) && cl.teamgame && !cl.matchinp && cl.notobserver && is_ready)
-				notready = false;
 		}
 
 		if (S_Voip_Speaking(k))	// spike -- speaking underlay, adjusted for QSS-M's centered scoreboard
@@ -2967,6 +3158,9 @@ void Sbar_DeathmatchOverlay (void)
 		y += 10;
 	}
 
+	if (layout.scrollable)
+		Sbar_EndScoreboardClip();
+
 	Draw_String(x - 64, y2 - 10, "  ping  pl  frags   name"); // woods #smartstatus
 
 	if (flash() && notready && unready_count == 1 && AreTeamsEven()) // blink only if I'm the last to ready AND teams are even
@@ -2975,7 +3169,30 @@ void Sbar_DeathmatchOverlay (void)
 		Draw_String
 		(score_x + 192, y2 - 10, "status");
 
-	Draw_Fill(x - 64, y, 361 + w, 1, 0, 1);	//Border - Bottom // woods #scoreboard
+	if (layout.scrollable)
+	{
+		char range[32];
+		int range_x;
+
+		Draw_Fill(x - 64, y, 361 + w, 1, 0, 1);	// footer separator
+		Draw_Fill(x - 63, y + 1, 359 + w, 9, 18, .8);
+		Draw_Fill(x - 64, y + 1, 1, 9, 0, 1);
+		Draw_Fill(x + 296 + w, y + 1, 1, 9, 0, 1);
+		Draw_Fill(x - 64, y + 10, 361 + w, 1, 0, 1);
+
+		q_snprintf(range, sizeof(range), "%i-%i / %i",
+			layout.first_row + 1, layout.last_row, l);
+		range_x = x - 64 + (361 + w - (int)strlen(range) * 8) / 2;
+		M_PrintWhite(range_x, y + 1, range);
+		if (layout.first_row > 0)
+			M_PrintWhite(x - 52, y + 1, "^");
+		if (layout.last_row < l)
+			M_PrintWhite(q_min(x + 280 + w, vid.conwidth - 12), y + 1, "v");
+	}
+	else
+	{
+		Draw_Fill(x - 64, y, 361 + w, 1, 0, 1);	//Border - Bottom // woods #scoreboard
+	}
 
 	GL_SetCanvas (CANVAS_SBAR); //johnfitz
 

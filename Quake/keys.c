@@ -3134,6 +3134,11 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		return;
 	}
 
+	// The native scoreboard owns navigation only while its most recent draw
+	// established a scrollable viewport. The handler also pairs key releases.
+	if (Sbar_HandleScoreboardKey(key, down))
+		return;
+
 	// demo controls -- woods (iw) #democontrols
 
 	if (cls.demoplayback && key_dest == key_game)

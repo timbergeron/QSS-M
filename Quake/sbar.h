@@ -34,6 +34,12 @@ void Sbar_LoadPics (void);
 void Sbar_Changed (void);
 // call whenever any of the client stats represented on the sbar changes
 
+qboolean Sbar_HandleScoreboardKey (int key, qboolean down);
+// handles navigation keys only while the native scoreboard is scrollable
+
+void Sbar_ScoreboardFrame (void);
+// resets per-frame native scoreboard input ownership and tracks intermission entry
+
 void Sbar_Draw (void);
 // called every frame by screen
 
