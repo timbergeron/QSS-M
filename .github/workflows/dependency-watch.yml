@@ -1,4 +1,4 @@
-name: Windows dependency update watch
+name: Bundled dependency update watch
 
 on:
   push:
@@ -6,17 +6,21 @@ on:
       - ".github/dependency-watch.json"
       - ".github/scripts/check-msys2-dependencies.js"
       - ".github/scripts/check-msys2-dependencies.test.js"
+      - ".github/scripts/check-gamecontrollerdb-update.js"
       - ".github/scripts/notify-dependency-updates.js"
       - ".github/scripts/notify-dependency-updates.test.js"
       - ".github/workflows/dependency-watch.yml"
+      - "Quake/gamecontrollerdb.txt"
   pull_request:
     paths:
       - ".github/dependency-watch.json"
       - ".github/scripts/check-msys2-dependencies.js"
       - ".github/scripts/check-msys2-dependencies.test.js"
+      - ".github/scripts/check-gamecontrollerdb-update.js"
       - ".github/scripts/notify-dependency-updates.js"
       - ".github/scripts/notify-dependency-updates.test.js"
       - ".github/workflows/dependency-watch.yml"
+      - "Quake/gamecontrollerdb.txt"
   schedule:
     # Daily at 15:23 UTC. Avoid the top of the hour, when schedules may queue.
     - cron: "23 15 * * *"
@@ -43,6 +47,25 @@ jobs:
       - name: Run unit tests
         run: node --test .github/scripts/*.test.js
 
+      - name: Validate controller database snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot_commit="$(node -e '
+            const fs = require("node:fs");
+            const { snapshotCommit } = require("./.github/scripts/check-gamecontrollerdb-update.js");
+            process.stdout.write(snapshotCommit(fs.readFileSync("Quake/gamecontrollerdb.txt", "utf8")));
+          ')"
+          curl --fail --location --silent --show-error \
+            --retry 5 --retry-all-errors --connect-timeout 15 --max-time 120 \
+            --output "$RUNNER_TEMP/gamecontrollerdb-pinned.txt" \
+            "https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/$snapshot_commit/gamecontrollerdb.txt"
+          node .github/scripts/check-gamecontrollerdb-update.js \
+            Quake/gamecontrollerdb.txt \
+            "$RUNNER_TEMP/gamecontrollerdb-pinned.txt" \
+            "$snapshot_commit" \
+            "$RUNNER_TEMP/gamecontrollerdb-validation.json"
+
       - name: Validate manifest and DLL coverage
         shell: bash
         run: |
@@ -56,7 +79,7 @@ jobs:
           NODE
 
   check:
-    name: Check MSYS2 DLL packages
+    name: Check bundled dependencies
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
@@ -106,6 +129,59 @@ jobs:
             "$RUNNER_TEMP/dependency-updates.json" \
             "mingw32=$RUNNER_TEMP/mingw32-db" \
             "mingw64=$RUNNER_TEMP/mingw64-db"
+
+      - name: Find latest controller database snapshot
+        id: controller-db
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          retries: 3
+          result-encoding: string
+          script: |
+            const response = await github.rest.repos.listCommits({
+              owner: "mdqinc",
+              repo: "SDL_GameControllerDB",
+              path: "gamecontrollerdb.txt",
+              per_page: 1,
+            });
+            const commit = response.data[0]?.sha;
+            if (!/^[0-9a-f]{40}$/.test(commit || ""))
+              throw new Error("SDL_GameControllerDB returned no valid gamecontrollerdb.txt commit.");
+            return commit;
+
+      - name: Compare bundled controller database
+        shell: bash
+        env:
+          AVAILABLE_COMMIT: ${{ steps.controller-db.outputs.result }}
+        run: |
+          set -euo pipefail
+          snapshot_commit="$(node -e '
+            const fs = require("node:fs");
+            const { snapshotCommit } = require("./.github/scripts/check-gamecontrollerdb-update.js");
+            process.stdout.write(snapshotCommit(fs.readFileSync("Quake/gamecontrollerdb.txt", "utf8")));
+          ')"
+          curl --fail --location --silent --show-error \
+            --retry 5 --retry-all-errors --connect-timeout 15 --max-time 120 \
+            --output "$RUNNER_TEMP/gamecontrollerdb-pinned.txt" \
+            "https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/$snapshot_commit/gamecontrollerdb.txt"
+          node .github/scripts/check-gamecontrollerdb-update.js \
+            Quake/gamecontrollerdb.txt \
+            "$RUNNER_TEMP/gamecontrollerdb-pinned.txt" \
+            "$AVAILABLE_COMMIT" \
+            "$RUNNER_TEMP/gamecontrollerdb-update.json"
+
+      - name: Combine dependency updates
+        shell: bash
+        env:
+          MSYS2_UPDATES: ${{ runner.temp }}/dependency-updates.json
+          CONTROLLER_DB_UPDATES: ${{ runner.temp }}/gamecontrollerdb-update.json
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const msys2 = JSON.parse(fs.readFileSync(process.env.MSYS2_UPDATES, "utf8"));
+          const controllerDb = JSON.parse(fs.readFileSync(process.env.CONTROLLER_DB_UPDATES, "utf8"));
+          fs.writeFileSync(process.env.MSYS2_UPDATES, `${JSON.stringify([...msys2, ...controllerDb], null, 2)}\n`);
+          NODE
 
       - name: Open notification issue
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0

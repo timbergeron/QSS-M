@@ -18,7 +18,7 @@ async function ensureLabel({ github, core, owner, repo }) {
         repo,
         name: LABEL,
         color: "0e8a16",
-        description: "Created by the scheduled Windows dependency monitor",
+        description: "Created by the scheduled bundled dependency monitor",
       });
     } catch (createError) {
       // A concurrent run or a user may have created it after the GET.
@@ -58,7 +58,7 @@ module.exports = async function notifyDependencyUpdates({ github, context, core,
   const rows = unreported.map((change) => {
     const reason = change.reasons.join("; ");
     return `| ${change.name} | ${change.repository} | ${change.vendored} | ` +
-      `**${change.packageVersion}** | ${reason} | [package](${change.packageUrl}) |`;
+      `**${change.packageVersion}** | ${reason} | [details](${change.packageUrl}) |`;
   });
   const upstreamLinks = [...new Map(
     unreported
@@ -66,15 +66,23 @@ module.exports = async function notifyDependencyUpdates({ github, context, core,
       .map((change) => [change.upstreamUrl, `- [${change.name} upstream](${change.upstreamUrl})`])
   ).values()];
   const names = [...new Set(unreported.map((change) => change.name))];
+  const reviewNotes = [
+    "This is a review notification only. Verify compatibility, licensing, and packaging before updating bundled files.",
+  ];
+  if (unreported.some((change) => change.repository.startsWith("mingw"))) {
+    reviewNotes.push(
+      "Do not replace Windows DLLs without checking ABI compatibility and the transitive runtime requirements documented in `Windows/codecs/README.md`."
+    );
+  }
 
   const body = [
-    `@${notifyUser}, a monitored Windows dependency package changed for QSS-M.`,
+    `@${notifyUser}, a monitored bundled dependency changed for QSS-M.`,
     "",
-    "| Dependency | Repository | Bundled upstream | Available package | Reason | Source |",
+    "| Dependency | Source | Bundled | Available | Reason | Details |",
     "|---|---|---:|---:|---|---|",
     ...rows,
     "",
-    "This is a review notification only. Do not replace DLLs without checking ABI compatibility and the transitive runtime requirements documented in `Windows/codecs/README.md`.",
+    ...reviewNotes,
     "",
     ...(upstreamLinks.length ? ["Upstream projects:", "", ...upstreamLinks, ""] : []),
     ...unreported.map(markerFor),
@@ -83,7 +91,7 @@ module.exports = async function notifyDependencyUpdates({ github, context, core,
   const created = await github.rest.issues.create({
     owner,
     repo,
-    title: `Windows dependency change detected: ${names.join(", ")}`,
+    title: `Bundled dependency change detected: ${names.join(", ")}`,
     body,
     labels: [LABEL],
   });

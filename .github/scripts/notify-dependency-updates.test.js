@@ -82,10 +82,42 @@ test("creates, mentions, and assigns a deduplicated notification issue", async (
   assert.deepEqual(result, { created: true, issueNumber: 42, reported: 1 });
   assert.equal(calls.created.length, 1);
   assert.match(calls.created[0].body, /@owner/);
+  assert.match(calls.created[0].body, /monitored bundled dependency changed/);
+  assert.match(calls.created[0].body, /Do not replace Windows DLLs/);
   assert.match(calls.created[0].body, /qssm-dependency:example-package:1\.1-1/);
+  assert.match(calls.created[0].title, /^Bundled dependency change detected:/);
   assert.deepEqual(calls.created[0].labels, [notify.LABEL]);
   assert.equal(calls.paginatedWith.labels, notify.LABEL);
   assert.deepEqual(calls.assigned[0].assignees, ["owner"]);
+});
+
+test("renders a controller database update without DLL-specific guidance", async () => {
+  const { calls, core, github } = fixture();
+  const commit = "8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5";
+  const controllerUpdate = {
+    name: "SDL_GameControllerDB",
+    vendored: "513c72e",
+    repository: "GitHub",
+    package: "mdqinc/SDL_GameControllerDB",
+    packageVersion: commit,
+    reasons: ["upstream commit changed"],
+    upstreamUrl: "https://github.com/mdqinc/SDL_GameControllerDB",
+    packageUrl: `https://github.com/mdqinc/SDL_GameControllerDB/commit/${commit}`,
+  };
+
+  await notify({
+    github,
+    context: { repo: { owner: "owner", repo: "repo" } },
+    core,
+    updates: [controllerUpdate],
+    notifyUser: "owner",
+  });
+
+  const body = calls.created[0].body;
+  assert.ok(body.includes(
+    `<!-- qssm-dependency:mdqinc/SDL_GameControllerDB:${commit} -->`
+  ));
+  assert.doesNotMatch(body, /Do not replace Windows DLLs/);
 });
 
 test("creates the dedicated label when it does not exist", async () => {

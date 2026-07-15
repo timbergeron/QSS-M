@@ -12,6 +12,17 @@ const {
   upstreamVersion,
   validateManifest,
 } = require("./check-msys2-dependencies.js");
+const {
+  findChange: findControllerDbChange,
+  snapshotCommit,
+  upstreamSnapshot,
+} = require("./check-gamecontrollerdb-update.js");
+
+const vendoredControllerDb = "513c72e34569e0f471dde7aa26eecb23946c3ef7";
+const availableControllerDb = "8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5";
+const upstreamControllerDb = "# Game Controller DB\n# Source: upstream\n\nentry\n";
+const controllerDbSnapshot = "# Game Controller DB\n# Source: upstream\n" +
+  `# QSS-M snapshot: commit ${vendoredControllerDb} (2026-06-26)\n\nentry\n`;
 
 test("parseDescription reads pacman fields and multiline values", () => {
   const fields = parseDescription("%NAME%\nexample\n\n%VERSION%\n1.2.3-4\n\n%DESC%\nline one\nline two\n");
@@ -94,4 +105,63 @@ test("validateManifest requires complete, one-to-one DLL coverage", () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("controller snapshot reads and removes the pinned commit marker", () => {
+  assert.equal(snapshotCommit(controllerDbSnapshot), vendoredControllerDb);
+  assert.equal(upstreamSnapshot(controllerDbSnapshot), upstreamControllerDb);
+});
+
+test("controller snapshot reports a newer upstream commit", () => {
+  const change = findControllerDbChange(
+    controllerDbSnapshot,
+    upstreamControllerDb,
+    availableControllerDb
+  );
+  assert.equal(change.name, "SDL_GameControllerDB");
+  assert.equal(change.vendored, "513c72e");
+  assert.equal(change.available, "8d9fefd");
+  assert.equal(change.packageVersion, availableControllerDb);
+  assert.match(
+    change.packageUrl,
+    new RegExp(`${vendoredControllerDb}\\.\\.\\.${availableControllerDb}$`)
+  );
+});
+
+test("controller snapshot accepts current matching contents", () => {
+  assert.equal(
+    findControllerDbChange(
+      controllerDbSnapshot,
+      upstreamControllerDb,
+      vendoredControllerDb
+    ),
+    null
+  );
+});
+
+test("controller snapshot rejects mismatched contents", () => {
+  assert.throws(
+    () => findControllerDbChange(
+      controllerDbSnapshot.replace("entry", "stale entry"),
+      upstreamControllerDb,
+      vendoredControllerDb
+    ),
+    /does not match recorded commit/
+  );
+});
+
+test("controller snapshot rejects invalid markers and upstream commits", () => {
+  assert.throws(() => snapshotCommit("# no snapshot here\n"), /snapshot marker/);
+  assert.throws(
+    () => snapshotCommit("# QSS-M snapshot: commit 513c72e (2026-06-26)\n"),
+    /snapshot marker/
+  );
+  assert.throws(
+    () => findControllerDbChange(
+      controllerDbSnapshot,
+      upstreamControllerDb,
+      "not-a-commit"
+    ),
+    /Invalid upstream commit/
+  );
 });
