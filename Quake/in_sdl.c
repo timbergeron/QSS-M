@@ -1912,6 +1912,7 @@ static joybuttonstate_t joy_buttonstate;
 static joyaxisstate_t joy_axisstate;
 
 static double joy_buttontimer[SDL_CONTROLLER_BUTTON_MAX];
+static int joy_buttonkey[SDL_CONTROLLER_BUTTON_MAX];
 static double joy_emulatedkeytimer[6];
 
 #ifdef __WATCOMC__ /* OW1.9 doesn't have powf() / sqrtf() */
@@ -1947,7 +1948,7 @@ static void IN_ReleaseJoystickKeys(void)
 	{
 		if (joy_buttonstate.buttondown[i])
 		{
-			int key = IN_KeyForControllerButton((SDL_GameControllerButton)i);
+			int key = joy_buttonkey[i] ? joy_buttonkey[i] : IN_KeyForControllerButton((SDL_GameControllerButton)i);
 			if (key > 0)
 				Key_Event(key, false);
 		}
@@ -1973,6 +1974,7 @@ static void IN_ResetJoystickState(void)
 	memset(&joy_buttonstate, 0, sizeof(joy_buttonstate));
 	memset(&joy_axisstate, 0, sizeof(joy_axisstate));
 	memset(joy_buttontimer, 0, sizeof(joy_buttontimer));
+	memset(joy_buttonkey, 0, sizeof(joy_buttonkey));
 	memset(joy_emulatedkeytimer, 0, sizeof(joy_emulatedkeytimer));
 }
 
@@ -2067,7 +2069,9 @@ static int IN_KeyForControllerButton(SDL_GameControllerButton button)
 		case SDL_CONTROLLER_BUTTON_B: return K_BBUTTON;
 		case SDL_CONTROLLER_BUTTON_X: return K_XBUTTON;
 		case SDL_CONTROLLER_BUTTON_Y: return K_YBUTTON;
-		case SDL_CONTROLLER_BUTTON_BACK: return K_TAB;
+		/* View/Back opens search only in eligible native menus. Disabling menu
+		 * search restores its legacy K_TAB mapping everywhere. */
+		case SDL_CONTROLLER_BUTTON_BACK: return M_MenuSearch_UseGamepadBack() ? K_BACK : K_TAB;
 		case SDL_CONTROLLER_BUTTON_START: return K_ESCAPE;
 		case SDL_CONTROLLER_BUTTON_LEFTSTICK: return K_LTHUMB;
 		case SDL_CONTROLLER_BUTTON_RIGHTSTICK: return K_RTHUMB;
@@ -2557,8 +2561,12 @@ void IN_Commands (void)
 	{
 		qboolean newstate = SDL_GameControllerGetButton(joy_active_controller, (SDL_GameControllerButton)i);
 		qboolean oldstate = joy_buttonstate.buttondown[i];
+		int key;
 
 		joy_buttonstate.buttondown[i] = newstate;
+		if (newstate && !oldstate)
+			joy_buttonkey[i] = IN_KeyForControllerButton((SDL_GameControllerButton)i);
+		key = joy_buttonkey[i] ? joy_buttonkey[i] : IN_KeyForControllerButton((SDL_GameControllerButton)i);
 
 		// weapon wheel: B cancels an open wheel without firing.  Only intercept the
 		// down-edge while already open, so a B-bound +weaponwheel still works.
@@ -2579,7 +2587,9 @@ void IN_Commands (void)
 		}
 
 		// NOTE: This can cause a reentrant call of IN_Commands, via SCR_ModalMessage when confirming a new game.
-		IN_JoyKeyEvent(oldstate, newstate, IN_KeyForControllerButton((SDL_GameControllerButton)i), &joy_buttontimer[i]);
+		IN_JoyKeyEvent(oldstate, newstate, key, &joy_buttontimer[i]);
+		if (oldstate && !newstate)
+			joy_buttonkey[i] = 0;
 	}
 	
 	for (i = 0; i < SDL_CONTROLLER_AXIS_MAX; i++)

@@ -1311,6 +1311,8 @@ static void VID_Restart (void)
 		return;
 	}
 
+	M_MenuSearch_CloseForVideoRestart();
+
 	// Mute DMA output while SDL/GL mode changes block regular sound updates.
 	blocked_sound = S_BlockSound ();
 	VID_Gamma_Restore ();
@@ -2909,6 +2911,7 @@ enum {
 	VID_OPT_APPLY,
 	VIDEO_OPTIONS_ITEMS
 };
+COMPILE_TIME_ASSERT(menu_search_video_count, VIDEO_OPTIONS_ITEMS == VID_MENU_SEARCH_ITEMS);
 
 static struct
 {
@@ -3322,6 +3325,61 @@ static windowmode_t VID_Menu_CycleDisplayMode(qboolean cycle)
 	}
 
 	return current;
+}
+
+const char *VID_MenuSearch_GetItemText(int index)
+{
+	return VID_Menu_GetItemText(index);
+}
+
+cvar_t *VID_MenuSearch_GetItemCvar(int index)
+{
+	return VID_Menu_GetItemCvar(index);
+}
+
+const char *VID_MenuSearch_GetItemHintText(int index)
+{
+	return VID_Menu_GetItemHintText(index);
+}
+
+const char *VID_MenuSearch_GetValueText(int index)
+{
+	static char value[32];
+
+	switch (index)
+	{
+	case VID_OPT_MODE:
+		q_snprintf(value, sizeof(value), "%dx%d", (int)vid_width.value, (int)vid_height.value);
+		return value;
+	case VID_OPT_BPP:
+		q_snprintf(value, sizeof(value), "%d", (int)vid_bpp.value);
+		return value;
+	case VID_OPT_REFRESHRATE:
+		q_snprintf(value, sizeof(value), "%d Hz", (int)vid_refreshrate.value);
+		return value;
+	case VID_OPT_FULLSCREEN:
+		switch (VID_Menu_CycleDisplayMode(false))
+		{
+		case DISPLAYMODE_FULLSCREEN: return "fullscreen";
+		case DISPLAYMODE_WINDOWED: return "windowed";
+		case DISPLAYMODE_BORDERLESS: return "borderless";
+		}
+		return NULL;
+	case VID_OPT_VSYNC:
+		return gl_swap_control ? (vid_vsync.value ? "on" : "off") : "N/A";
+	case VID_OPT_FPSLIMIT:
+		if (host_maxfps.value <= 0)
+			return "off";
+		q_snprintf(value, sizeof(value), "%d", (int)host_maxfps.value);
+		return value;
+	default:
+		return NULL;
+	}
+}
+
+qboolean VID_MenuSearch_ItemAvailable(int index)
+{
+	return vid_menudrawfn != NULL && index >= 0 && index < VIDEO_OPTIONS_ITEMS;
 }
 
 /*
@@ -3883,6 +3941,26 @@ static void VID_Menu_f (void)
 	//set up bpp and rate lists based on current cvars
 	VID_Menu_RebuildBppList ();
 	VID_Menu_RebuildRateList ();
+}
+
+void VID_MenuSearch_OpenItem(int index)
+{
+	if (m_state != m_video)
+		VID_Menu_f();
+	else
+	{
+		videomenu.search.len = 0;
+		videomenu.search.text[0] = 0;
+		numberOfVideoItems = VIDEO_OPTIONS_ITEMS;
+		M_TextField_ClearSelection(&fps_field);
+	}
+	video_options_cursor = CLAMP(0, index, VIDEO_OPTIONS_ITEMS - 1);
+}
+
+void VID_MenuSearch_LeaveMenu(void)
+{
+	VID_SyncCvars();
+	M_TextField_ClearSelection(&fps_field);
 }
 
 static SDL_Cursor *VID_GetCursorForDest(keydest_t dest)

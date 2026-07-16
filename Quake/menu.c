@@ -323,6 +323,33 @@ char		m_return_reason [32];
 void M_ConfigureNetSubsystem(void);
 void M_SetSkillMenuMap(const char* name); // woods #skillmenu (iw)
 static void M_GameOptions_ClearTypedLevel(void);
+static void M_Options_SelectModsFallback(void);
+static qboolean M_LanConfig_HasIce(void);
+static int M_LanConfig_NewGameProtocolCursor(void);
+static int M_LanConfig_NewGameOkCursor(void);
+static void CleanupPingThreads(void);
+static void M_MenuSearch_LeavePakLoading(void);
+static qboolean MenuSearch_HasLocalModalState(enum m_state_e state);
+extern int lanConfig_cursor;
+
+#define NUM_LANCONFIG_CMDS_NEWGAME 4
+#define NUM_LANCONFIG_CMDS_JOINGAME 6
+#define LANCONFIG_CURSOR_PORT 0
+#define LANCONFIG_CURSOR_NEWGAME_ROOM 1
+#define LANCONFIG_CURSOR_NEWGAME_PROTOCOL 2
+#define LANCONFIG_CURSOR_NEWGAME_OK 3
+#define LANCONFIG_CURSOR_JOINGAME_SEARCH_LAN 1
+#define LANCONFIG_CURSOR_JOINGAME_SEARCH_WEB 2
+#define LANCONFIG_CURSOR_JOINGAME_HISTORY 3
+#define LANCONFIG_CURSOR_JOINGAME_BOOKMARKS 4
+#define LANCONFIG_CURSOR_JOINGAME_JOIN 5
+#define LANCONFIG_PROTOCOL_BASE_COUNT 3
+#define LANCONFIG_PROTOCOL_COUNT 6
+static qboolean MenuSearch_IsActive(void);
+static qboolean MenuSearch_CanOpenImplicit(void);
+static void M_MenuSearch_Open(void);
+static void M_MenuSearch_Close(qboolean play_sound, qboolean clear_query);
+static void M_MenuSearch_Toggle(void);
 
 void FileList_Subtract(const char* name, filelist_item_t** list); // woods #historymenu
 void FileList_Add(const char* name, const char* data, filelist_item_t** list);
@@ -342,7 +369,10 @@ qboolean progs_check_done = false; // woods #botdetect
 
 cvar_t ui_live_preview = {"ui_live_preview", "1", CVAR_ARCHIVE};
 cvar_t cl_modmenu = {"cl_modmenu", "1", CVAR_ARCHIVE};
+cvar_t menu_search_enable = {"menu_search_enable", "1", CVAR_ARCHIVE};
+cvar_t menu_search_debug = {"menu_search_debug", "0", 0};
 extern cvar_t gl_cshiftpercent;
+extern qboolean windowhasfocus;
 
 typedef enum {
 	LP_NONE = -1,
@@ -2718,9 +2748,8 @@ void M_Menu_Main_f (void)
 // and its alternative location?
 	if (!m_main_mods && m_main_cursor == MAIN_MODS)
 	{
-		extern int options_cursor;
 		m_main_cursor = MAIN_OPTIONS;
-		options_cursor = 3; // OPT_MODS
+		M_Options_SelectModsFallback();
 	}
 
 	IN_UpdateGrabs();
@@ -7956,7 +7985,8 @@ Setup Menu
 
 static qboolean M_Menu_TabCompleteNameHistory(menu_textfield_t *field,
 	char *buffer, size_t buffer_size,
-	char *tab_partial, size_t tab_partial_size); // woods #namehistory
+	char *tab_partial, size_t tab_partial_size,
+	qboolean reverse); // woods #namehistory
 
 static int		setup_cursor = 6; // woods 4 to 5 #
 
@@ -8356,10 +8386,11 @@ void M_Setup_Key (int k)
 		return;
 	}
 
-	if (k == K_TAB && setup_cursor == 1) // woods #namehistory
+	if ((k == K_TAB || k == K_LSHOULDER || k == K_RSHOULDER) && setup_cursor == 1) // woods #namehistory
 	{
 		if (M_Menu_TabCompleteNameHistory(&setup_myname_field, setup_myname,
-			sizeof(setup_myname), setup_myname_tabpartial, sizeof(setup_myname_tabpartial)))
+			sizeof(setup_myname), setup_myname_tabpartial, sizeof(setup_myname_tabpartial),
+			k == K_LSHOULDER || (k == K_TAB && keydown[K_SHIFT])))
 			S_LocalSound("misc/menu2.wav");
 		M_Setup_UpdateNameHint();
 		return;
@@ -8730,7 +8761,8 @@ void M_NameMaker_Key (int k)
 	if (k == K_TAB) // woods #namehistory
 	{
 		if (M_Menu_TabCompleteNameHistory(&namemaker_name_field, namemaker_name,
-			sizeof(namemaker_name), namemaker_name_tabpartial, sizeof(namemaker_name_tabpartial)))
+			sizeof(namemaker_name), namemaker_name_tabpartial, sizeof(namemaker_name_tabpartial),
+			keydown[K_SHIFT]))
 			S_LocalSound("misc/menu2.wav");
 		M_NameMaker_UpdateNameHint();
 		namemaker_edit_active = true;
@@ -9115,6 +9147,7 @@ enum
 	OPT_CUSTOMIZE = 0,
 	OPT_MOUSE,
 	OPT_CONTROLLER,
+	OPT_MENUSEARCH,
 	OPT_WEAPONWHEEL,
 	OPT_VIDEO,
 	OPT_GRAPHICS,
@@ -9136,6 +9169,9 @@ enum
 
 int		options_cursor;
 static float pending_scale_value;
+static const char* M_Options_GetItemText(int index);
+static qboolean M_Options_ItemVisible(int item);
+static void M_Options_UpdateSearch(void);
 
 #define OPTIONS_WHEEL_REPEAT_TIME 0.12
 
@@ -9157,7 +9193,7 @@ static void M_Options_Init(void)
 	optionsmenu.list.viewsize = OPTIONS_ITEMS;
 	optionsmenu.list.cursor = 0;
 	optionsmenu.list.scroll = 0;
-	optionsmenu.list.numitems = OPTIONS_ITEMS;
+	optionsmenu.list.numitems = 0;
 	optionsmenu.scrollbar_grab = false;
 	optionsmenu.wheel_time = -OPTIONS_WHEEL_REPEAT_TIME;
 	optionsmenu.wheel_dir = 0;
@@ -9165,6 +9201,7 @@ static void M_Options_Init(void)
 	// Initialize search
 	memset(&optionsmenu.list.search, 0, sizeof(optionsmenu.list.search));
 	optionsmenu.list.search.maxlen = 32;
+	M_Options_UpdateSearch();
 }
 
 static qboolean M_Options_AcceptWheelMove(int dir)
@@ -9182,7 +9219,89 @@ static qboolean M_Options_AcceptWheelMove(int dir)
 
 static int M_Options_RowY(int item)
 {
+	if (!menu_search_enable.value)
+	{
+		if (item == OPT_MENUSEARCH)
+			return -1000;
+		if (item > OPT_MENUSEARCH)
+			item--;
+	}
+	else
+	{
+		if (item == OPT_SPACE)
+			return -1000;
+		if (item > OPT_SPACE)
+			item--;
+	}
+
 	return 32 + item * 8;
+}
+
+static qboolean M_Options_ItemVisible(int item)
+{
+	if (item < 0 || item >= OPTIONS_ITEMS)
+		return false;
+	if (item == OPT_SPACE)
+		return false;
+	if (item == OPT_MENUSEARCH)
+		return menu_search_enable.value != 0;
+	return true;
+}
+
+static void M_Options_SelectModsFallback(void)
+{
+	options_cursor = OPT_EXTRAS;
+}
+
+static void M_Options_UpdateSearch(void)
+{
+	int first_match = -1;
+	int i;
+
+	optionsmenu.list.numitems = 0;
+	for (i = 0; i < OPTIONS_ITEMS; ++i)
+	{
+		const char *text;
+		if (!M_Options_ItemVisible(i))
+			continue;
+		text = M_Options_GetItemText(i);
+		if (!optionsmenu.list.search.len || (text && q_strcasestr(text, optionsmenu.list.search.text)))
+		{
+			if (first_match < 0)
+				first_match = i;
+			optionsmenu.list.numitems++;
+		}
+	}
+	if (optionsmenu.list.search.len &&
+		(!M_Options_ItemVisible(options_cursor) ||
+		 !q_strcasestr(M_Options_GetItemText(options_cursor), optionsmenu.list.search.text)))
+		options_cursor = first_match >= 0 ? first_match : options_cursor;
+}
+
+static void M_Options_MoveCursor(int dir)
+{
+	do
+	{
+		options_cursor = (options_cursor + dir + OPTIONS_ITEMS) % OPTIONS_ITEMS;
+	} while (!M_Options_ItemVisible(options_cursor));
+}
+
+static int M_Options_ItemAtY(int cy)
+{
+	int i;
+
+	for (i = 0; i < OPTIONS_ITEMS; ++i)
+	{
+		int y;
+
+		if (!M_Options_ItemVisible(i))
+			continue;
+		y = M_Options_RowY(i);
+		if (cy >= y && cy < y + 8)
+			return i;
+	}
+
+	return -1;
 }
 
 static int M_Options_LivePreviewId(void)
@@ -9412,6 +9531,8 @@ void M_Options_Draw (void)
 	p = Draw_CachePic ("gfx/p_option.lmp");
 	M_DrawPic ( (320-p->width)/2, 4, p);
 
+	if (!M_Options_ItemVisible(options_cursor))
+		M_Options_MoveCursor(1);
 	M_LivePreview_WantAt (M_Options_LivePreviewId (), M_Options_RowY (options_cursor));
 
 	// Draw menu items with search highlighting if active
@@ -9424,6 +9545,9 @@ void M_Options_Draw (void)
 		const char *text_hint = M_Options_GetItemHintText(i);
 		qboolean show_cvar_hint = M_CvarHintActive(i == options_cursor, cvar_hint);
 		qboolean show_text_hint = M_TextHintActive(i == options_cursor, text_hint);
+
+		if (!M_Options_ItemVisible(i))
+			continue;
 
 		if (isolated)
 			M_LivePreview_BeginIsolate ();
@@ -9438,6 +9562,9 @@ void M_Options_Draw (void)
 			break;
 		case OPT_CONTROLLER:
 			text = "            Controller   ...";
+			break;
+		case OPT_MENUSEARCH:
+			text = "          Search Menus   ...";
 			break;
 		case OPT_WEAPONWHEEL:
 			text = "          Weapon Wheel   ...";
@@ -9552,6 +9679,8 @@ static const char* M_Options_GetItemText(int index)
 		return "                 Mouse   ...";
 	case OPT_CONTROLLER:
 		return "            Controller   ...";
+	case OPT_MENUSEARCH:
+		return "          Search Menus   ...";
 	case OPT_WEAPONWHEEL:
 		return "          Weapon Wheel   ...";
 	case OPT_VIDEO:
@@ -9594,6 +9723,7 @@ void M_Options_Key (int k)
 			// Clear search but stay in menu
 			optionsmenu.list.search.len = 0;
 			optionsmenu.list.search.text[0] = 0;
+			M_Options_UpdateSearch();
 			return;
 		}
 		// If no search active, proceed with normal menu exit
@@ -9610,6 +9740,7 @@ void M_Options_Key (int k)
 		if (optionsmenu.list.search.len > 0)
 		{
 			optionsmenu.list.search.text[--optionsmenu.list.search.len] = 0;
+			M_Options_UpdateSearch();
 			return;
 		}
 	}
@@ -9620,21 +9751,7 @@ void M_Options_Key (int k)
 			optionsmenu.list.search.text[optionsmenu.list.search.len++] = k;
 			optionsmenu.list.search.text[optionsmenu.list.search.len] = 0;
 
-			// Reset item count
-			optionsmenu.list.numitems = 0;
-
-			// Search for matching items and count them
-			for (int i = 0; i < OPTIONS_ITEMS; i++)
-			{
-				const char* itemtext = M_Options_GetItemText(i);
-				if (q_strcasestr(itemtext, optionsmenu.list.search.text))
-				{
-					optionsmenu.list.numitems++;
-					// Move cursor to the first matching item
-					if (optionsmenu.list.numitems == 1)
-						options_cursor = i;
-				}
-			}
+			M_Options_UpdateSearch();
 			return;
 		}
 	}
@@ -9685,6 +9802,10 @@ void M_Options_Key (int k)
 		case OPT_CONTROLLER:
 			M_Menu_Controller_f();
 			break;
+		case OPT_MENUSEARCH:
+			m_entersound = false;
+			M_MenuSearch_Open();
+			break;
 		case OPT_WEAPONWHEEL:
 			M_Menu_WeaponWheel_f();
 			break;
@@ -9730,42 +9851,26 @@ void M_Options_Key (int k)
 
 	case K_UPARROW:
 		S_LocalSound ("misc/menu1.wav");
-		options_cursor--;
-		if (options_cursor < 0)
-			options_cursor = OPTIONS_ITEMS-1;
-		if (options_cursor == OPT_SPACE)  // Skip space when going up
-			options_cursor--;
+		M_Options_MoveCursor(-1);
 		break;
 
 	case K_MWHEELUP:
 		if (!M_Options_AcceptWheelMove(-1))
 			return;
 		S_LocalSound ("misc/menu1.wav");
-		options_cursor--;
-		if (options_cursor < 0)
-			options_cursor = OPTIONS_ITEMS-1;
-		if (options_cursor == OPT_SPACE)  // Skip space when going up
-			options_cursor--;
+		M_Options_MoveCursor(-1);
 		break;
 
 	case K_DOWNARROW:
 		S_LocalSound ("misc/menu1.wav");
-		options_cursor++;
-		if (options_cursor >= OPTIONS_ITEMS)
-			options_cursor = 0;
-		if (options_cursor == OPT_SPACE)  // Skip space when going down
-			options_cursor++;
+		M_Options_MoveCursor(1);
 		break;
 
 	case K_MWHEELDOWN:
 		if (!M_Options_AcceptWheelMove(1))
 			return;
 		S_LocalSound ("misc/menu1.wav");
-		options_cursor++;
-		if (options_cursor >= OPTIONS_ITEMS)
-			options_cursor = 0;
-		if (options_cursor == OPT_SPACE)  // Skip space when going down
-			options_cursor++;
+		M_Options_MoveCursor(1);
 		break;
 
 	case K_LEFTARROW:
@@ -9819,18 +9924,10 @@ void M_Options_Mousemove(int cx, int cy) // woods #mousemenu
 		return;
 	}
 
-	int old_cursor = options_cursor;
-
-	M_UpdateCursor(cy, 36, 8, OPTIONS_ITEMS, &options_cursor);
-
-	if (options_cursor == OPT_SPACE)
 	{
-		// If moving down
-		if (old_cursor < OPT_SPACE)
-			options_cursor++;
-		// If moving up
-		else if (old_cursor > OPT_SPACE)
-			options_cursor--;
+		int item = M_Options_ItemAtY(cy);
+		if (item >= 0)
+			options_cursor = item;
 	}
 }
 
@@ -11564,7 +11661,8 @@ original name inserted with its colours preserved.
 */
 static qboolean M_Menu_TabCompleteNameHistory(menu_textfield_t *field,
 	char *buffer, size_t buffer_size,
-	char *tab_partial, size_t tab_partial_size)
+	char *tab_partial, size_t tab_partial_size,
+	qboolean reverse)
 {
 	extern char unfun[129];
 	const filelist_item_t *item;
@@ -11635,17 +11733,17 @@ static qboolean M_Menu_TabCompleteNameHistory(menu_textfield_t *field,
 	   substring matches may appear at different offsets) */
 	if (first_cycle)
 	{
-		replacement = keydown[K_SHIFT] ? last_match->name : first_match->name;
+		replacement = reverse ? last_match->name : first_match->name;
 	}
 	else if (current_match)
 	{
-		replacement = keydown[K_SHIFT]
+		replacement = reverse
 			? (prev_match ? prev_match->name : last_match->name)
 			: (next_match ? next_match->name : first_match->name);
 	}
 	else
 	{
-		replacement = keydown[K_SHIFT] ? last_match->name : first_match->name;
+		replacement = reverse ? last_match->name : first_match->name;
 	}
 
 	if (!strcmp(buffer, replacement))
@@ -14926,6 +15024,15 @@ static cvar_t *M_Sky_GetItemCvar(int index)
 	}
 }
 
+static const char *M_Sky_GetItemText(int index)
+{
+	static const char *const labels[SKY_ITEMS] = {
+		"Fast Sky", "Fast Sky Color", "Sky Quality", "Sky Alpha", "Sky Fog",
+		"Sky Speed", "Skybox Downloads", "Global Sky", "Skywind"
+	};
+	return (index >= 0 && index < SKY_ITEMS) ? labels[index] : "";
+}
+
 static void M_Sky_ClampCursor(void)
 {
 	sky_cursor = (enum sky_e)M_Menu_ClampCursorValue((int)sky_cursor, SKY_ITEMS);
@@ -15612,6 +15719,28 @@ static const char *M_Skywind_GetHintText(float dist, float yaw, float period, fl
 	q_snprintf(buffer, sizeof(buffer), "r_skywind %g, %g, %g, %g",
 		dist, yaw, period, pitch);
 	return buffer;
+}
+
+static const char *M_Skywind_GetItemText(int index)
+{
+	static const char *const labels[SKYWIND_ITEMS] = {"Strength", "Direction", "Pitch", "Period"};
+	return (index >= 0 && index < SKYWIND_ITEMS) ? labels[index] : "";
+}
+
+static const char *M_Skywind_GetValueText(int index)
+{
+	static char value[32];
+	float dist, yaw, period, pitch;
+	Sky_GetWindParams(&dist, &yaw, &period, &pitch);
+	switch (index)
+	{
+	case SKYWIND_STRENGTH: q_snprintf(value, sizeof(value), "%.2f", dist); break;
+	case SKYWIND_DIRECTION: q_snprintf(value, sizeof(value), "%.0f deg", yaw); break;
+	case SKYWIND_PITCH: q_snprintf(value, sizeof(value), "%.0f deg", pitch); break;
+	case SKYWIND_PERIOD: q_snprintf(value, sizeof(value), "%.0f sec", period); break;
+	default: return NULL;
+	}
+	return value;
 }
 
 static void M_Skywind_Adjust(int dir)
@@ -16506,6 +16635,16 @@ static cvar_t *M_Voip_GetItemCvar(int index)
 	case VOIP_TEST:			return &cl_voip_test;
 	default:				return NULL;
 	}
+}
+
+static const char *M_Voip_GetItemText(int index)
+{
+	static const char *const labels[VOIP_ITEMS] = {
+		"Mode", "Play Volume", "Mic Volume", "Mic Amplify", "VAD Threshold",
+		"VAD Delay", "Ducking", "Noise Filter", "Auto Gain", "Show Meter",
+		"Bitrate", "Mic Test"
+	};
+	return (index >= 0 && index < VOIP_ITEMS) ? labels[index] : "";
 }
 
 void M_Menu_Voip_f(void)
@@ -17494,6 +17633,39 @@ static const char *M_PlayerXray_SummaryValue(void)
 
 	M_PlayerXray_GetSettings(&settings);
 	return M_PlayerXray_TargetLabel(M_PlayerXray_GetMenuTarget(&settings));
+}
+
+static const char *M_PlayerXray_GetItemText(int index)
+{
+	static const char *const labels[PLAYERXRAY_ITEMS] = {
+		"Targets", "Style", "Opacity", "Range", "Color Mode", "Enemy Color",
+		"Team Color", "Match Size"
+	};
+	return (index >= 0 && index < PLAYERXRAY_ITEMS) ? labels[index] : "";
+}
+
+static cvar_t *M_PlayerXray_GetItemCvar(int index)
+{
+	return (index >= 0 && index < PLAYERXRAY_ITEMS) ? &r_player_xray : NULL;
+}
+
+static const char *M_PlayerXray_GetValueText(int index)
+{
+	static char value[32];
+	playerxray_settings_t settings;
+	M_PlayerXray_GetSettings(&settings);
+	switch (index)
+	{
+	case PLAYERXRAY_TARGETS: return M_PlayerXray_TargetLabel(M_PlayerXray_GetMenuTarget(&settings));
+	case PLAYERXRAY_STYLE: return M_PlayerXray_RenderModeLabel(settings.render_mode);
+	case PLAYERXRAY_ALPHA: q_snprintf(value, sizeof(value), "%.0f%%", settings.alpha * 100.f); return value;
+	case PLAYERXRAY_DISTANCE: q_snprintf(value, sizeof(value), "%.0f", settings.distance); return value;
+	case PLAYERXRAY_COLORMODE: return M_PlayerXray_ColorModeLabel(settings.color_mode);
+	case PLAYERXRAY_ENEMYCOLOR: return M_PlayerXray_ColorValue(&settings.enemy_color, playerxray_enemy_rgb_active);
+	case PLAYERXRAY_TEAMCOLOR: return M_PlayerXray_ColorValue(&settings.team_color, playerxray_team_rgb_active);
+	case PLAYERXRAY_MATCHSIZE: return M_PlayerXray_MatchSizeLabel(settings.max_match_size);
+	default: return NULL;
+	}
 }
 
 static void M_Game_AdjustColor(int dir, qboolean isTeam)
@@ -19858,6 +20030,10 @@ static const char* M_Crosshair_GetItemText(int index)
 		return "Use Crosshair";
 	case CROSSHAIR_ALPHA:
 		return "Crosshair Alpha";
+	case CROSSHAIR_COLOR:
+		return "Crosshair Color";
+	case CROSSHAIR_COLOR_PICKER:
+		return "Color Picker";
 	case CROSSHAIR_OUTLINE:
 		return "Crosshair Outline";
 	case CROSSHAIR_SCALE:
@@ -21324,6 +21500,1589 @@ void M_Console_Mousemove(int cx, int cy)
 	}
 }
 
+/*
+===============================================================================
+
+	MENU SEARCH
+
+	Native-menu command palette. Keep this section contiguous so it can be
+	extracted to menu_search.c once the provider API has settled.
+
+===============================================================================
+*/
+
+#define MENU_SEARCH_MAX_RESULTS 512
+#define MENU_SEARCH_VISIBLE_ROWS 12
+#define MENU_SEARCH_QUERY_CHARS 32
+#define MENU_SEARCH_RECENTS 5
+#define MENU_SEARCH_EMPTY_RECENTS 2
+
+typedef const char *(*menusearch_text_fn)(int index);
+typedef cvar_t *(*menusearch_cvar_fn)(int index);
+typedef const char *(*menusearch_hint_fn)(int index);
+typedef const char *(*menusearch_keywords_fn)(int index);
+typedef const char *(*menusearch_value_fn)(int index);
+typedef qboolean (*menusearch_available_fn)(int index);
+typedef void (*menusearch_open_fn)(int index);
+
+typedef struct
+{
+	const char *id;
+	const char *path;
+	const char * const *expected_labels;
+	int count;
+	menusearch_text_fn text_fn;
+	menusearch_cvar_fn cvar_fn;
+	menusearch_hint_fn hint_fn;
+	menusearch_keywords_fn keywords_fn;
+	menusearch_value_fn value_fn;
+	menusearch_available_fn available_fn;
+	menusearch_open_fn open_fn;
+} menusearch_provider_t;
+
+typedef struct
+{
+	const menusearch_provider_t *provider;
+	int index;
+	int score;
+} menusearch_result_t;
+
+static const char * const menusearch_options_labels[] = {
+	"Key/Button Setup", "Mouse", "Controller", "Search Menus", "Weapon Wheel",
+	"Display", "Graphics", "Sound", "Game", "HUD", "Console", "Startup",
+	"Demos", "Misc", "", "Menu Scale", "Goto Console", "Reset Config"
+};
+static const char * const menusearch_video_labels[] = {
+	"Video Mode", "Color Depth", "Refresh Rate", "Display Mode",
+	"Vertical Sync", "FPS Limit", "Test Changes", "Apply Changes"
+};
+static const char * const menusearch_graphics_labels[] = {
+	"Brightness", "Contrast", "Texture Filtering", "Screen Anti-Aliasing",
+	"Software Emulation", "External Textures", "Custom Models", "Rocket Light",
+	"Explosion Light", "Smooth Model Anims", "Render Scale", "Classic Particles",
+	"Custom Particles", "Colored Lighting", "Shadows", "Brush Shadows",
+	"Model Outlines", "Powerup Shells", "Water Caustics", "Underwater FX",
+	"Liquid Alpha", "Auto Liquid Tint", "Sky"
+};
+static const char * const menusearch_sound_labels[] = {
+	"Sound Volume", "Music Volume", "External Music", "Audio Rate", "Surround Sound",
+	"Water FX", "Ambient Level", "Stop Sound", "Mute", "Audio Browser", "VoIP"
+};
+static const char * const menusearch_game_labels[] = {
+	"Always Run", "Strafe Angle Tilt", "Field of View", "Screen Flashes", "Weapon Bob",
+	"Damage Kick", "Gun Damage Tint", "Gun Auto Switch", "Console Chat", "R2G Swap Rockets",
+	"True Lightning", "Straight Shaft", "Deadbody Filter", "Mute MM1 Chat", "View Model",
+	"Force Team Color", "Force Enemy Color", "3Wave CTF Models", "Player Xray", "Textureless"
+};
+static const char * const menusearch_hud_labels[] = {
+	"Crosshair", "HUD Scale", "Screen Size", "Statusbar Alpha", "Status Bar Style",
+	"Show FPS", "Show Match Scores", "Match Clock", "Show Ping", "Show Clock",
+	"Show Speed", "Show Scores", "Player Auto ID", "Movement Keys", "Console Font Size",
+	"Observer Items", "Scoreboard Sort"
+};
+static const char * const menusearch_console_labels[] = {
+	"Font Size", "Console Height", "Down/Up Speed", "Transparency", "Background Image",
+	"Background Color", "Content Filter", "Typing Status", "Auto Hints", "Clear On Toggle",
+	"Save History", "Clear Console", "Clear History"
+};
+static const char * const menusearch_main_labels[] = {
+	"Single Player", "Multiplayer", "Options", "Mods", "Demos", "Help", "Quit"
+};
+static const char * const menusearch_singleplayer_labels[] = {
+	"New Game", "Load Game", "Save Game", "Levels"
+};
+static const char * const menusearch_multiplayer_labels[] = {
+	"Join Game", "New Game", "Setup"
+};
+static const char * const menusearch_join_labels[] = {
+	"Local Games", "Server Browser", "Server History", "Server Bookmarks", "Join by Address"
+};
+static const char * const menusearch_host_labels[] = {
+	"Port", "Room", "Protocol", "Game Options"
+};
+static const char * const menusearch_setup_labels[] = {
+	"Hostname", "Player Name", "Name Maker", "Color Picker", "Shirt Color", "Pants Color", "Accept Changes"
+};
+static const char * const menusearch_mouse_labels[] = {
+	"Mouse Speed", "Invert Mouse", "Mouse Look", "Pitch Mode", "Custom Cursor",
+#ifdef MACOS_X_ACCELERATION_HACK
+	"Acceleration",
+#endif
+};
+static const char * const menusearch_controller_labels[] = {
+	"Device", "", "Yaw Speed", "Pitch Speed", "Invert Pitch", "Look Stick", "",
+	"Look Accel", "Move Accel", "Look Deadzone", "Move Deadzone", "Trigger Thresh", "",
+	"Vibration", "Trigger Vibe", "", "Touchpad Cursor", "Gyro", "Flick Stick",
+	"Gyro Button", "Gyro Axis", "Gyro Yaw Speed", "Gyro Pitch Speed", "Gyro Noise",
+	"Calibrate", "Controller Test"
+};
+static const char * const menusearch_sky_labels[] = {
+	"Fast Sky", "Fast Sky Color", "Sky Quality", "Sky Alpha", "Sky Fog",
+	"Sky Speed", "Skybox Downloads", "Global Sky", "Skywind"
+};
+static const char * const menusearch_skywind_labels[] = {
+	"Strength", "Direction", "Pitch", "Period"
+};
+static const char * const menusearch_voip_labels[] = {
+	"Mode", "Play Volume", "Mic Volume", "Mic Amplify", "VAD Threshold", "VAD Delay",
+	"Ducking", "Noise Filter", "Auto Gain", "Show Meter", "Bitrate", "Mic Test"
+};
+static const char * const menusearch_crosshair_labels[] = {
+	"Use Crosshair", "Crosshair Alpha", "Crosshair Color", "Color Picker",
+	"Crosshair Outline", "Crosshair Scale", "Horizontal (X) Adjustment", "Vertical (Y) Adjustment"
+};
+static const char * const menusearch_playerxray_labels[] = {
+	"Targets", "Style", "Opacity", "Range", "Color Mode", "Enemy Color", "Team Color", "Match Size"
+};
+static const char * const menusearch_extras_labels[] = {
+	"System Throttle", "Protocol Exts", "Download Policy", "Connection Retries",
+	"QC Extensions", "Prediction", "Auto Demo", "Port Ping Probe", "Spawn Trainer",
+	"Q3 Item Bobbing", "Reset Config", "Quake Pong", "Paused Hints", "Live Preview",
+	"Model Viewer", "Saving", "Keyboard Shortcuts", "Version Info"
+};
+static const char * const menusearch_saving_labels[] = {
+	"Auto Load", "Auto Save", "Auto Save Interval", "Saving Indicator"
+};
+static const char * const menusearch_startup_labels[] = {
+	"Use PAK Re-Ordering", "PAK Loading", "Start-up Screen", "Custom Command",
+	"Startup/Quit Fade", "Start Demo Attract"
+};
+static const char * const menusearch_demooptions_labels[] = {
+	"Demo Eyes", "Demo Format", "Auto-record", "Demo Reel", "Demo Eyecam",
+	"Demo Bar Timeout", "Demo Min Frames", "Hide Short Demos"
+};
+
+COMPILE_TIME_ASSERT(menusearch_options_count, Q_COUNTOF(menusearch_options_labels) == OPTIONS_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_video_count, Q_COUNTOF(menusearch_video_labels) == VID_MENU_SEARCH_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_graphics_count, Q_COUNTOF(menusearch_graphics_labels) == GRAPHICS_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_sound_count, Q_COUNTOF(menusearch_sound_labels) == SOUND_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_game_count, Q_COUNTOF(menusearch_game_labels) == GAME_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_hud_count, Q_COUNTOF(menusearch_hud_labels) == HUD_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_console_count, Q_COUNTOF(menusearch_console_labels) == CONSOLE_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_main_count, Q_COUNTOF(menusearch_main_labels) == MAIN_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_multiplayer_count, Q_COUNTOF(menusearch_multiplayer_labels) == MULTIPLAYER_BASE_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_setup_count, Q_COUNTOF(menusearch_setup_labels) == NUM_SETUP_CMDS);
+COMPILE_TIME_ASSERT(menusearch_mouse_count, Q_COUNTOF(menusearch_mouse_labels) == MOUSE_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_controller_count, Q_COUNTOF(menusearch_controller_labels) == CONTROLLER_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_sky_count, Q_COUNTOF(menusearch_sky_labels) == SKY_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_skywind_count, Q_COUNTOF(menusearch_skywind_labels) == SKYWIND_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_voip_count, Q_COUNTOF(menusearch_voip_labels) == VOIP_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_crosshair_count, Q_COUNTOF(menusearch_crosshair_labels) == CROSSHAIR_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_playerxray_count, Q_COUNTOF(menusearch_playerxray_labels) == PLAYERXRAY_ITEMS);
+
+/* These menus are defined after the contiguous Menu Search section. */
+static const char *M_Extras_GetItemText(int index);
+static cvar_t *M_Extras_GetItemCvar(int index);
+static const char *M_Extras_GetItemHintText(int index);
+static const char *M_Saving_GetItemText(int index);
+static cvar_t *M_Saving_GetItemCvar(int index);
+static const char *M_Saving_GetValueText(int index);
+static const char *M_Startup_GetItemText(int index);
+static cvar_t *M_Startup_GetItemCvar(int index);
+static qboolean MenuSearch_StartupAvailable(int index);
+static const char *M_DemoOptions_GetItemText(int index);
+static cvar_t *M_DemoOptions_GetItemCvar(int index);
+static const char *M_DemoOptions_GetValueText(int index);
+static void M_MenuSearch_OpenExtrasItem(int index);
+static void M_MenuSearch_OpenSavingItem(int index);
+static void M_MenuSearch_OpenStartupItem(int index);
+static void M_MenuSearch_OpenDemoOptionsItem(int index);
+
+static const char *MenuSearch_MainText(int index) { return menusearch_main_labels[index]; }
+static const char *MenuSearch_SinglePlayerText(int index) { return menusearch_singleplayer_labels[index]; }
+static const char *MenuSearch_MultiplayerText(int index) { return menusearch_multiplayer_labels[index]; }
+static const char *MenuSearch_JoinText(int index) { return menusearch_join_labels[index]; }
+static const char *MenuSearch_HostText(int index) { return menusearch_host_labels[index]; }
+static const char *MenuSearch_SetupText(int index) { return menusearch_setup_labels[index]; }
+static const char *MenuSearch_KeyText(int index) { return quakebindnames[index].desc; }
+static const char *MenuSearch_KeyKeywords(int index) { return quakebindnames[index].cmd; }
+
+static qboolean MenuSearch_OptionsAvailable(int index)
+{
+	if (index == OPT_MENUSEARCH || index == OPT_SPACE)
+		return false;
+	if ((index == OPT_VIDEO || index == OPT_GRAPHICS) && !vid_menudrawfn)
+		return false;
+	return true;
+}
+
+static qboolean MenuSearch_MainAvailable(int index)
+{
+	if (index == MAIN_MODS)
+		return m_main_mods != 0;
+	if (index == MAIN_DEMOS)
+		return m_main_demos != 0;
+	return true;
+}
+
+static qboolean MenuSearch_SinglePlayerAvailable(int index)
+{
+	if (index == 2)
+		return sv.active && !cl.intermission && svs.maxclients == 1;
+	if (index == 3)
+		return m_singleplayer_showlevels != 0;
+	return true;
+}
+
+static qboolean MenuSearch_NetworkAvailable(int index)
+{
+	(void)index;
+	return ipxAvailable || ipv4Available || ipv6Available;
+}
+
+static qboolean MenuSearch_MultiplayerAvailable(int index)
+{
+	/* Setup is local configuration and remains valid without a network transport. */
+	return index == 2 || MenuSearch_NetworkAvailable(index);
+}
+
+static qboolean MenuSearch_HostAvailable(int index)
+{
+	if (!MenuSearch_NetworkAvailable(index))
+		return false;
+	if (index == 1)
+		return M_LanConfig_HasIce();
+	return true;
+}
+
+static qboolean MenuSearch_KeyAvailable(int index)
+{
+	const char *cmd = quakebindnames[index].cmd;
+	if (M_Keys_IsCustomMarker(cmd))
+		return false;
+	return hipnotic || !M_Keys_IsHipnoticOnlyCommand(cmd);
+}
+
+static qboolean MenuSearch_ControllerAvailable(int index)
+{
+	return M_Controller_IsOptionVisible(index) && M_Controller_IsOptionEnabled(index);
+}
+
+static const char *MenuSearch_OptionsKeywords(int index)
+{
+	switch (index)
+	{
+	case OPT_CUSTOMIZE: return "keys buttons bindings controls";
+	case OPT_CONTROLLER: return "gamepad joystick controller test gyro calibration";
+	case OPT_VIDEO: return "video resolution fullscreen display monitor vsync";
+	case OPT_GRAPHICS: return "rendering video visuals effects";
+	case OPT_SOUND: return "audio music microphone mic voice voip";
+	case OPT_GAME: return "gameplay motion comfort fov";
+	case OPT_HUD: return "interface overlay reticle crosshair";
+	case OPT_CONSOLEM: return "terminal command history";
+	case OPT_DEMOOPTIONS: return "replay demos demo eyes";
+	case OPT_EXTRAS: return "misc saving autosave pak bookmarks favorites";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_VideoKeywords(int index)
+{
+	switch (index)
+	{
+	case 0: return "resolution width height screen video mode";
+	case 1: return "bpp bits pixel color colour depth";
+	case 2: return "hz monitor refresh rate";
+	case 3: return "fullscreen windowed borderless display mode";
+	case 4: return "vsync tearing vertical sync";
+	case 5: return "framerate frame rate maxfps fps cap limit";
+	case 6: return "preview test video changes";
+	case 7: return "apply save restart video changes";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_GraphicsKeywords(int index)
+{
+	switch (index)
+	{
+	case GRAPHICS_BRIGHTNESS: return "gamma luminance";
+	case GRAPHICS_ANTIALIASING: return "aa fsaa msaa jaggies";
+	case GRAPHICS_MODELLERP: return "animation interpolation motion";
+	case GRAPHICS_COLOREDLIGHTING: return "lit colored lights lighting";
+	case GRAPHICS_ALIASSHADOW: case GRAPHICS_BRUSHSHADOW: return "shadow lighting";
+	case GRAPHICS_WATERWARP: return "underwater distortion motion";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_SoundKeywords(int index)
+{
+	switch (index)
+	{
+	case SOUND_VOLUME: return "audio sfx";
+	case SOUND_MUSICVOL: case SOUND_MUSICEXT: return "audio soundtrack";
+	case SOUND_AUDIOBROWSER: return "audio files music sounds";
+	case SOUND_VOIP: return "microphone mic voice chat";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_GameKeywords(int index)
+{
+	switch (index)
+	{
+	case GAME_ROLLANGLE: case GAME_FLASHES: case GAME_WEAPONBOB:
+	case GAME_DAMAGEKICK: return "motion comfort accessibility";
+	case GAME_FOV: return "fov field view motion comfort";
+	case GAME_AUTOSWITCH: return "weapon switch pickup";
+	case GAME_TEAMCOLOR: case GAME_ENEMYCOLOR: return "player color colours";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_HUDKeywords(int index)
+{
+	switch (index)
+	{
+	case HUD_CROSSHAIR: return "reticle aim sight";
+	case HUD_SCALE: case HUD_SCRSIZE: return "interface ui size";
+	case HUD_AUTOID: return "player names identification";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_ConsoleKeywords(int index)
+{
+	switch (index)
+	{
+	case CONSOLE_SAVE_HISTORY: case CONSOLE_CLEAR_HISTORY: return "command history";
+	case CONSOLE_CONBACK: case CONSOLE_CONCOLOR: return "terminal background";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_MainKeywords(int index)
+{
+	switch (index)
+	{
+	case MAIN_SINGLEPLAYER: return "campaign solo singleplayer";
+	case MAIN_MULTIPLAYER: return "online network servers coop deathmatch";
+	case MAIN_OPTIONS: return "settings configuration preferences";
+	case MAIN_MODS: return "games modifications addons expansions";
+	case MAIN_DEMOS: return "replays recordings playback";
+	case MAIN_HELP: return "manual instructions assistance";
+	case MAIN_QUIT: return "exit close application";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_SinglePlayerKeywords(int index)
+{
+	switch (index)
+	{
+	case 0: return "start campaign solo new singleplayer";
+	case 1: return "load savegame continue";
+	case 2: return "save savegame slot";
+	case 3: return "maps levels map browser select level";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_MultiplayerKeywords(int index)
+{
+	switch (index)
+	{
+	case 0: return "connect server browser online lan internet";
+	case 1: return "host create start server coop deathmatch";
+	case 2: return "player setup name colors hostname profile";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_JoinKeywords(int index)
+{
+	switch (index)
+	{
+	case 0: return "lan local network search";
+	case 1: return "public internet online servers search join";
+	case 2: return "recent previous connections";
+	case 3: return "favorites favourite saved servers";
+	case 4: return "connect ip hostname address direct";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_HostKeywords(int index)
+{
+	switch (index)
+	{
+	case 0: return "network port host server";
+	case 1: return "ice webrtc room host server";
+	case 2: return "network protocol netquake fitzquake rmq fte";
+	case 3: return "host server settings maxplayers map deathmatch coop";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_SetupKeywords(int index)
+{
+	switch (index)
+	{
+	case 0: return "server hostname host name";
+	case 1: return "player name nickname profile";
+	case 2: return "character letters name editor";
+	case 3: return "player colors colour rgb";
+	case 4: return "top shirt player color colour";
+	case 5: return "bottom pants player color colour";
+	case 6: return "apply save setup";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_ControllerKeywords(int index)
+{
+	switch (index)
+	{
+	case CONTROLLER_DEVICE: return "gamepad joystick device";
+	case CONTROLLER_CALIBRATE: return "gyro calibration calibrate";
+	case CONTROLLER_TEST: return "gamepad joystick controller test buttons axes";
+	case CONTROLLER_TOUCHPAD: return "trackpad mouse cursor";
+	case CONTROLLER_GYRO_ENABLE: case CONTROLLER_GYRO_MODE: case CONTROLLER_GYRO_AXIS:
+	case CONTROLLER_GYRO_SENSX: case CONTROLLER_GYRO_SENSY: case CONTROLLER_GYRO_NOISE:
+		return "gyro motion aiming";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_SkyKeywords(int index)
+{
+	switch (index)
+	{
+	case SKY_FASTSKY: return "flat sky performance";
+	case SKY_FASTSKY_COLOR: return "sky colour rgb";
+	case SKY_ALLOW_DOWNLOAD: return "download skybox";
+	case SKY_GLOBALSKY: return "skybox name texture";
+	case SKY_WIND: return "wind clouds movement motion";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_SkywindKeywords(int index)
+{
+	(void)index;
+	return "sky wind clouds motion";
+}
+
+static const char *MenuSearch_VoipKeywords(int index)
+{
+	switch (index)
+	{
+	case VOIP_SEND: return "voice chat transmit activation";
+	case VOIP_MICVOL: case VOIP_MICAMP: case VOIP_VADTHRESH: case VOIP_VADDELAY:
+	case VOIP_NOISEFILTER: case VOIP_AUTOGAIN: case VOIP_SHOWMETER: case VOIP_TEST:
+		return "microphone mic voice chat";
+	default: return "voice chat voip";
+	}
+}
+
+static const char *MenuSearch_CrosshairKeywords(int index)
+{
+	switch (index)
+	{
+	case CROSSHAIR_TOGGLE: return "reticle aim sight style";
+	case CROSSHAIR_COLOR: case CROSSHAIR_COLOR_PICKER: return "reticle colour rgb";
+	case CROSSHAIR_X: case CROSSHAIR_Y: return "reticle position offset";
+	default: return "reticle aim sight";
+	}
+}
+
+static const char *MenuSearch_PlayerXrayKeywords(int index)
+{
+	switch (index)
+	{
+	case PLAYERXRAY_TARGETS: return "players enemies teammates wallhack visibility";
+	case PLAYERXRAY_STYLE: return "body outline render";
+	case PLAYERXRAY_ALPHA: return "transparency";
+	case PLAYERXRAY_DISTANCE: return "range distance";
+	case PLAYERXRAY_ENEMYCOLOR: case PLAYERXRAY_TEAMCOLOR: return "colour rgb";
+	case PLAYERXRAY_MATCHSIZE: return "gametype team size";
+	default: return "player xray";
+	}
+}
+
+static void M_MenuSearch_OpenOptionsItem(int index)
+{
+	M_ReleaseSliderGrab();
+	M_Menu_Options_f();
+	options_cursor = index;
+}
+
+static void M_MenuSearch_OpenGraphicsItem(int index)
+{
+	M_Menu_Graphics_f();
+	graphics_slider_grab = false;
+	graphics_cursor = (enum graphics_e)index;
+}
+
+static void M_MenuSearch_OpenSoundItem(int index)
+{
+	M_Menu_Sound_f();
+	sound_slider_grab = false;
+	sound_cursor = (enum sound_e)index;
+}
+
+static void M_MenuSearch_OpenGameItem(int index)
+{
+	M_Menu_Game_f();
+	game_slider_grab = false;
+	game_cursor = (enum game_e)index;
+}
+
+static void M_MenuSearch_OpenHUDItem(int index)
+{
+	M_Menu_HUD_f();
+	hud_slider_grab = false;
+	hud_cursor = (enum hud_e)index;
+}
+
+static void M_MenuSearch_OpenConsoleItem(int index)
+{
+	M_Menu_Console_f();
+	console_slider_grab = false;
+	console_cursor = (enum console_e)index;
+}
+
+static void M_MenuSearch_OpenMainItem(int index)
+{
+	switch (index)
+	{
+	case MAIN_SINGLEPLAYER: M_Menu_SinglePlayer_f(); break;
+	case MAIN_MULTIPLAYER: M_Menu_MultiPlayer_f(); break;
+	case MAIN_OPTIONS: M_Menu_Options_f(); break;
+	case MAIN_MODS: M_Menu_Mods_f(); break;
+	case MAIN_DEMOS: M_Menu_Demos_f(); break;
+	case MAIN_HELP: M_Menu_Help_f(); break;
+	case MAIN_QUIT:
+		M_Menu_Main_f();
+		m_main_cursor = MAIN_QUIT;
+		break;
+	}
+}
+
+static void M_MenuSearch_OpenSinglePlayerItem(int index)
+{
+	switch (index)
+	{
+	case 0:
+		M_Menu_SinglePlayer_f();
+		m_singleplayer_cursor = 0;
+		break;
+	case 1: M_Menu_Load_f(); break;
+	case 2: M_Menu_Save_f(); break;
+	case 3: M_Menu_Maps_f(); break;
+	}
+}
+
+static void M_MenuSearch_OpenMultiplayerItem(int index)
+{
+	if (index == 2)
+	{
+		M_Menu_Setup_f();
+		return;
+	}
+	m_multiplayer_cursor = index;
+	lanConfig_cursor = -1;
+	M_Menu_LanConfig_f();
+}
+
+static void M_MenuSearch_OpenJoinItem(int index)
+{
+	static const int cursors[] = {
+		LANCONFIG_CURSOR_JOINGAME_SEARCH_LAN,
+		LANCONFIG_CURSOR_JOINGAME_SEARCH_WEB,
+		LANCONFIG_CURSOR_JOINGAME_HISTORY,
+		LANCONFIG_CURSOR_JOINGAME_BOOKMARKS,
+		LANCONFIG_CURSOR_JOINGAME_JOIN
+	};
+	m_multiplayer_cursor = 0;
+	lanConfig_cursor = -1;
+	M_Menu_LanConfig_f();
+	lanConfig_cursor = cursors[index];
+}
+
+static void M_MenuSearch_OpenHostItem(int index)
+{
+	m_multiplayer_cursor = 1;
+	lanConfig_cursor = -1;
+	M_Menu_LanConfig_f();
+	switch (index)
+	{
+	case 0: lanConfig_cursor = LANCONFIG_CURSOR_PORT; break;
+	case 1: lanConfig_cursor = LANCONFIG_CURSOR_NEWGAME_ROOM; break;
+	case 2: lanConfig_cursor = M_LanConfig_NewGameProtocolCursor(); break;
+	case 3: lanConfig_cursor = M_LanConfig_NewGameOkCursor(); break;
+	}
+}
+
+static void M_MenuSearch_OpenSetupItem(int index)
+{
+	M_Menu_Setup_f();
+	setup_cursor = index;
+}
+
+static void M_MenuSearch_OpenKeyItem(int index)
+{
+	keydevicemask_t mask = quakebindnames[index].devicemask;
+	int actual = -1, i;
+
+	M_Menu_Keys_f();
+	if (mask == KDM_GAMEPAD)
+		M_Keys_SetDeviceMask(KDM_GAMEPAD);
+	else if (mask == KDM_KEYBOARD_AND_MOUSE)
+		M_Keys_SetDeviceMask(KDM_KEYBOARD_AND_MOUSE);
+	for (i = 0; i < numbindnames; ++i)
+		if (!strcmp(bindnames[i].cmd, quakebindnames[index].cmd))
+		{
+			actual = i;
+			break;
+		}
+	if (actual < 0)
+		return;
+	for (i = 0; i < keysmenu.num_filtered; ++i)
+		if (keysmenu.filtered_indices[i] == actual)
+		{
+			keysmenu.list.cursor = i;
+			M_List_CenterCursor(&keysmenu.list);
+			break;
+		}
+}
+
+static void M_MenuSearch_OpenMouseItem(int index)
+{
+	M_Menu_Mouse_f();
+	mouse_slider_grab = false;
+	mouse_cursor = (enum mouse_e)index;
+}
+
+static void M_MenuSearch_OpenControllerItem(int index)
+{
+	int i, visible = 0;
+	M_Menu_Controller_f();
+	for (i = 0; i < index; ++i)
+		if (M_Controller_IsOptionVisible(i))
+			visible++;
+	controller_cursor = visible;
+	controller_scroll = CLAMP(0, visible - CONTROLLER_MAX_VISIBLE / 2,
+		q_max(0, M_Controller_GetVisibleItemCount() - CONTROLLER_MAX_VISIBLE));
+}
+
+static void M_MenuSearch_OpenSkyItem(int index)
+{
+	M_Menu_Sky_f();
+	sky_slider_grab = false;
+	sky_field_editing = false;
+	sky_cursor = (enum sky_e)index;
+}
+
+static void M_MenuSearch_OpenSkywindItem(int index)
+{
+	M_Menu_Skywind_f();
+	skywind_slider_grab = false;
+	skywind_cursor = (enum skywind_e)index;
+}
+
+static void M_MenuSearch_OpenVoipItem(int index)
+{
+	M_Menu_Voip_f();
+	voip_slider_grab = false;
+	voip_cursor = (enum voip_e)index;
+}
+
+static void M_MenuSearch_OpenCrosshairItem(int index)
+{
+	M_Menu_Crosshair_f();
+	crosshair_slider_grab = false;
+	crosshair_cursor = (enum crosshair_e)index;
+}
+
+static void M_MenuSearch_OpenPlayerXrayItem(int index)
+{
+	M_Menu_PlayerXray_f();
+	playerxray_slider_grab = false;
+	playerxray_cursor = (enum playerxray_e)index;
+}
+
+enum
+{
+	MENUSEARCH_PROVIDER_OPTIONS,
+	MENUSEARCH_PROVIDER_VIDEO,
+	MENUSEARCH_PROVIDER_GRAPHICS,
+	MENUSEARCH_PROVIDER_SOUND,
+	MENUSEARCH_PROVIDER_GAME,
+	MENUSEARCH_PROVIDER_HUD,
+	MENUSEARCH_PROVIDER_CONSOLE,
+	MENUSEARCH_PROVIDER_MAIN,
+	MENUSEARCH_PROVIDER_SINGLEPLAYER,
+	MENUSEARCH_PROVIDER_MULTIPLAYER,
+	MENUSEARCH_PROVIDER_JOIN,
+	MENUSEARCH_PROVIDER_HOST,
+	MENUSEARCH_PROVIDER_SETUP,
+	MENUSEARCH_PROVIDER_KEYS,
+	MENUSEARCH_PROVIDER_MOUSE,
+	MENUSEARCH_PROVIDER_CONTROLLER,
+	MENUSEARCH_PROVIDER_SKY,
+	MENUSEARCH_PROVIDER_SKYWIND,
+	MENUSEARCH_PROVIDER_VOIP,
+	MENUSEARCH_PROVIDER_CROSSHAIR,
+	MENUSEARCH_PROVIDER_PLAYERXRAY,
+	MENUSEARCH_PROVIDER_EXTRAS,
+	MENUSEARCH_PROVIDER_SAVING,
+	MENUSEARCH_PROVIDER_STARTUP,
+	MENUSEARCH_PROVIDER_DEMOOPTIONS
+};
+
+static const menusearch_provider_t menusearch_providers[] = {
+	{"options", "Options", menusearch_options_labels, OPTIONS_ITEMS, M_Options_GetItemText, M_Options_GetItemCvar, M_Options_GetItemHintText, MenuSearch_OptionsKeywords, NULL, MenuSearch_OptionsAvailable, M_MenuSearch_OpenOptionsItem},
+	{"video", "Options > Display", menusearch_video_labels, VID_MENU_SEARCH_ITEMS, VID_MenuSearch_GetItemText, VID_MenuSearch_GetItemCvar, VID_MenuSearch_GetItemHintText, MenuSearch_VideoKeywords, VID_MenuSearch_GetValueText, VID_MenuSearch_ItemAvailable, VID_MenuSearch_OpenItem},
+	{"graphics", "Options > Graphics", menusearch_graphics_labels, GRAPHICS_ITEMS, M_Graphics_GetItemText, M_Graphics_GetItemCvar, M_Graphics_GetItemHintText, MenuSearch_GraphicsKeywords, NULL, NULL, M_MenuSearch_OpenGraphicsItem},
+	{"sound", "Options > Sound", menusearch_sound_labels, SOUND_ITEMS, M_Sound_GetItemText, M_Sound_GetItemCvar, NULL, MenuSearch_SoundKeywords, NULL, NULL, M_MenuSearch_OpenSoundItem},
+	{"game", "Options > Game", menusearch_game_labels, GAME_ITEMS, M_Game_GetItemText, M_Game_GetItemCvar, M_Game_GetItemHintText, MenuSearch_GameKeywords, NULL, NULL, M_MenuSearch_OpenGameItem},
+	{"hud", "Options > HUD", menusearch_hud_labels, HUD_ITEMS, M_HUD_GetItemText, M_HUD_GetItemCvar, NULL, MenuSearch_HUDKeywords, NULL, NULL, M_MenuSearch_OpenHUDItem},
+	{"console", "Options > Console", menusearch_console_labels, CONSOLE_ITEMS, M_Console_GetItemText, M_Console_GetItemCvar, M_Console_GetItemHintText, MenuSearch_ConsoleKeywords, NULL, NULL, M_MenuSearch_OpenConsoleItem},
+	{"main", "Main Menu", menusearch_main_labels, MAIN_ITEMS, MenuSearch_MainText, NULL, NULL, MenuSearch_MainKeywords, NULL, MenuSearch_MainAvailable, M_MenuSearch_OpenMainItem},
+	{"singleplayer", "Single Player", menusearch_singleplayer_labels, Q_COUNTOF(menusearch_singleplayer_labels), MenuSearch_SinglePlayerText, NULL, NULL, MenuSearch_SinglePlayerKeywords, NULL, MenuSearch_SinglePlayerAvailable, M_MenuSearch_OpenSinglePlayerItem},
+	{"multiplayer", "Multiplayer", menusearch_multiplayer_labels, MULTIPLAYER_BASE_ITEMS, MenuSearch_MultiplayerText, NULL, NULL, MenuSearch_MultiplayerKeywords, NULL, MenuSearch_MultiplayerAvailable, M_MenuSearch_OpenMultiplayerItem},
+	{"join", "Multiplayer > Join Game", menusearch_join_labels, Q_COUNTOF(menusearch_join_labels), MenuSearch_JoinText, NULL, NULL, MenuSearch_JoinKeywords, NULL, MenuSearch_NetworkAvailable, M_MenuSearch_OpenJoinItem},
+	{"host", "Multiplayer > New Game", menusearch_host_labels, Q_COUNTOF(menusearch_host_labels), MenuSearch_HostText, NULL, NULL, MenuSearch_HostKeywords, NULL, MenuSearch_HostAvailable, M_MenuSearch_OpenHostItem},
+	{"setup", "Multiplayer > Setup", menusearch_setup_labels, NUM_SETUP_CMDS, MenuSearch_SetupText, NULL, NULL, MenuSearch_SetupKeywords, NULL, NULL, M_MenuSearch_OpenSetupItem},
+	{"keys", "Options > Key/Button Setup", NULL, NUMQUAKECOMMANDS, MenuSearch_KeyText, NULL, NULL, MenuSearch_KeyKeywords, NULL, MenuSearch_KeyAvailable, M_MenuSearch_OpenKeyItem},
+	{"mouse", "Options > Mouse", menusearch_mouse_labels, MOUSE_ITEMS, M_Mouse_GetItemText, M_Mouse_GetItemCvar, M_Mouse_GetItemHintText, NULL, NULL, NULL, M_MenuSearch_OpenMouseItem},
+	{"controller", "Options > Controller", menusearch_controller_labels, CONTROLLER_ITEMS, M_Controller_GetItemText, M_Controller_GetItemCvar, NULL, MenuSearch_ControllerKeywords, NULL, MenuSearch_ControllerAvailable, M_MenuSearch_OpenControllerItem},
+	{"sky", "Options > Graphics > Sky", menusearch_sky_labels, SKY_ITEMS, M_Sky_GetItemText, M_Sky_GetItemCvar, NULL, MenuSearch_SkyKeywords, NULL, NULL, M_MenuSearch_OpenSkyItem},
+	{"skywind", "Options > Graphics > Sky > Skywind", menusearch_skywind_labels, SKYWIND_ITEMS, M_Skywind_GetItemText, NULL, NULL, MenuSearch_SkywindKeywords, M_Skywind_GetValueText, NULL, M_MenuSearch_OpenSkywindItem},
+	{"voip", "Options > Sound > VoIP", menusearch_voip_labels, VOIP_ITEMS, M_Voip_GetItemText, M_Voip_GetItemCvar, NULL, MenuSearch_VoipKeywords, NULL, NULL, M_MenuSearch_OpenVoipItem},
+	{"crosshair", "Options > HUD > Crosshair", menusearch_crosshair_labels, CROSSHAIR_ITEMS, M_Crosshair_GetItemText, M_Crosshair_GetItemCvar, NULL, MenuSearch_CrosshairKeywords, NULL, NULL, M_MenuSearch_OpenCrosshairItem},
+	{"playerxray", "Options > Game > Player Xray", menusearch_playerxray_labels, PLAYERXRAY_ITEMS, M_PlayerXray_GetItemText, M_PlayerXray_GetItemCvar, NULL, MenuSearch_PlayerXrayKeywords, M_PlayerXray_GetValueText, NULL, M_MenuSearch_OpenPlayerXrayItem},
+	{"extras", "Options > Misc", menusearch_extras_labels, Q_COUNTOF(menusearch_extras_labels), M_Extras_GetItemText, M_Extras_GetItemCvar, M_Extras_GetItemHintText, NULL, NULL, NULL, M_MenuSearch_OpenExtrasItem},
+	{"saving", "Options > Misc > Saving", menusearch_saving_labels, Q_COUNTOF(menusearch_saving_labels), M_Saving_GetItemText, M_Saving_GetItemCvar, NULL, NULL, M_Saving_GetValueText, NULL, M_MenuSearch_OpenSavingItem},
+	{"startup", "Options > Startup", menusearch_startup_labels, Q_COUNTOF(menusearch_startup_labels), M_Startup_GetItemText, M_Startup_GetItemCvar, NULL, NULL, NULL, MenuSearch_StartupAvailable, M_MenuSearch_OpenStartupItem},
+	{"demooptions", "Options > Demo Options", menusearch_demooptions_labels, Q_COUNTOF(menusearch_demooptions_labels), M_DemoOptions_GetItemText, M_DemoOptions_GetItemCvar, NULL, NULL, M_DemoOptions_GetValueText, NULL, M_MenuSearch_OpenDemoOptionsItem}
+};
+
+static const char *MenuSearch_Label(const menusearch_provider_t *provider, int index)
+{
+	const char *label;
+
+	if (!provider || index < 0 || index >= provider->count)
+		return "";
+	label = provider->expected_labels ? provider->expected_labels[index] : NULL;
+	if (label && label[0])
+		return label;
+	label = provider->text_fn ? provider->text_fn(index) : NULL;
+	return label ? label : "";
+}
+
+static struct
+{
+	qboolean active;
+	enum m_state_e origin_state;
+	qboolean block_b_until_release;
+	char query[MENU_SEARCH_QUERY_CHARS + 1];
+	menu_textfield_t field;
+	menusearch_result_t results[MENU_SEARCH_MAX_RESULTS];
+	int result_count;
+	int cursor;
+	int scroll;
+	qboolean empty_mode;
+	int empty_recent_count;
+	int empty_browse_start;
+	qboolean scrollbar_grab;
+	int recent_provider[MENU_SEARCH_RECENTS];
+	int recent_index[MENU_SEARCH_RECENTS];
+	int recent_count;
+	double status_until;
+	char status[64];
+} menusearch;
+
+static void MenuSearch_Normalize(const char *in, char *out, size_t outsize)
+{
+	size_t n = 0;
+	qboolean space = true;
+
+	while (*in && n + 1 < outsize)
+	{
+		unsigned char c = (unsigned char)*in++;
+		if (c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+		{
+			out[n++] = (char)c;
+			space = false;
+		}
+		else if (!space)
+		{
+			out[n++] = ' ';
+			space = true;
+		}
+	}
+	while (n && out[n - 1] == ' ')
+		n--;
+	out[n] = 0;
+}
+
+static qboolean MenuSearch_ItemAvailable(const menusearch_provider_t *provider, int index)
+{
+	if (!provider || !provider->text_fn || !provider->open_fn ||
+		index < 0 || index >= provider->count || !MenuSearch_Label(provider, index)[0])
+		return false;
+	return !provider->available_fn || provider->available_fn(index);
+}
+
+static int MenuSearch_Score(const menusearch_provider_t *provider, int index, const char *query)
+{
+	char label[96], path[96], cvarname[96], hint[192], keywords[192], haystack[672];
+	char terms[MENU_SEARCH_QUERY_CHARS + 1], *term;
+	const char *label_text = MenuSearch_Label(provider, index);
+	cvar_t *cv = provider->cvar_fn ? provider->cvar_fn(index) : NULL;
+	const char *hint_text = provider->hint_fn ? provider->hint_fn(index) : NULL;
+	const char *keyword_text = provider->keywords_fn ? provider->keywords_fn(index) : NULL;
+	int score = 0;
+
+	MenuSearch_Normalize(label_text, label, sizeof(label));
+	MenuSearch_Normalize(provider->path, path, sizeof(path));
+	MenuSearch_Normalize(cv ? cv->name : "", cvarname, sizeof(cvarname));
+	MenuSearch_Normalize(hint_text ? hint_text : "", hint, sizeof(hint));
+	MenuSearch_Normalize(keyword_text ? keyword_text : "", keywords, sizeof(keywords));
+	q_snprintf(haystack, sizeof(haystack), "%s %s %s %s %s", label, path, cvarname, hint, keywords);
+	q_strlcpy(terms, query, sizeof(terms));
+
+	for (term = strtok(terms, " "); term; term = strtok(NULL, " "))
+	{
+		const char *match = strstr(haystack, term);
+		if (!match)
+			return 0;
+		score += 100;
+		if (!strcmp(label, term)) score += 900;
+		else if (!strncmp(label, term, strlen(term))) score += 500;
+		else if (strstr(label, term)) score += 300;
+		else if (strstr(cvarname, term)) score += 180;
+		else if (strstr(keywords, term)) score += 140;
+		else if (strstr(path, term)) score += 100;
+	}
+	if (!strcmp(label, query)) score += 1600;
+	else if (cvarname[0] && !strcmp(cvarname, query)) score += 1500;
+	else if (!strncmp(label, query, strlen(query))) score += 800;
+	return score;
+}
+
+static int MenuSearch_CompareResults(const void *left, const void *right)
+{
+	const menusearch_result_t *a = (const menusearch_result_t *)left;
+	const menusearch_result_t *b = (const menusearch_result_t *)right;
+	int cmp;
+
+	if (a->score != b->score)
+		return b->score - a->score;
+	if (strlen(MenuSearch_Label(a->provider, a->index)) != strlen(MenuSearch_Label(b->provider, b->index)))
+		return (int)strlen(MenuSearch_Label(a->provider, a->index)) - (int)strlen(MenuSearch_Label(b->provider, b->index));
+	cmp = q_strcasecmp(a->provider->path, b->provider->path);
+	if (cmp)
+		return cmp;
+	return q_strcasecmp(MenuSearch_Label(a->provider, a->index), MenuSearch_Label(b->provider, b->index));
+}
+
+static void MenuSearch_AddResult(const menusearch_provider_t *provider, int index, int score)
+{
+	int i;
+	if (!MenuSearch_ItemAvailable(provider, index) || menusearch.result_count >= MENU_SEARCH_MAX_RESULTS)
+		return;
+	for (i = 0; i < menusearch.result_count; ++i)
+		if (menusearch.results[i].provider == provider && menusearch.results[i].index == index)
+			return;
+	menusearch.results[menusearch.result_count].provider = provider;
+	menusearch.results[menusearch.result_count].index = index;
+	menusearch.results[menusearch.result_count].score = score;
+	menusearch.result_count++;
+}
+
+static void MenuSearch_Rebuild(void)
+{
+	char query[MENU_SEARCH_QUERY_CHARS + 1];
+	const menusearch_provider_t *old_provider = NULL;
+	int old_index = -1;
+	int p, i;
+
+	if (menusearch.cursor >= 0 && menusearch.cursor < menusearch.result_count)
+	{
+		old_provider = menusearch.results[menusearch.cursor].provider;
+		old_index = menusearch.results[menusearch.cursor].index;
+	}
+	MenuSearch_Normalize(menusearch.query, query, sizeof(query));
+	menusearch.empty_mode = query[0] == 0;
+	if (menu_search_debug.value)
+		Con_Printf("menu_search: query '%s' (normalized '%s')\n", menusearch.query, query);
+	menusearch.result_count = 0;
+	menusearch.cursor = 0;
+	menusearch.scroll = 0;
+	menusearch.empty_recent_count = 0;
+	menusearch.empty_browse_start = 0;
+
+	if (menusearch.empty_mode)
+	{
+		/* Two visible recents plus two headers leave room for all eight Browse
+		 * destinations. Keep five internally for ranking and future journeys. */
+		for (i = 0; i < q_min(menusearch.recent_count, MENU_SEARCH_EMPTY_RECENTS); ++i)
+			MenuSearch_AddResult(&menusearch_providers[menusearch.recent_provider[i]], menusearch.recent_index[i], 2000 - i);
+		menusearch.empty_recent_count = menusearch.result_count;
+		menusearch.empty_browse_start = menusearch.result_count;
+		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_SINGLEPLAYER, 1000);
+		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_MULTIPLAYER, 990);
+		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_OPTIONS, 980);
+		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_SINGLEPLAYER], 3, 970);
+		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_MODS, 960);
+		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_DEMOS, 950);
+		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_JOIN], 1, 940);
+		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_HELP, 930);
+		return;
+	}
+
+	for (p = 0; p < (int)Q_COUNTOF(menusearch_providers); ++p)
+		for (i = 0; i < menusearch_providers[p].count; ++i)
+		{
+			int score;
+			if (!MenuSearch_ItemAvailable(&menusearch_providers[p], i))
+				continue;
+			score = MenuSearch_Score(&menusearch_providers[p], i, query);
+			if (score)
+			{
+				int recent;
+				for (recent = 0; recent < menusearch.recent_count; ++recent)
+					if (menusearch.recent_provider[recent] == p && menusearch.recent_index[recent] == i)
+					{
+						score += MENU_SEARCH_RECENTS - recent;
+						break;
+					}
+				MenuSearch_AddResult(&menusearch_providers[p], i, score);
+				if (menu_search_debug.value)
+					Con_Printf("menu_search: score=%4d label='%s' path='%s'%s%s\n", score,
+						MenuSearch_Label(&menusearch_providers[p], i), menusearch_providers[p].path,
+						menusearch_providers[p].cvar_fn && menusearch_providers[p].cvar_fn(i) ? " cvar=" : "",
+						menusearch_providers[p].cvar_fn && menusearch_providers[p].cvar_fn(i) ? menusearch_providers[p].cvar_fn(i)->name : "");
+			}
+		}
+	qsort(menusearch.results, menusearch.result_count, sizeof(menusearch.results[0]), MenuSearch_CompareResults);
+	if (old_provider)
+		for (i = 0; i < menusearch.result_count; ++i)
+			if (menusearch.results[i].provider == old_provider && menusearch.results[i].index == old_index)
+			{
+				menusearch.cursor = i;
+				menusearch.scroll = q_max(0, i - MENU_SEARCH_VISIBLE_ROWS + 1);
+				break;
+			}
+}
+
+static void MenuSearch_RecordRecent(const menusearch_provider_t *provider, int index)
+{
+	int provider_index = (int)(provider - menusearch_providers);
+	int found = -1, i;
+	for (i = 0; i < menusearch.recent_count; ++i)
+		if (menusearch.recent_provider[i] == provider_index && menusearch.recent_index[i] == index)
+			found = i;
+	if (found < 0)
+	{
+		found = q_min(menusearch.recent_count, MENU_SEARCH_RECENTS - 1);
+		menusearch.recent_count++;
+	}
+	menusearch.recent_count = q_min(menusearch.recent_count, MENU_SEARCH_RECENTS);
+	for (i = found; i > 0; --i)
+	{
+		menusearch.recent_provider[i] = menusearch.recent_provider[i - 1];
+		menusearch.recent_index[i] = menusearch.recent_index[i - 1];
+	}
+	menusearch.recent_provider[0] = provider_index;
+	menusearch.recent_index[0] = index;
+}
+
+static void MenuSearch_Activate(void)
+{
+	menusearch_result_t result;
+	if (menusearch.cursor < 0 || menusearch.cursor >= menusearch.result_count)
+		return;
+	result = menusearch.results[menusearch.cursor];
+	if (!MenuSearch_ItemAvailable(result.provider, result.index))
+	{
+		q_strlcpy(menusearch.status, "That menu item is no longer available", sizeof(menusearch.status));
+		menusearch.status_until = realtime + 2.0;
+		S_LocalSound("misc/menu1.wav");
+		MenuSearch_Rebuild();
+		return;
+	}
+	MenuSearch_RecordRecent(result.provider, result.index);
+	M_MenuSearch_Close(false, true);
+	/* Activation bypasses the origin menu's normal Back handler. Release the
+	 * same resources those handlers release before changing menu state. */
+	if (m_state == m_slist)
+		CleanupPingThreads();
+	else if (m_state == m_audiobrowser)
+		M_AudioBrowser_Close();
+	else if (m_state == m_video && result.provider != &menusearch_providers[MENUSEARCH_PROVIDER_VIDEO])
+		VID_MenuSearch_LeaveMenu();
+	else if (m_state == m_pakloading)
+		M_MenuSearch_LeavePakLoading();
+	result.provider->open_fn(result.index);
+	m_entersound = false;
+	S_LocalSound("misc/menu2.wav");
+}
+
+static qboolean MenuSearch_IsModalState(enum m_state_e state)
+{
+	return state == m_colorpicker || state == m_namemaker || state == m_skill ||
+		state == m_quit || state == m_resetconfig || state == m_bookmarks_edit ||
+		state == m_controller_test || state == m_calibration ||
+		MenuSearch_HasLocalModalState(state);
+}
+
+static qboolean MenuSearch_IsActive(void)
+{
+	return menusearch.active;
+}
+
+static qboolean MenuSearch_CanOpenImplicit(void)
+{
+	return menu_search_enable.value && key_dest == key_menu && m_state != m_none &&
+		windowhasfocus && !bind_grab && !cls.menu_qcvm.extfuncs.m_draw && !MenuSearch_IsModalState(m_state);
+}
+
+qboolean M_MenuSearch_UseGamepadBack(void)
+{
+	return menu_search_enable.value && (menusearch.active || MenuSearch_CanOpenImplicit());
+}
+
+static void M_MenuSearch_Open(void)
+{
+	if (!MenuSearch_CanOpenImplicit() || menusearch.active)
+		return;
+	menusearch.active = true;
+	menusearch.status_until = 0.0;
+	menusearch.scrollbar_grab = false;
+	textfield_drag_field = NULL;
+	textfield_mouse_dragging = false;
+	M_ReleaseSliderGrab();
+	graphics_slider_grab = false;
+	sound_slider_grab = false;
+	game_slider_grab = false;
+	hud_slider_grab = false;
+	console_slider_grab = false;
+	if (menusearch.origin_state != m_state)
+		menusearch.query[0] = 0;
+	menusearch.origin_state = m_state;
+	M_TextField_Init(&menusearch.field, menusearch.query, MENU_SEARCH_QUERY_CHARS, false);
+	MenuSearch_Rebuild();
+	M_LivePreview_Reset();
+	S_LocalSound("misc/menu2.wav");
+}
+
+static void M_MenuSearch_Close(qboolean play_sound, qboolean clear_query)
+{
+	if (!menusearch.active)
+		return;
+	menusearch.active = false;
+	menusearch.scrollbar_grab = false;
+	menusearch.status_until = 0.0;
+	if (clear_query)
+	{
+		menusearch.query[0] = 0;
+		M_TextField_Init(&menusearch.field, menusearch.query, MENU_SEARCH_QUERY_CHARS, false);
+	}
+	if (textfield_drag_field == &menusearch.field)
+	{
+		textfield_drag_field = NULL;
+		textfield_mouse_dragging = false;
+	}
+	if (play_sound)
+		S_LocalSound("misc/menu1.wav");
+}
+
+static void M_MenuSearch_Toggle(void)
+{
+	if (menusearch.active)
+		M_MenuSearch_Close(true, false);
+	else
+		M_MenuSearch_Open();
+}
+
+static void MenuSearch_MoveCursor(int delta)
+{
+	if (!menusearch.result_count)
+		return;
+	menusearch.cursor = (menusearch.cursor + delta + menusearch.result_count) % menusearch.result_count;
+	if (menusearch.cursor < menusearch.scroll)
+		menusearch.scroll = menusearch.cursor;
+	if (menusearch.cursor >= menusearch.scroll + MENU_SEARCH_VISIBLE_ROWS)
+		menusearch.scroll = menusearch.cursor - MENU_SEARCH_VISIBLE_ROWS + 1;
+	S_LocalSound("misc/menu1.wav");
+}
+
+static void MenuSearch_MoveCursorClamped(int delta)
+{
+	int old_cursor = menusearch.cursor;
+	if (!menusearch.result_count)
+		return;
+	menusearch.cursor = CLAMP(0, menusearch.cursor + delta, menusearch.result_count - 1);
+	if (menusearch.cursor < menusearch.scroll)
+		menusearch.scroll = menusearch.cursor;
+	if (menusearch.cursor >= menusearch.scroll + MENU_SEARCH_VISIBLE_ROWS)
+		menusearch.scroll = menusearch.cursor - MENU_SEARCH_VISIBLE_ROWS + 1;
+	if (menusearch.cursor != old_cursor)
+		S_LocalSound("misc/menu1.wav");
+}
+
+static int MenuSearch_EmptyResultRow(int result_index)
+{
+	if (menusearch.empty_recent_count > 0)
+		return result_index < menusearch.empty_browse_start ? result_index + 1 : result_index + 2;
+	return result_index + 1;
+}
+
+static int MenuSearch_ResultAtVisualRow(int visual_row)
+{
+	int i;
+	if (visual_row < 0 || visual_row >= MENU_SEARCH_VISIBLE_ROWS)
+		return -1;
+	if (!menusearch.empty_mode)
+	{
+		i = menusearch.scroll + visual_row;
+		return i < menusearch.result_count ? i : -1;
+	}
+	for (i = 0; i < menusearch.result_count; ++i)
+		if (MenuSearch_EmptyResultRow(i) == visual_row)
+			return i;
+	return -1;
+}
+
+static void MenuSearch_UpdateScrollbar(int y)
+{
+	menulist_t list = {0};
+
+	list.cursor = menusearch.cursor;
+	list.numitems = menusearch.result_count;
+	list.viewsize = MENU_SEARCH_VISIBLE_ROWS;
+	list.scroll = menusearch.scroll;
+	if (!M_List_UseScrollbar(&list, y - 56))
+		return;
+	menusearch.scroll = list.scroll;
+	menusearch.cursor = CLAMP(menusearch.scroll, menusearch.cursor,
+		menusearch.scroll + MENU_SEARCH_VISIBLE_ROWS - 1);
+}
+
+static void M_MenuSearch_Key(int key, qboolean repeat)
+{
+	char old_query[sizeof(menusearch.query)];
+	int clicked;
+
+	if (repeat)
+	{
+		switch (key)
+		{
+		case K_UPARROW: case K_DOWNARROW:
+		case K_PGUP: case K_PGDN:
+		case K_KP_PGUP: case K_KP_PGDN:
+		case K_BACKSPACE: case K_DEL:
+			break;
+		default:
+			return;
+		}
+	}
+
+	if ((key == 'k' || key == 'K') && Key_IsShortcutModifierDown())
+	{
+		M_MenuSearch_Close(true, false);
+		return;
+	}
+	if (key == K_ESCAPE)
+	{
+		if (menusearch.query[0])
+		{
+			menusearch.query[0] = 0;
+			M_TextField_Init(&menusearch.field, menusearch.query, MENU_SEARCH_QUERY_CHARS, false);
+			MenuSearch_Rebuild();
+			S_LocalSound("misc/menu1.wav");
+		}
+		else
+			M_MenuSearch_Close(true, true);
+		return;
+	}
+	if (key == K_MOUSE2 || key == K_MOUSE4 || key == K_BACK)
+	{
+		M_MenuSearch_Close(true, false);
+		return;
+	}
+	if (key == K_MOUSE1)
+	{
+		if (m_mousex < 8 || m_mousex >= 312 || m_mousey < 8 || m_mousey >= 192)
+			M_MenuSearch_Close(true, true);
+		else if (m_mousex >= 16 && m_mousex < 304 && M_TextField_MouseInRow(m_mousey, 32))
+			M_TextField_MouseClick(&menusearch.field, m_mousex, 24);
+		else if (!menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS &&
+			m_mousex >= 296 && m_mousex < 304 && m_mousey >= 56 && m_mousey < 152)
+		{
+			menusearch.scrollbar_grab = true;
+			MenuSearch_UpdateScrollbar(m_mousey);
+		}
+		else if (m_mousex >= 16 && m_mousex < 296 && m_mousey >= 56 && m_mousey < 152)
+		{
+			clicked = MenuSearch_ResultAtVisualRow((m_mousey - 56) / 8);
+			if (clicked >= 0)
+			{
+				menusearch.cursor = clicked;
+				MenuSearch_Activate();
+			}
+		}
+		return;
+	}
+	if (key == K_ENTER || key == K_KP_ENTER || key == K_ABUTTON)
+	{
+		MenuSearch_Activate();
+		return;
+	}
+	if (key == K_UPARROW || key == K_MWHEELUP)
+	{
+		if (key == K_MWHEELUP) MenuSearch_MoveCursorClamped(-3);
+		else MenuSearch_MoveCursor(-1);
+		return;
+	}
+	if (key == K_DOWNARROW || key == K_MWHEELDOWN)
+	{
+		if (key == K_MWHEELDOWN) MenuSearch_MoveCursorClamped(3);
+		else MenuSearch_MoveCursor(1);
+		return;
+	}
+	if (key == K_TAB)
+	{
+		if (menusearch.empty_mode && menusearch.empty_recent_count > 0 &&
+			menusearch.empty_browse_start < menusearch.result_count)
+		{
+			if (keydown[K_SHIFT])
+				menusearch.cursor = menusearch.cursor >= menusearch.empty_browse_start ? 0 : menusearch.empty_browse_start;
+			else
+				menusearch.cursor = menusearch.cursor < menusearch.empty_browse_start ? menusearch.empty_browse_start : 0;
+			S_LocalSound("misc/menu1.wav");
+		}
+		return;
+	}
+	if (key == K_HOME || key == K_KP_HOME)
+	{
+		if (menusearch.result_count) { menusearch.cursor = 0; menusearch.scroll = 0; S_LocalSound("misc/menu1.wav"); }
+		return;
+	}
+	if (key == K_END || key == K_KP_END)
+	{
+		if (menusearch.result_count) { menusearch.cursor = menusearch.result_count - 1; menusearch.scroll = q_max(0, menusearch.result_count - MENU_SEARCH_VISIBLE_ROWS); S_LocalSound("misc/menu1.wav"); }
+		return;
+	}
+	if (key == K_PGUP || key == K_KP_PGUP || key == K_LSHOULDER)
+	{
+		MenuSearch_MoveCursorClamped(-(MENU_SEARCH_VISIBLE_ROWS - 1));
+		return;
+	}
+	if (key == K_PGDN || key == K_KP_PGDN || key == K_RSHOULDER)
+	{
+		MenuSearch_MoveCursorClamped(MENU_SEARCH_VISIBLE_ROWS - 1);
+		return;
+	}
+	if (key == K_XBUTTON)
+	{
+		if (menusearch.query[0])
+		{
+			menusearch.query[0] = 0;
+			M_TextField_Init(&menusearch.field, menusearch.query, MENU_SEARCH_QUERY_CHARS, false);
+			MenuSearch_Rebuild();
+			S_LocalSound("misc/menu1.wav");
+		}
+		return;
+	}
+
+	q_strlcpy(old_query, menusearch.query, sizeof(old_query));
+	if (M_TextField_Key(&menusearch.field, key) && strcmp(old_query, menusearch.query))
+		MenuSearch_Rebuild();
+}
+
+static void M_MenuSearch_Char(int key)
+{
+	char old_query[sizeof(menusearch.query)];
+	q_strlcpy(old_query, menusearch.query, sizeof(old_query));
+	if (M_TextField_Char(&menusearch.field, key) && strcmp(old_query, menusearch.query))
+		MenuSearch_Rebuild();
+}
+
+static void M_MenuSearch_Mousemove(int x, int y)
+{
+	int result;
+	if (menusearch.scrollbar_grab)
+	{
+		if (!keydown[K_MOUSE1])
+			menusearch.scrollbar_grab = false;
+		else
+			MenuSearch_UpdateScrollbar(y);
+		return;
+	}
+	if (M_TextField_IsDraggingField(&menusearch.field))
+	{
+		M_TextField_MouseDrag(x);
+		return;
+	}
+	if (x < 16 || x >= 304 || y < 56 || y >= 152)
+		return;
+	if (x >= 296 && !menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS)
+		return;
+	result = MenuSearch_ResultAtVisualRow((y - 56) / 8);
+	if (result >= 0)
+		menusearch.cursor = result;
+}
+
+static void M_MenuSearch_Draw(void)
+{
+	int row, shown;
+	char count[32];
+	char detail[320];
+	const char *footer = IN_GetLastActiveDeviceType() == KD_GAMEPAD
+		? "A: open   B: close   X: clear"
+		: "enter: open   esc: clear/close";
+	menusearch_result_t *selected = NULL;
+
+	M_TextField_CheckMouseRelease();
+	if (!keydown[K_MOUSE1])
+		menusearch.scrollbar_grab = false;
+	M_LivePreview_DrawColorOverlay(0.f, 0.f, 0.f, 0.55f);
+	GL_SetCanvas(CANVAS_MENU);
+	M_DrawTextBox(8, 8, 36, 21);
+	M_PrintWhite(16, 16, "Menu Search");
+	M_DrawTextBox(16, 24, 34, 1);
+	M_TextField_DrawHighlight(&menusearch.field, 24, 32);
+	if (!menusearch.query[0])
+		M_PrintRGBA(24, 32, "Search menus and settings", CL_PLColours_Parse("0xffffff"), 0.45f, false);
+	else
+	{
+		M_PrintWhite(24, 32, menusearch.query);
+		M_TextField_DrawCursor(&menusearch.field, 24, 32);
+	}
+	M_DrawQuakeBar(16, 48, 34);
+
+	if (menusearch.empty_mode)
+	{
+		M_PrintRGBA(32, 56, menusearch.empty_recent_count ? "Recent" : "Browse",
+			CL_PLColours_Parse("0xffffff"), 0.55f, false);
+		if (menusearch.empty_recent_count)
+			M_PrintRGBA(32, 56 + (menusearch.empty_recent_count + 1) * 8, "Browse",
+				CL_PLColours_Parse("0xffffff"), 0.55f, false);
+	}
+
+	shown = !menusearch.empty_mode
+		? q_min(MENU_SEARCH_VISIBLE_ROWS, menusearch.result_count - menusearch.scroll)
+		: menusearch.result_count;
+	for (row = 0; row < shown; ++row)
+	{
+		int result_index = !menusearch.empty_mode ? menusearch.scroll + row : row;
+		menusearch_result_t *result = &menusearch.results[result_index];
+		const char *label = MenuSearch_Label(result->provider, result->index);
+		cvar_t *cv = result->provider->cvar_fn ? result->provider->cvar_fn(result->index) : NULL;
+		const char *value = result->provider->value_fn ? result->provider->value_fn(result->index) : NULL;
+		char compact_value[12];
+		int label_width = 264;
+		int visual_row = !menusearch.empty_mode ? row : MenuSearch_EmptyResultRow(result_index);
+		int y = 56 + visual_row * 8;
+		if (visual_row >= MENU_SEARCH_VISIBLE_ROWS)
+			continue;
+		if (result_index == menusearch.cursor)
+			M_DrawCharacter(16, y, 12 + ((int)(realtime * 4) & 1));
+		if (!value && cv && strlen(cv->string) <= 8)
+		{
+			q_strlcpy(compact_value, cv->string, sizeof(compact_value));
+			value = compact_value;
+		}
+		else if (!value && result->provider == &menusearch_providers[MENUSEARCH_PROVIDER_OPTIONS])
+			value = "...";
+		if (value)
+		{
+			int value_x = 296 - (int)strlen(value) * 8;
+			label_width = value_x - 40;
+			M_Print(value_x, y, value);
+		}
+		if (!menusearch.empty_mode)
+			M_PrintHighlightScroll(32, y, label_width, label, menusearch.query,
+				result_index == menusearch.cursor ? realtime : 0.0);
+		else
+			M_PrintScroll(32, y, label_width, label, result_index == menusearch.cursor ? realtime : 0.0, false);
+	}
+	if (!menusearch.result_count)
+	{
+		M_PrintRGBA(32, 64, "No matching menu items", CL_PLColours_Parse("0xffffff"), 0.55f, false);
+		M_PrintRGBA(32, 80, "Try a label, category, or cvar", CL_PLColours_Parse("0xffffff"), 0.45f, false);
+	}
+	if (!menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS)
+	{
+		menulist_t list = {0};
+		list.cursor = menusearch.cursor;
+		list.numitems = menusearch.result_count;
+		list.viewsize = MENU_SEARCH_VISIBLE_ROWS;
+		list.scroll = menusearch.scroll;
+		M_List_DrawScrollbar(&list, 300, 56);
+	}
+
+	M_DrawQuakeBar(16, 152, 34);
+	if (menusearch.result_count)
+	{
+		selected = &menusearch.results[menusearch.cursor];
+		q_snprintf(detail, sizeof(detail), "%s > %s", selected->provider->path,
+			MenuSearch_Label(selected->provider, selected->index));
+		if (Key_IsShortcutModifierDown())
+		{
+			cvar_t *cv = selected->provider->cvar_fn ? selected->provider->cvar_fn(selected->index) : NULL;
+			const char *hint = selected->provider->hint_fn ? selected->provider->hint_fn(selected->index) : NULL;
+			if (cv)
+				q_snprintf(detail, sizeof(detail), "%s %s", cv->name, cv->string);
+			else if (hint && hint[0])
+				q_strlcpy(detail, hint, sizeof(detail));
+		}
+		M_PrintScroll(16, 160, 288, detail, realtime, false);
+	}
+	else
+		M_Print(16, 160, "Search covers native menu items");
+	if (menusearch.status_until > realtime)
+		footer = menusearch.status;
+	M_PrintScroll(16, 176, 288, footer, 0.0, false);
+	if (!menusearch.empty_mode)
+	{
+		q_snprintf(count, sizeof(count), "%d result%s", menusearch.result_count,
+			menusearch.result_count == 1 ? "" : "s");
+		M_Print(304 - (int)strlen(count) * 8, 16, count);
+	}
+}
+
+static int MenuSearch_Validate(qboolean verbose)
+{
+	int errors = 0, total = 0, p, i;
+	for (p = 0; p < (int)Q_COUNTOF(menusearch_providers); ++p)
+		if (menusearch_providers[p].count > 0)
+			total += menusearch_providers[p].count;
+	if (total > MENU_SEARCH_MAX_RESULTS)
+	{
+		Con_Printf("menu_search: registry capacity exceeded (%d items, capacity %d)\n",
+			total, MENU_SEARCH_MAX_RESULTS);
+		errors++;
+	}
+	for (p = 0; p < (int)Q_COUNTOF(menusearch_providers); ++p)
+	{
+		const menusearch_provider_t *provider = &menusearch_providers[p];
+		int p2;
+		if (!provider->id || !provider->id[0] || !provider->path || !provider->path[0] ||
+			provider->count < 0 || !provider->text_fn || !provider->open_fn)
+		{
+			Con_Printf("menu_search: provider %d has an invalid contract\n", p);
+			errors++;
+			continue;
+		}
+		for (p2 = p + 1; p2 < (int)Q_COUNTOF(menusearch_providers); ++p2)
+			if (menusearch_providers[p2].id && !strcmp(provider->id, menusearch_providers[p2].id))
+			{
+				Con_Printf("menu_search: duplicate provider id '%s'\n", provider->id);
+				errors++;
+			}
+		for (i = 0; i < provider->count; ++i)
+		{
+			char expected[96], live[96];
+			if (!provider->expected_labels)
+				continue;
+			if (!provider->expected_labels[i][0])
+				continue;
+			MenuSearch_Normalize(provider->expected_labels[i], expected, sizeof(expected));
+			MenuSearch_Normalize(provider->text_fn(i), live, sizeof(live));
+			if (strcmp(expected, live))
+			{
+				Con_Printf("menu_search: %s[%d] drift: expected '%s', live '%s'\n",
+					provider->id, i, provider->expected_labels[i], provider->text_fn(i));
+				errors++;
+			}
+		}
+		if (verbose)
+			Con_Printf("menu_search: %-8s %d registered rows\n", provider->id, provider->count);
+	}
+	for (p = 0; p < (int)Q_COUNTOF(menusearch_providers); ++p)
+	{
+		if (!menusearch_providers[p].id || menusearch_providers[p].count < 0 ||
+			!menusearch_providers[p].text_fn)
+			continue;
+		for (i = 0; i < menusearch_providers[p].count; ++i)
+		{
+			char id[160], label[96];
+			int p2, i2;
+			if (!MenuSearch_Label(&menusearch_providers[p], i)[0])
+				continue;
+			MenuSearch_Normalize(MenuSearch_Label(&menusearch_providers[p], i), label, sizeof(label));
+			q_snprintf(id, sizeof(id), "%s.%s", menusearch_providers[p].id, label);
+			for (p2 = p; p2 < (int)Q_COUNTOF(menusearch_providers); ++p2)
+			{
+				if (!menusearch_providers[p2].id || menusearch_providers[p2].count < 0 ||
+					!menusearch_providers[p2].text_fn)
+					continue;
+				for (i2 = p2 == p ? i + 1 : 0; i2 < menusearch_providers[p2].count; ++i2)
+				{
+					char other_id[160], other_label[96];
+					if (!MenuSearch_Label(&menusearch_providers[p2], i2)[0])
+						continue;
+					MenuSearch_Normalize(MenuSearch_Label(&menusearch_providers[p2], i2), other_label, sizeof(other_label));
+					q_snprintf(other_id, sizeof(other_id), "%s.%s", menusearch_providers[p2].id, other_label);
+					if (!strcmp(id, other_id))
+					{
+						Con_Printf("menu_search: duplicate registry id '%s'\n", id);
+						errors++;
+					}
+				}
+			}
+		}
+	}
+	if (verbose || errors)
+		Con_Printf("menu_search: validation %s (%d providers, %d registered rows, capacity %d, %d errors)\n",
+			errors ? "FAILED" : "passed", (int)Q_COUNTOF(menusearch_providers), total,
+			MENU_SEARCH_MAX_RESULTS, errors);
+	return errors;
+}
+
+static void M_MenuSearch_Validate_f(void)
+{
+	MenuSearch_Validate(true);
+}
+
+static void M_MenuSearch_Command_f(void)
+{
+	if (!menu_search_enable.value)
+	{
+		Con_Printf("menu_search is disabled (set menu_search_enable 1)\n");
+		return;
+	}
+	if (menusearch.active || MenuSearch_CanOpenImplicit())
+	{
+		M_MenuSearch_Toggle();
+		return;
+	}
+	if (key_dest == key_menu && MenuSearch_IsModalState(m_state))
+	{
+		Con_Printf("menu_search: unavailable while this dialog is open\n");
+		return;
+	}
+	if (bind_grab)
+	{
+		Con_Printf("menu_search: unavailable while binding a key\n");
+		return;
+	}
+	if (!host_initialized || cls.menu_qcvm.extfuncs.m_draw)
+	{
+		Con_Printf("menu_search: native menus are not available\n");
+		return;
+	}
+	M_Menu_Options_f();
+	m_entersound = false;
+	M_MenuSearch_Open();
+}
+
+void M_MenuSearch_CloseForVideoRestart(void)
+{
+	M_MenuSearch_Close(false, true);
+}
+
+/* end MENU SEARCH */
+
 #define TOOLS_BACKGROUND_TOP 16
 #define TOOLS_BACKGROUND_HEIGHT 184
 
@@ -22204,6 +23963,7 @@ static enum extras_e
 } extras_cursor;
 
 #define EXTRAS_ITEMS (EXTRAS_COUNT)
+COMPILE_TIME_ASSERT(menusearch_extras_count, Q_COUNTOF(menusearch_extras_labels) == EXTRAS_ITEMS);
 
 int numberOfExtrasItems = EXTRAS_ITEMS; // woods #mousemenu
 
@@ -22888,6 +24648,7 @@ enum saving_e
 	SAVING_INDICATOR,
 	SAVING_ITEMS
 } saving_cursor;
+COMPILE_TIME_ASSERT(menusearch_saving_count, Q_COUNTOF(menusearch_saving_labels) == SAVING_ITEMS);
 
 #define SAVING_ROW_Y(item) (48 + (item) * 8)
 #define SAVING_AUTOSAVE_INTERVAL_DEFAULT	30
@@ -22970,6 +24731,23 @@ static const char* M_Saving_IntervalText(void)
 		return va("%d sec", seconds);
 
 	return va("%.1f sec", interval);
+}
+
+static const char *M_Saving_GetItemText(int index)
+{
+	return (index >= 0 && index < SAVING_ITEMS) ? menusearch_saving_labels[index] : "";
+}
+
+static const char *M_Saving_GetValueText(int index)
+{
+	switch (index)
+	{
+	case SAVING_AUTOLOAD: return M_Saving_AutoloadText();
+	case SAVING_AUTOSAVE: return M_Saving_AutosaveText();
+	case SAVING_AUTOSAVE_INTERVAL: return M_Saving_IntervalText();
+	case SAVING_INDICATOR: return M_Saving_IndicatorEnabled() ? "on" : "off";
+	default: return NULL;
+	}
 }
 
 static void M_Saving_MoveCursor(int delta)
@@ -23395,10 +25173,14 @@ static void M_Shortcuts_Init(void)
 	M_Shortcuts_AddHeader("App and System");
 #if defined(__APPLE__) || defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
 	M_Shortcuts_AddShortcut("Show keyboard shortcuts", "Cmd+/");
+	if (menu_search_enable.value)
+		M_Shortcuts_AddShortcut("Open Menu Search (in menus)", "Cmd+K / View");
 	M_Shortcuts_AddShortcut("Toggle fullscreen", KEY_ALT_MODIFIER_NAME "+Enter");
 	M_Shortcuts_AddShortcut("Minimize from fullscreen", "Cmd+Tab");
 	M_Shortcuts_AddShortcut("Show command history", "Cmd+Y");
 #else
+	if (menu_search_enable.value)
+		M_Shortcuts_AddShortcut("Open Menu Search (in menus)", "Ctrl+K / View");
 	M_Shortcuts_AddShortcut("Toggle fullscreen", KEY_ALT_MODIFIER_NAME "+Enter");
 	M_Shortcuts_AddShortcut("Show command history", "Ctrl+H");
 #endif
@@ -26188,19 +27970,6 @@ int		lanConfig_cursor_table[] = { 76, 94, 102, 108, 116, 124 }; // woods #mousem
 int*	lanConfig_cursor_ptr = NULL; // Pointer to the current cursor table
 
 int     NUM_LANCONFIG_CMDS;
-#define NUM_LANCONFIG_CMDS_NEWGAME 4
-#define NUM_LANCONFIG_CMDS_JOINGAME 6
-#define LANCONFIG_CURSOR_PORT 0
-#define LANCONFIG_CURSOR_NEWGAME_ROOM 1
-#define LANCONFIG_CURSOR_NEWGAME_PROTOCOL 2
-#define LANCONFIG_CURSOR_NEWGAME_OK 3
-#define LANCONFIG_CURSOR_JOINGAME_SEARCH_LAN 1
-#define LANCONFIG_CURSOR_JOINGAME_SEARCH_WEB 2
-#define LANCONFIG_CURSOR_JOINGAME_HISTORY 3
-#define LANCONFIG_CURSOR_JOINGAME_BOOKMARKS 4
-#define LANCONFIG_CURSOR_JOINGAME_JOIN 5
-#define LANCONFIG_PROTOCOL_BASE_COUNT 3
-#define LANCONFIG_PROTOCOL_COUNT 6
 
 int 	lanConfig_port;
 char	lanConfig_portname[6];
@@ -40979,6 +42748,8 @@ static qboolean MQC_Init(void)
 		success = PR_LoadProgs("menu.dat", false, MENUQC_PROGHEADER_CRC, pr_menubuiltins, pr_menunumbuiltins);
 	if (success && qcvm->extfuncs.m_draw)
 	{
+		M_MenuSearch_Close(false, true);
+		MenuSearch_Validate(false);
 		for (i = 0; i < sizeof(menucommands)/sizeof(menucommands[0]); i++)
 			if (menucommands[i].cmd)
 			{
@@ -41002,6 +42773,7 @@ static qboolean MQC_Init(void)
 void MQC_Shutdown(void)
 {
 	size_t i;
+	M_MenuSearch_Close(false, true);
 	if (key_dest == key_menu)
 		key_dest = key_console;
 	PR_ClearProgs(&cls.menu_qcvm);					//nuke it from orbit
@@ -41038,6 +42810,9 @@ M_ToggleMenu_f
 */
 void M_ToggleMenu (int mode)
 {
+	if (MenuSearch_IsActive())
+		M_MenuSearch_Close(false, true);
+
 	if (cls.menu_qcvm.extfuncs.m_toggle)
 	{
 		MQC_Begin();
@@ -41092,7 +42867,10 @@ static void M_MenuRestart_f (void)
 {
 	qboolean off = !strcmp(Cmd_Argv(1), "off");
 	if (off || !MQC_Init())
+	{
 		MQC_Shutdown();
+		MenuSearch_Validate(false);
+	}
 }
 
 /*
@@ -42327,12 +44105,22 @@ void M_Init (void)
 	Cmd_AddCommand ("menu_cmd", MQC_Command_f);
 	Cmd_AddCommand ("menu_restart", M_MenuRestart_f);	//qss still loads progs on hunk, so we can't do this safely.
 	Cmd_AddCommand ("update", M_Update_f);
+	Cmd_AddCommand ("menu_search", M_MenuSearch_Command_f);
+	Cmd_AddCommand ("menu_search_validate", M_MenuSearch_Validate_f);
 	update_cmd = Cmd_FindCommand("update");
 	if (update_cmd)
 		update_cmd->completion = M_Update_Completion_f;
 
 	Cvar_RegisterVariable (&ui_live_preview);
 	Cvar_RegisterVariable (&cl_modmenu);
+	Cvar_RegisterVariable (&menu_search_enable);
+	Cvar_RegisterVariable (&menu_search_debug);
+	M_TextField_Init(&menusearch.field, menusearch.query, MENU_SEARCH_QUERY_CHARS, false);
+	{
+		int validation_errors = MenuSearch_Validate(false);
+		if (developer.value)
+			SDL_assert(validation_errors == 0);
+	}
 	AudioCatalog_InitCommands();
 
 	if (!MQC_Init())
@@ -42342,6 +44130,13 @@ void M_Init (void)
 
 void M_Draw (void)
 {
+	if (menusearch.block_b_until_release && !keydown[K_BBUTTON])
+		menusearch.block_b_until_release = false;
+	if (MenuSearch_IsActive() && (!menu_search_enable.value || key_dest != key_menu || m_state == m_none ||
+		m_state != menusearch.origin_state ||
+		!windowhasfocus || cls.menu_qcvm.extfuncs.m_draw || MenuSearch_IsModalState(m_state)))
+		M_MenuSearch_Close(false, true);
+
 	if (cls.menu_qcvm.extfuncs.m_draw)
 	{	//Spike -- menuqc
 		float s = q_min((float)glwidth / 320.0, (float)glheight / 200.0);
@@ -42674,6 +44469,13 @@ void M_Draw (void)
 		glDisable (GL_BLEND);
 	}
 
+	/* Some native Draw handlers transition themselves (for example search to
+	 * server list). Never carry an overlay across that origin change. */
+	if (MenuSearch_IsActive() && m_state != menusearch.origin_state)
+		M_MenuSearch_Close(false, true);
+	if (MenuSearch_IsActive())
+		M_MenuSearch_Draw();
+
 	if (m_entersound)
 	{
 		S_LocalSound ("misc/menu2.wav");
@@ -42762,6 +44564,7 @@ static int M_ShiftedPrintableKey (int key)
 void M_Keydown (int key, qboolean repeat)
 {
 	qboolean has_search;
+	int raw_key = key;
 
 	if (cls.menu_qcvm.extfuncs.m_draw)	//don't get confused.
 		return;
@@ -42778,6 +44581,39 @@ void M_Keydown (int key, qboolean repeat)
 		case K_BBUTTON:		key = K_ESCAPE; break;
 		default:
 			break;
+		}
+	}
+
+	if (MenuSearch_IsActive())
+	{
+		if (raw_key == K_BBUTTON)
+		{
+			menusearch.block_b_until_release = true;
+			M_MenuSearch_Close(true, true);
+		}
+		else
+			M_MenuSearch_Key(key, repeat);
+		return;
+	}
+	if (menusearch.block_b_until_release)
+	{
+		if (!keydown[K_BBUTTON])
+			menusearch.block_b_until_release = false;
+		else if (raw_key == K_BBUTTON)
+			return;
+	}
+
+	if (!repeat && !bind_grab && MenuSearch_CanOpenImplicit())
+	{
+		if ((key == 'k' || key == 'K') && Key_IsShortcutModifierDown())
+		{
+			M_MenuSearch_Open();
+			return;
+		}
+		if (key == K_BACK)
+		{
+			M_MenuSearch_Open();
+			return;
 		}
 	}
 
@@ -43046,6 +44882,11 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 		return;
 	m_mousex = x;
 	m_mousey = y;
+	if (MenuSearch_IsActive())
+	{
+		M_MenuSearch_Mousemove(x, y);
+		return;
+	}
 
 	switch (m_state)
 	{
@@ -43269,6 +45110,11 @@ void M_Charinput (int key)
 {
 	if (cls.menu_qcvm.extfuncs.m_draw)	//don't get confused.
 		return;
+	if (MenuSearch_IsActive())
+	{
+		M_MenuSearch_Char(key);
+		return;
+	}
 
 	switch (m_state)
 	{
@@ -43310,6 +45156,9 @@ void M_Charinput (int key)
 
 qboolean M_TextEntry (void)
 {
+	if (MenuSearch_IsActive())
+		return true;
+
 	switch (m_state)
 	{
 	case m_setup:
@@ -43343,6 +45192,9 @@ qboolean M_WantsIBeamCursor(void)
 {
 	if (key_dest != key_menu)
 		return false;
+	if (MenuSearch_IsActive())
+		return M_TextField_IsDraggingField(&menusearch.field) ||
+			(m_mousex >= 24 && m_mousex < 296 && M_TextField_MouseInRow(m_mousey, 32));
 
 	if (M_TextField_IsDraggingAny())
 		return true;
@@ -43454,6 +45306,7 @@ enum startup_e
 	STARTUP_DEMO_ATTRACT,
 	STARTUP_ITEMS
 } startup_cursor;
+COMPILE_TIME_ASSERT(menusearch_startup_count, Q_COUNTOF(menusearch_startup_labels) == STARTUP_ITEMS);
 
 #define STARTUP_CUSTOM_COMMAND_MAX 127
 #define STARTUP_CUSTOM_BOX_X 128
@@ -44389,6 +46242,7 @@ enum demooptions_e
 	DEMOOPTIONS_MINFRAMES_DELETE,
 	DEMOOPTIONS_ITEMS
 } demooptions_cursor;
+COMPILE_TIME_ASSERT(menusearch_demooptions_count, Q_COUNTOF(menusearch_demooptions_labels) == DEMOOPTIONS_ITEMS);
 
 static const int demoptions_minframes_presets[] = {0, 50, 100, 250, 500, 1000};
 
@@ -44951,6 +46805,49 @@ void M_DemoOptions_Mousemove(int cx, int cy)
 	}
 }
 
+static qboolean MenuSearch_StartupAvailable(int index)
+{
+	if (index != STARTUP_CUSTOM_COMMAND)
+		return true;
+	if (m_state == m_startup)
+		return M_Startup_IsItemVisible(index);
+	return M_Startup_OnloadChoiceIndex(cl_onload.string) == STARTUP_ONLOAD_CUSTOM;
+}
+
+static qboolean MenuSearch_HasLocalModalState(enum m_state_e state)
+{
+	return (state == m_weaponwheel && weaponwheelmenu.preview) ||
+		(state == m_pakloading && pakmenu.dragging);
+}
+
+static void M_MenuSearch_OpenExtrasItem(int index)
+{
+	M_Menu_Extras_f();
+	extras_cursor = (enum extras_e)index;
+	extrasmenu.list.cursor = index;
+	M_List_CenterCursor(&extrasmenu.list);
+}
+
+static void M_MenuSearch_OpenSavingItem(int index)
+{
+	M_Menu_Saving_f();
+	saving_cursor = (enum saving_e)index;
+}
+
+static void M_MenuSearch_OpenStartupItem(int index)
+{
+	M_Menu_Startup_f();
+	startup_cursor = (enum startup_e)index;
+	startupmenu.custom_editing = false;
+}
+
+static void M_MenuSearch_OpenDemoOptionsItem(int index)
+{
+	M_Menu_DemoOptions_f();
+	demooptions_cursor = (enum demooptions_e)index;
+	demooptions_slider_grab = false;
+}
+
 // Helper to add unique pak
 static void M_Pak_Add(const char* name, qboolean readonly, int source)
 {
@@ -45182,6 +47079,12 @@ static void M_Pak_SaveList(void)
 	
 	Con_LinkPrintf(listpath, "pak.lst");
 	Con_SafePrintf(" saved. Restart game to apply changes.\n");
+}
+
+static void M_MenuSearch_LeavePakLoading(void)
+{
+	pakmenu.dragging = false;
+	M_Pak_SaveList();
 }
 
 void M_PakLoading_Draw(void)

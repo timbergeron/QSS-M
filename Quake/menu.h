@@ -122,6 +122,17 @@ void M_Charinput (int key);
 void M_Mousemove(int x, int y); // woods #mousemenu (iw)
 qboolean M_TextEntry (void);
 qboolean M_WantsIBeamCursor(void);
+void M_MenuSearch_CloseForVideoRestart(void);
+qboolean M_MenuSearch_UseGamepadBack(void);
+
+#define VID_MENU_SEARCH_ITEMS 8
+const char *VID_MenuSearch_GetItemText(int index);
+cvar_t *VID_MenuSearch_GetItemCvar(int index);
+const char *VID_MenuSearch_GetItemHintText(int index);
+const char *VID_MenuSearch_GetValueText(int index);
+qboolean VID_MenuSearch_ItemAvailable(int index);
+void VID_MenuSearch_OpenItem(int index);
+void VID_MenuSearch_LeaveMenu(void);
 
 typedef struct
 {
