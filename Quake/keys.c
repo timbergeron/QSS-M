@@ -3230,6 +3230,12 @@ void Char_Event (int key)
 	if (key < 32 || key > 126)
 		return;
 
+	// SDL may deliver the text event after a binding has opened the console.
+	// Honor the same binding-only characters as Key_Event so the console key
+	// itself (normally ` or ~) cannot leak into the input line.
+	if (key_dest == key_console && !consolekeys[key])
+		return;
+
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
 	if (keydown[K_COMMAND])
 		return;
