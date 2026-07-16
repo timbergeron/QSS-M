@@ -2727,7 +2727,10 @@ void SCR_DrawMatchScores(void)
 static int obs_frags_x;
 static int obs_frags_y;
 static int obs_frags_height;
+static int obs_frags_first;
+static int obs_frags_count;
 static qboolean obs_frags_active;  // Track if the frags list is currently being displayed	
+#define OBS_FRAGS_MAX_ROWS 16
 void Sbar_DrawSubPicAlpha (int x, int y, qpic_t* pic, int ofsx, int ofsy, int w, int h, float alpha);
 
 void getShortName(const char* fullName, char* shortName)
@@ -2851,6 +2854,10 @@ void SCR_ShowObsFrags(void)
 	static qpic_t* sb_sigil[4] = { NULL, NULL, NULL, NULL };
 	qboolean drew_scores = false;
 
+	obs_frags_active = false;
+	obs_frags_first = 0;
+	obs_frags_count = 0;
+
 	if (M_LivePreview_UseScores() && (cl.gametype != GAME_DEATHMATCH || cls.state != ca_connected))
 	{
 		SCR_DrawLivePreviewScores();
@@ -2883,8 +2890,6 @@ void SCR_ShowObsFrags(void)
 		sb_sigil[2] = Draw_PicFromWad("sb_sigil3");
 		sb_sigil[3] = Draw_PicFromWad("sb_sigil4");
 	}
-
-	obs_frags_active = true;
 
 	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
 	{
@@ -2921,17 +2926,19 @@ void SCR_ShowObsFrags(void)
 			}
 
 			// Store coordinates for click detection
+			obs_frags_count = q_min(scoreboardlines, OBS_FRAGS_MAX_ROWS);
+			obs_frags_first = scoreboardlines - obs_frags_count;
 			obs_frags_x = x;
 			obs_frags_y = y;
-			obs_frags_height = scoreboardlines * 8;
-			drew_scores = (scoreboardlines > 0);
+			obs_frags_height = obs_frags_count * 8;
+			drew_scores = (obs_frags_count > 0);
 
 			char qflbracket[2] = { 144, '\0' }; // woods  -- quake font left bracket
 			char qfrbracket[2] = { 145, '\0' }; // woods  -- quake font right bracket
 
-			for (i = 0; i < scoreboardlines; i++, y += -8) //johnfitz -- change y init, test, inc woods (reverse drawing order from bottom to top)
+			for (i = 0; i < obs_frags_count; i++, y += -8) //johnfitz -- change y init, test, inc woods (reverse drawing order from bottom to top)
 			{
-				k = fragsort[i];
+				k = fragsort[obs_frags_first + i];
 				s = &cl.scores[k];
 				if (!s->name[0])
 					continue;
@@ -3131,7 +3138,7 @@ void SCR_ShowObsFrags(void)
 					}
 				}
 			}
-			obs_frags_active = true;
+			obs_frags_active = drew_scores;
 		}
 	}
 
@@ -3202,15 +3209,15 @@ void IN_ObsFragsClick(int x, int y) // woods #eyemouse
 	}
 
 	// Validate row bounds
-	if (row < 0 || row >= scoreboardlines)
+	if (row < 0 || row >= obs_frags_count)
 	{
 		Con_DPrintf("ObsFragsClick: Row %d is out of bounds (valid range: 0 to %d)\n",
-			row, scoreboardlines - 1);
+			row, obs_frags_count - 1);
 		return;
 	}
 
 	// Get the player corresponding to the computed row
-	int playernum = fragsort[row];
+	int playernum = fragsort[obs_frags_first + row];
 	scoreboard_t* s = &cl.scores[playernum];
 
 	// Skip empty entries
