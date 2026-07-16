@@ -27155,7 +27155,9 @@ void M_History_Key(int key)
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
-	enter:
+enter:
+		if (!historymenu.items || historymenu.list.numitems <= 0)
+			break;
 		m_return_state = m_state;
 		m_return_onerror = true;
 		key_dest = key_game;
@@ -27176,10 +27178,11 @@ void M_History_Key(int key)
 		break;
 
 	case K_BACKSPACE:
-		if (historymenu.items != NULL && Key_IsShortcutModifierDown())
+		if (historymenu.items != NULL && historymenu.list.numitems > 0 &&
+			Key_IsShortcutModifierDown())
 		{
 			FileList_Subtract(historymenu.items[historymenu.list.cursor].connect_address, &serverlist);
-			Write_List(serverlist, SERVERLIST);
+			ServerHistory_Write();
 			M_Menu_History_f();
 		}
 		break;

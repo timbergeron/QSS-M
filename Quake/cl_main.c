@@ -135,7 +135,6 @@ extern char m_return_reason[32];
 char			lastmphost[NET_NAMELEN]; // woods - connected server address
 Uint64			maptime;		// woods connected map time #maptime
 
-void Log_Last_Server_f(void); // woods #connectlast (Qrack) -- write last server to file memory
 void Host_ConnectToLastServer_f(void); // woods use #connectlast for smarter reconnect
 qboolean Host_GetLastServer(char *name, size_t namesize);
 
@@ -516,9 +515,7 @@ static void CL_FinalizeConnection(struct qsocket_s *netcon, const char *host)
 
 	NET_HostnameCache_RecordSuccessfulConnection(host, netcon);
 	q_strlcpy(lastmphost, host, sizeof(lastmphost));
-	Log_Last_Server_f();
-	Write_Log(host, SERVERLIST);
-	ServerList_Rebuild();
+	ServerHistory_Record(host);
 
 	if (cl_portpingprobe_reconnecting)
 	{

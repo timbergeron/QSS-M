@@ -149,8 +149,18 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
     [argument release];
 }
 
+- (void)setArgument:(NSString *)name withValue:(NSString *)value {
+    [self removeArgument:name];
+    [self addArgument:name withValue:value];
+}
+
 - (void)removeArgument:(NSString *)arg {
-	[quakeArgs removeObject:arg];
+    QuakeArgument *argument;
+
+    /* quakeArgs holds QuakeArgument objects, so removeObject: with the name
+       string matched nothing and silently left the argument in place. */
+    while ((argument = [self argument:arg]) != nil)
+        [quakeArgs removeObjectIdenticalTo:argument];
 }
 
 - (QuakeArgument *)argument:(NSString *)name {

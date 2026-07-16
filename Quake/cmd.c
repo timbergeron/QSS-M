@@ -1026,6 +1026,21 @@ static void Cmd_PrintConsoleHistory (void)
 	Cmd_ExecuteString("printtxt history.txt\n", src_command);
 }
 
+static void Cmd_PrintServerHistory (void)
+{
+	filelist_item_t *item;
+	int count = 0;
+
+	Con_Printf("\n");
+	for (item = serverlist; item; item = item->next)
+	{
+		Con_Printf("%-24s  %s\n", item->name,
+			item->data[0] ? item->data : "date unavailable (migrated)");
+		count++;
+	}
+	Con_Printf("%d server%s found\n\n", count, count == 1 ? "" : "s");
+}
+
 void Cmd_History_f(void)
 {
 	const char* secondary = NULL;
@@ -1036,7 +1051,7 @@ void Cmd_History_f(void)
 	
 		if (!strcmp(secondary, "servers") || !strcmp(secondary, "-s") || !strcmp(secondary, "s"))
 		{ 
-			Cmd_ExecuteString("printtxt id1/backups/servers.txt\n", src_command);
+			Cmd_PrintServerHistory();
 			return;
 		}
 	
@@ -1049,7 +1064,7 @@ void Cmd_History_f(void)
 		if (!strcmp(secondary, "all") || !strcmp(secondary, "-a") || !strcmp(secondary, "a"))
 		{
 			Con_Printf("\n^mserver history:\n");
-			Cmd_ExecuteString("printtxt id1/backups/servers.txt\n", src_command);
+			Cmd_PrintServerHistory();
 			Con_Printf("^mconsole history:\n");
 			Cmd_PrintConsoleHistory();
 			return;

@@ -26,6 +26,8 @@
 	<string>Launcher</string>
 	<key>NSInputMonitoringUsageDescription</key>
 	<string>QSS-M uses Input Monitoring to read raw mouse movement for responsive in-game aiming.</string>
+	<key>NSDockTilePlugIn</key>
+	<string>QSSDockTilePlugin.docktileplugin</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>QSS-M uses the microphone for in-game VoIP voice chat.</string>
 	<key>NSPrincipalClass</key>

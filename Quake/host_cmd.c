@@ -2188,20 +2188,390 @@ static void Host_Modvote_f(void)
 
 filelist_item_t* serverlist;
 
-static void ServerList_Clear(void)
+#define SERVERHISTORY_TIME_LENGTH 21
+
+typedef enum
 {
-	FileList_Clear(&serverlist);
+	SERVERHISTORY_NOT_FOUND,
+	SERVERHISTORY_LOADED,
+	SERVERHISTORY_LOAD_ERROR
+} serverhistory_load_result_t;
+
+static void ServerHistory_GetPath (char *path, size_t path_size, const char *filename)
+{
+	q_snprintf(path, path_size, "%s/id1/backups/%s", com_basedir, filename);
 }
 
-void ServerList_Rebuild(void)
+/* Keep in sync with QSSValidServerAddress in macOS/Sources/Shared/QSSDockMenuContent.m,
+   which applies the same rules to the same files from the Dock menu. */
+static qboolean ServerHistory_ValidAddress (const char *address)
 {
-	ServerList_Clear();
-	ServerList_Init();
+	qboolean alnum = false;
+	size_t i;
+
+	if (!address || !address[0] || strlen(address) >= sizeof(serverlist->name) ||
+		!q_strcasecmp(address, "local") || !q_strcasecmp(address, "localhost"))
+		return false;
+	/* History entries are used by command-line and console reconnect paths. */
+	if (address[0] == '+' || address[0] == '-' || strpbrk(address, ";\""))
+		return false;
+
+	for (i = 0; address[i]; i++)
+	{
+		if (q_isspace((unsigned char)address[i]) || (unsigned char)address[i] < 0x20)
+			return false;
+		if (q_isalnum((unsigned char)address[i]))
+			alnum = true;
+	}
+
+	return alnum;	/* nothing resolvable is punctuation-only */
+}
+
+static qboolean ServerHistory_ValidTimestamp (const char *timestamp)
+{
+	static const char format[] = "dddd-dd-ddTdd:dd:ddZ";
+	size_t i;
+
+	if (!timestamp || strlen(timestamp) != sizeof(format) - 1)
+		return false;
+	for (i = 0; format[i]; i++)
+	{
+		if ((format[i] == 'd' && !q_isdigit((unsigned char)timestamp[i])) ||
+			(format[i] != 'd' && timestamp[i] != format[i]))
+			return false;
+	}
+	return true;
+}
+
+static qboolean ServerHistory_GetTimestamp (char *timestamp, size_t timestamp_size)
+{
+	time_t systime;
+	struct tm *utc;
+
+	if (!timestamp_size)
+		return false;
+	timestamp[0] = '\0';
+
+	systime = time(NULL);
+	utc = gmtime(&systime);
+	if (!utc || strftime(timestamp, timestamp_size, "%Y-%m-%dT%H:%M:%SZ", utc) == 0)
+		return false;
+	return true;
+}
+
+static filelist_item_t *ServerHistory_Find (const char *address, filelist_item_t **prev_out)
+{
+	filelist_item_t *item, *prev = NULL;
+
+	for (item = serverlist; item; item = item->next)
+	{
+		if (!q_strcasecmp(item->name, address))
+		{
+			if (prev_out)
+				*prev_out = prev;
+			return item;
+		}
+		prev = item;
+	}
+
+	if (prev_out)
+		*prev_out = NULL;
+	return NULL;
+}
+
+static filelist_item_t *ServerHistory_AllocItem (const char *address, const char *last_connected)
+{
+	filelist_item_t *item;
+
+	item = (filelist_item_t *)Z_Malloc(sizeof(*item));	/* Sys_Errors on failure */
+	memset(item, 0, sizeof(*item));
+	q_strlcpy(item->name, address, sizeof(item->name));
+	if (last_connected)
+		q_strlcpy(item->data, last_connected, sizeof(item->data));
+	return item;
+}
+
+static qboolean ServerHistory_Append (filelist_item_t **tail, const char *address,
+	const char *last_connected)
+{
+	filelist_item_t *item;
+
+	if (!ServerHistory_ValidAddress(address) || ServerHistory_Find(address, NULL))
+		return false;
+
+	item = ServerHistory_AllocItem(address, last_connected);
+	if (!*tail && serverlist)
+	{	/* Appending to a list we did not build: find its real tail rather
+		   than dropping it by overwriting the head. */
+		for (*tail = serverlist; (*tail)->next; *tail = (*tail)->next)
+			;
+	}
+	if (*tail)
+		(*tail)->next = item;
+	else
+		serverlist = item;
+	*tail = item;
+	return true;
+}
+
+/* Set when the history file exists but could not be read or preserved.
+   Writing then would replace data we never managed to load. */
+static qboolean serverhistory_write_blocked;
+
+qboolean ServerHistory_Write (void)
+{
+	char path[MAX_OSPATH], tmp_path[MAX_OSPATH];
+	FILE *file;
+	filelist_item_t *item;
+	qboolean ok = true;
+	qboolean first = true;
+
+	if (serverhistory_write_blocked)
+		return false;
+
+	ServerHistory_GetPath(path, sizeof(path), SERVERLIST);
+	q_snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%lu", path, Sys_GetProcessId());
+	COM_CreatePath(tmp_path);
+
+	file = fopen(tmp_path, "w");
+	if (!file)
+	{
+		Con_DPrintf("ServerHistory_Write: unable to open %s for writing\n", tmp_path);
+		return false;
+	}
+
+	if (fprintf(file, "[\n") < 0)
+		ok = false;
+	for (item = serverlist; ok && item; item = item->next)
+	{
+		char *escaped_address = JSON_EscapeString(item->name);
+		char *escaped_date = item->data[0] ? JSON_EscapeString(item->data) : NULL;
+
+		if (!escaped_address || (item->data[0] && !escaped_date))
+		{
+			free(escaped_address);
+			free(escaped_date);
+			ok = false;
+			break;
+		}
+
+		if (!first && fprintf(file, ",\n") < 0)
+			ok = false;
+		first = false;
+		if (ok && fprintf(file, "  {\n    \"address\": \"%s\",\n", escaped_address) < 0)
+			ok = false;
+		if (ok && item->data[0])
+		{
+			if (fprintf(file, "    \"last_connected\": \"%s\"\n  }", escaped_date) < 0)
+				ok = false;
+		}
+		else if (ok && fprintf(file, "    \"last_connected\": null\n  }") < 0)
+			ok = false;
+
+		free(escaped_address);
+		free(escaped_date);
+	}
+	if (ok && fprintf(file, "%s]\n", first ? "" : "\n") < 0)
+		ok = false;
+	if (fclose(file) != 0)
+		ok = false;
+
+	if (!ok)
+	{
+		Con_DPrintf("ServerHistory_Write: failed to flush %s, preserving existing file\n", tmp_path);
+		remove(tmp_path);
+		return false;
+	}
+
+#ifdef _WIN32
+	if (!MoveFileExA(tmp_path, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+#else
+	if (rename(tmp_path, path) != 0)
+#endif
+	{
+		Con_DPrintf("ServerHistory_Write: unable to replace %s with %s\n", path, tmp_path);
+		remove(tmp_path);
+		return false;
+	}
+
+	return true;
+}
+
+static serverhistory_load_result_t ServerHistory_LoadJSONFile (const char *filename,
+	filelist_item_t **tail, qboolean *needs_rewrite)
+{
+	char path[MAX_OSPATH];
+	FILE *file;
+	long file_size;
+	char *buffer;
+	json_t *json;
+	const jsonentry_t *entry;
+
+	ServerHistory_GetPath(path, sizeof(path), filename);
+	file = fopen(path, "rb");
+	if (!file)
+		return errno == ENOENT ? SERVERHISTORY_NOT_FOUND : SERVERHISTORY_LOAD_ERROR;
+
+	if (fseek(file, 0, SEEK_END) != 0 || (file_size = ftell(file)) < 0 ||
+		file_size > 4 * 1024 * 1024 || fseek(file, 0, SEEK_SET) != 0)
+	{
+		fclose(file);
+		Con_DPrintf("ServerHistory: unable to size %s\n", filename);
+		return SERVERHISTORY_LOAD_ERROR;
+	}
+
+	buffer = (char *)malloc((size_t)file_size + 1);
+	if (!buffer)
+	{
+		fclose(file);
+		return SERVERHISTORY_LOAD_ERROR;
+	}
+	if (fread(buffer, 1, (size_t)file_size, file) != (size_t)file_size)
+	{
+		free(buffer);
+		fclose(file);
+		Con_DPrintf("ServerHistory: unable to read %s\n", filename);
+		return SERVERHISTORY_LOAD_ERROR;
+	}
+	buffer[file_size] = '\0';
+	fclose(file);
+
+	json = JSON_Parse(buffer);
+	free(buffer);
+	if (!json || !json->root || json->root->type != JSON_ARRAY)
+	{
+		if (json)
+			JSON_Free(json);
+		Con_DPrintf("ServerHistory: invalid %s\n", filename);
+		return SERVERHISTORY_LOAD_ERROR;
+	}
+
+	for (entry = json->root->firstchild; entry; entry = entry->next)
+	{
+		const char *address = NULL;
+		const char *last_connected = NULL;
+
+		if (entry->type == JSON_OBJECT)
+		{
+			address = JSON_FindString(entry, "address");
+			last_connected = JSON_FindString(entry, "last_connected");
+			if (last_connected && !ServerHistory_ValidTimestamp(last_connected))
+			{
+				last_connected = NULL;
+				if (needs_rewrite)
+					*needs_rewrite = true;
+			}
+		}
+
+		if (!ServerHistory_Append(tail, address, last_connected) && needs_rewrite)
+			*needs_rewrite = true;
+	}
+
+	JSON_Free(json);
+	return SERVERHISTORY_LOADED;
+}
+
+static serverhistory_load_result_t ServerHistory_LoadTextFile (const char *filename,
+	filelist_item_t **tail)
+{
+	char path[MAX_OSPATH];
+	char line[NET_NAMELEN + 2];
+	FILE *file;
+
+	ServerHistory_GetPath(path, sizeof(path), filename);
+	file = fopen(path, "r");
+	if (!file)
+		return errno == ENOENT ? SERVERHISTORY_NOT_FOUND : SERVERHISTORY_LOAD_ERROR;
+
+	while (fgets(line, sizeof(line), file))
+	{
+		char *start = line;
+		char *end;
+		int c;
+
+		/* Reject rather than partially importing an overlong legacy line. */
+		if (!strpbrk(line, "\r\n") && !feof(file))
+		{
+			while ((c = fgetc(file)) != '\n' && c != EOF)
+				;
+			continue;
+		}
+
+		line[strcspn(line, "\r\n")] = '\0';
+		while (*start && q_isspace((unsigned char)*start))
+			start++;
+		end = start + strlen(start);
+		while (end > start && q_isspace((unsigned char)end[-1]))
+			*--end = '\0';
+		ServerHistory_Append(tail, start, NULL);
+	}
+
+	if (ferror(file))
+	{
+		fclose(file);
+		Con_DPrintf("ServerHistory: unable to read %s\n", filename);
+		return SERVERHISTORY_LOAD_ERROR;
+	}
+	fclose(file);
+	return SERVERHISTORY_LOADED;
+}
+
+/* Ordered most-recent-first: entries land in list order, and the head is what
+   Host_GetLastServer reports, so the file naming the last server used has to
+   be read before the alphabetically ordered bulk history. */
+static const char *serverhistory_legacy_sources[] = {
+	"lastserver.txt",
+	SERVERLIST_LEGACY
+};
+
+/*
+================
+ServerHistory_PreserveUnreadable
+
+The history file exists but would not load. Move it aside so a later write
+cannot silently destroy it, and only start a fresh history once it is safe.
+================
+*/
+static void ServerHistory_PreserveUnreadable (void)
+{
+	char path[MAX_OSPATH], bad_path[MAX_OSPATH];
+
+	ServerHistory_GetPath(path, sizeof(path), SERVERLIST);
+	q_snprintf(bad_path, sizeof(bad_path), "%s.bad", path);
+
+	remove(bad_path);
+	if (rename(path, bad_path) == 0)
+		Con_Printf("Couldn't read %s; kept a copy as %s.bad and started a new history\n",
+			SERVERLIST, SERVERLIST);
+	else
+	{
+		serverhistory_write_blocked = true;
+		Con_Printf("Couldn't read or move %s; server history will not be saved this session\n",
+			SERVERLIST);
+	}
+}
+
+static void ServerHistory_RemoveLegacyFiles (void)
+{
+	char path[MAX_OSPATH];
+	size_t i;
+
+	for (i = 0; i < countof(serverhistory_legacy_sources); i++)
+	{
+		ServerHistory_GetPath(path, sizeof(path), serverhistory_legacy_sources[i]);
+		remove(path);
+	}
 }
 
 void ServerList_Init(void)
 {
 	char	name[MAX_OSPATH];
+	filelist_item_t *tail = NULL;
+	serverhistory_load_result_t result;
+	qboolean rewrite = false;
+	qboolean migrated = false;
+	qboolean migration_error = false;
+	size_t i;
 
 	q_snprintf(name, sizeof(name), "%s/id1", com_basedir); //  make an id1 folder if it doesnt exist already #smartafk
 	Sys_mkdir(name);
@@ -2209,28 +2579,63 @@ void ServerList_Init(void)
 	q_snprintf(name, sizeof(name), "%s/id1/backups", com_basedir); //  create backups folder if not there
 	Sys_mkdir(name);
 
-	FILE* file = fopen(va("%s/id1/backups/%s", com_basedir, SERVERLIST), "r");
-	
-	if (file == NULL) {
+	result = ServerHistory_LoadJSONFile(SERVERLIST, &tail, &rewrite);
+	if (result == SERVERHISTORY_LOADED)
+	{
+		if (rewrite)
+			ServerHistory_Write();
+		return;
+	}
+	if (result == SERVERHISTORY_LOAD_ERROR)
+	{	/* Never migrate on top of a history we failed to read. */
+		ServerHistory_PreserveUnreadable();
 		return;
 	}
 
-	char buffer[256];
-	while (fgets(buffer, sizeof(buffer), file) != NULL) {
-		char *start = buffer;
-		char *end;
-
-		buffer[strcspn(buffer, "\r\n")] = '\0';
-		while (*start && q_isspace((unsigned char)*start))
-			start++;
-		end = start + strlen(start);
-		while (end > start && q_isspace((unsigned char)end[-1]))
-			*--end = '\0';
-		if (!*start)
-			continue;
-		FileList_Add(start, NULL, &serverlist); // woods #demolistsort add arg
+	for (i = 0; i < countof(serverhistory_legacy_sources); i++)
+	{
+		result = ServerHistory_LoadTextFile(serverhistory_legacy_sources[i], &tail);
+		migrated |= result == SERVERHISTORY_LOADED;
+		migration_error |= result == SERVERHISTORY_LOAD_ERROR;
 	}
-	fclose(file);
+
+	if (migrated && !migration_error && ServerHistory_Write())
+		ServerHistory_RemoveLegacyFiles();
+	else if (migration_error)
+		Con_DPrintf("ServerList_Init: preserving legacy history after a read error\n");
+}
+
+void ServerHistory_Record (const char *server)
+{
+	filelist_item_t *item, *prev;
+	char timestamp[SERVERHISTORY_TIME_LENGTH];
+
+	if (!ServerHistory_ValidAddress(server))
+		return;
+
+	if (!ServerHistory_GetTimestamp(timestamp, sizeof(timestamp)))
+		timestamp[0] = '\0';
+	item = ServerHistory_Find(server, &prev);
+	if (!item)
+	{
+		item = ServerHistory_AllocItem(server, timestamp[0] ? timestamp : NULL);
+		item->next = serverlist;
+		serverlist = item;
+	}
+	else
+	{
+		q_strlcpy(item->name, server, sizeof(item->name));
+		if (timestamp[0])	/* keep the known date if the clock read failed */
+			q_strlcpy(item->data, timestamp, sizeof(item->data));
+		if (prev)
+		{
+			prev->next = item->next;
+			item->next = serverlist;
+			serverlist = item;
+		}
+	}
+
+	ServerHistory_Write();
 }
 
 //==============================================================================
@@ -7909,58 +8314,17 @@ Host_GetLastServer
 */
 qboolean Host_GetLastServer(char *name, size_t namesize)
 {
-	FILE *f;
-
 	if (!name || !namesize)
 		return false;
 
-	f = fopen(va("%s/id1/backups/%s.txt", com_basedir, "lastserver"), "r");
-	if (f == NULL)
+	if (!serverlist)
 	{
 		Con_Printf("No server connection history.\n");
 		return false;
 	}
 
-	if (fgets(name, (int)namesize, f) == NULL)
-	{
-		Con_Printf("Error reading from file.\n");
-		fclose(f);
-		return false;
-	}
-
-	name[strcspn(name, "\r\n")] = '\0';
-	fclose(f);
+	q_strlcpy(name, serverlist->name, namesize);
 	return true;
-}
-
-/*
-===============
-Log_Last_Server_f // woods #connectlast (Qrack)
-===============
-*/
-void Log_Last_Server_f(void)
-{
-	FILE* f;
-
-	char server[MAX_OSPATH];
-
-	q_snprintf(server, sizeof(server), "%s/id1/backups", com_basedir); //  create backups folder if not there
-	Sys_mkdir(server);
-
-	if (!q_strcasecmp(lastmphost, "local"))
-		return;
-
-	f = fopen(va("%s/id1/backups/%s.txt", com_basedir, "lastserver"), "w");
-
-	if (!f)
-	{
-		Con_Printf("Couldn't write backup last server\n");
-		return;
-	}
-
-	fprintf(f, "%s", lastmphost);
-
-	fclose(f);
 }
 
 /*
@@ -7977,7 +8341,7 @@ void Host_ConnectToLastServer_f (void) // woods #connectlast (Qrack)
 
 retry:
 	if (cls.state == ca_disconnected)
-		Cbuf_AddText(va("connect %s\n", name));
+		Cbuf_AddText(va("connect \"%s\"\n", name));
 	else
 	{
 		CL_Disconnect();

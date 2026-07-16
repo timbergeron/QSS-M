@@ -96,6 +96,11 @@
 		664D98DC19CF6B78000D395C /* snd_flac.c in Sources */ = {isa = PBXBuildFile; fileRef = 482812FF179C3F13004E1D61 /* snd_flac.c */; };
 		664D98E619CF6B78000D395C /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 488EF23614B83A370021DD41 /* IOKit.framework */; };
 		664D98E919CF6B78000D395C /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1058C7A1FEA54F0111CA2CBB /* Cocoa.framework */; };
+		D0CC00010000000000000001 /* QSSDockTilePlugin.m in Sources */ = {isa = PBXBuildFile; fileRef = D0CC00110000000000000001 /* QSSDockTilePlugin.m */; };
+		D0CC00040000000000000004 /* QSSDockMenuContent.m in Sources */ = {isa = PBXBuildFile; fileRef = D0CC00140000000000000004 /* QSSDockMenuContent.m */; };
+		D0CC00050000000000000005 /* QSSDockMenuContent.m in Sources */ = {isa = PBXBuildFile; fileRef = D0CC00140000000000000004 /* QSSDockMenuContent.m */; };
+		D0CC00020000000000000002 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1058C7A1FEA54F0111CA2CBB /* Cocoa.framework */; };
+		D0CC00030000000000000003 /* QSSDockTilePlugin.docktileplugin in Embed PlugIns */ = {isa = PBXBuildFile; fileRef = D0CC00130000000000000003 /* QSSDockTilePlugin.docktileplugin */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		664D98EA19CF6B78000D395C /* OpenGL.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 002F3C0009D093BD00EBEB88 /* OpenGL.framework */; };
 		668A0110277D0BD6009D9427 /* pr_ext.c in Sources */ = {isa = PBXBuildFile; fileRef = 668A010E277D0BD6009D9427 /* pr_ext.c */; };
 		668A0113277D0BE8009D9427 /* mdfour.c in Sources */ = {isa = PBXBuildFile; fileRef = 668A0111277D0BE8009D9427 /* mdfour.c */; };
@@ -169,7 +174,28 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D0CC00330000000000000033 /* Embed PlugIns */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				D0CC00030000000000000003 /* QSSDockTilePlugin.docktileplugin in Embed PlugIns */,
+			);
+			name = "Embed PlugIns";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXContainerItemProxy section */
+		D0CC00500000000000000050 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 29B97313FDCFA39411CA2CEA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D0CC00400000000000000040;
+			remoteInfo = QSSDockTilePlugin;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		85D17E7520261A1A00100001 /* Sync Version from quakedef.h */ = {
@@ -364,6 +390,11 @@
 		6348AF9026EA46F500E036E2 /* snd_xmp.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = snd_xmp.h; path = ../Quake/snd_xmp.h; sourceTree = SOURCE_ROOT; };
 		63D6EB3423A255900047028C /* snd_mp3tag.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = snd_mp3tag.c; path = ../Quake/snd_mp3tag.c; sourceTree = SOURCE_ROOT; };
 		664D98F919CF6B78000D395C /* QSS-M.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "QSS-M.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		D0CC00110000000000000001 /* QSSDockTilePlugin.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = QSSDockTilePlugin.m; sourceTree = "<group>"; };
+		D0CC00140000000000000004 /* QSSDockMenuContent.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = QSSDockMenuContent.m; sourceTree = "<group>"; };
+		D0CC00150000000000000005 /* QSSDockMenuContent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = QSSDockMenuContent.h; sourceTree = "<group>"; };
+		D0CC00120000000000000002 /* DockTilePlugin-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist; path = "DockTilePlugin-Info.plist"; sourceTree = "<group>"; };
+		D0CC00130000000000000003 /* QSSDockTilePlugin.docktileplugin */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QSSDockTilePlugin.docktileplugin; sourceTree = BUILT_PRODUCTS_DIR; };
 		664D990519CF6E16000D395C /* SDL2.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = SDL2.framework; sourceTree = SOURCE_ROOT; };
 		668A010E277D0BD6009D9427 /* pr_ext.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = pr_ext.c; path = ../Quake/pr_ext.c; sourceTree = "<group>"; };
 		668A0111277D0BE8009D9427 /* mdfour.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = mdfour.c; path = ../Quake/mdfour.c; sourceTree = "<group>"; };
@@ -442,6 +473,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D0CC00300000000000000030 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D0CC00020000000000000002 /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -469,6 +508,7 @@
 			isa = PBXGroup;
 			children = (
 				664D98F919CF6B78000D395C /* QSS-M.app */,
+				D0CC00130000000000000003 /* QSSDockTilePlugin.docktileplugin */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -506,6 +546,7 @@
 				484AA4B30D3FF6C0005D917A /* QuakeSpasm.icns */,
 				48B9E7860D340B1E0001CACF /* Launcher.xib */,
 				8D1107310486CEB800E47090 /* Info.plist */,
+				D0CC00120000000000000002 /* DockTilePlugin-Info.plist */,
 			);
 			name = Resources;
 			path = Resources;
@@ -541,10 +582,29 @@
 		A1B2C3D40102030405060708 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				D0CC00200000000000000020 /* DockTile */,
 				A1B2C3D40102030405060709 /* Launcher */,
 				A1B2C3D4010203040506070A /* SDL */,
+				D0CC00210000000000000021 /* Shared */,
 			);
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		D0CC00200000000000000020 /* DockTile */ = {
+			isa = PBXGroup;
+			children = (
+				D0CC00110000000000000001 /* QSSDockTilePlugin.m */,
+			);
+			path = DockTile;
+			sourceTree = "<group>";
+		};
+		D0CC00210000000000000021 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				D0CC00150000000000000005 /* QSSDockMenuContent.h */,
+				D0CC00140000000000000004 /* QSSDockMenuContent.m */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 		A1B2C3D40102030405060709 /* Launcher */ = {
@@ -869,17 +929,35 @@
 				664D98DD19CF6B78000D395C /* Frameworks */,
 				66991C001DBAB3F500C373C0 /* CopyFiles */,
 				93F78A1F2946BD5B00800F54 /* Embed Frameworks */,
+				D0CC00330000000000000033 /* Embed PlugIns */,
 				85D17E7520261A1A00100001 /* Sync Version from quakedef.h */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				D0CC00510000000000000051 /* PBXTargetDependency */,
 			);
 			name = "QSS-M";
 			productInstallPath = "$(HOME)/Applications";
 			productName = "QSS-M";
 			productReference = 664D98F919CF6B78000D395C /* QSS-M.app */;
 			productType = "com.apple.product-type.application";
+		};
+		D0CC00400000000000000040 /* QSSDockTilePlugin */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D0CC00410000000000000041 /* Build configuration list for PBXNativeTarget "QSSDockTilePlugin" */;
+			buildPhases = (
+				D0CC00310000000000000031 /* Sources */,
+				D0CC00300000000000000030 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QSSDockTilePlugin;
+			productName = QSSDockTilePlugin;
+			productReference = D0CC00130000000000000003 /* QSSDockTilePlugin.docktileplugin */;
+			productType = "com.apple.product-type.bundle";
 		};
 /* End PBXNativeTarget section */
 
@@ -905,6 +983,7 @@
 			projectRoot = "";
 			targets = (
 				664D988819CF6B78000D395C /* QSS-M */,
+				D0CC00400000000000000040 /* QSSDockTilePlugin */,
 			);
 		};
 /* End PBXProject section */
@@ -1004,6 +1083,7 @@
 				664D98C619CF6B78000D395C /* snd_mix.c in Sources */,
 				664D98C719CF6B78000D395C /* main_sdl.c in Sources */,
 				664D98C819CF6B78000D395C /* AppController.m in Sources */,
+				D0CC00040000000000000004 /* QSSDockMenuContent.m in Sources */,
 				664D98C919CF6B78000D395C /* SDLApplication.m in Sources */,
 				664D98CA19CF6B78000D395C /* ScreenInfo.m in Sources */,
 				664D98CB19CF6B78000D395C /* QuakeArguments.m in Sources */,
@@ -1035,7 +1115,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D0CC00310000000000000031 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D0CC00010000000000000001 /* QSSDockTilePlugin.m in Sources */,
+				D0CC00050000000000000005 /* QSSDockMenuContent.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		D0CC00510000000000000051 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D0CC00400000000000000040 /* QSSDockTilePlugin */;
+			targetProxy = D0CC00500000000000000050 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		664D98F719CF6B78000D395C /* Debug */ = {
@@ -1049,6 +1146,40 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = A11C0F030000000000000003 /* Release.xcconfig */;
 			buildSettings = {
+			};
+			name = Release;
+		};
+		D0CC00420000000000000042 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				CLANG_ENABLE_OBJC_ARC = NO;
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = "Resources/DockTilePlugin-Info.plist";
+				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				PRODUCT_BUNDLE_IDENTIFIER = com.quakeone.qssm.docktile;
+				PRODUCT_NAME = QSSDockTilePlugin;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				WRAPPER_EXTENSION = docktileplugin;
+			};
+			name = Debug;
+		};
+		D0CC00430000000000000043 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD)";
+				CLANG_ENABLE_OBJC_ARC = NO;
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = "Resources/DockTilePlugin-Info.plist";
+				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				PRODUCT_BUNDLE_IDENTIFIER = com.quakeone.qssm.docktile;
+				PRODUCT_NAME = QSSDockTilePlugin;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				WRAPPER_EXTENSION = docktileplugin;
 			};
 			name = Release;
 		};
@@ -1072,6 +1203,15 @@
 			buildConfigurations = (
 				664D98F719CF6B78000D395C /* Debug */,
 				664D98F819CF6B78000D395C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D0CC00410000000000000041 /* Build configuration list for PBXNativeTarget "QSSDockTilePlugin" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D0CC00420000000000000042 /* Debug */,
+				D0CC00430000000000000043 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

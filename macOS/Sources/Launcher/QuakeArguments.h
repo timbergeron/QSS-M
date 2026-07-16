@@ -31,6 +31,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 - (void)addArgument:(NSString *)arg;
 - (void)addArgument:(NSString *)arg withValue:(NSString *)value;
+/* Replaces every existing occurrence rather than appending another one. */
+- (void)setArgument:(NSString *)arg withValue:(NSString *)value;
 
 - (QuakeArgument *)argument:(NSString *)name;
 - (void)removeArgument:(NSString *)arg;

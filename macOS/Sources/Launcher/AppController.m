@@ -18,6 +18,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 #import "AppController.h"
+#import "QSSDockMenuContent.h"
 #import <ApplicationServices/ApplicationServices.h>
 #import <IOKit/hid/IOHIDLib.h>
 #import <IOKit/hid/IOHIDUsageTables.h>
@@ -57,6 +58,14 @@ static const CGFloat QSSLaunchOptionsBaseHeight = 112.0f;
 static const CGFloat QSSSettingsCardHeight = 102.0f;
 static const CGFloat QSSRawMouseSwitchRightInsetExtra = 8.0f;
 static const CGFloat QSSShortcutTableRightGutter = 18.0f;
+
+extern void Cbuf_AddText (const char *text); /* engine command buffer (cmd.c) */
+
+static NSURL *QSSGameFolderURL(void)
+{
+    NSURL *bundleURL = [[NSBundle mainBundle] bundleURL];
+    return [bundleURL URLByDeletingLastPathComponent];
+}
 
 typedef struct {
     NSString *title;
@@ -3453,6 +3462,7 @@ doCommandBySelector:(SEL)commandSelector
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
     NSUInteger flags;
     BOOL optionKeyPressed;
+    BOOL launcherRequested;
 
     (void)aNotification;
 
@@ -3473,11 +3483,15 @@ doCommandBySelector:(SEL)commandSelector
 
     flags = [NSEvent modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
     optionKeyPressed = (flags & NSEventModifierFlagOption) != 0;
+    launcherRequested = ([arguments argument:@"-launcher"] != nil);
+
+    if (launcherRequested)
+        [arguments removeArgument:@"-launcher"];
 
     if ([arguments argument:@"-nolauncher"] != nil) {
         [arguments removeArgument:@"-nolauncher"];
         [self launchQuake:self];
-    } else if (!optionKeyPressed) {
+    } else if (!optionKeyPressed && !launcherRequested) {
         [self launchQuake:self];
     } else {
         [launcherWindow center];
@@ -3490,6 +3504,108 @@ doCommandBySelector:(SEL)commandSelector
     (void)notification;
     [self refreshLauncherAppearance];
     [self refreshRawMouseSwitchState];
+}
+
+- (NSMenu *)applicationDockMenu:(NSApplication *)sender
+{
+    NSMenu *menu;
+    NSMenuItem *launcherItem;
+
+    (void)sender;
+
+    /* Explicit targets: automatic validation resolves nil-target actions
+       through the responder chain, which no longer reaches us once the SDL
+       window takes over, leaving the items greyed out while the game runs. */
+    menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+    [menu setAutoenablesItems:NO];
+    launcherItem = [[[NSMenuItem alloc] initWithTitle:@"Open with Launcher"
+                                               action:@selector(openWithLauncher:)
+                                        keyEquivalent:@""] autorelease];
+    [launcherItem setTarget:self];
+    /* The launcher only chooses arguments for a not-yet-started game, so it
+       has nothing to offer once SDL_main has taken over this process. */
+    [launcherItem setEnabled:(SDL_WasInit(0) == 0)];
+    [menu addItem:launcherItem];
+
+    {
+        NSURL *gameFolderURL = QSSGameFolderURL();
+        SEL connect = @selector(connectToRecentServer:);
+
+        QSSAddServersSection(menu, @"Recent",
+                             QSSRecentServersForGameFolder(gameFolderURL), self, connect);
+        QSSAddServersSection(menu, @"Bookmarks",
+                             QSSBookmarksForGameFolder(gameFolderURL), self, connect);
+        QSSAddModsSection(menu, QSSModsForGameFolder(gameFolderURL), self,
+                          @selector(switchToMod:));
+    }
+
+    [menu addItem:[NSMenuItem separatorItem]];
+    {
+        NSMenuItem *folderItem = [[[NSMenuItem alloc] initWithTitle:@"Open Game Folder"
+                                                             action:@selector(openQuakeFolder:)
+                                                      keyEquivalent:@""] autorelease];
+        [folderItem setTarget:self];
+        [menu addItem:folderItem];
+    }
+    return menu;
+}
+
+- (IBAction)openWithLauncher:(id)sender
+{
+    (void)sender;
+
+    /* Disabled in the Dock menu once the game is running, so this only ever
+       has to bring this instance's launcher window back to the front. */
+    if (SDL_WasInit(0) != 0 || !launcherWindow)
+        return;
+
+    [launcherWindow center];
+    [launcherWindow makeKeyAndOrderFront:self];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (IBAction)connectToRecentServer:(id)sender
+{
+    id represented = [sender respondsToSelector:@selector(representedObject)] ?
+        [sender representedObject] : nil;
+    NSString *server = [represented isKindOfClass:[NSString class]] ? represented : nil;
+
+    if (!QSSValidServerAddress(server))
+        return;
+
+    if (SDL_WasInit(0) == 0) {
+        /* Replace, so a saved "+connect other" cannot make the game connect
+           somewhere else first and then here. */
+        [arguments setArgument:@"+connect" withValue:server];
+        [self launchQuake:self];
+    } else {
+        /* The game runs in this process, and this action is dispatched from
+           the engine's event pump on the main thread, so hand the command
+           straight to the running game instead of spawning a new instance. */
+        Cbuf_AddText([[NSString stringWithFormat:@"connect \"%@\"\n", server] UTF8String]);
+        [NSApp activateIgnoringOtherApps:YES];
+    }
+}
+
+- (IBAction)switchToMod:(id)sender
+{
+    id represented = [sender respondsToSelector:@selector(representedObject)] ?
+        [sender representedObject] : nil;
+    NSString *mod = [represented isKindOfClass:[NSString class]] ? represented : nil;
+
+    if (!QSSValidModName(mod))
+        return;
+
+    if (SDL_WasInit(0) == 0) {
+        /* Replace: COM_InitFilesystem stacks a gamedir for every -game it
+           finds, so appending to a saved "-game other" would launch both. */
+        [arguments setArgument:@"-game" withValue:mod];
+        [self launchQuake:self];
+    } else {
+        /* COM_Game_f disconnects and reloads the game directory itself. */
+        Cbuf_AddText([[NSString stringWithFormat:@"game \"%@\"\n", mod] UTF8String]);
+        [NSApp activateIgnoringOtherApps:YES];
+    }
 }
 
 - (void)launchDedicatedServerWithParsedArguments
@@ -3717,13 +3833,11 @@ doCommandBySelector:(SEL)commandSelector
 }
 
 - (IBAction)openQuakeFolder:(id)sender {
-    NSURL *bundleURL;
     NSURL *folderURL;
 
     (void)sender;
 
-    bundleURL = [[NSBundle mainBundle] bundleURL];
-    folderURL = [bundleURL URLByDeletingLastPathComponent];
+    folderURL = QSSGameFolderURL();
     if (!folderURL)
         folderURL = [NSURL fileURLWithPath:[[NSFileManager defaultManager] currentDirectoryPath]
                                isDirectory:YES];

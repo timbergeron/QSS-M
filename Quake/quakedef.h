@@ -281,7 +281,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define	SOUND_CHANNELS		8
 
-#define	SERVERLIST	"servers.txt"	// woods for server history + tab complete #serverlist
+#define	SERVERLIST	"servers.json"	// dated server history + tab complete #serverlist
+#define	SERVERLIST_LEGACY "servers.txt"
 #define	SERVERHOSTNAMES	"server_hostnames.json" /* successful hostname-to-endpoint cache */
 #define	BOOKMARKSLIST		"bookmarks.json"	// woods #bookmarksjson
 #define	BOOKMARKSLIST_LEGACY	"bookmarks.txt"		// woods #bookmarksjson - old filename for migration
@@ -400,7 +401,7 @@ extern	double		last_angle_time;	// JPG - need this for smooth chasecam (from Pro
 
 typedef struct filelist_item_s
 {
-	char			name[MAX_QPATH];
+	char			name[NET_NAMELEN]; // also stores full IPv6/DTLS server addresses
 	char			data[50]; // woods #demolistsort #mapdescriptions
 	float			total_surface_area;
 	float			floor_surface_area;
@@ -425,7 +426,7 @@ extern filelist_item_t  *musiclist; // woods #musiclist
 extern filelist_item_t  *textlist; // woods #textlist
 extern filelist_item_t  *namehistorylist; // woods #namehistory
 
-void Write_List(filelist_item_t* list, const char* list_name); // woods #bookmarksmenu #serverlist
+qboolean ServerHistory_Write (void);
 
 extern qboolean descriptionsParsed; // woods #mapdescriptions
 void ExtraMaps_ParseDescriptions (void); // woods #mapdescriptions
@@ -491,7 +492,6 @@ void ExtraMaps_NewGame (void);
 void DemoList_Rebuild (void);
 void ParticleList_Rebuild(void);
 void SkyList_Rebuild (void);
-void ServerList_Rebuild (void); // woods #serverlist
 void FolderList_Rebuild (void); // woods #folderlist
 void ExecList_Rebuild (void); // woods #execlist
 void MusicList_Rebuild (void); // woods #musiclist
