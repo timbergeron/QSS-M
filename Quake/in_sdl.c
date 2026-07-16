@@ -5642,13 +5642,7 @@ void IN_SendKeyEvents (void)
 
 		case SDL_QUIT:
 			Con_DPrintf("SDL_QUIT event received\n");
-#ifdef MACOS_X_ACCELERATION_HACK
-			Con_DPrintf("SDL_QUIT: calling IN_ReenableOSXMouseAccel\n");
-			if (originalMouseSpeed != -1)
-				IN_ReenableOSXMouseAccel();
-#endif
-			CL_Disconnect ();
-			Sys_Quit ();
+			Host_Quit_f ();
 			break;
 
 		default:

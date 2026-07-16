@@ -3572,6 +3572,15 @@ doCommandBySelector:(SEL)commandSelector
 
 - (IBAction)cancel:(id)sender {
     (void)sender;
+
+    /* Once SDL is running, let the engine perform its normal quit sequence. */
+    if (SDL_WasInit(0) != 0) {
+        SDL_Event event = {0};
+        event.type = SDL_QUIT;
+        if (SDL_PushEvent(&event) == 1)
+            return;
+    }
+
     [self stopRawMousePermissionAssistant];
     exit(0);
 }
