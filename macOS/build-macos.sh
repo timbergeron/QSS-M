@@ -21,7 +21,14 @@ if [ -n "$QSSM_XCODE_EXTRA_CFLAGS" ]; then
   xcodebuild_args+=(OTHER_CFLAGS="$OTHER_CFLAGS_ARG")
 fi
 
-xcodebuild "${xcodebuild_args[@]}"
+link_log="$(mktemp "${TMPDIR:-/tmp}/qssm-xcodebuild.XXXXXX")"
+trap 'rm -f "$link_log"' EXIT
+xcodebuild "${xcodebuild_args[@]}" 2>&1 | tee "$link_log"
+
+if grep -Fq "was built for newer 'macOS' version" "$link_log"; then
+  echo "Release build contains objects newer than the configured macOS deployment target."
+  exit 1
+fi
 
 cat <<EOF > build/Release/Quakespasm-Spiked-Revision.txt
 Git URL:      $(git config --get remote.origin.url)

@@ -114,10 +114,12 @@ replace_port_value() {
     local old="$2"
     local new="$3"
 
-    if grep -Fq "$old" "$file"; then
+    if PORT_VALUE="$old" perl -0777 -ne \
+        'exit(index($_, $ENV{PORT_VALUE}) < 0)' "$file"; then
         OLD_VALUE="$old" NEW_VALUE="$new" perl -0pi -e \
             's/\Q$ENV{OLD_VALUE}\E/$ENV{NEW_VALUE}/g' "$file"
-    elif ! grep -Fq "$new" "$file"; then
+    elif ! PORT_VALUE="$new" perl -0777 -ne \
+        'exit(index($_, $ENV{PORT_VALUE}) < 0)' "$file"; then
         echo "Expected value not found in $file: $old"
         exit 1
     fi
@@ -167,6 +169,19 @@ apply_crypto_port_overrides() {
         '8767e4f0c34ce76ead5d66f06f97e6b184d439fa94f848ee440196fafde3da2ea7cfc54f9bd8f9ab6a99929b0d14b3d5a28857e05d954551e94b619598c17659' \
         "$NETTLE_SHA512"
 
+    # vcpkg propagates VCPKG_OSX_DEPLOYMENT_TARGET to normal C/C++ flags,
+    # but these ports compile optimized assembly through separate flag
+    # variables. Keep those objects on the same minimum macOS version as the
+    # rest of each custom triplet instead of inheriting the current SDK default.
+    replace_port_value "$nettle_port/portfile.cmake" \
+        $'set(asmflags "")\r\nif(VCPKG_DETECTED_CMAKE_C_COMPILER_ID STREQUAL "MSVC")' \
+        $'set(asmflags "")\r\nif(VCPKG_TARGET_IS_OSX AND VCPKG_OSX_DEPLOYMENT_TARGET)\r\n    string(APPEND asmflags " -mmacosx-version-min=${VCPKG_OSX_DEPLOYMENT_TARGET}")\r\nendif()\r\nif(VCPKG_DETECTED_CMAKE_C_COMPILER_ID STREQUAL "MSVC")'
+
+    local gmp_port="./vcpkg/ports/gmp"
+    replace_port_value "$gmp_port/portfile.cmake" \
+        $'set(asmflags "-c")\r\nvcpkg_cmake_get_vars(cmake_vars_file)' \
+        $'set(asmflags "-c")\r\nif(VCPKG_TARGET_IS_OSX AND VCPKG_OSX_DEPLOYMENT_TARGET)\r\n    string(APPEND asmflags " -mmacosx-version-min=${VCPKG_OSX_DEPLOYMENT_TARGET}")\r\nendif()\r\nvcpkg_cmake_get_vars(cmake_vars_file)'
+
     echo "Using macOS crypto ports: GnuTLS $GNUTLS_VERSION, libtasn1 $LIBTASN1_VERSION, Nettle $NETTLE_VERSION"
 }
 
@@ -176,8 +191,12 @@ remove_stale_crypto_packages() {
     local expected_version
     local -a stale_specs=()
 
+    # vcpkg's package ABI includes each modified portfile, so same-version
+    # recipe changes rebuild automatically. Only remove packages whose pinned
+    # upstream version changed; this also keeps repeated setup runs idempotent.
     while read -r spec installed_version _; do
         case "${spec%%:*}" in
+            gmp) expected_version="6.3.0" ;;
             libgnutls) expected_version="$GNUTLS_VERSION" ;;
             libtasn1) expected_version="$LIBTASN1_VERSION" ;;
             nettle) expected_version="$NETTLE_VERSION" ;;
