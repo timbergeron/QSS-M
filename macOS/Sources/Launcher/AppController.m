@@ -1560,7 +1560,7 @@ static NSImage *QSSHostAppIcon(void)
     NSMenu *mainMenu = [NSApp mainMenu];
     NSMenuItem *appMenuItem = ([mainMenu numberOfItems] > 0) ? [mainMenu itemAtIndex:0] : nil;
     NSMenu *appMenu = [appMenuItem submenu];
-    NSMenuItem *aboutItem = [appMenu itemWithTitle:@"About QuakeSpasm"];
+    NSMenuItem *aboutItem = [appMenu itemWithTitle:@"About QSS-M"];
     if (!aboutItem && [appMenu numberOfItems] > 0)
         aboutItem = [appMenu itemAtIndex:0];
 
@@ -1637,9 +1637,7 @@ static NSImage *QSSHostAppIcon(void)
     NSMenu *mainMenu = [NSApp mainMenu];
     NSMenuItem *appMenuItem = ([mainMenu numberOfItems] > 0) ? [mainMenu itemAtIndex:0] : nil;
     NSMenu *appMenu = [appMenuItem submenu];
-    NSMenuItem *quitItem = [appMenu itemWithTitle:@"Quit QuakeSpasm"];
-    if (!quitItem)
-        quitItem = [appMenu itemWithTitle:@"Quit QSS-M"];
+    NSMenuItem *quitItem = [appMenu itemWithTitle:@"Quit QSS-M"];
 
     if (!quitItem) {
         NSInteger idx = [appMenu indexOfItemWithTarget:nil andAction:@selector(terminate:)];
