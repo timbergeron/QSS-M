@@ -1376,13 +1376,13 @@ void M_PrintTruncated(int x, int y, int maxwidth, const char* str, qboolean colo
 
 static qboolean M_CvarHintActive(qboolean selected, cvar_t *cv)
 {
-	return selected && keydown[K_CTRL] && cv != NULL &&
+	return selected && Key_IsShortcutModifierDown() && cv != NULL &&
 		cv->name != NULL && cv->string != NULL;
 }
 
 static qboolean M_TextHintActive(qboolean selected, const char *text)
 {
-	return selected && keydown[K_CTRL] && text != NULL && text[0] != '\0';
+	return selected && Key_IsShortcutModifierDown() && text != NULL && text[0] != '\0';
 }
 
 static void M_DrawHintValue(int x, int y, int maxwidth, const char *hint)
@@ -1815,27 +1815,11 @@ static int				textfield_click_pos = -1;
 static const double		TEXTFIELD_DOUBLECLICK_TIME = 0.5;
 extern qpic_t *pic_ins;
 
+// Shortcut, word-move and word-delete all share the platform modifier
+// (Ctrl, or Ctrl/Cmd on Mac).
 static qboolean M_TextField_HasShortcutModifier(void)
 {
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
-	return keydown[K_COMMAND] || keydown[K_CTRL];
-#else
-	return keydown[K_CTRL];
-#endif
-}
-
-static qboolean M_TextField_HasWordMoveModifier(void)
-{
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
-	return keydown[K_COMMAND];
-#else
-	return keydown[K_CTRL];
-#endif
-}
-
-static qboolean M_TextField_HasWordDeleteModifier(void)
-{
-	return keydown[K_CTRL];
+	return Key_IsShortcutModifierDown();
 }
 
 void M_TextField_ClampCursor(menu_textfield_t *tf)
@@ -2119,7 +2103,7 @@ qboolean M_TextField_Key(menu_textfield_t *tf, int key)
 	case K_LEFTARROW:
 	case K_KP_LEFTARROW:
 		target = tf->cursor;
-		if (M_TextField_HasWordMoveModifier())
+		if (M_TextField_HasShortcutModifier())
 			target = M_TextField_FindWordBoundary(tf, -1);
 		else if (target > 0)
 			--target;
@@ -2129,7 +2113,7 @@ qboolean M_TextField_Key(menu_textfield_t *tf, int key)
 	case K_RIGHTARROW:
 	case K_KP_RIGHTARROW:
 		target = tf->cursor;
-		if (M_TextField_HasWordMoveModifier())
+		if (M_TextField_HasShortcutModifier())
 			target = M_TextField_FindWordBoundary(tf, +1);
 		else if (target < len)
 			++target;
@@ -2147,14 +2131,14 @@ qboolean M_TextField_Key(menu_textfield_t *tf, int key)
 	case K_BACKSPACE:
 		if (M_TextField_DeleteSelection(tf))
 			return true;
-		if (M_TextField_HasWordDeleteModifier())
+		if (M_TextField_HasShortcutModifier())
 			return M_TextField_DeleteRange(tf, M_TextField_FindWordBoundary(tf, -1), tf->cursor);
 		return M_TextField_DeleteRange(tf, tf->cursor - 1, tf->cursor);
 
 	case K_DEL:
 		if (M_TextField_DeleteSelection(tf))
 			return true;
-		if (M_TextField_HasWordDeleteModifier())
+		if (M_TextField_HasShortcutModifier())
 			return M_TextField_DeleteRange(tf, tf->cursor, M_TextField_FindWordBoundary(tf, +1));
 		return M_TextField_DeleteRange(tf, tf->cursor, tf->cursor + 1);
 
@@ -4892,7 +4876,7 @@ static void M_ModMenu_Maps_Key(int key)
 	menulist_t *list = &modmenu_mapmenu.list;
 	int x, y;
 
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((key == 'u' || key == 'U') && list->search.len > 0)
 		{
@@ -6083,7 +6067,7 @@ void M_Load_Key (int k)
 {
 	save_entry_t *selected;
 
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((k == 'u' || k == 'U') && loadmenu.list.search.len > 0)
 		{
@@ -6713,7 +6697,7 @@ void M_Maps_Key(int key)
 {
 	int x, y;
 
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((key == 'u' || key == 'U') && mapsmenu.list.search.len > 0)
 		{
@@ -7258,7 +7242,7 @@ void M_DownloadMaps_Key(int key)
 {
 	int x, y;
 
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((key == 'u' || key == 'U') && downloadmapsmenu.list.search.len > 0)
 		{
@@ -8863,7 +8847,7 @@ void M_NameMaker_Key (int k)
 		break;
 
 	case K_BACKSPACE:
-		if (keydown[K_CTRL])
+		if (Key_IsShortcutModifierDown())
 		{
 			listsearch_t temp;
 			temp.len = strlen(namemaker_name);
@@ -8882,7 +8866,7 @@ void M_NameMaker_Key (int k)
 
 	case 'u':
 	case 'U':
-		if (keydown[K_CTRL])
+		if (Key_IsShortcutModifierDown())
 		{
 			namemaker_name[0] = 0;
 			M_TextField_ClampCursor(&namemaker_name_field);
@@ -10288,13 +10272,13 @@ void M_WeaponWheel_Draw(void)
 		M_DrawCharacter(16, M_WeaponWheel_CursorY(weaponwheelmenu.cursor), 12 + ((int)(realtime * 4) & 1));
 
 	legend_width = (float)(strlen("enter:") + strlen("toggle  ") + strlen("left/right:") +
-		strlen("reorder  ") + strlen("ctrl+r:") + strlen("defaults")) * 8.0f * legend_scale;
+		strlen("reorder  ") + strlen(KEY_SHORTCUT_MODIFIER_NAME_LOWER "+r:") + strlen("defaults")) * 8.0f * legend_scale;
 	legend_x = (320.0f - legend_width) * 0.5f;
 	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "enter:", false, legend_scale);
 	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "toggle  ", true, legend_scale);
 	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "left/right:", false, legend_scale);
 	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "reorder  ", true, legend_scale);
-	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "ctrl+r:", false, legend_scale);
+	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, KEY_SHORTCUT_MODIFIER_NAME_LOWER "+r:", false, legend_scale);
 	M_WeaponWheel_PrintLegendSegment(&legend_x, 190, "defaults", true, legend_scale);
 }
 
@@ -10339,7 +10323,7 @@ void M_WeaponWheel_Key(int key)
 		}
 	}
 
-	if (keydown[K_CTRL] && (key == 'r' || key == 'R'))
+	if (Key_IsShortcutModifierDown() && (key == 'r' || key == 'R'))
 	{
 		M_WeaponWheel_ResetDefaults();
 		return;
@@ -11216,11 +11200,11 @@ void M_Keys_Key(int k)
 		return;
 	}
 
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((k == 'u' || k == 'U') && keysmenu.search.len > 0)
 		{
-			// Clear entire search with Ctrl+U
+			// Clear entire search with the platform shortcut modifier
 			keysmenu.search.len = 0;
 			keysmenu.search.text[0] = 0;
 			M_Keys_UpdateFilter();
@@ -11228,7 +11212,7 @@ void M_Keys_Key(int k)
 		}
 		else if (k == K_BACKSPACE && keysmenu.search.len > 0)
 		{
-			// Delete previous word with Ctrl+Backspace
+			// Delete previous word with the platform shortcut modifier
 			listsearch_t temp;
 			temp.len = keysmenu.search.len;
 			Q_strcpy(temp.text, keysmenu.search.text);
@@ -11256,7 +11240,7 @@ void M_Keys_Key(int k)
 	{
 		if (keysmenu.search.len > 0)
 		{
-			if (keydown[K_CTRL])
+			if (Key_IsShortcutModifierDown())
 			{
 				// Delete previous word instead of just one character
 				listsearch_t temp;
@@ -12012,7 +11996,7 @@ void M_Mouse_Key(int k)
 	{
 		if (mousemenu.search.len > 0)
 		{
-			if (keydown[K_CTRL])
+			if (Key_IsShortcutModifierDown())
 			{
 				// Delete previous word
 				listsearch_t temp;
@@ -12034,7 +12018,7 @@ void M_Mouse_Key(int k)
 	}
 	else if (k == 'u' || k == 'U')
 	{
-		if (keydown[K_CTRL] && mousemenu.search.len > 0)
+		if (Key_IsShortcutModifierDown() && mousemenu.search.len > 0)
 		{
 			mousemenu.search.len = 0;
 			mousemenu.search.text[0] = 0;
@@ -14564,11 +14548,11 @@ void M_Graphics_Key(int k)
 		M_Menu_Options_f();
 		return;
 	}
-	else if (keydown[K_CTRL])
+	else if (Key_IsShortcutModifierDown())
 	{
 		if ((k == 'u' || k == 'U') && graphicsmenu.search.len > 0)
 		{
-			// Clear entire search with Ctrl+U
+			// Clear entire search with the platform shortcut modifier
 			graphicsmenu.search.len = 0;
 			graphicsmenu.search.text[0] = 0;
 			M_Graphics_UpdateSearch();
@@ -14576,7 +14560,7 @@ void M_Graphics_Key(int k)
 		}
 		else if (k == K_BACKSPACE && graphicsmenu.search.len > 0)
 		{
-			// Delete previous word with Ctrl+Backspace
+			// Delete previous word with the platform shortcut modifier
 			listsearch_t temp;
 			temp.len = graphicsmenu.search.len;
 			Q_strcpy(temp.text, graphicsmenu.search.text);
@@ -16286,11 +16270,11 @@ void M_Sound_Key(int k)
 		M_Menu_Options_f();
 		return;
 	}
-	else if (keydown[K_CTRL])
+	else if (Key_IsShortcutModifierDown())
 	{
 		if ((k == 'u' || k == 'U') && soundmenu.search.len > 0)
 		{
-			// Clear entire search with Ctrl+U
+			// Clear entire search with the platform shortcut modifier
 			soundmenu.search.len = 0;
 			soundmenu.search.text[0] = 0;
 			M_Sound_UpdateSearch();
@@ -16298,7 +16282,7 @@ void M_Sound_Key(int k)
 		}
 		else if (k == K_BACKSPACE && soundmenu.search.len > 0)
 		{
-			// Delete previous word with Ctrl+Backspace
+			// Delete previous word with the platform shortcut modifier
 			listsearch_t temp;
 			temp.len = soundmenu.search.len;
 			Q_strcpy(temp.text, soundmenu.search.text);
@@ -18247,11 +18231,11 @@ void M_Game_Key(int k)
 		M_Menu_Options_f();
 		return;
 	}
-	else if (keydown[K_CTRL])
+	else if (Key_IsShortcutModifierDown())
 	{
 		if ((k == 'u' || k == 'U') && gamemenu.search.len > 0)
 		{
-			// Clear entire search with Ctrl+U
+			// Clear entire search with the platform shortcut modifier
 			gamemenu.search.len = 0;
 			gamemenu.search.text[0] = 0;
 			M_Game_UpdateSearch();
@@ -18259,7 +18243,7 @@ void M_Game_Key(int k)
 		}
 		else if (k == K_BACKSPACE && gamemenu.search.len > 0)
 		{
-			// Delete previous word with Ctrl+Backspace
+			// Delete previous word with the platform shortcut modifier
 			listsearch_t temp;
 			temp.len = gamemenu.search.len;
 			Q_strcpy(temp.text, gamemenu.search.text);
@@ -19251,11 +19235,11 @@ void M_HUD_Key(int k)
 		M_Menu_Options_f();
 		return;
 	}
-	else if (keydown[K_CTRL])
+	else if (Key_IsShortcutModifierDown())
 	{
 		if ((k == 'u' || k == 'U') && hudmenu.search.len > 0)
 		{
-			// Clear entire search with Ctrl+U
+			// Clear entire search with the platform shortcut modifier
 			hudmenu.search.len = 0;
 			hudmenu.search.text[0] = 0;
 			numberOfHUDItems = HUD_ITEMS;
@@ -19263,7 +19247,7 @@ void M_HUD_Key(int k)
 		}
 		else if (k == K_BACKSPACE && hudmenu.search.len > 0)
 		{
-			// Delete previous word with Ctrl+Backspace
+			// Delete previous word with the platform shortcut modifier
 			listsearch_t temp;
 			temp.len = hudmenu.search.len;
 			Q_strcpy(temp.text, hudmenu.search.text);
@@ -20182,7 +20166,7 @@ void M_Crosshair_Key(int k)
 		{
 		case 'c':
 		case 'C':
-			if (keydown[K_CTRL])
+			if (Key_IsShortcutModifierDown())
 			{
 				if (last_crosshair_color[0] != '\0')
 					SDL_SetClipboardText(last_crosshair_color);
@@ -21138,17 +21122,17 @@ void M_Console_Key(int k)
 		M_Menu_Options_f();
 		return;
 	}
-	else if (keydown[K_CTRL])
+	else if (Key_IsShortcutModifierDown())
 	{
 		if ((k == 'u' || k == 'U') && consolemenu.search.len > 0)
 		{
-			// Clear entire search with Ctrl+U
+			// Clear entire search with the platform shortcut modifier
 			M_Console_ClearSearch();
 			return;
 		}
 		else if (k == K_BACKSPACE && consolemenu.search.len > 0)
 		{
-			// Delete previous word with Ctrl+Backspace
+			// Delete previous word with the platform shortcut modifier
 			listsearch_t temp;
 			temp.len = consolemenu.search.len;
 			Q_strcpy(temp.text, consolemenu.search.text);
@@ -22763,11 +22747,11 @@ void M_Extras_Key(int k)
 		M_Menu_Options_f();
 		return;
 	}
-	else if (keydown[K_CTRL])
+	else if (Key_IsShortcutModifierDown())
 	{
 		if ((k == 'u' || k == 'U') && extrasmenu.list.search.len > 0)
 		{
-			// Clear entire search with Ctrl+U
+			// Clear entire search with the platform shortcut modifier
 			extrasmenu.list.search.len = 0;
 			extrasmenu.list.search.text[0] = 0;
 			M_Extras_UpdateSearch();
@@ -22775,7 +22759,7 @@ void M_Extras_Key(int k)
 		}
 		else if (k == K_BACKSPACE && extrasmenu.list.search.len > 0)
 		{
-			// Delete previous word with Ctrl+Backspace
+			// Delete previous word with the platform shortcut modifier
 			M_DeletePrevWord(&extrasmenu.list.search);
 			M_Extras_UpdateSearch();
 			return;
@@ -23409,19 +23393,22 @@ static void M_Shortcuts_Init(void)
 	M_Ticker_Init(&shortcutmenu.ticker);
 
 	M_Shortcuts_AddHeader("App and System");
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+#if defined(__APPLE__) || defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
 	M_Shortcuts_AddShortcut("Show keyboard shortcuts", "Cmd+/");
-#endif
-	M_Shortcuts_AddShortcut("Toggle fullscreen", "Option+Enter");
+	M_Shortcuts_AddShortcut("Toggle fullscreen", KEY_ALT_MODIFIER_NAME "+Enter");
 	M_Shortcuts_AddShortcut("Minimize from fullscreen", "Cmd+Tab");
-	M_Shortcuts_AddShortcut("Show command history", "Cmd+Y / Ctrl+H");
-	M_Shortcuts_AddShortcut("Stop active download", "Cmd+. / Ctrl+.");
-	M_Shortcuts_AddShortcut("Paste clipboard file", "Cmd+V / Ctrl+V");
-	M_Shortcuts_AddShortcut("Mute or unmute sound", "Cmd+M / Ctrl+M");
-	M_Shortcuts_AddShortcut("Increase UI scale", "Cmd+Shift+Wheel Up / Ctrl+Shift+Wheel Up");
-	M_Shortcuts_AddShortcut("Decrease UI scale", "Cmd+Shift+Wheel Down / Ctrl+Shift+Wheel Down");
-	M_Shortcuts_AddShortcut("Increase volume", "Option+Shift+Wheel Up");
-	M_Shortcuts_AddShortcut("Decrease volume", "Option+Shift+Wheel Down");
+	M_Shortcuts_AddShortcut("Show command history", "Cmd+Y");
+#else
+	M_Shortcuts_AddShortcut("Toggle fullscreen", KEY_ALT_MODIFIER_NAME "+Enter");
+	M_Shortcuts_AddShortcut("Show command history", "Ctrl+H");
+#endif
+	M_Shortcuts_AddShortcut("Stop active download", KEY_SHORTCUT_MODIFIER_NAME "+.");
+	M_Shortcuts_AddShortcut("Paste clipboard file", KEY_SHORTCUT_MODIFIER_NAME "+V");
+	M_Shortcuts_AddShortcut("Mute or unmute sound", KEY_SHORTCUT_MODIFIER_NAME "+M");
+	M_Shortcuts_AddShortcut("Increase UI scale", KEY_SHORTCUT_MODIFIER_NAME "+Shift+Wheel Up");
+	M_Shortcuts_AddShortcut("Decrease UI scale", KEY_SHORTCUT_MODIFIER_NAME "+Shift+Wheel Down");
+	M_Shortcuts_AddShortcut("Increase volume", KEY_ALT_MODIFIER_NAME "+Shift+Wheel Up");
+	M_Shortcuts_AddShortcut("Decrease volume", KEY_ALT_MODIFIER_NAME "+Shift+Wheel Down");
 
 	M_Shortcuts_AddHeader("Movement");
 	M_Shortcuts_AddShortcut("Move forward", "W / Up Arrow");
@@ -23479,32 +23466,32 @@ static void M_Shortcuts_Init(void)
 	M_Shortcuts_AddShortcut("Autocomplete", "Tab");
 	M_Shortcuts_AddShortcut("Previous or next command", "Up Arrow / Down Arrow");
 	M_Shortcuts_AddShortcut("Scroll console", "Page Up / Page Down / Wheel");
-	M_Shortcuts_AddShortcut("Page console scroll", "Ctrl+Page Up / Ctrl+Page Down");
-	M_Shortcuts_AddShortcut("Jump to top or bottom", "Ctrl+Home / Ctrl+End");
-	M_Shortcuts_AddShortcut("Move cursor by word", "Cmd+Left / Cmd+Right");
-	M_Shortcuts_AddShortcut("Adjust console height", "Cmd+Up / Cmd+Down");
+	M_Shortcuts_AddShortcut("Page console scroll", KEY_SHORTCUT_MODIFIER_NAME "+Page Up / " KEY_SHORTCUT_MODIFIER_NAME "+Page Down");
+	M_Shortcuts_AddShortcut("Jump to top or bottom", KEY_SHORTCUT_MODIFIER_NAME "+Home / " KEY_SHORTCUT_MODIFIER_NAME "+End");
+	M_Shortcuts_AddShortcut("Move cursor by word", KEY_SHORTCUT_MODIFIER_NAME "+Left / " KEY_SHORTCUT_MODIFIER_NAME "+Right");
+	M_Shortcuts_AddShortcut("Adjust console height", KEY_SHORTCUT_MODIFIER_NAME "+Up / " KEY_SHORTCUT_MODIFIER_NAME "+Down");
 	M_Shortcuts_AddShortcut("Extend selection", "Shift+Arrow");
-	M_Shortcuts_AddShortcut("Delete previous or next word", "Ctrl+Backspace / Ctrl+Delete");
-	M_Shortcuts_AddShortcut("Clear line", "Cmd+U / Ctrl+U");
-	M_Shortcuts_AddShortcut("Paste text", "Cmd+V / Ctrl+V / Shift+Insert");
-	M_Shortcuts_AddShortcut("Select all", "Cmd+A");
-	M_Shortcuts_AddShortcut("Copy console", "Cmd+C / Ctrl+C");
-	M_Shortcuts_AddShortcut("Abort line", "Ctrl+D");
+	M_Shortcuts_AddShortcut("Delete previous or next word", KEY_SHORTCUT_MODIFIER_NAME "+Backspace / " KEY_SHORTCUT_MODIFIER_NAME "+Delete");
+	M_Shortcuts_AddShortcut("Clear line", KEY_SHORTCUT_MODIFIER_NAME "+U");
+	M_Shortcuts_AddShortcut("Paste text", KEY_SHORTCUT_MODIFIER_NAME "+V / Shift+Insert");
+	M_Shortcuts_AddShortcut("Select all", KEY_SHORTCUT_MODIFIER_NAME "+A");
+	M_Shortcuts_AddShortcut("Copy console", KEY_SHORTCUT_MODIFIER_NAME "+C");
+	M_Shortcuts_AddShortcut("Abort line", KEY_SHORTCUT_MODIFIER_NAME "+D");
 
 	M_Shortcuts_AddHeader("Chat");
 	M_Shortcuts_AddShortcut("Open chat", "T");
 	M_Shortcuts_AddShortcut("Send or cancel chat", "Enter / Esc");
-	M_Shortcuts_AddShortcut("Send chat as team chat", "Ctrl+Enter");
-	M_Shortcuts_AddShortcut("Delete previous word", "Ctrl+Backspace");
-	M_Shortcuts_AddShortcut("Clear message", "Ctrl+U");
-	M_Shortcuts_AddShortcut("Paste message", "Ctrl+V");
+	M_Shortcuts_AddShortcut("Send chat as team chat", KEY_SHORTCUT_MODIFIER_NAME "+Enter");
+	M_Shortcuts_AddShortcut("Delete previous word", KEY_SHORTCUT_MODIFIER_NAME "+Backspace");
+	M_Shortcuts_AddShortcut("Clear message", KEY_SHORTCUT_MODIFIER_NAME "+U");
+	M_Shortcuts_AddShortcut("Paste message", KEY_SHORTCUT_MODIFIER_NAME "+V");
 
 	M_Shortcuts_AddHeader("Demo Playback");
 	M_Shortcuts_AddShortcut("Pause or resume", "Space");
 	M_Shortcuts_AddShortcut("Increase speed", "Up Arrow / Shift+.");
 	M_Shortcuts_AddShortcut("Decrease speed", "Down Arrow / Shift+,");
 	M_Shortcuts_AddShortcut("Rewind or fast-forward", "Left Arrow / Right Arrow");
-	M_Shortcuts_AddShortcut("Fine rewind or fast-forward", "Ctrl+Left / Ctrl+Right");
+	M_Shortcuts_AddShortcut("Fine rewind or fast-forward", KEY_SHORTCUT_MODIFIER_NAME "+Left / " KEY_SHORTCUT_MODIFIER_NAME "+Right");
 	M_Shortcuts_AddShortcut("Single-frame step while paused", ", / .");
 	M_Shortcuts_AddShortcut("Seek to 10-90 percent", "1-9");
 	M_Shortcuts_AddShortcut("Restart demo", "0 / Home");
@@ -23660,7 +23647,7 @@ void M_Shortcuts_Key(int key)
 		return;
 	}
 
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((key == 'u' || key == 'U') && shortcutmenu.list.search.len > 0)
 		{
@@ -24357,7 +24344,7 @@ void M_ModelViewer_Draw(void)
 
 void M_ModelViewer_Key(int key)
 {
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((key == 'u' || key == 'U') && modelviewermenu.list.search.len > 0)
 		{
@@ -25310,7 +25297,7 @@ void M_Version_Key(int key)
 		return;
 	}
 
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((key == 'u' || key == 'U') && versionmenu.list.search.len > 0)
 		{
@@ -27116,7 +27103,8 @@ void M_History_Draw(void)
 		if (historymenu.list.scroll + historymenu.list.viewsize < historymenu.list.numitems)
 			M_DrawEllipsisBar(x, y + historymenu.list.viewsize * 8, cols);
 	}
-	M_PrintWhite(x, y + 2 + historymenu.list.viewsize * 8 + 10, "ctrl+backspace: delete");
+	M_PrintWhite(x, y + 2 + historymenu.list.viewsize * 8 + 10,
+		KEY_SHORTCUT_MODIFIER_NAME_LOWER "+backspace: delete");
 }
 
 qboolean M_History_Match(int index, char initial)
@@ -27188,7 +27176,7 @@ void M_History_Key(int key)
 		break;
 
 	case K_BACKSPACE:
-		if (historymenu.items != NULL && keydown[K_CTRL])
+		if (historymenu.items != NULL && Key_IsShortcutModifierDown())
 		{
 			FileList_Subtract(historymenu.items[historymenu.list.cursor].connect_address, &serverlist);
 			Write_List(serverlist, SERVERLIST);
@@ -27390,7 +27378,8 @@ void M_Bookmarks_Draw(void)
 			M_DrawEllipsisBar(x, y + bookmarksmenu.list.viewsize * 8, cols);
 	}
 
-	M_Print(x, y + 2 + bookmarksmenu.list.viewsize * 8 + 20, "ctrl+  a:add  e:edit  backspace:delete");
+	M_Print(x, y + 2 + bookmarksmenu.list.viewsize * 8 + 20,
+		KEY_SHORTCUT_MODIFIER_NAME_LOWER "+  a:add  e:edit  backspace:delete");
 }
 
 qboolean M_Bookmarks_Match(int index, char initial)
@@ -27419,7 +27408,7 @@ void M_Bookmarks_Key(int key)
 	if (M_List_Key(&bookmarksmenu.list, key))
 		return;
 
-	if (M_List_CycleMatch(&bookmarksmenu.list, key, M_Bookmarks_Match) && !keydown[K_CTRL])
+	if (M_List_CycleMatch(&bookmarksmenu.list, key, M_Bookmarks_Match) && !Key_IsShortcutModifierDown())
 		return;
 
 	if (M_Ticker_Key(&bookmarksmenu.ticker, key))
@@ -27460,7 +27449,7 @@ void M_Bookmarks_Key(int key)
 
 	case 'a':
 	case 'A':
-		if (keydown[K_CTRL])
+		if (Key_IsShortcutModifierDown())
 		{
 			bookmarks_edit_new = true;
 			M_Menu_Bookmarks_Edit_f();
@@ -27469,7 +27458,7 @@ void M_Bookmarks_Key(int key)
 
 	case 'e':
 	case 'E':
-		if (keydown[K_CTRL])
+		if (Key_IsShortcutModifierDown())
 		{
 			if (bookmarksmenu.items != NULL)
 				M_Menu_Bookmarks_Edit_f();
@@ -27477,7 +27466,7 @@ void M_Bookmarks_Key(int key)
 		break;
 
 	case K_BACKSPACE:
-		if (bookmarksmenu.items != NULL && keydown[K_CTRL])
+		if (bookmarksmenu.items != NULL && Key_IsShortcutModifierDown())
 		{ 
 			FileList_Subtract(bookmarksmenu.items[bookmarksmenu.list.cursor].name, &bookmarkslist);
 			BookmarksList_Write();
@@ -32245,8 +32234,8 @@ void M_ServerList_Key(int key)
 	}
 
 	
-	// Handle Ctrl+U or Ctrl+Backspace first
-	if (keydown[K_CTRL])
+	// Handle shortcut-modified clear or word deletion first
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((key == 'u' || key == 'U') && serversmenu.list.search.len > 0)
 		{
@@ -32990,7 +32979,7 @@ void M_Mods_Key(int key)
 
 	int x, y; // woods #mousemenu
 
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((key == 'u' || key == 'U') && modsmenu.list.search.len > 0)
 		{
@@ -36940,7 +36929,7 @@ void M_DownloadMods_Key(int key)
 	if (M_DownloadMods_ExitPromptKey(key))
 		return;
 
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((key == 'u' || key == 'U') && downloadmodsmenu.list.search.len > 0)
 		{
@@ -40677,8 +40666,8 @@ void M_Demos_Key(int key)
 		return;
 	}
 
-	// Handle Ctrl+U or Ctrl+Backspace first
-	if (keydown[K_CTRL])
+	// Handle shortcut-modified clear or word deletion first
+	if (Key_IsShortcutModifierDown())
 	{
 		if ((key == 'u' || key == 'U') && demosmenu.list.search.len > 0)
 		{
@@ -41411,11 +41400,7 @@ static void AudioCatalog_InitCommands(void)
 #define AUDIO_LIST_ROWS 16
 #define AUDIO_PANEL_X 176
 #define AUDIO_PANEL_W 128
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
-#define AUDIO_COPY_HINT "Cmd-C Copy"
-#else
-#define AUDIO_COPY_HINT "Ctrl-C Copy"
-#endif
+#define AUDIO_COPY_HINT KEY_SHORTCUT_MODIFIER_NAME "-C Copy"
 
 extern int m_mousex, m_mousey;
 
@@ -41446,15 +41431,6 @@ static struct
 	char status[96];
 	double status_time;
 } audiomenu;
-
-static qboolean M_Audio_HasShortcutModifier(void)
-{
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
-	return keydown[K_COMMAND] || keydown[K_CTRL];
-#else
-	return keydown[K_CTRL];
-#endif
-}
 
 static audio_catalog_item_t *M_Audio_Selected(void)
 {
@@ -42091,12 +42067,12 @@ void M_AudioBrowser_Draw(void)
 
 void M_AudioBrowser_Key(int key)
 {
-	if (M_Audio_HasShortcutModifier() && (key == 'c' || key == 'C'))
+	if (Key_IsShortcutModifierDown() && (key == 'c' || key == 'C'))
 	{
 		M_Audio_Copy();
 		return;
 	}
-	if (keydown[K_CTRL] && (key == 'u' || key == 'U'))
+	if (Key_IsShortcutModifierDown() && (key == 'u' || key == 'U'))
 	{
 		audiomenu.searchlen = 0;
 		audiomenu.search[0] = 0;
@@ -42104,7 +42080,7 @@ void M_AudioBrowser_Key(int key)
 		M_Audio_Refilter();
 		return;
 	}
-	if (keydown[K_CTRL] && key == K_BACKSPACE && audiomenu.searchlen)
+	if (Key_IsShortcutModifierDown() && key == K_BACKSPACE && audiomenu.searchlen)
 	{
 		while (audiomenu.searchlen && audiomenu.search[audiomenu.searchlen - 1] == ' ')
 			audiomenu.searchlen--;

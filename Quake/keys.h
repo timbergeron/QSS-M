@@ -232,6 +232,18 @@ extern keydest_t	key_dest;
 extern	char	*keybindings[MAX_BINDMAPS][MAX_KEYS];
 extern	qboolean	keydown[MAX_KEYS];
 
+#if defined(__APPLE__) || defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+#define KEY_SHORTCUT_MODIFIER_NAME		"Cmd"
+#define KEY_SHORTCUT_MODIFIER_NAME_LOWER	"cmd"
+#define KEY_ALT_MODIFIER_NAME			"Option"
+#define KEY_ALT_MODIFIER_NAME_LOWER		"option"
+#else
+#define KEY_SHORTCUT_MODIFIER_NAME		"Ctrl"
+#define KEY_SHORTCUT_MODIFIER_NAME_LOWER	"ctrl"
+#define KEY_ALT_MODIFIER_NAME			"Alt"
+#define KEY_ALT_MODIFIER_NAME_LOWER		"alt"
+#endif
+
 #define		CMDLINES 64
 
 extern	char	key_lines[CMDLINES][MAXCMDLINE];
@@ -247,6 +259,7 @@ extern	qboolean	chat_team;
 void Key_Init (void);
 void Key_ClearStates (void);
 void Key_UpdateForDest (void);
+qboolean Key_IsShortcutModifierDown (void);
 
 void Key_BeginInputGrab (void);
 void Key_EndInputGrab (void);

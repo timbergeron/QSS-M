@@ -9192,7 +9192,7 @@ static void Host_Like_f (void) // woods #like
 		return;
 
 	char text[MAXCMDLINE];
-	const char *verb = keydown[K_CTRL] ? "loves" : "likes";
+	const char *verb = Key_IsShortcutModifierDown() ? "loves" : "likes";
 	qboolean saved_ctrlpressed;
 
 	if (strstr(cl.lastchat, ": ^mlikes^m") || strstr(cl.lastchat, ": ^mloves^m")) // no intinite likes
@@ -9215,7 +9215,7 @@ static void Host_Like_f (void) // woods #like
 		q_snprintf(text, sizeof(text), "say %s %s", verb, cl.lastchat + 1);
 	}
 
-	// Ctrl selects "loves" here; don't let the generic say modifier flip the channel.
+	// The platform shortcut modifier selects "loves" here; don't let the generic say modifier flip the channel.
 	saved_ctrlpressed = ctrlpressed;
 	ctrlpressed = false;
 	Cmd_ExecuteString(text, src_command);

@@ -2827,13 +2827,13 @@ static SDL_Cursor *VID_GetMenuTextCursor(void)
 
 static qboolean VID_Menu_CvarHintActive(qboolean selected, cvar_t *cv)
 {
-	return selected && keydown[K_CTRL] && cv != NULL &&
+	return selected && Key_IsShortcutModifierDown() && cv != NULL &&
 		cv->name != NULL && cv->string != NULL;
 }
 
 static qboolean VID_Menu_TextHintActive(qboolean selected, const char *text)
 {
-	return selected && keydown[K_CTRL] && text != NULL && text[0] != '\0';
+	return selected && Key_IsShortcutModifierDown() && text != NULL && text[0] != '\0';
 }
 
 static void VID_Menu_DrawHintValue(int x, int y, int maxwidth, const char *hint)
@@ -3364,11 +3364,11 @@ static void VID_MenuKey (int key)
 			M_Menu_Options_f();
 			return;
 		}
-		else if (keydown[K_CTRL])
+		else if (Key_IsShortcutModifierDown())
 		{
 			if ((key == 'u' || key == 'U') && videomenu.search.len > 0)
 			{
-				// Clear entire search with Ctrl+U
+				// Clear entire search with the platform shortcut modifier
 				videomenu.search.len = 0;
 				videomenu.search.text[0] = 0;
 				numberOfVideoItems = VIDEO_OPTIONS_ITEMS;

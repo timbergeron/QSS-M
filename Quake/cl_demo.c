@@ -1463,7 +1463,7 @@ static void CL_UpdateDemoSpeed(void)
 		cls.demospeed = normal_speed;
 	}
 
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 		cls.demospeed *= 0.25f;
 
 	if (cls.demospeed > 0.f)

@@ -53,6 +53,15 @@ qboolean	consolekeys[MAX_KEYS];	// if true, can't be rebound while in console
 qboolean	menubound[MAX_KEYS];	// if true, can't be rebound while in menu
 qboolean	keydown[MAX_KEYS];
 
+qboolean Key_IsShortcutModifierDown (void)
+{
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+	return keydown[K_CTRL] || keydown[K_COMMAND];
+#else
+	return keydown[K_CTRL];
+#endif
+}
+
 qboolean	Cmd_Exists2(const char* cmd_name); // woods #ezsay
 qboolean	ctrlpressed; // woods #saymodifier
 static qboolean key_gamepad_altmodifier_pressed = false;
@@ -662,7 +671,7 @@ static void AdjustConsoleHeight(int delta) // woods (Qrack) by joe, from ZQuake
 
 void Key_Extra (int* key) // woods #namemaker
 {
-	if (keydown[K_CTRL])
+	if (Key_IsShortcutModifierDown())
 	{
 		if (*key >= '0' && *key <= '9')
 		{
@@ -895,7 +904,7 @@ void Key_Console (int key)
 		key_tabpartial[0] = 0;
 		if (key_linepos > 1)
 		{
-			int numchars = keydown[K_CTRL] ? key_linepos - Key_FindWordBoundary(-1) : 1;
+			int numchars = Key_IsShortcutModifierDown() ? key_linepos - Key_FindWordBoundary(-1) : 1;
 			SDL_assert (numchars > 0);
 			workline += key_linepos - numchars;
 			len = strlen(workline);
@@ -911,7 +920,7 @@ void Key_Console (int key)
 		workline += key_linepos;
 		if (*workline)
 		{
-			int numchars = keydown[K_CTRL] ? Key_FindWordBoundary(1) - key_linepos : 1;
+			int numchars = Key_IsShortcutModifierDown() ? Key_FindWordBoundary(1) - key_linepos : 1;
 			SDL_assert(numchars > 0);
 			len = strlen(workline);
 			SDL_assert ((int)len >= numchars);
@@ -921,7 +930,7 @@ void Key_Console (int key)
 		return;
 
 	case K_HOME:
-		if (keydown[K_CTRL])
+		if (Key_IsShortcutModifierDown())
 		{
 			//skip initial empty lines
 			int i, x;
@@ -945,7 +954,7 @@ void Key_Console (int key)
 		return;
 
 	case K_END:
-		if (keydown[K_CTRL])
+		if (Key_IsShortcutModifierDown())
 			con_backscroll = 0;
 		else	key_linepos = strlen(workline);
 		Con_TabComplete (TABCOMPLETE_AUTOHINT); // woods #iwtabcomplete
@@ -953,14 +962,14 @@ void Key_Console (int key)
 
 	case K_PGUP:
 	case K_MWHEELUP:
-		con_backscroll += keydown[K_CTRL] ? ((con_vislines>>3) - 4) : 2;
+		con_backscroll += Key_IsShortcutModifierDown() ? ((con_vislines>>3) - 4) : 2;
 		if (con_backscroll > con_totallines - (vid.height>>3) - 1)
 			con_backscroll = con_totallines - (vid.height>>3) - 1;
 		return;
 
 	case K_PGDN:
 	case K_MWHEELDOWN:
-		con_backscroll -= keydown[K_CTRL] ? ((con_vislines>>3) - 4) : 2;
+		con_backscroll -= Key_IsShortcutModifierDown() ? ((con_vislines>>3) - 4) : 2;
 		if (con_backscroll < 0)
 			con_backscroll = 0;
 		return;
@@ -971,13 +980,9 @@ void Key_Console (int key)
 			Con_MoveSelection(-1, 0);
 			return;
 		}
-		if (key_linepos > 1) // woods (ironwail) support for ctrl+left/right per word
+		if (key_linepos > 1) // woods (ironwail) support for shortcut+left/right per word
 		{
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
-			if (keydown[K_COMMAND])
-#elif !defined(PLATFORM_OSX) || !defined(PLATFORM_MAC)
-			if (keydown[K_CTRL])
-#endif
+			if (Key_IsShortcutModifierDown())
 				key_linepos = Key_FindWordBoundary(-1);
 			else
 				key_linepos--;
@@ -1005,11 +1010,7 @@ void Key_Console (int key)
 		}
 		else
 		{
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
-			if (keydown[K_COMMAND]) // woods (ironwail)
-#elif !defined(PLATFORM_OSX) || !defined(PLATFORM_MAC)
-			if (keydown[K_CTRL])
-#endif
+			if (Key_IsShortcutModifierDown()) // woods (ironwail)
 				key_linepos = Key_FindWordBoundary(1);
 			else
 				key_linepos++;
@@ -1024,11 +1025,7 @@ void Key_Console (int key)
 			Con_MoveSelection(0, 1); // +1 because higher line numbers are older
 			return;
 		}
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods (qrack)
-		if (keydown[K_COMMAND])
-#else
-		if (keydown[K_CTRL])
-#endif
+		if (Key_IsShortcutModifierDown()) // woods (qrack)
 		{
 			AdjustConsoleHeight(-10);
 			return;
@@ -1062,11 +1059,7 @@ void Key_Console (int key)
 			Con_MoveSelection(0, -1); // -1 because lower line numbers are newer
 			return;
 		}
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods (qrack)
-		if (keydown[K_COMMAND])
-#else
-		if (keydown[K_CTRL])
-#endif
+		if (Key_IsShortcutModifierDown()) // woods (qrack)
 		{
 			AdjustConsoleHeight(10);
 			return;
@@ -1105,15 +1098,7 @@ void Key_Console (int key)
 
 	case 'U':
 	case 'u':
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
-		if (keydown[K_COMMAND]) {
-			key_lines[edit_line][1] = 0;	// woods clear all line typing (Qrack)
-			key_linepos = 1;
-			Con_TabComplete (TABCOMPLETE_AUTOHINT); // woods #iwtabcomplete
-			return;
-		}
-#endif
-		if (keydown[K_CTRL]) {
+		if (Key_IsShortcutModifierDown()) {
 			key_lines[edit_line][1] = 0;	// woods clear all line typing (Qrack)
 			key_linepos = 1;
 			Con_TabComplete (TABCOMPLETE_AUTOHINT); // woods #iwtabcomplete
@@ -1123,14 +1108,7 @@ void Key_Console (int key)
 
 	case 'v':
 	case 'V':
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
-		if (keydown[K_COMMAND]) {	/* Cmd+v paste (Mac-only) */
-			PasteToConsole();
-			Con_TabComplete (TABCOMPLETE_AUTOHINT); // woods #iwtabcomplete
-			return;
-		}
-#endif
-		if (keydown[K_CTRL]) {		/* Ctrl+v paste */
+		if (Key_IsShortcutModifierDown()) {
 			PasteToConsole();
 			Con_TabComplete (TABCOMPLETE_AUTOHINT); // woods #iwtabcomplete
 			return;
@@ -1139,31 +1117,20 @@ void Key_Console (int key)
 
 	case 'a': // woods #consolecursor
 	case 'A':
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #conselection
-		if (keydown[K_COMMAND]) { Con_SelectAll(); return; }
-#else
-		if (keydown[K_CTRL])    { Con_SelectAll(); return; }
-#endif
+		if (Key_IsShortcutModifierDown()) { Con_SelectAll(); return; }
 		break;
 
 	case 'c':
 	case 'C':
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #concopy
-		if (key_dest == key_console)
-			if (keydown[K_COMMAND]) {	/* Cmd+c: condump and copy to clipboard (Mac-only) */
-				Con_Copy_f();
-				return;
-		}
-#endif
-		if (key_dest == key_console)
-			if (keydown[K_CTRL]) {		/* Ctrl+c: condump and copy to clipboard */
+		if (key_dest == key_console && Key_IsShortcutModifierDown())
+		{
 			Con_Copy_f();
 			return;
 		}
 		break;
 	case 'd':
 	case 'D':
-		if (keydown[K_CTRL]) {		/* Ctrl+d: abort the line -- S.A */ // woods switched to D, from C #concopy
+		if (Key_IsShortcutModifierDown()) { // woods switched to D, from C #concopy
 			Con_Printf ("%s\n", workline);
 			workline[0] = ']';
 			workline[1] = 0;
@@ -1342,11 +1309,7 @@ static void Chat_ClampEditState (void)
 
 static qboolean Chat_CommandOrCtrlDown (void)
 {
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
-	return keydown[K_COMMAND] || keydown[K_CTRL];
-#else
-	return keydown[K_CTRL];
-#endif
+	return Key_IsShortcutModifierDown();
 }
 
 static int Chat_FindWordBoundary (int pos, int dir)
@@ -1703,7 +1666,7 @@ void Key_Message (int key)
 
 	case K_HOME:
 	case K_KP_HOME:
-		if (keydown[K_CTRL])
+		if (Key_IsShortcutModifierDown())
 			Chat_HistoryOldest ();
 		else
 			Chat_MoveCursor (0, keydown[K_SHIFT]);
@@ -1711,7 +1674,7 @@ void Key_Message (int key)
 
 	case K_END:
 	case K_KP_END:
-		if (keydown[K_CTRL])
+		if (Key_IsShortcutModifierDown())
 			Chat_HistoryEnd ();
 		else
 			Chat_MoveCursor (chat_bufferlen, keydown[K_SHIFT]);
@@ -2840,12 +2803,18 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		}
 	}
 
-	if (key == K_CTRL) // woods #saymodifier
+	if (key == K_CTRL
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+		|| key == K_COMMAND
+#endif
+		) // woods #saymodifier
 	{
-		if (down)
-			ctrlpressed = true;
-		else
-			ctrlpressed = false;
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+		// Keep the modifier active if Ctrl and Command overlap and only one is released.
+		ctrlpressed = down || keydown[key == K_CTRL ? K_COMMAND : K_CTRL];
+#else
+		ctrlpressed = down;
+#endif
 	}
 
 // handle fullscreen toggle
@@ -2877,20 +2846,9 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		return;
 	}
 
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #shortcuts #stopdownload
 	if (cls.download.active)
 	{
-		if (down && (key == '.') && keydown[K_COMMAND]) // woods #shortcuts #stopdownload
-		{
-			Cbuf_AddText("stopdownload\n");
-			return;
-		}
-	}
-#endif
-
-	if (cls.download.active)
-	{
-		if (down && (key == '.') && keydown[K_CTRL]) // woods #shortcuts #stopdownload
+		if (down && (key == '.') && Key_IsShortcutModifierDown()) // woods #shortcuts #stopdownload
 		{
 			Cbuf_AddText("stopdownload\n");
 			return;
@@ -2917,38 +2875,17 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		return;
 	}*/
 
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #shortcuts
 	if (!(scr_conscale.value > 11) || !(scr_sbarscale.value > 7)) // max clamp
-	if (down && (key == K_MWHEELUP) && (keydown[K_COMMAND] && keydown[K_SHIFT]))
+	if (down && (key == K_MWHEELUP) && Key_IsShortcutModifierDown() && keydown[K_SHIFT]) // woods #shortcuts
 	{
 		Cmd_ExecuteString("inc scr_conscale 1\n", src_command);
 		Cmd_ExecuteString("inc scr_sbarscale 1\n", src_command);
 		Cmd_ExecuteString("inc scr_crosshairscale 1\n", src_command);
 		return;
 	}
-#endif
-	if (!(scr_conscale.value > 11) || !(scr_sbarscale.value > 7)) // max clamp
-	if (down && (key == K_MWHEELUP) && (keydown[K_CTRL] && keydown[K_SHIFT])) // woods #shortcuts
-	{
-		Cmd_ExecuteString("inc scr_conscale 1\n", src_command);
-		Cmd_ExecuteString("inc scr_sbarscale 1\n", src_command);
-		Cmd_ExecuteString("inc scr_crosshairscale 1\n", src_command);
-		return;
-	}
-
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #shortcuts
-		if (!(scr_conscale.value < -1) || !(scr_sbarscale.value < -1)) // min clamp
-	if (down && (key == K_MWHEELDOWN) && (keydown[K_COMMAND] && keydown[K_SHIFT]))
-	{
-		Cmd_ExecuteString("inc scr_conscale -1\n", src_command);
-		Cmd_ExecuteString("inc scr_sbarscale -1\n", src_command);
-		Cmd_ExecuteString("inc scr_crosshairscale -1\n", src_command);
-		return;
-}
-#endif
 
 	if (!(scr_conscale.value < -1) || !(scr_sbarscale.value < -1)) // min clamp
-	if (down && (key == K_MWHEELDOWN) && (keydown[K_CTRL] && keydown[K_SHIFT])) // woods #shortcuts
+	if (down && (key == K_MWHEELDOWN) && Key_IsShortcutModifierDown() && keydown[K_SHIFT]) // woods #shortcuts
 	{
 		Cmd_ExecuteString("inc scr_conscale -1\n", src_command);
 		Cmd_ExecuteString("inc scr_sbarscale -1\n", src_command);
@@ -2982,15 +2919,7 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 			return;
 		}
 
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #shortcuts
-	if (down && (key == 'm') && keydown[K_COMMAND])
-	{ 
-		Sound_Toggle_Mute_f();
-		return;
-	}
-#endif
-
-	if (down && (key == 'm') && keydown[K_CTRL]) // woods #usermute
+	if (down && (key == 'm') && Key_IsShortcutModifierDown()) // woods #usermute
 	{
 		Sound_Toggle_Mute_f();
 		return;
@@ -3057,14 +2986,10 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		return;
 	}
 
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
-	if (down && !wasdown && (key == 'v' || key == 'V') && (keydown[K_CTRL] || keydown[K_COMMAND]) && IN_PasteClipboardFile())
-#else
-	if (down && !wasdown && (key == 'v' || key == 'V') && keydown[K_CTRL] && IN_PasteClipboardFile())
-#endif
+	if (down && !wasdown && (key == 'v' || key == 'V') && Key_IsShortcutModifierDown() && IN_PasteClipboardFile())
 		return;
 
-	if (down && !wasdown && key_dest == key_game && (key == 'c' || key == 'C') && keydown[K_CTRL])
+	if (down && !wasdown && key_dest == key_game && (key == 'c' || key == 'C') && Key_IsShortcutModifierDown())
 	{
 		if (TexturePointer_Copy(keydown[K_SHIFT]))
 			return;
@@ -3197,6 +3122,9 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		case K_DPAD_LEFT:
 		case K_DPAD_RIGHT:
 		case K_CTRL:
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+		case K_COMMAND:
+#endif
 			// Temporary modifiers: they don't perform their actions on up/down events, but are queried per frame instead
 			// to avoid having to manage state transitions (e.g. pressing esc while still holding left arrow to rewind).
 			return;
