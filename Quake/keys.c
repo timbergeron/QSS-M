@@ -2838,6 +2838,12 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		Print_History();
 		return;
 	}
+
+	if (down && key == ',' && keydown[K_COMMAND])
+	{
+		M_Menu_Options_f();
+		return;
+	}
 #endif
 
 	if (down && (key == 'h') && keydown[K_CTRL]) // woods #shortcuts #history

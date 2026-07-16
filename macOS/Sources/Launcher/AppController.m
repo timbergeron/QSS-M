@@ -1572,6 +1572,26 @@ static NSImage *QSSHostAppIcon(void)
     }
 }
 
+- (void)configureSettingsMenu
+{
+    NSMenu *mainMenu = [NSApp mainMenu];
+    NSMenuItem *appMenuItem = ([mainMenu numberOfItems] > 0) ? [mainMenu itemAtIndex:0] : nil;
+    NSMenu *appMenu = [appMenuItem submenu];
+    NSMenuItem *settingsItem = [appMenu itemWithTitle:@"Settings…"];
+
+    if (!settingsItem)
+        settingsItem = [appMenu itemWithTitle:@"Preferences…"];
+
+    if (settingsItem) {
+        [settingsItem setTitle:@"Settings…"];
+        [settingsItem setTarget:self];
+        [settingsItem setAction:@selector(showSettings:)];
+        [settingsItem setKeyEquivalent:@","];
+        [settingsItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
+        [settingsItem setEnabled:YES];
+    }
+}
+
 - (void)configureHelpMenu
 {
     NSMenu *mainMenu = [NSApp mainMenu];
@@ -3439,6 +3459,7 @@ doCommandBySelector:(SEL)commandSelector
     (void)aNotification;
 
     [self configureAboutMenu];
+    [self configureSettingsMenu];
     [self configureHelpMenu];
     [self configureQuitMenu];
     [self configureFileMenu];
@@ -3583,6 +3604,39 @@ doCommandBySelector:(SEL)commandSelector
 
     [self stopRawMousePermissionAssistant];
     exit(0);
+}
+
+- (IBAction)showSettings:(id)sender
+{
+    (void)sender;
+
+    if (SDL_WasInit(0) != 0) {
+        const SDL_Scancode scancodes[] = {
+            SDL_SCANCODE_LGUI, SDL_SCANCODE_COMMA,
+            SDL_SCANCODE_COMMA, SDL_SCANCODE_LGUI
+        };
+        const SDL_Keycode keycodes[] = {
+            SDLK_LGUI, SDLK_COMMA, SDLK_COMMA, SDLK_LGUI
+        };
+        const Uint8 states[] = {
+            SDL_PRESSED, SDL_PRESSED, SDL_RELEASED, SDL_RELEASED
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(scancodes) / sizeof(scancodes[0]); ++i) {
+            SDL_Event event = {0};
+            event.type = (states[i] == SDL_PRESSED) ? SDL_KEYDOWN : SDL_KEYUP;
+            event.key.state = states[i];
+            event.key.keysym.scancode = scancodes[i];
+            event.key.keysym.sym = keycodes[i];
+            event.key.keysym.mod = (i == 0 || i == 3) ? KMOD_NONE : KMOD_GUI;
+            SDL_PushEvent(&event);
+        }
+        return;
+    }
+
+    [launcherWindow makeKeyAndOrderFront:self];
+    [NSApp activateIgnoringOtherApps:YES];
 }
 
 - (IBAction)showAboutPanel:(id)sender {

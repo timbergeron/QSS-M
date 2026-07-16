@@ -67,6 +67,7 @@ extern NSString *FQPrefCommandLineKey;
 - (IBAction)launchQuake:(id)sender;
 - (IBAction)cancel:(id)sender;
 - (IBAction)showAboutPanel:(id)sender;
+- (IBAction)showSettings:(id)sender;
 - (IBAction)showKeyboardShortcutsPanel:(id)sender;
 - (IBAction)openQuakeFolder:(id)sender;
 - (IBAction)openGithub:(id)sender;
