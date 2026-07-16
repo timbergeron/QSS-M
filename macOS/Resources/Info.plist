@@ -9,7 +9,7 @@
 	<key>CFBundleIconFile</key>
 	<string>QuakeSpasm</string>
 	<key>CFBundleIdentifier</key>
-	<string>net.sf.quakespasm.QuakeSpasm</string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -17,22 +17,11 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.6.5</string>
-	<key>CFBundleSignature</key>
-	<string>????</string>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.action-games</string>
-	<key>LSMinimumSystemVersionByArchitecture</key>
-	<dict>
-		<key>i386</key>
-		<string>10.4.0</string>
-		<key>ppc</key>
-		<string>10.4.0</string>
-		<key>x86_64</key>
-		<string>10.6.0</string>
-		<key>arm64</key>
-		<string>11.0.0</string>
-	</dict>
 	<key>NSMainNibFile</key>
 	<string>Launcher</string>
 	<key>NSInputMonitoringUsageDescription</key>

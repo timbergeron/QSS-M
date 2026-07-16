@@ -1,0 +1,71 @@
+// Settings shared by the QSS-M Debug and Release configurations.
+
+SDKROOT = macosx
+ONLY_ACTIVE_ARCH = NO
+ALWAYS_SEARCH_USER_PATHS = NO
+
+// Intel remains compatible with macOS 10.13. Apple Silicon starts at 11.0.
+MACOSX_DEPLOYMENT_TARGET = 10.13
+MACOSX_DEPLOYMENT_TARGET[arch=arm64] = 11.0
+
+PRODUCT_NAME = QSS-M
+PRODUCT_BUNDLE_IDENTIFIER = com.quakeone.qssm
+INFOPLIST_FILE = Resources/Info.plist
+INSTALL_PATH = $(HOME)/Applications
+
+// These defaults match Quake/quakedef.h. The build phase rewrites the bundle
+// metadata from that header, and the release validator rejects configuration drift.
+MARKETING_VERSION = 1.6.8
+CURRENT_PROJECT_VERSION = 1006008
+VERSIONING_SYSTEM = apple-generic
+
+ENABLE_HARDENED_RUNTIME = NO
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks
+
+FRAMEWORK_SEARCH_PATHS = \
+    $(inherited) \
+    $(PROJECT_DIR)
+
+HEADER_SEARCH_PATHS = \
+    $(inherited) \
+    $(PROJECT_DIR)/vcpkg/installed/x64-osx-1013/include \
+    $(PROJECT_DIR)/vcpkg/installed/x64-osx-1013/include/opus \
+    $(PROJECT_DIR)/vcpkg/installed/arm64-osx-11/include \
+    $(PROJECT_DIR)/vcpkg/installed/arm64-osx-11/include/opus
+
+LIBRARY_SEARCH_PATHS = \
+    $(inherited) \
+    $(PROJECT_DIR) \
+    $(PROJECT_DIR)/libs_universal \
+    $(PROJECT_DIR)/vcpkg/installed/x64-osx-1013/lib \
+    $(PROJECT_DIR)/vcpkg/installed/arm64-osx-11/lib
+
+GCC_PREPROCESSOR_DEFINITIONS = \
+    $(inherited) \
+    GL_SILENCE_DEPRECATION=1 \
+    USE_SDL2 \
+    USE_CODEC_MP3 \
+    USE_CODEC_VORBIS \
+    USE_CODEC_WAVE \
+    USE_CODEC_FLAC \
+    USE_CODEC_OPUS \
+    USE_CODEC_XMP \
+    USE_CODEC_UMX \
+    SDL_FRAMEWORK \
+    USE_ZLIB \
+    USE_GNUTLS \
+    GNUTLS_STATIC
+
+OTHER_LDFLAGS = \
+    $(inherited) \
+    -lcurl \
+    -lgnutls \
+    -lnettle \
+    -lhogweed \
+    -lgmp \
+    -lidn2 \
+    -lunistring \
+    -ltasn1 \
+    -liconv \
+    -framework Security \
+    -framework CoreFoundation

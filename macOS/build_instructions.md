@@ -37,14 +37,19 @@ archive are written to:
 The maintained macOS build consists of:
 
 - `QuakeSpasm.xcodeproj`: the `QSS-M` application target.
+- `Configurations/`: shared build policy plus the Debug and Release settings.
 - `Sources/Launcher/`: the Objective-C launcher and macOS integration.
 - `Sources/SDL/`: the customized SDL application bootstrap.
 - `Resources/`: the app metadata, launcher UI, icon, and packaged resources.
 - `custom-triplets/`: the Intel and Apple Silicon vcpkg configurations.
 - `setup-vcpkg.sh`: dependency checkout, port overrides, builds, and universal
   archive creation.
-- `build-macos.sh`: dependency setup, release build, revision metadata, and ZIP
-  packaging.
+- `sync-bundle-version.sh`: strict synchronization of the app version and build
+  number from `Quake/quakedef.h`.
+- `build-macos.sh`: dependency setup, clean release build, revision metadata,
+  ZIP packaging, and release validation.
+- `verify-macos-release.sh`: validates the app and packaged ZIP metadata,
+  architectures, deployment targets, dependencies, and code-signature integrity.
 - `SDL2.framework`: the one separately bundled third-party binary. SDL2 is not
   currently built by the vcpkg setup.
 
@@ -93,8 +98,9 @@ name.
 ## Building
 
 `build-macos.sh` is the release and CI-equivalent entry point. It runs dependency
-setup, builds the `QSS-M` Release target, writes revision metadata, copies the
-controller database, and creates the release ZIP.
+setup, performs a clean build of the `QSS-M` Release target, writes revision
+metadata, copies the controller database, creates the release ZIP, and validates
+the exact packaged artifact.
 
 For development, run setup once and invoke Xcode directly:
 
@@ -110,9 +116,19 @@ Opening `QuakeSpasm.xcodeproj` in Xcode uses the same generated dependencies.
 - `build-macos.sh` sources `../ci-version.sh`.
 - `QSSM_VERSION_SUFFIX`, when set, is passed to Xcode as `QSSM_VER_SUFFIX`.
 - The Xcode build synchronizes `CFBundleShortVersionString` from
-  `Quake/quakedef.h`.
+  `Quake/quakedef.h` and derives a monotonically increasing `CFBundleVersion`
+  as `major * 1000000 + minor * 1000 + patch`. Minor and patch components must
+  remain below 1000 so that encoding stays monotonic.
 - Release builds write `build/Release/Quakespasm-Spiked-Revision.txt` with the
   Git revision and compile date.
+
+## Distribution signing
+
+The default build is ad-hoc signed so macOS can verify bundle integrity. It is
+not Developer ID signed or notarized, so downloaded archives may still require
+the quarantine-removal step documented in `macos_instructions.html`. A
+Gatekeeper-clean public distribution requires a separate credentialed signing
+and notarization pipeline.
 
 ## Troubleshooting
 

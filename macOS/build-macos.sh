@@ -23,7 +23,7 @@ fi
 
 link_log="$(mktemp "${TMPDIR:-/tmp}/qssm-xcodebuild.XXXXXX")"
 trap 'rm -f "$link_log"' EXIT
-xcodebuild "${xcodebuild_args[@]}" 2>&1 | tee "$link_log"
+xcodebuild "${xcodebuild_args[@]}" clean build 2>&1 | tee "$link_log"
 
 if grep -Fq "was built for newer 'macOS' version" "$link_log"; then
   echo "Release build contains objects newer than the configured macOS deployment target."
@@ -43,3 +43,7 @@ cp "$SCRIPT_DIR/../Quake/gamecontrollerdb.txt" build/Release/
 cd build/Release
 rm -f QSS-M-macOS.zip
 zip --symlinks --recurse-paths QSS-M-macOS.zip *
+
+"$SCRIPT_DIR/verify-macos-release.sh" \
+  "$SCRIPT_DIR/build/Release/QSS-M.app" \
+  "$SCRIPT_DIR/build/Release/QSS-M-macOS.zip"

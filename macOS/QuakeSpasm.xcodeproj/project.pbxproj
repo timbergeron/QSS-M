@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 46;
+	objectVersion = 56;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -174,19 +174,21 @@
 /* Begin PBXShellScriptBuildPhase section */
 		85D17E7520261A1A00100001 /* Sync Version from quakedef.h */ = {
 			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
+				"$(SRCROOT)/sync-bundle-version.sh",
 				"$(SRCROOT)/../Quake/quakedef.h",
+				"$(BUILT_PRODUCTS_DIR)/$(INFOPLIST_PATH)",
 			);
 			name = "Sync Version from quakedef.h";
 			outputPaths = (
+				"$(DERIVED_FILE_DIR)/qssm-version.stamp",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "HEADER=\"${SRCROOT}/../Quake/quakedef.h\"\nPLIST=\"${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}\"\n\nif [ ! -f \"$HEADER\" ]; then\n\techo \"warning: quakedef.h not found at $HEADER\"\n\texit 0\nfi\nif [ ! -f \"$PLIST\" ]; then\n\techo \"warning: Info.plist not found at $PLIST\"\n\texit 0\nfi\n\nMAJOR=$(awk '/^#define[[:space:]]+QSSM_VER_MAJOR[[:space:]]/ {print $3}' \"$HEADER\")\nMINOR=$(awk '/^#define[[:space:]]+QSSM_VER_MINOR[[:space:]]/ {print $3}' \"$HEADER\")\nPATCH=$(awk '/^#define[[:space:]]+QSSM_VER_PATCH[[:space:]]/ {print $3}' \"$HEADER\")\n\nif [ -z \"$MAJOR\" ] || [ -z \"$MINOR\" ] || [ -z \"$PATCH\" ]; then\n\techo \"warning: could not parse QSSM_VER_* from $HEADER\"\n\texit 0\nfi\n\nVERSION=\"${MAJOR}.${MINOR}.${PATCH}\"\n/usr/libexec/PlistBuddy -c \"Set :CFBundleShortVersionString ${VERSION}\" \"$PLIST\"\necho \"Set CFBundleShortVersionString to ${VERSION}\"\n";
+			shellScript = "\"${SRCROOT}/sync-bundle-version.sh\" \\\n\t\"${SRCROOT}/../Quake/quakedef.h\" \\\n\t\"${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}\" \\\n\t\"${SCRIPT_OUTPUT_FILE_0}\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -398,6 +400,9 @@
 		554BBA0D192C3FA3E15D9B12 /* ice_private.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ice_private.h; path = ../Quake/ice/ice_private.h; sourceTree = "<group>"; };
 		85F640302C9E1EE300615B7F /* macos_instructions.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = macos_instructions.html; path = readme/macos_instructions.html; sourceTree = "<group>"; };
 		8D1107310486CEB800E47090 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		A11C0F010000000000000001 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
+		A11C0F020000000000000002 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		A11C0F030000000000000003 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		93B34FA02946BA0300FB5B72 /* libmad.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libmad.a; path = libs_universal/libmad.a; sourceTree = "<group>"; };
 		93B34FA12946BA0300FB5B72 /* libFLAC.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libFLAC.a; path = libs_universal/libFLAC.a; sourceTree = "<group>"; };
 		93C7005C2944122500FDFB9D /* libvorbis.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libvorbis.a; path = libs_universal/libvorbis.a; sourceTree = "<group>"; };
@@ -471,6 +476,7 @@
 		29B97314FDCFA39411CA2CEA /* QuakeSpasm */ = {
 			isa = PBXGroup;
 			children = (
+				A11C0F040000000000000004 /* Configurations */,
 				48243B060D33ED0A00C29F8F /* macOS */,
 				483A77D80D2EE8C500CB2E4C /* Quake */,
 				29B97317FDCFA39411CA2CEA /* Resources */,
@@ -483,6 +489,16 @@
 			sourceTree = "<group>";
 			tabWidth = 8;
 			usesTabs = 1;
+		};
+		A11C0F040000000000000004 /* Configurations */ = {
+			isa = PBXGroup;
+			children = (
+				A11C0F010000000000000001 /* Shared.xcconfig */,
+				A11C0F020000000000000002 /* Debug.xcconfig */,
+				A11C0F030000000000000003 /* Release.xcconfig */,
+			);
+			path = Configurations;
+			sourceTree = "<group>";
 		};
 		29B97317FDCFA39411CA2CEA /* Resources */ = {
 			isa = PBXGroup;
@@ -861,7 +877,7 @@
 			);
 			name = "QSS-M";
 			productInstallPath = "$(HOME)/Applications";
-			productName = QuakeSpasm;
+			productName = "QSS-M";
 			productReference = 664D98F919CF6B78000D395C /* QSS-M.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -871,10 +887,10 @@
 		29B97313FDCFA39411CA2CEA /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				LastUpgradeCheck = 0420;
+				LastUpgradeCheck = 1500;
 			};
 			buildConfigurationList = C01FCF4E08A954540054247B /* Build configuration list for PBXProject "QuakeSpasm" */;
-			compatibilityVersion = "Xcode 3.2";
+			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = English;
 			hasScannedForEncodings = 1;
 			knownRegions = (
@@ -1024,259 +1040,27 @@
 /* Begin XCBuildConfiguration section */
 		664D98F719CF6B78000D395C /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A11C0F020000000000000002 /* Debug.xcconfig */;
 			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				ARCHS = "$(ARCHS_STANDARD)";
-				COPY_PHASE_STRIP = NO;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(FRAMEWORK_SEARCH_PATHS_QUOTED_FOR_TARGET_1)",
-					"$(PROJECT_DIR)",
-				);
-				FRAMEWORK_SEARCH_PATHS_QUOTED_FOR_TARGET_1 = "\"$(SRCROOT)\"";
-				GCC_DYNAMIC_NO_PIC = NO;
-				GCC_ENABLE_FIX_AND_CONTINUE = YES;
-				GCC_MODEL_TUNING = G5;
-				GCC_OPTIMIZATION_LEVEL = 0;
-				GCC_PREPROCESSOR_DEFINITIONS = (
-					"GL_SILENCE_DEPRECATION=1",
-					USE_SDL2,
-					USE_CODEC_MP3,
-					USE_CODEC_VORBIS,
-					USE_CODEC_WAVE,
-					USE_CODEC_FLAC,
-					USE_CODEC_OPUS,
-					USE_CODEC_XMP,
-					USE_CODEC_UMX,
-					SDL_FRAMEWORK,
-					USE_ZLIB,
-					USE_GNUTLS,
-					GNUTLS_STATIC,
-				);
-				HEADER_SEARCH_PATHS = (
-					"vcpkg/installed/x64-osx-1013/include",
-					"vcpkg/installed/x64-osx-1013/include/opus",
-					"vcpkg/installed/arm64-osx-11/include",
-					"vcpkg/installed/arm64-osx-11/include/opus",
-					"$(HEADER_SEARCH_PATHS)",
-				);
-				INFOPLIST_FILE = Resources/Info.plist;
-				INSTALL_PATH = "$(HOME)/Applications";
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)",
-					"$(PROJECT_DIR)/libs_universal",
-					"$(PROJECT_DIR)/vcpkg/installed/x64-osx-1013/lib",
-					"$(PROJECT_DIR)/vcpkg/installed/arm64-osx-11/lib",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 10.13;
-				OTHER_LDFLAGS = (
-					"-lcurl",
-					"-lgnutls",
-					"-lnettle",
-					"-lhogweed",
-					"-lgmp",
-					"-lidn2",
-					"-lunistring",
-					"-ltasn1",
-					"-liconv",
-					"-framework",
-					Security,
-					"-framework",
-					CoreFoundation,
-				);
-				PRODUCT_NAME = "QSS-M";
-				"SDKROOT[arch=arm64]" = macosx;
-				VALID_ARCHS = "i386 x86_64 arm64";
-				WRAPPER_EXTENSION = app;
-				ZERO_LINK = YES;
 			};
 			name = Debug;
 		};
 		664D98F819CF6B78000D395C /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A11C0F030000000000000003 /* Release.xcconfig */;
 			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				ARCHS = "$(ARCHS_STANDARD)";
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(FRAMEWORK_SEARCH_PATHS_QUOTED_FOR_TARGET_1)",
-					"$(PROJECT_DIR)",
-				);
-				FRAMEWORK_SEARCH_PATHS_QUOTED_FOR_TARGET_1 = "\"$(SRCROOT)\"";
-				GCC_GENERATE_DEBUGGING_SYMBOLS = NO;
-				GCC_MODEL_TUNING = G5;
-				GCC_PREPROCESSOR_DEFINITIONS = (
-					"GL_SILENCE_DEPRECATION=1",
-					USE_SDL2,
-					USE_CODEC_MP3,
-					USE_CODEC_VORBIS,
-					USE_CODEC_WAVE,
-					USE_CODEC_FLAC,
-					USE_CODEC_OPUS,
-					USE_CODEC_XMP,
-					USE_CODEC_UMX,
-					SDL_FRAMEWORK,
-					USE_ZLIB,
-					USE_GNUTLS,
-					GNUTLS_STATIC,
-				);
-				"GCC_WARN_64_TO_32_BIT_CONVERSION[arch=*64]" = NO;
-				HEADER_SEARCH_PATHS = (
-					"vcpkg/installed/x64-osx-1013/include",
-					"vcpkg/installed/x64-osx-1013/include/opus",
-					"vcpkg/installed/arm64-osx-11/include",
-					"vcpkg/installed/arm64-osx-11/include/opus",
-					"$(HEADER_SEARCH_PATHS)",
-				);
-				INFOPLIST_FILE = Resources/Info.plist;
-				INSTALL_PATH = "$(HOME)/Applications";
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)",
-					"$(PROJECT_DIR)/libs_universal",
-					"$(PROJECT_DIR)/vcpkg/installed/x64-osx-1013/lib",
-					"$(PROJECT_DIR)/vcpkg/installed/arm64-osx-11/lib",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 10.13;
-				OTHER_CFLAGS = "";
-				"OTHER_CFLAGS[arch=i386]" = (
-					"-arch",
-					i386,
-				);
-				OTHER_LDFLAGS = (
-					"-lcurl",
-					"-lgnutls",
-					"-lnettle",
-					"-lhogweed",
-					"-lgmp",
-					"-lidn2",
-					"-lunistring",
-					"-ltasn1",
-					"-liconv",
-					"-framework",
-					Security,
-					"-framework",
-					CoreFoundation,
-				);
-				"OTHER_LDFLAGS[arch=i386]" = (
-					"-arch",
-					i386,
-				);
-				"OTHER_LDFLAGS[arch=ppc]" = (
-					"-arch",
-					ppc,
-				);
-				PRODUCT_NAME = "QSS-M";
-				"SDKROOT[arch=arm64]" = macosx;
-				VALID_ARCHS = "i386 x86_64 arm64 ppc";
-				WRAPPER_EXTENSION = app;
 			};
 			name = Release;
 		};
 		C01FCF4F08A954540054247B /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ARCHS = "$(ARCHS_STANDARD)";
-				ENABLE_HARDENED_RUNTIME = NO;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(SRCROOT)",
-					"$(FRAMEWORK_SEARCH_PATHS)",
-				);
-				GCC_MODEL_TUNING = G3;
-				GCC_PREPROCESSOR_DEFINITIONS = (
-					"GL_SILENCE_DEPRECATION=1",
-					SDL_FRAMEWORK,
-				);
-				GCC_VERSION = "";
-				GCC_WARN_ABOUT_RETURN_TYPE = YES;
-				GCC_WARN_UNUSED_VARIABLE = YES;
-				HEADER_SEARCH_PATHS = (
-					"vcpkg/installed/x64-osx-1013/include",
-					"vcpkg/installed/x64-osx-1013/include/opus",
-					"vcpkg/installed/arm64-osx-11/include",
-					"vcpkg/installed/arm64-osx-11/include/opus",
-					"$(HEADER_SEARCH_PATHS)",
-				);
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
-				LIBRARY_SEARCH_PATHS = "";
-				MACOSX_DEPLOYMENT_TARGET = 10.11;
-				ONLY_ACTIVE_ARCH = NO;
-				OTHER_CFLAGS = "";
-				OTHER_CODE_SIGN_FLAGS = "--deep";
-				PREBINDING = NO;
-				SDKROOT = macosx;
-				"SDKROOT[arch=i386]" = macosx;
-				"SDKROOT[arch=ppc]" = macosx;
-				"SDKROOT[arch=x86_64]" = macosx;
-				STRIP_INSTALLED_PRODUCT = NO;
-				VALID_ARCHS = "i386 x86_64 arm64";
 			};
 			name = Debug;
 		};
 		C01FCF5008A954540054247B /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ARCHS = "$(ARCHS_STANDARD)";
-				COPY_PHASE_STRIP = NO;
-				DEPLOYMENT_POSTPROCESSING = NO;
-				ENABLE_HARDENED_RUNTIME = NO;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(SRCROOT)",
-					"$(FRAMEWORK_SEARCH_PATHS)",
-				);
-				GCC_MODEL_TUNING = G3;
-				GCC_PREPROCESSOR_DEFINITIONS = (
-					"GL_SILENCE_DEPRECATION=1",
-					USE_CODEC_MP3,
-					USE_CODEC_VORBIS,
-					USE_CODEC_WAVE,
-					USE_CODEC_FLAC,
-					USE_CODEC_OPUS,
-					USE_CODEC_XMP,
-					USE_CODEC_UMX,
-					SDL_FRAMEWORK,
-					USE_ZLIB,
-				);
-				GCC_VERSION = "";
-				GCC_WARN_ABOUT_RETURN_TYPE = YES;
-				GCC_WARN_UNUSED_VARIABLE = YES;
-				HEADER_SEARCH_PATHS = (
-					"vcpkg/installed/x64-osx-1013/include",
-					"vcpkg/installed/x64-osx-1013/include/opus",
-					"vcpkg/installed/arm64-osx-11/include",
-					"vcpkg/installed/arm64-osx-11/include/opus",
-					"$(HEADER_SEARCH_PATHS)",
-				);
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
-				LIBRARY_SEARCH_PATHS = "";
-				MACOSX_DEPLOYMENT_TARGET = 10.11;
-				ONLY_ACTIVE_ARCH = NO;
-				OTHER_CFLAGS = "";
-				OTHER_CODE_SIGN_FLAGS = "--deep";
-				OTHER_LDFLAGS = "";
-				"OTHER_LDFLAGS[arch=arm64]" = (
-					"-mmacosx-version-min=11.0",
-					"-arch",
-					arm64,
-				);
-				"OTHER_LDFLAGS[arch=i386]" = (
-					"-mmacosx-version-min=10.4",
-					"-arch",
-					i386,
-				);
-				"OTHER_LDFLAGS[arch=ppc]" = (
-					"-mmacosx-version-min=10.4",
-					"-arch",
-					ppc,
-				);
-				PREBINDING = NO;
-				SDKROOT = macosx;
-				"SDKROOT[arch=i386]" = macosx;
-				"SDKROOT[arch=ppc]" = macosx;
-				"SDKROOT[arch=x86_64]" = macosx;
-				STRIP_INSTALLED_PRODUCT = NO;
-				VALID_ARCHS = "i386 x86_64 arm64 ppc";
 			};
 			name = Release;
 		};
