@@ -2901,7 +2901,7 @@ void CL_ParseProQuakeMessage(void)
 	case pqc_new_team:
 		Sbar_Changed();
 		team = MSG_ReadByte() - 16;
-		if (team < 0 || team > 15)
+		if (team < 0 || team > 13)	// woods #pqteam -- teamscores holds 14 (colors 0-13); >13 overflowed the hunk alloc
 			Host_Error("CL_ParseProQuakeMessage: pqc_new_team invalid team");
 		shirt = MSG_ReadByte() - 16;
 		cl.teamgame = true;
@@ -2913,7 +2913,7 @@ void CL_ParseProQuakeMessage(void)
 	case pqc_erase_team:
 		Sbar_Changed();
 		team = MSG_ReadByte() - 16;
-		if (team < 0 || team > 15)
+		if (team < 0 || team > 13)	// woods #pqteam -- see pqc_new_team
 			Host_Error("CL_ParseProQuakeMessage: pqc_erase_team invalid team");
 		cl.teamscores[team].colors = 0;
 		cl.teamscores[team].frags = 0;		// JPG 3.20 - added this
@@ -2924,7 +2924,7 @@ void CL_ParseProQuakeMessage(void)
 		Sbar_Changed();
 		cl.teamgame = true;
 		team = MSG_ReadByte() - 16;
-		if (team < 0 || team > 15)
+		if (team < 0 || team > 13)	// woods #pqteam -- see pqc_new_team
 			Host_Error("CL_ParseProQuakeMessage: pqc_team_frags invalid team");
 		frags = MSG_ReadShortPQ();
 		if (frags & 32768)
