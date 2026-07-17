@@ -12371,13 +12371,20 @@ void Host_InitCommands (void)
 		{
 			Cmd_AddCommand(cmd_rand[i], Host_Say_Rand_f);
 			num_rand[i] = 0;
-			while (fgets(msg_rand[i][num_rand[i]], 128, f))
+			// woods #sayrandom -- msg_rand/msg_order only hold 128 entries; stop before overrunning them
+			while (num_rand[i] < 128 && fgets(msg_rand[i][num_rand[i]], 128, f))
 			{
 				char* ch = strchr(msg_rand[i][num_rand[i]], '\n');
 				if (ch)
 					*ch = 0;
 				if (msg_rand[i][num_rand[i]][0])
 					num_rand[i]++;
+			}
+			if (num_rand[i] == 128)
+			{
+				char extra[128];
+				if (fgets(extra, sizeof(extra), f))
+					Con_Warning("msgrand%d.txt exceeds 128 messages; extra ignored\n", i);
 			}
 			fclose(f);
 		}
