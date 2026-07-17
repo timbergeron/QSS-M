@@ -11537,7 +11537,7 @@ int unfun_match(const char* s1, char* s2) // woods add const
 	int i;
 	for (; *s2; s2++)
 	{
-		for (i = 0; s1[i]; i++)
+		for (i = 0; s1[i] && s2[i]; i++)	// woods -- guard s2[i] too, else a match past s2's NUL reads out of bounds
 		{
 			if (unfun[s1[i] & 127] != unfun[s2[i] & 127])
 				break;
