@@ -21,25 +21,24 @@ void LOC_PQ_Init (void) // woods added PQ to name #pqteam
 
 void LOC_Delete(location_t* loc)
 {
-	location_t** ptr, ** next;
-	for (ptr = &locations; *ptr; ptr = next)
+	location_t** ptr;
+	for (ptr = &locations; *ptr; ptr = &(*ptr)->next_loc)
 	{
-		next = &(*ptr)->next_loc;
 		if (*ptr == loc)
 		{
-			*ptr = loc->next_loc;
+			*ptr = loc->next_loc;	// unlink before freeing so loc is never read again // woods #pqteam
 			Z_Free(loc);
+			return;
 		}
 	}
 }
 
 void LOC_Clear_f (void)
 {
-	location_t *l;
-	for (l = locations;l;l = l->next_loc)
-	{
-		LOC_Delete(l);
-	}
+	// LOC_Delete unlinks the head and updates `locations`, so re-reading it each
+	// pass never dereferences a freed node. // woods #pqteam
+	while (locations)
+		LOC_Delete(locations);
 }
 
 void LOC_SetLoc (vec3_t mins, vec3_t maxs, char *name)
