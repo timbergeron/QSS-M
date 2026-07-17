@@ -2165,7 +2165,13 @@ void CL_RelinkEntities (void)
 
 	SCR_UpdateZoom(); // woods #zoom (ironwail)
 
-	if ((cls.demoplayback || (last_angle_time > host_time && !(in_attack.state & 3)))) // woods JPG - check for last_angle_time for smooth chasecam!  #smoothcam
+	// woods JPG - check for last_angle_time for smooth chasecam!  #smoothcam
+	// Only lerp when the newest snapshot actually carried an svc_setangle, otherwise
+	// we'd replay the old angle segment against a freshly restarted entity fraction.
+	if (cls.demoplayback ||
+		(cl.last_angle_time > host_time &&
+		 cl.last_setangle_mtime == cl.mtime[0] &&
+		 !(in_attack.state & 3)))
 	{
 	// interpolate the angles
 		for (j=0 ; j<3 ; j++)

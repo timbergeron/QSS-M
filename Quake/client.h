@@ -285,6 +285,8 @@ typedef struct
 // of each level and after teleporting.
 	vec3_t		mviewangles[2];	// during demo playback viewangles is lerped
 								// between these
+	double		last_angle_time;		// JPG - autodetects continuous svc_setangles (from Proquake)   // woods #smoothcam
+	double		last_setangle_mtime;	// mtime[0] of the latest snapshot that carried an svc_setangle // woods #smoothcam
 	vec3_t		viewangles;
 
 	vec3_t		mvelocity[2];	// update by server, used for lean+bob

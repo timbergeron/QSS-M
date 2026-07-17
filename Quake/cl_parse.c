@@ -4751,6 +4751,7 @@ void CL_ParseServerMessage (void)
 	const char		*str; //johnfitz
 	int			lastcmd; //johnfitz
 	const char*		s;	// woods #pqteam
+	qboolean		saw_setangle = false;	// woods #smoothcam
 //
 // if recording demos, copy the message out
 //
@@ -4792,6 +4793,13 @@ void CL_ParseServerMessage (void)
 				CL_ParseStuffText("\n");	//there's a few mods that forget to write \ns, that then fuck up other things too. So make sure it gets flushed to the cbuf. the cursize check is to reduce backbuffer overflows that would give a false positive.
 			if (cls.demoplayback)
 				CL_FinishDemoFrame(); // woods (iw) #democontrols
+
+			// woods #smoothcam -- svc_setangle is written before the snapshot time on
+			// replacement-delta packets, so only associate it with mtime[0] once the
+			// whole message (and thus that snapshot time) has been parsed.
+			if (!cls.demoplayback && saw_setangle)
+				cl.last_setangle_mtime = cl.mtime[0];
+
 			return;		// end of message
 		}
 
@@ -4909,15 +4917,16 @@ void CL_ParseServerMessage (void)
 
 			if (!cls.demoplayback) // woods #smoothcam
 			{
+				saw_setangle = true; // woods #smoothcam
 				VectorCopy (cl.mviewangles[0], cl.mviewangles[1]);
 
 				// JPG - hack with last_angle_time to autodetect continuous svc_setangles   // woods #smoothcam
-				if (last_angle_time > host_time - 0.3)
-					last_angle_time = host_time + 0.3;
-				else if (last_angle_time > host_time - 0.6)
-					last_angle_time = host_time;
+				if (cl.last_angle_time > host_time - 0.3)
+					cl.last_angle_time = host_time + 0.3;
+				else if (cl.last_angle_time > host_time - 0.6)
+					cl.last_angle_time = host_time;
 				else
-					last_angle_time = host_time - 0.3;
+					cl.last_angle_time = host_time - 0.3;
 
 				for (i = 0; i < 3; i++)
 					cl.mviewangles[0][i] = cl.viewangles[i];

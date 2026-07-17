@@ -59,7 +59,6 @@ qboolean	host_initialized;		// true if into command execution
 
 double		host_frametime;
 double		host_time;              // woods #smoothcam
-double		last_angle_time;		// JPG - for smooth chasecam (from Proquake)   // woods #smoothcam
 double		realtime;				// without any filtering or bounding
 double		oldrealtime;			// last frame run
 
@@ -957,7 +956,6 @@ void Host_InitLocal (void)
 	Host_FindMaxClients ();
 
 	host_time = 1.0;		// so a think at time 0 won't get called // woods #smoothcam
-	last_angle_time = 0.0;  // JPG - smooth chasecam  // woods #smoothcam
 	Host_InitDeQuake ();	// JPG 1.05 - initialize dequake array // for #iplog woods
 }
 

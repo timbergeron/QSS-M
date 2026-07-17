@@ -397,8 +397,6 @@ extern	double		realtime;		// not bounded in any way, changed at
 							// start of every frame, never reset
 extern	double		scr_volume_display_time; // woods
 
-extern	double		last_angle_time;	// JPG - need this for smooth chasecam (from Proquake)   // woods #smoothcam
-
 typedef struct filelist_item_s
 {
 	char			name[NET_NAMELEN]; // also stores full IPv6/DTLS server addresses
