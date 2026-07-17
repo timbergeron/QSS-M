@@ -4798,7 +4798,31 @@ void CL_ParseServerMessage (void)
 			// replacement-delta packets, so only associate it with mtime[0] once the
 			// whole message (and thus that snapshot time) has been parsed.
 			if (!cls.demoplayback && saw_setangle)
+			{
 				cl.last_setangle_mtime = cl.mtime[0];
+
+				// record a (time, angles) sample for cubic interpolation
+				if (cl.setangle_hist_count &&
+					cl.mtime[0] < cl.setangle_hist[cl.setangle_hist_count-1].time)
+					cl.setangle_hist_count = 0;	// server time went backwards; restart history
+
+				if (cl.setangle_hist_count &&
+					cl.mtime[0] == cl.setangle_hist[cl.setangle_hist_count-1].time)
+				{	// second setangle within the same snapshot (e.g. reliable channel) -- keep the newest angles
+					VectorCopy (cl.mviewangles[0], cl.setangle_hist[cl.setangle_hist_count-1].angles);
+				}
+				else
+				{
+					if (cl.setangle_hist_count == (int)countof(cl.setangle_hist))
+					{
+						memmove (&cl.setangle_hist[0], &cl.setangle_hist[1], sizeof(cl.setangle_hist) - sizeof(cl.setangle_hist[0]));
+						cl.setangle_hist_count--;
+					}
+					cl.setangle_hist[cl.setangle_hist_count].time = cl.mtime[0];
+					VectorCopy (cl.mviewangles[0], cl.setangle_hist[cl.setangle_hist_count].angles);
+					cl.setangle_hist_count++;
+				}
+			}
 
 			return;		// end of message
 		}

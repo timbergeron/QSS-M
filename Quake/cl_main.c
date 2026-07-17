@@ -56,6 +56,7 @@ cvar_t	cl_bottomcolor = {"bottomcolor", "", CVAR_ARCHIVE | CVAR_USERINFO};
 
 cvar_t	cl_shownet = {"cl_shownet","0",CVAR_NONE};	// can be 0, 1, or 2
 cvar_t	cl_nolerp = {"cl_nolerp","0",CVAR_NONE};
+cvar_t	cl_smoothcam_cubic = {"cl_smoothcam_cubic","0",CVAR_ARCHIVE}; // woods #smoothcam -- experimental cubic angle interpolation for observer/eyecam; default off until soak-tested
 cvar_t	cl_nopred = {"cl_nopred", "0", CVAR_ARCHIVE};	//name comes from quakeworld.
 
 cvar_t	cfg_unbindall = {"cfg_unbindall", "1", CVAR_ARCHIVE};
@@ -2127,6 +2128,91 @@ static void CL_AddSinglePlayerCTFFallbackStaticLights (void)
 	}
 }
 
+/*
+===============
+CL_SmoothcamCubic -- woods #smoothcam
+
+Smoother interpolation of the observer setangle stream.  The linear lerp pans
+at constant angular velocity within each snapshot interval and the velocity
+jumps at every boundary; at 40Hz server ticks that corner is the residual
+judder eyecam viewers perceive.  This evaluates a Hermite curve over the same
+interval instead: velocity-continuous during ordinary motion, with a one-sided
+monotone limiter (inspired by Fritsch-Carlson) that zeroes/caps the entry
+tangent at reversals and flicks so the curve can never overshoot -- at the cost
+of a small velocity step in exactly those cases (unavoidable without lookahead).
+
+Takes the same `frac` the entities interpolate with (so angles stay in step
+with positions and cl_nolerp's frac=1 is honored), and requires the history
+interval to be exactly [mtime[1], mtime[0]] -- a snapshot that arrived without
+a setangle desyncs the two timelines, and the linear result handles that
+better.  Overrides `out` and returns true only when all of that holds.
+===============
+*/
+static qboolean CL_SmoothcamCubic (vec3_t out, float frac)
+{
+	int		n = cl.setangle_hist_count;
+	int		j;
+	double	t0, t1, t2, dt10, dt21;
+	float	u, h00, h10, h01, h11;
+
+	if (n < 3)
+		return false;
+
+	t0 = cl.setangle_hist[n-3].time;
+	t1 = cl.setangle_hist[n-2].time;
+	t2 = cl.setangle_hist[n-1].time;
+
+	if (t2 != cl.mtime[0] || t1 != cl.mtime[1])
+		return false;	// history doesn't span the entity interpolation interval
+	dt10 = t1 - t0;
+	dt21 = t2 - t1;
+	if (dt10 <= 0 || dt21 <= 0 || dt10 > 0.105 || dt21 > 0.105)
+		return false;	// gap or irregular cadence; linear handles it better
+
+	u = CLAMP (0.0f, frac, 1.0f);
+
+	h00 = ((2*u - 3)*u)*u + 1;
+	h10 = ((u - 2)*u + 1)*u;
+	h01 = (3 - 2*u)*u*u;
+	h11 = (u - 1)*u*u;
+
+	for (j = 0; j < 3; j++)
+	{
+		float a2 = cl.setangle_hist[n-1].angles[j];
+		float d21 = cl.setangle_hist[n-2].angles[j] - a2;
+		float d10;
+		float r0, r1, s1, s2, m1;
+
+		// unwrap the older samples relative to the newest so the curve never
+		// crosses the +/-180 seam
+		if (d21 > 180) d21 -= 360; else if (d21 < -180) d21 += 360;
+		r1 = a2 + d21;
+		d10 = cl.setangle_hist[n-3].angles[j] - cl.setangle_hist[n-2].angles[j];
+		if (d10 > 180) d10 -= 360; else if (d10 < -180) d10 += 360;
+		r0 = r1 + d10;
+
+		s1 = (r1 - r0) / dt10;	// angular velocity entering the boundary
+		s2 = (a2 - r1) / dt21;	// angular velocity across the newest interval
+
+		// Entry tangent = previous interval's secant, i.e. the exit velocity of
+		// the previous curve -- velocity-continuous whenever it's accepted
+		// unchanged.  Monotone limits: zero it on reversals and cap it at 3x the
+		// new secant so the curve stays within [r1, a2] and cannot overshoot;
+		// in exactly those cases a small velocity step remains.
+		if (s1 * s2 <= 0)
+			m1 = 0;
+		else
+		{
+			m1 = s1;
+			if (fabsf(m1) > 3*fabsf(s2))
+				m1 = (m1 > 0 ? 3 : -3) * fabsf(s2);
+		}
+
+		out[j] = h00*r1 + h10*(m1*dt21) + h01*a2 + h11*(s2*dt21);
+	}
+	return true;
+}
+
 void CL_RelinkEntities (void)
 {
 	entity_t	*ent;
@@ -2185,6 +2271,11 @@ void CL_RelinkEntities (void)
 			// I'll set lerpangles (new variable), and view.c will use that instead.
 			cl.lerpangles[j] = cl.mviewangles[1][j] + frac*d; // #smoothcam
 		}
+
+		// woods #smoothcam -- upgrade to cubic interpolation when we have a
+		// healthy, aligned sample history (falls back to the linear result above)
+		if (!cls.demoplayback && cl_smoothcam_cubic.value)
+			CL_SmoothcamCubic (cl.lerpangles, frac);
 	}
 	else
 		VectorCopy(cl.viewangles, cl.lerpangles);
@@ -2264,6 +2355,9 @@ void CL_RelinkEntities (void)
 
 		if (ent->effects & EF_MUZZLEFLASH)
 		{
+			if (i == cl.viewentity)
+				SCR_Latency_MuzzleEcho (); // woods #latprobe
+
 			if (cl_muzzleflash.value) // woods #muzzleflash
 			{ 
 				vec3_t		fv, rv, uv;
@@ -6493,6 +6587,7 @@ void CL_SendCmd (void)
 
 	if (cls.signon == SIGNONS)
 	{
+		SCR_Latency_CmdSent (cmd.buttons); // woods #latprobe
 		if (pq_lag.value) // woods #pqlag
 			CL_SendMove2(&cmd);	// send the unreliable message
 		else
@@ -7590,6 +7685,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_anglespeedkey);
 	Cvar_RegisterVariable (&cl_shownet);
 	Cvar_RegisterVariable (&cl_nolerp);
+	Cvar_RegisterVariable (&cl_smoothcam_cubic); // woods #smoothcam
 	Cvar_RegisterVariable (&cl_nopred);
 	Cvar_RegisterVariable (&lookspring);
 	Cvar_RegisterVariable (&lookstrafe);

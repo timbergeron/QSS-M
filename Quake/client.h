@@ -287,6 +287,11 @@ typedef struct
 								// between these
 	double		last_angle_time;		// JPG - autodetects continuous svc_setangles (from Proquake)   // woods #smoothcam
 	double		last_setangle_mtime;	// mtime[0] of the latest snapshot that carried an svc_setangle // woods #smoothcam
+	struct {								// woods #smoothcam -- recent setangle samples for cubic interpolation
+		double	time;						// snapshot time (cl.mtime[0] when the setangle arrived)
+		vec3_t	angles;
+	}			setangle_hist[3];
+	int			setangle_hist_count;		// woods #smoothcam
 	vec3_t		viewangles;
 
 	vec3_t		mvelocity[2];	// update by server, used for lean+bob
