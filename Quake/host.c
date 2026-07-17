@@ -130,6 +130,9 @@ void SV_Next_Map_f(void); // woods #maprotation
 typedef struct
 {
 	qboolean	active;
+	qboolean	local_server;
+	qboolean	remote_predinfo;
+	qboolean	remote_pmove_seen;
 	double		start_time;
 	double		last_frame_time;
 	double		duration;
@@ -160,6 +163,16 @@ typedef struct
 } netfps_probe_eval_t;
 
 static netfps_probe_t netfps_probe;
+
+static qboolean Host_NetfpsProbe_RemotePmove (void)
+{
+	/* A server emits a nonzero view-entity pmovetype only for its usingpmove
+	 * path. Zero is inconclusive because MOVETYPE_NONE is also zero. */
+	return !sv.active &&
+		(cl.protocol_pext2 & PEXT2_PREDINFO) &&
+		cl.entities && cl.viewentity > 0 && cl.viewentity < cl.num_entities &&
+		cl.entities[cl.viewentity].netstate.pmovetype;
+}
 
 /*
 ================
@@ -218,9 +231,36 @@ isolation accumulator to suggest a negative host_maxfps value.
 static void Host_NetfpsProbe_Usage (void)
 {
 	Con_Printf ("usage: netfps_probe [seconds] [target_netfps]\n");
-	Con_Printf ("       netfps_probe stop\n");
 	Con_Printf ("Defaults: %.0f seconds, %.0f target netfps.\n",
 				NETFPS_PROBE_DEFAULT_SECONDS, NETFPS_PROBE_DEFAULT_TARGET);
+	Con_Printf ("Run after connecting and entering a map, then move and fight normally.\n");
+	Con_Printf ("Examples:\n");
+	Con_Printf ("  netfps_probe          use the defaults\n");
+	Con_Printf ("  netfps_probe 15       sample for 15 seconds\n");
+	Con_Printf ("  netfps_probe 15 150   test a 150 netfps target for 15 seconds\n");
+	Con_Printf ("  netfps_probe stop     stop an active probe\n");
+}
+
+static void Host_NetfpsProbe_Completion (const char *partial)
+{
+	if (Cmd_Argc () == 2)
+	{
+		Con_AddToTabList ("5", partial, "seconds", NULL);
+		Con_AddToTabList ("10", partial, "seconds (default)", NULL);
+		Con_AddToTabList ("15", partial, "seconds", NULL);
+		Con_AddToTabList ("30", partial, "seconds (maximum)", NULL);
+		Con_AddToTabList ("stop", partial, "stop active probe", NULL);
+		Con_AddToTabList ("cancel", partial, "stop active probe", NULL);
+		Con_AddToTabList ("help", partial, "show usage", NULL);
+	}
+	else if (Cmd_Argc () == 3)
+	{
+		Con_AddToTabList ("72", partial, "compatibility rate", NULL);
+		Con_AddToTabList ("100", partial, "target netfps", NULL);
+		Con_AddToTabList ("125", partial, "target netfps", NULL);
+		Con_AddToTabList ("144", partial, "target netfps", NULL);
+		Con_AddToTabList ("150", partial, "maximum target", NULL);
+	}
 }
 
 static int Host_NetfpsProbe_CompareDouble (const void *a, const void *b)
@@ -379,6 +419,7 @@ static void Host_NetfpsProbe_Report (void)
 	double avg_dt, avgfps, minfps, maxfps, p95_dt = 0.0, p95fps = 0.0;
 	double target;
 	int target_value, safe_target, i;
+	const netfps_probe_eval_t *recommendation;
 	netfps_probe_eval_t requested, safe, closest, candidate;
 
 	if (netfps_probe.intervals < 10 || netfps_probe.sum_dt <= 0.0 || netfps_probe.sample_count < 10)
@@ -423,11 +464,25 @@ static void Host_NetfpsProbe_Report (void)
 				avgfps, avg_dt * 1000.0);
 	Con_Printf ("netfps_probe: render floor %.1f fps 95%%, worst %.1f fps, peak %.1f fps.\n",
 				p95fps, minfps, maxfps);
+	if (netfps_probe.local_server)
+		Con_Printf ("netfps_probe: mode: local/listen server; netfps is also the server physics rate.\n");
+	else if (netfps_probe.remote_pmove_seen)
+		Con_Printf ("netfps_probe: mode: remote server with per-move player processing confirmed.\n");
+	else if (netfps_probe.remote_predinfo)
+	{
+		Con_Printf ("netfps_probe: mode: remote server with prediction protocol, but per-move processing was not observed.\n");
+		Con_Printf ("netfps_probe: note: probe while actively spawned if you expected per-move processing.\n");
+	}
+	else
+		Con_Printf ("netfps_probe: mode: remote server; per-move processing could not be confirmed.\n");
 
 	Con_Printf ("\nnetfps_probe: requested host_maxfps -%d estimates %.1f netfps (%.1f in worst second).\n",
 				target_value, requested.effective_netfps, requested.min_window_netfps);
 	Con_Printf ("netfps_probe: requested avg send %.2f ms, jitter %.2f ms, max late %.2f ms.\n",
 				requested.avg_send_dt * 1000.0, requested.send_jitter * 1000.0, requested.max_late * 1000.0);
+	if (requested.effective_netfps < target - 0.5)
+		Con_Printf ("netfps_probe: note: the sampled render cadence cannot sustain %.1f netfps; host_maxfps -%d is estimated at %.1f netfps.\n",
+				target, target_value, requested.effective_netfps);
 
 	Con_Printf ("\n");
 	Con_Printf ("netfps_probe: conservative command: host_maxfps -%d\n", safe.value);
@@ -444,7 +499,14 @@ static void Host_NetfpsProbe_Report (void)
 		Con_Printf ("netfps_probe: closest avg send %.2f ms, jitter %.2f ms, max late %.2f ms.\n",
 					closest.avg_send_dt * 1000.0, closest.send_jitter * 1000.0, closest.max_late * 1000.0);
 		if (closest.value > 72)
-			Con_Printf ("netfps_probe: note: closest-to-target is above 72 and can affect Quake physics; use conservative for normal play.\n");
+		{
+			if (netfps_probe.local_server)
+				Con_Printf ("netfps_probe: note: above 72 changes local server physics; use conservative for compatibility.\n");
+			else if (netfps_probe.remote_pmove_seen)
+				Con_Printf ("netfps_probe: note: the server reports per-move processing; a higher rate does not change local physics, but increases packet traffic and may be limited by server policy.\n");
+			else
+				Con_Printf ("netfps_probe: note: without confirmed per-move processing, a quick button tap can be overwritten when multiple moves arrive before one physics tick; use conservative for compatibility.\n");
+		}
 	}
 	if (safe.effective_netfps < target - 0.5)
 	{
@@ -458,7 +520,12 @@ static void Host_NetfpsProbe_Report (void)
 					netfps_probe.clamped_intervals,
 					netfps_probe.clamped_intervals == 1 ? "interval" : "intervals",
 					netfps_probe.clamped_intervals == 1 ? "it" : "them");
-	Con_Printf ("\nnetfps_probe: final recommendation: ^mhost_maxfps^m -^g%d^d\n", safe.value);
+	recommendation = (!netfps_probe.local_server && netfps_probe.remote_pmove_seen) ? &closest : &safe;
+	Con_Printf ("\nnetfps_probe: final recommendation: ^mhost_maxfps^m -^g%d^d%s\n",
+				recommendation->value,
+				recommendation == &closest && closest.value > 72 ? " (remote low-latency mode)" : "");
+	Con_Printf ("netfps_probe: final estimate: %.1f netfps (%.1f in worst second).\n",
+				recommendation->effective_netfps, recommendation->min_window_netfps);
 	Con_Printf ("\n");
 }
 
@@ -476,6 +543,8 @@ static void Host_NetfpsProbe_Frame (void)
 	}
 
 	now = realtime;
+	if (Host_NetfpsProbe_RemotePmove ())
+		netfps_probe.remote_pmove_seen = true;
 	if (netfps_probe.last_frame_time > 0.0)
 	{
 		dt = now - netfps_probe.last_frame_time;
@@ -537,6 +606,7 @@ static void Host_NetfpsProbe_f (void)
 		Con_Printf ("netfps_probe: run this after connecting and entering a map.\n");
 		if (cls.demoplayback || cls.timedemo)
 			Con_Printf ("netfps_probe: demo playback/timedemo timing is not useful for netfps calibration.\n");
+		Host_NetfpsProbe_Usage ();
 		return;
 	}
 
@@ -553,6 +623,9 @@ static void Host_NetfpsProbe_f (void)
 
 	memset (&netfps_probe, 0, sizeof(netfps_probe));
 	netfps_probe.active = true;
+	netfps_probe.local_server = sv.active;
+	netfps_probe.remote_predinfo = !sv.active && (cl.protocol_pext2 & PEXT2_PREDINFO);
+	netfps_probe.remote_pmove_seen = Host_NetfpsProbe_RemotePmove ();
 	netfps_probe.start_time = realtime;
 	netfps_probe.duration = CLAMP (NETFPS_PROBE_MIN_SECONDS, duration, NETFPS_PROBE_MAX_SECONDS);
 	netfps_probe.target_netfps = CLAMP (NETFPS_PROBE_MIN_TARGET, target, NETFPS_PROBE_MAX_TARGET);
@@ -906,6 +979,11 @@ void Host_InitLocal (void)
 	Cmd_AddCommand ("startup", Host_Startup_f); // woods #onload
 	Cmd_AddCommand ("host_cvar_migrate", Host_RunCvarMigrations); // woods #migration
 	Cmd_AddCommand ("netfps_probe", Host_NetfpsProbe_f);
+	{
+		cmd_function_t *netfps_probe_cmd = Cmd_FindCommand ("netfps_probe");
+		if (netfps_probe_cmd)
+			netfps_probe_cmd->completion = Host_NetfpsProbe_Completion;
+	}
 
 	Host_InitCommands ();
 
