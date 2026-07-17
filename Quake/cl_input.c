@@ -607,7 +607,7 @@ void CL_FinishMove(usercmd_t *cmd, qboolean isfinal)
 // woods #pqlag
 
 sizebuf_t lag_buff[32]; // JPG - support for synthetic lag
-byte lag_data[32][128];  // JPG - support for synthetic lag
+byte lag_data[32][1024];  // JPG - support for synthetic lag // woods -- 1024 to match CL_SendMove and the maxsize set in CL_SendMove2
 unsigned int lag_head, lag_tail; // JPG - support for synthetic lag
 double lag_sendtime[32]; // JPG - support for synthetic lag
 
