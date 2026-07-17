@@ -182,6 +182,7 @@ jobs:
       run: |
           set -euxo pipefail
           package_zip="macOS/build/Release/QSS-M-macOS.zip"
+          package_dmg="macOS/build/Release/QSS-M-macOS.dmg"
           log_root="artifact/logs/QSS-M-macOS-logs"
 
           rm -rf "$log_root"
@@ -202,14 +203,24 @@ jobs:
               }
             done
           fi
+          if [ -f "$package_dmg" ]; then
+            hdiutil imageinfo "$package_dmg" > "$log_root/QSS-M-macOS-dmg-info.txt"
+          fi
 
           echo "===== Log artifact tree ====="
           find artifact/logs -maxdepth 3 -type f | sort
 
-    - name: Upload macOS artifact
+    - name: Upload macOS ZIP artifact
       uses: actions/upload-artifact@v7
       with:
         path: macOS/build/Release/QSS-M-macOS.zip
+        if-no-files-found: error
+        archive: false
+
+    - name: Upload macOS DMG artifact
+      uses: actions/upload-artifact@v7
+      with:
+        path: macOS/build/Release/QSS-M-macOS.dmg
         if-no-files-found: error
         archive: false
 
