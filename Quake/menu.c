@@ -23039,6 +23039,13 @@ static int MenuSearch_Validate(qboolean verbose)
 	return errors;
 }
 
+static void MenuSearch_DebugValidate(void)
+{
+#ifndef NDEBUG
+	SDL_assert(MenuSearch_Validate(false) == 0);
+#endif
+}
+
 static void M_MenuSearch_Validate_f(void)
 {
 	MenuSearch_Validate(true);
@@ -42749,7 +42756,7 @@ static qboolean MQC_Init(void)
 	if (success && qcvm->extfuncs.m_draw)
 	{
 		M_MenuSearch_Close(false, true);
-		MenuSearch_Validate(false);
+		MenuSearch_DebugValidate();
 		for (i = 0; i < sizeof(menucommands)/sizeof(menucommands[0]); i++)
 			if (menucommands[i].cmd)
 			{
@@ -42869,7 +42876,7 @@ static void M_MenuRestart_f (void)
 	if (off || !MQC_Init())
 	{
 		MQC_Shutdown();
-		MenuSearch_Validate(false);
+		MenuSearch_DebugValidate();
 	}
 }
 
@@ -44116,11 +44123,7 @@ void M_Init (void)
 	Cvar_RegisterVariable (&menu_search_enable);
 	Cvar_RegisterVariable (&menu_search_debug);
 	M_TextField_Init(&menusearch.field, menusearch.query, MENU_SEARCH_QUERY_CHARS, false);
-	{
-		int validation_errors = MenuSearch_Validate(false);
-		if (developer.value)
-			SDL_assert(validation_errors == 0);
-	}
+	MenuSearch_DebugValidate();
 	AudioCatalog_InitCommands();
 
 	if (!MQC_Init())
