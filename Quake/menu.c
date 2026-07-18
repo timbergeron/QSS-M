@@ -28778,10 +28778,70 @@ static qboolean M_History_IsActive(const char* server)
 		NET_HostnameCache_AddressesMatch(lastmphost, server, net_hostport);
 }
 
+static void M_History_FormatDisplay(const char *address, char *display, size_t display_size)
+{
+	char friendly[MAX_SERVER_ADDRESS_LEN];
+	net_endpoint_t endpoint;
+
+	NET_HostnameCache_FormatDisplay(address, net_hostport,
+		friendly, sizeof(friendly));
+	if (NET_ParseEndpoint(friendly, net_hostport, &endpoint) &&
+		endpoint.port == net_hostport &&
+		NET_FormatEndpoint(&endpoint, false, display, display_size))
+		return;
+
+	q_strlcpy(display, friendly, display_size);
+}
+
+static qboolean M_History_EntriesMatch(const char *first, const char *second)
+{
+	char first_display[MAX_SERVER_ADDRESS_LEN];
+	char second_display[MAX_SERVER_ADDRESS_LEN];
+
+	if (NET_HostnameCache_AddressesMatch(first, second, net_hostport))
+		return true;
+
+	M_History_FormatDisplay(first, first_display, sizeof(first_display));
+	M_History_FormatDisplay(second, second_display, sizeof(second_display));
+	return !q_strcasecmp(first_display, second_display);
+}
+
+static qboolean M_History_IsShown(const char *address)
+{
+	int i;
+
+	for (i = 0; i < historymenu.list.numitems; i++)
+	{
+		const char *shown_address = historymenu.items[i].connect_address;
+
+		if (M_History_EntriesMatch(shown_address, address))
+			return true;
+	}
+
+	return false;
+}
+
+static void M_History_Remove(const char *address)
+{
+	filelist_item_t *item;
+	filelist_item_t *next;
+
+	for (item = serverlist; item; item = next)
+	{
+		next = item->next;
+		if (M_History_EntriesMatch(address, item->name))
+			FileList_Subtract(item->name, &serverlist);
+	}
+}
+
 static void M_History_Add(const char* name)
 {
 	historyitem_t history;
 	qboolean active;
+
+	if (M_History_IsShown(name))
+		return;
+
 	q_strlcpy(history.connect_address, name, sizeof(history.connect_address));
 	active = M_History_IsActive(name);
 
@@ -28808,7 +28868,15 @@ static void M_History_Init(void)
 	M_Ticker_Init(&historymenu.ticker);
 
 	for (item = serverlist; item; item = item->next)
-		M_History_Add(item->name);
+	{
+		if (item->data[0])
+			M_History_Add(item->name);
+	}
+	for (item = serverlist; item; item = item->next)
+	{
+		if (!item->data[0])
+			M_History_Add(item->name);
+	}
 
 	if (historymenu.list.cursor == -1)
 		historymenu.list.cursor = 0;
@@ -28859,8 +28927,8 @@ void M_History_Draw(void)
 		char display_address[MAX_SERVER_ADDRESS_LEN];
 		qboolean selected = (idx == historymenu.list.cursor);
 		qboolean active = M_History_IsActive(historymenu.items[idx].connect_address);
-		NET_HostnameCache_FormatDisplay(historymenu.items[idx].connect_address,
-			net_hostport, display_address, sizeof(display_address));
+		M_History_FormatDisplay(historymenu.items[idx].connect_address,
+			display_address, sizeof(display_address));
 
 		M_PrintScroll(x, y + i * 8, (cols - 2) * 8,
 			display_address,
@@ -28887,8 +28955,8 @@ qboolean M_History_Match(int index, char initial)
 {
 	char display_address[MAX_SERVER_ADDRESS_LEN];
 
-	NET_HostnameCache_FormatDisplay(historymenu.items[index].connect_address,
-		net_hostport, display_address, sizeof(display_address));
+	M_History_FormatDisplay(historymenu.items[index].connect_address,
+		display_address, sizeof(display_address));
 	return q_tolower(display_address[0]) == initial;
 }
 
@@ -28957,7 +29025,7 @@ enter:
 		if (historymenu.items != NULL && historymenu.list.numitems > 0 &&
 			Key_IsShortcutModifierDown())
 		{
-			FileList_Subtract(historymenu.items[historymenu.list.cursor].connect_address, &serverlist);
+			M_History_Remove(historymenu.items[historymenu.list.cursor].connect_address);
 			ServerHistory_Write();
 			M_Menu_History_f();
 		}
