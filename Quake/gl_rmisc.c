@@ -331,6 +331,36 @@ static void Cl_Damagehue_Completion_f (cvar_t* cvar, const char* partial)
 
 /*
 ===============
+Cl_DamagehueMode_Completion_f
+===============
+*/
+static void Cl_DamagehueMode_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "weapon and HUD damage tint", NULL);
+	Con_AddToTabList("2", partial, "weapon, HUD, and crosshair damage tint", NULL);
+}
+
+/*
+===============
+CL_Autodemo_Completion_f
+===============
+*/
+static void CL_Autodemo_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "record every map", NULL);
+	Con_AddToTabList("2", partial, "CRMod matches", NULL);
+	Con_AddToTabList("3", partial, "record multiplayer maps only", NULL);
+	Con_AddToTabList("4", partial, "record every map; new demo per level", NULL);
+}
+
+/*
+===============
 GL_PowerupShells_Completion_f -- woods #iwtabcomplete #powershell
 ===============
 */
@@ -633,9 +663,11 @@ void R_Init (void)
 	//spike
 
 	Cvar_RegisterVariable (&cl_damagehue);   // woods #damage
+	Cvar_SetCompletion (&cl_damagehue, &Cl_DamagehueMode_Completion_f);
 	Cvar_RegisterVariable (&cl_damagehuecolor);   // woods #damage
 	Cvar_SetCompletion (&cl_damagehuecolor, &Cl_Damagehue_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable(&cl_autodemo);   // woods #autodemo
+	Cvar_SetCompletion(&cl_autodemo, &CL_Autodemo_Completion_f);
 
 	Cvar_RegisterVariable (&gl_zfix); // QuakeSpasm z-fighting fix
 	Cvar_RegisterVariable (&r_lavaalpha);

@@ -2355,9 +2355,6 @@ void CL_RelinkEntities (void)
 
 		if (ent->effects & EF_MUZZLEFLASH)
 		{
-			if (i == cl.viewentity)
-				SCR_Latency_MuzzleEcho (); // woods #latprobe
-
 			if (cl_muzzleflash.value) // woods #muzzleflash
 			{ 
 				vec3_t		fv, rv, uv;
@@ -6587,7 +6584,6 @@ void CL_SendCmd (void)
 
 	if (cls.signon == SIGNONS)
 	{
-		SCR_Latency_CmdSent (cmd.buttons); // woods #latprobe
 		if (pq_lag.value) // woods #pqlag
 			CL_SendMove2(&cmd);	// send the unreliable message
 		else
@@ -7431,6 +7427,21 @@ static void CL_ContentFilter_Completion_f(cvar_t* cvar, const char* partial)
 
 /*
 ===============
+CL_ChatMode_Completion_f
+===============
+*/
+static void CL_ChatMode_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off; use say for chat", NULL);
+	Con_AddToTabList("1", partial, "unknown console input becomes chat", NULL);
+	Con_AddToTabList("2", partial, "chat-first; remove space for commands", NULL);
+	Con_AddToTabList("3", partial, "leading space chats; unspaced is command", NULL);
+}
+
+/*
+===============
 CL_Autovote_List_Completion_f -- woods #autovote
 ===============
 */
@@ -7715,6 +7726,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_lightning_zadjust); // woods for #truelight
 	Cvar_RegisterVariable (&gl_lightning_alpha); // woods for lighting alpha #lightalpha
 	Cvar_RegisterVariable (&cl_chatmode); // woods for #ezsay
+	Cvar_SetCompletion (&cl_chatmode, &CL_ChatMode_Completion_f);
 	Cvar_RegisterVariable (&cl_afk); // woods #smartafk
 	Cvar_RegisterVariable (&cl_idle); // woods #smartafk
 	Cvar_RegisterVariable (&r_rocketlight); // woods #rocketlight

@@ -2706,6 +2706,20 @@ static void SKy_Color_Completion_f(cvar_t* cvar, const char* partial)
 }
 
 /*
+===============
+Sky_FastSky_Completion_f
+===============
+*/
+static void Sky_FastSky_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "normal textured sky or skybox", NULL);
+	Con_AddToTabList("1", partial, "flat-color fast sky", NULL);
+	Con_AddToTabList("2", partial, "prefer skybox; otherwise flat color", NULL);
+}
+
+/*
 =================
 Skywind_Cvar_Completion_f
 =================
@@ -2744,6 +2758,7 @@ void Sky_Init (void)
 	int		i;
 
 	Cvar_RegisterVariable (&r_fastsky);
+	Cvar_SetCompletion (&r_fastsky, &Sky_FastSky_Completion_f);
 	Cvar_RegisterVariable (&r_fastskycolor); // woods #fastskycolor
 	Cvar_SetCompletion (&r_fastskycolor, &SKy_Color_Completion_f); // woods #iwtabcomplete #fastskycolor
 	Cvar_SetCallback (&r_fastskycolor, Sky_FastSkyColorChanged);

@@ -1032,6 +1032,33 @@ static void ShowSpeed_Completion_f(cvar_t* cvar, const char* partial)
 
 /*
 ===============
+AutoID_Completion_f
+===============
+*/
+static void AutoID_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "show IDs while observing", NULL);
+	Con_AddToTabList("2", partial, "also show while playing prewar/practice", NULL);
+}
+
+/*
+===============
+ScoreboardTeamSort_Completion_f
+===============
+*/
+static void ScoreboardTeamSort_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "sort players by individual frags", NULL);
+	Con_AddToTabList("1", partial, "group by team total when supported", NULL);
+}
+
+/*
+===============
 MatchClock_Completion_f -- woods #iwtabcomplete
 ===============
 */
@@ -1156,7 +1183,9 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_centertime);
 	Cvar_RegisterVariable (&scr_printspeed);
 	Cvar_RegisterVariable (&scr_autoid); // woods #autoid
+	Cvar_SetCompletion (&scr_autoid, &AutoID_Completion_f);
 	Cvar_RegisterVariable (&scr_scoreboard_teamsort); // woods #teamscoreboard
+	Cvar_SetCompletion (&scr_scoreboard_teamsort, &ScoreboardTeamSort_Completion_f);
 	Cvar_RegisterVariable (&gl_triplebuffer);
 	Cvar_RegisterVariable (&cl_gun_fovscale);
 	Cvar_RegisterVariable (&cl_menucrosshair); // woods #menucrosshair
