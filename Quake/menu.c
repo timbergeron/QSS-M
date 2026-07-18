@@ -45426,7 +45426,12 @@ static struct
 } pakmenu;
 static qboolean paklist_exists = false;
 static qboolean pak_reorder_enabled = false;
-static const float startup_fade_values[] = {0.0f, 0.15f, 0.3f, 0.5f, 1.0f, 2.0f};
+static const float startup_fade_values[] =
+{
+	0.0f,
+	0.15f, 0.3f, 0.5f, 1.0f, 2.0f,
+	-0.15f, -0.3f, -0.5f, -1.0f, -2.0f
+};
 
 typedef struct
 {
@@ -45733,15 +45738,16 @@ static void M_Startup_AdjustFade(int dir)
 
 static const char* M_Startup_FadeValueText(void)
 {
-	float value = scr_fade.value;
+	float value = fabsf(scr_fade.value);
+	const char *scope = scr_fade.value < 0.0f ? " start+quit" : " startup";
 
-	if (value <= 0.0f)
+	if (value == 0.0f)
 		return "off";
 	if (fabsf(value - Q_rint(value)) < 0.005f)
-		return va("%d sec", (int)Q_rint(value));
+		return va("%ds%s", (int)Q_rint(value), scope);
 	if (value < 1.0f)
-		return va("%.2f sec", value);
-	return va("%.1f sec", value);
+		return va("%.2fs%s", value, scope);
+	return va("%.1fs%s", value, scope);
 }
 
 static const char* M_Startup_GetItemText(int index)

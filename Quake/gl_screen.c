@@ -149,7 +149,7 @@ cvar_t		scr_obscenterprint = {"scr_obscenterprint", "0",CVAR_ARCHIVE}; // woods
 cvar_t		scr_obsitems = {"scr_obsitems", "1",CVAR_ARCHIVE}; // woods
 cvar_t		scr_hints = {"scr_hints", "1",CVAR_ARCHIVE}; // woods #qssmhints
 cvar_t		scr_customcursor = {"scr_customcursor", "1", CVAR_ARCHIVE}; // woods #customcursor
-cvar_t		scr_fade = {"scr_fade", "0.15", CVAR_ARCHIVE}; // woods #fade -- startup/quit fade secs; 0 disables
+cvar_t		scr_fade = {"scr_fade", "0.15", CVAR_ARCHIVE}; // woods #fade -- +startup, -startup/quit; magnitude is seconds
 //johnfitz
 cvar_t		scr_usekfont = {"scr_usekfont", "0", CVAR_NONE}; // 2021 re-release
 cvar_t		cl_predict = { "cl_predict", "0", CVAR_NONE }; // 2021 re-release
@@ -1082,11 +1082,16 @@ static void Fade_Completion_f(cvar_t* cvar, const char* partial)
 	(void)cvar;
 
 	Con_AddToTabList("0", partial, "off", NULL);
-	Con_AddToTabList("0.15", partial, "default", NULL);
-	Con_AddToTabList("0.3", partial, "medium", NULL);
-	Con_AddToTabList("0.5", partial, "slow", NULL);
-	Con_AddToTabList("1", partial, "very slow", NULL);
-	Con_AddToTabList("2", partial, "max", NULL);
+	Con_AddToTabList("0.15", partial, "startup only (default)", NULL);
+	Con_AddToTabList("0.3", partial, "startup only", NULL);
+	Con_AddToTabList("0.5", partial, "startup only", NULL);
+	Con_AddToTabList("1", partial, "startup only", NULL);
+	Con_AddToTabList("2", partial, "startup only", NULL);
+	Con_AddToTabList("-0.15", partial, "startup and quit", NULL);
+	Con_AddToTabList("-0.3", partial, "startup and quit", NULL);
+	Con_AddToTabList("-0.5", partial, "startup and quit", NULL);
+	Con_AddToTabList("-1", partial, "startup and quit", NULL);
+	Con_AddToTabList("-2", partial, "startup and quit", NULL);
 }
 
 /*
@@ -6317,7 +6322,7 @@ SCR_FadeDuration
 */
 static float SCR_FadeDuration (void)
 {
-	return CLAMP (0.0f, scr_fade.value, SCR_FADE_MAX_SECONDS);
+	return CLAMP (0.0f, fabsf (scr_fade.value), SCR_FADE_MAX_SECONDS);
 }
 
 /*
@@ -6338,7 +6343,7 @@ SCR_UpdateStartupFade
 Draws a non-blocking fade-from-black from the first drawable startup frames.
 The fade holds at black until host init completes so startup console flushes
 do not appear before the fade begins.
-scr_fade sets the startup/quit fade duration in seconds; 0 disables both.
+The magnitude of scr_fade sets the duration in seconds; 0 disables the fade.
 ==================
 */
 static void SCR_UpdateStartupFade (void)
@@ -6401,7 +6406,7 @@ static void SCR_UpdateStartupFade (void)
 SCR_QuitFade
 
 Draws a short fade-to-black before the normal client shutdown path.
-scr_fade sets the startup/quit fade duration in seconds; 0 disables both.
+Negative scr_fade values enable this in addition to the startup fade.
 ==================
 */
 void SCR_QuitFade (void)
@@ -6410,6 +6415,8 @@ void SCR_QuitFade (void)
 	float	duration;
 
 	if (scr_quitfade_running)
+		return;
+	if (scr_fade.value >= 0.0f)
 		return;
 	if (cls.state == ca_dedicated || cls.timedemo)
 		return;
