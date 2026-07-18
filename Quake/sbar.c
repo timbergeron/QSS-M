@@ -473,6 +473,344 @@ void Sbar_LoadPics (void)
 	}
 }
 
+typedef enum
+{
+	SBAR_PRELOAD_TINYFONT,
+	SBAR_PRELOAD_NUMS,
+	SBAR_PRELOAD_MINUS,
+	SBAR_PRELOAD_PUNCTUATION,
+	SBAR_PRELOAD_WEAPONS,
+	SBAR_PRELOAD_WEAPON_FLASHES,
+	SBAR_PRELOAD_AMMO,
+	SBAR_PRELOAD_ARMOR,
+	SBAR_PRELOAD_ITEMS,
+	SBAR_PRELOAD_SIGILS,
+	SBAR_PRELOAD_FACES,
+	SBAR_PRELOAD_SPECIAL_FACES,
+	SBAR_PRELOAD_BARS,
+	SBAR_PRELOAD_HIP_WEAPONS,
+	SBAR_PRELOAD_HIP_FLASHES,
+	SBAR_PRELOAD_HIP_ITEMS,
+	SBAR_PRELOAD_ROGUE_INVBAR,
+	SBAR_PRELOAD_ROGUE_WEAPONS,
+	SBAR_PRELOAD_ROGUE_ITEMS,
+	SBAR_PRELOAD_ROGUE_TEAMBORD,
+	SBAR_PRELOAD_ROGUE_AMMO,
+	SBAR_PRELOAD_FINISH,
+	SBAR_PRELOAD_DONE
+} sbar_preloadstage_t;
+
+static const char *const sbar_preload_weapon_names[] =
+{
+	"shotgun", "sshotgun", "nailgun", "snailgun",
+	"rlaunch", "srlaunch", "lightng"
+};
+static const char *const sbar_preload_ammo_names[] =
+{
+	"sb_shells", "sb_nails", "sb_rocket", "sb_cells"
+};
+static const char *const sbar_preload_item_names[] =
+{
+	"sb_key1", "sb_key2", "sb_invis", "sb_invuln", "sb_suit", "sb_quad"
+};
+static const char *const sbar_preload_hip_weapon_names[] =
+{
+	"laser", "mjolnir", "gren_prox", "prox_gren", "prox"
+};
+static const char *const sbar_preload_rogue_weapon_names[] =
+{
+	"r_lava", "r_superlava", "r_gren", "r_multirock", "r_plasma"
+};
+static const char *const sbar_preload_rogue_item_names[] =
+{
+	"r_shield1", "r_agrav1"
+};
+static const char *const sbar_preload_rogue_ammo_names[] =
+{
+	"r_ammolava", "r_ammomulti", "r_ammoplasma"
+};
+
+static qboolean sbar_pics_loaded; // pics load lazily on first draw; decoding 24-bit HUD replacements at startup costs launch time
+static qboolean sbar_preload_started;
+static sbar_preloadstage_t sbar_preloadstage;
+static int sbar_preloadindex;
+
+static qboolean Sbar_AdvancePreloadStage (int count, sbar_preloadstage_t next)
+{
+	if (++sbar_preloadindex == count)
+	{
+		sbar_preloadstage = next;
+		sbar_preloadindex = 0;
+	}
+	return false;
+}
+
+static qboolean Sbar_PreloadPackPic (const char *name)
+{
+	lumpinfo_t *info;
+
+	if (!W_GetLumpName (name, &info))
+		return false;
+
+	return Draw_PicFromWad (name) != pic_nul;
+}
+
+/*
+===============
+Sbar_PreloadPic
+
+Warms at most one HUD image in the existing picture/texture caches. The normal
+Sbar_LoadPics pass later assigns the global pointers from those warm caches.
+===============
+*/
+static qboolean Sbar_PreloadPic (void)
+{
+	int row, column;
+	lumpinfo_t *info;
+
+	for (;;)
+	{
+		switch (sbar_preloadstage)
+		{
+		case SBAR_PRELOAD_TINYFONT:
+			if (W_GetLumpName ("tinyfont", &info))
+			{
+				sbar_preloadstage = SBAR_PRELOAD_FINISH;
+				continue;
+			}
+			sbar_preloadstage = SBAR_PRELOAD_NUMS;
+			continue;
+
+		case SBAR_PRELOAD_NUMS:
+			row = sbar_preloadindex & 1;
+			column = sbar_preloadindex >> 1;
+			Draw_PicFromWad (va ("%snum_%i", row ? "a" : "", column));
+			return Sbar_AdvancePreloadStage (20, SBAR_PRELOAD_MINUS);
+
+		case SBAR_PRELOAD_MINUS:
+			Draw_PicFromWad (sbar_preloadindex ? "anum_minus" : "num_minus");
+			return Sbar_AdvancePreloadStage (2, SBAR_PRELOAD_PUNCTUATION);
+
+		case SBAR_PRELOAD_PUNCTUATION:
+			Draw_PicFromWad (sbar_preloadindex ? "num_slash" : "num_colon");
+			return Sbar_AdvancePreloadStage (2, SBAR_PRELOAD_WEAPONS);
+
+		case SBAR_PRELOAD_WEAPONS:
+			row = sbar_preloadindex / 7;
+			column = sbar_preloadindex % 7;
+			Draw_PicFromWad2 (
+				va ("%s%s", row ? "inv2_" : "inv_",
+					sbar_preload_weapon_names[column]),
+				TEXPREF_NEAREST | TEXPREF_ALPHA);
+			return Sbar_AdvancePreloadStage (14, SBAR_PRELOAD_WEAPON_FLASHES);
+
+		case SBAR_PRELOAD_WEAPON_FLASHES:
+			row = sbar_preloadindex / 7;
+			column = sbar_preloadindex % 7;
+			Draw_PicFromWad (va ("inva%i_%s", row + 1,
+				sbar_preload_weapon_names[column]));
+			return Sbar_AdvancePreloadStage (35, SBAR_PRELOAD_AMMO);
+
+		case SBAR_PRELOAD_AMMO:
+			Draw_PicFromWad (sbar_preload_ammo_names[sbar_preloadindex]);
+			return Sbar_AdvancePreloadStage (4, SBAR_PRELOAD_ARMOR);
+
+		case SBAR_PRELOAD_ARMOR:
+			Draw_PicFromWad (va ("sb_armor%i", sbar_preloadindex + 1));
+			return Sbar_AdvancePreloadStage (3, SBAR_PRELOAD_ITEMS);
+
+		case SBAR_PRELOAD_ITEMS:
+			Draw_PicFromWad (sbar_preload_item_names[sbar_preloadindex]);
+			return Sbar_AdvancePreloadStage (6, SBAR_PRELOAD_SIGILS);
+
+		case SBAR_PRELOAD_SIGILS:
+			Draw_PicFromWad (va ("sb_sigil%i", sbar_preloadindex + 1));
+			return Sbar_AdvancePreloadStage (4, SBAR_PRELOAD_FACES);
+
+		case SBAR_PRELOAD_FACES:
+			column = sbar_preloadindex & 1;
+			Draw_PicFromWad (va ("face%s%i", column ? "_p" : "",
+				sbar_preloadindex / 2 + 1));
+			return Sbar_AdvancePreloadStage (10, SBAR_PRELOAD_SPECIAL_FACES);
+
+		case SBAR_PRELOAD_SPECIAL_FACES:
+			switch (sbar_preloadindex)
+			{
+			case 0: Draw_PicFromWad ("face_invis"); break;
+			case 1: Draw_PicFromWad ("face_invul2"); break;
+			case 2: Sbar_OptionalPicFromWad ("face_invul1", "face_invul2"); break;
+			case 3: Sbar_OptionalPicFromWad ("face_inv2", "face_invul2"); break;
+			case 4: Sbar_OptionalPicFromWad ("face_inv3", "face_invul2"); break;
+			case 5: Sbar_OptionalPicFromWad ("face_inv4", "face_invul2"); break;
+			case 6: Draw_PicFromWad ("face_quad"); break;
+			}
+			return Sbar_AdvancePreloadStage (7, SBAR_PRELOAD_BARS);
+
+		case SBAR_PRELOAD_BARS:
+			switch (sbar_preloadindex)
+			{
+			case 0:
+				Draw_PicFromWad2 ("sbar",
+					TEXPREF_PAD | TEXPREF_NOPICMIP | TEXPREF_ALPHA);
+				break;
+			case 1:
+				Draw_PicFromWad2 ("ibar", TEXPREF_PAD | TEXPREF_NOPICMIP);
+				break;
+			case 2:
+				Draw_PicFromWad ("scorebar");
+				break;
+			}
+			return Sbar_AdvancePreloadStage (3, SBAR_PRELOAD_HIP_WEAPONS);
+
+		case SBAR_PRELOAD_HIP_WEAPONS:
+			row = sbar_preloadindex / 5;
+			column = sbar_preloadindex % 5;
+			if (!Sbar_PreloadPackPic (va ("%s%s", row ? "inv2_" : "inv_",
+				sbar_preload_hip_weapon_names[column])))
+			{
+				sbar_preloadstage = SBAR_PRELOAD_ROGUE_INVBAR;
+				sbar_preloadindex = 0;
+				continue;
+			}
+			return Sbar_AdvancePreloadStage (10, SBAR_PRELOAD_HIP_FLASHES);
+
+		case SBAR_PRELOAD_HIP_FLASHES:
+			row = sbar_preloadindex / 5;
+			column = sbar_preloadindex % 5;
+			if (!Sbar_PreloadPackPic (va ("inva%i_%s", row + 1,
+				sbar_preload_hip_weapon_names[column])))
+			{
+				sbar_preloadstage = SBAR_PRELOAD_ROGUE_INVBAR;
+				sbar_preloadindex = 0;
+				continue;
+			}
+			return Sbar_AdvancePreloadStage (25, SBAR_PRELOAD_HIP_ITEMS);
+
+		case SBAR_PRELOAD_HIP_ITEMS:
+			if (!Sbar_PreloadPackPic (
+				sbar_preloadindex ? "sb_eshld" : "sb_wsuit"))
+			{
+				sbar_preloadstage = SBAR_PRELOAD_ROGUE_INVBAR;
+				sbar_preloadindex = 0;
+				continue;
+			}
+			return Sbar_AdvancePreloadStage (2, SBAR_PRELOAD_FINISH);
+
+		case SBAR_PRELOAD_ROGUE_INVBAR:
+			if (!Sbar_PreloadPackPic (
+				sbar_preloadindex ? "r_invbar2" : "r_invbar1"))
+			{
+				sbar_preloadstage = SBAR_PRELOAD_FINISH;
+				continue;
+			}
+			return Sbar_AdvancePreloadStage (2, SBAR_PRELOAD_ROGUE_WEAPONS);
+
+		case SBAR_PRELOAD_ROGUE_WEAPONS:
+			if (!Sbar_PreloadPackPic (
+				sbar_preload_rogue_weapon_names[sbar_preloadindex]))
+			{
+				sbar_preloadstage = SBAR_PRELOAD_FINISH;
+				continue;
+			}
+			return Sbar_AdvancePreloadStage (5, SBAR_PRELOAD_ROGUE_ITEMS);
+
+		case SBAR_PRELOAD_ROGUE_ITEMS:
+			if (!Sbar_PreloadPackPic (
+				sbar_preload_rogue_item_names[sbar_preloadindex]))
+			{
+				sbar_preloadstage = SBAR_PRELOAD_FINISH;
+				continue;
+			}
+			return Sbar_AdvancePreloadStage (2, SBAR_PRELOAD_ROGUE_TEAMBORD);
+
+		case SBAR_PRELOAD_ROGUE_TEAMBORD:
+			if (!Sbar_PreloadPackPic ("r_teambord"))
+			{
+				sbar_preloadstage = SBAR_PRELOAD_FINISH;
+				continue;
+			}
+			sbar_preloadstage = SBAR_PRELOAD_ROGUE_AMMO;
+			sbar_preloadindex = 0;
+			return false;
+
+		case SBAR_PRELOAD_ROGUE_AMMO:
+			if (!Sbar_PreloadPackPic (
+				sbar_preload_rogue_ammo_names[sbar_preloadindex]))
+			{
+				sbar_preloadstage = SBAR_PRELOAD_FINISH;
+				continue;
+			}
+			return Sbar_AdvancePreloadStage (3, SBAR_PRELOAD_FINISH);
+
+		case SBAR_PRELOAD_FINISH:
+			Sbar_LoadPics (); // cache hits assign all global HUD pointers
+			sbar_pics_loaded = true;
+			sbar_preloadstage = SBAR_PRELOAD_DONE;
+			return true;
+
+		case SBAR_PRELOAD_DONE:
+			return true;
+		}
+	}
+}
+
+void Sbar_InvalidatePics (void)
+{
+	sbar_pics_loaded = false;
+	sbar_preload_started = false;
+	sbar_preloadstage = SBAR_PRELOAD_TINYFONT;
+	sbar_preloadindex = 0;
+}
+
+qboolean Sbar_EnsurePics (void)
+{
+	if (sbar_pics_loaded)
+		return true;
+
+	// Once the post-launch preload is underway, keep rendering responsive and
+	// let the HUD appear when its cache is ready. The attract loop is the one
+	// path that can request a HUD before the first post-launch frame.
+	if (sbar_preload_started || (cls.demoplayback && cls.demonum != -1))
+		return false;
+
+	Sbar_LoadPics ();
+	sbar_pics_loaded = true;
+	sbar_preloadstage = SBAR_PRELOAD_DONE;
+	return true;
+}
+
+/*
+===============
+Sbar_PreloadFrame
+
+Called after presenting a frame. The first call only arms the loader, ensuring
+launch gets a visible frame before any 24-bit HUD decoding. Later menu and
+connection/game frames spend a small main-thread budget on HUD textures. HUD
+consumers defer drawing while that preload is active; paths with no prior
+rendered frame retain the synchronous Sbar_EnsurePics fallback.
+===============
+*/
+void Sbar_PreloadFrame (void)
+{
+	double start;
+
+	if (sbar_pics_loaded || cl.qcvm.extfuncs.CSQC_DrawHud)
+		return;
+
+	if (!sbar_preload_started)
+	{
+		sbar_preload_started = true;
+		return;
+	}
+
+	start = Sys_DoubleTime ();
+	do
+	{
+		if (Sbar_PreloadPic ())
+			return;
+	} while (Sys_DoubleTime () - start < 0.002);
+}
+
 /*
 ===============
 Sbar_Init -- johnfitz -- rewritten
@@ -483,7 +821,7 @@ void Sbar_Init (void)
 	Cmd_AddCommand ("+showscores", Sbar_ShowScores);
 	Cmd_AddCommand ("-showscores", Sbar_DontShowScores);
 
-	Sbar_LoadPics ();
+	Sbar_InvalidatePics (); // preload begins after the first presented frame
 }
 
 
@@ -2441,6 +2779,11 @@ void Sbar_Draw (void)
 	if (cl.intermission)
 		return; //johnfitz -- never draw sbar during intermission
 
+	// Only the classic HUD needs the sbar pics; load them here so pure-CSQC HUDs
+	// and the console/intermission early-outs above never pay the decode cost.
+	if (!Sbar_EnsurePics ())
+		return;
+
 	if (sb_updates >= vid.numpages && !gl_clear.value && scr_sbaralpha.value >= 1 //johnfitz -- gl_clear, scr_sbaralpha
         && !(gl_glsl_gamma_able && vid_gamma.value != 1))                         //ericw -- must draw sbar every frame if doing glsl gamma
 		return;
@@ -3324,6 +3667,9 @@ void Sbar_IntermissionOverlay (void)
 		Sbar_DeathmatchOverlay ();
 		return;
 	}
+
+	if (!Sbar_EnsurePics ()) // only the classic single-player intermission board below uses sbar pics
+		return;
 
 	GL_SetCanvas (CANVAS_MENU); //johnfitz
 

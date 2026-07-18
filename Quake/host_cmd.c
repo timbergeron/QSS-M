@@ -622,6 +622,8 @@ void Host_Quit_f (void)
 		return;
 	quit_in_progress = true;
 
+	CL_WebDownloadChecks_Abort (); // let in-flight startup probes die during the fade instead of stalling shutdown
+
 	SCR_QuitFade ();
 
 	CL_Disconnect ();
@@ -3729,6 +3731,8 @@ void BookmarksList_Init(void)
 
 filelist_item_t* execlist;
 
+static qboolean execlist_scanned; // built lazily on first tab-complete; scanning at startup costs launch time
+
 static void ExecList_Clear (void)
 {
 	FileList_Clear (&execlist);
@@ -3737,7 +3741,15 @@ static void ExecList_Clear (void)
 void ExecList_Rebuild(void)
 {
 	ExecList_Clear ();
+	execlist_scanned = false;
+}
+
+void ExecList_EnsureInit (void)
+{
+	if (execlist_scanned)
+		return;
 	ExecList_Init ();
+	execlist_scanned = true;
 }
 
 // TODO: Factor out to a general-purpose file searching function
@@ -3757,6 +3769,8 @@ void ExecList_Init(void)
 
 	for (search = com_searchpaths; search; search = search->next)
 	{
+		if (search->pack)
+			continue; // filename is a pak/pk3 file, not a directory
 #ifdef _WIN32
 		q_snprintf(filestring, sizeof(filestring), "%s/*.cfg", search->filename); // search gamedir
 		fhnd = FindFirstFile(filestring, &fdat);
@@ -4433,6 +4447,8 @@ void MusicList_Init(void)
 
 filelist_item_t* textlist;
 
+static qboolean textlist_scanned; // built lazily on first tab-complete; the recursive scan costs launch time
+
 static void TextList_Clear(void)
 {
 	FileList_Clear(&textlist);
@@ -4441,7 +4457,15 @@ static void TextList_Clear(void)
 void TextList_Rebuild(void)
 {
 	TextList_Clear();
+	textlist_scanned = false;
+}
+
+void TextList_EnsureInit(void)
+{
+	if (textlist_scanned)
+		return;
 	TextList_Init();
+	textlist_scanned = true;
 }
 
 int FileHasValidExtension(const char* filename)

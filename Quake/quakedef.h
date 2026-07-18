@@ -475,6 +475,7 @@ void ExtraMaps_Init (void);
 void Modlist_Init (void);
 void DemoList_Init (void);
 void ExecList_Init(void);
+void ExecList_EnsureInit(void); // woods #execlist -- lazy build on first tab-complete
 void ParticleList_Init (void); // woods #particlelist
 void ServerList_Init(void); // woods #serverlist
 void BookmarksList_Init (void); // woods #bookmarksmenu
@@ -482,6 +483,7 @@ void FolderList_Init (void); // woods #folderlist
 void SkyList_Init (void); // woods #folderlist
 void MusicList_Init (void); // woods #musiclist
 void TextList_Init (void); // woods #textlist
+void TextList_EnsureInit (void); // woods #textlist -- lazy build on first tab-complete
 void NameHistory_Init (void); // woods #namehistory
 void NameHistory_Add (const char *name); // woods #namehistory
 

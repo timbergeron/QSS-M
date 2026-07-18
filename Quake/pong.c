@@ -521,6 +521,9 @@ void Pong_Draw(void)
 	// Only draw if enabled and game is paused, or while the menu previews Pong.
 	if (!Pong_Enabled() || (!cl.paused && !cl.match_pause_time && !pong_preview)) return;
 
+	if (!Sbar_EnsurePics ()) // sb_nums load lazily
+		return;
+
 	if (!pong.pause_pic)
 		pong.pause_pic = Draw_CachePic("gfx/pause.lmp");
 

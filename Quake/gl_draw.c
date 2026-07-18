@@ -768,7 +768,7 @@ void Draw_NewGame (void)
 	W_LoadWadFile (); //johnfitz -- filename is now hard-coded for honesty
 	Draw_LoadPics ();
 	SCR_LoadPics ();
-	Sbar_LoadPics ();
+	Sbar_InvalidatePics (); // old pic pointers dangle after the wad reload; next draw reloads them
 	PR_ReloadPics(false);
 }
 

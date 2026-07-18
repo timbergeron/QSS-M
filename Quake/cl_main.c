@@ -3297,6 +3297,14 @@ static qboolean CL_WebDownloadShouldCheckAtStartup(const char *url,
 }
 
 
+static SDL_atomic_t webcheck_abort; // set at shutdown so quit doesn't block on in-flight HEAD requests (up to CURLOPT_TIMEOUT)
+
+static int WebCheck_AbortCallback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+	(void)clientp; (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+	return SDL_AtomicGet(&webcheck_abort) ? 1 : 0;
+}
+
 int checkWebsite (void* ptr)  // ping the potential websites in advance
 {
 	ThreadData* data = (ThreadData*)ptr;
@@ -3365,6 +3373,8 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
 	curl_easy_setopt(curl, CURLOPT_NOBODY, 1L); // HEAD request
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, WebCheck_AbortCallback);
 
 	CURLcode res = curl_easy_perform(curl);
 	if (res == CURLE_OK)
@@ -3416,6 +3426,10 @@ SDL_Thread* webDownloadCheck (const char* url, int webId)
 	}
 
 	data->web = webId;
+
+	// Re-arm the abort flag: it is only ever raised at shutdown, so a fresh probe
+	// must clear it in case a future (non-terminal) teardown ever leaves it set.
+	SDL_AtomicSet(&webcheck_abort, 0);
 
 	thread = SDL_CreateThread(checkWebsite, "CheckWebsiteThread", (void*)data);
 	if (thread == NULL) 
@@ -3477,8 +3491,15 @@ static void QWMapListWebCheckReset(void)
 	qwmaplist_webcheck_started = false;
 }
 
+void CL_WebDownloadChecks_Abort(void)
+{
+	SDL_AtomicSet(&webcheck_abort, 1);
+}
+
 static void CL_WebDownloadChecks_Shutdown(void)
 {
+	CL_WebDownloadChecks_Abort(); // in case a quit path skipped Host_Quit_f
+
 	if (currentWebCheckThread != NULL)
 	{
 		SDL_WaitThread(currentWebCheckThread, NULL);

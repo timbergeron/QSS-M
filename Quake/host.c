@@ -2454,6 +2454,7 @@ void _Host_Frame (double time)
 	{
 		SCR_UpdateScreen ();
 		CL_RunParticles (); //johnfitz -- seperated from rendering
+		Sbar_PreloadFrame (); // spread 24-bit HUD decoding across post-launch/menu/connection frames
 	}
 
 	if (host_speeds.value)
@@ -2605,8 +2606,7 @@ void Host_Init (void)
 		Modlist_Init (); //johnfitz
 		DemoList_Init (); //ericw
 		SkyList_Init (); // woods #skylist
-		ExecList_Init(); // woods #execlist
-		TextList_Init(); // woods #textlist
+		// ExecList/TextList are built lazily on first tab-complete (see CompleteFileList) to cut launch time
 		ParticleList_Init (); // woods #particlelist
 		ServerList_Init(); // woods #serverlist
 		NameHistory_Init(); // woods #namehistory
@@ -2631,7 +2631,6 @@ void Host_Init (void)
 	{
 		ExtraMaps_Init();
 		Modlist_Init();
-		ExecList_Init();
         CL_InitWebDownloads(false);
 	}
 

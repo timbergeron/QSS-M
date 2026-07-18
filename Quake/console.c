@@ -3572,6 +3572,10 @@ static qboolean CompleteFileList (const char* partial, void* param) // woods #iw
 		return false;
 	
 	filelist_item_t* file, ** list = (filelist_item_t**)param;
+	if (list == &execlist)
+		ExecList_EnsureInit (); // built lazily to keep filesystem scans off the launch path
+	else if (list == &textlist)
+		TextList_EnsureInit ();
 	for (file = *list; file; file = file->next)
 		Con_AddToTabList (file->name, partial, NULL, NULL);
 	return true;

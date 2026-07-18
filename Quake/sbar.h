@@ -30,6 +30,9 @@ extern	int			sb_lines;			// scan lines to draw
 
 void Sbar_Init (void);
 void Sbar_LoadPics (void);
+qboolean Sbar_EnsurePics (void);	// false while a post-launch background preload is still warming the cache
+void Sbar_InvalidatePics (void);	// marks pics stale after wad reload; next Sbar_EnsurePics reloads them
+void Sbar_PreloadFrame (void);		// warms pics incrementally after launch on the render thread
 
 void Sbar_Changed (void);
 // call whenever any of the client stats represented on the sbar changes

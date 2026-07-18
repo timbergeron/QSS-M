@@ -2055,6 +2055,9 @@ void SCR_DrawMatchClock(void)
 				
 				if (scr_matchclock_int == 1 || scr_matchclock_int == 2)
 				{
+					if (!Sbar_EnsurePics ()) // sb_nums/sb_colon load lazily
+						return;
+
 					int color = 0; // Default to brown
 
 					if (scr_matchclock.value == 2)
@@ -2687,6 +2690,8 @@ void SCR_DrawMatchScores(void)
 			int count_end = nx + num_w;
 
 			GL_SetCanvas(CANVAS_TOPRIGHT3);
+			if (!Sbar_EnsurePics ()) // sb_faces load lazily
+				return;
 			Draw_ScaledPicAlpha(base_x, 1, sb_faces[0][1], 0.5f, 1.0f);
 			Draw_String(nx, 3, num);
 
