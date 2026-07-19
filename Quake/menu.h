@@ -35,7 +35,6 @@ enum m_state_e {
 	m_skill, // woods #skillmenu (iw)
 	m_multiplayer,
 	m_setup,
-	m_net,
 	m_options,
 	m_keys,
 	m_mouse,
@@ -229,4 +228,3 @@ void M_DrawTextBox_WithAlpha (int x, int y, int width, int lines, float alpha); 
 void M_PrintHighlight(int x, int y, const char* str, const char* search, int searchlen); // woods #centerprintbg (iw)
 
 #endif	/* _QUAKE_MENU_H */
-

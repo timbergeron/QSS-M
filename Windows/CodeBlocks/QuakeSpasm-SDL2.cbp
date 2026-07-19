@@ -237,10 +237,6 @@
 			<Option compilerVar="CC" />
 		</Unit>
 		<Unit filename="..\..\Quake\net_wins.h" />
-		<Unit filename="..\..\Quake\net_wipx.c">
-			<Option compilerVar="CC" />
-		</Unit>
-		<Unit filename="..\..\Quake\net_wipx.h" />
 		<Unit filename="..\..\Quake\pl_win.c">
 			<Option compilerVar="CC" />
 		</Unit>

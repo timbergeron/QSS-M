@@ -155,10 +155,8 @@ const char *NET_SlistPrintServerName (size_t n);
 
 /* FIXME: driver related, but public:
  */
-extern	qboolean	ipxAvailable;
 extern	qboolean	ipv4Available;
 extern	qboolean	ipv6Available;
-extern	char		my_ipx_address[NET_NAMELEN];
 extern	char		my_ipv4_address[NET_NAMELEN];
 extern	char		my_ipv6_address[NET_NAMELEN];
 extern  char        my_public_ip[NET_NAMELEN]; // woods #extip

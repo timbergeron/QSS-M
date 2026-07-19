@@ -56,7 +56,7 @@ void (WSAAPI *qfreeaddrinfo)(const struct addrinfo *ai);
 
 int winsock_initialized = 0;
 WSADATA		winsockdata;
-#define __wsaerr_static			/* not static: used by net_wipx.c too */
+#define __wsaerr_static			/* used by other Windows networking code */
 #include "wsaerror.h"
 
 //=============================================================================
@@ -672,7 +672,7 @@ int WINIPv4_GetAddrFromName (const char *name, struct qsockaddr *addr)
 		memcpy(dupe, name, colon-name);
 		dupe[colon-name] = 0;
 		if (strchr(dupe, ':'))
-			return -1;	//don't resolve a name to an ipv4 address if it has multiple colons in it. its probably an ipx or ipv6 address, and I'd rather not block on any screwed dns resolves
+			return -1;	//don't resolve a name to an ipv4 address if it has multiple colons in it. it's probably an ipv6 address, and I'd rather not block on any screwed dns resolves
 		hostentry = gethostbyname (dupe);
 		port = strtoul(colon+1, NULL, 10);
 	}

@@ -31,14 +31,12 @@ qsocket_t	*net_activeSockets = NULL;
 qsocket_t	*net_freeSockets = NULL;
 int		net_numsockets = 0;
 
-qboolean	ipxAvailable = false;
 qboolean	ipv4Available = false;
 qboolean	ipv6Available = false;
 
 int		net_hostport;
 int		DEFAULTnet_hostport = 26000;
 
-char		my_ipx_address[NET_NAMELEN];
 char		my_ipv4_address[NET_NAMELEN];
 char		my_ipv6_address[NET_NAMELEN];
 char        my_public_ip[NET_NAMELEN]; // woods #extip
@@ -1316,8 +1314,6 @@ void NET_Init (void)
 	i = COM_CheckParm ("-port");
 	if (!i)
 		i = COM_CheckParm ("-udpport");
-	if (!i)
-		i = COM_CheckParm ("-ipxport");
 
 	if (i)
 	{
@@ -1385,10 +1381,6 @@ void NET_Init (void)
 		Sys_Error("Network not available!");
 	}
 
-	if (*my_ipx_address)
-	{
-		Con_DPrintf("IPX address %s\n", my_ipx_address);
-	}
 	if (*my_ipv4_address)
 	{
 		Con_DPrintf("IPv4 address %s\n", my_ipv4_address);

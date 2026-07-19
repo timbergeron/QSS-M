@@ -584,10 +584,6 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\Quake\net_wipx.c"
-				>
-			</File>
-			<File
 				RelativePath="..\..\Quake\pl_win.c"
 				>
 			</File>
@@ -915,10 +911,6 @@
 			</File>
 			<File
 				RelativePath="..\..\Quake\net_wins.h"
-				>
-			</File>
-			<File
-				RelativePath="..\..\Quake\net_wipx.h"
 				>
 			</File>
 			<File

@@ -94,7 +94,6 @@ void M_Menu_ModMenu_f (void);
 	void M_Menu_MultiPlayer_f (void);
 		void M_Menu_Setup_f (void);
 		void M_Menu_NameMaker_f(void); // woods #namemaker
-		void M_Menu_Net_f (void);
 		void M_Menu_LanConfig_f (void);
 		void M_Menu_GameOptions_f (void);
 		void M_Menu_Search_f (enum slistScope_e scope);
@@ -148,7 +147,6 @@ void M_ModMenu_Draw (void);
 	void M_MultiPlayer_Draw (void);
 		void M_Setup_Draw (void);
 		void M_NameMaker_Draw(void); // woods #namemaker
-		void M_Net_Draw (void);
 		void M_LanConfig_Draw (void);
 		void M_GameOptions_Draw (void);
 		void M_Search_Draw (void);
@@ -201,7 +199,6 @@ void M_ModMenu_Key (int key);
 		void M_Skill_Key(int key);
 	void M_MultiPlayer_Key (int key);
 		void M_Setup_Key (int key);
-		void M_Net_Key (int key);
 		void M_LanConfig_Key (int key);
 		void M_GameOptions_Key (int key);
 		void M_Search_Key (int key);
@@ -265,7 +262,6 @@ void M_ModMenu_Key (int key);
 	void M_MultiPlayer_Mousemove(int cx, int cy);
 		void M_Setup_Mousemove(int cx, int cy);
 		void M_NameMaker_Mousemove(int cx, int cy);
-		void M_Net_Mousemove(int cx, int cy);
 		void M_LanConfig_Mousemove(int cx, int cy);
 		void M_GameOptions_Mousemove(int cx, int cy);
 		//void M_Search_Mousemove (int cx, int cy);
@@ -317,9 +313,6 @@ char		m_return_reason [32];
 
 #define StartingGame	(m_multiplayer_cursor == 1)
 #define JoiningGame		(m_multiplayer_cursor == 0)
-//#define	IPXConfig		(m_net_cursor == 1) // woods #skipipx
-#define	TCPIPConfig		(m_net_cursor == 0)
-
 void M_ConfigureNetSubsystem(void);
 void M_SetSkillMenuMap(const char* name); // woods #skillmenu (iw)
 static void M_GameOptions_ClearTypedLevel(void);
@@ -7868,7 +7861,7 @@ void M_MultiPlayer_Draw (void)
 			M_PrintWhite(f, conn_y + 16, display_line);
 	}
 
-	if (ipxAvailable || ipv4Available || ipv6Available)
+	if (ipv4Available || ipv6Available)
 		return;
 	M_PrintWhite ((320/2) - ((27*8)/2), 148, "No Communications Available");
 }
@@ -7923,13 +7916,13 @@ void M_MultiPlayer_Key (int key)
 		switch (m_multiplayer_cursor)
 		{
 		case 0:
-			if (ipxAvailable || ipv4Available || ipv6Available)
-				M_Menu_LanConfig_f (); // woods #skipipx
+			if (ipv4Available || ipv6Available)
+				M_Menu_LanConfig_f ();
 			break;
 
 		case 1:
-			if (ipxAvailable || ipv4Available || ipv6Available)
-				M_Menu_LanConfig_f (); // woods #skipipx
+			if (ipv4Available || ipv6Available)
+				M_Menu_LanConfig_f ();
 			break;
 
 		case 2:
@@ -9008,130 +9001,6 @@ void M_NameMaker_Mousemove(int cx, int cy) // woods #mousemenu
 
 	namemaker_cursor_x = temp_cursor_x; // Update cursor positions
 	namemaker_cursor_y = temp_cursor_y;
-}
-
-/*
-==================
-Net Menu
-==================
-*/
-
-int	m_net_cursor;
-int m_net_items;
-
-const char *net_helpMessage [] =
-{
-/* .........1.........2.... */
-  " Novell network LANs    ",
-  " or Windows 95 DOS-box. ",
-  "                        ",
-  "(LAN=Local Area Network)",
-
-  " Commonly used to play  ",
-  " over the Internet, but ",
-  " also used on a Local   ",
-  " Area Network.          "
-};
-
-void M_Menu_Net_f (void)
-{
-	key_dest = key_menu;
-	m_state = m_net;
-	m_entersound = true;
-	m_net_items = 2;
-
-	IN_UpdateGrabs();
-
-	if (m_net_cursor >= m_net_items)
-		m_net_cursor = 0;
-	m_net_cursor--;
-	M_Net_Key (K_DOWNARROW);
-}
-
-
-void M_Net_Draw (void)
-{
-	int		f;
-	qpic_t	*p;
-
-	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
-	p = Draw_CachePic ("gfx/p_multi.lmp");
-	M_DrawPic ( (320-p->width)/2, 4, p);
-
-	f = 32;
-
-	/*if (ipxAvailable)   // woods this is not needed
-		p = Draw_CachePic ("gfx/netmen3.lmp");
-	else
-		p = Draw_CachePic ("gfx/dim_ipx.lmp");
-	M_DrawTransPic (72, f, p);*/
-
-	f += 19;
-	if (ipv4Available || ipv6Available)
-		p = Draw_CachePic ("gfx/netmen4.lmp");
-	else
-		p = Draw_CachePic ("gfx/dim_tcp.lmp");
-	M_DrawTransPic (72, f, p);
-
-	f = (320-26*8)/2;
-	M_DrawTextBox (f, 96, 24, 4);
-	f += 8;
-	M_Print (f, 104, net_helpMessage[m_net_cursor*4+0]);
-	M_Print (f, 112, net_helpMessage[m_net_cursor*4+1]);
-	M_Print (f, 120, net_helpMessage[m_net_cursor*4+2]);
-	M_Print (f, 128, net_helpMessage[m_net_cursor*4+3]);
-
-	f = (int)(realtime * 10)%6;
-	M_DrawTransPic (54, 32 + m_net_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
-}
-
-
-void M_Net_Key (int k)
-{
-again:
-	switch (k)
-	{
-	case K_ESCAPE:
-	case K_BBUTTON:
-	case K_MOUSE4: // woods #mousemenu
-	case K_MOUSE2:
-		M_Menu_MultiPlayer_f ();
-		break;
-
-	case K_DOWNARROW:
-		S_LocalSound ("misc/menu1.wav");
-		if (++m_net_cursor >= m_net_items)
-			m_net_cursor = 0;
-		break;
-
-	case K_UPARROW:
-		S_LocalSound ("misc/menu1.wav");
-		if (--m_net_cursor < 0)
-			m_net_cursor = m_net_items - 1;
-		break;
-
-	case K_ENTER:
-	case K_KP_ENTER:
-	case K_ABUTTON:
-	case K_MOUSE1: // woods #mousemenu
-		m_entersound = true;
-		M_Menu_LanConfig_f ();
-		break;
-	}
-
-	if (m_net_cursor == 0 && !ipxAvailable)
-		goto again;
-	if (m_net_cursor == 1 && !(ipv4Available || ipv6Available))
-		goto again;
-}
-
-void M_Net_Mousemove(int cx, int cy) // woods #mousemenu
-{
-	M_UpdateCursor(cy, 32, 20, m_net_items, &m_net_cursor);
-	if (m_net_cursor == 0 && !ipxAvailable)
-		m_net_cursor = 1;
-	if (m_net_cursor == 1 && !(ipv4Available || ipv6Available))
-		m_net_cursor = 0;
 }
 
 /*
@@ -21727,7 +21596,7 @@ static qboolean MenuSearch_SinglePlayerAvailable(int index)
 static qboolean MenuSearch_NetworkAvailable(int index)
 {
 	(void)index;
-	return ipxAvailable || ipv4Available || ipv6Available;
+	return ipv4Available || ipv6Available;
 }
 
 static qboolean MenuSearch_MultiplayerAvailable(int index)
@@ -28233,7 +28102,7 @@ void M_Menu_LanConfig_f (void)
 	{
 		if (StartingGame)
 			lanConfig_cursor = M_LanConfig_NewGameProtocolCursor();
-		else if (JoiningGame && TCPIPConfig)
+		else if (JoiningGame)
 			lanConfig_cursor = LANCONFIG_CURSOR_JOINGAME_SEARCH_WEB;
 		else
 			lanConfig_cursor = LANCONFIG_CURSOR_JOINGAME_SEARCH_LAN;
@@ -28545,7 +28414,7 @@ void M_LanConfig_Key (int key)
 	case K_BBUTTON:
 	case K_MOUSE4: // woods #mousemenu
 	case K_MOUSE2:
-		M_Menu_MultiPlayer_f (); // woods #skipipx
+		M_Menu_MultiPlayer_f ();
 		break;
 
 	case K_UPARROW:
@@ -30801,7 +30670,7 @@ void M_GameOptions_Key (int key)
 	case K_BBUTTON:
 	case K_MOUSE4: // woods #mousemenu
 	case K_MOUSE2:
-		M_Menu_MultiPlayer_f (); // woods #skipipx
+		M_Menu_MultiPlayer_f ();
 		break;
 
 	case K_UPARROW:
@@ -44366,10 +44235,6 @@ void M_Draw (void)
 		M_NameMaker_Draw();
 		break;
 
-	case m_net:
-		M_Net_Draw ();
-		break;
-
 	case m_options:
 		M_Options_Draw ();
 		break;
@@ -44786,10 +44651,6 @@ void M_Keydown (int key, qboolean repeat)
 		M_NameMaker_Key(key);
 		return;
 
-	case m_net:
-		M_Net_Key (key);
-		return;
-
 	case m_options:
 		M_Options_Key (key);
 		return;
@@ -45021,10 +44882,6 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_namemaker:
 		M_NameMaker_Mousemove(x, y);
-		return;
-
-	case m_net:
-		M_Net_Mousemove(x, y);
 		return;
 
 	case m_options:
@@ -45300,8 +45157,7 @@ void M_ConfigureNetSubsystem(void)
 // enable/disable net systems to match desired config
 	Cbuf_AddText ("stopdemo\n");
 
-	if (/*IPXConfig || */TCPIPConfig) // woods #skipipx
-		net_hostport = lanConfig_port;
+	net_hostport = lanConfig_port;
 }
 
 //=============================================================================

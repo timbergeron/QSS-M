@@ -327,12 +327,6 @@ SOCKET TCP_OpenStream(netadr_t *addr, const char *remotename, qboolean nonagle)
 		addrsize = sizeof(struct sockaddr_in6);
 		break;
 #endif
-#ifdef HAVE_IPX
-	case AF_IPX:
-		sysprot = NSPROTO_IPX;
-		addrsize = sizeof(struct sockaddr_ipx);
-		break;
-#endif
 	//case NA_UNIX:
 	default:
 		sysprot = 0;	//'auto'

@@ -90,7 +90,6 @@ const int net_numdrivers = (sizeof(net_drivers) / sizeof(net_drivers[0]));
 
 
 #include "net_wins.h"
-/* #include "net_wipx.h" */ /* IPX removed — not available on modern Windows */
 
 net_landriver_t	net_landrivers[] =
 {
@@ -142,32 +141,6 @@ net_landriver_t	net_landrivers[] =
 		WINS_SetSocketPort
 	},
 #endif
-#if 0 /* IPX removed — protocol not available on modern Windows */
-	{	"Winsock IPX",
-		false,
-		0,
-		WIPX_Init,
-		WIPX_Shutdown,
-		WIPX_Listen,
-		WIPX_GetAddresses,
-		WIPX_OpenSocket,
-		WIPX_CloseSocket,
-		WIPX_Connect,
-		WIPX_CheckNewConnections,
-		WIPX_Read,
-		WIPX_Write,
-		WIPX_Broadcast,
-		WIPX_AddrToString,
-		WIPX_StringToAddr,
-		WIPX_GetSocketAddr,
-		WIPX_GetNameFromAddr,
-		WIPX_GetAddrFromName,
-		WIPX_AddrCompare,
-		WIPX_GetSocketPort,
-		WIPX_SetSocketPort
-	}
-#endif
 };
 
 const int net_numlandrivers = (sizeof(net_landrivers) / sizeof(net_landrivers[0]));
-

@@ -5309,7 +5309,6 @@ static void Host_Status_f (void)
 	print_fn (    "host:    %s\n", Cvar_VariableString ("hostname"));
 	print_fn (    "version: "ENGINE_NAME_AND_VER"\n");
 
-#if 1
 	numaddresses = NET_ListAddresses(addresses, sizeof(addresses)/sizeof(addresses[0]));
 	for (i = 0; i < numaddresses; i++)
 	{
@@ -5318,14 +5317,6 @@ static void Host_Status_f (void)
 		else
 			print_fn ("tcp/ip:  %s\n", addresses[i]);	//Spike -- FIXME: we should really have ports displayed here or something
 	}
-#else
-	if (ipv4Available)
-		print_fn ("tcp/ip:  %s\n", my_ipv4_address);	//Spike -- FIXME: we should really have ports displayed here or something
-	if (ipv6Available)
-		print_fn ("ipv6:    %s\n", my_ipv6_address);
-	if (ipxAvailable)
-		print_fn ("ipx:     %s\n", my_ipx_address);
-#endif
 	print_fn (    "map:     %s\n", sv.name);
 
 	for (i = 1,j=0; i < MAX_MODELS; i++)
