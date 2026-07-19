@@ -49,6 +49,48 @@ int LMBLOCK_WIDTH, LMBLOCK_HEIGHT;
 static GLuint lm_scratchpbo; // reset by GL_BuildLightmaps on map load / video restart
 static SDL_mutex *lm_dirty_mutex; // woods #lmrect -- guards modified/rectchange/dirtyrects between the scenecache worker and the main thread's uploads
 
+static void R_TexSubImageLightmap (int x, int t, int w, int h, const GLvoid *src);
+
+static qboolean LM_CanUsePersistentPBO (void)
+{
+	return !COM_CheckParm ("-nolightmappbo")
+		&& gl_vbo_able
+		&& GL_GenBuffersFunc
+		&& GL_BindBufferFunc
+		&& GL_DeleteBuffersFunc
+		&& GL_BufferStorageFunc
+		&& GL_MapBufferRangeFunc
+		&& GL_UnmapBufferFunc;
+}
+
+static void LM_AllocateStaging (struct lightmap_s *lm)
+{
+	const size_t bytes = (size_t)4 * (size_t)LMBLOCK_WIDTH * (size_t)LMBLOCK_HEIGHT;
+
+	if (LM_CanUsePersistentPBO ())
+	{
+		GL_GenBuffersFunc (1, &lm->pbohandle);
+		if (lm->pbohandle)
+		{
+			GL_BindBufferFunc (GL_PIXEL_UNPACK_BUFFER_ARB, lm->pbohandle);
+			GL_BufferStorageFunc (GL_PIXEL_UNPACK_BUFFER_ARB, bytes, NULL,
+					GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT | GL_CLIENT_STORAGE_BIT);
+			lm->pbodata = GL_MapBufferRangeFunc (GL_PIXEL_UNPACK_BUFFER_ARB, 0, bytes,
+					GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+			GL_BindBufferFunc (GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+			if (lm->pbodata)
+				return;
+
+			GL_DeleteBuffersFunc (1, &lm->pbohandle);
+			lm->pbohandle = 0;
+		}
+	}
+
+	lm->pbodata = (byte *) calloc (1, bytes);
+	if (!lm->pbodata)
+		Sys_Error ("GL_BuildLightmaps: out of memory on %u bytes", (unsigned int)bytes);
+}
+
 
 /*
 ===============
@@ -564,20 +606,7 @@ int AllocBlock (int w, int h, int *x, int *y)
 				Sys_Error ("AllocBlock: out of memory (%d lightmaps)", lightmap_count);
 			lightmaps = newlightmaps;
 			memset(&lightmaps[texnum], 0, sizeof(lightmaps[texnum]));
-			if (GL_BufferStorageFunc)
-			{	//if we have bufferstorage then we have mapbufferrange+persistent+coherent
-				GL_GenBuffersFunc(1, &lightmaps[texnum].pbohandle);
-				GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, lightmaps[texnum].pbohandle);
-				GL_BufferStorageFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 4*LMBLOCK_WIDTH*LMBLOCK_HEIGHT, NULL, GL_MAP_WRITE_BIT|GL_MAP_PERSISTENT_BIT|GL_MAP_COHERENT_BIT|GL_CLIENT_STORAGE_BIT);
-				lightmaps[texnum].pbodata = GL_MapBufferRangeFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0, 4*LMBLOCK_WIDTH*LMBLOCK_HEIGHT, GL_MAP_WRITE_BIT|GL_MAP_PERSISTENT_BIT|GL_MAP_COHERENT_BIT);
-				GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
-			}
-			else
-			{
-				lightmaps[texnum].pbodata = (byte *) calloc(1, 4*LMBLOCK_WIDTH*LMBLOCK_HEIGHT);
-				if (!lightmaps[texnum].pbodata)
-					Sys_Error ("GL_BuildLightmaps: out of memory on %d bytes", 4*LMBLOCK_WIDTH*LMBLOCK_HEIGHT);
-			}
+			LM_AllocateStaging (&lightmaps[texnum]);
 			//as we're only tracking one texture, we don't need multiple copies of the skyline any more.
 			LM_ResetSkyline ();
 
@@ -625,6 +654,7 @@ int AllocBlock (int w, int h, int *x, int *y)
 		*x = bestx;
 		*y = best;
 		LM_SkylinePlace (bestx, w, best + h);
+		lightmaps[texnum].upload_height = q_max (lightmaps[texnum].upload_height, best + h);
 
 		last_lightmap_allocated = texnum;
 		return texnum;
@@ -1061,7 +1091,9 @@ void GL_BuildLightmaps (void)
 	struct lightmap_s *lm;
 	qmodel_t	*m;
 	double	t_start, t_built, t_uploaded;
-	qboolean profile;
+	qboolean profile, partial_uploads_enabled;
+	size_t	full_upload_bytes, occupied_upload_bytes, transferred_upload_bytes;
+	int		partial_upload_count;
 
 	RSceneCache_Shutdown();	//make sure there's nothing poking them off-thread.
 
@@ -1081,6 +1113,9 @@ void GL_BuildLightmaps (void)
 
 	profile = developer.value != 0;
 	t_start = profile ? Sys_DoubleTime () : 0;
+	partial_uploads_enabled = !COM_CheckParm ("-nofastlightmapupload");
+	full_upload_bytes = occupied_upload_bytes = transferred_upload_bytes = 0;
+	partial_upload_count = 0;
 
 	r_framecount = 1; // no dlightcache
 
@@ -1176,7 +1211,26 @@ void GL_BuildLightmaps (void)
 	//
 	for (i=0; i<lightmap_count; i++)
 	{
+		size_t full_bytes, occupied_bytes, saved_bytes;
+		qboolean use_partial_upload;
+
 		lm = &lightmaps[i];
+		if (lm->upload_height <= 0 || lm->upload_height > LMBLOCK_HEIGHT)
+			Sys_Error ("GL_BuildLightmaps: bad occupied height %d for lightmap %d", lm->upload_height, i);
+
+		full_bytes = (size_t)LMBLOCK_WIDTH * (size_t)LMBLOCK_HEIGHT * (size_t)lightmap_bytes;
+		occupied_bytes = (size_t)LMBLOCK_WIDTH * (size_t)lm->upload_height * (size_t)lightmap_bytes;
+		saved_bytes = full_bytes - occupied_bytes;
+		use_partial_upload = partial_uploads_enabled
+			&& saved_bytes >= 1024u * 1024u
+			&& saved_bytes >= full_bytes / 4u;
+
+		full_upload_bytes += full_bytes;
+		occupied_upload_bytes += occupied_bytes;
+		transferred_upload_bytes += use_partial_upload ? occupied_bytes : full_bytes;
+		if (use_partial_upload)
+			partial_upload_count++;
+
 		lm->modified = false;
 		lm->rectchange.l = LMBLOCK_WIDTH;
 		lm->rectchange.t = LMBLOCK_HEIGHT;
@@ -1187,7 +1241,26 @@ void GL_BuildLightmaps (void)
 		//johnfitz -- use texture manager
 		sprintf(name, "lightmap%07i",i);
 
-		if (lm->pbohandle)
+		if (use_partial_upload)
+		{
+			// With an unpack PBO bound, NULL is offset zero rather than "no data".
+			// Allocate the full texture first with no PBO, then upload only the
+			// occupied rows directly from the persistent PBO or client memory.
+			if (GL_BindBufferFunc)
+				GL_BindBufferFunc (GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+			lm->texture = TexMgr_LoadImage (NULL, name, LMBLOCK_WIDTH, LMBLOCK_HEIGHT,
+					SRC_LIGHTMAP, NULL, "", (src_offset_t)lm->pbodata, TEXPREF_LINEAR | TEXPREF_NOPICMIP | TEXPREF_PERSIST);
+			GL_Bind (lm->texture);
+			if (lm->pbohandle)
+			{
+				GL_BindBufferFunc (GL_PIXEL_UNPACK_BUFFER_ARB, lm->pbohandle);
+				R_TexSubImageLightmap (0, 0, LMBLOCK_WIDTH, lm->upload_height, (const GLvoid *)(uintptr_t)0);
+				GL_BindBufferFunc (GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+			}
+			else
+				R_TexSubImageLightmap (0, 0, LMBLOCK_WIDTH, lm->upload_height, lm->pbodata);
+		}
+		else if (lm->pbohandle)
 		{
 			GL_BindBufferFunc(GL_PIXEL_UNPACK_BUFFER_ARB, lm->pbohandle);
 			lm->texture = TexMgr_LoadImage (NULL, name, LMBLOCK_WIDTH, LMBLOCK_HEIGHT,
@@ -1213,6 +1286,10 @@ void GL_BuildLightmaps (void)
 	if (profile)
 	{
 		t_uploaded = Sys_DoubleTime ();
+		Con_DPrintf ("GL_BuildLightmaps: occupied %.1f/%.1f MiB, transferred %.1f MiB (%d/%d partial%s)\n",
+			occupied_upload_bytes / (1024.0 * 1024.0), full_upload_bytes / (1024.0 * 1024.0),
+			transferred_upload_bytes / (1024.0 * 1024.0), partial_upload_count, lightmap_count,
+			partial_uploads_enabled ? "" : ", disabled");
 		Con_DPrintf ("GL_BuildLightmaps: build %.1fms upload %.1fms (%d lightmaps)\n",
 			(t_built-t_start)*1000.0, (t_uploaded-t_built)*1000.0, lightmap_count);
 	}

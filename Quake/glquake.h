@@ -445,6 +445,7 @@ struct lightmap_s
 	//the data ptr points to a persistently mapped buffer so we can paint it from other threads while the main thread is doing other work so other than creation+upload we can just treat it like regular memory with slightly different cache properties.
 	GLuint		pbohandle;
 	byte		*pbodata;//[4*LMBLOCK_WIDTH*LMBLOCK_HEIGHT];
+	int			upload_height; // highest reserved row; initial uploads can skip the unused tail
 };
 extern struct lightmap_s *lightmaps;
 extern int lightmap_count;	//allocated lightmaps
