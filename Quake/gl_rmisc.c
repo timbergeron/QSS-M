@@ -277,6 +277,8 @@ static void R_InitOtherTextures () // woods #powershell #caustics
 			TEXPREF_PERSIST |    // Keep the texture loaded
 			TEXPREF_NOPICMIP     // Always use full resolution
 		);
+		if (malloced)
+			free(data);
 	}
 
 	if (COM_FileExists("textures/water_caustic.tga", NULL))
@@ -289,6 +291,8 @@ static void R_InitOtherTextures () // woods #powershell #caustics
 			TEXPREF_PERSIST |    // Keep the texture loaded
 			TEXPREF_NOPICMIP     // Always use full resolution
 		);
+		if (malloced)
+			free(data);
 	}
 }
 

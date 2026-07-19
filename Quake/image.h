@@ -27,10 +27,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 enum srcformat;
 
-//be sure to free the hunk after using these loading functions
+//The format-specific loaders return hunk-allocated data.
 byte *Image_LoadTGA (FILE *f, int *width, int *height);
 byte *Image_LoadPCX (FILE *f, int *width, int *height);
 byte *Image_LoadLMP (FILE *f, int *width, int *height, enum srcformat *fmt);
+//Image_LoadImage may return hunk- or heap-allocated data. If *malloced is true,
+//the caller must release the result with free().
 byte *Image_LoadImage (const char *name, int *width, int *height, enum srcformat *fmt, qboolean *malloced);
 
 qboolean Image_WriteTGA (const char *name, byte *data, int width, int height, int bpp, qboolean upsidedown);

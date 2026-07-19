@@ -118,36 +118,31 @@ static qboolean Buf_ReadByte(stdio_buffer_t *buf, byte *out)
 	#define STBI_ONLY_PNG
 #endif
 #include "stb_image.h"
-static byte *Image_LoadSTBI(FILE *f, int *width, int *height)
+static byte *Image_LoadSTBI(FILE *f, int *width, int *height, qboolean *malloced)
 {
 	int bytesPerPixel;
 	byte *heap = stbi_load_from_file(f, width, height, &bytesPerPixel, 4);
 	fclose(f);
 	if (heap)
-	{	//this is silly, but we do it for consistency.
-		//frankly, most people should be using tga-inside-pk3.
-		size_t numbytes;
-		byte *hunk;
-
+	{
 		if (*width <= 0 || *height <= 0 || (size_t)*width > (size_t)INT_MAX / (size_t)*height / 4)
 		{
 			free(heap);
 			return NULL;
 		}
 
-		numbytes = (size_t)*width * (size_t)*height * 4;
-		hunk = Hunk_AllocNoFill((int)numbytes);
-		memcpy(hunk, heap, numbytes);
-		free(heap);
-		return hunk;
+		// Keep the decoder's allocation instead of copying it into the hunk.
+		// Large replacement textures otherwise push the low hunk through the
+		// alias-model cache and can evict models that were just precached.
+		*malloced = true;
 	}
-	return NULL;
+	return heap;
 }
 
 byte *Image_LoadPNG(FILE *f, int *width, int *height, qboolean *malloced)
 {
 #ifdef LODEPNG_NO_COMPILE_DECODER
-	return Image_LoadSTBI (f, width, height);
+	return Image_LoadSTBI (f, width, height, malloced);
 #else
 	unsigned w, h;
 	unsigned char *out = NULL, *in;
@@ -582,7 +577,9 @@ fail:
 ============
 Image_LoadImage
 
-returns a pointer to hunk allocated data. either RGBA8 or a compressed mip chain.
+Returns either hunk-allocated or heap-allocated data. If *malloced is true,
+the caller must release the result with free(). The data is either RGBA8 or a
+compressed mip chain.
 
 TODO: search order: tga png jpg pcx lmp
 ============
@@ -628,12 +625,12 @@ byte *Image_LoadImage (const char *name, int *width, int *height, enum srcformat
 		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.jpeg", prefixes[i], name);
 		COM_FOpenFile (loadfilename, &f, NULL);
 		if (f)
-			return Image_LoadSTBI (f, width, height);
+			return Image_LoadSTBI (f, width, height, malloced);
 
 		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.jpg", prefixes[i], name);
 		COM_FOpenFile (loadfilename, &f, NULL);
 		if (f)
-			return Image_LoadSTBI (f, width, height);
+			return Image_LoadSTBI (f, width, height, malloced);
 
 		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.pcx", prefixes[i], name);
 		COM_FOpenFile (loadfilename, &f, NULL);
