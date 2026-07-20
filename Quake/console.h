@@ -53,6 +53,7 @@ void Con_ClearNotify (void);
 void Con_ToggleConsole_f (void);
 qboolean Con_IsRedirected(void);	//returns true if its redirected. this generally means that things are a little more verbose.
 void Con_Redirect(void(*flush)(const char *text));
+#define CON_REDIRECT_BUFFER_SIZE 8192
 
 void Con_NotifyBox (const char *text);	// during startup for sound / cd warnings
 

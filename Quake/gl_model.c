@@ -4535,7 +4535,7 @@ visdone:
 		{	// duplicate the basic information
 			char	name[12];
 
-			sprintf (name, "*%i", i+1);
+			q_snprintf (name, sizeof(name), "*%i", i+1);
 			loadmodel = Mod_FindName (name);
 			*loadmodel = *mod;
 			strcpy (loadmodel->name, name);

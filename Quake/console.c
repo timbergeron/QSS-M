@@ -114,7 +114,7 @@ static void Con_Autohint_Callback (cvar_t *var)
 char		con_lastcenterstring[1024]; //johnfitz
 
 void (*con_redirect_flush)(const char *buffer);	//call this to flush the redirection buffer (for rcon)
-char con_redirect_buffer[8192];
+char con_redirect_buffer[CON_REDIRECT_BUFFER_SIZE];
 
 #define	NUM_CON_TIMES 30 // woods from proquake 493 #notifylines
 double		con_times[NUM_CON_TIMES];	// realtime time the line was generated

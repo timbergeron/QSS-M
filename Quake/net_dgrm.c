@@ -2328,7 +2328,9 @@ static sys_socket_t rcon_response_landriver;
 void Datagram_Rcon_Flush(const char *text)
 {
 	sizebuf_t msg;
-	byte buffer[8192];
+	// The redirect buffer can contain 8191 text bytes. Reserve the control
+	// header, response opcode, and trailing NUL in addition to that payload.
+	byte buffer[CON_REDIRECT_BUFFER_SIZE + sizeof(int) + 2];
 	msg.data = buffer;
 	msg.maxsize = sizeof(buffer);
 	msg.allowoverflow = true;
