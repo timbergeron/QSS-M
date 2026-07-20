@@ -54,6 +54,7 @@ typedef char qhostaddr_t[NET_NAMELEN];
 
 void	NET_Init (void);
 void	NET_Shutdown (void);
+void	NET_AbortExternalIP (void);
 
 struct qsocket_s	*NET_CheckNewConnections (void);
 // returns a new connection number if there is one pending, else -1
@@ -159,7 +160,7 @@ extern	qboolean	ipv4Available;
 extern	qboolean	ipv6Available;
 extern	char		my_ipv4_address[NET_NAMELEN];
 extern	char		my_ipv6_address[NET_NAMELEN];
-extern  char        my_public_ip[NET_NAMELEN]; // woods #extip
+void NET_GetPublicIP(char *dst, size_t dstsize); // woods #extip
 
 typedef enum
 {

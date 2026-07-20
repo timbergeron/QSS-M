@@ -28141,8 +28141,11 @@ void M_LanConfig_CheckTimeouts(void)
 
 void M_LanConfig_Draw (void)
 {
+	char public_ip[NET_NAMELEN];
+
 	M_LanConfig_CheckTimeouts(); // woods #contentfilter
 	M_TextField_CheckMouseRelease();
+	NET_GetPublicIP(public_ip, sizeof(public_ip));
 	
 	qpic_t	*p;
 	int		basex;
@@ -28206,8 +28209,8 @@ void M_LanConfig_Draw (void)
 		ip_clickables[1].label_width = 7 * 8;
 		ip_clickables[1].x = address_x + 7 * 8;
 		ip_clickables[1].y = y;
-		ip_clickables[1].width = strlen(my_public_ip) * 8;
-		strncpy(ip_clickables[1].text, my_public_ip, sizeof(ip_clickables[1].text));
+		ip_clickables[1].width = strlen(public_ip) * 8;
+		q_strlcpy(ip_clickables[1].text, public_ip, sizeof(ip_clickables[1].text));
 
 		if (cl_contentfilter.value && !ip_temporarily_visible[1]) // woods #contentfilter
 		{
@@ -28216,7 +28219,7 @@ void M_LanConfig_Draw (void)
 		}
 		else 
 		{
-		M_Print(address_x, y, va("ext:   %s", my_public_ip));
+			M_Print(address_x, y, va("ext:   %s", public_ip));
 		}
 		y += 8;
 	}

@@ -39,7 +39,11 @@ int		DEFAULTnet_hostport = 26000;
 
 char		my_ipv4_address[NET_NAMELEN];
 char		my_ipv6_address[NET_NAMELEN];
-char        my_public_ip[NET_NAMELEN]; // woods #extip
+static char my_public_ip[NET_NAMELEN] = "UNKNOWN"; // woods #extip
+static SDL_Thread *external_ip_thread;
+static SDL_mutex *external_ip_mutex;
+static qboolean external_ip_curl_initialized;
+static SDL_atomic_t external_ip_abort;
 
 qboolean	listening = false; // woods #listens
 
@@ -81,14 +85,16 @@ double		net_time;
 
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) // woods #extip
 {
-	size_t realsize = size * nmemb;
+	size_t realsize;
 	char* buffer = (char*)userp;
 	size_t buffer_len = strlen(buffer);
 	size_t buffer_remaining = NET_NAMELEN - buffer_len - 1;
 
-	if (realsize > buffer_remaining) {
-		realsize = buffer_remaining;
-	}
+	if (size && nmemb > (size_t)-1 / size)
+		return 0;
+	realsize = size * nmemb;
+	if (realsize > buffer_remaining)
+		return 0;
 
 	memcpy(buffer + buffer_len, contents, realsize);
 	buffer[buffer_len + realsize] = '\0';
@@ -96,37 +102,64 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
 	return realsize;
 }
 
-int GetExternalIP(void* data) // woods #extip
+static int ExternalIP_AbortCallback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+	(void)clientp;
+	(void)dltotal;
+	(void)dlnow;
+	(void)ultotal;
+	(void)ulnow;
+	return SDL_AtomicGet(&external_ip_abort) ? 1 : 0;
+}
+
+static int GetExternalIP(void* data) // woods #extip
 {
 	CURL* curl;
 	CURLcode res;
 	char public_ip[NET_NAMELEN] = { 0 };
 
-	strncpy(my_public_ip, "UNKNOWN", sizeof(my_public_ip));
+	(void)data;
 
 	curl = curl_easy_init();
 	if (curl) {
-		curl_easy_setopt(curl, CURLOPT_URL, "http://checkip.amazonaws.com");
+		curl_easy_setopt(curl, CURLOPT_URL, "https://checkip.amazonaws.com");
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)public_ip);
+		curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+		curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+		curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+		curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+		curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ExternalIP_AbortCallback);
 		res = curl_easy_perform(curl);
-		if (res == CURLE_OK)
+		if (res == CURLE_OK && public_ip[0])
 		{
-			public_ip[strcspn(public_ip, "\n")] = '\0'; // Strip newline
-			strncpy(my_public_ip, public_ip, sizeof(my_public_ip) - 1);
-			my_public_ip[sizeof(my_public_ip) - 1] = '\0'; // Ensure null-termination
-			Con_DPrintf("Public IP: %s\n", my_public_ip);
-		}
-		else
-		{
-			Con_DPrintf("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+			public_ip[strcspn(public_ip, "\r\n")] = '\0';
+			if (public_ip[0])
+			{
+				SDL_LockMutex(external_ip_mutex);
+				q_strlcpy(my_public_ip, public_ip, sizeof(my_public_ip));
+				SDL_UnlockMutex(external_ip_mutex);
+			}
 		}
 		curl_easy_cleanup(curl);
 	}
-	else {
-		Con_DPrintf("curl_easy_init() failed\n");
-	}
-	return 0; // Return success
+	return 0;
+}
+
+void NET_AbortExternalIP(void)
+{
+	SDL_AtomicSet(&external_ip_abort, true);
+}
+
+void NET_GetPublicIP(char *dst, size_t dstsize)
+{
+	if (!dst || !dstsize)
+		return;
+	if (external_ip_mutex)
+		SDL_LockMutex(external_ip_mutex);
+	q_strlcpy(dst, my_public_ip, dstsize);
+	if (external_ip_mutex)
+		SDL_UnlockMutex(external_ip_mutex);
 }
 
 double SetNetTime (void)
@@ -1241,9 +1274,11 @@ void IP_f (void) // woods #extip
 	int numaddresses;
 	qhostaddr_t addresses[16];
 	char buf[MAX_OSPATH];
+	char public_ip[NET_NAMELEN];
 	int argc = Cmd_Argc();
 
 	numaddresses = NET_ListAddresses(addresses, sizeof(addresses) / sizeof(addresses[0]));
+	NET_GetPublicIP(public_ip, sizeof(public_ip));
 
 	if (argc >= 2)
 	{
@@ -1251,10 +1286,10 @@ void IP_f (void) // woods #extip
 
 		if (!q_strcasecmp(arg, "ext"))
 		{
-			if (SDL_SetClipboardText(my_public_ip) < 0)
+			if (SDL_SetClipboardText(public_ip) < 0)
 				Con_Printf("\nclipboard copy failed: %s\n\n", SDL_GetError());
 			else
-				Con_Printf("\nexternal IP copied to clipboard: ^m%s^m\n\n", my_public_ip);
+				Con_Printf("\nexternal IP copied to clipboard: ^m%s^m\n\n", public_ip);
 			return;
 
 		}
@@ -1291,7 +1326,7 @@ void IP_f (void) // woods #extip
 	else
 		Con_Printf("\n\nlocal:    ^m%s^m\n", addresses[0]);
 
-	Con_Printf("external: ^m%s^m\n\n", my_public_ip);
+	Con_Printf("external: ^m%s^m\n\n", public_ip);
 }
 
 //=============================================================================
@@ -1390,9 +1425,22 @@ void NET_Init (void)
 		Con_DPrintf("IPv6 address %s\n", my_ipv6_address);
 	}
 
-	curl_global_init(CURL_GLOBAL_DEFAULT); // woods #libcurl
-
-	SDL_CreateThread(GetExternalIP, "ExternalIPThread", NULL); // woods #extip
+	SDL_AtomicSet(&external_ip_abort, false);
+	if (curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK) // woods #libcurl
+	{
+		external_ip_curl_initialized = true;
+		external_ip_mutex = SDL_CreateMutex();
+		if (!external_ip_mutex)
+			Con_DWarning("Unable to create external IP mutex: %s\n", SDL_GetError());
+		else
+		{
+			external_ip_thread = SDL_CreateThread(GetExternalIP, "ExternalIPThread", NULL); // woods #extip
+			if (!external_ip_thread)
+				Con_DWarning("Unable to create external IP thread: %s\n", SDL_GetError());
+		}
+	}
+	else
+		Con_DWarning("Unable to initialize libcurl\n");
 }
 
 /*
@@ -1405,9 +1453,24 @@ void NET_Shutdown (void)
 {
 	qsocket_t	*sock;
 
+	NET_AbortExternalIP();
 	M_ServerList_ShutdownPingThreads();
 	M_ServerList_ShutdownApiFetch();
-	curl_global_cleanup(); // woods #libcurl
+	if (external_ip_thread)
+	{
+		SDL_WaitThread(external_ip_thread, NULL);
+		external_ip_thread = NULL;
+	}
+	if (external_ip_curl_initialized)
+	{
+		curl_global_cleanup(); // woods #libcurl
+		external_ip_curl_initialized = false;
+	}
+	if (external_ip_mutex)
+	{
+		SDL_DestroyMutex(external_ip_mutex);
+		external_ip_mutex = NULL;
+	}
 
 	SetNetTime();
 

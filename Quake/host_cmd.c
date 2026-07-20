@@ -623,6 +623,7 @@ void Host_Quit_f (void)
 	quit_in_progress = true;
 
 	CL_WebDownloadChecks_Abort (); // let in-flight startup probes die during the fade instead of stalling shutdown
+	NET_AbortExternalIP (); // likewise cancel the public-IP request before its shutdown join
 
 	SCR_QuitFade ();
 
