@@ -32,8 +32,6 @@ void Cmd_ForwardToServer (void);
 
 #define	MAX_ALIAS_NAME	32
 
-#define CMDLINE_LENGTH 256 //johnfitz -- mirrored in common.c
-
 typedef struct cmdalias_s
 {
 	struct cmdalias_s	*next;
@@ -253,8 +251,11 @@ quake -nosound +cmd amlev1
 void Cmd_StuffCmds_f (void)
 {
 	extern cvar_t cmdline;
-	char	cmds[CMDLINE_LENGTH];
-	int		i, j, plus;
+	char		*cmds;
+	size_t		i, j;
+	qboolean	plus;
+
+	cmds = (char *) Q_malloc (strlen (cmdline.string) + 1);
 
 	plus = false;	// On Unix, argv[0] is command name
 
@@ -279,6 +280,7 @@ void Cmd_StuffCmds_f (void)
 
 	Host_RunCvarMigrations ();
 	Cbuf_InsertText (cmds);
+	free (cmds);
 }
 
 /* id1/pak0.pak from 2021 re-release doesn't have a default.cfg

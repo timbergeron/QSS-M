@@ -146,8 +146,7 @@ char	com_token[1024];
 int		com_argc;
 char	**com_argv;
 
-#define CMDLINE_LENGTH	256		/* johnfitz -- mirrored in cmd.c */
-char	com_cmdline[CMDLINE_LENGTH];
+static char	*com_cmdline;
 static char	com_missingpak_hint[1024];
 
 const char *COM_GetMissingPakHint(void)
@@ -2261,28 +2260,31 @@ COM_InitArgv
 */
 void COM_InitArgv (int argc, char **argv)
 {
-	int		i, j, n;
+	int		j;
+	size_t		cmdline_size, len, n;
 
 // reconstitute the command line for the cmdline externally visible cvar
-	n = 0;
+	cmdline_size = 1; // trailing NUL
 
 	for (j = 0; (j<MAX_NUM_ARGVS) && (j< argc); j++)
 	{
-		i = 0;
-
-		while ((n < (CMDLINE_LENGTH - 1)) && argv[j][i])
-		{
-			com_cmdline[n++] = argv[j][i++];
-		}
-
-		if (n < (CMDLINE_LENGTH - 1))
-			com_cmdline[n++] = ' ';
-		else
-			break;
+		len = strlen (argv[j]);
+		if ((j > 0 && cmdline_size == SIZE_MAX) || len > SIZE_MAX - cmdline_size - (j > 0))
+			Sys_Error ("COM_InitArgv: command line too long");
+		cmdline_size += len + (j > 0);
 	}
 
-	if (n > 0 && com_cmdline[n-1] == ' ')
-		com_cmdline[n-1] = 0; //johnfitz -- kill the trailing space
+	com_cmdline = (char *) Q_malloc (cmdline_size);
+	n = 0;
+	for (j = 0; (j<MAX_NUM_ARGVS) && (j< argc); j++)
+	{
+		if (j > 0)
+			com_cmdline[n++] = ' ';
+		len = strlen (argv[j]);
+		memcpy (com_cmdline + n, argv[j], len);
+		n += len;
+	}
+	com_cmdline[n] = 0;
 
 	Con_Printf("Command line: %s\n", com_cmdline);
 

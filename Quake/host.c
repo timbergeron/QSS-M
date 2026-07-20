@@ -2165,27 +2165,46 @@ void Host_RunCvarMigrations (void) // woods #migration
 			cv = Cvar_FindVar (lists[l]);
 			if (cv)
 			{
-				char	list[2048];
-				size_t	len;
+				char	*list;
+				size_t	len, needed;
 				int	i;
 				qboolean added = false;
 
-				q_strlcpy (list, cv->string, sizeof(list));
-				len = strlen (list);
+				needed = strlen (cv->string);
 				for (i = 0; i < (int)Q_COUNTOF(candles); i++)
 				{
-					if (nameInList (list, candles[i]))
+					size_t candle_len, extra;
+
+					if (nameInList (cv->string, candles[i]))
 						continue;
-					if (len && len + 1 + strlen (candles[i]) < sizeof(list))
-						list[len++] = ',';
-					q_strlcpy (list + len, candles[i], sizeof(list) - len);
-					len += strlen (candles[i]);
+					candle_len = strlen (candles[i]);
+					extra = candle_len + (needed ? 1 : 0);
+					if (extra < candle_len || needed > SIZE_MAX - extra - 1)
+						Sys_Error ("Host_RunCvarMigrations: cvar value too long");
+					needed += extra;
 					added = true;
 				}
 				if (added)
 				{
+					list = (char *) Q_malloc (needed + 1);
+					len = strlen (cv->string);
+					memcpy (list, cv->string, len);
+					for (i = 0; i < (int)Q_COUNTOF(candles); i++)
+					{
+						size_t candle_len;
+
+						if (nameInList (cv->string, candles[i]))
+							continue;
+						if (len)
+							list[len++] = ',';
+						candle_len = strlen (candles[i]);
+						memcpy (list + len, candles[i], candle_len);
+						len += candle_len;
+					}
+					list[len] = 0;
 					Cvar_Set (lists[l], list);
 					Con_Printf ("Migrated %s: added candle models\n", lists[l]);
+					free (list);
 				}
 			}
 		}
