@@ -705,6 +705,7 @@ typedef struct lm_fillctx_s
 	entity_t	*ent;
 	int		framecount;
 	dlight_t	*lights;
+	const r_lightmap_buildstate_t *buildstate;
 } lm_fillctx_t;
 
 static void LM_FillRange (const lm_fillctx_t *ctx)
@@ -721,7 +722,7 @@ static void LM_FillRange (const lm_fillctx_t *ctx)
 		{
 			byte *base = lightmaps[surf->lightmaptexturenum].pbodata;
 			base += (surf->light_t * LMBLOCK_WIDTH + surf->light_s) * lightmap_bytes;
-			R_BuildLightMap (lm_filljobs[i].model, surf, base, LMBLOCK_WIDTH*lightmap_bytes, ctx->ent, ctx->framecount, ctx->lights);
+			R_BuildLightMapForState (lm_filljobs[i].model, surf, base, LMBLOCK_WIDTH*lightmap_bytes, ctx->ent, ctx->framecount, ctx->lights, ctx->buildstate);
 		}
 	}
 }
@@ -758,7 +759,10 @@ static void LM_RunDeferredFill (void)
 {
 	SDL_Thread	*threads[LM_MAX_FILL_THREADS];
 	lm_fillctx_t	ctx[LM_MAX_FILL_THREADS];
+	r_lightmap_buildstate_t buildstate;
 	int		i, numthreads;
+
+	R_LightmapBuildState_Snapshot (&buildstate);
 
 	numthreads = q_max (1, SDL_GetCPUCount ());
 	numthreads = q_min (numthreads, LM_MAX_FILL_THREADS);
@@ -771,6 +775,7 @@ static void LM_RunDeferredFill (void)
 		ctx[i].ent = currententity;
 		ctx[i].framecount = r_framecount;
 		ctx[i].lights = cl_dlights;
+		ctx[i].buildstate = &buildstate;
 	}
 
 	if (numthreads <= 1)
@@ -1439,7 +1444,7 @@ void GL_BuildBModelVertexBuffer (void)
 R_AddDynamicLights
 ===============
 */
-static void R_AddDynamicLights (msurface_t *surf, unsigned *blocklights, entity_t *currentent, dlight_t *lights)
+static void R_AddDynamicLights (msurface_t *surf, unsigned *blocklights, entity_t *currentent, dlight_t *lights, const int *lightstyles)
 {
 	int			lnum;
 	int			sd, td;
@@ -1463,7 +1468,10 @@ static void R_AddDynamicLights (msurface_t *surf, unsigned *blocklights, entity_
 			continue;		// not lit by this light
 
 		rad = lights[lnum].radius;
-		stylescale = R_DlightStyleScale(&lights[lnum]);
+		if (lights[lnum].style < 0 || lights[lnum].style >= MAX_LIGHTSTYLES)
+			stylescale = 1.0f;
+		else
+			stylescale = lightstyles[lights[lnum].style] * (1.0f / 256.0f);
 		if (stylescale <= 0.0f)
 			continue;
 		if (currentent->currentangles[0] || currentent->currentangles[1] || currentent->currentangles[2])
@@ -1536,9 +1544,19 @@ R_BuildLightMap -- johnfitz -- revised for lit support via lordhavoc
 Combine and scale multiple lightmaps into the 8.8 format in blocklights
 ===============
 */
-void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights)
+void R_LightmapBuildState_Snapshot (r_lightmap_buildstate_t *state)
 {
-	const int overbright = !!gl_overbright.value;
+	state->format = gl_lightmap_format;
+	state->overbright = !!gl_overbright.value;
+	state->ambient_light = 0;
+	if (!(cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected && !cls.demoplayback))
+		state->ambient_light = ((unsigned)CLAMP(0.0f, r_ambient.value, 255.0f)) << 8;
+	memcpy(state->lightstyles, d_lightstylevalue, sizeof(state->lightstyles));
+}
+
+void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights, const r_lightmap_buildstate_t *state)
+{
+	const int overbright = state->overbright;
 
 	int			smax, tmax;
 	unsigned		r, g, b;
@@ -1561,9 +1579,9 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 	// clear to no light
 		memset (&blocklights[0], 0, size * 3 * sizeof (unsigned int)); //johnfitz -- lit support via lordhavoc
 
-		if (!(cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected && !cls.demoplayback)) // woods #rambient
+		if (state->ambient_light) // woods #rambient
 		{
-			unsigned ambient_light = ((unsigned)CLAMP(0.0f, r_ambient.value, 255.0f)) << 8;
+			unsigned ambient_light = state->ambient_light;
 
 			if (ambient_light) {
 				bl = blocklights;
@@ -1584,7 +1602,7 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 			for (maps = 0 ; maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ;
 				 maps++)
 			{
-				scale = d_lightstylevalue[surf->styles[maps]];
+				scale = state->lightstyles[surf->styles[maps]];
 				surf->cached_light[maps] = scale;	// 8.8 fraction
 				bl = blocklights;		//it sucks that blocklights is an int array. we can still massively overbright though, just not underbright quite as accurately (still quite a bit more than rgb8 precision there).
 				for (i=0 ; i<size ; i++)
@@ -1610,7 +1628,7 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 			for (maps = 0 ; maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE ;
 				 maps++)
 			{
-				scale = d_lightstylevalue[surf->styles[maps]];
+				scale = state->lightstyles[surf->styles[maps]];
 				surf->cached_light[maps] = scale;	// 8.8 fraction
 				//johnfitz -- lit support via lordhavoc
 				bl = blocklights;
@@ -1626,7 +1644,7 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 
 	// add all the dynamic lights
 		if (surf->dlightframe == framecount)
-			R_AddDynamicLights (surf, blocklights, currentent, lights);
+			R_AddDynamicLights (surf, blocklights, currentent, lights, state->lightstyles);
 	}
 	else
 	{
@@ -1637,13 +1655,13 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 
 // bound, invert, and shift
 // store:
-	switch (gl_lightmap_format)
+	switch (state->format)
 	{
 	case GL_RGB9_E5:
 		{
 			int e;
 			float m;
-			float scale, identity = 1u<<((gl_overbright.value?8:7)+8);	//overbright is redundant with this, but its easier to leave it than conditionally block it.
+			float scale, identity = 1u<<((overbright?8:7)+8);	//overbright is redundant with this, but its easier to leave it than conditionally block it.
 			stride -= smax * 4;
 			bl = blocklights;
 			for (i=0 ; i<tmax ; i++, dest += stride)
@@ -1765,6 +1783,14 @@ void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride,
 	default:
 		Sys_Error ("R_BuildLightMap: bad lightmap format");
 	}
+}
+
+void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights)
+{
+	r_lightmap_buildstate_t state;
+
+	R_LightmapBuildState_Snapshot(&state);
+	R_BuildLightMapForState(model, surf, dest, stride, currentent, framecount, lights, &state);
 }
 
 /*

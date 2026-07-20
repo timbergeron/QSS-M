@@ -539,7 +539,16 @@ int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise);
 
 void GL_SubdivideSurface (msurface_t *fa);
 int R_SurfaceVertCount (const msurface_t *s); // woods #collinear -- verts in polys after collinear removal (<= numedges)
+typedef struct r_lightmap_buildstate_s
+{
+	int format;
+	int overbright;
+	unsigned ambient_light;
+	int lightstyles[MAX_LIGHTSTYLES];
+} r_lightmap_buildstate_t;
+void R_LightmapBuildState_Snapshot (r_lightmap_buildstate_t *state);
 void R_BuildLightMap (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights);
+void R_BuildLightMapForState (qmodel_t *model, msurface_t *surf, byte *dest, int stride, entity_t *currentent, int framecount, dlight_t *lights, const r_lightmap_buildstate_t *state);
 void R_RenderDynamicLightmaps (qmodel_t *model, msurface_t *fa);
 void R_UploadLightmaps (void);
 qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent);
