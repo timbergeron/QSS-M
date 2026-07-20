@@ -125,6 +125,7 @@ struct qice_userstate_s
 #endif
 
 static void QICE_FreeBrokerLookup(qice_connection_t *b);
+static void QICE_FreeHeartbeatLookup(qice_connection_t *b);
 
 static void QICE_Close(qice_connection_t *b)
 {
@@ -136,6 +137,7 @@ static void QICE_Close(qice_connection_t *b)
 		b->broker = NULL;
 	}
 	QICE_FreeBrokerLookup(b);
+	QICE_FreeHeartbeatLookup(b);
 
 	for (cl = 0; cl < b->numclients; cl++)
 		if (b->clients[cl].ice)
@@ -184,7 +186,8 @@ static void QICE_SendBrokerFrame(qice_connection_t *b, const char *msg)
 #define MAX_MASTERS 64
 struct heartbeatctx_s
 {	//thread context used to avoid stalls on dns lookups.
-	qboolean working;	//don't really need a barrier, we'll use join to sync before reading the rest.
+	struct heartbeatctx_s *next;
+	SDL_atomic_t working;
 	void *thread;
 
 	int nummasters;
@@ -205,7 +208,7 @@ struct heartbeatctx_s
 struct brokerlookupctx_s
 {
 	struct brokerlookupctx_s *next;
-	qboolean working;
+	SDL_atomic_t working;
 	qboolean okay;
 	void *thread;
 	char brokername[64];
@@ -214,6 +217,7 @@ struct brokerlookupctx_s
 };
 
 static struct brokerlookupctx_s *orphanedbrokerlookups;
+static struct heartbeatctx_s *orphanedheartbeatlookups;
 
 static int DNSLookupThread(void *vctx)
 {
@@ -245,7 +249,7 @@ static int DNSLookupThread(void *vctx)
 		}
 	}
 
-	ctx->working = false;	//done.
+	SDL_AtomicSet(&ctx->working, false);	//done.
 	return true;
 }
 
@@ -254,18 +258,18 @@ static int BrokerLookupThread(void *vctx)
 	struct brokerlookupctx_s *ctx = vctx;
 
 	ctx->okay = NET_StringToAdr(ctx->brokername, ctx->brokerport, &ctx->addr, 1) > 0;
-	ctx->working = false;
+	SDL_AtomicSet(&ctx->working, false);
 	return true;
 }
 
-static void QICE_CleanupBrokerLookups(void)
+static void QICE_CleanupBrokerLookups(qboolean wait)
 {
 	struct brokerlookupctx_s **link = &orphanedbrokerlookups;
 	struct brokerlookupctx_s *ctx;
 
 	while ((ctx = *link))
 	{
-		if (ctx->working)
+		if (!wait && SDL_AtomicGet(&ctx->working))
 		{
 			link = &ctx->next;
 			continue;
@@ -275,6 +279,31 @@ static void QICE_CleanupBrokerLookups(void)
 		*link = ctx->next;
 		Z_Free(ctx);
 	}
+}
+
+static void QICE_CleanupHeartbeatLookups(qboolean wait)
+{
+	struct heartbeatctx_s **link = &orphanedheartbeatlookups;
+	struct heartbeatctx_s *ctx;
+
+	while ((ctx = *link))
+	{
+		if (!wait && SDL_AtomicGet(&ctx->working))
+		{
+			link = &ctx->next;
+			continue;
+		}
+		if (ctx->thread)
+			SDL_WaitThread(ctx->thread, NULL);
+		*link = ctx->next;
+		Z_Free(ctx);
+	}
+}
+
+static void QICE_CleanupLookups(qboolean wait)
+{
+	QICE_CleanupBrokerLookups(wait);
+	QICE_CleanupHeartbeatLookups(wait);
 }
 
 static void QICE_FreeBrokerLookup(qice_connection_t *b)
@@ -287,10 +316,31 @@ static void QICE_FreeBrokerLookup(qice_connection_t *b)
 	b->brokerctx = NULL;
 	if (ctx->thread)
 	{
-		if (ctx->working)
+		if (SDL_AtomicGet(&ctx->working))
 		{
 			ctx->next = orphanedbrokerlookups;
 			orphanedbrokerlookups = ctx;
+			return;
+		}
+		SDL_WaitThread(ctx->thread, NULL);
+	}
+	Z_Free(ctx);
+}
+
+static void QICE_FreeHeartbeatLookup(qice_connection_t *b)
+{
+	struct heartbeatctx_s *ctx = b->heartbeatctx;
+
+	if (!ctx)
+		return;
+
+	b->heartbeatctx = NULL;
+	if (ctx->thread)
+	{
+		if (SDL_AtomicGet(&ctx->working))
+		{
+			ctx->next = orphanedheartbeatlookups;
+			orphanedheartbeatlookups = ctx;
 			return;
 		}
 		SDL_WaitThread(ctx->thread, NULL);
@@ -310,7 +360,7 @@ static void QICE_Heartbeat(qice_connection_t *b)
 	if (!b->isserver)
 		return;	//don't ever heartbeat as a client.
 
-	if (ctx && !ctx->working)
+	if (ctx && !SDL_AtomicGet(&ctx->working))
 	{	//dns resolution finished.
 		//only needs to do master stuff now
 
@@ -318,7 +368,8 @@ static void QICE_Heartbeat(qice_connection_t *b)
 		//(specifies that the server responds to infoRequest packets from the master/clients)
 		static char *str = "\377\377\377\377heartbeat DarkPlaces\n";
 		size_t k;
-		SDL_WaitThread(ctx->thread, NULL);
+		if (ctx->thread)
+			SDL_WaitThread(ctx->thread, NULL);
 
 		if (sv_public.value > 0)
 		{
@@ -370,10 +421,10 @@ static void QICE_Heartbeat(qice_connection_t *b)
 				ctx->nummasters++;
 			}
 		}
-		ctx->working = true;
+		SDL_AtomicSet(&ctx->working, true);
 		ctx->thread = SDL_CreateThread(DNSLookupThread, "heartbeatdns", ctx);
 		if (!ctx->thread)	//bum...
-			ctx->working = false;	//just clean it up later.
+			SDL_AtomicSet(&ctx->working, false);	//just clean it up later.
 	}
 }
 
@@ -571,7 +622,7 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 	netadr_t brokeraddr;
 	struct brokerlookupctx_s *brokerctx;
 
-	QICE_CleanupBrokerLookups();
+	QICE_CleanupLookups(false);
 
 	if (b->isserver && !*sv_port_rtc.string)
 	{
@@ -639,7 +690,7 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 					QICE_Heartbeat(b);
 				return false;
 			}
-			if (brokerctx->working)
+			if (SDL_AtomicGet(&brokerctx->working))
 			{
 				if (b->isserver)
 					QICE_Heartbeat(b);
@@ -667,7 +718,7 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 			brokerctx = Z_Malloc(sizeof(*brokerctx));
 			q_strlcpy(brokerctx->brokername, b->brokername, sizeof(brokerctx->brokername));
 			brokerctx->brokerport = b->brokerport;
-			brokerctx->working = true;
+			SDL_AtomicSet(&brokerctx->working, true);
 			brokerctx->thread = SDL_CreateThread(BrokerLookupThread, "brokerdns", brokerctx);
 			if (!brokerctx->thread)
 			{
@@ -2575,7 +2626,7 @@ qsocket_t *NQICE_CheckNewConnections (void)
 #ifdef HAVE_DTLS
 	BrokerDTLS_Cleanup();	//expire old sessions
 #endif
-	QICE_CleanupBrokerLookups();
+	QICE_CleanupLookups(false);
 
 	if (b)
 		QICE_UpdateBroker(b);
@@ -3165,7 +3216,7 @@ void NQICE_Listen (qboolean state)	//used by server (enables websocket connectio
 	qice_listening = state;
 	if (qice_listening)
 	{
-		QICE_CleanupBrokerLookups();
+		QICE_CleanupLookups(false);
 #ifdef HAVE_DTLS
 		//pre-generate the shared DTLS identity now (slow RSA keygen) rather than
 		//on the server frame when the first browser offer arrives.
@@ -3182,7 +3233,7 @@ void NQICE_Listen (qboolean state)	//used by server (enables websocket connectio
 	{
 		QICE_Close(qice_hostcon);
 		qice_hostcon = NULL;
-		QICE_CleanupBrokerLookups();
+		QICE_CleanupLookups(false);
 	}
 }
 
@@ -3382,7 +3433,7 @@ void NQICE_Shutdown (void)
 {
 	int i;
 	NQICE_Listen(false);	//just in case.
-	QICE_CleanupBrokerLookups();
+	QICE_CleanupLookups(true);
 
 	nqice_fp_cache[0] = 0;	//clear cached fingerprint
 
