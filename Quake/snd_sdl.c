@@ -67,7 +67,7 @@ static int SND_ScaledS8 (int sample, int scale)
 
 static void SND_CopyScaled (Uint8 *dst, const Uint8 *src, int len)
 {
-	int scale = snd_mastervolume_scale;
+	int scale = S_GetMasterVolumeScale ();
 
 	if (scale >= 256)
 	{
@@ -260,7 +260,7 @@ static void SDLCALL paint_audio (void *unused, Uint8 *stream, int len)
 		int	in_samples = buffersize / bps;	/* total samples in the ring */
 		int	frame_bytes = device_channels * bps;
 		int	out_frames = len / frame_bytes;
-		int scale = snd_mastervolume_scale;
+		int scale = S_GetMasterVolumeScale ();
 		int	f, sp, l, r;
 
 		memset(stream, silence, len);

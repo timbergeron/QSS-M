@@ -404,27 +404,49 @@ static	cvar_t	_snd_mixahead = {"_snd_mixahead", "0.1", CVAR_ARCHIVE};
 
 extern char mute[2]; // woods #usermute #mute
 
-// Intentionally plain volatile: main thread writes a transient fade scale read
-// by the SDL audio callback.
-volatile int snd_mastervolume_scale = 256;
+#if defined(USE_SDL2)
+static SDL_atomic_t snd_mastervolume_scale = {256};
+#else
+static volatile int snd_mastervolume_scale = 256;
+#endif
+
+int S_GetMasterVolumeScale (void)
+{
+#if defined(USE_SDL2)
+	return SDL_AtomicGet (&snd_mastervolume_scale);
+#else
+	return snd_mastervolume_scale;
+#endif
+}
 
 void S_SetMasterVolumeScale (float scale)
 {
-	snd_mastervolume_scale = (int)(CLAMP (0.0f, scale, 1.0f) * 256.0f);
+	int value = (int)(CLAMP (0.0f, scale, 1.0f) * 256.0f);
+
+#if defined(USE_SDL2)
+	SDL_AtomicSet (&snd_mastervolume_scale, value);
+#else
+	snd_mastervolume_scale = value;
+#endif
 }
 
 static void S_SoundInfo_f (void)
 {
+	int samplepos;
+
 	if (!sound_started || !shm)
 	{
 		Con_Printf ("sound system not started\n");
 		return;
 	}
+	SNDDMA_LockBuffer ();
+	samplepos = SNDDMA_GetDMAPos ();
+	SNDDMA_Submit ();
 
 	Con_Printf("%d bit, %s, %d Hz\n", shm->samplebits,
 			(shm->channels == 2) ? "stereo" : "mono", shm->speed);
 	Con_Printf("%5d samples\n", shm->samples);
-	Con_Printf("%5d samplepos\n", shm->samplepos);
+	Con_Printf("%5d samplepos\n", samplepos);
 	Con_Printf("%5d submission_chunk\n", shm->submission_chunk);
 	Con_Printf("%5d total_channels\n", total_channels);
 	Con_Printf("%p dma buffer\n", shm->buffer);
@@ -533,8 +555,10 @@ void S_Startup (void)
 	{
 		Con_Printf("Audio: %d bit, %s, %d Hz\n", shm->samplebits,
 				(shm->channels == 2) ? "stereo" : "mono", shm->speed);
+		SNDDMA_LockBuffer ();
+		GetSoundtime();
+		SNDDMA_Submit ();
 	}
-	GetSoundtime();
 	paintedtime = soundtime;
 }
 

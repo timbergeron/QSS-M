@@ -130,6 +130,7 @@ void S_StopAllSounds (qboolean clear, qboolean keep_statics);
 void S_ClearBuffer (void);
 void S_Update (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up);
 void S_ExtraUpdate (void);
+int S_GetMasterVolumeScale (void);
 void S_SetMasterVolumeScale (float scale);
 void S_ClearPrecache (void);
 void S_BeginPrecaching (void);
@@ -223,8 +224,6 @@ extern	cvar_t		snd_surround;
 extern	cvar_t		snd_filterquality;
 extern	cvar_t		sfxvolume;
 extern	cvar_t		loadas8bit;
-extern	volatile int	snd_mastervolume_scale;
-
 #define	MAX_RAW_SAMPLES	8192
 extern	portable_samplepair_t	s_rawsamples[MAX_RAW_SAMPLES];
 
