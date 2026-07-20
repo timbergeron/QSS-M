@@ -72,6 +72,39 @@ typedef struct gltexture_s {
 	int			visframe; //matches r_framecount if texture was bound this frame
 } gltexture_t;
 
+/*
+ * A synchronous batch of CPU-preparable images.  The texture manager may
+ * prepare these jobs on workers, but registration, GL upload, and publication
+ * through destination always happen on the calling (main) thread, in array
+ * order.  data_owned transfers a malloc-compatible source buffer to the batch.
+ */
+typedef struct texmgr_loadjob_s
+{
+	qmodel_t		*owner;
+	char			name[64];
+	unsigned int		width;
+	unsigned int		height;
+	enum srcformat		format;
+	const byte		*data;
+	char			source_file[MAX_QPATH];
+	src_offset_t		source_offset;
+	unsigned int		flags;
+	gltexture_t		**destination;
+	qboolean		data_owned;
+} texmgr_loadjob_t;
+
+typedef struct texmgr_prepstats_s
+{
+	double		prepare_wall_time;
+	double		prepare_cpu_time;
+	double		commit_time;
+	uint64_t	source_bytes;
+	uint64_t	prepared_bytes;
+	unsigned int	jobs;
+	unsigned int	batches;
+	unsigned int	parallel_batches;
+} texmgr_prepstats_t;
+
 extern gltexture_t *notexture;
 extern gltexture_t *nulltexture;
 extern gltexture_t *particletexture1;
@@ -91,6 +124,7 @@ void TexMgr_FreeTextures (unsigned int flags, unsigned int mask);
 void TexMgr_FreeTexturesForOwner (qmodel_t *owner);
 void TexMgr_NewGame (void);
 void TexMgr_Init (void);
+void TexMgr_Shutdown (void);
 int TexMgr_GetTextureMode(void);	//for menu use.
 void TexMgr_SoftEmu_f (cvar_t *var);
 void TexMgr_DeleteTextureObjects (void);
@@ -102,6 +136,8 @@ void TexMgr_BlockSize (enum srcformat format, int *bytes, int *width, int *heigh
 // IMAGE LOADING
 gltexture_t *TexMgr_LoadImage (qmodel_t *owner, const char *name, int width, int height, enum srcformat format,
 			       byte *data, const char *source_file, src_offset_t source_offset, unsigned flags);
+void TexMgr_LoadImageBatch (texmgr_loadjob_t *jobs, size_t count);
+void TexMgr_GetPrepStats (texmgr_prepstats_t *stats);
 struct gltexture_s *TexMgr_ColormapTexture(struct gltexture_s *basetex, plcolour_t lower, plcolour_t upper);
 void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants);
 void TexMgr_ReloadImages (void);

@@ -1390,6 +1390,188 @@ static qboolean Mod_CheckAnimTextureArrayQ64(texture_t *anims[], int numTex)
 	return true;
 }
 
+#define MOD_TEXTURE_BATCH_MAX_JOBS 32
+#define MOD_TEXTURE_BATCH_BUDGET (64u * 1024u * 1024u)
+
+typedef struct mod_texture_batch_s
+{
+	texmgr_loadjob_t jobs[MOD_TEXTURE_BATCH_MAX_JOBS];
+	size_t count;
+	size_t estimated_bytes;
+	int protected_hunk_mark;
+} mod_texture_batch_t;
+
+static size_t Mod_TextureBatchSourceSize (unsigned int width, unsigned int height, enum srcformat format)
+{
+	size_t pixels;
+	size_t bytes_per_pixel;
+
+	if (format == SRC_RGBA)
+		bytes_per_pixel = 4u;
+	else if (format == SRC_INDEXED)
+		bytes_per_pixel = 1u;
+	else
+		return SIZE_MAX;
+
+	if (!width || !height || (size_t)width > SIZE_MAX / (size_t)height)
+		return SIZE_MAX;
+	pixels = (size_t)width * (size_t)height;
+	if (pixels > SIZE_MAX / bytes_per_pixel)
+		return SIZE_MAX;
+	return pixels * bytes_per_pixel;
+}
+
+static size_t Mod_TextureBatchEstimate (unsigned int width, unsigned int height, enum srcformat format)
+{
+	size_t pixels, padded_width, padded_height, padded_pixels;
+	size_t bytes_per_pixel = format == SRC_RGBA ? 16u : 12u;
+	size_t source_size, indexed_copy, prepared_peak;
+
+	if (!width || !height || (size_t)width > SIZE_MAX / (size_t)height)
+		return SIZE_MAX;
+	pixels = (size_t)width * (size_t)height;
+	if (format != SRC_RGBA && format != SRC_INDEXED)
+		return SIZE_MAX;
+
+	/*
+	 * With NPOT support, 16/12 bytes per source pixel bound the retained
+	 * source, conversion copy, working image, and complete mip chain.  Without
+	 * it, power-of-two padding can nearly quadruple the working dimensions, so
+	 * account for the padded work image plus a conservatively rounded mip chain.
+	 */
+	if (!gl_texture_NPOT)
+	{
+		for (padded_width = 1; padded_width < width; padded_width <<= 1)
+			if (padded_width > SIZE_MAX / 2)
+				return SIZE_MAX;
+		for (padded_height = 1; padded_height < height; padded_height <<= 1)
+			if (padded_height > SIZE_MAX / 2)
+				return SIZE_MAX;
+		if (padded_width > SIZE_MAX / padded_height)
+			return SIZE_MAX;
+		padded_pixels = padded_width * padded_height;
+		source_size = Mod_TextureBatchSourceSize (width, height, format);
+		indexed_copy = format == SRC_INDEXED ? pixels : 0;
+		if (padded_pixels > SIZE_MAX / 10u)
+			return SIZE_MAX;
+		prepared_peak = padded_pixels * 10u;
+		if (source_size > SIZE_MAX - indexed_copy ||
+			source_size + indexed_copy > SIZE_MAX - prepared_peak)
+			return SIZE_MAX;
+		return source_size + indexed_copy + prepared_peak;
+	}
+
+	if (pixels > SIZE_MAX / bytes_per_pixel)
+		return SIZE_MAX;
+	return pixels * bytes_per_pixel;
+}
+
+static void Mod_FlushTextureBatch (mod_texture_batch_t *batch)
+{
+	size_t i;
+	int current_mark;
+
+	if (!batch->count)
+		return;
+
+	current_mark = Hunk_LowMark ();
+	if (current_mark < batch->protected_hunk_mark)
+		Sys_Error ("Mod_FlushTextureBatch: embedded texture storage was freed before dispatch");
+	for (i = 0; i < batch->count; i++)
+	{
+		texmgr_loadjob_t *job = &batch->jobs[i];
+		size_t source_size;
+
+		if (job->data_owned)
+			continue;
+		source_size = Mod_TextureBatchSourceSize (job->width, job->height, job->format);
+		if (source_size == SIZE_MAX || !Hunk_IsRangeBeforeMark(job->data, source_size, current_mark))
+			Sys_Error ("Mod_FlushTextureBatch: stale embedded texture source %s", job->name);
+	}
+	TexMgr_LoadImageBatch (batch->jobs, batch->count);
+	batch->count = 0;
+	batch->estimated_bytes = 0;
+	batch->protected_hunk_mark = 0;
+}
+
+/* A pending embedded job may never survive a temporary Hunk rewind past its source allocation. */
+static void Mod_FreeTextureBatchHunkToMark (mod_texture_batch_t *batch, int mark)
+{
+	if (batch->count && mark < batch->protected_hunk_mark)
+		Sys_Error ("Mod_LoadTextures: Hunk rewind would invalidate a queued texture");
+	Hunk_FreeToLowMark (mark);
+}
+
+static void Mod_ReserveTextureBatch (mod_texture_batch_t *batch, size_t jobs, size_t estimated_bytes)
+{
+	qboolean count_full = batch->count + jobs > MOD_TEXTURE_BATCH_MAX_JOBS;
+	qboolean memory_full = estimated_bytes == SIZE_MAX || batch->estimated_bytes > MOD_TEXTURE_BATCH_BUDGET ||
+		batch->estimated_bytes > MOD_TEXTURE_BATCH_BUDGET - q_min(estimated_bytes, (size_t)MOD_TEXTURE_BATCH_BUDGET);
+
+	if (batch->count && (count_full || memory_full))
+		Mod_FlushTextureBatch (batch);
+}
+
+static void Mod_AddTextureBatchJob (mod_texture_batch_t *batch, qmodel_t *owner,
+	const char *name, unsigned int width, unsigned int height, enum srcformat format,
+	const byte *data, const char *source_file, src_offset_t source_offset,
+	unsigned int flags, gltexture_t **destination, qboolean data_owned, int source_hunk_mark)
+{
+	texmgr_loadjob_t *job;
+	size_t estimate = Mod_TextureBatchEstimate (width, height, format);
+	size_t source_size;
+
+	if (batch->count == MOD_TEXTURE_BATCH_MAX_JOBS)
+		Mod_FlushTextureBatch (batch);
+	if (!data_owned)
+	{
+		source_size = Mod_TextureBatchSourceSize (width, height, format);
+		if (source_size == SIZE_MAX ||
+			!Hunk_IsRangeBeforeMark(data, source_size, source_hunk_mark))
+			Sys_Error ("Mod_AddTextureBatchJob: embedded texture %s is not protected by its Hunk mark", name);
+		batch->protected_hunk_mark = q_max (batch->protected_hunk_mark, source_hunk_mark);
+	}
+	job = &batch->jobs[batch->count++];
+	memset (job, 0, sizeof(*job));
+	job->owner = owner;
+	q_strlcpy (job->name, name, sizeof(job->name));
+	job->width = width;
+	job->height = height;
+	job->format = format;
+	job->data = data;
+	q_strlcpy (job->source_file, source_file, sizeof(job->source_file));
+	job->source_offset = source_offset;
+	job->flags = flags;
+	job->destination = destination;
+	job->data_owned = data_owned;
+	if (estimate == SIZE_MAX || batch->estimated_bytes > SIZE_MAX - estimate)
+		batch->estimated_bytes = SIZE_MAX;
+	else
+		batch->estimated_bytes += estimate;
+}
+
+static byte *Mod_OwnTextureBatchData (byte *data, unsigned int width, unsigned int height,
+	enum srcformat format, qboolean *malloced)
+{
+	byte *owned;
+	size_t bytes;
+
+	if (*malloced)
+	{
+		*malloced = false;
+		return data;
+	}
+
+	bytes = Mod_TextureBatchSourceSize (width, height, format);
+	if (bytes == SIZE_MAX)
+		Sys_Error ("Mod_OwnTextureBatchData: bad image size");
+	owned = (byte *)malloc (bytes);
+	if (!owned)
+		Sys_Error ("Mod_OwnTextureBatchData: out of memory on %u x %u texture", width, height);
+	memcpy (owned, data, bytes);
+	return owned;
+}
+
 /*
 =================
 Mod_LoadTextures
@@ -1415,6 +1597,9 @@ static void Mod_LoadTextures (lump_t *l)
 	enum srcformat fmt;	//spike
 	unsigned int imgwidth, imgheight, imgpixels;
 	unsigned int mipend;
+	mod_texture_batch_t texture_batch;
+
+	memset (&texture_batch, 0, sizeof(texture_batch));
 
 	//johnfitz -- don't return early if no textures; still need to create dummy texture
 	if (!l->filelen)
@@ -1492,6 +1677,7 @@ static void Mod_LoadTextures (lump_t *l)
 		{
 			if (!q_strncasecmp(tx->name,"sky",3)) //sky texture //also note -- was Q_strncmp, changed to match qbsp
 			{
+				Mod_FlushTextureBatch (&texture_batch);
 				if (!gl_load24bit.value || !Sky_LoadExternalTextures(loadmodel, tx)) // woods #extsky
 				{
 					if (loadmodel->bspversion == BSPVERSION_QUAKE64)
@@ -1502,6 +1688,7 @@ static void Mod_LoadTextures (lump_t *l)
 			}
 			else if (tx->name[0] == '*') //warping texture
 			{
+				Mod_FlushTextureBatch (&texture_batch);
 				enum srcformat rfmt = SRC_RGBA;
 				fwidth = fheight = 0;
 				malloced = false;
@@ -1599,14 +1786,36 @@ static void Mod_LoadTextures (lump_t *l)
 				if (data) //load external image
 				{
 					char filename2[MAX_OSPATH];
+					byte *owned_data;
+					size_t estimate;
+					qboolean batchable;
+
 					Mod_DetectGrassTexture(tx, rfmt, data, fwidth, fheight); // woods #grass
-					tx->gltexture = TexMgr_LoadImage (loadmodel, filename, fwidth, fheight,
-						rfmt, data, filename, 0, TEXPREF_MIPMAP | extraflags );
+					batchable = fwidth > 0 && fheight > 0 && (rfmt == SRC_RGBA || rfmt == SRC_INDEXED);
+					if (batchable)
+					{
+						estimate = Mod_TextureBatchEstimate ((unsigned int)fwidth, (unsigned int)fheight, rfmt);
+						Mod_ReserveTextureBatch (&texture_batch, 1, estimate);
+						owned_data = Mod_OwnTextureBatchData (data, (unsigned int)fwidth,
+							(unsigned int)fheight, rfmt, &malloced);
+						Mod_AddTextureBatchJob (&texture_batch, loadmodel, filename,
+							(unsigned int)fwidth, (unsigned int)fheight, rfmt, owned_data,
+							filename, 0, TEXPREF_MIPMAP | extraflags, &tx->gltexture, true, 0);
+						data = NULL;
+					}
+					else
+					{
+						Mod_FlushTextureBatch (&texture_batch);
+						tx->gltexture = TexMgr_LoadImage (loadmodel, filename, fwidth, fheight,
+							rfmt, data, filename, 0, TEXPREF_MIPMAP | extraflags );
+					}
 
 					//now try to load glow/luma image from the same place
 					if (malloced)
 						free(data);
-					Hunk_FreeToLowMark (mark);
+					data = NULL;
+					malloced = false;
+					Mod_FreeTextureBatchHunkToMark (&texture_batch, mark);
 					q_snprintf (filename2, sizeof(filename2), "%s_glow", filename);
 					data = (!gl_load24bit.value || gl_load24bit.value == 2)?NULL:Image_LoadImage (filename2, &fwidth, &fheight, &rfmt, &malloced);
 					if (!data)
@@ -1616,35 +1825,79 @@ static void Mod_LoadTextures (lump_t *l)
 					}
 
 					if (data)
-						tx->fullbright = TexMgr_LoadImage (loadmodel, filename2, fwidth, fheight,
-							rfmt, data, filename2, 0, TEXPREF_MIPMAP | extraflags );
+					{
+						batchable = fwidth > 0 && fheight > 0 && (rfmt == SRC_RGBA || rfmt == SRC_INDEXED);
+						if (batchable)
+						{
+							estimate = Mod_TextureBatchEstimate ((unsigned int)fwidth, (unsigned int)fheight, rfmt);
+							Mod_ReserveTextureBatch (&texture_batch, 1, estimate);
+							owned_data = Mod_OwnTextureBatchData (data, (unsigned int)fwidth,
+								(unsigned int)fheight, rfmt, &malloced);
+							Mod_AddTextureBatchJob (&texture_batch, loadmodel, filename2,
+								(unsigned int)fwidth, (unsigned int)fheight, rfmt, owned_data,
+								filename2, 0, TEXPREF_MIPMAP | extraflags, &tx->fullbright, true, 0);
+							data = NULL;
+						}
+						else
+						{
+							Mod_FlushTextureBatch (&texture_batch);
+							tx->fullbright = TexMgr_LoadImage (loadmodel, filename2, fwidth, fheight,
+								rfmt, data, filename2, 0, TEXPREF_MIPMAP | extraflags );
+						}
+					}
 				}
 				else //use the texture from the bsp file
 				{
+					qboolean hasfullbright;
+					size_t estimate, needed_estimate;
+					size_t needed_jobs;
+
 					q_snprintf (texturename, sizeof(texturename), "%s:%s", loadmodel->name, tx->name);
 					offset = (src_offset_t)(mt+1) - (src_offset_t)mod_base;
 					Mod_DetectGrassTexture(tx, fmt, (byte *)(tx+1), imgwidth, imgheight); // woods #grass
-					if (fmt == SRC_INDEXED && Mod_CheckFullbrights ((byte *)(tx+1), imgpixels))
+					hasfullbright = fmt == SRC_INDEXED && Mod_CheckFullbrights ((byte *)(tx+1), imgpixels);
+
+					if (fmt == SRC_INDEXED)
 					{
-						tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, imgwidth, imgheight,
-							fmt, (byte *)(tx+1), loadmodel->name, offset, TEXPREF_MIPMAP | TEXPREF_NOBRIGHT | extraflags);
-						q_snprintf (texturename, sizeof(texturename), "%s:%s_glow", loadmodel->name, tx->name);
-						tx->fullbright = TexMgr_LoadImage (loadmodel, texturename, imgwidth, imgheight,
-							fmt, (byte *)(tx+1), loadmodel->name, offset, TEXPREF_MIPMAP | TEXPREF_FULLBRIGHT | extraflags);
+						estimate = Mod_TextureBatchEstimate (imgwidth, imgheight, fmt);
+						needed_jobs = hasfullbright ? 2u : 1u;
+						needed_estimate = estimate;
+						if (hasfullbright)
+						{
+							if (needed_estimate == SIZE_MAX || needed_estimate > SIZE_MAX - estimate)
+								needed_estimate = SIZE_MAX;
+							else
+								needed_estimate += estimate;
+						}
+						Mod_ReserveTextureBatch (&texture_batch, needed_jobs, needed_estimate);
+						Mod_AddTextureBatchJob (&texture_batch, loadmodel, texturename,
+							imgwidth, imgheight, fmt, (byte *)(tx+1), loadmodel->name,
+							offset, TEXPREF_MIPMAP | (hasfullbright ? TEXPREF_NOBRIGHT : 0) | extraflags,
+							&tx->gltexture, false, mark);
+						if (hasfullbright)
+						{
+							q_snprintf (texturename, sizeof(texturename), "%s:%s_glow", loadmodel->name, tx->name);
+							Mod_AddTextureBatchJob (&texture_batch, loadmodel, texturename,
+								imgwidth, imgheight, fmt, (byte *)(tx+1), loadmodel->name,
+								offset, TEXPREF_MIPMAP | TEXPREF_FULLBRIGHT | extraflags,
+								&tx->fullbright, false, mark);
+						}
 					}
 					else
 					{
+						Mod_FlushTextureBatch (&texture_batch);
 						tx->gltexture = TexMgr_LoadImage (loadmodel, texturename, imgwidth, imgheight,
 							fmt, (byte *)(tx+1), loadmodel->name, offset, TEXPREF_MIPMAP | extraflags);
 					}
 				}
 				if (malloced)
 					free(data);
-				Hunk_FreeToLowMark (mark);
+				Mod_FreeTextureBatchHunkToMark (&texture_batch, mark);
 			}
 		}
 		//johnfitz
 	}
+	Mod_FlushTextureBatch (&texture_batch);
 
 	//johnfitz -- last 2 slots in array should be filled with dummy textures
 	loadmodel->textures[loadmodel->numtextures-2] = r_notexture_mip; //for lightmapped surfs
@@ -4129,6 +4382,10 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 	double ff0 = 0, tm0 = 0;
 	unsigned int ffc0 = 0, tmc0 = 0;
 	double t0 = 0, t_geom = 0, t_tex = 0, t_light = 0, t_faces = 0;
+	texmgr_prepstats_t tp0, tp1;
+
+	memset (&tp0, 0, sizeof(tp0));
+	memset (&tp1, 0, sizeof(tp1));
 
 	if (profile)
 		t0 = Sys_DoubleTime ();
@@ -4142,6 +4399,7 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 		tm0 = texmgr_load_time;
 		ffc0 = com_findfile_calls;
 		tmc0 = texmgr_load_calls;
+		TexMgr_GetPrepStats (&tp0);
 	}
 	Mod_LoadTextures (&header->lumps[LUMP_TEXTURES]);
 	if (profile)
@@ -4149,6 +4407,16 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 		t_tex = Sys_DoubleTime ();
 		Con_DPrintf ("Mod_LoadTextures %s: findfile %.1fms (%u calls) texmgr %.1fms (%u calls)\n", mod->name,
 			(com_findfile_time-ff0)*1000.0, com_findfile_calls-ffc0, (texmgr_load_time-tm0)*1000.0, texmgr_load_calls-tmc0);
+		TexMgr_GetPrepStats (&tp1);
+		if (tp1.jobs != tp0.jobs)
+			Con_DPrintf ("TexMgr prepare %s: wall %.1fms cpu %.1fms commit %.1fms, %u jobs/%u batches (%u parallel), %.1f/%.1f MiB source/prepared\n",
+				mod->name, (tp1.prepare_wall_time-tp0.prepare_wall_time)*1000.0,
+				(tp1.prepare_cpu_time-tp0.prepare_cpu_time)*1000.0,
+				(tp1.commit_time-tp0.commit_time)*1000.0,
+				tp1.jobs-tp0.jobs, tp1.batches-tp0.batches,
+				tp1.parallel_batches-tp0.parallel_batches,
+				(double)(tp1.source_bytes-tp0.source_bytes)/(1024.0*1024.0),
+				(double)(tp1.prepared_bytes-tp0.prepared_bytes)/(1024.0*1024.0));
 	}
 	Mod_LoadLighting (&header->lumps[LUMP_LIGHTING]);
 	if (profile)

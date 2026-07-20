@@ -34,6 +34,16 @@ static const int	gl_alpha_format = GL_RGBA8;
 
 static cvar_t	gl_texturemode = {"gl_texturemode", "", CVAR_ARCHIVE};
 static cvar_t	gl_texture_anisotropy = {"gl_texture_anisotropy", "1", CVAR_ARCHIVE};
+/*
+ * Texture preparation validation matrix:
+ *   tex_parallel 0                         legacy load path
+ *   tex_parallel 1; tex_workers 1          staged path, serial preparation
+ *   tex_parallel 1; tex_workers 0 (or >1)  staged path, parallel preparation
+ * Use developer 1 and tex_verify 1 when comparing texhash output across modes.
+ */
+static cvar_t	tex_parallel = {"tex_parallel", "1", CVAR_NONE};
+static cvar_t	tex_workers = {"tex_workers", "0", CVAR_NONE};
+static cvar_t	tex_verify = {"tex_verify", "0", CVAR_NONE};
 cvar_t	gl_max_size = {"gl_max_size", "0", CVAR_NONE}; // woods remove static for menu
 cvar_t	gl_picmip = {"gl_picmip", "0", CVAR_NONE}; // woods remove static for #f_config
 cvar_t	r_fastturb = {"r_fastturb", "0", CVAR_ARCHIVE}; // woods #fastturb
@@ -54,6 +64,246 @@ unsigned int d_8to24table_nobright_fence[256];
 unsigned int d_8to24table_conchars[256];
 
 static void TexMgr_ColormapTexture_Free(struct gltexture_s *basetex);
+
+#define TEXWORK_MAX_PARTICIPANTS 8
+
+typedef void (*texwork_fn_t) (void *context, unsigned int index);
+
+/* Prevent a coarse texture job from recursively dispatching its mip rows. */
+static THREAD_LOCAL qboolean texwork_in_job;
+
+#ifndef SDL_THREADS_DISABLED
+typedef struct texwork_worker_s
+{
+	int index;
+} texwork_worker_t;
+
+typedef struct texwork_pool_s
+{
+	SDL_mutex	*mutex;
+	SDL_cond	*work_cond;
+	SDL_cond	*done_cond;
+	SDL_Thread	*threads[TEXWORK_MAX_PARTICIPANTS - 1];
+	texwork_worker_t workers[TEXWORK_MAX_PARTICIPANTS - 1];
+	int		num_threads;
+	int		active_threads;
+	int		done_threads;
+	unsigned int	generation;
+	qboolean	stop;
+	qboolean	create_failed;
+	qboolean	batch_active;
+	texwork_fn_t	function;
+	void		*context;
+	unsigned int	count;
+	SDL_atomic_t	next_index;
+} texwork_pool_t;
+
+static texwork_pool_t texwork_pool;
+
+static void TexWork_ExecuteClaims (void)
+{
+	for (;;)
+	{
+		int claimed = SDL_AtomicAdd (&texwork_pool.next_index, 1);
+		qboolean previous;
+
+		if (claimed < 0 || (unsigned int)claimed >= texwork_pool.count)
+			break;
+
+		previous = texwork_in_job;
+		texwork_in_job = true;
+		texwork_pool.function (texwork_pool.context, (unsigned int)claimed);
+		texwork_in_job = previous;
+	}
+}
+
+static int TexWork_Thread (void *argument)
+{
+	texwork_worker_t *worker = (texwork_worker_t *)argument;
+	unsigned int seen_generation = 0;
+
+	for (;;)
+	{
+		SDL_LockMutex (texwork_pool.mutex);
+		while (!texwork_pool.stop && texwork_pool.generation == seen_generation)
+			SDL_CondWait (texwork_pool.work_cond, texwork_pool.mutex);
+		if (texwork_pool.stop)
+		{
+			SDL_UnlockMutex (texwork_pool.mutex);
+			break;
+		}
+
+		seen_generation = texwork_pool.generation;
+		if (worker->index >= texwork_pool.active_threads)
+		{
+			SDL_UnlockMutex (texwork_pool.mutex);
+			continue;
+		}
+		SDL_UnlockMutex (texwork_pool.mutex);
+
+		TexWork_ExecuteClaims ();
+
+		SDL_LockMutex (texwork_pool.mutex);
+		texwork_pool.done_threads++;
+		if (texwork_pool.done_threads == texwork_pool.active_threads)
+			SDL_CondSignal (texwork_pool.done_cond);
+		SDL_UnlockMutex (texwork_pool.mutex);
+	}
+
+	return 0;
+}
+
+static qboolean TexWork_CreatePrimitives (void)
+{
+	if (texwork_pool.mutex)
+		return true;
+
+	texwork_pool.mutex = SDL_CreateMutex ();
+	texwork_pool.work_cond = SDL_CreateCond ();
+	texwork_pool.done_cond = SDL_CreateCond ();
+	if (!texwork_pool.mutex || !texwork_pool.work_cond || !texwork_pool.done_cond)
+	{
+		Con_DPrintf ("TexWork: SDL synchronization creation failed: %s\n", SDL_GetError ());
+		if (texwork_pool.done_cond)
+			SDL_DestroyCond (texwork_pool.done_cond);
+		if (texwork_pool.work_cond)
+			SDL_DestroyCond (texwork_pool.work_cond);
+		if (texwork_pool.mutex)
+			SDL_DestroyMutex (texwork_pool.mutex);
+		memset (&texwork_pool, 0, sizeof(texwork_pool));
+		texwork_pool.create_failed = true;
+		return false;
+	}
+
+	return true;
+}
+
+static int TexWork_EnsureThreads (int requested)
+{
+	if (requested <= 0 || texwork_pool.create_failed)
+		return texwork_pool.num_threads;
+	if (!TexWork_CreatePrimitives ())
+		return 0;
+
+	/*
+	 * Create the bounded pool in one pass.  Growing it after generation zero
+	 * would require a readiness handshake so a newly created thread could not
+	 * miss the batch that caused the growth.  Seven sleeping workers are cheap
+	 * and make runtime tex_workers changes deterministic.
+	 */
+	requested = TEXWORK_MAX_PARTICIPANTS - 1;
+	while (texwork_pool.num_threads < requested)
+	{
+		int index = texwork_pool.num_threads;
+		SDL_Thread *thread;
+
+		texwork_pool.workers[index].index = index;
+		thread = SDL_CreateThread (TexWork_Thread, "texwork", &texwork_pool.workers[index]);
+		if (!thread)
+		{
+			Con_DPrintf ("TexWork: SDL_CreateThread failed: %s\n", SDL_GetError ());
+			texwork_pool.create_failed = true;
+			break;
+		}
+		texwork_pool.threads[index] = thread;
+		texwork_pool.num_threads++;
+	}
+
+	return texwork_pool.num_threads;
+}
+#endif
+
+static int TexWork_ConfiguredParticipants (void)
+{
+	int participants;
+
+	if (!tex_parallel.value || COM_CheckParm ("-noparalleltextureprep"))
+		return 1;
+
+	participants = (int)tex_workers.value;
+	if (participants <= 0)
+		participants = SDL_GetCPUCount ();
+	return CLAMP (1, participants, TEXWORK_MAX_PARTICIPANTS);
+}
+
+static void TexWork_Run (texwork_fn_t function, void *context, unsigned int count, int participants)
+{
+	unsigned int i;
+
+	if (!count)
+		return;
+
+	participants = CLAMP (1, participants, TEXWORK_MAX_PARTICIPANTS);
+	if (participants <= 1 || count <= 1 || texwork_in_job)
+	{
+		for (i = 0; i < count; i++)
+			function (context, i);
+		return;
+	}
+
+#ifndef SDL_THREADS_DISABLED
+	{
+		int available = TexWork_EnsureThreads (participants - 1);
+		int active = q_min (participants - 1, available);
+
+		if (active <= 0)
+		{
+			for (i = 0; i < count; i++)
+				function (context, i);
+			return;
+		}
+
+		SDL_LockMutex (texwork_pool.mutex);
+		texwork_pool.function = function;
+		texwork_pool.context = context;
+		texwork_pool.count = count;
+		texwork_pool.active_threads = active;
+		texwork_pool.done_threads = 0;
+		texwork_pool.batch_active = true;
+		SDL_AtomicSet (&texwork_pool.next_index, 0);
+		texwork_pool.generation++;
+		SDL_CondBroadcast (texwork_pool.work_cond);
+		SDL_UnlockMutex (texwork_pool.mutex);
+
+		TexWork_ExecuteClaims ();
+
+		SDL_LockMutex (texwork_pool.mutex);
+		while (texwork_pool.done_threads < texwork_pool.active_threads)
+			SDL_CondWait (texwork_pool.done_cond, texwork_pool.mutex);
+		texwork_pool.batch_active = false;
+		texwork_pool.function = NULL;
+		texwork_pool.context = NULL;
+		texwork_pool.count = 0;
+		SDL_UnlockMutex (texwork_pool.mutex);
+	}
+#else
+	for (i = 0; i < count; i++)
+		function (context, i);
+#endif
+}
+
+void TexMgr_Shutdown (void)
+{
+#ifndef SDL_THREADS_DISABLED
+	int i;
+
+	if (!texwork_pool.mutex)
+		return;
+
+	SDL_LockMutex (texwork_pool.mutex);
+	texwork_pool.stop = true;
+	SDL_CondBroadcast (texwork_pool.work_cond);
+	SDL_UnlockMutex (texwork_pool.mutex);
+
+	for (i = 0; i < texwork_pool.num_threads; i++)
+		SDL_WaitThread (texwork_pool.threads[i], NULL);
+
+	SDL_DestroyCond (texwork_pool.done_cond);
+	SDL_DestroyCond (texwork_pool.work_cond);
+	SDL_DestroyMutex (texwork_pool.mutex);
+	memset (&texwork_pool, 0, sizeof(texwork_pool));
+#endif
+}
 
 static struct
 {
@@ -1195,7 +1445,7 @@ must be called before any texture loading
 */
 void TexMgr_Init (void)
 {
-	int i;
+	int i, parm;
 	static byte notexture_data[16] = {159,91,83,255,0,0,0,255,0,0,0,255,159,91,83,255}; //black and pink checker
 	static byte nulltexture_data[16] = {127,191,255,255,0,0,0,255,0,0,0,255,127,191,255,255}; //black and blue checker
 
@@ -1216,6 +1466,17 @@ void TexMgr_Init (void)
 	Cvar_RegisterVariable (&gl_picmip);
 	Cvar_SetCallback (&gl_picmip, VID_ChangedRestart_f); // woods #vidrestart
 	Cvar_RegisterVariable (&r_fastturb); // woods #fastturb
+	Cvar_RegisterVariable (&tex_parallel);
+	Cvar_RegisterVariable (&tex_workers);
+	Cvar_RegisterVariable (&tex_verify);
+	parm = COM_CheckParm ("-textureworkers");
+	if (parm && parm < com_argc - 1)
+		Cvar_SetValueQuick (&tex_workers, (float)CLAMP (1, atoi(com_argv[parm + 1]), TEXWORK_MAX_PARTICIPANTS));
+	if (COM_CheckParm ("-noparalleltextureprep"))
+	{
+		Cvar_SetValueQuick (&tex_parallel, 0);
+		Cvar_SetValueQuick (&tex_workers, 1);
+	}
 	Cvar_RegisterVariable (&gl_texture_anisotropy);
 	Cvar_SetCallback (&gl_texture_anisotropy, &TexMgr_Anisotropy_f);
 	Cvar_SetCompletion (&gl_texture_anisotropy, &TexMgr_Anisotropy_Completion_f); // woods #iwtabcomplete
@@ -1386,29 +1647,26 @@ static int TexMgr_CheckedHunkImageBytes (size_t width, size_t height, size_t byt
 	return (int)(width * height * bytes);
 }
 
-static unsigned *TexMgr_ResampleTexture (unsigned *in, int inwidth, int inheight, qboolean alpha)
+static void TexMgr_ResampleTextureInto (const unsigned *in, int inwidth, int inheight, qboolean alpha, unsigned *out)
 {
-	byte *nwpx, *nepx, *swpx, *sepx, *dest;
-	unsigned xfrac, yfrac, x, y, modx, mody, imodx, imody, injump, outjump;
-	unsigned *out;
+	const byte *nwpx, *nepx, *swpx, *sepx;
+	byte *dest;
+	unsigned xfrac, yfrac, x, y, modx, mody, imodx, imody, injump, outjump, srcx, srcy;
 	int i, j, outwidth, outheight;
-
-	if (inwidth == TexMgr_Pad(inwidth) && inheight == TexMgr_Pad(inheight))
-		return in;
 
 	outwidth = TexMgr_Pad(inwidth);
 	outheight = TexMgr_Pad(inheight);
-	out = (unsigned *) Hunk_AllocNoFill (TexMgr_CheckedHunkImageBytes (outwidth, outheight, 4, "TexMgr_ResampleTexture"));
 
-	xfrac = ((inwidth-1) << 16) / (outwidth-1);
-	yfrac = ((inheight-1) << 16) / (outheight-1);
+	xfrac = outwidth > 1 ? ((unsigned)(inwidth-1) << 16) / (unsigned)(outwidth-1) : 0;
+	yfrac = outheight > 1 ? ((unsigned)(inheight-1) << 16) / (unsigned)(outheight-1) : 0;
 	y = outjump = 0;
 
 	for (i = 0; i < outheight; i++)
 	{
 		mody = (y>>8) & 0xFF;
 		imody = 256 - mody;
-		injump = (y>>16) * inwidth;
+		srcy = y >> 16;
+		injump = srcy * (unsigned)inwidth;
 		x = 0;
 
 		for (j = 0; j < outwidth; j++)
@@ -1416,10 +1674,11 @@ static unsigned *TexMgr_ResampleTexture (unsigned *in, int inwidth, int inheight
 			modx = (x>>8) & 0xFF;
 			imodx = 256 - modx;
 
-			nwpx = (byte *)(in + (x>>16) + injump);
-			nepx = nwpx + 4;
-			swpx = nwpx + inwidth*4;
-			sepx = swpx + 4;
+			srcx = x >> 16;
+			nwpx = (const byte *)(in + srcx + injump);
+			nepx = nwpx + (srcx + 1 < (unsigned)inwidth ? 4 : 0);
+			swpx = nwpx + (srcy + 1 < (unsigned)inheight ? inwidth * 4 : 0);
+			sepx = swpx + (srcx + 1 < (unsigned)inwidth ? 4 : 0);
 
 			dest = (byte *)(out + outjump + j);
 
@@ -1436,6 +1695,20 @@ static unsigned *TexMgr_ResampleTexture (unsigned *in, int inwidth, int inheight
 		outjump += outwidth;
 		y += yfrac;
 	}
+}
+
+static unsigned *TexMgr_ResampleTexture (unsigned *in, int inwidth, int inheight, qboolean alpha)
+{
+	unsigned *out;
+	int outwidth, outheight;
+
+	if (inwidth == TexMgr_Pad(inwidth) && inheight == TexMgr_Pad(inheight))
+		return in;
+
+	outwidth = TexMgr_Pad(inwidth);
+	outheight = TexMgr_Pad(inheight);
+	out = (unsigned *) Hunk_AllocNoFill (TexMgr_CheckedHunkImageBytes (outwidth, outheight, 4, "TexMgr_ResampleTexture"));
+	TexMgr_ResampleTextureInto (in, inwidth, inheight, alpha, out);
 
 	return out;
 }
@@ -1669,6 +1942,12 @@ static unsigned *TexMgr_8to32 (byte *in, int pixels, unsigned int *usepal)
 	return data;
 }
 
+static void TexMgr_8to32Into (const byte *in, size_t pixels, const unsigned int *usepal, unsigned *out)
+{
+	while (pixels--)
+		*out++ = usepal[*in++];
+}
+
 /*
 ================
 TexMgr_PadImageW -- return image with width padded up to power-of-two dimentions
@@ -1826,55 +2105,60 @@ static void TexMgr_GenerateMipRows (const texmip_job_t *job)
 	}
 }
 
-static int TexMgr_MipThread (void *arg)
+typedef struct texmip_batch_s
 {
-	TexMgr_GenerateMipRows ((const texmip_job_t *)arg);
-	return 0;
+	texmip_job_t jobs[TEXMIP_MAX_THREADS];
+} texmip_batch_t;
+
+static void TexMgr_MipWork (void *context, unsigned int index)
+{
+	texmip_batch_t *batch = (texmip_batch_t *)context;
+	TexMgr_GenerateMipRows (&batch->jobs[index]);
 }
 
-static void TexMgr_GenerateMipLevel (const unsigned *src, unsigned *dst, int srcwidth, int srcheight, int dstwidth, int dstheight)
+static void TexMgr_GenerateMipLevelWithParticipants (const unsigned *src, unsigned *dst, int srcwidth,
+	int srcheight, int dstwidth, int dstheight, int participants)
 {
-	SDL_Thread	*threads[TEXMIP_MAX_THREADS];
-	texmip_job_t	jobs[TEXMIP_MAX_THREADS];
+	texmip_batch_t	batch;
 	int		i, numthreads;
 	size_t		pixels = (size_t)dstwidth * (size_t)dstheight;
 
-	numthreads = q_max (1, SDL_GetCPUCount ());
-	numthreads = q_min (numthreads, TEXMIP_MAX_THREADS);
+	numthreads = q_min (participants, TEXMIP_MAX_THREADS);
 	numthreads = q_min (numthreads, q_max (1, (int)(pixels / TEXMIP_MIN_PIXELS_PER_THREAD)));
 
 	for (i = 0; i < numthreads; i++)
 	{
-		jobs[i].src = (const byte *)src;
-		jobs[i].dst = (byte *)dst;
-		jobs[i].srcwidth = srcwidth;
-		jobs[i].srcheight = srcheight;
-		jobs[i].dstwidth = dstwidth;
-		jobs[i].dstheight = dstheight;
-		jobs[i].firstrow = i;
-		jobs[i].stride = numthreads;
+		batch.jobs[i].src = (const byte *)src;
+		batch.jobs[i].dst = (byte *)dst;
+		batch.jobs[i].srcwidth = srcwidth;
+		batch.jobs[i].srcheight = srcheight;
+		batch.jobs[i].dstwidth = dstwidth;
+		batch.jobs[i].dstheight = dstheight;
+		batch.jobs[i].firstrow = i;
+		batch.jobs[i].stride = numthreads;
 	}
 
-	if (numthreads <= 1)
-	{
-		TexMgr_GenerateMipRows (&jobs[0]);
+	TexWork_Run (TexMgr_MipWork, &batch, (unsigned int)numthreads, numthreads);
+}
+
+static void TexMgr_GenerateMipLevel (const unsigned *src, unsigned *dst, int srcwidth, int srcheight,
+	int dstwidth, int dstheight)
+{
+	TexMgr_GenerateMipLevelWithParticipants (src, dst, srcwidth, srcheight, dstwidth, dstheight,
+		TexWork_ConfiguredParticipants ());
+}
+
+static void TexMgr_VerifyLevel (const char *name, unsigned int flags, int level, int width, int height, const void *pixels)
+{
+	size_t bytes;
+
+	if (!tex_verify.value || !developer.value || width <= 0 || height <= 0 || !pixels)
 		return;
-	}
-
-	for (i = 1; i < numthreads; i++)
-	{
-		threads[i] = SDL_CreateThread (TexMgr_MipThread, "texmip", &jobs[i]);
-		if (!threads[i])
-			Con_DPrintf ("TexMgr_GenerateMipLevel: SDL_CreateThread failed: %s\n", SDL_GetError());
-	}
-	TexMgr_GenerateMipRows (&jobs[0]);
-	for (i = 1; i < numthreads; i++)
-	{
-		if (threads[i])
-			SDL_WaitThread (threads[i], NULL);
-		else
-			TexMgr_GenerateMipRows (&jobs[i]);
-	}
+	if ((size_t)width > SIZE_MAX / (size_t)height || (size_t)width * (size_t)height > SIZE_MAX / 4u)
+		return;
+	bytes = (size_t)width * (size_t)height * 4u;
+	Con_DPrintf ("texhash %s %d %d %d %08x %08x\n", name, level, width, height,
+		flags, COM_HashBlock(pixels, bytes));
 }
 
 static void TexMgr_UploadMipChain (const gltexture_t *glt, unsigned *base, int internalformat)
@@ -1898,6 +2182,7 @@ static void TexMgr_UploadMipChain (const gltexture_t *glt, unsigned *base, int i
 			Sys_Error ("TexMgr_UploadMipChain: out of memory (%d bytes)", bytes);
 
 		TexMgr_GenerateMipLevel (src, dst, width, height, dstwidth, dstheight);
+		TexMgr_VerifyLevel (glt->name, glt->flags, miplevel, dstwidth, dstheight, dst);
 		glTexImage2D (GL_TEXTURE_2D, miplevel, internalformat, dstwidth, dstheight, 0, GL_RGBA, GL_UNSIGNED_BYTE, dst);
 
 		free (src_alloc);
@@ -1994,6 +2279,7 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 	// upload
 	GL_Bind (glt);
 	internalformat = (glt->flags & TEXPREF_ALPHA) ? gl_alpha_format : gl_solid_format;
+	TexMgr_VerifyLevel (glt->name, glt->flags, 0, glt->width, glt->height, data);
 	glTexImage2D (GL_TEXTURE_2D, 0, internalformat, glt->width, glt->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
 
 	// upload mipmaps
@@ -2018,6 +2304,7 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 					TexMgr_MipMapH (data, mipwidth, mipheight);
 					mipheight >>= 1;
 				}
+				TexMgr_VerifyLevel (glt->name, glt->flags, miplevel, mipwidth, mipheight, data);
 				glTexImage2D (GL_TEXTURE_2D, miplevel, internalformat, mipwidth, mipheight, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
 			}
 		}
@@ -2339,6 +2626,607 @@ static void TexMgr_LoadImage8 (gltexture_t *glt, byte *data)
 }
 
 /*
+=============================================================================
+
+	BOUNDED CPU TEXTURE PREPARATION
+
+These requests contain all name/cvar-derived decisions before dispatch.
+Workers own only malloc-compatible temporary/result buffers and never touch
+the Hunk, cvars, texture lists, the filesystem, console, or OpenGL.
+
+=============================================================================
+*/
+
+#define TEXPREP_MAX_MIPS 32
+#define TEXPREP_MIN_PARALLEL_JOBS 4
+#define TEXPREP_MIN_PARALLEL_PIXELS 131072u
+
+typedef enum texprep_status_e
+{
+	TEXPREP_OK,
+	TEXPREP_BAD_INPUT,
+	TEXPREP_OVERFLOW,
+	TEXPREP_OUT_OF_MEMORY
+} texprep_status_t;
+
+typedef struct texprep_level_s
+{
+	unsigned int width;
+	unsigned int height;
+	size_t offset;
+	size_t size;
+} texprep_level_t;
+
+typedef struct texprep_result_s
+{
+	texprep_status_t status;
+	unsigned int effective_flags;
+	unsigned int width;
+	unsigned int height;
+	unsigned int num_levels;
+	size_t allocation_size;
+	byte *pixels;
+	texprep_level_t levels[TEXPREP_MAX_MIPS];
+} texprep_result_t;
+
+typedef struct texprep_jobstate_s
+{
+	texmgr_loadjob_t *job;
+	texprep_result_t result;
+	const unsigned int *palette_opaque;
+	const unsigned int *palette_alpha;
+	unsigned int work_width;
+	unsigned int work_height;
+	unsigned int target_width;
+	unsigned int target_height;
+	unsigned short source_crc;
+	size_t source_size;
+	qboolean resample_npot;
+	qboolean grayscale;
+	qboolean shot1sid_fix;
+	qboolean profile;
+	int mip_participants;
+	double prepare_time;
+} texprep_jobstate_t;
+
+double texmgr_load_time;	//tb -- load profiling
+unsigned int texmgr_load_calls;
+static texmgr_prepstats_t texmgr_prepstats;
+
+void TexMgr_GetPrepStats (texmgr_prepstats_t *stats)
+{
+	if (stats)
+		*stats = texmgr_prepstats;
+}
+
+static qboolean TexPrep_CheckedBytes (size_t width, size_t height, size_t bytes_per_pixel, size_t *result)
+{
+	if (!width || !height || !bytes_per_pixel || width > SIZE_MAX / height || width * height > SIZE_MAX / bytes_per_pixel)
+		return false;
+	*result = width * height * bytes_per_pixel;
+	return true;
+}
+
+static qboolean TexPrep_CheckedAdd (size_t *total, size_t value)
+{
+	if (*total > SIZE_MAX - value)
+		return false;
+	*total += value;
+	return true;
+}
+
+static qboolean TexPrep_PadSize (unsigned int value, unsigned int *result)
+{
+	unsigned int padded = 1;
+
+	if (!value)
+		return false;
+	while (padded < value)
+	{
+		if (padded > UINT_MAX / 2)
+			return false;
+		padded <<= 1;
+	}
+	*result = padded;
+	return true;
+}
+
+static int TexPrep_ShiftSize (unsigned int value, int shift)
+{
+	if (shift >= 31)
+		return 0;
+	return (int)(value >> shift);
+}
+
+static qboolean TexPrep_IsEligible (const texmgr_loadjob_t *job)
+{
+	const unsigned int unsupported = TEXPREF_PAD | TEXPREF_OVERWRITE |
+		TEXPREF_CONCHARS | TEXPREF_WARPIMAGE | TEXPREF_PREMULTIPLY |
+		TEXPREF_ALLOWMISSING | TEXPREF_COLOURMAPPED |
+		TEXPREF_FLOODFILL | TEXPREF_OWNSOURCE;
+
+	if (!job || !job->data || !job->width || !job->height || !job->destination)
+		return false;
+	if (job->format != SRC_INDEXED && job->format != SRC_RGBA)
+		return false;
+	if (job->width > (unsigned int)INT_MAX || job->height > (unsigned int)INT_MAX)
+		return false;
+	if (job->flags & unsupported)
+		return false;
+	return true;
+}
+
+static qboolean TexPrep_SetupJob (texprep_jobstate_t *state, texmgr_loadjob_t *job,
+	qboolean profile, int mip_participants)
+{
+	extern cvar_t gl_fullbrights;
+	unsigned int work_width = job->width;
+	unsigned int work_height = job->height;
+	int picmip;
+	char mapname[MAX_QPATH];
+	qboolean ordinary_map_size = false;
+
+	memset (state, 0, sizeof(*state));
+	state->job = job;
+	state->profile = profile;
+	state->mip_participants = mip_participants;
+	state->result.status = TEXPREP_BAD_INPUT;
+
+	if (!TexPrep_IsEligible (job))
+		return false;
+	if (!TexPrep_CheckedBytes (job->width, job->height, job->format == SRC_RGBA ? 4u : 1u, &state->source_size))
+	{
+		state->result.status = TEXPREP_OVERFLOW;
+		return false;
+	}
+
+	state->shot1sid_fix = strstr (job->name, "shot1sid") != NULL && job->width == 32 && job->height == 32;
+
+	if (!gl_texture_NPOT)
+	{
+		if (!TexPrep_PadSize (work_width, &work_width) || !TexPrep_PadSize (work_height, &work_height))
+		{
+			state->result.status = TEXPREP_OVERFLOW;
+			return false;
+		}
+		if (work_width > (unsigned int)INT_MAX || work_height > (unsigned int)INT_MAX)
+		{
+			state->result.status = TEXPREP_OVERFLOW;
+			return false;
+		}
+		state->resample_npot = work_width != job->width || work_height != job->height;
+	}
+
+	picmip = (job->flags & TEXPREF_NOPICMIP) ? 0 : CLAMP (0, (int)gl_picmip.value, 30);
+	if (gl_max_size.value)
+	{
+		COM_FileBase (job->name, mapname, sizeof(mapname));
+		ordinary_map_size = strstr (job->name, "maps") && !isSpecialMap(mapname) &&
+			!strstr (job->name, "*") && !strstr (job->name, "sky");
+		if (ordinary_map_size)
+		{
+			state->target_width = (unsigned int)TexMgr_SafeTextureSize (TexPrep_ShiftSize(work_width, picmip));
+			state->target_height = (unsigned int)TexMgr_SafeTextureSize (TexPrep_ShiftSize(work_height, picmip));
+			state->grayscale = gl_max_size.value < 0;
+		}
+		else
+		{
+			state->target_width = (unsigned int)TexMgr_SafeTextureSize2 (TexPrep_ShiftSize(work_width, picmip));
+			state->target_height = (unsigned int)TexMgr_SafeTextureSize2 (TexPrep_ShiftSize(work_height, picmip));
+		}
+	}
+	else
+	{
+		state->target_width = (unsigned int)TexMgr_SafeTextureSize (TexPrep_ShiftSize(work_width, picmip));
+		state->target_height = (unsigned int)TexMgr_SafeTextureSize (TexPrep_ShiftSize(work_height, picmip));
+	}
+
+	if (strstr (job->name, "*") && r_fastturb.value)
+	{
+		state->target_width = (unsigned int)TexMgr_SafeTextureSize3 (TexPrep_ShiftSize(work_width, picmip));
+		state->target_height = (unsigned int)TexMgr_SafeTextureSize3 (TexPrep_ShiftSize(work_height, picmip));
+	}
+
+	state->work_width = work_width;
+	state->work_height = work_height;
+	if (job->flags & TEXPREF_FULLBRIGHT)
+	{
+		state->palette_opaque = d_8to24table_fbright;
+		state->palette_alpha = d_8to24table_fbright_fence;
+	}
+	else if ((job->flags & TEXPREF_NOBRIGHT) && gl_fullbrights.value)
+	{
+		state->palette_opaque = d_8to24table_nobright;
+		state->palette_alpha = d_8to24table_nobright_fence;
+	}
+	else
+	{
+		state->palette_opaque = d_8to24table;
+		state->palette_alpha = d_8to24table;
+	}
+
+	state->result.status = TEXPREP_OK;
+	return true;
+}
+
+static void TexPrep_FreeResult (texprep_result_t *result)
+{
+	free (result->pixels);
+	result->pixels = NULL;
+	result->allocation_size = 0;
+}
+
+static void TexPrep_PrepareOne (texprep_jobstate_t *state)
+{
+	texmgr_loadjob_t *job = state->job;
+	texprep_result_t *result = &state->result;
+	byte *indexed = NULL;
+	unsigned *work = NULL;
+	unsigned *resampled = NULL;
+	unsigned int flags = job->flags;
+	unsigned int width = job->width;
+	unsigned int height = job->height;
+	unsigned int level_width, level_height, level_count;
+	size_t work_bytes, resampled_bytes, total, offset;
+	double started = state->profile ? Sys_DoubleTime () : 0;
+
+	result->status = TEXPREP_OK;
+	state->source_crc = CRC_Block (job->data, state->source_size);
+	if (!TexPrep_CheckedBytes (width, height, 4, &work_bytes))
+	{
+		result->status = TEXPREP_OVERFLOW;
+		goto done;
+	}
+
+	work = (unsigned *)malloc (work_bytes);
+	if (!work)
+	{
+		result->status = TEXPREP_OUT_OF_MEMORY;
+		goto done;
+	}
+
+	if (job->format == SRC_INDEXED)
+	{
+		const unsigned int *palette;
+		size_t i, pixels = (size_t)width * (size_t)height;
+
+		indexed = (byte *)malloc (state->source_size);
+		if (!indexed)
+		{
+			result->status = TEXPREP_OUT_OF_MEMORY;
+			goto done;
+		}
+		memcpy (indexed, job->data, state->source_size);
+		if (state->shot1sid_fix && CRC_Block(indexed, 1024) == 65393)
+			memcpy (indexed, indexed + 32 * 31, 32);
+
+		if ((flags & TEXPREF_ALPHA) && !(flags & TEXPREF_CONCHARS))
+		{
+			for (i = 0; i < pixels; i++)
+				if (indexed[i] == 255)
+					break;
+			if (i == pixels)
+				flags &= ~TEXPREF_ALPHA;
+		}
+
+		palette = (flags & TEXPREF_ALPHA) ? state->palette_alpha : state->palette_opaque;
+		TexMgr_8to32Into (indexed, pixels, palette, work);
+		if (flags & TEXPREF_ALPHA)
+			TexMgr_AlphaEdgeFix ((byte *)work, (int)width, (int)height);
+	}
+	else
+		memcpy (work, job->data, work_bytes);
+
+	if (state->resample_npot)
+	{
+		if (!TexPrep_CheckedBytes (state->work_width, state->work_height, 4, &resampled_bytes))
+		{
+			result->status = TEXPREP_OVERFLOW;
+			goto done;
+		}
+		resampled = (unsigned *)malloc (resampled_bytes);
+		if (!resampled)
+		{
+			result->status = TEXPREP_OUT_OF_MEMORY;
+			goto done;
+		}
+		TexMgr_ResampleTextureInto (work, (int)width, (int)height, flags & TEXPREF_ALPHA, resampled);
+		free (work);
+		work = resampled;
+		resampled = NULL;
+		work_bytes = resampled_bytes;
+		width = state->work_width;
+		height = state->work_height;
+	}
+
+	if (state->grayscale)
+	{
+		size_t i, pixels = (size_t)width * (size_t)height;
+		for (i = 0; i < pixels; i++)
+		{
+			byte *pixel = (byte *)&work[i];
+			float grey = 0.3f * pixel[0] + 0.6f * pixel[1] + 0.1f * pixel[2];
+			pixel[0] = pixel[1] = pixel[2] = (byte)grey;
+		}
+	}
+
+	while (width > state->target_width)
+	{
+		TexMgr_MipMapW (work, (int)width, (int)height);
+		width >>= 1;
+		if (flags & TEXPREF_ALPHA)
+			TexMgr_AlphaEdgeFix ((byte *)work, (int)width, (int)height);
+	}
+	while (height > state->target_height)
+	{
+		TexMgr_MipMapH (work, (int)width, (int)height);
+		height >>= 1;
+		if (flags & TEXPREF_ALPHA)
+			TexMgr_AlphaEdgeFix ((byte *)work, (int)width, (int)height);
+	}
+
+	total = 0;
+	level_width = width;
+	level_height = height;
+	level_count = 0;
+	for (;;)
+	{
+		size_t level_bytes;
+		if (level_count == TEXPREP_MAX_MIPS || !TexPrep_CheckedBytes(level_width, level_height, 4, &level_bytes) || !TexPrep_CheckedAdd(&total, level_bytes))
+		{
+			result->status = TEXPREP_OVERFLOW;
+			goto done;
+		}
+		level_count++;
+		if (!(flags & TEXPREF_MIPMAP) || (level_width == 1 && level_height == 1))
+			break;
+		level_width = level_width > 1 ? level_width >> 1 : 1;
+		level_height = level_height > 1 ? level_height >> 1 : 1;
+	}
+
+	result->pixels = (byte *)malloc (total);
+	if (!result->pixels)
+	{
+		result->status = TEXPREP_OUT_OF_MEMORY;
+		goto done;
+	}
+	result->allocation_size = total;
+	result->effective_flags = flags;
+	result->width = width;
+	result->height = height;
+	result->num_levels = level_count;
+
+	offset = 0;
+	level_width = width;
+	level_height = height;
+	result->levels[0].width = level_width;
+	result->levels[0].height = level_height;
+	result->levels[0].offset = 0;
+	TexPrep_CheckedBytes (level_width, level_height, 4, &result->levels[0].size);
+	memcpy (result->pixels, work, result->levels[0].size);
+	offset += result->levels[0].size;
+
+	if (TexMgr_IsPowerOfTwo((int)width) && TexMgr_IsPowerOfTwo((int)height))
+	{
+		unsigned int level;
+		for (level = 1; level < level_count; level++)
+		{
+			unsigned int next_width = level_width > 1 ? level_width >> 1 : 1;
+			unsigned int next_height = level_height > 1 ? level_height >> 1 : 1;
+			texprep_level_t *metadata = &result->levels[level];
+			metadata->width = next_width;
+			metadata->height = next_height;
+			metadata->offset = offset;
+			TexPrep_CheckedBytes (next_width, next_height, 4, &metadata->size);
+			TexMgr_GenerateMipLevelWithParticipants (
+				(const unsigned *)(result->pixels + result->levels[level - 1].offset),
+				(unsigned *)(result->pixels + offset), (int)level_width, (int)level_height,
+				(int)next_width, (int)next_height, state->mip_participants);
+			offset += metadata->size;
+			level_width = next_width;
+			level_height = next_height;
+		}
+	}
+	else
+	{
+		unsigned int level;
+		level_width = width;
+		level_height = height;
+		for (level = 1; level < level_count; level++)
+		{
+			texprep_level_t *metadata = &result->levels[level];
+			if (level_width > 1)
+			{
+				TexMgr_MipMapW (work, (int)level_width, (int)level_height);
+				level_width >>= 1;
+			}
+			if (level_height > 1)
+			{
+				TexMgr_MipMapH (work, (int)level_width, (int)level_height);
+				level_height >>= 1;
+			}
+			metadata->width = level_width;
+			metadata->height = level_height;
+			metadata->offset = offset;
+			TexPrep_CheckedBytes (level_width, level_height, 4, &metadata->size);
+			memcpy (result->pixels + offset, work, metadata->size);
+			offset += metadata->size;
+		}
+	}
+
+done:
+	free (resampled);
+	free (work);
+	free (indexed);
+	if (result->status != TEXPREP_OK)
+		TexPrep_FreeResult (result);
+	if (state->profile)
+		state->prepare_time = Sys_DoubleTime () - started;
+}
+
+static void TexPrep_Work (void *context, unsigned int index)
+{
+	texprep_jobstate_t *states = (texprep_jobstate_t *)context;
+	TexPrep_PrepareOne (&states[index]);
+}
+
+static const char *TexPrep_StatusName (texprep_status_t status)
+{
+	switch (status)
+	{
+	case TEXPREP_BAD_INPUT: return "bad input";
+	case TEXPREP_OVERFLOW: return "image too large";
+	case TEXPREP_OUT_OF_MEMORY: return "out of memory";
+	default: return "unknown failure";
+	}
+}
+
+static gltexture_t *TexPrep_Commit (const texprep_jobstate_t *state)
+{
+	const texmgr_loadjob_t *job = state->job;
+	const texprep_result_t *result = &state->result;
+	gltexture_t *glt = TexMgr_NewTexture ();
+	unsigned int level;
+	int internalformat;
+
+	glt->owner = job->owner;
+	q_strlcpy (glt->name, job->name, sizeof(glt->name));
+	glt->source_width = job->width;
+	glt->source_height = job->height;
+	glt->source_format = job->format;
+	q_strlcpy (glt->source_file, job->source_file, sizeof(glt->source_file));
+	glt->source_offset = job->source_offset;
+	glt->source_crc = state->source_crc;
+	glt->shirt.type = 0;
+	glt->pants.type = 0;
+	glt->width = result->width;
+	glt->height = result->height;
+	glt->flags = result->effective_flags;
+
+	GL_Bind (glt);
+	internalformat = (glt->flags & TEXPREF_ALPHA) ? gl_alpha_format : gl_solid_format;
+	for (level = 0; level < result->num_levels; level++)
+	{
+		const texprep_level_t *metadata = &result->levels[level];
+		TexMgr_VerifyLevel (glt->name, glt->flags, (int)level,
+			(int)metadata->width, (int)metadata->height, result->pixels + metadata->offset);
+		glTexImage2D (GL_TEXTURE_2D, (GLint)level, internalformat,
+			(GLsizei)metadata->width, (GLsizei)metadata->height, 0,
+			GL_RGBA, GL_UNSIGNED_BYTE, result->pixels + metadata->offset);
+	}
+	TexMgr_SetFilterModes (glt);
+	return glt;
+}
+
+void TexMgr_LoadImageBatch (texmgr_loadjob_t *jobs, size_t count)
+{
+	texprep_jobstate_t *states;
+	size_t i;
+	uint64_t pixels = 0;
+	int participants;
+	qboolean profile = developer.value != 0;
+	double started = profile ? Sys_DoubleTime () : 0;
+	double prepared, committed;
+
+	if (!count || isDedicated)
+		return;
+	if (count > (size_t)UINT_MAX)
+		Sys_Error ("TexMgr_LoadImageBatch: too many jobs");
+
+	/* tex_parallel is the legacy kill switch; tex_workers 1 tests staged-serial. */
+	if (!tex_parallel.value || COM_CheckParm("-noparalleltextureprep"))
+		goto legacy;
+	for (i = 0; i < count; i++)
+		if (!TexPrep_IsEligible (&jobs[i]))
+			goto legacy;
+
+	states = (texprep_jobstate_t *)calloc (count, sizeof(*states));
+	if (!states)
+		Sys_Error ("TexMgr_LoadImageBatch: out of memory on %u jobs", (unsigned int)count);
+
+	/* Snapshot worker configuration before any preparation can run off-thread. */
+	participants = TexWork_ConfiguredParticipants ();
+	for (i = 0; i < count; i++)
+	{
+		if (!TexPrep_SetupJob (&states[i], &jobs[i], profile, participants))
+		{
+			texprep_status_t status = states[i].result.status;
+			free (states);
+			Sys_Error ("TexMgr_LoadImageBatch: %s for %s", TexPrep_StatusName(status), jobs[i].name);
+		}
+		{
+			uint64_t job_pixels = (uint64_t)jobs[i].width * (uint64_t)jobs[i].height;
+			pixels = pixels > UINT64_MAX - job_pixels ? UINT64_MAX : pixels + job_pixels;
+		}
+	}
+
+	if (count < TEXPREP_MIN_PARALLEL_JOBS || pixels < TEXPREP_MIN_PARALLEL_PIXELS)
+		participants = 1;
+	TexWork_Run (TexPrep_Work, states, (unsigned int)count, participants);
+	prepared = profile ? Sys_DoubleTime () : 0;
+
+	for (i = 0; i < count; i++)
+	{
+		if (jobs[i].data_owned)
+		{
+			free ((void *)jobs[i].data);
+			jobs[i].data = NULL;
+			jobs[i].data_owned = false;
+		}
+		if (states[i].result.status != TEXPREP_OK)
+		{
+			size_t j;
+			texprep_status_t status = states[i].result.status;
+			for (j = 0; j < count; j++)
+				TexPrep_FreeResult (&states[j].result);
+			free (states);
+			Sys_Error ("TexMgr_LoadImageBatch: %s for %s", TexPrep_StatusName(status), jobs[i].name);
+		}
+	}
+
+	for (i = 0; i < count; i++)
+	{
+		gltexture_t *loaded = TexPrep_Commit (&states[i]);
+		*jobs[i].destination = loaded;
+	}
+	committed = profile ? Sys_DoubleTime () : 0;
+
+	if (profile)
+	{
+		texmgr_prepstats.batches++;
+		texmgr_prepstats.jobs += (unsigned int)count;
+		if (participants > 1)
+			texmgr_prepstats.parallel_batches++;
+		texmgr_prepstats.prepare_wall_time += prepared - started;
+		texmgr_prepstats.commit_time += committed - prepared;
+		texmgr_load_time += committed - started;
+		texmgr_load_calls += (unsigned int)count;
+		for (i = 0; i < count; i++)
+		{
+			texmgr_prepstats.prepare_cpu_time += states[i].prepare_time;
+			texmgr_prepstats.source_bytes += states[i].source_size;
+			texmgr_prepstats.prepared_bytes += states[i].result.allocation_size;
+		}
+	}
+
+	for (i = 0; i < count; i++)
+		TexPrep_FreeResult (&states[i].result);
+	free (states);
+	return;
+
+legacy:
+	for (i = 0; i < count; i++)
+	{
+		gltexture_t *loaded = TexMgr_LoadImage (jobs[i].owner, jobs[i].name,
+			(int)jobs[i].width, (int)jobs[i].height, jobs[i].format,
+			(byte *)jobs[i].data, jobs[i].source_file, jobs[i].source_offset, jobs[i].flags);
+		*jobs[i].destination = loaded;
+		if (jobs[i].data_owned)
+			free ((void *)jobs[i].data);
+	}
+}
+
+/*
 ================
 TexMgr_LoadLightmap -- handles lightmap data
 ================
@@ -2363,9 +3251,6 @@ static void TexMgr_LoadLightmap (gltexture_t *glt, byte *data)
 TexMgr_LoadImage -- the one entry point for loading all textures
 ================
 */
-double texmgr_load_time;	//tb -- load profiling
-unsigned int texmgr_load_calls;
-
 static gltexture_t *TexMgr_LoadImage_impl (qmodel_t *owner, const char *name, int width, int height, enum srcformat format,
 			       byte *data, const char *source_file, src_offset_t source_offset, unsigned flags);
 

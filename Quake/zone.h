@@ -96,6 +96,7 @@ char *Hunk_Strdup (const char *s, const char *name);
 int	Hunk_LowMark (void);
 void Hunk_FreeToLowMark (int mark);
 qboolean Hunk_IsContiguous (int from, int to);
+qboolean Hunk_IsRangeBeforeMark (const void *ptr, size_t size, int mark);
 
 void Hunk_Check (void);
 

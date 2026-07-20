@@ -725,6 +725,32 @@ qboolean Hunk_IsContiguous (int from, int to)
 	return Hunk_SegForOfs (from) == Hunk_SegForOfs (to - 1);
 }
 
+/* Returns true only while the complete range is backed by live Hunk storage below mark. */
+qboolean Hunk_IsRangeBeforeMark (const void *ptr, size_t size, int mark)
+{
+	int i;
+
+	if (!ptr || !size || mark < 0 || mark > hunk_low_used)
+		return false;
+
+	for (i = hunk_numsegments - 1; i >= 0; i--)
+	{
+		const hunkseg_t *seg = hunk_segments[i];
+		const byte *begin = SEG_MEM (seg);
+		const byte *end = begin + seg->used;
+		size_t offset;
+
+		if (!PTR_IN_RANGE (ptr, begin, end))
+			continue;
+		offset = (size_t)((const byte *)ptr - begin);
+		if (size > (size_t)seg->used - offset)
+			return false;
+		return seg->base <= mark && offset + size <= (size_t)(mark - seg->base);
+	}
+
+	return false;
+}
+
 void Hunk_FreeToLowMark (int mark)
 {
 	int i;
