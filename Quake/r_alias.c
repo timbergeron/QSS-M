@@ -1703,12 +1703,14 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 {
 	GLuint viewmodel_stencil_bit = GL_VIEWMODEL_STENCIL_BIT();
 	int powerup_items = cl.items | (M_LivePreview_UsePowerupShells() ? IT_QUAD : 0);
+	qboolean damage_hue_active = cl_damagehue.value != 0.0f && (cl.time <= cl.faceanimtime || M_LivePreview_UseDamageTint()); // woods #damagehue
+	qboolean has_powerup_shell = (powerup_items & (IT_QUAD | IT_INVULNERABILITY)) != 0;
 
 	if (!r_coloredpowerupglow.value
 		|| gl_powerupshells.value <= 0.0f
 		|| !gl_stencilbits // woods #powershell -- no stencil buffer means no rim mask; skip rather than flood the whole model
 		|| e != &cl.viewent
-		|| !(powerup_items & (IT_QUAD | IT_INVULNERABILITY))
+		|| (!damage_hue_active && !has_powerup_shell)
 		|| chase_active.value)
 	{
 		return;
@@ -1758,7 +1760,7 @@ void R_DrawViewmodelShell(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_t* 
 
 	float shellColor[4] = { 0.0f, 0.0f, 0.0f, shellAlpha };
 
-	if ((cl.time <= cl.faceanimtime || M_LivePreview_UseDamageTint()) && cl_damagehue.value)
+	if (damage_hue_active)
 	{
 		plcolour_t dhvalue = CL_PLColours_Parse(cl_damagehuecolor.string);
 		byte* dhuecolor = CL_PLColours_ToRGB(&dhvalue);
@@ -2266,8 +2268,8 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 			R_DrawPowerupPickupShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
 			R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e); // woods #routline
 		}
-		else if (cl.items & (IT_QUAD | IT_INVULNERABILITY))
-			R_DrawViewmodelShell(glsl, paliashdr, &lerpdata, e); // woods #powershell
+		else
+			R_DrawViewmodelShell(glsl, paliashdr, &lerpdata, e); // woods #powershell -- self-gating: powerup shells and damage hue
 
 		R_EndAliasOutlineRendering(); // woods #routline
 	}
