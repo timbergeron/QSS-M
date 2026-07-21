@@ -1662,6 +1662,12 @@ void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const c
 {
     int len_str = strlen(str);
 
+	if (len_str * 8 <= maxwidth)
+	{
+		M_PrintHighlight(x, y, str, highlight, highlight ? (int)strlen(highlight) : 0);
+		return;
+	}
+
     // Copy the original string without masking
     char name_str[MAX_CHAT_SIZE_EX];
     strncpy(name_str, str, sizeof(name_str) - 1);
@@ -21381,6 +21387,8 @@ void M_Console_Mousemove(int cx, int cy)
 
 #define MENU_SEARCH_MAX_RESULTS 512
 #define MENU_SEARCH_VISIBLE_ROWS 12
+#define MENU_SEARCH_RESULTS_Y 52
+#define MENU_SEARCH_RESULTS_BOTTOM (MENU_SEARCH_RESULTS_Y + MENU_SEARCH_VISIBLE_ROWS * 8)
 #define MENU_SEARCH_QUERY_CHARS 32
 #define MENU_SEARCH_RECENTS 5
 #define MENU_SEARCH_EMPTY_RECENTS 2
@@ -22527,7 +22535,7 @@ static void MenuSearch_UpdateScrollbar(int y)
 	list.numitems = menusearch.result_count;
 	list.viewsize = MENU_SEARCH_VISIBLE_ROWS;
 	list.scroll = menusearch.scroll;
-	if (!M_List_UseScrollbar(&list, y - 56))
+	if (!M_List_UseScrollbar(&list, y - MENU_SEARCH_RESULTS_Y))
 		return;
 	menusearch.scroll = list.scroll;
 	menusearch.cursor = CLAMP(menusearch.scroll, menusearch.cursor,
@@ -22578,19 +22586,19 @@ static void M_MenuSearch_Key(int key, qboolean repeat)
 	}
 	if (key == K_MOUSE1)
 	{
-		if (m_mousex < 8 || m_mousex >= 312 || m_mousey < 8 || m_mousey >= 192)
+		if (m_mousex < 8 || m_mousex >= 312 || m_mousey < 4 || m_mousey >= 196)
 			M_MenuSearch_Close(true, true);
-		else if (m_mousex >= 16 && m_mousex < 304 && M_TextField_MouseInRow(m_mousey, 32))
-			M_TextField_MouseClick(&menusearch.field, m_mousex, 24);
+		else if (m_mousex >= 16 && m_mousex < 304 && M_TextField_MouseInRow(m_mousey, 20))
+			M_TextField_MouseClick(&menusearch.field, m_mousex, 32);
 		else if (!menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS &&
-			m_mousex >= 296 && m_mousex < 304 && m_mousey >= 56 && m_mousey < 152)
+			m_mousex >= 296 && m_mousex < 304 && m_mousey >= MENU_SEARCH_RESULTS_Y && m_mousey < MENU_SEARCH_RESULTS_BOTTOM)
 		{
 			menusearch.scrollbar_grab = true;
 			MenuSearch_UpdateScrollbar(m_mousey);
 		}
-		else if (m_mousex >= 16 && m_mousex < 296 && m_mousey >= 56 && m_mousey < 152)
+		else if (m_mousex >= 16 && m_mousex < 296 && m_mousey >= MENU_SEARCH_RESULTS_Y && m_mousey < MENU_SEARCH_RESULTS_BOTTOM)
 		{
-			clicked = MenuSearch_ResultAtVisualRow((m_mousey - 56) / 8);
+			clicked = MenuSearch_ResultAtVisualRow((m_mousey - MENU_SEARCH_RESULTS_Y) / 8);
 			if (clicked >= 0)
 			{
 				menusearch.cursor = clicked;
@@ -22690,11 +22698,11 @@ static void M_MenuSearch_Mousemove(int x, int y)
 		M_TextField_MouseDrag(x);
 		return;
 	}
-	if (x < 16 || x >= 304 || y < 56 || y >= 152)
+	if (x < 16 || x >= 304 || y < MENU_SEARCH_RESULTS_Y || y >= MENU_SEARCH_RESULTS_BOTTOM)
 		return;
 	if (x >= 296 && !menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS)
 		return;
-	result = MenuSearch_ResultAtVisualRow((y - 56) / 8);
+	result = MenuSearch_ResultAtVisualRow((y - MENU_SEARCH_RESULTS_Y) / 8);
 	if (result >= 0)
 		menusearch.cursor = result;
 }
@@ -22702,7 +22710,6 @@ static void M_MenuSearch_Mousemove(int x, int y)
 static void M_MenuSearch_Draw(void)
 {
 	int row, shown;
-	char count[32];
 	char detail[320];
 	const char *footer = IN_GetLastActiveDeviceType() == KD_GAMEPAD
 		? "A: open   B: close   X: clear"
@@ -22714,25 +22721,24 @@ static void M_MenuSearch_Draw(void)
 		menusearch.scrollbar_grab = false;
 	M_LivePreview_DrawColorOverlay(0.f, 0.f, 0.f, 0.55f);
 	GL_SetCanvas(CANVAS_MENU);
-	M_DrawTextBox(8, 8, 36, 21);
-	M_PrintWhite(16, 16, "Menu Search");
-	M_DrawTextBox(16, 24, 34, 1);
-	M_TextField_DrawHighlight(&menusearch.field, 24, 32);
+	M_DrawTextBox(8, 4, 36, 22);
+	M_DrawTextBox(16, 12, 34, 1);
+	M_TextField_DrawHighlight(&menusearch.field, 32, 20);
 	if (!menusearch.query[0])
-		M_PrintRGBA(24, 32, "Search menus and settings", CL_PLColours_Parse("0xffffff"), 0.45f, false);
+		M_PrintRGBA(32, 20, "Search menus and settings", CL_PLColours_Parse("0xffffff"), 0.45f, false);
 	else
 	{
-		M_PrintWhite(24, 32, menusearch.query);
-		M_TextField_DrawCursor(&menusearch.field, 24, 32);
+		M_PrintWhite(32, 20, menusearch.query);
+		M_TextField_DrawCursor(&menusearch.field, 32, 20);
 	}
-	M_DrawQuakeBar(16, 48, 34);
+	M_DrawQuakeBar(24, 40, 34);
 
 	if (menusearch.empty_mode)
 	{
-		M_PrintRGBA(32, 56, menusearch.empty_recent_count ? "Recent" : "Browse",
+		M_PrintRGBA(32, MENU_SEARCH_RESULTS_Y, menusearch.empty_recent_count ? "Recent" : "Browse",
 			CL_PLColours_Parse("0xffffff"), 0.55f, false);
 		if (menusearch.empty_recent_count)
-			M_PrintRGBA(32, 56 + (menusearch.empty_recent_count + 1) * 8, "Browse",
+			M_PrintRGBA(32, MENU_SEARCH_RESULTS_Y + (menusearch.empty_recent_count + 1) * 8, "Browse",
 				CL_PLColours_Parse("0xffffff"), 0.55f, false);
 	}
 
@@ -22749,7 +22755,7 @@ static void M_MenuSearch_Draw(void)
 		char compact_value[12];
 		int label_width = 264;
 		int visual_row = !menusearch.empty_mode ? row : MenuSearch_EmptyResultRow(result_index);
-		int y = 56 + visual_row * 8;
+		int y = MENU_SEARCH_RESULTS_Y + visual_row * 8;
 		if (visual_row >= MENU_SEARCH_VISIBLE_ROWS)
 			continue;
 		if (result_index == menusearch.cursor)
@@ -22775,8 +22781,8 @@ static void M_MenuSearch_Draw(void)
 	}
 	if (!menusearch.result_count)
 	{
-		M_PrintRGBA(32, 64, "No matching menu items", CL_PLColours_Parse("0xffffff"), 0.55f, false);
-		M_PrintRGBA(32, 80, "Try a label, category, or cvar", CL_PLColours_Parse("0xffffff"), 0.45f, false);
+		M_PrintRGBA(32, MENU_SEARCH_RESULTS_Y + 8, "No matching menu items", CL_PLColours_Parse("0xffffff"), 0.55f, false);
+		M_PrintRGBA(32, MENU_SEARCH_RESULTS_Y + 24, "Try a label, category, or cvar", CL_PLColours_Parse("0xffffff"), 0.45f, false);
 	}
 	if (!menusearch.empty_mode && menusearch.result_count > MENU_SEARCH_VISIBLE_ROWS)
 	{
@@ -22785,10 +22791,10 @@ static void M_MenuSearch_Draw(void)
 		list.numitems = menusearch.result_count;
 		list.viewsize = MENU_SEARCH_VISIBLE_ROWS;
 		list.scroll = menusearch.scroll;
-		M_List_DrawScrollbar(&list, 300, 56);
+		M_List_DrawScrollbar(&list, 300, MENU_SEARCH_RESULTS_Y);
 	}
 
-	M_DrawQuakeBar(16, 152, 34);
+	M_DrawQuakeBar(24, 152, 34);
 	if (menusearch.result_count)
 	{
 		selected = &menusearch.results[menusearch.cursor];
@@ -22803,19 +22809,13 @@ static void M_MenuSearch_Draw(void)
 			else if (hint && hint[0])
 				q_strlcpy(detail, hint, sizeof(detail));
 		}
-		M_PrintScroll(16, 160, 288, detail, realtime, false);
+		M_PrintScroll(24, 164, 272, detail, realtime, false);
 	}
 	else
-		M_Print(16, 160, "Search covers native menu items");
+		M_Print(24, 164, "Search covers native menu items");
 	if (menusearch.status_until > realtime)
 		footer = menusearch.status;
-	M_PrintScroll(16, 176, 288, footer, 0.0, false);
-	if (!menusearch.empty_mode)
-	{
-		q_snprintf(count, sizeof(count), "%d result%s", menusearch.result_count,
-			menusearch.result_count == 1 ? "" : "s");
-		M_Print(304 - (int)strlen(count) * 8, 16, count);
-	}
+	M_PrintScroll(24, 176, 272, footer, 0.0, false);
 }
 
 static int MenuSearch_Validate(qboolean verbose)
