@@ -21571,7 +21571,54 @@ static const char *MenuSearch_JoinText(int index) { return menusearch_join_label
 static const char *MenuSearch_HostText(int index) { return menusearch_host_labels[index]; }
 static const char *MenuSearch_SetupText(int index) { return menusearch_setup_labels[index]; }
 static const char *MenuSearch_KeyText(int index) { return quakebindnames[index].desc; }
-static const char *MenuSearch_KeyKeywords(int index) { return quakebindnames[index].cmd; }
+static const char *MenuSearch_KeyKeywords(int index)
+{
+	const char *cmd = quakebindnames[index].cmd;
+
+	if (!strcmp(cmd, "+forward")) return "+forward ahead movement walk";
+	if (!strcmp(cmd, "+back")) return "+back backward reverse movement walk";
+	if (!strcmp(cmd, "+moveleft")) return "+moveleft strafe left sidestep movement";
+	if (!strcmp(cmd, "+moveright")) return "+moveright strafe right sidestep movement";
+	if (!strcmp(cmd, "+jump")) return "+jump leap hop swim rise space";
+	if (!strcmp(cmd, "+moveup")) return "+moveup swim fly rise ascend";
+	if (!strcmp(cmd, "+movedown")) return "+movedown swim fly sink descend";
+	if (!strcmp(cmd, "+speed")) return "+speed run sprint walk modifier";
+	if (!strcmp(cmd, "+strafe")) return "+strafe sidestep movement modifier";
+	if (!strcmp(cmd, "+left")) return "+left turn rotate yaw";
+	if (!strcmp(cmd, "+right")) return "+right turn rotate yaw";
+	if (!strcmp(cmd, "+lookup")) return "+lookup camera pitch aim";
+	if (!strcmp(cmd, "+lookdown")) return "+lookdown camera pitch aim";
+	if (!strcmp(cmd, "centerview")) return "centerview reset camera aim horizon";
+	if (!strcmp(cmd, "levelview")) return "levelview reset camera aim horizon";
+	if (!strcmp(cmd, "zoom_in")) return "zoom_in scope magnify fov toggle";
+	if (!strcmp(cmd, "+zoom")) return "+zoom scope magnify fov hold";
+	if (!strcmp(cmd, "+gyroaction")) return "+gyroaction motion aim switch toggle";
+	if (!strcmp(cmd, "+altmodifier")) return "+altmodifier alternate layer shift modifier";
+	if (!strcmp(cmd, "+attack")) return "+attack fire shoot primary weapon";
+	if (!strcmp(cmd, "+weaponwheel")) return "+weaponwheel radial selector inventory weapons";
+	if (!strcmp(cmd, "impulse 10")) return "impulse 10 next cycle weapon";
+	if (!strcmp(cmd, "impulse 12")) return "impulse 12 previous prior cycle weapon";
+	if (!strcmp(cmd, "impulse 1")) return "impulse 1 axe melee";
+	if (!strcmp(cmd, "impulse 2")) return "impulse 2 shotgun sg";
+	if (!strcmp(cmd, "impulse 3")) return "impulse 3 super shotgun ssg double barrel";
+	if (!strcmp(cmd, "impulse 4")) return "impulse 4 nailgun ng";
+	if (!strcmp(cmd, "impulse 5")) return "impulse 5 super nailgun sng perforator";
+	if (!strcmp(cmd, "impulse 6")) return "impulse 6 grenade launcher gl explosives";
+	if (!strcmp(cmd, "impulse 7")) return "impulse 7 rocket launcher rl explosives";
+	if (!strcmp(cmd, "impulse 8")) return "impulse 8 thunderbolt lightning gun lg shaft";
+	if (!strcmp(cmd, "impulse 225")) return "impulse 225 laser cannon hipnotic";
+	if (!strcmp(cmd, "impulse 226")) return "impulse 226 mjolnir hammer hipnotic";
+	if (!strcmp(cmd, QUICKSAVE)) return "quicksave quick save checkpoint backup";
+	if (!strcmp(cmd, QUICKLOAD)) return "quickload quick load restore resume checkpoint";
+	if (!strcmp(cmd, "menu_load")) return "menu_load load savegame slots restore";
+	if (!strcmp(cmd, "menu_save")) return "menu_save save savegame slots backup";
+	if (!strcmp(cmd, "menu_multiplayer")) return "menu_multiplayer online network servers";
+	if (!strcmp(cmd, "menu_options")) return "menu_options settings preferences configuration";
+	if (!strcmp(cmd, "screenshot")) return "screenshot capture image picture photo";
+	if (!strcmp(cmd, "+showscores")) return "+showscores scoreboard frags standings match";
+	if (!strcmp(cmd, "messagemode")) return "messagemode chat message talk say text";
+	return cmd;
+}
 
 static qboolean MenuSearch_OptionsAvailable(int index)
 {
@@ -21638,16 +21685,38 @@ static const char *MenuSearch_OptionsKeywords(int index)
 {
 	switch (index)
 	{
-	case OPT_CUSTOMIZE: return "keys buttons bindings controls";
-	case OPT_CONTROLLER: return "gamepad joystick controller test gyro calibration";
+	case OPT_CUSTOMIZE: return "keys keyboard buttons bindings controls remap rebind hotkeys";
+	case OPT_MOUSE: return "mouse pointer sensitivity aiming cursor acceleration";
+	case OPT_CONTROLLER: return "gamepad joystick pad controller test gyro calibration";
+	case OPT_WEAPONWHEEL: return "weapon radial wheel quick select inventory";
 	case OPT_VIDEO: return "video resolution fullscreen display monitor vsync";
-	case OPT_GRAPHICS: return "rendering video visuals effects";
-	case OPT_SOUND: return "audio music microphone mic voice voip";
-	case OPT_GAME: return "gameplay motion comfort fov";
-	case OPT_HUD: return "interface overlay reticle crosshair";
-	case OPT_CONSOLEM: return "terminal command history";
-	case OPT_DEMOOPTIONS: return "replay demos demo eyes";
-	case OPT_EXTRAS: return "misc saving autosave pak bookmarks favorites";
+	case OPT_GRAPHICS: return "rendering renderer video visuals effects quality textures lighting";
+	case OPT_SOUND: return "audio volume music microphone mic voice voip speakers";
+	case OPT_GAME: return "gameplay player movement camera weapons comfort fov";
+	case OPT_HUD: return "interface overlay ui reticle crosshair statusbar scoreboard";
+	case OPT_CONSOLEM: return "terminal developer command commands log history";
+	case OPT_STARTUP: return "startup launch boot pak command fade attract";
+	case OPT_DEMOOPTIONS: return "replay demos recordings playback spectator demo eyes";
+	case OPT_EXTRAS: return "misc miscellaneous advanced extras tools utilities saving downloads";
+	case OPT_MENUSCALE: return "interface ui size scaling zoom dpi";
+	case OPT_CONSOLE: return "terminal developer command toggle";
+	case OPT_RESETCONFIG: return "restore defaults factory reset settings configuration";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_MouseKeywords(int index)
+{
+	switch (index)
+	{
+	case MOUSE_SPEED: return "sensitivity aim aiming turn look cursor dpi";
+	case MOUSE_INVERT: return "reverse vertical y axis pitch flight";
+	case MOUSE_ALWAYSMLOOK: return "freelook mouse look aiming camera";
+	case MOUSE_PITCHMODE: return "vertical look angle limits netquake pitch";
+	case MOUSE_CUSTOMCURSOR: return "pointer cursor system mouse icon native";
+#ifdef MACOS_X_ACCELERATION_HACK
+	case MOUSE_ACCELERATION: return "acceleration enhance pointer precision raw input macos";
+#endif
 	default: return NULL;
 	}
 }
@@ -21656,14 +21725,14 @@ static const char *MenuSearch_VideoKeywords(int index)
 {
 	switch (index)
 	{
-	case 0: return "resolution width height screen video mode";
-	case 1: return "bpp bits pixel color colour depth";
-	case 2: return "hz monitor refresh rate";
-	case 3: return "fullscreen windowed borderless display mode";
-	case 4: return "vsync tearing vertical sync";
-	case 5: return "framerate frame rate maxfps fps cap limit";
-	case 6: return "preview test video changes";
-	case 7: return "apply save restart video changes";
+	case 0: return "resolution width height dimensions aspect ratio screen size video mode";
+	case 1: return "bpp bits per pixel color colour depth truecolor 24bit 32bit";
+	case 2: return "hz monitor refresh rate frequency";
+	case 3: return "fullscreen windowed borderless exclusive desktop display mode";
+	case 4: return "vsync tearing tear vertical sync synchronized";
+	case 5: return "framerate frame rate maxfps fps cap limiter limit uncapped frametime";
+	case 6: return "preview test confirm revert timeout video changes";
+	case 7: return "apply commit save restart video changes";
 	default: return NULL;
 	}
 }
@@ -21672,12 +21741,29 @@ static const char *MenuSearch_GraphicsKeywords(int index)
 {
 	switch (index)
 	{
-	case GRAPHICS_BRIGHTNESS: return "gamma luminance";
-	case GRAPHICS_ANTIALIASING: return "aa fsaa msaa jaggies";
-	case GRAPHICS_MODELLERP: return "animation interpolation motion";
-	case GRAPHICS_COLOREDLIGHTING: return "lit colored lights lighting";
-	case GRAPHICS_ALIASSHADOW: case GRAPHICS_BRUSHSHADOW: return "shadow lighting";
-	case GRAPHICS_WATERWARP: return "underwater distortion motion";
+	case GRAPHICS_BRIGHTNESS: return "gamma luminance exposure light dark";
+	case GRAPHICS_CONTRAST: return "levels blacks whites image";
+	case GRAPHICS_FILTERING: return "texture filter smoothing nearest linear pixelated blurry crisp";
+	case GRAPHICS_ANTIALIASING: return "aa fsaa msaa jaggies jagged edges smoothing multisample";
+	case GRAPHICS_SOFTEMU: return "software palette retro classic vanilla 8bit eight bit";
+	case GRAPHICS_EXTERNALTEX: return "external high resolution hires 24bit textures replacements texture packs";
+	case GRAPHICS_REPLACEMENTMODELS: return "custom external replacement models mdl";
+	case GRAPHICS_ROCKETLIGHT: return "rocket dynamic light dlight glow";
+	case GRAPHICS_EXPLOSIONLIGHT: return "explosion dynamic light dlight glow";
+	case GRAPHICS_MODELLERP: return "animation interpolation motion smooth models";
+	case GRAPHICS_RENDERSCALE: return "resolution scaling pixelated performance internal resolution";
+	case GRAPHICS_CLASSICPARTICLES: return "vanilla original retro particle effects";
+	case GRAPHICS_CUSTOMPARTICLES: return "particle effects scripts external replacement";
+	case GRAPHICS_COLOREDLIGHTING: return "lit files colored colour rgb lights lighting";
+	case GRAPHICS_ALIASSHADOW: return "model player monster shadow lighting";
+	case GRAPHICS_BRUSHSHADOW: return "world map brush shadow lighting";
+	case GRAPHICS_MODELOUTLINES: return "outline silhouette cel shading models";
+	case GRAPHICS_POWERUPSHELLS: return "glow shell quad pent ring powerups";
+	case GRAPHICS_WATERCAUSTICS: return "water liquid ripple lighting underwater";
+	case GRAPHICS_WATERWARP: return "underwater distortion motion warp nausea";
+	case GRAPHICS_WATERALPHA: return "water liquid transparency opacity translucent";
+	case GRAPHICS_CSHIFTAUTO: return "underwater liquid tint color shift palette";
+	case GRAPHICS_SKY: return "skybox clouds environment backdrop";
 	default: return NULL;
 	}
 }
@@ -21686,10 +21772,17 @@ static const char *MenuSearch_SoundKeywords(int index)
 {
 	switch (index)
 	{
-	case SOUND_VOLUME: return "audio sfx";
-	case SOUND_MUSICVOL: case SOUND_MUSICEXT: return "audio soundtrack";
-	case SOUND_AUDIOBROWSER: return "audio files music sounds";
-	case SOUND_VOIP: return "microphone mic voice chat";
+	case SOUND_VOLUME: return "audio sfx effects master loudness speakers";
+	case SOUND_MUSICVOL: return "audio soundtrack cd music loudness";
+	case SOUND_MUSICEXT: return "external soundtrack mp3 ogg flac cd tracks";
+	case SOUND_AUDIORATE: return "sample rate hz quality frequency";
+	case SOUND_SURROUND: return "spatial multichannel speakers headphones stereo";
+	case SOUND_WATERFX: return "underwater muffled lowpass filter audio";
+	case SOUND_AMBIENTLEVEL: return "world ambience ambient wind water volume";
+	case SOUND_STOPSOUND: return "stop clear silence audio sounds";
+	case SOUND_MUTE: return "silence audio volume off";
+	case SOUND_AUDIOBROWSER: return "audio files music sounds preview browser";
+	case SOUND_VOIP: return "microphone mic voice chat talk communication";
 	default: return NULL;
 	}
 }
@@ -21698,11 +21791,26 @@ static const char *MenuSearch_GameKeywords(int index)
 {
 	switch (index)
 	{
-	case GAME_ROLLANGLE: case GAME_FLASHES: case GAME_WEAPONBOB:
-	case GAME_DAMAGEKICK: return "motion comfort accessibility";
-	case GAME_FOV: return "fov field view motion comfort";
-	case GAME_AUTOSWITCH: return "weapon switch pickup";
-	case GAME_TEAMCOLOR: case GAME_ENEMYCOLOR: return "player color colours";
+	case GAME_ALWAYSRUN: return "autorun speed movement walk running";
+	case GAME_ROLLANGLE: return "strafe angle banking tilt lean motion comfort";
+	case GAME_FOV: return "fov field view angle zoom camera motion comfort";
+	case GAME_FLASHES: return "screen flash lightning damage brightness accessibility photosensitivity";
+	case GAME_WEAPONBOB: return "gun weapon sway bob motion animation comfort";
+	case GAME_DAMAGEKICK: return "camera shake recoil damage knockback motion comfort";
+	case GAME_DAMAGETINT: return "damage red flash tint screen color";
+	case GAME_AUTOSWITCH: return "weapon switch pickup priority autoswap";
+	case GAME_CONSOLECHAT: return "chat console messagemode typing";
+	case GAME_SWAPROCKETS: return "rocket grenade launcher rl gl swap r2g weapons";
+	case GAME_TRUELIGHTNING: return "shaft lightning gun lg tl beam aim interpolation";
+	case GAME_STRAIGHTSHAFT: return "lightning beam shaft straight aim";
+	case GAME_DEADBODYFILTER: return "corpses gibs bodies hide remove performance";
+	case GAME_MM1MUTE: return "chat mute messages messagemode public";
+	case GAME_VIEWMODEL: return "weapon gun model hand hide";
+	case GAME_TEAMCOLOR: return "teammate ally player color colour";
+	case GAME_ENEMYCOLOR: return "opponent enemy player color colour";
+	case GAME_CTFMODELSWAP: return "ctf capture flag player models threewave";
+	case GAME_PLAYERXRAY: return "players enemies teammates outlines visibility walls";
+	case GAME_TEXTURELESS: return "flat textures solid colors visibility competitive";
 	default: return NULL;
 	}
 }
@@ -21712,8 +21820,20 @@ static const char *MenuSearch_HUDKeywords(int index)
 	switch (index)
 	{
 	case HUD_CROSSHAIR: return "reticle aim sight";
-	case HUD_SCALE: case HUD_SCRSIZE: return "interface ui size";
-	case HUD_AUTOID: return "player names identification";
+	case HUD_SCALE: return "interface ui size scaling zoom dpi";
+	case HUD_SCRSIZE: return "viewport view size statusbar screen area";
+	case HUD_SBALPHA: return "statusbar transparency opacity translucent";
+	case HUD_SBARSTYLE: return "statusbar layout classic modern hud";
+	case HUD_SHOWFPS: return "framerate frame rate performance counter";
+	case HUD_MATCHSCORES: case HUD_SHOWSCORES: return "score scoreboard frags match";
+	case HUD_MATCHCLOCK: case HUD_SHOWCLOCK: return "timer time clock match";
+	case HUD_SHOWPING: return "latency network connection ms";
+	case HUD_SHOWSPEED: return "velocity movement speedometer ups";
+	case HUD_AUTOID: return "player names id identification labels teammates enemies";
+	case HUD_MOVEKEYS: return "keystrokes input wasd movement display";
+	case HUD_CONSOLEFONT: return "text font size console ui";
+	case HUD_OBSITEMS: return "spectator observer pickups items inventory";
+	case HUD_SCOREBOARD_SORT: return "scores teams ordering ranking scoreboard";
 	default: return NULL;
 	}
 }
@@ -21722,8 +21842,19 @@ static const char *MenuSearch_ConsoleKeywords(int index)
 {
 	switch (index)
 	{
-	case CONSOLE_SAVE_HISTORY: case CONSOLE_CLEAR_HISTORY: return "command history";
-	case CONSOLE_CONBACK: case CONSOLE_CONCOLOR: return "terminal background";
+	case CONSOLE_FONTSIZE: return "text scale size terminal";
+	case CONSOLE_HEIGHT: return "size fullscreen dropdown terminal";
+	case CONSOLE_SPEED: return "animation slide dropdown open close";
+	case CONSOLE_TRANSPARENCY: return "alpha opacity translucent background";
+	case CONSOLE_CONBACK: return "terminal background image texture";
+	case CONSOLE_CONCOLOR: return "terminal background color colour tint rgb";
+	case CONSOLE_CONTENTFILTER: return "profanity language censor mature filter";
+	case CONSOLE_TYPING: return "chat input status indicator";
+	case CONSOLE_AUTOHINT: return "autocomplete suggestions commands help";
+	case CONSOLE_CLEAR_ON_TOGGLE: return "input erase reset close open";
+	case CONSOLE_SAVE_HISTORY: return "command history persist remember";
+	case CONSOLE_CLEAR_CONSOLE: return "erase output log terminal";
+	case CONSOLE_CLEAR_HISTORY: return "erase command history previous";
 	default: return NULL;
 	}
 }
@@ -21747,7 +21878,7 @@ static const char *MenuSearch_SinglePlayerKeywords(int index)
 {
 	switch (index)
 	{
-	case 0: return "start campaign solo new singleplayer";
+	case 0: return "start campaign solo new singleplayer difficulty skill episode fresh restart";
 	case 1: return "load savegame continue";
 	case 2: return "save savegame slot";
 	case 3: return "maps levels map browser select level";
@@ -21760,7 +21891,7 @@ static const char *MenuSearch_MultiplayerKeywords(int index)
 	switch (index)
 	{
 	case 0: return "connect server browser online lan internet";
-	case 1: return "host create start server coop deathmatch";
+	case 1: return "host create start listen server lobby coop deathmatch";
 	case 2: return "player setup name colors hostname profile";
 	default: return NULL;
 	}
@@ -21770,11 +21901,11 @@ static const char *MenuSearch_JoinKeywords(int index)
 {
 	switch (index)
 	{
-	case 0: return "lan local network search";
-	case 1: return "public internet online servers search join";
+	case 0: return "lan local area network search discover";
+	case 1: return "public internet online master directory servers search join";
 	case 2: return "recent previous connections";
-	case 3: return "favorites favourite saved servers";
-	case 4: return "connect ip hostname address direct";
+	case 3: return "favorites favourites favourite bookmarks starred saved servers";
+	case 4: return "connect ip dns domain hostname address url direct join";
 	default: return NULL;
 	}
 }
@@ -21784,9 +21915,9 @@ static const char *MenuSearch_HostKeywords(int index)
 	switch (index)
 	{
 	case 0: return "network port host server";
-	case 1: return "ice webrtc room host server";
-	case 2: return "network protocol netquake fitzquake rmq fte";
-	case 3: return "host server settings maxplayers map deathmatch coop";
+	case 1: return "ice webrtc room lobby rendezvous host server relay nat traversal invite";
+	case 2: return "network protocol netquake nq fitzquake rmq fte qss";
+	case 3: return "host server settings rules match maxplayers player slots fraglimit timelimit map deathmatch coop";
 	default: return NULL;
 	}
 }
@@ -21797,10 +21928,10 @@ static const char *MenuSearch_SetupKeywords(int index)
 	{
 	case 0: return "server hostname host name";
 	case 1: return "player name nickname profile";
-	case 2: return "character letters name editor";
-	case 3: return "player colors colour rgb";
-	case 4: return "top shirt player color colour";
-	case 5: return "bottom pants player color colour";
+	case 2: return "character letters ascii glyph symbols name maker generator editor";
+	case 3: return "player colors colour palette picker swatch hex rgb";
+	case 4: return "top shirt jersey torso player color colour";
+	case 5: return "bottom pants legs player color colour";
 	case 6: return "apply save setup";
 	default: return NULL;
 	}
@@ -21810,13 +21941,25 @@ static const char *MenuSearch_ControllerKeywords(int index)
 {
 	switch (index)
 	{
-	case CONTROLLER_DEVICE: return "gamepad joystick device";
+	case CONTROLLER_DEVICE: return "gamepad joystick pad device select controller";
+	case CONTROLLER_SENSX: return "yaw horizontal look turn sensitivity speed";
+	case CONTROLLER_SENSY: return "pitch vertical look sensitivity speed";
+	case CONTROLLER_INVERT: return "reverse vertical y axis pitch flight";
+	case CONTROLLER_LOOK_STICK: return "swap sticks thumbstick movement aiming";
+	case CONTROLLER_EXPONENT_LOOK: return "aim acceleration response curve look";
+	case CONTROLLER_EXPONENT_MOVE: return "movement acceleration response curve stick";
+	case CONTROLLER_DEADZONE_LOOK: return "aim drift dead zone stick";
+	case CONTROLLER_DEADZONE_MOVE: return "movement drift dead zone stick";
+	case CONTROLLER_TRIGGER_THRESH: return "trigger deadzone threshold sensitivity";
+	case CONTROLLER_RUMBLE: return "vibration haptics feedback motor";
+	case CONTROLLER_TRIGGER_RUMBLE: return "trigger vibration haptics feedback";
 	case CONTROLLER_CALIBRATE: return "gyro calibration calibrate";
 	case CONTROLLER_TEST: return "gamepad joystick controller test buttons axes";
 	case CONTROLLER_TOUCHPAD: return "trackpad mouse cursor";
+	case CONTROLLER_FLICK_STICK: return "gyro flick aiming turn stick";
 	case CONTROLLER_GYRO_ENABLE: case CONTROLLER_GYRO_MODE: case CONTROLLER_GYRO_AXIS:
 	case CONTROLLER_GYRO_SENSX: case CONTROLLER_GYRO_SENSY: case CONTROLLER_GYRO_NOISE:
-		return "gyro motion aiming";
+		return "gyro motion aiming sensor tilt sensitivity";
 	default: return NULL;
 	}
 }
@@ -21825,30 +21968,48 @@ static const char *MenuSearch_SkyKeywords(int index)
 {
 	switch (index)
 	{
-	case SKY_FASTSKY: return "flat sky performance";
-	case SKY_FASTSKY_COLOR: return "sky colour rgb";
-	case SKY_ALLOW_DOWNLOAD: return "download skybox";
-	case SKY_GLOBALSKY: return "skybox name texture";
-	case SKY_WIND: return "wind clouds movement motion";
+	case SKY_FASTSKY: return "flat solid sky performance simple disable texture";
+	case SKY_FASTSKY_COLOR: return "flat sky color colour rgb tint";
+	case SKY_QUALITY: return "detail resolution fidelity skybox texture";
+	case SKY_ALPHA: return "transparency opacity translucent blend";
+	case SKY_FOG: return "haze mist density atmosphere";
+	case SKY_SPEED: return "animation movement rotation scrolling clouds";
+	case SKY_ALLOW_DOWNLOAD: return "download skybox external texture files server";
+	case SKY_GLOBALSKY: return "skybox name texture environment override map";
+	case SKY_WIND: return "wind clouds movement motion animation direction";
 	default: return NULL;
 	}
 }
 
 static const char *MenuSearch_SkywindKeywords(int index)
 {
-	(void)index;
-	return "sky wind clouds motion";
+	switch (index)
+	{
+	case SKYWIND_STRENGTH: return "sky wind clouds motion speed distance intensity";
+	case SKYWIND_DIRECTION: return "sky wind clouds motion direction yaw compass angle";
+	case SKYWIND_PITCH: return "sky wind clouds motion vertical angle slope";
+	case SKYWIND_PERIOD: return "sky wind clouds motion cycle duration timing seconds";
+	default: return NULL;
+	}
 }
 
 static const char *MenuSearch_VoipKeywords(int index)
 {
 	switch (index)
 	{
-	case VOIP_SEND: return "voice chat transmit activation";
-	case VOIP_MICVOL: case VOIP_MICAMP: case VOIP_VADTHRESH: case VOIP_VADDELAY:
-	case VOIP_NOISEFILTER: case VOIP_AUTOGAIN: case VOIP_SHOWMETER: case VOIP_TEST:
-		return "microphone mic voice chat";
-	default: return "voice chat voip";
+	case VOIP_SEND: return "voice chat transmit mode push talk ptt activation vad always on";
+	case VOIP_PLAYVOL: return "voice chat receive playback speaker teammate volume loudness";
+	case VOIP_MICVOL: return "microphone mic capture input volume level sensitivity";
+	case VOIP_MICAMP: return "microphone mic amplify amplification boost gain input";
+	case VOIP_VADTHRESH: return "voice activation detection vad threshold sensitivity gate";
+	case VOIP_VADDELAY: return "voice activation detection vad delay hangover release timeout";
+	case VOIP_DUCKING: return "lower game audio while talking attenuation voice priority";
+	case VOIP_NOISEFILTER: return "microphone noise suppression filter hiss background cleanup";
+	case VOIP_AUTOGAIN: return "microphone automatic gain control agc normalize volume";
+	case VOIP_SHOWMETER: return "microphone level indicator meter vu volume display";
+	case VOIP_BITRATE: return "voice quality bandwidth kbps compression network";
+	case VOIP_TEST: return "microphone mic test loopback monitor playback check";
+	default: return "voice chat voip communication";
 	}
 }
 
@@ -21856,9 +22017,14 @@ static const char *MenuSearch_CrosshairKeywords(int index)
 {
 	switch (index)
 	{
-	case CROSSHAIR_TOGGLE: return "reticle aim sight style";
-	case CROSSHAIR_COLOR: case CROSSHAIR_COLOR_PICKER: return "reticle colour rgb";
-	case CROSSHAIR_X: case CROSSHAIR_Y: return "reticle position offset";
+	case CROSSHAIR_TOGGLE: return "reticle aim sight enable disable hide show style";
+	case CROSSHAIR_ALPHA: return "reticle transparency opacity translucent visibility";
+	case CROSSHAIR_COLOR: return "reticle color colour rgb tint";
+	case CROSSHAIR_COLOR_PICKER: return "reticle color colour palette picker rgb custom";
+	case CROSSHAIR_OUTLINE: return "reticle border stroke edge contrast visibility";
+	case CROSSHAIR_SCALE: return "reticle size scaling zoom large small";
+	case CROSSHAIR_X: return "reticle horizontal position offset left right center adjustment";
+	case CROSSHAIR_Y: return "reticle vertical position offset up down center adjustment";
 	default: return "reticle aim sight";
 	}
 }
@@ -21867,15 +22033,22 @@ static const char *MenuSearch_PlayerXrayKeywords(int index)
 {
 	switch (index)
 	{
-	case PLAYERXRAY_TARGETS: return "players enemies teammates wallhack visibility";
-	case PLAYERXRAY_STYLE: return "body outline render";
-	case PLAYERXRAY_ALPHA: return "transparency";
-	case PLAYERXRAY_DISTANCE: return "range distance";
-	case PLAYERXRAY_ENEMYCOLOR: case PLAYERXRAY_TEAMCOLOR: return "colour rgb";
-	case PLAYERXRAY_MATCHSIZE: return "gametype team size";
+	case PLAYERXRAY_TARGETS: return "players enemies teammates opponents allies both wallhack visibility";
+	case PLAYERXRAY_STYLE: return "body outline fill silhouette render mode";
+	case PLAYERXRAY_ALPHA: return "transparency opacity translucent visibility";
+	case PLAYERXRAY_DISTANCE: return "range distance radius limit units";
+	case PLAYERXRAY_COLORMODE: return "automatic custom relationship team enemy colors colours";
+	case PLAYERXRAY_ENEMYCOLOR: return "opponent enemy color colour rgb tint";
+	case PLAYERXRAY_TEAMCOLOR: return "teammate ally color colour rgb tint";
+	case PLAYERXRAY_MATCHSIZE: return "gametype team size player count limit disable";
 	default: return "player xray";
 	}
 }
+
+static const char *MenuSearch_ExtrasKeywords(int index);
+static const char *MenuSearch_SavingKeywords(int index);
+static const char *MenuSearch_StartupKeywords(int index);
+static const char *MenuSearch_DemoOptionsKeywords(int index);
 
 static void M_MenuSearch_OpenOptionsItem(int index)
 {
@@ -22123,17 +22296,17 @@ static const menusearch_provider_t menusearch_providers[] = {
 	{"host", "Multiplayer > New Game", menusearch_host_labels, Q_COUNTOF(menusearch_host_labels), MenuSearch_HostText, NULL, NULL, MenuSearch_HostKeywords, NULL, MenuSearch_HostAvailable, M_MenuSearch_OpenHostItem},
 	{"setup", "Multiplayer > Setup", menusearch_setup_labels, NUM_SETUP_CMDS, MenuSearch_SetupText, NULL, NULL, MenuSearch_SetupKeywords, NULL, NULL, M_MenuSearch_OpenSetupItem},
 	{"keys", "Options > Key/Button Setup", NULL, NUMQUAKECOMMANDS, MenuSearch_KeyText, NULL, NULL, MenuSearch_KeyKeywords, NULL, MenuSearch_KeyAvailable, M_MenuSearch_OpenKeyItem},
-	{"mouse", "Options > Mouse", menusearch_mouse_labels, MOUSE_ITEMS, M_Mouse_GetItemText, M_Mouse_GetItemCvar, M_Mouse_GetItemHintText, NULL, NULL, NULL, M_MenuSearch_OpenMouseItem},
+	{"mouse", "Options > Mouse", menusearch_mouse_labels, MOUSE_ITEMS, M_Mouse_GetItemText, M_Mouse_GetItemCvar, M_Mouse_GetItemHintText, MenuSearch_MouseKeywords, NULL, NULL, M_MenuSearch_OpenMouseItem},
 	{"controller", "Options > Controller", menusearch_controller_labels, CONTROLLER_ITEMS, M_Controller_GetItemText, M_Controller_GetItemCvar, NULL, MenuSearch_ControllerKeywords, NULL, MenuSearch_ControllerAvailable, M_MenuSearch_OpenControllerItem},
 	{"sky", "Options > Graphics > Sky", menusearch_sky_labels, SKY_ITEMS, M_Sky_GetItemText, M_Sky_GetItemCvar, NULL, MenuSearch_SkyKeywords, NULL, NULL, M_MenuSearch_OpenSkyItem},
 	{"skywind", "Options > Graphics > Sky > Skywind", menusearch_skywind_labels, SKYWIND_ITEMS, M_Skywind_GetItemText, NULL, NULL, MenuSearch_SkywindKeywords, M_Skywind_GetValueText, NULL, M_MenuSearch_OpenSkywindItem},
 	{"voip", "Options > Sound > VoIP", menusearch_voip_labels, VOIP_ITEMS, M_Voip_GetItemText, M_Voip_GetItemCvar, NULL, MenuSearch_VoipKeywords, NULL, NULL, M_MenuSearch_OpenVoipItem},
 	{"crosshair", "Options > HUD > Crosshair", menusearch_crosshair_labels, CROSSHAIR_ITEMS, M_Crosshair_GetItemText, M_Crosshair_GetItemCvar, NULL, MenuSearch_CrosshairKeywords, NULL, NULL, M_MenuSearch_OpenCrosshairItem},
 	{"playerxray", "Options > Game > Player Xray", menusearch_playerxray_labels, PLAYERXRAY_ITEMS, M_PlayerXray_GetItemText, M_PlayerXray_GetItemCvar, NULL, MenuSearch_PlayerXrayKeywords, M_PlayerXray_GetValueText, NULL, M_MenuSearch_OpenPlayerXrayItem},
-	{"extras", "Options > Misc", menusearch_extras_labels, Q_COUNTOF(menusearch_extras_labels), M_Extras_GetItemText, M_Extras_GetItemCvar, M_Extras_GetItemHintText, NULL, NULL, NULL, M_MenuSearch_OpenExtrasItem},
-	{"saving", "Options > Misc > Saving", menusearch_saving_labels, Q_COUNTOF(menusearch_saving_labels), M_Saving_GetItemText, M_Saving_GetItemCvar, NULL, NULL, M_Saving_GetValueText, NULL, M_MenuSearch_OpenSavingItem},
-	{"startup", "Options > Startup", menusearch_startup_labels, Q_COUNTOF(menusearch_startup_labels), M_Startup_GetItemText, M_Startup_GetItemCvar, NULL, NULL, NULL, MenuSearch_StartupAvailable, M_MenuSearch_OpenStartupItem},
-	{"demooptions", "Options > Demo Options", menusearch_demooptions_labels, Q_COUNTOF(menusearch_demooptions_labels), M_DemoOptions_GetItemText, M_DemoOptions_GetItemCvar, NULL, NULL, M_DemoOptions_GetValueText, NULL, M_MenuSearch_OpenDemoOptionsItem}
+	{"extras", "Options > Misc", menusearch_extras_labels, Q_COUNTOF(menusearch_extras_labels), M_Extras_GetItemText, M_Extras_GetItemCvar, M_Extras_GetItemHintText, MenuSearch_ExtrasKeywords, NULL, NULL, M_MenuSearch_OpenExtrasItem},
+	{"saving", "Options > Misc > Saving", menusearch_saving_labels, Q_COUNTOF(menusearch_saving_labels), M_Saving_GetItemText, M_Saving_GetItemCvar, NULL, MenuSearch_SavingKeywords, M_Saving_GetValueText, NULL, M_MenuSearch_OpenSavingItem},
+	{"startup", "Options > Startup", menusearch_startup_labels, Q_COUNTOF(menusearch_startup_labels), M_Startup_GetItemText, M_Startup_GetItemCvar, NULL, MenuSearch_StartupKeywords, NULL, MenuSearch_StartupAvailable, M_MenuSearch_OpenStartupItem},
+	{"demooptions", "Options > Demo Options", menusearch_demooptions_labels, Q_COUNTOF(menusearch_demooptions_labels), M_DemoOptions_GetItemText, M_DemoOptions_GetItemCvar, NULL, MenuSearch_DemoOptionsKeywords, M_DemoOptions_GetValueText, NULL, M_MenuSearch_OpenDemoOptionsItem}
 };
 
 static const char *MenuSearch_Label(const menusearch_provider_t *provider, int index)
@@ -22205,6 +22378,85 @@ static qboolean MenuSearch_ItemAvailable(const menusearch_provider_t *provider, 
 	return !provider->available_fn || provider->available_fn(index);
 }
 
+#define MENU_SEARCH_FUZZY_WORD_CHARS 63
+
+static int MenuSearch_EditDistance(const char *left, const char *right, int max_distance)
+{
+	int distance[MENU_SEARCH_QUERY_CHARS + 1][MENU_SEARCH_FUZZY_WORD_CHARS + 1];
+	int left_len = (int)strlen(left);
+	int right_len = (int)strlen(right);
+	int length_delta = left_len > right_len ? left_len - right_len : right_len - left_len;
+	int i, j;
+
+	if (left_len > MENU_SEARCH_QUERY_CHARS || right_len > MENU_SEARCH_FUZZY_WORD_CHARS ||
+		length_delta > max_distance)
+		return max_distance + 1;
+
+	for (i = 0; i <= left_len; ++i)
+		distance[i][0] = i;
+	for (j = 0; j <= right_len; ++j)
+		distance[0][j] = j;
+
+	for (i = 1; i <= left_len; ++i)
+	{
+		for (j = 1; j <= right_len; ++j)
+		{
+			int cost = left[i - 1] == right[j - 1] ? 0 : 1;
+			int best = q_min(distance[i - 1][j] + 1, distance[i][j - 1] + 1);
+
+			best = q_min(best, distance[i - 1][j - 1] + cost);
+			if (i > 1 && j > 1 && left[i - 1] == right[j - 2] && left[i - 2] == right[j - 1])
+				best = q_min(best, distance[i - 2][j - 2] + 1);
+			distance[i][j] = best;
+		}
+	}
+
+	return distance[left_len][right_len];
+}
+
+static int MenuSearch_FuzzyFieldScore(const char *field, const char *term)
+{
+	const char *word = field;
+	int term_len = (int)strlen(term);
+	int max_distance;
+	int best_score = 0;
+
+	if (term_len < 3)
+		return 0;
+	max_distance = term_len <= 5 ? 1 : term_len <= 9 ? 2 : 3;
+
+	while (*word)
+	{
+		const char *end;
+		char candidate[MENU_SEARCH_FUZZY_WORD_CHARS + 1];
+		int candidate_len, length_delta, distance, candidate_score;
+
+		while (*word == ' ')
+			word++;
+		if (!*word)
+			break;
+		end = word;
+		while (*end && *end != ' ')
+			end++;
+		candidate_len = (int)(end - word);
+		length_delta = term_len > candidate_len ? term_len - candidate_len : candidate_len - term_len;
+		if (candidate_len <= MENU_SEARCH_FUZZY_WORD_CHARS && length_delta <= max_distance)
+		{
+			memcpy(candidate, word, candidate_len);
+			candidate[candidate_len] = 0;
+			distance = MenuSearch_EditDistance(term, candidate, max_distance);
+			if (distance <= max_distance)
+			{
+				candidate_score = 70 - distance * 15 - length_delta * 3;
+				best_score = q_max(best_score, candidate_score);
+			}
+		}
+		word = end;
+	}
+
+	return best_score;
+}
+
 static int MenuSearch_Score(const menusearch_provider_t *provider, int index, const char *query)
 {
 	char label[96], path[96], cvarname[96], hint[192], keywords[192], haystack[672];
@@ -22227,7 +22479,25 @@ static int MenuSearch_Score(const menusearch_provider_t *provider, int index, co
 	{
 		const char *match = strstr(haystack, term);
 		if (!match)
-			return 0;
+		{
+			int fuzzy_score = 0;
+			int field_score;
+
+			field_score = MenuSearch_FuzzyFieldScore(label, term);
+			if (field_score) fuzzy_score = q_max(fuzzy_score, field_score + 60);
+			field_score = MenuSearch_FuzzyFieldScore(cvarname, term);
+			if (field_score) fuzzy_score = q_max(fuzzy_score, field_score + 40);
+			field_score = MenuSearch_FuzzyFieldScore(keywords, term);
+			if (field_score) fuzzy_score = q_max(fuzzy_score, field_score + 25);
+			field_score = MenuSearch_FuzzyFieldScore(path, term);
+			if (field_score) fuzzy_score = q_max(fuzzy_score, field_score + 10);
+			field_score = MenuSearch_FuzzyFieldScore(hint, term);
+			if (field_score) fuzzy_score = q_max(fuzzy_score, field_score);
+			if (!fuzzy_score)
+				return 0;
+			score += fuzzy_score;
+			continue;
+		}
 		score += 100;
 		if (!strcmp(label, term)) score += 900;
 		else if (!strncmp(label, term, strlen(term))) score += 500;
@@ -46748,6 +47018,74 @@ void M_DemoOptions_Mousemove(int cx, int cy)
 	else
 	{
 		M_DemoOptions_ClampCursor();
+	}
+}
+
+static const char *MenuSearch_ExtrasKeywords(int index)
+{
+	switch (index)
+	{
+	case EXTRAS_YIELD: return "performance cpu throttle sleep idle background battery";
+	case EXTRAS_NETEXTENSIONS: return "network protocol extensions compatibility fte";
+	case EXTRAS_DOWNLOADPOLICY: return "downloads files allow block security server content";
+	case EXTRAS_CONNECTRETRIES: return "reconnect connection attempts retry timeout network";
+	case EXTRAS_QCEXTENSIONS: return "quakec qc mod extensions compatibility";
+	case EXTRAS_PREDICTION: return "network latency lag movement prediction interpolation";
+	case EXTRAS_AUTODEMO: return "automatic record recording replay demos";
+	case EXTRAS_PORTPINGPROBE: return "server query ping latency browser network";
+	case EXTRAS_SPAWNTRAINER: return "practice training spawn timing jump";
+	case EXTRAS_ITEMBOB: return "pickup animation items quake3 q3 floating";
+	case EXTRAS_RESETCONFIG: return "restore defaults factory reset configuration settings";
+	case EXTRAS_PONG: return "minigame easter egg arcade";
+	case EXTRAS_HINTS: return "help tips tutorial paused assistance";
+	case EXTRAS_LIVEPREVIEW: return "preview settings instant realtime";
+	case EXTRAS_MODELVIEWER: return "models browser inspect preview mdl";
+	case EXTRAS_SAVING: return "savegame autosave autoload checkpoints";
+	case EXTRAS_SHORTCUTS: return "hotkeys keyboard keys commands reference";
+	case EXTRAS_VERSION: return "about build release commit revision information";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_SavingKeywords(int index)
+{
+	switch (index)
+	{
+	case SAVING_AUTOLOAD: return "automatic load continue resume savegame startup";
+	case SAVING_AUTOSAVE: return "automatic save checkpoint backup savegame";
+	case SAVING_AUTOSAVE_INTERVAL: return "frequency timer minutes checkpoint save";
+	case SAVING_INDICATOR: return "notification icon message saving status";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_StartupKeywords(int index)
+{
+	switch (index)
+	{
+	case STARTUP_PAK_TOGGLE: return "pak reorder priority load order mods files";
+	case STARTUP_PAK_LOADING: return "pak manager packages files addons mods";
+	case STARTUP_SCREEN: return "launch boot startup screen menu console";
+	case STARTUP_CUSTOM_COMMAND: return "launch command arguments console exec startup";
+	case STARTUP_FADE: return "startup quit transition animation fade";
+	case STARTUP_DEMO_ATTRACT: return "attract mode replay playback demo startup";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_DemoOptionsKeywords(int index)
+{
+	switch (index)
+	{
+	case DEMOOPTIONS_DEMOEYES: return "view weapon gun model playback replay";
+	case DEMOOPTIONS_FORMAT: return "recording file protocol compatibility qwd mvd dem";
+	case DEMOOPTIONS_AUTODEMO: return "automatic record recording replay matches";
+	case DEMOOPTIONS_DEMOREEL: return "playlist attract loop playback replays";
+	case DEMOOPTIONS_EYECAM: return "camera spectator view first person tracking";
+	case DEMOOPTIONS_BAR_TIMEOUT: return "controls overlay hide delay playback timeline";
+	case DEMOOPTIONS_MINFRAMES: return "short recordings filter minimum length frames";
+	case DEMOOPTIONS_MINFRAMES_DELETE: return "delete remove short recordings cleanup";
+	default: return NULL;
 	}
 }
 
