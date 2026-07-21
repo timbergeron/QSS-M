@@ -9,6 +9,7 @@
 <style>
   :root {
     color-scheme: dark light;
+    --navh: 61px;
     /* warm charcoal ground, Quake tan/gold, teal action accent */
     --ground:      #2b2926;
     --ground-2:    #211f1c;
@@ -52,7 +53,7 @@
   }
 
   * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+  html { scroll-behavior: smooth; scroll-padding-top: calc(var(--navh) + 16px); }
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
   body {
     margin: 0;
@@ -60,6 +61,7 @@
     background: var(--ground);
     color: var(--ink);
     line-height: 1.62;
+    overflow-wrap: break-word;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -71,8 +73,8 @@
   /* ---------- top nav ---------- */
   header.nav {
     position: sticky; top: 0; z-index: 40;
-    display: flex; align-items: center; gap: 20px;
-    padding: 0 clamp(16px, 4vw, 40px); height: 60px;
+    display: flex; align-items: center; gap: 12px 20px;
+    padding: 0 clamp(16px, 4vw, 40px); min-height: 60px;
     background: color-mix(in srgb, var(--ground-2) 88%, transparent);
     backdrop-filter: saturate(1.4) blur(10px);
     border-bottom: 1px solid var(--line);
@@ -80,22 +82,49 @@
   .brand { display: flex; align-items: baseline; gap: 10px; font-weight: 800; letter-spacing: .12em; }
   .brand .q { color: var(--gold-bright); }
   .brand .tag { font-size: .66rem; letter-spacing: .28em; color: var(--muted); text-transform: uppercase; }
-  nav.jump { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
+  nav.jump { margin-left: auto; display: flex; gap: 4px; min-width: 0; }
   nav.jump a {
-    font-size: .74rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 700;
+    font-size: .74rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; white-space: nowrap;
     color: var(--ink-soft); padding: 7px 12px; border-radius: 7px; border: 1px solid transparent;
   }
   nav.jump a:hover { color: var(--ink); background: var(--panel); border-color: var(--line); text-decoration: none; }
   .theme-btn {
-    font: inherit; font-size: .74rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    flex: none; display: grid; place-items: center; width: 28px; height: 28px; padding: 0;
     cursor: pointer; color: var(--ink-soft); background: var(--panel); border: 1px solid var(--line);
-    padding: 7px 12px; border-radius: 7px;
+    border-radius: 8px; transition: color .15s, border-color .15s;
   }
-  .theme-btn:hover { color: var(--ink); }
+  .theme-btn .ic { width: .85rem; height: .85rem; }
+  .theme-btn:hover { color: var(--gold-bright); border-color: var(--gold-deep); }
+
+  /* narrow screens: brand + toggle on row one, jump links become a swipeable strip */
+  @media (max-width: 720px) {
+    :root { --navh: 104px; }
+    header.nav {
+      flex-wrap: wrap; row-gap: 0;
+      padding-top: 9px; padding-bottom: 0;
+    }
+    .brand { font-size: .95rem; }
+    .theme-btn { margin-left: auto; width: 32px; height: 32px; }
+    nav.jump {
+      order: 3; flex-basis: 100%; margin-left: 0;
+      overflow-x: auto; overscroll-behavior-x: contain;
+      scrollbar-width: none; -ms-overflow-style: none;
+      padding: 6px 0 8px;
+      /* faded edges hint that the link row can be swiped horizontally */
+      -webkit-mask-image: linear-gradient(90deg, transparent, #000 12px, #000 calc(100% - 18px), transparent);
+      mask-image: linear-gradient(90deg, transparent, #000 12px, #000 calc(100% - 18px), transparent);
+    }
+    nav.jump::-webkit-scrollbar { display: none; }
+    nav.jump a { flex: none; min-height: 40px; display: inline-flex; align-items: center; }
+  }
+  @media (max-width: 400px) {
+    nav.jump { gap: 2px; }
+    nav.jump a { font-size: .7rem; letter-spacing: .08em; padding: 7px 9px; }
+  }
 
   /* ---------- layout ---------- */
   main { max-width: 940px; margin: 0 auto; padding: 0 clamp(16px, 4vw, 40px) 100px; }
-  section { scroll-margin-top: 76px; }
+  section, [id] { scroll-margin-top: calc(var(--navh) + 16px); }
 
   /* ---------- hero ---------- */
   .hero {
@@ -183,26 +212,33 @@
   .card p.result code { color: var(--gold-bright); }
 
   /* ---------- code blocks ---------- */
+  /* The copy button lives in its own toolbar row rather than floating over the
+     code — a long single-line command scrolls horizontally and would otherwise
+     run underneath an absolutely positioned button at any viewport width. */
   .code {
-    position: relative; margin: 8px 0 6px; border-radius: 10px; overflow: hidden;
+    margin: 8px 0 6px; border-radius: 10px; overflow: hidden;
     border: 1px solid #000; background: var(--code-bg);
+    display: flex; flex-direction: column;
   }
   .code pre {
-    margin: 0; padding: 16px 54px 16px 18px; overflow-x: auto;
+    margin: 0; padding: 14px 18px 16px; overflow-x: auto;
+    border-top: 1px solid rgba(255,255,255,.07);
     font-family: var(--mono); font-size: .86rem; line-height: 1.7; color: var(--code-ink);
     tab-size: 4;
   }
   .code pre .c { color: #7f8a6a; }           /* comment */
   .code pre .p { color: var(--gold-bright); } /* prompt / emphasis */
   .copy {
-    position: absolute; top: 9px; right: 9px; z-index: 2;
-    font: inherit; font-size: .68rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    align-self: flex-end; margin: 7px 8px; padding: 0;
+    display: grid; place-items: center; width: 30px; height: 30px;
     cursor: pointer; color: var(--ink-soft); background: rgba(255,255,255,.05);
-    border: 1px solid rgba(255,255,255,.14); padding: 5px 10px; border-radius: 7px;
+    border: 1px solid rgba(255,255,255,.14); border-radius: 7px;
     transition: color .15s, background .15s, border-color .15s;
   }
+  .copy .ic { width: .82rem; height: .82rem; }
   .copy:hover { color: var(--ink); background: rgba(255,255,255,.1); }
   .copy.done { color: var(--teal); border-color: var(--teal-deep); }
+  .copy.failed { color: var(--amber); border-color: var(--amber); }
 
   /* ---------- distro tabs ---------- */
   .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
@@ -223,6 +259,29 @@
   }
   footer a { color: var(--ink-soft); }
   footer .grow { flex: 1 1 auto; }
+
+  /* ---------- phone tuning ---------- */
+  @media (max-width: 560px) {
+    main { padding-bottom: 64px; }
+    .hero { border-radius: 14px; margin-bottom: 34px; }
+    .hero p.lede { font-size: 1rem; }
+    .hero .meta { margin-top: 20px; gap: 8px; }
+    .chip { font-size: .7rem; padding: 5px 10px; }
+
+    .callout { padding: 15px 16px; gap: 11px; margin-bottom: 34px; }
+
+    .sec-head { gap: 12px; margin-top: 42px; }
+    .sec-head .ord { width: 34px; height: 34px; border-radius: 9px; }
+    .ord .ic { width: 17px; height: 17px; }
+
+    .card { border-radius: 12px; }
+    .copy { margin: 6px 7px; font-size: .6rem; padding: 4px 8px; letter-spacing: .06em; }
+    .code pre { font-size: .78rem; padding: 12px 14px 14px; line-height: 1.65; }
+    .tab { font-size: .75rem; padding: 7px 12px; }
+    .step-label { letter-spacing: .12em; }
+
+    footer { gap: 10px 18px; padding-bottom: 44px; }
+  }
 </style>
 </head>
 <body>
@@ -232,6 +291,10 @@
   <symbol id="ic-ubuntu" viewBox="0 0 576 512"><path d="M469.2 75A75.6 75.6 0 1 0 317.9 75a75.6 75.6 0 1 0 151.2 0zM154.2 240.7A75.6 75.6 0 1 0 3 240.7a75.6 75.6 0 1 0 151.2 0zM57 346C75.6 392.9 108 433 150 461.1s91.5 42.6 142 41.7c-14.7-18.6-22.9-41.5-23.2-65.2c-6.8-.9-13.3-2.1-19.5-3.4c-26.8-5.7-51.9-17.3-73.6-34s-39.3-38.1-51.7-62.5c-20.9 9.9-44.5 12.8-67.1 8.2zm395.1 89.8a75.6 75.6 0 1 0 -151.2 0 75.6 75.6 0 1 0 151.2 0zM444 351.6c18.5 14.8 31.6 35.2 37.2 58.2c33.3-41.3 52.6-92.2 54.8-145.2s-12.5-105.4-42.2-149.4c-8.6 21.5-24 39.6-43.8 51.6c15.4 28.6 22.9 60.8 21.9 93.2s-10.7 64-28 91.6zM101.1 135.4c12.4 2.7 24.3 7.5 35.1 14.3c16.6-24.2 38.9-44.1 64.8-58S255.8 70.4 285.2 70c.2-5.9 .9-11.9 2-17.7c3.6-16.7 11.1-32.3 21.8-45.5c-47.7-3.8-95.4 6-137.6 28.5S94.3 91.7 70.8 133.4c2.7-.2 5.3-.3 8-.3c7.5 0 15 .8 22.4 2.3z"/></symbol>
   <symbol id="ic-apple" viewBox="0 0 384 512"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/></symbol>
   <symbol id="ic-windows" viewBox="0 0 448 512"><path d="M0 93.7l183.6-25.3v177.4H0V93.7zm0 324.6l183.6 25.3V268.4H0v149.9zm203.8 28L448 480V268.4H203.8v177.9zm0-380.6v180.1H448V32L203.8 65.7z"/></symbol>
+  <symbol id="ic-sun" viewBox="0 0 512 512"><path d="M361.5 1.2c5 2.1 8.6 6.6 9.6 11.9L391 121l107.9 19.8c5.3 1 9.8 4.6 11.9 9.6s1.5 10.7-1.6 15.2L446.9 256l62.3 90.3c3.1 4.5 3.7 10.2 1.6 15.2s-6.6 8.6-11.9 9.6L391 391 371.1 498.9c-1 5.3-4.6 9.8-9.6 11.9s-10.7 1.5-15.2-1.6L256 446.9l-90.3 62.3c-4.5 3.1-10.2 3.7-15.2 1.6s-8.6-6.6-9.6-11.9L121 391 13.1 371.1c-5.3-1-9.8-4.6-11.9-9.6s-1.5-10.7 1.6-15.2L65.1 256 2.8 165.7c-3.1-4.5-3.7-10.2-1.6-15.2s6.6-8.6 11.9-9.6L121 121 140.9 13.1c1-5.3 4.6-9.8 9.6-11.9s10.7-1.5 15.2 1.6L256 65.1 346.3 2.8c4.5-3.1 10.2-3.7 15.2-1.6zM160 256a96 96 0 1 1 192 0 96 96 0 1 1 -192 0zm224 0a128 128 0 1 0 -256 0 128 128 0 1 0 256 0z"/></symbol>
+  <symbol id="ic-copy" viewBox="0 0 448 512"><path d="M208 0H332.1c12.7 0 24.9 5.1 33.9 14.1l67.9 67.9c9 9 14.1 21.2 14.1 33.9V336c0 26.5-21.5 48-48 48H208c-26.5 0-48-21.5-48-48V48c0-26.5 21.5-48 48-48zM48 128h80v64H64V448H256V416h64v48c0 26.5-21.5 48-48 48H48c-26.5 0-48-21.5-48-48V176c0-26.5 21.5-48 48-48z"/></symbol>
+  <symbol id="ic-check" viewBox="0 0 448 512"><path d="M438.6 105.4c12.5 12.5 12.5 32.8 0 45.3l-256 256c-12.5 12.5-32.8 12.5-45.3 0l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0L160 338.7 393.4 105.4c12.5-12.5 32.8-12.5 45.3 0z"/></symbol>
+  <symbol id="ic-moon" viewBox="0 0 384 512"><path d="M223.5 32C100 32 0 132.3 0 256S100 480 223.5 480c60.6 0 115.5-24.2 155.8-63.4c5-4.9 6.3-12.5 3.1-18.7s-10.1-9.7-17-8.5c-9.8 1.7-19.8 2.6-30.1 2.6c-96.9 0-175.5-78.8-175.5-176c0-65.8 36-123.1 89.3-153.3c6.1-3.5 9.2-10.5 7.7-17.3s-7.3-11.9-14.3-12.5c-6.3-.5-12.6-.8-19-.8z"/></symbol>
   <symbol id="ic-warning" viewBox="0 0 512 512"><path d="M256 32c14.2 0 27.3 7.5 34.5 19.8l216 368c7.3 12.4 7.3 27.7 .2 40.1S486.3 480 472 480L40 480c-14.3 0-27.6-7.7-34.7-20.1s-7-27.8 .2-40.1l216-368C228.7 39.5 241.8 32 256 32zm0 128c-13.3 0-24 10.7-24 24l0 112c0 13.3 10.7 24 24 24s24-10.7 24-24l0-112c0-13.3-10.7-24-24-24zm32 224a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"/></symbol>
 </svg>
 
@@ -243,7 +306,9 @@
     <a href="#macos">macOS</a>
     <a href="#windows">Windows</a>
   </nav>
-  <button class="theme-btn" id="themeBtn" type="button" aria-label="Toggle light and dark theme">Dark</button>
+  <button class="theme-btn" id="themeBtn" type="button" aria-label="Switch to light theme">
+    <svg class="ic" aria-hidden="true"><use id="themeIcon" href="#ic-moon"/></svg>
+  </button>
 </header>
 
 <main>
@@ -277,7 +342,7 @@
     <p class="sec-sub">Every platform below starts the same way. Clone once, then jump to your OS.</p>
     <div class="card"><div class="body">
       <div class="code">
-        <button class="copy" type="button">Copy</button>
+        <button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button>
         <pre><span class="p">git</span> clone https://github.com/timbergeron/QSS-M.git
 <span class="p">cd</span> QSS-M</pre>
       </div>
@@ -294,50 +359,50 @@
 
     <div class="card"><div class="body">
       <div class="tabs" role="tablist" aria-label="Linux distribution">
-        <button class="tab" role="tab" aria-selected="true"  data-panel="deb">Debian / Ubuntu / Mint</button>
-        <button class="tab" role="tab" aria-selected="false" data-panel="fed">Fedora / RHEL / Rocky</button>
-        <button class="tab" role="tab" aria-selected="false" data-panel="arch">Arch / Manjaro</button>
-        <button class="tab" role="tab" aria-selected="false" data-panel="suse">openSUSE</button>
+        <button class="tab" id="tab-deb" role="tab" aria-selected="true" aria-controls="deb" tabindex="0" data-panel="deb">Debian / Ubuntu / Mint</button>
+        <button class="tab" id="tab-fed" role="tab" aria-selected="false" aria-controls="fed" tabindex="-1" data-panel="fed">Fedora / RHEL / Rocky</button>
+        <button class="tab" id="tab-arch" role="tab" aria-selected="false" aria-controls="arch" tabindex="-1" data-panel="arch">Arch / Manjaro</button>
+        <button class="tab" id="tab-suse" role="tab" aria-selected="false" aria-controls="suse" tabindex="-1" data-panel="suse">openSUSE</button>
       </div>
 
-      <div class="panel" id="deb">
+      <div class="panel" id="deb" role="tabpanel" aria-labelledby="tab-deb">
         <div class="step-label"><span class="n">1</span>Install dependencies</div>
-        <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">sudo</span> apt-get update
+        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> apt-get update
 <span class="p">sudo</span> apt-get install -y build-essential pkg-config libsdl2-dev \
   libgnutls28-dev libmad0-dev libopus-dev libopusfile-dev \
   libvorbis-dev zlib1g-dev libcurl4-openssl-dev zip</pre></div>
       </div>
 
-      <div class="panel" id="fed" hidden>
+      <div class="panel" id="fed" role="tabpanel" aria-labelledby="tab-fed" hidden>
         <div class="step-label"><span class="n">1</span>Install dependencies</div>
-        <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">sudo</span> dnf install -y gcc make pkgconf-pkg-config SDL2-devel gnutls-devel \
+        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> dnf install -y gcc make pkgconf-pkg-config SDL2-devel gnutls-devel \
   libmad-devel opus-devel opusfile-devel libvorbis-devel zlib-devel \
   libcurl-devel zip</pre></div>
         <p><span class="c" style="color:var(--muted)"># If dnf can't find libmad/opusfile, enable RPM Fusion (free) first:</span></p>
-        <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">sudo</span> dnf install -y \
+        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> dnf install -y \
   https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm</pre></div>
       </div>
 
-      <div class="panel" id="arch" hidden>
+      <div class="panel" id="arch" role="tabpanel" aria-labelledby="tab-arch" hidden>
         <div class="step-label"><span class="n">1</span>Install dependencies</div>
-        <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">sudo</span> pacman -S --needed base-devel sdl2 gnutls libmad \
+        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> pacman -S --needed base-devel sdl2 gnutls libmad \
   opus opusfile libvorbis zlib curl zip</pre></div>
       </div>
 
-      <div class="panel" id="suse" hidden>
+      <div class="panel" id="suse" role="tabpanel" aria-labelledby="tab-suse" hidden>
         <div class="step-label"><span class="n">1</span>Install dependencies</div>
-        <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">sudo</span> zypper install -y gcc make pkgconf-pkg-config libSDL2-devel \
+        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> zypper install -y gcc make pkgconf-pkg-config libSDL2-devel \
   gnutls-devel libmad-devel libopus-devel opusfile-devel \
   libvorbis-devel zlib-devel libcurl-devel zip</pre></div>
       </div>
 
       <div class="step-label"><span class="n">2</span>Build &amp; package</div>
-      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">./build-linux.sh</span></pre></div>
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">./build-linux.sh</span></pre></div>
       <p class="result"><b>Done.</b> You get the <code>QSS-M-l64</code> binary and a ready-to-ship <code>Quake/QSS-M-l64.zip</code>. Drop your <code>id1</code> folder beside the binary and run it.</p>
 
       <div class="step-label">Prefer to drive make yourself?</div>
       <p>Skip the script and compile directly &mdash; handy for quick dev iteration. The <code>QSS_LDFLAGS</code> below is required on GCC&nbsp;10+ (Ubuntu&nbsp;22.04+, current Fedora/Arch); without it the link fails with &ldquo;multiple definition&rdquo; errors:</p>
-      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">cd</span> Quake
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">cd</span> Quake
 <span class="p">make</span> USE_SDL2=1 QSS_LDFLAGS="-Wl,--allow-multiple-definition" -j8</pre></div>
     </div></div>
   </section>
@@ -353,20 +418,20 @@
     <div class="card"><div class="body">
       <div class="step-label"><span class="n">1</span>Install Xcode + build tools</div>
       <p>Install <strong>Xcode</strong> from the App Store (the full IDE, not just the command-line tools), then the Homebrew helpers the crypto libraries need:</p>
-      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">brew</span> install autoconf automake libtool pkg-config autoconf-archive</pre></div>
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">brew</span> install autoconf automake libtool pkg-config autoconf-archive</pre></div>
 
       <div class="step-label"><span class="n">2</span>Build &amp; package</div>
       <p>One command does everything &mdash; it runs <code>setup-vcpkg.sh</code> to fetch and compile the static deps, then builds and zips the app. <strong>Run it as your normal user, never with <code>sudo</code>.</strong></p>
-      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">cd</span> macOS
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">cd</span> macOS
 <span class="p">./build-macos.sh</span></pre></div>
-      <p><span class="c" style="color:var(--muted)"># The first run pulls a pinned vcpkg checkout and builds every static dep
-# (GnuTLS, Nettle, Opus, Vorbis, FLAC, ...) for both x86_64 and arm64 &mdash; go get a coffee.
+      <p><span class="c" style="color:var(--muted)"># The first run pulls a pinned vcpkg checkout and builds every static dep<br>
+# (GnuTLS, Nettle, Opus, Vorbis, FLAC, ...) for both x86_64 and arm64 &mdash; go get a coffee.<br>
 # Later builds reuse the vcpkg cache and are much faster.</span></p>
       <p class="result"><b>Done.</b> Your universal <code>QSS-M.app</code> and <code>QSS-M-macOS.zip</code> land in <code>macOS/build/Release/</code>.</p>
 
       <div class="step-label">Working in Xcode directly?</div>
       <p>If you skip the script and build the target yourself, run the dependency setup once first &mdash; otherwise the static libraries won't exist:</p>
-      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">cd</span> macOS
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">cd</span> macOS
 <span class="p">./setup-vcpkg.sh</span>            <span class="c" style="color:var(--muted)"># builds libs_universal/ for both arches</span>
 <span class="p">xcodebuild</span> -project QuakeSpasm.xcodeproj -target QSS-M -configuration Release</pre></div>
     </div></div>
@@ -378,7 +443,7 @@
       <span class="ord" aria-hidden="true"><svg class="ic"><use href="#ic-windows"/></svg></span>
       <h2>Windows</h2>
     </div>
-    <p class="sec-sub">Two proven paths. <strong>MSYS2</strong> is the easiest &mdash; it mirrors our CI exactly. Visual Studio is there if you'd rather stay in the IDE.</p>
+    <p class="sec-sub">Three proven paths. <strong>MSYS2</strong> is the easiest if you're on Windows. You can also <a href="#cross">cross-compile the <code>.exe</code> from Linux</a> &mdash; that's what our CI does. Visual Studio is there if you'd rather stay in the IDE.</p>
 
     <div class="card"><div class="body">
       <div class="step-label" style="color:var(--teal)">Recommended · MSYS2 (MinGW-w64)</div>
@@ -387,13 +452,13 @@
       <p>Grab the installer from <a href="https://www.msys2.org">msys2.org</a>. From the Start menu open the <strong>&ldquo;MSYS2 MINGW64&rdquo;</strong> shell (the blue one &mdash; not the plain UCRT/MSYS shell).</p>
 
       <div class="step-label"><span class="n">2</span>Install the toolchain &amp; libraries</div>
-      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">pacman</span> -S --needed git make zip \
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">pacman</span> -S --needed git make zip \
   mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gnutls \
   mingw-w64-x86_64-SDL2 mingw-w64-x86_64-opus mingw-w64-x86_64-libvorbis \
   mingw-w64-x86_64-zlib mingw-w64-x86_64-curl</pre></div>
 
       <div class="step-label"><span class="n">3</span>Clone &amp; build (64-bit)</div>
-      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">git</span> clone https://github.com/timbergeron/QSS-M.git
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">git</span> clone https://github.com/timbergeron/QSS-M.git
 <span class="p">cd</span> QSS-M/Quake
 <span class="p">make</span> -f Makefile.w64 USE_SDL2=1 SDL_CONFIG=sdl2-config -j8</pre></div>
       <p class="result"><b>Done.</b> Out comes <code>Quake/quakespasm.exe</code>. Keep the SDL2/codec DLLs from the <code>Windows/</code> folder beside it (the CI build scripts do this for you when packaging).</p>
@@ -403,9 +468,30 @@
 
       <hr style="border:none;border-top:1px solid var(--line);margin:26px 0">
 
+      <h3 class="step-label" style="color:var(--teal)" id="cross">Alternative · Cross-compile from Linux (MinGW-w64)</h3>
+      <p>No Windows machine needed &mdash; these commands use the same cross-build scripts and targets as the <code>windows.yml</code> workflow. SDL2, curl, zlib and the audio codec import libraries are already vendored in the repo's <code>Windows/</code> folder, so a normal local build only needs the cross toolchain and basic build utilities. CI additionally bootstraps GnuTLS for TLS-enabled artifacts.</p>
+
+      <div class="step-label"><span class="n">1</span>Install the MinGW-w64 cross toolchain</div>
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="c"># Debian / Ubuntu / Mint &mdash; one package covers both 64- and 32-bit targets</span>
+<span class="p">sudo</span> apt-get install -y build-essential git zip mingw-w64</pre></div>
+      <p>On Fedora/RHEL that's <code>mingw64-gcc mingw32-gcc</code>; on Arch it's <code>mingw-w64-gcc</code>.</p>
+
+      <div class="step-label"><span class="n">2</span>Build &amp; package</div>
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sh</span> ./build-w64.sh          <span class="c"># 64-bit</span>
+<span class="p">sh</span> ./build-w32.sh          <span class="c"># 32-bit</span></pre></div>
+      <p class="result"><b>Done.</b> The 64-bit command produces <code>Quake/QSS-M-w64.exe</code> and <code>Quake/QSS-M-w64.zip</code>; the 32-bit command produces the matching <code>QSS-M-w32.exe</code> and <code>QSS-M-w32.zip</code>. Each ZIP includes the required runtime DLLs.</p>
+      <p><span class="c" style="color:var(--muted)"># These scripts are checked in without the executable bit, so run them via <code>sh</code><br>
+# (or <code>chmod +x build-w64.sh</code> first). Override the defaults with environment<br>
+# variables: <code>MAKEARGS=-j16</code>, <code>TARGET_TRIPLET=</code>, <code>CROSS_PREFIX=</code>, <code>PKG_CONFIG=</code>.</span></p>
+
+      <div class="step-label">A word about TLS</div>
+      <p>Debian and friends ship no MinGW GnuTLS package. If <code>pkg-config</code> can't find a cross GnuTLS, the makefile prints <code>building without USE_GNUTLS</code> and carries on &mdash; you still get a perfectly good <code>.exe</code>, just without TLS support. To get a TLS-enabled build you have to cross-compile GnuTLS and its dependencies (GMP, Nettle, libtasn1) as static libraries first; the <a href="https://github.com/timbergeron/QSS-M/blob/qsrebase/.github/workflows/windows.yml">windows.yml</a> workflow does this step by step and is the recipe to copy.</p>
+
+      <hr style="border:none;border-top:1px solid var(--line);margin:26px 0">
+
       <div class="step-label" style="color:var(--gold)">Alternative · Visual Studio 2022</div>
       <p>Open <code>Windows/VisualStudio/quakespasm.sln</code>, select <strong>Release / x64</strong>, and hit Build. Or from a Developer prompt:</p>
-      <div class="code"><button class="copy" type="button">Copy</button><pre><span class="p">msbuild</span> Windows\VisualStudio\quakespasm-sdl2.vcxproj ^
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">msbuild</span> Windows\VisualStudio\quakespasm-sdl2.vcxproj ^
   -p:Configuration=Release -p:Platform=x64</pre></div>
     </div></div>
   </section>
@@ -441,9 +527,13 @@
   // --- theme toggle (defaults to dark, honors OS, remembers choice) ---
   (function () {
     var root = document.documentElement, btn = document.getElementById('themeBtn');
+    var icon = document.getElementById('themeIcon');
     function set(mode) {
+      var dark = mode === 'dark';
       root.setAttribute('data-theme', mode);
-      btn.textContent = mode === 'dark' ? 'Dark' : 'Light';
+      // show the current theme; the label announces what clicking will do
+      icon.setAttribute('href', dark ? '#ic-moon' : '#ic-sun');
+      btn.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
       try { localStorage.setItem('qssm-theme', mode); } catch (e) {}
     }
     var saved;
@@ -454,16 +544,43 @@
     });
   })();
 
+  // --- keep --navh in sync with the real header height so anchor jumps land right ---
+  (function () {
+    var hdr = document.querySelector('header.nav');
+    function measure() {
+      document.documentElement.style.setProperty('--navh', hdr.offsetHeight + 'px');
+    }
+    measure();
+    if (window.ResizeObserver) new ResizeObserver(measure).observe(hdr);
+    else addEventListener('resize', measure);
+  })();
+
   // --- distro tabs ---
   document.querySelectorAll('.tabs').forEach(function (group) {
     var tabs = group.querySelectorAll('.tab');
+    function selectTab(tab, moveFocus) {
+      tabs.forEach(function (t) {
+        var on = t === tab;
+        t.setAttribute('aria-selected', on);
+        t.setAttribute('tabindex', on ? '0' : '-1');
+        document.getElementById(t.dataset.panel).hidden = !on;
+      });
+      if (moveFocus) tab.focus();
+    }
     tabs.forEach(function (tab) {
       tab.addEventListener('click', function () {
-        tabs.forEach(function (t) {
-          var on = t === tab;
-          t.setAttribute('aria-selected', on);
-          document.getElementById(t.dataset.panel).hidden = !on;
-        });
+        selectTab(tab, false);
+      });
+      tab.addEventListener('keydown', function (event) {
+        var current = Array.prototype.indexOf.call(tabs, tab);
+        var next = current;
+        if (event.key === 'ArrowRight') next = (current + 1) % tabs.length;
+        else if (event.key === 'ArrowLeft') next = (current - 1 + tabs.length) % tabs.length;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = tabs.length - 1;
+        else return;
+        event.preventDefault();
+        selectTab(tabs[next], true);
       });
     });
   });
@@ -490,16 +607,22 @@
   }
 
   document.querySelectorAll('.code .copy').forEach(function (btn) {
+    var use = btn.querySelector('use');
+    function show(icon, label, state) {
+      use.setAttribute('href', icon);
+      btn.setAttribute('aria-label', label);
+      btn.classList.remove('done', 'failed');
+      if (state) btn.classList.add(state);
+    }
     btn.addEventListener('click', function () {
       if (btn.classList.contains('done')) return;   // ignore rapid re-clicks
       var code = btn.parentElement.querySelector('pre').innerText;
-      var old = btn.textContent;
       copyText(code).then(function () {
-        btn.textContent = 'Copied'; btn.classList.add('done');
-        setTimeout(function () { btn.textContent = old; btn.classList.remove('done'); }, 1400);
+        show('#ic-check', 'Copied', 'done');
+        setTimeout(function () { show('#ic-copy', 'Copy to clipboard'); }, 1400);
       }).catch(function () {
-        btn.textContent = 'Copy failed';
-        setTimeout(function () { btn.textContent = old; }, 1400);
+        show('#ic-warning', 'Copy failed', 'failed');
+        setTimeout(function () { show('#ic-copy', 'Copy to clipboard'); }, 1400);
       });
     });
   });
