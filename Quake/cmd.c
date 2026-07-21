@@ -1033,6 +1033,8 @@ static void Cmd_PrintServerHistory (void)
 	filelist_item_t *item;
 	int count = 0;
 
+	ServerList_Init();
+
 	Con_Printf("\n");
 	for (item = serverlist; item; item = item->next)
 	{

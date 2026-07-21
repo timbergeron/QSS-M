@@ -3613,7 +3613,10 @@ Particles_Completion_f -- woods #particlelist
 */
 void Particles_Completion_f (cvar_t* cvar, const char* partial)
 {
-	filelist_item_t* current = particlelist;
+	filelist_item_t* current;
+
+	ParticleList_Init();
+	current = particlelist;
 
 	while (current != NULL) {
 		Con_AddToTabList(current->name, partial, NULL, NULL); // #demolistsort add arg

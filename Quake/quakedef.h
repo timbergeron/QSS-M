@@ -486,6 +486,7 @@ void TextList_Init (void); // woods #textlist
 void TextList_EnsureInit (void); // woods #textlist -- lazy build on first tab-complete
 void NameHistory_Init (void); // woods #namehistory
 void NameHistory_Add (const char *name); // woods #namehistory
+void ContentList_EnsureInit (filelist_item_t **list); // lazy content-list dispatch for consumers
 
 
 void ExtraMaps_NewGame (void);

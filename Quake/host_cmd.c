@@ -733,6 +733,7 @@ static void FileList_Clear (filelist_item_t **list)
 }
 
 filelist_item_t	*extralevels;
+static qboolean extramaps_initialized;
 
 void ExtraMaps_Add (const char *name)
 {
@@ -754,6 +755,10 @@ void ExtraMaps_Init (void)
 	searchpath_t	*search;
 	pack_t		*pak;
 	int		i;
+
+	if (extramaps_initialized)
+		return;
+	extramaps_initialized = true;
 
 	// we don't want to list the maps in id1 pakfiles,
 	// because these are not "add-on" levels
@@ -813,13 +818,17 @@ void ExtraMaps_Init (void)
 static void ExtraMaps_Clear (void)
 {
 	FileList_Clear(&extralevels);
+	extramaps_initialized = false;
 	descriptionsParsed = false;
 }
 
 void ExtraMaps_NewGame (void)
 {
+	qboolean rebuild = extramaps_initialized;
+
 	ExtraMaps_Clear ();
-	ExtraMaps_Init ();
+	if (rebuild)
+		ExtraMaps_Init ();
 }
 
 //==============================================================================
@@ -1104,6 +1113,8 @@ void ExtraMaps_ParseDescriptions(void)
 	filelist_item_t* level;
 	filelist_item_t* extralevels_from_json = NULL;
 
+	ExtraMaps_Init();
+
 	LoadMapDescriptionsFromJSON(&extralevels_from_json);
 
 	for (level = extralevels; level; level = level->next)
@@ -1226,6 +1237,7 @@ static void Host_Maps_f (void) // prints worldspawn map description
 //==============================================================================
 
 filelist_item_t* folderlist;
+static qboolean folderlist_initialized;
 
 static void FolderList_Add (const char* name)
 {
@@ -1235,10 +1247,13 @@ static void FolderList_Add (const char* name)
 static void FolderList_Clear (void)
 {
 	FileList_Clear (&folderlist);
+	folderlist_initialized = false;
 }
 
 void FolderList_Rebuild (void)
 {
+	if (!folderlist_initialized)
+		return;
 	FolderList_Clear ();
 	FolderList_Init ();
 }
@@ -1250,6 +1265,10 @@ void FolderList_Init(void)
 	HANDLE		fhnd;
 	DWORD		attribs;
 	char		dir_string[MAX_OSPATH], mod_string[MAX_OSPATH];
+
+	if (folderlist_initialized)
+		return;
+	folderlist_initialized = true;
 
 	q_snprintf(dir_string, sizeof(dir_string), "%s/*", com_gamedir);
 	fhnd = FindFirstFile(dir_string, &fdat);
@@ -1278,6 +1297,10 @@ void FolderList_Init(void)
 	DIR* dir_p, * mod_dir_p;
 	struct dirent* dir_t;
 	char		dir_string[MAX_OSPATH], mod_string[MAX_OSPATH];
+
+	if (folderlist_initialized)
+		return;
+	folderlist_initialized = true;
 
 	q_snprintf(dir_string, sizeof(dir_string), "%s/", com_gamedir);
 	dir_p = opendir(dir_string);
@@ -1310,6 +1333,7 @@ void FolderList_Init(void)
 //==============================================================================
 
 filelist_item_t	*modlist;
+static qboolean modlist_initialized;
 
 static void Modlist_Add (const char *name)
 {
@@ -1347,6 +1371,10 @@ static void Modlist_AddDirectoriesInPath (const char *path)
 void Modlist_Init (void)
 {
 	char modpath[MAX_OSPATH];
+
+	if (modlist_initialized)
+		return;
+	modlist_initialized = true;
 
 	Modlist_AddDirectoriesInPath(com_basedir);
 	q_snprintf(modpath, sizeof(modpath), "%s/games", com_basedir);
@@ -1387,6 +1415,10 @@ static void Modlist_AddDirectoriesInPath (const char *path)
 void Modlist_Init (void)
 {
 	char modpath[MAX_OSPATH];
+
+	if (modlist_initialized)
+		return;
+	modlist_initialized = true;
 
 	Modlist_AddDirectoriesInPath(com_basedir);
 	q_snprintf(modpath, sizeof(modpath), "%s/games", com_basedir);
@@ -1653,6 +1685,8 @@ static qboolean Host_Modvote_IsValidMod(const char *modname)
 {
 	filelist_item_t *mod;
 
+	Modlist_Init();
+
 	for (mod = modlist; mod; mod = mod->next)
 	{
 		if (!q_strcasecmp(mod->name, modname))
@@ -1750,6 +1784,8 @@ static void Host_Modvote_PrintAvailableMods(client_t *client, qboolean motd_form
 	const char *active_mod = COM_GetGameNames(false);
 	char safe_active_mod[2048];
 	char safe_modname[MAX_QPATH * 2];
+
+	Modlist_Init();
 
 	if (motd_format)
 		Host_Modvote_Printf(client, "Available vote options:\n");
@@ -2190,6 +2226,7 @@ static void Host_Modvote_f(void)
 //==============================================================================
 
 filelist_item_t* serverlist;
+static qboolean serverlist_initialized;
 
 #define SERVERHISTORY_TIME_LENGTH 21
 
@@ -2328,6 +2365,8 @@ qboolean ServerHistory_Write (void)
 	filelist_item_t *item;
 	qboolean ok = true;
 	qboolean first = true;
+
+	ServerList_Init();
 
 	if (serverhistory_write_blocked)
 		return false;
@@ -2576,6 +2615,10 @@ void ServerList_Init(void)
 	qboolean migration_error = false;
 	size_t i;
 
+	if (serverlist_initialized)
+		return;
+	serverlist_initialized = true;
+
 	q_snprintf(name, sizeof(name), "%s/id1", com_basedir); //  make an id1 folder if it doesnt exist already #smartafk
 	Sys_mkdir(name);
 
@@ -2616,6 +2659,8 @@ void ServerHistory_Record (const char *server)
 	if (!ServerHistory_ValidAddress(server))
 		return;
 
+	ServerList_Init();
+
 	if (!ServerHistory_GetTimestamp(timestamp, sizeof(timestamp)))
 		timestamp[0] = '\0';
 	item = ServerHistory_Find(server, &prev);
@@ -2646,6 +2691,7 @@ void ServerHistory_Record (const char *server)
 //==============================================================================
 
 filelist_item_t* namehistorylist;
+static qboolean namehistory_initialized;
 
 #define NAMEHISTORY_FILE "names.json"
 #define NAMEHISTORY_FILE_LEGACY "names.txt"
@@ -3082,6 +3128,10 @@ void NameHistory_Init (void)
 {
 	char path[MAX_OSPATH];
 
+	if (namehistory_initialized)
+		return;
+	namehistory_initialized = true;
+
 	FileList_Clear(&namehistorylist);
 	NameHistory_EnsureDir();
 
@@ -3101,6 +3151,8 @@ void NameHistory_Add (const char *name)
 
 	if (!name || !name[0])
 		return;
+
+	NameHistory_Init();
 
 	NameHistory_GetTimestamp(last_used, sizeof(last_used));
 	item = NameHistory_Find(name, &prev);
@@ -3142,6 +3194,7 @@ void NameHistory_Add (const char *name)
 
 static void NameHistory_Clear (void)
 {
+	NameHistory_Init();
 	FileList_Clear(&namehistorylist);
 	NameHistory_Write();
 }
@@ -3168,6 +3221,8 @@ static void Host_NameHistory_Completion_f (const char *partial)
 {
 	if (Cmd_Argc() != 2)
 		return;
+
+	NameHistory_Init();
 
 	Con_AddToTabList("-d", partial, "show dates", NULL);
 	Con_AddToTabList("-c", partial, "clear history", NULL);
@@ -3234,6 +3289,7 @@ static void Host_NameHistory_f (void)
 
 	show_dates = false;
 	clear_history = false;
+	NameHistory_Init();
 
 	if (Cmd_Argc() > 2)
 	{
@@ -3335,10 +3391,12 @@ static void Host_NameHistory_f (void)
 //==============================================================================
 
 filelist_item_t* bookmarkslist;
+static qboolean bookmarkslist_initialized;
 
 static void BookmarksList_Clear(void)
 {
 	FileList_Clear(&bookmarkslist);
+	bookmarkslist_initialized = false;
 }
 
 void BookmarksList_Rebuild(void)
@@ -3495,6 +3553,8 @@ void BookmarksList_Write(void)
 	FILE* file;
 	qboolean ok = true;
 
+	BookmarksList_Init();
+
 	q_snprintf(fname, sizeof(fname), "%s/id1", com_basedir);
 	Sys_mkdir(fname);
 
@@ -3587,6 +3647,10 @@ void BookmarksList_Init(void)
 	FILE* file;
 	long file_size;
 	char* buffer;
+
+	if (bookmarkslist_initialized)
+		return;
+	bookmarkslist_initialized = true;
 
 	q_snprintf(fname, sizeof(fname), "%s/id1", com_basedir);
 	Sys_mkdir(fname);
@@ -3937,14 +4001,18 @@ void ExecList_Init(void)
 //==============================================================================
 
 filelist_item_t* particlelist;
+static qboolean particlelist_initialized;
 
 static void ParticleList_Clear(void)
 {
 	FileList_Clear (&particlelist);
+	particlelist_initialized = false;
 }
 
 void ParticleList_Rebuild (void)
 {
+	if (!particlelist_initialized)
+		return;
 	ParticleList_Clear ();
 	ParticleList_Init ();
 }
@@ -3964,6 +4032,10 @@ void ParticleList_Init (void)
 	searchpath_t* search;
 	pack_t* pak;
 	int		i;
+
+	if (particlelist_initialized)
+		return;
+	particlelist_initialized = true;
 
 	FileList_Add ("classic", NULL, &particlelist); // woods #demolistsort add arg
 
@@ -4037,14 +4109,18 @@ void ParticleList_Init (void)
 //==============================================================================
 
 filelist_item_t	*demolist;
+static qboolean demolist_initialized;
 
 static void DemoList_Clear (void)
 {
 	FileList_Clear (&demolist);
+	demolist_initialized = false;
 }
 
 void DemoList_Rebuild (void)
 {
+	if (!demolist_initialized)
+		return;
 	DemoList_Clear ();
 	DemoList_Init ();
 }
@@ -4069,6 +4145,10 @@ void DemoList_Init (void)
 	searchpath_t	*search;
 	pack_t		*pak;
 	int		i;
+
+	if (demolist_initialized)
+		return;
+	demolist_initialized = true;
 	
 	for (search = com_searchpaths; search; search = search->next)
 	{
@@ -4232,14 +4312,18 @@ void DemoList_Init (void)
 //==============================================================================
 
 filelist_item_t* skylist;
+static qboolean skylist_initialized;
 
 static void SkyList_Clear (void)
 {
 	FileList_Clear (&skylist);
+	skylist_initialized = false;
 }
 
 void SkyList_Rebuild(void)
 {
+	if (!skylist_initialized)
+		return;
 	SkyList_Clear ();
 	SkyList_Init ();
 }
@@ -4314,6 +4398,11 @@ void SkyList_Init (void)
 {
 	searchpath_t* search;
 	char filestring[MAX_OSPATH];
+
+	if (skylist_initialized)
+		return;
+	skylist_initialized = true;
+
 	for (search = com_searchpaths; search; search = search->next)
 	{
 		if (!search->pack) //directory
@@ -4349,14 +4438,18 @@ void SkyList_Init (void)
 //==============================================================================
 
 filelist_item_t* musiclist;
+static qboolean musiclist_initialized;
 
 static void MusicList_Clear (void)
 {
 	FileList_Clear (&musiclist);
+	musiclist_initialized = false;
 }
 
 void MusicList_Rebuild (void)
 {
+	if (!musiclist_initialized)
+		return;
 	MusicList_Clear ();
 	MusicList_Init ();
 }
@@ -4375,6 +4468,10 @@ void MusicList_Init(void)
 	searchpath_t* search;
 	pack_t* pak;
 	int i;
+
+	if (musiclist_initialized)
+		return;
+	musiclist_initialized = true;
 
 	for (search = com_searchpaths; search; search = search->next)
 	{
@@ -4440,6 +4537,30 @@ void MusicList_Init(void)
 			}
 		}
 	}
+}
+
+void ContentList_EnsureInit(filelist_item_t **list)
+{
+	if (list == &extralevels)
+		ExtraMaps_Init();
+	else if (list == &modlist)
+		Modlist_Init();
+	else if (list == &demolist)
+		DemoList_Init();
+	else if (list == &skylist)
+		SkyList_Init();
+	else if (list == &particlelist)
+		ParticleList_Init();
+	else if (list == &serverlist)
+		ServerList_Init();
+	else if (list == &bookmarkslist)
+		BookmarksList_Init();
+	else if (list == &folderlist)
+		FolderList_Init();
+	else if (list == &musiclist)
+		MusicList_Init();
+	else if (list == &namehistorylist)
+		NameHistory_Init();
 }
 
 //==============================================================================
@@ -4634,6 +4755,8 @@ static void Host_Mods_f (void)
 {
 	int i;
 	filelist_item_t	*mod;
+
+	Modlist_Init();
 
 	for (mod = modlist, i=0; mod; mod = mod->next, i++)
 		Con_SafePrintf ("   %s\n", mod->name);
@@ -8130,6 +8253,8 @@ static void Host_Randmap_f (void)
 	if (cmd_source != src_command)
 		return;
 
+	ExtraMaps_Init();
+
 	for (level = extralevels, numlevels = 0; level; level = level->next)
 		numlevels++;
 
@@ -8332,6 +8457,8 @@ qboolean Host_GetLastServer(char *name, size_t namesize)
 {
 	if (!name || !namesize)
 		return false;
+
+	ServerList_Init();
 
 	if (!serverlist)
 	{
@@ -9279,6 +9406,7 @@ static void Host_Name_f (void)
 		// recorded (e.g. set via a config/Cvar_Set that bypassed this path),
 		// back-fill it before logging the new name so the history stays honest.
 		// Skip the "player" default; it's the uninitialized state, not a chosen name.
+		NameHistory_Init();
 		if (!is_first_time && cl_name.string[0] &&
 			Q_strcmp(cl_name.string, default_name) != 0 &&
 			!NameHistory_Find(cl_name.string, NULL))
@@ -11240,6 +11368,8 @@ qboolean CompleteGive (const char* partial, void* unused) // woods #give+
 
 qboolean CompleteMapSize (const char *partial, void *unused)
 {
+	ExtraMaps_Init();
+
 	if (Cmd_Argc() == 2)
 	{
 		Con_AddToTabList("-l", partial, NULL, NULL);

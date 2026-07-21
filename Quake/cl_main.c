@@ -7679,6 +7679,8 @@ static void CL_Name_Completion_f (cvar_t *cvar, const char *partial)
 	if (Cmd_Argc() != 2)
 		return;
 
+	NameHistory_Init();
+
 	match_partial = Con_DequakePartial (partial, unfun_partial, sizeof(unfun_partial));
 
 	for (item = namehistorylist; item; item = item->next)

@@ -2621,18 +2621,7 @@ void Host_Init (void)
 
 		V_Init ();
 		Chase_Init ();
-		ExtraMaps_Init (); //johnfitz
-		Modlist_Init (); //johnfitz
-		DemoList_Init (); //ericw
-		SkyList_Init (); // woods #skylist
-		// ExecList/TextList are built lazily on first tab-complete (see CompleteFileList) to cut launch time
-		ParticleList_Init (); // woods #particlelist
-		ServerList_Init(); // woods #serverlist
-		NameHistory_Init(); // woods #namehistory
-		BookmarksList_Init (); // woods #bookmarksmenu
-		FolderList_Init(); // woods #folderlist
-		MusicList_Init (); // woods #musiclist
-		M_CheckMods (); // woods #modsmenu (iw)
+		// Filesystem-backed content lists are built lazily by their first consumer.
 		VID_Init ();
 		IN_Init ();
 		TexMgr_Init (); //johnfitz
@@ -2645,6 +2634,7 @@ void Host_Init (void)
 		Sbar_Init ();
 		CL_Init ();
 		M_Init(); // woods move this up for tab complete system #iwtabcomplete
+		M_CheckMods (); // woods #modsmenu (iw)
 	}
 	else // woods -- initialize lists for dedicated server argument completion
 	{

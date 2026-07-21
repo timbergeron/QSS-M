@@ -7723,6 +7723,8 @@ static int M_MultiPlayer_TotalItems(void);
 static int M_Bookmarks_CountPinned(void)
 {
 	int count = 0;
+
+	BookmarksList_Init();
 	for (filelist_item_t* item = bookmarkslist; item; item = item->next)
 	{
 		char alias[BOOKMARK_ALIAS_LENGTH];
@@ -7747,6 +7749,8 @@ static int M_Bookmarks_GetPinned(pinnedbookmark_t* out, int max_pins)
 
 	if (!out || max_pins <= 0)
 		return 0;
+
+	BookmarksList_Init();
 
 	for (filelist_item_t* item = bookmarkslist; item && count < max_pins; item = item->next)
 	{
@@ -8154,6 +8158,7 @@ static void M_Setup_UpdateNameHint(void) // woods #namehistory
 #define	NUM_SETUP_CMDS	7 // woods 5 to 6 #namemaker
 void M_Menu_Setup_f (void)
 {
+	NameHistory_Init();
 	key_dest = key_menu;
 	m_state = m_setup;
 	m_entersound = true;
@@ -8689,6 +8694,7 @@ static qboolean M_NameMaker_TextFieldKey(int k)
 
 void M_Menu_NameMaker_f (void)
 {
+	NameHistory_Init();
 	key_dest = key_menu;
 	//key_special_dest = 1;
 	m_state = m_namemaker;
@@ -11551,6 +11557,8 @@ static qboolean M_Menu_TabCompleteNameHistory(menu_textfield_t *field,
 
 	if (!buffer_size)
 		return false;
+
+	NameHistory_Init();
 
 	prefix_len = (size_t)CLAMP(0, field->cursor, (int)strlen(buffer));
 	if (prefix_len >= sizeof(prefix))
@@ -14939,6 +14947,7 @@ static void M_Sky_KickLivePreview(void)
 
 void M_Menu_Sky_f(void)
 {
+	SkyList_Init();
 	key_dest = key_menu;
 	m_state = m_sky;
 	m_entersound = true;
@@ -28057,6 +28066,8 @@ const char* GetProtocolDescription(int protocol_cursor)
 
 void M_Menu_LanConfig_f (void)
 {
+	if (JoiningGame)
+		ServerList_Init();
 	key_dest = key_menu;
 	m_state = m_lanconfig;
 	m_entersound = true;
@@ -28729,6 +28740,8 @@ static void M_History_Init(void)
 {
 	filelist_item_t* item;
 
+	ServerList_Init();
+
 	historymenu.list.viewsize = MAX_VIS_HISTORY;
 	historymenu.list.cursor = -1;
 	historymenu.list.scroll = 0;
@@ -28996,6 +29009,8 @@ int BookmarkCompare(const void* a, const void* b)
 static void M_Bookmarks_Init(void)
 {
 	filelist_item_t* item;
+
+	BookmarksList_Init();
 
 	bookmarksmenu.list.viewsize = MAX_VIS_BOOKMARKS;
 	bookmarksmenu.list.cursor = -1;
@@ -29303,6 +29318,7 @@ static void M_Bookmarks_Edit_ClearTextSelections(void)
 
 void M_Menu_Bookmarks_Edit_f (void)
 {
+	BookmarksList_Init();
 	key_dest = key_menu;
 	m_state = m_bookmarks_edit;
 	m_entersound = true;
@@ -30020,6 +30036,8 @@ static void M_GameOptions_SaveHistory(const char *selected_map)
 
 void M_Menu_GameOptions_f (void)
 {
+	ExtraMaps_Init();
+	Modlist_Init();
 	key_dest = key_menu;
 	m_state = m_gameoptions;
 	IN_UpdateGrabs();
@@ -34578,6 +34596,7 @@ static qboolean M_Mods_MouseYInDownloadGap(int yrel)
 
 void M_Menu_Mods_f(void)
 {
+	Modlist_Init();
 	key_dest = key_menu;
 	modsmenu.prev = m_state;
 	m_state = m_mods;
@@ -35426,6 +35445,7 @@ static void M_DownloadMods_Init(void)
 
 void M_Menu_DownloadMods_f(void)
 {
+	Modlist_Init();
 	key_dest = key_menu;
 	downloadmodsmenu.prev = m_state;
 	m_state = m_downloadmods;

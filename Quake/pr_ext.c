@@ -6260,12 +6260,15 @@ static void PF_getgamedirinfo(void)
 	int diridx = G_FLOAT(OFS_PARM0);
 	int prop = G_FLOAT(OFS_PARM1);
 
-	struct filelist_item_s *mod = modlist;
+	struct filelist_item_s *mod;
 	char *s;
 
 	G_INT(OFS_RETURN) = 0;
 	if (diridx < 0)
 		return;
+
+	Modlist_Init();
+	mod = modlist;
 
 	while (mod && diridx --> 0)
 		mod = mod->next;

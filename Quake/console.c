@@ -3576,6 +3576,8 @@ static qboolean CompleteFileList (const char* partial, void* param) // woods #iw
 		ExecList_EnsureInit (); // built lazily to keep filesystem scans off the launch path
 	else if (list == &textlist)
 		TextList_EnsureInit ();
+	else
+		ContentList_EnsureInit (list);
 	for (file = *list; file; file = file->next)
 		Con_AddToTabList (file->name, partial, NULL, NULL);
 	return true;
@@ -3588,6 +3590,7 @@ static qboolean CompleteServerHistory(const char *partial, void *unused)
 
 	if (Cmd_Argc() != 2)
 		return false;
+	ServerList_Init();
 	for (file = serverlist; file; file = file->next)
 	{
 		char display[MAX_SERVER_ADDRESS_LEN];
@@ -3830,6 +3833,8 @@ static qboolean CompleteFileListDemo (const char* partial, void* param) // woods
 	filelist_item_t* subdir_demos = NULL;
 	filelist_item_t* completed_demos = NULL;
 	char currentDateStr[80];
+
+	ContentList_EnsureInit(list);
 
 	// Get current date/time for the last demo aliases
 	time_t now = time(NULL);

@@ -1643,7 +1643,10 @@ Extralevels_Completion_f --  woods #iwtabcomplete
 */
 void Extralevels_Completion_f (cvar_t* cvar, const char* partial)
 {
-	filelist_item_t* current = extralevels;
+	filelist_item_t* current;
+
+	ExtraMaps_Init();
+	current = extralevels;
 
 	while (current != NULL) {
 		Con_AddToTabList (current->name, partial, NULL, NULL); // #demolistsort add arg
