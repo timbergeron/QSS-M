@@ -9022,7 +9022,6 @@ enum
 	OPT_CUSTOMIZE = 0,
 	OPT_MOUSE,
 	OPT_CONTROLLER,
-	OPT_MENUSEARCH,
 	OPT_WEAPONWHEEL,
 	OPT_VIDEO,
 	OPT_GRAPHICS,
@@ -9033,6 +9032,7 @@ enum
 	OPT_STARTUP,
 	OPT_DEMOOPTIONS,
 	OPT_EXTRAS,
+	OPT_MENUSEARCH,
 	OPT_SPACE,       // Spacer
 	OPT_MENUSCALE,
 	OPT_CONSOLE,
@@ -9094,20 +9094,10 @@ static qboolean M_Options_AcceptWheelMove(int dir)
 
 static int M_Options_RowY(int item)
 {
-	if (!menu_search_enable.value)
-	{
-		if (item == OPT_MENUSEARCH)
-			return -1000;
-		if (item > OPT_MENUSEARCH)
-			item--;
-	}
-	else
-	{
-		if (item == OPT_SPACE)
-			return -1000;
-		if (item > OPT_SPACE)
-			item--;
-	}
+	if (item == OPT_SPACE)
+		return -1000;
+	if (!menu_search_enable.value && item > OPT_MENUSEARCH)
+		item--;
 
 	return 32 + item * 8;
 }
@@ -9438,9 +9428,6 @@ void M_Options_Draw (void)
 		case OPT_CONTROLLER:
 			text = "            Controller   ...";
 			break;
-		case OPT_MENUSEARCH:
-			text = "          Search Menus   ...";
-			break;
 		case OPT_WEAPONWHEEL:
 			text = "          Weapon Wheel   ...";
 			break;
@@ -9472,6 +9459,9 @@ void M_Options_Draw (void)
 			break;
 		case OPT_EXTRAS:
 			text = "                  Misc   ...";
+			break;
+		case OPT_MENUSEARCH:
+			text = "                Search   ...";
 			break;
 		case OPT_MENUSCALE:
 			text = "            Menu Scale";
@@ -9554,8 +9544,6 @@ static const char* M_Options_GetItemText(int index)
 		return "                 Mouse   ...";
 	case OPT_CONTROLLER:
 		return "            Controller   ...";
-	case OPT_MENUSEARCH:
-		return "          Search Menus   ...";
 	case OPT_WEAPONWHEEL:
 		return "          Weapon Wheel   ...";
 	case OPT_VIDEO:
@@ -9576,6 +9564,8 @@ static const char* M_Options_GetItemText(int index)
 		return "                 Demos   ...";
 	case OPT_EXTRAS:
 		return "                  Misc   ...";
+	case OPT_MENUSEARCH:
+		return "                Search   ...";
 	case OPT_MENUSCALE:
 		return "            Menu Scale";
 	case OPT_CONSOLE:
@@ -9677,10 +9667,6 @@ void M_Options_Key (int k)
 		case OPT_CONTROLLER:
 			M_Menu_Controller_f();
 			break;
-		case OPT_MENUSEARCH:
-			m_entersound = false;
-			M_MenuSearch_Open();
-			break;
 		case OPT_WEAPONWHEEL:
 			M_Menu_WeaponWheel_f();
 			break;
@@ -9710,6 +9696,10 @@ void M_Options_Key (int k)
 			break;
 		case OPT_EXTRAS:
 			M_Menu_Extras_f();
+			break;
+		case OPT_MENUSEARCH:
+			m_entersound = false;
+			M_MenuSearch_Open();
 			break;
 		case OPT_CONSOLE:
 			m_state = m_none;
@@ -21426,9 +21416,9 @@ typedef struct
 } menusearch_result_t;
 
 static const char * const menusearch_options_labels[] = {
-	"Key/Button Setup", "Mouse", "Controller", "Search Menus", "Weapon Wheel",
+	"Key/Button Setup", "Mouse", "Controller", "Weapon Wheel",
 	"Display", "Graphics", "Sound", "Game", "HUD", "Console", "Startup",
-	"Demos", "Misc", "", "Menu Scale", "Goto Console", "Reset Config"
+	"Demos", "Misc", "Search", "", "Menu Scale", "Goto Console", "Reset Config"
 };
 static const char * const menusearch_video_labels[] = {
 	"Video Mode", "Color Depth", "Refresh Rate", "Display Mode",
