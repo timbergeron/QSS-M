@@ -576,6 +576,10 @@ dlight_t *CL_AllocDlight (int key);
 void	CL_DecayLights (void);
 
 void CL_Init (void);
+extern cvar_t cl_discord_presence;
+void DiscordPresence_Init(void);
+void DiscordPresence_Shutdown(void);
+void DiscordPresence_Frame(void);
 qboolean CL_ViewingQ3ItemBobbingItem (void);
 
 void CL_EstablishConnection (const char *host);

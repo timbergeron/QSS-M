@@ -237,6 +237,7 @@ copy "$(SolutionDir)..\zlib\$(PlatformShortName)\*.dll" "$(TargetDir)"</Command>
     <ClCompile Include="..\..\Quake\cl_demo.c" />
     <ClCompile Include="..\..\Quake\cl_input.c" />
     <ClCompile Include="..\..\Quake\cl_main.c" />
+    <ClCompile Include="..\..\Quake\discord_presence.c" />
     <ClCompile Include="..\..\Quake\cl_parse.c" />
     <ClCompile Include="..\..\Quake\cl_tent.c" />
     <ClCompile Include="..\..\Quake\cmd.c" />

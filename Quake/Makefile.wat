@@ -207,6 +207,7 @@ OBJS = strlcat.obj &
 	cl_demo.obj &
 	cl_input.obj &
 	cl_main.obj &
+	discord_presence.obj &
 	cl_parse.obj &
 	cl_tent.obj &
 	console.obj &

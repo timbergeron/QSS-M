@@ -356,6 +356,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\Quake\discord_presence.c"
+				>
+			</File>
+			<File
 				RelativePath="..\..\Quake\cl_parse.c"
 				>
 			</File>

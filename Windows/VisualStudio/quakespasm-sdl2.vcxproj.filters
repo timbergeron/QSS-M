@@ -36,6 +36,9 @@
     <ClCompile Include="..\..\Quake\cl_main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Quake\discord_presence.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\Quake\cl_parse.c">
       <Filter>Source Files</Filter>
     </ClCompile>

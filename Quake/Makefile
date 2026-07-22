@@ -306,6 +306,7 @@ OBJS := strlcat.o \
 	cl_demo.o \
 	cl_input.o \
 	cl_main.o \
+	discord_presence.o \
 	cl_parse.o \
 	cl_tent.o \
 	console.o \

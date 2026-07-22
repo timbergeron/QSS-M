@@ -21514,7 +21514,7 @@ static const char * const menusearch_extras_labels[] = {
 	"System Throttle", "Protocol Exts", "Download Policy", "Connection Retries",
 	"QC Extensions", "Prediction", "Auto Demo", "Port Ping Probe", "Spawn Trainer",
 	"Q3 Item Bobbing", "Reset Config", "Quake Pong", "Paused Hints", "Live Preview",
-	"Model Viewer", "Saving", "Keyboard Shortcuts", "Version Info"
+	"Discord Presence", "Model Viewer", "Saving", "Keyboard Shortcuts", "Version Info"
 };
 static const char * const menusearch_saving_labels[] = {
 	"Auto Load", "Auto Save", "Auto Save Interval", "Saving Indicator"
@@ -24100,6 +24100,7 @@ static enum extras_e
 	EXTRAS_PONG,
 	EXTRAS_HINTS,
 	EXTRAS_LIVEPREVIEW,
+	EXTRAS_DISCORD_PRESENCE,
 	EXTRAS_MODELVIEWER,
 	EXTRAS_SAVING,
 	EXTRAS_SHORTCUTS,
@@ -24158,6 +24159,8 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 		return "Paused Hints";
 	case EXTRAS_LIVEPREVIEW:
 		return "Live Preview";
+	case EXTRAS_DISCORD_PRESENCE:
+		return "Discord Presence";
 	case EXTRAS_MODELVIEWER:
 		return "Model Viewer";
 	case EXTRAS_SAVING:
@@ -24188,6 +24191,7 @@ static cvar_t *M_Extras_GetItemCvar(int index)
 	case EXTRAS_PONG:			return &cl_pong;
 	case EXTRAS_HINTS:			return &scr_hints;
 	case EXTRAS_LIVEPREVIEW:	return &ui_live_preview;
+	case EXTRAS_DISCORD_PRESENCE:	return &cl_discord_presence;
 	default:					return NULL;
 	}
 }
@@ -24368,6 +24372,9 @@ static void M_Extras_AdjustSliders (int dir)
 		if (!ui_live_preview.value)
 			M_LivePreview_Reset();
 		break;
+	case EXTRAS_DISCORD_PRESENCE:
+		Cvar_SetValueQuick(&cl_discord_presence, !cl_discord_presence.value);
+		break;
 	case EXTRAS_MODELVIEWER:
 		M_Menu_ModelViewer_f();
 		break;
@@ -24539,6 +24546,11 @@ void M_Extras_Draw(void)
 		case EXTRAS_LIVEPREVIEW:
 			text = "      Live Preview";
 			value = ui_live_preview.value ? "on" : "off";
+			break;
+
+		case EXTRAS_DISCORD_PRESENCE:
+			text = "  Discord Presence";
+			value = cl_discord_presence.value ? "on" : "off";
 			break;
 
 		case EXTRAS_MODELVIEWER:
@@ -47039,6 +47051,7 @@ static const char *MenuSearch_ExtrasKeywords(int index)
 	case EXTRAS_PONG: return "minigame easter egg arcade";
 	case EXTRAS_HINTS: return "help tips tutorial paused assistance";
 	case EXTRAS_LIVEPREVIEW: return "preview settings instant realtime";
+	case EXTRAS_DISCORD_PRESENCE: return "discord status activity presence rich rpc social privacy";
 	case EXTRAS_MODELVIEWER: return "models browser inspect preview mdl";
 	case EXTRAS_SAVING: return "savegame autosave autoload checkpoints";
 	case EXTRAS_SHORTCUTS: return "hotkeys keyboard keys commands reference";

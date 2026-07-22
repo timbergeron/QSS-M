@@ -36,6 +36,7 @@
 		664D98A319CF6B78000D395C /* cl_demo.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783A0D2EEAAB00CB2E4C /* cl_demo.c */; };
 		664D98A419CF6B78000D395C /* cl_input.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783B0D2EEAAB00CB2E4C /* cl_input.c */; };
 		664D98A519CF6B78000D395C /* cl_main.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783C0D2EEAAB00CB2E4C /* cl_main.c */; };
+		D15C0A020000000000000002 /* discord_presence.c in Sources */ = {isa = PBXBuildFile; fileRef = D15C0A120000000000000012 /* discord_presence.c */; };
 		664D98A619CF6B78000D395C /* cl_parse.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783D0D2EEAAB00CB2E4C /* cl_parse.c */; };
 		664D98A719CF6B78000D395C /* cl_tent.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783E0D2EEAAB00CB2E4C /* cl_tent.c */; };
 		664D98A819CF6B78000D395C /* net_main.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783F0D2EEAAB00CB2E4C /* net_main.c */; };
@@ -308,6 +309,7 @@
 		483A783A0D2EEAAB00CB2E4C /* cl_demo.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_demo.c; path = ../Quake/cl_demo.c; sourceTree = SOURCE_ROOT; };
 		483A783B0D2EEAAB00CB2E4C /* cl_input.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_input.c; path = ../Quake/cl_input.c; sourceTree = SOURCE_ROOT; };
 		483A783C0D2EEAAB00CB2E4C /* cl_main.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_main.c; path = ../Quake/cl_main.c; sourceTree = SOURCE_ROOT; };
+		D15C0A120000000000000012 /* discord_presence.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = discord_presence.c; path = ../Quake/discord_presence.c; sourceTree = SOURCE_ROOT; };
 		483A783D0D2EEAAB00CB2E4C /* cl_parse.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_parse.c; path = ../Quake/cl_parse.c; sourceTree = SOURCE_ROOT; };
 		483A783E0D2EEAAB00CB2E4C /* cl_tent.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_tent.c; path = ../Quake/cl_tent.c; sourceTree = SOURCE_ROOT; };
 		483A783F0D2EEAAB00CB2E4C /* net_main.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = net_main.c; path = ../Quake/net_main.c; sourceTree = SOURCE_ROOT; };
@@ -761,6 +763,7 @@
 				483A783A0D2EEAAB00CB2E4C /* cl_demo.c */,
 				483A783B0D2EEAAB00CB2E4C /* cl_input.c */,
 				483A783C0D2EEAAB00CB2E4C /* cl_main.c */,
+				D15C0A120000000000000012 /* discord_presence.c */,
 				483A783D0D2EEAAB00CB2E4C /* cl_parse.c */,
 				483A783E0D2EEAAB00CB2E4C /* cl_tent.c */,
 				90ECE478BDE66F0C8D06B1E6 /* ice_gnutls.c */,
@@ -1031,6 +1034,7 @@
 				664D98A319CF6B78000D395C /* cl_demo.c in Sources */,
 				664D98A419CF6B78000D395C /* cl_input.c in Sources */,
 				664D98A519CF6B78000D395C /* cl_main.c in Sources */,
+				D15C0A020000000000000002 /* discord_presence.c in Sources */,
 				664D98A619CF6B78000D395C /* cl_parse.c in Sources */,
 				664D98A719CF6B78000D395C /* cl_tent.c in Sources */,
 				E383D8D0E3D1C813E9CA024A /* ice_gnutls.c in Sources */,
