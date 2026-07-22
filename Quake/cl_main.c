@@ -315,6 +315,8 @@ static char cl_lasthost[NET_NAMELEN];
 static qboolean cl_next_connect_from_menu = false;
 static qboolean cl_portpingprobe_reconnecting = false;
 static char cl_portpingprobe_pending_host[NET_NAMELEN];
+static char cl_portpingprobe_deferred_host[NET_NAMELEN];
+static qboolean cl_portpingprobe_bypass = false;
 
 static void CL_ClearConnectReturnState(void)
 {
@@ -563,6 +565,8 @@ static qboolean CL_HandlePortPingProbe(const char *target)
 
 	if (!target || !*target)
 		return false;
+	if (cl_portpingprobe_bypass)
+		return false;
 
 	if (!NET_PortPingProbe_IsEnabled())
 	{
@@ -586,8 +590,9 @@ static qboolean CL_HandlePortPingProbe(const char *target)
 
 	if (probe_status == PORTPINGPROBE_PROBING || probe_status == PORTPINGPROBE_ABORT)
 	{
-		NET_PortPingProbe_RequestAbort();
-		Con_Printf("Port ping probe is still running; connect again in a moment\n");
+		q_strlcpy(cl_portpingprobe_deferred_host, target,
+			sizeof(cl_portpingprobe_deferred_host));
+		NET_PortPingProbe_RequestAbortQuietly();
 		return true;
 	}
 
@@ -654,9 +659,22 @@ void CL_ConnectFrame(void)
 	net_connect_result_t result;
 	struct qsocket_s *netcon = NULL;
 	const char *reason = NULL;
+	char deferred_host[NET_NAMELEN];
 
 	if (!cl_pending_connect.active)
+	{
+		if (cl_portpingprobe_deferred_host[0] &&
+			NET_PortPingProbe_GetStatus() == PORTPINGPROBE_IDLE)
+		{
+			q_strlcpy(deferred_host, cl_portpingprobe_deferred_host,
+				sizeof(deferred_host));
+			cl_portpingprobe_deferred_host[0] = '\0';
+			cl_portpingprobe_bypass = true;
+			CL_BeginConnect(deferred_host);
+			cl_portpingprobe_bypass = false;
+		}
 		return;
+	}
 
 	result = NET_DatagramConnectFrame(&netcon, &reason);
 	if (result == NET_CONNECT_PENDING)
@@ -693,6 +711,7 @@ void CL_Disconnect (void)
 	CL_ConnectTimingCancel();
 	CL_AsyncDownload_Cancel();
 	cl_portpingprobe_pending_host[0] = '\0';
+	cl_portpingprobe_deferred_host[0] = '\0';
 	NET_PortPingProbe_RequestAbort();
 	CL_CancelConnect();
 	CL_ClearTypingState();

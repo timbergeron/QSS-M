@@ -177,6 +177,7 @@ static SDL_atomic_t portpingprobe_status = {PORTPINGPROBE_IDLE};
 static SDL_atomic_t portpingprobe_abort_requested = {0};
 static SDL_atomic_t portpingprobe_worker_running = {0};
 static SDL_atomic_t portpingprobe_progress = {0};
+static qboolean portpingprobe_abort_quiet = false;
 static int net_probe_clientport = 0;
 static int net_probe_clientlandriver = -1;
 static sys_socket_t net_probe_clientsocket = INVALID_SOCKET;
@@ -369,6 +370,12 @@ void NET_PortPingProbe_RequestAbort(void)
 
 	SDL_AtomicSet(&portpingprobe_abort_requested, 1);
 	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_ABORT);
+}
+
+void NET_PortPingProbe_RequestAbortQuietly(void)
+{
+	portpingprobe_abort_quiet = true;
+	NET_PortPingProbe_RequestAbort();
 }
 
 static void NET_PortPingProbe_ClearResult(void)
@@ -1054,6 +1061,7 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 	SDL_AtomicSet(&portpingprobe_progress, 0);
 	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_PROBING);
 	SDL_AtomicSet(&portpingprobe_worker_running, 1);
+	portpingprobe_abort_quiet = false;
 	portpingprobe_last_percent = -1;
 	portpingprobe_console_inline = false;
 
@@ -1157,7 +1165,7 @@ void NET_PortPingProbe_Frame(void)
 	}
 	else
 	{
-		if (status == PORTPINGPROBE_ABORT)
+		if (status == PORTPINGPROBE_ABORT && !portpingprobe_abort_quiet)
 			Con_Printf("Port ping probe aborted\n");
 
 		NET_PortPingProbe_ClearResult();
@@ -1169,6 +1177,7 @@ void NET_PortPingProbe_Frame(void)
 	SDL_AtomicSet(&portpingprobe_progress, 0);
 	portpingprobe_last_percent = -1;
 	portpingprobe_console_inline = false;
+	portpingprobe_abort_quiet = false;
 }
 
 static void NET_PortPingProbe_Shutdown(void)
@@ -1198,6 +1207,7 @@ static void NET_PortPingProbe_Shutdown(void)
 	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
 	portpingprobe_last_percent = -1;
 	portpingprobe_console_inline = false;
+	portpingprobe_abort_quiet = false;
 }
 
 #ifdef BAN_TEST

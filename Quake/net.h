@@ -176,6 +176,7 @@ portpingprobe_status_t NET_PortPingProbe_GetStatus(void);
 int NET_PortPingProbe_GetProgress(void);
 qboolean NET_PortPingProbe_Start(const char *connect_addr);
 void NET_PortPingProbe_RequestAbort(void);
+void NET_PortPingProbe_RequestAbortQuietly(void);
 void NET_PortPingProbe_Frame(void);
 qboolean NET_PortPingProbe_ConsumeCompleted(const char *connect_addr);
 
