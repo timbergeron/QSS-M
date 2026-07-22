@@ -6464,7 +6464,9 @@ static qboolean M_DownloadMaps_ActiveMapName(char *display_name, size_t display_
 	if (!cls.download.active || !cls.download.current[0])
 		return false;
 
-	if (q_strcasecmp(COM_FileGetExtension(cls.download.current), "bsp"))
+	if (q_strcasecmp(COM_FileGetExtension(cls.download.current), "bsp") &&
+		q_strcasecmp(COM_FileGetExtension(cls.download.current), "lit") &&
+		q_strcasecmp(COM_FileGetExtension(cls.download.current), "loc"))
 		return false;
 
 	current = COM_SkipPath(cls.download.current);
@@ -7218,10 +7220,10 @@ void M_DownloadMaps_Draw(void)
 
 		if (M_DownloadMaps_RecentDownloadActive(selected_name))
 			tooltip = "successfully downloaded";
-		else if (selected_already_have)
-			tooltip = "already installed";
 		else if (message_active)
 			tooltip = downloadmapsmenu.message;
+		else if (selected_already_have)
+			tooltip = "already installed";
 
 		if (tooltip)
 			M_PrintWhite(x, y + downloadmapsmenu.list.viewsize * 8 + 16, tooltip);
@@ -7362,11 +7364,8 @@ void M_DownloadMaps_Key(int key)
 			{
 				if (M_DownloadMaps_AlreadyHave(name))
 				{
-					char display_name[MAX_QPATH];
-					M_DownloadMaps_DisplayName(name, display_name, sizeof(display_name));
-					S_LocalSound("misc/menu3.wav");
-					downloadmapsmenu.message[0] = '\0';
-					Con_Printf("Map already downloaded: %s\n", display_name);
+					Cbuf_AddText(va("download \"%s\"\n", name));
+					M_DownloadMaps_SetMessage("Checking optional files...");
 				}
 				else
 				{

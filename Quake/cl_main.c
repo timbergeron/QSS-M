@@ -2802,12 +2802,24 @@ typedef struct
 	CURLcode curl_result;
 	web_download_result_t result;
 	qboolean is_auto; // started by CL_CheckDownload during signon (falls back to in-protocol download on failure)
+	qboolean is_optional; // optional companion of a manually downloaded map
 } async_download_t;
 
 static async_download_t async_download;
 static SDL_mutex *async_download_mutex = NULL;
 static double async_download_last_progress_print = 0.0;
 static char async_download_auto_failed[MAX_OSPATH]; // last signon file whose web mirrors failed; CL_CheckDownload skips the mirrors for it and uses the in-protocol path instead
+
+typedef struct
+{
+	qboolean active;
+	int next_file;
+	int url_count;
+	char filenames[2][MAX_OSPATH];
+	char urls[2][MAX_URLPATH];
+} manual_map_companions_t;
+
+static manual_map_companions_t manual_map_companions;
 
 typedef struct {
 	char* url;
@@ -5144,7 +5156,7 @@ static int CL_AsyncDownload_Thread(void *unused)
 	return 0;
 }
 
-static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, int url_count, qboolean is_skybox, const char *display_name, qboolean auto_download, web_download_result_t *result_out)
+static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, int url_count, qboolean is_skybox, const char *display_name, qboolean auto_download, qboolean optional_download, web_download_result_t *result_out)
 {
 	char tmp_path[MAX_OSPATH];
 	char full_urls[2][MAX_URLPATH];
@@ -5207,6 +5219,7 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 	async_download.url_count = count;
 	async_download.current_url = 0;
 	async_download.is_auto = auto_download;
+	async_download.is_optional = optional_download;
 	q_strlcpy(async_download.filename, filename, sizeof(async_download.filename));
 	q_strlcpy(async_download.tmp_path, tmp_path, sizeof(async_download.tmp_path));
 	if (display_name)
@@ -5244,6 +5257,34 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 	return true;
 }
 
+static void CL_ManualMapCompanions_Clear(void)
+{
+	memset(&manual_map_companions, 0, sizeof(manual_map_companions));
+}
+
+static void CL_ManualMapCompanions_StartNext(void)
+{
+	const char *urls[2];
+	const char *filename;
+	int i;
+
+	while (manual_map_companions.active && manual_map_companions.next_file < 2)
+	{
+		filename = manual_map_companions.filenames[manual_map_companions.next_file++];
+		if (COM_FileExists(filename, NULL))
+			continue;
+
+		for (i = 0; i < manual_map_companions.url_count; i++)
+			urls[i] = manual_map_companions.urls[i];
+
+		if (CL_AsyncDownload_Start(filename, urls, manual_map_companions.url_count,
+			false, NULL, false, true, NULL))
+			return;
+	}
+
+	CL_ManualMapCompanions_Clear();
+}
+
 static qboolean CL_AsyncDownload_RequestStop(void)
 {
 	qboolean active = false;
@@ -5270,7 +5311,7 @@ static qboolean CL_AsyncDownload_RequestStop(void)
 
 void CL_AsyncDownload_Frame(void)
 {
-	qboolean active, done, success, aborted, is_auto;
+	qboolean active, done, success, aborted, is_auto, is_optional;
 	char filename[MAX_OSPATH];
 	char tmp_path[MAX_OSPATH];
 	char error[128];
@@ -5291,6 +5332,7 @@ void CL_AsyncDownload_Frame(void)
 	success = async_download.success;
 	aborted = async_download.aborted;
 	is_auto = async_download.is_auto;
+	is_optional = async_download.is_optional;
 	received = async_download.received;
 	total = async_download.total;
 	file_size = async_download.file_size;
@@ -5356,7 +5398,8 @@ void CL_AsyncDownload_Frame(void)
 			Con_Printf("Download cancelled: %s\n", COM_SkipPath(filename));
 		// auto-downloads probe optional files; a 404 just means the mirror
 		// doesn't have it, which is expected and shouldn't spam the console
-		else if (is_auto && (download_result == WEB_DOWNLOAD_RESULT_NOT_FOUND || CL_DownloadNameIsLoc(filename)))
+		else if ((is_auto && (download_result == WEB_DOWNLOAD_RESULT_NOT_FOUND || CL_DownloadNameIsLoc(filename))) ||
+			(is_optional && download_result == WEB_DOWNLOAD_RESULT_NOT_FOUND))
 			Con_DPrintf("Download failed: %s (%s)\n", filename, error[0] ? error : "not found");
 		else
 		{
@@ -5393,6 +5436,14 @@ void CL_AsyncDownload_Frame(void)
 	cls.download.current[0] = '\0';
 	cls.download.percent = success ? 100.0f : -1.0f;
 	async_download_last_progress_print = 0.0;
+
+	if (manual_map_companions.active)
+	{
+		if (aborted || (!is_optional && !success))
+			CL_ManualMapCompanions_Clear();
+		else
+			CL_ManualMapCompanions_StartNext();
+	}
 }
 
 static void CL_AsyncDownload_Stop(qboolean destroy_mutex)
@@ -5422,6 +5473,7 @@ static void CL_AsyncDownload_Stop(qboolean destroy_mutex)
 		unlink(tmp_path);
 
 	memset(&async_download, 0, sizeof(async_download));
+	CL_ManualMapCompanions_Clear();
 	async_download_last_progress_print = 0.0;
 	async_download_auto_failed[0] = '\0';
 
@@ -5921,7 +5973,7 @@ qboolean CL_CheckDownload(const char *filename)
 
 		if (url_count > 0)
 		{
-			if (CL_AsyncDownload_Start(filename, urls, url_count, false, NULL, true, &start_result))
+			if (CL_AsyncDownload_Start(filename, urls, url_count, false, NULL, true, false, &start_result))
 				return true; // block; on failure CL_AsyncDownload_Frame records it and we fall through to the server download next poll
 
 			if (start_result != WEB_DOWNLOAD_RESULT_NONE)
@@ -6404,10 +6456,15 @@ static qboolean CL_ManualDownloadAddMirror(const cvar_t *url, qboolean mirror_ac
 void CL_ManualDownload_f (const char* filename)
 {
     char prefixedArg[MAX_OSPATH];
+	char mapbase[MAX_QPATH];
+	char mapstem[MAX_OSPATH];
     const char *urls[2];
     int url_count = 0;
+	int i;
     qboolean require_active_check;
     qboolean isNeitherWebDownloadServerSet;
+	qboolean is_map;
+	qboolean primary_exists;
 
 	if (Cmd_Argc() != 2)
 	{
@@ -6441,7 +6498,9 @@ void CL_ManualDownload_f (const char* filename)
 	if (*cls.download.current && !strcmp(cls.download.current, prefixedArg))
 		return;	//if the previous download failed, don't endlessly retry.
 
-	if (COM_FileExists(prefixedArg, NULL))
+	is_map = !q_strcasecmp(COM_FileGetExtension(prefixedArg), "bsp");
+	primary_exists = COM_FileExists(prefixedArg, NULL);
+	if (primary_exists && !is_map)
 	{
 		Con_Printf("File already exists, download not attempted\n");
 		return;
@@ -6464,8 +6523,6 @@ void CL_ManualDownload_f (const char* filename)
 		return;
 	}
 
-	Con_Printf("Attempting download, if found you will see progress below...\n");
-
 	CL_ManualDownloadAddMirror(&cl_web_download_url, webcheck, require_active_check, urls, &url_count, (int)countof(urls));
 	CL_ManualDownloadAddMirror(&cl_web_download_url2, web2check, require_active_check, urls, &url_count, (int)countof(urls));
 
@@ -6475,7 +6532,39 @@ void CL_ManualDownload_f (const char* filename)
 		return;
 	}
 
-	CL_AsyncDownload_Start(prefixedArg, urls, url_count, false, NULL, false, NULL);
+	CL_ManualMapCompanions_Clear();
+	if (is_map)
+	{
+		COM_StripExtension(prefixedArg, mapstem, sizeof(mapstem));
+		COM_FileBase(prefixedArg, mapbase, sizeof(mapbase));
+		if ((size_t)q_snprintf(manual_map_companions.filenames[0],
+			sizeof(manual_map_companions.filenames[0]), "%s.lit", mapstem) >=
+			sizeof(manual_map_companions.filenames[0]) ||
+			(size_t)q_snprintf(manual_map_companions.filenames[1],
+			sizeof(manual_map_companions.filenames[1]), "locs/%s.loc", mapbase) >=
+			sizeof(manual_map_companions.filenames[1]))
+		{
+			Con_Printf("Map companion path too long\n");
+			return;
+		}
+
+		manual_map_companions.active = true;
+		manual_map_companions.url_count = url_count;
+		for (i = 0; i < url_count; i++)
+			q_strlcpy(manual_map_companions.urls[i], urls[i],
+				sizeof(manual_map_companions.urls[i]));
+	}
+
+	if (primary_exists)
+	{
+		Con_Printf("Map already exists; checking for optional .lit and .loc files...\n");
+		CL_ManualMapCompanions_StartNext();
+		return;
+	}
+
+	Con_Printf("Attempting download, if found you will see progress below...\n");
+	if (!CL_AsyncDownload_Start(prefixedArg, urls, url_count, false, NULL, false, false, NULL))
+		CL_ManualMapCompanions_Clear();
 }
 
 /*
