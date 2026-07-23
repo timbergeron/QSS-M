@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 extern cvar_t cl_maxpitch; //johnfitz -- variable pitch clamping
 extern cvar_t cl_minpitch; //johnfitz -- variable pitch clamping
+extern cvar_t cl_maxroll;  // configurable roll clamping
 extern cvar_t gl_load24bit; // woods #weaponwheel
 
 cvar_t	cl_iDrive = {"cl_iDrive", "1", CVAR_ARCHIVE}; // woods #idrive
@@ -390,6 +391,7 @@ void CL_AdjustAngles (void)
 {
 	float	speed;
 	float	up, down;
+	float	maxroll;
 
 	if ((in_speed.state & 1) ^ (cl_alwaysrun.value != 0.0))
 		speed = host_frametime * cl_anglespeedkey.value;
@@ -434,10 +436,11 @@ void CL_AdjustAngles (void)
 			cl.viewangles[PITCH] = cl_minpitch.value;
 		//johnfitz
 
-		if (cl.viewangles[ROLL] > 50)
-			cl.viewangles[ROLL] = 50;
-		if (cl.viewangles[ROLL] < -50)
-			cl.viewangles[ROLL] = -50;
+		maxroll = CLAMP (0.0f, cl_maxroll.value, 180.0f);
+		if (cl.viewangles[ROLL] > maxroll)
+			cl.viewangles[ROLL] = maxroll;
+		if (cl.viewangles[ROLL] < -maxroll)
+			cl.viewangles[ROLL] = -maxroll;
 	}
 }
 

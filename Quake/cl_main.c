@@ -73,6 +73,7 @@ cvar_t	m_side = {"m_side","0.8", CVAR_ARCHIVE};
 
 cvar_t	cl_maxpitch = {"cl_maxpitch", "90", CVAR_ARCHIVE}; //johnfitz -- variable pitch clamping
 cvar_t	cl_minpitch = {"cl_minpitch", "-90", CVAR_ARCHIVE}; //johnfitz -- variable pitch clamping
+cvar_t	cl_maxroll = {"cl_maxroll", "50", CVAR_ARCHIVE}; // configurable roll clamping
 
 cvar_t cl_recordingdemo = {"cl_recordingdemo", "", CVAR_ROM};	//the name of the currently-recording demo.
 cvar_t	cl_demo_format = {"cl_demo_format", "dem", CVAR_ARCHIVE};
@@ -7846,6 +7847,7 @@ void CL_Init (void)
 
 	Cvar_RegisterVariable (&cl_maxpitch); //johnfitz -- variable pitch clamping
 	Cvar_RegisterVariable (&cl_minpitch); //johnfitz -- variable pitch clamping
+	Cvar_RegisterVariable (&cl_maxroll);
 	Cvar_RegisterVariable (&cl_recordingdemo); //spike -- for mod hacks. combine with cvar_string or something
 	Cvar_RegisterVariable (&cl_demo_format);
 	Cvar_SetCompletion (&cl_demo_format, &CL_DemoFormat_Completion_f);
