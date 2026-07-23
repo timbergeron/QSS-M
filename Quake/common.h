@@ -477,6 +477,8 @@ void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, 
 const char *COM_GetGameNames(qboolean full);
 qboolean COM_GameDirMatches(const char *tdirs);
 qboolean COM_ResolveGameDir(const char *game, char *resolved, size_t resolved_size);
+qboolean COM_ResolveGameDirPath(const char *game, char *resolved, size_t resolved_size);
+qboolean COM_DetectGameDescription(const char *game, char *description, size_t description_size);
 void COM_SetModvoteAutostart(void);
 void COM_RemoveDownloadTempFiles(void);
 void COM_AddDownloadedPackage(const char *relative_path);

@@ -4383,27 +4383,44 @@ qboolean COM_GameDirMatches(const char *tdirs)
 	return false;
 }
 
-static qboolean COM_GameDirExistsInRoot(const char *root, const char *prefix, const char *game, char *resolved, size_t resolved_size)
+static qboolean COM_GameDirExistsInRoot(const char *root, const char *prefix,
+	const char *game, char *resolved, size_t resolved_size,
+	char *full_path, size_t full_path_size)
 {
 	char relative[MAX_OSPATH];
 	char path[MAX_OSPATH];
 
 	if (prefix && *prefix)
-		q_snprintf(relative, sizeof(relative), "%s/%s", prefix, game);
-	else
-		q_strlcpy(relative, game, sizeof(relative));
+	{
+		if ((size_t)q_snprintf(relative, sizeof(relative), "%s/%s",
+			prefix, game) >= sizeof(relative))
+			return false;
+	}
+	else if (q_strlcpy(relative, game, sizeof(relative)) >= sizeof(relative))
+		return false;
 
-	q_snprintf(path, sizeof(path), "%s/%s", root, relative);
+	if ((size_t)q_snprintf(path, sizeof(path), "%s/%s",
+		root, relative) >= sizeof(path))
+		return false;
 	if (!(Sys_FileType(path) & FS_ENT_DIRECTORY))
+		return false;
+
+	/* Check capacity before writing anything, so a caller asking for both
+	 * outputs never gets a populated 'resolved' alongside a false return.
+	 * 'resolved' itself keeps its legacy silent truncation. */
+	if (full_path && full_path_size && strlen(path) >= full_path_size)
 		return false;
 
 	if (resolved && resolved_size)
 		q_strlcpy(resolved, relative, resolved_size);
+	if (full_path && full_path_size)
+		q_strlcpy(full_path, path, full_path_size);
 
 	return true;
 }
 
-qboolean COM_ResolveGameDir(const char *game, char *resolved, size_t resolved_size)
+static qboolean COM_ResolveGameDirInternal(const char *game, char *resolved,
+	size_t resolved_size, char *full_path, size_t full_path_size)
 {
 	static const char *prefixes[] = { "", "games", "mods" };
 	size_t i;
@@ -4415,14 +4432,197 @@ qboolean COM_ResolveGameDir(const char *game, char *resolved, size_t resolved_si
 
 	for (i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++)
 	{
-		if (COM_GameDirExistsInRoot(com_basedir, prefixes[i], game, resolved, resolved_size))
+		if (COM_GameDirExistsInRoot(com_basedir, prefixes[i], game,
+			resolved, resolved_size, full_path, full_path_size))
 			return true;
 		if (host_parms->userdir != host_parms->basedir &&
-			COM_GameDirExistsInRoot(host_parms->userdir, prefixes[i], game, resolved, resolved_size))
+			COM_GameDirExistsInRoot(host_parms->userdir, prefixes[i], game,
+				resolved, resolved_size, full_path, full_path_size))
 			return true;
 	}
 
 	return false;
+}
+
+qboolean COM_ResolveGameDir(const char *game, char *resolved, size_t resolved_size)
+{
+	return COM_ResolveGameDirInternal(game, resolved, resolved_size, NULL, 0);
+}
+
+qboolean COM_ResolveGameDirPath(const char *game, char *resolved,
+	size_t resolved_size)
+{
+	if (!resolved || !resolved_size)
+		return false;
+	return COM_ResolveGameDirInternal(game, NULL, 0,
+		resolved, resolved_size);
+}
+
+typedef struct
+{
+	qboolean ad;
+	qboolean hip_demo1, hip_demo2, hip_demo3, hip_demo4;
+	qboolean rogue_end1, rogue_end2;
+	qboolean rogue_map1, rogue_map2, rogue_map3, rogue_map4;
+	qboolean mg_hub, mg_end, mg_map1, mg_horde1;
+} com_game_signatures_t;
+
+static qboolean COM_PackEntryNameEquals(const char entry_name[56],
+	const char *expected)
+{
+	size_t length = strlen(expected);
+
+	return length < sizeof(((dpackfile_t *)0)->name) &&
+		!memcmp(entry_name, expected, length) && entry_name[length] == '\0';
+}
+
+static void COM_DetectGameSignaturesInPak(const char *pak_path,
+	com_game_signatures_t *signatures)
+{
+	dpackheader_t header;
+	dpackfile_t entry;
+	FILE *pakfile;
+	long pak_size;
+	unsigned int numfiles, i;
+
+	pakfile = fopen(pak_path, "rb");
+	if (!pakfile)
+		return;
+	if (fread(&header, 1, sizeof(header), pakfile) != sizeof(header) ||
+		memcmp(header.id, "PACK", sizeof(header.id)))
+		goto done;
+
+	header.dirofs = LittleLong(header.dirofs);
+	header.dirlen = LittleLong(header.dirlen);
+	if (fseek(pakfile, 0, SEEK_END) != 0 ||
+		(pak_size = ftell(pakfile)) < (long)sizeof(header))
+		goto done;
+	if (header.dirlen % sizeof(entry) != 0 ||
+		header.dirofs > (unsigned long)pak_size ||
+		header.dirlen > (unsigned long)pak_size - header.dirofs)
+		goto done;
+
+	numfiles = header.dirlen / sizeof(entry);
+	if (numfiles > MAX_FILES_IN_PACK ||
+		fseek(pakfile, (long)header.dirofs, SEEK_SET) != 0)
+		goto done;
+
+	for (i = 0; i < numfiles; ++i)
+	{
+		if (fread(&entry, sizeof(entry), 1, pakfile) != 1)
+			break;
+
+		if (COM_PackEntryNameEquals(entry.name, "maps/ad_chapters.bsp"))
+			signatures->ad = true;
+		else if (COM_PackEntryNameEquals(entry.name, "hipdemo1.dem"))
+			signatures->hip_demo1 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "hipdemo2.dem"))
+			signatures->hip_demo2 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "hipdemo3.dem"))
+			signatures->hip_demo3 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "hipdemo4.dem"))
+			signatures->hip_demo4 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "end1.bin"))
+			signatures->rogue_end1 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "end2.bin"))
+			signatures->rogue_end2 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/r1m1.bsp"))
+			signatures->rogue_map1 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/r1m2.bsp"))
+			signatures->rogue_map2 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/r1m3.bsp"))
+			signatures->rogue_map3 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/r1m4.bsp"))
+			signatures->rogue_map4 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/hub.bsp"))
+			signatures->mg_hub = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/mgend.bsp"))
+			signatures->mg_end = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/mge1m1.bsp"))
+			signatures->mg_map1 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/horde1.bsp"))
+			signatures->mg_horde1 = true;
+	}
+
+done:
+	fclose(pakfile);
+}
+
+qboolean COM_DetectGameDescription(const char *game, char *description,
+	size_t description_size)
+{
+	static const char *pak_dirs[] = { "", "paks/" };
+	com_game_signatures_t signatures;
+	char game_path[MAX_OSPATH], path[MAX_OSPATH];
+	FILE *file;
+	size_t length;
+	int pak_dir, pak_num, read_size;
+
+	if (!description || !description_size)
+		return false;
+	description[0] = '\0';
+	if (!COM_ResolveGameDirInternal(game, NULL, 0,
+		game_path, sizeof(game_path)))
+		return false;
+
+	/* A description file overrides signatures, so avoid scanning PAKs when its
+	 * first line is readable. Only a file we cannot read a line from at all
+	 * (missing, or zero bytes) falls back to PAK detection: a readable but
+	 * blank first line is treated as a deliberate "no description", matching
+	 * what the Mods menu did before this moved out of menu.c. */
+	if ((size_t)q_snprintf(path, sizeof(path), "%s/descript.ion",
+		game_path) < sizeof(path))
+	{
+		file = fopen(path, "r");
+		if (file)
+		{
+			read_size = description_size > Q_MAXINT ?
+				Q_MAXINT : (int)description_size;
+			if (fgets(description, read_size, file))
+			{
+				fclose(file);
+				length = strlen(description);
+				while (length > 0 &&
+					(description[length - 1] == '\n' ||
+					 description[length - 1] == '\r'))
+					description[--length] = '\0';
+				return description[0] != '\0';
+			}
+			fclose(file);
+		}
+	}
+
+	memset(&signatures, 0, sizeof(signatures));
+	for (pak_dir = 0; pak_dir < (int)Q_COUNTOF(pak_dirs); ++pak_dir)
+	{
+		for (pak_num = 0; pak_num < 10; ++pak_num)
+		{
+			if ((size_t)q_snprintf(path, sizeof(path), "%s/%spak%d.pak",
+				game_path, pak_dirs[pak_dir], pak_num) >= sizeof(path))
+				continue;
+			COM_DetectGameSignaturesInPak(path, &signatures);
+		}
+	}
+
+	if (signatures.ad)
+		q_strlcpy(description, "Arcane Dimensions", description_size);
+	else if (signatures.hip_demo1 && signatures.hip_demo2 &&
+		signatures.hip_demo3 && signatures.hip_demo4)
+		q_strlcpy(description,
+			"Mission Pack 1: Scourge of Armagon - Hipnotic",
+			description_size);
+	else if (signatures.rogue_end1 && signatures.rogue_end2 &&
+		signatures.rogue_map1 && signatures.rogue_map2 &&
+		signatures.rogue_map3 && signatures.rogue_map4)
+		q_strlcpy(description,
+			"Mission Pack 2: Dissolution of Eternity - Rogue",
+			description_size);
+	else if (signatures.mg_hub && signatures.mg_end &&
+		signatures.mg_map1 && signatures.mg_horde1)
+		q_strlcpy(description,
+			"Dimension of the Machine - MachineGames", description_size);
+
+	return description[0] != '\0';
 }
 
 static void COM_AddGameDirectory(const char* dir); // woods #pakdirs

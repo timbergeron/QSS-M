@@ -649,6 +649,9 @@ typedef struct
 	int64_t timestamp_start;
 	discord_presence_snapshot_t sent;
 	discord_presence_snapshot_t pending;
+	char mod_detection_key[128];
+	char mod_detection_description[128];
+	qboolean mod_detection_cached;
 	qboolean have_sent;
 	qboolean have_pending;
 } discord_presence_state_t;
@@ -776,14 +779,223 @@ static const char *DiscordPresence_PlaymodeLabel(const char *playmode)
 	return NULL;
 }
 
-static const char *DiscordPresence_ModLabel(const char *mod, const char *modname)
+static void DiscordPresence_CopyModCandidate(char *destination,
+	size_t destination_size, const char *source)
 {
-	if ((modname[0] && q_strcasestr(modname, "crmod")) ||
-		(mod[0] && q_strcasestr(mod, "crmod")))
+	const char *start, *end, *p;
+	size_t written = 0;
+
+	if (!destination_size)
+		return;
+	destination[0] = '\0';
+	if (!source)
+		return;
+
+	start = source;
+	end = source + strlen(source);
+	for (p = start; p < end; ++p)
+		if (*p == ';')
+			start = p + 1;
+	for (p = start; p < end; ++p)
+		if (*p == '/' || *p == '\\')
+			start = p + 1;
+	while (start < end && (unsigned char)*start <= ' ')
+		++start;
+	while (end > start && (unsigned char)end[-1] <= ' ')
+		--end;
+
+	while (start < end && written + 1 < destination_size)
+	{
+		unsigned char c = (unsigned char)*start++;
+		if (c & 0x80)
+			c &= 0x7f;
+		if (c >= 32 && c < 127)
+			destination[written++] = (char)c;
+	}
+	destination[written] = '\0';
+}
+
+static const char *DiscordPresence_KnownServerModLabel(const char *mod)
+{
+	if (!mod || !mod[0])
+		return NULL;
+	if (q_strcasestr(mod, "crmod"))
 		return "CRMod 7";
-	if (mod[0] && q_strcasestr(mod, "nqcrx"))
+	if (q_strcasestr(mod, "nqcrx") || !q_strcasecmp(mod, "crx"))
 		return "ClanRing";
+	if (!q_strcasecmp(mod, "crctf"))
+		return "ClanRing CTF";
 	return NULL;
+}
+
+static const char *DiscordPresence_KnownModLabel(const char *mod)
+{
+	const char *known = DiscordPresence_KnownServerModLabel(mod);
+
+	if (known)
+		return known;
+	if (!mod || !mod[0])
+		return NULL;
+	if (!q_strcasecmp(mod, "hipnotic"))
+		return "Scourge of Armagon";
+	if (!q_strcasecmp(mod, "rogue"))
+		return "Dissolution of Eternity";
+	if (!q_strcasecmp(mod, "dopa"))
+		return "Dimension of the Past";
+	if (!q_strcasecmp(mod, "mg1"))
+		return "Dimension of the Machine";
+	if (!q_strcasecmp(mod, "ad"))
+		return "Arcane Dimensions";
+	if (!q_strcasecmp(mod, "quoth"))
+		return "Quoth";
+	return NULL;
+}
+
+/* Longest description the PAK signature table can produce is 46 chars
+ * ("Mission Pack 2: Dissolution of Eternity - Rogue"), so every built-in
+ * name clears this. Anything longer is a community descript.ion writing
+ * prose rather than naming itself; see DiscordPresence_TryModCandidate. */
+#define DISCORD_PRESENCE_MAX_MOD_LABEL 48
+
+/* Detection reads up to 20 PAKs, so results are cached. The cache holds a
+ * single entry, which is enough because DiscordPresence_BuildModLabel only
+ * ever looks up the first *non-empty* candidate it finds - the key is stable
+ * for a given gamedir and only turns over when the gamedir does, not once per
+ * snapshot. Keep that property if you add candidates, or this starts hitting
+ * the disk from the frame path. */
+static const char *DiscordPresence_DetectedModLabel(const char *mod)
+{
+	char description[sizeof(discord_presence.mod_detection_description)];
+
+	if (!discord_presence.mod_detection_cached ||
+		strcmp(discord_presence.mod_detection_key, mod))
+	{
+		discord_presence.mod_detection_cached = true;
+		q_strlcpy(discord_presence.mod_detection_key, mod,
+			sizeof(discord_presence.mod_detection_key));
+		discord_presence.mod_detection_description[0] = '\0';
+
+		if (COM_DetectGameDescription(mod, description, sizeof(description)))
+			DiscordPresence_CopyASCII(
+				discord_presence.mod_detection_description,
+				sizeof(discord_presence.mod_detection_description),
+				description);
+	}
+
+	return discord_presence.mod_detection_description[0] ?
+		discord_presence.mod_detection_description : NULL;
+}
+
+static qboolean DiscordPresence_TryModCandidate(char *destination,
+	size_t destination_size, const char *source)
+{
+	char candidate[128];
+	const char *label;
+
+	if (!destination_size)
+		return false;
+	DiscordPresence_CopyModCandidate(candidate, sizeof(candidate), source);
+	if (!candidate[0] || !q_strcasecmp(candidate, GAMENAME) ||
+		!q_strcasecmp(candidate, "qw"))
+		return false;
+
+	/* Detection first, so presence shows the same smart name as the Mods menu,
+	 * including custom descript.ion names. Discord only gives us ~128 chars of
+	 * "details" shared with the activity prefix and the multiplayer mode, and a
+	 * blurb-length description would push the mode off the end - so overlong
+	 * descriptions fall back to the curated name, then to the gamedir, instead
+	 * of being truncated mid-sentence. The Mods menu keeps the full text. */
+	label = DiscordPresence_DetectedModLabel(candidate);
+	if (label && strlen(label) > DISCORD_PRESENCE_MAX_MOD_LABEL)
+		label = NULL;
+	if (!label)
+		label = DiscordPresence_KnownModLabel(candidate);
+	q_strlcpy(destination, label ? label : candidate, destination_size);
+	return true;
+}
+
+static void DiscordPresence_BuildModLabel(char *destination,
+	size_t destination_size)
+{
+	char mod[64] = "", modname[64] = "", gamedir[MAX_OSPATH] = "";
+	const char *known;
+
+	if (!destination_size)
+		return;
+	destination[0] = '\0';
+
+	if (cls.state == ca_connected)
+	{
+		/* Prefer explicit server metadata and legacy runtime signatures. */
+		Info_GetKey(cl.serverinfo, "mod", mod, sizeof(mod));
+		Info_GetKey(cl.serverinfo, "modname", modname, sizeof(modname));
+
+		known = DiscordPresence_KnownServerModLabel(modname);
+		if (!known)
+			known = DiscordPresence_KnownServerModLabel(mod);
+		if (known)
+		{
+			q_strlcpy(destination, known, destination_size);
+			return;
+		}
+
+		/* Classic/NQ CRx and hybrid/QE CRx are deliberately named differently.
+		 * Note this switch must stay *after* the KnownServerModLabel checks
+		 * above: cl_main.c sets modtype 1 for both CRx and CRMod servers
+		 * (modname containing "crmod" also lands there), so it is the earlier
+		 * "crmod" match that keeps CRMod out of the ClanRing case below.
+		 * modtype 5 is FTE, an engine rather than a mod, so it falls through
+		 * to gamedir detection. */
+		switch (cl.modtype)
+		{
+		case 2:
+			q_strlcpy(destination, "ClanRing CTF", destination_size);
+			return;
+		case 3:
+			q_strlcpy(destination, "CRMod 7", destination_size);
+			return;
+		case 4:
+			q_strlcpy(destination, "CRx", destination_size);
+			return;
+		case 6:
+			q_strlcpy(destination, "RuneQuake", destination_size);
+			return;
+		default:
+			break;
+		}
+
+		if (cl.modtype == 1)
+		{
+			q_strlcpy(destination, "ClanRing", destination_size);
+			return;
+		}
+		if (DiscordPresence_TryModCandidate(destination, destination_size, modname) ||
+			DiscordPresence_TryModCandidate(destination, destination_size, mod))
+			return;
+
+		Info_GetKey(cl.serverinfo, "*gamedir", gamedir, sizeof(gamedir));
+		if (DiscordPresence_TryModCandidate(destination, destination_size, gamedir) ||
+			DiscordPresence_TryModCandidate(destination, destination_size,
+				cl.server_gamedir))
+			return;
+	}
+
+	/* Local search paths cover single-player, demos, and older servers. */
+	if (DiscordPresence_TryModCandidate(destination, destination_size,
+		COM_GetGameNames(false)))
+		return;
+	DiscordPresence_TryModCandidate(destination, destination_size,
+		COM_SkipPath(com_gamedir));
+}
+
+static void DiscordPresence_SetDetails(discord_presence_snapshot_t *snapshot,
+	const char *activity, const char *mod_label)
+{
+	if (mod_label[0])
+		q_snprintf(snapshot->details, sizeof(snapshot->details), "%s - %s",
+			activity, mod_label);
+	else
+		q_strlcpy(snapshot->details, activity, sizeof(snapshot->details));
 }
 
 static qboolean DiscordPresence_UserinfoValueEnabled(const char *value)
@@ -900,27 +1112,23 @@ static int64_t DiscordPresence_MapStartTimestamp(discord_presence_kind_t kind)
 }
 
 static void DiscordPresence_BuildMultiplayer(discord_presence_snapshot_t *snapshot,
-	const char *map)
+	const char *map, const char *mod_label)
 {
 	char mode[32] = "", gametype[32] = "", playmode[32] = "";
-	char mod[64] = "", modname[64] = "";
-	const char *mode_label, *playmode_label, *mod_label;
+	const char *mode_label, *playmode_label;
 	qboolean spectating;
 
 	Info_GetKey(cl.serverinfo, "mode", mode, sizeof(mode));
 	Info_GetKey(cl.serverinfo, "gametype", gametype, sizeof(gametype));
 	Info_GetKey(cl.serverinfo, "playmode", playmode, sizeof(playmode));
-	Info_GetKey(cl.serverinfo, "mod", mod, sizeof(mod));
-	Info_GetKey(cl.serverinfo, "modname", modname, sizeof(modname));
 
 	mode_label = DiscordPresence_ModeLabel(mode[0] ? mode : gametype);
 	playmode_label = DiscordPresence_PlaymodeLabel(playmode);
-	mod_label = DiscordPresence_ModLabel(mod, modname);
 	spectating = DiscordPresence_LocalPlayerSpectating();
 
-	if (mod_label && mode_label)
+	if (mod_label[0] && mode_label)
 		q_snprintf(snapshot->details, sizeof(snapshot->details), "%s - %s", mod_label, mode_label);
-	else if (mod_label)
+	else if (mod_label[0])
 		q_strlcpy(snapshot->details, mod_label, sizeof(snapshot->details));
 	else if (mode_label)
 		q_snprintf(snapshot->details, sizeof(snapshot->details), "Multiplayer - %s", mode_label);
@@ -941,46 +1149,48 @@ static void DiscordPresence_BuildSnapshot(discord_presence_snapshot_t *snapshot)
 {
 	discord_presence_kind_t kind = DiscordPresence_CurrentKind();
 	char map[sizeof(cl.mapname)];
+	char mod_label[128];
 
 	memset(snapshot, 0, sizeof(*snapshot));
 	DiscordPresence_CopyASCII(map, sizeof(map), cl.mapname);
+	DiscordPresence_BuildModLabel(mod_label, sizeof(mod_label));
 	if (!map[0])
 		q_strlcpy(map, "Unknown map", sizeof(map));
 
 	if (kind == DISCORD_PRESENCE_MENU)
 	{
-		q_strlcpy(snapshot->details, "Main Menu", sizeof(snapshot->details));
+		DiscordPresence_SetDetails(snapshot, "Main Menu", mod_label);
 		discord_presence.timestamp_start = 0;
 		discord_presence.timestamp_maptime = 0;
 		return;
 	}
 	if (kind == DISCORD_PRESENCE_CONNECTING)
 	{
-		q_strlcpy(snapshot->details, "Connecting", sizeof(snapshot->details));
+		DiscordPresence_SetDetails(snapshot, "Connecting", mod_label);
 		discord_presence.timestamp_start = 0;
 		discord_presence.timestamp_maptime = 0;
 		return;
 	}
 	if (kind == DISCORD_PRESENCE_DEMO)
 	{
-		q_strlcpy(snapshot->details, "Watching a Demo", sizeof(snapshot->details));
+		DiscordPresence_SetDetails(snapshot, "Watching a Demo", mod_label);
 		q_strlcpy(snapshot->state, map, sizeof(snapshot->state));
 	}
 	else if (kind == DISCORD_PRESENCE_SINGLE_PLAYER)
 	{
-		q_strlcpy(snapshot->details, "Single Player", sizeof(snapshot->details));
+		DiscordPresence_SetDetails(snapshot, "Single Player", mod_label);
 		q_strlcpy(snapshot->state, map, sizeof(snapshot->state));
 	}
 	else if (kind == DISCORD_PRESENCE_COOP)
 	{
-		q_strlcpy(snapshot->details, "Co-op", sizeof(snapshot->details));
+		DiscordPresence_SetDetails(snapshot, "Co-op", mod_label);
 		q_strlcpy(snapshot->state, map, sizeof(snapshot->state));
 		DiscordPresence_AddPlayerCount(snapshot);
 		DiscordPresence_BuildServerHover(snapshot);
 	}
 	else
 	{
-		DiscordPresence_BuildMultiplayer(snapshot, map);
+		DiscordPresence_BuildMultiplayer(snapshot, map, mod_label);
 		DiscordPresence_AddPlayerCount(snapshot);
 		DiscordPresence_BuildServerHover(snapshot);
 	}

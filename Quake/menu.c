@@ -30477,7 +30477,6 @@ static void M_GameOptions_CheckLeave(void)
 static qboolean M_GameOptions_ModIsSelectable(const char *name)
 {
 	char check_path[MAX_OSPATH];
-	char game_dir[MAX_OSPATH];
 	char game_path[MAX_OSPATH];
 	FILE *check_file;
 	int pak_num;
@@ -30485,21 +30484,25 @@ static qboolean M_GameOptions_ModIsSelectable(const char *name)
 	if (!name || !*name || !q_strcasecmp(name, GAMENAME))
 		return false;
 
-	if (!COM_ResolveGameDir(name, game_dir, sizeof(game_dir)))
+	if (!COM_ResolveGameDirPath(name, game_path, sizeof(game_path)))
 		return false;
 
-	q_snprintf(game_path, sizeof(game_path), "%s/%s", com_basedir, game_dir);
-	q_snprintf(check_path, sizeof(check_path), "%s/progs.dat", game_path);
-	check_file = fopen(check_path, "rb");
-	if (check_file)
+	if ((size_t)q_snprintf(check_path, sizeof(check_path), "%s/progs.dat",
+		game_path) < sizeof(check_path))
 	{
-		fclose(check_file);
-		return true;
+		check_file = fopen(check_path, "rb");
+		if (check_file)
+		{
+			fclose(check_file);
+			return true;
+		}
 	}
 
 	for (pak_num = 0; pak_num < 10; pak_num++)
 	{
-		q_snprintf(check_path, sizeof(check_path), "%s/pak%d.pak", game_path, pak_num);
+		if ((size_t)q_snprintf(check_path, sizeof(check_path),
+			"%s/pak%d.pak", game_path, pak_num) >= sizeof(check_path))
+			continue;
 		check_file = fopen(check_path, "rb");
 		if (check_file)
 		{
@@ -30509,7 +30512,9 @@ static qboolean M_GameOptions_ModIsSelectable(const char *name)
 	}
 	for (pak_num = 0; pak_num < 10; pak_num++)
 	{
-		q_snprintf(check_path, sizeof(check_path), "%s/paks/pak%d.pak", game_path, pak_num);
+		if ((size_t)q_snprintf(check_path, sizeof(check_path),
+			"%s/paks/pak%d.pak", game_path, pak_num) >= sizeof(check_path))
+			continue;
 		check_file = fopen(check_path, "rb");
 		if (check_file)
 		{
@@ -34559,32 +34564,35 @@ static int M_Mods_ContentCount(void)
 static void M_Mods_Add(const char* name)
 {
 	char check_path[MAX_OSPATH];
-	char game_dir[MAX_OSPATH];
 	char game_path[MAX_OSPATH];
 	FILE *check_file;
 	qboolean has_progs = false;
 	qboolean has_pak = false;
 	int pak_num;
 
-	if (!COM_ResolveGameDir(name, game_dir, sizeof(game_dir)))
+	if (!COM_ResolveGameDirPath(name, game_path, sizeof(game_path)))
 		return;
-	q_snprintf(game_path, sizeof(game_path), "%s/%s", com_basedir, game_dir);
-	
+
 	// Check for progs.dat
-	q_snprintf(check_path, sizeof(check_path), "%s/progs.dat", game_path);
-	check_file = fopen(check_path, "rb");
-	if (check_file)
+	if ((size_t)q_snprintf(check_path, sizeof(check_path), "%s/progs.dat",
+		game_path) < sizeof(check_path))
 	{
-		has_progs = true;
-		fclose(check_file);
+		check_file = fopen(check_path, "rb");
+		if (check_file)
+		{
+			has_progs = true;
+			fclose(check_file);
+		}
 	}
-	
+
 	// Check for pak files (pak0.pak, pak1.pak, etc)
 	if (!has_progs)
 	{
 		for (pak_num = 0; pak_num < 10 && !has_pak; pak_num++)
 		{
-			q_snprintf(check_path, sizeof(check_path), "%s/pak%d.pak", game_path, pak_num);
+			if ((size_t)q_snprintf(check_path, sizeof(check_path),
+				"%s/pak%d.pak", game_path, pak_num) >= sizeof(check_path))
+				continue;
 			check_file = fopen(check_path, "rb");
 			if (check_file)
 			{
@@ -34594,7 +34602,10 @@ static void M_Mods_Add(const char* name)
 		}
 		for (pak_num = 0; pak_num < 10 && !has_pak; pak_num++)
 		{
-			q_snprintf(check_path, sizeof(check_path), "%s/paks/pak%d.pak", game_path, pak_num);
+			if ((size_t)q_snprintf(check_path, sizeof(check_path),
+				"%s/paks/pak%d.pak", game_path, pak_num) >=
+				sizeof(check_path))
+				continue;
 			check_file = fopen(check_path, "rb");
 			if (check_file)
 			{
@@ -34613,190 +34624,7 @@ static void M_Mods_Add(const char* name)
 	mod.name = name;
 	mod.download_menu = false;
 	
-	// Special case: Auto-detect known mods by scanning PAK files
-	{
-		char pakpath[MAX_OSPATH];
-		qboolean found_ad_signature = false;
-		qboolean found_hip_demo1 = false;
-		qboolean found_hip_demo2 = false;
-		qboolean found_hip_demo3 = false;
-		qboolean found_hip_demo4 = false;
-		qboolean found_rog_end1 = false;
-		qboolean found_rog_end2 = false;
-		qboolean found_rog_r1m1 = false;
-		qboolean found_rog_r1m2 = false;
-		qboolean found_rog_r1m3 = false;
-		qboolean found_rog_r1m4 = false;
-		qboolean found_mg_hub = false;
-		qboolean found_mg_mgend = false;
-		qboolean found_mg_mge1m1 = false;
-		qboolean found_mg_horde1 = false;
-		int pak_dir;
-		const char *pak_dirs[] = {"", "paks/"};
-		
-		// PAK file structures (local definitions)
-		#pragma pack(push, 1)
-		typedef struct { char name[56]; int filepos; int filelen; } pak_entry_t;
-		typedef struct { char id[4]; int dirofs; int dirlen; } pak_header_t;
-		#pragma pack(pop)
-		
-		// Scan pak0.pak through pak9.pak in the game dir and optional paks/ folder.
-		for (pak_dir = 0; pak_dir < 2; pak_dir++)
-		{
-			for (pak_num = 0; pak_num < 10; pak_num++)
-			{
-				FILE *pakfile;
-				pak_header_t header;
-				long pak_size;
-				unsigned int numfiles, j;
-
-				q_snprintf(pakpath, sizeof(pakpath), "%s/%spak%d.pak", game_path, pak_dirs[pak_dir], pak_num);
-				pakfile = fopen(pakpath, "rb");
-				if (!pakfile)
-					continue;
-
-				// Read PAK header
-				if (fread(&header, 1, sizeof(header), pakfile) != sizeof(header))
-				{
-					fclose(pakfile);
-					continue;
-				}
-
-				// Verify PAK signature
-				if (header.id[0] != 'P' || header.id[1] != 'A' || header.id[2] != 'C' || header.id[3] != 'K')
-				{
-					fclose(pakfile);
-					continue;
-				}
-
-				header.dirofs = LittleLong(header.dirofs);
-				header.dirlen = LittleLong(header.dirlen);
-
-				if (fseek(pakfile, 0, SEEK_END) != 0 ||
-					(pak_size = ftell(pakfile)) < (long)sizeof(header))
-				{
-					fclose(pakfile);
-					continue;
-				}
-
-				if (header.dirlen < 0 || header.dirofs < 0 ||
-					header.dirlen % (int)sizeof(pak_entry_t) != 0 ||
-					(long)header.dirofs > pak_size ||
-					(long)header.dirlen > pak_size - (long)header.dirofs)
-				{
-					fclose(pakfile);
-					continue;
-				}
-
-				numfiles = (unsigned int)(header.dirlen / (int)sizeof(pak_entry_t));
-				if (numfiles > 4096)
-				{
-					fclose(pakfile);
-					continue;
-				}
-
-				// Seek to directory
-				if (fseek(pakfile, header.dirofs, SEEK_SET) != 0)
-				{
-					fclose(pakfile);
-					continue;
-				}
-
-				// Read and scan entries one at a time
-				for (j = 0; j < numfiles; j++)
-				{
-					pak_entry_t entry;
-					if (fread(&entry, sizeof(entry), 1, pakfile) != 1)
-						break;
-
-					// Check for Arcane Dimensions signature
-					if (!strcmp(entry.name, "maps/ad_chapters.bsp"))
-						found_ad_signature = true;
-
-					// Check for Hipnotic (Mission Pack 1) demos
-					else if (!strcmp(entry.name, "hipdemo1.dem"))
-						found_hip_demo1 = true;
-					else if (!strcmp(entry.name, "hipdemo2.dem"))
-						found_hip_demo2 = true;
-					else if (!strcmp(entry.name, "hipdemo3.dem"))
-						found_hip_demo3 = true;
-					else if (!strcmp(entry.name, "hipdemo4.dem"))
-						found_hip_demo4 = true;
-
-					// Check for Rogue (Mission Pack 2) files
-					else if (!strcmp(entry.name, "end1.bin"))
-						found_rog_end1 = true;
-					else if (!strcmp(entry.name, "end2.bin"))
-						found_rog_end2 = true;
-					else if (!strcmp(entry.name, "maps/r1m1.bsp"))
-						found_rog_r1m1 = true;
-					else if (!strcmp(entry.name, "maps/r1m2.bsp"))
-						found_rog_r1m2 = true;
-					else if (!strcmp(entry.name, "maps/r1m3.bsp"))
-						found_rog_r1m3 = true;
-					else if (!strcmp(entry.name, "maps/r1m4.bsp"))
-						found_rog_r1m4 = true;
-
-					// Check for Dimension of the Machine (MachineGames) files
-					else if (!strcmp(entry.name, "maps/hub.bsp"))
-						found_mg_hub = true;
-					else if (!strcmp(entry.name, "maps/mgend.bsp"))
-						found_mg_mgend = true;
-					else if (!strcmp(entry.name, "maps/mge1m1.bsp"))
-						found_mg_mge1m1 = true;
-					else if (!strcmp(entry.name, "maps/horde1.bsp"))
-						found_mg_horde1 = true;
-				}
-
-				fclose(pakfile);
-			}
-		}
-
-		// Set description based on detected mod
-		if (found_ad_signature)
-		{
-			q_strlcpy(mod.description, "Arcane Dimensions", sizeof(mod.description));
-		}
-		else if (found_hip_demo1 && found_hip_demo2 && found_hip_demo3 && found_hip_demo4)
-		{
-			q_strlcpy(mod.description, "Mission Pack 1: Scourge of Armagon - Hipnotic", sizeof(mod.description));
-		}
-		else if (found_rog_end1 && found_rog_end2 && found_rog_r1m1 && found_rog_r1m2 && found_rog_r1m3 && found_rog_r1m4)
-		{
-			q_strlcpy(mod.description, "Mission Pack 2: Dissolution of Eternity - Rogue", sizeof(mod.description));
-		}
-		else if (found_mg_hub && found_mg_mgend && found_mg_mge1m1 && found_mg_horde1)
-		{
-			q_strlcpy(mod.description, "Dimension of the Machine - MachineGames", sizeof(mod.description));
-		}
-		else
-		{
-			mod.description[0] = '\0'; // No description yet
-		}
-	}
-
-	// Read description from descript.ion file
-	{
-		char desc_path[MAX_OSPATH];
-		FILE *f;
-		q_snprintf(desc_path, sizeof(desc_path), "%s/descript.ion", game_path);
-		f = fopen(desc_path, "r");
-		if (f)
-		{
-			if (fgets(mod.description, sizeof(mod.description), f))
-			{
-				// Remove trailing newline if present
-				size_t len = strlen(mod.description);
-				if (len > 0 && mod.description[len-1] == '\n')
-					mod.description[len-1] = '\0';
-			}
-			fclose(f);
-		}
-		else
-		{
-			// mod.description[0] = '\0';  // Don't clear - preserve auto-detected description
-		}
-	}
+	COM_DetectGameDescription(name, mod.description, sizeof(mod.description));
 
 	mod.active = M_Mods_IsActive(name);
 	if (mod.active && modsmenu.list.cursor == -1)
