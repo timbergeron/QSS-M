@@ -24,12 +24,12 @@ char  **gArgv;
 BOOL   gFinderLaunch;
 BOOL   gCalledAppMainline = FALSE;
 
-/* woods: show download progress on the dock icon (see Sys_SetDockProgress in sys.h)
+/* woods: show download progress and notification counts on the Dock icon
 
-   The stock -[NSDockTile setBadgeLabel:] always draws the system red badge,
-   which can't be recoloured. So instead we install a custom content view that
-   redraws the app icon plus a Chrome-style circular progress indicator at the
-   bottom-right, with the filled arc drawn in our own colour. */
+   Notification counts use the stock system badge. Download progress needs its
+   own colour, so it uses a custom content view that redraws the app icon plus a
+   Chrome-style circular progress indicator at the bottom-right. AppKit draws
+   the notification badge over either form of the tile. */
 
 #define DOCKBADGE_R (0x8f / 255.0)
 #define DOCKBADGE_G (0x58 / 255.0)
@@ -128,6 +128,58 @@ BOOL   gCalledAppMainline = FALSE;
 @end
 
 static QSSDockProgressView *dockProgressView = nil;
+static NSUInteger dockNotificationCount = 0;
+
+void Sys_ClearDockNotificationBadge (void)
+{
+    dispatch_block_t apply = ^{
+        @autoreleasepool {
+            NSDockTile *tile;
+
+            dockNotificationCount = 0;
+            tile = [NSApp dockTile];
+            if (tile && [tile badgeLabel] != nil)
+            {
+                [tile setBadgeLabel:nil];
+                [tile display];
+            }
+        }
+    };
+    if ([NSThread isMainThread])
+        apply();
+    else
+        dispatch_async (dispatch_get_main_queue(), apply);
+}
+
+void Sys_IncrementDockNotificationBadge (void)
+{
+    /* Discord notifications are queued from the engine thread today, but keep
+       all AppKit access on the main thread if that ever changes. */
+    dispatch_block_t apply = ^{
+        @autoreleasepool {
+            NSDockTile *tile = [NSApp dockTile];
+            NSString *label;
+
+            /* count first so the unread state survives even if the tile is
+               somehow unavailable; the next increment redraws the total. */
+            if (dockNotificationCount < NSUIntegerMax)
+                dockNotificationCount++;
+
+            if (!tile)
+                return;
+
+            label = (dockNotificationCount > 99)
+                ? @"99+"
+                : [NSString stringWithFormat:@"%lu", (unsigned long)dockNotificationCount];
+            [tile setBadgeLabel:label];
+            [tile display];
+        }
+    };
+    if ([NSThread isMainThread])
+        apply();
+    else
+        dispatch_async (dispatch_get_main_queue(), apply);
+}
 
 void Sys_SetDockProgress (float fraction)
 {

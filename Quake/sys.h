@@ -97,6 +97,11 @@ void Sys_SetDockProgress (float fraction);
 // fraction 0..1 shows progress; a negative value clears it.
 // No-op on other platforms or when the shell API is unavailable.
 
+void Sys_IncrementDockNotificationBadge (void);
+// Increment the macOS Dock notification count. The badge is cleared when the
+// application becomes active. No-op on other platforms.
+void Sys_ClearDockNotificationBadge (void);
+
 #if defined(_WIN32) // woods #disablecaps via ironwail
 void Sys_ActivateKeyFilter (qboolean active);
 #endif

@@ -2176,6 +2176,14 @@ void Sys_SetDockProgress (float fraction)
 #endif
 }
 
+void Sys_IncrementDockNotificationBadge (void)
+{
+}
+
+void Sys_ClearDockNotificationBadge (void)
+{
+}
+
 #if defined(_WIN32) // woods #disablecaps via ironwail
 void Sys_ActivateKeyFilter (qboolean active)
 {

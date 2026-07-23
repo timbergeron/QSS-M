@@ -2414,6 +2414,14 @@ void Sys_SetDockProgress (float fraction)
 {
 	(void)fraction;
 }
+
+void Sys_IncrementDockNotificationBadge (void)
+{
+}
+
+void Sys_ClearDockNotificationBadge (void)
+{
+}
 #endif
 
 #ifdef __APPLE__

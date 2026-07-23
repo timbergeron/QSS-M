@@ -1981,6 +1981,7 @@ static void Con_Print (const char *txt)
 		return;
 
 	if (!VID_HasMouseOrInputFocus() && !cls.demoplayback) // woods flash if my name is mentioned #flash
+	{
 		if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
 		{ 
 			char namewithcolon[20]; // me talking while away needs to be avoided (f_ prints, alt tabbed, etc)
@@ -1999,45 +2000,47 @@ static void Con_Print (const char *txt)
 				
 				if (!strstr(txt, namewithcolon) && !matchstats && !strstr(txt, "alt-tabbed") && !strstr(txt, "next quad at")) // not me typing away or in a match end auto print -> "woods): "
 				{ 
+					qboolean should_notify = false; // woods #discord -- one flash/notify per message
+
 					if (cl_afk.value)
 					{
 						if (Q_strcasestr(txt, afk_name)) // has my name minus AFK (afk_name is only created if cl_afk 1)
+							should_notify = true;
+					}
+					else if (Q_strcasestr(txt, cl_name.string)) // has my name
+						should_notify = true;
+
+					if (!should_notify) // con_notifylist keywords
+					{
+						char notifylist[MAXCMDLINE];
+						char* saveptr;
+						char* token;
+
+						snprintf(notifylist, sizeof(notifylist), "%s", con_notifylist.string);
+
+						token = SDL_strtokr(notifylist, " ", &saveptr);
+						while (token != NULL)
 						{
-							SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);	
-							QSSM_DiscordNotify(txt); // woods #discord
-						}
-					}
-					else
-					{ 
-						if (Q_strcasestr(txt, cl_name.string)) // has my name
-						{
-							SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
-							QSSM_DiscordNotify(txt); // woods #discord
-					}
-					}
-
-					char notifylist[MAXCMDLINE];
-					snprintf(notifylist, sizeof(notifylist), "%s", con_notifylist.string);
-
-					char* saveptr;
-					char* token = SDL_strtokr(notifylist, " ", &saveptr);
-
-					if (strstr(txt, ": ")) {
-						while (token != NULL) {
 							char* found = Q_strcasestr(txt, token);
-							if (found != NULL) {
-								// Check if the remaining string after the token is exactly one character
-								if (strlen(found) == strlen(token) + 1) {
-									SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
-									QSSM_DiscordNotify(txt); // woods #discord
-								}
+							// Check if the remaining string after the token is exactly one character
+							if (found != NULL && strlen(found) == strlen(token) + 1)
+							{
+								should_notify = true;
+								break;
 							}
 							token = SDL_strtokr(NULL, " ", &saveptr);
 						}
 					}
+
+					if (should_notify)
+					{
+						SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
+						QSSM_DiscordNotify(txt); // woods #discord
+					}
 				}
 			}
 		}
+	}
 
 	if (strstr(txt, "dm [")) // woods #tell+
 	{
@@ -6828,8 +6831,10 @@ static void QSSM_DiscordNotify(const char *raw_msg)
     q_strlcpy(job->url, con_notifydiscord.string, sizeof(job->url));
 
     SDL_Thread *t = SDL_CreateThread(DiscordThread, "discord", job);
-	if (t)
+	if (t) {
 		SDL_DetachThread(t);
+		Sys_IncrementDockNotificationBadge();
+	}
 	else {
 		Con_DPrintf("discord: failed to create thread: %s\n", SDL_GetError());
 		free(job);
