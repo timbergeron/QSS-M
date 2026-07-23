@@ -24372,7 +24372,19 @@ static void M_Extras_AdjustSliders (int dir)
 			M_LivePreview_Reset();
 		break;
 	case EXTRAS_DISCORD_PRESENCE:
-		Cvar_SetValueQuick(&cl_discord_presence, !cl_discord_presence.value);
+		if (!isfinite(cl_discord_presence.value) ||
+			cl_discord_presence.value < DISCORD_PRESENCE_MODE_OFF ||
+			cl_discord_presence.value >= DISCORD_PRESENCE_MODE_COUNT ||
+			cl_discord_presence.value != (int)cl_discord_presence.value)
+			m = DISCORD_PRESENCE_MODE_OFF;
+		else
+			m = (int)cl_discord_presence.value;
+		m += dir;
+		if (m < DISCORD_PRESENCE_MODE_OFF)
+			m = DISCORD_PRESENCE_MODE_CONNECTED;
+		if (m >= DISCORD_PRESENCE_MODE_COUNT)
+			m = DISCORD_PRESENCE_MODE_OFF;
+		Cvar_SetValueQuick(&cl_discord_presence, m);
 		break;
 	case EXTRAS_MODELVIEWER:
 		M_Menu_ModelViewer_f();
@@ -24549,7 +24561,21 @@ void M_Extras_Draw(void)
 
 		case EXTRAS_DISCORD_PRESENCE:
 			text = "  Discord Presence";
-			value = cl_discord_presence.value ? "on" : "off";
+			if (!isfinite(cl_discord_presence.value) ||
+				cl_discord_presence.value < DISCORD_PRESENCE_MODE_OFF ||
+				cl_discord_presence.value >= DISCORD_PRESENCE_MODE_COUNT ||
+				cl_discord_presence.value != (int)cl_discord_presence.value)
+				value = "unknown";
+			else
+			{
+				switch ((int)cl_discord_presence.value)
+				{
+				case DISCORD_PRESENCE_MODE_OFF: value = "off"; break;
+				case DISCORD_PRESENCE_MODE_ALL: value = "all"; break;
+				case DISCORD_PRESENCE_MODE_CONNECTED: value = "connected"; break;
+				default: value = "unknown"; break;
+				}
+			}
 			break;
 
 		case EXTRAS_MODELVIEWER:

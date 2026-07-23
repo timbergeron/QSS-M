@@ -576,6 +576,13 @@ dlight_t *CL_AllocDlight (int key);
 void	CL_DecayLights (void);
 
 void CL_Init (void);
+typedef enum
+{
+	DISCORD_PRESENCE_MODE_OFF,
+	DISCORD_PRESENCE_MODE_ALL,
+	DISCORD_PRESENCE_MODE_CONNECTED,
+	DISCORD_PRESENCE_MODE_COUNT
+} discord_presence_mode_t;
 extern cvar_t cl_discord_presence;
 void DiscordPresence_Init(void);
 void DiscordPresence_Shutdown(void);

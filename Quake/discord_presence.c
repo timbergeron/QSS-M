@@ -655,6 +655,50 @@ typedef struct
 
 static discord_presence_state_t discord_presence;
 
+static discord_presence_mode_t DiscordPresence_GetMode(void)
+{
+	float value = cl_discord_presence.value;
+	int mode;
+
+	if (!isfinite(value) || value < DISCORD_PRESENCE_MODE_OFF ||
+		value >= DISCORD_PRESENCE_MODE_COUNT)
+		return DISCORD_PRESENCE_MODE_OFF;
+	mode = (int)value;
+	if (value != (float)mode)
+		return DISCORD_PRESENCE_MODE_OFF;
+	return (discord_presence_mode_t)mode;
+}
+
+static discord_presence_kind_t DiscordPresence_CurrentKind(void)
+{
+	if (cls.state == ca_disconnected)
+		return DISCORD_PRESENCE_MENU;
+	if (cls.signon != SIGNONS)
+		return DISCORD_PRESENCE_CONNECTING;
+	if (cls.demoplayback)
+		return DISCORD_PRESENCE_DEMO;
+	if (cl.maxclients <= 1)
+		return DISCORD_PRESENCE_SINGLE_PLAYER;
+	if (cl.gametype == GAME_COOP)
+		return DISCORD_PRESENCE_COOP;
+	return DISCORD_PRESENCE_MULTIPLAYER;
+}
+
+static qboolean DiscordPresence_ModeAllowsKind(discord_presence_mode_t mode,
+	discord_presence_kind_t kind)
+{
+	switch (mode)
+	{
+	case DISCORD_PRESENCE_MODE_ALL:
+		return true;
+	case DISCORD_PRESENCE_MODE_CONNECTED:
+		return kind == DISCORD_PRESENCE_COOP ||
+			kind == DISCORD_PRESENCE_MULTIPLAYER;
+	default:
+		return false;
+	}
+}
+
 static qboolean DiscordPresence_ApplicationIdValid(void)
 {
 	const unsigned char *p = (const unsigned char *)QSSM_DISCORD_APP_ID;
@@ -895,7 +939,7 @@ static void DiscordPresence_BuildMultiplayer(discord_presence_snapshot_t *snapsh
 
 static void DiscordPresence_BuildSnapshot(discord_presence_snapshot_t *snapshot)
 {
-	discord_presence_kind_t kind;
+	discord_presence_kind_t kind = DiscordPresence_CurrentKind();
 	char map[sizeof(cl.mapname)];
 
 	memset(snapshot, 0, sizeof(*snapshot));
@@ -903,37 +947,32 @@ static void DiscordPresence_BuildSnapshot(discord_presence_snapshot_t *snapshot)
 	if (!map[0])
 		q_strlcpy(map, "Unknown map", sizeof(map));
 
-	if (cls.state == ca_disconnected)
+	if (kind == DISCORD_PRESENCE_MENU)
 	{
-		kind = DISCORD_PRESENCE_MENU;
 		q_strlcpy(snapshot->details, "Main Menu", sizeof(snapshot->details));
 		discord_presence.timestamp_start = 0;
 		discord_presence.timestamp_maptime = 0;
 		return;
 	}
-	if (cls.signon != SIGNONS)
+	if (kind == DISCORD_PRESENCE_CONNECTING)
 	{
-		kind = DISCORD_PRESENCE_CONNECTING;
 		q_strlcpy(snapshot->details, "Connecting", sizeof(snapshot->details));
 		discord_presence.timestamp_start = 0;
 		discord_presence.timestamp_maptime = 0;
 		return;
 	}
-	if (cls.demoplayback)
+	if (kind == DISCORD_PRESENCE_DEMO)
 	{
-		kind = DISCORD_PRESENCE_DEMO;
 		q_strlcpy(snapshot->details, "Watching a Demo", sizeof(snapshot->details));
 		q_strlcpy(snapshot->state, map, sizeof(snapshot->state));
 	}
-	else if (cl.maxclients <= 1)
+	else if (kind == DISCORD_PRESENCE_SINGLE_PLAYER)
 	{
-		kind = DISCORD_PRESENCE_SINGLE_PLAYER;
 		q_strlcpy(snapshot->details, "Single Player", sizeof(snapshot->details));
 		q_strlcpy(snapshot->state, map, sizeof(snapshot->state));
 	}
-	else if (cl.gametype == GAME_COOP)
+	else if (kind == DISCORD_PRESENCE_COOP)
 	{
-		kind = DISCORD_PRESENCE_COOP;
 		q_strlcpy(snapshot->details, "Co-op", sizeof(snapshot->details));
 		q_strlcpy(snapshot->state, map, sizeof(snapshot->state));
 		DiscordPresence_AddPlayerCount(snapshot);
@@ -941,7 +980,6 @@ static void DiscordPresence_BuildSnapshot(discord_presence_snapshot_t *snapshot)
 	}
 	else
 	{
-		kind = DISCORD_PRESENCE_MULTIPLAYER;
 		DiscordPresence_BuildMultiplayer(snapshot, map);
 		DiscordPresence_AddPlayerCount(snapshot);
 		DiscordPresence_BuildServerHover(snapshot);
@@ -1158,6 +1196,34 @@ static void DiscordPresence_DriveDisable(double now)
 	}
 }
 
+/*
+===============
+DiscordPresence_Completion_f -- woods #iwtabcomplete
+===============
+*/
+static void DiscordPresence_Completion_f(cvar_t* cvar, const char* partial)
+{
+	static const struct
+	{
+		const char* value;
+		const char* type;
+	} modes[] =
+	{
+		{ "0", "off" },
+		{ "1", "all" },
+		{ "2", "connected" },
+	};
+	size_t i;
+
+	(void)cvar;
+
+	if (Cmd_Argc() != 2)
+		return;
+
+	for (i = 0; i < Q_COUNTOF(modes); i++)
+		Con_AddToTabList(modes[i].value, partial, modes[i].type, NULL);
+}
+
 void DiscordPresence_Init(void)
 {
 	memset(&discord_presence, 0, sizeof(discord_presence));
@@ -1165,6 +1231,7 @@ void DiscordPresence_Init(void)
 	discord_presence.application_id_valid = DiscordPresence_ApplicationIdValid();
 	DiscordIPC_Init();
 	Cvar_RegisterVariable(&cl_discord_presence);
+	Cvar_SetCompletion(&cl_discord_presence, &DiscordPresence_Completion_f); // woods #iwtabcomplete
 	discord_presence.initialized = true;
 }
 
@@ -1182,6 +1249,7 @@ void DiscordPresence_Shutdown(void)
 void DiscordPresence_Frame(void)
 {
 	double now;
+	discord_presence_mode_t mode;
 
 	if (!discord_presence.initialized)
 		return;
@@ -1192,7 +1260,9 @@ void DiscordPresence_Frame(void)
 		if (discord_presence.disabling)
 			return;
 	}
-	if (!cl_discord_presence.value || cls.state == ca_dedicated)
+	mode = DiscordPresence_GetMode();
+	if (cls.state == ca_dedicated ||
+		!DiscordPresence_ModeAllowsKind(mode, DiscordPresence_CurrentKind()))
 	{
 		if (discord_presence.enabled)
 		{
