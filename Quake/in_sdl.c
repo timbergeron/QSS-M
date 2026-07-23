@@ -5230,6 +5230,7 @@ void IN_SendKeyEvents (void)
 
 			if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
 			{
+				Sys_ClearDockNotificationBadge();
 #if defined(_WIN32) // woods #disablecaps via ironwail
 				Sys_ActivateKeyFilter(true);
 #endif

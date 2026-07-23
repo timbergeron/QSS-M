@@ -32,6 +32,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "q_ctype.h"
 
 #include <sys/types.h>
+#include <limits.h>
 #include <errno.h>
 #include <io.h>
 #include <direct.h>
@@ -81,6 +82,14 @@ typedef struct qss_ITaskbarList3Vtbl {
 	HRESULT (STDMETHODCALLTYPE *MarkFullscreenWindow)(qss_ITaskbarList3 *self, HWND hwnd, BOOL fFullscreen);
 	HRESULT (STDMETHODCALLTYPE *SetProgressValue)(qss_ITaskbarList3 *self, HWND hwnd, ULONGLONG ullCompleted, ULONGLONG ullTotal);
 	HRESULT (STDMETHODCALLTYPE *SetProgressState)(qss_ITaskbarList3 *self, HWND hwnd, qss_tbpflag_t tbpFlags);
+	HRESULT (STDMETHODCALLTYPE *RegisterTab)(qss_ITaskbarList3 *self, HWND hwndTab, HWND hwndMDI);
+	HRESULT (STDMETHODCALLTYPE *UnregisterTab)(qss_ITaskbarList3 *self, HWND hwndTab);
+	HRESULT (STDMETHODCALLTYPE *SetTabOrder)(qss_ITaskbarList3 *self, HWND hwndTab, HWND hwndInsertBefore);
+	HRESULT (STDMETHODCALLTYPE *SetTabActive)(qss_ITaskbarList3 *self, HWND hwndTab, HWND hwndMDI, DWORD reserved);
+	HRESULT (STDMETHODCALLTYPE *ThumbBarAddButtons)(qss_ITaskbarList3 *self, HWND hwnd, UINT count, void *buttons);
+	HRESULT (STDMETHODCALLTYPE *ThumbBarUpdateButtons)(qss_ITaskbarList3 *self, HWND hwnd, UINT count, void *buttons);
+	HRESULT (STDMETHODCALLTYPE *ThumbBarSetImageList)(qss_ITaskbarList3 *self, HWND hwnd, HANDLE imageList);
+	HRESULT (STDMETHODCALLTYPE *SetOverlayIcon)(qss_ITaskbarList3 *self, HWND hwnd, HICON icon, LPCWSTR description);
 } qss_ITaskbarList3Vtbl;
 struct qss_ITaskbarList3 {
 	const qss_ITaskbarList3Vtbl *lpVtbl;
@@ -100,9 +109,19 @@ static qss_CoUninitialize_f taskbar_CoUninitialize;
 static qss_ITaskbarList3 *taskbar_list;
 static qboolean taskbar_init_attempted;
 static qboolean taskbar_com_initialized;
-static HWND taskbar_hwnd;
+static HWND taskbar_progress_hwnd;
+static HWND taskbar_notification_hwnd;
+static unsigned int taskbar_notification_count;
+static UINT taskbar_button_created_message;
+static qboolean taskbar_message_hook_installed;
+static qboolean taskbar_shutdown;	/* set at quit so late calls cannot re-init COM */
 
-static void Sys_ShutdownTaskbarProgress(void);
+/* last progress state, reapplied when explorer recreates the taskbar button */
+static const ULONGLONG taskbar_progress_total = 1000;
+static qss_tbpflag_t taskbar_progress_state;
+static ULONGLONG taskbar_progress_completed;
+
+static void Sys_ShutdownTaskbarShell(void);
 #endif
 
 static size_t	sys_handles_max;	/* spike -- removed limit, was 32 (johnfitz -- was 10) */
@@ -1001,7 +1020,8 @@ void Sys_Error (const char *error, ...)
 	Con_Redirect(NULL);
 
 #if defined(USE_SDL2)
-	Sys_ShutdownTaskbarProgress();
+	taskbar_shutdown = true;
+	Sys_ShutdownTaskbarShell();
 #endif
 
 	if (isDedicated)
@@ -1670,7 +1690,8 @@ void Sys_Printf (const char *fmt, ...)
 void Sys_Quit (void)
 {
 #if defined(USE_SDL2)
-	Sys_ShutdownTaskbarProgress();
+	taskbar_shutdown = true;
+	Sys_ShutdownTaskbarShell();
 #endif
 
 	Host_Shutdown();
@@ -2031,7 +2052,7 @@ static void Sys_UnloadTaskbarOle32(void)
 	}
 }
 
-static HWND Sys_TaskbarProgressWindow(void)
+static HWND Sys_TaskbarWindow(void)
 {
 	SDL_Window *window;
 	SDL_SysWMinfo wmInfo;
@@ -2050,11 +2071,190 @@ static HWND Sys_TaskbarProgressWindow(void)
 	return wmInfo.info.win.window;
 }
 
-static qboolean Sys_InitTaskbarProgress(void)
+static HICON Sys_CreateTaskbarNotificationIcon(unsigned int count)
+{
+	const int size = 16;
+	HDC screen_dc = NULL;
+	HDC color_dc = NULL;
+	HDC mask_dc = NULL;
+	HBITMAP color_bitmap = NULL;
+	HBITMAP mask_bitmap = NULL;
+	HGDIOBJ old_color_bitmap = NULL;
+	HGDIOBJ old_mask_bitmap = NULL;
+	HGDIOBJ old_brush;
+	HGDIOBJ old_pen;
+	HGDIOBJ old_font = NULL;
+	HBRUSH badge_brush = NULL;
+	HFONT font = NULL;
+	HICON icon = NULL;
+	ICONINFO info;
+	RECT text_rect;
+	WCHAR label[16];
+	int font_height;
+
+	screen_dc = GetDC(NULL);
+	if (!screen_dc)
+		goto cleanup;
+
+	color_dc = CreateCompatibleDC(screen_dc);
+	mask_dc = CreateCompatibleDC(screen_dc);
+	color_bitmap = CreateCompatibleBitmap(screen_dc, size, size);
+	mask_bitmap = CreateBitmap(size, size, 1, 1, NULL);
+	if (!color_dc || !mask_dc || !color_bitmap || !mask_bitmap)
+		goto cleanup;
+
+	old_color_bitmap = SelectObject(color_dc, color_bitmap);
+	old_mask_bitmap = SelectObject(mask_dc, mask_bitmap);
+	if (!old_color_bitmap || !old_mask_bitmap)
+		goto cleanup;
+
+	/* The monochrome mask is white (transparent) outside the red badge and
+	   black (opaque) inside it. This also works on pre-alpha taskbars. */
+	PatBlt(color_dc, 0, 0, size, size, BLACKNESS);
+	PatBlt(mask_dc, 0, 0, size, size, WHITENESS);
+
+	badge_brush = CreateSolidBrush(RGB(205, 35, 50));
+	if (!badge_brush)
+		goto cleanup;
+
+	old_brush = SelectObject(color_dc, badge_brush);
+	old_pen = SelectObject(color_dc, GetStockObject(NULL_PEN));
+	Ellipse(color_dc, 0, 0, size, size);
+	SelectObject(color_dc, old_pen);
+	SelectObject(color_dc, old_brush);
+
+	old_brush = SelectObject(mask_dc, GetStockObject(BLACK_BRUSH));
+	old_pen = SelectObject(mask_dc, GetStockObject(NULL_PEN));
+	Ellipse(mask_dc, 0, 0, size, size);
+	SelectObject(mask_dc, old_pen);
+	SelectObject(mask_dc, old_brush);
+
+	if (count > 99)
+	{
+		lstrcpyW(label, L"99+");
+		font_height = -7;
+	}
+	else
+	{
+		wsprintfW(label, L"%u", count);
+		font_height = count > 9 ? -9 : -12;
+	}
+
+	font = CreateFontW(font_height, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+	old_font = SelectObject(color_dc,
+		font ? (HGDIOBJ)font : GetStockObject(DEFAULT_GUI_FONT));
+	SetBkMode(color_dc, TRANSPARENT);
+	SetTextColor(color_dc, RGB(255, 255, 255));
+	SetRect(&text_rect, 0, 0, size, size);
+	DrawTextW(color_dc, label, -1, &text_rect,
+		DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+	if (old_font)
+		SelectObject(color_dc, old_font);
+
+	/* CreateIconIndirect requires that neither bitmap still be selected into
+	   a DC, so put the originals back before handing them over. */
+	SelectObject(color_dc, old_color_bitmap);
+	SelectObject(mask_dc, old_mask_bitmap);
+	old_color_bitmap = NULL;
+	old_mask_bitmap = NULL;
+
+	memset(&info, 0, sizeof(info));
+	info.fIcon = TRUE;
+	info.hbmColor = color_bitmap;
+	info.hbmMask = mask_bitmap;
+	icon = CreateIconIndirect(&info);
+
+cleanup:
+	if (color_dc && old_color_bitmap)
+		SelectObject(color_dc, old_color_bitmap);
+	if (mask_dc && old_mask_bitmap)
+		SelectObject(mask_dc, old_mask_bitmap);
+	if (font)
+		DeleteObject(font);
+	if (badge_brush)
+		DeleteObject(badge_brush);
+	if (color_bitmap)
+		DeleteObject(color_bitmap);
+	if (mask_bitmap)
+		DeleteObject(mask_bitmap);
+	if (color_dc)
+		DeleteDC(color_dc);
+	if (mask_dc)
+		DeleteDC(mask_dc);
+	if (screen_dc)
+		ReleaseDC(NULL, screen_dc);
+
+	return icon;
+}
+
+static void Sys_ApplyTaskbarNotificationBadge(HWND hwnd)
+{
+	HICON icon;
+	WCHAR description[64];
+	HRESULT hr;
+
+	if (!taskbar_list || !hwnd || !taskbar_notification_count)
+		return;
+
+	icon = Sys_CreateTaskbarNotificationIcon(taskbar_notification_count);
+	if (!icon)
+		return;
+
+	if (taskbar_notification_count > 99)
+		lstrcpyW(description, L"99 or more unread notifications");
+	else if (taskbar_notification_count == 1)
+		lstrcpyW(description, L"1 unread notification");
+	else
+		wsprintfW(description, L"%u unread notifications",
+			taskbar_notification_count);
+
+	hr = taskbar_list->lpVtbl->SetOverlayIcon(taskbar_list, hwnd, icon, description);
+	DestroyIcon(icon); /* SetOverlayIcon keeps its own copy. */
+	if (SUCCEEDED(hr))
+		taskbar_notification_hwnd = hwnd;
+}
+
+static void Sys_ApplyTaskbarProgress(HWND hwnd)
+{
+	if (!taskbar_list || !hwnd || taskbar_progress_state == QSS_TBPF_NOPROGRESS)
+		return;
+
+	taskbar_list->lpVtbl->SetProgressState(taskbar_list, hwnd, taskbar_progress_state);
+	if (taskbar_progress_state == QSS_TBPF_NORMAL)
+		taskbar_list->lpVtbl->SetProgressValue(taskbar_list, hwnd,
+			taskbar_progress_completed, taskbar_progress_total);
+	taskbar_progress_hwnd = hwnd;
+}
+
+static void SDLCALL Sys_TaskbarMessageHook(void *userdata, void *window,
+	unsigned int message, Uint64 wparam, Sint64 lparam)
+{
+	(void)userdata;
+	(void)wparam;
+	(void)lparam;
+
+	if (message != taskbar_button_created_message)
+		return;
+
+	/* Explorer discards overlays and progress when it restarts.
+	   TaskbarButtonCreated means this window's replacement taskbar button is
+	   ready for the saved count and progress state to be reapplied. */
+	taskbar_notification_hwnd = NULL;
+	taskbar_progress_hwnd = NULL;
+	Sys_ApplyTaskbarNotificationBadge((HWND)window);
+	Sys_ApplyTaskbarProgress((HWND)window);
+}
+
+static qboolean Sys_InitTaskbarShell(void)
 {
 	qss_CoInitializeEx_f pCoInitializeEx;
 	qss_CoCreateInstance_f pCoCreateInstance;
 	HRESULT hr;
+
+	if (taskbar_shutdown)
+		return false;
 
 	if (taskbar_init_attempted)
 		return taskbar_list != NULL;
@@ -2086,7 +2286,7 @@ static qboolean Sys_InitTaskbarProgress(void)
 		&qss_IID_ITaskbarList3, (LPVOID *)&taskbar_list);
 	if (FAILED(hr) || !taskbar_list)
 	{
-		Sys_ShutdownTaskbarProgress();
+		Sys_ShutdownTaskbarShell();
 		taskbar_init_attempted = true;
 		return false;
 	}
@@ -2094,25 +2294,46 @@ static qboolean Sys_InitTaskbarProgress(void)
 	hr = taskbar_list->lpVtbl->HrInit(taskbar_list);
 	if (FAILED(hr))
 	{
-		Sys_ShutdownTaskbarProgress();
+		Sys_ShutdownTaskbarShell();
 		taskbar_init_attempted = true;
 		return false;
+	}
+
+	taskbar_button_created_message = RegisterWindowMessageW(L"TaskbarButtonCreated");
+	if (taskbar_button_created_message)
+	{
+		SDL_SetWindowsMessageHook(Sys_TaskbarMessageHook, NULL);
+		taskbar_message_hook_installed = true;
 	}
 
 	return true;
 }
 
-static void Sys_ShutdownTaskbarProgress(void)
+static void Sys_ShutdownTaskbarShell(void)
 {
+	if (taskbar_message_hook_installed)
+	{
+		SDL_SetWindowsMessageHook(NULL, NULL);
+		taskbar_message_hook_installed = false;
+	}
+	taskbar_button_created_message = 0;
+
 	if (taskbar_list)
 	{
-		if (taskbar_hwnd)
-			taskbar_list->lpVtbl->SetProgressState(taskbar_list, taskbar_hwnd, QSS_TBPF_NOPROGRESS);
+		if (taskbar_notification_hwnd)
+			taskbar_list->lpVtbl->SetOverlayIcon(taskbar_list,
+				taskbar_notification_hwnd, NULL, NULL);
+		if (taskbar_progress_hwnd)
+			taskbar_list->lpVtbl->SetProgressState(taskbar_list, taskbar_progress_hwnd, QSS_TBPF_NOPROGRESS);
 		taskbar_list->lpVtbl->Release(taskbar_list);
 		taskbar_list = NULL;
 	}
 
-	taskbar_hwnd = NULL;
+	taskbar_progress_hwnd = NULL;
+	taskbar_notification_hwnd = NULL;
+	taskbar_notification_count = 0;
+	taskbar_progress_state = QSS_TBPF_NOPROGRESS;
+	taskbar_progress_completed = 0;
 	taskbar_init_attempted = false;
 
 	if (taskbar_com_initialized && taskbar_CoUninitialize)
@@ -2130,7 +2351,7 @@ void Sys_SetDockProgress (float fraction)
 #if defined(USE_SDL2)
 	HWND hwnd;
 	ULONGLONG completed;
-	const ULONGLONG total = 1000;
+	const ULONGLONG total = taskbar_progress_total;
 
 	if (isDedicated)
 		return;
@@ -2138,27 +2359,29 @@ void Sys_SetDockProgress (float fraction)
 	if (fraction < 0.0f && !taskbar_list)
 		return;
 
-	if (!Sys_InitTaskbarProgress())
+	if (!Sys_InitTaskbarShell())
 		return;
 
-	hwnd = Sys_TaskbarProgressWindow();
+	hwnd = Sys_TaskbarWindow();
 	if (!hwnd && fraction < 0.0f)
-		hwnd = taskbar_hwnd;
+		hwnd = taskbar_progress_hwnd;
 	if (!hwnd)
 		return;
 
 	if (fraction < 0.0f)
 	{
 		taskbar_list->lpVtbl->SetProgressState(taskbar_list, hwnd, QSS_TBPF_NOPROGRESS);
-		taskbar_hwnd = NULL;
+		taskbar_progress_state = QSS_TBPF_NOPROGRESS;
+		taskbar_progress_hwnd = NULL;
 		return;
 	}
 
-	taskbar_hwnd = hwnd;
+	taskbar_progress_hwnd = hwnd;
 
 	if (fraction <= 0.0f)
 	{
 		taskbar_list->lpVtbl->SetProgressState(taskbar_list, hwnd, QSS_TBPF_INDETERMINATE);
+		taskbar_progress_state = QSS_TBPF_INDETERMINATE;
 		return;
 	}
 
@@ -2171,6 +2394,8 @@ void Sys_SetDockProgress (float fraction)
 
 	taskbar_list->lpVtbl->SetProgressState(taskbar_list, hwnd, QSS_TBPF_NORMAL);
 	taskbar_list->lpVtbl->SetProgressValue(taskbar_list, hwnd, completed, total);
+	taskbar_progress_state = QSS_TBPF_NORMAL;
+	taskbar_progress_completed = completed;
 #else
 	(void)fraction;
 #endif
@@ -2178,10 +2403,48 @@ void Sys_SetDockProgress (float fraction)
 
 void Sys_IncrementDockNotificationBadge (void)
 {
+#if defined(USE_SDL2)
+	HWND hwnd;
+
+	if (isDedicated)
+		return;
+
+	/* count first: the badge is unread state, so a notification that arrives
+	   before there is a window must not be lost. TaskbarButtonCreated and the
+	   next notification both reapply whatever has accumulated. */
+	if (taskbar_notification_count < UINT_MAX)
+		taskbar_notification_count++;
+
+	if (!Sys_InitTaskbarShell())
+		return;
+
+	hwnd = Sys_TaskbarWindow();
+	if (!hwnd)
+		return;
+
+	Sys_ApplyTaskbarNotificationBadge(hwnd);
+#endif
 }
 
 void Sys_ClearDockNotificationBadge (void)
 {
+#if defined(USE_SDL2)
+	HWND hwnd;
+
+	taskbar_notification_count = 0;
+	if (!taskbar_list)
+	{
+		taskbar_notification_hwnd = NULL;
+		return;
+	}
+
+	hwnd = Sys_TaskbarWindow();
+	if (!hwnd)
+		hwnd = taskbar_notification_hwnd;
+	if (hwnd)
+		taskbar_list->lpVtbl->SetOverlayIcon(taskbar_list, hwnd, NULL, NULL);
+	taskbar_notification_hwnd = NULL;
+#endif
 }
 
 #if defined(_WIN32) // woods #disablecaps via ironwail

@@ -98,8 +98,8 @@ void Sys_SetDockProgress (float fraction);
 // No-op on other platforms or when the shell API is unavailable.
 
 void Sys_IncrementDockNotificationBadge (void);
-// Increment the macOS Dock notification count. The badge is cleared when the
-// application becomes active. No-op on other platforms.
+// Increment the macOS Dock or Windows taskbar notification count. The badge is
+// cleared when the game regains focus. No-op on other platforms.
 void Sys_ClearDockNotificationBadge (void);
 
 #if defined(_WIN32) // woods #disablecaps via ironwail

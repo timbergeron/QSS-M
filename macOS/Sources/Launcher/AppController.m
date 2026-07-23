@@ -60,7 +60,6 @@ static const CGFloat QSSRawMouseSwitchRightInsetExtra = 8.0f;
 static const CGFloat QSSShortcutTableRightGutter = 18.0f;
 
 extern void Cbuf_AddText (const char *text); /* engine command buffer (cmd.c) */
-extern void Sys_ClearDockNotificationBadge (void); /* SDLMain.m */
 
 static NSURL *QSSGameFolderURL(void)
 {
@@ -3501,7 +3500,6 @@ doCommandBySelector:(SEL)commandSelector
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
     (void)notification;
-    Sys_ClearDockNotificationBadge();
     [self refreshLauncherAppearance];
     [self refreshRawMouseSwitchState];
 }
