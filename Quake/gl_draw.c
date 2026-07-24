@@ -1687,6 +1687,72 @@ void Draw_StringAnimatedDots(int x, int y, const char* str)
 
 /*
 ================
+Draw_RestoreStringState -- woods
+Shared tail for the tinted/animated string drawers.
+================
+*/
+static void Draw_RestoreStringState (void)
+{
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f (1, 1, 1, gl_menu_alpha);
+	}
+	else
+	{
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable (GL_ALPHA_TEST);
+		glDisable (GL_BLEND);
+		glColor4f (1, 1, 1, 1);
+	}
+}
+
+/*
+================
+Draw_SweepBand -- woods
+Per-glyph math for Draw_StringGradientSweep: where the sweep head sits relative
+to a glyph centre, as a 0..1 in-band mix, a bell shaped highlight, and a tail.
+================
+*/
+static void Draw_SweepBand (float cx, float t, float cycle_w, float sweep_span, float tail_span,
+							float* out_mix, float* out_highlight, float* out_tail)
+{
+	float	mix = 0.0f, highlight = 0.0f, tail = 0.0f;
+	float	d = cx - t;
+
+	if (d < 0.0f)
+		d += cycle_w;
+
+	// inside-band mix (0..1), using smoothstep for soft edges
+	if (d >= 0.0f && d <= sweep_span)
+	{
+		float u = CLAMP(0.0f, d / sweep_span, 1.0f);
+		float centered;
+
+		mix = u * u * (3.0f - 2.0f * u);
+
+		centered = 1.0f - fabsf(u - 0.5f) * 2.0f; // 0 at edges, 1 at center
+		if (centered > 0.0f)
+			highlight = centered * centered; // 0..1, bell-like
+	}
+
+	// trailing tail (0..1), behind the sweep head
+	if (tail_span > 0.0f)
+	{
+		float wrap = cycle_w - d;
+		if (wrap > 0.0f && wrap <= tail_span)
+		{
+			float u = CLAMP(0.0f, 1.0f - (wrap / tail_span), 1.0f);
+			tail = u * u * (3.0f - 2.0f * u);
+		}
+	}
+
+	*out_mix = mix;
+	*out_highlight = highlight;
+	*out_tail = tail;
+}
+
+/*
+================
 Draw_StringGradientSweep -- woods
 Unmasked: white → palette(128) red with a bright core + warm tail.
 Masked  : baseline EXACT red; sweep LIGHTENS toward white (no base alpha boost).
@@ -1749,128 +1815,261 @@ void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float 
 	GL_Bind(char_texture);
 	glBegin(GL_QUADS);
 
-	float px = (float)x;
 	for (int i = 0; i < len; ++i)
 	{
 		unsigned char ch = (unsigned char)str[i];
-		if (ch != 32)
+		float mix, highlight, tail;
+		int glyph;
+
+		if (ch == 32)
+			continue;
+
+		Draw_SweepBand ((float)(i * char_w + char_w * 0.5f), t, cycle_w, sweep_span, tail_span,
+						&mix, &highlight, &tail);
+
+		glyph = masked ? ((int)ch + 128) & 255 : (int)ch;
+
+		if (!masked)
 		{
-			const float cx = (float)(i * char_w + char_w * 0.5f);
+			// UNMASKED (white font): white -> red, plus bright core + warm tail.
+			float r = (1.0f - mix) + mix * red_r;
+			float g = (1.0f - mix) + mix * red_g;
+			float b = (1.0f - mix) + mix * red_b;
+			float final_alpha = draw_alpha;
 
-			// position of sweep relative to this glyph center
-			float d = cx - t;
-			if (d < 0.0f) d += cycle_w;
-
-			// inside-band mix (0..1), using smoothstep for soft edges
-			float mix = 0.0f;
-			float highlight = 0.0f; // peaked at center of sweep
-			if (d >= 0.0f && d <= sweep_span)
+			if (highlight > 0.0f)
 			{
-				float u = CLAMP(0.0f, d / sweep_span, 1.0f);
-				// smoothstep
-				mix = u * u * (3.0f - 2.0f * u);
-
-				float centered = 1.0f - fabsf(u - 0.5f) * 2.0f; // 0 at edges, 1 at center
-				if (centered > 0.0f)
-				{
-					centered *= centered;
-					highlight = centered; // 0..1, bell-like
-				}
+				float glow = highlight * glow_strength_unmasked;
+				r = CLAMP(0.0f, r + glow, 1.0f);
+				g = CLAMP(0.0f, g + glow * 0.5f, 1.0f);
+				b = CLAMP(0.0f, b + glow * 0.5f, 1.0f);
+				final_alpha = CLAMP(0.0f, draw_alpha * (1.0f + highlight * alpha_boost_unmasked), 1.0f);
 			}
 
-			// trailing tail (0..1), behind the sweep head
-			float tail = 0.0f;
-			if (tail_span > 0.0f)
+			if (tail > 0.0f)
 			{
-				float wrap = cycle_w - d;
-				if (wrap > 0.0f && wrap <= tail_span)
-				{
-					float u = 1.0f - (wrap / tail_span);
-					u = CLAMP(0.0f, u, 1.0f);
-					tail = u * u * (3.0f - 2.0f * u);
-				}
+				float fade = tail * 0.15f;
+				r = CLAMP(0.0f, r + fade, 1.0f);
+				g = CLAMP(0.0f, g + fade * 0.35f, 1.0f);
+				b = CLAMP(0.0f, b + fade * 0.35f, 1.0f);
 			}
 
-			int glyph = masked ? ((int)ch + 128) & 255 : (int)ch;
-
-			if (!masked)
-			{
-				// UNMASKED (white font): white -> red, plus bright core + warm tail.
-				float r = (1.0f - mix) + mix * red_r;
-				float g = (1.0f - mix) + mix * red_g;
-				float b = (1.0f - mix) + mix * red_b;
-
-				if (highlight > 0.0f)
-				{
-					float glow = highlight * glow_strength_unmasked;
-					r = CLAMP(0.0f, r + glow, 1.0f);
-					g = CLAMP(0.0f, g + glow * 0.5f, 1.0f);
-					b = CLAMP(0.0f, b + glow * 0.5f, 1.0f);
-				}
-
-				if (tail > 0.0f)
-				{
-					float fade = tail * 0.15f;
-					r = CLAMP(0.0f, r + fade, 1.0f);
-					g = CLAMP(0.0f, g + fade * 0.35f, 1.0f);
-					b = CLAMP(0.0f, b + fade * 0.35f, 1.0f);
-				}
-
-				float final_alpha = draw_alpha;
-				if (highlight > 0.0f)
-					final_alpha = CLAMP(0.0f, draw_alpha * (1.0f + highlight * alpha_boost_unmasked), 1.0f);
-
-				glColor4f(r, g, b, final_alpha);
-				Draw_CharacterQuad((int)px, y, (char)glyph);
-			}
-			else
-			{
-				// MASKED (red font): baseline EXACT red (no brightening), sweep LIGHTENS via small additive pass.
-
-				// Base pass: keep the original red exactly (color=white under MODULATE).
-				glColor4f(1.0f, 1.0f, 1.0f, draw_alpha);
-				Draw_CharacterQuad((int)px, y, (char)glyph);
-
-				// Additive lift only where the sweep/tail passes.
-				float add_amt = 0.0f;
-				if (highlight > 0.0f)
-					add_amt += highlight * masked_add_gain;
-				if (tail > 0.0f)
-					add_amt += tail * masked_tail_gain;
-
-				if (add_amt > 0.0f)
-				{
-					// one tiny additive pass in white to lift brightness toward white
-					glEnd(); // close current batch to safely change blend func
-
-					glBlendFunc(GL_SRC_ALPHA, GL_ONE); // additive
-					glBegin(GL_QUADS);
-					glColor4f(1.0f, 1.0f, 1.0f, CLAMP(0.0f, add_amt * draw_alpha, 1.0f));
-					Draw_CharacterQuad((int)px, y, (char)glyph);
-					glEnd();
-
-					// restore normal blending and resume batching
-					glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-					glBegin(GL_QUADS);
-				}
-			}
+			glColor4f(r, g, b, final_alpha);
 		}
-		px += (float)char_w;
+		else
+		{
+			// MASKED (red font): baseline EXACT red (color=white under MODULATE).
+			glColor4f(1.0f, 1.0f, 1.0f, draw_alpha);
+		}
+
+		Draw_CharacterQuad(x + i * char_w, y, (char)glyph);
 	}
 
 	glEnd();
 
-	if (gl_menu_alpha < 1.0f)
+	if (masked)
 	{
-		glColor4f(1, 1, 1, gl_menu_alpha);
+		// MASKED: one batched additive pass lifts brightness where the sweep/tail falls.
+		qboolean batching = false;
+
+		for (int i = 0; i < len; ++i)
+		{
+			unsigned char ch = (unsigned char)str[i];
+			float mix, highlight, tail, add_amt;
+
+			if (ch == 32)
+				continue;
+
+			Draw_SweepBand ((float)(i * char_w + char_w * 0.5f), t, cycle_w, sweep_span, tail_span,
+							&mix, &highlight, &tail);
+
+			add_amt = highlight * masked_add_gain + tail * masked_tail_gain;
+			if (add_amt <= 0.0f)
+				continue;
+
+			if (!batching)
+			{
+				glBlendFunc(GL_SRC_ALPHA, GL_ONE); // additive
+				glBegin(GL_QUADS);
+				batching = true;
+			}
+
+			glColor4f(1.0f, 1.0f, 1.0f, CLAMP(0.0f, add_amt * draw_alpha, 1.0f));
+			Draw_CharacterQuad(x + i * char_w, y, (char)(((int)ch + 128) & 255));
+		}
+
+		if (batching)
+		{
+			glEnd();
+			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		}
+	}
+
+	Draw_RestoreStringState ();
+}
+
+/*
+================
+Draw_CharacterQuadSlice -- woods
+One horizontal eighth of a conchars glyph, so a character can be shaded with a
+vertical gradient.  slice is 0 (top) .. 7 (bottom).
+================
+*/
+static void Draw_CharacterQuadSlice (int x, int y, char num, int slice)
+{
+	int				row, col;
+	float			frow, fcol, xsize, ysize, ystep;
+
+	if (char_hexen2)
+	{
+		row = (byte)num>>5;
+		col = (byte)num&31;
+		if (row >= 4)	//urgh... haxx...
+			row += 8-4;
+
+		xsize = 1.0/32;
+		ysize = 1.0/16;
 	}
 	else
 	{
-		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-		glEnable(GL_ALPHA_TEST);
-		glDisable(GL_BLEND);
-		glColor4f(1, 1, 1, 1);
+		row = num>>4;
+		col = num&15;
+
+		xsize = ysize = 0.0625;
 	}
+	fcol = col*xsize;
+	ystep = ysize * 0.125f;
+	frow = row*ysize + slice*ystep;
+
+	glTexCoord2f (fcol, frow);
+	glVertex2f (x, y + slice);
+	glTexCoord2f (fcol + xsize, frow);
+	glVertex2f (x+8, y + slice);
+	glTexCoord2f (fcol + xsize, frow + ystep);
+	glVertex2f (x+8, y + slice + 1);
+	glTexCoord2f (fcol, frow + ystep);
+	glVertex2f (x, y + slice + 1);
+}
+
+/*
+================
+Draw_StringSaturnShine -- woods
+Sega Saturn style text shine, ported from qrustyquake (cyanbun96, 348af76).
+There a lit scanline ping-pongs through the eight rows of every glyph, nudging
+each pixel up and down its own 16 colour palette ramp so the text lights up
+without changing hue.  We have no palette to walk in GL, so each character is
+sliced into its eight source rows: rows away from the lit line are darkened with
+a MODULATE pass, rows near it get a second additive pass that scales the glyph's
+own colour -- which keeps the hue for both the white and the red charset.
+
+speed  -- rows per second; the sweep is a 16 row ping-pong, so 40 matches the
+          original's pace
+masked -- true to use the red/brown half of the charset
+================
+*/
+void Draw_StringSaturnShine (int x, int y, const char* str, float speed, float alpha, qboolean masked)
+{
+	int		i, s, len;
+	float	litline, shine[8];
+	qboolean batching;
+
+	if (!str || !*str)
+		return;
+
+	len = (int)strlen(str);
+	if (!len)
+		return;
+
+	const int	char_w = 8;
+	const float	draw_alpha = CLAMP(0.0f, alpha, 1.0f) * gl_menu_alpha;
+
+	// Tunables (in-function "knobs")
+	const float	band = 3.5f;	// how many rows the lit line reaches
+	const float	dim_floor = 0.70f;	// brightness of the rows furthest from the line
+	const float	add_gain = 0.35f;	// additive lift at the centre of the line
+
+	// 16 row ping-pong, same cycle the software version steps through
+	if (speed > 0.0f)
+	{
+		float phase = fmodf ((float)realtime * speed, 16.0f);
+		litline = (phase <= 8.0f) ? phase : 16.0f - phase;
+	}
+	else
+		litline = 4.0f;
+
+	// the lit line is the same for every glyph, so shade the rows once
+	for (s = 0; s < 8; s++)
+	{
+		float u = 1.0f - fabsf ((float)s + 0.5f - litline) / band;
+		shine[s] = (u > 0.0f) ? u * u * (3.0f - 2.0f * u) : 0.0f;
+	}
+
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_ALPHA_TEST);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+
+	GL_Bind(char_texture);
+	glBegin(GL_QUADS);
+
+	for (i = 0; i < len; ++i)
+	{
+		unsigned char ch = (unsigned char)str[i];
+		int glyph;
+
+		if (ch == 32)
+			continue;
+
+		glyph = masked ? ((int)ch + 128) & 255 : (int)ch;
+
+		for (s = 0; s < 8; s++)
+		{
+			float lum = dim_floor + (1.0f - dim_floor) * shine[s];
+			glColor4f(lum, lum, lum, draw_alpha);
+			Draw_CharacterQuadSlice(x + i * char_w, y, (char)glyph, s);
+		}
+	}
+
+	glEnd();
+
+	// additive pass over the lit rows only -- white colour under MODULATE adds the
+	// glyph's own texel back on top, brightening it without washing out the hue
+	batching = false;
+	for (i = 0; i < len; ++i)
+	{
+		unsigned char ch = (unsigned char)str[i];
+		int glyph;
+
+		if (ch == 32)
+			continue;
+
+		glyph = masked ? ((int)ch + 128) & 255 : (int)ch;
+
+		for (s = 0; s < 8; s++)
+		{
+			float add_amt = shine[s] * add_gain;
+			if (add_amt <= 0.0f)
+				continue;
+
+			if (!batching)
+			{
+				glBlendFunc(GL_SRC_ALPHA, GL_ONE); // additive
+				glBegin(GL_QUADS);
+				batching = true;
+			}
+
+			glColor4f(1.0f, 1.0f, 1.0f, CLAMP(0.0f, add_amt * draw_alpha, 1.0f));
+			Draw_CharacterQuadSlice(x + i * char_w, y, (char)glyph, s);
+		}
+	}
+
+	if (batching)
+	{
+		glEnd();
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	}
+
+	Draw_RestoreStringState ();
 }
 
 
