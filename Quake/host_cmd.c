@@ -6919,6 +6919,122 @@ static void Host_Goto_f (void)
 	Con_DPrintf("coop move: goto: %s near %s\n", host_client->name, target_client->name);
 }
 
+#define HOST_RESURRECT_TRACE_UP		64.0f
+#define HOST_RESURRECT_TRACE_DOWN	128.0f
+#define HOST_RESURRECT_MIN_FLOOR_Z	0.7f
+#define HOST_RESURRECT_RING_STEP		32.0f
+#define HOST_RESURRECT_RING_COUNT	3
+
+static edict_t *Host_ResurrectGroundEntity(edict_t *player)
+{
+	vec3_t end;
+	trace_t trace;
+
+	VectorCopy(player->v.origin, end);
+	end[2] -= 2.0f;
+	trace = SV_Move(player->v.origin, player->v.mins, player->v.maxs, end,
+		MOVE_NOMONSTERS, player);
+	if (trace.allsolid || trace.startsolid || trace.fraction >= 1.0f ||
+		trace.plane.normal[2] <= HOST_RESURRECT_MIN_FLOOR_Z)
+		return NULL;
+
+	return trace.ent;
+}
+
+static qboolean Host_ResurrectTrySpot(edict_t *player, const vec3_t base, vec3_t out)
+{
+	static const float vertical_offsets[] = {
+		0.0f, 8.0f, 16.0f, 24.0f, -8.0f, -16.0f, -24.0f
+	};
+	vec3_t old_origin;
+	size_t i;
+
+	VectorCopy(player->v.origin, old_origin);
+
+	for (i = 0; i < Q_COUNTOF(vertical_offsets); i++)
+	{
+		vec3_t probe, above, below, spot;
+		trace_t ground_trace;
+
+		VectorCopy(base, probe);
+		probe[2] += vertical_offsets[i];
+
+		VectorCopy(probe, above);
+		above[2] += HOST_RESURRECT_TRACE_UP;
+		VectorCopy(probe, below);
+		below[2] -= HOST_RESURRECT_TRACE_DOWN;
+
+		/* Find a plausible floor with a point trace, then validate the
+		   resulting origin with the live player's complete collision hull. */
+		ground_trace = SV_Move(above, vec3_origin, vec3_origin, below,
+			MOVE_NOMONSTERS, player);
+		if (ground_trace.allsolid || ground_trace.startsolid ||
+			ground_trace.fraction >= 1.0f ||
+			ground_trace.plane.normal[2] <= HOST_RESURRECT_MIN_FLOOR_Z)
+			continue;
+
+		VectorCopy(ground_trace.endpos, spot);
+		spot[2] += -player->v.mins[2] + 1.0f;
+
+		VectorCopy(spot, player->v.origin);
+		if (!SV_TestEntityPosition(player) && Host_ResurrectGroundEntity(player))
+		{
+			VectorCopy(spot, out);
+			VectorCopy(old_origin, player->v.origin);
+			return true;
+		}
+	}
+
+	VectorCopy(old_origin, player->v.origin);
+	return false;
+}
+
+static qboolean Host_ResurrectFindSafeSpot(edict_t *player, const vec3_t base,
+	vec3_t out, int *found_ring)
+{
+	static const float ring_xy[][2] = {
+		{ 1.0f,  0.0f},
+		{-1.0f,  0.0f},
+		{ 0.0f,  1.0f},
+		{ 0.0f, -1.0f},
+		{ 1.0f,  1.0f},
+		{-1.0f,  1.0f},
+		{ 1.0f, -1.0f},
+		{-1.0f, -1.0f}
+	};
+	size_t i;
+	int ring;
+
+	if (found_ring)
+		*found_ring = 0;
+
+	if (Host_ResurrectTrySpot(player, base, out))
+		return true;
+
+	for (ring = 1; ring <= HOST_RESURRECT_RING_COUNT; ring++)
+	{
+		float radius = ring * HOST_RESURRECT_RING_STEP;
+
+		for (i = 0; i < Q_COUNTOF(ring_xy); i++)
+		{
+			vec3_t probe;
+
+			VectorCopy(base, probe);
+			probe[0] += ring_xy[i][0] * radius;
+			probe[1] += ring_xy[i][1] * radius;
+
+			if (Host_ResurrectTrySpot(player, probe, out))
+			{
+				if (found_ring)
+					*found_ring = ring;
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
 /*
 ==================
 Host_Resurrect_f -- woods #resurrect
@@ -6932,6 +7048,10 @@ static void Host_Resurrect_f (void)
 {
 	eval_t* val;
 	int     ofs;
+	vec3_t death_origin, safe_origin, spawnpoint_origin;
+	qboolean found, used_spawnpoint = false;
+	edict_t *safe_ground;
+	int found_ring = 0;
 
 	/*----------------------------------------------------------------
 	 * 1. Guard rails
@@ -6941,6 +7061,20 @@ static void Host_Resurrect_f (void)
 		Cmd_ForwardToServer();
 		return;
 	}
+
+	/* Client string commands can arrive before sign-on has completed. Do not
+	   run spawn QC or touch an incomplete client edict in that state. */
+	if (!sv.active || !host_client || !host_client->active ||
+		!host_client->spawned || !host_client->edict ||
+		host_client->edict->free || sv_player != host_client->edict)
+		return;
+
+	if (Host_CoopMoveIntermissionActive())
+	{
+		SV_ClientPrintf("resurrect is not available during intermission or level changes\n");
+		return;
+	}
+
 	if (pr_global_struct->deathmatch)      /* no cheats in deathmatch */
 		return;
 
@@ -6953,8 +7087,6 @@ static void Host_Resurrect_f (void)
 	/*----------------------------------------------------------------
 	 * 2. Snapshot the current state
 	 *----------------------------------------------------------------*/
-	vec3_t death_origin, safe_origin = {0, 0, 0};
-
 	float saved_weapon = sv_player->v.weapon;
 	float saved_ammo_shells = sv_player->v.ammo_shells;
 	float saved_ammo_nails = sv_player->v.ammo_nails;
@@ -6988,95 +7120,35 @@ static void Host_Resurrect_f (void)
 	VectorCopy(sv_player->v.origin, death_origin);
 
 	/*----------------------------------------------------------------
-	 * 3. Find a safe spot near the death position
-	 *----------------------------------------------------------------*/
-#define STEP_RINGS   4               /* 0, 32, 64, 96 */
-#define STEP_RADIUS  32.0f
-	static const float ring_xy[9][2] = {
-		{  0,  0}, { 1,  0}, {-1,  0}, { 0,  1},
-		{  0, -1}, { 1,  1}, {-1,  1}, { 1, -1}, {-1, -1}
-	};
-	int ring, dir, found = 0, found_ring = 0;
-
-	for (ring = 0; ring < STEP_RINGS && !found; ++ring)
-	{
-		float r = ring * STEP_RADIUS;
-
-		for (dir = 0; dir < 9 && !found; ++dir)
-		{
-			vec3_t try_xy, above, below, impact;
-			trace_t ground_trace;
-
-			/* XY offset in this ring */
-			try_xy[0] = death_origin[0] + ring_xy[dir][0] * r;
-			try_xy[1] = death_origin[1] + ring_xy[dir][1] * r;
-			try_xy[2] = death_origin[2];
-
-			/* Trace 64 down from 64 up to find ground. Use the server trace
-			   path; client TraceLine relies on cl.worldmodel and is wrong for
-			   dedicated/remote server command handling. */
-			VectorCopy(try_xy, above);  above[2] += 64.0f;
-			VectorCopy(try_xy, below);  below[2] -= 64.0f;
-			ground_trace = SV_Move(above, vec3_origin, vec3_origin, below,
-				MOVE_NOMONSTERS, sv_player);
-			if (ground_trace.allsolid || ground_trace.startsolid ||
-				ground_trace.fraction >= 1.0f ||
-				ground_trace.plane.normal[2] <= 0.0f)
-				continue;
-			VectorCopy(ground_trace.endpos, impact);
-
-			/* Place the player 18 units above impact point */
-			VectorCopy(impact, safe_origin);
-			safe_origin[2] += 18.0f;
-
-			VectorCopy(safe_origin, sv_player->v.origin);
-			if (!SV_TestEntityPosition(sv_player))
-			{
-				found = 1;
-				found_ring = ring;
-			}
-		}
-	}
-
-#undef STEP_RADIUS
-#undef STEP_RINGS
-
-	/* Probing left sv_player->v.origin at the last test position; restore it
-	   so PutClientInServer sees the original spot. We reposition afterwards. */
-	VectorCopy(death_origin, sv_player->v.origin);
-
-	if (!found)
-	{
-		/* Fallback: original position, nudged up 18 */
-		VectorCopy(death_origin, safe_origin);
-		safe_origin[2] += 18.0f;
-	}
-
-	/*----------------------------------------------------------------
-	 * 4. Call QC PutClientInServer to reset player state
+	 * 3. Call QC PutClientInServer to reset player state
 	 *----------------------------------------------------------------*/
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->self = EDICT_TO_PROG(sv_player);
 	PR_ExecuteProgram(pr_global_struct->PutClientInServer);
 
-	/* PutClientInServer chose a spawnpoint; remember it as a final fallback
-	   in case our safe_origin doesn't fit the live player bbox (e.g. corpse
-	   was crushed against geometry, or a mod shrinks the corpse bbox). */
-	vec3_t spawnpoint_origin;
-	qboolean used_spawnpoint = false;
+	/* PutClientInServer establishes the mod's live player bounds and chooses
+	   a spawnpoint. Preserve that spawnpoint as the authoritative fallback. */
 	VectorCopy(sv_player->v.origin, spawnpoint_origin);
+	sv_player->v.movetype = MOVETYPE_WALK;
+	sv_player->v.solid = SOLID_SLIDEBOX;
+
+	/*----------------------------------------------------------------
+	 * 4. Find a safe spot near the death position using the live hull
+	 *----------------------------------------------------------------*/
+	found = Host_ResurrectFindSafeSpot(sv_player, death_origin,
+		safe_origin, &found_ring);
+	if (found)
+		VectorCopy(safe_origin, sv_player->v.origin);
+	else
+	{
+		VectorCopy(spawnpoint_origin, sv_player->v.origin);
+		used_spawnpoint = true;
+	}
+	safe_ground = Host_ResurrectGroundEntity(sv_player);
 
 	/*----------------------------------------------------------------
 	 * 5. Restore inventory, position, and health
 	 *----------------------------------------------------------------*/
-	VectorCopy(safe_origin, sv_player->v.origin);
-	if (SV_TestEntityPosition(sv_player))
-	{
-		VectorCopy(spawnpoint_origin, sv_player->v.origin);
-		used_spawnpoint = true;
-		found_ring = 0;
-	}
-
 	sv_player->v.weapon = saved_weapon;
 	sv_player->v.ammo_shells = saved_ammo_shells;
 	sv_player->v.ammo_nails = saved_ammo_nails;
@@ -7102,7 +7174,18 @@ static void Host_Resurrect_f (void)
 	sv_player->v.takedamage = DAMAGE_AIM;
 	sv_player->v.movetype = MOVETYPE_WALK;
 	sv_player->v.solid = SOLID_SLIDEBOX;
-	sv_player->v.flags = (int)sv_player->v.flags | (FL_CLIENT | FL_ONGROUND);
+	VectorClear(sv_player->v.velocity);
+	sv_player->v.flags = ((int)sv_player->v.flags | FL_CLIENT) & ~FL_WATERJUMP;
+	if (safe_ground && safe_ground->v.solid == SOLID_BSP)
+	{
+		sv_player->v.flags = (int)sv_player->v.flags | FL_ONGROUND;
+		sv_player->v.groundentity = EDICT_TO_PROG(safe_ground);
+	}
+	else
+	{
+		sv_player->v.flags = (int)sv_player->v.flags & ~FL_ONGROUND;
+		sv_player->v.groundentity = 0;
+	}
 	{
 		unsigned powerup_effects = EF_DIMLIGHT | EF_RED | EF_BLUE;
 		if (qcvm->brokeneffects)
@@ -7138,6 +7221,12 @@ static void Host_Resurrect_f (void)
 				? qcvm->time + scalars[s].value
 				: scalars[s].value;
 	}
+
+	/* The final origin may differ from the spawnpoint where QC initialized
+	   movement state, so do not carry a stale water-jump timer with it. */
+	ofs = ED_FindFieldOffset("waterjump_time");
+	if (ofs >= 0 && (val = GetEdictFieldValue(sv_player, ofs)))
+		val->_float = 0.0f;
 
 	/* -----------------------------------------------------------------
 	 * clear temporary power-up timers
@@ -7233,6 +7322,9 @@ static void Host_Resurrect_f (void)
 	/*----------------------------------------------------------------
 	 * 8. Finalise: relink, play sound, force client update, print
 	 *----------------------------------------------------------------*/
+	/* PutClientInServer calculated these for its spawnpoint; refresh them for
+	   the selected resurrection origin before the next physics frame. */
+	SV_CheckWater(sv_player);
 	SV_LinkEdict(sv_player, false);      /* update physics box */
 
 	/* Sound emanates from the final position, not the death origin. */
