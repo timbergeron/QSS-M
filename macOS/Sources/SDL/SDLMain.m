@@ -38,15 +38,17 @@ BOOL   gCalledAppMainline = FALSE;
 @interface QSSDockProgressView : NSView
 {
     float progress;     /* 0..1 download fraction, or <0 to hide the badge */
+    BOOL portProbe;
 }
-- (void) setProgress:(float)p;
+- (void) setProgress:(float)p portProbe:(BOOL)isPortProbe;
 @end
 
 @implementation QSSDockProgressView
 
-- (void) setProgress:(float)p
+- (void) setProgress:(float)p portProbe:(BOOL)isPortProbe
 {
     progress = p;
+    portProbe = isPortProbe;
     [self setNeedsDisplay:YES];
 }
 
@@ -108,8 +110,8 @@ BOOL   gCalledAppMainline = FALSE;
         CGContextRestoreGState(ctx);
     }
 
-    /* download count in the centre (Chrome shows the number of active downloads;
-       the engine fetches one file at a time, so this is always "1") */
+    /* Show "P" for a port probe. Downloads retain the Chrome-style active
+       download count; the engine fetches one file at a time, so it is "1". */
     NSMutableParagraphStyle *ps = [[[NSMutableParagraphStyle alloc] init] autorelease];
     [ps setAlignment:NSTextAlignmentCenter];
     NSDictionary *attrs = [NSDictionary dictionaryWithObjectsAndKeys:
@@ -117,10 +119,10 @@ BOOL   gCalledAppMainline = FALSE;
         fg, NSForegroundColorAttributeName,
         ps, NSParagraphStyleAttributeName,
         nil];
-    NSString *glyph = @"1";
+    NSString *glyph = portProbe ? @"P" : @"1";
     NSSize ts = [glyph sizeWithAttributes:attrs];
     /* nudge left so the vertical stem of the "1" (not its top flag) reads centred */
-    CGFloat nudge = radius * 0.07;
+    CGFloat nudge = portProbe ? 0.0 : radius * 0.07;
     [glyph drawInRect:NSMakeRect(c.x - radius - nudge, c.y - ts.height * 0.5, radius * 2.0, ts.height)
         withAttributes:attrs];
 }
@@ -181,7 +183,7 @@ void Sys_IncrementDockNotificationBadge (void)
         dispatch_async (dispatch_get_main_queue(), apply);
 }
 
-void Sys_SetDockProgress (float fraction)
+void Sys_SetDockProgress (float fraction, int port_probe)
 {
     /* fraction is captured by value; all AppKit access (NSApp/NSDockTile/the
        content view) happens inside the block so the function is safe to call
@@ -195,7 +197,7 @@ void Sys_SetDockProgress (float fraction)
             {
                 if (!dockProgressView)
                     dockProgressView = [[QSSDockProgressView alloc] initWithFrame:NSMakeRect(0, 0, 128, 128)];
-                [dockProgressView setProgress:fraction];
+                [dockProgressView setProgress:fraction portProbe:(port_probe != 0)];
                 if ([tile contentView] != dockProgressView)
                     [tile setContentView:dockProgressView];
                 [tile display];

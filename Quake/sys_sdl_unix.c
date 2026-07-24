@@ -2410,9 +2410,10 @@ void Sys_SendKeyEvents (void)
 
 #ifndef __APPLE__
 // macOS provides a real implementation in SDLMain.m (dock icon progress ring).
-void Sys_SetDockProgress (float fraction)
+void Sys_SetDockProgress (float fraction, int port_probe)
 {
 	(void)fraction;
+	(void)port_probe;
 }
 
 void Sys_IncrementDockNotificationBadge (void)

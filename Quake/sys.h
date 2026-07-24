@@ -92,9 +92,10 @@ qboolean Sys_RunUpdateSelfTest(const char *exe_path, const char *working_dir,
 qboolean Sys_UpdateWaitForParentExit(uintptr_t wait_token,
 	unsigned long fallback_pid, unsigned int timeout_ms);
 
-void Sys_SetDockProgress (float fraction);
+void Sys_SetDockProgress (float fraction, int port_probe);
 // Show platform download progress: macOS Dock badge or Windows taskbar strip.
 // fraction 0..1 shows progress; a negative value clears it.
+// port_probe selects "P" instead of "1" in the macOS progress badge.
 // No-op on other platforms or when the shell API is unavailable.
 
 void Sys_IncrementDockNotificationBadge (void);

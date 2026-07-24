@@ -2346,8 +2346,10 @@ static void Sys_ShutdownTaskbarShell(void)
 }
 #endif
 
-void Sys_SetDockProgress (float fraction)
+void Sys_SetDockProgress (float fraction, int port_probe)
 {
+	(void)port_probe;
+
 #if defined(USE_SDL2)
 	HWND hwnd;
 	ULONGLONG completed;

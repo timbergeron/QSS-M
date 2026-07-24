@@ -1943,6 +1943,8 @@ static void Host_UpdateDockBadge(void)
 {
 	extern qboolean curl_download_active;	// cl_main.c #webdl
 	static int last = -1;	// last percent sent (-1 = hidden / not downloading)
+	static qboolean last_port_probe = false;
+	qboolean port_probe = false;
 	int pct;
 
 	if (cls.download.active || curl_download_active)
@@ -1953,6 +1955,7 @@ static void Host_UpdateDockBadge(void)
 	else if (NET_PortPingProbe_GetStatus() == PORTPINGPROBE_PROBING)
 	{
 		pct = NET_PortPingProbe_GetProgress();	// 0 = active, no probe completed yet
+		port_probe = true;
 	}
 	else
 		pct = -1;	// no shell-visible background activity
@@ -1960,10 +1963,11 @@ static void Host_UpdateDockBadge(void)
 	if (pct > 100)
 		pct = 100;
 
-	if (pct != last)	// only touch the dock tile when the value changes
+	if (pct != last || port_probe != last_port_probe)	// only touch the dock tile when the display changes
 	{
 		last = pct;
-		Sys_SetDockProgress(pct < 0 ? -1.f : pct / 100.f);
+		last_port_probe = port_probe;
+		Sys_SetDockProgress(pct < 0 ? -1.f : pct / 100.f, port_probe);
 	}
 }
 
