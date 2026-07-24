@@ -1768,6 +1768,7 @@ typedef struct summary_s {
 	}			stats;
 	char		map[countof(cl.mapname)];
 	char		server[MAX_SERVER_ADDRESS_LEN];
+	int			players;	// woods connected player count for (x/y) window title
 } summary_t;
 
 /*
@@ -1777,6 +1778,7 @@ GetGameSummary - github.com/andrei-drexler/ironwail (Show game summary in window
 */
 static void GetGameSummary(summary_t* s)
 {
+	s->players = 0; // woods
 	if (cls.state != ca_connected || cls.signon != SIGNONS)
 	{
 		s->map[0] = 0;
@@ -1792,8 +1794,14 @@ static void GetGameSummary(summary_t* s)
 		s->stats.secrets = cl.stats[STAT_SECRETS];
 		s->stats.total_secrets = cl.stats[STAT_TOTALSECRETS];
 		if (cl.gametype == GAME_DEATHMATCH && !cls.demoplayback)
+		{
+			int i;
 			NET_HostnameCache_FormatDisplay(lastmphost, net_hostport,
 				s->server, sizeof(s->server));
+			for (i = 0; i < cl.maxclients; i++) // woods count connected players
+				if (cl.scores && cl.scores[i].name[0])
+					s->players++;
+		}
 		else
 			s->server[0] = 0;
 	}
@@ -1848,6 +1856,7 @@ static void UpdateWindowTitle(void)
 	GetGameSummary(&current);
 	if (!cls.demoplayback || (cl.gametype != GAME_DEATHMATCH && cls.state != ca_connected)) // woods 
 		if (!strcmp(current.map, last.map) && !strcmp(current.server, last.server) &&
+			current.players == last.players && // woods refresh on player join/leave
 			!memcmp(&current.stats, &last.stats, sizeof(current.stats)))
 			return;
 	last = current;
@@ -1869,9 +1878,9 @@ static void UpdateWindowTitle(void)
 		if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected) && !cls.demoplayback) // woods added connected server
 {
     if (ln[0] != '\0' && Q_strcmp(ln, current.map) != 0)
-        q_snprintf(title, sizeof(title), "%s  |  %s (%s)  -  " ENGINE_NAME_AND_VER, current.server, ln, current.map);
+        q_snprintf(title, sizeof(title), "%s (%d/%d)  |  %s (%s)  -  " ENGINE_NAME_AND_VER, current.server, current.players, cl.maxclients, ln, current.map);
     else
-        q_snprintf(title, sizeof(title), "%s  |  %s  -  " ENGINE_NAME_AND_VER, current.server, current.map);
+        q_snprintf(title, sizeof(title), "%s (%d/%d)  |  %s  -  " ENGINE_NAME_AND_VER, current.server, current.players, cl.maxclients, current.map);
 }
 else if (cls.demoplayback) // woods added demofile
 {
