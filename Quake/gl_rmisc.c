@@ -630,6 +630,7 @@ void R_Init (void)
 	Cvar_SetCompletion (&r_grass, &R_Grass_Completion_f); // woods #iwtabcomplete #grass
 	Cvar_SetHelp (&r_grass, &R_Grass_Help_f); // woods #grass
 	Cvar_SetCompletion (&r_grass_tex, &R_GrassTex_Completion_f); // woods #iwtabcomplete #grass
+	R_HullDebug_Init ();
 	Cvar_RegisterVariable (&gl_motion_blur); // woods #motionblur
 	Cvar_SetCallback (&gl_fullbrights, GL_Fullbrights_f);
 	Cvar_SetCallback (&gl_overbright, GL_Overbright_f);

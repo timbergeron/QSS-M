@@ -3151,6 +3151,7 @@ void R_RenderScene (void)
 		LaserSight (); // woods #laser
 
 	R_ShowTris (); //johnfitz
+	R_HullDebug_Draw ();
 
 	TexturePointer_Think (); // woods #texturepointer
 

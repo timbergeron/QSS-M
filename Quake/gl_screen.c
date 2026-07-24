@@ -7529,6 +7529,7 @@ void SCR_UpdateScreen (void)
 		TexturePointer_Draw (); // woods #texturepointer
 		SCR_DrawScopeOverlay (); // woods #scope
 		SCR_DrawEdictInfo (); // woods #showfields
+		SCR_HullDebug_DrawInfo ();
 		SCR_DrawConsole ();
 		if (realtime < scr_volume_display_time)
 			SCR_DrawVolumeSlider ();

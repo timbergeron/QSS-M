@@ -387,6 +387,7 @@ void Mod_ClearAll (void)
 			RSceneCache_Cleanup(mod);
 			R_BModelDrawCache_Cleanup(mod);
 			R_GrassCache_Cleanup(mod);
+			R_HullDebug_Cleanup(mod);
 		}
 	}
 
@@ -410,6 +411,7 @@ void Mod_ResetAll (void)
 			RSceneCache_Cleanup(mod);
 			R_BModelDrawCache_Cleanup(mod);
 			R_GrassCache_Cleanup(mod);
+			R_HullDebug_Cleanup(mod);
 		}
 		memset(mod, 0, sizeof(qmodel_t));
 	}

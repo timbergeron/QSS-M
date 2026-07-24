@@ -270,6 +270,9 @@
 		<Unit filename="..\..\Quake\r_part.c">
 			<Option compilerVar="CC" />
 		</Unit>
+		<Unit filename="..\..\Quake\r_hulldebug.c">
+			<Option compilerVar="CC" />
+		</Unit>
 		<Unit filename="..\..\Quake\r_sprite.c">
 			<Option compilerVar="CC" />
 		</Unit>

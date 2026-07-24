@@ -274,6 +274,7 @@ GLOBJS = \
 	r_part.o \
 	r_part_fte.o \
 	r_world.o \
+	r_hulldebug.o \
 	gl_screen.o \
 	pong.o \
 	gl_sky.o \

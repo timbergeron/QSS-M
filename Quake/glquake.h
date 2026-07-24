@@ -554,6 +554,10 @@ void R_UploadLightmaps (void);
 qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent);
 void R_BModelDrawCache_Cleanup (qmodel_t *mod);
 void R_BModelDrawCache_CleanupAll (void);
+void R_HullDebug_Init (void);
+void R_HullDebug_Draw (void);
+void SCR_HullDebug_DrawInfo (void);
+void R_HullDebug_Cleanup (qmodel_t *model);
 
 void R_DrawWorld_ShowTris (void);
 void R_DrawBrushModel_ShowTris (entity_t *e);

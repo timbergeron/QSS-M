@@ -66,6 +66,7 @@
 		664D98BD19CF6B78000D395C /* r_alias.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78690D2EEAF000CB2E4C /* r_alias.c */; };
 		664D98BE19CF6B78000D395C /* r_brush.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A786A0D2EEAF000CB2E4C /* r_brush.c */; };
 		664D98BF19CF6B78000D395C /* r_part.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A786B0D2EEAF000CB2E4C /* r_part.c */; };
+		A8D4C1022F00000100C0DE01 /* r_hulldebug.c in Sources */ = {isa = PBXBuildFile; fileRef = A8D4C1012F00000100C0DE01 /* r_hulldebug.c */; };
 		664D98C019CF6B78000D395C /* r_sprite.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A786C0D2EEAF000CB2E4C /* r_sprite.c */; };
 		664D98C119CF6B78000D395C /* r_world.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A786D0D2EEAF000CB2E4C /* r_world.c */; };
 		664D98C219CF6B78000D395C /* net_dgrm.c in Sources */ = {isa = PBXBuildFile; fileRef = 48728D280D3004A70004D61B /* net_dgrm.c */; };
@@ -342,6 +343,7 @@
 		483A78690D2EEAF000CB2E4C /* r_alias.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = r_alias.c; path = ../Quake/r_alias.c; sourceTree = SOURCE_ROOT; };
 		483A786A0D2EEAF000CB2E4C /* r_brush.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = r_brush.c; path = ../Quake/r_brush.c; sourceTree = SOURCE_ROOT; };
 		483A786B0D2EEAF000CB2E4C /* r_part.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = r_part.c; path = ../Quake/r_part.c; sourceTree = SOURCE_ROOT; };
+		A8D4C1012F00000100C0DE01 /* r_hulldebug.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = r_hulldebug.c; path = ../Quake/r_hulldebug.c; sourceTree = SOURCE_ROOT; };
 		483A786C0D2EEAF000CB2E4C /* r_sprite.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = r_sprite.c; path = ../Quake/r_sprite.c; sourceTree = SOURCE_ROOT; };
 		483A786D0D2EEAF000CB2E4C /* r_world.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = r_world.c; path = ../Quake/r_world.c; sourceTree = SOURCE_ROOT; };
 		4846EB500D329BEB00A108DE /* platform.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = platform.h; path = ../Quake/platform.h; sourceTree = SOURCE_ROOT; };
@@ -722,6 +724,7 @@
 				483A786A0D2EEAF000CB2E4C /* r_brush.c */,
 				483A786B0D2EEAF000CB2E4C /* r_part.c */,
 				668A0117277D0C13009D9427 /* r_part_fte.c */,
+				A8D4C1012F00000100C0DE01 /* r_hulldebug.c */,
 				483A786C0D2EEAF000CB2E4C /* r_sprite.c */,
 				483A786D0D2EEAF000CB2E4C /* r_world.c */,
 			);
@@ -1075,6 +1078,7 @@
 				664D98BD19CF6B78000D395C /* r_alias.c in Sources */,
 				664D98BE19CF6B78000D395C /* r_brush.c in Sources */,
 				664D98BF19CF6B78000D395C /* r_part.c in Sources */,
+				A8D4C1022F00000100C0DE01 /* r_hulldebug.c in Sources */,
 				668A0116277D0BFB009D9427 /* fs_zip.c in Sources */,
 				664D98C019CF6B78000D395C /* r_sprite.c in Sources */,
 				664D98C119CF6B78000D395C /* r_world.c in Sources */,

@@ -216,6 +216,9 @@
     <ClCompile Include="..\..\Quake\r_part_fte.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Quake\r_hulldebug.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\Quake\r_sprite.c">
       <Filter>Source Files</Filter>
     </ClCompile>
