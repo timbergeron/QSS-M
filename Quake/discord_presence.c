@@ -587,6 +587,12 @@ static unsigned int DiscordIPC_ProcessId(void)
 #ifndef QSSM_DISCORD_LARGE_IMAGE
 #define QSSM_DISCORD_LARGE_IMAGE "qssm"
 #endif
+#ifndef QSSM_DISCORD_BUTTON_LABEL
+#define QSSM_DISCORD_BUTTON_LABEL "Get QSS-M"
+#endif
+#ifndef QSSM_DISCORD_BUTTON_URL
+#define QSSM_DISCORD_BUTTON_URL "https://qssm.quakeone.com"
+#endif
 
 #define DISCORD_PRESENCE_IPC_INTERVAL 0.05
 #define DISCORD_PRESENCE_SNAPSHOT_INTERVAL 1.0
@@ -636,6 +642,7 @@ typedef struct
 	qboolean application_id_valid;
 	qboolean warned_application_id;
 	qboolean was_ready;
+	qboolean hidden_cleared;
 	double next_ipc_pump;
 	double next_retry;
 	double retry_delay;
@@ -1092,6 +1099,33 @@ static void DiscordPresence_BuildServerHover(discord_presence_snapshot_t *snapsh
 			sizeof(snapshot->large_text));
 }
 
+/* Appends " @ <server>" to the details line for networked games. Uses the
+ * address the player connected to (lastmphost) so it reads as the recognizable
+ * name they typed - e.g. "denver.quakeone.com" - falling back to the resolved
+ * address, and is skipped entirely for local servers. The richer "hostname
+ * (resolved ip)" form still rides along as the large-image hover tooltip. */
+static void DiscordPresence_AddServerAddress(discord_presence_snapshot_t *snapshot)
+{
+	char requested[NET_NAMELEN] = "", resolved[64] = "";
+	char details[sizeof(snapshot->details)];
+	const char *address;
+
+	DiscordPresence_CopyASCII(requested, sizeof(requested), lastmphost);
+	if (!q_strcasecmp(requested, "local") || !q_strcasecmp(requested, "localhost"))
+		return;
+
+	DiscordPresence_CopyASCII(resolved, sizeof(resolved),
+		cls.netcon ? NET_QSocketGetResolvedAddressString(cls.netcon) : NULL);
+
+	address = requested[0] ? requested : resolved;
+	if (!address[0])
+		return;
+
+	q_strlcpy(details, snapshot->details, sizeof(details));
+	q_snprintf(snapshot->details, sizeof(snapshot->details), "%s @ %s",
+		details, address);
+}
+
 static int64_t DiscordPresence_MapStartTimestamp(discord_presence_kind_t kind)
 {
 	if (discord_presence.timestamp_maptime != maptime ||
@@ -1145,6 +1179,48 @@ static void DiscordPresence_BuildMultiplayer(discord_presence_snapshot_t *snapsh
 		q_strlcpy(snapshot->state, map, sizeof(snapshot->state));
 }
 
+/* True when the game window is not the active foreground one: either minimized
+ * or a windowed instance sitting in the background. Input focus (not the
+ * mouse-or-input test) is the deciding signal - a backgrounded window can keep
+ * mouse focus while the cursor hovers over it, so only keyboard/input focus
+ * reliably marks the active window. While hidden the presence activity is
+ * cleared entirely rather than shown with a marker. */
+static qboolean DiscordPresence_WindowHidden(void)
+{
+	return VID_IsMinimized() || !VID_HasInputFocus();
+}
+
+/* True when the local player is typing a chat message. Reuses the same "chat"
+ * userinfo flag the engine broadcasts so other players see the typing status -
+ * CIF_CHAT means typing, CIF_AFK is the separate alt-tab flag handled via window
+ * focus, so an exact CIF_CHAT match keeps the two states distinct. */
+static qboolean DiscordPresence_LocalPlayerTyping(void)
+{
+	char chat[8];
+
+	if (cls.state != ca_connected || cls.signon != SIGNONS || cls.demoplayback)
+		return false;
+	Info_GetKey(cls.userinfo, "chat", chat, sizeof(chat));
+	return atoi(chat) == CIF_CHAT;
+}
+
+/* Appends a bracketed status marker (e.g. "[Minimized]", "[Typing]") to the
+ * state line. Baked into the snapshot before the Frame memcmp so the marker
+ * appears/disappears like any other state change. */
+static void DiscordPresence_AppendStateMarker(discord_presence_snapshot_t *snapshot,
+	const char *marker)
+{
+	char text[sizeof(snapshot->state)];
+
+	if (snapshot->state[0])
+	{
+		q_strlcpy(text, snapshot->state, sizeof(text));
+		q_snprintf(snapshot->state, sizeof(snapshot->state), "%s - %s", text, marker);
+	}
+	else
+		q_strlcpy(snapshot->state, marker, sizeof(snapshot->state));
+}
+
 static void DiscordPresence_BuildSnapshot(discord_presence_snapshot_t *snapshot)
 {
 	discord_presence_kind_t kind = DiscordPresence_CurrentKind();
@@ -1157,16 +1233,10 @@ static void DiscordPresence_BuildSnapshot(discord_presence_snapshot_t *snapshot)
 	if (!map[0])
 		q_strlcpy(map, "Unknown map", sizeof(map));
 
-	if (kind == DISCORD_PRESENCE_MENU)
+	if (kind == DISCORD_PRESENCE_MENU || kind == DISCORD_PRESENCE_CONNECTING)
 	{
-		DiscordPresence_SetDetails(snapshot, "Main Menu", mod_label);
-		discord_presence.timestamp_start = 0;
-		discord_presence.timestamp_maptime = 0;
-		return;
-	}
-	if (kind == DISCORD_PRESENCE_CONNECTING)
-	{
-		DiscordPresence_SetDetails(snapshot, "Connecting", mod_label);
+		DiscordPresence_SetDetails(snapshot,
+			kind == DISCORD_PRESENCE_MENU ? "Main Menu" : "Connecting", mod_label);
 		discord_presence.timestamp_start = 0;
 		discord_presence.timestamp_maptime = 0;
 		return;
@@ -1186,12 +1256,14 @@ static void DiscordPresence_BuildSnapshot(discord_presence_snapshot_t *snapshot)
 		DiscordPresence_SetDetails(snapshot, "Co-op", mod_label);
 		q_strlcpy(snapshot->state, map, sizeof(snapshot->state));
 		DiscordPresence_AddPlayerCount(snapshot);
+		DiscordPresence_AddServerAddress(snapshot);
 		DiscordPresence_BuildServerHover(snapshot);
 	}
 	else
 	{
 		DiscordPresence_BuildMultiplayer(snapshot, map, mod_label);
 		DiscordPresence_AddPlayerCount(snapshot);
+		DiscordPresence_AddServerAddress(snapshot);
 		DiscordPresence_BuildServerHover(snapshot);
 	}
 	if (!cls.demoplayback && cl.intermission)
@@ -1297,6 +1369,11 @@ static qboolean DiscordPresence_BuildJSON(const discord_presence_snapshot_t *sna
 		DiscordJSON_AppendString(&writer, snapshot->large_text);
 		DiscordJSON_Append(&writer, "}");
 	}
+	DiscordJSON_Append(&writer, ",\"buttons\":[{\"label\":");
+	DiscordJSON_AppendString(&writer, QSSM_DISCORD_BUTTON_LABEL);
+	DiscordJSON_Append(&writer, ",\"url\":");
+	DiscordJSON_AppendString(&writer, QSSM_DISCORD_BUTTON_URL);
+	DiscordJSON_Append(&writer, "}]");
 	DiscordJSON_Append(&writer, "}},\"nonce\":");
 	q_snprintf(number, sizeof(number), "%llu", (unsigned long long)++discord_presence.nonce);
 	DiscordJSON_AppendString(&writer, number);
@@ -1459,6 +1536,7 @@ void DiscordPresence_Shutdown(void)
 void DiscordPresence_Frame(void)
 {
 	double now;
+	qboolean hidden;
 	discord_presence_mode_t mode;
 
 	if (!discord_presence.initialized)
@@ -1542,7 +1620,41 @@ void DiscordPresence_Frame(void)
 		discord_presence.next_snapshot = 0;
 		discord_presence.next_send = 0;
 		discord_presence.have_sent = false;
+		discord_presence.hidden_cleared = false;
 		Con_DPrintf("Discord Presence connected\n");
+	}
+
+	hidden = DiscordPresence_WindowHidden();
+
+	/* While minimized or backgrounded the two modes diverge: "connected" clears
+	 * the activity so nothing shows (idling with the socket kept open until
+	 * focus returns), while "all" keeps it visible with a [Minimized] marker
+	 * applied below. */
+	if (hidden && mode == DISCORD_PRESENCE_MODE_CONNECTED)
+	{
+		if (!discord_presence.hidden_cleared && !DiscordIPC_IsBusy())
+		{
+			char json[256];
+			size_t json_length;
+
+			if (DiscordPresence_BuildClearJSON(json, sizeof(json), &json_length) &&
+				DiscordIPC_SendJSON(json, json_length))
+			{
+				discord_presence.hidden_cleared = true;
+				discord_presence.have_sent = false;
+				discord_presence.have_pending = false;
+			}
+		}
+		return;
+	}
+	if (discord_presence.hidden_cleared)
+	{
+		/* Focus regained (or switched to "all" mode): force the live activity to
+		 * be rebuilt and resent. */
+		discord_presence.hidden_cleared = false;
+		discord_presence.next_snapshot = 0;
+		discord_presence.have_sent = false;
+		discord_presence.have_pending = false;
 	}
 
 	if (now >= discord_presence.next_snapshot)
@@ -1551,6 +1663,10 @@ void DiscordPresence_Frame(void)
 
 		discord_presence.next_snapshot = now + DISCORD_PRESENCE_SNAPSHOT_INTERVAL;
 		DiscordPresence_BuildSnapshot(&snapshot);
+		if (hidden)
+			DiscordPresence_AppendStateMarker(&snapshot, "[Minimized]");
+		else if (DiscordPresence_LocalPlayerTyping())
+			DiscordPresence_AppendStateMarker(&snapshot, "[Typing]");
 		if (!discord_presence.have_sent ||
 			memcmp(&snapshot, &discord_presence.sent, sizeof(snapshot)))
 		{

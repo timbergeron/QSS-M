@@ -96,6 +96,7 @@ void VID_Gamma_ApplyToBuffer (byte *buffer, size_t pixel_count, int bytes_per_pi
 
 void *VID_GetWindow (void);
 qboolean VID_HasMouseOrInputFocus (void);
+qboolean VID_HasInputFocus (void);
 qboolean VID_IsMinimized (void);
 void	VID_Lock (void);
 void	VID_SetWindowCaption(const char *newcaption);

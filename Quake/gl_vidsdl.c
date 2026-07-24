@@ -859,6 +859,24 @@ qboolean VID_HasMouseOrInputFocus (void)
 
 /*
 ====================
+VID_HasInputFocus
+
+Keyboard/input focus only - true only for the active foreground window. Unlike
+VID_HasMouseOrInputFocus this ignores mouse focus, so a backgrounded window with
+the cursor still hovering over it correctly reads as unfocused.
+====================
+*/
+qboolean VID_HasInputFocus (void)
+{
+#if defined(USE_SDL2)
+	return (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_INPUT_FOCUS) != 0;
+#else
+	return (SDL_GetAppState() & SDL_APPINPUTFOCUS) != 0;
+#endif
+}
+
+/*
+====================
 VID_IsMinimized
 ====================
 */
