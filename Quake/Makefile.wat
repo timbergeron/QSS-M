@@ -176,6 +176,7 @@ GLOBJS = &
 	r_part.obj &
 	r_part_fte.obj &
 	r_world.obj &
+	r_hulldebug.obj &
 	gl_screen.obj &
 	pong.obj &
 	gl_sky.obj &
