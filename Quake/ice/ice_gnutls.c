@@ -1571,7 +1571,7 @@ static neterr_t GNUDTLS_Received(void *ctx, netadr_t *from, const void *src_data
 			return NETERR_DISCONNECTED;
 	}
 
-	ret = qgnutls_record_recv(f->session, out_data, out_maxsize-1);
+	ret = qgnutls_record_recv(f->session, out_data, out_maxsize);
 //Sys_Printf("DTLS_Received returned %i of %i\n", ret, f->readsize);
 	f->readsize = 0;
 	if (ret <= 0)
@@ -1595,7 +1595,6 @@ static neterr_t GNUDTLS_Received(void *ctx, netadr_t *from, const void *src_data
 		return NETERR_CLOGGED;
 	}
 	*out_used = ret;
-	((qbyte*)out_data)[ret] = 0;
 //	Sys_Printf("DTLS_Received returned %s\n", data);
 	return NETERR_SENT;
 }

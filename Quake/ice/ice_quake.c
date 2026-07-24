@@ -1516,7 +1516,7 @@ qboolean BrokerDTLS_HandlePacket(byte *data, int len, struct qsockaddr *qaddr, s
 	struct broker_dtls_peer_s *peer = NULL;
 	const dtlsfuncs_t *funcs;
 	int i;
-	byte decrypted[2048 + 1];	//+1 for null terminator written by _Datagram_ServerControlPacket
+	byte decrypted[2048 + 1];	// reserve terminator headroom for _Datagram_ServerControlPacket
 	size_t decrypted_len = 0;
 	neterr_t err;
 
@@ -1545,7 +1545,7 @@ qboolean BrokerDTLS_HandlePacket(byte *data, int len, struct qsockaddr *qaddr, s
 		if (peer->funcs->Timeouts)
 			peer->funcs->Timeouts(peer->dtlsstate);
 
-		err = peer->funcs->Received(peer->dtlsstate, &from, data, len, decrypted, sizeof(decrypted), &decrypted_len);
+		err = peer->funcs->Received(peer->dtlsstate, &from, data, len, decrypted, sizeof(decrypted) - 1, &decrypted_len);
 		if (err == NETERR_DISCONNECTED)
 		{	//stale session — destroy and try a fresh handshake
 			Con_DPrintf("BrokerDTLS: stale session, rehandshaking\n");
@@ -1561,8 +1561,7 @@ qboolean BrokerDTLS_HandlePacket(byte *data, int len, struct qsockaddr *qaddr, s
 				broker_dtls_active = peer;
 				if (decrypted_len >= 4 && decrypted[0] == 0xFF && decrypted[1] == 0xFF && decrypted[2] == 0xFF && decrypted[3] == 0xFF)
 				{
-					extern void _Datagram_BrokerPacket(byte *data, unsigned int length, sys_socket_t sock, struct qsockaddr *addr);
-					_Datagram_BrokerPacket(decrypted, (unsigned int)decrypted_len, sendsock->sock, qaddr);
+					_Datagram_BrokerPacket(decrypted, (unsigned int)decrypted_len, sizeof(decrypted), sendsock->sock, qaddr);
 				}
 				broker_dtls_active = NULL;
 				broker_dtls_authenticated = false;

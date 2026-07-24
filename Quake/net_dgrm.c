@@ -45,7 +45,26 @@ static int packetsReSent = 0;
 static int packetsReceived = 0;
 static int receivedDuplicateCount = 0;
 static int shortPacketCount = 0;
+static int malformedPacketCount = 0;
 static int droppedDatagrams;
+
+typedef enum
+{
+	MALFORMED_PACKET_LENGTH,
+	MALFORMED_PACKET_CONTROL_CAPACITY,
+	MALFORMED_PACKET_TERMINATOR_HEADROOM
+} malformed_packet_reason_t;
+
+typedef struct
+{
+	qboolean			valid;
+	malformed_packet_reason_t	reason;
+	unsigned int			first_value;
+	unsigned int			second_value;
+} malformed_packet_sample_t;
+
+static malformed_packet_sample_t malformedPacketFirst;
+static malformed_packet_sample_t malformedPacketLatest;
 
 //cvars controlling dpmaster support:
 //our servers might as well claim to be 'FTE-Quake' servers. this means FTE can see us, we can see FTE (when its pretending to be nq).
@@ -76,12 +95,25 @@ extern cvar_t net_messagetimeout;
 extern cvar_t net_connecttimeout;
 extern cvar_t net_connectattempts; // woods #connectretry
 
-static struct
+typedef struct
 {
 	unsigned int	length;
 	unsigned int	sequence;
 	byte	data[MAX_DATAGRAM];
-} packetBuffer;
+	byte	terminator_spare;
+} packet_buffer_t;
+
+#define PACKET_BUFFER_RECV_SIZE offsetof(packet_buffer_t, terminator_spare)
+#define PACKET_BUFFER_PARSE_CAPACITY (PACKET_BUFFER_RECV_SIZE + sizeof(((packet_buffer_t *)0)->terminator_spare))
+
+COMPILE_TIME_ASSERT(packet_buffer_wire_size,
+	PACKET_BUFFER_RECV_SIZE == NET_DATAGRAMSIZE);
+COMPILE_TIME_ASSERT(packet_buffer_parse_capacity,
+	PACKET_BUFFER_PARSE_CAPACITY == NET_DATAGRAMSIZE + 1);
+COMPILE_TIME_ASSERT(packet_buffer_has_terminator_spare,
+	sizeof(packet_buffer_t) > NET_DATAGRAMSIZE);
+
+static packet_buffer_t packetBuffer;
 
 static int myDriverLevel;
 static qboolean islistening;
@@ -1424,22 +1456,76 @@ int Datagram_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data)
 	return 1;
 }
 
-static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsockaddr *clientaddr, byte *data, unsigned int length);
-qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
-{
-	unsigned int	flags;
-	unsigned int	sequence;
-	unsigned int	count;
+static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsockaddr *clientaddr, byte *data, unsigned int length, size_t capacity);
 
-	if (length < NET_HEADERSIZE)
+#define MALFORMED_PACKET_LOG_LIMIT 8
+
+//Keep enough detail to diagnose an interop problem without allowing
+//unauthenticated UDP traffic to grow a -condebug log without bound.
+static qboolean Datagram_RecordMalformedPacket (malformed_packet_reason_t reason, unsigned int first_value, unsigned int second_value)
+{
+	malformed_packet_sample_t sample;
+
+	sample.valid = true;
+	sample.reason = reason;
+	sample.first_value = first_value;
+	sample.second_value = second_value;
+
+	if (!malformedPacketFirst.valid)
+		malformedPacketFirst = sample;
+	malformedPacketLatest = sample;
+
+	if (malformedPacketCount < INT_MAX)
+		malformedPacketCount++;
+
+	if (malformedPacketCount <= MALFORMED_PACKET_LOG_LIMIT)
+		return true;
+
+	if (malformedPacketCount == MALFORMED_PACKET_LOG_LIMIT + 1)
+		Con_DPrintf("Further malformed datagram messages suppressed; use net_stats for the total\n");
+
+	return false;
+}
+
+//NETFLAG_LENGTH_MASK allows a declared length far larger than packetBuffer, so the
+//header's length field must be reconciled against the datagram we actually read
+//before anything indexes packetBuffer with it.
+static qboolean Datagram_DecodePacketHeader (unsigned int received_length, unsigned int *packet_length, unsigned int *flags)
+{
+	unsigned int	header;
+	unsigned int	declared_length;
+
+	if (received_length < NET_HEADERSIZE)
 	{
 		shortPacketCount++;
 		return false;
 	}
 
-	length = BigLong(packetBuffer.length);
-	flags = length & (~NETFLAG_LENGTH_MASK);
-	length &= NETFLAG_LENGTH_MASK;
+	header = BigLong(packetBuffer.length);
+	declared_length = header & NETFLAG_LENGTH_MASK;
+
+	if (declared_length < NET_HEADERSIZE || declared_length != received_length)
+	{
+		if (Datagram_RecordMalformedPacket(MALFORMED_PACKET_LENGTH, declared_length, received_length))
+			Con_DPrintf("Dropping datagram with invalid length (%u declared, %u received)\n",
+				declared_length, received_length);
+		return false;
+	}
+
+	*flags = header & (~NETFLAG_LENGTH_MASK);
+	*packet_length = declared_length;
+	return true;
+}
+
+qboolean Datagram_ProcessPacket(unsigned int received_length, qsocket_t *sock)
+{
+	unsigned int	flags;
+	unsigned int	length;
+	unsigned int	sequence;
+	unsigned int	count;
+
+	if (!Datagram_DecodePacketHeader(received_length, &length, &flags))
+		return false;
 
 	if (flags & NETFLAG_CTL)
 		return false;	//should only be for OOB packets.
@@ -1469,8 +1555,10 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 
 		if (length > (unsigned int)net_message.maxsize)
 		{	//is this even possible? maybe it will be in the future! either way, no sys_errors please.
+			//NB: must be false, not -1 - the caller treats any non-zero return as
+			//"net_message holds a packet to parse", and we never filled it.
 			Con_Printf("Over-sized unreliable\n");
-			return -1;
+			return false;
 		}
 		SZ_Clear (&net_message);
 		SZ_Write (&net_message, packetBuffer.data, length);
@@ -1529,9 +1617,9 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 		if (flags & NETFLAG_EOM)
 		{
 			if (sock->receiveMessageLength + length > (unsigned int)net_message.maxsize)
-			{
+			{	//false, not -1: net_message was not filled, so there is nothing to parse.
 				Con_Printf("Over-sized reliable\n");
-				return -1;
+				return false;
 			}
 			SZ_Clear(&net_message);
 			SZ_Write(&net_message, sock->receiveMessage, sock->receiveMessageLength);
@@ -1543,9 +1631,9 @@ qboolean Datagram_ProcessPacket(unsigned int length, qsocket_t *sock)
 		}
 
 		if (sock->receiveMessageLength + length > sizeof(sock->receiveMessage))
-		{
+		{	//false, not -1: net_message was not filled, so there is nothing to parse.
 			Con_Printf("Over-sized reliable\n");
-			return -1;
+			return false;
 		}
 		Q_memcpy(sock->receiveMessage + sock->receiveMessageLength, packetBuffer.data, length);
 		sock->receiveMessageLength += length;
@@ -1572,7 +1660,7 @@ void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 
 		while(1)
 		{
-			length = dfunc.Read(sock, (byte *)&packetBuffer, NET_DATAGRAMSIZE, &addr);
+			length = dfunc.Read(sock, (byte *)&packetBuffer, PACKET_BUFFER_RECV_SIZE, &addr);
 			if (length == -1 || !length)
 			{
 				//no more packets, move on to the next.
@@ -1584,7 +1672,7 @@ void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 
 			if (BigLong(packetBuffer.length) & NETFLAG_CTL)
 			{
-				_Datagram_ServerControlPacket(sock, &addr, (byte *)&packetBuffer, length);
+				_Datagram_ServerControlPacket(sock, &addr, (byte *)&packetBuffer, length, PACKET_BUFFER_PARSE_CAPACITY);
 
 				//rcon can mess some stuff up...
 				sock = dfunc.listeningSock;
@@ -1657,6 +1745,7 @@ void Datagram_GetAnyMessages(void(*callback)(qsocket_t *))
 int	Datagram_GetMessage (qsocket_t *sock)
 {
 	unsigned int	length;
+	unsigned int	packetlength;
 	unsigned int	flags;
 	int				ret = 0;
 	struct qsockaddr readaddr;
@@ -1670,7 +1759,7 @@ int	Datagram_GetMessage (qsocket_t *sock)
 	while (1)
 	{
 		length = (unsigned int) sfunc.Read(sock->socket, (byte *)&packetBuffer,
-							NET_DATAGRAMSIZE, &readaddr);
+							PACKET_BUFFER_RECV_SIZE, &readaddr);
 
 	//	if ((rand() & 255) > 220)
 	//		continue;
@@ -1700,11 +1789,12 @@ int	Datagram_GetMessage (qsocket_t *sock)
 			continue;
 		}
 
-		length = BigLong(packetBuffer.length);
-		if (length == 0xffffffff)
+		if (BigLong(packetBuffer.length) == 0xffffffff)
 			continue;	//some kind of lingering QW or DP response?
-		flags = length & (~NETFLAG_LENGTH_MASK);
-		length &= NETFLAG_LENGTH_MASK;
+
+		if (!Datagram_DecodePacketHeader(length, &packetlength, &flags))
+			continue;
+		length = packetlength;
 
 		if (flags & NETFLAG_CTL)
 		{
@@ -1841,6 +1931,25 @@ static void PrintStats(qsocket_t *s)
 	Con_Printf("\n");
 }
 
+static void Datagram_PrintMalformedPacketSample (const char *label, const malformed_packet_sample_t *sample)
+{
+	switch (sample->reason)
+	{
+	case MALFORMED_PACKET_LENGTH:
+		Con_Printf("%s = length mismatch (%u declared, %u received)\n",
+			label, sample->first_value, sample->second_value);
+		break;
+	case MALFORMED_PACKET_CONTROL_CAPACITY:
+		Con_Printf("%s = control capacity (%u length, %u capacity)\n",
+			label, sample->first_value, sample->second_value);
+		break;
+	case MALFORMED_PACKET_TERMINATOR_HEADROOM:
+		Con_Printf("%s = terminator headroom (%u length, %u capacity)\n",
+			label, sample->first_value, sample->second_value);
+		break;
+	}
+}
+
 static void NET_Stats_f (void)
 {
 	qsocket_t	*s;
@@ -1856,6 +1965,12 @@ static void NET_Stats_f (void)
 		Con_Printf("packetsReceived            = %i\n", packetsReceived);
 		Con_Printf("receivedDuplicateCount     = %i\n", receivedDuplicateCount);
 		Con_Printf("shortPacketCount           = %i\n", shortPacketCount);
+		Con_Printf("malformedPacketCount       = %i\n", malformedPacketCount);
+		if (malformedPacketFirst.valid)
+		{
+			Datagram_PrintMalformedPacketSample("malformedPacketFirst      ", &malformedPacketFirst);
+			Datagram_PrintMalformedPacketSample("malformedPacketLatest     ", &malformedPacketLatest);
+		}
 		Con_Printf("droppedDatagrams           = %i\n", droppedDatagrams);
 	}
 	else if (Q_strcmp(Cmd_Argv(1), "*") == 0)
@@ -2504,12 +2619,14 @@ static void _Datagram_ICE_SendPacket(const void *data, int len)
 }
 
 //called by BrokerDTLS to process decrypted connectionless packets
-void _Datagram_BrokerPacket(byte *data, unsigned int length, sys_socket_t sock, struct qsockaddr *addr)
+void _Datagram_BrokerPacket(byte *data, unsigned int length, size_t capacity, sys_socket_t sock, struct qsockaddr *addr)
 {
-	_Datagram_ServerControlPacket(sock, addr, data, length);
+	_Datagram_ServerControlPacket(sock, addr, data, length, capacity);
 }
 
-static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsockaddr *clientaddr, byte *data, unsigned int length)
+// capacity includes caller-owned terminator headroom. Text packets are dropped
+// unless data[length] is inside that allocation; they are never truncated.
+static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsockaddr *clientaddr, byte *data, unsigned int length, size_t capacity)
 {
 	struct qsockaddr newaddr;
 	qsocket_t	*sock;
@@ -2520,11 +2637,27 @@ static void _Datagram_ServerControlPacket (sys_socket_t acceptsock, struct qsock
 	int plnum;
 	int mod, /*mod_ver, mod_flags,*/ mod_passwd;	//proquake extensions
 
-	control = BigLong(*((int *)data));
+	if (length < sizeof(control))
+		return;
+	if ((size_t)length > capacity)
+	{
+		if (Datagram_RecordMalformedPacket(MALFORMED_PACKET_CONTROL_CAPACITY, length, (unsigned int)capacity))
+			Con_DPrintf("Dropping control packet larger than its input buffer\n");
+		return;
+	}
+
+	memcpy(&control, data, sizeof(control));	//data may be unaligned (dtls scratch buffer)
+	control = BigLong(control);
 	if (control == -1)
 	{
 		if (!sv_public.value)
 			return;
+		if ((size_t)length >= capacity)
+		{
+			if (Datagram_RecordMalformedPacket(MALFORMED_PACKET_TERMINATOR_HEADROOM, length, (unsigned int)capacity))
+				Con_DPrintf("Dropping connectionless packet without terminator headroom\n");
+			return;
+		}
 		data[length] = 0;
 		Cmd_TokenizeString((char*)data+4);
 		if (!strcmp(Cmd_Argv(0), "getinfo") || !strcmp(Cmd_Argv(0), "getstatus"))

@@ -49,6 +49,10 @@ void		BrokerDTLS_Shutdown (void);
 qboolean	BrokerDTLS_IsAuthenticated (void);
 int		BrokerDTLS_Send (const void *data, int len);	//returns 0 on success
 
+//implemented in net_dgrm.c. capacity is the total size of the data allocation,
+//including the one byte of terminator headroom the callee may write to.
+void		_Datagram_BrokerPacket (byte *data, unsigned int length, size_t capacity, sys_socket_t sock, struct qsockaddr *addr);
+
 //broker-to-server ICE signaling over the UDP game port (for /udp/IP:Port connections)
 typedef void (*ice_udp_send_t)(const void *data, int len);
 void		SVC_ICE_Offer(const char *clientaddr, const char *brokerid, const char *sdpdata, const char *brokeraddr, ice_udp_send_t sendpacket);

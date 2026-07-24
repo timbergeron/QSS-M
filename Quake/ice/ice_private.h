@@ -451,7 +451,8 @@ typedef struct dtlsfuncs_s
 	qboolean (*CheckConnection)(void *cbctx, void *peeraddr, size_t peeraddrsize, void *indata, size_t insize, neterr_t(*push)(void *cbctx, const qbyte *data, size_t datasize), void (*EstablishTrueContext)(void **cbctx, void *state));
 	void (*DestroyContext)(void *ctx);
 	neterr_t (*Transmit)(void *ctx, const qbyte *data, size_t datasize);
-	neterr_t (*Received)(void *ctx, netadr_t *from, const void *src_data, size_t src_size, void *out_data, size_t out_maxsize, size_t *out_used);	//operates in-place...
+	// out_data is binary and may be filled through out_maxsize; callers own any terminator headroom.
+	neterr_t (*Received)(void *ctx, netadr_t *from, const void *src_data, size_t src_size, void *out_data, size_t out_maxsize, size_t *out_used);
 	neterr_t (*Timeouts)(void *ctx);
 	int (*GetPeerCertificate)(void *ctx, enum certprops_e prop, char *out, size_t outsize);
 	qboolean (*GenTempCertificate)(const char *subject, struct dtlslocalcred_s *cred);
