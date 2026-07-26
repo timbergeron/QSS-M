@@ -25,6 +25,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // rights reserved.
 
 #include "quakedef.h"
+#include "q_ctype.h"
+
+#include <errno.h>
 
 extern cvar_t cl_maxpitch; //johnfitz -- variable pitch clamping
 extern cvar_t cl_minpitch; //johnfitz -- variable pitch clamping
@@ -981,7 +984,12 @@ void CL_InitInput (void)
 /*
 =============================================================================
 
-WEAPON WHEEL  (Quake remaster style, stock/mission-pack .lmps plus generated axe icon)
+WEAPON WHEEL
+
+Loads the Quake 2021 Remaster's data-driven wwheel.txt format when present.
+The built-in stock/mission-pack table remains the fallback for classic installs.
+Remaster icon/icon_sel paths are package-relative .lmps; entvaroffs values for
+the four standard ammo fields are translated to their networked client stats.
 
 =============================================================================
 */
@@ -1021,8 +1029,10 @@ WEAPON WHEEL  (Quake remaster style, stock/mission-pack .lmps plus generated axe
 #define WHEEL_PACK_HIPNOTIC	1
 #define WHEEL_PACK_ROGUE	2
 #define WHEEL_FLAG_AXE		1
+#define WHEEL_FLAG_FILE_ICON	2
 #define WHEEL_SELECT_NORMAL	0
 #define WHEEL_SELECT_HIP_PROX	1
+#define WHEEL_MAX_WEAPONS	16	// fits the existing wheel configuration menu without clipping
 #define WHEEL_ORDER_DEFAULT	"shotgun axe lg rl gl sng ng ssg prox laser mjolnir lavang lavasng multigl multirl plasma"
 
 typedef struct
@@ -1042,7 +1052,7 @@ typedef struct
 	int		fallback_char;
 } wheel_weapon_t;
 
-static const wheel_weapon_t wheel_weapons[] = {
+static const wheel_weapon_t wheel_default_weapons[] = {
 	// Quake remaster visual wheel order: shotgun at top, then 3/4/5/6/7/8/axe
 	// counter-clockwise.  Wheel_SlotAngle advances clockwise, so store the
 	// clockwise order here.
@@ -1063,7 +1073,30 @@ static const wheel_weapon_t wheel_weapons[] = {
 	{"Multi Rocket Launcher",  "multirl", "r_multirock",  NULL,           63, RIT_MULTI_ROCKET,      0,       STAT_ROCKETS, 1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '7'},
 	{"Plasma Gun",             "plasma",  "r_plasma",     NULL,           64, RIT_PLASMA_GUN,        0,       STAT_CELLS,   1, WHEEL_PACK_ROGUE,    0,              WHEEL_SELECT_NORMAL,   '8'}
 };
-#define WHEEL_WEAPON_COUNT ((int)(sizeof(wheel_weapons) / sizeof(wheel_weapons[0])))
+#define WHEEL_DEFAULT_WEAPON_COUNT ((int)(sizeof(wheel_default_weapons) / sizeof(wheel_default_weapons[0])))
+COMPILE_TIME_ASSERT (wheel_default_weapon_count_fits,
+	WHEEL_DEFAULT_WEAPON_COUNT <= WHEEL_MAX_WEAPONS);
+
+typedef struct
+{
+	wheel_weapon_t	weapon;
+	char		name[64];
+	char		id[16];
+	char		icon[MAX_QPATH];
+	char		icon_active[MAX_QPATH];
+	char		ammo_icon[MAX_QPATH];
+	int		entvar_offset;
+	qboolean	present;
+	qboolean	has_impulse;
+	qboolean	has_weaponnum;
+} wheel_file_weapon_t;
+
+static wheel_file_weapon_t wheel_file_weapons[WHEEL_MAX_WEAPONS];
+static wheel_weapon_t wheel_parsed_weapons[WHEEL_MAX_WEAPONS];
+static const wheel_weapon_t *wheel_weapons = wheel_default_weapons;
+static int	wheel_weapon_count = WHEEL_DEFAULT_WEAPON_COUNT;
+static char	wheel_default_order[512] = WHEEL_ORDER_DEFAULT;
+static qboolean	wheel_definition_loaded;
 
 static cvar_t	cl_wheel_order = {"cl_wheel_order", WHEEL_ORDER_DEFAULT, CVAR_ARCHIVE};
 
@@ -1074,10 +1107,10 @@ static int	wheel_pick;		// 0..Wheel_WeaponCount()-1
 static float	wheel_mouse_x;		// virtual stick built from accumulated mouse delta
 static float	wheel_mouse_y;
 static qboolean	wheel_icons_loaded;
-static qpic_t	*wheel_icons[WHEEL_WEAPON_COUNT];
-static qpic_t	*wheel_icons_active[WHEEL_WEAPON_COUNT];
+static qpic_t	*wheel_icons[WHEEL_MAX_WEAPONS];
+static qpic_t	*wheel_icons_active[WHEEL_MAX_WEAPONS];
 static qpic_t	*wheel_box_pic = NULL;	// backtile from gfx.wad -- tiled body texture
-static int	wheel_order_indices[WHEEL_WEAPON_COUNT];
+static int	wheel_order_indices[WHEEL_MAX_WEAPONS];
 static int	wheel_order_count;
 static qboolean	wheel_order_dirty = true;
 static qboolean	wheel_order_seen_hipnotic;
@@ -1125,6 +1158,445 @@ static void Wheel_DebugMsg (const char *msg)
 {
 	if (WHEEL_DEBUG)
 		Con_Printf ("weaponwheel: %s\n", msg);
+}
+
+static void Wheel_UseDefaultDefinition (void)
+{
+	wheel_weapons = wheel_default_weapons;
+	wheel_weapon_count = WHEEL_DEFAULT_WEAPON_COUNT;
+	q_strlcpy (wheel_default_order, WHEEL_ORDER_DEFAULT, sizeof(wheel_default_order));
+}
+
+static qboolean Wheel_IsSingleBit (unsigned int value)
+{
+	return value && !(value & (value - 1));
+}
+
+static qboolean Wheel_ParseInteger (const char *text, int minimum, int maximum, int *value)
+{
+	char *end;
+	long parsed;
+	const char *digits;
+	int base = 10;
+
+	if (!text || !text[0])
+		return false;
+	digits = (*text == '+' || *text == '-') ? text + 1 : text;
+	if (digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'))
+		base = 16;
+	errno = 0;
+	parsed = strtol (text, &end, base);
+	if (errno == ERANGE || *end || parsed < minimum || parsed > maximum)
+		return false;
+	*value = (int)parsed;
+	return true;
+}
+
+static qboolean Wheel_CopyDefinitionString (char *dst, size_t dst_size,
+	const char *value, const char *field, int slot)
+{
+	if (q_strlcpy (dst, value, dst_size) >= dst_size)
+	{
+		Con_Warning ("wwheel.txt: %s value is too long in slot %i\n", field, slot);
+		return false;
+	}
+	return true;
+}
+
+static qboolean Wheel_DefinitionIdValid (const char *id)
+{
+	const unsigned char *p = (const unsigned char *)id;
+
+	if (!p[0])
+		return false;
+	for (; *p; p++)
+	{
+		if (!q_isalnum (*p) && *p != '_' && *p != '-')
+			return false;
+	}
+	return true;
+}
+
+static qboolean Wheel_DefinitionIconPathValid (const char *path)
+{
+	if (!path || !path[0] || path[0] == '/' || path[0] == '\\')
+		return false;
+	if (strstr (path, "..") || strchr (path, ':') || strchr (path, '\\'))
+		return false;
+	return true;
+}
+
+static int Wheel_AmmoStatForDefinition (int entvar_offset, const char *ammo_icon)
+{
+	if (entvar_offset == (int)offsetof(entvars_t, ammo_shells) ||
+		(ammo_icon && (!q_strcasecmp (ammo_icon, "sb_shells") ||
+			!q_strcasecmp (ammo_icon, "shells"))))
+		return STAT_SHELLS;
+	if (entvar_offset == (int)offsetof(entvars_t, ammo_nails) ||
+		(ammo_icon && (!q_strcasecmp (ammo_icon, "sb_nails") ||
+			!q_strcasecmp (ammo_icon, "nails"))))
+		return STAT_NAILS;
+	if (entvar_offset == (int)offsetof(entvars_t, ammo_rockets) ||
+		(ammo_icon && (!q_strcasecmp (ammo_icon, "sb_rocket") ||
+			!q_strcasecmp (ammo_icon, "sb_rockets") ||
+			!q_strcasecmp (ammo_icon, "rockets"))))
+		return STAT_ROCKETS;
+	if (entvar_offset == (int)offsetof(entvars_t, ammo_cells) ||
+		(ammo_icon && (!q_strcasecmp (ammo_icon, "sb_cells") ||
+			!q_strcasecmp (ammo_icon, "cells"))))
+		return STAT_CELLS;
+	return 0;
+}
+
+static void Wheel_MakeDefinitionName (wheel_file_weapon_t *entry)
+{
+	static const struct
+	{
+		const char *icon;
+		const char *name;
+	} known_names[] = {
+		{"axe", "Axe"}, {"sword", "Sword"}, {"pistol", "Pistol"},
+		{"sgun", "Shotgun"}, {"shotgun", "Shotgun"},
+		{"sshotgun", "Super Shotgun"}, {"smg", "SMG"},
+		{"nailgun", "Nailgun"}, {"snailgun", "Super Nailgun"},
+		{"grenade", "Grenade Launcher"}, {"rlauncher", "Rocket Launcher"},
+		{"light", "Lightning Gun"}, {"plasma", "Plasma Gun"},
+		{"rail", "Railgun"}, {"grap", "Grappling Hook"},
+		{"grapple", "Grappling Hook"}
+	};
+	char stem[64];
+	const char *base;
+	char *suffix;
+	size_t i;
+	qboolean capitalize = true;
+
+	if (entry->name[0])
+		return;
+
+	base = COM_SkipPath (entry->icon);
+	q_strlcpy (stem, base && base[0] ? base : "weapon", sizeof(stem));
+	COM_StripExtension (stem, stem, sizeof(stem));
+	if (!q_strncasecmp (stem, "ww_", 3))
+		memmove (stem, stem + 3, strlen(stem + 3) + 1);
+	suffix = strrchr (stem, '_');
+	if (suffix && suffix[1] && !suffix[2] && suffix[1] >= '0' && suffix[1] <= '9')
+		*suffix = 0;
+
+	for (i = 0; i < sizeof(known_names) / sizeof(known_names[0]); i++)
+	{
+		if (!q_strcasecmp (stem, known_names[i].icon))
+		{
+			q_strlcpy (entry->name, known_names[i].name, sizeof(entry->name));
+			return;
+		}
+	}
+
+	for (i = 0; stem[i]; i++)
+	{
+		if (stem[i] == '_')
+		{
+			stem[i] = ' ';
+			capitalize = true;
+		}
+		else if (capitalize && stem[i] >= 'a' && stem[i] <= 'z')
+		{
+			stem[i] -= 'a' - 'A';
+			capitalize = false;
+		}
+		else
+			capitalize = false;
+	}
+	q_strlcpy (entry->name, stem[0] ? stem : "Weapon", sizeof(entry->name));
+}
+
+static qboolean Wheel_ParseDefinition (char *text)
+{
+	const char *data = text;
+	qboolean parse_error = false;
+	int parsed_count = 0;
+	int slot, i;
+
+	memset (wheel_file_weapons, 0, sizeof(wheel_file_weapons));
+
+	while ((data = COM_Parse (data)) != NULL)
+	{
+		wheel_file_weapon_t *entry;
+
+		if (!com_token[0])
+			continue;
+		if (q_strcasecmp (com_token, "slot"))
+		{
+			Con_Warning ("wwheel.txt: expected \"slot\", found \"%s\"\n", com_token);
+			parse_error = true;
+			break;
+		}
+		data = COM_Parse (data);
+		if (!data || !com_token[0])
+		{
+			parse_error = true;
+			break;
+		}
+		if (!Wheel_ParseInteger (com_token, 0, WHEEL_MAX_WEAPONS - 1, &slot))
+		{
+			Con_Warning ("wwheel.txt: invalid slot \"%s\" (expected 0-%i)\n",
+				com_token, WHEEL_MAX_WEAPONS - 1);
+			parse_error = true;
+			break;
+		}
+		entry = &wheel_file_weapons[slot];
+		if (entry->present)
+		{
+			Con_Warning ("wwheel.txt: duplicate slot %i\n", slot);
+			parse_error = true;
+			break;
+		}
+		memset (entry, 0, sizeof(*entry));
+		entry->present = true;
+		entry->entvar_offset = -1;
+		entry->weapon.pack = WHEEL_PACK_BASE;
+		entry->weapon.flags = WHEEL_FLAG_FILE_ICON;
+		entry->weapon.select_mode = WHEEL_SELECT_NORMAL;
+		entry->weapon.ammo_min = 1;
+
+		data = COM_Parse (data);
+		if (!data || strcmp (com_token, "{"))
+		{
+			Con_Warning ("wwheel.txt: expected \"{\" after slot %i\n", slot);
+			parse_error = true;
+			break;
+		}
+
+		for (;;)
+		{
+			char key[64];
+
+			data = COM_Parse (data);
+			if (!data)
+			{
+				parse_error = true;
+				break;
+			}
+			if (!strcmp (com_token, "}"))
+				break;
+			q_strlcpy (key, com_token, sizeof(key));
+
+			data = COM_Parse (data);
+			if (!data || !com_token[0] || !strcmp (com_token, "{") || !strcmp (com_token, "}"))
+			{
+				Con_Warning ("wwheel.txt: missing value for \"%s\" in slot %i\n", key, slot);
+				parse_error = true;
+				break;
+			}
+
+			if (!q_strcasecmp (key, "impulse"))
+			{
+				if (!Wheel_ParseInteger (com_token, 1, 255, &entry->weapon.impulse))
+				{
+					Con_Warning ("wwheel.txt: invalid impulse \"%s\" in slot %i\n", com_token, slot);
+					parse_error = true;
+					break;
+				}
+				entry->has_impulse = true;
+			}
+			else if (!q_strcasecmp (key, "weaponnum"))
+			{
+				if (!Wheel_ParseInteger (com_token, 1, INT_MAX, &entry->weapon.item_bit) ||
+					!Wheel_IsSingleBit ((unsigned int)entry->weapon.item_bit))
+				{
+					Con_Warning ("wwheel.txt: weaponnum \"%s\" in slot %i is not one positive item bit\n",
+						com_token, slot);
+					parse_error = true;
+					break;
+				}
+				entry->has_weaponnum = true;
+			}
+			else if (!q_strcasecmp (key, "icon"))
+			{
+				if (!Wheel_CopyDefinitionString (entry->icon, sizeof(entry->icon), com_token, key, slot))
+				{
+					parse_error = true;
+					break;
+				}
+			}
+			else if (!q_strcasecmp (key, "icon_sel"))
+			{
+				if (!Wheel_CopyDefinitionString (entry->icon_active, sizeof(entry->icon_active),
+					com_token, key, slot))
+				{
+					parse_error = true;
+					break;
+				}
+			}
+			else if (!q_strcasecmp (key, "ammoicon"))
+			{
+				if (!Wheel_CopyDefinitionString (entry->ammo_icon, sizeof(entry->ammo_icon),
+					com_token, key, slot))
+				{
+					parse_error = true;
+					break;
+				}
+			}
+			else if (!q_strcasecmp (key, "entvaroffs"))
+			{
+				if (!Wheel_ParseInteger (com_token, 0, INT_MAX, &entry->entvar_offset))
+				{
+					Con_Warning ("wwheel.txt: invalid entvaroffs \"%s\" in slot %i\n", com_token, slot);
+					parse_error = true;
+					break;
+				}
+			}
+			else if (!q_strcasecmp (key, "ammomin"))
+			{
+				if (!Wheel_ParseInteger (com_token, 0, INT_MAX, &entry->weapon.ammo_min))
+				{
+					Con_Warning ("wwheel.txt: invalid ammomin \"%s\" in slot %i\n", com_token, slot);
+					parse_error = true;
+					break;
+				}
+			}
+			else if (!q_strcasecmp (key, "name"))
+			{
+				if (!Wheel_CopyDefinitionString (entry->name, sizeof(entry->name), com_token, key, slot))
+				{
+					parse_error = true;
+					break;
+				}
+			}
+			else if (!q_strcasecmp (key, "id"))
+			{
+				if (!Wheel_CopyDefinitionString (entry->id, sizeof(entry->id), com_token, key, slot))
+				{
+					parse_error = true;
+					break;
+				}
+			}
+			// Unknown scalar fields are intentionally ignored for forward compatibility.
+		}
+		if (parse_error)
+			break;
+		if (!entry->has_impulse || !entry->has_weaponnum)
+		{
+			Con_Warning ("wwheel.txt: slot %i requires positive impulse and weaponnum values\n", slot);
+			parse_error = true;
+			break;
+		}
+		if (!Wheel_DefinitionIconPathValid (entry->icon) ||
+			(entry->icon_active[0] && !Wheel_DefinitionIconPathValid (entry->icon_active)))
+		{
+			Con_Warning ("wwheel.txt: slot %i has a missing or unsafe icon path\n", slot);
+			parse_error = true;
+			break;
+		}
+		if (entry->id[0] && !Wheel_DefinitionIdValid (entry->id))
+		{
+			Con_Warning ("wwheel.txt: id \"%s\" in slot %i contains unsupported characters\n",
+				entry->id, slot);
+			parse_error = true;
+			break;
+		}
+		parsed_count++;
+	}
+
+	if (parse_error || parsed_count <= 0)
+		return false;
+
+	wheel_weapon_count = 0;
+	wheel_default_order[0] = 0;
+	// Remaster slots advance counter-clockwise from slot zero; QSS-M's wheel
+	// angles advance clockwise, so retain slot zero at the top and reverse the rest.
+	for (i = 0; i < WHEEL_MAX_WEAPONS; i++)
+	{
+		int source_slot = (i == 0) ? 0 : WHEEL_MAX_WEAPONS - i;
+		wheel_file_weapon_t *entry = &wheel_file_weapons[source_slot];
+		wheel_weapon_t *weapon;
+
+		if (!entry->present)
+			continue;
+		if (!entry->id[0])
+			q_snprintf (entry->id, sizeof(entry->id), "slot%i", source_slot);
+		{
+			int previous;
+			for (previous = 0; previous < wheel_weapon_count; previous++)
+			{
+				if (!q_strcasecmp (entry->id, wheel_parsed_weapons[previous].id))
+				{
+					Con_Warning ("wwheel.txt: duplicate id \"%s\"\n", entry->id);
+					return false;
+				}
+			}
+		}
+		Wheel_MakeDefinitionName (entry);
+
+		weapon = &wheel_parsed_weapons[wheel_weapon_count++];
+		*weapon = entry->weapon;
+		weapon->name = entry->name;
+		weapon->id = entry->id;
+		weapon->icon = entry->icon[0] ? entry->icon : NULL;
+		weapon->icon_active = entry->icon_active[0] ? entry->icon_active : NULL;
+		weapon->ammo_stat = Wheel_AmmoStatForDefinition (entry->entvar_offset, entry->ammo_icon);
+		weapon->fallback_char = (weapon->impulse >= 1 && weapon->impulse <= 9) ?
+			'0' + weapon->impulse : 0;
+
+		if (wheel_default_order[0])
+			q_strlcat (wheel_default_order, " ", sizeof(wheel_default_order));
+		q_strlcat (wheel_default_order, weapon->id, sizeof(wheel_default_order));
+		Con_DPrintf ("wwheel.txt: slot %i -> %s (impulse %i, weaponnum %i, ammo stat %i)\n",
+			source_slot, weapon->name, weapon->impulse, weapon->item_bit, weapon->ammo_stat);
+	}
+
+	wheel_weapons = wheel_parsed_weapons;
+	return wheel_weapon_count > 0;
+}
+
+static void Wheel_LoadDefinition (void)
+{
+	char *text;
+	int file_handle;
+	int file_size;
+
+	if (wheel_definition_loaded)
+		return;
+
+	Wheel_UseDefaultDefinition ();
+	file_size = COM_OpenFile ("wwheel.txt", &file_handle, NULL);
+	if (file_size < 0)
+	{
+		wheel_definition_loaded = true;
+		wheel_order_dirty = true;
+		return;
+	}
+	COM_CloseFile (file_handle);
+	if (file_size > 256 * 1024)
+	{
+		Con_Warning ("wwheel.txt is too large; using the built-in weapon wheel\n");
+		wheel_definition_loaded = true;
+		wheel_order_dirty = true;
+		return;
+	}
+
+	text = (char *)COM_LoadMallocFile ("wwheel.txt", NULL);
+	if (text)
+	{
+		if (Wheel_ParseDefinition (text))
+			Con_Printf ("Loaded %i weapon wheel slots from wwheel.txt\n", wheel_weapon_count);
+		else
+		{
+			Con_Warning ("Could not parse wwheel.txt; using the built-in weapon wheel\n");
+			Wheel_UseDefaultDefinition ();
+		}
+		free (text);
+	}
+	else
+		Con_Warning ("Could not read wwheel.txt; using the built-in weapon wheel\n");
+
+	wheel_definition_loaded = true;
+	wheel_order_dirty = true;
+}
+
+static void Wheel_EnsureDefinition (void)
+{
+	if (!wheel_definition_loaded)
+		Wheel_LoadDefinition ();
 }
 
 static qboolean Wheel_Allowed (qboolean quiet)
@@ -1175,7 +1647,8 @@ static int Wheel_WeaponIndexForId (const char *id)
 {
 	int i;
 
-	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
+	Wheel_EnsureDefinition ();
+	for (i = 0; i < wheel_weapon_count; i++)
 	{
 		if (!q_strcasecmp (id, wheel_weapons[i].id))
 			return i;
@@ -1185,7 +1658,7 @@ static int Wheel_WeaponIndexForId (const char *id)
 
 static int Wheel_BuildRawOrder (const char *value, int *order, int max_order, qboolean warn_unknown)
 {
-	qboolean used[WHEEL_WEAPON_COUNT];
+	qboolean used[WHEEL_MAX_WEAPONS];
 	qboolean using_default;
 	const char *data;
 	int count = 0;
@@ -1193,8 +1666,15 @@ static int Wheel_BuildRawOrder (const char *value, int *order, int max_order, qb
 	if (max_order <= 0)
 		return 0;
 
-	using_default = (!value || !value[0]);
-	data = using_default ? WHEEL_ORDER_DEFAULT : value;
+	Wheel_EnsureDefinition ();
+	// The archived cvar starts with the built-in order.  Treat that factory
+	// value as "default" for file definitions too; otherwise a custom id
+	// such as "axe" could accidentally turn the stock string into a partial
+	// custom wheel and hide every nonmatching slot.
+	using_default = (!value || !value[0] ||
+		(wheel_weapons != wheel_default_weapons &&
+		 !q_strcasecmp (value, WHEEL_ORDER_DEFAULT)));
+	data = using_default ? wheel_default_order : value;
 	memset (used, 0, sizeof(used));
 
 	while ((data = COM_Parse (data)) != NULL)
@@ -1220,17 +1700,19 @@ static int Wheel_BuildRawOrder (const char *value, int *order, int max_order, qb
 	}
 
 	if (count == 0 && !using_default)
-		return Wheel_BuildRawOrder (WHEEL_ORDER_DEFAULT, order, max_order, false);
+		return Wheel_BuildRawOrder (NULL, order, max_order, false);
 
 	return count;
 }
 
 static void Wheel_RebuildOrder (void)
 {
-	int raw_order[WHEEL_WEAPON_COUNT];
+	int raw_order[WHEEL_MAX_WEAPONS];
 	int raw_count, i;
 
-	raw_count = Wheel_BuildRawOrder (cl_wheel_order.string, raw_order, WHEEL_WEAPON_COUNT, true);
+	Wheel_EnsureDefinition ();
+	raw_count = Wheel_BuildRawOrder (cl_wheel_order.string, raw_order, wheel_weapon_count,
+		q_strcasecmp (cl_wheel_order.string, WHEEL_ORDER_DEFAULT) != 0);
 
 	wheel_order_count = 0;
 	for (i = 0; i < raw_count; i++)
@@ -1242,7 +1724,7 @@ static void Wheel_RebuildOrder (void)
 
 	if (wheel_order_count == 0)
 	{
-		raw_count = Wheel_BuildRawOrder (WHEEL_ORDER_DEFAULT, raw_order, WHEEL_WEAPON_COUNT, false);
+		raw_count = Wheel_BuildRawOrder (NULL, raw_order, wheel_weapon_count, false);
 		for (i = 0; i < raw_count; i++)
 		{
 			int weapon_index = raw_order[i];
@@ -1258,6 +1740,7 @@ static void Wheel_RebuildOrder (void)
 
 static void Wheel_EnsureOrder (void)
 {
+	Wheel_EnsureDefinition ();
 	if (wheel_order_dirty ||
 		wheel_order_seen_hipnotic != (hipnotic ? true : false) ||
 		wheel_order_seen_rogue != (rogue ? true : false))
@@ -1272,7 +1755,7 @@ static void Wheel_OrderChanged (cvar_t *var)
 
 static void Wheel_OrderCompletion (cvar_t *var, const char *partial)
 {
-	qboolean used[WHEEL_WEAPON_COUNT];
+	qboolean used[WHEEL_MAX_WEAPONS];
 	const char *data;
 	int i;
 
@@ -1292,7 +1775,7 @@ static void Wheel_OrderCompletion (cvar_t *var, const char *partial)
 			used[weapon_index] = true;
 	}
 
-	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
+	for (i = 0; i < wheel_weapon_count; i++)
 	{
 		if (used[i] && q_strcasecmp (partial, wheel_weapons[i].id))
 			continue;
@@ -1325,11 +1808,6 @@ static int Wheel_WeaponItemBit (const wheel_weapon_t *weapon)
 	if (rogue && weapon->rogue_item_bit)
 		return weapon->rogue_item_bit;
 	return weapon->item_bit;
-}
-
-static qboolean Wheel_IsSingleBit (unsigned int value)
-{
-	return value && !(value & (value - 1));
 }
 
 static unsigned int Wheel_CustomWeaponMask (void)
@@ -2000,9 +2478,10 @@ static qpic_t *Wheel_LoadAxeIcon (void)
 static void Wheel_LoadIcons (void)
 {
 	int i;
+	Wheel_EnsureDefinition ();
 	if (wheel_icons_loaded)
 		return;
-	for (i = 0; i < WHEEL_WEAPON_COUNT; i++)
+	for (i = 0; i < wheel_weapon_count; i++)
 	{
 		if (!Wheel_WeaponAvailable (&wheel_weapons[i]))
 		{
@@ -2010,10 +2489,24 @@ static void Wheel_LoadIcons (void)
 			wheel_icons_active[i] = NULL;
 			continue;
 		}
-		wheel_icons[i] = wheel_weapons[i].icon ?
-			Draw_PicFromWad2 (wheel_weapons[i].icon, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP) : NULL;
-		wheel_icons_active[i] = wheel_weapons[i].icon_active ?
-			Draw_PicFromWad2 (wheel_weapons[i].icon_active, TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP) : NULL;
+		if (wheel_weapons[i].flags & WHEEL_FLAG_FILE_ICON)
+		{
+			wheel_icons[i] = wheel_weapons[i].icon ?
+				Draw_TryCachePic (wheel_weapons[i].icon,
+					TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP) : NULL;
+			wheel_icons_active[i] = wheel_weapons[i].icon_active ?
+				Draw_TryCachePic (wheel_weapons[i].icon_active,
+					TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP) : NULL;
+		}
+		else
+		{
+			wheel_icons[i] = wheel_weapons[i].icon ?
+				Draw_PicFromWad2 (wheel_weapons[i].icon,
+					TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP) : NULL;
+			wheel_icons_active[i] = wheel_weapons[i].icon_active ?
+				Draw_PicFromWad2 (wheel_weapons[i].icon_active,
+					TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP) : NULL;
+		}
 		if (wheel_icons[i] == pic_nul)
 			wheel_icons[i] = NULL;
 		if (wheel_icons_active[i] == pic_nul)
@@ -2053,21 +2546,23 @@ void Wheel_ClearBBlock (void)
 
 const char *Wheel_MenuWeaponName (int weapon_index)
 {
-	if (weapon_index < 0 || weapon_index >= WHEEL_WEAPON_COUNT)
+	Wheel_EnsureDefinition ();
+	if (weapon_index < 0 || weapon_index >= wheel_weapon_count)
 		return "";
 	return wheel_weapons[weapon_index].name;
 }
 
 qboolean Wheel_MenuWeaponAvailable (int weapon_index)
 {
-	if (weapon_index < 0 || weapon_index >= WHEEL_WEAPON_COUNT)
+	Wheel_EnsureDefinition ();
+	if (weapon_index < 0 || weapon_index >= wheel_weapon_count)
 		return false;
 	return Wheel_WeaponAvailable (&wheel_weapons[weapon_index]);
 }
 
 static void Wheel_MenuAppendOrderValue (char *value, size_t value_size, int weapon_index)
 {
-	if (weapon_index < 0 || weapon_index >= WHEEL_WEAPON_COUNT)
+	if (weapon_index < 0 || weapon_index >= wheel_weapon_count)
 		return;
 	if (value[0])
 		q_strlcat (value, " ", value_size);
@@ -2076,9 +2571,9 @@ static void Wheel_MenuAppendOrderValue (char *value, size_t value_size, int weap
 
 void Wheel_MenuBuildOrder (int *visible, int *visible_count, int *hidden, int *hidden_count, int max_count)
 {
-	int raw_order[WHEEL_WEAPON_COUNT];
-	int default_order[WHEEL_WEAPON_COUNT];
-	qboolean used[WHEEL_WEAPON_COUNT];
+	int raw_order[WHEEL_MAX_WEAPONS];
+	int default_order[WHEEL_MAX_WEAPONS];
+	qboolean used[WHEEL_MAX_WEAPONS];
 	int raw_count, default_count, i;
 	int vcount = 0, hcount = 0;
 
@@ -2090,7 +2585,8 @@ void Wheel_MenuBuildOrder (int *visible, int *visible_count, int *hidden, int *h
 		return;
 
 	memset (used, 0, sizeof(used));
-	raw_count = Wheel_BuildRawOrder (cl_wheel_order.string, raw_order, WHEEL_WEAPON_COUNT, false);
+	Wheel_EnsureDefinition ();
+	raw_count = Wheel_BuildRawOrder (cl_wheel_order.string, raw_order, wheel_weapon_count, false);
 	for (i = 0; i < raw_count && vcount < max_count; i++)
 	{
 		int weapon_index = raw_order[i];
@@ -2102,7 +2598,7 @@ void Wheel_MenuBuildOrder (int *visible, int *visible_count, int *hidden, int *h
 		vcount++;
 	}
 
-	default_count = Wheel_BuildRawOrder (WHEEL_ORDER_DEFAULT, default_order, WHEEL_WEAPON_COUNT, false);
+	default_count = Wheel_BuildRawOrder (NULL, default_order, wheel_weapon_count, false);
 	for (i = 0; i < default_count && hcount < max_count; i++)
 	{
 		int weapon_index = default_order[i];
@@ -2123,8 +2619,8 @@ void Wheel_MenuBuildOrder (int *visible, int *visible_count, int *hidden, int *h
 
 void Wheel_MenuSetOrder (const int *visible, int visible_count)
 {
-	int old_order[WHEEL_WEAPON_COUNT];
-	qboolean used[WHEEL_WEAPON_COUNT];
+	int old_order[WHEEL_MAX_WEAPONS];
+	qboolean used[WHEEL_MAX_WEAPONS];
 	char value[512];
 	int old_count, i;
 
@@ -2133,7 +2629,7 @@ void Wheel_MenuSetOrder (const int *visible, int visible_count)
 	for (i = 0; i < visible_count; i++)
 	{
 		int weapon_index = visible[i];
-		if (weapon_index < 0 || weapon_index >= WHEEL_WEAPON_COUNT)
+		if (weapon_index < 0 || weapon_index >= wheel_weapon_count)
 			continue;
 		if (used[weapon_index])
 			continue;
@@ -2143,11 +2639,11 @@ void Wheel_MenuSetOrder (const int *visible, int visible_count)
 		used[weapon_index] = true;
 	}
 
-	old_count = Wheel_BuildRawOrder (cl_wheel_order.string, old_order, WHEEL_WEAPON_COUNT, false);
+	old_count = Wheel_BuildRawOrder (cl_wheel_order.string, old_order, wheel_weapon_count, false);
 	for (i = 0; i < old_count; i++)
 	{
 		int weapon_index = old_order[i];
-		if (weapon_index < 0 || weapon_index >= WHEEL_WEAPON_COUNT)
+		if (weapon_index < 0 || weapon_index >= wheel_weapon_count)
 			continue;
 		if (used[weapon_index])
 			continue;
@@ -2162,7 +2658,8 @@ void Wheel_MenuSetOrder (const int *visible, int visible_count)
 
 void Wheel_MenuResetOrder (void)
 {
-	Cvar_Set ("cl_wheel_order", WHEEL_ORDER_DEFAULT);
+	Wheel_EnsureDefinition ();
+	Cvar_Set ("cl_wheel_order", wheel_default_order);
 }
 
 void Wheel_UpdateSelection (float stick_x, float stick_y)
@@ -2328,6 +2825,9 @@ void Wheel_ClearIcons (void)
 	wheel_icons_loaded = false;
 	wheel_axe_icon_pic = NULL;
 	wheel_axe_icon_attempted = false;
+	wheel_definition_loaded = false;
+	wheel_order_dirty = true;
+	wheel_order_count = 0;
 }
 
 void Wheel_Reset (void)
@@ -2375,6 +2875,7 @@ void Wheel_Init (void)
 	Cmd_AddCommand ("+weaponwheel", Wheel_OpenDown);
 	Cmd_AddCommand ("-weaponwheel", Wheel_OpenUp);
 
+	Wheel_LoadDefinition ();
 	Wheel_RebuildOrder ();
 	Wheel_Reset ();
 }
