@@ -102,6 +102,7 @@ double	v_punchangles_times[2]; //spike -- times, to avoid assumptions...
 
 void SCR_SetupAutoID(void); // woods #autoid
 void SCR_DrawAutoID(void); // woods #autoid
+void SCR_DrawGrenadeModelTimers(void); // woods #nadecount
 void SCR_DrawStatusIndicators(void); // woods #autoid
 
 static void V_Viewheight_Completion_f (cvar_t *cvar, const char *partial)
@@ -1675,6 +1676,8 @@ void V_RenderView (void)
 	SCR_SetupAutoID(); // woods #autoid
 
 	SCR_DrawAutoID(); // woods #autoid
+
+	SCR_DrawGrenadeModelTimers(); // woods #nadecount
 
 	SCR_DrawStatusIndicators(); // woods #autoid
 

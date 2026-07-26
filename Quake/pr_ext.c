@@ -7657,6 +7657,7 @@ static void PF_cl_setproperty(void)
 void V_PolyBlend (void);
 void SCR_SetupAutoID(void);
 void SCR_DrawAutoID(void);
+void SCR_DrawGrenadeModelTimers(void); // woods #nadecount
 void SCR_DrawStatusIndicators(void);
 void SCR_DrawCrosshair (void);
 float CalcFovy (float fov_x, float width, float height);
@@ -7706,6 +7707,7 @@ static void PF_cl_renderscene(void)
 	{
 		SCR_SetupAutoID();
 		SCR_DrawAutoID();
+		SCR_DrawGrenadeModelTimers(); // woods #nadecount
 		SCR_DrawStatusIndicators();
 	}
 	if (r_refdef.drawworld)

@@ -178,6 +178,12 @@ cvar_t		cl_menucrosshair = { "cl_menucrosshair","0",CVAR_ARCHIVE}; // woods #men
 
 static const float GRENADE_EXPLOSION_TIME = 2.5f; // woods #nadecount
 static const float GRENADE_TIMER_WIDTH = 24.0f; // woods #nadecount
+/*
+ * Screen-space lift for the scr_showgrenadecounter 2 meters. The 12 unit world
+ * offset alone collapses to nothing at range, so keep a fixed gap above the
+ * model as well.
+ */
+static const float GRENADE_TIMER_MODEL_LIFT = 6.0f; // woods #nadecount
 
 extern	cvar_t	crosshair;
 extern	cvar_t	con_notifyfade; // woods #confade
@@ -1031,6 +1037,20 @@ static void ShowSpeed_Completion_f(cvar_t* cvar, const char* partial)
 }
 
 /*
+============================
+GrenadeCounter_Completion_f
+============================
+*/
+static void GrenadeCounter_Completion_f(cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "center-screen bar", NULL);
+	Con_AddToTabList("2", partial, "small bars above grenade models", NULL);
+}
+
+/*
 ===============
 AutoID_Completion_f
 ===============
@@ -1144,6 +1164,7 @@ void SCR_Init (void)
 	Cvar_SetCompletion (&scr_clock, &Clock_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_clock);
 	Cvar_RegisterVariable (&scr_showgrenadecounter); // woods #nadecount
+	Cvar_SetCompletion (&scr_showgrenadecounter, &GrenadeCounter_Completion_f);
 	Cvar_RegisterVariable (&scr_ping); // woods #scrping
 	Cvar_RegisterVariable(&scr_match_hud); // woods #matchhud
 	Cvar_RegisterVariable (&scr_showspeed); // woods #speed
@@ -3737,7 +3758,8 @@ void SCR_DrawGrenadeTimer(void)
 	static float last_time_remaining = -1.0f;
 	static float smooth_time_frac = -1.0f;
 
-	if (cls.state != ca_connected || !scr_showgrenadecounter.value)
+	if (cls.state != ca_connected || !scr_showgrenadecounter.value ||
+		(int)scr_showgrenadecounter.value == 2)
 	{
 		finish_state = false;
 		last_time_remaining = -1.0f;
@@ -5453,6 +5475,348 @@ void SCR_DrawAutoID(void)
 
 		glPopMatrix();
 	}
+}
+
+#define MAX_GRENADE_MODEL_TIMERS 64
+
+typedef struct grenade_model_timer_s
+{
+	int			edict_num;
+	qboolean	seen;
+	qboolean	finish_state;
+	float		last_time_remaining;
+	float		smooth_time_frac;
+} grenade_model_timer_t;
+
+typedef struct grenade_model_draw_s
+{
+	float	x, y;
+	float	time_remaining;
+	int		timer_index;
+} grenade_model_draw_t;
+
+static grenade_model_timer_t grenade_model_timers[MAX_GRENADE_MODEL_TIMERS];
+static qboolean grenade_model_timers_initialized;
+
+static void SCR_ResetGrenadeModelTimers(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_GRENADE_MODEL_TIMERS; ++i)
+	{
+		grenade_model_timers[i].edict_num = -1;
+		grenade_model_timers[i].seen = false;
+		grenade_model_timers[i].finish_state = false;
+		grenade_model_timers[i].last_time_remaining = -1.0f;
+		grenade_model_timers[i].smooth_time_frac = -1.0f;
+	}
+
+	grenade_model_timers_initialized = true;
+}
+
+static int SCR_FindGrenadeModelTimer(int edict_num)
+{
+	int i;
+
+	for (i = 0; i < MAX_GRENADE_MODEL_TIMERS; ++i)
+	{
+		if (grenade_model_timers[i].edict_num == edict_num)
+			return i;
+	}
+
+	for (i = 0; i < MAX_GRENADE_MODEL_TIMERS; ++i)
+	{
+		if (grenade_model_timers[i].edict_num < 0)
+		{
+			grenade_model_timers[i].edict_num = edict_num;
+			grenade_model_timers[i].finish_state = false;
+			grenade_model_timers[i].last_time_remaining = -1.0f;
+			grenade_model_timers[i].smooth_time_frac = -1.0f;
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+static qboolean SCR_IsGrenadeVisible(vec3_t origin)
+{
+	item_vis_t visitem;
+
+	VectorCopy(vpn, visitem.forward);
+	VectorCopy(vright, visitem.right);
+	VectorCopy(vup, visitem.up);
+	VectorCopy(r_origin, visitem.vieworg);
+	VectorCopy(origin, visitem.entorg);
+	VectorSubtract(visitem.entorg, visitem.vieworg, visitem.dir);
+	visitem.dist = DotProduct(visitem.dir, visitem.forward);
+	visitem.radius = 8.0f;
+
+	return TP_IsItemVisible(&visitem);
+}
+
+/*
+==========================
+SCR_AddGrenadeModelDraw
+
+Culls, projects and queues one grenade timer. Shared by the local-server and
+pure-client collection paths.
+==========================
+*/
+static void SCR_AddGrenadeModelDraw(int entnum, vec3_t origin, float time_remaining,
+	grenade_model_draw_t *draws, int *draw_count)
+{
+	grenade_model_draw_t *draw;
+	vec3_t display_origin;
+	float winz;
+	int timer_index;
+
+	VectorCopy(origin, display_origin);
+	display_origin[2] += 12.0f;
+
+	if (R_CullSphere(display_origin, 8.0f) || !SCR_IsGrenadeVisible(origin))
+		return;
+
+	timer_index = SCR_FindGrenadeModelTimer(entnum);
+	if (timer_index < 0)
+		return;
+
+	draw = &draws[*draw_count];
+	if (!qglProject(display_origin[0], display_origin[1], display_origin[2],
+		r_world_matrix, r_projection_matrix, r_viewport,
+		&draw->x, &draw->y, &winz) || winz < 0.0f || winz > 1.0f)
+		return;
+
+	grenade_model_timers[timer_index].seen = true;
+	draw->time_remaining = time_remaining;
+	draw->timer_index = timer_index;
+	++(*draw_count);
+}
+
+/*
+==========================
+SCR_DrawGrenadeModelTimers
+
+Compact grenade timers projected above the grenade models.
+==========================
+*/
+void SCR_DrawGrenadeModelTimers(void)
+{
+	grenade_model_draw_t draws[MAX_GRENADE_MODEL_TIMERS];
+	int draw_count = 0;
+	int i;
+
+	if (!grenade_model_timers_initialized)
+		SCR_ResetGrenadeModelTimers();
+
+	/*
+	 * Same gating as the scr_showgrenadecounter 1 meter: the fuse comes from
+	 * the QC think time, so it only works while we are hosting, and only our
+	 * own grenades are timed.
+	 */
+	if ((int)scr_showgrenadecounter.value != 2 || cls.state != ca_connected ||
+		!sv.active || cl.intermission || qeintermission || crxintermission ||
+		!r_view_matrices_valid)
+	{
+		SCR_ResetGrenadeModelTimers();
+		return;
+	}
+
+	for (i = 0; i < MAX_GRENADE_MODEL_TIMERS; ++i)
+		grenade_model_timers[i].seen = false;
+
+	{
+		qcvm_t *oldvm = qcvm;
+		qboolean switched_vm = (oldvm != &sv.qcvm);
+
+		if (switched_vm)
+		{
+			/* CSQC calls us with cl.qcvm active, and a vm has to be
+			   deactivated before another one can be switched in */
+			if (oldvm)
+				PR_SwitchQCVM(NULL);
+			PR_SwitchQCVM(&sv.qcvm);
+		}
+
+		if (qcvm && cl.viewentity > 0 && cl.viewentity < qcvm->num_edicts)
+		{
+			edict_t *player = EDICT_NUM(cl.viewentity);
+
+			for (i = 0; i < qcvm->num_edicts && draw_count < MAX_GRENADE_MODEL_TIMERS; ++i)
+			{
+				edict_t *ent = EDICT_NUM(i);
+				edict_t *owner;
+				vec3_t origin;
+				float time_remaining;
+
+				if (ent->free || !ent->v.classname ||
+					strcmp(PR_GetString(ent->v.classname), "grenade"))
+					continue;
+
+				owner = ent->v.owner ? PROG_TO_EDICT(ent->v.owner) : NULL;
+				if (owner != player)
+					continue;
+
+				/*
+				 * BecomeExplosion keeps the "grenade" classname and pushes
+				 * nextthink out by another 0.5s while the husk fades, so skip
+				 * anything that has already dropped its model.
+				 */
+				if (!ent->v.model || !*PR_GetString(ent->v.model))
+					continue;
+
+				time_remaining = !ent->v.touch ? 0.0f : (ent->v.nextthink - cl.time);
+				if (time_remaining < 0.0f || time_remaining >= GRENADE_EXPLOSION_TIME)
+					continue;
+
+				/*
+				 * Project the interpolated client entity when available so the
+				 * timer follows the model's rendered position, not the server's
+				 * latest physics position.
+				 */
+				if (i < cl.num_entities && cl.entities[i].model)
+					SCR_GetAutoIDOrigin(&cl.entities[i], origin);
+				else
+					VectorCopy(ent->v.origin, origin);
+
+				SCR_AddGrenadeModelDraw(i, origin, time_remaining, draws, &draw_count);
+			}
+		}
+
+		if (switched_vm)
+		{
+			PR_SwitchQCVM(NULL);
+			if (oldvm)
+				PR_SwitchQCVM(oldvm);
+		}
+	}
+
+	for (i = 0; i < MAX_GRENADE_MODEL_TIMERS; ++i)
+	{
+		if (!grenade_model_timers[i].seen)
+		{
+			grenade_model_timers[i].edict_num = -1;
+			grenade_model_timers[i].finish_state = false;
+			grenade_model_timers[i].last_time_remaining = -1.0f;
+			grenade_model_timers[i].smooth_time_frac = -1.0f;
+		}
+	}
+
+	if (!draw_count)
+		return;
+
+	GL_SetCanvas(CANVAS_AUTOID);
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
+
+	for (i = 0; i < draw_count; ++i)
+	{
+		grenade_model_timer_t *timer = &grenade_model_timers[draws[i].timer_index];
+		plcolour_t start_color, end_color;
+		float time_remaining = draws[i].time_remaining;
+		float target_frac, alpha, frac_elapsed;
+		float x, y, left, right, top, bottom, pointer_x;
+		float r, g, b;
+		const float border = 1.0f;
+
+		if (time_remaining > 0.2f)
+			timer->finish_state = false;
+		else if (time_remaining < 0.02f)
+			timer->finish_state = true;
+		if (timer->finish_state)
+			time_remaining = 0.0f;
+
+		if (timer->last_time_remaining >= 0.0f)
+		{
+			if (time_remaining > timer->last_time_remaining + 0.05f)
+				timer->smooth_time_frac = -1.0f;
+			else
+				time_remaining = q_min(time_remaining, timer->last_time_remaining);
+		}
+		timer->last_time_remaining = time_remaining;
+
+		target_frac = CLAMP(0.0f, time_remaining / GRENADE_EXPLOSION_TIME, 1.0f);
+		if (timer->smooth_time_frac < 0.0f)
+			timer->smooth_time_frac = target_frac;
+		else
+		{
+			alpha = q_min(1.0f, host_frametime * 10.0f);
+			timer->smooth_time_frac += (target_frac - timer->smooth_time_frac) * alpha;
+		}
+		timer->smooth_time_frac = CLAMP(0.0f, timer->smooth_time_frac, 1.0f);
+
+		x = draws[i].x / canvas_scaling;
+		y = (glheight - draws[i].y) / canvas_scaling - GRENADE_TIMER_MODEL_LIFT;
+		if (r_refdef.viewangles[ROLL] == 80)
+		{
+			x += 26.0f;
+			y -= 12.0f;
+		}
+
+		left = x - 25.0f;
+		right = x + 25.0f;
+		top = y - 2.5f;
+		bottom = y + 2.5f;
+
+		/*
+		 * Same composition and colors as the scr_showgrenadecounter 1 meter:
+		 * a black border with the translucent white meter drawn over it, so
+		 * the two styles read identically.
+		 */
+		glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
+		glBegin(GL_QUADS);
+		// top border
+		glVertex2f(left, top);
+		glVertex2f(right, top);
+		glVertex2f(right, top + border);
+		glVertex2f(left, top + border);
+		// bottom border
+		glVertex2f(left, bottom - border);
+		glVertex2f(right, bottom - border);
+		glVertex2f(right, bottom);
+		glVertex2f(left, bottom);
+		// left border
+		glVertex2f(left, top + border);
+		glVertex2f(left + border, top + border);
+		glVertex2f(left + border, bottom - border);
+		glVertex2f(left, bottom - border);
+		// right border
+		glVertex2f(right - border, top + border);
+		glVertex2f(right, top + border);
+		glVertex2f(right, bottom - border);
+		glVertex2f(right - border, bottom - border);
+		glEnd();
+
+		glColor4f(1.0f, 1.0f, 1.0f, 150.0f / 255.0f);
+		glBegin(GL_QUADS);
+		glVertex2f(left, top);
+		glVertex2f(right, top);
+		glVertex2f(right, bottom);
+		glVertex2f(left, bottom);
+		glEnd();
+
+		pointer_x = left + 1.0f + 48.0f * timer->smooth_time_frac;
+		frac_elapsed = 1.0f - timer->smooth_time_frac;
+		start_color = Draw_GetConcharsCursorColorByIndex(2);
+		end_color = Draw_GetConcharsCursorColorByIndex(1);
+		r = (start_color.rgb[0] + (end_color.rgb[0] - start_color.rgb[0]) * frac_elapsed) / 255.0f;
+		g = (start_color.rgb[1] + (end_color.rgb[1] - start_color.rgb[1]) * frac_elapsed) / 255.0f;
+		b = (start_color.rgb[2] + (end_color.rgb[2] - start_color.rgb[2]) * frac_elapsed) / 255.0f;
+
+		glColor4f(r, g, b, 1.0f);
+		glBegin(GL_QUADS);
+		glVertex2f(pointer_x - 1.0f, y - 2.5f);
+		glVertex2f(pointer_x + 1.0f, y - 2.5f);
+		glVertex2f(pointer_x + 1.0f, y + 2.5f);
+		glVertex2f(pointer_x - 1.0f, y + 2.5f);
+		glEnd();
+	}
+
+	glDisable(GL_BLEND);
+	glEnable(GL_ALPHA_TEST);
+	glEnable(GL_TEXTURE_2D);
+	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
 void SCR_DrawStatusIndicators (void)
