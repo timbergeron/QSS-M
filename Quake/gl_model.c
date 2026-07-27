@@ -5444,12 +5444,215 @@ static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer, int pvtype)
 
 //=============================================================================
 
+//sanity caps on the file-supplied header values. these keep every later
+//computation (pixel run sizes, origin arithmetic, allocation sizes, the external
+//texture name's framenum*100+i) inside an int by construction rather than by
+//argument, and reject the wild values a corrupt/hostile header can hand us.
+#define SPRITE_MAX_DIM		16384
+#define SPRITE_MAX_ORIGIN	(1<<20)
+#define SPRITE_MAX_FRAMES	8192
+
+/*
+=================
+Mod_ValidateSpriteFrame -- woods #spriteharden
+
+Checks that one dspriteframe_t and its pixel payload lie entirely inside the
+file. Returns the position just past the frame, or NULL if it does not.
+=================
+*/
+static const byte *Mod_ValidateSpriteFrame (const byte *pos, const byte *end, size_t pixelbytes, const char *name)
+{
+	const dspriteframe_t	*pinframe;
+	int						width, height, org0, org1;
+	size_t					datasize;
+
+	if ((size_t)(end - pos) < sizeof(dspriteframe_t))
+	{
+		Con_Warning ("%s: truncated sprite frame header\n", name);
+		return NULL;
+	}
+
+	pinframe = (const dspriteframe_t *)pos;
+	width = LittleLong (pinframe->width);
+	height = LittleLong (pinframe->height);
+
+	if (width <= 0 || height <= 0 || width > SPRITE_MAX_DIM || height > SPRITE_MAX_DIM)
+	{
+		Con_Warning ("%s: bad sprite frame size %dx%d\n", name, width, height);
+		return NULL;
+	}
+
+	//the loader turns these into quad corners (origin[1]-height, width+origin[0]).
+	//unbounded file values would overflow that arithmetic before it ever reaches a
+	//float, so bound them here
+	org0 = LittleLong (pinframe->origin[0]);
+	org1 = LittleLong (pinframe->origin[1]);
+	if (org0 < -SPRITE_MAX_ORIGIN || org0 > SPRITE_MAX_ORIGIN ||
+		org1 < -SPRITE_MAX_ORIGIN || org1 > SPRITE_MAX_ORIGIN)
+	{
+		Con_Warning ("%s: bad sprite frame origin %d,%d\n", name, org0, org1);
+		return NULL;
+	}
+
+	pos += sizeof(dspriteframe_t);
+	datasize = (size_t)width * (size_t)height * pixelbytes;	//cannot overflow: capped well under 2^31 above
+	if (datasize > (size_t)(end - pos))
+	{
+		Con_Warning ("%s: truncated sprite frame data\n", name);
+		return NULL;
+	}
+
+	return pos + datasize;
+}
+
+/*
+=================
+Mod_ValidateSpriteGroup -- woods #spriteharden
+
+As above for a group (or angled) frame: header, interval table, then the
+subframes. totalframes caps the number of pixel-bearing frames across the whole
+model, not merely within each group.
+=================
+*/
+static const byte *Mod_ValidateSpriteGroup (const byte *pos, const byte *end, size_t pixelbytes,
+	const char *name, int *totalframes)
+{
+	const dspritegroup_t	*pingroup;
+	int						i, numframes;
+	float					interval, prevtime;
+
+	if ((size_t)(end - pos) < sizeof(dspritegroup_t))
+	{
+		Con_Warning ("%s: truncated sprite group header\n", name);
+		return NULL;
+	}
+
+	pingroup = (const dspritegroup_t *)pos;
+	numframes = LittleLong (pingroup->numframes);
+	pos += sizeof(dspritegroup_t);
+
+	if (numframes < 1 || numframes > SPRITE_MAX_FRAMES)
+	{
+		Con_Warning ("%s: invalid sprite group frame count %d\n", name, numframes);
+		return NULL;
+	}
+
+	if (numframes > SPRITE_MAX_FRAMES - *totalframes)
+	{
+		Con_Warning ("%s: too many total sprite frames\n", name);
+		return NULL;
+	}
+	*totalframes += numframes;
+
+	//explicit guards on what the load pass will allocate. the frame cap above
+	//already makes these unreachable, but Hunk_AllocName takes an int and we would
+	//rather reject here than depend on that reasoning holding
+	if ((size_t)(numframes - 1) > ((size_t)INT_MAX - sizeof(mspritegroup_t)) / sizeof(mspriteframe_t *) ||
+		(size_t)numframes > (size_t)INT_MAX / sizeof(float))
+	{
+		Con_Warning ("%s: sprite group too large\n", name);
+		return NULL;
+	}
+
+	//division, not multiplication, so a huge numframes cannot overflow the compare
+	if ((size_t)numframes > (size_t)(end - pos) / sizeof(dspriteinterval_t))
+	{
+		Con_Warning ("%s: truncated sprite group intervals\n", name);
+		return NULL;
+	}
+
+	for (i = 0, prevtime = 0 ; i < numframes ; i++)
+	{
+		interval = LittleFloat (((const dspriteinterval_t *)pos)->interval);
+		if (!isfinite (interval) || interval <= 0.0f)
+		{
+			Con_Warning ("%s: bad sprite group interval\n", name);
+			return NULL;
+		}
+		//the loader accumulates these into timestamps, so the running total has to
+		//stay finite too, not just each step
+		prevtime += interval;
+		if (!isfinite (prevtime))
+		{
+			Con_Warning ("%s: sprite group animation length overflows\n", name);
+			return NULL;
+		}
+		pos += sizeof(dspriteinterval_t);
+	}
+
+	for (i = 0 ; i < numframes ; i++)
+	{
+		pos = Mod_ValidateSpriteFrame (pos, end, pixelbytes, name);
+		if (!pos)
+			return NULL;
+	}
+
+	return pos;
+}
+
+/*
+=================
+Mod_ValidateSpriteModel -- woods #spriteharden
+
+Full structural pass over the frame list. Runs before anything is allocated or
+uploaded, so a rejected sprite costs us nothing but the warning.
+=================
+*/
+static qboolean Mod_ValidateSpriteModel (const byte *buffer, size_t filesize, size_t pixelbytes, int numframes, const char *name)
+{
+	const byte	*pos = buffer + sizeof(dsprite_t);
+	const byte	*end = buffer + filesize;
+	int			i, totalframes = 0;
+
+	for (i = 0 ; i < numframes ; i++)
+	{
+		int frametype;
+
+		if ((size_t)(end - pos) < sizeof(dspriteframetype_t))
+		{
+			Con_Warning ("%s: truncated sprite frame type\n", name);
+			return false;
+		}
+		frametype = LittleLong (((const dspriteframetype_t *)pos)->type);
+		pos += sizeof(dspriteframetype_t);
+
+		switch (frametype)
+		{
+		case SPR_SINGLE:
+			if (totalframes == SPRITE_MAX_FRAMES)
+			{
+				Con_Warning ("%s: too many total sprite frames\n", name);
+				return false;
+			}
+			totalframes++;
+			pos = Mod_ValidateSpriteFrame (pos, end, pixelbytes, name);
+			break;
+		case SPR_GROUP:
+		case SPR_ANGLED:
+			pos = Mod_ValidateSpriteGroup (pos, end, pixelbytes, name, &totalframes);
+			break;
+		default:
+			Con_Warning ("%s: unknown sprite frame type %d\n", name, frametype);
+			return false;
+		}
+
+		if (!pos)
+			return false;
+	}
+
+	return true;
+}
+
 /*
 =================
 Mod_LoadSpriteFrame
+
+Structure has already been validated by Mod_ValidateSpriteModel, so this only
+does the loading. maxradius accumulates the worst-case corner distance for the
+model bounds.
 =================
 */
-static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int framenum, enum srcformat fmt)
+static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int framenum, enum srcformat fmt, float *maxradius)
 {
 	dspriteframe_t		*pinframe;
 	mspriteframe_t		*pspriteframe;
@@ -5478,10 +5681,24 @@ static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int fram
 	origin[0] = LittleLong (pinframe->origin[0]);
 	origin[1] = LittleLong (pinframe->origin[1]);
 
-	pspriteframe->up = origin[1];
-	pspriteframe->down = origin[1] - height;
-	pspriteframe->left = origin[0];
-	pspriteframe->right = width + origin[0];
+	//in float: these are float fields anyway, and integer origins from the file
+	//must not be able to overflow the subtraction/addition on the way there
+	pspriteframe->up = (float)origin[1];
+	pspriteframe->down = (float)origin[1] - (float)height;
+	pspriteframe->left = (float)origin[0];
+	pspriteframe->right = (float)width + (float)origin[0];
+
+	//woods -- track the farthest quad corner from the entity origin. frame origins
+	//are routinely asymmetric, so this is what the model bounds have to be built
+	//from rather than the header's width/height. #spriteharden
+	{
+		float horiz = q_max (fabs(pspriteframe->left), fabs(pspriteframe->right));
+		float vert  = q_max (fabs(pspriteframe->up), fabs(pspriteframe->down));
+		float radius = sqrt (horiz*horiz + vert*vert);
+
+		if (radius > *maxradius)
+			*maxradius = radius;
+	}
 
 	//johnfitz -- image might be padded
 	pspriteframe->smax = (float)width/(float)TexMgr_PadConditional(width);
@@ -5499,6 +5716,12 @@ static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int fram
 			pspriteframe->gltexture =
 				TexMgr_LoadImage(loadmodel, name, fwidth, fheight, rfmt,
 					data, name, 0, TEXPREF_PAD | TEXPREF_NOPICMIP | TEXPREF_LINEAR | TEXPREF_ALPHA);
+
+			//the replacement can be any resolution, so the padded texcoords must come
+			//from what we actually uploaded, not from the 8bit original. only matters
+			//where padding kicks in, but it is wrong either way. #spriteharden
+			pspriteframe->smax = (float)fwidth/(float)TexMgr_PadConditional(fwidth);
+			pspriteframe->tmax = (float)fheight/(float)TexMgr_PadConditional(fheight);
 
 			if (malloced)
 				free(data);
@@ -5524,7 +5747,7 @@ static void *Mod_LoadSpriteFrame (void * pin, mspriteframe_t **ppframe, int fram
 Mod_LoadSpriteGroup
 =================
 */
-static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int framenum, enum srcformat fmt, spriteframetype_t type)
+static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int framenum, enum srcformat fmt, float *maxradius)
 {
 	dspritegroup_t		*pingroup;
 	mspritegroup_t		*pspritegroup;
@@ -5536,13 +5759,10 @@ static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int fram
 
 	pingroup = (dspritegroup_t *)pin;
 
+	//Mod_ValidateSpriteGroup has already vetted numframes against SPRITE_MAX_FRAMES
+	//and the allocation guards, the interval table and every subframe, so nothing
+	//here can run off the end of the file or overflow an allocation size
 	numframes = LittleLong (pingroup->numframes);
-	if (numframes < 1)
-		Sys_Error ("Mod_LoadSpriteGroup: Invalid # of frames: %d", numframes);
-	if (type == SPR_ANGLED && numframes != 8)
-		Sys_Error ("Mod_LoadSpriteGroup: Bad # of frames: %d", numframes);
-	if ((size_t)(numframes - 1) > ((size_t)INT_MAX - sizeof(mspritegroup_t)) / sizeof(pspritegroup->frames[0]))
-		Sys_Error ("Mod_LoadSpriteGroup: group too large");
 
 	pspritegroup = (mspritegroup_t *) Hunk_AllocName (sizeof (mspritegroup_t) +
 				(numframes - 1) * sizeof (pspritegroup->frames[0]), loadname);
@@ -5553,8 +5773,6 @@ static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int fram
 
 	pin_intervals = (dspriteinterval_t *)(pingroup + 1);
 
-	if ((size_t)numframes > (size_t)INT_MAX / sizeof (float))
-		Sys_Error ("Mod_LoadSpriteGroup: intervals too large");
 	poutintervals = (float *) Hunk_AllocName (numframes * sizeof (float), loadname);
 
 	pspritegroup->intervals = poutintervals;
@@ -5562,8 +5780,6 @@ static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int fram
 	for (i=0,prevtime=0 ; i<numframes ; i++)
 	{
 		*poutintervals = LittleFloat (pin_intervals->interval);
-		if (*poutintervals <= 0.0)
-			Sys_Error ("Mod_LoadSpriteGroup: interval<=0");
 		//Spike -- we need to accumulate the previous time too, so we get actual timestamps, otherwise spritegroups won't animate (vanilla bug).
 		prevtime = *poutintervals = prevtime+*poutintervals;
 
@@ -5575,7 +5791,7 @@ static void *Mod_LoadSpriteGroup (void * pin, mspriteframe_t **ppframe, int fram
 
 	for (i=0 ; i<numframes ; i++)
 	{
-		ptemp = Mod_LoadSpriteFrame (ptemp, &pspritegroup->frames[i], framenum * 100 + i, fmt);
+		ptemp = Mod_LoadSpriteFrame (ptemp, &pspritegroup->frames[i], framenum * 100 + i, fmt, maxradius);
 	}
 
 	return ptemp;
@@ -5597,9 +5813,19 @@ static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer)
 	int					size;
 	dspriteframetype_t	*pframetype;
 	enum srcformat fmt = SRC_INDEXED;
+	//grab the length now: loading replacement images below reuses com_filesize // woods #spriteharden
+	size_t				filesize = (size_t)com_filesize;
+	float				radius = 0;
 
 	pin = (dsprite_t *)buffer;
 	mod_base = (byte *)buffer; //johnfitz
+
+	if (filesize < sizeof(dsprite_t))
+	{
+		Con_Warning ("%s is too small to be a sprite\n", mod->name);
+		mod->type = mod_ext_invalid;
+		return;
+	}
 
 	version = LittleLong (pin->version);
 	if (version == 32)
@@ -5614,10 +5840,28 @@ static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer)
 	}
 
 	numframes = LittleLong (pin->numframes);
-	if (numframes < 1)
-		Sys_Error ("Mod_LoadSpriteModel: Invalid # of frames: %d", numframes);
+	if (numframes < 1 || numframes > SPRITE_MAX_FRAMES)
+	{
+		Con_Warning ("%s has bad sprite frame count %d\n", mod->name, numframes);
+		mod->type = mod_ext_invalid;
+		return;
+	}
+	//as in the group case: the cap makes this unreachable, but Hunk_AllocName takes
+	//an int, so guard the allocation explicitly instead of arguing about it
 	if ((size_t)(numframes - 1) > ((size_t)INT_MAX - sizeof(msprite_t)) / sizeof(psprite->frames[0]))
-		Sys_Error ("Mod_LoadSpriteModel: sprite too large");
+	{
+		Con_Warning ("%s: sprite too large\n", mod->name);
+		mod->type = mod_ext_invalid;
+		return;
+	}
+
+	//walk the whole file before we allocate or upload anything. after this every
+	//frame, group, interval and pixel run is known to be in bounds // woods #spriteharden
+	if (!Mod_ValidateSpriteModel ((const byte *)buffer, filesize, (fmt == SRC_RGBA) ? 4 : 1, numframes, mod->name))
+	{
+		mod->type = mod_ext_invalid;
+		return;
+	}
 
 	size = sizeof (msprite_t) + (numframes - 1) * sizeof (psprite->frames);
 
@@ -5626,18 +5870,29 @@ static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer)
 	mod->cache.data = psprite;
 
 	psprite->type = LittleLong (pin->type);
-	psprite->maxwidth = LittleLong (pin->width);
-	psprite->maxheight = LittleLong (pin->height);
+	switch (psprite->type)	// woods #spriteharden
+	{
+	case SPR_VP_PARALLEL_UPRIGHT:
+	case SPR_FACING_UPRIGHT:
+	case SPR_VP_PARALLEL:
+	case SPR_ORIENTED:
+	case SPR_VP_PARALLEL_ORIENTED:
+		break;
+	default:
+		//R_DrawSpriteModel would silently draw nothing. a plain billboard is a
+		//better answer than an invisible entity
+		Con_DWarning ("%s has unsupported sprite type %d\n", mod->name, psprite->type);
+		psprite->type = SPR_VP_PARALLEL;
+		break;
+	}
+
+	psprite->maxwidth = q_max (0, (int)LittleLong (pin->width));
+	psprite->maxheight = q_max (0, (int)LittleLong (pin->height));
 	psprite->beamlength = LittleFloat (pin->beamlength);
+	if (!isfinite (psprite->beamlength))
+		psprite->beamlength = 0;
 	mod->synctype = (synctype_t) LittleLong (pin->synctype);
 	psprite->numframes = numframes;
-
-	mod->mins[0] = mod->mins[1] = -psprite->maxwidth/2;
-	mod->maxs[0] = mod->maxs[1] = psprite->maxwidth/2;
-	mod->mins[2] = -psprite->maxheight/2;
-	mod->maxs[2] = psprite->maxheight/2;
-	VectorCopy(mod->mins, mod->clipmins);
-	VectorCopy(mod->maxs, mod->clipmaxs);
 
 //
 	mod->numframes = numframes;
@@ -5651,17 +5906,34 @@ static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer)
 		frametype = (spriteframetype_t) LittleLong (pframetype->type);
 		psprite->frames[i].type = frametype;
 
+		//validation guarantees frametype is SPR_SINGLE, SPR_GROUP or SPR_ANGLED
 		if (frametype == SPR_SINGLE)
 		{
 			pframetype = (dspriteframetype_t *)
-					Mod_LoadSpriteFrame (pframetype + 1, &psprite->frames[i].frameptr, i, fmt);
+					Mod_LoadSpriteFrame (pframetype + 1, &psprite->frames[i].frameptr, i, fmt, &radius);
 		}
 		else
 		{
 			pframetype = (dspriteframetype_t *)
-					Mod_LoadSpriteGroup (pframetype + 1, &psprite->frames[i].frameptr, i, fmt, frametype);
+					Mod_LoadSpriteGroup (pframetype + 1, &psprite->frames[i].frameptr, i, fmt, &radius);
 		}
 	}
+
+	//woods -- bounds are a sphere of the worst-case corner distance over every
+	//frame. billboards rotate to face the view and frame origins are asymmetric,
+	//so an oriented box would clip sprites away near the frustum edge. every
+	//rotation variant gets the same box because rotation cannot change it.
+	//#spriteharden
+	if (radius <= 0)
+		radius = 1;
+	mod->mins[0] = mod->mins[1] = mod->mins[2] = -radius;
+	mod->maxs[0] = mod->maxs[1] = mod->maxs[2] = radius;
+	VectorCopy(mod->mins, mod->ymins);
+	VectorCopy(mod->maxs, mod->ymaxs);
+	VectorCopy(mod->mins, mod->rmins);
+	VectorCopy(mod->maxs, mod->rmaxs);
+	VectorCopy(mod->mins, mod->clipmins);
+	VectorCopy(mod->maxs, mod->clipmaxs);
 
 	mod->type = mod_sprite;
 }

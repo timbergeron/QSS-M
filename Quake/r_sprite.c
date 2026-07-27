@@ -53,13 +53,23 @@ mspriteframe_t *R_GetSpriteFrame (entity_t *currentent)
 	{
 		// erysdren - angled sprites code backported from FTEQW
 		vec3_t axis[3];
-		AngleVectors(currententity->angles, axis[0], axis[1], axis[2]);
+		AngleVectors(currentent->angles, axis[0], axis[1], axis[2]);
 		{
 			float f = DotProduct(vpn, axis[0]);
 			float r = DotProduct(vright, axis[0]);
-			int dir = (atan2(r, f)+1.125*M_PI)*(4/M_PI);
+			float ang = atan2(r, f);
+			float slice;
+			int dir;
+
 			pspritegroup = (mspritegroup_t *)psprite->frames[frame].frameptr;
-			pspriteframe = pspritegroup->frames[dir&7];
+			numframes = pspritegroup->numframes;
+
+			// map the yaw difference onto 0..numframes, biased by half a slice so
+			// each frame is centred on its own direction. any positive count works.
+			slice = isfinite(ang) ? ((ang + M_PI) / (2 * M_PI)) * numframes + 0.5f : 0;
+			dir = (int)slice % numframes;	// slice is in [0, numframes], so this stays in range
+
+			pspriteframe = pspritegroup->frames[dir];
 		}
 	}
 	else
@@ -71,9 +81,12 @@ mspriteframe_t *R_GetSpriteFrame (entity_t *currentent)
 
 		time = cl.time + currentent->syncbase;
 
-	// when loading in Mod_LoadSpriteGroup, we guaranteed all interval values
-	// are positive, so we don't have to worry about division by 0
-		targettime = time - ((int)(time / fullinterval)) * fullinterval;
+	// the loader guarantees the intervals are positive and finite, but a legally
+	// tiny one makes time/fullinterval exceed int range, and that conversion is
+	// undefined. fmodf has no such trap.
+		targettime = fmodf (time, fullinterval);
+		if (targettime < 0)	// fmodf takes the sign of the dividend
+			targettime += fullinterval;
 
 		for (i = 0; i < (numframes-1); i++)
 		{
@@ -106,13 +119,20 @@ void R_DrawSpriteModel (entity_t *e)
 	if (entalpha <= 0.0f)
 		return;
 
-	frame = R_GetSpriteFrame (e);
-	psprite = (msprite_t *) currententity->model->cache.data;
-	
-	if (currententity->model && CL_ApplyModelRotation(currententity, currententity->angles, host_frametime)) // woods #clmrotate
+	// advance the rotation before culling, like R_SetupAliasFrame does, so an
+	// offscreen sprite's spin keeps running instead of popping when it returns
+	if (e->model && CL_ApplyModelRotation(e, e->angles, host_frametime)) // woods #clmrotate
 	{
-		currententity->effects &= ~EF_ROTATE; // EF_ROTATE already cleared server-side, but if mapper forgot
+		e->effects &= ~EF_ROTATE; // EF_ROTATE already cleared server-side, but if mapper forgot
 	}
+
+	// the viewmodel sits on top of the camera, where the frustum planes all meet,
+	// so culling it is meaningless. R_DrawAliasModel skips it for the same reason.
+	if (e != &cl.viewent && R_CullModelForEntity (e)) // woods #spriteharden
+		return;
+
+	frame = R_GetSpriteFrame (e);
+	psprite = (msprite_t *) e->model->cache.data;
 
 	switch(psprite->type)
 	{
@@ -126,7 +146,7 @@ void R_DrawSpriteModel (entity_t *e)
 		s_right = v_right;
 		break;
 	case SPR_FACING_UPRIGHT: //faces camera origin, up is towards the heavens
-		VectorSubtract(currententity->origin, r_origin, v_forward);
+		VectorSubtract(e->origin, r_origin, v_forward);
 		v_forward[2] = 0;
 		VectorNormalizeFast(v_forward);
 		v_right[0] = v_forward[1];
@@ -143,12 +163,12 @@ void R_DrawSpriteModel (entity_t *e)
 		s_right = vright;
 		break;
 	case SPR_ORIENTED: //pitch yaw roll are independent of camera
-		AngleVectors (currententity->angles, v_forward, v_right, v_up);
+		AngleVectors (e->angles, v_forward, v_right, v_up);
 		s_up = v_up;
 		s_right = v_right;
 		break;
 	case SPR_VP_PARALLEL_ORIENTED: //faces view plane, but obeys roll value
-		angle = currententity->angles[ROLL] * M_PI_DIV_180;
+		angle = e->angles[ROLL] * M_PI_DIV_180;
 		sr = sin(angle);
 		cr = cos(angle);
 		v_right[0] = vright[0] * cr + vup[0] * sr;
