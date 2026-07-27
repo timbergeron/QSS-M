@@ -311,8 +311,9 @@ enum m_state_e	m_return_state;
 qboolean	m_return_onerror;
 char		m_return_reason [32];
 
-#define StartingGame	(m_multiplayer_cursor == 1)
-#define JoiningGame		(m_multiplayer_cursor == 0)
+/* Expanded only in LanConfig, well after the MULTIPLAYER_* rows are declared. */
+#define StartingGame	(m_multiplayer_cursor == MULTIPLAYER_NEWGAME)
+#define JoiningGame		(m_multiplayer_cursor == MULTIPLAYER_JOINGAME)
 void M_ConfigureNetSubsystem(void);
 void M_SetSkillMenuMap(const char* name); // woods #skillmenu (iw)
 static void M_GameOptions_ClearTypedLevel(void);
@@ -321,7 +322,10 @@ static qboolean M_LanConfig_HasIce(void);
 static int M_LanConfig_NewGameProtocolCursor(void);
 static int M_LanConfig_NewGameOkCursor(void);
 static void CleanupPingThreads(void);
-static void M_MenuSearch_LeavePakLoading(void);
+static void M_PakLoading_Shutdown(void);
+static void M_ModelViewer_Shutdown(void);
+static void M_Demos_EndPathEdit(void);
+static void M_Demos_Shutdown(void);
 static qboolean MenuSearch_HasLocalModalState(enum m_state_e state);
 extern int lanConfig_cursor;
 
@@ -2703,6 +2707,37 @@ int m_save_demonum;
 
 /*
 ==================
+Shared menu item descriptors
+
+Menus described by a table here have exactly one definition of each row: its
+label, what activating it does, and when it is selectable. The menu's own Enter
+handler and menu search both go through that table, so neither can drift from
+the other. Menus drawn from a .lmp image have no other source for their labels,
+which makes the table the only thing that can be checked at all.
+==================
+*/
+
+/* Row changes game state rather than opening a submenu. Menu search parks the
+ * cursor on these instead of firing them, so the palette never commits on a
+ * single keystroke; the menu's own Enter still performs the action. */
+#define MENUITEM_COMMITS	(1u << 0)
+
+typedef struct
+{
+	const char	*label;
+	void		(*action)(void);
+	qboolean	(*available)(void);
+	unsigned	flags;
+} menuitem_t;
+
+static qboolean M_MenuItem_Available (const menuitem_t *item)
+{
+	return item->label && item->label[0] && item->action &&
+		(!item->available || item->available());
+}
+
+/*
+==================
 Main Menu
 ==================
 */
@@ -2723,6 +2758,37 @@ enum // woods #modsmenu (iw)
 
 	MAIN_ITEMS,
 };
+
+static qboolean M_Main_ModsAvailable (void)
+{
+	return m_main_mods != 0;
+}
+
+static qboolean M_Main_DemosAvailable (void)
+{
+	return m_main_demos != 0;
+}
+
+static const menuitem_t m_main_items[MAIN_ITEMS] = {
+	[MAIN_SINGLEPLAYER]	= {"Single Player",	M_Menu_SinglePlayer_f,	NULL,					0},
+	[MAIN_MULTIPLAYER]	= {"Multiplayer",	M_Menu_MultiPlayer_f,	NULL,					0},
+	[MAIN_OPTIONS]		= {"Options",		M_Menu_Options_f,		NULL,					0},
+	[MAIN_MODS]			= {"Mods",			M_Menu_Mods_f,			M_Main_ModsAvailable,	0},
+	[MAIN_DEMOS]		= {"Demos",			M_Menu_Demos_f,			M_Main_DemosAvailable,	0},
+	[MAIN_HELP]			= {"Help",			M_Menu_Help_f,			NULL,					0},
+	[MAIN_QUIT]			= {"Quit",			M_Menu_Quit_f,			NULL,					MENUITEM_COMMITS}
+};
+
+/* Reports whether the row actually ran, so menu search can tell a refusal
+ * from a successful activation. */
+static qboolean M_Main_ActivateItem (int item)
+{
+	if (item < 0 || item >= MAIN_ITEMS ||
+		!M_MenuItem_Available(&m_main_items[item]))
+		return false;
+	m_main_items[item].action();
+	return true;
+}
 
 
 void M_Menu_Main_f (void)
@@ -2923,36 +2989,7 @@ void M_Main_Key (int key) // woods #modsmenu #demosmenu (iw)
 		m_key_was_m = false;
 		m_entersound = true;
 
-		switch (m_main_cursor)
-		{
-		case MAIN_SINGLEPLAYER:
-			M_Menu_SinglePlayer_f ();
-			break;
-
-		case MAIN_MULTIPLAYER:
-			M_Menu_MultiPlayer_f ();
-			break;
-
-		case MAIN_OPTIONS:
-			M_Menu_Options_f ();
-			break;
-
-		case MAIN_HELP:
-			M_Menu_Help_f ();
-			break;
-
-		case MAIN_MODS:
-			M_Menu_Mods_f();
-			break;
-
-		case MAIN_DEMOS: // woods #demosmenu
-			M_Menu_Demos_f ();
-			break;
-
-		case MAIN_QUIT:
-			M_Menu_Quit_f ();
-			break;
-		}
+		M_Main_ActivateItem (m_main_cursor);
 	}
 }
 
@@ -5169,6 +5206,42 @@ qboolean m_singleplayer_showlevels;
 int	m_singleplayer_cursor;
 #define	SINGLEPLAYER_ITEMS	(3 + m_singleplayer_showlevels)
 
+enum
+{
+	SP_NEWGAME,
+	SP_LOADGAME,
+	SP_SAVEGAME,
+	SP_LEVELS,
+	SP_ITEM_COUNT
+};
+
+static void M_SinglePlayer_NewGame (void);
+static qboolean M_SinglePlayer_LevelsAvailable (void);
+static qboolean M_Save_IsAvailable (void);
+
+static const menuitem_t m_singleplayer_items[SP_ITEM_COUNT] = {
+	[SP_NEWGAME]	= {"New Game",	M_SinglePlayer_NewGame,	NULL,				MENUITEM_COMMITS},
+	[SP_LOADGAME]	= {"Load Game",	M_Menu_Load_f,			NULL,				0},
+	[SP_SAVEGAME]	= {"Save Game",	M_Menu_Save_f,			M_Save_IsAvailable,	0},
+	[SP_LEVELS]		= {"Levels",	M_Menu_Maps_f,			M_SinglePlayer_LevelsAvailable,	0}
+};
+
+static qboolean M_SinglePlayer_LevelsAvailable (void)
+{
+	return m_singleplayer_showlevels != 0;
+}
+
+/* Reports whether the row actually ran, so menu search can tell a refusal
+ * from a successful activation. */
+static qboolean M_SinglePlayer_ActivateItem (int item)
+{
+	if (item < 0 || item >= SP_ITEM_COUNT ||
+		!M_MenuItem_Available(&m_singleplayer_items[item]))
+		return false;
+	m_singleplayer_items[item].action();
+	return true;
+}
+
 
 void M_Menu_SinglePlayer_f (void)
 {
@@ -5180,6 +5253,23 @@ void M_Menu_SinglePlayer_f (void)
 	m_entersound = true;
 
 	IN_UpdateGrabs();
+}
+
+
+static void M_SinglePlayer_NewGame (void)
+{
+	if (sv.active)
+		if (!SCR_ModalMessage("Are you sure you want to\nstart a new game?\n (^mn^m/^my^m)\n", 0.0f))
+			return;
+	key_dest = key_game;
+	IN_UpdateGrabs();
+	if (sv.active)
+		Cbuf_AddText ("disconnect\n");
+	Cbuf_AddText ("maxplayers 1\n");
+	Cbuf_AddText ("samelevel 0\n"); //spike -- you'd be amazed how many qw players have this setting breaking their singleplayer experience...
+	Cbuf_AddText ("deathmatch 0\n"); //johnfitz
+	Cbuf_AddText ("coop 0\n"); //johnfitz
+	Cbuf_AddText ("startmap_sp\n");
 }
 
 
@@ -5291,34 +5381,7 @@ void M_SinglePlayer_Key (int key)
 		sp_key_was_l = false;
 		m_entersound = true;
 
-		switch (m_singleplayer_cursor)
-		{
-		case 0:
-			if (sv.active)
-				if (!SCR_ModalMessage("Are you sure you want to\nstart a new game?\n (^mn^m/^my^m)\n", 0.0f))
-					break;
-			key_dest = key_game;
-			IN_UpdateGrabs();
-			if (sv.active)
-				Cbuf_AddText ("disconnect\n");
-			Cbuf_AddText ("maxplayers 1\n");
-			Cbuf_AddText ("samelevel 0\n"); //spike -- you'd be amazed how many qw players have this setting breaking their singleplayer experience...
-			Cbuf_AddText ("deathmatch 0\n"); //johnfitz
-			Cbuf_AddText ("coop 0\n"); //johnfitz
-			Cbuf_AddText ("startmap_sp\n");
-			break;
-
-		case 1:
-			M_Menu_Load_f ();
-			break;
-
-		case 2:
-			M_Menu_Save_f ();
-			break;
-		case 3:
-			Cbuf_AddText("menu_maps\n");
-			break;
-		}
+		M_SinglePlayer_ActivateItem (m_singleplayer_cursor);
 		break;
 	}
 }
@@ -5825,13 +5888,17 @@ void M_Menu_Load_f (void)
 }
 
 
+/* Menu search offers this row only when the entry point would accept it.
+ * Both sides must read the same predicate, or the palette advertises a row
+ * that closes the search and then silently refuses to open. */
+static qboolean M_Save_IsAvailable (void)
+{
+	return sv.active && !cl.intermission && svs.maxclients == 1;
+}
+
 void M_Menu_Save_f (void)
 {
-	if (!sv.active)
-		return;
-	if (cl.intermission)
-		return;
-	if (svs.maxclients != 1)
+	if (!M_Save_IsAvailable())
 		return;
 	m_entersound = true;
 	m_state = m_save;
@@ -7707,11 +7774,58 @@ Multiplayer Menu
 */
 
 int	m_multiplayer_cursor;
-#define	MULTIPLAYER_BASE_ITEMS	3
+
+/* Rows past MULTIPLAYER_BASE_ITEMS are pinned bookmarks, built at draw time;
+ * only the fixed rows are described here. */
+enum
+{
+	MULTIPLAYER_JOINGAME,
+	MULTIPLAYER_NEWGAME,
+	MULTIPLAYER_SETUP,
+
+	MULTIPLAYER_BASE_ITEMS
+};
+
 #define	MAX_PINNED_BOOKMARKS	5
 #define	MULTIPLAYER_PINNED_OFFSET_Y	6
 #define	MULTIPLAYER_PINNED_SPACING	10
 extern cvar_t scr_shownet; // woods
+
+static qboolean M_MultiPlayer_NetworkAvailable (void)
+{
+	return ipv4Available || ipv6Available;
+}
+
+/* LanConfig reads m_multiplayer_cursor to decide join vs host (JoiningGame /
+ * StartingGame), so the row has to be selected before entering it. */
+static void M_MultiPlayer_JoinGame (void)
+{
+	m_multiplayer_cursor = MULTIPLAYER_JOINGAME;
+	M_Menu_LanConfig_f ();
+}
+
+static void M_MultiPlayer_NewGame (void)
+{
+	m_multiplayer_cursor = MULTIPLAYER_NEWGAME;
+	M_Menu_LanConfig_f ();
+}
+
+static const menuitem_t m_multiplayer_items[MULTIPLAYER_BASE_ITEMS] = {
+	[MULTIPLAYER_JOINGAME]	= {"Join Game",	M_MultiPlayer_JoinGame,	M_MultiPlayer_NetworkAvailable,	0},
+	[MULTIPLAYER_NEWGAME]	= {"New Game",	M_MultiPlayer_NewGame,	M_MultiPlayer_NetworkAvailable,	0},
+	[MULTIPLAYER_SETUP]		= {"Setup",		M_Menu_Setup_f,			NULL,							0}
+};
+
+/* Reports whether the row actually ran, so menu search can tell a refusal
+ * from a successful activation. */
+static qboolean M_MultiPlayer_ActivateItem (int item)
+{
+	if (item < 0 || item >= MULTIPLAYER_BASE_ITEMS ||
+		!M_MenuItem_Available(&m_multiplayer_items[item]))
+		return false;
+	m_multiplayer_items[item].action();
+	return true;
+}
 
 #define	BOOKMARK_ALIAS_LENGTH	BOOKMARK_DATA_LENGTH
 
@@ -7922,42 +8036,25 @@ void M_MultiPlayer_Key (int key)
 	case K_ABUTTON:
 	case K_MOUSE1: // woods #mousemenu
 		m_entersound = true;
-		switch (m_multiplayer_cursor)
-		{
-		case 0:
-			if (ipv4Available || ipv6Available)
-				M_Menu_LanConfig_f ();
-			break;
-
-		case 1:
-			if (ipv4Available || ipv6Available)
-				M_Menu_LanConfig_f ();
-			break;
-
-		case 2:
-			M_Menu_Setup_f ();
-			break;
-
-		default:
-			// Handle pinned bookmarks
-			if (m_multiplayer_cursor >= MULTIPLAYER_BASE_ITEMS)
+		if (m_multiplayer_cursor < MULTIPLAYER_BASE_ITEMS)
+			M_MultiPlayer_ActivateItem (m_multiplayer_cursor);
+		else
+		{	// Handle pinned bookmarks
+			int index = m_multiplayer_cursor - MULTIPLAYER_BASE_ITEMS;
+			pinnedbookmark_t pinned[MAX_PINNED_BOOKMARKS];
+			int count = M_Bookmarks_GetPinned(pinned, MAX_PINNED_BOOKMARKS);
+			if (index < count)
 			{
-				int index = m_multiplayer_cursor - MULTIPLAYER_BASE_ITEMS;
-				pinnedbookmark_t pinned[MAX_PINNED_BOOKMARKS];
-				int count = M_Bookmarks_GetPinned(pinned, MAX_PINNED_BOOKMARKS);
-				if (index < count)
-				{
-						m_return_state = m_state;
-						m_return_onerror = true;
-						key_dest = key_game;
-						m_state = m_none;
-						IN_UpdateGrabs();
-						CL_MarkNextConnectFromMenu();
-						Cbuf_AddText(va("connect \"%s\"\n", pinned[index].name));
-					}
-				}
-				break;
+				m_return_state = m_state;
+				m_return_onerror = true;
+				key_dest = key_game;
+				m_state = m_none;
+				IN_UpdateGrabs();
+				CL_MarkNextConnectFromMenu();
+				Cbuf_AddText(va("connect \"%s\"\n", pinned[index].name));
+			}
 		}
+		break;
 	}
 }
 
@@ -8376,6 +8473,36 @@ void M_Setup_Draw (void)
 
 char lastColorSelected[10]; // woods
 
+/* The menu turns on the third-person camera to preview colours; both leaving
+ * and accepting have to put it back. */
+static void M_Setup_RestoreChaseCam (void)
+{
+	if (chasewasnotactive && !cls.demoplayback && host_initialized && !flyme) // woods #3rdperson
+	{
+		chasewasnotactive = false;
+		Cbuf_AddText("chase_active 0\n");
+	}
+}
+
+/*
+==================
+M_Setup_Cancel
+
+Leaving without accepting: drop the live colour preview and the camera. Called
+by the Back handler and by M_LeaveMenuState, so navigating away through menu
+search cannot strand chase_active or a previewed colour.
+==================
+*/
+static void M_Setup_Cancel (void)
+{
+	M_Setup_RestoreChaseCam ();
+	if (colordelta)
+	{
+		colordelta = false;
+		Cbuf_AddText(va("color %s %s\n", CL_PLColours_ToString(setup_oldtop), CL_PLColours_ToString(setup_oldbottom)));
+	}
+}
+
 void M_Setup_Key (int k)
 {
 	menu_textfield_t *active_field = M_Setup_GetFieldForCursor();
@@ -8405,16 +8532,7 @@ void M_Setup_Key (int k)
 	case K_BBUTTON:
 	case K_MOUSE4: // woods #mousemenu
 	case K_MOUSE2: // woods #mousemenu
-		if (chasewasnotactive && !cls.demoplayback && host_initialized && !flyme) // woods #3rdperson
-		{
-			chasewasnotactive = false;
-			Cbuf_AddText("chase_active 0\n");
-		}
-		if (colordelta)
-		{
-			colordelta = false;
-			Cbuf_AddText(va("color %s %s\n", CL_PLColours_ToString(setup_oldtop), CL_PLColours_ToString(setup_oldbottom)));
-		}
+		M_Setup_Cancel ();
 		M_Menu_MultiPlayer_f ();
 		break;
 
@@ -8582,11 +8700,7 @@ forward:
 			Cbuf_AddText( va ("color %s %s\n", CL_PLColours_ToString(setup_top), CL_PLColours_ToString(setup_bottom)) );
 		m_entersound = true;
 
-		if (chasewasnotactive && !cls.demoplayback && host_initialized && !flyme) // woods #3rdperson
-		{
-			chasewasnotactive = false;
-			Cbuf_AddText("chase_active 0\n");
-		}
+		M_Setup_RestoreChaseCam ();
 
 			M_Menu_MultiPlayer_f ();
 			break;
@@ -21374,6 +21488,102 @@ void M_Console_Mousemove(int cx, int cy)
 }
 
 /*
+==================
+M_LeaveMenuState
+
+Release what a menu holds once it has been left by a route other than its own
+Back handler (menu search activation). Cleanup only: never navigates, never
+touches the menu now on screen.
+
+The switch has no default on purpose. Adding a value to m_state_e without
+deciding what it releases is a -Wswitch warning, not a silent leak. States that
+hold nothing are listed explicitly so "nothing to do" is a recorded decision.
+==================
+*/
+static void M_LeaveMenuState (enum m_state_e from)
+{
+	switch (from)
+	{
+	case m_slist:
+		CleanupPingThreads();
+		break;
+
+	case m_audiobrowser:
+		M_AudioBrowser_Close();
+		break;
+
+	case m_video:
+		VID_MenuSearch_LeaveMenu();
+		break;
+
+	case m_pakloading:
+		M_PakLoading_Shutdown();
+		break;
+
+	case m_setup:
+		M_Setup_Cancel();
+		break;
+
+	case m_modelviewer:
+		M_ModelViewer_Shutdown();
+		break;
+
+	case m_demos:
+		M_Demos_Shutdown();
+		break;
+
+	/* Hold nothing that outlives the menu. */
+	case m_none:
+	case m_main:
+	case m_modmenu:
+	case m_singleplayer:
+	case m_load:
+	case m_save:
+	case m_maps:
+	case m_downloadmaps:
+	case m_skill:
+	case m_multiplayer:
+	case m_options:
+	case m_keys:
+	case m_mouse:
+	case m_controller:
+	case m_controller_test:
+	case m_weaponwheel:
+	case m_calibration:
+	case m_graphics:
+	case m_sky:
+	case m_skywind:
+	case m_sound:
+	case m_voip:
+	case m_game:
+	case m_playerxray:
+	case m_hud:
+	case m_crosshair:
+	case m_console:
+	case m_colorpicker:
+	case m_extras:
+	case m_saving:
+	case m_shortcuts:
+	case m_version:
+	case m_startup:
+	case m_demooptions:
+	case m_mods:
+	case m_downloadmods:
+	case m_help:
+	case m_quit:
+	case m_lanconfig:
+	case m_gameoptions:
+	case m_search:
+	case m_history:
+	case m_bookmarks:
+	case m_bookmarks_edit:
+	case m_namemaker:
+	case m_resetconfig:
+		break;
+	}
+}
+
+/*
 ===============================================================================
 
 	MENU SEARCH
@@ -21398,7 +21608,7 @@ typedef const char *(*menusearch_hint_fn)(int index);
 typedef const char *(*menusearch_keywords_fn)(int index);
 typedef const char *(*menusearch_value_fn)(int index);
 typedef qboolean (*menusearch_available_fn)(int index);
-typedef void (*menusearch_open_fn)(int index);
+typedef qboolean (*menusearch_open_fn)(int index);
 
 typedef struct
 {
@@ -21460,21 +21670,42 @@ static const char * const menusearch_console_labels[] = {
 	"Background Color", "Content Filter", "Typing Status", "Auto Hints", "Clear On Toggle",
 	"Save History", "Clear Console", "Clear History"
 };
-static const char * const menusearch_main_labels[] = {
-	"Single Player", "Multiplayer", "Options", "Mods", "Demos", "Help", "Quit"
-};
-static const char * const menusearch_singleplayer_labels[] = {
-	"New Game", "Load Game", "Save Game", "Levels"
-};
-static const char * const menusearch_multiplayer_labels[] = {
-	"Join Game", "New Game", "Setup"
-};
+/* Main Menu has no label table here: m_main_items owns its rows. */
+/* Single Player has no label table here: m_singleplayer_items owns its rows. */
+/* Multiplayer has no label table here: m_multiplayer_items owns its rows. */
 static const char * const menusearch_join_labels[] = {
 	"Local Games", "Server Browser", "Server History", "Server Bookmarks", "Join by Address"
 };
 static const char * const menusearch_host_labels[] = {
 	"Port", "Room", "Protocol", "Game Options"
 };
+
+/* These menus have no live label accessor, so the tables above are their only
+ * description of themselves and the drift validator cannot check them. Name
+ * every row the availability and open handlers reach for: a row added or
+ * removed then fails to build, and reordering one has to be done deliberately
+ * in both places. Routing is only truly safe once activation shares a source
+ * of truth with the menu's own Enter handler, as Single Player now does via
+ * m_singleplayer_items. */
+enum
+{
+	MENUSEARCH_JOIN_LOCAL,
+	MENUSEARCH_JOIN_BROWSER,
+	MENUSEARCH_JOIN_HISTORY,
+	MENUSEARCH_JOIN_BOOKMARKS,
+	MENUSEARCH_JOIN_ADDRESS,
+	MENUSEARCH_JOIN_COUNT
+};
+
+enum
+{
+	MENUSEARCH_HOST_PORT,
+	MENUSEARCH_HOST_ROOM,
+	MENUSEARCH_HOST_PROTOCOL,
+	MENUSEARCH_HOST_GAMEOPTIONS,
+	MENUSEARCH_HOST_COUNT
+};
+
 static const char * const menusearch_setup_labels[] = {
 	"Hostname", "Player Name", "Name Maker", "Color Picker", "Shirt Color", "Pants Color", "Accept Changes"
 };
@@ -21534,8 +21765,6 @@ COMPILE_TIME_ASSERT(menusearch_sound_count, Q_COUNTOF(menusearch_sound_labels) =
 COMPILE_TIME_ASSERT(menusearch_game_count, Q_COUNTOF(menusearch_game_labels) == GAME_ITEMS);
 COMPILE_TIME_ASSERT(menusearch_hud_count, Q_COUNTOF(menusearch_hud_labels) == HUD_ITEMS);
 COMPILE_TIME_ASSERT(menusearch_console_count, Q_COUNTOF(menusearch_console_labels) == CONSOLE_ITEMS);
-COMPILE_TIME_ASSERT(menusearch_main_count, Q_COUNTOF(menusearch_main_labels) == MAIN_ITEMS);
-COMPILE_TIME_ASSERT(menusearch_multiplayer_count, Q_COUNTOF(menusearch_multiplayer_labels) == MULTIPLAYER_BASE_ITEMS);
 COMPILE_TIME_ASSERT(menusearch_setup_count, Q_COUNTOF(menusearch_setup_labels) == NUM_SETUP_CMDS);
 COMPILE_TIME_ASSERT(menusearch_mouse_count, Q_COUNTOF(menusearch_mouse_labels) == MOUSE_ITEMS);
 COMPILE_TIME_ASSERT(menusearch_controller_count, Q_COUNTOF(menusearch_controller_labels) == CONTROLLER_ITEMS);
@@ -21544,6 +21773,8 @@ COMPILE_TIME_ASSERT(menusearch_skywind_count, Q_COUNTOF(menusearch_skywind_label
 COMPILE_TIME_ASSERT(menusearch_voip_count, Q_COUNTOF(menusearch_voip_labels) == VOIP_ITEMS);
 COMPILE_TIME_ASSERT(menusearch_crosshair_count, Q_COUNTOF(menusearch_crosshair_labels) == CROSSHAIR_ITEMS);
 COMPILE_TIME_ASSERT(menusearch_playerxray_count, Q_COUNTOF(menusearch_playerxray_labels) == PLAYERXRAY_ITEMS);
+COMPILE_TIME_ASSERT(menusearch_join_count, Q_COUNTOF(menusearch_join_labels) == MENUSEARCH_JOIN_COUNT);
+COMPILE_TIME_ASSERT(menusearch_host_count, Q_COUNTOF(menusearch_host_labels) == MENUSEARCH_HOST_COUNT);
 
 /* These menus are defined after the contiguous Menu Search section. */
 static const char *M_Extras_GetItemText(int index);
@@ -21558,14 +21789,14 @@ static qboolean MenuSearch_StartupAvailable(int index);
 static const char *M_DemoOptions_GetItemText(int index);
 static cvar_t *M_DemoOptions_GetItemCvar(int index);
 static const char *M_DemoOptions_GetValueText(int index);
-static void M_MenuSearch_OpenExtrasItem(int index);
-static void M_MenuSearch_OpenSavingItem(int index);
-static void M_MenuSearch_OpenStartupItem(int index);
-static void M_MenuSearch_OpenDemoOptionsItem(int index);
+static qboolean M_MenuSearch_OpenExtrasItem(int index);
+static qboolean M_MenuSearch_OpenSavingItem(int index);
+static qboolean M_MenuSearch_OpenStartupItem(int index);
+static qboolean M_MenuSearch_OpenDemoOptionsItem(int index);
 
-static const char *MenuSearch_MainText(int index) { return menusearch_main_labels[index]; }
-static const char *MenuSearch_SinglePlayerText(int index) { return menusearch_singleplayer_labels[index]; }
-static const char *MenuSearch_MultiplayerText(int index) { return menusearch_multiplayer_labels[index]; }
+static const char *MenuSearch_MainText(int index) { return m_main_items[index].label; }
+static const char *MenuSearch_SinglePlayerText(int index) { return m_singleplayer_items[index].label; }
+static const char *MenuSearch_MultiplayerText(int index) { return m_multiplayer_items[index].label; }
 static const char *MenuSearch_JoinText(int index) { return menusearch_join_labels[index]; }
 static const char *MenuSearch_HostText(int index) { return menusearch_host_labels[index]; }
 static const char *MenuSearch_SetupText(int index) { return menusearch_setup_labels[index]; }
@@ -21630,20 +21861,12 @@ static qboolean MenuSearch_OptionsAvailable(int index)
 
 static qboolean MenuSearch_MainAvailable(int index)
 {
-	if (index == MAIN_MODS)
-		return m_main_mods != 0;
-	if (index == MAIN_DEMOS)
-		return m_main_demos != 0;
-	return true;
+	return M_MenuItem_Available(&m_main_items[index]);
 }
 
 static qboolean MenuSearch_SinglePlayerAvailable(int index)
 {
-	if (index == 2)
-		return sv.active && !cl.intermission && svs.maxclients == 1;
-	if (index == 3)
-		return m_singleplayer_showlevels != 0;
-	return true;
+	return M_MenuItem_Available(&m_singleplayer_items[index]);
 }
 
 static qboolean MenuSearch_NetworkAvailable(int index)
@@ -21655,14 +21878,14 @@ static qboolean MenuSearch_NetworkAvailable(int index)
 static qboolean MenuSearch_MultiplayerAvailable(int index)
 {
 	/* Setup is local configuration and remains valid without a network transport. */
-	return index == 2 || MenuSearch_NetworkAvailable(index);
+	return M_MenuItem_Available(&m_multiplayer_items[index]);
 }
 
 static qboolean MenuSearch_HostAvailable(int index)
 {
 	if (!MenuSearch_NetworkAvailable(index))
 		return false;
-	if (index == 1)
+	if (index == MENUSEARCH_HOST_ROOM)
 		return M_LanConfig_HasIce();
 	return true;
 }
@@ -21877,10 +22100,10 @@ static const char *MenuSearch_SinglePlayerKeywords(int index)
 {
 	switch (index)
 	{
-	case 0: return "start campaign solo new singleplayer difficulty skill episode fresh restart";
-	case 1: return "load savegame continue";
-	case 2: return "save savegame slot";
-	case 3: return "maps levels map browser select level";
+	case SP_NEWGAME: return "start campaign solo new singleplayer difficulty skill episode fresh restart";
+	case SP_LOADGAME: return "load savegame continue";
+	case SP_SAVEGAME: return "save savegame slot";
+	case SP_LEVELS: return "maps levels map browser select level";
 	default: return NULL;
 	}
 }
@@ -21889,9 +22112,9 @@ static const char *MenuSearch_MultiplayerKeywords(int index)
 {
 	switch (index)
 	{
-	case 0: return "connect server browser online lan internet";
-	case 1: return "host create start listen server lobby coop deathmatch";
-	case 2: return "player setup name colors hostname profile";
+	case MULTIPLAYER_JOINGAME: return "connect server browser online lan internet";
+	case MULTIPLAYER_NEWGAME: return "host create start listen server lobby coop deathmatch";
+	case MULTIPLAYER_SETUP: return "player setup name colors hostname profile";
 	default: return NULL;
 	}
 }
@@ -22049,127 +22272,131 @@ static const char *MenuSearch_SavingKeywords(int index);
 static const char *MenuSearch_StartupKeywords(int index);
 static const char *MenuSearch_DemoOptionsKeywords(int index);
 
-static void M_MenuSearch_OpenOptionsItem(int index)
+static qboolean M_MenuSearch_OpenOptionsItem(int index)
 {
 	M_ReleaseSliderGrab();
 	M_Menu_Options_f();
 	options_cursor = index;
+	return true;
 }
 
-static void M_MenuSearch_OpenGraphicsItem(int index)
+static qboolean M_MenuSearch_OpenGraphicsItem(int index)
 {
 	M_Menu_Graphics_f();
 	graphics_slider_grab = false;
 	graphics_cursor = (enum graphics_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenSoundItem(int index)
+static qboolean M_MenuSearch_OpenSoundItem(int index)
 {
 	M_Menu_Sound_f();
 	sound_slider_grab = false;
 	sound_cursor = (enum sound_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenGameItem(int index)
+static qboolean M_MenuSearch_OpenGameItem(int index)
 {
 	M_Menu_Game_f();
 	game_slider_grab = false;
 	game_cursor = (enum game_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenHUDItem(int index)
+static qboolean M_MenuSearch_OpenHUDItem(int index)
 {
 	M_Menu_HUD_f();
 	hud_slider_grab = false;
 	hud_cursor = (enum hud_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenConsoleItem(int index)
+static qboolean M_MenuSearch_OpenConsoleItem(int index)
 {
 	M_Menu_Console_f();
 	console_slider_grab = false;
 	console_cursor = (enum console_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenMainItem(int index)
+static qboolean M_MenuSearch_OpenMainItem(int index)
 {
-	switch (index)
+	/* Committing rows land you on the menu row instead of firing it. */
+	if (m_main_items[index].flags & MENUITEM_COMMITS)
 	{
-	case MAIN_SINGLEPLAYER: M_Menu_SinglePlayer_f(); break;
-	case MAIN_MULTIPLAYER: M_Menu_MultiPlayer_f(); break;
-	case MAIN_OPTIONS: M_Menu_Options_f(); break;
-	case MAIN_MODS: M_Menu_Mods_f(); break;
-	case MAIN_DEMOS: M_Menu_Demos_f(); break;
-	case MAIN_HELP: M_Menu_Help_f(); break;
-	case MAIN_QUIT:
 		M_Menu_Main_f();
-		m_main_cursor = MAIN_QUIT;
-		break;
+		m_main_cursor = index;
+		return true;
 	}
+	return M_Main_ActivateItem(index);
 }
 
-static void M_MenuSearch_OpenSinglePlayerItem(int index)
+static qboolean M_MenuSearch_OpenSinglePlayerItem(int index)
 {
-	switch (index)
+	/* Committing rows land you on the menu row instead of firing it. */
+	if (m_singleplayer_items[index].flags & MENUITEM_COMMITS)
 	{
-	case 0:
 		M_Menu_SinglePlayer_f();
-		m_singleplayer_cursor = 0;
-		break;
-	case 1: M_Menu_Load_f(); break;
-	case 2: M_Menu_Save_f(); break;
-	case 3: M_Menu_Maps_f(); break;
+		m_singleplayer_cursor = index;
+		return true;
 	}
+	return M_SinglePlayer_ActivateItem(index);
 }
 
-static void M_MenuSearch_OpenMultiplayerItem(int index)
+static qboolean M_MenuSearch_OpenMultiplayerItem(int index)
 {
-	if (index == 2)
-	{
-		M_Menu_Setup_f();
-		return;
-	}
-	m_multiplayer_cursor = index;
-	lanConfig_cursor = -1;
-	M_Menu_LanConfig_f();
+	/* Arrive at LanConfig on its default row rather than resuming the last
+	 * one; the menu's own path deliberately resumes. Setup does not enter
+	 * LanConfig, so leave its stored row alone. */
+	if (index != MULTIPLAYER_SETUP)
+		lanConfig_cursor = -1;
+	return M_MultiPlayer_ActivateItem(index);
 }
 
-static void M_MenuSearch_OpenJoinItem(int index)
+static qboolean M_MenuSearch_OpenJoinItem(int index)
 {
 	static const int cursors[] = {
-		LANCONFIG_CURSOR_JOINGAME_SEARCH_LAN,
-		LANCONFIG_CURSOR_JOINGAME_SEARCH_WEB,
-		LANCONFIG_CURSOR_JOINGAME_HISTORY,
-		LANCONFIG_CURSOR_JOINGAME_BOOKMARKS,
-		LANCONFIG_CURSOR_JOINGAME_JOIN
+		[MENUSEARCH_JOIN_LOCAL]		= LANCONFIG_CURSOR_JOINGAME_SEARCH_LAN,
+		[MENUSEARCH_JOIN_BROWSER]	= LANCONFIG_CURSOR_JOINGAME_SEARCH_WEB,
+		[MENUSEARCH_JOIN_HISTORY]	= LANCONFIG_CURSOR_JOINGAME_HISTORY,
+		[MENUSEARCH_JOIN_BOOKMARKS]	= LANCONFIG_CURSOR_JOINGAME_BOOKMARKS,
+		[MENUSEARCH_JOIN_ADDRESS]	= LANCONFIG_CURSOR_JOINGAME_JOIN
 	};
-	m_multiplayer_cursor = 0;
+	COMPILE_TIME_ASSERT(menusearch_join_cursors, Q_COUNTOF(cursors) == MENUSEARCH_JOIN_COUNT);
+	m_multiplayer_cursor = MULTIPLAYER_JOINGAME;
 	lanConfig_cursor = -1;
 	M_Menu_LanConfig_f();
 	lanConfig_cursor = cursors[index];
+	return true;
 }
 
-static void M_MenuSearch_OpenHostItem(int index)
+static qboolean M_MenuSearch_OpenHostItem(int index)
 {
-	m_multiplayer_cursor = 1;
+	m_multiplayer_cursor = MULTIPLAYER_NEWGAME;
 	lanConfig_cursor = -1;
 	M_Menu_LanConfig_f();
 	switch (index)
 	{
-	case 0: lanConfig_cursor = LANCONFIG_CURSOR_PORT; break;
-	case 1: lanConfig_cursor = LANCONFIG_CURSOR_NEWGAME_ROOM; break;
-	case 2: lanConfig_cursor = M_LanConfig_NewGameProtocolCursor(); break;
-	case 3: lanConfig_cursor = M_LanConfig_NewGameOkCursor(); break;
+	case MENUSEARCH_HOST_PORT: lanConfig_cursor = LANCONFIG_CURSOR_PORT; break;
+	case MENUSEARCH_HOST_ROOM: lanConfig_cursor = LANCONFIG_CURSOR_NEWGAME_ROOM; break;
+	case MENUSEARCH_HOST_PROTOCOL: lanConfig_cursor = M_LanConfig_NewGameProtocolCursor(); break;
+	case MENUSEARCH_HOST_GAMEOPTIONS: lanConfig_cursor = M_LanConfig_NewGameOkCursor(); break;
 	}
+	return true;
 }
 
-static void M_MenuSearch_OpenSetupItem(int index)
+static qboolean M_MenuSearch_OpenSetupItem(int index)
 {
-	M_Menu_Setup_f();
+	/* Re-initialising Setup would discard buffered name/hostname edits, so a
+	 * result targeting another Setup row just moves the cursor. */
+	if (m_state != m_setup)
+		M_Menu_Setup_f();
 	setup_cursor = index;
+	return true;
 }
 
-static void M_MenuSearch_OpenKeyItem(int index)
+static qboolean M_MenuSearch_OpenKeyItem(int index)
 {
 	keydevicemask_t mask = quakebindnames[index].devicemask;
 	int actual = -1, i;
@@ -22185,25 +22412,29 @@ static void M_MenuSearch_OpenKeyItem(int index)
 			actual = i;
 			break;
 		}
+	/* The bind exists in the default table but not in the live list: report it
+	 * rather than leaving the user on an unrelated row. */
 	if (actual < 0)
-		return;
+		return false;
 	for (i = 0; i < keysmenu.num_filtered; ++i)
 		if (keysmenu.filtered_indices[i] == actual)
 		{
 			keysmenu.list.cursor = i;
 			M_List_CenterCursor(&keysmenu.list);
-			break;
+			return true;
 		}
+	return false;
 }
 
-static void M_MenuSearch_OpenMouseItem(int index)
+static qboolean M_MenuSearch_OpenMouseItem(int index)
 {
 	M_Menu_Mouse_f();
 	mouse_slider_grab = false;
 	mouse_cursor = (enum mouse_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenControllerItem(int index)
+static qboolean M_MenuSearch_OpenControllerItem(int index)
 {
 	int i, visible = 0;
 	M_Menu_Controller_f();
@@ -22213,42 +22444,48 @@ static void M_MenuSearch_OpenControllerItem(int index)
 	controller_cursor = visible;
 	controller_scroll = CLAMP(0, visible - CONTROLLER_MAX_VISIBLE / 2,
 		q_max(0, M_Controller_GetVisibleItemCount() - CONTROLLER_MAX_VISIBLE));
+	return true;
 }
 
-static void M_MenuSearch_OpenSkyItem(int index)
+static qboolean M_MenuSearch_OpenSkyItem(int index)
 {
 	M_Menu_Sky_f();
 	sky_slider_grab = false;
 	sky_field_editing = false;
 	sky_cursor = (enum sky_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenSkywindItem(int index)
+static qboolean M_MenuSearch_OpenSkywindItem(int index)
 {
 	M_Menu_Skywind_f();
 	skywind_slider_grab = false;
 	skywind_cursor = (enum skywind_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenVoipItem(int index)
+static qboolean M_MenuSearch_OpenVoipItem(int index)
 {
 	M_Menu_Voip_f();
 	voip_slider_grab = false;
 	voip_cursor = (enum voip_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenCrosshairItem(int index)
+static qboolean M_MenuSearch_OpenCrosshairItem(int index)
 {
 	M_Menu_Crosshair_f();
 	crosshair_slider_grab = false;
 	crosshair_cursor = (enum crosshair_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenPlayerXrayItem(int index)
+static qboolean M_MenuSearch_OpenPlayerXrayItem(int index)
 {
 	M_Menu_PlayerXray_f();
 	playerxray_slider_grab = false;
 	playerxray_cursor = (enum playerxray_e)index;
+	return true;
 }
 
 enum
@@ -22277,36 +22514,38 @@ enum
 	MENUSEARCH_PROVIDER_EXTRAS,
 	MENUSEARCH_PROVIDER_SAVING,
 	MENUSEARCH_PROVIDER_STARTUP,
-	MENUSEARCH_PROVIDER_DEMOOPTIONS
+	MENUSEARCH_PROVIDER_DEMOOPTIONS,
+	MENUSEARCH_PROVIDER_COUNT
 };
 
-static const menusearch_provider_t menusearch_providers[] = {
-	{"options", "Options", menusearch_options_labels, OPTIONS_ITEMS, M_Options_GetItemText, M_Options_GetItemCvar, M_Options_GetItemHintText, MenuSearch_OptionsKeywords, NULL, MenuSearch_OptionsAvailable, M_MenuSearch_OpenOptionsItem},
-	{"video", "Options > Display", menusearch_video_labels, VID_MENU_SEARCH_ITEMS, VID_MenuSearch_GetItemText, VID_MenuSearch_GetItemCvar, VID_MenuSearch_GetItemHintText, MenuSearch_VideoKeywords, VID_MenuSearch_GetValueText, VID_MenuSearch_ItemAvailable, VID_MenuSearch_OpenItem},
-	{"graphics", "Options > Graphics", menusearch_graphics_labels, GRAPHICS_ITEMS, M_Graphics_GetItemText, M_Graphics_GetItemCvar, M_Graphics_GetItemHintText, MenuSearch_GraphicsKeywords, NULL, NULL, M_MenuSearch_OpenGraphicsItem},
-	{"sound", "Options > Sound", menusearch_sound_labels, SOUND_ITEMS, M_Sound_GetItemText, M_Sound_GetItemCvar, NULL, MenuSearch_SoundKeywords, NULL, NULL, M_MenuSearch_OpenSoundItem},
-	{"game", "Options > Game", menusearch_game_labels, GAME_ITEMS, M_Game_GetItemText, M_Game_GetItemCvar, M_Game_GetItemHintText, MenuSearch_GameKeywords, NULL, NULL, M_MenuSearch_OpenGameItem},
-	{"hud", "Options > HUD", menusearch_hud_labels, HUD_ITEMS, M_HUD_GetItemText, M_HUD_GetItemCvar, NULL, MenuSearch_HUDKeywords, NULL, NULL, M_MenuSearch_OpenHUDItem},
-	{"console", "Options > Console", menusearch_console_labels, CONSOLE_ITEMS, M_Console_GetItemText, M_Console_GetItemCvar, M_Console_GetItemHintText, MenuSearch_ConsoleKeywords, NULL, NULL, M_MenuSearch_OpenConsoleItem},
-	{"main", "Main Menu", menusearch_main_labels, MAIN_ITEMS, MenuSearch_MainText, NULL, NULL, MenuSearch_MainKeywords, NULL, MenuSearch_MainAvailable, M_MenuSearch_OpenMainItem},
-	{"singleplayer", "Single Player", menusearch_singleplayer_labels, Q_COUNTOF(menusearch_singleplayer_labels), MenuSearch_SinglePlayerText, NULL, NULL, MenuSearch_SinglePlayerKeywords, NULL, MenuSearch_SinglePlayerAvailable, M_MenuSearch_OpenSinglePlayerItem},
-	{"multiplayer", "Multiplayer", menusearch_multiplayer_labels, MULTIPLAYER_BASE_ITEMS, MenuSearch_MultiplayerText, NULL, NULL, MenuSearch_MultiplayerKeywords, NULL, MenuSearch_MultiplayerAvailable, M_MenuSearch_OpenMultiplayerItem},
-	{"join", "Multiplayer > Join Game", menusearch_join_labels, Q_COUNTOF(menusearch_join_labels), MenuSearch_JoinText, NULL, NULL, MenuSearch_JoinKeywords, NULL, MenuSearch_NetworkAvailable, M_MenuSearch_OpenJoinItem},
-	{"host", "Multiplayer > New Game", menusearch_host_labels, Q_COUNTOF(menusearch_host_labels), MenuSearch_HostText, NULL, NULL, MenuSearch_HostKeywords, NULL, MenuSearch_HostAvailable, M_MenuSearch_OpenHostItem},
-	{"setup", "Multiplayer > Setup", menusearch_setup_labels, NUM_SETUP_CMDS, MenuSearch_SetupText, NULL, NULL, MenuSearch_SetupKeywords, NULL, NULL, M_MenuSearch_OpenSetupItem},
-	{"keys", "Options > Key/Button Setup", NULL, NUMQUAKECOMMANDS, MenuSearch_KeyText, NULL, NULL, MenuSearch_KeyKeywords, NULL, MenuSearch_KeyAvailable, M_MenuSearch_OpenKeyItem},
-	{"mouse", "Options > Mouse", menusearch_mouse_labels, MOUSE_ITEMS, M_Mouse_GetItemText, M_Mouse_GetItemCvar, M_Mouse_GetItemHintText, MenuSearch_MouseKeywords, NULL, NULL, M_MenuSearch_OpenMouseItem},
-	{"controller", "Options > Controller", menusearch_controller_labels, CONTROLLER_ITEMS, M_Controller_GetItemText, M_Controller_GetItemCvar, NULL, MenuSearch_ControllerKeywords, NULL, MenuSearch_ControllerAvailable, M_MenuSearch_OpenControllerItem},
-	{"sky", "Options > Graphics > Sky", menusearch_sky_labels, SKY_ITEMS, M_Sky_GetItemText, M_Sky_GetItemCvar, NULL, MenuSearch_SkyKeywords, NULL, NULL, M_MenuSearch_OpenSkyItem},
-	{"skywind", "Options > Graphics > Sky > Skywind", menusearch_skywind_labels, SKYWIND_ITEMS, M_Skywind_GetItemText, NULL, NULL, MenuSearch_SkywindKeywords, M_Skywind_GetValueText, NULL, M_MenuSearch_OpenSkywindItem},
-	{"voip", "Options > Sound > VoIP", menusearch_voip_labels, VOIP_ITEMS, M_Voip_GetItemText, M_Voip_GetItemCvar, NULL, MenuSearch_VoipKeywords, NULL, NULL, M_MenuSearch_OpenVoipItem},
-	{"crosshair", "Options > HUD > Crosshair", menusearch_crosshair_labels, CROSSHAIR_ITEMS, M_Crosshair_GetItemText, M_Crosshair_GetItemCvar, NULL, MenuSearch_CrosshairKeywords, NULL, NULL, M_MenuSearch_OpenCrosshairItem},
-	{"playerxray", "Options > Game > Player Xray", menusearch_playerxray_labels, PLAYERXRAY_ITEMS, M_PlayerXray_GetItemText, M_PlayerXray_GetItemCvar, NULL, MenuSearch_PlayerXrayKeywords, M_PlayerXray_GetValueText, NULL, M_MenuSearch_OpenPlayerXrayItem},
-	{"extras", "Options > Misc", menusearch_extras_labels, Q_COUNTOF(menusearch_extras_labels), M_Extras_GetItemText, M_Extras_GetItemCvar, M_Extras_GetItemHintText, MenuSearch_ExtrasKeywords, NULL, NULL, M_MenuSearch_OpenExtrasItem},
-	{"saving", "Options > Misc > Saving", menusearch_saving_labels, Q_COUNTOF(menusearch_saving_labels), M_Saving_GetItemText, M_Saving_GetItemCvar, NULL, MenuSearch_SavingKeywords, M_Saving_GetValueText, NULL, M_MenuSearch_OpenSavingItem},
-	{"startup", "Options > Startup", menusearch_startup_labels, Q_COUNTOF(menusearch_startup_labels), M_Startup_GetItemText, M_Startup_GetItemCvar, NULL, MenuSearch_StartupKeywords, NULL, MenuSearch_StartupAvailable, M_MenuSearch_OpenStartupItem},
-	{"demooptions", "Options > Demo Options", menusearch_demooptions_labels, Q_COUNTOF(menusearch_demooptions_labels), M_DemoOptions_GetItemText, M_DemoOptions_GetItemCvar, NULL, MenuSearch_DemoOptionsKeywords, M_DemoOptions_GetValueText, NULL, M_MenuSearch_OpenDemoOptionsItem}
+static const menusearch_provider_t menusearch_providers[MENUSEARCH_PROVIDER_COUNT] = {
+	[MENUSEARCH_PROVIDER_OPTIONS] = {"options", "Options", menusearch_options_labels, OPTIONS_ITEMS, M_Options_GetItemText, M_Options_GetItemCvar, M_Options_GetItemHintText, MenuSearch_OptionsKeywords, NULL, MenuSearch_OptionsAvailable, M_MenuSearch_OpenOptionsItem},
+	[MENUSEARCH_PROVIDER_VIDEO] = {"video", "Options > Display", menusearch_video_labels, VID_MENU_SEARCH_ITEMS, VID_MenuSearch_GetItemText, VID_MenuSearch_GetItemCvar, VID_MenuSearch_GetItemHintText, MenuSearch_VideoKeywords, VID_MenuSearch_GetValueText, VID_MenuSearch_ItemAvailable, VID_MenuSearch_OpenItem},
+	[MENUSEARCH_PROVIDER_GRAPHICS] = {"graphics", "Options > Graphics", menusearch_graphics_labels, GRAPHICS_ITEMS, M_Graphics_GetItemText, M_Graphics_GetItemCvar, M_Graphics_GetItemHintText, MenuSearch_GraphicsKeywords, NULL, NULL, M_MenuSearch_OpenGraphicsItem},
+	[MENUSEARCH_PROVIDER_SOUND] = {"sound", "Options > Sound", menusearch_sound_labels, SOUND_ITEMS, M_Sound_GetItemText, M_Sound_GetItemCvar, NULL, MenuSearch_SoundKeywords, NULL, NULL, M_MenuSearch_OpenSoundItem},
+	[MENUSEARCH_PROVIDER_GAME] = {"game", "Options > Game", menusearch_game_labels, GAME_ITEMS, M_Game_GetItemText, M_Game_GetItemCvar, M_Game_GetItemHintText, MenuSearch_GameKeywords, NULL, NULL, M_MenuSearch_OpenGameItem},
+	[MENUSEARCH_PROVIDER_HUD] = {"hud", "Options > HUD", menusearch_hud_labels, HUD_ITEMS, M_HUD_GetItemText, M_HUD_GetItemCvar, NULL, MenuSearch_HUDKeywords, NULL, NULL, M_MenuSearch_OpenHUDItem},
+	[MENUSEARCH_PROVIDER_CONSOLE] = {"console", "Options > Console", menusearch_console_labels, CONSOLE_ITEMS, M_Console_GetItemText, M_Console_GetItemCvar, M_Console_GetItemHintText, MenuSearch_ConsoleKeywords, NULL, NULL, M_MenuSearch_OpenConsoleItem},
+	[MENUSEARCH_PROVIDER_MAIN] = {"main", "Main Menu", NULL, MAIN_ITEMS, MenuSearch_MainText, NULL, NULL, MenuSearch_MainKeywords, NULL, MenuSearch_MainAvailable, M_MenuSearch_OpenMainItem},
+	[MENUSEARCH_PROVIDER_SINGLEPLAYER] = {"singleplayer", "Single Player", NULL, SP_ITEM_COUNT, MenuSearch_SinglePlayerText, NULL, NULL, MenuSearch_SinglePlayerKeywords, NULL, MenuSearch_SinglePlayerAvailable, M_MenuSearch_OpenSinglePlayerItem},
+	[MENUSEARCH_PROVIDER_MULTIPLAYER] = {"multiplayer", "Multiplayer", NULL, MULTIPLAYER_BASE_ITEMS, MenuSearch_MultiplayerText, NULL, NULL, MenuSearch_MultiplayerKeywords, NULL, MenuSearch_MultiplayerAvailable, M_MenuSearch_OpenMultiplayerItem},
+	[MENUSEARCH_PROVIDER_JOIN] = {"join", "Multiplayer > Join Game", menusearch_join_labels, MENUSEARCH_JOIN_COUNT, MenuSearch_JoinText, NULL, NULL, MenuSearch_JoinKeywords, NULL, MenuSearch_NetworkAvailable, M_MenuSearch_OpenJoinItem},
+	[MENUSEARCH_PROVIDER_HOST] = {"host", "Multiplayer > New Game", menusearch_host_labels, MENUSEARCH_HOST_COUNT, MenuSearch_HostText, NULL, NULL, MenuSearch_HostKeywords, NULL, MenuSearch_HostAvailable, M_MenuSearch_OpenHostItem},
+	[MENUSEARCH_PROVIDER_SETUP] = {"setup", "Multiplayer > Setup", menusearch_setup_labels, NUM_SETUP_CMDS, MenuSearch_SetupText, NULL, NULL, MenuSearch_SetupKeywords, NULL, NULL, M_MenuSearch_OpenSetupItem},
+	[MENUSEARCH_PROVIDER_KEYS] = {"keys", "Options > Key/Button Setup", NULL, NUMQUAKECOMMANDS, MenuSearch_KeyText, NULL, NULL, MenuSearch_KeyKeywords, NULL, MenuSearch_KeyAvailable, M_MenuSearch_OpenKeyItem},
+	[MENUSEARCH_PROVIDER_MOUSE] = {"mouse", "Options > Mouse", menusearch_mouse_labels, MOUSE_ITEMS, M_Mouse_GetItemText, M_Mouse_GetItemCvar, M_Mouse_GetItemHintText, MenuSearch_MouseKeywords, NULL, NULL, M_MenuSearch_OpenMouseItem},
+	[MENUSEARCH_PROVIDER_CONTROLLER] = {"controller", "Options > Controller", menusearch_controller_labels, CONTROLLER_ITEMS, M_Controller_GetItemText, M_Controller_GetItemCvar, NULL, MenuSearch_ControllerKeywords, NULL, MenuSearch_ControllerAvailable, M_MenuSearch_OpenControllerItem},
+	[MENUSEARCH_PROVIDER_SKY] = {"sky", "Options > Graphics > Sky", menusearch_sky_labels, SKY_ITEMS, M_Sky_GetItemText, M_Sky_GetItemCvar, NULL, MenuSearch_SkyKeywords, NULL, NULL, M_MenuSearch_OpenSkyItem},
+	[MENUSEARCH_PROVIDER_SKYWIND] = {"skywind", "Options > Graphics > Sky > Skywind", menusearch_skywind_labels, SKYWIND_ITEMS, M_Skywind_GetItemText, NULL, NULL, MenuSearch_SkywindKeywords, M_Skywind_GetValueText, NULL, M_MenuSearch_OpenSkywindItem},
+	[MENUSEARCH_PROVIDER_VOIP] = {"voip", "Options > Sound > VoIP", menusearch_voip_labels, VOIP_ITEMS, M_Voip_GetItemText, M_Voip_GetItemCvar, NULL, MenuSearch_VoipKeywords, NULL, NULL, M_MenuSearch_OpenVoipItem},
+	[MENUSEARCH_PROVIDER_CROSSHAIR] = {"crosshair", "Options > HUD > Crosshair", menusearch_crosshair_labels, CROSSHAIR_ITEMS, M_Crosshair_GetItemText, M_Crosshair_GetItemCvar, NULL, MenuSearch_CrosshairKeywords, NULL, NULL, M_MenuSearch_OpenCrosshairItem},
+	[MENUSEARCH_PROVIDER_PLAYERXRAY] = {"playerxray", "Options > Game > Player Xray", menusearch_playerxray_labels, PLAYERXRAY_ITEMS, M_PlayerXray_GetItemText, M_PlayerXray_GetItemCvar, NULL, MenuSearch_PlayerXrayKeywords, M_PlayerXray_GetValueText, NULL, M_MenuSearch_OpenPlayerXrayItem},
+	[MENUSEARCH_PROVIDER_EXTRAS] = {"extras", "Options > Misc", menusearch_extras_labels, Q_COUNTOF(menusearch_extras_labels), M_Extras_GetItemText, M_Extras_GetItemCvar, M_Extras_GetItemHintText, MenuSearch_ExtrasKeywords, NULL, NULL, M_MenuSearch_OpenExtrasItem},
+	[MENUSEARCH_PROVIDER_SAVING] = {"saving", "Options > Misc > Saving", menusearch_saving_labels, Q_COUNTOF(menusearch_saving_labels), M_Saving_GetItemText, M_Saving_GetItemCvar, NULL, MenuSearch_SavingKeywords, M_Saving_GetValueText, NULL, M_MenuSearch_OpenSavingItem},
+	[MENUSEARCH_PROVIDER_STARTUP] = {"startup", "Options > Startup", menusearch_startup_labels, Q_COUNTOF(menusearch_startup_labels), M_Startup_GetItemText, M_Startup_GetItemCvar, NULL, MenuSearch_StartupKeywords, NULL, MenuSearch_StartupAvailable, M_MenuSearch_OpenStartupItem},
+	[MENUSEARCH_PROVIDER_DEMOOPTIONS] = {"demooptions", "Options > Demo Options", menusearch_demooptions_labels, Q_COUNTOF(menusearch_demooptions_labels), M_DemoOptions_GetItemText, M_DemoOptions_GetItemCvar, NULL, MenuSearch_DemoOptionsKeywords, M_DemoOptions_GetValueText, NULL, M_MenuSearch_OpenDemoOptionsItem}
 };
+COMPILE_TIME_ASSERT(menusearch_provider_count, Q_COUNTOF(menusearch_providers) == MENUSEARCH_PROVIDER_COUNT);
 
 static const char *MenuSearch_Label(const menusearch_provider_t *provider, int index)
 {
@@ -22348,9 +22587,13 @@ static void MenuSearch_Normalize(const char *in, char *out, size_t outsize)
 	size_t n = 0;
 	qboolean space = true;
 
+	if (!in)
+		in = "";
 	while (*in && n + 1 < outsize)
 	{
-		unsigned char c = (unsigned char)*in++;
+		/* Quake's charset carries colour in the high bit, so mask it off before
+		 * classifying: a gold "Options" must normalize like a white one. */
+		unsigned char c = (unsigned char)*in++ & 0x7f;
 		if (c >= 'A' && c <= 'Z')
 			c += 'a' - 'A';
 		if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
@@ -22379,9 +22622,34 @@ static qboolean MenuSearch_ItemAvailable(const menusearch_provider_t *provider, 
 
 #define MENU_SEARCH_FUZZY_WORD_CHARS 63
 
+/* The scored haystack is the normalized fields joined by single spaces. Sized
+ * from the parts so growing a field buffer cannot silently start truncating. */
+#define MENU_SEARCH_LABEL_CHARS		95
+#define MENU_SEARCH_PATH_CHARS		95
+#define MENU_SEARCH_CVARNAME_CHARS	95
+#define MENU_SEARCH_HINT_CHARS		191
+#define MENU_SEARCH_KEYWORD_CHARS	191
+#define MENU_SEARCH_HAYSTACK_CHARS	(MENU_SEARCH_LABEL_CHARS + MENU_SEARCH_PATH_CHARS + \
+	MENU_SEARCH_CVARNAME_CHARS + MENU_SEARCH_HINT_CHARS + MENU_SEARCH_KEYWORD_CHARS + 4)
+
+/* Records the query terms already scored, so a repeat is skipped. */
+static qboolean MenuSearch_HasTerm(const char *seen, const char *term)
+{
+	size_t term_len = strlen(term);
+	const char *at;
+
+	for (at = seen; (at = strstr(at, term)) != NULL; at += term_len)
+		if ((at == seen || at[-1] == ' ') && at[term_len] == ' ')
+			return true;
+	return false;
+}
+
 static int MenuSearch_EditDistance(const char *left, const char *right, int max_distance)
 {
-	int distance[MENU_SEARCH_QUERY_CHARS + 1][MENU_SEARCH_FUZZY_WORD_CHARS + 1];
+	/* Damerau-Levenshtein needs the two preceding rows for the transposition
+	 * term, so three rolling rows replace the full matrix. */
+	int rows[3][MENU_SEARCH_FUZZY_WORD_CHARS + 1];
+	int *prev2 = rows[0], *prev = rows[1], *cur = rows[2];
 	int left_len = (int)strlen(left);
 	int right_len = (int)strlen(right);
 	int length_delta = left_len > right_len ? left_len - right_len : right_len - left_len;
@@ -22391,26 +22659,31 @@ static int MenuSearch_EditDistance(const char *left, const char *right, int max_
 		length_delta > max_distance)
 		return max_distance + 1;
 
-	for (i = 0; i <= left_len; ++i)
-		distance[i][0] = i;
 	for (j = 0; j <= right_len; ++j)
-		distance[0][j] = j;
+		prev[j] = j;
 
 	for (i = 1; i <= left_len; ++i)
 	{
+		int *rotate;
+
+		cur[0] = i;
 		for (j = 1; j <= right_len; ++j)
 		{
 			int cost = left[i - 1] == right[j - 1] ? 0 : 1;
-			int best = q_min(distance[i - 1][j] + 1, distance[i][j - 1] + 1);
+			int best = q_min(prev[j] + 1, cur[j - 1] + 1);
 
-			best = q_min(best, distance[i - 1][j - 1] + cost);
+			best = q_min(best, prev[j - 1] + cost);
 			if (i > 1 && j > 1 && left[i - 1] == right[j - 2] && left[i - 2] == right[j - 1])
-				best = q_min(best, distance[i - 2][j - 2] + 1);
-			distance[i][j] = best;
+				best = q_min(best, prev2[j - 2] + 1);
+			cur[j] = best;
 		}
+		rotate = prev2;
+		prev2 = prev;
+		prev = cur;
+		cur = rotate;
 	}
 
-	return distance[left_len][right_len];
+	return prev[right_len];
 }
 
 static int MenuSearch_FuzzyFieldScore(const char *field, const char *term)
@@ -22458,25 +22731,39 @@ static int MenuSearch_FuzzyFieldScore(const char *field, const char *term)
 
 static int MenuSearch_Score(const menusearch_provider_t *provider, int index, const char *query)
 {
-	char label[96], path[96], cvarname[96], hint[192], keywords[192], haystack[672];
+	char label[MENU_SEARCH_LABEL_CHARS + 1], path[MENU_SEARCH_PATH_CHARS + 1];
+	char cvarname[MENU_SEARCH_CVARNAME_CHARS + 1], hint[MENU_SEARCH_HINT_CHARS + 1];
+	char keywords[MENU_SEARCH_KEYWORD_CHARS + 1];
+	char haystack[MENU_SEARCH_HAYSTACK_CHARS + 1];
 	char terms[MENU_SEARCH_QUERY_CHARS + 1], *term;
-	const char *label_text = MenuSearch_Label(provider, index);
-	cvar_t *cv = provider->cvar_fn ? provider->cvar_fn(index) : NULL;
-	const char *hint_text = provider->hint_fn ? provider->hint_fn(index) : NULL;
-	const char *keyword_text = provider->keywords_fn ? provider->keywords_fn(index) : NULL;
+	char seen[MENU_SEARCH_QUERY_CHARS + 2];
+	cvar_t *cv;
 	int score = 0;
 
-	MenuSearch_Normalize(label_text, label, sizeof(label));
+	/* Normalize each callback result before fetching the next: providers are
+	 * free to return a pointer into a shared static buffer, so no two of these
+	 * strings may be held live at once. */
+	MenuSearch_Normalize(MenuSearch_Label(provider, index), label, sizeof(label));
 	MenuSearch_Normalize(provider->path, path, sizeof(path));
+	cv = provider->cvar_fn ? provider->cvar_fn(index) : NULL;
 	MenuSearch_Normalize(cv ? cv->name : "", cvarname, sizeof(cvarname));
-	MenuSearch_Normalize(hint_text ? hint_text : "", hint, sizeof(hint));
-	MenuSearch_Normalize(keyword_text ? keyword_text : "", keywords, sizeof(keywords));
+	MenuSearch_Normalize(provider->hint_fn ? provider->hint_fn(index) : NULL, hint, sizeof(hint));
+	MenuSearch_Normalize(provider->keywords_fn ? provider->keywords_fn(index) : NULL, keywords, sizeof(keywords));
 	q_snprintf(haystack, sizeof(haystack), "%s %s %s %s %s", label, path, cvarname, hint, keywords);
 	q_strlcpy(terms, query, sizeof(terms));
+	seen[0] = 0;
 
 	for (term = strtok(terms, " "); term; term = strtok(NULL, " "))
 	{
-		const char *match = strstr(haystack, term);
+		const char *match;
+
+		/* A term repeated in the query must not score its item twice. */
+		if (MenuSearch_HasTerm(seen, term))
+			continue;
+		q_strlcat(seen, term, sizeof(seen));
+		q_strlcat(seen, " ", sizeof(seen));
+
+		match = strstr(haystack, term);
 		if (!match)
 		{
 			int fuzzy_score = 0;
@@ -22515,16 +22802,22 @@ static int MenuSearch_CompareResults(const void *left, const void *right)
 {
 	const menusearch_result_t *a = (const menusearch_result_t *)left;
 	const menusearch_result_t *b = (const menusearch_result_t *)right;
+	/* Copy both labels before comparing: a provider may return them from one
+	 * shared buffer, and an order-dependent comparator would make the sort
+	 * order depend on argument evaluation order. */
+	char a_label[MENU_SEARCH_LABEL_CHARS + 1], b_label[MENU_SEARCH_LABEL_CHARS + 1];
 	int cmp;
 
 	if (a->score != b->score)
 		return b->score - a->score;
-	if (strlen(MenuSearch_Label(a->provider, a->index)) != strlen(MenuSearch_Label(b->provider, b->index)))
-		return (int)strlen(MenuSearch_Label(a->provider, a->index)) - (int)strlen(MenuSearch_Label(b->provider, b->index));
+	q_strlcpy(a_label, MenuSearch_Label(a->provider, a->index), sizeof(a_label));
+	q_strlcpy(b_label, MenuSearch_Label(b->provider, b->index), sizeof(b_label));
+	if (strlen(a_label) != strlen(b_label))
+		return (int)strlen(a_label) - (int)strlen(b_label);
 	cmp = q_strcasecmp(a->provider->path, b->provider->path);
 	if (cmp)
 		return cmp;
-	return q_strcasecmp(MenuSearch_Label(a->provider, a->index), MenuSearch_Label(b->provider, b->index));
+	return q_strcasecmp(a_label, b_label);
 }
 
 static void MenuSearch_AddResult(const menusearch_provider_t *provider, int index, int score)
@@ -22574,10 +22867,10 @@ static void MenuSearch_Rebuild(void)
 		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_SINGLEPLAYER, 1000);
 		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_MULTIPLAYER, 990);
 		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_OPTIONS, 980);
-		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_SINGLEPLAYER], 3, 970);
+		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_SINGLEPLAYER], SP_LEVELS, 970);
 		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_MODS, 960);
 		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_DEMOS, 950);
-		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_JOIN], 1, 940);
+		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_JOIN], MENUSEARCH_JOIN_BROWSER, 940);
 		MenuSearch_AddResult(&menusearch_providers[MENUSEARCH_PROVIDER_MAIN], MAIN_HELP, 930);
 		return;
 	}
@@ -22642,6 +22935,7 @@ static void MenuSearch_RecordRecent(const menusearch_provider_t *provider, int i
 static void MenuSearch_Activate(void)
 {
 	menusearch_result_t result;
+	enum m_state_e origin;
 	if (menusearch.cursor < 0 || menusearch.cursor >= menusearch.result_count)
 		return;
 	result = menusearch.results[menusearch.cursor];
@@ -22653,19 +22947,25 @@ static void MenuSearch_Activate(void)
 		MenuSearch_Rebuild();
 		return;
 	}
+	/* Open first, and commit to it only if the provider reports success: a
+	 * refused activation must leave the palette up with its query intact
+	 * instead of closing over a menu that never changed. */
+	origin = m_state;
+	if (!result.provider->open_fn(result.index))
+	{
+		q_strlcpy(menusearch.status, "That menu item could not be opened", sizeof(menusearch.status));
+		menusearch.status_until = realtime + 2.0;
+		S_LocalSound("misc/menu1.wav");
+		MenuSearch_Rebuild();
+		return;
+	}
 	MenuSearch_RecordRecent(result.provider, result.index);
 	M_MenuSearch_Close(false, true);
-	/* Activation bypasses the origin menu's normal Back handler. Release the
-	 * same resources those handlers release before changing menu state. */
-	if (m_state == m_slist)
-		CleanupPingThreads();
-	else if (m_state == m_audiobrowser)
-		M_AudioBrowser_Close();
-	else if (m_state == m_video && result.provider != &menusearch_providers[MENUSEARCH_PROVIDER_VIDEO])
-		VID_MenuSearch_LeaveMenu();
-	else if (m_state == m_pakloading)
-		M_MenuSearch_LeavePakLoading();
-	result.provider->open_fn(result.index);
+	/* Activation bypasses the origin menu's Back handler, so release what that
+	 * menu held - but only once the activation has actually left it. A row that
+	 * lands back on the same menu must not tear down the menu still on screen. */
+	if (m_state != origin)
+		M_LeaveMenuState(origin);
 	m_entersound = false;
 	S_LocalSound("misc/menu2.wav");
 }
@@ -23087,9 +23387,39 @@ static void M_MenuSearch_Draw(void)
 	M_PrintScroll(24, 176, 272, footer, 0.0, false);
 }
 
+/*
+Shared descriptor tables are written with designated initializers, so a row
+whose enum entry gained no initializer is zero-filled rather than missing. That
+row would simply never appear - dynamic availability makes the same row vanish
+legitimately, so only a structural check can tell the two apart.
+*/
+static int MenuSearch_ValidateItemTable(const menuitem_t *items, int count, const char *name)
+{
+	int errors = 0, i;
+
+	for (i = 0; i < count; ++i)
+	{
+		if (!items[i].label || !items[i].label[0])
+		{
+			Con_Printf("menu items: %s[%d] has no label\n", name, i);
+			errors++;
+		}
+		if (!items[i].action)
+		{
+			Con_Printf("menu items: %s[%d] has no action\n", name, i);
+			errors++;
+		}
+	}
+	return errors;
+}
+
 static int MenuSearch_Validate(qboolean verbose)
 {
 	int errors = 0, total = 0, p, i;
+
+	errors += MenuSearch_ValidateItemTable(m_main_items, MAIN_ITEMS, "main");
+	errors += MenuSearch_ValidateItemTable(m_singleplayer_items, SP_ITEM_COUNT, "singleplayer");
+	errors += MenuSearch_ValidateItemTable(m_multiplayer_items, MULTIPLAYER_BASE_ITEMS, "multiplayer");
 	for (p = 0; p < (int)Q_COUNTOF(menusearch_providers); ++p)
 		if (menusearch_providers[p].count > 0)
 			total += menusearch_providers[p].count;
@@ -23176,11 +23506,14 @@ static int MenuSearch_Validate(qboolean verbose)
 	return errors;
 }
 
-static void MenuSearch_DebugValidate(void)
+/* Registry drift misroutes activation silently, so the check runs in every
+ * build: it walks ~300 rows and prints nothing unless something is wrong.
+ * Debug builds additionally stop on it. */
+static void MenuSearch_CheckRegistry(void)
 {
-#ifndef NDEBUG
-	SDL_assert(MenuSearch_Validate(false) == 0);
-#endif
+	int errors = MenuSearch_Validate(false);
+	SDL_assert(errors == 0);
+	(void)errors;
 }
 
 static void M_MenuSearch_Validate_f(void)
@@ -26144,10 +26477,17 @@ static void M_ModelViewer_MoveCursor(int delta)
 	M_List_AutoScroll(&modelviewermenu.list);
 }
 
-static void M_ModelViewer_Close(void)
+/* Release only. Kept separate from the Back handler so leaving by any other
+ * route (menu search) can free the same resources without navigating. */
+static void M_ModelViewer_Shutdown(void)
 {
 	VEC_CLEAR(modelviewermenu.items);
 	VEC_CLEAR(modelviewermenu.filtered_indices);
+}
+
+static void M_ModelViewer_Close(void)
+{
+	M_ModelViewer_Shutdown();
 	M_Menu_Extras_f();
 }
 
@@ -41766,6 +42106,9 @@ static void M_Demos_Init(void)
 {
 	qboolean blocked_sound = M_Demos_BlockSoundForIO();
 
+	/* Re-entry (menu search landing on Demos while already here) reinitialises
+	 * without any leave hook running, so flush what the last visit dirtied. */
+	M_Demos_MetadataCache_SaveIfDirty();
 	M_Demos_MetadataCache_Load();
 
 	demosmenu.list.viewsize = MAX_VIS_DEMOS;
@@ -42402,6 +42745,20 @@ static void M_Demos_BeginPathEdit(void)
 	M_Demos_UpdatePathHint();
 }
 
+/*
+==================
+M_Demos_Shutdown
+
+Everything leaving the demos menu owes: flush the metadata cache and drop any
+in-progress path edit. Shared by the Back handler and M_LeaveMenuState.
+==================
+*/
+static void M_Demos_Shutdown(void)
+{
+	M_Demos_MetadataCache_SaveIfDirty();
+	M_Demos_EndPathEdit();
+}
+
 static void M_Demos_EndPathEdit(void)
 {
 	demosmenu.path_editing = false;
@@ -42663,7 +43020,7 @@ void M_Demos_Key(int key)
     case K_BBUTTON:
     case K_MOUSE4: // woods #mousemenu
     case K_MOUSE2:
-        M_Demos_MetadataCache_SaveIfDirty();
+        M_Demos_Shutdown();
         if (demosmenu.prev == m_options)
             M_Menu_Options_f();
         else
@@ -42841,7 +43198,7 @@ static qboolean MQC_Init(void)
 	if (success && qcvm->extfuncs.m_draw)
 	{
 		M_MenuSearch_Close(false, true);
-		MenuSearch_DebugValidate();
+		MenuSearch_CheckRegistry();
 		for (i = 0; i < sizeof(menucommands)/sizeof(menucommands[0]); i++)
 			if (menucommands[i].cmd)
 			{
@@ -42961,7 +43318,7 @@ static void M_MenuRestart_f (void)
 	if (off || !MQC_Init())
 	{
 		MQC_Shutdown();
-		MenuSearch_DebugValidate();
+		MenuSearch_CheckRegistry();
 	}
 }
 
@@ -44208,7 +44565,7 @@ void M_Init (void)
 	Cvar_RegisterVariable (&menu_search_enable);
 	Cvar_RegisterVariable (&menu_search_debug);
 	M_TextField_Init(&menusearch.field, menusearch.query, MENU_SEARCH_QUERY_CHARS, false);
-	MenuSearch_DebugValidate();
+	MenuSearch_CheckRegistry();
 	AudioCatalog_InitCommands();
 
 	if (!MQC_Init())
@@ -46970,32 +47327,36 @@ static qboolean MenuSearch_HasLocalModalState(enum m_state_e state)
 		(state == m_pakloading && pakmenu.dragging);
 }
 
-static void M_MenuSearch_OpenExtrasItem(int index)
+static qboolean M_MenuSearch_OpenExtrasItem(int index)
 {
 	M_Menu_Extras_f();
 	extras_cursor = (enum extras_e)index;
 	extrasmenu.list.cursor = index;
 	M_List_CenterCursor(&extrasmenu.list);
+	return true;
 }
 
-static void M_MenuSearch_OpenSavingItem(int index)
+static qboolean M_MenuSearch_OpenSavingItem(int index)
 {
 	M_Menu_Saving_f();
 	saving_cursor = (enum saving_e)index;
+	return true;
 }
 
-static void M_MenuSearch_OpenStartupItem(int index)
+static qboolean M_MenuSearch_OpenStartupItem(int index)
 {
 	M_Menu_Startup_f();
 	startup_cursor = (enum startup_e)index;
 	startupmenu.custom_editing = false;
+	return true;
 }
 
-static void M_MenuSearch_OpenDemoOptionsItem(int index)
+static qboolean M_MenuSearch_OpenDemoOptionsItem(int index)
 {
 	M_Menu_DemoOptions_f();
 	demooptions_cursor = (enum demooptions_e)index;
 	demooptions_slider_grab = false;
+	return true;
 }
 
 // Helper to add unique pak
@@ -47231,7 +47592,7 @@ static void M_Pak_SaveList(void)
 	Con_SafePrintf(" saved. Restart game to apply changes.\n");
 }
 
-static void M_MenuSearch_LeavePakLoading(void)
+static void M_PakLoading_Shutdown(void)
 {
 	pakmenu.dragging = false;
 	M_Pak_SaveList();

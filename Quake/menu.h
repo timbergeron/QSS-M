@@ -130,7 +130,7 @@ cvar_t *VID_MenuSearch_GetItemCvar(int index);
 const char *VID_MenuSearch_GetItemHintText(int index);
 const char *VID_MenuSearch_GetValueText(int index);
 qboolean VID_MenuSearch_ItemAvailable(int index);
-void VID_MenuSearch_OpenItem(int index);
+qboolean VID_MenuSearch_OpenItem(int index);
 void VID_MenuSearch_LeaveMenu(void);
 
 typedef struct

@@ -3961,8 +3961,10 @@ static void VID_Menu_f (void)
 	VID_Menu_RebuildRateList ();
 }
 
-void VID_MenuSearch_OpenItem(int index)
+qboolean VID_MenuSearch_OpenItem(int index)
 {
+	if (index < 0 || index >= VIDEO_OPTIONS_ITEMS)
+		return false;
 	if (m_state != m_video)
 		VID_Menu_f();
 	else
@@ -3972,7 +3974,8 @@ void VID_MenuSearch_OpenItem(int index)
 		numberOfVideoItems = VIDEO_OPTIONS_ITEMS;
 		M_TextField_ClearSelection(&fps_field);
 	}
-	video_options_cursor = CLAMP(0, index, VIDEO_OPTIONS_ITEMS - 1);
+	video_options_cursor = index;
+	return true;
 }
 
 void VID_MenuSearch_LeaveMenu(void)
