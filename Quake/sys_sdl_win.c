@@ -31,6 +31,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+
 #include <sys/types.h>
 #include <limits.h>
 #include <errno.h>
@@ -98,6 +102,8 @@ struct qss_ITaskbarList3 {
 typedef HRESULT (WINAPI *qss_CoInitializeEx_f)(LPVOID pvReserved, DWORD dwCoInit);
 typedef void (WINAPI *qss_CoUninitialize_f)(void);
 typedef HRESULT (WINAPI *qss_CoCreateInstance_f)(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD dwClsContext, REFIID riid, LPVOID *ppv);
+typedef UINT (WINAPI *qss_GetDpiForWindow_f)(HWND hwnd);
+typedef int (WINAPI *qss_GetSystemMetricsForDpi_f)(int index, UINT dpi);
 
 static const CLSID qss_CLSID_TaskbarList =
 	{0x56fdf344, 0xfd6d, 0x11d0, {0x95, 0x8a, 0x00, 0x60, 0x97, 0xc9, 0xa0, 0x90}};
@@ -2071,94 +2077,232 @@ static HWND Sys_TaskbarWindow(void)
 	return wmInfo.info.win.window;
 }
 
-static HICON Sys_CreateTaskbarNotificationIcon(unsigned int count)
+static UINT Sys_TaskbarWindowDpi(HWND hwnd)
 {
-	const int size = 16;
-	HDC screen_dc = NULL;
-	HDC color_dc = NULL;
-	HDC mask_dc = NULL;
+	HMODULE user32;
+	qss_GetDpiForWindow_f pGetDpiForWindow;
+	HDC dc;
+	UINT dpi = 96;
+
+	user32 = GetModuleHandleW(L"user32.dll");
+	pGetDpiForWindow = user32
+		? (qss_GetDpiForWindow_f)GetProcAddress(user32, "GetDpiForWindow")
+		: NULL;
+	if (pGetDpiForWindow)
+		dpi = pGetDpiForWindow(hwnd);
+	else
+	{
+		dc = GetDC(hwnd);
+		if (dc)
+		{
+			dpi = (UINT)GetDeviceCaps(dc, LOGPIXELSX);
+			ReleaseDC(hwnd, dc);
+		}
+	}
+
+	return dpi ? dpi : 96;
+}
+
+static int Sys_TaskbarOverlaySize(HWND hwnd, UINT requested_dpi)
+{
+	HMODULE user32;
+	qss_GetSystemMetricsForDpi_f pGetSystemMetricsForDpi;
+	UINT dpi;
+	int size;
+
+	dpi = requested_dpi ? requested_dpi : Sys_TaskbarWindowDpi(hwnd);
+	user32 = GetModuleHandleW(L"user32.dll");
+	pGetSystemMetricsForDpi = user32
+		? (qss_GetSystemMetricsForDpi_f)GetProcAddress(user32,
+			"GetSystemMetricsForDpi")
+		: NULL;
+	size = pGetSystemMetricsForDpi
+		? pGetSystemMetricsForDpi(SM_CXSMICON, dpi)
+		: MulDiv(16, (int)dpi, 96);
+
+	/* A shell overlay is nominally 16 logical pixels. Keep malformed DPI or
+	   accessibility settings from turning a notification into a huge bitmap. */
+	if (size < 16)
+		size = 16;
+	else if (size > 64)
+		size = 64;
+	return size;
+}
+
+static HBITMAP Sys_CreateTaskbarDIB(int width, int height, void **pixels)
+{
+	BITMAPINFO bitmap_info;
+
+	memset(&bitmap_info, 0, sizeof(bitmap_info));
+	bitmap_info.bmiHeader.biSize = sizeof(bitmap_info.bmiHeader);
+	bitmap_info.bmiHeader.biWidth = width;
+	bitmap_info.bmiHeader.biHeight = -height; /* top-down, like the text layout */
+	bitmap_info.bmiHeader.biPlanes = 1;
+	bitmap_info.bmiHeader.biBitCount = 32;
+	bitmap_info.bmiHeader.biCompression = BI_RGB;
+
+	return CreateDIBSection(NULL, &bitmap_info, DIB_RGB_COLORS, pixels, NULL, 0);
+}
+
+static HICON Sys_CreateTaskbarNotificationIcon(HWND hwnd, unsigned int count,
+	UINT requested_dpi)
+{
+	enum { supersample = 4 };
+	const int size = Sys_TaskbarOverlaySize(hwnd, requested_dpi);
+	const int work_size = size * supersample;
+	HDC work_dc = NULL;
+	HBITMAP work_bitmap = NULL;
 	HBITMAP color_bitmap = NULL;
 	HBITMAP mask_bitmap = NULL;
-	HGDIOBJ old_color_bitmap = NULL;
-	HGDIOBJ old_mask_bitmap = NULL;
-	HGDIOBJ old_brush;
-	HGDIOBJ old_pen;
+	HGDIOBJ old_work_bitmap = NULL;
 	HGDIOBJ old_font = NULL;
-	HBRUSH badge_brush = NULL;
 	HFONT font = NULL;
 	HICON icon = NULL;
 	ICONINFO info;
 	RECT text_rect;
 	WCHAR label[16];
+	DWORD *work_pixels = NULL;
+	DWORD *color_pixels = NULL;
+	BYTE mask_bits[512];
 	int font_height;
+	int radius;
+	int inner_radius;
+	int x, y, sx, sy;
 
-	screen_dc = GetDC(NULL);
-	if (!screen_dc)
+	work_dc = CreateCompatibleDC(NULL);
+	work_bitmap = Sys_CreateTaskbarDIB(work_size, work_size,
+		(void **)&work_pixels);
+	color_bitmap = Sys_CreateTaskbarDIB(size, size, (void **)&color_pixels);
+	memset(mask_bits, 0, sizeof(mask_bits));
+	mask_bitmap = CreateBitmap(size, size, 1, 1, mask_bits);
+	if (!work_dc || !work_bitmap || !color_bitmap || !mask_bitmap ||
+		!work_pixels || !color_pixels)
 		goto cleanup;
 
-	color_dc = CreateCompatibleDC(screen_dc);
-	mask_dc = CreateCompatibleDC(screen_dc);
-	color_bitmap = CreateCompatibleBitmap(screen_dc, size, size);
-	mask_bitmap = CreateBitmap(size, size, 1, 1, NULL);
-	if (!color_dc || !mask_dc || !color_bitmap || !mask_bitmap)
+	old_work_bitmap = SelectObject(work_dc, work_bitmap);
+	if (!old_work_bitmap)
 		goto cleanup;
 
-	old_color_bitmap = SelectObject(color_dc, color_bitmap);
-	old_mask_bitmap = SelectObject(mask_dc, mask_bitmap);
-	if (!old_color_bitmap || !old_mask_bitmap)
-		goto cleanup;
+	/* Render four times larger and downsample. This keeps the circle, alpha
+	   edge, and glyphs clean even at fractional taskbar scales. The subtle
+	   top-to-bottom red shading gives the badge shape without visual noise. */
+	radius = (work_size - supersample) / 2;
+	inner_radius = radius - supersample;
+	for (y = 0; y < work_size; y++)
+	{
+		const int dy = y * 2 + 1 - work_size;
+		for (x = 0; x < work_size; x++)
+		{
+			const int dx = x * 2 + 1 - work_size;
+			const int distance_squared = dx * dx + dy * dy;
+			const int radius_squared = (radius * 2) * (radius * 2);
+			const int inner_squared = (inner_radius * 2) * (inner_radius * 2);
+			BYTE red, green, blue;
 
-	/* The monochrome mask is white (transparent) outside the red badge and
-	   black (opaque) inside it. This also works on pre-alpha taskbars. */
-	PatBlt(color_dc, 0, 0, size, size, BLACKNESS);
-	PatBlt(mask_dc, 0, 0, size, size, WHITENESS);
+			if (distance_squared > radius_squared)
+			{
+				work_pixels[y * work_size + x] = 0;
+				continue;
+			}
 
-	badge_brush = CreateSolidBrush(RGB(205, 35, 50));
-	if (!badge_brush)
-		goto cleanup;
-
-	old_brush = SelectObject(color_dc, badge_brush);
-	old_pen = SelectObject(color_dc, GetStockObject(NULL_PEN));
-	Ellipse(color_dc, 0, 0, size, size);
-	SelectObject(color_dc, old_pen);
-	SelectObject(color_dc, old_brush);
-
-	old_brush = SelectObject(mask_dc, GetStockObject(BLACK_BRUSH));
-	old_pen = SelectObject(mask_dc, GetStockObject(NULL_PEN));
-	Ellipse(mask_dc, 0, 0, size, size);
-	SelectObject(mask_dc, old_pen);
-	SelectObject(mask_dc, old_brush);
+			if (distance_squared > inner_squared)
+			{
+				red = 174;
+				green = 22;
+				blue = 38;
+			}
+			else
+			{
+				red = (BYTE)(224 - (38 * y) / work_size);
+				green = (BYTE)(48 - (20 * y) / work_size);
+				blue = (BYTE)(62 - (14 * y) / work_size);
+			}
+			work_pixels[y * work_size + x] =
+				0xff000000u | ((DWORD)red << 16) |
+				((DWORD)green << 8) | blue;
+		}
+	}
 
 	if (count > 99)
 	{
 		lstrcpyW(label, L"99+");
-		font_height = -7;
+		font_height = -(work_size * 43) / 100;
 	}
 	else
 	{
 		wsprintfW(label, L"%u", count);
-		font_height = count > 9 ? -9 : -12;
+		font_height = count > 9
+			? -(work_size * 57) / 100
+			: -(work_size * 73) / 100;
 	}
 
-	font = CreateFontW(font_height, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+	font = CreateFontW(font_height, 0, 0, 0, 600, FALSE, FALSE, FALSE,
 		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-		ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-	old_font = SelectObject(color_dc,
+		ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Semibold");
+	old_font = SelectObject(work_dc,
 		font ? (HGDIOBJ)font : GetStockObject(DEFAULT_GUI_FONT));
-	SetBkMode(color_dc, TRANSPARENT);
-	SetTextColor(color_dc, RGB(255, 255, 255));
-	SetRect(&text_rect, 0, 0, size, size);
-	DrawTextW(color_dc, label, -1, &text_rect,
+	SetBkMode(work_dc, TRANSPARENT);
+	SetTextColor(work_dc, RGB(255, 255, 255));
+	SetRect(&text_rect, 0, 0, work_size, work_size);
+	DrawTextW(work_dc, label, -1, &text_rect,
 		DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 	if (old_font)
-		SelectObject(color_dc, old_font);
+	{
+		SelectObject(work_dc, old_font);
+		old_font = NULL;
+	}
 
-	/* CreateIconIndirect requires that neither bitmap still be selected into
-	   a DC, so put the originals back before handing them over. */
-	SelectObject(color_dc, old_color_bitmap);
-	SelectObject(mask_dc, old_mask_bitmap);
-	old_color_bitmap = NULL;
-	old_mask_bitmap = NULL;
+	/* GDI text drawing does not reliably preserve the unused alpha byte.
+	   Restore circle alpha, then box-filter into the actual DPI-sized icon. */
+	for (y = 0; y < work_size; y++)
+	{
+		const int dy = y * 2 + 1 - work_size;
+		for (x = 0; x < work_size; x++)
+		{
+			const int dx = x * 2 + 1 - work_size;
+			DWORD *pixel = &work_pixels[y * work_size + x];
+			if (dx * dx + dy * dy <= (radius * 2) * (radius * 2))
+				*pixel |= 0xff000000u;
+			else
+				*pixel = 0;
+		}
+	}
+
+	for (y = 0; y < size; y++)
+	{
+		for (x = 0; x < size; x++)
+		{
+			unsigned int alpha = 0, red = 0, green = 0, blue = 0;
+
+			for (sy = 0; sy < supersample; sy++)
+			{
+				for (sx = 0; sx < supersample; sx++)
+				{
+					DWORD pixel = work_pixels[
+						(y * supersample + sy) * work_size +
+						x * supersample + sx];
+					unsigned int sample_alpha = pixel >> 24;
+					alpha += sample_alpha;
+					red += ((pixel >> 16) & 255) * sample_alpha;
+					green += ((pixel >> 8) & 255) * sample_alpha;
+					blue += (pixel & 255) * sample_alpha;
+				}
+			}
+
+			if (alpha)
+			{
+				const unsigned int samples = supersample * supersample;
+				const unsigned int divisor = samples * 255;
+				color_pixels[y * size + x] =
+					((DWORD)(alpha / samples) << 24) |
+					((DWORD)(red / divisor) << 16) |
+					((DWORD)(green / divisor) << 8) |
+					(DWORD)(blue / divisor);
+			}
+			else
+				color_pixels[y * size + x] = 0;
+		}
+	}
 
 	memset(&info, 0, sizeof(info));
 	info.fIcon = TRUE;
@@ -2167,29 +2311,25 @@ static HICON Sys_CreateTaskbarNotificationIcon(unsigned int count)
 	icon = CreateIconIndirect(&info);
 
 cleanup:
-	if (color_dc && old_color_bitmap)
-		SelectObject(color_dc, old_color_bitmap);
-	if (mask_dc && old_mask_bitmap)
-		SelectObject(mask_dc, old_mask_bitmap);
+	if (work_dc && old_font)
+		SelectObject(work_dc, old_font);
+	if (work_dc && old_work_bitmap)
+		SelectObject(work_dc, old_work_bitmap);
 	if (font)
 		DeleteObject(font);
-	if (badge_brush)
-		DeleteObject(badge_brush);
+	if (work_bitmap)
+		DeleteObject(work_bitmap);
 	if (color_bitmap)
 		DeleteObject(color_bitmap);
 	if (mask_bitmap)
 		DeleteObject(mask_bitmap);
-	if (color_dc)
-		DeleteDC(color_dc);
-	if (mask_dc)
-		DeleteDC(mask_dc);
-	if (screen_dc)
-		ReleaseDC(NULL, screen_dc);
+	if (work_dc)
+		DeleteDC(work_dc);
 
 	return icon;
 }
 
-static void Sys_ApplyTaskbarNotificationBadge(HWND hwnd)
+static void Sys_ApplyTaskbarNotificationBadge(HWND hwnd, UINT requested_dpi)
 {
 	HICON icon;
 	WCHAR description[64];
@@ -2198,7 +2338,8 @@ static void Sys_ApplyTaskbarNotificationBadge(HWND hwnd)
 	if (!taskbar_list || !hwnd || !taskbar_notification_count)
 		return;
 
-	icon = Sys_CreateTaskbarNotificationIcon(taskbar_notification_count);
+	icon = Sys_CreateTaskbarNotificationIcon(hwnd, taskbar_notification_count,
+		requested_dpi);
 	if (!icon)
 		return;
 
@@ -2232,19 +2373,25 @@ static void SDLCALL Sys_TaskbarMessageHook(void *userdata, void *window,
 	unsigned int message, Uint64 wparam, Sint64 lparam)
 {
 	(void)userdata;
-	(void)wparam;
 	(void)lparam;
 
-	if (message != taskbar_button_created_message)
-		return;
-
-	/* Explorer discards overlays and progress when it restarts.
-	   TaskbarButtonCreated means this window's replacement taskbar button is
-	   ready for the saved count and progress state to be reapplied. */
-	taskbar_notification_hwnd = NULL;
-	taskbar_progress_hwnd = NULL;
-	Sys_ApplyTaskbarNotificationBadge((HWND)window);
-	Sys_ApplyTaskbarProgress((HWND)window);
+	if (message == taskbar_button_created_message)
+	{
+		/* Explorer discards overlays and progress when it restarts.
+		   TaskbarButtonCreated means this window's replacement taskbar button
+		   is ready for the saved count and progress state to be reapplied. */
+		taskbar_notification_hwnd = NULL;
+		taskbar_progress_hwnd = NULL;
+		Sys_ApplyTaskbarNotificationBadge((HWND)window, 0);
+		Sys_ApplyTaskbarProgress((HWND)window);
+	}
+	else if (message == WM_DPICHANGED && taskbar_notification_count)
+	{
+		/* Moving between differently scaled monitors changes the ideal HICON
+		   dimensions. Re-render instead of asking Windows to stretch it. */
+		taskbar_notification_hwnd = NULL;
+		Sys_ApplyTaskbarNotificationBadge((HWND)window, LOWORD(wparam));
+	}
 }
 
 static qboolean Sys_InitTaskbarShell(void)
@@ -2424,7 +2571,7 @@ void Sys_IncrementDockNotificationBadge (void)
 	if (!hwnd)
 		return;
 
-	Sys_ApplyTaskbarNotificationBadge(hwnd);
+	Sys_ApplyTaskbarNotificationBadge(hwnd, 0);
 #endif
 }
 
