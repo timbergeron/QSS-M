@@ -1038,6 +1038,12 @@ void S_StopSound (int entnum, int entchannel)
 {
 	int	i;
 
+	// svc_stopsound reaches us straight off the wire, and snd_channels is
+	// only allocated once sound is running -- with -nosound, or when the
+	// audio device fails to open, this would dereference NULL
+	if (!sound_started || !snd_channels)
+		return;
+
 	for (i = NUM_AMBIENTS; i < NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS; i++) // woods
 	{
 		if (snd_channels[i].entnum == entnum
@@ -1134,6 +1140,9 @@ void S_StaticSound (sfx_t *sfx, vec3_t origin, float vol, float attenuation)
 {
 	channel_t	*ss;
 	sfxcache_t		*sc;
+
+	if (!sound_started)	// likewise driven by svc_spawnstaticsound
+		return;
 
 	if (!sfx)
 		return;
