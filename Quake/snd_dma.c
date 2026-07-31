@@ -593,6 +593,14 @@ void S_Restart_f(void)
 		return;
 	}
 
+	// if audio failed to open at startup, S_Init returned before S_StopAllSounds
+	// ever allocated the channel array.  sound_started is true again now, so the
+	// next S_StartSound would reach SND_PickChannel, which walks a fixed channel
+	// range and would dereference NULL.  (total_channels is still 0 here, so the
+	// reset loop below quietly does nothing and hides it.)
+	if (!snd_channels)
+		S_StopAllSounds (true, false);
+
 	paintedtime = soundtime;
 	//we changed the sound time and probably the rates too...
 	//any timing of sounds will be way off. so lets just kill any currently playing sounds
