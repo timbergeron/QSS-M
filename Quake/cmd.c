@@ -919,10 +919,20 @@ scans through each command and cvar names+descriptions for the given substring
 we don't support descriptions, so this isn't really all that useful, but even without the sake of consistency it still combines cvars+commands under a single command.
 ============
 */
-static void Cmd_ListAllContaining(const char* substr)
+// woods -- maxshow==0 means print everything (an explicit "apropos").
+// The unknown-command suggestion list is reached from the command buffer, which
+// is also where a server's stufftext ends up once it fails the src_server pass,
+// so a one-character unknown command can make a client print hundreds of lines
+// to the console, system console and logfile.  (Printing goes through
+// Con_SafePrintf, so it does not force screen updates.)  Show enough to be
+// useful, summarise the rest, and keep the total count honest.
+#define CMD_MAX_SUGGESTIONS	20
+
+static void Cmd_ListAllContaining(const char* substr, int maxshow)
 {
 	char tmpbuf[256];
 	int hits = 0;
+	int shown = 0;
 	cmd_function_t* cmd;
 	cvar_t* var;
 	const char* plural;
@@ -934,7 +944,8 @@ static void Cmd_ListAllContaining(const char* substr)
 		if (cmd->srctype != src_server && q_strcasestr(cmd->name, substr) && !Cmd_IsReservedName(cmd->name))
 		{
 			hits++;
-			Con_SafePrintf("   %s\n", COM_TintSubstring(cmd->name, substr, tmpbuf, sizeof(tmpbuf)));
+			if (!maxshow || shown++ < maxshow)
+				Con_SafePrintf("   %s\n", COM_TintSubstring(cmd->name, substr, tmpbuf, sizeof(tmpbuf)));
 		}
 	}
 
@@ -943,9 +954,13 @@ static void Cmd_ListAllContaining(const char* substr)
 		if (q_strcasestr(var->name, substr))
 		{
 			hits++;
-			Con_SafePrintf ("   %s (current value: \"%s\")\n", COM_TintSubstring(var->name, substr, tmpbuf, sizeof(tmpbuf)), var->string);
+			if (!maxshow || shown++ < maxshow)
+				Con_SafePrintf ("   %s (current value: \"%s\")\n", COM_TintSubstring(var->name, substr, tmpbuf, sizeof(tmpbuf)), var->string);
 		}
 	}
+
+	if (maxshow && hits > maxshow)
+		Con_SafePrintf ("   ...and %d more\n", hits - maxshow);
 
 	plural = (hits == 1) ? "" : "s";
 	plural2 = (hits == 1) ? "" : "es"; // woods #addaliases
@@ -968,7 +983,7 @@ void Cmd_Apropos_f(void)
 		Con_SafePrintf("%s <substring> : search through commands and cvars for the given substring\n", Cmd_Argv(0));
 		return;
 	}
-	Cmd_ListAllContaining(substr);
+	Cmd_ListAllContaining(substr, 0);	// explicit request -- no cap
 }
 
 /*
@@ -1701,7 +1716,7 @@ qboolean	Cmd_ExecuteString (const char *text, cmd_source_t src)
 			if (in_cfg_exec) // woods - Skip apropos text for unknown commands executed from config (ironwail)
 				Con_Printf("Unknown command \"%s\"\n", Cmd_Argv(0));
 			else
-				Cmd_ListAllContaining(Cmd_Argv(0));
+				Cmd_ListAllContaining(Cmd_Argv(0), CMD_MAX_SUGGESTIONS);
 		}
 
 	return true;
