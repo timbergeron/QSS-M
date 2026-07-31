@@ -2700,6 +2700,11 @@ static void CL_ParseStaticSound (int version) //johnfitz -- added argument
 	vol = MSG_ReadByte ();
 	atten = MSG_ReadByte ();
 
+	// version 2 reads a signed short straight off the wire; bound it the same
+	// way CL_ParseStartSoundPacket does before indexing the precache table
+	if (sound_num < 0 || sound_num >= MAX_SOUNDS)
+		Host_Error ("CL_ParseStaticSound: sound %i out of range (max %i)", sound_num, MAX_SOUNDS);
+
 	S_StaticSound (cl.sound_precache[sound_num], org, vol, atten);
 }
 
