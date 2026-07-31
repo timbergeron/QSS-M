@@ -2063,6 +2063,15 @@ qboolean COM_DownloadNameOkay(const char *filename)
 	//windows paths are NOT permitted, nor are alternative data streams, nor wildcards, and double quotes are always bad(which allows for spaces)
 	if (strchr(filename, '\\') || strchr(filename, ':') || strchr(filename, '*') || strchr(filename, '?') || strchr(filename, '\"'))
 		return false;
+	//this name comes off the wire and ends up in a filesystem path, so keep it
+	//to printable ascii -- control bytes and high-bit junk are not valid in the
+	//filesystem's encoding, and mkdir failing on them is fatal (Sys_mkdir)
+	{
+		const char *c;
+		for (c = filename; *c; c++)
+			if ((unsigned char)*c < 0x20 || (unsigned char)*c > 0x7e)
+				return false;
+	}
 	//some operating systems interpret this as 'parent directory'
 	if (strstr(filename, "//"))
 		return false;
@@ -2134,6 +2143,13 @@ qboolean COM_DownloadPackageNameOkay(const char *filename)
 
 	if (*filename == '.' || strstr(filename, "/."))
 		return false;
+
+	{	// printable ascii only -- see COM_DownloadNameOkay
+		const char *c;
+		for (c = filename; *c; c++)
+			if ((unsigned char)*c < 0x20 || (unsigned char)*c > 0x7e)
+				return false;
+	}
 
 	slash = strchr(filename, '/');
 	if (slash)
