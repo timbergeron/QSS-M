@@ -2416,6 +2416,7 @@ static void CL_WriteRecordedDemoMarker(void)
 static int CL_GetDemoMessage (void)
 {
 	int	r, i;
+	int	msglen;
 	float	f;
 
 	if (!cls.demospeed || demo_rewind.backstop) // woods (iw) #democontrols
@@ -2453,7 +2454,10 @@ static int CL_GetDemoMessage (void)
 
 	cls.demo_offset_current = ftell(cls.demofile); // woods #demopercent (Baker Fitzquake Mark V)
 
-	if (fread (&net_message.cursize, 4, 1, cls.demofile) != 1) // woods
+	// read the length into a local and validate it before it ever reaches
+	// net_message.cursize, so a corrupt demo cannot leave a bogus size on the
+	// global buffer for anything else to act on
+	if (fread (&msglen, 4, 1, cls.demofile) != 1) // woods
 	{
 		CL_StopPlayback();
 		return 0;
@@ -2469,15 +2473,28 @@ static int CL_GetDemoMessage (void)
 		cl.mviewangles[0][i] = LittleFloat (f);
 	}
 
-	net_message.cursize = LittleLong (net_message.cursize);
-	if (net_message.cursize > MAX_MSGLEN)
-		Sys_Error ("Demo message > MAX_MSGLEN");
-	r = fread (net_message.data, net_message.cursize, 1, cls.demofile);
-	if (r != 1)
+	// cursize is signed: a negative length used to slip past the upper-bound-only
+	// check and then convert to a huge size_t in fread, overrunning
+	// net_message.data with the rest of the file.  A bad length just means a bad
+	// demo -- stop playing it rather than killing the whole engine.
+	msglen = LittleLong (msglen);
+	if (msglen <= 0 || msglen > MAX_MSGLEN)
 	{
+		Con_Printf ("Corrupt demo: message length %i out of range\n", msglen);
+		net_message.cursize = 0;
 		CL_StopPlayback ();
 		return 0;
 	}
+	// only publish the size once the payload is actually in the buffer, so a
+	// short read never leaves cursize describing bytes we did not get
+	r = fread (net_message.data, msglen, 1, cls.demofile);
+	if (r != 1)
+	{
+		net_message.cursize = 0;
+		CL_StopPlayback ();
+		return 0;
+	}
+	net_message.cursize = msglen;
 
 	if (cls.signon == SIGNONS && !initialized) // woods (iw) #democontrols
 	{
