@@ -40,6 +40,7 @@
 
 
 static snd_codec_t *codecs;
+static qboolean codecs_initialized;
 
 /*
 =================
@@ -62,7 +63,9 @@ S_CodecInit
 void S_CodecInit (void)
 {
 	snd_codec_t *codec;
-	codecs = NULL;
+
+	if (codecs_initialized)
+		return;
 
 	/* Register in the inverse order
 	 * of codec choice preference: */
@@ -100,6 +103,8 @@ void S_CodecInit (void)
 		codec->initialize();
 		codec = codec->next;
 	}
+
+	codecs_initialized = true;
 }
 
 /*
@@ -110,12 +115,22 @@ S_CodecShutdown
 void S_CodecShutdown (void)
 {
 	snd_codec_t *codec = codecs;
+
+	if (!codecs_initialized)
+		return;
+
 	while (codec)
 	{
 		codec->shutdown();
 		codec = codec->next;
 	}
 	codecs = NULL;
+	codecs_initialized = false;
+}
+
+qboolean S_CodecIsInitialized (void)
+{
+	return codecs_initialized;
 }
 
 /*

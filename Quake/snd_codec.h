@@ -62,6 +62,7 @@ typedef struct snd_stream_s
 
 void S_CodecInit (void);
 void S_CodecShutdown (void);
+qboolean S_CodecIsInitialized (void);
 
 /* Callers of the following S_CodecOpenStream* functions
  * are reponsible for attaching any path to the filename */

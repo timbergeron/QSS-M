@@ -394,28 +394,17 @@ static void BGM_Jump_f (void)
 	}
 }
 
-qboolean BGM_Init (void)
+void BGM_RefreshCodecHandlers (void)
 {
 	music_handler_t *handlers = NULL;
 	int i;
 
-	Cvar_RegisterVariable(&bgm_extmusic);
-	Cmd_AddCommand("music", BGM_Play_f);
-	Cmd_AddCommand("music_pause", BGM_Pause_f);
-	Cmd_AddCommand("music_resume", BGM_Resume_f);
-	Cmd_AddCommand("music_loop", BGM_Loop_f);
-	Cmd_AddCommand("music_stop", BGM_Stop_f);
-	Cmd_AddCommand("music_preview", BGM_Preview_f);
-	Cmd_AddCommand("music_jump", BGM_Jump_f);
-
-	if (COM_CheckParm("-noextmusic") != 0)
-		no_extmusic = true;
-
-	bgmloop = true;
-	bgmpreview.gain = 1.0f;
+	music_handlers = NULL;
 
 	for (i = 0; wanted_handlers[i].type != CODECTYPE_NONE; i++)
 	{
+		wanted_handlers[i].next = NULL;
+
 		switch (wanted_handlers[i].player)
 		{
 		case BGM_MIDIDRV:
@@ -443,6 +432,26 @@ qboolean BGM_Init (void)
 			}
 		}
 	}
+}
+
+qboolean BGM_Init (void)
+{
+	Cvar_RegisterVariable(&bgm_extmusic);
+	Cmd_AddCommand("music", BGM_Play_f);
+	Cmd_AddCommand("music_pause", BGM_Pause_f);
+	Cmd_AddCommand("music_resume", BGM_Resume_f);
+	Cmd_AddCommand("music_loop", BGM_Loop_f);
+	Cmd_AddCommand("music_stop", BGM_Stop_f);
+	Cmd_AddCommand("music_preview", BGM_Preview_f);
+	Cmd_AddCommand("music_jump", BGM_Jump_f);
+
+	if (COM_CheckParm("-noextmusic") != 0)
+		no_extmusic = true;
+
+	bgmloop = true;
+	bgmpreview.gain = 1.0f;
+
+	BGM_RefreshCodecHandlers ();
 
 	return true;
 }

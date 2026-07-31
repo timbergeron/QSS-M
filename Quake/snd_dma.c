@@ -45,6 +45,7 @@ static void S_PlayVol (void);
 static void S_SoundList (void);
 static void S_Update_ (void);
 static void GetSoundtime (void);
+static void S_CompleteStartup (void);
 void S_StopAllSounds (qboolean clear, qboolean keep_statics);
 static void S_StopAllSoundsC (void);
 void Sound_Toggle_Mute_f (void); // woods
@@ -593,13 +594,11 @@ void S_Restart_f(void)
 		return;
 	}
 
-	// if audio failed to open at startup, S_Init returned before S_StopAllSounds
-	// ever allocated the channel array.  sound_started is true again now, so the
-	// next S_StartSound would reach SND_PickChannel, which walks a fixed channel
-	// range and would dereference NULL.  (total_channels is still 0 here, so the
-	// reset loop below quietly does nothing and hides it.)
-	if (!snd_channels)
-		S_StopAllSounds (true, false);
+	if (!snd_channels || !S_CodecIsInitialized ())
+	{
+		S_CompleteStartup ();
+		BGM_RefreshCodecHandlers ();
+	}
 
 	paintedtime = soundtime;
 	//we changed the sound time and probably the rates too...
@@ -641,6 +640,18 @@ static void S_PrecacheAmbientSounds (void)
 
 	ambient_sfx[AMBIENT_WATER] = S_PrecacheSound ("ambience/water1.wav");
 	ambient_sfx[AMBIENT_SKY] = S_PrecacheSound ("ambience/wind2.wav");
+}
+
+static void S_CompleteStartup (void)
+{
+	if (!sound_started || !shm)
+		return;
+
+	if (!snd_channels)
+		S_StopAllSounds (true, false);
+
+	S_CodecInit ();
+	S_PrecacheAmbientSounds ();
 }
 
 /*
@@ -730,11 +741,7 @@ void S_Init (void)
 //	if (shm->buffer)
 //		shm->buffer[4] = shm->buffer[5] = 0x7f;	// force a pop for debugging
 
-	S_PrecacheAmbientSounds ();
-
-	S_CodecInit ();
-
-	S_StopAllSounds (true, false);
+	S_CompleteStartup ();
 }
 
 
@@ -743,16 +750,20 @@ void S_Init (void)
 // =======================================================================
 void S_Shutdown (void)
 {
-	if (!sound_started)
+	qboolean shutdown_backend;
+
+	if (!sound_started && !S_CodecIsInitialized ())
 		return;
 	S_SoundPreview_Release();
 
+	shutdown_backend = sound_started;
 	sound_started = 0;
 	snd_blocked = 0;
 
 	S_CodecShutdown();
 
-	SNDDMA_Shutdown();
+	if (shutdown_backend)
+		SNDDMA_Shutdown();
 	shm = NULL;
 }
 
