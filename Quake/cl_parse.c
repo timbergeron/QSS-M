@@ -1424,6 +1424,15 @@ static void CL_ParseServerInfo (void)
 	CL_ClearState ();
 	cl.protocol_dpdownload = i;
 
+	// woods -- a serverinfo always begins a fresh signon sequence, but
+	// CL_ClearState leaves cls.signon alone.  Two level loads close enough
+	// together (e.g. "restart" twice a frame apart) both complete server-side
+	// before the client parses either signon message, so the stale counter made
+	// the second svc_signonnum 1 look like a replay:
+	//   Host_Error ("Received signon 1 when at 1")
+	// and dropped the player from their own listen server.
+	cls.signon = 0;
+
 	if (sv.loadgame)
 		V_StopPitchDrift ();
 
