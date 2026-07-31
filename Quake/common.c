@@ -1521,6 +1521,15 @@ float MSG_ReadFloat (void)
 		int	l;
 	} dat;
 
+	// unlike the byte/short/long readers this indexes net_message.data
+	// directly, so without this guard a truncated float (e.g. a short temp
+	// entity coordinate) reads past cursize and never trips msg_badread
+	if (msg_readcount + 4 > net_message.cursize)
+	{
+		msg_badread = true;
+		return -1;
+	}
+
 	dat.b[0] = net_message.data[msg_readcount];
 	dat.b[1] = net_message.data[msg_readcount+1];
 	dat.b[2] = net_message.data[msg_readcount+2];
@@ -1538,6 +1547,12 @@ float MSG_ReadDouble (void)
 		double	f;
 		uint64_t	l;
 	} dat;
+
+	if (msg_readcount + 8 > net_message.cursize)	// see MSG_ReadFloat
+	{
+		msg_badread = true;
+		return -1;
+	}
 
 	dat.l = ((uint64_t)net_message.data[msg_readcount  ]<<0 )	|
 			((uint64_t)net_message.data[msg_readcount+1]<<8 )	|
