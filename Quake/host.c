@@ -1936,14 +1936,22 @@ Host_UpdateDockBadge - woods
 Reflect download and port-ping-probe activity in the platform shell UI: a
 Chrome-style ring on the macOS Dock icon, or the native Windows taskbar
 progress strip. Downloads take priority if both are active. Clears once the
-activity finishes. No-op on platforms without support.
+activity finishes. Activity is ignored until it has been running for
+HOST_DOCKBADGE_DELAY seconds, so quick downloads and probes never flash the
+badge up at all. No-op on platforms without support.
 ==================
 */
+#define HOST_DOCKBADGE_DELAY	2.0	// seconds of activity before the badge appears
+#define HOST_DOCKBADGE_GAP		0.5	// idle gap tolerated before a run counts as finished
+
 static void Host_UpdateDockBadge(void)
 {
 	extern qboolean curl_download_active;	// cl_main.c #webdl
 	static int last = -1;	// last percent sent (-1 = hidden / not downloading)
 	static qboolean last_port_probe = false;
+	static double run_start = 0.0;	// when the current run of activity began
+	static double run_seen = 0.0;	// last time that run was seen active
+	double now = Sys_DoubleTime ();
 	qboolean port_probe = false;
 	int pct;
 
@@ -1962,6 +1970,23 @@ static void Host_UpdateDockBadge(void)
 
 	if (pct > 100)
 		pct = 100;
+
+	if (pct >= 0)
+	{
+		/* the run spans whatever is busy, download or probe, so handing off
+		   between them only swaps the glyph instead of hiding the badge.
+		   consecutive files clear the active flag between them, so a short idle
+		   gap counts as the same run rather than restarting the delay. */
+		if (now - run_seen > HOST_DOCKBADGE_GAP)
+			run_start = now;
+		run_seen = now;
+
+		if (now - run_start < HOST_DOCKBADGE_DELAY)
+		{	// too brief to be worth showing yet - stay hidden
+			pct = -1;
+			port_probe = false;
+		}
+	}
 
 	if (pct != last || port_probe != last_port_probe)	// only touch the dock tile when the display changes
 	{
