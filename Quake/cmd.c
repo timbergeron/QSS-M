@@ -1614,12 +1614,14 @@ qboolean	Cmd_ExecuteString (const char *text, cmd_source_t src)
 	if (!Cmd_Argc())
 		return true;		// no tokens
 
-	if (Cmd_IsQuitMistype(Cmd_Argv(0))) // // woods -- #smartquit -- check for mistyped "quit" command
-	{
-		if (SCR_ModalMessage(va("you typed: ^m%s^m\n\n do you want to quit? (^my^m/^mn^m)\n", Cmd_Argv(0)), 0.0f))
-			Host_Quit_f();
-		return true;
-	}
+	// woods -- #smartquit -- the mistyped-"quit" prompt used to live here, but
+	// Cmd_ExecuteString cannot tell a human apart from a config, an alias body
+	// or a server stufftext: aliases are re-inserted into the buffer and
+	// unrecognised stufftext is re-queued, so both arrive as src_command.  A
+	// server could raise an untimed modal on a client, and on a dedicated
+	// server SCR_ModalMessage auto-answers "yes" so any "qu" typo shut it down.
+	// The prompt now happens where the provenance is known: Key_Console, at the
+	// point a line is submitted from the interactive console.
 
 // check functions
 	for (cmd=cmd_functions ; cmd ; cmd=cmd->next)

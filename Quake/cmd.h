@@ -119,6 +119,8 @@ const char *Cmd_GetAliasValue (const char *aliasname);
 qboolean Cmd_Exists (const char *cmd_name);
 // used by the cvar code to check for cvar / command name overlap
 
+qboolean Cmd_IsQuitMistype (const char *input); // woods -- #smartquit -- called from Key_Console
+
 cmd_function_t* Cmd_FindCommand (const char* cmd_name); // woods #iwtabcomplete
 
 const char	*Cmd_CompleteCommand (const char *partial);

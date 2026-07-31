@@ -854,12 +854,41 @@ Interactive line editing and console scrollback
 extern	char *con_text, key_tabpartial[MAXCMDLINE];
 extern	int con_current, con_linewidth, con_vislines;
 
+/*
+====================
+Key_ConsoleQuitMistype -- woods #smartquit
+
+If the line a user just typed looks like a fumbled "quit", ask before acting on
+it.  Returns true when the line has been handled and must not be executed.
+====================
+*/
+static qboolean Key_ConsoleQuitMistype (const char *line)
+{
+	char	word[64];
+	size_t	n;
+
+	while (*line == ' ' || *line == '\t')
+		line++;
+	for (n = 0; n < sizeof(word) - 1 && line[n] && line[n] != ' ' && line[n] != '\t'
+		    && line[n] != ';' && line[n] != '\n'; n++)
+		word[n] = line[n];
+	word[n] = '\0';
+
+	if (!n || !Cmd_IsQuitMistype (word))
+		return false;
+
+	if (SCR_ModalMessage (va("you typed: ^m%s^m\n\n do you want to quit? (^my^m/^mn^m)\n", word), 0.0f))
+		Host_Quit_f ();
+	return true;
+}
+
 void Key_Console (int key)
 {
 	static	char current[MAXCMDLINE] = "";
 	int	history_line_last;
 	size_t		len;
 	char *workline = key_lines[edit_line];
+	qboolean	chatprefixed = false;
 
 	switch (key)
 	{
@@ -868,11 +897,18 @@ void Key_Console (int key)
 		{
 				Cbuf_AddText("say ");
 				key_tabhint[0] = '\0';
+				chatprefixed = true;
 		}
 		// K_ABUTTON shares enter behavior, but skips the chat shortcut branch above.
 	case K_ABUTTON:
 	case K_KP_ENTER:
 		key_tabpartial[0] = 0;
+		// woods -- #smartquit -- a human typed this line, so it is the one place
+		// a mistyped "quit" may raise the confirmation prompt.  Doing it deeper,
+		// in Cmd_ExecuteString, cannot tell us apart from an alias body or a
+		// server stufftext, both of which reach the buffer as src_command.
+		if (!chatprefixed && Key_ConsoleQuitMistype (workline + 1))
+			return;
 		Cbuf_AddText (workline + 1);	// skip the prompt
 		Cbuf_AddText ("\n");
 		Con_Printf ("%s\n", workline);
