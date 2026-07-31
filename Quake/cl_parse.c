@@ -2136,8 +2136,8 @@ CL_NewTranslation
 */
 static void CL_NewTranslation (int slot, int vanillacolour)
 {
-	if (slot > cl.maxclients)
-		Sys_Error ("CL_NewTranslation: slot > cl.maxclients");
+	if (slot < 0 || slot >= cl.maxclients)	// cl.scores holds exactly maxclients entries
+		Host_Error ("CL_NewTranslation: slot %i out of range (maxclients %i)", slot, cl.maxclients);
 
 	cl.scores[slot].shirt = CL_PLColours_FromLegacy((vanillacolour>>4)&0xf);
 	cl.scores[slot].pants = CL_PLColours_FromLegacy((vanillacolour>>0)&0xf);
