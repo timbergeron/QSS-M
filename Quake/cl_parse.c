@@ -471,8 +471,9 @@ static unsigned int CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, c
 				news->solidsize = MSG_ReadSize16(&net_message);
 			else if (enc == 32)
 				news->solidsize = MSG_ReadLong();
-			else
-				Sys_Error("Solid+Size encoding not known");
+			else	// untrusted stream: drop the connection like every other
+				// parse error here, don't take the whole engine down
+				Host_Error ("CL_ParseDelta: unknown solid+size encoding %i", enc);
 		}
 		else
 			news->solidsize = MSG_ReadSize16(&net_message);
