@@ -1015,6 +1015,7 @@ static void BuildSurfaceVerts (qmodel_t *model, msurface_t *fa, glpoly_t *poly)
 
 		poly->verts[i][5] = s;
 		poly->verts[i][6] = t;
+
 	}
 
 	//johnfitz -- removed gl_keeptjunctions code
@@ -1309,6 +1310,7 @@ void GL_BuildLightmaps (void)
 */
 
 GLuint gl_bmodel_vbo = 0;
+GLuint gl_bmodel_lmbounds_vbo = 0;
 GLuint gl_bmodel_instance_vbo = 0;
 unsigned int gl_bmodel_vbo_generation = 0;	//tb -- bumped whenever vbo_firstvert offsets change, to invalidate per-model draw caches
 
@@ -1320,9 +1322,12 @@ void GL_DeleteBModelVertexBuffer (void)
 		return;
 
 	GL_DeleteBuffersFunc (1, &gl_bmodel_vbo);
+	if (gl_bmodel_lmbounds_vbo)
+		GL_DeleteBuffersFunc (1, &gl_bmodel_lmbounds_vbo);
 	if (gl_bmodel_instance_vbo)
 		GL_DeleteBuffersFunc (1, &gl_bmodel_instance_vbo);
 	gl_bmodel_vbo = 0;
+	gl_bmodel_lmbounds_vbo = 0;
 	gl_bmodel_instance_vbo = 0;
 
 	GL_ClearBufferBindings ();
@@ -1338,10 +1343,11 @@ surfaces from world + all brush models
 */
 void GL_BuildBModelVertexBuffer (void)
 {
-	size_t		numverts, varray_bytes, varray_index;
+	size_t		numverts, varray_bytes, lmbounds_bytes, varray_index;
 	int		i, j;
 	qmodel_t	*m;
 	float		*varray;
+	unsigned short	*lmbounds;
 	double		t_start;
 	qboolean	profile;
 
@@ -1353,7 +1359,9 @@ void GL_BuildBModelVertexBuffer (void)
 
 // ask GL for a name for our VBO
 	GL_DeleteBuffersFunc (1, &gl_bmodel_vbo);
+	GL_DeleteBuffersFunc (1, &gl_bmodel_lmbounds_vbo);
 	GL_GenBuffersFunc (1, &gl_bmodel_vbo);
+	GL_GenBuffersFunc (1, &gl_bmodel_lmbounds_vbo);
 
 // count all verts in all models
 	numverts = 0;
@@ -1387,10 +1395,16 @@ void GL_BuildBModelVertexBuffer (void)
 // build vertex array
 	if (numverts > SIZE_MAX / (VERTEXSIZE * sizeof(float)))
 		Sys_Error ("GL_BuildBModelVertexBuffer: vertex buffer too large");
+	if (numverts > SIZE_MAX / (4 * sizeof(unsigned short)))
+		Sys_Error ("GL_BuildBModelVertexBuffer: lightmap bounds buffer too large");
 	varray_bytes = VERTEXSIZE * sizeof(float) * numverts;
+	lmbounds_bytes = 4 * sizeof(unsigned short) * numverts;
 	varray = (float *) malloc (varray_bytes);
 	if (!varray && varray_bytes)
 		Sys_Error ("GL_BuildBModelVertexBuffer: out of memory (%" SDL_PRIu64 " bytes)", (uint64_t)varray_bytes);
+	lmbounds = (unsigned short *) malloc (lmbounds_bytes);
+	if (!lmbounds && lmbounds_bytes)
+		Sys_Error ("GL_BuildBModelVertexBuffer: out of memory (%" SDL_PRIu64 " bytes)", (uint64_t)lmbounds_bytes);
 	varray_index = 0;
 
 	for (j=1 ; j<MAX_MODELS ; j++)
@@ -1403,8 +1417,17 @@ void GL_BuildBModelVertexBuffer (void)
 		{
 			msurface_t *s = &m->surfaces[i];
 			size_t nv = (size_t)R_SurfaceVertCount (s);	// woods #collinear -- poly may hold fewer verts than numedges
+			size_t k;
+			const unsigned short bounds[4] = {
+				(unsigned short)(s->lightmaptexturenum >= 0 ? s->light_s : 0),
+				(unsigned short)(s->lightmaptexturenum >= 0 ? s->light_t : 0),
+				(unsigned short)(s->lightmaptexturenum >= 0 ? s->light_s + s->extents[0] : 0),
+				(unsigned short)(s->lightmaptexturenum >= 0 ? s->light_t + s->extents[1] : 0)
+			};
 			s->vbo_firstvert = (int)varray_index;
 			memcpy (&varray[VERTEXSIZE * varray_index], s->polys->verts, VERTEXSIZE * sizeof(float) * nv);
+			for (k = 0; k < nv; k++)
+				memcpy (&lmbounds[4 * (varray_index + k)], bounds, sizeof(bounds));
 			varray_index += nv;
 		}
 	}
@@ -1418,8 +1441,17 @@ void GL_BuildBModelVertexBuffer (void)
 		{
 			msurface_t *s = &m->surfaces[i];
 			size_t nv = (size_t)R_SurfaceVertCount (s);	// woods #collinear -- poly may hold fewer verts than numedges
+			size_t k;
+			const unsigned short bounds[4] = {
+				(unsigned short)(s->lightmaptexturenum >= 0 ? s->light_s : 0),
+				(unsigned short)(s->lightmaptexturenum >= 0 ? s->light_t : 0),
+				(unsigned short)(s->lightmaptexturenum >= 0 ? s->light_s + s->extents[0] : 0),
+				(unsigned short)(s->lightmaptexturenum >= 0 ? s->light_t + s->extents[1] : 0)
+			};
 			s->vbo_firstvert = (int)varray_index;
 			memcpy (&varray[VERTEXSIZE * varray_index], s->polys->verts, VERTEXSIZE * sizeof(float) * nv);
+			for (k = 0; k < nv; k++)
+				memcpy (&lmbounds[4 * (varray_index + k)], bounds, sizeof(bounds));
 			varray_index += nv;
 		}
 	}
@@ -1427,7 +1459,10 @@ void GL_BuildBModelVertexBuffer (void)
 // upload to GPU
 	GL_BindBufferFunc (GL_ARRAY_BUFFER, gl_bmodel_vbo);
 	GL_BufferDataFunc (GL_ARRAY_BUFFER, (GLsizeiptr)varray_bytes, varray, GL_STATIC_DRAW);
+	GL_BindBufferFunc (GL_ARRAY_BUFFER, gl_bmodel_lmbounds_vbo);
+	GL_BufferDataFunc (GL_ARRAY_BUFFER, (GLsizeiptr)lmbounds_bytes, lmbounds, GL_STATIC_DRAW);
 	free (varray);
+	free (lmbounds);
 
 	gl_bmodel_vbo_generation++;	//tb -- vbo_firstvert offsets just changed; invalidate bmodel draw caches
 

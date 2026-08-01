@@ -29,6 +29,9 @@ extern cvar_t gl_fullbrights, r_drawflat, gl_overbright, r_oldskyleaf, r_showtri
 extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
 extern cvar_t r_flatlightstyles;
 extern cvar_t r_drawcandle;
+extern cvar_t gl_max_size;
+extern cvar_t r_lightmap_extra4;
+extern cvar_t r_textureless_dither;
 cvar_t r_scenecache = {"r_scenecache",""};	//spike, an attempt to cope with abusive maps a bit better.
 cvar_t r_bmodelcache = {"r_bmodelcache","1",CVAR_ARCHIVE};	//tb -- cache static index buffers for opaque moved bmodel entities.
 cvar_t gl_bmodel_instancing = {"gl_bmodel_instancing", "1", CVAR_ARCHIVE};
@@ -667,6 +670,7 @@ float GL_WaterAlphaForEntitySurface (entity_t *ent, msurface_t *s)
 static GLuint r_world_program;
 static GLuint r_world_instanced_program;
 extern GLuint gl_bmodel_vbo;
+extern GLuint gl_bmodel_lmbounds_vbo;
 extern GLuint gl_bmodel_instance_vbo;
 
 // uniforms used in frag shader
@@ -678,6 +682,9 @@ static GLuint useOverbrightLoc;
 static GLuint useAlphaTestLoc;
 static GLuint useLightmapWideLoc;
 static GLuint useLightmapOnlyLoc;
+static GLuint useLightmapExtra4Loc;
+static GLuint lightmapTexelSizeLoc;
+static GLuint useTexturelessDitherLoc;
 static GLuint alphaLoc;
 GLuint clTimeLoc; // woods #caustics
 static GLuint causticsOpacityLoc; // woods #caustics
@@ -701,6 +708,9 @@ static GLint instUseCausticsTexLoc;
 static GLint instUseGrassLoc;
 static GLint instUseLightmapWideLoc;
 static GLint instUseLightmapOnlyLoc;
+static GLint instUseLightmapExtra4Loc;
+static GLint instLightmapTexelSizeLoc;
+static GLint instUseTexturelessDitherLoc;
 static GLint instAlphaLoc;
 static GLint instClTimeLoc;
 static GLint instCausticsOpacityLoc;
@@ -743,17 +753,63 @@ static struct
 	GLuint colour;
 	GLint fogmode;
 	GLint skyfogcolor;
+	GLint use_extra4;
+	GLint texel_size;
 } r_water[4];	//
+
+static void R_SetLightmapExtra4Uniforms (GLint use_loc, GLint texel_size_loc)
+{
+	if (use_loc >= 0)
+		GL_Uniform1iFunc (use_loc,
+			r_lightmap_extra4.value != 0.0f && gl_bmodel_lmbounds_vbo != 0);
+	if (texel_size_loc >= 0)
+		GL_Uniform2fFunc (texel_size_loc,
+			1.0f / q_max(1, LMBLOCK_WIDTH), 1.0f / q_max(1, LMBLOCK_HEIGHT));
+}
+
+static void R_SetTexturelessDitherUniform (GLint loc)
+{
+	if (loc >= 0)
+		GL_Uniform1iFunc (loc, gl_max_size.value == 1.0f && r_textureless_dither.value != 0.0f);
+}
 
 #ifndef vertAttrIndex
 #define vertAttrIndex 0
 #define texCoordsAttrIndex 1
 #define LMCoordsAttrIndex 2
+#define LMBoundsAttrIndex 7
 #define instMat0AttrIndex 3
 #define instMat1AttrIndex 4
 #define instMat2AttrIndex 5
 #define instMat3AttrIndex 6
 #endif
+
+static qboolean R_LightmapExtra4BoundsEnabled (void)
+{
+	return r_lightmap_extra4.value != 0.0f && gl_bmodel_lmbounds_vbo != 0;
+}
+
+static void R_SetupLightmapBoundsAttrib (void)
+{
+	if (!R_LightmapExtra4BoundsEnabled ())
+	{
+		GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+		return;
+	}
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_lmbounds_vbo);
+	GL_EnableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	GL_VertexAttribPointerFunc (LMBoundsAttrIndex, 4, GL_UNSIGNED_SHORT, GL_FALSE,
+		4 * sizeof(unsigned short), (const void *)0);
+}
+
+static void R_EnableLightmapBoundsAttrib (qboolean enable)
+{
+	if (enable && R_LightmapExtra4BoundsEnabled ())
+		GL_EnableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	else
+		GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+}
 
 typedef struct bmodel_drawbatch_s
 {
@@ -1207,6 +1263,7 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
 	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
 	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
 
 	GL_Uniform1iFunc (texLoc, 0);
 	GL_Uniform1iFunc (LMTexLoc, 1);
@@ -1219,6 +1276,8 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 	GL_Uniform1iFunc (useAlphaTestLoc, 0);
 	GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
 	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
+	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
 	GL_Uniform1fFunc (alphaLoc, 1.0f);
 	GL_Uniform1fFunc (clTimeLoc, cl.time);
 	GL_Uniform1fFunc (causticsOpacityLoc, gl_caustics.value);
@@ -1295,6 +1354,7 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
 	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
 	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
 	GL_UseProgramFunc (0);
 	GL_SelectTexture (GL_TEXTURE0);
 	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
@@ -1569,6 +1629,7 @@ static void R_DrawBrushModelInstancedGroup (entity_t **ents, int count)
 	GL_VertexAttribPointerFunc(vertAttrIndex, 3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
 	GL_VertexAttribPointerFunc(texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
 	GL_VertexAttribPointerFunc(LMCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
 
 	GL_BindBuffer(GL_ARRAY_BUFFER, gl_bmodel_instance_vbo);
 	GL_EnableVertexAttribArrayFunc(instMat0AttrIndex);
@@ -1595,6 +1656,8 @@ static void R_DrawBrushModelInstancedGroup (entity_t **ents, int count)
 	GL_Uniform1iFunc(instUseAlphaTestLoc, 0);
 	GL_Uniform1iFunc(instUseLightmapWideLoc, wide10bits);
 	GL_Uniform1iFunc(instUseLightmapOnlyLoc, 0);
+	R_SetLightmapExtra4Uniforms (instUseLightmapExtra4Loc, instLightmapTexelSizeLoc);
+	R_SetTexturelessDitherUniform (instUseTexturelessDitherLoc);
 	GL_Uniform1fFunc(instAlphaLoc, 1.0f);
 	GL_Uniform1fFunc(instClTimeLoc, cl.time);
 	GL_Uniform1fFunc(instCausticsOpacityLoc, gl_caustics.value);
@@ -1672,6 +1735,7 @@ static void R_DrawBrushModelInstancedGroup (entity_t **ents, int count)
 	GL_DisableVertexAttribArrayFunc(vertAttrIndex);
 	GL_DisableVertexAttribArrayFunc(texCoordsAttrIndex);
 	GL_DisableVertexAttribArrayFunc(LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc(LMBoundsAttrIndex);
 
 	GL_UseProgramFunc(0);
 	GL_SelectTexture(GL_TEXTURE0);
@@ -1744,6 +1808,9 @@ static void GLWorld_DeleteShaderPrograms (void)
 	useCausticsTexLoc = 0;
 	useLightmapWideLoc = 0;
 	useLightmapOnlyLoc = 0;
+	useLightmapExtra4Loc = 0;
+	lightmapTexelSizeLoc = 0;
+	useTexturelessDitherLoc = 0;
 	alphaLoc = 0;
 	clTimeLoc = 0;
 	causticsOpacityLoc = 0;
@@ -1767,6 +1834,9 @@ static void GLWorld_DeleteShaderPrograms (void)
 	instUseGrassLoc = -1;
 	instUseLightmapWideLoc = -1;
 	instUseLightmapOnlyLoc = -1;
+	instUseLightmapExtra4Loc = -1;
+	instLightmapTexelSizeLoc = -1;
+	instUseTexturelessDitherLoc = -1;
 	instAlphaLoc = -1;
 	instClTimeLoc = -1;
 	instCausticsOpacityLoc = -1;
@@ -1806,6 +1876,8 @@ static void GLWorld_DeleteShaderPrograms (void)
 		r_water[i].colour = 0;
 		r_water[i].fogmode = -1;
 		r_water[i].skyfogcolor = -1;
+		r_water[i].use_extra4 = -1;
+		r_water[i].texel_size = -1;
 	}
 }
 
@@ -4691,7 +4763,8 @@ static void GLWater_CreateShaders (void)
 	const glsl_attrib_binding_t bindings[] = {
 		{ "Vert", vertAttrIndex },
 		{ "TexCoords", texCoordsAttrIndex },
-		{ "LMCoords", LMCoordsAttrIndex }
+		{ "LMCoords", LMCoordsAttrIndex },
+		{ "LMBounds", LMBoundsAttrIndex }
 	};
 
 	// Driver bug workarounds:
@@ -4707,7 +4780,9 @@ static void GLWater_CreateShaders (void)
 		"attribute vec2 TexCoords;\n"
 "#ifdef LIT\n"
 		"attribute vec2 LMCoords;\n"
+		"attribute vec4 LMBounds;\n"
 		"varying vec2 tc_lm;\n"
+		"varying vec4 tc_lmbounds;\n"
 "#endif\n"
 		"\n"
 		"varying float FogFragCoord;\n"
@@ -4718,6 +4793,7 @@ static void GLWater_CreateShaders (void)
 		"	tc_tex = TexCoords;\n"
 "#ifdef LIT\n"
 		"	tc_lm = LMCoords;\n"
+		"	tc_lmbounds = LMBounds;\n"
 "#endif\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * Vert;\n"
 		"	FogFragCoord = gl_Position.w;\n"
@@ -4731,10 +4807,29 @@ static void GLWater_CreateShaders (void)
 "#ifdef LIT\n"
 		"uniform sampler2D LMTex;\n"
 		"uniform float LightScale;\n"
+		"uniform bool UseLightmapExtra4;\n"
+		"uniform vec2 LightmapTexelSize;\n"
 		"varying vec2 tc_lm;\n"
+		"varying vec4 tc_lmbounds;\n"
 "#endif\n"
 		"uniform float Alpha;\n"
 		"uniform float WarpTime;\n"
+		"#ifdef LIT\n"
+		"vec4 LightmapBoundsUV()\n"
+		"{\n"
+		"\treturn (tc_lmbounds + vec4(0.5)) * LightmapTexelSize.xyxy;\n"
+		"}\n"
+		"vec2 ClampLightmapUV(vec2 uv, vec2 offset, vec4 bounds)\n"
+		"{\n"
+		"\treturn clamp(uv + offset, bounds.xy, bounds.zw);\n"
+		"}\n"
+		"float LightmapExtra4EdgeBlend(vec4 bounds)\n"
+		"{\n"
+		"\tvec2 edgeDistance = min(tc_lm - bounds.xy, bounds.zw - tc_lm);\n"
+		"\tvec2 edgeTexels = max(edgeDistance / LightmapTexelSize, vec2(0.0));\n"
+		"\treturn smoothstep(0.0, 0.375, min(edgeTexels.x, edgeTexels.y));\n"
+		"}\n"
+		"#endif\n"
 		"uniform int FogMode;\n"
 		"\n"
 		"varying float FogFragCoord;\n"
@@ -4778,7 +4873,23 @@ static void GLWater_CreateShaders (void)
 		"	ntc += 0.125 + sin(tc_tex.ts*M_PI + TIMEBIAS)*0.125;\n"
 		"	vec4 result = texture2D(Tex, ntc.st);\n"
 "#ifdef LIT\n"
-		"	result *= texture2D(LMTex, tc_lm.xy);\n"
+		"	vec4 lightmapBase = texture2D(LMTex, tc_lm.xy);\n"
+		"	vec4 lightmapColor;\n"
+		"	if (UseLightmapExtra4)\n"
+		"	{\n"
+		"		vec4 bounds = LightmapBoundsUV();\n"
+		"		vec2 s = LightmapTexelSize * 0.28;\n"
+		"		lightmapColor = vec4(0.0);\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x, -s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x, -s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x,  s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x,  s.y), bounds));\n"
+		"		lightmapColor *= 0.25;\n"
+		"		lightmapColor = mix(lightmapBase, lightmapColor, LightmapExtra4EdgeBlend(bounds));\n"
+		"	}\n"
+		"	else\n"
+		"		lightmapColor = lightmapBase;\n"
+		"	result *= lightmapColor;\n"
 		"	result.rgb *= LightScale;\n"
 "#endif\n"
 		"	result.a *= Alpha;\n"
@@ -4901,6 +5012,8 @@ static void GLWater_CreateShaders (void)
 			GLuint LMTexLoc				= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "LMTex"):-1);
 			GLuint CloudTexLoc			= ((i==2)?GL_GetUniformLocation (&r_water[i].program, "CloudTex"):-1);
 			r_water[i].light_scale		= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "LightScale"):-1);
+			r_water[i].use_extra4		= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "UseLightmapExtra4"):-1);
+			r_water[i].texel_size		= ((i==1)?GL_GetUniformLocation (&r_water[i].program, "LightmapTexelSize"):-1);
 			r_water[i].alpha_scale		= ((i!=3)?GL_GetUniformLocation (&r_water[i].program, "Alpha"):-1);
 			r_water[i].time				= ((i!=3)?GL_GetUniformLocation (&r_water[i].program, "WarpTime"):-1);
 			r_water[i].eyepos			= ((i==2)?GL_GetUniformLocation (&r_water[i].program, "EyePos"):-1);
@@ -4971,6 +5084,7 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 			GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
 			GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
 			GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+			R_SetupLightmapBoundsAttrib ();
 
 			//actually use the buffers...
 			GL_EnableVertexAttribArrayFunc (vertAttrIndex);
@@ -4989,16 +5103,21 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 					if (mode)
 					{	//lit
 						GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						R_EnableLightmapBoundsAttrib (true);
 						GL_Bind (lightmaps[s->lightmaptexturenum].texture);
 					}
 					else	//unlit
+					{
 						GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						R_EnableLightmapBoundsAttrib (false);
+					}
 
 					GL_UseProgramFunc (r_water[mode].program);
 					GL_Uniform1fFunc (r_water[mode].time, cl.time);
 					GL_Uniform1iFunc (r_water[mode].fogmode, Fog_GetMode());
 					if (r_water[mode].light_scale != -1)
 						GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
+					R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
 					GL_Uniform1fFunc (r_water[mode].alpha_scale, entalpha);
 					lastlightmap = s->lightmaptexturenum;
 				}
@@ -5012,6 +5131,7 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 			GL_DisableVertexAttribArrayFunc (vertAttrIndex);
 			GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
 			GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+			GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
 			GL_SelectTexture (GL_TEXTURE0);
 			lastlightmap = -2;
 
@@ -5122,12 +5242,14 @@ void GLWorld_CreateShaders (void)
 	const glsl_attrib_binding_t bindings[] = {
 		{ "Vert", vertAttrIndex },
 		{ "TexCoords", texCoordsAttrIndex },
-		{ "LMCoords", LMCoordsAttrIndex }
+		{ "LMCoords", LMCoordsAttrIndex },
+		{ "LMBounds", LMBoundsAttrIndex }
 	};
 	const glsl_attrib_binding_t instancedBindings[] = {
 		{ "Vert", vertAttrIndex },
 		{ "TexCoords", texCoordsAttrIndex },
 		{ "LMCoords", LMCoordsAttrIndex },
+		{ "LMBounds", LMBoundsAttrIndex },
 		{ "InstanceMat0", instMat0AttrIndex },
 		{ "InstanceMat1", instMat1AttrIndex },
 		{ "InstanceMat2", instMat2AttrIndex },
@@ -5145,15 +5267,18 @@ void GLWorld_CreateShaders (void)
 		"attribute vec4 Vert;\n"
 		"attribute vec2 TexCoords;\n"
 		"attribute vec2 LMCoords;\n"
+		"attribute vec4 LMBounds;\n"
 		"\n"
 		"varying float FogFragCoord;\n"
 		"varying vec2 tc_tex;\n"
 		"varying vec2 tc_lm;\n"
+		"varying vec4 tc_lmbounds;\n"
 		"\n"
 		"void main()\n"
 		"{\n"
 		"	tc_tex = TexCoords;\n"
 		"	tc_lm = LMCoords;\n"
+		"	tc_lmbounds = LMBounds;\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * Vert;\n"
 		"	FogFragCoord = gl_Position.w;\n"
 		"}\n";
@@ -5164,6 +5289,7 @@ void GLWorld_CreateShaders (void)
 		"attribute vec2 TexCoords;\n"
 		"attribute vec2 LMCoords;\n"
 		"attribute vec4 InstanceMat0;\n"
+		"attribute vec4 LMBounds;\n"
 		"attribute vec4 InstanceMat1;\n"
 		"attribute vec4 InstanceMat2;\n"
 		"attribute vec4 InstanceMat3;\n"
@@ -5171,6 +5297,7 @@ void GLWorld_CreateShaders (void)
 		"varying float FogFragCoord;\n"
 		"varying vec2 tc_tex;\n"
 		"varying vec2 tc_lm;\n"
+		"varying vec4 tc_lmbounds;\n"
 		"\n"
 		"void main()\n"
 		"{\n"
@@ -5178,6 +5305,7 @@ void GLWorld_CreateShaders (void)
 		"	vec4 worldVert = instance * Vert;\n"
 		"	tc_tex = TexCoords;\n"
 		"	tc_lm = LMCoords;\n"
+		"	tc_lmbounds = LMBounds;\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * worldVert;\n"
 		"	FogFragCoord = gl_Position.w;\n"
 		"}\n";
@@ -5198,6 +5326,9 @@ void GLWorld_CreateShaders (void)
 		"uniform bool UseGrass;\n"
 		"uniform bool UseLightmapWide;\n"
 		"uniform bool UseLightmapOnly;\n"
+		"uniform bool UseLightmapExtra4;\n"
+		"uniform vec2 LightmapTexelSize;\n"
+		"uniform bool UseTexturelessDither;\n"
 		"uniform float Alpha;\n"
 		"uniform float ClTime;\n"
 		"uniform float CausticsOpacity;\n"
@@ -5212,6 +5343,7 @@ void GLWorld_CreateShaders (void)
 		"varying float FogFragCoord;\n"
 		"varying vec2 tc_tex;\n"
 		"varying vec2 tc_lm;\n"
+		"varying vec4 tc_lmbounds;\n"
 		"\n"
 		"float FogFactor(float dist)\n"
 		"{\n"
@@ -5220,6 +5352,23 @@ void GLWorld_CreateShaders (void)
 		"	if (FogMode == 2)\n"
 		"		return exp(-gl_Fog.density * dist);\n"
 		"	return exp(-gl_Fog.density * gl_Fog.density * dist * dist);\n"
+		"}\n"
+		"\n"
+		"vec4 LightmapBoundsUV()\n"
+		"{\n"
+		"\treturn (tc_lmbounds + vec4(0.5)) * LightmapTexelSize.xyxy;\n"
+		"}\n"
+		"\n"
+		"vec2 ClampLightmapUV(vec2 uv, vec2 offset, vec4 bounds)\n"
+		"{\n"
+		"\treturn clamp(uv + offset, bounds.xy, bounds.zw);\n"
+		"}\n"
+		"\n"
+		"float LightmapExtra4EdgeBlend(vec4 bounds)\n"
+		"{\n"
+		"\tvec2 edgeDistance = min(tc_lm - bounds.xy, bounds.zw - tc_lm);\n"
+		"\tvec2 edgeTexels = max(edgeDistance / LightmapTexelSize, vec2(0.0));\n"
+		"\treturn smoothstep(0.0, 0.375, min(edgeTexels.x, edgeTexels.y));\n"
 		"}\n"
 		"\n"
 		"float FogDitherHash(vec2 p)\n"
@@ -5231,6 +5380,13 @@ void GLWorld_CreateShaders (void)
 		"{\n"
 		"	vec2 p = floor(gl_FragCoord.xy);\n"
 		"	return (FogDitherHash(p) + FogDitherHash(p + vec2(17.0, 29.0)) - 1.0) * (1.0 / 255.0);\n"
+		"}\n"
+		"\n"
+		"float TexturelessDither()\n"
+		"{\n"
+		"	vec2 p = floor(gl_FragCoord.xy);\n"
+		"	return FogDitherHash(p + vec2(13.0, 7.0)) +\n"
+		"	       FogDitherHash(p + vec2(29.0, 17.0)) - 1.0;\n"
 		"}\n"
 		"\n"
 		"float GrassHash(vec2 p)\n"
@@ -5283,7 +5439,25 @@ void GLWorld_CreateShaders (void)
 		"void main()\n"
 		"{\n"
 		"	vec4 result = texture2D(Tex, tc_tex.xy);\n"
-		"	vec4 lightmapColor = texture2D(LMTex, tc_lm.xy); // Sample lightmap early\n"
+		"	vec4 lightmapBase = texture2D(LMTex, tc_lm.xy);\n"
+		"	vec4 lightmapColor;\n"
+		"	if (UseLightmapExtra4)\n"
+		"	{\n"
+		"		// Approximate light -extra4 with four variance-matched sub-texel samples.\n"
+		"		// The original compiler's sub-samples are not recoverable clientside,\n"
+		"		// so this deliberately trades some sharpness for smoother transitions.\n"
+		"		vec4 bounds = LightmapBoundsUV();\n"
+		"		vec2 s = LightmapTexelSize * 0.28;\n"
+		"		lightmapColor = vec4(0.0);\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x, -s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x, -s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2(-s.x,  s.y), bounds));\n"
+		"		lightmapColor += texture2D(LMTex, ClampLightmapUV(tc_lm.xy, vec2( s.x,  s.y), bounds));\n"
+		"		lightmapColor *= 0.25;\n"
+		"		lightmapColor = mix(lightmapBase, lightmapColor, LightmapExtra4EdgeBlend(bounds));\n"
+		"	}\n"
+		"	else\n"
+		"		lightmapColor = lightmapBase; // Sample lightmap early\n"
 		"	if (UseLightmapWide)\n"
 		"	    lightmapColor.rgb *= 4.0;\n"
 		"	float lightBrightness = (lightmapColor.r + lightmapColor.g + lightmapColor.b) / 3.0;\n"
@@ -5350,7 +5524,10 @@ void GLWorld_CreateShaders (void)
 		"	float fog = FogFactor(FogFragCoord);\n"
 		"	fog = clamp(fog, 0.0, 1.0);\n"
 		"	result = mix(gl_Fog.color, result, fog);\n"
-		"	result.rgb = clamp(result.rgb + vec3(FogDither()), 0.0, 1.0);\n"
+		"	vec3 dither = vec3(FogDither());\n"
+		"	if (UseTexturelessDither)\n"
+		"		dither += vec3(TexturelessDither() * (0.35 / 255.0));\n"
+		"	result.rgb = clamp(result.rgb + dither, 0.0, 1.0);\n"
 		"	result.a = Alpha;\n" // FIXME: This will make almost transparent things cut holes though heavy fog
 		"	gl_FragColor = result;\n"
 		"}\n";
@@ -5376,6 +5553,9 @@ void GLWorld_CreateShaders (void)
 		useGrassLoc = GL_GetUniformLocation (&r_world_program, "UseGrass"); // woods #grass
 		useLightmapWideLoc = GL_GetUniformLocation (&r_world_program, "UseLightmapWide");
 		useLightmapOnlyLoc = GL_GetUniformLocation (&r_world_program, "UseLightmapOnly");
+		useLightmapExtra4Loc = GL_GetUniformLocation (&r_world_program, "UseLightmapExtra4");
+		lightmapTexelSizeLoc = GL_GetUniformLocation (&r_world_program, "LightmapTexelSize");
+		useTexturelessDitherLoc = GL_GetUniformLocation (&r_world_program, "UseTexturelessDither");
 		alphaLoc = GL_GetUniformLocation (&r_world_program, "Alpha");
 		clTimeLoc = GL_GetUniformLocation(&r_world_program, "ClTime"); // woods #caustics
 		causticsOpacityLoc = GL_GetUniformLocation(&r_world_program, "CausticsOpacity"); // woods #caustics
@@ -5413,6 +5593,9 @@ void GLWorld_CreateShaders (void)
 			instUseGrassLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseGrass"); // woods #grass
 			instUseLightmapWideLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseLightmapWide");
 			instUseLightmapOnlyLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseLightmapOnly");
+			instUseLightmapExtra4Loc = GL_GetUniformLocation (&r_world_instanced_program, "UseLightmapExtra4");
+			instLightmapTexelSizeLoc = GL_GetUniformLocation (&r_world_instanced_program, "LightmapTexelSize");
+			instUseTexturelessDitherLoc = GL_GetUniformLocation (&r_world_instanced_program, "UseTexturelessDither");
 			instAlphaLoc = GL_GetUniformLocation (&r_world_instanced_program, "Alpha");
 			instClTimeLoc = GL_GetUniformLocation(&r_world_instanced_program, "ClTime"); // woods #caustics
 			instCausticsOpacityLoc = GL_GetUniformLocation(&r_world_instanced_program, "CausticsOpacity"); // woods #caustics
@@ -5491,6 +5674,7 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
 	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
 	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
 
 // set uniforms
 	GL_Uniform1iFunc (texLoc, 0);
@@ -5504,6 +5688,8 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 	GL_Uniform1iFunc (useAlphaTestLoc, 0);
 	GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
 	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
+	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
 	GL_Uniform1fFunc (alphaLoc, entalpha);
 	GL_Uniform1fFunc(clTimeLoc, cl.time); // woods #caustics
 	GL_Uniform1fFunc(causticsOpacityLoc, gl_caustics.value); // woods #caustics
@@ -5583,6 +5769,7 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
 	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
 	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
 
 	GL_UseProgramFunc (0);
 	GL_SelectTexture (GL_TEXTURE0);
@@ -5628,6 +5815,7 @@ void R_DrawLightmapChains_GLSL(qmodel_t* model, entity_t* ent, texchain_t chain)
 	GL_VertexAttribPointerFunc(vertAttrIndex, 3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float*)0));
 	GL_VertexAttribPointerFunc(texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float*)0) + 3);
 	GL_VertexAttribPointerFunc(LMCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float*)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
 
 	// set uniforms
 	GL_Uniform1iFunc(texLoc, 0);
@@ -5642,6 +5830,8 @@ void R_DrawLightmapChains_GLSL(qmodel_t* model, entity_t* ent, texchain_t chain)
 	GL_Uniform1fFunc(alphaLoc, 1.0f);
 	GL_Uniform1iFunc(useFullbrightTexLoc, 0);
 	GL_Uniform1iFunc(useLightmapOnlyLoc, 1);
+	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
 	GL_Uniform1iFunc(fogModeLoc, Fog_GetMode());
 
 	R_ClearBatch();
@@ -5682,6 +5872,7 @@ void R_DrawLightmapChains_GLSL(qmodel_t* model, entity_t* ent, texchain_t chain)
 	GL_DisableVertexAttribArrayFunc(vertAttrIndex);
 	GL_DisableVertexAttribArrayFunc(texCoordsAttrIndex);
 	GL_DisableVertexAttribArrayFunc(LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc(LMBoundsAttrIndex);
 
 	GL_UseProgramFunc(0);
 	GL_SelectTexture(GL_TEXTURE0);
@@ -7342,6 +7533,7 @@ static void RSceneCache_Draw(qboolean water)
 	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
 	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
 	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
 
 	rs_brushpolys += cache->brushpolys; //for r_speeds.;
 
@@ -7381,11 +7573,13 @@ static void RSceneCache_Draw(qboolean water)
 					if (lm_slot>0) // changed j to lm_slot
 					{	//lit
 						GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						R_EnableLightmapBoundsAttrib (true);
 						mode = 1;
 					}
 					else	//unlit
 					{
 						GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+						R_EnableLightmapBoundsAttrib (false);
 						mode = 0;
 					}
 
@@ -7419,6 +7613,7 @@ static void RSceneCache_Draw(qboolean water)
 						if (r_water[mode].light_scale != -1)
 							GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
 					}
+					R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
 					GL_Uniform1fFunc (r_water[mode].alpha_scale, alpha);
 				}
 				else if (tex->name[0]=='s'&&tex->name[1]=='k'&&tex->name[2]=='y')
@@ -7464,6 +7659,7 @@ static void RSceneCache_Draw(qboolean water)
 				}
 				else
 				{
+					R_EnableLightmapBoundsAttrib (true);
 					if (lastprog != r_world_program)
 					{
 						lastprog = r_world_program;
@@ -7471,6 +7667,8 @@ static void RSceneCache_Draw(qboolean water)
 						GL_Uniform1iFunc (useOverbrightLoc, overbright);
 						GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
 						GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
+						R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+						R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
 						GL_Uniform1fFunc (alphaLoc, 1);			//worldmodel is never translucent.
 						GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount()); // woods #grass
 						GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime()); // woods #grass
@@ -7543,6 +7741,7 @@ static void RSceneCache_Draw(qboolean water)
 	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
 	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
 	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
 	GL_SelectTexture (GL_TEXTURE0);
 
 	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
