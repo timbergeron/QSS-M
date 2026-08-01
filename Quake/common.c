@@ -5201,11 +5201,24 @@ static qboolean COM_Dir_Result2(void *ctx, const char *fname, time_t mtime, size
 		*primary = spath;
 	return false;
 }
+static const char *COM_Dir_LinkPath(const char *fname, searchpath_t *spath, char *path, size_t path_size)
+{
+	if (spath->pack)
+		return spath->pack->filename;
+
+	if ((size_t)q_snprintf(path, path_size, "%s/%s", spath->filename, fname) >= path_size)
+		return NULL;
+
+	return Sys_FileType(path) != FS_ENT_NONE ? path : NULL;
+}
 static qboolean COM_Dir_Result(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath)
 {
 	searchpath_t *primary = NULL;
 	const char *prefix;
+	char link_path[MAX_OSPATH];
+	const char *link;
 	COM_ListAllFiles(&primary, fname, COM_Dir_Result2, 0, NULL);
+	link = COM_Dir_LinkPath(fname, spath, link_path, sizeof(link_path));
 
 	if (primary == spath)
 		prefix = "^m";	//file that will be opened.
@@ -5213,13 +5226,24 @@ static qboolean COM_Dir_Result(void *ctx, const char *fname, time_t mtime, size_
 		prefix = "";	//file that will be ignored.
 
 	if (fsize > 1024*1024*1024)
-		Con_SafePrintf("%s    %6.1fgb %-32s %s\n", prefix, (double)fsize/(1024*1024*1024), fname, spath->filename);
+		Con_SafePrintf("%s    %6.1fgb ", prefix, (double)fsize/(1024*1024*1024));
 	else if (fsize > 1024*1024)
-		Con_SafePrintf("%s    %6.1fmb %-32s %s\n", prefix, (double)fsize/(1024*1024), fname, spath->filename);
+		Con_SafePrintf("%s    %6.1fmb ", prefix, (double)fsize/(1024*1024));
 	else if (fsize > 1024)
-		Con_SafePrintf("%s    %6.1fkb %-32s %s\n", prefix, (double)fsize/1024, fname, spath->filename);
+		Con_SafePrintf("%s    %6.1fkb ", prefix, (double)fsize/1024);
 	else
-		Con_SafePrintf("%s    %4.0fb    %-32s %s\n", prefix, (double)fsize, fname, spath->filename);
+		Con_SafePrintf("%s    %4.0fb    ", prefix, (double)fsize);
+
+	if (link)
+	{
+		size_t name_length = strlen(fname);
+		Con_LinkPrintf(link, "%s", fname);
+		while (name_length++ < 32)
+			Con_SafePrintf(" ");
+	}
+	else
+		Con_SafePrintf("%-32s", fname);
+	Con_SafePrintf(" %s\n", spath->filename);
 	return true;
 }
 static void COM_Dir_f(void)

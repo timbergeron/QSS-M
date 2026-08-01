@@ -8226,6 +8226,40 @@ map <servername>
 command from the console.  Active clients are kicked off.
 ======================
 */
+static const char *Host_MapFileLinkPath (const char *mapname, char *path, size_t path_size)
+{
+	char map_path[MAX_QPATH];
+	searchpath_t *search;
+
+	if ((size_t)q_snprintf(map_path, sizeof(map_path), "maps/%s.bsp", mapname) >= sizeof(map_path))
+		return NULL;
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (search->pack)
+		{
+			int i;
+
+			for (i = 0; i < search->pack->numfiles; i++)
+			{
+				if (!q_strcasecmp(search->pack->files[i].name, map_path))
+				{
+					q_strlcpy(path, search->pack->filename, path_size);
+					return path;
+				}
+			}
+		}
+		else
+		{
+			q_snprintf(path, path_size, "%s/%s", search->filename, map_path);
+			if (Sys_FileType(path) & FS_ENT_FILE)
+				return path;
+		}
+	}
+
+	return NULL;
+}
+
 static void Host_Map_f (void)
 {
 	int		i;
@@ -8243,21 +8277,27 @@ static void Host_Map_f (void)
 		else if (cls.state == ca_connected)
 		{
 			char   mapPath[MAX_OSPATH];
+			char   mapLinkPath[MAX_OSPATH];
+			const char *mapLink;
 			int    h;
 			qofs_t fsize = -1;
 
 			q_snprintf(mapPath, sizeof(mapPath), "maps/%s.bsp", cl.mapname);
+			mapLink = Host_MapFileLinkPath(cl.mapname, mapLinkPath, sizeof(mapLinkPath));
 			fsize = COM_OpenFile(mapPath, &h, NULL);
 			if (h != -1)
 				COM_CloseFile(h);
 
-			if (fsize > 0)
-				Con_Printf("Current map: %s ( %s ) - ^m%.1f MB^m\n",
-					cl.levelname,
-					cl.mapname,
-					(float)fsize / (1024.0f * 1024.0f));
+			Con_Printf("Current map: %s ( ", cl.levelname);
+			if (mapLink)
+				Con_LinkPrintf(mapLink, "%s", cl.mapname);
 			else
-				Con_Printf("Current map: %s ( %s )\n", cl.levelname, cl.mapname);
+				Con_Printf("%s", cl.mapname);
+
+			if (fsize > 0)
+				Con_Printf(" ) - ^m%.1f MB^m\n", (float)fsize / (1024.0f * 1024.0f));
+			else
+				Con_Printf(" )\n");
 		}
 		else
 		{
