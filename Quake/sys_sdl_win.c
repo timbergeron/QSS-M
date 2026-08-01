@@ -727,6 +727,26 @@ qboolean Sys_Explore (const char *path)
 	if (type == FS_ENT_NONE)
 		return false;
 
+	if (type == FS_ENT_FILE)
+	{
+		STARTUPINFOA si;
+		PROCESS_INFORMATION pi;
+		char command_line[MAX_OSPATH * 2 + 64];
+
+		memset(&si, 0, sizeof(si));
+		memset(&pi, 0, sizeof(pi));
+		si.cb = sizeof(si);
+		if ((size_t)q_snprintf(command_line, sizeof(command_line),
+			"explorer.exe /select,\"%s\"", path) < sizeof(command_line) &&
+			CreateProcessA(NULL, command_line, NULL, NULL, FALSE, 0, NULL, NULL,
+				&si, &pi))
+		{
+			CloseHandle(pi.hThread);
+			CloseHandle(pi.hProcess);
+			return true;
+		}
+	}
+
 	q_strlcpy (dir, path, sizeof(dir));
 	if (!(type & FS_ENT_DIRECTORY))
 	{

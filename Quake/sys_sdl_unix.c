@@ -1020,6 +1020,67 @@ qboolean Sys_Explore (const char *path)
 	char	*s;
 	int	type;
 
+#if defined(__APPLE__)
+	if (Sys_FileType(path) == FS_ENT_FILE)
+	{
+		pid_t pid;
+		int child_status;
+		int wait_result;
+
+		pid = fork();
+		if (pid >= 0)
+		{
+			if (pid == 0)
+			{
+				execl("/usr/bin/open", "open", "-R", path, (char *)NULL);
+				_exit(127);
+			}
+
+			do
+				wait_result = waitpid(pid, &child_status, 0);
+			while (wait_result < 0 && errno == EINTR);
+
+			if (wait_result == pid && WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0)
+				return true;
+		}
+	}
+#elif !defined(__ANDROID__)
+	if (Sys_FileType(path) == FS_ENT_FILE && Sys_BuildFileURL(path, url, sizeof(url)))
+	{
+		char file_items[MAX_OSPATH * 3 + 32];
+		pid_t pid;
+		int child_status;
+		int wait_result;
+
+		if ((size_t)q_snprintf(file_items, sizeof(file_items), "array:string:%s", url) < sizeof(file_items))
+		{
+			pid = fork();
+			if (pid >= 0 && pid == 0)
+			{
+				execlp("dbus-send", "dbus-send",
+					"--session",
+					"--dest=org.freedesktop.FileManager1",
+					"--type=method_call",
+					"--print-reply",
+					"/org/freedesktop/FileManager1",
+					"org.freedesktop.FileManager1.ShowItems",
+					file_items, "string:", (char *)NULL);
+				_exit(127);
+			}
+
+			if (pid >= 0)
+			{
+				do
+					wait_result = waitpid(pid, &child_status, 0);
+				while (wait_result < 0 && errno == EINTR);
+
+				if (wait_result == pid && WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0)
+					return true;
+			}
+		}
+	}
+#endif
+
 	type = Sys_FileType (path);
 	if (type == FS_ENT_NONE)
 		return false;
