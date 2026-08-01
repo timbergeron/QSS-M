@@ -67,6 +67,27 @@ static NSURL *QSSGameFolderURL(void)
     return [bundleURL URLByDeletingLastPathComponent];
 }
 
+static void QSSLaunchNewInstance(void)
+{
+    NSURL *applicationURL = [[NSBundle mainBundle] bundleURL];
+    NSError *error = nil;
+
+    if (!applicationURL)
+        return;
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    /* NSWorkspaceOpenConfiguration needs macOS 10.15; QSS-M supports 10.13. */
+    if (![[NSWorkspace sharedWorkspace] launchApplicationAtURL:applicationURL
+                                                       options:(NSWorkspaceLaunchDefault | NSWorkspaceLaunchNewInstance)
+                                                 configuration:@{
+                                                     NSWorkspaceLaunchConfigurationArguments : @[ @"-nolauncher" ]
+                                                 }
+                                                         error:&error])
+        NSLog(@"QSS-M: unable to launch new instance: %@", error);
+#pragma clang diagnostic pop
+}
+
 typedef struct {
     NSString *title;
     NSString *insert;
@@ -3507,6 +3528,7 @@ doCommandBySelector:(SEL)commandSelector
 - (NSMenu *)applicationDockMenu:(NSApplication *)sender
 {
     NSMenu *menu;
+    NSMenuItem *newInstanceItem;
     NSMenuItem *launcherItem;
 
     (void)sender;
@@ -3516,6 +3538,12 @@ doCommandBySelector:(SEL)commandSelector
        window takes over, leaving the items greyed out while the game runs. */
     menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
     [menu setAutoenablesItems:NO];
+    newInstanceItem = [[[NSMenuItem alloc] initWithTitle:@"New Instance"
+                                                  action:@selector(startNewInstance:)
+                                           keyEquivalent:@""] autorelease];
+    [newInstanceItem setTarget:self];
+    [menu addItem:newInstanceItem];
+
     launcherItem = [[[NSMenuItem alloc] initWithTitle:@"Open with Launcher"
                                                action:@selector(openWithLauncher:)
                                         keyEquivalent:@""] autorelease];
@@ -3546,6 +3574,12 @@ doCommandBySelector:(SEL)commandSelector
         [menu addItem:folderItem];
     }
     return menu;
+}
+
+- (IBAction)startNewInstance:(id)sender
+{
+    (void)sender;
+    QSSLaunchNewInstance();
 }
 
 - (IBAction)openWithLauncher:(id)sender

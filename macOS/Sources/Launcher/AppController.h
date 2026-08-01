@@ -70,6 +70,7 @@ extern NSString *FQPrefCommandLineKey;
 - (IBAction)showSettings:(id)sender;
 - (IBAction)showKeyboardShortcutsPanel:(id)sender;
 - (IBAction)openWithLauncher:(id)sender;
+- (IBAction)startNewInstance:(id)sender;
 - (IBAction)connectToRecentServer:(id)sender;
 - (IBAction)switchToMod:(id)sender;
 - (IBAction)openQuakeFolder:(id)sender;
