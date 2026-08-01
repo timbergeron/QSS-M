@@ -11,6 +11,7 @@
 		63D6EB3623A255900047028C /* snd_mp3tag.c in Sources */ = {isa = PBXBuildFile; fileRef = 63D6EB3423A255900047028C /* snd_mp3tag.c */; };
 		664D988B19CF6B78000D395C /* Launcher.xib in Resources */ = {isa = PBXBuildFile; fileRef = 48B9E7860D340B1E0001CACF /* Launcher.xib */; };
 		664D988C19CF6B78000D395C /* QuakeSpasm.icns in Resources */ = {isa = PBXBuildFile; fileRef = 484AA4B30D3FF6C0005D917A /* QuakeSpasm.icns */; };
+		C0DE00010000000000000001 /* QSSAboutMenuIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = C0DE00020000000000000002 /* QSSAboutMenuIcon.png */; };
 		664D988E19CF6B78000D395C /* SDLMain.m in Sources */ = {isa = PBXBuildFile; fileRef = 002F3A2C09D0888800EBEB88 /* SDLMain.m */; };
 		664D988F19CF6B78000D395C /* chase.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78100D2EEA5400CB2E4C /* chase.c */; };
 		664D989019CF6B78000D395C /* cmd.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78110D2EEA5400CB2E4C /* cmd.c */; };
@@ -349,6 +350,7 @@
 		4846EB500D329BEB00A108DE /* platform.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = platform.h; path = ../Quake/platform.h; sourceTree = SOURCE_ROOT; };
 		4847CD5E12057F94000B560F /* sys_sdl_unix.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = sys_sdl_unix.c; path = ../Quake/sys_sdl_unix.c; sourceTree = SOURCE_ROOT; };
 		484AA4B30D3FF6C0005D917A /* QuakeSpasm.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = QuakeSpasm.icns; sourceTree = "<group>"; };
+		C0DE00020000000000000002 /* QSSAboutMenuIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = QSSAboutMenuIcon.png; sourceTree = "<group>"; };
 		4854B1B01340C646004C9F45 /* snd_mp3.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = snd_mp3.c; path = ../Quake/snd_mp3.c; sourceTree = SOURCE_ROOT; };
 		486577C80D31A22A00E7920A /* snd_dma.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = snd_dma.c; path = ../Quake/snd_dma.c; sourceTree = SOURCE_ROOT; };
 		486577C90D31A22A00E7920A /* snd_mem.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = snd_mem.c; path = ../Quake/snd_mem.c; sourceTree = SOURCE_ROOT; };
@@ -548,6 +550,7 @@
 			isa = PBXGroup;
 			children = (
 				484AA4B30D3FF6C0005D917A /* QuakeSpasm.icns */,
+				C0DE00020000000000000002 /* QSSAboutMenuIcon.png */,
 				48B9E7860D340B1E0001CACF /* Launcher.xib */,
 				8D1107310486CEB800E47090 /* Info.plist */,
 				D0CC00120000000000000002 /* DockTilePlugin-Info.plist */,
@@ -1001,6 +1004,7 @@
 			files = (
 				664D988B19CF6B78000D395C /* Launcher.xib in Resources */,
 				664D988C19CF6B78000D395C /* QuakeSpasm.icns in Resources */,
+				C0DE00010000000000000001 /* QSSAboutMenuIcon.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

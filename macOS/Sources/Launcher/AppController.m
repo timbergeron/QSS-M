@@ -1593,10 +1593,18 @@ static NSImage *QSSHostAppIcon(void)
         aboutItem = [appMenu itemAtIndex:0];
 
     if (aboutItem) {
+        NSString *aboutIconPath = [[NSBundle mainBundle] pathForResource:@"QSSAboutMenuIcon"
+                                                                     ofType:@"png"];
+        NSImage *aboutIcon = [[[NSImage alloc] initWithContentsOfFile:aboutIconPath] autorelease];
+
         [aboutItem setTitle:@"About QSS-M"];
         [aboutItem setTarget:self];
         [aboutItem setAction:@selector(showAboutPanel:)];
         [aboutItem setEnabled:YES];
+
+        /* Replace macOS's default info glyph with the supplied white QSS-M emblem. */
+        [aboutIcon setSize:NSMakeSize(16.0f, 16.0f)];
+        [aboutItem setImage:aboutIcon];
     }
 }
 
