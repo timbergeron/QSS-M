@@ -3791,6 +3791,61 @@ static const char *CL_LinuxOSDescription(void)
 }
 #endif
 
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+static const char *CL_MacOSDescription(void)
+{
+	static char description[64];
+	char version[16] = "";
+	size_t version_length = sizeof(version) - 1;
+
+	if (sysctlbyname("kern.osproductversion", version, &version_length, NULL, 0) == -1)
+		return NULL;
+
+	version[version_length < sizeof(version) ? version_length : sizeof(version) - 1] = '\0';
+
+	if (!strncmp(version, "27.", 3))
+		q_strlcpy(description, "macOS Golden Gate (2026)", sizeof(description));
+	else if (!strncmp(version, "26.", 3))
+		q_strlcpy(description, "macOS Tahoe (2025)", sizeof(description));
+	else if (!strncmp(version, "15.", 3))
+		q_strlcpy(description, "macOS Sequoia (2024)", sizeof(description));
+	else if (!strncmp(version, "14.", 3))
+		q_strlcpy(description, "macOS Sonoma (2023)", sizeof(description));
+	else if (!strncmp(version, "13.", 3))
+		q_strlcpy(description, "macOS Ventura (2022)", sizeof(description));
+	else if (!strncmp(version, "12.", 3))
+		q_strlcpy(description, "macOS Monterey (2021)", sizeof(description));
+	else if (!strncmp(version, "11", 2))
+		q_strlcpy(description, "macOS Big Sur (2020)", sizeof(description));
+	else if (!strncmp(version, "10.15", 5))
+		q_strlcpy(description, "macOS Catalina (2019)", sizeof(description));
+	else if (!strncmp(version, "10.14", 5))
+		q_strlcpy(description, "macOS Mojave (2018)", sizeof(description));
+	else if (!strncmp(version, "10.13", 5))
+		q_strlcpy(description, "macOS High Sierra (2017)", sizeof(description));
+	else if (!strncmp(version, "10.12", 5))
+		q_strlcpy(description, "macOS Sierra (2016)", sizeof(description));
+	else if (!strncmp(version, "10.11", 5))
+		q_strlcpy(description, "Mac OS X El Capitan (2015)", sizeof(description));
+	else if (!strncmp(version, "10.10", 5))
+		q_strlcpy(description, "Mac OS X Yosemite (2014)", sizeof(description));
+	else if (!strncmp(version, "10.9", 4))
+		q_strlcpy(description, "Mac OS X Mavericks (2013)", sizeof(description));
+	else if (!strncmp(version, "10.8", 4))
+		q_strlcpy(description, "Mac OS X Mountain Lion (2012)", sizeof(description));
+	else if (!strncmp(version, "10.7", 4))
+		q_strlcpy(description, "Mac OS X Lion (2011)", sizeof(description));
+	else if (!strncmp(version, "10.6", 4))
+		q_strlcpy(description, "Mac OS X Snow Leopard (2009)", sizeof(description));
+	else if (!strncmp(version, "10.5", 4))
+		q_strlcpy(description, "Mac OS X Leopard (2007)", sizeof(description));
+	else
+		q_snprintf(description, sizeof(description), "macOS %s", version);
+
+	return description;
+}
+#endif
+
 //warning: this text might not even be a complete line.
 //we're screwed if someone names themselves something that triggers this or some such
 //however, that's what has become standard for nq clients
@@ -4015,6 +4070,11 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			if (linux_platform && *linux_platform)
 				platform = linux_platform;
 #endif
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+			const char *mac_platform = CL_MacOSDescription();
+			if (mac_platform && *mac_platform)
+				platform = mac_platform;
+#endif
 
 			MSG_WriteByte (&cls.message, clc_stringcmd);
 			MSG_WriteString(&cls.message,va("say %s %s %d-bit", ENGINE_NAME_AND_VER, platform, bit)); // woods add bit, adapted from ironwail
@@ -4040,6 +4100,11 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			const char *linux_platform = CL_LinuxOSDescription();
 			if (linux_platform && *linux_platform)
 				platform = linux_platform;
+#endif
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+			const char *mac_platform = CL_MacOSDescription();
+			if (mac_platform && *mac_platform)
+				platform = mac_platform;
 #endif
 
 			const char* sound = SDL_GetAudioDeviceName(0, SDL_FALSE); // woods #q_sysinfo (qrack)
@@ -4124,16 +4189,12 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods -- use mac terminal to get some more detailed info that SDL2 can't
 
 			char* SYSINFO_processor_description = NULL;
-			char* os_codename = NULL;
 			char* com_modelname = NULL;
 			char modelbuf[75] = "";
 
 			char buf[75];
-			char buf2[16];
 			char buf2a[75];
-			char os_unknown[30];
 			size_t buflen = 75;
-			size_t buflen2 = 16;
 			size_t buflen2a = 75;
 
 			// get prcoessor info: brand, name, ghz
@@ -4142,59 +4203,6 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 				SYSINFO_processor_description = "Could Not Find Processor Info";
 			else
 				SYSINFO_processor_description = buf;
-
-			// get os version: apple codename, release year, and number
-
-			if (sysctlbyname("kern.osproductversion", &buf2, &buflen2, NULL, 0) == -1)
-			{
-				os_codename = "Unknown OS Name/Version";
-			}
-			else
-			{
-				if (!strncmp(buf2, "27.", 3))
-					os_codename = "macOS Golden Gate (2026)";
-				else if (!strncmp(buf2, "26.", 3))
-					os_codename = "macOS Tahoe (2025)";
-				else if (!strncmp(buf2, "15.", 3))
-					os_codename = "macOS Sequoia (2024)";
-				else if (!strncmp(buf2, "14.", 3))
-					os_codename = "macOS Sonoma (2023)";
-				else if (!strncmp(buf2, "13.", 3))
-					os_codename = "macOS Ventura (2022)";
-				else if (!strncmp(buf2, "12.", 3))
-					os_codename = "macOS Monterey (2021)";
-				else if (!strncmp(buf2, "11", 2))
-					os_codename = "macOS Big Sur (2020)";
-				else if (!strncmp(buf2, "10.15", 4))
-					os_codename = "macOS Catalina (2019)";
-				else if (!strncmp(buf2, "10.14", 4))
-					os_codename = "macOS Mojave (2018)";
-				else if (!strncmp(buf2, "10.13", 4))
-					os_codename = "macOS High Sierra (2017)";
-				else if (!strncmp(buf2, "10.12", 4))
-					os_codename = "macOS Sierra (2016)";
-				else if (!strncmp(buf2, "10.11", 4))
-					os_codename = "Mac OS X El Capitan (2015)";
-				else if (!strncmp(buf2, "10.10", 4))
-					os_codename = "Mac OS X Yosemite (2014)";
-				else if (!strncmp(buf2, "10.9", 3))
-					os_codename = "Mac OS X Mavericks (2013)";
-				else if (!strncmp(buf2, "10.8", 3))
-					os_codename = "Mac OS X Mountain Lion (2012)";
-				else if (!strncmp(buf2, "10.7", 3))
-					os_codename = "Mac OS X Lion (2011)";
-				else if (!strncmp(buf2, "10.6", 3))
-					os_codename = "Mac OS X Snow Leopard (2009)";
-				else if (!strncmp(buf2, "10.5", 3))
-					os_codename = "Mac OS X Leopard (2007)";
-				else
-				{ 
-					sprintf(os_unknown, "macOS %s", buf2);
-					os_codename = os_unknown;
-				}
-			}
-
-			platform = os_codename;
 
 			// get the specific model name and release year
 
