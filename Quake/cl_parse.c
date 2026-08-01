@@ -3712,6 +3712,85 @@ static void CL_ParseStuffText(const char *msg)
 	}
 }
 
+#if defined(__linux__) || defined(__linux)
+static const char *CL_LinuxOSDescription(void)
+{
+	static char description[128];
+	char name[96] = "";
+	char version[64] = "";
+	const char *paths[] = { "/etc/os-release", "/usr/lib/os-release" };
+	char line[256];
+	int path_index;
+
+	description[0] = '\0';
+
+	for (path_index = 0; path_index < (int)Q_COUNTOF(paths); path_index++)
+	{
+		FILE *file = fopen(paths[path_index], "r");
+		if (!file)
+			continue;
+
+		while (fgets(line, sizeof(line), file))
+		{
+			const char *key = NULL;
+			char *value;
+			size_t value_length;
+
+			if (!strncmp(line, "PRETTY_NAME=", 12))
+			{
+				key = "PRETTY_NAME=";
+			}
+			else if (!strncmp(line, "NAME=", 5))
+			{
+				key = "NAME=";
+			}
+			else if (!strncmp(line, "VERSION_ID=", 11))
+			{
+				key = "VERSION_ID=";
+			}
+
+			if (!key)
+				continue;
+
+			value = line + strlen(key);
+			while (*value == ' ' || *value == '\t')
+				value++;
+			value_length = strlen(value);
+			while (value_length && (value[value_length - 1] == '\n' || value[value_length - 1] == '\r'))
+				value[--value_length] = '\0';
+			if (value_length >= 2 &&
+				((value[0] == '"' && value[value_length - 1] == '"') ||
+				 (value[0] == '\'' && value[value_length - 1] == '\'')))
+			{
+				value[value_length - 1] = '\0';
+				value++;
+			}
+
+			if (!strcmp(key, "PRETTY_NAME="))
+			{
+				q_strlcpy(description, value, sizeof(description));
+				break;
+			}
+			else if (!strcmp(key, "NAME="))
+				q_strlcpy(name, value, sizeof(name));
+			else if (!strcmp(key, "VERSION_ID="))
+				q_strlcpy(version, value, sizeof(version));
+		}
+
+		fclose(file);
+		if (description[0])
+			return description;
+	}
+
+	if (name[0] && version[0])
+		q_snprintf(description, sizeof(description), "%s %s", name, version);
+	else if (name[0])
+		q_strlcpy(description, name, sizeof(description));
+
+	return description[0] ? description : NULL;
+}
+#endif
+
 //warning: this text might not even be a complete line.
 //we're screwed if someone names themselves something that triggers this or some such
 //however, that's what has become standard for nq clients
@@ -3931,6 +4010,12 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 	{
 		if (realtime > cl.printversionresponse)
 		{
+#if defined(__linux__) || defined(__linux)
+			const char *linux_platform = CL_LinuxOSDescription();
+			if (linux_platform && *linux_platform)
+				platform = linux_platform;
+#endif
+
 			MSG_WriteByte (&cls.message, clc_stringcmd);
 			MSG_WriteString(&cls.message,va("say %s %s %d-bit", ENGINE_NAME_AND_VER, platform, bit)); // woods add bit, adapted from ironwail
 			cl.printversionresponse = realtime+20;
@@ -3951,6 +4036,11 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 	{
 		if (realtime > cl.printqsys)
 		{
+#if defined(__linux__) || defined(__linux)
+			const char *linux_platform = CL_LinuxOSDescription();
+			if (linux_platform && *linux_platform)
+				platform = linux_platform;
+#endif
 
 			const char* sound = SDL_GetAudioDeviceName(0, SDL_FALSE); // woods #q_sysinfo (qrack)
 			const int sdlRam = SDL_GetSystemRAM(); // woods #q_sysinfo (qrack)
