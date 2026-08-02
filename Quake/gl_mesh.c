@@ -526,6 +526,12 @@ typedef struct md3Frame_s {
 	char		name[16];
 } md3Frame_t;
 
+typedef struct {
+	char		name[64];
+	vec3_t		origin;
+	float		axis[3][3];
+} md3Tag_t;
+
 //there are header->numSurfaces of these at header->ofsSurfaces, following from ofsEnd
 typedef struct {
 	int		ident;				//
@@ -570,6 +576,147 @@ typedef struct {
 	int				shaderIndex;
 } md3Shader_t;
 
+static qboolean Mod_MD3Range (size_t base, size_t limit, int offset, size_t count, size_t size)
+{
+	size_t start, bytes;
+
+	if (base > limit || offset < 0 || (size_t)offset > limit - base)
+		return false;
+	start = base + (size_t)offset;
+	if (size && count > SIZE_MAX / size)
+		return false;
+	bytes = count * size;
+	return bytes <= limit - start;
+}
+
+static qboolean Mod_MD3Multiply (size_t left, size_t right, size_t *result)
+{
+	if (left && right > SIZE_MAX / left)
+		return false;
+	*result = left * right;
+	return true;
+}
+
+static qboolean Mod_MD3Invalid (qmodel_t *mod, int start, const char *reason)
+{
+	Con_Warning ("Mod_LoadMD3Model: %s: %s\n", mod->name, reason);
+	mod->type = mod_ext_invalid;
+	mod->flags = 0;
+	Hunk_FreeToLowMark (start);
+	return false;
+}
+
+static qboolean Mod_ValidateMD3Model (qmodel_t *mod, const void *buffer, size_t file_size, int start)
+{
+	const byte *base = (const byte *)buffer;
+	const md3Header_t *header;
+	const md3Surface_t *surface;
+	size_t md3_end, surface_offset, surface_end, tag_count;
+	size_t vertex_count;
+	int numframes, numtags, numsurfs, surf;
+
+	if (file_size < sizeof(md3Header_t))
+		return Mod_MD3Invalid (mod, start, "file is smaller than its header");
+
+	header = (const md3Header_t *)buffer;
+	if (LittleLong(header->ident) != (('I'<<0)|('D'<<8)|('P'<<16)|('3'<<24)))
+		return Mod_MD3Invalid (mod, start, "invalid ident");
+	if (LittleLong(header->version) != MD3_VERSION)
+		return Mod_MD3Invalid (mod, start, "wrong version");
+
+	numframes = LittleLong(header->numFrames);
+	numtags = LittleLong(header->numTags);
+	numsurfs = LittleLong(header->numSurfaces);
+	if (numframes < 1 || numframes > MAXALIASFRAMES)
+		return Mod_MD3Invalid (mod, start, "invalid frame count");
+	if (numtags < 0)
+		return Mod_MD3Invalid (mod, start, "invalid tag count");
+	if (numsurfs < 1)
+		return Mod_MD3Invalid (mod, start, "no surfaces");
+
+	if (LittleLong(header->ofsEnd) < (int)sizeof(md3Header_t) ||
+		(size_t)LittleLong(header->ofsEnd) > file_size)
+		return Mod_MD3Invalid (mod, start, "invalid file end offset");
+	md3_end = (size_t)LittleLong(header->ofsEnd);
+	if (LittleLong(header->ofsFrames) < (int)sizeof(md3Header_t) ||
+		LittleLong(header->ofsSurfaces) < (int)sizeof(md3Header_t) ||
+		(numtags && LittleLong(header->ofsTags) < (int)sizeof(md3Header_t)))
+		return Mod_MD3Invalid (mod, start, "header data offset is inside the header");
+
+	if (!Mod_MD3Range (0, md3_end, LittleLong(header->ofsFrames),
+		(size_t)numframes, sizeof(md3Frame_t)))
+		return Mod_MD3Invalid (mod, start, "frame range is outside the file");
+	if (numtags &&
+		(!Mod_MD3Multiply ((size_t)numtags, (size_t)numframes, &tag_count) ||
+		 !Mod_MD3Range (0, md3_end, LittleLong(header->ofsTags),
+		 tag_count, sizeof(md3Tag_t))))
+		return Mod_MD3Invalid (mod, start, "tag range is outside the file");
+
+	surface_offset = (size_t)LittleLong(header->ofsSurfaces);
+	if (surface_offset >= md3_end)
+		return Mod_MD3Invalid (mod, start, "surface offset is outside the file");
+
+	for (surf = 0; surf < numsurfs; surf++)
+	{
+		if (!Mod_MD3Range (surface_offset, md3_end, 0, 1, sizeof(md3Surface_t)))
+			return Mod_MD3Invalid (mod, start, "surface header is outside the file");
+
+		surface = (const md3Surface_t *)(base + surface_offset);
+		if (LittleLong(surface->ident) != (('I'<<0)|('D'<<8)|('P'<<16)|('3'<<24)))
+			return Mod_MD3Invalid (mod, start, "corrupt surface ident");
+		if (LittleLong(surface->numFrames) != numframes)
+			return Mod_MD3Invalid (mod, start, "mismatched surface frame count");
+		if (LittleLong(surface->numShaders) < 0)
+			return Mod_MD3Invalid (mod, start, "invalid shader count");
+		if (LittleLong(surface->numVerts) <= 0 || LittleLong(surface->numVerts) > 0xffff)
+			return Mod_MD3Invalid (mod, start, "invalid vertex count");
+		if (LittleLong(surface->numTriangles) <= 0 ||
+			(size_t)LittleLong(surface->numTriangles) > (size_t)INT_MAX / 3)
+			return Mod_MD3Invalid (mod, start, "invalid triangle count");
+		if (LittleLong(surface->ofsEnd) < (int)sizeof(md3Surface_t))
+			return Mod_MD3Invalid (mod, start, "surface does not advance");
+
+		if ((size_t)LittleLong(surface->ofsEnd) > md3_end - surface_offset)
+			return Mod_MD3Invalid (mod, start, "surface end is outside the file");
+		surface_end = surface_offset + (size_t)LittleLong(surface->ofsEnd);
+
+		if (!Mod_MD3Range (surface_offset, surface_end, LittleLong(surface->ofsTriangles),
+			(size_t)LittleLong(surface->numTriangles), sizeof(md3Triangle_t)) ||
+			!Mod_MD3Range (surface_offset, surface_end, LittleLong(surface->ofsShaders),
+			(size_t)LittleLong(surface->numShaders), sizeof(md3Shader_t)) ||
+			!Mod_MD3Range (surface_offset, surface_end, LittleLong(surface->ofsSt),
+			(size_t)LittleLong(surface->numVerts), sizeof(md3St_t)))
+			return Mod_MD3Invalid (mod, start, "surface data range is outside the surface");
+
+		if (!Mod_MD3Multiply ((size_t)LittleLong(surface->numFrames),
+			(size_t)LittleLong(surface->numVerts), &vertex_count) ||
+			!Mod_MD3Range (surface_offset, surface_end, LittleLong(surface->ofsXyzNormals),
+			vertex_count, sizeof(md3XyzNormal_t)))
+			return Mod_MD3Invalid (mod, start, "vertex range is outside the surface");
+
+		for (int triangle_index = 0; triangle_index < LittleLong(surface->numTriangles); triangle_index++)
+		{
+			const md3Triangle_t *triangle = (const md3Triangle_t *)
+				(base + surface_offset + (size_t)LittleLong(surface->ofsTriangles) +
+				 (size_t)triangle_index * sizeof(md3Triangle_t));
+			for (int vertex_index = 0; vertex_index < 3; vertex_index++)
+			{
+				int index = LittleLong(triangle->indexes[vertex_index]);
+				if (index < 0 || index >= LittleLong(surface->numVerts))
+					return Mod_MD3Invalid (mod, start, "triangle index is outside the surface");
+			}
+		}
+
+		surface_offset = surface_end;
+	}
+
+	/* Some exporters leave padding between the final surface and ofsEnd. */
+	if (surface_offset > md3_end)
+		return Mod_MD3Invalid (mod, start, "surface list exceeds file end");
+
+	return true;
+}
+
 qboolean Mod_GetShaderNameForSurface(const char *skinfile, const char *surfacename, char *texturename, size_t texturenamesize)
 {
 	const char *linestart = skinfile;
@@ -609,7 +756,7 @@ qboolean Mod_GetShaderNameForSurface(const char *skinfile, const char *surfacena
 	return false;
 }
 
-void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
+qboolean Mod_LoadMD3Model (qmodel_t *mod, void *buffer, size_t file_size)
 {
 	md3Header_t			*pinheader;
 	md3Surface_t		*pinsurface;
@@ -634,11 +781,8 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 	start = Hunk_LowMark ();
 
 	pinheader = (md3Header_t *)buffer;
-
-	ival = LittleLong (pinheader->version);
-	if (ival != MD3_VERSION)
-		Sys_Error ("%s has wrong version number (%i should be %i)",
-				 diskname, ival, MD3_VERSION);
+	if (!Mod_ValidateMD3Model (mod, buffer, file_size, start))
+		return false;
 
 	numsurfs = LittleLong (pinheader->numSurfaces);
 	numframes = LittleLong(pinheader->numFrames);
@@ -849,10 +993,11 @@ void Mod_LoadMD3Model (qmodel_t *mod, void *buffer)
 //
 	Cache_Alloc (&mod->cache, total, loadname);
 	if (!mod->cache.data)
-		return;
+		return true;
 	memcpy (mod->cache.data, outhdr, total);
 
 	Hunk_FreeToLowMark (start);
+	return true;
 }
 
 /*

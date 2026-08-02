@@ -34,7 +34,7 @@ char	diskname[MAX_QPATH];	// for loading related name-based files.
 static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer);
 static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer);
 static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer, int pvtype);
-void Mod_LoadMD3Model (qmodel_t *mod, void *buffer);
+qboolean Mod_LoadMD3Model (qmodel_t *mod, void *buffer, size_t file_size);
 void Mod_LoadMD5MeshModel (qmodel_t *mod, void *buffer);
 void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer);
 static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash);
@@ -624,7 +624,8 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 
 	//Spike -- md3 support
 	case (('I'<<0)+('D'<<8)+('P'<<16)+('3'<<24)):	//md3
-		Mod_LoadMD3Model(mod, buf);
+		if (!Mod_LoadMD3Model(mod, buf, (model_filelen > 0) ? (size_t)model_filelen : 0))
+			mod->type = mod_ext_invalid;
 		break;
 
 	//Spike -- md5 support
