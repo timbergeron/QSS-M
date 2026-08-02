@@ -3002,6 +3002,12 @@ void Con_Redirect(void(*flush)(const char *))
 //unique defs
 char key_tabpartial[MAXCMDLINE];
 static char dedicated_tab_partial[MAXCMDLINE];
+typedef enum
+{
+	CON_MATCH_EXACT,
+	CON_MATCH_PREFIX,
+	CON_MATCH_INTERNAL
+} console_match_rank_t;
 typedef struct tab_s
 {
 	const char	*name;
@@ -3011,6 +3017,7 @@ typedef struct tab_s
 	struct tab_s	*next;
 	struct tab_s	*prev;
 	int			count; // woods #iwtabcomplete
+	console_match_rank_t rank;
 } tab_t;
 tab_t	*tablist;
 
@@ -3120,6 +3127,25 @@ static qboolean	bash_singlematch;
 static int tablist_omitted_count;
 static int tablist_limited_count;
 
+static console_match_rank_t Con_MatchRank (const char *name, const char *partial)
+{
+	if (q_strcasestr (name, partial) != name)
+		return CON_MATCH_INTERNAL;
+	else if (name[strlen(partial)])
+		return CON_MATCH_PREFIX;
+	else
+		return CON_MATCH_EXACT;
+}
+
+static int Con_CompareTabEntry (console_match_rank_t rank, const char *name,
+	const char *date, qboolean file_is_demo, const tab_t *t)
+{
+	if (rank != t->rank)
+		return rank - t->rank;
+
+	return file_is_demo ? q_sortdemos(date, t->date) : q_strnaturalcmp(name, t->name);
+}
+
 // woods -- internal helper. match_name is what's used for Con_Match and the
 // bash_partial common-substring logic; if NULL we fall back to name. callers
 // that want "type ascii to find a quake-special-char entry, but insert the
@@ -3134,10 +3160,13 @@ static void Con_AddToTabListInternal (const char* name, const char* partial, con
 	int		allocsize, mark;
 	const char* match = match_name ? match_name : name;
 	qboolean match_is_name = (!match_name || !strcmp(match_name, name));
+	console_match_rank_t rank;
 	char*	storage;
 
 	if (!Con_Match (match, partial))
 		return;
+
+	rank = Con_MatchRank (match, partial);
 
 	int FileIsDemo = (param != NULL); // woods #demolistsort
 
@@ -3203,6 +3232,7 @@ static void Con_AddToTabListInternal (const char* name, const char* partial, con
 	else
 		t->type = NULL;
 	t->count = 1;
+	t->rank = rank;
 	if (param)
 	{
 		strncpy(t->date, param, sizeof(t->date) - 1); // Copy the date
@@ -3215,7 +3245,7 @@ static void Con_AddToTabListInternal (const char* name, const char* partial, con
 		t->next = t;
 		t->prev = t;
 	}
-	else if (FileIsDemo ? (q_sortdemos(param, tablist->date) < 0) : (q_strnaturalcmp(name, tablist->name) < 0)) // Insert at front -- woods #demolistsort
+	else if (Con_CompareTabEntry(rank, name, param, FileIsDemo, tablist) < 0) // Insert at front -- woods #demolistsort
 	{
 		t->next = tablist;
 		t->prev = tablist->prev;
@@ -3228,7 +3258,7 @@ static void Con_AddToTabListInternal (const char* name, const char* partial, con
 		insert = tablist;
 		do
 		{
-			int cmp = FileIsDemo ? q_sortdemos(t->date, insert->date) : q_strnaturalcmp(name, insert->name);  // woods #demolistsort
+			int cmp = Con_CompareTabEntry(rank, name, t->date, FileIsDemo, insert);  // woods #demolistsort
 			if (!cmp && !strcmp(name, insert->name)) // avoid duplicates
 			{
 				Hunk_FreeToLowMark (mark);
