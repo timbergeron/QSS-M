@@ -1910,10 +1910,16 @@ typedef struct axisstate_s
 
 static joybuttonstate_t joy_buttonstate;
 static joyaxisstate_t joy_axisstate;
+static joyaxisstate_t joy_csqc_axisstate;
+static qboolean joy_axis_consumed[SDL_CONTROLLER_AXIS_MAX];
+static dprograms_t *joy_csqc_progs;
+static func_t joy_csqc_inputevent;
 
 static double joy_buttontimer[SDL_CONTROLLER_BUTTON_MAX];
 static int joy_buttonkey[SDL_CONTROLLER_BUTTON_MAX];
 static double joy_emulatedkeytimer[6];
+
+#define JOY_CSQC_AXIS_EPSILON (1.0f / 256.0f)
 
 #ifdef __WATCOMC__ /* OW1.9 doesn't have powf() / sqrtf() */
 #define powf pow
@@ -1973,6 +1979,10 @@ static void IN_ResetJoystickState(void)
 	IN_ReleaseJoystickKeys();
 	memset(&joy_buttonstate, 0, sizeof(joy_buttonstate));
 	memset(&joy_axisstate, 0, sizeof(joy_axisstate));
+	memset(&joy_csqc_axisstate, 0, sizeof(joy_csqc_axisstate));
+	memset(joy_axis_consumed, 0, sizeof(joy_axis_consumed));
+	joy_csqc_progs = NULL;
+	joy_csqc_inputevent = 0;
 	memset(joy_buttontimer, 0, sizeof(joy_buttontimer));
 	memset(joy_buttonkey, 0, sizeof(joy_buttonkey));
 	memset(joy_emulatedkeytimer, 0, sizeof(joy_emulatedkeytimer));
@@ -2137,6 +2147,106 @@ static void IN_JoyKeyEvent(qboolean wasdown, qboolean isdown, int key, double *t
 			lastactivetype = KD_GAMEPAD;
 			Key_Event(key, true);
 		}
+	}
+}
+
+static qboolean IN_CSQCAxisEvent(int axis, float value)
+{
+	qboolean consumed;
+
+	if (!cl.qcvm.progs || !cl.qcvm.extfuncs.CSQC_InputEvent)
+		return false;
+
+	PR_SwitchQCVM(&cl.qcvm);
+	G_FLOAT(OFS_PARM0) = CSIE_JOYAXIS;
+	// Keep the SDL game-controller axis order here; joy_swapmovelook only
+	// changes the engine's movement/look mapping, not the CSQC axis identity.
+	G_FLOAT(OFS_PARM1) = (float)axis;
+	G_FLOAT(OFS_PARM2) = value;
+	// QSS-M exposes one active controller to CSQC.  Keep its logical device
+	// ID consistent with the existing keyboard and mouse input events instead
+	// of exposing an SDL enumeration or instance ID to QC.
+	G_FLOAT(OFS_PARM3) = 0.0f;
+	PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_InputEvent);
+	consumed = G_FLOAT(OFS_RETURN) != 0;
+	PR_SwitchQCVM(NULL);
+
+	return consumed;
+}
+
+static void IN_JoyTriggerKeyEvent(qboolean consumed, qboolean wasdown, qboolean isdown, int key, double *timer)
+{
+	if (consumed)
+	{
+		if (*timer != 0.0)
+		{
+			Key_Event(key, false);
+			*timer = 0.0;
+		}
+		return;
+	}
+
+	// If QC consumed the preceding press, do not synthesize an unmatched
+	// release when it stops consuming the axis at the neutral position.
+	if (wasdown && !isdown && *timer == 0.0)
+		return;
+
+	IN_JoyKeyEvent(wasdown, isdown, key, timer);
+}
+
+static void IN_UpdateCSQCAxisEvents(const joyaxisstate_t *newaxisstate)
+{
+	int i;
+	func_t inputevent = cl.qcvm.extfuncs.CSQC_InputEvent;
+
+	if (joy_csqc_progs != cl.qcvm.progs || joy_csqc_inputevent != inputevent)
+	{
+		memset(&joy_csqc_axisstate, 0, sizeof(joy_csqc_axisstate));
+		memset(joy_axis_consumed, 0, sizeof(joy_axis_consumed));
+		joy_csqc_progs = cl.qcvm.progs;
+		joy_csqc_inputevent = inputevent;
+	}
+
+	if (key_dest != key_game || !inputevent)
+	{
+		// Do not carry a gameplay baseline across menu/console input.  If an
+		// axis is held while returning to the game, the next frame should report
+		// its current value to CSQC rather than treating it as unchanged.
+		memset(&joy_csqc_axisstate, 0, sizeof(joy_csqc_axisstate));
+		memset(joy_axis_consumed, 0, sizeof(joy_axis_consumed));
+		return;
+	}
+
+	for (i = 0; i < SDL_CONTROLLER_AXIS_MAX; i++)
+	{
+		// CSQC may change the input destination or reload itself from inside
+		// the callback.  Do not dispatch the remaining axes under that new
+		// state, and do not retain consumption results from the old state.
+		if (key_dest != key_game || cl.qcvm.progs != joy_csqc_progs ||
+			cl.qcvm.extfuncs.CSQC_InputEvent != inputevent)
+		{
+			memset(joy_axis_consumed, 0, sizeof(joy_axis_consumed));
+			break;
+		}
+
+		float value = newaxisstate->axisvalue[i];
+		float last = joy_csqc_axisstate.axisvalue[i];
+
+		// SDL axis values jitter slightly even while the stick is stationary.
+		// Report meaningful changes, but always report the return to exact zero.
+		if (fabsf(value - last) < JOY_CSQC_AXIS_EPSILON &&
+			!(value == 0.0f && last != 0.0f))
+			continue;
+
+		// Update before entering QC so a reentrant IN_Commands call cannot
+		// dispatch the same axis event again.  Treat the axis as consumed while
+		// QC is running so reentrant input processing cannot synthesize a key
+		// event before the callback's return value is known.  Keep that
+		// provisional value through the callback: a reentrant pass can still
+		// reach trigger emulation even when its axis loop emits nothing.
+		joy_csqc_axisstate.axisvalue[i] = value;
+		joy_axis_consumed[i] = true;
+		joy_axis_consumed[i] = IN_CSQCAxisEvent(i, value);
 	}
 }
 
@@ -2539,6 +2649,7 @@ void IN_Commands (void)
 {
 #if defined(USE_SDL2)
 	joyaxisstate_t newaxisstate;
+	joyaxisstate_t oldaxisstate;
 	joyaxis_t old_move, new_move, raw, deadzone, eased;
 	int i;
 	const float stickthreshold = 0.9;
@@ -2591,16 +2702,24 @@ void IN_Commands (void)
 		if (oldstate && !newstate)
 			joy_buttonkey[i] = 0;
 	}
+
+	// Button key events can re-enter IN_Commands.  Take the axis snapshot
+	// after that loop so trigger/menu transitions already handled by a nested
+	// pass are not synthesized again by this pass.
+	oldaxisstate = joy_axisstate;
 	
 	for (i = 0; i < SDL_CONTROLLER_AXIS_MAX; i++)
 	{
 		newaxisstate.axisvalue[i] = SDL_GameControllerGetAxis(joy_active_controller, (SDL_GameControllerAxis)i) / 32768.0f;
 	}
+
+	joy_axisstate = newaxisstate;
+	IN_UpdateCSQCAxisEvents(&newaxisstate);
 	
 	// emit emulated arrow keys so the analog sticks can be used in the menu
 	if (key_dest != key_game)
 	{
-		old_move = IN_GetMoveAxis(&joy_axisstate);
+		old_move = IN_GetMoveAxis(&oldaxisstate);
 		new_move = IN_GetMoveAxis(&newaxisstate);
 		IN_JoyKeyEvent(old_move.x < -stickthreshold, new_move.x < -stickthreshold, K_LEFTARROW, &joy_emulatedkeytimer[0]);
 		IN_JoyKeyEvent(old_move.x >  stickthreshold, new_move.x >  stickthreshold, K_RIGHTARROW, &joy_emulatedkeytimer[1]);
@@ -2646,11 +2765,17 @@ void IN_Commands (void)
 		}
 	}
 	
-	// emit emulated keys for the analog triggers
-	IN_JoyKeyEvent(joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERLEFT] > triggerthreshold,  newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERLEFT] > triggerthreshold, K_LTRIGGER, &joy_emulatedkeytimer[4]);
-	IN_JoyKeyEvent(joy_axisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] > triggerthreshold, newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] > triggerthreshold, K_RTRIGGER, &joy_emulatedkeytimer[5]);
-	
-	joy_axisstate = newaxisstate;
+	// Emit emulated keys for the analog triggers unless CSQC consumed the
+	// corresponding axis event.  Release an already-held key if consumption
+	// changes while the trigger is down.
+	IN_JoyTriggerKeyEvent(joy_axis_consumed[SDL_CONTROLLER_AXIS_TRIGGERLEFT],
+		oldaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERLEFT] > triggerthreshold,
+		newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERLEFT] > triggerthreshold,
+		K_LTRIGGER, &joy_emulatedkeytimer[4]);
+	IN_JoyTriggerKeyEvent(joy_axis_consumed[SDL_CONTROLLER_AXIS_TRIGGERRIGHT],
+		oldaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] > triggerthreshold,
+		newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] > triggerthreshold,
+		K_RTRIGGER, &joy_emulatedkeytimer[5]);
 
 #if SDL_VERSION_ATLEAST(2, 0, 9)
 	if ((joy_has_rumble || joy_has_trigger_rumble) && !IN_IsCalibratingGyro() &&
@@ -2721,6 +2846,25 @@ void IN_JoyMove (usercmd_t *cmd)
 
 	moveEased = IN_ApplyEasing(moveDeadzone, joy_exponent_move.value);
 	lookEased = IN_ApplyEasing(lookDeadzone, joy_exponent.value);
+
+	// Apply consumption after the radial deadzone/easing calculations.  Masking
+	// the raw vector first would change its magnitude and unintentionally reduce
+	// the response of the unconsumed sibling axis.  The raw look vector is also
+	// masked for the weapon wheel and flick-stick paths below.
+	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTX : SDL_CONTROLLER_AXIS_LEFTX])
+		moveEased.x = 0.0f;
+	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTY : SDL_CONTROLLER_AXIS_LEFTY])
+		moveEased.y = 0.0f;
+	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTX : SDL_CONTROLLER_AXIS_RIGHTX])
+	{
+		lookEased.x = 0.0f;
+		lookRaw.x = 0.0f;
+	}
+	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_RIGHTY])
+	{
+		lookEased.y = 0.0f;
+		lookRaw.y = 0.0f;
+	}
 
 	if ((in_speed.state & 1) ^ (cl_alwaysrun.value != 0.0 || cl_forwardspeed.value >= sv_maxspeed.value))
 		// running
