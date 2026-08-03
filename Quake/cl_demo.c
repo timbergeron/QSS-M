@@ -307,6 +307,7 @@ static void CL_ResetDemoSeekState(void)
 	demo_time_seek_direction = 0;
 	demo_frame_seek_target = 0;
 	demo_marker_found_time = 0.f;
+	demo_seek_frame_activity = false;
 }
 
 static void CL_ClearDemoRestartRequest(void)
@@ -2297,7 +2298,10 @@ static void CL_DemoMarkHistory_Print(const char *map_filter)
 ==============
 CL_StopPlayback
 
-Called when a demo file runs out, or the user starts a game
+Called when a demo file runs out, or the user starts a game.
+
+Abnormal demo reads must terminate through Host_EndGame after clearing the
+playlist and net message state; callers must not return to the host frame.
 ==============
 */
 void CL_StopPlayback (void)
@@ -2413,6 +2417,18 @@ static void CL_WriteRecordedDemoMarker(void)
 	CL_WriteDemoMessageData(msg.data, msg.cursize, cl.viewangles);
 }
 
+static FUNC_NORETURN void CL_EndDemoReadFailure(const char *reason)
+{
+	net_message.cursize = 0;
+	Con_Printf("%s\n", reason);
+
+	/* A malformed/unterminated attract demo must not be queued again by
+	   Host_EndGame. Valid playlist demos terminate through svc_disconnect. */
+	cls.demonum = -1;
+
+	Host_EndGame("%s", reason);
+}
+
 static int CL_GetDemoMessage (void)
 {
 	int	r, i;
@@ -2457,18 +2473,18 @@ static int CL_GetDemoMessage (void)
 	// read the length into a local and validate it before it ever reaches
 	// net_message.cursize, so a corrupt demo cannot leave a bogus size on the
 	// global buffer for anything else to act on
-	if (fread (&msglen, 4, 1, cls.demofile) != 1) // woods
+	r = (int)fread (&msglen, 1, 4, cls.demofile);
+	if (r != 4) // woods
 	{
-		CL_StopPlayback();
-		return 0;
+		CL_EndDemoReadFailure(r == 0 && feof (cls.demofile) ?
+			"End of demo" : "Demo read failed: truncated message length");
 	}
 	VectorCopy (cl.mviewangles[0], cl.mviewangles[1]);
 	for (i = 0 ; i < 3 ; i++)
 	{
 		if (fread (&f, 4, 1, cls.demofile) != 1)
 		{
-			CL_StopPlayback();
-			return 0;
+			CL_EndDemoReadFailure("Demo read failed: truncated view angles");
 		}
 		cl.mviewangles[0][i] = LittleFloat (f);
 	}
@@ -2481,18 +2497,14 @@ static int CL_GetDemoMessage (void)
 	if (msglen <= 0 || msglen > MAX_MSGLEN)
 	{
 		Con_Printf ("Corrupt demo: message length %i out of range\n", msglen);
-		net_message.cursize = 0;
-		CL_StopPlayback ();
-		return 0;
+		CL_EndDemoReadFailure("Demo read failed: invalid message length");
 	}
 	// only publish the size once the payload is actually in the buffer, so a
 	// short read never leaves cursize describing bytes we did not get
 	r = fread (net_message.data, msglen, 1, cls.demofile);
 	if (r != 1)
 	{
-		net_message.cursize = 0;
-		CL_StopPlayback ();
-		return 0;
+		CL_EndDemoReadFailure("Demo read failed: truncated message payload");
 	}
 	net_message.cursize = msglen;
 
