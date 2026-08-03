@@ -89,8 +89,8 @@ NAV_KEYS = [K["UP"], K["DOWN"], K["LEFT"], K["RIGHT"], K["ENTER"], K["ESCAPE"],
             K["PGUP"], K["PGDN"], K["INS"], K["SPACE"],
             K["MWHEELUP"], K["MWHEELDOWN"]]
 
-# menucommands[] from menu.c.  The download/serverlist ones reach out to the
-# internet, so they are opt-in.
+# menucommands[] from menu.c.  Download/serverlist and web-launching menus
+# reach outside the engine, so they are excluded from the local campaign.
 MENUS_LOCAL = [
     "menu_main", "menu_modmenu", "menu_singleplayer", "menu_load", "menu_save",
     "menu_skill", "menu_multiplayer", "menu_setup", "menu_options", "menu_keys",
@@ -99,7 +99,7 @@ MENUS_LOCAL = [
     "menu_console", "menu_colorpicker", "menu_startup", "menu_demooptions",
     "menu_pakloading", "menu_modelviewer", "menu_audiobrowser", "menu_saving",
     "menu_misc", "menu_shortcuts", "menu_version", "menu_config", "menu_video",
-    "menu_graphics", "help", "menu_credits", "menu_namemaker", "namemaker",
+    "menu_graphics", "menu_credits",
     "menu_mods", "menu_demos", "menu_maps", "menu_bookmarks", "bookmark",
     "menu_history",
 ]
@@ -150,8 +150,10 @@ COMMAND_BLOCKLIST = {
     "unbindall", "menu_restart", "sys_open", "openurl", "opendir",
     "showfile", "explore", "record", "timedemo", "startdemos",
 }
+# max_edicts is a capacity limit; fuzzing it below a map's entity demand
+# produces an expected ED_Alloc resource error rather than an engine bug.
 CVAR_BLOCKLIST_RE = re.compile(
-    r"^(vid_|_vid|snd_device|host_maxfps$|developer$|sv_public|rcon_|"
+    r"^(vid_|_vid|snd_device|host_maxfps$|developer$|max_edicts$|sv_public|rcon_|"
     r"cl_web|net_|sys_|com_|registered$|cmdline$)")
 
 
@@ -783,7 +785,7 @@ class Engine:
         shutil.copy2(src, dst)
         return True
 
-    def answer_dialog(self):
+    def answer_dialog(self, response="n"):
         """Answer a blocking SCR_ModalMessage over the priority channel.
 
         Not the main script: a dialog opens with the fuzzer's queued keys still
@@ -792,7 +794,7 @@ class Engine:
         """
         try:
             with open(str(self.script) + ".answer", "a") as f:
-                f.write(f"_stress_char 110\n_stress_key {K['ESCAPE']}\n")
+                f.write(f"_stress_char {response}\n_stress_key {K['ESCAPE']}\n")
                 f.flush()
                 os.fsync(f.fileno())
         except OSError:
@@ -1098,9 +1100,10 @@ class Engine:
             if not self.alive():
                 return
             time.sleep(0.2)
-        # the quit menu may have eaten it -- confirm with 'y'
+        # The quit menu may have eaten it.  Use the priority channel because a
+        # normal script key would sit behind the modal's blocking loop.
         try:
-            self.send("_stress_key 121")
+            self.answer_dialog("y")
         except Dead:
             return
         deadline = now() + 10
@@ -2092,6 +2095,11 @@ def scen_wirefuzz(eng, rng, cfg):
     Expected: graceful disconnect, Host_Error, or an ignored packet.  A crash,
     hang, sanitizer report, or a parser-invariant violation is a finding.
     """
+    if eng.capabilities.get("wire_inject") != "1":
+        eng.stress_event("CL_ParseServerMessage", phase="skipped",
+                         reason="binary lacks wire_inject capability")
+        return
+
     srv = cfg.runner.make_engine("server")
     eng.helpers.append(srv)
     srv.extra_args = ["-dedicated", "8"]
@@ -2204,6 +2212,11 @@ def scen_servercmdfuzz(eng, rng, cfg):
     Payloads go out as svc_stufftext from a real dedicated server so they take
     the genuine src_server dispatch path.
     """
+    if eng.capabilities.get("wire_inject") != "1":
+        eng.stress_event("src_server", phase="skipped",
+                         reason="binary lacks wire_inject capability")
+        return
+
     srv = cfg.runner.make_engine("server")
     eng.helpers.append(srv)
     srv.extra_args = ["-dedicated", "8"]

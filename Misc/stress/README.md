@@ -8,11 +8,43 @@ every registered console command and cvar.
 
 ## Requirements
 
-* a QSS-M build containing the `-stress` hooks (`Host_StressInit` in `host.c`)
+* a QSS-M Debug build containing the `-stress` hooks (`Host_StressInit` in
+  `Misc/stress/host_stress.c`)
 * `pak0.pak` (+ `pak1.pak` for the registered maps); found automatically in
   `~/Desktop/qssm/id1/paks`, or pass `--paks <dir>`
 * loose base assets such as `gfx.wad`; the harness auto-detects
   `~/Desktop/qssm/id1/paktest`, or pass `--loose-root <game-root>`
+
+## Build the stress-enabled macOS binary
+
+The stress hooks are wired into the `QSS-M` Xcode target.  `Debug` defines
+`QSSM_STRESS=1` and compiles `Misc/stress/host_stress.c`; `Release` does not
+define it and keeps the normal player command surface.  Build the app bundle,
+then verify the hook strings before starting a campaign:
+
+```bash
+xcodebuild -project macOS/QuakeSpasm.xcodeproj -target QSS-M \
+  -configuration Debug CODE_SIGNING_ALLOWED=NO build
+
+export QSSM_BIN="$PWD/macOS/build/Debug/QSS-M.app/Contents/MacOS/QSS-M"
+strings "$QSSM_BIN" | grep -E 'STRESS_READY|_stress_status'
+```
+
+If the build output is in Xcode DerivedData instead of `macOS/build`, locate
+the bundle executable and set `QSSM_BIN` explicitly:
+
+```bash
+QSSM_BIN="$(find "$HOME/Library/Developer/Xcode/DerivedData" \
+  -path '*/Build/Products/Debug/QSS-M.app/Contents/MacOS/QSS-M' \
+  -type f -print -exec stat -f '%m %N' {} \; | sort -nr | head -1 | cut -d' ' -f2-)"
+test -n "$QSSM_BIN" && strings "$QSSM_BIN" | grep -E 'STRESS_READY|_stress_status'
+```
+
+The current engine boundary covers script-driven lifecycle, console, menu,
+key, and character stress.  Parser-exact, server-message injection, and
+raw-datagram lanes advertise their capability status at boot and are skipped
+until their owning parser/network modules are wired to the corresponding
+stress seam.
 
 Every run gets its own throwaway `-basedir`, isolated HOME/TMPDIR, and working
 directory.  PAKs and loose assets are copied into the sandbox rather than symlinked, so
@@ -191,14 +223,15 @@ and BJP3 10002, then requires the real client to complete signon before the
 actor pair is shut down. A higher stress level therefore adds protocol-state
 coverage instead of only increasing random iteration counts.
 
-Stress-enabled Debug builds also emit one-time `STRESS_COVERAGE` records for
-server-message opcodes, client-message opcodes, protocol profiles, and raw
-datagram outcomes. Inputs that discover a new campaign-wide ID are saved as
-content-addressed `.bin` files under the selected corpus directory (by
-default, `results/corpus`); later wire lanes mutate those saved inputs.
-Each normal campaign deduplicates representatives by coverage ID and moves
-redundant entries to `corpus/quarantine/`. Use `--corpus-regress` to replay
-every remaining representative and write `CORPUS_REGRESSION.md`.
+When the parser/network seams are enabled, stress builds emit one-time
+`STRESS_COVERAGE` records for server-message opcodes, client-message opcodes,
+protocol profiles, and raw datagram outcomes. Inputs that discover a new
+campaign-wide ID are saved as content-addressed `.bin` files under the
+selected corpus directory (by default, `results/corpus`); later wire lanes
+mutate those saved inputs. Each normal campaign deduplicates representatives
+by coverage ID and moves redundant entries to `corpus/quarantine/`. Use
+`--corpus-regress` to replay every remaining representative and write
+`CORPUS_REGRESSION.md`.
 
 `--regress <dir>` turns saved `repro.jsonl`/`repro.txt` files into a repeatable
 suite.  The complete multi-actor event log is preferred; otherwise a minimized
@@ -343,8 +376,9 @@ enough to look exactly like a wedged frame loop.  Runs pass
 A bare `SZ_GetSpace: overflow` message is the engine's handled
 `allowoverflow` recovery path and is not a finding by itself. Likewise, a
 `SCR_ModalMessage` stack is first treated as a modal-input recovery case: the
-harness uses the priority `<script>.answer` channel to answer scripted dialogs
-before classifying the process as hung.
+harness uses the priority `<script>.answer` channel, which the stress-enabled
+engine drains from inside the modal loop, to answer scripted dialogs before
+classifying the process as hung.
 
 ## Known issues
 
