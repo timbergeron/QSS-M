@@ -76,6 +76,18 @@ cvar_t	gl_cshift_contents_auto = {"gl_cshift_contents_auto", "0", CVAR_ARCHIVE};
 cvar_t	r_viewmodel_quake = {"r_viewmodel_quake", "0", CVAR_ARCHIVE};
 cvar_t	cl_demo_eyecam = {"cl_demo_eyecam", "0", CVAR_NONE}; // woods #demoeyecam
 
+// woods #gunpos -- FTEQW-compatible viewmodel offsets, ported from FTEQW commit
+// 50c00fb7bcbdaeb18f840155f6a9c5d75b66ab47 (cl_main.c/cl_ents.c).
+// Axis names follow FTEQW rather than the engine's internal axes, so:
+//   cl_gunx  positive = right   (view->origin[1] is left,    hence negated)
+//   cl_guny  positive = down    (view->origin[2] is up,      hence negated)
+//   cl_gunz  positive = forward (view->origin[0] is forward, applied directly)
+// Clamped at the use site so the model can't be pushed behind the view origin.
+#define GUNOFS_LIMIT	30
+cvar_t	cl_gunx = {"cl_gunx", "0", CVAR_ARCHIVE}; // woods #gunpos
+cvar_t	cl_guny = {"cl_guny", "0", CVAR_ARCHIVE}; // woods #gunpos
+cvar_t	cl_gunz = {"cl_gunz", "0", CVAR_ARCHIVE}; // woods #gunpos
+
 float	v_dmg_time, v_dmg_roll, v_dmg_pitch;
 
 extern	int			in_forward, in_forward2, in_back;
@@ -1526,6 +1538,9 @@ void V_CalcRefdef (void)
 	view->eflags = EFLAGS_VIEWMODEL;
 	VectorScale(forward, 1.0/32, view->origin);	//bias it very slightly sideways (so it shifts slightly when turning to mimic the 1/32 bias that used to affect it before we changed how viewmodels work)
 	view->origin[0] = bob*0.4;	//and bob it forwards
+	view->origin[0] += bound(-GUNOFS_LIMIT, cl_gunz.value, GUNOFS_LIMIT);	// woods #gunpos
+	view->origin[1] -= bound(-GUNOFS_LIMIT, cl_gunx.value, GUNOFS_LIMIT);	// woods #gunpos
+	view->origin[2] -= bound(-GUNOFS_LIMIT, cl_guny.value, GUNOFS_LIMIT);	// woods #gunpos
 
 	if (cl.items & IT_INVISIBILITY) // woods #ringalpha
 	{
@@ -1747,5 +1762,8 @@ void V_Init (void)
 	Cvar_RegisterVariable (&cl_gun_drift); // woods #gdrift
 
 	Cvar_RegisterVariable (&r_viewmodel_quake); //MarkV
+	Cvar_RegisterVariable (&cl_gunx); // woods #gunpos
+	Cvar_RegisterVariable (&cl_guny); // woods #gunpos
+	Cvar_RegisterVariable (&cl_gunz); // woods #gunpos
 	Cvar_RegisterVariable (&cl_demo_eyecam); // woods #demoeyecam
 }
