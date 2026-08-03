@@ -1,0 +1,5 @@
+# Generated stress output and local Python caches.
+tmp/
+__pycache__/
+*.py[cod]
+.DS_Store

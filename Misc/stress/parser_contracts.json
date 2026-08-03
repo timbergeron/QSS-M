@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "status": "exact_entry_points_bounded_raw_replay_and_opcode_coverage_implemented",
+  "entry_points": [
+    {
+      "name": "_stress_parse_servermsg",
+      "target": "CL_ParseServerMessage",
+      "input": "exact message bytes plus protocol profile",
+      "oracle": ["readcount_equals_cursize", "deterministic_reject", "no_overread"],
+      "status": "implemented_current_protocol"
+    },
+    {
+      "name": "_stress_parse_clientmsg",
+      "target": "SV_ReadClientMessage",
+      "input": "exact client message bytes plus protocol profile",
+      "oracle": ["server_alive", "expected_drop_or_reject", "no_command_side_effect"],
+      "status": "implemented_current_protocol"
+    },
+    {
+      "name": "_stress_replay_datagram",
+      "target": "connectionless_and_netchan_datagram_boundary",
+      "input": "raw datagram bytes and declared length",
+      "oracle": ["length_policy_recorded", "loopback_only", "server_alive"],
+      "status": "implemented_bounded_loopback_replay"
+    }
+  ]
+}

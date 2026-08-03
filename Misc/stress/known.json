@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "_comment": [
+    "Triaged signatures.  A campaign reports only signatures that are NOT in",
+    "here, so a nightly run stays quiet until something genuinely new turns up.",
+    "",
+    "state=open   the bug is real and still open.  Seeing it again is expected:",
+    "             it is filed under 'Known issues seen again' in REPORT.md and",
+    "             does not affect the exit code.  In --regress it is an expected",
+    "             reproduction, and if it STOPS reproducing the run says so, so",
+    "             the entry can be closed.",
+    "state=fixed  the bug was fixed.  Reproducing it again is a regression and",
+    "             is reported loudly, in campaigns and in --regress alike.",
+    "",
+    "Entry fields: id, signature (exact) or signature_re (regex), optional kind",
+    "and scenarios filters, state, opened, note.",
+    "",
+    "Add an entry from a real finding rather than writing signatures by hand:",
+    "  ./qssm_stress.py --known-add tmp/results/0007-filefuzz --known-note '...'",
+    "  ./qssm_stress.py --known-list",
+    "",
+    "Example entry (delete the leading underscore to activate):",
+    "  { \"id\": \"QSSM-001\", \"signature_re\": \"^SIGSEGV.*Mod_LoadLighting\",",
+    "    \"kind\": \"crash\", \"scenarios\": [\"filefuzz\"], \"state\": \"open\",",
+    "    \"opened\": \"2026-08-02\", \"note\": \"negative BSP lump offset\" }"
+  ],
+  "issues": []
+}

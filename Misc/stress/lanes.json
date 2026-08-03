@@ -1,0 +1,231 @@
+{
+  "schema": 1,
+  "levels": ["L0", "L1", "L2", "L3", "L4", "L5"],
+  "lanes": [
+    {
+      "name": "smoke",
+      "status": "implemented",
+      "required_hooks": ["-stress", "_stress_status"],
+      "corpus_adapters": ["builtin_maps"],
+      "progression_levels": ["L0", "L1", "L3", "L5"],
+      "oracle_contract": ["process_alive", "map_reached", "clean_quit"],
+      "minimum_acceptance": "boot, load start, move, disconnect, and quit"
+    },
+    {
+      "name": "menu",
+      "status": "implemented",
+      "required_hooks": ["-stress", "_stress_key", "_stress_char"],
+      "corpus_adapters": ["menu_names", "text_inputs"],
+      "progression_levels": ["L1", "L3", "L5"],
+      "oracle_contract": ["process_alive", "no_stuck_modal_input", "clean_quit"],
+      "minimum_acceptance": "visit local menus from disconnected and spawned states"
+    },
+    {
+      "name": "mapchurn",
+      "status": "implemented",
+      "required_hooks": ["-stress", "_stress_status"],
+      "corpus_adapters": ["builtin_maps", "savegames"],
+      "progression_levels": ["L1", "L2", "L3", "L5"],
+      "oracle_contract": ["process_alive", "map_reached", "filesystem_contained"],
+      "minimum_acceptance": "complete a map, changelevel, save/load, and disconnect cycle"
+    },
+    {
+      "name": "gameplay",
+      "status": "implemented",
+      "required_hooks": ["-stress", "_stress_key"],
+      "corpus_adapters": ["movement", "weapons", "hud_cvars"],
+      "progression_levels": ["L1", "L3", "L5"],
+      "oracle_contract": ["process_alive", "no_stuck_input", "clean_quit"],
+      "minimum_acceptance": "run movement, weapon, cheat, and HUD actions in a live map"
+    },
+    {
+      "name": "demo",
+      "status": "implemented",
+      "required_hooks": ["-stress", "_stress_status"],
+      "corpus_adapters": ["builtin_demos", "demo_mutator"],
+      "progression_levels": ["L1", "L2", "L3", "L4", "L5"],
+      "oracle_contract": ["process_alive", "demo_state_reached", "filesystem_contained"],
+      "minimum_acceptance": "record, play, seek, and reject a truncated demo"
+    },
+    {
+      "name": "cmdfuzz",
+      "status": "implemented",
+      "required_hooks": ["-stress", "_stress_status"],
+      "corpus_adapters": ["cmdlist", "fuzz_args"],
+      "progression_levels": ["L2", "L3", "L4", "L5"],
+      "oracle_contract": ["process_alive", "expected_command_rejects", "filesystem_contained"],
+      "minimum_acceptance": "exercise every allowed command in disconnected, spawned, and demo states"
+    },
+    {
+      "name": "cvarfuzz",
+      "status": "implemented",
+      "required_hooks": ["-stress", "_stress_status"],
+      "corpus_adapters": ["cvarlist", "fuzz_args"],
+      "progression_levels": ["L2", "L3", "L4", "L5"],
+      "oracle_contract": ["process_alive", "render_reached", "filesystem_contained"],
+      "minimum_acceptance": "set boundary cvars and force a render/map transition"
+    },
+    {
+      "name": "netchurn",
+      "status": "implemented",
+      "required_hooks": ["-stress", "rcon"],
+      "corpus_adapters": ["rcon_commands", "connect_churn"],
+      "progression_levels": ["L1", "L3", "L5"],
+      "oracle_contract": ["process_alive", "listen_reached", "filesystem_contained"],
+      "minimum_acceptance": "open a local listen server and complete map/connect churn"
+    },
+    {
+      "name": "remote",
+      "status": "implemented_benign_opt_in",
+      "required_hooks": ["-stress"],
+      "corpus_adapters": ["live_signon"],
+      "progression_levels": ["L1", "L3"],
+      "oracle_contract": ["client_alive", "clean_disconnect", "no_fuzzing"],
+      "minimum_acceptance": "connect and disconnect only when an explicit target is supplied"
+    },
+    {
+      "name": "chaos",
+      "status": "implemented_composite",
+      "required_hooks": ["-stress"],
+      "corpus_adapters": ["scenario_rotation"],
+      "progression_levels": ["L3", "L4", "L5"],
+      "oracle_contract": ["process_alive", "filesystem_contained", "event_log_complete"],
+      "minimum_acceptance": "complete a deterministic composite of lifecycle and input lanes"
+    },
+    {
+      "name": "clientserver",
+      "status": "implemented",
+      "required_hooks": ["-stress", "rcon", "dedicated_server"],
+      "corpus_adapters": ["local_udp", "connect_churn"],
+      "progression_levels": ["L1", "L3", "L5"],
+      "oracle_contract": ["client_alive", "server_alive", "signon_reached", "filesystem_contained"],
+      "minimum_acceptance": "complete a local dedicated-server signon and reconnect cycle"
+    },
+    {
+      "name": "wirefuzz",
+      "status": "implemented_legacy_boundary",
+      "required_hooks": ["-stress", "_stress_inject", "coverage", "dedicated_server"],
+      "corpus_adapters": ["svc_records", "wire_mutator"],
+      "progression_levels": ["L2", "L4", "L5"],
+      "oracle_contract": ["client_alive", "parser_invariant", "filesystem_contained"],
+      "minimum_acceptance": "deliver a valid control record and one exact truncation through the local server"
+    },
+    {
+      "name": "servercmdfuzz",
+      "status": "implemented_legacy_boundary",
+      "required_hooks": ["-stress", "_stress_inject", "coverage", "dedicated_server"],
+      "corpus_adapters": ["server_commands", "download_args"],
+      "progression_levels": ["L2", "L4", "L5"],
+      "oracle_contract": ["client_alive", "expected_command_rejects", "filesystem_contained"],
+      "minimum_acceptance": "reach a server-only command through svc_stufftext"
+    },
+    {
+      "name": "filefuzz",
+      "status": "implemented",
+      "required_hooks": ["-stress", "_stress_status"],
+      "corpus_adapters": ["pak_entries", "bsp", "mdl", "spr", "wav", "lmp"],
+      "progression_levels": ["L1", "L2", "L4", "L5"],
+      "oracle_contract": ["loader_reached", "expected_asset_rejects", "filesystem_contained"],
+      "minimum_acceptance": "load a valid asset control and reject one mutated asset without touching source files"
+    },
+    {
+      "name": "md3fuzz",
+      "status": "implemented",
+      "required_hooks": ["-stress", "_stress_status"],
+      "corpus_adapters": ["md3_fixture", "model_mutator"],
+      "progression_levels": ["L0", "L2", "L4", "L5"],
+      "oracle_contract": ["loader_reached", "control_acceptance", "expected_asset_rejects"],
+      "minimum_acceptance": "accept the valid MD3 control and reject malformed variants"
+    },
+    {
+      "name": "audio",
+      "status": "planned",
+      "required_hooks": ["QSSM_STRESS", "decoder_probe", "audio_lifecycle"],
+      "corpus_adapters": ["wav", "ogg", "mp3", "flac", "opus", "module"],
+      "progression_levels": ["L0", "L1", "L2", "L3", "L4", "L5"],
+      "oracle_contract": ["decoder_reached", "no_zero_progress", "device_baseline", "process_alive"],
+      "minimum_acceptance": "decode a valid fixture and close/reopen it without resource growth"
+    },
+    {
+      "name": "clientwirefuzz",
+      "status": "implemented_raw_boundary",
+      "required_hooks": ["QSSM_STRESS", "_stress_replay_datagram", "coverage", "dedicated_server"],
+      "corpus_adapters": ["clc_records", "connectionless", "fragment_mutator"],
+      "progression_levels": ["L2", "L4", "L5"],
+      "oracle_contract": ["server_alive", "sentinel_client_alive", "expected_drop", "filesystem_contained"],
+      "minimum_acceptance": "send a valid client control and one rejected malformed client packet"
+    },
+    {
+      "name": "msgboundary",
+      "status": "implemented_exact_entry_points",
+      "required_hooks": ["QSSM_STRESS", "_stress_parse_servermsg", "_stress_parse_clientmsg", "coverage"],
+      "corpus_adapters": ["protocol_records", "exact_truncator"],
+      "progression_levels": ["L0", "L1", "L2", "L4", "L5"],
+      "oracle_contract": ["exact_end_reject", "no_overread", "deterministic_readcount"],
+      "minimum_acceptance": "run the same valid record and every cut from zero through its exact end"
+    },
+    {
+      "name": "protocolmatrix",
+      "status": "implemented_protocol_matrix",
+      "required_hooks": ["-stress", "sv_protocol", "coverage", "dedicated_server"],
+      "corpus_adapters": ["netquake15", "fitz666", "rmq999", "bjp3_10002"],
+      "progression_levels": ["L2", "L4", "L5"],
+      "oracle_contract": ["signon_reached", "opcode_coverage", "protocol_specific_reject"],
+      "minimum_acceptance": "complete valid signon under every supported protocol profile"
+    },
+    {
+      "name": "corpus",
+      "status": "implemented_replay_and_dedupe",
+      "required_hooks": ["-stress", "coverage", "dedicated_server"],
+      "corpus_adapters": ["wirefuzz", "servercmdfuzz", "clientwirefuzz", "msgboundary", "protocolmatrix"],
+      "progression_levels": ["L2", "L4", "L5"],
+      "oracle_contract": ["saved_input_replayed", "coverage_id_seen", "process_alive", "filesystem_contained"],
+      "minimum_acceptance": "replay every saved novelty input through its original boundary"
+    },
+    {
+      "name": "netimpair",
+      "status": "planned",
+      "required_hooks": ["QSSM_STRESS", "net_driver_impairment"],
+      "corpus_adapters": ["loss", "delay", "duplicate", "reorder", "mtu"],
+      "progression_levels": ["L1", "L2", "L3", "L5"],
+      "oracle_contract": ["bounded_queue", "recovery_or_timeout", "no_duplicate_commands"],
+      "minimum_acceptance": "recover from one deterministic loss and one blackout"
+    },
+    {
+      "name": "qcfuzz",
+      "status": "planned",
+      "required_hooks": ["QSSM_STRESS", "qc_execution_budget"],
+      "corpus_adapters": ["progs_fixture", "qc_header_mutator", "edict_budget"],
+      "progression_levels": ["L0", "L1", "L2", "L3", "L4", "L5"],
+      "oracle_contract": ["qc_reached", "controlled_budget_error", "edict_baseline"],
+      "minimum_acceptance": "load a valid fixture and reject a malformed header before pointer use"
+    },
+    {
+      "name": "formatfuzz",
+      "status": "planned",
+      "required_hooks": ["QSSM_STRESS", "loader_events"],
+      "corpus_adapters": ["pak", "wad", "lit", "vis", "ent", "loc", "cfg", "save", "playlist"],
+      "progression_levels": ["L0", "L1", "L2", "L3", "L4", "L5"],
+      "oracle_contract": ["loader_reached", "expected_reject", "filesystem_contained"],
+      "minimum_acceptance": "prove each adapter reaches its intended loader before accepting a pass"
+    },
+    {
+      "name": "renderlife",
+      "status": "planned",
+      "required_hooks": ["QSSM_STRESS", "renderer_lifecycle"],
+      "corpus_adapters": ["texture_cache", "lightmap", "model_cache", "context"],
+      "progression_levels": ["L0", "L1", "L3", "L4", "L5"],
+      "oracle_contract": ["post_restart_frame", "context_generation", "resource_plateau", "no_gl_errors"],
+      "minimum_acceptance": "complete one renderer restart and produce a post-restart frame"
+    },
+    {
+      "name": "inputctrl",
+      "status": "planned",
+      "required_hooks": ["QSSM_STRESS", "virtual_input"],
+      "corpus_adapters": ["keyboard", "mouse", "controller", "touchpad", "gyro"],
+      "progression_levels": ["L0", "L1", "L3", "L4", "L5"],
+      "oracle_contract": ["no_stuck_input", "device_state_sane", "capture_state_matches_keydest"],
+      "minimum_acceptance": "attach/detach a virtual device and return all axes/buttons to neutral"
+    }
+  ]
+}
