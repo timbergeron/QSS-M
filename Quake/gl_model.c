@@ -4341,10 +4341,21 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 	dheader_t	*header;
 	mmodel_t 	*bm;
 	float		radius; //johnfitz
+	size_t		filesize; // woods #bsppreflight
 
 	loadmodel->type = mod_brush;
 
 	header = (dheader_t *)buffer;
+
+	// woods #bsppreflight -- the generic 4-byte check in Mod_LoadModel is not enough here: the
+	// header byte-swap below reads and writes the whole dheader_t, off the end of a truncated file
+	if (com_filesize < (qofs_t)sizeof(dheader_t))
+	{
+		loadmodel->type = mod_ext_invalid;
+		Con_Warning ("Mod_LoadBrushModel: %s is too small to be a bsp (%i bytes, need %i)\n", mod->name, (int)com_filesize, (int)sizeof(dheader_t));
+		return;
+	}
+	filesize = (size_t)com_filesize;
 
 	mod->bspversion = LittleLong (header->version);
 
@@ -4373,6 +4384,34 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 
 	for (i = 0; i < (int) sizeof(dheader_t) / 4; i++)
 		((int *)header)[i] = LittleLong ( ((int *)header)[i]);
+
+	// woods #bsppreflight -- range-check every lump once, up front, so the individual Mod_Load*
+	// readers below can trust mod_base+fileofs. negative values fail via the unsigned compare.
+	for (i = 0; i < HEADER_LUMPS; i++)
+	{
+		if (!Mod_BSPLumpValid (filesize, &header->lumps[i], 0, NULL))
+		{
+			loadmodel->type = mod_ext_invalid;
+			Con_Warning ("Mod_LoadBrushModel: %s has out of range bsp lump %i (ofs %u len %u, file %u bytes)\n",
+				mod->name, i, (unsigned)header->lumps[i].fileofs, (unsigned)header->lumps[i].filelen, (unsigned)filesize);
+			return;
+		}
+	}
+
+	// woods #bsppreflight -- these are present in every real bsp, and a zero-length one leaves the
+	// hull/bounds setup at the end of this function with nothing to fill it in
+	{
+		static const int reqlumps[] = {LUMP_MODELS, LUMP_PLANES, LUMP_VERTEXES, LUMP_NODES, LUMP_LEAFS};
+		for (i = 0; i < (int) countof(reqlumps); i++)
+		{
+			if (!header->lumps[reqlumps[i]].filelen)
+			{
+				loadmodel->type = mod_ext_invalid;
+				Con_Warning ("Mod_LoadBrushModel: %s has empty bsp lump %i\n", mod->name, reqlumps[i]);
+				return;
+			}
+		}
+	}
 
 	Q1BSPX_Setup(mod, buffer, com_filesize, header->lumps, HEADER_LUMPS);
 
