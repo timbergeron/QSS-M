@@ -33179,8 +33179,12 @@ static qboolean ServerList_UpdateTeslaItem(const char* jsonText, double connectT
 		for (playerEntry = playersArray->firstchild; playerEntry; playerEntry = playerEntry->next)
 		{
 			const char* name = JSON_FindString(playerEntry, "name");
+			const double* score = JSON_FindNumber(playerEntry, "frags");
 			char displayName[128];
+			char playerLabel[160];
 			int len;
+			if (!score)
+				score = JSON_FindNumber(playerEntry, "score");
 
 			listedPlayers++;
 			if (!name || !*name)
@@ -33189,14 +33193,21 @@ static qboolean ServerList_UpdateTeslaItem(const char* jsonText, double connectT
 			len = (int)strlen(displayName);
 			while (len > 0 && displayName[len - 1] == ' ')
 				len--;
-			if (!len || playerNamesLen + len + (playerNamesLen ? 2 : 0) >= (int)sizeof(playerNames))
+			if (!len)
+				continue;
+			if (score && isfinite(*score))
+				q_snprintf(playerLabel, sizeof(playerLabel), "%.*s (%d)", len, displayName, (int)*score);
+			else
+				q_snprintf(playerLabel, sizeof(playerLabel), "%.*s", len, displayName);
+			len = (int)strlen(playerLabel);
+			if (playerNamesLen + len + (playerNamesLen ? 2 : 0) >= (int)sizeof(playerNames))
 				continue;
 			if (playerNamesLen)
 			{
 				playerNames[playerNamesLen++] = ',';
 				playerNames[playerNamesLen++] = ' ';
 			}
-			memcpy(playerNames + playerNamesLen, displayName, len);
+			memcpy(playerNames + playerNamesLen, playerLabel, len);
 			playerNamesLen += len;
 			playerNames[playerNamesLen] = '\0';
 		}
@@ -33338,9 +33349,13 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 			for (playerEntry = playersArray->firstchild; playerEntry; playerEntry = playerEntry->next)
 			{
 				const char* pname = JSON_FindString(playerEntry, "name");
+				const double* score = JSON_FindNumber(playerEntry, "frags");
+				if (!score)
+					score = JSON_FindNumber(playerEntry, "score");
 				if (pname && pname[0])
 				{
 					char playerName[128];
+					char playerLabel[160];
 					// trim trailing spaces
 					int plen;
 
@@ -33348,14 +33363,21 @@ void populateServersFromJSON (const char* jsonText, servertitem_t** items, int* 
 					plen = (int)strlen(playerName);
 					while (plen > 0 && playerName[plen - 1] == ' ')
 						plen--;
-					if (plen > 0 && playerNamesLen + plen + 2 < (int)sizeof(playerNames))
+					if (plen > 0)
 					{
+						if (score && isfinite(*score))
+							q_snprintf(playerLabel, sizeof(playerLabel), "%.*s (%d)", plen, playerName, (int)*score);
+						else
+							q_snprintf(playerLabel, sizeof(playerLabel), "%.*s", plen, playerName);
+						plen = (int)strlen(playerLabel);
+						if (playerNamesLen + plen + 2 >= (int)sizeof(playerNames))
+							continue;
 						if (playerNamesLen > 0)
 						{
 							playerNames[playerNamesLen++] = ',';
 							playerNames[playerNamesLen++] = ' ';
 						}
-						memcpy(playerNames + playerNamesLen, playerName, plen);
+						memcpy(playerNames + playerNamesLen, playerLabel, plen);
 						playerNamesLen += plen;
 						playerNames[playerNamesLen] = '\0';
 					}
@@ -34391,12 +34413,13 @@ void M_ServerList_Draw (void)
                                 m_mousey >= current_y_pos &&
                                 m_mousey < current_y_pos + 8);
 	                        qboolean tab_held = keydown[K_TAB];
+	                        qboolean shortcut_held = Key_IsShortcutModifierDown();
 
 				if (copy_message_active)
 				{
 					M_PrintWhite(x, info_y, "copied!");
 				}
-	                        else if ((hover_plys || tab_held) && server.has_players)
+	                        else if ((hover_plys || tab_held || shortcut_held) && server.has_players)
 	                        {
 	                                // Display player names with word-wrapping (like demos menu)
 	                                char players_copy[512];

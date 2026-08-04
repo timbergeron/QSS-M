@@ -7694,7 +7694,7 @@ int UDP_Ping_Host(const char* host)
 
 /*
 ==================
-UDP_QueryPlayers -- query player names from a server via CCREQ_PLAYER_INFO
+UDP_QueryPlayers -- query player names and scores from a server via CCREQ_PLAYER_INFO
 Returns a malloc'd comma-separated string, or NULL on failure.
 ==================
 */
@@ -7820,6 +7820,8 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 				const unsigned char *p;
 				const char *pname;
 				int namelen;
+				int frags = 0;
+				qboolean has_frags = false;
 
 				if ((control & (~NETFLAG_LENGTH_MASK)) != (int)NETFLAG_CTL)
 					continue;
@@ -7837,26 +7839,44 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 				{
 					const unsigned char *end = buf + len;
 					const unsigned char *scan = p;
+					int encoded_value;
 					while (scan < end && *scan)
 						scan++;
 					if (scan >= end)
 						continue; /* no null terminator found, skip */
 					namelen = (int)(scan - p);
+					/* CCREP_PLAYER_INFO continues with colors and frags. */
+					if ((size_t)(end - scan) >= 1 + 2 * sizeof(encoded_value))
+					{
+						memcpy(&encoded_value, scan + 1 + sizeof(encoded_value), sizeof(encoded_value));
+						frags = BigLong(encoded_value);
+						has_frags = true;
+					}
 				}
 
 				/* trim trailing spaces */
 				while (namelen > 0 && pname[namelen - 1] == ' ')
 					namelen--;
 
-				if (namelen > 0 && nameslen + namelen + 2 < (int)sizeof(names))
+				if (namelen > 0)
 				{
+					char player[128];
+					int playerlen;
+
+					if (has_frags)
+						q_snprintf(player, sizeof(player), "%.*s (%d)", namelen, pname, frags);
+					else
+						q_snprintf(player, sizeof(player), "%.*s", namelen, pname);
+					playerlen = (int)strlen(player);
+					if (nameslen + playerlen + 2 >= (int)sizeof(names))
+						continue;
 					if (nameslen > 0)
 					{
 						names[nameslen++] = ',';
 						names[nameslen++] = ' ';
 					}
-					memcpy(names + nameslen, pname, namelen);
-					nameslen += namelen;
+					memcpy(names + nameslen, player, playerlen);
+					nameslen += playerlen;
 					names[nameslen] = '\0';
 				}
 				received_count++;
