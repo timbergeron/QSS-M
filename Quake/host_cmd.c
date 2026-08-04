@@ -7840,6 +7840,7 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 					const unsigned char *end = buf + len;
 					const unsigned char *scan = p;
 					int encoded_value;
+					int network_frags;
 					while (scan < end && *scan)
 						scan++;
 					if (scan >= end)
@@ -7849,8 +7850,19 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 					if ((size_t)(end - scan) >= 1 + 2 * sizeof(encoded_value))
 					{
 						memcpy(&encoded_value, scan + 1 + sizeof(encoded_value), sizeof(encoded_value));
-						frags = BigLong(encoded_value);
-						has_frags = true;
+						network_frags = BigLong(encoded_value);
+						/* A few server implementations return the control header in
+						 * network order but leave the player fields in host order. */
+						if (network_frags >= -1000000 && network_frags <= 1000000)
+						{
+							frags = network_frags;
+							has_frags = true;
+						}
+						else if (encoded_value >= -1000000 && encoded_value <= 1000000)
+						{
+							frags = encoded_value;
+							has_frags = true;
+						}
 					}
 				}
 
