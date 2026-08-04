@@ -9484,6 +9484,10 @@ Host_Name_f
 static void Host_Name_f (void)
 {
 	char	newName[32];
+	const char *raw_args;
+	const char *name_start;
+	const char *name_end;
+	size_t name_len;
 	int a, b, c;	// JPG 1.05 - ip address logging  // woods for #iplog
 	qboolean truncated = false;
 
@@ -9514,18 +9518,36 @@ static void Host_Name_f (void)
 		return;
 	}
 
-	if (Cmd_Argc () == 2)
+	// Use the original argument text rather than Cmd_Argv(1).  Quake color
+	// bytes are <= 0x20, so tokenization can discard them before Cmd_Argv(1)
+	// is built.  The raw form preserves the selected name exactly.
+	raw_args = Cmd_RawArgs();
+	name_start = raw_args;
+	name_end = raw_args + strlen(raw_args);
+
+	// Tab completion appends a separator after the selected name.
+	while (name_end > name_start && q_isspace((unsigned char)name_end[-1]))
+		name_end--;
+
+	// Strip optional command quotes while preserving any Quake color bytes
+	// inside the name.
+	if (name_end - name_start >= 2 && name_start[0] == '"' && name_end[-1] == '"')
 	{
-		if (strlen(Cmd_Argv(1)) > 15)
-			truncated = true;
-		q_strlcpy(newName, Cmd_Argv(1), sizeof(newName));
+		name_start++;
+		name_end--;
 	}
-	else
-	{
-		if (strlen(Cmd_Args()) > 15)
-			truncated = true;
-		q_strlcpy(newName, Cmd_Args(), sizeof(newName));
-	}
+
+	while (name_end > name_start && q_isspace((unsigned char)name_end[-1]))
+		name_end--;
+
+	name_len = (size_t)(name_end - name_start);
+	if (name_len >= sizeof(newName))
+		name_len = sizeof(newName) - 1;
+	memcpy(newName, name_start, name_len);
+	newName[name_len] = '\0';
+
+	if (name_end - name_start > 15)
+		truncated = true;
 
 	newName[15] = 0;	// client_t structure actually says name[32].
 

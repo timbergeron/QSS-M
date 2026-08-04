@@ -882,6 +882,38 @@ static qboolean Key_ConsoleQuitMistype (const char *line)
 	return true;
 }
 
+/*
+====================
+Key_ConsoleCommitTabHint
+
+The console's auto-hint is drawn after the cursor but is not part of
+key_lines[].  Commit it when Enter is pressed so accepting a visible
+completion has the same effect as pressing Tab first.
+====================
+*/
+static void Key_ConsoleCommitTabHint (char *workline)
+{
+	size_t line_len, hint_len, copy_len;
+
+	if (!key_tabhint[0])
+		return;
+
+	line_len = strlen(workline);
+	if (key_linepos != line_len)
+		return;
+
+	hint_len = strlen(key_tabhint);
+	copy_len = q_min(hint_len, (size_t)(MAXCMDLINE - 1) - line_len);
+	if (!copy_len)
+		return;
+
+	memcpy(workline + line_len, key_tabhint, copy_len);
+	workline[line_len + copy_len] = '\0';
+	key_linepos += copy_len;
+	key_tabhint[0] = '\0';
+	key_tabpartial[0] = '\0';
+}
+
 void Key_Console (int key)
 {
 	static	char current[MAXCMDLINE] = "";
@@ -902,6 +934,7 @@ void Key_Console (int key)
 		// K_ABUTTON shares enter behavior, but skips the chat shortcut branch above.
 	case K_ABUTTON:
 	case K_KP_ENTER:
+		Key_ConsoleCommitTabHint(workline);
 		key_tabpartial[0] = 0;
 		// woods -- #smartquit -- a human typed this line, so it is the one place
 		// a mistyped "quit" may raise the confirmation prompt.  Doing it deeper,

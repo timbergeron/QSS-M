@@ -821,6 +821,7 @@ static	int			cmd_argc;
 static	char		*cmd_argv[MAX_ARGS];
 static	char		cmd_null_string[] = "";
 static	const char	*cmd_args = NULL;
+static	const char	*cmd_rawargs = NULL;
 
 cmd_source_t	cmd_source;
 
@@ -1359,6 +1360,21 @@ const char	*Cmd_Args (void)
 
 /*
 ============
+Cmd_RawArgs
+
+Returns the original argument text after ordinary command-separating spaces
+and tabs, before COM_Parse discards low Quake character bytes as whitespace.
+============
+*/
+const char *Cmd_RawArgs (void)
+{
+	if (!cmd_rawargs)
+		return "";
+	return cmd_rawargs;
+}
+
+/*
+============
 Cmd_AddArg  -- woods #iwtabcomplete
 ============
 */
@@ -1388,9 +1404,17 @@ void Cmd_TokenizeString (const char *text)
 
 	cmd_argc = 0;
 	cmd_args = NULL;
+	cmd_rawargs = NULL;
 
 	while (1)
 	{
+		if (cmd_argc == 1 && !cmd_rawargs)
+		{
+			cmd_rawargs = text;
+			while (*cmd_rawargs == ' ' || *cmd_rawargs == '\t')
+				cmd_rawargs++;
+		}
+
 // skip whitespace up to a /n
 		while (*text && (unsigned char)*text <= ' ' && *text != '\n')
 		{
