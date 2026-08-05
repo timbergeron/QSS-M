@@ -93,6 +93,7 @@ void M_Menu_ModMenu_f (void);
 		void M_Menu_Skill_f(void);
 	void M_Menu_MultiPlayer_f (void);
 		void M_Menu_Setup_f (void);
+		void M_Menu_NameHistory_f(void); // woods #namehistory
 		void M_Menu_NameMaker_f(void); // woods #namemaker
 		void M_Menu_LanConfig_f (void);
 		void M_Menu_GameOptions_f (void);
@@ -146,6 +147,7 @@ void M_ModMenu_Draw (void);
 		void M_Skill_Draw (void);
 	void M_MultiPlayer_Draw (void);
 		void M_Setup_Draw (void);
+		void M_NameHistory_Draw(void); // woods #namehistory
 		void M_NameMaker_Draw(void); // woods #namemaker
 		void M_LanConfig_Draw (void);
 		void M_GameOptions_Draw (void);
@@ -247,6 +249,7 @@ void M_ModMenu_Key (int key);
 	qboolean M_Demos_TextEntry (void);
 	void M_Help_Key (int key);
 	void M_Quit_Key (int key);
+	void M_NameHistory_Key(int key); // woods #namehistory
 	void M_NameMaker_Key(int key); // woods #namemaker
 
 	// woods #mousemenu
@@ -261,6 +264,7 @@ void M_ModMenu_Key (int key);
 			void M_Skill_Mousemove(int cx, int cy);
 	void M_MultiPlayer_Mousemove(int cx, int cy);
 		void M_Setup_Mousemove(int cx, int cy);
+		void M_NameHistory_Mousemove(int cx, int cy); // woods #namehistory
 		void M_NameMaker_Mousemove(int cx, int cy);
 		void M_LanConfig_Mousemove(int cx, int cy);
 		void M_GameOptions_Mousemove(int cx, int cy);
@@ -8087,9 +8091,29 @@ static qboolean M_Menu_TabCompleteNameHistory(menu_textfield_t *field,
 	char *tab_partial, size_t tab_partial_size,
 	qboolean reverse); // woods #namehistory
 
-static int		setup_cursor = 6; // woods 4 to 5 #
+enum // woods -- row ids, so inserting a row is one edit instead of a renumbering sweep #namehistory
+{
+	SETUP_CURSOR_HOSTNAME,
+	SETUP_CURSOR_NAME,
+	SETUP_CURSOR_NAMEHISTORY,
+	SETUP_CURSOR_NAMEMAKER,
+	SETUP_CURSOR_COLORPICKER,
+	SETUP_CURSOR_SHIRT,
+	SETUP_CURSOR_PANTS,
+	SETUP_CURSOR_ACCEPT,
+	SETUP_CURSOR_COUNT
+};
+#define	NUM_SETUP_CMDS	SETUP_CURSOR_COUNT // woods 5 to 6 #namemaker, 7 to 8 #namehistory
 
-static int		setup_cursor_table[] = {40, 56, 72, 88, 104, 128, 158}; // woods add value, change position #namemaker #colorbar
+/* The two colour rows are taller than the rest: each carries a colour bar drawn
+ * just below its label, so they get 22/30px instead of the plain 16px step. */
+#define	SETUP_SHIRT_BAR_Y	122 // woods #colorbar
+#define	SETUP_PANTS_BAR_Y	144 // woods #colorbar
+
+static int		setup_cursor = SETUP_CURSOR_ACCEPT; // woods
+
+static int		setup_cursor_table[] = {36, 52, 68, 84, 100, 116, 138, 168}; // woods add value, change position #namemaker #colorbar #namehistory
+COMPILE_TIME_ASSERT(setup_cursor_table_count, Q_COUNTOF(setup_cursor_table) == NUM_SETUP_CMDS);
 
 static void (*colorpicker_return_fn)(void);
 
@@ -8204,9 +8228,9 @@ void M_AdjustColour(plcolour_t *tr, int dir)
 
 static menu_textfield_t *M_Setup_GetFieldForCursor(void)
 {
-	if (setup_cursor == 0)
+	if (setup_cursor == SETUP_CURSOR_HOSTNAME)
 		return &setup_hostname_field;
-	if (setup_cursor == 1)
+	if (setup_cursor == SETUP_CURSOR_NAME)
 		return &setup_myname_field;
 	return NULL;
 }
@@ -8257,7 +8281,6 @@ static void M_Setup_UpdateNameHint(void) // woods #namehistory
 	M_Menu_UpdateNameHistoryHint(setup_myname, setup_myname_hint, sizeof(setup_myname_hint));
 }
 
-#define	NUM_SETUP_CMDS	7 // woods 5 to 6 #namemaker
 void M_Menu_Setup_f (void)
 {
 	NameHistory_Init();
@@ -8376,39 +8399,41 @@ void M_Setup_Draw (void)
 	p = Draw_CachePic ("gfx/p_multi.lmp");
 	M_DrawPic ( (320-p->width)/2, 4, p);
 
-	M_Print (64, 40, "Hostname");
-	M_DrawTextBox (160, 32, 16, 1);
-	M_TextField_DrawHighlight(&setup_hostname_field, 168, 40);
-	M_Print (168, 40, setup_hostname);
+	M_Print (64, setup_cursor_table[SETUP_CURSOR_HOSTNAME], "Hostname");
+	M_DrawTextBox (160, setup_cursor_table[SETUP_CURSOR_HOSTNAME] - 8, 16, 1);
+	M_TextField_DrawHighlight(&setup_hostname_field, 168, setup_cursor_table[SETUP_CURSOR_HOSTNAME]);
+	M_Print (168, setup_cursor_table[SETUP_CURSOR_HOSTNAME], setup_hostname);
 
-	M_Print (64, 56, "Your name");
-	M_DrawTextBox (160, 48, 16, 1);
-	M_TextField_DrawHighlight(&setup_myname_field, 168, 56);
-	M_PrintWhite (168, 56, setup_myname); // woods change to white #namemaker
-	if (setup_cursor == 1 && // woods #namehistory
+	M_Print (64, setup_cursor_table[SETUP_CURSOR_NAME], "Your name");
+	M_DrawTextBox (160, setup_cursor_table[SETUP_CURSOR_NAME] - 8, 16, 1);
+	M_TextField_DrawHighlight(&setup_myname_field, 168, setup_cursor_table[SETUP_CURSOR_NAME]);
+	M_PrintWhite (168, setup_cursor_table[SETUP_CURSOR_NAME], setup_myname); // woods change to white #namemaker
+	if (setup_cursor == SETUP_CURSOR_NAME && // woods #namehistory
 		setup_myname_hint[0] &&
 		setup_myname_field.cursor == (int)strlen(setup_myname))
 	{
 		int hint_x = 168 + (int)strlen(setup_myname) * 8;
-		M_PrintRGBA(hint_x, 56, setup_myname_hint, CL_PLColours_Parse("0xffffff"), 0.5f, false);
+		M_PrintRGBA(hint_x, setup_cursor_table[SETUP_CURSOR_NAME], setup_myname_hint, CL_PLColours_Parse("0xffffff"), 0.5f, false);
 	}
 
-	M_Print(64, 72, "Name Maker"); // woods #namemaker
+	M_Print(64, setup_cursor_table[SETUP_CURSOR_NAMEHISTORY], "Name History"); // woods #namehistory
 
-	M_Print(64, 88, "Color Picker");
+	M_Print(64, setup_cursor_table[SETUP_CURSOR_NAMEMAKER], "Name Maker"); // woods #namemaker
 
-	M_Print (64, 104, "Shirt -"); // woods 80 to 104 #namemaker #showcolornum
-	M_PrintWhite (126, 104, CL_PLColours_ToString (setup_top)); // woods #showcolornum
-	M_DrawColorBar_Top (64, 110, atoi(CL_PLColours_ToString (setup_top))); // woods #colorbar
-	M_Print (64, 128, "Pants -"); // woods 104 to 128 #namemaker #showcolornum
-	M_PrintWhite (126, 128, CL_PLColours_ToString (setup_bottom)); // woods #showcolornum
-	M_DrawColorBar_Bot (64, 134, atoi(CL_PLColours_ToString (setup_bottom))); // woods #colorbar
+	M_Print(64, setup_cursor_table[SETUP_CURSOR_COLORPICKER], "Color Picker");
 
-	if (!rgbactive && (setup_cursor == 4 || setup_cursor == 5)) // woods
-		M_PrintRGBA (64, 178, "+shift for RGB colors", CL_PLColours_Parse ("0xffffff"), 0.6f, false); // woods
+	M_Print (64, setup_cursor_table[SETUP_CURSOR_SHIRT], "Shirt -"); // woods #namemaker #showcolornum
+	M_PrintWhite (126, setup_cursor_table[SETUP_CURSOR_SHIRT], CL_PLColours_ToString (setup_top)); // woods #showcolornum
+	M_DrawColorBar_Top (64, SETUP_SHIRT_BAR_Y, atoi(CL_PLColours_ToString (setup_top))); // woods #colorbar
+	M_Print (64, setup_cursor_table[SETUP_CURSOR_PANTS], "Pants -"); // woods #namemaker #showcolornum
+	M_PrintWhite (126, setup_cursor_table[SETUP_CURSOR_PANTS], CL_PLColours_ToString (setup_bottom)); // woods #showcolornum
+	M_DrawColorBar_Bot (64, SETUP_PANTS_BAR_Y, atoi(CL_PLColours_ToString (setup_bottom))); // woods #colorbar
 
-	M_DrawTextBox (64, 150, 14, 1);  // woods 140 to 152 #namemaker
-	M_Print (72, 158, "Accept Changes"); // woods #colorbar
+	if (!rgbactive && (setup_cursor == SETUP_CURSOR_SHIRT || setup_cursor == SETUP_CURSOR_PANTS)) // woods
+		M_PrintRGBA (64, 188, "+shift for RGB colors", CL_PLColours_Parse ("0xffffff"), 0.6f, false); // woods
+
+	M_DrawTextBox (64, setup_cursor_table[SETUP_CURSOR_ACCEPT] - 8, 14, 1);  // woods #namemaker
+	M_Print (72, setup_cursor_table[SETUP_CURSOR_ACCEPT], "Accept Changes"); // woods #colorbar
 
 	p = Draw_CachePic ("gfx/bigbox.lmp");
 	M_DrawTransPic (196, 77, p); // woods #colorbar
@@ -8516,7 +8541,7 @@ void M_Setup_Key (int k)
 		return;
 	}
 
-	if ((k == K_TAB || k == K_LSHOULDER || k == K_RSHOULDER) && setup_cursor == 1) // woods #namehistory
+	if ((k == K_TAB || k == K_LSHOULDER || k == K_RSHOULDER) && setup_cursor == SETUP_CURSOR_NAME) // woods #namehistory
 	{
 		if (M_Menu_TabCompleteNameHistory(&setup_myname_field, setup_myname,
 			sizeof(setup_myname), setup_myname_tabpartial, sizeof(setup_myname_tabpartial),
@@ -8556,10 +8581,10 @@ void M_Setup_Key (int k)
 
 	case K_MWHEELDOWN:
 	case K_LEFTARROW:
-		if (setup_cursor < 2)
+		if (setup_cursor < SETUP_CURSOR_NAMEHISTORY)
 			return;
 		S_LocalSound ("misc/menu3.wav");
-		if (setup_cursor == 4) // 2 to 3 woods #namemaker
+		if (setup_cursor == SETUP_CURSOR_SHIRT) // 2 to 3 woods #namemaker
 		{
 			M_AdjustColour(&setup_top, -1);
 			q_strlcpy (lastColorSelected, CL_PLColours_ToString(setup_top), sizeof(lastColorSelected));
@@ -8570,7 +8595,7 @@ void M_Setup_Key (int k)
 					colordelta = true;
 				}
 		}
-		if (setup_cursor == 5) // 3 to 4 woods #namemaker
+		if (setup_cursor == SETUP_CURSOR_PANTS) // 3 to 4 woods #namemaker
 		{
 			M_AdjustColour(&setup_bottom, -1);
 			q_strlcpy (lastColorSelected, CL_PLColours_ToString(setup_bottom), sizeof(lastColorSelected));
@@ -8584,11 +8609,11 @@ void M_Setup_Key (int k)
 		break;
 	case K_MWHEELUP:
 	case K_RIGHTARROW:
-		if (setup_cursor < 2)
+		if (setup_cursor < SETUP_CURSOR_NAMEHISTORY)
 			return;
 forward:
 		S_LocalSound ("misc/menu3.wav");
-		if (setup_cursor == 4) // 2 to 3 woods #namemaker
+		if (setup_cursor == SETUP_CURSOR_SHIRT) // 2 to 3 woods #namemaker
 		{
 			M_AdjustColour(&setup_top, +1);
 			q_strlcpy (lastColorSelected, CL_PLColours_ToString(setup_top), sizeof(lastColorSelected));
@@ -8599,7 +8624,7 @@ forward:
 					colordelta = true;
 				}
 		}
-		if (setup_cursor == 5) // 3 to 4 woods #namemaker
+		if (setup_cursor == SETUP_CURSOR_PANTS) // 3 to 4 woods #namemaker
 		{
 			M_AdjustColour(&setup_bottom, +1);
 			q_strlcpy (lastColorSelected, CL_PLColours_ToString(setup_bottom), sizeof(lastColorSelected));
@@ -8616,16 +8641,16 @@ forward:
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	case K_MOUSE1: // woods #mousemenu
-		if (k == K_MOUSE1 && setup_cursor == 0)
+		if (k == K_MOUSE1 && setup_cursor == SETUP_CURSOR_HOSTNAME)
 		{
-			if (M_TextField_MouseInRow(m_mousey, setup_cursor_table[0]))
+			if (M_TextField_MouseInRow(m_mousey, setup_cursor_table[SETUP_CURSOR_HOSTNAME]))
 				M_TextField_MouseClick(&setup_hostname_field, m_mousex, 168);
 			return;
 		}
 
-		if (k == K_MOUSE1 && setup_cursor == 1)
+		if (k == K_MOUSE1 && setup_cursor == SETUP_CURSOR_NAME)
 		{
-			if (M_TextField_MouseInRow(m_mousey, setup_cursor_table[1]))
+			if (M_TextField_MouseInRow(m_mousey, setup_cursor_table[SETUP_CURSOR_NAME]))
 			{
 				setup_myname_tabpartial[0] = '\0'; // woods #namehistory
 				M_TextField_MouseClick(&setup_myname_field, m_mousex, 168);
@@ -8633,19 +8658,19 @@ forward:
 			return;
 		}
 
-		if (setup_cursor == 0 || setup_cursor == 1)
+		if (setup_cursor == SETUP_CURSOR_HOSTNAME || setup_cursor == SETUP_CURSOR_NAME)
 			return;
 
-		if (setup_cursor == 4 || setup_cursor == 5) // inc 1 both woods #namemaker
+		if (setup_cursor == SETUP_CURSOR_SHIRT || setup_cursor == SETUP_CURSOR_PANTS) // inc 1 both woods #namemaker
 		{
 			// Handle direct click on color bar boxes
-			// Color bar is drawn at y+4 offset: shirt at 114, pants at 138 (8 pixels tall each)
+			// Color bar is drawn at y+4 offset (8 pixels tall each)
 			// Color bar starts at x=64, each box is 8 pixels wide, 14 colors (0-13)
 			if (k == K_MOUSE1)
 			{
 				int colorbar_x = 70; // Adjusted for visual offset (boxes appear ~6px right of mouse coords)
-				int colorbar_y = (setup_cursor == 4) ? 110 : 134; // Menu item Y position
-				
+				int colorbar_y = (setup_cursor == SETUP_CURSOR_SHIRT) ? SETUP_SHIRT_BAR_Y : SETUP_PANTS_BAR_Y;
+
 				// Check if click is within the color bar area
 				if (m_mousex >= colorbar_x && m_mousex < colorbar_x + 14 * 8 &&
 					m_mousey >= colorbar_y && m_mousey < colorbar_y + 20)
@@ -8653,7 +8678,7 @@ forward:
 					int clicked_color = (m_mousex - colorbar_x) / 8;
 					if (clicked_color >= 0 && clicked_color <= 13)
 					{
-						plcolour_t *target = (setup_cursor == 4) ? &setup_top : &setup_bottom;
+						plcolour_t *target = (setup_cursor == SETUP_CURSOR_SHIRT) ? &setup_top : &setup_bottom;
 						target->type = 1;
 						target->basic = clicked_color;
 						S_LocalSound("misc/menu3.wav");
@@ -8676,7 +8701,7 @@ forward:
 
 
 
-		if (setup_cursor == 3)
+		if (setup_cursor == SETUP_CURSOR_COLORPICKER)
 		{
 			m_entersound = true;
 			colorpicker_return_fn = M_Menu_Setup_f;
@@ -8684,14 +8709,21 @@ forward:
 			break;
 		}
 
-		if (setup_cursor == 2) // woods #namemaker
+		if (setup_cursor == SETUP_CURSOR_NAMEMAKER) // woods #namemaker
 		{
 			m_entersound = true;
 			M_Menu_NameMaker_f();
 			break;
 		}
 
-		// setup_cursor == 6 (OK)
+		if (setup_cursor == SETUP_CURSOR_NAMEHISTORY) // woods #namehistory
+		{
+			m_entersound = true;
+			M_Menu_NameHistory_f();
+			break;
+		}
+
+		// setup_cursor == SETUP_CURSOR_ACCEPT (OK)
 		if (Q_strcmp(cl_name.string, setup_myname) != 0)
 			Cbuf_AddText ( va ("name \"%s\"\n", setup_myname) );
 		if (Q_strcmp(hostname.string, setup_hostname) != 0)
@@ -8736,7 +8768,7 @@ void M_Setup_Char (int k)
 
 qboolean M_Setup_TextEntry (void)
 {
-	return (setup_cursor == 0 || setup_cursor == 1);
+	return (setup_cursor == SETUP_CURSOR_HOSTNAME || setup_cursor == SETUP_CURSOR_NAME);
 }
 
 void M_Setup_Mousemove(int cx, int cy) // woods #mousemenu
@@ -8757,6 +8789,327 @@ void M_Setup_Mousemove(int cx, int cy) // woods #mousemenu
 		M_Setup_ClearTextSelections();
 		setup_myname_tabpartial[0] = '\0'; // woods #namehistory
 	}
+}
+
+/*
+=============================================================
+Name History Menu #namehistory
+
+Browsable view of the names recorded in id1/backups/names.json -- the same list
+the "namehistory" command prints and that Tab-completion walks in the Setup and
+Name Maker name fields.
+=============================================================
+*/
+
+#define MAX_VIS_NAMEHISTORY	16
+
+/* Copies rather than pointers into namehistorylist: deleting an entry frees the
+ * filelist_item_t it came from. Sized to match filelist_item_t's own fields. */
+typedef struct
+{
+	char	name[NET_NAMELEN];
+	char	last_used[50];
+} namehistoryitem_t;
+
+static struct
+{
+	menulist_t			list;
+	enum m_state_e		prev;
+	int					x, y, cols;
+	int					prev_cursor;
+	menuticker_t		ticker;
+	namehistoryitem_t	*items;
+	qboolean			scrollbar_grab;
+} namehistorymenu;
+
+/*
+==================
+M_NameHistory_Init
+
+Rebuilds the visible list from namehistorylist, which is already ordered most
+recently used first. Parks the cursor on whichever entry matches the name the
+caller is editing, so the menu opens on "what I am now".
+==================
+*/
+static void M_NameHistory_Init (void)
+{
+	filelist_item_t *item;
+	const char *current;
+	int i;
+
+	NameHistory_Init ();
+
+	namehistorymenu.list.viewsize = MAX_VIS_NAMEHISTORY;
+	namehistorymenu.list.cursor = 0;
+	namehistorymenu.list.scroll = 0;
+	namehistorymenu.list.numitems = 0;
+	namehistorymenu.scrollbar_grab = false;
+	VEC_CLEAR (namehistorymenu.items);
+
+	M_Ticker_Init (&namehistorymenu.ticker);
+
+	for (item = namehistorylist; item; item = item->next)
+	{
+		namehistoryitem_t entry;
+
+		q_strlcpy (entry.name, item->name, sizeof(entry.name));
+		q_strlcpy (entry.last_used, item->data, sizeof(entry.last_used));
+
+		VEC_PUSH (namehistorymenu.items, entry);
+		namehistorymenu.list.numitems++;
+	}
+
+	current = (namehistorymenu.prev == m_setup) ? setup_myname : cl_name.string;
+	for (i = 0; i < namehistorymenu.list.numitems; i++)
+		if (!q_strcasecmp(namehistorymenu.items[i].name, current))
+		{
+			namehistorymenu.list.cursor = i;
+			break;
+		}
+
+	M_List_CenterCursor (&namehistorymenu.list);
+}
+
+void M_Menu_NameHistory_f (void)
+{
+	key_dest = key_menu;
+	/* Re-entering from the console while already here must not overwrite the
+	 * menu we have to return to. */
+	if (m_state != m_namehistory)
+		namehistorymenu.prev = m_state;
+	m_state = m_namehistory;
+	m_entersound = true;
+	M_NameHistory_Init ();
+}
+
+/*
+==================
+M_NameHistory_Leave
+
+Setup owns a buffered copy of the name, so hand control back to it rather than
+unwinding to the game -- from_namemaker keeps M_Menu_Setup_f from overwriting
+that buffer with cl_name. Reached any other way (the menu_namehistory command)
+there is nothing to return to, so close out to the game.
+==================
+*/
+static void M_NameHistory_Leave (void)
+{
+	if (namehistorymenu.prev == m_setup)
+	{
+		from_namemaker = true;
+		M_Menu_Setup_f (); // sets m_entersound itself
+		return;
+	}
+
+	key_dest = key_game;
+	m_state = m_none;
+	IN_UpdateGrabs ();
+}
+
+static void M_NameHistory_Accept (void)
+{
+	const char *name;
+
+	if (!namehistorymenu.items || namehistorymenu.list.numitems <= 0)
+		return;
+	if (namehistorymenu.list.cursor < 0 || namehistorymenu.list.cursor >= namehistorymenu.list.numitems)
+		return;
+
+	name = namehistorymenu.items[namehistorymenu.list.cursor].name;
+
+	if (namehistorymenu.prev == m_setup)
+	{
+		/* Stage it in Setup's field: nothing is applied until Accept Changes,
+		 * exactly as if it had been typed there. */
+		q_strlcpy (setup_myname, name, sizeof(setup_myname));
+		M_NameHistory_Leave ();
+		return;
+	}
+
+	if (strcmp(name, cl_name.string))
+	{
+		Cbuf_AddText (va("name \"%s\"\n", name));
+		Con_Printf ("name changed to %s\n", name);
+	}
+
+	M_NameHistory_Leave ();
+}
+
+void M_NameHistory_Draw (void)
+{
+	int x, y, i, cols;
+	int firstvis, numvis;
+
+	x = 16;
+	y = 32;
+	cols = 36;
+
+	namehistorymenu.x = x;
+	namehistorymenu.y = y;
+	namehistorymenu.cols = cols;
+
+	if (!keydown[K_MOUSE1]) // woods #mousemenu
+		namehistorymenu.scrollbar_grab = false;
+
+	if (namehistorymenu.prev_cursor != namehistorymenu.list.cursor)
+	{
+		namehistorymenu.prev_cursor = namehistorymenu.list.cursor;
+		M_Ticker_Init (&namehistorymenu.ticker);
+	}
+	else
+		M_Ticker_Update (&namehistorymenu.ticker);
+
+	M_DrawCountHeader (x, y - 28, cols, "Name History",
+		namehistorymenu.list.numitems, "name", "names");
+	M_DrawQuakeBar (x - 8, y - 16, cols + 2);
+
+	if (namehistorymenu.list.numitems <= 0)
+	{
+		M_Print (x, y, "no names recorded yet");
+		return;
+	}
+
+	M_List_GetVisibleRange (&namehistorymenu.list, &firstvis, &numvis);
+	for (i = 0; i < numvis; i++)
+	{
+		int idx = i + firstvis;
+		qboolean selected = (idx == namehistorymenu.list.cursor);
+
+		/* Names carry raw Quake colour bytes, so print them unmasked. */
+		M_PrintScroll (x, y + i * 8, (cols - 2) * 8,
+			namehistorymenu.items[idx].name,
+			selected ? namehistorymenu.ticker.scroll_time : 0.0, false);
+
+		if (selected)
+			M_DrawCharacter (x - 8, y + i * 8, 12 + ((int)(realtime * 4) & 1));
+	}
+
+	if (M_List_GetOverflow(&namehistorymenu.list) > 0)
+	{
+		M_List_DrawScrollbar (&namehistorymenu.list, x + cols * 8 - 8, y);
+
+		if (namehistorymenu.list.scroll > 0)
+			M_DrawEllipsisBar (x, y - 8, cols);
+		if (namehistorymenu.list.scroll + namehistorymenu.list.viewsize < namehistorymenu.list.numitems)
+			M_DrawEllipsisBar (x, y + namehistorymenu.list.viewsize * 8, cols);
+	}
+
+	if (namehistorymenu.list.cursor >= 0 && namehistorymenu.list.cursor < namehistorymenu.list.numitems)
+	{
+		const char *last_used = namehistorymenu.items[namehistorymenu.list.cursor].last_used;
+		char line[64];
+
+		q_snprintf (line, sizeof(line), "last used  %s", last_used[0] ? last_used : "unknown");
+		M_PrintWhite (x, y + namehistorymenu.list.viewsize * 8 + 12, line);
+	}
+
+	M_Print (x, y + 2 + namehistorymenu.list.viewsize * 8 + 20,
+		KEY_SHORTCUT_MODIFIER_NAME_LOWER "+backspace: delete");
+}
+
+static qboolean M_NameHistory_Match (int index, char initial)
+{
+	extern char unfun[129];
+
+	return q_tolower(unfun[namehistorymenu.items[index].name[0] & 127]) == initial;
+}
+
+void M_NameHistory_Key (int key)
+{
+	int x, y; // woods #mousemenu
+
+	if (namehistorymenu.scrollbar_grab)
+	{
+		switch (key)
+		{
+		case K_ESCAPE:
+		case K_BBUTTON:
+		case K_MOUSE4:
+		case K_MOUSE2:
+			namehistorymenu.scrollbar_grab = false;
+			break;
+		}
+		return;
+	}
+
+	if (M_List_Key(&namehistorymenu.list, key))
+		return;
+
+	/* No cmd+letter shortcuts here, and cmd+K is taken by menu search before we
+	 * see it, so type-to-jump can own every letter unconditionally. */
+	if (M_List_CycleMatch(&namehistorymenu.list, key, M_NameHistory_Match))
+		return;
+
+	if (M_Ticker_Key(&namehistorymenu.ticker, key))
+		return;
+
+	switch (key)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4: // woods #mousemenu
+	case K_MOUSE2:
+		M_NameHistory_Leave ();
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+	enter:
+		M_NameHistory_Accept ();
+		break;
+
+	case K_MOUSE1: // woods #mousemenu
+		x = m_mousex - namehistorymenu.x - (namehistorymenu.cols - 1) * 8;
+		y = m_mousey - namehistorymenu.y;
+		if (x < -8 || !M_List_UseScrollbar(&namehistorymenu.list, y))
+			goto enter;
+		namehistorymenu.scrollbar_grab = true;
+		M_NameHistory_Mousemove (m_mousex, m_mousey);
+		break;
+
+	case K_BACKSPACE:
+		if (namehistorymenu.items && namehistorymenu.list.numitems > 0 &&
+			namehistorymenu.list.cursor >= 0 &&
+			namehistorymenu.list.cursor < namehistorymenu.list.numitems &&
+			Key_IsShortcutModifierDown())
+		{
+			int cursor = namehistorymenu.list.cursor;
+
+			NameHistory_Remove (namehistorymenu.items[cursor].name);
+			M_NameHistory_Init ();
+			/* Stay put rather than jumping to the current name, so holding the
+			 * shortcut deletes straight down the list. */
+			if (namehistorymenu.list.numitems > 0)
+			{
+				namehistorymenu.list.cursor = q_min(cursor, namehistorymenu.list.numitems - 1);
+				M_List_CenterCursor (&namehistorymenu.list);
+			}
+			S_LocalSound ("misc/menu2.wav");
+		}
+		break;
+
+	default:
+		break;
+	}
+}
+
+void M_NameHistory_Mousemove (int cx, int cy) // woods #mousemenu
+{
+	cy -= namehistorymenu.y;
+
+	if (namehistorymenu.scrollbar_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			namehistorymenu.scrollbar_grab = false;
+			return;
+		}
+		M_List_UseScrollbar (&namehistorymenu.list, cy);
+		// Note: no return, we also update the cursor
+	}
+
+	M_List_Mousemove (&namehistorymenu.list, cy);
 }
 
 /*
@@ -21577,6 +21930,7 @@ static void M_LeaveMenuState (enum m_state_e from)
 	case m_history:
 	case m_bookmarks:
 	case m_bookmarks_edit:
+	case m_namehistory:
 	case m_namemaker:
 	case m_resetconfig:
 		break;
@@ -21707,7 +22061,8 @@ enum
 };
 
 static const char * const menusearch_setup_labels[] = {
-	"Hostname", "Player Name", "Name Maker", "Color Picker", "Shirt Color", "Pants Color", "Accept Changes"
+	"Hostname", "Player Name", "Name History", "Name Maker", "Color Picker",
+	"Shirt Color", "Pants Color", "Accept Changes"
 };
 static const char * const menusearch_mouse_labels[] = {
 	"Mouse Speed", "Invert Mouse", "Mouse Look", "Pitch Mode", "Custom Cursor",
@@ -22148,13 +22503,14 @@ static const char *MenuSearch_SetupKeywords(int index)
 {
 	switch (index)
 	{
-	case 0: return "server hostname host name";
-	case 1: return "player name nickname profile";
-	case 2: return "character letters ascii glyph symbols name maker generator editor";
-	case 3: return "player colors colour palette picker swatch hex rgb";
-	case 4: return "top shirt jersey torso player color colour";
-	case 5: return "bottom pants legs player color colour";
-	case 6: return "apply save setup";
+	case SETUP_CURSOR_HOSTNAME: return "server hostname host name";
+	case SETUP_CURSOR_NAME: return "player name nickname profile";
+	case SETUP_CURSOR_NAMEHISTORY: return "name history previous past used aliases nicknames recent list";
+	case SETUP_CURSOR_NAMEMAKER: return "character letters ascii glyph symbols name maker generator editor";
+	case SETUP_CURSOR_COLORPICKER: return "player colors colour palette picker swatch hex rgb";
+	case SETUP_CURSOR_SHIRT: return "top shirt jersey torso player color colour";
+	case SETUP_CURSOR_PANTS: return "bottom pants legs player color colour";
+	case SETUP_CURSOR_ACCEPT: return "apply save setup";
 	default: return NULL;
 	}
 }
@@ -43185,6 +43541,7 @@ static struct
 	{"help", M_Menu_Help_f},
 	{"menu_quit", M_Menu_Quit_f},
 	{"menu_credits", M_Menu_Credits_f}, // needed by the 2021 re-release
+	{"menu_namehistory", M_Menu_NameHistory_f}, // woods #namehistory
 	{"menu_namemaker", M_Menu_NameMaker_f}, // woods #namemaker
 	{"namemaker", M_Shortcut_NameMaker_f}, // woods #namemaker
 	{"menu_mods", M_Menu_Mods_f}, // woods
@@ -44759,6 +45116,10 @@ void M_Draw (void)
 		M_Setup_Draw ();
 		break;
 
+	case m_namehistory: // woods #namehistory
+		M_NameHistory_Draw();
+		break;
+
 	case m_namemaker: // woods #namemaker
 		M_NameMaker_Draw();
 		break;
@@ -45175,6 +45536,10 @@ void M_Keydown (int key, qboolean repeat)
 		M_Setup_Key (key);
 		return;
 
+	case m_namehistory: // woods #namehistory
+		M_NameHistory_Key(key);
+		return;
+
 	case m_namemaker: // woods #namemaker
 		M_NameMaker_Key(key);
 		return;
@@ -45406,6 +45771,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_setup:
 		M_Setup_Mousemove(x, y);
+		return;
+
+	case m_namehistory: // woods #namehistory
+		M_NameHistory_Mousemove(x, y);
 		return;
 
 	case m_namemaker:

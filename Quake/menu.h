@@ -75,6 +75,7 @@ enum m_state_e {
 	m_history,
 	m_bookmarks, // woods #bookmarksmenu
 	m_bookmarks_edit, // woods #bookmarksmenu
+	m_namehistory, // woods #namehistory
 	m_namemaker, // woods #namemaker
 	m_resetconfig
 };

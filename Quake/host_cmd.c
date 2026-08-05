@@ -3192,6 +3192,28 @@ void NameHistory_Add (const char *name)
 	NameHistory_Write();
 }
 
+void NameHistory_Remove (const char *name)
+{
+	filelist_item_t *item;
+	char stored[NET_NAMELEN];
+
+	if (!name || !name[0])
+		return;
+
+	NameHistory_Init();
+
+	/* Lookup is case-insensitive but FileList_Subtract matches exactly, so
+	 * remove by the stored spelling rather than the caller's -- via a copy,
+	 * since FileList_Subtract frees the item that buffer lives in. */
+	item = NameHistory_Find(name, NULL);
+	if (!item)
+		return;
+
+	q_strlcpy(stored, item->name, sizeof(stored));
+	FileList_Subtract(stored, &namehistorylist);
+	NameHistory_Write();
+}
+
 static void NameHistory_Clear (void)
 {
 	NameHistory_Init();
