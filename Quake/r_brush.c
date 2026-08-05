@@ -1317,6 +1317,9 @@ unsigned int gl_bmodel_vbo_generation = 0;	//tb -- bumped whenever vbo_firstvert
 void GL_DeleteBModelVertexBuffer (void)
 {
 	R_BModelDrawCache_CleanupAll ();
+	//tb -- above the capability check: the index buffers reference gl_bmodel_vbo,
+	//and the CPU-side nodes must be released even when GL support is absent.
+	GL_BrushShadowCache_Clear ();
 
 	if (!(gl_vbo_able && gl_mtexable && gl_max_texture_units >= 3))
 		return;
@@ -1358,6 +1361,12 @@ void GL_BuildBModelVertexBuffer (void)
 	t_start = profile ? Sys_DoubleTime () : 0;
 
 // ask GL for a name for our VBO
+	//tb -- normal map setup comes through here rather than through
+	//GL_DeleteBModelVertexBuffer, so the shadow index cache must be released
+	//here too. Generation checking stops stale indices being *drawn*, but the
+	//old EBOs and nodes would otherwise accumulate across every map change.
+	GL_BrushShadowCache_Clear ();
+
 	GL_DeleteBuffersFunc (1, &gl_bmodel_vbo);
 	GL_DeleteBuffersFunc (1, &gl_bmodel_lmbounds_vbo);
 	GL_GenBuffersFunc (1, &gl_bmodel_vbo);
@@ -2109,6 +2118,145 @@ extern qboolean GL_DrawAliasShadowCheck (entity_t* e); // woods #shadow
 #define SHADOW_COMPUTED (1 << 0) // woods #shadow
 #define SHADOW_VALID    (1 << 1) // woods #shadow
 
+/*
+==============================================================================
+
+BRUSH SHADOW INDEX CACHE -- tb
+
+The shadow silhouette is the model's static geometry, so it can be drawn from
+gl_bmodel_vbo with a prebuilt index buffer instead of a glBegin/glEnd pair per
+surface and a glVertex3fv per vertex.  On a busy ad_tears view that was ~47k GL
+calls a frame for 43 entities.
+
+This deliberately does NOT reuse R_BModelDrawCache.  The two paths agree on
+rejecting entalpha < 1, but the cache additionally requires gl_cull, no
+ent->effects at all (the shadow path only rejects EF_NOSHADOW), a live world
+program, non-cheat-safe modes and submodelof == cl.worldmodel -- so borrowing it
+would silently drop shadows this path draws.  Every surface the immediate path
+would have drawn goes in the index buffer, in the same fan order.
+
+State stays fixed-function (matrix stack, glColor, blend) exactly as before --
+only the submission changes.  Immediate mode remains the fallback when VBOs are
+unavailable or the buffer could not be built.
+==============================================================================
+*/
+cvar_t r_shadows_buffered = {"r_shadows_buffered","1",CVAR_ARCHIVE};
+
+typedef struct bshadowcache_s
+{
+	struct bshadowcache_s *next;
+	qmodel_t	*model;
+	unsigned int generation;	//gl_bmodel_vbo_generation when built
+	GLuint		ebo;
+	int			numindexes;
+} bshadowcache_t;
+
+static bshadowcache_t *bshadowcaches;
+
+void GL_BrushShadowCache_Clear (void)
+{	//safe to call regardless of GL capability: the CPU nodes are always freed.
+	while (bshadowcaches)
+	{
+		bshadowcache_t *c = bshadowcaches;
+		bshadowcaches = c->next;
+		if (c->ebo && GL_DeleteBuffersFunc)
+			GL_DeleteBuffersFunc (1, &c->ebo);
+		free (c);
+	}
+}
+
+static bshadowcache_t *GL_BrushShadowCache_Get (qmodel_t *model)
+{
+	bshadowcache_t *c;
+	unsigned int *idx;
+	size_t total, count;
+	int i;
+	msurface_t *surf;
+
+	for (c = bshadowcaches; c; c = c->next)
+		if (c->model == model)
+		{
+			if (c->generation == gl_bmodel_vbo_generation)
+				return c->numindexes ? c : NULL;
+			break;	//stale: vbo_firstvert offsets moved, rebuild below
+		}
+
+	if (!gl_vbo_able || !gl_bmodel_vbo || !GL_GenBuffersFunc || !GL_BufferDataFunc)
+		return NULL;
+	if (model->firstmodelsurface < 0 || model->nummodelsurfaces < 0 ||
+		model->firstmodelsurface > model->numsurfaces - model->nummodelsurfaces)
+		return NULL;
+
+	//every surface is fan-triangulated, matching the immediate path's GL_POLYGON
+	//R_SurfaceVertCount, not polys->numverts: GL_BuildBModelVertexBuffer sizes
+	//each surface's VBO region with it, so using the raw poly count could emit
+	//indices that run past this surface into the next one's vertices.
+	total = 0;
+	surf = &model->surfaces[model->firstmodelsurface];
+	for (i = 0; i < model->nummodelsurfaces; i++, surf++)
+	{
+		size_t add;
+		int nv = R_SurfaceVertCount (surf);
+		if (!surf->polys || nv < 3)
+			continue;
+		//check each addition: a post-loop guard can only see a total that has
+		//already wrapped. glDrawElements takes a signed GLsizei, so cap there.
+		add = (size_t)(nv - 2) * 3;
+		if (add > (size_t)INT_MAX - total)
+			return NULL;
+		total += add;
+	}
+	if (!total || total > SIZE_MAX / sizeof(unsigned int))
+		return NULL;	//the INT_MAX cap is enforced per-addition above
+
+	if (!c)
+	{
+		c = (bshadowcache_t *)calloc (1, sizeof(*c));
+		if (!c)
+			return NULL;
+		c->model = model;
+		c->next = bshadowcaches;
+		bshadowcaches = c;
+	}
+
+	idx = (unsigned int *)malloc (total * sizeof(*idx));
+	if (!idx)
+		return NULL;
+
+	count = 0;
+	surf = &model->surfaces[model->firstmodelsurface];
+	for (i = 0; i < model->nummodelsurfaces; i++, surf++)
+	{
+		int k, first = surf->vbo_firstvert, nv = R_SurfaceVertCount (surf);
+		if (!surf->polys || nv < 3)
+			continue;
+		for (k = 2; k < nv; k++)
+		{
+			idx[count++] = (unsigned int)first;
+			idx[count++] = (unsigned int)(first + k - 1);
+			idx[count++] = (unsigned int)(first + k);
+		}
+	}
+
+	if (!c->ebo)
+		GL_GenBuffersFunc (1, &c->ebo);
+	if (!c->ebo)
+	{	//generation failed; leave the cache empty so the caller uses immediate mode
+		free (idx);
+		c->numindexes = 0;
+		c->generation = gl_bmodel_vbo_generation;
+		return NULL;
+	}
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, c->ebo);
+	GL_BufferDataFunc (GL_ELEMENT_ARRAY_BUFFER, count * sizeof(*idx), idx,
+					   GL_STATIC_DRAW);
+	free (idx);
+
+	c->numindexes = (int)count;
+	c->generation = gl_bmodel_vbo_generation;
+	return c->numindexes ? c : NULL;
+}
+
 void GL_DrawBrushShadow (entity_t* e) // woods #shadow
 {
     qmodel_t* clmodel;
@@ -2189,14 +2337,33 @@ void GL_DrawBrushShadow (entity_t* e) // woods #shadow
         msurface_t* surf = &clmodel->surfaces[clmodel->firstmodelsurface];
         int i;
 
+        bshadowcache_t *shcache = r_shadows_buffered.value ?
+                                  GL_BrushShadowCache_Get (clmodel) : NULL;
+
+        if (shcache)
+        {   //one indexed draw from the shared bmodel VBO
+            GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+            GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, shcache->ebo);
+            glEnableClientState (GL_VERTEX_ARRAY);
+            glVertexPointer (3, GL_FLOAT, VERTEXSIZE * sizeof(float), (void *)0);
+            glDrawElements (GL_TRIANGLES, shcache->numindexes,
+                            GL_UNSIGNED_INT, (void *)0);
+            glDisableClientState (GL_VERTEX_ARRAY);
+            GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+            GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+        }
+        else
         for (i = 0; i < clmodel->nummodelsurfaces; i++, surf++)
         {
             glpoly_t* p = surf->polys;
-            float* v = p->verts[0];
-            int k;
+            int k, nv = R_SurfaceVertCount (surf);
+            float* v;
 
+            if (!p || nv < 3)
+                continue;
+            v = p->verts[0];
             glBegin(GL_POLYGON);
-            for (k = 0; k < p->numverts; k++, v += VERTEXSIZE)
+            for (k = 0; k < nv; k++, v += VERTEXSIZE)
             {
                 glVertex3fv(v);
             }

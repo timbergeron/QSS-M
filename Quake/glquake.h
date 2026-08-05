@@ -188,6 +188,8 @@ extern	cvar_t	r_lightmap;
 extern	cvar_t	r_shadows;
 extern	cvar_t	r_shadows_groundcheck; // woods #shadow
 extern	cvar_t	r_shadows_bmodels; // woods #shadow
+extern	cvar_t	r_shadows_buffered; // tb -- indexed brush shadows vs immediate mode
+void GL_BrushShadowCache_Clear (void); // tb -- drop the shadow index buffers
 extern	cvar_t	r_wateralpha;
 extern	cvar_t	r_lavaalpha;
 extern	cvar_t	r_telealpha;
