@@ -33,6 +33,10 @@ extern cvar_t gl_max_size;
 extern cvar_t r_lightmap_extra4;
 extern cvar_t r_textureless_dither;
 cvar_t r_scenecache = {"r_scenecache",""};	//spike, an attempt to cope with abusive maps a bit better.
+
+//tb -- scene cache statistics, see glquake.h. Diagnostic only, and absent
+//from player builds: the renderer's hot paths must not carry profiling.
+
 cvar_t r_bmodelcache = {"r_bmodelcache","1",CVAR_ARCHIVE};	//tb -- cache static index buffers for opaque moved bmodel entities.
 cvar_t gl_bmodel_instancing = {"gl_bmodel_instancing", "1", CVAR_ARCHIVE};
 
@@ -179,6 +183,7 @@ static void R_MarkGrassSurfaces (byte *vis)
 	}
 }
 #endif
+
 
 /*
 ===============
@@ -6157,6 +6162,19 @@ static struct
 		dlight_t dlights[countof(cl_dlights)];
 		double time;
 		int framecount;
+		//tb -- also refresh lightstyle-driven lightmaps in this job. A lightstyle
+		//tick used to invalidate the whole cache, so the worker regenerated every
+		//index batch and the main thread re-uploaded the entire EBO, ~10x a second,
+		//to produce byte-identical geometry. Geometry cannot depend on lightstyle
+		//brightness, so only the lightmap texels need refreshing.
+		qboolean styles;
+		//Which surfaces that sweep may touch: the union of every live cache's
+		//visited set, built on the main thread. Sweeping the whole world instead
+		//was correct but relit ~2x the surfaces the old rebuild did, saturating
+		//the worker; restricting it to the drawing cache alone would leave stale
+		//light when another cache or a skyroom draws from the shared lightmaps.
+		byte *surfs;
+		size_t surfbytes;
 	} dlightjob;
 	SDL_atomic_t haslitsurfs;	//worker-maintained: lightmaps still contain dlight contributions needing cleanup
 
@@ -6592,6 +6610,38 @@ static qboolean RSceneCache_RunDlightJob (struct rscenecache_s *cache)
 	rscenecache_numlitsurfs = out;
 	SDL_AtomicSet(&rscenecache.haslitsurfs, out != 0);
 
+	//tb -- a lightstyle tick changed the light values in cache->lightmapstate.
+	//Sweep every world surface, not just the drawing cache's visible set:
+	//lightmap texels are shared, several caches (plus skyrooms) can be drawn from
+	//the same texels, and a surface skipped here would keep stale light until
+	//something else happened to rebuild it. RenderDynamicLightmaps already
+	//early-outs on surfaces whose cached_light still matches, so the sweep only
+	//pays for the surfaces that genuinely changed.
+	if (rscenecache.dlightjob.styles && rscenecache.dlightjob.surfs)
+	{
+		msurface_t *surfaces = cache->worldmodel->surfaces;
+		int numsurfaces = cache->worldmodel->numsurfaces;
+		const byte *want = rscenecache.dlightjob.surfs;
+		int i;
+
+		for (i = 0; i < numsurfaces; i++)
+		{
+			if (!(want[i>>3] & (1u<<(i&7))))
+				continue;	//not reachable from any live cache.
+			surf = &surfaces[i];
+			if (surf->numedges < 3)
+				continue;	//degenerate; visitedsurfs is set before the builder's own check.
+			if ((unsigned int)(surf->lightmaptexturenum+1) >= cache->lightmaps)
+				continue;
+			if (surf->dlightframe == framecount || surf->cached_dlight)
+				continue;	//the dlight passes above already rebuilt this one, and
+						//RenderDynamicLightmaps would redo it: once the style
+						//check passes, the dlight condition still fires.
+			RSceneCache_RenderDynamicLightmaps (cache, surf, framecount, false);
+		}
+		changed = true;
+	}
+
 	return changed;
 }
 
@@ -6599,17 +6649,19 @@ static qboolean RSceneCache_RunDlightJob (struct rscenecache_s *cache)
 // for the cache we're about to draw. Caller ensures no full build is queued or
 // in flight, so the worker only ever touches the surf dlight fields and the
 // lightmap staging memory from one place at a time.
-static void RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache)
+static qboolean RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache, qboolean stylechanged)
 {
+	qboolean queued = false;
 	static int lastframe = -1;
 	unsigned int i;
 	dlight_t *l;
+	struct rscenecache_s *c;
 	qboolean active = false;
 
 	if (!cache || cache->worldmodel != cl.worldmodel || !r_dynamic.value || !rscenecache.thread)
-		return;
+		return false;
 	if (lastframe == host_framecount)
-		return;	//skyrooms/splitscreen queue several scenes per frame; once is enough.
+		return false;	//skyrooms/splitscreen queue several scenes per frame; once is enough.
 	lastframe = host_framecount;
 
 	// don't spawn dlights before their time when rewinding demos (matches R_PushDlights)
@@ -6628,23 +6680,64 @@ static void RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache)
 		}
 	}
 
-	if (!active && !SDL_AtomicGet(&rscenecache.haslitsurfs))
-		return;	//nothing to light, nothing to clear.
+	if (!active && !stylechanged && !SDL_AtomicGet(&rscenecache.haslitsurfs))
+		return false;	//nothing to light, nothing to clear.
 
 	SDL_LockMutex(rscenecache.mutex);
 	if (!rscenecache.processing && !rscenecache.dlightjob.cache)
 	{
+		if (stylechanged)
+		{	//Which surfaces the worker's sweep may touch. Built here, under the
+			//lock and only once we know no job is in flight: the worker reads
+			//this buffer for the whole sweep, so refreshing it while a job was
+			//running would rewrite data under it. The main thread owns the cache
+			//list, and the caller guarantees nothing is SCS_BUILDING, so no
+			//visitedsurfs is being written while we read it.
+			size_t need = ((size_t)cl.worldmodel->numsurfaces + 7) >> 3;
+
+			if (rscenecache.dlightjob.surfbytes != need)
+			{
+				byte *grown = realloc (rscenecache.dlightjob.surfs, need);
+				if (!grown)
+				{	//skip this tick; the next frame re-offers it.
+					SDL_UnlockMutex(rscenecache.mutex);
+					return false;
+				}
+				rscenecache.dlightjob.surfs = grown;
+				rscenecache.dlightjob.surfbytes = need;
+			}
+			memset (rscenecache.dlightjob.surfs, 0, need);
+			for (c = rscenecache.cache; c; c = c->next)
+			{
+				size_t b;
+				if (c->worldmodel != cl.worldmodel || !c->visitedsurfs)
+					continue;
+				if (SDL_AtomicGet(&c->status) == SCS_DISCARDED)
+					continue;
+				for (b = 0; b < need; b++)
+					rscenecache.dlightjob.surfs[b] |= c->visitedsurfs[b];
+			}
+		}
+
 		RSceneCache_CopyDlights (rscenecache.dlightjob.dlights, cl_dlights, countof(cl_dlights));
 		rscenecache.dlightjob.time = cl.time;
 		rscenecache.dlightjob.framecount = r_framecount;
+		rscenecache.dlightjob.styles = stylechanged;
 		cache->flashblend = !!gl_flashblend.value;
 		cache->dynamic = !!r_dynamic.value;
 		cache->dlightframecount = r_framecount;
+		//picks up the current d_lightstylevalue, which is what the worker's
+		//sweep compares each surface's cached_light against.
 		R_LightmapBuildState_Snapshot(&cache->lightmapstate);
 		rscenecache.dlightjob.cache = cache;
 		SDL_CondSignal(rscenecache.wt_cond);
+		queued = true;
 	}
+	//tb -- if the worker is busy we simply do not queue. The style comparison in
+	//RSceneCache_Queue has not been advanced, so the next frame re-offers the job
+	//with the newest values: latest state wins, and ticks cannot pile up.
 	SDL_UnlockMutex(rscenecache.mutex);
+	return queued;
 }
 
 static int RSceneCache_Thread(void *ctx)
@@ -6675,6 +6768,8 @@ static int RSceneCache_Thread(void *ctx)
 			qboolean changed;
 			SDL_UnlockMutex(rscenecache.mutex);
 			changed = RSceneCache_RunDlightJob(jobcache);
+			//tb -- counted as worker time alongside full builds, so the columns
+			//stay comparable between the rebuild and lightmap-only paths.
 			SDL_LockMutex(rscenecache.mutex);
 			if (changed)
 				SDL_AtomicSet(&rscenecache.processed, true);	//get RSceneCache_Finish to upload the dirty regions.
@@ -6810,6 +6905,7 @@ static int RSceneCache_Thread(void *ctx)
 			// later dlight job can clear it once the lights move or die.
 			RSceneCache_MergeLitSurfs(cache);
 
+
 			SDL_LockMutex(rscenecache.mutex);
 			SDL_AtomicSet(&rscenecache.processed, true);
 			SDL_AtomicSet(&cache->status, SCS_COMPUTED);
@@ -6895,6 +6991,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 	int e;
 	qboolean grass_blades_active;
 	qboolean queuedbuild = false;	// woods #scenecachedlights
+	qboolean stylechanged = false;	//tb -- lightstyle tick needs a lightmap-only refresh
 	static int settingconflict;
 
 	static int old_lightstylevalue[countof(d_lightstylevalue)];
@@ -7085,12 +7182,11 @@ static qboolean RSceneCache_Queue(byte *vis)
 	else
 	{
 		if (!building)
-		{	//if the lighting is changing then keep rebuilding,
+		{	//tb -- a lightstyle tick only changes lightmap texels, never geometry
+			//or indices, so it no longer invalidates the cache. The worker
+			//refreshes the affected lightmaps instead; see the job below.
 			if (RSceneCache_UsedLightstylesChanged(old_lightstylevalue, d_lightstylevalue))
-			{
-				old_lightstylevalue[0] = INT_MIN;	//something that'll force a regen pretty soon...
-				cache = NULL;	//make sure its rebuilt (can still use the best while it computes).
-			}
+				stylechanged = true;
 			//woods #scenecachedlights -- dlights no longer invalidate the cache (which forced
 			//a full rebuild + EBO upload every frame while a quad/pent glow, rocket or muzzle
 			//flash was live); RSceneCache_QueueDlightUpdate below patches the lightmaps in place.
@@ -7103,7 +7199,12 @@ static qboolean RSceneCache_Queue(byte *vis)
 		unsigned int oldestage = 3, a;
 
 		queuedbuild = true;	// woods #scenecachedlights -- worker will own surf dlight state this frame
-		memcpy(old_lightstylevalue, d_lightstylevalue, sizeof(old_lightstylevalue));
+		//tb -- a rebuild deliberately does NOT consume a pending lightstyle
+		//tick. It relights the surfaces *it* visits; another live cache -- a
+		//skyroom especially -- draws from the same shared lightmaps and would
+		//keep stale light. Leaving the tick pending makes the next quiet frame
+		//sweep the union of live caches; surfaces this build already relit
+		//early-out there on cached_light and cost almost nothing.
 
 		if (rscenecache.thread)
 		{	//we already had one queued? don't wait for TWO frames!
@@ -7288,8 +7389,19 @@ static qboolean RSceneCache_Queue(byte *vis)
 
 	//woods #scenecachedlights -- with no rebuild queued or in flight, have the
 	//worker patch active dlights into the shared lightmaps instead of rebuilding.
+	//tb -- and lightstyle ticks, for the same reason.
 	if (cache && !queuedbuild && !building && SDL_AtomicGet(&cache->status) != SCS_BUILDING)
-		RSceneCache_QueueDlightUpdate (cache);
+	{
+		if (RSceneCache_QueueDlightUpdate (cache, stylechanged) && stylechanged)
+		{	//only advance the reference values once the worker has actually taken
+			//the job, so a tick dropped while it was busy is re-offered next frame
+			//with the newest values rather than being lost.
+			memcpy(old_lightstylevalue, d_lightstylevalue, sizeof(old_lightstylevalue));
+		}
+	}
+	//tb -- deliberately no 'else': when a rebuild is in flight the tick stays
+	//pending. The rebuild only covers its own visited set, so the union sweep
+	//still has to run for the other live caches.
 
 	return !!cache;
 }
@@ -7390,7 +7502,7 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 #define USEMAPBUFFER
 	unsigned int i;
 	int status;
-	size_t numidx;
+	size_t numidx = 0;
 #ifdef USEMAPBUFFER
 	byte *ebomem = NULL;
 #endif
@@ -7404,11 +7516,20 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 	if (rscenecache.thread &&
 		(status == SCS_BUILDING || status == SCS_COMPUTED))
 	{
+		qboolean blocked = false;
+
 		SDL_LockMutex(rscenecache.mutex);
 		while(SDL_AtomicGet(&cache->status) == SCS_BUILDING)
+		{
+			blocked = true;
 			SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+		}
 		status = SDL_AtomicGet(&cache->status);
 		SDL_UnlockMutex(rscenecache.mutex);
+
+		if (blocked)
+		{
+		}
 	}
 
 	switch(status)
@@ -7459,6 +7580,7 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 #endif
 		RSceneCache_UpdateDrawTextureList(cache);
 		SDL_AtomicSet(&cache->status, SCS_FINISHED);
+
 
 		for (i=0, cache = rscenecache.cache; cache; cache = cache->next)
 			i++;
@@ -7874,6 +7996,10 @@ void RSceneCache_Shutdown(void)
 	rscenecache.mutex = NULL;
 	rscenecache.processing = NULL;
 	rscenecache.dlightjob.cache = NULL;	// woods #scenecachedlights -- worker may have died with a job still queued
+	free(rscenecache.dlightjob.surfs);	//tb -- lightstyle sweep set
+	rscenecache.dlightjob.surfs = NULL;
+	rscenecache.dlightjob.surfbytes = 0;
+	rscenecache.dlightjob.styles = false;
 	SDL_AtomicSet(&rscenecache.processed, false);
 	SDL_AtomicSet(&rscenecache.haslitsurfs, false);
 	free(rscenecache_litsurfs);
