@@ -2908,8 +2908,10 @@ void R_SetupAliasLighting (entity_t	*e)
 	float		radiansangle;
 	float		*origin;
 
-	plcolour_t dhvalue = CL_PLColours_Parse(cl_damagehuecolor.string); // woods #damage
-	byte* dhuecolor = CL_PLColours_ToRGB(&dhvalue); // woods #damage
+	// woods #damage -- tb: parsed where it is used, not here. This runs for every
+	// visible entity every frame, but the result only ever reaches the view
+	// model, so on a busy ad_tears view it was ~330 string parses a frame thrown
+	// away.
 
 	if (e->effects & EF_FULLBRIGHT)
 	{
@@ -3024,11 +3026,11 @@ void R_SetupAliasLighting (entity_t	*e)
 	if ((cl.time <= cl.faceanimtime || M_LivePreview_UseDamageTint()) && cl_damagehue.value)
 		if (e == &cl.viewent)
 		{
-			{
- 				lightcolor[0] = dhuecolor[0];
-				lightcolor[1] = dhuecolor[1];
-				lightcolor[2] = dhuecolor[2];
-			}
+			plcolour_t dhvalue = CL_PLColours_Parse(cl_damagehuecolor.string);
+			byte *dhuecolor = CL_PLColours_ToRGB(&dhvalue);
+			lightcolor[0] = dhuecolor[0];
+			lightcolor[1] = dhuecolor[1];
+			lightcolor[2] = dhuecolor[2];
 		}
 
 	// end woods for damage taken
