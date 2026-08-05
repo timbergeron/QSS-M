@@ -19,8 +19,9 @@ every registered console command and cvar.
 
 The stress hooks are wired into the `QSS-M` Xcode target.  `Debug` defines
 `QSSM_STRESS=1` and compiles `Misc/stress/host_stress.c`; `Release` does not
-define it and keeps the normal player command surface.  Build the app bundle,
-then verify the hook strings before starting a campaign:
+define it and keeps the normal player command surface.  (On Windows the switch
+is the `QSSMStress` MSBuild property instead -- see below.)  Build the app
+bundle, then verify the hook strings before starting a campaign:
 
 ```bash
 xcodebuild -project macOS/QuakeSpasm.xcodeproj -target QSS-M \
@@ -39,6 +40,217 @@ QSSM_BIN="$(find "$HOME/Library/Developer/Xcode/DerivedData" \
   -type f -print -exec stat -f '%m %N' {} \; | sort -nr | head -1 | cut -d' ' -f2-)"
 test -n "$QSSM_BIN" && strings "$QSSM_BIN" | grep -E 'STRESS_READY|_stress_status'
 ```
+
+## Run a live Windows client probe
+
+The Windows Visual Studio project takes `/p:QSSMStress=1` to compile
+`Misc/stress/host_stress.c` with the `-stress` command channel.  It is a
+property rather than a per-configuration define, so it works with `Release`
+too -- which is what you want for any performance work, since an unoptimised
+`Debug` build tells you nothing useful about frame time:
+
+```powershell
+& "$env:ProgramFiles\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" Windows/VisualStudio/quakespasm-sdl2.vcxproj -p:Configuration=Release -p:Platform=x64 -p:QSSMStress=1 -p:OutDir=".codex-build\prof-out\" -p:IntDir=".codex-build\prof-int\"
+```
+
+Then drive the real client through map loading, exact `setpos` commands, and
+frame profiling:
+
+```powershell
+python Misc/stress/live_client_probe.py `
+  --bin Windows/VisualStudio/.codex-build/prof-out/quakespasm-sdl2.exe `
+  --basedir "$env:USERPROFILE/Desktop/qssm" `
+  --output Misc/stress/tmp/ad-tears-live
+```
+
+The probe writes `report.json` under the output directory and tails the
+client's `qconsole.log` beside the executable.
+Unlike command-line `+setpos`, negative coordinates are delivered after
+startup through the append-only stress file and are not truncated by the
+engine's command-line parser.
+
+### Where the harness attaches to the engine
+
+Everything below is inert without `QSSM_STRESS`; the release player build
+contains none of it.
+
+| Site | File | What it does |
+| --- | --- | --- |
+| `Host_StressInit ()` | `host.c`, end of `Host_Init` | Parses `-stress <path>`, registers the `_stress_*` commands, prints `STRESS_READY`. |
+| `Host_StressPoll ()` | `host.c`, in `_Host_Frame` before `Cbuf_Execute` | Drains the script file (throttled to 50Hz) and samples the frame-time profiler. Being on the host thread is what makes key/menu/console commands safe to execute. |
+| `QSSMStress` property | `quakespasm-sdl2.vcxproj` | An `ItemDefinitionGroup` conditioned on the property adds `QSSM_STRESS` to `PreprocessorDefinitions`, so it composes with any configuration rather than being baked into `Debug`. |
+| `host_stress.c` | `quakespasm-sdl2.vcxproj` (+`.filters`) | Compiled unconditionally; the file is `#ifdef QSSM_STRESS` internally and reduces to no-op lifecycle stubs otherwise. |
+| `NET_Address_RunSelfTests ()` | `net_main.c`, `NET_Init` | Skipped under `QSSM_STRESS`. It asserts on Windows and opens a modal SDL dialog that wedges an unattended run. **This masks a real failure** -- normal `Debug` builds still run it, and it deserves its own investigation. |
+
+`Host_StressPumpModal`, `Host_StressNoteParse` and `Host_StressCoverage` are
+defined but **not currently called from the engine** on this platform.  They
+exist for the macOS lanes; do not assume modal-dialog answering or parser
+coverage works in a Windows run until those call sites are added.
+
+### Instrumentation counters
+
+**Two separate defines.**  `QSSM_STRESS` gives you the command channel and the
+frame-time profiler, and needs nothing from the renderer -- `host_stress.c`
+compiles against a stock tree.  `QSSM_RENDERSTATS` additionally enables the
+`STRESS_PROF_CACHE` line, and requires the renderer counter patch to be applied
+(the `rs_*` globals and their `RSC_STAT`/`RS_STAT` call sites).  That patch is
+deliberately not part of the engine history: it is applied when there is
+something to measure and dropped again afterwards.
+
+So a stock checkout gives you:
+
+```
+/p:QSSMStress=1                            -> STRESS_PROF (frame percentiles)
+/p:QSSMStress=1 + counter patch + define   -> STRESS_PROF and STRESS_PROF_CACHE
+```
+
+The `rs_*` globals are declared in `glquake.h` inside a single
+`#ifdef QSSM_STRESS` block, and every update goes through a macro so nothing
+survives preprocessing in a player build:
+
+```c
+RSC_STAT (rs_scenecache_builds++);          /* scene cache */
+RS_STAT  (rs_bshadow_indices += n);         /* alias + shadow */
+RS_ALIAS_DRAW (RS_ALIAS_SHADOW, numtris);   /* per-pass draw + triangle count */
+```
+
+Add new counters the same way, and keep them at **per-job or per-frame
+granularity**.  An earlier revision timed every visited surface, which put
+~190k `Sys_DoubleTime` calls per rebuild into the worker's hot loop -- real
+shipping overhead, and because only one side of the A/B paid it, the comparison
+was biased by 8-10% in the fix's favour.
+
+What the counters cover:
+
+* **Scene cache** -- `builds`, `stylebuilds`, `uploads`/`uploadkb`/`uploadms`,
+  `blocks`/`blockms`, `skyscanms`, `workerwallms`, `lightmapwallms`,
+  `lmscanned`/`lmbuilt`, `stylejobs`, `stylebusy`, and the main-thread phase
+  timers `visms`/`queuems`/`drawms`.
+* **Alias** -- `edicts`, `aents`, and the instancing-bucket triple
+  `akeysw`/`adkey`/`adModel`.  The key is `(model, pose1, pose2)`, because the
+  pose attrib pointers are offset by `lerpdata.pose1/pose2`; keying on the model
+  alone badly understates the bucket count (8 models vs 31-36 real keys).
+* **Draw calls per pass** -- `dcMain`/`dcShadow`/`dcOutline`/`dcShell` counted
+  at the `glDrawElements` site, with matching `trMain`/`trShadow`/... triangle
+  totals.  Note `rs_aliaspasses` (johnfitz) adds `numtris` and so measures
+  triangle passes, *not* draws.
+* **Brush shadows** -- `bsEnts`, `bsSurfs`, `bsVerts`, `bsBuf` (how many used
+  the index cache) and `bsIdx`.  `bsIdx` is computed identically on both the
+  immediate and buffered paths, so it is the parity check when changing that
+  code -- though it proves index *count* parity, not that the silhouettes match.
+* **Particles** -- `partms` and `partcount`.
+* **Shadow culling** -- `scullA`/`scullD`.
+
+### Diagnostic cvars
+
+These exist to isolate costs, not to be set by players.  Several deliberately
+render incorrectly.
+
+| Cvar | Meaning |
+| --- | --- |
+| `r_shadows_buffered` | `1` indexed brush shadows (shipping), `0` the original immediate-mode path.  Same geometry either way, so this is the honest A/B and the lever for a pixel diff. |
+| `r_shadows_maxdist` | `0` off (default).  Positive values skip alias and brush shadows beyond that many units, measured to the entity's world-space bounds. A quality tradeoff, not a free win. |
+| `r_alias_skip` | `1` replaces per-entity lighting setup with a constant.  `QSSM_STRESS` only. |
+
+### Measuring frame time
+
+Do not use `r_speeds` for this.  It times only `R_RenderView`, so it misses
+present and the scene-cache index upload that lands on the main thread; it
+reports whole milliseconds; and it prints a line every frame, so under
+`-condebug` the measurement writes a file per frame and changes what it is
+measuring.  Early probe runs that used it produced numbers that varied by 50x
+between repeats of the same test.
+
+Use `_stress_frameprof <seconds> <label>` instead.  It samples the whole frame
+period once per frame, buffers the samples, and prints two lines at the end:
+
+```
+STRESS_PROF label=... frames=... fps=... min/p50/p90/p99/max=... over16=... over33=...
+STRESS_PROF_CACHE label=... builds=... stylebuilds=... uploads=... uploadkb=...
+                  uploadms=... blocks=... blockms=... skyscanms=... workerms=...
+```
+
+The `_CACHE` line comes from the `rs_scenecache_*` counters in `r_world.c`.
+`builds` is scene-cache rebuilds queued, `stylebuilds` how many of those a
+lightstyle animation tick forced, `workerms` the worker thread's build time,
+`uploadms` the main-thread EBO upload, and `blockms` how long the render
+thread waited on the worker.
+
+The probe sets `host_maxfps 0` and `vid_vsync 0` so frame time reflects work
+rather than the frame limiter, and it interleaves repeats across variants so
+warm-up and clock drift do not land on whichever variant ran first.  Always
+run `--repeats 3` or more and discard repeat 0; the first pass is warm-up.
+
+Useful options:
+
+* `--motion still|sweep|storm|walk` -- how the viewpoint moves while sampling.
+  `sweep` teleports along X to churn the PVS, but each `setpos` is a console
+  command with its own cost, so `storm` (re-`setpos` to the *same* spot at the
+  same rate) is its control.  They measured the same, which is how we found
+  that an early "motion" result was measuring command traffic and not PVS
+  churn at all.  `walk` holds `+forward` and is the only mode whose movement
+  matches a player's, but it drifts and can walk into a wall, so treat its
+  numbers as indicative rather than controlled.
+* `--cores N` -- restrict the client to N CPUs.  The scene cache offloads
+  rebuilds to a worker thread, so on a machine with spare cores their cost
+  hides; `--cores 2` is how you find out what happens when the worker cannot
+  keep up.
+* `--width/--height` -- match the machine's real resolution.  A 1280x720
+  window and a 3840x2160 one are different tests.  Resolution insensitivity is
+  evidence against a fill bottleneck only; it says nothing about vertex work,
+  driver submission or synchronisation.
+* `--position NAME` (repeatable) -- restrict to named positions.  Not just for
+  speed: the scene-cache pool accumulates, so visiting two distant spots in one
+  session inflates the lightstyle sweep's cache union and makes a single-spot
+  cost look worse than it is.  `--position tears_low` alone measured 856ms of
+  worker time where the two-position run reported 2647ms.
+* `--variant NAME` (repeatable) -- restrict to named variants.  Variants are
+  interleaved within each repeat, so warm-up and clock drift hit every cell
+  equally instead of loading onto whichever ran first.
+* `--repeats N`, `--sample-seconds N` -- see the drift warning above.
+
+`STRESS_PROF_CACHE` reports `stylejobs` (lightmap-only refreshes performed) and
+`stylebusy` (a refresh was offered while the worker was still busy).  A
+non-zero `stylebusy` means the worker cannot keep up with the 10Hz tick and
+lighting is updating more slowly than it should -- watch it whenever changing
+the sweep's cost.  It counts *per-frame rejected offers*, not distinct dropped
+ticks: at 300fps one busy job rejects many frames' worth.
+
+### Traps this harness exists to avoid
+
+Every one of these produced a wrong conclusion that had to be retracted.
+
+**The machine drifts ~30% between sessions.**  The same cell measured
+`workerwallms` 3325 in one session and 2504 in another.  Never compare numbers
+across runs; only within-run, interleaved A/B.  Always `--repeats 3` or more
+and discard repeat 0 -- it is warm-up, and is routinely 20-40% off the others.
+
+**Variants must be hermetic.**  They run against one long-lived client, so a
+variant that only sets what it *disables* leaves that setting applied for
+everything after it.  This silently turned shadows off for most of an entity
+bisect and made it look like no single feature mattered, when shadows were
+actually ~30% of the frame.  `_entvariant()` in the probe restates every cvar
+in its group for exactly this reason -- follow that pattern for new groups.
+
+**Disabling a subsystem measures an upper bound, not the cost of its
+submission.**  `r_shadows_bmodels 0` also removes lighting queries, ground
+checks, matrices, rasterization and blending.  To size an optimisation, compare
+optimised-vs-unoptimised with the feature still *on*, and compute recovery from
+frame time:
+
+    recovery = (T_before - T_after) / (T_before - T_off)
+
+**Console commands are not free.**  A `setpos` sweep looked like PVS churn
+costing 20ms p99, until re-`setpos`ing to the *same* spot at the same rate
+reproduced it exactly.  `--motion storm` is that control; keep it.
+
+**Entity counts vary even standing still** (203-246 between samples in
+`ad_tears`).  A sample whose `edicts`/`dc` counts diverge sharply from its
+siblings is not comparable -- check them before trusting a frame-time delta.
+
+**Watch `printf` arity.**  The `STRESS_PROF_CACHE` format string and its
+argument list are edited together; a mismatch compiles fine and silently prints
+garbage for every field after the break.
 
 The current engine boundary covers script-driven lifecycle, console, menu,
 key, and character stress.  Parser-exact, server-message injection, and
