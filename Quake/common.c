@@ -7476,13 +7476,40 @@ typedef struct
 {
 	int			numentries;
 	int			maxnumentries;
-	int			numindices;
+	unsigned		numindices;
 	unsigned	*indices;
 	locentry_t	*entries;
-	char		*text;
+	char		**layers;		// one text buffer per loaded copy; entries point into these
+	int			numlayers;
+	int			maxnumlayers;
 } localization_t;
 
 static localization_t localization;
+
+// A healthy rerelease loc_<lang>.txt holds well over a thousand strings. A
+// much smaller merged table is worth warning about, but may be valid for mods.
+#define LOC_MIN_EXPECTED_STRINGS	64
+
+/*
+================
+LOC_ReallocArray
+
+Checked allocation for localization arrays.
+================
+*/
+static void *LOC_ReallocArray (void *ptr, size_t count, size_t elementsize)
+{
+	void *newptr;
+
+	if (elementsize && count > SIZE_MAX / elementsize)
+		Sys_Error("LOC_ReallocArray: allocation size overflow");
+
+	newptr = realloc(ptr, count * elementsize);
+	if (!newptr && count)
+		Sys_Error("LOC_ReallocArray: not enough memory");
+
+	return newptr;
+}
 
 /*
 ================
@@ -7521,36 +7548,149 @@ unsigned COM_HashBlock(const void* data, size_t size)
 
 /*
 ================
-LOC_LoadFile
+LOC_FreeAll
 ================
 */
-void LOC_LoadFile (const char *file)
+static void LOC_FreeAll (void)
 {
-	int i,lineno;
-	char *cursor;
+	int i;
 
-	// clear existing data
-	if (localization.text)
-	{
-		free(localization.text);
-		localization.text = NULL;
-	}
-	localization.numentries = 0;
+	for (i = 0; i < localization.numlayers; i++)
+		free(localization.layers[i]);
+	free(localization.layers);
+	localization.layers = NULL;
+	localization.numlayers = 0;
+	localization.maxnumlayers = 0;
+
+	free(localization.indices);
+	localization.indices = NULL;
 	localization.numindices = 0;
 
-	if (!file || !*file)
-		return;
+	free(localization.entries);
+	localization.entries = NULL;
+	localization.numentries = 0;
+	localization.maxnumentries = 0;
+}
 
-	Con_Printf("\nLanguage initialization\n");
+/*
+================
+LOC_LoadFromSearchPath
 
-	localization.text = (char*)COM_LoadFile(file, LOADFILE_MALLOC, NULL);
-	if (!localization.text)
+Loads a file directly from one specific search path. COM_LoadFile only returns
+the highest-priority copy, but layered localization needs to see every copy.
+
+Returns malloc'd, NUL-terminated text, or NULL if this searchpath lacks it.
+================
+*/
+static char *LOC_LoadFromSearchPath (searchpath_t *sp, const char *file)
+{
+	char		*buf;
+	FILE		*f;
+	qofs_t		len;
+	size_t		nread;
+
+	if (sp->pack)
 	{
-		Con_Printf("Couldn't load '%s'\nfrom '%s'\n", file, com_basedir);
-		return;
+		packfile_t *packfile;
+		int index = COM_FindPackFileIndex(sp->pack, file);
+
+		if (index < 0)
+			return NULL;
+		packfile = &sp->pack->files[index];
+		if (packfile->filepos < 0 || packfile->filelen < 0 ||
+			packfile->filelen >= INT_MAX || packfile->deflatedsize < 0)
+			Sys_Error("LOC_LoadFromSearchPath: invalid archive metadata for %s", file);
+		len = packfile->filelen;
+
+		f = fopen(sp->pack->filename, "rb");
+		if (!f)
+			return NULL;
+		if (fseek(f, packfile->filepos, SEEK_SET) != 0)
+		{
+			fclose(f);
+			return NULL;
+		}
+		if (packfile->deflatedsize)
+		{
+			f = FSZIP_Deflate(f, packfile->deflatedsize, packfile->filelen, packfile->name);
+			if (!f)
+				return NULL;
+		}
+	}
+	else
+	{
+		char netpath[MAX_OSPATH];
+
+		// Keep the shareware restrictions applied by COM_FindFile.
+		if (!registered.value &&
+			(strchr(file, '/') || strchr(file, '\\') ||
+			 !q_strcasecmp(COM_FileGetExtension(file), "dat")))
+			return NULL;
+
+		q_snprintf(netpath, sizeof(netpath), "%s/%s", sp->filename, file);
+		f = fopen(netpath, "rb");
+		if (!f)
+			return NULL;
+		if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0)
+		{
+			fclose(f);
+			return NULL;
+		}
 	}
 
-	cursor = localization.text;
+	if (len < 0 || len >= INT_MAX)
+	{
+		fclose(f);
+		Sys_Error("LOC_LoadFromSearchPath: invalid size for %s", file);
+	}
+
+	buf = (char *) malloc((size_t)len + 1);
+	if (!buf)
+	{
+		fclose(f);
+		Sys_Error("LOC_LoadFromSearchPath: not enough space for %s", file);
+	}
+
+	nread = fread(buf, 1, (size_t)len, f);
+	fclose(f);
+	if (nread != (size_t)len)
+	{
+		free(buf);
+		Sys_Error("LOC_LoadFromSearchPath: error reading %s from %s", file,
+				sp->pack ? COM_SkipPath(sp->pack->filename) : sp->filename);
+	}
+	buf[len] = 0;
+
+	return buf;
+}
+
+/*
+================
+LOC_ParseBuffer
+
+Appends the key/value pairs in text to the entry list, taking ownership of the
+buffer -- entries point into it, so it has to outlive them.
+================
+*/
+static void LOC_ParseBuffer (char *text, const char *file)
+{
+	int lineno;
+	char *cursor;
+
+	if (localization.numlayers == localization.maxnumlayers)
+	{
+		int newmaxnumlayers;
+
+		if (localization.maxnumlayers > INT_MAX / 2)
+			Sys_Error("LOC_ParseBuffer: too many localization layers");
+		newmaxnumlayers = localization.maxnumlayers ? localization.maxnumlayers * 2 : 8;
+		localization.layers = (char **) LOC_ReallocArray(localization.layers,
+				(size_t)newmaxnumlayers, sizeof(*localization.layers));
+		localization.maxnumlayers = newmaxnumlayers;
+	}
+	localization.layers[localization.numlayers++] = text;
+
+	cursor = text;
 
 	// skip BOM
 	if ((unsigned char)(cursor[0]) == 0xEF && (unsigned char)(cursor[1]) == 0xBB && (unsigned char)(cursor[2]) == 0xBF)
@@ -7559,7 +7699,7 @@ void LOC_LoadFile (const char *file)
 	lineno = 0;
 	while (*cursor)
 	{
-		char *line, *equals;
+		char *line, *equals, *next;
 
 		lineno++;
 
@@ -7576,11 +7716,12 @@ void LOC_LoadFile (const char *file)
 				equals = cursor;
 			cursor++;
 		}
+		next = *cursor ? cursor + 1 : cursor;
 
 		if (line[0] == '/')
 		{
 			if (line[1] != '/')
-				Con_DPrintf("LOC_LoadFile: malformed comment on line %d\n", lineno);
+				Con_DPrintf("LOC_ParseBuffer: malformed comment on line %d of '%s'\n", lineno, file);
 		}
 		else if (equals)
 		{
@@ -7625,18 +7766,19 @@ void LOC_LoadFile (const char *file)
 
 						case '"':
 						case '\'':
+						case '\\':
 							*value_dst++ = c;
 							break;
 
 						default:
-							Con_Printf("LOC_LoadFile: unrecognized escape sequence \\%c on line %d\n", c, lineno);
+							Con_Printf("LOC_ParseBuffer: unrecognized escape sequence \\%c on line %d of '%s'\n", c, lineno, file);
 							*value_dst++ = c;
 							break;
 					}
 					continue;
 				}
 
-				if (*value_src == '\"')
+				if (leading_quote && *value_src == '\"')
 				{
 					trailing_quote = true;
 					*value_dst = 0;
@@ -7646,22 +7788,29 @@ void LOC_LoadFile (const char *file)
 				*value_dst++ = *value_src++;
 			}
 
-			// if not a quoted string, trim trailing whitespace
+			// If not a quoted string, trim and terminate the transformed value.
 			if (!trailing_quote)
 			{
-				while (value_dst != value && q_isblank(value_dst[-1]))
-				{
-					*value_dst = 0;
+				while (value_dst != value && q_isspace(value_dst[-1]))
 					value_dst--;
-				}
+				*value_dst = 0;
 			}
 
 			if (localization.numentries == localization.maxnumentries)
 			{
-				// grow by 50%
-				localization.maxnumentries += localization.maxnumentries >> 1;
-				localization.maxnumentries = q_max(localization.maxnumentries, 32);
-				localization.entries = (locentry_t*) realloc(localization.entries, sizeof(*localization.entries) * localization.maxnumentries);
+				int newmaxnumentries;
+
+				if (!localization.maxnumentries)
+					newmaxnumentries = 32;
+				else
+				{
+					if (localization.maxnumentries > INT_MAX - (localization.maxnumentries >> 1))
+						Sys_Error("LOC_ParseBuffer: too many localized strings");
+					newmaxnumentries = localization.maxnumentries + (localization.maxnumentries >> 1);
+				}
+				localization.entries = (locentry_t *) LOC_ReallocArray(localization.entries,
+						(size_t)newmaxnumentries, sizeof(*localization.entries));
+				localization.maxnumentries = newmaxnumentries;
 			}
 
 			entry = &localization.entries[localization.numentries++];
@@ -7669,20 +7818,33 @@ void LOC_LoadFile (const char *file)
 			entry->value = value;
 		}
 
-		if (*cursor)
-			*cursor++ = 0; // terminate line and advance to next
+		*cursor = 0;
+		cursor = next;
 	}
 
-	// hash all entries
+}
 
+/*
+================
+LOC_BuildIndex
+
+Hashes every entry. Later entries override earlier ones, so layers can be
+parsed lowest-priority-first and the higher-priority copy still wins per key.
+Returns the number of distinct keys.
+================
+*/
+static int LOC_BuildIndex (void)
+{
+	int i, unique = 0;
+
+	if (localization.numentries > INT_MAX / 2)
+		Sys_Error("LOC_BuildIndex: too many localized strings");
 	localization.numindices = localization.numentries * 2; // 50% load factor
 	if (localization.numindices == 0)
-	{
-		Con_Printf("No localized strings in file '%s'\n", file);
-		return;
-	}
+		return 0;
 
-	localization.indices = (unsigned*) realloc(localization.indices, localization.numindices * sizeof(*localization.indices));
+	localization.indices = (unsigned *) LOC_ReallocArray(localization.indices,
+			(size_t)localization.numindices, sizeof(*localization.indices));
 	memset(localization.indices, 0, localization.numindices * sizeof(*localization.indices));
 
 	for (i = 0; i < localization.numentries; i++)
@@ -7692,7 +7854,17 @@ void LOC_LoadFile (const char *file)
 
 		for (;;)
 		{
-			if (!localization.indices[pos])
+			unsigned idx = localization.indices[pos];
+
+			if (!idx)
+			{
+				localization.indices[pos] = i + 1;
+				unique++;
+				break;
+			}
+
+			// same key from a lower-priority layer: let this one replace it
+			if (!Q_strcmp(localization.entries[idx - 1].key, entry->key))
 			{
 				localization.indices[pos] = i + 1;
 				break;
@@ -7703,11 +7875,117 @@ void LOC_LoadFile (const char *file)
 				pos = 0;
 
 			if (pos == end)
-				Sys_Error("LOC_LoadFile failed");
+				Sys_Error("LOC_BuildIndex failed");
 		}
 	}
 
-	Con_Printf("Loaded %d strings from '%s'\n", localization.numentries, file);
+	return unique;
+}
+
+/*
+================
+LOC_LoadLayered
+
+Parses every copy on the search path, lowest priority first. The base file and
+its _mod overlay are loaded together per search path so a lower-priority _mod
+file cannot override a higher-priority base file. Returns the number of base
+copies found.
+================
+*/
+static int LOC_LoadLayered (const char *file, const char *modfile)
+{
+	searchpath_t	*sp, **list;
+	int		count = 0, n = 0, i, loaded = 0;
+
+	for (sp = com_searchpaths; sp; sp = sp->next)
+	{
+		if (count == INT_MAX)
+			Sys_Error("LOC_LoadLayered: too many search paths");
+		count++;
+	}
+	if (!count)
+		return 0;
+
+	list = (searchpath_t **) LOC_ReallocArray(NULL, (size_t)count, sizeof(*list));
+	for (sp = com_searchpaths; sp; sp = sp->next)
+		list[n++] = sp;
+
+	for (i = count - 1; i >= 0; i--)
+	{
+		char *buf = LOC_LoadFromSearchPath(list[i], file);
+		if (buf)
+		{
+			LOC_ParseBuffer(buf, file);
+			loaded++;
+		}
+
+		if (modfile)
+		{
+			buf = LOC_LoadFromSearchPath(list[i], modfile);
+			if (buf)
+				LOC_ParseBuffer(buf, modfile);
+		}
+	}
+
+	free(list);
+	return loaded;
+}
+
+/*
+================
+LOC_LoadFile
+================
+*/
+void LOC_LoadFile (const char *file)
+{
+	char		modfile[MAX_QPATH];
+	const char	*ext;
+	size_t		extlen, prefixlen;
+	int		unique;
+
+	LOC_FreeAll();
+
+	if (!file || !*file)
+		return;
+
+	Con_Printf("\nLanguage initialization\n");
+
+	// 2021 rerelease mod overlay: loc_<lang>_mod.txt sits next to the base file
+	// and is meant to override it with mod-specific terms.
+	modfile[0] = 0;
+	ext = COM_FileGetExtension(file);
+	if (*ext && ext > file && ext[-1] == '.')
+	{
+		prefixlen = (size_t)(ext - file - 1);
+		extlen = strlen(ext);
+		if (prefixlen <= sizeof(modfile) - 6 && extlen <= sizeof(modfile) - prefixlen - 6)
+		{
+			memcpy(modfile, file, prefixlen);
+			memcpy(modfile + prefixlen, "_mod.", 5);
+			memcpy(modfile + prefixlen + 5, ext, extlen + 1);
+		}
+	}
+
+	if (!LOC_LoadLayered(file, modfile[0] ? modfile : NULL))
+	{
+		LOC_FreeAll();
+		Con_Printf("Couldn't load '%s'\nfrom '%s'\n", file, com_basedir);
+		return;
+	}
+
+	unique = LOC_BuildIndex();
+	if (!unique)
+	{
+		LOC_FreeAll();
+		Con_Printf("No localized strings in file '%s'\n", file);
+		return;
+	}
+
+	Con_Printf("Loaded %d strings from '%s'\n", unique, file);
+
+	if (unique < LOC_MIN_EXPECTED_STRINGS)
+		Con_Warning("only %d localized string%s found; localization data may be incomplete\n",
+					unique, (unique == 1) ? "" : "s");
 }
 
 /*
@@ -7727,9 +8005,7 @@ LOC_Shutdown
 */
 void LOC_Shutdown(void)
 {
-	free(localization.indices);
-	free(localization.entries);
-	free(localization.text);
+	LOC_FreeAll();
 }
 
 /*

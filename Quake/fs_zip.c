@@ -88,8 +88,9 @@ struct ziplocalentry
 	unsigned short	extra_len;
 };
 
-#define LittleU2FromPtr(p) (unsigned int)((p)[0] | ((p)[1]<<8u))
-#define LittleU4FromPtr(p) (unsigned int)((p)[0] | ((p)[1]<<8u) | ((p)[2]<<16u) | ((p)[3]<<24u))
+#define LittleU2FromPtr(p) ((unsigned int)(p)[0] | ((unsigned int)(p)[1] << 8u))
+#define LittleU4FromPtr(p) ((unsigned int)(p)[0] | ((unsigned int)(p)[1] << 8u) | \
+				((unsigned int)(p)[2] << 16u) | ((unsigned int)(p)[3] << 24u))
 #define LittleU8FromPtr(p) qofs_Make(LittleU4FromPtr(p), LittleU4FromPtr((p)+4))
 
 #define SIZE_LOCALENTRY 30
