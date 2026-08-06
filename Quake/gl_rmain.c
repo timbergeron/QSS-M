@@ -958,7 +958,7 @@ R_CullBox -- johnfitz -- replaced with new function from lordhavoc
 Returns true if the box is completely outside the frustum
 =================
 */
-qboolean R_CullBox (vec3_t emins, vec3_t emaxs)
+qboolean R_CullBox (const vec3_t emins, const vec3_t emaxs)
 {
 	int i;
 	mplane_t *p;

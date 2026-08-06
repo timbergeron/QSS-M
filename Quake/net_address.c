@@ -35,13 +35,12 @@ static qboolean NET_ParsePortText(const char *text, int *port)
 	return true;
 }
 
-static qboolean NET_NormalizeIPv4(const char *host, char *output, size_t output_size)
+static qboolean NET_ParseIPv4Octets(const char *text, int octets[4])
 {
-	const char *scan = host;
-	int octets[4];
+	const char *scan = text;
 	int i;
 
-	if (!host || !*host || !output || output_size == 0)
+	if (!text || !*text)
 		return false;
 
 	for (i = 0; i < 4; i++)
@@ -67,42 +66,244 @@ static qboolean NET_NormalizeIPv4(const char *host, char *output, size_t output_
 			return false;
 	}
 
+	return true;
+}
+
+static qboolean NET_NormalizeIPv4(const char *host, char *output, size_t output_size)
+{
+	int octets[4];
+
+	if (!host || !output || output_size == 0)
+		return false;
+	if (!NET_ParseIPv4Octets(host, octets))
+		return false;
+
 	q_snprintf(output, output_size, "%d.%d.%d.%d",
 		octets[0], octets[1], octets[2], octets[3]);
 	return true;
 }
 
-static qboolean NET_NormalizeIPv6(const char *host, char *output, size_t output_size)
+/*
+ * Split a scope id ("fe80::1%12") off an address literal. The scope is only
+ * carried through for display; we validate its shape but never resolve it.
+ */
+static qboolean NET_SplitIPv6Scope(const char *host, char *address, size_t address_size,
+	char *scope, size_t scope_size)
 {
-	if (!host || !*host || !strchr(host, ':') || !output || output_size == 0)
-		return false;
+	const char *mark = strchr(host, '%');
+	size_t address_len;
+	size_t i;
 
-#ifndef AI_NUMERICHOST
-	/* Never fall back to name service while classifying a display address. */
-	return false;
-#else
-	struct addrinfo hints;
-	struct addrinfo *result = NULL;
-	int error;
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET6;
-	hints.ai_socktype = SOCK_DGRAM;
-	hints.ai_flags = AI_NUMERICHOST;
-
-	error = getaddrinfo(host, NULL, &hints, &result);
-	if (error != 0 || !result)
+	if (!mark)
 	{
-		if (result)
-			freeaddrinfo(result);
-		return false;
+		if (strlen(host) >= address_size)
+			return false;
+		q_strlcpy(address, host, address_size);
+		scope[0] = '\0';
+		return true;
 	}
 
-	error = getnameinfo(result->ai_addr, (socklen_t)result->ai_addrlen,
-		output, (socklen_t)output_size, NULL, 0, NI_NUMERICHOST);
-	freeaddrinfo(result);
-	return error == 0;
-#endif
+	address_len = (size_t)(mark - host);
+	if (address_len == 0 || address_len >= address_size)
+		return false;
+	memcpy(address, host, address_len);
+	address[address_len] = '\0';
+
+	mark++;
+	if (!*mark || strlen(mark) >= scope_size)
+		return false;
+	for (i = 0; mark[i]; i++)
+	{
+		if (!q_isalnum((unsigned char)mark[i]) &&
+			mark[i] != '-' && mark[i] != '_' && mark[i] != '.')
+			return false;
+		scope[i] = (char)q_tolower((unsigned char)mark[i]);
+	}
+	scope[i] = '\0';
+	return true;
+}
+
+static qboolean NET_ParseIPv6Groups(const char *address, unsigned short groups[8])
+{
+	const char *scan = address;
+	unsigned short head[8], tail[8];
+	int head_count = 0, tail_count = 0;
+	qboolean elided = false;
+	int i;
+
+	if (!*scan)
+		return false;
+
+	if (*scan == ':')
+	{
+		if (scan[1] != ':')
+			return false;
+		scan += 2;
+		elided = true;
+		if (!*scan)
+		{
+			memset(groups, 0, sizeof(*groups) * 8);
+			return true;
+		}
+	}
+
+	for (;;)
+	{
+		unsigned short *store = elided ? tail : head;
+		int *count = elided ? &tail_count : &head_count;
+		const char *dot = strchr(scan, '.');
+		const char *colon = strchr(scan, ':');
+
+		if (dot && (!colon || dot < colon))
+		{	/* dotted tail: "::ffff:192.0.2.1" - fills the low 32 bits */
+			int octets[4];
+
+			if (!NET_ParseIPv4Octets(scan, octets))
+				return false;
+			if (*count + 2 > 8)
+				return false;
+			store[(*count)++] = (unsigned short)((octets[0] << 8) | octets[1]);
+			store[(*count)++] = (unsigned short)((octets[2] << 8) | octets[3]);
+			break;
+		}
+
+		{
+			int digits = 0;
+			unsigned int value = 0;
+
+			while (q_isxdigit((unsigned char)*scan))
+			{
+				const char c = *scan++;
+
+				value <<= 4;
+				if (q_isdigit((unsigned char)c))
+					value |= (unsigned int)(c - '0');
+				else
+					value |= (unsigned int)((q_tolower((unsigned char)c) - 'a') + 10);
+				if (++digits > 4)
+					return false;
+			}
+			if (digits == 0 || *count >= 8)
+				return false;
+			store[(*count)++] = (unsigned short)value;
+		}
+
+		if (!*scan)
+			break;
+		if (*scan != ':')
+			return false;
+		scan++;
+		if (*scan == ':')
+		{
+			if (elided)
+				return false;
+			elided = true;
+			scan++;
+			if (!*scan)
+				break;
+		}
+		else if (!*scan)
+			return false;	/* trailing single colon */
+	}
+
+	if (elided)
+	{
+		if (head_count + tail_count > 7)
+			return false;
+	}
+	else if (head_count != 8)
+		return false;
+
+	memset(groups, 0, sizeof(*groups) * 8);
+	for (i = 0; i < head_count; i++)
+		groups[i] = head[i];
+	for (i = 0; i < tail_count; i++)
+		groups[8 - tail_count + i] = tail[i];
+	return true;
+}
+
+/* Canonical text per RFC 5952: lowercase, no leading zeros, longest zero run elided. */
+static qboolean NET_FormatIPv6(const unsigned short groups[8], const char *scope,
+	char *output, size_t output_size)
+{
+	char text[64];
+	int best_start = -1, best_len = 0;
+	int run_start = -1, run_len = 0;
+	size_t used = 0;
+	int result;
+	int i;
+
+	for (i = 0; i < 8; i++)
+	{
+		if (groups[i] != 0)
+		{
+			run_start = -1;
+			continue;
+		}
+		if (run_start < 0)
+		{
+			run_start = i;
+			run_len = 0;
+		}
+		if (++run_len > best_len)
+		{
+			best_len = run_len;
+			best_start = run_start;
+		}
+	}
+	if (best_len < 2)
+		best_start = -1;
+
+	if (best_start == 0 && best_len == 5 && groups[5] == 0xffff)
+	{	/* IPv4-mapped addresses read better in the dotted form */
+		result = q_snprintf(text, sizeof(text), "::ffff:%d.%d.%d.%d",
+			groups[6] >> 8, groups[6] & 0xff, groups[7] >> 8, groups[7] & 0xff);
+		if (result < 0 || (size_t)result >= sizeof(text))
+			return false;
+	}
+	else
+	{
+		for (i = 0; i < 8; i++)
+		{
+			if (best_start >= 0 && i >= best_start && i < best_start + best_len)
+			{
+				if (i == best_start)
+					text[used++] = ':';
+				continue;
+			}
+			if (i > 0)
+				text[used++] = ':';
+			result = q_snprintf(text + used, sizeof(text) - used, "%x", groups[i]);
+			if (result < 0 || (size_t)result >= sizeof(text) - used)
+				return false;
+			used += (size_t)result;
+		}
+		if (best_start >= 0 && best_start + best_len == 8)
+			text[used++] = ':';
+		text[used] = '\0';
+	}
+
+	if (scope && *scope)
+		result = q_snprintf(output, output_size, "%s%%%s", text, scope);
+	else
+		result = q_snprintf(output, output_size, "%s", text);
+	return result >= 0 && (size_t)result < output_size;
+}
+
+static qboolean NET_NormalizeIPv6(const char *host, char *output, size_t output_size)
+{
+	char address[MAX_SERVER_ADDRESS_LEN];
+	char scope[MAX_SERVER_ADDRESS_LEN];
+	unsigned short groups[8];
+
+	/* Purely textual: classifying a display address must never touch name service. */
+	if (!host || !*host || !strchr(host, ':') || !output || output_size == 0)
+		return false;
+	if (!NET_SplitIPv6Scope(host, address, sizeof(address), scope, sizeof(scope)))
+		return false;
+	if (!NET_ParseIPv6Groups(address, groups))
+		return false;
+	return NET_FormatIPv6(groups, scope, output, output_size);
 }
 
 static qboolean NET_NormalizeDomain(const char *host, char *output, size_t output_size)
@@ -343,5 +544,27 @@ void NET_Address_RunSelfTests(void)
 	SDL_assert(text[0] == '[' && strstr(text, "]:26000") != NULL);
 	SDL_assert(!NET_ParseEndpoint("[::1", 26000, &a));
 	SDL_assert(!NET_ParseEndpoint("[::1]:", 26000, &a));
+
+	SDL_assert(NET_ParseEndpoint("[2001:0DB8:0000:0000:0000:0000:0000:0001]", 26000, &a));
+	SDL_assert(a.kind == NET_HOST_IPV6 && !strcmp(a.host, "2001:db8::1") && !a.port_explicit);
+	SDL_assert(NET_ParseEndpoint("[2001:db8:0:1:0:0:0:1]", 26000, &a));
+	SDL_assert(!strcmp(a.host, "2001:db8:0:1::1"));	/* longest run wins, not the first */
+	SDL_assert(NET_ParseEndpoint("[fe80:0:0:0:0:0:0:0]", 26000, &a));
+	SDL_assert(!strcmp(a.host, "fe80::"));
+	SDL_assert(NET_ParseEndpoint("[::]", 26000, &a) && !strcmp(a.host, "::"));
+	SDL_assert(NET_ParseEndpoint("[::ffff:192.0.2.128]", 26000, &a));
+	SDL_assert(a.kind == NET_HOST_IPV6 && !strcmp(a.host, "::ffff:192.0.2.128"));
+	SDL_assert(NET_ParseEndpoint("[fe80::1%eth0]:27500", 26000, &a));
+	SDL_assert(a.kind == NET_HOST_IPV6 && !strcmp(a.host, "fe80::1%eth0") && a.port == 27500);
+
+	SDL_assert(!NET_ParseEndpoint("[1:2:3:4:5:6:7]", 26000, &a));	/* too few groups */
+	SDL_assert(!NET_ParseEndpoint("[1:2:3:4:5:6:7:8:9]", 26000, &a));
+	SDL_assert(!NET_ParseEndpoint("[1::2::3]", 26000, &a));		/* two elisions */
+	SDL_assert(!NET_ParseEndpoint("[12345::1]", 26000, &a));	/* group too wide */
+	SDL_assert(!NET_ParseEndpoint("[:1:2:3:4:5:6:7]", 26000, &a));
+	SDL_assert(!NET_ParseEndpoint("[1:2:3:4:5:6:7:]", 26000, &a));
+	SDL_assert(!NET_ParseEndpoint("[::1%]", 26000, &a));
+	SDL_assert(!NET_ParseEndpoint("[::ffff:192.0.2.256]", 26000, &a));
+	SDL_assert(!NET_ParseEndpoint("[::gggg]", 26000, &a));
 }
 #endif

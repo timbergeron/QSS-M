@@ -497,7 +497,7 @@ void R_NewGame (void);
 void CL_UpdateLightstyle(unsigned int idx, const char *stylestring);
 void R_AnimateLight (void);
 void R_MarkSurfaces (void);
-qboolean R_CullBox (vec3_t emins, vec3_t emaxs);
+qboolean R_CullBox (const vec3_t emins, const vec3_t emaxs);
 void R_StoreEfrags (efrag_t **ppefrag);
 void R_GetEntityBounds (const entity_t *e, vec3_t mins, vec3_t maxs);
 qboolean R_CullModelForEntity (entity_t *e);
