@@ -4495,7 +4495,9 @@ typedef struct
 	qboolean hip_demo1, hip_demo2, hip_demo3, hip_demo4;
 	qboolean rogue_end1, rogue_end2;
 	qboolean rogue_map1, rogue_map2, rogue_map3, rogue_map4;
+	qboolean dopa_start, dopa_end, dopa_map1, dopa_secret1;
 	qboolean mg_hub, mg_end, mg_map1, mg_horde1;
+	qboolean mg3_fgd, mg3_map8, mg3_secret6;
 } com_game_signatures_t;
 
 static qboolean COM_PackEntryNameEquals(const char entry_name[56],
@@ -4565,6 +4567,14 @@ static void COM_DetectGameSignaturesInPak(const char *pak_path,
 			signatures->rogue_map3 = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/r1m4.bsp"))
 			signatures->rogue_map4 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/e5start.bsp"))
+			signatures->dopa_start = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/e5end.bsp"))
+			signatures->dopa_end = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/e5m1.bsp"))
+			signatures->dopa_map1 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/e5sm1.bsp"))
+			signatures->dopa_secret1 = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/hub.bsp"))
 			signatures->mg_hub = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/mgend.bsp"))
@@ -4573,6 +4583,14 @@ static void COM_DetectGameSignaturesInPak(const char *pak_path,
 			signatures->mg_map1 = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/horde1.bsp"))
 			signatures->mg_horde1 = true;
+		/* mg3's maps are named too generically (map1..map8, secret1..secret6)
+		 * to identify on their own, so anchor on its unique editor def. */
+		else if (COM_PackEntryNameEquals(entry.name, "fgd/quake_mg3.fgd"))
+			signatures->mg3_fgd = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/map8.bsp"))
+			signatures->mg3_map8 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/secret6.bsp"))
+			signatures->mg3_secret6 = true;
 	}
 
 done:
@@ -4648,10 +4666,18 @@ qboolean COM_DetectGameDescription(const char *game, char *description,
 		q_strlcpy(description,
 			"Mission Pack 2: Dissolution of Eternity - Rogue",
 			description_size);
+	else if (signatures.dopa_start && signatures.dopa_end &&
+		signatures.dopa_map1 && signatures.dopa_secret1)
+		q_strlcpy(description,
+			"Dimension of the Past - MachineGames", description_size);
 	else if (signatures.mg_hub && signatures.mg_end &&
 		signatures.mg_map1 && signatures.mg_horde1)
 		q_strlcpy(description,
 			"Dimension of the Machine - MachineGames", description_size);
+	else if (signatures.mg3_fgd && signatures.mg3_map8 &&
+		signatures.mg3_secret6)
+		q_strlcpy(description,
+			"Dawn of the Machine - MachineGames", description_size);
 
 	return description[0] != '\0';
 }
