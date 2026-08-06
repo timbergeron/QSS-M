@@ -1987,8 +1987,17 @@ struct md5animctx_s
 	float frametime;
 	bonepose_t *posedata;
 };
+static void MD5Anim_Discard(struct md5animctx_s *ctx)
+{
+	free(ctx->animfile);
+	ctx->animfile = NULL;
+	ctx->buffer = NULL;
+	ctx->numposes = 0;
+	ctx->numjoints = 0;
+	ctx->posedata = NULL;
+}
 //This is split into two because aliashdr_t has silly trailing framegroup info.
-static void MD5Anim_Begin(struct md5animctx_s *ctx, const char *fname)
+static void MD5Anim_Begin(struct md5animctx_s *ctx, const char *fname, size_t numbones)
 {
 	//Load an md5anim into it, if we can.
 	COM_StripExtension(fname, ctx->fname, sizeof(ctx->fname));
@@ -2011,12 +2020,34 @@ static void MD5Anim_Begin(struct md5animctx_s *ctx, const char *fname)
 			char *endptr;
 			double framerate = SDL_strtod(com_token, &endptr);
 			if (endptr == com_token || *endptr || !isfinite(framerate) || framerate <= 0)
-				Sys_Error ("%s has invalid frame rate", fname);
+			{
+				Con_Warning ("%s has an invalid frame rate; ignoring animation\n", fname);
+				MD5Anim_Discard(ctx);
+				return;
+			}
 			ctx->frametime = (float)(1.0 / framerate);
 		}
 
 		if (!ctx->numposes)
-			Sys_Error ("%s has no poses", fname);
+		{
+			Con_Warning ("%s has no poses; ignoring animation\n", fname);
+			MD5Anim_Discard(ctx);
+			return;
+		}
+		if (ctx->numposes > MAXALIASFRAMES)
+		{
+			Con_Warning ("%s has too many poses (%llu > %u); ignoring animation\n",
+				fname, (unsigned long long)ctx->numposes, (unsigned int)MAXALIASFRAMES);
+			MD5Anim_Discard(ctx);
+			return;
+		}
+		if (ctx->numjoints != numbones)
+		{
+			Con_Warning ("%s has %llu bones, but the mesh has %llu; ignoring animation\n",
+				fname, (unsigned long long)ctx->numjoints, (unsigned long long)numbones);
+			MD5Anim_Discard(ctx);
+			return;
+		}
 
 		ctx->buffer = buffer;
 	}
@@ -2036,14 +2067,18 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 
 	if (!buffer)
 	{
-		free(ctx->animfile);
+		MD5Anim_Discard(ctx);
 		return;
 	}
 
 	MD5EXPECT("numAnimatedComponents");	rawcount = MD5UINT();
 
 	if (ctx->numjoints != numbones)
-		Sys_Error ("%s has incorrect bone count", fname);
+	{
+		Con_Warning ("%s bone count changed while loading; ignoring animation\n", fname);
+		MD5Anim_Discard(ctx);
+		return;
+	}
 	if (ctx->numposes > (size_t)INT_MAX)
 		Sys_Error ("%s has too many poses", fname);
 
@@ -2055,19 +2090,33 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 	basequat = Z_Malloc(GLMesh_CheckedHunkSize(ctx->numjoints, sizeof(*basequat), "MD5Anim_Load"));
 	framedone = Z_Malloc(GLMesh_CheckedHunkSize(ctx->numposes, sizeof(*framedone), "MD5Anim_Load"));
 
-	ctx->posedata = outposes = Hunk_Alloc(GLMesh_CheckedHunkSize(GLMesh_CheckedSize(ctx->numjoints, ctx->numposes, "MD5Anim_Load"), sizeof(*outposes), "MD5Anim_Load"));
-
-
 	MD5EXPECT("hierarchy");
 	MD5EXPECT("{");
 	for (j = 0; j < ctx->numjoints; j++)
 	{
+		long parent;
+
 		//validate stuff
 		if (strcmp(bones[j].name, com_token))
-			Sys_Error ("%s: bone was renamed", fname);
+		{
+			Con_Warning ("%s: bone %u has a different name than the mesh; ignoring animation\n",
+				fname, (unsigned int)j);
+			goto ignore_animation;
+		}
 		buffer = COM_Parse(buffer);
-		if (bones[j].parent != MD5SINT())
-			Sys_Error ("%s: bone has wrong parent", fname);
+		parent = MD5SINT();
+		if (parent < -1 || (parent >= 0 && (size_t)parent >= j))
+		{
+			Con_Warning ("%s: bone %u has invalid parent %ld; treating it as a root bone\n",
+				fname, (unsigned int)j, parent);
+			parent = -1;
+		}
+		if (bones[j].parent != parent)
+		{
+			Con_Warning ("%s: bone %u has parent %ld, but the mesh uses %d; ignoring animation\n",
+				fname, (unsigned int)j, parent, bones[j].parent);
+			goto ignore_animation;
+		}
 		//new info
 		{
 			size_t flags = MD5UINT();
@@ -2088,6 +2137,11 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 		}
 	}
 	MD5EXPECT("}");
+
+	//Only commit pose data to the hunk after the optional animation has been
+	//verified against the mesh hierarchy. Ignored animations then need no hunk unwind.
+	ctx->posedata = outposes = Hunk_Alloc(GLMesh_CheckedHunkSize(GLMesh_CheckedSize(ctx->numjoints, ctx->numposes, "MD5Anim_Load"), sizeof(*outposes), "MD5Anim_Load"));
+
 	MD5EXPECT("bounds");
 	MD5EXPECT("{");
 	for (j = 0; j < ctx->numposes; j++)
@@ -2174,6 +2228,17 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 	Z_Free(raw);
 	Z_Free(ab);
 	free(ctx->animfile);
+	ctx->animfile = NULL;
+	ctx->buffer = NULL;
+	return;
+
+ignore_animation:
+	Z_Free(framedone);
+	Z_Free(basequat);
+	Z_Free(basepos);
+	Z_Free(raw);
+	Z_Free(ab);
+	MD5Anim_Discard(ctx);
 }
 void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 {
@@ -2194,6 +2259,10 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 	struct md5vertinfo_s	*vinfo;
 	struct md5weightinfo_s	*weight;
 	size_t					numweights;
+	size_t					invalidboneweights = 0;
+	size_t					firstinvalidweight = 0;
+	size_t					firstinvalidbone = 0;
+	size_t					firstinvalidmesh = 0;
 
 	struct md5animctx_s		anim = {NULL};
 
@@ -2215,7 +2284,7 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 		Sys_Error ("%s has too many bones", mod->name);
 
 	if (strcmp(com_token, "joints")) Sys_Error ("Mod_LoadMD5MeshModel(%s): Expected \"%s\"", fname, "joints");
-	MD5Anim_Begin(&anim, fname);
+	MD5Anim_Begin(&anim, fname, numjoints);
 	buffer = COM_Parse(buffer);
 
 	hdrsize = sizeof(*outhdr) - sizeof(outhdr->frames);
@@ -2235,7 +2304,11 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 		{
 			long parent = MD5SINT();
 			if (parent < -1 || (parent >= 0 && (size_t)parent >= j))
-				Sys_Error ("%s: bone index out of bounds", fname);
+			{
+				Con_Warning ("%s: bone %u has invalid parent %ld; treating it as a root bone\n",
+					fname, (unsigned int)j, parent);
+				parent = -1;
+			}
 			outbones[j].parent = (int)parent;
 		}
 		MD5EXPECT("(");
@@ -2477,7 +2550,16 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 
 				weight[idx].bone = MD5UINT();
 				if (weight[idx].bone >= numjoints)
-					Sys_Error ("%s: bone index out of bounds", fname);
+				{
+					if (!invalidboneweights)
+					{
+						firstinvalidweight = idx;
+						firstinvalidbone = weight[idx].bone;
+						firstinvalidmesh = m;
+					}
+					invalidboneweights++;
+					weight[idx].bone = 0;
+				}
 				weight[idx].pos[3] = MD5FLOAT();
 				MD5EXPECT("(");
 				weight[idx].pos[0] = MD5FLOAT()*weight[idx].pos[3];
@@ -2500,6 +2582,13 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 
 		MD5EXPECT("}");
 	}
+	if (invalidboneweights)
+	{
+		Con_Warning ("%s: %llu weights reference invalid bones (first: mesh %llu, weight %llu, bone %llu); using bone 0\n",
+			fname, (unsigned long long)invalidboneweights,
+			(unsigned long long)firstinvalidmesh, (unsigned long long)firstinvalidweight,
+			(unsigned long long)firstinvalidbone);
+	}
 	Z_Free(outposes);
 
 //
@@ -2517,6 +2606,7 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 	//the md5 format does not have its own modelflags, yet we still need to know about trails and rotating etc
 	mod->flags = MD5_HackyModelFlags(mod->name);
 
+	mod->numframes = q_max(1, (int)anim.numposes);
 	mod->synctype = ST_FRAMETIME;	//keep IQM animations synced to when .frame is changed. framegroups are otherwise not very useful.
 	mod->type = mod_alias;
 
