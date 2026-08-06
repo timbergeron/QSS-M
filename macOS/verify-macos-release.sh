@@ -8,7 +8,6 @@ SCRIPT_DIR="$(
 APP_PATH=${1:-"$SCRIPT_DIR/build/Release/QSS-M.app"}
 ARCHIVE_PATH=${2:-"$SCRIPT_DIR/build/Release/QSS-M-macOS.zip"}
 HEADER="$SCRIPT_DIR/../Quake/quakedef.h"
-SHARED_CONFIG="$SCRIPT_DIR/Configurations/Shared.xcconfig"
 EXPECTED_BUNDLE_ID=com.quakeone.qssm
 
 fail()
@@ -40,21 +39,6 @@ validate_component()
 plist_value()
 {
 	/usr/libexec/PlistBuddy -c "Print :$2" "$1"
-}
-
-config_value()
-{
-	awk -F= -v setting="$1" '
-		{
-			key = $1
-			gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
-			if (key == setting) {
-				value = $2
-				gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-				print value
-				exit
-			}
-		}' "$SHARED_CONFIG"
 }
 
 require_equal()
@@ -150,12 +134,6 @@ validate_component QSSM_VER_PATCH "$PATCH"
 	fail "minor and patch versions must remain below 1000 for monotonic build numbers"
 EXPECTED_VERSION="${MAJOR}.${MINOR}.${PATCH}"
 EXPECTED_BUILD_NUMBER=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))
-
-[ -f "$SHARED_CONFIG" ] || fail "shared Xcode configuration not found at $SHARED_CONFIG"
-require_equal "MARKETING_VERSION in Shared.xcconfig" \
-	"$(config_value MARKETING_VERSION)" "$EXPECTED_VERSION"
-require_equal "CURRENT_PROJECT_VERSION in Shared.xcconfig" \
-	"$(config_value CURRENT_PROJECT_VERSION)" "$EXPECTED_BUILD_NUMBER"
 
 verify_app "$APP_PATH"
 

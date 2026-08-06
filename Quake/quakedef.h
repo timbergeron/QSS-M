@@ -48,7 +48,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define QSSM_VER_MAJOR		1
 #define QSSM_VER_MINOR		6
-#define QSSM_VER_PATCH		8
+#define QSSM_VER_PATCH		9
 #ifndef QSSM_VER_SUFFIX
 #define QSSM_VER_SUFFIX			// optional version suffix string literal like "-beta1"
 #endif

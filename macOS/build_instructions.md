@@ -115,10 +115,14 @@ Opening `QuakeSpasm.xcodeproj` in Xcode uses the same generated dependencies.
 
 - `build-macos.sh` sources `../ci-version.sh`.
 - `QSSM_VERSION_SUFFIX`, when set, is passed to Xcode as `QSSM_VER_SUFFIX`.
-- The Xcode build synchronizes `CFBundleShortVersionString` from
-  `Quake/quakedef.h` and derives a monotonically increasing `CFBundleVersion`
-  as `major * 1000000 + minor * 1000 + patch`. Minor and patch components must
+- `Quake/quakedef.h` is the single source of truth for the release version.
+  The Xcode build replaces the placeholder bundle metadata with its
+  `QSSM_VER_MAJOR`, `QSSM_VER_MINOR`, and `QSSM_VER_PATCH` values, deriving a
+  monotonically increasing `CFBundleVersion` as
+  `major * 1000000 + minor * 1000 + patch`. Minor and patch components must
   remain below 1000 so that encoding stays monotonic.
+- Release validation compares the built application and archive directly with
+  `Quake/quakedef.h`; no matching version edit is required in an Xcode config.
 - Release builds write `build/Release/Quakespasm-Spiked-Revision.txt` with the
   Git revision and compile date.
 

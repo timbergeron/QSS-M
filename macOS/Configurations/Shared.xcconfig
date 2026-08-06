@@ -13,11 +13,10 @@ PRODUCT_BUNDLE_IDENTIFIER = com.quakeone.qssm
 INFOPLIST_FILE = Resources/Info.plist
 INSTALL_PATH = $(HOME)/Applications
 
-// These defaults match Quake/quakedef.h. The build phase rewrites the bundle
-// metadata from that header, and the release validator rejects configuration drift.
-MARKETING_VERSION = 1.6.8
-CURRENT_PROJECT_VERSION = 1006008
-VERSIONING_SYSTEM = apple-generic
+// Placeholders used while Xcode processes Info.plist. The version-sync build
+// phase replaces both values in the built bundle from Quake/quakedef.h.
+MARKETING_VERSION = 0.0.0
+CURRENT_PROJECT_VERSION = 0
 
 ENABLE_HARDENED_RUNTIME = NO
 LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks
