@@ -5623,6 +5623,68 @@ static void PF_cl_drawpic(void)
 	}
 }
 
+static void DrawQC_RotPic(const float *pivot, const float *mins, const float *maxs,
+	qpic_t *pic, const float *texmins, const float *texsize, const float *rgb,
+	float alpha, float angle)
+{
+	float radians = angle * M_PI_DIV_180;
+	float saxis[2] = {cos(radians), sin(radians)};
+	float taxis[2] = {-saxis[1], saxis[0]};
+	float offsets[4][2] = {
+		{mins[0], mins[1]},
+		{maxs[0], mins[1]},
+		{maxs[0], maxs[1]},
+		{mins[0], maxs[1]}
+	};
+	float texcoords[4][2] = {
+		{texmins[0], texmins[1]},
+		{texmins[0] + texsize[0], texmins[1]},
+		{texmins[0] + texsize[0], texmins[1] + texsize[1]},
+		{texmins[0], texmins[1] + texsize[1]}
+	};
+	polygonvert_t verts[4];
+	unsigned int i;
+
+	if (!pic)
+		return;
+
+	for (i = 0; i < countof(verts); i++)
+	{
+		verts[i].xy[0] = pivot[0] + offsets[i][0] * saxis[0] + offsets[i][1] * taxis[0];
+		verts[i].xy[1] = pivot[1] + offsets[i][0] * saxis[1] + offsets[i][1] * taxis[1];
+		verts[i].st[0] = texcoords[i][0];
+		verts[i].st[1] = texcoords[i][1];
+		verts[i].rgba[0] = rgb[0];
+		verts[i].rgba[1] = rgb[1];
+		verts[i].rgba[2] = rgb[2];
+		verts[i].rgba[3] = alpha;
+	}
+
+	Draw_PicPolygon(pic, countof(verts), verts);
+}
+
+static void PF_cl_drawrotpic(void)
+{
+	static const float texmins[2] = {0, 0};
+	static const float texsize[2] = {1, 1};
+
+	DrawQC_RotPic(G_VECTOR(OFS_PARM0), G_VECTOR(OFS_PARM1), G_VECTOR(OFS_PARM2),
+		DrawQC_CachePic(G_STRING(OFS_PARM3), PICFLAG_AUTO), texmins, texsize,
+		G_VECTOR(OFS_PARM4), G_FLOAT(OFS_PARM5), G_FLOAT(OFS_PARM6));
+	G_FLOAT(OFS_RETURN) = 1;
+}
+
+static void PF_cl_drawrotsubpic(void)
+{
+	float *alphaandangles = G_VECTOR(OFS_PARM7);
+
+	DrawQC_RotPic(G_VECTOR(OFS_PARM0), G_VECTOR(OFS_PARM1), G_VECTOR(OFS_PARM2),
+		DrawQC_CachePic(G_STRING(OFS_PARM3), PICFLAG_AUTO), G_VECTOR(OFS_PARM4),
+		G_VECTOR(OFS_PARM5), G_VECTOR(OFS_PARM6), alphaandangles[0], alphaandangles[1]);
+	// alphaandangles[2] is the draw flag, currently ignored like other 2d QC draw flags.
+	G_FLOAT(OFS_RETURN) = 1;
+}
+
 static void PF_cl_getimagesize(void)
 {
 	qpic_t *pic	= DrawQC_CachePic(G_STRING(OFS_PARM0), PICFLAG_AUTO);
@@ -8981,8 +9043,8 @@ static struct
 	{"drawstring",		PF_NoSSQC,			PF_cl_drawstring,	326,	PF_cl_drawstring,467,		D("float(vector position, string text, vector size, vector rgb, float alpha, float drawflag)", "Draws a string, interpreting markup and recolouring as appropriate.")},// #326
 	{"stringwidth",		PF_NoSSQC,			PF_cl_stringwidth,	327,	PF_cl_stringwidth,468,		D("float(string text, float usecolours, vector fontsize='8 8')", "Calculates the width of the screen in virtual pixels. If usecolours is 1, markup that does not affect the string width will be ignored. Will always be decoded as UTF-8 if UTF-8 is globally enabled.\nIf the char size is not specified, '8 8 0' will be assumed.")},// EXT_CSQC_'DARKPLACES'
 	{"drawsubpic",		PF_NoSSQC,			PF_cl_drawsubpic,	328,	PF_cl_drawsubpic,369,		D("void(vector pos, vector sz, string pic, vector srcpos, vector srcsz, vector rgb, float alpha, optional float drawflag)", "Draws a rescaled subsection of an image to the screen.")},// #328 EXT_CSQC_'DARKPLACES'
-//	{"drawrotpic",		PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("void(vector pivot, vector mins, vector maxs, string pic, vector rgb, float alpha, float angle)", "Draws an image rotating at the pivot. To rotate in the center, use mins+maxs of half the size with mins negated. Angle is in degrees.")},
-//	{"drawrotsubpic",	PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("void(vector pivot, vector mins, vector maxs, string pic, vector txmin, vector txsize, vector rgb, vector alphaandangles)", "Overcomplicated draw function for over complicated people. Positions follow drawrotpic, while texture coords follow drawsubpic. Due to argument count limitations in builtins, the alpha value and angles are combined into separate fields of a vector (tip: use fteqcc's [alpha, angle] feature.")},
+	{"drawrotpic",		PF_NoSSQC,			PF_cl_drawrotpic,	0,		PF_cl_drawrotpic,0,		D("void(vector pivot, vector mins, vector maxs, string pic, vector rgb, float alpha, float angle)", "Draws an image rotating at the pivot. To rotate in the center, use mins+maxs of half the size with mins negated. Angle is in degrees.")},
+	{"drawrotsubpic",	PF_NoSSQC,			PF_cl_drawrotsubpic,	0,		PF_cl_drawrotsubpic,0,	D("void(vector pivot, vector mins, vector maxs, string pic, vector txmin, vector txsize, vector rgb, vector alphaandangles)", "Draws a rotating subsection of an image. Positions follow drawrotpic, texture coordinates follow drawsubpic, and alphaandangles contains alpha, angle, and a draw flag that is currently ignored.")},
 	{"getstati",		PF_NoSSQC,			PF_cl_getstat_int,	330,	PF_NoMenu, D("#define getstati_punf(stnum) (float)(__variant)getstati(stnum)\nint(float stnum)", "Retrieves the numerical value of the given EV_INTEGER or EV_ENTITY stat. Use getstati_punf if you wish to type-pun a float stat as an int to avoid truncation issues with DP's network protocol.")},// (EXT_CSQC)
 	{"getstatf",		PF_NoSSQC,			PF_cl_getstat_float,331,	PF_NoMenu, D("#define getstatbits getstatf\nfloat(float stnum, optional float firstbit, optional float bitcount)", "Retrieves the numerical value of the given EV_FLOAT stat. If firstbit and bitcount are specified, retrieves the upper bits of the STAT_ITEMS stat (converted into a float, so there are no VM dependancies).")},// (EXT_CSQC)
 	{"getstats",		PF_NoSSQC,			PF_cl_getstat_string,332,	PF_NoMenu, D("string(float stnum)", "Retrieves the value of the given EV_STRING stat, as a tempstring.\nString stats use a separate pool of stats from numeric ones.\n")},
