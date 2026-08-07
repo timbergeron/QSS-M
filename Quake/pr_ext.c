@@ -9942,6 +9942,12 @@ void PR_DumpPlatform_f(void)
 	if (!targs)
 		targs = SS|CS;
 
+	if ((targs & MN) && (targs & (SS|CS)))
+	{	//builtin numbers differ between menuqc and the other modules, so a single file cannot serve both.
+		Con_Printf("%s: -Tmenu cannot be combined with -Tcs or -Tss\n", Cmd_Argv(0));
+		return;
+	}
+
 	if (strstr(outname, ".."))
 		return;
 	q_snprintf (name, sizeof(name), "%s/src/%s", com_gamedir, outname);
@@ -10539,7 +10545,7 @@ void PR_DumpPlatform_f(void)
 
 			if (j != (extensionbuiltins[i].desc?!strncmp(extensionbuiltins[i].desc, "stub.", 5):0))
 				continue;
-			fprintf(f, "%s %s = #%i;", extensionbuiltins[i].typestr, extensionbuiltins[i].name, extensionbuiltins[i].documentednumber);
+			fprintf(f, "%s %s = #%i;", extensionbuiltins[i].typestr, extensionbuiltins[i].name, (targs & MN)?extensionbuiltins[i].documentednumber_menuqc:extensionbuiltins[i].documentednumber);
 			if (extensionbuiltins[i].desc && !j)
 			{
 				const char *line = extensionbuiltins[i].desc;
