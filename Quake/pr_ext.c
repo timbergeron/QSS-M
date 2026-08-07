@@ -8951,7 +8951,7 @@ static struct
 	{"stov",			PF_stov,			PF_stov,			117, PF_stov,55, "vector(string s)"},	// (FRIK_FILE)
 	{"strzone",			PF_strzone,			PF_strzone,			118, PF_strzone,56,		D("string(string s, ...)", "Create a semi-permanent copy of a string that only becomes invalid once strunzone is called on the string (instead of when the engine assumes your string has left scope).")},	// (FRIK_FILE)
 	{"strunzone",		PF_strunzone,		PF_strunzone,		119, PF_strunzone,57,	D("void(string s)", "Destroys a string that was allocated by strunzone. Further references to the string MAY crash the game.")},	// (FRIK_FILE)
-	{"tokenize_menuqc",	PF_Tokenize,		PF_Tokenize,		0,	PF_Tokenize,58, "float(string s)"},
+	{"tokenize_menuqc",	PF_Tokenize,		PF_Tokenize,		0,	PF_Tokenize,58, "float(string s)"},	//alias of tokenize's canonical #58; kept so existing source using this name still compiles
 	{"localsound",		PF_NoSSQC,			PF_cl_localsound,	177,	PF_cl_localsound,65, D("void(string soundname, optional float channel, optional float volume)", "Plays a sound... locally... probably best not to call this from ssqc. Also disables reverb.")},//	#177
 //	{"getmodelindex",	PF_getmodelindex,	PF_getmodelindex,	200,	PF_NoMenu, D("float(string modelname, optional float queryonly)", "Acts as an alternative to precache_model(foo);setmodel(bar, foo); return bar.modelindex;\nIf queryonly is set and the model was not previously precached, the builtin will return 0 without needlessly precaching the model.")},
 //	{"externcall",		PF_externcall,		PF_externcall,		201,	PF_NoMenu, D("__variant(float prnum, string funcname, ...)", "Directly call a function in a different/same progs by its name.\nprnum=0 is the 'default' or 'main' progs.\nprnum=-1 means current progs.\nprnum=-2 will scan through the active progs and will use the first it finds.")},
@@ -9207,7 +9207,7 @@ static struct
 	{"getsurfacenearpoint",PF_getsurfacenearpoint,PF_getsurfacenearpoint,438,PF_NoMenu, "float(entity e, vector p)"},// (DP_QC_GETSURFACE)
 	{"getsurfaceclippedpoint",PF_getsurfaceclippedpoint,PF_getsurfaceclippedpoint,439,PF_NoMenu, "vector(entity e, float s, vector p)"},// (DP_QC_GETSURFACE)
 	{"clientcommand",	PF_clientcommand,	PF_NoCSQC,			440,	PF_NoMenu, "void(entity e, string s)"},// (KRIMZON_SV_PARSECLIENTCOMMAND)
-	{"tokenize",		PF_Tokenize,		PF_Tokenize,		441,	PF_Tokenize,441, "float(string s)"},// (KRIMZON_SV_PARSECLIENTCOMMAND)
+	{"tokenize",		PF_Tokenize,		PF_Tokenize,		441,	PF_Tokenize,58, "float(string s)"},// (KRIMZON_SV_PARSECLIENTCOMMAND)
 	{"argv",			PF_ArgV,			PF_ArgV,			442,	PF_ArgV,59, "string(float n)"},// (KRIMZON_SV_PARSECLIENTCOMMAND
 	{"argc",			PF_ArgC,			PF_ArgC,			0,		PF_ArgC,0, "float()"},
 	{"setattachment",	PF_setattachment,	PF_setattachment,	443,	PF_NoMenu, "void(entity e, entity tagentity, string tagname)", ""},// (DP_GFX_QUAKE3MODELTAGS)
@@ -9227,7 +9227,8 @@ static struct
 	{"WriteUnterminatedString",PF_WriteString2,PF_NoCSQC,		456,	PF_NoMenu, "void(float target, string str)"},	//writestring but without the null terminator. makes things a little nicer.
 	{"edict_num",		PF_edict_for_num,	PF_edict_for_num,	459,	PF_NoMenu, "entity(float entnum)"},//DP_QC_EDICT_NUM
 	{"buf_create",		PF_buf_create,		PF_buf_create,		460,	PF_buf_create,440, "strbuf()"},//DP_QC_STRINGBUFFERS
-	{"buf_del",			PF_buf_del,			PF_buf_del,			461,	PF_buf_del,461, "void(strbuf bufhandle)"},//DP_QC_STRINGBUFFERS
+	{"buf_del",			PF_buf_del,			PF_buf_del,			461,	PF_buf_del,441, "void(strbuf bufhandle)"},//DP_QC_STRINGBUFFERS
+	{"buf_del_legacy",	PF_NoSSQC,			PF_NoCSQC,			0,	PF_buf_del,461, "void(strbuf bufhandle)"},	//superseded qss menuqc slot, kept bound for existing bytecode
 	{"buf_getsize",		PF_buf_getsize,		PF_buf_getsize,		462,	PF_buf_getsize,442, "float(strbuf bufhandle)"},//DP_QC_STRINGBUFFERS
 	{"buf_copy",		PF_buf_copy,		PF_buf_copy,		463,	PF_buf_copy,443, "void(strbuf bufhandle_from, strbuf bufhandle_to)"},//DP_QC_STRINGBUFFERS
 	{"buf_sort",		PF_buf_sort,		PF_buf_sort,		464,	PF_buf_sort,444, "void(strbuf bufhandle, float sortprefixlen, float backward)"},//DP_QC_STRINGBUFFERS
@@ -9815,6 +9816,20 @@ void PR_InitExtensions(void)
 	}
 }
 
+//qss-m originally gave these its csqc numbers in menuqc. fte's numbering (which we now follow)
+//puts buf_del on #441, which is where qss-m's tokenize used to live - so bytecode built against
+//either set would silently call the wrong builtin. remap the superseded pairs by name at load.
+static const struct
+{
+	const char *name;
+	int oldnum;
+	int newnum;
+} menuqc_legacybuiltins[] =
+{
+	{"tokenize",	441,	58},
+	{"buf_del",		461,	441},
+};
+
 //called at map start
 void PR_EnableExtensions(ddef_t *pr_globaldefs)
 {
@@ -9920,6 +9935,20 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 			if (j == sizeof(extensionbuiltins)/sizeof(extensionbuiltins[0]))
 			{
 				Con_DPrintf("QC builtin %s is not known\n", name);
+			}
+		}
+		else if (menuqc && qcvm->functions[i].first_statement < 0 && qcvm->functions[i].s_name)
+		{	//explicitly numbered - rewrite the superseded menuqc slots by name.
+			const char *name = PR_GetString(qcvm->functions[i].s_name);
+			int binum = -qcvm->functions[i].first_statement;
+			for (j = 0; j < countof(menuqc_legacybuiltins); j++)
+			{
+				if (menuqc_legacybuiltins[j].oldnum == binum && !strcmp(menuqc_legacybuiltins[j].name, name))
+				{
+					qcvm->functions[i].first_statement = -menuqc_legacybuiltins[j].newnum;
+					Con_DPrintf("remapped legacy menuqc builtin %s from #%i to #%i\n", name, binum, menuqc_legacybuiltins[j].newnum);
+					break;
+				}
 			}
 		}
 	}
