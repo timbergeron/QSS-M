@@ -9530,11 +9530,15 @@ static void PF_builtinsupported(void)
 	for (i = 0; i < sizeof(extensionbuiltins) / sizeof(extensionbuiltins[0]); i++)
 	{
 		if (!strcmp(extensionbuiltins[i].name, biname))
-		{
+		{	//don't report a number the current module has no handler for - mapping it would just fail on the call.
 			if (qcvm == &cls.menu_qcvm)
-				G_FLOAT(OFS_RETURN) = extensionbuiltins[i].number_menuqc;
+				G_FLOAT(OFS_RETURN) = extensionbuiltins[i].menufunc?extensionbuiltins[i].number_menuqc:0;
+			else if (qcvm == &cl.qcvm)
+				G_FLOAT(OFS_RETURN) = extensionbuiltins[i].csqcfunc?extensionbuiltins[i].number:0;
+			else if (qcvm == &sv.qcvm)
+				G_FLOAT(OFS_RETURN) = extensionbuiltins[i].ssqcfunc?extensionbuiltins[i].number:0;
 			else
-				G_FLOAT(OFS_RETURN) = extensionbuiltins[i].number;
+				G_FLOAT(OFS_RETURN) = 0;
 			return;
 		}
 	}
