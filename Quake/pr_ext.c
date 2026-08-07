@@ -4287,6 +4287,14 @@ static void PF_num_for_edict(void)
 {
 	G_FLOAT(OFS_RETURN) = G_EDICTNUM(OFS_PARM0);
 }
+static int PF_ChainFieldOffset(void)
+{	//menuqc declares no system fields, so chain cannot be assumed to sit at the entvars offset,
+	//and a same-named field of some other type would link garbage rather than edict references.
+	ddef_t *def = ED_FindField("chain");
+	if (!def || (def->type & ~DEF_SAVEGLOBAL) != ev_entity)
+		return -1;
+	return def->ofs;
+}
 static void PF_findchain(void)
 {
 	edict_t	*ent, *chain;
@@ -4302,7 +4310,7 @@ static void PF_findchain(void)
 	if (qcvm->argc > 2)
 		cfld = G_INT(OFS_PARM2);
 	else
-		cfld = ED_FindFieldOffset("chain");	//menuqc declares no system fields, so chain cannot be assumed to sit at the entvars offset.
+		cfld = PF_ChainFieldOffset();
 	if (cfld < 0 || cfld >= qcvm->progs->entityfields)
 	{	//nothing safe to link through - a guessed offset would write off the end of the edict.
 		RETURN_EDICT((edict_t *)qcvm->edicts);
@@ -4364,7 +4372,7 @@ static void PF_findchainfloat(void)
 	if (qcvm->argc > 2)
 		cfld = G_INT(OFS_PARM2);
 	else
-		cfld = ED_FindFieldOffset("chain");	//menuqc declares no system fields, so chain cannot be assumed to sit at the entvars offset.
+		cfld = PF_ChainFieldOffset();
 	if (cfld < 0 || cfld >= qcvm->progs->entityfields)
 	{	//nothing safe to link through - a guessed offset would write off the end of the edict.
 		RETURN_EDICT((edict_t *)qcvm->edicts);
@@ -4426,7 +4434,7 @@ static void PF_findchainflags(void)
 	if (qcvm->argc > 2)
 		cfld = G_INT(OFS_PARM2);
 	else
-		cfld = ED_FindFieldOffset("chain");	//menuqc declares no system fields, so chain cannot be assumed to sit at the entvars offset.
+		cfld = PF_ChainFieldOffset();
 	if (cfld < 0 || cfld >= qcvm->progs->entityfields)
 	{	//nothing safe to link through - a guessed offset would write off the end of the edict.
 		RETURN_EDICT((edict_t *)qcvm->edicts);
