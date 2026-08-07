@@ -2764,7 +2764,10 @@ static void PF_registercvar(void)
 {
 	const char *name = G_STRING(OFS_PARM0);
 	const char *value = (qcvm->argc>1)?G_STRING(OFS_PARM1):"";
-	Cvar_Create(name, value);
+	if (Cvar_FindVar(name))
+		G_FLOAT(OFS_RETURN) = 0;	//already exists, so this is a no-op
+	else
+		G_FLOAT(OFS_RETURN) = Cvar_Create(name, value)?1:0;
 }
 
 //temp entities + networking
@@ -8883,7 +8886,7 @@ static struct
 	{"tracebox",		PF_tracebox,		PF_tracebox,		90,	PF_NoMenu, D("void(vector start, vector mins, vector maxs, vector end, float nomonsters, entity ent)", "Exactly like traceline, but a box instead of a uselessly thin point. Acceptable sizes are limited by bsp format, q1bsp has strict acceptable size values.")},
 	{"randomvec",		PF_randomvector,	PF_randomvector,	91,	PF_NoMenu, D("vector()", "Returns a vector with random values. Each axis is independantly a value between -1 and 1 inclusive.")},
 	{"getlight",		PF_sv_getlight,		PF_cl_getlight,		92, PF_NoMenu, "vector(vector org)"},// (DP_QC_GETLIGHT),
-	{"registercvar",	PF_registercvar,	PF_registercvar,	93,	PF_NoMenu, D("float(string cvarname, string defaultvalue)", "Creates a new cvar on the fly. If it does not already exist, it will be given the specified value. If it does exist, this is a no-op.\nThis builtin has the limitation that it does not apply to configs or commandlines. Such configs will need to use the set or seta command causing this builtin to be a noop.\nIn engines that support it, you will generally find the autocvar feature easier and more efficient to use.")},
+	{"registercvar",	PF_registercvar,	PF_registercvar,	93,	PF_registercvar,42, D("float(string cvarname, string defaultvalue)", "Creates a new cvar on the fly. If it does not already exist, it will be given the specified value. If it does exist, this is a no-op.\nThis builtin has the limitation that it does not apply to configs or commandlines. Such configs will need to use the set or seta command causing this builtin to be a noop.\nIn engines that support it, you will generally find the autocvar feature easier and more efficient to use.")},
 	{"min",				PF_min,				PF_min,				94,	PF_min,43, D("float(float a, float b, ...)", "Returns the lowest value of its arguments.")},// (DP_QC_MINMAXBOUND)
 	{"max",				PF_max,				PF_max,				95,	PF_max,44, D("float(float a, float b, ...)", "Returns the highest value of its arguments.")},// (DP_QC_MINMAXBOUND)
 	{"bound",			PF_bound,			PF_bound,			96,	PF_bound,45, D("float(float minimum, float val, float maximum)", "Returns val, unless minimum is higher, or maximum is less.")},// (DP_QC_MINMAXBOUND)
