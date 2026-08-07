@@ -2282,6 +2282,7 @@ static void PF_frameduration(void)
 	qmodel_t *mod = qcvm->GetModel(modelindex);
 	aliashdr_t *alias;
 
+	G_FLOAT(OFS_RETURN) = 0;
 	if (mod && mod->type == mod_alias && (alias = Mod_Extradata(mod)) && framenum < (unsigned int)alias->numframes)
 		G_FLOAT(OFS_RETURN) = alias->frames[framenum].numposes * alias->frames[framenum].interval;
 }
@@ -5812,8 +5813,8 @@ static void PF_cl_setkeybind(void)
 {
 	int keynum = Key_QCToNative(G_FLOAT(OFS_PARM0));
 	const char *binding = G_STRING(OFS_PARM1);
-	int bindmap = (qcvm->argc<=1)?0:G_FLOAT(OFS_PARM2);
-	int modifier = (qcvm->argc<=2)?0:G_FLOAT(OFS_PARM3);	//shift,alt,ctrl bitmask.
+	int bindmap = (qcvm->argc<=2)?0:G_FLOAT(OFS_PARM2);
+	int modifier = (qcvm->argc<=3)?0:G_FLOAT(OFS_PARM3);	//shift,alt,ctrl bitmask.
 	if (modifier != 0)	//we don't support modifiers.
 		return;
 	if (bindmap < 0 || bindmap >= MAX_BINDMAPS)
@@ -6334,6 +6335,8 @@ static void PF_getgamedirinfo(void)
 
 	while (mod && diridx --> 0)
 		mod = mod->next;
+	if (!mod)
+		return;
 
 	switch(prop)
 	{
@@ -6513,7 +6516,7 @@ static int CompareSortServers (const void *va, const void *vb)
 		r = strcmp(hostcache[idx1].cname, hostcache[idx2].cname);
 		break;
 	case SLKEY_GAMEDIR:
-		r = strcmp(hostcache[idx1].cname, hostcache[idx2].cname);
+		r = strcmp(hostcache[idx1].gamedir, hostcache[idx2].gamedir);
 		break;
 	case SLKEY_MAP:
 		r = strcmp(hostcache[idx1].map, hostcache[idx2].map);
