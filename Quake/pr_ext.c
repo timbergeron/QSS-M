@@ -8874,7 +8874,7 @@ static struct
 	{"cos",				PF_Cos,				PF_Cos,				61,	PF_Cos,39, "float(float angle)"},	//61
 	{"sqrt",			PF_Sqrt,			PF_Sqrt,			62,	PF_Sqrt,40, "float(float value)"},	//62
 	{"tracetoss",		PF_TraceToss,		PF_TraceToss,		64,	PF_NoMenu, "void(entity ent, entity ignore)"},
-	{"etos",			PF_etos,			PF_etos,			65,	PF_NoMenu, "string(entity ent)"},
+	{"etos",			PF_etos,			PF_etos,			65,	PF_etos,20, "string(entity ent)"},
 
 	{"etof",			PF_num_for_edict,	PF_num_for_edict,	0, PF_num_for_edict,79, "float(entity ent)"},
 	{"ftoe",			PF_edict_for_num,	PF_edict_for_num,	0, PF_edict_for_num,80, "entity(float ent)"},
@@ -8884,14 +8884,14 @@ static struct
 	{"multicast",		PF_multicast,		PF_NoCSQC,			82,	PF_NoMenu, D("#define unicast(pl,reli) do{msg_entity = pl; multicast('0 0 0', reli?MULITCAST_ONE_R:MULTICAST_ONE);}while(0)\n"
 																				 "void(vector where, float set)", "Once the MSG_MULTICAST network message buffer has been filled with data, this builtin is used to dispatch it to the given target, filtering by pvs for reduced network bandwidth.")},	//82
 	{"tracebox",		PF_tracebox,		PF_tracebox,		90,	PF_NoMenu, D("void(vector start, vector mins, vector maxs, vector end, float nomonsters, entity ent)", "Exactly like traceline, but a box instead of a uselessly thin point. Acceptable sizes are limited by bsp format, q1bsp has strict acceptable size values.")},
-	{"randomvec",		PF_randomvector,	PF_randomvector,	91,	PF_NoMenu, D("vector()", "Returns a vector with random values. Each axis is independantly a value between -1 and 1 inclusive.")},
+	{"randomvec",		PF_randomvector,	PF_randomvector,	91,	PF_randomvector,41, D("vector()", "Returns a vector with random values. Each axis is independantly a value between -1 and 1 inclusive.")},
 	{"getlight",		PF_sv_getlight,		PF_cl_getlight,		92, PF_NoMenu, "vector(vector org)"},// (DP_QC_GETLIGHT),
 	{"registercvar",	PF_registercvar,	PF_registercvar,	93,	PF_registercvar,42, D("float(string cvarname, string defaultvalue)", "Creates a new cvar on the fly. If it does not already exist, it will be given the specified value. If it does exist, this is a no-op.\nThis builtin has the limitation that it does not apply to configs or commandlines. Such configs will need to use the set or seta command causing this builtin to be a noop.\nIn engines that support it, you will generally find the autocvar feature easier and more efficient to use.")},
 	{"min",				PF_min,				PF_min,				94,	PF_min,43, D("float(float a, float b, ...)", "Returns the lowest value of its arguments.")},// (DP_QC_MINMAXBOUND)
 	{"max",				PF_max,				PF_max,				95,	PF_max,44, D("float(float a, float b, ...)", "Returns the highest value of its arguments.")},// (DP_QC_MINMAXBOUND)
 	{"bound",			PF_bound,			PF_bound,			96,	PF_bound,45, D("float(float minimum, float val, float maximum)", "Returns val, unless minimum is higher, or maximum is less.")},// (DP_QC_MINMAXBOUND)
 	{"pow",				PF_pow,				PF_pow,				97,	PF_pow,46, "float(float value, float exp)"},
-	{"findfloat",		PF_findfloat,		PF_findfloat,		98, PF_NoMenu, D("#define findentity findfloat\nentity(entity start, .__variant fld, __variant match)", "Equivelent to the find builtin, but instead of comparing strings contents, this builtin compares the raw values. This builtin requires multiple calls in order to scan all entities - set start to the previous call's return value.\nworld is returned when there are no more entities.")},	// #98 (DP_QC_FINDFLOAT)
+	{"findfloat",		PF_findfloat,		PF_findfloat,		98, PF_findfloat,25, D("#define findentity findfloat\nentity(entity start, .__variant fld, __variant match)", "Equivelent to the find builtin, but instead of comparing strings contents, this builtin compares the raw values. This builtin requires multiple calls in order to scan all entities - set start to the previous call's return value.\nworld is returned when there are no more entities.")},	// #98 (DP_QC_FINDFLOAT)
 	{"checkextension",	PF_checkextension,	PF_checkextension,	99,	PF_checkextension,1, D("float(string extname)", "Checks for an extension by its name (eg: checkextension(\"FRIK_FILE\") says that its okay to go ahead and use strcat).\nUse cvar(\"pr_checkextension\") to see if this builtin exists.")},	// #99	//darkplaces system - query a string to see if the mod supports X Y and Z.
 	{"checkbuiltin",	PF_checkbuiltin,	PF_checkbuiltin,	0,	PF_checkbuiltin,0, D("float(__variant funcref)", "Checks to see if the specified builtin is supported/mapped. This is intended as a way to check for #0 functions, allowing for simple single-builtin functions.")},
 	{"builtin_find",	PF_builtinsupported,PF_builtinsupported,100,PF_NoMenu, D("float(string builtinname)", "Looks to see if the named builtin is valid, and returns the builtin number it exists at.")},	// #100	//per builtin system.
@@ -9060,7 +9060,7 @@ static struct
 	{"particleeffectnum",PF_sv_particleeffectnum,PF_cl_particleeffectnum,335,PF_NoMenu, D("float(string effectname)", "Precaches the named particle effect. If your effect name is of the form 'foo.bar' then particles/foo.cfg will be loaded by the client if foo.bar was not already defined.\nDifferent engines will have different particle systems, this specifies the QC API only.")},// (EXT_CSQC)
 	{"trailparticles",	PF_sv_trailparticles,PF_cl_trailparticles,336,	PF_NoMenu,	D("void(float effectnum, entity ent, vector start, vector end)", "Draws the given effect between the two named points. If ent is not world, distances will be cached in the entity in order to avoid framerate dependancies. The entity is not otherwise used.")},// (EXT_CSQC),
 	{"pointparticles",	PF_sv_pointparticles,PF_cl_pointparticles,337,	PF_NoMenu,	D("void(float effectnum, vector origin, optional vector dir, optional float count)", "Spawn a load of particles from the given effect at the given point traveling or aiming along the direction specified. The number of particles are scaled by the count argument.")},// (EXT_CSQC)
-	{"cprint",			PF_NoSSQC,			PF_cl_cprint,		338,	PF_NoMenu,	D("void(string s, ...)", "Print into the center of the screen just as ssqc's centerprint would appear.")},//(EXT_CSQC)
+	{"cprint",			PF_NoSSQC,			PF_cl_cprint,		338,	PF_cl_cprint,7,	D("void(string s, ...)", "Print into the center of the screen just as ssqc's centerprint would appear.")},//(EXT_CSQC)
 	{"print",			PF_print,			PF_print,			339,	PF_print,339,D("void(string s, ...)", "Unconditionally print on the local system's console, even in ssqc (doesn't care about the value of the developer cvar).")},//(EXT_CSQC)
 	{"menu_print",		PF_NoSSQC,			PF_NoCSQC,			0,		PF_print,4,	D("void(string s, ...)", "Unconditionally print on the local system's console, even in ssqc (doesn't care about the value of the developer cvar).")},//(EXT_CSQC)
 	{"keynumtostring",	NULL,				PF_cl_keynumtostring,340,	PF_cl_keynumtostring,609,	D("string(float keynum)", "Returns a hunam-readable name for the given keycode, as a tempstring.")},// (EXT_CSQC)
