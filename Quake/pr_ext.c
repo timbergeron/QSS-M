@@ -2764,10 +2764,27 @@ static void PF_registercvar(void)
 {
 	const char *name = G_STRING(OFS_PARM0);
 	const char *value = (qcvm->argc>1)?G_STRING(OFS_PARM1):"";
+	unsigned int dpflags = (qcvm->argc>2)?(unsigned int)G_FLOAT(OFS_PARM2):0;
+	unsigned int flags = 0;
+	cvar_t *var;
+
+	//dp's flag bits, as understood by fte. anything without a quakespasm equivalent is
+	//reported rather than silently dropped, so a mod does not think it got what it asked for.
+	if (dpflags & (1u<<5))	{dpflags &= ~(1u<<5); flags |= CVAR_ARCHIVE;}
+	if (dpflags & (1u<<8))	{dpflags &= ~(1u<<8); flags |= CVAR_SERVERINFO;}
+	if (dpflags & (1u<<9))	{dpflags &= ~(1u<<9); flags |= CVAR_USERINFO;}
+	if (dpflags)
+		Con_DPrintf("registercvar(\"%s\"): unsupported flags %#x ignored\n", name, dpflags);
+
 	if (Cvar_FindVar(name))
 		G_FLOAT(OFS_RETURN) = 0;	//already exists, so this is a no-op
+	else if ((var = Cvar_Create(name, value)))
+	{
+		var->flags |= flags;
+		G_FLOAT(OFS_RETURN) = 1;
+	}
 	else
-		G_FLOAT(OFS_RETURN) = Cvar_Create(name, value)?1:0;
+		G_FLOAT(OFS_RETURN) = 0;
 }
 
 //temp entities + networking
@@ -8909,7 +8926,7 @@ static struct
 	{"tracebox",		PF_tracebox,		PF_tracebox,		90,	PF_NoMenu, D("void(vector start, vector mins, vector maxs, vector end, float nomonsters, entity ent)", "Exactly like traceline, but a box instead of a uselessly thin point. Acceptable sizes are limited by bsp format, q1bsp has strict acceptable size values.")},
 	{"randomvec",		PF_randomvector,	PF_randomvector,	91,	PF_randomvector,41, D("vector()", "Returns a vector with random values. Each axis is independantly a value between -1 and 1 inclusive.")},
 	{"getlight",		PF_sv_getlight,		PF_cl_getlight,		92, PF_NoMenu, "vector(vector org)"},// (DP_QC_GETLIGHT),
-	{"registercvar",	PF_registercvar,	PF_registercvar,	93,	PF_registercvar,42, D("float(string cvarname, string defaultvalue)", "Creates a new cvar on the fly. If it does not already exist, it will be given the specified value. If it does exist, this is a no-op.\nThis builtin has the limitation that it does not apply to configs or commandlines. Such configs will need to use the set or seta command causing this builtin to be a noop.\nIn engines that support it, you will generally find the autocvar feature easier and more efficient to use.")},
+	{"registercvar",	PF_registercvar,	PF_registercvar,	93,	PF_registercvar,42, D("float(string cvarname, string defaultvalue, optional float flags)", "Creates a new cvar on the fly. If it does not already exist, it will be given the specified value. If it does exist, this is a no-op.\nThis builtin has the limitation that it does not apply to configs or commandlines. Such configs will need to use the set or seta command causing this builtin to be a noop.\nIn engines that support it, you will generally find the autocvar feature easier and more efficient to use.")},
 	{"min",				PF_min,				PF_min,				94,	PF_min,43, D("float(float a, float b, ...)", "Returns the lowest value of its arguments.")},// (DP_QC_MINMAXBOUND)
 	{"max",				PF_max,				PF_max,				95,	PF_max,44, D("float(float a, float b, ...)", "Returns the highest value of its arguments.")},// (DP_QC_MINMAXBOUND)
 	{"bound",			PF_bound,			PF_bound,			96,	PF_bound,45, D("float(float minimum, float val, float maximum)", "Returns val, unless minimum is higher, or maximum is less.")},// (DP_QC_MINMAXBOUND)
