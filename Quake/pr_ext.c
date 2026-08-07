@@ -9260,8 +9260,8 @@ static struct
 
 	{"setkeydest",		PF_NoSSQC,			PF_NoCSQC,			601,	PF_m_setkeydest,601, D("void(float dest)", "Grab key focus")},
 	{"getkeydest",		PF_NoSSQC,			PF_NoCSQC,			602,	PF_m_getkeydest,602, D("float()", "Returns key focus")},
-	{"setmousetarget",	PF_NoSSQC,			PF_NoCSQC,			603,	PF_m_setmousetarget,603, D("void(float dest)", "Grab mouse focus")},
-	{"getmousetarget",	PF_NoSSQC,			PF_NoCSQC,			604,	PF_m_getmousetarget,604, D("float()", "Returns mouse focus")},
+	{"setmousetarget",	PF_NoSSQC,			PF_m_setmousetarget,603,	PF_m_setmousetarget,603, D("void(float dest)", "Grab mouse focus")},
+	{"getmousetarget",	PF_NoSSQC,			PF_m_getmousetarget,604,	PF_m_getmousetarget,604, D("float()", "Returns mouse focus")},
 
 	{"callfunction",	PF_callfunction,	PF_callfunction,			605,PF_callfunction,			605, D("void(.../*, string funcname*/)", "Invokes the named function. The function name is always passed as the last parameter and must always be present. The others are passed to the named function as-is")},
 	{"writetofile",		PF_writetofile,		PF_writetofile,				606,PF_writetofile,				606, D("void(filestream fh, entity e)", "Writes an entity's fields to a frik_file file handle.")},
