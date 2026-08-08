@@ -28,7 +28,9 @@ typedef struct
 } SHA1_CTX;
 #define SHA1_DIGEST_SIZE 20
 
-#define ShaBigLong(l)  (((unsigned char*)&l)[0]<<24) | (((unsigned char*)&l)[1]<<16) | (((unsigned char*)&l)[2]<<8) | (((unsigned char*)&l)[3]<<0)
+//the bytes promote to int, so a byte >= 128 shifted left by 24 overflows a
+//signed int - undefined behaviour. cast to unsigned, where the shift is defined.
+#define ShaBigLong(l)  ((((unsigned int)((unsigned char*)&l)[0])<<24) | (((unsigned int)((unsigned char*)&l)[1])<<16) | (((unsigned int)((unsigned char*)&l)[2])<<8) | (((unsigned int)((unsigned char*)&l)[3])<<0))
 
 
 #define rol(value, bits) (((value) << (bits)) | ((value) >> (32 - (bits))))

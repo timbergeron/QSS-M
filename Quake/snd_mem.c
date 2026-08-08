@@ -38,7 +38,8 @@ static int ResampleSfx_GetMonoSample (const byte *data, int inwidth, int srcsamp
 	if (inwidth == 2)
 		return LittleShort (((const short *)data)[srcsample]);
 
-	return ((int)((unsigned char)data[srcsample]) - 128) << 8;
+	//left-shifting a negative value is undefined; the multiply is the same result
+	return ((int)((unsigned char)data[srcsample]) - 128) * 256;
 }
 
 static int ResampleSfx_GetStereoSample (const byte *data, int inwidth, int srcsample)
