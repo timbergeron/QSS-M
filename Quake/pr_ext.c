@@ -5602,6 +5602,11 @@ static qpic_t *DrawQC_CachePic(const char *picname, unsigned int flags)
 
 	return qcpics[i].pic;
 }
+static qboolean DrawQC_PicValid(const qpic_t *pic)
+{	//drawing a missing image may legitimately show a diagnostic, but the cache-query builtins must not
+	//claim that diagnostic is a resource that actually loaded.
+	return pic && pic != pic_nul && pic->width > 0 && pic->height > 0;
+}
 static void DrawQC_CharacterQuad (float x, float y, int num, float w, float h)
 {
 	float size = 0.0625;
@@ -5744,17 +5749,19 @@ static void PF_cl_drawresetclip(void)
 static void PF_cl_precachepic(void)
 {
 	const char *name	= G_STRING(OFS_PARM0);
-	unsigned int flags = G_FLOAT(OFS_PARM1);
+	unsigned int flags	= (qcvm->argc > 1)?(unsigned int)G_FLOAT(OFS_PARM1):PICFLAG_AUTO;
+
+	qpic_t *pic			= DrawQC_CachePic(name, flags);
 
 	G_INT(OFS_RETURN) = G_INT(OFS_PARM0);	//return input string, for convienience
 
-	if (!DrawQC_CachePic(name, flags) && (flags & PICFLAG_BLOCK))
-		G_INT(OFS_RETURN) = 0;	//return input string, for convienience
+	if ((flags & PICFLAG_BLOCK) && !DrawQC_PicValid(pic))
+		G_INT(OFS_RETURN) = 0;	//caller asked us to block, so it wants a real answer
 }
 static void PF_cl_iscachedpic(void)
 {
 	const char *name	= G_STRING(OFS_PARM0);
-	if (DrawQC_CachePic(name, PICFLAG_NOLOAD))
+	if (DrawQC_PicValid(DrawQC_CachePic(name, PICFLAG_NOLOAD)))
 		G_FLOAT(OFS_RETURN) = true;
 	else
 		G_FLOAT(OFS_RETURN) = false;
@@ -5841,7 +5848,7 @@ static void PF_cl_drawrotsubpic(void)
 static void PF_cl_getimagesize(void)
 {
 	qpic_t *pic	= DrawQC_CachePic(G_STRING(OFS_PARM0), PICFLAG_AUTO);
-	if (pic)
+	if (DrawQC_PicValid(pic))
 		G_VECTORSET(OFS_RETURN, pic->width, pic->height, 0);
 	else
 		G_VECTORSET(OFS_RETURN, 0, 0, 0);
