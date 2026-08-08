@@ -148,6 +148,9 @@ def main():
     args = ap.parse_args()
 
     results = []
+    # any earlier run -- including a manual one -- may have persisted the
+    # archived probe cvar, which would make registercvar report "already exists"
+    strip_test_cvars(args.basedir, args.game)
     shots = os.path.join(args.basedir, args.game, 'screenshots')
     for f in os.listdir(shots) if os.path.isdir(shots) else []:
         if f.endswith('.tga'):

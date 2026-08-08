@@ -44,6 +44,13 @@ static float PR_GetVMScale(void)
 	return s;
 }
 
+static qmodel_t *PR_GetVMModel(int modelindex)
+{	//some vms intentionally have no model resolver. let each handler follow its
+	//normal invalid-model path instead of dereferencing null - they all set their
+	//return before looking a model up, so an early return would leak a stale one.
+	return qcvm->GetModel ? qcvm->GetModel(modelindex) : NULL;
+}
+
 //there's a few different aproaches to tempstrings...
 //the lame way is to just have a single one (vanilla).
 //the only slightly less lame way is to just cycle between 16 or so (most engines).
@@ -2195,7 +2202,7 @@ static void PF_sv_setmodelindex(void)
 {
 	edict_t	*e			= G_EDICT(OFS_PARM0);
 	unsigned int newidx	= G_FLOAT(OFS_PARM1);
-	qmodel_t *mod = qcvm->GetModel(newidx);
+	qmodel_t *mod = PR_GetVMModel(newidx);
 	e->v.model = (newidx<MAX_MODELS)?PR_SetEngineString(sv.model_precache[newidx]):0;
 	e->v.modelindex = newidx;
 
@@ -2215,7 +2222,7 @@ static void PF_cl_setmodelindex(void)
 {
 	edict_t	*e		= G_EDICT(OFS_PARM0);
 	int newidx		= G_FLOAT(OFS_PARM1);
-	qmodel_t *mod = qcvm->GetModel(newidx);
+	qmodel_t *mod = PR_GetVMModel(newidx);
 	e->v.model = mod?PR_SetEngineString(mod->name):0;	//FIXME: is this going to cause issues with vid_restart?
 	e->v.modelindex = newidx;
 
@@ -2235,7 +2242,7 @@ static void PF_cl_setmodelindex(void)
 static void PF_modelnameforidx(void)
 {
 	int idx = G_FLOAT(OFS_PARM0);
-	qmodel_t *mod = qcvm->GetModel(idx);
+	qmodel_t *mod = PR_GetVMModel(idx);
 	if (mod)
 		G_INT(OFS_RETURN) = PR_MakeTempString(mod->name);
 	else
@@ -2246,7 +2253,7 @@ static void PF_frameforname(void)
 {
 	unsigned int modelindex	= G_FLOAT(OFS_PARM0);
 	const char *framename	= G_STRING(OFS_PARM1);
-	qmodel_t *mod = qcvm->GetModel(modelindex);
+	qmodel_t *mod = PR_GetVMModel(modelindex);
 	aliashdr_t *alias;
 
 	G_FLOAT(OFS_RETURN) = -1;
@@ -2267,7 +2274,7 @@ static void PF_frametoname(void)
 {
 	unsigned int modelindex	= G_FLOAT(OFS_PARM0);
 	unsigned int framenum	= G_FLOAT(OFS_PARM1);
-	qmodel_t *mod = qcvm->GetModel(modelindex);
+	qmodel_t *mod = PR_GetVMModel(modelindex);
 	aliashdr_t *alias;
 
 	if (mod && mod->type == mod_alias && (alias = Mod_Extradata(mod)) && framenum < (unsigned int)alias->numframes)
@@ -2279,7 +2286,7 @@ static void PF_frameduration(void)
 {
 	unsigned int modelindex	= G_FLOAT(OFS_PARM0);
 	unsigned int framenum	= G_FLOAT(OFS_PARM1);
-	qmodel_t *mod = qcvm->GetModel(modelindex);
+	qmodel_t *mod = PR_GetVMModel(modelindex);
 	aliashdr_t *alias;
 
 	G_FLOAT(OFS_RETURN) = 0;
@@ -2291,7 +2298,7 @@ static void PF_getsurfacenumpoints(void)
 	edict_t	*ed				= G_EDICT(OFS_PARM0);
 	unsigned int surfidx	= G_FLOAT(OFS_PARM1);
 	unsigned int modelindex = ed->v.modelindex;
-	qmodel_t *mod = qcvm->GetModel(modelindex);
+	qmodel_t *mod = PR_GetVMModel(modelindex);
 
 	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces)
 	{
@@ -2314,7 +2321,7 @@ static void PF_getsurfacepoint(void)
 	edict_t	*ed				= G_EDICT(OFS_PARM0);
 	unsigned int surfidx	= G_FLOAT(OFS_PARM1);
 	unsigned int point		= G_FLOAT(OFS_PARM2);
-	qmodel_t *mod = qcvm->GetModel(ed->v.modelindex);
+	qmodel_t *mod = PR_GetVMModel(ed->v.modelindex);
 
 	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces && point < (unsigned int)mod->surfaces[surfidx].numedges)
 	{
@@ -2332,7 +2339,7 @@ static void PF_getsurfacenumtriangles(void)
 {	//for q3bsp compat (which this engine doesn't support, so its fairly simple)
 	edict_t	*ed				= G_EDICT(OFS_PARM0);
 	unsigned int surfidx	= G_FLOAT(OFS_PARM1);
-	qmodel_t *mod = qcvm->GetModel(ed->v.modelindex);
+	qmodel_t *mod = PR_GetVMModel(ed->v.modelindex);
 
 	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces)
 		G_FLOAT(OFS_RETURN) = (mod->surfaces[surfidx+mod->firstmodelsurface].numedges-2);	//q1bsp is only triangle fans
@@ -2344,7 +2351,7 @@ static void PF_getsurfacetriangle(void)
 	edict_t	*ed				= G_EDICT(OFS_PARM0);
 	unsigned int surfidx	= G_FLOAT(OFS_PARM1);
 	unsigned int triangleidx= G_FLOAT(OFS_PARM2);
-	qmodel_t *mod = qcvm->GetModel(ed->v.modelindex);
+	qmodel_t *mod = PR_GetVMModel(ed->v.modelindex);
 
 	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces && triangleidx < (unsigned int)mod->surfaces[surfidx].numedges-2)
 	{
@@ -2363,7 +2370,7 @@ static void PF_getsurfacenormal(void)
 {
 	edict_t	*ed				= G_EDICT(OFS_PARM0);
 	unsigned int surfidx	= G_FLOAT(OFS_PARM1);
-	qmodel_t *mod = qcvm->GetModel(ed->v.modelindex);
+	qmodel_t *mod = PR_GetVMModel(ed->v.modelindex);
 
 	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces)
 	{
@@ -2379,7 +2386,7 @@ static void PF_getsurfacetexture(void)
 {
 	edict_t	*ed				= G_EDICT(OFS_PARM0);
 	unsigned int surfidx	= G_FLOAT(OFS_PARM1);
-	qmodel_t *mod = qcvm->GetModel(ed->v.modelindex);
+	qmodel_t *mod = PR_GetVMModel(ed->v.modelindex);
 
 	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces)
 	{
@@ -2463,7 +2470,7 @@ static void PF_getsurfacenearpoint(void)
 
 	G_FLOAT(OFS_RETURN) = -1;
 
-	model = qcvm->GetModel(ent->v.modelindex);
+	model = PR_GetVMModel(ent->v.modelindex);
 
 	if (!model || model->type != mod_brush || model->needload)
 		return;
@@ -2501,7 +2508,7 @@ static void PF_getsurfaceclippedpoint(void)
 
 	VectorCopy(point, result);
 
-	model = qcvm->GetModel(ent->v.modelindex);
+	model = PR_GetVMModel(ent->v.modelindex);
 
 	if (!model || model->type != mod_brush || model->needload)
 		return;
@@ -2530,7 +2537,7 @@ static void PF_getsurfacepointattribute(void)
 	unsigned int point		= G_FLOAT(OFS_PARM2);
 	unsigned int attribute	= G_FLOAT(OFS_PARM3);
 
-	qmodel_t *mod = qcvm->GetModel(ed->v.modelindex);
+	qmodel_t *mod = PR_GetVMModel(ed->v.modelindex);
 
 	if (mod && mod->type == mod_brush && !mod->needload && surfidx < (unsigned int)mod->nummodelsurfaces && point < (unsigned int)mod->surfaces[mod->firstmodelsurface+surfidx].numedges)
 	{
@@ -7174,7 +7181,7 @@ enum
 };
 static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the scene.
 {
-	qmodel_t *model = qcvm->GetModel(ed->v.modelindex);
+	qmodel_t *model = PR_GetVMModel(ed->v.modelindex);
 
 	if (model)
 	{
@@ -7842,7 +7849,7 @@ static void PF_cl_renderscene(void)
 
 static void PR_addentity_internalNew(edict_t* ed, float frame2, float lerpfrac, float frame1time, float frame2time) // woods #spinnymodel
 {
-	qmodel_t* model = qcvm->GetModel(ed->v.modelindex);
+	qmodel_t* model = PR_GetVMModel(ed->v.modelindex);
 
 	if (model)
 	{
