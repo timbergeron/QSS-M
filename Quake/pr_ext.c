@@ -10542,7 +10542,9 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float VF_CL_VIEWANGLES_X = %i;", VF_CL_VIEWANGLES_X);
 		fprintf(f, "const float VF_CL_VIEWANGLES_Y = %i;", VF_CL_VIEWANGLES_Y);
 		fprintf(f, "const float VF_CL_VIEWANGLES_Z = %i;", VF_CL_VIEWANGLES_Z);
-		fprintf(f, "const float VF_ACTIVESEAT = %i; //stub - must only be set to 0", VF_ACTIVESEAT);
+		//the newline matters: these are emitted without one, so a trailing // comment
+		//would swallow every constant after it on the same line.
+		fprintf(f, "const float VF_ACTIVESEAT = %i; //stub - must only be set to 0\n", VF_ACTIVESEAT);
 		fprintf(f, "const float VF_AFOV = %i;", VF_AFOV);
 		fprintf(f, "const float VF_SCREENVSIZE = %i;", VF_SCREENVSIZE);
 		fprintf(f, "const float VF_SCREENPSIZE = %i;", VF_SCREENPSIZE);
