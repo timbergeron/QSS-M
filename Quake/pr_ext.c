@@ -45,9 +45,8 @@ static float PR_GetVMScale(void)
 }
 
 static qmodel_t *PR_GetVMModel(int modelindex)
-{	//some vms intentionally have no model resolver. let each handler follow its
-	//normal invalid-model path instead of dereferencing null - they all set their
-	//return before looking a model up, so an early return would leak a stale one.
+{	//some vms intentionally have no model resolver. hand back null so each handler
+	//follows its normal invalid-model path rather than dereferencing it.
 	return qcvm->GetModel ? qcvm->GetModel(modelindex) : NULL;
 }
 
@@ -2442,7 +2441,7 @@ static void PF_getsurfacenormal(void)
 			VectorInverse(G_VECTOR(OFS_RETURN));
 	}
 	else
-		G_FLOAT(OFS_RETURN) = 0;
+		VectorClear(G_VECTOR(OFS_RETURN));
 }
 static void PF_getsurfacetexture(void)
 {
@@ -7205,6 +7204,8 @@ static void PF_m_setmodel(void)
 
 	int modelindex = PR_MenuModelIndexForName(newmodel, false);
 	qmodel_t *model = PR_MenuModelForIndex(modelindex);
+	if (!model)
+		modelindex = 0;	//don't leave a positive but unusable handle on the entity
 	eval_t *emodel = GetEdictFieldValue(ed, ED_FindFieldOffset("model"));
 	ddef_t *dmodelindex = ED_FindField("modelindex");
 	eval_t *emins = GetEdictFieldValue(ed, ED_FindFieldOffset("mins"));
