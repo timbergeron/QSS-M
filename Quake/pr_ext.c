@@ -6113,9 +6113,14 @@ void PF_cl_serverkey_internal(const char *key, qboolean retfloat)
 	}
 
 	if (retfloat)
-		G_FLOAT(OFS_RETURN) = atof(ret);
+	{	//an absent key falls back to the caller's assumevalue, if it passed one
+		if (ret && *ret)
+			G_FLOAT(OFS_RETURN) = strtod(ret, NULL);
+		else
+			G_FLOAT(OFS_RETURN) = (qcvm->argc > 1)?G_FLOAT(OFS_PARM1):0;
+	}
 	else
-		G_INT(OFS_RETURN) = PR_SetEngineString(ret);
+		G_INT(OFS_RETURN) = (ret && *ret)?PR_SetEngineString(ret):0;	//null string, not an empty tempstring
 }
 static void PF_cl_serverkey_s(void)
 {
@@ -6134,9 +6139,14 @@ void PF_sv_serverkey_internal(const char *key, qboolean retfloat)
 	const char *ret = Info_GetKey(svs.serverinfo, key, buf, sizeof(buf));
 
 	if (retfloat)
-		G_FLOAT(OFS_RETURN) = atof(ret);
+	{	//an absent key falls back to the caller's assumevalue, if it passed one
+		if (ret && *ret)
+			G_FLOAT(OFS_RETURN) = strtod(ret, NULL);
+		else
+			G_FLOAT(OFS_RETURN) = (qcvm->argc > 1)?G_FLOAT(OFS_PARM1):0;
+	}
 	else
-		G_INT(OFS_RETURN) = PR_SetEngineString(ret);
+		G_INT(OFS_RETURN) = (ret && *ret)?PR_SetEngineString(ret):0;	//null string, not an empty tempstring
 }
 static void PF_sv_serverkey_s(void)
 {
@@ -9130,8 +9140,8 @@ static struct
 //	{"setup_reverb",	PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("typedef struct {\n\tfloat flDensity;\n\tfloat flDiffusion;\n\tfloat flGain;\n\tfloat flGainHF;\n\tfloat flGainLF;\n\tfloat flDecayTime;\n\tfloat flDecayHFRatio;\n\tfloat flDecayLFRatio;\n\tfloat flReflectionsGain;\n\tfloat flReflectionsDelay;\n\tvector flReflectionsPan;\n\tfloat flLateReverbGain;\n\tfloat flLateReverbDelay;\n\tvector flLateReverbPan;\n\tfloat flEchoTime;\n\tfloat flEchoDepth;\n\tfloat flModulationTime;\n\tfloat flModulationDepth;\n\tfloat flAirAbsorptionGainHF;\n\tfloat flHFReference;\n\tfloat flLFReference;\n\tfloat flRoomRolloffFactor;\n\tint   iDecayHFLimit;\n} reverbinfo_t;\nvoid(float reverbslot, reverbinfo_t *reverbinfo, int sizeofreverinfo_t)", "Reconfigures a reverb slot for weird effects. Slot 0 is reserved for no effects. Slot 1 is reserved for underwater effects. Reserved slots will be reinitialised on snd_restart, but can otherwise be changed. These reverb slots can be activated with SetListener. Note that reverb will currently only work when using OpenAL.")},
 	{"registercommand",	NULL,				PF_cl_registercommand,352,	PF_cl_registercommand,352, D("void(string cmdname)", "Register the given console command, for easy console use.\nConsole commands that are later used will invoke CSQC_ConsoleCommand.")},//(EXT_CSQC)
 	{"wasfreed",		PF_WasFreed,		PF_WasFreed,		353,	PF_WasFreed,353, D("float(entity ent)", "Quickly check to see if the entity is currently free. This function is only valid during the two-second non-reuse window, after that it may give bad results. Try one second to make it more robust.")},//(EXT_CSQC) (should be availabe on server too)
-	{"serverkey",		PF_sv_serverkey_s,	PF_cl_serverkey_s,	354,	PF_NoMenu, D("string(string key)", "Look up a key in the server's public serverinfo string")},//
-	{"serverkeyfloat",	PF_sv_serverkey_f,	PF_cl_serverkey_f,	0,		PF_NoMenu, D("float(string key, optional float assumevalue)", "Version of serverkey that returns the value as a float (which avoids tempstrings).")},//
+	{"serverkey",		PF_sv_serverkey_s,	PF_cl_serverkey_s,	354,	PF_cl_serverkey_s,354, D("string(string key)", "Look up a key in the server's public serverinfo string")},//
+	{"serverkeyfloat",	PF_sv_serverkey_f,	PF_cl_serverkey_f,	0,		PF_cl_serverkey_f,0, D("float(string key, optional float assumevalue)", "Version of serverkey that returns the value as a float (which avoids tempstrings).")},//
 	{"getentitytoken",	PF_NoSSQC,			PF_cs_getentitytoken,355,	PF_NoMenu, D("string(optional string resetstring)", "Grab the next token in the map's entity lump.\nIf resetstring is not specified, the next token will be returned with no other sideeffects.\nIf empty, will reset from the map before returning the first token, probably {.\nIf not empty, will tokenize from that string instead.\nAlways returns tempstrings.")},//;
 //	{"findfont",		PF_NoSSQC,			PF_FullCSQCOnly,	356,	PF_NoMenu, D("float(string s)", "Looks up a named font slot. Matches the actual font name as a last resort.")},//;
 //	{"loadfont",		PF_NoSSQC,			PF_FullCSQCOnly,	357,	PF_NoMenu, D("float(string fontname, string fontmaps, string sizes, float slot, optional float fix_scale, optional float fix_voffset)", "too convoluted for me to even try to explain correct usage. Try drawfont = loadfont(\"\", \"cour\", \"16\", -1, 0, 0); to switch to the courier font (optimised for 16 virtual pixels high), if you have the freetype2 library in windows..")},

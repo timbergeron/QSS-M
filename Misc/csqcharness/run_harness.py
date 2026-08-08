@@ -27,7 +27,8 @@ DUMP_EXPECT = {
     'qscsextensions.qc':   {'drawfill': 323, 'drawpic': 322, 'drawsubpic': 328},
     'qsmenuextensions.qc': {'drawfill': 457, 'drawpic': 456, 'drawsubpic': 469,
                             'gettime': 67, 'registercvar': 42, 'findflags': 87,
-                            'tokenize': 58, 'buf_del': 441},
+                            'tokenize': 58, 'buf_del': 441,
+                            'serverkey': 354, 'serverkeyfloat': 0},
 }
 
 

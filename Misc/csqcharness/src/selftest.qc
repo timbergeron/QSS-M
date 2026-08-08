@@ -106,3 +106,15 @@ void() st_numbering_shared =
 	st_ok("findflags/finds-tagged-entity",
 		findflags(__NULL__, st_flagfield, 128) == f);
 };
+
+// serverkeyfloat used to ignore its assumevalue entirely, and serverkey handed
+// back an empty tempstring rather than the null string for a missing key.
+void() st_serverkeyfloat =
+{
+	st_eqf("serverkeyfloat/missing-default",
+		serverkeyfloat("hq_key_does_not_exist", 37), 37);
+	st_eqf("serverkeyfloat/missing-zero",
+		serverkeyfloat("hq_key_does_not_exist"), 0);
+	st_ok("serverkey/missing-is-null-string",
+		serverkey("hq_key_does_not_exist") == "");
+};

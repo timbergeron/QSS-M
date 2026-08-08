@@ -47,6 +47,8 @@ void() cq_selftest =
 	cq_builtin_find();
 	cq_mousetarget();
 	cq_frameduration();
+	st_serverkeyfloat();
+	st_eqs("serverkey/constate-active", serverkey("constate"), "active");
 	st_getgamedirinfo();
 	st_setkeybind();
 	st_numbering_shared();

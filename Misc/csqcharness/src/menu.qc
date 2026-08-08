@@ -131,6 +131,8 @@ void() mq_selftest =
 	mq_findchain();
 	mq_remap();
 	mq_aliases();
+	st_serverkeyfloat();
+	st_eqs("serverkey/constate-disconnected", serverkey("constate"), "disconnected");
 	st_getgamedirinfo();
 	st_setkeybind();
 	st_numbering_shared();
