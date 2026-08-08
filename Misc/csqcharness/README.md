@@ -108,6 +108,12 @@ Three layers:
   only `PROG_VERSION` 6. Any menu.dat QSS-M will load cannot call it.
 * **The server-list gamedir sort** is not covered — it needs a populated
   `hostcache`, which is not reachable from a headless local run.
+* **`frametoname`/`frameforname` are degenerate for classic `.mdl`.** Only the
+  md3 and iqm loaders populate `frames[].name` (`gl_mesh.c`); the `.mdl` loader
+  never copies it, so every frame name is the null string. This affects SSQC and
+  CSQC too, not just MenuQC. The harness records the current behaviour rather
+  than asserting something false — fix the loader and
+  `model/frametoname-mdl-names-unloaded` will tell you to update the test.
 * **`getmousepos`** is MenuQC-only by design; its CSQC semantics (movement
   deltas rather than absolute position) are unimplemented, so there is nothing
   to assert yet.

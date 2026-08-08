@@ -143,6 +143,21 @@ void() mq_models =
 	after = getmodelindex("progs/player.mdl", TRUE);
 	st_eqf("model/query-after-precache", after, idx);
 
+	// round-trip rather than hardcoding an animation name: whatever the shipped
+	// player.mdl calls frame 0, frametoname and frameforname must agree on it.
+	// NOTE: only the md3 and iqm loaders populate frames[].name -- the classic
+	// .mdl loader never copies it, so this is degenerate ("") for player.mdl.
+	// If the mdl loader learns to load frame names, the next check flips and
+	// this round-trip becomes a real test.
+	frame0 = frametoname(idx, 0);
+	st_eqs("model/frametoname-mdl-names-unloaded", frame0, "");
+	st_eqf("model/frame-name-roundtrip", frameforname(idx, frame0), 0);
+	st_ok("model/frameduration-positive", frameduration(idx, 0) > 0);
+
+	st_eqf("model/frameforname-invalid-handle", frameforname(99999, frame0), -1);
+	st_eqf("model/frameduration-invalid-handle", frameduration(99999, 0), 0);
+	st_eqs("model/frametoname-invalid-handle", frametoname(99999, 0), "");
+
 	ent = spawn();
 	setmodel(ent, "progs/player.mdl");
 	st_eqf("model/setmodel-populates-index", ent.modelindex, idx);

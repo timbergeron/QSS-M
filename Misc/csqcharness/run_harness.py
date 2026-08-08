@@ -29,7 +29,8 @@ DUMP_EXPECT = {
                             'gettime': 67, 'registercvar': 42, 'findflags': 87,
                             'tokenize': 58, 'buf_del': 441,
                             'serverkey': 354, 'serverkeyfloat': 0,
-                            'getmodelindex': 200},
+                            'getmodelindex': 200, 'frameforname': 276,
+                            'frameduration': 277, 'frametoname': 0},
 }
 
 
