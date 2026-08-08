@@ -1778,6 +1778,149 @@ static void Con_UpdateLastchatCounter(void) // woods #like
 	}
 }
 
+/*
+================
+Con_ChatBodyForSenderPrefix
+
+Check only the sender prefix.  Searching the whole line for "name: " can
+mistake text in another player's message for a message sent by the local
+player.
+================
+*/
+static const char *Con_ChatBodyForSenderPrefix (const char *txt, const char *name)
+{
+	const char *sender;
+	size_t name_length;
+	size_t text_length;
+
+	if (!txt || !name[0])
+		return NULL;
+
+	sender = txt + (txt[0] == 1);
+	name_length = strlen(name);
+	text_length = strlen(sender);
+	if (text_length >= name_length + 2 &&
+		!strncmp(sender, name, name_length) &&
+		sender[name_length] == ':' && sender[name_length + 1] == ' ')
+		return sender + name_length + 2;
+	if (text_length >= name_length + 4 && sender[0] == '(' &&
+		!strncmp(sender + 1, name, name_length) &&
+		sender[name_length + 1] == ')' && sender[name_length + 2] == ':' &&
+		sender[name_length + 3] == ' ')
+		return sender + name_length + 4;
+
+	return NULL;
+}
+
+static const char *Con_ChatBodyForSenderName (const char *txt, const char *name)
+{
+	const char *chat_body;
+	char filtered_name[MAX_SCOREBOARDNAME];
+
+	chat_body = Con_ChatBodyForSenderPrefix(txt, name);
+	if (chat_body)
+		return chat_body;
+
+	if (cl_contentfilter.value != 2 ||
+		!WordFilter_Check(name, filtered_name, sizeof(filtered_name)))
+		return NULL;
+
+	return Con_ChatBodyForSenderPrefix(txt, filtered_name);
+}
+
+/*
+================
+Con_PlayerChatBody
+
+Marked chat is authoritative.  Some vanilla/ProQuake tells and QC chat relays
+omit the marker, so accept those only when the line begins with the exact name
+of a player on the current scoreboard.  This excludes ordinary server prints
+whose text merely contains a player name after a timestamp.
+================
+*/
+static const char *Con_PlayerChatBody (const char *txt)
+{
+	const char *chat_body;
+	const char *separator;
+	int i;
+
+	if (!txt)
+		return NULL;
+
+	if (cl.scores)
+	{
+		for (i = 0; i < cl.maxclients; i++)
+		{
+			if (!cl.scores[i].name[0])
+				continue;
+			chat_body = Con_ChatBodyForSenderName(txt, cl.scores[i].name);
+			if (chat_body)
+				return chat_body;
+		}
+	}
+
+	if (txt[0] != 1)
+		return NULL;
+
+	separator = strstr(txt + 1, ": ");
+	return separator ? separator + 2 : NULL;
+}
+
+/* Private messages are unmarked, so require their complete leading syntax. */
+static qboolean Con_IsDirectMessage (const char *txt)
+{
+	const char *sender_end;
+
+	if (!txt || strncmp(txt, "dm [", 4))
+		return false;
+
+	sender_end = strstr(txt + 4, "]:");
+	return sender_end && sender_end > txt + 4;
+}
+
+static qboolean Con_IsLocalPlayerChat (const char *txt)
+{
+	int local_index = cl.realviewentity - 1;
+
+	if (cl.scores && local_index >= 0 && local_index < cl.maxclients &&
+		Con_ChatBodyForSenderName(txt, cl.scores[local_index].name))
+		return true;
+
+	if (Con_ChatBodyForSenderName(txt, cl_name.string))
+		return true;
+
+	return cl_afk.value && afk_name[0] &&
+		Con_ChatBodyForSenderName(txt, afk_name);
+}
+
+static qboolean Con_TextContainsName (const char *text, const char *name)
+{
+	char filtered_name[MAX_SCOREBOARDNAME];
+
+	if (!name[0])
+		return false;
+	if (Q_strcasestr(text, name))
+		return true;
+	if (cl_contentfilter.value != 2 ||
+		!WordFilter_Check(name, filtered_name, sizeof(filtered_name)))
+		return false;
+
+	return filtered_name[0] && Q_strcasestr(text, filtered_name);
+}
+
+static qboolean Con_ChatMentionsLocalPlayer (const char *chat_body)
+{
+	int local_index = cl.realviewentity - 1;
+
+	if (Con_TextContainsName(chat_body, cl_name.string))
+		return true;
+	if (cl.scores && local_index >= 0 && local_index < cl.maxclients &&
+		Con_TextContainsName(chat_body, cl.scores[local_index].name))
+		return true;
+
+	return cl_afk.value && Con_TextContainsName(chat_body, afk_name);
+}
+
 static void RideDelay_Deferred(void *param) // runequake changelevel hack -- runs on the main thread via Host_DeferCall
 {
 	strncpy(cl.observer, "y", sizeof(cl.observer));
@@ -1797,6 +1940,7 @@ static void Con_Print (const char *txt)
 {
 	int		y;
 	int		c, l;
+	const char	*chat_body;
 	static int	cr;
 	int		mask;
 	qboolean	gold_digits;
@@ -1984,10 +2128,6 @@ static void Con_Print (const char *txt)
 	{
 		if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
 		{ 
-			char namewithcolon[20]; // me talking while away needs to be avoided (f_ prints, alt tabbed, etc)
-
-			sprintf(namewithcolon, "%s: ", cl_name.string); // "woods: "
-
 			char statistics[11] = { 243, 244, 225, 244, 233, 243, 244, 233, 227, 243, '\0' }; // woods -- quake font red 'statistics'
 
 			if (strstr(txt, statistics) || strstr(txt, "match starting") || strstr(txt, "End of match"))
@@ -1995,19 +2135,15 @@ static void Con_Print (const char *txt)
 			if (strstr(txt, "The match is over"))
 				matchstats = false;
 
-			if (strstr(txt, ": ")) // detect if a say command from another person (not perfect)
+			chat_body = Con_PlayerChatBody(txt);
+			if (chat_body)
 			{ 
 				
-				if (!strstr(txt, namewithcolon) && !matchstats && !strstr(txt, "alt-tabbed") && !strstr(txt, "next quad at")) // not me typing away or in a match end auto print -> "woods): "
+				if (!Con_IsLocalPlayerChat(txt) && !matchstats && !strstr(chat_body, "alt-tabbed") && !strstr(chat_body, "next quad at"))
 				{ 
 					qboolean should_notify = false; // woods #discord -- one flash/notify per message
 
-					if (cl_afk.value)
-					{
-						if (Q_strcasestr(txt, afk_name)) // has my name minus AFK (afk_name is only created if cl_afk 1)
-							should_notify = true;
-					}
-					else if (Q_strcasestr(txt, cl_name.string)) // has my name
+					if (Con_ChatMentionsLocalPlayer(chat_body))
 						should_notify = true;
 
 					if (!should_notify) // con_notifylist keywords
@@ -2021,7 +2157,7 @@ static void Con_Print (const char *txt)
 						token = SDL_strtokr(notifylist, " ", &saveptr);
 						while (token != NULL)
 						{
-							char* found = Q_strcasestr(txt, token);
+							char* found = Q_strcasestr(chat_body, token);
 							// Check if the remaining string after the token is exactly one character
 							if (found != NULL && strlen(found) == strlen(token) + 1)
 							{
@@ -2042,7 +2178,7 @@ static void Con_Print (const char *txt)
 		}
 	}
 
-	if (strstr(txt, "dm [")) // woods #tell+
+	if (Con_IsDirectMessage(txt)) // woods #tell+
 	{
 		S_LocalSound("misc/talk.wav");
 		if (!VID_HasMouseOrInputFocus())

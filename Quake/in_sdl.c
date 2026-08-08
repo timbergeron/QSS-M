@@ -5463,13 +5463,25 @@ void IN_SendKeyEvents (void)
 				}
 				if (cl_afk.value) // woods #smartafk
 				{
-					if (!strstr(cl_name.string, afktype)) // initiate AFK-in-name if AFK not already in the name
+					const char *afk_marker = strstr(cl_name.string, afktype);
+
+					if (!afk_marker) // initiate AFK-in-name if AFK not already in the name
 					{
-						Q_strcpy(afk_name, cl_name.string); // store name to memory
+						q_strlcpy(afk_name, cl_name.string, sizeof(afk_name)); // store name to memory
 						sprintf(normalname, "%.11s", cl_name.string); // cut name
 						sprintf(normalname2, "%s %s", normalname, afktype); // add AFK to name
 						Cvar_Set("name", normalname2); // set name with AFK
 						Host_Name_Backup_f(); // back up the full name incase of crash
+					}
+					else if (!afk_name[0]) // recover the base name from an existing/crash-restored AFK name
+					{
+						size_t base_length = afk_marker - cl_name.string;
+
+						while (base_length && cl_name.string[base_length - 1] == ' ')
+							base_length--;
+						base_length = q_min(base_length, sizeof(afk_name) - 1);
+						memcpy(afk_name, cl_name.string, base_length);
+						afk_name[base_length] = '\0';
 					}
 				}
 
