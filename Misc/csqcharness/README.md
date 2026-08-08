@@ -58,17 +58,32 @@ cd ~/Desktop/qssm/csqcharness/src && ./build.sh /path/to/fteqcc
 ```bash
 python3 Misc/csqcharness/run_harness.py \
     --bin macOS/build/Debug/QSS-M.app/Contents/MacOS/QSS-M \
-    --basedir ~/Desktop/qssm
+    --basedir ~/Desktop/qssm \
+    --fteqcc /path/to/fteqcc
 ```
 
 Exit status is non-zero if anything failed. `--skip-pixels` drops the
 screenshot diff if you only care about the builtin assertions.
 
+**Pass `--fteqcc`.** It closes the loop: the runner regenerates both headers
+with the binary under test, validates them, rebuilds `csprogs.dat`/`menu.dat`
+from exactly those headers, and only then runs. Without it the progs are
+whatever was lying around, so a stale `.dat` can produce a green run against an
+engine it was never compiled for -- the runner reports that as a failure rather
+than staying quiet about it. Compiler warnings are failures too.
+
+Every invocation's output lands in `artifacts/` (`dump.log`, `build.log`,
+`csqc.log`, `menu-disconnected.log`, `menu-connected.log`, `pixels.log`) along
+with `summary.json`, which records sha256 and mtime for the engine, both
+generated headers, and both compiled progs -- so a result can be tied back to
+the exact inputs that produced it.
+
 ## What it checks
 
 Three layers:
 
-1. **QC assertions.** `hq_selftest 1` makes each module run its checks and quit,
+1. **QC assertions.** `hq_csqc_selftest 1` / `hq_menu_selftest 1` make a module
+   run its checks and quit,
    printing `SELFTEST PASS|FAIL <name>` lines that the runner parses. Covers
    `builtin_find` VM gating, `setkeybind` argument counts, `getgamedirinfo`
    bounds, `frameduration`'s return, `registercvar`'s 0/1 result and flag
@@ -82,6 +97,9 @@ Three layers:
    builtin numbers (this is what regressed when `pr_dumpplatform` emitted the
    CSQC number for every module), that a mixed `-Tcs -Tmenu` run is refused,
    and that an archived `registercvar` actually reaches `config.cfg`.
+   Three engine states are exercised: CSQC with a map, MenuQC disconnected, and
+   MenuQC with a map loaded (`hq_expect_connected 1`), which is what proves the
+   MenuQC model handles are independent of `cl.model_precache`.
 3. **Pixels.** `check_rotpic.py` diffs the 4x4 grid — `drawrotpic` at angle 0
    must be identical to `drawpic`, 90/180/270 must equal the reference rotated,
    sub-rect texcoords must match `drawsubpic`, and so on.
@@ -99,6 +117,16 @@ Three layers:
   entities left behind by earlier checks will join the results.
 * **`config.cfg` contains high-bit Quake charset bytes**, so `grep` treats it as
   binary and silently matches nothing. Use `grep -a`, or read it as bytes.
+* **Poison the return before a negative-path check.** A test expecting `0`,
+  `'0 0 0'` or `""` can pass by accident because `OFS_RETURN` already held that.
+  Call `st_poisonf()` / `st_poisonv()` / `st_poisons()` immediately before the
+  call under test. This is what makes a partially-cleared vector detectable.
+* **`#pragma warning disable F210` must not be re-enabled.** That warning is
+  emitted in a sweep at the *end* of compilation, so re-enabling it later in the
+  file re-arms it.
+* **Each run persists its probe cvars**, so the runner strips `seta hq_*` from
+  `config.cfg` between runs; otherwise the next run sees `registercvar` report
+  "already exists".
 * **Scale must be 1:1** for the pixel checks — the QC sets `scr_sbarscale 1` /
   `scr_menuscale 1` and disables the HUD widgets that draw *after*
   `CSQC_DrawHud` (`scr_ping`'s packet-loss readout lands on the top row).

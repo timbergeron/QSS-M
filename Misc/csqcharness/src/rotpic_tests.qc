@@ -35,8 +35,12 @@ var float autocvar_rotpic_freeze = 0;
 // drives that itself: a wait-spammed cfg stalls the client's signon, so an
 // externally timed screenshot never catches a running CSQC.
 var float autocvar_rotpic_autoshot = 0;
-// "hq_selftest 1" runs the builtin assertions and quits
-var float autocvar_hq_selftest = 0;
+// one switch per module, so the menu suite can run with a map loaded while
+// the csqc suite stays quiet
+var float autocvar_hq_csqc_selftest = 0;
+var float autocvar_hq_menu_selftest = 0;
+// what the menu suite should expect from serverkey("constate")
+var float autocvar_hq_expect_connected = 0;
 
 float rp_frames;
 

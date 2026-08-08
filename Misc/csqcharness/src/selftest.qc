@@ -59,6 +59,44 @@ void(string name, string got, string want) st_eqs =
 	}
 };
 
+//======================================================================
+// Return poisoning.
+//
+// A negative-path check that expects 0 (or '0 0 0', or "") can pass by accident
+// when OFS_RETURN already held that value. Call a poison helper immediately
+// before the call under test so the return globals hold something distinctive;
+// a handler that leaves them alone, or clears only part of a vector, then fails.
+//======================================================================
+
+float() st_poisonf =
+{
+	return 12345;
+};
+
+vector() st_poisonv =
+{
+	return '123 456 789';
+};
+
+string() st_poisons =
+{
+	return "poison";
+};
+
+void(string name, vector got, vector want) st_eqv =
+{
+	if (got == want)
+	{
+		st_pass = st_pass + 1;
+		print("SELFTEST PASS ", name, "\n");
+	}
+	else
+	{
+		st_fail = st_fail + 1;
+		print("SELFTEST FAIL ", name, " got=", vtos(got), " want=", vtos(want), "\n");
+	}
+};
+
 void(string module) st_report =
 {
 	print("SELFTEST DONE ", module, " pass=", ftos(st_pass), " fail=", ftos(st_fail), "\n");
@@ -72,7 +110,9 @@ void(string module) st_report =
 // dereference NULL. Any index past the end must return the null string.
 void() st_getgamedirinfo =
 {
+	st_poisons();
 	st_eqs("getgamedirinfo/out-of-range", getgamedirinfo(99999, 0), "");
+	st_poisons();
 	st_eqs("getgamedirinfo/negative",     getgamedirinfo(-5, 0), "");
 	// index 0 is whatever the first mod is; only assert it did not crash
 	getgamedirinfo(0, 0);
@@ -113,6 +153,7 @@ void() st_serverkeyfloat =
 {
 	st_eqf("serverkeyfloat/missing-default",
 		serverkeyfloat("hq_key_does_not_exist", 37), 37);
+	st_poisonf();
 	st_eqf("serverkeyfloat/missing-zero",
 		serverkeyfloat("hq_key_does_not_exist"), 0);
 	st_ok("serverkey/missing-is-null-string",

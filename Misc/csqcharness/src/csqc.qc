@@ -17,10 +17,12 @@ float(string builtinname) builtin_find = #0;
 void() cq_builtin_find =
 {
 	// ssqc-only: clientstat is PF_NoCSQC, te_lightningblood has a NULL csqcfunc
+	st_poisonf();
 	st_eqf("builtin_find/ssqc-only-clientstat", builtin_find("clientstat"), 0);
 	st_eqf("builtin_find/ssqc-only-te_lightningblood", builtin_find("te_lightningblood"), 0);
 	// present in csqc, so the number still comes back
 	st_ok("builtin_find/csqc-drawpic", builtin_find("drawpic") != 0);
+	st_poisonf();
 	st_eqf("builtin_find/unknown-name", builtin_find("nosuchbuiltin"), 0);
 };
 
@@ -38,7 +40,9 @@ void() cq_mousetarget =
 // frame, so callers read whatever happened to be in the return global.
 void() cq_frameduration =
 {
+	st_poisonf();
 	st_eqf("frameduration/bad-modelindex", frameduration(9999, 0), 0);
+	st_poisonf();
 	st_eqf("frameduration/bad-frame", frameduration(1, 9999), 0);
 };
 
@@ -49,9 +53,10 @@ void() cq_frameduration =
 void() cq_surfaces =
 {
 	local float i, primed;
-	local vector norm, bad;
+	local vector norm;
 
 	st_ok("surface/numpoints-positive", getsurfacenumpoints(world, 0) > 0);
+	st_poisonf();
 	st_eqf("surface/numpoints-invalid", getsurfacenumpoints(world, 99999), 0);
 
 	// find a surface whose normal has a non-zero y or z, so that a partial
@@ -70,8 +75,12 @@ void() cq_surfaces =
 	// prime OFS_RETURN with that normal, then ask for a surface that does not
 	// exist: the whole vector must be cleared, not just its x component
 	getsurfacenormal(world, i);
-	bad = getsurfacenormal(world, 99999);
-	st_ok("surface/invalid-normal-fully-cleared", bad == '0 0 0');
+	st_eqv("surface/invalid-normal-fully-cleared",
+		getsurfacenormal(world, 99999), '0 0 0');
+	// and again from a poisoned return, so this does not rely on the priming call
+	st_poisonv();
+	st_eqv("surface/invalid-normal-from-poison",
+		getsurfacenormal(world, 99999), '0 0 0');
 };
 
 void() cq_selftest =
@@ -94,7 +103,7 @@ void() cq_selftest =
 void(vector virtsize, float showscores) CSQC_DrawHud =
 {
 	cq_frames = cq_frames + 1;
-	if (autocvar_hq_selftest && cq_frames == 60)
+	if (autocvar_hq_csqc_selftest && cq_frames == 60)
 		cq_selftest();
 
 	RotPic_DrawTests(virtsize);

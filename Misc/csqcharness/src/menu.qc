@@ -128,6 +128,11 @@ void() mq_aliases =
 	st_ok("alias/gettime-legacy-519", gettime_legacy(0) > 0);
 };
 
+//F210 ("used but not directly precached") is emitted in a sweep at the end of
+//compilation, not at the setmodel site, so this must stay disabled for the
+//rest of the file -- re-enabling it later re-arms the sweep. We setmodel a
+//model we deliberately have not precached, which is the point of the test.
+#pragma warning disable F210
 void() mq_models =
 {
 	local float before, idx, after;
@@ -154,8 +159,11 @@ void() mq_models =
 	st_eqf("model/frame-name-roundtrip", frameforname(idx, frame0), 0);
 	st_ok("model/frameduration-positive", frameduration(idx, 0) > 0);
 
+	st_poisonf();
 	st_eqf("model/frameforname-invalid-handle", frameforname(99999, frame0), -1);
+	st_poisonf();
 	st_eqf("model/frameduration-invalid-handle", frameduration(99999, 0), 0);
+	st_poisons();
 	st_eqs("model/frametoname-invalid-handle", frametoname(99999, 0), "");
 
 	ent = spawn();
@@ -172,7 +180,8 @@ void() mq_selftest =
 	mq_remap();
 	mq_aliases();
 	st_serverkeyfloat();
-	st_eqs("serverkey/constate-disconnected", serverkey("constate"), "disconnected");
+	st_eqs("serverkey/constate", serverkey("constate"),
+		autocvar_hq_expect_connected ? "active" : "disconnected");
 	st_getgamedirinfo();
 	st_setkeybind();
 	st_numbering_shared();
@@ -201,7 +210,7 @@ void(vector screensize) m_draw =
 	// console prints force screen updates, so the first m_draw calls happen then.
 	// Wait for the frame loop proper before asserting on it.
 	mq_frames = mq_frames + 1;
-	if (autocvar_hq_selftest && mq_frames == 120)
+	if (autocvar_hq_menu_selftest && mq_frames == 120)
 		mq_selftest();
 
 	RotPic_DrawTests(screensize);
