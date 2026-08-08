@@ -9,6 +9,8 @@ Windows/VisualStudio/UpgradeLog.htm
 
 # macOS
 .DS_Store
+xcuserdata/
+*.xcuserstate
 
 out
 .vs

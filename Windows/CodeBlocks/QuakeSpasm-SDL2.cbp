@@ -56,6 +56,7 @@
 			<Add library="mad" />
 			<Add library="xmp" />
 			<Add library="winmm" />
+			<Add library="advapi32" />
 			<Add library="opengl32" />
 			<Add library="wsock32" />
 			<Add directory="..\codecs\x86" />
@@ -90,6 +91,9 @@
 			<Option compilerVar="CC" />
 		</Unit>
 		<Unit filename="..\..\Quake\discord_presence.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="..\..\Quake\qwatch.c">
 			<Option compilerVar="CC" />
 		</Unit>
 		<Unit filename="..\..\Quake\cl_parse.c">
@@ -261,6 +265,7 @@
 		<Unit filename="..\..\Quake\q_stdinc.h" />
 		<Unit filename="..\..\Quake\qs_bmp.h" />
 		<Unit filename="..\..\Quake\quakedef.h" />
+		<Unit filename="..\..\Quake\qwatch.h" />
 		<Unit filename="..\..\Quake\r_alias.c">
 			<Option compilerVar="CC" />
 		</Unit>

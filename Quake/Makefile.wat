@@ -114,7 +114,7 @@ CFLAGS+= -DUSE_CODEC_UMX
 !endif
 CFLAGS+= $(CODEC_INC)
 
-COMMON_LIBS= opengl32.lib winmm.lib
+COMMON_LIBS= opengl32.lib winmm.lib advapi32.lib
 !ifeq USE_ZLIB 1
 CFLAGS+= -DUSE_ZLIB
 COMMON_LIBS+= -lz
@@ -210,6 +210,7 @@ OBJS = strlcat.obj &
 	cl_main.obj &
 	discord_presence.obj &
 	cl_parse.obj &
+	qwatch.obj &
 	cl_tent.obj &
 	console.obj &
 	keys.obj &

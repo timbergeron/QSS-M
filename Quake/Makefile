@@ -309,6 +309,7 @@ OBJS := strlcat.o \
 	cl_main.o \
 	discord_presence.o \
 	cl_parse.o \
+	qwatch.o \
 	cl_tent.o \
 	console.o \
 	iplog.o \

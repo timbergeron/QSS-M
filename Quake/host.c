@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // host.c -- coordinates spawning and killing of local servers
 
 #include "quakedef.h"
+#include "qwatch.h"
 #include "bgmusic.h"
 #include "pmove.h"
 #include "f_modified.h"
@@ -1030,6 +1031,9 @@ void Host_InitLocal (void)
 	Cvar_RegisterVariable (&pausable);
 
 	Cvar_RegisterVariable (&temp1);
+	Cvar_RegisterVariable (&qwatch_aura);
+	Cvar_RegisterVariable (&qwatch_port);
+	QWatch_InitLocal();
 
 	Host_FindMaxClients ();
 
@@ -2497,7 +2501,13 @@ void _Host_Frame (double time)
 		// normal demo playback needs the next frame to see the usual delta.
 		if (demo_seek_activity && cls.state == ca_connected && cls.demoplayback && cl.qcvm.progs)
 			cl.qcvm.time = cl.time;
+		QWatch_Frame(!demo_seek_activity &&
+			(cls.demoplayback || !QWatch_LocalPlayerSpectating()) &&
+			(cls.demoplayback || cl.viewentity == cl.realviewentity),
+			(unsigned int)cl.items);
 	}
+	else
+		QWatch_Frame(false, 0);
 
 // update video
 	if (host_speeds.value)
@@ -2755,6 +2765,7 @@ void Host_Shutdown(void)
 // keep Con_Printf from trying to update the screen
 	scr_disabled_for_loading = true;
 	DiscordPresence_Shutdown();
+	QWatch_Shutdown();
 
 	SV_CleanupTimer(); // woods #svtimer
 
