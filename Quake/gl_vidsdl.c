@@ -1301,7 +1301,7 @@ static void VID_Restart (void)
 {
 	int width, height, refreshrate, bpp;
 	qboolean fullscreen, validmode;
-	qboolean blocked_sound;
+	qboolean blocked_sound, scr_was_disabled;
 
 	if (vid_locked || !vid_changed)
 		return;
@@ -1328,6 +1328,11 @@ static void VID_Restart (void)
 				width, height, bpp, refreshrate, fullscreen? "fullscreen" : "windowed");
 		return;
 	}
+
+	// Console prints during GL_Init can otherwise call SCR_UpdateScreen while
+	// shaders, textures and framebuffer objects are only partially rebuilt.
+	scr_was_disabled = scr_disabled_for_loading;
+	scr_disabled_for_loading = true;
 
 	M_MenuSearch_CloseForVideoRestart();
 
@@ -1394,6 +1399,8 @@ static void VID_Restart (void)
 
 	if (blocked_sound)
 		S_UnblockSound ();
+
+	scr_disabled_for_loading = scr_was_disabled;
 }
 
 /*
