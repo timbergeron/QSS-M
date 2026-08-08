@@ -125,12 +125,15 @@ void() st_getgamedirinfo =
 void() st_setkeybind =
 {
 	local float k = stringtokeynum("F11");
+	local string saved = getkeybind(k);
 	setkeybind(k, "impulse 251");
 	st_eqs("setkeybind/2arg", getkeybind(k), "impulse 251");
 	setkeybind(k, "impulse 252", 0);
 	st_eqs("setkeybind/3arg", getkeybind(k), "impulse 252");
 	setkeybind(k, "", 0, 0);
 	st_eqs("setkeybind/4arg-clears", getkeybind(k), "");
+	setkeybind(k, saved);	//leave the user's binding as we found it
+	st_eqs("setkeybind/restored-original", getkeybind(k), saved);
 };
 
 // 66180b68 / dd50a274 -- FTE's menuqc numbers are bound alongside (or now

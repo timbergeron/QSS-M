@@ -171,9 +171,59 @@ void() mq_models =
 	st_eqf("model/setmodel-populates-index", ent.modelindex, idx);
 };
 
+// Bounded malformed input across the handle/index builtins. Deterministic
+// boundary values beat random fuzzing: these are the cases that actually
+// separate "rejected cleanly" from "read something it should not have".
+void(float h, string tag) mq_bad_handle =
+{
+	st_poisonf();
+	st_eqf(strcat("badhandle/frameduration/", tag), frameduration(h, 0), 0);
+	st_poisonf();
+	st_eqf(strcat("badhandle/frameforname/", tag), frameforname(h, "nosuchframe"), -1);
+	st_poisons();
+	st_eqs(strcat("badhandle/frametoname/", tag), frametoname(h, 0), "");
+};
+
+void() mq_bounds =
+{
+	local float idx = getmodelindex("progs/player.mdl", FALSE);
+
+	mq_bad_handle(-1, "negative");
+	mq_bad_handle(0, "zero");
+	mq_bad_handle(idx + 1, "one-past-valid");
+	mq_bad_handle(99999, "far-out-of-range");
+
+	// a fractional handle truncates to the valid one rather than being rejected
+	st_ok("bounds/fractional-handle-truncates",
+		frameduration(idx + 0.5, 0) == frameduration(idx, 0));
+
+	// bad frame numbers on a good handle
+	// NOTE: framenum is read into an unsigned int, and float->unsigned of a
+	// negative value is undefined in C; on arm64 it saturates to 0, so a
+	// negative frame aliases to frame 0 rather than being rejected.
+	st_ok("bounds/frameduration/frame-negative-aliases-to-zero",
+		frameduration(idx, -1) == frameduration(idx, 0));
+	st_poisonf();
+	st_eqf("bounds/frameduration/frame-far", frameduration(idx, 99999), 0);
+	st_poisons();
+	st_eqs("bounds/frametoname/frame-far", frametoname(idx, 99999), "");
+
+	// getmodelindex itself
+	st_eqf("bounds/getmodelindex/empty-name", getmodelindex("", FALSE), 0);
+	st_eqf("bounds/getmodelindex/missing-file",
+		getmodelindex("progs/hq_no_such_model.mdl", FALSE), 0);
+
+	// string buffer handles
+	st_poisonf();
+	st_ok("bounds/buf_getsize/negative", buf_getsize(-1) <= 0);
+	st_poisonf();
+	st_ok("bounds/buf_getsize/far", buf_getsize(99999) <= 0);
+};
+
 void() mq_selftest =
 {
 	mq_models();
+	mq_bounds();
 	mq_registercvar();
 	mq_wiring();
 	mq_findchain();

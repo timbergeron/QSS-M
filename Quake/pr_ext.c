@@ -3949,6 +3949,8 @@ static void PF_buf_getsize(void)
 {
 	int bufno = G_FLOAT(OFS_PARM0)-BUFSTRBASE;
 
+	G_FLOAT(OFS_RETURN) = 0;	//an invalid handle must not leak the previous return
+
 	if ((unsigned int)bufno >= NUMSTRINGBUFS)
 		return;
 	if (!strbuflist[bufno].owningvm)
@@ -4040,6 +4042,8 @@ static void PF_buf_implode(void)
 	unsigned int retlen, l, i;
 	char **strings;
 	char *ret;
+
+	G_INT(OFS_RETURN) = 0;	//null string on an invalid handle
 
 	if ((unsigned int)bufno >= NUMSTRINGBUFS)
 		return;
@@ -4197,6 +4201,8 @@ static void PF_bufstr_add(void)
 	size_t bufno = G_FLOAT(OFS_PARM0)-BUFSTRBASE;
 	const char *string = G_STRING(OFS_PARM1);
 	qboolean ordered = G_FLOAT(OFS_PARM2);
+
+	G_FLOAT(OFS_RETURN) = -1;	//0 is a valid index, so failure has to be distinct
 
 	if ((unsigned int)bufno >= NUMSTRINGBUFS)
 		return;
@@ -5582,6 +5588,7 @@ static void DrawQC_CharacterQuad (float x, float y, int num, float w, float h)
 }
 static void PF_cl_drawcharacter(void)
 {
+	G_FLOAT(OFS_RETURN) = 0;	//declared float; set it before any early out
 	extern gltexture_t *char_texture;
 
 	float *pos	= G_VECTOR(OFS_PARM0);
@@ -5603,6 +5610,7 @@ static void PF_cl_drawcharacter(void)
 
 static void PF_cl_drawrawstring(void)
 {
+	G_FLOAT(OFS_RETURN) = 0;	//declared float; set it before any early out
 	extern gltexture_t *char_texture;
 
 	float *pos	= G_VECTOR(OFS_PARM0);
@@ -5630,6 +5638,7 @@ static void PF_cl_drawrawstring(void)
 }
 static void PF_cl_drawstring(void)
 {
+	G_FLOAT(OFS_RETURN) = 0;	//declared float; set it before any early out
 	extern gltexture_t *char_texture;
 
 	float *pos	= G_VECTOR(OFS_PARM0);
@@ -5926,12 +5935,16 @@ static void PF_cl_setkeybind(void)
 	const char *binding = G_STRING(OFS_PARM1);
 	int bindmap = (qcvm->argc<=2)?0:G_FLOAT(OFS_PARM2);
 	int modifier = (qcvm->argc<=3)?0:G_FLOAT(OFS_PARM3);	//shift,alt,ctrl bitmask.
+	G_FLOAT(OFS_RETURN) = 0;	//declared float; 1 only once the bind is applied
 	if (modifier != 0)	//we don't support modifiers.
 		return;
 	if (bindmap < 0 || bindmap >= MAX_BINDMAPS)
 		bindmap = 0;
 	if (keynum >= 0 && keynum < MAX_KEYS)
+	{
 		Key_SetBinding(keynum, binding, bindmap);
+		G_FLOAT(OFS_RETURN) = 1;
+	}
 }
 static void PF_cl_getbindmaps(void)
 {

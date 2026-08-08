@@ -131,6 +131,24 @@ Three layers:
   `scr_menuscale 1` and disables the HUD widgets that draw *after*
   `CSQC_DrawHud` (`scr_ping`'s packet-loss readout lands on the top row).
 
+## Bugs this harness found
+
+Recorded because they show what the checks are for, not as history for its own
+sake:
+
+* Seven builtins declared a `float`/`string` return but left `OFS_RETURN`
+  untouched on an early out, so an invalid argument handed back whatever the
+  previous builtin left behind — `buf_getsize`, `buf_implode`, `bufstr_add`,
+  `drawcharacter`, `drawrawstring`, `drawstring`, and `setkeybind` (which never
+  set a return at all, even on success). Return poisoning is what exposed these;
+  without it they pass whenever the stale value happens to match.
+* `getsurfacenormal` cleared only the x component of its vector return.
+* `frameduration`/`frameforname`/`frametoname` read the frame number into an
+  `unsigned int`. Float-to-unsigned of a negative value is undefined in C and
+  saturates to 0 on arm64, so `frameduration(idx, -1)` aliases to frame 0
+  instead of being rejected. The harness records this rather than asserting a
+  fix — see `bounds/frameduration/frame-negative-aliases-to-zero`.
+
 ## Known gaps
 
 * **`gettimed`** cannot be tested. Its return is `__double`, which needs
