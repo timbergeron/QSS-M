@@ -80,6 +80,7 @@ qboolean PR_LoadProgs (const char *filename, qboolean fatal, unsigned int needcr
 void PR_InitExtensions(void);
 void PR_EnableExtensions(ddef_t *pr_globaldefs);	//adds in the extra builtins etc
 void PR_AutoCvarChanged(cvar_t *var);				//updates the autocvar_ globals when their cvar is changed
+struct qmodel_s *PR_MenuModelForIndex(int modelindex);
 void PR_ShutdownExtensions(void);					//nooooes!
 void PR_ReloadPics(qboolean purge);					//for gamedir or video changes
 func_t PR_FindExtFunction(const char *entryname);

@@ -43575,6 +43575,8 @@ static qboolean MQC_Init(void)
 		success = false;
 	else
 		success = PR_LoadProgs("menu.dat", false, MENUQC_PROGHEADER_CRC, pr_menubuiltins, pr_menunumbuiltins);
+	if (success)	//after PR_LoadProgs (it clears the vm) and before m_init (which may precache)
+		qcvm->GetModel = PR_MenuModelForIndex;
 	if (success && qcvm->extfuncs.m_draw)
 	{
 		M_MenuSearch_Close(false, true);

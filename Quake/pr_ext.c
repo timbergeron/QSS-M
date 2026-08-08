@@ -51,6 +51,68 @@ static qmodel_t *PR_GetVMModel(int modelindex)
 	return qcvm->GetModel ? qcvm->GetModel(modelindex) : NULL;
 }
 
+//menuqc has no server precache list to index, so it keeps its own table of
+//model names. handles are 1-based; 0 is invalid. every lookup re-resolves by
+//name, so a handle stays valid across Mod_ResetAll() (which resets mod_known,
+//including on texture reloads) and reloads the model if its data was flushed.
+typedef struct
+{
+	char name[MAX_QPATH];
+} menuqc_model_t;
+static menuqc_model_t *menuqc_models;
+static size_t menuqc_nummodels;
+static size_t menuqc_maxmodels;
+
+static void PR_MenuModels_Clear(void)
+{
+	free(menuqc_models);
+	menuqc_models = NULL;
+	menuqc_nummodels = 0;
+	menuqc_maxmodels = 0;
+}
+
+static int PR_MenuModelIndexForName(const char *name, qboolean queryonly)
+{
+	qmodel_t *model;
+	size_t i;
+
+	if (!name || !*name || strlen(name) >= MAX_QPATH)
+		return 0;
+
+	for (i = 0; i < menuqc_nummodels; i++)
+		if (!strcmp(menuqc_models[i].name, name))
+			return i + 1;
+
+	if (queryonly)
+		return 0;
+
+	model = Mod_ForName(name, false);
+	if (!model || model->type == mod_ext_invalid)
+		return 0;
+
+	if (menuqc_nummodels == menuqc_maxmodels)
+	{
+		size_t newmax = menuqc_maxmodels?menuqc_maxmodels*2:64;
+		menuqc_model_t *newmodels = realloc(menuqc_models, newmax * sizeof(*newmodels));
+		if (!newmodels)
+			Sys_Error("PR_MenuModelIndexForName: out of memory");
+		menuqc_models = newmodels;
+		menuqc_maxmodels = newmax;
+	}
+
+	q_strlcpy(menuqc_models[menuqc_nummodels].name, name, sizeof(menuqc_models[menuqc_nummodels].name));
+	return ++menuqc_nummodels;
+}
+
+qmodel_t *PR_MenuModelForIndex(int modelindex)
+{
+	qmodel_t *model;
+	if (modelindex <= 0 || (size_t)modelindex > menuqc_nummodels)
+		return NULL;
+	model = Mod_ForName(menuqc_models[modelindex-1].name, false);
+	return (model && model->type != mod_ext_invalid)?model:NULL;
+}
+
 //there's a few different aproaches to tempstrings...
 //the lame way is to just have a single one (vanilla).
 //the only slightly less lame way is to just cycle between 16 or so (most engines).
@@ -7141,12 +7203,20 @@ static void PF_m_setmodel(void)
 	edict_t *ed = G_EDICT(OFS_PARM0);
 	const char *newmodel = G_STRING(OFS_PARM1);
 
-	qmodel_t *model = Mod_ForName(newmodel, false);
+	int modelindex = PR_MenuModelIndexForName(newmodel, false);
+	qmodel_t *model = PR_MenuModelForIndex(modelindex);
 	eval_t *emodel = GetEdictFieldValue(ed, ED_FindFieldOffset("model"));
+	ddef_t *dmodelindex = ED_FindField("modelindex");
 	eval_t *emins = GetEdictFieldValue(ed, ED_FindFieldOffset("mins"));
 	eval_t *emaxs = GetEdictFieldValue(ed, ED_FindFieldOffset("maxs"));
 	if (emodel)
 		emodel->_int = PR_SetEngineString(model?model->name:"");
+	if (dmodelindex && (dmodelindex->type & ~DEF_SAVEGLOBAL) == ev_float)
+	{	//so frameforname(ent.modelindex, ...) works, as it does in fte
+		eval_t *emodelindex = GetEdictFieldValue(ed, dmodelindex->ofs);
+		if (emodelindex)
+			emodelindex->_float = modelindex;
+	}
 	if (emins)
 	{
 		if (model)
@@ -7170,11 +7240,17 @@ static void PF_m_setmodel(void)
 		}
 	}
 }
+static void PF_m_getmodelindex(void)
+{
+	const char *name = G_STRING(OFS_PARM0);
+	qboolean queryonly = (qcvm->argc > 1) && G_FLOAT(OFS_PARM1);
+	G_FLOAT(OFS_RETURN) = PR_MenuModelIndexForName(name, queryonly);
+}
 static void PF_m_precache_model(void)
 {
 	const char *modname = G_STRING(OFS_PARM0);
 	G_INT(OFS_RETURN) = G_INT(OFS_PARM0);
-	Mod_ForName(modname, false);
+	PR_MenuModelIndexForName(modname, false);
 }
 entity_t *CL_NewTempEntity (void);
 extern int num_temp_entities;
@@ -8970,7 +9046,7 @@ static struct
 	{"strunzone",		PF_strunzone,		PF_strunzone,		119, PF_strunzone,57,	D("void(string s)", "Destroys a string that was allocated by strunzone. Further references to the string MAY crash the game.")},	// (FRIK_FILE)
 	{"tokenize_menuqc",	PF_Tokenize,		PF_Tokenize,		0,	PF_Tokenize,58, "float(string s)"},	//alias of tokenize's canonical #58; kept so existing source using this name still compiles
 	{"localsound",		PF_NoSSQC,			PF_cl_localsound,	177,	PF_cl_localsound,65, D("void(string soundname, optional float channel, optional float volume)", "Plays a sound... locally... probably best not to call this from ssqc. Also disables reverb.")},//	#177
-//	{"getmodelindex",	PF_getmodelindex,	PF_getmodelindex,	200,	PF_NoMenu, D("float(string modelname, optional float queryonly)", "Acts as an alternative to precache_model(foo);setmodel(bar, foo); return bar.modelindex;\nIf queryonly is set and the model was not previously precached, the builtin will return 0 without needlessly precaching the model.")},
+	{"getmodelindex",	PF_NoSSQC,			PF_NoCSQC,			200,	PF_m_getmodelindex,200, D("float(string modelname, optional float queryonly)", "Acts as an alternative to precache_model(foo);setmodel(bar, foo); return bar.modelindex;\nIf queryonly is set and the model was not previously precached, the builtin will return 0 without needlessly precaching the model.")},
 //	{"externcall",		PF_externcall,		PF_externcall,		201,	PF_NoMenu, D("__variant(float prnum, string funcname, ...)", "Directly call a function in a different/same progs by its name.\nprnum=0 is the 'default' or 'main' progs.\nprnum=-1 means current progs.\nprnum=-2 will scan through the active progs and will use the first it finds.")},
 //	{"addprogs",		PF_addprogs,		PF_addprogs,		202,	PF_NoMenu, D("float(string progsname)", "Loads an additional .dat file into the current qcvm. The returned handle can be used with any of the externcall/externset/externvalue builtins.\nThere are cvars that allow progs to be loaded automatically.")},
 //	{"externvalue",		PF_externvalue,		PF_externvalue,		203,	PF_NoMenu, D("__variant(float prnum, string varname)", "Reads a global in the named progs by the name of that global.\nprnum=0 is the 'default' or 'main' progs.\nprnum=-1 means current progs.\nprnum=-2 will scan through the active progs and will use the first it finds.")},
@@ -9750,6 +9826,8 @@ void PR_ShutdownExtensions(void)
 	tokenize_flush();
 	if (qcvm == &cl.qcvm)
 		PR_ReloadPics(true);
+	if (qcvm == &cls.menu_qcvm)
+		PR_MenuModels_Clear();
 
 	pr_ext_warned_particleeffectnum = 0;
 }

@@ -19,6 +19,10 @@ float mq_frames;
 //   .chain is deliberately a float: the implicit lookup must reject it by type
 //   rather than link edict references through a float field (bc7078cd).
 .float chain;
+.string model;
+.float modelindex;
+.vector mins;
+.vector maxs;
 .entity mychain;
 
 // legacy/canonical builtin slots, declared by number on purpose so the
@@ -124,8 +128,29 @@ void() mq_aliases =
 	st_ok("alias/gettime-legacy-519", gettime_legacy(0) > 0);
 };
 
+void() mq_models =
+{
+	local float before, idx, after;
+	local string frame0;
+	local entity ent;
+
+	before = getmodelindex("progs/player.mdl", TRUE);
+	st_eqf("model/query-before-precache", before, 0);
+
+	idx = getmodelindex("progs/player.mdl", FALSE);
+	st_ok("model/getmodelindex-positive", idx > 0);
+
+	after = getmodelindex("progs/player.mdl", TRUE);
+	st_eqf("model/query-after-precache", after, idx);
+
+	ent = spawn();
+	setmodel(ent, "progs/player.mdl");
+	st_eqf("model/setmodel-populates-index", ent.modelindex, idx);
+};
+
 void() mq_selftest =
 {
+	mq_models();
 	mq_registercvar();
 	mq_wiring();
 	mq_findchain();
