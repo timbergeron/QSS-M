@@ -520,7 +520,14 @@ static qpic_t	*Draw_TryCachePicEx (const char *cachename, const char *path, unsi
 	{
 		char npath[MAX_QPATH];
 		COM_StripExtension(path, npath, sizeof(npath));
-		gl.gltexture = TexMgr_LoadImage (NULL, npath, 0, 0, SRC_EXTERNAL, NULL, npath, 0, texflags);
+		gl.gltexture = TexMgr_LoadImage (NULL, npath, 0, 0, SRC_EXTERNAL, NULL, npath, 0, texflags|TEXPREF_ALLOWMISSING);
+		if (!gl.gltexture)
+		{	//Spike's texmgr builds a real 0x0 texture for a missing external image unless we ask it not to.
+			//caching that would make every later lookup of this name 'succeed' until Draw_NewGame, so drop the slot.
+			pic->name[0] = 0;
+			menu_numcachepics--;
+			return NULL;
+		}
 
 		pic->pic.width = gl.gltexture->width;
 		pic->pic.height = gl.gltexture->height;
