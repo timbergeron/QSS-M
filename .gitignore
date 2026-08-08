@@ -19,3 +19,7 @@ out
 /Quake/quakespasm.exe
 /Quake/QSS-M
 /Quake/debug.txt
+
+# python bytecode from the harness runner
+__pycache__/
+*.pyc
