@@ -408,7 +408,7 @@ static void Con_Dump_f (void)
 	int		l, x;
 	const char	*line;
 	FILE	*f;
-	char	buffer[1024];
+	char	*buffer;
 	char	relname[MAX_OSPATH];
 	char	name[MAX_OSPATH];
 
@@ -425,6 +425,14 @@ static void Con_Dump_f (void)
 	if (!f)
 	{
 		Con_Printf ("ERROR: couldn't open file %s.\n", name);
+		return;
+	}
+
+	buffer = (char *) malloc ((size_t) con_linewidth + 1);
+	if (!buffer)
+	{
+		fclose (f);
+		Con_Printf ("Con_Dump_f: Couldn't allocate memory\n");
 		return;
 	}
 
@@ -462,6 +470,7 @@ static void Con_Dump_f (void)
 		fprintf (f, "%s\n", buffer);
 	}
 
+	free (buffer);
 	fclose (f);
 	if (cl_contentfilter.value) // woods #contentfilter
 	{
