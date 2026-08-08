@@ -2,4 +2,5 @@
 qscsextensions.qc
 selftest.qc
 rotpic_tests.qc
+pic_tests.qc
 csqc.qc

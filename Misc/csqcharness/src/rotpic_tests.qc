@@ -19,7 +19,14 @@
 	I==J, K==rot90(I), M==N.
 */
 
-#define TESTPIC		"gfx/help0.lmp"
+// The panel is drawn from a generated standalone TGA rather than a wad-backed
+// .lmp, so every cell below also exercises the external-image load path -- the
+// one that used to hand back a 0x0 placeholder. run_harness.py writes it; the
+// size is asserted in pic_tests.qc.
+#define PIC_GRID	"gfx/hq_grid.tga"
+#define PIC_GRID_SIZE	'64 64 0'
+
+#define TESTPIC		PIC_GRID
 #define SPINPIC		"gfx/qplaque.lmp"
 
 #define CELL		64
@@ -41,6 +48,14 @@ var float autocvar_hq_csqc_selftest = 0;
 var float autocvar_hq_menu_selftest = 0;
 // what the menu suite should expect from serverkey("constate")
 var float autocvar_hq_expect_connected = 0;
+// The two picture modes each replace the normal csqc suite with one dedicated
+// check -- see pic_tests.qc for why neither can share an invocation with it.
+// They are declared here, not there, because this file is the one compiled into
+// *both* progs: menu.dat loads at startup, so these exist as cvars by the time
+// the engine runs the +commands. An autocvar only csprogs.dat declares is not
+// registered until a map loads, which is far too late to switch a mode on.
+var float autocvar_hq_pic_stress = 0;
+var float autocvar_hq_pic_recovery = 0;
 
 float rp_frames;
 

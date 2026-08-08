@@ -89,6 +89,10 @@ void() cq_selftest =
 	cq_builtin_find();
 	cq_mousetarget();
 	cq_frameduration();
+	cq_pic_present();
+	cq_pic_missing();
+	cq_pic_default_flags();
+	cq_pic_flag_reuse();
 	st_serverkeyfloat();
 	st_eqs("serverkey/constate-active", serverkey("constate"), "active");
 	st_getgamedirinfo();
@@ -100,10 +104,42 @@ void() cq_selftest =
 
 //======================================================================
 
+// quit is queued rather than immediate, so several more frames run after we ask
+// for it. Without this the picture modes would report again on each of them and
+// the runner would see duplicate test names.
+float cq_reported;
+
+void() cq_finish =
+{
+	if (cq_reported)
+		return;
+	cq_reported = TRUE;
+	st_report("csqc");
+	localcmd("quit\n");
+};
+
 void(vector virtsize, float showscores) CSQC_DrawHud =
 {
 	cq_frames = cq_frames + 1;
-	if (autocvar_hq_csqc_selftest && cq_frames == 60)
+
+	if (autocvar_hq_pic_stress)
+	{
+		if (cq_frames == 60)
+		{
+			cq_pic_stress();
+			cq_finish();
+		}
+	}
+	else if (autocvar_hq_pic_recovery)
+	{
+		if (cq_frames >= 60)
+		{
+			cq_pic_recovery_poll();
+			if (cq_late_done)
+				cq_finish();
+		}
+	}
+	else if (autocvar_hq_csqc_selftest && cq_frames == 60)
 		cq_selftest();
 
 	RotPic_DrawTests(virtsize);
