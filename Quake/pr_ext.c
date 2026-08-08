@@ -5580,6 +5580,9 @@ static qpic_t *DrawQC_CachePic(const char *picname, unsigned int flags)
 	//the extra gfx/ crap is because DP insists on it for wad images. and its a nightmare to get things working in all engines if we don't accept that quirk too.
 	if (flags & PICFLAG_WAD)
 	{	//the qc explicitly asked for a wad lump, so a miss keeps returning the missing-image diagnostic, as it always has.
+		//note this caches pic_nul rather than NULL, so unlike every other failure here it is not retried: a later
+		//request for the same name without PICFLAG_WAD keeps getting the checkerboard until PR_ReloadPics. that is the
+		//price of not changing what an explicit wad miss draws for mods that already rely on it.
 		qcpics[i].pic = Draw_PicFromWad2(picname + (strncmp(picname, "gfx/", 4)?0:4), texflags);
 	}
 	else if (!strncmp(picname, "gfx/", 4) && !strchr(picname+4, '.'))
