@@ -42,8 +42,41 @@ void() cq_frameduration =
 	st_eqf("frameduration/bad-frame", frameduration(1, 9999), 0);
 };
 
+// 8328e149 -- getsurfacenormal returns a vector but used to clear only its x
+// component on the invalid path, leaving y/z stale from the previous call.
+// The engine points world.modelindex at the worldmodel, so a loaded map gives
+// us real brush geometry to query.
+void() cq_surfaces =
+{
+	local float i, primed;
+	local vector norm, bad;
+
+	st_ok("surface/numpoints-positive", getsurfacenumpoints(world, 0) > 0);
+	st_eqf("surface/numpoints-invalid", getsurfacenumpoints(world, 99999), 0);
+
+	// find a surface whose normal has a non-zero y or z, so that a partial
+	// clear of the return would leave detectable residue in the next call
+	while (i < 256 && !primed)
+	{
+		norm = getsurfacenormal(world, i);
+		if (norm_y != 0 || norm_z != 0)
+			primed = 1;
+		else
+			i = i + 1;
+	}
+	st_ok("surface/found-oblique-normal", primed);
+	st_ok("surface/normal-is-unit", fabs(vlen(norm) - 1) < 0.01);
+
+	// prime OFS_RETURN with that normal, then ask for a surface that does not
+	// exist: the whole vector must be cleared, not just its x component
+	getsurfacenormal(world, i);
+	bad = getsurfacenormal(world, 99999);
+	st_ok("surface/invalid-normal-fully-cleared", bad == '0 0 0');
+};
+
 void() cq_selftest =
 {
+	cq_surfaces();
 	cq_builtin_find();
 	cq_mousetarget();
 	cq_frameduration();

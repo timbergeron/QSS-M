@@ -74,8 +74,10 @@ Three layers:
    bounds, `frameduration`'s return, `registercvar`'s 0/1 result and flag
    mapping, the MenuQC wiring (`cprint`/`etos`/`findfloat`/`randomvec`/
    `findchainflags`), the `findchain` chain-field lookup and its type check, the
-   CSQC mouse targets, the FTE-numbered aliases, and the `tokenize`/`buf_del`
-   #441 remap in both directions.
+   CSQC mouse targets, the FTE-numbered aliases, the `tokenize`/`buf_del`
+   #441 remap in both directions, the MenuQC model-handle table with
+   `getmodelindex`/`setmodel`/the frame trio, `serverkey`'s connected and
+   disconnected states, and the surface-query family against the worldmodel.
 2. **Engine-side.** Regenerates the platform defs and asserts the per-target
    builtin numbers (this is what regressed when `pr_dumpplatform` emitted the
    CSQC number for every module), that a mixed `-Tcs -Tmenu` run is refused,
