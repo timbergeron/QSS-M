@@ -61,6 +61,12 @@ extern NSString *FQPrefCommandLineKey;
     NSArray *keyboardShortcutRows;
     NSArray *filteredKeyboardShortcutRows;
 
+    id quitKeyMonitor;
+    NSTimer *quitHoldTimer;
+    NSPanel *quitHoldOverlayWindow;
+    NSMenuItem *warnBeforeQuittingItem;
+    BOOL quitKeyDown;
+
     QuakeArguments *arguments;
 }
 

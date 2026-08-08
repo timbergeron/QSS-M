@@ -36,6 +36,47 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 NSString *FQPrefCommandLineKey = @"CommandLine";
 static NSString *QSSPrefRawMouseInputEnabledKey = @"RawMouseInputEnabled";
+static NSString *QSSPrefWarnBeforeQuittingKey = @"WarnBeforeQuitting";
+static const NSTimeInterval QSSCommandQHoldDuration = 1.0;
+/* Half-size point measurements from the supplied 2x Retina reference. */
+static const CGFloat QSSQuitHoldOverlayWidth = 356.0f;
+static const CGFloat QSSQuitHoldOverlayHeight = 72.0f;
+
+@interface QSSQuitHoldOverlayView : NSView
+@end
+
+@implementation QSSQuitHoldOverlayView
+
+- (BOOL)isOpaque
+{
+    return NO;
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSRect bounds = [self bounds];
+    NSBezierPath *background;
+    NSString *text = @"Hold \u2318Q to Quit";
+    NSDictionary *attributes;
+    NSSize textSize;
+    NSPoint textOrigin;
+
+    (void)dirtyRect;
+    background = [NSBezierPath bezierPathWithRoundedRect:bounds xRadius:6.0f yRadius:6.0f];
+    [[NSColor colorWithCalibratedWhite:0.16f alpha:0.75f] setFill];
+    [background fill];
+
+    attributes = [NSDictionary dictionaryWithObjectsAndKeys:
+        [NSFont boldSystemFontOfSize:24.0f], NSFontAttributeName,
+        [NSColor whiteColor], NSForegroundColorAttributeName,
+        nil];
+    textSize = [text sizeWithAttributes:attributes];
+    textOrigin = NSMakePoint(NSMidX(bounds) - textSize.width * 0.5f,
+                             NSMidY(bounds) - textSize.height * 0.5f);
+    [text drawAtPoint:textOrigin withAttributes:attributes];
+}
+
+@end
 
 #ifndef MAC_OS_X_VERSION_10_13
 #define NSControlStateValueOff NSOffState
@@ -1301,6 +1342,14 @@ static NSImage *QSSHostAppIcon(void)
 @interface AppController ()
 - (NSText *)activeArgumentFieldEditor;
 - (NSString *)currentArgumentText;
+- (void)installQuitKeyMonitor;
+- (void)beginQuitHold;
+- (void)cancelQuitHold;
+- (void)quitHoldTimerFired:(NSTimer *)timer;
+- (void)showQuitHoldOverlay;
+- (void)hideQuitHoldOverlay;
+- (void)quitNow;
+- (BOOL)warnBeforeQuittingEnabled;
 - (void)hideArgumentCompletionGhost;
 - (void)updateArgumentCompletionGhostWithText:(NSString *)text
                                    completion:(NSString *)completion
@@ -1317,6 +1366,7 @@ static NSImage *QSSHostAppIcon(void)
 
     [defaults setObject:@"" forKey:FQPrefCommandLineKey];
     [defaults setObject:[NSNumber numberWithBool:NO] forKey:QSSPrefRawMouseInputEnabledKey];
+    [defaults setObject:[NSNumber numberWithBool:YES] forKey:QSSPrefWarnBeforeQuittingKey];
 
     [[NSUserDefaults standardUserDefaults] registerDefaults:defaults];
 }
@@ -1674,6 +1724,11 @@ static NSImage *QSSHostAppIcon(void)
     NSMenuItem *appMenuItem = ([mainMenu numberOfItems] > 0) ? [mainMenu itemAtIndex:0] : nil;
     NSMenu *appMenu = [appMenuItem submenu];
     NSMenuItem *quitItem = [appMenu itemWithTitle:@"Quit QSS-M"];
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    BOOL warnBeforeQuitting = [defaults boolForKey:QSSPrefWarnBeforeQuittingKey];
+
+    if (!quitItem)
+        quitItem = [appMenu itemWithTitle:@"Hold \u2318Q to Quit"];
 
     if (!quitItem) {
         NSInteger idx = [appMenu indexOfItemWithTarget:nil andAction:@selector(terminate:)];
@@ -1682,13 +1737,181 @@ static NSImage *QSSHostAppIcon(void)
     }
 
     if (quitItem) {
-        [quitItem setTitle:@"Quit QSS-M"];
+        warnBeforeQuittingItem = [appMenu itemWithTitle:@"Warn Before Quitting"];
+        if (!warnBeforeQuittingItem) {
+            warnBeforeQuittingItem = [[[NSMenuItem alloc] initWithTitle:@"Warn Before Quitting"
+                                                                   action:@selector(toggleWarnBeforeQuitting:)
+                                                            keyEquivalent:@""] autorelease];
+            [appMenu insertItem:warnBeforeQuittingItem atIndex:[appMenu indexOfItem:quitItem]];
+        }
+
+        [warnBeforeQuittingItem setTarget:self];
+        [warnBeforeQuittingItem setAction:@selector(toggleWarnBeforeQuitting:)];
+        [warnBeforeQuittingItem setState:warnBeforeQuitting ? NSControlStateValueOn : NSControlStateValueOff];
+        [warnBeforeQuittingItem setEnabled:YES];
+
+        [quitItem setTitle:warnBeforeQuitting ? @"Hold \u2318Q to Quit" : @"Quit QSS-M"];
         [quitItem setTarget:self];
         [quitItem setAction:@selector(cancel:)];
-        [quitItem setKeyEquivalent:@"q"];
-        [quitItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
+        [quitItem setKeyEquivalent:warnBeforeQuitting ? @"" : @"q"];
+        [quitItem setKeyEquivalentModifierMask:warnBeforeQuitting ? 0 : NSEventModifierFlagCommand];
         [quitItem setEnabled:YES];
     }
+}
+
+- (BOOL)warnBeforeQuittingEnabled
+{
+    return [[NSUserDefaults standardUserDefaults] boolForKey:QSSPrefWarnBeforeQuittingKey];
+}
+
+- (void)installQuitKeyMonitor
+{
+    __block AppController *blockSelf = self;
+
+    if (quitKeyMonitor)
+        return;
+
+    quitKeyMonitor = [[NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskKeyDown | NSEventMaskKeyUp)
+        handler:^NSEvent *(NSEvent *event) {
+            NSEventModifierFlags flags;
+            NSString *characters;
+            BOOL commandQ;
+
+            if (![blockSelf warnBeforeQuittingEnabled])
+                return event;
+
+            flags = [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+            characters = [[event charactersIgnoringModifiers] lowercaseString];
+            commandQ = ([characters isEqualToString:@"q"] &&
+                        (flags & NSEventModifierFlagCommand) != 0 &&
+                        (flags & (NSEventModifierFlagShift | NSEventModifierFlagOption |
+                                  NSEventModifierFlagControl)) == 0);
+
+            if ([event type] == NSEventTypeKeyDown && commandQ) {
+                if (!blockSelf->quitKeyDown) {
+                    blockSelf->quitKeyDown = YES;
+                    [blockSelf beginQuitHold];
+                }
+                /* Do not let the key equivalent or the game see Command-Q. */
+                return nil;
+            }
+
+            if ([event type] == NSEventTypeKeyUp &&
+                blockSelf->quitKeyDown && [characters isEqualToString:@"q"]) {
+                blockSelf->quitKeyDown = NO;
+                [blockSelf cancelQuitHold];
+                return nil;
+            }
+
+            return event;
+        }] retain];
+}
+
+- (void)beginQuitHold
+{
+    if (quitHoldTimer)
+        return;
+
+    [self showQuitHoldOverlay];
+    quitHoldTimer = [[NSTimer scheduledTimerWithTimeInterval:QSSCommandQHoldDuration
+                                                       target:self
+                                                     selector:@selector(quitHoldTimerFired:)
+                                                     userInfo:nil
+                                                      repeats:NO] retain];
+}
+
+- (void)cancelQuitHold
+{
+    if (quitHoldTimer) {
+        [quitHoldTimer invalidate];
+        [quitHoldTimer release];
+        quitHoldTimer = nil;
+    }
+    [self hideQuitHoldOverlay];
+}
+
+- (void)showQuitHoldOverlay
+{
+    NSView *overlayView;
+    NSWindow *anchorWindow;
+    NSScreen *screen;
+    NSRect frame;
+
+    if (!quitHoldOverlayWindow) {
+        frame = NSMakeRect(0.0f, 0.0f, QSSQuitHoldOverlayWidth, QSSQuitHoldOverlayHeight);
+        quitHoldOverlayWindow = [[NSPanel alloc] initWithContentRect:frame
+                                                             styleMask:(NSWindowStyleMaskBorderless |
+                                                                        NSWindowStyleMaskNonactivatingPanel)
+                                                               backing:NSBackingStoreBuffered
+                                                                 defer:NO];
+        [quitHoldOverlayWindow setOpaque:NO];
+        [quitHoldOverlayWindow setBackgroundColor:[NSColor clearColor]];
+        [quitHoldOverlayWindow setHasShadow:NO];
+        [quitHoldOverlayWindow setFloatingPanel:YES];
+        [quitHoldOverlayWindow setHidesOnDeactivate:NO];
+        [quitHoldOverlayWindow setIgnoresMouseEvents:YES];
+        /* Exclusive fullscreen uses Core Graphics' shielding level. The HUD
+           exists only while Command-Q is held, so placing it one level above
+           the shield is safe and keeps it visible in every video mode. */
+        [quitHoldOverlayWindow setLevel:(NSWindowLevel)(CGShieldingWindowLevel() + 1)];
+        [quitHoldOverlayWindow setAnimationBehavior:NSWindowAnimationBehaviorNone];
+        [quitHoldOverlayWindow setCollectionBehavior:(NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                                       NSWindowCollectionBehaviorFullScreenAuxiliary |
+                                                       NSWindowCollectionBehaviorStationary |
+                                                       NSWindowCollectionBehaviorIgnoresCycle)];
+
+        /* A fixed alpha view preserves the same translucent appearance over
+           the launcher, console, renderer and every fullscreen style. */
+        overlayView = [[[QSSQuitHoldOverlayView alloc] initWithFrame:frame] autorelease];
+        [overlayView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+        [[quitHoldOverlayWindow contentView] addSubview:overlayView];
+    }
+
+    anchorWindow = [NSApp keyWindow];
+    if (!anchorWindow)
+        anchorWindow = [NSApp mainWindow];
+    screen = anchorWindow ? [anchorWindow screen] : [NSScreen mainScreen];
+    if (anchorWindow)
+        frame = [anchorWindow frame];
+    else
+        frame = [screen visibleFrame];
+
+    frame.origin.x = NSMidX(frame) - QSSQuitHoldOverlayWidth * 0.5f;
+    frame.origin.y = NSMaxY(frame) - QSSQuitHoldOverlayHeight - 72.0f;
+    frame.size.width = QSSQuitHoldOverlayWidth;
+    frame.size.height = QSSQuitHoldOverlayHeight;
+    [quitHoldOverlayWindow setFrame:frame display:NO];
+    [quitHoldOverlayWindow orderFrontRegardless];
+}
+
+- (void)hideQuitHoldOverlay
+{
+    if (quitHoldOverlayWindow)
+        [quitHoldOverlayWindow orderOut:nil];
+}
+
+- (void)quitHoldTimerFired:(NSTimer *)timer
+{
+    (void)timer;
+
+    [quitHoldTimer release];
+    quitHoldTimer = nil;
+    [self quitNow];
+}
+
+- (void)toggleWarnBeforeQuitting:(id)sender
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    BOOL enabled = ![self warnBeforeQuittingEnabled];
+
+    (void)sender;
+    [defaults setBool:enabled forKey:QSSPrefWarnBeforeQuittingKey];
+    [defaults synchronize];
+    if (!enabled) {
+        quitKeyDown = NO;
+        [self cancelQuitHold];
+    }
+    [self configureQuitMenu];
 }
 
 - (void)configureFileMenu
@@ -3497,6 +3720,7 @@ doCommandBySelector:(SEL)commandSelector
     [self configureSettingsMenu];
     [self configureHelpMenu];
     [self configureQuitMenu];
+    [self installQuitKeyMonitor];
     [self configureFileMenu];
     [self removeUnusedMenus];
 
@@ -3748,6 +3972,14 @@ doCommandBySelector:(SEL)commandSelector
 - (IBAction)cancel:(id)sender {
     (void)sender;
 
+    [self quitNow];
+}
+
+- (void)quitNow
+{
+    quitKeyDown = NO;
+    [self cancelQuitHold];
+
     /* Once SDL is running, let the engine perform its normal quit sequence. */
     if (SDL_WasInit(0) != 0) {
         SDL_Event event = {0};
@@ -3913,6 +4145,13 @@ doCommandBySelector:(SEL)commandSelector
 
 - (void) dealloc {
     [self stopRawMousePermissionAssistant];
+    if (quitKeyMonitor)
+        [NSEvent removeMonitor:quitKeyMonitor];
+    [quitKeyMonitor release];
+    [quitHoldTimer invalidate];
+    [quitHoldTimer release];
+    [quitHoldOverlayWindow orderOut:nil];
+    [quitHoldOverlayWindow release];
     [rawMouseOverlayWindow release];
     [rawMouseOverlayArrowField release];
     [rawMouseOverlayTitleField release];
