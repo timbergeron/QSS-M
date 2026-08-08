@@ -147,6 +147,9 @@ typedef struct
 	GLint fogModeLoc;
 } aliasglsl_t;
 static aliasglsl_t r_alias_glsl[ALIAS_GLSL_MODES];
+static aliasglsl_t r_alias_inst_glsl;
+
+cvar_t gl_alias_instancing = {"gl_alias_instancing", "1", CVAR_ARCHIVE};
 
 // tb -- Alias programs created during a vid_restart performed while disconnected
 // can render models black or with garbage skinning after the next map loads.
@@ -161,6 +164,13 @@ qboolean gl_alias_shaders_compiling_disconnected_restart = false;
 #define pose2NormalAttrIndex 3
 #define texCoordsAttrIndex 4
 #define vertColoursAttrIndex 5
+
+#define aliasInstMat0AttrIndex 5
+#define aliasInstMat1AttrIndex 6
+#define aliasInstMat2AttrIndex 7
+#define aliasInstMat3AttrIndex 8
+#define aliasInstLightAttrIndex 9
+#define aliasInstShadeBlendAttrIndex 10
 
 #define boneWeightAttrIndex pose2VertexAttrIndex
 #define boneIndexAttrIndex pose2NormalAttrIndex
@@ -234,6 +244,19 @@ void GLAlias_CreateShaders (void)
 		{ "Pose2Normal", pose2NormalAttrIndex },
 		{ "VertColours", vertColoursAttrIndex }
 	};
+	const glsl_attrib_binding_t instancedBindings[] = {
+		{ "TexCoords", texCoordsAttrIndex },
+		{ "Pose1Vert", pose1VertexAttrIndex },
+		{ "Pose1Normal", pose1NormalAttrIndex },
+		{ "Pose2Vert", pose2VertexAttrIndex },
+		{ "Pose2Normal", pose2NormalAttrIndex },
+		{ "InstMat0", aliasInstMat0AttrIndex },
+		{ "InstMat1", aliasInstMat1AttrIndex },
+		{ "InstMat2", aliasInstMat2AttrIndex },
+		{ "InstMat3", aliasInstMat3AttrIndex },
+		{ "InstLight", aliasInstLightAttrIndex },
+		{ "InstShadeBlend", aliasInstShadeBlendAttrIndex }
+	};
 
 	const GLchar *vertSource = \
 		"#version 110\n"
@@ -247,8 +270,23 @@ void GLAlias_CreateShaders (void)
 		"uniform float shellTime;\n"    // Time for animation
 		"uniform vec4 shellWaveParams;\n" // x=amplitude, y=frequency, z=phase, w=unused
 		"\n"
+		"#ifdef INSTANCED\n"
+		"attribute vec4 InstMat0;\n"
+		"attribute vec4 InstMat1;\n"
+		"attribute vec4 InstMat2;\n"
+		"attribute vec4 InstMat3;\n"
+		"attribute vec4 InstLight;\n"
+		"attribute vec4 InstShadeBlend;\n"
+		"#define AliasShadeVector InstShadeBlend.xyz\n"
+		"#define AliasLightColor InstLight\n"
+		"#define AliasBlend InstShadeBlend.w\n"
+		"#else\n"
 		"uniform vec3 ShadeVector;\n"
 		"uniform vec4 LightColor;\n"
+		"#define AliasShadeVector ShadeVector\n"
+		"#define AliasLightColor LightColor\n"
+		"#define AliasBlend Blend\n"
+		"#endif\n"
 		"uniform float outlineWidth; // Amount to expand vertices\n" // woods #routline
 		"uniform int isOutlinePass; // Indicates if this is the outline pass\n" // woods #routline
 		"attribute vec4 TexCoords; // only xy are used \n"
@@ -262,7 +300,9 @@ void GLAlias_CreateShaders (void)
 		"attribute vec4 VertColours;\n"
 		"uniform vec4 BoneTable[MAXBONES*3];\n" //fixme: should probably try to use a UBO or SSBO.
 		"#else\n"
+		"#ifndef INSTANCED\n"
 		"uniform float Blend;\n"
+		"#endif\n"
 		"attribute vec4 Pose2Vert;\n"
 		"attribute vec3 Pose2Normal;\n"
 		"#endif\n"
@@ -271,7 +311,7 @@ void GLAlias_CreateShaders (void)
 		"\n"
 		"float r_avertexnormal_dot(vec3 vertexnormal) // from MH \n"
 		"{\n"
-		"        float dot = dot(vertexnormal, ShadeVector);\n"
+		"        float dot = dot(vertexnormal, AliasShadeVector);\n"
 		"        // wtf - this reproduces anorm_dots within as reasonable a degree of tolerance as the >= 0 case\n"
 		"        if (dot < 0.0)\n"
 		"            return 1.0 + dot * (13.0 / 44.0);\n"
@@ -337,11 +377,11 @@ void GLAlias_CreateShaders (void)
 		"\n"
 		"#else\n"
 		"	// Vertex position interpolation\n" // woods #routline
-		"	lerpedVert = mix(vec4(Pose1Vert.xyz, 1.0), vec4(Pose2Vert.xyz, 1.0), Blend);\n"
-		"	float dot1 = mix(r_avertexnormal_dot(Pose1Normal), r_avertexnormal_dot(Pose2Normal), Blend);\n"
+		"	lerpedVert = mix(vec4(Pose1Vert.xyz, 1.0), vec4(Pose2Vert.xyz, 1.0), AliasBlend);\n"
+		"	float dot1 = mix(r_avertexnormal_dot(Pose1Normal), r_avertexnormal_dot(Pose2Normal), AliasBlend);\n"
 		"\n"
 		" 	// Normal interpolation\n" // woods #routline
-		"	lerpedNormal = mix(Pose1Normal, Pose2Normal, Blend);\n"
+		"	lerpedNormal = mix(Pose1Normal, Pose2Normal, AliasBlend);\n"
 		"	lerpedNormal = normalize(lerpedNormal);\n"
 		"\n"
 		"	// Apply outline expansion if in the outline pass\n" // woods #routline
@@ -364,9 +404,14 @@ void GLAlias_CreateShaders (void)
 		"		finalPos += normalDir * wave * shellWaveParams.x;\n"
 		"		lerpedVert = vec4(finalPos, 1.0);\n"
 		"	}\n"
+		"#ifdef INSTANCED\n"
+		"	mat4 InstanceMatrix = mat4(InstMat0, InstMat1, InstMat2, InstMat3);\n"
+		"	gl_Position = gl_ModelViewProjectionMatrix * InstanceMatrix * lerpedVert;\n"
+		"#else\n"
 		"	gl_Position = gl_ModelViewProjectionMatrix * lerpedVert;\n"
+		"#endif\n"
 		"	FogFragCoord = gl_Position.w;\n"
-		"	gl_FrontColor = LightColor * vec4(vec3(dot1), 1.0);\n"
+		"	gl_FrontColor = AliasLightColor * vec4(vec3(dot1), 1.0);\n"
 		"#ifdef SKELETAL\n"
 		"	gl_FrontColor *= VertColours;\n"	//this is basically only useful for vertex alphas.
 		"#endif\n"
@@ -476,7 +521,12 @@ void GLAlias_CreateShaders (void)
 			"}\n";
 
 	for (i = 0; i < ALIAS_GLSL_MODES; i++)
+	{
+		GL_DeleteProgramTracked (&r_alias_glsl[i].program);
 		memset (&r_alias_glsl[i], 0, sizeof(r_alias_glsl[i]));
+	}
+	GL_DeleteProgramTracked (&r_alias_inst_glsl.program);
+	memset (&r_alias_inst_glsl, 0, sizeof(r_alias_inst_glsl));
 
 	if (!gl_glsl_alias_able)
 		return;
@@ -550,6 +600,56 @@ void GLAlias_CreateShaders (void)
 			GL_Uniform1iFunc(glsl->shellModeLoc, 0);  // woods #powershell
 			GL_Uniform1fFunc(glsl->shellTimeLoc, 0.0f);  // woods #powershell
 			GL_Uniform4fFunc(glsl->shellWaveParamsLoc, 0.1f, 4.0f, 0.0f, 0.0f);  // woods #powershell
+			GL_UseProgramFunc (0);
+		}
+	}
+
+	if (gl_bmodel_instancing_able)
+	{
+		glsl = &r_alias_inst_glsl;
+		q_snprintf(processedVertSource, sizeof(processedVertSource), vertSource,
+			"#define INSTANCED\n");
+		glsl->program = GL_CreateProgram (processedVertSource, fragSource,
+			sizeof(instancedBindings) / sizeof(instancedBindings[0]), instancedBindings);
+		if (glsl->program != 0)
+		{
+			glsl->bonesLoc = -1;
+			glsl->blendLoc = -1;
+			glsl->shadevectorLoc = -1;
+			glsl->lightColorLoc = -1;
+			glsl->texLoc = GL_GetUniformLocation (&glsl->program, "Tex");
+			glsl->lowerTexLoc = GL_GetUniformLocation (&glsl->program, "LowerTex");
+			glsl->upperTexLoc = GL_GetUniformLocation (&glsl->program, "UpperTex");
+			glsl->fullbrightTexLoc = GL_GetUniformLocation (&glsl->program, "FullbrightTex");
+			glsl->useFullbrightTexLoc = GL_GetUniformLocation (&glsl->program, "UseFullbrightTex");
+			glsl->useOverbrightLoc = GL_GetUniformLocation (&glsl->program, "UseOverbright");
+			glsl->useAlphaTestLoc = GL_GetUniformLocation (&glsl->program, "UseAlphaTest");
+			glsl->colorTintLoc = GL_GetUniformLocation (&glsl->program, "ColourTint");
+			glsl->outlineWidthLoc = GL_GetUniformLocation (&glsl->program, "outlineWidth");
+			glsl->isOutlinePassLoc = GL_GetUniformLocation (&glsl->program, "isOutlinePass");
+			glsl->outlineColorLoc = GL_GetUniformLocation (&glsl->program, "outlineColor");
+			glsl->clTimeLoc = GL_GetUniformLocation (&glsl->program, "ClTime");
+			glsl->shellTexLoc = GL_GetUniformLocation (&glsl->program, "ShellTex");
+			glsl->useShellTexLoc = GL_GetUniformLocation (&glsl->program, "UseShellTex");
+			glsl->shellColorLoc = GL_GetUniformLocation (&glsl->program, "ShellColor");
+			glsl->shellAlphaLoc = GL_GetUniformLocation (&glsl->program, "ShellAlpha");
+			glsl->shellModeLoc = GL_GetUniformLocation (&glsl->program, "shellMode");
+			glsl->shellTimeLoc = GL_GetUniformLocation (&glsl->program, "shellTime");
+			glsl->shellWaveParamsLoc = GL_GetUniformLocation (&glsl->program, "shellWaveParams");
+			glsl->fogModeLoc = GL_GetUniformLocation (&glsl->program, "FogMode");
+
+			GL_UseProgramFunc (glsl->program);
+			GL_Uniform1iFunc (glsl->texLoc, 0);
+			GL_Uniform1iFunc (glsl->fullbrightTexLoc, 1);
+			GL_Uniform1iFunc (glsl->lowerTexLoc, 2);
+			GL_Uniform1iFunc (glsl->upperTexLoc, ALIAS_UPPER_TEXTURE_UNIT_INDEX);
+			GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
+			GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
+			GL_Uniform1iFunc (glsl->shellTexLoc, ALIAS_UPPER_TEXTURE_UNIT_INDEX);
+			GL_Uniform1iFunc (glsl->shellModeLoc, 0);
+			GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
+			GL_Uniform1fFunc (glsl->shellTimeLoc, 0.0f);
+			GL_Uniform4fFunc (glsl->shellWaveParamsLoc, 0.1f, 4.0f, 0.0f, 0.0f);
 			GL_UseProgramFunc (0);
 		}
 	}
@@ -3158,12 +3258,449 @@ void R_SetupAliasLighting (entity_t	*e)
 	lightcolor[2] *= e->netstate.colormod[2] / 32.0;
 }
 
+//============================================================================
+// Portable alias model instancing
+//============================================================================
+
+typedef struct
+{
+	float matrix[16];
+	float light[4];
+	float shade_blend[4];
+} alias_inst_data_t;
+
+typedef struct
+{
+	entity_t *ent;
+	qmodel_t *model;
+	lerpdata_t lerp;
+	vec3_t scale;
+	vec3_t scale_origin;
+	struct skintextures_s tex;
+	int skin;
+} alias_inst_rec_t;
+
+typedef struct
+{
+	int first;
+	int count;
+	int recindex;
+} alias_inst_run_t;
+
+static alias_inst_rec_t r_alias_inst_recs[MAX_ALIAS_INSTANCES];
+static alias_inst_data_t r_alias_inst_data[MAX_ALIAS_INSTANCES];
+static int r_alias_inst_order[MAX_ALIAS_INSTANCES];
+static int r_alias_inst_draw_order[MAX_ALIAS_INSTANCES];
+static alias_inst_run_t r_alias_inst_runs[MAX_ALIAS_INSTANCES];
+static GLuint r_alias_inst_vbos[3];
+static unsigned int r_alias_inst_ring;
+static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared);
+
+static qboolean R_AliasInst_SpecialModel (const char *name)
+{
+	static const char *const excluded[] = {
+		"progs/eyes.mdl", "progs/flag.mdl", "progs/flag2.mdl",
+		"progs/flag3.mdl", "progs/ctfmodel.mdl", "progs/quaddama.mdl",
+		"progs/invulner.mdl", "progs/invisibl.mdl", "progs/player.mdl",
+		"progs/bolt.mdl", "progs/bolt1.mdl", "progs/bolt2.mdl",
+		"progs/bolt3.mdl"
+	};
+	int i;
+
+	for (i = 0; i < countof(excluded); ++i)
+		if (!strcmp(name, excluded[i]))
+			return true;
+	return false;
+}
+
+qboolean R_AliasInst_Eligible (entity_t *e)
+{
+	qboolean eligible = true;
+
+	if (!gl_alias_instancing.value || !r_alias_inst_glsl.program ||
+		!gl_bmodel_instancing_able || r_drawflat_cheatsafe ||
+		r_fullbright_cheatsafe || r_lightmap_cheatsafe)
+	{
+		eligible = false;
+	}
+	else if (!e || !e->model || e->model->type != mod_alias || e->model->needload)
+	{
+		eligible = false;
+	}
+	else if (!e->model->meshvbo || !e->model->meshindexesvbo)
+	{
+		eligible = false;
+	}
+	else if (e == &cl.viewent || (e->eflags & EFLAGS_VIEWMODEL))
+	{
+		eligible = false;
+	}
+	else if (ENTALPHA_DECODE(e->alpha) != 1.0f)
+	{
+		eligible = false;
+	}
+	else if (e->effects & ~EF_NOSHADOW)
+	{
+		eligible = false;
+	}
+	else if (e->eflags & EFLAGS_COLOURMAPPED)
+	{
+		eligible = false;
+	}
+	else if (e->netstate.colormap != 0 || e->netstate.scale != ENTSCALE_DEFAULT ||
+		e->netstate.tagentity)
+	{
+		eligible = false;
+	}
+	else if (e->netstate.glowmod[0] != 32 || e->netstate.glowmod[1] != 32 ||
+		e->netstate.glowmod[2] != 32)
+	{
+		eligible = false;
+	}
+	else if (r_outline.value > 0.0f)
+	{
+		eligible = false;
+	}
+	else if (R_AliasInst_SpecialModel(e->model->name))
+	{
+		eligible = false;
+	}
+
+	return eligible;
+}
+
+static int R_CompareAliasInstances (const void *lhs, const void *rhs)
+{
+	const alias_inst_rec_t *a = &r_alias_inst_recs[*(const int *)lhs];
+	const alias_inst_rec_t *b = &r_alias_inst_recs[*(const int *)rhs];
+#define CMPPTR(field) do { uintptr_t av = (uintptr_t)(a->field); uintptr_t bv = (uintptr_t)(b->field); if (av != bv) return av < bv ? -1 : 1; } while (0)
+	CMPPTR(model);
+	CMPPTR(tex.base);
+	CMPPTR(tex.luma);
+#undef CMPPTR
+	if (a->skin != b->skin)
+		return a->skin < b->skin ? -1 : 1;
+	if (a->lerp.pose1 != b->lerp.pose1)
+		return a->lerp.pose1 < b->lerp.pose1 ? -1 : 1;
+	if (a->lerp.pose2 != b->lerp.pose2)
+		return a->lerp.pose2 < b->lerp.pose2 ? -1 : 1;
+	return (uintptr_t)a->ent < (uintptr_t)b->ent ? -1 :
+		((uintptr_t)a->ent > (uintptr_t)b->ent ? 1 : 0);
+}
+
+static qboolean R_AliasInst_SameBatch (const alias_inst_rec_t *a,
+	const alias_inst_rec_t *b)
+{
+	return a->model == b->model && a->tex.base == b->tex.base &&
+		a->tex.luma == b->tex.luma && a->skin == b->skin &&
+		a->lerp.pose1 == b->lerp.pose1 && a->lerp.pose2 == b->lerp.pose2;
+}
+
+static void R_AliasInst_BuildMatrix (const alias_inst_rec_t *rec, float *m)
+{
+	vec3_t forward, right, up, angle;
+
+	VectorCopy (rec->lerp.angles, angle);
+	angle[PITCH] = -angle[PITCH];
+	AngleVectors (angle, forward, right, up);
+
+	m[0] = forward[0] * rec->scale[0];
+	m[1] = forward[1] * rec->scale[0];
+	m[2] = forward[2] * rec->scale[0];
+	m[3] = 0.0f;
+	m[4] = -right[0] * rec->scale[1];
+	m[5] = -right[1] * rec->scale[1];
+	m[6] = -right[2] * rec->scale[1];
+	m[7] = 0.0f;
+	m[8] = up[0] * rec->scale[2];
+	m[9] = up[1] * rec->scale[2];
+	m[10] = up[2] * rec->scale[2];
+	m[11] = 0.0f;
+	m[12] = rec->lerp.origin[0] + rec->scale_origin[0] * forward[0] -
+		rec->scale_origin[1] * right[0] + rec->scale_origin[2] * up[0];
+	m[13] = rec->lerp.origin[1] + rec->scale_origin[0] * forward[1] -
+		rec->scale_origin[1] * right[1] + rec->scale_origin[2] * up[1];
+	m[14] = rec->lerp.origin[2] + rec->scale_origin[0] * forward[2] -
+		rec->scale_origin[1] * right[2] + rec->scale_origin[2] * up[2];
+	m[15] = 1.0f;
+}
+
+enum
+{
+	ALIAS_INST_PREP_FALLBACK,
+	ALIAS_INST_PREP_CULLED,
+	ALIAS_INST_PREP_OK
+};
+
+static int R_AliasInst_Prepare (entity_t *e, alias_inst_rec_t *rec)
+{
+	aliashdr_t *hdr = (aliashdr_t *)Mod_Extradata (e->model);
+	int anim = (int)(cl.time * 10) & 3;
+	int skin;
+
+	if (!hdr || hdr->poseverttype != PV_QUAKE1 || hdr->nextsurface ||
+		hdr->numbones || hdr->numindexes <= 0 || hdr->numverts_vbo <= 0)
+	{
+		return ALIAS_INST_PREP_FALLBACK;
+	}
+
+	memset (rec, 0, sizeof(*rec));
+	rec->ent = e;
+	rec->model = e->model;
+	VectorCopy (hdr->scale, rec->scale);
+	VectorCopy (hdr->scale_origin, rec->scale_origin);
+	R_SetupAliasFrame (hdr, e, &rec->lerp);
+	R_SetupEntityTransform (e, &rec->lerp);
+	if (R_CullModelForEntityTransform(e, rec->lerp.origin, rec->lerp.angles))
+		return ALIAS_INST_PREP_CULLED;
+	if (rec->lerp.pose1 < 0 || rec->lerp.pose2 < 0 ||
+		rec->lerp.pose1 >= hdr->nummorphposes || rec->lerp.pose2 >= hdr->nummorphposes)
+		return ALIAS_INST_PREP_FALLBACK;
+
+	skin = e->skinnum;
+	if (skin < 0 || skin >= hdr->numskins)
+		skin = 0;
+	rec->skin = skin;
+	if (hdr->numskins <= 0)
+		rec->tex.base = rec->tex.luma = rec->tex.lower = rec->tex.upper = NULL;
+	else
+		rec->tex = hdr->textures[skin][anim];
+	if (!gl_fullbrights.value)
+		rec->tex.luma = NULL;
+	if (rec->tex.lower || rec->tex.upper)
+	{
+		return ALIAS_INST_PREP_FALLBACK;
+	}
+
+	return ALIAS_INST_PREP_OK;
+}
+
+static void R_AliasInst_DrawRun (const alias_inst_rec_t *rec, int first,
+	int count)
+{
+	const aliasglsl_t *glsl = &r_alias_inst_glsl;
+	aliashdr_t *hdr = (aliashdr_t *)Mod_Extradata (rec->model);
+	GLfloat tints[3][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {1, 1, 1, 1}};
+	size_t base = (size_t)first * sizeof(alias_inst_data_t);
+	int attrib;
+
+	if (!hdr)
+		return;
+
+	currententity = rec->ent;
+	GL_DisableMultitexture ();
+	GL_BindBuffer (GL_ARRAY_BUFFER, rec->model->meshvbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, rec->model->meshindexesvbo);
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose1VertexAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose2VertexAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose1NormalAttrIndex);
+	GL_EnableVertexAttribArrayFunc (pose2NormalAttrIndex);
+	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0,
+		rec->model->meshvboptr + hdr->vbostofs);
+	GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE,
+		sizeof(meshxyz_mdl_t), GLARB_GetXYZOffset_MDL(hdr, rec->lerp.pose1));
+	GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE,
+		sizeof(meshxyz_mdl_t), GLARB_GetXYZOffset_MDL(hdr, rec->lerp.pose2));
+	GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE,
+		sizeof(meshxyz_mdl_t), GLARB_GetNormalOffset_MDL(hdr, rec->lerp.pose1));
+	GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE,
+		sizeof(meshxyz_mdl_t), GLARB_GetNormalOffset_MDL(hdr, rec->lerp.pose2));
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, r_alias_inst_vbos[(r_alias_inst_ring - 1) % countof(r_alias_inst_vbos)]);
+	for (attrib = aliasInstMat0AttrIndex; attrib <= aliasInstMat3AttrIndex; ++attrib)
+	{
+		GL_EnableVertexAttribArrayFunc (attrib);
+		GL_VertexAttribPointerFunc (attrib, 4, GL_FLOAT, GL_FALSE,
+			sizeof(alias_inst_data_t), (void *)(base +
+			(size_t)(attrib - aliasInstMat0AttrIndex) * 4 * sizeof(float)));
+		GL_VertexAttribDivisorFunc (attrib, 1);
+	}
+	GL_EnableVertexAttribArrayFunc (aliasInstLightAttrIndex);
+	GL_VertexAttribPointerFunc (aliasInstLightAttrIndex, 4, GL_FLOAT, GL_FALSE,
+		sizeof(alias_inst_data_t), (void *)(base + offsetof(alias_inst_data_t, light)));
+	GL_VertexAttribDivisorFunc (aliasInstLightAttrIndex, 1);
+	GL_EnableVertexAttribArrayFunc (aliasInstShadeBlendAttrIndex);
+	GL_VertexAttribPointerFunc (aliasInstShadeBlendAttrIndex, 4, GL_FLOAT, GL_FALSE,
+		sizeof(alias_inst_data_t), (void *)(base + offsetof(alias_inst_data_t, shade_blend)));
+	GL_VertexAttribDivisorFunc (aliasInstShadeBlendAttrIndex, 1);
+
+	GL_SelectTexture (GL_TEXTURE0);
+	GL_Bind (rec->tex.base);
+	if (rec->tex.luma)
+	{
+		GL_SelectTexture (GL_TEXTURE1);
+		GL_Bind (rec->tex.luma);
+	}
+	else
+		memset (tints[2], 0, sizeof(tints[2]));
+	GL_SelectTexture (GL_TEXTURE0);
+
+	GL_Uniform1iFunc (glsl->useFullbrightTexLoc, rec->tex.luma ? 1 : 0);
+	GL_Uniform1fFunc (glsl->useOverbrightLoc, gl_overbright_models.value ? 1.0f : 0.0f);
+	GL_Uniform1iFunc (glsl->useAlphaTestLoc, (rec->model->flags & MF_HOLEY) ? 1 : 0);
+	GL_Uniform4fvFunc (glsl->colorTintLoc, countof(tints), tints[0]);
+	GL_Uniform1iFunc (glsl->fogModeLoc, Fog_GetMode());
+	GL_Uniform1fFunc (glsl->clTimeLoc, cl.time);
+	GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
+	GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
+	GL_Uniform1iFunc (glsl->shellModeLoc, 0);
+	GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
+
+	GL_DrawElementsInstancedFunc (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT,
+		rec->model->meshindexesvboptr + hdr->eboofs, count);
+	rs_aliaspolys += hdr->numtris * count;
+	rs_aliaspasses += hdr->numtris * count;
+}
+
+void R_DrawAliasModelsInstanced (entity_t **ents, int count)
+{
+	entity_t *saved = currententity;
+	int i, nrec = 0, ndata = 0, nruns = 0;
+	GLuint uploadvbo;
+
+	if (!ents || count <= 0)
+		return;
+	if (count > MAX_ALIAS_INSTANCES)
+		count = MAX_ALIAS_INSTANCES;
+
+	for (i = 0; i < count; ++i)
+	{
+		int result;
+
+		currententity = ents[i];
+		result = R_AliasInst_Prepare(ents[i], &r_alias_inst_recs[nrec]);
+		if (result == ALIAS_INST_PREP_CULLED)
+		{
+			continue;
+		}
+		if (result == ALIAS_INST_PREP_FALLBACK)
+		{
+			R_DrawAliasModel(ents[i]);
+			continue;
+		}
+		r_alias_inst_order[nrec] = nrec;
+		nrec++;
+	}
+
+	qsort (r_alias_inst_order, nrec, sizeof(r_alias_inst_order[0]),
+		R_CompareAliasInstances);
+	for (i = 0; i < nrec; )
+	{
+		int j, k;
+		alias_inst_rec_t *first = &r_alias_inst_recs[r_alias_inst_order[i]];
+
+		for (j = i + 1; j < nrec; ++j)
+			if (!R_AliasInst_SameBatch(first,
+				&r_alias_inst_recs[r_alias_inst_order[j]]))
+				break;
+		if (j - i < 2)
+		{
+			R_DrawAliasModelPrepared(first->ent, &first->lerp);
+		}
+		else
+		{
+			alias_inst_run_t *run = &r_alias_inst_runs[nruns++];
+			run->first = ndata;
+			run->count = j - i;
+			run->recindex = r_alias_inst_order[i];
+			for (k = i; k < j; ++k)
+			{
+				int recindex = r_alias_inst_order[k];
+				alias_inst_rec_t *rec = &r_alias_inst_recs[recindex];
+				alias_inst_data_t *data = &r_alias_inst_data[ndata];
+
+				currententity = rec->ent;
+				overbright = gl_overbright_models.value;
+				R_SetupAliasLighting (rec->ent);
+				R_AliasInst_BuildMatrix (rec, data->matrix);
+				data->light[0] = lightcolor[0];
+				data->light[1] = lightcolor[1];
+				data->light[2] = lightcolor[2];
+				data->light[3] = 1.0f;
+				data->shade_blend[0] = shadevector[0];
+				data->shade_blend[1] = shadevector[1];
+				data->shade_blend[2] = shadevector[2];
+				data->shade_blend[3] = rec->lerp.pose1 == rec->lerp.pose2 ?
+					0.0f : rec->lerp.blend;
+				r_alias_inst_draw_order[ndata++] = recindex;
+			}
+		}
+		i = j;
+	}
+
+	if (!ndata)
+	{
+		currententity = saved;
+		return;
+	}
+	if (!r_alias_inst_vbos[0])
+	{
+		GL_GenBuffersFunc (countof(r_alias_inst_vbos), r_alias_inst_vbos);
+		for (i = 0; i < countof(r_alias_inst_vbos); ++i)
+		{
+			GL_BindBuffer (GL_ARRAY_BUFFER, r_alias_inst_vbos[i]);
+			GL_BufferDataFunc (GL_ARRAY_BUFFER,
+				(GLsizeiptr)(MAX_ALIAS_INSTANCES * sizeof(alias_inst_data_t)),
+				NULL, GL_STREAM_DRAW);
+		}
+		GL_ClearBufferBindings ();
+	}
+	uploadvbo = r_alias_inst_vbos[r_alias_inst_ring % countof(r_alias_inst_vbos)];
+	r_alias_inst_ring++;
+	if (!uploadvbo)
+	{
+		for (i = 0; i < ndata; ++i)
+		{
+			alias_inst_rec_t *rec = &r_alias_inst_recs[r_alias_inst_draw_order[i]];
+			R_DrawAliasModelPrepared(rec->ent, &rec->lerp);
+		}
+		currententity = saved;
+		return;
+	}
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, uploadvbo);
+	GL_BufferSubDataFunc (GL_ARRAY_BUFFER, 0,
+		(GLsizeiptr)((size_t)ndata * sizeof(alias_inst_data_t)),
+		r_alias_inst_data);
+	GL_UseProgramFunc (r_alias_inst_glsl.program);
+	glDepthMask (GL_TRUE);
+	glDisable (GL_BLEND);
+	glDisable (GL_ALPHA_TEST);
+	if (gl_smoothmodels.value && !r_drawflat_cheatsafe)
+		glShadeModel (GL_SMOOTH);
+	for (i = 0; i < nruns; ++i)
+		R_AliasInst_DrawRun (&r_alias_inst_recs[r_alias_inst_runs[i].recindex],
+			r_alias_inst_runs[i].first, r_alias_inst_runs[i].count);
+	glShadeModel (GL_FLAT);
+
+	for (i = aliasInstMat0AttrIndex; i <= aliasInstShadeBlendAttrIndex; ++i)
+		GL_VertexAttribDivisorFunc (i, 0);
+	for (i = pose1VertexAttrIndex; i <= aliasInstShadeBlendAttrIndex; ++i)
+		GL_DisableVertexAttribArrayFunc (i);
+	GL_UseProgramFunc (0);
+	GL_SelectTexture (GL_TEXTURE0);
+	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+	glColor3f (1, 1, 1);
+	currententity = saved;
+}
+
+void R_DeleteAliasModelInstancingBuffers (void)
+{
+	if (r_alias_inst_vbos[0] && GL_DeleteBuffersFunc)
+		GL_DeleteBuffersFunc (countof(r_alias_inst_vbos), r_alias_inst_vbos);
+	memset (r_alias_inst_vbos, 0, sizeof(r_alias_inst_vbos));
+	r_alias_inst_ring = 0;
+	GL_ClearBufferBindings ();
+}
+
 /*
 =================
 R_DrawAliasModel -- johnfitz -- almost completely rewritten
 =================
 */
-void R_DrawAliasModel (entity_t *e)
+static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
 {
 	aliasglsl_t *glsl;
 	aliashdr_t	*paliashdr;
@@ -3179,8 +3716,13 @@ void R_DrawAliasModel (entity_t *e)
 	// setup pose/lerp data -- do it first so we don't miss updates due to culling
 	//
 	paliashdr = (aliashdr_t *)Mod_Extradata (e->model);
-	R_SetupAliasFrame (paliashdr, e, &lerpdata);
-	R_SetupEntityTransform (e, &lerpdata);
+	if (prepared)
+		lerpdata = *prepared;
+	else
+	{
+		R_SetupAliasFrame (paliashdr, e, &lerpdata);
+		R_SetupEntityTransform (e, &lerpdata);
+	}
 
 	glsl = &r_alias_glsl[(paliashdr->poseverttype==PV_IQM&&lerpdata.bonestate)?ALIAS_GLSL_SKELETAL:ALIAS_GLSL_BASIC];
 
@@ -3206,7 +3748,7 @@ void R_DrawAliasModel (entity_t *e)
 		//
 		// cull it
 		//
-		if (R_CullModelForEntityTransform(e, lerpdata.origin, lerpdata.angles))
+		if (!prepared && R_CullModelForEntityTransform(e, lerpdata.origin, lerpdata.angles))
 			return;
 
 		//
@@ -3681,6 +4223,11 @@ cleanup:
 	if (e->effects & EF_ADDITIVE)
 		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glPopMatrix ();
+}
+
+void R_DrawAliasModel (entity_t *e)
+{
+	R_DrawAliasModelPrepared (e, NULL);
 }
 
 /*

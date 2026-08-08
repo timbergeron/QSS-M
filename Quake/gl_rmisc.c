@@ -668,6 +668,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_bmodelcache);	//tb -- cached EBO path for large moved opaque bmodels
 	Cvar_RegisterVariable (&r_shadows_buffered);	//tb -- indexed brush shadows
 	Cvar_RegisterVariable (&gl_bmodel_instancing);	//tb -- instanced draw path for repeated opaque bmodels
+	Cvar_RegisterVariable (&gl_alias_instancing);	//tb -- portable instanced draw path for repeated opaque alias models
 	Cvar_RegisterVariable (&r_lightmap_format);	//instead of qs's read-only r_lightmapwide cvar. can also select e5bgr9
 	Cvar_SetCompletion (&r_lightmap_format, &R_Lightmap_Format_Completion_f); // woods #iwtabcomplete
 	//spike

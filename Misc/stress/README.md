@@ -8,50 +8,29 @@ every registered console command and cvar.
 
 ## Requirements
 
-* a QSS-M Debug build containing the `-stress` hooks (`Host_StressInit` in
-  `Misc/stress/host_stress.c`)
+* a QSS-M build with the optional stress hooks re-added (`Host_StressInit` in
+  `Misc/stress/host_stress.c`); production targets currently omit them
 * `pak0.pak` (+ `pak1.pak` for the registered maps); found automatically in
   `~/Desktop/qssm/id1/paks`, or pass `--paks <dir>`
 * loose base assets such as `gfx.wad`; the harness auto-detects
   `~/Desktop/qssm/id1/paktest`, or pass `--loose-root <game-root>`
 
-## Build the stress-enabled macOS binary
+## macOS harness status
 
-The stress hooks are wired into the `QSS-M` Xcode target.  `Debug` defines
-`QSSM_STRESS=1` and compiles `Misc/stress/host_stress.c`; `Release` does not
-define it and keeps the normal player command surface.  (On Windows the switch
-is the `QSSMStress` MSBuild property instead -- see below.)  Build the app
-bundle, then verify the hook strings before starting a campaign:
-
-```bash
-xcodebuild -project macOS/QuakeSpasm.xcodeproj -target QSS-M \
-  -configuration Debug CODE_SIGNING_ALLOWED=NO build
-
-export QSSM_BIN="$PWD/macOS/build/Debug/QSS-M.app/Contents/MacOS/QSS-M"
-strings "$QSSM_BIN" | grep -E 'STRESS_READY|_stress_status'
-```
-
-If the build output is in Xcode DerivedData instead of `macOS/build`, locate
-the bundle executable and set `QSSM_BIN` explicitly:
-
-```bash
-QSSM_BIN="$(find "$HOME/Library/Developer/Xcode/DerivedData" \
-  -path '*/Build/Products/Debug/QSS-M.app/Contents/MacOS/QSS-M' \
-  -type f -print -exec stat -f '%m %N' {} \; | sort -nr | head -1 | cut -d' ' -f2-)"
-test -n "$QSSM_BIN" && strings "$QSSM_BIN" | grep -E 'STRESS_READY|_stress_status'
-```
+The stock Xcode and Makefile targets do not currently define `QSSM_STRESS` or
+compile `Misc/stress/host_stress.c`.  Normal macOS builds therefore keep their
+existing command surface, but cannot run the in-process stress channel.  A
+dedicated macOS stress target must add that source file and define before using
+this harness; verify it with `strings QSS-M | grep -E
+'STRESS_READY|_stress_status'`.
 
 ## Run a live Windows client probe
 
-The Windows Visual Studio project takes `/p:QSSMStress=1` to compile
-`Misc/stress/host_stress.c` with the `-stress` command channel.  It is a
-property rather than a per-configuration define, so it works with `Release`
-too -- which is what you want for any performance work, since an unoptimised
-`Debug` build tells you nothing useful about frame time:
-
-```powershell
-& "$env:ProgramFiles\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" Windows/VisualStudio/quakespasm-sdl2.vcxproj -p:Configuration=Release -p:Platform=x64 -p:QSSMStress=1 -p:OutDir=".codex-build\prof-out\" -p:IntDir=".codex-build\prof-int\"
-```
+The production Windows Visual Studio project currently does not compile the
+stress hooks. To use this probe again, re-add `Misc/stress/host_stress.c` and
+the `QSSM_STRESS` define to a dedicated local stress target. Keep that target
+separate from production builds; an unoptimised `Debug` build tells you
+nothing useful about frame time.
 
 Then drive the real client through map loading, exact `setpos` commands, and
 frame profiling:
@@ -69,18 +48,46 @@ Unlike command-line `+setpos`, negative coordinates are delivered after
 startup through the append-only stress file and are not truncated by the
 engine's command-line parser.
 
+### Curated alias-instancing demos
+
+`demo_alias_probe.py` defaults to the `best-data` suite in
+`alias_instancing_demos.json`. These three primary fixtures produced the best
+fair A/B results during the alias-instancing work:
+
+| Tier | Demo | Map | Observed gain |
+| --- | --- | --- | ---: |
+| primary | `bravado_01-21-2023-154438` | bravado | 8.675% |
+| primary | `ctf3m1-12-19-2021-707pm` | ctf3m1 | 4.033% |
+| primary | `pound_12-13-2022-201443` | pound | 1.640% |
+| secondary | `ctf3m9-11-4-2021-624pm` | ctf3m9 | 1.051% |
+| secondary | `kaboom-12-3-2021-745pm` | kaboom | 1.266% |
+
+The gains are historical measurements from fair Windows A/B runs, not
+performance guarantees. Run the primary regression set with:
+
+```powershell
+python Misc/stress/demo_alias_probe.py `
+  --bin path/to/stress-enabled/quakespasm-sdl2.exe `
+  --basedir "$env:USERPROFILE/Desktop/qssm" `
+  --output Misc/stress/tmp/alias-best-data
+```
+
+Use `--suite extended` to include the two lower-signal valid fixtures
+(`ctf3m9` and `kaboom`), or use repeated `--demo name` arguments to run a
+specific fixture.
+
 ### Where the harness attaches to the engine
 
-Everything below is inert without `QSSM_STRESS`; the release player build
-contains none of it.
+The following table documents the archived harness boundary. The production
+player build contains none of it.
 
 | Site | File | What it does |
 | --- | --- | --- |
 | `Host_StressInit ()` | `host.c`, end of `Host_Init` | Parses `-stress <path>`, registers the `_stress_*` commands, prints `STRESS_READY`. |
 | `Host_StressPoll ()` | `host.c`, in `_Host_Frame` before `Cbuf_Execute` | Drains the script file (throttled to 50Hz) and samples the frame-time profiler. Being on the host thread is what makes key/menu/console commands safe to execute. |
-| `QSSMStress` property | `quakespasm-sdl2.vcxproj` | An `ItemDefinitionGroup` conditioned on the property adds `QSSM_STRESS` to `PreprocessorDefinitions`, so it composes with any configuration rather than being baked into `Debug`. |
-| `host_stress.c` | `quakespasm-sdl2.vcxproj` (+`.filters`) | Compiled unconditionally; the file is `#ifdef QSSM_STRESS` internally and reduces to no-op lifecycle stubs otherwise. |
-| `NET_Address_RunSelfTests ()` | `net_main.c`, `NET_Init` | Skipped under `QSSM_STRESS`. It asserts on Windows and opens a modal SDL dialog that wedges an unattended run. **This masks a real failure** -- normal `Debug` builds still run it, and it deserves its own investigation. |
+| `QSSM_STRESS` | Dedicated local stress target | Must be defined explicitly when re-enabling the archived command channel. |
+| `host_stress.c` | Dedicated local stress target | Re-add manually for a future harness build; it is not part of the production project. |
+| `NET_Address_RunSelfTests ()` | `net_main.c`, `NET_Init` | Runs in all normal non-`NDEBUG` builds. |
 
 `Host_StressPumpModal`, `Host_StressNoteParse` and `Host_StressCoverage` are
 defined but **not currently called from the engine** on this platform.  They
@@ -89,24 +96,22 @@ coverage works in a Windows run until those call sites are added.
 
 ### Instrumentation counters
 
-**Two separate defines.**  `QSSM_STRESS` gives you the command channel and the
-frame-time profiler, and needs nothing from the renderer -- `host_stress.c`
-compiles against a stock tree.  `QSSM_RENDERSTATS` additionally enables the
+**Archived instrumentation.**  `QSSM_STRESS` gave the command channel and the
+frame-time profiler, while `QSSM_RENDERSTATS` additionally enabled the
 `STRESS_PROF_CACHE` line, and requires the renderer counter patch to be applied
 (the `rs_*` globals and their `RSC_STAT`/`RS_STAT` call sites).  That patch is
 deliberately not part of the engine history: it is applied when there is
 something to measure and dropped again afterwards.
 
-So a stock checkout gives you:
+When the archived hooks are re-enabled, the stress target gives you:
 
 ```
 /p:QSSMStress=1                            -> STRESS_PROF (frame percentiles)
 /p:QSSMStress=1 + counter patch + define   -> STRESS_PROF and STRESS_PROF_CACHE
 ```
 
-The `rs_*` globals are declared in `glquake.h` inside a single
-`#ifdef QSSM_STRESS` block, and every update goes through a macro so nothing
-survives preprocessing in a player build:
+The archived renderer-counter patch declares the `rs_*` globals behind its
+stress define, and every update goes through a macro:
 
 ```c
 RSC_STAT (rs_scenecache_builds++);          /* scene cache */
@@ -280,38 +285,12 @@ worker-local port, and retries before reporting a boot failure.
 The results directory also has an advisory OS lock; a second campaign using the
 same `--results` path exits before launching an engine.
 
-### macOS quick start
+### macOS harness use
 
-Build a stress-enabled Debug app, then point the harness at the executable
-inside the app bundle. Do not point `--bin` at an Xcode intermediate binary: it
+After creating a dedicated stress-enabled target as described above, point
+`--bin` at the executable inside its app bundle.  An Xcode intermediate binary
 does not carry the app's embedded SDL2 framework and will fail at boot with a
 `dyld` `Library not loaded: @rpath/SDL2.framework` error.
-
-From the repository root:
-
-```bash
-xcodebuild -project macOS/QuakeSpasm.xcodeproj -target QSS-M \
-  -configuration Debug CODE_SIGNING_ALLOWED=NO build
-
-export QSSM_BIN="$PWD/macOS/build/Debug/QSS-M.app/Contents/MacOS/QSS-M"
-export QSSM_PAKS="$HOME/Desktop/qssm/id1/paks"
-
-python3 Misc/stress/qssm_stress.py --bin "$QSSM_BIN" --paks "$QSSM_PAKS" \
-  --stress-level deep --minutes 5 --nosound
-```
-
-For five isolated workers:
-
-```bash
-python3 Misc/stress/qssm_stress.py --bin "$QSSM_BIN" --paks "$QSSM_PAKS" \
-  --jobs 5 --stress-level deep --minutes 5 --nosound \
-  --results Misc/stress/tmp/results-5x5
-```
-
-The normal app bundle can also be used if it is already built and signed. The
-`CODE_SIGNING_ALLOWED=NO` form is useful for local stress builds when the
-optional Dock Tile plugin prevents the final ad-hoc signing step; the app
-executable and embedded SDL2 framework are still produced for the harness.
 
 ## Usage
 

@@ -1356,6 +1356,7 @@ static void VID_Restart (void)
 	R_DeleteShaders ();
 	GL_DeleteBModelVertexBuffer ();
 	R_DeleteBrushModelInstancingBuffers ();
+	R_DeleteAliasModelInstancingBuffers ();
 	GLMesh_DeleteVertexBuffers ();
 	FXAA_Shutdown (); // woods #fxaa
 
@@ -2200,6 +2201,7 @@ void	VID_Shutdown (void)
 		VID_Gamma_Shutdown (); //johnfitz
 		FXAA_Shutdown(); // woods #fxaa
 		R_DeleteBrushModelInstancingBuffers ();
+		R_DeleteAliasModelInstancingBuffers ();
 		// Free custom cursor before tearing down video subsystem
 		if (custom_cursor)
 		{

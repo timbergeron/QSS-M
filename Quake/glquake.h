@@ -516,6 +516,11 @@ void R_UpdateWarpTextures (void);
 
 void R_DrawWorld (void);
 void R_DrawAliasModel (entity_t *e);
+#define MAX_ALIAS_INSTANCES 1024
+qboolean R_AliasInst_Eligible (entity_t *e);
+void R_DrawAliasModelsInstanced (entity_t **ents, int count);
+void R_DeleteAliasModelInstancingBuffers (void);
+extern cvar_t gl_alias_instancing;
 void R_BeginDeferredAliasOutlines (void);
 void R_DrawDeferredAliasOutlines (void);
 void R_DrawBrushModel (entity_t *e);

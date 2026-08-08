@@ -1615,9 +1615,11 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 	int		i;
 	static sortable_entity_t sorted_ents[MAX_EDICTS];
 	static entity_t *brush_ents[MAX_EDICTS];
+	static entity_t *alias_ents[MAX_ALIAS_INSTANCES];
 	entity_t *viewmodel_ent = NULL;
 	int num_sorted = 0;
 	int num_brush = 0;
+	int num_alias = 0;
 	int count = cl_numvisedicts;
 
 	//johnfitz -- optimized zero-check
@@ -1628,7 +1630,9 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 		return;
 
 	if (!alphapass)
+	{
 		R_BeginDeferredAliasOutlines();
+	}
 
 	//johnfitz -- sprites are not a special case
 	
@@ -1711,12 +1715,27 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 				brush_ents[num_brush++] = currententity;
 				continue;
 			}
+			if (!alphapass && gl_alias_instancing.value &&
+				currententity->model->type == mod_alias &&
+				num_alias < MAX_ALIAS_INSTANCES)
+			{
+				R_CheckFlagSwap(currententity);
+				if (R_AliasInst_Eligible(currententity))
+				{
+					alias_ents[num_alias++] = currententity;
+					continue;
+				}
+				R_DrawAliasModel(currententity);
+				continue;
+			}
 
 			R_DrawEntityModel(currententity);
 		}
 
 		if (!alphapass && num_brush > 0)
 			R_DrawBrushModelsInstanced(brush_ents, num_brush);
+		if (!alphapass && num_alias > 0)
+			R_DrawAliasModelsInstanced(alias_ents, num_alias);
 	}
 	else
 	{
@@ -1744,12 +1763,27 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 				brush_ents[num_brush++] = currententity;
 				continue;
 			}
+			if (!alphapass && gl_alias_instancing.value &&
+				currententity->model->type == mod_alias &&
+				num_alias < MAX_ALIAS_INSTANCES)
+			{
+				R_CheckFlagSwap(currententity);
+				if (R_AliasInst_Eligible(currententity))
+				{
+					alias_ents[num_alias++] = currententity;
+					continue;
+				}
+				R_DrawAliasModel(currententity);
+				continue;
+			}
 
 			R_DrawEntityModel(currententity);
 		}
 
 		if (!alphapass && num_brush > 0)
 			R_DrawBrushModelsInstanced(brush_ents, num_brush);
+		if (!alphapass && num_alias > 0)
+			R_DrawAliasModelsInstanced(alias_ents, num_alias);
 	}
 
 	if (!alphapass)

@@ -1,0 +1,39 @@
+{
+  "demos": [
+    {
+      "demo": "bravado_01-21-2023-154438",
+      "map": "bravado",
+      "tier": "primary",
+      "observed_gain_percent": 8.675,
+      "note": "strongest repeatable alias-instancing signal"
+    },
+    {
+      "demo": "ctf3m1-12-19-2021-707pm",
+      "map": "ctf3m1",
+      "tier": "primary",
+      "observed_gain_percent": 4.033,
+      "note": "strong secondary signal with active player/model traffic"
+    },
+    {
+      "demo": "pound_12-13-2022-201443",
+      "map": "pound",
+      "tier": "primary",
+      "observed_gain_percent": 1.640,
+      "note": "smaller but repeatable positive result"
+    },
+    {
+      "demo": "ctf3m9-11-4-2021-624pm",
+      "map": "ctf3m9",
+      "tier": "secondary",
+      "observed_gain_percent": 1.051,
+      "note": "valid alternate fixture"
+    },
+    {
+      "demo": "kaboom-12-3-2021-745pm",
+      "map": "kaboom",
+      "tier": "secondary",
+      "observed_gain_percent": 1.266,
+      "note": "valid alternate fixture"
+    }
+  ]
+}

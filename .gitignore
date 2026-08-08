@@ -15,6 +15,7 @@ xcuserdata/
 out
 .vs
 # Build artifacts
+/.codex-build/
 *.o
 *.d
 /Quake/quakespasm

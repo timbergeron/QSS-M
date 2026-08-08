@@ -1,9 +1,9 @@
 /*
  * host_stress.c -- QSS-M stress-test command and script boundary.
  *
- * This module is compiled into the Debug QSS-M target with QSSM_STRESS.  The
- * release build gets no-op lifecycle functions, so the stress command surface
- * is not present in normal player binaries.
+ * This module is compiled only into stress-enabled targets with QSSM_STRESS.
+ * Normal player targets compile the guarded call sites out and do not include
+ * this translation unit.
  *
  * The Python harness appends commands to a per-process script.  The engine
  * polls that file on the main thread, queues ordinary console commands, and
