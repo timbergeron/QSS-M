@@ -27,9 +27,7 @@ DUMP_EXPECT = {
     'qscsextensions.qc':   {'drawfill': 323, 'drawpic': 322, 'drawsubpic': 328},
     'qsmenuextensions.qc': {'drawfill': 457, 'drawpic': 456, 'drawsubpic': 469,
                             'gettime': 67, 'registercvar': 42, 'findflags': 87,
-                            'tokenize': 58, 'buf_del': 441,
-                            'gettime_legacy': 519, 'drawsubpic_legacy': 369,
-                            'buf_del_legacy': 461},
+                            'tokenize': 58, 'buf_del': 441},
 }
 
 
@@ -94,6 +92,12 @@ def check_dump(binary, basedir, game):
     results.append(('dump/menu-default-filename',
                     os.path.exists(os.path.join(srcdir, 'qsmenuextensions.qc'))
                     and not os.path.exists(os.path.join(srcdir, 'qsextensions.qc'))))
+
+    # compatibility aliases stay bound at load but must not be advertised
+    for alias in ('gettime_legacy', 'drawsubpic_legacy', 'buf_del_legacy',
+                  'chr2str_menuqc', 'stringtokeynum_menuqc'):
+        results.append(('dump/%s-not-advertised' % alias,
+                        not re.search(r'\)\s*%s = #' % alias, mn_text)))
 
     # the signature fix that let the generated header compile at all
     cs = open(os.path.join(srcdir, 'qscsextensions.qc'), encoding='utf-8',

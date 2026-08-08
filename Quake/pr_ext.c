@@ -8977,7 +8977,7 @@ static struct
 	{"strstrofs",		PF_strstrofs,		PF_strstrofs,		221,	PF_strstrofs,221, D("float(string s1, string sub, optional float startidx)", "Returns the 0-based offset of sub within the s1 string, or -1 if sub is not in s1.\nIf startidx is set, this builtin will ignore matches before that 0-based offset.")},
 	{"str2chr",			PF_str2chr,			PF_str2chr,			222,	PF_str2chr,222, D("float(string str, float index)", "Retrieves the character value at offset 'index'.")},
 	{"chr2str",			PF_chr2str,			PF_chr2str,			223,	PF_chr2str,223, D("string(float chr, ...)", "The input floats are considered character values, and are concatenated.")},
-	{"chr2str_menuqc",	PF_NoSSQC,			PF_NoCSQC,			0,	PF_chr2str,78, "string(float chr, ...)"},	//fte/dp menuqc slot; #223 above is kept for existing qss bytecode
+	{"chr2str_menuqc",	PF_NoSSQC,			PF_NoCSQC,			0,	PF_chr2str,78, D("string(float chr, ...)", "alias. fte/dp menuqc slot for chr2str; both numbers reach the same builtin")},
 	{"strconv",			PF_strconv,			PF_strconv,			224,	PF_strconv,224, D("string(float ccase, float redalpha, float redchars, string str, ...)", "Converts quake chars in the input string amongst different representations.\nccase specifies the new case for letters.\n 0: not changed.\n 1: forced to lower case.\n 2: forced to upper case.\nredalpha and redchars switch between colour ranges.\n 0: no change.\n 1: Forced white.\n 2: Forced red.\n 3: Forced gold(low) (numbers only).\n 4: Forced gold (high) (numbers only).\n 5+6: Forced to white and red alternately.\nYou should not use this builtin in combination with UTF-8.")},
 	{"strpad",			PF_strpad,			PF_strpad,			225,	PF_strpad,225, D("string(float pad, string str1, ...)", "Pads the string with spaces, to ensure its a specific length (so long as a fixed-width font is used, anyway). If pad is negative, the spaces are added on the left. If positive the padding is on the right.")},	//will be moved
 	{"infoadd",			PF_infoadd,			PF_infoadd,			226,	PF_infoadd,226, D("string(infostring old, string key, string value)", "Returns a new tempstring infostring with the named value changed (or added if it was previously unspecified). Key and value may not contain the \\ character.")},
@@ -9090,7 +9090,7 @@ static struct
 	{"drawstring",		PF_NoSSQC,			PF_cl_drawstring,	326,	PF_cl_drawstring,467,		D("float(vector position, string text, vector size, vector rgb, float alpha, float drawflag)", "Draws a string, interpreting markup and recolouring as appropriate.")},// #326
 	{"stringwidth",		PF_NoSSQC,			PF_cl_stringwidth,	327,	PF_cl_stringwidth,468,		D("float(string text, float usecolours, vector fontsize='8 8')", "Calculates the width of the screen in virtual pixels. If usecolours is 1, markup that does not affect the string width will be ignored. Will always be decoded as UTF-8 if UTF-8 is globally enabled.\nIf the char size is not specified, '8 8 0' will be assumed.")},// EXT_CSQC_'DARKPLACES'
 	{"drawsubpic",		PF_NoSSQC,			PF_cl_drawsubpic,	328,	PF_cl_drawsubpic,469,		D("void(vector pos, vector sz, string pic, vector srcpos, vector srcsz, vector rgb, float alpha, optional float drawflag)", "Draws a rescaled subsection of an image to the screen.")},// #328 EXT_CSQC_'DARKPLACES'
-	{"drawsubpic_legacy",PF_NoSSQC,			PF_NoCSQC,			0,	PF_cl_drawsubpic,369, "void(vector pos, vector sz, string pic, vector srcpos, vector srcsz, vector rgb, float alpha, optional float drawflag)"},	//superseded qss menuqc slot, kept bound for existing bytecode
+	{"drawsubpic_legacy",PF_NoSSQC,			PF_NoCSQC,			0,	PF_cl_drawsubpic,369, D("void(vector pos, vector sz, string pic, vector srcpos, vector srcsz, vector rgb, float alpha, optional float drawflag)", "alias. superseded qss menuqc slot, kept bound for existing bytecode")},
 	{"drawrotpic",		PF_NoSSQC,			PF_cl_drawrotpic,	0,		PF_cl_drawrotpic,0,		D("void(vector pivot, vector mins, vector maxs, string pic, vector rgb, float alpha, float angle)", "Draws an image rotating at the pivot. To rotate in the center, use mins+maxs of half the size with mins negated. Angle is in degrees.")},
 	{"drawrotsubpic",	PF_NoSSQC,			PF_cl_drawrotsubpic,	0,		PF_cl_drawrotsubpic,0,	D("void(vector pivot, vector mins, vector maxs, string pic, vector txmin, vector txsize, vector rgb, vector alphaandangles)", "Draws a rotating subsection of an image. Positions follow drawrotpic, texture coordinates follow drawsubpic, and alphaandangles contains alpha, angle, and a draw flag that is currently ignored.")},
 	{"getstati",		PF_NoSSQC,			PF_cl_getstat_int,	330,	PF_NoMenu, D("#define getstati_punf(stnum) (float)(__variant)getstati(stnum)\nint(float stnum)", "Retrieves the numerical value of the given EV_INTEGER or EV_ENTITY stat. Use getstati_punf if you wish to type-pun a float stat as an int to avoid truncation issues with DP's network protocol.")},// (EXT_CSQC)
@@ -9107,7 +9107,7 @@ static struct
 	{"menu_print",		PF_NoSSQC,			PF_NoCSQC,			0,		PF_print,4,	D("void(string s, ...)", "Unconditionally print on the local system's console, even in ssqc (doesn't care about the value of the developer cvar).")},//(EXT_CSQC)
 	{"keynumtostring",	NULL,				PF_cl_keynumtostring,340,	PF_cl_keynumtostring,609,	D("string(float keynum)", "Returns a hunam-readable name for the given keycode, as a tempstring.")},// (EXT_CSQC)
 	{"stringtokeynum",	NULL,				PF_cl_stringtokeynum,341,	PF_cl_stringtokeynum,341,	D("float(string keyname)", "Looks up the key name in the same way that the bind command would, returning the keycode for that key.")},// (EXT_CSQC)
-	{"stringtokeynum_menuqc",NULL,			PF_NoCSQC,			0,	PF_cl_stringtokeynum,614, "float(string keyname)"},	//fte menuqc slot; #341 above is kept for existing qss bytecode
+	{"stringtokeynum_menuqc",NULL,			PF_NoCSQC,			0,	PF_cl_stringtokeynum,614, D("float(string keyname)", "alias. fte menuqc slot for stringtokeynum; both numbers reach the same builtin")},
 	{"getkeybind",		NULL,				PF_cl_getkeybind,	342,	PF_cl_getkeybind,342, D("string(float keynum, optional float bindmap)", "Returns the current binding for the given key (returning only the command executed when no modifiers are pressed).")},// (EXT_CSQC)
 	{"setcursormode",	PF_NoSSQC,			PF_cl_setcursormode,343,	PF_cl_setcursormode,343, D("void(float usecursor, optional string cursorimage, optional vector hotspot, optional float scale)", "Pass TRUE if you want the engine to release the mouse cursor (absolute input events + touchscreen mode). Pass FALSE if you want the engine to grab the cursor (relative input events + standard looking). If the image name is specified, the engine will use that image for a cursor (use an empty string to clear it again), in a way that will not conflict with the console. Images specified this way will be hardware accelerated, if supported by the platform/port.")},
 	{"getcursormode",	PF_NoSSQC,			PF_cl_getcursormode,0,		PF_cl_getcursormode,0, D("float(float effective)", "Reports the cursor mode this module previously attempted to use. If 'effective' is true, reports the cursor mode currently active (if was overriden by a different module which has precidence, for instance, or if there is only a touchscreen and no mouse).")},
@@ -9228,7 +9228,7 @@ static struct
 	{"edict_num",		PF_edict_for_num,	PF_edict_for_num,	459,	PF_NoMenu, "entity(float entnum)"},//DP_QC_EDICT_NUM
 	{"buf_create",		PF_buf_create,		PF_buf_create,		460,	PF_buf_create,440, "strbuf()"},//DP_QC_STRINGBUFFERS
 	{"buf_del",			PF_buf_del,			PF_buf_del,			461,	PF_buf_del,441, "void(strbuf bufhandle)"},//DP_QC_STRINGBUFFERS
-	{"buf_del_legacy",	PF_NoSSQC,			PF_NoCSQC,			0,	PF_buf_del,461, "void(strbuf bufhandle)"},	//superseded qss menuqc slot, kept bound for existing bytecode
+	{"buf_del_legacy",	PF_NoSSQC,			PF_NoCSQC,			0,	PF_buf_del,461, D("void(strbuf bufhandle)", "alias. superseded qss menuqc slot, kept bound for existing bytecode")},
 	{"buf_getsize",		PF_buf_getsize,		PF_buf_getsize,		462,	PF_buf_getsize,442, "float(strbuf bufhandle)"},//DP_QC_STRINGBUFFERS
 	{"buf_copy",		PF_buf_copy,		PF_buf_copy,		463,	PF_buf_copy,443, "void(strbuf bufhandle_from, strbuf bufhandle_to)"},//DP_QC_STRINGBUFFERS
 	{"buf_sort",		PF_buf_sort,		PF_buf_sort,		464,	PF_buf_sort,444, "void(strbuf bufhandle, float sortprefixlen, float backward)"},//DP_QC_STRINGBUFFERS
@@ -9276,7 +9276,7 @@ static struct
 	{"buf_cvarlist",	PF_buf_cvarlist,	PF_buf_cvarlist,	517,	PF_buf_cvarlist,517, D("void(strbuf strbuf, string pattern, string antipattern)", "Populates the strbuf with a list of known cvar names.")},
 	{"cvar_description",PF_cvar_description,PF_cvar_description,518,	PF_cvar_description,518, D("string(string cvarname)", "Retrieves the description of a cvar, which might be useful for tooltips or help files. This may still not be useful.")},
 	{"gettime",			PF_gettimef,		PF_gettimef,		519,	PF_gettimef,67, "float(optional float timetype)"},
-	{"gettime_legacy",	PF_NoSSQC,			PF_NoCSQC,			0,	PF_gettimef,519, "float(optional float timetype)"},	//superseded qss menuqc slot, kept bound for existing bytecode
+	{"gettime_legacy",	PF_NoSSQC,			PF_NoCSQC,			0,	PF_gettimef,519, D("float(optional float timetype)", "alias. superseded qss menuqc slot, kept bound for existing bytecode")},
 	{"gettimed",		PF_gettimed,		PF_gettimed,		0,		PF_gettimed,0, "__double(optional int timetype)"},
 	{"findkeysforcommand",PF_NoSSQC,		PF_cl_findkeysforcommand,521,PF_cl_findkeysforcommand,610, D("string(string command, optional float bindmap)", "Returns a list of keycodes that perform the given console command in a format that can only be parsed via tokenize (NOT tokenize_console). This always returns at least two values - if only one key is actually bound, -1 will be returned. The bindmap argument is listed for compatibility with dp-specific defs, but is ignored in FTE.")},
 	{"findkeysforcommandex",PF_NoSSQC,		PF_cl_findkeysforcommandex,0,PF_cl_findkeysforcommandex,0, D("string(string command, optional float bindmap)", "Returns a list of key bindings in keyname format instead of keynums. Use tokenize to parse. This list may contain modifiers. May return large numbers of keys.")},
@@ -10643,6 +10643,8 @@ void PR_DumpPlatform_f(void)
 
 			if (j != (extensionbuiltins[i].desc?!strncmp(extensionbuiltins[i].desc, "stub.", 5):0))
 				continue;
+			if (extensionbuiltins[i].desc && !strncmp(extensionbuiltins[i].desc, "alias.", 6))
+				continue;	//still bound at load, but authors should use the canonical name
 			fprintf(f, "%s %s = #%i;", extensionbuiltins[i].typestr, extensionbuiltins[i].name, (targs & MN)?extensionbuiltins[i].documentednumber_menuqc:extensionbuiltins[i].documentednumber);
 			if (extensionbuiltins[i].desc && !j)
 			{
