@@ -10021,7 +10021,14 @@ void PR_DumpPlatform_f(void)
 		}
 	}
 	if (!outname)
-		outname = ((targs==2)?"qscsextensions":"qsextensions");
+	{	//each target gets its own name, so one dump cannot clobber another's defs.
+		if (targs == CS)
+			outname = "qscsextensions";
+		else if (targs == MN)
+			outname = "qsmenuextensions";
+		else
+			outname = "qsextensions";
+	}
 	if (!targs)
 		targs = SS|CS;
 
@@ -10052,12 +10059,20 @@ void PR_DumpPlatform_f(void)
 		"*/\n"
 		,Cmd_Argv(0), Cmd_Args()?Cmd_Args():"with no args");
 
-	fprintf(f,
-		"\n\n//This file only supports csqc, so including this file in some other situation is a user error\n"
-		"#if defined(QUAKEWORLD) || defined(MENU)\n"
-		"#error Mixed up module defs\n"
-		"#endif\n"
-		);
+	if (targs & MN)
+		fprintf(f,
+			"\n\n//This file only supports menuqc, so including this file in some other situation is a user error\n"
+			"#if defined(QUAKEWORLD) || defined(CSQC) || defined(SSQC)\n"
+			"#error Mixed up module defs\n"
+			"#endif\n"
+			);
+	else
+		fprintf(f,
+			"\n\n//This file only supports csqc/ssqc, so including this file in some other situation is a user error\n"
+			"#if defined(QUAKEWORLD) || defined(MENU)\n"
+			"#error Mixed up module defs\n"
+			"#endif\n"
+			);
 	if (targs & CS)
 	{
 		fprintf(f,
