@@ -61,6 +61,7 @@ def check_dump(binary, basedir, game):
         f.write('pr_dumpplatform -Tcs -O qscsextensions\n'
                 'pr_dumpplatform -Tmenu -O qsmenuextensions\n'
                 'pr_dumpplatform -Tcs -Tmenu -O hq_mixed\n'
+                'pr_dumpplatform -Tmenu\n'   # default filename, no -O
                 'quit\n')
     out = run_engine(binary, basedir, game, ['+exec', 'hq_dump.cfg'], 120)
     os.remove(cfg)
@@ -84,6 +85,16 @@ def check_dump(binary, basedir, game):
             got = int(m.group(1)) if m else None
             results.append(('dump/%s/%s=#%d' % (fname.split('.')[0], name, num),
                             got == num))
+    # -Tmenu must get its own filename, and its guard must reject the other
+    # modules rather than MENU itself (a caller pre-defining MENU used to #error)
+    mn_text = open(os.path.join(srcdir, 'qsmenuextensions.qc'), encoding='utf-8',
+                   errors='replace').read()
+    results.append(('dump/menu-guard-rejects-csqc-not-menu',
+                    '#if defined(QUAKEWORLD) || defined(CSQC) || defined(SSQC)' in mn_text))
+    results.append(('dump/menu-default-filename',
+                    os.path.exists(os.path.join(srcdir, 'qsmenuextensions.qc'))
+                    and not os.path.exists(os.path.join(srcdir, 'qsextensions.qc'))))
+
     # the signature fix that let the generated header compile at all
     cs = open(os.path.join(srcdir, 'qscsextensions.qc'), encoding='utf-8',
               errors='replace').read()
@@ -93,6 +104,10 @@ def check_dump(binary, basedir, game):
               errors='replace').read()
     results.append(('dump/registercvar-has-flags',
                     'string defaultvalue, optional float flags) registercvar' in mn))
+    results.append(('dump/getkeybind-has-optional-bindmap',
+                    'float keynum, optional float bindmap) getkeybind' in mn))
+    results.append(('dump/getresolution-forfullscreen-optional',
+                    'float mode, optional float forfullscreen) getresolution' in mn))
     return results
 
 
