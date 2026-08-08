@@ -254,7 +254,13 @@ static void QWatch_CloseListener(void)
 
 static qboolean QWatch_SetNonBlocking(sys_socket_t socket_id)
 {
+	/* Winsock's ioctlsocket API requires an unsigned long argument, while
+	 * the Unix ioctl compatibility path takes an int. */
+#ifdef PLATFORM_WINDOWS
+	u_long one = 1;
+#else
 	int one = 1;
+#endif
 	return ioctlsocket(socket_id, FIONBIO, &one) != SOCKET_ERROR;
 }
 
