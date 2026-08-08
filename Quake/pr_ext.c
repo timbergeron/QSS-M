@@ -2310,11 +2310,21 @@ static void PF_modelnameforidx(void)
 		G_INT(OFS_RETURN) = 0;
 }
 
+//qc hands these in as floats. converting a negative (or huge) float straight to
+//unsigned is undefined - on arm64 it saturates to 0, so a negative index quietly
+//aliased to a valid one. compare as float, then narrow.
+static qboolean PR_IndexFromFloat(float v, int limit, int *out)
+{
+	if (!(v >= 0) || v >= (float)limit)	//!(v>=0) also rejects nan
+		return false;
+	*out = (int)v;
+	return true;
+}
 static void PF_frameforname(void)
 {
-	unsigned int modelindex	= G_FLOAT(OFS_PARM0);
+	float modelindex	= G_FLOAT(OFS_PARM0);
 	const char *framename	= G_STRING(OFS_PARM1);
-	qmodel_t *mod = PR_GetVMModel(modelindex);
+	qmodel_t *mod = (modelindex >= 0 && modelindex < 65536)?PR_GetVMModel((int)modelindex):NULL;
 	aliashdr_t *alias;
 
 	G_FLOAT(OFS_RETURN) = -1;
@@ -2333,25 +2343,29 @@ static void PF_frameforname(void)
 }
 static void PF_frametoname(void)
 {
-	unsigned int modelindex	= G_FLOAT(OFS_PARM0);
-	unsigned int framenum	= G_FLOAT(OFS_PARM1);
-	qmodel_t *mod = PR_GetVMModel(modelindex);
+	float modelindex	= G_FLOAT(OFS_PARM0);
+	float framenumf		= G_FLOAT(OFS_PARM1);
+	int framenum;
+	qmodel_t *mod = (modelindex >= 0 && modelindex < 65536)?PR_GetVMModel((int)modelindex):NULL;
 	aliashdr_t *alias;
 
-	if (mod && mod->type == mod_alias && (alias = Mod_Extradata(mod)) && framenum < (unsigned int)alias->numframes)
+	if (mod && mod->type == mod_alias && (alias = Mod_Extradata(mod)) &&
+		PR_IndexFromFloat(framenumf, alias->numframes, &framenum))
 		G_INT(OFS_RETURN) = PR_SetEngineString(alias->frames[framenum].name);
 	else
 		G_INT(OFS_RETURN) = 0;
 }
 static void PF_frameduration(void)
 {
-	unsigned int modelindex	= G_FLOAT(OFS_PARM0);
-	unsigned int framenum	= G_FLOAT(OFS_PARM1);
-	qmodel_t *mod = PR_GetVMModel(modelindex);
+	float modelindex	= G_FLOAT(OFS_PARM0);
+	float framenumf		= G_FLOAT(OFS_PARM1);
+	int framenum;
+	qmodel_t *mod = (modelindex >= 0 && modelindex < 65536)?PR_GetVMModel((int)modelindex):NULL;
 	aliashdr_t *alias;
 
 	G_FLOAT(OFS_RETURN) = 0;
-	if (mod && mod->type == mod_alias && (alias = Mod_Extradata(mod)) && framenum < (unsigned int)alias->numframes)
+	if (mod && mod->type == mod_alias && (alias = Mod_Extradata(mod)) &&
+		PR_IndexFromFloat(framenumf, alias->numframes, &framenum))
 		G_FLOAT(OFS_RETURN) = alias->frames[framenum].numposes * alias->frames[framenum].interval;
 }
 static void PF_getsurfacenumpoints(void)

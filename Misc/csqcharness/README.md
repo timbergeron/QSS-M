@@ -143,11 +143,31 @@ sake:
   set a return at all, even on success). Return poisoning is what exposed these;
   without it they pass whenever the stale value happens to match.
 * `getsurfacenormal` cleared only the x component of its vector return.
-* `frameduration`/`frameforname`/`frametoname` read the frame number into an
-  `unsigned int`. Float-to-unsigned of a negative value is undefined in C and
-  saturates to 0 on arm64, so `frameduration(idx, -1)` aliases to frame 0
-  instead of being rejected. The harness records this rather than asserting a
-  fix — see `bounds/frameduration/frame-negative-aliases-to-zero`.
+* `frameduration`/`frameforname`/`frametoname` read the model and frame index
+  into an `unsigned int`. Float-to-unsigned of a negative value is undefined in
+  C and saturates to 0 on arm64, so `frameduration(idx, -1)` returned frame 0
+  instead of rejecting the input. Found by the bounds matrix and independently
+  confirmed by UBSan. They now compare as float and narrow afterwards.
+
+## Running under sanitizers
+
+```bash
+cd macOS && xcodebuild -project QuakeSpasm.xcodeproj -target QSS-M \
+  -configuration Debug CODE_SIGNING_ALLOWED=NO SYMROOT=/tmp/asan-build \
+  OTHER_CFLAGS='$(inherited) -fsanitize=address,undefined -fno-sanitize=alignment -fno-omit-frame-pointer -g' \
+  OTHER_LDFLAGS='$(inherited) -fsanitize=address,undefined' build
+
+ASAN_OPTIONS=halt_on_error=0:detect_leaks=0 UBSAN_OPTIONS=halt_on_error=0 \
+python3 Misc/csqcharness/run_harness.py --bin /tmp/asan-build/Debug/QSS-M.app/Contents/MacOS/QSS-M ...
+```
+
+The runner already treats `AddressSanitizer` and `runtime error:` as failures,
+so no extra flags are needed on its side.
+
+`-fno-sanitize=alignment` is required or the run drowns in reports: `glpic_t` is
+cast onto `qpic_t`'s 4-byte-aligned `data[]` while containing pointers, a
+longstanding Quake idiom that is benign on x86 and ARM. Leak detection is off
+because macOS ASan does not support it and SDL/driver allocations add noise.
 
 ## Known gaps
 

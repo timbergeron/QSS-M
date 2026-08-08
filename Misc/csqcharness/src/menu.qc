@@ -198,11 +198,12 @@ void() mq_bounds =
 		frameduration(idx + 0.5, 0) == frameduration(idx, 0));
 
 	// bad frame numbers on a good handle
-	// NOTE: framenum is read into an unsigned int, and float->unsigned of a
-	// negative value is undefined in C; on arm64 it saturates to 0, so a
-	// negative frame aliases to frame 0 rather than being rejected.
-	st_ok("bounds/frameduration/frame-negative-aliases-to-zero",
-		frameduration(idx, -1) == frameduration(idx, 0));
+	// a negative frame used to alias to frame 0: float->unsigned is undefined
+	// and saturates to 0 on arm64. it must be rejected outright.
+	st_poisonf();
+	st_eqf("bounds/frameduration/frame-negative", frameduration(idx, -1), 0);
+	st_ok("bounds/frameduration/frame-negative-differs-from-zero",
+		frameduration(idx, 0) > 0);
 	st_poisonf();
 	st_eqf("bounds/frameduration/frame-far", frameduration(idx, 99999), 0);
 	st_poisons();
