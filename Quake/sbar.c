@@ -2157,6 +2157,7 @@ void Sbar_DrawFrags(void)
 	scoreboard_t* s;
 	int				teamscores, colors, minutes, seconds, mask; // JPG - added these
 	int				match_time; // JPG - added this
+	qboolean		final_minute;
 
 	extern qboolean crxintermission; // woods #crxintermission
 
@@ -2203,8 +2204,14 @@ void Sbar_DrawFrags(void)
 					match_time = ceil(60.0 * cl.minutes + cl.seconds - (cl.time - cl.last_match_time));
 				minutes = q_max(0, floor(match_time / 60));
 				seconds = q_max(0, match_time - 60 * floor(match_time / 60));
+				final_minute = !minutes;
+				if (SCR_GetCRMod7CountupTime(&match_time))
+				{
+					minutes = match_time / 60;
+					seconds = match_time - 60 * minutes;
+				}
 				sprintf(num, "%3d:%02d", minutes, seconds);
-				if (!minutes)
+				if (final_minute)
 					mask = 128;
 			}
 		}

@@ -131,6 +131,7 @@ extern int		ctfpubhookchainprecache; // woods #ctfpubmodels
 extern int		ctfpubhookweaponprecache; // woods #ctfpubmodels
 extern qboolean	qeintermission; // woods #qeintermission
 extern qboolean	crxintermission; // woods #crxintermission
+extern qboolean	countdown; // woods #clearcrxcountdown
 extern qboolean m_return_onerror;
 extern char m_return_reason[32];
 
@@ -776,6 +777,7 @@ void CL_Disconnect (void)
 	if (cl.modtype == 1 || cl.modtype == 4)
 		Cbuf_AddText("setinfo observing off\n"); // woods
 	pausedprint = false;  // woods
+	countdown = false; // woods #clearcrxcountdown
 	cl.match_pause_time = 0; // woods
 	prediction_msg_shown = false; // woods #prednotify
 	V_ResetEffects ();
@@ -942,6 +944,7 @@ void CL_SignonReply (void)
 
 		qeintermission = false; // woods #qeintermission
 		crxintermission = false; // woods #crxintermission
+		countdown = false; // woods #clearcrxcountdown
 		pausedprint = false; // woods
 		cl.match_pause_time = 0; // woods
 

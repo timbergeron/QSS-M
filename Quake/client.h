@@ -451,6 +451,13 @@ typedef struct
 	int				minutes;			// JPG - for match time in status bar // woods #pqteam
 	int				seconds;			// JPG - for match time in status bar // woods #pqteam
 	double			last_match_time;	// JPG - last time match time was obtained // woods #pqteam
+	double			match_elapsed_time;	// elapsed match seconds at the last timer update
+	double			match_elapsed_last_update_time;
+	int				match_elapsed_last_remaining;
+	int				match_elapsed_match_length;
+	int				match_elapsed_seed_samples;
+	qboolean		match_elapsed_overtime_seen;
+	qboolean		match_elapsed_valid;
 	double			last_ping_time;		// JPG - last time pings were obtained // woods #pqteam
 	qboolean		console_ping;		// JPG 1.05 - true if the ping came from the console // woods #pqteam
 	double			last_status_time;	// JPG 1.05 - last time status was obtained // woods #pqteam

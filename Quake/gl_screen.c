@@ -140,6 +140,7 @@ cvar_t		scr_showspeed = {"scr_showspeed", "0",CVAR_ARCHIVE}; // woods #speed
 cvar_t		scr_showspeed_y = {"scr_showspeed_y", "176", CVAR_ARCHIVE}; // woods - #speedometer
 cvar_t		scr_movekeys = {"scr_movekeys", "0", CVAR_ARCHIVE}; // woods #movementkeys
 cvar_t		scr_matchclock = {"scr_matchclock", "0",CVAR_ARCHIVE}; // woods #varmatchclock
+cvar_t		scr_matchclock_countup = {"scr_matchclock_countup", "0", CVAR_ARCHIVE}; // woods #varmatchclock
 cvar_t		scr_matchclock_y = {"scr_matchclock_y", "0",CVAR_ARCHIVE}; // woods #varmatchclock
 cvar_t		scr_matchclock_x = {"scr_matchclock_x", "0",CVAR_ARCHIVE}; // woods #varmatchclock
 cvar_t		scr_matchclockscale = {"scr_matchclockscale", "1",CVAR_ARCHIVE}; // woods #varmatchclock
@@ -1092,6 +1093,12 @@ static void MatchClock_Completion_f(cvar_t* cvar, const char* partial)
 	Con_AddToTabList("3", partial, "text", NULL);
 }
 
+static void MatchClockCountup_Completion_f(cvar_t* cvar, const char* partial)
+{
+	Con_AddToTabList("0", partial, "CRMod7 countdown", NULL);
+	Con_AddToTabList("1", partial, "CRMod7 elapsed time", NULL);
+}
+
 /*
 ===============
 Fade_Completion_f -- woods #iwtabcomplete
@@ -1173,6 +1180,8 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_movekeys); // woods #movementkeys
 	Cvar_RegisterVariable (&scr_matchclock); // woods #varmatchclock
 	Cvar_SetCompletion (&scr_matchclock, &MatchClock_Completion_f); // woods #iwtabcomplete
+	Cvar_RegisterVariable (&scr_matchclock_countup); // woods #varmatchclock
+	Cvar_SetCompletion (&scr_matchclock_countup, &MatchClockCountup_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_matchclock_y); // woods #varmatchclock
 	Cvar_RegisterVariable (&scr_matchclock_x); // woods #varmatchclock
 	Cvar_RegisterVariable (&scr_matchclockscale); // woods #varmatchclock
@@ -1856,6 +1865,7 @@ SCR_DrawMatchClock    woods (Adapted from Sbar_DrawFrags from r00k) draw match c
 
 #define MATCHCLOCK_REF_W 1920.0f
 #define MATCHCLOCK_REF_H 1080.0f
+#define MATCHCLOCK_MAX_ELAPSED_SECONDS (999.0 * 60.0 + 59.0)
 
 // Track current minute-digit count (1-3) for the numeric match clock (modes 1/2)
 // Baseline alignment assumes 3 digits; other HUD elements can offset relative to this
@@ -1892,11 +1902,91 @@ static qboolean SCR_LivePreviewUseSyntheticMatchScores(void)
 			!SCR_MatchScoresHaveLiveData());
 }
 
+static qboolean SCR_IsCRMod7(void)
+{
+	char mod[64] = "", modname[64] = "";
+
+	Info_GetKey(cl.serverinfo, "mod", mod, sizeof(mod));
+	Info_GetKey(cl.serverinfo, "modname", modname, sizeof(modname));
+
+	return cl.modtype == 3 || q_strcasestr(mod, "crmod") || q_strcasestr(modname, "crmod");
+}
+
+static qboolean SCR_IsCRMod7MatchMode(void)
+{
+	char mode[16] = "", playmode[16] = "";
+
+	Info_GetKey(cl.serverinfo, "mode", mode, sizeof(mode));
+	Info_GetKey(cl.serverinfo, "playmode", playmode, sizeof(playmode));
+
+	// Prefer live serverinfo because CRMod7 can change modes without a new
+	// signon. Fall back to the cached classifications for older servers.
+	if (playmode[0])
+	{
+		if (q_strcasecmp(playmode, "match"))
+			return false;
+	}
+	else if (cl.playmode != 1)
+		return false;
+
+	if (mode[0])
+		return !q_strcasecmp(mode, "dm") || !q_strcasecmp(mode, "ctf");
+
+	return cl.modetype == 1 || cl.modetype == 2;
+}
+
+static qboolean SCR_IsBarePositiveInteger(const char *value)
+{
+	char *end;
+	long minutes;
+
+	if (!value[0] || value[0] < '0' || value[0] > '9')
+		return false;
+
+	minutes = strtol(value, &end, 10);
+	return !*end && minutes > 0 && minutes <= INT_MAX / 60;
+}
+
+qboolean SCR_GetCRMod7CountupTime(int *elapsed_time)
+{
+	char intermission[16] = "";
+	char timelimit[64] = "";
+	double sample_time, elapsed_seconds;
+
+	if (!elapsed_time || !scr_matchclock_countup.value || !SCR_IsCRMod7() ||
+		!SCR_IsCRMod7MatchMode() || !cl.match_elapsed_valid ||
+		cl.minutes < 0 || cl.minutes >= 254 ||
+		cl.seconds < 0 || cl.seconds > 59 || countdown)
+		return false;
+
+	// CRMod7 publishes a bare positive timelimit only while a timed match is
+	// running. Pre-match, waiting, sudden-death, and final-score states use
+	// prose; intermission also reuses the ProQuake timer for its vote countdown.
+	Info_GetKey(cl.serverinfo, "intermission", intermission, sizeof(intermission));
+	Info_GetKey(cl.serverinfo, "timelimit", timelimit, sizeof(timelimit));
+	if (!q_strcasecmp(intermission, "on") || !SCR_IsBarePositiveInteger(timelimit))
+		return false;
+
+	// Rewind snapshots do not restore arbitrary client_state_t fields. Timer
+	// packets reseed the accumulator, but keep the fallback visible between
+	// those packets instead of briefly displaying elapsed time from the future.
+	if (cls.demoplayback && (cls.demospeed < 0 ||
+		cl.time + 0.25 < cl.match_elapsed_last_update_time))
+		return false;
+
+	sample_time = cl.match_pause_time ? cl.match_pause_time : cl.time;
+	elapsed_seconds = CLAMP(0.0,
+		cl.match_elapsed_time + q_max(0.0, sample_time - cl.last_match_time),
+		MATCHCLOCK_MAX_ELAPSED_SECONDS);
+	*elapsed_time = floor(elapsed_seconds);
+	return true;
+}
+
 void SCR_DrawMatchClock(void)
 {
 	char			num[22] = "empty";
 	char			round_num[22];
-	qboolean		show_round_hud;
+	qboolean		show_round_hud, final_seconds;
 	int				teamscores, minutes, seconds;
 	int				match_time, tl;
 
@@ -1907,6 +1997,7 @@ void SCR_DrawMatchClock(void)
 	minutes = match_time / 60;
 	seconds = match_time - 60 * minutes;
 	teamscores = cl.teamgame;
+	final_seconds = false;
 	show_round_hud = SCR_GetRoundHudString(round_num, sizeof(round_num));
 	// Wipeout uses the ProQuake match-time fields for a contextual respawn
 	// countdown.  Prefer it to the round indicator while the mod supplies one.
@@ -1979,11 +2070,21 @@ void SCR_DrawMatchClock(void)
 				match_time = ceil(60.0 * cl.minutes + cl.seconds - (cl.time - cl.last_match_time));
 			minutes = q_max(0, floor(match_time / 60));
 			seconds = q_max(0, match_time - 60 * floor(match_time / 60));
+			final_seconds = teamscores && minutes == 0 && seconds > 0 && seconds < 15;
+
+			if (!show_round_hud && SCR_GetCRMod7CountupTime(&match_time))
+			{
+				minutes = match_time / 60;
+				seconds = match_time - 60 * minutes;
+			}
 			sprintf(num, "%3d:%02d", minutes, seconds);
 		}
 
 		if (cl.seconds >= 128) // DM CRMOD 6.6 countdown, second count inaccurate in countdown, fix it
+		{
 			sprintf(num, " 0:%02d", cl.seconds - 128);
+			final_seconds = teamscores && cl.seconds - 128 > 0 && cl.seconds - 128 < 15;
+		}
 
 		if (show_round_hud)
 			q_strlcpy(num, round_num, sizeof(num));
@@ -2035,7 +2136,7 @@ void SCR_DrawMatchClock(void)
 
 		if (scr_match_hud.value)
 		{
-			if (!show_round_hud && ((((minutes <= 0) && (seconds < 15) && (seconds > 0)) && teamscores) || cl.seconds >= 128)) // color last 15 seconds to draw attention cl.seconds >= 128 is for CRMOD
+			if (!show_round_hud && (final_seconds || cl.seconds >= 128)) // color last 15 seconds to draw attention cl.seconds >= 128 is for CRMOD
 				M_Print(((314 - (strlen(num) << 3)) + 1), 195 - 8, num); // M_Print is colored text
 			else
 				Draw_String(((314 - (strlen(num) << 3)) + 1), 195 - 8, num);
@@ -2107,7 +2208,7 @@ void SCR_DrawMatchClock(void)
 					seconds = (*p++ - '0') * 10;  // get the tens place of seconds
 					seconds += (*p++ - '0');  // get the ones place of seconds
 
-					if (scr_matchclock.value == 1 && (minutes == 0 && seconds < 15 && seconds > 0) && teamscores) // check if we are in the final 15 seconds
+					if (scr_matchclock.value == 1 && final_seconds) // check if we are in the final 15 seconds
 						color = 1;
 
 					int x_offset = 0;
@@ -2127,7 +2228,7 @@ void SCR_DrawMatchClock(void)
 					int ones_min = minutes % 10;
 					Draw_Pic_RGBA_Outline(base_x + x_offset, base_y, sb_nums[color][ones_min], CL_PLColours_Parse("0xffffff"), 1.0f, border);
 
-					qboolean red_colon = (scr_matchclock.value == 2 || ((minutes == 0 && seconds < 15 && seconds > 0) && teamscores));
+					qboolean red_colon = (scr_matchclock.value == 2 || final_seconds);
 					plcolour_t colon_color = CL_PLColours_Parse(red_colon ? "0xff0000" : "0xffffff");
 					// Use base_x, base_y + offset
 					Draw_Pic_RGBA_Outline(base_x + x_offset + 24, base_y, sb_colon, colon_color, 1.0f, border);
@@ -2140,7 +2241,7 @@ void SCR_DrawMatchClock(void)
 				}
 				else if (scr_matchclock.value == 3)
 				{
-					if ((((minutes <= 0) && (seconds < 15) && (seconds > 0)) && teamscores) || cl.seconds >= 128) // color last 15 seconds or CRMOD condition
+					if (final_seconds || cl.seconds >= 128) // color last 15 seconds or CRMOD condition
 						M_Print(base_x, base_y, num);
 					else
 						Draw_String(base_x, base_y, num);

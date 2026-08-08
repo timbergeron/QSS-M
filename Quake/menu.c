@@ -19243,7 +19243,7 @@ HUD Menu
 ==================
 */
 
-extern cvar_t scr_sbar, scr_showfps, scr_match_hud, scr_matchclock, scr_ping, scr_clock, 
+extern cvar_t scr_sbar, scr_showfps, scr_match_hud, scr_matchclock, scr_matchclock_countup, scr_ping, scr_clock,
 scr_showspeed, scr_sbarfacecolor, scr_showscores, scr_autoid, scr_movekeys, scr_conscale, 
 scr_sbaralphaqwammo, scr_obsitems, scr_scoreboard_teamsort;
 
@@ -19257,6 +19257,7 @@ static enum hud_e
 	HUD_SHOWFPS,
 	HUD_MATCHSCORES,
 	HUD_MATCHCLOCK,
+	HUD_MATCHCLOCK_COUNTUP,
 	HUD_SHOWPING,
 	HUD_SHOWCLOCK,
 	HUD_SHOWSPEED,
@@ -19305,6 +19306,8 @@ static const char* M_HUD_GetItemText(int index)
 		return "Show Match Scores";
 	case HUD_MATCHCLOCK:
 		return "Match Clock";
+	case HUD_MATCHCLOCK_COUNTUP:
+		return "Match Clock Count Up";
 	case HUD_SHOWPING:
 		return "Show Ping";
 	case HUD_SHOWCLOCK:
@@ -19341,6 +19344,7 @@ static cvar_t *M_HUD_GetItemCvar(int index)
 	case HUD_SHOWFPS:			return &scr_showfps;
 	case HUD_MATCHSCORES:		return &scr_match_hud;
 	case HUD_MATCHCLOCK:		return &scr_matchclock;
+	case HUD_MATCHCLOCK_COUNTUP:	return &scr_matchclock_countup;
 	case HUD_SHOWPING:			return &scr_ping;
 	case HUD_SHOWCLOCK:			return &scr_clock;
 	case HUD_SHOWSPEED:			return &scr_showspeed;
@@ -19435,6 +19439,9 @@ static void M_HUD_AdjustSliders(int dir)
 
 	case HUD_MATCHCLOCK:
 		Cvar_SetValue("scr_matchclock", !scr_matchclock.value);
+		break;
+	case HUD_MATCHCLOCK_COUNTUP:
+		Cvar_SetValue("scr_matchclock_countup", !scr_matchclock_countup.value);
 		break;
 
 	case HUD_SHOWPING:
@@ -19575,6 +19582,12 @@ void M_HUD_Draw(void)
 			text = "       Match Clock";
 			if (!show_cvar_hint)
 				M_DrawCheckbox(MENU_VALUE_X, y, scr_matchclock.value);
+			break;
+
+		case HUD_MATCHCLOCK_COUNTUP:
+			text = "    Clock Count Up";
+			if (!show_cvar_hint)
+				M_DrawCheckbox(MENU_VALUE_X, y, scr_matchclock_countup.value);
 			break;
 
 		case HUD_SHOWPING:
@@ -19873,6 +19886,9 @@ void M_HUD_Key(int k)
 		case HUD_MATCHCLOCK:
 			Cvar_SetValue("scr_matchclock", !scr_matchclock.value);
 			break;
+		case HUD_MATCHCLOCK_COUNTUP:
+			Cvar_SetValue("scr_matchclock_countup", !scr_matchclock_countup.value);
+			break;
 		case HUD_SHOWPING:
 			Cvar_SetValue("scr_ping", !scr_ping.value);
 			break;
@@ -19945,6 +19961,10 @@ void M_HUD_Key(int k)
 			else if (hud_cursor == HUD_MATCHCLOCK)
 			{
 				Cvar_SetValue("scr_matchclock", !scr_matchclock.value);
+			}
+			else if (hud_cursor == HUD_MATCHCLOCK_COUNTUP)
+			{
+				Cvar_SetValue("scr_matchclock_countup", !scr_matchclock_countup.value);
 			}
 			else if (hud_cursor == HUD_SHOWPING)
 			{
@@ -20077,6 +20097,7 @@ void M_HUD_Mousemove(int cx, int cy)
 		case HUD_SHOWFPS:
 		case HUD_MATCHSCORES:
 		case HUD_MATCHCLOCK:
+		case HUD_MATCHCLOCK_COUNTUP:
 		case HUD_SHOWPING:
 		case HUD_SHOWCLOCK:
 		case HUD_SHOWSPEED:
@@ -22015,7 +22036,7 @@ static const char * const menusearch_game_labels[] = {
 };
 static const char * const menusearch_hud_labels[] = {
 	"Crosshair", "HUD Scale", "Screen Size", "Statusbar Alpha", "Status Bar Style",
-	"Show FPS", "Show Match Scores", "Match Clock", "Show Ping", "Show Clock",
+	"Show FPS", "Show Match Scores", "Match Clock", "Match Clock Count Up", "Show Ping", "Show Clock",
 	"Show Speed", "Show Scores", "Player Auto ID", "Movement Keys", "Console Font Size",
 	"Observer Items", "Scoreboard Sort"
 };
@@ -22403,7 +22424,7 @@ static const char *MenuSearch_HUDKeywords(int index)
 	case HUD_SBARSTYLE: return "statusbar layout classic modern hud";
 	case HUD_SHOWFPS: return "framerate frame rate performance counter";
 	case HUD_MATCHSCORES: case HUD_SHOWSCORES: return "score scoreboard frags match";
-	case HUD_MATCHCLOCK: case HUD_SHOWCLOCK: return "timer time clock match";
+	case HUD_MATCHCLOCK: case HUD_MATCHCLOCK_COUNTUP: case HUD_SHOWCLOCK: return "timer time clock match";
 	case HUD_SHOWPING: return "latency network connection ms";
 	case HUD_SHOWSPEED: return "velocity movement speedometer ups";
 	case HUD_AUTOID: return "player names id identification labels teammates enemies";

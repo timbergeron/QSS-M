@@ -59,6 +59,7 @@ extern char videosetg[50];	// woods #q_sysinfo (qrack)
 extern char videoc[40];		// woods #q_sysinfo (qrack)
 qboolean	endscoreprint = false; // woods pq_confilter+
 extern qboolean pausedprint; // woods
+extern qboolean countdown; // woods #clearcrxcountdown
 
 extern void CL_DeferredExecConfig (void *cfgname); // woods #execdelay
 server_alias_t* server_aliases = NULL; // woods #serveralias
@@ -2902,6 +2903,122 @@ int MSG_PeekByte(void)// JPG - need this to check for ProQuake messages
 	return (unsigned char)net_message.data[msg_readcount];
 }
 
+static void CL_ResetMatchElapsedTime(void)
+{
+	cl.match_elapsed_time = 0;
+	cl.match_elapsed_last_update_time = 0;
+	cl.match_elapsed_last_remaining = 0;
+	cl.match_elapsed_match_length = 0;
+	cl.match_elapsed_seed_samples = 0;
+	cl.match_elapsed_overtime_seen = false;
+	cl.match_elapsed_valid = false;
+}
+
+// Initial seed plus the next two accepted timer samples. Counting samples
+// instead of wall time keeps pauses and packet delay from consuming the window.
+#define MATCH_ELAPSED_REBASE_SAMPLES 3
+
+static qboolean CL_ParsePositiveMinuteValue(const char *value, int *seconds)
+{
+	char *end;
+	long minutes;
+
+	if (!value[0] || value[0] < '0' || value[0] > '9')
+		return false;
+
+	minutes = strtol(value, &end, 10);
+	if (*end || minutes <= 0 || minutes > INT_MAX / 60)
+		return false;
+
+	if (seconds)
+		*seconds = (int)minutes * 60;
+	return true;
+}
+
+static void CL_UpdateMatchElapsedTime(int minutes, int seconds)
+{
+	char intermission_buf[16] = "";
+	char matchtime_buf[16] = "";
+	char timelimit_buf[64] = "";
+	qboolean match_length_valid;
+	int match_length = 0, remaining;
+
+	// 254 denotes sudden death; seconds outside 0..59 are legacy encoded
+	// countdown values. Neither form is a normal match clock sample.
+	if (minutes >= 254 || minutes < 0 || minutes > INT_MAX / 60 ||
+		seconds < 0 || seconds > 59)
+		return;
+
+	remaining = minutes * 60 + seconds;
+	Info_GetKey(cl.serverinfo, "intermission", intermission_buf, sizeof(intermission_buf));
+	Info_GetKey(cl.serverinfo, "timelimit", timelimit_buf, sizeof(timelimit_buf));
+	if (!q_strcasecmp(intermission_buf, "on") ||
+		!CL_ParsePositiveMinuteValue(timelimit_buf, NULL))
+	{
+		CL_ResetMatchElapsedTime();
+		return; // only a running timed match publishes a bare positive timelimit
+	}
+
+	if (cl.match_elapsed_valid && cl.time < cl.match_elapsed_last_update_time)
+		CL_ResetMatchElapsedTime(); // demo rewind: reseed from the replayed sample
+
+	Info_GetKey(cl.serverinfo, "matchtime", matchtime_buf, sizeof(matchtime_buf));
+	match_length_valid = CL_ParsePositiveMinuteValue(matchtime_buf, &match_length);
+
+	if (!cl.match_elapsed_valid)
+	{
+		if (match_length_valid)
+		{
+			if (remaining > match_length)
+				return; // the advertised regulation length cannot describe this sample
+
+			// Seeding from the advertised match length makes late joins start at
+			// the actual regulation elapsed time rather than zero. The protocol
+			// does not expose an overtime-period number, so a first sample taken
+			// during timed OT cannot include already completed periods.
+			cl.match_elapsed_time = match_length - remaining;
+		}
+		else
+			cl.match_elapsed_time = 0;
+
+		// Older CRMod servers do not publish a usable match length. Count from
+		// the first sample so the feature still works for on-time clients.
+		cl.match_elapsed_match_length = match_length_valid ? match_length : 0;
+		cl.match_elapsed_seed_samples = 0;
+		cl.match_elapsed_overtime_seen = false;
+		cl.match_elapsed_valid = true;
+	}
+	else if (remaining > cl.match_elapsed_last_remaining + 2)
+	{
+		// CRMod7 resets the remaining clock upward for timed overtime. Finish
+		// the preceding period and retain the accumulated elapsed time. Marking
+		// this first prevents a future OT matchtime sync from rebasing the clock.
+		cl.match_elapsed_time += cl.match_elapsed_last_remaining;
+		cl.match_elapsed_overtime_seen = true;
+	}
+	else if (cl.match_elapsed_seed_samples < MATCH_ELAPSED_REBASE_SAMPLES &&
+		!cl.match_elapsed_overtime_seen && match_length_valid &&
+		match_length != cl.match_elapsed_match_length && remaining <= match_length)
+	{
+		// matchtime can arrive after the first timer sample when CRMod7 defers
+		// serverinfo publication. Allow one startup rebase instead of latching
+		// a previous match's length or reacting to a later rules change.
+		cl.match_elapsed_time = match_length - remaining;
+		cl.match_elapsed_match_length = match_length;
+		cl.match_elapsed_seed_samples = MATCH_ELAPSED_REBASE_SAMPLES;
+	}
+	else if (remaining <= cl.match_elapsed_last_remaining)
+	{
+		// Timer packets can be skipped, so advance by the full observed delta.
+		cl.match_elapsed_time += cl.match_elapsed_last_remaining - remaining;
+	}
+
+	cl.match_elapsed_last_remaining = remaining;
+	cl.match_elapsed_last_update_time = cl.time;
+	if (cl.match_elapsed_seed_samples < MATCH_ELAPSED_REBASE_SAMPLES)
+		cl.match_elapsed_seed_samples++;
+}
+
 void CL_ParseProQuakeMessage(void)
 {
 	int cmd, i;
@@ -2953,6 +3070,7 @@ void CL_ParseProQuakeMessage(void)
 		cl.teamgame = true;
 		cl.minutes = MSG_ReadBytePQ();
 		cl.seconds = MSG_ReadBytePQ();
+		CL_UpdateMatchElapsedTime(cl.minutes, cl.seconds);
 		cl.last_match_time = cl.time;//todo: fix for demo-rewind
 		//Con_Printf("pqc_match_time %d %d\n", cl.minutes, cl.seconds);
 		break;
@@ -2960,6 +3078,7 @@ void CL_ParseProQuakeMessage(void)
 	case pqc_match_reset:
 		Sbar_Changed();
 		cl.teamgame = true;
+		CL_ResetMatchElapsedTime();
 		for (i = 0; i < 14; i++)
 		{
 			cl.teamscores[i].colors = 0;
@@ -3236,6 +3355,8 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 	{
 		endscoreprint = false; // woods pq_confilter +
 		cl.matchinp = 1;
+		CL_ResetMatchElapsedTime();
+		countdown = false;
 	}
 
 	// check for match time
@@ -3247,6 +3368,7 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 		{
 			sscanf(s, "%d", &cl.minutes);
 			cl.seconds = 0;
+			CL_UpdateMatchElapsedTime(cl.minutes, cl.seconds);
 			cl.last_match_time = cl.time;
 		}
 	}
@@ -3275,7 +3397,8 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 					endscoreprint = true; // woods pq_confilter +
 					cl.matchinp = 0;
 					cl.match_pause_time = 0;
-					cl.minutes = 255;					
+					cl.minutes = 255;
+					CL_ResetMatchElapsedTime();
 					if ((cl_autodemo.value == 2) && (cls.demorecording)) // woods #autodemo
 						Cbuf_AddText("stop\n");
 					
@@ -3376,6 +3499,7 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 								{
 									cl.minutes = i;
 									cl.seconds = 0;
+									CL_UpdateMatchElapsedTime(cl.minutes, cl.seconds);
 									cl.last_match_time = cl.time;
 								}
 							}
@@ -4833,7 +4957,7 @@ qboolean WordFilter_Check(const char* text, char* dest_buffer, size_t buffer_siz
 				else
 				{
 					// Not enough space for replacement
-					dest_buffer[buffer_size - 1] = '\0';
+					dest_buffer[dest_index] = '\0';
 					return replaced_any;
 				}
 				}

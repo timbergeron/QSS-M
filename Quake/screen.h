@@ -128,6 +128,7 @@ typedef struct {
 void SCR_ShowDemoBar (void); // woods #democontrols -- force the demo bar to appear briefly
 void SCR_ShowDemoBarFor (float seconds); // woods #democontrols -- force the demo bar for a specific duration
 qboolean SCR_GetDemoBarRect(scr_demobar_rect_t *out);
+qboolean SCR_GetCRMod7CountupTime(int *elapsed_time); // woods #varmatchclock
 
 extern	cvar_t		scr_menuscale;
 extern	cvar_t		scr_sbarscale;
