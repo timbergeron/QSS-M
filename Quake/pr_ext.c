@@ -5541,8 +5541,12 @@ static qpic_t *DrawQC_CachePic(const char *picname, unsigned int flags)
 		if (!strcmp(picname, qcpics[i].name))
 		{
 			if (qcpics[i].pic)
+			{	//note that lookups are keyed on the name alone, so the first successful load wins the texflags.
+				if ((flags & (PICFLAG_WRAP|PICFLAG_MIPMAP)) & ~qcpics[i].flags)
+					Con_DPrintf("DrawQC_CachePic: \"%s\" was already cached with different flags, reusing the existing image\n", picname);
 				return qcpics[i].pic;
-			break;
+			}
+			break;	//known to us, but the load failed. retry it - the file may have appeared since.
 		}
 	}
 
@@ -5554,8 +5558,12 @@ static qpic_t *DrawQC_CachePic(const char *picname, unsigned int flags)
 
 	if (i+1 > maxqcpics)
 	{
-		maxqcpics = i + 32;
-		qcpics = realloc(qcpics, maxqcpics * sizeof(*qcpics));
+		size_t newmax = i + 32;
+		void *newpics = realloc(qcpics, newmax * sizeof(*qcpics));
+		if (!newpics)
+			return NULL;	//out of memory. leave the existing table intact.
+		qcpics = newpics;
+		maxqcpics = newmax;
 	}
 
 	strcpy(qcpics[i].name, picname);
@@ -5571,12 +5579,22 @@ static qpic_t *DrawQC_CachePic(const char *picname, unsigned int flags)
 	//try to load it from a wad if applicable.
 	//the extra gfx/ crap is because DP insists on it for wad images. and its a nightmare to get things working in all engines if we don't accept that quirk too.
 	if (flags & PICFLAG_WAD)
+	{	//the qc explicitly asked for a wad lump, so a miss keeps returning the missing-image diagnostic, as it always has.
 		qcpics[i].pic = Draw_PicFromWad2(picname + (strncmp(picname, "gfx/", 4)?0:4), texflags);
+	}
 	else if (!strncmp(picname, "gfx/", 4) && !strchr(picname+4, '.'))
-		qcpics[i].pic = Draw_PicFromWad2(picname+4, texflags);
+	{	//extensionless gfx/ name, so a real wad lump wins and supplies the logical size. if there is no such lump we
+		//must fall through to the external loader - Draw_PicFromWad2 reports a miss as the non-NULL pic_nul, which
+		//would otherwise swallow the fallback below and hand the qc an 8x8 checkerboard instead of gfx/<name>.tga.
+		lumpinfo_t *info;
+		if (W_GetLumpName(picname+4, &info))	//quiet probe, so a standalone image doesn't log a bogus wad warning
+			qcpics[i].pic = Draw_PicFromWad2(picname+4, texflags);
+		if (qcpics[i].pic == pic_nul)
+			qcpics[i].pic = NULL;
+	}
 
 	//okay, not a wad pic, try and load a lmp/tga/etc
-	if (!qcpics[i].pic)
+	if (!qcpics[i].pic && !(flags & PICFLAG_WAD))
 		qcpics[i].pic = Draw_TryCachePic(picname, texflags);
 
 	if (i == numqcpics)
