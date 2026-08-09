@@ -249,6 +249,35 @@ extern qboolean WordFilter_Check(const char* text, char* dest_buffer, size_t buf
 
 /*
 ==============
+SCR_GetCenterPrintWrapLimit -- woods (ironwail) #centerprintwrap
+
+Returns the maximum number of chars to be printed on a single line.
+
+Centerprints use CANVAS_MOD (or CANVAS_OBSERVER), which share the same
+horizontal mapping: 960 virtual units at the console scale, centered on the
+classic 320-unit screen, so the visible width is glwidth/scale units.
+==============
+*/
+static int SCR_GetCenterPrintWrapLimit (void)
+{
+	float scale, width;
+
+	if (glwidth <= 0 || vid.conwidth <= 0)
+		return 320 >> 3;
+
+	scale = (float)glwidth / vid.conwidth;
+	scale = CLAMP (1.0f, scr_conscale.value, scale);
+	width = glwidth / scale;
+
+	// avoid overlong lines
+	width = LERP (320.0f, width, 0.25f);
+	width = CLAMP (320.0f, width, 400.0f);
+
+	return ((int)width) >> 3;
+}
+
+/*
+==============
 SCR_CenterPrint
 
 Called for important messages that should stay in the center of the screen
@@ -482,7 +511,8 @@ void SCR_CenterPrint (const char *str) //update centerprint data
 	}
 
 	int cols; // woods #centerprintbg (iw)
-	q_strlcpy(scr_centerstring, str, sizeof(scr_centerstring)); // woods #centerprintbg (iw)
+	cols = scr_usekfont.value ? SCR_GetCenterPrintWrapLimit () : 0; // woods (ironwail) #centerprintwrap
+	COM_WordWrap (scr_centerstring, str, sizeof(scr_centerstring), cols);
 	if (!scr_centerstring[0]) // woods #centerprintbg (iw)
 	{
 		scr_center_lines = 0;

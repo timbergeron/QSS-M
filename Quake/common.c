@@ -154,7 +154,7 @@ const char *COM_GetMissingPakHint(void)
 	return com_missingpak_hint;
 }
 
-qboolean standard_quake = true, rogue, hipnotic;
+qboolean standard_quake = true, rogue, hipnotic, mg3;
 
 // this graphic needs to be in the pak file to use registered features
 static unsigned short pop[] =
@@ -2192,6 +2192,122 @@ Return NULL in case of overflow
 const char *COM_Parse (const char *data)
 {
 	return COM_ParseEx (data, CPE_NOTRUNC);
+}
+
+/*
+================
+COM_WordLength -- woods (ironwail) #centerprintwrap
+================
+*/
+int COM_WordLength (const char *text)
+{
+	const char *start = text;
+
+	while (*text && !q_isspace ((unsigned char)*text))
+		text++;
+
+	return (int)(text - start);
+}
+
+/*
+================
+COM_AdvanceLineWrapped -- woods (ironwail) #centerprintwrap
+
+Advances text by as much as possible until maxchars is reached, avoiding
+splitting words when possible. The returned length excludes a newline or
+space consumed at the break.
+================
+*/
+int COM_AdvanceLineWrapped (const char **text, int maxchars)
+{
+	const char *str;
+	int i;
+
+	if (!text || !*text || maxchars <= 0)
+		return 0;
+
+	str = *text;
+	for (i = 0; i < maxchars && str[i]; )
+	{
+		if (str[i] == '\n')
+		{
+			*text += i + 1;
+			return i;
+		}
+
+		if (!q_isspace ((unsigned char)str[i]) &&
+			(i == 0 || q_isspace ((unsigned char)str[i - 1])))
+		{
+			int len = COM_WordLength (str + i);
+
+			if (len > maxchars)
+			{
+				*text += maxchars;
+				return maxchars;
+			}
+			if (i + len > maxchars)
+			{
+				*text += i;
+				return i;
+			}
+			i += len;
+		}
+		else
+			i++;
+	}
+
+	// avoid starting the next line with a space
+	*text += i + (q_isspace ((unsigned char)str[i]) ? 1 : 0);
+	return i;
+}
+
+/*
+================
+COM_WordWrap -- woods (ironwail) #centerprintwrap
+
+Copies src to dst, wrapping lines longer than maxcols while preserving
+existing newlines. A non-positive maxcols performs a plain bounded copy.
+dst is always NUL terminated if dstsize > 0.
+================
+*/
+void COM_WordWrap (char *dst, const char *src, size_t dstsize, int maxcols)
+{
+	size_t ofs = 0;
+
+	if (!dstsize)
+		return;
+
+	if (maxcols <= 0)
+	{
+		q_strlcpy (dst, src, dstsize);
+		return;
+	}
+
+	while (*src && ofs + 1 < dstsize)
+	{
+		const char *start = src;
+		size_t len = (size_t)COM_AdvanceLineWrapped (&src, maxcols);
+		size_t remaining = dstsize - ofs - 1;
+		qboolean hardbreak = (start[len] == '\n');	//the string's own line break
+
+		// a word pushed to the next line leaves the space before it at the end
+		// of this one, which would offset centered text by half a char
+		if (!hardbreak && *src)
+			while (len > 0 && q_isblank ((unsigned char)start[len - 1]))
+				len--;
+
+		if (len > remaining)
+			len = remaining;
+		memcpy (dst + ofs, start, len);
+		ofs += len;
+
+		// keep the string's own line breaks even at the very end, so text that
+		// needs no wrapping comes out byte for byte the same as a plain copy
+		if ((hardbreak || *src) && ofs + 1 < dstsize)
+			dst[ofs++] = '\n';
+	}
+
+	dst[ofs] = '\0';
 }
 
 
@@ -4861,6 +4977,8 @@ static void COM_AddGameDirectory (const char *dir)
 		hipnotic = true;
 		standard_quake = false;
 	}
+	if (!q_strcasecmp(dir,"mg3")) // woods (ironwail) #centerprintwrap
+		mg3 = true;
 
 	q_strlcpy (com_gamedir, va("%s/%s", base, load_dir), sizeof(com_gamedir));
 
@@ -5010,6 +5128,7 @@ void COM_ResetGameDirectories(char *newgamedirs)
 	}
 	hipnotic = false;
 	rogue = false;
+	mg3 = false; // woods (ironwail) #centerprintwrap
 	standard_quake = true;
 	//wipe the list of mod gamedirs
 	*com_gamenames = 0;
@@ -5187,6 +5306,10 @@ static void COM_Game_f (void)
 		MusicList_Rebuild (); // woods #musiclist
 		TextList_Rebuild (); // woods #textlist
 		M_CheckMods (); // woods #modsmenu (iw)
+
+		// enable scr_usekfont (for centerprint word wrapping) in case mg3 is
+		// used with original id1 data, whose quake.rc doesn't set it
+		Cvar_SetValueQuick (&scr_usekfont, mg3 ? 1.0f : 0.0f); // woods (ironwail) #centerprintwrap
 
 		progs_check_done = false; // woods #botdetect
 

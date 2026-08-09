@@ -2713,6 +2713,9 @@ void Host_Init (void)
 
 	if (cls.state != ca_dedicated)
 	{
+		// enable scr_usekfont (for centerprint word wrapping) in case mg3 is
+		// used with original id1 data, whose quake.rc doesn't set it
+		Cvar_SetValueQuick (&scr_usekfont, mg3 ? 1.0f : 0.0f); // woods (ironwail) #centerprintwrap
 		Cbuf_AddText ("cl_warncmd 0\n");
 		if (COM_FileExists("quake.rc", NULL))
 			Cbuf_InsertText ("exec quake.rc\nhost_cvar_migrate\n");

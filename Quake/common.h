@@ -298,6 +298,9 @@ typedef enum // woods (ironwail) #mapdescriptions
 
 const char *COM_Parse (const char *data);
 const char *COM_ParseEx (const char* data, cpe_mode mode); // woods (ironwail) #mapdescriptions
+int COM_WordLength (const char *text);
+int COM_AdvanceLineWrapped (const char **text, int maxchars);
+void COM_WordWrap (char *dst, const char *src, size_t dstsize, int maxcols);
 
 extern	int		com_argc;
 extern	char	**com_argv;
@@ -558,7 +561,7 @@ long FS_filelength (fshandle_t *fh);
 
 
 extern struct cvar_s	registered;
-extern qboolean		standard_quake, rogue, hipnotic;
+extern qboolean		standard_quake, rogue, hipnotic, mg3;
 extern qboolean		fitzmode;
 	/* if true, run in fitzquake mode disabling custom quakespasm hacks */
 
