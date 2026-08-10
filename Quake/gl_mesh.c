@@ -1803,6 +1803,73 @@ void Matrix3x4_RM_Transform4(const float *matrix, const float *vector, float *pr
 	product[1] = matrix[4]*vector[0] + matrix[5]*vector[1] + matrix[6]*vector[2] + matrix[7]*vector[3];
 	product[2] = matrix[8]*vector[0] + matrix[9]*vector[1] + matrix[10]*vector[2] + matrix[11]*vector[3];
 }
+
+/*
+================
+MD5_FixJointTranslationScale
+
+The joint block is a bind pose and the weights are joint-local, so every joint
+influencing a vertex must place it in the same position. Some exported meshes
+write joint translations at a different scale than their weights. Recover the
+uniform translation scale that makes the bind pose self-consistent.
+================
+*/
+static void MD5_FixJointTranslationScale(const char *fname, bonepose_t *poses,
+										 size_t numbones, const struct md5vertinfo_s *vinfo,
+										 const struct md5weightinfo_s *weight, size_t numverts,
+										 size_t numweights)
+{
+	double num = 0.0, den = 0.0;
+	float scale;
+	size_t v, i, j;
+
+	for (v = 0; v < numverts; v++)
+	{
+		const size_t first = vinfo[v].firstweight;
+
+		if (first > numweights || vinfo[v].count > numweights - first)
+			continue; // MD5_BakeInfluences reports the malformed range
+
+		for (i = 0; i + 1 < vinfo[v].count; i++)
+		{
+			const struct md5weightinfo_s *a = &weight[first + i];
+			const struct md5weightinfo_s *b = &weight[first + i + 1];
+			vec3_t pa, pb, da, db;
+			int k;
+
+			if (a->pos[3] <= 0 || b->pos[3] <= 0)
+				continue;
+
+			Matrix3x4_RM_Transform4(poses[a->bone].mat, a->pos, pa);
+			Matrix3x4_RM_Transform4(poses[b->bone].mat, b->pos, pb);
+			VectorScale(pa, 1.0f / a->pos[3], pa);
+			VectorScale(pb, 1.0f / b->pos[3], pb);
+
+			for (k = 0; k < 3; k++)
+			{
+				db[k] = poses[a->bone].mat[k * 4 + 3] - poses[b->bone].mat[k * 4 + 3];
+				da[k] = pa[k] - pb[k] - db[k];
+			}
+			num += DotProduct(da, db);
+			den += DotProduct(db, db);
+		}
+	}
+
+	if (den <= 0.0)
+		return;
+	scale = (float)(-num / den);
+	if (!isfinite(scale) || scale <= 0.0f || fabsf(scale - 1.0f) < 0.001f)
+		return;
+
+	Con_DWarning("MD5: %s has joint translations %g x the scale of its weights, correcting\n",
+		fname, 1.0f / scale);
+	for (j = 0; j < numbones; j++)
+	{
+		poses[j].mat[3] *= scale;
+		poses[j].mat[7] *= scale;
+		poses[j].mat[11] *= scale;
+	}
+}
 static void MD5_BakeInfluences(const char *fname, bonepose_t *outposes, iqmvert_t *vert, struct md5vertinfo_s *vinfo, struct md5weightinfo_s *weight, size_t numverts, size_t numweights)
 {
 	size_t v, i, lowidx, k;
@@ -2041,9 +2108,9 @@ static void MD5Anim_Begin(struct md5animctx_s *ctx, const char *fname, size_t nu
 			MD5Anim_Discard(ctx);
 			return;
 		}
-		if (ctx->numjoints != numbones)
+		if (ctx->numjoints > numbones)
 		{
-			Con_Warning ("%s has %llu bones, but the mesh has %llu; ignoring animation\n",
+			Con_Warning ("%s has %llu bones, but the mesh has only %llu; ignoring animation\n",
 				fname, (unsigned long long)ctx->numjoints, (unsigned long long)numbones);
 			MD5Anim_Discard(ctx);
 			return;
@@ -2073,7 +2140,7 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 
 	MD5EXPECT("numAnimatedComponents");	rawcount = MD5UINT();
 
-	if (ctx->numjoints != numbones)
+	if (ctx->numjoints > numbones)
 	{
 		Con_Warning ("%s bone count changed while loading; ignoring animation\n", fname);
 		MD5Anim_Discard(ctx);
@@ -2111,12 +2178,9 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 				fname, (unsigned int)j, parent);
 			parent = -1;
 		}
-		if (bones[j].parent != parent)
-		{
-			Con_Warning ("%s: bone %u has parent %ld, but the mesh uses %d; ignoring animation\n",
-				fname, (unsigned int)j, parent, bones[j].parent);
-			goto ignore_animation;
-		}
+		// Animation poses are relative to the animation's hierarchy, which may
+		// legitimately differ from the mesh's bind-pose hierarchy.
+		bones[j].parent = (int)parent;
 		//new info
 		{
 			size_t flags = MD5UINT();
@@ -2139,8 +2203,8 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 	MD5EXPECT("}");
 
 	//Only commit pose data to the hunk after the optional animation has been
-	//verified against the mesh hierarchy. Ignored animations then need no hunk unwind.
-	ctx->posedata = outposes = Hunk_Alloc(GLMesh_CheckedHunkSize(GLMesh_CheckedSize(ctx->numjoints, ctx->numposes, "MD5Anim_Load"), sizeof(*outposes), "MD5Anim_Load"));
+	//validated. Ignored animations then need no hunk unwind.
+	ctx->posedata = outposes = Hunk_Alloc(GLMesh_CheckedHunkSize(GLMesh_CheckedSize(numbones, ctx->numposes, "MD5Anim_Load"), sizeof(*outposes), "MD5Anim_Load"));
 
 	MD5EXPECT("bounds");
 	MD5EXPECT("{");
@@ -2217,7 +2281,7 @@ static void MD5Anim_Load(struct md5animctx_s *ctx, boneinfo_t *bones, size_t num
 				quat[3] = 0;//we have no imagination.
 			quat[3] = -sqrt(quat[3]);
 
-			GenMatrixPosQuat4Scale(pos, quat, scale, outposes[idx*ctx->numjoints + j].mat);
+			GenMatrixPosQuat4Scale(pos, quat, scale, outposes[idx*numbones + j].mat);
 		}
 	}
 	if (framecount != ctx->numposes)
@@ -2239,6 +2303,33 @@ ignore_animation:
 	Z_Free(raw);
 	Z_Free(ab);
 	MD5Anim_Discard(ctx);
+}
+
+/*
+================
+MD5Anim_CompleteBindPose
+
+An animation may omit trailing helper bones from the mesh. QSS-M constructs the
+skinning palette at draw time, so widen every animation pose to the mesh bone
+count and make each omitted bone produce an identity skinning transform.
+================
+*/
+static void MD5Anim_CompleteBindPose(struct md5animctx_s *ctx, boneinfo_t *bones,
+									 const bonepose_t *bindposes, size_t numbones)
+{
+	size_t pose, bone;
+
+	if (!ctx->posedata)
+		return;
+
+	for (bone = ctx->numjoints; bone < numbones; bone++)
+	{
+		// Store the absolute bind pose as a root-relative pose. The renderer then
+		// multiplies it by its inverse bind matrix, yielding identity.
+		bones[bone].parent = -1;
+		for (pose = 0; pose < ctx->numposes; pose++)
+			ctx->posedata[pose*numbones + bone] = bindposes[bone];
+	}
 }
 void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 {
@@ -2301,16 +2392,8 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 		static vec3_t scale = {1,1,1};
 		vec4_t quat;
 		q_strlcpy(outbones[j].name, com_token, sizeof(outbones[j].name));	buffer = COM_Parse(buffer);
-		{
-			long parent = MD5SINT();
-			if (parent < -1 || (parent >= 0 && (size_t)parent >= j))
-			{
-				Con_Warning ("%s: bone %u has invalid parent %ld; treating it as a root bone\n",
-					fname, (unsigned int)j, parent);
-				parent = -1;
-			}
-			outbones[j].parent = (int)parent;
-		}
+		MD5SINT(); // bind-pose hierarchy is unused; animated poses use the animation's hierarchy
+		outbones[j].parent = -1;
 		MD5EXPECT("(");
 		pos[0] = MD5FLOAT();
 		pos[1] = MD5FLOAT();
@@ -2327,7 +2410,6 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 		MD5EXPECT(")");
 
 		GenMatrixPosQuat4Scale(pos, quat, scale, outposes[j].mat);
-		Matrix3x4_Invert_Simple(outposes[j].mat, outbones[j].inverse.mat);	//absolute, so we can just invert now.
 	}
 
 	if (strcmp(com_token, "}")) Sys_Error ("Mod_LoadMD5MeshModel(%s): Expected \"%s\"", fname, "}");
@@ -2571,6 +2653,16 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 				if (!weightdone[j])
 					Sys_Error ("%s: missing weight", fname);
 			Z_Free(weightdone);
+		}
+		if (m == 0)
+		{
+			// The weights are needed to validate and, when necessary, correct the
+			// bind pose before baking vertices or computing inverse bind matrices.
+			MD5_FixJointTranslationScale(fname, outposes, numjoints, vinfo, weight,
+				surf->numverts, numweights);
+			for (j = 0; j < numjoints; j++)
+				Matrix3x4_Invert_Simple(outposes[j].mat, outbones[j].inverse.mat);
+			MD5Anim_CompleteBindPose(&anim, outbones, outposes, numjoints);
 		}
 		//so make it gpu-friendly.
 		MD5_BakeInfluences(fname, outposes, poutvert, vinfo, weight, surf->numverts, numweights);
