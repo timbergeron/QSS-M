@@ -3710,7 +3710,9 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
 	qboolean	alphatest = !!(e->model->flags & MF_HOLEY);
 	int surf;
 	float		fovscale = 1.0f;
-	qmodel_t* clmodel = currententity->model;   // woods lightning alpha #lightalpha & doubleeyes 
+	qmodel_t* clmodel = e->model;   // woods lightning alpha #lightalpha & doubleeyes
+
+	currententity = e;
 
 	//
 	// setup pose/lerp data -- do it first so we don't miss updates due to culling
