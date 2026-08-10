@@ -45454,6 +45454,13 @@ void M_Keydown (int key, qboolean repeat)
 			return;
 	}
 
+	/* Cmd/Ctrl-V is also handled globally for clipboard file drops.  If the
+	 * clipboard has no file, keep it from becoming a printable search letter;
+	 * active text fields still receive it below for normal text paste. */
+	if (!bind_grab && (key == 'v' || key == 'V') &&
+		Key_IsShortcutModifierDown() && !M_TextEntry())
+		return;
+
 	if (!repeat && !bind_grab && MenuSearch_CanOpenImplicit())
 	{
 		if ((key == 'k' || key == 'K') && Key_IsShortcutModifierDown())
