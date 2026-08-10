@@ -4801,6 +4801,8 @@ static qboolean IN_IsMapAssetFile(const char *path)
 	return IN_IsMapAssetExtension(COM_FileGetExtension(normalized_path));
 }
 
+static qboolean IN_IsSkyboxImageFile(const char *path);
+
 static qboolean IN_HasMapAssetFiles(char **paths, int count)
 {
 	int i;
@@ -5025,6 +5027,10 @@ static qboolean IN_InstallMapFiles(char **paths, int path_count, const char *bat
 			found_map_asset = true;
 			IN_AddMapSidecar(vises, &vis_count, normalized_path, ".vis", file_desc, &skipped_count);
 		}
+		else if (IN_IsSkyboxImageFile(normalized_path))
+		{
+			/* Skybox faces are installed by IN_ProcessSkyboxFiles below. */
+		}
 		else if (path_count > 1 && !IN_IsLegacyExternalExtension(extension))
 		{
 			Con_Printf("Unsupported %s: %s\n", file_desc, COM_SkipPath(normalized_path));
@@ -5153,10 +5159,365 @@ static qboolean IN_InstallMapFiles(char **paths, int path_count, const char *bat
 	return found_map_asset;
 }
 
+#define IN_SKYBOX_FACE_COUNT 6
+
+static const char *in_skybox_suffixes[IN_SKYBOX_FACE_COUNT] =
+{
+	"rt", "bk", "lf", "ft", "up", "dn"
+};
+
+static const char *IN_SkyboxImageExtension(const char *extension)
+{
+	static const char *extensions[] = { "dds", "tga", "png", "jpeg", "jpg", "pcx" };
+	int i;
+
+	if (!extension || !*extension)
+		return NULL;
+	for (i = 0; i < (int)Q_COUNTOF(extensions); ++i)
+	{
+		if (!q_strcasecmp(extension, extensions[i]))
+			return extensions[i];
+	}
+	return NULL;
+}
+
+static qboolean IN_ParseSkyboxImagePath(const char *path, char *skyname, size_t skyname_size, int *face_index, qboolean *has_underscore)
+{
+	char normalized_path[MAX_OSPATH];
+	char stem[MAX_OSPATH];
+	const char *extension;
+	const char *basename;
+	size_t len;
+	int i;
+
+	if (!path || !*path || !skyname || skyname_size == 0)
+		return false;
+	if (q_strlcpy(normalized_path, path, sizeof(normalized_path)) >= sizeof(normalized_path))
+		return false;
+	IN_NormalizeDroppedPath(normalized_path);
+
+	extension = IN_SkyboxImageExtension(COM_FileGetExtension(normalized_path));
+	if (!extension)
+		return false;
+
+	basename = COM_SkipPath(normalized_path);
+	COM_StripExtension(basename, stem, sizeof(stem));
+	len = strlen(stem);
+	if (len <= 2)
+		return false;
+
+	for (i = 0; i < IN_SKYBOX_FACE_COUNT; ++i)
+	{
+		qboolean underscore = false;
+		size_t prefix_len;
+
+		if (q_strcasecmp(stem + len - 2, in_skybox_suffixes[i]) != 0)
+			continue;
+
+		prefix_len = len - 2;
+		if (prefix_len > 0 && stem[prefix_len - 1] == '_')
+		{
+			underscore = true;
+			--prefix_len;
+		}
+		if (prefix_len == 0 || prefix_len >= skyname_size)
+			return false;
+
+		memcpy(skyname, stem, prefix_len);
+		skyname[prefix_len] = '\0';
+		if (!q_strcasecmp(skyname, ".") || !q_strcasecmp(skyname, ".."))
+			return false;
+
+		if (face_index)
+			*face_index = i;
+		if (has_underscore)
+			*has_underscore = underscore;
+		return true;
+	}
+
+	return false;
+}
+
+static void IN_GetSkyboxImageDirectory(const char *path, char *directory, size_t directory_size)
+{
+	const char *basename;
+	size_t directory_len;
+
+	if (!directory || directory_size == 0)
+		return;
+	directory[0] = '\0';
+	if (!path || !*path)
+		return;
+
+	basename = COM_SkipPath(path);
+	directory_len = (size_t)(basename - path);
+	if (directory_len > 0 && path[directory_len - 1] == '/')
+		--directory_len;
+	if (directory_len >= directory_size)
+		return;
+	memcpy(directory, path, directory_len);
+	directory[directory_len] = '\0';
+}
+
+static qboolean IN_SameSkyboxGroup(const char *path, const char *directory, const char *skyname)
+{
+	char candidate_directory[MAX_OSPATH];
+	char candidate_skyname[MAX_OSPATH];
+
+	if (!IN_ParseSkyboxImagePath(path, candidate_skyname, sizeof(candidate_skyname), NULL, NULL))
+		return false;
+	IN_GetSkyboxImageDirectory(path, candidate_directory, sizeof(candidate_directory));
+#ifdef _WIN32
+	return !q_strcasecmp(candidate_directory, directory) && !q_strcasecmp(candidate_skyname, skyname);
+#else
+	return !strcmp(candidate_directory, directory) && !q_strcasecmp(candidate_skyname, skyname);
+#endif
+}
+
+static const char *IN_FindSkyboxFaceInBatch(char **paths, int path_count, const char *directory, const char *skyname, int face_index)
+{
+	int i;
+
+	for (i = 0; i < path_count; ++i)
+	{
+		char candidate_skyname[MAX_OSPATH];
+		int candidate_face;
+
+		if (!IN_ParseSkyboxImagePath(paths[i], candidate_skyname, sizeof(candidate_skyname), &candidate_face, NULL))
+			continue;
+		if (candidate_face != face_index || !IN_SameSkyboxGroup(paths[i], directory, skyname))
+			continue;
+		return paths[i];
+	}
+	return NULL;
+}
+
+static qboolean IN_BuildSkyboxFaceCandidate(const char *directory, const char *skyname, int face_index, qboolean underscore, const char *extension, char *path, size_t path_size)
+{
+	int result;
+
+	if (directory && directory[0])
+		result = q_snprintf(path, path_size, "%s/%s%s%s.%s", directory, skyname,
+			underscore ? "_" : "", in_skybox_suffixes[face_index], extension);
+	else
+		result = q_snprintf(path, path_size, "%s%s%s.%s", skyname,
+			underscore ? "_" : "", in_skybox_suffixes[face_index], extension);
+	return result >= 0 && (size_t)result < path_size;
+}
+
+static qboolean IN_FindAdjacentSkyboxFace(const char *directory, const char *skyname, int face_index, qboolean preferred_underscore, char *path, size_t path_size)
+{
+	static const char *extensions[] = { "dds", "tga", "png", "jpeg", "jpg", "pcx" };
+	int style;
+	int extension_index;
+
+	for (style = 0; style < 2; ++style)
+	{
+		qboolean underscore = style == 0 ? preferred_underscore : !preferred_underscore;
+
+		for (extension_index = 0; extension_index < (int)Q_COUNTOF(extensions); ++extension_index)
+		{
+			if (!IN_BuildSkyboxFaceCandidate(directory, skyname, face_index, underscore,
+				extensions[extension_index], path, path_size))
+				continue;
+			if (Sys_FileType(path) & FS_ENT_FILE)
+				return true;
+		}
+	}
+	return false;
+}
+
+static qboolean IN_IsSkyboxImageFile(const char *path)
+{
+	char skyname[MAX_OSPATH];
+
+	return IN_ParseSkyboxImagePath(path, skyname, sizeof(skyname), NULL, NULL);
+}
+
+static qboolean IN_FindExistingSkyboxFace(const char *relative_path, const char *extension,
+	char *existing_relative_path, size_t existing_relative_size,
+	char *existing_dest_path, size_t existing_dest_size)
+{
+	static const char *extensions[] = { "dds", "tga", "png", "jpeg", "jpg", "pcx" };
+	char relative_base[MAX_OSPATH];
+	int i;
+
+	if (!relative_path || !extension || !existing_relative_path || existing_relative_size == 0 ||
+		!existing_dest_path || existing_dest_size == 0)
+		return false;
+	COM_StripExtension(relative_path, relative_base, sizeof(relative_base));
+
+	for (i = 0; i < (int)Q_COUNTOF(extensions); ++i)
+	{
+		int result;
+
+		if (!q_strcasecmp(extension, extensions[i]))
+			continue;
+		result = q_snprintf(existing_relative_path, existing_relative_size, "%s.%s",
+			relative_base, extensions[i]);
+		if (result < 0 || (size_t)result >= existing_relative_size)
+			continue;
+		result = q_snprintf(existing_dest_path, existing_dest_size, "%s/%s",
+			com_gamedir, existing_relative_path);
+		if (result < 0 || (size_t)result >= existing_dest_size)
+			continue;
+		IN_NormalizeDroppedPath(existing_dest_path);
+		if (Sys_FileType(existing_dest_path) & FS_ENT_FILE)
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean IN_ProcessSkyboxFiles(char **paths, int path_count, const char *batch_desc, const char *file_desc, qboolean *installed_any)
+{
+	int group_index;
+	int face_index;
+	int groups = 0;
+	int ready_faces = 0;
+	qboolean found_skybox = false;
+
+	if (!paths || path_count <= 0)
+		return false;
+	if (installed_any)
+		*installed_any = false;
+	if (!batch_desc || !*batch_desc)
+		batch_desc = "Skybox";
+	if (!file_desc || !*file_desc)
+		file_desc = "skybox face";
+
+	for (group_index = 0; group_index < path_count; ++group_index)
+	{
+		char normalized_path[MAX_OSPATH];
+		char directory[MAX_OSPATH];
+		char skyname[MAX_OSPATH];
+		char source_path[MAX_OSPATH];
+		char source_paths[IN_SKYBOX_FACE_COUNT][MAX_OSPATH];
+		char relative_path[MAX_OSPATH];
+		char dest_path[MAX_OSPATH];
+		qboolean preferred_underscore;
+		int source_count = 0;
+		int face_count = 0;
+
+		if (!paths[group_index] || !*paths[group_index])
+			continue;
+		if (!IN_ParseSkyboxImagePath(paths[group_index], skyname, sizeof(skyname),
+			NULL, &preferred_underscore))
+			continue;
+		if (q_strlcpy(normalized_path, paths[group_index], sizeof(normalized_path)) >= sizeof(normalized_path))
+			continue;
+		IN_NormalizeDroppedPath(normalized_path);
+		IN_GetSkyboxImageDirectory(normalized_path, directory, sizeof(directory));
+
+		/* Process each pasted/source directory and skybox name only once. */
+		{
+			int previous;
+			qboolean already_processed = false;
+			for (previous = 0; previous < group_index; ++previous)
+			{
+				if (IN_SameSkyboxGroup(paths[previous], directory, skyname))
+				{
+					already_processed = true;
+					break;
+				}
+			}
+			if (already_processed)
+				continue;
+		}
+
+		memset(source_paths, 0, sizeof(source_paths));
+		for (face_index = 0; face_index < IN_SKYBOX_FACE_COUNT; ++face_index)
+		{
+			const char *batch_face;
+
+			batch_face = IN_FindSkyboxFaceInBatch(paths, path_count, directory, skyname, face_index);
+			if (batch_face)
+			{
+				if (q_strlcpy(source_path, batch_face, sizeof(source_path)) >= sizeof(source_path))
+					continue;
+				IN_NormalizeDroppedPath(source_path);
+			}
+			else if (!IN_FindAdjacentSkyboxFace(directory, skyname, face_index,
+				preferred_underscore, source_path, sizeof(source_path)))
+			{
+				continue;
+			}
+			q_strlcpy(source_paths[face_index], source_path, sizeof(source_paths[face_index]));
+			++source_count;
+		}
+
+		/* A lone image with a coincidental face suffix is not enough to
+		 * identify a skybox.  A complete set is required before installing. */
+		if (source_count < 2)
+			continue;
+
+		found_skybox = true;
+		++groups;
+		if (source_count != IN_SKYBOX_FACE_COUNT)
+		{
+			Con_Printf("%s skybox %s incomplete: %d/%d faces found; not installed.\n",
+				batch_desc, skyname, source_count, IN_SKYBOX_FACE_COUNT);
+			continue;
+		}
+
+		for (face_index = 0; face_index < IN_SKYBOX_FACE_COUNT; ++face_index)
+		{
+			const char *extension;
+			char existing_relative_path[MAX_OSPATH];
+			char existing_dest_path[MAX_OSPATH];
+			qboolean copied;
+
+			extension = IN_SkyboxImageExtension(COM_FileGetExtension(source_paths[face_index]));
+			if (!extension)
+				continue;
+			if (q_snprintf(relative_path, sizeof(relative_path), "gfx/env/%s%s.%s",
+				skyname, in_skybox_suffixes[face_index], extension) < 0 ||
+				strlen(relative_path) >= sizeof(relative_path))
+			{
+				Con_Printf("Path too long for %s.\n", file_desc);
+				continue;
+			}
+			if (IN_FindExistingSkyboxFace(relative_path, extension,
+				existing_relative_path, sizeof(existing_relative_path),
+				existing_dest_path, sizeof(existing_dest_path)))
+			{
+				Con_SafePrintf("Using existing skybox face at ");
+				Con_LinkPrintf(existing_dest_path, "%s/%s", COM_SkipPath(com_gamedir), existing_relative_path);
+				Con_SafePrintf("\n");
+				++face_count;
+				continue;
+			}
+			if (q_snprintf(dest_path, sizeof(dest_path), "%s/%s", com_gamedir, relative_path) < 0 ||
+				strlen(dest_path) >= sizeof(dest_path))
+			{
+				Con_Printf("Path too long for %s.\n", file_desc);
+				continue;
+			}
+			IN_NormalizeDroppedPath(dest_path);
+			copied = IN_CopyExternalFileToMapPath(source_paths[face_index], file_desc, relative_path, dest_path, NULL);
+			if (copied)
+				++face_count;
+		}
+
+		ready_faces += face_count;
+		if (face_count > 0 && installed_any)
+			*installed_any = true;
+		Con_Printf("%s skybox %s: %d/%d faces installed%s.\n", batch_desc, skyname,
+			face_count, IN_SKYBOX_FACE_COUNT,
+			face_count == IN_SKYBOX_FACE_COUNT ? "" : "; one or more faces could not be copied");
+	}
+
+	if (found_skybox && groups > 1)
+		Con_Printf("%s skyboxes: %d groups, %d faces ready.\n", batch_desc, groups, ready_faces);
+	return found_skybox;
+}
+
 static qboolean IN_ProcessExternalFiles(char **paths, int count, const char *batch_desc, const char *file_desc, const char *bsp_desc, const char *lit_desc, const char *ent_desc, const char *vis_desc)
 {
 	qboolean handled = false;
 	qboolean handled_maps;
+	qboolean handled_skyboxes;
+	qboolean skybox_installed = false;
 	qboolean installed_any = false;
 	qboolean map_installed = false;
 	qboolean suppress_demo_autoplay_for_match;
@@ -5176,12 +5537,18 @@ static qboolean IN_ProcessExternalFiles(char **paths, int count, const char *bat
 		IN_InstallMapFiles(paths, count, batch_desc, file_desc, bsp_desc, lit_desc, ent_desc, vis_desc, &map_installed);
 	if (handled_maps)
 		handled = true;
+	handled_skyboxes = IN_ProcessSkyboxFiles(paths, count, batch_desc, file_desc, &skybox_installed);
+	if (handled_skyboxes)
+		handled = true;
+	if (skybox_installed)
+		installed_any = true;
 
 	for (i = 0; i < count; ++i)
 	{
 		if (!paths[i])
 			continue;
-		if (handled_maps && !IN_IsLegacyExternalFile(paths[i]))
+		if ((handled_maps && !IN_IsLegacyExternalFile(paths[i])) ||
+			(handled_skyboxes && IN_IsSkyboxImageFile(paths[i])))
 			continue;
 		if (IN_InstallExternalFile(paths[i], file_desc, suppress_demo_autoplay))
 		{
