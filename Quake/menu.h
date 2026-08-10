@@ -45,6 +45,7 @@ enum m_state_e {
 	m_video,
 	m_graphics,
 	m_sky,
+	m_skyboxviewer,
 	m_skywind,
 	m_sound,
 	m_voip,

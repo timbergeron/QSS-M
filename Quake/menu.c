@@ -112,6 +112,7 @@ void M_Menu_ModMenu_f (void);
 		void M_Menu_Video_f (void);
 	void M_Menu_Graphics_f (void);
 		void M_Menu_Sky_f (void);
+			void M_Menu_SkyboxViewer_f (void);
 			void M_Menu_Skywind_f (void);
 	void M_Menu_Sound_f (void);
 		void M_Menu_Voip_f (void);
@@ -166,6 +167,7 @@ void M_ModMenu_Draw (void);
 		void M_Video_Draw (void);
 	void M_Graphics_Draw (void);
 		void M_Sky_Draw (void);
+			void M_SkyboxViewer_Draw (void);
 			void M_Skywind_Draw (void);
 	void M_Sound_Draw (void);
 		void M_Voip_Draw (void);
@@ -220,6 +222,7 @@ void M_ModMenu_Key (int key);
 		void M_Sky_Key (int key);
 		void M_Sky_Char (int key);
 		qboolean M_Sky_TextEntry (void);
+			void M_SkyboxViewer_Key (int key);
 			void M_Skywind_Key (int key);
 	void M_Sound_Key (int key);
 		void M_Voip_Key (int key);
@@ -281,6 +284,7 @@ void M_ModMenu_Key (int key);
 		void M_Video_Mousemove (int cx, int cy);
 		void M_Graphics_Mousemove (int cx, int cy);
 			void M_Sky_Mousemove (int cx, int cy);
+				void M_SkyboxViewer_Mousemove (int cx, int cy);
 				void M_Skywind_Mousemove (int cx, int cy);
 		void M_Sound_Mousemove (int cx, int cy);
 			void M_Voip_Mousemove (int cx, int cy);
@@ -328,6 +332,7 @@ static int M_LanConfig_NewGameOkCursor(void);
 static void CleanupPingThreads(void);
 static void M_PakLoading_Shutdown(void);
 static void M_ModelViewer_Shutdown(void);
+static void M_SkyboxViewer_Shutdown(void);
 static void M_Demos_EndPathEdit(void);
 static void M_Demos_Shutdown(void);
 static qboolean MenuSearch_HasLocalModalState(enum m_state_e state);
@@ -15444,6 +15449,7 @@ Sky Menu
 
 extern cvar_t r_fastsky, r_fastskycolor, r_skyalpha, r_skyfog, r_skyspeed;
 extern cvar_t r_skywind, r_globalsky, allow_download_sky;
+extern char skybox_name[1024];
 // r_sky_quality is file-static in gl_sky.c; we access it by name via Cvar_FindVar.
 
 void Sky_GetWindParams(float *dist, float *yaw, float *period, float *pitch);
@@ -15465,6 +15471,7 @@ static enum sky_e
 	SKY_SPEED,
 	SKY_ALLOW_DOWNLOAD,
 	SKY_GLOBALSKY,
+	SKY_VIEWER,
 	SKY_WIND,
 	SKY_COUNT
 } sky_cursor;
@@ -15593,7 +15600,7 @@ static const char *M_Sky_GetItemText(int index)
 {
 	static const char *const labels[SKY_ITEMS] = {
 		"Fast Sky", "Fast Sky Color", "Sky Quality", "Sky Alpha", "Sky Fog",
-		"Sky Speed", "Skybox Downloads", "Global Sky", "Skywind"
+		"Sky Speed", "Skybox Downloads", "Global Sky", "Skybox Viewer", "Skywind"
 	};
 	return (index >= 0 && index < SKY_ITEMS) ? labels[index] : "";
 }
@@ -15777,6 +15784,10 @@ static void M_Sky_AdjustSliders(int dir)
 
 	case SKY_GLOBALSKY:
 		M_Sky_BeginFieldEdit();
+		break;
+
+	case SKY_VIEWER:
+		M_Menu_SkyboxViewer_f();
 		break;
 
 	case SKY_WIND:
@@ -15965,6 +15976,11 @@ void M_Sky_Draw(void)
 			value = "...";
 			break;
 
+		case SKY_VIEWER:
+			text = "     Skybox Viewer";
+			value = "...";
+			break;
+
 		default:
 			break;
 		}
@@ -16142,7 +16158,7 @@ void M_Sky_Key(int k)
 		break;
 
 	case K_MWHEELDOWN:
-		if (sky_cursor != SKY_WIND)
+		if (sky_cursor != SKY_WIND && sky_cursor != SKY_VIEWER)
 			M_Sky_AdjustSliders(-1);
 		break;
 
@@ -16151,7 +16167,7 @@ void M_Sky_Key(int k)
 		break;
 
 	case K_MWHEELUP:
-		if (sky_cursor != SKY_WIND)
+		if (sky_cursor != SKY_WIND && sky_cursor != SKY_VIEWER)
 			M_Sky_AdjustSliders(1);
 		break;
 	}
@@ -16238,6 +16254,400 @@ void M_Sky_Mousemove(int cx, int cy)
 		if (item >= 0)
 			sky_cursor = item;
 	}
+}
+
+
+/*
+==================
+Skybox Viewer Menu
+==================
+*/
+
+#define SKYBOXVIEWER_LIST_X 16
+#define SKYBOXVIEWER_LIST_Y 12
+#define SKYBOXVIEWER_LIST_COLS 14
+#define SKYBOXVIEWER_LIST_ROWS 16
+#define SKYBOXVIEWER_PREVIEW_X 136
+#define SKYBOXVIEWER_PREVIEW_Y 12
+#define SKYBOXVIEWER_PREVIEW_W 176
+#define SKYBOXVIEWER_PREVIEW_H 136
+#define SKYBOXVIEWER_DETAIL_Y 160
+#define SKYBOXVIEWER_SEARCH_BOX_Y 176
+#define SKYBOXVIEWER_LOOK_SENSITIVITY 0.35f
+
+typedef struct
+{
+	char name[MAX_QPATH];
+} skyboxvieweritem_t;
+
+static struct
+{
+	menulist_t list;
+	skyboxvieweritem_t *items;
+	int *filtered_indices;
+	qboolean scrollbar_grab;
+	qboolean look_grab;
+	int look_last_x, look_last_y;
+	float yaw, pitch, fov;
+	char saved_skybox[sizeof(skybox_name)];
+	char loaded_skybox[MAX_QPATH];
+	qboolean applied;
+} skyboxviewermenu;
+
+static skyboxvieweritem_t *M_SkyboxViewer_SelectedItem(void)
+{
+	int index;
+
+	if (skyboxviewermenu.list.numitems <= 0 ||
+		skyboxviewermenu.list.cursor < 0 ||
+		skyboxviewermenu.list.cursor >= skyboxviewermenu.list.numitems)
+		return NULL;
+	index = skyboxviewermenu.filtered_indices[skyboxviewermenu.list.cursor];
+	return &skyboxviewermenu.items[index];
+}
+
+static void M_SkyboxViewer_ResetView(void)
+{
+	skyboxviewermenu.yaw = 0.0f;
+	skyboxviewermenu.pitch = 0.0f;
+	skyboxviewermenu.fov = 75.0f;
+}
+
+static void M_SkyboxViewer_Refilter(void)
+{
+	int i;
+
+	VEC_CLEAR(skyboxviewermenu.filtered_indices);
+	for (i = 0; i < (int)VEC_SIZE(skyboxviewermenu.items); ++i)
+	{
+		if (!skyboxviewermenu.list.search.len ||
+			q_strcasestr(skyboxviewermenu.items[i].name, skyboxviewermenu.list.search.text))
+			VEC_PUSH(skyboxviewermenu.filtered_indices, i);
+	}
+	skyboxviewermenu.list.numitems = (int)VEC_SIZE(skyboxviewermenu.filtered_indices);
+	skyboxviewermenu.list.cursor = 0;
+	skyboxviewermenu.list.scroll = 0;
+}
+
+static void M_SkyboxViewer_BuildItems(void)
+{
+	filelist_item_t *sky;
+	const char *preferred = r_globalsky.string[0] ? r_globalsky.string : skyboxviewermenu.saved_skybox;
+	int preferred_item = -1;
+
+	VEC_CLEAR(skyboxviewermenu.items);
+	for (sky = skylist; sky; sky = sky->next)
+	{
+		skyboxvieweritem_t item;
+
+		if (!Sky_HasAllSkyboxFaces(sky->name))
+			continue;
+		q_strlcpy(item.name, sky->name, sizeof(item.name));
+		if (preferred[0] && !q_strcasecmp(preferred, item.name))
+			preferred_item = (int)VEC_SIZE(skyboxviewermenu.items);
+		VEC_PUSH(skyboxviewermenu.items, item);
+	}
+	M_SkyboxViewer_Refilter();
+	if (preferred_item >= 0)
+	{
+		skyboxviewermenu.list.cursor = preferred_item;
+		M_List_CenterCursor(&skyboxviewermenu.list);
+	}
+}
+
+static void M_SkyboxViewer_LoadSelection(void)
+{
+	skyboxvieweritem_t *selected = M_SkyboxViewer_SelectedItem();
+
+	if (!selected || !q_strcasecmp(selected->name, skyboxviewermenu.loaded_skybox))
+		return;
+	Sky_LoadSkyBox(selected->name);
+	q_strlcpy(skyboxviewermenu.loaded_skybox, selected->name,
+		sizeof(skyboxviewermenu.loaded_skybox));
+	M_SkyboxViewer_ResetView();
+}
+
+static void M_SkyboxViewer_MenuRectToPixels(float x, float y, float w, float h,
+	float *px, float *py, float *pw, float *ph)
+{
+	vrect_t bounds, viewport;
+	float sx, sy;
+
+	Draw_GetMenuTransform(&bounds, &viewport);
+	sx = (float)viewport.width / (float)bounds.width;
+	sy = (float)viewport.height / (float)bounds.height;
+	*px = viewport.x + (x - bounds.x) * sx;
+	*py = viewport.y + (y - bounds.y) * sy;
+	*pw = w * sx;
+	*ph = h * sy;
+}
+
+static qboolean M_SkyboxViewer_PointInPreview(int x, int y)
+{
+	return x >= SKYBOXVIEWER_PREVIEW_X && x < SKYBOXVIEWER_PREVIEW_X + SKYBOXVIEWER_PREVIEW_W &&
+		y >= SKYBOXVIEWER_PREVIEW_Y && y < SKYBOXVIEWER_PREVIEW_Y + SKYBOXVIEWER_PREVIEW_H;
+}
+
+static void M_SkyboxViewer_Shutdown(void)
+{
+	if (!skyboxviewermenu.applied &&
+		q_strcasecmp(skybox_name, skyboxviewermenu.saved_skybox))
+		Sky_LoadSkyBox(skyboxviewermenu.saved_skybox);
+	VEC_CLEAR(skyboxviewermenu.items);
+	VEC_CLEAR(skyboxviewermenu.filtered_indices);
+	skyboxviewermenu.loaded_skybox[0] = '\0';
+}
+
+static void M_SkyboxViewer_Close(void)
+{
+	M_SkyboxViewer_Shutdown();
+	M_Menu_Sky_f();
+	sky_cursor = SKY_VIEWER;
+}
+
+void M_Menu_SkyboxViewer_f(void)
+{
+	memset(&skyboxviewermenu, 0, sizeof(skyboxviewermenu));
+	q_strlcpy(skyboxviewermenu.saved_skybox, skybox_name,
+		sizeof(skyboxviewermenu.saved_skybox));
+	skyboxviewermenu.list.viewsize = SKYBOXVIEWER_LIST_ROWS;
+	skyboxviewermenu.list.search.maxlen = 32;
+	M_SkyboxViewer_ResetView();
+	SkyList_Init();
+	M_SkyboxViewer_BuildItems();
+
+	key_dest = key_menu;
+	m_state = m_skyboxviewer;
+	m_entersound = true;
+	M_LivePreview_Reset();
+	IN_UpdateGrabs();
+}
+
+void M_SkyboxViewer_Draw(void)
+{
+	int firstvis, numvis, i;
+	skyboxvieweritem_t *selected;
+	float px, py, pw, ph;
+
+	if (!keydown[K_MOUSE1])
+	{
+		skyboxviewermenu.scrollbar_grab = false;
+		skyboxviewermenu.look_grab = false;
+	}
+	M_SkyboxViewer_LoadSelection();
+	M_DrawTextBox(SKYBOXVIEWER_PREVIEW_X - 8, SKYBOXVIEWER_PREVIEW_Y - 8, 22, 17);
+
+	selected = M_SkyboxViewer_SelectedItem();
+	if (selected)
+	{
+		M_SkyboxViewer_MenuRectToPixels(SKYBOXVIEWER_PREVIEW_X, SKYBOXVIEWER_PREVIEW_Y,
+			SKYBOXVIEWER_PREVIEW_W, SKYBOXVIEWER_PREVIEW_H, &px, &py, &pw, &ph);
+		if (!Sky_DrawMenuPreview(px, py, pw, ph, skyboxviewermenu.yaw,
+			skyboxviewermenu.pitch, skyboxviewermenu.fov))
+			M_PrintWhite(SKYBOXVIEWER_PREVIEW_X + 44, SKYBOXVIEWER_PREVIEW_Y + 60, "preview unavailable");
+		GL_SetCanvas(CANVAS_MENU);
+	}
+
+	if (skyboxviewermenu.list.numitems > 0)
+	{
+		M_List_GetVisibleRange(&skyboxviewermenu.list, &firstvis, &numvis);
+		for (i = 0; i < numvis; ++i)
+		{
+			int row = firstvis + i;
+			int item_index = skyboxviewermenu.filtered_indices[row];
+			const char *name = skyboxviewermenu.items[item_index].name;
+			int y = SKYBOXVIEWER_LIST_Y + i * 8;
+			M_PrintScroll(SKYBOXVIEWER_LIST_X, y, (SKYBOXVIEWER_LIST_COLS - 2) * 8,
+				name, row == skyboxviewermenu.list.cursor ? realtime : 0.0, true);
+			if (row == skyboxviewermenu.list.cursor)
+				M_DrawCharacter(SKYBOXVIEWER_LIST_X - 8, y, 12 + ((int)(realtime * 4) & 1));
+		}
+	}
+	else
+		M_PrintWhite(SKYBOXVIEWER_LIST_X, SKYBOXVIEWER_LIST_Y,
+			VEC_SIZE(skyboxviewermenu.items) ? "No matches" : "No complete skyboxes");
+
+	if (M_List_GetOverflow(&skyboxviewermenu.list) > 0)
+		M_List_DrawScrollbar(&skyboxviewermenu.list,
+			SKYBOXVIEWER_LIST_X + SKYBOXVIEWER_LIST_COLS * 8 - 8, SKYBOXVIEWER_LIST_Y);
+
+	if (selected)
+		M_PrintScroll(16, SKYBOXVIEWER_DETAIL_Y, 288, selected->name, realtime, false);
+	M_PrintRGBA(16, SKYBOXVIEWER_DETAIL_Y + 8,
+		"drag: look  wheel: zoom  Home: reset  Enter: use",
+		CL_PLColours_Parse("0xffffff"), 0.5f, false);
+
+	if (skyboxviewermenu.list.search.len > 0)
+	{
+		int cursor_x = 24 + 8 * skyboxviewermenu.list.search.len;
+		M_DrawTextBox(16, SKYBOXVIEWER_SEARCH_BOX_Y, 32, 1);
+		M_PrintHighlight(24, SKYBOXVIEWER_SEARCH_BOX_Y + 8,
+			skyboxviewermenu.list.search.text, skyboxviewermenu.list.search.text,
+			skyboxviewermenu.list.search.len);
+		M_DrawCharacter(cursor_x, SKYBOXVIEWER_SEARCH_BOX_Y + 8,
+			skyboxviewermenu.list.numitems ? 10 + ((int)(realtime * 4) & 1) : 11 ^ 128);
+	}
+}
+
+static void M_SkyboxViewer_MoveCursor(int delta)
+{
+	if (skyboxviewermenu.list.numitems <= 0)
+		return;
+	S_LocalSound("misc/menu1.wav");
+	skyboxviewermenu.list.cursor = (skyboxviewermenu.list.cursor + delta) % skyboxviewermenu.list.numitems;
+	if (skyboxviewermenu.list.cursor < 0)
+		skyboxviewermenu.list.cursor += skyboxviewermenu.list.numitems;
+	M_List_AutoScroll(&skyboxviewermenu.list);
+}
+
+void M_SkyboxViewer_Key(int key)
+{
+	if (Key_IsShortcutModifierDown() && (key == 'u' || key == 'U'))
+	{
+		skyboxviewermenu.list.search.len = 0;
+		skyboxviewermenu.list.search.text[0] = '\0';
+		M_SkyboxViewer_Refilter();
+		return;
+	}
+	if (key >= 32 && key < 127)
+	{
+		if (skyboxviewermenu.list.search.len < skyboxviewermenu.list.search.maxlen)
+		{
+			skyboxviewermenu.list.search.text[skyboxviewermenu.list.search.len++] = key;
+			skyboxviewermenu.list.search.text[skyboxviewermenu.list.search.len] = '\0';
+			M_SkyboxViewer_Refilter();
+		}
+		return;
+	}
+	if (key == K_BACKSPACE && skyboxviewermenu.list.search.len > 0)
+	{
+		skyboxviewermenu.list.search.text[--skyboxviewermenu.list.search.len] = '\0';
+		M_SkyboxViewer_Refilter();
+		return;
+	}
+
+	switch (key)
+	{
+	case K_ESCAPE:
+		if (skyboxviewermenu.list.search.len > 0)
+		{
+			skyboxviewermenu.list.search.len = 0;
+			skyboxviewermenu.list.search.text[0] = '\0';
+			M_SkyboxViewer_Refilter();
+			return;
+		}
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_SkyboxViewer_Close();
+		return;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	{
+		skyboxvieweritem_t *selected = M_SkyboxViewer_SelectedItem();
+		if (selected)
+		{
+			Cvar_Set("r_globalsky", selected->name);
+			skyboxviewermenu.applied = true;
+			S_LocalSound("misc/menu3.wav");
+			M_SkyboxViewer_Close();
+			sky_cursor = SKY_GLOBALSKY;
+		}
+		return;
+	}
+
+	case K_HOME:
+	case K_KP_HOME:
+	case K_XBUTTON:
+		M_SkyboxViewer_ResetView();
+		return;
+
+	case K_LEFTARROW:
+		skyboxviewermenu.yaw -= 10.0f;
+		return;
+	case K_RIGHTARROW:
+		skyboxviewermenu.yaw += 10.0f;
+		return;
+	case K_UPARROW:
+		M_SkyboxViewer_MoveCursor(-1);
+		return;
+	case K_DOWNARROW:
+		M_SkyboxViewer_MoveCursor(1);
+		return;
+
+	case K_MWHEELUP:
+		if (M_SkyboxViewer_PointInPreview(m_mousex, m_mousey))
+			skyboxviewermenu.fov = CLAMP(35.0f, skyboxviewermenu.fov - 5.0f, 110.0f);
+		else
+			M_SkyboxViewer_MoveCursor(-1);
+		return;
+	case K_MWHEELDOWN:
+		if (M_SkyboxViewer_PointInPreview(m_mousex, m_mousey))
+			skyboxviewermenu.fov = CLAMP(35.0f, skyboxviewermenu.fov + 5.0f, 110.0f);
+		else
+			M_SkyboxViewer_MoveCursor(1);
+		return;
+
+	case K_MOUSE1:
+		if (M_SkyboxViewer_PointInPreview(m_mousex, m_mousey) && M_SkyboxViewer_SelectedItem())
+		{
+			skyboxviewermenu.look_grab = true;
+			skyboxviewermenu.look_last_x = m_mousex;
+			skyboxviewermenu.look_last_y = m_mousey;
+			return;
+		}
+		if (skyboxviewermenu.list.numitems > 0)
+		{
+			int x = m_mousex - SKYBOXVIEWER_LIST_X - (SKYBOXVIEWER_LIST_COLS - 1) * 8;
+			int y = m_mousey - SKYBOXVIEWER_LIST_Y;
+			if (x >= -8 && M_List_UseScrollbar(&skyboxviewermenu.list, y))
+			{
+				skyboxviewermenu.scrollbar_grab = true;
+				M_SkyboxViewer_Mousemove(m_mousex, m_mousey);
+			}
+			else
+				M_List_Mousemove(&skyboxviewermenu.list, y);
+		}
+		return;
+
+	default:
+		return;
+	}
+}
+
+void M_SkyboxViewer_Mousemove(int cx, int cy)
+{
+	int list_y = cy - SKYBOXVIEWER_LIST_Y;
+
+	if (skyboxviewermenu.look_grab)
+	{
+		if (!keydown[K_MOUSE1])
+		{
+			skyboxviewermenu.look_grab = false;
+			return;
+		}
+		skyboxviewermenu.yaw += (cx - skyboxviewermenu.look_last_x) * SKYBOXVIEWER_LOOK_SENSITIVITY;
+		skyboxviewermenu.pitch = CLAMP(-89.0f,
+			skyboxviewermenu.pitch + (cy - skyboxviewermenu.look_last_y) * SKYBOXVIEWER_LOOK_SENSITIVITY,
+			89.0f);
+		skyboxviewermenu.look_last_x = cx;
+		skyboxviewermenu.look_last_y = cy;
+		return;
+	}
+	if (skyboxviewermenu.scrollbar_grab)
+	{
+		if (!keydown[K_MOUSE1])
+			skyboxviewermenu.scrollbar_grab = false;
+		else
+			M_List_UseScrollbar(&skyboxviewermenu.list, list_y);
+		return;
+	}
+	if (cx >= SKYBOXVIEWER_LIST_X - 8 &&
+		cx < SKYBOXVIEWER_LIST_X + SKYBOXVIEWER_LIST_COLS * 8 &&
+		cy >= SKYBOXVIEWER_LIST_Y &&
+		cy < SKYBOXVIEWER_LIST_Y + SKYBOXVIEWER_LIST_ROWS * 8)
+		M_List_Mousemove(&skyboxviewermenu.list, list_y);
 }
 
 
@@ -22128,6 +22538,10 @@ static void M_LeaveMenuState (enum m_state_e from)
 		M_ModelViewer_Shutdown();
 		break;
 
+	case m_skyboxviewer:
+		M_SkyboxViewer_Shutdown();
+		break;
+
 	case m_demos:
 		M_Demos_Shutdown();
 		break;
@@ -22326,7 +22740,7 @@ static const char * const menusearch_controller_labels[] = {
 };
 static const char * const menusearch_sky_labels[] = {
 	"Fast Sky", "Fast Sky Color", "Sky Quality", "Sky Alpha", "Sky Fog",
-	"Sky Speed", "Skybox Downloads", "Global Sky", "Skywind"
+	"Sky Speed", "Skybox Downloads", "Global Sky", "Skybox Viewer", "Skywind"
 };
 static const char * const menusearch_skywind_labels[] = {
 	"Strength", "Direction", "Pitch", "Period"
@@ -22801,6 +23215,7 @@ static const char *MenuSearch_SkyKeywords(int index)
 	case SKY_SPEED: return "animation movement rotation scrolling clouds";
 	case SKY_ALLOW_DOWNLOAD: return "download skybox external texture files server";
 	case SKY_GLOBALSKY: return "skybox name texture environment override map";
+	case SKY_VIEWER: return "browse inspect preview cubemap environment drag look zoom";
 	case SKY_WIND: return "wind clouds movement motion animation direction";
 	default: return NULL;
 	}
@@ -45267,7 +45682,8 @@ void M_Draw (void)
 
 	if (!m_recursiveDraw)
 	{
-		qboolean live_world_menu = (m_state == m_skywind && cl.worldmodel);
+		qboolean live_world_menu = (cl.worldmodel &&
+			(m_state == m_sky || m_state == m_skyboxviewer || m_state == m_skywind));
 		float lp_frac = M_LivePreview_Alpha ();
 
 		if (scr_con_current && !M_WantsConsole (NULL))
@@ -45449,6 +45865,10 @@ void M_Draw (void)
 		M_ModelViewer_Draw();
 		break;
 
+	case m_skyboxviewer:
+		M_SkyboxViewer_Draw();
+		break;
+
 	case m_audiobrowser:
 		M_AudioBrowser_Draw();
 		break;
@@ -45591,6 +46011,7 @@ static qboolean M_HasSearchField (void)
 	case m_demooptions:
 	case m_pakloading:
 	case m_modelviewer:
+	case m_skyboxviewer:
 	case m_audiobrowser:
 	case m_slist:
 	case m_mods:
@@ -45874,6 +46295,10 @@ void M_Keydown (int key, qboolean repeat)
 		M_ModelViewer_Key(key);
 		return;
 
+	case m_skyboxviewer:
+		M_SkyboxViewer_Key(key);
+		return;
+
 	case m_audiobrowser:
 		M_AudioBrowser_Key(key);
 		return;
@@ -46080,6 +46505,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 
 	case m_sky:
 		M_Sky_Mousemove(x, y);
+		return;
+
+	case m_skyboxviewer:
+		M_SkyboxViewer_Mousemove(x, y);
 		return;
 
 	case m_skywind:

@@ -75,7 +75,7 @@ extern qboolean scr_disabled_for_loading;
 static void Sky_ApplyGlobalSkybox(void);
 static void Sky_GlobalSkyboxChanged(cvar_t *var);
 static void Sky_SetMapSkybox(const char *name);
-static qboolean Sky_HasAllSkyboxFaces(const char *name);
+qboolean Sky_HasAllSkyboxFaces(const char *name);
 
 #ifndef ARRAY_COUNT
 #define ARRAY_COUNT(arr)   (sizeof(arr) / sizeof((arr)[0]))
@@ -2001,7 +2001,7 @@ static qboolean Sky_HasSkyboxFace(const char *name, const char *suffix)
 	return false;
 }
 
-static qboolean Sky_HasAllSkyboxFaces(const char *name)
+qboolean Sky_HasAllSkyboxFaces(const char *name)
 {
 	if (!name || !name[0])
 		return false;
@@ -3378,6 +3378,114 @@ void Sky_DrawSkyBox (void)
 	}
 
 	Sky_DrawSkyBox_Static();
+}
+
+/* Draw the loaded six-face skybox into a menu preview rectangle.  This is a
+ * deliberately static view: the viewer controls the camera, while the normal
+ * world renderer remains responsible for map rotation, fog, and skywind. */
+qboolean Sky_DrawMenuPreview (float pixel_x, float pixel_y, float pixel_w, float pixel_h,
+	float yaw, float pitch, float fov)
+{
+	GLint old_viewport[4], old_scissor[4], old_depth_func, old_texenv;
+	GLboolean depth_was, cull_was, blend_was, alpha_was, scissor_was;
+	mat4_t projection, view;
+	vec3_t viewangles = {pitch, yaw, 0.0f};
+	vec3_t vieworg = {0.0f, 0.0f, 0.0f};
+	float fov_y;
+	int i;
+
+	if (!skybox_complete || pixel_w < 1.0f || pixel_h < 1.0f)
+		return false;
+	for (i = 0; i < 6; ++i)
+		if (!skybox_textures[i] || skybox_textures[i] == notexture)
+			return false;
+
+	glGetIntegerv(GL_VIEWPORT, old_viewport);
+	glGetIntegerv(GL_SCISSOR_BOX, old_scissor);
+	glGetIntegerv(GL_DEPTH_FUNC, &old_depth_func);
+	glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &old_texenv);
+	depth_was = glIsEnabled(GL_DEPTH_TEST);
+	cull_was = glIsEnabled(GL_CULL_FACE);
+	blend_was = glIsEnabled(GL_BLEND);
+	alpha_was = glIsEnabled(GL_ALPHA_TEST);
+	scissor_was = glIsEnabled(GL_SCISSOR_TEST);
+
+	glViewport((GLint)pixel_x, gly + glheight - (GLint)(pixel_y + pixel_h),
+		(GLsizei)pixel_w, (GLsizei)pixel_h);
+	glScissor((GLint)pixel_x, gly + glheight - (GLint)(pixel_y + pixel_h),
+		(GLsizei)pixel_w, (GLsizei)pixel_h);
+	glEnable(GL_SCISSOR_TEST);
+	glClear(GL_DEPTH_BUFFER_BIT);
+
+	fov = CLAMP(35.0f, fov, 110.0f);
+	fov_y = atanf((pixel_h / pixel_w) * tanf(fov * (float)M_PI / 360.0f)) * 360.0f / (float)M_PI;
+	Matrix4_ProjectionMatrix(fov, fov_y, 0.1f, 64.0f, false, 0.0f, 0.0f, projection);
+	Matrix4_ViewMatrix(viewangles, vieworg, view);
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadMatrixf(projection);
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadMatrixf(view);
+
+	GL_DisableMultitexture();
+	glEnable(GL_TEXTURE_2D);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LEQUAL);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glColor4f(1, 1, 1, 1);
+
+	for (i = 0; i < 6; ++i)
+	{
+		static const float corners[4][2] = {{-1, -1}, {-1, 1}, {1, 1}, {1, -1}};
+		gltexture_t *texture = skybox_textures[skytexorder[i]];
+		int corner;
+
+		GL_Bind(texture);
+		glBegin(GL_QUADS);
+		for (corner = 0; corner < 4; ++corner)
+		{
+			float s = corners[corner][0];
+			float t = corners[corner][1];
+			float b[3] = {s * 16.0f, t * 16.0f, 16.0f};
+			vec3_t vertex;
+			float tex_s = ((s + 1.0f) * 0.5f) * (texture->width - 1) / texture->width + 0.5f / texture->width;
+			float tex_t = 1.0f - (((t + 1.0f) * 0.5f) * (texture->height - 1) / texture->height + 0.5f / texture->height);
+			int axis;
+
+			for (axis = 0; axis < 3; ++axis)
+			{
+				int component = st_to_vec[i][axis];
+				vertex[axis] = component < 0 ? -b[-component - 1] : b[component - 1];
+			}
+			glTexCoord2f(tex_s, tex_t);
+			glVertex3fv(vertex);
+		}
+		glEnd();
+	}
+
+	glPopMatrix();
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode(GL_MODELVIEW);
+	glDepthFunc(old_depth_func);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, old_texenv);
+	if (!depth_was) glDisable(GL_DEPTH_TEST);
+	if (cull_was) glEnable(GL_CULL_FACE);
+	if (blend_was) glEnable(GL_BLEND);
+	if (alpha_was) glEnable(GL_ALPHA_TEST);
+	if (!scissor_was) glDisable(GL_SCISSOR_TEST);
+	else glScissor(old_scissor[0], old_scissor[1], old_scissor[2], old_scissor[3]);
+	glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
+	glColor4f(1, 1, 1, 1);
+
+	/* The matrices changed behind GL_SetCanvas's cache. */
+	extern canvastype currentcanvas;
+	currentcanvas = CANVAS_INVALID;
+	return true;
 }
 
 //==============================================================================

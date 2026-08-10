@@ -599,6 +599,9 @@ void Sky_LoadTexture (qmodel_t *mod, texture_t *mt, enum srcformat fmt, unsigned
 void Sky_LoadTextureQ64 (qmodel_t *mod, texture_t *mt);
 qboolean  Sky_LoadExternalTextures (qmodel_t* mod, texture_t* mt); // woods #extsky
 void Sky_LoadSkyBox (const char *name);
+qboolean Sky_HasAllSkyboxFaces (const char *name);
+qboolean Sky_DrawMenuPreview (float pixel_x, float pixel_y, float pixel_w, float pixel_h,
+	float yaw, float pitch, float fov);
 extern qboolean skyroom_drawn, skyroom_drawing;		//we draw a skyroom this frame
 extern qboolean skyroom_enabled;	//we know where the skyroom is ...
 extern vec4_t skyroom_origin;		//... and it is here. [3] is paralax scale
