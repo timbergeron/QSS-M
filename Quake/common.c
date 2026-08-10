@@ -4607,7 +4607,13 @@ qboolean COM_ResolveGameDirPath(const char *game, char *resolved,
 
 typedef struct
 {
-	qboolean ad;
+	qboolean ad_chapters, ad_akalakha;
+	qboolean ravenkeep_main, ravenkeep_church;
+	qboolean dwell_d1m1, dwell_d1end, dwell_d2m1, dwell_d2end, dwell_orb;
+	qboolean qbj_annihilator, qbj_wiedo;
+	qboolean sj2_grue, sj2_naitelveni;
+	qboolean enyo_player;
+	qboolean libre_start, libre_end;
 	qboolean hip_demo1, hip_demo2, hip_demo3, hip_demo4;
 	qboolean rogue_end1, rogue_end2;
 	qboolean rogue_map1, rogue_map2, rogue_map3, rogue_map4;
@@ -4615,6 +4621,71 @@ typedef struct
 	qboolean mg_hub, mg_end, mg_map1, mg_horde1;
 	qboolean mg3_fgd, mg3_map8, mg3_secret6;
 } com_game_signatures_t;
+
+static qboolean COM_TextFileContains(const char *path, const char *marker)
+{
+	char buffer[4096 + 1];
+	FILE *file;
+	size_t read_size;
+
+	file = fopen(path, "rb");
+	if (!file)
+		return false;
+	read_size = fread(buffer, 1, sizeof(buffer) - 1, file);
+	fclose(file);
+	buffer[read_size] = '\0';
+
+	return q_strcasestr(buffer, marker) != NULL;
+}
+
+typedef struct
+{
+	const char *game_path;
+	qboolean found;
+} com_ad_release_scan_t;
+
+static qboolean COM_DetectADReleaseReadme(void *context, const char *filename)
+{
+	static const char prefix[] = "ad_v";
+	static const char suffix[] = "_readme.txt";
+	com_ad_release_scan_t *scan = context;
+	char path[MAX_OSPATH];
+	size_t length;
+
+	if (scan->found)
+		return true;
+	length = strlen(filename);
+	if (length < sizeof(prefix) - 1 + sizeof(suffix) - 1 ||
+		q_strncasecmp(filename, prefix, sizeof(prefix) - 1) ||
+		q_strcasecmp(filename + length - (sizeof(suffix) - 1), suffix))
+		return true;
+	if ((size_t)q_snprintf(path, sizeof(path), "%s/%s",
+		scan->game_path, filename) < sizeof(path) &&
+		COM_TextFileContains(path, "Arcane Dimensions"))
+		scan->found = true;
+
+	return true;
+}
+
+static qboolean COM_HasOfficialADReleaseReadme(const char *game_path)
+{
+	com_ad_release_scan_t scan;
+
+	scan.game_path = game_path;
+	scan.found = false;
+	COM_ListSystemFiles(&scan, game_path, "txt", COM_DetectADReleaseReadme);
+	return scan.found;
+}
+
+static qboolean COM_GamePathIsFile(const char *game_path,
+	const char *relative_path)
+{
+	char path[MAX_OSPATH];
+
+	return (size_t)q_snprintf(path, sizeof(path), "%s/%s",
+		game_path, relative_path) < sizeof(path) &&
+		(Sys_FileType(path) & FS_ENT_FILE) != 0;
+}
 
 static qboolean COM_PackEntryNameEquals(const char entry_name[56],
 	const char *expected)
@@ -4662,7 +4733,43 @@ static void COM_DetectGameSignaturesInPak(const char *pak_path,
 			break;
 
 		if (COM_PackEntryNameEquals(entry.name, "maps/ad_chapters.bsp"))
-			signatures->ad = true;
+			signatures->ad_chapters = true;
+		/* The 1.80 patch may be installed without the base campaign PAKs. Its
+		 * added map is official AD content, unlike the devkit QC copied by jams. */
+		else if (COM_PackEntryNameEquals(entry.name, "maps/ad_akalakha.bsp"))
+			signatures->ad_akalakha = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/ravenkeep.bsp"))
+			signatures->ravenkeep_main = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/church.bsp"))
+			signatures->ravenkeep_church = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/d1m1.bsp"))
+			signatures->dwell_d1m1 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/d1end.bsp"))
+			signatures->dwell_d1end = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/d2m1.bsp"))
+			signatures->dwell_d2m1 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/d2end.bsp"))
+			signatures->dwell_d2end = true;
+		else if (COM_PackEntryNameEquals(entry.name,
+			"progs/dwellorb_phase01.mdl"))
+			signatures->dwell_orb = true;
+		else if (COM_PackEntryNameEquals(entry.name,
+			"maps/qbj_annihilator.bsp"))
+			signatures->qbj_annihilator = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/qbj_wiedo.bsp"))
+			signatures->qbj_wiedo = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/sj2_grue.bsp"))
+			signatures->sj2_grue = true;
+		else if (COM_PackEntryNameEquals(entry.name,
+			"maps/sj2_naitelveni.bsp"))
+			signatures->sj2_naitelveni = true;
+		else if (COM_PackEntryNameEquals(entry.name,
+			"progs/ee_gib_h_enyo.mdl"))
+			signatures->enyo_player = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/lq_e0m1.bsp"))
+			signatures->libre_start = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/lq_end.bsp"))
+			signatures->libre_end = true;
 		else if (COM_PackEntryNameEquals(entry.name, "hipdemo1.dem"))
 			signatures->hip_demo1 = true;
 		else if (COM_PackEntryNameEquals(entry.name, "hipdemo2.dem"))
@@ -4756,7 +4863,6 @@ qboolean COM_DetectGameDescription(const char *game, char *description,
 			fclose(file);
 		}
 	}
-
 	memset(&signatures, 0, sizeof(signatures));
 	for (pak_dir = 0; pak_dir < (int)Q_COUNTOF(pak_dirs); ++pak_dir)
 	{
@@ -4768,9 +4874,63 @@ qboolean COM_DetectGameDescription(const char *game, char *description,
 			COM_DetectGameSignaturesInPak(path, &signatures);
 		}
 	}
+	signatures.ad_chapters |=
+		COM_GamePathIsFile(game_path, "maps/ad_chapters.bsp");
+	signatures.ad_akalakha |=
+		COM_GamePathIsFile(game_path, "maps/ad_akalakha.bsp");
+	signatures.ravenkeep_main |=
+		COM_GamePathIsFile(game_path, "maps/ravenkeep.bsp");
+	signatures.ravenkeep_church |=
+		COM_GamePathIsFile(game_path, "maps/church.bsp");
+	signatures.dwell_d1m1 |= COM_GamePathIsFile(game_path, "maps/d1m1.bsp");
+	signatures.dwell_d1end |= COM_GamePathIsFile(game_path, "maps/d1end.bsp");
+	signatures.dwell_d2m1 |= COM_GamePathIsFile(game_path, "maps/d2m1.bsp");
+	signatures.dwell_d2end |= COM_GamePathIsFile(game_path, "maps/d2end.bsp");
+	signatures.dwell_orb |=
+		COM_GamePathIsFile(game_path, "progs/dwellorb_phase01.mdl");
+	signatures.qbj_annihilator |=
+		COM_GamePathIsFile(game_path, "maps/qbj_annihilator.bsp");
+	signatures.qbj_wiedo |=
+		COM_GamePathIsFile(game_path, "maps/qbj_wiedo.bsp");
+	signatures.sj2_grue |=
+		COM_GamePathIsFile(game_path, "maps/sj2_grue.bsp");
+	signatures.sj2_naitelveni |=
+		COM_GamePathIsFile(game_path, "maps/sj2_naitelveni.bsp");
 
-	if (signatures.ad)
+	/* AD's QC and quake.rc are commonly bundled by derivative campaigns. Treat
+	 * those as insufficient: official versioned release notes plus an official
+	 * campaign hub or patch map identify AD without catching devkit-based jams.
+	 * The version wildcard survives later patches. */
+	if (COM_HasOfficialADReleaseReadme(game_path) &&
+		(signatures.ad_chapters || signatures.ad_akalakha))
 		q_strlcpy(description, "Arcane Dimensions", description_size);
+	else if ((size_t)q_snprintf(path, sizeof(path),
+		"%s/RavenKeep_README.txt", game_path) < sizeof(path) &&
+		COM_TextFileContains(path, "Raven Keep by Redfield") &&
+		signatures.ravenkeep_main && signatures.ravenkeep_church)
+		q_strlcpy(description, "Raven Keep", description_size);
+	else if (signatures.dwell_d1m1 && signatures.dwell_d1end &&
+		signatures.dwell_d2m1 && signatures.dwell_d2end &&
+		signatures.dwell_orb)
+		q_strlcpy(description, "Dwell", description_size);
+	else if ((size_t)q_snprintf(path, sizeof(path), "%s/QBJ_readme.txt",
+		game_path) < sizeof(path) &&
+		COM_TextFileContains(path, "Quake Brutalist Jam") &&
+		signatures.qbj_annihilator && signatures.qbj_wiedo)
+		q_strlcpy(description, "Quake Brutalist Jam", description_size);
+	else if ((size_t)q_snprintf(path, sizeof(path), "%s/sewerjam2.txt",
+		game_path) < sizeof(path) &&
+		COM_TextFileContains(path, "Sewer Jam 2") &&
+		signatures.sj2_grue && signatures.sj2_naitelveni)
+		q_strlcpy(description, "Sewer Jam 2", description_size);
+	else if (signatures.enyo_player)
+		q_strlcpy(description, "Slave Zero X: Episode Enyo",
+			description_size);
+	else if (((size_t)q_snprintf(path, sizeof(path), "%s/docs/README.md",
+		game_path) < sizeof(path) &&
+		COM_TextFileContains(path, "LibreQuake")) ||
+		(signatures.libre_start && signatures.libre_end))
+		q_strlcpy(description, "LibreQuake", description_size);
 	else if (signatures.hip_demo1 && signatures.hip_demo2 &&
 		signatures.hip_demo3 && signatures.hip_demo4)
 		q_strlcpy(description,
