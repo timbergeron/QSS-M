@@ -19,7 +19,9 @@ Examples:
 
 import argparse
 import random
+import re
 import secrets
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -67,6 +69,57 @@ DEMO_COMMANDS = [
     "pause",
 ]
 
+NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+VIEWPOS_RE = re.compile(
+    rf"Player pos:\s*\(\s*({NUMBER})\s+({NUMBER})\s+({NUMBER})\s*\)"
+    rf"\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})",
+    re.IGNORECASE,
+)
+
+
+class ProbeFailure(Exception):
+    """A focused probe oracle failed while the engine remained controllable."""
+
+
+def parse_viewpos(reply):
+    match = VIEWPOS_RE.search(reply or "")
+    return tuple(float(value) for value in match.groups()) if match else None
+
+
+def position_matches(actual, expected, tolerance):
+    return (actual is not None
+            and all(abs(actual[i] - expected[i]) <= tolerance
+                    for i in range(3)))
+
+
+def is_fully_spawned(state):
+    """The local client is signed on and its listen server is active."""
+    return (state.get("state") == "2" and state.get("signon") == "4"
+            and state.get("sv") == "1")
+
+
+def fail_oracle(eng, message, oracle, **fields):
+    if eng.assertion_failure is None:
+        eng.assertion_failure = message
+    eng.journal.append("// ASSERTION FAILED: " + message)
+    if eng.event_log:
+        eng.event_log.record("oracle", actor=eng.actor, oracle=oracle,
+                             result="fail", detail=message, **fields)
+    raise ProbeFailure(message)
+
+
+def require_fully_spawned(eng, cfg, label, wait=True):
+    state = (eng.wait_spawned(timeout=cfg.map_timeout) if wait
+             else eng.status(timeout=min(cfg.hang_timeout, 10.0)))
+    if not is_fully_spawned(state):
+        fail_oracle(eng, f"{label}: expected fully spawned listen server, got {state}",
+                    "fully-spawned", state=state, label=label)
+    if eng.event_log:
+        eng.event_log.record("oracle", actor=eng.actor,
+                             oracle="fully-spawned", result="pass",
+                             state=state, label=label)
+    return state
+
 
 def make_config(args, results):
     paks = S.find_paks(args.paks)
@@ -100,31 +153,121 @@ def make_config(args, results):
         replay_pace=0.05,
         always_check=True,
         keep=args.keep,
+        position_tolerance=args.position_tolerance,
     )
 
 
-def run_rcon(eng, command, reply_log):
+def run_rcon(eng, command, reply_log, require_reply=True):
     """Send one localhost RCON command and retain its console reply."""
     eng.journal.append("// rcon: " + command)
     if eng.event_log:
         eng.event_log.record("actor_command", actor=eng.actor,
                              channel="rcon", commands=[command])
     reply = eng.rcon.send(command, want_reply=True)
+    meta = eng.rcon.last_reply_meta
     with reply_log.open("a", encoding="utf-8", errors="replace") as fh:
         fh.write(f">>> {command}\n")
-        fh.write((reply or "<no reply>") + "\n")
+        if meta:
+            fh.write("<<< " + json_meta(meta) + "\n")
+        shown_reply = ("<no reply>" if reply is None else
+                       (reply or "<empty reply>"))
+        fh.write(shown_reply + "\n")
     if reply is None and not eng.alive():
         raise S.Dead(f"engine exited during RCON command: {command}")
-    shown = " ".join((reply or "<no reply>").split())
+    if eng.event_log:
+        eng.event_log.record("rcon_reply", actor=eng.actor, command=command,
+                             reply=meta, received=reply is not None)
+    if reply is None and require_reply:
+        fail_oracle(eng, f"no RCON reply for {command!r}", "rcon-reply",
+                    command=command)
+    if meta and (meta["truncated"] or meta["malformed"]):
+        fail_oracle(eng, f"invalid RCON reply for {command!r}: {json_meta(meta)}",
+                    "rcon-framing", command=command, reply=meta)
+    if meta and meta["redirect_saturated"]:
+        print(f"    warning: RCON output for {command!r} filled the "
+              f"{S.RCON_REDIRECT_TEXT_LIMIT}-byte engine redirect buffer",
+              flush=True)
+    shown = " ".join(("<no reply>" if reply is None else
+                      (reply or "<empty reply>")).split())
     print(f"    rcon {command!r} -> {shown[:180]}", flush=True)
     return reply or ""
 
 
-def probe_commands(eng, commands, reply_log, label, cfg, settle=0.08):
+def json_meta(meta):
+    return " ".join(f"{key}={value}" for key, value in sorted(meta.items()))
+
+
+def setpos_verified(eng, position, reply_log, cfg):
+    x, y, z, pitch, yaw = position
+    command = f"setpos {x} {y} {z} {pitch} {yaw} 0"
+    run_rcon(eng, command, reply_log)
+    expected = tuple(float(value) for value in (x, y, z))
+    deadline = S.now() + min(2.0, cfg.hang_timeout)
+    attempts = 0
+    actual = None
+    while True:
+        # setpos received over RCON forwards through the local client/server
+        # command path.  Observe at least one later engine frame before using
+        # viewpos as the round-trip oracle, then tolerate another network tick.
+        eng.status(timeout=min(cfg.hang_timeout, 10.0))
+        reply = run_rcon(eng, "viewpos", reply_log)
+        attempts += 1
+        actual = parse_viewpos(reply)
+        if position_matches(actual, expected, cfg.position_tolerance):
+            break
+        if S.now() >= deadline:
+            break
+        time.sleep(0.05)
+    if not position_matches(actual, expected, cfg.position_tolerance):
+        fail_oracle(
+            eng,
+            f"setpos round trip failed: expected xyz={expected} within "
+            f"{cfg.position_tolerance:g}, viewpos={actual}",
+            "setpos-round-trip", expected=expected, actual=actual,
+            tolerance=cfg.position_tolerance, attempts=attempts,
+        )
+    if eng.event_log:
+        eng.event_log.record("oracle", actor=eng.actor,
+                             oracle="setpos-round-trip", result="pass",
+                             expected=expected, actual=actual,
+                             tolerance=cfg.position_tolerance,
+                             attempts=attempts)
+    return actual
+
+
+def capture_screenshot(eng, cfg, label):
+    """Capture and label a durable PNG for a targeted visual probe."""
+    source_dir = eng.work / "base" / "id1" / "screenshots"
+    before = {path: (path.stat().st_mtime_ns, path.stat().st_size)
+              for path in source_dir.glob("*.png")}
+    eng.send("screenshot png 90")
+    eng.status(timeout=min(cfg.hang_timeout, 10.0))
+    changed = [path for path in source_dir.glob("*.png")
+               if before.get(path) != (path.stat().st_mtime_ns,
+                                       path.stat().st_size)]
+    if not changed:
+        fail_oracle(eng, f"{label}: screenshot command produced no PNG",
+                    "screenshot", label=label)
+    source = max(changed, key=lambda path: path.stat().st_mtime_ns)
+    artifact_dir = eng.work / "visuals"
+    artifact_dir.mkdir(exist_ok=True)
+    destination = artifact_dir / (re.sub(r"[^A-Za-z0-9_.-]+", "-", label)
+                                  + ".png")
+    shutil.copy2(source, destination)
+    if eng.event_log:
+        eng.event_log.record("artifact", actor=eng.actor, kind="screenshot",
+                             label=label,
+                             path=str(destination.relative_to(eng.work)))
+    print(f"    screenshot -> {destination}", flush=True)
+    return destination
+
+
+def probe_commands(eng, commands, reply_log, label, cfg, settle=0.08,
+                   require_replies=True):
     """Run commands in one state, checking process liveness after each one."""
     print(f"  [{label}] {len(commands)} commands", flush=True)
     for command in commands:
-        run_rcon(eng, command, reply_log)
+        run_rcon(eng, command, reply_log, require_reply=require_replies)
         if settle:
             time.sleep(settle)
         # The stress channel gives us a deterministic liveness check even when
@@ -140,6 +283,7 @@ def reopen_listen_socket(eng, cfg):
 
 def probe_spawned_state(eng, rng, cfg, reply_log, label):
     """Probe several camera positions and render/cvar combinations in-level."""
+    require_fully_spawned(eng, cfg, label, wait=False)
     for i in range(cfg.iterations):
         if i < len(POSITIONS):
             x, y, z, pitch, yaw = POSITIONS[i]
@@ -150,7 +294,7 @@ def probe_spawned_state(eng, rng, cfg, reply_log, label):
             pitch = rng.randint(-90, 90)
             yaw = rng.randint(0, 359)
 
-        run_rcon(eng, f"setpos {x} {y} {z} {pitch} {yaw} 0", reply_log)
+        setpos_verified(eng, (x, y, z, pitch, yaw), reply_log, cfg)
         probe_commands(eng, STATE_COMMANDS, reply_log, f"{label}/pos-{i}", cfg)
         if i % 2 == 0:
             probe_commands(eng, RENDER_COMMANDS, reply_log,
@@ -180,19 +324,22 @@ def run_probe(runner, cfg, args, run_number, seed):
         eng.stress_event("rcon-probe", phase="L0", loader_hit=None,
                          parser="rcon", protocol="local")
         eng.send("listen 1", f"map {args.map_name}")
-        eng.wait_spawned(timeout=cfg.map_timeout)
+        require_fully_spawned(eng, cfg, "initial-spawned")
 
         # The first external pass is fully spawned.  The client/server remains
         # on a live local listen server, so RCON replies are available.
         probe_commands(eng, STATE_COMMANDS, reply_log,
                        "initial-spawned", cfg)
+        if args.screenshots:
+            capture_screenshot(eng, cfg, "initial-spawned")
 
         # Start another map through the internal channel and immediately send
         # RCON probes while signon is in flight.
         eng.send(f"map {args.map_name}")
         probe_commands(eng, STATE_COMMANDS[:4], reply_log,
-                       "early-signon", cfg, settle=0.0)
-        eng.wait_spawned(timeout=cfg.map_timeout)
+                       "early-signon", cfg, settle=0.0,
+                       require_replies=False)
+        require_fully_spawned(eng, cfg, "after-early-signon")
         reopen_listen_socket(eng, cfg)
 
         # The main target: state-sensitive client commands at known and random
@@ -219,10 +366,13 @@ def run_probe(runner, cfg, args, run_number, seed):
         second = args.second_map or ("dm1" if args.map_name != "dm1" else "start")
         run_rcon(eng, f"changelevel {second}", reply_log)
         probe_commands(eng, STATE_COMMANDS[:4], reply_log,
-                       "changelevel", cfg, settle=0.0)
-        eng.wait_spawned(timeout=cfg.map_timeout)
+                       "changelevel", cfg, settle=0.0,
+                       require_replies=False)
+        require_fully_spawned(eng, cfg, "post-changelevel")
         reopen_listen_socket(eng, cfg)
         probe_spawned_state(eng, rng, cfg, reply_log, "post-changelevel")
+        if args.screenshots:
+            capture_screenshot(eng, cfg, "post-changelevel")
 
         # Record a short local demo, then exercise seeking and client queries
         # while demo playback owns the normal network state.
@@ -231,7 +381,7 @@ def run_probe(runner, cfg, args, run_number, seed):
                              "stop", "disconnect", f"playdemo {demo_name}"],
                        reply_log, "demo-start", cfg, settle=0.2)
         probe_commands(eng, DEMO_COMMANDS, reply_log, "demo-playback", cfg)
-        run_rcon(eng, "disconnect", reply_log)
+        run_rcon(eng, "disconnect", reply_log, require_reply=False)
         eng.status(timeout=min(cfg.hang_timeout, 10.0))
 
     except S.Dead as exc:
@@ -241,6 +391,8 @@ def run_probe(runner, cfg, args, run_number, seed):
         sample = eng.sample()
         if sample:
             cause += f"\nstack sample: {sample}"
+    except ProbeFailure as exc:
+        cause = f"assertion: {exc}"
     except Exception as exc:
         cause = f"harness error: {exc!r}"
     finally:
@@ -277,6 +429,10 @@ def main(argv=None):
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--iterations", type=int, default=8,
                     help="camera positions per spawned-state phase")
+    ap.add_argument("--position-tolerance", type=float, default=1.0,
+                    help="maximum xyz drift accepted after setpos (default: 1)")
+    ap.add_argument("--screenshots", action="store_true",
+                    help="retain labeled initial/post-changelevel PNG artifacts")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--rcon-password",
                     help="override the random localhost RCON password")
@@ -299,6 +455,9 @@ def main(argv=None):
     ap.add_argument("--list", action="store_true", help="list probe phases")
     args = ap.parse_args(argv)
 
+    if args.position_tolerance < 0:
+        ap.error("--position-tolerance must be non-negative")
+
     if args.list:
         for name in ("initial-spawned", "early-signon", "spawned",
                      "save-load", "dead", "menu", "changelevel",
@@ -311,7 +470,10 @@ def main(argv=None):
 
     results = Path(args.results).expanduser().resolve()
     cfg = make_config(args, results)
-    runner = S.Runner(cfg)
+    try:
+        runner = S.Runner(cfg)
+    except S.StressBinaryError as exc:
+        sys.exit(str(exc))
     seeds = random.Random(args.seed).randrange(1 << 30) if args.seed is not None else None
     findings = []
 

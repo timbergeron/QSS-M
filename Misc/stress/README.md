@@ -24,6 +24,11 @@ dedicated macOS stress target must add that source file and define before using
 this harness; verify it with `strings QSS-M | grep -E
 'STRESS_READY|_stress_status'`.
 
+The runner performs that marker check before launch. Automatic DerivedData
+discovery prefers a stress-enabled product over a newer production product; if
+none exists, it writes `binary.json` and exits immediately with the selected
+path instead of spending the boot timeout waiting for `STRESS_READY`.
+
 ## Run a live Windows client probe
 
 The production Windows Visual Studio project currently does not compile the
@@ -75,6 +80,44 @@ python Misc/stress/demo_alias_probe.py `
 Use `--suite extended` to include the two lower-signal valid fixtures
 (`ctf3m9` and `kaboom`), or use repeated `--demo name` arguments to run a
 specific fixture.
+
+### Alias-instancing visual regression
+
+`alias_visual_probe.py` covers visual correctness rather than frame time. It
+records the vanilla `start` lava-ball scene once from a verified camera
+position, then replays that exact demo with alias instancing off and on for
+both `r_alphasort 0` and `r_alphasort 1`. Playback is paused and sought to
+matching timestamps before every capture, avoiding live-server phase drift.
+
+The default normalized crop targets the wall zombies involved in the stale
+alias-entity regression. Particles, dynamic lights, the view model, outlines,
+HUD counters, and console notifications are disabled to remove unrelated
+pixel noise. Run it with a stress-enabled binary:
+
+```bash
+./alias_visual_probe.py \
+  --bin /path/to/stress-enabled/QSS-M \
+  --paks ~/Desktop/qssm/id1/paks \
+  --results tmp/alias-visual-fixed
+```
+
+Each run retains the recorded demo, paired cropped TGAs, amplified difference
+images, and `visual-report.json`. The default is deliberately report-only:
+inspect the `changed_fraction` and `mean_abs` range on a known-good build
+before enforcing a limit. Once calibrated, make any outlier a regression
+finding with, for example:
+
+```bash
+./alias_visual_probe.py \
+  --bin /path/to/stress-enabled/QSS-M \
+  --paks ~/Desktop/qssm/id1/paks \
+  --max-changed-fraction 0.05
+```
+
+Use `--crop full` when establishing a new fixture, or `--crop X,Y,W,H` with
+normalized coordinates to focus a different screen region. `--start-time`,
+`--end-time`, and `--step` control sampling density. Do not copy a threshold
+between resolutions, renderers, or crops without recalibrating it.
 
 ### Where the harness attaches to the engine
 
@@ -308,6 +351,8 @@ does not carry the app's embedded SDL2 framework and will fail at boot with a
 ./qssm_stress.py --known-list                       # triaged signatures
 ./qssm_stress.py --known-add tmp/results/0003-menu --known-note "why"
 ./rcon_probe.py --map start --runs 3
+./rcon_probe.py --map start --runs 3 --screenshots
+./alias_visual_probe.py --bin /path/to/stress/QSS-M --paks /path/to/id1/paks
 # If the loose assets are not in the standard location:
 ./rcon_probe.py --paks /path/to/id1/paks --loose-root /path/to/id1/paktest
 ```
@@ -317,10 +362,22 @@ bugs.  It starts a local listen server in the same throwaway sandbox, then
 uses real localhost RCON packets after boot and across early signon, spawned,
 dead, menu, save/load, changelevel, and demo-playback states.  It
 repeats `viewpos`, `setpos`, `entities`, `edictcount`, `edicts`, demo seeking,
-and render/cvar combinations at fixed and randomized positions.  Its output
-goes under `tmp/rcon-probe/`; it shares the main harness' crash-report parsing,
-liveness checks, journals, and finding format.  It never targets a public
-server.
+and render/cvar combinations at fixed and randomized positions. Spawned-state
+passes require `state=2`, `signon=4`, and an active local server before sending
+stateful commands. Every `setpos` is then round-tripped through `viewpos` (with
+`--position-tolerance` controlling allowed xyz drift), so a command that was
+accepted but never applied fails as an assertion instead of producing a false
+pass. Its output goes under `tmp/rcon-probe/`; it shares the main harness'
+crash-report parsing, liveness checks, journals, and finding format. It never
+targets a public server.
+
+RCON receive buffers cover the full UDP datagram. `rcon-replies.log` records
+declared and received packet lengths, framing validity, and the decoded text
+size. A reply that fills the engine's separate 8191-byte console redirect
+buffer is marked `redirect_saturated=True`; this distinguishes server-side
+output clipping from UDP receive truncation. Use `--screenshots` for targeted
+render or asset probes; labeled baseline PNGs are retained under each run's
+`visuals/` directory.
 
 ### Recommended local targets
 
@@ -342,6 +399,15 @@ Findings land in `tmp/results/<run>/`:
 | `console.log` | full engine stdout for the run |
 | `QSS-M-*.ips` | the macOS crash report, when there was one |
 | `hang-sample.txt` | `sample(1)` stack trace, when the engine wedged |
+| `rcon-replies.log` | RCON text plus packet-length and saturation metadata |
+| `visuals/*.png` | optional labeled visual baselines from `--screenshots` |
+| `visual-report.json` | paired alias-instancing image metrics and enforced limits |
+| `visuals/*.tga` | alias visual crops and amplified difference images |
+
+Each campaign root also contains `binary.json`, which pins the tested
+executable by absolute path, size, nanosecond mtime, SHA-256, and Mach-O UUIDs
+when available. The same identity is embedded in every `actor_start` event and
+summarized in `REPORT.md`, avoiding ambiguity between stale DerivedData builds.
 
 Runs are offline by default: the web-download mirrors are blanked, because a
 corrupted demo's precache list will otherwise send real HTTP requests for

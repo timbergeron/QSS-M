@@ -164,6 +164,28 @@ def now():
 # ---------------------------------------------------------------------------
 # environment discovery
 # ---------------------------------------------------------------------------
+STRESS_BINARY_MARKERS = (b"STRESS_READY", b"_stress_status")
+
+
+def binary_has_stress_hooks(path):
+    """Cheaply identify a build that can service the append-only channel."""
+    found = {marker: False for marker in STRESS_BINARY_MARKERS}
+    carry = b""
+    longest = max(map(len, STRESS_BINARY_MARKERS))
+    try:
+        with Path(path).open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                window = carry + chunk
+                for marker in found:
+                    found[marker] = found[marker] or marker in window
+                if all(found.values()):
+                    return True
+                carry = window[-(longest - 1):]
+    except OSError:
+        return False
+    return False
+
+
 def find_binary(explicit=None):
     if explicit:
         p = Path(explicit).expanduser()
@@ -176,8 +198,65 @@ def find_binary(explicit=None):
     cands = [Path(p) for p in glob.glob(DEFAULT_BIN_GLOB)]
     if not cands:
         sys.exit("no QSS-M build found; pass --bin or set QSSM_BIN")
+    # A newer production build cannot run this harness.  Prefer a slightly
+    # older dedicated stress product when both live in DerivedData.
+    stress_cands = [path for path in cands if binary_has_stress_hooks(path)]
+    if stress_cands:
+        cands = stress_cands
     cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return cands[0]
+
+
+def binary_provenance(path):
+    """Return a stable identity for the executable used by a campaign.
+
+    A DerivedData path and its timestamp are not enough to prove that a test
+    exercised the intended build: incremental Xcode builds can leave several
+    products with the same name, and a report is often read days later.  Keep
+    the content hash as the primary identity and include Mach-O UUIDs when the
+    host toolchain can provide them.
+    """
+    binary = Path(path).expanduser().resolve()
+    stat = binary.stat()
+    digest = hashlib.sha256()
+    with binary.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    provenance = {
+        "path": str(binary),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "mtime_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                    time.gmtime(stat.st_mtime)),
+        "sha256": digest.hexdigest(),
+        "stress_hooks": binary_has_stress_hooks(binary),
+    }
+
+    command = None
+    if sys.platform == "darwin":
+        dwarfdump = shutil.which("dwarfdump")
+        xcrun = shutil.which("xcrun")
+        if dwarfdump:
+            command = [dwarfdump, "--uuid", str(binary)]
+        elif xcrun:
+            command = [xcrun, "dwarfdump", "--uuid", str(binary)]
+    if command:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True,
+                                    timeout=5, check=False)
+            uuids = []
+            for line in result.stdout.splitlines():
+                match = re.match(r"UUID:\s+([0-9A-Fa-f-]+)\s+\(([^)]+)\)",
+                                 line)
+                if match:
+                    uuids.append({"uuid": match.group(1).upper(),
+                                  "arch": match.group(2)})
+            if uuids:
+                provenance["macho_uuids"] = uuids
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return provenance
 
 
 def find_paks(explicit=None):
@@ -293,6 +372,45 @@ class CrashReports:
 # rcon
 # ---------------------------------------------------------------------------
 CCREQ_RCON = 0x05
+CCREP_RCON = 0x86
+RCON_REPLY_LIMIT = 65535
+RCON_REDIRECT_TEXT_LIMIT = 8191
+
+
+def decode_rcon_reply(data):
+    """Decode a connectionless RCON reply and expose framing integrity."""
+    received = len(data)
+    declared = None
+    control = False
+    unexpected_flags = None
+    if received >= 4:
+        header = struct.unpack(">I", data[:4])[0]
+        declared = header & 0x0000ffff  # NETFLAG_LENGTH_MASK
+        control = bool(header & 0x80000000)  # NETFLAG_CTL
+        unexpected_flags = header & ~0x8000ffff
+    opcode = data[4] if received >= 5 else None
+    payload = data[5:] if received >= 5 else b""
+    terminated = payload.endswith(b"\x00")
+    if terminated:
+        payload = payload[:-1]
+    meta = {
+        "received": received,
+        "declared": declared,
+        "control": control,
+        "unexpected_flags": unexpected_flags,
+        "text_bytes": len(payload),
+        "opcode": opcode,
+        "terminated": terminated,
+        "truncated": declared is not None and declared > received,
+        # The engine's console redirect buffer is independently bounded.  A
+        # full 8191-byte string has valid UDP framing but may have lost later
+        # console output, so distinguish that from transport truncation.
+        "redirect_saturated": len(payload) >= RCON_REDIRECT_TEXT_LIMIT,
+        "malformed": (received < 6 or declared != received or not control
+                      or unexpected_flags != 0
+                      or opcode != CCREP_RCON or not terminated),
+    }
+    return payload.decode(errors="replace"), meta
 
 
 class Rcon:
@@ -301,8 +419,10 @@ class Rcon:
         self.password = password
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(0.6)
+        self.last_reply_meta = None
 
     def send(self, cmd, want_reply=False):
+        self.last_reply_meta = None
         body = b"\x05" + self.password.encode() + b"\x00" + cmd.encode() + b"\x00"
         pkt = struct.pack(">I", 0x80000000 | (len(body) + 4)) + body
         try:
@@ -312,9 +432,10 @@ class Rcon:
         if not want_reply:
             return None
         try:
-            data, _ = self.sock.recvfrom(8192)
-            return data[5:].decode(errors="replace")
-        except socket.timeout:
+            data, _ = self.sock.recvfrom(RCON_REPLY_LIMIT)
+            reply, self.last_reply_meta = decode_rcon_reply(data)
+            return reply
+        except (socket.timeout, OSError):
             return None
 
     def close(self):
@@ -644,6 +765,7 @@ class Engine:
         if self.event_log:
             self.event_log.record("actor_start", actor=self.actor,
                                   scenario=self.scenario,
+                                  binary=getattr(self.cfg, "binary_provenance", None),
                                   port=self.port,
                                   rcon_password=getattr(self.cfg, "rcon_password", "stresspw"),
                                   boot_cmds=list(boot_cmds),
@@ -1130,7 +1252,7 @@ def sandbox_escapes(work):
     allowed_work_files = {
         "cmdline.txt", "console.log", "journal.txt", "hang-sample.txt",
         "stress.cmds", "stress.cmds.answer", "events.jsonl", "stress.sb",
-        "rcon-replies.log",
+        "rcon-replies.log", "visual-report.json",
     }
     allowed_base_root = {"privkey.der", "fullchain.der", "qconsole.log", "stress.cmds"}
     bad = []
@@ -1146,7 +1268,7 @@ def sandbox_escapes(work):
                 continue
             rel_work = os.path.relpath(full, work).replace(os.sep, "/")
             first = rel_work.split("/", 1)[0]
-            if first in {"home", "tmp", "inputs"}:
+            if first in {"home", "tmp", "inputs", "visuals"}:
                 continue
             if first != "base":
                 if rel_work in allowed_work_files:
@@ -2772,6 +2894,10 @@ class Config:
         return Config(**d)
 
 
+class StressBinaryError(RuntimeError):
+    """The selected executable cannot service the stress command channel."""
+
+
 # ---------------------------------------------------------------------------
 # runner
 # ---------------------------------------------------------------------------
@@ -2785,6 +2911,18 @@ class Runner:
         self.cfg.corpus = self.corpus
         self.cfg.coverage_sink = self.record_coverage
         self.lock = CampaignLock(self.results / ".campaign.lock")
+        self.binary_provenance = getattr(cfg, "binary_provenance", None)
+        if self.binary_provenance is None:
+            self.binary_provenance = binary_provenance(cfg.binary)
+        self.cfg.binary_provenance = self.binary_provenance
+        (self.results / "binary.json").write_text(
+            json.dumps(self.binary_provenance, indent=2, sort_keys=True) + "\n")
+        if (getattr(cfg, "require_stress_hooks", True)
+                and not self.binary_provenance.get("stress_hooks")):
+            raise StressBinaryError(
+                "selected binary lacks QSSM_STRESS hooks "
+                "(STRESS_READY/_stress_status); build the dedicated stress "
+                f"target or pass --bin to one: {self.binary_provenance['path']}")
         self.lock.acquire()
         atexit.register(self.close)
         self.crashwatch = CrashReports()
@@ -3382,10 +3520,14 @@ class Runner:
 # ---------------------------------------------------------------------------
 def write_report(runner, path):
     cfg = runner.cfg
+    provenance = getattr(cfg, "binary_provenance", {})
     lines = [
         "# QSS-M stress run",
         "",
         f"binary:    {cfg.binary}",
+        f"sha256:    {provenance.get('sha256', 'unknown')}",
+        f"mtime:     {provenance.get('mtime_utc', 'unknown')}",
+        f"size:      {provenance.get('size', 'unknown')} bytes",
         f"level:    {getattr(cfg, 'stress_level', 'custom')}",
         f"scenarios: {', '.join(cfg.scenarios)}",
         f"iterations: {cfg.iterations}",
@@ -3398,6 +3540,10 @@ def write_report(runner, path):
         f"inputs at {runner.corpus}",
         "",
     ]
+    if provenance.get("macho_uuids"):
+        lines.insert(6, "Mach-O:    " + ", ".join(
+            f"{item['arch']}={item['uuid']}"
+            for item in provenance["macho_uuids"]))
     if not runner.findings:
         lines.append("No new crashes, hangs or fatal errors reproduced.")
     for f in runner.findings:
@@ -3753,7 +3899,10 @@ def main(argv=None):
     print(f"seed:       {cfg.seed}")
     print()
 
-    runner = Runner(cfg)
+    try:
+        runner = Runner(cfg)
+    except StressBinaryError as exc:
+        sys.exit(str(exc))
 
     if args.corpus_regress:
         failures = runner.corpus_regress()
