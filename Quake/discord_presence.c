@@ -1361,14 +1361,14 @@ static qboolean DiscordPresence_BuildJSON(const discord_presence_snapshot_t *sna
 		DiscordJSON_Append(&writer, number);
 		DiscordJSON_Append(&writer, "}");
 	}
+	DiscordJSON_Append(&writer, ",\"assets\":{\"large_image\":");
+	DiscordJSON_AppendString(&writer, QSSM_DISCORD_LARGE_IMAGE);
 	if (snapshot->large_text[0])
 	{
-		DiscordJSON_Append(&writer, ",\"assets\":{\"large_image\":");
-		DiscordJSON_AppendString(&writer, QSSM_DISCORD_LARGE_IMAGE);
 		DiscordJSON_Append(&writer, ",\"large_text\":");
 		DiscordJSON_AppendString(&writer, snapshot->large_text);
-		DiscordJSON_Append(&writer, "}");
 	}
+	DiscordJSON_Append(&writer, "}");
 	DiscordJSON_Append(&writer, ",\"buttons\":[{\"label\":");
 	DiscordJSON_AppendString(&writer, QSSM_DISCORD_BUTTON_LABEL);
 	DiscordJSON_Append(&writer, ",\"url\":");
