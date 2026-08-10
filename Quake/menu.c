@@ -1259,6 +1259,229 @@ static qboolean M_Ticker_Key(menuticker_t* ticker, int key)
 	}
 }
 
+/* Non-looping scrolling for selected menu items.  This is intentionally
+ * separate from menuticker_t/M_PrintScroll: the classic ticker still loops
+ * and keeps its existing callers and behavior. */
+
+#define MENU_ONESCROLL_WAIT 1.0
+#define MENU_ONESCROLL_SPEED 24.0
+
+void M_OneScroll_Reset(menuonescroll_t *scroll)
+{
+	if (!scroll)
+		return;
+
+	scroll->scroll_time = 0.0;
+	scroll->scroll_wait_time = MENU_ONESCROLL_WAIT;
+}
+
+void M_OneScroll_Init(menuonescroll_t *scroll)
+{
+	if (!scroll)
+		return;
+
+	scroll->item = -1;
+	M_OneScroll_Reset(scroll);
+}
+
+void M_OneScroll_Update(menuonescroll_t *scroll, int selected_item)
+{
+	if (!scroll)
+		return;
+
+	if (scroll->item != selected_item)
+	{
+		scroll->item = selected_item;
+		M_OneScroll_Reset(scroll);
+	}
+
+	/* Passing -1 is a convenient way to reset while a menu has no selection. */
+	if (selected_item < 0)
+		return;
+
+	if (scroll->scroll_wait_time > 0.0)
+		scroll->scroll_wait_time = q_max(0.0, scroll->scroll_wait_time - host_frametime);
+	else
+		scroll->scroll_time += host_frametime;
+}
+
+static float M_OneScrollPixelOffset(double time, int max_offset)
+{
+	const double ease_start = 0.70;
+	const double travel_scale = 2.0 / (1.0 + ease_start);
+	double travel_time;
+	double progress;
+	double decel_progress;
+	double linear_fraction;
+
+	if (max_offset <= 0 || time <= 0.0)
+		return 0.0f;
+
+	/* Hold the normal speed through most of the journey, then use a quadratic
+	 * ease-out only near the end.  Extend the total travel time so the easing
+	 * begins at the same speed as the linear section. */
+	travel_time = (double)max_offset / MENU_ONESCROLL_SPEED * travel_scale;
+	if (travel_time < 0.75)
+		travel_time = 0.75;
+	progress = time / travel_time;
+	if (progress >= 1.0)
+		return (float)max_offset;
+
+	if (progress <= ease_start)
+		return (float)((double)max_offset * travel_scale * progress);
+
+	decel_progress = (progress - ease_start) / (1.0 - ease_start);
+	linear_fraction = ease_start * travel_scale;
+	return (float)((double)max_offset *
+		(linear_fraction + (1.0 - linear_fraction) *
+			(2.0 * decel_progress - decel_progress * decel_progress)));
+}
+
+static void M_PrintScrollOnceMasked(int x, int y, int maxwidth,
+	const char *str, double time, int mask)
+{
+	const int charwidth = 8;
+	int maxchars = maxwidth / charwidth;
+	int len = (int)strlen(str);
+	int max_offset;
+	float offset;
+	int pixel_offset;
+	float frac;
+
+	if (len <= maxchars)
+	{
+		for (int i = 0; i < len; ++i)
+			M_DrawCharacter(x + i * charwidth, y, (unsigned char)str[i] ^ mask);
+		return;
+	}
+
+	if (!len || maxwidth <= 0)
+		return;
+
+	max_offset = (len - maxchars) * charwidth;
+	offset = M_OneScrollPixelOffset(time, max_offset);
+	pixel_offset = (int)offset;
+	frac = offset - (float)pixel_offset;
+
+	glPushMatrix();
+	glTranslatef(-frac, 0.0f, 0.0f);
+	for (int pos = 0; pos < len; ++pos)
+	{
+		int char_x = x - pixel_offset + pos * charwidth;
+		if (char_x + charwidth <= x)
+			continue;
+		if (char_x >= x + maxwidth)
+			break;
+		M_DrawCharacter(char_x, y, (unsigned char)str[pos] ^ mask);
+	}
+	glPopMatrix();
+}
+
+void M_PrintScrollOnce(int x, int y, int maxwidth, const char *str, double time, qboolean color)
+{
+	M_PrintScrollOnceMasked(x, y, maxwidth, str, time, color ? 128 : 0);
+}
+
+static void M_PrintScrollOnce2(int x, int y, int maxwidth,
+	const char *str, const char *str2, double time, qboolean name_red)
+{
+	char masked_name[MAX_QPATH];
+	char combined[MAX_CHAT_SIZE_EX];
+	int len_str = (int)strlen(str);
+	int effective_len_str = time != 0.0 ? len_str : q_min(len_str, 12);
+	int name_len = q_min(effective_len_str, (int)sizeof(masked_name) - 1);
+	int padding_width = q_min(max_word_length + 1, 13);
+
+	for (int i = 0; i < name_len; ++i)
+		masked_name[i] = (char)((unsigned char)str[i] ^ (name_red ? 128 : 0));
+	masked_name[name_len] = '\0';
+
+	if (time != 0.0 && len_str > 12)
+		q_snprintf(combined, sizeof(combined), "%-*s %s",
+			padding_width, masked_name, str2);
+	else
+		q_snprintf(combined, sizeof(combined), "%-*s%s", padding_width, masked_name, str2);
+
+	M_PrintScrollOnceMasked(x, y, maxwidth, combined, time, 0);
+}
+
+static void M_PrintHighlightScrollOnce2(int x, int y, int maxwidth,
+	const char *str, const char *str2, const char *highlight, double time)
+{
+	char name_str[256];
+	char name_portion[MAX_CHAT_SIZE_EX];
+	char combined[MAX_CHAT_SIZE_EX];
+	char styled[MAX_CHAT_SIZE_EX];
+	int len_str = (int)strlen(str);
+	int effective_len_str = time != 0.0 ? len_str : q_min(len_str, 12);
+	int padding_width = q_min(max_word_length + 1, 13);
+	int actual_name_len;
+	int combined_len;
+	int name_highlight_start = -1;
+	int name_highlight_end = -1;
+	int desc_highlight_start = -1;
+	int desc_highlight_end = -1;
+
+	q_strlcpy(name_str, str, sizeof(name_str));
+	if (effective_len_str < len_str && effective_len_str < (int)sizeof(name_str))
+		name_str[effective_len_str] = '\0';
+
+	if (time != 0.0 && len_str > 12)
+		q_snprintf(name_portion, sizeof(name_portion), "%s ", name_str);
+	else
+		q_snprintf(name_portion, sizeof(name_portion), "%-*s", padding_width, name_str);
+
+	q_snprintf(combined, sizeof(combined), "%s%s", name_portion, str2);
+	actual_name_len = (int)strlen(name_portion);
+	combined_len = (int)strlen(combined);
+
+	if (highlight && highlight[0])
+	{
+		const char *match = q_strcasestr(name_str, highlight);
+		if (match)
+		{
+			name_highlight_start = (int)(match - name_str);
+			name_highlight_end = name_highlight_start + (int)strlen(highlight);
+			if (name_highlight_end > effective_len_str)
+				name_highlight_end = effective_len_str;
+		}
+
+		match = q_strcasestr(str2, highlight);
+		if (match)
+		{
+			desc_highlight_start = (int)(match - str2);
+			desc_highlight_end = desc_highlight_start + (int)strlen(highlight);
+			if (desc_highlight_end > (int)strlen(str2))
+				desc_highlight_end = (int)strlen(str2);
+		}
+	}
+
+	for (int i = 0; i < combined_len && i < (int)sizeof(styled) - 1; ++i)
+	{
+		qboolean is_highlighted;
+
+		if (i < actual_name_len)
+		{
+			is_highlighted = i < effective_len_str &&
+				name_highlight_start != -1 &&
+				i >= name_highlight_start && i < name_highlight_end;
+			styled[i] = (char)((unsigned char)combined[i] |
+				(is_highlighted ? 0 : 128));
+		}
+		else
+		{
+			int desc_pos = i - actual_name_len;
+			is_highlighted = desc_highlight_start != -1 &&
+				desc_pos >= desc_highlight_start && desc_pos < desc_highlight_end;
+			styled[i] = (char)((unsigned char)combined[i] |
+				(is_highlighted ? 128 : 0));
+		}
+	}
+	styled[q_min(combined_len, (int)sizeof(styled) - 1)] = '\0';
+
+	M_PrintScrollOnceMasked(x, y, maxwidth, styled, time, 0);
+}
+
 void M_PrintHighlight(int x, int y, const char* str, const char* search, int searchlen)
 {
 	if (!searchlen)
@@ -35228,6 +35451,7 @@ static struct
 	int					modcount;
 	int					prev_cursor;
 	menuticker_t		ticker;
+	menuonescroll_t	one_scroll;
 	qboolean			scrollbar_grab;
 	moditem_t			*items;
 	int*				filtered_indices;
@@ -35431,6 +35655,7 @@ static void M_Mods_Init(void)
 	M_Mods_UpdateViewsize();
 
 	M_Ticker_Init(&modsmenu.ticker);
+	M_OneScroll_Init(&modsmenu.one_scroll);
 
 	if (CL_ModDownloadsAvailable())
 		M_Mods_AddDownloadMenu();
@@ -35496,6 +35721,10 @@ void M_Mods_Draw(void)
 	else
 		M_Ticker_Update(&modsmenu.ticker);
 
+	M_OneScroll_Update(&modsmenu.one_scroll,
+		modsmenu.list.cursor >= 0 && modsmenu.list.cursor < modsmenu.list.numitems ?
+			modsmenu.filtered_indices[modsmenu.list.cursor] : -1);
+
 	M_DrawCountHeader(x, y - 28, cols, "Mods",
 		M_Mods_ContentCount(), "mod", "mods");
 	M_DrawQuakeBar(x - 8, y - 16, cols + 2);
@@ -35523,11 +35752,11 @@ void M_Mods_Draw(void)
 			}
 			else
 			{
-				M_PrintHighlightScroll2(x, item_y, (cols - 2) * 8,
+				M_PrintHighlightScrollOnce2(x, item_y, (cols - 2) * 8,
 					modsmenu.items[mod_idx].name,
 					modsmenu.items[mod_idx].description,
 					modsmenu.list.search.text,
-					selected ? modsmenu.ticker.scroll_time : 0.0);
+					selected ? modsmenu.one_scroll.scroll_time : 0.0);
 			}
 		}
 		else
@@ -35538,10 +35767,10 @@ void M_Mods_Draw(void)
 			}
 			else
 			{
-				M_PrintScroll2(x, item_y, (cols - 2) * 8,
+				M_PrintScrollOnce2(x, item_y, (cols - 2) * 8,
 					modsmenu.items[mod_idx].name,
 					modsmenu.items[mod_idx].description,
-					selected ? modsmenu.ticker.scroll_time : 0.0,
+					selected ? modsmenu.one_scroll.scroll_time : 0.0,
 					!modsmenu.items[mod_idx].active);
 			}
 		}

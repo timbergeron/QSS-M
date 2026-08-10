@@ -189,6 +189,21 @@ void M_PrintRGBA (int cx, int cy, const char* str, plcolour_t c, float alpha, qb
 void M_PrintWhite (int cx, int cy, const char *str);
 void M_PrintScroll(int x, int y, int maxwidth, const char* str, double time, qboolean color);
 
+/* One-shot overflow scrolling.  The caller updates this state with the
+ * selected item before drawing it, so changing selection starts that item
+ * from the beginning when it is selected again. */
+typedef struct
+{
+	int		item;
+	double	scroll_time;
+	double	scroll_wait_time;
+} menuonescroll_t;
+
+void M_OneScroll_Init(menuonescroll_t *scroll);
+void M_OneScroll_Update(menuonescroll_t *scroll, int selected_item);
+void M_OneScroll_Reset(menuonescroll_t *scroll);
+void M_PrintScrollOnce(int x, int y, int maxwidth, const char *str, double time, qboolean color);
+
 void M_Draw (void);
 void M_DrawCharacter (int cx, int line, int num);
 void M_DrawQuakeBar(int x, int y, int cols);
