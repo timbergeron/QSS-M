@@ -19,6 +19,7 @@ of the License, or (at your option) any later version.
 #include <sys/un.h>
 #include <unistd.h>
 #endif
+#include <curl/curl.h>
 #include <time.h>
 
 /*
@@ -587,6 +588,12 @@ static unsigned int DiscordIPC_ProcessId(void)
 #ifndef QSSM_DISCORD_LARGE_IMAGE
 #define QSSM_DISCORD_LARGE_IMAGE "qssm"
 #endif
+#ifndef QSSM_DISCORD_MAPSHOT_URL
+#define QSSM_DISCORD_MAPSHOT_URL "https://assets.quake.world/mapshots/sm/%s.webp"
+#endif
+#ifndef QSSM_DISCORD_QUAKEONE_MAPSHOT_URL
+#define QSSM_DISCORD_QUAKEONE_MAPSHOT_URL "https://servers.quakeone.com/mapthumbs/%s.jpg"
+#endif
 #ifndef QSSM_DISCORD_BUTTON_LABEL
 #define QSSM_DISCORD_BUTTON_LABEL "Get QSS-M"
 #endif
@@ -601,6 +608,8 @@ static unsigned int DiscordIPC_ProcessId(void)
 #define DISCORD_PRESENCE_RETRY_MAX 60.0
 #define DISCORD_PRESENCE_HANDSHAKE_TIMEOUT 5.0
 #define DISCORD_PRESENCE_CLEAR_TIMEOUT 1.0
+#define DISCORD_MAPSHOT_CACHE_SIZE 64
+#define DISCORD_MAPSHOT_RETRY_DELAY 60.0
 
 extern Uint64 maptime;
 extern char lastmphost[NET_NAMELEN];
@@ -621,9 +630,44 @@ typedef struct
 {
 	char details[128];
 	char state[128];
+	char large_image[301];
 	char large_text[128];
+	char small_image[301];
+	char small_text[128];
 	int64_t start_timestamp;
 } discord_presence_snapshot_t;
+
+typedef enum
+{
+	DISCORD_MAPSHOT_PROBE_NONE,
+	DISCORD_MAPSHOT_PROBE_FOUND,
+	DISCORD_MAPSHOT_PROBE_NOT_FOUND,
+	DISCORD_MAPSHOT_PROBE_TRANSIENT,
+	DISCORD_MAPSHOT_PROBE_ABORTED
+} discord_mapshot_probe_result_t;
+
+typedef struct
+{
+	qboolean valid;
+	char key[MAX_QPATH * 2 + 2];
+	char url[301];
+} discord_mapshot_cache_entry_t;
+
+typedef struct
+{
+	SDL_Thread *thread;
+	SDL_atomic_t abort_requested;
+	SDL_atomic_t done;
+	char key[MAX_QPATH * 2 + 2];
+	char map[MAX_QPATH];
+	char gamedir[MAX_QPATH];
+	char result_url[301];
+	discord_mapshot_probe_result_t result;
+	discord_mapshot_cache_entry_t cache[DISCORD_MAPSHOT_CACHE_SIZE];
+	size_t next_cache;
+	char retry_key[MAX_QPATH * 2 + 2];
+	double retry_after;
+} discord_mapshot_state_t;
 
 typedef struct
 {
@@ -664,6 +708,7 @@ typedef struct
 } discord_presence_state_t;
 
 static discord_presence_state_t discord_presence;
+static discord_mapshot_state_t discord_mapshots;
 
 static discord_presence_mode_t DiscordPresence_GetMode(void)
 {
@@ -742,6 +787,312 @@ static void DiscordPresence_CopyASCII(char *destination, size_t destination_size
 			destination[written++] = (char)c;
 	}
 	destination[written] = '\0';
+}
+
+static qboolean DiscordPresence_NormalizeMapshotSegment(char *destination,
+	size_t destination_size, const char *source)
+{
+	size_t written = 0;
+
+	if (!destination_size)
+		return false;
+	destination[0] = '\0';
+	if (!source || !source[0])
+		return false;
+
+	while (*source && written + 1 < destination_size)
+	{
+		unsigned char c = (unsigned char)*source++;
+
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_' || c == '+' ||
+			c == '.'))
+			return false;
+		if (c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		destination[written++] = (char)c;
+	}
+	if (*source)
+		return false;
+	destination[written] = '\0';
+	return true;
+}
+
+static void DiscordPresence_CurrentMapshotGameDir(char *destination,
+	size_t destination_size)
+{
+	char gamedir[MAX_OSPATH] = "";
+	const char *leaf, *p;
+
+	if (!destination_size)
+		return;
+	destination[0] = '\0';
+	if (cls.state == ca_connected)
+	{
+		Info_GetKey(cl.serverinfo, "*gamedir", gamedir, sizeof(gamedir));
+		if (!gamedir[0])
+			q_strlcpy(gamedir, cl.server_gamedir, sizeof(gamedir));
+	}
+	if (!gamedir[0])
+		q_strlcpy(gamedir, COM_SkipPath(com_gamedir), sizeof(gamedir));
+
+	leaf = gamedir;
+	for (p = gamedir; *p; ++p)
+		if (*p == '/' || *p == '\\' || *p == ';')
+			leaf = p + 1;
+	if (!DiscordPresence_NormalizeMapshotSegment(destination,
+		destination_size, leaf) || !q_strcasecmp(destination, GAMENAME) ||
+		!q_strcasecmp(destination, "qw"))
+		destination[0] = '\0';
+}
+
+static qboolean DiscordPresence_MapshotCacheLookup(const char *key,
+	char *url, size_t url_size)
+{
+	size_t i;
+
+	for (i = 0; i < Q_COUNTOF(discord_mapshots.cache); ++i)
+		if (discord_mapshots.cache[i].valid &&
+			!strcmp(discord_mapshots.cache[i].key, key))
+		{
+			q_strlcpy(url, discord_mapshots.cache[i].url, url_size);
+			return true;
+		}
+	return false;
+}
+
+static void DiscordPresence_MapshotCacheStore(const char *key, const char *url)
+{
+	discord_mapshot_cache_entry_t *entry = NULL;
+	size_t i;
+
+	for (i = 0; i < Q_COUNTOF(discord_mapshots.cache); ++i)
+		if (discord_mapshots.cache[i].valid &&
+			!strcmp(discord_mapshots.cache[i].key, key))
+		{
+			entry = &discord_mapshots.cache[i];
+			break;
+		}
+	if (!entry)
+	{
+		entry = &discord_mapshots.cache[discord_mapshots.next_cache];
+		discord_mapshots.next_cache =
+			(discord_mapshots.next_cache + 1) % Q_COUNTOF(discord_mapshots.cache);
+	}
+	entry->valid = true;
+	q_strlcpy(entry->key, key, sizeof(entry->key));
+	q_strlcpy(entry->url, url ? url : "", sizeof(entry->url));
+}
+
+static int DiscordPresence_MapshotAbortCallback(void *unused,
+	curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+	(void)unused;
+	(void)dltotal;
+	(void)dlnow;
+	(void)ultotal;
+	(void)ulnow;
+	return SDL_AtomicGet(&discord_mapshots.abort_requested) ? 1 : 0;
+}
+
+static CURLcode DiscordPresence_MapshotProbeURL(const char *url,
+	long *response_code)
+{
+	CURL *curl = curl_easy_init();
+	CURLcode result;
+
+	*response_code = 0;
+	if (!curl)
+		return CURLE_FAILED_INIT;
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 4000L);
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION,
+		DiscordPresence_MapshotAbortCallback);
+#if CURL_AT_LEAST_VERSION(7, 85, 0)
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+#else
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+	result = curl_easy_perform(curl);
+	if (result == CURLE_OK)
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, response_code);
+	curl_easy_cleanup(curl);
+	return result;
+}
+
+static int DiscordPresence_MapshotProbeThread(void *unused)
+{
+	char urls[3][301];
+	char quakeone_path[MAX_QPATH * 2 + 2];
+	int url_count = 0;
+	int i;
+	qboolean saw_transient = false;
+
+	(void)unused;
+	q_snprintf(urls[url_count++], sizeof(urls[0]),
+		QSSM_DISCORD_MAPSHOT_URL, discord_mapshots.map);
+	q_snprintf(urls[url_count++], sizeof(urls[0]),
+		QSSM_DISCORD_QUAKEONE_MAPSHOT_URL, discord_mapshots.map);
+	if (discord_mapshots.gamedir[0])
+	{
+		q_snprintf(quakeone_path, sizeof(quakeone_path), "%s/%s",
+			discord_mapshots.gamedir, discord_mapshots.map);
+		q_snprintf(urls[url_count++], sizeof(urls[0]),
+			QSSM_DISCORD_QUAKEONE_MAPSHOT_URL, quakeone_path);
+	}
+
+	discord_mapshots.result = DISCORD_MAPSHOT_PROBE_NOT_FOUND;
+	discord_mapshots.result_url[0] = '\0';
+	for (i = 0; i < url_count; ++i)
+	{
+		CURLcode result;
+		long response_code;
+
+		if (SDL_AtomicGet(&discord_mapshots.abort_requested))
+		{
+			discord_mapshots.result = DISCORD_MAPSHOT_PROBE_ABORTED;
+			break;
+		}
+		result = DiscordPresence_MapshotProbeURL(urls[i], &response_code);
+		if (result == CURLE_OK && response_code >= 200 && response_code < 300)
+		{
+			discord_mapshots.result = DISCORD_MAPSHOT_PROBE_FOUND;
+			q_strlcpy(discord_mapshots.result_url, urls[i],
+				sizeof(discord_mapshots.result_url));
+			break;
+		}
+		if (result == CURLE_ABORTED_BY_CALLBACK ||
+			SDL_AtomicGet(&discord_mapshots.abort_requested))
+		{
+			discord_mapshots.result = DISCORD_MAPSHOT_PROBE_ABORTED;
+			break;
+		}
+		if (result != CURLE_OK || (response_code != 404 && response_code != 410))
+			saw_transient = true;
+	}
+	if (discord_mapshots.result == DISCORD_MAPSHOT_PROBE_NOT_FOUND && saw_transient)
+		discord_mapshots.result = DISCORD_MAPSHOT_PROBE_TRANSIENT;
+	SDL_AtomicSet(&discord_mapshots.done, 1);
+	return 0;
+}
+
+static void DiscordPresence_MapshotPump(double now)
+{
+	if (!discord_mapshots.thread || !SDL_AtomicGet(&discord_mapshots.done))
+		return;
+	SDL_WaitThread(discord_mapshots.thread, NULL);
+	discord_mapshots.thread = NULL;
+	if (discord_mapshots.result == DISCORD_MAPSHOT_PROBE_FOUND)
+	{
+		DiscordPresence_MapshotCacheStore(discord_mapshots.key,
+			discord_mapshots.result_url);
+		Con_DPrintf("Discord mapshot: %s\n", discord_mapshots.result_url);
+	}
+	else if (discord_mapshots.result == DISCORD_MAPSHOT_PROBE_NOT_FOUND)
+	{
+		DiscordPresence_MapshotCacheStore(discord_mapshots.key, "");
+		Con_DPrintf("Discord mapshot: no image for %s\n", discord_mapshots.key);
+	}
+	else if (discord_mapshots.result == DISCORD_MAPSHOT_PROBE_TRANSIENT)
+	{
+		q_strlcpy(discord_mapshots.retry_key, discord_mapshots.key,
+			sizeof(discord_mapshots.retry_key));
+		discord_mapshots.retry_after = now + DISCORD_MAPSHOT_RETRY_DELAY;
+		Con_DPrintf("Discord mapshot: probe failed for %s; retrying later\n",
+			discord_mapshots.key);
+	}
+	SDL_AtomicSet(&discord_mapshots.abort_requested, 0);
+	SDL_AtomicSet(&discord_mapshots.done, 0);
+	discord_presence.next_snapshot = 0;
+}
+
+static void DiscordPresence_MapshotStart(const char *key, const char *map,
+	const char *gamedir)
+{
+	q_strlcpy(discord_mapshots.key, key, sizeof(discord_mapshots.key));
+	q_strlcpy(discord_mapshots.map, map, sizeof(discord_mapshots.map));
+	q_strlcpy(discord_mapshots.gamedir, gamedir,
+		sizeof(discord_mapshots.gamedir));
+	discord_mapshots.result = DISCORD_MAPSHOT_PROBE_NONE;
+	discord_mapshots.result_url[0] = '\0';
+	SDL_AtomicSet(&discord_mapshots.abort_requested, 0);
+	SDL_AtomicSet(&discord_mapshots.done, 0);
+	discord_mapshots.thread = SDL_CreateThread(
+		DiscordPresence_MapshotProbeThread, "DiscordMapshot", NULL);
+	if (!discord_mapshots.thread)
+	{
+		q_strlcpy(discord_mapshots.retry_key, key,
+			sizeof(discord_mapshots.retry_key));
+		discord_mapshots.retry_after = realtime + DISCORD_MAPSHOT_RETRY_DELAY;
+		Con_DWarning("Unable to create Discord mapshot probe thread: %s\n",
+			SDL_GetError());
+	}
+}
+
+static void DiscordPresence_MapshotShutdown(void)
+{
+	if (discord_mapshots.thread)
+	{
+		SDL_AtomicSet(&discord_mapshots.abort_requested, 1);
+		SDL_WaitThread(discord_mapshots.thread, NULL);
+		discord_mapshots.thread = NULL;
+	}
+	memset(&discord_mapshots, 0, sizeof(discord_mapshots));
+}
+
+static qboolean DiscordPresence_MapshotResolve(const char *map,
+	const char *gamedir, char *url, size_t url_size)
+{
+	char key[MAX_QPATH * 2 + 2];
+
+	q_snprintf(key, sizeof(key), "%s|%s", map, gamedir);
+	if (DiscordPresence_MapshotCacheLookup(key, url, url_size))
+		return url[0] != '\0';
+	if (discord_mapshots.thread)
+	{
+		if (strcmp(discord_mapshots.key, key))
+			SDL_AtomicSet(&discord_mapshots.abort_requested, 1);
+		return false;
+	}
+	if (!strcmp(discord_mapshots.retry_key, key) &&
+		realtime < discord_mapshots.retry_after)
+		return false;
+	DiscordPresence_MapshotStart(key, map, gamedir);
+	return false;
+}
+
+static void DiscordPresence_BuildArtwork(discord_presence_snapshot_t *snapshot,
+	discord_presence_kind_t kind, const char *map)
+{
+	char mapshot[sizeof(cl.mapname)];
+	char gamedir[MAX_QPATH];
+	char url[sizeof(snapshot->large_image)];
+
+	q_strlcpy(snapshot->large_image, QSSM_DISCORD_LARGE_IMAGE,
+		sizeof(snapshot->large_image));
+	if (kind == DISCORD_PRESENCE_MENU || kind == DISCORD_PRESENCE_CONNECTING ||
+		!DiscordPresence_NormalizeMapshotSegment(mapshot, sizeof(mapshot), map))
+		return;
+	DiscordPresence_CurrentMapshotGameDir(gamedir, sizeof(gamedir));
+	if (!DiscordPresence_MapshotResolve(mapshot, gamedir, url, sizeof(url)))
+		return;
+	q_strlcpy(snapshot->large_image, url, sizeof(snapshot->large_image));
+	DiscordPresence_CopyASCII(snapshot->large_text,
+		sizeof(snapshot->large_text), map);
+	q_strlcpy(snapshot->small_image, QSSM_DISCORD_LARGE_IMAGE,
+		sizeof(snapshot->small_image));
+	q_strlcpy(snapshot->small_text, "QSS-M", sizeof(snapshot->small_text));
 }
 
 static const char *DiscordPresence_ModeLabel(const char *mode)
@@ -1065,45 +1416,10 @@ static void DiscordPresence_AddPlayerCount(discord_presence_snapshot_t *snapshot
 		details, DiscordPresence_CountPlayers(), cl.maxclients);
 }
 
-static void DiscordPresence_BuildServerHover(discord_presence_snapshot_t *snapshot)
-{
-	char hostname[64] = "";
-	char friendly[60] = "", requested[NET_NAMELEN] = "";
-	char resolved[64] = "";
-	const char *resolved_address;
-
-	Info_GetKey(cl.serverinfo, "hostname", hostname, sizeof(hostname));
-	DiscordPresence_CopyASCII(requested, sizeof(requested), lastmphost);
-	DiscordPresence_CopyASCII(friendly, sizeof(friendly), hostname);
-	if (!friendly[0])
-		DiscordPresence_CopyASCII(friendly, sizeof(friendly), requested);
-	resolved_address = cls.netcon ?
-		NET_QSocketGetResolvedAddressString(cls.netcon) : NULL;
-	DiscordPresence_CopyASCII(resolved, sizeof(resolved), resolved_address);
-
-	if (!q_strcasecmp(requested, "local") || !q_strcasecmp(requested, "localhost"))
-	{
-		if (friendly[0] && q_strcasecmp(friendly, "local") &&
-			q_strcasecmp(friendly, "localhost"))
-			q_snprintf(snapshot->large_text, sizeof(snapshot->large_text),
-				"%s - Local server", friendly);
-		else
-			q_strlcpy(snapshot->large_text, "Local server",
-				sizeof(snapshot->large_text));
-	}
-	else if (friendly[0] && resolved[0] && q_strcasecmp(friendly, resolved))
-		q_snprintf(snapshot->large_text, sizeof(snapshot->large_text),
-			"%s (%s)", friendly, resolved);
-	else
-		q_strlcpy(snapshot->large_text, friendly[0] ? friendly : resolved,
-			sizeof(snapshot->large_text));
-}
-
 /* Appends " @ <server>" to the details line for networked games. Uses the
  * address the player connected to (lastmphost) so it reads as the recognizable
  * name they typed - e.g. "denver.quakeone.com" - falling back to the resolved
- * address, and is skipped entirely for local servers. The richer "hostname
- * (resolved ip)" form still rides along as the large-image hover tooltip. */
+ * address, and is skipped entirely for local servers. */
 static void DiscordPresence_AddServerAddress(discord_presence_snapshot_t *snapshot)
 {
 	char requested[NET_NAMELEN] = "", resolved[64] = "";
@@ -1230,6 +1546,7 @@ static void DiscordPresence_BuildSnapshot(discord_presence_snapshot_t *snapshot)
 	memset(snapshot, 0, sizeof(*snapshot));
 	DiscordPresence_CopyASCII(map, sizeof(map), cl.mapname);
 	DiscordPresence_BuildModLabel(mod_label, sizeof(mod_label));
+	DiscordPresence_BuildArtwork(snapshot, kind, map);
 	if (!map[0])
 		q_strlcpy(map, "Unknown map", sizeof(map));
 
@@ -1257,14 +1574,12 @@ static void DiscordPresence_BuildSnapshot(discord_presence_snapshot_t *snapshot)
 		q_strlcpy(snapshot->state, map, sizeof(snapshot->state));
 		DiscordPresence_AddPlayerCount(snapshot);
 		DiscordPresence_AddServerAddress(snapshot);
-		DiscordPresence_BuildServerHover(snapshot);
 	}
 	else
 	{
 		DiscordPresence_BuildMultiplayer(snapshot, map, mod_label);
 		DiscordPresence_AddPlayerCount(snapshot);
 		DiscordPresence_AddServerAddress(snapshot);
-		DiscordPresence_BuildServerHover(snapshot);
 	}
 	if (!cls.demoplayback && cl.intermission)
 		q_snprintf(snapshot->state, sizeof(snapshot->state),
@@ -1362,11 +1677,21 @@ static qboolean DiscordPresence_BuildJSON(const discord_presence_snapshot_t *sna
 		DiscordJSON_Append(&writer, "}");
 	}
 	DiscordJSON_Append(&writer, ",\"assets\":{\"large_image\":");
-	DiscordJSON_AppendString(&writer, QSSM_DISCORD_LARGE_IMAGE);
+	DiscordJSON_AppendString(&writer, snapshot->large_image);
 	if (snapshot->large_text[0])
 	{
 		DiscordJSON_Append(&writer, ",\"large_text\":");
 		DiscordJSON_AppendString(&writer, snapshot->large_text);
+	}
+	if (snapshot->small_image[0])
+	{
+		DiscordJSON_Append(&writer, ",\"small_image\":");
+		DiscordJSON_AppendString(&writer, snapshot->small_image);
+		if (snapshot->small_text[0])
+		{
+			DiscordJSON_Append(&writer, ",\"small_text\":");
+			DiscordJSON_AppendString(&writer, snapshot->small_text);
+		}
 	}
 	DiscordJSON_Append(&writer, "}");
 	DiscordJSON_Append(&writer, ",\"buttons\":[{\"label\":");
@@ -1514,6 +1839,7 @@ static void DiscordPresence_Completion_f(cvar_t* cvar, const char* partial)
 void DiscordPresence_Init(void)
 {
 	memset(&discord_presence, 0, sizeof(discord_presence));
+	memset(&discord_mapshots, 0, sizeof(discord_mapshots));
 	discord_presence.retry_delay = DISCORD_PRESENCE_RETRY_INITIAL;
 	discord_presence.application_id_valid = DiscordPresence_ApplicationIdValid();
 	DiscordIPC_Init();
@@ -1529,6 +1855,7 @@ void DiscordPresence_Shutdown(void)
 	if (discord_presence.enabled)
 		DiscordPresence_BeginDisable(realtime);
 	DiscordPresence_DriveDisable(realtime);
+	DiscordPresence_MapshotShutdown();
 	DiscordIPC_Shutdown();
 	memset(&discord_presence, 0, sizeof(discord_presence));
 }
@@ -1542,6 +1869,7 @@ void DiscordPresence_Frame(void)
 	if (!discord_presence.initialized)
 		return;
 	now = realtime;
+	DiscordPresence_MapshotPump(now);
 	if (discord_presence.disabling)
 	{
 		DiscordPresence_DriveDisable(now);
