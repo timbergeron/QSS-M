@@ -44190,6 +44190,7 @@ static struct
 	{"menu_sound", M_Menu_Sound_f},
 	{"menu_voip", M_Menu_Voip_f},
 	{"menu_game", M_Menu_Game_f},
+	{"menu_playerxray", M_Menu_PlayerXray_f},
 	{"menu_hud", M_Menu_HUD_f},
 	{"menu_crosshair", M_Menu_Crosshair_f},
 	{"menu_console", M_Menu_Console_f},
@@ -44206,6 +44207,9 @@ static struct
 	{"menu_config", M_Menu_ResetConfig_f},
 	{"menu_video", M_Menu_Video_f},
 	{"menu_graphics", M_Menu_Graphics_f},
+	{"menu_sky", M_Menu_Sky_f},
+	{"menu_skyboxviewer", M_Menu_SkyboxViewer_f},
+	{"menu_skywind", M_Menu_Skywind_f},
 	{"help", M_Menu_Help_f},
 	{"menu_quit", M_Menu_Quit_f},
 	{"menu_credits", M_Menu_Credits_f}, // needed by the 2021 re-release
