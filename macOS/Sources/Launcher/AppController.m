@@ -38,11 +38,16 @@ NSString *FQPrefCommandLineKey = @"CommandLine";
 static NSString *QSSPrefRawMouseInputEnabledKey = @"RawMouseInputEnabled";
 static NSString *QSSPrefWarnBeforeQuittingKey = @"WarnBeforeQuitting";
 static const NSTimeInterval QSSCommandQHoldDuration = 1.0;
+static const NSTimeInterval QSSQuitHoldCompletionDisplayDuration = 0.08;
 /* Half-size point measurements from the supplied 2x Retina reference. */
 static const CGFloat QSSQuitHoldOverlayWidth = 356.0f;
 static const CGFloat QSSQuitHoldOverlayHeight = 72.0f;
 
 @interface QSSQuitHoldOverlayView : NSView
+{
+    CGFloat progress;
+}
+- (void)setProgress:(CGFloat)value;
 @end
 
 @implementation QSSQuitHoldOverlayView
@@ -52,19 +57,84 @@ static const CGFloat QSSQuitHoldOverlayHeight = 72.0f;
     return NO;
 }
 
+- (void)setProgress:(CGFloat)value
+{
+    progress = MAX(0.0f, MIN(1.0f, value));
+    [self setNeedsDisplay:YES];
+}
+
 - (void)drawRect:(NSRect)dirtyRect
 {
     NSRect bounds = [self bounds];
     NSBezierPath *background;
+    NSBezierPath *borderPath;
     NSString *text = @"Hold \u2318Q to Quit";
     NSDictionary *attributes;
     NSSize textSize;
     NSPoint textOrigin;
+    NSRect borderBounds;
+    CGFloat radius;
+    CGFloat perimeter;
+    CGFloat dashPattern[2];
+    CGFloat progressAlpha;
+    CGFloat glowAlpha;
+    NSShadow *progressShadow;
 
     (void)dirtyRect;
     background = [NSBezierPath bezierPathWithRoundedRect:bounds xRadius:6.0f yRadius:6.0f];
     [[NSColor colorWithCalibratedWhite:0.16f alpha:0.75f] setFill];
     [background fill];
+
+    /* The outline is a clockwise progress indicator for the hold duration. */
+    borderBounds = NSInsetRect(bounds, 1.5f, 1.5f);
+    radius = 5.0f;
+    perimeter = 2.0f * (borderBounds.size.width - 2.0f * radius) +
+                2.0f * (borderBounds.size.height - 2.0f * radius) +
+                2.0f * (CGFloat)M_PI * radius;
+    borderPath = [NSBezierPath bezierPath];
+    [borderPath moveToPoint:NSMakePoint(NSMidX(borderBounds), NSMaxY(borderBounds))];
+    [borderPath lineToPoint:NSMakePoint(NSMaxX(borderBounds) - radius, NSMaxY(borderBounds))];
+    [borderPath appendBezierPathWithArcWithCenter:NSMakePoint(NSMaxX(borderBounds) - radius,
+                                                               NSMaxY(borderBounds) - radius)
+                                           radius:radius startAngle:90.0f endAngle:0.0f clockwise:YES];
+    [borderPath lineToPoint:NSMakePoint(NSMaxX(borderBounds), NSMinY(borderBounds) + radius)];
+    [borderPath appendBezierPathWithArcWithCenter:NSMakePoint(NSMaxX(borderBounds) - radius,
+                                                               NSMinY(borderBounds) + radius)
+                                           radius:radius startAngle:0.0f endAngle:-90.0f clockwise:YES];
+    [borderPath lineToPoint:NSMakePoint(NSMinX(borderBounds) + radius, NSMinY(borderBounds))];
+    [borderPath appendBezierPathWithArcWithCenter:NSMakePoint(NSMinX(borderBounds) + radius,
+                                                               NSMinY(borderBounds) + radius)
+                                           radius:radius startAngle:-90.0f endAngle:-180.0f clockwise:YES];
+    [borderPath lineToPoint:NSMakePoint(NSMinX(borderBounds), NSMaxY(borderBounds) - radius)];
+    [borderPath appendBezierPathWithArcWithCenter:NSMakePoint(NSMinX(borderBounds) + radius,
+                                                               NSMaxY(borderBounds) - radius)
+                                           radius:radius startAngle:180.0f endAngle:90.0f clockwise:YES];
+    [borderPath lineToPoint:NSMakePoint(NSMidX(borderBounds), NSMaxY(borderBounds))];
+    [borderPath setLineWidth:1.0f];
+    [borderPath setLineCapStyle:NSLineCapStyleRound];
+    [[NSColor colorWithCalibratedWhite:1.0f alpha:0.16f] setStroke];
+    [borderPath stroke];
+
+    if (progress > 0.0f) {
+        progressAlpha = progress >= 1.0f ? 1.0f : 0.66f;
+        glowAlpha = progress >= 1.0f ? 0.42f : 0.21f;
+        dashPattern[0] = MAX(0.01f, perimeter * progress);
+        dashPattern[1] = perimeter;
+        [borderPath setLineDash:dashPattern count:2 phase:0.0f];
+        progressShadow = [[[NSShadow alloc] init] autorelease];
+        [progressShadow setShadowOffset:NSZeroSize];
+        [progressShadow setShadowBlurRadius:2.5f];
+        [progressShadow setShadowColor:[NSColor colorWithCalibratedWhite:1.0f alpha:0.22f]];
+        [NSGraphicsContext saveGraphicsState];
+        [progressShadow set];
+        [borderPath setLineWidth:3.0f];
+        [[NSColor colorWithCalibratedWhite:1.0f alpha:glowAlpha] setStroke];
+        [borderPath stroke];
+        [NSGraphicsContext restoreGraphicsState];
+        [borderPath setLineWidth:2.0f];
+        [[NSColor colorWithCalibratedWhite:1.0f alpha:progressAlpha] setStroke];
+        [borderPath stroke];
+    }
 
     attributes = [NSDictionary dictionaryWithObjectsAndKeys:
         [NSFont boldSystemFontOfSize:24.0f], NSFontAttributeName,
@@ -1343,9 +1413,11 @@ static NSImage *QSSHostAppIcon(void)
 - (NSText *)activeArgumentFieldEditor;
 - (NSString *)currentArgumentText;
 - (void)installQuitKeyMonitor;
+- (void)handleCommandQEventDown:(BOOL)down;
 - (void)beginQuitHold;
 - (void)cancelQuitHold;
 - (void)quitHoldTimerFired:(NSTimer *)timer;
+- (void)updateQuitHoldProgress:(NSTimer *)timer;
 - (void)showQuitHoldOverlay;
 - (void)hideQuitHoldOverlay;
 - (void)quitNow;
@@ -1788,23 +1860,54 @@ static NSImage *QSSHostAppIcon(void)
                                   NSEventModifierFlagControl)) == 0);
 
             if ([event type] == NSEventTypeKeyDown && commandQ) {
-                if (!blockSelf->quitKeyDown) {
-                    blockSelf->quitKeyDown = YES;
-                    [blockSelf beginQuitHold];
-                }
+                [blockSelf handleCommandQEventDown:YES];
                 /* Do not let the key equivalent or the game see Command-Q. */
                 return nil;
             }
 
             if ([event type] == NSEventTypeKeyUp &&
                 blockSelf->quitKeyDown && [characters isEqualToString:@"q"]) {
-                blockSelf->quitKeyDown = NO;
-                [blockSelf cancelQuitHold];
+                [blockSelf handleCommandQEventDown:NO];
                 return nil;
             }
 
             return event;
         }] retain];
+}
+
+- (void)handleCommandQEventDown:(BOOL)down
+{
+    if (![self warnBeforeQuittingEnabled]) {
+        if (down)
+            [self quitNow];
+        return;
+    }
+
+    if (down) {
+        if (!quitKeyDown) {
+            quitKeyDown = YES;
+            [self beginQuitHold];
+        }
+    } else if (quitKeyDown) {
+        quitKeyDown = NO;
+        [self cancelQuitHold];
+    }
+}
+
+void PL_CommandQEvent(int down)
+{
+    id delegate = [NSApp delegate];
+
+    if ([delegate respondsToSelector:@selector(handleCommandQEventDown:)]) {
+        [(AppController *)delegate handleCommandQEventDown:(down != 0)];
+        return;
+    }
+
+    if (down) {
+        SDL_Event event = {0};
+        event.type = SDL_QUIT;
+        SDL_PushEvent(&event);
+    }
 }
 
 - (void)beginQuitHold
@@ -1813,6 +1916,14 @@ static NSImage *QSSHostAppIcon(void)
         return;
 
     [self showQuitHoldOverlay];
+    quitHoldStartedAt = CFAbsoluteTimeGetCurrent();
+    [quitHoldOverlayView setProgress:0.0f];
+    quitHoldProgressTimer = [[NSTimer scheduledTimerWithTimeInterval:(1.0 / 120.0)
+                                                               target:self
+                                                             selector:@selector(updateQuitHoldProgress:)
+                                                             userInfo:nil
+                                                              repeats:YES] retain];
+    [quitHoldProgressTimer setTolerance:0.0];
     quitHoldTimer = [[NSTimer scheduledTimerWithTimeInterval:QSSCommandQHoldDuration
                                                        target:self
                                                      selector:@selector(quitHoldTimerFired:)
@@ -1827,6 +1938,12 @@ static NSImage *QSSHostAppIcon(void)
         [quitHoldTimer release];
         quitHoldTimer = nil;
     }
+    if (quitHoldProgressTimer) {
+        [quitHoldProgressTimer invalidate];
+        [quitHoldProgressTimer release];
+        quitHoldProgressTimer = nil;
+    }
+    [quitHoldOverlayView setProgress:0.0f];
     [self hideQuitHoldOverlay];
 }
 
@@ -1863,6 +1980,7 @@ static NSImage *QSSHostAppIcon(void)
         /* A fixed alpha view preserves the same translucent appearance over
            the launcher, console, renderer and every fullscreen style. */
         overlayView = [[[QSSQuitHoldOverlayView alloc] initWithFrame:frame] autorelease];
+        quitHoldOverlayView = overlayView;
         [overlayView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
         [[quitHoldOverlayWindow contentView] addSubview:overlayView];
     }
@@ -1896,7 +2014,24 @@ static NSImage *QSSHostAppIcon(void)
 
     [quitHoldTimer release];
     quitHoldTimer = nil;
-    [self quitNow];
+    [quitHoldProgressTimer invalidate];
+    [quitHoldProgressTimer release];
+    quitHoldProgressTimer = nil;
+    [quitHoldOverlayView setProgress:1.0f];
+    [quitHoldOverlayView displayIfNeeded];
+    [quitHoldOverlayWindow display];
+    [self performSelector:@selector(quitNow)
+               withObject:nil
+               afterDelay:QSSQuitHoldCompletionDisplayDuration];
+}
+
+- (void)updateQuitHoldProgress:(NSTimer *)timer
+{
+    CGFloat elapsed;
+
+    (void)timer;
+    elapsed = (CGFloat)(CFAbsoluteTimeGetCurrent() - quitHoldStartedAt);
+    [quitHoldOverlayView setProgress:elapsed / (CGFloat)QSSCommandQHoldDuration];
 }
 
 - (void)toggleWarnBeforeQuitting:(id)sender
@@ -4150,6 +4285,8 @@ doCommandBySelector:(SEL)commandSelector
     [quitKeyMonitor release];
     [quitHoldTimer invalidate];
     [quitHoldTimer release];
+    [quitHoldProgressTimer invalidate];
+    [quitHoldProgressTimer release];
     [quitHoldOverlayWindow orderOut:nil];
     [quitHoldOverlayWindow release];
     [rawMouseOverlayWindow release];

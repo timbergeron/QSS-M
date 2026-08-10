@@ -63,9 +63,12 @@ extern NSString *FQPrefCommandLineKey;
 
     id quitKeyMonitor;
     NSTimer *quitHoldTimer;
+    NSTimer *quitHoldProgressTimer;
     NSPanel *quitHoldOverlayWindow;
+    id quitHoldOverlayView;
     NSMenuItem *warnBeforeQuittingItem;
     BOOL quitKeyDown;
+    CFAbsoluteTime quitHoldStartedAt;
 
     QuakeArguments *arguments;
 }
@@ -82,5 +85,6 @@ extern NSString *FQPrefCommandLineKey;
 - (IBAction)openQuakeFolder:(id)sender;
 - (IBAction)openGithub:(id)sender;
 - (IBAction)openWebsite:(id)sender;
+- (void)handleCommandQEventDown:(BOOL)down;
 
 @end

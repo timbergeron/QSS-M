@@ -48,6 +48,11 @@ void PL_FreeClipboardFilePaths (char **paths, int count);
 /* show an error dialog */
 void PL_ErrorDialog(const char *text);
 
+#if defined(__APPLE__) || defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+/* Forward a raw engine Command-Q transition to the native hold-to-quit UI. */
+void PL_CommandQEvent(int down);
+#endif
+
 #if defined(_WIN32)
 /* show a confirmation dialog, true when the user selects yes */
 qboolean PL_ConfirmDialog(const char *title, const char *text);

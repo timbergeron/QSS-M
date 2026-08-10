@@ -52,6 +52,9 @@ char		*keybindings[MAX_BINDMAPS][MAX_KEYS];
 qboolean	consolekeys[MAX_KEYS];	// if true, can't be rebound while in console
 qboolean	menubound[MAX_KEYS];	// if true, can't be rebound while in menu
 qboolean	keydown[MAX_KEYS];
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+static qboolean command_q_active;
+#endif
 
 qboolean Key_IsShortcutModifierDown (void)
 {
@@ -2886,6 +2889,18 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 #endif
 	}
 
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
+	/* The Cocoa monitor normally owns Command-Q, including its one-second hold
+	 * UI. Some SDL paths deliver it directly to the engine, so cancel the
+	 * native hold if Command itself is released before Q. */
+	if (!down && key == K_COMMAND && command_q_active)
+	{
+		command_q_active = false;
+		keydown['q'] = false;
+		PL_CommandQEvent(false);
+	}
+#endif
+
 // handle fullscreen toggle
 	if (down && (key == K_ENTER || key == K_KP_ENTER) && keydown[K_ALT])
 	{
@@ -2930,25 +2945,25 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		}
 	}
 
-/*#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #shortcuts
-	if (down && (key == 'q') && keydown[K_COMMAND])
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #shortcuts
+	if (down && key == 'q' && keydown[K_COMMAND])
 	{
-		Host_Quit_f();
+		if (!command_q_active)
+		{
+			command_q_active = true;
+			PL_CommandQEvent(true);
+		}
+		keydown[key] = true;
+		return;
+	}
+	if (!down && key == 'q' && command_q_active)
+	{
+		command_q_active = false;
+		keydown[key] = false;
+		PL_CommandQEvent(false);
 		return;
 	}
 #endif
-
-	if (down && (key == 'q') && keydown[K_CTRL]) // woods #shortcuts
-	{
-		Host_Quit_f();
-		return;
-	}
-
-	if (down && (key == 'w') && keydown[K_CTRL]) // woods #shortcuts
-	{
-		Host_Quit_f();
-		return;
-	}*/
 
 	if (!(scr_conscale.value > 11) || !(scr_sbarscale.value > 7)) // max clamp
 	if (down && (key == K_MWHEELUP) && Key_IsShortcutModifierDown() && keydown[K_SHIFT]) // woods #shortcuts
