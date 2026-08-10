@@ -7906,6 +7906,35 @@ qboolean RSceneCache_HasSky(void)
 	}
 	return false;
 }
+
+static qboolean RSceneCache_WorldSkyVisible(void)
+{
+	struct rscenecache_s *cache = rscenecache.drawing;
+	qmodel_t *model;
+	msurface_t *surf;
+	int i, status;
+
+	if (!cache || !cache->visitedsurfs || cache->worldmodel != cl.worldmodel)
+		return false;
+
+	status = SDL_AtomicGet(&cache->status);
+	if (status != SCS_COMPUTED && status != SCS_FINISHED)
+		return false;
+
+	model = cache->worldmodel;
+	for (i = 0, surf = model->surfaces; i < model->numsurfaces; i++, surf++)
+	{
+		if (!(cache->visitedsurfs[i >> 3] & (1u << (i & 7))))
+			continue;
+		if (!(surf->flags & SURF_DRAWSKY) || !surf->plane)
+			continue;
+		if (!R_CullBox (surf->mins, surf->maxs) && !R_BackFaceCull (surf))
+			return true;
+	}
+
+	return false;
+}
+
 qboolean RSceneCache_DrawSkySurfDepth(void)
 {	//legacy skyboxes are a serious pain, but oh well...
 	//if we draw anything here then its JUST depth values. we don't need glsl nor even textures for this.
@@ -8015,20 +8044,15 @@ qboolean R_WorldSkyVisible(void)
 {
 	qmodel_t *model = cl.worldmodel;
 	texture_t *tex;
-	msurface_t *surf, **mark;
 	int i;
 
 	if (!model)
 		return false;
 
 #ifndef SDL_THREADS_DISABLED
-	if (RSceneCache_HasSky())
-		return true;
+	if (rscenecache.drawing)
+		return RSceneCache_WorldSkyVisible ();
 #endif
-
-	for (i = 0, surf = model->surfaces; i < model->numsurfaces; i++, surf++)
-		if ((surf->flags & SURF_DRAWSKY) && surf->visframe == r_visframecount)
-			return true;
 
 	for (i = 0; i < model->numtextures; i++)
 	{
@@ -8036,13 +8060,6 @@ qboolean R_WorldSkyVisible(void)
 		if (tex && tex->texturechains[chain_world] &&
 			(tex->texturechains[chain_world]->flags & SURF_DRAWSKY))
 			return true;
-	}
-
-	if (r_viewleaf)
-	{
-		for (i = 0, mark = r_viewleaf->firstmarksurface; i < r_viewleaf->nummarksurfaces; i++, mark++)
-			if ((*mark)->flags & SURF_DRAWSKY)
-				return true;
 	}
 
 	return false;

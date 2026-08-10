@@ -45687,7 +45687,8 @@ void M_Draw (void)
 	if (!m_recursiveDraw)
 	{
 		qboolean live_world_menu = (cl.worldmodel &&
-			(m_state == m_sky || m_state == m_skyboxviewer || m_state == m_skywind));
+			(m_state == m_sky || m_state == m_skyboxviewer || m_state == m_skywind) &&
+			R_WorldSkyVisible ());
 		float lp_frac = M_LivePreview_Alpha ();
 
 		if (scr_con_current && !M_WantsConsole (NULL))
