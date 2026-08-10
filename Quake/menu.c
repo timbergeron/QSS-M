@@ -893,6 +893,9 @@ void M_LivePreview_EndIsolate (void)
 static void M_LivePreview_Update (void)
 {
 	qboolean hold_paused;
+	// ignore hitches (such as when toggling enhanced models),
+	// otherwise the preview fraction would change abruptly
+	double frametime = q_min (host_frametime, 1.0 / 30.0);
 
 	if (!M_LivePreview_ValidateFrame ())
 		return;
@@ -915,7 +918,7 @@ static void M_LivePreview_Update (void)
 		livepreview.hold_time > 0.f &&
 		!hold_paused)
 	{
-		livepreview.hold_time -= host_frametime;
+		livepreview.hold_time -= frametime;
 		if (livepreview.hold_time <= 0.f)
 		{
 			livepreview.hold_time = 0.f;
@@ -926,13 +929,13 @@ static void M_LivePreview_Update (void)
 	// Advance fade toward target.
 	if (livepreview.frac < livepreview.frac_target)
 	{
-		livepreview.frac += host_frametime / LP_FADEIN_TIME;
+		livepreview.frac += frametime / LP_FADEIN_TIME;
 		if (livepreview.frac > livepreview.frac_target)
 			livepreview.frac = livepreview.frac_target;
 	}
 	else if (livepreview.frac > livepreview.frac_target)
 	{
-		livepreview.frac -= host_frametime / LP_FADEOUT_TIME;
+		livepreview.frac -= frametime / LP_FADEOUT_TIME;
 		if (livepreview.frac < livepreview.frac_target)
 			livepreview.frac = livepreview.frac_target;
 		if (livepreview.frac == 0.f && livepreview.frac_target == 0.f)
