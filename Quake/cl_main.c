@@ -102,6 +102,7 @@ cvar_t  f_status = {"f_status", "on", CVAR_ARCHIVE | CVAR_USERINFO}; // woods #f
 
 cvar_t  cl_ambient = {"cl_ambient", "1", CVAR_ARCHIVE}; // woods #stopsound
 cvar_t  r_coloredpowerupglow = {"r_coloredpowerupglow", "1", CVAR_ARCHIVE}; // woods
+cvar_t  r_poweruplightflicker = {"r_poweruplightflicker", "0", CVAR_ARCHIVE};
 cvar_t  cl_bobbing = {"cl_bobbing", "0", CVAR_ARCHIVE}; // woods (joequake #weaponbob)
 cvar_t	cl_web_download_url = {"cl_web_download_url", "q1tools/q1tools.github.io", CVAR_ARCHIVE}; // woods #webdl
 cvar_t	cl_web_download_url2 = { "cl_web_download_url2", "maps.quakeworld.nu", CVAR_ARCHIVE }; // woods #webdl
@@ -2455,14 +2456,14 @@ void CL_RelinkEntities (void)
 			dl = CL_AllocDlight (i);
 			VectorCopy (ent->origin,  dl->origin);
 			dl->origin[2] += 16;
-			dl->radius = 416;// +(rand() & 31); // woods no light flicker
+			dl->radius = r_poweruplightflicker.value ? 400 + (rand() & 31) : 416;
 			dl->die = cl.time + 0.1; //R00k was .001
 		}
 		if (ent->effects & (EF_DIMLIGHT|EF_RED|EF_BLUE|EF_GREEN))
 		{
 			dl = CL_AllocDlight (i);
 			VectorCopy (ent->origin,  dl->origin);
-			dl->radius = 216;// +(rand() & 31); // woods no light flicker
+			dl->radius = r_poweruplightflicker.value ? 200 + (rand() & 31) : 216;
 			dl->die = cl.time + 0.1; //R00k was .001
 
 			if (((ent->effects & (EF_RED|EF_BLUE|EF_GREEN)) && r_coloredpowerupglow.value)) // woods
@@ -7885,6 +7886,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_ambient); // woods #stopsound
 	Cvar_RegisterVariable (&cl_smartspawn); // woods #spawntrainer
 	Cvar_RegisterVariable (&r_coloredpowerupglow); // woods
+	Cvar_RegisterVariable (&r_poweruplightflicker);
 	Cvar_RegisterVariable (&cl_bobbing); // woods (joequake #weaponbob)
 
     CL_InitWebDownloads(false);
