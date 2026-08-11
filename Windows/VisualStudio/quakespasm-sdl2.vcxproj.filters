@@ -39,6 +39,9 @@
     <ClCompile Include="..\..\Quake\discord_presence.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Quake\mapshot.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\Quake\qwatch.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -462,6 +465,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Quake\quakedef.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Quake\mapshot.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Quake\qwatch.h">

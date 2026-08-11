@@ -238,6 +238,7 @@ copy "$(SolutionDir)..\zlib\$(PlatformShortName)\*.dll" "$(TargetDir)"</Command>
     <ClCompile Include="..\..\Quake\cl_input.c" />
     <ClCompile Include="..\..\Quake\cl_main.c" />
     <ClCompile Include="..\..\Quake\discord_presence.c" />
+    <ClCompile Include="..\..\Quake\mapshot.c" />
     <ClCompile Include="..\..\Quake\qwatch.c" />
     <ClCompile Include="..\..\Quake\cl_parse.c" />
     <ClCompile Include="..\..\Quake\cl_tent.c" />
@@ -389,6 +390,7 @@ copy "$(SolutionDir)..\zlib\$(PlatformShortName)\*.dll" "$(TargetDir)"</Command>
     <ClInclude Include="..\..\Quake\pr_comp.h" />
     <ClInclude Include="..\..\Quake\qs_bmp.h" />
     <ClInclude Include="..\..\Quake\quakedef.h" />
+    <ClInclude Include="..\..\Quake\mapshot.h" />
     <ClInclude Include="..\..\Quake\qwatch.h" />
     <ClInclude Include="..\..\Quake\q_sound.h" />
     <ClInclude Include="..\..\Quake\q_stdinc.h" />

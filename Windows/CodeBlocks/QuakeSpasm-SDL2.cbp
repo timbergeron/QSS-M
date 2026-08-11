@@ -93,6 +93,9 @@
 		<Unit filename="..\..\Quake\discord_presence.c">
 			<Option compilerVar="CC" />
 		</Unit>
+		<Unit filename="..\..\Quake\mapshot.c">
+			<Option compilerVar="CC" />
+		</Unit>
 		<Unit filename="..\..\Quake\qwatch.c">
 			<Option compilerVar="CC" />
 		</Unit>
@@ -265,6 +268,7 @@
 		<Unit filename="..\..\Quake\q_stdinc.h" />
 		<Unit filename="..\..\Quake\qs_bmp.h" />
 		<Unit filename="..\..\Quake\quakedef.h" />
+		<Unit filename="..\..\Quake\mapshot.h" />
 		<Unit filename="..\..\Quake\qwatch.h" />
 		<Unit filename="..\..\Quake\r_alias.c">
 			<Option compilerVar="CC" />

@@ -8363,6 +8363,17 @@ static void Host_Map_f (void)
 	if (cmd_source != src_command)
 		return;
 
+	q_strlcpy (name, Cmd_Argv(1), sizeof(name));
+	// remove (any) trailing ".bsp" from mapname -- S.A.
+	p = strrchr(name, '.');
+	if (p != NULL)
+	{
+		if (strcmp(p, ".bsp") == 0)
+			*p = '\0';
+	}
+	if (cls.state != ca_dedicated)
+		Mapshot_SetLoadingMap(name);
+
 	cls.demonum = -1;		// stop demo loop in case this fails
 
 	CL_Disconnect ();
@@ -8374,17 +8385,8 @@ static void Host_Map_f (void)
 		key_dest = key_game;			// remove console or menu
 	if (cls.state != ca_dedicated)
 		IN_UpdateGrabs();
-	SCR_BeginLoadingPlaque ();
 
 	svs.serverflags = 0;			// haven't completed an episode yet
-	q_strlcpy (name, Cmd_Argv(1), sizeof(name));
-	// remove (any) trailing ".bsp" from mapname -- S.A.
-	p = strrchr(name, '.');
-	if (p != NULL)
-	{
-		if (strcmp(p, ".bsp") == 0)
-			*p = '\0';
-	}
 
 	if (cls.state != ca_dedicated) // woods -- try to download map
 	{
@@ -8409,7 +8411,10 @@ static void Host_Map_f (void)
 	SV_SpawnServer (name);
 	PR_SwitchQCVM(NULL);
 	if (!sv.active)
+	{
+		Mapshot_EndLoading();
 		return;
+	}
 
 	if (cls.state != ca_dedicated)
 	{
@@ -8539,6 +8544,8 @@ static void Host_Changelevel_f (void)
 
 	PR_SwitchQCVM(&sv.qcvm);
 	SV_SaveSpawnparms ();
+	if (cls.state != ca_dedicated)
+		Mapshot_SetLoadingMap(level);
 	SV_SpawnServer (level);
 	PR_SwitchQCVM(NULL);
 	// also issue an error if spawn failed -- O.S.
@@ -8572,6 +8579,8 @@ static void Host_Restart_f (void)
 		return;
 	}
 	q_strlcpy (mapname, sv.name, sizeof(mapname));	// mapname gets cleared in spawnserver
+	if (cls.state != ca_dedicated)
+		Mapshot_SetLoadingMap(mapname);
 	PR_SwitchQCVM(&sv.qcvm);
 	SV_SpawnServer (mapname);
 	PR_SwitchQCVM(NULL);
@@ -9332,6 +9341,7 @@ static void Host_Loadgame_f (void)
 	data = COM_ParseStringNewline (data);
 	q_strlcpy (mapname, com_token, sizeof(mapname));
 	data = COM_ParseFloatNewline (data, &time);
+	Mapshot_SetLoadingMap(mapname);
 
 // Note: calling CL_Disconnect instead of CL_Disconnect_f to avoid stopping the music
 	CL_Disconnect ();

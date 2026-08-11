@@ -6902,6 +6902,106 @@ static qboolean M_Maps_MouseYInDownloadGap(int yrel)
 	return M_Maps_HasDownloadGap() && yrel >= 8 && yrel < 16;
 }
 
+/*
+================
+M_Maps_DrawLevelshotPreview -- woods #mapshots
+
+Hold the shortcut modifier (cmd on macOS, ctrl elsewhere) to overlay the
+selected map's levelshot.  Resolution is asynchronous and some maps have no
+image at all, so the in-between states get drawn too: holding the key and
+seeing nothing whatsoever reads as a broken feature.
+================
+*/
+#define MAPS_PREVIEW_WIDTH		200
+#define MAPS_PREVIEW_FALLBACK_H	(MAPS_PREVIEW_WIDTH * 7 / 10)
+#define MAPS_PREVIEW_PAD		4
+#define MAPS_PREVIEW_RADIUS		5.0f
+/* Two alphas on purpose.  Behind a levelshot the photo is opaque and supplies
+   its own backing, so the panel only needs to be a hint of a frame.  With no
+   photo the panel *is* the backing, and at 90% transparent the status and map
+   name are unreadable over the level list showing through. */
+#define MAPS_PREVIEW_BG_ALPHA		0.1f	// 90% transparent
+#define MAPS_PREVIEW_BG_ALPHA_TEXT	0.85f
+
+static void M_Maps_DrawLevelshotPreview (void)
+{
+	const mapitem_t	*item;
+	qpic_t			*pic;
+	const char		*status;
+	plcolour_t		bg;
+	qboolean		pending = false;
+	int				idx, w, h, x, y, panel_h;
+
+	if (!Key_IsShortcutModifierDown())
+		return;
+	if (mapsmenu.list.cursor < 0 || mapsmenu.list.cursor >= mapsmenu.list.numitems)
+		return;
+
+	idx = mapsmenu.filtered_indices[mapsmenu.list.cursor];
+	item = &mapsmenu.items[idx];
+	if (item->download_menu)
+		return;
+
+	pic = Mapshot_ResolvePic(item->name);
+	w = MAPS_PREVIEW_WIDTH;
+	if (pic && pic->width > 0 && pic->height > 0)
+	{
+		/* Fit inside the box rather than only pinning the width: local
+		   levelshots are whatever the user dropped in, and a portrait one
+		   scaled to 200 wide would run off the 320x200 canvas. */
+		h = w * pic->height / pic->width;
+		if (h > MAPS_PREVIEW_FALLBACK_H)
+		{
+			h = MAPS_PREVIEW_FALLBACK_H;
+			w = h * pic->width / pic->height;
+			if (w < 1)
+				w = 1;
+		}
+		status = NULL;
+		panel_h = h + 13;		// image, 5px gap, 8px caption
+	}
+	else
+	{
+		h = MAPS_PREVIEW_FALLBACK_H;
+		pending = Mapshot_PicPending(item->name);
+		status = pending ? "loading..." : "no levelshot";
+		panel_h = h;			// status and name are centred inside the box
+	}
+
+	x = (320 - w) / 2;
+	y = (190 - h) / 2;
+
+	// The pad keeps the rounded corners clear of the image's square ones:
+	// an arc of radius r needs r*(1-1/sqrt2) of inset, well under PAD here.
+	bg = CL_PLColours_Parse("0x000000");
+	Draw_Fill_Plus_Radius (x - MAPS_PREVIEW_PAD, y - MAPS_PREVIEW_PAD,
+		w + MAPS_PREVIEW_PAD * 2, panel_h + MAPS_PREVIEW_PAD * 2,
+		bg, pic ? MAPS_PREVIEW_BG_ALPHA : MAPS_PREVIEW_BG_ALPHA_TEXT,
+		true, DRAW_CORNERS_ALL, MAPS_PREVIEW_RADIUS);
+
+	if (pic)
+	{
+		Draw_Levelshot (x, y, w, h, pic);
+		M_PrintWhite ((320 - (int)strlen(item->name) * 8) / 2, y + h + 5, item->name);
+	}
+	else
+	{
+		// Status, a blank line, then the map name -- centred as a 3-line block.
+		int sy = y + (h - 24) / 2;
+
+		// Same sweep the server browser uses for "Searching...", and for the
+		// same reason: it reads as work in progress.  A settled "no levelshot"
+		// gets plain text so the two states stay distinguishable.
+		if (pending)
+			Draw_StringGradientSweep (x + (w - (int)strlen(status) * 8) / 2, sy,
+				status, 96.0f, 48.0f, 1.0f, true);
+		else
+			M_Print (x + (w - (int)strlen(status) * 8) / 2, sy, status);
+
+		M_PrintWhite ((320 - (int)strlen(item->name) * 8) / 2, sy + 16, item->name);
+	}
+}
+
 void M_Maps_Draw(void)
 {
 	int x, y, i, cols;
@@ -7016,6 +7116,8 @@ void M_Maps_Draw(void)
 		else
 			M_DrawCharacter(cursor_x, 184, 10 + ((int)(realtime * 4) & 1));
 	}
+
+	M_Maps_DrawLevelshotPreview(); // woods #mapshots -- last, so it overlays the list
 }
 
 qboolean M_Maps_Match(int index, char initial)

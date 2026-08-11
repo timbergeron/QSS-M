@@ -325,6 +325,189 @@ qpic_t *Draw_PicFromWad (const char *name)
 
 /*
 ================
+Draw_CacheLevelshot -- woods #mapshots
+
+Levelshots are unbounded in a way menu pics are not: a player scrolling the
+levels list can name hundreds of maps in one session, and menu_cachepics never
+releases a slot before Draw_NewGame.  So these get their own small LRU with
+real eviction instead.
+
+`name` is the cache key (the map name); `filename` is the extensionless path
+handed to the texture manager, which picks the on-disk format.  Returns NULL
+when no image exists, without leaving a poisoned slot behind.
+================
+*/
+#define MAX_LEVELSHOT_PICS	8
+
+typedef struct
+{
+	char		name[MAX_QPATH];
+	qpic_t		pic;
+	byte		padding[32];	// for appended glpic
+	double		lastused;
+	qboolean	valid;
+} levelshotpic_t;
+
+static levelshotpic_t	levelshot_pics[MAX_LEVELSHOT_PICS];
+
+static void Draw_ReleaseLevelshot (levelshotpic_t *slot)
+{
+	glpic_t gl;
+
+	if (!slot->valid)
+		return;
+	memcpy (&gl, slot->pic.data, sizeof(glpic_t));
+	if (gl.gltexture)
+		TexMgr_FreeTexture (gl.gltexture);
+	memset (slot, 0, sizeof(*slot));
+}
+
+qpic_t *Draw_CacheLevelshot (const char *name, const char *filename)
+{
+	levelshotpic_t	*slot = NULL, *oldest = NULL;
+	glpic_t			gl;
+	unsigned int	texflags = TEXPREF_ALPHA | TEXPREF_NOPICMIP | TEXPREF_CLAMP;
+	int				i;
+
+	/* Deliberately not gated on draw_load24bit: that governs whether external
+	   art replaces a pic that has a .lmp original.  A levelshot has no
+	   original, so gl_load24bit 0 must not suppress it. */
+	if (!name || !name[0])
+		return NULL;
+
+	for (i = 0; i < MAX_LEVELSHOT_PICS; i++)
+	{
+		levelshotpic_t *p = &levelshot_pics[i];
+
+		if (p->valid && !strcmp(p->name, name))
+		{
+			p->lastused = realtime;
+			return &p->pic;
+		}
+		if (!p->valid)
+		{
+			if (!slot)
+				slot = p;
+		}
+		else if (!oldest || p->lastused < oldest->lastused)
+			oldest = p;
+	}
+
+	texflags |= (premul_hud ? TEXPREF_PREMULTIPLY : 0);
+	gl.gltexture = TexMgr_LoadImage (NULL, va("levelshot:%s", name), 0, 0,
+		SRC_EXTERNAL, NULL, filename, 0, texflags | TEXPREF_ALLOWMISSING);
+	if (!gl.gltexture)
+		return NULL;
+
+	if (!slot)
+	{
+		slot = oldest;
+		Draw_ReleaseLevelshot (slot);
+	}
+
+	// no TEXPREF_PAD, so the image occupies the whole texture
+	gl.sl = 0;
+	gl.sh = 1;
+	gl.tl = 0;
+	gl.th = 1;
+
+	slot->valid = true;
+	slot->lastused = realtime;
+	q_strlcpy (slot->name, name, sizeof(slot->name));
+	slot->pic.width = gl.gltexture->width;
+	slot->pic.height = gl.gltexture->height;
+	memcpy (slot->pic.data, &gl, sizeof(glpic_t));
+
+	return &slot->pic;
+}
+
+/*
+================
+Draw_Levelshot -- woods #mapshots
+
+Draws a levelshot scaled into x/y/w/h, compensating for the gamma pass.
+
+The whole frame goes through `pow(frag.rgb * ContrastValue, GammaValue)` after
+the menu draws (see GLSLGamma in gl_rmain.c), and a typical gamma below 1 is
+chosen to lift Quake's deliberately dark art.  A levelshot is an ordinary
+correctly-exposed photo, so that same lift just washes it out.
+
+A vertex-colour modulate k scales the shader's output by k^gamma, so solving
+for a neutral midtone gives k = 0.5^(1/gamma - 1) / contrast.  That is exactly
+1.0 when gamma is 1, so this costs nothing for players who never touch gamma,
+and it inverts correctly for gamma above 1 as well.
+================
+*/
+void Draw_Levelshot (int x, int y, int w, int h, qpic_t *pic)
+{
+	extern cvar_t vid_gamma, vid_contrast;
+	glpic_t	*gl;
+	float	gamma, contrast, k;
+
+	if (!pic)
+		return;
+	if (scrap_dirty)
+		Scrap_Upload ();
+	gl = (glpic_t *)pic->data;
+	if ((uintptr_t)gl < 0x1000)
+		return;
+
+	gamma = vid_gamma.value;
+	contrast = vid_contrast.value;
+	if (!isfinite(gamma) || gamma <= 0.f)
+		gamma = 1.f;
+	if (!isfinite(contrast) || contrast <= 0.f)
+		contrast = 1.f;
+
+	k = powf (0.5f, 1.f / gamma - 1.f) / contrast;
+	k = CLAMP(0.25f, k * cl_mapshots_brightness.value, 2.f);
+
+	glEnable (GL_BLEND);
+	glColor4f (k, k, k, gl_menu_alpha);
+	glDisable (GL_ALPHA_TEST);
+	glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+
+	GL_Bind (gl->gltexture);
+	glBegin (GL_QUADS);
+	glTexCoord2f (gl->sl, gl->tl);
+	glVertex2f (x, y);
+	glTexCoord2f (gl->sh, gl->tl);
+	glVertex2f (x + w, y);
+	glTexCoord2f (gl->sh, gl->th);
+	glVertex2f (x + w, y + h);
+	glTexCoord2f (gl->sl, gl->th);
+	glVertex2f (x, y + h);
+	glEnd ();
+
+	// leave the fixed-function state the way the other menu pic draws do
+	if (gl_menu_alpha < 1.0f)
+	{
+		glColor4f (1, 1, 1, gl_menu_alpha);
+	}
+	else
+	{
+		glColor4f (1, 1, 1, 1);
+		glTexEnvf (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glEnable (GL_ALPHA_TEST);
+		glDisable (GL_BLEND);
+	}
+}
+
+/*
+================
+Draw_InvalidateLevelshots
+
+For the Draw_NewGame path, where TexMgr_NewGame has already deleted every
+non-persistent texture: drop the slots without touching the dead handles.
+================
+*/
+void Draw_InvalidateLevelshots (void)
+{
+	memset (levelshot_pics, 0, sizeof(levelshot_pics));
+}
+
+/*
+================
 Draw_ExternalPicFromWadBase
 
 Sbar-only optional HUD face helper. It lives here because cachepic_t and
@@ -770,6 +953,8 @@ void Draw_NewGame (void)
 		pic->name[0] = 0;
 	menu_numcachepics = 0;
 	Wheel_ClearIcons ();
+	Draw_InvalidateLevelshots ();	// woods #mapshots
+	Mapshot_NewGame ();				// so resolved-but-now-dead shots reload
 
 	// reload wad pics
 	W_LoadWadFile (); //johnfitz -- filename is now hard-coded for honesty

@@ -209,6 +209,7 @@ OBJS = strlcat.obj &
 	cl_input.obj &
 	cl_main.obj &
 	discord_presence.obj &
+	mapshot.obj &
 	cl_parse.obj &
 	qwatch.obj &
 	cl_tent.obj &

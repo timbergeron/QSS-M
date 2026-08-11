@@ -366,6 +366,7 @@ typedef struct
 #include "menu.h"
 #include "cdaudio.h"
 #include "glquake.h"
+#include "mapshot.h"	// woods #mapshots
 #include "location.h"      // rook / woods #pqteam
 #include "iplog.h"		// JPG 1.05 - ip address logging // woods #iplog
 

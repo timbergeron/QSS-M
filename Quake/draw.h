@@ -85,6 +85,13 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags);
 qpic_t *Draw_PicFromWad (const char *name);
 qpic_t *Draw_CachePic (const char *path);
 qpic_t *Draw_TryCachePic (const char *path, unsigned int texflags);
+// woods #mapshots -- bounded LRU for level screenshots, keyed by map name.
+// `filename` is the extensionless path handed to the texture manager.
+qpic_t *Draw_CacheLevelshot (const char *name, const char *filename);
+void Draw_InvalidateLevelshots (void);
+// Scaled levelshot draw that cancels the gamma pass, so a correctly-exposed
+// photo is not washed out by a gamma chosen to lift Quake's dark art.
+void Draw_Levelshot (int x, int y, int w, int h, qpic_t *pic);
 void Draw_NewGame (void);
 qboolean Draw_GetCanvasTransform(canvastype canvas, vrect_t *bounds, vrect_t *viewport);
 qboolean Draw_WindowToCanvas(canvastype canvas, int win_x, int win_y, int *canvas_x, int *canvas_y);

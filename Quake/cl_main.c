@@ -7810,6 +7810,7 @@ void CL_Init (void)
 {
 	SZ_Alloc (&cls.message, 1024);
 	cls.download.percent = -1.0f;
+	Mapshot_Init();			// before presence: it resolves mapshot URLs through this
 	DiscordPresence_Init();
 
 	CL_InitInput ();

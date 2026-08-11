@@ -4529,6 +4529,102 @@ void SCR_DrawPause2(void)
 SCR_DrawLoading
 ==============
 */
+#define LOADING_MAPSHOT_W		200
+#define LOADING_MAPSHOT_H		140
+#define LOADING_MAPSHOT_IMAGE_H	127
+#define LOADING_MAPSHOT_PAD		4
+#define LOADING_MAPSHOT_SCREEN_W	0.32f
+#define LOADING_MAPSHOT_SCREEN_H	0.34f
+#define LOADING_MAPSHOT_MARGIN_X	0.05f
+#define LOADING_MAPSHOT_MARGIN_Y	0.075f
+
+static void SCR_DrawLoadingMapshot (void)
+{
+	const char	*map, *status;
+	qpic_t		*pic;
+	plcolour_t	bg;
+	qboolean	pending;
+	char		caption[13];
+	size_t		len;
+	float		scale;
+	int		panel_x, panel_y, w, h, x, y, sy;
+
+	map = Mapshot_LoadingMap();
+	if (!map || (int)cl_mapshots.value < MAPSHOT_MODE_LOADING)
+		return;
+	/* A completed worker normally gets collected by the next host frame.  A
+	   local server spawn can block that frame, so publish it here before any
+	   drawing state is changed.  Do not run the vote-map portion of Frame from
+	   inside the renderer. */
+	Mapshot_CollectFinished();
+
+	/* Scale from the drawable itself, independent of console/menu cvars.  The
+	   smaller axis wins so ultrawide or portrait windows preserve the panel's
+	   shape without consuming more than its target percentage on either axis. */
+	scale = q_min(glwidth * LOADING_MAPSHOT_SCREEN_W / LOADING_MAPSHOT_W,
+		glheight * LOADING_MAPSHOT_SCREEN_H / LOADING_MAPSHOT_H);
+	if (scale <= 0.0f)
+		return;
+	panel_x = (int)((glwidth * (1.0f - LOADING_MAPSHOT_MARGIN_X)) / scale -
+		LOADING_MAPSHOT_W + 0.5f);
+	panel_y = (int)((glheight * (1.0f - LOADING_MAPSHOT_MARGIN_Y)) / scale -
+		LOADING_MAPSHOT_H + 0.5f);
+	GL_SetCanvas(CANVAS_DEFAULT);
+	glPushMatrix();
+	glScalef(scale, scale, 1.0f);
+
+	pic = Mapshot_ResolvePic(map);
+	pending = Mapshot_PicPending(map);
+
+	bg = CL_PLColours_Parse("0x000000");
+	Draw_Fill_Plus_Radius(panel_x - LOADING_MAPSHOT_PAD,
+		panel_y - LOADING_MAPSHOT_PAD,
+		LOADING_MAPSHOT_W + LOADING_MAPSHOT_PAD * 2,
+		LOADING_MAPSHOT_H + LOADING_MAPSHOT_PAD * 2,
+		bg, pic ? 0.1f : 0.85f, true, DRAW_CORNERS_ALL, 5.0f);
+
+	len = strlen(map);
+	if (len <= 12)
+		q_strlcpy(caption, map, sizeof(caption));
+	else
+	{
+		memcpy(caption, map, 9);
+		memcpy(caption + 9, "...", 4);
+		len = 12;
+	}
+
+	if (pic && pic->width > 0 && pic->height > 0)
+	{
+		w = LOADING_MAPSHOT_W;
+		h = w * pic->height / pic->width;
+		if (h > LOADING_MAPSHOT_IMAGE_H)
+		{
+			h = LOADING_MAPSHOT_IMAGE_H;
+			w = h * pic->width / pic->height;
+		}
+		w = q_max(w, 1);
+		h = q_max(h, 1);
+		x = panel_x + (LOADING_MAPSHOT_W - w) / 2;
+		y = panel_y + (LOADING_MAPSHOT_IMAGE_H - h) / 2;
+		Draw_Levelshot(x, y, w, h, pic);
+		M_PrintWhite(panel_x + (LOADING_MAPSHOT_W - (int)len * 8) / 2,
+			panel_y + 132, caption);
+		glPopMatrix();
+		return;
+	}
+
+	status = pending ? "loading..." : "no levelshot";
+	sy = panel_y + (LOADING_MAPSHOT_H - 24) / 2;
+	x = panel_x + (LOADING_MAPSHOT_W - (int)strlen(status) * 8) / 2;
+	if (pending)
+		Draw_StringGradientSweep(x, sy, status, 96.0f, 48.0f, 1.0f, true);
+	else
+		M_Print(x, sy, status);
+	M_PrintWhite(panel_x + (LOADING_MAPSHOT_W - (int)len * 8) / 2,
+		sy + 16, caption);
+	glPopMatrix();
+}
+
 void SCR_DrawLoading (void)
 {
 	qpic_t	*pic;
@@ -4540,6 +4636,7 @@ void SCR_DrawLoading (void)
 
 	pic = Draw_CachePic ("gfx/loading.lmp");
 	Draw_Pic ( (320 - pic->width)/2, (240 - 48 - pic->height)/2, pic); //johnfitz -- stretched menus
+	SCR_DrawLoadingMapshot ();
 
 	scr_tileclear_updates = 0; //johnfitz
 }
@@ -6577,6 +6674,7 @@ SCR_EndLoadingPlaque
 void SCR_EndLoadingPlaque (void)
 {
 	scr_disabled_for_loading = false;
+	Mapshot_EndLoading ();
 	VID_Gamma_Reapply ();
 	Con_ClearNotify ();
 }
@@ -8031,6 +8129,13 @@ void SCR_UpdateScreen (void)
 		M_Draw ();
 		SCR_DrawSaving ();
 	}
+
+	/* Direct `map` loads disconnect before a classic loading plaque can be
+	   painted.  Their precache progress still produces live console frames, so
+	   draw the active target over those frames too. */
+	if (!scr_drawloading && (int)cl_mapshots.value >= MAPSHOT_MODE_LOADING &&
+		cls.signon != SIGNONS && Mapshot_LoadingMap())
+		SCR_DrawLoadingMapshot();
 
 	V_UpdateBlend (); //johnfitz -- V_UpdatePalette cleaned up and renamed
 	SCR_UpdateStartupFade ();

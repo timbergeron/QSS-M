@@ -2543,6 +2543,7 @@ void _Host_Frame (double time)
 	CDAudio_Update();
 	UpdateWindowTitle(); // github.com/andrei-drexler/ironwail (Show game summary in window title)
 	Host_UpdateDockBadge(); // woods -- show download progress in the platform shell UI
+	Mapshot_Frame();		// completes lookups before presence reads the result
 	DiscordPresence_Frame();
 
 	if (host_speeds.value)
@@ -2768,6 +2769,8 @@ void Host_Shutdown(void)
 // keep Con_Printf from trying to update the screen
 	scr_disabled_for_loading = true;
 	DiscordPresence_Shutdown();
+	Mapshot_Shutdown();
+
 	QWatch_Shutdown();
 
 	SV_CleanupTimer(); // woods #svtimer

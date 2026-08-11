@@ -360,6 +360,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\Quake\mapshot.c"
+				>
+			</File>
+			<File
 				RelativePath="..\..\Quake\qwatch.c"
 				>
 			</File>
@@ -955,6 +959,10 @@
 			</File>
 			<File
 				RelativePath="..\..\Quake\quakedef.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\mapshot.h"
 				>
 			</File>
 			<File
