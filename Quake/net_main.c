@@ -687,15 +687,150 @@ const char* NET_SlistPrintServerInfo (size_t idx, ServerInfoType type) // woods 
 	}
 }
 
+/*
+===================
+local server scan	// woods #localscan
+
+"connect localhost" sweeps 127.0.0.1 across a port range instead of blindly
+poking :26000, so several servers on one machine can all be found. The results
+are snapshotted here because hostcache is clobbered by any later slist.
+===================
+*/
+
+// the sweep also probes a non-default net_hostport, hence the spare slot
+#define MAX_LOCALSCAN	(NET_LOCALSCAN_PORTS + 1)
+
+typedef struct
+{
+	char	name[64];
+	char	map[16];
+	char	cname[NET_NAMELEN];
+	int		users;
+	int		maxusers;
+	int		port;
+} localscan_t;
+
+static localscan_t	localscan_results[MAX_LOCALSCAN];
+static size_t		localscan_count;
+
+static int NET_LocalScan_HostPort (const hostcache_t *host)
+{
+	const net_landriver_t *landriver;
+	struct qsockaddr addr;
+
+	if (host->ldriver < 0 || host->ldriver >= net_numlandrivers)
+		return 0;
+	landriver = &net_landrivers[host->ldriver];
+	if (!landriver->GetSocketPort)
+		return 0;
+
+	addr = host->addr;
+	return landriver->GetSocketPort (&addr);
+}
+
+size_t NET_LocalScan (void)
+{
+	size_t	n, i, j;
+
+	localscan_count = 0;
+
+	if (slistInProgress)
+		return 0;
+
+	slistSilent = true;
+	slistScope = SLIST_LOCAL;
+	NET_Slist_f ();
+
+	while (slistInProgress)
+		NET_Poll ();
+
+	for (n = 0; n < hostCacheCount && localscan_count < MAX_LOCALSCAN; n++)
+	{
+		int port = NET_LocalScan_HostPort (&hostcache[n]);
+		localscan_t *result;
+
+		// our own listen server answers too, but connecting to it shuts it down
+		if (sv.active && port == net_hostport)
+			continue;
+
+		result = &localscan_results[localscan_count++];
+
+		q_strlcpy (result->name, hostcache[n].name, sizeof(result->name));
+		q_strlcpy (result->map, hostcache[n].map, sizeof(result->map));
+		q_strlcpy (result->cname, hostcache[n].cname, sizeof(result->cname));
+		result->users = hostcache[n].users;
+		result->maxusers = hostcache[n].maxusers;
+		result->port = port;
+	}
+
+	// lowest port first, so the numbering stays stable between scans
+	for (i = 0; i < localscan_count; i++)
+	{
+		for (j = i + 1; j < localscan_count; j++)
+		{
+			if (localscan_results[j].port < localscan_results[i].port)
+			{
+				localscan_t temp = localscan_results[j];
+				localscan_results[j] = localscan_results[i];
+				localscan_results[i] = temp;
+			}
+		}
+	}
+
+	return localscan_count;
+}
+
+const char *NET_LocalScan_GetAddress (size_t idx)
+{
+	if (idx >= localscan_count)
+		return NULL;
+	return localscan_results[idx].cname;
+}
+
+void NET_LocalScan_Print (void)
+{
+	size_t	n;
+
+	Con_Printf ("\nfound ^m%u^m local servers\n\n", (unsigned)localscan_count);
+
+	for (n = 0; n < localscan_count; n++)
+	{
+		const localscan_t *result = &localscan_results[n];
+
+		if (result->maxusers)
+		{
+			Con_Printf (" ^m%u^m  %-20.20s %-12.12s %2d/%-2d  %s\n", (unsigned)(n + 1),
+						result->name, result->map, result->users, result->maxusers,
+						result->cname);
+		}
+		else
+		{
+			Con_Printf (" ^m%u^m  %-20.20s %-12.12s        %s\n", (unsigned)(n + 1),
+						result->name, result->map, result->cname);
+		}
+	}
+
+	Con_Printf ("\ntype ^mconnect <number>^m to join one\n\n");
+}
+
+
 static void Slist_Send (void *unused)
 {
 	for (net_driverlevel = 0; net_driverlevel < net_numdrivers; net_driverlevel++)
 	{
-		if (slistScope == SLIST_INTERNET && IS_LOOP_DRIVER(net_driverlevel)) // woods #localmpfix
+		// woods #localmpfix / #localscan -- the loop driver clobbers hostcache[0] with our own server
+		if ((slistScope == SLIST_INTERNET || slistScope == SLIST_LOCAL) && IS_LOOP_DRIVER(net_driverlevel))
 			continue;
 		if (net_drivers[net_driverlevel].initialized == false)
 			continue;
 		dfunc.SearchForHosts (true);
+	}
+
+	if (slistScope == SLIST_LOCAL) // woods #localscan -- loopback replies are instant, one retry is plenty
+	{
+		if ((Sys_DoubleTime() - slistStartTime) < 0.1)
+			SchedulePollProcedure(&slistSendProcedure, 0.15);
+		return;
 	}
 
 	if ((Sys_DoubleTime() - slistStartTime) < 0.5)
@@ -707,7 +842,8 @@ static void Slist_Poll (void *unused)
 {
 	for (net_driverlevel = 0; net_driverlevel < net_numdrivers; net_driverlevel++)
 	{
-		if (slistScope == SLIST_INTERNET && IS_LOOP_DRIVER(net_driverlevel)) // woods #localmpfix
+		// woods #localmpfix / #localscan -- the loop driver clobbers hostcache[0] with our own server
+		if ((slistScope == SLIST_INTERNET || slistScope == SLIST_LOCAL) && IS_LOOP_DRIVER(net_driverlevel))
 			continue;
 		if (net_drivers[net_driverlevel].initialized == false)
 			continue;
@@ -718,7 +854,8 @@ static void Slist_Poll (void *unused)
 	if (! slistSilent)
 		PrintSlist();
 
-	if ((Sys_DoubleTime() - slistActiveTime) < 1.5)
+	// woods #localscan -- a loopback sweep never has to wait out a LAN round trip
+	if ((Sys_DoubleTime() - slistActiveTime) < ((slistScope == SLIST_LOCAL) ? 0.35 : 1.5))
 	{
 		SchedulePollProcedure(&slistPollProcedure, 0.1);
 		return;
@@ -752,6 +889,7 @@ static qboolean NET_IsSameConnectionAddress(const char *addressString,
 	struct qsockaddr address1;
 	struct qsockaddr address2;
 	const net_landriver_t *landriver;
+	net_endpoint_t endpoint;
 
 	if (!addressString || !*addressString || !cachedHost)
 		return false;
@@ -765,6 +903,17 @@ static qboolean NET_IsSameConnectionAddress(const char *addressString,
 		return false;
 
 	address2 = cachedHost->addr;
+
+	// woods #localscan -- a port the user spelled out has to match. Ports are
+	// otherwise ignored so a bare "1.2.3.4" still finds its cached entry, but
+	// several servers can share one address (the normal case on localhost) and
+	// without this the first of them wins every lookup.
+	if (landriver->GetSocketPort &&
+		NET_ParseEndpoint(addressString, net_hostport, &endpoint) &&
+		endpoint.port_explicit &&
+		endpoint.port != landriver->GetSocketPort(&address2))
+		return false;
+
 	landriver->SetSocketPort(&address1, 0);
 	landriver->SetSocketPort(&address2, 0);
 	return (landriver->AddrCompare(&address1, &address2) == 0);

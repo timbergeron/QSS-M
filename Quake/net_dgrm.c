@@ -3187,6 +3187,65 @@ static void _Datagram_SendServerQuery(struct qsockaddr *addr, qboolean master)
 	dfunc.Write(dfunc.controlSock, net_message.data, net_message.cursize, addr);
 	SZ_Clear(&net_message);
 }
+
+/*
+============
+_Datagram_SweepLoopback		// woods #localscan
+
+Queries the preferred loopback family across a port range so that servers on
+non-default ports can answer. IPv4 is preferred by landriver order, with IPv6
+as the fallback. Returns false if this landriver cannot form a loopback address.
+============
+*/
+static qboolean _Datagram_SweepLoopback (void)
+{
+	struct qsockaddr base, addr;
+	char		str[64];
+	int			count = NET_LOCALSCAN_PORTS;
+	int			i, port;
+	qboolean	sent = false;
+
+	if (!dfunc.GetAddrFromName || !dfunc.SetSocketPort)
+		return false;
+
+	// resolve the loopback address once, then just re-port it: this landriver
+	// may only speak one family
+	q_snprintf(str, sizeof(str), "127.0.0.1:%d", DEFAULTnet_hostport);
+	if (dfunc.GetAddrFromName(str, &base) != 0)
+	{
+		q_snprintf(str, sizeof(str), "[::1]:%d", DEFAULTnet_hostport);
+		if (dfunc.GetAddrFromName(str, &base) != 0)
+			return false;
+	}
+
+	for (i = 0; i < count; i++)
+	{
+		port = DEFAULTnet_hostport + i;
+		if (port > 65535)
+			break;
+		addr = base;
+		if (dfunc.SetSocketPort(&addr, port) != 0)
+			continue;
+		_Datagram_SendServerQuery(&addr, false);
+		sent = true;
+	}
+
+	// a non-default net_hostport is worth probing even when it sits outside the sweep
+	port = net_hostport;
+	if (port > 0 && port <= 65535 &&
+		(port < DEFAULTnet_hostport || port >= DEFAULTnet_hostport + count))
+	{
+		addr = base;
+		if (dfunc.SetSocketPort(&addr, port) == 0)
+		{
+			_Datagram_SendServerQuery(&addr, false);
+			sent = true;
+		}
+	}
+
+	return sent;
+}
+
 static struct
 {
 	int driver;
@@ -3336,7 +3395,7 @@ void Datagram_AddHostCacheInfo(struct qsockaddr *readaddr, const char *cname, co
 	}
 	if (readaddr)
 	{
-		Q_memcpy(&hostcache[n].addr, &readaddr, sizeof(struct qsockaddr));
+		hostcache[n].addr = *readaddr;
 		hostcache[n].ldriver = net_landriverlevel;
 	}
 	else
@@ -3379,6 +3438,35 @@ void ResetHostlist (void) // woods #resethostlist
 	hostlist_count = 0;
 }
 
+/*
+============
+_Datagram_IsOwnServerReply	// woods #localmpfix
+
+The listen socket uses net_hostport while discovery uses an ephemeral control
+port, so comparing the complete endpoints never recognized our own reply.
+Ignore only our address on our active server port; separate local servers on
+other ports remain discoverable.
+============
+*/
+static qboolean _Datagram_IsOwnServerReply (struct qsockaddr *readaddr,
+	struct qsockaddr *myaddr)
+{
+	struct qsockaddr readhost, myhost;
+
+	if (!sv.active || !dfunc.GetSocketPort || !dfunc.SetSocketPort || !dfunc.AddrCompare)
+		return false;
+	if (dfunc.GetSocketPort(readaddr) != net_hostport)
+		return false;
+
+	readhost = *readaddr;
+	myhost = *myaddr;
+	if (dfunc.SetSocketPort(&readhost, 0) != 0 ||
+		dfunc.SetSocketPort(&myhost, 0) != 0)
+		return false;
+
+	return dfunc.AddrCompare(&readhost, &myhost) == 0;
+}
+
 static qboolean _Datagram_SearchForHosts (qboolean xmit)
 {
 	int		ret;
@@ -3393,8 +3481,11 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 	dfunc.GetSocketAddr (dfunc.controlSock, &myaddr);
 	if (xmit)
 	{
-		for (i = 0; i < hostlist_count; i++)
-			hostlist[i].requery = true;
+		if (slistScope != SLIST_LOCAL) // woods #localscan -- a loopback sweep must not drag in known internet hosts
+		{
+			for (i = 0; i < hostlist_count; i++)
+				hostlist[i].requery = true;
+		}
 
 		SZ_Clear(&net_message);
 		// save space for the header, filled in later
@@ -3404,7 +3495,10 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 		MSG_WriteByte(&net_message, NET_PROTOCOL_VERSION);
 		*((int *)net_message.data) = BigLong(NETFLAG_CTL | (net_message.cursize & NETFLAG_LENGTH_MASK));
 
-		if (slistScope != SLIST_INTERNET) // woods
+		// woods #landedupe -- prefer IPv4 for LAN discovery. If IPv4 was
+		// disabled or failed to initialize, the IPv6 landriver remains the fallback.
+		if (slistScope != SLIST_INTERNET && slistScope != SLIST_LOCAL &&
+			!(slistScope == SLIST_LAN && ipv4Available && myaddr.qsa_family == AF_INET6))
 			dfunc.Broadcast(dfunc.controlSock, net_message.data, net_message.cursize);
 
 		SZ_Clear(&net_message);
@@ -3447,10 +3541,8 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 			continue;
 		net_message.cursize = ret;
 
-		// don't answer our own query
-		//Note: this doesn't really work too well if we're multi-homed.
-		//we should probably just refuse to respond to serverinfo requests while we're scanning (chances are our server is going to die anyway).
-		if (dfunc.AddrCompare(&readaddr, &myaddr) == 0) // woods #localmpfix
+		// The loop driver already supplies the active listen server during a LAN search.
+		if (_Datagram_IsOwnServerReply(&readaddr, &myaddr)) // woods #localmpfix
 			continue;
 
 		// is the cache full?
@@ -3592,7 +3684,7 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 		}
 	}
 
-	if (!xmit)
+	if (!xmit && slistScope != SLIST_LOCAL) // woods #localscan -- keep stale requeries out of a loopback sweep
 	{
 		n = 4; //should be time-based. meh.
 		for (i = 0; i < hostlist_count; i++)
@@ -3614,12 +3706,20 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 qboolean Datagram_SearchForHosts (qboolean xmit)
 {
 	qboolean ret = false;
+	qboolean sweep = (xmit && slistScope == SLIST_LOCAL); // woods #localscan
 	for (net_landriverlevel = 0; net_landriverlevel < net_numlandrivers; net_landriverlevel++)
 	{
 		if (hostCacheCount == HOSTCACHESIZE)
 			break;
 		if (net_landrivers[net_landriverlevel].initialized)
+		{
+			if (sweep && _Datagram_SweepLoopback())
+			{	// one loopback family is enough; a second would only duplicate hits
+				sweep = false;
+				ret = true;
+			}
 			ret |= _Datagram_SearchForHosts (xmit);
+		}
 	}
 	return ret;
 }

@@ -8715,6 +8715,65 @@ static qboolean Host_ValidWebSocketAddress(const char *address)
 
 /*
 =====================
+Host_IsListIndex	// woods #localscan
+
+"connect 2" means the second entry of the last local scan. Plain numbers are
+never valid addresses, so this cannot shadow a real target.
+=====================
+*/
+static qboolean Host_IsListIndex (const char *arg)
+{
+	const char *s;
+
+	if (!arg || !*arg)
+		return false;
+	for (s = arg; *s; s++)
+		if (*s < '0' || *s > '9')
+			return false;
+
+	return true;
+}
+
+/*
+=====================
+Host_ResolveLocalTarget	// woods #localscan
+
+Turns a bare "localhost" into a real address by sweeping the loopback ports.
+One server found means just connect to it; several means show the list and let
+the player pick. Returns false when the caller should stop.
+=====================
+*/
+static qboolean Host_ResolveLocalTarget (char *name, size_t namesize, qboolean loopkeyword)
+{
+	const char *only;
+	size_t found;
+
+	if (cls.state == ca_dedicated) // nothing to connect with, don't stall the server
+		return true;
+	if (sv.active && loopkeyword) // "local" while hosting still means our own loop connection
+		return true;
+
+	found = NET_LocalScan();
+	if (!found)
+		return true; // nothing answered, fall through to the plain localhost attempt
+
+	if (found > 1)
+	{
+		NET_LocalScan_Print();
+		return false;
+	}
+
+	only = NET_LocalScan_GetAddress(0);
+	if (!only)
+		return true;
+
+	q_strlcpy(name, only, namesize);
+	Con_Printf("found ^m1^m local server\n");
+	return true;
+}
+
+/*
+=====================
 Host_Connect_f
 
 User command to connect to server
@@ -8739,6 +8798,23 @@ static void Host_Connect_f (void)
 		Host_ConnectToLastServer_f();
 	else
 	{
+		if (Host_IsListIndex(name)) // woods #localscan
+		{
+			long idx = strtol(name, NULL, 10);
+			const char *picked = (idx >= 1) ? NET_LocalScan_GetAddress((size_t)(idx - 1)) : NULL;
+			if (!picked)
+			{
+				Con_Printf("\nno local server ^m%s^m in the list -- run ^mconnect localhost^m first\n\n", name);
+				return;
+			}
+			q_strlcpy(name, picked, sizeof(name));
+		}
+		else if (!q_strcasecmp(name, "local") || !q_strcasecmp(name, "localhost")) // woods #localscan
+		{
+			if (!Host_ResolveLocalTarget(name, sizeof(name), !q_strcasecmp(name, "local")))
+				return;
+		}
+
 		is_local = !q_strcasecmp(name, "local") || !q_strcasecmp(name, "localhost");
 		if ((((Valid_Domain(name)) || (Valid_IP(name))) && (Valid_Port(name))) ||
 			Host_ValidWebSocketAddress(name) || is_local) // woods #connectfilter -- avoid client lockup if possible

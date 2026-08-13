@@ -131,7 +131,8 @@ extern	enum slistScope_e
 {
 	SLIST_LOOP,
 	SLIST_LAN,
-	SLIST_INTERNET
+	SLIST_INTERNET,
+	SLIST_LOCAL		// woods #localscan -- loopback port sweep, no broadcast
 } slistScope;
 
 #define HOSTCACHESIZE	128	// woods #serversmenu
@@ -152,6 +153,16 @@ void	NET_Slist_f (void);
 void	NET_SlistSort (void);
 const char *NET_SlistPrintServer (size_t n);
 const char *NET_SlistPrintServerName (size_t n);
+
+// woods #localscan -- probe loopback across a port range for local servers.
+// Loopback probes are free, so the range is a constant rather than a cvar; to
+// bypass the search entirely just name the address and port
+// ("connect 127.0.0.1:26000").
+#define NET_LOCALSCAN_PORTS	16
+
+size_t	NET_LocalScan (void);
+const char *NET_LocalScan_GetAddress (size_t idx);
+void	NET_LocalScan_Print (void);
 
 
 /* FIXME: driver related, but public:
