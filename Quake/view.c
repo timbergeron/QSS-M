@@ -1257,13 +1257,14 @@ float lerp(float a, float b, float alpha)
 
 float lerp_alpha = 0;
 qboolean isTransitioning = false;
-float previousRoll = 0;  // this will store the starting roll value for the lerp
+float previousRoll = 0;  // this will store the starting screen angle for the lerp
+float currentScreenAngle = 0;
 
 void OnClScreenAngleChanged (void) // woods #screenangle
 {
 	lerp_alpha = 0;
 	isTransitioning = true;
-	previousRoll = r_refdef.viewangles[ROLL];
+	previousRoll = currentScreenAngle;
 }
 
 /*
@@ -1307,18 +1308,20 @@ void V_CalcViewRoll (void)
 
 	if (isTransitioning) // woods #screenangle lerp transition
 	{
-		r_refdef.viewangles[ROLL] = lerp(previousRoll, cl_screenangle.value, lerp_alpha);
+		currentScreenAngle = lerp(previousRoll, cl_screenangle.value, lerp_alpha);
 		lerp_alpha += host_frametime * cl_screenangle_speed.value;  // adjust this value to control the speed of the transition
 
 		if (lerp_alpha >= 1) 
 		{
-			r_refdef.viewangles[ROLL] = cl_screenangle.value;  // ensure it's set to the exact target value
+			currentScreenAngle = cl_screenangle.value;  // ensure it's set to the exact target value
 			isTransitioning = false;  // stop the transition
 		}
 	}
 	else {
-		r_refdef.viewangles[ROLL] = cl_screenangle.value; // state when not transitioning
+		currentScreenAngle = cl_screenangle.value; // state when not transitioning
 	}
+
+	r_refdef.viewangles[ROLL] += currentScreenAngle;
 }
 
 /*
