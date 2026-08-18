@@ -346,6 +346,7 @@ unsigned COM_HashBlock (const void* data, size_t size); // woods #modsmenu (iw)
 
 // localization support for 2021 rerelease version:
 void LOC_Init (void);
+void LOC_Reload (void);
 void LOC_Shutdown (void);
 const char* LOC_GetRawString (const char *key);
 const char* LOC_GetString (const char *key);

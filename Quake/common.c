@@ -5449,6 +5449,7 @@ static void COM_Game_f (void)
 		COM_ResetGameDirectories(paths);
 
 		//clear out and reload appropriate data
+		LOC_Reload (); // woods #locreload -- string table is per-gamedir
 		Cache_Flush ();
 		Mod_ResetAll();
 		Sky_ClearAll();
@@ -8245,19 +8246,25 @@ static int LOC_LoadLayered (const char *file, const char *modfile)
 LOC_LoadFile
 ================
 */
-void LOC_LoadFile (const char *file)
+static void LOC_LoadFile (const char *file, qboolean quiet)
 {
 	char		modfile[MAX_QPATH];
 	const char	*ext;
 	size_t		extlen, prefixlen;
 	int		unique;
+	qboolean	had_strings;
+
+	// a reload that finds nothing is only worth reporting if we had strings
+	// before; classic (non-rerelease) data never has a table to begin with.
+	had_strings = (localization.numindices != 0);
 
 	LOC_FreeAll();
 
 	if (!file || !*file)
 		return;
 
-	Con_Printf("\nLanguage initialization\n");
+	if (!quiet)
+		Con_Printf("\nLanguage initialization\n");
 
 	// 2021 rerelease mod overlay: loc_<lang>_mod.txt sits next to the base file
 	// and is meant to override it with mod-specific terms.
@@ -8278,7 +8285,8 @@ void LOC_LoadFile (const char *file)
 	if (!LOC_LoadLayered(file, modfile[0] ? modfile : NULL))
 	{
 		LOC_FreeAll();
-		Con_Printf("Couldn't load '%s'\nfrom '%s'\n", file, com_basedir);
+		if (!quiet || had_strings)
+			Con_Printf("Couldn't load '%s'\nfrom '%s'\n", file, com_basedir);
 		return;
 	}
 
@@ -8286,7 +8294,8 @@ void LOC_LoadFile (const char *file)
 	if (!unique)
 	{
 		LOC_FreeAll();
-		Con_Printf("No localized strings in file '%s'\n", file);
+		if (!quiet || had_strings)
+			Con_Printf("No localized strings in file '%s'\n", file);
 		return;
 	}
 
@@ -8304,7 +8313,21 @@ LOC_Init
 */
 void LOC_Init(void)
 {
-	LOC_LoadFile("localization/loc_english.txt");
+	LOC_LoadFile("localization/loc_english.txt", false);
+}
+
+/*
+================
+LOC_Reload
+
+Re-reads the string table after the search paths change. The table is built by
+layering every gamedir's copy (see LOC_LoadLayered), so a "game" switch leaves
+the old mod's strings behind unless we rebuild it here.
+================
+*/
+void LOC_Reload(void)
+{
+	LOC_LoadFile("localization/loc_english.txt", true);
 }
 
 /*
