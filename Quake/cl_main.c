@@ -2839,7 +2839,7 @@ SDL_Thread* currentQWMapListCheckThread = NULL;
 
 #define QW_MAPLIST_SOURCE_HOST "maps.quakeworld.nu"
 #define QW_MAPLIST_SOURCE_URL "https://maps.quakeworld.nu/all/"
-#define MENU_DOWNLOAD_REDRAW_INTERVAL_MS 50
+#define DOWNLOAD_REDRAW_INTERVAL_MS 50
 
 
 qboolean IsGithubRepoPath(const char* s)
@@ -3756,21 +3756,32 @@ static void CL_DownloadProgress_Update(double received, double total)
 		cls.download.percent = -1.0f;
 }
 
-static void CL_DownloadProgress_UpdateMenuScreen(void)
+static void CL_DownloadProgress_UpdateScreen(void)
 {
 	static Uint32 last_update_time = 0;
 	Uint32 now;
+	qboolean loading;
 
-	if (isDedicated || scr_disabled_for_loading)
+	if (isDedicated)
+		return;
+
+	/* woods #dlprogress -- skybox faces are the only downloads that block the
+	   host frame: Sky_DownloadSkybox sits inside curl for the whole transfer, so
+	   pumping from here is the only way a level load can show one running.  The
+	   threaded web downloads and the server's in-protocol ones keep framing on
+	   their own and just need the plaque bypass in SCR_UpdateScreen. */
+	loading = (cls.state == ca_connected && cls.signon != SIGNONS);
+
+	if (scr_disabled_for_loading && !loading)
 		return;
 
 	SDL_PumpEvents();
 
-	if (key_dest != key_menu)
+	if (key_dest != key_menu && !loading)
 		return;
 
 	now = SDL_GetTicks();
-	if (last_update_time && now - last_update_time < MENU_DOWNLOAD_REDRAW_INTERVAL_MS)
+	if (last_update_time && now - last_update_time < DOWNLOAD_REDRAW_INTERVAL_MS)
 		return;
 
 	last_update_time = now;
@@ -3853,7 +3864,7 @@ int Progress_Callback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl
 				progress);
 		}
 
-		CL_DownloadProgress_UpdateMenuScreen();
+		CL_DownloadProgress_UpdateScreen();
 	}
 	return 0;
 }

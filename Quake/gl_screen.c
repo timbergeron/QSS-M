@@ -7969,7 +7969,19 @@ void SCR_UpdateScreen (void)
 
 	if (scr_disabled_for_loading)
 	{
-		if (realtime - scr_disabled_time > 60)
+		extern qboolean curl_download_active;	// cl_main.c #webdl
+
+		/* woods #dlprogress -- a level load waiting on a download used to sit on
+		   the frozen plaque frame with no sign of progress.  The console carries
+		   the running download log, so let it paint while any transfer is in
+		   flight - web or in-protocol, they all set download.active - and hold
+		   the watchdog off meanwhile so a slow mirror can't print "load failed"
+		   mid-download.  The plaque does not come back afterwards: the freeze
+		   resumes on the console frame, so the rest of the load stays there. */
+		if (cls.state == ca_connected && cls.signon != SIGNONS &&
+			(cls.download.active || curl_download_active))
+			scr_disabled_time = realtime;
+		else if (realtime - scr_disabled_time > 60)
 		{
 			scr_disabled_for_loading = false;
 			Con_Printf ("load failed.\n");
