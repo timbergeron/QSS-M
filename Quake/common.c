@@ -4613,6 +4613,11 @@ typedef struct
 	qboolean qbj_annihilator, qbj_wiedo;
 	qboolean sj2_grue, sj2_naitelveni;
 	qboolean enyo_player;
+	qboolean alk_central, alk_core, alk_tellus, alk_undead;
+	qboolean dmd_map1, dmd_map6, dmd_map9;
+	qboolean honey_main, honey_saint, honey_hub1;
+	qboolean pun_map1, pun_map3, pun_map5;
+	qboolean rrp_locust, rrp_mfxsp19, rrp_telefragged;
 	qboolean libre_start, libre_end;
 	qboolean hip_demo1, hip_demo2, hip_demo3, hip_demo4;
 	qboolean rogue_end1, rogue_end2;
@@ -4766,6 +4771,41 @@ static void COM_DetectGameSignaturesInPak(const char *pak_path,
 		else if (COM_PackEntryNameEquals(entry.name,
 			"progs/ee_gib_h_enyo.mdl"))
 			signatures->enyo_player = true;
+		/* Alkaline ships no descript.ion, so the campaign PAK identifies it.
+		 * Its devkit is redistributed inside jams built on the mod, so match
+		 * several official campaign maps rather than the shared QC/assets. */
+		else if (COM_PackEntryNameEquals(entry.name, "maps/alk_central.bsp"))
+			signatures->alk_central = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/alk_core.bsp"))
+			signatures->alk_core = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/alk_tellus.bsp"))
+			signatures->alk_tellus = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/alk_undead.bsp"))
+			signatures->alk_undead = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/dmd1.bsp"))
+			signatures->dmd_map1 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/dmd6.bsp"))
+			signatures->dmd_map6 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/dmd9.bsp"))
+			signatures->dmd_map9 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/honey.bsp"))
+			signatures->honey_main = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/saint.bsp"))
+			signatures->honey_saint = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/h_hub1.bsp"))
+			signatures->honey_hub1 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/pun1.bsp"))
+			signatures->pun_map1 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/pun3.bsp"))
+			signatures->pun_map3 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/pun5.bsp"))
+			signatures->pun_map5 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/locust.bsp"))
+			signatures->rrp_locust = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/mfxsp19.bsp"))
+			signatures->rrp_mfxsp19 = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/telefragged.bsp"))
+			signatures->rrp_telefragged = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/lq_e0m1.bsp"))
 			signatures->libre_start = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/lq_end.bsp"))
@@ -4882,6 +4922,20 @@ qboolean COM_DetectGameDescription(const char *game, char *description,
 		COM_GamePathIsFile(game_path, "maps/ravenkeep.bsp");
 	signatures.ravenkeep_church |=
 		COM_GamePathIsFile(game_path, "maps/church.bsp");
+	signatures.honey_main |= COM_GamePathIsFile(game_path, "maps/honey.bsp");
+	signatures.honey_saint |= COM_GamePathIsFile(game_path, "maps/saint.bsp");
+	signatures.honey_hub1 |= COM_GamePathIsFile(game_path, "maps/h_hub1.bsp");
+	signatures.pun_map1 |= COM_GamePathIsFile(game_path, "maps/pun1.bsp");
+	signatures.pun_map3 |= COM_GamePathIsFile(game_path, "maps/pun3.bsp");
+	signatures.pun_map5 |= COM_GamePathIsFile(game_path, "maps/pun5.bsp");
+	signatures.rrp_locust |= COM_GamePathIsFile(game_path, "maps/locust.bsp");
+	signatures.rrp_mfxsp19 |= COM_GamePathIsFile(game_path, "maps/mfxsp19.bsp");
+	signatures.rrp_telefragged |=
+		COM_GamePathIsFile(game_path, "maps/telefragged.bsp");
+	/* DMD ships its maps loose rather than in a PAK. */
+	signatures.dmd_map1 |= COM_GamePathIsFile(game_path, "maps/dmd1.bsp");
+	signatures.dmd_map6 |= COM_GamePathIsFile(game_path, "maps/dmd6.bsp");
+	signatures.dmd_map9 |= COM_GamePathIsFile(game_path, "maps/dmd9.bsp");
 	signatures.dwell_d1m1 |= COM_GamePathIsFile(game_path, "maps/d1m1.bsp");
 	signatures.dwell_d1end |= COM_GamePathIsFile(game_path, "maps/d1end.bsp");
 	signatures.dwell_d2m1 |= COM_GamePathIsFile(game_path, "maps/d2m1.bsp");
@@ -4926,6 +4980,25 @@ qboolean COM_DetectGameDescription(const char *game, char *description,
 	else if (signatures.enyo_player)
 		q_strlcpy(description, "Slave Zero X: Episode Enyo",
 			description_size);
+	else if (signatures.alk_central && signatures.alk_core &&
+		signatures.alk_tellus && signatures.alk_undead)
+		q_strlcpy(description, "Alkaline", description_size);
+	else if (signatures.dmd_map1 && signatures.dmd_map6 && signatures.dmd_map9)
+		q_strlcpy(description, "Deathmatch Dimension", description_size);
+	else if (signatures.honey_main && signatures.honey_saint &&
+		signatures.honey_hub1)
+		q_strlcpy(description, "Honey", description_size);
+	else if (signatures.pun_map1 && signatures.pun_map3 && signatures.pun_map5)
+		q_strlcpy(description, "The Punishment Due", description_size);
+	else if (signatures.rrp_locust && signatures.rrp_mfxsp19 &&
+		signatures.rrp_telefragged)
+		q_strlcpy(description, "Rubicon Rumble Pack", description_size);
+	/* Tremor reuses id1's map names (e1m1..e4m8), so its readme is the only
+	 * thing that distinguishes it from Quake itself or another replacement. */
+	else if ((size_t)q_snprintf(path, sizeof(path), "%s/tremor.txt",
+		game_path) < sizeof(path) &&
+		COM_TextFileContains(path, "32-level excursion"))
+		q_strlcpy(description, "Tremor", description_size);
 	else if (((size_t)q_snprintf(path, sizeof(path), "%s/docs/README.md",
 		game_path) < sizeof(path) &&
 		COM_TextFileContains(path, "LibreQuake")) ||
