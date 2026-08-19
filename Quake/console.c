@@ -2788,7 +2788,11 @@ void Con_Printf (const char *fmt, ...)
 	Con_Print (msg);
 
 // update the screen if the console is displayed
-	if (cls.signon != SIGNONS && !scr_disabled_for_loading && !qcvm)
+	/* woods -- host_framecount > 0 keeps boot-time prints from forcing a full
+	   SCR_UpdateScreen before the first host frame has run (vkQuake).  The
+	   startup fade holds at black until host_initialized anyway, so those
+	   frames were never visible - they only cost launch time. */
+	if (host_framecount > 0 && cls.signon != SIGNONS && !scr_disabled_for_loading && !qcvm)
 	{
 	// protect against infinite loop if something in SCR_UpdateScreen calls
 	// Con_Printd
