@@ -6667,15 +6667,29 @@ void SCR_BeginLoadingPlaque (void)
 
 /*
 ===============
+SCR_AbortLoadingPlaque -- woods
+
+Releases the frozen screen for a load that failed.  Unlike SCR_EndLoadingPlaque
+it leaves the notify lines alone, because these callers have already printed the
+reason and would otherwise wipe it off the screen on their way out.
+================
+*/
+void SCR_AbortLoadingPlaque (void)
+{
+	scr_disabled_for_loading = false;
+	Mapshot_EndLoading ();
+	VID_Gamma_Reapply ();
+}
+
+/*
+===============
 SCR_EndLoadingPlaque
 
 ================
 */
 void SCR_EndLoadingPlaque (void)
 {
-	scr_disabled_for_loading = false;
-	Mapshot_EndLoading ();
-	VID_Gamma_Reapply ();
+	SCR_AbortLoadingPlaque ();
 	Con_ClearNotify ();
 }
 

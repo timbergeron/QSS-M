@@ -40,6 +40,7 @@ void SCR_CenterPrint (const char *str);
 
 void SCR_BeginLoadingPlaque (void);
 void SCR_EndLoadingPlaque (void);
+void SCR_AbortLoadingPlaque (void);	// woods -- release without clearing the notify lines
 void SCR_ShowSaving (void);
 void SCR_QuitFade (void);
 

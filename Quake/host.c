@@ -655,6 +655,14 @@ void Host_EndGame (const char *message, ...)
 
 	PR_SwitchQCVM(NULL);
 
+	/* woods -- reenable screen updates, as Host_Error does.  Whatever load was
+	   in progress is over, and nothing else released the plaque here: a demo
+	   that raises one for a map change and then ends before the next signon
+	   (a truncated or corrupt file) used to sit on the frozen frame for the
+	   full 60s watchdog.  Abort, not End, so the caller's reason stays on
+	   screen.  The CL_NextDemo below raises a fresh plaque for the next demo. */
+	SCR_AbortLoadingPlaque ();
+
 	if (sv.active)
 		Host_ShutdownServer (false);
 
