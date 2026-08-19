@@ -4412,6 +4412,7 @@ char* hints[] = {
 	"typing help into the console opens qss-m webpage in browser",
 	KEY_ALT_MODIFIER_NAME_LOWER "-enter swtiches between windowed and fullscreen mode",
 	"pressing tab in console will auto-complete commands",
+	"pressing tab in chat completes the word you are typing",
 	"dragging a demo into windowed mode plays the demo",
 	"arrow keys, scroll wheel, and pgup/pgdn adjust demo speed",
 	KEY_SHORTCUT_MODIFIER_NAME_LOWER "-u clears the console line",

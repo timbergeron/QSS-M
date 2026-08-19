@@ -1,0 +1,155 @@
+# Curated vocabulary for QSS-M chat autocomplete.
+#
+# The general-English corpus in chat_autocomplete_english.txt knows nothing
+# about Quake and nothing about how people actually talk in a deathmatch, so
+# this file supplies both.  Each entry is "<word> <weight>", where the weight
+# is either a number or one of the named tiers below.
+#
+#   core    unambiguous Quake vocabulary; outranks ordinary English outright
+#   common  Quake words that collide with ordinary English; wins only when the
+#           English competition is weak
+#   jargon  engine and mod internals nobody types mid-fight; present so the
+#           word exists, not so it gets suggested over real English
+#   chat    conversational vocabulary the literary corpus underweights or
+#           lacks entirely
+#
+# A curated weight replaces the corpus frequency for that word rather than
+# adding to it.  Weights are compared by the same dominance rule as every
+# other word, so two words at the same weight cancel out and nothing is
+# suggested -- that is the intended outcome for a genuine tie.  Give a word an
+# explicit number when it should beat its own family (quad over quake, armor
+# over armour, the singular over the plural).
+
+# --- Quake: core -------------------------------------------------------------
+quad             9000
+quake            6000
+pent             6000
+frag             6000
+gib              6000
+grenade          6000
+rocket           6000
+spawn            6000
+respawn          core
+telefrag         core
+telefragged      1500
+teleporter       1500
+megahealth       1500
+pentagram        1500
+shambler         core
+railgun          core
+thunderbolt      core
+deathmatch       core
+bunnyhop         core
+bunnyhopping     1500
+rocketjump       1500
+rocketjumping    1500
+spawnfrag        1500
+quakeworld       1500
+quakec           1500
+quakeone         800
+qssm             core
+ironwail         core
+ssg              core
+ctf              core
+
+# plural and inflected forms sit below their stem so the stem wins the prefix
+frags            1500
+fragged          1500
+fragging         800
+gibs             1500
+gibbed           800
+gibbing          800
+grenades         1500
+rockets          1500
+spawned          1500
+quads            1500
+
+# --- Quake: common -----------------------------------------------------------
+ammo             common
+armor            common
+armour           300
+backpack         common
+camping          common
+camper           common
+client           common
+coop             common
+demo             common
+demos            300
+health           1200
+heal             400
+hook             common
+item             common
+items            300
+lag              common
+laggy            common
+latency          400
+mega             6000
+mod              common
+mods             300
+observer         common
+packet           common
+ping             common
+rune             common
+runes            300
+server           common
+shotgun          common
+skill            common
+skin             1200
+skins            300
+spectator        common
+spike            common
+spikes           300
+weapon           common
+weapons          300
+vanilla          common
+
+# --- Quake: jargon -----------------------------------------------------------
+airshot          jargon
+alkaline         jargon
+bmodel           jargon
+chasecam         jargon
+darkplaces       jargon
+efrag            jargon
+efrags           30
+eyecam           jargon
+freesync         jargon
+headhunters      jargon
+hipnotic         jargon
+netquake         jargon
+pak              jargon
+proquake         jargon
+qrack            jargon
+fte              jargon
+vis              jargon
+vised            jargon
+wipeout          jargon
+
+# --- Conversational ----------------------------------------------------------
+thanks           chat
+please           chat
+sorry            chat
+hello            chat
+yeah             chat
+okay             chat
+sure             chat
+nice             chat
+welcome          chat
+awesome          chat
+ready            chat
+later            chat
+definitely       chat
+probably         chat
+congrats         chat
+gratz            chat
+respect          chat
+revenge          chat
+rematch          chat
+teamwork         chat
+unlucky          chat
+incoming         chat
+defending        chat
+attacking        chat
+nooby            chat
+rekt             chat
+pwned            chat
+glhf             chat

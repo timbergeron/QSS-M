@@ -6230,6 +6230,9 @@ void Con_TabComplete (tabcomplete_t mode)
 		if (key_lines[edit_line][1] == ' ') // woods no auto hints if leading space for chatting from console
 			return;
 
+		if (Key_ConsoleLineIsChat ()) // woods #chatcomplete -- word completion owns this line
+			return;
+
 		// only show completion hint when the cursor is at the end of the line
 		if ((size_t)key_linepos >= sizeof(key_lines[edit_line]) || key_lines[edit_line][key_linepos])
 			return;
@@ -6482,6 +6485,23 @@ void Con_DrawNotify (void)
 		}
 
 		x = chat_x + chat_cursor - chat_ofs;
+
+		// woods #chatcomplete -- ghost the completion starting at the cursor
+		// cell, exactly where accepting it will put the text.  Same tint and
+		// alpha as Con_DrawInput's tab hint.
+		{
+			const char *hint = Key_GetChatAutocompleteSuffix ();
+
+			if (hint[0])
+			{
+				plcolour_t hintcolour = CL_PLColours_Parse("0xffffff");
+
+				for (i = 0; hint[i] && x + i < chat_x + chat_max; i++)
+					Draw_CharacterRGBA ((x + i) << 3, v,
+						hint[i] | 0x80, hintcolour, 0.75f);
+			}
+		}
+
 		if (!((int)((realtime-key_blinktime)*con_cursorspeed) & 1))
 			Draw_PicRGBA (x << 3, v, pic_ins, Draw_GetConcharsCursorColor(), 1.0f); // woods #cursorcolor
 		v += 8;
@@ -6521,11 +6541,18 @@ void Con_DrawInput (void)
 	for (i = 0; i + ofs < len; i++)
 		Draw_Character ((i + 1) << 3, vid.conheight - 16, workline[i + ofs]);
 
-	// draw tab completion hint
-	if (key_tabhint[0])
+	// draw tab completion hint, or the chat word completion that replaces it
+	// on a cl_chatmode chat line // woods #chatcomplete
 	{
-		for (i = 0; key_tabhint[i] && i + 1 + len - ofs < con_linewidth + CON_MARGIN * 2; i++)
-			Draw_CharacterRGBA ((i+1 + len - ofs) <<3, vid.conheight - 16, key_tabhint[i] | 0x80, CL_PLColours_Parse("0xffffff"), 0.75f);
+		const char *hint = key_tabhint[0] ? key_tabhint : Key_GetConsoleAutocompleteSuffix ();
+
+		if (hint[0])
+		{
+			plcolour_t hintcolour = CL_PLColours_Parse("0xffffff");
+
+			for (i = 0; hint[i] && i + 1 + len - ofs < con_linewidth + CON_MARGIN * 2; i++)
+				Draw_CharacterRGBA ((i+1 + len - ofs) <<3, vid.conheight - 16, hint[i] | 0x80, hintcolour, 0.75f);
+		}
 	}
 
 	// johnfitz -- new cursor handling // woods #cursorcolor

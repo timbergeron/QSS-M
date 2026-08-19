@@ -656,6 +656,45 @@ qboolean CheckForCommand(void)  // woods added for don't have to type "say " eve
 	return (Cvar_FindVar(command) || Cmd_Exists2(command) || Cmd_AliasExists(command));
 }
 
+/*
+==============
+Key_ConsoleInputLimit -- woods #chatlimit
+
+How long the console input line may grow.  A line that will be sent as chat is
+bounded by what the server will accept, not by MAXCMDLINE.
+==============
+*/
+int Key_ConsoleInputLimit (void)
+{
+	if (cl_chatmode.value && (cls.state == ca_connected && cl.gametype == GAME_DEATHMATCH))
+	{
+		if ((cl.modtype == 1) || (cl.modtype == 4))
+			return MAX_CHAT_SIZE_EX;
+		return MAX_CHAT_SIZE;
+	}
+	return MAXCMDLINE;
+}
+
+/*
+==============
+Key_ConsoleLineIsChat -- woods #chatcomplete
+
+True when Enter would send the current console line as chat rather than run it
+as a command.  Key_Console's K_ENTER uses this too, so what the hint shows and
+what Enter does cannot disagree.
+==============
+*/
+qboolean Key_ConsoleLineIsChat (void)
+{
+	if (cls.state != ca_connected)
+		return false;
+	if (CheckForCommand ())
+		return false;
+	if (cl_chatmode.value == 1 || cl_chatmode.value == 2)
+		return true;
+	return cl_chatmode.value == 3 && key_lines[edit_line][1] == ' ';
+}
+
 static void AdjustConsoleHeight(int delta) // woods (Qrack) by joe, from ZQuake
 {
 	extern	cvar_t	scr_consize;
@@ -760,13 +799,7 @@ void Char_Console2(int key) // woods #ezsay add leading space for mode 2
 	char* workline = key_lines[edit_line];
 	int max;
 
-	if (cl_chatmode.value && (cls.state == ca_connected && cl.gametype == GAME_DEATHMATCH))
-		if ((cl.modtype == 1) || (cl.modtype == 4))
-			max = MAX_CHAT_SIZE_EX;
-		else
-			max = MAX_CHAT_SIZE;
-	else
-		max = MAXCMDLINE;
+	max = Key_ConsoleInputLimit (); // woods #chatlimit
 	if (key_linepos < max) // woods limit chat to 45 server limit  #chatlimit
 	{
 		qboolean endpos = !workline[key_linepos];
@@ -928,7 +961,7 @@ void Key_Console (int key)
 	switch (key)
 	{
 	case K_ENTER:
-		if (cls.state == ca_connected && !CheckForCommand() && (cl_chatmode.value == 1 || cl_chatmode.value == 2 || (cl_chatmode.value == 3 && key_lines[edit_line][1] == ' '))) // woods don't have to type "say " every time you wanna say something #ezsay (joequake)
+		if (Key_ConsoleLineIsChat ()) // woods don't have to type "say " every time you wanna say something #ezsay (joequake)
 		{
 				Cbuf_AddText("say ");
 				key_tabhint[0] = '\0';
@@ -969,6 +1002,8 @@ void Key_Console (int key)
 		return;
 
 	case K_TAB:
+		if (Key_ConsoleAcceptAutocomplete ()) // woods #chatcomplete
+			return;
 		Con_TabComplete (TABCOMPLETE_USER); // woods #iwtabcomplete
 		return;
 
@@ -1254,13 +1289,7 @@ void Char_Console(int key) // woods -- added detection for when typing in consol
 			SetChatInfo(CIF_CHAT);
 	}
 
-	if (cl_chatmode.value && (cls.state == ca_connected && cl.gametype == GAME_DEATHMATCH))
-		if ((cl.modtype == 1) || (cl.modtype == 4))
-			max = MAX_CHAT_SIZE_EX;
-		else
-			max = MAX_CHAT_SIZE;
-	else
-		max = MAXCMDLINE;
+	max = Key_ConsoleInputLimit (); // woods #chatlimit
 	if (key_linepos < max) // woods limit chat to 45 server limit  #chatlimit
 	{
 		qboolean endpos = !workline[key_linepos];
@@ -1318,7 +1347,51 @@ static int chat_history_count = 0;
 static int chat_history_line = -1;
 static char chat_history_saved_current[MAX_CHAT_SIZE_EX];
 
+/*
+ * Chat word completion is deliberately local and passive: the engine owns
+ * editing, this table only supplies a high-confidence suffix.  The cvar is an
+ * escape hatch, not a UI surface.  woods #chatcomplete
+ */
+static cvar_t cl_chat_autocomplete = {"cl_chat_autocomplete", "1", CVAR_ARCHIVE};
+
+#define CHAT_AUTOCOMPLETE_MIN_PREFIX 3
+
+/* A suggestion has to beat the runner-up by this much or we show nothing.
+   Showing nothing is the normal case, not a failure. */
+#define CHAT_AUTOCOMPLETE_DOMINANCE_PERCENT 125u
+
+typedef struct chat_autocomplete_word_s
+{
+	unsigned int offset;
+	unsigned int frequency;
+} chat_autocomplete_word_t;
+
+/* Defines CHAT_AUTOCOMPLETE_MIN_FREQUENCY, chat_autocomplete_blob[] and
+   chat_autocomplete_words[].  The generator emits the frequency floor so it
+   cannot drift from the one it pruned the table with. */
+#include "chat_autocomplete_words.inc"
+
+#define CHAT_AUTOCOMPLETE_COUNT \
+	(sizeof(chat_autocomplete_words) / sizeof(chat_autocomplete_words[0]))
+
+static unsigned int chat_edit_generation = 1u;
+static unsigned int chat_autocomplete_generation = 0u;
+static int chat_autocomplete_cached_dest = -1;
+static int chat_autocomplete_cached_enabled = -1;
+static char chat_autocomplete_suffix[MAX_CHAT_SIZE_EX];
+
+static char con_autocomplete_suffix[MAXCMDLINE];
+static char con_autocomplete_cached_line[MAXCMDLINE];
+static int con_autocomplete_cached_pos = -1;
+
 static void Chat_HistoryResetBrowse (void);
+
+static void Chat_MarkChanged (void) // woods #chatcomplete
+{
+	chat_edit_generation++;
+	if (!chat_edit_generation)
+		chat_edit_generation = 1u;
+}
 
 const char *Key_GetChatBuffer (void)
 {
@@ -1358,13 +1431,271 @@ qboolean Key_GetChatSelection (int *start, int *end)
 	return true;
 }
 
+static qboolean ChatAuto_IsAsciiLetter (unsigned char c)
+{
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+static char ChatAuto_ToLowerAscii (char c)
+{
+	if (c >= 'A' && c <= 'Z')
+		return (char)(c - 'A' + 'a');
+	return c;
+}
+
+static const char *ChatAuto_Word (const chat_autocomplete_word_t *entry)
+{
+	return chat_autocomplete_blob + entry->offset;
+}
+
+static size_t ChatAuto_LowerBound (const char *prefix)
+{
+	size_t lo = 0;
+	size_t hi = CHAT_AUTOCOMPLETE_COUNT;
+
+	while (lo < hi)
+	{
+		size_t mid = lo + (hi - lo) / 2;
+		if (strcmp(ChatAuto_Word (&chat_autocomplete_words[mid]), prefix) < 0)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+
+	return lo;
+}
+
+/*
+ * The one place a suffix is decided.  Pure function of (buffer, cursor,
+ * headroom): the message-mode editor and the cl_chatmode console line both
+ * come through here, so they cannot drift apart.  Writes an empty string
+ * whenever confidence is low, which is the common case.
+ */
+static void ChatAuto_Suggest (const char *buffer, int cursorpos, int available,
+	char *out, size_t out_size)
+{
+	char prefix[32];
+	int prefix_start;
+	int prefix_len;
+	qboolean all_lower = true;
+	qboolean all_upper = true;
+	qboolean title_case = true;
+	qboolean exact_common_word = false;
+	const char *best_word = NULL;
+	unsigned int best_frequency = 0;
+	unsigned int second_frequency = 0;
+	size_t best_suffix_len = 0;
+	size_t i;
+
+	out[0] = 0;
+	if (available <= 0)
+		return;
+
+	prefix_start = cursorpos;
+	while (prefix_start > 0 &&
+		ChatAuto_IsAsciiLetter ((unsigned char)buffer[prefix_start - 1]))
+		prefix_start--;
+	prefix_len = cursorpos - prefix_start;
+	if (prefix_len < CHAT_AUTOCOMPLETE_MIN_PREFIX || prefix_len >= (int)sizeof(prefix))
+		return;
+
+	for (i = 0; i < (size_t)prefix_len; i++)
+	{
+		char c = buffer[prefix_start + (int)i];
+		if (c < 'a' || c > 'z')
+			all_lower = false;
+		if (c < 'A' || c > 'Z')
+			all_upper = false;
+		if (i == 0)
+		{
+			if (c < 'A' || c > 'Z')
+				title_case = false;
+		}
+		else if (c < 'a' || c > 'z')
+		{
+			title_case = false;
+		}
+		prefix[i] = ChatAuto_ToLowerAscii (c);
+	}
+	prefix[prefix_len] = 0;
+
+	if (!all_lower && !all_upper && !title_case)
+		return;
+
+	for (i = ChatAuto_LowerBound (prefix); i < CHAT_AUTOCOMPLETE_COUNT; i++)
+	{
+		const chat_autocomplete_word_t *candidate = &chat_autocomplete_words[i];
+		const char *word = ChatAuto_Word (candidate);
+		size_t candidate_len;
+		size_t suffix_len;
+
+		if (strncmp(word, prefix, (size_t)prefix_len))
+			break;
+		if (candidate->frequency < CHAT_AUTOCOMPLETE_MIN_FREQUENCY)
+			continue;	// the generator prunes these; belt and braces
+
+		candidate_len = strlen(word);
+		if (candidate_len == (size_t)prefix_len)
+		{
+			// what they typed is already a word; don't nag them with a longer
+			// one that merely starts the same way
+			exact_common_word = true;
+			continue;
+		}
+
+		suffix_len = candidate_len - (size_t)prefix_len;
+		if ((int)suffix_len > available)
+			continue;
+
+		// rank on frequency alone, breaking ties toward the shorter word; any
+		// tie that survives that is caught by the dominance test below
+		if (!best_word ||
+			candidate->frequency > best_frequency ||
+			(candidate->frequency == best_frequency && suffix_len < best_suffix_len))
+		{
+			if (best_word)
+				second_frequency = best_frequency;
+			best_word = word;
+			best_frequency = candidate->frequency;
+			best_suffix_len = suffix_len;
+		}
+		else if (candidate->frequency > second_frequency)
+		{
+			second_frequency = candidate->frequency;
+		}
+	}
+
+	if (exact_common_word || !best_word)
+		return;
+	if (second_frequency &&
+		best_frequency * 100u < second_frequency * CHAT_AUTOCOMPLETE_DOMINANCE_PERCENT)
+		return;
+
+	{
+		const char *suffix = best_word + prefix_len;
+		size_t len = 0;
+		while (*suffix && len + 1 < out_size)
+		{
+			char c = *suffix++;
+			if (all_upper && c >= 'a' && c <= 'z')
+				c = (char)(c - 'a' + 'A');
+			out[len++] = c;
+		}
+		out[len] = 0;
+	}
+}
+
+static void ChatAuto_Refresh (qboolean force) // woods #chatcomplete
+{
+	int enabled = cl_chat_autocomplete.value != 0;
+
+	if (!force &&
+		chat_autocomplete_generation == chat_edit_generation &&
+		chat_autocomplete_cached_dest == (int)key_dest &&
+		chat_autocomplete_cached_enabled == enabled)
+		return;
+
+	chat_autocomplete_generation = chat_edit_generation;
+	chat_autocomplete_cached_dest = (int)key_dest;
+	chat_autocomplete_cached_enabled = enabled;
+	chat_autocomplete_suffix[0] = 0;
+
+	if (!enabled || key_dest != key_message)
+		return;
+	if (chat_cursorpos != chat_bufferlen)
+		return;
+	if (Key_GetChatSelection (NULL, NULL))
+		return;
+
+	ChatAuto_Suggest (chat_buffer, chat_cursorpos,
+		(int)sizeof(chat_buffer) - 1 - chat_bufferlen,
+		chat_autocomplete_suffix, sizeof(chat_autocomplete_suffix));
+}
+
+const char *Key_GetChatAutocompleteSuffix (void) // woods #chatcomplete
+{
+	ChatAuto_Refresh (false);
+	return chat_autocomplete_suffix;
+}
+
+/*
+ * Same completion on the cl_chatmode console line.  Typing chat into the
+ * console is a first-class way to chat in QSS-M, so it gets the same ghost;
+ * anything else on that line is a command, and Con_TabComplete still owns it.
+ */
+static void ConAuto_Refresh (qboolean force) // woods #chatcomplete
+{
+	extern	cvar_t	con_autohint;
+	const char *line = key_lines[edit_line];
+
+	/* The gates depend on connection state and cvars, not just on the text, so
+	   re-check them every call rather than caching them; only the dictionary
+	   search is worth skipping.  con_autohint counts: this is inline console
+	   hint text, so someone who turned those off gets none of it here either. */
+	if (cl_chat_autocomplete.value == 0 || con_autohint.value == 0 ||
+		!Key_ConsoleLineIsChat () ||
+		key_linepos != (int)strlen(line))	// only ghost at the end of the line
+	{
+		con_autocomplete_suffix[0] = 0;
+		con_autocomplete_cached_pos = -1;
+		return;
+	}
+
+	if (!force &&
+		con_autocomplete_cached_pos == key_linepos &&
+		!strcmp(con_autocomplete_cached_line, line))
+		return;
+
+	con_autocomplete_cached_pos = key_linepos;
+	q_strlcpy (con_autocomplete_cached_line, line, sizeof(con_autocomplete_cached_line));
+
+	ChatAuto_Suggest (line, key_linepos, Key_ConsoleInputLimit () - key_linepos,
+		con_autocomplete_suffix, sizeof(con_autocomplete_suffix));
+}
+
+const char *Key_GetConsoleAutocompleteSuffix (void) // woods #chatcomplete
+{
+	ConAuto_Refresh (false);
+	return con_autocomplete_suffix;
+}
+
+qboolean Key_ConsoleAcceptAutocomplete (void) // woods #chatcomplete
+{
+	size_t suffix_len, line_len;
+	char *workline = key_lines[edit_line];
+
+	/* Re-evaluate at acceptance time so Tab can never apply a stale hint. */
+	ConAuto_Refresh (true);
+	if (!con_autocomplete_suffix[0])
+		return false;
+
+	line_len = strlen(workline);
+	suffix_len = strlen(con_autocomplete_suffix);
+	if (line_len + suffix_len >= sizeof(key_lines[edit_line]))
+		return false;
+
+	memcpy (workline + line_len, con_autocomplete_suffix, suffix_len + 1);
+	key_linepos = (int)(line_len + suffix_len);
+	con_autocomplete_suffix[0] = 0;
+	key_tabhint[0] = '\0';
+	key_tabpartial[0] = '\0';
+	return true;
+}
+
 static void Chat_ClearSelection (void)
 {
+	if (chat_selection_anchor < 0)
+		return;
 	chat_selection_anchor = -1;
+	Chat_MarkChanged (); // woods #chatcomplete -- keep the hint off stale state
 }
 
 static void Chat_ClampEditState (void)
 {
+	int old_len = chat_bufferlen;
+	int old_cursor = chat_cursorpos;
+	int old_anchor = chat_selection_anchor;
+
 	if (chat_bufferlen < 0)
 		chat_bufferlen = 0;
 	if (chat_bufferlen >= (int)sizeof(chat_buffer))
@@ -1377,6 +1708,9 @@ static void Chat_ClampEditState (void)
 		chat_selection_anchor = chat_bufferlen;
 	if (chat_selection_anchor == chat_cursorpos)
 		Chat_ClearSelection ();
+
+	if (old_len != chat_bufferlen || old_cursor != chat_cursorpos || old_anchor != chat_selection_anchor)
+		Chat_MarkChanged ();
 }
 
 static qboolean Chat_CommandOrCtrlDown (void)
@@ -1406,6 +1740,8 @@ static int Chat_FindWordBoundary (int pos, int dir)
 
 static void Chat_MoveCursor (int pos, qboolean selecting)
 {
+	int old_cursor = chat_cursorpos;
+	int old_anchor = chat_selection_anchor;
 	pos = CLAMP(0, pos, chat_bufferlen);
 
 	if (selecting)
@@ -1423,6 +1759,9 @@ static void Chat_MoveCursor (int pos, qboolean selecting)
 	}
 
 	key_blinktime = realtime;
+
+	if (old_cursor != chat_cursorpos || old_anchor != chat_selection_anchor)
+		Chat_MarkChanged ();
 }
 
 void Key_SetChatCursorPos (int pos, qboolean selecting)
@@ -1450,6 +1789,7 @@ static qboolean Chat_DeleteRange (int start, int end)
 	Chat_ClearSelection ();
 	Chat_HistoryResetBrowse ();
 	key_blinktime = realtime;
+	Chat_MarkChanged ();
 	return true;
 }
 
@@ -1506,6 +1846,24 @@ static qboolean Chat_InsertText (const char *text, int len)
 	Chat_ClearSelection ();
 	Chat_HistoryResetBrowse ();
 	key_blinktime = realtime;
+	Chat_MarkChanged ();
+	return true;
+}
+
+static qboolean Chat_AcceptAutocomplete (void) // woods #chatcomplete
+{
+	int suffix_len;
+
+	/* Re-evaluate at acceptance time so Tab can never apply a stale hint. */
+	ChatAuto_Refresh (true);
+	if (!chat_autocomplete_suffix[0])
+		return false;
+
+	suffix_len = (int)strlen(chat_autocomplete_suffix);
+	if (!Chat_InsertText (chat_autocomplete_suffix, suffix_len))
+		return false;
+
+	chat_autocomplete_suffix[0] = 0;
 	return true;
 }
 
@@ -1521,6 +1879,7 @@ static void Chat_SetBuffer (const char *text)
 	chat_bufferlen = (int)strlen(chat_buffer);
 	chat_cursorpos = chat_bufferlen;
 	Chat_ClearSelection ();
+	Chat_MarkChanged ();
 }
 
 static void Chat_HistorySaveDraft (void)
@@ -1714,6 +2073,10 @@ void Key_Message (int key)
 		Key_EndChat ();
 		return;
 
+	case K_TAB: // woods #chatcomplete
+		Chat_AcceptAutocomplete ();
+		return;
+
 	case K_UPARROW:
 	case K_KP_UPARROW:
 	case K_DPAD_UP:
@@ -1837,6 +2200,7 @@ void Key_Message (int key)
 			if (chat_bufferlen == 0)
 				Chat_ClearSelection ();
 			key_blinktime = realtime;
+			Chat_MarkChanged ();
 			return;
 		}
 		break;
@@ -2611,6 +2975,7 @@ void Key_Init (void)
 
 	History_RegisterControls();
 	History_Init ();
+	Cvar_RegisterVariable (&cl_chat_autocomplete); // woods #chatcomplete
 
 	key_blinktime = realtime; //johnfitz
 

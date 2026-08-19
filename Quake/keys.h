@@ -287,6 +287,11 @@ void Key_EndChat (void);
 const char *Key_GetChatBuffer (void);
 int Key_GetChatMsgLen (void);
 int Key_GetChatCursorPos (void);
+const char *Key_GetChatAutocompleteSuffix (void); // woods #chatcomplete
+const char *Key_GetConsoleAutocompleteSuffix (void); // woods #chatcomplete
+qboolean Key_ConsoleAcceptAutocomplete (void); // woods #chatcomplete
+qboolean Key_ConsoleLineIsChat (void); // woods #chatcomplete
+int Key_ConsoleInputLimit (void); // woods #chatlimit
 qboolean Key_GetChatSelection (int *start, int *end);
 void Key_SetChatCursorPos (int pos, qboolean selecting);
 void Chat_HistoryStore (const char *text);
