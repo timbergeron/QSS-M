@@ -3301,13 +3301,16 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		return;
 	}
 
-	if (cls.download.active)
+	if (down && key == '.' && Key_IsShortcutModifierDown()) // woods #shortcuts #stopdownload
 	{
-		if (down && (key == '.') && Key_IsShortcutModifierDown()) // woods #shortcuts #stopdownload
+		if (cls.download.active)
 		{
 			Cbuf_AddText("stopdownload\n");
 			return;
 		}
+
+		if (CL_CancelPortPingProbe())
+			return;
 	}
 
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #shortcuts

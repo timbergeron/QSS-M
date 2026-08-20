@@ -400,14 +400,15 @@ void NET_PortPingProbe_RequestAbort(void)
 	if (status == PORTPINGPROBE_IDLE || status == PORTPINGPROBE_COMPLETED)
 		return;
 
+	portpingprobe_abort_quiet = false;
 	SDL_AtomicSet(&portpingprobe_abort_requested, 1);
 	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_ABORT);
 }
 
 void NET_PortPingProbe_RequestAbortQuietly(void)
 {
-	portpingprobe_abort_quiet = true;
 	NET_PortPingProbe_RequestAbort();
+	portpingprobe_abort_quiet = true;
 }
 
 static void NET_PortPingProbe_ClearResult(void)

@@ -562,6 +562,20 @@ void CL_CancelConnect(void)
 	CL_CancelConnectInternal(true);
 }
 
+qboolean CL_CancelPortPingProbe(void)
+{
+	portpingprobe_status_t status = NET_PortPingProbe_GetStatus();
+
+	if (status != PORTPINGPROBE_PROBING && status != PORTPINGPROBE_ABORT)
+		return false;
+
+	cl_portpingprobe_pending_host[0] = '\0';
+	cl_portpingprobe_deferred_host[0] = '\0';
+	cl_portpingprobe_reconnecting = false;
+	NET_PortPingProbe_RequestAbort();
+	return true;
+}
+
 static qboolean CL_HandlePortPingProbe(const char *target)
 {
 	portpingprobe_status_t probe_status;

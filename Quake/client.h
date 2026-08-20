@@ -602,6 +602,7 @@ void CL_EstablishConnection (const char *host);
 qboolean CL_BeginConnect (const char *host);
 void CL_ConnectFrame (void);
 void CL_CancelConnect (void);
+qboolean CL_CancelPortPingProbe (void);
 void CL_MarkNextConnectFromMenu (void);
 qboolean CL_ConsumeNextConnectFromMenu (void);
 void CL_Signon1 (void);
