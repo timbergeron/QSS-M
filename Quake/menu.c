@@ -26869,7 +26869,11 @@ static void M_Shortcuts_Init(void)
 	M_Shortcuts_AddShortcut("Multiplayer menu", "F5");
 	M_Shortcuts_AddShortcut("Quicksave", "F6");
 	M_Shortcuts_AddShortcut("Quickload", "F9");
+#if defined(PLATFORM_WINDOWS)
+	M_Shortcuts_AddShortcut("Quit", "F10 / Hold Ctrl+W");
+#else
 	M_Shortcuts_AddShortcut("Quit prompt", "F10");
+#endif
 	M_Shortcuts_AddShortcut("Screenshot", "F12 / Print Screen");
 	M_Shortcuts_AddShortcut("Toggle zoom", "F11");
 	M_Shortcuts_AddShortcut("Pause", "Pause");

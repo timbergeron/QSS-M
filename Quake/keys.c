@@ -55,6 +55,9 @@ qboolean	keydown[MAX_KEYS];
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC)
 static qboolean command_q_active;
 #endif
+#if defined(PLATFORM_WINDOWS)
+static qboolean control_w_active;
+#endif
 
 qboolean Key_IsShortcutModifierDown (void)
 {
@@ -3266,6 +3269,16 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 	}
 #endif
 
+#if defined(PLATFORM_WINDOWS)
+	/* Cancel the Windows hold-to-quit UI if Ctrl is released before W. */
+	if (!down && key == K_CTRL && control_w_active)
+	{
+		control_w_active = false;
+		keydown['w'] = false;
+		PL_ControlWEvent(false);
+	}
+#endif
+
 // handle fullscreen toggle
 	if (down && (key == K_ENTER || key == K_KP_ENTER) && keydown[K_ALT])
 	{
@@ -3329,6 +3342,26 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		command_q_active = false;
 		keydown[key] = false;
 		PL_CommandQEvent(false);
+		return;
+	}
+#endif
+
+#if defined(PLATFORM_WINDOWS) // woods #shortcuts
+	if (down && key == 'w' && keydown[K_CTRL] && !keydown[K_SHIFT] && !keydown[K_ALT])
+	{
+		if (!control_w_active)
+		{
+			control_w_active = true;
+			PL_ControlWEvent(true);
+		}
+		keydown[key] = true;
+		return;
+	}
+	if (!down && key == 'w' && control_w_active)
+	{
+		control_w_active = false;
+		keydown[key] = false;
+		PL_ControlWEvent(false);
 		return;
 	}
 #endif

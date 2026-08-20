@@ -38,10 +38,439 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 static HICON icon;
 
+#define PL_QUIT_HOLD_DURATION_MS 1000
+#define PL_QUIT_HOLD_COMPLETION_MS 80
+#define PL_QUIT_HOLD_TIMER_PROGRESS 1
+#define PL_QUIT_HOLD_TIMER_COMPLETE 2
+#define PL_QUIT_HOLD_WIDTH 356
+#define PL_QUIT_HOLD_HEIGHT 72
+#define PL_QUIT_HOLD_TOP_OFFSET 72
+#define PL_QUIT_HOLD_PROGRESS_INTERVAL_MS 10
+#define PL_QUIT_HOLD_POINT_COUNT 256
+
+static const WCHAR pl_quit_hold_class[] = L"QSSMQuitHoldOverlay";
+static HWND pl_quit_hold_window;
+static qboolean pl_quit_hold_active;
+static qboolean pl_quit_hold_committed;
+static DWORD pl_quit_hold_started;
+
+static HWND PL_GetNativeWindow (void)
+{
+	SDL_SysWMinfo wminfo;
+
+	SDL_VERSION(&wminfo.version);
+#if defined(USE_SDL2)
+	if (!VID_GetWindow())
+		return NULL;
+	if (SDL_GetWindowWMInfo((SDL_Window *)VID_GetWindow(), &wminfo) != SDL_TRUE)
+		return NULL;
+	return wminfo.info.win.window;
+#else
+	if (SDL_GetWMInfo(&wminfo) != 1)
+		return NULL;
+	return wminfo.window;
+#endif
+}
+
+static UINT PL_GetWindowDPI (HWND hwnd)
+{
+	typedef UINT (WINAPI *get_dpi_for_window_fn)(HWND);
+	union
+	{
+		FARPROC generic;
+		get_dpi_for_window_fn typed;
+	} resolver;
+	static get_dpi_for_window_fn get_dpi_for_window;
+	static qboolean resolved;
+	HDC dc;
+	HMODULE user32;
+	UINT dpi;
+
+	if (!resolved)
+	{
+		user32 = GetModuleHandleA("user32.dll");
+		if (user32)
+		{
+			resolver.generic = GetProcAddress(user32, "GetDpiForWindow");
+			get_dpi_for_window = resolver.typed;
+		}
+		resolved = true;
+	}
+	if (get_dpi_for_window)
+	{
+		dpi = get_dpi_for_window(hwnd);
+		if (dpi)
+			return dpi;
+	}
+
+	dc = GetDC(hwnd);
+	dpi = dc ? (UINT)GetDeviceCaps(dc, LOGPIXELSX) : 96;
+	if (dc)
+		ReleaseDC(hwnd, dc);
+	return dpi ? dpi : 96;
+}
+
+static double PL_QuitHoldBorderPerimeter (int width, int height, int radius)
+{
+	const double horizontal = (width - 5.0) - 2.0 * radius;
+	const double vertical = (height - 5.0) - 2.0 * radius;
+
+	return 2.0 * horizontal + 2.0 * vertical + 2.0 * M_PI * radius;
+}
+
+static POINT PL_QuitHoldBorderPoint (double distance, int width, int height, int radius)
+{
+	POINT point;
+	double left = 2.0;
+	double top = 2.0;
+	double right = width - 3.0;
+	double bottom = height - 3.0;
+	double center = (left + right) * 0.5;
+	double straight;
+	double arc = M_PI * radius * 0.5;
+	double angle;
+
+	straight = right - radius - center;
+	if (distance <= straight)
+	{
+		point.x = (LONG)(center + distance + 0.5);
+		point.y = (LONG)top;
+		return point;
+	}
+	distance -= straight;
+	if (distance <= arc)
+	{
+		angle = -M_PI * 0.5 + distance / radius;
+		point.x = (LONG)(right - radius + cos(angle) * radius + 0.5);
+		point.y = (LONG)(top + radius + sin(angle) * radius + 0.5);
+		return point;
+	}
+	distance -= arc;
+	straight = bottom - top - 2.0 * radius;
+	if (distance <= straight)
+	{
+		point.x = (LONG)right;
+		point.y = (LONG)(top + radius + distance + 0.5);
+		return point;
+	}
+	distance -= straight;
+	if (distance <= arc)
+	{
+		angle = distance / radius;
+		point.x = (LONG)(right - radius + cos(angle) * radius + 0.5);
+		point.y = (LONG)(bottom - radius + sin(angle) * radius + 0.5);
+		return point;
+	}
+	distance -= arc;
+	straight = right - left - 2.0 * radius;
+	if (distance <= straight)
+	{
+		point.x = (LONG)(right - radius - distance + 0.5);
+		point.y = (LONG)bottom;
+		return point;
+	}
+	distance -= straight;
+	if (distance <= arc)
+	{
+		angle = M_PI * 0.5 + distance / radius;
+		point.x = (LONG)(left + radius + cos(angle) * radius + 0.5);
+		point.y = (LONG)(bottom - radius + sin(angle) * radius + 0.5);
+		return point;
+	}
+	distance -= arc;
+	straight = bottom - top - 2.0 * radius;
+	if (distance <= straight)
+	{
+		point.x = (LONG)left;
+		point.y = (LONG)(bottom - radius - distance + 0.5);
+		return point;
+	}
+	distance -= straight;
+	if (distance <= arc)
+	{
+		angle = M_PI + distance / radius;
+		point.x = (LONG)(left + radius + cos(angle) * radius + 0.5);
+		point.y = (LONG)(top + radius + sin(angle) * radius + 0.5);
+		return point;
+	}
+	distance -= arc;
+	point.x = (LONG)(left + radius + distance + 0.5);
+	point.y = (LONG)top;
+	return point;
+}
+
+static void PL_QuitHoldDrawProgress (HDC dc, const RECT *rect, float progress, int radius)
+{
+	POINT points[PL_QUIT_HOLD_POINT_COUNT];
+	HPEN glow_pen;
+	HPEN progress_pen;
+	HGDIOBJ old_pen;
+	double width = rect->right - rect->left;
+	double height = rect->bottom - rect->top;
+	double perimeter;
+	int count;
+	int i;
+
+	if (progress <= 0.0f)
+		return;
+	if (progress > 1.0f)
+		progress = 1.0f;
+
+	perimeter = PL_QuitHoldBorderPerimeter((int)width, (int)height, radius);
+	count = 2 + (int)((PL_QUIT_HOLD_POINT_COUNT - 2) * progress);
+	for (i = 0; i < count; ++i)
+	{
+		double fraction = count > 1 ? (double)i / (double)(count - 1) : 0.0;
+		points[i] = PL_QuitHoldBorderPoint(perimeter * progress * fraction,
+			(int)width, (int)height, radius);
+	}
+
+	glow_pen = CreatePen(PS_SOLID, progress >= 1.0f ? 5 : 4, RGB(120, 120, 120));
+	progress_pen = CreatePen(PS_SOLID, progress >= 1.0f ? 3 : 2, RGB(245, 245, 245));
+	if (!glow_pen || !progress_pen)
+	{
+		if (progress_pen)
+			DeleteObject(progress_pen);
+		if (glow_pen)
+			DeleteObject(glow_pen);
+		return;
+	}
+	old_pen = SelectObject(dc, glow_pen);
+	Polyline(dc, points, count);
+	SelectObject(dc, progress_pen);
+	Polyline(dc, points, count);
+	SelectObject(dc, old_pen);
+	DeleteObject(progress_pen);
+	DeleteObject(glow_pen);
+}
+
+static void PL_QuitHoldPaint (HWND hwnd)
+{
+	PAINTSTRUCT paint;
+	RECT rect;
+	RECT text_rect;
+	HDC dc;
+	HBRUSH background;
+	HPEN border;
+	HFONT font;
+	HGDIOBJ old_brush;
+	HGDIOBJ old_pen;
+	HGDIOBJ old_font;
+	UINT dpi;
+	int radius;
+	float progress;
+
+	dc = BeginPaint(hwnd, &paint);
+	GetClientRect(hwnd, &rect);
+	dpi = PL_GetWindowDPI(hwnd);
+	radius = MulDiv(5, dpi, 96);
+	if (radius < 3)
+		radius = 3;
+
+	background = CreateSolidBrush(RGB(41, 41, 41));
+	border = CreatePen(PS_SOLID, 1, RGB(82, 82, 82));
+	old_brush = SelectObject(dc, background);
+	old_pen = SelectObject(dc, border);
+	RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius * 2, radius * 2);
+	SelectObject(dc, old_pen);
+	SelectObject(dc, old_brush);
+	DeleteObject(border);
+	DeleteObject(background);
+
+	if (pl_quit_hold_committed)
+		progress = 1.0f;
+	else
+		progress = (float)(DWORD)(GetTickCount() - pl_quit_hold_started) /
+			(float)PL_QUIT_HOLD_DURATION_MS;
+	PL_QuitHoldDrawProgress(dc, &rect, progress, radius);
+
+	font = CreateFontW(-MulDiv(24, dpi, 96), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+	old_font = font ? SelectObject(dc, font) : NULL;
+	SetBkMode(dc, TRANSPARENT);
+	SetTextColor(dc, RGB(255, 255, 255));
+	text_rect = rect;
+	DrawTextW(dc, L"Hold Ctrl+W to Quit", -1, &text_rect,
+		DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+	if (old_font)
+		SelectObject(dc, old_font);
+	if (font)
+		DeleteObject(font);
+	EndPaint(hwnd, &paint);
+}
+
+static void PL_QuitHoldPushQuit (void)
+{
+	SDL_Event event;
+
+	memset(&event, 0, sizeof(event));
+	event.type = SDL_QUIT;
+	if (SDL_PushEvent(&event) != 1)
+		Cbuf_AddText("quit\n");
+}
+
+static LRESULT CALLBACK PL_QuitHoldWindowProc (HWND hwnd, UINT message,
+	WPARAM wparam, LPARAM lparam)
+{
+	(void)lparam;
+
+	switch (message)
+	{
+	case WM_TIMER:
+		if (wparam == PL_QUIT_HOLD_TIMER_PROGRESS && pl_quit_hold_active)
+		{
+			if ((DWORD)(GetTickCount() - pl_quit_hold_started) >= PL_QUIT_HOLD_DURATION_MS)
+			{
+				pl_quit_hold_active = false;
+				pl_quit_hold_committed = true;
+				KillTimer(hwnd, PL_QUIT_HOLD_TIMER_PROGRESS);
+				if (!SetTimer(hwnd, PL_QUIT_HOLD_TIMER_COMPLETE,
+					PL_QUIT_HOLD_COMPLETION_MS, NULL))
+				{
+					pl_quit_hold_committed = false;
+					ShowWindow(hwnd, SW_HIDE);
+					PL_QuitHoldPushQuit();
+				}
+			}
+			InvalidateRect(hwnd, NULL, FALSE);
+			UpdateWindow(hwnd);
+			return 0;
+		}
+		if (wparam == PL_QUIT_HOLD_TIMER_COMPLETE && pl_quit_hold_committed)
+		{
+			KillTimer(hwnd, PL_QUIT_HOLD_TIMER_COMPLETE);
+			pl_quit_hold_committed = false;
+			ShowWindow(hwnd, SW_HIDE);
+			PL_QuitHoldPushQuit();
+			return 0;
+		}
+		break;
+	case WM_PAINT:
+		PL_QuitHoldPaint(hwnd);
+		return 0;
+	case WM_ERASEBKGND:
+		return 1;
+	case WM_NCHITTEST:
+		return HTTRANSPARENT;
+	case WM_MOUSEACTIVATE:
+		return MA_NOACTIVATE;
+	case WM_DESTROY:
+		pl_quit_hold_active = false;
+		pl_quit_hold_committed = false;
+		pl_quit_hold_window = NULL;
+		return 0;
+	default:
+		break;
+	}
+	return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+static qboolean PL_QuitHoldCreateWindow (HWND anchor)
+{
+	WNDCLASSEXW window_class;
+	HINSTANCE instance = GetModuleHandle(NULL);
+
+	if (pl_quit_hold_window && IsWindow(pl_quit_hold_window))
+		return true;
+
+	memset(&window_class, 0, sizeof(window_class));
+	window_class.cbSize = sizeof(window_class);
+	window_class.lpfnWndProc = PL_QuitHoldWindowProc;
+	window_class.hInstance = instance;
+	window_class.lpszClassName = pl_quit_hold_class;
+	if (!RegisterClassExW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+		return false;
+
+	pl_quit_hold_window = CreateWindowExW(
+		WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED,
+		pl_quit_hold_class, L"", WS_POPUP, 0, 0, 0, 0, anchor, NULL, instance, NULL);
+	if (!pl_quit_hold_window)
+		return false;
+	if (!SetLayeredWindowAttributes(pl_quit_hold_window, 0, 235, LWA_ALPHA))
+	{
+		DestroyWindow(pl_quit_hold_window);
+		pl_quit_hold_window = NULL;
+		return false;
+	}
+	return true;
+}
+
+static void PL_QuitHoldCancel (void)
+{
+	pl_quit_hold_active = false;
+	pl_quit_hold_committed = false;
+	if (pl_quit_hold_window && IsWindow(pl_quit_hold_window))
+	{
+		KillTimer(pl_quit_hold_window, PL_QUIT_HOLD_TIMER_PROGRESS);
+		KillTimer(pl_quit_hold_window, PL_QUIT_HOLD_TIMER_COMPLETE);
+		ShowWindow(pl_quit_hold_window, SW_HIDE);
+	}
+}
+
+void PL_ControlWEvent (int down)
+{
+	HWND anchor;
+	RECT anchor_rect;
+	HRGN region;
+	UINT dpi;
+	int width;
+	int height;
+	int offset;
+	int radius;
+	int x;
+	int y;
+
+	if (!down)
+	{
+		if (!pl_quit_hold_committed)
+			PL_QuitHoldCancel();
+		return;
+	}
+	if (pl_quit_hold_active || pl_quit_hold_committed)
+		return;
+
+	anchor = PL_GetNativeWindow();
+	if (!anchor || !PL_QuitHoldCreateWindow(anchor))
+		return;
+
+	dpi = PL_GetWindowDPI(anchor);
+	width = MulDiv(PL_QUIT_HOLD_WIDTH, dpi, 96);
+	height = MulDiv(PL_QUIT_HOLD_HEIGHT, dpi, 96);
+	offset = MulDiv(PL_QUIT_HOLD_TOP_OFFSET, dpi, 96);
+	radius = MulDiv(6, dpi, 96);
+	if (!GetWindowRect(anchor, &anchor_rect))
+		return;
+	x = anchor_rect.left + ((anchor_rect.right - anchor_rect.left) - width) / 2;
+	y = anchor_rect.top + offset;
+	region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2);
+	if (!region)
+		return;
+	if (!SetWindowRgn(pl_quit_hold_window, region, FALSE))
+	{
+		DeleteObject(region);
+		return;
+	}
+
+	pl_quit_hold_active = true;
+	pl_quit_hold_committed = false;
+	pl_quit_hold_started = GetTickCount();
+	if (!SetWindowPos(pl_quit_hold_window, HWND_TOPMOST, x, y, width, height,
+		SWP_NOACTIVATE | SWP_SHOWWINDOW))
+	{
+		PL_QuitHoldCancel();
+		return;
+	}
+	InvalidateRect(pl_quit_hold_window, NULL, FALSE);
+	UpdateWindow(pl_quit_hold_window);
+	if (!SetTimer(pl_quit_hold_window, PL_QUIT_HOLD_TIMER_PROGRESS,
+		PL_QUIT_HOLD_PROGRESS_INTERVAL_MS, NULL))
+		PL_QuitHoldCancel();
+}
+
 void PL_SetWindowIcon (void)
 {
 	HINSTANCE handle;
-	SDL_SysWMinfo wminfo;
 	HWND hwnd;
 
 	handle = GetModuleHandle(NULL);
@@ -50,19 +479,9 @@ void PL_SetWindowIcon (void)
 	if (!icon)
 		return;	/* no icon in the exe */
 
-	SDL_VERSION(&wminfo.version);
-
-#if defined(USE_SDL2)
-	if (SDL_GetWindowWMInfo((SDL_Window*) VID_GetWindow(), &wminfo) != SDL_TRUE)
+	hwnd = PL_GetNativeWindow();
+	if (!hwnd)
 		return;	/* wrong SDL version */
-
-	hwnd = wminfo.info.win.window;
-#else
-	if (SDL_GetWMInfo(&wminfo) != 1)
-		return;	/* wrong SDL version */
-
-	hwnd = wminfo.window;
-#endif
 #ifdef _WIN64
 	SetClassLongPtr(hwnd, GCLP_HICON, (LONG_PTR) icon);
 #else
@@ -72,7 +491,13 @@ void PL_SetWindowIcon (void)
 
 void PL_VID_Shutdown (void)
 {
-	DestroyIcon(icon);
+	PL_QuitHoldCancel();
+	if (pl_quit_hold_window && IsWindow(pl_quit_hold_window))
+		DestroyWindow(pl_quit_hold_window);
+	pl_quit_hold_window = NULL;
+	if (icon)
+		DestroyIcon(icon);
+	icon = NULL;
 }
 
 #define MAX_CLIPBOARDTXT	MAXCMDLINE	/* 256 */

@@ -54,6 +54,9 @@ void PL_CommandQEvent(int down);
 #endif
 
 #if defined(_WIN32)
+/* Forward a raw engine Ctrl-W transition to the native hold-to-quit UI. */
+void PL_ControlWEvent(int down);
+
 /* show a confirmation dialog, true when the user selects yes */
 qboolean PL_ConfirmDialog(const char *title, const char *text);
 #endif
