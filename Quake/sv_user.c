@@ -525,6 +525,8 @@ void SV_ReadClientMove (usercmd_t *move)
 	int sequence;
 	eval_t *val;
 	vec3_t savedvel;
+	float savedwaterjumptime = 0;
+	qboolean legacy_pmove = false;
 
 	if (host_client->protocol_pext2 & PEXT2_PREDINFO)
 	{
@@ -635,6 +637,7 @@ void SV_ReadClientMove (usercmd_t *move)
 
 	//decide if we're going independant or not
 	host_client->usingpmove = !!qcvm->extfuncs.SV_RunClientCommand || (!sv_nqplayerphysics.value && (*sv_nqplayerphysics.string||deathmatch.value));
+	legacy_pmove = host_client->usingpmove && !qcvm->extfuncs.SV_RunClientCommand;
 
 	//and give them their independance here.
 	if (host_client->usingpmove && host_client->knowntoqc)
@@ -673,9 +676,18 @@ void SV_ReadClientMove (usercmd_t *move)
 			*qcvm->extglobals.input_cursor_entitynumber = curs_entity;
 
 		VectorCopy(host_client->edict->v.velocity, savedvel);
+		if (legacy_pmove)
+		{
+			/* Legacy NQ QC owns FL_WATERJUMP only while PlayerPreThink runs.
+			 * Engine pmove owns the actual timer and movement, so preserve its
+			 * deadline and expose the matching flag temporarily for QC effects. */
+			savedwaterjumptime = host_client->edict->v.teleport_time;
+			if (savedwaterjumptime > qcvm->time)
+				host_client->edict->v.flags = (int)host_client->edict->v.flags | FL_WATERJUMP;
+		}
 		pr_global_struct->self = EDICT_TO_PROG(host_client->edict);
 		PR_ExecuteProgram(pr_global_struct->PlayerPreThink);
-		if (!qcvm->extfuncs.SV_RunClientCommand)
+		if (legacy_pmove)
 		{
 			//Undo damage caused by unaware mods... in vanilla this includes:
 			//	PlayerJump has 4 velocity changes that might mess with prediction
@@ -683,6 +695,12 @@ void SV_ReadClientMove (usercmd_t *move)
 			//	CheckWaterJump is entirely redundant.
 			//(it should be noted that the (cs)qc should still track jumps for sounds, and landings for fall damage, and water for drowning, just not any of the velocity changes)
 			VectorCopy(savedvel, host_client->edict->v.velocity);
+
+			/* CheckWaterJump also changes these non-velocity fields. Leaving
+			 * either change behind suppresses pmove's matching water jump, and
+			 * FL_WATERJUMP would never be cleared by the bypassed NQ physics. */
+			host_client->edict->v.flags = (int)host_client->edict->v.flags & ~FL_WATERJUMP;
+			host_client->edict->v.teleport_time = savedwaterjumptime;
 		}
 
 		if (!SV_RunThink (host_client->edict))
@@ -847,6 +865,9 @@ qboolean SV_ReadClientMessage (void)
 
 		if (msg_badread)
 		{
+#ifdef QSSM_STRESS
+			Host_StressNoteParse (msg_readcount, net_message.cursize);
+#endif
 			Con_DPrintf ("SV_ReadClientMessage: badread from %s at byte %d/%d\n",
 				NET_QSocketGetOwnerString(host_client->netconnection),
 				msg_readcount, net_message.cursize);
@@ -854,6 +875,11 @@ qboolean SV_ReadClientMessage (void)
 		}
 
 		ccmd = MSG_ReadChar ();
+
+#ifdef QSSM_STRESS
+		if (ccmd != -1)
+			Host_StressCoverage ("clientmsg", (unsigned int)(unsigned char)ccmd);
+#endif
 
 		switch (ccmd)
 		{

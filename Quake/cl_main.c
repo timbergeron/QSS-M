@@ -1354,7 +1354,7 @@ static qboolean CL_LerpEntity(entity_t *ent, vec3_t org, vec3_t ang, float frac)
 		}
 		VectorClear(pmove.gravitydir);
 
-		pmove.waterjumptime = 0;//FIXME: needs propagation. (e->v.teleport_time>qcvm->time)?e->v.teleport_time - qcvm->time:0;
+		pmove.waterjumptime = 0;	//restored from per-command propagation below when available
 		pmove.jump_held = !!(ent->netstate.pmovetype&0x40);
 		pmove.onladder = false;//!!(fl&PMF_LADDER);
 		pmove.jump_secs = 0;	//has been 0 since Z_EXT_PM_TYPE instead of imposing a delay on rejumps.
