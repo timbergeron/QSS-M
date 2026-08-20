@@ -62,15 +62,12 @@ cvar_t r_skywind = {"r_skywind", "0", CVAR_ARCHIVE};
 cvar_t allow_download_sky = {"allow_download_sky", "1", CVAR_ARCHIVE}; // woods automatic skybox downloading #skydownloads
 cvar_t r_globalsky = {"r_globalsky", "", CVAR_ARCHIVE};
 
-qboolean Sky_DownloadSkybox(const char* name);
 extern cvar_t	cl_web_download_url;
 extern cvar_t	cl_web_download_url2;
 extern qboolean IsGithubRepoPath(const char* s);
 static char pending_skybox_name[1024];
 static qboolean skybox_download_pending = false;
 static char map_skybox_name[1024];
-extern qboolean Curl_DownloadFile(const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name, web_download_result_t *result_out);
-extern qboolean scr_disabled_for_loading;
 
 static void Sky_ApplyGlobalSkybox(void);
 static void Sky_GlobalSkyboxChanged(cvar_t *var);
@@ -2152,6 +2149,29 @@ qboolean Sky_DownloadsDisabled(void) // woods #skydownloads
 
 static com_negative_cache_t skybox_download_cache;
 
+static const char *skybox_download_extensions[] = {"tga", "png", "jpg", "dds"};
+
+typedef struct
+{
+	qboolean active;
+	qboolean done;
+	qboolean attempt_active;
+	int skybox_count;
+	int skybox_index;
+	int face_index;
+	int mirror_index;
+	int extension_index;
+	int attempt_count;
+	int not_found_count;
+	qboolean cacheable;
+	char skyboxes[MAX_MAP_SKYBOX_CHOICES][MAX_QPATH];
+	char mirrors[2][SKYBOX_DOWNLOAD_CACHE_MAX_MIRROR];
+	char normalized_mirror[SKYBOX_DOWNLOAD_CACHE_MAX_MIRROR];
+	char face_path[MAX_QPATH];
+} skybox_async_download_t;
+
+static skybox_async_download_t skybox_async_download;
+
 static qboolean SkyboxDownloadCache_Validate(const char *mirror, const char *face, void *ctx)
 {
 	(void)ctx;
@@ -2233,135 +2253,240 @@ static void SkyboxDownloadCache_SaveIfDirty(void)
 		&skybox_download_cache_config);
 }
 
-/*
-==============================================================================
-Sky_DownloadSkybox - woods #skydownloads
-Only downloads from mirrors that are in user/repo/branch form
-Leaves tag formatting to Curl_DownloadFile (display_name = NULL)
-==============================================================================
-*/
-qboolean Sky_DownloadSkybox(const char* name)
+static void Sky_AsyncDownload_ResetMirror(void)
 {
-	if (Sky_DownloadsDisabled())
-		return false;
+	skybox_async_download.extension_index = 0;
+	skybox_async_download.attempt_count = 0;
+	skybox_async_download.not_found_count = 0;
+	skybox_async_download.cacheable = true;
+	skybox_async_download.normalized_mirror[0] = 0;
+}
 
-	const char* bases[2] = {
-		cl_web_download_url.string,
-		cl_web_download_url2.string
-	};
+static void Sky_AsyncDownload_NextFace(void)
+{
+	skybox_async_download.face_index++;
+	skybox_async_download.mirror_index = 0;
+	Sky_AsyncDownload_ResetMirror();
+}
 
-	static const char* extensions[] = { "tga", "png", "jpg", "dds" };
+static void Sky_AsyncDownload_Finish(void)
+{
+	int i;
 
-	time_t now = time(NULL);
-	char face_path[MAX_QPATH];
-	char remote_path[MAX_QPATH];
-	char local_path[MAX_OSPATH];
-
-	if (Sky_HasAllSkyboxFaces(name))
-		return true;
-
-	for (int i = 0; i < 6; ++i)
+	for (i = 0; i < skybox_async_download.skybox_count; i++)
 	{
-		int face_path_len;
-
-		if (Sky_HasSkyboxFace(name, suf[i]))
-			continue;
-
-		face_path_len = q_snprintf(face_path, sizeof(face_path),
-			"gfx/env/%s%s", name, suf[i]);
-		if (face_path_len < 0 || (size_t)face_path_len >= sizeof(face_path))
-		{
-			Con_DPrintf("Skybox face path too long for %s%s\n", name, suf[i]);
-			continue;
-		}
-
-		for (int b = 0; b < 2; ++b)
-		{
-			char normalized_base[SKYBOX_DOWNLOAD_CACHE_MAX_MIRROR];
-			int not_found_count = 0;
-			int attempt_count = 0;
-			qboolean downloaded = false;
-			qboolean cacheable = true;
-
-			if (!SkyboxDownloadCache_NormalizeMirror(bases[b],
-				normalized_base, sizeof(normalized_base)))      /* skip plain hosts       */
-				continue;
-
-			if (SkyboxDownloadCache_ShouldSkip(normalized_base, face_path, now))
-				continue;
-
-			for (int e = 0; e < (int)ARRAY_COUNT(extensions); ++e)
-			{
-				web_download_result_t download_result = WEB_DOWNLOAD_RESULT_NONE;
-				int remote_path_len;
-				int local_path_len;
-
-				remote_path_len = q_snprintf(remote_path, sizeof(remote_path),
-					"%s.%s", face_path, extensions[e]);
-				if (remote_path_len < 0 || (size_t)remote_path_len >= sizeof(remote_path))
-				{
-					attempt_count++;
-					not_found_count++;
-					continue;
-				}
-
-				local_path_len = q_snprintf(local_path, sizeof(local_path),
-					"%s/%s", com_gamedir, remote_path);
-				if (local_path_len < 0 || (size_t)local_path_len >= sizeof(local_path))
-				{
-					attempt_count++;
-					not_found_count++;
-					continue;
-				}
-
-				if (Curl_DownloadFile(bases[b],
-					remote_path,
-					local_path,
-					/* is_skybox   */ true,
-					/* display_tag */ NULL,
-					&download_result))
-				{
-					downloaded = true;
-					SkyboxDownloadCache_Remove(normalized_base, face_path);
-					break;                         /* face is present       */
-				}
-
-				if (download_result == WEB_DOWNLOAD_RESULT_NONE)
-				{
-					cacheable = false;
-					break;
-				}
-
-				attempt_count++;
-				if (download_result == WEB_DOWNLOAD_RESULT_NOT_FOUND ||
-					download_result == WEB_DOWNLOAD_RESULT_INVALID)
-				{
-					not_found_count++;
-				}
-			}
-
-			if (downloaded || Sky_HasSkyboxFace(name, suf[i]))
-				break;
-
-			if (cacheable && attempt_count > 0)
-			{
-				if (not_found_count == attempt_count &&
-					attempt_count == (int)ARRAY_COUNT(extensions))
-				{
-					SkyboxDownloadCache_Update(normalized_base, face_path,
-						COM_NEGATIVE_CACHE_MISSING, now);
-				}
-				else
-				{
-					SkyboxDownloadCache_Update(normalized_base, face_path,
-						COM_NEGATIVE_CACHE_TRANSIENT, now);
-				}
-			}
-		}
+		if (!Sky_HasAllSkyboxFaces(skybox_async_download.skyboxes[i]))
+			Sky_WarnMissingSkybox(skybox_async_download.skyboxes[i]);
 	}
 
 	SkyboxDownloadCache_SaveIfDirty();
-	return Sky_HasAllSkyboxFaces(name);
+	skybox_async_download.active = false;
+	skybox_async_download.attempt_active = false;
+	skybox_async_download.done = true;
+
+	/* Normally signon has not loaded the world yet. If this coordinator is
+	 * reused after the world exists, reload pending renderer state here on the
+	 * main thread so newly completed faces become visible immediately. */
+	if (cl.worldmodel && skybox_download_pending)
+		Sky_ApplyGlobalSkybox();
+}
+
+static void Sky_AsyncDownload_StartNext(void)
+{
+	while (skybox_async_download.active && !skybox_async_download.attempt_active)
+	{
+		const char *name;
+		web_download_result_t start_result = WEB_DOWNLOAD_RESULT_NONE;
+		char remote_path[MAX_QPATH];
+		int path_len;
+
+		if (skybox_async_download.skybox_index >= skybox_async_download.skybox_count)
+		{
+			Sky_AsyncDownload_Finish();
+			return;
+		}
+
+		name = skybox_async_download.skyboxes[skybox_async_download.skybox_index];
+		if (skybox_async_download.face_index >= 6)
+		{
+			skybox_async_download.skybox_index++;
+			skybox_async_download.face_index = 0;
+			skybox_async_download.mirror_index = 0;
+			Sky_AsyncDownload_ResetMirror();
+			continue;
+		}
+
+		if (Sky_HasSkyboxFace(name, suf[skybox_async_download.face_index]))
+		{
+			Sky_AsyncDownload_NextFace();
+			continue;
+		}
+
+		path_len = q_snprintf(skybox_async_download.face_path,
+			sizeof(skybox_async_download.face_path), "gfx/env/%s%s", name,
+			suf[skybox_async_download.face_index]);
+		if (path_len < 0 || (size_t)path_len >= sizeof(skybox_async_download.face_path))
+		{
+			Con_DPrintf("Skybox face path too long for %s%s\n", name,
+				suf[skybox_async_download.face_index]);
+			Sky_AsyncDownload_NextFace();
+			continue;
+		}
+
+		if (skybox_async_download.mirror_index >= 2)
+		{
+			Sky_AsyncDownload_NextFace();
+			continue;
+		}
+
+		if (skybox_async_download.extension_index == 0)
+		{
+			const char *mirror = skybox_async_download.mirrors[skybox_async_download.mirror_index];
+
+			if (!SkyboxDownloadCache_NormalizeMirror(mirror,
+				skybox_async_download.normalized_mirror,
+				sizeof(skybox_async_download.normalized_mirror)) ||
+				SkyboxDownloadCache_ShouldSkip(skybox_async_download.normalized_mirror,
+					skybox_async_download.face_path, time(NULL)))
+			{
+				skybox_async_download.mirror_index++;
+				Sky_AsyncDownload_ResetMirror();
+				continue;
+			}
+		}
+
+		if (skybox_async_download.extension_index >= (int)ARRAY_COUNT(skybox_download_extensions))
+		{
+			if (skybox_async_download.cacheable && skybox_async_download.attempt_count > 0)
+			{
+				com_negative_cache_result_t cache_result =
+					(skybox_async_download.not_found_count == skybox_async_download.attempt_count &&
+					 skybox_async_download.attempt_count == (int)ARRAY_COUNT(skybox_download_extensions))
+					? COM_NEGATIVE_CACHE_MISSING : COM_NEGATIVE_CACHE_TRANSIENT;
+
+				SkyboxDownloadCache_Update(skybox_async_download.normalized_mirror,
+					skybox_async_download.face_path, cache_result, time(NULL));
+			}
+
+			skybox_async_download.mirror_index++;
+			Sky_AsyncDownload_ResetMirror();
+			continue;
+		}
+
+		path_len = q_snprintf(remote_path, sizeof(remote_path), "%s.%s",
+			skybox_async_download.face_path,
+			skybox_download_extensions[skybox_async_download.extension_index]);
+		if (path_len < 0 || (size_t)path_len >= sizeof(remote_path))
+		{
+			skybox_async_download.attempt_count++;
+			skybox_async_download.not_found_count++;
+			skybox_async_download.extension_index++;
+			continue;
+		}
+
+		if (CL_AsyncDownload_StartSkybox(remote_path,
+			skybox_async_download.mirrors[skybox_async_download.mirror_index],
+			&start_result))
+		{
+			skybox_async_download.attempt_active = true;
+			return;
+		}
+
+		/* NONE means another download owns the worker. Leave this attempt in
+		 * place; signon will call us again after that owner completes. */
+		if (start_result == WEB_DOWNLOAD_RESULT_NONE)
+			return;
+
+		skybox_async_download.attempt_count++;
+		if (start_result == WEB_DOWNLOAD_RESULT_NOT_FOUND ||
+			start_result == WEB_DOWNLOAD_RESULT_INVALID)
+			skybox_async_download.not_found_count++;
+		skybox_async_download.extension_index++;
+	}
+}
+
+qboolean Sky_AsyncDownload_Start(char choices[][MAX_QPATH], int count)
+{
+	int i;
+
+	if (Sky_DownloadsDisabled() || !choices || count <= 0)
+		return false;
+	if (skybox_async_download.active)
+		return true;
+
+	memset(&skybox_async_download, 0, sizeof(skybox_async_download));
+	skybox_async_download.active = true;
+	skybox_async_download.cacheable = true;
+	skybox_async_download.skybox_count = q_min(count, MAX_MAP_SKYBOX_CHOICES);
+	for (i = 0; i < skybox_async_download.skybox_count; i++)
+		q_strlcpy(skybox_async_download.skyboxes[i], choices[i], MAX_QPATH);
+	q_strlcpy(skybox_async_download.mirrors[0], cl_web_download_url.string,
+		sizeof(skybox_async_download.mirrors[0]));
+	q_strlcpy(skybox_async_download.mirrors[1], cl_web_download_url2.string,
+		sizeof(skybox_async_download.mirrors[1]));
+
+	Sky_AsyncDownload_StartNext();
+	return true;
+}
+
+qboolean Sky_AsyncDownload_IsActive(void)
+{
+	if (skybox_async_download.active && !skybox_async_download.attempt_active)
+		Sky_AsyncDownload_StartNext();
+	return skybox_async_download.active;
+}
+
+qboolean Sky_AsyncDownload_Finished(void)
+{
+	qboolean finished = skybox_async_download.done;
+	skybox_async_download.done = false;
+	return finished;
+}
+
+void Sky_AsyncDownload_Cancel(void)
+{
+	memset(&skybox_async_download, 0, sizeof(skybox_async_download));
+}
+
+void Sky_AsyncDownload_Complete(const char *filename, const char *source_url,
+	qboolean success, qboolean aborted, web_download_result_t result)
+{
+	(void)filename;
+	(void)source_url;
+
+	if (!skybox_async_download.active || !skybox_async_download.attempt_active)
+		return;
+
+	skybox_async_download.attempt_active = false;
+	if (aborted)
+	{
+		SkyboxDownloadCache_SaveIfDirty();
+		skybox_async_download.active = false;
+		skybox_async_download.done = true;
+		return;
+	}
+
+	if (success)
+	{
+		SkyboxDownloadCache_Remove(skybox_async_download.normalized_mirror,
+			skybox_async_download.face_path);
+		Sky_AsyncDownload_NextFace();
+	}
+	else
+	{
+		if (result == WEB_DOWNLOAD_RESULT_NONE)
+			skybox_async_download.cacheable = false;
+		else
+		{
+			skybox_async_download.attempt_count++;
+			if (result == WEB_DOWNLOAD_RESULT_NOT_FOUND ||
+				result == WEB_DOWNLOAD_RESULT_INVALID)
+				skybox_async_download.not_found_count++;
+		}
+		skybox_async_download.extension_index++;
+	}
+
+	Sky_AsyncDownload_StartNext();
 }
 
 static void Sky_LoadSkyBoxAuto(const char *name)
@@ -2377,9 +2502,9 @@ static void Sky_LoadSkyBoxAuto(const char *name)
 
 	Sky_LoadSkyBoxInternal(name, allow_downloads); // quiet if downloads enabled, verbose if disabled
 
-	if (name[0] && !skybox_name[0] && allow_downloads)
+	if (name[0] && !skybox_complete && allow_downloads)
 	{
-		// Store the name for delayed download when connection is complete
+		// Store missing or partial skyboxes for a main-thread reload on completion.
 		q_strlcpy(pending_skybox_name, name, sizeof(pending_skybox_name));
 		skybox_download_pending = true;
 	}

@@ -600,6 +600,12 @@ void Sky_LoadTextureQ64 (qmodel_t *mod, texture_t *mt);
 qboolean  Sky_LoadExternalTextures (qmodel_t* mod, texture_t* mt); // woods #extsky
 void Sky_LoadSkyBox (const char *name);
 qboolean Sky_HasAllSkyboxFaces (const char *name);
+qboolean Sky_AsyncDownload_Start (char choices[][MAX_QPATH], int count);
+qboolean Sky_AsyncDownload_IsActive (void);
+qboolean Sky_AsyncDownload_Finished (void);
+void Sky_AsyncDownload_Cancel (void);
+void Sky_AsyncDownload_Complete (const char *filename, const char *source_url,
+	qboolean success, qboolean aborted, web_download_result_t result);
 qboolean Sky_DrawMenuPreview (float pixel_x, float pixel_y, float pixel_w, float pixel_h,
 	float yaw, float pitch, float fov);
 extern qboolean skyroom_drawn, skyroom_drawing;		//we draw a skyroom this frame

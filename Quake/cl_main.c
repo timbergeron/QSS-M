@@ -2786,14 +2786,6 @@ Note: Ensure correct configuration of the map repository URL.
 
 static void CL_AsyncDownload_FormatSize(long bytes, char *out, size_t outsize);
 
-typedef struct 
-{
-	char filename[MAX_OSPATH];
-	char url[MAX_URLPATH];
-        qboolean is_skybox;
-        char display_name[64];
-} DownloadData;
-
 qboolean web2check = false;
 qboolean webcheck = false;
 static qboolean qwmaplist_webcheck = false;
@@ -2826,6 +2818,7 @@ typedef struct
 	web_download_result_t result;
 	qboolean is_auto; // started by CL_CheckDownload during signon (falls back to in-protocol download on failure)
 	qboolean is_optional; // optional companion of a manually downloaded map
+	qboolean is_skybox; // one face attempt owned by the main-thread skybox coordinator
 } async_download_t;
 
 static async_download_t async_download;
@@ -2855,7 +2848,6 @@ SDL_Thread* currentQWMapListCheckThread = NULL;
 
 #define QW_MAPLIST_SOURCE_HOST "maps.quakeworld.nu"
 #define QW_MAPLIST_SOURCE_URL "https://maps.quakeworld.nu/all/"
-#define DOWNLOAD_REDRAW_INTERVAL_MS 50
 
 
 qboolean IsGithubRepoPath(const char* s)
@@ -3772,119 +3764,6 @@ static void CL_DownloadProgress_Update(double received, double total)
 		cls.download.percent = -1.0f;
 }
 
-static void CL_DownloadProgress_UpdateScreen(void)
-{
-	static Uint32 last_update_time = 0;
-	Uint32 now;
-	qboolean loading;
-
-	if (isDedicated)
-		return;
-
-	/* woods #dlprogress -- skybox faces are the only downloads that block the
-	   host frame: Sky_DownloadSkybox sits inside curl for the whole transfer, so
-	   pumping from here is the only way a level load can show one running.  The
-	   threaded web downloads and the server's in-protocol ones keep framing on
-	   their own and just need the plaque bypass in SCR_UpdateScreen. */
-	loading = (cls.state == ca_connected && cls.signon != SIGNONS);
-
-	if (scr_disabled_for_loading && !loading)
-		return;
-
-	SDL_PumpEvents();
-
-	if (key_dest != key_menu && !loading)
-		return;
-
-	now = SDL_GetTicks();
-	if (last_update_time && now - last_update_time < DOWNLOAD_REDRAW_INTERVAL_MS)
-		return;
-
-	last_update_time = now;
-	SCR_UpdateScreen();
-}
-
-size_t Write_Data (void* ptr, size_t size, size_t nmemb, FILE* stream)
-{
-	return fwrite (ptr, size, nmemb, stream) * size;
-}
-
-int Progress_Callback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
-{
-	if (stop_curl_download)
-		return 1;
-
-	DownloadData* dataFromCurl = (DownloadData*)clientp;
-
-	if (dataFromCurl == NULL)
-		return 0;
-
-	CL_DownloadProgress_Update((double)dlnow, (double)dltotal);
-
-	static int dotCount = 0;
-	static int callbackInvocationCount = 0;
-	const int callbackThreshold = 300; // Adjust this value to control the speed
-
-
-	if (dlnow > 10000 && strcmp(COM_FileGetExtension(dataFromCurl->filename), "loc"))
-	{
-		if (dltotal == 0)
-		{
-			if (callbackInvocationCount >= callbackThreshold) // Check if threshold is reached
-			{
-				char dots[32];
-				int numDots = dotCount % (sizeof(dots) - 1);
-				memset(dots, '.', numDots);
-				dots[numDots] = '\0';
-
-				Con_Printf("DL %s %s\r", COM_SkipPath(dataFromCurl->filename), dots);
-
-				dotCount++;
-				callbackInvocationCount = 0;
-			}
-			else
-			{
-				callbackInvocationCount++;
-			}
-		}
-		else
-		{
-			int progress = 0; // Initialize progress to 0%
-
-			if (dlnow > 0 && dltotal > 0)
-				progress = (int)((double)dlnow / (double)dltotal * 100.0);
-
-			char urlLimited[21];
-			if (dataFromCurl->is_skybox && dataFromCurl->display_name[0] != '\0')
-				Q_strncpy(urlLimited, dataFromCurl->display_name, 20);
-			else
-			Q_strncpy(urlLimited, dataFromCurl->url, 20);
-			urlLimited[20] = '\0';
-
-			char sizeStr[32];
-
-			float dltotalKB = BYTES_TO_KB(dltotal);
-			float dltotalMB = BYTES_TO_MB(dltotal);
-
-			if (dltotalMB >= 1.0f)
-				q_snprintf(sizeStr, sizeof(sizeStr), "%.2f mb", dltotalMB);
-			else if (dltotalKB >= 1.0f)
-				q_snprintf(sizeStr, sizeof(sizeStr), "%ld kb", (long)dltotalKB);
-			else
-				q_snprintf(sizeStr, sizeof(sizeStr), "%ld bytes", (long)dltotal);
-
-			Con_Printf("DL %s (%s) %s ^m%d%%\r",
-				COM_SkipPath(dataFromCurl->filename),
-				urlLimited,
-				sizeStr,
-				progress);
-		}
-
-		CL_DownloadProgress_UpdateScreen();
-	}
-	return 0;
-}
-
 static qboolean CL_DownloadNameIsValid(const char *relative_path)
 {
 	return COM_DownloadNameOkay(relative_path) || COM_DownloadPackageNameOkay(relative_path);
@@ -4768,166 +4647,6 @@ static void CL_SetWebDownloadResult(web_download_result_t *result_out, web_downl
 		*result_out = result;
 }
 
-qboolean Curl_DownloadFile (const char* url, const char* filename, const char* local_path, qboolean is_skybox, const char* display_name, web_download_result_t *result_out) // main curl function
-{
-	if (cls.download.active || curl_download_active)	// don't stomp an in-flight download's shared state
-	{
-		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_NONE);
-		return false;
-	}
-
-	CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_NONE);
-
-	stop_curl_download = false;
-	CL_DownloadProgress_Begin(filename);
-	curl_download_active = true;
-
-	if (url == NULL || url[0] == '\0')
-	{
-		cls.download.active = false;
-		curl_download_active = false;
-		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_INVALID);
-		return false;
-	}
-
-	char full_url[MAX_URLPATH];
-	if (!CL_BuildDownloadUrl(url, filename, is_skybox, full_url, sizeof(full_url)))
-		goto url_too_long;
-
-	DownloadData dl_data;
-	memset(&dl_data, 0, sizeof(dl_data)); // Reset dl_data
-	Q_strncpy(dl_data.filename, filename, MAX_OSPATH);
-	Q_strncpy(dl_data.url, url, MAX_URLPATH); // the server set in cl_web_download_url
-        dl_data.is_skybox = is_skybox;
-        if (display_name)
-            Q_strncpy(dl_data.display_name, display_name, sizeof(dl_data.display_name));
-        else
-            dl_data.display_name[0] = '\0';
-	q_strlcpy(cls.download.current, filename, sizeof(cls.download.current));
-
-	CURL* curl = curl_easy_init();
-	if (!curl)
-    {
-        cls.download.active = false;
-        curl_download_active = false;
-		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_TRANSIENT);
-		return false;
-    }
-
-	char tmp_path[MAX_OSPATH];
-    if ((size_t)q_snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", local_path) >= sizeof(tmp_path))
-    {
-        curl_easy_cleanup(curl);
-        cls.download.active = false;
-        curl_download_active = false;
-		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_INVALID);
-        return false;
-    }
-
-	COM_CreatePath(tmp_path);
-
-	FILE* fp = fopen(tmp_path, "wb");
-	if (!fp)
-	{
-		curl_easy_cleanup(curl);
-		cls.download.active = false;
-		curl_download_active = false;
-		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_TRANSIENT);
-		return false;
-	}
-
-	curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &dl_data); // Pass the struct to the callback
-	curl_easy_setopt(curl, CURLOPT_URL, full_url); // Use full_url here
-	curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 1024L); // Use a smaller buffer size for more frequent progress updates
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, Write_Data);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, Progress_Callback);
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 0L); // Timeout after x milliseconds, 1000 = 1 sec, 0L - not limit
-	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 500L); // Set minimum bytes per second (e.g., 500 bytes/sec)
-	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 10L); // Set time in seconds (e.g., 10 seconds)
-	CL_CurlSetDownloadOptions(curl);
-
-	CURLcode res = curl_easy_perform(curl);
-	long response_code = 0;
-	qboolean write_failed;
-	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-
-	write_failed = (fflush(fp) != 0 || ferror(fp));
-
-	// Get file size in bytes
-	fseek(fp, 0, SEEK_END); // Seek to end of file
-	long fileSizeBytes = ftell(fp); // Get current file pointer position, which is the size
-	if (fileSizeBytes < 0)
-		fileSizeBytes = 0;
-	float fileSizeKB = BYTES_TO_KB(fileSizeBytes);
-	float fileSizeMB = BYTES_TO_MB(fileSizeBytes);
-
-	fclose(fp);
-	curl_easy_cleanup(curl);
-
-	if (write_failed && res == CURLE_OK)
-		res = CURLE_WRITE_ERROR;
-
-	if (res != CURLE_OK || response_code != 200) 
-	{
-		unlink(tmp_path); // Delete the temporary file in case of an error
-		cls.download.active = false;
-		curl_download_active = false;
-		if (res == CURLE_OK && (response_code == 404 || response_code == 410))
-			CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_NOT_FOUND);
-		else
-			CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_TRANSIENT);
-
-		if (res != CURLE_OK) 
-			Con_DPrintf("Error downloading file: CURL error %s\n", curl_easy_strerror(res));
-		else
-			Con_DPrintf("Error downloading file: Server responded with HTTP status %ld\n", response_code);
-
-		return false;
-	}
-
-	if (!CL_FinalizeDownloadFile(filename, tmp_path))
-	{
-		unlink(tmp_path); // Also delete the temporary file in case renaming fails
-		cls.download.active = false;
-		curl_download_active = false;
-		CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_TRANSIENT);
-		return false;
-	}
-	CL_DownloadProgress_Update((double)fileSizeBytes, (double)fileSizeBytes);
-	cls.download.active = false;
-	curl_download_active = false;
-	CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_SUCCESS);
-
-	char sizeStr[32];
-
-	if (fileSizeMB >= 1.0f)
-		q_snprintf(sizeStr, sizeof(sizeStr), "%.2f mb", fileSizeMB);
-	else if (fileSizeKB >= 1.0f)
-		q_snprintf(sizeStr, sizeof(sizeStr), "%ld kb", (long)fileSizeKB);
-
-	else
-		q_snprintf(sizeStr, sizeof(sizeStr), "%ld bytes", fileSizeBytes);
-
-	char tagbuf[64];
-	const char* src = (display_name && display_name[0])
-		? display_name
-		: DL_DisplayTag(url, tagbuf, sizeof(tagbuf));
-
-	Con_Printf("Downloaded ^m%s^m (%s) from %s\n",
-		COM_SkipPath(filename), sizeStr, src);
-
-	return true; // File successfully downloaded
-
-url_too_long:
-	Con_DPrintf("Download URL is invalid or too long: %s\n", url ? url : "(null)");
-	cls.download.active = false;
-	curl_download_active = false;
-	CL_SetWebDownloadResult(result_out, WEB_DOWNLOAD_RESULT_INVALID);
-	return false;
-}
-
 static qboolean CL_AsyncDownload_EnsureMutex(void)
 {
 	if (async_download_mutex)
@@ -5212,7 +4931,8 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 
 	if (CL_AsyncDownload_IsActive() || cls.download.active || curl_download_active)
 	{
-		Con_Printf("A download is already active\n");
+		if (!is_skybox)
+			Con_Printf("A download is already active\n");
 		return false;
 	}
 
@@ -5254,6 +4974,7 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 	async_download.current_url = 0;
 	async_download.is_auto = auto_download;
 	async_download.is_optional = optional_download;
+	async_download.is_skybox = is_skybox;
 	q_strlcpy(async_download.filename, filename, sizeof(async_download.filename));
 	q_strlcpy(async_download.tmp_path, tmp_path, sizeof(async_download.tmp_path));
 	if (display_name)
@@ -5289,6 +5010,16 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 	SDL_UnlockMutex(async_download_mutex);
 
 	return true;
+}
+
+qboolean CL_AsyncDownload_StartSkybox(const char *filename, const char *url,
+	web_download_result_t *result_out)
+{
+	const char *urls[1];
+
+	urls[0] = url;
+	return CL_AsyncDownload_Start(filename, urls, 1, true, NULL,
+		false, false, result_out);
 }
 
 static void CL_ManualMapCompanions_Clear(void)
@@ -5345,7 +5076,7 @@ static qboolean CL_AsyncDownload_RequestStop(void)
 
 void CL_AsyncDownload_Frame(void)
 {
-	qboolean active, done, success, aborted, is_auto, is_optional;
+	qboolean active, done, success, aborted, is_auto, is_optional, is_skybox;
 	char filename[MAX_OSPATH];
 	char tmp_path[MAX_OSPATH];
 	char error[128];
@@ -5367,6 +5098,7 @@ void CL_AsyncDownload_Frame(void)
 	aborted = async_download.aborted;
 	is_auto = async_download.is_auto;
 	is_optional = async_download.is_optional;
+	is_skybox = async_download.is_skybox;
 	received = async_download.received;
 	total = async_download.total;
 	file_size = async_download.file_size;
@@ -5432,6 +5164,9 @@ void CL_AsyncDownload_Frame(void)
 			Con_Printf("Download cancelled: %s\n", COM_SkipPath(filename));
 		// auto-downloads probe optional files; a 404 just means the mirror
 		// doesn't have it, which is expected and shouldn't spam the console
+		else if (is_skybox)
+			Con_DPrintf("Skybox face download failed: %s (%s)\n", filename,
+				error[0] ? error : "not found");
 		else if ((is_auto && (download_result == WEB_DOWNLOAD_RESULT_NOT_FOUND || CL_DownloadNameIsLoc(filename))) ||
 			(is_optional && download_result == WEB_DOWNLOAD_RESULT_NOT_FOUND))
 			Con_DPrintf("Download failed: %s (%s)\n", filename, error[0] ? error : "not found");
@@ -5470,6 +5205,10 @@ void CL_AsyncDownload_Frame(void)
 	cls.download.current[0] = '\0';
 	cls.download.percent = success ? 100.0f : -1.0f;
 	async_download_last_progress_print = 0.0;
+
+	if (is_skybox)
+		Sky_AsyncDownload_Complete(filename, source_url, success, aborted,
+			download_result);
 
 	if (manual_map_companions.active)
 	{
@@ -5537,11 +5276,13 @@ static void CL_AsyncDownload_Stop(qboolean destroy_mutex)
 void CL_AsyncDownload_Cancel(void)
 {
 	CL_AsyncDownload_Stop(false);
+	Sky_AsyncDownload_Cancel();
 }
 
 void CL_AsyncDownload_Shutdown(void)
 {
 	CL_AsyncDownload_Stop(true);
+	Sky_AsyncDownload_Cancel();
 	CL_WebDownloadChecks_Shutdown();
 }
 
@@ -5687,7 +5428,7 @@ void CL_StopDownload_f(void)
 		CL_OptionalDownloadCache_RecordServerMissing(cls.download.current);
 	}
 
-	if (!curl_download_active) // woods, add support for stopping curl downloads #webdl
+	if (!curl_download_active)
 	{
 		if (cls.download.chunked)
 		{
@@ -5700,12 +5441,9 @@ void CL_StopDownload_f(void)
 			cls.download.file = NULL;
 			unlink(cls.download.temp);
 			DL_FreeBlocks();
-
-			//		Con_SafePrintf("Download cancelled\n", cl.download_current, cl.download_size);
 		}
 		cls.download.active = false;
 		cls.download.chunked = false;
-
 	}
 	else
 		stop_curl_download = true;
@@ -6222,8 +5960,6 @@ try_external_ent:
 }
 
 extern qboolean Sky_DownloadsDisabled(void);
-extern qboolean Sky_DownloadSkybox(const char* name);
-extern void Sky_WarnMissingSkybox(const char* name);
 extern int Sky_AddMapSkyboxChoices(char choices[][MAX_QPATH], int count, int maxchoices, const char *value); // gl_sky.c, shared parse/dedupe
 
 //download+load models and sounds as needed, once complete let the server know we're ready for the next stage.
@@ -6272,35 +6008,32 @@ qboolean CL_CheckDownloads(void)
 		&& cl.model_name[1][0]                    /* we know the BSP path  */
 		&& COM_FileExists(cl.model_name[1], NULL)) /* BSP already here      */
 	{
-		char skylist[1024] = { 0 };
+		if (Sky_AsyncDownload_IsActive())
+			return false;
 
-		if (Sky_PeekSkyKeyFromBSP(cl.model_name[1], skylist, sizeof(skylist))
-			&& skylist[0]
-			&& !Sky_DownloadsDisabled())
+		if (!Sky_AsyncDownload_Finished())
 		{
-			/* worldspawn may list several skyboxes (random sky feature in
-			   gl_sky.c). Parse with the same dedupe/cap helper the render path
-			   uses, then download each unique one so the random pick always has a
-			   complete local set. Sky_DownloadSkybox no-ops on skyboxes already
-			   fully present. */
-			/* size >= MAX_MAP_SKYBOX_CHOICES in gl_sky.c so we pre-fetch every
-			   choice the render path might pick; helper caps at the size we pass */
-			char skychoices[16][MAX_QPATH];
-			int  skycount = Sky_AddMapSkyboxChoices(skychoices, 0,
-				(int)countof(skychoices), skylist);
+			char skylist[1024] = { 0 };
 
-			for (i = 0; i < skycount; i++)
+			if (Sky_PeekSkyKeyFromBSP(cl.model_name[1], skylist, sizeof(skylist))
+				&& skylist[0]
+				&& !Sky_DownloadsDisabled())
 			{
-				/* Only try if any face is missing; Sky_DownloadSkybox itself
-				   skips mirrors that aren't in user/repo/branch form */
-				if (!Sky_DownloadSkybox(skychoices[i]))
-					Sky_WarnMissingSkybox(skychoices[i]);
-				/* on failure we still fall through – we tried once */
+				/* The coordinator preserves the old face/mirror/extension order,
+				 * but each individual transfer runs on the existing SDL worker. */
+				char skychoices[16][MAX_QPATH];
+				int skycount = Sky_AddMapSkyboxChoices(skychoices, 0,
+					(int)countof(skychoices), skylist);
+
+				if (Sky_AsyncDownload_Start(skychoices, skycount) &&
+					Sky_AsyncDownload_IsActive())
+					return false;
+				Sky_AsyncDownload_Finished();
 			}
 		}
 
-		cl.skybox_download++;      /* always advance so we never loop */
-		return false;              /* block exactly like .loc stage   */
+		cl.skybox_download++;      /* advance after the coordinator drains */
+		return false;
 	}
 
 	if (cl.model_download < cl.model_count || cl.sound_download < cl.sound_count)
