@@ -26819,7 +26819,7 @@ static void M_Shortcuts_Init(void)
 	M_Shortcuts_AddShortcut("Toggle fullscreen", KEY_ALT_MODIFIER_NAME "+Enter");
 	M_Shortcuts_AddShortcut("Show command history", "Ctrl+H");
 #endif
-	M_Shortcuts_AddShortcut("Cancel active download or port probe", KEY_SHORTCUT_MODIFIER_NAME "+.");
+	M_Shortcuts_AddShortcut("Cancel active download, port probe, or connection", KEY_SHORTCUT_MODIFIER_NAME "+.");
 	M_Shortcuts_AddShortcut("Paste clipboard file", KEY_SHORTCUT_MODIFIER_NAME "+V");
 	M_Shortcuts_AddShortcut("Mute or unmute sound", KEY_SHORTCUT_MODIFIER_NAME "+M");
 	M_Shortcuts_AddShortcut("Increase UI scale", KEY_SHORTCUT_MODIFIER_NAME "+Shift+Wheel Up");

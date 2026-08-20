@@ -538,12 +538,12 @@ static void CL_FinalizeConnection(struct qsocket_s *netcon, const char *host)
 	}
 }
 
-static void CL_CancelConnectInternal(qboolean clear_return_state)
+static qboolean CL_CancelConnectInternal(qboolean clear_return_state)
 {
 	qboolean was_pending;
 
 	if (!cl_pending_connect.active && !NET_DatagramConnectPending())
-		return;
+		return false;
 
 	was_pending = cl_pending_connect.active || NET_DatagramConnectPending();
 	NET_DatagramConnectCancel();
@@ -555,11 +555,13 @@ static void CL_CancelConnectInternal(qboolean clear_return_state)
 
 	if (clear_return_state)
 		CL_ClearConnectReturnState();
+
+	return true;
 }
 
-void CL_CancelConnect(void)
+qboolean CL_CancelConnect(void)
 {
-	CL_CancelConnectInternal(true);
+	return CL_CancelConnectInternal(true);
 }
 
 qboolean CL_CancelPortPingProbe(void)
@@ -5658,6 +5660,21 @@ cleanup:
 	cls.download.active = false;
 	cls.download.chunked = false;
 }
+qboolean CL_CancelActiveDownload(void)
+{
+	if (curl_download_active)
+	{
+		stop_curl_download = true;
+		return true;
+	}
+
+	if (!cls.download.active && !CL_AsyncDownload_IsActive())
+		return false;
+
+	Cbuf_AddText("stopdownload\n");
+	return true;
+}
+
 //sent by the server (or issued by the user) to stop the current download for any reason.
 void CL_StopDownload_f(void)
 {

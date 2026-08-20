@@ -1547,7 +1547,7 @@ static NSImage *QSSHostAppIcon(void)
     [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Toggle fullscreen", @"Option+Enter")];
     [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Minimize from fullscreen", @"Cmd+Tab")];
     [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Show command history", @"Cmd+Y")];
-    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Cancel active download or port probe", @"Cmd+.")];
+    [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Cancel active download, port probe, or connection", @"Cmd+.")];
     [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Paste clipboard file", @"Cmd+V")];
     [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Mute or unmute sound", @"Cmd+M")];
     [rows addObject:QSSKeyboardShortcutItem(@"App and System", @"Increase UI scale", @"Cmd+Shift+Wheel Up")];

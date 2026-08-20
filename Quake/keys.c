@@ -3316,14 +3316,17 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 
 	if (down && key == '.' && Key_IsShortcutModifierDown()) // woods #shortcuts #stopdownload
 	{
-		if (cls.download.active)
-		{
-			Cbuf_AddText("stopdownload\n");
+		if (CL_CancelActiveDownload())
 			return;
-		}
 
 		if (CL_CancelPortPingProbe())
 			return;
+
+		if (CL_CancelConnect())
+		{
+			Con_Printf("Connection attempt cancelled\n");
+			return;
+		}
 	}
 
 #if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods #shortcuts
