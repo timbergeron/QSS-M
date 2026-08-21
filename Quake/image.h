@@ -38,6 +38,9 @@ byte *Image_LoadImage (const char *name, int *width, int *height, enum srcformat
 qboolean Image_WriteTGA (const char *name, byte *data, int width, int height, int bpp, qboolean upsidedown);
 qboolean Image_WritePNG (const char *name, byte *data, int width, int height, int bpp, qboolean upsidedown);
 qboolean Image_WriteJPG (const char *name, byte *data, int width, int height, int bpp, int quality, qboolean upsidedown);
+qboolean Image_WriteTGA_OSPath (const char *path, byte *data, int width, int height, int bpp, qboolean upsidedown);
+qboolean Image_WritePNG_OSPath (const char *path, byte *data, int width, int height, int bpp, qboolean upsidedown, char *error_text, size_t error_text_size);
+qboolean Image_WriteJPG_OSPath (const char *path, byte *data, int width, int height, int bpp, int quality, qboolean upsidedown);
 qboolean Image_WriteLMP (const char *name, byte *data, int width, int height);
 
 #endif	/* GL_IMAGE_H */

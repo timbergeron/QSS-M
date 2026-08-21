@@ -217,6 +217,8 @@ static qboolean scr_quitfade_running = false;
 int	scr_tileclear_updates = 0; //johnfitz
 
 void SCR_ScreenShot_f (void);
+static void SCR_ScreenshotInit (void);
+static void SCR_ScreenshotConsumeCompleted (void);
 void TP_DrawClosestLocText(void); // woods #locext
 
 /*
@@ -1256,6 +1258,7 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&cl_menucrosshair); // woods #menucrosshair
 	Cmd_AddCommand ("scr_autoscale",SCR_AutoScale_f);
 
+	SCR_ScreenshotInit ();
 	Cmd_AddCommand ("screenshot",SCR_ScreenShot_f);
 	Cmd_AddCommand ("sizeup",SCR_SizeUp_f);
 	Cmd_AddCommand ("sizedown",SCR_SizeDown_f);
@@ -6419,95 +6422,42 @@ SCREEN SHOTS
 // woods #screenshotcopy from fitzquake markvr9
 //======================================================
 
-#if defined(_WIN32)
-static void FlipBuffer(byte* buffer, const int columns, const int rows, const int BytesPerPixel)	// Flip the image because of GL's up = positive-y
+#if defined(_WIN32) || defined(__APPLE__)
+static void SCR_ScreenShot_Clipboard_RGB (const byte *rgb, int width, int height)
 {
-	int		bufsize = columns * BytesPerPixel; // bufsize=widthBytes;
+	byte *bgra;
+	size_t buffersize;
+	int x, y;
 
-	byte* tb1 = malloc(bufsize);
-	byte* tb2 = malloc(bufsize);
-	int		i, offset1, offset2;
-
-	for (i = 0; i < (rows + 1) / 2;i++)
-	{
-		offset1 = i * bufsize;
-		offset2 = ((rows - 1) - i) * bufsize;
-
-		memcpy(tb1, buffer + offset1, bufsize);
-		memcpy(tb2, buffer + offset2, bufsize);
-		memcpy(buffer + offset1, tb2, bufsize);
-		memcpy(buffer + offset2, tb1, bufsize);
-	}
-
-	free(tb1);
-	free(tb2);
-	return;
-}
-
-void SCR_ScreenShot_Clipboard_f(void)
-{
-	int		buffersize = glwidth * glheight * 4; // 4 bytes per pixel
-	byte* buffer = malloc(buffersize);
-
-	//get data
-	glReadPixels(glx, gly, glwidth, glheight, GL_BGRA_EXT, GL_UNSIGNED_BYTE, buffer);
-	VID_Gamma_ApplyToBuffer(buffer, (size_t)glwidth * (size_t)glheight, 4);
-
-	// We are upside down flip it
-	FlipBuffer(buffer, glwidth, glheight, 4 /* bytes per pixel */);
-
-	// FIXME: No gamma correction of screenshots in Fitz?
-	Sys_Image_BGRA_To_Clipboard(buffer, glwidth, glheight, buffersize);
-
-	//Con_Printf("\nscreenshot copied to clipboard\n");
-
-	free(buffer);
-}
-#endif
-
-#ifdef __APPLE__
-static void FlipBuffer(byte* buffer, const int columns, const int rows, const int BytesPerPixel) {
-	int bufsize = columns * BytesPerPixel;
-	byte* temp = malloc(bufsize);
-	if (!temp) return;  // Handle allocation failure
-
-	for (int i = 0; i < rows / 2; i++) {
-		byte* row1 = buffer + i * bufsize;
-		byte* row2 = buffer + (rows - 1 - i) * bufsize;
-
-		memcpy(temp, row1, bufsize);
-		memcpy(row1, row2, bufsize);
-		memcpy(row2, temp, bufsize);
-	}
-
-	free(temp);
-}
-
-void SCR_ScreenShot_Clipboard_f(void) {
-	int width = glwidth;    // Replace with your OpenGL viewport width
-	int height = glheight;  // Replace with your OpenGL viewport height
-	int buffersize = width * height * 4; // 4 bytes per pixel
-
-	byte* buffer = malloc(buffersize);
-	if (!buffer) {
-		// Handle allocation failure
-		fprintf(stderr, "Failed to allocate memory for screenshot buffer.\n");
+	if (!rgb || width <= 0 || height <= 0 ||
+		(size_t)width > (size_t)-1 / (size_t)height / 4)
 		return;
+	buffersize = (size_t)width * (size_t)height * 4;
+	if (buffersize > (size_t)INT_MAX)
+		return;
+
+	bgra = (byte *)malloc (buffersize);
+	if (!bgra)
+		return;
+
+	/* GL_RGB is bottom-up. Convert and flip it into the clipboard's BGRA layout
+	   in one pass instead of reading the framebuffer a second time. */
+	for (y = 0; y < height; y++)
+	{
+		const byte *src = rgb + (size_t)(height - 1 - y) * (size_t)width * 3;
+		byte *dst = bgra + (size_t)y * (size_t)width * 4;
+
+		for (x = 0; x < width; x++, src += 3, dst += 4)
+		{
+			dst[0] = src[2];
+			dst[1] = src[1];
+			dst[2] = src[0];
+			dst[3] = 255;
+		}
 	}
 
-	// Get data from OpenGL buffer
-	glReadPixels(glx, gly, width, height, GL_BGRA, GL_UNSIGNED_BYTE, buffer);
-	VID_Gamma_ApplyToBuffer(buffer, (size_t)width * (size_t)height, 4);
-
-	// Flip the image vertically
-	FlipBuffer(buffer, width, height, 4 /* bytes per pixel */);
-
-	// Copy the image buffer to the clipboard
-	Sys_Image_BGRA_To_Clipboard(buffer, width, height, buffersize);
-
-	//Con_Printf("\nscreenshot copied to clipboard\n");
-
-	free(buffer);
+	Sys_Image_BGRA_To_Clipboard (bgra, width, height, (int)buffersize);
+	free (bgra);
 }
 #endif
 
@@ -6519,6 +6469,302 @@ static void SCR_ScreenShot_Usage (void)
 	return;
 }
 
+#define SCR_SCREENSHOT_MAX_OUTSTANDING 2
+
+typedef enum
+{
+	SCR_SCREENSHOT_PNG,
+	SCR_SCREENSHOT_TGA,
+	SCR_SCREENSHOT_JPG
+} scr_screenshot_format_t;
+
+typedef struct scr_screenshot_job_s
+{
+	struct scr_screenshot_job_s *next;
+	byte *pixels;
+	int width;
+	int height;
+	int quality;
+	scr_screenshot_format_t format;
+	qboolean ok;
+	qboolean filtered;
+	char error[128];
+	char name[MAX_OSPATH];
+	char path[MAX_OSPATH];
+	char filtered_path[MAX_OSPATH];
+} scr_screenshot_job_t;
+
+static SDL_Thread *scr_screenshot_thread;
+static SDL_mutex *scr_screenshot_mutex;
+static SDL_cond *scr_screenshot_condition;
+static scr_screenshot_job_t *scr_screenshot_pending_head;
+static scr_screenshot_job_t *scr_screenshot_pending_tail;
+static scr_screenshot_job_t *scr_screenshot_completed_head;
+static scr_screenshot_job_t *scr_screenshot_completed_tail;
+static int scr_screenshot_outstanding;
+static qboolean scr_screenshot_shutdown;
+static char scr_screenshot_last_stamp[24];
+static unsigned int scr_screenshot_stamp_sequence;
+
+static qboolean SCR_ScreenshotWrite (scr_screenshot_job_t *job)
+{
+	switch (job->format)
+	{
+	case SCR_SCREENSHOT_PNG:
+		return Image_WritePNG_OSPath (job->path, job->pixels, job->width,
+			job->height, 24, false, job->error, sizeof(job->error));
+	case SCR_SCREENSHOT_TGA:
+		return Image_WriteTGA_OSPath (job->path, job->pixels, job->width,
+			job->height, 24, false);
+	case SCR_SCREENSHOT_JPG:
+		return Image_WriteJPG_OSPath (job->path, job->pixels, job->width,
+			job->height, 24, job->quality, false);
+	default:
+		return false;
+	}
+}
+
+static int SCR_ScreenshotWorker (void *unused)
+{
+	(void)unused;
+
+	for (;;)
+	{
+		scr_screenshot_job_t *job;
+
+		SDL_LockMutex (scr_screenshot_mutex);
+		while (!scr_screenshot_pending_head && !scr_screenshot_shutdown)
+			SDL_CondWait (scr_screenshot_condition, scr_screenshot_mutex);
+		if (!scr_screenshot_pending_head && scr_screenshot_shutdown)
+		{
+			SDL_UnlockMutex (scr_screenshot_mutex);
+			break;
+		}
+
+		job = scr_screenshot_pending_head;
+		scr_screenshot_pending_head = job->next;
+		if (!scr_screenshot_pending_head)
+			scr_screenshot_pending_tail = NULL;
+		job->next = NULL;
+		SDL_UnlockMutex (scr_screenshot_mutex);
+
+		job->ok = SCR_ScreenshotWrite (job);
+		free (job->pixels);
+		job->pixels = NULL;
+
+		SDL_LockMutex (scr_screenshot_mutex);
+		if (scr_screenshot_completed_tail)
+			scr_screenshot_completed_tail->next = job;
+		else
+			scr_screenshot_completed_head = job;
+		scr_screenshot_completed_tail = job;
+		SDL_UnlockMutex (scr_screenshot_mutex);
+	}
+
+	return 0;
+}
+
+static void SCR_ScreenshotInit (void)
+{
+	if (scr_screenshot_mutex)
+		return;
+
+	scr_screenshot_mutex = SDL_CreateMutex ();
+	scr_screenshot_condition = SDL_CreateCond ();
+	if (!scr_screenshot_mutex || !scr_screenshot_condition)
+		goto fail;
+
+	scr_screenshot_shutdown = false;
+	scr_screenshot_thread = SDL_CreateThread (SCR_ScreenshotWorker,
+		"Screenshot", NULL);
+	if (!scr_screenshot_thread)
+		goto fail;
+	return;
+
+fail:
+	Con_DPrintf ("Unable to start screenshot worker: %s\n", SDL_GetError ());
+	if (scr_screenshot_condition)
+		SDL_DestroyCond (scr_screenshot_condition);
+	if (scr_screenshot_mutex)
+		SDL_DestroyMutex (scr_screenshot_mutex);
+	scr_screenshot_condition = NULL;
+	scr_screenshot_mutex = NULL;
+	scr_screenshot_thread = NULL;
+}
+
+static void SCR_ScreenshotReport (scr_screenshot_job_t *job)
+{
+	if (job->ok)
+	{
+		Con_SafePrintf ("Wrote ");
+		Con_LinkPrintf (job->path, "%s",
+			job->filtered ? job->filtered_path : job->path);
+		Con_SafePrintf ("\n");
+	}
+	else
+		Con_SafePrintf ("SCR_ScreenShot_f: Couldn't create %s%s%s\n",
+			job->name, job->error[0] ? ": " : "", job->error);
+}
+
+static void SCR_ScreenshotSound (void)
+{
+	const char *sound_file = COM_FileExists ("sound/qssm/copy.wav", NULL) ?
+		"qssm/copy.wav" : "player/tornoff2.wav";
+
+	S_LocalSound (sound_file);
+}
+
+static void SCR_ScreenshotConsumeCompleted (void)
+{
+	scr_screenshot_job_t *jobs;
+	scr_screenshot_job_t *job;
+	int completed = 0;
+
+	if (!scr_screenshot_mutex)
+		return;
+
+	SDL_LockMutex (scr_screenshot_mutex);
+	jobs = scr_screenshot_completed_head;
+	scr_screenshot_completed_head = NULL;
+	scr_screenshot_completed_tail = NULL;
+	for (job = jobs; job; job = job->next)
+		completed++;
+	scr_screenshot_outstanding -= completed;
+	SDL_UnlockMutex (scr_screenshot_mutex);
+
+	while (jobs)
+	{
+		job = jobs;
+		jobs = jobs->next;
+		SCR_ScreenshotReport (job);
+		free (job);
+	}
+}
+
+static qboolean SCR_ScreenshotCanQueue (void)
+{
+	qboolean can_queue;
+
+	if (!scr_screenshot_mutex || !scr_screenshot_thread)
+		return true;
+
+	SDL_LockMutex (scr_screenshot_mutex);
+	can_queue = !scr_screenshot_shutdown &&
+		scr_screenshot_outstanding < SCR_SCREENSHOT_MAX_OUTSTANDING;
+	SDL_UnlockMutex (scr_screenshot_mutex);
+	return can_queue;
+}
+
+static qboolean SCR_ScreenshotQueue (scr_screenshot_job_t *job)
+{
+	if (!scr_screenshot_mutex || !scr_screenshot_thread)
+		return false;
+
+	SDL_LockMutex (scr_screenshot_mutex);
+	if (scr_screenshot_shutdown ||
+		scr_screenshot_outstanding >= SCR_SCREENSHOT_MAX_OUTSTANDING)
+	{
+		SDL_UnlockMutex (scr_screenshot_mutex);
+		return false;
+	}
+
+	job->next = NULL;
+	if (scr_screenshot_pending_tail)
+		scr_screenshot_pending_tail->next = job;
+	else
+		scr_screenshot_pending_head = job;
+	scr_screenshot_pending_tail = job;
+	scr_screenshot_outstanding++;
+	SDL_CondSignal (scr_screenshot_condition);
+	SDL_UnlockMutex (scr_screenshot_mutex);
+	return true;
+}
+
+void SCR_Shutdown (void)
+{
+	if (!scr_screenshot_mutex)
+		return;
+
+	SDL_LockMutex (scr_screenshot_mutex);
+	scr_screenshot_shutdown = true;
+	SDL_CondSignal (scr_screenshot_condition);
+	SDL_UnlockMutex (scr_screenshot_mutex);
+
+	if (scr_screenshot_thread)
+		SDL_WaitThread (scr_screenshot_thread, NULL);
+	scr_screenshot_thread = NULL;
+	SCR_ScreenshotConsumeCompleted ();
+
+	SDL_DestroyCond (scr_screenshot_condition);
+	SDL_DestroyMutex (scr_screenshot_mutex);
+	scr_screenshot_condition = NULL;
+	scr_screenshot_mutex = NULL;
+	scr_screenshot_pending_head = NULL;
+	scr_screenshot_pending_tail = NULL;
+	scr_screenshot_completed_head = NULL;
+	scr_screenshot_completed_tail = NULL;
+	scr_screenshot_outstanding = 0;
+	scr_screenshot_last_stamp[0] = '\0';
+	scr_screenshot_stamp_sequence = 0;
+}
+
+static qboolean SCR_ScreenshotBuildName (const char *stamp, const char *ext,
+	char *name, size_t namesize, char *path, size_t pathsize)
+{
+	unsigned int sequence;
+
+	if (strcmp (stamp, scr_screenshot_last_stamp))
+	{
+		q_strlcpy (scr_screenshot_last_stamp, stamp,
+			sizeof(scr_screenshot_last_stamp));
+		scr_screenshot_stamp_sequence = 1;
+	}
+	else if (scr_screenshot_stamp_sequence < 10000)
+		scr_screenshot_stamp_sequence++;
+	else
+		return false;
+
+	sequence = scr_screenshot_stamp_sequence;
+	for (; sequence < 10000; sequence++)
+	{
+		int name_length;
+		int path_length;
+
+		if (cl.mapname[0] == '\0' || cls.state == ca_disconnected)
+		{
+			if (sequence == 1)
+				name_length = q_snprintf (name, namesize,
+					"screenshots/qssm_%s.%s", stamp, ext);
+			else
+				name_length = q_snprintf (name, namesize,
+					"screenshots/qssm_%s_%u.%s", stamp, sequence, ext);
+		}
+		else
+		{
+			if (sequence == 1)
+				name_length = q_snprintf (name, namesize,
+					"screenshots/qssm_%s_%s.%s", cl.mapname, stamp, ext);
+			else
+				name_length = q_snprintf (name, namesize,
+					"screenshots/qssm_%s_%s_%u.%s", cl.mapname, stamp,
+					sequence, ext);
+		}
+		if (name_length < 0 || (size_t)name_length >= namesize)
+			return false;
+
+		path_length = q_snprintf (path, pathsize, "%s/%s", com_gamedir, name);
+		if (path_length < 0 || (size_t)path_length >= pathsize)
+			return false;
+		if (Sys_FileType (path) == FS_ENT_NONE)
+		{
+			scr_screenshot_stamp_sequence = sequence;
+			return true;
+		}
+	}
+
+	return false;
+}
+
 /*
 ==================
 SCR_ScreenShot_f -- johnfitz -- rewritten to use Image_WriteTGA
@@ -6526,34 +6772,28 @@ SCR_ScreenShot_f -- johnfitz -- rewritten to use Image_WriteTGA
 */
 void SCR_ScreenShot_f (void)
 {
-	byte	*buffer;
+	scr_screenshot_job_t *job;
 	char	ext[4];
-	char	imagename[MAX_OSPATH];  //johnfitz -- was [80] // woods #screenshots was 16
 	char	checkname[MAX_OSPATH];
 	int	quality;
-	qboolean	ok;
+	int	path_length;
 	qboolean	blocked_sound;
+	size_t	buffer_size;
 
 	// woods added time for demo output // woods #screenshots
 	char str[24];
 	time_t systime = time(0);
-	struct tm loct = *localtime(&systime);
+	struct tm *local_time = localtime(&systime);
 
-	strftime(str, 24, "%m-%d-%Y-%H%M%S", &loct); // time and date support
-
-	q_snprintf(checkname, sizeof(checkname), "%s/screenshots", com_gamedir); // woods #screenshots
-	Sys_mkdir(com_gamedir); //  woods create gamedir if not there #screenshots
-	Sys_mkdir(checkname); //  woods create screenshots if not there #screenshots
-	
+	SCR_ScreenshotConsumeCompleted ();
 	Q_strncpy (ext, "png", sizeof(ext));
-
 	if (Cmd_Argc () >= 2)
 	{
-		const char	*requested_ext = Cmd_Argv (1);
+		const char *requested_ext = Cmd_Argv (1);
 
-		if (!q_strcasecmp ("png", requested_ext)
-		    || !q_strcasecmp ("tga", requested_ext)
-		    || !q_strcasecmp ("jpg", requested_ext))
+		if (!q_strcasecmp ("png", requested_ext) ||
+			!q_strcasecmp ("tga", requested_ext) ||
+			!q_strcasecmp ("jpg", requested_ext))
 			Q_strncpy (ext, requested_ext, sizeof(ext));
 		else
 		{
@@ -6562,7 +6802,6 @@ void SCR_ScreenShot_f (void)
 		}
 	}
 
-// read quality as the 3rd param (only used for JPG)
 	quality = 90;
 	if (Cmd_Argc () >= 3)
 		quality = Q_atoi (Cmd_Argv(2));
@@ -6571,66 +6810,97 @@ void SCR_ScreenShot_f (void)
 		SCR_ScreenShot_Usage ();
 		return;
 	}
-	
-	if (cl.mapname[0] == '\0' || cls.state == ca_disconnected)
-		q_snprintf(imagename, sizeof(imagename), "screenshots/qssm_%s.%s", str, ext); // woods #screenshots time and date support
-	else
-		q_snprintf(imagename, sizeof(imagename), "screenshots/qssm_%s_%s.%s", cl.mapname, str, ext);
 
-	q_snprintf(checkname, sizeof(checkname), "%s/%s", com_gamedir, imagename);
+	if (!SCR_ScreenshotCanQueue ())
+	{
+		Con_Printf ("Screenshot queue is busy; try again shortly.\n");
+		return;
+	}
+
+	if (local_time)
+		strftime(str, sizeof(str), "%m-%d-%Y-%H%M%S", local_time);
+	else
+		q_snprintf(str, sizeof(str), "unknown-%u", (unsigned int)SDL_GetTicks());
+
+	path_length = q_snprintf(checkname, sizeof(checkname), "%s/screenshots",
+		com_gamedir); // woods #screenshots
+	if (path_length < 0 || (size_t)path_length >= sizeof(checkname))
+	{
+		Con_Printf ("SCR_ScreenShot_f: Screenshot path is too long\n");
+		return;
+	}
+	Sys_mkdir(com_gamedir); //  woods create gamedir if not there #screenshots
+	Sys_mkdir(checkname); //  woods create screenshots if not there #screenshots
 
 //get data
-	if (!(buffer = (byte *) malloc(glwidth*glheight*3)))
+	if (glwidth <= 0 || glheight <= 0 ||
+		(size_t)glwidth > (size_t)-1 / (size_t)glheight / 3)
 	{
+		Con_Printf ("SCR_ScreenShot_f: Invalid screenshot dimensions\n");
+		return;
+	}
+	buffer_size = (size_t)glwidth * (size_t)glheight * 3;
+	job = (scr_screenshot_job_t *)calloc (1, sizeof(*job));
+	if (!job || !(job->pixels = (byte *)malloc (buffer_size)))
+	{
+		free (job);
 		Con_Printf ("SCR_ScreenShot_f: Couldn't allocate memory\n");
 		return;
+	}
+
+	if (!SCR_ScreenshotBuildName (str, ext, job->name, sizeof(job->name),
+		job->path, sizeof(job->path)))
+	{
+		free (job->pixels);
+		free (job);
+		Con_Printf ("SCR_ScreenShot_f: Couldn't choose a screenshot filename\n");
+		return;
+	}
+	job->width = glwidth;
+	job->height = glheight;
+	job->quality = quality;
+	job->filtered = cl_contentfilter.value != 0;
+	if (!q_strcasecmp (ext, "png"))
+		job->format = SCR_SCREENSHOT_PNG;
+	else if (!q_strcasecmp (ext, "tga"))
+		job->format = SCR_SCREENSHOT_TGA;
+	else
+		job->format = SCR_SCREENSHOT_JPG;
+	if (job->filtered)
+	{
+		path_length = q_snprintf (job->filtered_path,
+			sizeof(job->filtered_path),
+			"%s/screenshots/%s", COM_SkipPath(com_gamedir),
+			COM_SkipPath(job->name));
+		if (path_length < 0 ||
+			(size_t)path_length >= sizeof(job->filtered_path))
+			job->filtered = false;
 	}
 
 	blocked_sound = S_BlockSound ();
 
 	glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
-	glReadPixels (glx, gly, glwidth, glheight, GL_RGB, GL_UNSIGNED_BYTE, buffer);
-	VID_Gamma_ApplyToBuffer(buffer, (size_t)glwidth * (size_t)glheight, 3);
-
-// now write the file
-	if (!q_strncasecmp (ext, "png", sizeof(ext)))
-		ok = Image_WritePNG (imagename, buffer, glwidth, glheight, 24, false);
-	else if (!q_strncasecmp (ext, "tga", sizeof(ext)))
-		ok = Image_WriteTGA (imagename, buffer, glwidth, glheight, 24, false);
-	else if (!q_strncasecmp (ext, "jpg", sizeof(ext)))
-		ok = Image_WriteJPG (imagename, buffer, glwidth, glheight, 24, quality, false);
-	else
-		ok = false;
+	glReadPixels (glx, gly, glwidth, glheight, GL_RGB, GL_UNSIGNED_BYTE,
+		job->pixels);
+	VID_Gamma_ApplyToBuffer(job->pixels, (size_t)glwidth * (size_t)glheight, 3);
 
 #if defined(_WIN32) || defined(__APPLE__)
-	SCR_ScreenShot_Clipboard_f();	// woods #screenshotcopy
+	SCR_ScreenShot_Clipboard_RGB (job->pixels, job->width, job->height);
 #endif
 
 	if (blocked_sound)
 		S_UnblockSound ();
+	SCR_ScreenshotSound ();
 
-	if (ok)
-	{ 
-		Con_SafePrintf("Wrote ");
-		if (cl_contentfilter.value) // woods #contentfilter
-		{
-			char filtered_path[MAX_OSPATH];
-			const char* gamedir_name = COM_SkipPath(com_gamedir);
-			q_snprintf(filtered_path, sizeof(filtered_path), "%s/screenshots/%s",
-				gamedir_name, COM_SkipPath(imagename));
-			Con_LinkPrintf(checkname, "%s", filtered_path);
-		}
-		else
-			Con_LinkPrintf(checkname, "%s", checkname);
-		Con_SafePrintf("\n");
+	if (SCR_ScreenshotQueue (job))
+		return;
 
-		const char* soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-		S_LocalSound(soundFile); // woods add sound to screenshot
-	}
-	else
-		Con_Printf ("SCR_ScreenShot_f: Couldn't create %s\n", imagename);
-
-	free (buffer);
+	/* Preserve screenshots if SDL threading is unavailable. */
+	job->ok = SCR_ScreenshotWrite (job);
+	free (job->pixels);
+	job->pixels = NULL;
+	SCR_ScreenshotReport (job);
+	free (job);
 }
 
 
@@ -7979,6 +8249,7 @@ needs almost the entire 256k of stack space!
 */
 void SCR_UpdateScreen (void)
 {
+	SCR_ScreenshotConsumeCompleted ();
 	Sbar_ScoreboardFrame ();
 	vid.numpages = (gl_triplebuffer.value) ? 3 : 2;
 

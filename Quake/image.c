@@ -25,12 +25,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
+#define STBI_WRITE_NO_STDIO
 #include "stb_image_write.h"
 
 #define LODEPNG_NO_COMPILE_DECODER
 #define LODEPNG_NO_COMPILE_CPP
 #define LODEPNG_NO_COMPILE_ANCILLARY_CHUNKS
-#define LODEPNG_NO_COMPILE_ERROR_TEXT
 #include "lodepng.h"
 #include "lodepng.c"
 
@@ -674,14 +674,31 @@ TODO: support BGRA and BGR formats (since opengl can return them, and we don't h
 */
 qboolean Image_WriteTGA (const char *name, byte *data, int width, int height, int bpp, qboolean upsidedown)
 {
-	int		handle, i, size, temp, bytes;
 	char	pathname[MAX_OSPATH];
-	byte	header[TARGAHEADERSIZE];
 
 	Sys_mkdir (com_gamedir); //if we've switched to a nonexistant gamedir, create it now so we don't crash
 	q_snprintf (pathname, sizeof(pathname), "%s/%s", com_gamedir, name);
-	handle = Sys_FileOpenWrite (pathname);
-	if (handle == -1)
+	return Image_WriteTGA_OSPath (pathname, data, width, height, bpp, upsidedown);
+}
+
+qboolean Image_WriteTGA_OSPath (const char *path, byte *data, int width, int height, int bpp, qboolean upsidedown)
+{
+	FILE	*file;
+	size_t	i, size;
+	int		temp, bytes;
+	byte	header[TARGAHEADERSIZE];
+	qboolean ok;
+
+	if (!path || !data || width <= 0 || height <= 0 ||
+		width > 65535 || height > 65535 ||
+		!(bpp == 24 || bpp == 32))
+		return false;
+	bytes = bpp / 8;
+	if ((size_t)width > (size_t)-1 / (size_t)height / (size_t)bytes)
+		return false;
+
+	file = fopen (path, "wb");
+	if (!file)
 		return false;
 
 	Q_memset (header, 0, TARGAHEADERSIZE);
@@ -695,8 +712,7 @@ qboolean Image_WriteTGA (const char *name, byte *data, int width, int height, in
 		header[17] = 0x20; //upside-down attribute
 
 	// swap red and blue bytes
-	bytes = bpp/8;
-	size = width*height*bytes;
+	size = (size_t)width * (size_t)height * (size_t)bytes;
 	for (i=0; i<size; i+=bytes)
 	{
 		temp = data[i];
@@ -704,11 +720,14 @@ qboolean Image_WriteTGA (const char *name, byte *data, int width, int height, in
 		data[i+2] = temp;
 	}
 
-	Sys_FileWrite (handle, header, TARGAHEADERSIZE);
-	Sys_FileWrite (handle, data, size);
-	Sys_FileClose (handle);
+	ok = fwrite (header, 1, TARGAHEADERSIZE, file) == TARGAHEADERSIZE &&
+		fwrite (data, 1, size, file) == size;
+	if (fclose (file) != 0)
+		ok = false;
+	if (!ok)
+		remove (path);
 
-	return true;
+	return ok;
 }
 
 /*
@@ -1225,11 +1244,21 @@ qboolean Image_WriteLMP (const char *name, byte *data, int width, int height)
 
 static byte *CopyFlipped(const byte *data, int width, int height, int bpp)
 {
-	int	y, rowsize;
+	int	y;
+	int	bytes;
+	size_t	rowsize;
 	byte	*flipped;
 
-	rowsize = width * (bpp / 8);
-	flipped = (byte *) malloc(height * rowsize);
+	if (!data || width <= 0 || height <= 0 ||
+		!(bpp == 24 || bpp == 32))
+		return NULL;
+	bytes = bpp / 8;
+	if ((size_t)width > (size_t)-1 / (size_t)bytes)
+		return NULL;
+	rowsize = (size_t)width * (size_t)bytes;
+	if ((size_t)height > (size_t)-1 / rowsize)
+		return NULL;
+	flipped = (byte *) malloc((size_t)height * rowsize);
 	if (!flipped)
 		return NULL;
 
@@ -1238,6 +1267,34 @@ static byte *CopyFlipped(const byte *data, int width, int height, int bpp)
 		memcpy(&flipped[y * rowsize], &data[(height - 1 - y) * rowsize], rowsize);
 	}
 	return flipped;
+}
+
+typedef struct image_jpg_write_context_s
+{
+	FILE *file;
+	qboolean ok;
+} image_jpg_write_context_t;
+
+static void Image_JPGWriteCallback (void *opaque, void *data, int size)
+{
+	image_jpg_write_context_t *context = (image_jpg_write_context_t *)opaque;
+
+	if (!context->ok)
+		return;
+	if (size < 0)
+	{
+		context->ok = false;
+		return;
+	}
+	if (size > 0 && fwrite (data, 1, (size_t)size, context->file) != (size_t)size)
+		context->ok = false;
+}
+
+static void Image_SetWriteError (char *error_text, size_t error_text_size,
+	const char *message)
+{
+	if (error_text && error_text_size)
+		q_strlcpy (error_text, message, error_text_size);
 }
 
 /*
@@ -1249,18 +1306,26 @@ returns true if successful
 */
 qboolean Image_WriteJPG (const char *name, byte *data, int width, int height, int bpp, int quality, qboolean upsidedown)
 {
-	unsigned error;
 	char	pathname[MAX_OSPATH];
-	byte	*flipped;
-	int	bytes_per_pixel;
-
-	if (!(bpp == 32 || bpp == 24))
-		Sys_Error ("bpp not 24 or 32");
-
-	bytes_per_pixel = bpp / 8;
 
 	Sys_mkdir (com_gamedir); //if we've switched to a nonexistant gamedir, create it now so we don't crash
 	q_snprintf (pathname, sizeof(pathname), "%s/%s", com_gamedir, name);
+	return Image_WriteJPG_OSPath (pathname, data, width, height, bpp, quality, upsidedown);
+}
+
+qboolean Image_WriteJPG_OSPath (const char *path, byte *data, int width, int height, int bpp, int quality, qboolean upsidedown)
+{
+	image_jpg_write_context_t context;
+	byte	*flipped;
+	FILE	*file;
+	int	bytes_per_pixel;
+	qboolean encoded, ok;
+
+	if (!path || !data || width <= 0 || height <= 0 ||
+		!(bpp == 32 || bpp == 24) || quality < 1 || quality > 100)
+		return false;
+
+	bytes_per_pixel = bpp / 8;
 
 	if (!upsidedown)
 	{
@@ -1271,28 +1336,59 @@ qboolean Image_WriteJPG (const char *name, byte *data, int width, int height, in
 	else
 		flipped = data;
 
-	error = stbi_write_jpg (pathname, width, height, bytes_per_pixel, flipped, quality);
+	file = fopen (path, "wb");
+	if (!file)
+	{
+		if (!upsidedown)
+			free (flipped);
+		return false;
+	}
+
+	context.file = file;
+	context.ok = true;
+	encoded = stbi_write_jpg_to_func (Image_JPGWriteCallback, &context, width,
+		height, bytes_per_pixel, flipped, quality) != 0;
+	ok = encoded && context.ok && !ferror (file);
+	if (fclose (file) != 0)
+		ok = false;
 	if (!upsidedown)
 		free (flipped);
+	if (!ok)
+		remove (path);
 
-	return (error != 0);
+	return ok;
 }
 
 qboolean Image_WritePNG (const char *name, byte *data, int width, int height, int bpp, qboolean upsidedown)
 {
-	unsigned error;
 	char	pathname[MAX_OSPATH];
-	byte	*flipped;
-	unsigned char	*filters;
-	unsigned char	*png;
-	size_t		pngsize;
-	LodePNGState	state;
-
-	if (!(bpp == 32 || bpp == 24))
-		Sys_Error("bpp not 24 or 32");
 
 	Sys_mkdir (com_gamedir); //if we've switched to a nonexistant gamedir, create it now so we don't crash
 	q_snprintf (pathname, sizeof(pathname), "%s/%s", com_gamedir, name);
+	return Image_WritePNG_OSPath (pathname, data, width, height, bpp, upsidedown,
+		NULL, 0);
+}
+
+qboolean Image_WritePNG_OSPath (const char *path, byte *data, int width, int height,
+	int bpp, qboolean upsidedown, char *error_text, size_t error_text_size)
+{
+	unsigned error;
+	byte	*flipped;
+	unsigned char	*filters;
+	unsigned char	*png = NULL;
+	size_t		pngsize;
+	LodePNGState	state;
+	qboolean	saved = false;
+
+	if (error_text && error_text_size)
+		error_text[0] = '\0';
+	if (!path || !data || width <= 0 || height <= 0 ||
+		!(bpp == 32 || bpp == 24))
+	{
+		Image_SetWriteError (error_text, error_text_size,
+			"invalid image parameters");
+		return false;
+	}
 
 	flipped = (!upsidedown)? CopyFlipped (data, width, height, bpp) : data;
 	filters = (unsigned char *) malloc (height);
@@ -1301,6 +1397,7 @@ qboolean Image_WritePNG (const char *name, byte *data, int width, int height, in
 		if (!upsidedown)
 		  free (flipped);
 		free (filters);
+		Image_SetWriteError (error_text, error_text_size, "out of memory");
 		return false;
 	}
 
@@ -1325,10 +1422,24 @@ qboolean Image_WritePNG (const char *name, byte *data, int width, int height, in
 
 	error = lodepng_encode (&png, &pngsize, flipped, width, height, &state);
 	if (error == 0)
-		error = lodepng_save_file (png, pngsize, pathname);
-#ifdef LODEPNG_COMPILE_ERROR_TEXT
-	else Con_Printf("WritePNG: %s\n", lodepng_error_text (error));
-#endif
+	{
+		FILE *file = fopen (path, "wb");
+
+		if (file)
+		{
+			saved = fwrite (png, 1, pngsize, file) == pngsize;
+			if (fclose (file) != 0)
+				saved = false;
+			if (!saved)
+				remove (path);
+		}
+		if (!saved)
+			Image_SetWriteError (error_text, error_text_size,
+				"file write failed");
+	}
+	else
+		Image_SetWriteError (error_text, error_text_size,
+			lodepng_error_text (error));
 
 	lodepng_state_cleanup (&state);
 	lodepng_free (png); /* png was allocated by lodepng */
@@ -1337,5 +1448,5 @@ qboolean Image_WritePNG (const char *name, byte *data, int width, int height, in
 	  free (flipped);
 	}
 
-	return (error == 0);
+	return error == 0 && saved;
 }

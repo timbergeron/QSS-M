@@ -2779,6 +2779,7 @@ void Host_Shutdown(void)
 	scr_disabled_for_loading = true;
 	DiscordPresence_Shutdown();
 	Mapshot_Shutdown();
+	SCR_Shutdown();
 
 	QWatch_Shutdown();
 
