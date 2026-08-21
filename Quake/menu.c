@@ -128,6 +128,7 @@ void M_Menu_ModMenu_f (void);
 		void M_Menu_AudioBrowser_f (void);
 		void M_Menu_ColorPicker_f (void);
 		void M_Menu_Extras_f (void);
+		void M_Menu_Discord_f (void);
 		void M_Menu_Saving_f (void);
 		void M_Menu_Shortcuts_f (void);
 		void M_Menu_Version_f (void);
@@ -181,6 +182,7 @@ void M_ModMenu_Draw (void);
 		void M_AudioBrowser_Draw (void);
 		void M_ColorPicker_Draw (void);
 		void M_Extras_Draw (void);
+		void M_Discord_Draw (void);
 		void M_Saving_Draw (void);
 		void M_Shortcuts_Draw (void);
 		void M_Version_Draw (void);
@@ -239,6 +241,9 @@ void M_ModMenu_Key (int key);
 		void M_AudioBrowser_Key (int key);
 		void M_ColorPicker_Key (int key);
 		void M_Extras_Key (int key);
+		void M_Discord_Key (int key);
+		void M_Discord_Char (int key);
+		qboolean M_Discord_TextEntry (void);
 		void M_Saving_Key (int key);
 		void M_Shortcuts_Key (int key);
 		void M_Version_Key (int key);
@@ -300,6 +305,7 @@ void M_ModMenu_Key (int key);
 		void M_AudioBrowser_Mousemove(int cx, int cy);
 		void M_ColorPicker_Mousemove(int cx, int cy);
 		void M_Extras_Mousemove(int cx, int cy);
+		void M_Discord_Mousemove(int cx, int cy);
 		void M_Saving_Mousemove(int cx, int cy);
 		void M_Shortcuts_Mousemove(int cx, int cy);
 		void M_Version_Mousemove(int cx, int cy);
@@ -328,6 +334,7 @@ static void M_GameOptions_ClearTypedLevel(void);
 static void M_Options_SelectModsFallback(void);
 static qboolean M_LanConfig_HasIce(void);
 static int M_LanConfig_NewGameProtocolCursor(void);
+static void M_Discord_EndWebhookEdit(void);
 static int M_LanConfig_NewGameOkCursor(void);
 static void CleanupPingThreads(void);
 static void M_PakLoading_Shutdown(void);
@@ -22648,6 +22655,10 @@ static void M_LeaveMenuState (enum m_state_e from)
 		M_Demos_Shutdown();
 		break;
 
+	case m_discord:
+		M_Discord_EndWebhookEdit();
+		break;
+
 	/* Hold nothing that outlives the menu. */
 	case m_none:
 	case m_main:
@@ -22862,7 +22873,10 @@ static const char * const menusearch_extras_labels[] = {
 	"System Throttle", "Protocol Exts", "Download Policy", "Connection Retries",
 	"QC Extensions", "Prediction", "Auto Demo", "Port Ping Probe", "Spawn Trainer",
 	"Q3 Item Bobbing", "Reset Config", "Quake Pong", "Paused Hints", "Live Preview",
-	"Discord Presence", "Model Viewer", "Saving", "Keyboard Shortcuts", "Version Info"
+	"Discord", "Model Viewer", "Saving", "Keyboard Shortcuts", "Version Info"
+};
+static const char * const menusearch_discord_labels[] = {
+	"Activity Sharing", "Alert Webhook", "Test Alert", "Join NQ Discord"
 };
 static const char * const menusearch_saving_labels[] = {
 	"Auto Load", "Auto Save", "Auto Save Interval", "Saving Indicator"
@@ -22898,6 +22912,10 @@ COMPILE_TIME_ASSERT(menusearch_host_count, Q_COUNTOF(menusearch_host_labels) == 
 static const char *M_Extras_GetItemText(int index);
 static cvar_t *M_Extras_GetItemCvar(int index);
 static const char *M_Extras_GetItemHintText(int index);
+static const char *M_Discord_GetItemText(int index);
+static cvar_t *M_Discord_GetItemCvar(int index);
+static const char *M_Discord_GetItemHintText(int index);
+static const char *M_Discord_GetValueText(int index);
 static const char *M_Saving_GetItemText(int index);
 static cvar_t *M_Saving_GetItemCvar(int index);
 static const char *M_Saving_GetValueText(int index);
@@ -22908,6 +22926,7 @@ static const char *M_DemoOptions_GetItemText(int index);
 static cvar_t *M_DemoOptions_GetItemCvar(int index);
 static const char *M_DemoOptions_GetValueText(int index);
 static qboolean M_MenuSearch_OpenExtrasItem(int index);
+static qboolean M_MenuSearch_OpenDiscordItem(int index);
 static qboolean M_MenuSearch_OpenSavingItem(int index);
 static qboolean M_MenuSearch_OpenStartupItem(int index);
 static qboolean M_MenuSearch_OpenDemoOptionsItem(int index);
@@ -23388,6 +23407,7 @@ static const char *MenuSearch_PlayerXrayKeywords(int index)
 }
 
 static const char *MenuSearch_ExtrasKeywords(int index);
+static const char *MenuSearch_DiscordKeywords(int index);
 static const char *MenuSearch_SavingKeywords(int index);
 static const char *MenuSearch_StartupKeywords(int index);
 static const char *MenuSearch_DemoOptionsKeywords(int index);
@@ -23632,6 +23652,7 @@ enum
 	MENUSEARCH_PROVIDER_CROSSHAIR,
 	MENUSEARCH_PROVIDER_PLAYERXRAY,
 	MENUSEARCH_PROVIDER_EXTRAS,
+	MENUSEARCH_PROVIDER_DISCORD,
 	MENUSEARCH_PROVIDER_SAVING,
 	MENUSEARCH_PROVIDER_STARTUP,
 	MENUSEARCH_PROVIDER_DEMOOPTIONS,
@@ -23661,6 +23682,7 @@ static const menusearch_provider_t menusearch_providers[MENUSEARCH_PROVIDER_COUN
 	[MENUSEARCH_PROVIDER_CROSSHAIR] = {"crosshair", "Options > HUD > Crosshair", menusearch_crosshair_labels, CROSSHAIR_ITEMS, M_Crosshair_GetItemText, M_Crosshair_GetItemCvar, NULL, MenuSearch_CrosshairKeywords, NULL, NULL, M_MenuSearch_OpenCrosshairItem},
 	[MENUSEARCH_PROVIDER_PLAYERXRAY] = {"playerxray", "Options > Game > Player Xray", menusearch_playerxray_labels, PLAYERXRAY_ITEMS, M_PlayerXray_GetItemText, M_PlayerXray_GetItemCvar, NULL, MenuSearch_PlayerXrayKeywords, M_PlayerXray_GetValueText, NULL, M_MenuSearch_OpenPlayerXrayItem},
 	[MENUSEARCH_PROVIDER_EXTRAS] = {"extras", "Options > Misc", menusearch_extras_labels, Q_COUNTOF(menusearch_extras_labels), M_Extras_GetItemText, M_Extras_GetItemCvar, M_Extras_GetItemHintText, MenuSearch_ExtrasKeywords, NULL, NULL, M_MenuSearch_OpenExtrasItem},
+	[MENUSEARCH_PROVIDER_DISCORD] = {"discord", "Options > Misc > Discord", menusearch_discord_labels, Q_COUNTOF(menusearch_discord_labels), M_Discord_GetItemText, M_Discord_GetItemCvar, M_Discord_GetItemHintText, MenuSearch_DiscordKeywords, M_Discord_GetValueText, NULL, M_MenuSearch_OpenDiscordItem},
 	[MENUSEARCH_PROVIDER_SAVING] = {"saving", "Options > Misc > Saving", menusearch_saving_labels, Q_COUNTOF(menusearch_saving_labels), M_Saving_GetItemText, M_Saving_GetItemCvar, NULL, MenuSearch_SavingKeywords, M_Saving_GetValueText, NULL, M_MenuSearch_OpenSavingItem},
 	[MENUSEARCH_PROVIDER_STARTUP] = {"startup", "Options > Startup", menusearch_startup_labels, Q_COUNTOF(menusearch_startup_labels), M_Startup_GetItemText, M_Startup_GetItemCvar, NULL, MenuSearch_StartupKeywords, NULL, MenuSearch_StartupAvailable, M_MenuSearch_OpenStartupItem},
 	[MENUSEARCH_PROVIDER_DEMOOPTIONS] = {"demooptions", "Options > Demo Options", menusearch_demooptions_labels, Q_COUNTOF(menusearch_demooptions_labels), M_DemoOptions_GetItemText, M_DemoOptions_GetItemCvar, NULL, MenuSearch_DemoOptionsKeywords, M_DemoOptions_GetValueText, NULL, M_MenuSearch_OpenDemoOptionsItem}
@@ -25552,7 +25574,7 @@ static enum extras_e
 	EXTRAS_PONG,
 	EXTRAS_HINTS,
 	EXTRAS_LIVEPREVIEW,
-	EXTRAS_DISCORD_PRESENCE,
+	EXTRAS_DISCORD,
 	EXTRAS_MODELVIEWER,
 	EXTRAS_SAVING,
 	EXTRAS_SHORTCUTS,
@@ -25611,8 +25633,8 @@ static const char* M_Extras_GetItemText(int index) // Add this helper function
 		return "Paused Hints";
 	case EXTRAS_LIVEPREVIEW:
 		return "Live Preview";
-	case EXTRAS_DISCORD_PRESENCE:
-		return "Discord Presence";
+	case EXTRAS_DISCORD:
+		return "Discord";
 	case EXTRAS_MODELVIEWER:
 		return "Model Viewer";
 	case EXTRAS_SAVING:
@@ -25643,7 +25665,6 @@ static cvar_t *M_Extras_GetItemCvar(int index)
 	case EXTRAS_PONG:			return &cl_pong;
 	case EXTRAS_HINTS:			return &scr_hints;
 	case EXTRAS_LIVEPREVIEW:	return &ui_live_preview;
-	case EXTRAS_DISCORD_PRESENCE:	return &cl_discord_presence;
 	default:					return NULL;
 	}
 }
@@ -25824,20 +25845,8 @@ static void M_Extras_AdjustSliders (int dir)
 		if (!ui_live_preview.value)
 			M_LivePreview_Reset();
 		break;
-	case EXTRAS_DISCORD_PRESENCE:
-		if (!isfinite(cl_discord_presence.value) ||
-			cl_discord_presence.value < DISCORD_PRESENCE_MODE_OFF ||
-			cl_discord_presence.value >= DISCORD_PRESENCE_MODE_COUNT ||
-			cl_discord_presence.value != (int)cl_discord_presence.value)
-			m = DISCORD_PRESENCE_MODE_OFF;
-		else
-			m = (int)cl_discord_presence.value;
-		m += dir;
-		if (m < DISCORD_PRESENCE_MODE_OFF)
-			m = DISCORD_PRESENCE_MODE_CONNECTED;
-		if (m >= DISCORD_PRESENCE_MODE_COUNT)
-			m = DISCORD_PRESENCE_MODE_OFF;
-		Cvar_SetValueQuick(&cl_discord_presence, m);
+	case EXTRAS_DISCORD:
+		M_Menu_Discord_f();
 		break;
 	case EXTRAS_MODELVIEWER:
 		M_Menu_ModelViewer_f();
@@ -26012,23 +26021,9 @@ void M_Extras_Draw(void)
 			value = ui_live_preview.value ? "on" : "off";
 			break;
 
-		case EXTRAS_DISCORD_PRESENCE:
-			text = "  Discord Presence";
-			if (!isfinite(cl_discord_presence.value) ||
-				cl_discord_presence.value < DISCORD_PRESENCE_MODE_OFF ||
-				cl_discord_presence.value >= DISCORD_PRESENCE_MODE_COUNT ||
-				cl_discord_presence.value != (int)cl_discord_presence.value)
-				value = "unknown";
-			else
-			{
-				switch ((int)cl_discord_presence.value)
-				{
-				case DISCORD_PRESENCE_MODE_OFF: value = "off"; break;
-				case DISCORD_PRESENCE_MODE_ALL: value = "all"; break;
-				case DISCORD_PRESENCE_MODE_CONNECTED: value = "connected"; break;
-				default: value = "unknown"; break;
-				}
-			}
+		case EXTRAS_DISCORD:
+			text = "           Discord";
+			value = "...";
 			break;
 
 		case EXTRAS_MODELVIEWER:
@@ -26267,6 +26262,504 @@ void M_Extras_Mousemove(int cx, int cy)
 
 	M_List_Mousemove(&extrasmenu.list, cy);
 	extras_cursor = (enum extras_e)extrasmenu.list.cursor;
+}
+
+/*
+==================
+Discord Menu
+==================
+*/
+
+enum discord_menu_e
+{
+	DISCORD_ACTIVITY,
+	DISCORD_WEBHOOK,
+	DISCORD_TEST,
+	DISCORD_JOIN,
+	DISCORD_ITEMS
+};
+COMPILE_TIME_ASSERT(menusearch_discord_count,
+	Q_COUNTOF(menusearch_discord_labels) == DISCORD_ITEMS);
+
+#define DISCORD_ROW_Y(item) (48 + (item) * 8)
+#define DISCORD_VALUE_X 168
+#define DISCORD_VALUE_CHARS 17
+#define DISCORD_WEBHOOK_MAX 255
+#define DISCORD_SEARCH_BOX_Y 176
+#define DISCORD_SEARCH_TEXT_Y 184
+
+static struct
+{
+	int cursor;
+	int filtered_count;
+	qboolean editing;
+	listsearch_t search;
+	char webhook[DISCORD_WEBHOOK_MAX + 1];
+	menu_textfield_t field;
+} discordmenu;
+
+static const char *M_Discord_GetItemText(int index)
+{
+	return (index >= 0 && index < DISCORD_ITEMS) ?
+		menusearch_discord_labels[index] : "";
+}
+
+static cvar_t *M_Discord_GetItemCvar(int index)
+{
+	return index == DISCORD_ACTIVITY ? &cl_discord_presence : NULL;
+}
+
+static const char *M_Discord_GetItemHintText(int index)
+{
+	return index == DISCORD_WEBHOOK ? "con_notifydiscord <hidden>" : NULL;
+}
+
+static int M_Discord_ActivityMode(void)
+{
+	if (!isfinite(cl_discord_presence.value) ||
+		cl_discord_presence.value < DISCORD_PRESENCE_MODE_OFF ||
+		cl_discord_presence.value >= DISCORD_PRESENCE_MODE_COUNT ||
+		cl_discord_presence.value != (int)cl_discord_presence.value)
+		return DISCORD_PRESENCE_MODE_OFF;
+	return (int)cl_discord_presence.value;
+}
+
+static const char *M_Discord_GetValueText(int index)
+{
+	static char test_status_text[32];
+
+	switch (index)
+	{
+	case DISCORD_ACTIVITY:
+		switch (M_Discord_ActivityMode())
+		{
+		case DISCORD_PRESENCE_MODE_ALL: return "all activity";
+		case DISCORD_PRESENCE_MODE_CONNECTED: return "multiplayer only";
+		default: return "off";
+		}
+	case DISCORD_WEBHOOK:
+		return con_notifydiscord.string[0] ? "configured" : "not configured";
+	case DISCORD_TEST:
+	{
+		int http_code;
+
+		switch (Con_DiscordNotifyTestStatus(&http_code))
+		{
+		case CON_DISCORD_TEST_SENDING: return "Sending";
+		case CON_DISCORD_TEST_DELIVERED: return "Delivered";
+		case CON_DISCORD_TEST_HTTP_ERROR:
+			q_snprintf(test_status_text, sizeof(test_status_text),
+				"HTTP error %d", http_code);
+			return test_status_text;
+		case CON_DISCORD_TEST_TIMEOUT: return "Timeout";
+		case CON_DISCORD_TEST_TRANSPORT_ERROR: return "Send failed";
+		default: return "...";
+		}
+	}
+	case DISCORD_JOIN: return "open browser";
+	default: return NULL;
+	}
+}
+
+static const char *MenuSearch_DiscordKeywords(int index)
+{
+	switch (index)
+	{
+	case DISCORD_ACTIVITY: return "discord status activity presence rich rpc profile privacy";
+	case DISCORD_WEBHOOK: return "discord webhook url alerts notifications mentions direct messages con_notifydiscord clear remove delete credential secret";
+	case DISCORD_TEST: return "discord webhook alert notification test verify send";
+	case DISCORD_JOIN: return "discord nq netquake players community server invite quakeone browser online members presence count";
+	default: return NULL;
+	}
+}
+
+static void M_Discord_UpdateSearch(void)
+{
+	discordmenu.cursor = M_Menu_UpdateSearchCursor(
+		DISCORD_ITEMS, discordmenu.cursor, &discordmenu.filtered_count,
+		M_Discord_GetItemText, discordmenu.search.text, discordmenu.search.len);
+}
+
+static void M_Discord_MoveCursor(int delta)
+{
+	discordmenu.cursor = M_Menu_MoveSearchCursor(
+		DISCORD_ITEMS, discordmenu.filtered_count, discordmenu.cursor, delta,
+		M_Discord_GetItemText, discordmenu.search.text, discordmenu.search.len);
+}
+
+static void M_Discord_AdjustActivity(int dir)
+{
+	static const int modes[] = {
+		DISCORD_PRESENCE_MODE_OFF,
+		DISCORD_PRESENCE_MODE_CONNECTED,
+		DISCORD_PRESENCE_MODE_ALL
+	};
+	int mode = M_Discord_ActivityMode();
+	int index;
+
+	for (index = 0; index < Q_COUNTOF(modes) && modes[index] != mode; ++index)
+		;
+	if (index >= Q_COUNTOF(modes))
+		index = 0;
+	index = (index + dir + Q_COUNTOF(modes)) % Q_COUNTOF(modes);
+	Cvar_SetValueQuick(&cl_discord_presence, modes[index]);
+}
+
+static void M_Discord_BeginWebhookEdit(void)
+{
+	/* Start blank so the existing secret can never be exposed or copied by the UI. */
+	memset(discordmenu.webhook, 0, sizeof(discordmenu.webhook));
+	M_TextField_Init(&discordmenu.field, discordmenu.webhook,
+		DISCORD_WEBHOOK_MAX, false);
+	discordmenu.editing = true;
+}
+
+static void M_Discord_EndWebhookEdit(void)
+{
+	discordmenu.editing = false;
+	memset(discordmenu.webhook, 0, sizeof(discordmenu.webhook));
+	discordmenu.field.cursor = 0;
+	discordmenu.field.sel_start = -1;
+}
+
+static void M_Discord_SaveWebhook(void)
+{
+	if (!discordmenu.webhook[0])
+	{
+		if (!con_notifydiscord.string[0])
+		{
+			SCR_ModalMessage("Paste a Discord webhook URL first.", 2.0f);
+			return;
+		}
+		if (SCR_ModalMessage("Clear the Discord alert webhook?\n (^mn^m/^my^m)\n", 0.0f))
+		{
+			Cvar_SetQuick(&con_notifydiscord, "");
+			M_Discord_EndWebhookEdit();
+		}
+		return;
+	}
+
+	Cvar_SetQuick(&con_notifydiscord, discordmenu.webhook);
+	if (strcmp(con_notifydiscord.string, discordmenu.webhook))
+	{
+		SCR_ModalMessage("Invalid Discord webhook URL.\nThe previous setting was kept.", 2.5f);
+		return;
+	}
+
+	M_Discord_EndWebhookEdit();
+	SCR_ModalMessage("Discord alert webhook saved.", 2.0f);
+}
+
+void M_Menu_Discord_f(void)
+{
+	key_dest = key_menu;
+	m_state = m_discord;
+	m_entersound = true;
+	discordmenu.cursor = DISCORD_ACTIVITY;
+	discordmenu.filtered_count = DISCORD_ITEMS;
+	memset(&discordmenu.search, 0, sizeof(discordmenu.search));
+	discordmenu.search.maxlen = 32;
+	M_Discord_EndWebhookEdit();
+	M_TextField_Init(&discordmenu.field, discordmenu.webhook,
+		DISCORD_WEBHOOK_MAX, false);
+	Con_DiscordCommunityRefresh();
+	IN_UpdateGrabs();
+}
+
+static void M_Discord_DrawMaskedField(int y)
+{
+	char masked[DISCORD_VALUE_CHARS + 1];
+	int len = (int)strlen(discordmenu.webhook);
+	int start = q_max(0, discordmenu.field.cursor - DISCORD_VALUE_CHARS);
+	int visible = q_min(DISCORD_VALUE_CHARS, len - start);
+	int i;
+
+	for (i = 0; i < visible; ++i)
+		masked[i] = '*';
+	masked[visible] = 0;
+	if (!visible)
+		q_strlcpy(masked, "<paste URL>", sizeof(masked));
+	M_Print(DISCORD_VALUE_X, y, masked);
+	M_DrawCharacter(DISCORD_VALUE_X + (discordmenu.field.cursor - start) * 8,
+		y, 10 + ((int)(realtime * 4) & 1));
+}
+
+void M_Discord_Draw(void)
+{
+	qpic_t *p = Draw_CachePic("gfx/p_option.lmp");
+	qboolean show_activity_cvar;
+	qboolean show_webhook_cvar;
+	int i;
+
+	M_DrawPic((320 - p->width) / 2, 4, p);
+	M_PrintWhite((320 - 15 * 8) / 2, 32, "Discord Options");
+
+	for (i = 0; i < DISCORD_ITEMS; ++i)
+	{
+		char text[32];
+		const char *label = M_Discord_GetItemText(i);
+
+		q_snprintf(text, sizeof(text), "%18s", label);
+		if (discordmenu.search.len > 0 &&
+			q_strcasestr(label, discordmenu.search.text))
+			M_PrintHighlight(8, DISCORD_ROW_Y(i), text,
+				discordmenu.search.text, discordmenu.search.len);
+		else
+			M_Print(8, DISCORD_ROW_Y(i), text);
+	}
+
+	show_activity_cvar = M_CvarHintActive(
+		discordmenu.cursor == DISCORD_ACTIVITY, &cl_discord_presence);
+	show_webhook_cvar = M_TextHintActive(
+		discordmenu.cursor == DISCORD_WEBHOOK && !discordmenu.editing,
+		"con_notifydiscord <hidden>");
+
+	if (show_activity_cvar)
+		M_DrawCvarHintValue(DISCORD_VALUE_X, DISCORD_ROW_Y(DISCORD_ACTIVITY),
+			MENU_CVAR_HINT_WIDTH, &cl_discord_presence);
+	else
+		M_Print(DISCORD_VALUE_X, DISCORD_ROW_Y(DISCORD_ACTIVITY),
+			M_Discord_GetValueText(DISCORD_ACTIVITY));
+	if (discordmenu.editing)
+		M_Discord_DrawMaskedField(DISCORD_ROW_Y(DISCORD_WEBHOOK));
+	else if (show_webhook_cvar)
+		M_DrawHintValue(DISCORD_VALUE_X, DISCORD_ROW_Y(DISCORD_WEBHOOK),
+			MENU_CVAR_HINT_WIDTH, "con_notifydiscord <hidden>");
+	else
+		M_Print(DISCORD_VALUE_X, DISCORD_ROW_Y(DISCORD_WEBHOOK),
+			M_Discord_GetValueText(DISCORD_WEBHOOK));
+	M_Print(DISCORD_VALUE_X, DISCORD_ROW_Y(DISCORD_TEST),
+		M_Discord_GetValueText(DISCORD_TEST));
+	M_Print(DISCORD_VALUE_X, DISCORD_ROW_Y(DISCORD_JOIN),
+		M_Discord_GetValueText(DISCORD_JOIN));
+
+	M_DrawCharacter(160, DISCORD_ROW_Y(discordmenu.cursor),
+		12 + ((int)(realtime * 4) & 1));
+
+	if (discordmenu.editing)
+	{
+		M_PrintWhite(8, 104, "Enter saves; Esc cancels; submit an");
+		M_PrintWhite(8, 112, "empty field to clear");
+	}
+	else if (discordmenu.cursor == DISCORD_WEBHOOK)
+	{
+		M_PrintWhite(8, 104, "Forwards background mentions and direct");
+		M_PrintWhite(8, 112, "messages");
+	}
+	else if (discordmenu.cursor == DISCORD_ACTIVITY)
+	{
+		M_PrintWhite(8, 104, "Controls what Discord shows about your");
+		M_PrintWhite(8, 112, "QSS-M activity");
+	}
+	else if (discordmenu.cursor == DISCORD_TEST)
+	{
+		M_PrintWhite(8, 104, "Sends a test message to the configured");
+		M_PrintWhite(8, 112, "webhook");
+	}
+	else if (discordmenu.cursor == DISCORD_JOIN)
+	{
+		const char *tooltip = "Join NetQuake Players Discord";
+		const char *count_text;
+		char count_buffer[16];
+		int online_count;
+		int count_x;
+
+		M_PrintWhite((320 - 8 * strlen(tooltip)) / 2, 104, tooltip);
+		switch (Con_DiscordCommunityStatus(&online_count))
+		{
+		case CON_DISCORD_COMMUNITY_READY:
+			q_snprintf(count_buffer, sizeof(count_buffer), "%d", online_count);
+			count_text = " online";
+			count_x = (320 - 8 * (strlen(count_buffer) + strlen(count_text))) / 2;
+			M_Print2(count_x, 112, count_buffer);
+			M_PrintWhite(count_x + 8 * strlen(count_buffer), 112, count_text);
+			break;
+		case CON_DISCORD_COMMUNITY_ERROR:
+			count_text = "Discord count unavailable";
+			M_PrintWhite((320 - 8 * strlen(count_text)) / 2, 112, count_text);
+			break;
+		default:
+			count_text = "Checking Discord";
+			M_PrintWhite((320 - 8 * strlen(count_text)) / 2, 112, count_text);
+			break;
+		}
+	}
+
+	if (discordmenu.search.len > 0)
+	{
+		int cursor_x = 24 + 8 * discordmenu.search.len;
+
+		M_DrawTextBox(16, DISCORD_SEARCH_BOX_Y, 32, 1);
+		M_PrintHighlight(24, DISCORD_SEARCH_TEXT_Y, discordmenu.search.text,
+			discordmenu.search.text, discordmenu.search.len);
+		if (discordmenu.filtered_count > 0)
+			M_DrawCharacter(cursor_x, DISCORD_SEARCH_TEXT_Y,
+				10 + ((int)(realtime * 4) & 1));
+		else
+			M_DrawCharacter(cursor_x, DISCORD_SEARCH_TEXT_Y, 11 ^ 128);
+	}
+}
+
+static void M_Discord_Activate(void)
+{
+	switch (discordmenu.cursor)
+	{
+	case DISCORD_ACTIVITY:
+		M_Discord_AdjustActivity(1);
+		break;
+	case DISCORD_WEBHOOK:
+		M_Discord_BeginWebhookEdit();
+		break;
+	case DISCORD_TEST:
+		switch (Con_DiscordNotifyTest())
+		{
+		case CON_DISCORD_TEST_NOT_CONFIGURED:
+			SCR_ModalMessage("Configure an alert webhook first.", 2.0f);
+			break;
+		case CON_DISCORD_TEST_TRANSPORT_ERROR:
+			SCR_ModalMessage("Unable to start the Discord test alert.", 2.0f);
+			break;
+		default:
+			break;
+		}
+		break;
+	case DISCORD_JOIN:
+		if (SDL_OpenURL(DISCORD_COMMUNITY_URL) == 0)
+			SCR_ModalMessage("The NQ Discord has been opened\nin your ^mweb browser^m.", 2.5f);
+		else
+		{
+			Con_Warning("Unable to open NQ Discord: %s\n", SDL_GetError());
+			SCR_ModalMessage("Unable to open the NQ Discord link.", 2.5f);
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+void M_Discord_Key(int key)
+{
+	if (discordmenu.editing)
+	{
+		if (key == K_ESCAPE || key == K_BBUTTON || key == K_MOUSE4 || key == K_MOUSE2)
+		{
+			M_Discord_EndWebhookEdit();
+			return;
+		}
+		if (key == K_ENTER || key == K_KP_ENTER || key == K_ABUTTON)
+		{
+			M_Discord_SaveWebhook();
+			return;
+		}
+		M_TextField_Key(&discordmenu.field, key);
+		return;
+	}
+
+	if (key == K_ESCAPE && discordmenu.search.len > 0)
+	{
+		discordmenu.search.len = 0;
+		discordmenu.search.text[0] = 0;
+		M_Discord_UpdateSearch();
+		return;
+	}
+	else if (Key_IsShortcutModifierDown())
+	{
+		if ((key == 'u' || key == 'U') && discordmenu.search.len > 0)
+		{
+			discordmenu.search.len = 0;
+			discordmenu.search.text[0] = 0;
+			M_Discord_UpdateSearch();
+			return;
+		}
+		if (key == K_BACKSPACE && discordmenu.search.len > 0)
+		{
+			M_DeletePrevWord(&discordmenu.search);
+			M_Discord_UpdateSearch();
+			return;
+		}
+	}
+	else if (key == K_BACKSPACE && discordmenu.search.len > 0)
+	{
+		discordmenu.search.text[--discordmenu.search.len] = 0;
+		M_Discord_UpdateSearch();
+		return;
+	}
+	else if (key >= 32 && key < 127 &&
+		discordmenu.search.len < discordmenu.search.maxlen)
+	{
+		discordmenu.search.text[discordmenu.search.len++] = key;
+		discordmenu.search.text[discordmenu.search.len] = 0;
+		M_Discord_UpdateSearch();
+		return;
+	}
+
+	switch (key)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		M_Menu_Extras_f();
+		extras_cursor = EXTRAS_DISCORD;
+		extrasmenu.list.cursor = EXTRAS_DISCORD;
+		M_List_AutoScroll(&extrasmenu.list);
+		break;
+	case K_UPARROW:
+		S_LocalSound("misc/menu1.wav");
+		M_Discord_MoveCursor(-1);
+		break;
+	case K_DOWNARROW:
+		S_LocalSound("misc/menu1.wav");
+		M_Discord_MoveCursor(1);
+		break;
+	case K_LEFTARROW:
+	case K_RIGHTARROW:
+		if (discordmenu.cursor == DISCORD_ACTIVITY)
+		{
+			S_LocalSound("misc/menu3.wav");
+			M_Discord_AdjustActivity(key == K_LEFTARROW ? -1 : 1);
+		}
+		break;
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+	case K_MOUSE1:
+		if (discordmenu.filtered_count > 0)
+		{
+			m_entersound = true;
+			M_Discord_Activate();
+		}
+		break;
+	}
+}
+
+void M_Discord_Char(int key)
+{
+	if (discordmenu.editing)
+		M_TextField_Char(&discordmenu.field, key);
+}
+
+qboolean M_Discord_TextEntry(void)
+{
+	return discordmenu.editing;
+}
+
+void M_Discord_Mousemove(int cx, int cy)
+{
+	int cursor;
+
+	(void)cx;
+	if (discordmenu.editing)
+		return;
+	if (discordmenu.search.len > 0 && cy >= DISCORD_SEARCH_BOX_Y)
+		return;
+	if (cy < DISCORD_ROW_Y(0) || cy >= DISCORD_ROW_Y(DISCORD_ITEMS))
+		return;
+	cursor = (cy - DISCORD_ROW_Y(0)) / 8;
+	if (cursor >= 0 && cursor < DISCORD_ITEMS &&
+		(discordmenu.search.len == 0 || M_Menu_SearchItemMatches(
+			M_Discord_GetItemText, discordmenu.search.text, cursor)))
+		discordmenu.cursor = cursor;
 }
 
 /*
@@ -44308,6 +44801,7 @@ static struct
 	{"menu_audiobrowser", M_Menu_AudioBrowser_f},
 	{"menu_saving", M_Menu_Saving_f},
 	{"menu_misc", M_Menu_Extras_f},
+	{"menu_discord", M_Menu_Discord_f},
 	{"menu_shortcuts", M_Menu_Shortcuts_f},
 	{"menu_version", M_Menu_Version_f},
 	{"menu_config", M_Menu_ResetConfig_f},
@@ -45944,6 +46438,10 @@ void M_Draw (void)
 		M_Extras_Draw ();
 		break;
 
+	case m_discord:
+		M_Discord_Draw ();
+		break;
+
 	case m_saving:
 		M_Saving_Draw();
 		break;
@@ -46116,6 +46614,7 @@ static qboolean M_HasSearchField (void)
 	case m_hud:
 	case m_console:
 	case m_extras:
+	case m_discord:
 	case m_shortcuts:
 	case m_version:
 	case m_startup:
@@ -46372,6 +46871,10 @@ void M_Keydown (int key, qboolean repeat)
 
 	case m_extras:
 		M_Extras_Key (key);
+		return;
+
+	case m_discord:
+		M_Discord_Key(key);
 		return;
 
 	case m_saving:
@@ -46658,6 +47161,10 @@ void M_Mousemove(int x, int y) // woods #mousemenu
 		M_Extras_Mousemove(x, y);
 		return;
 
+	case m_discord:
+		M_Discord_Mousemove(x, y);
+		return;
+
 	case m_saving:
 		M_Saving_Mousemove(x, y);
 		return;
@@ -46748,6 +47255,9 @@ void M_Charinput (int key)
 	case m_setup:
 		M_Setup_Char (key);
 		return;
+	case m_discord:
+		M_Discord_Char(key);
+		return;
 	case m_console:
 		M_Console_Char(key);
 		return;
@@ -46794,6 +47304,8 @@ qboolean M_TextEntry (void)
 		return M_NameMaker_TextEntry();
 	case m_console:
 		return M_Console_TextEntry();
+	case m_discord:
+		return M_Discord_TextEntry();
 	case m_sky:
 		return M_Sky_TextEntry();
 	case m_bookmarks_edit: // woods #bookmarksmenu
@@ -48455,7 +48967,7 @@ static const char *MenuSearch_ExtrasKeywords(int index)
 	case EXTRAS_PONG: return "minigame easter egg arcade";
 	case EXTRAS_HINTS: return "help tips tutorial paused assistance";
 	case EXTRAS_LIVEPREVIEW: return "preview settings instant realtime";
-	case EXTRAS_DISCORD_PRESENCE: return "discord status activity presence rich rpc social privacy";
+	case EXTRAS_DISCORD: return "discord status activity presence rich rpc webhook alerts community invite social privacy";
 	case EXTRAS_MODELVIEWER: return "models browser inspect preview mdl";
 	case EXTRAS_SAVING: return "savegame autosave autoload checkpoints";
 	case EXTRAS_SHORTCUTS: return "hotkeys keyboard keys commands reference";
@@ -48518,7 +49030,8 @@ static qboolean MenuSearch_StartupAvailable(int index)
 static qboolean MenuSearch_HasLocalModalState(enum m_state_e state)
 {
 	return (state == m_weaponwheel && weaponwheelmenu.preview) ||
-		(state == m_pakloading && pakmenu.dragging);
+		(state == m_pakloading && pakmenu.dragging) ||
+		(state == m_discord && M_Discord_TextEntry());
 }
 
 static qboolean M_MenuSearch_OpenExtrasItem(int index)
@@ -48527,6 +49040,13 @@ static qboolean M_MenuSearch_OpenExtrasItem(int index)
 	extras_cursor = (enum extras_e)index;
 	extrasmenu.list.cursor = index;
 	M_List_CenterCursor(&extrasmenu.list);
+	return true;
+}
+
+static qboolean M_MenuSearch_OpenDiscordItem(int index)
+{
+	M_Menu_Discord_f();
+	discordmenu.cursor = index;
 	return true;
 }
 

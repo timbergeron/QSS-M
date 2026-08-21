@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include <sys/types.h>
 #include <stdint.h> // woods #debuglogsize
+#include <limits.h>
 #include <time.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -207,14 +208,94 @@ static int console_msg_since_lastchat = 0; // woods #like
 extern qboolean WordFilter_Check(const char* text, char* dest_buffer, size_t buffer_size); // woods #contentfilter
 
 // woods #discord
+#define DISCORD_PAYLOAD_MAX 8192
+#define DISCORD_WEBHOOK_URL_MAX 256
+#define DISCORD_NOTIFY_MAX_WORKERS 4
+
 typedef struct {
-    char payload[1300];
-    char url[256];
+    char payload[DISCORD_PAYLOAD_MAX];
+    char url[DISCORD_WEBHOOK_URL_MAX];
+	qboolean is_test;
 } discord_job_t;
+
+static SDL_atomic_t discord_test_status;
+static SDL_atomic_t discord_test_http_code;
+static SDL_atomic_t discord_community_status;
+static SDL_atomic_t discord_community_online_count;
+static SDL_atomic_t discord_community_completed_ticks;
+static SDL_atomic_t discord_workers_active;
+static SDL_atomic_t discord_notify_workers_active;
+static SDL_atomic_t discord_shutting_down;
 
 static int DiscordThread(void *data);
 static void MakeDiscordPayload(const char *raw, char *out, size_t outsz);
-static void QSSM_DiscordNotify(const char *raw_msg);
+static qboolean QSSM_DiscordNotify(const char *raw_msg, qboolean is_test);
+
+static void DiscordTest_SetResult(con_discord_test_status_t status, long http_code)
+{
+	SDL_AtomicSet(&discord_test_http_code, (int)http_code);
+	SDL_AtomicSet(&discord_test_status, status);
+}
+
+static size_t Discord_DiscardResponse(void *contents, size_t size,
+	size_t nmemb, void *userdata)
+{
+	(void)contents;
+	(void)userdata;
+	if (size && nmemb > (size_t)-1 / size)
+		return 0;
+	return size * nmemb;
+}
+
+static qboolean DiscordWorker_Begin(void)
+{
+	if (SDL_AtomicGet(&discord_shutting_down))
+		return false;
+	SDL_AtomicAdd(&discord_workers_active, 1);
+	if (SDL_AtomicGet(&discord_shutting_down))
+	{
+		SDL_AtomicAdd(&discord_workers_active, -1);
+		return false;
+	}
+	return true;
+}
+
+static void DiscordWorker_End(void)
+{
+	SDL_AtomicAdd(&discord_workers_active, -1);
+}
+
+static qboolean DiscordNotifyWorker_Begin(void)
+{
+	int active;
+
+	do
+	{
+		active = SDL_AtomicGet(&discord_notify_workers_active);
+		if (active >= DISCORD_NOTIFY_MAX_WORKERS)
+			return false;
+	} while (!SDL_AtomicCAS(&discord_notify_workers_active, active, active + 1));
+
+	if (!DiscordWorker_Begin())
+	{
+		SDL_AtomicAdd(&discord_notify_workers_active, -1);
+		return false;
+	}
+	return true;
+}
+
+static void DiscordNotifyWorker_End(void)
+{
+	SDL_AtomicAdd(&discord_notify_workers_active, -1);
+	DiscordWorker_End();
+}
+
+void Con_DiscordShutdown(void)
+{
+	SDL_AtomicSet(&discord_shutting_down, 1);
+	while (SDL_AtomicGet(&discord_workers_active) > 0)
+		SDL_Delay(1);
+}
 
 /* Redact webhook token when printing URLs to logs/errors */
 static void MaskDiscordURL(const char *url, char *out, size_t outsz)
@@ -240,15 +321,32 @@ static qboolean IsDiscordWebhookURL(const char *url)
     };
     size_t i;
 
-    if (!url || !*url) return false;
+    if (!url || !*url || strlen(url) >= DISCORD_WEBHOOK_URL_MAX) return false;
 
     // reject control chars / whitespace
     for (const unsigned char *p = (const unsigned char*)url; *p; ++p)
         if (*p <= 0x20) return false;
 
     for (i = 0; i < sizeof(okprefixes)/sizeof(okprefixes[0]); ++i)
-        if (!Q_strncmp(url, okprefixes[i], strlen(okprefixes[i])))
-            return true;
+	{
+		const char *p;
+
+        if (Q_strncmp(url, okprefixes[i], strlen(okprefixes[i])))
+			continue;
+
+		/* Require a numeric webhook ID followed by a non-empty token. */
+		p = url + strlen(okprefixes[i]);
+		if (*p < '0' || *p > '9')
+			return false;
+		while (*p >= '0' && *p <= '9')
+			p++;
+		if (*p++ != '/' || !*p)
+			return false;
+		for (; *p; ++p)
+			if (*p == '/' || *p == '?' || *p == '#')
+				return false;
+		return true;
+	}
 
     return false;
 }
@@ -269,7 +367,7 @@ static void ConNotifyDiscord_Callback(cvar_t* var)
 
 	char masked[256];
 	MaskDiscordURL(var->string, masked, sizeof(masked));
-	Con_Printf("discord: invalid webhook URL ^m%s^m (must be https://*.discord.com/api/webhooks/...)\n", masked);
+	Con_Printf("discord: invalid webhook URL ^m%s^m (expected .../api/webhooks/<id>/<token>)\n", masked);
 
 	// Temporarily remove callback to prevent recursion, then restore it
 	cvarcallback_t saved_callback = var->callback;
@@ -2180,7 +2278,7 @@ static void Con_Print (const char *txt)
 					if (should_notify)
 					{
 						SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
-						QSSM_DiscordNotify(txt); // woods #discord
+						QSSM_DiscordNotify(txt, false); // woods #discord
 					}
 				}
 			}
@@ -2193,7 +2291,7 @@ static void Con_Print (const char *txt)
 		if (!VID_HasMouseOrInputFocus())
 		{
 			SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
-			QSSM_DiscordNotify(txt); // woods #discord
+			QSSM_DiscordNotify(txt, false); // woods #discord
 		}
 	}
 
@@ -6939,45 +7037,288 @@ void LOG_Close (void)
 }
 
 // woods #discord
+#define DISCORD_COMMUNITY_RESPONSE_MAX (64 * 1024)
+#define DISCORD_COMMUNITY_READY_CACHE_MS 60000u
+#define DISCORD_COMMUNITY_ERROR_CACHE_MS 15000u
+
+typedef struct
+{
+	char *data;
+	size_t size;
+} discord_community_response_t;
+
+static size_t DiscordCommunity_WriteResponse(void *contents, size_t size,
+	size_t nmemb, void *userdata)
+{
+	discord_community_response_t *response =
+		(discord_community_response_t *)userdata;
+	size_t bytes;
+	char *resized;
+
+	if (!response || (size && nmemb > (size_t)-1 / size))
+		return 0;
+	bytes = size * nmemb;
+	if (response->size > DISCORD_COMMUNITY_RESPONSE_MAX ||
+		bytes > DISCORD_COMMUNITY_RESPONSE_MAX - response->size)
+		return 0;
+
+	resized = (char *)realloc(response->data, response->size + bytes + 1);
+	if (!resized)
+		return 0;
+	response->data = resized;
+	memcpy(response->data + response->size, contents, bytes);
+	response->size += bytes;
+	response->data[response->size] = 0;
+	return bytes;
+}
+
+static void DiscordCommunity_SetCurlOptions(CURL *curl)
+{
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 5000L);
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, "QSS-M");
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+#if CURL_AT_LEAST_VERSION(7, 85, 0)
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+#else
+	curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+}
+
+static qboolean DiscordCommunity_CopyInviteCode(const char *url,
+	char *code, size_t codesize)
+{
+	static const char *prefixes[] = {
+		"https://discord.gg/",
+		"https://discord.com/invite/",
+		"https://discordapp.com/invite/"
+	};
+	size_t i;
+
+	if (!url || !code || codesize < 2)
+		return false;
+	for (i = 0; i < Q_COUNTOF(prefixes); ++i)
+	{
+		const char *start;
+		const char *end;
+		size_t len;
+
+		if (Q_strncmp(url, prefixes[i], strlen(prefixes[i])))
+			continue;
+		start = url + strlen(prefixes[i]);
+		end = start;
+		while ((*end >= 'a' && *end <= 'z') ||
+			(*end >= 'A' && *end <= 'Z') ||
+			(*end >= '0' && *end <= '9') || *end == '-' || *end == '_')
+			end++;
+		len = (size_t)(end - start);
+		if (!len || len >= codesize || (*end && *end != '?' && *end != '#'))
+			return false;
+		memcpy(code, start, len);
+		code[len] = 0;
+		return true;
+	}
+	return false;
+}
+
+static qboolean DiscordCommunity_FetchInviteCode(char *code, size_t codesize)
+{
+	CURL *curl = curl_easy_init();
+	CURLcode result;
+	const char *redirect_url = NULL;
+	long http_code = 0;
+	qboolean valid = false;
+
+	if (!curl)
+		return false;
+	curl_easy_setopt(curl, CURLOPT_URL, DISCORD_COMMUNITY_URL);
+	curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+	DiscordCommunity_SetCurlOptions(curl);
+
+	result = curl_easy_perform(curl);
+	if (result == CURLE_OK)
+	{
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+		curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &redirect_url);
+		if (http_code >= 300 && http_code < 400)
+			valid = DiscordCommunity_CopyInviteCode(redirect_url, code, codesize);
+	}
+	curl_easy_cleanup(curl);
+	return valid;
+}
+
+static qboolean DiscordCommunity_FetchOnlineCount(const char *invite_code,
+	int *online_count)
+{
+	discord_community_response_t response = {NULL, 0};
+	char url[256];
+	CURL *curl;
+	CURLcode result;
+	long http_code = 0;
+	json_t *json = NULL;
+	const double *presence;
+	qboolean valid = false;
+
+	q_snprintf(url, sizeof(url),
+		"https://discord.com/api/v10/invites/%s?with_counts=true", invite_code);
+	curl = curl_easy_init();
+	if (!curl)
+		return false;
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscordCommunity_WriteResponse);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+	curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+	DiscordCommunity_SetCurlOptions(curl);
+
+	result = curl_easy_perform(curl);
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+	if (result == CURLE_OK && http_code == 200 && response.data)
+	{
+		json = JSON_Parse(response.data);
+		if (json && json->root && json->root->type == JSON_OBJECT)
+		{
+			presence = JSON_FindNumber(json->root, "approximate_presence_count");
+			if (presence && isfinite(*presence) && *presence >= 0.0 &&
+				*presence <= INT_MAX)
+			{
+				*online_count = (int)*presence;
+				valid = true;
+			}
+		}
+	}
+	if (json)
+		JSON_Free(json);
+	free(response.data);
+	curl_easy_cleanup(curl);
+	return valid;
+}
+
+static void DiscordCommunity_SetResult(con_discord_community_status_t status,
+	int online_count)
+{
+	SDL_AtomicSet(&discord_community_online_count, online_count);
+	SDL_AtomicSet(&discord_community_completed_ticks, (int)SDL_GetTicks());
+	SDL_AtomicSet(&discord_community_status, status);
+}
+
+static int DiscordCommunityThread(void *unused)
+{
+	char invite_code[128];
+	int online_count;
+
+	(void)unused;
+	if (DiscordCommunity_FetchInviteCode(invite_code, sizeof(invite_code)) &&
+		DiscordCommunity_FetchOnlineCount(invite_code, &online_count))
+		DiscordCommunity_SetResult(CON_DISCORD_COMMUNITY_READY, online_count);
+	else
+		DiscordCommunity_SetResult(CON_DISCORD_COMMUNITY_ERROR, 0);
+	DiscordWorker_End();
+	return 0;
+}
+
+void Con_DiscordCommunityRefresh(void)
+{
+	con_discord_community_status_t status =
+		(con_discord_community_status_t)SDL_AtomicGet(&discord_community_status);
+	Uint32 now = SDL_GetTicks();
+	Uint32 completed = (Uint32)SDL_AtomicGet(&discord_community_completed_ticks);
+	Uint32 cache_ms = status == CON_DISCORD_COMMUNITY_READY ?
+		DISCORD_COMMUNITY_READY_CACHE_MS : DISCORD_COMMUNITY_ERROR_CACHE_MS;
+	SDL_Thread *thread;
+
+	if (SDL_AtomicGet(&discord_shutting_down))
+		return;
+	if (status == CON_DISCORD_COMMUNITY_LOADING)
+		return;
+	if ((status == CON_DISCORD_COMMUNITY_READY ||
+		status == CON_DISCORD_COMMUNITY_ERROR) && now - completed < cache_ms)
+		return;
+
+	if (!DiscordWorker_Begin())
+		return;
+	SDL_AtomicSet(&discord_community_status, CON_DISCORD_COMMUNITY_LOADING);
+	thread = SDL_CreateThread(DiscordCommunityThread, "discord-community", NULL);
+	if (thread)
+		SDL_DetachThread(thread);
+	else
+	{
+		DiscordWorker_End();
+		DiscordCommunity_SetResult(CON_DISCORD_COMMUNITY_ERROR, 0);
+	}
+}
+
+con_discord_community_status_t Con_DiscordCommunityStatus(int *online_count)
+{
+	con_discord_community_status_t status =
+		(con_discord_community_status_t)SDL_AtomicGet(&discord_community_status);
+
+	if (online_count)
+		*online_count = SDL_AtomicGet(&discord_community_online_count);
+	return status;
+}
+
 static int DiscordThread(void *data)
 {
     discord_job_t *job = (discord_job_t*)data;
+	con_discord_test_status_t test_status = CON_DISCORD_TEST_TRANSPORT_ERROR;
+	long http_code = 0;
 
     CURL *curl = curl_easy_init();
     if (curl) {
         struct curl_slist *hdr = NULL;
         hdr = curl_slist_append(hdr, "Content-Type: application/json");
 
-        curl_easy_setopt(curl, CURLOPT_URL, job->url);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, job->payload);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(job->payload)); // exact body size
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 2000L);
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1500L); // fail fast on connect
-        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, "QSS-M");
-        /* keep TLS verification ON (explicit) */
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+		if (hdr)
+		{
+			curl_easy_setopt(curl, CURLOPT_URL, job->url);
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDS, job->payload);
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(job->payload)); // exact body size
+			curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr);
+			curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, Discord_DiscardResponse);
+			curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 2000L);
+			curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1500L); // fail fast on connect
+			curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+			curl_easy_setopt(curl, CURLOPT_USERAGENT, "QSS-M");
+			/* keep TLS verification ON (explicit) */
+			curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+			curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 
-        CURLcode rc = curl_easy_perform(curl);
-        if (rc != CURLE_OK) {
-            if (developer.value)
-                Con_DPrintf("discord: curl error: %s\n", curl_easy_strerror(rc));
-        } else {
-            long http_code = 0;
-            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-            if (http_code != 204 && http_code != 200) {
-                if (developer.value)
-                    Con_DPrintf("discord: HTTP %ld\n", http_code);
-            }
-        }
+			CURLcode rc = curl_easy_perform(curl);
+			if (rc == CURLE_OPERATION_TIMEDOUT)
+			{
+				test_status = CON_DISCORD_TEST_TIMEOUT;
+			}
+			else if (rc != CURLE_OK)
+			{
+				test_status = CON_DISCORD_TEST_TRANSPORT_ERROR;
+			}
+			else
+			{
+				curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+				if (http_code == 204 || http_code == 200)
+					test_status = CON_DISCORD_TEST_DELIVERED;
+				else
+				{
+					test_status = CON_DISCORD_TEST_HTTP_ERROR;
+				}
+			}
+		}
 
         curl_slist_free_all(hdr);
         curl_easy_cleanup(curl);
     }
 
+	if (job->is_test)
+		DiscordTest_SetResult(test_status, http_code);
+
 	free(job);
+	DiscordNotifyWorker_End();
     return 0;
 }
 
@@ -7013,36 +7354,73 @@ static void MakeDiscordPayload(const char *raw, char *out, size_t outsz)
     free(esc);
 }
 
-static void QSSM_DiscordNotify(const char *raw_msg)
+static qboolean QSSM_DiscordNotify(const char *raw_msg, qboolean is_test)
 {
-    if (!con_notifydiscord.string[0]) return;
+    if (!con_notifydiscord.string[0]) return false;
     if (!IsDiscordWebhookURL(con_notifydiscord.string)) {
         char masked[256];
         MaskDiscordURL(con_notifydiscord.string, masked, sizeof(masked));
-        Con_Printf("discord: invalid webhook URL ^m%s^m (must be https://*.discord.com/api/webhooks/...)\n", masked);
-        return;
+        Con_Printf("discord: invalid webhook URL ^m%s^m (expected .../api/webhooks/<id>/<token>)\n", masked);
+        return false;
     }
 
-    char payload[1300];
+    char payload[DISCORD_PAYLOAD_MAX];
     MakeDiscordPayload(raw_msg, payload, sizeof(payload));
-    if (!payload[0]) return;
+    if (!payload[0]) return false;
 
 	discord_job_t* job = (discord_job_t*)malloc(sizeof(*job));
 	if (!job) {
 		Con_DPrintf("discord: out of memory creating job\n");
-		return;
+		return false;
 	}
 
     q_strlcpy(job->payload, payload, sizeof(job->payload));
     q_strlcpy(job->url, con_notifydiscord.string, sizeof(job->url));
+	job->is_test = is_test;
 
+	if (!DiscordNotifyWorker_Begin())
+	{
+		free(job);
+		return false;
+	}
     SDL_Thread *t = SDL_CreateThread(DiscordThread, "discord", job);
 	if (t) {
 		SDL_DetachThread(t);
-		Sys_IncrementDockNotificationBadge();
+		if (!is_test)
+			Sys_IncrementDockNotificationBadge();
+		return true;
 	}
 	else {
 		Con_DPrintf("discord: failed to create thread: %s\n", SDL_GetError());
 		free(job);
+		DiscordNotifyWorker_End();
+		return false;
 	}
+}
+
+con_discord_test_status_t Con_DiscordNotifyTest(void)
+{
+	if (SDL_AtomicGet(&discord_test_status) == CON_DISCORD_TEST_SENDING)
+		return CON_DISCORD_TEST_SENDING;
+
+	if (!con_notifydiscord.string[0] || !IsDiscordWebhookURL(con_notifydiscord.string))
+		return CON_DISCORD_TEST_NOT_CONFIGURED;
+
+	DiscordTest_SetResult(CON_DISCORD_TEST_SENDING, 0);
+	if (!QSSM_DiscordNotify("Menu Discord alert test", true))
+	{
+		DiscordTest_SetResult(CON_DISCORD_TEST_TRANSPORT_ERROR, 0);
+		return CON_DISCORD_TEST_TRANSPORT_ERROR;
+	}
+	return CON_DISCORD_TEST_SENDING;
+}
+
+con_discord_test_status_t Con_DiscordNotifyTestStatus(int *http_code)
+{
+	con_discord_test_status_t status =
+		(con_discord_test_status_t)SDL_AtomicGet(&discord_test_status);
+
+	if (http_code)
+		*http_code = SDL_AtomicGet(&discord_test_http_code);
+	return status;
 }

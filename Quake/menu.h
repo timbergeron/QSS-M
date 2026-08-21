@@ -56,6 +56,7 @@ enum m_state_e {
 	m_console,
 	m_colorpicker,
 	m_extras,
+	m_discord,
 	m_saving,
 	m_shortcuts,
 	m_version,

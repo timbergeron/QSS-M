@@ -33,6 +33,28 @@ extern	qboolean con_forcedup;	// because no entities to refresh
 extern qboolean con_initialized;
 extern byte *con_chars;
 extern	int	con_notifylines_; // woods from proquake 493 #notifylines
+extern cvar_t con_notifydiscord;
+
+#define DISCORD_COMMUNITY_URL "https://discord.quakeone.com/"
+
+typedef enum
+{
+	CON_DISCORD_TEST_IDLE,
+	CON_DISCORD_TEST_SENDING,
+	CON_DISCORD_TEST_DELIVERED,
+	CON_DISCORD_TEST_HTTP_ERROR,
+	CON_DISCORD_TEST_TIMEOUT,
+	CON_DISCORD_TEST_TRANSPORT_ERROR,
+	CON_DISCORD_TEST_NOT_CONFIGURED
+} con_discord_test_status_t;
+
+typedef enum
+{
+	CON_DISCORD_COMMUNITY_IDLE,
+	CON_DISCORD_COMMUNITY_LOADING,
+	CON_DISCORD_COMMUNITY_READY,
+	CON_DISCORD_COMMUNITY_ERROR
+} con_discord_community_status_t;
 
 extern char con_lastcenterstring[]; //johnfitz
 
@@ -50,6 +72,11 @@ void Con_LinkPrintf (const char *addr, const char *fmt, ...) FUNC_PRINTF(2,3);
 void Con_SafePrintf (const char *fmt, ...) FUNC_PRINTF(1,2);
 void Con_DrawNotify (void);
 void Con_ClearNotify (void);
+con_discord_test_status_t Con_DiscordNotifyTest (void);
+con_discord_test_status_t Con_DiscordNotifyTestStatus (int *http_code);
+void Con_DiscordCommunityRefresh (void);
+con_discord_community_status_t Con_DiscordCommunityStatus (int *online_count);
+void Con_DiscordShutdown (void);
 void Con_ToggleConsole_f (void);
 qboolean Con_IsRedirected(void);	//returns true if its redirected. this generally means that things are a little more verbose.
 void Con_Redirect(void(*flush)(const char *text));

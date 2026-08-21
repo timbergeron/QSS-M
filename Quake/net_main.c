@@ -1605,6 +1605,7 @@ void NET_Shutdown (void)
 	NET_AbortExternalIP();
 	M_ServerList_ShutdownPingThreads();
 	M_ServerList_ShutdownApiFetch();
+	Con_DiscordShutdown();
 	if (external_ip_thread)
 	{
 		SDL_WaitThread(external_ip_thread, NULL);
