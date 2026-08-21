@@ -210,13 +210,66 @@ extern qboolean WordFilter_Check(const char* text, char* dest_buffer, size_t buf
 // woods #discord
 #define DISCORD_PAYLOAD_MAX 8192
 #define DISCORD_WEBHOOK_URL_MAX 256
-#define DISCORD_NOTIFY_MAX_WORKERS 4
+#define DISCORD_WEBHOOK_REQUEST_URL_MAX (DISCORD_WEBHOOK_URL_MAX + 32)
+#define DISCORD_NOTIFY_MAX_WORKERS 1
+#define DISCORD_ALERT_QUEUE_MAX 8
+#define DISCORD_ALERT_MAPSHOT_WAIT 0.75
+#define DISCORD_ALERT_RESPONSE_MAX 4096
+#define DISCORD_ALERT_RETRY_MAX_SECONDS 60.0
+#define DISCORD_ALERT_FAILURE_WARNING_INTERVAL 30.0
+#define DISCORD_ALERT_FOLLOWUP_WINDOW 90.0
+
+typedef enum
+{
+	DISCORD_ALERT_MENTION,
+	DISCORD_ALERT_DIRECT_MESSAGE,
+	DISCORD_ALERT_TEST
+} discord_alert_kind_t;
+
+typedef struct
+{
+	discord_alert_kind_t kind;
+	qboolean is_test;
+	qboolean compact;
+	char sender[MAX_SCOREBOARDNAME];
+	char message[1024];
+	char server[128];
+	char map[MAX_QPATH];
+	char mode[96];
+	char gamedir[MAX_QPATH];
+	char mapshot_url[301];
+	char webhook_url[DISCORD_WEBHOOK_URL_MAX];
+	char timestamp[32];
+	double mapshot_deadline;
+} discord_alert_t;
+
+typedef struct
+{
+	qboolean valid;
+	discord_alert_kind_t kind;
+	char sender[MAX_SCOREBOARDNAME];
+	char server[128];
+	char map[MAX_QPATH];
+	char mode[96];
+	double last_alert_time;
+} discord_followup_context_t;
 
 typedef struct {
     char payload[DISCORD_PAYLOAD_MAX];
-    char url[DISCORD_WEBHOOK_URL_MAX];
+	char url[DISCORD_WEBHOOK_REQUEST_URL_MAX];
 	qboolean is_test;
 } discord_job_t;
+
+typedef struct
+{
+	char body[DISCORD_ALERT_RESPONSE_MAX];
+	size_t length;
+	double retry_after;
+} discord_http_response_t;
+
+static discord_alert_t discord_alert_queue[DISCORD_ALERT_QUEUE_MAX];
+static int discord_alert_queue_count;
+static discord_followup_context_t discord_followup_context;
 
 static SDL_atomic_t discord_test_status;
 static SDL_atomic_t discord_test_http_code;
@@ -225,11 +278,19 @@ static SDL_atomic_t discord_community_online_count;
 static SDL_atomic_t discord_community_completed_ticks;
 static SDL_atomic_t discord_workers_active;
 static SDL_atomic_t discord_notify_workers_active;
+static SDL_atomic_t discord_notify_failure_status;
+static SDL_atomic_t discord_notify_failure_http_code;
 static SDL_atomic_t discord_shutting_down;
+static con_discord_test_status_t discord_notify_last_warning_status;
+static int discord_notify_last_warning_http_code;
+static double discord_notify_next_warning;
 
 static int DiscordThread(void *data);
-static void MakeDiscordPayload(const char *raw, char *out, size_t outsz);
-static qboolean QSSM_DiscordNotify(const char *raw_msg, qboolean is_test);
+static qboolean DiscordAlert_BuildPayload(const discord_alert_t *alert,
+	char *out, size_t outsz);
+static qboolean QSSM_DiscordNotify(const char *raw_msg,
+	discord_alert_kind_t kind, qboolean is_test);
+static void DiscordAlert_ResetFollowup(void);
 
 static void DiscordTest_SetResult(con_discord_test_status_t status, long http_code)
 {
@@ -237,14 +298,111 @@ static void DiscordTest_SetResult(con_discord_test_status_t status, long http_co
 	SDL_AtomicSet(&discord_test_status, status);
 }
 
-static size_t Discord_DiscardResponse(void *contents, size_t size,
+static void DiscordNotify_SetFailure(con_discord_test_status_t status,
+	long http_code)
+{
+	SDL_AtomicSet(&discord_notify_failure_http_code, (int)http_code);
+	SDL_AtomicSet(&discord_notify_failure_status, status);
+}
+
+static size_t Discord_WriteResponse(void *contents, size_t size,
 	size_t nmemb, void *userdata)
 {
-	(void)contents;
-	(void)userdata;
+	discord_http_response_t *response = (discord_http_response_t *)userdata;
+	size_t bytes, available, copied;
+
 	if (size && nmemb > (size_t)-1 / size)
 		return 0;
-	return size * nmemb;
+	bytes = size * nmemb;
+	if (!response)
+		return bytes;
+	available = sizeof(response->body) - response->length - 1;
+	copied = q_min(bytes, available);
+	if (copied)
+	{
+		memcpy(response->body + response->length, contents, copied);
+		response->length += copied;
+		response->body[response->length] = 0;
+	}
+	/* A diagnostic response may be truncated, but must not abort the request. */
+	return bytes;
+}
+
+static size_t Discord_ReadResponseHeader(char *contents, size_t size,
+	size_t nmemb, void *userdata)
+{
+	static const char retry_after_header[] = "Retry-After:";
+	discord_http_response_t *response = (discord_http_response_t *)userdata;
+	char value[64];
+	char *end;
+	size_t bytes, offset, length;
+	double seconds;
+
+	if (size && nmemb > (size_t)-1 / size)
+		return 0;
+	bytes = size * nmemb;
+	if (!response || bytes < sizeof(retry_after_header) - 1 ||
+		q_strncasecmp(contents, retry_after_header,
+			sizeof(retry_after_header) - 1))
+		return bytes;
+
+	offset = sizeof(retry_after_header) - 1;
+	while (offset < bytes && (contents[offset] == ' ' || contents[offset] == '\t'))
+		offset++;
+	length = q_min(bytes - offset, sizeof(value) - 1);
+	memcpy(value, contents + offset, length);
+	value[length] = 0;
+	seconds = strtod(value, &end);
+	if (end != value && isfinite(seconds) && seconds >= 0.0)
+		response->retry_after = seconds;
+	return bytes;
+}
+
+static double Discord_ResponseRetryAfter(const discord_http_response_t *response)
+{
+	static const char key[] = "\"retry_after\"";
+	const char *value;
+	char *end;
+	double seconds;
+
+	if (response->retry_after >= 0.0)
+		return response->retry_after;
+	value = strstr(response->body, key);
+	if (!value)
+		return -1.0;
+	value += sizeof(key) - 1;
+	while (*value == ' ' || *value == '\t' || *value == '\r' || *value == '\n')
+		value++;
+	if (*value++ != ':')
+		return -1.0;
+	while (*value == ' ' || *value == '\t' || *value == '\r' || *value == '\n')
+		value++;
+	seconds = strtod(value, &end);
+	if (end == value || !isfinite(seconds) || seconds < 0.0)
+		return -1.0;
+	return seconds;
+}
+
+static qboolean Discord_WaitForRetry(double seconds)
+{
+	Uint64 now, deadline, delay_ms;
+
+	if (!isfinite(seconds) || seconds < 0.0 ||
+		seconds > DISCORD_ALERT_RETRY_MAX_SECONDS)
+		return false;
+	delay_ms = (Uint64)ceil(seconds * 1000.0) + 1;
+	now = SDL_GetTicks64();
+	deadline = now + delay_ms;
+	while (now < deadline)
+	{
+		Uint64 remaining = deadline - now;
+
+		if (SDL_AtomicGet(&discord_shutting_down))
+			return false;
+		SDL_Delay((Uint32)q_min(remaining, (Uint64)50));
+		now = SDL_GetTicks64();
+	}
+	return !SDL_AtomicGet(&discord_shutting_down);
 }
 
 static qboolean DiscordWorker_Begin(void)
@@ -293,6 +451,7 @@ static void DiscordNotifyWorker_End(void)
 void Con_DiscordShutdown(void)
 {
 	SDL_AtomicSet(&discord_shutting_down, 1);
+	discord_alert_queue_count = 0;
 	while (SDL_AtomicGet(&discord_workers_active) > 0)
 		SDL_Delay(1);
 }
@@ -343,7 +502,10 @@ static qboolean IsDiscordWebhookURL(const char *url)
 		if (*p++ != '/' || !*p)
 			return false;
 		for (; *p; ++p)
-			if (*p == '/' || *p == '?' || *p == '#')
+			if (!((*p >= 'a' && *p <= 'z') ||
+				(*p >= 'A' && *p <= 'Z') ||
+				(*p >= '0' && *p <= '9') || *p == '-' || *p == '_' ||
+				*p == '.' || *p == '~'))
 				return false;
 		return true;
 	}
@@ -355,6 +517,7 @@ static char g_last_good_discord[256] = ""; // persists between calls
 
 static void ConNotifyDiscord_Callback(cvar_t* var)
 {
+	DiscordAlert_ResetFollowup();
 	if (!var->string[0]) {            // empty is allowed
 		g_last_good_discord[0] = 0;
 		return;
@@ -1903,7 +2066,7 @@ static const char *Con_ChatBodyForSenderPrefix (const char *txt, const char *nam
 	if (!txt || !name[0])
 		return NULL;
 
-	sender = txt + (txt[0] == 1);
+	sender = txt + (txt[0] == 1 || txt[0] == 2);
 	name_length = strlen(name);
 	text_length = strlen(sender);
 	if (text_length >= name_length + 2 &&
@@ -2278,7 +2441,7 @@ static void Con_Print (const char *txt)
 					if (should_notify)
 					{
 						SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
-						QSSM_DiscordNotify(txt, false); // woods #discord
+						QSSM_DiscordNotify(txt, DISCORD_ALERT_MENTION, false); // woods #discord
 					}
 				}
 			}
@@ -2291,7 +2454,7 @@ static void Con_Print (const char *txt)
 		if (!VID_HasMouseOrInputFocus())
 		{
 			SDL_FlashWindow((SDL_Window*)VID_GetWindow(), SDL_FLASH_BRIEFLY);
-			QSSM_DiscordNotify(txt, false); // woods #discord
+			QSSM_DiscordNotify(txt, DISCORD_ALERT_DIRECT_MESSAGE, false); // woods #discord
 		}
 	}
 
@@ -7268,6 +7431,8 @@ static int DiscordThread(void *data)
     discord_job_t *job = (discord_job_t*)data;
 	con_discord_test_status_t test_status = CON_DISCORD_TEST_TRANSPORT_ERROR;
 	long http_code = 0;
+	discord_http_response_t response;
+	int attempt;
 
     CURL *curl = curl_easy_init();
     if (curl) {
@@ -7280,33 +7445,58 @@ static int DiscordThread(void *data)
 			curl_easy_setopt(curl, CURLOPT_POSTFIELDS, job->payload);
 			curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(job->payload)); // exact body size
 			curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr);
-			curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, Discord_DiscardResponse);
+			curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, Discord_WriteResponse);
+			curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+			curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, Discord_ReadResponseHeader);
+			curl_easy_setopt(curl, CURLOPT_HEADERDATA, &response);
 			curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 2000L);
 			curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1500L); // fail fast on connect
 			curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-			curl_easy_setopt(curl, CURLOPT_USERAGENT, "QSS-M");
+			curl_easy_setopt(curl, CURLOPT_USERAGENT, ENGINE_NAME_AND_VER);
+			curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
 			/* keep TLS verification ON (explicit) */
 			curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 			curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+#if CURL_AT_LEAST_VERSION(7, 85, 0)
+			curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
+#else
+			curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
 
-			CURLcode rc = curl_easy_perform(curl);
-			if (rc == CURLE_OPERATION_TIMEDOUT)
+			for (attempt = 0; attempt < 2; ++attempt)
 			{
-				test_status = CON_DISCORD_TEST_TIMEOUT;
-			}
-			else if (rc != CURLE_OK)
-			{
-				test_status = CON_DISCORD_TEST_TRANSPORT_ERROR;
-			}
-			else
-			{
+				CURLcode rc;
+				double retry_after;
+
+				memset(&response, 0, sizeof(response));
+				response.retry_after = -1.0;
+				http_code = 0;
+				rc = curl_easy_perform(curl);
+				if (rc == CURLE_OPERATION_TIMEDOUT)
+				{
+					test_status = CON_DISCORD_TEST_TIMEOUT;
+					break;
+				}
+				if (rc != CURLE_OK)
+				{
+					test_status = CON_DISCORD_TEST_TRANSPORT_ERROR;
+					break;
+				}
+
 				curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 				if (http_code == 204 || http_code == 200)
-					test_status = CON_DISCORD_TEST_DELIVERED;
-				else
 				{
-					test_status = CON_DISCORD_TEST_HTTP_ERROR;
+					test_status = CON_DISCORD_TEST_DELIVERED;
+					break;
 				}
+				if (http_code == 429 && attempt == 0)
+				{
+					retry_after = Discord_ResponseRetryAfter(&response);
+					if (Discord_WaitForRetry(retry_after))
+						continue;
+				}
+				test_status = CON_DISCORD_TEST_HTTP_ERROR;
+				break;
 			}
 		}
 
@@ -7316,86 +7506,693 @@ static int DiscordThread(void *data)
 
 	if (job->is_test)
 		DiscordTest_SetResult(test_status, http_code);
+	else if (test_status != CON_DISCORD_TEST_DELIVERED)
+		DiscordNotify_SetFailure(test_status, http_code);
 
 	free(job);
 	DiscordNotifyWorker_End();
     return 0;
 }
 
-static void MakeDiscordPayload(const char *raw, char *out, size_t outsz)
+typedef struct
 {
-    char clean[1024];
-    const unsigned char *src = (const unsigned char *)raw;
-    size_t len = 0;
+	char *buffer;
+	size_t capacity;
+	size_t length;
+	qboolean valid;
+} discord_alert_json_writer_t;
 
-    if (!outsz) return;
-    out[0] = 0;
-    if (!raw) return;
+typedef enum
+{
+	DISCORD_ALERT_SEND_STARTED,
+	DISCORD_ALERT_SEND_RETRY,
+	DISCORD_ALERT_SEND_DROPPED
+} discord_alert_send_result_t;
 
-    // Strip the console chat colour prefix so Discord doesn't show ".name:".
-    while (*src == 1 || *src == 2)
-        src++;
+extern char lastmphost[NET_NAMELEN];
 
-    while (*src && len + 1 < sizeof(clean))
-        clean[len++] = dequake[*src++];
+static void DiscordAlert_CleanSpan(char *destination, size_t destination_size,
+	const char *source, size_t source_length)
+{
+	size_t read, written = 0;
+	qboolean pending_space = false;
 
-    while (len > 0 && (clean[len - 1] == '\n' || clean[len - 1] == '\r'))
-        len--;
+	if (!destination_size)
+		return;
+	destination[0] = '\0';
+	if (!source)
+		return;
 
-    clean[len] = 0;
+	for (read = 0; read < source_length && source[read]; ++read)
+	{
+		unsigned char c = dequake[(unsigned char)source[read]];
 
-    char *esc = JSON_EscapeString(clean);
-    if (!esc) { out[0] = 0; return; }
-
-    /* Avoid accidental pings to @everyone/@here and roles */
-    q_snprintf(out, outsz,
-               "{\"content\":\"%s\",\"allowed_mentions\":{\"parse\":[]}}",
-               esc);
-    free(esc);
+		if (c == '\r' || c == '\n' || c == '\t' || c == ' ')
+		{
+			pending_space = written > 0;
+			continue;
+		}
+		if (c < 32 || c == 127)
+			continue;
+		if (pending_space)
+		{
+			if (written + 1 >= destination_size)
+				break;
+			destination[written++] = ' ';
+			pending_space = false;
+		}
+		if (written + 1 >= destination_size)
+			break;
+		destination[written++] = (char)c;
+	}
+	destination[written] = '\0';
 }
 
-static qboolean QSSM_DiscordNotify(const char *raw_msg, qboolean is_test)
+static void DiscordAlert_CleanText(char *destination, size_t destination_size,
+	const char *source)
 {
-    if (!con_notifydiscord.string[0]) return false;
-    if (!IsDiscordWebhookURL(con_notifydiscord.string)) {
-        char masked[256];
-        MaskDiscordURL(con_notifydiscord.string, masked, sizeof(masked));
-        Con_Printf("discord: invalid webhook URL ^m%s^m (expected .../api/webhooks/<id>/<token>)\n", masked);
-        return false;
-    }
-
-    char payload[DISCORD_PAYLOAD_MAX];
-    MakeDiscordPayload(raw_msg, payload, sizeof(payload));
-    if (!payload[0]) return false;
-
-	discord_job_t* job = (discord_job_t*)malloc(sizeof(*job));
-	if (!job) {
-		Con_DPrintf("discord: out of memory creating job\n");
-		return false;
+	if (!source)
+	{
+		if (destination_size)
+			destination[0] = '\0';
+		return;
 	}
+	while (*source == 1 || *source == 2)
+		source++;
+	DiscordAlert_CleanSpan(destination, destination_size, source, strlen(source));
+}
 
-    q_strlcpy(job->payload, payload, sizeof(job->payload));
-    q_strlcpy(job->url, con_notifydiscord.string, sizeof(job->url));
-	job->is_test = is_test;
+static void DiscordAlert_EscapeMarkdown(char *destination,
+	size_t destination_size, const char *source)
+{
+	static const char markdown[] = "\\`*_{}[]()#+-.!|>~";
+	size_t written = 0;
+
+	if (!destination_size)
+		return;
+	if (!source)
+		source = "";
+	while (*source && written + 1 < destination_size)
+	{
+		if (strchr(markdown, *source))
+		{
+			if (written + 2 >= destination_size)
+				break;
+			destination[written++] = '\\';
+		}
+		destination[written++] = *source++;
+	}
+	destination[written] = '\0';
+}
+
+static qboolean DiscordAlert_ParsePlayerChat(discord_alert_t *alert,
+	const char *raw)
+{
+	const char *body = Con_PlayerChatBody(raw);
+	const char *sender_start;
+	const char *sender_end;
+
+	if (!body || body < raw + 2)
+		return false;
+	sender_start = raw + (raw[0] == 1 || raw[0] == 2);
+	sender_end = body - 2; /* points at the ':' in the recognized ": " separator */
+	if (sender_start < sender_end && sender_start[0] == '(' &&
+		sender_end[-1] == ')')
+	{
+		sender_start++;
+		sender_end--;
+	}
+	if (sender_end <= sender_start)
+		return false;
+
+	DiscordAlert_CleanSpan(alert->sender, sizeof(alert->sender), sender_start,
+		(size_t)(sender_end - sender_start));
+	DiscordAlert_CleanText(alert->message, sizeof(alert->message), body);
+	return alert->sender[0] && alert->message[0];
+}
+
+static qboolean DiscordAlert_ParseDirectMessage(discord_alert_t *alert,
+	const char *raw)
+{
+	const char *sender_start;
+	const char *sender_end;
+	const char *body;
+
+	if (!Con_IsDirectMessage(raw))
+		return false;
+	sender_start = raw + 4;
+	sender_end = strstr(sender_start, "]:");
+	if (!sender_end)
+		return false;
+	body = sender_end + 2;
+	while (*body == ' ')
+		body++;
+
+	DiscordAlert_CleanSpan(alert->sender, sizeof(alert->sender), sender_start,
+		(size_t)(sender_end - sender_start));
+	DiscordAlert_CleanText(alert->message, sizeof(alert->message), body);
+	return alert->sender[0] && alert->message[0];
+}
+
+static const char *DiscordAlert_ModeLabel(const char *mode)
+{
+	if (!q_strcasecmp(mode, "ctf"))
+		return "Capture the Flag";
+	if (!q_strcasecmp(mode, "dm") || !q_strcasecmp(mode, "ffa"))
+		return "Deathmatch";
+	if (!q_strcasecmp(mode, "arena"))
+		return "Arena";
+	if (!q_strcasecmp(mode, "wipeout"))
+		return "Wipeout";
+	if (!q_strcasecmp(mode, "dmm4") || !q_strcasecmp(mode, "ctfdmm4"))
+		return "DMM4";
+	if (!q_strcasecmp(mode, "ca") || !q_strcasecmp(mode, "clanarena"))
+		return "Clan Arena";
+	if (!q_strcasecmp(mode, "ra") || !q_strcasecmp(mode, "rocketarena") ||
+		!q_strcasecmp(mode, "rocket_arena"))
+		return "Rocket Arena";
+	if (!q_strcasecmp(mode, "airshot"))
+		return "Airshot";
+	if (!q_strcasecmp(mode, "freezetag"))
+		return "Freeze Tag";
+	if (!q_strcasecmp(mode, "hh") || !q_strcasecmp(mode, "headhunter") ||
+		!q_strcasecmp(mode, "headhunters"))
+		return "Head Hunters";
+	return NULL;
+}
+
+static const char *DiscordAlert_PlaymodeLabel(const char *playmode)
+{
+	if (!q_strcasecmp(playmode, "match"))
+		return "Match";
+	if (!q_strcasecmp(playmode, "pug"))
+		return "PUG";
+	if (!q_strcasecmp(playmode, "ffa"))
+		return "FFA";
+	if (!q_strcasecmp(playmode, "practice"))
+		return "Practice";
+	if (!q_strcasecmp(playmode, "normal") || !q_strcasecmp(playmode, "pub"))
+		return "Public";
+	return NULL;
+}
+
+static void DiscordAlert_CaptureMode(discord_alert_t *alert)
+{
+	char mode[32] = "", gametype[32] = "", playmode[32] = "";
+	char clean[64];
+	const char *raw_mode;
+	const char *mode_label;
+	const char *playmode_label;
+
+	Info_GetKey(cl.serverinfo, "mode", mode, sizeof(mode));
+	Info_GetKey(cl.serverinfo, "gametype", gametype, sizeof(gametype));
+	Info_GetKey(cl.serverinfo, "playmode", playmode, sizeof(playmode));
+	raw_mode = mode[0] ? mode : gametype;
+	mode_label = DiscordAlert_ModeLabel(raw_mode);
+	playmode_label = DiscordAlert_PlaymodeLabel(playmode);
+
+	if (mode_label)
+		q_strlcpy(alert->mode, mode_label, sizeof(alert->mode));
+	else if (raw_mode[0] && !q_isdigit((unsigned char)raw_mode[0]))
+	{
+		DiscordAlert_CleanText(clean, sizeof(clean), raw_mode);
+		q_strlcpy(alert->mode, clean, sizeof(alert->mode));
+	}
+	else if (cl.gametype == GAME_COOP)
+		q_strlcpy(alert->mode, "Co-op", sizeof(alert->mode));
+	else if (cl.gametype == GAME_DEATHMATCH)
+		q_strlcpy(alert->mode, "Deathmatch", sizeof(alert->mode));
+	else
+		q_strlcpy(alert->mode, "Multiplayer", sizeof(alert->mode));
+
+	if (playmode_label && q_strcasecmp(alert->mode, playmode_label))
+	{
+		q_strlcat(alert->mode, " - ", sizeof(alert->mode));
+		q_strlcat(alert->mode, playmode_label, sizeof(alert->mode));
+	}
+}
+
+static void DiscordAlert_FormatTimestamp(char *destination,
+	size_t destination_size, time_t timestamp)
+{
+	struct tm *utc;
+
+	if (!destination_size)
+		return;
+	destination[0] = '\0';
+	utc = gmtime(&timestamp); /* main thread only; copied before a worker starts */
+	if (utc)
+		strftime(destination, destination_size, "%Y-%m-%dT%H:%M:%SZ", utc);
+}
+
+static void DiscordAlert_CaptureContext(discord_alert_t *alert)
+{
+	char hostname[128] = "";
+	char display_address[MAX_SERVER_ADDRESS_LEN] = "";
+
+	DiscordAlert_FormatTimestamp(alert->timestamp, sizeof(alert->timestamp),
+		time(NULL));
+	if (cls.state != ca_connected || cls.signon != SIGNONS || cls.demoplayback)
+		return;
+
+	DiscordAlert_CleanText(alert->map, sizeof(alert->map), cl.mapname);
+	Info_GetKey(cl.serverinfo, "hostname", hostname, sizeof(hostname));
+	DiscordAlert_CleanText(alert->server, sizeof(alert->server), hostname);
+	if (!alert->server[0] || !q_strcasecmp(alert->server, "UNNAMED"))
+	{
+		NET_HostnameCache_FormatDisplay(lastmphost, net_hostport,
+			display_address, sizeof(display_address));
+		DiscordAlert_CleanText(alert->server, sizeof(alert->server),
+			display_address);
+	}
+	DiscordAlert_CaptureMode(alert);
+	if (alert->map[0])
+		Mapshot_CurrentGameDir(alert->gamedir, sizeof(alert->gamedir));
+}
+
+static void DiscordAlert_ResetFollowup(void)
+{
+	memset(&discord_followup_context, 0, sizeof(discord_followup_context));
+}
+
+static qboolean DiscordAlert_IsFollowup(const discord_alert_t *alert)
+{
+	if (!discord_followup_context.valid ||
+		alert->kind == DISCORD_ALERT_TEST ||
+		realtime < discord_followup_context.last_alert_time ||
+		realtime - discord_followup_context.last_alert_time >
+			DISCORD_ALERT_FOLLOWUP_WINDOW)
+		return false;
+	return alert->kind == discord_followup_context.kind &&
+		!strcmp(alert->sender, discord_followup_context.sender) &&
+		!strcmp(alert->server, discord_followup_context.server) &&
+		!strcmp(alert->map, discord_followup_context.map) &&
+		!strcmp(alert->mode, discord_followup_context.mode);
+}
+
+static void DiscordAlert_RecordFollowupContext(const discord_alert_t *alert)
+{
+	discord_followup_context.valid = true;
+	discord_followup_context.kind = alert->kind;
+	q_strlcpy(discord_followup_context.sender, alert->sender,
+		sizeof(discord_followup_context.sender));
+	q_strlcpy(discord_followup_context.server, alert->server,
+		sizeof(discord_followup_context.server));
+	q_strlcpy(discord_followup_context.map, alert->map,
+		sizeof(discord_followup_context.map));
+	q_strlcpy(discord_followup_context.mode, alert->mode,
+		sizeof(discord_followup_context.mode));
+	discord_followup_context.last_alert_time = realtime;
+}
+
+static void DiscordAlert_PrepareFullCard(discord_alert_t *alert)
+{
+	alert->compact = false;
+	alert->mapshot_url[0] = '\0';
+	alert->mapshot_deadline = 0.0;
+	if (alert->map[0])
+	{
+		if (!Mapshot_ResolveURL(alert->map, alert->gamedir,
+			alert->mapshot_url, sizeof(alert->mapshot_url)))
+			alert->mapshot_deadline = realtime + DISCORD_ALERT_MAPSHOT_WAIT;
+	}
+}
+
+static qboolean DiscordAlert_BuildSnapshot(discord_alert_t *alert,
+	const char *raw, discord_alert_kind_t kind, qboolean is_test)
+{
+	qboolean parsed = false;
+
+	memset(alert, 0, sizeof(*alert));
+	alert->kind = kind;
+	alert->is_test = is_test;
+	if (kind == DISCORD_ALERT_MENTION)
+		parsed = DiscordAlert_ParsePlayerChat(alert, raw);
+	else if (kind == DISCORD_ALERT_DIRECT_MESSAGE)
+		parsed = DiscordAlert_ParseDirectMessage(alert, raw);
+	else
+	{
+		q_strlcpy(alert->sender, "QSS-M", sizeof(alert->sender));
+		DiscordAlert_CleanText(alert->message, sizeof(alert->message), raw);
+		parsed = alert->message[0] != '\0';
+	}
+	if (!parsed)
+	{
+		q_strlcpy(alert->sender, kind == DISCORD_ALERT_TEST ? "QSS-M" : "Player",
+			sizeof(alert->sender));
+		DiscordAlert_CleanText(alert->message, sizeof(alert->message), raw);
+	}
+	if (!alert->message[0])
+		q_strlcpy(alert->message, "(empty message)", sizeof(alert->message));
+	DiscordAlert_CaptureContext(alert);
+	if (kind != DISCORD_ALERT_TEST)
+	{
+		alert->compact = DiscordAlert_IsFollowup(alert);
+		DiscordAlert_RecordFollowupContext(alert);
+	}
+	if (!alert->compact)
+		DiscordAlert_PrepareFullCard(alert);
+	return true;
+}
+
+static void DiscordAlertJSON_Init(discord_alert_json_writer_t *writer,
+	char *buffer, size_t capacity)
+{
+	writer->buffer = buffer;
+	writer->capacity = capacity;
+	writer->length = 0;
+	writer->valid = capacity > 0;
+	if (capacity)
+		buffer[0] = '\0';
+}
+
+static void DiscordAlertJSON_AppendBytes(discord_alert_json_writer_t *writer,
+	const char *data, size_t length)
+{
+	if (!writer->valid || writer->length >= writer->capacity ||
+		length > writer->capacity - writer->length - 1)
+	{
+		writer->valid = false;
+		return;
+	}
+	memcpy(writer->buffer + writer->length, data, length);
+	writer->length += length;
+	writer->buffer[writer->length] = '\0';
+}
+
+static void DiscordAlertJSON_Append(discord_alert_json_writer_t *writer,
+	const char *text)
+{
+	DiscordAlertJSON_AppendBytes(writer, text, strlen(text));
+}
+
+static void DiscordAlertJSON_AppendString(discord_alert_json_writer_t *writer,
+	const char *text)
+{
+	static const char hex[] = "0123456789abcdef";
+	const unsigned char *p = (const unsigned char *)(text ? text : "");
+
+	DiscordAlertJSON_Append(writer, "\"");
+	while (writer->valid && *p)
+	{
+		char escaped[6];
+		unsigned char c = *p++;
+
+		if (c == '"' || c == '\\')
+		{
+			escaped[0] = '\\';
+			escaped[1] = (char)c;
+			DiscordAlertJSON_AppendBytes(writer, escaped, 2);
+		}
+		else if (c >= 32 && c < 127)
+		{
+			escaped[0] = (char)c;
+			DiscordAlertJSON_AppendBytes(writer, escaped, 1);
+		}
+		else
+		{
+			escaped[0] = '\\';
+			escaped[1] = 'u';
+			escaped[2] = '0';
+			escaped[3] = '0';
+			escaped[4] = hex[(c >> 4) & 0xf];
+			escaped[5] = hex[c & 0xf];
+			DiscordAlertJSON_AppendBytes(writer, escaped, sizeof(escaped));
+		}
+	}
+	DiscordAlertJSON_Append(writer, "\"");
+}
+
+static void DiscordAlertJSON_AppendField(discord_alert_json_writer_t *writer,
+	const char *name, const char *value, qboolean inline_value,
+	qboolean *have_field)
+{
+	if (!value || !value[0])
+		return;
+	if (*have_field)
+		DiscordAlertJSON_Append(writer, ",");
+	DiscordAlertJSON_Append(writer, "{\"name\":");
+	DiscordAlertJSON_AppendString(writer, name);
+	DiscordAlertJSON_Append(writer, ",\"value\":");
+	DiscordAlertJSON_AppendString(writer, value);
+	DiscordAlertJSON_Append(writer, inline_value ? ",\"inline\":true}" : "}");
+	*have_field = true;
+}
+
+static qboolean DiscordAlert_BuildPayload(const discord_alert_t *alert,
+	char *out, size_t outsz)
+{
+	discord_alert_json_writer_t writer;
+	char author[MAX_SCOREBOARDNAME + 64];
+	char message[2048];
+	char server[256], map[2 * MAX_QPATH], mode[192];
+	char color[16];
+	qboolean have_field = false;
+	int embed_color;
+
+	if (!alert || !outsz)
+		return false;
+	DiscordAlert_EscapeMarkdown(message, sizeof(message), alert->message);
+	DiscordAlert_EscapeMarkdown(server, sizeof(server), alert->server);
+	DiscordAlert_EscapeMarkdown(map, sizeof(map), alert->map);
+	DiscordAlert_EscapeMarkdown(mode, sizeof(mode), alert->mode);
+	if (alert->compact)
+	{
+		q_strlcpy(author, alert->sender, sizeof(author));
+		embed_color = alert->kind == DISCORD_ALERT_DIRECT_MESSAGE ?
+			10181046 : 5793266;
+	}
+	else if (alert->kind == DISCORD_ALERT_DIRECT_MESSAGE)
+	{
+		q_snprintf(author, sizeof(author), "%s - direct message", alert->sender);
+		embed_color = 10181046;
+	}
+	else if (alert->kind == DISCORD_ALERT_TEST)
+	{
+		q_strlcpy(author, "QSS-M - test alert", sizeof(author));
+		embed_color = 15844367;
+	}
+	else
+	{
+		q_snprintf(author, sizeof(author), "%s - mentioned you", alert->sender);
+		embed_color = 5793266;
+	}
+	q_snprintf(color, sizeof(color), "%d", embed_color);
+
+	DiscordAlertJSON_Init(&writer, out, outsz);
+	DiscordAlertJSON_Append(&writer,
+		"{\"username\":\"QSS-M Alerts\",\"allowed_mentions\":{\"parse\":[]},"
+		"\"embeds\":[{\"author\":{\"name\":");
+	DiscordAlertJSON_AppendString(&writer, author);
+	DiscordAlertJSON_Append(&writer, "},\"description\":");
+	DiscordAlertJSON_AppendString(&writer, message);
+	DiscordAlertJSON_Append(&writer, ",\"color\":");
+	DiscordAlertJSON_Append(&writer, color);
+	if (!alert->compact && (server[0] || map[0] || mode[0]))
+	{
+		DiscordAlertJSON_Append(&writer, ",\"fields\":[");
+		DiscordAlertJSON_AppendField(&writer, "Server", server, false, &have_field);
+		DiscordAlertJSON_AppendField(&writer, "Map", map, true, &have_field);
+		DiscordAlertJSON_AppendField(&writer, "Mode", mode, true, &have_field);
+		DiscordAlertJSON_Append(&writer, "]");
+	}
+	if (!alert->compact && alert->mapshot_url[0] &&
+		!q_strncasecmp(alert->mapshot_url, "https://", 8))
+	{
+		DiscordAlertJSON_Append(&writer, ",\"thumbnail\":{\"url\":");
+		DiscordAlertJSON_AppendString(&writer, alert->mapshot_url);
+		DiscordAlertJSON_Append(&writer, "}");
+	}
+	if (!alert->compact)
+	{
+		DiscordAlertJSON_Append(&writer,
+			",\"footer\":{\"text\":\"QSS-M Alert\"}");
+		if (alert->timestamp[0])
+		{
+			DiscordAlertJSON_Append(&writer, ",\"timestamp\":");
+			DiscordAlertJSON_AppendString(&writer, alert->timestamp);
+		}
+	}
+	DiscordAlertJSON_Append(&writer, "}]}");
+	return writer.valid;
+}
+
+static discord_alert_send_result_t DiscordAlert_StartJob(
+	const discord_alert_t *alert)
+{
+	discord_job_t *job;
+	SDL_Thread *thread;
+	int url_length;
+
+	if (SDL_AtomicGet(&discord_shutting_down))
+		return DISCORD_ALERT_SEND_DROPPED;
+	if (SDL_AtomicGet(&discord_notify_workers_active) >= DISCORD_NOTIFY_MAX_WORKERS)
+		return DISCORD_ALERT_SEND_RETRY;
+
+	job = (discord_job_t *)malloc(sizeof(*job));
+	if (!job)
+	{
+		Con_DPrintf("discord: out of memory creating job\n");
+		return DISCORD_ALERT_SEND_DROPPED;
+	}
+	if (!DiscordAlert_BuildPayload(alert, job->payload, sizeof(job->payload)))
+	{
+		Con_DWarning("Discord alert payload exceeded its fixed buffer\n");
+		free(job);
+		return DISCORD_ALERT_SEND_DROPPED;
+	}
+	url_length = q_snprintf(job->url, sizeof(job->url), "%s?wait=true",
+		alert->webhook_url);
+	if (url_length < 0 || (size_t)url_length >= sizeof(job->url))
+	{
+		free(job);
+		return DISCORD_ALERT_SEND_DROPPED;
+	}
+	job->is_test = alert->is_test;
 
 	if (!DiscordNotifyWorker_Begin())
 	{
 		free(job);
-		return false;
+		return SDL_AtomicGet(&discord_shutting_down) ?
+			DISCORD_ALERT_SEND_DROPPED : DISCORD_ALERT_SEND_RETRY;
 	}
-    SDL_Thread *t = SDL_CreateThread(DiscordThread, "discord", job);
-	if (t) {
-		SDL_DetachThread(t);
-		if (!is_test)
-			Sys_IncrementDockNotificationBadge();
-		return true;
-	}
-	else {
+	thread = SDL_CreateThread(DiscordThread, "discord", job);
+	if (!thread)
+	{
 		Con_DPrintf("discord: failed to create thread: %s\n", SDL_GetError());
+		if (!alert->is_test)
+			DiscordNotify_SetFailure(CON_DISCORD_TEST_TRANSPORT_ERROR, 0);
 		free(job);
 		DiscordNotifyWorker_End();
+		return DISCORD_ALERT_SEND_DROPPED;
+	}
+	SDL_DetachThread(thread);
+	if (!alert->is_test)
+		Sys_IncrementDockNotificationBadge();
+	return DISCORD_ALERT_SEND_STARTED;
+}
+
+static void DiscordAlert_RemoveFirst(void)
+{
+	if (discord_alert_queue_count <= 0)
+		return;
+	discord_alert_queue_count--;
+	if (discord_alert_queue_count > 0)
+		memmove(&discord_alert_queue[0], &discord_alert_queue[1],
+			(size_t)discord_alert_queue_count * sizeof(discord_alert_queue[0]));
+}
+
+static void DiscordAlert_PromoteFirstCompact(void)
+{
+	int i;
+
+	for (i = 0; i < discord_alert_queue_count; ++i)
+	{
+		if (discord_alert_queue[i].is_test)
+			continue;
+		if (discord_alert_queue[i].compact)
+			DiscordAlert_PrepareFullCard(&discord_alert_queue[i]);
+		break;
+	}
+}
+
+static qboolean DiscordAlert_Enqueue(const discord_alert_t *alert)
+{
+	if (discord_alert_queue_count >= DISCORD_ALERT_QUEUE_MAX)
+	{
+		qboolean dropped_full = !discord_alert_queue[0].is_test &&
+			!discord_alert_queue[0].compact;
+
+		if (discord_alert_queue[0].is_test)
+			DiscordTest_SetResult(CON_DISCORD_TEST_TRANSPORT_ERROR, 0);
+		DiscordAlert_RemoveFirst();
+		if (dropped_full)
+			DiscordAlert_PromoteFirstCompact();
+		Con_DWarning("Discord alert queue full; dropped oldest alert\n");
+	}
+	discord_alert_queue[discord_alert_queue_count++] = *alert;
+	return true;
+}
+
+static void DiscordNotify_ReportFailure(void)
+{
+	con_discord_test_status_t status =
+		(con_discord_test_status_t)SDL_AtomicGet(&discord_notify_failure_status);
+	int http_code;
+
+	if (status == CON_DISCORD_TEST_IDLE ||
+		!SDL_AtomicCAS(&discord_notify_failure_status, status,
+			CON_DISCORD_TEST_IDLE))
+		return;
+	http_code = SDL_AtomicGet(&discord_notify_failure_http_code);
+	if (status == discord_notify_last_warning_status &&
+		http_code == discord_notify_last_warning_http_code &&
+		realtime < discord_notify_next_warning)
+		return;
+
+	discord_notify_last_warning_status = status;
+	discord_notify_last_warning_http_code = http_code;
+	discord_notify_next_warning = realtime +
+		DISCORD_ALERT_FAILURE_WARNING_INTERVAL;
+	if (status == CON_DISCORD_TEST_TIMEOUT)
+		Con_Warning("Discord alert timed out; delivery could not be confirmed\n");
+	else if (status == CON_DISCORD_TEST_HTTP_ERROR)
+		Con_Warning("Discord alert rejected with HTTP %d\n", http_code);
+	else
+		Con_Warning("Discord alert delivery could not be confirmed\n");
+}
+
+void Con_DiscordFrame(void)
+{
+	if (discord_followup_context.valid && VID_HasMouseOrInputFocus())
+		DiscordAlert_ResetFollowup();
+	DiscordNotify_ReportFailure();
+	while (discord_alert_queue_count > 0)
+	{
+		discord_alert_t *alert = &discord_alert_queue[0];
+		discord_alert_send_result_t result;
+		qboolean dropped_full;
+
+		if (!alert->mapshot_url[0] && alert->map[0] &&
+			realtime < alert->mapshot_deadline)
+		{
+			if (!Mapshot_ResolveURL(alert->map, alert->gamedir,
+				alert->mapshot_url, sizeof(alert->mapshot_url)))
+				break;
+		}
+
+		result = DiscordAlert_StartJob(alert);
+		if (result == DISCORD_ALERT_SEND_RETRY)
+			break;
+		dropped_full = result == DISCORD_ALERT_SEND_DROPPED &&
+			!alert->is_test && !alert->compact;
+		if (result == DISCORD_ALERT_SEND_DROPPED && alert->is_test)
+			DiscordTest_SetResult(CON_DISCORD_TEST_TRANSPORT_ERROR, 0);
+		DiscordAlert_RemoveFirst();
+		if (dropped_full)
+			DiscordAlert_PromoteFirstCompact();
+	}
+}
+
+static qboolean QSSM_DiscordNotify(const char *raw_msg,
+	discord_alert_kind_t kind, qboolean is_test)
+{
+	discord_alert_t alert;
+
+	if (!con_notifydiscord.string[0])
+		return false;
+	if (!IsDiscordWebhookURL(con_notifydiscord.string))
+	{
+		char masked[256];
+		MaskDiscordURL(con_notifydiscord.string, masked, sizeof(masked));
+		Con_Printf("discord: invalid webhook URL ^m%s^m (expected .../api/webhooks/<id>/<token>)\n", masked);
 		return false;
 	}
+
+	DiscordAlert_BuildSnapshot(&alert, raw_msg, kind, is_test);
+	q_strlcpy(alert.webhook_url, con_notifydiscord.string,
+		sizeof(alert.webhook_url));
+	return DiscordAlert_Enqueue(&alert);
 }
 
 con_discord_test_status_t Con_DiscordNotifyTest(void)
@@ -7407,7 +8204,7 @@ con_discord_test_status_t Con_DiscordNotifyTest(void)
 		return CON_DISCORD_TEST_NOT_CONFIGURED;
 
 	DiscordTest_SetResult(CON_DISCORD_TEST_SENDING, 0);
-	if (!QSSM_DiscordNotify("Menu Discord alert test", true))
+	if (!QSSM_DiscordNotify("Menu Discord alert test", DISCORD_ALERT_TEST, true))
 	{
 		DiscordTest_SetResult(CON_DISCORD_TEST_TRANSPORT_ERROR, 0);
 		return CON_DISCORD_TEST_TRANSPORT_ERROR;

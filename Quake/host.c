@@ -2552,6 +2552,7 @@ void _Host_Frame (double time)
 	UpdateWindowTitle(); // github.com/andrei-drexler/ironwail (Show game summary in window title)
 	Host_UpdateDockBadge(); // woods -- show download progress in the platform shell UI
 	Mapshot_Frame();		// completes lookups before presence reads the result
+	Con_DiscordFrame();		// dispatch alert cards after mapshot results are collected
 	DiscordPresence_Frame();
 
 	if (host_speeds.value)

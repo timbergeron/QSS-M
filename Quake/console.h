@@ -74,6 +74,7 @@ void Con_DrawNotify (void);
 void Con_ClearNotify (void);
 con_discord_test_status_t Con_DiscordNotifyTest (void);
 con_discord_test_status_t Con_DiscordNotifyTestStatus (int *http_code);
+void Con_DiscordFrame (void);
 void Con_DiscordCommunityRefresh (void);
 con_discord_community_status_t Con_DiscordCommunityStatus (int *online_count);
 void Con_DiscordShutdown (void);
