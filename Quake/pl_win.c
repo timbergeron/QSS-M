@@ -250,6 +250,10 @@ static void PL_QuitHoldPaint (HWND hwnd)
 	RECT rect;
 	RECT text_rect;
 	HDC dc;
+	HDC paint_dc;
+	HDC buffer_dc;
+	HBITMAP buffer_bitmap;
+	HGDIOBJ old_bitmap;
 	HBRUSH background;
 	HPEN border;
 	HFONT font;
@@ -262,6 +266,23 @@ static void PL_QuitHoldPaint (HWND hwnd)
 
 	dc = BeginPaint(hwnd, &paint);
 	GetClientRect(hwnd, &rect);
+	paint_dc = dc;
+	buffer_dc = CreateCompatibleDC(dc);
+	buffer_bitmap = buffer_dc ? CreateCompatibleBitmap(dc,
+		rect.right - rect.left, rect.bottom - rect.top) : NULL;
+	old_bitmap = buffer_bitmap ? SelectObject(buffer_dc, buffer_bitmap) : NULL;
+	if (old_bitmap && old_bitmap != HGDI_ERROR)
+		paint_dc = buffer_dc;
+	else
+	{
+		if (buffer_bitmap)
+			DeleteObject(buffer_bitmap);
+		if (buffer_dc)
+			DeleteDC(buffer_dc);
+		buffer_bitmap = NULL;
+		buffer_dc = NULL;
+		old_bitmap = NULL;
+	}
 	dpi = PL_GetWindowDPI(hwnd);
 	radius = MulDiv(5, dpi, 96);
 	if (radius < 3)
@@ -269,11 +290,11 @@ static void PL_QuitHoldPaint (HWND hwnd)
 
 	background = CreateSolidBrush(RGB(41, 41, 41));
 	border = CreatePen(PS_SOLID, 1, RGB(82, 82, 82));
-	old_brush = SelectObject(dc, background);
-	old_pen = SelectObject(dc, border);
-	RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius * 2, radius * 2);
-	SelectObject(dc, old_pen);
-	SelectObject(dc, old_brush);
+	old_brush = SelectObject(paint_dc, background);
+	old_pen = SelectObject(paint_dc, border);
+	RoundRect(paint_dc, rect.left, rect.top, rect.right, rect.bottom, radius * 2, radius * 2);
+	SelectObject(paint_dc, old_pen);
+	SelectObject(paint_dc, old_brush);
 	DeleteObject(border);
 	DeleteObject(background);
 
@@ -282,21 +303,29 @@ static void PL_QuitHoldPaint (HWND hwnd)
 	else
 		progress = (float)(DWORD)(GetTickCount() - pl_quit_hold_started) /
 			(float)PL_QUIT_HOLD_DURATION_MS;
-	PL_QuitHoldDrawProgress(dc, &rect, progress, radius);
+	PL_QuitHoldDrawProgress(paint_dc, &rect, progress, radius);
 
 	font = CreateFontW(-MulDiv(24, dpi, 96), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
 		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
 		CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-	old_font = font ? SelectObject(dc, font) : NULL;
-	SetBkMode(dc, TRANSPARENT);
-	SetTextColor(dc, RGB(255, 255, 255));
+	old_font = font ? SelectObject(paint_dc, font) : NULL;
+	SetBkMode(paint_dc, TRANSPARENT);
+	SetTextColor(paint_dc, RGB(255, 255, 255));
 	text_rect = rect;
-	DrawTextW(dc, L"Hold Ctrl+W to Quit", -1, &text_rect,
+	DrawTextW(paint_dc, L"Hold Ctrl+W to Quit", -1, &text_rect,
 		DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 	if (old_font)
-		SelectObject(dc, old_font);
+		SelectObject(paint_dc, old_font);
 	if (font)
 		DeleteObject(font);
+	if (buffer_dc)
+	{
+		BitBlt(dc, rect.left, rect.top, rect.right - rect.left,
+			rect.bottom - rect.top, buffer_dc, 0, 0, SRCCOPY);
+		SelectObject(buffer_dc, old_bitmap);
+		DeleteObject(buffer_bitmap);
+		DeleteDC(buffer_dc);
+	}
 	EndPaint(hwnd, &paint);
 }
 
