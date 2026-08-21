@@ -225,6 +225,9 @@ static int PartialIPAddress (const char *in, struct qsockaddr *hostaddr)
 	char	*b;
 	int	addr, mask, num, port, run;
 
+	if (!in || !hostaddr || strlen(in) >= sizeof(buff) - 1)
+		return -1;
+
 	buff[0] = '.';
 	b = buff;
 	strcpy(buff+1, in);
@@ -453,11 +456,21 @@ const char *UDP_AddrToString (struct qsockaddr *addr, qboolean masked)
 
 int UDP4_StringToAddr (const char *string, struct qsockaddr *addr)
 {
-	int	ha1, ha2, ha3, ha4, hp, ipaddr;
+	int	ha1, ha2, ha3, ha4, hp;
+	unsigned int ipaddr;
+	char trailing;
 
-	sscanf(string, "%d.%d.%d.%d:%d", &ha1, &ha2, &ha3, &ha4, &hp);
-	ipaddr = (ha1 << 24) | (ha2 << 16) | (ha3 << 8) | ha4;
+	if (!string || !addr ||
+		sscanf(string, "%d.%d.%d.%d:%d%c", &ha1, &ha2, &ha3, &ha4, &hp,
+			&trailing) != 5 ||
+		ha1 < 0 || ha1 > 255 || ha2 < 0 || ha2 > 255 ||
+		ha3 < 0 || ha3 > 255 || ha4 < 0 || ha4 > 255 ||
+		hp <= 0 || hp > 65535)
+		return -1;
+	ipaddr = ((unsigned int)ha1 << 24) | ((unsigned int)ha2 << 16) |
+		((unsigned int)ha3 << 8) | (unsigned int)ha4;
 
+	memset(addr, 0, sizeof(*addr));
 	addr->qsa_family = AF_INET;
 	((struct sockaddr_in *)addr)->sin_addr.s_addr = htonl(ipaddr);
 	((struct sockaddr_in *)addr)->sin_port = htons((unsigned short)hp);
@@ -520,9 +533,18 @@ int UDP_GetNameFromAddr (struct qsockaddr *addr, char *name)
 
 int UDP4_GetAddrFromName (const char *name, struct qsockaddr *addr)
 {
-	struct hostent *hostentry;
+	struct addrinfo hints;
+	struct addrinfo *result = NULL;
+	struct addrinfo *entry;
 	const char *colon;
+	const char *hostname = name;
+	char hostname_buf[MAX_SERVER_ADDRESS_LEN];
 	unsigned short port = net_hostport;
+	qboolean success = false;
+	int error;
+
+	if (!name || !*name || !addr)
+		return -1;
 
 	if (name[0] >= '0' && name[0] <= '9')
 		return PartialIPAddress (name, addr);
@@ -530,25 +552,41 @@ int UDP4_GetAddrFromName (const char *name, struct qsockaddr *addr)
 	colon = strrchr(name, ':');
 	if (colon)
 	{
-		char dupe[MAXHOSTNAMELEN];
-		if (colon-name+1 > MAXHOSTNAMELEN)
+		if (strchr(name, ':') != colon || colon == name ||
+			(size_t)(colon - name) >= sizeof(hostname_buf))
 			return -1;
-		memcpy(dupe, name, colon-name);
-		dupe[colon-name] = 0;
-		hostentry = gethostbyname (dupe);
+		memcpy(hostname_buf, name, (size_t)(colon - name));
+		hostname_buf[colon - name] = '\0';
+		hostname = hostname_buf;
 		port = strtoul(colon+1, NULL, 10);
 	}
-	else
-		hostentry = gethostbyname (name);
-	if (!hostentry || hostentry->h_addrtype != AF_INET)
+
+	/* gethostbyname returns process-global static storage on some supported
+	 * Unix platforms. Background connect, port-probe, and heartbeat lookups may
+	 * overlap, so use the reentrant resolver interface and copy its result. */
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_protocol = IPPROTO_UDP;
+	error = getaddrinfo(hostname, NULL, &hints, &result);
+	if (error != 0)
 		return -1;
 
-	addr->qsa_family = AF_INET;
-	((struct sockaddr_in *)addr)->sin_port = htons(port);
-	((struct sockaddr_in *)addr)->sin_addr.s_addr =
-						*(in_addr_t *)hostentry->h_addr_list[0];
+	for (entry = result; entry; entry = entry->ai_next)
+	{
+		if (entry->ai_family == AF_INET &&
+			entry->ai_addrlen >= sizeof(struct sockaddr_in))
+		{
+			memset(addr, 0, sizeof(*addr));
+			memcpy(addr, entry->ai_addr, sizeof(struct sockaddr_in));
+			((struct sockaddr_in *)addr)->sin_port = htons(port);
+			success = true;
+			break;
+		}
+	}
+	freeaddrinfo(result);
 
-	return 0;
+	return success ? 0 : -1;
 }
 
 //=============================================================================

@@ -187,10 +187,12 @@ typedef struct portpingprobe_ctx_s
 	unsigned long delay_ms;
 	int landriver;
 	char connect_addr[NET_NAMELEN];
+	char resolve_address[MAX_SERVER_ADDRESS_LEN + 16];
 	struct qsockaddr target_addr;
 	byte serverinfo_packet[4 + 1 + sizeof("QUAKE") + 1];
 	portpingprobe_query_t query;
 	portpingprobe_endpoint_t endpoints[MAX_NET_DRIVERS];
+	int enabled_endpoint_count;
 	int endpoint_count;
 	portpingprobe_candidate_t *candidates;
 	int responsive_ports;
@@ -214,12 +216,15 @@ static int net_probe_clientport = 0;
 static int net_probe_clientlandriver = -1;
 static sys_socket_t net_probe_clientsocket = INVALID_SOCKET;
 static qboolean net_probe_clienthas_target = false;
+static qboolean net_probe_clientresolvefailed = false;
+static char net_probe_clientresolveaddress[NET_NAMELEN];
 static struct qsockaddr net_probe_clienttarget;
 
 static struct
 {
 	qboolean valid;
 	qboolean has_target;
+	qboolean resolution_failed;
 	char connect_addr[NET_NAMELEN];
 	int landriver;
 	struct qsockaddr target_addr;
@@ -249,6 +254,7 @@ static void NET_PortPingProbe_ClearResult(void);
 static void NET_PortPingProbe_ClearPendingSocket(void);
 static void NET_PortPingProbe_FreeContext(portpingprobe_ctx_t *ctx);
 static void NET_PortPingProbe_Shutdown(void);
+static void Datagram_ConnectResolverShutdown(void);
 
 
 static char *StrAddr (struct qsockaddr *addr)
@@ -423,6 +429,7 @@ static void NET_PortPingProbe_ClearResult(void)
 
 	portpingprobe_result.valid = false;
 	portpingprobe_result.has_target = false;
+	portpingprobe_result.resolution_failed = false;
 	portpingprobe_result.has_socket = false;
 	portpingprobe_result.connect_addr[0] = '\0';
 	portpingprobe_result.landriver = -1;
@@ -449,7 +456,19 @@ static void NET_PortPingProbe_ClearPendingSocket(void)
 	net_probe_clientlandriver = -1;
 	net_probe_clientport = 0;
 	net_probe_clienthas_target = false;
+	net_probe_clientresolvefailed = false;
+	net_probe_clientresolveaddress[0] = '\0';
 	memset(&net_probe_clienttarget, 0, sizeof(net_probe_clienttarget));
+}
+
+static qboolean NET_PortPingProbe_TakeResolutionFailure(const char *connect_addr)
+{
+	qboolean failed = net_probe_clientresolvefailed && connect_addr &&
+		q_strcasecmp(connect_addr, net_probe_clientresolveaddress) == 0;
+
+	net_probe_clientresolvefailed = false;
+	net_probe_clientresolveaddress[0] = '\0';
+	return failed;
 }
 
 static qboolean NET_PortPingProbe_GetPendingTarget(int *landriver, struct qsockaddr *target)
@@ -504,10 +523,6 @@ static void NET_PortPingProbe_FreeContext(portpingprobe_ctx_t *ctx)
 
 qboolean NET_PortPingProbe_ConsumeCompleted(const char *connect_addr)
 {
-	struct qsockaddr resolved_addr;
-	qboolean equivalent_target = false;
-	int i;
-
 	if (NET_PortPingProbe_GetStatus() != PORTPINGPROBE_COMPLETED)
 		return false;
 
@@ -520,45 +535,22 @@ qboolean NET_PortPingProbe_ConsumeCompleted(const char *connect_addr)
 
 	if (q_strcasecmp(connect_addr, portpingprobe_result.connect_addr))
 	{
-		if (portpingprobe_result.has_target)
-		{
-			if (portpingprobe_result.landriver >= 0 &&
-				portpingprobe_result.landriver < net_numlandrivers &&
-				net_landrivers[portpingprobe_result.landriver].initialized &&
-				net_landrivers[portpingprobe_result.landriver].GetAddrFromName(connect_addr, &resolved_addr) != -1 &&
-				net_landrivers[portpingprobe_result.landriver].AddrCompare(&resolved_addr, &portpingprobe_result.target_addr) != -1)
-			{
-				equivalent_target = true;
-			}
-			else
-			{
-				for (i = 0; i < net_numlandrivers; i++)
-				{
-					if (!net_landrivers[i].initialized)
-						continue;
-					if (net_landrivers[i].GetAddrFromName(connect_addr, &resolved_addr) == -1)
-						continue;
-					if (net_landrivers[i].AddrCompare(&resolved_addr, &portpingprobe_result.target_addr) != -1)
-					{
-						equivalent_target = true;
-						break;
-					}
-				}
-			}
-		}
-
-		if (!equivalent_target)
-		{
-			NET_PortPingProbe_ClearResult();
-			SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
-			return false;
-		}
+		/* Do not synchronously resolve an alternate spelling just to reuse an
+		 * optimization result. Starting a fresh asynchronous probe is cheaper
+		 * than risking a main-thread DNS stall here. */
+		NET_PortPingProbe_ClearResult();
+		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
+		return false;
 	}
 
 	NET_PortPingProbe_ClearPendingSocket();
 	net_probe_clientport = portpingprobe_result.best_port > 0 ? portpingprobe_result.best_port : 0;
 	net_probe_clientlandriver = portpingprobe_result.landriver;
 	net_probe_clienthas_target = portpingprobe_result.has_target;
+	net_probe_clientresolvefailed = portpingprobe_result.resolution_failed;
+	if (portpingprobe_result.resolution_failed)
+		q_strlcpy(net_probe_clientresolveaddress, portpingprobe_result.connect_addr,
+			sizeof(net_probe_clientresolveaddress));
 	if (portpingprobe_result.has_target)
 		net_probe_clienttarget = portpingprobe_result.target_addr;
 	if (portpingprobe_result.has_socket)
@@ -778,6 +770,34 @@ static int NET_PortPingProbeWorker(void *data)
 
 	if (!ctx)
 		return 0;
+
+	/* DNS may block for seconds on a broken resolver, so endpoint discovery is
+	 * part of the worker too. The landriver table stays alive until this thread
+	 * is joined by NET_PortPingProbe_Shutdown. */
+	for (i = 0; i < net_numlandrivers; i++)
+	{
+		portpingprobe_endpoint_t *endpoint;
+
+		if (SDL_AtomicGet(&portpingprobe_abort_requested))
+			goto finished;
+		if (!net_landrivers[i].initialized ||
+			!net_landrivers[i].GetAddrFromName ||
+			ctx->endpoint_count >= MAX_NET_DRIVERS)
+			continue;
+		endpoint = &ctx->endpoints[ctx->endpoint_count];
+		if (net_landrivers[i].GetAddrFromName(ctx->resolve_address,
+			&endpoint->addr) == -1)
+			continue;
+		endpoint->landriver = i;
+		endpoint->socket = INVALID_SOCKET;
+		ctx->endpoint_count++;
+	}
+
+	/* Keep the published work total stable while accounting for enabled
+	 * address families that did not resolve to a usable endpoint. */
+	progress += (ctx->enabled_endpoint_count - ctx->endpoint_count) *
+		PORTPINGPROBE_ENDPOINT_PROBES;
+	SDL_AtomicSet(&portpingprobe_progress, progress);
 
 	/* Select the destination first. Source-port results are meaningful only for
 	 * the exact address family and route that will be used by the connection. */
@@ -1001,10 +1021,10 @@ finished:
 qboolean NET_PortPingProbe_Start(const char *connect_addr)
 {
 	portpingprobe_ctx_t *ctx;
-	portpingprobe_endpoint_t endpoints[MAX_NET_DRIVERS];
 	char display_addr[MAX_SERVER_ADDRESS_LEN * 2];
+	net_endpoint_t endpoint;
 	unsigned int random_state;
-	int endpoint_count = 0;
+	int enabled_endpoints = 0;
 	int num_probes;
 	int port_probes;
 	int control;
@@ -1016,34 +1036,21 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 	if (NET_PortPingProbe_GetStatus() != PORTPINGPROBE_IDLE)
 		return false;
 
-	memset(endpoints, 0, sizeof(endpoints));
 	for (i = 0; i < net_numlandrivers; i++)
 	{
-		if (!net_landrivers[i].initialized)
-			continue;
-
-		if (endpoint_count < MAX_NET_DRIVERS &&
-			net_landrivers[i].GetAddrFromName(connect_addr,
-				&endpoints[endpoint_count].addr) != -1)
-		{
-			endpoints[endpoint_count].landriver = i;
-			endpoints[endpoint_count].socket = INVALID_SOCKET;
-			endpoint_count++;
-		}
+		if (net_landrivers[i].initialized && net_landrivers[i].GetAddrFromName)
+			enabled_endpoints++;
 	}
 
-	if (endpoint_count <= 0)
-	{
-		Con_SafePrintf("Could not resolve %s\n", connect_addr);
+	if (enabled_endpoints <= 0)
 		return false;
-	}
 
 	num_probes = CLAMP(1, (int)cl_portpingprobe_probes.value, 1000);
 	port_probes = CLAMP(1, (int)cl_portpingprobe_port_probes.value, PORTPINGPROBE_MAX_PORT_PROBES);
 	ctx = Z_Malloc(sizeof(*ctx));
 	ctx->num_probes = num_probes;
 	ctx->port_probes = port_probes;
-	ctx->total_work = endpoint_count * PORTPINGPROBE_ENDPOINT_PROBES + num_probes +
+	ctx->total_work = enabled_endpoints * PORTPINGPROBE_ENDPOINT_PROBES + num_probes +
 		q_min(num_probes, PORTPINGPROBE_FINALISTS) * port_probes;
 	ctx->delay_ms = cl_portpingprobe_delay.value > 0 ? (unsigned long)cl_portpingprobe_delay.value : 0;
 	ctx->landriver = -1;
@@ -1054,8 +1061,8 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 	memcpy(ctx->serverinfo_packet + 5, "QUAKE", sizeof("QUAKE"));
 	ctx->serverinfo_packet[5 + sizeof("QUAKE")] = NET_PROTOCOL_VERSION;
 	ctx->query = PORTPINGPROBE_QUERY_NONE;
-	memcpy(ctx->endpoints, endpoints, endpoint_count * sizeof(endpoints[0]));
-	ctx->endpoint_count = endpoint_count;
+	ctx->enabled_endpoint_count = enabled_endpoints;
+	ctx->endpoint_count = 0;
 	ctx->candidates = Z_Malloc(num_probes * sizeof(*ctx->candidates));
 	ctx->responsive_ports = 0;
 	ctx->finalist_count = 0;
@@ -1065,6 +1072,21 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 	ctx->best_replies = 0;
 	ctx->best_socket = INVALID_SOCKET;
 	q_strlcpy(ctx->connect_addr, connect_addr, sizeof(ctx->connect_addr));
+	if (NET_ParseEndpoint(connect_addr, net_hostport, &endpoint))
+	{
+		endpoint.port_explicit = true;
+		if (!NET_FormatEndpoint(&endpoint, true, ctx->resolve_address,
+			sizeof(ctx->resolve_address)))
+		{
+			NET_PortPingProbe_FreeContext(ctx);
+			return false;
+		}
+	}
+	else
+	{
+		q_strlcpy(ctx->resolve_address, connect_addr,
+			sizeof(ctx->resolve_address));
+	}
 	ctx->thread = NULL;
 
 	/* Generate without replacement so every discovery probe covers a new port. */
@@ -1111,8 +1133,8 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 	portpingprobe_ctx = ctx;
 	NET_HostnameCache_FormatDetailedDisplay(connect_addr, net_hostport,
 		display_addr, sizeof(display_addr));
-	Con_Printf("Probing %s across %d network endpoint%s to find best source port (%d unique ports, %d confirmation probes on up to %d finalists)\n",
-		display_addr, endpoint_count, endpoint_count == 1 ? "" : "s",
+	Con_Printf("Probing %s to find best source port (%d unique ports, %d confirmation probes on up to %d finalists)\n",
+		display_addr,
 		num_probes, port_probes, PORTPINGPROBE_FINALISTS);
 	return true;
 }
@@ -1162,6 +1184,7 @@ void NET_PortPingProbe_Frame(void)
 		portpingprobe_result.valid = true;
 		portpingprobe_result.has_target = ctx->landriver >= 0 &&
 			ctx->landriver < net_numlandrivers && ctx->query != PORTPINGPROBE_QUERY_NONE;
+		portpingprobe_result.resolution_failed = ctx->endpoint_count == 0;
 		q_strlcpy(portpingprobe_result.connect_addr, ctx->connect_addr, sizeof(portpingprobe_result.connect_addr));
 		portpingprobe_result.landriver = ctx->landriver;
 		portpingprobe_result.target_addr = ctx->target_addr;
@@ -1175,11 +1198,12 @@ void NET_PortPingProbe_Frame(void)
 		portpingprobe_result.best_socket = ctx->best_socket;
 		ctx->best_socket = INVALID_SOCKET;
 
-		if (!portpingprobe_result.has_target)
+		if (!portpingprobe_result.resolution_failed &&
+			!portpingprobe_result.has_target)
 		{
 			Con_Printf("Port probe completed: no stable network endpoint found; falling back to normal connection selection\n");
 		}
-		else if (ctx->best_port > 0)
+		else if (!portpingprobe_result.resolution_failed && ctx->best_port > 0)
 		{
 			Con_Printf("Port probe completed for %s via %s: source port %d, median %.2f ms, jitter %.2f ms (%d/%d replies, %d responsive ports)\n",
 				display_addr,
@@ -1187,7 +1211,7 @@ void NET_PortPingProbe_Frame(void)
 				ctx->best_port, ctx->best_rtt * 1000.0, ctx->best_jitter * 1000.0,
 				ctx->best_replies, ctx->port_probes, ctx->responsive_ports);
 		}
-		else
+		else if (!portpingprobe_result.resolution_failed)
 		{
 			Con_Printf("Port probe completed for %s via %s: no stable source port found (%d responsive), falling back to OS-assigned source port\n",
 				display_addr,
@@ -2374,6 +2398,7 @@ void Datagram_Shutdown (void)
 	int i;
 
 	NET_DatagramConnectCancel();
+	Datagram_ConnectResolverShutdown();
 	NET_PortPingProbe_Shutdown();
 	Datagram_Listen(false);
 
@@ -4073,16 +4098,40 @@ typedef enum
 {
 	DATAGRAM_CONNECT_PHASE_IDLE = 0,
 	DATAGRAM_CONNECT_PHASE_RESOLVE,
+	DATAGRAM_CONNECT_PHASE_RESOLVE_WAIT,
 	DATAGRAM_CONNECT_PHASE_OPEN_SOCKET,
 	DATAGRAM_CONNECT_PHASE_SEND_REQUEST,
 	DATAGRAM_CONNECT_PHASE_WAIT_RESPONSE
 } datagram_connect_phase_t;
 
+/* OS resolver calls are not portably cancelable. A canceled connection drops
+ * ownership immediately while the lookup finishes in the background; the
+ * main thread reaps it later, and this cap prevents reconnect spam from
+ * creating an unbounded number of resolver threads. */
+#define DATAGRAM_CONNECT_MAX_ABANDONED_RESOLVERS 4
+
+typedef struct datagram_connect_resolver_s
+{
+	SDL_Thread *thread;
+	SDL_atomic_t done;
+	SDL_atomic_t canceled;
+	char address[MAX_SERVER_ADDRESS_LEN + 16];
+	qboolean enabled[MAX_NET_DRIVERS];
+	qboolean resolved[MAX_NET_DRIVERS];
+	struct qsockaddr addresses[MAX_NET_DRIVERS];
+	struct datagram_connect_resolver_s *next;
+} datagram_connect_resolver_t;
+
 typedef struct
 {
 	qboolean active;
 	datagram_connect_phase_t phase;
-	char host[NET_NAMELEN];
+	char resolve_address[MAX_SERVER_ADDRESS_LEN + 16];
+	qboolean resolve_async;
+	qboolean resolve_attempted[MAX_NET_DRIVERS];
+	qboolean resolved[MAX_NET_DRIVERS];
+	struct qsockaddr resolved_addresses[MAX_NET_DRIVERS];
+	datagram_connect_resolver_t *resolver;
 	int landriver;
 	struct qsockaddr serveraddr;
 	sys_socket_t newsock;
@@ -4095,7 +4144,142 @@ typedef struct
 	qboolean probe_fallback_started;
 } datagram_connect_ctx_t;
 
-static datagram_connect_ctx_t datagram_connect_ctx = {false, DATAGRAM_CONNECT_PHASE_IDLE, {0}, -1, {0}, INVALID_SOCKET, NULL, 0, 0, 0.0, {0}};
+static datagram_connect_ctx_t datagram_connect_ctx;
+static datagram_connect_resolver_t *datagram_connect_abandoned_resolvers;
+static int datagram_connect_abandoned_resolver_count;
+
+static int Datagram_ConnectResolverWorker(void *data)
+{
+	datagram_connect_resolver_t *resolver = (datagram_connect_resolver_t *)data;
+	int i;
+
+	for (i = 0; i < net_numlandrivers; i++)
+	{
+		if (SDL_AtomicGet(&resolver->canceled))
+			break;
+		if (!resolver->enabled[i])
+			continue;
+		if (net_landrivers[i].GetAddrFromName(resolver->address,
+			&resolver->addresses[i]) != -1)
+			resolver->resolved[i] = true;
+	}
+
+	SDL_AtomicSet(&resolver->done, 1);
+	return 0;
+}
+
+static void Datagram_ConnectResolverFree(datagram_connect_resolver_t *resolver)
+{
+	if (!resolver)
+		return;
+	if (resolver->thread)
+		SDL_WaitThread(resolver->thread, NULL);
+	free(resolver);
+}
+
+static void Datagram_ConnectResolverReapAbandoned(qboolean wait_all)
+{
+	datagram_connect_resolver_t **link = &datagram_connect_abandoned_resolvers;
+
+	while (*link)
+	{
+		datagram_connect_resolver_t *resolver = *link;
+
+		if (!wait_all && !SDL_AtomicGet(&resolver->done))
+		{
+			link = &resolver->next;
+			continue;
+		}
+
+		*link = resolver->next;
+		datagram_connect_abandoned_resolver_count--;
+		Datagram_ConnectResolverFree(resolver);
+	}
+}
+
+static void Datagram_ConnectResolverAbandon(void)
+{
+	datagram_connect_resolver_t *resolver = datagram_connect_ctx.resolver;
+
+	if (!resolver)
+		return;
+	datagram_connect_ctx.resolver = NULL;
+	SDL_AtomicSet(&resolver->canceled, 1);
+	resolver->next = datagram_connect_abandoned_resolvers;
+	datagram_connect_abandoned_resolvers = resolver;
+	datagram_connect_abandoned_resolver_count++;
+}
+
+static datagram_connect_resolver_t *Datagram_ConnectResolverStart(const char *address,
+	int landriver)
+{
+	datagram_connect_resolver_t *resolver;
+
+	Datagram_ConnectResolverReapAbandoned(false);
+	if (datagram_connect_abandoned_resolver_count >=
+		DATAGRAM_CONNECT_MAX_ABANDONED_RESOLVERS)
+	{
+		Con_DWarning("Connect resolver: too many canceled lookups are still running\n");
+		return NULL;
+	}
+
+	resolver = (datagram_connect_resolver_t *)calloc(1, sizeof(*resolver));
+	if (!resolver)
+		return NULL;
+	q_strlcpy(resolver->address, address, sizeof(resolver->address));
+	if (landriver < 0 || landriver >= net_numlandrivers ||
+		!net_landrivers[landriver].initialized ||
+		!net_landrivers[landriver].GetAddrFromName)
+	{
+		free(resolver);
+		return NULL;
+	}
+	resolver->enabled[landriver] = true;
+	SDL_AtomicSet(&resolver->done, 0);
+	SDL_AtomicSet(&resolver->canceled, 0);
+	resolver->thread = SDL_CreateThread(Datagram_ConnectResolverWorker,
+		"connectdns", resolver);
+	if (!resolver->thread)
+	{
+		Con_DWarning("Connect resolver: unable to create worker thread: %s\n",
+			SDL_GetError());
+		free(resolver);
+		return NULL;
+	}
+
+	return resolver;
+}
+
+static void Datagram_ConnectResolverConsume(void)
+{
+	datagram_connect_resolver_t *resolver = datagram_connect_ctx.resolver;
+	int i;
+
+	if (!resolver)
+		return;
+	if (resolver->thread)
+	{
+		SDL_WaitThread(resolver->thread, NULL);
+		resolver->thread = NULL;
+	}
+	for (i = 0; i < net_numlandrivers; i++)
+	{
+		if (!resolver->enabled[i])
+			continue;
+		datagram_connect_ctx.resolve_attempted[i] = true;
+		datagram_connect_ctx.resolved[i] = resolver->resolved[i];
+		if (resolver->resolved[i])
+			datagram_connect_ctx.resolved_addresses[i] = resolver->addresses[i];
+	}
+	datagram_connect_ctx.resolver = NULL;
+	free(resolver);
+}
+
+static void Datagram_ConnectResolverShutdown(void)
+{
+	Datagram_ConnectResolverAbandon();
+	Datagram_ConnectResolverReapAbandoned(true);
+}
 
 static void Datagram_ConnectAsyncSetReason(const char *reason)
 {
@@ -4203,12 +4387,19 @@ qboolean NET_DatagramConnectPending(void)
 	return datagram_connect_ctx.active;
 }
 
+void NET_DatagramConnectMaintenance(void)
+{
+	Datagram_ConnectResolverReapAbandoned(false);
+}
+
 void NET_DatagramConnectCancel(void)
 {
+	NET_DatagramConnectMaintenance();
 	if (!datagram_connect_ctx.active)
 		return;
 
 	Datagram_ConnectAsyncReleaseSocket();
+	Datagram_ConnectResolverAbandon();
 	datagram_connect_ctx.active = false;
 	datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_IDLE;
 	datagram_connect_ctx.landriver = -1;
@@ -4216,20 +4407,52 @@ void NET_DatagramConnectCancel(void)
 
 qboolean NET_DatagramConnectStart(const char *host)
 {
+	char normalized_host[NET_NAMELEN];
+	char resolve_address[MAX_SERVER_ADDRESS_LEN + 16];
+	net_endpoint_t endpoint;
+	qboolean resolve_async = true;
+	qboolean probe_resolution_failed;
+	int i;
+
 	NET_DatagramConnectCancel();
 
 	if (!host || !*host)
 		return false;
 
+	probe_resolution_failed = NET_PortPingProbe_TakeResolutionFailure(host);
 	host = Strip_Port(host);
-
+	q_strlcpy(normalized_host, host, sizeof(normalized_host));
+	if (NET_ParseEndpoint(normalized_host, net_hostport, &endpoint))
+	{
+		/* IPv6 conversion still goes through getaddrinfo on some platforms, so
+		 * only IPv4 literals use the synchronous numeric fast path. */
+		resolve_async = endpoint.kind != NET_HOST_IPV4;
+		endpoint.port = net_hostport;
+		endpoint.port_explicit = true;
+		if (!NET_FormatEndpoint(&endpoint, true, resolve_address,
+			sizeof(resolve_address)))
+			return false;
+	}
+	else
+	{
+		q_strlcpy(resolve_address, normalized_host, sizeof(resolve_address));
+	}
 	memset(&datagram_connect_ctx, 0, sizeof(datagram_connect_ctx));
 	datagram_connect_ctx.active = true;
 	datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_RESOLVE;
+	datagram_connect_ctx.resolve_async = resolve_async;
 	datagram_connect_ctx.landriver = 0;
 	datagram_connect_ctx.newsock = INVALID_SOCKET;
 	datagram_connect_ctx.total_attempts = q_max(1, (int)net_connectattempts.value);
-	q_strlcpy(datagram_connect_ctx.host, host, sizeof(datagram_connect_ctx.host));
+	q_strlcpy(datagram_connect_ctx.resolve_address, resolve_address,
+		sizeof(datagram_connect_ctx.resolve_address));
+	if (resolve_async && probe_resolution_failed)
+	{
+		/* The immediately preceding probe already failed resolution for every
+		 * enabled family; do not repeat the same blocking OS queries. */
+		for (i = 0; i < net_numlandrivers; i++)
+			datagram_connect_ctx.resolve_attempted[i] = true;
+	}
 
 	return true;
 }
@@ -4251,6 +4474,7 @@ net_connect_result_t NET_DatagramConnectFrame(qsocket_t **outsock, const char **
 	if (!datagram_connect_ctx.active)
 		return NET_CONNECT_FAILED;
 
+	Datagram_ConnectResolverReapAbandoned(false);
 	SetNetTime();
 
 	while (datagram_connect_ctx.active)
@@ -4258,7 +4482,6 @@ net_connect_result_t NET_DatagramConnectFrame(qsocket_t **outsock, const char **
 		switch (datagram_connect_ctx.phase)
 		{
 		case DATAGRAM_CONNECT_PHASE_RESOLVE:
-			/* v1 note: name resolution is still synchronous and may briefly stall for hostnames. */
 			if (NET_PortPingProbe_GetPendingTarget(&datagram_connect_ctx.landriver,
 				&datagram_connect_ctx.serveraddr) &&
 				net_landrivers[datagram_connect_ctx.landriver].initialized)
@@ -4271,17 +4494,57 @@ net_connect_result_t NET_DatagramConnectFrame(qsocket_t **outsock, const char **
 				datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_OPEN_SOCKET;
 				break;
 			}
+
 			for (; datagram_connect_ctx.landriver < net_numlandrivers; datagram_connect_ctx.landriver++)
 			{
 				if (!net_landrivers[datagram_connect_ctx.landriver].initialized)
 					continue;
 
-				net_landriverlevel = datagram_connect_ctx.landriver;
-				if (dfunc.GetAddrFromName(datagram_connect_ctx.host, &datagram_connect_ctx.serveraddr) != -1)
+				if (datagram_connect_ctx.resolve_async)
 				{
-					datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_OPEN_SOCKET;
-					break;
+					if (!net_landrivers[datagram_connect_ctx.landriver].GetAddrFromName)
+						continue;
+					if (!datagram_connect_ctx.resolve_attempted[datagram_connect_ctx.landriver])
+					{
+						/* A canceled OS lookup cannot be interrupted. Queue this
+						 * connection until a bounded resolver slot becomes free. */
+						Datagram_ConnectResolverReapAbandoned(false);
+						if (datagram_connect_abandoned_resolver_count >=
+							DATAGRAM_CONNECT_MAX_ABANDONED_RESOLVERS)
+							return NET_CONNECT_PENDING;
+
+						datagram_connect_ctx.resolver = Datagram_ConnectResolverStart(
+							datagram_connect_ctx.resolve_address,
+							datagram_connect_ctx.landriver);
+						if (!datagram_connect_ctx.resolver)
+						{
+							Datagram_ConnectAsyncSetReason("Resolver unavailable");
+							Datagram_ConnectAsyncFinalizeFailure();
+							datagram_connect_ctx.active = false;
+							datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_IDLE;
+							if (outreason)
+								*outreason = datagram_connect_ctx.reason;
+							return NET_CONNECT_FAILED;
+						}
+						datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_RESOLVE_WAIT;
+						return NET_CONNECT_PENDING;
+					}
+					if (!datagram_connect_ctx.resolved[datagram_connect_ctx.landriver])
+						continue;
+					datagram_connect_ctx.serveraddr =
+						datagram_connect_ctx.resolved_addresses[datagram_connect_ctx.landriver];
 				}
+				else
+				{
+					net_landriverlevel = datagram_connect_ctx.landriver;
+					if (!dfunc.GetAddrFromName ||
+						dfunc.GetAddrFromName(datagram_connect_ctx.resolve_address,
+							&datagram_connect_ctx.serveraddr) != 0)
+						continue;
+				}
+
+				datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_OPEN_SOCKET;
+				break;
 			}
 
 			if (datagram_connect_ctx.phase != DATAGRAM_CONNECT_PHASE_OPEN_SOCKET)
@@ -4295,6 +4558,23 @@ net_connect_result_t NET_DatagramConnectFrame(qsocket_t **outsock, const char **
 					*outreason = datagram_connect_ctx.reason;
 				return NET_CONNECT_FAILED;
 			}
+			break;
+
+		case DATAGRAM_CONNECT_PHASE_RESOLVE_WAIT:
+			if (!datagram_connect_ctx.resolver)
+			{
+				Datagram_ConnectAsyncSetReason("Resolver unavailable");
+				Datagram_ConnectAsyncFinalizeFailure();
+				datagram_connect_ctx.active = false;
+				datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_IDLE;
+				if (outreason)
+					*outreason = datagram_connect_ctx.reason;
+				return NET_CONNECT_FAILED;
+			}
+			if (!SDL_AtomicGet(&datagram_connect_ctx.resolver->done))
+				return NET_CONNECT_PENDING;
+			Datagram_ConnectResolverConsume();
+			datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_RESOLVE;
 			break;
 
 		case DATAGRAM_CONNECT_PHASE_OPEN_SOCKET:

@@ -202,5 +202,6 @@ qboolean NET_DatagramConnectStart(const char *host);
 net_connect_result_t NET_DatagramConnectFrame(struct qsocket_s **outsock, const char **outreason);
 void NET_DatagramConnectCancel(void);
 qboolean NET_DatagramConnectPending(void);
+void NET_DatagramConnectMaintenance(void);
 
 #endif	/* _QUAKE_NET_H */

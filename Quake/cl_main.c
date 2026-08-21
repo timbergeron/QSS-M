@@ -681,6 +681,9 @@ void CL_ConnectFrame(void)
 	const char *reason = NULL;
 	char deferred_host[NET_NAMELEN];
 
+	/* Reap canceled DNS jobs even if no connection is currently pending. */
+	NET_DatagramConnectMaintenance();
+
 	if (!cl_pending_connect.active)
 	{
 		if (cl_portpingprobe_deferred_host[0] &&
