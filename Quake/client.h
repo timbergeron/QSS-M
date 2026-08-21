@@ -742,7 +742,13 @@ qboolean CL_DemoSeekRelativeSeconds(float seconds);
 qboolean CL_DemoSeekPercent(float pct);
 
 void CL_Stop_f (void);
+void CL_StopRecording (void);
 void CL_Record_f (void);
+void CL_Demo_Init (void);
+void CL_Demo_Frame (void);
+void CL_Demo_Shutdown (void);
+void CL_WriteDemoVoiceMessage(byte command, byte codec_generation, byte sequence,
+	const byte *data, size_t data_size);
 void CL_PlayDemo_f (void);
 void CL_TimeDemo_f (void);
 void CL_JumpDemo_f (void);

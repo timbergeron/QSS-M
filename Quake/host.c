@@ -2424,6 +2424,7 @@ void _Host_Frame (double time)
 	/* Audio-browser isolation must not depend on the menu draw path running.
 	 * Run after commands so scripted menu transitions release it immediately. */
 	M_AudioBrowser_CloseIfInactive();
+	CL_Demo_Frame();
 	CL_ConnectFrame();
 
 	Con_UpdateCenterPrint ();	// woods #centerlog -- flush deferred centerprint (main thread)
@@ -2780,6 +2781,7 @@ void Host_Shutdown(void)
 	DiscordPresence_Shutdown();
 	Mapshot_Shutdown();
 	SCR_Shutdown();
+	CL_Demo_Shutdown();
 
 	QWatch_Shutdown();
 

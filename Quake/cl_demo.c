@@ -38,6 +38,9 @@ char		last_demo[MAX_OSPATH]; // woods #lastdemo
 static char	demo_record_raw_path[MAX_OSPATH];
 static qboolean demo_record_to_dzip;
 static unsigned int demo_record_serial;
+#ifdef USE_ZLIB
+static unsigned int demo_finalize_serial;
+#endif
 
 #define DEMOMARK_HISTORY_FILENAME "demomarks.json"
 #define DEMOMARK_HISTORY_TIME_LENGTH 20
@@ -54,6 +57,67 @@ typedef struct demomark_history_entry_s
 static demomark_history_entry_t *demomark_pending_head;
 static demomark_history_entry_t *demomark_pending_tail;
 static void CL_DemoMarkHistory_ClearPending(void);
+static qboolean demo_record_stop_in_progress;
+static qboolean demo_record_stop_requested;
+
+#define DEMO_WRITE_QUEUE_BYTES (8u * 1024u * 1024u)
+
+typedef struct demo_write_chunk_s
+{
+	struct demo_write_chunk_s *next;
+	size_t size;
+	byte data[1];
+} demo_write_chunk_t;
+
+static struct
+{
+	SDL_mutex *mutex;
+	SDL_cond *work_condition;
+	SDL_cond *state_condition;
+	SDL_Thread *thread;
+	demo_write_chunk_t *pending_head;
+	demo_write_chunk_t *pending_tail;
+	size_t pending_bytes;
+	FILE *file;
+	qboolean active;
+	qboolean closing;
+	qboolean shutdown;
+	qboolean write_failed;
+} demo_writer;
+static qboolean demo_writer_queue_error_reported;
+
+#ifdef USE_ZLIB
+#define DEMO_FINALIZE_MAX_OUTSTANDING 4
+
+typedef struct demo_finalize_job_s
+{
+	struct demo_finalize_job_s *next;
+	char raw_path[MAX_OSPATH];
+	char archive_path[MAX_OSPATH];
+	char temp_path[MAX_OSPATH];
+	char entry_name[MAX_OSPATH];
+	int frame_count;
+	qboolean delete_short;
+	qboolean ok;
+	qboolean raw_remove_failed;
+	demomark_history_entry_t *marks_head;
+	demomark_history_entry_t *marks_tail;
+} demo_finalize_job_t;
+
+static struct
+{
+	SDL_mutex *mutex;
+	SDL_cond *condition;
+	SDL_Thread *thread;
+	demo_finalize_job_t *pending_head;
+	demo_finalize_job_t *pending_tail;
+	demo_finalize_job_t *completed_head;
+	demo_finalize_job_t *completed_tail;
+	demo_finalize_job_t *active;
+	int outstanding;
+	qboolean shutdown;
+} demo_finalizer;
+#endif
 
 #ifdef USE_ZLIB
 static void CL_DZipCleanupTempDemo(void);
@@ -2188,20 +2252,21 @@ static void CL_DemoMarkHistory_QueuePending(const char *map, int frame)
 		Con_Printf("markdemo: failed to queue history entry\n");
 }
 
-static void CL_DemoMarkHistory_FlushPending(const char *demo_path)
+static void CL_DemoMarkHistory_FlushList(demomark_history_entry_t **pending_head,
+	demomark_history_entry_t **pending_tail, const char *demo_path)
 {
 	demomark_history_entry_t *head = NULL;
 	demomark_history_entry_t *tail = NULL;
 	demomark_history_entry_t *pending;
 	const char *demo_name;
 
-	if (!demomark_pending_head)
+	if (!pending_head || !*pending_head)
 		return;
 
 	head = CL_DemoMarkHistory_Load(&tail);
 	demo_name = (demo_path && demo_path[0]) ? COM_SkipPath(demo_path) : "unknown.dem";
 
-	for (pending = demomark_pending_head; pending; pending = pending->next)
+	for (pending = *pending_head; pending; pending = pending->next)
 	{
 		if (!CL_DemoMarkHistory_Append(&head, &tail, demo_name, pending->map, pending->created_at, pending->frame))
 		{
@@ -2212,7 +2277,12 @@ static void CL_DemoMarkHistory_FlushPending(const char *demo_path)
 
 	CL_DemoMarkHistory_Write(head);
 	CL_DemoMarkHistory_ClearList(&head, &tail);
-	CL_DemoMarkHistory_ClearPending();
+	CL_DemoMarkHistory_ClearList(pending_head, pending_tail);
+}
+
+static void CL_DemoMarkHistory_FlushPending(const char *demo_path)
+{
+	CL_DemoMarkHistory_FlushList(&demomark_pending_head, &demomark_pending_tail, demo_path);
 }
 
 static void CL_DemoMarkHistory_Print(const char *map_filter)
@@ -2377,24 +2447,317 @@ CL_WriteDemoMessage
 Dumps the current net message, prefixed by the length and view angles
 ====================
 */
+static int CL_DemoWriterThread(void *unused)
+{
+	(void)unused;
+
+	for (;;)
+	{
+		demo_write_chunk_t *chunk;
+		FILE *file;
+		qboolean failed;
+
+		SDL_LockMutex(demo_writer.mutex);
+		while (!demo_writer.pending_head && !demo_writer.closing && !demo_writer.shutdown)
+			SDL_CondWait(demo_writer.work_condition, demo_writer.mutex);
+
+		chunk = demo_writer.pending_head;
+		if (chunk)
+		{
+			demo_writer.pending_head = chunk->next;
+			if (!demo_writer.pending_head)
+				demo_writer.pending_tail = NULL;
+			file = demo_writer.file;
+			failed = demo_writer.write_failed;
+			SDL_UnlockMutex(demo_writer.mutex);
+
+			if (!failed && (!file || fwrite(chunk->data, 1, chunk->size, file) != chunk->size || fflush(file) != 0))
+				failed = true;
+
+			SDL_LockMutex(demo_writer.mutex);
+			if (failed)
+				demo_writer.write_failed = true;
+			demo_writer.pending_bytes -= chunk->size;
+			SDL_CondBroadcast(demo_writer.state_condition);
+			SDL_UnlockMutex(demo_writer.mutex);
+			free(chunk);
+			continue;
+		}
+
+		if (demo_writer.active && (demo_writer.closing || demo_writer.shutdown))
+		{
+			file = demo_writer.file;
+			demo_writer.file = NULL;
+			SDL_UnlockMutex(demo_writer.mutex);
+
+			failed = false;
+			if (!file)
+				failed = true;
+			else
+			{
+				if (fflush(file) != 0)
+					failed = true;
+				if (fclose(file) != 0)
+					failed = true;
+			}
+
+			SDL_LockMutex(demo_writer.mutex);
+			if (failed)
+				demo_writer.write_failed = true;
+			demo_writer.active = false;
+			demo_writer.closing = false;
+			SDL_CondBroadcast(demo_writer.state_condition);
+			SDL_UnlockMutex(demo_writer.mutex);
+			continue;
+		}
+
+		if (demo_writer.shutdown)
+		{
+			SDL_UnlockMutex(demo_writer.mutex);
+			break;
+		}
+
+		SDL_UnlockMutex(demo_writer.mutex);
+	}
+
+	return 0;
+}
+
+static void CL_DemoWriterInit(void)
+{
+	if (demo_writer.thread || demo_writer.mutex)
+		return;
+
+	demo_writer.mutex = SDL_CreateMutex();
+	demo_writer.work_condition = SDL_CreateCond();
+	demo_writer.state_condition = SDL_CreateCond();
+	if (!demo_writer.mutex || !demo_writer.work_condition || !demo_writer.state_condition)
+		goto fail;
+
+	demo_writer.thread = SDL_CreateThread(CL_DemoWriterThread, "DemoWriter", NULL);
+	if (!demo_writer.thread)
+		goto fail;
+	return;
+
+fail:
+	Con_DPrintf("Unable to start demo writer: %s\n", SDL_GetError());
+	if (demo_writer.state_condition)
+		SDL_DestroyCond(demo_writer.state_condition);
+	if (demo_writer.work_condition)
+		SDL_DestroyCond(demo_writer.work_condition);
+	if (demo_writer.mutex)
+		SDL_DestroyMutex(demo_writer.mutex);
+	memset(&demo_writer, 0, sizeof(demo_writer));
+}
+
+static qboolean CL_DemoWriterStart(FILE *file)
+{
+	demo_writer_queue_error_reported = false;
+	demo_record_stop_requested = false;
+
+	if (!demo_writer.thread || !demo_writer.mutex)
+		return true;
+
+	SDL_LockMutex(demo_writer.mutex);
+	if (demo_writer.active || demo_writer.shutdown)
+	{
+		SDL_UnlockMutex(demo_writer.mutex);
+		return false;
+	}
+
+	demo_writer.file = file;
+	demo_writer.active = true;
+	demo_writer.closing = false;
+	demo_writer.write_failed = false;
+	SDL_CondSignal(demo_writer.work_condition);
+	SDL_UnlockMutex(demo_writer.mutex);
+	return true;
+}
+
+static qboolean CL_DemoWriterQueueParts(const byte *prefix, size_t prefix_size,
+	const byte *payload, size_t payload_size, const vec3_t viewangles)
+{
+	demo_write_chunk_t *chunk;
+	byte *dst;
+	size_t data_size;
+	size_t record_size;
+	int little_size;
+	int i;
+	float little_angle;
+
+	if ((!prefix && prefix_size) || (!payload && payload_size) ||
+		prefix_size > INT_MAX || payload_size > (size_t)INT_MAX - prefix_size)
+		return false;
+	data_size = prefix_size + payload_size;
+	record_size = 16 + data_size;
+	if (record_size > DEMO_WRITE_QUEUE_BYTES)
+		return false;
+
+	chunk = (demo_write_chunk_t *)malloc(sizeof(*chunk) - sizeof(chunk->data) + record_size);
+	if (!chunk)
+		return false;
+
+	chunk->next = NULL;
+	chunk->size = record_size;
+	dst = chunk->data;
+	little_size = LittleLong((int)data_size);
+	memcpy(dst, &little_size, sizeof(little_size));
+	dst += sizeof(little_size);
+	for (i = 0; i < 3; ++i)
+	{
+		little_angle = LittleFloat(viewangles[i]);
+		memcpy(dst, &little_angle, sizeof(little_angle));
+		dst += sizeof(little_angle);
+	}
+	if (prefix_size)
+	{
+		memcpy(dst, prefix, prefix_size);
+		dst += prefix_size;
+	}
+	if (payload_size)
+		memcpy(dst, payload, payload_size);
+
+	if (!demo_writer.thread || !demo_writer.mutex)
+	{
+		qboolean ok = cls.demofile &&
+			fwrite(chunk->data, 1, chunk->size, cls.demofile) == chunk->size &&
+			fflush(cls.demofile) == 0;
+		free(chunk);
+		return ok;
+	}
+
+	SDL_LockMutex(demo_writer.mutex);
+	while (demo_writer.active && !demo_writer.closing && !demo_writer.shutdown &&
+		!demo_writer.write_failed &&
+		demo_writer.pending_bytes + chunk->size > DEMO_WRITE_QUEUE_BYTES)
+	{
+		SDL_CondWait(demo_writer.state_condition, demo_writer.mutex);
+	}
+
+	if (!demo_writer.active || demo_writer.closing || demo_writer.shutdown || demo_writer.write_failed)
+	{
+		SDL_UnlockMutex(demo_writer.mutex);
+		free(chunk);
+		return false;
+	}
+
+	if (demo_writer.pending_tail)
+		demo_writer.pending_tail->next = chunk;
+	else
+		demo_writer.pending_head = chunk;
+	demo_writer.pending_tail = chunk;
+	demo_writer.pending_bytes += chunk->size;
+	SDL_CondSignal(demo_writer.work_condition);
+	SDL_UnlockMutex(demo_writer.mutex);
+	return true;
+}
+
+static qboolean CL_DemoWriterStop(void)
+{
+	qboolean ok;
+
+	if (!demo_writer.thread || !demo_writer.mutex)
+	{
+		if (!cls.demofile)
+			return false;
+		ok = fflush(cls.demofile) == 0;
+		if (fclose(cls.demofile) != 0)
+			ok = false;
+		return ok;
+	}
+
+	SDL_LockMutex(demo_writer.mutex);
+	if (!demo_writer.active)
+	{
+		ok = !demo_writer.write_failed;
+		SDL_UnlockMutex(demo_writer.mutex);
+		return ok;
+	}
+
+	demo_writer.closing = true;
+	SDL_CondSignal(demo_writer.work_condition);
+	while (demo_writer.active)
+		SDL_CondWait(demo_writer.state_condition, demo_writer.mutex);
+	ok = !demo_writer.write_failed;
+	SDL_UnlockMutex(demo_writer.mutex);
+	return ok;
+}
+
+static void CL_DemoWriterShutdown(void)
+{
+	demo_write_chunk_t *chunk;
+
+	if (!demo_writer.mutex)
+	{
+		if (cls.demorecording && cls.demofile)
+			CL_DemoWriterStop();
+		return;
+	}
+
+	SDL_LockMutex(demo_writer.mutex);
+	demo_writer.shutdown = true;
+	demo_writer.closing = demo_writer.active;
+	SDL_CondBroadcast(demo_writer.work_condition);
+	SDL_CondBroadcast(demo_writer.state_condition);
+	SDL_UnlockMutex(demo_writer.mutex);
+
+	if (demo_writer.thread)
+		SDL_WaitThread(demo_writer.thread, NULL);
+
+	while ((chunk = demo_writer.pending_head) != NULL)
+	{
+		demo_writer.pending_head = chunk->next;
+		free(chunk);
+	}
+
+	SDL_DestroyCond(demo_writer.state_condition);
+	SDL_DestroyCond(demo_writer.work_condition);
+	SDL_DestroyMutex(demo_writer.mutex);
+	memset(&demo_writer, 0, sizeof(demo_writer));
+}
+
 static void CL_WriteDemoMessageData(const byte *data, int cursize, const vec3_t viewangles)
 {
-	int	len;
-	int	i;
-	float	f;
-
-	len = LittleLong (cursize);
-	fwrite (&len, 4, 1, cls.demofile);
-	for (i = 0; i < 3; i++)
+	if (cursize >= 0 && CL_DemoWriterQueueParts(NULL, 0, data, (size_t)cursize, viewangles))
 	{
-		f = LittleFloat (viewangles[i]);
-		fwrite (&f, 4, 1, cls.demofile);
-	}
-	fwrite (data, cursize, 1, cls.demofile);
-	fflush (cls.demofile);
-
-	if (cls.demorecording)
 		cls.demo_record_frame_count++;
+		return;
+	}
+
+	if (!demo_writer_queue_error_reported)
+	{
+		demo_writer_queue_error_reported = true;
+		Con_SafePrintf("WARNING: failed to write demo data; stopping recording\n");
+	}
+	if (cls.demorecording && !demo_record_stop_in_progress)
+		demo_record_stop_requested = true;
+}
+
+void CL_WriteDemoVoiceMessage(byte command, byte codec_generation, byte sequence,
+	const byte *data, size_t data_size)
+{
+	byte prefix[5];
+	unsigned short little_size;
+
+	if (!cls.demorecording || !cls.demofile || data_size > USHRT_MAX)
+		return;
+
+	prefix[0] = command;
+	prefix[1] = codec_generation;
+	prefix[2] = sequence;
+	little_size = (unsigned short)LittleShort((short)data_size);
+	memcpy(prefix + 3, &little_size, sizeof(little_size));
+
+	if (CL_DemoWriterQueueParts(prefix, sizeof(prefix), data, data_size, cl.viewangles))
+		return;
+
+	if (!demo_writer_queue_error_reported)
+	{
+		demo_writer_queue_error_reported = true;
+		Con_SafePrintf("WARNING: failed to write demo voice data; stopping recording\n");
+	}
+	if (cls.demorecording && !demo_record_stop_in_progress)
+		demo_record_stop_requested = true;
 }
 
 static void CL_WriteDemoMessage (void)
@@ -2580,11 +2943,14 @@ static qboolean CL_DemoFormatWantsDZip(void)
 #endif
 }
 
-static void CL_DemoBuildArchiveEntryName(const char *archive_path, char *out, size_t outsize)
+#ifdef USE_ZLIB
+static void CL_DemoBuildArchiveEntryName(const char *archive_path, char *out,
+	size_t outsize)
 {
 	COM_FileBase(COM_SkipPath(archive_path), out, outsize);
 	COM_AddExtension(out, ".dem", outsize);
 }
+#endif
 
 static const char *CL_DemoSkipExplicitRootPrefix(const char *name)
 {
@@ -2967,13 +3333,28 @@ static void CL_ResetDemoRecordingPaths(void)
 	demo_record_to_dzip = false;
 }
 
-static void CL_BuildRecordingRawPath(const char *final_path, char *raw_path, size_t raw_path_size)
+static qboolean CL_BuildRecordingRawPath(const char *final_path, char *raw_path,
+	size_t raw_path_size)
 {
 	char base[MAX_OSPATH];
+	int attempt;
 
 	COM_StripExtension(final_path, base, sizeof(base));
-	++demo_record_serial;
-	q_snprintf(raw_path, raw_path_size, "%s.__recording_%u.dem", base, demo_record_serial);
+	for (attempt = 0; attempt < 10000; ++attempt)
+	{
+		int length;
+
+		++demo_record_serial;
+		length = q_snprintf(raw_path, raw_path_size, "%s.__recording_%u.dem",
+			base, demo_record_serial);
+		if (length <= 0 || (size_t)length >= raw_path_size)
+			break;
+		if (!CL_DemoFilenameExists(raw_path))
+			return true;
+	}
+
+	raw_path[0] = '\0';
+	return false;
 }
 
 static qboolean CL_DemoShouldAutoDelete(int frames)
@@ -3001,6 +3382,24 @@ static qboolean CL_AutoDeleteShortDemo(const char *path, int frames)
 	Con_Printf("deleted short demo %s (%d frames)\n", COM_SkipPath(path), frames);
 	return true;
 }
+
+#ifdef USE_ZLIB
+static qboolean CL_DeleteShortDemoRequested(const char *path, int frames,
+	qboolean requested)
+{
+	if (!requested || !path || !path[0])
+		return false;
+
+	if (remove(path) != 0)
+	{
+		Con_Printf("WARNING: could not delete short demo %s\n", COM_SkipPath(path));
+		return false;
+	}
+
+	Con_Printf("deleted short demo %s (%d frames)\n", COM_SkipPath(path), frames);
+	return true;
+}
+#endif
 
 static void CL_GetDemoModeTag(char *mode_tag, size_t mode_tag_size)
 {
@@ -3123,6 +3522,329 @@ static void CL_RenameDemoWithMatchSuffixes(void)
 	}
 }
 
+#ifdef USE_ZLIB
+static qboolean CL_DemoFinalizePathReserved(const char *path)
+{
+	demo_finalize_job_t *job;
+	qboolean reserved = false;
+
+	if (!demo_finalizer.mutex || !path || !path[0])
+		return false;
+
+	SDL_LockMutex(demo_finalizer.mutex);
+	if (demo_finalizer.active && !q_strcasecmp(demo_finalizer.active->archive_path, path))
+		reserved = true;
+	for (job = demo_finalizer.pending_head; !reserved && job; job = job->next)
+		if (!q_strcasecmp(job->archive_path, path))
+			reserved = true;
+	for (job = demo_finalizer.completed_head; !reserved && job; job = job->next)
+		if (!q_strcasecmp(job->archive_path, path))
+			reserved = true;
+	SDL_UnlockMutex(demo_finalizer.mutex);
+	return reserved;
+}
+
+static qboolean CL_DemoFinalizeChoosePath(const char *preferred, char *path, size_t path_size)
+{
+	char base[MAX_OSPATH];
+	char extension[16];
+	int attempt;
+
+	if (!CL_DemoFilenameExists(preferred) && !CL_DemoFinalizePathReserved(preferred))
+	{
+		q_strlcpy(path, preferred, path_size);
+		return true;
+	}
+
+	COM_StripExtension(preferred, base, sizeof(base));
+	q_snprintf(extension, sizeof(extension), ".%s", COM_FileGetExtension(preferred));
+	for (attempt = 2; attempt <= 1000; ++attempt)
+	{
+		q_snprintf(path, path_size, "%s_%d%s", base, attempt, extension);
+		if (!CL_DemoFilenameExists(path) && !CL_DemoFinalizePathReserved(path))
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean CL_DemoFinalizeBuildTempPath(const char *archive_path,
+	char *temp_path, size_t temp_path_size)
+{
+	int attempt;
+
+	for (attempt = 0; attempt < 10000; ++attempt)
+	{
+		int length;
+
+		++demo_finalize_serial;
+		length = q_snprintf(temp_path, temp_path_size, "%s.__finalizing_%u",
+			archive_path, demo_finalize_serial);
+		if (length <= 0 || (size_t)length >= temp_path_size)
+			break;
+		if (!CL_DemoFilenameExists(temp_path))
+			return true;
+	}
+
+	temp_path[0] = '\0';
+	return false;
+}
+
+static qboolean CL_DemoFinalizeArchive(const char *raw_path, const char *archive_path,
+	const char *temp_path, const char *entry_name, qboolean *raw_remove_failed)
+{
+	if (raw_remove_failed)
+		*raw_remove_failed = false;
+	if (!temp_path[0] || !CL_DZipArchiveDemoFile(raw_path, temp_path, entry_name))
+		return false;
+
+	if (rename(temp_path, archive_path) != 0)
+	{
+		remove(temp_path);
+		return false;
+	}
+
+	if (remove(raw_path) != 0 && raw_remove_failed)
+		*raw_remove_failed = true;
+	return true;
+}
+
+static int CL_DemoFinalizeThread(void *unused)
+{
+	(void)unused;
+
+	for (;;)
+	{
+		demo_finalize_job_t *job;
+
+		SDL_LockMutex(demo_finalizer.mutex);
+		while (!demo_finalizer.pending_head && !demo_finalizer.shutdown)
+			SDL_CondWait(demo_finalizer.condition, demo_finalizer.mutex);
+		if (!demo_finalizer.pending_head && demo_finalizer.shutdown)
+		{
+			SDL_UnlockMutex(demo_finalizer.mutex);
+			break;
+		}
+
+		job = demo_finalizer.pending_head;
+		demo_finalizer.pending_head = job->next;
+		if (!demo_finalizer.pending_head)
+			demo_finalizer.pending_tail = NULL;
+		job->next = NULL;
+		demo_finalizer.active = job;
+		SDL_UnlockMutex(demo_finalizer.mutex);
+
+		job->ok = CL_DemoFinalizeArchive(job->raw_path, job->archive_path,
+			job->temp_path, job->entry_name, &job->raw_remove_failed);
+
+		SDL_LockMutex(demo_finalizer.mutex);
+		demo_finalizer.active = NULL;
+		if (demo_finalizer.completed_tail)
+			demo_finalizer.completed_tail->next = job;
+		else
+			demo_finalizer.completed_head = job;
+		demo_finalizer.completed_tail = job;
+		SDL_UnlockMutex(demo_finalizer.mutex);
+	}
+
+	return 0;
+}
+
+static void CL_DemoFinalizeInit(void)
+{
+	if (demo_finalizer.thread || demo_finalizer.mutex)
+		return;
+
+	demo_finalizer.mutex = SDL_CreateMutex();
+	demo_finalizer.condition = SDL_CreateCond();
+	if (!demo_finalizer.mutex || !demo_finalizer.condition)
+		goto fail;
+
+	demo_finalizer.thread = SDL_CreateThread(CL_DemoFinalizeThread, "DemoFinalize", NULL);
+	if (!demo_finalizer.thread)
+		goto fail;
+	return;
+
+fail:
+	Con_DPrintf("Unable to start demo finalizer: %s\n", SDL_GetError());
+	if (demo_finalizer.condition)
+		SDL_DestroyCond(demo_finalizer.condition);
+	if (demo_finalizer.mutex)
+		SDL_DestroyMutex(demo_finalizer.mutex);
+	memset(&demo_finalizer, 0, sizeof(demo_finalizer));
+}
+
+static demo_finalize_job_t *CL_DemoFinalizeJobCreate(const char *raw_path,
+	const char *archive_path, const char *entry_name, int frame_count)
+{
+	demo_finalize_job_t *job = (demo_finalize_job_t *)calloc(1, sizeof(*job));
+
+	if (!job)
+		return NULL;
+
+	q_strlcpy(job->raw_path, raw_path, sizeof(job->raw_path));
+	q_strlcpy(job->archive_path, archive_path, sizeof(job->archive_path));
+	q_strlcpy(job->entry_name, entry_name, sizeof(job->entry_name));
+	if (!CL_DemoFinalizeBuildTempPath(archive_path, job->temp_path,
+		sizeof(job->temp_path)))
+	{
+		free(job);
+		return NULL;
+	}
+	job->frame_count = frame_count;
+	job->delete_short = CL_DemoShouldAutoDelete(frame_count);
+	return job;
+}
+
+static qboolean CL_DemoFinalizeQueue(demo_finalize_job_t *job)
+{
+	if (!job || !demo_finalizer.thread || !demo_finalizer.mutex)
+		return false;
+
+	SDL_LockMutex(demo_finalizer.mutex);
+	if (demo_finalizer.shutdown || demo_finalizer.outstanding >= DEMO_FINALIZE_MAX_OUTSTANDING)
+	{
+		SDL_UnlockMutex(demo_finalizer.mutex);
+		return false;
+	}
+
+	job->next = NULL;
+	if (demo_finalizer.pending_tail)
+		demo_finalizer.pending_tail->next = job;
+	else
+		demo_finalizer.pending_head = job;
+	demo_finalizer.pending_tail = job;
+	demo_finalizer.outstanding++;
+	SDL_CondSignal(demo_finalizer.condition);
+	SDL_UnlockMutex(demo_finalizer.mutex);
+	return true;
+}
+
+static void CL_DemoFinalizeConsumeCompleted(void)
+{
+	demo_finalize_job_t *jobs;
+	qboolean rebuild = false;
+
+	if (!demo_finalizer.mutex)
+		return;
+
+	SDL_LockMutex(demo_finalizer.mutex);
+	jobs = demo_finalizer.completed_head;
+	demo_finalizer.completed_head = NULL;
+	demo_finalizer.completed_tail = NULL;
+	SDL_UnlockMutex(demo_finalizer.mutex);
+
+	while (jobs)
+	{
+		demo_finalize_job_t *job = jobs;
+		const char *final_path;
+		qboolean deleted_short = false;
+
+		jobs = jobs->next;
+		final_path = job->ok ? job->archive_path : job->raw_path;
+
+		if (!job->ok)
+		{
+			Con_SafePrintf("WARNING: failed to write %s, raw demo kept at ",
+				COM_SkipPath(job->archive_path));
+			Con_LinkPrintf(job->raw_path, "%s", job->raw_path);
+			Con_SafePrintf("\n");
+		}
+		else
+		{
+			deleted_short = CL_DeleteShortDemoRequested(final_path,
+				job->frame_count, job->delete_short);
+			if (job->raw_remove_failed)
+				Con_SafePrintf("WARNING: archived demo but could not remove temporary file %s\n",
+					COM_SkipPath(job->raw_path));
+		}
+
+		if (deleted_short)
+			CL_DemoMarkHistory_ClearList(&job->marks_head, &job->marks_tail);
+		else
+			CL_DemoMarkHistory_FlushList(&job->marks_head, &job->marks_tail, final_path);
+
+		if (job->ok && !deleted_short)
+		{
+			Con_SafePrintf("completed demo ");
+			Con_LinkPrintf(final_path, "%s", COM_SkipPath(final_path));
+			Con_SafePrintf("\n");
+		}
+
+		SDL_LockMutex(demo_finalizer.mutex);
+		demo_finalizer.outstanding--;
+		SDL_UnlockMutex(demo_finalizer.mutex);
+		free(job);
+		rebuild = true;
+	}
+
+	if (rebuild)
+		DemoList_Rebuild();
+}
+
+static void CL_DemoFinalizeShutdown(void)
+{
+	qboolean finishing;
+
+	if (!demo_finalizer.mutex)
+		return;
+
+	SDL_LockMutex(demo_finalizer.mutex);
+	finishing = demo_finalizer.active != NULL || demo_finalizer.pending_head != NULL;
+	demo_finalizer.shutdown = true;
+	SDL_CondSignal(demo_finalizer.condition);
+	SDL_UnlockMutex(demo_finalizer.mutex);
+
+	if (demo_finalizer.thread)
+	{
+		if (finishing)
+			Sys_Printf("Finishing pending demo archives before shutdown...\n");
+		SDL_WaitThread(demo_finalizer.thread, NULL);
+	}
+	demo_finalizer.thread = NULL;
+	CL_DemoFinalizeConsumeCompleted();
+
+	SDL_DestroyCond(demo_finalizer.condition);
+	SDL_DestroyMutex(demo_finalizer.mutex);
+	memset(&demo_finalizer, 0, sizeof(demo_finalizer));
+}
+#endif
+
+void CL_Demo_Init(void)
+{
+	if (cls.state == ca_dedicated)
+		return;
+
+	CL_DemoWriterInit();
+#ifdef USE_ZLIB
+	CL_DemoFinalizeInit();
+#endif
+}
+
+void CL_Demo_Frame(void)
+{
+	if (demo_record_stop_requested)
+	{
+		demo_record_stop_requested = false;
+		if (cls.demorecording && !demo_record_stop_in_progress)
+			CL_StopRecording();
+	}
+
+#ifdef USE_ZLIB
+	CL_DemoFinalizeConsumeCompleted();
+#endif
+}
+
+void CL_Demo_Shutdown(void)
+{
+	if (cls.demorecording)
+		CL_StopRecording();
+	CL_DemoWriterShutdown();
+#ifdef USE_ZLIB
+	CL_DemoFinalizeShutdown();
+#endif
+}
+
 
 /*
 ====================
@@ -3131,19 +3853,19 @@ CL_Stop_f
 stop recording a demo
 ====================
 */
-void CL_Stop_f (void)
+void CL_StopRecording(void)
 {
 	qboolean completed = true;
 	qboolean deleted_short = false;
+	qboolean writer_ok;
+#ifdef USE_ZLIB
+	qboolean finalize_queued = false;
+#endif
 
-	if (cmd_source != src_command)
+	if (!cls.demorecording || demo_record_stop_in_progress)
 		return;
-
-	if (!cls.demorecording)
-	{
-		Con_Printf ("Not recording a demo.\n");
-		return;
-	}
+	demo_record_stop_in_progress = true;
+	demo_record_stop_requested = false;
 
 // write a disconnect message to the demo file
 	SZ_Clear (&net_message);
@@ -3151,30 +3873,80 @@ void CL_Stop_f (void)
 	CL_WriteDemoMessage ();
 
 // finish up
-	fclose (cls.demofile);
+	writer_ok = CL_DemoWriterStop();
 	cls.demofile = NULL;
 	cls.demorecording = false;
+	if (!writer_ok)
+	{
+		Con_SafePrintf("WARNING: failed to finish writing demo; partial demo kept at ");
+		Con_LinkPrintf(demo_record_to_dzip ? demo_record_raw_path : cls.demofilename,
+			"%s", demo_record_to_dzip ? demo_record_raw_path : cls.demofilename);
+		Con_SafePrintf("\n");
+		completed = false;
+	}
 
-	if (demo_record_to_dzip)
+	if (demo_record_to_dzip && writer_ok)
 	{
 #ifdef USE_ZLIB
 		char archived_path[MAX_OSPATH];
+		char available_path[MAX_OSPATH];
+		char temp_path[MAX_OSPATH] = "";
 		char entry_name[MAX_OSPATH];
+		demo_finalize_job_t *job = NULL;
+		qboolean raw_remove_failed = false;
 
 		if (!CL_BuildDemoPathWithMatchSuffixes(cls.demofilename, archived_path, sizeof(archived_path)))
 		{
 			Con_Printf("WARNING: could not build archive path for %s\n", COM_SkipPath(cls.demofilename));
 			completed = false;
 		}
+		else if (!CL_DemoFinalizeChoosePath(archived_path, available_path, sizeof(available_path)))
+		{
+			Con_Printf("WARNING: could not reserve archive path for %s\n", COM_SkipPath(cls.demofilename));
+			completed = false;
+		}
 		else
 		{
+			q_strlcpy(archived_path, available_path, sizeof(archived_path));
 			CL_DemoBuildArchiveEntryName(archived_path, entry_name, sizeof(entry_name));
-			if (CL_DZipArchiveDemoFile(demo_record_raw_path, archived_path, entry_name))
+			job = CL_DemoFinalizeJobCreate(demo_record_raw_path, archived_path,
+				entry_name, cls.demo_record_frame_count);
+			if (job)
 			{
-				remove(demo_record_raw_path);
+				job->marks_head = demomark_pending_head;
+				job->marks_tail = demomark_pending_tail;
+				demomark_pending_head = NULL;
+				demomark_pending_tail = NULL;
+				if (CL_DemoFinalizeQueue(job))
+				{
+					finalize_queued = true;
+					q_strlcpy(cls.demofilename, archived_path, sizeof(cls.demofilename));
+					Con_SafePrintf("finishing demo ");
+					Con_LinkPrintf(archived_path, "%s", COM_SkipPath(archived_path));
+					Con_SafePrintf(" in the background\n");
+				}
+				else
+				{
+					q_strlcpy(temp_path, job->temp_path, sizeof(temp_path));
+					demomark_pending_head = job->marks_head;
+					demomark_pending_tail = job->marks_tail;
+					free(job);
+					job = NULL;
+				}
+			}
+
+			if (!finalize_queued && !temp_path[0])
+				CL_DemoFinalizeBuildTempPath(archived_path, temp_path, sizeof(temp_path));
+
+			if (!finalize_queued && CL_DemoFinalizeArchive(demo_record_raw_path,
+				archived_path, temp_path, entry_name, &raw_remove_failed))
+			{
+				if (raw_remove_failed)
+					Con_Printf("WARNING: could not remove temporary demo %s\n",
+						COM_SkipPath(demo_record_raw_path));
 				q_strlcpy(cls.demofilename, archived_path, sizeof(cls.demofilename));
 			}
-			else
+			else if (!finalize_queued)
 			{
 				Con_Printf("WARNING: failed to write %s, raw demo kept at ",
 					COM_SkipPath(archived_path));
@@ -3188,10 +3960,30 @@ void CL_Stop_f (void)
 		completed = false;
 #endif
 	}
-	else
+	else if (!demo_record_to_dzip)
 	{
 		CL_RenameDemoWithMatchSuffixes();
 	}
+	else
+	{
+		q_strlcpy(cls.demofilename, demo_record_raw_path, sizeof(cls.demofilename));
+	}
+
+#ifdef USE_ZLIB
+	if (demo_record_to_dzip && !finalize_queued && !completed)
+		q_strlcpy(cls.demofilename, demo_record_raw_path, sizeof(cls.demofilename));
+
+	if (finalize_queued)
+	{
+		cls.demo_had_overtime = false;
+		cls.demo_marker_count = 0;
+		cls.demo_record_frame_count = 0;
+		Cvar_SetROM(cl_recordingdemo.name, "");
+		CL_ResetDemoRecordingPaths();
+		demo_record_stop_in_progress = false;
+		return;
+	}
+#endif
 
 	if (completed)
 		deleted_short = CL_AutoDeleteShortDemo(cls.demofilename, cls.demo_record_frame_count);
@@ -3214,9 +4006,24 @@ void CL_Stop_f (void)
 
 	Cvar_SetROM(cl_recordingdemo.name, "");
 	CL_ResetDemoRecordingPaths();
+	demo_record_stop_in_progress = false;
 	
 // ericw -- update demo tab-completion list
 	DemoList_Rebuild ();
+}
+
+void CL_Stop_f(void)
+{
+	if (cmd_source != src_command)
+		return;
+
+	if (!cls.demorecording)
+	{
+		Con_Printf("Not recording a demo.\n");
+		return;
+	}
+
+	CL_StopRecording();
 }
 
 void CL_DemoMark_f(void)
@@ -3664,8 +4471,13 @@ void CL_Record_f (void)
 
 	CL_ResetDemoRecordingPaths();
 	demo_record_to_dzip = CL_DemoFormatWantsDZip();
-	if (demo_record_to_dzip)
-		CL_BuildRecordingRawPath(name, demo_record_raw_path, sizeof(demo_record_raw_path));
+	if (demo_record_to_dzip &&
+		!CL_BuildRecordingRawPath(name, demo_record_raw_path, sizeof(demo_record_raw_path)))
+	{
+		Con_Printf("ERROR: couldn't reserve a temporary demo path for %s\n", name);
+		CL_ResetDemoRecordingPaths();
+		return;
+	}
 
 	Cvar_SetROM(cl_recordingdemo.name, name);
 	q_strlcpy(cls.demofilename, name, sizeof(cls.demofilename)); // user-visible final target
@@ -3683,7 +4495,21 @@ void CL_Record_f (void)
 	}
 
 	cls.forcetrack = track;
-	fprintf (cls.demofile, "%i\n", cls.forcetrack);
+	if (fprintf(cls.demofile, "%i\n", cls.forcetrack) < 0 ||
+		!CL_DemoWriterStart(cls.demofile))
+	{
+		const char *record_path = demo_record_to_dzip ? demo_record_raw_path : name;
+
+		fclose(cls.demofile);
+		cls.demofile = NULL;
+		if (remove(record_path) != 0)
+			Con_Printf("WARNING: couldn't remove incomplete demo %s\n", record_path);
+		Con_Printf("ERROR: couldn't start demo writer for %s\n",
+			record_path);
+		Cvar_SetROM(cl_recordingdemo.name, "");
+		CL_ResetDemoRecordingPaths();
+		return;
+	}
 
 	cls.demo_had_overtime = false;
 	cls.demo_marker_count = 0;
@@ -4423,7 +5249,7 @@ static unsigned long CL_DZipCRCReflect(unsigned long x, int bits)
 	return value;
 }
 
-static void CL_DZipCRCInit(void)
+static void CL_DZipCRCBuildTable(unsigned long table[256])
 {
 	unsigned long crcpol = 0x04c11db7;
 	unsigned long i, j, k;
@@ -4433,14 +5259,25 @@ static void CL_DZipCRCInit(void)
 		k = CL_DZipCRCReflect(i, 8) << 24;
 		for (j = 0; j < 8; ++j)
 			k = (k << 1) ^ ((k & 0x80000000UL) ? crcpol : 0);
-		cl_dzip_crctable[i] = CL_DZipCRCReflect(k, 32);
+		table[i] = CL_DZipCRCReflect(k, 32);
 	}
+}
+
+static void CL_DZipCRCInit(void)
+{
+	CL_DZipCRCBuildTable(cl_dzip_crctable);
+}
+
+static void CL_DZipUpdateCRC(const unsigned long table[256], unsigned long *crc,
+	const byte *ptr, int len)
+{
+	while (len-- > 0)
+		*crc = (*crc >> 8) ^ table[(*crc & 0xff) ^ *ptr++];
 }
 
 static void CL_DZipMakeCRC(const byte *ptr, int len)
 {
-	while (len-- > 0)
-		cl_dzip_crcval = (cl_dzip_crcval >> 8) ^ cl_dzip_crctable[(cl_dzip_crcval & 0xff) ^ *ptr++];
+	CL_DZipUpdateCRC(cl_dzip_crctable, &cl_dzip_crcval, ptr, len);
 }
 
 static qboolean CL_DZipArchiveRead(void *buf, unsigned int num)
@@ -6380,11 +7217,13 @@ static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *arc
 	byte dirbuf[CL_DZIP_DIR_DISK_SIZE];
 	byte inbuf[65536];
 	byte outbuf[65536];
+	unsigned long crc_table[256];
+	unsigned long crc_value = CL_DZIP_INITCRC;
 	FILE *in = NULL;
 	FILE *out = NULL;
 	z_stream zs;
 	long real_size;
-	long compressed_size;
+	uLong compressed_size;
 	int ret;
 	size_t entry_len;
 	qboolean ok = false;
@@ -6400,15 +7239,15 @@ static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *arc
 	if (fseek(in, 0, SEEK_END) != 0)
 		goto done;
 	real_size = ftell(in);
-	if (real_size < 0 || fseek(in, 0, SEEK_SET) != 0)
+	if (real_size < 0 || (unsigned long)real_size > UINT32_MAX ||
+		fseek(in, 0, SEEK_SET) != 0)
 		goto done;
 
 	out = fopen(archive_path, "wb");
 	if (!out)
 		goto done;
 
-	CL_DZipCRCInit();
-	cl_dzip_crcval = CL_DZIP_INITCRC;
+	CL_DZipCRCBuildTable(crc_table);
 
 	CL_DZipWriteLE32(header + 0, 'D' + ('Z' << 8) + (CL_DZIP_MAJOR_VERSION << 16) + (CL_DZIP_MINOR_VERSION << 24));
 	CL_DZipWriteLE32(header + 4, 0);
@@ -6425,7 +7264,7 @@ static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *arc
 		size_t read = fread(inbuf, 1, sizeof(inbuf), in);
 		if (read)
 		{
-			CL_DZipMakeCRC(inbuf, (int)read);
+			CL_DZipUpdateCRC(crc_table, &crc_value, inbuf, (int)read);
 			zs.next_in = inbuf;
 			zs.avail_in = (uInt)read;
 			while (zs.avail_in)
@@ -6480,13 +7319,15 @@ static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *arc
 
 	compressed_size = zs.total_out;
 	deflateEnd(&zs);
+	if (compressed_size > UINT32_MAX - 12u)
+		goto done;
 
 	CL_DZipWriteLE32(dirbuf + 0, 12);
 	CL_DZipWriteLE32(dirbuf + 4, (uint32_t)compressed_size);
 	CL_DZipWriteLE32(dirbuf + 8, (uint32_t)real_size);
 	CL_DZipWriteLE16(dirbuf + 12, (uint16_t)entry_len);
 	CL_DZipWriteLE16(dirbuf + 14, 0);
-	CL_DZipWriteLE32(dirbuf + 16, (uint32_t)cl_dzip_crcval);
+	CL_DZipWriteLE32(dirbuf + 16, (uint32_t)crc_value);
 	CL_DZipWriteLE32(dirbuf + 20, CL_DZIP_TYPE_NORMAL);
 	CL_DZipWriteLE32(dirbuf + 24, 0);
 	CL_DZipWriteLE32(dirbuf + 28, (uint32_t)real_size);
@@ -6506,7 +7347,12 @@ static qboolean CL_DZipArchiveDemoFile(const char *src_dem_path, const char *arc
 
 done:
 	if (out)
-		fclose(out);
+	{
+		if (fflush(out) != 0)
+			ok = false;
+		if (fclose(out) != 0)
+			ok = false;
+	}
 	if (in)
 		fclose(in);
 	if (!ok)

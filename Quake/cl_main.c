@@ -758,7 +758,7 @@ void CL_Disconnect (void)
 	else if (cls.state == ca_connected)
 	{
 		if (cls.demorecording)
-			CL_Stop_f ();
+			CL_StopRecording ();
 
 		Con_DPrintf ("Sending clc_disconnect\n");
 		SZ_Clear (&cls.message);
@@ -7589,6 +7589,7 @@ void CL_Init (void)
 {
 	SZ_Alloc (&cls.message, 1024);
 	cls.download.percent = -1.0f;
+	CL_Demo_Init();
 	Mapshot_Init();			// before presence: it resolves mapshot URLs through this
 	DiscordPresence_Init();
 

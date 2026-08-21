@@ -2472,24 +2472,9 @@ void S_Voip_Transmit(unsigned char clc, sizebuf_t *buf)
 			}
 			if (cls.demorecording && (!sv.active || !sv_voip_echo.value))	//voice is not (normally) echoed by the server, which means that you won't hear yourself speak. which is unfortunate when it comes to demos.
 			{	//the small size of various voip packets means that the 12 bytes of angles overhead is going to give a noticable size overhead...
-				byte b;
-				unsigned short s;
-				int i = LittleLong (5+outpos);
-				fwrite (&i, 4, 1, cls.demofile);
-				for (i = 0; i < 3; i++)
-				{
-					float f = LittleFloat (cl.viewangles[i]);
-					fwrite (&f, 4, 1, cls.demofile);
-				}
-				b = clc;
-				fwrite (&b, 1, 1, cls.demofile);
-				b = (s_voip.enccodec<<4) | (s_voip.generation & 0x0f);
-				fwrite (&b, 1, 1, cls.demofile);
-				b = initseq;
-				fwrite (&b, 1, 1, cls.demofile);
-				s = outpos;
-				fwrite (&s, 2, 1, cls.demofile);
-				fwrite (outbuf, outpos, 1, cls.demofile);
+				CL_WriteDemoVoiceMessage(clc,
+					(s_voip.enccodec << 4) | (s_voip.generation & 0x0f),
+					initseq, outbuf, outpos);
 			}
 		}
 
