@@ -5122,8 +5122,9 @@ static void PF_setattachment(void)
 
 	if (*tagname)
 	{
-		//we don't support md3s, or any skeletal formats, so all tag names are logically invalid for us.
-		Con_DWarning("PF_setattachment: tag %s not found\n", tagname);
+		//The model loaders can render MD3/IQM/MD5 geometry, but QSS-M does not yet
+		//retain/query their tags or bones for entity attachments.
+		Con_DWarning("PF_setattachment: model tags are unsupported (requested %s)\n", tagname);
 	}
 
 	if ((val = GetEdictFieldValue(ent, qcvm->extfields.tag_entity)))
@@ -7723,8 +7724,17 @@ enum
 	RF_WEIRDFRAMETIMES	= 1u<<6,	//change frame*time fields to need to be translated as realframeNtime='time-frameNtime' to determine which pose to use.
 						//CONSULT OTHER ENGINES BEFORE ADDING NEW FLAGS.
 };
+static byte PR_CSQCApplyColormod(byte base, float scale)
+{
+	float value = base * scale;
+
+	if (!isfinite(value))
+		return 0;
+	return (byte)CLAMP(0.0f, value, 255.0f);
+}
 static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the scene.
 {
+	static unsigned int warned_renderflags;
 	qmodel_t *model = PR_GetVMModel(ed->v.modelindex);
 
 	if (model)
@@ -7740,7 +7750,9 @@ static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the sce
 			eval_t *alpha = GetEdictFieldValue(ed, qcvm->extfields.alpha);
 			eval_t *scale = GetEdictFieldValue(ed, qcvm->extfields.scale);
 			eval_t *renderflags = GetEdictFieldValue(ed, qcvm->extfields.renderflags);
-			int rf = renderflags?renderflags->_float:0;
+			unsigned int rf = renderflags && isfinite(renderflags->_float) && renderflags->_float > 0.0f &&
+				(double)renderflags->_float <= UINT_MAX ? (unsigned int)renderflags->_float : 0;
+			unsigned int unsupported_rf;
 
 			VectorCopy(ed->v.origin, e->origin);
 			VectorCopy(ed->v.angles, e->angles);
@@ -7748,9 +7760,9 @@ static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the sce
 			e->skinnum = ed->v.skin;
 			if (colormod && (colormod->vector[0]||colormod->vector[1]||colormod->vector[2]))
 			{
-				e->netstate.colormod[0] *= colormod->vector[0];
-				e->netstate.colormod[1] *= colormod->vector[1];
-				e->netstate.colormod[2] *= colormod->vector[2];
+				e->netstate.colormod[0] = PR_CSQCApplyColormod(e->netstate.colormod[0], colormod->vector[0]);
+				e->netstate.colormod[1] = PR_CSQCApplyColormod(e->netstate.colormod[1], colormod->vector[1]);
+				e->netstate.colormod[2] = PR_CSQCApplyColormod(e->netstate.colormod[2], colormod->vector[2]);
 			}
 			e->alpha = alpha?ENTALPHA_ENCODE(alpha->_float):ENTALPHA_DEFAULT;
 			if (scale)
@@ -7770,10 +7782,26 @@ static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the sce
 				e->eflags |= EFLAGS_VIEWMODEL;
 			if (rf & RF_EXTERNALMODEL)
 				e->eflags |= EFLAGS_EXTERIORMODEL;
+			if (rf & RF_ADDITIVE)
+				e->effects |= EF_ADDITIVE;
+			if (rf & RF_NOSHADOW)
+				e->effects |= EF_NOSHADOW;
 			if (rf & RF_WEIRDFRAMETIMES)
 			{
 				e->lerp.snap.time[0] = qcvm->time - e->lerp.snap.time[0];
 				e->lerp.snap.time[1] = qcvm->time - e->lerp.snap.time[1];
+			}
+
+			//RF_VIEWMODEL already includes QSS-M's viewmodel depth range. A standalone
+			//RF_DEPTHHACK and RF_USEAXIS need renderer support that entity_t cannot express.
+			unsupported_rf = rf & RF_USEAXIS;
+			if ((rf & RF_DEPTHHACK) && !(rf & RF_VIEWMODEL))
+				unsupported_rf |= RF_DEPTHHACK;
+			unsupported_rf &= ~warned_renderflags;
+			if (unsupported_rf)
+			{
+				Con_DPrintf("CSQC addentity: unsupported renderflags %#x ignored\n", unsupported_rf);
+				warned_renderflags |= unsupported_rf;
 			}
 		}
 	}
@@ -8431,9 +8459,10 @@ void SCR_DrawStatusIndicators(void);
 void SCR_DrawCrosshair (void);
 float CalcFovy (float fov_x, float width, float height);
 extern cvar_t scr_fov;
-static void PF_cl_computerefdef(void)
+static qboolean PF_cl_computerefdef(void)
 {
 	float s = PR_GetVMScale();
+	float afov;
 
 	VectorCopy(viewprops.origin, r_refdef.vieworg);
 	VectorCopy(viewprops.angles, r_refdef.viewangles);
@@ -8441,6 +8470,8 @@ static void PF_cl_computerefdef(void)
 	r_refdef.vrect.y = viewprops.rect_pos[1]*s;
 	r_refdef.vrect.width = viewprops.rect_size[0]*s;
 	r_refdef.vrect.height = viewprops.rect_size[1]*s;
+	if (r_refdef.vrect.width < 1 || r_refdef.vrect.height < 1)
+		return false;
 
 	if (viewprops.fov_x && viewprops.fov_y)
 	{
@@ -8449,26 +8480,28 @@ static void PF_cl_computerefdef(void)
 	}
 	else
 	{
-		if (!viewprops.afov)
-			viewprops.afov = scr_fov.value;
-		if (r_refdef.vrect.width/r_refdef.vrect.height < 4/3)
+		afov = viewprops.afov;
+		if (!isfinite(afov) || !afov)
+			afov = scr_fov.value;
+		afov = CLAMP(1.0f, afov, 170.0f);
+		if ((float)r_refdef.vrect.width / (float)r_refdef.vrect.height < 4.0f / 3.0f)
 		{
-			r_refdef.fov_y = viewprops.afov;
+			r_refdef.fov_y = afov;
 			r_refdef.fov_x = CalcFovy(r_refdef.fov_y, r_refdef.vrect.height, r_refdef.vrect.width);
 		}
 		else
 		{
-			r_refdef.fov_y = tan(viewprops.afov * M_PI / 360.0) * (3.0 / 4.0);
+			r_refdef.fov_y = tan(afov * M_PI / 360.0) * (3.0 / 4.0);
 			r_refdef.fov_x = r_refdef.fov_y * r_refdef.vrect.width / r_refdef.vrect.height;
 			r_refdef.fov_x = atan(r_refdef.fov_x) * (360.0 / M_PI);
 			r_refdef.fov_y = atan(r_refdef.fov_y) * (360.0 / M_PI);
 		}
 	}
+	return true;
 }
 static void PF_cl_renderscene(void)
 {
-	PF_cl_computerefdef();
-	if (r_refdef.vrect.width < 1 || r_refdef.vrect.height < 1)
+	if (!PF_cl_computerefdef())
 		return;	//can't draw nuffin...
 
 	R_RenderView();
@@ -9094,7 +9127,11 @@ static void PF_cl_unproject(void)
 	float s = PR_GetVMScale();
 	VectorCopy(G_VECTOR(OFS_PARM0), pos);
 
-	PF_cl_computerefdef();	//determine correct vrect (in pixels), and compute fovxy accordingly. this could be cached...
+	if (!PF_cl_computerefdef())	//determine correct vrect (in pixels), and compute fovxy accordingly. this could be cached...
+	{
+		VectorClear(G_VECTOR(OFS_RETURN));
+		return;
+	}
 	PF_cl_genProjectMatricies(viewproj);
 	Matrix4_Invert(viewproj, viewproj_inv);
 
@@ -9134,7 +9171,11 @@ static void PF_cl_project(void)
 	VectorCopy(G_VECTOR(OFS_PARM0), pos);
 	pos[3] = 1;	//w is always 1.
 
-	PF_cl_computerefdef();	//determine correct vrect (in pixels), and compute fovxy accordingly. this could be cached...
+	if (!PF_cl_computerefdef())	//determine correct vrect (in pixels), and compute fovxy accordingly. this could be cached...
+	{
+		VectorClear(G_VECTOR(OFS_RETURN));
+		return;
+	}
 	PF_cl_genProjectMatricies(viewproj);
 
 	Matrix4_Transform4(viewproj, pos, res);
@@ -9728,8 +9769,8 @@ static struct
 //	{"addtrisoup_simple",PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("typedef float vec2[2];\ntypedef float vec3[3];\ntypedef float vec4[4];\ntypedef struct trisoup_simple_vert_s {vec3 xyz;vec2 st;vec4 rgba;} trisoup_simple_vert_t;\nvoid(string texturename, int flags, struct trisoup_simple_vert_s *verts, int *indexes, int numindexes)", "Adds the specified trisoup into the scene as additional geometry. This permits caching geometry to reduce builtin spam. Indexes are a triangle list (so eg quads will need 6 indicies to form two triangles). NOTE: this is not going to be a speedup over polygons if you're still generating lots of new data every frame.")},
 	{"setproperty",		PF_NoSSQC,			PF_cl_setproperty,	303,	PF_cl_setproperty,303, D("#define setviewprop setproperty\nfloat(float property, ...)", "Allows you to override default view properties like viewport, fov, and whether the engine hud will be drawn. Different VF_ values have slightly different arguments, some are vectors, some floats.")},// (EXT_CSQC)
 	{"renderscene",		PF_NoSSQC,			PF_cl_renderscene,	304,	PF_cl_renderscene,304, D("void()", "Draws all entities, polygons, and particles on the rentity list (which were added via addentities or addentity), using the various view properties set via setproperty. There is no ordering dependancy.\nThe scene must generally be cleared again before more entities are added, as entities will persist even over to the next frame.\nYou may call this builtin multiple times per frame, but should only be called from CSQC_UpdateView.")},// (EXT_CSQC)
-	{"R_BeginPolygon",	PF_NoSSQC,			PF_R_PolygonBegin,	306,	PF_R_PolygonBegin,	306, D("void(string texturename, optional float flags, optional float is2d)", "Specifies the shader to use for the following polygons, along with optional flags.\nIf is2d, the polygon will be drawn as soon as the EndPolygon call is made, rather than waiting for renderscene. This allows complex 2d effects.")},// (EXT_CSQC_???)
 	{"dynamiclight_add",PF_NoSSQC,			PF_cs_addlight,		305,	PF_NoMenu, D("float(vector org, float radius, vector lightcolours, optional float style, optional string cubemapname, optional float pflags)", "Adds a temporary dynamic light and returns its handle. QSS-M supports ordinary omnidirectional lights; cubemap and projected-light arguments are accepted but not rendered.")},// (EXT_CSQC)
+	{"R_BeginPolygon",	PF_NoSSQC,			PF_R_PolygonBegin,	306,	PF_R_PolygonBegin,	306, D("void(string texturename, optional float flags, optional float is2d)", "Begins an immediate 2D textured polygon when is2d is nonzero and flags is zero. QSS-M does not currently support modifier flags or queued 3D scene polygons.")},// (EXT_CSQC_???)
 	{"R_PolygonVertex",	PF_NoSSQC,			PF_R_PolygonVertex,	307,	PF_R_PolygonVertex,	307, D("void(vector org, vector texcoords, vector rgb, float alpha)", "Specifies a polygon vertex with its various properties.")},// (EXT_CSQC_???)
 	{"R_EndPolygon",	PF_NoSSQC,			PF_R_PolygonEnd,	308,	PF_R_PolygonEnd,	308, D("void()", "Ends the current polygon. At least 3 verticies must have been specified. You do not need to call beginpolygon if you wish to draw another polygon with the same shader.")},
 	{"getproperty",		PF_NoSSQC,			PF_cl_getproperty,	309,	PF_cl_getproperty,	309, D("#define getviewprop getproperty\n__variant(float property)", "Retrieve a currently-set (typically view) property, allowing you to read the current viewport or other things. Due to cheat protection, certain values may be unretrievable.")},// (EXT_CSQC_1)

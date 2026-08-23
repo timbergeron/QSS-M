@@ -2585,23 +2585,21 @@ void Draw_SubPic_QW (int x, int y, qpic_t *pic, int ofsx, int ofsy, int w, int h
 
 void Draw_SubPic (float x, float y, float w, float h, qpic_t *pic, float s1, float t1, float s2, float t2)
 {
-	glpic_t			*gl;
+	float sl, tl, sh, th;
 
 	s2 += s1;
 	t2 += t1;
 
-	if (scrap_dirty)
-		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
-	GL_Bind (gl->gltexture);
+	if (!Draw_BindPicTexture(pic, &sl, &tl, &sh, &th))
+		return;
 	glBegin (GL_QUADS);
-	glTexCoord2f (gl->sl*(1-s1) + s1*gl->sh, gl->tl*(1-t1) + t1*gl->th);
+	glTexCoord2f (sl*(1-s1) + s1*sh, tl*(1-t1) + t1*th);
 	glVertex2f (x, y);
-	glTexCoord2f (gl->sl*(1-s2) + s2*gl->sh, gl->tl*(1-t1) + t1*gl->th);
+	glTexCoord2f (sl*(1-s2) + s2*sh, tl*(1-t1) + t1*th);
 	glVertex2f (x+w, y);
-	glTexCoord2f (gl->sl*(1-s2) + s2*gl->sh, gl->tl*(1-t2) + t2*gl->th);
+	glTexCoord2f (sl*(1-s2) + s2*sh, tl*(1-t2) + t2*th);
 	glVertex2f (x+w, y+h);
-	glTexCoord2f (gl->sl*(1-s1) + s1*gl->sh, gl->tl*(1-t2) + t2*gl->th);
+	glTexCoord2f (sl*(1-s1) + s1*sh, tl*(1-t2) + t2*th);
 	glVertex2f (x, y+h);
 	glEnd ();
 }
@@ -2609,17 +2607,15 @@ void Draw_SubPic (float x, float y, float w, float h, qpic_t *pic, float s1, flo
 //Spike -- this is for CSQC to do fancy drawing.
 void Draw_PicPolygon(qpic_t *pic, unsigned int numverts, polygonvert_t *verts)
 {
-	glpic_t			*gl;
+	float sl, tl, sh, th;
 
-	if (scrap_dirty)
-		Scrap_Upload ();
-	gl = (glpic_t *)pic->data;
-	GL_Bind (gl->gltexture);
+	if (!Draw_BindPicTexture(pic, &sl, &tl, &sh, &th))
+		return;
 	glBegin (GL_TRIANGLE_FAN);
 	while (numverts --> 0)
 	{
 		glColor4fv(verts->rgba);
-		glTexCoord2f (gl->sl*(1-verts->st[0]) + verts->st[0]*gl->sh, gl->tl*(1-verts->st[1]) + verts->st[1]*gl->th);
+		glTexCoord2f (sl*(1-verts->st[0]) + verts->st[0]*sh, tl*(1-verts->st[1]) + verts->st[1]*th);
 		glVertex2f(verts->xy[0], verts->xy[1]);
 		verts++;
 	}
