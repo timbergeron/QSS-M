@@ -7906,18 +7906,128 @@ static void PF_cs_addlight(void)
 	float *org = G_VECTOR(OFS_PARM0);
 	float radius = G_FLOAT(OFS_PARM1);
 	float *rgb = G_VECTOR(OFS_PARM2);
-//	float style = G_FLOAT(OFS_PARM3);
+	float stylevalue = (qcvm->argc > 3) ? G_FLOAT(OFS_PARM3) : 0;
+	int style = 0;
 //	const char *cubename = G_STRING(OFS_PARM4);
 //	float pflags = G_FLOAT(OFS_PARM5);
 
 	int key = 0;
-	dlight_t *dl = CL_AllocDlight (key);
+	dlight_t *dl;
+
+	G_FLOAT(OFS_RETURN) = -1;
+	if (!isfinite(org[0]) || !isfinite(org[1]) || !isfinite(org[2]) ||
+		!isfinite(radius) ||
+		!isfinite(rgb[0]) || !isfinite(rgb[1]) || !isfinite(rgb[2]))
+		return;
+	if (isfinite(stylevalue) && (double)stylevalue >= INT_MIN && (double)stylevalue <= INT_MAX)
+		style = (int)stylevalue;
+
+	dl = CL_AllocDlight (key);
 	VectorCopy(rgb, dl->color);
 	VectorCopy (org,  dl->origin);
 	dl->radius = radius;
 	dl->minlight = 32;
 	dl->die = cl.time+1;
 	dl->decay = -1;	//die at end of frame.
+	dl->style = style;
+	G_FLOAT(OFS_RETURN) = dl - cl_dlights;
+}
+
+enum
+{
+	QCLFIELD_ORIGIN = 0,
+	QCLFIELD_COLOUR = 1,
+	QCLFIELD_RADIUS = 2,
+	QCLFIELD_FLAGS = 3,
+	QCLFIELD_STYLE = 4,
+	QCLFIELD_ANGLES = 5,
+	QCLFIELD_FOV = 6,
+	QCLFIELD_CORONA = 7,
+	QCLFIELD_CORONASCALE = 8,
+	QCLFIELD_CUBEMAPNAME = 9,
+	QCLFIELD_AMBIENTSCALE = 10,
+	QCLFIELD_DIFFUSESCALE = 11,
+	QCLFIELD_SPECULARSCALE = 12,
+	QCLFIELD_ROTATION = 13,
+	QCLFIELD_DIETIME = 14,
+	QCLFIELD_RGBDECAY = 15,
+	QCLFIELD_RADIUSDECAY = 16,
+	QCLFIELD_STYLESTRING = 17,
+	QCLFIELD_NEARCLIP = 18
+};
+
+static void PF_cs_dynamiclight_set(void)
+{
+	float handle = G_FLOAT(OFS_PARM0);
+	float fieldvalue = G_FLOAT(OFS_PARM1);
+	float value;
+	float *vector;
+	int field;
+	dlight_t *dl;
+
+	if (!isfinite(handle) || handle < 0 || handle >= MAX_DLIGHTS ||
+		!isfinite(fieldvalue) || fieldvalue < QCLFIELD_ORIGIN ||
+		fieldvalue > QCLFIELD_NEARCLIP)
+		return;
+
+	dl = &cl_dlights[(int)handle];
+	field = (int)fieldvalue;
+
+	switch (field)
+	{
+	case QCLFIELD_ORIGIN:
+		vector = G_VECTOR(OFS_PARM2);
+		if (isfinite(vector[0]) && isfinite(vector[1]) && isfinite(vector[2]))
+			VectorCopy(vector, dl->origin);
+		break;
+	case QCLFIELD_COLOUR:
+		vector = G_VECTOR(OFS_PARM2);
+		if (isfinite(vector[0]) && isfinite(vector[1]) && isfinite(vector[2]))
+			VectorCopy(vector, dl->color);
+		break;
+	case QCLFIELD_RADIUS:
+		value = G_FLOAT(OFS_PARM2);
+		if (isfinite(value))
+			dl->radius = value;
+		break;
+	case QCLFIELD_STYLE:
+		value = G_FLOAT(OFS_PARM2);
+		if (isfinite(value) && (double)value >= INT_MIN && (double)value <= INT_MAX)
+			dl->style = (int)value;
+		break;
+	case QCLFIELD_DIETIME:
+		value = G_FLOAT(OFS_PARM2);
+		if (isfinite(value))
+			dl->die = value;
+		break;
+	case QCLFIELD_RGBDECAY:
+		vector = G_VECTOR(OFS_PARM2);
+		if (isfinite(vector[0]) && isfinite(vector[1]) && isfinite(vector[2]))
+			VectorCopy(vector, dl->channelfade);
+		break;
+	case QCLFIELD_RADIUSDECAY:
+		value = G_FLOAT(OFS_PARM2);
+		if (isfinite(value))
+			dl->decay = value;
+		break;
+
+	case QCLFIELD_FLAGS:
+	case QCLFIELD_ANGLES:
+	case QCLFIELD_FOV:
+	case QCLFIELD_CORONA:
+	case QCLFIELD_CORONASCALE:
+	case QCLFIELD_CUBEMAPNAME:
+	case QCLFIELD_AMBIENTSCALE:
+	case QCLFIELD_DIFFUSESCALE:
+	case QCLFIELD_SPECULARSCALE:
+	case QCLFIELD_ROTATION:
+	case QCLFIELD_STYLESTRING:
+	case QCLFIELD_NEARCLIP:
+	default:
+		/* QSS-M has no projected/RT-light fields. Accept them for CSQC
+		 * compatibility while retaining the ordinary dynamic light. */
+		break;
+	}
 }
 static struct
 {
@@ -9618,8 +9728,8 @@ static struct
 //	{"addtrisoup_simple",PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("typedef float vec2[2];\ntypedef float vec3[3];\ntypedef float vec4[4];\ntypedef struct trisoup_simple_vert_s {vec3 xyz;vec2 st;vec4 rgba;} trisoup_simple_vert_t;\nvoid(string texturename, int flags, struct trisoup_simple_vert_s *verts, int *indexes, int numindexes)", "Adds the specified trisoup into the scene as additional geometry. This permits caching geometry to reduce builtin spam. Indexes are a triangle list (so eg quads will need 6 indicies to form two triangles). NOTE: this is not going to be a speedup over polygons if you're still generating lots of new data every frame.")},
 	{"setproperty",		PF_NoSSQC,			PF_cl_setproperty,	303,	PF_cl_setproperty,303, D("#define setviewprop setproperty\nfloat(float property, ...)", "Allows you to override default view properties like viewport, fov, and whether the engine hud will be drawn. Different VF_ values have slightly different arguments, some are vectors, some floats.")},// (EXT_CSQC)
 	{"renderscene",		PF_NoSSQC,			PF_cl_renderscene,	304,	PF_cl_renderscene,304, D("void()", "Draws all entities, polygons, and particles on the rentity list (which were added via addentities or addentity), using the various view properties set via setproperty. There is no ordering dependancy.\nThe scene must generally be cleared again before more entities are added, as entities will persist even over to the next frame.\nYou may call this builtin multiple times per frame, but should only be called from CSQC_UpdateView.")},// (EXT_CSQC)
-	{"dynamiclight_add",PF_NoSSQC,			PF_cs_addlight,		305,	PF_NoMenu, D("float(vector org, float radius, vector lightcolours, optional float style, optional string cubemapname, optional float pflags)", "Adds a temporary dlight, ready to be drawn via addscene. Cubemap orientation will be read from v_forward/v_right/v_up.")},// (EXT_CSQC)
 	{"R_BeginPolygon",	PF_NoSSQC,			PF_R_PolygonBegin,	306,	PF_R_PolygonBegin,	306, D("void(string texturename, optional float flags, optional float is2d)", "Specifies the shader to use for the following polygons, along with optional flags.\nIf is2d, the polygon will be drawn as soon as the EndPolygon call is made, rather than waiting for renderscene. This allows complex 2d effects.")},// (EXT_CSQC_???)
+	{"dynamiclight_add",PF_NoSSQC,			PF_cs_addlight,		305,	PF_NoMenu, D("float(vector org, float radius, vector lightcolours, optional float style, optional string cubemapname, optional float pflags)", "Adds a temporary dynamic light and returns its handle. QSS-M supports ordinary omnidirectional lights; cubemap and projected-light arguments are accepted but not rendered.")},// (EXT_CSQC)
 	{"R_PolygonVertex",	PF_NoSSQC,			PF_R_PolygonVertex,	307,	PF_R_PolygonVertex,	307, D("void(vector org, vector texcoords, vector rgb, float alpha)", "Specifies a polygon vertex with its various properties.")},// (EXT_CSQC_???)
 	{"R_EndPolygon",	PF_NoSSQC,			PF_R_PolygonEnd,	308,	PF_R_PolygonEnd,	308, D("void()", "Ends the current polygon. At least 3 verticies must have been specified. You do not need to call beginpolygon if you wish to draw another polygon with the same shader.")},
 	{"getproperty",		PF_NoSSQC,			PF_cl_getproperty,	309,	PF_cl_getproperty,	309, D("#define getviewprop getproperty\n__variant(float property)", "Retrieve a currently-set (typically view) property, allowing you to read the current viewport or other things. Due to cheat protection, certain values may be unretrievable.")},// (EXT_CSQC_1)
@@ -9697,7 +9807,7 @@ static struct
 	{"readentitynum",	PF_NoSSQC,			PF_cl_readentitynum,368,	PF_NoMenu, "float()"},// (EXT_CSQC)
 //	{"deltalisten",		NULL,				PF_FullCSQCOnly,	371,	PF_NoMenu, D("float(string modelname, float(float isnew) updatecallback, float flags)", "Specifies a per-modelindex callback to listen for engine-networking entity updates. Such entities are automatically interpolated by the engine (unless flags specifies not to).\nThe various standard entity fields will be overwritten each frame before the updatecallback function is called.")},//  (EXT_CSQC_1)
 //	{"dynamiclight_get",PF_NoSSQC,			PF_FullCSQCOnly,	372,	PF_NoMenu, D("__variant(float lno, float fld)", "Retrieves a property from the given dynamic/rt light. Return type depends upon the light field requested.")},
-//	{"dynamiclight_set",PF_NoSSQC,			PF_FullCSQCOnly,	373,	PF_NoMenu, D("void(float lno, float fld, __variant value)", "Changes a property on the given dynamic/rt light. Value type depends upon the light field to be changed.")},
+	{"dynamiclight_set",PF_NoSSQC,			PF_cs_dynamiclight_set,373,	PF_NoMenu, D("void(float lno, float fld, __variant value)", "Changes origin, colour, radius, style, die time, RGB decay, or radius decay on a dynamic light. Projected/RT-light-only fields such as angles and cubemaps are accepted but have no effect.")},
 //	{"particleeffectquery",PF_NoSSQC,		PF_FullCSQCOnly,	374,	PF_NoMenu, D("string(float efnum, float body)", "Retrieves either the name or the body of the effect with the given number. The effect body is regenerated from internal state, and can be changed before being reapplied via the localcmd builtin.")},
 //	{"adddecal",		PF_NoSSQC,			PF_FullCSQCOnly,	375,	PF_NoMenu, D("void(string shadername, vector origin, vector up, vector side, vector rgb, float alpha)", "Adds a temporary clipped decal shader to the scene, centered at the given point with given orientation. Will be drawn by the next renderscene call, and freed by the next clearscene call.")},
 //	{"setcustomskin",	PF_NoSSQC,			PF_FullCSQCOnly,	376,	PF_NoMenu, D("void(entity e, string skinfilename, optional string skindata)", "Sets an entity's skin overrides. These are custom per-entity surface->shader lookups. The skinfilename/data should be in .skin format:\nsurfacename,shadername - makes the named surface use the named shader\nreplace \"surfacename\" \"shadername\" - same.\nqwskin \"foo\" - use an unmodified quakeworld player skin (including crop+repalette rules)\nq1lower 0xff0000 - specify an override for the entity's lower colour, in this case to red\nq1upper 0x0000ff - specify an override for the entity's lower colour, in this case to blue\ncompose \"surfacename\" \"shader\" \"imagename@x,y:w,h$s,t,s2,t2?r,g,b,a\" - compose a skin texture from multiple images.\n  The texture is determined to be sufficient to hold the first named image, additional images can be named as extra tokens on the same line.\n  Use a + at the end of the line to continue reading image tokens from the next line also, the named shader must use 'map $diffuse' to read the composed texture (compatible with the defaultskin shader).")},
