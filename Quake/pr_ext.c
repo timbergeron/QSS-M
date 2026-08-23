@@ -5517,6 +5517,26 @@ static struct
 static size_t numqcpics;
 static size_t maxqcpics;
 
+typedef struct
+{
+	char name[MAX_QPATH];
+	char image[MAX_QPATH];
+} csqcshader_t;
+// QSS-M has no material renderer. Registered CSQC shaders therefore alias a
+// material name to one representative bitmap for the existing 2D draw path.
+static csqcshader_t *csqcshaders;
+static size_t numcsqcshaders;
+static size_t maxcsqcshaders;
+
+typedef struct
+{
+	char name[MAX_QPATH];
+	char image[MAX_QPATH];
+} csqcshaderdef_t;
+static csqcshaderdef_t *csqcshaderdefs;
+static size_t numcsqcshaderdefs;
+static size_t maxcsqcshaderdefs;
+static qboolean csqcshaderdefs_loaded;
 
 #define MAX_CSQC_FONTS 32
 typedef struct
@@ -5542,6 +5562,16 @@ void PR_ReloadPics(qboolean purge)
 	{
 		memset(csqcfonts, 0, sizeof(csqcfonts));
 
+		free(csqcshaders);
+		csqcshaders = NULL;
+		numcsqcshaders = 0;
+		maxcsqcshaders = 0;
+
+		free(csqcshaderdefs);
+		csqcshaderdefs = NULL;
+		numcsqcshaderdefs = 0;
+		maxcsqcshaderdefs = 0;
+		csqcshaderdefs_loaded = false;
 	}
 	else
 		for (i = 0; i < countof(csqcfonts); i++)
@@ -5555,10 +5585,31 @@ void PR_ReloadPics(qboolean purge)
 //#define PICFLAG_DOWNLOAD	(1u<<8)	//request to download it from the gameserver if its not stored locally.
 #define PICFLAG_BLOCK		(1u<<9)	//wait until the texture is fully loaded.
 #define PICFLAG_NOLOAD		(1u<<31)
+
+static const char *DrawQC_ShaderAlias(const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < numcsqcshaders; i++)
+		if (!q_strcasecmp(name, csqcshaders[i].name))
+			return csqcshaders[i].image;
+	return name;
+}
+
+static void DrawQC_InvalidatePic(const char *picname)
+{
+	size_t i;
+
+	for (i = 0; i < numqcpics; i++)
+		if (!q_strcasecmp(picname, qcpics[i].name))
+			qcpics[i].pic = NULL;
+}
+
 static qpic_t *DrawQC_CachePic(const char *picname, unsigned int flags)
 {	//okay, so this is silly. we've ended up with 3 different cache levels. qcpics, pics, and images.
 	size_t i;
 	unsigned int texflags;
+	const char *loadname;
 	for (i = 0; i < numqcpics; i++)
 	{	//binary search? something more sane?
 		if (!strcmp(picname, qcpics[i].name))
@@ -5578,6 +5629,8 @@ static qpic_t *DrawQC_CachePic(const char *picname, unsigned int flags)
 
 	if (flags & PICFLAG_NOLOAD)
 		return NULL;	//its a query, not actually needed.
+
+	loadname = DrawQC_ShaderAlias(picname);
 
 	if (i+1 > maxqcpics)
 	{
@@ -5621,7 +5674,7 @@ static qpic_t *DrawQC_CachePic(const char *picname, unsigned int flags)
 
 	//okay, not a wad pic, try and load a lmp/tga/etc
 	if (!qcpics[i].pic && !(flags & PICFLAG_WAD))
-		qcpics[i].pic = Draw_TryCachePic(picname, texflags);
+		qcpics[i].pic = Draw_TryCachePic(loadname, texflags);
 
 	if (i == numqcpics)
 		numqcpics++;
@@ -5632,6 +5685,236 @@ static qboolean DrawQC_PicValid(const qpic_t *pic)
 {	//drawing a missing image may legitimately show a diagnostic, but the cache-query builtins must not
 	//claim that diagnostic is a resource that actually loaded.
 	return pic && pic != pic_nul && pic->width > 0 && pic->height > 0;
+}
+
+static qboolean DrawQC_ShaderImageTokenValid(const char *name)
+{
+	return name[0] && name[0] != '$' && strcmp(name, "-") &&
+		strcmp(name, "{") && strcmp(name, "}") &&
+		q_strcasecmp(name, "none") && strlen(name) < MAX_QPATH;
+}
+
+static const char *DrawQC_ParseShaderImageDirective(const char *data, int directive,
+	char *image, size_t imagesize)
+{
+	const char *tokenstart;
+
+	// animMap has a frequency before its first image; the other directives do not.
+	if (directive == 2)
+	{
+		tokenstart = data;
+		data = COM_Parse(data);
+		if (!data)
+			return NULL;
+		if (!strcmp(com_token, "{") || !strcmp(com_token, "}"))
+			return tokenstart;
+	}
+	tokenstart = data;
+	data = COM_Parse(data);
+	if (!data)
+		return NULL;
+	if (!strcmp(com_token, "{") || !strcmp(com_token, "}"))
+		return tokenstart;
+	if (DrawQC_ShaderImageTokenValid(com_token))
+		q_strlcpy(image, com_token, imagesize);
+	return data;
+}
+
+static void DrawQC_ShaderImageFromBody(const char *data, char *image, size_t imagesize)
+{
+	int directive;
+
+	image[0] = '\0';
+	while (!image[0] && (data = COM_Parse(data)) != NULL)
+	{
+		if (!q_strcasecmp(com_token, "map") || !q_strcasecmp(com_token, "clampmap") ||
+			!q_strcasecmp(com_token, "diffusemap") || !q_strcasecmp(com_token, "qer_editorimage"))
+			directive = 1;
+		else if (!q_strcasecmp(com_token, "animmap"))
+			directive = 2;
+		else
+			continue;
+
+		data = DrawQC_ParseShaderImageDirective(data, directive, image, imagesize);
+		if (!data)
+			break;
+	}
+}
+
+static qboolean DrawQC_AddShaderDef(const char *name, const char *image)
+{
+	csqcshaderdef_t *newdefs;
+	size_t i;
+
+	if (!name[0] || !image[0] || strlen(name) >= MAX_QPATH)
+		return false;
+	for (i = 0; i < numcsqcshaderdefs; i++)
+		if (!q_strcasecmp(name, csqcshaderdefs[i].name))
+			return true;	//higher-priority search paths were enumerated first
+
+	if (numcsqcshaderdefs == maxcsqcshaderdefs)
+	{
+		size_t newmax = maxcsqcshaderdefs + 128;
+		newdefs = realloc(csqcshaderdefs, newmax * sizeof(*newdefs));
+		if (!newdefs)
+			return false;
+		csqcshaderdefs = newdefs;
+		maxcsqcshaderdefs = newmax;
+	}
+
+	q_strlcpy(csqcshaderdefs[numcsqcshaderdefs].name, name,
+		sizeof(csqcshaderdefs[numcsqcshaderdefs].name));
+	q_strlcpy(csqcshaderdefs[numcsqcshaderdefs].image, image,
+		sizeof(csqcshaderdefs[numcsqcshaderdefs].image));
+	numcsqcshaderdefs++;
+	return true;
+}
+
+static qboolean DrawQC_LoadShaderFile(void *ctx, const char *fname, time_t mtime,
+	size_t fsize, searchpath_t *spath)
+{
+	char shadername[MAX_QPATH];
+	char image[MAX_QPATH];
+	char *file;
+	const char *data;
+	int depth;
+	int directive;
+
+	(void)ctx;
+	(void)mtime;
+	(void)fsize;
+	(void)spath;
+
+	file = (char *)COM_LoadMallocFile(fname, NULL);
+	if (!file)
+		return true;
+
+	data = file;
+	while ((data = COM_Parse(data)) != NULL)
+	{
+		if (!strcmp(com_token, "{") || !strcmp(com_token, "}"))
+			continue;
+		if (strlen(com_token) >= sizeof(shadername))
+			shadername[0] = '\0';
+		else
+			q_strlcpy(shadername, com_token, sizeof(shadername));
+
+		data = COM_Parse(data);
+		if (!data)
+			break;
+		if (strcmp(com_token, "{"))
+			continue;
+
+		depth = 1;
+		image[0] = '\0';
+		while (depth && (data = COM_Parse(data)) != NULL)
+		{
+			if (!strcmp(com_token, "{"))
+			{
+				depth++;
+				continue;
+			}
+			if (!strcmp(com_token, "}"))
+			{
+				depth--;
+				continue;
+			}
+			if (image[0])
+				continue;
+
+			if (!q_strcasecmp(com_token, "map") || !q_strcasecmp(com_token, "clampmap") ||
+				!q_strcasecmp(com_token, "diffusemap") || !q_strcasecmp(com_token, "qer_editorimage"))
+				directive = 1;
+			else if (!q_strcasecmp(com_token, "animmap"))
+				directive = 2;
+			else
+				continue;
+
+			data = DrawQC_ParseShaderImageDirective(data, directive, image, sizeof(image));
+			if (!data)
+				break;
+		}
+
+		DrawQC_AddShaderDef(shadername, image);
+	}
+
+	free(file);
+	return true;
+}
+
+static void DrawQC_LoadShaderDefs(void)
+{
+	if (csqcshaderdefs_loaded)
+		return;
+	csqcshaderdefs_loaded = true;
+	COM_ListAllFiles(NULL, "scripts/*.shader", DrawQC_LoadShaderFile, 0, NULL);
+}
+
+static const char *DrawQC_FindShaderImage(const char *name)
+{
+	size_t i;
+
+	DrawQC_LoadShaderDefs();
+	for (i = 0; i < numcsqcshaderdefs; i++)
+		if (!q_strcasecmp(name, csqcshaderdefs[i].name))
+			return csqcshaderdefs[i].image;
+	return NULL;
+}
+
+static void PF_cl_shaderforname(void)
+{
+	const char *name = G_STRING(OFS_PARM0);
+	const char *defaultbody = PF_VarString(1);
+	const char *image;
+	char defaultimage[MAX_QPATH];
+	csqcshader_t *newshaders;
+	size_t i;
+
+	G_FLOAT(OFS_RETURN) = 0;
+	if (!name[0] || strlen(name) >= MAX_QPATH)
+		return;
+
+	for (i = 0; i < numcsqcshaders; i++)
+		if (!q_strcasecmp(name, csqcshaders[i].name))
+		{
+			G_FLOAT(OFS_RETURN) = i + 1;
+			return;
+		}
+
+	image = DrawQC_FindShaderImage(name);
+	if (!image && defaultbody[0])
+	{
+		DrawQC_ShaderImageFromBody(defaultbody, defaultimage, sizeof(defaultimage));
+		if (defaultimage[0])
+			image = defaultimage;
+	}
+	if (!image)
+		image = name;	//FTE's skin-shader fallback: treat the name as a plain image
+
+	if (numcsqcshaders == maxcsqcshaders)
+	{
+		size_t newmax = maxcsqcshaders + 64;
+		newshaders = realloc(csqcshaders, newmax * sizeof(*newshaders));
+		if (!newshaders)
+			return;
+		csqcshaders = newshaders;
+		maxcsqcshaders = newmax;
+	}
+
+	q_strlcpy(csqcshaders[numcsqcshaders].name, name,
+		sizeof(csqcshaders[numcsqcshaders].name));
+	q_strlcpy(csqcshaders[numcsqcshaders].image, image,
+		sizeof(csqcshaders[numcsqcshaders].image));
+	numcsqcshaders++;
+
+	// A plain-image lookup may have happened before the shader was registered.
+	// Invalidate that request-name entry so the new alias wins immediately.
+	DrawQC_InvalidatePic(name);
+
+	// Warm the same alias that subsequent supported 2D drawing will use.
+	Con_DPrintf("shaderforname: %s -> %s\n", name, image);
+	DrawQC_CachePic(name, PICFLAG_BLOCK);
+	G_FLOAT(OFS_RETURN) = numcsqcshaders;
 }
 
 static qpic_t *DrawQC_FontPic(csqcfont_t *font)
@@ -9264,7 +9547,7 @@ static struct
 //	{"rotatevectorsbyangle",PF_rotatevectorsbyangles,PF_rotatevectorsbyangles,235,PF_NoMenu,D("void(vector angle)", "rotates the v_forward,v_right,v_up matrix by the specified angles.")}, // #235
 //	{"rotatevectorsbyvectors",PF_rotatevectorsbymatrix,PF_rotatevectorsbymatrix,PF_NoMenu, 236,"void(vector fwd, vector right, vector up)"}, // #236
 //	{"skinforname",		PF_skinforname,		PF_skinforname,		237,	"float(float mdlindex, string skinname)"},		// #237
-//	{"shaderforname",	PF_Fixme,			PF_Fixme,			238,	PF_NoMenu, D("float(string shadername, optional string defaultshader, ...)", "Caches the named shader and returns a handle to it.\nIf the shader could not be loaded from disk (missing file or ruleset_allow_shaders 0), it will be created from the 'defaultshader' string if specified, or a 'skin shader' default will be used.\ndefaultshader if not empty should include the outer {} that you would ordinarily find in a shader.")},
+	{"shaderforname",	PF_NoSSQC,			PF_cl_shaderforname,	238,	PF_NoMenu, D("float(string shadername, optional string defaultshader, ...)", "Registers a stable CSQC shader handle. QSS-M resolves map, clampMap, animMap, diffuseMap, and qer_editorimage directives to a representative bitmap for drawpic and its supported 2D polygon path. Material render state, multipass shaders, and 3D scene polygons are not supported. If no shader definition exists, defaultshader's first image is used, then the shader name is treated as a plain image.")},
 	{"te_bloodqw",		PF_sv_te_bloodqw,	NULL,				239,	PF_NoMenu, "void(vector org, float count)"},
 	{"te_muzzleflash",	PF_sv_te_muzzleflash,PF_cl_te_muzzleflash,0,	PF_NoMenu, "void(entity ent)"},
 	{"checkpvs",		PF_checkpvs,		PF_checkpvs,		240,	PF_NoMenu, "float(vector viewpos, entity entity)"},
