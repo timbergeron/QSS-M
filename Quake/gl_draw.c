@@ -804,6 +804,37 @@ qpic_t	*Draw_TryCachePic (const char *path, unsigned int texflags)
 	return Draw_TryCachePicEx(path, path, texflags, true, NULL);
 }
 
+/*
+================
+Draw_BindPicTexture
+
+Bind a cached picture and expose its usable texture rectangle. CSQC bitmap
+fonts use this so padded atlas textures do not sample outside their image.
+================
+*/
+qboolean Draw_BindPicTexture (qpic_t *pic, float *sl, float *tl, float *sh, float *th)
+{
+	glpic_t gl;
+
+	if (!pic || pic == pic_nul)
+		return false;
+
+	// qpic_t::data has byte alignment, so copy instead of type-punning it.
+	memcpy (&gl, pic->data, sizeof(gl));
+	if (!gl.gltexture)
+		return false;
+
+	if (scrap_dirty)
+		Scrap_Upload ();
+
+	GL_Bind (gl.gltexture);
+	*sl = gl.sl;
+	*tl = gl.tl;
+	*sh = gl.sh;
+	*th = gl.th;
+	return true;
+}
+
 static qpic_t	*Draw_TryCachePicPackageLmp (const char *path, const char *pakname, unsigned int texflags)
 {
 	char cachename[MAX_QPATH];

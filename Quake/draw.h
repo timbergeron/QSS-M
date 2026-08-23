@@ -85,6 +85,7 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags);
 qpic_t *Draw_PicFromWad (const char *name);
 qpic_t *Draw_CachePic (const char *path);
 qpic_t *Draw_TryCachePic (const char *path, unsigned int texflags);
+qboolean Draw_BindPicTexture (qpic_t *pic, float *sl, float *tl, float *sh, float *th);
 // woods #mapshots -- bounded LRU for level screenshots, keyed by map name.
 // `filename` is the extensionless path handed to the texture manager.
 qpic_t *Draw_CacheLevelshot (const char *name, const char *filename);

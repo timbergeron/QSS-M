@@ -5516,13 +5516,36 @@ static struct
 } *qcpics;
 static size_t numqcpics;
 static size_t maxqcpics;
+
+
+#define MAX_CSQC_FONTS 32
+typedef struct
+{
+	qboolean active;
+	char slotname[MAX_QPATH];
+	char facename[MAX_QPATH];
+	qpic_t *pic;
+} csqcfont_t;
+static csqcfont_t csqcfonts[MAX_CSQC_FONTS];
+
 void PR_ReloadPics(qboolean purge)
 {
+	size_t i;
+
 	numqcpics = 0;
 
 	free(qcpics);
 	qcpics = NULL;
 	maxqcpics = 0;
+
+	if (purge)
+	{
+		memset(csqcfonts, 0, sizeof(csqcfonts));
+
+	}
+	else
+		for (i = 0; i < countof(csqcfonts); i++)
+			csqcfonts[i].pic = NULL;
 }
 #define PICFLAG_AUTO		0	//value used when no flags known
 #define PICFLAG_WAD			(1u<<0)	//name matches that of a wad lump
@@ -5610,54 +5633,150 @@ static qboolean DrawQC_PicValid(const qpic_t *pic)
 	//claim that diagnostic is a resource that actually loaded.
 	return pic && pic != pic_nul && pic->width > 0 && pic->height > 0;
 }
-static void DrawQC_CharacterQuad (float x, float y, int num, float w, float h)
+
+static qpic_t *DrawQC_FontPic(csqcfont_t *font)
 {
-	float size = 0.0625;
-	float frow = (num>>4)*size;
-	float fcol = (num&15)*size;
-	size = 0.0624;	//avoid rounding errors...
+	if (!font || !font->active)
+		return NULL;
+	if (!font->pic)
+		font->pic = DrawQC_CachePic(font->facename, PICFLAG_BLOCK);
+	if (!DrawQC_PicValid(font->pic))
+	{
+		font->pic = NULL;
+		return NULL;
+	}
+	return font->pic;
+}
+
+static void PF_cl_loadfont(void)
+{
+	const char *slotname = G_STRING(OFS_PARM0);
+	const char *facename = G_STRING(OFS_PARM1);
+	float slotvalue = (qcvm->argc > 3) ? G_FLOAT(OFS_PARM3) : -1;
+	int slot;
+	qpic_t *pic;
+	int i;
+
+	G_FLOAT(OFS_RETURN) = 0;
+
+	// Bitmap atlases are sufficient here: CSQC draw calls specify the output
+	// glyph size, so the size and fixup arguments do not need font rasterization.
+	if (!*facename || strlen(facename) >= MAX_QPATH || strlen(slotname) >= MAX_QPATH || !isfinite(slotvalue))
+		return;
+	if (slotvalue < 0)
+		slot = -1;
+	else if (slotvalue >= countof(csqcfonts))
+		return;
+	else
+		slot = (int)slotvalue;
+
+	if (slot < 0)
+	{
+		for (i = 1; i < countof(csqcfonts); i++)
+		{
+			if (csqcfonts[i].active &&
+				((*slotname && !q_strcasecmp(csqcfonts[i].slotname, slotname)) ||
+				 (!*slotname && !q_strcasecmp(csqcfonts[i].facename, facename))))
+			{
+				slot = i;
+				break;
+			}
+		}
+		if (slot < 0)
+			for (i = 1; i < countof(csqcfonts); i++)
+				if (!csqcfonts[i].active)
+				{
+					slot = i;
+					break;
+				}
+	}
+
+	if (slot < 0 || slot >= countof(csqcfonts))
+		return;
+
+	pic = DrawQC_CachePic(facename, PICFLAG_BLOCK);
+	if (!DrawQC_PicValid(pic))
+	{
+		Con_DWarning("loadfont: couldn't load bitmap font %s\n", facename);
+		return;
+	}
+
+	csqcfonts[slot].active = true;
+	q_strlcpy(csqcfonts[slot].slotname, slotname, sizeof(csqcfonts[slot].slotname));
+	q_strlcpy(csqcfonts[slot].facename, facename, sizeof(csqcfonts[slot].facename));
+	csqcfonts[slot].pic = pic;
+	G_FLOAT(OFS_RETURN) = slot;
+}
+
+static void DrawQC_BindFont(float *sl, float *tl, float *sh, float *th)
+{
+	extern gltexture_t *char_texture;
+	float fontvalue = (qcvm == &cl.qcvm && qcvm->extglobals.drawfont) ? *qcvm->extglobals.drawfont : 0;
+	int fontnum = (isfinite(fontvalue) && fontvalue >= 0 && fontvalue < countof(csqcfonts)) ? (int)fontvalue : -1;
+	qpic_t *pic = NULL;
+
+	if (fontnum >= 0)
+		pic = DrawQC_FontPic(&csqcfonts[fontnum]);
+
+	if (pic && Draw_BindPicTexture(pic, sl, tl, sh, th))
+		return;
+
+	GL_Bind(char_texture);
+	*sl = *tl = 0;
+	*sh = *th = 1;
+}
+
+static void DrawQC_CharacterQuad (float x, float y, int num, float w, float h,
+	float sl, float tl, float sh, float th)
+{
+	float cellwidth = (sh - sl) * 0.0625;
+	float cellheight = (th - tl) * 0.0625;
+	float frow = tl + (num >> 4) * cellheight;
+	float fcol = sl + (num & 15) * cellwidth;
+	float epsilon_u = cellwidth * 0.0016;
+	float epsilon_v = cellheight * 0.0016;
 
 	glTexCoord2f (fcol, frow);
 	glVertex2f (x, y);
-	glTexCoord2f (fcol + size, frow);
+	glTexCoord2f (fcol + cellwidth - epsilon_u, frow);
 	glVertex2f (x+w, y);
-	glTexCoord2f (fcol + size, frow + size);
+	glTexCoord2f (fcol + cellwidth - epsilon_u, frow + cellheight - epsilon_v);
 	glVertex2f (x+w, y+h);
-	glTexCoord2f (fcol, frow + size);
+	glTexCoord2f (fcol, frow + cellheight - epsilon_v);
 	glVertex2f (x, y+h);
 }
 static void PF_cl_drawcharacter(void)
 {
 	G_FLOAT(OFS_RETURN) = 0;	//declared float; set it before any early out
-	extern gltexture_t *char_texture;
 
 	float *pos	= G_VECTOR(OFS_PARM0);
 	int charcode= (int)G_FLOAT (OFS_PARM1) & 0xff;
 	float *size	= G_VECTOR(OFS_PARM2);
 	float *rgb	= G_VECTOR(OFS_PARM3);
 	float alpha	= G_FLOAT (OFS_PARM4);
+	float sl, tl, sh, th;
 //	int flags	= G_FLOAT (OFS_PARM5);
 
 	if (charcode == 32)
 		return; //don't waste time on spaces
 
-	GL_Bind (char_texture);
+	DrawQC_BindFont(&sl, &tl, &sh, &th);
 	glColor4f (rgb[0], rgb[1], rgb[2], alpha);
 	glBegin (GL_QUADS);
-	DrawQC_CharacterQuad (pos[0], pos[1], charcode, size[0], size[1]);
+	DrawQC_CharacterQuad (pos[0], pos[1], charcode, size[0], size[1], sl, tl, sh, th);
 	glEnd ();
 }
 
 static void PF_cl_drawrawstring(void)
 {
 	G_FLOAT(OFS_RETURN) = 0;	//declared float; set it before any early out
-	extern gltexture_t *char_texture;
 
 	float *pos	= G_VECTOR(OFS_PARM0);
 	const char *text = G_STRING (OFS_PARM1);
 	float *size	= G_VECTOR(OFS_PARM2);
 	float *rgb	= G_VECTOR(OFS_PARM3);
 	float alpha	= G_FLOAT (OFS_PARM4);
+	float sl, tl, sh, th;
 //	int flags	= G_FLOAT (OFS_PARM5);
 
 	float x = pos[0];
@@ -5666,12 +5785,12 @@ static void PF_cl_drawrawstring(void)
 	if (!*text)
 		return; //don't waste time on spaces
 
-	GL_Bind (char_texture);
+	DrawQC_BindFont(&sl, &tl, &sh, &th);
 	glColor4f (rgb[0], rgb[1], rgb[2], alpha);
 	glBegin (GL_QUADS);
 	while ((c = *text++))
 	{
-		DrawQC_CharacterQuad (x, pos[1], c, size[0], size[1]);
+		DrawQC_CharacterQuad (x, pos[1], c, size[0], size[1], sl, tl, sh, th);
 		x += size[0];
 	}
 	glEnd ();
@@ -5679,13 +5798,13 @@ static void PF_cl_drawrawstring(void)
 static void PF_cl_drawstring(void)
 {
 	G_FLOAT(OFS_RETURN) = 0;	//declared float; set it before any early out
-	extern gltexture_t *char_texture;
 
 	float *pos	= G_VECTOR(OFS_PARM0);
 	const char *text = G_STRING (OFS_PARM1);
 	float *size	= G_VECTOR(OFS_PARM2);
 	float *rgb	= G_VECTOR(OFS_PARM3);
 	float alpha	= G_FLOAT (OFS_PARM4);
+	float sl, tl, sh, th;
 //	int flags	= G_FLOAT (OFS_PARM5);
 
 	float x = pos[0];
@@ -5697,12 +5816,12 @@ static void PF_cl_drawstring(void)
 
 	PR_Markup_Begin(&mu, text, rgb, alpha);
 
-	GL_Bind (char_texture);
+	DrawQC_BindFont(&sl, &tl, &sh, &th);
 	glBegin (GL_QUADS);
 	while ((c = PR_Markup_Parse(&mu)))
 	{
 		glColor4fv (mu.colour);
-		DrawQC_CharacterQuad (x, pos[1], c, size[0], size[1]);
+		DrawQC_CharacterQuad (x, pos[1], c, size[0], size[1], sl, tl, sh, th);
 		x += size[0];
 	}
 	glEnd ();
@@ -9277,7 +9396,7 @@ static struct
 	{"serverkeyfloat",	PF_sv_serverkey_f,	PF_cl_serverkey_f,	0,		PF_cl_serverkey_f,0, D("float(string key, optional float assumevalue)", "Version of serverkey that returns the value as a float (which avoids tempstrings).")},//
 	{"getentitytoken",	PF_NoSSQC,			PF_cs_getentitytoken,355,	PF_NoMenu, D("string(optional string resetstring)", "Grab the next token in the map's entity lump.\nIf resetstring is not specified, the next token will be returned with no other sideeffects.\nIf empty, will reset from the map before returning the first token, probably {.\nIf not empty, will tokenize from that string instead.\nAlways returns tempstrings.")},//;
 //	{"findfont",		PF_NoSSQC,			PF_FullCSQCOnly,	356,	PF_NoMenu, D("float(string s)", "Looks up a named font slot. Matches the actual font name as a last resort.")},//;
-//	{"loadfont",		PF_NoSSQC,			PF_FullCSQCOnly,	357,	PF_NoMenu, D("float(string fontname, string fontmaps, string sizes, float slot, optional float fix_scale, optional float fix_voffset)", "too convoluted for me to even try to explain correct usage. Try drawfont = loadfont(\"\", \"cour\", \"16\", -1, 0, 0); to switch to the courier font (optimised for 16 virtual pixels high), if you have the freetype2 library in windows..")},
+	{"loadfont",		PF_NoSSQC,			PF_cl_loadfont,		357,	PF_NoMenu, D("float(string fontname, string fontmaps, string sizes, float slot, optional float fix_scale, optional float fix_voffset)", "Loads a 16-by-16 bitmap font atlas into one of 32 CSQC font slots and returns its drawfont handle. Automatic allocation skips reserved slot 0, but an explicit slot 0 is supported. TrueType fonts are not supported.")},
 	{"sendevent",		PF_NoSSQC,			PF_cl_sendevent,	359,	PF_NoMenu, D("void(string evname, string evargs, ...)", "Invoke Cmd_evname_evargs in ssqc. evargs must be a string of initials refering to the types of the arguments to pass. v=vector, e=entity(.entnum field is sent), f=float, i=int. 6 arguments max - you can get more if you pack your floats into vectors.")},// (EXT_CSQC_1)
 	{"readbyte",		PF_NoSSQC,			PF_cl_readbyte,		360,	PF_NoMenu, "float()"},// (EXT_CSQC)
 	{"readchar",		PF_NoSSQC,			PF_cl_readchar,		361,	PF_NoMenu, "float()"},// (EXT_CSQC)

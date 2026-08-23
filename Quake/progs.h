@@ -300,6 +300,7 @@ struct pr_extglobals_s
 	QCEXTGLOBAL_FLOAT(player_localnum)\
 	QCEXTGLOBAL_FLOAT(player_localentnum)\
 	QCEXTGLOBAL_VECTOR(view_angles)\
+	QCEXTGLOBAL_FLOAT(drawfont)\
 	QCEXTGLOBAL_FLOAT(clientcommandframe)\
 	QCEXTGLOBAL_FLOAT(servercommandframe)\
 	//end
