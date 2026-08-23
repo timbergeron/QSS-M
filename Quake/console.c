@@ -755,8 +755,6 @@ Con_Copy_f -- woods #concopy #conselection
 void Con_Copy_f(void)
 {
 	qboolean copied = false;
-	const char* copySnd = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-
 
 	if (Con_CopySelectionToClipboard()) // Try copying the current selection first
 	{
@@ -777,7 +775,7 @@ void Con_Copy_f(void)
 	}
 
 	if (copied)
-		S_LocalSound(copySnd);
+		S_NotificationSound_Copy();
 }
 
 

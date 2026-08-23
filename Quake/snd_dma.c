@@ -119,7 +119,10 @@ static cvar_t nosound;
 #define SOUND_PREVIEW_ENTNUM       (-7777)
 #define SOUND_PREVIEW_ENTCHANNEL   (-2) /* non-spatial, like voice audio */
 #define SOUND_PREVIEW_CHANNEL      (NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS)
-#define FIRST_STATIC_SOUND_CHANNEL (SOUND_PREVIEW_CHANNEL + 1)
+#define SOUND_NOTIFY_ENTNUM        (-7778)
+#define SOUND_NOTIFY_ENTCHANNEL    (-2) /* non-spatial, like voice audio */
+#define NOTIFICATION_SOUND_CHANNEL (SOUND_PREVIEW_CHANNEL + 1)
+#define FIRST_STATIC_SOUND_CHANNEL (NOTIFICATION_SOUND_CHANNEL + 1)
 
 static sfx_t sound_preview_sfx;
 static sound_preview_state_t sound_preview;
@@ -1084,7 +1087,7 @@ void S_StopAllSounds (qboolean clear, qboolean keep_statics)
 
 	if (!keep_statics)
 	{
-		total_channels = FIRST_STATIC_SOUND_CHANNEL;	// ambience, dynamics, and preview; no statics
+		total_channels = FIRST_STATIC_SOUND_CHANNEL;	// ambience, dynamics, preview, and notifications; no statics
 		if (max_channels != total_channels + 64)
 		{	//shrink it if needed
 			max_channels = total_channels + 64;
@@ -1695,6 +1698,45 @@ void S_LocalSound (const char *name)
 		return;
 	}
 	S_StartSound (cl.viewentity, -1, sfx, vec3_origin, 1, 1);
+}
+
+/* Plays UI feedback without consuming or replacing a gameplay sound channel. */
+void S_NotificationSound (const char *name)
+{
+	channel_t	*channel;
+	sfxcache_t	*cache;
+	sfx_t		*sfx;
+
+	if (nosound.value || !sound_started || !snd_channels ||
+		total_channels <= NOTIFICATION_SOUND_CHANNEL)
+		return;
+
+	sfx = S_PrecacheSound (name);
+	if (!sfx)
+	{
+		Con_Printf ("S_NotificationSound: can't cache %s\n", name);
+		return;
+	}
+	cache = S_LoadSound (sfx);
+	if (!cache || cache->length <= 0)
+		return;
+
+	channel = &snd_channels[NOTIFICATION_SOUND_CHANNEL];
+	memset (channel, 0, sizeof(*channel));
+	channel->sfx = sfx;
+	channel->end = paintedtime + cache->length;
+	channel->looping = SND_LOOP_DISABLE;
+	channel->master_vol = 255;
+	channel->entnum = SOUND_NOTIFY_ENTNUM;
+	channel->entchannel = SOUND_NOTIFY_ENTCHANNEL;
+	VectorCopy (vec3_origin, channel->origin);
+	SND_Spatialize (channel);
+}
+
+void S_NotificationSound_Copy (void)
+{
+	S_NotificationSound (COM_FileExists ("sound/qssm/copy.wav", NULL) ?
+		"qssm/copy.wav" : "player/tornoff2.wav");
 }
 
 

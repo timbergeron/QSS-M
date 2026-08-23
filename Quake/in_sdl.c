@@ -3716,9 +3716,7 @@ static qboolean IN_IsActiveMatchParticipant(void)
 
 static void IN_PlayCopySound(void)
 {
-	const char *sound_file = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-
-	S_LocalSound(sound_file);
+	S_NotificationSound_Copy();
 }
 
 static qboolean IN_InstallExternalFile(const char *source_path, const char *source_desc, qboolean suppress_demo_autoplay)

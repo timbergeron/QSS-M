@@ -4037,10 +4037,7 @@ void CL_DemoMark_f(void)
 			{
 				const int mark_frame = cls.demo_record_frame_count > 0 ? cls.demo_record_frame_count : 1;
 				CL_DemoMarkHistory_QueuePending(cl.mapname, mark_frame);
-				{
-					const char *soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-					S_LocalSound(soundFile);
-				}
+				S_NotificationSound_Copy();
 				Con_Printf("demo marker added at ^mframe^d ^1%d^d\n", mark_frame);
 			}
 		}
@@ -4104,10 +4101,7 @@ void CL_DemoMark_f(void)
 		cls.demo_marker_count++;
 		CL_DemoMarkHistory_QueuePending(cl.mapname, mark_frame);
 		CL_WriteRecordedDemoMarker();
-		{
-			const char *soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-			S_LocalSound(soundFile);
-		}
+		S_NotificationSound_Copy();
 		Con_Printf("demo marker added at ^mframe^d ^1%d^d\n", mark_frame);
 	}
 }

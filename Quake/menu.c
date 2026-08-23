@@ -2341,8 +2341,7 @@ static qboolean M_TextField_Insert(menu_textfield_t *tf, const char *src)
 
 static void M_TextField_PlayCopySound(void)
 {
-	const char* sound_file = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-	S_LocalSound(sound_file);
+	S_NotificationSound_Copy();
 }
 
 static qboolean M_TextField_CopySelection(menu_textfield_t *tf)
@@ -21452,8 +21451,7 @@ void M_Crosshair_Key(int k)
 			{
 				if (last_crosshair_color[0] != '\0')
 					SDL_SetClipboardText(last_crosshair_color);
-				const char* soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-				S_LocalSound(soundFile);
+				S_NotificationSound_Copy();
 			}
 			break;
 		case K_ESCAPE:
@@ -25357,10 +25355,7 @@ static void Tools_CopyHexToClipboard(void)
 	q_snprintf(hex_line, sizeof(hex_line), "#%02X%02X%02X", rgb[0], rgb[1], rgb[2]);
 	SDL_SetClipboardText(hex_line);
 	toolsmenu_hex_flash_until = realtime + 1.0;
-	{
-		const char* soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-		S_LocalSound(soundFile);
-	}
+	S_NotificationSound_Copy();
 }
 
 static void Tools_CopyRgbToClipboard(void)
@@ -25371,10 +25366,7 @@ static void Tools_CopyRgbToClipboard(void)
 	q_snprintf(buf, sizeof(buf), "%d,%d,%d", rgb[0], rgb[1], rgb[2]);
 	SDL_SetClipboardText(buf);
 	toolsmenu_rgb_flash_until = realtime + 1.0;
-	{
-		const char* soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-		S_LocalSound(soundFile);
-	}
+	S_NotificationSound_Copy();
 }
 
 void M_Menu_ColorPicker_f(void)
@@ -30651,8 +30643,7 @@ void M_LanConfig_Key (int key)
 				SDL_SetClipboardText(ip_clickables[i].text);
 				strcpy(last_copied_ip, ip_clickables[i].text);
 				copy_message_time = realtime + 1.0;
-				const char* soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-				S_LocalSound(soundFile);
+				S_NotificationSound_Copy();
 					}
 				}
 				else 
@@ -30660,8 +30651,7 @@ void M_LanConfig_Key (int key)
 					SDL_SetClipboardText(ip_clickables[i].text);
 					strcpy(last_copied_ip, ip_clickables[i].text);
 					copy_message_time = realtime + 1.0;
-					const char* soundFile = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-					S_LocalSound(soundFile);
+					S_NotificationSound_Copy();
 				}
 				return;
 			}

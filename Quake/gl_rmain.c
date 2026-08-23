@@ -2296,9 +2296,7 @@ static qboolean TexturePointer_Active (void)
 
 static void TexturePointer_CopySound (void)
 {
-	const char *sound_file = COM_FileExists("sound/qssm/copy.wav", NULL) ? "qssm/copy.wav" : "player/tornoff2.wav";
-
-	S_LocalSound(sound_file);
+	S_NotificationSound_Copy();
 }
 
 static void TexturePointer_CopyName (char *out, size_t outsize)

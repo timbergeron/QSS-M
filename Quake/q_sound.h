@@ -199,7 +199,7 @@ void SNDDMA_UnblockSound(void);
 extern	channel_t	*snd_channels;
 /* 0 to NUM_AMBIENTS - 1 = water, wind, etc.
  * NUM_AMBIENTS to NUM_AMBIENTS + MAX_DYNAMIC_CHANNELS - 1 = entity sounds
- * The audio browser reserves the following channel.
+ * The audio browser and UI notifications reserve the following two channels.
  * Remaining channels up to total_channels are static sounds.
  */
 
@@ -230,6 +230,8 @@ extern	portable_samplepair_t	s_rawsamples[MAX_RAW_SAMPLES];
 extern	cvar_t		bgmvolume;
 
 void S_LocalSound (const char *name);
+void S_NotificationSound (const char *name);
+void S_NotificationSound_Copy (void);
 sfxcache_t *S_LoadSound (sfx_t *s);
 
 wavinfo_t GetWavinfo (const char *name, byte *wav, qofs_t wavlength);

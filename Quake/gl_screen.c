@@ -6608,10 +6608,7 @@ static void SCR_ScreenshotReport (scr_screenshot_job_t *job)
 
 static void SCR_ScreenshotSound (void)
 {
-	const char *sound_file = COM_FileExists ("sound/qssm/copy.wav", NULL) ?
-		"qssm/copy.wav" : "player/tornoff2.wav";
-
-	S_LocalSound (sound_file);
+	S_NotificationSound_Copy ();
 }
 
 static void SCR_ScreenshotConsumeCompleted (void)
