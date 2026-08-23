@@ -23,6 +23,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include <windows.h>
+#include <shlobj.h>
+#if !defined(__WATCOMC__)
+#include <shobjidl.h>
+#endif
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
 #if defined(USE_SDL2)
 #include <SDL2/SDL.h>
@@ -716,9 +720,154 @@ void PL_ErrorDialog(const char *errorMsg)
 			MB_OK | MB_SETFOREGROUND | MB_ICONSTOP);
 }
 
+int PL_MessageDialog(const char *title, const char *message,
+	const pl_dialog_button_t *buttons, int num_buttons,
+	int default_button, int cancel_button)
+{
+	SDL_MessageBoxButtonData *sdl_buttons;
+	SDL_MessageBoxData data;
+	int i, selected = cancel_button;
+
+	if (!buttons || num_buttons <= 0)
+		return cancel_button;
+	sdl_buttons = (SDL_MessageBoxButtonData *)calloc((size_t)num_buttons,
+		sizeof(*sdl_buttons));
+	if (!sdl_buttons)
+		return cancel_button;
+	for (i = 0; i < num_buttons; ++i)
+	{
+		sdl_buttons[i].flags =
+			(buttons[i].id == default_button ? SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT : 0) |
+			(buttons[i].id == cancel_button ? SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT : 0);
+		sdl_buttons[i].buttonid = buttons[i].id;
+		sdl_buttons[i].text = buttons[i].text;
+	}
+	memset(&data, 0, sizeof(data));
+	data.flags = SDL_MESSAGEBOX_INFORMATION;
+	data.title = title;
+	data.message = message;
+	data.numbuttons = num_buttons;
+	data.buttons = sdl_buttons;
+	if (SDL_ShowMessageBox(&data, &selected) < 0)
+		selected = cancel_button;
+	free(sdl_buttons);
+	return selected;
+}
+
 qboolean PL_ConfirmDialog(const char *title, const char *text)
 {
-	int result = MessageBox(NULL, text, title,
-		MB_YESNO | MB_SETFOREGROUND | MB_ICONQUESTION | MB_DEFBUTTON1);
-	return (result == IDYES) ? true : false;
+	static const pl_dialog_button_t buttons[] = {{1, "Yes"}, {0, "No"}};
+	return PL_MessageDialog(title, text, buttons, 2, 1, 0) == 1;
+}
+
+qboolean PL_SelectDirectory(const char *title, const char *initial_path,
+	char *result, size_t result_size)
+{
+	qboolean success = false;
+	qboolean use_legacy = true;
+	HRESULT initialized;
+
+	if (!result || result_size == 0)
+		return false;
+	result[0] = '\0';
+	initialized = CoInitialize(NULL);
+
+#if !defined(__WATCOMC__)
+	{
+		IFileDialog *dialog = NULL;
+		if (SUCCEEDED(CoCreateInstance(&CLSID_FileOpenDialog, NULL,
+			CLSCTX_INPROC_SERVER, &IID_IFileDialog, (void **)&dialog)))
+		{
+			DWORD options = 0;
+			qboolean configured = false;
+			if (initial_path && initial_path[0])
+			{
+				int needed = MultiByteToWideChar(CP_UTF8, 0, initial_path, -1,
+					NULL, 0);
+				wchar_t *winitial = needed > 0 ?
+					(wchar_t *)malloc((size_t)needed * sizeof(*winitial)) : NULL;
+				IShellItem *folder = NULL;
+				if (winitial && MultiByteToWideChar(CP_UTF8, 0, initial_path, -1,
+					winitial, needed) > 0 &&
+					SUCCEEDED(SHCreateItemFromParsingName(winitial, NULL,
+						&IID_IShellItem, (void **)&folder)))
+				{
+					dialog->lpVtbl->SetFolder(dialog, folder);
+					folder->lpVtbl->Release(folder);
+				}
+				free(winitial);
+			}
+			if (SUCCEEDED(dialog->lpVtbl->GetOptions(dialog, &options)) &&
+				SUCCEEDED(dialog->lpVtbl->SetOptions(dialog,
+					options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)))
+			{
+				configured = true;
+				if (title)
+				{
+					wchar_t wtitle[512];
+					if (MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle,
+						(int)(sizeof(wtitle) / sizeof(wtitle[0]))) > 0)
+						dialog->lpVtbl->SetTitle(dialog, wtitle);
+				}
+			}
+			if (configured)
+			{
+				HRESULT shown = dialog->lpVtbl->Show(dialog, NULL);
+				if (SUCCEEDED(shown))
+				{
+					IShellItem *item = NULL;
+					use_legacy = false;
+					if (SUCCEEDED(dialog->lpVtbl->GetResult(dialog, &item)))
+					{
+						PWSTR path = NULL;
+						if (SUCCEEDED(item->lpVtbl->GetDisplayName(item,
+							SIGDN_FILESYSPATH, &path)))
+						{
+							int needed = WideCharToMultiByte(CP_UTF8, 0, path, -1,
+								NULL, 0, NULL, NULL);
+							if (needed > 0 && (size_t)needed <= result_size &&
+								WideCharToMultiByte(CP_UTF8, 0, path, -1, result,
+									(int)result_size, NULL, NULL) > 0)
+								success = true;
+							CoTaskMemFree(path);
+						}
+						item->lpVtbl->Release(item);
+					}
+				}
+				else if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED))
+					use_legacy = false;
+			}
+			dialog->lpVtbl->Release(dialog);
+		}
+	}
+#endif
+
+	if (use_legacy)
+	{
+		BROWSEINFOW browse;
+		LPITEMIDLIST item;
+		wchar_t path[MAX_PATH];
+		memset(&browse, 0, sizeof(browse));
+		{
+			static wchar_t wtitle[512];
+			browse.lpszTitle = L"Select the folder containing Quake data";
+			if (title && MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle,
+				(int)(sizeof(wtitle) / sizeof(wtitle[0]))) > 0)
+				browse.lpszTitle = wtitle;
+		}
+		browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+		item = SHBrowseForFolderW(&browse);
+		if (item)
+		{
+			if (SHGetPathFromIDListW(item, path) &&
+				WideCharToMultiByte(CP_UTF8, 0, path, -1, result,
+					(int)result_size, NULL, NULL) > 0)
+				success = true;
+			CoTaskMemFree(item);
+		}
+	}
+
+	if (SUCCEEDED(initialized))
+		CoUninitialize();
+	return success;
 }

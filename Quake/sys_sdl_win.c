@@ -770,22 +770,20 @@ static char	cwd[1024];
 
 static void Sys_GetBasedir (char *argv0, char *dst, size_t dstsize)
 {
-	char *tmp;
-	size_t rc;
+	char executable[sizeof(cwd)];
+	DWORD length;
+	(void)argv0;
 
-	rc = GetCurrentDirectory(dstsize, dst);
-	if (rc == 0 || rc > dstsize)
-		Sys_Error ("Couldn't determine current directory");
-
-	tmp = dst;
-	while (*tmp != 0)
-		tmp++;
-	while (*tmp == 0 && tmp != dst)
+	if (Sys_GetExecutablePath(executable, sizeof(executable)))
 	{
-		--tmp;
-		if (tmp != dst && (*tmp == '/' || *tmp == '\\'))
-			*tmp = 0;
+		Sys_PathDirName(executable, dst, dstsize);
+		if (dst[0]) return;
 	}
+	/* Preserve startup on unusually long/unsupported executable paths.  This is
+	 * only a failure fallback; normal launches always use the executable dir. */
+	length = GetCurrentDirectory((DWORD)dstsize, dst);
+	if (length == 0 || (size_t)length >= dstsize)
+		Sys_Error ("Couldn't determine executable or current directory");
 }
 
 typedef enum { dpi_unaware = 0, dpi_system_aware = 1, dpi_monitor_aware = 2 } dpi_awareness;

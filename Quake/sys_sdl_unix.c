@@ -895,36 +895,25 @@ static void Sys_GetBasedir (char *argv0, char *dst, size_t dstsize)
 #else
 static void Sys_GetBasedir (char *argv0, char *dst, size_t dstsize)
 {
-	char	*tmp;
+	char executable[MAX_OSPATH];
+	char resolved[MAX_OSPATH];
 
-	#ifdef PLATFORM_HAIKU
-	if (realpath(argv0, dst) == NULL)
+	/* Match the self-contained Windows/macOS policy: the default data root is
+	 * beside the executable, independent of a desktop launcher's working dir. */
+	if (Sys_GetExecutablePath(executable, sizeof(executable)))
 	{
-		perror("realpath");
-		if (getcwd(dst, dstsize - 1) == NULL)
-	_fail:		Sys_Error ("Couldn't determine current directory");
+		Sys_PathDirName(executable, dst, dstsize);
+		if (dst[0]) return;
 	}
-	else
+	/* Platforms without a native executable-path implementation retain the
+	 * argv0/cwd fallback used before data import was added. */
+	if (argv0 && realpath(argv0, resolved))
 	{
-		/* strip off the binary name */
-		if (! (tmp = strdup (dst))) goto _fail;
-		q_strlcpy (dst, dirname(tmp), dstsize);
-		free (tmp);
+		Sys_PathDirName(resolved, dst, dstsize);
+		if (dst[0]) return;
 	}
-	#else
 	if (getcwd(dst, dstsize - 1) == NULL)
-		Sys_Error ("Couldn't determine current directory");
-
-	tmp = dst;
-	while (*tmp != 0)
-		tmp++;
-	while (*tmp == 0 && tmp != dst)
-	{
-		--tmp;
-		if (tmp != dst && *tmp == '/')
-			*tmp = 0;
-	}
-	#endif
+		Sys_Error ("Couldn't determine executable directory");
 }
 #endif
 

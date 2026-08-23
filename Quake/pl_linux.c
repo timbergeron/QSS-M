@@ -31,6 +31,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #else
 #include "SDL.h"
 #endif
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <string.h>
+#include <unistd.h>
 
 static const Uint8 bmp_bytes[] =
 {
@@ -246,3 +251,192 @@ void PL_ErrorDialog (const char *errorMsg)
 #endif
 }
 
+int PL_MessageDialog(const char *title, const char *message,
+	const pl_dialog_button_t *buttons, int num_buttons,
+	int default_button, int cancel_button)
+{
+#if defined(USE_SDL2)
+	SDL_MessageBoxButtonData *sdl_buttons;
+	SDL_MessageBoxData data;
+	int i, selected = cancel_button;
+
+	if (!buttons || num_buttons <= 0)
+		return cancel_button;
+	sdl_buttons = (SDL_MessageBoxButtonData *)calloc((size_t)num_buttons,
+		sizeof(*sdl_buttons));
+	if (!sdl_buttons)
+		return cancel_button;
+	for (i = 0; i < num_buttons; ++i)
+	{
+		sdl_buttons[i].flags =
+			(buttons[i].id == default_button ? SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT : 0) |
+			(buttons[i].id == cancel_button ? SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT : 0);
+		sdl_buttons[i].buttonid = buttons[i].id;
+		sdl_buttons[i].text = buttons[i].text;
+	}
+	memset(&data, 0, sizeof(data));
+	data.flags = SDL_MESSAGEBOX_INFORMATION;
+	data.title = title;
+	data.message = message;
+	data.numbuttons = num_buttons;
+	data.buttons = sdl_buttons;
+	if (SDL_ShowMessageBox(&data, &selected) < 0)
+		selected = cancel_button;
+	free(sdl_buttons);
+	return selected;
+#else
+	(void)title; (void)message; (void)buttons; (void)num_buttons;
+	(void)default_button;
+	return cancel_button;
+#endif
+}
+
+qboolean PL_ConfirmDialog(const char *title, const char *text)
+{
+	static const pl_dialog_button_t buttons[] = {{1, "Yes"}, {0, "No"}};
+	return PL_MessageDialog(title, text, buttons, 2, 1, 0) == 1;
+}
+
+typedef enum
+{
+	PL_PICKER_UNAVAILABLE = -1,
+	PL_PICKER_CANCELLED = 0,
+	PL_PICKER_SUCCESS = 1
+} pl_picker_result_t;
+
+static pl_picker_result_t PL_RunDirectoryPicker(char *const argv[], qboolean portal,
+	char *result, size_t result_size)
+{
+	int output[2];
+	pid_t child;
+	ssize_t got;
+	size_t total = 0;
+	unsigned char buffer[4096];
+	int status;
+	qboolean read_error = false, truncated = false;
+
+	if (pipe(output) != 0)
+		return PL_PICKER_UNAVAILABLE;
+	child = fork();
+	if (child == 0)
+	{
+		close(output[0]);
+		dup2(output[1], STDOUT_FILENO);
+		close(output[1]);
+		if (portal)
+			setenv("GTK_USE_PORTAL", "1", 1);
+		execvp(argv[0], argv);
+		_exit(127);
+	}
+	close(output[1]);
+	if (child < 0)
+	{
+		close(output[0]);
+		return PL_PICKER_UNAVAILABLE;
+	}
+	/* Always drain the child pipe, even if the selected path exceeds our output
+	 * buffer, so the picker cannot block before waitpid(). */
+	for (;;)
+	{
+		got = read(output[0], buffer, sizeof(buffer));
+		if (got > 0)
+		{
+			size_t available = total + 1 < result_size ?
+				result_size - total - 1 : 0;
+			size_t copy = (size_t)got < available ? (size_t)got : available;
+			if (copy < (size_t)got)
+				truncated = true;
+			if (copy > 0)
+			{
+				memcpy(result + total, buffer, copy);
+				total += copy;
+			}
+			continue;
+		}
+		if (got < 0 && errno == EINTR)
+			continue;
+		if (got < 0)
+			read_error = true;
+		break;
+	}
+	close(output[0]);
+	do
+		got = waitpid(child, &status, 0);
+	while (got < 0 && errno == EINTR);
+	if (read_error || truncated || got != child || !WIFEXITED(status))
+		return PL_PICKER_UNAVAILABLE;
+	if (WEXITSTATUS(status) == 1)
+		return PL_PICKER_CANCELLED;
+	if (WEXITSTATUS(status) != 0 || total == 0)
+		return PL_PICKER_UNAVAILABLE;
+	result[total] = '\0';
+	while (total > 0 && (result[total - 1] == '\n' || result[total - 1] == '\r'))
+		result[--total] = '\0';
+	return total > 0 ? PL_PICKER_SUCCESS : PL_PICKER_UNAVAILABLE;
+}
+
+qboolean PL_SelectDirectory(const char *title, const char *initial_path,
+	char *result, size_t result_size)
+{
+	char *zenity_argv[7];
+	char *kdialog_argv[6];
+	char *zenity_title;
+	char *zenity_initial = NULL;
+	size_t len;
+	pl_picker_result_t picker;
+
+	if (!result || result_size == 0)
+		return false;
+	result[0] = '\0';
+	len = strlen(title ? title : "Select Quake Data Folder") + 9;
+	zenity_title = (char *)malloc(len);
+	if (!zenity_title)
+		return false;
+	q_snprintf(zenity_title, len, "--title=%s",
+		title ? title : "Select Quake Data Folder");
+	if (initial_path && initial_path[0])
+	{
+		len = strlen(initial_path) + 13;
+		zenity_initial = (char *)malloc(len);
+		if (zenity_initial)
+			q_snprintf(zenity_initial, len, "--filename=%s/", initial_path);
+	}
+	zenity_argv[0] = "zenity";
+	zenity_argv[1] = "--file-selection";
+	zenity_argv[2] = "--directory";
+	zenity_argv[3] = zenity_title;
+	zenity_argv[4] = zenity_initial;
+	zenity_argv[5] = NULL;
+	/* GTK's portal backend is requested first.  Exit 1 is an intentional cancel,
+	 * not a reason to open two more picker windows. */
+	picker = PL_RunDirectoryPicker(zenity_argv, true, result, result_size);
+	if (picker == PL_PICKER_SUCCESS)
+	{
+		free(zenity_initial);
+		free(zenity_title);
+		return true;
+	}
+	if (picker == PL_PICKER_CANCELLED)
+	{
+		free(zenity_initial);
+		free(zenity_title);
+		return false;
+	}
+	picker = PL_RunDirectoryPicker(zenity_argv, false, result, result_size);
+	if (picker == PL_PICKER_SUCCESS || picker == PL_PICKER_CANCELLED)
+	{
+		free(zenity_initial);
+		free(zenity_title);
+		return picker == PL_PICKER_SUCCESS;
+	}
+	free(zenity_initial);
+	free(zenity_title);
+	kdialog_argv[0] = "kdialog";
+	kdialog_argv[1] = "--getexistingdirectory";
+	kdialog_argv[2] = (char *)(initial_path && initial_path[0] ? initial_path : ".");
+	kdialog_argv[3] = "--title";
+	kdialog_argv[4] = (char *)(title ? title : "Select Quake Data Folder");
+	kdialog_argv[5] = NULL;
+	return PL_RunDirectoryPicker(kdialog_argv, false, result, result_size) ==
+		PL_PICKER_SUCCESS;
+}

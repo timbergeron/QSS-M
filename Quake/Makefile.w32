@@ -219,7 +219,7 @@ CFLAGS+= -DUSE_CODEC_UMX
 endif
 CFLAGS+= $(CODEC_INC)
 
-COMMON_LIBS:= -lopengl32 -lwinmm
+COMMON_LIBS:= -lopengl32 -lwinmm -lole32 -lshell32 -luuid
 
 ifeq ($(USE_ZLIB),1)
 CFLAGS+= -DUSE_ZLIB
@@ -326,6 +326,7 @@ OBJS := strlcat.o \
 	wad.o \
 	cmd.o \
 	common.o \
+	quake_data_import.o \
 	json.o \
 	mdfour.o \
 	fs_zip.o \

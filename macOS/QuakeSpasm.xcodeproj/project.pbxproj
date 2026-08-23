@@ -16,6 +16,7 @@
 		664D988F19CF6B78000D395C /* chase.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78100D2EEA5400CB2E4C /* chase.c */; };
 		664D989019CF6B78000D395C /* cmd.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78110D2EEA5400CB2E4C /* cmd.c */; };
 		664D989119CF6B78000D395C /* common.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78120D2EEA5400CB2E4C /* common.c */; };
+		64480392532C4827872D7381 /* quake_data_import.c in Sources */ = {isa = PBXBuildFile; fileRef = C50474B796FC4411A1688338 /* quake_data_import.c */; };
 		664D989219CF6B78000D395C /* console.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78130D2EEA5400CB2E4C /* console.c */; };
 		664D989319CF6B78000D395C /* crc.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78140D2EEA5400CB2E4C /* crc.c */; };
 		664D989419CF6B78000D395C /* cvar.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A78150D2EEA5400CB2E4C /* cvar.c */; };
@@ -292,6 +293,8 @@
 		483A78100D2EEA5400CB2E4C /* chase.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = chase.c; path = ../Quake/chase.c; sourceTree = SOURCE_ROOT; };
 		483A78110D2EEA5400CB2E4C /* cmd.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cmd.c; path = ../Quake/cmd.c; sourceTree = SOURCE_ROOT; };
 		483A78120D2EEA5400CB2E4C /* common.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = common.c; path = ../Quake/common.c; sourceTree = SOURCE_ROOT; };
+		C50474B796FC4411A1688338 /* quake_data_import.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = quake_data_import.c; path = ../Quake/quake_data_import.c; sourceTree = SOURCE_ROOT; };
+		9A352FB12EEC4A8FA94DED7A /* quake_data_import.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = quake_data_import.h; path = ../Quake/quake_data_import.h; sourceTree = SOURCE_ROOT; };
 		483A78130D2EEA5400CB2E4C /* console.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = console.c; path = ../Quake/console.c; sourceTree = SOURCE_ROOT; };
 		483A78140D2EEA5400CB2E4C /* crc.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = crc.c; path = ../Quake/crc.c; sourceTree = SOURCE_ROOT; };
 		483A78150D2EEA5400CB2E4C /* cvar.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cvar.c; path = ../Quake/cvar.c; sourceTree = SOURCE_ROOT; };
@@ -665,6 +668,8 @@
 				483A78100D2EEA5400CB2E4C /* chase.c */,
 				483A78110D2EEA5400CB2E4C /* cmd.c */,
 				483A78120D2EEA5400CB2E4C /* common.c */,
+				C50474B796FC4411A1688338 /* quake_data_import.c */,
+				9A352FB12EEC4A8FA94DED7A /* quake_data_import.h */,
 				85AC9B2A2A70521E00228EF3 /* pmove.c */,
 				85AC9B2B2A70521E00228EF3 /* pmovetst.c */,
 				483A78130D2EEA5400CB2E4C /* console.c */,
@@ -1025,6 +1030,7 @@
 				664D988F19CF6B78000D395C /* chase.c in Sources */,
 				664D989019CF6B78000D395C /* cmd.c in Sources */,
 				664D989119CF6B78000D395C /* common.c in Sources */,
+				64480392532C4827872D7381 /* quake_data_import.c in Sources */,
 				664D989219CF6B78000D395C /* console.c in Sources */,
 				664D989319CF6B78000D395C /* crc.c in Sources */,
 				664D989419CF6B78000D395C /* cvar.c in Sources */,

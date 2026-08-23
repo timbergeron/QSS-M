@@ -173,3 +173,81 @@ void PL_ErrorDialog(const char *errorMsg)
 #endif
 }
 
+static NSString *PL_String(const char *text)
+{
+	if (!text)
+		return @"";
+	return [NSString stringWithUTF8String:text] ?: @"";
+}
+
+int PL_MessageDialog(const char *title, const char *message,
+	const pl_dialog_button_t *buttons, int num_buttons,
+	int default_button, int cancel_button)
+{
+	NSAlert *alert;
+	NSButton *defaultButton = nil;
+	NSInteger response;
+	int i;
+
+	if (!buttons || num_buttons <= 0)
+		return cancel_button;
+	[NSApplication sharedApplication];
+	alert = [[[NSAlert alloc] init] autorelease];
+	[alert setAlertStyle:NSAlertStyleInformational];
+	[alert setMessageText:PL_String(title)];
+	[alert setInformativeText:PL_String(message)];
+	for (i = 0; i < num_buttons; ++i) {
+		NSButton *button = [alert addButtonWithTitle:PL_String(buttons[i].text)];
+		if (buttons[i].id == default_button) {
+			defaultButton = button;
+			[button setKeyEquivalent:@"\r"];
+		}
+		if (buttons[i].id == cancel_button)
+			[button setKeyEquivalent:@"\e"];
+	}
+	/* A button has only one keyEquivalent.  Keeping it as Escape when it is both
+	 * default and cancel still lets Return activate it through the window's
+	 * defaultButtonCell. */
+	if (defaultButton)
+		[[alert window] setDefaultButtonCell:[defaultButton cell]];
+	response = [alert runModal];
+	i = (int)(response - NSAlertFirstButtonReturn);
+	if (i < 0 || i >= num_buttons)
+		return cancel_button;
+	return buttons[i].id;
+}
+
+qboolean PL_ConfirmDialog(const char *title, const char *text)
+{
+	static const pl_dialog_button_t buttons[] = {{1, "Yes"}, {0, "No"}};
+	return PL_MessageDialog(title, text, buttons, 2, 1, 0) == 1;
+}
+
+qboolean PL_SelectDirectory(const char *title, const char *initial_path,
+	char *result, size_t result_size)
+{
+	NSOpenPanel *panel;
+	NSURL *url;
+	const char *path;
+
+	if (!result || result_size == 0)
+		return false;
+	result[0] = '\0';
+	[NSApplication sharedApplication];
+	panel = [NSOpenPanel openPanel];
+	[panel setTitle:PL_String(title)];
+	[panel setCanChooseDirectories:YES];
+	[panel setCanChooseFiles:NO];
+	[panel setAllowsMultipleSelection:NO];
+	if (initial_path && initial_path[0])
+		[panel setDirectoryURL:[NSURL fileURLWithPath:PL_String(initial_path)
+			isDirectory:YES]];
+	if ([panel runModal] != NSModalResponseOK)
+		return false;
+	url = [[panel URLs] firstObject];
+	path = [[url path] fileSystemRepresentation];
+	if (!path || strlen(path) + 1 > result_size)
+		return false;
+	q_strlcpy(result, path, result_size);
+	return true;
+}

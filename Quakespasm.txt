@@ -41,6 +41,20 @@
      this file alongside your id1 directory to enable the custom console
      background and other minor features.
 
+  -  QSS-M now uses a self-contained default data location. On Windows
+     and Linux, the basedir is the directory containing the executable;
+     on macOS, it is the directory containing QSS-M.app. The process
+     working directory and a shortcut's "Start in" field no longer select
+     Quake data or, in default self-contained builds, config.cfg. Use
+     "-basedir PATH" when an explicit data directory is required. Linux
+     builds compiled with DO_USERDIRS=1 retain their per-user config path.
+
+     If that location has no base Quake PAKs, Find Quake Data Files can
+     locate valid pak0.pak and pak1.pak files and copy them into the
+     app-local id1 without replacing existing files. "-noquakeimport"
+     disables this startup helper. "-quakeimportselftest" runs its developer
+     diagnostics and exits without starting the game.
+
   -  For different sound backend drivers use :
      "SDL_AUDIODRIVER=DRIVER ./quakespasm"
      where DRIVER may be alsa, dsp, pulse, esd ...

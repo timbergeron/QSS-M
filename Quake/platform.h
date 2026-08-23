@@ -53,12 +53,25 @@ void PL_ErrorDialog(const char *text);
 void PL_CommandQEvent(int down);
 #endif
 
+typedef struct
+{
+	int id;
+	const char *text;
+} pl_dialog_button_t;
+
+/* Startup-safe native dialogs.  PL_MessageDialog returns a button id. */
+int PL_MessageDialog(const char *title, const char *message,
+	const pl_dialog_button_t *buttons, int num_buttons,
+	int default_button, int cancel_button);
+qboolean PL_SelectDirectory(const char *title, const char *initial_path,
+	char *result, size_t result_size);
+
+/* Compatibility wrapper for older callers. */
+qboolean PL_ConfirmDialog(const char *title, const char *text);
+
 #if defined(_WIN32)
 /* Forward a raw engine Ctrl-W transition to the native hold-to-quit UI. */
 void PL_ControlWEvent(int down);
-
-/* show a confirmation dialog, true when the user selects yes */
-qboolean PL_ConfirmDialog(const char *title, const char *text);
 #endif
 
 #ifdef __cplusplus

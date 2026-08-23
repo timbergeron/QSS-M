@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "update.h"
+#include "quake_data_import.h"
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
 #if defined(USE_SDL2)
 #include <SDL2/SDL.h>
@@ -82,6 +83,8 @@ int main(int argc, char *argv[])
 	int		t;
 	double		time, oldtime, newtime;
 
+	if (QuakeDataImport_IsSelfTestArg(argc, argv))
+		return QuakeDataImport_RunSelfTests();
 	if (argc >= 2 && M_Update_IsSelfTestArg(argv[1]))
 		return 0;
 	if (argc >= 2 && M_Update_IsHelperArg(argv[1]))

@@ -60,7 +60,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="libvorbisfile.lib libvorbis.lib libopusfile.lib libopus.lib libFLAC.lib libogg.lib libmad.lib libxmp.lib ws2_32.lib opengl32.lib winmm.lib advapi32.lib SDL2.lib SDL2main.lib"
+				AdditionalDependencies="libvorbisfile.lib libvorbis.lib libopusfile.lib libopus.lib libFLAC.lib libogg.lib libmad.lib libxmp.lib ws2_32.lib opengl32.lib winmm.lib advapi32.lib ole32.lib shell32.lib uuid.lib SDL2.lib SDL2main.lib"
 				LinkIncremental="2"
 				AdditionalLibraryDirectories="..\codecs\x86;..\SDL2\lib;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)"
 				IgnoreDefaultLibraryNames="msvcrt.lib"
@@ -135,7 +135,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="libvorbisfile.lib libvorbis.lib libopusfile.lib libopus.lib libFLAC.lib libogg.lib libmad.lib libxmp.lib ws2_32.lib opengl32.lib winmm.lib advapi32.lib SDL2.lib SDL2main.lib"
+				AdditionalDependencies="libvorbisfile.lib libvorbis.lib libopusfile.lib libopus.lib libFLAC.lib libogg.lib libmad.lib libxmp.lib ws2_32.lib opengl32.lib winmm.lib advapi32.lib ole32.lib shell32.lib uuid.lib SDL2.lib SDL2main.lib"
 				LinkIncremental="1"
 				AdditionalLibraryDirectories="..\codecs\x86;..\SDL2\lib;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)"
 				GenerateDebugInformation="true"
@@ -210,7 +210,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="libvorbisfile.lib libvorbis.lib libopusfile.lib libopus.lib libFLAC.lib libogg.lib libmad.lib libxmp.lib ws2_32.lib opengl32.lib winmm.lib advapi32.lib SDL2.lib SDL2main.lib"
+				AdditionalDependencies="libvorbisfile.lib libvorbis.lib libopusfile.lib libopus.lib libFLAC.lib libogg.lib libmad.lib libxmp.lib ws2_32.lib opengl32.lib winmm.lib advapi32.lib ole32.lib shell32.lib uuid.lib SDL2.lib SDL2main.lib"
 				LinkIncremental="2"
 				AdditionalLibraryDirectories="..\codecs\x64;..\SDL2\lib64;$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64)"
 				IgnoreDefaultLibraryNames="msvcrt.lib"
@@ -286,7 +286,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="libvorbisfile.lib libvorbis.lib libopusfile.lib libopus.lib libFLAC.lib libogg.lib libmad.lib libxmp.lib ws2_32.lib opengl32.lib winmm.lib advapi32.lib SDL2.lib SDL2main.lib"
+				AdditionalDependencies="libvorbisfile.lib libvorbis.lib libopusfile.lib libopus.lib libFLAC.lib libogg.lib libmad.lib libxmp.lib ws2_32.lib opengl32.lib winmm.lib advapi32.lib ole32.lib shell32.lib uuid.lib SDL2.lib SDL2main.lib"
 				LinkIncremental="1"
 				AdditionalLibraryDirectories="..\codecs\x64;..\SDL2\lib64;$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64)"
 				GenerateDebugInformation="true"
@@ -381,6 +381,10 @@
 			</File>
 			<File
 				RelativePath="..\..\Quake\common.c"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\quake_data_import.c"
 				>
 			</File>
 			<File
@@ -835,6 +839,10 @@
 			</File>
 			<File
 				RelativePath="..\..\Quake\common.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\quake_data_import.h"
 				>
 			</File>
 			<File

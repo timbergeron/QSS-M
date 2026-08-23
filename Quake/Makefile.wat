@@ -114,7 +114,7 @@ CFLAGS+= -DUSE_CODEC_UMX
 !endif
 CFLAGS+= $(CODEC_INC)
 
-COMMON_LIBS= opengl32.lib winmm.lib advapi32.lib
+COMMON_LIBS= opengl32.lib winmm.lib advapi32.lib ole32.lib shell32.lib uuid.lib
 !ifeq USE_ZLIB 1
 CFLAGS+= -DUSE_ZLIB
 COMMON_LIBS+= -lz
@@ -222,6 +222,9 @@ OBJS = strlcat.obj &
 	wad.obj &
 	cmd.obj &
 	common.obj &
+	quake_data_import.obj &
+	ice_sha1.obj &
+	ice_sha2.obj &
 	mdfour.obj &
 	fs_zip.obj &
 	f_modified.obj &
@@ -250,6 +253,12 @@ OBJS = strlcat.obj &
 # ------------------------
 
 # 1 MB stack size.
+ice_sha1.obj: ice/sha1.c
+	wcc386 $(CFLAGS) -fo=$@ $<
+
+ice_sha2.obj: ice/sha2.c
+	wcc386 $(CFLAGS) -fo=$@ $<
+
 quakespasm.exe: $(OBJS) quakespasm.res
 	wlink N $@ SYS NT_WIN OPTION q OPTION STACK=0x100000 OPTION RESOURCE=$^*.res LIBR {$(LIBS)} F {$(OBJS)}
 

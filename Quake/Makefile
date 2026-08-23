@@ -323,6 +323,7 @@ OBJS := strlcat.o \
 	wad.o \
 	cmd.o \
 	common.o \
+	quake_data_import.o \
 	json.o \
 	fs_zip.o \
 	f_modified.o \
