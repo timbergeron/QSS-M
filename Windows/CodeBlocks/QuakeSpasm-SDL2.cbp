@@ -93,9 +93,10 @@
 		<Unit filename="..\..\Quake\cl_main.c">
 			<Option compilerVar="CC" />
 		</Unit>
-		<Unit filename="..\..\Quake\discord_presence.c">
+		<Unit filename="..\..\Quake\discord.c">
 			<Option compilerVar="CC" />
 		</Unit>
+		<Unit filename="..\..\Quake\discord.h" />
 		<Unit filename="..\..\Quake\mapshot.c">
 			<Option compilerVar="CC" />
 		</Unit>

@@ -356,7 +356,7 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\Quake\discord_presence.c"
+				RelativePath="..\..\Quake\discord.c"
 				>
 			</File>
 			<File
@@ -847,6 +847,10 @@
 			</File>
 			<File
 				RelativePath="..\..\Quake\console.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\Quake\discord.h"
 				>
 			</File>
 			<File

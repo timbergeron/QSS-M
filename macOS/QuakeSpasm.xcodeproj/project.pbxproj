@@ -38,7 +38,7 @@
 		664D98A319CF6B78000D395C /* cl_demo.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783A0D2EEAAB00CB2E4C /* cl_demo.c */; };
 		664D98A419CF6B78000D395C /* cl_input.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783B0D2EEAAB00CB2E4C /* cl_input.c */; };
 		664D98A519CF6B78000D395C /* cl_main.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783C0D2EEAAB00CB2E4C /* cl_main.c */; };
-		D15C0A020000000000000002 /* discord_presence.c in Sources */ = {isa = PBXBuildFile; fileRef = D15C0A120000000000000012 /* discord_presence.c */; };
+		D15C0A020000000000000002 /* discord.c in Sources */ = {isa = PBXBuildFile; fileRef = D15C0A120000000000000012 /* discord.c */; };
 		D15C0AA20000000000000A02 /* mapshot.c in Sources */ = {isa = PBXBuildFile; fileRef = D15C0AA10000000000000A01 /* mapshot.c */; };
 		664D98A619CF6B78000D395C /* cl_parse.c in Sources */ = {isa = PBXBuildFile; fileRef = 483A783D0D2EEAAB00CB2E4C /* cl_parse.c */; };
 		D15C0A030000000000000003 /* qwatch.c in Sources */ = {isa = PBXBuildFile; fileRef = D15C0A130000000000000013 /* qwatch.c */; };
@@ -316,7 +316,8 @@
 		483A783A0D2EEAAB00CB2E4C /* cl_demo.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_demo.c; path = ../Quake/cl_demo.c; sourceTree = SOURCE_ROOT; };
 		483A783B0D2EEAAB00CB2E4C /* cl_input.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_input.c; path = ../Quake/cl_input.c; sourceTree = SOURCE_ROOT; };
 		483A783C0D2EEAAB00CB2E4C /* cl_main.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_main.c; path = ../Quake/cl_main.c; sourceTree = SOURCE_ROOT; };
-		D15C0A120000000000000012 /* discord_presence.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = discord_presence.c; path = ../Quake/discord_presence.c; sourceTree = SOURCE_ROOT; };
+		D15C0A120000000000000012 /* discord.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = discord.c; path = ../Quake/discord.c; sourceTree = SOURCE_ROOT; };
+		D15C0AB10000000000000B01 /* discord.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = discord.h; path = ../Quake/discord.h; sourceTree = SOURCE_ROOT; };
 		D15C0AA10000000000000A01 /* mapshot.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = mapshot.c; path = ../Quake/mapshot.c; sourceTree = SOURCE_ROOT; };
 		483A783D0D2EEAAB00CB2E4C /* cl_parse.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = cl_parse.c; path = ../Quake/cl_parse.c; sourceTree = SOURCE_ROOT; };
 		D15C0A130000000000000013 /* qwatch.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = qwatch.c; path = ../Quake/qwatch.c; sourceTree = SOURCE_ROOT; };
@@ -778,7 +779,7 @@
 				483A783A0D2EEAAB00CB2E4C /* cl_demo.c */,
 				483A783B0D2EEAAB00CB2E4C /* cl_input.c */,
 				483A783C0D2EEAAB00CB2E4C /* cl_main.c */,
-				D15C0A120000000000000012 /* discord_presence.c */,
+				D15C0A120000000000000012 /* discord.c */,
 				D15C0AA10000000000000A01 /* mapshot.c */,
 				483A783D0D2EEAAB00CB2E4C /* cl_parse.c */,
 				D15C0A130000000000000013 /* qwatch.c */,
@@ -818,6 +819,7 @@
 				483A77E60D2EE97700CB2E4C /* cmd.h */,
 				483A77E70D2EE97700CB2E4C /* common.h */,
 				483A77E80D2EE97700CB2E4C /* console.h */,
+				D15C0AB10000000000000B01 /* discord.h */,
 				483A77E90D2EE97700CB2E4C /* crc.h */,
 				483A77EA0D2EE97700CB2E4C /* cvar.h */,
 				6348AF7D26EA437E00E036E2 /* default_cfg.h */,
@@ -1053,7 +1055,7 @@
 				664D98A319CF6B78000D395C /* cl_demo.c in Sources */,
 				664D98A419CF6B78000D395C /* cl_input.c in Sources */,
 				664D98A519CF6B78000D395C /* cl_main.c in Sources */,
-				D15C0A020000000000000002 /* discord_presence.c in Sources */,
+				D15C0A020000000000000002 /* discord.c in Sources */,
 				D15C0AA20000000000000A02 /* mapshot.c in Sources */,
 				664D98A619CF6B78000D395C /* cl_parse.c in Sources */,
 				D15C0A030000000000000003 /* qwatch.c in Sources */,

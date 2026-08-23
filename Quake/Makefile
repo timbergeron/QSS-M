@@ -307,7 +307,7 @@ OBJS := strlcat.o \
 	cl_demo.o \
 	cl_input.o \
 	cl_main.o \
-	discord_presence.o \
+	discord.o \
 	mapshot.o \
 	cl_parse.o \
 	qwatch.o \

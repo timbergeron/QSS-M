@@ -346,6 +346,7 @@ typedef struct
 #include "server.h"
 
 #include "console.h"
+#include "discord.h"
 #include "wad.h"
 #include "vid.h"
 #include "screen.h"

@@ -26335,16 +26335,16 @@ static const char *M_Discord_GetValueText(int index)
 	{
 		int http_code;
 
-		switch (Con_DiscordNotifyTestStatus(&http_code))
+		switch (Discord_NotifyTestStatus(&http_code))
 		{
-		case CON_DISCORD_TEST_SENDING: return "Sending";
-		case CON_DISCORD_TEST_DELIVERED: return "Delivered";
-		case CON_DISCORD_TEST_HTTP_ERROR:
+		case DISCORD_TEST_SENDING: return "Sending";
+		case DISCORD_TEST_DELIVERED: return "Delivered";
+		case DISCORD_TEST_HTTP_ERROR:
 			q_snprintf(test_status_text, sizeof(test_status_text),
 				"HTTP error %d", http_code);
 			return test_status_text;
-		case CON_DISCORD_TEST_TIMEOUT: return "Timeout";
-		case CON_DISCORD_TEST_TRANSPORT_ERROR: return "Send failed";
+		case DISCORD_TEST_TIMEOUT: return "Timeout";
+		case DISCORD_TEST_TRANSPORT_ERROR: return "Send failed";
 		default: return "...";
 		}
 	}
@@ -26454,7 +26454,7 @@ void M_Menu_Discord_f(void)
 	M_Discord_EndWebhookEdit();
 	M_TextField_Init(&discordmenu.field, discordmenu.webhook,
 		DISCORD_WEBHOOK_MAX, false);
-	Con_DiscordCommunityRefresh();
+	Discord_CommunityRefresh();
 	IN_UpdateGrabs();
 }
 
@@ -26557,16 +26557,16 @@ void M_Discord_Draw(void)
 		int count_x;
 
 		M_PrintWhite((320 - 8 * strlen(tooltip)) / 2, 104, tooltip);
-		switch (Con_DiscordCommunityStatus(&online_count))
+		switch (Discord_CommunityStatus(&online_count))
 		{
-		case CON_DISCORD_COMMUNITY_READY:
+		case DISCORD_COMMUNITY_READY:
 			q_snprintf(count_buffer, sizeof(count_buffer), "%d", online_count);
 			count_text = " online";
 			count_x = (320 - 8 * (strlen(count_buffer) + strlen(count_text))) / 2;
 			M_Print2(count_x, 112, count_buffer);
 			M_PrintWhite(count_x + 8 * strlen(count_buffer), 112, count_text);
 			break;
-		case CON_DISCORD_COMMUNITY_ERROR:
+		case DISCORD_COMMUNITY_ERROR:
 			count_text = "Discord count unavailable";
 			M_PrintWhite((320 - 8 * strlen(count_text)) / 2, 112, count_text);
 			break;
@@ -26603,12 +26603,12 @@ static void M_Discord_Activate(void)
 		M_Discord_BeginWebhookEdit();
 		break;
 	case DISCORD_TEST:
-		switch (Con_DiscordNotifyTest())
+		switch (Discord_NotifyTest())
 		{
-		case CON_DISCORD_TEST_NOT_CONFIGURED:
+		case DISCORD_TEST_NOT_CONFIGURED:
 			SCR_ModalMessage("Configure an alert webhook first.", 2.0f);
 			break;
-		case CON_DISCORD_TEST_TRANSPORT_ERROR:
+		case DISCORD_TEST_TRANSPORT_ERROR:
 			SCR_ModalMessage("Unable to start the Discord test alert.", 2.0f);
 			break;
 		default:

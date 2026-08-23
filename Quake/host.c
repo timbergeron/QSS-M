@@ -2553,8 +2553,7 @@ void _Host_Frame (double time)
 	UpdateWindowTitle(); // github.com/andrei-drexler/ironwail (Show game summary in window title)
 	Host_UpdateDockBadge(); // woods -- show download progress in the platform shell UI
 	Mapshot_Frame();		// completes lookups before presence reads the result
-	Con_DiscordFrame();		// dispatch alert cards after mapshot results are collected
-	DiscordPresence_Frame();
+	Discord_Frame();		// dispatch alerts and update presence after mapshot results
 
 	if (host_speeds.value)
 	{
@@ -2778,7 +2777,7 @@ void Host_Shutdown(void)
 
 // keep Con_Printf from trying to update the screen
 	scr_disabled_for_loading = true;
-	DiscordPresence_Shutdown();
+	Discord_Shutdown(); // joins curl workers before NET_Shutdown cleans up libcurl
 	Mapshot_Shutdown();
 	SCR_Shutdown();
 	CL_Demo_Shutdown();
