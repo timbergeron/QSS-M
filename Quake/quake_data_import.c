@@ -12,6 +12,7 @@ SHA-256 checked against their sources, and installed without replacement.
 #include "crc.h"
 #include "q_hash.h"
 #include "q_ctype.h"
+#include "json.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -53,6 +54,9 @@ SHA-256 checked against their sources, and installed without replacement.
 #define QDI_PAK0_CRC_V101 62751u
 #define QDI_PAK0_CRC_V106 32981u
 #define QDI_PICKER_PATH_SIZE 32768u
+#define QDI_SEARCH_MAX_DEPTH 8u
+#define QDI_SEARCH_MAX_ENQUEUED 100000u
+#define QDI_SEARCH_MAX_SECONDS 180
 
 typedef struct
 {
@@ -78,6 +82,25 @@ typedef struct
 	int capacity;
 } qdi_path_list_t;
 
+typedef struct
+{
+	char *path;
+	unsigned int depth;
+} qdi_search_node_t;
+
+typedef struct
+{
+	qdi_search_node_t *items;
+	size_t head;
+	size_t count;
+	size_t capacity;
+	size_t total_enqueued;
+	qboolean limited;
+} qdi_search_queue_t;
+
+typedef qboolean (*qdi_search_progress_fn)(void *context,
+	const char *phase, const char *location, uint64_t directories);
+
 #ifndef _WIN32
 typedef struct
 {
@@ -98,7 +121,8 @@ typedef enum
 {
 	QDI_SEARCH_NOT_FOUND = 0,
 	QDI_SEARCH_FOUND = 1,
-	QDI_SEARCH_CANCELLED = -1
+	QDI_SEARCH_CANCELLED = -1,
+	QDI_SEARCH_TIMED_OUT = -2
 } qdi_search_result_t;
 
 typedef enum
@@ -718,26 +742,82 @@ static qboolean QDI_PathListAdd(qdi_path_list_t *list, const char *path)
 	return true;
 }
 
-/* Search traversal does not need the O(n) string dedupe used by the small
- * Steam/source lists.  POSIX cycle protection is handled by inode identity. */
-static qboolean QDI_PathStackPush(qdi_path_list_t *stack, const char *path)
+static void QDI_SearchQueueFree(qdi_search_queue_t *queue)
 {
-	char **items;
+	size_t i;
+	for (i = queue->head; i < queue->count; ++i)
+		free(queue->items[i].path);
+	free(queue->items);
+	memset(queue, 0, sizeof(*queue));
+}
+
+/* A bounded breadth-first queue finds conventional shallow installs first
+ * without retaining an arbitrarily large filesystem frontier. */
+static qboolean QDI_SearchQueuePush(qdi_search_queue_t *queue,
+	const char *path, unsigned int depth)
+{
+	qdi_search_node_t *items;
 	char *copy;
-	if (!path || !path[0]) return false;
-	if (stack->count == stack->capacity)
+	size_t live;
+	size_t capacity;
+	if (!path || !path[0])
+		return true;
+	if (depth > QDI_SEARCH_MAX_DEPTH)
 	{
-		int capacity = stack->capacity ? stack->capacity * 2 : 64;
-		items = (char **)realloc(stack->items,
-			(size_t)capacity * sizeof(*items));
-		if (!items) return false;
-		stack->items = items;
-		stack->capacity = capacity;
+		queue->limited = true;
+		return false;
+	}
+	if (queue->total_enqueued >= QDI_SEARCH_MAX_ENQUEUED)
+	{
+		queue->limited = true;
+		return false;
+	}
+	if (queue->head > 1024 && queue->head > queue->count / 2)
+	{
+		live = queue->count - queue->head;
+		memmove(queue->items, queue->items + queue->head,
+			live * sizeof(*queue->items));
+		queue->head = 0;
+		queue->count = live;
+	}
+	if (queue->count == queue->capacity)
+	{
+		capacity = queue->capacity ? queue->capacity * 2 : 64;
+		if (capacity > QDI_SEARCH_MAX_ENQUEUED)
+			capacity = QDI_SEARCH_MAX_ENQUEUED;
+		items = (qdi_search_node_t *)realloc(queue->items,
+			capacity * sizeof(*items));
+		if (!items)
+		{
+			queue->limited = true;
+			return false;
+		}
+		queue->items = items;
+		queue->capacity = capacity;
 	}
 	copy = QDI_Strdup(path);
-	if (!copy) return false;
+	if (!copy)
+	{
+		queue->limited = true;
+		return false;
+	}
 	QDI_TrimPath(copy);
-	stack->items[stack->count++] = copy;
+	queue->items[queue->count].path = copy;
+	queue->items[queue->count].depth = depth;
+	++queue->count;
+	++queue->total_enqueued;
+	return true;
+}
+
+static qboolean QDI_SearchQueuePop(qdi_search_queue_t *queue,
+	char **path, unsigned int *depth)
+{
+	if (queue->head >= queue->count)
+		return false;
+	*path = queue->items[queue->head].path;
+	*depth = queue->items[queue->head].depth;
+	queue->items[queue->head].path = NULL;
+	++queue->head;
 	return true;
 }
 
@@ -829,24 +909,78 @@ static qboolean QDI_Numeric(const char *text)
 	return true;
 }
 
-static void QDI_ParseVDF(const char *path, qdi_path_list_t *libraries)
+static char *QDI_ReadTextFile(const char *path, uint64_t maximum_length)
 {
 	FILE *file;
 	uint64_t length;
 	char *text = NULL;
-	const char *p;
 #ifdef _WIN32
 	file = QDI_Open(path, L"rb");
 #else
 	file = QDI_Open(path, "rb");
 #endif
 	if (!file || !QDI_FileSize(file, &length) || length == 0 ||
-		length > 4u * 1024u * 1024u || !QDI_Seek(file, 0))
+		length > maximum_length || length > SIZE_MAX - 1 || !QDI_Seek(file, 0))
 		goto done;
 	text = (char *)malloc((size_t)length + 1);
 	if (!text || fread(text, 1, (size_t)length, file) != (size_t)length)
+	{
+		free(text);
+		text = NULL;
 		goto done;
-	text[length] = '\0';
+	}
+	text[(size_t)length] = '\0';
+done:
+	if (file) fclose(file);
+	return text;
+}
+
+static char *QDI_ParseVDFString(const char *path, const char *wanted_key)
+{
+	char *text = QDI_ReadTextFile(path, 4u * 1024u * 1024u);
+	const char *p;
+	char *result = NULL;
+
+	if (!text)
+		return NULL;
+	p = text;
+	while (*p)
+	{
+		char *key = NULL, *value = NULL;
+		const char *next;
+		while (*p && *p != '"') ++p;
+		if (!*p) break;
+		next = QDI_ParseQuoted(p, &key);
+		if (!next) break;
+		p = next;
+		while (*p && q_isspace(*p)) ++p;
+		if (*p == '"')
+		{
+			next = QDI_ParseQuoted(p, &value);
+			if (!next) { free(key); break; }
+			p = next;
+			if (!q_strcasecmp(key, wanted_key))
+			{
+				result = value;
+				value = NULL;
+				free(key);
+				break;
+			}
+		}
+		free(key);
+		free(value);
+	}
+	free(text);
+	return result;
+}
+
+static void QDI_ParseVDF(const char *path, qdi_path_list_t *libraries)
+{
+	char *text;
+	const char *p;
+	text = QDI_ReadTextFile(path, 4u * 1024u * 1024u);
+	if (!text)
+		return;
 	p = text;
 	while (*p)
 	{
@@ -870,38 +1004,74 @@ static void QDI_ParseVDF(const char *path, qdi_path_list_t *libraries)
 		free(key);
 		free(value);
 	}
-done:
 	free(text);
-	if (file) fclose(file);
 }
 
 #ifdef _WIN32
-static void QDI_AddRegistrySteamRoot(HKEY root, const char *subkey,
-	const wchar_t *value, qdi_path_list_t *roots)
+static char *QDI_RegistryStringUtf8(HKEY key, const wchar_t *value_name)
 {
-	HKEY key;
 	DWORD type = 0, bytes = 0;
-	wchar_t *wide = NULL;
+	wchar_t *wide = NULL, *expanded = NULL;
 	char *utf8 = NULL;
-	if (RegOpenKeyExA(root, subkey, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
-		return;
-	if (RegQueryValueExW(key, value, NULL, &type, NULL, &bytes) == ERROR_SUCCESS &&
+	if (RegQueryValueExW(key, value_name, NULL, &type, NULL, &bytes) == ERROR_SUCCESS &&
 		(type == REG_SZ || type == REG_EXPAND_SZ) && bytes >= sizeof(wchar_t))
 	{
 		wide = (wchar_t *)malloc(bytes + sizeof(wchar_t));
-		if (wide && RegQueryValueExW(key, value,
+		if (wide && RegQueryValueExW(key, value_name,
 			NULL, &type, (LPBYTE)wide, &bytes) == ERROR_SUCCESS)
 		{
 			int needed;
 			wide[bytes / sizeof(wchar_t)] = L'\0';
+			if (type == REG_EXPAND_SZ)
+			{
+				DWORD expanded_length = ExpandEnvironmentStringsW(wide, NULL, 0);
+				if (expanded_length)
+				{
+					expanded = (wchar_t *)malloc((size_t)expanded_length *
+						sizeof(*expanded));
+					if (expanded && !ExpandEnvironmentStringsW(wide, expanded,
+						expanded_length))
+					{
+						free(expanded);
+						expanded = NULL;
+					}
+				}
+			}
+			if (expanded)
+			{
+				free(wide);
+				wide = expanded;
+				expanded = NULL;
+			}
 			needed = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
 			utf8 = needed > 0 ? (char *)malloc((size_t)needed) : NULL;
-			if (utf8 && WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8,
-				needed, NULL, NULL) > 0)
-				QDI_PathListAdd(roots, utf8);
+			if (utf8 && !WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8,
+				needed, NULL, NULL))
+			{
+				free(utf8);
+				utf8 = NULL;
+			}
 		}
 	}
-	free(utf8); free(wide); RegCloseKey(key);
+	free(expanded);
+	free(wide);
+	return utf8;
+}
+
+static void QDI_AddRegistryPath(HKEY root, const wchar_t *subkey,
+	const wchar_t *value, REGSAM view, qdi_path_list_t *paths)
+{
+	HKEY key;
+	char *utf8;
+	if (RegOpenKeyExW(root, subkey, 0, KEY_QUERY_VALUE | view, &key) != ERROR_SUCCESS)
+		return;
+	utf8 = QDI_RegistryStringUtf8(key, value);
+	if (utf8)
+	{
+		QDI_PathListAdd(paths, utf8);
+		free(utf8);
+	}
+	RegCloseKey(key);
 }
 #endif
 
@@ -910,12 +1080,12 @@ static void QDI_AddSteamRoots(qdi_path_list_t *roots)
 	char *path;
 #ifdef _WIN32
 	const char *pf;
-	QDI_AddRegistrySteamRoot(HKEY_CURRENT_USER, "Software\\Valve\\Steam",
-		L"SteamPath", roots);
-	QDI_AddRegistrySteamRoot(HKEY_LOCAL_MACHINE, "SOFTWARE\\Valve\\Steam",
-		L"InstallPath", roots);
-	QDI_AddRegistrySteamRoot(HKEY_LOCAL_MACHINE,
-		"SOFTWARE\\WOW6432Node\\Valve\\Steam", L"InstallPath", roots);
+	QDI_AddRegistryPath(HKEY_CURRENT_USER, L"Software\\Valve\\Steam",
+		L"SteamPath", 0, roots);
+	QDI_AddRegistryPath(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Valve\\Steam",
+		L"InstallPath", KEY_WOW64_32KEY, roots);
+	QDI_AddRegistryPath(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Valve\\Steam",
+		L"InstallPath", KEY_WOW64_64KEY, roots);
 	pf = getenv("ProgramFiles(x86)");
 	if (pf && (path = QDI_Join(pf, "Steam")) != NULL)
 		{ QDI_PathListAdd(roots, path); free(path); }
@@ -1003,7 +1173,57 @@ static qboolean QDI_ProbeQuakeRoot(const char *root, qdi_candidate_t *candidate)
 	return false;
 }
 
-static qboolean QDI_FindSteamCandidate(qdi_candidate_t *candidate)
+static qboolean QDI_ProbeCandidatePath(const char *path,
+	qdi_candidate_t *candidate)
+{
+	return QDI_TryCandidateDirectory(path, candidate) ||
+		QDI_ProbeQuakeRoot(path, candidate);
+}
+
+static qboolean QDI_ReportSearchProgress(qdi_search_progress_fn progress,
+	void *context, qboolean *cancelled, const char *phase,
+	const char *location, uint64_t directories)
+{
+	if (!progress || progress(context, phase, location, directories))
+		return true;
+	if (cancelled)
+		*cancelled = true;
+	return false;
+}
+
+static qboolean QDI_ProbeSteamLibrary(const char *library,
+	qdi_candidate_t *candidate, qdi_search_progress_fn progress,
+	void *context, qboolean *cancelled)
+{
+	char *manifest = QDI_Join(library, "steamapps/appmanifest_2310.acf");
+	char *install_directory = manifest ?
+		QDI_ParseVDFString(manifest, "installdir") : NULL;
+	char *common = QDI_Join(library, "steamapps/common");
+	char *quake = common && install_directory ?
+		QDI_Join(common, install_directory) : NULL;
+	qboolean found = false;
+
+	if (quake && QDI_ReportSearchProgress(progress, context, cancelled,
+		"Checking installed game libraries...", quake, 0))
+		found = QDI_ProbeCandidatePath(quake, candidate);
+	/* Older or incomplete Steam metadata still uses this stable folder name. */
+	if (!found)
+	{
+		free(quake);
+		quake = common ? QDI_Join(common, "Quake") : NULL;
+		if (quake && QDI_ReportSearchProgress(progress, context, cancelled,
+			"Checking installed game libraries...", quake, 0))
+			found = QDI_ProbeCandidatePath(quake, candidate);
+	}
+	free(quake);
+	free(common);
+	free(install_directory);
+	free(manifest);
+	return found;
+}
+
+static qboolean QDI_FindSteamCandidateProgress(qdi_candidate_t *candidate,
+	qdi_search_progress_fn progress, void *context, qboolean *cancelled)
 {
 	qdi_path_list_t roots = {0}, libraries = {0};
 	int i;
@@ -1012,19 +1232,267 @@ static qboolean QDI_FindSteamCandidate(qdi_candidate_t *candidate)
 	for (i = 0; i < roots.count; ++i)
 	{
 		char *vdf;
+		if (!QDI_ReportSearchProgress(progress, context, cancelled,
+			"Checking Steam libraries...", roots.items[i], 0))
+			break;
 		QDI_PathListAdd(&libraries, roots.items[i]);
 		vdf = QDI_Join(roots.items[i], "steamapps/libraryfolders.vdf");
 		if (vdf) { QDI_ParseVDF(vdf, &libraries); free(vdf); }
 	}
-	for (i = 0; i < libraries.count && !found; ++i)
-	{
-		char *quake = QDI_Join(libraries.items[i], "steamapps/common/Quake");
-		if (quake) { found = QDI_ProbeQuakeRoot(quake, candidate); free(quake); }
-	}
+	for (i = 0; i < libraries.count && !found &&
+		(!cancelled || !*cancelled); ++i)
+		found = QDI_ProbeSteamLibrary(libraries.items[i], candidate,
+			progress, context, cancelled);
 	QDI_PathListFree(&libraries);
 	QDI_PathListFree(&roots);
 	return found;
 }
+
+static qboolean QDI_FindSteamCandidate(qdi_candidate_t *candidate)
+{
+	return QDI_FindSteamCandidateProgress(candidate, NULL, NULL, NULL);
+}
+
+#ifdef _WIN32
+static qboolean QDI_WideContainsQuake(const wchar_t *text)
+{
+	static const wchar_t needle[] = L"quake";
+	const wchar_t *p;
+	if (!text) return false;
+	for (p = text; *p; ++p)
+	{
+		size_t i;
+		for (i = 0; needle[i]; ++i)
+		{
+			wchar_t c = p[i];
+			if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
+			if (c != needle[i]) break;
+		}
+		if (!needle[i]) return true;
+	}
+	return false;
+}
+
+static void QDI_AddRegistryGamePaths(HKEY root, const wchar_t *subkey,
+	REGSAM view, qboolean require_quake_name, qdi_path_list_t *paths)
+{
+	HKEY games;
+	DWORD index = 0;
+	if (RegOpenKeyExW(root, subkey, 0, KEY_ENUMERATE_SUB_KEYS | view,
+		&games) != ERROR_SUCCESS)
+		return;
+	for (;; ++index)
+	{
+		wchar_t name[512];
+		DWORD name_length = (DWORD)(sizeof(name) / sizeof(name[0]));
+		HKEY game;
+		LONG result = RegEnumKeyExW(games, index, name, &name_length, NULL,
+			NULL, NULL, NULL);
+		char *path;
+		if (result == ERROR_NO_MORE_ITEMS) break;
+		if (result != ERROR_SUCCESS) continue;
+		if (RegOpenKeyExW(games, name, 0, KEY_QUERY_VALUE, &game) != ERROR_SUCCESS)
+			continue;
+		if (require_quake_name)
+		{
+			DWORD type = 0, bytes = 0;
+			wchar_t *display_name = NULL;
+			if (RegQueryValueExW(game, L"DisplayName", NULL, &type, NULL,
+				&bytes) == ERROR_SUCCESS && type == REG_SZ &&
+				bytes >= sizeof(wchar_t))
+			{
+				display_name = (wchar_t *)malloc(bytes + sizeof(wchar_t));
+				if (display_name && RegQueryValueExW(game, L"DisplayName", NULL,
+					&type, (LPBYTE)display_name, &bytes) == ERROR_SUCCESS)
+					display_name[bytes / sizeof(wchar_t)] = L'\0';
+				else
+				{
+					free(display_name);
+					display_name = NULL;
+				}
+			}
+			if (!QDI_WideContainsQuake(display_name))
+			{
+				free(display_name);
+				RegCloseKey(game);
+				continue;
+			}
+			free(display_name);
+		}
+		path = QDI_RegistryStringUtf8(game, require_quake_name ?
+			L"InstallLocation" : L"path");
+		if (path)
+		{
+			QDI_PathListAdd(paths, path);
+			free(path);
+		}
+		RegCloseKey(game);
+	}
+	RegCloseKey(games);
+}
+
+static void QDI_JSONCollectInstallPaths(const jsonentry_t *entry,
+	qdi_path_list_t *paths)
+{
+	const jsonentry_t *child;
+	if (!entry) return;
+	for (child = entry->firstchild; child; child = child->next)
+	{
+		if (entry->type == JSON_ARRAY)
+		{
+			if (child->type == JSON_OBJECT || child->type == JSON_ARRAY)
+				QDI_JSONCollectInstallPaths(child, paths);
+		}
+		else
+		{
+			const jsonentry_t *value = child->firstchild;
+			if (child->string && value && value->type == JSON_STRING &&
+				(!q_strcasecmp(child->string, "InstallLocation") ||
+				 !q_strcasecmp(child->string, "install_path")))
+				QDI_PathListAdd(paths, value->string);
+			if (value && (value->type == JSON_OBJECT || value->type == JSON_ARRAY))
+				QDI_JSONCollectInstallPaths(value, paths);
+		}
+	}
+}
+
+static void QDI_AddJSONInstallPaths(const char *path, qdi_path_list_t *paths)
+{
+	char *text = QDI_ReadTextFile(path, 32u * 1024u * 1024u);
+	json_t *json;
+	if (!text) return;
+	json = JSON_Parse(text);
+	if (json)
+	{
+		QDI_JSONCollectInstallPaths(json->root, paths);
+		JSON_Free(json);
+	}
+	free(text);
+}
+
+static void QDI_AddEpicInstallPaths(qdi_path_list_t *paths,
+	qdi_search_progress_fn progress, void *context, qboolean *cancelled)
+{
+	const char *program_data = getenv("ProgramData");
+	char *directory, *pattern;
+	wchar_t *wide_pattern;
+	WIN32_FIND_DATAW data;
+	HANDLE find;
+	if (!program_data) return;
+	directory = QDI_Join(program_data,
+		"Epic/EpicGamesLauncher/Data/Manifests");
+	pattern = directory ? QDI_Join(directory, "*.item") : NULL;
+	wide_pattern = pattern ? QDI_WidePath(pattern, true) : NULL;
+	find = wide_pattern ? FindFirstFileW(wide_pattern, &data) :
+		INVALID_HANDLE_VALUE;
+	free(pattern);
+	free(wide_pattern);
+	if (find != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			char utf8[1024];
+			char *path;
+			if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+				!WideCharToMultiByte(CP_UTF8, 0, data.cFileName, -1, utf8,
+					sizeof(utf8), NULL, NULL))
+				continue;
+			path = QDI_Join(directory, utf8);
+			if (path)
+			{
+				if (QDI_ReportSearchProgress(progress, context, cancelled,
+					"Checking Epic Games manifests...", path, 0))
+					QDI_AddJSONInstallPaths(path, paths);
+				free(path);
+			}
+		} while ((!cancelled || !*cancelled) && FindNextFileW(find, &data));
+		FindClose(find);
+	}
+	free(directory);
+}
+
+static void QDI_AddLauncherMetadataPaths(qdi_path_list_t *paths,
+	qdi_search_progress_fn progress, void *context, qboolean *cancelled)
+{
+	const char *profile = getenv("USERPROFILE");
+	const char *appdata = getenv("APPDATA");
+	char *path;
+	if (!QDI_ReportSearchProgress(progress, context, cancelled,
+		"Checking installed game libraries...", "GOG registry entries", 0))
+		return;
+	QDI_AddRegistryGamePaths(HKEY_LOCAL_MACHINE, L"SOFTWARE\\GOG.com\\Games",
+		KEY_WOW64_32KEY, false, paths);
+	QDI_AddRegistryGamePaths(HKEY_LOCAL_MACHINE, L"SOFTWARE\\GOG.com\\Games",
+		KEY_WOW64_64KEY, false, paths);
+	QDI_AddRegistryGamePaths(HKEY_CURRENT_USER, L"SOFTWARE\\GOG.com\\Games",
+		KEY_WOW64_32KEY, false, paths);
+	QDI_AddRegistryGamePaths(HKEY_CURRENT_USER, L"SOFTWARE\\GOG.com\\Games",
+		KEY_WOW64_64KEY, false, paths);
+	if (!QDI_ReportSearchProgress(progress, context, cancelled,
+		"Checking installed applications...", "Windows uninstall registry", 0))
+		return;
+	QDI_AddRegistryGamePaths(HKEY_LOCAL_MACHINE,
+		L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+		KEY_WOW64_32KEY, true, paths);
+	QDI_AddRegistryGamePaths(HKEY_LOCAL_MACHINE,
+		L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+		KEY_WOW64_64KEY, true, paths);
+	QDI_AddRegistryGamePaths(HKEY_CURRENT_USER,
+		L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+		KEY_WOW64_32KEY, true, paths);
+	QDI_AddRegistryGamePaths(HKEY_CURRENT_USER,
+		L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+		KEY_WOW64_64KEY, true, paths);
+	if (!QDI_ReportSearchProgress(progress, context, cancelled,
+		"Checking Epic Games manifests...", "Epic Games Launcher", 0))
+		return;
+	QDI_AddEpicInstallPaths(paths, progress, context, cancelled);
+	if (cancelled && *cancelled)
+		return;
+	if (profile && (path = QDI_Join(profile,
+		".config/legendary/installed.json")) != NULL)
+	{
+		if (QDI_ReportSearchProgress(progress, context, cancelled,
+			"Checking Legendary manifests...", path, 0))
+			QDI_AddJSONInstallPaths(path, paths);
+		free(path);
+	}
+	if (cancelled && *cancelled)
+		return;
+	if (appdata && (path = QDI_Join(appdata,
+		"heroic/legendaryConfig/legendary/installed.json")) != NULL)
+	{
+		if (QDI_ReportSearchProgress(progress, context, cancelled,
+			"Checking Heroic manifests...", path, 0))
+			QDI_AddJSONInstallPaths(path, paths);
+		free(path);
+	}
+}
+
+static qboolean QDI_FindWindowsMetadataCandidate(qdi_candidate_t *candidate,
+	qdi_search_progress_fn progress, void *context, qboolean *cancelled)
+{
+	qdi_path_list_t paths = {0};
+	qboolean found;
+	int i;
+	if (QDI_FindSteamCandidateProgress(candidate, progress, context, cancelled))
+		return true;
+	if (cancelled && *cancelled)
+		return false;
+	QDI_AddLauncherMetadataPaths(&paths, progress, context, cancelled);
+	found = false;
+	for (i = 0; i < paths.count && !found &&
+		(!cancelled || !*cancelled); ++i)
+	{
+		if (!QDI_ReportSearchProgress(progress, context, cancelled,
+			"Checking installed game locations...", paths.items[i], 0))
+			break;
+		found = QDI_ProbeCandidatePath(paths.items[i], candidate);
+	}
+	QDI_PathListFree(&paths);
+	return found;
+}
+#endif
 
 static qboolean QDI_NormalizeSelection(const char *selection,
 	qdi_candidate_t *candidate)
@@ -1180,38 +1648,43 @@ static qboolean QDI_SearchSpotlight(qdi_candidate_t *candidate)
 
 static qdi_search_result_t QDI_SearchPOSIX(qdi_candidate_t *candidate)
 {
-	qdi_path_list_t stack = {0};
+	qdi_search_queue_t queue = {0};
 	qdi_visited_set_t visited = {0};
 	const char *home = getenv("HOME");
 	time_t next_checkpoint = time(NULL) + 15;
+	time_t deadline = time(NULL) + QDI_SEARCH_MAX_SECONDS;
 	uint64_t directories = 0;
-	qboolean found = false, cancelled = false;
+	qboolean found = false, cancelled = false, timed_out = false;
+	qboolean limited;
 	char *path;
+	unsigned int depth;
 
 #if defined(__APPLE__)
 	if (QDI_SearchSpotlight(candidate)) return QDI_SEARCH_FOUND;
 #endif
-	if (home) QDI_PathStackPush(&stack, home);
+	if (home) QDI_SearchQueuePush(&queue, home, 0);
 #if defined(__APPLE__)
-	QDI_PathStackPush(&stack, "/Volumes");
+	QDI_SearchQueuePush(&queue, "/Volumes", 0);
 #else
 	const char *user = getenv("USER");
 	if (user)
 	{
 		path = QDI_Join("/media", user);
-		if (path) { QDI_PathStackPush(&stack, path); free(path); }
+		if (path) { QDI_SearchQueuePush(&queue, path, 0); free(path); }
 		path = QDI_Join("/run/media", user);
-		if (path) { QDI_PathStackPush(&stack, path); free(path); }
+		if (path) { QDI_SearchQueuePush(&queue, path, 0); free(path); }
 	}
-	QDI_PathStackPush(&stack, "/mnt");
+	QDI_SearchQueuePush(&queue, "/mnt", 0);
 #endif
-	while (stack.count > 0 && !found)
+	while (!found && QDI_SearchQueuePop(&queue, &path, &depth))
 	{
 		DIR *dir;
 		struct dirent *entry;
 		struct stat current_stat;
-		char *current = stack.items[--stack.count];
-		stack.items[stack.count] = NULL;
+		char *current = path;
+		qboolean has_pak0 = false, has_pak1 = false;
+		if (time(NULL) >= deadline)
+			{ timed_out = true; free(current); break; }
 		if (lstat(current, &current_stat) != 0 ||
 			!S_ISDIR(current_stat.st_mode) ||
 			!QDI_VisitedAdd(&visited, current_stat.st_dev, current_stat.st_ino))
@@ -1228,27 +1701,89 @@ static qdi_search_result_t QDI_SearchPOSIX(qdi_candidate_t *candidate)
 		{
 			struct stat st;
 			if (QDI_SearchSkipName(entry->d_name)) continue;
+			if (!q_strcasecmp(entry->d_name, "pak0.pak")) has_pak0 = true;
+			else if (!q_strcasecmp(entry->d_name, "pak1.pak")) has_pak1 = true;
 			path = QDI_Join(current, entry->d_name);
 			if (!path) continue;
 			if (lstat(path, &st) == 0 && S_ISDIR(st.st_mode))
-				QDI_PathStackPush(&stack, path);
+				QDI_SearchQueuePush(&queue, path, depth + 1);
 			free(path);
 		}
-		closedir(dir); free(current);
+		closedir(dir);
+		if (has_pak0 && has_pak1 && QDI_TryCandidateDirectory(current, candidate))
+			found = true;
+		free(current);
 	}
-	QDI_PathListFree(&stack);
+	limited = queue.limited;
+	QDI_SearchQueueFree(&queue);
 	free(visited.entries);
 	return found ? QDI_SEARCH_FOUND :
-		cancelled ? QDI_SEARCH_CANCELLED : QDI_SEARCH_NOT_FOUND;
+		cancelled ? QDI_SEARCH_CANCELLED :
+		(timed_out || limited) ? QDI_SEARCH_TIMED_OUT : QDI_SEARCH_NOT_FOUND;
 }
 #else
+#if !defined(__WATCOMC__)
+static qboolean QDI_WindowsSearchProgress(void *context, const char *phase,
+	const char *location, uint64_t directories)
+{
+	return PL_SearchProgressUpdate((pl_search_progress_t *)context, phase,
+		location, (unsigned long long)directories);
+}
+#endif
+
 static qdi_search_result_t QDI_SearchWindows(qdi_candidate_t *candidate)
 {
-	qdi_path_list_t stack = {0};
+	qdi_search_queue_t queue = {0};
 	wchar_t drives[512], *drive;
 	time_t next_checkpoint = time(NULL) + 15;
+	time_t deadline = time(NULL) + QDI_SEARCH_MAX_SECONDS;
 	uint64_t directories = 0;
-	qboolean found = false, cancelled = false;
+	qboolean found = false, cancelled = false, timed_out = false;
+	qboolean limited;
+	qdi_search_progress_fn metadata_progress = NULL;
+	void *metadata_context = NULL;
+	char *current;
+	unsigned int depth;
+#if !defined(__WATCOMC__)
+	pl_search_progress_t *progress = PL_SearchProgressBegin(
+		"Find Quake Data Files", "Checking installed game libraries...");
+	if (progress)
+	{
+		metadata_progress = QDI_WindowsSearchProgress;
+		metadata_context = progress;
+	}
+	if (progress && !PL_SearchProgressUpdate(progress, NULL,
+		"Steam, GOG, Epic, Heroic, and installed applications", 0))
+	{
+		PL_SearchProgressEnd(progress);
+		return QDI_SEARCH_CANCELLED;
+	}
+#endif
+
+	/* Current launchers discover installed games from store metadata rather than
+	 * crawling disks.  This is both faster and able to cross store-managed
+	 * junctions which the safety-conscious fallback traversal must not follow. */
+	if (QDI_FindWindowsMetadataCandidate(candidate, metadata_progress,
+		metadata_context, &cancelled))
+	{
+		found = true;
+		goto done;
+	}
+	if (cancelled)
+		goto done;
+	if (time(NULL) >= deadline)
+	{
+		timed_out = true;
+		goto done;
+	}
+#if !defined(__WATCOMC__)
+	if (progress && !PL_SearchProgressUpdate(progress,
+		"Scanning local drives...", "Preparing drive scan", 0))
+	{
+		cancelled = true;
+		goto done;
+	}
+#endif
 
 	if (GetLogicalDriveStringsW((DWORD)(sizeof(drives) / sizeof(drives[0])), drives))
 	{
@@ -1260,18 +1795,31 @@ static qdi_search_result_t QDI_SearchWindows(qdi_candidate_t *candidate)
 				type == DRIVE_CDROM) &&
 				WideCharToMultiByte(CP_UTF8, 0, drive, -1, utf8, sizeof(utf8),
 					NULL, NULL) > 0)
-				QDI_PathStackPush(&stack, utf8);
+				QDI_SearchQueuePush(&queue, utf8, 0);
 		}
 	}
-	while (stack.count > 0 && !found && !cancelled)
+	/* Breadth-first fallback reaches normal C:/Games and Program Files layouts
+	 * before descending through unrelated trees. */
+	while (!found && !cancelled &&
+		QDI_SearchQueuePop(&queue, &current, &depth))
 	{
-		char *current = stack.items[--stack.count];
 		char *pattern;
 		wchar_t *wpattern;
 		WIN32_FIND_DATAW data;
 		HANDLE find;
-		stack.items[stack.count] = NULL;
+		qboolean has_pak0 = false, has_pak1 = false;
+		if (time(NULL) >= deadline)
+			{ timed_out = true; free(current); break; }
 		++directories;
+#if !defined(__WATCOMC__)
+		if (progress)
+		{
+			if (!PL_SearchProgressUpdate(progress, NULL, current,
+				(unsigned long long)directories))
+				{ cancelled = true; free(current); break; }
+		}
+		else
+#endif
 		if (!QDI_SearchCheckpoint(current, directories, &next_checkpoint))
 			{ cancelled = true; free(current); break; }
 		if (QDI_SearchDirectoryCandidate(current, candidate))
@@ -1286,22 +1834,41 @@ static qdi_search_result_t QDI_SearchWindows(qdi_candidate_t *candidate)
 			{
 				char utf8[1024];
 				char *path;
-				if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
-					(data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
-					!wcscmp(data.cFileName, L".") || !wcscmp(data.cFileName, L"..") ||
-					!WideCharToMultiByte(CP_UTF8, 0, data.cFileName, -1, utf8,
-						sizeof(utf8), NULL, NULL) || QDI_SearchSkipName(utf8))
+				if (!WideCharToMultiByte(CP_UTF8, 0, data.cFileName, -1, utf8,
+					sizeof(utf8), NULL, NULL))
+					continue;
+				if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				{
+					if (!q_strcasecmp(utf8, "pak0.pak")) has_pak0 = true;
+					else if (!q_strcasecmp(utf8, "pak1.pak")) has_pak1 = true;
+					continue;
+				}
+				if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+					QDI_SearchSkipName(utf8))
 					continue;
 				path = QDI_Join(current, utf8);
-				if (path) { QDI_PathStackPush(&stack, path); free(path); }
+				if (path)
+				{
+					QDI_SearchQueuePush(&queue, path, depth + 1);
+					free(path);
+				}
 			} while (FindNextFileW(find, &data));
 			FindClose(find);
 		}
+		/* A manual backup need not use the conventional id1 directory name. */
+		if (has_pak0 && has_pak1 && QDI_TryCandidateDirectory(current, candidate))
+			found = true;
 		free(current);
 	}
-	QDI_PathListFree(&stack);
+done:
+	limited = queue.limited;
+	QDI_SearchQueueFree(&queue);
+#if !defined(__WATCOMC__)
+	PL_SearchProgressEnd(progress);
+#endif
 	return found ? QDI_SEARCH_FOUND :
-		cancelled ? QDI_SEARCH_CANCELLED : QDI_SEARCH_NOT_FOUND;
+		cancelled ? QDI_SEARCH_CANCELLED :
+		(timed_out || limited) ? QDI_SEARCH_TIMED_OUT : QDI_SEARCH_NOT_FOUND;
 }
 #endif
 
@@ -1790,6 +2357,12 @@ qboolean QuakeDataImport_RunAtStartup(const char *basedir, const char *userdir,
 						PL_MessageDialog("Quake Data Files Not Found",
 							"The computer search finished without finding a valid Quake PAK pair.",
 							ok_button, 1, 0, 0);
+					else if (search_result == QDI_SEARCH_TIMED_OUT)
+						PL_MessageDialog("Quake Data Search Stopped",
+							"The computer search reached its three-minute or size safety limit.\n\n"
+							"Choose Folder... to select the Quake folder, id1 folder, paks folder, "
+							"or a backup folder containing both PAK files.",
+							ok_button, 1, 0, 0);
 					continue;
 				}
 			}
@@ -1843,6 +2416,12 @@ qboolean QuakeDataImport_RunAtStartup(const char *basedir, const char *userdir,
 				if (search_result == QDI_SEARCH_NOT_FOUND)
 					PL_MessageDialog("Quake Data Files Not Found",
 						"The computer search finished without finding a valid Quake PAK pair.",
+						ok_button, 1, 0, 0);
+				else if (search_result == QDI_SEARCH_TIMED_OUT)
+					PL_MessageDialog("Quake Data Search Stopped",
+						"The computer search reached its three-minute or size safety limit.\n\n"
+						"Choose Folder... to select the Quake folder, id1 folder, paks folder, "
+						"or a backup folder containing both PAK files.",
 						ok_button, 1, 0, 0);
 				continue;
 			}
@@ -2042,6 +2621,7 @@ int QuakeDataImport_RunSelfTests(void)
 	}
 	{
 		char *vdf = QDI_Join(directory, "libraryfolders.vdf");
+		char *install_directory;
 #ifdef _WIN32
 		file = QDI_Open(vdf, L"wb");
 #else
@@ -2051,14 +2631,59 @@ int QuakeDataImport_RunSelfTests(void)
 		{
 			fputs("\"libraryfolders\" { "
 				"\"1\" { \"path\" \"D:\\\\Steam Library\" } "
-				"\"2\" \"/mnt/Steam Two\" }", file);
+				"\"2\" \"/mnt/Steam Two\" "
+				"\"installdir\" \"Custom Quake\" }", file);
 			fclose(file);
 		}
 		QDI_ParseVDF(vdf, &paths);
+		install_directory = QDI_ParseVDFString(vdf, "installdir");
 		QDI_SelfTestResult("VDF escapes and multiple libraries", paths.count == 2 &&
 			!strcmp(paths.items[0], "D:/Steam Library") &&
 			!strcmp(paths.items[1], "/mnt/Steam Two"), &failures);
+		QDI_SelfTestResult("Steam app manifest install directory",
+			install_directory && !strcmp(install_directory, "Custom Quake"),
+			&failures);
+		free(install_directory);
 		QDI_PathListFree(&paths); QDI_Remove(vdf); free(vdf);
+	}
+#ifdef _WIN32
+	{
+		char *metadata = QDI_Join(directory, "launcher-metadata.json");
+		if (metadata)
+			file = QDI_Open(metadata, L"wb");
+		else
+			file = NULL;
+		if (file)
+		{
+			fputs("{\"InstallLocation\":\"C:\\\\Games\\\\Quake\","
+				"\"nested\":{\"install_path\":\"D:\\\\Quake Backup\"}}",
+				file);
+			fclose(file);
+		}
+		if (metadata) QDI_AddJSONInstallPaths(metadata, &paths);
+		QDI_SelfTestResult("launcher JSON install locations", paths.count == 2 &&
+			!strcmp(paths.items[0], "C:/Games/Quake") &&
+			!strcmp(paths.items[1], "D:/Quake Backup"), &failures);
+		QDI_PathListFree(&paths);
+		if (metadata) { QDI_Remove(metadata); free(metadata); }
+	}
+#endif
+	{
+		qdi_search_queue_t queue = {0};
+		char *queued = NULL;
+		unsigned int depth = 0;
+		qboolean added = QDI_SearchQueuePush(&queue, "C:/Games/Quake", 0);
+		qboolean rejected_deep = !QDI_SearchQueuePush(&queue,
+			"C:/too/deep", QDI_SEARCH_MAX_DEPTH + 1);
+		qboolean popped = QDI_SearchQueuePop(&queue, &queued, &depth);
+		queue.total_enqueued = QDI_SEARCH_MAX_ENQUEUED;
+		QDI_SearchQueuePush(&queue, "C:/limited", 0);
+		QDI_SelfTestResult("bounded breadth-first search queue",
+			added && rejected_deep && popped && queued && depth == 0 &&
+			!strcmp(queued, "C:/Games/Quake") && queue.limited &&
+			queue.head == queue.count, &failures);
+		free(queued);
+		QDI_SearchQueueFree(&queue);
 	}
 	{
 		char *id1 = QDI_Join(directory, "id1");
@@ -2071,6 +2696,26 @@ int QuakeDataImport_RunSelfTests(void)
 			QDI_FreeCandidate(&normalized); QDI_Remove(p0); QDI_Remove(p1); free(p0); free(p1); }
 		QDI_RemoveSelfTestDirectory(paks); QDI_RemoveSelfTestDirectory(id1);
 		free(paks); free(id1);
+	}
+	{
+		char *backup = QDI_Join(directory, "my quake backup");
+		char *p0 = NULL, *p1 = NULL;
+		qdi_candidate_t backup_candidate = {0};
+		qboolean setup = backup && QDI_Mkdir(backup);
+		if (backup)
+		{
+			p0 = QDI_Join(backup, "PAK0.PAK");
+			p1 = QDI_Join(backup, "pak1.pak");
+		}
+		setup = setup && p0 && p1 && QDI_CopyToNewFile(valid, p0) &&
+			QDI_CopyToNewFile(valid, p1);
+		QDI_SelfTestResult("arbitrary backup folder candidate", setup &&
+			QDI_TryCandidateDirectory(backup, &backup_candidate), &failures);
+		QDI_FreeCandidate(&backup_candidate);
+		if (p0) QDI_Remove(p0);
+		if (p1) QDI_Remove(p1);
+		if (backup) QDI_RemoveSelfTestDirectory(backup);
+		free(p0); free(p1); free(backup);
 	}
 #ifndef _WIN32
 	{

@@ -37,6 +37,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include <sys/types.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <io.h>
 #include <direct.h>
@@ -169,17 +170,33 @@ int Sys_remove (const char *path)
 
 qboolean Sys_GetExecutablePath(char *out, size_t outsize)
 {
+	wchar_t *wide;
 	DWORD len;
+	int converted;
 
 	if (!out || outsize == 0)
 		return false;
-
-	len = GetModuleFileNameA(NULL, out, (DWORD)outsize);
-	if (len > 0 && (size_t)len < outsize)
-		return true;
-
 	out[0] = '\0';
-	return false;
+	if (outsize > INT_MAX)
+		return false;
+	wide = (wchar_t *)malloc(32768u * sizeof(*wide));
+	if (!wide)
+		return false;
+	len = GetModuleFileNameW(NULL, wide, 32768u);
+	if (len == 0 || len >= 32768u)
+	{
+		free(wide);
+		return false;
+	}
+	converted = WideCharToMultiByte(CP_UTF8, 0, wide, -1, out,
+		(int)outsize, NULL, NULL);
+	free(wide);
+	if (converted <= 0)
+	{
+		out[0] = '\0';
+		return false;
+	}
+	return true;
 }
 
 unsigned long Sys_GetProcessId(void)

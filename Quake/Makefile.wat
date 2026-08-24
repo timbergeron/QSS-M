@@ -223,6 +223,7 @@ OBJS = strlcat.obj &
 	cmd.obj &
 	common.obj &
 	quake_data_import.obj &
+	json.obj &
 	ice_sha1.obj &
 	ice_sha2.obj &
 	mdfour.obj &

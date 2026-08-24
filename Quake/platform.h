@@ -66,6 +66,17 @@ int PL_MessageDialog(const char *title, const char *message,
 qboolean PL_SelectDirectory(const char *title, const char *initial_path,
 	char *result, size_t result_size);
 
+#if defined(_WIN32) && !defined(__WATCOMC__)
+typedef struct pl_search_progress_s pl_search_progress_t;
+/* Modeless startup-safe status UI. Update pumps messages and returns false
+ * after the user cancels or closes the window. */
+pl_search_progress_t *PL_SearchProgressBegin(const char *title,
+	const char *phase);
+qboolean PL_SearchProgressUpdate(pl_search_progress_t *progress,
+	const char *phase, const char *location, unsigned long long directories);
+void PL_SearchProgressEnd(pl_search_progress_t *progress);
+#endif
+
 /* Compatibility wrapper for older callers. */
 qboolean PL_ConfirmDialog(const char *title, const char *text);
 
