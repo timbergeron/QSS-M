@@ -133,6 +133,8 @@ static struct
 	char				votemap[MAX_QPATH];
 	// Explicit destination captured before a local map load starts.
 	char				loading_map[MAX_QPATH];
+	// Keep a same-map load hidden after CL_ClearState forgets the old map name.
+	qboolean			hide_loading_map;
 } mapshots;
 
 static com_negative_cache_t mapshot_negative_cache;
@@ -928,13 +930,30 @@ void Mapshot_Prefetch (const char *map)
 	Mapshot_ResolvePic(map);
 }
 
+static qboolean Mapshot_IsCurrentMap (const char *map)
+{
+	if (!map || !map[0] || cls.state != ca_connected ||
+		cls.signon != SIGNONS || !cl.mapname[0])
+		return false;
+
+	if (FS_IsCaseSensitive())
+		return !strcmp(map, cl.mapname);
+	return !q_strcasecmp(map, cl.mapname);
+}
+
 void Mapshot_SetLoadingMap (const char *map)
 {
 	char normalized[MAX_QPATH];
 
 	mapshots.loading_map[0] = '\0';
+	mapshots.hide_loading_map = false;
 	if (!Mapshot_NormalizeSegment(normalized, sizeof(normalized), map))
 		return;
+	if (Mapshot_IsCurrentMap(normalized))
+	{
+		mapshots.hide_loading_map = true;
+		return;
+	}
 	q_strlcpy(mapshots.loading_map, normalized, sizeof(mapshots.loading_map));
 	if ((int)cl_mapshots.value >= MAPSHOT_MODE_LOADING)
 		Mapshot_Prefetch(normalized);
@@ -942,6 +961,8 @@ void Mapshot_SetLoadingMap (const char *map)
 
 const char *Mapshot_LoadingMap (void)
 {
+	if (mapshots.hide_loading_map)
+		return NULL;
 	if (mapshots.loading_map[0])
 		return mapshots.loading_map;
 	if (mapshots.votemap[0])
@@ -952,6 +973,7 @@ const char *Mapshot_LoadingMap (void)
 void Mapshot_EndLoading (void)
 {
 	mapshots.loading_map[0] = '\0';
+	mapshots.hide_loading_map = false;
 }
 
 /*
@@ -974,6 +996,8 @@ static void Mapshot_CheckVoteMap (void)
 		Info_GetKey(cl.serverinfo, "votemap", raw, sizeof(raw));
 	if (raw[0])
 		Mapshot_NormalizeSegment(votemap, sizeof(votemap), raw);
+	if (Mapshot_IsCurrentMap(votemap))
+		votemap[0] = '\0';
 
 	if (!strcmp(votemap, mapshots.votemap))
 		return;

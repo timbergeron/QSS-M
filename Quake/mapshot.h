@@ -69,7 +69,8 @@ qboolean Mapshot_PicPending (const char *map);
 void Mapshot_Prefetch (const char *map);
 
 // Loading-plaque consumer.  Local map commands set an explicit destination;
-// an advertised vote-map is used as a fallback for remote transitions.
+// an advertised vote-map is used as a fallback for remote transitions.  A
+// destination matching the fully loaded current map is intentionally hidden.
 void Mapshot_SetLoadingMap (const char *map);
 const char *Mapshot_LoadingMap (void);
 void Mapshot_EndLoading (void);
