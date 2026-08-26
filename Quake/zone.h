@@ -105,17 +105,20 @@ typedef struct cache_user_s
 	void	*data;
 } cache_user_t;
 
+struct qmodel_s;
+
 void Cache_Flush (void);
+void Cache_Shutdown (void);
 
 void *Cache_Check (cache_user_t *c);
 // returns the cached data, and moves to the head of the LRU list
 // if present, otherwise returns NULL
 
-void Cache_Free (cache_user_t *c, qboolean freetextures); //johnfitz -- added second argument
+void Cache_Free (cache_user_t *c);
 
-void *Cache_Alloc (cache_user_t *c, int size, const char *name);
-// Returns NULL if all purgable data was tossed and there still
-// wasn't enough room.
+void *Cache_Alloc (cache_user_t *c, int size, const char *name, struct qmodel_s *textureowner);
+// Allocates a separately backed cache entry. Recently used entries grow the
+// adaptive cache budget; stale entries remain LRU-purgable.
 
 void Cache_Report (void);
 

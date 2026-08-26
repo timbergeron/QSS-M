@@ -3848,8 +3848,6 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
 
 	for(surf=0;;surf++)
 	{
-		struct gltexture_s *colormapped_base = NULL;
-
 		rs_aliaspolys += paliashdr->numtris;
 
 		//
@@ -3878,10 +3876,7 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
 				{
 					struct gltexture_s *t = TexMgr_ColormapTexture(tex.base, CL_PLColours_FromLegacy(e->netstate.colormap&15), CL_PLColours_FromLegacy(e->netstate.colormap>>4));
 					if (t)
-					{
 						tex.base = t;
-						colormapped_base = t;
-					}
 				}
 			}
 			else if (cl.scores && e->netstate.colormap>=1&&e->netstate.colormap<=cl.maxclients)
@@ -3930,66 +3925,12 @@ static void R_DrawAliasModelPrepared (entity_t *e, const lerpdata_t *prepared)
 						t = TexMgr_ColormapTexture(tex.base, sb->pants, sb->shirt);
 
 					if (t)
-					{
 						tex.base = t;
-						colormapped_base = t;
-					}
 				}
 			}
 		}
 		if (!gl_fullbrights.value)
 			tex.luma = NULL;
-
-		// woods #md5crash -- the skin/colormap work above can call TexMgr_ColormapTexture,
-		// which allocates from the hunk; if that grows a new hunk segment it triggers a
-		// Cache_Flush that frees the very model we are drawing (alias extradata lives in the
-		// relocatable cache). Re-fetch our surface pointer so the draw below and the surface
-		// walk never dereference freed memory.
-		{
-			aliashdr_t *old_paliashdr = paliashdr;
-			struct skintextures_s old_tex = tex;
-			struct skintextures_s fresh_tex;
-			aliashdr_t *rebase = (aliashdr_t *)Mod_Extradata (e->model);
-			int rs;
-
-			if (!rebase)
-				goto cleanup;
-			paliashdr = rebase;
-			for (rs = 0; rs < surf && paliashdr->nextsurface; rs++)
-				paliashdr = (aliashdr_t*)((byte*)paliashdr + paliashdr->nextsurface);
-
-			if (paliashdr->numskins <= 0)
-				fresh_tex.base = fresh_tex.luma = fresh_tex.lower = fresh_tex.upper = NULL;
-			else
-				fresh_tex = paliashdr->textures[skinnum][anim];
-
-			if (colormapped_base)
-				fresh_tex.base = colormapped_base;
-			if (!gl_fullbrights.value)
-				fresh_tex.luma = NULL;
-
-			if (old_paliashdr != paliashdr ||
-				old_tex.base != fresh_tex.base ||
-				old_tex.luma != fresh_tex.luma ||
-				old_tex.lower != fresh_tex.lower ||
-				old_tex.upper != fresh_tex.upper)
-			{
-				Con_DPrintf("R_DrawAliasModel: refreshed alias textures after cache rebase: model=%s surf=%d skin=%d anim=%d hdr=%p->%p base=%p->%p luma=%p->%p lower=%p->%p upper=%p->%p%s\n",
-					e->model->name, surf, skinnum, anim,
-					(void *)old_paliashdr, (void *)paliashdr,
-					(void *)old_tex.base, (void *)fresh_tex.base,
-					(void *)old_tex.luma, (void *)fresh_tex.luma,
-					(void *)old_tex.lower, (void *)fresh_tex.lower,
-					(void *)old_tex.upper, (void *)fresh_tex.upper,
-					colormapped_base ? " preserved_colormap" : "");
-				if (fresh_tex.base)
-					Con_DPrintf("R_DrawAliasModel: fresh base texture name=%s texnum=%u owner=%s\n",
-						fresh_tex.base->name, fresh_tex.base->texnum,
-						fresh_tex.base->owner ? fresh_tex.base->owner->name : "<none>");
-			}
-
-			tex = fresh_tex;
-		}
 
 		//
 		// draw it

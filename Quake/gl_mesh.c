@@ -991,7 +991,7 @@ qboolean Mod_LoadMD3Model (qmodel_t *mod, void *buffer, size_t file_size)
 //
 // move the complete, relocatable alias model to the cache
 //
-	Cache_Alloc (&mod->cache, total, loadname);
+	Cache_Alloc (&mod->cache, total, loadname, mod);
 	if (!mod->cache.data)
 		return true;
 	memcpy (mod->cache.data, outhdr, total);
@@ -1701,7 +1701,7 @@ void Mod_LoadIQMModel (qmodel_t *mod, const void *buffer)
 //
 // move the complete, relocatable alias model to the cache
 //
-	Cache_Alloc (&mod->cache, total, loadname);
+	Cache_Alloc (&mod->cache, total, loadname, mod);
 	if (!mod->cache.data)
 		return;
 	memcpy (mod->cache.data, outhdr, total);
@@ -2707,7 +2707,7 @@ void Mod_LoadMD5MeshModel (qmodel_t *mod, const void *buffer)
 //
 // move the complete, relocatable alias model to the cache
 //
-	Cache_Alloc (&mod->cache, total, loadname);
+	Cache_Alloc (&mod->cache, total, loadname, mod);
 	if (!mod->cache.data)
 		return;
 	memcpy (mod->cache.data, outhdr, total);

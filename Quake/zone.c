@@ -44,9 +44,6 @@ typedef struct
 	memblock_t	*rover;
 } memzone_t;
 
-void Cache_FreeLow (int new_low_hunk);
-
-
 /*
 ==============================================================================
 
@@ -541,30 +538,6 @@ static int Hunk_SegForOfs (int ofs)
 
 /*
 ===================
-Hunk_SegForPtr
-===================
-*/
-static int Hunk_SegForPtr (const void *ptr)
-{
-	int i;
-
-	for (i = hunk_numsegments - 1; i >= 0; i--)
-	{
-		const hunkseg_t *seg = hunk_segments[i];
-		const byte *begin = SEG_MEM (seg);
-		const byte *end = begin + seg->size;
-		if (PTR_IN_RANGE (ptr, begin, end))
-			return i;
-	}
-
-	Sys_Error ("Hunk_SegForPtr: bad pointer");
-
-	return -1;
-}
-
-
-/*
-===================
 Hunk_AllocInternal
 ===================
 */
@@ -612,8 +585,6 @@ static void *Hunk_AllocInternal (int size, const char *name, hunkflags_t flags)
 		if (hunk_numsegments == MAX_SEGMENTS)
 			Sys_Error ("Hunk_Alloc: segment overflow");
 
-		Cache_Flush ();
-
 		if (LASTSEG->base > HUNK_MAX_SIZE - LASTSEG->size)
 			Sys_Error ("Hunk_Alloc: segment overflow");
 
@@ -645,8 +616,6 @@ static void *Hunk_AllocInternal (int size, const char *name, hunkflags_t flags)
 	h = (hunk_t *) (SEG_MEM (seg) + hunk_low_used - seg->base);
 	hunk_low_used += size;
 	seg->used = hunk_low_used - seg->base;
-
-	Cache_FreeLow (hunk_low_used);
 
 	if (flags & HF_CLEAR)
 		memset (h, 0, size);
@@ -784,6 +753,9 @@ CACHE MEMORY
 */
 
 #define CACHENAME_LEN	32
+#define CACHE_INITIAL_BUDGET_MB	64u
+#define CACHE_RECENT_FRAMES	2u
+
 typedef struct cache_system_s
 {
 	int			size;		// including this header
@@ -791,68 +763,41 @@ typedef struct cache_system_s
 	char			name[CACHENAME_LEN];
 	struct cache_system_s	*prev, *next;
 	struct cache_system_s	*lru_prev, *lru_next;	// for LRU flushing
+	unsigned int		last_used_frame;
+	qmodel_t		*textureowner;
 } cache_system_t;
 
-cache_system_t *Cache_TryAlloc (int size, qboolean nobottom);
+// Cached model payloads contain SIMD-friendly data and must stay 16-byte aligned.
+COMPILE_TIME_ASSERT (cache_header_alignment, sizeof(cache_system_t) % 16 == 0);
 
-cache_system_t	cache_head;
+static cache_system_t	cache_head;
+static size_t		cache_bytes;
+static size_t		cache_peak_bytes;
+static size_t		cache_budget;
+static size_t		cache_max_budget;
+static unsigned int	cache_evictions;
+static qboolean		cache_limit_warned;
+static qboolean		cache_initialized;
 
-/*
-===========
-Cache_Move
-===========
-*/
-void Cache_Move ( cache_system_t *c)
+static size_t Cache_MaxBudget (void)
 {
-	cache_system_t		*new_cs;
+	size_t max_mb = 1024;
 
-// we are clearing up space at the bottom, so only allocate it late
-	new_cs = Cache_TryAlloc (c->size, true);
-	if (new_cs)
+#if defined(USE_SDL2)
 	{
-//		Con_Printf ("cache_move ok\n");
-
-		Q_memcpy ( new_cs+1, c+1, c->size - sizeof(cache_system_t) );
-		new_cs->user = c->user;
-		Q_memcpy (new_cs->name, c->name, sizeof(new_cs->name));
-		Cache_Free (c->user, false); //johnfitz -- added second argument
-		new_cs->user->data = (void *)(new_cs+1);
+		const int system_ram_mb = SDL_GetSystemRAM ();
+		if (system_ram_mb > 0)
+			max_mb = (size_t)system_ram_mb / 4;
 	}
+#endif
+
+	if (sizeof(void *) <= 4)
+		max_mb = q_min (max_mb, (size_t)512);
 	else
-	{
-//		Con_Printf ("cache_move failed\n");
+		max_mb = q_min (max_mb, (size_t)2048);
+	max_mb = q_max (max_mb, (size_t)256);
 
-		Cache_Free (c->user, true); // tough luck... //johnfitz -- added second argument
-	}
-}
-
-/*
-============
-Cache_FreeLow
-
-Throw things out until the hunk can be expanded to the given point
-============
-*/
-void Cache_FreeLow (int new_low_hunk)
-{
-	cache_system_t	*c;
-	hunkseg_t		*seg;
-	int				ofs;
-
-	// can only allocate space in the last segment
-	new_low_hunk = q_max (new_low_hunk, LASTSEG->base);
-
-	while (1)
-	{
-		c = cache_head.next;
-		if (c == &cache_head)
-			return;		// nothing in cache at all
-		seg = hunk_segments[Hunk_SegForPtr (c)];
-		ofs = (int)((byte *)c - SEG_MEM (seg));
-		if (ofs + seg->base >= new_low_hunk)
-			return;		// there is space to grow the hunk
-		Cache_Move ( c );	// reclaim the space
-	}
+	return max_mb * 1024 * 1024;
 }
 
 void Cache_UnlinkLRU (cache_system_t *cs)
@@ -877,93 +822,94 @@ void Cache_MakeLRU (cache_system_t *cs)
 	cache_head.lru_next = cs;
 }
 
-/*
-============
-Cache_TryAlloc
-
-Looks for a free block of memory between the high and low hunk marks
-Size should already include the header and padding
-============
-*/
-cache_system_t *Cache_TryAlloc (int size, qboolean nobottom)
+static qboolean Cache_WasUsedRecently (const cache_system_t *cs)
 {
-	cache_system_t	*cs, *new_cs;
-	int ofs = q_max (hunk_low_used, LASTSEG->base);
-	int used;
+	return (unsigned int)host_framecount - cs->last_used_frame <= CACHE_RECENT_FRAMES;
+}
 
-// is the cache completely empty?
-	if (!nobottom && cache_head.prev == &cache_head)
+static qboolean Cache_GrowBudget (size_t required)
+{
+	size_t new_budget = cache_budget;
+
+	while (new_budget < required && new_budget < cache_max_budget)
 	{
-		used = ofs - LASTSEG->base;
-		if (used < 0 || used > LASTSEG->size || size > LASTSEG->size - used)
-			Sys_Error ("Cache_TryAlloc: %i is greater then free hunk", size);
-
-		new_cs = (cache_system_t *) (SEG_MEM (LASTSEG) + used);
-		memset (new_cs, 0, sizeof(*new_cs));
-		new_cs->size = size;
-
-		cache_head.prev = cache_head.next = new_cs;
-		new_cs->prev = new_cs->next = &cache_head;
-
-		Cache_MakeLRU (new_cs);
-		return new_cs;
+		if (new_budget > cache_max_budget / 2)
+			new_budget = cache_max_budget;
+		else
+			new_budget *= 2;
 	}
 
-// search from the bottom up for space
+	if (new_budget <= cache_budget)
+		return false;
 
-	used = ofs - LASTSEG->base;
-	if (used < 0 || used > LASTSEG->size)
-		Sys_Error ("Cache_TryAlloc: bad hunk mark");
-	new_cs = (cache_system_t *) (SEG_MEM (LASTSEG) + used);
-	cs = cache_head.next;
+	cache_budget = new_budget;
+	Sys_Printf ("Growing data cache budget to %.1f MiB\n",
+		cache_budget / 1048576.0);
+	return true;
+}
 
-	do
+/*
+ * Cache users may keep the returned pointer for the rest of the current host
+ * frame.  Never reclaim such an entry under budget or malloc pressure: model
+ * eviction also releases its GL textures, so doing so could invalidate both
+ * CPU and renderer state that is still in flight.
+ */
+static cache_system_t *Cache_FindEvictableLRU (void)
+{
+	cache_system_t *cs;
+
+	for (cs = cache_head.lru_prev; cs != &cache_head; cs = cs->lru_prev)
 	{
-		if (!nobottom || cs != cache_head.next)
+		if (cs->last_used_frame != (unsigned int)host_framecount)
+			return cs;
+	}
+
+	return NULL;
+}
+
+static qboolean Cache_EvictLRU (void)
+{
+	cache_system_t *cs = Cache_FindEvictableLRU ();
+
+	if (!cs)
+		return false;
+
+	cache_evictions++;
+	Cache_Free (cs->user);
+	return true;
+}
+
+static void Cache_MakeRoom (size_t size)
+{
+	size_t required;
+
+	if (cache_bytes > (size_t)-1 - size)
+		Sys_Error ("Cache_Alloc: size overflow");
+	required = cache_bytes + size;
+
+	while (required > cache_budget)
+	{
+		cache_system_t *victim = cache_head.lru_prev;
+
+		if (victim == &cache_head || Cache_WasUsedRecently (victim))
 		{
-			if ( (byte *)cs - (byte *)new_cs >= size)
-			{	// found space
-				memset (new_cs, 0, sizeof(*new_cs));
-				new_cs->size = size;
+			if (Cache_GrowBudget (required))
+				continue;
+		}
 
-				new_cs->next = cs;
-				new_cs->prev = cs->prev;
-				cs->prev->next = new_cs;
-				cs->prev = new_cs;
-
-				Cache_MakeLRU (new_cs);
-
-				return new_cs;
+		if (!Cache_EvictLRU ())
+		{
+			/* The adaptive ceiling is soft while every entry is in use this frame. */
+			if (!cache_limit_warned)
+			{
+				cache_limit_warned = true;
+				Con_Warning ("Data cache active working set exceeded %.1f MiB; temporarily exceeding budget\n",
+					cache_max_budget / 1048576.0);
 			}
+			break;
 		}
-
-	// continue looking
-		new_cs = (cache_system_t *)((byte *)cs + cs->size);
-		cs = cs->next;
-
-	} while (cs != &cache_head);
-
-// try to allocate one at the very end
-	if ((byte *)new_cs >= SEG_MEM (LASTSEG) && (byte *)new_cs <= SEG_MEM (LASTSEG) + LASTSEG->size)
-	{
-		used = (int)((byte *)new_cs - SEG_MEM (LASTSEG));
-		if (size <= LASTSEG->size - used)
-		{
-			memset (new_cs, 0, sizeof(*new_cs));
-			new_cs->size = size;
-
-			new_cs->next = &cache_head;
-			new_cs->prev = cache_head.prev;
-			cache_head.prev->next = new_cs;
-			cache_head.prev = new_cs;
-
-			Cache_MakeLRU (new_cs);
-
-			return new_cs;
-		}
+		required = cache_bytes + size;
 	}
-
-	return NULL;		// couldn't allocate
 }
 
 /*
@@ -975,8 +921,23 @@ Throw everything out, so new data will be demand cached
 */
 void Cache_Flush (void)
 {
+	if (!cache_initialized)
+		return;
+
 	while (cache_head.next != &cache_head)
-		Cache_Free ( cache_head.next->user, true); // reclaim the space //johnfitz -- added second argument
+	{
+		cache_system_t *cs = cache_head.next;
+		Cache_Free (cs->user);
+	}
+}
+
+void Cache_Shutdown (void)
+{
+	if (!cache_initialized)
+		return;
+
+	Cache_Flush ();
+	cache_initialized = false;
 }
 
 void Cache_Flush_f (cvar_t* var) // woods #loadskins
@@ -1008,7 +969,9 @@ Cache_Report
 */
 void Cache_Report (void)
 {
-	Con_DPrintf ("%4.1f megabyte data cache\n", (Hunk_Size () - hunk_low_used) / (float)(1024*1024) );
+	Con_DPrintf ("%.1f MiB data cache used (%.1f MiB peak, %.1f MiB budget, %u evictions)\n",
+		cache_bytes / 1048576.0, cache_peak_bytes / 1048576.0,
+		cache_budget / 1048576.0, cache_evictions);
 }
 
 /*
@@ -1019,8 +982,19 @@ Cache_Init
 */
 void Cache_Init (void)
 {
+	if (cache_initialized)
+		Sys_Error ("Cache_Init: already initialized");
+
+	memset (&cache_head, 0, sizeof(cache_head));
 	cache_head.next = cache_head.prev = &cache_head;
 	cache_head.lru_next = cache_head.lru_prev = &cache_head;
+	cache_bytes = cache_peak_bytes = 0;
+	cache_evictions = 0;
+	cache_limit_warned = false;
+	cache_budget = (size_t)CACHE_INITIAL_BUDGET_MB * 1024 * 1024;
+	cache_max_budget = Cache_MaxBudget ();
+	cache_budget = q_min (cache_budget, cache_max_budget);
+	cache_initialized = true;
 
 	Cmd_AddCommand ("flush", Cache_Flush);
 }
@@ -1032,7 +1006,7 @@ Cache_Free
 Frees the memory and removes it from the LRU list
 ==============
 */
-void Cache_Free (cache_user_t *c, qboolean freetextures) //johnfitz -- added second argument
+void Cache_Free (cache_user_t *c)
 {
 	cache_system_t	*cs;
 
@@ -1048,12 +1022,14 @@ void Cache_Free (cache_user_t *c, qboolean freetextures) //johnfitz -- added sec
 	c->data = NULL;
 
 	Cache_UnlinkLRU (cs);
+	if (cache_bytes < (size_t)cs->size)
+		Sys_Error ("Cache_Free: byte count underflow");
+	cache_bytes -= (size_t)cs->size;
 
-	//johnfitz -- if a model becomes uncached, free the gltextures.  This only works
-	//becuase the cache_user_t is the last component of the qmodel_t struct.  Should
-	//fail harmlessly if *c is actually part of an sfx_t struct.  I FEEL DIRTY
-	if (freetextures)
-		TexMgr_FreeTexturesForOwner ((qmodel_t *)(c + 1) - 1);
+	if (cs->textureowner)
+		TexMgr_FreeTexturesForOwner (cs->textureowner);
+
+	free (cs);
 }
 
 
@@ -1075,6 +1051,7 @@ void *Cache_Check (cache_user_t *c)
 // move to head of LRU
 	Cache_UnlinkLRU (cs);
 	Cache_MakeLRU (cs);
+	cs->last_used_frame = (unsigned int)host_framecount;
 
 	return c->data;
 }
@@ -1085,7 +1062,7 @@ void *Cache_Check (cache_user_t *c)
 Cache_Alloc
 ==============
 */
-void *Cache_Alloc (cache_user_t *c, int size, const char *name)
+void *Cache_Alloc (cache_user_t *c, int size, const char *name, qmodel_t *textureowner)
 {
 	cache_system_t	*cs;
 
@@ -1099,27 +1076,32 @@ void *Cache_Alloc (cache_user_t *c, int size, const char *name)
 		Sys_Error ("Cache_Alloc: size %i", size);
 
 	size = (size + sizeof(cache_system_t) + 15) & ~15;
+	Cache_MakeRoom ((size_t)size);
 
-// find memory for it
-	while (1)
-	{
-		cs = Cache_TryAlloc (size, false);
-		if (cs)
-		{
-			q_strlcpy (cs->name, name, CACHENAME_LEN);
-			c->data = (void *)(cs+1);
-			cs->user = c;
-			break;
-		}
+	cs = (cache_system_t *)malloc ((size_t)size);
+	while (!cs && Cache_EvictLRU ())
+		cs = (cache_system_t *)malloc ((size_t)size);
+	if (!cs)
+		Sys_Error ("Cache_Alloc: out of memory on %i bytes", size);
 
-	// free the least recently used cahedat
-		if (cache_head.lru_prev == &cache_head)
-			Sys_Error ("Cache_Alloc: out of memory"); // not enough memory at all
+	memset (cs, 0, sizeof(*cs));
+	cs->size = size;
+	cs->user = c;
+	cs->textureowner = textureowner;
+	cs->last_used_frame = (unsigned int)host_framecount;
+	q_strlcpy (cs->name, name, CACHENAME_LEN);
+	c->data = (void *)(cs + 1);
 
-		Cache_Free (cache_head.lru_prev->user, true); //johnfitz -- added second argument
-	}
+	cs->next = cache_head.next;
+	cs->prev = &cache_head;
+	cache_head.next->prev = cs;
+	cache_head.next = cs;
+	Cache_MakeLRU (cs);
 
-	return Cache_Check (c);
+	cache_bytes += (size_t)size;
+	cache_peak_bytes = q_max (cache_peak_bytes, cache_bytes);
+
+	return c->data;
 }
 
 //============================================================================

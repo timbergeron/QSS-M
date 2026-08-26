@@ -5471,7 +5471,7 @@ static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer, int pvtype)
 
 	GLMesh_LoadVertexBuffer (mod, pheader);
 
-	Cache_Alloc (&mod->cache, total, loadname);
+	Cache_Alloc (&mod->cache, total, loadname, mod);
 	if (!mod->cache.data)
 	{
 		Hunk_FreeToLowMark (start);

@@ -965,7 +965,7 @@ static void S_RawClearStream(streaming_t *s)
 
 	// free cache.
 	if (s->sfx.cache.data)
-		Cache_Free(&s->sfx.cache, false);
+		Cache_Free(&s->sfx.cache);
 
 	// clear whole struct.
 	memset(s, 0, sizeof(*s));
@@ -1037,7 +1037,7 @@ void S_RawAudio(int sourceid, byte *data, unsigned int speed, unsigned int sampl
 		// allocate cache.
 		newsize = MAX_RAW_CACHE+sizeof(sfxcache_t);
 
-		newcache = Cache_Alloc(&s->sfx.cache, newsize, "rawaudio");
+		newcache = Cache_Alloc(&s->sfx.cache, newsize, "rawaudio", NULL);
 		if (!newcache)
 		{
 			Con_DPrintf("Cache_Alloc failed\n");

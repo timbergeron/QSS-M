@@ -585,7 +585,7 @@ typedef struct qmodel_s
 	void		*bmodel_drawcache;	//tb -- cached static index buffer for fast bmodel-entity drawing (see r_world.c)
 	void		*hull_debug_cache;	// exact collision-hull debug geometry (see r_hulldebug.c)
 
-	cache_user_t	cache;		// only access through Mod_Extradata; must remain the last qmodel_t field (see Cache_Free)
+	cache_user_t	cache;		// only access through Mod_Extradata
 
 } qmodel_t;
 

@@ -192,7 +192,7 @@ static void S_SoundPreview_Clear(void)
 {
 	S_SoundPreview_StopChannel();
 	if (sound_preview_sfx.cache.data)
-		Cache_Free(&sound_preview_sfx.cache, false);
+		Cache_Free(&sound_preview_sfx.cache);
 	memset(&sound_preview_sfx, 0, sizeof(sound_preview_sfx));
 	memset(&sound_preview, 0, sizeof(sound_preview));
 	sound_preview.gain = 1.0f;
@@ -621,7 +621,7 @@ void S_Restart_f(void)
 		{
 			s = &known_sfx[i];
 			if (s->cache.data)
-				Cache_Free(&s->cache, false);
+				Cache_Free(&s->cache);
 		}
 	}
 }
@@ -1754,7 +1754,7 @@ void S_ClearPrecache (void)
 	for (sfx = known_sfx, i = 0; i < num_sfx; i++, sfx++)
 	{
 		if (sfx->cache.data)
-			Cache_Free (&sfx->cache, false);
+			Cache_Free (&sfx->cache);
 	}
 
 	memset (known_sfx, 0, MAX_SFX * sizeof(*known_sfx));

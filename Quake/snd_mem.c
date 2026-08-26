@@ -221,7 +221,7 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 				return NULL;
 			}
 
-			sc = (sfxcache_t *) Cache_Alloc ( &s->cache, len + sizeof(sfxcache_t), s->name);
+			sc = (sfxcache_t *) Cache_Alloc ( &s->cache, len + sizeof(sfxcache_t), s->name, NULL);
 			if (!sc)
 			{
 				free(decoded);
@@ -295,7 +295,7 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 		return NULL;
 	}
 
-	sc = (sfxcache_t *) Cache_Alloc ( &s->cache, len + sizeof(sfxcache_t), s->name);
+	sc = (sfxcache_t *) Cache_Alloc ( &s->cache, len + sizeof(sfxcache_t), s->name, NULL);
 	if (!sc)
 	{
 		free (data);

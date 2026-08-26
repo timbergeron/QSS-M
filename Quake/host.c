@@ -2813,12 +2813,14 @@ void Host_Shutdown(void)
 		BGM_Shutdown();
 		CDAudio_Shutdown ();
 		S_Shutdown ();
+		Cache_Shutdown ();
 		IN_Shutdown ();
 		R_GrassShutdown();
 		VID_Shutdown();
 	}
 	else // woods #serverhistory
 	{
+		Cache_Shutdown ();
 		History_Shutdown();
 	}
 
