@@ -6794,18 +6794,40 @@ static qboolean M_DownloadMaps_NameIsActive(const char *name)
 	return !q_strcasecmp(active_name, display_name);
 }
 
-static void M_DownloadMaps_DrawProgressPercent(int x, int y, int progress)
+static void M_FormatDownloadRate(int bytes_per_second, char *out, size_t outsize)
 {
-	char digits[8];
+	double kb, mb, gb;
 
-	q_snprintf(digits, sizeof(digits), "%d", progress);
-	M_Print2(x, y, digits);
-	M_Print(x + (int)strlen(digits) * 8, y, "%");
+	if (bytes_per_second < 0)
+		bytes_per_second = 0;
+	kb = bytes_per_second / 1024.0;
+	mb = kb / 1024.0;
+	gb = mb / 1024.0;
+
+	if (gb >= 1.0)
+		q_snprintf(out, outsize, gb < 10.0 ? "%.1fG/s" : "%.0fG/s", gb);
+	else if (mb >= 1.0)
+		q_snprintf(out, outsize, mb < 10.0 ? "%.1fM/s" : "%.0fM/s", mb);
+	else
+		q_snprintf(out, outsize, "%.0fK/s", kb);
+}
+
+static void M_DownloadMaps_DrawProgress(int x, int y, const char *progress)
+{
+	while (*progress)
+	{
+		int ch = (unsigned char)*progress++;
+		int glyph = (ch >= '0' && ch <= '9') ? ch - 30 : ch + 128;
+
+		M_DrawCharacter(x, y, glyph);
+		x += 8;
+	}
 }
 
 static void M_DownloadMaps_DrawActiveDownload(int x, int y, int maxwidth, const char *display_name)
 {
 	char visible_name[MAX_QPATH];
+	char progress_text[16] = "";
 	int maxchars, namechars, progress = -1, progresschars = 0;
 
 	if (!display_name || !display_name[0])
@@ -6818,7 +6840,13 @@ static void M_DownloadMaps_DrawActiveDownload(int x, int y, int maxwidth, const 
 			progress = 0;
 		else if (progress > 100)
 			progress = 100;
-		progresschars = (progress >= 100) ? 4 : (progress >= 10 ? 3 : 2);
+		{
+			char rate[7];
+			M_FormatDownloadRate(cls.download.rate, rate, sizeof(rate));
+			q_snprintf(progress_text, sizeof(progress_text), "%d%% %s",
+				progress, rate);
+			progresschars = (int)strlen(progress_text);
+		}
 	}
 
 	maxchars = maxwidth / 8;
@@ -6841,7 +6869,7 @@ static void M_DownloadMaps_DrawActiveDownload(int x, int y, int maxwidth, const 
 		int progress_x = x + namelen * 8 + (namelen > 0 ? 8 : 0);
 
 		if (progress_x + progresschars * 8 <= x + maxwidth)
-			M_DownloadMaps_DrawProgressPercent(progress_x, y, progress);
+			M_DownloadMaps_DrawProgress(progress_x, y, progress_text);
 	}
 }
 
@@ -36970,7 +36998,7 @@ Download Mods Menu
  * neither column draws under the scrollbar when the list overflows. */
 #define DOWNLOAD_MODS_LIST_COLS	36
 #define DOWNLOAD_MODS_SCROLLBAR_COLS	2
-#define DOWNLOAD_MODS_NAME_CHARS	24
+#define DOWNLOAD_MODS_NAME_CHARS	22
 #define DOWNLOAD_MODS_DETAIL_CHARS \
 	(DOWNLOAD_MODS_LIST_COLS - DOWNLOAD_MODS_SCROLLBAR_COLS \
 		- DOWNLOAD_MODS_NAME_CHARS - 1)
@@ -38080,6 +38108,46 @@ static void M_DownloadMods_BeginSharedDownloadProgress(const char *display_name)
 	cls.download.starttime = (float)realtime;
 	cls.download.current[0] = '\0';
 	q_strlcpy(cls.download.current, display_name, sizeof(cls.download.current));
+}
+
+static void M_DownloadMods_UpdateSharedDownloadProgress(double received,
+	double total)
+{
+	double credited, dt, bytes_per_second;
+
+	if (received < 0.0)
+		received = 0.0;
+	if (total < 0.0)
+		total = 0.0;
+
+	credited = received - cls.download.received;
+	if (credited > 0.0)
+	{
+		if (credited >= (double)(UINT_MAX - cls.download.ratebytes))
+			cls.download.ratebytes = UINT_MAX;
+		else
+			cls.download.ratebytes += (unsigned int)credited;
+	}
+
+	cls.download.received = received;
+	cls.download.total = total;
+	if (total > 0.0)
+	{
+		double percent = (received * 100.0) / total;
+		cls.download.percent = (float)CLAMP(0.0, percent, 100.0);
+	}
+	else
+		cls.download.percent = -1.0f;
+
+	if (realtime < cls.download.ratetime + 1.0)
+		return;
+
+	dt = realtime - cls.download.ratetime;
+	bytes_per_second = dt > 0.0 ? cls.download.ratebytes / dt : 0.0;
+	cls.download.rate = bytes_per_second >= INT_MAX ? INT_MAX :
+		(int)bytes_per_second;
+	cls.download.ratebytes = 0;
+	cls.download.ratetime = realtime;
 }
 
 static int M_DownloadMods_InstallThread(void *unused);
@@ -39234,13 +39302,7 @@ void M_DownloadMods_Frame(void)
 		if (!cls.download.active || strcmp(cls.download.current, display_name))
 			M_DownloadMods_BeginSharedDownloadProgress(display_name);
 
-		cls.download.received = received > 0.0 ? received : 0.0;
-		cls.download.total = total > 0.0 ? total : 0.0;
-		if (cls.download.total > 0.0)
-			cls.download.percent = (float)((cls.download.received * 100.0) /
-				cls.download.total);
-		else
-			cls.download.percent = -1.0f;
+		M_DownloadMods_UpdateSharedDownloadProgress(received, total);
 
 		if (received > 10000.0 && realtime - downloadmodinstall.last_progress_print >= 0.5)
 		{
@@ -39361,11 +39423,14 @@ void M_DownloadMods_Shutdown(void)
 }
 
 static const char *M_DownloadMods_InstallDetail(const downloadmoditem_t *item,
-	char *buffer, size_t buffer_size)
+	char *buffer, size_t buffer_size, qboolean *progress)
 {
 	char status[sizeof(downloadmodinstall.status)];
 	downloadmodinstallstage_t stage = DOWNLOADMOD_INSTALL_NONE;
 	qboolean downloading = false;
+
+	if (progress)
+		*progress = false;
 
 	if (!M_DownloadMods_CopyInstallStateForItem(item, &stage,
 		status, sizeof(status), &downloading))
@@ -39373,14 +39438,21 @@ static const char *M_DownloadMods_InstallDetail(const downloadmoditem_t *item,
 
 	if (stage == DOWNLOADMOD_INSTALL_ARCHIVE && downloading && cls.download.active)
 	{
-		/* Show a percentage for the whole transfer; during the connect phase
+		char rate[7];
+
+		/* Show percentage and transfer rate for the whole transfer. During connect
 		 * (before a total is known) percent is -1, so clamp it to 0% rather
 		 * than briefly flashing the "downloading..." status text. Once the
 		 * transfer is done, show worker statuses such as verifying/extracting. */
 		float percent = cls.download.percent;
 		if (percent < 0.0f)
 			percent = 0.0f;
-		q_snprintf(buffer, buffer_size, "%d%%", (int)(percent + 0.5f));
+
+		M_FormatDownloadRate(cls.download.rate, rate, sizeof(rate));
+		q_snprintf(buffer, buffer_size, "%d%% %s",
+			(int)(percent + 0.5f), rate);
+		if (progress)
+			*progress = true;
 		return buffer;
 	}
 
@@ -40658,6 +40730,7 @@ void M_DownloadMods_Draw(void)
 		qboolean selected;
 		qboolean installed;
 		qboolean target_exists;
+		qboolean active_progress;
 		char active_detail[DOWNLOAD_MODS_DETAIL_CHARS + 1];
 		const char *detail;
 		downloadmoddetailstyle_t detail_style = DOWNLOADMOD_DETAIL_NORMAL;
@@ -40669,11 +40742,11 @@ void M_DownloadMods_Draw(void)
 		selected = (idx == downloadmodsmenu.list.cursor);
 		installed = M_DownloadMods_IsInstalled(item);
 		detail = M_DownloadMods_InstallDetail(item,
-			active_detail, sizeof(active_detail));
+			active_detail, sizeof(active_detail), &active_progress);
 		target_exists = !installed && !detail &&
 			M_DownloadMods_TargetExists(item, NULL);
 
-		if (detail && detail[0] && detail[strlen(detail) - 1] == '%')
+		if (active_progress)
 			detail_style = DOWNLOADMOD_DETAIL_PROGRESS;
 		else if (installed)
 			detail_style = DOWNLOADMOD_DETAIL_INSTALLED;
@@ -40715,8 +40788,8 @@ void M_DownloadMods_Draw(void)
 		const char *tooltip = NULL;
 
 		/* Transient messages take priority, then a state-driven action hint. The
-		 * live progress percentage is drawn on the row itself, so the hint here
-		 * is just the relevant key: cancel while this item is downloading/
+		 * live progress percentage and rate are drawn on the row itself, so the
+		 * hint here is just the relevant key: cancel while this item is downloading/
 		 * installing, play when installed, otherwise download. No descriptive
 		 * tooltip (e.g. "GitHub release") or "target exists" on plain selection. */
 		if (message_active)

@@ -3749,8 +3749,25 @@ static void CL_DownloadProgress_Begin(const char *filename)
 		q_strlcpy(cls.download.current, filename, sizeof(cls.download.current));
 }
 
-static void CL_DownloadProgress_Update(double received, double total)
+static qboolean CL_DownloadProgress_Update(double received, double total)
 {
+	double credited, dt, bytes_per_second;
+	qboolean completed;
+
+	if (received < 0.0)
+		received = 0.0;
+	if (total < 0.0)
+		total = 0.0;
+
+	credited = received - cls.download.received;
+	if (credited > 0.0)
+	{
+		if (credited >= (double)(UINT_MAX - cls.download.ratebytes))
+			cls.download.ratebytes = UINT_MAX;
+		else
+			cls.download.ratebytes += (unsigned int)credited;
+	}
+
 	cls.download.received = received > 0.0 ? received : 0.0;
 	cls.download.total = total > 0.0 ? total : 0.0;
 
@@ -3765,6 +3782,21 @@ static void CL_DownloadProgress_Update(double received, double total)
 	}
 	else
 		cls.download.percent = -1.0f;
+
+	completed = total > 0.0 && received >= total;
+	if (credited <= 0.0 ||
+		(realtime < cls.download.ratetime + 1.0 && !completed))
+		return false;
+
+	dt = realtime - cls.download.ratetime;
+	if (dt <= 0.0)
+		dt = 1.0;
+	bytes_per_second = cls.download.ratebytes / dt;
+	cls.download.rate = bytes_per_second >= INT_MAX ? INT_MAX :
+		(int)bytes_per_second;
+	cls.download.ratebytes = 0;
+	cls.download.ratetime = realtime;
+	return true;
 }
 
 static qboolean CL_DownloadNameIsValid(const char *relative_path)
@@ -5546,6 +5578,7 @@ void CL_Download_Chunked(void)
 	int chunknum = MSG_ReadLong();
 	byte *data;
 	unsigned int chunk, maxchunk, offset, wanted, credited;
+	qboolean rate_updated = false;
 
 	if (chunknum == -1)
 	{
@@ -5673,19 +5706,12 @@ void CL_Download_Chunked(void)
 		cls.download.completedbytes += credited;
 		if (cls.download.completedbytes > cls.download.size)
 			cls.download.completedbytes = cls.download.size;
-		cls.download.ratebytes += credited;
-		CL_DownloadProgress_Update((double)cls.download.completedbytes, (double)cls.download.size);
+		rate_updated = CL_DownloadProgress_Update(
+			(double)cls.download.completedbytes, (double)cls.download.size);
 	}
 
-	if (realtime > cls.download.ratetime + 1.0 ||
-		cls.download.completedbytes >= cls.download.size)
+	if (rate_updated)
 	{
-		double dt = realtime - cls.download.ratetime;
-		if (dt <= 0)
-			dt = 1;
-		cls.download.rate = (int)(cls.download.ratebytes / dt);
-		cls.download.ratebytes = 0;
-		cls.download.ratetime = realtime;
 		Con_SafePrintf("Downloading %s ^m%d%%^m - ^g%d^g KB/s\r",
 			cls.download.current, (int)cls.download.percent, cls.download.rate / 1024);
 	}
