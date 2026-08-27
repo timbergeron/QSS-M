@@ -64,6 +64,7 @@ extern NSString *FQPrefCommandLineKey;
     id quitKeyMonitor;
     NSTimer *quitHoldTimer;
     NSTimer *quitHoldProgressTimer;
+    NSTimer *quitHoldDismissTimer;
     NSPanel *quitHoldOverlayWindow;
     id quitHoldOverlayView;
     NSMenuItem *warnBeforeQuittingItem;

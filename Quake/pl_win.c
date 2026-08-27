@@ -43,11 +43,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 static HICON icon;
 
 #define PL_QUIT_HOLD_DURATION_MS 1000
+#define PL_QUIT_HOLD_CANCELLED_DISPLAY_MS 1000
 #define PL_QUIT_HOLD_COMPLETION_MS 80
 #define PL_QUIT_HOLD_TIMER_PROGRESS 1
 #define PL_QUIT_HOLD_TIMER_COMPLETE 2
+#define PL_QUIT_HOLD_TIMER_DISMISS 3
 #define PL_QUIT_HOLD_WIDTH 356
 #define PL_QUIT_HOLD_HEIGHT 72
+#define PL_QUIT_HOLD_RADIUS 12
 #define PL_QUIT_HOLD_TOP_OFFSET 72
 #define PL_QUIT_HOLD_PROGRESS_INTERVAL_MS 10
 #define PL_QUIT_HOLD_POINT_COUNT 256
@@ -56,6 +59,7 @@ static const WCHAR pl_quit_hold_class[] = L"QSSMQuitHoldOverlay";
 static HWND pl_quit_hold_window;
 static qboolean pl_quit_hold_active;
 static qboolean pl_quit_hold_committed;
+static qboolean pl_quit_hold_cancelled;
 static DWORD pl_quit_hold_started;
 
 static HWND PL_GetNativeWindow (void)
@@ -265,7 +269,8 @@ static void PL_QuitHoldPaint (HWND hwnd)
 	HGDIOBJ old_pen;
 	HGDIOBJ old_font;
 	UINT dpi;
-	int radius;
+	int corner_radius;
+	int progress_radius;
 	float progress;
 
 	dc = BeginPaint(hwnd, &paint);
@@ -288,15 +293,19 @@ static void PL_QuitHoldPaint (HWND hwnd)
 		old_bitmap = NULL;
 	}
 	dpi = PL_GetWindowDPI(hwnd);
-	radius = MulDiv(5, dpi, 96);
-	if (radius < 3)
-		radius = 3;
+	corner_radius = MulDiv(PL_QUIT_HOLD_RADIUS, dpi, 96);
+	if (corner_radius < 4)
+		corner_radius = 4;
+	progress_radius = corner_radius - MulDiv(2, dpi, 96);
+	if (progress_radius < 3)
+		progress_radius = 3;
 
 	background = CreateSolidBrush(RGB(41, 41, 41));
 	border = CreatePen(PS_SOLID, 1, RGB(82, 82, 82));
 	old_brush = SelectObject(paint_dc, background);
 	old_pen = SelectObject(paint_dc, border);
-	RoundRect(paint_dc, rect.left, rect.top, rect.right, rect.bottom, radius * 2, radius * 2);
+	RoundRect(paint_dc, rect.left, rect.top, rect.right, rect.bottom,
+		corner_radius * 2, corner_radius * 2);
 	SelectObject(paint_dc, old_pen);
 	SelectObject(paint_dc, old_brush);
 	DeleteObject(border);
@@ -304,10 +313,12 @@ static void PL_QuitHoldPaint (HWND hwnd)
 
 	if (pl_quit_hold_committed)
 		progress = 1.0f;
+	else if (pl_quit_hold_cancelled)
+		progress = 0.0f;
 	else
 		progress = (float)(DWORD)(GetTickCount() - pl_quit_hold_started) /
 			(float)PL_QUIT_HOLD_DURATION_MS;
-	PL_QuitHoldDrawProgress(paint_dc, &rect, progress, radius);
+	PL_QuitHoldDrawProgress(paint_dc, &rect, progress, progress_radius);
 
 	font = CreateFontW(-MulDiv(24, dpi, 96), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
 		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -357,6 +368,7 @@ static LRESULT CALLBACK PL_QuitHoldWindowProc (HWND hwnd, UINT message,
 			{
 				pl_quit_hold_active = false;
 				pl_quit_hold_committed = true;
+				pl_quit_hold_cancelled = false;
 				KillTimer(hwnd, PL_QUIT_HOLD_TIMER_PROGRESS);
 				if (!SetTimer(hwnd, PL_QUIT_HOLD_TIMER_COMPLETE,
 					PL_QUIT_HOLD_COMPLETION_MS, NULL))
@@ -378,6 +390,13 @@ static LRESULT CALLBACK PL_QuitHoldWindowProc (HWND hwnd, UINT message,
 			PL_QuitHoldPushQuit();
 			return 0;
 		}
+		if (wparam == PL_QUIT_HOLD_TIMER_DISMISS && pl_quit_hold_cancelled)
+		{
+			KillTimer(hwnd, PL_QUIT_HOLD_TIMER_DISMISS);
+			pl_quit_hold_cancelled = false;
+			ShowWindow(hwnd, SW_HIDE);
+			return 0;
+		}
 		break;
 	case WM_PAINT:
 		PL_QuitHoldPaint(hwnd);
@@ -391,6 +410,7 @@ static LRESULT CALLBACK PL_QuitHoldWindowProc (HWND hwnd, UINT message,
 	case WM_DESTROY:
 		pl_quit_hold_active = false;
 		pl_quit_hold_committed = false;
+		pl_quit_hold_cancelled = false;
 		pl_quit_hold_window = NULL;
 		return 0;
 	default:
@@ -433,12 +453,31 @@ static void PL_QuitHoldCancel (void)
 {
 	pl_quit_hold_active = false;
 	pl_quit_hold_committed = false;
+	pl_quit_hold_cancelled = false;
 	if (pl_quit_hold_window && IsWindow(pl_quit_hold_window))
 	{
 		KillTimer(pl_quit_hold_window, PL_QUIT_HOLD_TIMER_PROGRESS);
 		KillTimer(pl_quit_hold_window, PL_QUIT_HOLD_TIMER_COMPLETE);
+		KillTimer(pl_quit_hold_window, PL_QUIT_HOLD_TIMER_DISMISS);
 		ShowWindow(pl_quit_hold_window, SW_HIDE);
 	}
+}
+
+static void PL_QuitHoldCancelAfterDelay (void)
+{
+	if (!pl_quit_hold_active || !pl_quit_hold_window || !IsWindow(pl_quit_hold_window))
+		return;
+
+	pl_quit_hold_active = false;
+	pl_quit_hold_committed = false;
+	pl_quit_hold_cancelled = true;
+	KillTimer(pl_quit_hold_window, PL_QUIT_HOLD_TIMER_PROGRESS);
+	KillTimer(pl_quit_hold_window, PL_QUIT_HOLD_TIMER_COMPLETE);
+	InvalidateRect(pl_quit_hold_window, NULL, FALSE);
+	UpdateWindow(pl_quit_hold_window);
+	if (!SetTimer(pl_quit_hold_window, PL_QUIT_HOLD_TIMER_DISMISS,
+		PL_QUIT_HOLD_CANCELLED_DISPLAY_MS, NULL))
+		PL_QuitHoldCancel();
 }
 
 void PL_ControlWEvent (int down)
@@ -457,7 +496,7 @@ void PL_ControlWEvent (int down)
 	if (!down)
 	{
 		if (!pl_quit_hold_committed)
-			PL_QuitHoldCancel();
+			PL_QuitHoldCancelAfterDelay();
 		return;
 	}
 	if (pl_quit_hold_active || pl_quit_hold_committed)
@@ -471,7 +510,7 @@ void PL_ControlWEvent (int down)
 	width = MulDiv(PL_QUIT_HOLD_WIDTH, dpi, 96);
 	height = MulDiv(PL_QUIT_HOLD_HEIGHT, dpi, 96);
 	offset = MulDiv(PL_QUIT_HOLD_TOP_OFFSET, dpi, 96);
-	radius = MulDiv(6, dpi, 96);
+	radius = MulDiv(PL_QUIT_HOLD_RADIUS, dpi, 96);
 	if (!GetWindowRect(anchor, &anchor_rect))
 		return;
 	x = anchor_rect.left + ((anchor_rect.right - anchor_rect.left) - width) / 2;
@@ -485,8 +524,11 @@ void PL_ControlWEvent (int down)
 		return;
 	}
 
+	if (pl_quit_hold_cancelled)
+		KillTimer(pl_quit_hold_window, PL_QUIT_HOLD_TIMER_DISMISS);
 	pl_quit_hold_active = true;
 	pl_quit_hold_committed = false;
+	pl_quit_hold_cancelled = false;
 	pl_quit_hold_started = GetTickCount();
 	if (!SetWindowPos(pl_quit_hold_window, HWND_TOPMOST, x, y, width, height,
 		SWP_NOACTIVATE | SWP_SHOWWINDOW))

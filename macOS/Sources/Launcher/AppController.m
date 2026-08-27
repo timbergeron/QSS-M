@@ -38,10 +38,12 @@ NSString *FQPrefCommandLineKey = @"CommandLine";
 static NSString *QSSPrefRawMouseInputEnabledKey = @"RawMouseInputEnabled";
 static NSString *QSSPrefWarnBeforeQuittingKey = @"WarnBeforeQuitting";
 static const NSTimeInterval QSSCommandQHoldDuration = 1.0;
+static const NSTimeInterval QSSQuitHoldCancelledDisplayDuration = 1.0;
 static const NSTimeInterval QSSQuitHoldCompletionDisplayDuration = 0.08;
 /* Half-size point measurements from the supplied 2x Retina reference. */
 static const CGFloat QSSQuitHoldOverlayWidth = 356.0f;
 static const CGFloat QSSQuitHoldOverlayHeight = 72.0f;
+static const CGFloat QSSQuitHoldCornerRadius = 12.0f;
 
 @interface QSSQuitHoldOverlayView : NSView
 {
@@ -81,13 +83,15 @@ static const CGFloat QSSQuitHoldOverlayHeight = 72.0f;
     NSShadow *progressShadow;
 
     (void)dirtyRect;
-    background = [NSBezierPath bezierPathWithRoundedRect:bounds xRadius:6.0f yRadius:6.0f];
+    background = [NSBezierPath bezierPathWithRoundedRect:bounds
+                                                 xRadius:QSSQuitHoldCornerRadius
+                                                 yRadius:QSSQuitHoldCornerRadius];
     [[NSColor colorWithCalibratedWhite:0.16f alpha:0.75f] setFill];
     [background fill];
 
     /* The outline is a clockwise progress indicator for the hold duration. */
     borderBounds = NSInsetRect(bounds, 1.5f, 1.5f);
-    radius = 5.0f;
+    radius = QSSQuitHoldCornerRadius - 1.5f;
     perimeter = 2.0f * (borderBounds.size.width - 2.0f * radius) +
                 2.0f * (borderBounds.size.height - 2.0f * radius) +
                 2.0f * (CGFloat)M_PI * radius;
@@ -1416,6 +1420,8 @@ static NSImage *QSSHostAppIcon(void)
 - (void)handleCommandQEventDown:(BOOL)down;
 - (void)beginQuitHold;
 - (void)cancelQuitHold;
+- (void)cancelQuitHoldAfterDelay;
+- (void)quitHoldDismissTimerFired:(NSTimer *)timer;
 - (void)quitHoldTimerFired:(NSTimer *)timer;
 - (void)updateQuitHoldProgress:(NSTimer *)timer;
 - (void)showQuitHoldOverlay;
@@ -1890,7 +1896,7 @@ static NSImage *QSSHostAppIcon(void)
         }
     } else if (quitKeyDown) {
         quitKeyDown = NO;
-        [self cancelQuitHold];
+        [self cancelQuitHoldAfterDelay];
     }
 }
 
@@ -1915,6 +1921,11 @@ void PL_CommandQEvent(int down)
     if (quitHoldTimer)
         return;
 
+    if (quitHoldDismissTimer) {
+        [quitHoldDismissTimer invalidate];
+        [quitHoldDismissTimer release];
+        quitHoldDismissTimer = nil;
+    }
     [self showQuitHoldOverlay];
     quitHoldStartedAt = CFAbsoluteTimeGetCurrent();
     [quitHoldOverlayView setProgress:0.0f];
@@ -1943,6 +1954,46 @@ void PL_CommandQEvent(int down)
         [quitHoldProgressTimer release];
         quitHoldProgressTimer = nil;
     }
+    if (quitHoldDismissTimer) {
+        [quitHoldDismissTimer invalidate];
+        [quitHoldDismissTimer release];
+        quitHoldDismissTimer = nil;
+    }
+    [quitHoldOverlayView setProgress:0.0f];
+    [self hideQuitHoldOverlay];
+}
+
+- (void)cancelQuitHoldAfterDelay
+{
+    if (quitHoldTimer) {
+        [quitHoldTimer invalidate];
+        [quitHoldTimer release];
+        quitHoldTimer = nil;
+    }
+    if (quitHoldProgressTimer) {
+        [quitHoldProgressTimer invalidate];
+        [quitHoldProgressTimer release];
+        quitHoldProgressTimer = nil;
+    }
+    [quitHoldOverlayView setProgress:0.0f];
+    [quitHoldOverlayView displayIfNeeded];
+    if (quitHoldDismissTimer) {
+        [quitHoldDismissTimer invalidate];
+        [quitHoldDismissTimer release];
+    }
+    quitHoldDismissTimer = [[NSTimer scheduledTimerWithTimeInterval:QSSQuitHoldCancelledDisplayDuration
+                                                              target:self
+                                                            selector:@selector(quitHoldDismissTimerFired:)
+                                                            userInfo:nil
+                                                             repeats:NO] retain];
+}
+
+- (void)quitHoldDismissTimerFired:(NSTimer *)timer
+{
+    (void)timer;
+
+    [quitHoldDismissTimer release];
+    quitHoldDismissTimer = nil;
     [quitHoldOverlayView setProgress:0.0f];
     [self hideQuitHoldOverlay];
 }
@@ -4287,6 +4338,8 @@ doCommandBySelector:(SEL)commandSelector
     [quitHoldTimer release];
     [quitHoldProgressTimer invalidate];
     [quitHoldProgressTimer release];
+    [quitHoldDismissTimer invalidate];
+    [quitHoldDismissTimer release];
     [quitHoldOverlayWindow orderOut:nil];
     [quitHoldOverlayWindow release];
     [rawMouseOverlayWindow release];
