@@ -2,7 +2,8 @@
  * QSSDockMenuContent.m -- the Dock menu's contents: server history, bookmark
  * and mod readers plus the section builders that turn them into menu items.
  * Shared by the launcher and the Dock tile plug-in, which build the same menu
- * from different processes.
+ * from different processes. It also resolves their common host application
+ * URL so both processes survive Gatekeeper App Translocation consistently.
  *
  * Copyright (C) 2026 QSS-M team
  *
@@ -18,6 +19,7 @@
  */
 
 #import "QSSDockMenuContent.h"
+#include <dlfcn.h>
 
 NSString * const QSSServerAddressKey = @"address";
 NSString * const QSSServerDateKey = @"date";
@@ -25,6 +27,61 @@ NSString * const QSSServerAliasKey = @"alias";
 NSString * const QSSServerPinnedKey = @"pinned";
 
 static const unsigned long long QSSMaxContentFileSize = 4ULL * 1024ULL * 1024ULL;
+
+NSURL *QSSOriginalApplicationURL(NSURL *applicationURL, NSString *logPrefix)
+{
+    NSURL *originalApplicationURL = nil;
+    NSString *applicationPath;
+    void *securityHandle;
+
+    if (!applicationURL)
+        return nil;
+    applicationPath = [[applicationURL path] stringByStandardizingPath];
+    if ([applicationPath rangeOfString:@"/AppTranslocation/"].location == NSNotFound)
+        return applicationURL;
+
+    securityHandle = dlopen("/System/Library/Frameworks/Security.framework/Security",
+                            RTLD_LAZY | RTLD_LOCAL);
+    if (securityHandle) {
+        typedef CFURLRef (*QSSOriginalPathFunction)(CFURLRef, CFErrorRef *);
+        QSSOriginalPathFunction originalPathFunction =
+            (QSSOriginalPathFunction)dlsym(securityHandle,
+                "SecTranslocateCreateOriginalPathForURL");
+
+        if (originalPathFunction) {
+            CFErrorRef error = NULL;
+            CFURLRef resolvedURL = originalPathFunction((CFURLRef)applicationURL, &error);
+
+            if (resolvedURL) {
+                BOOL isDirectory = NO;
+                NSURL *candidateURL = (NSURL *)resolvedURL;
+
+                if ([[NSFileManager defaultManager] fileExistsAtPath:[candidateURL path]
+                                                          isDirectory:&isDirectory] && isDirectory)
+                    originalApplicationURL = [[candidateURL copy] autorelease];
+                else
+                    NSLog(@"%@: App Translocation returned an unusable original URL: %@",
+                          logPrefix, candidateURL);
+                CFRelease(resolvedURL);
+            }
+            else
+                NSLog(@"%@: unable to resolve the original application URL: %@",
+                      logPrefix, error ? (NSError *)error : @"unknown Security.framework error");
+            if (error)
+                CFRelease(error);
+        }
+        else
+            NSLog(@"%@: Security.framework does not provide the App Translocation resolver",
+                  logPrefix);
+        /* Keep the framework loaded for the process lifetime. The resolved
+           application URL is cached by both callers, so closing it buys
+           nothing and risks invalidating private framework state. */
+    }
+    else
+        NSLog(@"%@: unable to load Security.framework for App Translocation", logPrefix);
+
+    return originalApplicationURL ? originalApplicationURL : applicationURL;
+}
 
 static NSData *QSSBoundedDataAtURL(NSURL *url)
 {

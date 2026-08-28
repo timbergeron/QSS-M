@@ -18,12 +18,23 @@
 
 static NSURL *QSSDockApplicationURL(void)
 {
+    static NSURL *applicationURL;
+    NSString *pluginPath;
+    NSString *applicationPath;
+    NSURL *candidateURL;
+
+    if (applicationURL)
+        return applicationURL;
+
     /* plugin bundle -> PlugIns -> Contents -> QSS-M.app */
-    NSString *pluginPath = [[NSBundle bundleForClass:[QSSDockTilePlugin class]] bundlePath];
-    NSString *applicationPath = [[[pluginPath stringByDeletingLastPathComponent]
-                                  stringByDeletingLastPathComponent]
-                                 stringByDeletingLastPathComponent];
-    return [NSURL fileURLWithPath:applicationPath isDirectory:YES];
+    pluginPath = [[NSBundle bundleForClass:[QSSDockTilePlugin class]] bundlePath];
+    applicationPath = [[[pluginPath stringByDeletingLastPathComponent]
+                        stringByDeletingLastPathComponent]
+                       stringByDeletingLastPathComponent];
+    candidateURL = [NSURL fileURLWithPath:applicationPath isDirectory:YES];
+
+    applicationURL = [QSSOriginalApplicationURL(candidateURL, @"QSSDockTilePlugin") copy];
+    return applicationURL;
 }
 
 static NSURL *QSSDockGameFolderURL(void)

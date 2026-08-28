@@ -2,7 +2,8 @@
  * QSSDockMenuContent.h -- the Dock menu's contents: server history, bookmark
  * and mod readers plus the section builders that turn them into menu items.
  * Shared by the launcher and the Dock tile plug-in, which build the same menu
- * from different processes.
+ * from different processes. It also resolves their common host application
+ * URL so both processes survive Gatekeeper App Translocation consistently.
  *
  * Copyright (C) 2026 QSS-M team
  *
@@ -28,6 +29,12 @@ extern NSString * const QSSServerAddressKey;    /* NSString */
 extern NSString * const QSSServerDateKey;       /* NSDate */
 extern NSString * const QSSServerAliasKey;      /* NSString */
 extern NSString * const QSSServerPinnedKey;     /* NSNumber (BOOL) */
+
+/* Gatekeeper may run an application from an AppTranslocation mount. Returns
+   its existing original bundle URL when Security.framework can resolve it,
+   or applicationURL for ordinary launches and as a logged fallback. Ordinary
+   paths return without loading Security.framework or calling its private SPI. */
+NSURL *QSSOriginalApplicationURL(NSURL *applicationURL, NSString *logPrefix);
 
 /* Rejects addresses the engine would refuse to record or that could not be
    passed safely on a command line (see ServerHistory_ValidAddress). */

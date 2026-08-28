@@ -37,6 +37,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <sys/wait.h>
 #include <fcntl.h>
 #if defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#include <dlfcn.h>
 #include <mach-o/dyld.h>
 #endif
 #ifdef DO_USERDIRS
@@ -65,6 +67,61 @@ static size_t	sys_handles_max;	/* spike -- removed limit, was 32 (johnfitz -- wa
 static FILE		**sys_handles;
 
 static qboolean		stdinIsATTY;	/* from ioquake3 source */
+
+#if defined(__APPLE__)
+/* _NSGetExecutablePath reports Gatekeeper's mounted copy while an app is
+ * translocated. Resolve the real executable here so every consumer -- most
+ * importantly update apply, recovery, and confirmation -- targets the live
+ * writable installation. Keep the private Security.framework symbol dynamic
+ * and leave the framework loaded after caching its function pointer. */
+static qboolean Sys_OSXGetOriginalExecutablePath(const char *path,
+	char *out, size_t outsize)
+{
+	typedef CFURLRef (*original_path_fn_t)(CFURLRef, CFErrorRef *);
+	static void *security_handle;
+	static original_path_fn_t original_path_fn;
+	static qboolean resolver_checked;
+	CFURLRef translocated_url;
+	CFURLRef original_url;
+	qboolean ok = false;
+
+	if (!path || !out || outsize == 0 ||
+		!strstr(path, "/AppTranslocation/"))
+		return false;
+	out[0] = '\0';
+
+	if (!resolver_checked)
+	{
+		resolver_checked = true;
+		security_handle = dlopen(
+			"/System/Library/Frameworks/Security.framework/Security",
+			RTLD_LAZY | RTLD_LOCAL);
+		if (security_handle)
+			original_path_fn = (original_path_fn_t)dlsym(security_handle,
+				"SecTranslocateCreateOriginalPathForURL");
+		/* Keep Security.framework loaded once the function pointer is cached. */
+	}
+	if (!original_path_fn)
+		return false;
+
+	translocated_url = CFURLCreateFromFileSystemRepresentation(
+		kCFAllocatorDefault, (const UInt8 *)path, (CFIndex)strlen(path), false);
+	if (!translocated_url)
+		return false;
+	original_url = original_path_fn(translocated_url, NULL);
+	CFRelease(translocated_url);
+	if (!original_url)
+		return false;
+
+	if (CFURLGetFileSystemRepresentation(original_url, true,
+		(UInt8 *)out, (CFIndex)outsize))
+		ok = true;
+	CFRelease(original_url);
+	if (!ok)
+		out[0] = '\0';
+	return ok;
+}
+#endif
 
 static int findhandle (void)
 {
@@ -126,16 +183,14 @@ qboolean Sys_GetExecutablePath(char *out, size_t outsize)
 		if (_NSGetExecutablePath(raw, &size) == 0)
 		{
 			char *resolved = realpath(raw, NULL);
+			const char *candidate = resolved ? resolved : raw;
+			qboolean ok;
 
-			if (resolved)
-			{
-				qboolean ok = q_strlcpy(out, resolved, outsize) < outsize;
-
-				free(resolved);
-				if (ok)
-					return true;
-			}
-			if (q_strlcpy(out, raw, outsize) < outsize)
+			ok = Sys_OSXGetOriginalExecutablePath(candidate, out, outsize);
+			if (!ok)
+				ok = q_strlcpy(out, candidate, outsize) < outsize;
+			free(resolved);
+			if (ok)
 				return true;
 		}
 	}

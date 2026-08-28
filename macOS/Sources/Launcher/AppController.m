@@ -176,15 +176,54 @@ static const CGFloat QSSShortcutTableRightGutter = 18.0f;
 
 extern void Cbuf_AddText (const char *text); /* engine command buffer (cmd.c) */
 
+/*
+ * Gatekeeper may launch a quarantined application from a randomized
+ * AppTranslocation directory instead of the place where the user installed
+ * it. QSS-M keeps its game data beside the application bundle, so every path
+ * derived from NSBundle's translocated URL would otherwise point at the
+ * read-only container and make the engine report that its data is missing.
+ *
+ * SecTranslocateCreateOriginalPathForURL is present on systems that support
+ * App Translocation but is not exposed by the public SDK. Resolve it at
+ * runtime to avoid a hard reference to private Security.framework SPI.
+ */
+static NSURL *QSSHostAppBundleURL(void)
+{
+    static NSURL *originalBundleURL;
+
+    if (!originalBundleURL)
+        originalBundleURL = [QSSOriginalApplicationURL([[NSBundle mainBundle] bundleURL],
+                                                       @"QSS-M") copy];
+
+    return originalBundleURL;
+}
+
 static NSURL *QSSGameFolderURL(void)
 {
-    NSURL *bundleURL = [[NSBundle mainBundle] bundleURL];
-    return [bundleURL URLByDeletingLastPathComponent];
+    return [QSSHostAppBundleURL() URLByDeletingLastPathComponent];
+}
+
+static NSString *QSSHostAppExecutablePath(void)
+{
+    static NSString *executablePath;
+
+    if (!executablePath) {
+        NSBundle *hostBundle = [NSBundle bundleWithURL:QSSHostAppBundleURL()];
+        NSString *candidatePath = [hostBundle executablePath];
+
+        if (candidatePath && [[NSFileManager defaultManager] isExecutableFileAtPath:candidatePath])
+            executablePath = [candidatePath copy];
+        else
+            NSLog(@"QSS-M: unable to find the executable in application bundle %@",
+                  QSSHostAppBundleURL());
+    }
+
+    return executablePath;
 }
 
 static void QSSLaunchNewInstance(void)
 {
-    NSURL *applicationURL = [[NSBundle mainBundle] bundleURL];
+    NSURL *applicationURL = QSSHostAppBundleURL();
     NSError *error = nil;
 
     if (!applicationURL)
@@ -837,11 +876,6 @@ static NSPoint QSSRawMouseOverlayOrigin(QSSSystemSettingsWindowSnapshot snapshot
 
     return NSMakePoint(MIN(MAX(preferredX, minX), maxX),
         MIN(MAX(preferredY, minY), maxY));
-}
-
-static NSURL *QSSHostAppBundleURL(void)
-{
-    return [[NSBundle mainBundle] bundleURL];
 }
 
 static NSString *QSSHostAppDisplayName(void)
@@ -4060,7 +4094,7 @@ doCommandBySelector:(SEL)commandSelector
 
 - (void)launchDedicatedServerWithParsedArguments
 {
-    NSString *executablePath = [[NSBundle mainBundle] executablePath];
+    NSString *executablePath = QSSHostAppExecutablePath();
     if (!executablePath)
         return;
 
@@ -4104,12 +4138,13 @@ doCommandBySelector:(SEL)commandSelector
 
 - (IBAction)launchQuake:(id)sender {
     BOOL hadInitialArgs = ([arguments count] > 0);
+    const char *executableFileSystemPath;
     NSString *launchOptions;
     NSString *effectiveCommandLine;
+    NSString *executablePath;
     NSString *path;
     QuakeArguments *launchArguments;
     int argc;
-    int i;
 
     (void)sender;
 
@@ -4132,18 +4167,25 @@ doCommandBySelector:(SEL)commandSelector
         return;
     }
 
-    path = [NSString stringWithCString:gArgv[0] encoding:NSASCIIStringEncoding];
-
-    for (i = 0; i < 4; i++)
-        path = [path stringByDeletingLastPathComponent];
-
-    [[NSFileManager defaultManager] changeCurrentDirectoryPath:path];
+    executablePath = QSSHostAppExecutablePath();
+    executableFileSystemPath = executablePath ?
+        [executablePath fileSystemRepresentation] : NULL;
+    path = [QSSGameFolderURL() path];
+    if (!executableFileSystemPath || !path ||
+        ![[NSFileManager defaultManager] changeCurrentDirectoryPath:path]) {
+        NSLog(@"QSS-M: unable to launch from executable %@ with game folder %@",
+              executablePath ? executablePath : @"(unknown)", path ? path : @"(unknown)");
+        [launchArguments release];
+        NSBeep();
+        return;
+    }
 
     argc = [launchArguments count] + 1;
     {
-        char *argv[argc];
-        argv[0] = gArgv[0];
+        char *argv[argc + 1];
+        argv[0] = (char *)executableFileSystemPath;
         [launchArguments setArguments:argv + 1];
+        argv[argc] = NULL;
 
         [self stopRawMousePermissionAssistant];
         if (launcherWindow)
