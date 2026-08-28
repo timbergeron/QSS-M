@@ -150,12 +150,28 @@ enum sendsignon_e
 	PRESPAWN_SIGNONMSG,
 };
 
+enum client_signon_phase_e
+{
+	CLIENT_SIGNON_NONE,
+	CLIENT_SIGNON_SERVERINFO_PENDING,
+	CLIENT_SIGNON_WAIT_PRESPAWN,
+	CLIENT_SIGNON_PRESPAWN_BUILDING,
+	CLIENT_SIGNON_PRESPAWN_PENDING,
+	CLIENT_SIGNON_WAIT_SPAWN,
+	CLIENT_SIGNON_SPAWN_BUILDING,
+	CLIENT_SIGNON_SPAWN_PENDING,
+	CLIENT_SIGNON_WAIT_BEGIN,
+	CLIENT_SIGNON_COMPLETE,
+};
+
 typedef struct client_s
 {
 	qboolean		active;				// false = client is free
 	qboolean		spawned;			// false = don't send datagrams (set when client acked the first entities)
 	qboolean		dropasap;			// has been told to go to another level
 	enum sendsignon_e	sendsignon;			// only valid before spawned
+	enum client_signon_phase_e signon_phase;	// client command progress for the current map
+	qboolean		spawnprepared;		// final spawn response has already been queued
 	int				signonidx;
 	unsigned int	signon_sounds;		//
 	unsigned int	signon_models;		//
@@ -171,6 +187,8 @@ typedef struct client_s
 	sizebuf_t		message;			// can be added to at any time,
 										// copied and clear once per frame
 	byte			msgbuf[MAX_MSGLEN];
+	sizebuf_t		signon_preamble;	// reliable data ordered before the final spawn response
+	sizebuf_t		signon_response;	// isolated final spawn response
 	edict_t			*edict;				// EDICT_NUM(clientnum+1)
 	char			name[32];			// for printing to other people
 	char			desired_name[32];	// preferred name without duplicate prefix
@@ -378,6 +396,9 @@ void SV_DropClient (qboolean crash);
 void SVFTE_Ack(client_t *client, int sequence);
 void SVFTE_DestroyFrames(client_t *client);
 void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state);
+void SV_ClearClientSignonMessages(client_t *client);
+qboolean SV_ClientHasPendingReliable(client_t *client);
+int SV_SendClientReliable(client_t *client, qboolean *completed_signon);
 void SV_SendClientMessages (void);
 void SV_ClearDatagram (void);
 void SV_ReserveSignonSpace (int numbytes);

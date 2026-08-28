@@ -2068,6 +2068,111 @@ static qboolean SV_IsLocalClient (client_t *client)
 
 /*
 ================
+SV_ClearClientSignonMessages
+
+Release the temporary reliable messages used to keep the final spawn reply in
+FIFO order without exposing it to unrelated reliable writes.
+================
+*/
+void SV_ClearClientSignonMessages (client_t *client)
+{
+	free (client->signon_preamble.data);
+	free (client->signon_response.data);
+	memset (&client->signon_preamble, 0, sizeof(client->signon_preamble));
+	memset (&client->signon_response, 0, sizeof(client->signon_response));
+}
+
+/*
+================
+SV_ClientHasPendingReliable
+================
+*/
+qboolean SV_ClientHasPendingReliable (client_t *client)
+{
+	return client->signon_preamble.cursize ||
+		client->signon_response.cursize || client->message.cursize;
+}
+
+/*
+================
+SV_FinishClientSignonMessage
+
+Advance client command progress only after the corresponding server milestone
+has actually entered the reliable channel.  This keeps commands left over from
+an earlier map from completing signon on the new one.
+================
+*/
+static void SV_FinishClientSignonMessage (client_t *client)
+{
+	switch (client->signon_phase)
+	{
+	case CLIENT_SIGNON_SERVERINFO_PENDING:
+		client->signon_phase = CLIENT_SIGNON_WAIT_PRESPAWN;
+		break;
+	case CLIENT_SIGNON_PRESPAWN_PENDING:
+		client->signon_phase = CLIENT_SIGNON_WAIT_SPAWN;
+		break;
+	case CLIENT_SIGNON_SPAWN_PENDING:
+		client->signon_phase = CLIENT_SIGNON_WAIT_BEGIN;
+		break;
+	default:
+		break;
+	}
+}
+
+/*
+================
+SV_SendClientReliable
+
+Send the oldest queued reliable message.  The final spawn response is kept
+separate from both earlier and later writes, so sustained updates cannot
+reorder it or make it overflow while another reliable is in flight.
+================
+*/
+int SV_SendClientReliable (client_t *client, qboolean *completed_signon)
+{
+	sizebuf_t *message;
+	qboolean finishes_signon = false;
+	int result;
+
+	if (completed_signon)
+		*completed_signon = false;
+
+	if (client->signon_preamble.cursize)
+		message = &client->signon_preamble;
+	else if (client->signon_response.cursize)
+	{
+		message = &client->signon_response;
+		finishes_signon = client->sendsignon == PRESPAWN_FLUSH;
+	}
+	else if (client->message.cursize)
+	{
+		message = &client->message;
+		finishes_signon = client->sendsignon == PRESPAWN_FLUSH;
+	}
+	else
+		return 0;
+
+	result = NET_SendMessage (client->netconnection, message);
+	if (result != 1)
+		return result;
+
+	if (message == &client->message)
+		SZ_Clear (message);
+	else
+	{
+		free (message->data);
+		memset (message, 0, sizeof(*message));
+	}
+
+	client->last_message = realtime;
+	if (completed_signon)
+		*completed_signon = finishes_signon;
+	return 1;
+}
+
+/*
+================
 SV_SendServerinfo
 
 Sends the first message from the server to a connected client.
@@ -2084,7 +2189,10 @@ void SV_SendServerinfo (client_t *client)
 
 	SV_VoiceInitClient(client);
 
+	SV_ClearClientSignonMessages (client);
 	client->spawned = false;		// need prespawn, spawn, etc
+	client->spawnprepared = false;
+	client->signon_phase = CLIENT_SIGNON_NONE;
 
 	//assume some safe defaults if we early out.
 	client->limit_unreliable = 1024;
@@ -2188,12 +2296,12 @@ void SV_SendServerinfo (client_t *client)
 
 	if (client->message.cursize)
 	{	//try and flush the reliable NOW, in case the qc is evil
-		if (NET_CanSendMessage (host_client->netconnection))
+		if (NET_CanSendMessage (client->netconnection))
 		{
-			if (NET_SendMessage (host_client->netconnection, &host_client->message) != -1)
+			if (NET_SendMessage (client->netconnection, &client->message) == 1)
 			{
-				SZ_Clear (&host_client->message);
-				host_client->last_message = realtime;
+				SZ_Clear (&client->message);
+				client->last_message = realtime;
 			}
 		}
 	}
@@ -2311,6 +2419,7 @@ retry:
 	MSG_WriteByte (&client->message, svc_signonnum);
 	MSG_WriteByte (&client->message, 1);
 
+	client->signon_phase = CLIENT_SIGNON_SERVERINFO_PENDING;
 	client->sendsignon = PRESPAWN_FLUSH;
 
 	SVFTE_SetupFrames(client);
@@ -2333,11 +2442,12 @@ retry:
 	//try and flush the reliable NOW, in case the qc is evil
 	if (NET_CanSendMessage (client->netconnection))
 	{
-		if (NET_SendMessage (client->netconnection, &client->message) != -1)
+		if (NET_SendMessage (client->netconnection, &client->message) == 1)
 		{
 			SZ_Clear (&client->message);
 			client->last_message = realtime;
 			client->sendsignon = PRESPAWN_DONE;
+			SV_FinishClientSignonMessage (client);
 		}
 	}
 
@@ -2616,6 +2726,7 @@ void SV_ConnectClient (int clientnum)
 
 	if (sv.loadgame)
 		memcpy (spawn_parms, client->spawn_parms, sizeof(spawn_parms));
+	SV_ClearClientSignonMessages (client);
 	memset (client, 0, sizeof(*client));
 	client->netconnection = netconnection;
 
@@ -3805,13 +3916,18 @@ void SV_SendClientMessages (void)
 		// the player isn't totally in the game yet
 		// send small keepalive messages if too much time has passed
 		// send a full message when the next signon stage has been requested
-		// some other message data (name changes, etc) may accumulate
-		// between signon stages
+		// reliable updates may arrive between signon stages; send them instead
+		// of leaving them queued until a later signon command clears the buffer
 			if (!host_client->sendsignon)
 			{
-				if (realtime - host_client->last_message > 5)
-					SV_SendNop (host_client);
-				continue;	// don't send out non-signon messages
+				if (!host_client->pextknown ||
+					(!SV_ClientHasPendingReliable (host_client) &&
+					 !host_client->message.overflowed && !host_client->dropasap))
+				{
+					if (realtime - host_client->last_message > 5)
+						SV_SendNop (host_client);
+					continue;
+				}
 			}
 			/*if (host_client->sendsignon == PRESPAWN_SERVERINFO)
 			{
@@ -3911,6 +4027,8 @@ void SV_SendClientMessages (void)
 				{
 					MSG_WriteByte (&host_client->message, svc_signonnum);
 					MSG_WriteByte (&host_client->message, 2);
+					if (host_client->signon_phase == CLIENT_SIGNON_PRESPAWN_BUILDING)
+						host_client->signon_phase = CLIENT_SIGNON_PRESPAWN_PENDING;
 					host_client->sendsignon = PRESPAWN_FLUSH;
 				}
 			}
@@ -3929,8 +4047,11 @@ void SV_SendClientMessages (void)
 			continue;
 		}
 
-		if (host_client->message.cursize || host_client->dropasap)
+		if (SV_ClientHasPendingReliable (host_client) || host_client->dropasap)
 		{
+			qboolean completed_signon;
+			int result;
+
 			if (!NET_CanSendMessage (host_client->netconnection))
 			{
 //				I_Printf ("can't write\n");
@@ -3941,13 +4062,14 @@ void SV_SendClientMessages (void)
 				SV_DropClient (false);	// went to another level
 			else
 			{
-				if (NET_SendMessage (host_client->netconnection
-				, &host_client->message) == -1)
+				result = SV_SendClientReliable (host_client, &completed_signon);
+				if (result == -1)
 					SV_DropClient (false);	// if the message couldn't send, kick off
-				SZ_Clear (&host_client->message);
-				host_client->last_message = realtime;
-				if (host_client->sendsignon == PRESPAWN_FLUSH)
+				else if (result == 1 && completed_signon)
+				{
 					host_client->sendsignon = PRESPAWN_DONE;
+					SV_FinishClientSignonMessage (host_client);
+				}
 			}
 		}
 	}

@@ -1388,6 +1388,7 @@ void SV_DropClient (qboolean crash)
 	NET_Close (host_client->netconnection);
 	host_client->netconnection = NULL;
 
+	SV_ClearClientSignonMessages (host_client);
 	SVFTE_DestroyFrames(host_client);	//release any delta state
 
 // free the client (the body stays around)
@@ -1460,14 +1461,11 @@ void Host_ShutdownServer(qboolean crash)
 		NET_GetServerMessages(NULL);	//read packets to make sure we're receiving their acks. we're going to drop them all so we don't actually care to read the data, just the acks so we can flush our outgoing properly.
 		for (i=0, host_client = svs.clients ; i<svs.maxclients ; i++, host_client++)
 		{
-			if (host_client->active && host_client->message.cursize && host_client->netconnection)
+			if (host_client->active && SV_ClientHasPendingReliable (host_client) && host_client->netconnection)
 			{
 				if (NET_CanSendMessage (host_client->netconnection))	//also sends pending data too.
-				{
-					NET_SendMessage(host_client->netconnection, &host_client->message);
-					SZ_Clear (&host_client->message);
-				}
-				else
+					SV_SendClientReliable (host_client, NULL);
+				if (SV_ClientHasPendingReliable (host_client))
 					count++;
 			}
 		}

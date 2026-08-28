@@ -10461,34 +10461,29 @@ static void Host_PreSpawn_f (void)
 		Con_Printf ("prespawn not valid -- already spawned\n");
 		return;
 	}
+	if (host_client->signon_phase != CLIENT_SIGNON_WAIT_PRESPAWN)
+	{
+		Con_DPrintf ("Ignoring out-of-order prespawn from %s (phase %d)\n",
+			NET_QSocketGetOwnerString(host_client->netconnection),
+			host_client->signon_phase);
+		return;
+	}
 
 	//will start splurging out prespawn data
+	host_client->signon_phase = CLIENT_SIGNON_PRESPAWN_BUILDING;
 	host_client->sendsignon = 2;
 	host_client->signonidx = 0;
 }
 
 /*
 ==================
-Host_Spawn_f
+Host_PrepareSpawn
 ==================
 */
-static void Host_Spawn_f (void)
+static void Host_PrepareSpawn (void)
 {
 	int		i;
-	client_t	*client;
 	edict_t	*ent;
-
-	if (cmd_source != src_client)
-	{
-		Con_Printf ("spawn is not valid from the console\n");
-		return;
-	}
-
-	if (host_client->spawned)
-	{
-		Con_Printf ("Spawn not valid -- already spawned\n");
-		return;
-	}
 
 	host_client->knowntoqc = true;
 	host_client->lastmovetime = qcvm->time;
@@ -10530,38 +10525,53 @@ static void Host_Spawn_f (void)
 
 		PR_ExecuteProgram (pr_global_struct->PutClientInServer);
 	}
+}
+
+/*
+==================
+Host_WriteSpawnResponse
+==================
+*/
+static void Host_WriteSpawnResponse (sizebuf_t *message)
+{
+	int		i;
+	client_t	*client;
+	edict_t	*ent;
 
 // send all current names, colors, and frag counts
-	SZ_Clear (&host_client->message);
-
 // send time of update
-	MSG_WriteByte (&host_client->message, svc_time);
-	MSG_WriteFloat (&host_client->message, qcvm->time);
+	MSG_WriteByte (message, svc_time);
+	MSG_WriteFloat (message, qcvm->time);
 	if (host_client->protocol_pext2 & PEXT2_PREDINFO)
-		MSG_WriteShort(&host_client->message, (host_client->lastmovemessage&0xffff));
+		MSG_WriteShort(message, (host_client->lastmovemessage&0xffff));
 
 	for (i = 0, client = svs.clients; i < svs.maxclients; i++, client++)
 	{
+		const char *userinfo = client->active ? client->userinfo : "";
+		const char *name = client->active ? client->name : "";
+		int colors = client->active ? client->colors : 0;
+		int frags = client->active ? client->old_frags : 0;
+
 	//	if (!client->knowntoqc)
 	//		continue;
 		if (host_client->protocol_pext2 & PEXT2_PREDINFO)
 		{
-			MSG_WriteByte (&host_client->message, svc_stufftext);
-			MSG_WriteString (&host_client->message, va("//fui %i \"%s\"\n", i, client->userinfo));
+			MSG_WriteByte (message, svc_stufftext);
+			MSG_WriteString (message, va("//fui %i \"%s\"\n", i, userinfo));
 		}
 		
 		{
-			MSG_WriteByte (&host_client->message, svc_updatename);
-			MSG_WriteByte (&host_client->message, i);
-			MSG_WriteString (&host_client->message, client->name);
-			MSG_WriteByte (&host_client->message, svc_updatecolors);
-			MSG_WriteByte (&host_client->message, i);
-			MSG_WriteByte (&host_client->message, client->colors);
+			MSG_WriteByte (message, svc_updatename);
+			MSG_WriteByte (message, i);
+			MSG_WriteString (message, name);
+			MSG_WriteByte (message, svc_updatecolors);
+			MSG_WriteByte (message, i);
+			MSG_WriteByte (message, colors);
 		}
 
-		MSG_WriteByte (&host_client->message, svc_updatefrags);
-		MSG_WriteByte (&host_client->message, i);
-		MSG_WriteShort (&host_client->message, client->old_frags);
+		MSG_WriteByte (message, svc_updatefrags);
+		MSG_WriteByte (message, i);
+		MSG_WriteShort (message, frags);
 	}
 
 // send all current light styles
@@ -10572,14 +10582,14 @@ static void Host_Spawn_f (void)
 		{
 			if (i > 0xff)
 			{
-				MSG_WriteByte (&host_client->message, svc_stufftext);
-				MSG_WriteString (&host_client->message, va("//ls %i \"%s\"\n", i, sv.lightstyles[i]));
+				MSG_WriteByte (message, svc_stufftext);
+				MSG_WriteString (message, va("//ls %i \"%s\"\n", i, sv.lightstyles[i]));
 			}
 			else
 			{
-				MSG_WriteByte (&host_client->message, svc_lightstyle);
-				MSG_WriteByte (&host_client->message, i);
-				MSG_WriteString (&host_client->message, sv.lightstyles[i]);
+				MSG_WriteByte (message, svc_lightstyle);
+				MSG_WriteByte (message, i);
+				MSG_WriteString (message, sv.lightstyles[i]);
 			}
 		}
 	}
@@ -10587,21 +10597,21 @@ static void Host_Spawn_f (void)
 //
 // send some stats
 //
-	MSG_WriteByte (&host_client->message, svc_updatestat);
-	MSG_WriteByte (&host_client->message, STAT_TOTALSECRETS);
-	MSG_WriteLong (&host_client->message, pr_global_struct->total_secrets);
+	MSG_WriteByte (message, svc_updatestat);
+	MSG_WriteByte (message, STAT_TOTALSECRETS);
+	MSG_WriteLong (message, pr_global_struct->total_secrets);
 
-	MSG_WriteByte (&host_client->message, svc_updatestat);
-	MSG_WriteByte (&host_client->message, STAT_TOTALMONSTERS);
-	MSG_WriteLong (&host_client->message, pr_global_struct->total_monsters);
+	MSG_WriteByte (message, svc_updatestat);
+	MSG_WriteByte (message, STAT_TOTALMONSTERS);
+	MSG_WriteLong (message, pr_global_struct->total_monsters);
 
-	MSG_WriteByte (&host_client->message, svc_updatestat);
-	MSG_WriteByte (&host_client->message, STAT_SECRETS);
-	MSG_WriteLong (&host_client->message, pr_global_struct->found_secrets);
+	MSG_WriteByte (message, svc_updatestat);
+	MSG_WriteByte (message, STAT_SECRETS);
+	MSG_WriteLong (message, pr_global_struct->found_secrets);
 
-	MSG_WriteByte (&host_client->message, svc_updatestat);
-	MSG_WriteByte (&host_client->message, STAT_MONSTERS);
-	MSG_WriteLong (&host_client->message, pr_global_struct->killed_monsters);
+	MSG_WriteByte (message, svc_updatestat);
+	MSG_WriteByte (message, STAT_MONSTERS);
+	MSG_WriteLong (message, pr_global_struct->killed_monsters);
 
 //
 // send a fixangle
@@ -10610,20 +10620,136 @@ static void Host_Spawn_f (void)
 // and it won't happen if the game was just loaded, so you wind up
 // with a permanent head tilt
 	ent = EDICT_NUM( 1 + (host_client - svs.clients) );
-	MSG_WriteByte (&host_client->message, svc_setangle);
+	MSG_WriteByte (message, svc_setangle);
 	for (i = 0; i < 2; i++)
 		if (sv.loadgame)
-			MSG_WriteAngle (&host_client->message, ent->v.v_angle[i], sv.protocolflags );
+			MSG_WriteAngle (message, ent->v.v_angle[i], sv.protocolflags );
 		else
-			MSG_WriteAngle (&host_client->message, ent->v.angles[i], sv.protocolflags );
-	MSG_WriteAngle (&host_client->message, 0, sv.protocolflags );
+			MSG_WriteAngle (message, ent->v.angles[i], sv.protocolflags );
+	MSG_WriteAngle (message, 0, sv.protocolflags );
 
 	if (!(host_client->protocol_pext2 & PEXT2_REPLACEMENTDELTAS))
-		SV_WriteClientdataToMessage (host_client, &host_client->message);
+		SV_WriteClientdataToMessage (host_client, message);
 
-	MSG_WriteByte (&host_client->message, svc_signonnum);
-	MSG_WriteByte (&host_client->message, 3);
-	host_client->sendsignon = PRESPAWN_FLUSH; // woods - switch to enum
+	MSG_WriteByte (message, svc_signonnum);
+	MSG_WriteByte (message, 3);
+}
+
+/*
+==================
+Host_QueueSpawnResponse
+
+Build the final response independently, then preserve exact FIFO ordering.
+Earlier reliable data is coalesced when the combined message fits, otherwise
+it becomes a one-shot preamble.  Later writes remain in client->message.
+==================
+*/
+static qboolean Host_QueueSpawnResponse (void)
+{
+	sizebuf_t response = {0};
+	int preamblesize = host_client->message.cursize;
+
+	if (host_client->signon_preamble.data || host_client->signon_response.data)
+	{
+		Con_DWarning ("Client %s already has queued signon messages\n",
+			NET_QSocketGetOwnerString(host_client->netconnection));
+		host_client->message.overflowed = true;
+		return false;
+	}
+
+	response.data = malloc (host_client->message.maxsize);
+	if (!response.data)
+		Sys_Error ("Host_QueueSpawnResponse: out of memory (%d bytes)",
+			host_client->message.maxsize);
+	response.maxsize = host_client->message.maxsize;
+	response.allowoverflow = true;
+
+	Host_WriteSpawnResponse (&response);
+	if (response.overflowed)
+	{
+		Con_DWarning ("Client %s spawn response exceeds reliable limit (%d bytes)\n",
+			NET_QSocketGetOwnerString(host_client->netconnection),
+			host_client->message.maxsize);
+		free (response.data);
+		host_client->message.overflowed = true;
+		return false;
+	}
+
+	if (preamblesize && preamblesize <= response.maxsize - response.cursize)
+	{
+		memmove (response.data + preamblesize, response.data, response.cursize);
+		memcpy (response.data, host_client->message.data, preamblesize);
+		response.cursize += preamblesize;
+	}
+	else if (preamblesize)
+	{
+		host_client->signon_preamble.data = malloc (preamblesize);
+		if (!host_client->signon_preamble.data)
+			Sys_Error ("Host_QueueSpawnResponse: out of memory (%d bytes)", preamblesize);
+		memcpy (host_client->signon_preamble.data, host_client->message.data, preamblesize);
+		host_client->signon_preamble.maxsize = preamblesize;
+		host_client->signon_preamble.cursize = preamblesize;
+
+		Con_DPrintf ("Client %s spawn response queued behind %d reliable bytes\n",
+			NET_QSocketGetOwnerString(host_client->netconnection), preamblesize);
+	}
+
+	host_client->signon_response = response;
+	SZ_Clear (&host_client->message);
+	host_client->sendsignon = PRESPAWN_FLUSH;
+	return true;
+}
+
+/*
+==================
+Host_ClientBegin
+==================
+*/
+static void Host_ClientBegin (void)
+{
+	host_client->spawnprepared = false;
+	host_client->signon_phase = CLIENT_SIGNON_COMPLETE;
+	host_client->spawned = true;
+	Host_Modvote_PrintJoinMotd(host_client);
+}
+
+/*
+==================
+Host_Spawn_f
+==================
+*/
+static void Host_Spawn_f (void)
+{
+	if (cmd_source != src_client)
+	{
+		Con_Printf ("spawn is not valid from the console\n");
+		return;
+	}
+
+	if (host_client->spawned)
+	{
+		Con_Printf ("Spawn not valid -- already spawned\n");
+		return;
+	}
+	if (host_client->signon_phase != CLIENT_SIGNON_WAIT_SPAWN)
+	{
+		Con_DPrintf ("Ignoring out-of-order spawn from %s (phase %d)\n",
+			NET_QSocketGetOwnerString(host_client->netconnection),
+			host_client->signon_phase);
+		return;
+	}
+
+	host_client->signon_phase = CLIENT_SIGNON_SPAWN_BUILDING;
+	Host_PrepareSpawn ();
+	if (!host_client->active || host_client->message.overflowed ||
+		host_client->signon_phase != CLIENT_SIGNON_SPAWN_BUILDING)
+		return;
+
+	if (Host_QueueSpawnResponse ())
+	{
+		host_client->spawnprepared = true;
+		host_client->signon_phase = CLIENT_SIGNON_SPAWN_PENDING;
+	}
 }
 
 /*
@@ -10638,9 +10764,15 @@ static void Host_Begin_f (void)
 		Con_Printf ("begin is not valid from the console\n");
 		return;
 	}
-
-	host_client->spawned = true;
-	Host_Modvote_PrintJoinMotd(host_client);
+	if (host_client->signon_phase != CLIENT_SIGNON_WAIT_BEGIN ||
+		!host_client->spawnprepared)
+	{
+		Con_DPrintf ("Ignoring out-of-order begin from %s (phase %d)\n",
+			NET_QSocketGetOwnerString(host_client->netconnection),
+			host_client->signon_phase);
+		return;
+	}
+	Host_ClientBegin ();
 }
 
 //===========================================================================
@@ -12343,8 +12475,6 @@ static void Host_SendChunkedDownloadStart(client_t *client, int size_or_error, c
 	MSG_WriteLong(&client->message, -1);
 	MSG_WriteLong(&client->message, size_or_error);
 	MSG_WriteString(&client->message, safe_name);
-	if (!client->spawned)
-		client->sendsignon = PRESPAWN_FLUSH;
 }
 
 static void Host_FailChunkedDownload(client_t *client)
@@ -12463,8 +12593,6 @@ static void Host_Download_f(void)
 				MSG_WriteString (&host_client->message, "\nstopdownload\n");
 			}
 		}
-		if (!host_client->download.chunked || !host_client->spawned)
-			host_client->sendsignon = PRESPAWN_FLUSH;	//override any keepalive issues. woods - switch to enum
 	}
 }
 
@@ -12707,7 +12835,6 @@ void Host_DownloadAck(client_t *client)
 		MSG_WriteByte (&client->message, svc_stufftext);
 		MSG_WriteString (&client->message, va("cl_downloadfinished %u %u \"%s\"\n", client->download.size, hash, client->download.name));
 		*client->download.name = 0;
-		client->sendsignon = PRESPAWN_FLUSH;	//override any keepalive issues. woods - switch to enum
 	}
 }
 
