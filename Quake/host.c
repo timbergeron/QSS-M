@@ -2432,6 +2432,7 @@ void _Host_Frame (double time)
 	NET_PortPingProbe_Frame();
 	URI_Frame(); // woods #uri
 	CL_AsyncDownload_Frame();
+	CL_LocDownload_Frame();
 	M_DownloadMods_Frame();
 
 	if (cl.sendprespawn)

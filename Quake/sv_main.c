@@ -4287,6 +4287,34 @@ static void SV_ClearClientMapDropCounts(void)
 	}
 }
 
+static void SV_ClearClientLocDownloads(void)
+{
+	int i;
+	client_t *client;
+
+	/* A background loc transfer belongs to the old level. */
+	if (!svs.clients)
+		return;
+
+	for (i = 0, client = svs.clients; i < svs.maxclients; i++, client++)
+	{
+		if (q_strncasecmp(client->download.name, "locs/", 5) ||
+			q_strcasecmp(COM_FileGetExtension(client->download.name), "loc"))
+		{
+			continue;
+		}
+		/* Older clients do not cancel a map-scoped download on reconnect. */
+		if (client->active && client->netconnection)
+		{
+			MSG_WriteByte(&client->message, svc_stufftext);
+			MSG_WriteString(&client->message, "\nstopdownload\n");
+		}
+		if (client->download.file)
+			fclose(client->download.file);
+		memset(&client->download, 0, sizeof(client->download));
+	}
+}
+
 void SV_SpawnServer (const char *server)
 {
 	static char	dummy[8] = { 0,0,0,0,0,0,0,0 };
@@ -4312,6 +4340,7 @@ void SV_SpawnServer (const char *server)
 	if (sv.active)
 		SV_SendReconnect ();
 	SV_ClearClientMapDropCounts();
+	SV_ClearClientLocDownloads();
 
 //
 // make cvars consistant

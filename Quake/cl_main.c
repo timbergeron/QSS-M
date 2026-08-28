@@ -3885,12 +3885,15 @@ static qboolean CL_OptionalDownloadCache_SourceKey(char *source, size_t source_s
 	if (!source || source_size == 0)
 		return false;
 
-	if (webcheck && cl_web_download_url.string && cl_web_download_url.string[0])
+	/* Key the cache by configured sources, not their asynchronous probe state.
+	 * Otherwise the same server and mirrors produce different entries depending
+	 * on whether the web checks finished before signon. */
+	if (cl_web_download_url.string && cl_web_download_url.string[0])
 	{
 		web1 = cl_web_download_url.string;
 		has_web = true;
 	}
-	if (web2check && cl_web_download_url2.string && cl_web_download_url2.string[0])
+	if (cl_web_download_url2.string && cl_web_download_url2.string[0])
 	{
 		web2 = cl_web_download_url2.string;
 		has_web = true;
@@ -4092,6 +4095,27 @@ static void CL_DownloadAddMapDesc(const char *relative_path)
 	}
 }
 
+static void CL_DownloadReloadCurrentLoc(const char *relative_path)
+{
+	char current_loc[MAX_QPATH];
+
+	if (!CL_DownloadNameIsLoc(relative_path) ||
+		cls.state != ca_connected || cls.signon != SIGNONS || !cl.worldmodel ||
+		!cl.mapname[0])
+	{
+		return;
+	}
+
+	if ((size_t)q_snprintf(current_loc, sizeof(current_loc),
+		"locs/%s.loc", cl.mapname) >= sizeof(current_loc))
+	{
+		return;
+	}
+
+	if (!strcmp(relative_path, current_loc))
+		LOC_LoadLocations();
+}
+
 static qboolean CL_FinalizeDownloadFile(const char *relative_path, const char *temp_path)
 {
 	char finalpath[MAX_OSPATH];
@@ -4144,6 +4168,7 @@ static qboolean CL_FinalizeDownloadFile(const char *relative_path, const char *t
 
 	CL_DownloadAddMapDesc(relative_path);
 	CL_OptionalDownloadCache_RemoveCurrent(relative_path);
+	CL_DownloadReloadCurrentLoc(relative_path);
 	return true;
 }
 
@@ -5314,6 +5339,44 @@ void CL_AsyncDownload_Cancel(void)
 	Sky_AsyncDownload_Cancel();
 }
 
+void CL_LocDownload_Cancel(void)
+{
+	/* Automatic loc transfers are map-scoped now that they can outlive signon. */
+	if (!cls.download.active || !CL_DownloadNameIsLoc(cls.download.current))
+		return;
+
+	if (CL_AsyncDownload_IsActive())
+	{
+		CL_AsyncDownload_Stop(false);
+	}
+	else if (cls.download.chunked)
+	{
+		DL_AbortChunked(true);
+		cls.download.current[0] = '\0';
+	}
+	else
+	{
+		if (cls.download.file)
+		{
+			fclose(cls.download.file);
+			cls.download.file = NULL;
+			unlink(cls.download.temp);
+		}
+		DL_FreeBlocks();
+		cls.download.active = false;
+		cls.download.chunked = false;
+		cls.download.current[0] = '\0';
+		cls.download.size = 0;
+		cls.download.completedbytes = 0;
+		cls.download.percent = -1.0f;
+		cls.download.received = 0.0;
+		cls.download.total = 0.0;
+	}
+
+	CL_OptionalDownloadCache_ClearPending();
+	async_download_auto_failed[0] = '\0';
+}
+
 void CL_AsyncDownload_Shutdown(void)
 {
 	CL_AsyncDownload_Stop(true);
@@ -5567,7 +5630,8 @@ void CL_Download_Data(void)
 	}
 	CL_DownloadProgress_Update((double)(start + size), (double)cls.download.size);
 
-	Con_SafePrintf("Downloading %s (%.2f MB): ^m%d%%\r", cls.download.current, (double)cls.download.size / (1024 * 1024), (int)(100 * (start + size) / (double)cls.download.size)); // woods add file size info
+	if (!CL_DownloadNameIsLoc(cls.download.current))
+		Con_SafePrintf("Downloading %s (%.2f MB): ^m%d%%\r", cls.download.current, (double)cls.download.size / (1024 * 1024), (int)(100 * (start + size) / (double)cls.download.size)); // woods add file size info
 
 	//should maybe use unreliables, but whatever, shouldn't matter too much, it'll still complete
 	(void)DL_SendLegacyDownloadAck(start, size);
@@ -5710,7 +5774,7 @@ void CL_Download_Chunked(void)
 			(double)cls.download.completedbytes, (double)cls.download.size);
 	}
 
-	if (rate_updated)
+	if (rate_updated && !CL_DownloadNameIsLoc(cls.download.current))
 	{
 		Con_SafePrintf("Downloading %s ^m%d%%^m - ^g%d^g KB/s\r",
 			cls.download.current, (int)cls.download.percent, cls.download.rate / 1024);
@@ -6016,23 +6080,6 @@ qboolean CL_CheckDownloads(void)
 		cl.model_download++;
 	}
 
-	// woods #locdownloads
-
-	if (cl.loc_download == 0 && !cls.demoplayback)
-	{ 
-		char locname[MAX_QPATH];
-		char locname2[80];
-		COM_FileBase(cl.model_name[1], locname, sizeof(locname));
-		sprintf(locname2, "locs/%s.loc", locname);
-
-		if (!COM_FileExists(locname2, NULL))
-		{
-			if (CL_CheckDownload(locname2))
-				return false;
-		}
-		cl.loc_download++;
-	}
-
 	if (cl.skybox_download == 0                   /* run once              */
 		&& cl.model_name[1][0]                    /* we know the BSP path  */
 		&& COM_FileExists(cl.model_name[1], NULL)) /* BSP already here      */
@@ -6181,6 +6228,31 @@ qboolean CL_CheckDownloads(void)
 	}
 	CL_SpawnClientLightCandles ();
 	return true;
+}
+
+void CL_LocDownload_Frame(void)
+{
+	char locname[MAX_QPATH];
+
+	/* Locations are optional; fetch them only after required precaches and
+	 * signon have completed, then CL_FinalizeDownloadFile hot-loads them. */
+	if (cl.loc_download || cls.state != ca_connected || cls.signon != SIGNONS ||
+		cls.demoplayback || !cl.worldmodel || !cl.mapname[0])
+	{
+		return;
+	}
+
+	if ((size_t)q_snprintf(locname, sizeof(locname),
+		"locs/%s.loc", cl.mapname) >= sizeof(locname))
+	{
+		cl.loc_download++;
+		return;
+	}
+
+	if (!COM_FileExists(locname, NULL) && CL_CheckDownload(locname))
+		return;
+
+	cl.loc_download++;
 }
 
 /*

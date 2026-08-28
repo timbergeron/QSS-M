@@ -667,6 +667,8 @@ qboolean CL_CancelActiveDownload(void);
 void CL_AsyncDownload_Cancel(void);
 void CL_AsyncDownload_Frame(void);
 void CL_AsyncDownload_Shutdown(void);
+void CL_LocDownload_Frame(void);
+void CL_LocDownload_Cancel(void);
 qboolean CL_AsyncDownload_StartSkybox(const char *filename, const char *url,
 	web_download_result_t *result_out);
 void CL_WebDownloadChecks_Abort(void);	// flag in-flight startup probes to abort; call early in quit so the join in shutdown doesn't wait on them

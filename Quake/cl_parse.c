@@ -1422,6 +1422,7 @@ static void CL_ParseServerInfo (void)
 // wipe the client_state_t struct
 //
 	i = cl.protocol_dpdownload;	//for some absurd reason, this is sent just before the serverinfo, which just confuses everything.
+	CL_LocDownload_Cancel();
 	CL_ClearState ();
 	cl.protocol_dpdownload = i;
 
