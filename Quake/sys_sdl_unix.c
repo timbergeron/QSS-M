@@ -33,7 +33,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 #include <sys/stat.h>
 #include <sys/select.h>
+#include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <fcntl.h>
 #if defined(__APPLE__)
@@ -66,7 +68,17 @@ cvar_t		sys_dedmouse_capture = {"sys_dedmouse_capture", "0", CVAR_ARCHIVE};
 static size_t	sys_handles_max;	/* spike -- removed limit, was 32 (johnfitz -- was 10) */
 static FILE		**sys_handles;
 
-static qboolean		stdinIsATTY;	/* from ioquake3 source */
+typedef enum
+{
+	SYS_STDIN_UNAVAILABLE,
+	SYS_STDIN_TTY,
+	SYS_STDIN_PIPE,
+	SYS_STDIN_FIFO,
+	SYS_STDIN_SOCKET,
+	SYS_STDIN_DATAGRAM,
+	SYS_STDIN_SEQPACKET
+} sys_stdin_mode_t;
+static sys_stdin_mode_t stdinMode;
 
 #if defined(__APPLE__)
 /* _NSGetExecutablePath reports Gatekeeper's mounted copy while an app is
@@ -972,13 +984,63 @@ static void Sys_GetBasedir (char *argv0, char *dst, size_t dstsize)
 }
 #endif
 
+/* fstat() reports both anonymous pipes and named FIFOs as S_ISFIFO.  Their EOF
+ * semantics differ for console input: an anonymous pipe is finished forever,
+ * while a named FIFO can acquire another writer later. */
+static qboolean Sys_StdinFIFOIsNamed (void)
+{
+#if defined(F_GETPATH)
+	char path[4096];
+
+	return fcntl (STDIN_FILENO, F_GETPATH, path) != -1;
+#elif defined(__linux__)
+	char target[64];
+	ssize_t len;
+
+	len = readlink ("/proc/self/fd/0", target, sizeof(target));
+	/* Only the kernel's pipe:[inode] spelling proves this is anonymous.  If
+	 * procfs is unavailable, fall back to the safer named-FIFO behavior. */
+	return !(len >= 6 && !memcmp(target, "pipe:[", 6));
+#else
+	/* If the platform offers no reliable distinction, require a complete line.
+	 * Losing an unterminated one-shot command is safer than executing a command
+	 * truncated when a FIFO writer died. */
+	return true;
+#endif
+}
+
 void Sys_Init (void)
 {
 	const char* term = getenv("TERM");
-	stdinIsATTY = isatty(STDIN_FILENO) &&
+	struct stat stdin_stat;
+	qboolean stdin_is_tty;
+
+	stdin_is_tty = isatty(STDIN_FILENO) &&
 			!(term && (!strcmp(term, "raw") || !strcmp(term, "dumb")));
-	if (!stdinIsATTY)
-		Sys_Printf("Terminal input not available.\n");
+	stdinMode = stdin_is_tty ? SYS_STDIN_TTY : SYS_STDIN_UNAVAILABLE;
+	if (!stdin_is_tty && fstat(STDIN_FILENO, &stdin_stat) == 0)
+	{
+		if (S_ISFIFO(stdin_stat.st_mode))
+			stdinMode = Sys_StdinFIFOIsNamed () ? SYS_STDIN_FIFO : SYS_STDIN_PIPE;
+		else if (S_ISSOCK(stdin_stat.st_mode))
+		{
+			int socket_type;
+			socklen_t socket_type_len = sizeof(socket_type);
+
+			if (getsockopt (STDIN_FILENO, SOL_SOCKET, SO_TYPE, &socket_type,
+					&socket_type_len) == 0)
+			{
+				if (socket_type == SOCK_STREAM)
+					stdinMode = SYS_STDIN_SOCKET;
+				else if (socket_type == SOCK_DGRAM)
+					stdinMode = SYS_STDIN_DATAGRAM;
+#ifdef SOCK_SEQPACKET
+				else if (socket_type == SOCK_SEQPACKET)
+					stdinMode = SYS_STDIN_SEQPACKET;
+#endif
+			}
+		}
+	}
 
 	memset (cwd, 0, sizeof(cwd));
 	Sys_GetBasedir(host_parms->argv[0], cwd, sizeof(cwd));
@@ -2238,6 +2300,228 @@ static void Sys_RewriteInputLine(const char* newline, char* con_text, size_t con
 	*cursor_pos = *textlen;
 }
 
+static const char *Sys_ConsoleStreamInput (void)
+{
+	/* Host_GetConsoleCommands calls repeatedly until this function returns NULL.
+	 * Bound parsing, command dispatch, and short-read syscalls independently so
+	 * no continuously readable producer can monopolize the server frame. */
+	enum
+	{
+		STREAM_READ_SIZE = 1024,
+		STREAM_BYTES_PER_FRAME = 4096,
+		STREAM_COMMANDS_PER_FRAME = 32,
+		STREAM_READS_PER_FRAME = 8
+	};
+	static char stream_text[MAXCMDLINE];
+	static size_t stream_len;
+	static qboolean stream_discard;
+	static qboolean stream_eof;
+	static unsigned char stream_readbuf[STREAM_READ_SIZE];
+	static size_t stream_readpos;
+	static size_t stream_readlen;
+	static qboolean stream_message_end;
+	static qboolean budget_initialized;
+	static double budget_realtime;
+	static size_t bytes_this_frame;
+	static unsigned int commands_this_frame;
+	static unsigned int reads_this_frame;
+
+	if (stream_eof)
+		return NULL;
+	/* realtime is advanced once before each accepted host frame and remains
+	 * unchanged throughout Host_GetConsoleCommands' inner drain loop. */
+	if (!budget_initialized || budget_realtime != realtime)
+	{
+		budget_initialized = true;
+		budget_realtime = realtime;
+		bytes_this_frame = 0;
+		commands_this_frame = 0;
+		reads_this_frame = 0;
+	}
+
+	for (;;)
+	{
+		fd_set set;
+		struct timeval timeout;
+		ssize_t len;
+		int ready;
+		unsigned char c;
+
+		if (bytes_this_frame >= STREAM_BYTES_PER_FRAME ||
+				commands_this_frame >= STREAM_COMMANDS_PER_FRAME)
+			return NULL;
+
+		if (stream_readpos < stream_readlen)
+		{
+			c = stream_readbuf[stream_readpos++];
+			bytes_this_frame++;
+
+			if (c == '\n' || c == '\r')
+			{
+				if (stream_discard)
+				{
+					stream_discard = false;
+					stream_len = 0;
+					Sys_Printf("Console input line invalid or too long; discarded.\n");
+					continue;
+				}
+				if (stream_len == 0)
+					continue;
+
+				stream_text[stream_len] = '\0';
+				stream_len = 0;
+				commands_this_frame++;
+				return stream_text;
+			}
+
+			if (stream_discard)
+				continue;
+			if (c == '\0')
+			{
+				stream_discard = true;
+				continue;
+			}
+			if (stream_len >= sizeof(stream_text) - 1)
+			{
+				stream_discard = true;
+				continue;
+			}
+			stream_text[stream_len++] = (char)c;
+			continue;
+		}
+
+		stream_readpos = 0;
+		stream_readlen = 0;
+		if (stream_message_end)
+		{
+			stream_message_end = false;
+			if (stream_discard)
+			{
+				stream_discard = false;
+				stream_len = 0;
+				Sys_Printf("Console input line invalid or too long; discarded.\n");
+				continue;
+			}
+			if (stream_len > 0)
+			{
+				stream_text[stream_len] = '\0';
+				stream_len = 0;
+				commands_this_frame++;
+				return stream_text;
+			}
+		}
+		if (reads_this_frame >= STREAM_READS_PER_FRAME)
+			return NULL;
+
+		FD_ZERO (&set);
+		FD_SET (STDIN_FILENO, &set);
+		timeout.tv_sec = 0;
+		timeout.tv_usec = 0;
+		ready = select (STDIN_FILENO + 1, &set, NULL, NULL, &timeout);
+		if (ready == 0)
+			return NULL;
+		if (ready < 0)
+		{
+			if (errno == EINTR)
+				return NULL;
+			Sys_Printf("Console input failed: %s\n", strerror(errno));
+			stream_eof = true;
+			return NULL;
+		}
+
+		if (stdinMode == SYS_STDIN_DATAGRAM ||
+				stdinMode == SYS_STDIN_SEQPACKET)
+		{
+			struct iovec iov;
+			struct msghdr msg;
+
+			memset (&msg, 0, sizeof(msg));
+			iov.iov_base = stream_readbuf;
+			iov.iov_len = sizeof(stream_readbuf);
+			msg.msg_iov = &iov;
+			msg.msg_iovlen = 1;
+			len = recvmsg (STDIN_FILENO, &msg, 0);
+			if (len >= 0 && (msg.msg_flags & MSG_TRUNC))
+			{
+				Sys_Printf("Console input socket message too long; discarded.\n");
+				return NULL;
+			}
+			stream_message_end = len > 0;
+		}
+		else
+			len = read (STDIN_FILENO, stream_readbuf, sizeof(stream_readbuf));
+		reads_this_frame++;
+
+		if (len < 0)
+		{
+			if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+				return NULL;
+			Sys_Printf("Console input failed: %s\n", strerror(errno));
+			stream_eof = true;
+			return NULL;
+		}
+		if (len == 0)
+		{
+			/* A zero-length datagram is an empty message, not EOF. */
+			if (stdinMode == SYS_STDIN_DATAGRAM)
+				return NULL;
+
+			/* A FIFO reports EOF whenever it temporarily has no writer. Keep
+			 * polling it so a later writer can submit another command. */
+			if (stdinMode != SYS_STDIN_FIFO)
+				stream_eof = true;
+
+			if (stream_discard)
+			{
+				stream_discard = false;
+				stream_len = 0;
+				Sys_Printf("Console input line invalid or too long; discarded.\n");
+				return NULL;
+			}
+			if (stream_len == 0)
+				return NULL;
+			if (stdinMode == SYS_STDIN_FIFO)
+			{
+				stream_len = 0;
+				Sys_Printf("Console input: incomplete FIFO command discarded.\n");
+				return NULL;
+			}
+
+			stream_text[stream_len] = '\0';
+			stream_len = 0;
+			commands_this_frame++;
+			return stream_text;
+		}
+
+		stream_readlen = (size_t)len;
+	}
+}
+
+static void Sys_ReportConsoleInputMode (void)
+{
+	static qboolean reported;
+	const char *stream_type;
+
+	if (!isDedicated || reported)
+		return;
+	reported = true;
+
+	if (stdinMode == SYS_STDIN_UNAVAILABLE)
+	{
+		Sys_Printf("Terminal input not available.\n");
+		return;
+	}
+	if (stdinMode == SYS_STDIN_TTY)
+		return;
+
+	stream_type = stdinMode == SYS_STDIN_FIFO ? "FIFO" :
+			stdinMode == SYS_STDIN_PIPE ? "pipe" :
+			stdinMode == SYS_STDIN_DATAGRAM ? "datagram socket" :
+			stdinMode == SYS_STDIN_SEQPACKET ? "sequenced-packet socket" : "socket";
+	Sys_Printf("Console input: reading commands from standard input (%s).\n",
+			stream_type);
+}
+
 const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
 {
 	// Input state is in file-scope ded_input / ded_input_len / ded_input_cursor
@@ -2248,7 +2532,12 @@ const char *Sys_ConsoleInput (void) // woods #arrowkeys #serverhistory
     static struct termios orig_termios, raw_termios;
     static qboolean term_setup = false;
 
-	if (!stdinIsATTY || con_eof)
+	Sys_ReportConsoleInputMode ();
+	if (stdinMode == SYS_STDIN_UNAVAILABLE)
+		return NULL;
+	if (stdinMode != SYS_STDIN_TTY)
+		return Sys_ConsoleStreamInput ();
+	if (con_eof)
 		return NULL;
 
     // Set up terminal once
