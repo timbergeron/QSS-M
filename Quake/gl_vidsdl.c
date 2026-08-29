@@ -893,25 +893,25 @@ qboolean VID_IsMinimized (void)
 #if defined(USE_SDL2)
 /*
 ================
-VID_SDL2_GetDisplayMode
+VID_SDL2_GetDisplayModeForDisplay
 
 Returns a pointer to a statically allocated SDL_DisplayMode structure
-if there is one with the requested params on the default display.
+if there is one with the requested params on the selected display.
 Otherwise returns NULL.
 
 This is passed to SDL_SetWindowDisplayMode to specify a pixel format
 with the requested bpp. If we didn't care about bpp we could just pass NULL.
 ================
 */
-static SDL_DisplayMode *VID_SDL2_GetDisplayMode(int width, int height, int refreshrate, int bpp)
+static SDL_DisplayMode *VID_SDL2_GetDisplayModeForDisplay(int display, int width, int height, int refreshrate, int bpp)
 {
 	static SDL_DisplayMode mode;
-	const int sdlmodes = SDL_GetNumDisplayModes(0);
+	const int sdlmodes = SDL_GetNumDisplayModes(display);
 	int i;
 
 	for (i = 0; i < sdlmodes; i++)
 	{
-		if (SDL_GetDisplayMode(0, i, &mode) != 0)
+		if (SDL_GetDisplayMode(display, i, &mode) != 0)
 			continue;
 
 		if (mode.w == width && mode.h == height
@@ -922,6 +922,11 @@ static SDL_DisplayMode *VID_SDL2_GetDisplayMode(int width, int height, int refre
 		}
 	}
 	return NULL;
+}
+
+static SDL_DisplayMode *VID_SDL2_GetDisplayMode(int width, int height, int refreshrate, int bpp)
+{
+	return VID_SDL2_GetDisplayModeForDisplay(0, width, height, refreshrate, bpp);
 }
 #endif /* USE_SDL2 */
 
@@ -1043,6 +1048,146 @@ static qboolean VID_UseClosestFullscreenMode (int *width, int *height, int *refr
 }
 #endif /* USE_SDL2 */
 
+#if defined(USE_SDL2)
+/*
+================
+VID_TryFullscreenMode
+
+Try one fullscreen style and confirm SDL's resulting window state. When there
+is no exact exclusive mode, passing NULL asks SDL to select the closest mode
+using the window dimensions and the desktop format and refresh rate.
+================
+*/
+static qboolean VID_TryFullscreenMode (Uint32 flag, const char *name, SDL_DisplayMode *mode)
+{
+	char error[256];
+
+	if (flag == SDL_WINDOW_FULLSCREEN)
+	{
+		if (SDL_SetWindowDisplayMode (draw_context, mode) != 0)
+		{
+			q_strlcpy (error, SDL_GetError(), sizeof(error));
+			Con_Warning ("Couldn't prepare %s fullscreen: %s\n", name, error);
+			return false;
+		}
+	}
+
+	if (SDL_SetWindowFullscreen (draw_context, flag) != 0)
+	{
+		q_strlcpy (error, SDL_GetError(), sizeof(error));
+		Con_Warning ("Couldn't enter %s fullscreen: %s\n", name, error);
+
+		/* Some backends can report an error after changing the window state. */
+		if (VID_GetFullscreen())
+		{
+			Con_Warning ("SDL reported failure, but the window is fullscreen; keeping it\n");
+			return true;
+		}
+		return false;
+	}
+
+	if (!VID_GetFullscreen())
+	{
+		Con_Warning ("SDL reported success entering %s fullscreen, but the window remained windowed\n", name);
+		return false;
+	}
+	if ((flag == SDL_WINDOW_FULLSCREEN_DESKTOP) != VID_GetDesktopFullscreen())
+		Con_Warning ("SDL entered a different fullscreen style than requested; keeping it\n");
+
+	return true;
+}
+
+/*
+================
+VID_TryEnterFullscreen
+
+Failure to take over the display should not make an otherwise usable window
+fatal. Try the requested fullscreen style, then the other style, and finally
+leave the window in windowed mode.
+================
+*/
+static qboolean VID_TryEnterFullscreen (int width, int height, int refreshrate, int bpp)
+{
+	const Uint32 requested = vid_desktopfullscreen.value ?
+		SDL_WINDOW_FULLSCREEN_DESKTOP : SDL_WINDOW_FULLSCREEN;
+	const Uint32 alternate = vid_desktopfullscreen.value ?
+		SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
+	const char *requested_name = vid_desktopfullscreen.value ? "desktop" : "exclusive";
+	const char *alternate_name = vid_desktopfullscreen.value ? "exclusive" : "desktop";
+	SDL_DisplayMode *exclusive_mode;
+	int display;
+	char error[256];
+
+	display = SDL_GetWindowDisplayIndex(draw_context);
+	if (display < 0)
+	{
+		q_strlcpy (error, SDL_GetError(), sizeof(error));
+		Con_Warning ("Couldn't determine the window's display: %s; using display 0\n", error);
+		display = 0;
+	}
+	exclusive_mode = VID_SDL2_GetDisplayModeForDisplay(display, width, height, refreshrate, bpp);
+
+	if (VID_TryFullscreenMode(requested, requested_name,
+		requested == SDL_WINDOW_FULLSCREEN ? exclusive_mode : NULL))
+		return true;
+
+	if (VID_TryFullscreenMode(alternate, alternate_name,
+		alternate == SDL_WINDOW_FULLSCREEN ? exclusive_mode : NULL))
+	{
+		Con_Printf ("Falling back to %s fullscreen\n", alternate_name);
+		return true;
+	}
+
+	return false;
+}
+
+/*
+================
+VID_RestoreWindowedFallback
+
+Recover from rejected fullscreen transitions with a usable, visible window.
+Desktop fullscreen deliberately bypasses normal mode validation, so clamp the
+emergency window to the target display's usable work area.
+================
+*/
+static void VID_RestoreWindowedFallback (int width, int height)
+{
+	SDL_Rect usable = {0, 0, 0, 0};
+	int display, actual_width, actual_height;
+	const qboolean maximized = (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_MAXIMIZED) != 0;
+
+	display = SDL_GetWindowDisplayIndex(draw_context);
+	if (display < 0)
+		display = 0;
+
+	/* Resizing or repositioning an already maximized window triggers SDL2
+	 * backend bugs. Preserve its geometry and only restore its chrome. */
+	if (!maximized)
+	{
+		width = q_max(width, 320);
+		height = q_max(height, 200);
+		if (SDL_GetDisplayUsableBounds(display, &usable) != 0)
+			SDL_GetDisplayBounds(display, &usable);
+		if (usable.w > 0 && usable.h > 0)
+		{
+			width = q_min(width, usable.w);
+			height = q_min(height, usable.h);
+		}
+
+		SDL_SetWindowSize (draw_context, width, height);
+		SDL_SetWindowPosition (draw_context,
+			SDL_WINDOWPOS_CENTERED_DISPLAY(display),
+			SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+	}
+
+	SDL_SetWindowBordered (draw_context, vid_borderless.value ? SDL_FALSE : SDL_TRUE);
+	SDL_SetWindowResizable (draw_context, vid_borderless.value ? SDL_FALSE : SDL_TRUE);
+
+	SDL_GetWindowSize (draw_context, &actual_width, &actual_height);
+	Con_Printf ("Falling back to %dx%d windowed mode\n", actual_width, actual_height);
+}
+#endif /* USE_SDL2 */
+
 /*
 ================
 VID_SetMode
@@ -1124,7 +1269,29 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 	if (VID_GetFullscreen ())
 	{
 		if (SDL_SetWindowFullscreen (draw_context, 0) != 0)
-			Sys_Error("Couldn't set fullscreen state mode: %s", SDL_GetError());
+		{
+			char error[256];
+
+			q_strlcpy (error, SDL_GetError(), sizeof(error));
+			if (!VID_GetFullscreen())
+			{
+				Con_Warning ("SDL reported failure leaving fullscreen: %s; the window is windowed, continuing\n", error);
+			}
+			else
+			{
+				Con_Warning ("Couldn't leave fullscreen: %s; keeping the current video mode\n", error);
+				/* VID_Restart has already deleted the GL objects. Preserve the usable
+				 * window state and continue to the renderer rebuild. */
+				goto fullscreen_result;
+			}
+		}
+		else if (VID_GetFullscreen())
+		{
+			Con_Warning ("SDL reported success leaving fullscreen, but the window is still fullscreen; keeping the current video mode\n");
+			/* VID_Restart has already deleted the GL objects. Preserve the usable
+			 * window state and continue to the renderer rebuild. */
+			goto fullscreen_result;
+		}
 	}
 
 	if (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_MAXIMIZED)
@@ -1137,21 +1304,25 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 			SDL_SetWindowPosition (draw_context, SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display), SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display));
 		else
 			SDL_SetWindowPosition(draw_context, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-		}
-		SDL_SetWindowDisplayMode (draw_context, VID_SDL2_GetDisplayMode(width, height, refreshrate, bpp));
-		SDL_SetWindowBordered (draw_context, vid_borderless.value ? SDL_FALSE : SDL_TRUE);
-		SDL_SetWindowResizable (draw_context,
-			(!fullscreen && !vid_borderless.value) ? SDL_TRUE : SDL_FALSE);
+	}
+	SDL_SetWindowBordered (draw_context, vid_borderless.value ? SDL_FALSE : SDL_TRUE);
+	SDL_SetWindowResizable (draw_context,
+		(!fullscreen && !vid_borderless.value) ? SDL_TRUE : SDL_FALSE);
 
-	/* Make window fullscreen if needed, and show the window */
+	/* Make window fullscreen if needed, and show the window. SDL2 defers the
+	 * backend transition for hidden windows until SDL_ShowWindow(), which cannot
+	 * report failure. Show a hidden fullscreen window first so the guarded
+	 * transition below receives the real backend result. */
 
-	if (fullscreen) {
-		const Uint32 flag = vid_desktopfullscreen.value ?
-				SDL_WINDOW_FULLSCREEN_DESKTOP : SDL_WINDOW_FULLSCREEN;
-		if (SDL_SetWindowFullscreen (draw_context, flag) != 0)
-			Sys_Error ("Couldn't set fullscreen state mode: %s", SDL_GetError());
+	if (fullscreen)
+	{
+		if (!(SDL_GetWindowFlags(draw_context) & SDL_WINDOW_SHOWN))
+			SDL_ShowWindow (draw_context);
+		if (!VID_TryEnterFullscreen (width, height, refreshrate, bpp))
+			VID_RestoreWindowedFallback (width, height);
 	}
 
+fullscreen_result:
 	SDL_ShowWindow (draw_context);
 	SDL_RaiseWindow (draw_context);
 
