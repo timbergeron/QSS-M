@@ -231,7 +231,7 @@ static void QSSLaunchNewInstance(void)
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    /* NSWorkspaceOpenConfiguration needs macOS 10.15; QSS-M supports 10.13. */
+    /* Deprecated launch API, kept until it is migrated to NSWorkspaceOpenConfiguration. */
     if (![[NSWorkspace sharedWorkspace] launchApplicationAtURL:applicationURL
                                                        options:(NSWorkspaceLaunchDefault | NSWorkspaceLaunchNewInstance)
                                                  configuration:@{

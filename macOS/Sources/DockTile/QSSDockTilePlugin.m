@@ -51,7 +51,7 @@ static void QSSDockLaunchApp(NSArray *launchArguments)
         return;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    /* NSWorkspaceOpenConfiguration needs macOS 10.15; the plugin targets 10.13. */
+    /* Deprecated launch API, kept until it is migrated to NSWorkspaceOpenConfiguration. */
     if (![[NSWorkspace sharedWorkspace] launchApplicationAtURL:applicationURL
                                                        options:NSWorkspaceLaunchDefault
                                                  configuration:@{ NSWorkspaceLaunchConfigurationArguments : launchArguments }

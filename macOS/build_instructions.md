@@ -6,8 +6,11 @@ Silicon executables:
 
 | Architecture | Minimum macOS version | vcpkg triplet |
 |---|---:|---|
-| `x86_64` | 10.13 | `x64-osx-1013` |
-| `arm64` | 11.0 | `arm64-osx-11` |
+| `x86_64` | 12.0 | `x64-osx-1013` |
+| `arm64` | 12.0 | `arm64-osx-11` |
+
+The triplet names keep their original deployment targets; static dependencies
+built for an older minimum link into the 12.0 application unchanged.
 
 The old Darwin makefile and pre-Xcode cross-compilation scripts are no longer
 supported.

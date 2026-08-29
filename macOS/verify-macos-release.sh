@@ -98,14 +98,14 @@ verify_app()
 	require_equal CFBundleExecutable "$(plist_value "$plist" CFBundleExecutable)" QSS-M
 	require_equal CFBundleShortVersionString "$(plist_value "$plist" CFBundleShortVersionString)" "$EXPECTED_VERSION"
 	require_equal CFBundleVersion "$(plist_value "$plist" CFBundleVersion)" "$EXPECTED_BUILD_NUMBER"
-	require_equal LSMinimumSystemVersion "$(plist_value "$plist" LSMinimumSystemVersion)" 10.13
+	require_equal LSMinimumSystemVersion "$(plist_value "$plist" LSMinimumSystemVersion)" 12.0
 	if /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersionByArchitecture' "$plist" >/dev/null 2>&1; then
 		fail "$plist contains obsolete LSMinimumSystemVersionByArchitecture metadata"
 	fi
 
 	require_arches "$executable"
-	require_equal "x86_64 minimum macOS" "$(minimum_macos x86_64 "$executable")" 10.13
-	require_equal "arm64 minimum macOS" "$(minimum_macos arm64 "$executable")" 11.0
+	require_equal "x86_64 minimum macOS" "$(minimum_macos x86_64 "$executable")" 12.0
+	require_equal "arm64 minimum macOS" "$(minimum_macos arm64 "$executable")" 12.0
 	require_arches "$framework"
 
 	bad_dependency=$(otool -L "$executable" | awk 'NR > 1 { print $1 }' |
