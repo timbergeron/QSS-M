@@ -113,6 +113,7 @@
   {
     "name": "winpthreads",
     "vendored": "12.0.0.r747",
+    "cadence": "monthly",
     "dlls": ["Windows/codecs/x86/libwinpthread-1.dll", "Windows/codecs/x64/libwinpthread-1.dll"],
     "packages": [
       { "repository": "mingw32", "name": "mingw-w64-i686-winpthreads", "baseline": "14.0.0.r179.g24aaa6147-1" },

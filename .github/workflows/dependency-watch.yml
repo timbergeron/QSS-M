@@ -95,10 +95,11 @@ jobs:
       cancel-in-progress: false
     env:
       NOTIFY_USER: ${{ vars.DEPENDENCY_NOTIFY_USER || github.repository_owner }}
-      # gamecontrollerdb.txt takes upstream commits almost daily, and every new
-      # commit is a separate notification, so it is only compared on the monthly
-      # schedule and on manual runs.
-      CHECK_CONTROLLER_DB: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '23 16 1 * *' }}
+      # gamecontrollerdb.txt and the dependencies marked "cadence": "monthly" in
+      # the manifest change upstream almost daily, and every new version is a
+      # separate notification, so they are only compared on the monthly schedule
+      # and on manual runs.
+      CHECK_MONTHLY_DEPENDENCIES: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '23 16 1 * *' }}
 
     steps:
       - name: Check out repository
@@ -130,7 +131,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ "$CHECK_MONTHLY_DEPENDENCIES" = "true" ]; then
+            set -- --monthly
+          else
+            set --
+          fi
           node .github/scripts/check-msys2-dependencies.js \
+            "$@" \
             .github/dependency-watch.json \
             . \
             "$RUNNER_TEMP/dependency-updates.json" \
@@ -139,7 +146,7 @@ jobs:
 
       - name: Find latest controller database snapshot
         id: controller-db
-        if: env.CHECK_CONTROLLER_DB == 'true'
+        if: env.CHECK_MONTHLY_DEPENDENCIES == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           retries: 3
@@ -157,7 +164,7 @@ jobs:
             return commit;
 
       - name: Compare bundled controller database
-        if: env.CHECK_CONTROLLER_DB == 'true'
+        if: env.CHECK_MONTHLY_DEPENDENCIES == 'true'
         shell: bash
         env:
           AVAILABLE_COMMIT: ${{ steps.controller-db.outputs.result }}
@@ -179,7 +186,7 @@ jobs:
             "$RUNNER_TEMP/gamecontrollerdb-update.json"
 
       - name: Combine dependency updates
-        if: env.CHECK_CONTROLLER_DB == 'true'
+        if: env.CHECK_MONTHLY_DEPENDENCIES == 'true'
         shell: bash
         env:
           MSYS2_UPDATES: ${{ runner.temp }}/dependency-updates.json

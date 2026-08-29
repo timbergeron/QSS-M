@@ -73,6 +73,24 @@ test("findChanges treats a matching baseline as acknowledged even when the vendo
   assert.deepEqual(findChanges(dependencies, databases), []);
 });
 
+test("findChanges compares monthly dependencies only when monthly checks are enabled", () => {
+  const dependencies = [{
+    name: "winpthreads",
+    vendored: "12.0",
+    cadence: "monthly",
+    dlls: ["Windows/codecs/libwinpthread-1.dll"],
+    packages: [{ repository: "mingw64", name: "package-a", baseline: "14.0.r1-1" }],
+  }];
+  const databases = new Map([
+    ["mingw64", new Map([["package-a", { VERSION: "14.0.r2-1" }]])],
+  ]);
+
+  assert.deepEqual(findChanges(dependencies, databases), []);
+  const changes = findChanges(dependencies, databases, { includeMonthly: true });
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].name, "winpthreads");
+});
+
 test("findChanges fails closed when a monitored package disappears", () => {
   const dependencies = [{
     name: "missing",
@@ -98,6 +116,11 @@ test("validateManifest requires complete, one-to-one DLL coverage", () => {
       dlls: ["Windows/codecs/example.dll"],
       packages: [{ repository: "mingw64", name: "example-package", baseline: "1.0-1" }],
     }];
+    assert.doesNotThrow(() => validateManifest(manifest, root));
+
+    manifest[0].cadence = "weekly";
+    assert.throws(() => validateManifest(manifest, root), /Invalid cadence/);
+    manifest[0].cadence = "monthly";
     assert.doesNotThrow(() => validateManifest(manifest, root));
 
     fs.writeFileSync(path.join(root, "Windows", "codecs", "untracked.dll"), "fixture");

@@ -5,6 +5,10 @@
 const fs = require("fs");
 const path = require("path");
 
+// Dependencies whose upstream packaging changes almost daily are only compared
+// on the monthly schedule, so a review notification stays worth reading.
+const MONTHLY_CADENCE = "monthly";
+
 function parseDescription(contents) {
   const fields = {};
   let current = null;
@@ -84,6 +88,8 @@ function validateManifest(dependencies, repositoryRoot) {
         !Array.isArray(dependency.packages) || dependency.packages.length === 0) {
       throw new Error("Every dependency requires name, vendored, dlls, and packages fields.");
     }
+    if (dependency.cadence !== undefined && dependency.cadence !== MONTHLY_CADENCE)
+      throw new Error(`Invalid cadence for ${dependency.name}: ${dependency.cadence}`);
     if (dependencyNames.has(dependency.name))
       throw new Error(`Duplicate dependency name: ${dependency.name}`);
     dependencyNames.add(dependency.name);
@@ -119,11 +125,14 @@ function validateManifest(dependencies, repositoryRoot) {
   }
 }
 
-function findChanges(dependencies, databases) {
+function findChanges(dependencies, databases, { includeMonthly = false } = {}) {
   const changes = [];
   const missing = [];
 
   for (const dependency of dependencies) {
+    if (dependency.cadence === MONTHLY_CADENCE && !includeMonthly)
+      continue;
+
     for (const pkg of dependency.packages) {
       const database = databases.get(pkg.repository);
       if (!database)
@@ -167,10 +176,12 @@ function findChanges(dependencies, databases) {
 }
 
 function main(argv) {
-  const [manifestPath, repositoryRoot, outputPath, ...databaseArguments] = argv;
+  const includeMonthly = argv.includes("--monthly");
+  const [manifestPath, repositoryRoot, outputPath, ...databaseArguments] =
+    argv.filter((argument) => argument !== "--monthly");
   if (!manifestPath || !repositoryRoot || !outputPath || databaseArguments.length === 0) {
     throw new Error(
-      "usage: check-msys2-dependencies.js MANIFEST REPOSITORY_ROOT OUTPUT REPOSITORY=EXTRACTED_DB [...]"
+      "usage: check-msys2-dependencies.js [--monthly] MANIFEST REPOSITORY_ROOT OUTPUT REPOSITORY=EXTRACTED_DB [...]"
     );
   }
 
@@ -189,7 +200,7 @@ function main(argv) {
     databases.set(name, loadPackageDatabase(databasePath));
   }
 
-  const changes = findChanges(dependencies, databases);
+  const changes = findChanges(dependencies, databases, { includeMonthly });
   fs.writeFileSync(outputPath, `${JSON.stringify(changes, null, 2)}\n`);
   console.log(changes.length
     ? `Found ${changes.length} dependency package change(s).`
@@ -206,6 +217,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  MONTHLY_CADENCE,
   findChanges,
   listDlls,
   loadPackageDatabase,
