@@ -24,6 +24,9 @@ on:
   schedule:
     # Daily at 15:23 UTC. Avoid the top of the hour, when schedules may queue.
     - cron: "23 15 * * *"
+    # Monthly on the 1st at 16:23 UTC, for dependencies that change too often
+    # upstream to be worth a daily notification.
+    - cron: "23 16 1 * *"
   workflow_dispatch:
 
 permissions:
@@ -92,6 +95,10 @@ jobs:
       cancel-in-progress: false
     env:
       NOTIFY_USER: ${{ vars.DEPENDENCY_NOTIFY_USER || github.repository_owner }}
+      # gamecontrollerdb.txt takes upstream commits almost daily, and every new
+      # commit is a separate notification, so it is only compared on the monthly
+      # schedule and on manual runs.
+      CHECK_CONTROLLER_DB: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '23 16 1 * *' }}
 
     steps:
       - name: Check out repository
@@ -132,6 +139,7 @@ jobs:
 
       - name: Find latest controller database snapshot
         id: controller-db
+        if: env.CHECK_CONTROLLER_DB == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           retries: 3
@@ -149,6 +157,7 @@ jobs:
             return commit;
 
       - name: Compare bundled controller database
+        if: env.CHECK_CONTROLLER_DB == 'true'
         shell: bash
         env:
           AVAILABLE_COMMIT: ${{ steps.controller-db.outputs.result }}
@@ -170,6 +179,7 @@ jobs:
             "$RUNNER_TEMP/gamecontrollerdb-update.json"
 
       - name: Combine dependency updates
+        if: env.CHECK_CONTROLLER_DB == 'true'
         shell: bash
         env:
           MSYS2_UPDATES: ${{ runner.temp }}/dependency-updates.json
