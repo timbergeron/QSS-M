@@ -2092,11 +2092,11 @@ static void Test_Poll (void *unused)
 			Sys_Error("Unexpected response to Player Info request\n");
 
 		MSG_ReadByte(); /* playerNumber */
-		Q_strcpy(name, MSG_ReadString());
+		q_strlcpy(name, MSG_ReadString(), sizeof(name));
 		colors = MSG_ReadLong();
 		frags = MSG_ReadLong();
 		connectTime = MSG_ReadLong();
-		Q_strcpy(address, MSG_ReadString());
+		q_strlcpy(address, MSG_ReadString(), sizeof(address));
 
 		Con_Printf("%s\n  frags:%3i  colors:%d %d  time:%d\n  %s\n", name, frags, colors >> 4, colors & 0x0f, connectTime / 60, address);
 	}
@@ -2221,10 +2221,10 @@ static void Test2_Poll (void *unused)
 	if (MSG_ReadByte() != CCREP_RULE_INFO)
 		goto Error;
 
-	Q_strcpy(name, MSG_ReadString());
+	q_strlcpy(name, MSG_ReadString(), sizeof(name));
 	if (name[0] == 0)
 		goto Done;
-	Q_strcpy(value, MSG_ReadString());
+	q_strlcpy(value, MSG_ReadString(), sizeof(value));
 
 	Con_Printf("%-16.16s  %-16.16s\n", name, value);
 
@@ -3415,9 +3415,8 @@ void Datagram_AddHostCacheInfo(struct qsockaddr *readaddr, const char *cname, co
 
 	if (!supported)
 	{	//server is unsupported. give it a star.
-		Q_strcpy(hostcache[n].cname, hostcache[n].name);
-		Q_strcpy(hostcache[n].name, "*");
-		Q_strcat(hostcache[n].name, hostcache[n].cname);
+		q_strlcpy(hostcache[n].cname, hostcache[n].name, sizeof(hostcache[n].cname));
+		q_snprintf(hostcache[n].name, sizeof(hostcache[n].name), "*%s", hostcache[n].cname);
 	}
 	if (readaddr)
 	{
@@ -3674,10 +3673,9 @@ static qboolean _Datagram_SearchForHosts (qboolean xmit)
 		hostcache[n].maxusers = MSG_ReadByte();
 		if (MSG_ReadByte() != NET_PROTOCOL_VERSION)
 		{
-			Q_strcpy(hostcache[n].cname, hostcache[n].name);
+			q_strlcpy(hostcache[n].cname, hostcache[n].name, sizeof(hostcache[n].cname));
 			hostcache[n].cname[14] = 0;
-			Q_strcpy(hostcache[n].name, "*");
-			Q_strcat(hostcache[n].name, hostcache[n].cname);
+			q_snprintf(hostcache[n].name, sizeof(hostcache[n].name), "*%s", hostcache[n].cname);
 		}
 		Q_memcpy(&hostcache[n].addr, &readaddr, sizeof(struct qsockaddr));
 		hostcache[n].driver = net_driverlevel;

@@ -230,7 +230,8 @@ static int PartialIPAddress (const char *in, struct qsockaddr *hostaddr)
 
 	buff[0] = '.';
 	b = buff;
-	strcpy(buff+1, in);
+	if (q_strlcpy(buff + 1, in, sizeof(buff) - 1) >= sizeof(buff) - 1)
+		return -1;
 	if (buff[1] == '.')
 		b++;
 
@@ -516,7 +517,7 @@ int UDP_GetNameFromAddr (struct qsockaddr *addr, char *name)
 							sizeof(struct in_addr), AF_INET);
 		if (hostentry)
 		{
-			strncpy (name, (char *)hostentry->h_name, NET_NAMELEN - 1);
+			q_strlcpy (name, (char *)hostentry->h_name, NET_NAMELEN);
 			return 0;
 		}
 	}
