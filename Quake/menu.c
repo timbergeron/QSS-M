@@ -8773,8 +8773,8 @@ void M_Menu_Setup_f (void)
 	if (from_namemaker) // woods #namemaker
 		from_namemaker = !from_namemaker;
 	else
-		Q_strcpy(setup_myname, cl_name.string);
-	Q_strcpy(setup_hostname, hostname.string);
+		q_strlcpy(setup_myname, cl_name.string, sizeof(setup_myname));
+	q_strlcpy(setup_hostname, hostname.string, sizeof(setup_hostname));
 	setup_top = setup_oldtop = CL_PLColours_Parse(cl_topcolor.string);
 	setup_bottom = setup_oldbottom = CL_PLColours_Parse(cl_bottomcolor.string);
 	M_TextField_Init(&setup_hostname_field, setup_hostname, 15, false);
