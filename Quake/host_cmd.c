@@ -9047,7 +9047,7 @@ Writes a SAVEGAME_COMMENT_LENGTH character comment describing the current
 void Host_SavegameComment (char text[SAVEGAME_COMMENT_LENGTH + 1])
 {
 	int		i;
-	char	kills[20];
+	char	kills[64];
 	char	*p;
 
 	for (i = 0; i < SAVEGAME_COMMENT_LENGTH; i++)
@@ -9065,8 +9065,8 @@ void Host_SavegameComment (char text[SAVEGAME_COMMENT_LENGTH + 1])
 	while ((p = strchr(text, '\r')) != NULL)
 		*p = ' ';
 
-	sprintf (kills,"kills:%3i/%3i", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
-	memcpy (text+22, kills, strlen(kills));
+	q_snprintf (kills, sizeof(kills), "kills:%3i/%3i", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
+	memcpy (text+22, kills, q_min(strlen(kills), SAVEGAME_COMMENT_LENGTH - 22));
 
 // convert space to _ to make stdio happy
 	for (i = 0; i < SAVEGAME_COMMENT_LENGTH; i++)
