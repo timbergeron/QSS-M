@@ -6,6 +6,25 @@ function markerFor(change) {
   return `<!-- qssm-dependency:${change.package}:${change.packageVersion} -->`;
 }
 
+// Every package an existing notification issue reports on, read back from the
+// markers it was created with.
+function markedPackages(body) {
+  return [...(body || "").matchAll(/<!-- qssm-dependency:([^\s:]+):[^\s]+ -->/g)]
+    .map((match) => match[1]);
+}
+
+// An open issue is superseded once every package it reports on appears in the
+// notification being created, which always carries the newer version.
+function findSuperseded(issues, unreported) {
+  const packages = new Set(unreported.map((change) => change.package));
+  return issues.filter((issue) => {
+    if (issue.state !== "open" || issue.pull_request)
+      return false;
+    const reported = markedPackages(issue.body);
+    return reported.length > 0 && reported.every((name) => packages.has(name));
+  });
+}
+
 async function ensureLabel({ github, core, owner, repo }) {
   try {
     await github.rest.issues.getLabel({ owner, repo, name: LABEL });
@@ -75,6 +94,11 @@ module.exports = async function notifyDependencyUpdates({ github, context, core,
     );
   }
 
+  const superseded = findSuperseded(issues, unreported);
+  const supersedeNote = superseded.length
+    ? [`Supersedes ${superseded.map((issue) => `#${issue.number}`).join(", ")}, closed as out of date.`, ""]
+    : [];
+
   const body = [
     `@${notifyUser}, a monitored bundled dependency changed for QSS-M.`,
     "",
@@ -84,6 +108,7 @@ module.exports = async function notifyDependencyUpdates({ github, context, core,
     "",
     ...reviewNotes,
     "",
+    ...supersedeNote,
     ...(upstreamLinks.length ? ["Upstream projects:", "", ...upstreamLinks, ""] : []),
     ...unreported.map(markerFor),
   ].join("\n");
@@ -110,8 +135,33 @@ module.exports = async function notifyDependencyUpdates({ github, context, core,
     core.warning(`Issue #${created.data.number} was created, but assignment to ${notifyUser} failed: ${error.message}`);
   }
 
+  // Closing an older notification must never lose the newer one, so failures
+  // are reported rather than thrown.
+  let closed = 0;
+  for (const issue of superseded) {
+    try {
+      await github.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: issue.number,
+        body: `Superseded by #${created.data.number}, which reports the current version.`,
+      });
+      await github.rest.issues.update({
+        owner,
+        repo,
+        issue_number: issue.number,
+        state: "closed",
+        state_reason: "not_planned",
+      });
+      closed += 1;
+    } catch (error) {
+      core.warning(`Issue #${issue.number} could not be closed as superseded: ${error.message}`);
+    }
+  }
+
   core.info(`Created issue #${created.data.number} for ${unreported.length} dependency change(s).`);
-  return { created: true, issueNumber: created.data.number, reported: unreported.length };
+  return { created: true, issueNumber: created.data.number, reported: unreported.length, closed };
 };
 
 module.exports.LABEL = LABEL;
+module.exports.findSuperseded = findSuperseded;

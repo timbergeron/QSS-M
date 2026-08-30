@@ -6,7 +6,9 @@ const test = require("node:test");
 const notify = require("./notify-dependency-updates.js");
 
 function fixture(overrides = {}) {
-  const calls = { created: [], assigned: [], labelsCreated: [], paginatedWith: null };
+  const calls = {
+    created: [], assigned: [], labelsCreated: [], comments: [], closed: [], paginatedWith: null,
+  };
   const core = {
     infos: [],
     warnings: [],
@@ -39,6 +41,14 @@ function fixture(overrides = {}) {
           calls.assigned.push(args);
           if (overrides.assignmentError)
             throw new Error("not assignable");
+        },
+        async createComment(args) {
+          if (overrides.closeError)
+            throw new Error("comments are locked");
+          calls.comments.push(args);
+        },
+        async update(args) {
+          calls.closed.push(args);
         },
       },
     },
@@ -79,7 +89,7 @@ test("creates, mentions, and assigns a deduplicated notification issue", async (
     updates: [update],
     notifyUser: "owner",
   });
-  assert.deepEqual(result, { created: true, issueNumber: 42, reported: 1 });
+  assert.deepEqual(result, { created: true, issueNumber: 42, reported: 1, closed: 0 });
   assert.equal(calls.created.length, 1);
   assert.match(calls.created[0].body, /@owner/);
   assert.match(calls.created[0].body, /monitored bundled dependency changed/);
@@ -118,6 +128,81 @@ test("renders a controller database update without DLL-specific guidance", async
     `<!-- qssm-dependency:mdqinc/SDL_GameControllerDB:${commit} -->`
   ));
   assert.doesNotMatch(body, /Do not replace Windows DLLs/);
+});
+
+test("closes an open notification once a newer version supersedes it", async () => {
+  const stale = {
+    number: 7,
+    state: "open",
+    body: "<!-- qssm-dependency:example-package:1.0-1 -->",
+  };
+  const { calls, core, github } = fixture({ issues: [stale] });
+  const result = await notify({
+    github,
+    context: { repo: { owner: "owner", repo: "repo" } },
+    core,
+    updates: [update],
+    notifyUser: "owner",
+  });
+
+  assert.equal(result.closed, 1);
+  assert.match(calls.created[0].body, /Supersedes #7, closed as out of date\./);
+  assert.equal(calls.comments[0].issue_number, 7);
+  assert.match(calls.comments[0].body, /Superseded by #42/);
+  assert.deepEqual(calls.closed[0], {
+    owner: "owner",
+    repo: "repo",
+    issue_number: 7,
+    state: "closed",
+    state_reason: "not_planned",
+  });
+});
+
+test("keeps notifications that are closed, unrelated, or only partly superseded", async () => {
+  const issues = [
+    { number: 5, state: "closed", body: "<!-- qssm-dependency:example-package:1.0-1 -->" },
+    { number: 6, state: "open", body: "<!-- qssm-dependency:other-package:2.0-1 -->" },
+    {
+      number: 7,
+      state: "open",
+      body: "<!-- qssm-dependency:example-package:1.0-1 -->\n" +
+        "<!-- qssm-dependency:other-package:2.0-1 -->",
+    },
+    { number: 8, state: "open", body: "no markers here" },
+  ];
+  const { calls, core, github } = fixture({ issues });
+  const result = await notify({
+    github,
+    context: { repo: { owner: "owner", repo: "repo" } },
+    core,
+    updates: [update],
+    notifyUser: "owner",
+  });
+
+  assert.equal(result.closed, 0);
+  assert.equal(calls.closed.length, 0);
+  assert.doesNotMatch(calls.created[0].body, /Supersedes/);
+});
+
+test("keeps the new notification when an older one cannot be closed", async () => {
+  const stale = {
+    number: 7,
+    state: "open",
+    body: "<!-- qssm-dependency:example-package:1.0-1 -->",
+  };
+  const { calls, core, github } = fixture({ issues: [stale], closeError: true });
+  const result = await notify({
+    github,
+    context: { repo: { owner: "owner", repo: "repo" } },
+    core,
+    updates: [update],
+    notifyUser: "owner",
+  });
+
+  assert.equal(result.created, true);
+  assert.equal(result.closed, 0);
+  assert.equal(calls.closed.length, 0);
+  assert.equal(core.warnings.length, 1);
 });
 
 test("creates the dedicated label when it does not exist", async () => {
