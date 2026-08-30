@@ -48,6 +48,7 @@ typedef struct trace_s
 #define	MOVE_NOMONSTERS	1
 #define	MOVE_MISSILE	2
 
+#define MOVE_LAGGED (1<<6)
 #define MOVE_HITALLCONTENTS (1<<9)
 
 

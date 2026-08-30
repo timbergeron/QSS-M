@@ -164,6 +164,15 @@ enum client_signon_phase_e
 	CLIENT_SIGNON_COMPLETE,
 };
 
+#define SV_ANTILAG_MAX_HISTORY 0.5 // never rewind through an extended ack stall
+
+typedef struct laggedentinfo_s
+{
+	qboolean present;
+	vec3_t origin;
+	vec3_t angles;
+} laggedentinfo_t;
+
 typedef struct client_s
 {
 	qboolean		active;				// false = client is free
@@ -252,9 +261,18 @@ typedef struct client_s
 		} *ents;
 		int numents;	//doesn't contain an entry for every entity, just ones that were sent this frame. no 0 bits
 		int maxents;
+		laggedentinfo_t *laggedplayers;
+		size_t numlaggedplayers;
+		size_t maxlaggedplayers;
+		float laggedtime;
 	} *frames;
 	size_t numframes;	//preallocated power-of-two
 	int lastacksequence;
+	laggedentinfo_t *laggedents;
+	size_t numlaggedents;
+	size_t maxlaggedents;
+	float laggedents_frac;
+	float laggedents_time;
 	int lastmovemessage;
 	double lastmovetime;
 	qboolean usingpmove;	//using the SV_RunClientCommand entrypoint, or getting pmove thrust upon them serverside (disables sv_user.c+movetype stuff, enables provides pmove hints to the client)
@@ -370,6 +388,9 @@ extern	cvar_t	deathmatch;
 extern	cvar_t	coop;
 extern	cvar_t	fraglimit;
 extern	cvar_t	timelimit;
+extern	cvar_t	sv_antilag;
+extern	cvar_t	sv_antilag_frac;
+extern	cvar_t	sv_antilag_maxrewind;
 
 extern	server_static_t	svs;				// persistant server info
 extern	server_t		sv;					// local server

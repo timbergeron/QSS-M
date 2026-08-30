@@ -1798,6 +1798,8 @@ static void PF_tracebox(void)
 	v2 = G_VECTOR(OFS_PARM3);
 	nomonsters = G_FLOAT(OFS_PARM4);
 	ent = G_EDICT(OFS_PARM5);
+	if (sv_antilag.value >= 2 && qcvm == &sv.qcvm)
+		nomonsters |= MOVE_LAGGED;
 
 	/* FIXME FIXME FIXME: Why do we hit this with certain progs.dat ?? */
 	if (developer.value) {
@@ -11188,6 +11190,7 @@ void PR_DumpPlatform_f(void)
 
 		//extra constants
 		fprintf(f, "\n\n//Supported Extension Constants\n");
+		fprintf(f, "const float MOVE_LAGGED = "STRINGIFY(MOVE_LAGGED)";\n");
 		fprintf(f, "const float MOVETYPE_FOLLOW	= "STRINGIFY(MOVETYPE_EXT_FOLLOW)";\n");
 		fprintf(f, "const float SOLID_CORPSE	= "STRINGIFY(SOLID_EXT_CORPSE)";\n");
 

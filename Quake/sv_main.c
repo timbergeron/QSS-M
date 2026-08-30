@@ -716,16 +716,25 @@ void SVFTE_DestroyFrames(client_t *client)
 	{
 		client->numframes--;
 		free(client->frames[client->numframes].ents);
+		free(client->frames[client->numframes].laggedplayers);
 	}
 	if (client->frames)
 		free(client->frames);
 	client->frames = NULL;
+	free(client->laggedents);
+	client->laggedents = NULL;
+	client->numlaggedents = 0;
+	client->maxlaggedents = 0;
+	client->laggedents_frac = 0;
+	client->laggedents_time = 0;
 
 	client->lastacksequence = 0;
 }
 static void SVFTE_SetupFrames(client_t *client)
 {
 	size_t fr;
+	SVFTE_DestroyFrames(client);
+
 	//the client will clear out their stats on receipt of the svc_serverinfo packet.
 	//we won't send any reliables until they receive it
 	//so it should be enough to just clear these here, and they'll get their new stats with the first entity update once they're spawned
@@ -734,10 +743,7 @@ static void SVFTE_SetupFrames(client_t *client)
 	client->lastmovemessage = 0;	//it'll clear this too
 
 	if (!client->protocol_pext2)
-	{
-		SVFTE_DestroyFrames(client);
 		return;
-	}
 
 	client->numframes = 64;	//must be power-of-two
 	client->frames = malloc(sizeof(*client->frames) * client->numframes);
@@ -783,9 +789,34 @@ static void SVFTE_DroppedFrame(client_t *client, int sequence)
 			client->pendingcsqcentities_bits[frame->ents[i].num] |= frame->ents[i].csqcbits;
 	}
 }
+static float SVFTE_AntilagMaxRewind(void)
+{	//operator ceiling on how far a trace may rewind, bounded by the hard stale-history limit.
+	if (!isfinite(sv_antilag_maxrewind.value))
+		return 0.25f;
+	return CLAMP(0.0f, sv_antilag_maxrewind.value, (float)SV_ANTILAG_MAX_HISTORY);
+}
+static struct deltaframe_s *SVFTE_FindLaggedFrame(client_t *client, double target)
+{	//oldest recorded snapshot that is no older than target. anything newer hands back
+	//compensation the client's latency actually earned, so picking the minimum is the point.
+	struct deltaframe_s *best = NULL;
+	size_t i;
+
+	for (i = 0; i < client->numframes; i++)
+	{
+		struct deltaframe_s *f = &client->frames[i];
+		if (!f->numlaggedplayers)
+			continue;	//slot never written since the last map change
+		if (f->laggedtime < target)
+			continue;
+		if (!best || f->laggedtime < best->laggedtime)
+			best = f;
+	}
+	return best;
+}
 void SVFTE_Ack(client_t *client, int sequence)
 {	//any gaps in the sequence need to considered dropped
 	struct deltaframe_s *frame;
+	qboolean advanced;
 	int dropseq = client->lastacksequence+1;
 	if (!client->numframes)
 		return;	//client shouldn't be using this.
@@ -796,6 +827,7 @@ void SVFTE_Ack(client_t *client, int sequence)
 //		else Con_SafePrintf("dupe or stale ack (%s, %i->%i)\n", client->name, client->lastacksequence, sequence);
 		return;	//panic
 	}
+	advanced = sequence > client->lastacksequence;
 	
 	if ((unsigned)(dropseq-sequence) >= client->numframes)
 		dropseq = sequence - client->numframes;
@@ -806,10 +838,55 @@ void SVFTE_Ack(client_t *client, int sequence)
 	frame = &client->frames[sequence&(client->numframes-1)];
 	if (frame->sequence == sequence)
 	{
+		client->ping_times[client->num_pings%NUM_PING_TIMES] = qcvm->time - frame->timestamp;
+		client->num_pings++;
+
+		if (sv_antilag.value > 0 && frame->numlaggedplayers)
+		{	//The ceiling is measured against the acknowledged snapshot's age, which is roughly
+			//rtt plus server scheduling and ack jitter - not the scoreboard ping. When the ack is
+			//older than the ceiling we substitute a more recent recorded snapshot rather than
+			//interpolating towards the acked positions: rewind is then quantized to a server frame
+			//and may fall slightly under the ceiling, but never over it, and we never synthesize a
+			//position the player never occupied. Substituting can also change which players are
+			//present, as one may have left this client's pvs between the two frames.
+			struct deltaframe_s *src = frame;
+			float maxrewind = SVFTE_AntilagMaxRewind();
+			double historyage = qcvm->time - frame->laggedtime;
+
+			if (maxrewind <= 0)
+				src = NULL;
+			else if (historyage > maxrewind)
+				src = SVFTE_FindLaggedFrame(client, qcvm->time - maxrewind);
+
+			if (src)
+			{
+				if (client->maxlaggedents < src->numlaggedplayers)
+				{
+					laggedentinfo_t *newlaggedents = realloc(client->laggedents,
+						src->numlaggedplayers * sizeof(*client->laggedents));
+					if (!newlaggedents)
+						Sys_Error ("SVFTE_Ack: out of memory (%u lagged players)",
+							(unsigned int)src->numlaggedplayers);
+					client->laggedents = newlaggedents;
+					client->maxlaggedents = src->numlaggedplayers;
+				}
+				memcpy(client->laggedents, src->laggedplayers,
+					src->numlaggedplayers * sizeof(*client->laggedents));
+				client->numlaggedents = src->numlaggedplayers;
+				client->laggedents_time = src->laggedtime;
+				client->laggedents_frac = isfinite(sv_antilag_frac.value)
+					? CLAMP(0.0f, sv_antilag_frac.value, 1.0f) : 1.0f;
+			}
+			else
+				client->numlaggedents = 0;
+		}
+		else
+			client->numlaggedents = 0;
+
 		frame->sequence = -1;
-		host_client->ping_times[host_client->num_pings%NUM_PING_TIMES] = qcvm->time - frame->timestamp;
-		host_client->num_pings++;
 	}
+	else if (advanced || sv_antilag.value <= 0)
+		client->numlaggedents = 0;
 }
 static void SVFTE_WriteStats(client_t *client, sizebuf_t *msg)
 {
@@ -978,6 +1055,63 @@ static void SVFTE_CalcEntityDeltas(client_t *client)
 	snapshot_numents = 0;
 	snapshot_maxents = oldstop-olds;
 }
+
+static void SVFTE_RecordLaggedPlayers(client_t *client, struct deltaframe_s *frame)
+{
+	struct entity_num_state_s *state;
+	client_t *player;
+	edict_t *ent;
+	double age;
+	size_t i, count;
+
+	if (sv_antilag.value <= 0)
+	{
+		frame->numlaggedplayers = 0;
+		return;
+	}
+
+	count = (size_t)svs.maxclients;
+	if (frame->maxlaggedplayers < count)
+	{
+		laggedentinfo_t *newlaggedplayers = realloc(frame->laggedplayers,
+			count * sizeof(*frame->laggedplayers));
+		if (!newlaggedplayers)
+			Sys_Error ("SVFTE_RecordLaggedPlayers: out of memory (%u players)",
+				(unsigned int)count);
+		frame->laggedplayers = newlaggedplayers;
+		frame->maxlaggedplayers = count;
+	}
+
+	memset(frame->laggedplayers, 0, count * sizeof(*frame->laggedplayers));
+	frame->numlaggedplayers = count;
+	frame->laggedtime = qcvm->time;
+
+	// Track only players in the PVS-culled snapshot the client was actually sent.
+	// Players absent from it intentionally keep their current collision position.
+	for (i = 0; i < client->numpreviousentities; i++)
+	{
+		state = &client->previousentities[i];
+		if (!state->num)
+			continue;
+		if (state->num > count)
+			continue;
+
+		player = &svs.clients[state->num - 1];
+		ent = EDICT_NUM(state->num);
+		if (!player->active || !player->spawned || player->edict != ent || ent->free)
+			continue;
+
+		age = player->usingpmove && player->lastmovetime > 0.0
+			? qcvm->time - player->lastmovetime : 0.0;
+		age = CLAMP(0.0, age, 0.1); // FTE's untraced extrapolation safety bound
+		VectorMA(state->state.origin, age, ent->v.velocity,
+			frame->laggedplayers[state->num - 1].origin);
+		VectorCopy(state->state.angles,
+			frame->laggedplayers[state->num - 1].angles);
+		frame->laggedplayers[state->num - 1].present = true;
+	}
+}
+
 static void SVFTE_WriteEntitiesToClient(client_t *client, sizebuf_t *msg, size_t overflowsize)
 {
 	struct entity_num_state_s *state, *stateend;
@@ -989,6 +1123,7 @@ static void SVFTE_WriteEntitiesToClient(client_t *client, sizebuf_t *msg, size_t
 	struct deltaframe_s *frame = &client->frames[sequence&(client->numframes-1)];
 	frame->sequence = sequence;	//so we know that it wasn't stale later.
 	frame->timestamp = qcvm->time;
+	SVFTE_RecordLaggedPlayers(client, frame);
 
 	msg->maxsize = overflowsize;
 
@@ -1699,6 +1834,9 @@ void SV_Init (void)
 	extern	cvar_t	sv_autosave; // woods #autosave (iw)
 	extern	cvar_t	sv_autosave_interval; // woods #autosave (iw)
 	extern	cvar_t	sv_nqplayerphysics; //spike
+	extern	cvar_t	sv_antilag;
+	extern	cvar_t	sv_antilag_frac;
+	extern	cvar_t	sv_antilag_maxrewind;
 	extern	cvar_t	sv_public;	//spike
 	extern	cvar_t	sv_reportheartbeats;	//spike
 	extern	cvar_t	com_protocolname;	//spike
@@ -1741,6 +1879,9 @@ void SV_Init (void)
 	Cvar_RegisterVariable (&sv_autosave_interval); // woods #autosave (iw)
 	Cvar_RegisterVariable (&sv_nqplayerphysics);	//spike
 	Cvar_RegisterVariable (&sv_fullpitch); // woods
+	Cvar_RegisterVariable (&sv_antilag);
+	Cvar_RegisterVariable (&sv_antilag_frac);
+	Cvar_RegisterVariable (&sv_antilag_maxrewind);
 
 
 	Cvar_RegisterVariable (&sv_sound_watersplash); //spike

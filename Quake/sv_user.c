@@ -48,6 +48,9 @@ cvar_t	sv_idealpitchscale = {"sv_idealpitchscale","0.8",CVAR_NONE};
 cvar_t	sv_altnoclip = {"sv_altnoclip","1",CVAR_ARCHIVE}; //johnfitz
 cvar_t	sv_nqplayerphysics = {"sv_nqplayerphysics", "1", CVAR_ARCHIVE | CVAR_SERVERINFO }; //spike. set to 0 for prediction to work. name comes from fte. -- woods, add serverinfo #prednotify
 cvar_t	sv_fullpitch = {"sv_fullpitch","1",CVAR_ARCHIVE| CVAR_SERVERINFO}; // woods -- 1 is qs default, 0 limits server to og nq default #pqfullpitch
+cvar_t	sv_antilag = {"sv_antilag", "0", CVAR_SERVERINFO}; // 0: off, 1: QC opt-in, 2: force player traceline/tracebox calls
+cvar_t	sv_antilag_frac = {"sv_antilag_frac", "1", CVAR_SERVERINFO};
+cvar_t	sv_antilag_maxrewind = {"sv_antilag_maxrewind", "0.25", CVAR_SERVERINFO}; // operator ceiling on rewind, in seconds
 
 qboolean SV_RunThink (edict_t *ent);
 

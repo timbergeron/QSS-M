@@ -43,6 +43,9 @@ typedef struct
 	int			type;
 	unsigned int	hitcontents;	//content types to impact upon... (1<<-CONTENTS_FOO) bitmask
 	edict_t		*passedict;
+	laggedentinfo_t *laggedents;
+	size_t		numlaggedents;
+	float		laggedfrac;
 } moveclip_t;
 
 
@@ -130,7 +133,8 @@ Offset is filled in to contain the adjustment that must be added to the
 testing object's origin to get a point to use with the returned hull.
 ================
 */
-hull_t *SV_HullForEntity (edict_t *ent, vec3_t mins, vec3_t maxs, vec3_t offset)
+static hull_t *SV_HullForEntityAtOrigin (edict_t *ent, vec3_t mins, vec3_t maxs,
+	vec3_t entorigin, vec3_t offset)
 {
 	qmodel_t	*model;
 	vec3_t		size;
@@ -142,7 +146,7 @@ hull_t *SV_HullForEntity (edict_t *ent, vec3_t mins, vec3_t maxs, vec3_t offset)
 	{	// explicit hulls in the BSP model
 		if (ent->v.movetype != MOVETYPE_PUSH && !pr_checkextension.value)
 			Con_Warning ("SOLID_BSP without MOVETYPE_PUSH (%s at %f %f %f)\n",
-				    PR_GetString(ent->v.classname), ent->v.origin[0], ent->v.origin[1], ent->v.origin[2]);
+				    PR_GetString(ent->v.classname), entorigin[0], entorigin[1], entorigin[2]);
 
 		model = qcvm->GetModel(ent->v.modelindex);
 
@@ -150,7 +154,7 @@ hull_t *SV_HullForEntity (edict_t *ent, vec3_t mins, vec3_t maxs, vec3_t offset)
 		{
 			Con_Warning ("SOLID_BSP%s with a non bsp model (%s at %f %f %f)\n",
 					(ent->v.solid == SOLID_EXT_BSPTRIGGER)?"TRIGGER":"",
-				    PR_GetString(ent->v.classname), ent->v.origin[0], ent->v.origin[1], ent->v.origin[2]);
+				    PR_GetString(ent->v.classname), entorigin[0], entorigin[1], entorigin[2]);
 			goto nohitmeshsupport;
 		}
 
@@ -164,7 +168,7 @@ hull_t *SV_HullForEntity (edict_t *ent, vec3_t mins, vec3_t maxs, vec3_t offset)
 
 // calculate an offset value to center the origin
 		VectorSubtract (hull->clip_mins, mins, offset);
-		VectorAdd (offset, ent->v.origin, offset);
+		VectorAdd (offset, entorigin, offset);
 	}
 	else
 	{	// create a temp hull from bounding box sizes
@@ -173,11 +177,16 @@ nohitmeshsupport:
 		VectorSubtract (ent->v.maxs, mins, hullmaxs);
 		hull = SV_HullForBox (hullmins, hullmaxs);
 
-		VectorCopy (ent->v.origin, offset);
+		VectorCopy (entorigin, offset);
 	}
 
 
 	return hull;
+}
+
+hull_t *SV_HullForEntity (edict_t *ent, vec3_t mins, vec3_t maxs, vec3_t offset)
+{
+	return SV_HullForEntityAtOrigin(ent, mins, maxs, ent->v.origin, offset);
 }
 
 /*
@@ -1124,7 +1133,9 @@ Handles selection or creation of a clipping hull, and offseting (and
 eventually rotation) of the end points
 ==================
 */
-trace_t SV_ClipMoveToEntity (edict_t *ent, vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, unsigned int hitcontents)
+static trace_t SV_ClipMoveToEntityAt (edict_t *ent, vec3_t entorigin,
+	vec3_t entangles, vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end,
+	unsigned int hitcontents)
 {
 	trace_t		trace;
 	vec3_t		offset;
@@ -1138,19 +1149,19 @@ trace_t SV_ClipMoveToEntity (edict_t *ent, vec3_t start, vec3_t mins, vec3_t max
 	VectorCopy (end, trace.endpos);
 
 // get the clipping hull
-	hull = SV_HullForEntity (ent, mins, maxs, offset);
+	hull = SV_HullForEntityAtOrigin (ent, mins, maxs, entorigin, offset);
 
 	VectorSubtract (start, offset, start_l);
 	VectorSubtract (end, offset, end_l);
 
 // trace a line through the apropriate clipping hull
-	if ((ent->v.solid == SOLID_BSP || ent->v.solid == SOLID_EXT_BSPTRIGGER) && (ent->v.angles[0]||ent->v.angles[1]||ent->v.angles[2]) && qcvm->edicts != ent)	//don't rotate the world entity's collisions (its not networked, and some maps are buggy, resulting in screwed collisions)
+	if ((ent->v.solid == SOLID_BSP || ent->v.solid == SOLID_EXT_BSPTRIGGER) && (entangles[0]||entangles[1]||entangles[2]) && qcvm->edicts != ent)	//don't rotate the world entity's collisions (its not networked, and some maps are buggy, resulting in screwed collisions)
 	{
 		if (qcvm->rotatingbmodel)
 		{
 #define DotProductTranspose(v,m,a) ((v)[0]*(m)[0][a] + (v)[1]*(m)[1][a] + (v)[2]*(m)[2][a])
 			vec3_t axis[3], start_r, end_r, tmp;
-			AngleVectors(ent->v.angles, axis[0], axis[1], axis[2]);
+			AngleVectors(entangles, axis[0], axis[1], axis[2]);
 			VectorInverse(axis[1]);
 			start_r[0] = DotProduct(start_l, axis[0]);
 			start_r[1] = DotProduct(start_l, axis[1]);
@@ -1192,6 +1203,13 @@ trace_t SV_ClipMoveToEntity (edict_t *ent, vec3_t start, vec3_t mins, vec3_t max
 	return trace;
 }
 
+trace_t SV_ClipMoveToEntity (edict_t *ent, vec3_t start, vec3_t mins, vec3_t maxs,
+	vec3_t end, unsigned int hitcontents)
+{
+	return SV_ClipMoveToEntityAt(ent, ent->v.origin, ent->v.angles, start, mins,
+		maxs, end, hitcontents);
+}
+
 //===========================================================================
 
 /*
@@ -1218,6 +1236,14 @@ static void SV_ClipToLinks ( areanode_t *node, moveclip_t *clip )
 			continue;
 		if (touch->v.solid == SOLID_TRIGGER || touch->v.solid == SOLID_EXT_BSPTRIGGER)
 			Sys_Error ("Trigger in clipping list");
+
+		if (clip->laggedents)
+		{
+			int entnum = NUM_FOR_EDICT(touch) - 1;
+			if (entnum >= 0 && (size_t)entnum < clip->numlaggedents &&
+				clip->laggedents[entnum].present)
+				continue;
+		}
 
 		if (clip->type == MOVE_NOMONSTERS && touch->v.solid != SOLID_BSP)
 			continue;
@@ -1297,6 +1323,113 @@ static void SV_ClipToLinks ( areanode_t *node, moveclip_t *clip )
 		SV_ClipToLinks ( node->children[0], clip );
 	if ( clip->boxmins[node->axis] < node->dist )
 		SV_ClipToLinks ( node->children[1], clip );
+}
+
+static float SV_LerpLaggedAngle(float current, float old, float frac)
+{
+	float delta = anglemod(old - current + 180.0f) - 180.0f;
+	return current + frac * delta;
+}
+
+static void SV_ClipToLaggedPlayers(moveclip_t *clip)
+{
+	edict_t *touch;
+	trace_t trace;
+	vec3_t origin, angles;
+	float *entangles;
+	size_t i;
+	int j;
+
+	for (i = 0; i < clip->numlaggedents; i++)
+	{
+		if (!clip->laggedents[i].present)
+			continue;
+		if (clip->trace.allsolid)
+			return;
+
+		touch = EDICT_NUM((int)i + 1);
+		if (touch->free || touch->v.solid == SOLID_NOT)
+			continue;
+		if (touch == clip->passedict)
+			continue;
+		if (touch->v.solid == SOLID_TRIGGER || touch->v.solid == SOLID_EXT_BSPTRIGGER)
+			continue;
+		if (clip->type == MOVE_NOMONSTERS && touch->v.solid != SOLID_BSP)
+			continue;
+
+		VectorInterpolate(touch->v.origin, clip->laggedfrac,
+			clip->laggedents[i].origin, origin);
+		entangles = touch->v.angles;
+		if (touch->v.solid == SOLID_BSP || touch->v.solid == SOLID_EXT_BSPTRIGGER)
+		{
+			for (j = 0; j < 3; j++)
+				angles[j] = SV_LerpLaggedAngle(touch->v.angles[j],
+					clip->laggedents[i].angles[j], clip->laggedfrac);
+			entangles = angles;
+		}
+
+		if (clip->boxmins[0] > origin[0] + touch->v.maxs[0]
+		|| clip->boxmins[1] > origin[1] + touch->v.maxs[1]
+		|| clip->boxmins[2] > origin[2] + touch->v.maxs[2]
+		|| clip->boxmaxs[0] < origin[0] + touch->v.mins[0]
+		|| clip->boxmaxs[1] < origin[1] + touch->v.mins[1]
+		|| clip->boxmaxs[2] < origin[2] + touch->v.mins[2])
+			continue;
+
+		if (clip->passedict && clip->passedict->v.size[0] && !touch->v.size[0])
+			continue;
+
+		if (pr_checkextension.value && clip->passedict)
+		{
+			if (clip->passedict->v.solid == SOLID_SLIDEBOX && touch->v.solid == SOLID_EXT_CORPSE)
+				continue;
+			if (clip->passedict->v.solid == SOLID_EXT_CORPSE &&
+				(touch->v.solid == SOLID_SLIDEBOX || touch->v.solid == SOLID_EXT_CORPSE))
+				continue;
+		}
+
+		if (clip->passedict)
+		{
+			if (PROG_TO_EDICT(touch->v.owner) == clip->passedict)
+				continue;
+			if (PROG_TO_EDICT(clip->passedict->v.owner) == touch)
+				continue;
+		}
+
+		if (touch->v.skin < 0)
+		{
+			if (!(clip->hitcontents & (1<<-(int)touch->v.skin)))
+				continue;
+			if ((int)touch->v.flags & FL_MONSTER)
+				trace = SV_ClipMoveToEntityAt(touch, origin, entangles, clip->start,
+					clip->mins2, clip->maxs2, clip->end, ~(1<<-CONTENTS_EMPTY));
+			else
+				trace = SV_ClipMoveToEntityAt(touch, origin, entangles, clip->start,
+					clip->mins, clip->maxs, clip->end, ~(1<<-CONTENTS_EMPTY));
+			if (trace.contents != CONTENTS_EMPTY)
+				trace.contents = touch->v.skin;
+		}
+		else if ((int)touch->v.flags & FL_MONSTER)
+			trace = SV_ClipMoveToEntityAt(touch, origin, entangles, clip->start,
+				clip->mins2, clip->maxs2, clip->end, clip->hitcontents);
+		else
+			trace = SV_ClipMoveToEntityAt(touch, origin, entangles, clip->start,
+				clip->mins, clip->maxs, clip->end, clip->hitcontents);
+
+		if (trace.allsolid || trace.startsolid || trace.fraction < clip->trace.fraction)
+		{
+			trace.ent = touch;
+			if (clip->trace.startsolid)
+			{
+				clip->trace = trace;
+				clip->trace.startsolid = true;
+			}
+			else
+				clip->trace = trace;
+		}
+		else if (trace.startsolid)
+			clip->trace.startsolid = true;
+	}
 }
 
 static void World_ClipToNetwork ( moveclip_t *clip )
@@ -1504,8 +1637,25 @@ trace_t SV_Move (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int type, e
 	clip.maxs = maxs;
 	clip.type = type&3;
 	clip.passedict = passedict;
+	if ((type & MOVE_LAGGED) && sv_antilag.value > 0 && qcvm == &sv.qcvm && passedict)
+	{
+		int entnum = NUM_FOR_EDICT(passedict);
+		if (entnum > 0 && entnum <= svs.maxclients)
+		{
+			client_t *client = &svs.clients[entnum - 1];
+			double historyage = qcvm->time - client->laggedents_time;
+			if (client->active && client->spawned && client->edict == passedict &&
+				client->numlaggedents && client->laggedents_frac > 0 &&
+				historyage >= 0.0 && historyage <= SV_ANTILAG_MAX_HISTORY)
+			{
+				clip.laggedents = client->laggedents;
+				clip.numlaggedents = q_min(client->numlaggedents, (size_t)svs.maxclients);
+				clip.laggedfrac = client->laggedents_frac;
+			}
+		}
+	}
 
-	if (type == MOVE_MISSILE)
+	if ((type & ~MOVE_LAGGED) == MOVE_MISSILE)
 	{
 		for (i=0 ; i<3 ; i++)
 		{
@@ -1524,6 +1674,8 @@ trace_t SV_Move (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int type, e
 
 // clip to entities
 	SV_ClipToLinks ( qcvm->areanodes, &clip );
+	if (clip.laggedents)
+		SV_ClipToLaggedPlayers(&clip);
 
 	if (qcvm == &cl.qcvm)
 		World_ClipToNetwork(&clip);
