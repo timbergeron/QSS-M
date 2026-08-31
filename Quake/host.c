@@ -1746,6 +1746,8 @@ void Host_ServerFrame (void)
 	if (!sv.paused && (svs.maxclients > 1 || key_dest == key_game) )
 		SV_Physics (host_frametime);
 
+	SV_AntilagTrackPlayerLifetimes();
+
 //johnfitz -- devstats
 	if (cls.signon == SIGNONS)
 	{

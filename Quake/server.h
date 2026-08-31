@@ -169,8 +169,14 @@ enum client_signon_phase_e
 typedef struct laggedentinfo_s
 {
 	qboolean present;
+	unsigned int entnum;
+	unsigned int epoch;
+	int solid;
+	double sampletime;
 	vec3_t origin;
 	vec3_t angles;
+	vec3_t mins;
+	vec3_t maxs;
 } laggedentinfo_t;
 
 typedef struct client_s
@@ -199,6 +205,8 @@ typedef struct client_s
 	sizebuf_t		signon_preamble;	// reliable data ordered before the final spawn response
 	sizebuf_t		signon_response;	// isolated final spawn response
 	edict_t			*edict;				// EDICT_NUM(clientnum+1)
+	unsigned int	antilag_epoch;		// changes whenever old collision history becomes invalid
+	qboolean		antilag_alive;		// tracks death/respawn transitions even at the same origin
 	char			name[32];			// for printing to other people
 	char			desired_name[32];	// preferred name without duplicate prefix
 	int				colors;
@@ -264,15 +272,13 @@ typedef struct client_s
 		laggedentinfo_t *laggedplayers;
 		size_t numlaggedplayers;
 		size_t maxlaggedplayers;
-		float laggedtime;
+		double laggedtime;
 	} *frames;
 	size_t numframes;	//preallocated power-of-two
 	int lastacksequence;
 	laggedentinfo_t *laggedents;
 	size_t numlaggedents;
 	size_t maxlaggedents;
-	float laggedents_frac;
-	float laggedents_time;
 	int lastmovemessage;
 	double lastmovetime;
 	qboolean usingpmove;	//using the SV_RunClientCommand entrypoint, or getting pmove thrust upon them serverside (disables sv_user.c+movetype stuff, enables provides pmove hints to the client)
@@ -415,6 +421,10 @@ void SV_LocalSound (client_t *client, const char *sample); // for 2021 rerelease
 void SV_DropClient (qboolean crash);
 
 void SVFTE_Ack(client_t *client, int sequence);
+float SV_AntilagMaxRewind(void);
+float SV_AntilagFrac(void);
+void SV_AntilagInvalidatePlayer(edict_t *ent);
+void SV_AntilagTrackPlayerLifetimes(void);
 void SVFTE_DestroyFrames(client_t *client);
 void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state);
 void SV_ClearClientSignonMessages(client_t *client);

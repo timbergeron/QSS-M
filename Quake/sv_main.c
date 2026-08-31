@@ -725,8 +725,6 @@ void SVFTE_DestroyFrames(client_t *client)
 	client->laggedents = NULL;
 	client->numlaggedents = 0;
 	client->maxlaggedents = 0;
-	client->laggedents_frac = 0;
-	client->laggedents_time = 0;
 
 	client->lastacksequence = 0;
 }
@@ -789,30 +787,100 @@ static void SVFTE_DroppedFrame(client_t *client, int sequence)
 			client->pendingcsqcentities_bits[frame->ents[i].num] |= frame->ents[i].csqcbits;
 	}
 }
-static float SVFTE_AntilagMaxRewind(void)
-{	//operator ceiling on how far a trace may rewind, bounded by the hard stale-history limit.
+float SV_AntilagMaxRewind(void)
+{	// Fail closed and keep the operator ceiling inside the hard storage limit.
 	if (!isfinite(sv_antilag_maxrewind.value))
-		return 0.25f;
+		return 0.0f;
 	return CLAMP(0.0f, sv_antilag_maxrewind.value, (float)SV_ANTILAG_MAX_HISTORY);
 }
-static struct deltaframe_s *SVFTE_FindLaggedFrame(client_t *client, double target)
-{	//oldest recorded snapshot that is no older than target. anything newer hands back
-	//compensation the client's latency actually earned, so picking the minimum is the point.
-	struct deltaframe_s *best = NULL;
+
+float SV_AntilagFrac(void)
+{
+	if (!isfinite(sv_antilag_frac.value))
+		return 0.0f;
+	return CLAMP(0.0f, sv_antilag_frac.value, 1.0f);
+}
+
+void SV_AntilagInvalidatePlayer(edict_t *ent)
+{
+	client_t *client;
+	int entnum;
+
+	if (qcvm != &sv.qcvm || !ent)
+		return;
+	entnum = NUM_FOR_EDICT(ent);
+	if (entnum <= 0 || entnum > svs.maxclients)
+		return;
+	client = &svs.clients[entnum - 1];
+	if (client->edict != ent)
+		return;
+	if (++client->antilag_epoch == 0)
+		client->antilag_epoch = 1;
+}
+
+void SV_AntilagTrackPlayerLifetimes(void)
+{
+	client_t *client;
+	qboolean alive;
+	int i;
+
+	for (i = 0, client = svs.clients; i < svs.maxclients; i++, client++)
+	{
+		alive = client->active && client->spawned && client->edict &&
+			!client->edict->free && client->edict->v.health > 0.0f &&
+			(int)client->edict->v.deadflag == DEAD_NO;
+		if (alive == client->antilag_alive)
+			continue;
+		client->antilag_alive = alive;
+		if (++client->antilag_epoch == 0)
+			client->antilag_epoch = 1;
+	}
+}
+
+static void SVFTE_ClearLaggedEnts(client_t *client)
+{
+	if (client->laggedents && client->numlaggedents)
+		memset(client->laggedents, 0,
+			client->numlaggedents * sizeof(*client->laggedents));
+}
+
+static void SVFTE_EnsureLaggedEnts(client_t *client)
+{
+	size_t count = (size_t)svs.maxclients;
+
+	if (client->maxlaggedents < count)
+	{
+		laggedentinfo_t *newlaggedents = realloc(client->laggedents,
+			count * sizeof(*client->laggedents));
+		if (!newlaggedents)
+			Sys_Error("SVFTE_EnsureLaggedEnts: out of memory (%u players)",
+				(unsigned int)count);
+		memset(newlaggedents + client->maxlaggedents, 0,
+			(count - client->maxlaggedents) * sizeof(*newlaggedents));
+		client->laggedents = newlaggedents;
+		client->maxlaggedents = count;
+	}
+	client->numlaggedents = count;
+}
+
+static void SVFTE_PruneLaggedEnts(client_t *client, double now)
+{
 	size_t i;
 
-	for (i = 0; i < client->numframes; i++)
+	for (i = 0; i < client->numlaggedents; i++)
 	{
-		struct deltaframe_s *f = &client->frames[i];
-		if (!f->numlaggedplayers)
-			continue;	//slot never written since the last map change
-		if (f->laggedtime < target)
+		laggedentinfo_t *info = &client->laggedents[i];
+		double age;
+
+		if (!info->present)
 			continue;
-		if (!best || f->laggedtime < best->laggedtime)
-			best = f;
+		age = now - info->sampletime;
+		if (!isfinite(info->sampletime) || !isfinite(age) || age < 0.0 ||
+			age > SV_ANTILAG_MAX_HISTORY)
+			memset(info, 0, sizeof(*info));
 	}
-	return best;
 }
+
 void SVFTE_Ack(client_t *client, int sequence)
 {	//any gaps in the sequence need to considered dropped
 	struct deltaframe_s *frame;
@@ -838,55 +906,41 @@ void SVFTE_Ack(client_t *client, int sequence)
 	frame = &client->frames[sequence&(client->numframes-1)];
 	if (frame->sequence == sequence)
 	{
+		size_t i;
+		float maxrewind = SV_AntilagMaxRewind();
+		double historyage = qcvm->time - frame->laggedtime;
+
 		client->ping_times[client->num_pings%NUM_PING_TIMES] = qcvm->time - frame->timestamp;
 		client->num_pings++;
 
-		if (sv_antilag.value > 0 && frame->numlaggedplayers)
-		{	//The ceiling is measured against the acknowledged snapshot's age, which is roughly
-			//rtt plus server scheduling and ack jitter - not the scoreboard ping. When the ack is
-			//older than the ceiling we substitute a more recent recorded snapshot rather than
-			//interpolating towards the acked positions: rewind is then quantized to a server frame
-			//and may fall slightly under the ceiling, but never over it, and we never synthesize a
-			//position the player never occupied. Substituting can also change which players are
-			//present, as one may have left this client's pvs between the two frames.
-			struct deltaframe_s *src = frame;
-			float maxrewind = SVFTE_AntilagMaxRewind();
-			double historyage = qcvm->time - frame->laggedtime;
+		if (sv_antilag.value > 0 && maxrewind > 0.0f)
+		{
+			SVFTE_EnsureLaggedEnts(client);
+			SVFTE_PruneLaggedEnts(client, qcvm->time);
 
-			if (maxrewind <= 0)
-				src = NULL;
-			else if (historyage > maxrewind)
-				src = SVFTE_FindLaggedFrame(client, qcvm->time - maxrewind);
-
-			if (src)
+			for (i = 0; i < frame->numlaggedplayers; i++)
 			{
-				if (client->maxlaggedents < src->numlaggedplayers)
-				{
-					laggedentinfo_t *newlaggedents = realloc(client->laggedents,
-						src->numlaggedplayers * sizeof(*client->laggedents));
-					if (!newlaggedents)
-						Sys_Error ("SVFTE_Ack: out of memory (%u lagged players)",
-							(unsigned int)src->numlaggedplayers);
-					client->laggedents = newlaggedents;
-					client->maxlaggedents = src->numlaggedplayers;
-				}
-				memcpy(client->laggedents, src->laggedplayers,
-					src->numlaggedplayers * sizeof(*client->laggedents));
-				client->numlaggedents = src->numlaggedplayers;
-				client->laggedents_time = src->laggedtime;
-				client->laggedents_frac = isfinite(sv_antilag_frac.value)
-					? CLAMP(0.0f, sv_antilag_frac.value, 1.0f) : 1.0f;
+				laggedentinfo_t *src = &frame->laggedplayers[i];
+				laggedentinfo_t *dst;
+
+				if (!src->entnum || src->entnum > (unsigned int)svs.maxclients)
+					continue;
+				dst = &client->laggedents[src->entnum - 1];
+				memset(dst, 0, sizeof(*dst));
+				if (!src->present || !isfinite(historyage) || historyage < 0.0 ||
+					historyage > SV_ANTILAG_MAX_HISTORY)
+					continue;
+				*dst = *src;
+				dst->sampletime = frame->laggedtime;
 			}
-			else
-				client->numlaggedents = 0;
 		}
 		else
-			client->numlaggedents = 0;
+			SVFTE_ClearLaggedEnts(client);
 
 		frame->sequence = -1;
 	}
 	else if (advanced || sv_antilag.value <= 0)
-		client->numlaggedents = 0;
+		SVFTE_ClearLaggedEnts(client);
 }
 static void SVFTE_WriteStats(client_t *client, sizebuf_t *msg)
 {
@@ -1056,74 +1110,73 @@ static void SVFTE_CalcEntityDeltas(client_t *client)
 	snapshot_maxents = oldstop-olds;
 }
 
-static void SVFTE_RecordLaggedPlayers(client_t *client, struct deltaframe_s *frame)
+static void SVFTE_BeginLaggedPlayers(struct deltaframe_s *frame)
 {
-	struct entity_num_state_s *state;
+	frame->numlaggedplayers = 0;
+	frame->laggedtime = qcvm->time;
+}
+
+static void SVFTE_RecordLaggedPlayer(struct deltaframe_s *frame, unsigned int entnum,
+	const struct entity_num_state_s *state)
+{
+	laggedentinfo_t *info;
 	client_t *player;
 	edict_t *ent;
-	double age;
-	size_t i, count;
+	size_t newmax;
 
-	if (sv_antilag.value <= 0)
-	{
-		frame->numlaggedplayers = 0;
+	if (sv_antilag.value <= 0 || !entnum || entnum > (unsigned int)svs.maxclients)
 		return;
-	}
-
-	count = (size_t)svs.maxclients;
-	if (frame->maxlaggedplayers < count)
+	if (frame->numlaggedplayers == frame->maxlaggedplayers)
 	{
-		laggedentinfo_t *newlaggedplayers = realloc(frame->laggedplayers,
-			count * sizeof(*frame->laggedplayers));
-		if (!newlaggedplayers)
-			Sys_Error ("SVFTE_RecordLaggedPlayers: out of memory (%u players)",
-				(unsigned int)count);
-		frame->laggedplayers = newlaggedplayers;
-		frame->maxlaggedplayers = count;
+		newmax = frame->maxlaggedplayers ? frame->maxlaggedplayers * 2 : 4;
+		info = realloc(frame->laggedplayers, newmax * sizeof(*frame->laggedplayers));
+		if (!info)
+			Sys_Error("SVFTE_RecordLaggedPlayer: out of memory (%u updates)",
+				(unsigned int)newmax);
+		frame->laggedplayers = info;
+		frame->maxlaggedplayers = newmax;
 	}
 
-	memset(frame->laggedplayers, 0, count * sizeof(*frame->laggedplayers));
-	frame->numlaggedplayers = count;
-	frame->laggedtime = qcvm->time;
+	info = &frame->laggedplayers[frame->numlaggedplayers++];
+	memset(info, 0, sizeof(*info));
+	info->entnum = entnum;
+	info->sampletime = frame->laggedtime;
+	if (!state)
+		return;	// An acknowledged remove clears this target's retained state.
 
-	// Track only players in the PVS-culled snapshot the client was actually sent.
-	// Players absent from it intentionally keep their current collision position.
-	for (i = 0; i < client->numpreviousentities; i++)
-	{
-		state = &client->previousentities[i];
-		if (!state->num)
-			continue;
-		if (state->num > count)
-			continue;
+	player = &svs.clients[entnum - 1];
+	ent = EDICT_NUM((int)entnum);
+	/* Corpse traces deliberately use current collision, never rewind history. */
+	if (!player->active || !player->spawned || player->edict != ent || ent->free ||
+		(ent->v.solid != SOLID_BBOX && ent->v.solid != SOLID_SLIDEBOX) ||
+		ent->v.health <= 0.0f ||
+		(int)ent->v.deadflag != DEAD_NO)
+		return;
 
-		player = &svs.clients[state->num - 1];
-		ent = EDICT_NUM(state->num);
-		if (!player->active || !player->spawned || player->edict != ent || ent->free)
-			continue;
-
-		age = player->usingpmove && player->lastmovetime > 0.0
-			? qcvm->time - player->lastmovetime : 0.0;
-		age = CLAMP(0.0, age, 0.1); // FTE's untraced extrapolation safety bound
-		VectorMA(state->state.origin, age, ent->v.velocity,
-			frame->laggedplayers[state->num - 1].origin);
-		VectorCopy(state->state.angles,
-			frame->laggedplayers[state->num - 1].angles);
-		frame->laggedplayers[state->num - 1].present = true;
-	}
+	info->present = true;
+	info->epoch = player->antilag_epoch;
+	info->solid = (int)ent->v.solid;
+	// Store the wire origin exactly; extrapolation would diverge from the acknowledged view.
+	VectorCopy(state->state.origin, info->origin);
+	VectorCopy(state->state.angles, info->angles);
+	VectorCopy(ent->v.mins, info->mins);
+	VectorCopy(ent->v.maxs, info->maxs);
 }
 
 static void SVFTE_WriteEntitiesToClient(client_t *client, sizebuf_t *msg, size_t overflowsize)
 {
 	struct entity_num_state_s *state, *stateend;
+	struct entity_num_state_s *laggedstate;
 	unsigned int entbits, logbits, netbits;
 	size_t entnum;
 	int sequence = NET_QSocketGetSequenceOut(client->netconnection);
 	size_t origmaxsize = msg->maxsize;
 	size_t rollbacksize;	//I'm too lazy to figure out sizes (especially if someone updates this for bone states or whatever)
+	qboolean laggedremove;
 	struct deltaframe_s *frame = &client->frames[sequence&(client->numframes-1)];
 	frame->sequence = sequence;	//so we know that it wasn't stale later.
 	frame->timestamp = qcvm->time;
-	SVFTE_RecordLaggedPlayers(client, frame);
+	SVFTE_BeginLaggedPlayers(frame);
 
 	msg->maxsize = overflowsize;
 
@@ -1142,11 +1195,14 @@ static void SVFTE_WriteEntitiesToClient(client_t *client, sizebuf_t *msg, size_t
 		if (!(entbits & ~UF_RESET2))
 			continue;	//nothing to send (if reset2 is still set, then leave it pending until there's more data
 
+		laggedstate = NULL;
+		laggedremove = false;
 		rollbacksize = msg->cursize;
 		client->pendingentities_bits[entnum] = 0;
 		logbits = 0;
 		if (entbits & UF_REMOVE)
 		{
+			laggedremove = true;
 			if (entnum > 0x3fff)
 			{
 				MSG_WriteShort(msg, 0xc000|(entnum&0x3fff));
@@ -1162,6 +1218,7 @@ static void SVFTE_WriteEntitiesToClient(client_t *client, sizebuf_t *msg, size_t
 				state++;
 			if (state<stateend && state->num == entnum)
 			{
+				laggedstate = state;
 				if (entbits & UF_RESET2)
 				{
 					/*if reset2, then this is the second packet sent to the client and should have a forced reset (but which isn't tracked)*/
@@ -1198,6 +1255,10 @@ static void SVFTE_WriteEntitiesToClient(client_t *client, sizebuf_t *msg, size_t
 			client->pendingentities_bits[entnum] = entbits;	//make sure those bits get re-applied later.
 			break;
 		}
+		if (laggedremove)
+			SVFTE_RecordLaggedPlayer(frame, (unsigned int)entnum, NULL);
+		else if (laggedstate)
+			SVFTE_RecordLaggedPlayer(frame, (unsigned int)entnum, laggedstate);
 		if (frame->numents == frame->maxents)
 		{
 			void *newents;
@@ -2845,6 +2906,7 @@ void SV_ConnectClient (int clientnum)
 	int				edictnum;
 	struct qsocket_s *netconnection;
 	int				i;
+	unsigned int	next_antilag_epoch;
 	float			spawn_parms[NUM_TOTAL_SPAWN_PARMS];
 
 	client = svs.clients + clientnum;
@@ -2863,6 +2925,9 @@ void SV_ConnectClient (int clientnum)
 
 // set up the client_t
 	netconnection = client->netconnection;
+	next_antilag_epoch = client->antilag_epoch + 1;
+	if (!next_antilag_epoch)
+		next_antilag_epoch = 1;
 	net_activeconnections++;
 
 	if (sv.loadgame)
@@ -2877,6 +2942,7 @@ void SV_ConnectClient (int clientnum)
 	client->active = true;
 	client->spawned = false;
 	client->edict = ent;
+	client->antilag_epoch = next_antilag_epoch;
 	client->message.data = client->msgbuf;
 	client->message.maxsize = sizeof(client->msgbuf);
 	client->message.allowoverflow = true;		// we can catch it

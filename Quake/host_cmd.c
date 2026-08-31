@@ -6952,6 +6952,7 @@ static void Host_CoopMoveApply(edict_t *player, const vec3_t origin, edict_t *gr
 	Host_CoopMoveTeleportSplash(old_origin);
 
 	VectorCopy(origin, player->v.origin);
+	SV_AntilagInvalidatePlayer(player);
 	VectorClear(player->v.velocity);
 	player->v.movetype = MOVETYPE_WALK;
 	player->v.solid = SOLID_SLIDEBOX;

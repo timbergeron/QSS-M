@@ -163,10 +163,14 @@ static void PF_setorigin (void)
 {
 	edict_t	*e;
 	float	*org;
+	qboolean changed;
 
 	e = G_EDICT(OFS_PARM0);
 	org = G_VECTOR(OFS_PARM1);
+	changed = !VectorCompare(org, e->v.origin);
 	VectorCopy (org, e->v.origin);
+	if (changed)
+		SV_AntilagInvalidatePlayer(e);
 	SV_LinkEdict (e, false);
 }
 
@@ -744,14 +748,26 @@ static void PF_traceline (void)
 	float	*v1, *v2;
 	trace_t	trace;
 	int	nomonsters;
-	edict_t	*ent;
+	edict_t	*ent, *lagowner;
 
 	v1 = G_VECTOR(OFS_PARM0);
 	v2 = G_VECTOR(OFS_PARM1);
 	nomonsters = G_FLOAT(OFS_PARM2);
 	ent = G_EDICT(OFS_PARM3);
+	lagowner = ent;
 	if (sv_antilag.value >= 2 && qcvm == &sv.qcvm)
+	{
+		int ownernum;
+
 		nomonsters |= MOVE_LAGGED;
+		lagowner = PROG_TO_EDICT(pr_global_struct->self);
+		ownernum = NUM_FOR_EDICT(lagowner);
+		if (ownernum <= 0 || ownernum > svs.maxclients ||
+			!svs.clients[ownernum - 1].active ||
+			!svs.clients[ownernum - 1].spawned ||
+			svs.clients[ownernum - 1].edict != lagowner)
+			lagowner = ent;
+	}
 
 	/* FIXME FIXME FIXME: Why do we hit this with certain progs.dat ?? */
 	if (developer.value) {
@@ -767,7 +783,8 @@ static void PF_traceline (void)
 	if (IS_NAN(v2[0]) || IS_NAN(v2[1]) || IS_NAN(v2[2]))
 		v2[0] = v2[1] = v2[2] = 0;
 
-	trace = SV_Move (v1, vec3_origin, vec3_origin, v2, nomonsters, ent);
+	trace = SV_MoveWithLagOwner(v1, vec3_origin, vec3_origin, v2,
+		nomonsters, ent, lagowner);
 
 	pr_global_struct->trace_allsolid = trace.allsolid;
 	pr_global_struct->trace_startsolid = trace.startsolid;

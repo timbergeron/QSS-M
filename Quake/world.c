@@ -43,9 +43,12 @@ typedef struct
 	int			type;
 	unsigned int	hitcontents;	//content types to impact upon... (1<<-CONTENTS_FOO) bitmask
 	edict_t		*passedict;
+	edict_t		*lagowner;
+	client_t	*laggedclient;
 	laggedentinfo_t *laggedents;
 	size_t		numlaggedents;
 	float		laggedfrac;
+	float		laggedmaxrewind;
 } moveclip_t;
 
 
@@ -134,7 +137,7 @@ testing object's origin to get a point to use with the returned hull.
 ================
 */
 static hull_t *SV_HullForEntityAtOrigin (edict_t *ent, vec3_t mins, vec3_t maxs,
-	vec3_t entorigin, vec3_t offset)
+	vec3_t entorigin, vec3_t entmins, vec3_t entmaxs, vec3_t offset)
 {
 	qmodel_t	*model;
 	vec3_t		size;
@@ -173,8 +176,8 @@ static hull_t *SV_HullForEntityAtOrigin (edict_t *ent, vec3_t mins, vec3_t maxs,
 	else
 	{	// create a temp hull from bounding box sizes
 nohitmeshsupport:
-		VectorSubtract (ent->v.mins, maxs, hullmins);
-		VectorSubtract (ent->v.maxs, mins, hullmaxs);
+		VectorSubtract (entmins, maxs, hullmins);
+		VectorSubtract (entmaxs, mins, hullmaxs);
 		hull = SV_HullForBox (hullmins, hullmaxs);
 
 		VectorCopy (entorigin, offset);
@@ -186,7 +189,8 @@ nohitmeshsupport:
 
 hull_t *SV_HullForEntity (edict_t *ent, vec3_t mins, vec3_t maxs, vec3_t offset)
 {
-	return SV_HullForEntityAtOrigin(ent, mins, maxs, ent->v.origin, offset);
+	return SV_HullForEntityAtOrigin(ent, mins, maxs, ent->v.origin,
+		ent->v.mins, ent->v.maxs, offset);
 }
 
 /*
@@ -1134,8 +1138,8 @@ eventually rotation) of the end points
 ==================
 */
 static trace_t SV_ClipMoveToEntityAt (edict_t *ent, vec3_t entorigin,
-	vec3_t entangles, vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end,
-	unsigned int hitcontents)
+	vec3_t entangles, vec3_t entmins, vec3_t entmaxs, vec3_t start,
+	vec3_t mins, vec3_t maxs, vec3_t end, unsigned int hitcontents)
 {
 	trace_t		trace;
 	vec3_t		offset;
@@ -1149,7 +1153,8 @@ static trace_t SV_ClipMoveToEntityAt (edict_t *ent, vec3_t entorigin,
 	VectorCopy (end, trace.endpos);
 
 // get the clipping hull
-	hull = SV_HullForEntityAtOrigin (ent, mins, maxs, entorigin, offset);
+	hull = SV_HullForEntityAtOrigin (ent, mins, maxs, entorigin,
+		entmins, entmaxs, offset);
 
 	VectorSubtract (start, offset, start_l);
 	VectorSubtract (end, offset, end_l);
@@ -1206,11 +1211,71 @@ static trace_t SV_ClipMoveToEntityAt (edict_t *ent, vec3_t entorigin,
 trace_t SV_ClipMoveToEntity (edict_t *ent, vec3_t start, vec3_t mins, vec3_t maxs,
 	vec3_t end, unsigned int hitcontents)
 {
-	return SV_ClipMoveToEntityAt(ent, ent->v.origin, ent->v.angles, start, mins,
-		maxs, end, hitcontents);
+	return SV_ClipMoveToEntityAt(ent, ent->v.origin, ent->v.angles,
+		ent->v.mins, ent->v.maxs, start, mins, maxs, end, hitcontents);
 }
 
 //===========================================================================
+
+static const laggedentinfo_t *SV_LaggedPlayerState(const moveclip_t *clip,
+	edict_t *touch, size_t slot)
+{
+	const laggedentinfo_t *acked, *best = NULL;
+	client_t *target;
+	double age, besttime = DBL_MAX, cutoff;
+	size_t framenum, updatenum;
+
+	if (!clip->laggedclient || !clip->laggedclient->frames ||
+		!clip->laggedents ||
+		slot >= clip->numlaggedents ||
+		slot >= (size_t)svs.maxclients)
+		return NULL;
+	acked = &clip->laggedents[slot];
+	if (!acked->present || acked->entnum != slot + 1 ||
+		clip->laggedmaxrewind <= 0.0f || !isfinite(acked->sampletime))
+		return NULL;
+
+	target = &svs.clients[slot];
+	if (!target->active || !target->spawned || target->edict != touch ||
+		touch->free || target->antilag_epoch != acked->epoch ||
+		(acked->solid != SOLID_BBOX && acked->solid != SOLID_SLIDEBOX) ||
+		(touch->v.solid != SOLID_BBOX && touch->v.solid != SOLID_SLIDEBOX) ||
+		touch->v.health <= 0.0f || (int)touch->v.deadflag != DEAD_NO)
+		return NULL;
+
+	age = qcvm->time - acked->sampletime;
+	if (!isfinite(age) || age < 0.0 || age > SV_ANTILAG_MAX_HISTORY)
+		return NULL;
+	if (age <= clip->laggedmaxrewind)
+		return acked;
+
+	/* Pick the oldest real player update at or after the configured cutoff. */
+	cutoff = qcvm->time - clip->laggedmaxrewind;
+	for (framenum = 0; framenum < clip->laggedclient->numframes; framenum++)
+	{
+		const struct deltaframe_s *frame = &clip->laggedclient->frames[framenum];
+
+		for (updatenum = 0; updatenum < frame->numlaggedplayers; updatenum++)
+		{
+			const laggedentinfo_t *candidate = &frame->laggedplayers[updatenum];
+
+			if (candidate->entnum != slot + 1 ||
+				!isfinite(candidate->sampletime) ||
+				candidate->sampletime < cutoff ||
+				candidate->sampletime > qcvm->time ||
+				candidate->sampletime >= besttime)
+				continue;
+			best = candidate;
+			besttime = candidate->sampletime;
+		}
+	}
+
+	/* A remove, gap, or discontinuity falls back to current-world collision. */
+	if (!best || !best->present || best->epoch != target->antilag_epoch ||
+		(best->solid != SOLID_BBOX && best->solid != SOLID_SLIDEBOX))
+		return NULL;
+	return best;
+}
 
 /*
 ====================
@@ -1232,7 +1297,7 @@ static void SV_ClipToLinks ( areanode_t *node, moveclip_t *clip )
 		touch = EDICT_FROM_AREA(l);
 		if (touch->v.solid == SOLID_NOT)
 			continue;
-		if (touch == clip->passedict)
+		if (touch == clip->passedict || touch == clip->lagowner)
 			continue;
 		if (touch->v.solid == SOLID_TRIGGER || touch->v.solid == SOLID_EXT_BSPTRIGGER)
 			Sys_Error ("Trigger in clipping list");
@@ -1241,7 +1306,7 @@ static void SV_ClipToLinks ( areanode_t *node, moveclip_t *clip )
 		{
 			int entnum = NUM_FOR_EDICT(touch) - 1;
 			if (entnum >= 0 && (size_t)entnum < clip->numlaggedents &&
-				clip->laggedents[entnum].present)
+				SV_LaggedPlayerState(clip, touch, (size_t)entnum))
 				continue;
 		}
 
@@ -1333,47 +1398,49 @@ static float SV_LerpLaggedAngle(float current, float old, float frac)
 
 static void SV_ClipToLaggedPlayers(moveclip_t *clip)
 {
+	const laggedentinfo_t *info;
 	edict_t *touch;
 	trace_t trace;
-	vec3_t origin, angles;
+	vec3_t origin, angles, entmins, entmaxs;
 	float *entangles;
 	size_t i;
 	int j;
 
 	for (i = 0; i < clip->numlaggedents; i++)
 	{
-		if (!clip->laggedents[i].present)
-			continue;
 		if (clip->trace.allsolid)
 			return;
 
 		touch = EDICT_NUM((int)i + 1);
-		if (touch->free || touch->v.solid == SOLID_NOT)
+		info = SV_LaggedPlayerState(clip, touch, i);
+		if (!info)
 			continue;
-		if (touch == clip->passedict)
+		if (touch == clip->passedict || touch == clip->lagowner)
 			continue;
 		if (touch->v.solid == SOLID_TRIGGER || touch->v.solid == SOLID_EXT_BSPTRIGGER)
 			continue;
 		if (clip->type == MOVE_NOMONSTERS && touch->v.solid != SOLID_BSP)
 			continue;
 
-		VectorInterpolate(touch->v.origin, clip->laggedfrac,
-			clip->laggedents[i].origin, origin);
+		/* sv_antilag_frac remains an explicit operator-controlled interpolation. */
+		VectorInterpolate(touch->v.origin, clip->laggedfrac, info->origin, origin);
+		VectorInterpolate(touch->v.mins, clip->laggedfrac, info->mins, entmins);
+		VectorInterpolate(touch->v.maxs, clip->laggedfrac, info->maxs, entmaxs);
 		entangles = touch->v.angles;
 		if (touch->v.solid == SOLID_BSP || touch->v.solid == SOLID_EXT_BSPTRIGGER)
 		{
 			for (j = 0; j < 3; j++)
 				angles[j] = SV_LerpLaggedAngle(touch->v.angles[j],
-					clip->laggedents[i].angles[j], clip->laggedfrac);
+					info->angles[j], clip->laggedfrac);
 			entangles = angles;
 		}
 
-		if (clip->boxmins[0] > origin[0] + touch->v.maxs[0]
-		|| clip->boxmins[1] > origin[1] + touch->v.maxs[1]
-		|| clip->boxmins[2] > origin[2] + touch->v.maxs[2]
-		|| clip->boxmaxs[0] < origin[0] + touch->v.mins[0]
-		|| clip->boxmaxs[1] < origin[1] + touch->v.mins[1]
-		|| clip->boxmaxs[2] < origin[2] + touch->v.mins[2])
+		if (clip->boxmins[0] > origin[0] + entmaxs[0]
+		|| clip->boxmins[1] > origin[1] + entmaxs[1]
+		|| clip->boxmins[2] > origin[2] + entmaxs[2]
+		|| clip->boxmaxs[0] < origin[0] + entmins[0]
+		|| clip->boxmaxs[1] < origin[1] + entmins[1]
+		|| clip->boxmaxs[2] < origin[2] + entmins[2])
 			continue;
 
 		if (clip->passedict && clip->passedict->v.size[0] && !touch->v.size[0])
@@ -1401,20 +1468,24 @@ static void SV_ClipToLaggedPlayers(moveclip_t *clip)
 			if (!(clip->hitcontents & (1<<-(int)touch->v.skin)))
 				continue;
 			if ((int)touch->v.flags & FL_MONSTER)
-				trace = SV_ClipMoveToEntityAt(touch, origin, entangles, clip->start,
-					clip->mins2, clip->maxs2, clip->end, ~(1<<-CONTENTS_EMPTY));
+				trace = SV_ClipMoveToEntityAt(touch, origin, entangles, entmins,
+					entmaxs, clip->start, clip->mins2, clip->maxs2, clip->end,
+					~(1<<-CONTENTS_EMPTY));
 			else
-				trace = SV_ClipMoveToEntityAt(touch, origin, entangles, clip->start,
-					clip->mins, clip->maxs, clip->end, ~(1<<-CONTENTS_EMPTY));
+				trace = SV_ClipMoveToEntityAt(touch, origin, entangles, entmins,
+					entmaxs, clip->start, clip->mins, clip->maxs, clip->end,
+					~(1<<-CONTENTS_EMPTY));
 			if (trace.contents != CONTENTS_EMPTY)
 				trace.contents = touch->v.skin;
 		}
 		else if ((int)touch->v.flags & FL_MONSTER)
-			trace = SV_ClipMoveToEntityAt(touch, origin, entangles, clip->start,
-				clip->mins2, clip->maxs2, clip->end, clip->hitcontents);
+			trace = SV_ClipMoveToEntityAt(touch, origin, entangles, entmins,
+				entmaxs, clip->start, clip->mins2, clip->maxs2, clip->end,
+				clip->hitcontents);
 		else
-			trace = SV_ClipMoveToEntityAt(touch, origin, entangles, clip->start,
-				clip->mins, clip->maxs, clip->end, clip->hitcontents);
+			trace = SV_ClipMoveToEntityAt(touch, origin, entangles, entmins,
+				entmaxs, clip->start, clip->mins, clip->maxs, clip->end,
+				clip->hitcontents);
 
 		if (trace.allsolid || trace.startsolid || trace.fraction < clip->trace.fraction)
 		{
@@ -1616,7 +1687,14 @@ boxmaxs[0] = boxmaxs[1] = boxmaxs[2] = 9999;
 SV_Move
 ==================
 */
-trace_t SV_Move (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int type, edict_t *passedict)
+trace_t SV_Move (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int type,
+	edict_t *passedict)
+{
+	return SV_MoveWithLagOwner(start, mins, maxs, end, type, passedict, passedict);
+}
+
+trace_t SV_MoveWithLagOwner (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end,
+	int type, edict_t *passedict, edict_t *lagowner)
 {
 	moveclip_t	clip;
 	int			i;
@@ -1637,20 +1715,23 @@ trace_t SV_Move (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int type, e
 	clip.maxs = maxs;
 	clip.type = type&3;
 	clip.passedict = passedict;
-	if ((type & MOVE_LAGGED) && sv_antilag.value > 0 && qcvm == &sv.qcvm && passedict)
+	clip.lagowner = (type & MOVE_LAGGED) ? lagowner : passedict;
+	if ((type & MOVE_LAGGED) && sv_antilag.value > 0 && qcvm == &sv.qcvm && lagowner)
 	{
-		int entnum = NUM_FOR_EDICT(passedict);
+		int entnum = NUM_FOR_EDICT(lagowner);
 		if (entnum > 0 && entnum <= svs.maxclients)
 		{
 			client_t *client = &svs.clients[entnum - 1];
-			double historyage = qcvm->time - client->laggedents_time;
-			if (client->active && client->spawned && client->edict == passedict &&
-				client->numlaggedents && client->laggedents_frac > 0 &&
-				historyage >= 0.0 && historyage <= SV_ANTILAG_MAX_HISTORY)
+			float maxrewind = SV_AntilagMaxRewind();
+			float frac = SV_AntilagFrac();
+			if (client->active && client->spawned && client->edict == lagowner &&
+				client->numlaggedents && maxrewind > 0.0f && frac > 0.0f)
 			{
+				clip.laggedclient = client;
 				clip.laggedents = client->laggedents;
 				clip.numlaggedents = q_min(client->numlaggedents, (size_t)svs.maxclients);
-				clip.laggedfrac = client->laggedents_frac;
+				clip.laggedfrac = frac;
+				clip.laggedmaxrewind = maxrewind;
 			}
 		}
 	}

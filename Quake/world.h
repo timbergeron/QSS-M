@@ -79,6 +79,8 @@ edict_t	*SV_TestEntityPosition (edict_t *ent);
 #define CONTENTMASK_ANYSOLID (CONTENTMASK_FROMQ1(CONTENTS_SOLID) | CONTENTMASK_FROMQ1(CONTENTS_CLIP))
 trace_t SV_ClipMoveToEntity (edict_t *ent, vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, unsigned int hitcontents);
 trace_t SV_Move (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int type, edict_t *passedict);
+trace_t SV_MoveWithLagOwner (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end,
+	int type, edict_t *passedict, edict_t *lagowner);
 // mins and maxs are reletive
 
 // if the entire move stays in a solid volume, trace.allsolid will be set
