@@ -11299,6 +11299,35 @@ static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 };
 #define	NUMQUAKECOMMANDS	(sizeof(quakebindnames)/sizeof(quakebindnames[0]))
 
+typedef struct
+{
+	const char *cmd;
+	const char *desc;
+} requiredbind_t;
+
+// QSS/FTE replace their engine-defined bind lists with bindlist.lst instead of
+// merging them. Reject incomplete files so lists authored for QSS-M remain
+// compatible with those engines.
+static const requiredbind_t required_bindnames[] =
+{
+	{"+forward",       "Move forward"},
+	{"+back",          "Move backward"},
+	{"+moveleft",      "Move left"},
+	{"+moveright",     "Move right"},
+	{"+jump",          "Jump / swim up"},
+	{"+moveup",        "Swim up"},
+	{"+movedown",      "Swim down"},
+	{"+speed",         "Run"},
+	{"+strafe",        "Sidestep"},
+	{"+left",          "Turn left"},
+	{"+right",         "Turn right"},
+	{"+lookup",        "Look up"},
+	{"+lookdown",      "Look down"},
+	{"centerview",     "Center view"},
+	{"messagemode",    "Text chat"},
+	{"+voip",          "Voice chat"},
+};
+
 
 #define MAX_VIS_KEYS	14 // woods #mousemenu
 #define KEYS_TAB_Y		40
@@ -11499,10 +11528,15 @@ static void M_Keys_AddDefaultBind (const defaultbind_t *defaultbind)
 	M_Keys_AddBindNameUnique(defaultbind->cmd, defaultbind->desc, defaultbind->devicemask);
 }
 
+static void M_Keys_FreeCustomBindList (bindname_t *custombinds, int numcustombinds);
+
 static void M_Keys_LoadCustomBindList (bindname_t **custombinds, int *numcustombinds)
 {
 	FILE* file;
 	char line[1024];
+	qboolean required_found[Q_COUNTOF(required_bindnames)] = { false };
+	int missing;
+	int i;
 
 	*custombinds = NULL;
 	*numcustombinds = 0;
@@ -11519,6 +11553,15 @@ static void M_Keys_LoadCustomBindList (bindname_t **custombinds, int *numcustomb
 		cmd = Cmd_Argv(0);
 		desc = Cmd_Argv(1);
 
+		if (cmd[0] && cmd[0] != '-')
+		{
+			for (i = 0; i < Q_COUNTOF(required_bindnames); i++)
+			{
+				if (!strcmp(required_bindnames[i].cmd, cmd))
+					required_found[i] = true;
+			}
+		}
+
 		if (!cmd[0] || !desc[0] || (cmd[0] == '-' && cmd[1] == '\0'))
 			continue;
 		if (M_Keys_ShouldSuppressCustomBind(cmd))
@@ -11533,6 +11576,35 @@ static void M_Keys_LoadCustomBindList (bindname_t **custombinds, int *numcustomb
 	}
 
 	fclose(file);
+
+	for (i = 0, missing = 0; i < Q_COUNTOF(required_bindnames); i++)
+	{
+		if (!required_found[i])
+			missing++;
+	}
+
+	if (missing)
+	{
+		M_Keys_FreeCustomBindList(*custombinds, *numcustombinds);
+		*custombinds = NULL;
+		*numcustombinds = 0;
+
+		if (!developer.value)
+		{
+			Con_Warning("ignoring incomplete bindlist.lst\n(use developer 1 for more details)\n");
+		}
+		else
+		{
+			Con_SafePrintf("\n");
+			Con_Warning("bindlist.lst is missing %d required %s:\n", missing, missing == 1 ? "entry" : "entries");
+			for (i = 0; i < Q_COUNTOF(required_bindnames); i++)
+			{
+				if (!required_found[i])
+					Con_SafePrintf("\"%s\" \"%s\"\n", required_bindnames[i].cmd, required_bindnames[i].desc);
+			}
+			Con_SafePrintf("\n");
+		}
+	}
 }
 
 static void M_Keys_FreeCustomBindList (bindname_t *custombinds, int numcustombinds)
