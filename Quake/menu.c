@@ -11244,12 +11244,9 @@ typedef struct
 	keydevicemask_t devicemask;
 } defaultbind_t;
 
-#define KEYBIND_CUSTOM_MARKER	"*"
 #define QUICKSAVE	"echo Quicksaving...; wait; save quick"
 #define QUICKLOAD	"echo Quickloading...; wait; load quick"
 
-// The marker pair brackets the gameplay/weapon section where bindlist.lst
-// entries may override default labels instead of being suppressed as duplicates.
 static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 {
 	{"+forward",		"Move forward",			KDM_KEYBOARD_AND_MOUSE},
@@ -11271,7 +11268,6 @@ static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 	{"+zoom",			"Quick zoom",			KDM_ANY},
 	{"+gyroaction",		"Gyro switch",			KDM_GAMEPAD},
 	{"+altmodifier",	"Alt modifier",			KDM_GAMEPAD},
-	{KEYBIND_CUSTOM_MARKER, "",		KDM_NONE},
 	{"+attack",			"Attack",				KDM_ANY},
 	{"+weaponwheel",	"Weapon wheel",			KDM_ANY},
 	{"impulse 10",		"Next weapon",			KDM_ANY},
@@ -11286,7 +11282,6 @@ static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 	{"impulse 8",		"Thunderbolt",			KDM_ANY},
 	{"impulse 225",		"Laser Cannon",			KDM_ANY},
 	{"impulse 226",		"Mjolnir",				KDM_ANY},
-	{KEYBIND_CUSTOM_MARKER, "",		KDM_NONE},
 	{QUICKSAVE,			"Quick save",			KDM_ANY},
 	{QUICKLOAD,			"Quick load",			KDM_ANY},
 	{"menu_load",		"Load menu",			KDM_ANY},
@@ -11298,35 +11293,6 @@ static const defaultbind_t quakebindnames[] = // woods use iw quake bind names
 	{"messagemode",		"Text chat",			KDM_KEYBOARD_AND_MOUSE},
 };
 #define	NUMQUAKECOMMANDS	(sizeof(quakebindnames)/sizeof(quakebindnames[0]))
-
-typedef struct
-{
-	const char *cmd;
-	const char *desc;
-} requiredbind_t;
-
-// QSS/FTE replace their engine-defined bind lists with bindlist.lst instead of
-// merging them. Reject incomplete files so lists authored for QSS-M remain
-// compatible with those engines.
-static const requiredbind_t required_bindnames[] =
-{
-	{"+forward",       "Move forward"},
-	{"+back",          "Move backward"},
-	{"+moveleft",      "Move left"},
-	{"+moveright",     "Move right"},
-	{"+jump",          "Jump / swim up"},
-	{"+moveup",        "Swim up"},
-	{"+movedown",      "Swim down"},
-	{"+speed",         "Run"},
-	{"+strafe",        "Sidestep"},
-	{"+left",          "Turn left"},
-	{"+right",         "Turn right"},
-	{"+lookup",        "Look up"},
-	{"+lookdown",      "Look down"},
-	{"centerview",     "Center view"},
-	{"messagemode",    "Text chat"},
-	{"+voip",          "Voice chat"},
-};
 
 
 #define MAX_VIS_KEYS	14 // woods #mousemenu
@@ -11408,9 +11374,9 @@ static void M_Keys_ClearBindNames (void)
 	numbindnames = 0;
 }
 
-static qboolean M_Keys_IsCustomMarker (const char *cmd)
+static qboolean M_Keys_IsSeparator (const char *cmd)
 {
-	return cmd[0] == KEYBIND_CUSTOM_MARKER[0] && cmd[1] == '\0';
+	return cmd[0] == '-' && cmd[1] == '\0';
 }
 
 static qboolean M_Keys_IsHipnoticOnlyCommand (const char *cmd)
@@ -11424,8 +11390,6 @@ static const defaultbind_t *M_Keys_FindDefaultBind (const char *cmd)
 
 	for (i = 0; i < NUMQUAKECOMMANDS; i++)
 	{
-		if (M_Keys_IsCustomMarker(quakebindnames[i].cmd))
-			continue;
 		if (!strcmp(quakebindnames[i].cmd, cmd))
 			return &quakebindnames[i];
 	}
@@ -11446,72 +11410,6 @@ static qboolean M_Keys_HasCommand (const char *cmd)
 	return false;
 }
 
-static qboolean M_Keys_ShouldSuppressCustomBind (const char *cmd)
-{
-	int i;
-	qboolean filter_enabled = true;
-
-	if (!cmd[0])
-		return true;
-
-	for (i = 0; i < NUMQUAKECOMMANDS; i++)
-	{
-		const defaultbind_t *defaultbind = &quakebindnames[i];
-
-		if (M_Keys_IsCustomMarker(defaultbind->cmd))
-		{
-			filter_enabled = !filter_enabled;
-			continue;
-		}
-
-		if (!filter_enabled)
-			continue;
-		if (!strcmp(defaultbind->cmd, cmd))
-			return true;
-	}
-
-	return false;
-}
-
-static qboolean M_Keys_IsDeprecatedBindCommand (const char *cmd)
-{
-	static const char *const deprecated[] =
-	{
-		"+klook",
-		"+mlook",
-	};
-	int i;
-
-	for (i = 0; i < Q_COUNTOF(deprecated); i++)
-	{
-		if (!strcmp(deprecated[i], cmd))
-			return true;
-	}
-
-	return false;
-}
-
-static qboolean M_Keys_CustomCommandSupported (const char *cmd, const char *desc)
-{
-	if (!cmd[0])
-		return false;
-
-	COM_Parse(cmd);
-	if (!Cmd_Exists(com_token) && !Cmd_AliasExists(com_token) && !Cvar_FindVar(com_token))
-	{
-		Con_DPrintf("Skipping unsupported key binding: \"%s\" = \"%s\"\n", desc, cmd);
-		return false;
-	}
-
-	if (M_Keys_IsDeprecatedBindCommand(cmd))
-	{
-		Con_DPrintf("Skipping deprecated key binding: \"%s\" = \"%s\"\n", desc, cmd);
-		return false;
-	}
-
-	return true;
-}
-
 static void M_Keys_AddBindNameUnique (const char *cmd, const char *desc, keydevicemask_t devicemask)
 {
 	if (!cmd[0] || M_Keys_HasCommand(cmd))
@@ -11528,15 +11426,10 @@ static void M_Keys_AddDefaultBind (const defaultbind_t *defaultbind)
 	M_Keys_AddBindNameUnique(defaultbind->cmd, defaultbind->desc, defaultbind->devicemask);
 }
 
-static void M_Keys_FreeCustomBindList (bindname_t *custombinds, int numcustombinds);
-
 static void M_Keys_LoadCustomBindList (bindname_t **custombinds, int *numcustombinds)
 {
 	FILE* file;
 	char line[1024];
-	qboolean required_found[Q_COUNTOF(required_bindnames)] = { false };
-	int missing;
-	int i;
 
 	*custombinds = NULL;
 	*numcustombinds = 0;
@@ -11553,20 +11446,9 @@ static void M_Keys_LoadCustomBindList (bindname_t **custombinds, int *numcustomb
 		cmd = Cmd_Argv(0);
 		desc = Cmd_Argv(1);
 
-		if (cmd[0] && cmd[0] != '-')
-		{
-			for (i = 0; i < Q_COUNTOF(required_bindnames); i++)
-			{
-				if (!strcmp(required_bindnames[i].cmd, cmd))
-					required_found[i] = true;
-			}
-		}
-
-		if (!cmd[0] || !desc[0] || (cmd[0] == '-' && cmd[1] == '\0'))
-			continue;
-		if (M_Keys_ShouldSuppressCustomBind(cmd))
-			continue;
-		if (!M_Keys_CustomCommandSupported(cmd, desc))
+		// Match QSS/FTE parsing: every non-empty command is a menu row, and
+		// the explicit "-" command is a non-selectable caption or spacer.
+		if (!cmd[0])
 			continue;
 
 		defaultbind = M_Keys_FindDefaultBind(cmd);
@@ -11576,35 +11458,6 @@ static void M_Keys_LoadCustomBindList (bindname_t **custombinds, int *numcustomb
 	}
 
 	fclose(file);
-
-	for (i = 0, missing = 0; i < Q_COUNTOF(required_bindnames); i++)
-	{
-		if (!required_found[i])
-			missing++;
-	}
-
-	if (missing)
-	{
-		M_Keys_FreeCustomBindList(*custombinds, *numcustombinds);
-		*custombinds = NULL;
-		*numcustombinds = 0;
-
-		if (!developer.value)
-		{
-			Con_Warning("ignoring incomplete bindlist.lst\n(use developer 1 for more details)\n");
-		}
-		else
-		{
-			Con_SafePrintf("\n");
-			Con_Warning("bindlist.lst is missing %d required %s:\n", missing, missing == 1 ? "entry" : "entries");
-			for (i = 0; i < Q_COUNTOF(required_bindnames); i++)
-			{
-				if (!required_found[i])
-					Con_SafePrintf("\"%s\" \"%s\"\n", required_bindnames[i].cmd, required_bindnames[i].desc);
-			}
-			Con_SafePrintf("\n");
-		}
-	}
 }
 
 static void M_Keys_FreeCustomBindList (bindname_t *custombinds, int numcustombinds)
@@ -11624,37 +11477,67 @@ static void M_Keys_AddCustomBindList (bindname_t *custombinds, int numcustombind
 	int i;
 
 	for (i = 0; i < numcustombinds; i++)
-		M_Keys_AddBindNameUnique(custombinds[i].cmd, custombinds[i].desc, custombinds[i].devicemask);
+		M_Keys_AddBindName(custombinds[i].cmd, custombinds[i].desc, custombinds[i].devicemask);
 }
 
 static void M_Keys_Populate(void) // woods #mousemenu -- modified
 {
 	bindname_t *custombinds;
 	int numcustombinds;
-	qboolean added_custom_entries = false;
 	int i;
 
 	M_Keys_ClearBindNames();
 	M_Keys_LoadCustomBindList(&custombinds, &numcustombinds);
+	// Preserve the authored rows, labels, duplicates, and ordering. QSS-M then
+	// appends only missing built-ins so intentionally small lists remain usable.
+	M_Keys_AddCustomBindList(custombinds, numcustombinds);
 
 	for (i = 0; i < NUMQUAKECOMMANDS; i++)
-	{
-		const defaultbind_t *defaultbind = &quakebindnames[i];
-
-		if (M_Keys_IsCustomMarker(defaultbind->cmd))
-		{
-			if (!added_custom_entries)
-			{
-				M_Keys_AddCustomBindList(custombinds, numcustombinds);
-				added_custom_entries = true;
-			}
-			continue;
-		}
-
-		M_Keys_AddDefaultBind(defaultbind);
-	}
+		M_Keys_AddDefaultBind(&quakebindnames[i]);
 
 	M_Keys_FreeCustomBindList(custombinds, numcustombinds);
+}
+
+static qboolean M_Keys_IsSelectableDisplayIndex (int index)
+{
+	int bindindex;
+
+	if (index < 0 || index >= keysmenu.num_filtered)
+		return false;
+
+	bindindex = keysmenu.filtered_indices[index];
+	return !M_Keys_IsSeparator(bindnames[bindindex].cmd);
+}
+
+static void M_Keys_EnsureSelectableCursor (int dir)
+{
+	if (keysmenu.list.numitems <= 0 || M_Keys_IsSelectableDisplayIndex(keysmenu.list.cursor))
+		return;
+
+	if (!M_List_SelectNextActive(&keysmenu.list, keysmenu.list.cursor, dir, true))
+	{
+		keysmenu.list.cursor = 0;
+		keysmenu.list.scroll = 0;
+	}
+}
+
+static void M_Keys_EnsureSelectableCursorForKey (int key)
+{
+	switch (key)
+	{
+	case K_UPARROW:
+	case K_KP_UPARROW:
+	case K_PGUP:
+	case K_KP_PGUP:
+	case K_END:
+	case K_KP_END:
+		M_Keys_EnsureSelectableCursor(-1);
+		break;
+
+	default:
+		M_Keys_EnsureSelectableCursor(1);
+		break;
+	}
 }
 
 void M_Keys_UpdateFilter(void)
@@ -11754,6 +11637,7 @@ void M_Keys_UpdateFilter(void)
 		keysmenu.list.cursor = keysmenu.num_filtered - 1;
 	if (keysmenu.list.cursor < 0)
 		keysmenu.list.cursor = 0;
+	M_Keys_EnsureSelectableCursor(1);
 }
 
 void M_Menu_Keys_f(void)
@@ -11768,6 +11652,7 @@ void M_Menu_Keys_f(void)
 	keysmenu.list.cursor = 0;
 	keysmenu.list.scroll = 0;
 	keysmenu.list.numitems = numbindnames;
+	keysmenu.list.isactive_fn = M_Keys_IsSelectableDisplayIndex;
 
 	keysmenu.search.len = 0;
 	keysmenu.search.text[0] = 0;
@@ -11911,6 +11796,14 @@ void M_Keys_Draw(void)
 			break;
 
 		int actual_idx = keysmenu.filtered_indices[list_index];
+		if (M_Keys_IsSeparator(bindnames[actual_idx].cmd))
+		{
+			if (bindnames[actual_idx].desc[0])
+				M_PrintWhite((320 - (int)strlen(bindnames[actual_idx].desc) * 8) / 2, y, bindnames[actual_idx].desc);
+			y += 8;
+			continue;
+		}
+
 		qboolean is_selected = (list_index == keysmenu.list.cursor && bind_grab);
 
 		void (*print_fn)(int, int, const char*) = is_selected ? M_PrintWhite : M_Print;
@@ -12133,8 +12026,11 @@ void M_Keys_Key(int k)
 		}
 	}
 
-	if (M_List_Key(&keysmenu.list, k))
+	if (keysmenu.list.numitems > 0 && M_List_Key(&keysmenu.list, k))
+	{
+		M_Keys_EnsureSelectableCursorForKey(k);
 		return;
+	}
 
 	switch (k)
 	{
@@ -12159,7 +12055,7 @@ void M_Keys_Key(int k)
 	case K_ABUTTON:
 	case K_MOUSE1:
 	{
-		if (keysmenu.num_filtered <= 0)
+		if (keysmenu.num_filtered <= 0 || !M_Keys_IsSelectableDisplayIndex(keysmenu.list.cursor))
 			break;
 		x = m_mousex - keysmenu.x - (keysmenu.cols - 1) * 8;
 		y = m_mousey - keysmenu.y;
@@ -12182,7 +12078,8 @@ void M_Keys_Key(int k)
 	case K_BACKSPACE:
 	case K_DEL:
 	case K_YBUTTON:
-		if (!keysmenu.search.len && keysmenu.num_filtered > 0)  // Only delete binding if not searching
+		if (!keysmenu.search.len && keysmenu.num_filtered > 0 &&
+			M_Keys_IsSelectableDisplayIndex(keysmenu.list.cursor))  // Only delete binding if not searching
 		{
 			S_LocalSound("misc/menu2.wav");
 			int actual_idx = keysmenu.filtered_indices[keysmenu.list.cursor];
@@ -23128,8 +23025,6 @@ static qboolean MenuSearch_HostAvailable(int index)
 static qboolean MenuSearch_KeyAvailable(int index)
 {
 	const char *cmd = quakebindnames[index].cmd;
-	if (M_Keys_IsCustomMarker(cmd))
-		return false;
 	return hipnotic || !M_Keys_IsHipnoticOnlyCommand(cmd);
 }
 
