@@ -1,0 +1,181 @@
+{
+  "engine": {
+    "path": "/Users/timbergeron/codedev/QSS-M/macOS/build/Debug/QSS-M.app/Contents/MacOS/QSS-M",
+    "sha256": "be4a76ebbd050426723399a6faeeb354ac0721e251c453f19a809b1ee9ab606b",
+    "mtime": 1788295952.8428798
+  },
+  "packs": {
+    "mg1": {
+      "path": "/Users/timbergeron/Desktop/qssm/mg1/pak0.pak",
+      "sha256": "41436d7e10965276a28ff7b2649bfb9cadd491c9236c5cbd44a135d69023c0d0"
+    },
+    "mg3": {
+      "path": "/Users/timbergeron/Desktop/qssm/mg3/pak0.pak",
+      "sha256": "d6504ef6f8a7ae4c2d1ea3cb97d9206dc99a20b25b8992632e0a2c35f783efe5"
+    }
+  },
+  "configs_restored": true,
+  "results": [
+    {
+      "game": "mg1",
+      "map": "horde1",
+      "duration_seconds": 1.835,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-horde1.log"
+    },
+    {
+      "game": "mg1",
+      "map": "horde3",
+      "duration_seconds": 1.526,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-horde3.log"
+    },
+    {
+      "game": "mg1",
+      "map": "horde6",
+      "duration_seconds": 1.726,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-horde6.log"
+    },
+    {
+      "game": "mg1",
+      "map": "horde7",
+      "duration_seconds": 1.667,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-horde7.log"
+    },
+    {
+      "game": "mg1",
+      "map": "hub",
+      "duration_seconds": 1.002,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-hub.log"
+    },
+    {
+      "game": "mg1",
+      "map": "mge1m1",
+      "duration_seconds": 1.507,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-mge1m1.log"
+    },
+    {
+      "game": "mg1",
+      "map": "mge1m2",
+      "duration_seconds": 1.438,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-mge1m2.log"
+    },
+    {
+      "game": "mg1",
+      "map": "mge1m3",
+      "duration_seconds": 1.532,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-mge1m3.log"
+    },
+    {
+      "game": "mg1",
+      "map": "mge2m1",
+      "duration_seconds": 1.654,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-mge2m1.log"
+    },
+    {
+      "game": "mg1",
+      "map": "mge2m2",
+      "duration_seconds": 1.656,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-mge2m2.log"
+    },
+    {
+      "game": "mg1",
+      "map": "mge4m1",
+      "duration_seconds": 1.524,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-mge4m1.log"
+    },
+    {
+      "game": "mg1",
+      "map": "mge5m2",
+      "duration_seconds": 1.629,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-mge5m2.log"
+    },
+    {
+      "game": "mg1",
+      "map": "start",
+      "duration_seconds": 0.974,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg1-start.log"
+    },
+    {
+      "game": "mg3",
+      "map": "map1",
+      "duration_seconds": 1.58,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg3-map1.log"
+    },
+    {
+      "game": "mg3",
+      "map": "map5",
+      "duration_seconds": 2.019,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg3-map5.log"
+    },
+    {
+      "game": "mg3",
+      "map": "map6",
+      "duration_seconds": 1.755,
+      "returncode": 0,
+      "timed_out": false,
+      "engine_exe_stamp": "09:25:46 Sep  1 2026",
+      "errors": [],
+      "log": "artifacts/smoke-mg3-map6.log"
+    }
+  ],
+  "passed": true
+}

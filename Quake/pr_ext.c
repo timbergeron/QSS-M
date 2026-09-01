@@ -10077,22 +10077,25 @@ qboolean PR_Can_Ent_Scale(unsigned int prot, unsigned int pext1, unsigned int pe
 	else
 		return false;	//sorry. don't report it as supported.
 }
-qboolean PR_CanPrecacheAnyTime(unsigned int prot, unsigned int pext1, unsigned int pext2)
+static void PR_EnablePrecacheAnyTime(void)
 {
 	qcvm->precacheanytime = true;
-	return qcvm->precacheanytime;
 }
-qboolean PR_CanPushRotate(unsigned int prot, unsigned int pext1, unsigned int pext2)
+static qboolean PR_CanPushRotate(unsigned int prot, unsigned int pext1, unsigned int pext2)
 {
-	if (qcvm->qexlogic)
-		return false;	//QuakeEx QC advances pusher angles itself, so don't promise DP angular pushing.
-	qcvm->rotatingbmodel = true;
-	return qcvm->rotatingbmodel;
+	return !qcvm->qexlogic;	//QuakeEx QC advances pusher angles itself, so don't promise DP angular pushing.
+}
+static void PR_EnablePushRotate(void)
+{
+	qcvm->rotatingbmodelmode = ROTATINGBMODEL_ENGINE_PUSH;
 }
 qboolean PR_Can_EF_Red_Blue(unsigned int prot, unsigned int pext1, unsigned int pext2)
 {
+	return true;
+}
+static void PR_Enable_EF_Red_Blue(void)
+{
 	qcvm->brokeneffects = false;
-	return !qcvm->brokeneffects;
 }
 qboolean PR_Can_EX_EXTENDED_EF(unsigned int prot, unsigned int pext1, unsigned int pext2)
 {
@@ -10108,18 +10111,20 @@ qboolean PR_NotQEX(unsigned int prot, unsigned int pext1, unsigned int pext2)
 		return false;
 	return true;
 }
-static struct
+typedef struct
 {
 	const char *name;
-	qboolean (*checkextsupported)(unsigned int prot, unsigned int pext1, unsigned int pext2);
-} qcextensions[] =
+	qboolean (*is_supported)(unsigned int prot, unsigned int pext1, unsigned int pext2);
+	void (*on_enable)(void);
+} qcextension_t;
+static const qcextension_t qcextensions[] =
 {
 	{"DP_CON_SET"},
 	{"DP_CON_SETA"},
 	{"DP_CSQC_QUERYRENDERENTITY"},
 	{"DP_EF_NOSHADOW"},
-	{"DP_EF_BLUE",				PR_Can_EF_Red_Blue},
-	{"DP_EF_RED",				PR_Can_EF_Red_Blue},
+	{"DP_EF_BLUE",				PR_Can_EF_Red_Blue,	PR_Enable_EF_Red_Blue},
+	{"DP_EF_RED",				PR_Can_EF_Red_Blue,	PR_Enable_EF_Red_Blue},
 	{"DP_ENT_ALPHA",			PR_Can_Ent_Alpha},	//already in quakespasm, supposedly.
 	{"DP_ENT_COLORMOD",			PR_Can_Ent_ColorMod},
 	{"DP_ENT_EXTERIORMODELTOCLIENT"},
@@ -10176,9 +10181,9 @@ static struct
 	{"DP_SV_NODRAWTOCLIENT"},
 //	{"DP_SV_POINTPARTICLES",	PR_Can_Particles},	//can't enable this, because certain mods then assume that we're DP and all the particles break.
 	{"DP_SV_POINTSOUND"},
-	{"DP_SV_PRECACHEANYTIME",	PR_CanPrecacheAnyTime},
+	{"DP_SV_PRECACHEANYTIME",	NULL,				PR_EnablePrecacheAnyTime},
 	{"DP_SV_PRINT"},
-	{"DP_SV_ROTATINGBMODEL",	PR_CanPushRotate},
+	{"DP_SV_ROTATINGBMODEL",	PR_CanPushRotate,		PR_EnablePushRotate},
 	{"DP_SV_SETCOLOR"},
 	{"DP_SV_SPAWNFUNC_PREFIX"},
 	{"DP_SV_WRITEUNTERMINATEDSTRING"},
@@ -10222,13 +10227,16 @@ static void PF_checkextension(void)
 {
 	const char *extname = G_STRING(OFS_PARM0);
 	unsigned int i;
+	const qcextension_t *ext;
+	size_t j;
 	cvar_t *v;
 	char *cvn;
 	for (i = 0; i < countof(qcextensions); i++)
 	{
 		if (!strcmp(extname, qcextensions[i].name))
 		{
-			if (qcextensions[i].checkextsupported)
+			ext = &qcextensions[i];
+			if (ext->is_supported)
 			{
 				unsigned int prot, pext1, pext2;
 				extern unsigned int sv_protocol;
@@ -10257,7 +10265,7 @@ static void PF_checkextension(void)
 					pext1 = 0;
 					pext2 = 0;
 				}
-				if (!qcextensions[i].checkextsupported(prot, pext1, pext2))
+				if (!ext->is_supported(prot, pext1, pext2))
 				{
 					if (!pr_checkextension.value)
 						Con_Printf("Mod queried extension %s, but not enabled\n", extname);
@@ -10266,10 +10274,10 @@ static void PF_checkextension(void)
 				}
 			}
 
-			cvn = va("pr_ext_%s", qcextensions[i].name);
-			for (i = 0; cvn[i]; i++)
-				if (cvn[i] >= 'A' && cvn[i] <= 'Z')
-					cvn[i] = 'a' + (cvn[i]-'A');
+			cvn = va("pr_ext_%s", ext->name);
+			for (j = 0; cvn[j]; j++)
+				if (cvn[j] >= 'A' && cvn[j] <= 'Z')
+					cvn[j] = 'a' + (cvn[j]-'A');
 			v = Cvar_Create(cvn, "1");
 			if (v && !v->value)
 			{
@@ -10278,6 +10286,8 @@ static void PF_checkextension(void)
 				G_FLOAT(OFS_RETURN) = false;
 				return;
 			}
+			if (ext->on_enable)
+				ext->on_enable();
 			if (!pr_checkextension.value)
 				Con_Printf("Mod found extension %s\n", extname);
 			G_FLOAT(OFS_RETURN) = true;
@@ -10568,7 +10578,7 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 
 		qcvm->qexlogic = true;
 		qcvm->brokenbouncemissile = true;
-		qcvm->rotatingbmodel = true;
+		qcvm->rotatingbmodelmode = ROTATINGBMODEL_EXTERNAL_ANGLES;
 		qcvm->brokeneffects = true;
 	}
 	if (!pr_checkextension.value && qcvm == &sv.qcvm)

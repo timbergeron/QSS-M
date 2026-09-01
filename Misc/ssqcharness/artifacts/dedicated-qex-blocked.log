@@ -1,0 +1,55 @@
+/Users/timbergeron/codedev/QSS-M/macOS/build/Debug/QSS-M.app/Contents/MacOS/QSS-M -basedir /Users/timbergeron/Desktop/qssm -game ssqcharness-run-62523 -nosound -condebug -dedicated +set developer 1 +set sys_ticrate 0.02 +set pr_checkextension 1 +set ssqc_case 2 +set pr_ext_dp_sv_rotatingbmodel 0 +set pr_ext_dp_sv_precacheanytime 0 +set pr_ext_dp_ef_red 0 +map rotating_pushers
+
+UDP_Init: skipping gethostbyname for tbmbp.local
+UDP4 Initialized
+UDPv6 Initialized
+Generated temp DTLS identity in 184ms
+Server using protocol 999+ (FTE-RMQ)
+Exe: 09:25:46 Sep  1 2026
+384.0 megabyte heap
+
+Language initialization
+Loaded 1671 strings from 'localization/loc_english.txt'
+
+========= Quake Initialized =========
+
+couldn't exec server.cfg
+execing configs/autoexec.cfg
+Unknown command "volume"
+Unknown command "mute"
+SpawnServer: rotating_pushers
+Clearing memory
+progs.dat occupies 13K.
+Mod_LoadTextures maps/rotating_pushers.bsp: findfile 0.0ms (0 calls) texmgr 0.0ms (0 calls)
+Mod_LoadBrushModel maps/rotating_pushers.bsp: geom 0.0ms tex 0.0ms light 0.0ms faces 0.0ms
+trying to open external vis file
+maps/rotating_pushers.vis not found, trying ssqcharness-run-62523.vis
+external vis not found
+Mod_LoadBrushModel maps/rotating_pushers.bsp: nodes 0.0ms watervis 0.0ms
+0 entities inhibited
+ED_LoadFromFile: 0.1ms (models 0.0ms/0 read 0.0ms findfile 0.0ms/0 texmgr 0.0ms/0)
+Server spawned.
+Terminal input not available.
+Warning: PF_precache_sound("misc/menu1.wav"): 'DP_SV_PRECACHEANYTIME' not checked, so precaches should only be done in spawn functions
+SELFTEST PASS rotation/qex-query-rejected
+SELFTEST PASS effects/qex-extended-before
+SELFTEST PASS effects/blocked-query-rejected
+SELFTEST PASS effects/blocked-query-no-mutation
+SELFTEST PASS precache/blocked-query-rejected
+SELFTEST PASS collision/initial-thin-axis-hit
+SELFTEST PASS collision/initial-off-axis-miss
+SELFTEST PASS collision/rotated-old-axis-miss
+SELFTEST PASS collision/rotated-new-axis-hit
+SELFTEST PASS linear/origin-advanced
+SELFTEST PASS linear/ltime-advanced
+SELFTEST PASS linear/no-angle
+SELFTEST PASS mixed/origin-advanced
+SELFTEST PASS mixed/ltime-advanced
+SELFTEST PASS mixed/external-angle-advanced
+SELFTEST PASS stopped/external-angle-stationary
+SELFTEST PASS tween/external-scaled-delta
+SELFTEST PASS rider/external-origin-unchanged
+SELFTEST PASS rider/external-angles-unchanged
+SELFTEST PASS trigger/external-relink-does-not-touch
+SELFTEST PASS rotation/external-angles-integrated-once
+SELFTEST DONE ssqc pass=21 fail=0

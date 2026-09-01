@@ -1,0 +1,154 @@
+/Users/timbergeron/codedev/QSS-M/macOS/build/Debug/QSS-M.app/Contents/MacOS/QSS-M -basedir /Users/timbergeron/Desktop/qssm -game ssqcharness-run-62523 -nosound -condebug -window +listen 1 +set developer 1 +set sys_ticrate 0.02 +set pr_checkextension 1 +set ssqc_case 0 +set pr_ext_dp_sv_rotatingbmodel 1 +set pr_ext_dp_sv_precacheanytime 1 +set pr_ext_dp_ef_red 1 +map rotating_pushers
+
+Console initialized.
+UDP_Init: skipping gethostbyname for tbmbp.local
+UDP4 Initialized
+UDPv6 Initialized
+Server using protocol 999+ (FTE-RMQ)
+Exe: 09:25:46 Sep  1 2026
+384.0 megabyte heap
+Video mode 1024x768x32 120Hz 255 ppi (32-bit z-buffer, 0x FSAA) initialized
+GL_VENDOR: Apple
+GL_RENDERER: Apple M1 Pro
+GL_VERSION: 2.1 Metal - 91.7
+FOUND: ARB_vertex_buffer_object
+FOUND: ARB_multitexture
+GL_MAX_TEXTURE_UNITS: 8
+FOUND: ARB_texture_env_combine
+FOUND: ARB_texture_env_add
+FOUND: SDL_GL_SetSwapInterval
+FOUND: EXT_texture_filter_anisotropic
+FOUND: ARB_texture_non_power_of_two
+FOUND: GLSL
+GL_MAX_TEXTURE_IMAGE_UNITS: 16
+FOUND: brush model instancing
+FOUND: Framebuffer Objects
+Enabled: GLSL gamma
+FOUND: glBlendFuncSeparate
+Enabled: GLSL alias model rendering
+Enabled: EXT_packed_pixels
+FOUND: glGenerateMipmap
+183 mappings loaded from /Users/timbergeron/Desktop/qssm/gamecontrollerdb.txt
+
+Language initialization
+Loaded 1671 strings from 'localization/loc_english.txt'
+
+========= Quake Initialized =========
+
+execing quake.rc
+execing default.cfg
+execing config.cfg
+execing configs/autoexec.cfg
+Unknown command "mute"
+Generated temp DTLS identity in 133ms
+SpawnServer: rotating_pushers
+Clearing memory
+progs.dat occupies 14K.
+Mod_LoadTextures maps/rotating_pushers.bsp: findfile 0.0ms (0 calls) texmgr 0.0ms (0 calls)
+Mod_LoadBrushModel maps/rotating_pushers.bsp: geom 0.0ms tex 0.0ms light 0.0ms faces 0.0ms
+trying to open external vis file
+maps/rotating_pushers.vis not found, trying ssqcharness-run-62523.vis
+external vis not found
+Mod_LoadBrushModel maps/rotating_pushers.bsp: nodes 0.0ms watervis 0.0ms
+sv_mapcrc: Starting two-stage map CRC calculation for maps/rotating_pushers.bsp
+=== SERVER MAP CRC CALCULATION ===
+Map: maps/rotating_pushers.bsp (path_id: 2)
+File size: 4436 bytes
+Quick CRC (4096 bytes): 3107963505 (0xb93fc271) [0.0ms]
+Full CRC (4436 bytes):  2964397119 (0xb0b11c3f) [0.0ms]
+Total CRC time: 0.0ms
+==================================
+0 entities inhibited
+ED_LoadFromFile: 0.1ms (models 0.0ms/0 read 0.0ms findfile 0.0ms/0 texmgr 0.0ms/0)
+Mod_LoadModel progs/player.mdl: read 0.1ms parse 9.2ms (178658 bytes)
+Server spawned.
+connect timing: handshake accepted       +    0.0ms  (total     0.0ms)
+CL_EstablishConnection: connected to local
+Client LOCAL connected
+UNSUPPORTED (log once): POSSIBLE ISSUE: unit 1 GLD_TEXTURE_INDEX_2D is unloadable and bound to sampler type (Float) - using zero texture because texture unloadable
+Client unconnected pext: raw 0x60000000/0x0000007f accepted 0x60000000/0x0000006b
+
+QSS-M 1.6.9 Server (63724 CRC)
+Serverinfo packet received.
+connect timing: serverinfo received      +  198.1ms  (total   198.1ms)
+Using protocol 999(rmq)+fte2(0x6b)
+FindFile: can't find progs/flag3.mdl
+
+>
+
+QSS-M rotating-pusher selftest
+connect timing: serverinfo parsed        +    6.7ms  (total   204.8ms)
+CL_SignonReply: 1
+connect timing: signon 1 received        +    0.1ms  (total   204.9ms)
+Mod_LoadModel progs/flag.mdl: read 0.0ms parse 44.0ms (63776 bytes)
+FindFile: can't find progs/star.md3_0.skin
+Mod_LoadModel progs/star.mdl: read 0.0ms parse 5.8ms (35828 bytes)
+Mod_LoadModel progs/v_star.mdl: read 0.0ms parse 46.3ms (56996 bytes)
+model precache: 102.5ms (findfile 2.4ms/539 texmgr 49.7ms/24)
+sound precache: 0.0ms (findfile 0.0ms/0)
+R_NewMap classic particles: 0.0ms
+FindFile: can't find particles/map_rotating_pushers.cfg
+FindFile: can't find map_rotating_pushers.cfg
+R_NewMap pscript clear: 0.5ms
+GL_BuildLightmaps: surfaces 0.0ms
+GL_BuildLightmaps: fill 0.1ms
+GL_BuildLightmaps: occupied 0.0/0.0 MiB, transferred 0.0 MiB (0/0 partial)
+GL_BuildLightmaps: build 0.1ms upload 0.0ms (0 lightmaps)
+R_NewMap lightmaps: 0.1ms
+GL_BuildBModelVertexBuffer: 0.0ms (0 verts)
+R_NewMap vbo+decals: 0.1ms
+R_NewMap sky: 0.0ms
+R_NewMap worldspawn: 0.0ms
+R_NewMap locs: 0.0ms
+R_NewMap total: 0.8ms
+R_NewMap: 0.8ms (findfile 0.1ms/3 texmgr 0.0ms/0)
+FindFile: can't find 0x73d6
+csprogs.dat occupies 28K.
+connect timing: prespawn sent (precache done) +  116.9ms  (total   321.8ms)
+CL_SignonReply: 2
+connect timing: signon 2 (baselines)     +    7.4ms  (total   329.3ms)
+r_scenecache: Disabling due to conflicting settings
+allowing *ver set from woods (not yet spawned)
+woods entered the game
+CL_SignonReply: 3
+connect timing: signon 3 (spawninfo)     +    5.0ms  (total   334.3ms)
+0.8 MiB data cache used (0.8 MiB peak, 64.0 MiB budget, 0 evictions)
+CL_SignonReply: 4
+connect timing: in game                  +    8.2ms  (total   342.5ms)
+FindFile: can't find connect.cfg
+Skipping map CRC validation for listen server
+SELFTEST PASS effects/ordinary-extended-before
+SELFTEST PASS effects/ordinary-extended-after
+SELFTEST PASS rotation/ordinary-query-accepted
+SELFTEST PASS effects/accepted-query
+SELFTEST PASS precache/accepted-query
+SELFTEST PASS collision/initial-thin-axis-hit
+SELFTEST PASS collision/initial-off-axis-miss
+SELFTEST PASS collision/rotated-old-axis-miss
+SELFTEST PASS collision/rotated-new-axis-hit
+SELFTEST PASS linear/origin-advanced
+SELFTEST PASS linear/ltime-advanced
+SELFTEST PASS linear/no-angle
+SELFTEST PASS mixed/origin-advanced
+SELFTEST PASS mixed/ltime-advanced
+SELFTEST PASS mixed/engine-angle-advanced
+SELFTEST PASS rider/engine-origin-orbited
+SELFTEST PASS rider/engine-angles-updated
+SELFTEST PASS trigger/engine-pusher-touch
+SELFTEST INFO blocked count=3 angle=40.08840179443359375 ltime=0.445426642894744873046875
+SELFTEST PASS blocked/ordinary-callback
+SELFTEST PASS blocked/ordinary-angle-rollback
+SELFTEST PASS blocked/ordinary-ltime-rollback
+SELFTEST PASS rotation/engine-time-advanced
+SELFTEST PASS rotation/engine-angles-integrated-once
+SELFTEST DONE ssqc pass=23 fail=0
+Loaded I-beam cursor image: 256x256
+Custom I-beam cursor created successfully
+Sending clc_disconnect
+Client woods removed
+FindFile: can't find configs/config.cfg
+Wrote config.cfg.
+FindFile: can't find configs/config.cfg
+IN_Shutdown called
+HID Mouse: Raw mouse input shutdown
+IN_Shutdown: calling IN_ReenableOSXMouseAccel

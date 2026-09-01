@@ -2094,7 +2094,7 @@ static qboolean CL_LoadCSProgs(void)
 				qcvm->extglobals.servercommandframe = NULL;
 			}
 
-			qcvm->rotatingbmodel = true;	//csqc always assumes this is enabled.
+			qcvm->rotatingbmodelmode = ROTATINGBMODEL_EXTERNAL_ANGLES;	//CSQC consumes server-provided angles.
 			qcvm->GetModel = PR_CSQC_GetModel;
 			//set a few globals, if they exist
 			if (qcvm->extglobals.maxclients)

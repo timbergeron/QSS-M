@@ -1,0 +1,10 @@
+/Users/timbergeron/codedev/runequake/fteqcc -Wall -srcfile progs.src
+
+FTEQCC: Nov 22 2025
+Source file: progs.src
+outputfile: ../progs.dat
+compiling defs.qc
+compiling world.qc
+Writing ../progs.dat
+Compile finished: ../progs.dat (id format)
+Done. 0 warnings

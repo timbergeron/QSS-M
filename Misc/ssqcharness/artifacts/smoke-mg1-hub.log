@@ -1,0 +1,45 @@
+/Users/timbergeron/codedev/QSS-M/macOS/build/Debug/QSS-M.app/Contents/MacOS/QSS-M -basedir /Users/timbergeron/Desktop/qssm -game mg1 -nosound -dedicated +set developer 1 +map hub +wait +wait +quit
+
+UDP_Init: skipping gethostbyname for tbmbp.local
+UDP4 Initialized
+UDPv6 Initialized
+Generated temp DTLS identity in 101ms
+Server using protocol 999+ (FTE-RMQ)
+Exe: 09:25:46 Sep  1 2026
+384.0 megabyte heap
+
+Language initialization
+Loaded 1671 strings from 'localization/loc_english.txt'
+
+========= Quake Initialized =========
+
+couldn't exec server.cfg
+execing configs/autoexec.cfg
+Unknown command "volume"
+Unknown command "mute"
+SpawnServer: hub
+Clearing memory
+progs.dat occupies 422K.
+Mod_LoadTextures maps/hub.bsp: findfile 0.0ms (0 calls) texmgr 0.0ms (0 calls)
+Mod_LoadBrushModel maps/hub.bsp: geom 4.1ms tex 0.1ms light 0.6ms faces 97.4ms
+Mod_LoadBrushModel maps/hub.bsp: nodes 4.7ms watervis 0.2ms
+Mod_LoadModel maps/hub.bsp: read 4.8ms parse 110.4ms (32939532 bytes)
+"mapversion" is not a field
+Mod_LoadModel progs/eyes.mdl: read 0.0ms parse 5.0ms (4372 bytes)
+Mod_LoadModel progs/h_player.mdl: read 0.0ms parse 16.8ms (41916 bytes)
+Mod_LoadModel progs/gib1.mdl: read 0.0ms parse 7.7ms (5716 bytes)
+Mod_LoadModel progs/gib2.mdl: read 0.0ms parse 13.2ms (16228 bytes)
+Mod_LoadModel progs/v_axe.mdl: read 0.0ms parse 11.9ms (57908 bytes)
+Mod_LoadModel progs/v_shot.mdl: read 0.0ms parse 13.3ms (43852 bytes)
+Mod_LoadModel progs/v_nail.mdl: read 0.0ms parse 16.9ms (54472 bytes)
+Mod_LoadModel progs/v_rock.mdl: read 0.0ms parse 9.3ms (81820 bytes)
+Mod_LoadModel progs/v_shot2.mdl: read 0.0ms parse 14.8ms (50816 bytes)
+Mod_LoadModel progs/v_nail2.mdl: read 0.0ms parse 8.1ms (111124 bytes)
+Mod_LoadModel progs/lavaball.mdl: read 0.0ms parse 21.1ms (8788 bytes)
+Mod_LoadModel progs/backpack.mdl: read 0.0ms parse 15.8ms (19348 bytes)
+Mod_LoadModel progs/zom_gib.mdl: read 0.0ms parse 27.6ms (10196 bytes)
+Mod_LoadModel progs/v_light.mdl: read 0.0ms parse 8.3ms (89796 bytes)
+0 entities inhibited
+ED_LoadFromFile: 245.8ms (models 209.7ms/33 read 0.7ms findfile 6.9ms/1409 texmgr 0.0ms/100)
+Server spawned.
+Terminal input not available.

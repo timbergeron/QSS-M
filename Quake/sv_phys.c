@@ -570,14 +570,14 @@ trace_t SV_PushEntity (edict_t *ent, vec3_t push)
 SV_PushMove
 ============
 */
-static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime)
+static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime, const vec3_t amove)
 {
 	int			i, e;
 	edict_t		*check, *block;
 	vec3_t		mins, maxs;
 	//float oldsolid;
 	vec3_t		org, org2, move2, forward, right, up;
-	vec3_t		move, amove;
+	vec3_t		move;
 	struct {
 		edict_t *ent;
 		vec3_t origin;
@@ -587,7 +587,6 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime)
 	for (i=0 ; i<3 ; i++)
 	{
 		move[i] = pusher->v.velocity[i] * movetime;
-		amove[i] = pusher->v.avelocity[i] * movetime;
 		mins[i] = pusher->v.absmin[i] + move[i];
 		maxs[i] = pusher->v.absmax[i] + move[i];
 	}
@@ -788,30 +787,38 @@ void SV_PushMove (edict_t *pusher, float movetime)
 
 	if ((pusher->v.avelocity[0] || pusher->v.avelocity[1] || pusher->v.avelocity[2]))
 	{
-		if (qcvm->rotatingbmodel)
-		{	//spike -- added this block for proper rotations
-			if (qcvm->qexlogic)
-			{	//QuakeEx QC advances pusher angles from StartFrame; relink them without applying avelocity twice.
-				if (!pusher->v.velocity[0] && !pusher->v.velocity[1] && !pusher->v.velocity[2])
-				{
-					SV_LinkEdict (pusher, false);
-					pusher->v.ltime += movetime;
-					return;
-				}
-			}
-			else
-			{
+		switch (qcvm->rotatingbmodelmode)
+		{
+		case ROTATINGBMODEL_ENGINE_PUSH:
+			{	//spike -- added this block for proper rotations
+				vec3_t amove;
+
 				mark = Hunk_LowMark ();
-				if (SV_PushMoveAngles (pusher, movetime))
+				VectorScale (pusher->v.avelocity, movetime, amove);
+				if (SV_PushMoveAngles (pusher, movetime, amove))
 					pusher->v.ltime += movetime;
 				Hunk_FreeToLowMark (mark);
 				return;
 			}
-		}
-		else if (!qcvm->warned_rotatingbmodel)
-		{
-			Con_Warning("MOVETYPE_PUSH(\"%s\") has avelocity, but DP_SV_ROTATINGBMODEL is not enabled\n", PR_GetString(pusher->v.classname));
-			qcvm->warned_rotatingbmodel = true;
+
+		case ROTATINGBMODEL_EXTERNAL_ANGLES:
+			//External QC or server state already supplied the angle; only refresh collision here.
+			if (!pusher->v.velocity[0] && !pusher->v.velocity[1] && !pusher->v.velocity[2])
+			{
+				SV_LinkEdict (pusher, false);
+				pusher->v.ltime += movetime;
+				return;
+			}
+			break;
+
+		case ROTATINGBMODEL_DISABLED:
+		default:
+			if (!qcvm->warned_rotatingbmodel)
+			{
+				Con_Warning("MOVETYPE_PUSH(\"%s\") has avelocity, but DP_SV_ROTATINGBMODEL is not enabled\n", PR_GetString(pusher->v.classname));
+				qcvm->warned_rotatingbmodel = true;
+			}
+			break;
 		}
 	}
 

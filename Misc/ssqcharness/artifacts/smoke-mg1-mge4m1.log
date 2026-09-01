@@ -1,0 +1,107 @@
+/Users/timbergeron/codedev/QSS-M/macOS/build/Debug/QSS-M.app/Contents/MacOS/QSS-M -basedir /Users/timbergeron/Desktop/qssm -game mg1 -nosound -dedicated +set developer 1 +map mge4m1 +wait +wait +quit
+
+UDP_Init: skipping gethostbyname for tbmbp.local
+UDP4 Initialized
+UDPv6 Initialized
+Generated temp DTLS identity in 137ms
+Server using protocol 999+ (FTE-RMQ)
+Exe: 09:25:46 Sep  1 2026
+384.0 megabyte heap
+
+Language initialization
+Loaded 1671 strings from 'localization/loc_english.txt'
+
+========= Quake Initialized =========
+
+couldn't exec server.cfg
+execing configs/autoexec.cfg
+Unknown command "volume"
+Unknown command "mute"
+SpawnServer: mge4m1
+Clearing memory
+progs.dat occupies 422K.
+Mod_LoadTextures maps/mge4m1.bsp: findfile 0.0ms (0 calls) texmgr 0.0ms (0 calls)
+Mod_LoadBrushModel maps/mge4m1.bsp: geom 1.6ms tex 0.3ms light 0.9ms faces 34.4ms
+Mod_LoadBrushModel maps/mge4m1.bsp: nodes 1.8ms watervis 0.1ms
+Mod_LoadModel maps/mge4m1.bsp: read 2.3ms parse 40.3ms (16779724 bytes)
+Mod_LoadModel progs/eyes.mdl: read 0.0ms parse 5.0ms (4372 bytes)
+Mod_LoadModel progs/h_player.mdl: read 0.0ms parse 17.1ms (41916 bytes)
+Mod_LoadModel progs/gib1.mdl: read 0.0ms parse 7.7ms (5716 bytes)
+Mod_LoadModel progs/gib2.mdl: read 0.0ms parse 13.1ms (16228 bytes)
+Mod_LoadModel progs/v_axe.mdl: read 0.0ms parse 12.0ms (57908 bytes)
+Mod_LoadModel progs/v_shot.mdl: read 0.0ms parse 13.3ms (43852 bytes)
+Mod_LoadModel progs/v_nail.mdl: read 0.0ms parse 17.0ms (54472 bytes)
+Mod_LoadModel progs/v_rock.mdl: read 0.0ms parse 9.5ms (81820 bytes)
+Mod_LoadModel progs/v_shot2.mdl: read 0.0ms parse 14.8ms (50816 bytes)
+Mod_LoadModel progs/v_nail2.mdl: read 0.0ms parse 8.4ms (111124 bytes)
+Mod_LoadModel progs/lavaball.mdl: read 0.0ms parse 21.3ms (8788 bytes)
+Mod_LoadModel progs/backpack.mdl: read 0.0ms parse 16.1ms (19348 bytes)
+Mod_LoadModel progs/zom_gib.mdl: read 0.0ms parse 27.5ms (10196 bytes)
+Mod_LoadModel progs/v_light.mdl: read 0.0ms parse 8.2ms (89796 bytes)
+Mod_LoadTextures maps/b_nail0.bsp: findfile 0.0ms (0 calls) texmgr 0.0ms (0 calls)
+Mod_LoadBrushModel maps/b_nail0.bsp: geom 0.0ms tex 0.0ms light 0.0ms faces 0.1ms
+trying to open external vis file
+maps/b_nail0.vis not found, trying mg1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_nail0.bsp"
+Mod_LoadBrushModel maps/b_nail0.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel progs/knight.mdl: read 0.0ms parse 66.1ms (101404 bytes)
+Mod_LoadTextures maps/b_bh25.bsp: findfile 0.0ms (0 calls) texmgr 0.0ms (0 calls)
+Mod_LoadBrushModel maps/b_bh25.bsp: geom 0.0ms tex 0.0ms light 0.0ms faces 0.2ms
+trying to open external vis file
+maps/b_bh25.vis not found, trying mg1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_bh25.bsp"
+Mod_LoadBrushModel maps/b_bh25.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadTextures maps/b_shell0.bsp: findfile 0.0ms (0 calls) texmgr 0.0ms (0 calls)
+Mod_LoadBrushModel maps/b_shell0.bsp: geom 0.0ms tex 0.0ms light 0.0ms faces 0.1ms
+trying to open external vis file
+maps/b_shell0.vis not found, trying mg1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_shell0.bsp"
+Mod_LoadBrushModel maps/b_shell0.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel progs/hknight.mdl: read 0.0ms parse 18.8ms (228400 bytes)
+Mod_LoadModel progs/zombie.mdl: read 0.0ms parse 36.3ms (186084 bytes)
+Mod_LoadModel progs/h_zombie.mdl: read 0.0ms parse 7.7ms (4484 bytes)
+Mod_LoadModel progs/flame2.mdl: read 0.0ms parse 8.6ms (64572 bytes)
+Mod_LoadTextures maps/b_rock0.bsp: findfile 0.0ms (0 calls) texmgr 0.0ms (0 calls)
+Mod_LoadBrushModel maps/b_rock0.bsp: geom 0.0ms tex 0.0ms light 0.0ms faces 0.2ms
+trying to open external vis file
+maps/b_rock0.vis not found, trying mg1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_rock0.bsp"
+Mod_LoadBrushModel maps/b_rock0.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel progs/ogre.mdl: read 0.0ms parse 128.3ms (162036 bytes)
+Mod_LoadModel progs/h_ogre.mdl: read 0.0ms parse 12.1ms (14900 bytes)
+Mod_LoadModel progs/wizard.mdl: read 0.0ms parse 38.0ms (64472 bytes)
+Mod_LoadModel progs/h_wizard.mdl: read 0.0ms parse 7.3ms (14804 bytes)
+Mod_LoadModel progs/shalrath.mdl: read 0.0ms parse 26.3ms (80648 bytes)
+Mod_LoadModel progs/h_shal.mdl: read 0.0ms parse 10.0ms (28036 bytes)
+Mod_LoadModel progs/v_spike.mdl: read 0.0ms parse 11.5ms (13684 bytes)
+Mod_LoadModel progs/demon.mdl: read 0.0ms parse 22.3ms (102120 bytes)
+Mod_LoadModel progs/h_demon.mdl: read 0.0ms parse 42.5ms (34884 bytes)
+Mod_LoadModel progs/armor.mdl: read 0.0ms parse 27.3ms (44076 bytes)
+Mod_LoadModel progs/h_dog.mdl: read 0.0ms parse 10.4ms (24436 bytes)
+Mod_LoadModel progs/dog.mdl: read 0.0ms parse 15.1ms (146056 bytes)
+Mod_LoadModel progs/invulner.mdl: read 0.0ms parse 9.1ms (23920 bytes)
+Mod_LoadTextures maps/b_shell1.bsp: findfile 0.0ms (0 calls) texmgr 0.0ms (0 calls)
+Mod_LoadBrushModel maps/b_shell1.bsp: geom 0.0ms tex 0.0ms light 0.0ms faces 0.1ms
+trying to open external vis file
+maps/b_shell1.vis not found, trying mg1.vis
+external vis not found
+Mod_DecompressVis: leaf VIS offset out of range on model "maps/b_shell1.bsp"
+Mod_LoadBrushModel maps/b_shell1.bsp: nodes 0.0ms watervis 0.0ms
+Mod_LoadModel progs/suit.mdl: read 0.0ms parse 38.8ms (51236 bytes)
+0 entities inhibited
+ED_LoadFromFile: 795.2ms (models 758.2ms/60 read 1.4ms findfile 13.8ms/2649 texmgr 0.0ms/171)
+Server spawned.
+Terminal input not available.
+Bonus item fell out of level at '-1184 1836 1482'
+Bonus item fell out of level at '-1216 1836 1482'
+Bonus item fell out of level at '-1504 1824 -278'
+Bonus item fell out of level at '-2380 1432 46'
+Bonus item fell out of level at '-2428 1384 46'
+Bonus item fell out of level at '-1320 2164 -150'
+Bonus item fell out of level at '-2764 2488 -770'
+Bonus item fell out of level at '-2552 2852 -766'
+Bonus item fell out of level at '-2548 1868 -766'

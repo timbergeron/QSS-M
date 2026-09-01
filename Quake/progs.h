@@ -409,6 +409,13 @@ typedef struct areanode_s
 #define CSIE_JOYAXIS			6
 //#define CSIE_GYROSCOPE		7
 
+typedef enum
+{
+	ROTATINGBMODEL_DISABLED = 0,
+	ROTATINGBMODEL_EXTERNAL_ANGLES,
+	ROTATINGBMODEL_ENGINE_PUSH
+} rotatingbmodelmode_t;
+
 struct qcvm_s
 {
 	dprograms_t	*progs;
@@ -441,7 +448,7 @@ struct qcvm_s
 	qboolean nogameaccess;	//simplecsqc isn't allowed to poke properties of the actual game (to prevent cheats when there's no restrictions on what it can access)
 	qboolean qexlogic;			//2021 rerelease gamecode owns behaviors that conflict with some DP extensions.
 	qboolean brokenbouncemissile;	//2021 rerelease redefined it, breaking any mod that depends on it.
-	qboolean rotatingbmodel;		//2021 rerelease fucks over avelocity on movetype_push. broken by lots of other defective maps too.
+	rotatingbmodelmode_t rotatingbmodelmode;	//angle-aware brush collision and ownership of pusher angle integration.
 	qboolean brokeneffects;			//2021 rerelease redefined EF_RED and EF_BLUE.
 	qboolean precacheanytime; //mod queried for support. this is used to spam warnings to anyone that doesn't bother checking for it first. this annoyance is to reduce compat issues.
 
