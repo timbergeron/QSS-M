@@ -790,13 +790,25 @@ void SV_PushMove (edict_t *pusher, float movetime)
 	{
 		if (qcvm->rotatingbmodel)
 		{	//spike -- added this block for proper rotations
-			mark = Hunk_LowMark ();
-			if (SV_PushMoveAngles (pusher, movetime))
-				pusher->v.ltime += movetime;
-			Hunk_FreeToLowMark (mark);
-			return;
+			if (qcvm->qexlogic)
+			{	//QuakeEx QC advances pusher angles from StartFrame; relink them without applying avelocity twice.
+				if (!pusher->v.velocity[0] && !pusher->v.velocity[1] && !pusher->v.velocity[2])
+				{
+					SV_LinkEdict (pusher, false);
+					pusher->v.ltime += movetime;
+					return;
+				}
+			}
+			else
+			{
+				mark = Hunk_LowMark ();
+				if (SV_PushMoveAngles (pusher, movetime))
+					pusher->v.ltime += movetime;
+				Hunk_FreeToLowMark (mark);
+				return;
+			}
 		}
-		if (!qcvm->warned_rotatingbmodel)
+		else if (!qcvm->warned_rotatingbmodel)
 		{
 			Con_Warning("MOVETYPE_PUSH(\"%s\") has avelocity, but DP_SV_ROTATINGBMODEL is not enabled\n", PR_GetString(pusher->v.classname));
 			qcvm->warned_rotatingbmodel = true;

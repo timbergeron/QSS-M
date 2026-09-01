@@ -10071,6 +10071,8 @@ qboolean PR_CanPrecacheAnyTime(unsigned int prot, unsigned int pext1, unsigned i
 }
 qboolean PR_CanPushRotate(unsigned int prot, unsigned int pext1, unsigned int pext2)
 {
+	if (qcvm->qexlogic)
+		return false;	//QuakeEx QC advances pusher angles itself, so don't promise DP angular pushing.
 	qcvm->rotatingbmodel = true;
 	return qcvm->rotatingbmodel;
 }
@@ -10551,7 +10553,9 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 	{
 		qcvm->builtins[99] = PF_checkextension;
 
+		qcvm->qexlogic = true;
 		qcvm->brokenbouncemissile = true;
+		qcvm->rotatingbmodel = true;
 		qcvm->brokeneffects = true;
 	}
 	if (!pr_checkextension.value && qcvm == &sv.qcvm)

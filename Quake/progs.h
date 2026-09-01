@@ -439,6 +439,7 @@ struct qcvm_s
 	qboolean cursorforced;
 	void *cursorhandle;	//video code.
 	qboolean nogameaccess;	//simplecsqc isn't allowed to poke properties of the actual game (to prevent cheats when there's no restrictions on what it can access)
+	qboolean qexlogic;			//2021 rerelease gamecode owns behaviors that conflict with some DP extensions.
 	qboolean brokenbouncemissile;	//2021 rerelease redefined it, breaking any mod that depends on it.
 	qboolean rotatingbmodel;		//2021 rerelease fucks over avelocity on movetype_push. broken by lots of other defective maps too.
 	qboolean brokeneffects;			//2021 rerelease redefined EF_RED and EF_BLUE.
