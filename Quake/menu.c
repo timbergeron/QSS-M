@@ -32418,54 +32418,10 @@ static void M_GameOptions_CheckLeave(void)
 
 static qboolean M_GameOptions_ModIsSelectable(const char *name)
 {
-	char check_path[MAX_OSPATH];
-	char game_path[MAX_OSPATH];
-	FILE *check_file;
-	int pak_num;
-
 	if (!name || !*name || !q_strcasecmp(name, GAMENAME))
 		return false;
 
-	if (!COM_ResolveGameDirPath(name, game_path, sizeof(game_path)))
-		return false;
-
-	if ((size_t)q_snprintf(check_path, sizeof(check_path), "%s/progs.dat",
-		game_path) < sizeof(check_path))
-	{
-		check_file = fopen(check_path, "rb");
-		if (check_file)
-		{
-			fclose(check_file);
-			return true;
-		}
-	}
-
-	for (pak_num = 0; pak_num < 10; pak_num++)
-	{
-		if ((size_t)q_snprintf(check_path, sizeof(check_path),
-			"%s/pak%d.pak", game_path, pak_num) >= sizeof(check_path))
-			continue;
-		check_file = fopen(check_path, "rb");
-		if (check_file)
-		{
-			fclose(check_file);
-			return true;
-		}
-	}
-	for (pak_num = 0; pak_num < 10; pak_num++)
-	{
-		if ((size_t)q_snprintf(check_path, sizeof(check_path),
-			"%s/paks/pak%d.pak", game_path, pak_num) >= sizeof(check_path))
-			continue;
-		check_file = fopen(check_path, "rb");
-		if (check_file)
-		{
-			fclose(check_file);
-			return true;
-		}
-	}
-
-	return false;
+	return COM_GameDirNameHasPlayableContent(name);
 }
 
 static void M_GameOptions_RebuildMods(void)
@@ -36529,63 +36485,9 @@ static int M_Mods_ContentCount(void)
 
 static void M_Mods_Add(const char* name)
 {
-	char check_path[MAX_OSPATH];
-	char game_path[MAX_OSPATH];
-	FILE *check_file;
-	qboolean has_progs = false;
-	qboolean has_pak = false;
-	int pak_num;
-
-	if (!COM_ResolveGameDirPath(name, game_path, sizeof(game_path)))
+	if (!COM_GameDirNameHasPlayableContent(name))
 		return;
 
-	// Check for progs.dat
-	if ((size_t)q_snprintf(check_path, sizeof(check_path), "%s/progs.dat",
-		game_path) < sizeof(check_path))
-	{
-		check_file = fopen(check_path, "rb");
-		if (check_file)
-		{
-			has_progs = true;
-			fclose(check_file);
-		}
-	}
-
-	// Check for pak files (pak0.pak, pak1.pak, etc)
-	if (!has_progs)
-	{
-		for (pak_num = 0; pak_num < 10 && !has_pak; pak_num++)
-		{
-			if ((size_t)q_snprintf(check_path, sizeof(check_path),
-				"%s/pak%d.pak", game_path, pak_num) >= sizeof(check_path))
-				continue;
-			check_file = fopen(check_path, "rb");
-			if (check_file)
-			{
-				has_pak = true;
-				fclose(check_file);
-			}
-		}
-		for (pak_num = 0; pak_num < 10 && !has_pak; pak_num++)
-		{
-			if ((size_t)q_snprintf(check_path, sizeof(check_path),
-				"%s/paks/pak%d.pak", game_path, pak_num) >=
-				sizeof(check_path))
-				continue;
-			check_file = fopen(check_path, "rb");
-			if (check_file)
-			{
-				has_pak = true;
-				fclose(check_file);
-			}
-		}
-	}
-	
-	// Only add if it has progs.dat or pak files
-	if (!has_progs && !has_pak)
-		return;
-	
-	
 	moditem_t mod;
 	mod.name = name;
 	mod.download_menu = false;
@@ -36598,9 +36500,7 @@ static void M_Mods_Add(const char* name)
 
 	// Ensure there's enough space for one more item
 	VEC_PUSH(modsmenu.items, mod);
-
-	modsmenu.items[modsmenu.modcount] = mod;
-	modsmenu.modcount++;
+	modsmenu.modcount = (int)VEC_SIZE(modsmenu.items);
 }
 
 static void M_Mods_UpdateViewsize(void)
@@ -37159,7 +37059,6 @@ static void M_DownloadMods_Add(const downloadmoditem_t *item)
 }
 
 static qboolean M_DownloadMods_InstallDirNameOkay(const char *name);
-static qboolean M_DownloadMods_PathLooksInstalled(const char *path);
 
 static void M_DownloadMods_SeedBuiltins(void)
 {
@@ -37236,7 +37135,7 @@ static qboolean M_DownloadMods_ProbeInstalledAt(const downloadmoditem_t *item,
 		root, item->install_dir) >= sizeof(game_path))
 		return false;
 
-	return M_DownloadMods_PathLooksInstalled(game_path);
+	return COM_GameDirHasPlayableContent(game_path);
 }
 
 static qboolean M_DownloadMods_ProbeInstalled(const downloadmoditem_t *item)
@@ -38186,7 +38085,18 @@ static qboolean M_DownloadMods_VerifySHA256(const char *path, const char *expect
 		M_DownloadMods_CancelRequested);
 }
 
-static qboolean M_DownloadMods_PathLooksInstalled(const char *path)
+/*
+============
+M_DownloadMods_PathIsUnambiguousInstallRoot
+
+Conservative counterpart to COM_GameDirHasPlayableContent, used only while
+interpreting a freshly extracted archive.  Layout inference has to pick one
+directory out of whatever the archive happened to contain, so it recognises
+only the canonical mod layout: a stray source zip or a loose readme package
+must not read as a mod root.
+============
+*/
+static qboolean M_DownloadMods_PathIsUnambiguousInstallRoot(const char *path)
 {
 	char check[MAX_OSPATH];
 	int pak_num;
@@ -38314,7 +38224,7 @@ static qboolean M_DownloadMods_TargetExists(const downloadmoditem_t *item,
 		return false;
 
 	if (looks_installed && (target_type & FS_ENT_DIRECTORY))
-		*looks_installed = M_DownloadMods_PathLooksInstalled(target);
+		*looks_installed = COM_GameDirHasPlayableContent(target);
 	return true;
 }
 
@@ -38556,7 +38466,7 @@ static qboolean M_DownloadMods_FindSingleInstalledDir(char *out, size_t outsize)
 			FindClose(fhnd);
 			return false;
 		}
-		if (M_DownloadMods_PathLooksInstalled(child))
+		if (M_DownloadMods_PathIsUnambiguousInstallRoot(child))
 		{
 			if (++matches == 1)
 				q_strlcpy(found, child, sizeof(found));
@@ -38591,7 +38501,7 @@ static qboolean M_DownloadMods_FindSingleInstalledDir(char *out, size_t outsize)
 		if (stat(child, &st) != 0 || !S_ISDIR(st.st_mode))
 			continue;
 
-		if (M_DownloadMods_PathLooksInstalled(child))
+		if (M_DownloadMods_PathIsUnambiguousInstallRoot(child))
 		{
 			if (++matches == 1)
 				q_strlcpy(found, child, sizeof(found));
@@ -38695,7 +38605,7 @@ static qboolean M_DownloadMods_FinalizeStagedInstall(void)
 	{
 		/* source was filled by helper */
 	}
-	else if (M_DownloadMods_PathLooksInstalled(downloadmodinstall.stage_dir))
+	else if (M_DownloadMods_PathIsUnambiguousInstallRoot(downloadmodinstall.stage_dir))
 	{
 		q_strlcpy(source, downloadmodinstall.stage_dir, sizeof(source));
 		source_is_stage = true;
@@ -46230,6 +46140,328 @@ void M_AudioBrowser_MouseClick(int x, int y)
 }
 
 
+/*
+==============================================================================
+
+MOD DETECTION VALIDATOR -- woods #modsmenu
+
+Filesystem-backed regression test for the two gamedir classifiers.  Three
+copies of this policy drifted apart once already (the mods menu, the game
+options mod picker and the downloader), which is how csprogs-only mods and
+loose map packs went missing from the menus.  This pins both policies down:
+
+  COM_GameDirHasPlayableContent            broad   -- menus, vote, installed
+  M_DownloadMods_PathIsUnambiguousInstallRoot conservative -- archive layout
+
+The scratch tree lives under qssm-downloads/ so M_DownloadMods_RemoveTree
+will clean it up; the gamedir-resolution cases have to sit in com_basedir
+itself, so those are created and removed one entry at a time.
+
+==============================================================================
+*/
+
+#define MODDETECT_ROOT_NAME	"moddetect-validate"
+#define MODDETECT_MAX_ENTRIES	4
+
+typedef struct
+{
+	const char	*path;		/* relative to the case dir, NULL = unused */
+	qboolean	isdir;
+} moddetect_entry_t;
+
+typedef struct
+{
+	const char		*name;
+	qboolean		playable;	/* COM_GameDirHasPlayableContent */
+	qboolean		install_root;	/* archive-layout inference */
+	moddetect_entry_t	entries[MODDETECT_MAX_ENTRIES];
+} moddetect_case_t;
+
+static const moddetect_case_t moddetect_cases[] =
+{
+	{ "progs",		true,  true,  { {"progs.dat", false} } },
+	{ "csprogs",		true,  false, { {"csprogs.dat", false} } },
+	{ "loosemaps",		true,  true,  { {"maps", true}, {"maps/start.bsp", false} } },
+	{ "emptymaps",		true,  true,  { {"maps", true} } },
+	{ "pak0",		true,  true,  { {"pak0.pak", false} } },
+	{ "pak0pk3",		true,  true,  { {"pak0.pk3", false} } },
+	{ "pakssub",		true,  true,  { {"paks", true}, {"paks/pak0.pak", false} } },
+	{ "pakssubpk3",		true,  true,  { {"paks", true}, {"paks/pak0.pk3", false} } },
+	{ "namedpak",		true,  false, { {"quoffee.pak", false} } },
+	{ "namedpk4",		true,  false, { {"content.pk4", false} } },
+	{ "namedkpf",		true,  false, { {"content.kpf", false} } },
+	{ "packagedir",		true,  false, { {"content.pk3dir", true} } },
+	{ "pakssubnamed",	true,  false, { {"paks", true}, {"paks/quoffee.pak", false} } },
+	/* mountable, but far too weak to call an extracted archive's mod root */
+	{ "strayzip",		true,  false, { {"source.zip", false} } },
+	/* Package files and *dir packages must also have the right entity type. */
+	{ "packagefiledir",	false, false, { {"content.pk3", true} } },
+	{ "packagedirfile",	false, false, { {"content.pk3dir", false} } },
+	{ "empty",		false, false, { {NULL, false} } },
+	/* a *directory* called progs.dat is not a progs.dat */
+	{ "progsdir",		false, false, { {"progs.dat", true} } },
+};
+
+static void ModDetect_Check(const char *label, qboolean got, qboolean want,
+	int *errors)
+{
+	if (got == want)
+		return;
+	Con_Printf("mods_validate: %s expected %s, got %s\n", label,
+		want ? "true" : "false", got ? "true" : "false");
+	(*errors)++;
+}
+
+static qboolean ModDetect_TouchFile(const char *path)
+{
+	FILE *f = fopen(path, "wb");
+
+	if (!f)
+		return false;
+	fclose(f);
+	return true;
+}
+
+/* one gamedir named `name` holding a single progs.dat, under com_basedir or
+   one of the games/ mods/ subroots -- exercises COM_ResolveGameDirPath */
+static qboolean ModDetect_MakeResolutionCase(const char *prefix,
+	const char *name, char *dir, size_t dirsize, qboolean *made_dir,
+	qboolean *made_prefix)
+{
+	char path[MAX_OSPATH];
+
+	*made_dir = false;
+	*made_prefix = false;
+
+	if (prefix && *prefix)
+	{
+		if ((size_t)q_snprintf(path, sizeof(path), "%s/%s", com_basedir,
+			prefix) >= sizeof(path))
+			return false;
+		if (!(Sys_FileType(path) & FS_ENT_DIRECTORY))
+		{
+			Sys_mkdir(path);
+			if (!(Sys_FileType(path) & FS_ENT_DIRECTORY))
+				return false;
+			*made_prefix = true;
+		}
+		if ((size_t)q_snprintf(dir, dirsize, "%s/%s/%s", com_basedir, prefix,
+			name) >= dirsize)
+			return false;
+	}
+	else if ((size_t)q_snprintf(dir, dirsize, "%s/%s", com_basedir, name) >=
+		dirsize)
+		return false;
+
+	/* Never borrow a pre-existing path: the validator owns everything it
+	   creates and removes. */
+	if (Sys_FileType(dir) != FS_ENT_NONE)
+		return false;
+	Sys_mkdir(dir);
+	if (!(Sys_FileType(dir) & FS_ENT_DIRECTORY))
+		return false;
+	*made_dir = true;
+
+	if ((size_t)q_snprintf(path, sizeof(path), "%s/progs.dat", dir) >=
+		sizeof(path))
+		return false;
+
+	return ModDetect_TouchFile(path);
+}
+
+static void ModDetect_RemoveResolutionCase(const char *dir, const char *prefix,
+	qboolean made_dir, qboolean made_prefix)
+{
+	char path[MAX_OSPATH];
+
+	if (made_dir && dir && *dir)
+	{
+		if ((size_t)q_snprintf(path, sizeof(path), "%s/progs.dat", dir) <
+			sizeof(path))
+			remove(path);
+		M_DownloadMods_Rmdir(dir);
+	}
+
+	/* only ever removes a prefix we created, and rmdir leaves it alone if
+	   anything else has since appeared inside */
+	if (made_prefix && prefix && *prefix &&
+		(size_t)q_snprintf(path, sizeof(path), "%s/%s", com_basedir, prefix) <
+		sizeof(path))
+		M_DownloadMods_Rmdir(path);
+}
+
+static void M_ModDetect_Validate_f(void)
+{
+	static const char *const prefixes[] = { "", "games", "mods" };
+	char downloads_root[MAX_OSPATH];
+	char root[MAX_OSPATH];
+	char casedir[MAX_OSPATH];
+	char path[MAX_OSPATH];
+	char resolvedir[MAX_OSPATH];
+	char resolvename[MAX_QPATH];
+	int errors = 0;
+	int checks = 0;
+	size_t i, j;
+	qboolean made_downloads_root = false;
+
+	if ((size_t)q_snprintf(downloads_root, sizeof(downloads_root),
+		"%s/qssm-downloads", com_basedir) >= sizeof(downloads_root))
+	{
+		Con_Printf("mods_validate: basedir path too long\n");
+		return;
+	}
+	if (Sys_FileType(downloads_root) == FS_ENT_NONE)
+	{
+		Sys_mkdir(downloads_root);
+		if (!(Sys_FileType(downloads_root) & FS_ENT_DIRECTORY))
+		{
+			Con_Printf("mods_validate: could not create %s\n", downloads_root);
+			return;
+		}
+		made_downloads_root = true;
+	}
+	else if (!(Sys_FileType(downloads_root) & FS_ENT_DIRECTORY))
+	{
+		Con_Printf("mods_validate: %s is not a directory\n", downloads_root);
+		return;
+	}
+
+	if ((size_t)q_snprintf(root, sizeof(root), "%s/%s", downloads_root,
+		MODDETECT_ROOT_NAME) >= sizeof(root))
+	{
+		Con_Printf("mods_validate: basedir path too long\n");
+		if (made_downloads_root)
+			M_DownloadMods_Rmdir(downloads_root);
+		return;
+	}
+	if (Sys_FileType(root) != FS_ENT_NONE)
+	{
+		Con_Printf("mods_validate: scratch path already exists: %s\n", root);
+		if (made_downloads_root)
+			M_DownloadMods_Rmdir(downloads_root);
+		return;
+	}
+	Sys_mkdir(root);
+	if (!(Sys_FileType(root) & FS_ENT_DIRECTORY))
+	{
+		Con_Printf("mods_validate: could not create %s\n", root);
+		if (made_downloads_root)
+			M_DownloadMods_Rmdir(downloads_root);
+		return;
+	}
+
+	for (i = 0; i < Q_COUNTOF(moddetect_cases); i++)
+	{
+		const moddetect_case_t *tc = &moddetect_cases[i];
+
+		if ((size_t)q_snprintf(casedir, sizeof(casedir), "%s/%s", root,
+			tc->name) >= sizeof(casedir))
+		{
+			Con_Printf("mods_validate: %s path too long\n", tc->name);
+			errors++;
+			continue;
+		}
+		Sys_mkdir(casedir);
+		if (!(Sys_FileType(casedir) & FS_ENT_DIRECTORY))
+		{
+			Con_Printf("mods_validate: could not create %s\n", casedir);
+			errors++;
+			continue;
+		}
+
+		for (j = 0; j < MODDETECT_MAX_ENTRIES; j++)
+		{
+			const moddetect_entry_t *entry = &tc->entries[j];
+			qboolean ok;
+
+			if (!entry->path)
+				break;
+			if ((size_t)q_snprintf(path, sizeof(path), "%s/%s", casedir,
+				entry->path) >= sizeof(path))
+			{
+				Con_Printf("mods_validate: %s/%s path too long\n", tc->name,
+					entry->path);
+				errors++;
+				continue;
+			}
+			if (entry->isdir)
+			{
+				Sys_mkdir(path);
+				ok = (Sys_FileType(path) & FS_ENT_DIRECTORY) != 0;
+			}
+			else
+				ok = ModDetect_TouchFile(path);
+			if (!ok)
+			{
+				Con_Printf("mods_validate: could not create %s/%s\n",
+					tc->name, entry->path);
+				errors++;
+			}
+		}
+
+		ModDetect_Check(va("%s (playable)", tc->name),
+			COM_GameDirHasPlayableContent(casedir), tc->playable, &errors);
+		ModDetect_Check(va("%s (install root)", tc->name),
+			M_DownloadMods_PathIsUnambiguousInstallRoot(casedir),
+			tc->install_root, &errors);
+		checks += 2;
+	}
+
+	/* gamedir name resolution: com_basedir, games/ and mods/ */
+	for (i = 0; i < Q_COUNTOF(prefixes); i++)
+	{
+		qboolean made_dir;
+		qboolean made_prefix;
+
+		q_snprintf(resolvename, sizeof(resolvename), "moddetectvalidate%d",
+			(int)i);
+		resolvedir[0] = '\0';
+		if (COM_ResolveGameDirPath(resolvename, path, sizeof(path)))
+		{
+			Con_Printf("mods_validate: resolution path already exists: %s\n",
+				path);
+			errors++;
+			continue;
+		}
+		if (!ModDetect_MakeResolutionCase(prefixes[i], resolvename, resolvedir,
+			sizeof(resolvedir), &made_dir, &made_prefix))
+		{
+			Con_Printf("mods_validate: could not stage resolution case '%s'\n",
+				prefixes[i][0] ? prefixes[i] : "basedir");
+			errors++;
+			ModDetect_RemoveResolutionCase(resolvedir, prefixes[i],
+				made_dir, made_prefix);
+			continue;
+		}
+
+		ModDetect_Check(va("resolve %s/", prefixes[i][0] ? prefixes[i] : "."),
+			COM_GameDirNameHasPlayableContent(resolvename), true, &errors);
+		checks++;
+
+		ModDetect_RemoveResolutionCase(resolvedir, prefixes[i], made_dir,
+			made_prefix);
+	}
+
+	ModDetect_Check("resolve missing name",
+		COM_GameDirNameHasPlayableContent("moddetectvalidate_absent"), false,
+		&errors);
+	ModDetect_Check("resolve path escape",
+		COM_GameDirNameHasPlayableContent("../id1"), false, &errors);
+	ModDetect_Check("resolve empty name",
+		COM_GameDirNameHasPlayableContent(""), false, &errors);
+	checks += 3;
+
+	if (!M_DownloadMods_RemoveTree(root))
+		Con_Printf("mods_validate: could not remove %s\n", root);
+	if (made_downloads_root)
+		M_DownloadMods_Rmdir(downloads_root);
+
+	if (errors)
+		Con_Printf("mods_validate: %d of %d checks FAILED\n", errors, checks);
+	else
+		Con_Printf("mods_validate: %d checks passed\n", checks);
+}
+
 void M_Init (void)
 {
 	cmd_function_t *update_cmd;
@@ -46240,6 +46472,7 @@ void M_Init (void)
 	Cmd_AddCommand ("update", M_Update_f);
 	Cmd_AddCommand ("menu_search", M_MenuSearch_Command_f);
 	Cmd_AddCommand ("menu_search_validate", M_MenuSearch_Validate_f);
+	Cmd_AddCommand ("mods_validate", M_ModDetect_Validate_f);
 	update_cmd = Cmd_FindCommand("update");
 	if (update_cmd)
 		update_cmd->completion = M_Update_Completion_f;

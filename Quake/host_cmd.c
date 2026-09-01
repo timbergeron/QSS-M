@@ -1335,8 +1335,25 @@ void FolderList_Init(void)
 filelist_item_t	*modlist;
 static qboolean modlist_initialized;
 
+/*
+==================
+Modlist_IsEngineWorkingDir
+
+The downloader's staging area and the updater's cache sit in the basedir but
+are not mods.  Both hold archives, which the playable-content test would
+otherwise happily accept.
+==================
+*/
+static qboolean Modlist_IsEngineWorkingDir (const char *name)
+{
+	return !q_strcasecmp(name, "qssm-downloads") ||
+		!q_strcasecmp(name, "qssm-updates");
+}
+
 static void Modlist_Add (const char *name)
 {
+	if (Modlist_IsEngineWorkingDir(name))
+		return;
 	FileList_Add(name, NULL, &modlist); // woods #demolistsort add arg
 }
 
@@ -1689,8 +1706,10 @@ static qboolean Host_Modvote_IsValidMod(const char *modname)
 
 	for (mod = modlist; mod; mod = mod->next)
 	{
+		/* modlist holds every directory, playable or not -- only offer the
+		   ones a client would actually get something out of switching to. */
 		if (!q_strcasecmp(mod->name, modname))
-			return true;
+			return COM_GameDirNameHasPlayableContent(mod->name);
 	}
 
 	return false;
@@ -1801,6 +1820,8 @@ static void Host_Modvote_PrintAvailableMods(client_t *client, qboolean motd_form
 	for (mod = modlist; mod; mod = mod->next)
 	{
 		if (COM_GameDirMatches(mod->name))
+			continue;
+		if (!COM_GameDirNameHasPlayableContent(mod->name))
 			continue;
 
 		Host_Modvote_EscapeMarkup(mod->name, safe_modname, sizeof(safe_modname));

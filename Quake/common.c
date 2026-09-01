@@ -4665,6 +4665,130 @@ static qboolean COM_GamePathIsFile(const char *game_path,
 		(Sys_FileType(path) & FS_ENT_FILE) != 0;
 }
 
+static qboolean COM_GamePathIsDirectory(const char *game_path,
+	const char *relative_path)
+{
+	char path[MAX_OSPATH];
+
+	return (size_t)q_snprintf(path, sizeof(path), "%s/%s",
+		game_path, relative_path) < sizeof(path) &&
+		(Sys_FileType(path) & FS_ENT_DIRECTORY) != 0;
+}
+
+static qboolean COM_DirEntryIsMountablePackage(const char *path,
+	const char *entry_name)
+{
+	char packagename[MAX_OSPATH];
+
+	if (COM_IsPackageExtension(COM_FileGetExtension(entry_name)))
+		return COM_GamePathIsFile(path, entry_name);
+	if (COM_PackageDirNameToPackageName(entry_name, packagename,
+		sizeof(packagename)))
+		return COM_GamePathIsDirectory(path, entry_name);
+
+	return false;
+}
+
+/*
+=================
+COM_DirHasMountablePackage
+
+True if the OS directory holds anything COM_ListPackageFiles would mount: a
+package file of any supported extension, or a matching "*dir" package
+directory.  Names are not restricted to pak0..pak9 -- unlisted packages are
+mounted alphabetically, so a mod may ship "quoffee.pak" and nothing else.
+=================
+*/
+static qboolean COM_DirHasMountablePackage(const char *path)
+{
+	qboolean	found = false;
+#ifdef _WIN32
+	WIN32_FIND_DATA	fdat;
+	HANDLE		fhnd;
+	char		filestring[MAX_OSPATH];
+
+	if ((size_t)q_snprintf(filestring, sizeof(filestring), "%s/*", path) >=
+		sizeof(filestring))
+		return false;
+	fhnd = FindFirstFile(filestring, &fdat);
+	if (fhnd == INVALID_HANDLE_VALUE)
+		return false;
+	do
+	{
+		if (COM_DirEntryIsMountablePackage(path, fdat.cFileName))
+		{
+			found = true;
+			break;
+		}
+	} while (FindNextFile(fhnd, &fdat));
+	FindClose(fhnd);
+#else
+	DIR		*dir_p;
+	struct dirent	*dir_t;
+
+	dir_p = opendir(path);
+	if (dir_p == NULL)
+		return false;
+	while ((dir_t = readdir(dir_p)) != NULL)
+	{
+		if (COM_DirEntryIsMountablePackage(path, dir_t->d_name))
+		{
+			found = true;
+			break;
+		}
+	}
+	closedir(dir_p);
+#endif
+
+	return found;
+}
+
+/*
+=================
+COM_GameDirHasPlayableContent
+
+Broad "is there anything here to play?" test, used by the mod menus, by the
+mod vote and by the downloader when it asks whether an item is already
+installed.  It accepts whatever the filesystem can actually mount: server or
+client progs, any package, or loose maps.
+
+The downloader's archive-layout inference deliberately does not use this --
+interpreting an extracted archive needs a conservative rule, so it keeps its
+own (see M_DownloadMods_PathIsUnambiguousInstallRoot).
+=================
+*/
+qboolean COM_GameDirHasPlayableContent(const char *game_path)
+{
+	char paksdir[MAX_OSPATH];
+
+	if (!game_path || !*game_path)
+		return false;
+
+	if (COM_GamePathIsFile(game_path, "progs.dat"))
+		return true;
+	/* CSQC-only mods ship a csprogs.dat and no server progs at all. */
+	if (COM_GamePathIsFile(game_path, "csprogs.dat"))
+		return true;
+	/* A maps/ directory marks a playable mappack even without progs/paks. */
+	if (COM_GamePathIsDirectory(game_path, "maps"))
+		return true;
+	if (COM_DirHasMountablePackage(game_path))
+		return true;
+	if ((size_t)q_snprintf(paksdir, sizeof(paksdir), "%s/paks", game_path) <
+		sizeof(paksdir) && COM_DirHasMountablePackage(paksdir))
+		return true;
+
+	return false;
+}
+
+qboolean COM_GameDirNameHasPlayableContent(const char *game)
+{
+	char game_path[MAX_OSPATH];
+
+	return COM_ResolveGameDirPath(game, game_path, sizeof(game_path)) &&
+		COM_GameDirHasPlayableContent(game_path);
+}
+
 static qboolean COM_PackEntryNameEquals(const char entry_name[56],
 	const char *expected)
 {
