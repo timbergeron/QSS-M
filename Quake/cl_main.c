@@ -2127,6 +2127,7 @@ CL_RelinkEntities
 */
 #define CL_CTF_FALLBACK_STATIC_DLIGHT_Z 24.f
 #define CL_CTF_FALLBACK_STATIC_DLIGHT_RADIUS 256.f
+#define CL_QEX_CANDLELIGHT_RADIUS 108.f
 
 static void CL_AddSinglePlayerCTFFallbackStaticLights (void)
 {
@@ -2477,6 +2478,17 @@ void CL_RelinkEntities (void)
 			dl->origin[2] += 16;
 			dl->radius = r_poweruplightflicker.value ? 400 + (rand() & 31) : 416;
 			dl->die = cl.time + 0.1; //R00k was .001
+		}
+		if (ent->effects & EF_CANDLELIGHT)
+		{
+			// QEX projectile glow is steady and independent of powerup-light preferences.
+			dl = CL_AllocDlight (i);
+			VectorCopy (ent->origin, dl->origin);
+			dl->radius = CL_QEX_CANDLELIGHT_RADIUS;
+			dl->die = cl.time + 0.001;
+			dl->color[0] = 1.0f;
+			dl->color[1] = 0.55f;
+			dl->color[2] = 0.25f;
 		}
 		if (ent->effects & (EF_DIMLIGHT|EF_RED|EF_BLUE|EF_GREEN))
 		{

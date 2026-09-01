@@ -1414,6 +1414,33 @@ sendremove:
 }
 
 /*
+SV_TranslateQEXEffects
+
+QEX reuses three bits of the original effects byte for its powerup and candle
+lights. Translate them before either entity protocol serializes the state.
+The candle uses a widened internal bit so legacy clients safely omit it instead
+of mistaking bit 16 for QEX quad light or DP EF_NODRAW.
+*/
+static unsigned int SV_TranslateQEXEffects (unsigned int effects)
+{
+	unsigned int qexeffects;
+
+	if (!qcvm->brokeneffects ||
+		!(effects & (EFQE_QUADLIGHT | EFQE_PENTLIGHT | EFQE_CANDLELIGHT)))
+		return effects;
+
+	qexeffects = effects;
+	effects &= ~(EFQE_QUADLIGHT | EFQE_PENTLIGHT | EFQE_CANDLELIGHT);
+	if (qexeffects & EFQE_QUADLIGHT)
+		effects |= EF_BLUE;
+	if (qexeffects & EFQE_PENTLIGHT)
+		effects |= EF_RED;
+	if (qexeffects & EFQE_CANDLELIGHT)
+		effects |= EF_CANDLELIGHT;
+	return effects;
+}
+
+/*
 SV_BuildEntityState
 copies edict state into a more compact entity_state_t with all the extension fields etc sorted out and neatened up for network precision.
 note: ignores viewmodelforclient and other client-specific stuff.
@@ -1454,15 +1481,7 @@ void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state)
 		state->tagindex = val->_float;
 	else
 		state->tagindex = 0;
-	state->effects = ent->v.effects;
-	if (qcvm->brokeneffects && (state->effects & 0xf0u))
-	{	//translate qe effects to something more standard.
-		state->effects &= ~0xf0u;
-		if ((unsigned)ent->v.effects & EFQE_QUADLIGHT)
-			state->effects |= EF_BLUE;
-		if ((unsigned)ent->v.effects & EFQE_PENTLIGHT)
-			state->effects |= EF_RED;
-	}
+	state->effects = SV_TranslateQEXEffects ((unsigned int)ent->v.effects);
 	if ((val = GetEdictFieldValue(ent, qcvm->extfields.modelflags)))
 		state->effects |= ((unsigned int)val->_float)<<24;
 	if (ent->v.movetype == MOVETYPE_STEP)
@@ -3175,7 +3194,7 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 	edict_t	*ent;
 	eval_t	*val;
 	int maxsize = msg->maxsize;
-	int effects;
+	unsigned int effects;
 	int scale = ENTSCALE_DEFAULT;
 
 	//try to avoid sounds getting lost. flickering entities are weird, but missing sounds+particles are just eerie.
@@ -3297,15 +3316,7 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 		if (ent->baseline.frame != ent->v.frame)
 			bits |= U_FRAME;
 
-		effects = ent->v.effects;
-		if (qcvm->brokeneffects && (effects & 0xf0u))
-		{	//translate qe effects to something more standard.
-			effects &= ~0xf0u;
-			if ((unsigned)ent->v.effects & EFQE_QUADLIGHT)
-				effects |= EF_BLUE;
-			if ((unsigned)ent->v.effects & EFQE_PENTLIGHT)
-				effects |= EF_RED;
-		}
+		effects = SV_TranslateQEXEffects ((unsigned int)ent->v.effects);
 		if (ent->baseline.effects ^ effects)
 			bits |= U_EFFECTS;
 

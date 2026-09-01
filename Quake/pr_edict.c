@@ -759,6 +759,7 @@ const char *ED_FieldValueString (edict_t *ed, ddef_t *d)
 			BIT_CASE (EF_FULLBRIGHT);
 			BIT_CASE (EF_NOSHADOW);
 			BIT_CASE (EF_GREEN);
+			BIT_CASE (EF_CANDLELIGHT);
 			BIT_CASE (EF_NOMODELFLAGS);
 		}
 

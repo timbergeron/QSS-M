@@ -481,7 +481,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //#define EFDP_NOSELFSHADOW			(1u<<16)
 //#define EFDP_DYNAMICMODELLIGHT	(1u<<17)
 #define EF_GREEN					(1u<<18)
-//#define EF_UNUSED					(1u<<19)
+#define EF_CANDLELIGHT				(1u<<19)	// internal widened form of QEX EFQE_CANDLELIGHT
 //#define EF_RESTARTANIM_BIT		(1u<<20)	//reset model lerps over toggles
 //#define EF_TELEPORT_BIT			(1u<<21)	//reset origin lerps over toggles
 //#define EFDP_LOWPRECISION			(1u<<22)

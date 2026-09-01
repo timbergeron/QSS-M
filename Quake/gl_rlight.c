@@ -1024,7 +1024,7 @@ static qboolean R_LightPointCacheEligible (entity_t *e, vec3_t p)
         return false;
     if (e->model->type != mod_alias)
         return false;
-    if (e->effects & (EF_BRIGHTLIGHT|EF_DIMLIGHT|EF_RED|EF_BLUE|EF_GREEN))
+    if (e->effects & (EF_BRIGHTLIGHT|EF_DIMLIGHT|EF_CANDLELIGHT|EF_RED|EF_BLUE|EF_GREEN))
         return false;
     if ((e->eflags & EFLAGS_VIEWMODEL) || e->netstate.tagentity)
         return false;
