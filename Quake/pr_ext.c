@@ -9530,7 +9530,20 @@ static void PF_ex_centerprint (void)
 }
 static void PF_ex_CheckPlayerEXFlags (void)
 {
+	int		entnum = G_EDICTNUM(OFS_PARM0);
+	client_t	*client;
+	char		value[16];
+	float		w_switch, b_switch;
+
 	G_FLOAT(OFS_RETURN) = 0;
+	if (entnum < 1 || entnum > svs.maxclients)
+		return;
+
+	client = &svs.clients[entnum-1];
+	w_switch = Q_atof(Info_GetKey(client->userinfo, "w_switch", value, sizeof(value)));
+	b_switch = Q_atof(Info_GetKey(client->userinfo, "b_switch", value, sizeof(value)));
+	if ((w_switch != 0 && w_switch < 8) || (b_switch != 0 && b_switch < 8))
+		G_FLOAT(OFS_RETURN) = 2; /* PEF_CHANGENEVER */
 }
 static void PF_ex_walkpathtogoal (void)
 {
@@ -9601,7 +9614,7 @@ static struct
 	{"ex_centerprint",	PF_ex_centerprint,	PF_NoCSQC,			0/*90*/,PF_NoMenu,	"void(entity ent, string text, optional string s0, optional string s1, optional string s2, optional string s3, optional string s4, optional string s5)", "Remaster: Sends the strings to the client, which will order according to {#}. Also substitutes localised strings for $NAME strings."},
 	{"ex_bprint",		PF_ex_bprint,		PF_NoCSQC,			0/*91*/,PF_NoMenu,	"void(string s, optional string s0, optional string s1, optional string s2, optional string s3, optional string s4, optional string s5, optional string s6)", "Remaster: Sends the strings to all clients, which will order them according to {#}. Also substitutes localised strings for $NAME strings."},
 	{"ex_sprint",		PF_ex_sprint,		PF_NoCSQC,			0/*92*/,PF_NoMenu,	"void(entity client, string s, optional string s0, optional string s1, optional string s2, optional string s3, optional string s4, optional string s5)", "Remaster: Sends the strings to the client, which will order according to {#}. Also substitutes localised strings for $NAME strings."},
-	{"ex_CheckPlayerEXFlags",PF_ex_CheckPlayerEXFlags,PF_NoCSQC,0,	PF_NoMenu,		"QSSDEP float(entity playerEnt)", "Stub, for now."},
+	{"ex_CheckPlayerEXFlags",PF_ex_CheckPlayerEXFlags,PF_NoCSQC,0,	PF_NoMenu,		"QSSDEP float(entity playerEnt)", "Returns PEF_CHANGENEVER for nonzero w_switch or b_switch values below QuakeWorld's always-switch threshold."},
 	{"ex_walkpathtogoal",PF_ex_walkpathtogoal,PF_NoCSQC,		0,	PF_NoMenu,		"QSSDEP float(float movedist, vector goal)", "Stub, for now."},
 	{"ex_bot_movetopoint",PF_ex_bot_movetopoint,PF_NoCSQC,		0,	PF_NoMenu,		"QSSDEP float(entity bot, vector point)", "Stub, for now."},
 	{"ex_bot_followentity",PF_ex_bot_followentity,PF_NoCSQC,	0,	PF_NoMenu,		"QSSDEP float(entity bot, entity goal)", "Stub, for now."},
