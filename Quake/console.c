@@ -267,12 +267,10 @@ void Con_ToggleConsole_f (void)
 	}
 	else
 	{
+		Key_ReleaseMouseButtons(); // woods #conselection - release held buttons before the console owns the mouse, so no queued press leaks into the game (and none stays latched)
 		M_ToggleMenu(0);
 		key_dest = key_console;
 		Con_EnterCursorMode(); // woods #conselection - entering console -> save host cursor+visibility, then enable console cursor
-
-       keydown[K_MOUSE1] = keydown[K_MOUSE2] = keydown[K_MOUSE3] = false; // woods #conselection - make sure no queued mouse presses leak into the game
-       keydown[K_MWHEELUP] = keydown[K_MWHEELDOWN] = false; // woods #conselection - wheels too, if you track them as keys
 	}
 
        Con_SetHotLink(NULL); // woods #conselection - clear hover/selection on toggle to avoid stale state
@@ -1086,9 +1084,9 @@ static void Con_UpdateMouseState (void)
     }
     SDL_ShowCursor(SDL_ENABLE);  /* console owns the OS cursor while open */
 
-    /* prevent clicks from leaking to the game while console is active */
-    keydown[K_MOUSE1] = keydown[K_MOUSE2] = keydown[K_MOUSE3] = false;
-    keydown[K_MWHEELUP] = keydown[K_MWHEELDOWN] = false;
+    /* Clicks cannot leak into the game: presses are swallowed in Key_Event
+       while the console is up, and held buttons are released through
+       Key_ReleaseMouseButtons when it takes over. */
 
     Con_ForceMouseMove();
     /* use actual SDL button state, not the global keydown[] */

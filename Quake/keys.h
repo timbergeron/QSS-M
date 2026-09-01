@@ -258,6 +258,7 @@ extern	qboolean	chat_team;
 
 void Key_Init (void);
 void Key_ClearStates (void);
+void Key_ReleaseMouseButtons (void);
 void Key_UpdateForDest (void);
 qboolean Key_IsShortcutModifierDown (void);
 

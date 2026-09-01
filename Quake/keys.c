@@ -3208,9 +3208,12 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
        Do NOT swallow right-click (K_MOUSE2) so it can toggle the menu
        from the console. Do NOT swallow wheel so it can be used in game. */
     if (key_dest == key_console &&
-        (key == K_MOUSE1 || key == K_MOUSE3)) {
+        (key == K_MOUSE1 || key == K_MOUSE3) &&
+        (down || !keydown[key])) {
         /* Do not update keydown[] here; console uses SDL_GetMouseState().
-           Returning early prevents weapon fires/uses/etc. */
+           Returning early prevents weapon fires/uses/etc.  The release of a
+           press that began in the game still falls through, so its button
+           command (-attack and friends) cannot stay latched. */
         return;
     }
 
@@ -3831,6 +3834,32 @@ void Key_ClearStates (void)
 
 /*
 ===================
+Key_ReleaseMouseButtons
+
+Releases any held mouse button through the normal key path, so that a bound
+button command still gets its matching - half.  Used when the console takes
+ownership of the mouse: clearing keydown[] directly would leave +attack (and
+friends) latched in the game.
+===================
+*/
+void Key_ReleaseMouseButtons (void)
+{
+	static const int mousekeys[] =
+	{
+		K_MOUSE1, K_MOUSE2, K_MOUSE3, K_MOUSE4, K_MOUSE5,
+		K_MWHEELUP, K_MWHEELDOWN
+	};
+	size_t	i;
+
+	for (i = 0; i < Q_COUNTOF(mousekeys); i++)
+	{
+		if (keydown[mousekeys[i]])
+			Key_Event (mousekeys[i], false);
+	}
+}
+
+/*
+===================
 Key_UpdateForDest
 ===================
 */
@@ -3856,6 +3885,7 @@ void Key_UpdateForDest (void)
 		if (cls.state != ca_connected)
 		{
 			forced = true;
+			Key_ReleaseMouseButtons ();	// while still key_game, so held buttons pair up
 			key_dest = key_console;
 			IN_UpdateGrabs();
 			break;
