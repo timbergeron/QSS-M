@@ -7240,8 +7240,8 @@ static void SV_DecodeUserInfo(client_t *client)
 		q_strlcpy(client->desired_name, tmp, sizeof(client->desired_name));
 
 		if (client->name[0] && strcmp(client->name, "unconnected") )
-			Con_Printf ("%s renamed to %s\n", host_client->name, tmp);
-		Q_strcpy (host_client->name, tmp);
+			Con_Printf ("%s renamed to %s\n", client->name, tmp);
+		q_strlcpy (client->name, tmp, sizeof(client->name));
 		client->edict->v.netname = PR_SetEngineString(client->name);
 		SV_CheckDuplicateNames(client); // woods #dupnames
 	}
