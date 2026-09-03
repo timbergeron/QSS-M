@@ -3801,6 +3801,10 @@ qboolean Key_TextEntry (void)
 	case key_message:
 		return true;
 	case key_menu:
+		// Scripted menus receive character events without M_TextEntry's native
+		// menu state, so keep their text input available as well.
+		if (cls.menu_qcvm.extfuncs.Menu_InputEvent || cls.menu_qcvm.extfuncs.m_keydown)
+			return true;
 		return M_TextEntry();
 	case key_game:
 		// Don't return true even during con_forcedup, because that happens while starting a

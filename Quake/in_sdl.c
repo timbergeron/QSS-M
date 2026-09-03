@@ -1698,10 +1698,10 @@ void IN_Init (void)
 	if (SDL_EnableKeyRepeat(SDL_DEFAULT_REPEAT_DELAY, SDL_DEFAULT_REPEAT_INTERVAL) == -1)
 		Con_Printf("Warning: SDL_EnableKeyRepeat() failed.\n");
 #else
-//	if (textmode)
-//		SDL_StartTextInput();
-//	else
-//		SDL_StopTextInput();
+	if (textmode)
+		SDL_StartTextInput();
+	else
+		SDL_StopTextInput();
 #endif
 	if (safemode || COM_CheckParm("-nomouse"))
 	{
@@ -3174,7 +3174,9 @@ void IN_ClearStates (void)
 void IN_UpdateInputMode (void)
 {
 	qboolean want_textmode = Key_TextEntry();
-	if (0)//textmode != want_textmode)
+	// Stop text input outside text entry so the console key cannot leave a
+	// pending dead-key accent (e.g. ^ on German keyboards) while playing.
+	if (textmode != want_textmode)
 	{
 		textmode = want_textmode;
 #if !defined(USE_SDL2)
