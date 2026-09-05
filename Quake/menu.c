@@ -6657,12 +6657,87 @@ static void M_Maps_AddDownloadMenu(void)
 	mapsmenu.mapcount = (int)VEC_SIZE(mapsmenu.items);
 }
 
+static void M_Maps_AddDecoration(const char *text)
+{
+	mapitem_t map;
+
+	memset(&map, 0, sizeof(map));
+	map.name = text;
+	map.date = "";
+	VEC_PUSH(mapsmenu.items, map);
+	mapsmenu.mapcount = (int)VEC_SIZE(mapsmenu.items);
+}
+
+static void M_Maps_AddSeparator(maptype_t before, maptype_t after)
+{
+#define QBAR "\35\36\37"
+	if (after >= MAPTYPE_ID_START)
+	{
+		if (before < MAPTYPE_ID_START)
+		{
+			M_Maps_AddDecoration("");
+			M_Maps_AddDecoration(QBAR " Original Quake levels " QBAR);
+		}
+		M_Maps_AddDecoration("");
+	}
+	else if (after >= MAPTYPE_CUSTOM_ID_START && before < MAPTYPE_CUSTOM_ID_START)
+	{
+		M_Maps_AddDecoration("");
+		M_Maps_AddDecoration(QBAR " Custom Quake levels " QBAR);
+		M_Maps_AddDecoration("");
+	}
+	else if (after >= MAPTYPE_MOD_START && before < MAPTYPE_MOD_START)
+	{
+		M_Maps_AddDecoration("");
+		M_Maps_AddDecoration(QBAR " Official mod levels " QBAR);
+		M_Maps_AddDecoration("");
+	}
+#undef QBAR
+}
+
+static int M_Maps_Compare(const void *a, const void *b)
+{
+	const filelist_item_t *left = *(filelist_item_t *const *)a;
+	const filelist_item_t *right = *(filelist_item_t *const *)b;
+
+	if (left->maptype != right->maptype)
+		return (int)left->maptype - (int)right->maptype;
+	return q_strnaturalcmp(left->name, right->name);
+}
+
+static qboolean M_Maps_IsSelectable(int index)
+{
+	return index >= 0 && index < mapsmenu.list.numitems &&
+		mapsmenu.items[mapsmenu.filtered_indices[index]].active;
+}
+
+static void M_Maps_EnsureSelectableCursor(int key)
+{
+	int dir = 1;
+
+	if (M_Maps_IsSelectable(mapsmenu.list.cursor))
+		return;
+
+	switch (key)
+	{
+	case K_UPARROW:
+	case K_KP_UPARROW:
+	case K_PGUP:
+	case K_KP_PGUP:
+	case K_END:
+	case K_KP_END:
+		dir = -1;
+		break;
+	}
+	M_List_SelectNextActive(&mapsmenu.list, mapsmenu.list.cursor, dir, true);
+}
+
 static int M_Maps_ContentCount(void)
 {
 	int i, count = 0;
 
 	for (i = 0; i < mapsmenu.mapcount; i++)
-		if (!mapsmenu.items[i].download_menu)
+		if (mapsmenu.items[i].active && !mapsmenu.items[i].download_menu)
 			count++;
 	return count;
 }
@@ -6691,27 +6766,31 @@ static void M_Maps_UpdateViewsize(void)
 static void M_Maps_Refilter(void)
 {
 	int i;
+	int selected = M_Maps_IsSelectable(mapsmenu.list.cursor) ?
+		mapsmenu.filtered_indices[mapsmenu.list.cursor] : -1;
 
 	M_Maps_UpdateViewsize();
 	VEC_CLEAR(mapsmenu.filtered_indices);
+	mapsmenu.list.cursor = -1;
 
 	for (i = 0; i < mapsmenu.mapcount; i++)
 	{
 		if (mapsmenu.list.search.len == 0 ||
-			q_strcasestr(mapsmenu.items[i].name, mapsmenu.list.search.text) ||
-			(mapsmenu.items[i].date && q_strcasestr(mapsmenu.items[i].date, mapsmenu.list.search.text)))
+			(mapsmenu.items[i].active &&
+			 (q_strcasestr(mapsmenu.items[i].name, mapsmenu.list.search.text) ||
+			  q_strcasestr(mapsmenu.items[i].date, mapsmenu.list.search.text))))
 		{
+			if (i == selected)
+				mapsmenu.list.cursor = (int)VEC_SIZE(mapsmenu.filtered_indices);
 			VEC_PUSH(mapsmenu.filtered_indices, i);
 		}
 	}
 
 	mapsmenu.list.numitems = (int)VEC_SIZE(mapsmenu.filtered_indices);
 
-	if (mapsmenu.list.cursor >= mapsmenu.list.numitems)
-		mapsmenu.list.cursor = mapsmenu.list.numitems - 1;
-
 	if (mapsmenu.list.cursor < 0 && mapsmenu.list.numitems > 0)
 		mapsmenu.list.cursor = 0;
+	M_Maps_EnsureSelectableCursor(K_DOWNARROW);
 
 	M_List_CenterCursor(&mapsmenu.list);
 }
@@ -6719,6 +6798,9 @@ static void M_Maps_Refilter(void)
 static void M_Maps_Init(void)
 {
 	filelist_item_t* item;
+	filelist_item_t **sorted = NULL;
+	int i, initial = -1, active = -1;
+	maptype_t type, prev_type = MAPTYPE_COUNT;
 
 	mapsmenu.scrollbar_grab = false;
 	mapsmenu.download_available = CL_QWMapListDownloadsAvailable();
@@ -6726,6 +6808,7 @@ static void M_Maps_Init(void)
 	mapsmenu.list.cursor = -1;
 	mapsmenu.list.scroll = 0;
 	mapsmenu.list.numitems = 0;
+	mapsmenu.list.isactive_fn = M_Maps_IsSelectable;
 	mapsmenu.mapcount = 0;
 	VEC_CLEAR(mapsmenu.items);
 	VEC_CLEAR(mapsmenu.filtered_indices);
@@ -6743,12 +6826,33 @@ static void M_Maps_Init(void)
 		ExtraMaps_ParseDescriptions();
 
 	for (item = extralevels; item; item = item->next)
+		VEC_PUSH(sorted, item);
+	if (VEC_SIZE(sorted) > 1)
+		qsort(sorted, VEC_SIZE(sorted), sizeof(*sorted), M_Maps_Compare);
+
+	for (i = 0; i < (int)VEC_SIZE(sorted); i++)
+	{
+		item = sorted[i];
+		type = item->maptype;
+		if (prev_type != MAPTYPE_COUNT && prev_type != type)
+			M_Maps_AddSeparator(prev_type, type);
+		prev_type = type;
+		if (cls.state == ca_connected && cls.signon == SIGNONS && !strcmp(cl.mapname, item->name))
+		{
+			active = mapsmenu.mapcount;
+			if (!cls.demoplayback)
+				initial = active;
+		}
+		if (initial == -1 && (type == MAPTYPE_CUSTOM_MOD_START || type == MAPTYPE_MOD_START ||
+			type == MAPTYPE_CUSTOM_ID_START || type == MAPTYPE_ID_START))
+			initial = mapsmenu.mapcount;
 		M_Maps_Add(item->name, item->data);
+	}
+	VEC_FREE(sorted);
 
 	M_Maps_Refilter();
-
-	if (mapsmenu.list.cursor == -1)
-		mapsmenu.list.cursor = 0;
+	if (initial != -1 || active != -1)
+		mapsmenu.list.cursor = initial != -1 ? initial : active;
 
 	M_List_CenterCursor(&mapsmenu.list);
 }
@@ -6973,7 +7077,7 @@ static void M_Maps_DrawLevelshotPreview (void)
 
 	idx = mapsmenu.filtered_indices[mapsmenu.list.cursor];
 	item = &mapsmenu.items[idx];
-	if (item->download_menu)
+	if (!item->active || item->download_menu)
 		return;
 
 	pic = Mapshot_ResolvePic(item->name);
@@ -7084,6 +7188,12 @@ void M_Maps_Draw(void)
 			row++;
 		item_y = y + row * 8;
 
+		if (!map_item->active)
+		{
+			M_PrintWhite(x + (cols - (int)strlen(map_item->name)) / 2 * 8, item_y, map_item->name);
+			continue;
+		}
+
 		if (mapsmenu.list.search.len > 0)
 		{
 			if (map_item->download_menu)
@@ -7158,7 +7268,7 @@ qboolean M_Maps_Match(int index, char initial)
 {
 	int map_idx = mapsmenu.filtered_indices[index];
 
-	return q_tolower(mapsmenu.items[map_idx].name[0]) == initial;
+	return M_Maps_IsSelectable(index) && q_tolower(mapsmenu.items[map_idx].name[0]) == initial;
 }
 
 void M_Maps_Key(int key)
@@ -7206,8 +7316,11 @@ void M_Maps_Key(int key)
 		return;
 	}
 
-	if (M_List_Key(&mapsmenu.list, key))
+	if (mapsmenu.list.numitems > 0 && M_List_Key(&mapsmenu.list, key))
+	{
+		M_Maps_EnsureSelectableCursor(key);
 		return;
+	}
 
 	if (M_List_CycleMatch(&mapsmenu.list, key, M_Maps_Match))
 		return;
@@ -7253,7 +7366,7 @@ void M_Maps_Key(int key)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	enter:
-		if (mapsmenu.list.numitems > 0 && mapsmenu.items[mapsmenu.filtered_indices[mapsmenu.list.cursor]].name[0])
+		if (M_Maps_IsSelectable(mapsmenu.list.cursor))
 		{
 			mapitem_t *map_item = &mapsmenu.items[mapsmenu.filtered_indices[mapsmenu.list.cursor]];
 			if (map_item->download_menu)

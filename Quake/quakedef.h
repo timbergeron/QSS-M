@@ -399,6 +399,32 @@ extern	double		realtime;		// not bounded in any way, changed at
 							// start of every frame, never reset
 extern	double		scr_volume_display_time; // woods
 
+// Level-menu order, from Ironwail.
+typedef enum
+{
+	MAPTYPE_CUSTOM_MOD_START,
+	MAPTYPE_CUSTOM_MOD_LEVEL,
+	MAPTYPE_CUSTOM_MOD_END,
+	MAPTYPE_CUSTOM_MOD_DM,
+	MAPTYPE_MOD_START,
+	MAPTYPE_MOD_LEVEL,
+	MAPTYPE_MOD_END,
+	MAPTYPE_MOD_DM,
+	MAPTYPE_CUSTOM_ID_START,
+	MAPTYPE_CUSTOM_ID_LEVEL,
+	MAPTYPE_CUSTOM_ID_END,
+	MAPTYPE_CUSTOM_ID_DM,
+	MAPTYPE_ID_START,
+	MAPTYPE_ID_EP1_LEVEL,
+	MAPTYPE_ID_EP2_LEVEL,
+	MAPTYPE_ID_EP3_LEVEL,
+	MAPTYPE_ID_EP4_LEVEL,
+	MAPTYPE_ID_END,
+	MAPTYPE_ID_DM,
+	MAPTYPE_ID_LEVEL,
+	MAPTYPE_COUNT
+} maptype_t;
+
 typedef struct filelist_item_s
 {
 	char			name[NET_NAMELEN]; // also stores full IPv6/DTLS server addresses
@@ -410,6 +436,7 @@ typedef struct filelist_item_s
 	int			counted_faces;
 	int			total_faces;
 	qboolean		has_mapsize_cache;
+	maptype_t		maptype; // extralevels only; rebuilt from the mounted search paths
 	struct filelist_item_s	*next;
 } filelist_item_t;
 

@@ -735,9 +735,63 @@ static void FileList_Clear (filelist_item_t **list)
 filelist_item_t	*extralevels;
 static qboolean extramaps_initialized;
 
-void ExtraMaps_Add (const char *name)
+// Match Ironwail's source categories and start/episode/end/deathmatch order.
+static maptype_t ExtraMaps_Categorize (const char *name, const searchpath_t *source)
 {
-	FileList_Add(name, NULL, &extralevels); // woods #demolistsort add arg
+	size_t len = strlen(name);
+	maptype_t base;
+	qboolean is_start, is_end, is_dm;
+
+	if (source->pack && !q_strncasecmp(source->purename, GAMENAME "/", sizeof(GAMENAME)))
+	{
+		if (name[0] == 'd' && name[1] == 'm')
+			return MAPTYPE_ID_DM;
+		if (!strcmp(name, "start"))
+			return MAPTYPE_ID_START;
+		if (name[0] == 'e' && name[1] >= '1' && name[1] <= '4')
+			return MAPTYPE_ID_EP1_LEVEL + name[1] - '1';
+		if (!strcmp(name, "end"))
+			return MAPTYPE_ID_END;
+		return MAPTYPE_ID_LEVEL;
+	}
+
+	is_start = len >= 5 && (!memcmp(name + len - 5, "start", 5) ||
+		!memcmp(name, "start", 5) || !memcmp(name + len - 5, "intro", 5));
+	is_end = len >= 3 && !memcmp(name + len - 3, "end", 3);
+	while (len > 0 && (unsigned int)(name[len - 1] - '0') <= 9)
+		len--;
+	is_dm = len >= 2 && !memcmp(name + len - 2, "dm", 2);
+
+	if (source->path_id != com_searchpaths->path_id)
+		base = MAPTYPE_CUSTOM_ID_START;
+	else
+		base = source->pack ? MAPTYPE_MOD_START : MAPTYPE_CUSTOM_MOD_START;
+	if (is_start)
+		return base + MAPTYPE_CUSTOM_MOD_START;
+	if (is_end)
+		return base + MAPTYPE_CUSTOM_MOD_END;
+	if (is_dm)
+		return base + MAPTYPE_CUSTOM_MOD_DM;
+	return base + MAPTYPE_CUSTOM_MOD_LEVEL;
+}
+
+static void ExtraMaps_Add (const char *name, const searchpath_t *source)
+{
+	filelist_item_t *item;
+
+	// The first match is the file the engine will load. Lower-priority copies
+	// must not change its category (notably a mod's replacement start.bsp).
+	for (item = extralevels; item; item = item->next)
+		if (!q_strcasecmp(name, item->name))
+			return;
+
+	FileList_Add(name, NULL, &extralevels);
+	for (item = extralevels; item; item = item->next)
+		if (!q_strcasecmp(name, item->name))
+		{
+			item->maptype = ExtraMaps_Categorize(name, source);
+			break;
+		}
 }
 
 void ExtraMaps_Init (void)
@@ -751,7 +805,6 @@ void ExtraMaps_Init (void)
 #endif
 	char		filestring[MAX_OSPATH];
 	char		mapname[32];
-	//char		ignorepakdir[32]; // woods, no lets search in paks
 	searchpath_t	*search;
 	pack_t		*pak;
 	int		i;
@@ -759,10 +812,6 @@ void ExtraMaps_Init (void)
 	if (extramaps_initialized)
 		return;
 	extramaps_initialized = true;
-
-	// we don't want to list the maps in id1 pakfiles,
-	// because these are not "add-on" levels
-	//q_snprintf (ignorepakdir, sizeof(ignorepakdir), "/%s/", GAMENAME); // woods, no lets search in paks
 
 	for (search = com_searchpaths; search; search = search->next)
 	{
@@ -776,7 +825,7 @@ void ExtraMaps_Init (void)
 			do
 			{
 				COM_StripExtension(fdat.cFileName, mapname, sizeof(mapname));
-				ExtraMaps_Add (mapname);
+				ExtraMaps_Add (mapname, search);
 			} while (FindNextFile(fhnd, &fdat));
 			FindClose(fhnd);
 #else
@@ -789,28 +838,27 @@ void ExtraMaps_Init (void)
 				if (q_strcasecmp(COM_FileGetExtension(dir_t->d_name), "bsp") != 0)
 					continue;
 				COM_StripExtension(dir_t->d_name, mapname, sizeof(mapname));
-				ExtraMaps_Add (mapname);
+				ExtraMaps_Add (mapname, search);
 			}
 			closedir(dir_p);
 #endif
 		}
 		else //pakfile
 		{
-			//if (!strstr(search->pack->filename, ignorepakdir)) // woods, no lets search in paks
-			//{ //don't list standard id maps
-				for (i = 0, pak = search->pack; i < pak->numfiles; i++)
+			for (i = 0, pak = search->pack; i < pak->numfiles; i++)
+			{
+				if (!strncmp(pak->files[i].name, "maps/", 5) &&
+					!strchr(pak->files[i].name + 5, '/') &&
+					!strcmp(COM_FileGetExtension(pak->files[i].name), "bsp"))
 				{
-					if (!strcmp(COM_FileGetExtension(pak->files[i].name), "bsp"))
-					{
-						COM_StripExtension(pak->files[i].name + 5, mapname, sizeof(mapname));
+					COM_StripExtension(pak->files[i].name + 5, mapname, sizeof(mapname));
 
-						if (pak->files[i].filelen > 32*1024 && !isSpecialMap(mapname))
-						{ // don't list files under 32k (ammo boxes etc) or certain names (ex. authmdl are larger) -- woods
-							ExtraMaps_Add (mapname);
-						}
+					if (pak->files[i].filelen > 32*1024 && !isSpecialMap(mapname))
+					{ // don't list files under 32k (ammo boxes etc) or certain names (ex. authmdl are larger) -- woods
+						ExtraMaps_Add (mapname, search);
 					}
 				}
-			//}
+			}
 		}
 	}
 }
@@ -1161,6 +1209,11 @@ void ExtraMaps_ParseDescriptions(void)
 
 void FileList_Add_MapDesc (const char* levelName) // for a map download
 {
+	filelist_item_t *level;
+	searchpath_t *search;
+	unsigned int path_id;
+	char mappath[MAX_QPATH];
+
 	if (!descriptionsParsed)
 		ExtraMaps_ParseDescriptions();
 	
@@ -1170,6 +1223,17 @@ void FileList_Add_MapDesc (const char* levelName) // for a map download
 	Mod_LoadMapDescription (mapdesc, sizeof(mapdesc), levelName);
 
 	FileList_Add (levelName, mapdesc, &extralevels);
+	level = FindLevelInList(extralevels, levelName);
+	q_snprintf(mappath, sizeof(mappath), "maps/%s.bsp", levelName);
+	if (level && COM_FileExists(mappath, &path_id))
+	{
+		for (search = com_searchpaths; search; search = search->next)
+			if (search->path_id == path_id && !!search->pack == !!file_from_pak)
+			{
+				level->maptype = ExtraMaps_Categorize(levelName, search);
+				break;
+			}
+	}
 
 	SaveMapDescriptionsToJSON(extralevels); // save the updated extralevels list to mapdesc.json
 }
