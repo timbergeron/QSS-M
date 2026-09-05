@@ -654,7 +654,8 @@ static void S_CompleteStartup (void)
 		S_StopAllSounds (true, false);
 
 	S_CodecInit ();
-	S_PrecacheAmbientSounds ();
+	// S_UpdateAmbientSounds loads the loops once a map needs them. Startup
+	// precaches would be discarded by Host_ClearMemory before the first map.
 }
 
 /*

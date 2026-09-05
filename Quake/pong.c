@@ -80,7 +80,6 @@ typedef struct {
 	int player_score;
 	int ai_score;
 	Uint64 map_start_time;
-	qpic_t* pause_pic;
 	double last_update_time;
 	double player_paddle_flash_time;
 	float ai_offset;
@@ -138,7 +137,10 @@ void Pong_ToggleFreeze(void)
 static qboolean Pong_GetPauseRect(float sc,
 	float* x, float* y, float* w, float* h)
 {
-	if (!pong.pause_pic)                       /* texture not in memory   */
+	// Resolve on demand so startup does not decode a pause graphic, and game
+	// or HUD changes use the current Draw_CachePic entry.
+	qpic_t *pause_pic = Draw_CachePic("gfx/pause.lmp");
+	if (!pause_pic)
 		return false;
 
 	// Match the canvas used by SCR_DrawPause or SCR_DrawPause2.
@@ -148,8 +150,8 @@ static qboolean Pong_GetPauseRect(float sc,
 	const float maxscale = q_min((float)glwidth / 320.f,
 		(float)glheight / 200.f);
 	const float msc = CLAMP(1.0f, menuscale, maxscale);
-	float pic_w = pong.pause_pic->width;
-	float pic_h = pong.pause_pic->height;
+	float pic_w = pause_pic->width;
+	float pic_h = pause_pic->height;
 
 	// The stock LMP is 128x24 even when its cached dimensions disagree.
 	if (!gl_load24bit.value)
@@ -181,10 +183,6 @@ void Pong_Init(void)
 	Pong_CvarChanged(&cl_pong);
 
 	memset(&pong.ball, 0, sizeof(pong.ball));
-
-	// Cache pause pic on init
-	if (!pong.pause_pic)
-		pong.pause_pic = Draw_CachePic("gfx/pause.lmp");
 }
 
 static float Pong_MouseYInFramebuffer(int y)
@@ -524,15 +522,13 @@ void Pong_Draw(void)
 	if (!Sbar_EnsurePics ()) // sb_nums load lazily
 		return;
 
-	if (!pong.pause_pic)
-		pong.pause_pic = Draw_CachePic("gfx/pause.lmp");
-
 	if (pong_preview && !cl.paused && !cl.match_pause_time)
 	{
+		qpic_t *pause_pic = Draw_CachePic("gfx/pause.lmp");
 		GL_SetCanvas(CANVAS_MENU);
-		Draw_Pic((320 - (int)pong.pause_pic->width) / 2,
-			(240 - 48 - (int)pong.pause_pic->height) / 2,
-			pong.pause_pic);
+		Draw_Pic((320 - (int)pause_pic->width) / 2,
+			(240 - 48 - (int)pause_pic->height) / 2,
+			pause_pic);
 	}
 
 	GL_SetCanvas(CANVAS_DEFAULT);

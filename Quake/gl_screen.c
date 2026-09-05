@@ -988,8 +988,9 @@ SCR_LoadPics -- johnfitz
 */
 void SCR_LoadPics (void)
 {
-	scr_net = Draw_PicFromWad2 ("net", TEXPREF_NEAREST | TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
-	scr_turtle = Draw_PicFromWad2 ("turtle", TEXPREF_NEAREST | TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
+	// Drop old WAD pointers on game/HUD changes; decode each icon on first use.
+	scr_net = NULL;
+	scr_turtle = NULL;
 }
 
 /*
@@ -4351,6 +4352,9 @@ void SCR_DrawTurtle (void)
 	if (count < 3)
 		return;
 
+	if (!scr_turtle)
+		scr_turtle = Draw_PicFromWad2 ("turtle", TEXPREF_NEAREST | TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
+
 	GL_SetCanvas (CANVAS_DEFAULT); //johnfitz
 
 	Draw_Pic (scr_vrect.x, scr_vrect.y, scr_turtle);
@@ -4374,6 +4378,9 @@ void SCR_DrawNet (void)
 		return;
 	if (cls.demoplayback)
 		return;
+
+	if (!scr_net)
+		scr_net = Draw_PicFromWad2 ("net", TEXPREF_NEAREST | TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
 
 	GL_SetCanvas (CANVAS_DEFAULT2); // woods
 
@@ -4486,12 +4493,13 @@ void SCR_DrawPause2(void)
 	char hint[80];
 	qboolean hint_preview = M_LivePreview_UsePausedHints () && !cls.demoplayback;
 	qboolean show_hints = ((cl.match_pause_time > 0 && !cls.demoplayback) || pausedprint || hint_preview);
-	GL_SetCanvas(CANVAS_MENU2); //johnfitz
-
-	pic = Draw_CachePic("gfx/pause.lmp");
 
 	if (show_hints)
+	{
+		GL_SetCanvas(CANVAS_MENU2); //johnfitz
+		pic = Draw_CachePic("gfx/pause.lmp");
 		Draw_Pic((320 - pic->width) / 2, (240 - 48 - pic->height) / 2, pic); //johnfitz -- stretched menus
+	}
 
 	if (show_hints && scr_hints.value)
 	{
