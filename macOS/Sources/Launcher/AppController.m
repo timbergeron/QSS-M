@@ -3944,14 +3944,6 @@ doCommandBySelector:(SEL)commandSelector
     [self configureFileMenu];
     [self removeUnusedMenus];
 
-    if (launcherWindow) {
-        [self configureLauncherWindow];
-        [self buildLauncherUI];
-        [self populateInitialChips];
-    }
-
-    [self refreshRawMouseSwitchState];
-
     flags = [NSEvent modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
     optionKeyPressed = (flags & NSEventModifierFlagOption) != 0;
     launcherRequested = ([arguments argument:@"-launcher"] != nil);
@@ -3965,6 +3957,13 @@ doCommandBySelector:(SEL)commandSelector
     } else if (!optionKeyPressed && !launcherRequested) {
         [self launchQuake:self];
     } else {
+        // Build the optional launcher only when it will be shown.
+        if (launcherWindow) {
+            [self configureLauncherWindow];
+            [self buildLauncherUI];
+            [self populateInitialChips];
+        }
+        [self refreshRawMouseSwitchState];
         [launcherWindow center];
         [launcherWindow makeKeyAndOrderFront:self];
         [self scheduleRawMouseStartupRefresh];
