@@ -256,6 +256,7 @@ struct pr_extfuncs_s
 	QCEXTFUNC(m_keyup,					"void(float scan, float chr)")										/*obsoleted by Menu_InputEvent, included for dp compat.*/	\
 	QCEXTFUNC(m_consolecommand,			"float(string cmd)")												\
 	QCEXTFUNC(Menu_InputEvent,			"float(float evtype, float scanx, float chary, float devid)")		\
+	QCEXTFUNC(Menu_TextEntry,			"float()") /*optional: true only while a text field has focus*/ \
 
 #define QCEXTFUNC(n,t) func_t n;
 	QCEXTFUNCS_COMMON

@@ -45,6 +45,9 @@ static qboolean history_controls_registered = false;
 static cvar_t con_savehistory = {"con_savehistory", "1", CVAR_ARCHIVE}; // woods #historyprivacy
 static qboolean History_SaveHistoryEnabled (void);
 
+// Enable SDL text input for legacy menus without a focused-text callback.
+static cvar_t in_menutextinput = {"in_menutextinput", "0", CVAR_ARCHIVE};
+
 keydest_t	key_dest;
 
 int			key_bindmap[2] = {0,1};
@@ -2979,6 +2982,7 @@ void Key_Init (void)
 	History_RegisterControls();
 	History_Init ();
 	Cvar_RegisterVariable (&cl_chat_autocomplete); // woods #chatcomplete
+	Cvar_RegisterVariable (&in_menutextinput);
 
 	key_blinktime = realtime; //johnfitz
 
@@ -3164,6 +3168,69 @@ qboolean CSQC_HandleKeyEvent(qboolean down, int keyc, int unic)
 	if (key_dest == key_game)
 		return inhibit;
 	return false;
+}
+
+// Older scripted menus cannot report text-field focus. Give them basic ASCII
+// character events without enabling the IME. Menus needing composed text or
+// layout-specific shifted symbols can opt in via Menu_TextEntry.
+static int Key_MenuChar (int key, int keycode)
+{
+	qboolean shift = keydown[K_SHIFT];
+	int mods = SDL_GetModState();
+	qboolean caps = (mods & KMOD_CAPS) != 0;
+	const char *unshifted = "1234567890-=[]\\;'`,./";
+	const char *shifted = "!@#$%^&*()_+{}|:\"~<>?";
+	const char *p;
+
+#if defined(USE_SDL2)
+	if (SDL_IsTextInputActive())
+#else
+	if (SDL_EnableUNICODE(-1))
+#endif
+		return 0;
+	if (Key_IsShortcutModifierDown() || keydown[K_ALT])
+		return 0;
+	if (keycode <= 0)
+		return 0; // Synthetic/controller events do not carry keyboard text.
+
+	// Keypad SDL keycodes are outside ASCII. Keep operators independent of
+	// Shift, and leave navigation keys alone when Num Lock is off.
+	switch (key)
+	{
+	case K_KP_SLASH: return '/';
+	case K_KP_STAR: return '*';
+	case K_KP_MINUS: return '-';
+	case K_KP_PLUS: return '+';
+	default: break;
+	}
+	// macOS has a Clear key rather than Num Lock; its keypad always types.
+#if !defined(PLATFORM_OSX) && !defined(PLATFORM_MAC)
+	if ((mods & KMOD_NUM) && !shift)
+#endif
+	{
+		switch (key)
+		{
+		case K_KP_INS: return '0';
+		case K_KP_END: return '1';
+		case K_KP_DOWNARROW: return '2';
+		case K_KP_PGDN: return '3';
+		case K_KP_LEFTARROW: return '4';
+		case K_KP_5: return '5';
+		case K_KP_RIGHTARROW: return '6';
+		case K_KP_HOME: return '7';
+		case K_KP_UPARROW: return '8';
+		case K_KP_PGUP: return '9';
+		case K_KP_DEL: return '.';
+		default: break;
+		}
+	}
+	if (keycode < 32 || keycode > 126)
+		return 0;
+	if (keycode >= 'a' && keycode <= 'z')
+		return shift != caps ? keycode - 'a' + 'A' : keycode;
+	if (shift && (p = strchr(unshifted, keycode)) != NULL)
+		return shifted[p - unshifted];
+	return keycode;
 }
 
 /*
@@ -3653,8 +3720,19 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 	}
 
 	//Spike -- give menuqc a chance to handle (and swallow) key events.
-	if ((key_dest == key_menu || !down) && Menu_HandleKeyEvent(down, key, 0))
-		return;
+	if (key_dest == key_menu || !down)
+	{
+		qboolean was_menu = key_dest == key_menu;
+		int menuchar = down ? Key_MenuChar(key, keycode) : 0;
+		qboolean handled = Menu_HandleKeyEvent(down, key, 0);
+
+		// Match SDL's separate key/character events, including for handlers
+		// that consume the key press. Never send text to a newly opened console.
+		if (menuchar && was_menu && key_dest == key_menu)
+			Menu_HandleKeyEvent(true, 0, menuchar);
+		if (handled || (down && was_menu && key_dest != key_menu))
+			return;
+	}
 	//Spike -- give csqc a chance to handle (and swallow) key events.
 	if ((key_dest == key_game || !down) && CSQC_HandleKeyEvent(down, key, 0))
 		return;
@@ -3801,10 +3879,24 @@ qboolean Key_TextEntry (void)
 	case key_message:
 		return true;
 	case key_menu:
-		// Scripted menus receive character events without M_TextEntry's native
-		// menu state, so keep their text input available as well.
-		if (cls.menu_qcvm.extfuncs.Menu_InputEvent || cls.menu_qcvm.extfuncs.m_keydown)
-			return true;
+		if (cls.menu_qcvm.extfuncs.m_draw)
+		{
+			// A menu's explicit focus request takes precedence over the
+			// compatibility setting for legacy menus.
+			if (cls.menu_qcvm.extfuncs.Menu_TextEntry)
+			{
+				qboolean wants_text;
+
+				if (qcvm)
+					return false; // An input-mode poll must not reenter an active VM.
+				PR_SwitchQCVM(&cls.menu_qcvm);
+				PR_ExecuteProgram(qcvm->extfuncs.Menu_TextEntry);
+				wants_text = G_FLOAT(OFS_RETURN) != 0;
+				PR_SwitchQCVM(NULL);
+				return wants_text;
+			}
+			return in_menutextinput.value > 0;
+		}
 		return M_TextEntry();
 	case key_game:
 		// Don't return true even during con_forcedup, because that happens while starting a
