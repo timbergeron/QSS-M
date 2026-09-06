@@ -212,7 +212,10 @@ mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model)
 		plane = node->plane;
 		if (!plane)
 			break;
-		d = DotProduct (p,plane->normal) - plane->dist;
+		if (plane->type < 3)
+			d = p[plane->type] - plane->dist;
+		else
+			d = DotProduct (p,plane->normal) - plane->dist;
 		if (d > 0)
 			node = node->children[0];
 		else

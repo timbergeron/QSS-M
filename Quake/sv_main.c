@@ -3103,7 +3103,10 @@ static void SV_AddToFatPVS (vec3_t org, mnode_t *node, qmodel_t *worldmodel) //j
 		}
 
 		plane = node->plane;
-		d = DotProduct (org, plane->normal) - plane->dist;
+		if (plane->type < 3)
+			d = org[plane->type] - plane->dist;
+		else
+			d = DotProduct (org, plane->normal) - plane->dist;
 		if (d > 8)
 			node = node->children[0];
 		else if (d < -8)
