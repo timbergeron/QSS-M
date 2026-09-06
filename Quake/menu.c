@@ -6668,40 +6668,41 @@ static void M_Maps_AddDecoration(const char *text)
 	mapsmenu.mapcount = (int)VEC_SIZE(mapsmenu.items);
 }
 
-static void M_Maps_AddSeparator(maptype_t before, maptype_t after)
+static const char *M_Maps_GameDir(const filelist_item_t *item)
 {
-#define QBAR "\35\36\37"
-	if (after >= MAPTYPE_ID_START)
-	{
-		if (before < MAPTYPE_ID_START)
-		{
-			M_Maps_AddDecoration("");
-			M_Maps_AddDecoration(QBAR " Original Quake levels " QBAR);
-		}
-		M_Maps_AddDecoration("");
-	}
-	else if (after >= MAPTYPE_CUSTOM_ID_START && before < MAPTYPE_CUSTOM_ID_START)
-	{
-		M_Maps_AddDecoration("");
-		M_Maps_AddDecoration(QBAR " Custom Quake levels " QBAR);
-		M_Maps_AddDecoration("");
-	}
-	else if (after >= MAPTYPE_MOD_START && before < MAPTYPE_MOD_START)
-	{
-		M_Maps_AddDecoration("");
-		M_Maps_AddDecoration(QBAR " Official mod levels " QBAR);
-		M_Maps_AddDecoration("");
-	}
-#undef QBAR
+	return item->map_gamedir ? item->map_gamedir : "";
+}
+
+static qboolean M_Maps_IsStart(const char *name)
+{
+	size_t len = strlen(name);
+
+	return len >= 5 && (!q_strncasecmp(name, "start", 5) ||
+		!q_strcasecmp(name + len - 5, "start") || !q_strcasecmp(name + len - 5, "intro"));
 }
 
 static int M_Maps_Compare(const void *a, const void *b)
 {
 	const filelist_item_t *left = *(filelist_item_t *const *)a;
 	const filelist_item_t *right = *(filelist_item_t *const *)b;
+	const char *left_dir = M_Maps_GameDir(left);
+	const char *right_dir = M_Maps_GameDir(right);
+	const searchpath_t *search;
+	qboolean left_start, right_start;
 
-	if (left->maptype != right->maptype)
-		return (int)left->maptype - (int)right->maptype;
+	// Follow the mounted search paths, including dependencies and base games.
+	if (q_strcasecmp(left_dir, right_dir))
+		for (search = com_searchpaths; search; search = search->next)
+		{
+			if (!q_strcasecmp(search->gamedir, left_dir))
+				return -1;
+			if (!q_strcasecmp(search->gamedir, right_dir))
+				return 1;
+		}
+	left_start = M_Maps_IsStart(left->name);
+	right_start = M_Maps_IsStart(right->name);
+	if (left_start != right_start)
+		return right_start - left_start;
 	return q_strnaturalcmp(left->name, right->name);
 }
 
@@ -6799,8 +6800,7 @@ static void M_Maps_Init(void)
 {
 	filelist_item_t* item;
 	filelist_item_t **sorted = NULL;
-	int i, initial = -1, active = -1;
-	maptype_t type, prev_type = MAPTYPE_COUNT;
+	int i, initial = -1;
 
 	mapsmenu.scrollbar_grab = false;
 	mapsmenu.download_available = CL_QWMapListDownloadsAvailable();
@@ -6833,26 +6833,23 @@ static void M_Maps_Init(void)
 	for (i = 0; i < (int)VEC_SIZE(sorted); i++)
 	{
 		item = sorted[i];
-		type = item->maptype;
-		if (prev_type != MAPTYPE_COUNT && prev_type != type)
-			M_Maps_AddSeparator(prev_type, type);
-		prev_type = type;
-		if (cls.state == ca_connected && cls.signon == SIGNONS && !strcmp(cl.mapname, item->name))
+		if (i == 0 || q_strcasecmp(M_Maps_GameDir(item), M_Maps_GameDir(sorted[i - 1])))
 		{
-			active = mapsmenu.mapcount;
-			if (!cls.demoplayback)
-				initial = active;
+			if (i > 0)
+				M_Maps_AddDecoration("");
+			M_Maps_AddDecoration(M_Maps_GameDir(item));
+			M_Maps_AddDecoration("");
 		}
-		if (initial == -1 && (type == MAPTYPE_CUSTOM_MOD_START || type == MAPTYPE_MOD_START ||
-			type == MAPTYPE_CUSTOM_ID_START || type == MAPTYPE_ID_START))
+		if (initial == -1 || (cls.state == ca_connected && cls.signon == SIGNONS &&
+			!cls.demoplayback && !strcmp(cl.mapname, item->name)))
 			initial = mapsmenu.mapcount;
 		M_Maps_Add(item->name, item->data);
 	}
 	VEC_FREE(sorted);
 
 	M_Maps_Refilter();
-	if (initial != -1 || active != -1)
-		mapsmenu.list.cursor = initial != -1 ? initial : active;
+	if (initial != -1)
+		mapsmenu.list.cursor = initial;
 
 	M_List_CenterCursor(&mapsmenu.list);
 }
@@ -7190,7 +7187,13 @@ void M_Maps_Draw(void)
 
 		if (!map_item->active)
 		{
-			M_PrintWhite(x + (cols - (int)strlen(map_item->name)) / 2 * 8, item_y, map_item->name);
+			if (*map_item->name)
+			{
+				char heading[MAX_QPATH + 16];
+				const char *label = !q_strcasecmp(map_item->name, GAMENAME) ? "Quake (id1)" : map_item->name;
+				q_snprintf(heading, sizeof(heading), "\35\36\37 %.*s \35\36\37", cols - 10, label);
+				M_PrintWhite(x + (cols - (int)strlen(heading)) / 2 * 8, item_y, heading);
+			}
 			continue;
 		}
 

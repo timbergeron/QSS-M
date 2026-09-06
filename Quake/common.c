@@ -3343,26 +3343,26 @@ static int COM_FindPackFileIndex (pack_t *pak, const char *filename)
 }
 
 static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
-							unsigned int *path_id);
+							unsigned int *path_id, const searchpath_t **source);
 
 static int COM_FindFile (const char *filename, int *handle, FILE **file,
-							unsigned int *path_id)
+							unsigned int *path_id, const searchpath_t **source)
 {
 	double t;
 	int ret;
 
 	if (!developer.value)
-		return COM_FindFile_impl (filename, handle, file, path_id);
+		return COM_FindFile_impl (filename, handle, file, path_id, source);
 
 	t = Sys_DoubleTime ();
-	ret = COM_FindFile_impl (filename, handle, file, path_id);
+	ret = COM_FindFile_impl (filename, handle, file, path_id, source);
 	com_findfile_time += Sys_DoubleTime () - t;
 	com_findfile_calls++;
 	return ret;
 }
 
 static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
-							unsigned int *path_id)
+							unsigned int *path_id, const searchpath_t **source)
 {
 	searchpath_t	*search;
 	char		netpath[MAX_OSPATH];
@@ -3374,6 +3374,8 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 		Sys_Error ("COM_FindFile: both handle and file set");
 
 	file_from_pak = 0;
+	if (source)
+		*source = NULL;
 
 //
 // search through the path, one element at a time
@@ -3391,6 +3393,8 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 				file_from_pak = 1;
 				if (path_id)
 					*path_id = search->path_id;
+				if (source)
+					*source = search;
 				if (handle)
 				{
 					if (pak->files[i].deflatedsize)
@@ -3455,6 +3459,8 @@ static int COM_FindFile_impl (const char *filename, int *handle, FILE **file,
 
 			if (path_id)
 				*path_id = search->path_id;
+			if (source)
+				*source = search;
 			if (handle)
 			{
 				com_filesize = Sys_FileOpenRead (netpath, &i);
@@ -3511,8 +3517,18 @@ Returns whether the file is found in the quake filesystem.
 */
 qboolean COM_FileExists (const char *filename, unsigned int *path_id)
 {
-	int ret = COM_FindFile (filename, NULL, NULL, path_id);
+	int ret = COM_FindFile (filename, NULL, NULL, path_id, NULL);
 	return (ret == -1) ? false : true;
+}
+
+// Return the winning mount without opening the file. Unlike path_id, this
+// distinguishes nested # directories from unrelated gamedirs with the same ID.
+const searchpath_t *COM_FileSearchPath (const char *filename)
+{
+	const searchpath_t *source;
+
+	COM_FindFile(filename, NULL, NULL, NULL, &source);
+	return source;
 }
 
 static qboolean COM_ConfigDirPath (const char *filename, char *config_path, size_t config_path_size)
@@ -3601,7 +3617,7 @@ it may actually be inside a pak file
 */
 int COM_OpenFile (const char *filename, int *handle, unsigned int *path_id)
 {
-	return COM_FindFile (filename, handle, NULL, path_id);
+	return COM_FindFile (filename, handle, NULL, path_id, NULL);
 }
 
 /*
@@ -3614,7 +3630,7 @@ into the file.
 */
 int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id)
 {
-	return COM_FindFile (filename, NULL, file, path_id);
+	return COM_FindFile (filename, NULL, file, path_id, NULL);
 }
 
 /*
@@ -4146,6 +4162,7 @@ static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile, cons
 			q_strlcpy(search->filename, pakdir, sizeof(search->filename));
 			q_strlcpy(search->purename, purename, sizeof(search->purename));
 			search->path_id = basepath?basepath->path_id:0;	//doesn't count as a new gamedir.
+			search->gamedir = basepath ? basepath->gamedir : search->purename;
 			search->pack = NULL;
 			search->next = com_searchpaths;
 			com_searchpaths = search;
@@ -4179,6 +4196,7 @@ static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile, cons
 	q_strlcpy(search->filename, mountfile, sizeof(search->filename));
 	q_strlcpy(search->purename, purename, sizeof(search->purename));
 	search->path_id = basepath?basepath->path_id:0;
+	search->gamedir = basepath ? basepath->gamedir : search->purename;
 	search->pack = pak;
 	search->next = com_searchpaths;
 	com_searchpaths = search;
@@ -5322,6 +5340,7 @@ _add_path:
 	searchdir->path_id = path_id;
 	q_strlcpy (searchdir->filename, com_gamedir, sizeof(searchdir->filename));
 	q_strlcpy (searchdir->purename, dir, sizeof(searchdir->purename));
+	searchdir->gamedir = searchdir->purename;
 
 	// Load pak0
 	COM_AddGamePackageFile(searchdir, dir, "pak0.pak");

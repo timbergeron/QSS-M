@@ -410,6 +410,7 @@ typedef struct searchpath_s
 					// <userdir>/game1 have the same id.
 	char	filename[MAX_OSPATH];
 	char	purename[MAX_OSPATH];	// 'gamedir[/foo.pak]'
+	const char *gamedir;		// logical gamedir, borrowed from its root search path's purename
 	pack_t	*pack;			// only one of filename / pack will be used
 	struct searchpath_s	*next;
 } searchpath_t;
@@ -498,6 +499,7 @@ void COM_WriteFile (const char *filename, const void *data, int len);
 int COM_OpenFile (const char *filename, int *handle, unsigned int *path_id);
 int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id);
 qboolean COM_FileExists (const char *filename, unsigned int *path_id);
+const searchpath_t *COM_FileSearchPath (const char *filename); // valid until the search paths change
 qboolean COM_ConfigFileUsesConfigsDir (const char *filename);
 qboolean COM_ConfigFilePrefersConfigsDir (const char *filename);
 void COM_ConfigFileEffectivePath (const char *filename, char *path, size_t path_size);

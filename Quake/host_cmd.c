@@ -735,52 +735,12 @@ static void FileList_Clear (filelist_item_t **list)
 filelist_item_t	*extralevels;
 static qboolean extramaps_initialized;
 
-// Match Ironwail's source categories and start/episode/end/deathmatch order.
-static maptype_t ExtraMaps_Categorize (const char *name, const searchpath_t *source)
-{
-	size_t len = strlen(name);
-	maptype_t base;
-	qboolean is_start, is_end, is_dm;
-
-	if (source->pack && !q_strncasecmp(source->purename, GAMENAME "/", sizeof(GAMENAME)))
-	{
-		if (name[0] == 'd' && name[1] == 'm')
-			return MAPTYPE_ID_DM;
-		if (!strcmp(name, "start"))
-			return MAPTYPE_ID_START;
-		if (name[0] == 'e' && name[1] >= '1' && name[1] <= '4')
-			return MAPTYPE_ID_EP1_LEVEL + name[1] - '1';
-		if (!strcmp(name, "end"))
-			return MAPTYPE_ID_END;
-		return MAPTYPE_ID_LEVEL;
-	}
-
-	is_start = len >= 5 && (!memcmp(name + len - 5, "start", 5) ||
-		!memcmp(name, "start", 5) || !memcmp(name + len - 5, "intro", 5));
-	is_end = len >= 3 && !memcmp(name + len - 3, "end", 3);
-	while (len > 0 && (unsigned int)(name[len - 1] - '0') <= 9)
-		len--;
-	is_dm = len >= 2 && !memcmp(name + len - 2, "dm", 2);
-
-	if (source->path_id != com_searchpaths->path_id)
-		base = MAPTYPE_CUSTOM_ID_START;
-	else
-		base = source->pack ? MAPTYPE_MOD_START : MAPTYPE_CUSTOM_MOD_START;
-	if (is_start)
-		return base + MAPTYPE_CUSTOM_MOD_START;
-	if (is_end)
-		return base + MAPTYPE_CUSTOM_MOD_END;
-	if (is_dm)
-		return base + MAPTYPE_CUSTOM_MOD_DM;
-	return base + MAPTYPE_CUSTOM_MOD_LEVEL;
-}
-
 static void ExtraMaps_Add (const char *name, const searchpath_t *source)
 {
 	filelist_item_t *item;
 
 	// The first match is the file the engine will load. Lower-priority copies
-	// must not change its category (notably a mod's replacement start.bsp).
+	// must not change its gamedir (notably a mod's replacement start.bsp).
 	for (item = extralevels; item; item = item->next)
 		if (!q_strcasecmp(name, item->name))
 			return;
@@ -789,7 +749,7 @@ static void ExtraMaps_Add (const char *name, const searchpath_t *source)
 	for (item = extralevels; item; item = item->next)
 		if (!q_strcasecmp(name, item->name))
 		{
-			item->maptype = ExtraMaps_Categorize(name, source);
+			item->map_gamedir = source->gamedir;
 			break;
 		}
 }
@@ -1210,8 +1170,7 @@ void ExtraMaps_ParseDescriptions(void)
 void FileList_Add_MapDesc (const char* levelName) // for a map download
 {
 	filelist_item_t *level;
-	searchpath_t *search;
-	unsigned int path_id;
+	const searchpath_t *source;
 	char mappath[MAX_QPATH];
 
 	if (!descriptionsParsed)
@@ -1225,15 +1184,9 @@ void FileList_Add_MapDesc (const char* levelName) // for a map download
 	FileList_Add (levelName, mapdesc, &extralevels);
 	level = FindLevelInList(extralevels, levelName);
 	q_snprintf(mappath, sizeof(mappath), "maps/%s.bsp", levelName);
-	if (level && COM_FileExists(mappath, &path_id))
-	{
-		for (search = com_searchpaths; search; search = search->next)
-			if (search->path_id == path_id && !!search->pack == !!file_from_pak)
-			{
-				level->maptype = ExtraMaps_Categorize(levelName, search);
-				break;
-			}
-	}
+	source = COM_FileSearchPath(mappath);
+	if (level && source)
+		level->map_gamedir = source->gamedir;
 
 	SaveMapDescriptionsToJSON(extralevels); // save the updated extralevels list to mapdesc.json
 }
