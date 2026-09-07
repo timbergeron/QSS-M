@@ -1393,10 +1393,11 @@ Called once each time through the main loop
 */
 void S_Update (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 {
-	int			i, j;
+	int			i;
 	int			total;
 	channel_t	*ch;
 	channel_t	*combine;
+	static channel_t *first_static[MAX_SFX];
 
 	if (!sound_started || (snd_blocked > 0))
 		return;
@@ -1409,6 +1410,8 @@ void S_Update (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 // update general area ambient sound sources
 	S_UpdateAmbientSounds ();
 
+	if (total_channels > FIRST_STATIC_SOUND_CHANNEL)
+		memset(first_static, 0, num_sfx * sizeof(*first_static));
 	combine = NULL;
 
 // update spatialization for static and dynamic sounds
@@ -1418,44 +1421,35 @@ void S_Update (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 		if (!ch->sfx)
 			continue;
 		SND_Spatialize(ch);	// respatialize channel
+
+		/* Remember even inaudible channels: the original search mixed into
+		 * the first static channel with this effect, preserving its phase.
+		 * Rebuild each update so channel reallocations and map/demo resets
+		 * cannot leave stale pointers. All static effects belong to known_sfx. */
+		if (i >= FIRST_STATIC_SOUND_CHANNEL)
+		{
+			if (!combine || combine->sfx != ch->sfx)
+			{
+				channel_t **first = &first_static[ch->sfx - known_sfx];
+				if (!*first)
+					*first = ch;
+				combine = *first;
+			}
+		}
+		else
+			combine = NULL;
+
 		if (!ch->leftvol && !ch->rightvol)
 			continue;
 
 	// try to combine static sounds with a previous channel of the same
 	// sound effect so we don't mix five torches every frame
 
-		if (i >= FIRST_STATIC_SOUND_CHANNEL)
+		if (combine && combine != ch)
 		{
-		// see if it can just use the last one
-			if (combine && combine->sfx == ch->sfx)
-			{
-				combine->leftvol += ch->leftvol;
-				combine->rightvol += ch->rightvol;
-				ch->leftvol = ch->rightvol = 0;
-				continue;
-			}
-		// search for one
-			combine = snd_channels + FIRST_STATIC_SOUND_CHANNEL;
-			for (j = FIRST_STATIC_SOUND_CHANNEL; j < i; j++, combine++)
-			{
-				if (combine->sfx == ch->sfx)
-					break;
-			}
-
-			if (j == total_channels)
-			{
-				combine = NULL;
-			}
-			else
-			{
-				if (combine != ch)
-				{
-					combine->leftvol += ch->leftvol;
-					combine->rightvol += ch->rightvol;
-					ch->leftvol = ch->rightvol = 0;
-				}
-				continue;
-			}
+			combine->leftvol += ch->leftvol;
+			combine->rightvol += ch->rightvol;
+			ch->leftvol = ch->rightvol = 0;
 		}
 	}
 

@@ -26,6 +26,21 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 static cvar_t	*cvar_vars;
 static char	cvar_null_string[] = "";
 
+#define CVAR_HASH_SIZE 1024
+static cvar_t *cvar_hash[CVAR_HASH_SIZE];
+
+static unsigned int Cvar_HashName(const char *name)
+{
+	unsigned int hash = 2166136261u;
+
+	while (*name)
+	{
+		hash ^= (unsigned char)*name++;
+		hash *= 16777619u;
+	}
+	return hash & (CVAR_HASH_SIZE - 1);
+}
+
 static struct cvaralias_s
 {	//spike -- tbh mostly for _cl_name -> name, but useful for future reasons too. can't handle different values though.
 	const char			*name;
@@ -498,7 +513,7 @@ cvar_t *Cvar_FindVar (const char *var_name)
 	cvar_t	*var;
 	struct cvaralias_s	*varalias;
 
-	for (var = cvar_vars ; var ; var = var->next)
+	for (var = cvar_hash[Cvar_HashName(var_name)] ; var ; var = var->hash_next)
 	{
 		if (!Q_strcmp(var_name, var->name))
 			return var;
@@ -1401,6 +1416,7 @@ void Cvar_RegisterVariable (cvar_t *variable)
 	char	value[800]; // woods #obmodelslist raise for lists
 	qboolean	set_rom;
 	cvar_t	*cursor,*prev; //johnfitz -- sorted list insert
+	unsigned int bucket;
 
 // first check to see if it has already been defined
 	if (Cvar_FindVar (variable->name))
@@ -1438,6 +1454,11 @@ void Cvar_RegisterVariable (cvar_t *variable)
 	}
 	//johnfitz
 	variable->flags |= CVAR_REGISTERED;
+	/* Cvars persist for the process lifetime, including user-created ones.
+	 * Publish the lookup entry before the initial value's callback runs. */
+	bucket = Cvar_HashName(variable->name);
+	variable->hash_next = cvar_hash[bucket];
+	cvar_hash[bucket] = variable;
 
 // copy the value off, because future sets will Z_Free it
 	q_strlcpy (value, variable->string, sizeof(value));

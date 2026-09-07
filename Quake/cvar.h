@@ -93,6 +93,7 @@ typedef struct cvar_s
 	cvarcompletion_t	completion; // woods #iwtabcomplete
 	cvarhelp_t	help;
 	struct cvar_s	*next;
+	struct cvar_s	*hash_next; // name lookup; next retains alphabetical iteration order
 } cvar_t;
 
 void	Cvar_RegisterVariable (cvar_t *variable);
