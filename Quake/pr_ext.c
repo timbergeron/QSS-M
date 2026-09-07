@@ -4377,7 +4377,7 @@ static void PF_copyentity(void)
 	edict_t *dst = (qcvm->argc<2)?ED_Alloc():G_EDICT(OFS_PARM1);
 	if (src->free || dst->free)
 		Con_Printf("PF_copyentity: entity is free\n");
-	memcpy(&dst->v, &src->v, qcvm->edict_size - sizeof(entvars_t));
+	memcpy(&dst->v, &src->v, qcvm->progs->entityfields * 4);
 	dst->alpha = src->alpha;
 	dst->sendinterval = src->sendinterval;
 	SV_LinkEdict(dst, false);
