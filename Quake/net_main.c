@@ -1679,6 +1679,7 @@ void NET_Shutdown (void)
 	qsocket_t	*sock;
 
 	NET_CancelWebRequests();
+	NET_CancelServerQueries();
 	NET_AbortExternalIP();
 	M_ServerList_ShutdownPingThreads();
 	M_ServerList_ShutdownApiFetch();

@@ -623,6 +623,7 @@ void Host_Quit_f (void)
 	quit_in_progress = true;
 
 	NET_CancelWebRequests (); // stop all HTTP workers together before the fade and shutdown joins
+	NET_CancelServerQueries ();
 	CL_WebDownloadChecks_Abort (); // let in-flight startup probes die during the fade instead of stalling shutdown
 	NET_AbortExternalIP (); // likewise cancel the public-IP request before its shutdown join
 
@@ -7553,6 +7554,15 @@ static void Host_Resurrect_f (void)
 		PR_GetString(sv_player->v.netname));
 }
 
+/* Raised before shutdown joins, so UDP browser workers stop together instead
+ * of waiting for a silent server's full reply deadline. Terminal, never reset. */
+static SDL_atomic_t server_queries_abort;
+
+void NET_CancelServerQueries(void)
+{
+	SDL_AtomicSet(&server_queries_abort, 1);
+}
+
 /*
 ==================
 ParseServerAddress -- woods #udplist
@@ -7686,6 +7696,8 @@ static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, 
 
 	if (resolved && resolvedsize)
 		resolved[0] = '\0';
+	if (SDL_AtomicGet(&server_queries_abort))
+		return -1;
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_socktype = SOCK_DGRAM;
@@ -7707,7 +7719,7 @@ static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, 
 		return -1;
 	}
 
-	for (rp = res; rp; rp = rp->ai_next)
+	for (rp = res; rp && !SDL_AtomicGet(&server_queries_abort); rp = rp->ai_next)
 	{
 		sys_socket_t sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (resolved && resolvedsize && !resolved[0])
@@ -7761,7 +7773,7 @@ static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, 
 			{
 				double deadline = start_time + max_wait_time; // allow a little longer for servers to answer
 
-				while (ping_result < 0)
+				while (ping_result < 0 && !SDL_AtomicGet(&server_queries_abort))
 				{
 					double now = Sys_DoubleTime();
 					double remaining = deadline - now;
@@ -7784,18 +7796,12 @@ static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, 
 					FD_ZERO(&readfds);
 					FD_SET(sock, &readfds);
 
-					if (remaining >= 1.0)
-					{
-						tv.tv_sec = (int)remaining;
-						tv.tv_usec = (int)((remaining - tv.tv_sec) * 1000000.0);
-		}
-					else
-					{
-						tv.tv_sec = 0;
-						tv.tv_usec = (int)(remaining * 1000000.0);
-						if (tv.tv_usec <= 0)
-							tv.tv_usec = 1000;
-	}
+					/* Keep the full query deadline, but check quit every 50 ms. */
+					remaining = q_min(remaining, 0.05);
+					tv.tv_sec = 0;
+					tv.tv_usec = (int)(remaining * 1000000.0);
+					if (tv.tv_usec <= 0)
+						tv.tv_usec = 1000;
 
 #ifdef _WIN32
 					sel = selectsocket(0, &readfds, NULL, NULL, &tv);
@@ -7917,6 +7923,8 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 
 	if (!host || !*host || maxslots <= 0)
 		return NULL;
+	if (SDL_AtomicGet(&server_queries_abort))
+		return NULL;
 	if (maxslots > MAX_SCOREBOARD)
 		maxslots = MAX_SCOREBOARD;
 
@@ -7933,7 +7941,7 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 	if (ret != 0)
 		return NULL;
 
-	for (rp = res; rp; rp = rp->ai_next)
+	for (rp = res; rp && !SDL_AtomicGet(&server_queries_abort); rp = rp->ai_next)
 	{
 		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (sock != INVALID_SOCKET)
@@ -7949,7 +7957,7 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 	{
 		unsigned char pkt[8];
 		int i;
-		for (i = 0; i < maxslots; i++)
+		for (i = 0; i < maxslots && !SDL_AtomicGet(&server_queries_abort); i++)
 		{
 			unsigned int hdr;
 			int behdr;
@@ -7971,7 +7979,7 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 		double idle_deadline = Sys_DoubleTime() + 0.3; /* give up if no response within 300ms */
 		int received_count = 0;
 
-		while (received_count < maxslots)
+		while (received_count < maxslots && !SDL_AtomicGet(&server_queries_abort))
 		{
 			double now = Sys_DoubleTime();
 			double wait_until = (idle_deadline < deadline) ? idle_deadline : deadline;
@@ -7990,25 +7998,20 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 
 			FD_ZERO(&readfds);
 			FD_SET(sock, &readfds);
-			if (remaining >= 1.0)
-			{
-				tv.tv_sec = (int)remaining;
-				tv.tv_usec = (int)((remaining - tv.tv_sec) * 1000000.0);
-			}
-			else
-			{
-				tv.tv_sec = 0;
-				tv.tv_usec = (int)(remaining * 1000000.0);
-				if (tv.tv_usec <= 0)
-					tv.tv_usec = 1000;
-			}
+			remaining = q_min(remaining, 0.05);
+			tv.tv_sec = 0;
+			tv.tv_usec = (int)(remaining * 1000000.0);
+			if (tv.tv_usec <= 0)
+				tv.tv_usec = 1000;
 
 #ifdef _WIN32
 			sel = selectsocket(0, &readfds, NULL, NULL, &tv);
 #else
 			sel = selectsocket((int)(sock + 1), &readfds, NULL, NULL, &tv);
 #endif
-			if (sel <= 0)
+			if (sel == 0)
+				continue; // poll slice expired; the reply/idle deadlines still apply
+			if (sel < 0)
 				break;
 			if (!FD_ISSET(sock, &readfds))
 				break;

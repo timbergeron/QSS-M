@@ -55,6 +55,7 @@ typedef char qhostaddr_t[NET_NAMELEN];
 void	NET_Init (void);
 void	NET_Shutdown (void);
 void	NET_CancelWebRequests (void); // terminal shutdown: cancel current and future HTTP transfers
+void	NET_CancelServerQueries (void); // terminal shutdown: cancel browser ping/player queries
 void	NET_AbortExternalIP (void);
 
 struct qsocket_s	*NET_CheckNewConnections (void);
