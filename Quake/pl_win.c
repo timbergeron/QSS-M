@@ -346,12 +346,7 @@ static void PL_QuitHoldPaint (HWND hwnd)
 
 static void PL_QuitHoldPushQuit (void)
 {
-	SDL_Event event;
-
-	memset(&event, 0, sizeof(event));
-	event.type = SDL_QUIT;
-	if (SDL_PushEvent(&event) != 1)
-		Cbuf_AddText("quit\n");
+	Host_QueueConfirmedQuit ();
 }
 
 static LRESULT CALLBACK PL_QuitHoldWindowProc (HWND hwnd, UINT message,
@@ -501,6 +496,13 @@ void PL_ControlWEvent (int down)
 	}
 	if (pl_quit_hold_active || pl_quit_hold_committed)
 		return;
+
+	if (!Host_ShouldConfirmQuitShortcut())
+	{
+		PL_QuitHoldCancel();
+		PL_QuitHoldPushQuit();
+		return;
+	}
 
 	anchor = PL_GetNativeWindow();
 	if (!anchor || !PL_QuitHoldCreateWindow(anchor))

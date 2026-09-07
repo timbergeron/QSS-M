@@ -455,6 +455,8 @@ int  Host_DeferCall (double delay_seconds, void (*fn)(void *), void *param);	// 
 void Host_CancelDeferredCall (int handle);
 void Host_Quit_f (void);
 void Host_Quit_Confirmed_f (void);
+int Host_ShouldConfirmQuitShortcut (void);
+void Host_QueueConfirmedQuit (void);
 void Host_ClientCommands (const char *fmt, ...) FUNC_PRINTF(1,2);
 void Host_ShutdownServer (qboolean crash);
 qboolean Host_MapHasLevelStats (const char *mapname, int total_monsters, int total_secrets);

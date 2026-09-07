@@ -175,6 +175,8 @@ static const CGFloat QSSRawMouseSwitchRightInsetExtra = 8.0f;
 static const CGFloat QSSShortcutTableRightGutter = 18.0f;
 
 extern void Cbuf_AddText (const char *text); /* engine command buffer (cmd.c) */
+extern int Host_ShouldConfirmQuitShortcut (void);
+extern void Host_QueueConfirmedQuit (void);
 
 /*
  * Gatekeeper may launch a quarantined application from a randomized
@@ -1461,6 +1463,7 @@ static NSImage *QSSHostAppIcon(void)
 - (void)showQuitHoldOverlay;
 - (void)hideQuitHoldOverlay;
 - (void)quitNow;
+- (void)quitShortcutNow;
 - (BOOL)warnBeforeQuittingEnabled;
 - (void)hideArgumentCompletionGhost;
 - (void)updateArgumentCompletionGhostWithText:(NSString *)text
@@ -1889,9 +1892,6 @@ static NSImage *QSSHostAppIcon(void)
             NSString *characters;
             BOOL commandQ;
 
-            if (![blockSelf warnBeforeQuittingEnabled])
-                return event;
-
             flags = [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
             characters = [[event charactersIgnoringModifiers] lowercaseString];
             commandQ = ([characters isEqualToString:@"q"] &&
@@ -1917,20 +1917,22 @@ static NSImage *QSSHostAppIcon(void)
 
 - (void)handleCommandQEventDown:(BOOL)down
 {
-    if (![self warnBeforeQuittingEnabled]) {
-        if (down)
-            [self quitNow];
+    if (!down) {
+        if (quitKeyDown) {
+            quitKeyDown = NO;
+            [self cancelQuitHoldAfterDelay];
+        }
         return;
     }
 
-    if (down) {
-        if (!quitKeyDown) {
-            quitKeyDown = YES;
-            [self beginQuitHold];
-        }
-    } else if (quitKeyDown) {
-        quitKeyDown = NO;
-        [self cancelQuitHoldAfterDelay];
+    if (![self warnBeforeQuittingEnabled] || !Host_ShouldConfirmQuitShortcut()) {
+        [self quitShortcutNow];
+        return;
+    }
+
+    if (!quitKeyDown) {
+        quitKeyDown = YES;
+        [self beginQuitHold];
     }
 }
 
@@ -1943,11 +1945,8 @@ void PL_CommandQEvent(int down)
         return;
     }
 
-    if (down) {
-        SDL_Event event = {0};
-        event.type = SDL_QUIT;
-        SDL_PushEvent(&event);
-    }
+    if (down)
+        Host_QueueConfirmedQuit();
 }
 
 - (void)beginQuitHold
@@ -2105,7 +2104,7 @@ void PL_CommandQEvent(int down)
     [quitHoldOverlayView setProgress:1.0f];
     [quitHoldOverlayView displayIfNeeded];
     [quitHoldOverlayWindow display];
-    [self performSelector:@selector(quitNow)
+    [self performSelector:@selector(quitShortcutNow)
                withObject:nil
                afterDelay:QSSQuitHoldCompletionDisplayDuration];
 }
@@ -4217,6 +4216,16 @@ doCommandBySelector:(SEL)commandSelector
 
     [self stopRawMousePermissionAssistant];
     exit(0);
+}
+
+- (void)quitShortcutNow
+{
+    quitKeyDown = NO;
+    [self cancelQuitHold];
+    if (SDL_WasInit(0) != 0)
+        Host_QueueConfirmedQuit();
+    else
+        [self quitNow];
 }
 
 - (IBAction)showSettings:(id)sender

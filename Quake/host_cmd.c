@@ -602,6 +602,24 @@ Host_Quit_f
 */
 static qboolean host_quit_confirmed = false;
 
+int Host_ShouldConfirmQuitShortcut (void)
+{
+	if (cl_confirmquit.value == 0)
+		return false;
+	if (cl_confirmquit.value == 2)
+		return cls.state == ca_connected && cl.worldmodel != NULL;
+	return true;
+}
+
+/* Native key handlers must defer shutdown until the engine processes commands. */
+void Host_QueueConfirmedQuit (void)
+{
+	if (host_quit_confirmed)
+		return;
+	host_quit_confirmed = true;
+	Cbuf_InsertText ("quit\n");
+}
+
 void Host_Quit_f (void)
 {
 	static qboolean quit_in_progress = false;

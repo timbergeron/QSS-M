@@ -79,6 +79,7 @@ cvar_t cl_recordingdemo = {"cl_recordingdemo", "", CVAR_ROM};	//the name of the 
 cvar_t	cl_demo_format = {"cl_demo_format", "dem", CVAR_ARCHIVE};
 cvar_t	cl_demo_minframes = {"cl_demo_minframes", "0", CVAR_ARCHIVE}; // abs(value) hides shorter demos; <0 also deletes just-finished short demos
 cvar_t	cl_demoreel = {"cl_demoreel", "1", CVAR_ARCHIVE};
+cvar_t	cl_confirmquit = {"cl_confirmquit", "2", CVAR_ARCHIVE}; // 0: never hold, 1: always hold, 2: hold with a map loaded
 cvar_t	cl_demoreel_playback_controls = {"cl_demoreel_playback_controls", "0", CVAR_ARCHIVE};
 
 cvar_t	cl_beams_polygons = {"cl_beams_polygons", "0", CVAR_ARCHIVE}; // woods #beamspoly
@@ -7750,6 +7751,7 @@ void CL_Init (void)
 	Cvar_RegisterVariable (&cl_demo_minframes);
 	Cvar_SetCompletion (&cl_demo_minframes, &CL_DemoMinFrames_Completion_f);
 	Cvar_RegisterVariable (&cl_demoreel);
+	Cvar_RegisterVariable (&cl_confirmquit);
 	Cvar_RegisterVariable (&cl_demoreel_playback_controls);
 
 	Cvar_RegisterVariable (&cl_beams_polygons); // woods #beamspoly

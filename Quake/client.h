@@ -533,6 +533,7 @@ extern	cvar_t	cl_demo_minframes;
 extern	cvar_t	cl_shownet;
 extern	cvar_t	cl_nolerp;
 extern	cvar_t	cl_demoreel;
+extern	cvar_t	cl_confirmquit;
 extern	cvar_t	cl_demoreel_playback_controls;
 extern	cvar_t	cl_demoeyes;
 extern	cvar_t	cl_ctf_pub_modelswap;
