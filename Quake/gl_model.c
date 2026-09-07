@@ -763,10 +763,17 @@ static void *Q1BSPX_FindLump(char *lumpname, int *lumpsize)
 	}
 	return NULL;
 }
-static void Q1BSPX_Setup(qmodel_t *mod, char *filebase, unsigned int filelen, lump_t *lumps, int numlumps)
+static int Mod_ReadLittleLong (const void *data)
+{
+	int value;
+	memcpy (&value, data, sizeof(value));
+	return LittleLong (value);
+}
+
+static void Q1BSPX_Setup(qmodel_t *mod, char *filebase, size_t filelen, lump_t *lumps, int numlumps)
 {
 	int i;
-	unsigned int offs = 0;
+	size_t offs = 0, headersize;
 	bspx_header_t *h;
 	qboolean misaligned = false;
 
@@ -775,23 +782,30 @@ static void Q1BSPX_Setup(qmodel_t *mod, char *filebase, unsigned int filelen, lu
 
 	for (i = 0; i < numlumps; i++, lumps++)
 	{
+		if (!lumps->filelen)
+			continue;
 		if ((lumps->fileofs & 3) && i != LUMP_ENTITIES)
 			misaligned = true;
-		if (offs < lumps->fileofs + lumps->filelen)
-			offs = lumps->fileofs + lumps->filelen;
+		/* The ordinary BSP lumps are validated before this function is called. */
+		if (offs < (size_t)lumps->fileofs + (size_t)lumps->filelen)
+			offs = (size_t)lumps->fileofs + (size_t)lumps->filelen;
 	}
 	if (misaligned)
 		Con_DWarning("%s contains misaligned lumps\n", mod->name);
-	offs = (offs + 3) & ~3;
-	if (offs + sizeof(*bspxheader) > filelen)
+	if (offs > SIZE_MAX - 3)
+		return;
+	offs = (offs + 3) & ~(size_t)3;
+	headersize = offsetof(bspx_header_t, lumps);
+	if (offs > filelen || headersize > filelen - offs)
 		return; /*no space for it*/
 	h = (bspx_header_t*)(filebase + offs);
 
 	i = LittleLong(h->numlumps);
 	/*verify the header*/
 	if (strncmp(h->id, "BSPX", 4) ||
-		i < 0 ||
-		offs + sizeof(*h) + sizeof(h->lumps[0])*(i-1) > filelen)
+		i < 0)
+		return;
+	if ((size_t)i > (filelen - offs - headersize) / sizeof(h->lumps[0]))
 		return;
 	h->numlumps = i;
 	while(i-->0)
@@ -799,8 +813,10 @@ static void Q1BSPX_Setup(qmodel_t *mod, char *filebase, unsigned int filelen, lu
 		h->lumps[i].fileofs = LittleLong(h->lumps[i].fileofs);
 		h->lumps[i].filelen = LittleLong(h->lumps[i].filelen);
 		if (h->lumps[i].fileofs & 3)
-			Con_DWarning("%s contains misaligned bspx limp %s\n", mod->name, h->lumps[i].lumpname);
-		if ((unsigned int)h->lumps[i].fileofs + (unsigned int)h->lumps[i].filelen > filelen)
+			Con_DWarning("%s contains misaligned bspx lump %.24s\n", mod->name, h->lumps[i].lumpname);
+		if (h->lumps[i].fileofs < 0 || h->lumps[i].filelen < 0 ||
+			(size_t)h->lumps[i].fileofs > filelen ||
+			(size_t)h->lumps[i].filelen > filelen - (size_t)h->lumps[i].fileofs)
 			return;
 	}
 
@@ -1257,53 +1273,102 @@ static void Mod_DetectGrassTexture (texture_t *tx, enum srcformat fmt, const byt
 	}
 }
 
-static texture_t *Mod_LoadMipTex(miptex_t *mt, byte *lumpend, enum srcformat *fmt, unsigned int *width, unsigned int *height, unsigned int *pixelbytes)
+static texture_t *Mod_LoadMipTex(const byte *mipstart, size_t entrylen, enum srcformat *fmt, unsigned int *width, unsigned int *height, unsigned int *pixelbytes)
 {
 	//if offsets[0] is 0, then we've no legacy data (offsets[3] signifies the end of the extension data.
-	byte *extdata;
+	const byte *extdata;
+	union { miptex_t q1; miptex64_t q64; } header;
+	miptex_t *mt = &header.q1;
 	texture_t *tx;
-	byte *srcdata = NULL;
-	size_t sz;
-	int shift = 0;
+	const byte *srcdata = NULL;
+	size_t headersize, extofs, srcofs, sz;
+	int j, shift = 0;
 	unsigned int allocpixelbytes;
+	uint64_t mip1, mip2, mip3, mip4, pixelarea, standardend;
+
+	/* Decode an aligned local copy: entries can be unaligned or share offsets. */
+	headersize = loadmodel->bspversion == BSPVERSION_QUAKE64 ? sizeof(header.q64) : sizeof(header.q1);
+	if (entrylen < headersize)
+		return NULL;
+	memcpy (&header, mipstart, headersize);
+	mt->width = LittleLong (mt->width);
+	mt->height = LittleLong (mt->height);
+	if (loadmodel->bspversion == BSPVERSION_QUAKE64)
+		shift = LittleLong (header.q64.shift);
+	else
+	{
+		for (j = 0; j < MIPLEVELS; j++)
+		{
+			mt->offsets[j] = LittleLong (mt->offsets[j]);
+			if (mt->offsets[j] && (mt->offsets[j] < headersize || mt->offsets[j] > entrylen))
+			{
+				Con_DWarning ("Invalid mip offset for texture %.16s in %s; using missing texture\n", mt->name, loadmodel->name);
+				return NULL;
+			}
+		}
+	}
+	if (!mt->width || !mt->height || mt->width > (unsigned int)INT_MAX || mt->height > (unsigned int)INT_MAX)
+	{
+		Con_DWarning ("Invalid texture %.16s dimensions in %s; using missing texture\n", mt->name, loadmodel->name);
+		return NULL;
+	}
+	if (((mt->width & 15) || (mt->height & 15)) && loadmodel->bspversion != BSPVERSION_QUAKE64)
+		Con_DWarning ("Texture %.16s (%u x %u) is not 16 aligned\n", mt->name, mt->width, mt->height);
 
 	if (loadmodel->bspversion == BSPVERSION_QUAKE64)
-		extdata = lumpend;	//don't bother, I'm too lazy to validate offsets.
+		extofs = entrylen;	// Quake64 does not carry texture extensions here.
 	else if (!mt->offsets[0])	//the legacy data was omitted. we may still have block-compression though.
-		extdata = (byte*)(mt+1);
-	else if (mt->offsets[0] == sizeof(miptex_t) &&
-			 mt->offsets[1] == mt->offsets[0]+(mt->width>>0)*(mt->height>>0) &&
-			 mt->offsets[2] == mt->offsets[1]+(mt->width>>1)*(mt->height>>1) &&
-			 mt->offsets[3] == mt->offsets[2]+(mt->width>>2)*(mt->height>>2))
+		extofs = sizeof(miptex_t);
+	else
 	{	//miptex makes sense and matches the standard 4-mip-levels.
-		extdata = (byte*)mt + mt->offsets[3]+(mt->width>>3)*(mt->height>>3);
-		//FIXME: halflife - leshort=256, palette[256][3].
-		//extdata += 2+256*3;
+		mip1 = (uint64_t)(mt->width >> 0) * (uint64_t)(mt->height >> 0);
+		mip2 = (uint64_t)(mt->width >> 1) * (uint64_t)(mt->height >> 1);
+		mip3 = (uint64_t)(mt->width >> 2) * (uint64_t)(mt->height >> 2);
+		mip4 = (uint64_t)(mt->width >> 3) * (uint64_t)(mt->height >> 3);
+		standardend = (uint64_t)mt->offsets[3] + mip4;
+		if (mt->offsets[0] == sizeof(miptex_t) &&
+			(uint64_t)mt->offsets[1] == (uint64_t)mt->offsets[0] + mip1 &&
+			(uint64_t)mt->offsets[2] == (uint64_t)mt->offsets[1] + mip2 &&
+			(uint64_t)mt->offsets[3] == (uint64_t)mt->offsets[2] + mip3 &&
+			standardend <= entrylen)
+			extofs = (size_t)standardend;
+		else	//the numbers don't match what we expect... don't misinterpret them.
+			extofs = entrylen;
 	}
-	else	//the numbers don't match what we expect... something weird is going on here... don't misinterpret it.
-		extdata = lumpend;
+	if (extofs > entrylen)
+		extofs = entrylen;
+	extdata = mipstart + extofs;
 
-	if (extdata+4 <= lumpend && extdata[0] == 0 && extdata[1]==0xfb && extdata[2]==0x2b && extdata[3]==0xaf)
-	for (extdata+=4; extdata+8 < lumpend; extdata += sz)
+	if (entrylen - extofs >= 4 && extdata[0] == 0 && extdata[1]==0xfb && extdata[2]==0x2b && extdata[3]==0xaf)
+	for (extofs += 4; entrylen - extofs > 8; extofs += sz)
 	{
-		sz = (extdata[0]<<0)|(extdata[1]<<8)|(extdata[2]<<16)|(extdata[3]<<24);
-		if (sz < 8 || sz >(size_t)(lumpend-extdata))	break;	//bad! bad! bad!
+		extdata = mipstart + extofs;
+		sz = ((size_t)extdata[0]<<0)|((size_t)extdata[1]<<8)|((size_t)extdata[2]<<16)|((size_t)extdata[3]<<24);
+		if (sz < 8 || sz > entrylen - extofs)	break;	//bad! bad! bad!
 		else if (sz <= 16)	continue;	//nope, no idea
 
 		*fmt = TexMgr_FormatForCode((char*)extdata+4);
 		if (*fmt == SRC_EXTERNAL)
 			continue;	//nope, no idea
 
-		*width = (extdata[8]<<0)|(extdata[9]<<8)|(extdata[10]<<16)|(extdata[11]<<24);
-		*height = (extdata[12]<<0)|(extdata[13]<<8)|(extdata[14]<<16)|(extdata[15]<<24);
+		*width = ((unsigned int)extdata[8]<<0)|((unsigned int)extdata[9]<<8)|((unsigned int)extdata[10]<<16)|((unsigned int)extdata[11]<<24);
+		*height = ((unsigned int)extdata[12]<<0)|((unsigned int)extdata[13]<<8)|((unsigned int)extdata[14]<<16)|((unsigned int)extdata[15]<<24);
 
-		if (*width > (unsigned int)INT_MAX || *height > (unsigned int)INT_MAX)
+		if (!*width || !*height || *width > (unsigned int)INT_MAX || *height > (unsigned int)INT_MAX)
 			continue;	//nope, can't use that.
+		// Reject oversized inputs before SafeTextureSize can round them up on older hardware.
+		if (*width > (unsigned int)gl_hardware_maxsize || *height > (unsigned int)gl_hardware_maxsize)
+			continue;
 		if ((int)*width != TexMgr_SafeTextureSize((int)*width) || (int)*height != TexMgr_SafeTextureSize((int)*height))
 			continue;	//nope, can't use that. drivers are too lame (or gl_max_size is too low).
+		pixelarea = (uint64_t)*width * (uint64_t)*height;
+		if (pixelarea > (uint64_t)SIZE_MAX / 8)
+			continue;	// Keep TexMgr_ImageSize arithmetic representable on 32-bit builds.
 
 		size_t pixelcount = TexMgr_ImageSize((int)*width, (int)*height, *fmt);
-		if (pixelcount > (size_t)UINT_MAX)
+		if (pixelcount > (size_t)UINT_MAX ||
+			pixelcount > (size_t)INT_MAX - sizeof(texture_t) ||
+			pixelcount > SIZE_MAX - 16)
 			continue;
 		*pixelbytes = (unsigned int)pixelcount;
 		if (16 + (size_t)*pixelbytes == sz)
@@ -1316,31 +1381,24 @@ static texture_t *Mod_LoadMipTex(miptex_t *mt, byte *lumpend, enum srcformat *fm
 		*fmt = SRC_INDEXED;
 		*width = mt->width;
 		*height = mt->height;
-		if (*width > (unsigned int)INT_MAX || *height > (unsigned int)INT_MAX)
-			Sys_Error ("Mod_LoadMipTex: texture %s is too large", mt->name);
-		{
-			size_t pixelcount = TexMgr_ImageSize((int)*width, (int)*height, *fmt);
-			if (pixelcount > (size_t)UINT_MAX)
-				Sys_Error ("Mod_LoadMipTex: texture %s is too large", mt->name);
-			*pixelbytes = (unsigned int)pixelcount;
-		}
+		pixelarea = (uint64_t)*width * (uint64_t)*height;
+		if (pixelarea > (uint64_t)((size_t)INT_MAX - sizeof(texture_t)))
+			goto toobig;
+		*pixelbytes = (unsigned int)pixelarea;
 
 		if (loadmodel->bspversion == BSPVERSION_QUAKE64)
-		{
-			miptex64_t *mt64 = (miptex64_t*)mt;
-			srcdata = (byte*)(mt64 + 1);	//revert to lameness
-			shift = LittleLong (mt64->shift);
-		}
+			srcofs = sizeof(header.q64);
 		else
 		{
-			if (LittleLong (mt->offsets[0]))
-				srcdata = (byte*)mt+LittleLong(mt->offsets[0]);
+			srcofs = mt->offsets[0];
 		}
+		if (srcofs && srcofs <= entrylen)
+			srcdata = mipstart + srcofs;
 	}
 
 	allocpixelbytes = *pixelbytes;
 	if ((size_t)allocpixelbytes > (size_t)INT_MAX - sizeof(texture_t))
-		Sys_Error ("Mod_LoadMipTex: texture %s is too large", mt->name);
+		goto toobig;
 	tx = (texture_t *) Hunk_AllocNameNoFill ((int)(sizeof(texture_t) + (size_t)allocpixelbytes), loadname );
 	// only clear the texture struct, not the pixel buffer following it
 	memset (tx, 0, sizeof (*tx));
@@ -1356,11 +1414,11 @@ static texture_t *Mod_LoadMipTex(miptex_t *mt, byte *lumpend, enum srcformat *fm
 		// appears in the wild; e.g. jam2_tronyn.bsp (func_mapjam2),
 		// kellbase1.bsp (quoth), and can lead to a segfault if we read past
 		// the end of the .bsp file buffer
-		if ((srcdata + *pixelbytes) > lumpend)
+		srcofs = (size_t)(srcdata - mipstart);
+		if ((size_t)*pixelbytes > entrylen - srcofs)
 		{
-			ptrdiff_t available = lumpend - srcdata;
-			Con_DPrintf("Texture %s extends past end of lump\n", mt->name);
-			*pixelbytes = (available > 0) ? (unsigned int)available : 0;
+			Con_DPrintf("Texture %.16s extends past end of lump\n", mt->name);
+			*pixelbytes = (unsigned int)(entrylen - srcofs);
 		}
 
 		memcpy ( tx+1, srcdata, *pixelbytes);
@@ -1375,6 +1433,10 @@ static texture_t *Mod_LoadMipTex(miptex_t *mt, byte *lumpend, enum srcformat *fm
 				((byte*)(tx+1))[y*tx->width+x] = (((x>>2)^(y>>2))&1)?6:2;
 	}
 	return tx;
+
+toobig:
+	Con_DWarning ("Texture %.16s in %s is too large; using missing texture\n", mt->name, loadmodel->name);
+	return NULL;
 }
 /*
 =================
@@ -1583,6 +1645,109 @@ static byte *Mod_OwnTextureBatchData (byte *data, unsigned int width, unsigned i
 Mod_LoadTextures
 =================
 */
+typedef struct
+{
+	int index;
+	unsigned int offset;
+} miptexbound_t;
+
+static int Mod_CompareMiptexBounds (const void *a, const void *b)
+{
+	const miptexbound_t *ma = (const miptexbound_t *)a;
+	const miptexbound_t *mb = (const miptexbound_t *)b;
+
+	return (ma->offset > mb->offset) - (ma->offset < mb->offset);
+}
+
+static size_t *Mod_LoadMiptexBounds (const byte *data, size_t length, int *count)
+{
+	const dmiptexlump_t *m;
+	size_t tablesize, entryheadersize;
+	size_t *mipends = NULL;
+	miptexbound_t *bounds = NULL;
+	int i, j, nummiptex, dataofs, numbounds = 0;
+
+	//johnfitz -- don't return early if no textures; still need to create dummy texture
+	if (!length)
+	{
+		Con_Printf ("Mod_LoadTextures: no textures in bsp file\n");
+		nummiptex = 0;
+		m = NULL; // no table
+	}
+	else if ((size_t)length < sizeof(m->nummiptex))
+	{
+		Con_Warning ("Invalid texture table in %s; using missing textures\n", loadmodel->name);
+		nummiptex = 0;
+		m = NULL;
+	}
+	else
+	{
+		m = (const dmiptexlump_t *)data;
+		nummiptex = Mod_ReadLittleLong (m);
+		if (nummiptex < 0 || (size_t)nummiptex > ((size_t)length - sizeof(m->nummiptex)) / sizeof(m->dataofs[0]) ||
+			(size_t)nummiptex > ((size_t)INT_MAX / sizeof(*loadmodel->textures)) - 2 ||
+			(size_t)nummiptex > SIZE_MAX / sizeof(*mipends) || (size_t)nummiptex > SIZE_MAX / sizeof(*bounds))
+		{
+			Con_Warning ("Invalid texture table in %s; using missing textures\n", loadmodel->name);
+			nummiptex = 0;
+			m = NULL;
+		}
+	}
+	//johnfitz
+
+	if (nummiptex)
+	{
+		tablesize = sizeof(m->nummiptex) + (size_t)nummiptex * sizeof(m->dataofs[0]);
+		entryheadersize = (loadmodel->bspversion == BSPVERSION_QUAKE64) ? sizeof(miptex64_t) : sizeof(miptex_t);
+		mipends = (size_t *)malloc((size_t)nummiptex * sizeof(*mipends));
+		bounds = (miptexbound_t *)malloc((size_t)nummiptex * sizeof(*bounds));
+		if (!mipends || !bounds)
+		{
+			Con_Warning ("Not enough memory for texture table in %s; using missing textures\n", loadmodel->name);
+			free(mipends);
+			free(bounds);
+			mipends = NULL;
+			bounds = NULL;
+			nummiptex = 0;
+		}
+		else
+		{
+			memset(mipends, 0, (size_t)nummiptex * sizeof(*mipends));
+			for (i = 0; i < nummiptex; i++)
+			{
+				dataofs = Mod_ReadLittleLong ((const byte *)m + sizeof(m->nummiptex) + (size_t)i * sizeof(m->dataofs[0]));
+				if (dataofs == -1)
+					continue;
+				if (dataofs < 0 || (size_t)dataofs < tablesize ||
+					(size_t)dataofs > (size_t)length ||
+					entryheadersize > (size_t)length - (size_t)dataofs)
+				{
+					Con_DWarning ("Invalid texture %d offset in %s; using missing texture\n", i, loadmodel->name);
+					continue;
+				}
+				bounds[numbounds].index = i;
+				bounds[numbounds].offset = (unsigned int)dataofs;
+				numbounds++;
+			}
+
+			qsort(bounds, (size_t)numbounds, sizeof(*bounds), Mod_CompareMiptexBounds);
+			for (i = 0; i < numbounds; )
+			{
+				int first = i;
+				unsigned int offset = bounds[i].offset;
+				while (i < numbounds && bounds[i].offset == offset)
+					i++;
+				for (j = first; j < i; j++)
+					mipends[bounds[j].index] = (i < numbounds) ? bounds[i].offset : (size_t)length;
+			}
+		}
+	}
+
+	free (bounds);
+	*count = nummiptex;
+	return mipends;
+}
+
 static void Mod_LoadTextures (lump_t *l)
 {
 	int		i, j, num, maxanim, altmax;
@@ -1602,59 +1767,37 @@ static void Mod_LoadTextures (lump_t *l)
 	qboolean malloced;	//spike
 	enum srcformat fmt;	//spike
 	unsigned int imgwidth, imgheight, imgpixels;
-	unsigned int mipend;
+	size_t entryheadersize, entrylen;
+	size_t *mipends;
+	int dataofs;
 	mod_texture_batch_t texture_batch;
 
 	memset (&texture_batch, 0, sizeof(texture_batch));
 
-	//johnfitz -- don't return early if no textures; still need to create dummy texture
-	if (!l->filelen)
-	{
-		Con_Printf ("Mod_LoadTextures: no textures in bsp file\n");
-		nummiptex = 0;
-		m = NULL; // avoid bogus compiler warning
-	}
-	else
-	{
-		m = (dmiptexlump_t *)(mod_base + l->fileofs);
-		m->nummiptex = LittleLong (m->nummiptex);
-		nummiptex = m->nummiptex;
-	}
-	//johnfitz
+	m = (dmiptexlump_t *)(mod_base + l->fileofs);
+	mipends = Mod_LoadMiptexBounds ((const byte *)m, (size_t)l->filelen, &nummiptex);
+	entryheadersize = loadmodel->bspversion == BSPVERSION_QUAKE64 ? sizeof(miptex64_t) : sizeof(miptex_t);
 
 	loadmodel->numtextures = nummiptex + 2; //johnfitz -- need 2 dummy texture chains for missing textures
 	loadmodel->textures = (texture_t **) Hunk_AllocName (loadmodel->numtextures * sizeof(*loadmodel->textures) , loadname);
 
-	//spike -- rewrote this loop to run backwards (to make it easier to track the end of the miptex) and added handling for extra texture block compression.
-	for (i = nummiptex, mipend=l->filelen; i --> 0; )
+	//spike -- run backwards to retain the historical allocation order.
+	for (i = nummiptex; i --> 0; )
 	{
-		m->dataofs[i] = LittleLong(m->dataofs[i]);
-		if (m->dataofs[i] == -1)
+		if (!mipends[i])
 			continue;
-		if ((unsigned int)m->dataofs[i] >= mipend)
-			mipend = l->filelen;	//o.O something weird!
-		mt = (miptex_t *)((byte *)m + m->dataofs[i]);
-		mt->width = LittleLong (mt->width);
-		mt->height = LittleLong (mt->height);
-		for (j=0 ; j<MIPLEVELS ; j++)
-			mt->offsets[j] = LittleLong (mt->offsets[j]);
-
-		if (mt->width == 0 || mt->height == 0)
+		dataofs = Mod_ReadLittleLong ((byte *)m + sizeof(m->nummiptex) + (size_t)i * sizeof(m->dataofs[0]));
+		entrylen = mipends[i] - (size_t)dataofs;
+		if (entryheadersize > entrylen)
 		{
-			Con_Warning ("Zero sized texture %s in %s!\n", mt->name, loadmodel->name);
+			Con_DWarning ("Overlapping texture %d header in %s; using missing texture\n", i, loadmodel->name);
 			continue;
 		}
-
-		if ( (mt->width & 15) || (mt->height & 15) )
-		{
-			if (loadmodel->bspversion != BSPVERSION_QUAKE64)
-				Con_Warning ("Texture %s (%d x %d) is not 16 aligned\n", mt->name, mt->width, mt->height);
-		}
-
-		tx = Mod_LoadMipTex(mt, (mod_base + l->fileofs + mipend), &fmt, &imgwidth, &imgheight, &imgpixels);
+		mt = (miptex_t *)((byte *)m + dataofs);
+		tx = Mod_LoadMipTex((const byte *)mt, entrylen, &fmt, &imgwidth, &imgheight, &imgpixels);
+		if (!tx)
+			continue;
 		loadmodel->textures[i] = tx;
-
-		mipend = m->dataofs[i];
 
 		if (!tx->name[0]) // woods (aerowalk.bsp)
 		{
@@ -1904,6 +2047,7 @@ static void Mod_LoadTextures (lump_t *l)
 		//johnfitz
 	}
 	Mod_FlushTextureBatch (&texture_batch);
+	free(mipends);
 
 	//johnfitz -- last 2 slots in array should be filled with dummy textures
 	loadmodel->textures[loadmodel->numtextures-2] = r_notexture_mip; //for lightmapped surfs
@@ -3689,6 +3833,8 @@ static qboolean Mod_BSPLumpValid (size_t filesize, const lump_t *lump, size_t it
 	if (!lump)
 		return false;
 
+	if (lump->fileofs < 0 || lump->filelen < 0)
+		return false;
 	if ((size_t)lump->fileofs > filesize || (size_t)lump->filelen > filesize - (size_t)lump->fileofs)
 		return false;
 
@@ -3704,10 +3850,10 @@ static qboolean Mod_BSPLumpValid (size_t filesize, const lump_t *lump, size_t it
 static qboolean Mod_BSPTextureName (const byte *modbase, const lump_t *textures_lump, const texinfo_t *info, char name[17])
 {
 	const dmiptexlump_t *miptex_lump;
-	const miptex_t *tex;
+	const byte *tex;
 	int nummiptex, miptex;
 	int dataofs;
-	size_t header_size;
+	size_t tablesize;
 	const char *fallback;
 
 	name[0] = '\0';
@@ -3724,25 +3870,26 @@ static qboolean Mod_BSPTextureName (const byte *modbase, const lump_t *textures_
 	}
 
 	miptex_lump = (const dmiptexlump_t *)(modbase + textures_lump->fileofs);
-	nummiptex = LittleLong(miptex_lump->nummiptex);
+	nummiptex = Mod_ReadLittleLong (miptex_lump);
 	if (nummiptex <= 0 || miptex < 0 || miptex >= nummiptex)
 	{
 		q_strlcpy(name, fallback, 17);
 		return true;
 	}
 
-	header_size = sizeof(miptex_lump->nummiptex) + (size_t)nummiptex * sizeof(miptex_lump->dataofs[0]);
-	if (header_size > textures_lump->filelen)
+	if ((size_t)nummiptex > ((size_t)textures_lump->filelen - sizeof(miptex_lump->nummiptex)) / sizeof(miptex_lump->dataofs[0]))
 		return false;
-	dataofs = LittleLong(miptex_lump->dataofs[miptex]);
-	if (dataofs < 0 || (size_t)dataofs + 16 > textures_lump->filelen)
+	tablesize = sizeof(miptex_lump->nummiptex) + (size_t)nummiptex * sizeof(miptex_lump->dataofs[0]);
+	dataofs = Mod_ReadLittleLong ((const byte *)miptex_lump + sizeof(miptex_lump->nummiptex) + (size_t)miptex * sizeof(miptex_lump->dataofs[0]));
+	if (dataofs < 0 || (size_t)dataofs < tablesize || (size_t)dataofs > (size_t)textures_lump->filelen ||
+		16 > (size_t)textures_lump->filelen - (size_t)dataofs)
 	{
 		q_strlcpy(name, fallback, 17);
 		return true;
 	}
 
-	tex = (const miptex_t *)((const byte *)miptex_lump + dataofs);
-	memcpy(name, tex->name, 16);
+	tex = (const byte *)miptex_lump + dataofs;
+	memcpy(name, tex, 16);
 	name[16] = '\0';
 
 	return true;
@@ -4416,7 +4563,7 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 		}
 	}
 
-	Q1BSPX_Setup(mod, buffer, com_filesize, header->lumps, HEADER_LUMPS);
+	Q1BSPX_Setup(mod, buffer, filesize, header->lumps, HEADER_LUMPS);
 
 // load into heap
 
