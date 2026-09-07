@@ -622,6 +622,7 @@ void Host_Quit_f (void)
 		return;
 	quit_in_progress = true;
 
+	NET_CancelWebRequests (); // stop all HTTP workers together before the fade and shutdown joins
 	CL_WebDownloadChecks_Abort (); // let in-flight startup probes die during the fade instead of stalling shutdown
 	NET_AbortExternalIP (); // likewise cancel the public-IP request before its shutdown join
 

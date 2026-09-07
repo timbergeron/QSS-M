@@ -34,7 +34,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <errno.h>
 #include <string.h>
 
-#include <curl/curl.h> // woods #webdl
+#include "net_curl.h" // woods #webdl
 #include "cfgfile.h" // woods #webdl
 #include "q_ctype.h" // woods #entcopy
 #include <time.h>
@@ -3437,7 +3437,7 @@ int checkWebsite (void* ptr)  // ping the potential websites in advance
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, WebCheck_AbortCallback);
 
-	CURLcode res = curl_easy_perform(curl);
+	CURLcode res = NET_CurlEasyPerform(curl);
 	if (res == CURLE_OK)
 	{
 		WebCheckSetResult(data->web, true);
@@ -4910,7 +4910,7 @@ static int CL_AsyncDownload_Thread(void *unused)
 		curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 10L);
 		CL_CurlSetDownloadOptions(curl);
 
-		curl_result = curl_easy_perform(curl);
+		curl_result = NET_CurlEasyPerform(curl);
 		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
 
 		write_failed = (fflush(fp) != 0 || ferror(fp));

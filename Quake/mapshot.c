@@ -10,7 +10,7 @@ of the License, or (at your option) any later version.
 #include "quakedef.h"
 #include "mapshot.h"
 
-#include <curl/curl.h>
+#include "net_curl.h"
 #include <time.h>
 
 /*
@@ -479,7 +479,7 @@ static CURLcode Mapshot_ProbeURL (const char *url, long *response_code)
 	Mapshot_SetCommonOptions(curl);
 	/* A HEAD has no body to wait on, so keep it shorter than a fetch. */
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 4000L);
-	result = curl_easy_perform(curl);
+	result = NET_CurlEasyPerform(curl);
 	if (result == CURLE_OK)
 		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, response_code);
 	curl_easy_cleanup(curl);
@@ -500,7 +500,7 @@ static CURLcode Mapshot_FetchURL (const char *url, mapshot_buffer_t *buffer,
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)buffer);
 	curl_easy_setopt(curl, CURLOPT_MAXFILESIZE, (long)MAPSHOT_MAX_BYTES);
 	Mapshot_SetCommonOptions(curl);
-	result = curl_easy_perform(curl);
+	result = NET_CurlEasyPerform(curl);
 	if (result == CURLE_OK)
 		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, response_code);
 	curl_easy_cleanup(curl);

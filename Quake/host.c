@@ -2778,6 +2778,7 @@ void Host_Shutdown(void)
 
 // keep Con_Printf from trying to update the screen
 	scr_disabled_for_loading = true;
+	NET_CancelWebRequests(); // also covers Sys_Error and quit paths that skip Host_Quit_f
 	Discord_Shutdown(); // joins curl workers before NET_Shutdown cleans up libcurl
 	Mapshot_Shutdown();
 	SCR_Shutdown();

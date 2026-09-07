@@ -10,7 +10,7 @@ of the License, or (at your option) any later version.
 #include "quakedef.h"
 #include "q_ctype.h"
 #include "mapshot.h"
-#include <curl/curl.h>
+#include "net_curl.h"
 #include "json.h"
 
 #ifdef _WIN32
@@ -2088,7 +2088,7 @@ static int DiscordNotifyThread(void *data)
 				memset(&response, 0, sizeof(response));
 				response.retry_after = -1.0;
 				http_code = 0;
-				rc = curl_easy_perform(curl);
+				rc = NET_CurlEasyPerform(curl);
 				if (rc == CURLE_OPERATION_TIMEDOUT)
 				{
 					test_status = DISCORD_TEST_TIMEOUT;
@@ -2918,7 +2918,7 @@ static qboolean DiscordCommunity_FetchInviteCode(char *code, size_t codesize)
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
 	DiscordCommunity_SetCurlOptions(curl);
 
-	result = curl_easy_perform(curl);
+	result = NET_CurlEasyPerform(curl);
 	if (result == CURLE_OK)
 	{
 		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -2954,7 +2954,7 @@ static qboolean DiscordCommunity_FetchOnlineCount(const char *invite_code,
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
 	DiscordCommunity_SetCurlOptions(curl);
 
-	result = curl_easy_perform(curl);
+	result = NET_CurlEasyPerform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 	if (result == CURLE_OK && http_code == 200 && response.data)
 	{

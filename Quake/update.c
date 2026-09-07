@@ -182,7 +182,7 @@ void M_Update_PruneStagingAtStartup(void) {}
 
 #include "q_ctype.h"
 #include "q_hash.h"
-#include <curl/curl.h>
+#include "net_curl.h"
 #include "json.h"
 #include <errno.h>
 #include <limits.h>
@@ -621,7 +621,7 @@ qboolean M_Version_GitHubHttpGet(const char *url, versionhttpmem_t *mem,
 			(curl_off_t)max_bytes);
 	M_Update_CurlOptions(curl);
 
-	res = curl_easy_perform(curl);
+	res = NET_CurlEasyPerform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 	curl_easy_cleanup(curl);
 
@@ -6268,7 +6268,7 @@ static qboolean M_Update_RunTransfer(const char *url, const char *path,
 		input_grabbed = true;
 	}
 
-	result = curl_easy_perform(curl);
+	result = NET_CurlEasyPerform(curl);
 
 	if (input_grabbed)
 	{

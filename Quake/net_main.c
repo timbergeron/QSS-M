@@ -25,7 +25,81 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "net_defs.h"
 
-#include <curl/curl.h> // woods #libcurl
+#include "net_curl.h"
+
+static SDL_atomic_t net_web_shutting_down;
+
+void NET_CancelWebRequests(void)
+{
+	SDL_AtomicSet(&net_web_shutting_down, 1);
+}
+
+CURLcode NET_CurlEasyPerform(CURL *curl)
+{
+	CURLM *multi;
+	CURLMcode status;
+	CURLcode result = CURLE_FAILED_INIT;
+	CURLMsg *message;
+	int running, remaining;
+
+	if (SDL_AtomicGet(&net_web_shutting_down))
+		return CURLE_ABORTED_BY_CALLBACK;
+	multi = curl_multi_init();
+	if (!multi)
+		return CURLE_OUT_OF_MEMORY;
+	status = curl_multi_add_handle(multi, curl);
+	if (status != CURLM_OK)
+		goto cleanup;
+
+	/* easy_perform can go a second or more between progress callbacks while
+	 * idle. Poll in short slices so all workers can notice quit together,
+	 * without changing their progress callbacks or normal transfer timeouts. */
+	for (;;)
+	{
+		if (SDL_AtomicGet(&net_web_shutting_down))
+		{
+			result = CURLE_ABORTED_BY_CALLBACK;
+			break;
+		}
+		status = curl_multi_perform(multi, &running);
+		if (status == CURLM_CALL_MULTI_PERFORM)
+			continue;
+		if (status != CURLM_OK)
+			break;
+		if (!running)
+		{
+			while ((message = curl_multi_info_read(multi, &remaining)) != NULL)
+				if (message->msg == CURLMSG_DONE && message->easy_handle == curl)
+					result = message->data.result;
+			break;
+		}
+#if CURL_AT_LEAST_VERSION(7, 66, 0)
+		status = curl_multi_poll(multi, NULL, 0, 50, NULL);
+#else
+		{
+			int numfds = 0;
+			Uint32 start = SDL_GetTicks();
+			Uint32 elapsed;
+
+			status = curl_multi_wait(multi, NULL, 0, 50, &numfds);
+			/* Older curl returns immediately when it has no sockets (DNS,
+			 * for example). Avoid spinning a worker at full CPU. */
+			elapsed = SDL_GetTicks() - start;
+			if (status == CURLM_OK && !numfds && elapsed < 50)
+				SDL_Delay(50 - elapsed);
+		}
+#endif
+		if (status != CURLM_OK)
+			break;
+	}
+
+	curl_multi_remove_handle(multi, curl);
+cleanup:
+	if (status == CURLM_OUT_OF_MEMORY)
+		result = CURLE_OUT_OF_MEMORY;
+	curl_multi_cleanup(multi);
+	return result;
+}
 
 qsocket_t	*net_activeSockets = NULL;
 qsocket_t	*net_freeSockets = NULL;
@@ -130,7 +204,7 @@ static int GetExternalIP(void* data) // woods #extip
 		curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
 		curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 		curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ExternalIP_AbortCallback);
-		res = curl_easy_perform(curl);
+		res = NET_CurlEasyPerform(curl);
 		if (res == CURLE_OK && public_ip[0])
 		{
 			public_ip[strcspn(public_ip, "\r\n")] = '\0';
@@ -1491,6 +1565,8 @@ void NET_Init (void)
 	int			i;
 	qsocket_t	*s;
 
+	SDL_AtomicSet(&net_web_shutting_down, 0);
+
 #ifndef NDEBUG
 	NET_Address_RunSelfTests();
 #endif
@@ -1602,6 +1678,7 @@ void NET_Shutdown (void)
 {
 	qsocket_t	*sock;
 
+	NET_CancelWebRequests();
 	NET_AbortExternalIP();
 	M_ServerList_ShutdownPingThreads();
 	M_ServerList_ShutdownApiFetch();

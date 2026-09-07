@@ -25,7 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "net_ws.h"
 #include "q_ctype.h" // woods #modsmenu (iw)
 #include "q_hash.h"
-#include <curl/curl.h> // woods #serversmenu
+#include "net_curl.h" // woods #serversmenu
 #include <zlib.h>
 #include "json.h" // woods #serversmenu
 #include "update.h"
@@ -34770,7 +34770,7 @@ static qboolean ServerList_CurlFetch(const char* url, long timeout,
 	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
 #endif
 
-	res = curl_easy_perform(curl);
+	res = NET_CurlEasyPerform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
 	if (connectTime && res == CURLE_OK)
 	{
@@ -38014,7 +38014,7 @@ static qboolean M_DownloadMods_RunTransfer(const char *url, const char *temp_pat
 		curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, max_bytes);
 	M_Update_CurlOptions(curl);
 
-	result = curl_easy_perform(curl);
+	result = NET_CurlEasyPerform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
 	write_failed = (fflush(fp) != 0 || ferror(fp));
 	if (fseek(fp, 0, SEEK_END) == 0)

@@ -26,7 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "q_ctype.h"
-#include <curl/curl.h> // woods #uri
+#include "net_curl.h" // woods #uri
 
 static float g_menu_vm_scale_override = 0.0f; // woods #spinnymodel
 static float PR_GetVMScale(void)
@@ -7349,7 +7349,7 @@ static void URI_PerformCurl(const uri_request_t *req, uri_response_t *out) {
         headers = curl_slist_append(headers, "Expect:");
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     }
-    CURLcode res = curl_easy_perform(curl);
+    CURLcode res = NET_CurlEasyPerform(curl);
     long code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
     out->http_status = code;

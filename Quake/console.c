@@ -37,7 +37,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 #include <errno.h> // woods
-#include <curl/curl.h>
+#include "net_curl.h"
 #include "json.h"
 
 static SDL_Cursor *con_cursor_arrow = NULL; // woods #conselection
@@ -5006,7 +5006,7 @@ static int QWMapList_RefreshThread(void *unused)
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 
-	result = curl_easy_perform(curl);
+	result = NET_CurlEasyPerform(curl);
 	if (result != CURLE_OK || download.failed)
 		goto cleanup_curl;
 
