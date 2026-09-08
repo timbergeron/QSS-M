@@ -669,6 +669,8 @@ void SCR_DrawCenterString (void) //actually do the drawing
 
 	SCR_DrawCenterStringBG(y, alpha);
 
+	const plcolour_t white = CL_PLColours_Parse("0xffffff");
+
 	do
 	{
 	// scan the width of the line
@@ -678,7 +680,7 @@ void SCR_DrawCenterString (void) //actually do the drawing
 		x = (320 - l*8)/2;	//johnfitz -- 320x200 coordinate system
 		for (j=0 ; j<l ; j++, x+=8)
 		{
-			Draw_CharacterRGBA (x, y, start[j], CL_PLColours_Parse("0xffffff"), alpha);	//johnfitz -- stretch overlays
+			Draw_CharacterRGBA (x, y, start[j], white, alpha);	//johnfitz -- stretch overlays
 			if (!remaining--)
 				return;
 		}
@@ -7060,6 +7062,8 @@ void SCR_DrawNotifyString (void) // woods add ^m/^g support
 	if (SCR_NotifyStringWantsBox())
 		SCR_DrawNotifyStringBox(y);
 
+	const plcolour_t white = CL_PLColours_Parse("0xffffff");
+
 	while (*start)
 	{
 		// First pass: calculate visible length (excluding control sequences)
@@ -7125,7 +7129,7 @@ void SCR_DrawNotifyString (void) // woods add ^m/^g support
 				continue;
 			}
 
-			Draw_CharacterRGBA(x, y, num, CL_PLColours_Parse("0xffffff"), 1);
+			Draw_CharacterRGBA(x, y, num, white, 1);
 			x += 8;
 			j++;
 		}
