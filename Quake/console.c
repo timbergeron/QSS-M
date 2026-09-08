@@ -6326,6 +6326,8 @@ void Con_DrawNotify (void)
 	if (realtime < scr_volume_display_time)
 		v += 24; // keep notify lines below the temporary volume widget
 
+	const plcolour_t white = CL_PLColours_Parse("0xffffff");
+
 	for (i = con_current - maxlines + 1; i <= con_current; i++) // woods from proquake 493 #notifylines
 	{
 		if (i < 0)
@@ -6341,8 +6343,7 @@ void Con_DrawNotify (void)
 
 		clearnotify = 0;
 
-		for (x = 0; x < con_linewidth; x++)
-			Draw_CharacterRGBA ((x+1)<<3, v, text[x], CL_PLColours_Parse("0xffffff"), alpha); // woods #confade
+		Draw_CharactersRGBA (8, v, text, con_linewidth, white, alpha); // woods #confade
 
 		v += 8;
 

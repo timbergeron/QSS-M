@@ -1001,12 +1001,7 @@ void M_DrawArrowCursor(int cx, int cy) // woods #skillmenu (iw)
 
 void M_Print (int cx, int cy, const char *str)
 {
-	while (*str)
-	{
-		M_DrawCharacter (cx, cy, (*str)+128);
-		str++;
-		cx += 8;
-	}
+	Draw_StringMasked (cx, cy, str);
 }
 
 void M_DrawCharacterRGBA (int cx, int line, int num, plcolour_t c, float alpha) // woods
@@ -1039,12 +1034,7 @@ void M_Print2 (int cx, int cy, const char* str) // woods #speed yellow/gold numb
 
 void M_PrintWhite (int cx, int cy, const char *str)
 {
-	while (*str)
-	{
-		M_DrawCharacter (cx, cy, *str);
-		str++;
-		cx += 8;
-	}
+	Draw_String (cx, cy, str);
 }
 
 void M_DrawTransPic (int x, int y, qpic_t *pic)
