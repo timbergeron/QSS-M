@@ -1011,14 +1011,22 @@ void M_DrawCharacterRGBA (int cx, int line, int num, plcolour_t c, float alpha) 
 
 void M_PrintRGBA (int cx, int cy, const char* str, plcolour_t c, float alpha, qboolean mask) // woods
 {
+	if (!mask)
+	{
+		Draw_CharactersRGBA (cx, cy, str, (int)strlen(str), c, alpha);
+		return;
+	}
+
+	char glyphs[256];
+	int count;
+
+	// Counted chunks preserve glyph zero after masking without truncating long strings.
 	while (*str)
 	{
-		if (mask)
-			M_DrawCharacterRGBA(cx, cy, (*str) + 128, c, alpha);  // Add 128 for masked version
-		else
-			M_DrawCharacterRGBA(cx, cy, (*str), c, alpha);
-		str++;
-		cx += 8;
+		for (count = 0; count < (int)sizeof(glyphs) && *str; count++, str++)
+			glyphs[count] = (char)(*str + 128);
+		Draw_CharactersRGBA (cx, cy, glyphs, count, c, alpha);
+		cx += count * 8;
 	}
 }
 

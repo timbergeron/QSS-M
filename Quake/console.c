@@ -6462,8 +6462,8 @@ void Con_DrawInput (void)
 	len = strlen(workline); // woods #iwtabcomplete
 
 	// draw input string // woods #iwtabcomplete
-	for (i = 0; i + ofs < len; i++)
-		Draw_Character ((i + 1) << 3, vid.conheight - 16, workline[i + ofs]);
+	if (ofs < len)
+		Draw_String (8, vid.conheight - 16, workline + ofs);
 
 	// draw tab completion hint, or the chat word completion that replaces it
 	// on a cl_chatmode chat line // woods #chatcomplete
@@ -6754,8 +6754,8 @@ void Con_DrawConsole (int lines, qboolean drawinput)
 	Con_DrawTypingStatus(); // woods #typing...
 
 //draw version number in bottom right
-	for (x = 0; x < (int)strlen(ver); x++)
-		Draw_Character ((con_linewidth - strlen(ver) + x + 2)<<3, vid.conheight - CHARSIZE, ver[x] /*+ 128*/); // woods iw
+	Draw_String ((con_linewidth - (int)strlen(ver) + 2) * CHARSIZE,
+		vid.conheight - CHARSIZE, ver); // woods iw
 
 	Con_DrawBirthdayMessage (); // woods #qbday - show quake's birthday for 30 seconds on june 22
 }
