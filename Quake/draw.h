@@ -49,6 +49,7 @@ extern	qboolean	custom_conchars; // woods (iw) #democontrols
 void Draw_Init (void);
 void Draw_Character (int x, int y, int num);
 void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha); // woods #iwtabcomplete
+void Draw_CharactersRGBA (int x, int y, const char *chars, int count, plcolour_t c, float alpha);
 void Draw_Character_Rotation (int x, int y, int num, int rotation); // woods #movementkeys
 void Draw_DebugChar (char num);
 void Draw_Pic (int x, int y, qpic_t *pic);
@@ -75,6 +76,7 @@ void Draw_FadeScreen_Alpha (float alpha);
 void Draw_FadeScreen_Rect_Alpha (float x0, float y0, float x1, float y1, float alpha);
 extern float gl_menu_alpha; // set by M_Draw to fade the menu during live preview
 void Draw_String (int x, int y, const char *str);
+void Draw_StringMasked (int x, int y, const char *str);
 void Draw_StringAnimatedDots(int x, int y, const char* str); // woods
 void Draw_StringGradientSweep(int x, int y, const char* str, float speed, float span_px, float alpha, qboolean masked); // woods
 void Draw_StringSaturnShine(int x, int y, const char* str, float speed, float alpha, qboolean masked); // woods

@@ -3439,7 +3439,7 @@ void Sbar_DeathmatchOverlay (void)
 
 		if (s->spectator == 1)	//2 is 'spectator-with-scores' (temporarily inactive players).
 		{
-			M_PrintWhite (score_x, y, "spect");
+			Draw_String (score_x, y, "spect");
 		}
 		else
 		{
@@ -3478,15 +3478,15 @@ void Sbar_DeathmatchOverlay (void)
 
 		sprintf (num, "%4i", CLAMP(0, s->ping, 9999));
 		if (ct > 5) // woods don't print 0 print on connect
-			M_PrintWhite ((x-8*4)-22, y, num); //johnfitz -- was Draw_String, changed for stretched overlays // woods centered ping #scoreboard
+			Draw_String ((x-8*4)-22, y, num); // woods centered ping #scoreboard
 
 		if (ct > 5 && s->packetloss > 0) // blank when clean -- 0 also means 'not measured' on servers without pings support
 		{
 			sprintf (num, "%3i", CLAMP(0, s->packetloss, 100));
 			if (s->packetloss >= 10)
-				M_Print (x - 10, y, num); // colored so chronic loss stands out
+				Draw_StringMasked (x - 10, y, num); // colored so chronic loss stands out
 			else
-				M_PrintWhite (x - 10, y, num);
+				Draw_String (x - 10, y, num);
 		}
 
 	// draw name
@@ -3499,10 +3499,10 @@ void Sbar_DeathmatchOverlay (void)
 
 		if (cl_contentfilter.value == 2 && was_filtered) // woods #contentfilter
 		{
-			M_PrintWhite(score_x + 64, y, filtered_name);
+			Draw_String(score_x + 64, y, filtered_name);
 		}
 		else {
-			M_PrintWhite(score_x + 64, y, s->name); //johnfitz -- was Draw_String, changed for stretched overlays // woods changed to white #scoreboard
+			Draw_String(score_x + 64, y, s->name); // woods white names #scoreboard
 		}
 		
 		y += 10;
@@ -3514,7 +3514,7 @@ void Sbar_DeathmatchOverlay (void)
 	Draw_String(x - 64, y2 - 10, "  ping  pl  frags   name"); // woods #smartstatus
 
 	if (flash() && notready && unready_count == 1 && AreTeamsEven()) // blink only if I'm the last to ready AND teams are even
-		M_Print(score_x + 192, y2 - 10, "status");
+		Draw_StringMasked(score_x + 192, y2 - 10, "status");
 	else
 		Draw_String
 		(score_x + 192, y2 - 10, "status");
@@ -3533,11 +3533,11 @@ void Sbar_DeathmatchOverlay (void)
 		q_snprintf(range, sizeof(range), "%i-%i / %i",
 			layout.first_row + 1, layout.last_row, l);
 		range_x = x - 64 + (361 + w - (int)strlen(range) * 8) / 2;
-		M_PrintWhite(range_x, y + 1, range);
+		Draw_String(range_x, y + 1, range);
 		if (layout.first_row > 0)
-			M_PrintWhite(x - 52, y + 1, "^");
+			Draw_String(x - 52, y + 1, "^");
 		if (layout.last_row < l)
-			M_PrintWhite(q_min(x + 280 + w, vid.conwidth - 12), y + 1, "v");
+			Draw_String(q_min(x + 280 + w, vid.conwidth - 12), y + 1, "v");
 	}
 	else
 	{

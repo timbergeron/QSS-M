@@ -605,7 +605,6 @@ void SCR_DrawCenterString (void) //actually do the drawing
 {
 	char	*start;
 	int		l;
-	int		j;
 	int		x, y;
 	int		remaining;
 	float	alpha; // woods #confade
@@ -678,12 +677,12 @@ void SCR_DrawCenterString (void) //actually do the drawing
 			if (start[l] == '\n')
 				break;
 		x = (320 - l*8)/2;	//johnfitz -- 320x200 coordinate system
-		for (j=0 ; j<l ; j++, x+=8)
-		{
-			Draw_CharacterRGBA (x, y, start[j], white, alpha);	//johnfitz -- stretch overlays
-			if (!remaining--)
-				return;
-		}
+		// The legacy loop draws before testing remaining--, including at zero.
+		int count = (remaining >= 0 && remaining < l) ? remaining + 1 : l;
+		Draw_CharactersRGBA (x, y, start, count, white, alpha);
+		if (remaining >= 0 && remaining < l)
+			return;
+		remaining -= l;
 
 		y += 8;
 		start += l;
@@ -7068,6 +7067,8 @@ void SCR_DrawNotifyString (void) // woods add ^m/^g support
 	{
 		// First pass: calculate visible length (excluding control sequences)
 		int visible_length = 0;
+		char glyphs[40];
+		int glyph_count = 0;
 		for (l = 0; l < 40; l++)
 		{
 			if (start[l] == '\n' || !start[l])
@@ -7091,7 +7092,7 @@ void SCR_DrawNotifyString (void) // woods add ^m/^g support
 		// Calculate starting x position based on visible length
 		x = (320 - visible_length * 8) / 2;
 
-		// Second pass: actual drawing
+		// Second pass: prepare the glyphs, retaining style state across lines.
 		for (int j = 0; j < l;)
 		{
 			char c = start[j];
@@ -7122,17 +7123,10 @@ void SCR_DrawNotifyString (void) // woods add ^m/^g support
 			else
 				num &= 127;
 
-			if (num == 32)
-			{
-				x += 8;
-				j++;
-				continue;
-			}
-
-			Draw_CharacterRGBA(x, y, num, white, 1);
-			x += 8;
+			glyphs[glyph_count++] = (char)num;
 			j++;
 		}
+		Draw_CharactersRGBA(x, y, glyphs, glyph_count, white, 1);
 
 		y += 8;
 

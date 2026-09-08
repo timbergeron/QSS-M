@@ -1114,19 +1114,23 @@ void Draw_Character (int x, int y, int num)
 
 /*
 ================
-Draw_CharacterRGBA -- woods -- https://github.com/nzp-team/quakespasm commit c7ba1d4 -- #iwtabcomplete
+Draw_CharactersRGBA -- a counted run with Draw_CharacterRGBA's glyph layout
 ================
 */
-void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha)
+void Draw_CharactersRGBA (int x, int y, const char *chars, int count, plcolour_t c, float alpha)
 {
 	int				row, col;
 	float			frow, fcol, size;
 	float			a = alpha * gl_menu_alpha;
 
-	num &= 255;
-
-	if (num == 32)
-		return; //don't waste verts on spaces
+	while (count > 0 && *chars == 32)
+	{
+		chars++;
+		count--;
+		x += 8;
+	}
+	if (count <= 0)
+		return;
 
 	glEnable (GL_BLEND);
 
@@ -1144,21 +1148,28 @@ void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha)
 	GL_Bind (char_texture);
 	glBegin (GL_QUADS);
 
-	row = num >> 4;
-	col = num & 15;
+	for (; count > 0; count--, chars++, x += 8)
+	{
+		int num = (byte)*chars;
+		if (num == 32)
+			continue;
 
-	frow = row * 0.0625;
-	fcol = col * 0.0625;
-	size = 0.0625;
+		row = num >> 4;
+		col = num & 15;
 
-	glTexCoord2f (fcol, frow);
-	glVertex2f (x, y);
-	glTexCoord2f (fcol + size, frow);
-	glVertex2f (x + 8, y);
-	glTexCoord2f (fcol + size, frow + size);
-	glVertex2f (x + 8, y + 8);
-	glTexCoord2f (fcol, frow + size);
-	glVertex2f (x, y + 8);
+		frow = row * 0.0625;
+		fcol = col * 0.0625;
+		size = 0.0625;
+
+		glTexCoord2f (fcol, frow);
+		glVertex2f (x, y);
+		glTexCoord2f (fcol + size, frow);
+		glVertex2f (x + 8, y);
+		glTexCoord2f (fcol + size, frow + size);
+		glVertex2f (x + 8, y + 8);
+		glTexCoord2f (fcol, frow + size);
+		glVertex2f (x, y + 8);
+	}
 
 	glEnd();
 
@@ -1174,6 +1185,12 @@ void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha)
 		glDisable (GL_BLEND);
 		glColor4f (1, 1, 1, 1);
 	}
+}
+
+void Draw_CharacterRGBA (int x, int y, int num, plcolour_t c, float alpha)
+{
+	char glyph = (char)(num & 255);
+	Draw_CharactersRGBA (x, y, &glyph, 1, c, alpha);
 }
 
 void Draw_Character_Rotation (int x, int y, int num, int rotation) // woods #movementkeys
@@ -1243,6 +1260,24 @@ void Draw_String (int x, int y, const char *str)
 		x += 8;
 	}
 
+	glEnd ();
+}
+
+/*
+================
+Draw_StringMasked -- M_Print's alternate glyph bank, batched as one string
+================
+*/
+void Draw_StringMasked (int x, int y, const char *str)
+{
+	GL_Bind (char_texture);
+	glBegin (GL_QUADS);
+	for (; *str; str++, x += 8)
+	{
+		int num = (*str + 128) & 255;
+		if (num != 32)
+			Draw_CharacterQuad (x, y, (char)num);
+	}
 	glEnd ();
 }
 
