@@ -368,6 +368,63 @@ void Cmd_Toggle_f(void)
 	}
 }
 
+typedef struct cmdcycle_s
+{
+	struct cmdcycle_s *next;
+	int count;
+	int position;
+	char **commands;
+} cmdcycle_t;
+
+static cmdcycle_t *cmdcycles;
+
+/*
+============
+Cmd_Cycle_f
+============
+*/
+static void Cmd_Cycle_f (void)
+{
+	cmdcycle_t *cycle;
+	int i, count = Cmd_Argc() - 1;
+
+	if (count < 2)
+	{
+		Con_Printf ("cmdcycle <command1> <command2> [command3 ...]: cycle through commands\n");
+		return;
+	}
+
+	// Keep a separate position for each exact, ordered command list.
+	for (cycle = cmdcycles; cycle; cycle = cycle->next)
+	{
+		if (cycle->count != count)
+			continue;
+		for (i = 0; i < count; i++)
+			if (strcmp (cycle->commands[i], Cmd_Argv(i + 1)))
+				break;
+		if (i == count)
+			break;
+	}
+
+	if (!cycle)
+	{
+		// Like aliases, these strings must survive command tokenization.
+		cycle = (cmdcycle_t *) Z_Malloc (sizeof (*cycle));
+		cycle->count = count;
+		cycle->position = 0;
+		cycle->commands = (char **) Z_Malloc (count * sizeof (*cycle->commands));
+		for (i = 0; i < count; i++)
+			cycle->commands[i] = Z_Strdup (Cmd_Argv(i + 1));
+		cycle->next = cmdcycles;
+		cmdcycles = cycle;
+	}
+
+	// InsertText supplies a newline and runs this step before queued commands.
+	i = cycle->position;
+	cycle->position = (i + 1) % count;
+	Cbuf_InsertText (cycle->commands[i]);
+}
+
 /*
 ============
 Cvar_Cycle_f -- johnfitz
@@ -485,6 +542,7 @@ void Cvar_Init (void)
 	Cmd_AddCommand ("cvarlist", Cvar_List_f);
 	Cmd_AddCommand ("toggle", Cvar_Toggle_f);
 	Cmd_AddCommand ("cmdtoggle", Cmd_Toggle_f); // woods #cmdtoggle
+	Cmd_AddCommand ("cmdcycle", Cmd_Cycle_f);
 	Cmd_AddCommand ("cycle", Cvar_Cycle_f);
 	Cmd_AddCommand ("inc", Cvar_Inc_f);
 	Cmd_AddCommand ("reset", Cvar_Reset_f);

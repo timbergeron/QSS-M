@@ -5876,6 +5876,7 @@ static const arg_completion_type_t arg_completion_types[] =
 	{ "set",					CompleteCvarArcList,	NULL },
 	{ "seta",					CompleteCvarArcList,	NULL },
 	{ "cmdtoggle",				CompleteCommandList,	NULL },
+	{ "cmdcycle",				CompleteCommandList,	NULL },
 	{ "if",						CompleteGeneralList,	NULL },
 	{ "play",					CompleteSoundList,		NULL },
 	{ "play2",					CompleteSoundList,		NULL },
