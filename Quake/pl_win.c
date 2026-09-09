@@ -581,6 +581,15 @@ void PL_VID_Shutdown (void)
 char *PL_GetClipboardData (void)
 {
 	char *data = NULL;
+#if defined(USE_SDL2)
+	char *cliptext = SDL_GetClipboardText();
+	if (cliptext != NULL)
+	{
+		data = (char *) Z_Malloc(MAX_CLIPBOARDTXT);
+		UTF8_ToQuake(data, MAX_CLIPBOARDTXT, cliptext);
+		SDL_free(cliptext);
+	}
+#else
 	char *cliptext;
 
 	if (OpenClipboard(NULL) != 0)
@@ -605,6 +614,7 @@ char *PL_GetClipboardData (void)
 		}
 		CloseClipboard ();
 	}
+#endif
 	return data;
 }
 

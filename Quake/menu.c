@@ -2337,6 +2337,18 @@ static qboolean M_TextField_Insert(menu_textfield_t *tf, const char *src)
 	}
 }
 
+static void M_TextField_InsertUTF8(menu_textfield_t *tf, const char *src)
+{
+	while (*src)
+	{
+		char text[UTF8_QUAKE_BUFSIZE];
+		UTF8_ToQuakeChar(text, &src);
+		M_TextField_Insert(tf, text);
+		if ((int)strlen(tf->text) >= tf->max_len && tf->sel_start < 0)
+			break;
+	}
+}
+
 static void M_TextField_PlayCopySound(void)
 {
 	S_NotificationSound_Copy();
@@ -2345,7 +2357,7 @@ static void M_TextField_PlayCopySound(void)
 static qboolean M_TextField_CopySelection(menu_textfield_t *tf)
 {
 	int sel_begin, sel_end;
-	int copy_len;
+	int copy_len, i;
 	char *copy;
 
 	if (!M_TextField_GetSelection(tf, &sel_begin, &sel_end))
@@ -2356,7 +2368,9 @@ static qboolean M_TextField_CopySelection(menu_textfield_t *tf)
 	if (!copy)
 		return false;
 
-	memcpy(copy, tf->text + sel_begin, (size_t)copy_len);
+	// Names can contain Quake glyphs; export readable ASCII for UTF-8 paste.
+	for (i = 0; i < copy_len; i++)
+		copy[i] = dequake[(unsigned char)tf->text[sel_begin + i]];
 	copy[copy_len] = 0;
 	SDL_SetClipboardText(copy);
 	SDL_free(copy);
@@ -2448,7 +2462,7 @@ qboolean M_TextField_Key(menu_textfield_t *tf, int key)
 			char *clipboard = SDL_GetClipboardText();
 			if (clipboard)
 			{
-				M_TextField_Insert(tf, clipboard);
+				M_TextField_InsertUTF8(tf, clipboard);
 				SDL_free(clipboard);
 			}
 			return true;

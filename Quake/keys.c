@@ -1810,7 +1810,7 @@ static qboolean Chat_DeleteSelection (void)
 
 static qboolean Chat_CopySelectionToClipboard (void)
 {
-	int start, end, len;
+	int start, end, len, i;
 	char copy[MAX_CHAT_SIZE_EX];
 
 	if (!Key_GetChatSelection (&start, &end))
@@ -1822,7 +1822,9 @@ static qboolean Chat_CopySelectionToClipboard (void)
 	if (len >= (int)sizeof(copy))
 		len = (int)sizeof(copy) - 1;
 
-	memcpy(copy, chat_buffer + start, len);
+	// SDL's clipboard takes UTF-8, not Quake's high-bit coloured glyphs.
+	for (i = 0; i < len; i++)
+		copy[i] = dequake[(unsigned char)chat_buffer[start + i]];
 	copy[len] = 0;
 	return SDL_SetClipboardText(copy) == 0;
 }

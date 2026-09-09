@@ -5903,10 +5903,13 @@ void IN_SendKeyEvents (void)
 		// SDL2 uses the local keyboard layout and handles modifiers
 		// (shift for uppercase, etc.) for us.
 			{
-				unsigned char *ch;
-				for (ch = (unsigned char *)event.text.text; *ch; ch++)
-					if ((*ch & ~0x7F) == 0)
-						Char_Event (*ch);
+				char text[sizeof(event.text.text) * 3], *ch;
+				// No fallback expands a source codepoint past three bytes per
+				// UTF-8 byte, so the conversion never truncates a keystroke.
+				// test_utf8_to_quake.py enforces that bound on the table.
+				UTF8_ToQuake(text, sizeof(text), event.text.text);
+				for (ch = text; *ch; ch++)
+					Char_Event ((unsigned char)*ch);
 			}
 			break;
 #endif

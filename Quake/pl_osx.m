@@ -56,13 +56,10 @@ char *PL_GetClipboardData (void)
     if ([types containsObject: NSPasteboardTypeString]) {
         NSString* clipboardString = [pasteboard stringForType: NSPasteboardTypeString];
         if (clipboardString != NULL && [clipboardString length] > 0) {
-            NSData *ansiData = [clipboardString dataUsingEncoding:NSWindowsCP1252StringEncoding allowLossyConversion:YES];
-            if (ansiData) {
-                size_t sz = [ansiData length] + 1;
-                sz = q_min((size_t)(MAX_CLIPBOARDTXT), sz);
-                data = (char *) Z_Malloc((int)sz);
-                memcpy(data, [ansiData bytes], sz - 1);
-                data[sz - 1] = '\0';
+            const char *utf8 = [clipboardString UTF8String];
+            if (utf8) {
+                data = (char *) Z_Malloc(MAX_CLIPBOARDTXT);
+                UTF8_ToQuake(data, MAX_CLIPBOARDTXT, utf8);
             }
         }
     }

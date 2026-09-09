@@ -8227,6 +8227,762 @@ size_t UTF8_WriteCodePoint(char* dst, size_t maxbytes, uint32_t codepoint)
 	return 0;
 }
 
+/*
+ * UTF-8 input fallback for the classic conchars renderer. This is deliberately
+ * lossy, and must only be used at known UTF-8 boundaries, never on arbitrary
+ * network/QC strings (their high bytes may be legacy Quake glyphs).
+ */
+static uint32_t UTF8_ReadCodePoint (const char **text)
+{
+	const unsigned char *s = (const unsigned char *)*text;
+	uint32_t cp, minimum;
+	int count, i;
+
+	cp = *s++;
+	if (cp < 0x80)
+	{
+		*text = (const char *)s;
+		return cp;
+	}
+	if (cp >= 0xc2 && cp <= 0xdf)
+	{
+		cp &= 0x1f;
+		count = 1;
+		minimum = 0x80;
+	}
+	else if (cp >= 0xe0 && cp <= 0xef)
+	{
+		cp &= 0x0f;
+		count = 2;
+		minimum = 0x800;
+	}
+	else if (cp >= 0xf0 && cp <= 0xf4)
+	{
+		cp &= 0x07;
+		count = 3;
+		minimum = 0x10000;
+	}
+	else
+	{
+		*text = (const char *)s;
+		return 0xfffd;
+	}
+	for (i = 0; i < count; i++)
+	{
+		// Check each byte before advancing, including the terminating NUL.
+		if ((*s & 0xc0) != 0x80)
+		{
+			*text = (const char *)s;
+			return 0xfffd;
+		}
+		cp = (cp << 6) | (*s++ & 0x3f);
+	}
+	*text = (const char *)s;
+	if (cp < minimum || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff))
+		return 0xfffd;
+	return cp;
+}
+
+/*
+ * Codepoints that carry no glyph of their own: combining marks, byte-order
+ * marks, soft hyphens, bidi/zero-width controls, emoji presentation selectors
+ * and skin-tone modifiers. Dropping them keeps a converted string free of
+ * stray "?" where the source only meant to decorate the previous character.
+ */
+static qboolean UTF8_IsInvisible (uint32_t cp)
+{
+	return cp == 0x00ad || cp == 0xfeff ||
+		(cp >= 0x0300 && cp <= 0x036f) ||
+		(cp >= 0x1ab0 && cp <= 0x1aff) ||
+		(cp >= 0x1dc0 && cp <= 0x1dff) ||
+		(cp >= 0x200b && cp <= 0x200f) ||
+		(cp >= 0x202a && cp <= 0x202e) ||
+		(cp >= 0x2060 && cp <= 0x2064) ||
+		(cp >= 0x2066 && cp <= 0x2069) ||
+		(cp >= 0x20d0 && cp <= 0x20f0) ||
+		(cp >= 0xfe00 && cp <= 0xfe0f) ||
+		(cp >= 0xfe20 && cp <= 0xfe2f) ||
+		(cp >= 0x1f3fb && cp <= 0x1f3ff);
+}
+
+static const struct
+{
+	uint32_t codepoint;
+	char text[UTF8_QUAKE_BUFSIZE];
+} unicode_quake_fallbacks[] = {
+	// Sorted by codepoint for binary search; replacements are plain Quake
+	// ASCII, chosen so a name or chat line stays readable after conversion.
+	// Latin-1 and Latin Extended-A.
+	{0x00a0, " "},
+	{0x00a1, "!"},
+	{0x00a2, "c"},
+	{0x00a3, "L"},
+	{0x00a4, "$"},
+	{0x00a5, "Y"},
+	{0x00a6, "|"},
+	{0x00a7, "S"},
+	{0x00a8, "\""},
+	{0x00a9, "(c)"},
+	{0x00aa, "a"},
+	{0x00ab, "<<"},
+	{0x00ac, "!"},
+	{0x00ae, "(r)"},
+	{0x00af, "-"},
+	{0x00b0, "deg"},
+	{0x00b1, "+/-"},
+	{0x00b2, "2"},
+	{0x00b3, "3"},
+	{0x00b4, "'"},
+	{0x00b5, "u"},
+	{0x00b6, "P"},
+	{0x00b7, "*"},
+	{0x00b8, ","},
+	{0x00b9, "1"},
+	{0x00ba, "o"},
+	{0x00bb, ">>"},
+	{0x00bc, "1/4"},
+	{0x00bd, "1/2"},
+	{0x00be, "3/4"},
+	{0x00bf, "?"},
+	{0x00c0, "A"},
+	{0x00c1, "A"},
+	{0x00c2, "A"},
+	{0x00c3, "A"},
+	{0x00c4, "A"},
+	{0x00c5, "A"},
+	{0x00c6, "AE"},
+	{0x00c7, "C"},
+	{0x00c8, "E"},
+	{0x00c9, "E"},
+	{0x00ca, "E"},
+	{0x00cb, "E"},
+	{0x00cc, "I"},
+	{0x00cd, "I"},
+	{0x00ce, "I"},
+	{0x00cf, "I"},
+	{0x00d0, "D"},
+	{0x00d1, "N"},
+	{0x00d2, "O"},
+	{0x00d3, "O"},
+	{0x00d4, "O"},
+	{0x00d5, "O"},
+	{0x00d6, "O"},
+	{0x00d7, "x"},
+	{0x00d8, "O"},
+	{0x00d9, "U"},
+	{0x00da, "U"},
+	{0x00db, "U"},
+	{0x00dc, "U"},
+	{0x00dd, "Y"},
+	{0x00de, "Th"},
+	{0x00df, "ss"},
+	{0x00e0, "a"},
+	{0x00e1, "a"},
+	{0x00e2, "a"},
+	{0x00e3, "a"},
+	{0x00e4, "a"},
+	{0x00e5, "a"},
+	{0x00e6, "ae"},
+	{0x00e7, "c"},
+	{0x00e8, "e"},
+	{0x00e9, "e"},
+	{0x00ea, "e"},
+	{0x00eb, "e"},
+	{0x00ec, "i"},
+	{0x00ed, "i"},
+	{0x00ee, "i"},
+	{0x00ef, "i"},
+	{0x00f0, "d"},
+	{0x00f1, "n"},
+	{0x00f2, "o"},
+	{0x00f3, "o"},
+	{0x00f4, "o"},
+	{0x00f5, "o"},
+	{0x00f6, "o"},
+	{0x00f7, "/"},
+	{0x00f8, "o"},
+	{0x00f9, "u"},
+	{0x00fa, "u"},
+	{0x00fb, "u"},
+	{0x00fc, "u"},
+	{0x00fd, "y"},
+	{0x00fe, "th"},
+	{0x00ff, "y"},
+	{0x0100, "A"},
+	{0x0101, "a"},
+	{0x0102, "A"},
+	{0x0103, "a"},
+	{0x0104, "A"},
+	{0x0105, "a"},
+	{0x0106, "C"},
+	{0x0107, "c"},
+	{0x0108, "C"},
+	{0x0109, "c"},
+	{0x010a, "C"},
+	{0x010b, "c"},
+	{0x010c, "C"},
+	{0x010d, "c"},
+	{0x010e, "D"},
+	{0x010f, "d"},
+	{0x0110, "D"},
+	{0x0111, "d"},
+	{0x0112, "E"},
+	{0x0113, "e"},
+	{0x0114, "E"},
+	{0x0115, "e"},
+	{0x0116, "E"},
+	{0x0117, "e"},
+	{0x0118, "E"},
+	{0x0119, "e"},
+	{0x011a, "E"},
+	{0x011b, "e"},
+	{0x011c, "G"},
+	{0x011d, "g"},
+	{0x011e, "G"},
+	{0x011f, "g"},
+	{0x0120, "G"},
+	{0x0121, "g"},
+	{0x0122, "G"},
+	{0x0123, "g"},
+	{0x0124, "H"},
+	{0x0125, "h"},
+	{0x0128, "I"},
+	{0x0129, "i"},
+	{0x012a, "I"},
+	{0x012b, "i"},
+	{0x012c, "I"},
+	{0x012d, "i"},
+	{0x012e, "I"},
+	{0x012f, "i"},
+	{0x0130, "I"},
+	{0x0131, "i"},
+	{0x0132, "IJ"},
+	{0x0133, "ij"},
+	{0x0134, "J"},
+	{0x0135, "j"},
+	{0x0136, "K"},
+	{0x0137, "k"},
+	{0x0138, "k"},
+	{0x0139, "L"},
+	{0x013a, "l"},
+	{0x013b, "L"},
+	{0x013c, "l"},
+	{0x013d, "L"},
+	{0x013e, "l"},
+	{0x0141, "L"},
+	{0x0142, "l"},
+	{0x0143, "N"},
+	{0x0144, "n"},
+	{0x0145, "N"},
+	{0x0146, "n"},
+	{0x0147, "N"},
+	{0x0148, "n"},
+	{0x014a, "N"},
+	{0x014b, "n"},
+	{0x014c, "O"},
+	{0x014d, "o"},
+	{0x014e, "O"},
+	{0x014f, "o"},
+	{0x0150, "O"},
+	{0x0151, "o"},
+	{0x0152, "OE"},
+	{0x0153, "oe"},
+	{0x0154, "R"},
+	{0x0155, "r"},
+	{0x0156, "R"},
+	{0x0157, "r"},
+	{0x0158, "R"},
+	{0x0159, "r"},
+	{0x015a, "S"},
+	{0x015b, "s"},
+	{0x015c, "S"},
+	{0x015d, "s"},
+	{0x015e, "S"},
+	{0x015f, "s"},
+	{0x0160, "S"},
+	{0x0161, "s"},
+	{0x0162, "T"},
+	{0x0163, "t"},
+	{0x0164, "T"},
+	{0x0165, "t"},
+	{0x0168, "U"},
+	{0x0169, "u"},
+	{0x016a, "U"},
+	{0x016b, "u"},
+	{0x016c, "U"},
+	{0x016d, "u"},
+	{0x016e, "U"},
+	{0x016f, "u"},
+	{0x0170, "U"},
+	{0x0171, "u"},
+	{0x0172, "U"},
+	{0x0173, "u"},
+	{0x0174, "W"},
+	{0x0175, "w"},
+	{0x0176, "Y"},
+	{0x0177, "y"},
+	{0x0178, "Y"},
+	{0x0179, "Z"},
+	{0x017a, "z"},
+	{0x017b, "Z"},
+	{0x017c, "z"},
+	{0x017d, "Z"},
+	{0x017e, "z"},
+	{0x017f, "s"},
+
+	// Greek.
+	{0x0386, "A"},
+	{0x0388, "E"},
+	{0x0389, "I"},
+	{0x038a, "I"},
+	{0x038c, "O"},
+	{0x038e, "Y"},
+	{0x038f, "O"},
+	{0x0390, "i"},
+	{0x0391, "A"},
+	{0x0392, "V"},
+	{0x0393, "G"},
+	{0x0394, "D"},
+	{0x0395, "E"},
+	{0x0396, "Z"},
+	{0x0397, "I"},
+	{0x0398, "Th"},
+	{0x0399, "I"},
+	{0x039a, "K"},
+	{0x039b, "L"},
+	{0x039c, "M"},
+	{0x039d, "N"},
+	{0x039e, "X"},
+	{0x039f, "O"},
+	{0x03a0, "P"},
+	{0x03a1, "R"},
+	{0x03a3, "S"},
+	{0x03a4, "T"},
+	{0x03a5, "Y"},
+	{0x03a6, "F"},
+	{0x03a7, "Ch"},
+	{0x03a8, "Ps"},
+	{0x03a9, "O"},
+	{0x03aa, "I"},
+	{0x03ab, "Y"},
+	{0x03ac, "a"},
+	{0x03ad, "e"},
+	{0x03ae, "i"},
+	{0x03af, "i"},
+	{0x03b0, "y"},
+	{0x03b1, "a"},
+	{0x03b2, "v"},
+	{0x03b3, "g"},
+	{0x03b4, "d"},
+	{0x03b5, "e"},
+	{0x03b6, "z"},
+	{0x03b7, "i"},
+	{0x03b8, "th"},
+	{0x03b9, "i"},
+	{0x03ba, "k"},
+	{0x03bb, "l"},
+	{0x03bc, "m"},
+	{0x03bd, "n"},
+	{0x03be, "x"},
+	{0x03bf, "o"},
+	{0x03c0, "p"},
+	{0x03c1, "r"},
+	{0x03c2, "s"},
+	{0x03c3, "s"},
+	{0x03c4, "t"},
+	{0x03c5, "y"},
+	{0x03c6, "f"},
+	{0x03c7, "ch"},
+	{0x03c8, "ps"},
+	{0x03c9, "o"},
+	{0x03ca, "i"},
+	{0x03cb, "y"},
+	{0x03cc, "o"},
+	{0x03cd, "y"},
+	{0x03ce, "o"},
+
+	// Cyrillic.
+	{0x0401, "E"},
+	{0x0402, "D"},
+	{0x0403, "G"},
+	{0x0404, "Ye"},
+	{0x0405, "Dz"},
+	{0x0406, "I"},
+	{0x0407, "Yi"},
+	{0x0408, "J"},
+	{0x0409, "Lj"},
+	{0x040a, "Nj"},
+	{0x040b, "C"},
+	{0x040c, "K"},
+	{0x040e, "U"},
+	{0x040f, "Dz"},
+	{0x0410, "A"},
+	{0x0411, "B"},
+	{0x0412, "V"},
+	{0x0413, "G"},
+	{0x0414, "D"},
+	{0x0415, "E"},
+	{0x0416, "Zh"},
+	{0x0417, "Z"},
+	{0x0418, "I"},
+	{0x0419, "Y"},
+	{0x041a, "K"},
+	{0x041b, "L"},
+	{0x041c, "M"},
+	{0x041d, "N"},
+	{0x041e, "O"},
+	{0x041f, "P"},
+	{0x0420, "R"},
+	{0x0421, "S"},
+	{0x0422, "T"},
+	{0x0423, "U"},
+	{0x0424, "F"},
+	{0x0425, "Kh"},
+	{0x0426, "Ts"},
+	{0x0427, "Ch"},
+	{0x0428, "Sh"},
+	{0x0429, "Shch"},
+	{0x042a, ""},
+	{0x042b, "Y"},
+	{0x042c, ""},
+	{0x042d, "E"},
+	{0x042e, "Yu"},
+	{0x042f, "Ya"},
+	{0x0430, "a"},
+	{0x0431, "b"},
+	{0x0432, "v"},
+	{0x0433, "g"},
+	{0x0434, "d"},
+	{0x0435, "e"},
+	{0x0436, "zh"},
+	{0x0437, "z"},
+	{0x0438, "i"},
+	{0x0439, "y"},
+	{0x043a, "k"},
+	{0x043b, "l"},
+	{0x043c, "m"},
+	{0x043d, "n"},
+	{0x043e, "o"},
+	{0x043f, "p"},
+	{0x0440, "r"},
+	{0x0441, "s"},
+	{0x0442, "t"},
+	{0x0443, "u"},
+	{0x0444, "f"},
+	{0x0445, "kh"},
+	{0x0446, "ts"},
+	{0x0447, "ch"},
+	{0x0448, "sh"},
+	{0x0449, "shch"},
+	{0x044a, ""},
+	{0x044b, "y"},
+	{0x044c, ""},
+	{0x044d, "e"},
+	{0x044e, "yu"},
+	{0x044f, "ya"},
+	{0x0451, "e"},
+	{0x0452, "d"},
+	{0x0453, "g"},
+	{0x0454, "ye"},
+	{0x0455, "dz"},
+	{0x0456, "i"},
+	{0x0457, "yi"},
+	{0x0458, "j"},
+	{0x0459, "lj"},
+	{0x045a, "nj"},
+	{0x045b, "c"},
+	{0x045c, "k"},
+	{0x045e, "u"},
+	{0x045f, "dz"},
+	{0x0490, "G"},
+	{0x0491, "g"},
+
+	// Punctuation, spaces and arrows.
+	{0x1680, " "},
+	{0x1e9e, "SS"},
+	{0x2000, " "},
+	{0x2001, " "},
+	{0x2002, " "},
+	{0x2003, " "},
+	{0x2004, " "},
+	{0x2005, " "},
+	{0x2006, " "},
+	{0x2007, " "},
+	{0x2008, " "},
+	{0x2009, " "},
+	{0x200a, " "},
+	{0x2010, "-"},
+	{0x2011, "-"},
+	{0x2012, "-"},
+	{0x2013, "-"},
+	{0x2014, "-"},
+	{0x2015, "-"},
+	{0x2016, "||"},
+	{0x2017, "_"},
+	{0x2018, "'"},
+	{0x2019, "'"},
+	{0x201a, "'"},
+	{0x201b, "'"},
+	{0x201c, "\""},
+	{0x201d, "\""},
+	{0x201e, "\""},
+	{0x201f, "\""},
+	{0x2020, "+"},
+	{0x2021, "++"},
+	{0x2022, "*"},
+	{0x2023, ">"},
+	{0x2024, "."},
+	{0x2025, ".."},
+	{0x2026, "..."},
+	{0x2027, "*"},
+	{0x2028, " "},
+	{0x2029, " "},
+	{0x202f, " "},
+	{0x2030, "%"},
+	{0x2032, "'"},
+	{0x2033, "\""},
+	{0x2039, "<"},
+	{0x203a, ">"},
+	{0x203c, "!!"},
+	{0x203d, "?!"},
+	{0x2044, "/"},
+	{0x2047, "??"},
+	{0x2048, "?!"},
+	{0x2049, "!?"},
+	{0x205f, " "},
+	{0x20ac, "E"},
+
+	// Maths, currency and geometric shapes.
+	{0x2122, "(tm)"},
+	{0x2190, "<-"},
+	{0x2191, "^"},
+	{0x2192, "->"},
+	{0x2193, "v"},
+	{0x2194, "<->"},
+	{0x21a9, "<-"},
+	{0x21aa, "->"},
+	{0x21d0, "<="},
+	{0x21d2, "=>"},
+	{0x21d4, "<=>"},
+	{0x2212, "-"},
+	{0x221a, "sqrt"},
+	{0x221e, "inf"},
+	{0x2248, "~="},
+	{0x2260, "!="},
+	{0x2264, "<="},
+	{0x2265, ">="},
+	{0x25a0, "#"},
+	{0x25aa, "*"},
+	{0x25b6, ">"},
+	{0x25c0, "<"},
+	{0x25cf, "*"},
+
+	// Symbols and dingbats.
+	{0x2605, "*"},
+	{0x2606, "*"},
+	{0x2615, "[coffee]"},
+	{0x2620, "[skull]"},
+	{0x2639, ":("},
+	{0x263a, ":)"},
+	{0x2665, "<3"},
+	{0x266a, "[music]"},
+	{0x266b, "[music]"},
+	{0x2694, "[swords]"},
+	{0x26a0, "[!]"},
+	{0x26a1, "[zap]"},
+	{0x2705, "[ok]"},
+	{0x2713, "[ok]"},
+	{0x2714, "[ok]"},
+	{0x2717, "[x]"},
+	{0x2718, "[x]"},
+	{0x2728, "*"},
+	{0x274c, "[x]"},
+	{0x274e, "[x]"},
+	{0x2753, "?"},
+	{0x2754, "?"},
+	{0x2755, "!"},
+	{0x2757, "!"},
+	{0x2764, "<3"},
+	{0x2795, "+"},
+	{0x2796, "-"},
+	{0x2797, "/"},
+	{0x27a1, "->"},
+	{0x2b05, "<-"},
+	{0x2b06, "^"},
+	{0x2b07, "v"},
+	{0x2b1b, "#"},
+	{0x2b50, "*"},
+	{0x3000, " "},
+
+	// Emoji.
+	{0x1f31f, "*"},
+	{0x1f389, "[party]"},
+	{0x1f3ae, "[game]"},
+	{0x1f3af, "[target]"},
+	{0x1f3c1, "[flag]"},
+	{0x1f3c6, "[win]"},
+	{0x1f410, "[goat]"},
+	{0x1f440, "[eyes]"},
+	{0x1f44a, "[fist]"},
+	{0x1f44b, "[wave]"},
+	{0x1f44c, "[ok]"},
+	{0x1f44d, "[+1]"},
+	{0x1f44e, "[-1]"},
+	{0x1f451, "[crown]"},
+	{0x1f47b, "[ghost]"},
+	{0x1f47d, "[alien]"},
+	{0x1f480, "[skull]"},
+	{0x1f494, "</3"},
+	{0x1f4a2, ">:("},
+	{0x1f4a3, "[bomb]"},
+	{0x1f4a4, "zzz"},
+	{0x1f4a5, "[boom]"},
+	{0x1f4a9, "[poo]"},
+	{0x1f4aa, "[flex]"},
+	{0x1f4af, "100"},
+	{0x1f525, "[fire]"},
+	{0x1f52b, "[gun]"},
+	{0x1f5e1, "[sword]"},
+	{0x1f600, ":)"},
+	{0x1f601, ":D"},
+	{0x1f602, ":D"},
+	{0x1f603, ":)"},
+	{0x1f604, ":)"},
+	{0x1f605, ":D"},
+	{0x1f606, ":D"},
+	{0x1f607, "O:)"},
+	{0x1f608, ">:)"},
+	{0x1f609, ";)"},
+	{0x1f60a, ":)"},
+	{0x1f60b, ":P"},
+	{0x1f60c, ":)"},
+	{0x1f60d, "<3"},
+	{0x1f60e, "B)"},
+	{0x1f60f, ";)"},
+	{0x1f610, ":|"},
+	{0x1f611, ":|"},
+	{0x1f612, ":/"},
+	{0x1f613, ":("},
+	{0x1f614, ":("},
+	{0x1f615, ":/"},
+	{0x1f616, ":("},
+	{0x1f617, ":*"},
+	{0x1f618, ":*"},
+	{0x1f619, ":*"},
+	{0x1f61a, ":*"},
+	{0x1f61b, ":P"},
+	{0x1f61c, ":P"},
+	{0x1f61d, ":P"},
+	{0x1f61e, ":("},
+	{0x1f620, ">:("},
+	{0x1f621, ">:("},
+	{0x1f622, ":'("},
+	{0x1f624, ">:("},
+	{0x1f625, ":'("},
+	{0x1f628, ":o"},
+	{0x1f629, ":("},
+	{0x1f62a, ":("},
+	{0x1f62b, ":("},
+	{0x1f62c, ":|"},
+	{0x1f62d, ":'("},
+	{0x1f62e, ":o"},
+	{0x1f62f, ":o"},
+	{0x1f630, ":o"},
+	{0x1f631, ":o"},
+	{0x1f632, ":o"},
+	{0x1f633, ":$"},
+	{0x1f634, "zzz"},
+	{0x1f635, "x_x"},
+	{0x1f636, ":|"},
+	{0x1f641, ":("},
+	{0x1f642, ":)"},
+	{0x1f643, "(:"},
+	{0x1f644, ":/"},
+	{0x1f645, "[no]"},
+	{0x1f646, "[yes]"},
+	{0x1f64c, "[yay]"},
+	{0x1f64f, "[thanks]"},
+	{0x1f680, "[rocket]"},
+	{0x1f6e1, "[shield]"},
+	{0x1f914, "[hmm]"},
+	{0x1f916, "[bot]"},
+	{0x1f91d, "[shake]"},
+	{0x1f921, "[clown]"},
+	{0x1f923, ":D"},
+	{0x1f92c, ">:("},
+	{0x1f937, "[shrug]"},
+	{0x1f947, "[1st]"},
+	{0x1f970, "<3"},
+	{0x1f973, "[party]"},
+	{0x1f97a, ":'("},
+	{0x1f9e0, "[brain]"},
+
+};
+
+size_t UTF8_ToQuakeChar (char dst[UTF8_QUAKE_BUFSIZE], const char **src)
+{
+	uint32_t cp;
+	const char *replacement = "?";
+	char ascii[2] = {0, 0};
+	size_t lo = 0, hi = countof(unicode_quake_fallbacks), len;
+
+	dst[0] = 0;
+	if (!**src)
+		return 0;
+	cp = UTF8_ReadCodePoint(src);
+	if (UTF8_IsInvisible(cp))
+		return 0;
+	if (cp < 0x80 || (cp >= 0xff01 && cp <= 0xff5e))
+	{
+		ascii[0] = (char)(cp < 0x80 ? cp : cp - 0xfee0);
+		replacement = ascii;
+	}
+	else if (cp >= 0x1f1e6 && cp <= 0x1f1ff)
+	{
+		// Regional indicators spell out a country code, so a flag reads as "US".
+		ascii[0] = (char)('A' + (cp - 0x1f1e6));
+		replacement = ascii;
+	}
+	else
+	{
+		while (lo < hi)
+		{
+			size_t mid = lo + (hi - lo) / 2;
+			if (unicode_quake_fallbacks[mid].codepoint < cp)
+				lo = mid + 1;
+			else
+				hi = mid;
+		}
+		if (lo < countof(unicode_quake_fallbacks) &&
+			unicode_quake_fallbacks[lo].codepoint == cp)
+			replacement = unicode_quake_fallbacks[lo].text;
+	}
+	len = strlen(replacement);
+	memcpy(dst, replacement, len + 1);
+	return len;
+}
+
+size_t UTF8_ToQuake (char *dst, size_t dstsize, const char *src)
+{
+	size_t written = 0;
+
+	if (!dstsize)
+		return 0;
+	while (*src)
+	{
+		char replacement[UTF8_QUAKE_BUFSIZE];
+		size_t len = UTF8_ToQuakeChar(replacement, &src);
+
+		// Never leave half an approximation (such as "[tha") at the boundary.
+		if (len >= dstsize - written)
+			break;
+		memcpy(dst + written, replacement, len);
+		written += len;
+	}
+	dst[written] = 0;
+	return written;
+}
+
 void SetChatInfo (int flags) // woods #chatinfo
 {
 	char command[16];

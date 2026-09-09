@@ -357,6 +357,13 @@ qboolean FS_IsCaseSensitive(void); // woods #filesystemsens
 
 // Unicode
 size_t UTF8_WriteCodePoint(char* dst, size_t maxbytes, uint32_t codepoint); // woods #serversmenu (ironwail)
+// Lossy UTF-8 -> classic Quake ASCII; returns bytes written, excluding NUL.
+// src must be NUL-terminated UTF-8, not legacy Quake text. Buffers must not overlap.
+// Always terminates when dstsize > 0; truncates at whole replacement boundaries.
+size_t UTF8_ToQuake (char *dst, size_t dstsize, const char *src);
+// Convert one codepoint and advance src; ignored modifiers produce empty output.
+#define UTF8_QUAKE_BUFSIZE 9
+size_t UTF8_ToQuakeChar (char dst[UTF8_QUAKE_BUFSIZE], const char **src);
 
 #define CIF_CHAT  (1<<0) // set this flag if user is in console, mm1, mm2 etc but not in game -- woods #chatinfo
 #define CIF_AFK   (1<<1) // set this flag if app loses focus, ie alt+tab -- woods #chatinfo
