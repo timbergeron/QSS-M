@@ -41014,6 +41014,7 @@ typedef struct
 	qboolean    from_id1;
 	time_t      mtime;
 	size_t      fsize;
+	int         scan_order; // preserve search-path precedence and equal-date ordering
 	searchpath_t *source_searchpath;
 	char        cache_key[MAX_OSPATH];
 	demo_minframes_state_t minframes_state;
@@ -41910,23 +41911,13 @@ static void M_Demos_FreeItems(void)
 	demosmenu.minframes_hidden_since_refilter = 0;
 }
 
-static void M_Demos_AddEx(const char* name, const char* date, const char *display,
+static void M_Demos_AddEx(const char* name, const char *display,
 	qboolean from_id1, time_t mtime, size_t fsize, searchpath_t *spath)
 {
     demoitem_t tempDemo;
 	char display_with_source[MAX_QPATH + 8];
-	int i;
 
 	memset(&tempDemo, 0, sizeof(tempDemo));
-
-	if (!date)
-		date = "Unknown Date";
-
-	for (i = 0; i < demosmenu.democount; i++)
-	{
-		if (!q_strcasecmp(name, demosmenu.items[i].name))
-			return;
-	}
 
 	q_strlcpy(tempDemo.name, name, sizeof(tempDemo.name));
 	if (from_id1 && !M_Demos_CurrentGameIsId1())
@@ -41937,7 +41928,6 @@ static void M_Demos_AddEx(const char* name, const char* date, const char *displa
 	}
 	else
 		q_strlcpy(tempDemo.display, display && display[0] ? display : name, sizeof(tempDemo.display));
-	q_strlcpy(tempDemo.date, date, sizeof(tempDemo.date));
 	M_InferDemoMapName(name, tempDemo.map, sizeof(tempDemo.map));
 	tempDemo.players[0] = '\0';
 	tempDemo.stats[0] = '\0';
@@ -41948,6 +41938,7 @@ static void M_Demos_AddEx(const char* name, const char* date, const char *displa
 	tempDemo.from_id1 = from_id1;
 	tempDemo.mtime = mtime;
 	tempDemo.fsize = fsize;
+	tempDemo.scan_order = demosmenu.democount;
 	tempDemo.source_searchpath = spath;
 	tempDemo.minframes_state = demosmenu.minframes_threshold > 0 ?
 		DEMO_MINFRAMES_UNKNOWN : DEMO_MINFRAMES_PASS;
@@ -41958,30 +41949,111 @@ static void M_Demos_AddEx(const char* name, const char* date, const char *displa
 	M_Demos_BuildCacheKey(tempDemo.cache_key, sizeof(tempDemo.cache_key), tempDemo.name, spath);
 	M_Demos_MetadataCache_ApplyToItem(&tempDemo);
 
-    int insertPos = demosmenu.democount;
+	// Collect first: searching and inserting into a sorted list for every file
+	// makes opening large demo folders quadratic in both comparisons and copies.
+	VEC_PUSH(demosmenu.items, tempDemo);
+	demosmenu.democount++;
+}
 
-    for (int i = 0; i < demosmenu.democount; i++)
-    {
-        if (q_sortdemos(date, demosmenu.items[i].date) > 0) // If new date is newer
-        {
-            insertPos = i;
-            break;
-        }
-    }
+static demoitem_t *demos_sort_base;
 
-    // Increase the size of demosmenu.items by one
-    Vec_Grow((void**)&demosmenu.items, sizeof(demoitem_t), demosmenu.democount + 1);
+static int M_Demos_CompareNames(const void *a, const void *b)
+{
+	const demoitem_t *da = &demos_sort_base[*(const int *)a];
+	const demoitem_t *db = &demos_sort_base[*(const int *)b];
+	int order = q_strcasecmp(da->name, db->name);
 
-    if (insertPos != demosmenu.democount)
-    {
-        // Shift items to make room for the new demo
-        memmove(&demosmenu.items[insertPos + 1], &demosmenu.items[insertPos], sizeof(demoitem_t) * (demosmenu.democount - insertPos));
-    }
+	return order ? order : da->scan_order - db->scan_order;
+}
 
-    // Insert the new demo
-    demosmenu.items[insertPos] = tempDemo;
+static int M_Demos_CompareDates(const void *a, const void *b)
+{
+	const demoitem_t *da = &demos_sort_base[*(const int *)a];
+	const demoitem_t *db = &demos_sort_base[*(const int *)b];
+	int order;
 
-    demosmenu.democount++;
+	// Sort timestamps directly. Formatting thousands of local dates can itself
+	// stall menu entry; the date string is only needed when searching it.
+	// Keep undated entries first, matching the old "Unknown Date" ordering.
+	if (!da->mtime || !db->mtime)
+		order = (da->mtime != 0) - (db->mtime != 0);
+	else
+		order = (da->mtime < db->mtime) - (da->mtime > db->mtime);
+
+	return order ? order : da->scan_order - db->scan_order;
+}
+
+// Rearrange items[] in place so slot i holds the item order[i] points at.
+// order[] doubles as the "already placed" marker, so it is consumed here.
+static void M_Demos_ApplyOrder(int *order, int count)
+{
+	int i;
+
+	for (i = 0; i < count; ++i)
+	{
+		demoitem_t held;
+		int slot, next;
+
+		if (order[i] == i)
+			continue;
+
+		// Walk the cycle, pulling each item forward into the slot ahead of it.
+		held = demosmenu.items[i];
+		slot = i;
+		for (;;)
+		{
+			next = order[slot];
+			order[slot] = slot;
+			if (next == i)
+				break;
+			demosmenu.items[slot] = demosmenu.items[next];
+			slot = next;
+		}
+		demosmenu.items[slot] = held;
+	}
+}
+
+static void M_Demos_SortItems(void)
+{
+	int *order;
+	int i, count;
+
+	if (demosmenu.democount < 2)
+		return;
+
+	// Sort indices, not the records: a demoitem_t is close to a kilobyte, and
+	// qsort moves elements around bodily (a byte at a time in MSVC's CRT), so
+	// sorting in place shuffles megabytes for a folder holding thousands.
+	order = (int *)malloc(sizeof(*order) * (size_t)demosmenu.democount);
+	if (!order)
+		return;  // an unsorted list still beats refusing to open the menu
+	for (i = 0; i < demosmenu.democount; ++i)
+		order[i] = i;
+	demos_sort_base = demosmenu.items;
+
+	// Group duplicate names, keeping the first source encountered just as the
+	// old insertion path did (including case-insensitive pak/mod overrides).
+	qsort(order, demosmenu.democount, sizeof(*order), M_Demos_CompareNames);
+	M_Demos_ApplyOrder(order, demosmenu.democount);
+	count = 1;
+	for (i = 1; i < demosmenu.democount; ++i)
+	{
+		if (!q_strcasecmp(demosmenu.items[count - 1].name, demosmenu.items[i].name))
+			continue;
+		if (count != i)
+			demosmenu.items[count] = demosmenu.items[i];
+		++count;
+	}
+	demosmenu.democount = count;
+	VEC_HEADER(demosmenu.items).size = count;
+
+	// Explicit scan-order ties retain the stable newest-first ordering, even
+	// for files sharing a timestamp or an unknown date.
+	for (i = 0; i < count; ++i)
+		order[i] = i;
+	qsort(order, count, sizeof(*order), M_Demos_CompareDates);
+	M_Demos_ApplyOrder(order, count);
+	free(order);
 }
 
 static void M_Demos_AddFolderAncestors(const char *relpath)
@@ -42118,9 +42190,20 @@ static void M_Demos_ScanPhysicalFolders(const char *basepath, const char *relpat
 			if (dir_t->d_name[0] == '.')
 				continue;
 
-			q_snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir_t->d_name);
-			if (stat(fullpath, &st) < 0 || !S_ISDIR(st.st_mode))
+			// readdir already knows the type nearly everywhere; stat'ing every
+			// file in a folder holding thousands of demos just to find its
+			// subfolders is pure overhead on the way into the menu.
+#if defined(DT_DIR)
+			if (dir_t->d_type != DT_DIR && dir_t->d_type != DT_UNKNOWN &&
+				dir_t->d_type != DT_LNK)
 				continue;
+			if (dir_t->d_type != DT_DIR)
+#endif
+			{
+				q_snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir_t->d_name);
+				if (stat(fullpath, &st) < 0 || !S_ISDIR(st.st_mode))
+					continue;
+			}
 
 			if (relpath && relpath[0])
 				q_snprintf(child_rel, sizeof(child_rel), "%s/%s", relpath, dir_t->d_name);
@@ -42938,18 +43021,6 @@ static const char *M_Demos_SkipExplicitRootPrefix(const char *name)
 	return name;
 }
 
-static qboolean M_Demos_ListedFileIsRegular(const char *fname, searchpath_t *spath)
-{
-	char path[MAX_OSPATH];
-
-	if (!spath || spath->pack)
-		return true;
-
-	q_snprintf(path, sizeof(path), "%s/%s", spath->filename,
-		M_Demos_SkipExplicitRootPrefix(fname));
-	return (Sys_FileType(path) & FS_ENT_FILE) != 0;
-}
-
 static int M_Demos_CountFrames(const char *fname, time_t mtime, size_t fsize,
 	searchpath_t *spath, int min_frames)
 {
@@ -43076,7 +43147,6 @@ static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime
 	demos_list_ctx_t *list_ctx = (demos_list_ctx_t *)ctx;
 	char logical_name[MAX_QPATH];
 	char display_name[MAX_QPATH];
-	char date[32];
 	qboolean from_id1;
 	qboolean explicit_root = list_ctx && list_ctx->explicit_root &&
 		!strchr(fname, '/') && !strchr(fname, '\\');
@@ -43095,11 +43165,7 @@ static qboolean M_Demos_AddListedFile(void *ctx, const char *fname, time_t mtime
 		q_strlcpy(display_name, COM_SkipPath(fname), sizeof(display_name));
 	}
 
-	if (!M_Demos_ListedFileIsRegular(logical_name, spath))
-		return true;
-
-	M_Demos_FormatFileDate(mtime, date, sizeof(date));
-	M_Demos_AddEx(logical_name, date, display_name, from_id1, mtime, fsize, spath);
+	M_Demos_AddEx(logical_name, display_name, from_id1, mtime, fsize, spath);
 	return true;
 }
 
@@ -43544,11 +43610,28 @@ static qboolean M_Demos_FieldMatchesTerm(const char *field, const char *term)
 	return field && field[0] && q_strcasestr(field, term);
 }
 
+static qboolean M_Demos_DateMatchesTerm(demoitem_t *di, const char *term)
+{
+	if (!di->date[0])
+	{
+		const char *p;
+
+		// Most searches are names/maps/players. Only pay for local date
+		// conversion if the term could occur in a date or "Unknown Date".
+		for (p = term; *p; ++p)
+			if (!q_isdigit((unsigned char)*p) && *p != '-' && *p != ':' && *p != ' ')
+				break;
+		if (*p && !q_strcasestr("Unknown Date", term))
+			return false;
+		M_Demos_FormatFileDate(di->mtime, di->date, sizeof(di->date));
+	}
+	return M_Demos_FieldMatchesTerm(di->date, term);
+}
+
 static qboolean M_Demos_ItemMatchesTerm(demoitem_t *di, const char *term, const char *map_desc)
 {
 	if (M_Demos_FieldMatchesTerm(di->name, term) ||
 		M_Demos_FieldMatchesTerm(di->display, term) ||
-		M_Demos_FieldMatchesTerm(di->date, term) ||
 		M_Demos_FieldMatchesTerm(di->map, term) ||
 		M_Demos_FieldMatchesTerm(map_desc, term))
 		return true;
@@ -43560,7 +43643,7 @@ static qboolean M_Demos_ItemMatchesTerm(demoitem_t *di, const char *term, const 
 		 M_Demos_FieldMatchesTerm(di->filesize, term)))
 		return true;
 
-	return false;
+	return M_Demos_DateMatchesTerm(di, term);
 }
 
 static qboolean M_Demos_ItemMatchesSearch(demoitem_t *di, const demosearchterm_t *terms,
@@ -43728,7 +43811,9 @@ static void M_Demos_RebuildForCurrentPath(void)
 	demos_list_ctx_t root_ctx = { true };
 	char actual_folder[MAX_QPATH];
 	qboolean blocked_sound;
+	double t_start, t_scan, t_sort, t_filter;
 
+	t_start = Sys_DoubleTime();
 	blocked_sound = M_Demos_BlockSoundForIO();
 	M_Demos_FreeItems();
 	demosmenu.list.cursor = -1;
@@ -43747,24 +43832,28 @@ static void M_Demos_RebuildForCurrentPath(void)
 	{
 		if (!actual_folder[0])
 		{
-			COM_ListAllFiles(&root_ctx, "*.dem", M_Demos_AddListedFile, 0, NULL);
-			COM_ListAllFiles(&root_ctx, "*.dz", M_Demos_AddListedFile, 0, NULL);
-			COM_ListAllFiles(NULL, "demos/*.dem", M_Demos_AddListedFile, 0, NULL);
-			COM_ListAllFiles(NULL, "demos/*.dz", M_Demos_AddListedFile, 0, NULL);
+			COM_ListAllFiles(&root_ctx, "*.dem", M_Demos_AddListedFile, COM_LIST_NODIRS, NULL);
+			COM_ListAllFiles(&root_ctx, "*.dz", M_Demos_AddListedFile, COM_LIST_NODIRS, NULL);
+			COM_ListAllFiles(NULL, "demos/*.dem", M_Demos_AddListedFile, COM_LIST_NODIRS, NULL);
+			COM_ListAllFiles(NULL, "demos/*.dz", M_Demos_AddListedFile, COM_LIST_NODIRS, NULL);
 		}
 		else
 		{
 			char pattern[MAX_OSPATH];
 
 			q_snprintf(pattern, sizeof(pattern), "demos/%s/*.dem", actual_folder);
-			COM_ListAllFiles(NULL, pattern, M_Demos_AddListedFile, 0, NULL);
+			COM_ListAllFiles(NULL, pattern, M_Demos_AddListedFile, COM_LIST_NODIRS, NULL);
 
 			q_snprintf(pattern, sizeof(pattern), "demos/%s/*.dz", actual_folder);
-			COM_ListAllFiles(NULL, pattern, M_Demos_AddListedFile, 0, NULL);
+			COM_ListAllFiles(NULL, pattern, M_Demos_AddListedFile, COM_LIST_NODIRS, NULL);
 		}
 	}
 
+	t_scan = Sys_DoubleTime();
+	M_Demos_SortItems();
+	t_sort = Sys_DoubleTime();
 	M_Demos_Refilter();
+	t_filter = Sys_DoubleTime();
 
 	if (demosmenu.list.cursor == -1 && demosmenu.list.numitems > 0)
 		demosmenu.list.cursor = 0;
@@ -43772,6 +43861,11 @@ static void M_Demos_RebuildForCurrentPath(void)
 	M_List_CenterCursor(&demosmenu.list);
 	M_Demos_UpdatePathHint();
 	M_Demos_UnblockSoundForIO(blocked_sound);
+
+	// developer 1 breaks down where a big demos folder actually spends its time
+	Con_DPrintf("demos menu: %d demos, list %.1fms, sort %.1fms, filter %.1fms\n",
+		demosmenu.democount, (t_scan - t_start) * 1000.0,
+		(t_sort - t_scan) * 1000.0, (t_filter - t_sort) * 1000.0);
 }
 
 static void M_Demos_ClearRememberedPath(void)
@@ -43819,11 +43913,14 @@ static void M_Demos_ResetPathToRoot(void)
 static void M_Demos_Init(void)
 {
 	qboolean blocked_sound = M_Demos_BlockSoundForIO();
+	double t_start = Sys_DoubleTime();
+	double t_cache, t_descriptions, t_folders;
 
 	/* Re-entry (menu search landing on Demos while already here) reinitialises
 	 * without any leave hook running, so flush what the last visit dirtied. */
 	M_Demos_MetadataCache_SaveIfDirty();
 	M_Demos_MetadataCache_Load();
+	t_cache = Sys_DoubleTime();
 
 	demosmenu.list.viewsize = MAX_VIS_DEMOS;
 	demosmenu.list.cursor = -1;
@@ -43849,8 +43946,10 @@ static void M_Demos_Init(void)
 	// their map's worldspawn description (e.g. typing "necropolis" → e1m3).
 	if (!descriptionsParsed)
 		ExtraMaps_ParseDescriptions();
+	t_descriptions = Sys_DoubleTime();
 
 	M_Demos_RebuildFolderList();
+	t_folders = Sys_DoubleTime();
 	M_Demos_RebuildForCurrentPath();
 	if (demosmenu.remembered_path_suffix[0] && !demosmenu.path_valid)
 	{
@@ -43859,6 +43958,10 @@ static void M_Demos_Init(void)
 		M_Demos_RebuildForCurrentPath();
 	}
 	M_Demos_UnblockSoundForIO(blocked_sound);
+
+	Con_DPrintf("demos menu: cache %.1fms, mapdescs %.1fms, folders %.1fms, open %.1fms\n",
+		(t_cache - t_start) * 1000.0, (t_descriptions - t_cache) * 1000.0,
+		(t_folders - t_descriptions) * 1000.0, (Sys_DoubleTime() - t_start) * 1000.0);
 }
 
 void M_Menu_Demos_f (void)

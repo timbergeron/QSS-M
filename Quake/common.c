@@ -3912,7 +3912,7 @@ void COM_ListSystemFiles(void *ctx, const char *gamedir, const char *ext, qboole
 #endif
 }
 
-static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath))
+static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags)
 {
 	char prefixdir[MAX_OSPATH];
 	char *sl;
@@ -3940,6 +3940,10 @@ static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, q
 			return;
 		do
 		{
+			//the enumeration already knows what each entry is, so callers that
+			//only want files needn't stat every name they get handed back.
+			if ((flags & COM_LIST_NODIRS) && (fdat.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				continue;
 			q_snprintf (filestring, sizeof(filestring), "%s%s", prefixdir, fdat.cFileName);
 			cb (ctx, filestring, Sys_FileTimeToTime(fdat.ftLastWriteTime), fdat.nFileSizeLow, spath);
 		} while (FindNextFile(fhnd, &fdat));
@@ -3964,7 +3968,13 @@ static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, q
 				struct stat s;
 				q_snprintf (filestring, sizeof(filestring), "%s/%s%s", spath->filename, prefixdir, dir_t->d_name);
 				if (stat(filestring, &s) < 0)
+				{
+					if (flags & COM_LIST_NODIRS)
+						continue;
 					memset(&s, 0, sizeof(s));
+				}
+				else if ((flags & COM_LIST_NODIRS) && !S_ISREG(s.st_mode))
+					continue;	//reuse stat: pipes/devices must not reach demo readers
 
 				q_snprintf (filestring, sizeof(filestring), "%s%s", prefixdir, dir_t->d_name);
 				cb (ctx, filestring, s.st_mtime, s.st_size, spath);
@@ -4020,7 +4030,7 @@ void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, 
 		}
 		else
 		{
-			COM_ListFiles(ctx, search, pattern, cb);
+			COM_ListFiles(ctx, search, pattern, cb, flags);
 		}
 	}
 
@@ -5444,8 +5454,8 @@ _add_path:
 		COM_ListPackageFiles(searchdir, paksubdir, "paks");
 	}
 
-	COM_ListFiles(NULL, searchdir, "#*", AddHashedDirectories); // woods #pakdirs
-	COM_ListFiles(NULL, searchdir, "paks/#*", AddHashedDirectories); // woods #pakdirs
+	COM_ListFiles(NULL, searchdir, "#*", AddHashedDirectories, 0); // woods #pakdirs
+	COM_ListFiles(NULL, searchdir, "paks/#*", AddHashedDirectories, 0); // woods #pakdirs
 
 	// then finally link the directory to the search path
 	//spike -- moved this last (also explicitly blocked loading progs.dat from system paths when running the demo)

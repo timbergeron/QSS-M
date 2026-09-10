@@ -484,6 +484,8 @@ void COM_NegativeCache_Remove(com_negative_cache_t *cache, const com_negative_ca
 	const char *key1, const char *key2);
 void COM_NegativeCache_SaveIfDirty(com_negative_cache_t *cache, const com_negative_cache_config_t *config);
 
+/* engine-only listing flag: QC's search_begin owns the low bits of flags */
+#define COM_LIST_NODIRS	(1u<<16)	// skip directories and other non-file entries
 void COM_ListSystemFiles(void *ctx, const char *gamedir, const char *ext, qboolean (*cb)(void *ctx, const char *fname));
 void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter);
 const char *COM_GetGameNames(qboolean full);
