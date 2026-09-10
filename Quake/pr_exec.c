@@ -373,6 +373,10 @@ void PR_ExecuteProgram (func_t fnum)
 
 	//FIXME: if this is a builtin, then we're going to crash.
 
+	//progs code can assign .movetype, spawn, or remove entities, so the pusher
+	//candidate cache cannot outlive a call into QC. see SV_UpdatePushCandidates.
+	qcvm->pushcache_valid = false;
+
 	qcvm->trace = false;
 
 // make a stack frame

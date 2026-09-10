@@ -483,6 +483,17 @@ struct qcvm_s
 	int			num_edicts;
 	int			reserved_edicts;
 	int			max_edicts;
+
+	//pusher candidate cache (sv_phys.c). holds edict numbers, ascending, and is a
+	//*superset* of the entities a pusher may move -- both pusher loops still apply
+	//the real movetype/free tests, so a list that is stale in the too-large
+	//direction changes nothing. pushcache_valid is cleared by everything that could
+	//turn a non-candidate into a candidate: QC execution, ED_ClearEdict, ED_Free,
+	//and the top of every SV_Physics frame.
+	int			*pushcache;
+	int			pushcache_count;
+	int			pushcache_max;
+	qboolean	pushcache_valid;
 	edict_t		*edicts;			// can NOT be array indexed, because edict_t is variable sized, but can be used to reference the world ent
 	qboolean	worldlocked;
 	struct qmodel_s	*worldmodel;

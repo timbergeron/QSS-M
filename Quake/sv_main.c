@@ -1902,6 +1902,7 @@ void SV_Init (void)
 	extern	cvar_t	sv_gameplayfix_elevators;
 	extern	cvar_t	sv_gameplayfix_fishcount;
 	extern	cvar_t	sv_gameplayfix_setmodelrealbox;	//spike: 1 to replicate a quakespasm bug, 0 for actual vanilla compat.
+	extern	cvar_t	sv_pushcache;
 	extern	cvar_t	sv_friction;
 	extern	cvar_t	sv_edgefriction;
 	extern	cvar_t	sv_stopspeed;
@@ -1951,6 +1952,7 @@ void SV_Init (void)
 	Cvar_RegisterVariable (&sv_gameplayfix_elevators);
 	Cvar_RegisterVariable (&sv_gameplayfix_fishcount);
 	Cvar_RegisterVariable (&sv_gameplayfix_setmodelrealbox);
+	Cvar_RegisterVariable (&sv_pushcache);
 	Cvar_RegisterVariable (&pr_checkextension);
 	Cvar_RegisterVariable (&sv_altnoclip); //johnfitz
 	Cvar_RegisterVariable (&sv_autoload); // woods #autoload (iw)

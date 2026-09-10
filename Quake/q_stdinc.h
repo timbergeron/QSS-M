@@ -259,6 +259,14 @@ typedef ptrdiff_t	ssize_t;
 #define FUNC_NOINLINE
 #endif
 
+#if defined(__GNUC__) && ((__GNUC__ > 3) || (__GNUC__ == 3 && __GNUC_MINOR__ >= 1))
+#define FUNC_ALWAYSINLINE	__inline__ __attribute__((__always_inline__))
+#elif defined(_MSC_VER) && (_MSC_VER >= 1200)
+#define FUNC_ALWAYSINLINE	__forceinline
+#else
+#define FUNC_ALWAYSINLINE	inline
+#endif
+
 #if defined(__GNUC__) && ((__GNUC__ > 4) || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5))
 #define FUNC_NOCLONE	__attribute__((__noclone__))
 #else

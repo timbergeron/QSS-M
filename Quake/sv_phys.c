@@ -55,6 +55,8 @@ cvar_t	sv_gameplayfix_fishcount = {"sv_gameplayfix_fishcount","1",CVAR_NONE};
 cvar_t	sv_sound_watersplash	= {"sv_sound_watersplash",	"misc/h2ohit1.wav", CVAR_NONE};
 cvar_t	sv_sound_land			= {"sv_sound_land",			"demon/dland2.wav", CVAR_NONE};
 
+cvar_t	sv_pushcache = {"sv_pushcache","1",CVAR_NONE};	//0=off, 1=on, 2=on+verify against the plain scan, 3=+force the fallback path
+
 
 #define	MOVE_EPSILON	0.01
 
@@ -566,6 +568,233 @@ trace_t SV_PushEntity (edict_t *ent, vec3_t push)
 
 
 /*
+============================================================================
+
+PUSHER CANDIDATE CACHE
+
+Every moving MOVETYPE_PUSH entity has to consider every other entity in the
+game.  On a map like Immortal Lock (9.5k edicts, 185 func_trains moving at
+once) that is ~1.8M edict visits per server tick, and it dominates the frame.
+
+The set of entities a pusher can move is the same for every pusher within a
+tick, so it is built once and reused.  The list is deliberately a *superset*:
+both pusher loops still run the original movetype/free tests on each entry, so
+a list that is stale in the too-large direction cannot change behaviour.  What
+must never happen is a list that is missing a live candidate, so the cache is
+dropped by everything that can turn a non-candidate into one --- any call into
+QC (pr_exec.c), ED_ClearEdict/ED_Free (pr_edict.c), and the top of every
+SV_Physics frame, which covers console commands, savegame loads and map spawn.
+
+If the cache is dropped part way through a pusher's loop (a blocked/touch
+callback spawned or altered something) the iterator falls back to the plain
+scan from the next edict number onwards, so the visited set and its order stay
+identical to the uncached code.
+
+============================================================================
+*/
+
+//indices come from our own list or the loop bound, both already < num_edicts.
+#define PUSH_EDICT(e)	((edict_t *)((byte *)qcvm->edicts + (e) * qcvm->edict_size))
+
+static FUNC_ALWAYSINLINE qboolean SV_IsPushCandidate (const edict_t *check)
+{
+	if (check->v.movetype == MOVETYPE_PUSH
+	|| check->v.movetype == MOVETYPE_NONE
+	|| check->v.movetype == MOVETYPE_NOCLIP)
+		return false;
+	return !check->free;
+}
+
+/*
+============
+SV_UpdatePushCandidates
+
+Returns true if qcvm->pushcache is usable for this scan.
+============
+*/
+static qboolean SV_UpdatePushCandidates (void)
+{
+	edict_t	*check;
+	int		e;
+
+	if (!sv_pushcache.value)
+		return false;
+
+	if (qcvm->pushcache_valid)
+		return true;
+
+	if (qcvm->pushcache_max < qcvm->num_edicts)
+	{
+		int		newmax = qcvm->max_edicts;
+		int		*grown;
+
+		if (newmax < qcvm->num_edicts)
+			newmax = qcvm->num_edicts;
+		grown = (int *) realloc (qcvm->pushcache, sizeof(int) * newmax);
+		if (!grown)
+			return false;	//just keep using the plain scan
+		qcvm->pushcache = grown;
+		qcvm->pushcache_max = newmax;
+	}
+
+	qcvm->pushcache_count = 0;
+	check = NEXT_EDICT(qcvm->edicts);
+	for (e = 1; e < qcvm->num_edicts; e++, check = NEXT_EDICT(check))
+	{
+		if (SV_IsPushCandidate (check))
+			qcvm->pushcache[qcvm->pushcache_count++] = e;
+	}
+
+	qcvm->pushcache_valid = true;
+	return true;
+}
+
+typedef struct
+{
+	qboolean	uselist;
+	int			listpos;
+	int			e;			//edict number most recently returned
+	edict_t		*cur;		//plain-scan cursor, so that path stays a pointer walk
+	byte		*base;		//qcvm->edicts and edict_size are fixed for the level, so
+	int			size;		// hoist them out of the loop; qcvm is thread-local
+	qboolean	verifying;	//sv_pushcache 2+
+	int			shadow;		//position of the shadow plain scan
+	qboolean	torture;	//sv_pushcache 3
+	int			yields;
+	int			limit;		//cached qcvm->num_edicts; see SV_PushIter_Next
+} pushiter_t;
+
+static FUNC_ALWAYSINLINE void SV_PushIter_Begin (pushiter_t *it)
+{
+	it->uselist = SV_UpdatePushCandidates ();
+	it->listpos = 0;
+	it->e = 0;
+	it->base = (byte *)qcvm->edicts;
+	it->size = qcvm->edict_size;
+	it->cur = (edict_t *)it->base;			//edict 0; the first step lands on 1
+	it->verifying = (sv_pushcache.value >= 2);
+	it->shadow = 0;
+	it->torture = (sv_pushcache.value >= 3);
+	it->yields = 0;
+	it->limit = qcvm->num_edicts;
+}
+
+/*
+============
+SV_PushIter_Verify
+
+sv_pushcache 2+.  The iterator's contract is that the candidates it yields are
+exactly the ones a plain 1..num_edicts scan would reach: same set, same order,
+and each carrying the edict number of the entity it is handed with.  Membership
+alone is not enough --- SV_PushMove's elevator fix tests "e <= svs.maxclients",
+so an edict number replaced by a position in the cache would change behaviour
+while every entity still got visited.  This walks a shadow plain scan in step
+with the iterator and reports the first divergence of any kind.
+
+check == NULL means the iterator has finished; the shadow scan must be finished too.
+Returns the new shadow position, or -1 to stop verifying this scan.
+============
+*/
+static FUNC_NOINLINE int SV_PushIter_Verify (int shadow_pos, edict_t *check, int e)
+{
+	edict_t		*shadow = NULL;
+	const char	*problem;
+	int			next;
+
+	for (next = shadow_pos + 1; next < qcvm->num_edicts; next++)
+	{
+		shadow = PUSH_EDICT(next);
+		if (SV_IsPushCandidate (shadow))
+			break;
+	}
+	if (next >= qcvm->num_edicts)
+	{
+		if (!check)
+			return next;	//both finished together
+		problem = "yielded an entity the plain scan had already passed";
+	}
+	else if (!check)
+	{
+		Con_Warning ("sv_pushcache: scan stopped, but edict %i (%s) was still pending\n",
+					next, PR_GetString(shadow->v.classname));
+		qcvm->pushcache_valid = false;
+		return -1;
+	}
+	else if (shadow != check)
+		problem = "wrong entity";
+	else if (next != e)
+		problem = "wrong edict number";
+	else
+		return next;		//matched
+
+	Con_Warning ("sv_pushcache: %s: expected edict %i, got %i (%s)\n",
+				problem, next, e, check ? PR_GetString(check->v.classname) : "?");
+	qcvm->pushcache_valid = false;
+	return -1;				//one report per scan
+}
+
+/*
+============
+SV_PushIter_Next
+
+Yields the same edicts, in the same order, as "for (e = 1; e < num_edicts; e++)".
+Returns NULL when the scan is finished; *out_e receives the edict number.
+============
+*/
+static FUNC_ALWAYSINLINE edict_t *SV_PushIter_Next (pushiter_t *it, int *out_e)
+{
+	edict_t	*check = NULL;
+
+	if (it->uselist)
+	{
+		if (!qcvm->pushcache_valid)
+		{	//a callback changed things: finish with a plain scan from the next edict
+			it->uselist = false;
+			it->cur = (edict_t *)(it->base + (size_t)it->e * it->size);
+		}
+		else if (it->listpos < qcvm->pushcache_count)
+		{
+			it->e = qcvm->pushcache[it->listpos++];
+			check = (edict_t *)(it->base + (size_t)it->e * it->size);
+		}
+		//else: still valid, so num_edicts has not grown and the list covered everything
+	}
+
+	if (!check && !it->uselist)
+	{
+		//the vanilla loop re-reads num_edicts every iteration.  it only ever grows
+		//(ED_Alloc), so refreshing the bound once the scan reaches it is exactly
+		//equivalent and keeps the thread-local qcvm out of the inner loop.
+		if (++it->e >= it->limit)
+			it->limit = qcvm->num_edicts;
+		if (it->e < it->limit)
+		{
+			it->cur = (edict_t *)((byte *)it->cur + it->size);
+			check = it->cur;
+		}
+	}
+
+	if (it->verifying && (!check || SV_IsPushCandidate (check)))
+	{	//scalars only: taking &iter here would force the iterator state to memory
+		//and cost the uncached path more than the whole cache saves.
+		it->shadow = SV_PushIter_Verify (it->shadow, check, it->e);
+		if (it->shadow < 0)
+			it->verifying = false;
+	}
+
+	if (!check)
+		return NULL;
+
+	//sv_pushcache 3: drop the cache mid-scan so the fallback to the plain scan,
+	//and its resume-from-the-next-edict-number arithmetic, are exercised constantly.
+	if (it->torture && !(++it->yields & 7))
+		qcvm->pushcache_valid = false;
+
+	*out_e = it->e;
+	return check;
+}
+
+/*
 ============
 SV_PushMove
 ============
@@ -574,6 +803,7 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime, const vec3_t
 {
 	int			i, e;
 	edict_t		*check, *block;
+	pushiter_t	iter;
 	vec3_t		mins, maxs;
 	//float oldsolid;
 	vec3_t		org, org2, move2, forward, right, up;
@@ -617,16 +847,15 @@ static qboolean SV_PushMoveAngles (edict_t *pusher, float movetime, const vec3_t
 	SV_LinkEdict (pusher, false);
 
 // see if any solid entities are inside the final position
-	check = NEXT_EDICT(qcvm->edicts);
-	for (e = 1; e < qcvm->num_edicts; e++, check = NEXT_EDICT(check))
+	SV_PushIter_Begin (&iter);
+	while ((check = SV_PushIter_Next (&iter, &e)) != NULL)
 	{
-		if (check->free)
-			continue;
-
 		if (check->v.movetype == MOVETYPE_PUSH
 		|| check->v.movetype == MOVETYPE_NONE
 		|| check->v.movetype == MOVETYPE_NOCLIP
 		|| check->v.movetype == MOVETYPE_ANGLENOCLIP)
+			continue;
+		if (check->free)
 			continue;
 /*
 		oldsolid = pusher->v->solid;
@@ -777,6 +1006,7 @@ void SV_PushMove (edict_t *pusher, float movetime)
 {
 	int			i, e;
 	edict_t		*check, *block;
+	pushiter_t	iter;
 	vec3_t		mins, maxs, move;
 	vec3_t		entorig, pushorig;
 	int			num_moved;
@@ -851,15 +1081,15 @@ void SV_PushMove (edict_t *pusher, float movetime)
 
 // see if any solid entities are inside the final position
 	num_moved = 0;
-	check = NEXT_EDICT(qcvm->edicts);
-	for (e=1 ; e<qcvm->num_edicts ; e++, check = NEXT_EDICT(check))
+	SV_PushIter_Begin (&iter);
+	while ((check = SV_PushIter_Next (&iter, &e)) != NULL)
 	{
 		qboolean riding;
-		if (check->free)
-			continue;
 		if (check->v.movetype == MOVETYPE_PUSH
 		|| check->v.movetype == MOVETYPE_NONE
 		|| check->v.movetype == MOVETYPE_NOCLIP)
+			continue;
+		if (check->free)
 			continue;
 
 	// if the entity is standing on the pusher, it will definately be moved
@@ -1702,6 +1932,10 @@ void SV_Physics (double frametime)
 		frametime = 0;	//no, just no. stoopid float precision.
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->frametime = qcvm->frametime = frametime;
+
+	//console commands, savegame loads and map spawn all run between server frames
+	//and can assign movetype directly, so never trust a cache built before now.
+	qcvm->pushcache_valid = false;
 
 	if (!physics_mode)
 	{

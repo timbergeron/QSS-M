@@ -68,6 +68,7 @@ void ED_ClearEdict (edict_t *e)
 	memset (&e->v, 0, qcvm->progs->entityfields * 4);
 	e->swimmonster_start_counted = false;
 	e->free = false;
+	qcvm->pushcache_valid = false;	//a reused/new slot may now be a pusher candidate
 }
 
 /*
@@ -102,6 +103,7 @@ edict_t *ED_Alloc (void)
 		Host_Error ("ED_Alloc: no free edicts (max_edicts is %i)", qcvm->max_edicts);
 
 	qcvm->num_edicts++;
+	qcvm->pushcache_valid = false;	//this path does not go through ED_ClearEdict
 	e = EDICT_NUM(i);
 	memset(e, 0, qcvm->edict_size); // ericw -- switched sv.edicts to malloc(), so we are accessing uninitialized memory and must fully zero it, not just ED_ClearEdict
 	e->baseline = nullentitystate;
@@ -139,6 +141,7 @@ void ED_Free (edict_t *ed)
 	ed->alpha = ENTALPHA_DEFAULT; //johnfitz -- reset alpha for next entity
 
 	ed->freetime = qcvm->time;
+	qcvm->pushcache_valid = false;
 }
 
 //===========================================================================
@@ -1727,6 +1730,7 @@ void PR_ClearProgs(qcvm_t *vm)
 
 	if (qcvm->knownstrings)
 		Z_Free ((void *)qcvm->knownstrings);
+	free(qcvm->pushcache);
 	free(qcvm->edicts); // ericw -- sv.edicts switched to use malloc()
 	if (qcvm->fielddefs != (ddef_t *)((byte *)qcvm->progs + qcvm->progs->ofs_fielddefs))
 		free(qcvm->fielddefs);
