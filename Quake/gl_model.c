@@ -4699,6 +4699,33 @@ visdone:
 		mod->submodelof = loadmodel->submodelof;
 		mod->submodelidx = i;
 
+		//note whether this submodel has any sky at all, so Sky_ProcessEntities can
+		//skip it outright instead of walking its faces every frame.  the flags were
+		//assigned in Mod_LoadFaces, which has already run.
+		//Mod_LoadSubmodels takes firstface/numfaces straight from the lump without
+		//validating them, so check the range before forming a pointer from it.  the
+		//render paths that walk it are equally unguarded, but this is the first thing
+		//to touch it at *load* time, and a dedicated server never renders at all --
+		//without this, a malformed submodel range turns into a load-time segfault on
+		//a headless server.  a proper fix belongs in Mod_LoadSubmodels, where it would
+		//cover every consumer.  written as a subtraction of values already known to be
+		//non-negative so it cannot overflow.
+		mod->hasskysurfaces = false;
+		if (mod->firstmodelsurface >= 0 && mod->nummodelsurfaces >= 0 &&
+			mod->firstmodelsurface <= mod->numsurfaces &&
+			mod->nummodelsurfaces <= mod->numsurfaces - mod->firstmodelsurface)
+		{
+			msurface_t *surf = mod->surfaces + mod->firstmodelsurface;
+			for (j = 0; j < mod->nummodelsurfaces; j++, surf++)
+			{
+				if (surf->flags & SURF_DRAWSKY)
+				{
+					mod->hasskysurfaces = true;
+					break;
+				}
+			}
+		}
+
 		VectorCopy (bm->maxs, mod->maxs);
 		VectorCopy (bm->mins, mod->mins);
 

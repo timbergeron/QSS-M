@@ -3205,6 +3205,9 @@ void Sky_ProcessEntities (void)
 			skipsubmodels[e->model->submodelidx>>3]&(1u<<(e->model->submodelidx&7)))
 			return;	//its in the scenecache that we're drawing. don't draw it twice (and certainly not the slow way).
 
+		if (!e->model->hasskysurfaces)
+			continue;	//nothing below can emit anything for a model with no sky faces
+
 		if (R_CullModelForEntity(e))
 			continue;
 

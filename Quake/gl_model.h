@@ -510,6 +510,9 @@ typedef struct qmodel_s
 // brush model
 //
 	int			firstmodelsurface, nummodelsurfaces;
+	qboolean	hasskysurfaces;		//any SURF_DRAWSKY in this submodel's surface range.
+								//SURF_DRAWSKY is only ever set in Mod_LoadFaces, so this
+								//is fixed once the model is loaded. see Sky_ProcessEntities.
 
 	int			numsubmodels;
 	mmodel_t	*submodels;
