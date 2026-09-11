@@ -2,7 +2,11 @@ QSS-M is a open source port of the original ID Software Quake. Over 25 years Qua
 
 https://qssm.quakeone.com
 
-📖 [**Build QSS-M from source**](https://raw.githack.com/timbergeron/QSS-M/qsrebase/BUILDING.html) — step-by-step for Linux, macOS & Windows
+Documentation:
+
+- 📖 [**Build QSS-M from source**](https://raw.githack.com/timbergeron/QSS-M/qsrebase/BUILDING.html) — step-by-step for Linux, macOS & Windows
+- [Chunked download bandwidth settings and tests](Misc/stress/chunked_downloads.md)
+- [All QSS-M Commands & Variables (Google Sheets)](https://docs.google.com/spreadsheets/d/1ubOuromaXpZonfL-eJ-KA7q-xSRiBBuSvxahzF-uFOY/edit?usp=sharing)
 
 Credits:
 JPG, r00k, Spoike for QSS and FTEQW, Ozkan Sezer & Eric Wasylishen (Quakespasm), John Fitzgibbons (FitzQuake), Baker (MarkV), MH, Joe (JoeQuake), Andrei Drexler (Ironwail), & [many more](https://q1tools.github.io/tree/)
@@ -85,9 +89,6 @@ JPG, r00k, Spoike for QSS and FTEQW, Ozkan Sezer & Eric Wasylishen (Quakespasm),
 - Out-of-memory and size-overflow guards on previously unchecked malloc sites
 
 </details>
-
-
-[ALL QSS-M Commands & Variables (Google Sheets)](https://docs.google.com/spreadsheets/d/1ubOuromaXpZonfL-eJ-KA7q-xSRiBBuSvxahzF-uFOY/edit?usp=sharing)
 
 ```
 timbergeron@gmail.com | discord.quakeone.com (woods#3451)

@@ -300,6 +300,8 @@ typedef struct client_s
 		unsigned int chunkqueue[DL_MAX_CHUNK_QUEUE];
 		unsigned int chunkqueue_head;
 		unsigned int chunkqueue_count;
+		double chunkcredit;
+		double chunkcredit_time;
 		//for more speed, the server should build a collection of blocks to track which parts were actually acked, thereby avoiding redundant resends, but in the intererest of simplicity...
 	} download;
 	qboolean		knowntoqc;			// putclientinserver was called

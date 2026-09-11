@@ -336,7 +336,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define DL_CHUNK_HEADER_SIZE		5	// svc_download byte + 32-bit chunk number.
 #define DL_CHUNK_PACKET_SIZE		(DL_CHUNK_HEADER_SIZE + DLBLOCKSIZE)
 #define DL_LEGACY_HEADER_SIZE		7	// svcdp_downloaddata byte + offset + size.
-#define DL_MAX_CHUNK_QUEUE		64	//server-side queue for client nextdl requests.
+#define DL_MAX_CHUNK_QUEUE		128	//server-side queue for client nextdl requests.
 #define DLERR_FILENOTFOUND		-1
 #define DLERR_PERMISSIONS		-2
 #define DLERR_UNKNOWN			-3

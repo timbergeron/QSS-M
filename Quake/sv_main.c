@@ -3866,18 +3866,23 @@ qboolean SV_SendClientDatagram (client_t *client)
 
 	if (client->download.file && client->download.chunked)
 	{
-		enum { MAX_CHUNKED_DOWNLOAD_PACKETS = 8 };
+		enum { MAX_CHUNKED_DOWNLOAD_PACKETS = 32 };
 		int dlpackets = 0;
+		int allowance = Host_ChunkDownloadAllowance(client);
 
-		while (client->download.chunkqueue_count && dlpackets < MAX_CHUNKED_DOWNLOAD_PACKETS)
+		while (client->download.chunkqueue_count && dlpackets < MAX_CHUNKED_DOWNLOAD_PACKETS &&
+			allowance >= DL_CHUNK_PACKET_SIZE)
 		{
 			qboolean appended;
 
 			msg.maxsize = q_min((int)sizeof(buf), (int)client->limit_unreliable);
+			msg.maxsize = q_min(msg.maxsize, allowance);
 			msg.cursize = 0;
 			appended = Host_AppendDownloadData(client, &msg);
 			if (!appended)
 				break;
+			allowance -= msg.cursize;
+			client->download.chunkcredit = q_max(0.0, client->download.chunkcredit - msg.cursize);
 			if (msg.cursize &&
 				NET_SendUnreliableMessage(client->netconnection, &msg) == -1)
 			{

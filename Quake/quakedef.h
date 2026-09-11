@@ -471,6 +471,7 @@ void Host_SaveConfiguration (void); // woods #cfgsave
 void Host_BackupConfiguration (void); // woods #cfgbackup
 
 qboolean Host_AppendDownloadData(client_t *client, sizebuf_t *buf);
+int Host_ChunkDownloadAllowance(client_t *client);
 void Host_DownloadAck(client_t *client);
 void CL_ClearIgnoredChats(void);
 void CL_UpdateIgnoredChatSlot(int slot, const char *name);

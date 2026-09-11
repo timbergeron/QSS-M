@@ -780,7 +780,11 @@ void CL_Disconnect (void)
 	cls.signon = 0;
 	cls.netcon = NULL;
 	if (cls.download.file)
+	{
 		fclose(cls.download.file);
+		if (cls.download.chunked)
+			unlink(cls.download.temp);
+	}
 	DL_FreeBlocks();
 	memset(&cls.download, 0, sizeof(cls.download));
 	cls.download.percent = -1.0f;
@@ -3747,6 +3751,7 @@ void CL_InitWebDownloads(qboolean run_checks)
 static void CL_DownloadProgress_Begin(const char *filename)
 {
 	DL_FreeBlocks();
+	cls.download.chunksequence_valid = false;
 	cls.download.active = true;
 	cls.download.chunked = false;
 	cls.download.completedbytes = 0;
@@ -4217,12 +4222,20 @@ static qboolean DL_SendLegacyDownloadAck(unsigned int start, unsigned int size)
 	return true;
 }
 
-static qboolean DL_SendNextDownloadChunk(unsigned int chunk)
+static qboolean DL_WriteNextDownloadChunk(sizebuf_t *message, unsigned int chunk)
 {
 	char command[64];
+	size_t needed;
 
 	q_snprintf(command, sizeof(command), "nextdl %u %.1f 0\n", chunk, cls.download.percent);
-	return DL_SendDownloadCommand(command);
+	needed = 1 + strlen(command) + 1;
+	if (message->cursize > message->maxsize)
+		return false;
+	if (needed > (size_t)(message->maxsize - message->cursize))
+		return false;
+	MSG_WriteByte(message, clc_stringcmd);
+	MSG_WriteString(message, command);
+	return true;
 }
 
 static dlblock_t *DL_NewBlock(unsigned int start, unsigned int end, dlblock_state_t state)
@@ -4233,6 +4246,7 @@ static dlblock_t *DL_NewBlock(unsigned int start, unsigned int end, dlblock_stat
 	b->end = end;
 	b->state = state;
 	b->requesttime = 0;
+	b->requests = 0;
 	b->next = NULL;
 	return b;
 }
@@ -4272,6 +4286,23 @@ static unsigned int DL_PeekLong(int pos)
 		((unsigned int)net_message.data[pos + 1] << 8) |
 		((unsigned int)net_message.data[pos + 2] << 16) |
 		((unsigned int)net_message.data[pos + 3] << 24);
+}
+
+static void CL_Download_Sequence_f(void)
+{
+	unsigned int sequence;
+
+	/* Sent reliably immediately before the chunked start. Older servers omit
+	 * this optional marker; older clients ignore it as a stufftext comment. */
+	if (Cmd_Argc() != 3 || !cls.download.active || !cls.download.chunked ||
+		cls.download.file || strcmp(Cmd_Argv(2), cls.download.current) ||
+		!DL_ParseUnsigned(Cmd_Argv(1), &sequence))
+	{
+		Con_DPrintf("Ignoring download sequence marker: invalid state, filename or sequence\n");
+		return;
+	}
+	cls.download.chunksequence = sequence;
+	cls.download.chunksequence_valid = true;
 }
 
 static qboolean DL_LooksLikeChunkedStart(int pos)
@@ -4333,6 +4364,8 @@ static qboolean DL_ChunkExpected(unsigned int chunk)
 
 	for (b = cls.download.dlblocks; b; b = b->next)
 	{
+		if (b->start >= end)
+			break;
 		if (start < b->end && end > b->start)
 			return true;
 	}
@@ -4352,6 +4385,7 @@ static void DL_ClearChunkedState(qboolean delete_temp)
 	cls.download.active = false;
 	cls.download.chunked = false;
 	cls.download.size = 0;
+	cls.download.chunksequence_valid = false;
 	cls.download.completedbytes = 0;
 	cls.download.ratebytes = 0;
 	cls.download.rate = 0;
@@ -4498,7 +4532,9 @@ static unsigned int DL_MarkBlockReceived(unsigned int start, unsigned int end)
 		dlblock_t *next = b->next;
 		unsigned int overlap_start, overlap_end;
 
-		if (end <= b->start || start >= b->end)
+		if (end <= b->start)
+			break;
+		if (start >= b->end)
 		{
 			prev = b;
 			b = next;
@@ -4554,31 +4590,97 @@ static unsigned int DL_MarkBlockReceived(unsigned int start, unsigned int end)
 	return credited;
 }
 
+static void DL_InitChunkedPacing(void)
+{
+	/* Keep RTT estimates and transport fallback for this connection, but start
+	 * each file with a small window rather than bursting the previous one. */
+	cls.download.chunkwindow = 8;
+	cls.download.chunkthreshold = 64;
+	cls.download.chunkcredit = 8;
+	cls.download.chunkcredit_time = realtime;
+	cls.download.chunkloss_time = realtime;
+	cls.download.chunkprogress_time = 0;	//start the stall timer with the first request.
+}
+
 static void DLC_RequestDownloadChunks(void)
 {
-	enum { MAX_PENDING_CHUNKS = 32 };
-	const double retry_delay = 1.0;
-	dlblock_t *b;
-	int pending = 0;
+	enum { MAX_PENDING_CHUNKS = DL_MAX_CHUNK_QUEUE, MAX_REQUESTS = 32 };
+	byte data[1024];
+	sizebuf_t message;
+	double retry_delay;
+	double elapsed, pace_rtt;
+	dlblock_t *b, *missing = NULL;
+	int pending = 0, requests = 0;
+	qboolean loss = false, fallback = false;
 
-	if (!cls.download.active || !cls.download.chunked || !cls.download.file)
+	if (cls.state != ca_connected || cls.demoplayback || !cls.netcon ||
+		!cls.download.active || !cls.download.chunked || !cls.download.file)
 		return;
+
+	/* Pace by elapsed time, not render FPS. The window limits outstanding
+	 * requests; credit limits how quickly we refill it after a burst of replies. */
+	memset(&message, 0, sizeof(message));
+	message.data = data;
+	message.maxsize = sizeof(data);
+	retry_delay = cls.download.chunkrtt > 0
+		? CLAMP(0.25, cls.download.chunkrtt + 4 * cls.download.chunkrttvar, 2.0)
+		: 1.0;
+	pace_rtt = q_max(0.05, cls.download.chunkrtt);
+	elapsed = CLAMP(0.0, realtime - cls.download.chunkcredit_time, 0.25);
+	cls.download.chunkcredit_time = realtime;
+	cls.download.chunkcredit = q_min(q_min(cls.download.chunkwindow, MAX_REQUESTS),
+		cls.download.chunkcredit + elapsed * cls.download.chunkwindow / pace_rtt);
 
 	for (b = cls.download.dlblocks; b; b = b->next)
 	{
 		if (b->state == DLB_PENDING)
 		{
-			if (realtime - b->requesttime >= retry_delay)
+			if (!cls.download.chunkreliable && !cls.download.chunkunreliable_ok &&
+				realtime - cls.download.chunkprogress_time >= 5.0)
 			{
+				/* Try the reliable stream if the unreliable request path has never
+				 * worked on this connection. Later outages should not select it. */
+				cls.download.chunkreliable = fallback = true;
+				cls.download.chunkwindow = cls.download.chunkcredit = 8;
+				Con_Printf("Download stalled; switching to reliable chunk requests\n");
+			}
+			/* Back off repeated losses, including a completely lost request
+			 * batch. A delayed retransmission cannot supply a reliable RTT. */
+			unsigned int backoff = b->requests > 1 ? q_min(b->requests - 1, 3u) : 0;
+			double delay = q_min(2.0, retry_delay * (1u << backoff));
+			if (fallback || realtime - b->requesttime >= delay)
+			{
+				if (!fallback)
+					loss = true;
 				b->state = DLB_MISSING;
 				b->requesttime = 0;
 			}
 			else
 				pending++;
 		}
+		if (!missing && b->state == DLB_MISSING)
+			missing = b;
 	}
 
-	for (b = cls.download.dlblocks; b && pending < MAX_PENDING_CHUNKS; b = b->next)
+	/* Reduce once per recovery interval, not once per lost chunk in a batch. */
+	if (loss && realtime >= cls.download.chunkloss_time)
+	{
+		cls.download.chunkwindow = q_max(4.0, cls.download.chunkwindow * 0.75);
+		cls.download.chunkthreshold = cls.download.chunkwindow;
+		cls.download.chunkcredit = q_min(cls.download.chunkcredit, cls.download.chunkwindow);
+		cls.download.chunkloss_time = realtime + q_max(1.0, retry_delay);
+	}
+
+	/* Batch up to eight requests in the stop-and-wait reliable stream, with at
+	 * most eight outstanding. Allow the signon nop queued by connection setup
+	 * or Host_Frame, but not retries behind other commands or a blocked stream. */
+	if (cls.download.chunkreliable &&
+		((cls.message.cursize && !(cls.message.cursize == 1 && cls.message.data[0] == clc_nop)) ||
+		 !NET_CanSendMessage(cls.netcon)))
+		return;
+	for (b = missing;
+		b && pending < q_min(cls.download.chunkreliable ? 8 : MAX_PENDING_CHUNKS, (int)cls.download.chunkwindow) &&
+		requests < (cls.download.chunkreliable ? 8 : MAX_REQUESTS) && cls.download.chunkcredit >= 1; b = b->next)
 	{
 		unsigned int chunk, chunk_end;
 
@@ -4598,12 +4700,67 @@ static void DLC_RequestDownloadChunks(void)
 			b->end = chunk_end;
 		}
 
-		if (!DL_SendNextDownloadChunk(chunk))
+		if (!DL_WriteNextDownloadChunk(cls.download.chunkreliable ? &cls.message : &message, chunk))
 			break;
 
 		b->state = DLB_PENDING;
 		b->requesttime = realtime;
+		if (!cls.download.chunkprogress_time)
+			cls.download.chunkprogress_time = realtime;
+		if (b->requests < 4)
+			b->requests++;
 		pending++;
+		requests++;
+		cls.download.chunkcredit -= 1;
+	}
+
+	if (message.cursize && NET_SendUnreliableMessage(cls.netcon, &message) == -1)
+		Host_Error("DLC_RequestDownloadChunks: lost server connection");
+}
+
+static void DL_RecordChunkRTT(unsigned int offset)
+{
+	dlblock_t *b;
+
+	for (b = cls.download.dlblocks; b; b = b->next)
+	{
+		if (b->start > offset)
+			break;
+		if (b->start == offset && b->state == DLB_PENDING)
+		{
+			double sample = realtime - b->requesttime;
+			if (b->requests != 1)
+				return;	//the reply could belong to an earlier request.
+			if (sample <= 0)
+				return;
+			if (cls.download.chunkrtt <= 0)
+			{
+				cls.download.chunkrtt = sample;
+				cls.download.chunkrttvar = sample / 2;
+			}
+			else
+			{
+				cls.download.chunkrttvar += 0.25 *
+					(fabs(sample - cls.download.chunkrtt) - cls.download.chunkrttvar);
+				cls.download.chunkrtt += 0.125 * (sample - cls.download.chunkrtt);
+			}
+			/* Let an old minimum approach the smoothed RTT with a ten-second
+			 * time constant. This ages low outliers and path changes across files
+			 * without making the rate of adaptation depend on the ACK count. */
+			if (cls.download.chunkrttmin > 0)
+				cls.download.chunkrttmin += (cls.download.chunkrtt - cls.download.chunkrttmin) *
+					(1 - exp(-q_max(0.0, realtime - cls.download.chunkrttmin_time) / 10.0));
+			if (cls.download.chunkrttmin <= 0 || sample < cls.download.chunkrttmin)
+				cls.download.chunkrttmin = sample;
+			cls.download.chunkrttmin_time = realtime;
+			/* Stop growing into a standing queue. The additive increase is
+			 * deliberately four chunks per RTT: one roughly halved throughput
+			 * in the lossy-transfer test. Retransmissions never grow the window. */
+			if (cls.download.chunkrtt <= 2 * cls.download.chunkrttmin)
+				cls.download.chunkwindow = q_min((double)DL_MAX_CHUNK_QUEUE, cls.download.chunkwindow +
+					(cls.download.chunkwindow < cls.download.chunkthreshold ? 1 : 4 / cls.download.chunkwindow));
+			return;
+		}
 	}
 }
 
@@ -5726,6 +5883,7 @@ void CL_Download_Chunked(void)
 		cls.download.ratebytes = 0;
 		cls.download.rate = 0;
 		cls.download.ratetime = realtime;
+		DL_InitChunkedPacing();
 		CL_DownloadProgress_Update(0.0, (double)cls.download.size);
 
 		COM_CreatePath(cls.download.temp);
@@ -5744,7 +5902,6 @@ void CL_Download_Chunked(void)
 		if (cls.download.size)
 		{
 			cls.download.dlblocks = DL_NewBlock(0, cls.download.size, DLB_MISSING);
-			DLC_RequestDownloadChunks();
 		}
 		else
 			DL_FinishChunked();
@@ -5756,6 +5913,9 @@ void CL_Download_Chunked(void)
 		return;
 	if (chunknum < 0 || !cls.download.active || !cls.download.chunked || !cls.download.file)
 		return;
+	if (cls.download.chunksequence_valid && cls.netcon && !cls.demoplayback &&
+		(int)((unsigned int)NET_QSocketGetSequenceIn(cls.netcon) - cls.download.chunksequence) < 0)
+		return;	//an old download's reply arrived after the new reliable start.
 	if (!cls.download.size)
 		return;
 
@@ -5763,12 +5923,17 @@ void CL_Download_Chunked(void)
 	maxchunk = (cls.download.size - 1) / DLBLOCKSIZE;
 	if (chunk > maxchunk)
 		return;
+	if (!DL_ChunkExpected(chunk))
+		return;	//duplicates need neither another write nor another RTT sample.
 	offset = chunk * DLBLOCKSIZE;
 	wanted = cls.download.size - offset;
 	if (wanted > DLBLOCKSIZE)
 		wanted = DLBLOCKSIZE;
 
-	if (fseek(cls.download.file, offset, SEEK_SET) != 0 ||
+	/* This wb+ stream only writes during chunk reception. A read here would
+	 * require a positioning operation before the next write, even at offset. */
+	if ((ftell(cls.download.file) != (long long)offset &&
+		fseek(cls.download.file, offset, SEEK_SET) != 0) ||
 		fwrite(data, 1, wanted, cls.download.file) != wanted)
 	{
 		Con_Warning("Download of %s failed while writing chunk\n", cls.download.current);
@@ -5777,9 +5942,13 @@ void CL_Download_Chunked(void)
 		return;
 	}
 
+	DL_RecordChunkRTT(offset);
 	credited = DL_MarkBlockReceived(offset, offset + wanted);
 	if (credited)
 	{
+		cls.download.chunkprogress_time = realtime;
+		if (!cls.download.chunkreliable)
+			cls.download.chunkunreliable_ok = true;
 		cls.download.completedbytes += credited;
 		if (cls.download.completedbytes > cls.download.size)
 			cls.download.completedbytes = cls.download.size;
@@ -5795,8 +5964,6 @@ void CL_Download_Chunked(void)
 
 	if (!cls.download.dlblocks)
 		DL_FinishChunked();
-	else
-		DLC_RequestDownloadChunks();
 }
 
 //returns true if we should block waiting for a download, false if there's no point.
@@ -6632,6 +6799,8 @@ void CL_SendCmd (void)
 		SZ_Clear (&cls.message);
 		return;
 	}
+
+	DLC_RequestDownloadChunks();
 
 // send the reliable message
 	if (!cls.message.cursize)
@@ -7846,6 +8015,7 @@ void CL_Init (void)
 	
 	Cmd_AddCommand_ServerCommand ("cl_serverextension_download", CL_ServerExtension_Download_f); //spike
 	Cmd_AddCommand_ServerCommand ("cl_downloadbegin", CL_Download_Begin_f); //spike
+	Cmd_AddCommand_ServerCommand ("cl_downloadsequence", CL_Download_Sequence_f);
 	Cmd_AddCommand_ServerCommand ("cl_downloadfinished", CL_Download_Finished_f); //spike
 	Cmd_AddCommand ("stopdownload", CL_StopDownload_f); //spike
 }

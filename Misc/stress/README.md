@@ -8,6 +8,9 @@ every registered console command and cvar.
 
 ## Requirements
 
+For chunked download pacing and standalone regression tests, see
+[chunked_downloads.md](chunked_downloads.md). Those tests do not need stress hooks.
+
 * a QSS-M build with the optional stress hooks re-added (`Host_StressInit` in
   `Misc/stress/host_stress.c`); production targets currently omit them
 * `pak0.pak` (+ `pak1.pak` for the registered maps); found automatically in

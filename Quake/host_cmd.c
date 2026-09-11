@@ -53,6 +53,7 @@ extern		char afk_name[16]; // woods #smartafk
 
 cvar_t sv_adminnick = {"sv_adminnick", "server admin", CVAR_ARCHIVE}; // woods (darkpaces) #adminnick
 cvar_t sv_modvote = {"sv_modvote", "0", CVAR_ARCHIVE | CVAR_SERVERINFO};
+cvar_t sv_downloadrate = {"sv_downloadrate", "1024", CVAR_ARCHIVE}; // total chunked download KiB/s; <= 0 = unlimited.
 extern char lastconnected[3]; // woods -- #identify+
 extern qboolean ctrlpressed; // woods #saymodifier
 
@@ -12532,6 +12533,15 @@ static void Host_SendChunkedDownloadStart(client_t *client, int size_or_error, c
 	 * 32-bit sizes. The client parser still accepts FTE's 64-bit marker for
 	 * interoperability with other servers. */
 	q_strlcpy(safe_name, name ? name : "", sizeof(safe_name));
+	if (size_or_error >= 0)
+	{
+		/* All previous-file replies have smaller unreliable sequence numbers.
+		 * Keep the marker and start in the same reliable message, in that order.
+		 * COM_DownloadNameOkay already excludes quotes and control characters. */
+		MSG_WriteByte(&client->message, svc_stufftext);
+		MSG_WriteString(&client->message, va("//cl_downloadsequence %u \"%s\"\n",
+			(unsigned int)NET_QSocketGetSequenceOut(client->netconnection), safe_name));
+	}
 	MSG_WriteByte(&client->message, svc_download);
 	MSG_WriteLong(&client->message, -1);
 	MSG_WriteLong(&client->message, size_or_error);
@@ -12579,6 +12589,8 @@ static void Host_Download_f(void)
 		host_client->download.ackpos = 0;
 		host_client->download.chunkqueue_head = 0;
 		host_client->download.chunkqueue_count = 0;
+		host_client->download.chunkcredit = 0;
+		host_client->download.chunkcredit_time = realtime;
 		
 		fsize = -1;
 		if (!COM_DownloadNameOkay(fname))
@@ -12687,7 +12699,34 @@ static void Host_StartDownload_f(void)
 	else
 		SV_ClientPrintf("no download started\n");
 }
-//just writes download data onto the end of the outgoing unreliable buffer
+// Returns the chunk-message bytes this client can send now.
+int Host_ChunkDownloadAllowance(client_t *client)
+{
+	double rate = sv_downloadrate.value;
+	double burst, elapsed;
+	int i, downloading = 0;
+
+	if (rate <= 0)
+	{
+		client->download.chunkcredit_time = realtime;
+		return 32 * DL_CHUNK_PACKET_SIZE;
+	}
+	/* Share the configured total fairly, independently of client iteration order. */
+	if (!(rate >= 1))
+		rate = 1;
+	rate = q_min(rate, 65536.0) * 1024;
+	for (i = 0; i < svs.maxclients; i++)
+		if (svs.clients[i].active && svs.clients[i].download.file && svs.clients[i].download.chunked)
+			downloading++;
+	rate /= q_max(1, downloading);
+	/* Up to 100 ms of credit, with an absolute 32-chunk burst ceiling. */
+	burst = CLAMP((double)DL_CHUNK_PACKET_SIZE, rate * 0.1, 32.0 * DL_CHUNK_PACKET_SIZE);
+	elapsed = CLAMP(0.0, realtime - client->download.chunkcredit_time, 0.1);
+	client->download.chunkcredit_time = realtime;
+	client->download.chunkcredit = q_min(burst, client->download.chunkcredit + elapsed * rate);
+	return (int)(client->download.chunkcredit / DL_CHUNK_PACKET_SIZE) * DL_CHUNK_PACKET_SIZE;
+}
+
 static void Host_PopDownloadChunk(client_t *client)
 {
 	client->download.chunkqueue_head =
@@ -12695,6 +12734,7 @@ static void Host_PopDownloadChunk(client_t *client)
 	client->download.chunkqueue_count--;
 }
 
+// Writes download data onto the end of the outgoing unreliable buffer.
 qboolean Host_AppendDownloadData(client_t *client, sizebuf_t *buf)
 {
 	if (buf->cursize > buf->maxsize - DL_LEGACY_HEADER_SIZE)
@@ -12726,7 +12766,9 @@ qboolean Host_AppendDownloadData(client_t *client, sizebuf_t *buf)
 			}
 			offset = chunk * DLBLOCKSIZE;
 
-			if (fseek(client->download.file, client->download.startpos + offset, SEEK_SET) != 0)
+			/* Preserve stdio read-ahead for the usual sequential requests. */
+			if (ftell(client->download.file) != (long long)client->download.startpos + offset &&
+				fseek(client->download.file, client->download.startpos + offset, SEEK_SET) != 0)
 			{
 				Host_FailChunkedDownload(client);
 				return sent;
@@ -12822,10 +12864,13 @@ static void Host_NextDownload_f(void)
 	/* Keep one chunk per nextdl to avoid request amplification; the client can
 	 * pipeline separate nextdl commands. */
 	chunk = (unsigned int)chunknum;
-	if (host_client->download.chunkqueue_count >= countof(host_client->download.chunkqueue))
-		return;
 	if (Host_DownloadChunkQueued(host_client, chunk))
 		return;
+	if (host_client->download.chunkqueue_count >= countof(host_client->download.chunkqueue))
+	{
+		Con_DPrintf("Download chunk queue full; dropping request for %u\n", chunk);
+		return;
+	}
 
 	tail = (host_client->download.chunkqueue_head +
 		host_client->download.chunkqueue_count) % countof(host_client->download.chunkqueue);
@@ -13050,6 +13095,7 @@ Host_InitCommands
 */
 void Host_InitCommands (void)
 {
+	Cvar_RegisterVariable(&sv_downloadrate);
 #define Cmd_AddCommand_ClientCommandQC(cmd,fnc) Cmd_AddCommand2(cmd,fnc,src_client,true)
 
 	Host_InitSaveThread ();

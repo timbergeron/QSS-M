@@ -151,6 +151,7 @@ typedef struct dlblock_s
 	unsigned int end;
 	dlblock_state_t state;
 	double requesttime;
+	unsigned int requests;	//exclude retransmitted chunks from RTT samples.
 	struct dlblock_s *next;
 } dlblock_t;
 
@@ -231,6 +232,20 @@ typedef struct
 		int		rate;
 		double	ratetime;
 		double	chunkedstaleuntil;
+		double	chunkrtt;
+		double	chunkrttvar;
+		double	chunkrttmin;	//RTT estimates persist across files until disconnect.
+		double	chunkrttmin_time;
+		qboolean chunkreliable;	//connection fallback for peers rejecting unreliable nextdl.
+		qboolean chunkunreliable_ok;	//credited data proves the request path works on this connection.
+		double	chunkprogress_time;
+		double	chunkwindow;
+		double	chunkthreshold;
+		double	chunkcredit;
+		double	chunkcredit_time;
+		double	chunkloss_time;
+		qboolean chunksequence_valid;
+		unsigned int chunksequence;	//reject old-file datagrams after a reliable start marker.
 		dlblock_t *dlblocks;
 		char	current[MAX_QPATH];	//also prevents us from repeatedly trying to download the same file
 		char	temp[MAX_OSPATH];		//the temp filename for the download, will be renamed to current
