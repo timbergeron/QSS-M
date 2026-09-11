@@ -2347,14 +2347,71 @@ static void Mod_LoadVisibility (lump_t *l)
 
 /*
 =================
+Mod_FindExternalEntFile
+
+Picks the external .ent file that replaces a map's embedded entity lump, if
+any. Shared so that every caller agrees on which file wins -- the client-side
+sky prefetch scan (Sky_PeekSkyKeyFromBSP) used to disagree with this and then
+downloaded and warned about the sky the .ent had overridden.
+entcrc is the CRC of the embedded lump, used by the "@crc" variants.
+=================
+*/
+qboolean Mod_FindExternalEntFile (const char *bspname, unsigned int entcrc, char *out, size_t outsize, unsigned int *path_id)
+{
+	char	basemapname[MAX_QPATH];
+	char	entfilename[MAX_QPATH];
+	const char	*dir;
+	int		i;
+
+	if (! external_ents.value)
+		return false;
+
+	q_strlcpy(basemapname, bspname, sizeof(basemapname));
+	COM_StripExtension(basemapname, basemapname, sizeof(basemapname));
+	dir = external_ents_dir.string ? external_ents_dir.string : "";
+
+	for (i = 0; i < 4; i++)
+	{
+		switch (i)
+		{
+		case 0:
+			if (!*dir)
+				continue;
+			q_snprintf(entfilename, sizeof(entfilename), "maps/%s/%s@%04x.ent", dir, COM_SkipPath(basemapname), entcrc);
+			break;
+		case 1:
+			q_snprintf(entfilename, sizeof(entfilename), "%s@%04x.ent", basemapname, entcrc);
+			break;
+		case 2:
+			if (!*dir)
+				continue;
+			q_snprintf(entfilename, sizeof(entfilename), "maps/%s/%s.ent", dir, COM_SkipPath(basemapname));
+			break;
+		default:
+			q_snprintf(entfilename, sizeof(entfilename), "%s.ent", basemapname);
+			break;
+		}
+
+		Con_DPrintf2("trying to load %s\n", entfilename);
+		if (COM_FileExists(entfilename, path_id))
+		{
+			q_strlcpy(out, entfilename, outsize);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/*
+=================
 Mod_LoadEntities
 =================
 */
 static void Mod_LoadEntities (lump_t *l)
 {
-	char	basemapname[MAX_QPATH];
 	char	entfilename[MAX_QPATH];
-	char		*ents;
+	char		*ents = NULL;
 	int		mark;
 	unsigned int	path_id;
 	unsigned int	crc = 0;
@@ -2367,38 +2424,8 @@ static void Mod_LoadEntities (lump_t *l)
 		crc = CRC_Block(mod_base + l->fileofs, l->filelen - 1);
 	}
 
-	q_strlcpy(basemapname, loadmodel->name, sizeof(basemapname));
-	COM_StripExtension(basemapname, basemapname, sizeof(basemapname));
-
-	
-	q_snprintf(entfilename, sizeof(entfilename), "maps/%s/%s@%04x.ent", external_ents_dir.string, COM_SkipPath(basemapname), crc);
-	if (external_ents_dir.string && COM_FileExists(entfilename, NULL))
-	{
-		Con_DPrintf2("trying to load %s\n", entfilename);
-		ents = (char*)COM_LoadHunkFile(entfilename, &path_id);
-	}
-	else
-	{
-		q_snprintf(entfilename, sizeof(entfilename), "%s@%04x.ent", basemapname, crc);
-		Con_DPrintf2("trying to load %s\n", entfilename);
+	if (Mod_FindExternalEntFile (loadmodel->name, crc, entfilename, sizeof(entfilename), NULL))
 		ents = (char *) COM_LoadHunkFile (entfilename, &path_id);
-	}
-
-	if (!ents)
-	{
-		q_snprintf(entfilename, sizeof(entfilename), "maps/%s/%s.ent", external_ents_dir.string, COM_SkipPath(basemapname));
-		if (external_ents_dir.string && COM_FileExists(entfilename, NULL))
-		{
-			Con_DPrintf2("trying to load %s\n", entfilename);
-			ents = (char*)COM_LoadHunkFile(entfilename, &path_id);
-		}
-		else
-		{
-			q_snprintf(entfilename, sizeof(entfilename), "%s.ent", basemapname);
-			Con_DPrintf2("trying to load %s\n", entfilename);
-			ents = (char *) COM_LoadHunkFile (entfilename, &path_id);
-		}
-	}
 
 	if (ents)
 	{

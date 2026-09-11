@@ -612,6 +612,7 @@ void	Mod_ForEachModel(void(*callback)(qmodel_t *mod));
 void	*Mod_Extradata (qmodel_t *mod);	// handles caching
 void	Mod_TouchModel (const char *name);
 qboolean Mod_CalcBSPFileSurfaceAreas (const char *path, map_surface_areas_t *areas);
+qboolean Mod_FindExternalEntFile (const char *bspname, unsigned int entcrc, char *out, size_t outsize, unsigned int *path_id);
 
 mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model);
 byte	*Mod_LeafPVS (mleaf_t *leaf, qmodel_t *model);

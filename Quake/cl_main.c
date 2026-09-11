@@ -5919,13 +5919,63 @@ static void Sky_AppendSkyName(char *outbuf, size_t outsz, const char *value)
 
 /*
 =============================================================================
+ Sky_ScanWorldspawnSkyKeys -- woods
+-----------------------------------------------------------------------------
+Scans an entity string for worldspawn skybox keys (sky/skyname/qlsky/skybox
+and the numbered variants, see Sky_IsSkyboxWorldspawnKey) and appends every
+value found to *outbuf. Only the first entity block is read, matching what
+Sky_NewMap treats as worldspawn.
+=============================================================================
+*/
+static qboolean Sky_ScanWorldspawnSkyKeys (const char *data, char *outbuf, size_t outsz)
+{
+	qboolean ok = false;
+
+	/* COM_Parse skips comments; require worldspawn first, as Sky_NewMap does. */
+	data = COM_Parse(data);
+	if (!data || com_token[0] != '{')
+		return false;
+
+	while ((data = COM_Parse(data)) != NULL)
+	{
+		char key[128];
+
+		if (com_token[0] == '}')
+			break;
+
+		if (com_token[0] == '_')
+			q_strlcpy(key, com_token + 1, sizeof(key));
+		else
+			q_strlcpy(key, com_token, sizeof(key));
+		while (key[0] && key[strlen(key)-1] == ' ') /* as Sky_NewMap does */
+			key[strlen(key)-1] = 0;
+
+		data = COM_ParseEx(data, CPE_ALLOWTRUNC);
+		if (!data)
+			break;
+
+		if (Sky_IsSkyboxWorldspawnKey(key))
+		{
+			Sky_AppendSkyName(outbuf, outsz, com_token);
+			ok = true;
+		}
+	}
+
+	return ok;
+}
+
+/*
+=============================================================================
  Sky_PeekSkyKeyFromBSP -- woods
 -----------------------------------------------------------------------------
-Looks for worldspawn skybox keys in a map (sky/skyname/qlsky/skybox and the
-numbered variants, see Sky_IsSkyboxWorldspawnKey).
-Order of search
-   1. Inside the BSP's entity lump
-   2. If not found, an external entity file  maps/<mapname>.ent
+Looks for worldspawn skybox keys in a map, ahead of loading it, so the faces
+can be prefetched before signon.
+
+Follows the same precedence as Mod_LoadEntities: an external .ent file
+*replaces* the embedded entity lump, so when one applies its worldspawn is the
+only thing consulted -- even if it names no sky at all. Reading the lump first
+made the prefetcher download (and then warn about) a sky the .ent had
+overridden.
 
 Returns true and puts a space-separated list of every sky name found in *outbuf
 (truncated to outsz-1); otherwise returns false and leaves *outbuf empty.
@@ -5937,7 +5987,12 @@ qboolean Sky_PeekSkyKeyFromBSP(const char* bspname,
 {
 	dheader_t  hdr;
 	lump_t* ent;
-	FILE* f;
+	FILE* f = NULL;
+	char* lump = NULL;
+	char entfilename[MAX_QPATH];
+	int filesize;
+	unsigned int bsp_path_id = 0, ent_path_id = 0;
+	unsigned int crc = 0;
 	qboolean   ok = false;
 
 	/* ------------------ sanity ------------------ */
@@ -5946,122 +6001,69 @@ qboolean Sky_PeekSkyKeyFromBSP(const char* bspname,
 	*outbuf = 0;
 
 	/* ------------------ open BSP ---------------- */
-	if (COM_FOpenFile(bspname, &f, NULL) < (int)sizeof(hdr) || !f)
-		goto try_external_ent;
+	filesize = COM_FOpenFile(bspname, &f, &bsp_path_id);
+	if (filesize < (int)sizeof(hdr) || !f)
+		goto done;
 
 	/* read + validate header */
 	if (fread(&hdr, sizeof(hdr), 1, f) != 1)
-		goto close_bsp;
+		goto done;
 
 	hdr.version = LittleLong(hdr.version);
 	if (hdr.version != BSPVERSION &&
 		hdr.version != BSP2VERSION_2PSB &&
 		hdr.version != BSP2VERSION_BSP2 &&
 		hdr.version != BSPVERSION_QUAKE64)
-		goto close_bsp;
+		goto done;
 
-	for (int i = 1; i < (int)sizeof(hdr) / 4; i++)
-		((int*)&hdr)[i] = LittleLong(((int*)&hdr)[i]);
-
-	/* --------------- scan entity lump ---------- */
+	/* ---- read the entity lump (needed for the "@crc" .ent variants) ---- */
 	ent = &hdr.lumps[LUMP_ENTITIES];
-	if (ent->filelen > 0 && ent->filelen <= 32768)
+	ent->fileofs = LittleLong(ent->fileofs);
+	ent->filelen = LittleLong(ent->filelen);
+	if ((size_t)ent->fileofs > (size_t)filesize ||
+		(size_t)ent->filelen > (size_t)filesize - (size_t)ent->fileofs)
+		goto done;
+
+	if (ent->filelen > 0)
 	{
-		char* buf = (char*)Z_Malloc(ent->filelen + 1);
-		fseek(f, ent->fileofs, SEEK_SET);
-		size_t readlen = fread(buf, 1, ent->filelen, f);
-		if (readlen != (size_t)ent->filelen)
-		{
-			Z_Free(buf);
-			goto close_bsp;
-		}
-		buf[ent->filelen] = 0;
+		/* The stream is just past the BSP header, possibly inside an archive.
+		 * Seek relative to it so large archive offsets need no conversion/addition. */
+		if (fseek(f, (qofs_t)ent->fileofs - (qofs_t)sizeof(hdr), SEEK_CUR) != 0)
+			goto done;
 
-		const char* p = COM_Parse(buf);
-		if (p && com_token[0] == '{')
-		{
-			while ((p = COM_Parse(p)))
-			{
-				if (com_token[0] == '}')
-					break;
+		/* Large maps can exceed the entire zone. Use the heap and read the
+		 * full validated lump so CRC-specific overrides match Mod_LoadEntities. */
+		lump = (char*)malloc((size_t)ent->filelen + 1);
+		if (!lump || fread(lump, 1, ent->filelen, f) != (size_t)ent->filelen)
+			goto done; /* an unreadable lump must not turn into a CRC of zero */
 
-				char key[64];
-				if (com_token[0] == '_')
-					q_strlcpy(key, com_token + 1, sizeof(key));
-				else q_strlcpy(key, com_token, sizeof(key));
-
-				p = COM_Parse(p);
-				if (!p) break;
-
-				if (Sky_IsSkyboxWorldspawnKey(key))
-				{
-					Sky_AppendSkyName(outbuf, outsz, com_token);
-					ok = true;
-				}
-			}
-		}
-		Z_Free(buf);
+		lump[ent->filelen] = 0;
+		crc = CRC_Block((const byte*)lump, ent->filelen - 1);
 	}
-
-close_bsp:
 	fclose(f);
-	if (ok)
-		return true;
+	f = NULL;
 
-	/* ---------------- external .ent ------------- */
-try_external_ent:
+	/* ---------------- external .ent wins -------------- */
+	if (Mod_FindExternalEntFile(bspname, crc, entfilename, sizeof(entfilename), &ent_path_id) &&
+		ent_path_id >= bsp_path_id) /* same rule Mod_LoadEntities applies */
 	{
-		char mapname[MAX_QPATH];
-		char entpath[MAX_QPATH];
-
-		/* get file name w/o path or extension */
-		q_strlcpy(mapname, COM_SkipPath(bspname), sizeof(mapname));
-		COM_StripExtension(mapname, mapname, sizeof(mapname));
-
-		q_snprintf(entpath, sizeof(entpath), "maps/%s.ent", mapname);
-
-		char* ebuf = (char*)COM_LoadMallocFile(entpath, NULL);
-		if (!ebuf)
-			return false;
-
-		const char* p = COM_Parse(ebuf);
-		while (p)
+		char* ebuf = (char*)COM_LoadMallocFile(entfilename, NULL);
+		if (ebuf)
 		{
-			if (com_token[0] != '{')
-			{   /* not an entity start – skip line */
-				p = COM_Parse(p);
-				continue;
-			}
-
-			/* entity loop */
-			while ((p = COM_Parse(p)))
-			{
-				if (com_token[0] == '}')
-					break;
-
-				char key[64];
-				if (com_token[0] == '_')
-					q_strlcpy(key, com_token + 1, sizeof(key));
-				else q_strlcpy(key, com_token, sizeof(key));
-
-				p = COM_Parse(p);
-				if (!p) break;
-
-				if (Sky_IsSkyboxWorldspawnKey(key))
-				{
-					Sky_AppendSkyName(outbuf, outsz, com_token);
-					ok = true;
-				}
-			}
-			if (ok) break;
-
-			/* continue with next entity */
-			p = COM_Parse(p);
+			ok = Sky_ScanWorldspawnSkyKeys(ebuf, outbuf, outsz);
+			free(ebuf);
+			goto done; /* the .ent replaced the lump, sky key or not */
 		}
-
-		free(ebuf);
 	}
 
+	/* --------------- embedded lump ---------- */
+	if (lump)
+		ok = Sky_ScanWorldspawnSkyKeys(lump, outbuf, outsz);
+
+done:
+	if (f)
+		fclose(f);
+	free(lump);
 	return ok;
 }
 
