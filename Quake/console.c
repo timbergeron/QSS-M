@@ -5986,6 +5986,41 @@ static void BuildTabList (const char* partial)
 
 /*
 ============
+Con_TokenIsCommandPrefix -- woods #chatcomplete
+
+Case-insensitive prefix lookup using the same names and filters as BuildTabList.
+Substring matches must not prevent dictionary completion of unrelated chat.
+============
+*/
+qboolean Con_TokenIsCommandPrefix (const char *token)
+{
+	cmd_function_t	*cmd;
+	cmdalias_t	*alias;
+	cvar_t		*cvar;
+	size_t		len;
+
+	if (!token || !*token)
+		return false;
+	len = strlen(token);
+
+	for (cvar = Cvar_FindVarAfter("", CVAR_NONE); cvar; cvar = cvar->next)
+		if (!q_strncasecmp (cvar->name, token, len))
+			return true;
+
+	for (cmd = cmd_functions; cmd; cmd = cmd->next)
+		if (cmd->srctype != src_server && !q_strncasecmp (cmd->name, token, len) &&
+			!Cmd_IsReservedName (cmd->name))
+			return true;
+
+	for (alias = cmd_alias; alias; alias = alias->next)
+		if (!q_strncasecmp (alias->name, token, len))
+			return true;
+
+	return false;
+}
+
+/*
+============
 Con_FormatTabMatch -- woods #consolecols (iw 85bf0e8)
 ============
 */
@@ -6154,7 +6189,8 @@ void Con_TabComplete (tabcomplete_t mode)
 		if (key_lines[edit_line][1] == ' ') // woods no auto hints if leading space for chatting from console
 			return;
 
-		if (Key_ConsoleLineIsChat ()) // woods #chatcomplete -- word completion owns this line
+		// woods #chatcomplete -- command prefixes take priority over chat words
+		if (Key_ConsoleLineIsChat () && !Key_ConsoleLineIsCommandInProgress ())
 			return;
 
 		// only show completion hint when the cursor is at the end of the line

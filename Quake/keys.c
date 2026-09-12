@@ -685,9 +685,8 @@ int Key_ConsoleInputLimit (void)
 ==============
 Key_ConsoleLineIsChat -- woods #chatcomplete
 
-True when Enter would send the current console line as chat rather than run it
-as a command.  Key_Console's K_ENTER uses this too, so what the hint shows and
-what Enter does cannot disagree.
+True when submitting the current console line would send it as chat rather
+than run it as a command. Completion separately checks for command prefixes.
 ==============
 */
 qboolean Key_ConsoleLineIsChat (void)
@@ -699,6 +698,36 @@ qboolean Key_ConsoleLineIsChat (void)
 	if (cl_chatmode.value == 1 || cl_chatmode.value == 2)
 		return true;
 	return cl_chatmode.value == 3 && key_lines[edit_line][1] == ' ';
+}
+
+/*
+==============
+Key_ConsoleLineIsCommandInProgress -- woods #chatcomplete
+
+Give command completion priority while typing the first token, even when the
+incomplete name would currently be sent as chat. A leading space opts into
+chat. Check cursor position here because callers may not have checked it yet.
+==============
+*/
+qboolean Key_ConsoleLineIsCommandInProgress (void)
+{
+	const char	*line = key_lines[edit_line];
+	int		i;
+
+	if (key_linepos <= 1 || (size_t)key_linepos >= sizeof(key_lines[edit_line]))
+		return false;
+	if (line[key_linepos])
+		return false;	// only ever hint at the end of the line
+
+	// the cursor has to still be inside the first token; once a separator is
+	// behind it the line cannot become a bare command name any more
+	for (i = 1; i < key_linepos; i++)
+	{
+		if (line[i] == ' ' || line[i] == '"' || line[i] == ';')
+			return false;
+	}
+
+	return Con_TokenIsCommandPrefix (line + 1);
 }
 
 static void AdjustConsoleHeight(int delta) // woods (Qrack) by joe, from ZQuake
@@ -967,15 +996,14 @@ void Key_Console (int key)
 	switch (key)
 	{
 	case K_ENTER:
+	case K_ABUTTON:
+	case K_KP_ENTER:
 		if (Key_ConsoleLineIsChat ()) // woods don't have to type "say " every time you wanna say something #ezsay (joequake)
 		{
 				Cbuf_AddText("say ");
 				key_tabhint[0] = '\0';
 				chatprefixed = true;
 		}
-		// K_ABUTTON shares enter behavior, but skips the chat shortcut branch above.
-	case K_ABUTTON:
-	case K_KP_ENTER:
 		Key_ConsoleCommitTabHint(workline);
 		key_tabpartial[0] = 0;
 		// woods -- #smartquit -- a human typed this line, so it is the one place
@@ -1654,6 +1682,11 @@ static void ConAuto_Refresh (qboolean force) // woods #chatcomplete
 
 	con_autocomplete_cached_pos = key_linepos;
 	q_strlcpy (con_autocomplete_cached_line, line, sizeof(con_autocomplete_cached_line));
+	con_autocomplete_suffix[0] = 0;
+
+	/* Clear any cached dictionary hint before yielding to command completion. */
+	if (Key_ConsoleLineIsCommandInProgress ())
+		return;
 
 	ChatAuto_Suggest (line, key_linepos, Key_ConsoleInputLimit () - key_linepos,
 		con_autocomplete_suffix, sizeof(con_autocomplete_suffix));

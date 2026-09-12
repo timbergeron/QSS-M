@@ -292,6 +292,7 @@ const char *Key_GetChatAutocompleteSuffix (void); // woods #chatcomplete
 const char *Key_GetConsoleAutocompleteSuffix (void); // woods #chatcomplete
 qboolean Key_ConsoleAcceptAutocomplete (void); // woods #chatcomplete
 qboolean Key_ConsoleLineIsChat (void); // woods #chatcomplete
+qboolean Key_ConsoleLineIsCommandInProgress (void); // woods #chatcomplete
 int Key_ConsoleInputLimit (void); // woods #chatlimit
 qboolean Key_GetChatSelection (int *start, int *end);
 void Key_SetChatCursorPos (int pos, qboolean selecting);

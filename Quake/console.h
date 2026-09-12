@@ -81,6 +81,7 @@ void Con_ModelName_List_Completion_f (cvar_t *cvar, const char *partial); // woo
 const char *Con_DequakePartial (const char *partial, char *dst, size_t dstsize); // woods -- dequake helper for name tab completion
 void Con_AddNameToTabList (const char *name, const char *partial, const char *match_partial); // woods -- add a player/history name to the tab list
 qboolean Con_Match (const char* str, const char* partial); // woods #iwtabcomplete
+qboolean Con_TokenIsCommandPrefix (const char *token); // woods #chatcomplete
 void Con_LogCenterPrint (const char *str);
 void Con_UpdateCenterPrint (void);	// woods #centerlog -- main-thread flush of a deferred centerprint
 
