@@ -651,6 +651,7 @@ void Host_EndGame (const char *message, ...)
 	va_start (argptr,message);
 	q_vsnprintf (string, sizeof(string), message, argptr);
 	va_end (argptr);
+	R_TeleportAbort();
 	Con_DPrintf ("Host_EndGame: %s\n",string);
 
 	PR_SwitchQCVM(NULL);
@@ -693,6 +694,7 @@ void Host_Error (const char *error, ...)
 	if (inerror)
 		Sys_Error ("Host_Error: recursively entered");
 	inerror = true;
+	R_TeleportAbort();
 
 	if (cl.qcvm.progs)
 		glDisable(GL_SCISSOR_TEST);	//equivelent to drawresetcliparea, to reset any damage if we crashed in csqc.

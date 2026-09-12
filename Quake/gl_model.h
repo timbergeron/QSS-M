@@ -88,6 +88,7 @@ typedef struct texture_s
 	unsigned			shift;		// Q64
 	struct gltexture_s	*gltexture; //johnfitz -- pointer to gltexture
 	struct gltexture_s	*fullbright; //johnfitz -- fullbright mask texture
+	struct gltexture_s	*tele_normal;
 	qboolean			grass_detected; // woods #grass
 	qboolean			grass_color_valid; // woods #grass
 	vec3_t				grass_color; // woods #grass
@@ -513,6 +514,8 @@ typedef struct qmodel_s
 	qboolean	hasskysurfaces;		//any SURF_DRAWSKY in this submodel's surface range.
 								//SURF_DRAWSKY is only ever set in Mod_LoadFaces, so this
 								//is fixed once the model is loaded. see Sky_ProcessEntities.
+	qboolean	hastelesurfaces;		// any SURF_DRAWTELE in this submodel's surface range
+	qboolean	hasteletextures;		// shared texture set has a usable teleporter normal map
 
 	int			numsubmodels;
 	mmodel_t	*submodels;

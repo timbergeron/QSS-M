@@ -683,6 +683,8 @@ void R_Init (void)
 	Cvar_RegisterVariable (&gl_zfix); // QuakeSpasm z-fighting fix
 	Cvar_RegisterVariable (&r_lavaalpha);
 	Cvar_RegisterVariable (&r_telealpha);
+	Cvar_RegisterVariable (&r_telestyle);
+	Cvar_SetCallback (&r_telestyle, R_TeleportStyleChanged);
 	Cvar_RegisterVariable (&r_slimealpha);
 	Cvar_RegisterVariable (&r_scale);
 	Cvar_RegisterVariable (&r_softemu);
@@ -851,6 +853,9 @@ void R_NewMap (void)
 	// that fixes it.
 	if (gl_alias_shaders_compiled_disconnected)
 		GLAlias_CreateShaders ();
+
+	R_TeleportCreateShaders ();
+	RNEWMAP_MARK("teleporter shader");
 
 	r_framecount = 0; //johnfitz -- paranoid?
 	r_visframecount = 0; //johnfitz -- paranoid?

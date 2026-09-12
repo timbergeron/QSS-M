@@ -227,6 +227,18 @@ void R_StoreEfrags (efrag_t **ppefrag)
 	{
 		pent = pefrag->entity;
 
+		if (r_teleport_view)
+		{
+			if (pent->teleportvisframe != r_teleport_visframe && cl_numvisedicts < cl_maxvisedicts &&
+				!(pent->model->flags & MOD_EMITREPLACE))
+			{
+				pent->teleportvisframe = r_teleport_visframe;
+				cl_visedicts[cl_numvisedicts++] = pent;
+			}
+			ppefrag = &pefrag->leafnext;
+			continue;
+		}
+
 		if ((pent->visframe != r_framecount) && (cl_numvisedicts < cl_maxvisedicts))
 		{
 #ifdef PSET_SCRIPT

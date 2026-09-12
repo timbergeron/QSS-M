@@ -103,6 +103,7 @@ typedef struct entity_s
 											//  found in an active leaf
 
 	int						dlightframe;	// dynamic lighting
+	unsigned int			teleportvisframe; // independent stamp for each teleporter subview
 	int						dlightbits;
 	qboolean				is_static;		// true for static entities stored in cl.static_entities
 	qboolean				is_client_candle;	// client-side light_candle decoration

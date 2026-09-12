@@ -8881,12 +8881,15 @@ void PScript_DrawParticles (void)
 		pframetime = 0;
 	if (pframetime > 1)
 		pframetime = 1;
-	oldtime = cl.time;
+	if (r_teleport_view)
+		pframetime = 0;
+	else
+		oldtime = cl.time;
 
 	if (!r_particles.value) // woodd (vk)
 		return;
 
-	if (r_part_rain.value)
+	if (r_part_rain.value && !r_teleport_view)
 	{
 		for (i = 0; i < cl.num_entities; i++)
 		{

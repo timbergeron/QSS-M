@@ -1170,10 +1170,15 @@ static void GL_DeleteTexture (gltexture_t *texture);
 
 static void TexMgr_FreeOwnedSource (gltexture_t *glt)
 {
-	if ((glt->flags & TEXPREF_OWNSOURCE) && !glt->source_file[0] && glt->source_offset)
-		Z_Free ((void *)glt->source_offset);
+	if (!glt->source_file[0] && glt->source_offset)
+	{
+		if (glt->flags & TEXPREF_MALLOCSOURCE)
+			free ((void *)glt->source_offset);
+		else if (glt->flags & TEXPREF_OWNSOURCE)
+			Z_Free ((void *)glt->source_offset);
+	}
 
-	glt->flags &= ~TEXPREF_OWNSOURCE;
+	glt->flags &= ~(TEXPREF_OWNSOURCE | TEXPREF_MALLOCSOURCE);
 	glt->source_offset = 0;
 	glt->source_file[0] = 0;
 }
@@ -2206,6 +2211,17 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 	int	internalformat,	miplevel, mipwidth, mipheight, picmip;
 	char mapname[MAX_QPATH]; // woods #gl_max_size
 
+	/* Upload processing downsizes in place. Keep retained RGBA sources intact
+	 * so a later reload starts from the same full-resolution pixels. */
+	if ((glt->flags & (TEXPREF_OWNSOURCE | TEXPREF_MALLOCSOURCE)) &&
+		(src_offset_t)data == glt->source_offset)
+	{
+		size_t size = TexMgr_ImageSize(glt->width, glt->height, SRC_RGBA);
+		unsigned *copy = (unsigned *)Hunk_AllocNoFill((int)size);
+		memcpy(copy, data, size);
+		data = copy;
+	}
+
 	//do this before any rescaling
 	if (glt->flags & TEXPREF_PREMULTIPLY)
 		data = (unsigned*)TexMgr_PreMultiply32((byte*)data, glt->width, glt->height);
@@ -2743,7 +2759,7 @@ static qboolean TexPrep_IsEligible (const texmgr_loadjob_t *job)
 	const unsigned int unsupported = TEXPREF_PAD | TEXPREF_OVERWRITE |
 		TEXPREF_CONCHARS | TEXPREF_WARPIMAGE | TEXPREF_PREMULTIPLY |
 		TEXPREF_ALLOWMISSING | TEXPREF_COLOURMAPPED |
-		TEXPREF_FLOODFILL | TEXPREF_OWNSOURCE;
+		TEXPREF_FLOODFILL | TEXPREF_OWNSOURCE | TEXPREF_MALLOCSOURCE;
 
 	if (!job || !job->data || !job->width || !job->height || !job->destination)
 		return false;
@@ -3626,7 +3642,7 @@ struct gltexture_s *TexMgr_ColormapTexture(struct gltexture_s *basetex, plcolour
 	q_strlcpy (glt->name, basetex->name, sizeof(glt->name));
 	glt->width = basetex->width;
 	glt->height = basetex->height;
-	glt->flags = (basetex->flags & ~TEXPREF_OWNSOURCE)|TEXPREF_OVERWRITE;
+	glt->flags = (basetex->flags & ~(TEXPREF_OWNSOURCE | TEXPREF_MALLOCSOURCE))|TEXPREF_OVERWRITE;
 	glt->shirt = upper;
 	glt->pants = lower;
 	q_strlcpy (glt->source_file, basetex->source_file, sizeof(glt->source_file));

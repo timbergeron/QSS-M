@@ -33,7 +33,8 @@ entity_t	*currententity;
 int			r_visframecount;	// bumped when going to a new PVS
 int			r_framecount;		// used for dlight push checking
 
-mplane_t	frustum[4];
+mplane_t	frustum[5]; // four sides, plus the oblique near plane in teleporter views
+int r_frustumplanes = 4;
 
 //johnfitz -- rendering statistics
 int rs_brushpolys, rs_aliaspolys, rs_skypolys;
@@ -965,7 +966,7 @@ qboolean R_CullBox (const vec3_t emins, const vec3_t emaxs)
 	byte signbits;
 	float vec[3];
 
-	for (i = 0;i < 4;i++)
+	for (i = 0;i < r_frustumplanes;i++)
 	{
 		p = frustum + i;
 		signbits = p->signbits;
@@ -1160,6 +1161,7 @@ void R_SetFrustum (float fovx, float fovy)
 {
 	int		i;
 
+	r_frustumplanes = 4;
 	if (r_stereo.value)
 		fovx += 10; //silly hack so that polygons don't drop out becuase of stereo skew
 
@@ -1262,6 +1264,7 @@ void R_SetupGL (void)
 	glDisable(GL_BLEND);
 	glDisable(GL_ALPHA_TEST);
 	glEnable(GL_DEPTH_TEST);
+	R_TeleportSetupGL ();
 }
 
 /*
@@ -1426,7 +1429,9 @@ static qboolean R_ShouldDrawEntity(entity_t *ent, qboolean alphapass)
 	qboolean is_translucent;
 
 	//spike -- this would be more efficient elsewhere, but its more correct here.
-	if (ent->eflags & EFLAGS_EXTERIORMODEL)
+	if ((ent->eflags & EFLAGS_EXTERIORMODEL) && !r_teleport_reflection)
+		return false;
+	if (r_teleport_view && (ent == &cl.viewent || (ent->eflags & EFLAGS_VIEWMODEL)))
 		return false;
 	if (!ent->model || ent->model->needload)
 		return false;
@@ -1621,6 +1626,8 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 	int num_brush = 0;
 	int num_alias = 0;
 	int count = cl_numvisedicts;
+	entity_t *player = cl.viewentity > 0 && cl.viewentity < cl.num_entities ? &cl.entities[cl.viewentity] : NULL;
+	float playerpitch = player ? player->angles[0] : 0;
 
 	//johnfitz -- optimized zero-check
 	if (count == 0)
@@ -1666,7 +1673,7 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 			currententity = sorted_ents[i].ent;
 
 			//johnfitz -- chasecam
-			if (currententity == &cl.entities[cl.viewentity])
+			if (!r_teleport_view && currententity == &cl.entities[cl.viewentity])
 				currententity->angles[0] *= 0.3;
 			//johnfitz
 
@@ -1687,12 +1694,14 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 				continue;
 
 			//johnfitz -- chasecam
-			if (currententity == &cl.entities[cl.viewentity])
+			if (!r_teleport_view && currententity == &cl.entities[cl.viewentity])
 				currententity->angles[0] *= 0.3;
 			//johnfitz
 
 			//spike -- this would be more efficient elsewhere, but its more correct here.
-			if (currententity->eflags & EFLAGS_EXTERIORMODEL)
+			if ((currententity->eflags & EFLAGS_EXTERIORMODEL) && !r_teleport_reflection)
+				continue;
+			if (r_teleport_view && (currententity == &cl.viewent || (currententity->eflags & EFLAGS_VIEWMODEL)))
 				continue;
 			if (!currententity->model || currententity->model->needload)
 				continue;
@@ -1748,7 +1757,7 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 				continue;
 
 			//johnfitz -- chasecam
-			if (currententity == &cl.entities[cl.viewentity])
+			if (!r_teleport_view && currententity == &cl.entities[cl.viewentity])
 				currententity->angles[0] *= 0.3; //johnfitz -- damp pitch
 			//johnfitz
 
@@ -1796,6 +1805,8 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 			R_DrawEntityModel(currententity);
 		}
 	}
+	if (player)
+		player->angles[0] = playerpitch; // preserve pitch across stereo eyes and later subviews
 }
 
 /*
@@ -2777,6 +2788,8 @@ void R_DrawShadows (void)
 	{
 		currententity = cl_visedicts[i];
 
+		if (r_teleport_view && (currententity->eflags & EFLAGS_VIEWMODEL))
+			continue;
 		if (!currententity->model) // woods
 			continue;
 
@@ -3025,7 +3038,8 @@ static void R_DrawLightningBeamsPolygons(void)
 
 	float repeat = 0.125f;
 
-	r_lightningbeam_scroll += host_frametime * 1.0f;
+	if (!r_teleport_view)
+		r_lightningbeam_scroll += host_frametime * 1.0f;
 	if (r_lightningbeam_scroll > 1000.0f || r_lightningbeam_scroll < -1000.0f)
 		r_lightningbeam_scroll = 0.0f;
 
@@ -3128,6 +3142,8 @@ void R_RenderScene (void)
 {
 	currententity = &r_worldentity;
 	R_SetupScene (); //johnfitz -- this does everything that should be done once per call to RenderScene
+	if (!r_teleport_view && !skyroom_drawing)
+		R_TeleportPrepare ();
 
 	Fog_EnableGFog (); //johnfitz
 
@@ -3180,6 +3196,9 @@ void R_RenderScene (void)
 	}
 
 	Fog_DisableGFog (); //johnfitz
+
+	if (r_teleport_view)
+		return;
 
 	if (gl_laserpoint.value)
 		LaserSight (); // woods #laser

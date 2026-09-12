@@ -1525,6 +1525,7 @@ static void VID_Restart (void)
 	TexMgr_DeleteTextureObjects ();
 	GLSLGamma_DeleteTexture ();
 	R_WarpScaleView_DeleteTexture ();
+	R_TeleportShutdownGL ();
 	R_LightningBeam_DeleteTexture (); // woods #beamspoly
 	R_MotionBlur_DeleteTexture (); // woods #motionblur
 	Draw_ShutdownGL (); // rounded-fill program handle becomes invalid on context loss
@@ -1551,6 +1552,7 @@ static void VID_Restart (void)
 	GL_SetupState ();
 	Fog_SetupState ();
 	FXAA_Init (); // woods #fxaa
+	R_TeleportCreateShaders (); // connected restart: R_NewMap is not called here
 
 	//conwidth and conheight need to be recalculated
 	vid.conwidth = (scr_conwidth.value > 0) ? (int)scr_conwidth.value : (scr_conscale.value > 0) ? (int)(vid.width/scr_conscale.value) : vid.width;

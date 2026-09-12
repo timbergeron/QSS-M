@@ -150,7 +150,8 @@ extern	vec3_t		modelorg, r_entorigin;
 extern	entity_t	*currententity;
 extern	int		r_visframecount;	// ??? what difs?
 extern	int		r_framecount;
-extern	mplane_t	frustum[4];
+extern	mplane_t	frustum[5];
+extern int r_frustumplanes;
 
 extern	texture_t	*r_notexture_mip, *r_notexture_mip2;
 
@@ -193,6 +194,24 @@ void GL_BrushShadowCache_Clear (void); // tb -- drop the shadow index buffers
 extern	cvar_t	r_wateralpha;
 extern	cvar_t	r_lavaalpha;
 extern	cvar_t	r_telealpha;
+extern cvar_t r_telestyle;
+extern qboolean r_teleport_view, r_teleport_reflection;
+extern byte *r_teleport_pvs;
+extern unsigned int r_teleport_visframe;
+float GL_WaterAlphaForEntitySurface (entity_t *ent, msurface_t *s);
+qboolean R_TeleportActive (void);
+void R_TeleportLoadNormal (qmodel_t *model, texture_t *texture, enum srcformat format,
+	const byte *pixels, int width, int height);
+void R_TeleportPrepare (void);
+void R_TeleportSetupGL (void);
+qboolean R_TeleportDrawChain (msurface_t *chain, entity_t *ent);
+void R_TeleportShutdownGL (void);
+void R_TeleportCreateShaders (void);
+void R_TeleportStyleChanged (cvar_t *var);
+void R_TeleportAbort (void);
+void R_RenderScene (void);
+void R_SetupGL (void);
+void R_SetFrustum (float fovx, float fovy);
 extern	cvar_t	r_slimealpha;
 extern	cvar_t	r_dynamic;
 extern	cvar_t	r_novis;
@@ -626,6 +645,7 @@ qboolean R_WorldSkyVisible(void);
 #ifndef SDL_THREADS_DISABLED
 void RSceneCache_Cleanup(qmodel_t *mod);
 void RSceneCache_Shutdown(void);
+void RSceneCache_AbortTeleport(void);
 qboolean RSceneCache_DrawSkySurfDepth(void);	//Draws sky surfaces.
 qboolean RSceneCache_HasSky(void);
 #endif

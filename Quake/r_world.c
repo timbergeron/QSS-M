@@ -46,6 +46,7 @@ byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
 #ifndef SDL_THREADS_DISABLED
 static qboolean RSceneCache_Queue(byte *vis);
 static void RSceneCache_Draw(qboolean water);
+static void RSceneCache_MarkTeleportSurfaces(void);
 #endif
 void RSceneCache_Shutdown(void);
 static qboolean R_GrassBladesActive (void);
@@ -197,6 +198,11 @@ void R_MarkSurfaces (void)
 	msurface_t	*surf, **mark;
 	int			i, j;
 	qboolean	nearwaterportal;
+	static qmodel_t *dlightmodel;
+	static int dlightframe;
+
+	if (!r_teleport_view)
+		dlightmodel = NULL; // also invalidates a stamp when a cached view begins a new map
 
 	// clear lightmap chains
 	for (i=0 ; i<lightmap_count ; i++)
@@ -210,7 +216,9 @@ void R_MarkSurfaces (void)
 			nearwaterportal = true;
 
 	// choose vis data
-	if (r_novis.value || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
+	if (r_teleport_pvs)
+		vis = r_teleport_pvs;
+	else if (r_novis.value || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
 		vis = Mod_NoVisPVS (cl.worldmodel);
 	else if (nearwaterportal)
 		vis = SV_FatPVS (r_origin, cl.worldmodel);
@@ -227,14 +235,21 @@ void R_MarkSurfaces (void)
 #ifndef SDL_THREADS_DISABLED
 	if (RSceneCache_Queue(vis))
 	{
+		RSceneCache_MarkTeleportSurfaces();
 		R_MarkGrassSurfaces(vis);
 		return;
 	}
 	lightmaps_skipupdates = false;
 #endif
 
-	//need to do this somewhere...
-	R_PushDlights ();
+	/* A subview changes visibility, not world-space light influence. The first
+	 * legacy walk after a cached main view still needs to mark the lights. */
+	if (!r_teleport_view || dlightmodel != cl.worldmodel || dlightframe != r_framecount)
+	{
+		R_PushDlights ();
+		dlightmodel = cl.worldmodel;
+		dlightframe = r_framecount;
+	}
 
 	// iterate through leaves, marking surfaces
 	leaf = &cl.worldmodel->leafs[1];
@@ -5076,6 +5091,9 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 				continue;
 			s = t->texturechains[chain];
 
+			if ((s->flags & SURF_DRAWTELE) && R_TeleportDrawChain(s, ent))
+				continue;
+
 			entalpha = GL_WaterAlphaForEntitySurface (ent, s);
 			if (entalpha < 1.0f)
 			{
@@ -6179,6 +6197,7 @@ static struct
 	SDL_atomic_t haslitsurfs;	//worker-maintained: lightmaps still contain dlight contributions needing cleanup
 
 	struct rscenecache_s *drawing;
+	struct rscenecache_s *teleportmain; // retained while the teleporter renders its extra views
 	qboolean doingskybox;
 
 	struct rscenecache_s
@@ -6201,6 +6220,10 @@ static struct
 		unsigned int *drawtextures;
 		byte *drawtextureflags;
 		qboolean hassky;
+		msurface_t **teleports; // world faces and baked submodel faces, in world coordinates
+		size_t numteleports, maxteleports;
+		qboolean teleportscomplete;
+		qboolean teleportchains; // main thread: these faces draw through texture chains this view
 
 		SDL_atomic_t status;
 		GLuint ebo;
@@ -6268,7 +6291,7 @@ static msurface_t **rscenecache_litsurfs;
 static size_t rscenecache_numlitsurfs, rscenecache_maxlitsurfs;
 static qmodel_t *rscenecache_litsurfs_model;
 
-static qboolean RSceneCache_LitSurfsReserve (msurface_t ***surfs, size_t *max, size_t needed)
+static qboolean RSceneCache_SurfaceListReserve (msurface_t ***surfs, size_t *max, size_t needed)
 {
 	msurface_t **grown;
 	size_t newmax;
@@ -6291,6 +6314,18 @@ static qboolean RSceneCache_LitSurfsReserve (msurface_t ***surfs, size_t *max, s
 	*surfs = grown;
 	*max = newmax;
 	return true;
+}
+
+static void RSceneCache_AddTeleportSurface(struct rscenecache_s *cache, msurface_t *surf)
+{
+	// Match cached-batch suppression: an unsupported normal map stays entirely
+	// in the ordinary water batch, even when other teleporters use the shader.
+	if (!(surf->flags & SURF_DRAWTELE) || !surf->texinfo->texture->tele_normal)
+		return;
+	if (RSceneCache_SurfaceListReserve(&cache->teleports, &cache->maxteleports, cache->numteleports + 1))
+		cache->teleports[cache->numteleports++] = surf;
+	else
+		cache->teleportscomplete = false; // keep the ordinary water batches as a fallback
 }
 
 static void RSceneCache_ResetDlightTracking (qmodel_t *mod)
@@ -6327,7 +6362,7 @@ static void RSceneCache_MergeLitSurfs (struct rscenecache_s *cache)
 			rscenecache_numlitsurfs = 0;
 			rscenecache_litsurfs_model = cache->worldmodel;
 		}
-		if (RSceneCache_LitSurfsReserve(&rscenecache_litsurfs, &rscenecache_maxlitsurfs, rscenecache_numlitsurfs + cache->numlitsurfs))
+		if (RSceneCache_SurfaceListReserve(&rscenecache_litsurfs, &rscenecache_maxlitsurfs, rscenecache_numlitsurfs + cache->numlitsurfs))
 		{
 			memcpy(rscenecache_litsurfs + rscenecache_numlitsurfs, cache->litsurfs, cache->numlitsurfs * sizeof(*cache->litsurfs));
 			rscenecache_numlitsurfs += cache->numlitsurfs;
@@ -6367,7 +6402,7 @@ dynamic:
 			R_LightmapMarkDirtyRect (lm, fa->light_s, fa->light_t, smax, tmax); // woods #lmrect -- after the bytes, see its comment
 			// woods #scenecachedlights -- remember dlight-lit surfaces so they can be cleared later without another full rebuild
 			if (track && fa->cached_dlight &&
-				RSceneCache_LitSurfsReserve(&cache->litsurfs, &cache->maxlitsurfs, cache->numlitsurfs+1))
+				RSceneCache_SurfaceListReserve(&cache->litsurfs, &cache->maxlitsurfs, cache->numlitsurfs+1))
 				cache->litsurfs[cache->numlitsurfs++] = fa;
 		}
 	}
@@ -6519,7 +6554,7 @@ start:
 					memset (surf->dlightbits, 0, sizeof(surf->dlightbits)); // clear every word, not just this light's - stale bits in the other word kept expired lights baked in
 					surf->dlightframe = framecount;
 					if (track && !(surf->flags & SURF_DRAWTILED) &&
-						RSceneCache_LitSurfsReserve(&rscenecache_litsurfs, &rscenecache_maxlitsurfs, rscenecache_numlitsurfs+1))
+						RSceneCache_SurfaceListReserve(&rscenecache_litsurfs, &rscenecache_maxlitsurfs, rscenecache_numlitsurfs+1))
 						rscenecache_litsurfs[rscenecache_numlitsurfs++] = surf;
 				}
 				surf->dlightbits[num >> 5] |= 1U << (num & 31);
@@ -6781,6 +6816,8 @@ static int RSceneCache_Thread(void *ctx)
 		if (cache)
 		{
 			int dlightframecount = cache->dlightframecount;
+			cache->numteleports = 0;
+			cache->teleportscomplete = true;
 
 			if (!cache->flashblend)
 				for (j = 0; j < countof(cache->dlights); j++)
@@ -6841,6 +6878,7 @@ static int RSceneCache_Thread(void *ctx)
 									*idx++ = surf->vbo_firstvert + e;
 								}
 
+								RSceneCache_AddTeleportSurface(cache, surf);
 								RSceneCache_RenderDynamicLightmaps(cache, surf, dlightframecount, true);
 							}
 						}
@@ -6895,6 +6933,7 @@ static int RSceneCache_Thread(void *ctx)
 						*idx++ = surf->vbo_firstvert + e;
 					}
 
+					RSceneCache_AddTeleportSurface(cache, surf);
 					RSceneCache_RenderDynamicLightmaps(cache, surf, dlightframecount, true);
 				}
 			}
@@ -6979,6 +7018,35 @@ static qboolean RSceneCache_InputsHaveSky(const struct rscenecache_s *cache)
 	return false;
 }
 
+/* Legacy subviews mark lights and write the same lightmap staging data as the
+ * worker. Drain every pending build/update before handing it to the main thread,
+ * keeping the caches and the sleeping worker available for the main view.
+ */
+static void RSceneCache_WaitForWorker(void)
+{
+	struct rscenecache_s *cache;
+	if (!rscenecache.thread)
+		return;
+	SDL_LockMutex(rscenecache.mutex);
+	for (;;)
+	{
+		for (cache = rscenecache.cache; cache; cache = cache->next)
+			if (SDL_AtomicGet(&cache->status) == SCS_BUILDING)
+				break;
+		if (!cache && !rscenecache.processing && !rscenecache.dlightjob.cache)
+			break;
+		SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+	}
+	SDL_UnlockMutex(rscenecache.mutex);
+}
+
+void RSceneCache_AbortTeleport(void)
+{
+	rscenecache.teleportmain = NULL;
+	rscenecache.drawing = NULL;
+	skipsubmodels = NULL;
+}
+
 static qboolean RSceneCache_Queue(byte *vis)
 {
 	extern GLuint gl_bmodel_vbo;
@@ -7003,6 +7071,23 @@ static qboolean RSceneCache_Queue(byte *vis)
 	surfacebytes = ((size_t)cl.worldmodel->numsurfaces + 7) >> 3;
 
 	skipsubmodels = NULL;
+	if (r_teleport_view)
+	{
+		if (rscenecache.drawing)
+			rscenecache.teleportmain = rscenecache.drawing;
+		rscenecache.drawing = NULL;
+		RSceneCache_WaitForWorker();
+		return false;
+	}
+	if (rscenecache.teleportmain)
+	{
+		// R_TeleportPrepare restores the main view and its entity list, then
+		// rebuilds its chains. Reuse its cache without emitting particles or
+		// queuing lighting/build work a second time in the same view.
+		rscenecache.drawing = rscenecache.teleportmain;
+		rscenecache.teleportmain = NULL;
+		return true;
+	}
 	rscenecache.drawing = NULL;	//still need to figure out which cache to use.
 	if (!*r_scenecache.string)
 		r_scenecache.value = 1;	//consistency with FTE's 'auto' seting.
@@ -7417,6 +7502,8 @@ static void RSceneCache_Uncache(struct rscenecache_s *cache)
 	}
 	if (rscenecache.drawing == cache)
 		rscenecache.drawing = NULL;
+	if (rscenecache.teleportmain == cache)
+		rscenecache.teleportmain = NULL;
 	// woods #scenecachedlights -- a dlight job may still be reading this cache
 	if (rscenecache.thread)
 	{
@@ -7427,6 +7514,8 @@ static void RSceneCache_Uncache(struct rscenecache_s *cache)
 	}
 	if (cache->litsurfs)
 		free(cache->litsurfs);
+	if (cache->teleports)
+		free(cache->teleports);
 	for (i = 0; i < cache->numtextures*cache->lightmaps*2; i++)
 		if (cache->batches[i].idx)
 			free(cache->batches[i].idx);
@@ -7608,6 +7697,32 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 		lightmaps_skipupdates = true;
 	}
 }
+static void RSceneCache_MarkTeleportSurfaces(void)
+{
+	struct rscenecache_s *cache = rscenecache.drawing;
+	size_t i;
+	if (!cache)
+		return;
+	cache->teleportchains = false;
+	if (!R_TeleportActive() || skyroom_drawing || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
+		return;
+	RSceneCache_Finish(cache);
+	if (SDL_AtomicGet(&cache->status) != SCS_FINISHED || !cache->teleportscomplete)
+		return;
+	cache->teleportchains = true;
+	// Only the portal faces need per-view culling and planes. Everything else
+	// continues to use the cached index batches, including baked brush models.
+	for (i = 0; i < cache->numteleports; i++)
+	{
+		msurface_t *surf = cache->teleports[i];
+		if (surf->visframe == r_visframecount)
+			continue;
+		surf->visframe = r_visframecount;
+		if (!R_CullBox(surf->mins, surf->maxs) && !R_BackFaceCull(surf))
+			R_ChainSurface(surf, chain_world);
+	}
+}
+
 static void RSceneCache_Draw(qboolean water)
 {
 	extern GLuint gl_bmodel_vbo;
@@ -7673,6 +7788,8 @@ static void RSceneCache_Draw(qboolean water)
 			continue;
 		if (!cache->worldmodel->textures[i])
 			continue;	//stupid buggy shite.
+		if (cache->teleportchains && cache->worldmodel->textures[i]->tele_normal)
+			continue; // already drawn by R_DrawTextureChains_Water, including any fallback faces
 		b = false;
 		for (j = 0; j < cache->lightmaps * 2; j++)
 		{
@@ -8036,6 +8153,7 @@ void RSceneCache_Shutdown(void)
 	rscenecache_numlitsurfs = rscenecache_maxlitsurfs = 0;
 	rscenecache_litsurfs_model = NULL;
 	rscenecache.drawing = NULL;
+	rscenecache.teleportmain = NULL;
 	skipsubmodels = NULL;
 }
 #endif

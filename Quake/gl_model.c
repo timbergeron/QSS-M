@@ -1865,6 +1865,14 @@ static void Mod_LoadTextures (lump_t *l)
 					}
 				}
 
+				/* Generate from the original pixels before a diffuse upload can rescale them. */
+				if (!q_strncasecmp(tx->name, "*tele", 5))
+				{
+					R_TeleportLoadNormal(loadmodel, tx, fmt, (const byte *)(tx + 1), imgwidth, imgheight);
+					if (tx->tele_normal)
+						loadmodel->hasteletextures = true;
+				}
+
 				//now load whatever we found
 				if (data && !r_fastturb.value) //load external image // woods #fastturb
 				{
@@ -3085,12 +3093,12 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 				out->flags |= SURF_DRAWTILED;	//unlit water
 			out->lightmaptexturenum = -1;
 
-			// detect special liquid types
-			if (!strncmp (out->texinfo->texture->name, "*lava", 5) || !strncmp (out->texinfo->texture->name, "!lava", 5))
+			// Quake liquid surfaces use '*'; match the texture loader's case handling.
+			if (!q_strncasecmp (out->texinfo->texture->name, "*lava", 5))
 				out->flags |= SURF_DRAWLAVA;
-			else if (!strncmp (out->texinfo->texture->name, "*slime", 6) || !strncmp (out->texinfo->texture->name, "!slime", 6))
+			else if (!q_strncasecmp (out->texinfo->texture->name, "*slime", 6))
 				out->flags |= SURF_DRAWSLIME;
-			else if (!strncmp (out->texinfo->texture->name, "*tele", 5) || !strncmp (out->texinfo->texture->name, "!tele", 5))
+			else if (!q_strncasecmp (out->texinfo->texture->name, "*tele", 5))
 				out->flags |= SURF_DRAWTELE;
 			else out->flags |= SURF_DRAWWATER;
 		}
@@ -4620,6 +4628,7 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 		tmc0 = texmgr_load_calls;
 		TexMgr_GetPrepStats (&tp0);
 	}
+	mod->hasteletextures = false;
 	Mod_LoadTextures (&header->lumps[LUMP_TEXTURES]);
 	if (profile)
 	{
@@ -4738,6 +4747,7 @@ visdone:
 		//cover every consumer.  written as a subtraction of values already known to be
 		//non-negative so it cannot overflow.
 		mod->hasskysurfaces = false;
+		mod->hastelesurfaces = false;
 		if (mod->firstmodelsurface >= 0 && mod->nummodelsurfaces >= 0 &&
 			mod->firstmodelsurface <= mod->numsurfaces &&
 			mod->nummodelsurfaces <= mod->numsurfaces - mod->firstmodelsurface)
@@ -4746,10 +4756,11 @@ visdone:
 			for (j = 0; j < mod->nummodelsurfaces; j++, surf++)
 			{
 				if (surf->flags & SURF_DRAWSKY)
-				{
 					mod->hasskysurfaces = true;
+				if (surf->flags & SURF_DRAWTELE)
+					mod->hastelesurfaces = true;
+				if (mod->hasskysurfaces && mod->hastelesurfaces)
 					break;
-				}
 			}
 		}
 
