@@ -146,7 +146,7 @@ with tempfile.TemporaryDirectory(prefix="qssm-tick-deadlines-") as tmp:
     path = Path(tmp)
     (path / "ticks.c").write_text(source)
     subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O2", "-Wall",
-                    "-Wshorten-64-to-32", "-Werror=shorten-64-to-32",
+                    "-Wconversion", "-Werror=conversion",
                     "-fsanitize=undefined", str(path / "ticks.c"),
                     "-o", str(path / "ticks")], check=True)
     subprocess.run([str(path / "ticks")], check=True)

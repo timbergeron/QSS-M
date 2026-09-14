@@ -51,7 +51,7 @@ jobs:
         set -eux
         . /etc/os-release
         echo "SDL3_PREFIX=${RUNNER_TEMP}/sdl3-${{ matrix.sdl.version }}" >> "$GITHUB_ENV"
-        echo "SDL3_CACHE_KEY=sdl3-${{ matrix.sdl.version }}-${{ matrix.sdl.commit }}-${ID}-${VERSION_ID}-gcc$(gcc -dumpversion)-shared-v1" >> "$GITHUB_ENV"
+        echo "SDL3_CACHE_KEY=sdl3-${{ matrix.sdl.version }}-${{ matrix.sdl.commit }}-${ID}-${VERSION_ID}-gcc$(gcc -dumpversion)-shared-no-rpath-v2" >> "$GITHUB_ENV"
 
     - name: Cache SDL3
       uses: actions/cache@v5
@@ -105,13 +105,17 @@ jobs:
           exit 1
         fi
 
-    - name: Test SDL3 audio and release packaging
+    - name: Test SDL3 regressions and release packaging
       run: |
         set -euxo pipefail
         export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
         export LD_LIBRARY_PATH="$SDL3_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         python3 Misc/stress/test_sdl3_audio.py
         python3 Misc/stress/test_sdl3_capture_lifecycle.py
+        python3 Misc/stress/test_gamepad_labels.py
+        python3 Misc/stress/test_hid_start_wait.py
+        python3 Misc/stress/test_mouse_motion.py
+        python3 Misc/stress/test_tick_deadlines.py
         python3 Misc/stress/test_release_archives.py
 
     - name: Prepare Linux debug logs

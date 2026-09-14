@@ -17,7 +17,7 @@ fi
 version=$1
 commit=$2
 prefix=$3
-marker="$prefix/.qssm-sdl3-commit"
+marker="$prefix/.qssm-sdl3-commit-no-rpath"
 
 if [ -f "$marker" ] && [ "$(cat "$marker")" = "$commit" ] &&
 	[ "$(PKG_CONFIG_PATH="$prefix/lib/pkgconfig" pkg-config --modversion sdl3 2>/dev/null)" = "$version" ]; then
@@ -37,11 +37,14 @@ if [ "$actual" != "$commit" ]; then
 	exit 1
 fi
 
+# Keep the temporary CI install directory out of SDL's pkg-config link flags;
+# release executables supply their own $ORIGIN path for the bundled runtime.
 if ! cmake -S "$work/src" -B "$work/build" -G Ninja \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_INSTALL_PREFIX="$prefix" \
 	-DCMAKE_INSTALL_LIBDIR=lib \
 	-DSDL_SHARED=ON -DSDL_STATIC=OFF \
+	-DSDL_RPATH=OFF \
 	-DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
 	-DSDL_X11=ON -DSDL_WAYLAND=ON \
 	-DSDL_ALSA=ON -DSDL_PULSEAUDIO=ON -DSDL_PIPEWIRE=ON \

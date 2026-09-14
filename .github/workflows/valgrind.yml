@@ -51,7 +51,7 @@ jobs:
         set -eux
         . /etc/os-release
         echo "SDL3_PREFIX=${RUNNER_TEMP}/sdl3-${SDL3_VERSION}" >> "$GITHUB_ENV"
-        echo "SDL3_CACHE_KEY=sdl3-${SDL3_VERSION}-${SDL3_COMMIT}-${ID}-${VERSION_ID}-gcc$(gcc -dumpversion)-shared-v1" >> "$GITHUB_ENV"
+        echo "SDL3_CACHE_KEY=sdl3-${SDL3_VERSION}-${SDL3_COMMIT}-${ID}-${VERSION_ID}-gcc$(gcc -dumpversion)-shared-no-rpath-v2" >> "$GITHUB_ENV"
 
     - name: Cache SDL3
       uses: actions/cache@v5
