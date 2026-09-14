@@ -207,10 +207,10 @@ typedef struct portpingprobe_ctx_s
 static const byte portpingprobe_getinfo_packet[] = {0xFF, 0xFF, 0xFF, 0xFF, 'g', 'e', 't', 'i', 'n', 'f', 'o', '\n'};
 
 static portpingprobe_ctx_t *portpingprobe_ctx = NULL;
-static SDL_atomic_t portpingprobe_status = {PORTPINGPROBE_IDLE};
-static SDL_atomic_t portpingprobe_abort_requested = {0};
-static SDL_atomic_t portpingprobe_worker_running = {0};
-static SDL_atomic_t portpingprobe_progress = {0};
+static SDL_AtomicInt portpingprobe_status = {PORTPINGPROBE_IDLE};
+static SDL_AtomicInt portpingprobe_abort_requested = {0};
+static SDL_AtomicInt portpingprobe_worker_running = {0};
+static SDL_AtomicInt portpingprobe_progress = {0};
 static qboolean portpingprobe_abort_quiet = false;
 static int net_probe_clientport = 0;
 static int net_probe_clientlandriver = -1;
@@ -366,8 +366,8 @@ static void cl_portpingprobe_enable_changed(cvar_t *var)
 		net_probe_clientport = 0;
 		portpingprobe_last_percent = -1;
 		portpingprobe_console_inline = false;
-		SDL_AtomicSet(&portpingprobe_progress, 0);
-		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
+		SDL_SetAtomicInt(&portpingprobe_progress, 0);
+		SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_IDLE);
 	}
 }
 
@@ -383,7 +383,7 @@ int NET_PortPingProbe_GetMode(void)
 
 portpingprobe_status_t NET_PortPingProbe_GetStatus(void)
 {
-	return (portpingprobe_status_t)SDL_AtomicGet(&portpingprobe_status);
+	return (portpingprobe_status_t)SDL_GetAtomicInt(&portpingprobe_status);
 }
 
 int NET_PortPingProbe_GetProgress(void)
@@ -395,7 +395,7 @@ int NET_PortPingProbe_GetProgress(void)
 	if (NET_PortPingProbe_GetStatus() != PORTPINGPROBE_PROBING || !portpingprobe_ctx || portpingprobe_ctx->total_work <= 0)
 		return 0;
 
-	progress_count = SDL_AtomicGet(&portpingprobe_progress);
+	progress_count = SDL_GetAtomicInt(&portpingprobe_progress);
 	return CLAMP(0, (progress_count * 100) / portpingprobe_ctx->total_work, 100);
 }
 
@@ -407,8 +407,8 @@ void NET_PortPingProbe_RequestAbort(void)
 		return;
 
 	portpingprobe_abort_quiet = false;
-	SDL_AtomicSet(&portpingprobe_abort_requested, 1);
-	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_ABORT);
+	SDL_SetAtomicInt(&portpingprobe_abort_requested, 1);
+	SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_ABORT);
 }
 
 void NET_PortPingProbe_RequestAbortQuietly(void)
@@ -529,7 +529,7 @@ qboolean NET_PortPingProbe_ConsumeCompleted(const char *connect_addr)
 	if (!connect_addr || !connect_addr[0] || !portpingprobe_result.valid)
 	{
 		NET_PortPingProbe_ClearResult();
-		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
+		SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_IDLE);
 		return false;
 	}
 
@@ -539,7 +539,7 @@ qboolean NET_PortPingProbe_ConsumeCompleted(const char *connect_addr)
 		 * optimization result. Starting a fresh asynchronous probe is cheaper
 		 * than risking a main-thread DNS stall here. */
 		NET_PortPingProbe_ClearResult();
-		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
+		SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_IDLE);
 		return false;
 	}
 
@@ -560,7 +560,7 @@ qboolean NET_PortPingProbe_ConsumeCompleted(const char *connect_addr)
 		portpingprobe_result.best_socket = INVALID_SOCKET;
 	}
 	NET_PortPingProbe_ClearResult();
-	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
+	SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_IDLE);
 	return true;
 }
 
@@ -646,7 +646,7 @@ static double NET_PortPingProbeSocket(const portpingprobe_ctx_t *ctx, sys_socket
 		int selected;
 		int ret;
 
-		if (SDL_AtomicGet(&portpingprobe_abort_requested) || remaining <= 0)
+		if (SDL_GetAtomicInt(&portpingprobe_abort_requested) || remaining <= 0)
 			return -1;
 
 		wait_time = q_min(remaining, PORTPINGPROBE_SELECT_SLICE);
@@ -707,7 +707,7 @@ static portpingprobe_query_t NET_PortPingProbeDetectQuery(const portpingprobe_ct
 {
 	if (NET_PortPingProbeSocket(ctx, sock, PORTPINGPROBE_QUERY_GETINFO) >= 0)
 		return PORTPINGPROBE_QUERY_GETINFO;
-	if (!SDL_AtomicGet(&portpingprobe_abort_requested) &&
+	if (!SDL_GetAtomicInt(&portpingprobe_abort_requested) &&
 		NET_PortPingProbeSocket(ctx, sock, PORTPINGPROBE_QUERY_SERVER_INFO) >= 0)
 		return PORTPINGPROBE_QUERY_SERVER_INFO;
 	return PORTPINGPROBE_QUERY_NONE;
@@ -778,7 +778,7 @@ static int NET_PortPingProbeWorker(void *data)
 	{
 		portpingprobe_endpoint_t *endpoint;
 
-		if (SDL_AtomicGet(&portpingprobe_abort_requested))
+		if (SDL_GetAtomicInt(&portpingprobe_abort_requested))
 			goto finished;
 		if (!net_landrivers[i].initialized ||
 			!net_landrivers[i].GetAddrFromName ||
@@ -797,7 +797,7 @@ static int NET_PortPingProbeWorker(void *data)
 	 * address families that did not resolve to a usable endpoint. */
 	progress += (ctx->enabled_endpoint_count - ctx->endpoint_count) *
 		PORTPINGPROBE_ENDPOINT_PROBES;
-	SDL_AtomicSet(&portpingprobe_progress, progress);
+	SDL_SetAtomicInt(&portpingprobe_progress, progress);
 
 	/* Select the destination first. Source-port results are meaningful only for
 	 * the exact address family and route that will be used by the connection. */
@@ -815,13 +815,13 @@ static int NET_PortPingProbeWorker(void *data)
 		{
 			double rtt = -1;
 
-			if (SDL_AtomicGet(&portpingprobe_abort_requested))
+			if (SDL_GetAtomicInt(&portpingprobe_abort_requested))
 				goto finished;
 			if (endpoint->query != PORTPINGPROBE_QUERY_NONE)
 				rtt = NET_PortPingProbeSocket(ctx, endpoint->socket, endpoint->query);
 			if (rtt >= 0)
 				endpoint->samples[endpoint->replies++] = rtt;
-			SDL_AtomicSet(&portpingprobe_progress, ++progress);
+			SDL_SetAtomicInt(&portpingprobe_progress, ++progress);
 
 			if (ctx->delay_ms > 0)
 				Sys_Sleep(ctx->delay_ms);
@@ -884,11 +884,11 @@ static int NET_PortPingProbeWorker(void *data)
 		int position;
 		int move;
 
-		if (SDL_AtomicGet(&portpingprobe_abort_requested))
+		if (SDL_GetAtomicInt(&portpingprobe_abort_requested))
 			goto finished;
 
 		candidate->discovery_rtt = NET_PortPingProbeSingle(ctx, candidate->port, ctx->query);
-		SDL_AtomicSet(&portpingprobe_progress, ++progress);
+		SDL_SetAtomicInt(&portpingprobe_progress, ++progress);
 		if (candidate->discovery_rtt >= 0)
 		{
 			ctx->responsive_ports++;
@@ -927,13 +927,13 @@ static int NET_PortPingProbeWorker(void *data)
 			portpingprobe_candidate_t *candidate = &ctx->candidates[finalists[slot]];
 			double rtt = -1;
 
-			if (SDL_AtomicGet(&portpingprobe_abort_requested))
+			if (SDL_GetAtomicInt(&portpingprobe_abort_requested))
 				goto finished;
 			if (candidate->socket != INVALID_SOCKET)
 				rtt = NET_PortPingProbeSocket(ctx, candidate->socket, ctx->query);
 			if (rtt >= 0 && candidate->replies < PORTPINGPROBE_MAX_PORT_PROBES)
 				candidate->samples[candidate->replies++] = rtt;
-			SDL_AtomicSet(&portpingprobe_progress, ++progress);
+			SDL_SetAtomicInt(&portpingprobe_progress, ++progress);
 
 			if (ctx->delay_ms > 0)
 				Sys_Sleep(ctx->delay_ms);
@@ -1000,21 +1000,21 @@ finished:
 		}
 	}
 
-	if (SDL_AtomicGet(&portpingprobe_abort_requested))
+	if (SDL_GetAtomicInt(&portpingprobe_abort_requested))
 	{
 		if (ctx->best_socket != INVALID_SOCKET)
 		{
 			net_landrivers[ctx->landriver].Close_Socket(ctx->best_socket);
 			ctx->best_socket = INVALID_SOCKET;
 		}
-		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_ABORT);
+		SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_ABORT);
 	}
 	else
 	{
-		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_COMPLETED);
+		SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_COMPLETED);
 	}
 
-	SDL_AtomicSet(&portpingprobe_worker_running, 0);
+	SDL_SetAtomicInt(&portpingprobe_worker_running, 0);
 	return 0;
 }
 
@@ -1112,10 +1112,10 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 
 	NET_PortPingProbe_ClearResult();
 	NET_PortPingProbe_ClearPendingSocket();
-	SDL_AtomicSet(&portpingprobe_abort_requested, 0);
-	SDL_AtomicSet(&portpingprobe_progress, 0);
-	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_PROBING);
-	SDL_AtomicSet(&portpingprobe_worker_running, 1);
+	SDL_SetAtomicInt(&portpingprobe_abort_requested, 0);
+	SDL_SetAtomicInt(&portpingprobe_progress, 0);
+	SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_PROBING);
+	SDL_SetAtomicInt(&portpingprobe_worker_running, 1);
 	portpingprobe_abort_quiet = false;
 	portpingprobe_last_percent = -1;
 	portpingprobe_console_inline = false;
@@ -1124,8 +1124,8 @@ qboolean NET_PortPingProbe_Start(const char *connect_addr)
 	if (!ctx->thread)
 	{
 		Con_Printf("NET_PortPingProbe_Start: failed to create worker thread\n");
-		SDL_AtomicSet(&portpingprobe_worker_running, 0);
-		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
+		SDL_SetAtomicInt(&portpingprobe_worker_running, 0);
+		SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_IDLE);
 		NET_PortPingProbe_FreeContext(ctx);
 		return false;
 	}
@@ -1148,7 +1148,7 @@ void NET_PortPingProbe_Frame(void)
 	if (!ctx)
 		return;
 
-	if (SDL_AtomicGet(&portpingprobe_worker_running))
+	if (SDL_GetAtomicInt(&portpingprobe_worker_running))
 	{
 		progress_percent = NET_PortPingProbe_GetProgress();
 		if (progress_percent > 0 && progress_percent != portpingprobe_last_percent)
@@ -1226,12 +1226,12 @@ void NET_PortPingProbe_Frame(void)
 			Con_Printf("Port ping probe aborted\n");
 
 		NET_PortPingProbe_ClearResult();
-		SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
+		SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_IDLE);
 	}
 
 	NET_PortPingProbe_FreeContext(ctx);
-	SDL_AtomicSet(&portpingprobe_abort_requested, 0);
-	SDL_AtomicSet(&portpingprobe_progress, 0);
+	SDL_SetAtomicInt(&portpingprobe_abort_requested, 0);
+	SDL_SetAtomicInt(&portpingprobe_progress, 0);
 	portpingprobe_last_percent = -1;
 	portpingprobe_console_inline = false;
 	portpingprobe_abort_quiet = false;
@@ -1258,10 +1258,10 @@ static void NET_PortPingProbe_Shutdown(void)
 
 	NET_PortPingProbe_ClearResult();
 	NET_PortPingProbe_ClearPendingSocket();
-	SDL_AtomicSet(&portpingprobe_abort_requested, 0);
-	SDL_AtomicSet(&portpingprobe_worker_running, 0);
-	SDL_AtomicSet(&portpingprobe_progress, 0);
-	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
+	SDL_SetAtomicInt(&portpingprobe_abort_requested, 0);
+	SDL_SetAtomicInt(&portpingprobe_worker_running, 0);
+	SDL_SetAtomicInt(&portpingprobe_progress, 0);
+	SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_IDLE);
 	portpingprobe_last_percent = -1;
 	portpingprobe_console_inline = false;
 	portpingprobe_abort_quiet = false;
@@ -2357,10 +2357,10 @@ int Datagram_Init (void)
 	Cvar_SetCallback(&cl_portpingprobe_probes, cl_portpingprobe_probes_changed);
 	Cvar_SetCallback(&cl_portpingprobe_port_probes, cl_portpingprobe_port_probes_changed);
 	Cvar_SetCallback(&cl_portpingprobe_delay, cl_portpingprobe_delay_changed);
-	SDL_AtomicSet(&portpingprobe_status, PORTPINGPROBE_IDLE);
-	SDL_AtomicSet(&portpingprobe_abort_requested, 0);
-	SDL_AtomicSet(&portpingprobe_worker_running, 0);
-	SDL_AtomicSet(&portpingprobe_progress, 0);
+	SDL_SetAtomicInt(&portpingprobe_status, PORTPINGPROBE_IDLE);
+	SDL_SetAtomicInt(&portpingprobe_abort_requested, 0);
+	SDL_SetAtomicInt(&portpingprobe_worker_running, 0);
+	SDL_SetAtomicInt(&portpingprobe_progress, 0);
 	NET_PortPingProbe_ClearResult();
 	NET_PortPingProbe_ClearPendingSocket();
 
@@ -4111,8 +4111,8 @@ typedef enum
 typedef struct datagram_connect_resolver_s
 {
 	SDL_Thread *thread;
-	SDL_atomic_t done;
-	SDL_atomic_t canceled;
+	SDL_AtomicInt done;
+	SDL_AtomicInt canceled;
 	char address[MAX_SERVER_ADDRESS_LEN + 16];
 	qboolean enabled[MAX_NET_DRIVERS];
 	qboolean resolved[MAX_NET_DRIVERS];
@@ -4153,7 +4153,7 @@ static int Datagram_ConnectResolverWorker(void *data)
 
 	for (i = 0; i < net_numlandrivers; i++)
 	{
-		if (SDL_AtomicGet(&resolver->canceled))
+		if (SDL_GetAtomicInt(&resolver->canceled))
 			break;
 		if (!resolver->enabled[i])
 			continue;
@@ -4162,7 +4162,7 @@ static int Datagram_ConnectResolverWorker(void *data)
 			resolver->resolved[i] = true;
 	}
 
-	SDL_AtomicSet(&resolver->done, 1);
+	SDL_SetAtomicInt(&resolver->done, 1);
 	return 0;
 }
 
@@ -4183,7 +4183,7 @@ static void Datagram_ConnectResolverReapAbandoned(qboolean wait_all)
 	{
 		datagram_connect_resolver_t *resolver = *link;
 
-		if (!wait_all && !SDL_AtomicGet(&resolver->done))
+		if (!wait_all && !SDL_GetAtomicInt(&resolver->done))
 		{
 			link = &resolver->next;
 			continue;
@@ -4202,7 +4202,7 @@ static void Datagram_ConnectResolverAbandon(void)
 	if (!resolver)
 		return;
 	datagram_connect_ctx.resolver = NULL;
-	SDL_AtomicSet(&resolver->canceled, 1);
+	SDL_SetAtomicInt(&resolver->canceled, 1);
 	resolver->next = datagram_connect_abandoned_resolvers;
 	datagram_connect_abandoned_resolvers = resolver;
 	datagram_connect_abandoned_resolver_count++;
@@ -4233,8 +4233,8 @@ static datagram_connect_resolver_t *Datagram_ConnectResolverStart(const char *ad
 		return NULL;
 	}
 	resolver->enabled[landriver] = true;
-	SDL_AtomicSet(&resolver->done, 0);
-	SDL_AtomicSet(&resolver->canceled, 0);
+	SDL_SetAtomicInt(&resolver->done, 0);
+	SDL_SetAtomicInt(&resolver->canceled, 0);
 	resolver->thread = SDL_CreateThread(Datagram_ConnectResolverWorker,
 		"connectdns", resolver);
 	if (!resolver->thread)
@@ -4569,7 +4569,7 @@ net_connect_result_t NET_DatagramConnectFrame(qsocket_t **outsock, const char **
 					*outreason = datagram_connect_ctx.reason;
 				return NET_CONNECT_FAILED;
 			}
-			if (!SDL_AtomicGet(&datagram_connect_ctx.resolver->done))
+			if (!SDL_GetAtomicInt(&datagram_connect_ctx.resolver->done))
 				return NET_CONNECT_PENDING;
 			Datagram_ConnectResolverConsume();
 			datagram_connect_ctx.phase = DATAGRAM_CONNECT_PHASE_RESOLVE;

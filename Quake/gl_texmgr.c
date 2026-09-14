@@ -80,9 +80,9 @@ typedef struct texwork_worker_s
 
 typedef struct texwork_pool_s
 {
-	SDL_mutex	*mutex;
-	SDL_cond	*work_cond;
-	SDL_cond	*done_cond;
+	SDL_Mutex	*mutex;
+	SDL_Condition	*work_cond;
+	SDL_Condition	*done_cond;
 	SDL_Thread	*threads[TEXWORK_MAX_PARTICIPANTS - 1];
 	texwork_worker_t workers[TEXWORK_MAX_PARTICIPANTS - 1];
 	int		num_threads;
@@ -95,7 +95,7 @@ typedef struct texwork_pool_s
 	texwork_fn_t	function;
 	void		*context;
 	unsigned int	count;
-	SDL_atomic_t	next_index;
+	SDL_AtomicInt	next_index;
 } texwork_pool_t;
 
 static texwork_pool_t texwork_pool;
@@ -104,7 +104,7 @@ static void TexWork_ExecuteClaims (void)
 {
 	for (;;)
 	{
-		int claimed = SDL_AtomicAdd (&texwork_pool.next_index, 1);
+		int claimed = SDL_AddAtomicInt (&texwork_pool.next_index, 1);
 		qboolean previous;
 
 		if (claimed < 0 || (unsigned int)claimed >= texwork_pool.count)
@@ -126,7 +126,7 @@ static int TexWork_Thread (void *argument)
 	{
 		SDL_LockMutex (texwork_pool.mutex);
 		while (!texwork_pool.stop && texwork_pool.generation == seen_generation)
-			SDL_CondWait (texwork_pool.work_cond, texwork_pool.mutex);
+			SDL_WaitCondition (texwork_pool.work_cond, texwork_pool.mutex);
 		if (texwork_pool.stop)
 		{
 			SDL_UnlockMutex (texwork_pool.mutex);
@@ -146,7 +146,7 @@ static int TexWork_Thread (void *argument)
 		SDL_LockMutex (texwork_pool.mutex);
 		texwork_pool.done_threads++;
 		if (texwork_pool.done_threads == texwork_pool.active_threads)
-			SDL_CondSignal (texwork_pool.done_cond);
+			SDL_SignalCondition (texwork_pool.done_cond);
 		SDL_UnlockMutex (texwork_pool.mutex);
 	}
 
@@ -159,15 +159,15 @@ static qboolean TexWork_CreatePrimitives (void)
 		return true;
 
 	texwork_pool.mutex = SDL_CreateMutex ();
-	texwork_pool.work_cond = SDL_CreateCond ();
-	texwork_pool.done_cond = SDL_CreateCond ();
+	texwork_pool.work_cond = SDL_CreateCondition ();
+	texwork_pool.done_cond = SDL_CreateCondition ();
 	if (!texwork_pool.mutex || !texwork_pool.work_cond || !texwork_pool.done_cond)
 	{
 		Con_DPrintf ("TexWork: SDL synchronization creation failed: %s\n", SDL_GetError ());
 		if (texwork_pool.done_cond)
-			SDL_DestroyCond (texwork_pool.done_cond);
+			SDL_DestroyCondition (texwork_pool.done_cond);
 		if (texwork_pool.work_cond)
-			SDL_DestroyCond (texwork_pool.work_cond);
+			SDL_DestroyCondition (texwork_pool.work_cond);
 		if (texwork_pool.mutex)
 			SDL_DestroyMutex (texwork_pool.mutex);
 		memset (&texwork_pool, 0, sizeof(texwork_pool));
@@ -222,7 +222,7 @@ static int TexWork_ConfiguredParticipants (void)
 
 	participants = (int)tex_workers.value;
 	if (participants <= 0)
-		participants = SDL_GetCPUCount ();
+		participants = SDL_GetNumLogicalCPUCores ();
 	return CLAMP (1, participants, TEXWORK_MAX_PARTICIPANTS);
 }
 
@@ -260,16 +260,16 @@ static void TexWork_Run (texwork_fn_t function, void *context, unsigned int coun
 		texwork_pool.active_threads = active;
 		texwork_pool.done_threads = 0;
 		texwork_pool.batch_active = true;
-		SDL_AtomicSet (&texwork_pool.next_index, 0);
+		SDL_SetAtomicInt (&texwork_pool.next_index, 0);
 		texwork_pool.generation++;
-		SDL_CondBroadcast (texwork_pool.work_cond);
+		SDL_BroadcastCondition (texwork_pool.work_cond);
 		SDL_UnlockMutex (texwork_pool.mutex);
 
 		TexWork_ExecuteClaims ();
 
 		SDL_LockMutex (texwork_pool.mutex);
 		while (texwork_pool.done_threads < texwork_pool.active_threads)
-			SDL_CondWait (texwork_pool.done_cond, texwork_pool.mutex);
+			SDL_WaitCondition (texwork_pool.done_cond, texwork_pool.mutex);
 		texwork_pool.batch_active = false;
 		texwork_pool.function = NULL;
 		texwork_pool.context = NULL;
@@ -292,14 +292,14 @@ void TexMgr_Shutdown (void)
 
 	SDL_LockMutex (texwork_pool.mutex);
 	texwork_pool.stop = true;
-	SDL_CondBroadcast (texwork_pool.work_cond);
+	SDL_BroadcastCondition (texwork_pool.work_cond);
 	SDL_UnlockMutex (texwork_pool.mutex);
 
 	for (i = 0; i < texwork_pool.num_threads; i++)
 		SDL_WaitThread (texwork_pool.threads[i], NULL);
 
-	SDL_DestroyCond (texwork_pool.done_cond);
-	SDL_DestroyCond (texwork_pool.work_cond);
+	SDL_DestroyCondition (texwork_pool.done_cond);
+	SDL_DestroyCondition (texwork_pool.work_cond);
 	SDL_DestroyMutex (texwork_pool.mutex);
 	memset (&texwork_pool, 0, sizeof(texwork_pool));
 #endif

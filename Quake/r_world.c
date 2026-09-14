@@ -6164,13 +6164,13 @@ enum rscenecachestatus_e
 static struct
 {	//I'm tagging things as commented-volatile to mark the things that we depend upon before the sdl lock/unlock/wait calls.
 	SDL_Thread *thread;
-	SDL_mutex *mutex;
-	SDL_cond *wt_cond;
-	SDL_cond *rt_cond;
+	SDL_Mutex *mutex;
+	SDL_Condition *wt_cond;
+	SDL_Condition *rt_cond;
 
 	/*volatile*/ qboolean die;
 	/*volatile*/ struct rscenecache_s *processing;
-	SDL_atomic_t processed;	//lightmaps need updating
+	SDL_AtomicInt processed;	//lightmaps need updating
 
 	// woods #scenecachedlights -- lightweight per-frame worker job that patches
 	// dlight lightmaps in place so active dlights don't force full cache rebuilds.
@@ -6194,7 +6194,7 @@ static struct
 		byte *surfs;
 		size_t surfbytes;
 	} dlightjob;
-	SDL_atomic_t haslitsurfs;	//worker-maintained: lightmaps still contain dlight contributions needing cleanup
+	SDL_AtomicInt haslitsurfs;	//worker-maintained: lightmaps still contain dlight contributions needing cleanup
 
 	struct rscenecache_s *drawing;
 	struct rscenecache_s *teleportmain; // retained while the teleporter renders its extra views
@@ -6225,7 +6225,7 @@ static struct
 		qboolean teleportscomplete;
 		qboolean teleportchains; // main thread: these faces draw through texture chains this view
 
-		SDL_atomic_t status;
+		SDL_AtomicInt status;
 		GLuint ebo;
 		dlight_t dlights[countof(cl_dlights)];	//added this here so the cache at least gets consistent lighting without having to fight the main thread.
 		double time;	//for killing old lights...
@@ -6245,7 +6245,7 @@ static struct
 		} batches[1];	//one per texturelm...
 	} *cache;	//remember a few, for skyrooms or multiple-csqc-renderscenes etc. we need at least two - previous and pending
 } rscenecache;
-static SDL_atomic_t rscenecache_worker_warning;
+static SDL_AtomicInt rscenecache_worker_warning;
 static qboolean RSceneCache_TextureIsSky(const texture_t *tex);
 byte *skipsubmodels;
 
@@ -6257,7 +6257,7 @@ static qboolean RSceneCache_ReserveBatchIndices(struct rscenecachebath_s *batch,
 
 	if (addidx > (size_t)-1 - batch->numidx)
 	{
-		SDL_AtomicSet(&rscenecache_worker_warning, true);
+		SDL_SetAtomicInt(&rscenecache_worker_warning, true);
 		return false;
 	}
 	needed = batch->numidx + addidx;
@@ -6267,13 +6267,13 @@ static qboolean RSceneCache_ReserveBatchIndices(struct rscenecachebath_s *batch,
 	newmax = (needed > (size_t)-1 - 4096) ? needed : needed + 4096;
 	if (newmax > (size_t)-1 / sizeof(*batch->idx))
 	{
-		SDL_AtomicSet(&rscenecache_worker_warning, true);
+		SDL_SetAtomicInt(&rscenecache_worker_warning, true);
 		return false;
 	}
 	new_idx = realloc(batch->idx, sizeof(*batch->idx) * newmax);
 	if (!new_idx)
 	{
-		SDL_AtomicSet(&rscenecache_worker_warning, true);
+		SDL_SetAtomicInt(&rscenecache_worker_warning, true);
 		return false;
 	}
 
@@ -6302,13 +6302,13 @@ static qboolean RSceneCache_SurfaceListReserve (msurface_t ***surfs, size_t *max
 		newmax = needed;
 	if (newmax > (size_t)-1 / sizeof(*grown))
 	{
-		SDL_AtomicSet(&rscenecache_worker_warning, true);
+		SDL_SetAtomicInt(&rscenecache_worker_warning, true);
 		return false;
 	}
 	grown = realloc(*surfs, newmax * sizeof(*grown));
 	if (!grown)
 	{
-		SDL_AtomicSet(&rscenecache_worker_warning, true);
+		SDL_SetAtomicInt(&rscenecache_worker_warning, true);
 		return false;
 	}
 	*surfs = grown;
@@ -6335,12 +6335,12 @@ static void RSceneCache_ResetDlightTracking (qmodel_t *mod)
 	{
 		SDL_LockMutex(rscenecache.mutex);
 		while (rscenecache.dlightjob.cache)
-			SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
 		if (!mod || rscenecache_litsurfs_model == mod)
 		{
 			rscenecache_numlitsurfs = 0;
 			rscenecache_litsurfs_model = NULL;
-			SDL_AtomicSet(&rscenecache.haslitsurfs, false);
+			SDL_SetAtomicInt(&rscenecache.haslitsurfs, false);
 		}
 		SDL_UnlockMutex(rscenecache.mutex);
 	}
@@ -6348,7 +6348,7 @@ static void RSceneCache_ResetDlightTracking (qmodel_t *mod)
 	{
 		rscenecache_numlitsurfs = 0;
 		rscenecache_litsurfs_model = NULL;
-		SDL_AtomicSet(&rscenecache.haslitsurfs, false);
+		SDL_SetAtomicInt(&rscenecache.haslitsurfs, false);
 	}
 }
 
@@ -6366,7 +6366,7 @@ static void RSceneCache_MergeLitSurfs (struct rscenecache_s *cache)
 		{
 			memcpy(rscenecache_litsurfs + rscenecache_numlitsurfs, cache->litsurfs, cache->numlitsurfs * sizeof(*cache->litsurfs));
 			rscenecache_numlitsurfs += cache->numlitsurfs;
-			SDL_AtomicSet(&rscenecache.haslitsurfs, true);
+			SDL_SetAtomicInt(&rscenecache.haslitsurfs, true);
 		}
 	}
 	cache->numlitsurfs = 0;
@@ -6643,7 +6643,7 @@ static qboolean RSceneCache_RunDlightJob (struct rscenecache_s *cache)
 		changed = true;
 	}
 	rscenecache_numlitsurfs = out;
-	SDL_AtomicSet(&rscenecache.haslitsurfs, out != 0);
+	SDL_SetAtomicInt(&rscenecache.haslitsurfs, out != 0);
 
 	//tb -- a lightstyle tick changed the light values in cache->lightmapstate.
 	//Sweep every world surface, not just the drawing cache's visible set:
@@ -6715,7 +6715,7 @@ static qboolean RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache, qboo
 		}
 	}
 
-	if (!active && !stylechanged && !SDL_AtomicGet(&rscenecache.haslitsurfs))
+	if (!active && !stylechanged && !SDL_GetAtomicInt(&rscenecache.haslitsurfs))
 		return false;	//nothing to light, nothing to clear.
 
 	SDL_LockMutex(rscenecache.mutex);
@@ -6747,7 +6747,7 @@ static qboolean RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache, qboo
 				size_t b;
 				if (c->worldmodel != cl.worldmodel || !c->visitedsurfs)
 					continue;
-				if (SDL_AtomicGet(&c->status) == SCS_DISCARDED)
+				if (SDL_GetAtomicInt(&c->status) == SCS_DISCARDED)
 					continue;
 				for (b = 0; b < need; b++)
 					rscenecache.dlightjob.surfs[b] |= c->visitedsurfs[b];
@@ -6765,7 +6765,7 @@ static qboolean RSceneCache_QueueDlightUpdate (struct rscenecache_s *cache, qboo
 		//sweep compares each surface's cached_light against.
 		R_LightmapBuildState_Snapshot(&cache->lightmapstate);
 		rscenecache.dlightjob.cache = cache;
-		SDL_CondSignal(rscenecache.wt_cond);
+		SDL_SignalCondition(rscenecache.wt_cond);
 		queued = true;
 	}
 	//tb -- if the worker is busy we simply do not queue. The style comparison in
@@ -6790,11 +6790,11 @@ static int RSceneCache_Thread(void *ctx)
 	mmodel_t *sub;
 
 	SDL_LockMutex(rscenecache.mutex);
-	SDL_CondSignal(rscenecache.rt_cond);	//wake the parent thread. its waiting for us.
+	SDL_SignalCondition(rscenecache.rt_cond);	//wake the parent thread. its waiting for us.
 	while (!rscenecache.die)
 	{
 		if (!rscenecache.processing && !rscenecache.dlightjob.cache)	//might have been posted+signaled to us while we were busy on the last one.
-			SDL_CondWait(rscenecache.wt_cond, rscenecache.mutex);
+			SDL_WaitCondition(rscenecache.wt_cond, rscenecache.mutex);
 		cache = rscenecache.processing;
 		rscenecache.processing = NULL;	//accepted!
 		if (!cache && rscenecache.dlightjob.cache)
@@ -6807,9 +6807,9 @@ static int RSceneCache_Thread(void *ctx)
 			//stay comparable between the rebuild and lightmap-only paths.
 			SDL_LockMutex(rscenecache.mutex);
 			if (changed)
-				SDL_AtomicSet(&rscenecache.processed, true);	//get RSceneCache_Finish to upload the dirty regions.
+				SDL_SetAtomicInt(&rscenecache.processed, true);	//get RSceneCache_Finish to upload the dirty regions.
 			rscenecache.dlightjob.cache = NULL;
-			SDL_CondSignal(rscenecache.rt_cond);
+			SDL_SignalCondition(rscenecache.rt_cond);
 			continue;
 		}
 		SDL_UnlockMutex(rscenecache.mutex);
@@ -6855,7 +6855,7 @@ static int RSceneCache_Thread(void *ctx)
 								if ((unsigned)(surf->lightmaptexturenum+1) >= cache->lightmaps)
 									continue;	//wtf
 								if (!surf->texinfo) { // material sanity – guard against NULL or out-of-range
-									SDL_AtomicSet(&rscenecache_worker_warning, true);
+									SDL_SetAtomicInt(&rscenecache_worker_warning, true);
 									continue;
 								}
 								if ((unsigned int)surf->texinfo->materialidx >= cache->numtextures)
@@ -6910,7 +6910,7 @@ static int RSceneCache_Thread(void *ctx)
 					if ((unsigned)(surf->lightmaptexturenum+1) >= cache->lightmaps)
 						continue;	//wtf
 					if (!surf->texinfo) {
-						SDL_AtomicSet(&rscenecache_worker_warning, true);
+						SDL_SetAtomicInt(&rscenecache_worker_warning, true);
 						continue;
 					}
 					if ((unsigned int)surf->texinfo->materialidx >= cache->numtextures)
@@ -6946,9 +6946,9 @@ static int RSceneCache_Thread(void *ctx)
 
 
 			SDL_LockMutex(rscenecache.mutex);
-			SDL_AtomicSet(&rscenecache.processed, true);
-			SDL_AtomicSet(&cache->status, SCS_COMPUTED);
-			SDL_CondSignal(rscenecache.rt_cond);
+			SDL_SetAtomicInt(&rscenecache.processed, true);
+			SDL_SetAtomicInt(&cache->status, SCS_COMPUTED);
+			SDL_SignalCondition(rscenecache.rt_cond);
 		}
 		else
 			SDL_LockMutex(rscenecache.mutex);
@@ -7031,11 +7031,11 @@ static void RSceneCache_WaitForWorker(void)
 	for (;;)
 	{
 		for (cache = rscenecache.cache; cache; cache = cache->next)
-			if (SDL_AtomicGet(&cache->status) == SCS_BUILDING)
+			if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
 				break;
 		if (!cache && !rscenecache.processing && !rscenecache.dlightjob.cache)
 			break;
-		SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+		SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
 	}
 	SDL_UnlockMutex(rscenecache.mutex);
 }
@@ -7203,11 +7203,11 @@ static qboolean RSceneCache_Queue(byte *vis)
 	{
 		if (cache->worldmodel != cl.worldmodel)
 		{	//this cache is completely unsuitable.
-			if (SDL_AtomicGet(&cache->status) == SCS_BUILDING)
+			if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
 				building = cache;
 			continue;
 		}
-		if (SDL_AtomicGet(&cache->status) == SCS_DISCARDED)
+		if (SDL_GetAtomicInt(&cache->status) == SCS_DISCARDED)
 			continue;
 		if (cache->lightmaps != (unsigned int)(lightmap_count + 1) ||
 			cache->numtextures != (unsigned int)cl.worldmodel->numtextures)
@@ -7216,7 +7216,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 		if (!memcmp(cache->pvs, vis, rowbytes))
 		{	//pvs matches. yay. we *could* check leaf, but that wouldn't handle detail brushes properly.
 			VectorCopy(r_origin, cache->pos);	//might as well keep its origin updated, so we don't block needlessly, but only when its actually valid.
-			if (SDL_AtomicGet(&cache->status) == SCS_BUILDING)
+			if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
 			{	//its perfect so there's no point building it, but we still can't use it yet, so keep looking for one we CAN use.
 				building = cache;
 				if (!best)
@@ -7243,7 +7243,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 			}
 		}
 
-		if (SDL_AtomicGet(&cache->status) == SCS_BUILDING)
+		if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
 		{
 			building = cache;
 			continue;	//can't be better if we're not able to use it yet... we'll block building a new one though.
@@ -7259,7 +7259,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 
 	//check if there's one building already (don't want to queue too many)
 	if (!building && best)
-		for (building = best; building && SDL_AtomicGet(&building->status) != SCS_BUILDING; building = building->next)
+		for (building = best; building && SDL_GetAtomicInt(&building->status) != SCS_BUILDING; building = building->next)
 			;
 
 	if (!r_dynamic.value)
@@ -7296,7 +7296,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 			SDL_LockMutex(rscenecache.mutex);
 			if (rscenecache.processing)
 			{
-				SDL_AtomicSet(&rscenecache.processing->status, SCS_DISCARDED);
+				SDL_SetAtomicInt(&rscenecache.processing->status, SCS_DISCARDED);
 				rscenecache.processing = NULL;
 			}
 			SDL_UnlockMutex(rscenecache.mutex);
@@ -7304,7 +7304,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 
 		for (cache = rscenecache.cache; cache; cache = cache->next)
 		{
-			if (SDL_AtomicGet(&cache->status) == SCS_BUILDING ||	//worker still has it.
+			if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING ||	//worker still has it.
 				cache == best)						//we're falling back on it...
 				continue;
 			if (cache->worldmodel != cl.worldmodel)
@@ -7314,7 +7314,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 				cache->numtextures != (unsigned int)cl.worldmodel->numtextures)
 				continue;	//allocation sizes changed...
 
-			if (SDL_AtomicGet(&cache->status) == SCS_DISCARDED)
+			if (SDL_GetAtomicInt(&cache->status) == SCS_DISCARDED)
 			{	//this one is fine.
 				oldest = cache;
 				break;
@@ -7397,7 +7397,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 			cache->numcachedsubmodels = cl.worldmodel->numsubmodels;
 		}
 
-		SDL_AtomicSet(&cache->status, SCS_BUILDING);
+		SDL_SetAtomicInt(&cache->status, SCS_BUILDING);
 		VectorCopy(r_origin, cache->pos);	//might as well overwrite its origin
 		cache->hostframe = host_framecount;
 		memcpy(cache->pvs, vis, rowbytes);
@@ -7417,8 +7417,8 @@ static qboolean RSceneCache_Queue(byte *vis)
 		{
 			rscenecache.die = false;	//just in case...
 			rscenecache.mutex = SDL_CreateMutex();
-			rscenecache.wt_cond = SDL_CreateCond();
-			rscenecache.rt_cond = SDL_CreateCond();
+			rscenecache.wt_cond = SDL_CreateCondition();
+			rscenecache.rt_cond = SDL_CreateCondition();
 			if (!rscenecache.mutex || !rscenecache.wt_cond || !rscenecache.rt_cond)
 			{
 				Con_DWarning("RSceneCache: failed to create worker synchronization: %s\n", SDL_GetError());
@@ -7436,7 +7436,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 				RSceneCache_Shutdown();
 				return false;
 			}
-			SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
 			SDL_UnlockMutex(rscenecache.mutex);
 			//the thread is now at a known position.
 		}
@@ -7447,12 +7447,12 @@ static qboolean RSceneCache_Queue(byte *vis)
 		while(rscenecache.processing)
 		{
 //			double t = Sys_DoubleTime();
-			SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
 //			t = Sys_DoubleTime()-t;
 //			Con_Printf("Scenecache prewait (%f)\n", t*1000);
 		}
 		rscenecache.processing = cache;
-		SDL_CondSignal(rscenecache.wt_cond);
+		SDL_SignalCondition(rscenecache.wt_cond);
 		SDL_UnlockMutex(rscenecache.mutex);
 	}
 	if (best)
@@ -7475,7 +7475,7 @@ static qboolean RSceneCache_Queue(byte *vis)
 	//woods #scenecachedlights -- with no rebuild queued or in flight, have the
 	//worker patch active dlights into the shared lightmaps instead of rebuilding.
 	//tb -- and lightstyle ticks, for the same reason.
-	if (cache && !queuedbuild && !building && SDL_AtomicGet(&cache->status) != SCS_BUILDING)
+	if (cache && !queuedbuild && !building && SDL_GetAtomicInt(&cache->status) != SCS_BUILDING)
 	{
 		if (RSceneCache_QueueDlightUpdate (cache, stylechanged) && stylechanged)
 		{	//only advance the reference values once the worker has actually taken
@@ -7493,11 +7493,11 @@ static qboolean RSceneCache_Queue(byte *vis)
 static void RSceneCache_Uncache(struct rscenecache_s *cache)
 {
 	size_t i;
-	if (SDL_AtomicGet(&cache->status) == SCS_BUILDING && rscenecache.thread)
+	if (SDL_GetAtomicInt(&cache->status) == SCS_BUILDING && rscenecache.thread)
 	{
 		SDL_LockMutex(rscenecache.mutex);
-		while(SDL_AtomicGet(&cache->status) == SCS_BUILDING)	//thread still has it...
-			SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+		while(SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)	//thread still has it...
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
 		SDL_UnlockMutex(rscenecache.mutex);
 	}
 	if (rscenecache.drawing == cache)
@@ -7509,7 +7509,7 @@ static void RSceneCache_Uncache(struct rscenecache_s *cache)
 	{
 		SDL_LockMutex(rscenecache.mutex);
 		while (rscenecache.dlightjob.cache == cache)
-			SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
 		SDL_UnlockMutex(rscenecache.mutex);
 	}
 	if (cache->litsurfs)
@@ -7595,10 +7595,10 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 #ifdef USEMAPBUFFER
 	byte *ebomem = NULL;
 #endif
-	if (SDL_AtomicSet(&rscenecache_worker_warning, false))
+	if (SDL_SetAtomicInt(&rscenecache_worker_warning, false))
 		Con_DWarning("RSceneCache: worker skipped invalid or oversized surface data\n");
 
-	status = SDL_AtomicGet(&cache->status);
+	status = SDL_GetAtomicInt(&cache->status);
 	// Acquire the worker mutex before the first consumption of published cache
 	// fields. Finished and discarded caches are already owned by the main thread,
 	// so avoid paying for this lock on every subsequent frame.
@@ -7608,12 +7608,12 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 		qboolean blocked = false;
 
 		SDL_LockMutex(rscenecache.mutex);
-		while(SDL_AtomicGet(&cache->status) == SCS_BUILDING)
+		while(SDL_GetAtomicInt(&cache->status) == SCS_BUILDING)
 		{
 			blocked = true;
-			SDL_CondWait(rscenecache.rt_cond, rscenecache.mutex);
+			SDL_WaitCondition(rscenecache.rt_cond, rscenecache.mutex);
 		}
-		status = SDL_AtomicGet(&cache->status);
+		status = SDL_GetAtomicInt(&cache->status);
 		SDL_UnlockMutex(rscenecache.mutex);
 
 		if (blocked)
@@ -7668,7 +7668,7 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 			GL_UnmapBufferFunc(GL_ELEMENT_ARRAY_BUFFER);
 #endif
 		RSceneCache_UpdateDrawTextureList(cache);
-		SDL_AtomicSet(&cache->status, SCS_FINISHED);
+		SDL_SetAtomicInt(&cache->status, SCS_FINISHED);
 
 
 		for (i=0, cache = rscenecache.cache; cache; cache = cache->next)
@@ -7679,7 +7679,7 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 		break;
 	}
 
-	if (SDL_AtomicSet(&rscenecache.processed, false))
+	if (SDL_SetAtomicInt(&rscenecache.processed, false))
 	{	//make sure lightmaps are updated when we can.
 		// woods #scenecachedlights -- safe to run every frame, even while a
 		// worker job is mid-flight: R_LightmapMarkDirtyRect only publishes a
@@ -7707,7 +7707,7 @@ static void RSceneCache_MarkTeleportSurfaces(void)
 	if (!R_TeleportActive() || skyroom_drawing || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
 		return;
 	RSceneCache_Finish(cache);
-	if (SDL_AtomicGet(&cache->status) != SCS_FINISHED || !cache->teleportscomplete)
+	if (SDL_GetAtomicInt(&cache->status) != SCS_FINISHED || !cache->teleportscomplete)
 		return;
 	cache->teleportchains = true;
 	// Only the portal faces need per-view culling and planes. Everything else
@@ -7744,7 +7744,7 @@ static void RSceneCache_Draw(qboolean water)
 		return;
 	}
 	RSceneCache_Finish(cache);
-	if (SDL_AtomicGet(&cache->status) != SCS_FINISHED)
+	if (SDL_GetAtomicInt(&cache->status) != SCS_FINISHED)
 	{
 		skipsubmodels = NULL;
 		return;
@@ -7995,7 +7995,7 @@ qboolean RSceneCache_HasSky(void)
 
 	if (cache)
 	{
-		status = SDL_AtomicGet(&cache->status);
+		status = SDL_GetAtomicInt(&cache->status);
 		if (status == SCS_DISCARDED)
 			return false;
 		if (status == SCS_BUILDING)
@@ -8005,7 +8005,7 @@ qboolean RSceneCache_HasSky(void)
 		if (rscenecache.thread)
 		{
 			SDL_LockMutex(rscenecache.mutex);
-			status = SDL_AtomicGet(&cache->status);
+			status = SDL_GetAtomicInt(&cache->status);
 			SDL_UnlockMutex(rscenecache.mutex);
 			if (status != SCS_COMPUTED)
 				return false;
@@ -8034,7 +8034,7 @@ static qboolean RSceneCache_WorldSkyVisible(void)
 	if (!cache || !cache->visitedsurfs || cache->worldmodel != cl.worldmodel)
 		return false;
 
-	status = SDL_AtomicGet(&cache->status);
+	status = SDL_GetAtomicInt(&cache->status);
 	if (status != SCS_COMPUTED && status != SCS_FINISHED)
 		return false;
 
@@ -8067,7 +8067,7 @@ qboolean RSceneCache_DrawSkySurfDepth(void)
 	rscenecache.doingskybox = true;
 
 	RSceneCache_Finish(cache);
-	if (SDL_AtomicGet(&cache->status) != SCS_FINISHED)
+	if (SDL_GetAtomicInt(&cache->status) != SCS_FINISHED)
 	{
 		rscenecache.doingskybox = false;
 		return false;
@@ -8125,16 +8125,16 @@ void RSceneCache_Shutdown(void)
 	{
 		SDL_LockMutex(rscenecache.mutex);
 		rscenecache.die = true;
-		SDL_CondSignal(rscenecache.wt_cond);	//make sure it wakes up so it knows it needs to die.
+		SDL_SignalCondition(rscenecache.wt_cond);	//make sure it wakes up so it knows it needs to die.
 		SDL_UnlockMutex(rscenecache.mutex);
 
 		SDL_WaitThread(rscenecache.thread, NULL);
 		rscenecache.thread = NULL;
 	}
 	if (rscenecache.wt_cond)
-		SDL_DestroyCond(rscenecache.wt_cond);
+		SDL_DestroyCondition(rscenecache.wt_cond);
 	if (rscenecache.rt_cond)
-		SDL_DestroyCond(rscenecache.rt_cond);
+		SDL_DestroyCondition(rscenecache.rt_cond);
 	if (rscenecache.mutex)
 		SDL_DestroyMutex(rscenecache.mutex);
 	rscenecache.wt_cond = NULL;
@@ -8146,8 +8146,8 @@ void RSceneCache_Shutdown(void)
 	rscenecache.dlightjob.surfs = NULL;
 	rscenecache.dlightjob.surfbytes = 0;
 	rscenecache.dlightjob.styles = false;
-	SDL_AtomicSet(&rscenecache.processed, false);
-	SDL_AtomicSet(&rscenecache.haslitsurfs, false);
+	SDL_SetAtomicInt(&rscenecache.processed, false);
+	SDL_SetAtomicInt(&rscenecache.haslitsurfs, false);
 	free(rscenecache_litsurfs);
 	rscenecache_litsurfs = NULL;
 	rscenecache_numlitsurfs = rscenecache_maxlitsurfs = 0;

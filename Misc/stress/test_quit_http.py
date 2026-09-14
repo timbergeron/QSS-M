@@ -1,6 +1,6 @@
 """Exercise shutdown cancellation against a real, deliberately stalled HTTP server.
 
-Run with python3 Misc/stress/test_quit_http.py (requires cc, SDL2 and libcurl).
+Run with python3 Misc/stress/test_quit_http.py (requires cc, SDL3 and libcurl).
 Compiles the engine's transfer helper; no Quake assets or external network needed.
 """
 
@@ -15,11 +15,11 @@ import threading
 
 ROOT = Path(__file__).resolve().parents[2]
 net = (ROOT / "Quake/net_main.c").read_text()
-start = net.index("static SDL_atomic_t net_web_shutting_down;")
+start = net.index("static SDL_AtomicInt net_web_shutting_down;")
 helper = net[start:net.index("qsocket_t\t*net_activeSockets", start)]
 
 SOURCE = r'''
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #include <curl/curl.h>
 #include <assert.h>
 #include <stdio.h>
@@ -27,7 +27,7 @@ SOURCE = r'''
 ''' + helper + r'''
 typedef struct {
     const char *url;
-    SDL_atomic_t received;
+    SDL_AtomicInt received;
     CURLcode result;
     int baseline;
     char body[32];
@@ -43,7 +43,7 @@ static size_t receive(char *data, size_t size, size_t count, void *opaque)
         request->size += bytes;
         request->body[request->size] = 0;
     }
-    SDL_AtomicSet(&request->received, 1);
+    SDL_SetAtomicInt(&request->received, 1);
     return bytes;
 }
 
@@ -51,7 +51,7 @@ static int progress(void *unused, curl_off_t a, curl_off_t b,
     curl_off_t c, curl_off_t d)
 {
     (void)unused; (void)a; (void)b; (void)c; (void)d;
-    return SDL_AtomicGet(&net_web_shutting_down);
+    return SDL_GetAtomicInt(&net_web_shutting_down);
 }
 
 static int abort_progress(void *unused, curl_off_t a, curl_off_t b,
@@ -125,16 +125,16 @@ static double cancel_transfers(const char *base, int baseline)
     SDL_Thread *threads[COUNT];
     char url[256];
     snprintf(url, sizeof(url), "%s/stall", base);
-    SDL_AtomicSet(&net_web_shutting_down, 0);
+    SDL_SetAtomicInt(&net_web_shutting_down, 0);
     for (int i = 0; i < COUNT; ++i) {
         requests[i].url = url;
         requests[i].baseline = baseline;
         threads[i] = SDL_CreateThread(transfer, "http-test", &requests[i]);
         assert(threads[i]);
     }
-    Uint32 start = SDL_GetTicks();
+    Uint64 start = SDL_GetTicks();
     for (int i = 0; i < COUNT; ++i) {
-        while (!SDL_AtomicGet(&requests[i].received)) {
+        while (!SDL_GetAtomicInt(&requests[i].received)) {
             assert(SDL_GetTicks() - start < 4000);
             SDL_Delay(1);
         }
@@ -155,7 +155,7 @@ static double cancel_transfers(const char *base, int baseline)
 int main(int argc, char **argv)
 {
     assert(argc == 2);
-    assert(SDL_Init(0) == 0);
+    assert(SDL_Init(0));
     assert(curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK);
     normal_transfers(argv[1]);
     double baseline = cancel_transfers(argv[1], 1);
@@ -164,7 +164,7 @@ int main(int argc, char **argv)
     late.url = argv[1];
     transfer(&late); /* queued/retried requests must not start after shutdown */
     assert(late.result == CURLE_ABORTED_BY_CALLBACK);
-    assert(!SDL_AtomicGet(&late.received));
+    assert(!SDL_GetAtomicInt(&late.received));
     curl_global_cleanup();
     SDL_Quit();
     printf("PASS: GET, redirect, HTTP status, POST, HEAD, timeout, progress abort, late request\n");
@@ -209,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     flags = shlex.split(subprocess.check_output(
-        ["pkg-config", "--cflags", "--libs", "sdl2", "libcurl"], text=True))
+        ["pkg-config", "--cflags", "--libs", "sdl3", "libcurl"], text=True))
     with tempfile.TemporaryDirectory(prefix="qssm-quit-http-") as tmp:
         path = Path(tmp)
         source = path / "test.c"

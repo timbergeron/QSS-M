@@ -47,15 +47,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <pwd.h>
 #endif
 
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#include <SDL2/SDL.h>
-#else
-#include <SDL/SDL.h>
-#endif
-#else
-#include "SDL.h"
-#endif
+#include <SDL3/SDL.h>
 
 #include <termios.h> // woods #arrowkeys
 #include <unistd.h> // woods #arrowkeys
@@ -1205,7 +1197,7 @@ qboolean Sys_Explore (const char *path)
 
 	if (!Sys_BuildFileURL(dir, url, sizeof(url)))
 		return false;
-	return SDL_OpenURL (url) == 0;
+	return SDL_OpenURL (url);
 }
 
 static const char errortxt1[] = "\nERROR-OUT BEGIN\n\n";

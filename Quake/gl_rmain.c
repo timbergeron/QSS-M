@@ -2414,7 +2414,7 @@ qboolean TexturePointer_Copy (qboolean copy_image)
 #endif
 	}
 
-	if (SDL_SetClipboardText(copyname) < 0)
+	if (!SDL_SetClipboardText(copyname))
 	{
 		Con_Printf("Clipboard copy failed: %s\n", SDL_GetError());
 		return true;

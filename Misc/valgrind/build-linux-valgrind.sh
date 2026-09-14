@@ -25,5 +25,5 @@ export QSS_CFLAGS="$(qssm_build_cflags)"
 export QSS_LDFLAGS="-Wl,--allow-multiple-definition"
 
 make clean
-make USE_SDL2=1 DEBUG=1 $MAKEARGS
+make DEBUG=1 $MAKEARGS
 mv quakespasm quakespasm-valgrind

@@ -68,7 +68,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 
 // SDL version the code was compiled with -- woods (iw)
-#define Q_SDL_COMPILED_VERSION_STRING	QS_STRINGIFY(SDL_MAJOR_VERSION) "." QS_STRINGIFY(SDL_MINOR_VERSION) "." QS_STRINGIFY(SDL_PATCHLEVEL)
+#define Q_SDL_COMPILED_VERSION_STRING	QS_STRINGIFY(SDL_MAJOR_VERSION) "." QS_STRINGIFY(SDL_MINOR_VERSION) "." QS_STRINGIFY(SDL_MICRO_VERSION)
 
 //define	PARANOID			// speed sapping error checking
 
@@ -323,20 +323,11 @@ typedef struct
 
 #include "snd_voip.h"
 #include "platform.h"
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_opengl.h>
-#include <SDL2/SDL_opengl_glext.h>
-#else
-#include <SDL/SDL.h>
-#include <SDL/SDL_opengl.h>
-#include <SDL/SDL_opengl_glext.h>
-#endif
-#else
-#include "SDL.h"
-#include "SDL_opengl.h"
-#include "SDL_opengl_glext.h"
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_opengl.h>
+#include <SDL3/SDL_opengl_glext.h>
+#if SDL_MAJOR_VERSION != 3 || !SDL_VERSION_ATLEAST(3, 2, 12)
+#error QSS-M requires SDL 3.2.12 or newer in the SDL3 series
 #endif
 #ifndef APIENTRY
 #define	APIENTRY
@@ -451,6 +442,7 @@ FUNC_NORETURN void Host_EndGame (const char *message, ...) FUNC_PRINTF(1,2);
 #pragma aux Host_EndGame aborts;
 #endif
 void Host_Frame (double time);
+int  QSSM_Main (int argc, char **argv);
 int  Host_DeferCall (double delay_seconds, void (*fn)(void *), void *param);	// run fn(param) on the main thread after a delay (replaces unsafe SDL_AddTimer callbacks)
 void Host_CancelDeferredCall (int handle);
 void Host_Quit_f (void);

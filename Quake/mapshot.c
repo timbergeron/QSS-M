@@ -113,8 +113,8 @@ static struct
 	qboolean			initialized;
 
 	SDL_Thread			*thread;
-	SDL_atomic_t		abort_requested;
-	SDL_atomic_t		done;
+	SDL_AtomicInt		abort_requested;
+	SDL_AtomicInt		done;
 
 	// Owned by the main thread while no job runs, by the worker while one does.
 	mapshot_jobkind_t	kind;
@@ -412,7 +412,7 @@ static int Mapshot_AbortCallback (void *unused, curl_off_t dltotal,
 	(void)dlnow;
 	(void)ultotal;
 	(void)ulnow;
-	return SDL_AtomicGet(&mapshots.abort_requested) ? 1 : 0;
+	return SDL_GetAtomicInt(&mapshots.abort_requested) ? 1 : 0;
 }
 
 static size_t Mapshot_WriteCallback (void *contents, size_t size, size_t nmemb,
@@ -565,7 +565,7 @@ static int Mapshot_WorkerThread (void *unused)
 		long response_code = 0;
 		mapshot_buffer_t buffer = { NULL, 0, 0 };
 
-		if (SDL_AtomicGet(&mapshots.abort_requested))
+		if (SDL_GetAtomicInt(&mapshots.abort_requested))
 		{
 			mapshots.result = MAPSHOT_RESULT_ABORTED;
 			break;
@@ -614,7 +614,7 @@ static int Mapshot_WorkerThread (void *unused)
 		free(buffer.data);
 
 		if (result == CURLE_ABORTED_BY_CALLBACK ||
-			SDL_AtomicGet(&mapshots.abort_requested))
+			SDL_GetAtomicInt(&mapshots.abort_requested))
 		{
 			mapshots.result = MAPSHOT_RESULT_ABORTED;
 			break;
@@ -625,7 +625,7 @@ static int Mapshot_WorkerThread (void *unused)
 
 	if (mapshots.result == MAPSHOT_RESULT_MISSING && saw_transient)
 		mapshots.result = MAPSHOT_RESULT_TRANSIENT;
-	SDL_AtomicSet(&mapshots.done, 1);
+	SDL_SetAtomicInt(&mapshots.done, 1);
 	return 0;
 }
 
@@ -656,8 +656,8 @@ static void Mapshot_StartJob (mapshot_jobkind_t kind, const char *key,
 		COM_CreatePath(mapshots.local_path);
 	}
 
-	SDL_AtomicSet(&mapshots.abort_requested, 0);
-	SDL_AtomicSet(&mapshots.done, 0);
+	SDL_SetAtomicInt(&mapshots.abort_requested, 0);
+	SDL_SetAtomicInt(&mapshots.done, 0);
 	mapshots.thread = SDL_CreateThread(Mapshot_WorkerThread, "Mapshot", NULL);
 	if (!mapshots.thread)
 	{
@@ -714,7 +714,7 @@ static mapshot_start_t Mapshot_TryStartJob (mapshot_jobkind_t kind,
 			   every time the player is browsing a different map than the one
 			   being played, and neither job ever finishes. */
 			if (kind != MAPSHOT_JOB_URL || mapshots.kind != MAPSHOT_JOB_PIC)
-				SDL_AtomicSet(&mapshots.abort_requested, 1);
+				SDL_SetAtomicInt(&mapshots.abort_requested, 1);
 		}
 		return MAPSHOT_START_WAIT;
 	}
@@ -812,8 +812,8 @@ static void Mapshot_FinishJob (void)
 		break;
 	}
 
-	SDL_AtomicSet(&mapshots.abort_requested, 0);
-	SDL_AtomicSet(&mapshots.done, 0);
+	SDL_SetAtomicInt(&mapshots.abort_requested, 0);
+	SDL_SetAtomicInt(&mapshots.done, 0);
 }
 
 /*
@@ -1013,7 +1013,7 @@ void Mapshot_CollectFinished (void)
 {
 	if (!mapshots.initialized)
 		return;
-	if (mapshots.thread && SDL_AtomicGet(&mapshots.done))
+	if (mapshots.thread && SDL_GetAtomicInt(&mapshots.done))
 		Mapshot_FinishJob();
 }
 
@@ -1099,8 +1099,8 @@ void Mapshot_Init (void)
 	Cvar_RegisterVariable(&cl_mapshots);
 	Cvar_RegisterVariable(&cl_mapshots_brightness);
 	Cmd_AddCommand("mapshot", Mapshot_f);
-	SDL_AtomicSet(&mapshots.abort_requested, 0);
-	SDL_AtomicSet(&mapshots.done, 0);
+	SDL_SetAtomicInt(&mapshots.abort_requested, 0);
+	SDL_SetAtomicInt(&mapshots.done, 0);
 	mapshots.initialized = true;
 }
 
@@ -1110,7 +1110,7 @@ void Mapshot_Shutdown (void)
 		return;
 	if (mapshots.thread)
 	{
-		SDL_AtomicSet(&mapshots.abort_requested, 1);
+		SDL_SetAtomicInt(&mapshots.abort_requested, 1);
 		SDL_WaitThread(mapshots.thread, NULL);
 		mapshots.thread = NULL;
 	}

@@ -7189,9 +7189,9 @@ typedef struct uri_response_s {
 } uri_response_t;
 
 static SDL_Thread *uri_worker_thread = NULL;
-static SDL_mutex  *uri_pending_mtx   = NULL;
-static SDL_cond   *uri_pending_cv    = NULL;
-static SDL_mutex  *uri_completed_mtx = NULL;
+static SDL_Mutex     *uri_pending_mtx   = NULL;
+static SDL_Condition *uri_pending_cv    = NULL;
+static SDL_Mutex     *uri_completed_mtx = NULL;
 
 static uri_request_t  *pending_head   = NULL;
 static uri_request_t  *pending_tail   = NULL;
@@ -7210,7 +7210,7 @@ static void enqueue_request(uri_request_t *r) {
         pending_tail = r;
     }
     r->next = NULL;
-    SDL_CondSignal(uri_pending_cv);
+    SDL_SignalCondition(uri_pending_cv);
     SDL_UnlockMutex(uri_pending_mtx);
 }
 
@@ -7218,7 +7218,7 @@ static uri_request_t *dequeue_request_blocking(void) {
     uri_request_t *r = NULL;
     SDL_LockMutex(uri_pending_mtx);
     while (uri_worker_running && pending_head == NULL) {
-        SDL_CondWait(uri_pending_cv, uri_pending_mtx);
+        SDL_WaitCondition(uri_pending_cv, uri_pending_mtx);
     }
     if (!uri_worker_running) {
         SDL_UnlockMutex(uri_pending_mtx);
@@ -7421,7 +7421,7 @@ static void URI_DispatchToQC(uri_response_t *r) {
 void URI_Init(void) {
     uri_pending_mtx   = SDL_CreateMutex();
     uri_completed_mtx = SDL_CreateMutex();
-    uri_pending_cv    = SDL_CreateCond();
+    uri_pending_cv    = SDL_CreateCondition();
     if (!uri_pending_mtx || !uri_completed_mtx || !uri_pending_cv) {
         Con_Printf("URI_Init: SDL mutex/cond init failed\n");
         return;
@@ -7438,7 +7438,7 @@ void URI_Shutdown(void) {
     if (uri_worker_running) {
         SDL_LockMutex(uri_pending_mtx);
         uri_worker_running = 0;
-        SDL_CondBroadcast(uri_pending_cv);
+        SDL_BroadcastCondition(uri_pending_cv);
         SDL_UnlockMutex(uri_pending_mtx);
         if (uri_worker_thread) {
             SDL_WaitThread(uri_worker_thread, NULL);
@@ -7465,7 +7465,7 @@ void URI_Shutdown(void) {
     }
     completed_head = completed_tail = NULL;
     SDL_UnlockMutex(uri_completed_mtx);
-    if (uri_pending_cv)  { SDL_DestroyCond(uri_pending_cv); uri_pending_cv = NULL; }
+    if (uri_pending_cv)  { SDL_DestroyCondition(uri_pending_cv); uri_pending_cv = NULL; }
     if (uri_pending_mtx) { SDL_DestroyMutex(uri_pending_mtx); uri_pending_mtx = NULL; }
     if (uri_completed_mtx){ SDL_DestroyMutex(uri_completed_mtx); uri_completed_mtx = NULL; }
 }

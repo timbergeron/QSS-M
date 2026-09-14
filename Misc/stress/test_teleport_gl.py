@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check teleporter shader failure handling and CPU brush transforms.
 
-Uses production C functions. Requires SDL2/OpenGL and an X11 display:
+Uses production C functions. Requires SDL3/OpenGL and an X11 display:
     xvfb-run -a python3 Misc/stress/test_teleport_gl.py
 """
 from pathlib import Path
@@ -115,8 +115,8 @@ int main(void) {
     for (int frame=0; frame<128; frame++) assert(R_TeleportCreateShader());
     assert(creates==1 && uses==2 && uniforms==4 && teleport_program==42);
 
-    assert(SDL_Init(SDL_INIT_VIDEO)==0);
-    SDL_Window *window=SDL_CreateWindow("teleporter matrix test",0,0,64,64,SDL_WINDOW_OPENGL|SDL_WINDOW_HIDDEN);
+    assert(SDL_Init(SDL_INIT_VIDEO));
+    SDL_Window *window=SDL_CreateWindow("teleporter matrix test",64,64,SDL_WINDOW_OPENGL|SDL_WINDOW_HIDDEN);
     assert(window);
     SDL_GLContext context=SDL_GL_CreateContext(window);
     assert(context);
@@ -181,17 +181,17 @@ int main(void) {
         tested++;
     }
     // Simulate an interrupted subview with altered GL state and entity list.
-    GL_BindFramebufferFunc=SDL_GL_GetProcAddress("glBindFramebuffer");
-    GL_BindRenderbufferFunc=SDL_GL_GetProcAddress("glBindRenderbuffer");
+    GL_BindFramebufferFunc=(__typeof__(GL_BindFramebufferFunc))SDL_GL_GetProcAddress("glBindFramebuffer");
+    GL_BindRenderbufferFunc=(__typeof__(GL_BindRenderbufferFunc))SDL_GL_GetProcAddress("glBindRenderbuffer");
     assert(GL_BindFramebufferFunc && GL_BindRenderbufferFunc);
-    GL_GenFramebuffersFunc=SDL_GL_GetProcAddress("glGenFramebuffers");
-    GL_GenRenderbuffersFunc=SDL_GL_GetProcAddress("glGenRenderbuffers");
-    GL_DeleteFramebuffersFunc=SDL_GL_GetProcAddress("glDeleteFramebuffers");
-    GL_DeleteRenderbuffersFunc=SDL_GL_GetProcAddress("glDeleteRenderbuffers");
-    GL_RenderbufferStorageFunc=SDL_GL_GetProcAddress("glRenderbufferStorage");
-    GL_FramebufferTexture2DFunc=SDL_GL_GetProcAddress("glFramebufferTexture2D");
-    GL_FramebufferRenderbufferFunc=SDL_GL_GetProcAddress("glFramebufferRenderbuffer");
-    real_check_framebuffer=SDL_GL_GetProcAddress("glCheckFramebufferStatus");
+    GL_GenFramebuffersFunc=(__typeof__(GL_GenFramebuffersFunc))SDL_GL_GetProcAddress("glGenFramebuffers");
+    GL_GenRenderbuffersFunc=(__typeof__(GL_GenRenderbuffersFunc))SDL_GL_GetProcAddress("glGenRenderbuffers");
+    GL_DeleteFramebuffersFunc=(__typeof__(GL_DeleteFramebuffersFunc))SDL_GL_GetProcAddress("glDeleteFramebuffers");
+    GL_DeleteRenderbuffersFunc=(__typeof__(GL_DeleteRenderbuffersFunc))SDL_GL_GetProcAddress("glDeleteRenderbuffers");
+    GL_RenderbufferStorageFunc=(__typeof__(GL_RenderbufferStorageFunc))SDL_GL_GetProcAddress("glRenderbufferStorage");
+    GL_FramebufferTexture2DFunc=(__typeof__(GL_FramebufferTexture2DFunc))SDL_GL_GetProcAddress("glFramebufferTexture2D");
+    GL_FramebufferRenderbufferFunc=(__typeof__(GL_FramebufferRenderbufferFunc))SDL_GL_GetProcAddress("glFramebufferRenderbuffer");
+    real_check_framebuffer=(__typeof__(real_check_framebuffer))SDL_GL_GetProcAddress("glCheckFramebufferStatus");
     // Validate newly allocated attachments, reuse them without driver status
     // queries, and validate again after size/context teardown.
     for (int cycle=0;cycle<2;cycle++) {
@@ -251,7 +251,7 @@ int main(void) {
     style.value=1; R_TeleportStyleChanged(&style);
     assert(!glIsTexture(targets[0]) && !teleport_width && !teleport_height);
     assert(glGetError()==GL_NO_ERROR);
-    SDL_GL_DeleteContext(context); SDL_DestroyWindow(window); SDL_Quit();
+    SDL_GL_DestroyContext(context); SDL_DestroyWindow(window); SDL_Quit();
     printf("PASS: shader warmup/restart lifecycle and failure latch; %d CPU brush transforms match OpenGL; subview abort restores state; style changes release targets\n",tested);
     puts("PASS: framebuffer validation only on allocation, attachment reuse, resize/restart teardown, and failure fallback");
     return 0;
@@ -260,9 +260,9 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix="qssm-tele-gl-") as directory:
     work = Path(directory)
     (work / "test.c").write_text(source)
-    cflags = shlex.split(subprocess.check_output(["sdl2-config", "--cflags"], text=True))
-    libs = shlex.split(subprocess.check_output(["sdl2-config", "--libs"], text=True))
-    subprocess.run(["cc", "-std=gnu11", "-O2", "-DUSE_SDL2", *cflags,
+    cflags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "sdl3"], text=True))
+    libs = shlex.split(subprocess.check_output(["pkg-config", "--libs", "sdl3"], text=True))
+    subprocess.run(["cc", "-std=gnu11", "-O2", *cflags,
                     "-I", str(ROOT / "Quake"), str(work / "test.c"), *libs, "-lGL", "-lm",
                     "-o", str(work / "test")], check=True)
     subprocess.run([str(work / "test")], check=True)

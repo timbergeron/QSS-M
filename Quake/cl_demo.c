@@ -71,9 +71,9 @@ typedef struct demo_write_chunk_s
 
 static struct
 {
-	SDL_mutex *mutex;
-	SDL_cond *work_condition;
-	SDL_cond *state_condition;
+	SDL_Mutex *mutex;
+	SDL_Condition *work_condition;
+	SDL_Condition *state_condition;
 	SDL_Thread *thread;
 	demo_write_chunk_t *pending_head;
 	demo_write_chunk_t *pending_tail;
@@ -106,8 +106,8 @@ typedef struct demo_finalize_job_s
 
 static struct
 {
-	SDL_mutex *mutex;
-	SDL_cond *condition;
+	SDL_Mutex *mutex;
+	SDL_Condition *condition;
 	SDL_Thread *thread;
 	demo_finalize_job_t *pending_head;
 	demo_finalize_job_t *pending_tail;
@@ -2459,7 +2459,7 @@ static int CL_DemoWriterThread(void *unused)
 
 		SDL_LockMutex(demo_writer.mutex);
 		while (!demo_writer.pending_head && !demo_writer.closing && !demo_writer.shutdown)
-			SDL_CondWait(demo_writer.work_condition, demo_writer.mutex);
+			SDL_WaitCondition(demo_writer.work_condition, demo_writer.mutex);
 
 		chunk = demo_writer.pending_head;
 		if (chunk)
@@ -2478,7 +2478,7 @@ static int CL_DemoWriterThread(void *unused)
 			if (failed)
 				demo_writer.write_failed = true;
 			demo_writer.pending_bytes -= chunk->size;
-			SDL_CondBroadcast(demo_writer.state_condition);
+			SDL_BroadcastCondition(demo_writer.state_condition);
 			SDL_UnlockMutex(demo_writer.mutex);
 			free(chunk);
 			continue;
@@ -2506,7 +2506,7 @@ static int CL_DemoWriterThread(void *unused)
 				demo_writer.write_failed = true;
 			demo_writer.active = false;
 			demo_writer.closing = false;
-			SDL_CondBroadcast(demo_writer.state_condition);
+			SDL_BroadcastCondition(demo_writer.state_condition);
 			SDL_UnlockMutex(demo_writer.mutex);
 			continue;
 		}
@@ -2529,8 +2529,8 @@ static void CL_DemoWriterInit(void)
 		return;
 
 	demo_writer.mutex = SDL_CreateMutex();
-	demo_writer.work_condition = SDL_CreateCond();
-	demo_writer.state_condition = SDL_CreateCond();
+	demo_writer.work_condition = SDL_CreateCondition();
+	demo_writer.state_condition = SDL_CreateCondition();
 	if (!demo_writer.mutex || !demo_writer.work_condition || !demo_writer.state_condition)
 		goto fail;
 
@@ -2542,9 +2542,9 @@ static void CL_DemoWriterInit(void)
 fail:
 	Con_DPrintf("Unable to start demo writer: %s\n", SDL_GetError());
 	if (demo_writer.state_condition)
-		SDL_DestroyCond(demo_writer.state_condition);
+		SDL_DestroyCondition(demo_writer.state_condition);
 	if (demo_writer.work_condition)
-		SDL_DestroyCond(demo_writer.work_condition);
+		SDL_DestroyCondition(demo_writer.work_condition);
 	if (demo_writer.mutex)
 		SDL_DestroyMutex(demo_writer.mutex);
 	memset(&demo_writer, 0, sizeof(demo_writer));
@@ -2569,7 +2569,7 @@ static qboolean CL_DemoWriterStart(FILE *file)
 	demo_writer.active = true;
 	demo_writer.closing = false;
 	demo_writer.write_failed = false;
-	SDL_CondSignal(demo_writer.work_condition);
+	SDL_SignalCondition(demo_writer.work_condition);
 	SDL_UnlockMutex(demo_writer.mutex);
 	return true;
 }
@@ -2631,7 +2631,7 @@ static qboolean CL_DemoWriterQueueParts(const byte *prefix, size_t prefix_size,
 		!demo_writer.write_failed &&
 		demo_writer.pending_bytes + chunk->size > DEMO_WRITE_QUEUE_BYTES)
 	{
-		SDL_CondWait(demo_writer.state_condition, demo_writer.mutex);
+		SDL_WaitCondition(demo_writer.state_condition, demo_writer.mutex);
 	}
 
 	if (!demo_writer.active || demo_writer.closing || demo_writer.shutdown || demo_writer.write_failed)
@@ -2647,7 +2647,7 @@ static qboolean CL_DemoWriterQueueParts(const byte *prefix, size_t prefix_size,
 		demo_writer.pending_head = chunk;
 	demo_writer.pending_tail = chunk;
 	demo_writer.pending_bytes += chunk->size;
-	SDL_CondSignal(demo_writer.work_condition);
+	SDL_SignalCondition(demo_writer.work_condition);
 	SDL_UnlockMutex(demo_writer.mutex);
 	return true;
 }
@@ -2675,9 +2675,9 @@ static qboolean CL_DemoWriterStop(void)
 	}
 
 	demo_writer.closing = true;
-	SDL_CondSignal(demo_writer.work_condition);
+	SDL_SignalCondition(demo_writer.work_condition);
 	while (demo_writer.active)
-		SDL_CondWait(demo_writer.state_condition, demo_writer.mutex);
+		SDL_WaitCondition(demo_writer.state_condition, demo_writer.mutex);
 	ok = !demo_writer.write_failed;
 	SDL_UnlockMutex(demo_writer.mutex);
 	return ok;
@@ -2697,8 +2697,8 @@ static void CL_DemoWriterShutdown(void)
 	SDL_LockMutex(demo_writer.mutex);
 	demo_writer.shutdown = true;
 	demo_writer.closing = demo_writer.active;
-	SDL_CondBroadcast(demo_writer.work_condition);
-	SDL_CondBroadcast(demo_writer.state_condition);
+	SDL_BroadcastCondition(demo_writer.work_condition);
+	SDL_BroadcastCondition(demo_writer.state_condition);
 	SDL_UnlockMutex(demo_writer.mutex);
 
 	if (demo_writer.thread)
@@ -2710,8 +2710,8 @@ static void CL_DemoWriterShutdown(void)
 		free(chunk);
 	}
 
-	SDL_DestroyCond(demo_writer.state_condition);
-	SDL_DestroyCond(demo_writer.work_condition);
+	SDL_DestroyCondition(demo_writer.state_condition);
+	SDL_DestroyCondition(demo_writer.work_condition);
 	SDL_DestroyMutex(demo_writer.mutex);
 	memset(&demo_writer, 0, sizeof(demo_writer));
 }
@@ -3619,7 +3619,7 @@ static int CL_DemoFinalizeThread(void *unused)
 
 		SDL_LockMutex(demo_finalizer.mutex);
 		while (!demo_finalizer.pending_head && !demo_finalizer.shutdown)
-			SDL_CondWait(demo_finalizer.condition, demo_finalizer.mutex);
+			SDL_WaitCondition(demo_finalizer.condition, demo_finalizer.mutex);
 		if (!demo_finalizer.pending_head && demo_finalizer.shutdown)
 		{
 			SDL_UnlockMutex(demo_finalizer.mutex);
@@ -3656,7 +3656,7 @@ static void CL_DemoFinalizeInit(void)
 		return;
 
 	demo_finalizer.mutex = SDL_CreateMutex();
-	demo_finalizer.condition = SDL_CreateCond();
+	demo_finalizer.condition = SDL_CreateCondition();
 	if (!demo_finalizer.mutex || !demo_finalizer.condition)
 		goto fail;
 
@@ -3668,7 +3668,7 @@ static void CL_DemoFinalizeInit(void)
 fail:
 	Con_DPrintf("Unable to start demo finalizer: %s\n", SDL_GetError());
 	if (demo_finalizer.condition)
-		SDL_DestroyCond(demo_finalizer.condition);
+		SDL_DestroyCondition(demo_finalizer.condition);
 	if (demo_finalizer.mutex)
 		SDL_DestroyMutex(demo_finalizer.mutex);
 	memset(&demo_finalizer, 0, sizeof(demo_finalizer));
@@ -3715,7 +3715,7 @@ static qboolean CL_DemoFinalizeQueue(demo_finalize_job_t *job)
 		demo_finalizer.pending_head = job;
 	demo_finalizer.pending_tail = job;
 	demo_finalizer.outstanding++;
-	SDL_CondSignal(demo_finalizer.condition);
+	SDL_SignalCondition(demo_finalizer.condition);
 	SDL_UnlockMutex(demo_finalizer.mutex);
 	return true;
 }
@@ -3792,7 +3792,7 @@ static void CL_DemoFinalizeShutdown(void)
 	SDL_LockMutex(demo_finalizer.mutex);
 	finishing = demo_finalizer.active != NULL || demo_finalizer.pending_head != NULL;
 	demo_finalizer.shutdown = true;
-	SDL_CondSignal(demo_finalizer.condition);
+	SDL_SignalCondition(demo_finalizer.condition);
 	SDL_UnlockMutex(demo_finalizer.mutex);
 
 	if (demo_finalizer.thread)
@@ -3804,7 +3804,7 @@ static void CL_DemoFinalizeShutdown(void)
 	demo_finalizer.thread = NULL;
 	CL_DemoFinalizeConsumeCompleted();
 
-	SDL_DestroyCond(demo_finalizer.condition);
+	SDL_DestroyCondition(demo_finalizer.condition);
 	SDL_DestroyMutex(demo_finalizer.mutex);
 	memset(&demo_finalizer, 0, sizeof(demo_finalizer));
 }

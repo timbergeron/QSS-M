@@ -47,7 +47,7 @@ int LMBLOCK_WIDTH, LMBLOCK_HEIGHT;
 // pipeline sync per touched atlas per frame); staging through an orphaned PBO
 // turns the update into a GPU-side blit instead.
 static GLuint lm_scratchpbo; // reset by GL_BuildLightmaps on map load / video restart
-static SDL_mutex *lm_dirty_mutex; // woods #lmrect -- guards modified/rectchange/dirtyrects between the scenecache worker and the main thread's uploads
+static SDL_Mutex *lm_dirty_mutex; // woods #lmrect -- guards modified/rectchange/dirtyrects between the scenecache worker and the main thread's uploads
 
 static void R_TexSubImageLightmap (int x, int t, int w, int h, const GLvoid *src);
 
@@ -764,7 +764,7 @@ static void LM_RunDeferredFill (void)
 
 	R_LightmapBuildState_Snapshot (&buildstate);
 
-	numthreads = q_max (1, SDL_GetCPUCount ());
+	numthreads = q_max (1, SDL_GetNumLogicalCPUCores ());
 	numthreads = q_min (numthreads, LM_MAX_FILL_THREADS);
 	numthreads = q_min (numthreads, q_max (1, lm_numfilljobs / LM_MIN_JOBS_PER_THREAD));
 

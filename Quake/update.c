@@ -2697,7 +2697,7 @@ static qboolean M_Update_ValidateExtracted(const updatereleaseinfo_t *info,
 			error_size) &&
 			M_Update_RequireFile(extract_dir, "quakespasm.pak", error,
 			error_size) &&
-			M_Update_RequireFile(extract_dir, "SDL2.dll", error,
+			M_Update_RequireFile(extract_dir, "SDL3.dll", error,
 			error_size) &&
 			M_Update_RequireFile(extract_dir, "libcurl.dll", error,
 			error_size);
@@ -2711,7 +2711,7 @@ static qboolean M_Update_ValidateExtracted(const updatereleaseinfo_t *info,
 			error_size) &&
 			M_Update_RequireFile(extract_dir, "quakespasm.pak", error,
 			error_size) &&
-			M_Update_RequireFile(extract_dir, "SDL2.dll", error,
+			M_Update_RequireFile(extract_dir, "SDL3.dll", error,
 			error_size) &&
 			M_Update_RequireFile(extract_dir, "libcurl.dll", error,
 			error_size);
@@ -2756,6 +2756,7 @@ static const char *const update_linux64_files[] =
 	"Quakespasm.txt",
 	"Quakespasm-Spiked.txt",
 	"Quakespasm-Music.txt",
+	"libSDL3.so.0",	/* bundled SDL3 runtime; skipped if a package has none */
 	NULL
 };
 
@@ -2771,7 +2772,7 @@ static const char *const update_win_files[] =
 	"Quakespasm.txt",
 	"Quakespasm-Spiked.txt",
 	"Quakespasm-Music.txt",
-	"SDL2.dll",
+	"SDL3.dll",
 	"libcurl.dll",
 	"zlib1.dll",
 	"libFLAC.dll",
@@ -2832,10 +2833,12 @@ static qboolean M_Update_CopyHelperRuntimeFiles(const char *platform,
 	const char *live_dir, const char *extract_dir, const char *helper_dir,
 	char *error, size_t error_size)
 {
+	const char *const *files;
+	int i;
 #ifdef _WIN32
 	static const char *const update_win_helper_runtime_files[] =
 	{
-		"SDL2.dll",
+		"SDL3.dll",
 		"libcurl.dll",
 		"zlib1.dll",
 		"libFLAC.dll",
@@ -2852,11 +2855,23 @@ static qboolean M_Update_CopyHelperRuntimeFiles(const char *platform,
 		"libxmp.dll",
 		NULL
 	};
-	const char *const *files = update_win_helper_runtime_files;
-	int i;
 
 	if (strcmp(platform, "win64") && strcmp(platform, "win32"))
 		return true;
+	files = update_win_helper_runtime_files;
+#else
+	/* The helper is a copy of the executable; its $ORIGIN rpath only finds a
+	 * bundled SDL3 runtime beside it. */
+	static const char *const update_linux_helper_runtime_files[] =
+	{
+		"libSDL3.so.0",
+		NULL
+	};
+
+	if (strcmp(platform, "linux64"))
+		return true;
+	files = update_linux_helper_runtime_files;
+#endif
 
 	for (i = 0; files[i]; i++)
 	{
@@ -2893,14 +2908,6 @@ static qboolean M_Update_CopyHelperRuntimeFiles(const char *platform,
 		if (!M_Update_CopyFileAtomic(src, dst, false, error, error_size))
 			return false;
 	}
-#else
-	(void)platform;
-	(void)live_dir;
-	(void)extract_dir;
-	(void)helper_dir;
-	(void)error;
-	(void)error_size;
-#endif
 
 	return true;
 }
@@ -5320,7 +5327,7 @@ static qboolean M_Update_PrepareApplyHelper(const updatereleaseinfo_t *info,
 	if (helper_runs_from_live_image)
 	{
 		/* Keep @executable_path/../Frameworks valid for bundled macOS
-		 * frameworks such as SDL2 while the helper process starts. */
+		 * frameworks such as SDL3 while the helper process starts. */
 		if (q_strlcpy(helper_path, current_exe, helper_path_size) >=
 			helper_path_size)
 		{
@@ -6832,7 +6839,7 @@ void M_Update_f(void)
 
 	if (!q_strcasecmp(arg, "page"))
 	{
-		if (SDL_OpenURL(UPDATE_RELEASE_PAGE) != 0)
+		if (!SDL_OpenURL(UPDATE_RELEASE_PAGE))
 			Con_Printf("Unable to open %s\n", UPDATE_RELEASE_PAGE);
 		return;
 	}

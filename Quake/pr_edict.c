@@ -422,14 +422,14 @@ static const char *PR_GetSaveString (savedata_t *save, int num)
 	{
 		if (!save->knownstrings[-1 - num])
 		{
-			SDL_AtomicCAS (&save->abort, 0, -1);
+			SDL_CompareAndSwapAtomicInt (&save->abort, 0, -1);
 			return "";
 		}
 		return save->knownstrings[-1 - num];
 	}
 	else
 	{
-		SDL_AtomicCAS (&save->abort, 0, -1);
+		SDL_CompareAndSwapAtomicInt (&save->abort, 0, -1);
 		return "";
 	}
 }
@@ -459,14 +459,14 @@ static const char *PR_UglySaveValueString (savedata_t *save, int type, eval_t *v
 	case ev_entity:
 		if (val->edict < 0 || val->edict % qcvm->edict_size)
 		{
-			SDL_AtomicCAS (&save->abort, 0, -1);
+			SDL_CompareAndSwapAtomicInt (&save->abort, 0, -1);
 			q_snprintf (line, sizeof(line), "0");
 			break;
 		}
 		entnum = val->edict / qcvm->edict_size;
 		if (entnum >= save->num_edicts)
 		{
-			SDL_AtomicCAS (&save->abort, 0, -1);
+			SDL_CompareAndSwapAtomicInt (&save->abort, 0, -1);
 			q_snprintf (line, sizeof(line), "0");
 			break;
 		}
@@ -475,7 +475,7 @@ static const char *PR_UglySaveValueString (savedata_t *save, int type, eval_t *v
 	case ev_function:
 		if (val->function >= (func_t)qcvm->progs->numfunctions)
 		{
-			SDL_AtomicCAS (&save->abort, 0, -1);
+			SDL_CompareAndSwapAtomicInt (&save->abort, 0, -1);
 			line[0] = '\0';
 			break;
 		}
@@ -486,7 +486,7 @@ static const char *PR_UglySaveValueString (savedata_t *save, int type, eval_t *v
 		def = ED_FieldAtOfs ( val->_int );
 		if (!def)
 		{
-			SDL_AtomicCAS (&save->abort, 0, -1);
+			SDL_CompareAndSwapAtomicInt (&save->abort, 0, -1);
 			line[0] = '\0';
 			break;
 		}
@@ -2187,14 +2187,14 @@ int SAVE_NUM_FOR_EDICT (savedata_t *save, edict_t *e)
 	ofs = (byte *)e - (byte *)save->edicts;
 	if (ofs < 0 || ofs % qcvm->edict_size)
 	{
-		SDL_AtomicCAS (&save->abort, 0, -1);
+		SDL_CompareAndSwapAtomicInt (&save->abort, 0, -1);
 		return 0;
 	}
 
 	b = ofs / qcvm->edict_size;
 	if (b < 0 || b >= save->num_edicts)
 	{
-		SDL_AtomicCAS (&save->abort, 0, -1);
+		SDL_CompareAndSwapAtomicInt (&save->abort, 0, -1);
 		return 0;
 	}
 

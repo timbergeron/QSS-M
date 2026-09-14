@@ -220,7 +220,7 @@ def main():
     config('tc_reconnect', commands)
 
     env = os.environ.copy()
-    env.update(SDL_VIDEODRIVER='x11', SDL_AUDIODRIVER='dummy', LIBGL_ALWAYS_SOFTWARE='1')
+    env.update(SDL_VIDEO_DRIVER='x11', SDL_AUDIO_DRIVER='dummy', LIBGL_ALWAYS_SOFTWARE='1')
     proc = subprocess.Popen([
         'stdbuf', '-oL', '-eL', str(args.binary.resolve()), '-basedir', str(work),
         '-window', '-width', '640', '-height', '480', '-nosound', '-nolan', '-noudp',

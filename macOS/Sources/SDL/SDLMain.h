@@ -12,5 +12,8 @@ extern char  **gArgv;
 extern BOOL   gFinderLaunch;
 extern BOOL   gCalledAppMainline;
 
+/* engine entry point, defined in main_sdl.c */
+int QSSM_Main (int argc, char **argv);
+
 @interface SDLMain : NSObject
 @end

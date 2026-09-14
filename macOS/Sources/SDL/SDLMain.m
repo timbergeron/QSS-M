@@ -5,19 +5,10 @@
     Feel free to customize this file to suit your needs
 */
 
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#import <SDL2/SDL.h>
-#else
-#import <SDL/SDL.h>
-#endif
-#else
-#import "SDL.h"
-#endif
+#import <SDL3/SDL.h>
 #import "SDLMain.h"
 #import <sys/param.h> /* for MAXPATHLEN */
 #import <unistd.h>
-#import "SDLApplication.h"
 
 int    gArgc;
 char  **gArgv;
@@ -246,7 +237,7 @@ void Sys_SetDockProgress (float fraction, int port_probe)
 
     /* Hand off to main application code */
     gCalledAppMainline = TRUE;
-    status = SDL_main (gArgc, gArgv);
+    status = QSSM_Main (gArgc, gArgv);
 
     /* We're done, thank you for playing */
     exit(status);

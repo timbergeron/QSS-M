@@ -1,6 +1,6 @@
 """Check demo file enumeration and compare bulk sorting with insertion behavior.
 
-Run with python3 Misc/stress/test_demo_list.py (requires cc and SDL2).
+Run with python3 Misc/stress/test_demo_list.py (requires cc and SDL3).
 Timings cover list construction/sorting, excluding filesystem I/O and parsing.
 """
 
@@ -236,8 +236,8 @@ with tempfile.TemporaryDirectory(prefix="qssm-demo-list-") as tmp:
     source = path / "test.c"
     binary = path / "test"
     source.write_text(SOURCE)
-    flags = shlex.split(subprocess.check_output(["sdl2-config", "--cflags", "--libs"], text=True))
-    subprocess.run([os.environ.get("CC", "cc"), "-O2", "-std=gnu11", "-DUSE_SDL2",
+    flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "--libs", "sdl3"], text=True))
+    subprocess.run([os.environ.get("CC", "cc"), "-O2", "-std=gnu11",
                     "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "Quake"),
                     str(source), "-o", str(binary), *flags, "-lm"], check=True)
 

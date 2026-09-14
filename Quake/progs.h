@@ -132,7 +132,7 @@ int NUM_FOR_EDICT(edict_t*);
 typedef struct savedata_s
 {
 	FILE			*file;
-	SDL_atomic_t	abort;			// < 0 = error, > 0 = aborted by user
+	SDL_AtomicInt	abort;			// < 0 = error, > 0 = aborted by user
 	char			path[MAX_OSPATH];
 	char			comment[SAVEGAME_COMMENT_LENGTH+1];
 	char			mapname[MAX_QPATH];

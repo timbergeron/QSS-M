@@ -188,6 +188,14 @@ void SNDDMA_BlockSound(void);
 /* unblocks the output upon window focus gain */
 void SNDDMA_UnblockSound(void);
 
+/* names the output device for diagnostics; the backend owns the string */
+const char *SNDDMA_GetDeviceName(void);
+/* re-reads the output device after SDL reports a playback device change */
+void SNDDMA_DeviceChanged (void);
+/* opens an SDL audio stream with a best-effort device period; main thread only */
+SDL_AudioStream *SND_OpenAudioStream (SDL_AudioDeviceID device, const SDL_AudioSpec *spec,
+	SDL_AudioStreamCallback callback, void *userdata, int sample_frames);
+
 /* ====================================================================
  * User-setable variables
  * ====================================================================

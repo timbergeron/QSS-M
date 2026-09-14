@@ -27,11 +27,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "net_curl.h"
 
-static SDL_atomic_t net_web_shutting_down;
+static SDL_AtomicInt net_web_shutting_down;
 
 void NET_CancelWebRequests(void)
 {
-	SDL_AtomicSet(&net_web_shutting_down, 1);
+	SDL_SetAtomicInt(&net_web_shutting_down, 1);
 }
 
 CURLcode NET_CurlEasyPerform(CURL *curl)
@@ -42,7 +42,7 @@ CURLcode NET_CurlEasyPerform(CURL *curl)
 	CURLMsg *message;
 	int running, remaining;
 
-	if (SDL_AtomicGet(&net_web_shutting_down))
+	if (SDL_GetAtomicInt(&net_web_shutting_down))
 		return CURLE_ABORTED_BY_CALLBACK;
 	multi = curl_multi_init();
 	if (!multi)
@@ -56,7 +56,7 @@ CURLcode NET_CurlEasyPerform(CURL *curl)
 	 * without changing their progress callbacks or normal transfer timeouts. */
 	for (;;)
 	{
-		if (SDL_AtomicGet(&net_web_shutting_down))
+		if (SDL_GetAtomicInt(&net_web_shutting_down))
 		{
 			result = CURLE_ABORTED_BY_CALLBACK;
 			break;
@@ -78,15 +78,15 @@ CURLcode NET_CurlEasyPerform(CURL *curl)
 #else
 		{
 			int numfds = 0;
-			Uint32 start = SDL_GetTicks();
-			Uint32 elapsed;
+			Uint64 start = SDL_GetTicks();
+			Uint64 elapsed;
 
 			status = curl_multi_wait(multi, NULL, 0, 50, &numfds);
 			/* Older curl returns immediately when it has no sockets (DNS,
 			 * for example). Avoid spinning a worker at full CPU. */
 			elapsed = SDL_GetTicks() - start;
 			if (status == CURLM_OK && !numfds && elapsed < 50)
-				SDL_Delay(50 - elapsed);
+				SDL_Delay((Uint32)(50 - elapsed));
 		}
 #endif
 		if (status != CURLM_OK)
@@ -115,9 +115,9 @@ char		my_ipv4_address[NET_NAMELEN];
 char		my_ipv6_address[NET_NAMELEN];
 static char my_public_ip[NET_NAMELEN] = "UNKNOWN"; // woods #extip
 static SDL_Thread *external_ip_thread;
-static SDL_mutex *external_ip_mutex;
+static SDL_Mutex *external_ip_mutex;
 static qboolean external_ip_curl_initialized;
-static SDL_atomic_t external_ip_abort;
+static SDL_AtomicInt external_ip_abort;
 
 qboolean	listening = false; // woods #listens
 
@@ -183,7 +183,7 @@ static int ExternalIP_AbortCallback(void *clientp, curl_off_t dltotal, curl_off_
 	(void)dlnow;
 	(void)ultotal;
 	(void)ulnow;
-	return SDL_AtomicGet(&external_ip_abort) ? 1 : 0;
+	return SDL_GetAtomicInt(&external_ip_abort) ? 1 : 0;
 }
 
 static int GetExternalIP(void* data) // woods #extip
@@ -222,7 +222,7 @@ static int GetExternalIP(void* data) // woods #extip
 
 void NET_AbortExternalIP(void)
 {
-	SDL_AtomicSet(&external_ip_abort, true);
+	SDL_SetAtomicInt(&external_ip_abort, true);
 }
 
 void NET_GetPublicIP(char *dst, size_t dstsize)
@@ -1509,7 +1509,7 @@ void IP_f (void) // woods #extip
 
 		if (!q_strcasecmp(arg, "ext"))
 		{
-			if (SDL_SetClipboardText(public_ip) < 0)
+			if (!SDL_SetClipboardText(public_ip))
 				Con_Printf("\nclipboard copy failed: %s\n\n", SDL_GetError());
 			else
 				Con_Printf("\nexternal IP copied to clipboard: ^m%s^m\n\n", public_ip);
@@ -1523,7 +1523,7 @@ void IP_f (void) // woods #extip
 				strncpy(buf, addresses[0], sizeof(buf) - 1);
 				buf[sizeof(buf) - 1] = '\0';
 
-				if (SDL_SetClipboardText(buf) < 0)
+				if (!SDL_SetClipboardText(buf))
 					Con_Printf("\nclipboard copy failed: %s\n\n", SDL_GetError());
 				else
 					Con_Printf("\nlocal IP copied to clipboard: ^m%s^m\n\n", buf);
@@ -1565,7 +1565,7 @@ void NET_Init (void)
 	int			i;
 	qsocket_t	*s;
 
-	SDL_AtomicSet(&net_web_shutting_down, 0);
+	SDL_SetAtomicInt(&net_web_shutting_down, 0);
 
 #ifndef NDEBUG
 	NET_Address_RunSelfTests();
@@ -1650,7 +1650,7 @@ void NET_Init (void)
 		Con_DPrintf("IPv6 address %s\n", my_ipv6_address);
 	}
 
-	SDL_AtomicSet(&external_ip_abort, false);
+	SDL_SetAtomicInt(&external_ip_abort, false);
 	if (curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK) // woods #libcurl
 	{
 		external_ip_curl_initialized = true;

@@ -783,13 +783,11 @@ static size_t Cache_MaxBudget (void)
 {
 	size_t max_mb = 1024;
 
-#if defined(USE_SDL2)
 	{
 		const int system_ram_mb = SDL_GetSystemRAM ();
 		if (system_ram_mb > 0)
 			max_mb = (size_t)system_ram_mb / 4;
 	}
-#endif
 
 	if (sizeof(void *) <= 4)
 		max_mb = q_min (max_mb, (size_t)512);

@@ -189,7 +189,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define K_MOUSE4		241
 #define K_MOUSE5		242
 
-// SDL2 game controller keys
+// SDL gamepad keys
 #define GAMEPAD_KEYCODE_DEFINE(keycode, value, xboxname, psname, nintendoname) enum { keycode = value };
 GAMEPAD_KEY_LIST(GAMEPAD_KEYCODE_DEFINE)
 #undef GAMEPAD_KEYCODE_DEFINE

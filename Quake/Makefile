@@ -1,14 +1,11 @@
 # GNU Makefile for QuakeSpasm unix targets.
 # You need the SDL library fully installed.
 # "make DEBUG=1" to build a debug client.
-# "make SDL_CONFIG=/path/to/sdl-config" for unusual SDL installations.
+# "PKG_CONFIG_PATH=/path/to/lib/pkgconfig make" for unusual SDL3 installations.
 # "make DO_USERDIRS=1" to enable user directories support
 
 # Enable/Disable user directories support
 DO_USERDIRS=0
-
-### Enable/Disable SDL2
-USE_SDL2=1
 
 ### Enable the use of zlib, for compressed pk3s.
 USE_ZLIB=1
@@ -110,19 +107,17 @@ LDFLAGS+= -L$(X11BASE)/lib
 CFLAGS += -I$(X11BASE)/include
 endif
 
-ifeq ($(USE_SDL2),1)
-CFLAGS += -DUSE_SDL2
-endif
 #make use of LFS on 32bit even on systems.
 CFLAGS += -D_FILE_OFFSET_BITS=64
 
-ifeq ($(USE_SDL2),1)
-SDL_CONFIG ?= sdl2-config
-else
-SDL_CONFIG ?= sdl-config
+SDL3_PKG := 'sdl3 >= 3.2.12' 'sdl3 < 4'
+ifeq ($(filter clean,$(MAKECMDGOALS)),)
+ifneq ($(shell $(PKG_CONFIG) --exists $(SDL3_PKG) && echo yes),yes)
+$(error SDL 3.2.12 or newer in the SDL3 series is required; pkg-config could not find it)
 endif
-SDL_CFLAGS := $(shell $(SDL_CONFIG) --cflags)
-SDL_LIBS   := $(shell $(SDL_CONFIG) --libs)
+endif
+SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(SDL3_PKG) 2>/dev/null)
+SDL_LIBS   := $(shell $(PKG_CONFIG) --libs $(SDL3_PKG) 2>/dev/null)
 
 ifeq ($(HOST_OS),sunos)
 NET_LIBS   :=-lsocket -lnsl -lresolv
@@ -258,7 +253,7 @@ MUSIC_OBJS:= bgmusic.o \
 	snd_umx.o
 COMOBJ_SND := snd_voip.o snd_dma.o snd_mix.o snd_mem.o $(MUSIC_OBJS)
 SYSOBJ_SND := snd_sdl.o
-SYSOBJ_CDA := cd_sdl.o
+SYSOBJ_CDA := cd_null.o
 SYSOBJ_INPUT := in_sdl.o
 SYSOBJ_GL_VID:= gl_vidsdl.o
 SYSOBJ_NET := net_bsd.o net_udp.o

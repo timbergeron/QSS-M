@@ -31,6 +31,6 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>QSS-M uses the microphone for in-game VoIP voice chat.</string>
 	<key>NSPrincipalClass</key>
-	<string>SDLApplication</string>
+	<string>SDL3Application</string>
 </dict>
 </plist>

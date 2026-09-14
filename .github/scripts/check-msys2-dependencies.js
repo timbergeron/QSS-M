@@ -64,7 +64,7 @@ function listDlls(root) {
     }
   }
 
-  for (const relativeRoot of ["Windows/SDL2", "Windows/codecs", "Windows/curl", "Windows/zlib"]) {
+  for (const relativeRoot of ["Windows/SDL3", "Windows/codecs", "Windows/curl", "Windows/zlib"]) {
     const dependencyRoot = path.join(root, relativeRoot);
     if (!fs.existsSync(dependencyRoot))
       throw new Error(`Bundled dependency directory is missing: ${relativeRoot}`);

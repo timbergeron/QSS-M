@@ -3438,7 +3438,6 @@ qboolean Draw_WindowToCanvas(canvastype canvas, int win_x, int win_y, int *canva
 	if (viewport.width <= 0 || viewport.height <= 0)
 		return false;
 
-#if defined(USE_SDL2)
 	{
 		SDL_Window *window = (SDL_Window *)VID_GetWindow();
 		int window_w = 0, window_h = 0;
@@ -3447,7 +3446,7 @@ qboolean Draw_WindowToCanvas(canvastype canvas, int win_x, int win_y, int *canva
 		if (window)
 		{
 			SDL_GetWindowSize(window, &window_w, &window_h);
-			SDL_GL_GetDrawableSize(window, &sdl_drawable_w, &sdl_drawable_h);
+			SDL_GetWindowSizeInPixels(window, &sdl_drawable_w, &sdl_drawable_h);
 		}
 
 		// High-DPI backends can report mouse events in window pixels while
@@ -3462,7 +3461,6 @@ qboolean Draw_WindowToCanvas(canvastype canvas, int win_x, int win_y, int *canva
 			drawable_y = (float)win_y * (float)sdl_drawable_h / (float)window_h;
 		}
 	}
-#endif
 
 	viewport_top_y = drawable_h - (viewport.y + viewport.height);
 	*canvas_x = bounds.x + (int)((drawable_x - viewport.x) * bounds.width / (float)viewport.width + 0.5f);

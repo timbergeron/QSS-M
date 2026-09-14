@@ -41,15 +41,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 	#endif
 #endif
 
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#include <SDL2/SDL.h>
-#else
-#include <SDL/SDL.h>
-#endif
-#else
-#include "SDL.h"
-#endif
+#include <SDL3/SDL.h>
 
 #include "zlib.h" // woods #unpak
 
@@ -5786,7 +5778,7 @@ static void COM_Dir_Open_f(void) // woods #openfolder opens folder outside of ga
 			q_snprintf(path, sizeof(path), "file://%s/%s", com_gamedir, folder);
 		}
 
-		if (SDL_OpenURL(path) == -1)
+		if (!SDL_OpenURL(path))
 		{ 
 			Con_Printf("\n");
 			Con_Printf("no folder found\n");

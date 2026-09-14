@@ -92,12 +92,14 @@ void VID_Toggle (void);
 void VID_OnResize (int width, int height); // github.com/andrei-drexler/ironwail (Enable resizing)
 void VID_Gamma_Reapply (void);
 void VID_Gamma_Frame (void);
+void VID_Gamma_FocusLost (void);
 void VID_Gamma_ApplyToBuffer (byte *buffer, size_t pixel_count, int bytes_per_pixel);
 
 void *VID_GetWindow (void);
 qboolean VID_HasMouseOrInputFocus (void);
 qboolean VID_HasInputFocus (void);
 qboolean VID_IsMinimized (void);
+float VID_GetCurrentDisplayScale (void); // content scale of the window's display, for diagnostics
 void	VID_Lock (void);
 void	VID_SetWindowCaption(const char *newcaption);
 void	VID_SetWindowTitle(const char* title); // github.com/andrei-drexler/ironwail (Show game summary in window title)

@@ -1,7 +1,7 @@
 """Exercise the actual BSP texture readers under ASan/UBSan, without a GL context.
 
 Run: python3 Misc/stress/test_bsp_miptex.py
-Requires a C compiler and sdl2-config. Only allocation/console services are stubbed;
+Requires a C compiler and pkg-config's sdl3. Only allocation/console services are stubbed;
 the loader and texture-format arithmetic are extracted from the current sources.
 """
 
@@ -30,7 +30,7 @@ source = r'''
 static qmodel_t model;
 qmodel_t *loadmodel = &model;
 char loadname[32] = "miptex-test";
-static int little_long(int value) { return SDL_SwapLE32(value); }
+static int little_long(int value) { return SDL_Swap32LE(value); }
 int (*LittleLong)(int) = little_long;
 qboolean gl_texture_NPOT = true;
 qboolean gl_packed_pixels;
@@ -71,7 +71,7 @@ source += function(model, "static qboolean Mod_BSPTextureName (")
 
 source += r'''
 static void put32(byte *out, uint32_t value) {
-    value = SDL_SwapLE32(value);
+    value = SDL_Swap32LE(value);
     memcpy(out, &value, 4);
 }
 static void mipheader(byte *out, unsigned int width, unsigned int height) {
@@ -277,8 +277,8 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix="qssm-miptex-") as tmp:
     path = Path(tmp)
     (path / "test.c").write_text(source)
-    flags = shlex.split(subprocess.check_output(["sdl2-config", "--cflags"], text=True))
-    subprocess.run([os.environ.get("CC", "cc"), "-O1", "-g", "-std=gnu11", "-DUSE_SDL2",
+    flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "sdl3"], text=True))
+    subprocess.run([os.environ.get("CC", "cc"), "-O1", "-g", "-std=gnu11",
                     "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
                     "-Wall", "-Wextra", "-Werror", "-Wno-missing-field-initializers",
                     "-I", str(ROOT / "Quake"), str(path / "test.c"), "-o", str(path / "test"),

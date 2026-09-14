@@ -37,7 +37,10 @@ source = r'''
 typedef enum { false, true } qboolean;
 enum { key_game, key_console, key_message, key_menu } key_dest;
 enum { K_SHIFT, K_CTRL, K_COMMAND, K_ALT };
-enum { KMOD_CAPS = 1, KMOD_NUM = 2 };
+enum { SDL_KMOD_CAPS = 1, SDL_KMOD_NUM = 2 };
+typedef struct SDL_Window SDL_Window;
+static int fake_window;
+void *VID_GetWindow(void) { return &fake_window; }
 qboolean keydown[4], native_text, requested_text;
 struct { qboolean active; } key_inputgrab;
 typedef struct {
@@ -55,13 +58,13 @@ struct { int key, ch; qboolean down; } events[8];
 int event_count, dispatch_fallthrough;
 qboolean Key_TextEntry(void);
 int SDL_GetModState(void) { return mods; }
-qboolean SDL_IsTextInputActive(void) { return sdl_active; }
-void SDL_StartTextInput(void) { sdl_active = true; ++starts; }
-void SDL_StopTextInput(void) { sdl_active = false; ++stops; }
+qboolean SDL_TextInputActive(SDL_Window *window) { assert(window); return sdl_active; }
+qboolean SDL_StartTextInput(SDL_Window *window) { assert(window); sdl_active = true; ++starts; return true; }
+qboolean SDL_StopTextInput(SDL_Window *window) { assert(window); sdl_active = false; ++stops; return true; }
 int SDL_EnableUNICODE(int enabled) {
     int old = sdl_active;
     if (enabled >= 0 && enabled != old) {
-        if (enabled) SDL_StartTextInput(); else SDL_StopTextInput();
+        if (enabled) SDL_StartTextInput(VID_GetWindow()); else SDL_StopTextInput(VID_GetWindow());
     }
     return old;
 }
@@ -121,13 +124,13 @@ int main(void) {
     assert(Key_MenuChar(0, 0) == 0 && Key_MenuChar(0, 128) == 0);
     keydown[K_SHIFT] = true;
     assert(Key_MenuChar(0, 'z') == 'Z' && Key_MenuChar(0, '6') == '^');
-    mods = KMOD_CAPS;
+    mods = SDL_KMOD_CAPS;
     assert(Key_MenuChar(0, 'z') == 'z');
     keydown[K_SHIFT] = false;
     assert(Key_MenuChar(0, 'z') == 'Z');
     const int keypad[] = {K_KP_INS, K_KP_END, K_KP_DOWNARROW, K_KP_PGDN,
         K_KP_LEFTARROW, K_KP_5, K_KP_RIGHTARROW, K_KP_HOME, K_KP_UPARROW, K_KP_PGUP};
-    mods = KMOD_NUM;
+    mods = SDL_KMOD_NUM;
     for (int digit = 0; digit < 10; ++digit)
         assert(Key_MenuChar(keypad[digit], 0x40000062) == '0' + digit);
     assert(Key_MenuChar(K_KP_DEL, 0x40000063) == '.');
@@ -160,7 +163,7 @@ int main(void) {
     assert(event_count == 2);
     assert(events[0].key == 'a' && events[0].ch == 0);
     assert(events[1].key == 0 && events[1].ch == 'a');
-    mods = KMOD_NUM;
+    mods = SDL_KMOD_NUM;
     event_count = 0;
     dispatch_key(K_KP_END, true, 0x40000059);
     assert(event_count == 2 && events[0].key == K_KP_END);
@@ -270,7 +273,7 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix="qssm-menu-input-") as directory:
     path = Path(directory)
     (path / "test.c").write_text(source)
-    for defines in (["-DUSE_SDL2=1"], [], ["-DUSE_SDL2=1", "-DPLATFORM_OSX=1"]):
+    for defines in ([], ["-DPLATFORM_OSX=1"]):
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-Wall", "-Wextra", "-Werror",
                         *defines, str(path / "test.c"), "-o", str(path / "test")], check=True)
         subprocess.run([str(path / "test")], check=True)

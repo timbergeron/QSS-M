@@ -41,8 +41,6 @@ extern cvar_t gl_picmip; // woods #f_config
 extern cvar_t scr_showfps; // woods #f_config
 extern cvar_t allow_download; // woods #ftehack
 
-int VID_GetCurrentDPI(void);
-
 extern cvar_t cl_iDrive; // woods for f_config
 extern qboolean WordFilter_Check(const char* text, char* dest_buffer, size_t buffer_size); // woods #contentfilter
 
@@ -3090,7 +3088,7 @@ void CL_ParseProQuakeMessage(void)
 	}
 }
 
-static Uint32 last_vote_time = 0; // woods #autovote
+static Uint64 last_vote_time = 0; // woods #autovote
 
 static qboolean CL_Autovote_MatchesVoteText(const char* vote_text, const char* token)
 {
@@ -3208,7 +3206,7 @@ static qboolean CL_Autovote_ShouldExcludeVote(const char* string)
 
 	// first token determines the mode: "exclude" or "include"
 	// if neither, default to exclude mode and treat all tokens as entries
-	token = SDL_strtokr(listbuf, ",;", &saveptr);
+	token = SDL_strtok_r(listbuf, ",;", &saveptr);
 	if (token)
 	{
 		while (*token && q_isspace((unsigned char)*token))
@@ -3217,17 +3215,17 @@ static qboolean CL_Autovote_ShouldExcludeVote(const char* string)
 		if (!q_strcasecmp(token, "exclude"))
 		{
 			include_mode = false;
-			token = SDL_strtokr(NULL, ",;", &saveptr); // advance past mode token
+			token = SDL_strtok_r(NULL, ",;", &saveptr); // advance past mode token
 		}
 		else if (!q_strcasecmp(token, "include"))
 		{
 			include_mode = true;
-			token = SDL_strtokr(NULL, ",;", &saveptr); // advance past mode token
+			token = SDL_strtok_r(NULL, ",;", &saveptr); // advance past mode token
 		}
 		// else: first token is not a mode keyword, treat it as an entry in exclude mode
 	}
 
-	for (; token; token = SDL_strtokr(NULL, ",;", &saveptr))
+	for (; token; token = SDL_strtok_r(NULL, ",;", &saveptr))
 	{
 		char* token_end;
 
@@ -3431,7 +3429,7 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 				char qfmatchlength[13] = { 237, 225, 244, 227, 232, 32, 236, 229, 238, 231, 244, 232,'\0' }; // woods -- quake font red 'match length'
 				qboolean vote_requester_excluded = CL_Autovote_ShouldExcludeVote(string);
 				
-				Uint32 current_time = SDL_GetTicks(); // get current time in milliseconds
+				Uint64 current_time = SDL_GetTicks(); // get current time in milliseconds
 
 				if (cl_autovote.value) // woods #autovote --  yes on timelimit requests
 				{
@@ -4232,12 +4230,12 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 				platform = mac_platform;
 #endif
 
-			const char* sound = SDL_GetAudioDeviceName(0, SDL_FALSE); // woods #q_sysinfo (qrack)
+			const char* sound = SNDDMA_GetDeviceName(); // woods #q_sysinfo (qrack)
 			const int sdlRam = SDL_GetSystemRAM(); // woods #q_sysinfo (qrack)
-			const int num_cpus = SDL_GetCPUCount(); // woods #q_sysinfo (qrack)
-			const int dpi_num = VID_GetCurrentDPI(); // woods #q_sysinfo
+			const int num_cpus = SDL_GetNumLogicalCPUCores(); // woods #q_sysinfo (qrack)
+			const float display_scale = VID_GetCurrentDisplayScale(); // woods #q_sysinfo
 
-#if defined(_WIN32) // use windows registry to get some more detailed info that SDL2 can't, adapted from ezquake
+#if defined(_WIN32) // use windows registry to get some more detailed info that SDL can't, adapted from ezquake
 			char* SYSINFO_processor_description = NULL;
 			char* SYSINFO_windows_version = NULL;
 			int	 SYSINFO_MHz = 0;
@@ -4311,7 +4309,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 			MSG_WriteString(&cls.message, va("say %1.1fGHz %s", (float)SYSINFO_MHz/1000, SYSINFO_processor_description));
 #endif
 
-#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods -- use mac terminal to get some more detailed info that SDL2 can't
+#if defined(PLATFORM_OSX) || defined(PLATFORM_MAC) // woods -- use mac terminal to get some more detailed info that SDL can't
 
 			char* SYSINFO_processor_description = NULL;
 			char* com_modelname = NULL;
@@ -4449,7 +4447,7 @@ if (!strcmp(printtext, "Client ping times:\n") && (cl.expectingpingtimes > realt
 				strcpy(resolution_suffix, " (2k)");
 			}
 
-			MSG_WriteString(&cls.message, va("say %s %d ppi%s", videosetg, dpi_num, resolution_suffix));
+			MSG_WriteString(&cls.message, va("say %s %gx scale%s", videosetg, display_scale, resolution_suffix));
 			MSG_WriteByte(&cls.message, clc_stringcmd);
 			MSG_WriteString(&cls.message, va("say Audio: %s", sound));
 		

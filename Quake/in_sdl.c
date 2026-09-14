@@ -24,19 +24,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include <errno.h>
 #include <string.h>
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#include <SDL2/SDL.h>
-#else
-#include <SDL/SDL.h>
-#endif
-#else
-#include "SDL.h"
-#endif
+#include <SDL3/SDL.h>
 
-#if defined(USE_SDL2)
 static void IN_ClearDropBatch(void);
-#endif
 
 #ifdef __APPLE__
 #include <IOKit/hid/IOHIDLib.h>
@@ -44,9 +34,11 @@ static void IN_ClearDropBatch(void);
 
 // HID Raw Mouse Input System
 static SDL_Thread *hid_thread = NULL;
-static SDL_mutex *hid_mouse_mutex = NULL;
-static SDL_mutex *hid_start_mutex = NULL;
-static SDL_cond *hid_start_cond = NULL;
+static SDL_Mutex *hid_mouse_mutex = NULL;
+static SDL_Mutex *hid_start_mutex = NULL;
+static SDL_Condition *hid_start_cond = NULL;
+enum { HID_START_PENDING, HID_START_READY, HID_START_FAILED, HID_START_ABANDONED };
+static int hid_start_state = HID_START_PENDING;	// guarded by hid_start_mutex
 static IOHIDManagerRef hid_manager = NULL;
 static CFRunLoopRef hid_runloop = NULL;
 static int hid_mouse_x = 0;
@@ -67,16 +59,14 @@ static void HID_InputCallback(void *unused, IOReturn result, void *sender, IOHID
 	if (page == kHIDPage_GenericDesktop) {
 		switch (usage) {
 			case kHIDUsage_GD_X:
-				if (SDL_LockMutex(hid_mouse_mutex) == 0) {
-					hid_mouse_x += val;
-					SDL_UnlockMutex(hid_mouse_mutex);
-				}
+				SDL_LockMutex(hid_mouse_mutex);
+				hid_mouse_x += val;
+				SDL_UnlockMutex(hid_mouse_mutex);
 				break;
 			case kHIDUsage_GD_Y:
-				if (SDL_LockMutex(hid_mouse_mutex) == 0) {
-					hid_mouse_y += val;
-					SDL_UnlockMutex(hid_mouse_mutex);
-				}
+				SDL_LockMutex(hid_mouse_mutex);
+				hid_mouse_y += val;
+				SDL_UnlockMutex(hid_mouse_mutex);
 				break;
 			default:
 				break;
@@ -96,6 +86,11 @@ static int HID_MouseThread(void *inarg)
 	}
 	
 	SDL_LockMutex(hid_start_mutex);
+	if (hid_start_state != HID_START_PENDING) {
+		// HID_MouseInit stopped waiting before this thread started
+		SDL_UnlockMutex(hid_start_mutex);
+		return -1;
+	}
 
 	hid_manager = IOHIDManagerCreate(kCFAllocatorSystemDefault, kIOHIDOptionsTypeNone);
 	if (!hid_manager) {
@@ -151,7 +146,8 @@ static int HID_MouseThread(void *inarg)
 	hid_runloop = runloop;
 	
 	// Signal success and unlock
-	SDL_CondSignal(hid_start_cond);
+	hid_start_state = HID_START_READY;
+	SDL_SignalCondition(hid_start_cond);
 	SDL_UnlockMutex(hid_start_mutex);
 
 	CFRunLoopRun();
@@ -181,21 +177,45 @@ cleanup_and_signal:
 	hid_runloop = NULL;
 	
 	// Signal failure and unlock
-	SDL_CondSignal(hid_start_cond);
+	hid_start_state = HID_START_FAILED;
+	SDL_SignalCondition(hid_start_cond);
 	SDL_UnlockMutex(hid_start_mutex);
 	
 	return -1;
 }
 
+/*
+Called with hid_start_mutex held. SDL_WaitConditionTimeout can wake early or
+time out, so the state HID_MouseThread records under the same mutex decides
+the outcome. A thread that has not started by the deadline is told to exit.
+*/
+static qboolean HID_WaitForStart(Uint64 deadline)
+{
+	while (hid_start_state == HID_START_PENDING)
+	{
+		const Uint64 now = SDL_GetTicks();
+
+		if (now >= deadline)
+		{
+			hid_start_state = HID_START_ABANDONED;
+			break;
+		}
+		SDL_WaitConditionTimeout(hid_start_cond, hid_start_mutex, (Sint32)q_min(deadline - now, (Uint64)1000));
+	}
+	return hid_start_state == HID_START_READY;
+}
+
 static qboolean HID_MouseInit(void)
 {
+	qboolean ready;
+
 	if (hid_mouse_active) return true;
 
 	hid_mouse_x = 0;
 	hid_mouse_y = 0;
 
 	hid_start_mutex = SDL_CreateMutex();
-	hid_start_cond = SDL_CreateCond();
+	hid_start_cond = SDL_CreateCondition();
 	hid_mouse_mutex = SDL_CreateMutex();
 
 	if (!hid_start_mutex || !hid_start_cond || !hid_mouse_mutex) {
@@ -204,40 +224,35 @@ static qboolean HID_MouseInit(void)
 	}
 
 	SDL_LockMutex(hid_start_mutex);
+	hid_start_state = HID_START_PENDING;
 	hid_thread = SDL_CreateThread(HID_MouseThread, "HID_MouseThread", NULL);
 	
 	if (!hid_thread) {
 		SDL_UnlockMutex(hid_start_mutex);
 		SDL_DestroyMutex(hid_start_mutex);
 		SDL_DestroyMutex(hid_mouse_mutex);
-		SDL_DestroyCond(hid_start_cond);
+		SDL_DestroyCondition(hid_start_cond);
 		return false;
 	}
 
-	// Wait for HID thread to initialize with timeout (5 seconds)
-	Uint32 start_time = SDL_GetTicks();
-	int wait_result = 0;
-	while ((SDL_GetTicks() - start_time) < 5000) {
-		wait_result = SDL_CondWaitTimeout(hid_start_cond, hid_start_mutex, 1000);
-		if (wait_result == 0 && hid_runloop) break; // Success - thread is ready
-		if (wait_result == 0 && !hid_runloop) break; // Signal received but failed - exit immediately
-		if (wait_result == SDL_MUTEX_TIMEDOUT) continue; // Timeout, try again
-		break; // Error
-	}
-	
+	// Wait up to 5 seconds for the HID thread to report readiness or failure
+	ready = HID_WaitForStart(SDL_GetTicks() + 5000);
 	SDL_UnlockMutex(hid_start_mutex);
 
+	if (!ready) {
+		Con_DPrintf("HID Mouse: Failed to initialize - falling back to SDL mouse\n");
+		// the thread exits after reporting failure, or at startup once abandoned
+		SDL_WaitThread(hid_thread, NULL);
+		hid_thread = NULL;
+	}
+
+	// only HID_MouseThread's startup uses these, and that has finished
 	SDL_DestroyMutex(hid_start_mutex);
-	SDL_DestroyCond(hid_start_cond);
+	SDL_DestroyCondition(hid_start_cond);
 	hid_start_mutex = NULL;
 	hid_start_cond = NULL;
 
-	if (wait_result != 0 || !hid_runloop) {
-		Con_DPrintf("HID Mouse: Failed to initialize - falling back to SDL mouse\n");
-		if (hid_thread) {
-			SDL_WaitThread(hid_thread, NULL);
-			hid_thread = NULL;
-		}
+	if (!ready) {
 		if (hid_mouse_mutex) {
 			SDL_DestroyMutex(hid_mouse_mutex);
 			hid_mouse_mutex = NULL;
@@ -490,7 +505,7 @@ static void IN_ReenableOSXMouseAccelForFocus (void)
 
 #endif /* MACOS_X_ACCELERATION_HACK */
 
-// SDL2 Game Controller cvars
+// SDL gamepad cvars
 cvar_t	joy_deadzone_look = { "joy_deadzone_look", "0.175", CVAR_ARCHIVE };
 cvar_t	joy_deadzone_move = { "joy_deadzone_move", "0.175", CVAR_ARCHIVE };
 cvar_t	joy_outer_threshold_look = { "joy_outer_threshold_look", "0.02", CVAR_ARCHIVE };
@@ -525,10 +540,9 @@ cvar_t gyro_calibration_y = { "gyro_calibration_y", "0", CVAR_ARCHIVE };
 cvar_t gyro_calibration_z = { "gyro_calibration_z", "0", CVAR_ARCHIVE };
 cvar_t gyro_noise_thresh = { "gyro_noise_thresh", "1.5", CVAR_ARCHIVE };
 
-#if defined(USE_SDL2)
-static SDL_JoystickID joy_active_instanceid = -1;
+static SDL_JoystickID joy_active_instanceid = 0;
 static int joy_active_device = -1;
-static SDL_GameController *joy_active_controller = NULL;
+static SDL_Gamepad *joy_active_controller = NULL;
 static gamepadtype_t joy_active_type = GAMEPAD_NONE;
 static char joy_active_name[256];
 static qboolean joy_has_rumble = false;
@@ -548,7 +562,6 @@ static void Joy_Device_Completion_f(cvar_t *cvar, const char *partial);
 static void Joy_Flick_f(cvar_t *cvar);
 void IN_GyroActionDown(void);
 void IN_GyroActionUp(void);
-#endif
 
 static qboolean	no_mouse = false;
 static qboolean	wheel_block_mouse2 = false;
@@ -556,21 +569,13 @@ static qboolean demoscrub_hover = false;
 static double demoscrub_hover_until = 0.0;
 static qboolean demoscrub_was_eligible = false;
 static qboolean demoscrub_cursor_was_visible = false;
-#if defined(USE_SDL2)
-#if SDL_VERSION_ATLEAST(2, 0, 4)
 static qboolean demoscrub_mouse_captured = false;
-#endif
-#endif
 
 static int buttonremap[] =
 {
 	K_MOUSE1,
 	K_MOUSE3,	/* right button		*/
 	K_MOUSE2,	/* middle button	*/
-#if !defined(USE_SDL2)	/* mousewheel up/down not counted as buttons in SDL2 */
-	K_MWHEELUP,
-	K_MWHEELDOWN,
-#endif
 	K_MOUSE4,
 	K_MOUSE5
 };
@@ -596,7 +601,7 @@ static void IN_EmitWheelKeySteps(int steps)
 }
 
 /* total accumulated mouse movement since last frame */
-static int	total_dx, total_dy = 0;
+static float	total_dx, total_dy = 0;
 static float gyro_yaw = 0.f, gyro_pitch = 0.f, gyro_raw_mag = 0.f;
 static float gyro_center_frac = 0.f, gyro_center_amount = 0.f;
 
@@ -618,7 +623,7 @@ static struct
 	float prev_scale;
 } flick;
 
-static Uint32 obs_cursor_last_move = 0; // ms timestamp of last motion / click -- woods #eyemouse
+static Uint64 obs_cursor_last_move = 0; // ms timestamp of last motion / click -- woods #eyemouse
 static qboolean obs_cursor_hidden = false; // SDL_ShowCursor() state we forced -- woods #eyemouse
 #define OBS_CURSOR_IDLE_MS 2000 // 2 seconds -- woods #eyemouse
 
@@ -626,52 +631,40 @@ static qboolean obs_cursor_hidden = false; // SDL_ShowCursor() state we forced -
 static void IN_BeginIgnoringMouseEvents(void){}
 static void IN_EndIgnoringMouseEvents(void){}
 #else
-static int SDLCALL IN_FilterMouseEvents (const SDL_Event *event)
+static bool IN_FilterMouseEvents (const SDL_Event *event)
 {
 	switch (event->type)
 	{
-	case SDL_MOUSEMOTION:
-	// case SDL_MOUSEBUTTONDOWN:
-	// case SDL_MOUSEBUTTONUP:
-		return 0;
+	case SDL_EVENT_MOUSE_MOTION:
+	// case SDL_EVENT_MOUSE_BUTTON_DOWN:
+	// case SDL_EVENT_MOUSE_BUTTON_UP:
+		return false;
 	}
 
-	return 1;
+	return true;
 }
 
-#if defined(USE_SDL2)
-static int SDLCALL IN_SDL2_FilterMouseEvents (void *userdata, SDL_Event *event)
+static bool SDLCALL IN_SDL_FilterMouseEvents (void *userdata, SDL_Event *event)
 {
 	return IN_FilterMouseEvents (event);
 }
-#endif
 
 static void IN_BeginIgnoringMouseEvents(void)
 {
-#if defined(USE_SDL2)
 	SDL_EventFilter currentFilter = NULL;
 	void *currentUserdata = NULL;
 	SDL_GetEventFilter(&currentFilter, &currentUserdata);
 
-	if (currentFilter != IN_SDL2_FilterMouseEvents)
-		SDL_SetEventFilter(IN_SDL2_FilterMouseEvents, NULL);
-#else
-	if (SDL_GetEventFilter() != IN_FilterMouseEvents)
-		SDL_SetEventFilter(IN_FilterMouseEvents);
-#endif
+	if (currentFilter != IN_SDL_FilterMouseEvents)
+		SDL_SetEventFilter(IN_SDL_FilterMouseEvents, NULL);
 }
 
 static void IN_EndIgnoringMouseEvents(void)
 {
-#if defined(USE_SDL2)
 	SDL_EventFilter currentFilter;
 	void *currentUserdata;
-	if (SDL_GetEventFilter(&currentFilter, &currentUserdata) == SDL_TRUE)
+	if (SDL_GetEventFilter(&currentFilter, &currentUserdata) == true)
 		SDL_SetEventFilter(NULL, NULL);
-#else
-	if (SDL_GetEventFilter() != NULL)
-		SDL_SetEventFilter(NULL);
-#endif
 }
 #endif
 
@@ -788,7 +781,6 @@ static void IN_Activate (void)
 		IN_DisableOSXMouseAccel();
 #endif
 
-#if defined(USE_SDL2)
 #ifdef __APPLE__
 	{
 		// Work around https://github.com/sezero/quakespasm/issues/48
@@ -798,25 +790,10 @@ static void IN_Activate (void)
 	}
 #endif
 
-	if (SDL_SetRelativeMouseMode(SDL_TRUE) != 0)
+	if (!SDL_SetWindowRelativeMouseMode((SDL_Window *)VID_GetWindow(), true))
 	{
-		Con_Printf("WARNING: SDL_SetRelativeMouseMode(SDL_TRUE) failed.\n");
+		Con_Printf("WARNING: SDL_SetWindowRelativeMouseMode(true) failed.\n");
 	}
-#else
-	if (SDL_WM_GrabInput(SDL_GRAB_QUERY) != SDL_GRAB_ON)
-	{
-		SDL_WM_GrabInput(SDL_GRAB_ON);
-		if (SDL_WM_GrabInput(SDL_GRAB_QUERY) != SDL_GRAB_ON)
-			Con_Printf("WARNING: SDL_WM_GrabInput(SDL_GRAB_ON) failed.\n");
-	}
-
-	if (SDL_ShowCursor(SDL_QUERY) != SDL_DISABLE)
-	{
-		SDL_ShowCursor(SDL_DISABLE);
-		if (SDL_ShowCursor(SDL_QUERY) != SDL_DISABLE)
-			Con_Printf("WARNING: SDL_ShowCursor(SDL_DISABLE) failed.\n");
-	}
-#endif
 
 	IN_EndIgnoringMouseEvents();
 
@@ -836,23 +813,7 @@ static void IN_Deactivate (qboolean free_cursor)
 
 	if (free_cursor)
 	{
-#if defined(USE_SDL2)
-		SDL_SetRelativeMouseMode(SDL_FALSE);
-#else
-		if (SDL_WM_GrabInput(SDL_GRAB_QUERY) != SDL_GRAB_OFF)
-		{
-			SDL_WM_GrabInput(SDL_GRAB_OFF);
-			if (SDL_WM_GrabInput(SDL_GRAB_QUERY) != SDL_GRAB_OFF)
-				Con_Printf("WARNING: SDL_WM_GrabInput(SDL_GRAB_OFF) failed.\n");
-		}
-
-		if (SDL_ShowCursor(SDL_QUERY) != SDL_ENABLE)
-		{
-			SDL_ShowCursor(SDL_ENABLE);
-			if (SDL_ShowCursor(SDL_QUERY) != SDL_ENABLE)
-				Con_Printf("WARNING: SDL_ShowCursor(SDL_ENABLE) failed.\n");
-		}
-#endif
+		SDL_SetWindowRelativeMouseMode((SDL_Window *)VID_GetWindow(), false);
 	}
 
 	/* discard all mouse events when input is deactivated */
@@ -958,7 +919,7 @@ static qboolean IN_DemoScrubWindowToPct(int win_x, int win_y, float *pct, qboole
 
 static void IN_DemoScrubSeedHover(void)
 {
-	int x, y;
+	float x, y;
 	float pct;
 	qboolean inside_hit;
 	qboolean was_hover = IN_DemoScrubPollHoverActive();
@@ -985,10 +946,10 @@ static qboolean IN_DemoScrubHandleButton(const SDL_Event *event)
 	if (event->button.button != SDL_BUTTON_LEFT)
 		return false;
 
-	if (event->button.state == SDL_PRESSED && CL_DemoScrubActive())
+	if (event->button.down && CL_DemoScrubActive())
 		return true;
 
-	if (event->button.state == SDL_RELEASED)
+	if (!event->button.down)
 	{
 		if (!CL_DemoScrubActive())
 			return false;
@@ -1005,7 +966,7 @@ static qboolean IN_DemoScrubHandleButton(const SDL_Event *event)
 		return true;
 	}
 
-	if (event->button.state != SDL_PRESSED || !IN_DemoScrubEligible())
+	if (!event->button.down || !IN_DemoScrubEligible())
 		return false;
 
 	if (!IN_DemoScrubWindowToPct(event->button.x, event->button.y, &pct, &inside_hit) || !inside_hit)
@@ -1064,10 +1025,9 @@ static qboolean IN_DemoScrubHandleMotion(const SDL_Event *event)
 	return false;
 }
 
-#if defined(USE_SDL2)
 static qboolean IN_DemoScrubHandleWheel(const SDL_Event *event)
 {
-	int x, y;
+	float x, y;
 	float pct;
 	qboolean inside_hit = false;
 	qboolean hover_active;
@@ -1087,7 +1047,7 @@ static qboolean IN_DemoScrubHandleWheel(const SDL_Event *event)
 	if (!inside_hit && !hover_active)
 		return false;
 
-	seconds = (float)event->wheel.y;
+	seconds = (float)event->wheel.integer_y;
 	if (seconds == 0.0f)
 		return false;
 
@@ -1098,7 +1058,6 @@ static qboolean IN_DemoScrubHandleWheel(const SDL_Event *event)
 	IN_UpdateGrabs();
 	return true;
 }
-#endif
 
 static void IN_DemoScrubRefreshCursor(void)
 {
@@ -1112,23 +1071,15 @@ static void IN_DemoScrubRefreshCursor(void)
 
 void IN_DemoScrubCapture(qboolean capture)
 {
-#if defined(USE_SDL2)
-#if SDL_VERSION_ATLEAST(2, 0, 4)
 	if (capture == demoscrub_mouse_captured)
 		return;
-	if (SDL_CaptureMouse(capture ? SDL_TRUE : SDL_FALSE) != 0)
+	if (!SDL_CaptureMouse(capture ? true : false))
 	{
 		Con_DPrintf("WARNING: SDL_CaptureMouse(%s) failed: %s\n",
 			capture ? "true" : "false", SDL_GetError());
 		return;
 	}
 	demoscrub_mouse_captured = capture;
-#else
-	Q_UNUSED(capture);
-#endif
-#else
-	Q_UNUSED(capture);
-#endif
 }
 
 static void IN_UpdateGrabs_Internal(qboolean forecerelease)
@@ -1142,6 +1093,7 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 	qboolean gamecodecursor = (key_dest == key_game && cl.qcvm.cursorforced) || (key_dest == key_menu && cls.menu_qcvm.cursorforced);
 	qboolean demoscrub_eligible = IN_DemoScrubEligible();
 	qboolean demoscrub_cursor;
+	SDL_Window *window = (SDL_Window *)VID_GetWindow();
 
 	if (demoscrub_eligible && !demoscrub_was_eligible)
 		IN_DemoScrubSeedHover();
@@ -1186,22 +1138,21 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 		IN_ReenableOSXMouseAccel();
 #endif
 
-#if defined(USE_SDL2)
 	// freemouse controls grab/relative mode; wantcursor controls visibility.
 	if (freemouse)
 	{
-		if (SDL_GetRelativeMouseMode())
+		if (window && SDL_GetWindowRelativeMouseMode(window))
 		{
-			if (SDL_SetRelativeMouseMode(SDL_FALSE) != 0)
-				Con_Printf("WARNING: SDL_SetRelativeMouseMode(SDL_FALSE) failed.\n");
+			if (!SDL_SetWindowRelativeMouseMode(window, false))
+				Con_Printf("WARNING: SDL_SetWindowRelativeMouseMode(false) failed.\n");
 		}
 	}
 	else
 	{
-		if (!SDL_GetRelativeMouseMode())
+		if (window && !SDL_GetWindowRelativeMouseMode(window))
 		{
-			if (SDL_SetRelativeMouseMode(SDL_TRUE) != 0)
-				Con_Printf("WARNING: SDL_SetRelativeMouseMode(SDL_TRUE) failed.\n");
+			if (!SDL_SetWindowRelativeMouseMode(window, true))
+				Con_Printf("WARNING: SDL_SetWindowRelativeMouseMode(true) failed.\n");
 		}
 	}
 
@@ -1211,47 +1162,13 @@ static void IN_UpdateGrabs_Internal(qboolean forecerelease)
 		{
 			VID_UpdateCursor(); // menu/game cursor
 		}
-		SDL_ShowCursor(SDL_ENABLE);
+		SDL_ShowCursor();
 	}
 	else
 	{
-		SDL_ShowCursor(SDL_DISABLE);
+		SDL_HideCursor();
 		VID_UpdateCursor();
 	}
-#else
-	if (freemouse)
-	{
-		if (SDL_WM_GrabInput(SDL_GRAB_QUERY) != SDL_GRAB_OFF)
-		{
-			SDL_WM_GrabInput(SDL_GRAB_OFF);
-			if (SDL_WM_GrabInput(SDL_GRAB_QUERY) != SDL_GRAB_OFF)
-				Con_Printf("WARNING: SDL_WM_GrabInput(SDL_GRAB_OFF) failed.\n");
-		}
-
-		if (SDL_ShowCursor(SDL_QUERY) != SDL_ENABLE)
-		{
-			SDL_ShowCursor(SDL_ENABLE);
-			if (SDL_ShowCursor(SDL_QUERY) != SDL_ENABLE)
-				Con_Printf("WARNING: SDL_ShowCursor(SDL_ENABLE) failed.\n");
-		}
-	}
-	else
-	{
-		if (SDL_WM_GrabInput(SDL_GRAB_QUERY) != SDL_GRAB_ON)
-		{
-			SDL_WM_GrabInput(SDL_GRAB_ON);
-			if (SDL_WM_GrabInput(SDL_GRAB_QUERY) != SDL_GRAB_ON)
-				Con_Printf("WARNING: SDL_WM_GrabInput(SDL_GRAB_ON) failed.\n");
-		}
-
-		if (SDL_ShowCursor(SDL_QUERY) != SDL_DISABLE)
-		{
-			SDL_ShowCursor(SDL_DISABLE);
-			if (SDL_ShowCursor(SDL_QUERY) != SDL_DISABLE)
-				Con_Printf("WARNING: SDL_ShowCursor(SDL_DISABLE) failed.\n");
-		}
-	}
-#endif
 
 	if (needevents)
 		IN_EndIgnoringMouseEvents();
@@ -1270,48 +1187,35 @@ static void IN_MouseInfo_f(void)
 	Con_Printf("  SDL Mouse Events: %s\n", no_mouse ? "Disabled" : "Enabled");
 	Con_Printf("  Window Focus: %s\n", windowhasfocus ? "Yes" : "No");
 	
-#if defined(USE_SDL2)
-	// SDL2 mouse state information=
+	// SDL mouse state information
 	const char* drv = SDL_GetCurrentVideoDriver();
-	const char* warp = SDL_GetHint(SDL_HINT_MOUSE_RELATIVE_MODE_WARP);
 	Con_Printf("  SDL Video Driver: %s\n", drv ? drv : "(unknown)");
 
 	if (!drv)
 		Con_Printf("  Relative Mode Path: backend default (raw)\n");
 	else if (!strcmp(drv, "windows"))
-		Con_Printf("  Relative Mode Path: %s (Win RAWINPUT)\n",
-			(warp && warp[0] == '1') ? "Warp fallback - accelerated"
-			: "Raw");
+		Con_Printf("  Relative Mode Path: Raw (Win RAWINPUT)\n");
 	else if (!strcmp(drv, "x11"))
-		Con_Printf("  Relative Mode Path: %s (X11)\n",
-			(warp && warp[0] == '1') ? "Warp fallback - accelerated"
-			: "XI2 raw");
+		Con_Printf("  Relative Mode Path: XI2 raw (X11)\n");
 	else if (!strcmp(drv, "wayland"))
 		Con_Printf("  Relative Mode Path: Wayland zwp_relative_pointer (raw)\n");
 	else
 		Con_Printf("  Relative Mode Path: backend default (raw)\n");
 
-	Con_Printf("  Relative Mouse Mode: %s\n", SDL_GetRelativeMouseMode() ? "Enabled" : "Disabled");
-	Con_Printf("  Cursor Visibility: %s\n", SDL_ShowCursor(SDL_QUERY) ? "Visible" : "Hidden");
+	Con_Printf("  Relative Mouse Mode: %s\n", SDL_GetWindowRelativeMouseMode((SDL_Window *)VID_GetWindow()) ? "Enabled" : "Disabled");
+	Con_Printf("  Cursor Visibility: %s\n", SDL_CursorVisible() ? "Visible" : "Hidden");
 	
 	// Mouse position information
-	int mx, my;
+	float mx, my;
 	SDL_GetMouseState(&mx, &my);
-	Con_Printf("  Mouse Position: %d, %d\n", mx, my);
+	Con_Printf("  Mouse Position: %.0f, %.0f\n", mx, my);
 	
 	// Mouse button state
 	Uint32 buttons = SDL_GetMouseState(NULL, NULL);
 	Con_Printf("  Mouse Buttons: L:%s M:%s R:%s\n", 
-		(buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) ? "Down" : "Up",
-		(buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE)) ? "Down" : "Up",
-		(buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) ? "Down" : "Up");
-#else
-	// SDL1 mouse state information
-	int grab_state = SDL_WM_GrabInput(SDL_GRAB_QUERY);
-	Con_Printf("  Mouse Grab: %s\n", 
-		(grab_state == SDL_GRAB_ON) ? "Enabled" : "Disabled");
-	Con_Printf("  Cursor Visibility: %s\n", SDL_ShowCursor(SDL_QUERY) ? "Visible" : "Hidden");
-#endif
+		(buttons & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) ? "Down" : "Up",
+		(buttons & SDL_BUTTON_MASK(SDL_BUTTON_MIDDLE)) ? "Down" : "Up",
+		(buttons & SDL_BUTTON_MASK(SDL_BUTTON_RIGHT)) ? "Down" : "Up");
 	
 	// Platform-specific information
 #ifdef __APPLE__
@@ -1339,7 +1243,7 @@ static void IN_MouseInfo_f(void)
 	Con_Printf("  Bind Grab Mode: %s\n", bind_grab ? "Active" : "Inactive");
 	
 	// Mouse movement accumulation
-	Con_Printf("  Movement Delta: %d, %d\n", total_dx, total_dy);
+	Con_Printf("  Movement Delta: %.2f, %.2f\n", total_dx, total_dy);
 	
 	// Mouse button mapping
 	Con_Printf("  Button Mapping: L=Mouse1, R=Mouse3, M=Mouse2\n");
@@ -1348,39 +1252,22 @@ static void IN_MouseInfo_f(void)
 
 void IN_StartupJoystick (void)
 {
-#if defined(USE_SDL2)
 	if (COM_CheckParm("-nojoy"))
 		return;
 
-#if SDL_VERSION_ATLEAST(2, 0, 12)
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE, "1");
-#endif
-#if SDL_VERSION_ATLEAST(2, 0, 14)
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5, "1");
-#endif
-#if SDL_VERSION_ATLEAST(2, 0, 22)
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4, "1");
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_SWITCH, "1");
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_JOY_CONS, "1");
-	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, "1");
-	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
-#endif
-#if SDL_VERSION_ATLEAST(2, 23, 2)
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_COMBINE_JOY_CONS, "1");
-#endif
-#if SDL_VERSION_ATLEAST(2, 25, 1)
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS3, "1");
-#endif
-#if SDL_VERSION_ATLEAST(2, 26, 0)
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_WII, "1");
-#endif
-#if SDL_VERSION_ATLEAST(2, 0, 18)
 	SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
 	SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT_CORRELATE_XINPUT, "1");
-#endif
 
-	if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) == -1 )
+	if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD))
 	{
 		Con_Warning("could not initialize SDL Game Controller\n");
 		return;
@@ -1388,100 +1275,76 @@ void IN_StartupJoystick (void)
 
 	IN_LoadControllerMappings();
 	IN_SetupJoystick();
-#endif
 }
 
 void IN_ShutdownJoystick (void)
 {
-#if defined(USE_SDL2)
 	IN_UseController(-1);
-	SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
-#endif
+	SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
 }
 
 qboolean IN_HasGamepad (void)
 {
-#if defined(USE_SDL2)
 	return joy_active_controller != NULL;
-#else
-	return false;
-#endif
 }
 
 const char *IN_GetGamepadName (void)
 {
-#if defined(USE_SDL2)
 	return joy_active_controller ? joy_active_name : NULL;
-#else
-	return NULL;
-#endif
 }
 
 gamepadtype_t IN_GetGamepadType (void)
 {
-#if defined(USE_SDL2)
 	return joy_active_type;
-#else
-	return GAMEPAD_NONE;
-#endif
 }
 
 qboolean IN_HasRumble (void)
 {
-#if defined(USE_SDL2)
 	return joy_has_rumble;
-#else
-	return false;
-#endif
 }
 
 qboolean IN_HasTriggerRumble (void)
 {
-#if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2, 0, 18)
 	return joy_has_trigger_rumble;
-#else
-	return false;
-#endif
 }
 
 qboolean IN_HasTouchpad (void)
 {
-#if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2, 0, 14)
 	return joy_has_touchpad;
-#else
-	return false;
-#endif
 }
 
 gamepadpower_t IN_GetGamepadPower (void)
 {
-#if defined(USE_SDL2)
 	return joy_power;
-#else
-	return GAMEPAD_POWER_UNKNOWN;
-#endif
 }
 
-#if defined(USE_SDL2)
-static gamepadpower_t IN_TranslateGamepadPower (SDL_JoystickPowerLevel level)
+/* SDL3 reports a power state and percentage; map them onto SDL2's battery
+   levels (empty <= 5%, low <= 20%, medium <= 70%) so the menu is unchanged. */
+static gamepadpower_t IN_TranslateGamepadPower (SDL_PowerState state, int percent)
 {
-	switch (level)
+	switch (state)
 	{
-	case SDL_JOYSTICK_POWER_EMPTY:	return GAMEPAD_POWER_EMPTY;
-	case SDL_JOYSTICK_POWER_LOW:		return GAMEPAD_POWER_LOW;
-	case SDL_JOYSTICK_POWER_MEDIUM:	return GAMEPAD_POWER_MEDIUM;
-	case SDL_JOYSTICK_POWER_FULL:		return GAMEPAD_POWER_FULL;
-	case SDL_JOYSTICK_POWER_WIRED:	return GAMEPAD_POWER_WIRED;
-	default:						return GAMEPAD_POWER_UNKNOWN;
+	case SDL_POWERSTATE_ON_BATTERY:
+		if (percent < 0)	return GAMEPAD_POWER_UNKNOWN;
+		if (percent <= 5)	return GAMEPAD_POWER_EMPTY;
+		if (percent <= 20)	return GAMEPAD_POWER_LOW;
+		if (percent <= 70)	return GAMEPAD_POWER_MEDIUM;
+		return GAMEPAD_POWER_FULL;
+	case SDL_POWERSTATE_NO_BATTERY:
+	case SDL_POWERSTATE_CHARGING:
+	case SDL_POWERSTATE_CHARGED:
+		return GAMEPAD_POWER_WIRED;
+	default:
+		return GAMEPAD_POWER_UNKNOWN;
 	}
 }
 
-static void IN_UpdateGamepadPower (SDL_JoystickPowerLevel level, qboolean notify)
+static void IN_UpdateGamepadPower (SDL_PowerState state, int percent, qboolean notify)
 {
 	qboolean warn_empty;
 	qboolean warn_low;
 
-	joy_power = IN_TranslateGamepadPower(level);
+	joy_power = IN_TranslateGamepadPower(state, percent);
 	if (joy_power == GAMEPAD_POWER_MEDIUM || joy_power == GAMEPAD_POWER_FULL ||
 		joy_power == GAMEPAD_POWER_WIRED)
 	{
@@ -1500,95 +1363,59 @@ static void IN_UpdateGamepadPower (SDL_JoystickPowerLevel level, qboolean notify
 			joy_warned_empty_power = true;
 	}
 }
-#endif
 
 void IN_TestRumble (void)
 {
-#if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2, 0, 9)
 	if (joy_active_controller && (joy_has_rumble || joy_has_trigger_rumble))
 	{
 		joy_rumble_test_end = Sys_DoubleTime() + 0.2;
 		if (joy_has_rumble)
-			SDL_GameControllerRumble(joy_active_controller, 0x6000, 0xffff, 200);
-#if SDL_VERSION_ATLEAST(2, 0, 18)
+			SDL_RumbleGamepad(joy_active_controller, 0x6000, 0xffff, 200);
 		if (joy_has_trigger_rumble)
-			SDL_GameControllerRumbleTriggers(joy_active_controller, 0xb000, 0xffff, 200);
-#endif
+			SDL_RumbleGamepadTriggers(joy_active_controller, 0xb000, 0xffff, 200);
 	}
-#endif
 }
 
 qboolean IN_HasGyro (void)
 {
-#if defined(USE_SDL2)
 	return gyro_present;
-#else
-	return false;
-#endif
 }
 
 float IN_GetRawGyroMagnitude (void)
 {
-#if defined(USE_SDL2)
 	return gyro_present ? gyro_raw_mag : 0.f;
-#else
-	return 0.f;
-#endif
 }
 
-#if defined(USE_SDL2)
-static float IN_GetControllerAxis (SDL_GameControllerAxis axis)
+static float IN_GetControllerAxis (SDL_GamepadAxis axis)
 {
 	if (!joy_active_controller)
 		return 0.f;
 
-	return SDL_GameControllerGetAxis(joy_active_controller, axis) / 32768.0f;
+	return SDL_GetGamepadAxis(joy_active_controller, axis) / 32768.0f;
 }
-#endif
 
 void IN_GetRawLookAxis (float *x, float *y)
 {
-#if defined(USE_SDL2)
 	if (x)
-		*x = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTX : SDL_CONTROLLER_AXIS_RIGHTX);
+		*x = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_LEFTX : SDL_GAMEPAD_AXIS_RIGHTX);
 	if (y)
-		*y = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_RIGHTY);
-#else
-	if (x)
-		*x = 0.f;
-	if (y)
-		*y = 0.f;
-#endif
+		*y = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_LEFTY : SDL_GAMEPAD_AXIS_RIGHTY);
 }
 
 void IN_GetRawMoveAxis (float *x, float *y)
 {
-#if defined(USE_SDL2)
 	if (x)
-		*x = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTX : SDL_CONTROLLER_AXIS_LEFTX);
+		*x = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_RIGHTX : SDL_GAMEPAD_AXIS_LEFTX);
 	if (y)
-		*y = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTY : SDL_CONTROLLER_AXIS_LEFTY);
-#else
-	if (x)
-		*x = 0.f;
-	if (y)
-		*y = 0.f;
-#endif
+		*y = IN_GetControllerAxis(joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_RIGHTY : SDL_GAMEPAD_AXIS_LEFTY);
 }
 
 void IN_GetRawTriggerAxis (float *left, float *right)
 {
-#if defined(USE_SDL2)
 	if (left)
-		*left = CLAMP(0.f, IN_GetControllerAxis(SDL_CONTROLLER_AXIS_TRIGGERLEFT), 1.f);
+		*left = CLAMP(0.f, IN_GetControllerAxis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER), 1.f);
 	if (right)
-		*right = CLAMP(0.f, IN_GetControllerAxis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT), 1.f);
-#else
-	if (left)
-		*left = 0.f;
-	if (right)
-		*right = 0.f;
-#endif
+		*right = CLAMP(0.f, IN_GetControllerAxis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER), 1.f);
 }
 
 float IN_GetRawLookMagnitude (void)
@@ -1617,14 +1444,10 @@ float IN_GetRawTriggerMagnitude (void)
 
 void IN_StartGyroCalibration (void)
 {
-#if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2, 0, 9)
 	if (joy_has_rumble)
-		SDL_GameControllerRumble(joy_active_controller, 0, 0, 100);
-#if SDL_VERSION_ATLEAST(2, 0, 18)
+		SDL_RumbleGamepad(joy_active_controller, 0, 0, 100);
 	if (joy_has_trigger_rumble)
-		SDL_GameControllerRumbleTriggers(joy_active_controller, 0, 0, 100);
-#endif
-#endif
+		SDL_RumbleGamepadTriggers(joy_active_controller, 0, 0, 100);
 
 	gyro_accum[0] = 0.f;
 	gyro_accum[1] = 0.f;
@@ -1693,16 +1516,10 @@ void IN_Init (void)
 {
 	textmode = Key_TextEntry();
 
-#if !defined(USE_SDL2)
-	SDL_EnableUNICODE (textmode);
-	if (SDL_EnableKeyRepeat(SDL_DEFAULT_REPEAT_DELAY, SDL_DEFAULT_REPEAT_INTERVAL) == -1)
-		Con_Printf("Warning: SDL_EnableKeyRepeat() failed.\n");
-#else
 	if (textmode)
-		SDL_StartTextInput();
+		SDL_StartTextInput((SDL_Window *)VID_GetWindow());
 	else
-		SDL_StopTextInput();
-#endif
+		SDL_StopTextInput((SDL_Window *)VID_GetWindow());
 	if (safemode || COM_CheckParm("-nomouse"))
 	{
 		no_mouse = true;
@@ -1779,9 +1596,7 @@ void IN_Init (void)
 void IN_Shutdown (void)
 {
 	Con_DPrintf("IN_Shutdown called\n");
-#if defined(USE_SDL2)
 	IN_ClearDropBatch();
-#endif
 #if defined(_WIN32) // woods #disablecaps via ironwail
 	Sys_ActivateKeyFilter(false);
 #endif
@@ -1813,7 +1628,7 @@ static float IN_RecenterEasing (float frac)
 	return frac * frac;
 }
 
-void IN_MouseMotion(int dx, int dy, int wx, int wy)
+void IN_MouseMotion(float dx, float dy, float wx, float wy)
 {
 	if (!windowhasfocus)
 		dx = dy = 0;	//don't change view angles etc while unfocused.
@@ -1822,7 +1637,7 @@ void IN_MouseMotion(int dx, int dy, int wx, int wy)
 
 	if (cl.paused || cl.match_pause_time > 0) // if the game is paused in any way (regular or match pause) #pong
 	{
-		Pong_MouseMove(wx, wy);
+		Pong_MouseMove((int)wx, (int)wy);
 	}
 
 	else if (key_dest == key_menu && cls.menu_qcvm.extfuncs.Menu_InputEvent)
@@ -1833,8 +1648,9 @@ void IN_MouseMotion(int dx, int dy, int wx, int wy)
 			float s;
 			s = q_min((float)glwidth / 320.0, (float)glheight / 200.0);
 			s = CLAMP (1.0, scr_menuscale.value, s);
-			wx /= s;
-			wy /= s;
+			// keep the whole virtual pixels QC has always received
+			wx = (int)(wx / s);
+			wy = (int)(wy / s);
 
 			G_FLOAT(OFS_PARM0) = CSIE_MOUSEABS;
 			G_VECTORSET(OFS_PARM1, wx, wy, 0);	//x
@@ -1861,8 +1677,9 @@ void IN_MouseMotion(int dx, int dy, int wx, int wy)
 		if (qcvm->cursorforced)
 		{
 			float s = CLAMP (1.0, scr_sbarscale.value, (float)glwidth / 320.0);
-			wx /= s;
-			wy /= s;
+			// keep the whole virtual pixels QC has always received
+			wx = (int)(wx / s);
+			wy = (int)(wy / s);
 
 			G_FLOAT(OFS_PARM0) = CSIE_MOUSEABS;
 			G_VECTORSET(OFS_PARM1, wx, wy, 0);	//x
@@ -1891,7 +1708,6 @@ void IN_MouseMotion(int dx, int dy, int wx, int wy)
 	total_dy += dy;
 }
 
-#if defined(USE_SDL2)
 typedef struct joyaxis_s
 {
 	float x;
@@ -1900,23 +1716,23 @@ typedef struct joyaxis_s
 
 typedef struct joy_buttonstate_s
 {
-	qboolean buttondown[SDL_CONTROLLER_BUTTON_MAX];
+	qboolean buttondown[SDL_GAMEPAD_BUTTON_COUNT];
 } joybuttonstate_t;
 
 typedef struct axisstate_s
 {
-	float axisvalue[SDL_CONTROLLER_AXIS_MAX]; // normalized to +-1
+	float axisvalue[SDL_GAMEPAD_AXIS_COUNT]; // normalized to +-1
 } joyaxisstate_t;
 
 static joybuttonstate_t joy_buttonstate;
 static joyaxisstate_t joy_axisstate;
 static joyaxisstate_t joy_csqc_axisstate;
-static qboolean joy_axis_consumed[SDL_CONTROLLER_AXIS_MAX];
+static qboolean joy_axis_consumed[SDL_GAMEPAD_AXIS_COUNT];
 static dprograms_t *joy_csqc_progs;
 static func_t joy_csqc_inputevent;
 
-static double joy_buttontimer[SDL_CONTROLLER_BUTTON_MAX];
-static int joy_buttonkey[SDL_CONTROLLER_BUTTON_MAX];
+static double joy_buttontimer[SDL_GAMEPAD_BUTTON_COUNT];
+static int joy_buttonkey[SDL_GAMEPAD_BUTTON_COUNT];
 static double joy_emulatedkeytimer[6];
 
 #define JOY_CSQC_AXIS_EPSILON (1.0f / 256.0f)
@@ -1926,7 +1742,7 @@ static double joy_emulatedkeytimer[6];
 #define sqrtf sqrt
 #endif
 
-static int IN_KeyForControllerButton(SDL_GameControllerButton button);
+static int IN_KeyForControllerButton(SDL_GamepadButton button);
 
 /*
 ================
@@ -1950,11 +1766,11 @@ static void IN_ReleaseJoystickKeys(void)
 {
 	int i;
 
-	for (i = 0; i < SDL_CONTROLLER_BUTTON_MAX; i++)
+	for (i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
 	{
 		if (joy_buttonstate.buttondown[i])
 		{
-			int key = joy_buttonkey[i] ? joy_buttonkey[i] : IN_KeyForControllerButton((SDL_GameControllerButton)i);
+			int key = joy_buttonkey[i] ? joy_buttonkey[i] : IN_KeyForControllerButton((SDL_GamepadButton)i);
 			if (key > 0)
 				Key_Event(key, false);
 		}
@@ -2047,8 +1863,8 @@ static joyaxis_t IN_GetLookAxis(joyaxisstate_t *state)
 {
 	joyaxis_t axis;
 
-	axis.x = state->axisvalue[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTX : SDL_CONTROLLER_AXIS_RIGHTX];
-	axis.y = state->axisvalue[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_RIGHTY];
+	axis.x = state->axisvalue[joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_LEFTX : SDL_GAMEPAD_AXIS_RIGHTX];
+	axis.y = state->axisvalue[joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_LEFTY : SDL_GAMEPAD_AXIS_RIGHTY];
 	return axis;
 }
 
@@ -2056,8 +1872,8 @@ static joyaxis_t IN_GetMoveAxis(joyaxisstate_t *state)
 {
 	joyaxis_t axis;
 
-	axis.x = state->axisvalue[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTX : SDL_CONTROLLER_AXIS_LEFTX];
-	axis.y = state->axisvalue[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTY : SDL_CONTROLLER_AXIS_LEFTY];
+	axis.x = state->axisvalue[joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_RIGHTX : SDL_GAMEPAD_AXIS_LEFTX];
+	axis.y = state->axisvalue[joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_RIGHTY : SDL_GAMEPAD_AXIS_LEFTY];
 	return axis;
 }
 
@@ -2068,37 +1884,97 @@ static qboolean IN_JoyActive(void)
 
 /*
 ================
+IN_UseNintendoButtonLabels
+
+SDL2 named Nintendo face buttons by their printed labels unless
+SDL_GAMECONTROLLER_USE_BUTTON_LABELS was false. SDL3 dropped that hint, so an
+explicit opt-out in the environment is still honored here, parsed as SDL2 did.
+================
+*/
+static qboolean IN_UseNintendoButtonLabels(void)
+{
+	const char *hint = SDL_getenv("SDL_GAMECONTROLLER_USE_BUTTON_LABELS");
+
+	if (!hint || !*hint)
+		return true;
+	return *hint != '0' && SDL_strcasecmp(hint, "false") != 0;
+}
+
+/*
+================
+IN_FaceButtonKey
+
+SDL3 reports face buttons by position. K_ABUTTON..K_YBUTTON follow the Xbox
+positions, except on Nintendo pads, where they follow the printed labels as they
+did by default under SDL2. A Nintendo button without a known label uses the
+Switch layout.
+================
+*/
+static int IN_FaceButtonKey(SDL_GamepadButton button)
+{
+	if (joy_active_type == GAMEPAD_NINTENDO && joy_active_controller && IN_UseNintendoButtonLabels())
+	{
+		switch (SDL_GetGamepadButtonLabel(joy_active_controller, button))
+		{
+		case SDL_GAMEPAD_BUTTON_LABEL_A: return K_ABUTTON;
+		case SDL_GAMEPAD_BUTTON_LABEL_B: return K_BBUTTON;
+		case SDL_GAMEPAD_BUTTON_LABEL_X: return K_XBUTTON;
+		case SDL_GAMEPAD_BUTTON_LABEL_Y: return K_YBUTTON;
+		default: break;
+		}
+
+		switch (button)
+		{
+		case SDL_GAMEPAD_BUTTON_EAST: return K_ABUTTON;
+		case SDL_GAMEPAD_BUTTON_SOUTH: return K_BBUTTON;
+		case SDL_GAMEPAD_BUTTON_NORTH: return K_XBUTTON;
+		case SDL_GAMEPAD_BUTTON_WEST: return K_YBUTTON;
+		default: return 0;
+		}
+	}
+
+	switch (button)
+	{
+	case SDL_GAMEPAD_BUTTON_SOUTH: return K_ABUTTON;
+	case SDL_GAMEPAD_BUTTON_EAST: return K_BBUTTON;
+	case SDL_GAMEPAD_BUTTON_WEST: return K_XBUTTON;
+	case SDL_GAMEPAD_BUTTON_NORTH: return K_YBUTTON;
+	default: return 0;
+	}
+}
+
+/*
+================
 IN_KeyForControllerButton
 ================
 */
-static int IN_KeyForControllerButton(SDL_GameControllerButton button)
+static int IN_KeyForControllerButton(SDL_GamepadButton button)
 {
 	switch (button)
 	{
-		case SDL_CONTROLLER_BUTTON_A: return K_ABUTTON;
-		case SDL_CONTROLLER_BUTTON_B: return K_BBUTTON;
-		case SDL_CONTROLLER_BUTTON_X: return K_XBUTTON;
-		case SDL_CONTROLLER_BUTTON_Y: return K_YBUTTON;
+		case SDL_GAMEPAD_BUTTON_SOUTH:
+		case SDL_GAMEPAD_BUTTON_EAST:
+		case SDL_GAMEPAD_BUTTON_WEST:
+		case SDL_GAMEPAD_BUTTON_NORTH:
+			return IN_FaceButtonKey(button);
 		/* View/Back opens search only in eligible native menus. Disabling menu
 		 * search restores its legacy K_TAB mapping everywhere. */
-		case SDL_CONTROLLER_BUTTON_BACK: return M_MenuSearch_UseGamepadBack() ? K_BACK : K_TAB;
-		case SDL_CONTROLLER_BUTTON_START: return K_ESCAPE;
-		case SDL_CONTROLLER_BUTTON_LEFTSTICK: return K_LTHUMB;
-		case SDL_CONTROLLER_BUTTON_RIGHTSTICK: return K_RTHUMB;
-		case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: return K_LSHOULDER;
-		case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return K_RSHOULDER;
-		case SDL_CONTROLLER_BUTTON_DPAD_UP: return K_DPAD_UP;
-		case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return K_DPAD_DOWN;
-		case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return K_DPAD_LEFT;
-		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return K_DPAD_RIGHT;
-#if SDL_VERSION_ATLEAST(2, 0, 14)
-		case SDL_CONTROLLER_BUTTON_MISC1: return K_MISC1;
-		case SDL_CONTROLLER_BUTTON_PADDLE1: return K_PADDLE1;
-		case SDL_CONTROLLER_BUTTON_PADDLE2: return K_PADDLE2;
-		case SDL_CONTROLLER_BUTTON_PADDLE3: return K_PADDLE3;
-		case SDL_CONTROLLER_BUTTON_PADDLE4: return K_PADDLE4;
-		case SDL_CONTROLLER_BUTTON_TOUCHPAD: return K_TOUCHPAD;
-#endif
+		case SDL_GAMEPAD_BUTTON_BACK: return M_MenuSearch_UseGamepadBack() ? K_BACK : K_TAB;
+		case SDL_GAMEPAD_BUTTON_START: return K_ESCAPE;
+		case SDL_GAMEPAD_BUTTON_LEFT_STICK: return K_LTHUMB;
+		case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return K_RTHUMB;
+		case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return K_LSHOULDER;
+		case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return K_RSHOULDER;
+		case SDL_GAMEPAD_BUTTON_DPAD_UP: return K_DPAD_UP;
+		case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return K_DPAD_DOWN;
+		case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return K_DPAD_LEFT;
+		case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return K_DPAD_RIGHT;
+		case SDL_GAMEPAD_BUTTON_MISC1: return K_MISC1;
+		case SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1: return K_PADDLE1;
+		case SDL_GAMEPAD_BUTTON_LEFT_PADDLE1: return K_PADDLE2;
+		case SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2: return K_PADDLE3;
+		case SDL_GAMEPAD_BUTTON_LEFT_PADDLE2: return K_PADDLE4;
+		case SDL_GAMEPAD_BUTTON_TOUCHPAD: return K_TOUCHPAD;
 		default: return 0;
 	}
 }
@@ -2217,7 +2093,7 @@ static void IN_UpdateCSQCAxisEvents(const joyaxisstate_t *newaxisstate)
 		return;
 	}
 
-	for (i = 0; i < SDL_CONTROLLER_AXIS_MAX; i++)
+	for (i = 0; i < SDL_GAMEPAD_AXIS_COUNT; i++)
 	{
 		// CSQC may change the input destination or reload itself from inside
 		// the callback.  Do not dispatch the remaining axes under that new
@@ -2261,7 +2137,7 @@ static void IN_LoadControllerMappingsFromDir(const char *dir)
 	q_snprintf(controllerdb, sizeof(controllerdb), "%s/gamecontrollerdb.txt", dir);
 	if (!(Sys_FileType(controllerdb) & FS_ENT_FILE))
 		return;
-	nummappings = SDL_GameControllerAddMappingsFromFile(controllerdb);
+	nummappings = SDL_AddGamepadMappingsFromFile(controllerdb);
 	if (nummappings < 0)
 		Con_Warning("couldn't load controller mappings from %s: %s\n",
 			controllerdb, SDL_GetError());
@@ -2310,7 +2186,7 @@ static void IN_LoadControllerMappings(void)
 
 static void IN_ClearActiveControllerState(void)
 {
-	joy_active_instanceid = -1;
+	joy_active_instanceid = 0;
 	joy_active_device = -1;
 	joy_active_type = GAMEPAD_NONE;
 	joy_active_name[0] = '\0';
@@ -2333,27 +2209,26 @@ static void IN_ClearActiveControllerState(void)
 	IN_ResetJoystickState();
 }
 
+static qboolean IN_GamepadHasCapability(SDL_Gamepad *gamepad, const char *property)
+{
+	return SDL_GetBooleanProperty(SDL_GetGamepadProperties(gamepad), property, false);
+}
+
 static void IN_CloseActiveController(qboolean announce)
 {
 	if (!joy_active_controller)
 		return;
 
-#if SDL_VERSION_ATLEAST(2, 0, 9)
 	if (joy_has_rumble)
-		SDL_GameControllerRumble(joy_active_controller, 0, 0, 100);
-#endif
-#if SDL_VERSION_ATLEAST(2, 0, 18)
+		SDL_RumbleGamepad(joy_active_controller, 0, 0, 100);
 	if (joy_has_trigger_rumble)
-		SDL_GameControllerRumbleTriggers(joy_active_controller, 0, 0, 100);
-#endif
-#if SDL_VERSION_ATLEAST(2, 0, 14)
-	if (SDL_GameControllerHasLED(joy_active_controller))
-		SDL_GameControllerSetLED(joy_active_controller, 0, 0, 0);
-#endif
+		SDL_RumbleGamepadTriggers(joy_active_controller, 0, 0, 100);
+	if (IN_GamepadHasCapability(joy_active_controller, SDL_PROP_GAMEPAD_CAP_RGB_LED_BOOLEAN))
+		SDL_SetGamepadLED(joy_active_controller, 0, 0, 0);
 
 	if (announce)
 		Con_Printf("Gamepad removed: %s\n", joy_active_name);
-	SDL_GameControllerClose(joy_active_controller);
+	SDL_CloseGamepad(joy_active_controller);
 	joy_active_controller = NULL;
 	IN_ClearActiveControllerState();
 }
@@ -2365,52 +2240,42 @@ static void IN_RefreshActiveControllerInfo(void)
 	if (!joy_active_controller)
 		return;
 
-	controllername = SDL_GameControllerName(joy_active_controller);
+	controllername = SDL_GetGamepadName(joy_active_controller);
 	q_strlcpy(joy_active_name, controllername ? controllername : "[Unknown gamepad]",
 		sizeof(joy_active_name));
 
-#if SDL_VERSION_ATLEAST(2, 0, 12)
-	switch (SDL_GameControllerGetType(joy_active_controller))
+	switch (SDL_GetGamepadType(joy_active_controller))
 	{
 	default:
-	case SDL_CONTROLLER_TYPE_XBOX360:
-	case SDL_CONTROLLER_TYPE_XBOXONE:
+	case SDL_GAMEPAD_TYPE_XBOX360:
+	case SDL_GAMEPAD_TYPE_XBOXONE:
 		joy_active_type = GAMEPAD_XBOX;
 		break;
 
-	case SDL_CONTROLLER_TYPE_PS3:
-	case SDL_CONTROLLER_TYPE_PS4:
-#if SDL_VERSION_ATLEAST(2, 0, 14)
-	case SDL_CONTROLLER_TYPE_PS5:
-#endif
+	case SDL_GAMEPAD_TYPE_PS3:
+	case SDL_GAMEPAD_TYPE_PS4:
+	case SDL_GAMEPAD_TYPE_PS5:
 		joy_active_type = GAMEPAD_PLAYSTATION;
 		break;
 
-	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO:
-#if SDL_VERSION_ATLEAST(2, 24, 0)
-	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
-	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
-	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
-#endif
+	case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
+	case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+	case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+	case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
 		joy_active_type = GAMEPAD_NINTENDO;
 		break;
 	}
-#else
-	joy_active_type = GAMEPAD_XBOX;
-#endif
 
 	joy_has_touchpad = false;
-#if SDL_VERSION_ATLEAST(2, 0, 14)
-	if (SDL_GameControllerHasLED(joy_active_controller))
-		SDL_GameControllerSetLED(joy_active_controller, 80, 20, 0);
-	joy_has_touchpad = SDL_GameControllerGetNumTouchpads(joy_active_controller) > 0;
-	if (SDL_GameControllerHasSensor(joy_active_controller, SDL_SENSOR_GYRO) &&
-		!SDL_GameControllerSetSensorEnabled(joy_active_controller, SDL_SENSOR_GYRO, SDL_TRUE))
+	if (IN_GamepadHasCapability(joy_active_controller, SDL_PROP_GAMEPAD_CAP_RGB_LED_BOOLEAN))
+		SDL_SetGamepadLED(joy_active_controller, 80, 20, 0);
+	joy_has_touchpad = SDL_GetNumGamepadTouchpads(joy_active_controller) > 0;
+	if (SDL_GamepadHasSensor(joy_active_controller, SDL_SENSOR_GYRO) &&
+		SDL_SetGamepadSensorEnabled(joy_active_controller, SDL_SENSOR_GYRO, true))
 	{
 		gyro_present = true;
 	}
 	else
-#endif
 	{
 		gyro_present = false;
 		gyro_yaw = 0.f;
@@ -2422,17 +2287,77 @@ static void IN_RefreshActiveControllerInfo(void)
 	}
 
 	joy_has_rumble = false;
-#if SDL_VERSION_ATLEAST(2, 0, 18)
-	joy_has_rumble = SDL_GameControllerHasRumble(joy_active_controller);
-#elif SDL_VERSION_ATLEAST(2, 0, 9)
-	joy_has_rumble = SDL_GameControllerRumble(joy_active_controller, 0, 0, 0) == 0;
-#endif
+	joy_has_rumble = IN_GamepadHasCapability(joy_active_controller, SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN);
 	joy_has_trigger_rumble = false;
-#if SDL_VERSION_ATLEAST(2, 0, 18)
-	joy_has_trigger_rumble = SDL_GameControllerHasRumbleTriggers(joy_active_controller);
-#endif
-	IN_UpdateGamepadPower(SDL_JoystickCurrentPowerLevel(
-		SDL_GameControllerGetJoystick(joy_active_controller)), joy_enable.value != 0.f);
+	joy_has_trigger_rumble = IN_GamepadHasCapability(joy_active_controller, SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN);
+	{
+		int percent = -1;
+		const SDL_PowerState state = SDL_GetGamepadPowerInfo(joy_active_controller, &percent);
+
+		IN_UpdateGamepadPower(state, percent, joy_enable.value != 0.f);
+	}
+}
+
+/*
+SDL3 identifies joysticks by instance ID. joy_device keeps SDL2's meaning, an
+index into the currently connected joysticks, so saved configs still select
+the same device.
+*/
+static SDL_JoystickID IN_JoystickIDAt(int index)
+{
+	SDL_JoystickID *ids, id = 0;
+	int count = 0;
+
+	if (index < 0)
+		return 0;
+	ids = SDL_GetJoysticks(&count);
+	if (ids && index < count)
+		id = ids[index];
+	SDL_free(ids);
+	return id;
+}
+
+static int IN_JoystickIndexOf(SDL_JoystickID target)
+{
+	SDL_JoystickID *ids;
+	int i, count = 0, index = -1;
+
+	ids = SDL_GetJoysticks(&count);
+	for (i = 0; ids && i < count; i++)
+	{
+		if (ids[i] == target)
+		{
+			index = i;
+			break;
+		}
+	}
+	SDL_free(ids);
+	return index;
+}
+
+int IN_GetJoystickCount(void)
+{
+	int count = 0;
+	SDL_JoystickID *ids = SDL_GetJoysticks(&count);
+
+	if (!ids)
+		return -1;
+	SDL_free(ids);
+	return count;
+}
+
+qboolean IN_IsGamepadAt(int index)
+{
+	const SDL_JoystickID id = IN_JoystickIDAt(index);
+
+	return id && SDL_IsGamepad(id);
+}
+
+const char *IN_GetGamepadNameAt(int index)
+{
+	const SDL_JoystickID id = IN_JoystickIDAt(index);
+
+	return id ? SDL_GetGamepadNameForID(id) : NULL;
 }
 
 static void IN_ReloadControllerMappings_f(void)
@@ -2441,7 +2366,7 @@ static void IN_ReloadControllerMappings_f(void)
 	SDL_JoystickID desired_instanceid;
 	qboolean had_active_controller;
 
-	if (!(SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER))
+	if (!(SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD))
 	{
 		Con_Printf("Controller subsystem is not initialized\n");
 		return;
@@ -2459,16 +2384,10 @@ static void IN_ReloadControllerMappings_f(void)
 
 	if (had_active_controller)
 	{
-		int i, count = SDL_NumJoysticks();
+		const int index = IN_JoystickIndexOf(desired_instanceid);
 
-		for (i = 0; i < count; i++)
-		{
-			if (SDL_JoystickGetDeviceInstanceID(i) == desired_instanceid)
-			{
-				desired_device = i;
-				break;
-			}
-		}
+		if (index >= 0)
+			desired_device = index;
 		Cvar_SetValueQuick(&joy_device, desired_device);
 	}
 
@@ -2477,12 +2396,12 @@ static void IN_ReloadControllerMappings_f(void)
 
 static qboolean IN_UseController(int device_index)
 {
-	SDL_GameController *gamecontroller;
+	SDL_Gamepad *gamecontroller;
+	SDL_JoystickID device_id;
 
 	if (device_index == joy_active_device && joy_active_controller &&
-		SDL_GameControllerGetAttached(joy_active_controller) &&
-		device_index >= 0 && device_index < SDL_NumJoysticks() &&
-		SDL_JoystickGetDeviceInstanceID(device_index) == joy_active_instanceid)
+		SDL_GamepadConnected(joy_active_controller) &&
+		IN_JoystickIDAt(device_index) == joy_active_instanceid)
 	{
 		if ((int)joy_device.value != device_index)
 			Cvar_SetValueQuick(&joy_device, device_index);
@@ -2497,18 +2416,19 @@ static qboolean IN_UseController(int device_index)
 	if (device_index == -1)
 		return true;
 
-	if (device_index < 0 || device_index >= SDL_NumJoysticks())
+	device_id = IN_JoystickIDAt(device_index);
+	if (!device_id)
 		return false;
 
-	if (!SDL_IsGameController(device_index))
+	if (!SDL_IsGamepad(device_id))
 	{
-		const char *joyname = SDL_JoystickNameForIndex(device_index);
+		const char *joyname = SDL_GetJoystickNameForID(device_id);
 		Con_Warning("joystick missing controller mappings: %s\n",
 			joyname != NULL ? joyname : "NULL");
 		return false;
 	}
 
-	gamecontroller = SDL_GameControllerOpen(device_index);
+	gamecontroller = SDL_OpenGamepad(device_id);
 	if (!gamecontroller)
 	{
 		Con_Warning("couldn't open gamepad device %d\n", device_index);
@@ -2516,41 +2436,35 @@ static qboolean IN_UseController(int device_index)
 	}
 
 	joy_active_controller = gamecontroller;
-	joy_active_instanceid = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gamecontroller));
+	joy_active_instanceid = SDL_GetJoystickID(SDL_GetGamepadJoystick(gamecontroller));
 	joy_active_device = device_index;
 	Cvar_SetValueQuick(&joy_device, device_index);
 	IN_RefreshActiveControllerInfo();
 	Con_Printf("Using gamepad: %s\n", joy_active_name);
 
-#if SDL_VERSION_ATLEAST(2, 0, 14)
 	if (gyro_present)
 	{
-#if SDL_VERSION_ATLEAST(2, 0, 16)
 		Con_Printf("Gyro sensor enabled at %g Hz\n",
-			SDL_GameControllerGetSensorDataRate(joy_active_controller, SDL_SENSOR_GYRO));
-#else
-		Con_Printf("Gyro sensor enabled.\n");
-#endif
+			SDL_GetGamepadSensorDataRate(joy_active_controller, SDL_SENSOR_GYRO));
 	}
 	else
 	{
 		Con_Printf("Gyro sensor not found\n");
 	}
-#endif
 
 	return true;
 }
 
 static void IN_SetupJoystick(void)
 {
-	int count = SDL_NumJoysticks();
+	int count = IN_GetJoystickCount();
 	int device_index;
 	int i;
 
 	if (count < 0)
 	{
 		Con_Warning("couldn't enumerate joystick devices: %s\n", SDL_GetError());
-		if (joy_active_controller && !SDL_GameControllerGetAttached(joy_active_controller))
+		if (joy_active_controller && !SDL_GamepadConnected(joy_active_controller))
 			IN_UseController(-1);
 		return;
 	}
@@ -2566,40 +2480,35 @@ static void IN_SetupJoystick(void)
 	// Device indices include raw joysticks that do not have a controller
 	// mapping. Prefer the configured index, then fall back to the first usable
 	// game controller so an unmapped joystick cannot block plug-and-play.
-	if (SDL_IsGameController(device_index) && IN_UseController(device_index))
+	if (IN_IsGamepadAt(device_index) && IN_UseController(device_index))
 		return;
 	for (i = 0; i < count; i++)
 	{
-		if (i != device_index && SDL_IsGameController(i) && IN_UseController(i))
+		if (i != device_index && IN_IsGamepadAt(i) && IN_UseController(i))
 			return;
 	}
 
 	// Preserve the existing diagnostic when only an unmapped joystick exists.
-	if (!SDL_IsGameController(device_index))
+	if (!IN_IsGamepadAt(device_index))
 		IN_UseController(device_index);
 }
 
 static qboolean IN_RemapJoystick(void)
 {
-	int i, count, old_device;
+	int index, old_device;
 
-	if (joy_active_instanceid == -1)
+	if (!joy_active_instanceid)
 		return false;
 
 	old_device = joy_active_device;
+	index = IN_JoystickIndexOf(joy_active_instanceid);
+	if (index < 0)
+		return false;
 
-	for (i = 0, count = SDL_NumJoysticks(); i < count; i++)
-	{
-		if (SDL_JoystickGetDeviceInstanceID(i) == joy_active_instanceid)
-		{
-			joy_active_device = i;
-			if ((int)joy_device.value == old_device)
-				Cvar_SetValueQuick(&joy_device, i);
-			return true;
-		}
-	}
-
-	return false;
+	joy_active_device = index;
+	if ((int)joy_device.value == old_device)
+		Cvar_SetValueQuick(&joy_device, index);
+	return true;
 }
 
 static void Joy_Device_f(cvar_t *cvar)
@@ -2610,15 +2519,18 @@ static void Joy_Device_f(cvar_t *cvar)
 
 static void Joy_Device_Completion_f(cvar_t *cvar, const char *partial)
 {
-	int i, count;
+	SDL_JoystickID *ids;
+	int i, count = 0;
 
 	(void)cvar;
 
-	for (i = 0, count = SDL_NumJoysticks(); i < count; i++)
+	ids = SDL_GetJoysticks(&count);
+	for (i = 0; ids && i < count; i++)
 	{
-		if (SDL_IsGameController(i))
-			Con_AddToTabList(va("%d", i), partial, SDL_GameControllerNameForIndex(i), NULL);
+		if (SDL_IsGamepad(ids[i]))
+			Con_AddToTabList(va("%d", i), partial, SDL_GetGamepadNameForID(ids[i]), NULL);
 	}
+	SDL_free(ids);
 }
 
 static void Joy_Flick_f(cvar_t *cvar)
@@ -2636,7 +2548,6 @@ void IN_GyroActionUp (void)
 {
 	gyro_button_pressed = false;
 }
-#endif
 
 /*
 ================
@@ -2647,7 +2558,6 @@ Emit key events for game controller buttons, including emulated buttons for anal
 */
 void IN_Commands (void)
 {
-#if defined(USE_SDL2)
 	joyaxisstate_t newaxisstate;
 	joyaxisstate_t oldaxisstate;
 	joyaxis_t old_move, new_move, raw, deadzone, eased;
@@ -2668,20 +2578,21 @@ void IN_Commands (void)
 	}
 
 	// emit key events for controller buttons
-	for (i = 0; i < SDL_CONTROLLER_BUTTON_MAX; i++)
+	for (i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
 	{
-		qboolean newstate = SDL_GameControllerGetButton(joy_active_controller, (SDL_GameControllerButton)i);
+		qboolean newstate = SDL_GetGamepadButton(joy_active_controller, (SDL_GamepadButton)i);
 		qboolean oldstate = joy_buttonstate.buttondown[i];
 		int key;
 
 		joy_buttonstate.buttondown[i] = newstate;
 		if (newstate && !oldstate)
-			joy_buttonkey[i] = IN_KeyForControllerButton((SDL_GameControllerButton)i);
-		key = joy_buttonkey[i] ? joy_buttonkey[i] : IN_KeyForControllerButton((SDL_GameControllerButton)i);
+			joy_buttonkey[i] = IN_KeyForControllerButton((SDL_GamepadButton)i);
+		key = joy_buttonkey[i] ? joy_buttonkey[i] : IN_KeyForControllerButton((SDL_GamepadButton)i);
 
 		// weapon wheel: B cancels an open wheel without firing.  Only intercept the
 		// down-edge while already open, so a B-bound +weaponwheel still works.
-		if (i == SDL_CONTROLLER_BUTTON_B)
+		// Compare the resolved key: Nintendo's B is not in the EAST position.
+		if (key == K_BBUTTON)
 		{
 			if (Wheel_IsOpen () && newstate && !oldstate)
 			{
@@ -2708,9 +2619,9 @@ void IN_Commands (void)
 	// pass are not synthesized again by this pass.
 	oldaxisstate = joy_axisstate;
 	
-	for (i = 0; i < SDL_CONTROLLER_AXIS_MAX; i++)
+	for (i = 0; i < SDL_GAMEPAD_AXIS_COUNT; i++)
 	{
-		newaxisstate.axisvalue[i] = SDL_GameControllerGetAxis(joy_active_controller, (SDL_GameControllerAxis)i) / 32768.0f;
+		newaxisstate.axisvalue[i] = SDL_GetGamepadAxis(joy_active_controller, (SDL_GamepadAxis)i) / 32768.0f;
 	}
 
 	joy_axisstate = newaxisstate;
@@ -2768,16 +2679,15 @@ void IN_Commands (void)
 	// Emit emulated keys for the analog triggers unless CSQC consumed the
 	// corresponding axis event.  Release an already-held key if consumption
 	// changes while the trigger is down.
-	IN_JoyTriggerKeyEvent(joy_axis_consumed[SDL_CONTROLLER_AXIS_TRIGGERLEFT],
-		oldaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERLEFT] > triggerthreshold,
-		newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERLEFT] > triggerthreshold,
+	IN_JoyTriggerKeyEvent(joy_axis_consumed[SDL_GAMEPAD_AXIS_LEFT_TRIGGER],
+		oldaxisstate.axisvalue[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] > triggerthreshold,
+		newaxisstate.axisvalue[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] > triggerthreshold,
 		K_LTRIGGER, &joy_emulatedkeytimer[4]);
-	IN_JoyTriggerKeyEvent(joy_axis_consumed[SDL_CONTROLLER_AXIS_TRIGGERRIGHT],
-		oldaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] > triggerthreshold,
-		newaxisstate.axisvalue[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] > triggerthreshold,
+	IN_JoyTriggerKeyEvent(joy_axis_consumed[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER],
+		oldaxisstate.axisvalue[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] > triggerthreshold,
+		newaxisstate.axisvalue[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] > triggerthreshold,
 		K_RTRIGGER, &joy_emulatedkeytimer[5]);
 
-#if SDL_VERSION_ATLEAST(2, 0, 9)
 	if ((joy_has_rumble || joy_has_trigger_rumble) && !IN_IsCalibratingGyro() &&
 		Sys_DoubleTime() >= joy_rumble_test_end && IN_JoyActive())
 	{
@@ -2788,20 +2698,16 @@ void IN_Commands (void)
 		if (joy_has_rumble && joy_rumble.value > 0.f)
 		{
 			float strength = CLAMP(0.f, joy_rumble.value, 1.f) * 0xffff;
-			SDL_GameControllerRumble(joy_active_controller, lofreq * strength, hifreq * strength, 100);
+			SDL_RumbleGamepad(joy_active_controller, lofreq * strength, hifreq * strength, 100);
 		}
-#if SDL_VERSION_ATLEAST(2, 0, 18)
 		if (joy_has_trigger_rumble && joy_rumble_triggers.value > 0.f)
 		{
 			float strength = CLAMP(0.f, joy_rumble_triggers.value, 1.f) * 0xffff;
 			float level = q_max(lofreq, hifreq);
-			SDL_GameControllerRumbleTriggers(joy_active_controller,
+			SDL_RumbleGamepadTriggers(joy_active_controller,
 				level * strength, level * strength, 100);
 		}
-#endif
 	}
-#endif
-#endif
 }
 
 /*
@@ -2823,7 +2729,6 @@ IN_JoyMove
 */
 void IN_JoyMove (usercmd_t *cmd)
 {
-#if defined(USE_SDL2)
 	float speed;
 	const float csqcsens = cl.csqc_sensitivity;
 	joyaxis_t moveRaw, moveDeadzone, moveEased;
@@ -2851,16 +2756,16 @@ void IN_JoyMove (usercmd_t *cmd)
 	// the raw vector first would change its magnitude and unintentionally reduce
 	// the response of the unconsumed sibling axis.  The raw look vector is also
 	// masked for the weapon wheel and flick-stick paths below.
-	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTX : SDL_CONTROLLER_AXIS_LEFTX])
+	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_RIGHTX : SDL_GAMEPAD_AXIS_LEFTX])
 		moveEased.x = 0.0f;
-	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_RIGHTY : SDL_CONTROLLER_AXIS_LEFTY])
+	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_RIGHTY : SDL_GAMEPAD_AXIS_LEFTY])
 		moveEased.y = 0.0f;
-	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTX : SDL_CONTROLLER_AXIS_RIGHTX])
+	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_LEFTX : SDL_GAMEPAD_AXIS_RIGHTX])
 	{
 		lookEased.x = 0.0f;
 		lookRaw.x = 0.0f;
 	}
-	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_RIGHTY])
+	if (joy_axis_consumed[joy_swapmovelook.value ? SDL_GAMEPAD_AXIS_LEFTY : SDL_GAMEPAD_AXIS_RIGHTY])
 	{
 		lookEased.y = 0.0f;
 		lookRaw.y = 0.0f;
@@ -2980,12 +2885,10 @@ void IN_JoyMove (usercmd_t *cmd)
 		if (cl.viewangles[PITCH] < cl_minpitch.value)
 			cl.viewangles[PITCH] = cl_minpitch.value;
 	}
-#endif
 }
 
 void IN_GyroMove(usercmd_t *cmd)
 {
-#if defined(USE_SDL2)
 	float scale, duration, lerp_frac;
 
 	(void)cmd;
@@ -3061,9 +2964,6 @@ void IN_GyroMove(usercmd_t *cmd)
 		if (cl.viewangles[PITCH] < cl_minpitch.value)
 			cl.viewangles[PITCH] = cl_minpitch.value;
 	}
-#else
-	(void)cmd;
-#endif
 }
 
 void IN_MouseMove(usercmd_t *cmd)
@@ -3093,8 +2993,8 @@ void IN_MouseMove(usercmd_t *cmd)
 	sens = tan(DEG2RAD(r_refdef.basefov) * 0.5f) / tan(DEG2RAD(scr_fov.value) * 0.5f); // woods #zoom (ironwail)
 	sens *= sensitivity.value; // woods #zoom (ironwail)
 
-	raw_dx = (float)total_dx;
-	raw_dy = (float)total_dy;
+	raw_dx = total_dx;
+	raw_dy = total_dy;
 	dmx = raw_dx * sens; // woods #zoom (ironwail)
 	dmy = raw_dy * sens; // woods #zoom (ironwail)
 
@@ -3103,9 +3003,9 @@ void IN_MouseMove(usercmd_t *cmd)
 
 	if (pong_active) // woods #pong
 	{
-		int wx, wy;
+		float wx, wy;
 		SDL_GetMouseState(&wx, &wy); // Need to get current absolute position
-		Pong_MouseMove(wx, wy);
+		Pong_MouseMove((int)wx, (int)wy);
 	}
 
 	// do pause/pong check after resetting total_d* so mouse movements don't accumulate
@@ -3179,107 +3079,23 @@ void IN_UpdateInputMode (void)
 	if (textmode != want_textmode)
 	{
 		textmode = want_textmode;
-#if !defined(USE_SDL2)
-		SDL_EnableUNICODE(textmode);
-		if (in_debugkeys.value)
-			Con_Printf("SDL_EnableUNICODE %d time: %g\n", textmode, Sys_DoubleTime());
-#else
 		if (textmode)
 		{
-			SDL_StartTextInput();
+			SDL_StartTextInput((SDL_Window *)VID_GetWindow());
 			if (in_debugkeys.value)
 				Con_Printf("SDL_StartTextInput time: %g\n", Sys_DoubleTime());
 		}
 		else
 		{
-			SDL_StopTextInput();
+			SDL_StopTextInput((SDL_Window *)VID_GetWindow());
 			if (in_debugkeys.value)
 				Con_Printf("SDL_StopTextInput time: %g\n", Sys_DoubleTime());
 		}
-#endif
 	}
 }
 
-#if !defined(USE_SDL2)
-static inline int IN_SDL_KeysymToQuakeKey(SDLKey sym)
-{
-	if (sym > SDLK_SPACE && sym < SDLK_DELETE)
-		return sym;
 
-	switch (sym)
-	{
-	case SDLK_TAB: return K_TAB;
-	case SDLK_RETURN: return K_ENTER;
-	case SDLK_ESCAPE: return K_ESCAPE;
-	case SDLK_SPACE: return K_SPACE;
-
-	case SDLK_BACKSPACE: return K_BACKSPACE;
-	case SDLK_CAPSLOCK: return K_CAPSLOCK; // woods #capslock
-	case SDLK_PRINTSCREEN: return K_PRINTSCREEN; // woods #printscreen
-	case SDLK_UP: return K_UPARROW;
-	case SDLK_DOWN: return K_DOWNARROW;
-	case SDLK_LEFT: return K_LEFTARROW;
-	case SDLK_RIGHT: return K_RIGHTARROW;
-
-	case SDLK_LALT: return K_ALT;
-	case SDLK_RALT: return K_ALT;
-	case SDLK_LCTRL: return K_CTRL;
-	case SDLK_RCTRL: return K_CTRL;
-	case SDLK_LSHIFT: return K_SHIFT;
-	case SDLK_RSHIFT: return K_SHIFT;
-
-	case SDLK_F1: return K_F1;
-	case SDLK_F2: return K_F2;
-	case SDLK_F3: return K_F3;
-	case SDLK_F4: return K_F4;
-	case SDLK_F5: return K_F5;
-	case SDLK_F6: return K_F6;
-	case SDLK_F7: return K_F7;
-	case SDLK_F8: return K_F8;
-	case SDLK_F9: return K_F9;
-	case SDLK_F10: return K_F10;
-	case SDLK_F11: return K_F11;
-	case SDLK_F12: return K_F12;
-	case SDLK_INSERT: return K_INS;
-	case SDLK_DELETE: return K_DEL;
-	case SDLK_PAGEDOWN: return K_PGDN;
-	case SDLK_PAGEUP: return K_PGUP;
-	case SDLK_HOME: return K_HOME;
-	case SDLK_END: return K_END;
-
-	case SDLK_NUMLOCK: return K_KP_NUMLOCK;
-	case SDLK_KP_DIVIDE: return K_KP_SLASH;
-	case SDLK_KP_MULTIPLY: return K_KP_STAR;
-	case SDLK_KP_MINUS:return K_KP_MINUS;
-	case SDLK_KP7: return K_KP_HOME;
-	case SDLK_KP8: return K_KP_UPARROW;
-	case SDLK_KP9: return K_KP_PGUP;
-	case SDLK_KP_PLUS: return K_KP_PLUS;
-	case SDLK_KP4: return K_KP_LEFTARROW;
-	case SDLK_KP5: return K_KP_5;
-	case SDLK_KP6: return K_KP_RIGHTARROW;
-	case SDLK_KP1: return K_KP_END;
-	case SDLK_KP2: return K_KP_DOWNARROW;
-	case SDLK_KP3: return K_KP_PGDN;
-	case SDLK_KP_ENTER: return K_KP_ENTER;
-	case SDLK_KP0: return K_KP_INS;
-	case SDLK_KP_PERIOD: return K_KP_DEL;
-
-	case SDLK_LMETA: return K_COMMAND;
-	case SDLK_RMETA: return K_COMMAND;
-
-	case SDLK_BREAK: return K_PAUSE;
-	case SDLK_PAUSE: return K_PAUSE;
-
-	case SDLK_WORLD_18: return '~'; // the alternate tilde key
-
-	default: return 0;
-	}
-}
-#endif
-
-#if defined(USE_SDL2)
-static inline int IN_SDL2_ScancodeToQuakeKey(SDL_Scancode scancode)
+static inline int IN_ScancodeToQuakeKey(SDL_Scancode scancode)
 {
 	switch (scancode)
 	{
@@ -3401,31 +3217,20 @@ static inline int IN_SDL2_ScancodeToQuakeKey(SDL_Scancode scancode)
 	default: return 0;
 	}
 }
-#endif
 
-#if defined(USE_SDL2)
 static void IN_DebugTextEvent(SDL_Event *event)
 {
-	Con_Printf ("SDL_TEXTINPUT '%s' time: %g\n", event->text.text, Sys_DoubleTime());
+	Con_Printf ("SDL_EVENT_TEXT_INPUT '%s' time: %g\n", event->text.text, Sys_DoubleTime());
 }
-#endif
 
 static void IN_DebugKeyEvent(SDL_Event *event)
 {
-	const char *eventtype = (event->key.state == SDL_PRESSED) ? "SDL_KEYDOWN" : "SDL_KEYUP";
-#if defined(USE_SDL2)
+	const char *eventtype = event->key.down ? "SDL_EVENT_KEY_DOWN" : "SDL_EVENT_KEY_UP";
 	Con_Printf ("%s scancode: '%s' keycode: '%s' time: %g\n",
 		eventtype,
-		SDL_GetScancodeName(event->key.keysym.scancode),
-		SDL_GetKeyName(event->key.keysym.sym),
+		SDL_GetScancodeName(event->key.scancode),
+		SDL_GetKeyName(event->key.key),
 		Sys_DoubleTime());
-#else
-	Con_Printf ("%s sym: '%s' unicode: %04x time: %g\n",
-		eventtype,
-		SDL_GetKeyName(event->key.keysym.sym),
-		(int)event->key.keysym.unicode,
-		Sys_DoubleTime());
-#endif
 }
 
 // woods #eyemouse
@@ -3433,16 +3238,16 @@ static void IN_DebugKeyEvent(SDL_Event *event)
 #define LONG_PRESS_TIME 500 // 500ms = 0.5 seconds
 #define COOL_DOWN_TIME 300 // 300ms = 0.3 seconds
 static qboolean is_long_pressing = false;
-static Uint32 press_start_time = 0;
+static Uint64 press_start_time = 0;
 static qboolean long_press_triggered = false; // Add this to prevent multiple triggers
 
 static void IN_HandleObserverMouseEvents (SDL_Event* event) // woods #eyemouse
 {
 	if (event->button.button == 1)  // Left click
 	{
-		if (event->button.state == SDL_PRESSED)
+		if (event->button.down)
 		{
-			Uint32 current_time = SDL_GetTicks();
+			Uint64 current_time = SDL_GetTicks();
 
 			// Handle observer frags click
 			IN_ObsFragsClick(event->button.x, event->button.y);
@@ -3450,7 +3255,7 @@ static void IN_HandleObserverMouseEvents (SDL_Event* event) // woods #eyemouse
 			// Update the cursor idle time on mouse click
 			obs_cursor_last_move = current_time;
 			if (obs_cursor_hidden) {
-				SDL_ShowCursor(SDL_ENABLE);
+				SDL_ShowCursor();
 				obs_cursor_hidden = false;
 				IN_UpdateGrabs(); // Refresh grabs to ensure cursor is visible
 			}
@@ -3459,7 +3264,7 @@ static void IN_HandleObserverMouseEvents (SDL_Event* event) // woods #eyemouse
 			is_long_pressing = true;
 			long_press_triggered = false;
 		}
-		else if (event->button.state == SDL_RELEASED)
+		else if (!event->button.down)
 		{
 			if (is_long_pressing && long_press_triggered)
 			{
@@ -3471,15 +3276,15 @@ static void IN_HandleObserverMouseEvents (SDL_Event* event) // woods #eyemouse
 	}
 	else if (event->button.button == 3)  // Right click
 	{
-		static Uint32 last_flyme_time = 0;
-		Uint32 current_time = SDL_GetTicks();
+		static Uint64 last_flyme_time = 0;
+		Uint64 current_time = SDL_GetTicks();
 
-		if (event->button.state == SDL_PRESSED)
+		if (event->button.down)
 		{
 			// Update the cursor idle time on mouse click
 			obs_cursor_last_move = current_time;
 			if (obs_cursor_hidden) {
-				SDL_ShowCursor(SDL_ENABLE);
+				SDL_ShowCursor();
 				obs_cursor_hidden = false;
 				IN_UpdateGrabs(); // Refresh grabs to ensure cursor is visible
 			}
@@ -3500,7 +3305,6 @@ static void IN_HandleObserverMouseEvents (SDL_Event* event) // woods #eyemouse
 	}
 }
 
-#if defined(USE_SDL2)
 static void IN_NormalizeDroppedPath(char *path)
 {
 	char	*c;
@@ -5695,12 +5499,6 @@ static qboolean IN_FinishDropBatch(void)
 	IN_ClearDropBatch();
 	return handled;
 }
-#else
-qboolean IN_PasteClipboardFile (void)
-{
-	return false;
-}
-#endif
 
 void IN_SendKeyEvents (void)
 {
@@ -5713,7 +5511,7 @@ void IN_SendKeyEvents (void)
 
 	if (is_long_pressing && !long_press_triggered && cl.modtype == 1 && cl.eyecam) // woods #eyemouse
 	{
-		Uint32 current_time = SDL_GetTicks();
+		Uint64 current_time = SDL_GetTicks();
 		if (current_time - press_start_time >= LONG_PRESS_TIME)
 		{
 			long_press_triggered = true;  // Prevent multiple triggers
@@ -5736,10 +5534,16 @@ void IN_SendKeyEvents (void)
 	{
 		switch (event.type)
 		{
-#if defined(USE_SDL2)
-		case SDL_WINDOWEVENT:
+		case SDL_EVENT_WINDOW_FOCUS_GAINED:
+		case SDL_EVENT_WINDOW_FOCUS_LOST:
+		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+		case SDL_EVENT_WINDOW_RESTORED:
+		case SDL_EVENT_WINDOW_SHOWN:
+		case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+		case SDL_EVENT_WINDOW_EXPOSED:
+		case SDL_EVENT_WINDOW_MOUSE_ENTER:
 
-			if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
+			if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED)
 			{
 				Sys_ClearDockNotificationBadge();
 #if defined(_WIN32) // woods #disablecaps via ironwail
@@ -5794,13 +5598,14 @@ void IN_SendKeyEvents (void)
 					Cmd_ExecuteString("say_team \"back from alt-tab\"", src_command);
 			}
 
-			else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+			else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST)
 			{
 #if defined(_WIN32) // woods #disablecaps via ironwail
 				Sys_ActivateKeyFilter(false);
 #endif
 				//S_BlockSound();
 				windowhasfocus=false;
+				VID_Gamma_FocusLost();
 				if (CL_DemoScrubActive())
 					CL_DemoScrub_Cancel();
 				IN_DemoScrubSetHover(false);
@@ -5857,77 +5662,58 @@ void IN_SendKeyEvents (void)
 					Cmd_ExecuteString("say_team alt-tabbed", src_command);
 			}
 
-			else if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
+			else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
 			{
 				VID_OnResize (event.window.data1, event.window.data2); // github.com/andrei-drexler/ironwail (Enable resizing)
 			}
-			else if (event.window.event == SDL_WINDOWEVENT_RESTORED ||
-				event.window.event == SDL_WINDOWEVENT_SHOWN ||
-#if SDL_VERSION_ATLEAST(2, 0, 18)
-				event.window.event == SDL_WINDOWEVENT_DISPLAY_CHANGED || // ramp was applied to the old display
-#endif
-				event.window.event == SDL_WINDOWEVENT_EXPOSED)
+			else if (event.type == SDL_EVENT_WINDOW_RESTORED ||
+				event.type == SDL_EVENT_WINDOW_SHOWN ||
+				event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED || // ramp was applied to the old display
+				event.type == SDL_EVENT_WINDOW_EXPOSED)
 			{
 				VID_Gamma_Reapply();
 			}
-			else if (event.window.event == SDL_WINDOWEVENT_ENTER)
+			else if (event.type == SDL_EVENT_WINDOW_MOUSE_ENTER)
 			{
 				IN_DemoScrubSeedHover();
 				IN_UpdateGrabs();
 			}
 			break;
-#else
-		case SDL_ACTIVEEVENT:
-			if (event.active.state & (SDL_APPINPUTFOCUS|SDL_APPACTIVE))
-			{
-				if (event.active.gain)
-				{
-					windowhasfocus = true;
-					S_UnblockSound();
-				}
-				else
-				{
-					windowhasfocus = false;
-					S_BlockSound();
-				}
-			}
-			break;
-#endif
-#if defined(USE_SDL2)
-		case SDL_TEXTINPUT:
+		case SDL_EVENT_TEXT_INPUT:
 			lastactivetype = KD_KEYBOARD;
 			if (in_debugkeys.value)
 				IN_DebugTextEvent(&event);
 
-		// SDL2: We use SDL_TEXTINPUT for typing in the console / chat.
-		// SDL2 uses the local keyboard layout and handles modifiers
+		// SDL: We use SDL_EVENT_TEXT_INPUT for typing in the console / chat.
+		// SDL uses the local keyboard layout and handles modifiers
 		// (shift for uppercase, etc.) for us.
 			{
-				char text[sizeof(event.text.text) * 3], *ch;
-				// No fallback expands a source codepoint past three bytes per
-				// UTF-8 byte, so the conversion never truncates a keystroke.
-				// test_utf8_to_quake.py enforces that bound on the table.
-				UTF8_ToQuake(text, sizeof(text), event.text.text);
-				for (ch = text; *ch; ch++)
-					Char_Event ((unsigned char)*ch);
+				// SDL3 text is an unbounded string. No fallback expands a source
+				// codepoint past three bytes per UTF-8 byte, so this buffer never
+				// truncates it; test_utf8_to_quake.py enforces that bound on the table.
+				const size_t size = SDL_strlen(event.text.text) * 3 + 1;
+				char *text = (char *)SDL_malloc(size), *ch;
+
+				if (text)
+				{
+					UTF8_ToQuake(text, size, event.text.text);
+					for (ch = text; *ch; ch++)
+						Char_Event ((unsigned char)*ch);
+					SDL_free(text);
+				}
 			}
 			break;
-#endif
-		case SDL_KEYDOWN:
-		case SDL_KEYUP:
-			down = (event.key.state == SDL_PRESSED);
+		case SDL_EVENT_KEY_DOWN:
+		case SDL_EVENT_KEY_UP:
+			down = (event.key.down);
 			lastactivetype = KD_KEYBOARD;
 
 			if (in_debugkeys.value)
 				IN_DebugKeyEvent(&event);
 
-#if defined(USE_SDL2)
-		// SDL2: we interpret the keyboard as the US layout, so keybindings
+		// SDL: we interpret the keyboard as the US layout, so keybindings
 		// are based on key position, not the label on the key cap.
-			key = IN_SDL2_ScancodeToQuakeKey(event.key.keysym.scancode);
-#else
-			key = IN_SDL_KeysymToQuakeKey(event.key.keysym.sym);
-#endif
+			key = IN_ScancodeToQuakeKey(event.key.scancode);
 
 			if (Wheel_IsOpen () && down && key == K_ESCAPE && key_dest == key_game)
 			{
@@ -5936,16 +5722,12 @@ void IN_SendKeyEvents (void)
 			}
 
 		// also pass along the underlying keycode using the proper current layout for Y/N prompts.
-			Key_EventWithKeycode (key, down, event.key.keysym.sym);
+			Key_EventWithKeycode (key, down, event.key.key);
 
-#if !defined(USE_SDL2)
-			if (down && (event.key.keysym.unicode & ~0x7F) == 0)
-				Char_Event (event.key.keysym.unicode);
-#endif
 			break;
 
-		case SDL_MOUSEBUTTONDOWN:
-		case SDL_MOUSEBUTTONUP:
+		case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		case SDL_EVENT_MOUSE_BUTTON_UP:
 			if (event.button.button < 1 ||
 				event.button.button > sizeof(buttonremap) / sizeof(buttonremap[0]))
 			{
@@ -5963,13 +5745,13 @@ void IN_SendKeyEvents (void)
 			if (event.button.button == SDL_BUTTON_RIGHT && wheel_block_mouse2)
 			{
 				lastactivetype = KD_MOUSE;
-				if (event.button.state == SDL_RELEASED)
+				if (!event.button.down)
 					wheel_block_mouse2 = false;
 				break;
 			}
 
 			if (Wheel_IsOpen () &&
-				event.button.state == SDL_PRESSED &&
+				event.button.down &&
 				event.button.button == SDL_BUTTON_RIGHT &&
 				key_dest == key_game)
 			{
@@ -5986,14 +5768,14 @@ void IN_SendKeyEvents (void)
 
 				// Always send button release events
 				// even in eyecam mode to ensure buttons don't get stuck
-				if (event.button.state == SDL_RELEASED)
+				if (!event.button.down)
 				{
 					Key_Event(buttonremap[event.button.button - 1], false);
 				}
 				break;
 			}
 
-				if (event.button.state == SDL_PRESSED && // woods #pong
+				if (event.button.down && // woods #pong
 					event.button.button == SDL_BUTTON_LEFT &&
 					Pong_Enabled() && !cls.demoplayback &&
 					(cl.paused || cl.match_pause_time) &&
@@ -6006,17 +5788,16 @@ void IN_SendKeyEvents (void)
 			if (key_dest == key_menu) // woods #mousemenu
 				M_Mousemove(event.button.x, event.button.y);
 			lastactivetype = KD_MOUSE;
-			Key_Event(buttonremap[event.button.button - 1], event.button.state == SDL_PRESSED);
+			Key_Event(buttonremap[event.button.button - 1], event.button.down);
 			break;
 
-#if defined(USE_SDL2)
-		case SDL_MOUSEWHEEL:
+		case SDL_EVENT_MOUSE_WHEEL:
 			lastactivetype = KD_MOUSE;
 			if (IN_DemoScrubHandleWheel(&event))
 				break;
 			if (Wheel_IsOpen ())
 			{
-				int steps = event.wheel.y;
+				int steps = event.wheel.integer_y;
 
 				while (steps > 0)
 				{
@@ -6030,17 +5811,16 @@ void IN_SendKeyEvents (void)
 				}
 				break;
 			}
-			IN_EmitWheelKeySteps(event.wheel.y);
+			IN_EmitWheelKeySteps(event.wheel.integer_y);
 			break;
-#endif
 
-		case SDL_MOUSEMOTION:
+		case SDL_EVENT_MOUSE_MOTION:
 			lastactivetype = KD_MOUSE;
 			if (IN_DemoScrubHandleMotion(&event))
 				break;
 			if (key_dest == key_menu) // woods #mousemenu
 			{
-				M_Mousemove(event.button.x, event.button.y);
+				M_Mousemove(event.motion.x, event.motion.y);
 			}
 			if (!(key_dest == key_game && cl.modtype == 1 && cl.eyecam)) // woods #eyemouse
 			{
@@ -6051,30 +5831,28 @@ void IN_SendKeyEvents (void)
 				// Update the cursor idle time on mouse movement in observer mode
 				obs_cursor_last_move = SDL_GetTicks();
 				if (obs_cursor_hidden) {
-					SDL_ShowCursor(SDL_ENABLE);
+					SDL_ShowCursor();
 					obs_cursor_hidden = false;
 					IN_UpdateGrabs(); // Refresh grabs to ensure cursor is visible
 				}
 			}
 			break;
 
-#if defined(USE_SDL2)
-		case SDL_JOYDEVICEADDED:
+		case SDL_EVENT_JOYSTICK_ADDED:
 			// Raw joysticks share SDL's device-index namespace with gamepads.
 			// Keep the selected gamepad index synchronized even when the changed
 			// device itself has no controller mapping.
 			if (joy_active_controller)
 				IN_RemapJoystick();
 			break;
-		case SDL_JOYDEVICEREMOVED:
+		case SDL_EVENT_JOYSTICK_REMOVED:
 			if (joy_active_controller && !IN_RemapJoystick())
 				IN_SetupJoystick();
 			break;
-#if SDL_VERSION_ATLEAST(2, 0, 14)
-		case SDL_CONTROLLERTOUCHPADDOWN:
-		case SDL_CONTROLLERTOUCHPADMOTION:
-			if (event.ctouchpad.which == joy_active_instanceid &&
-				event.ctouchpad.touchpad == 0 && event.ctouchpad.finger == 0 &&
+		case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
+		case SDL_EVENT_GAMEPAD_TOUCHPAD_MOTION:
+			if (event.gtouchpad.which == joy_active_instanceid &&
+				event.gtouchpad.touchpad == 0 && event.gtouchpad.finger == 0 &&
 				joy_enable.value && joy_touchpad.value && key_dest == key_menu)
 			{
 				SDL_Window *window = (SDL_Window *)VID_GetWindow();
@@ -6084,101 +5862,102 @@ void IN_SendKeyEvents (void)
 					SDL_GetWindowSize(window, &width, &height);
 				if (width > 0 && height > 0)
 				{
-					M_Mousemove((int)(CLAMP(0.f, event.ctouchpad.x, 1.f) * (width - 1)),
-						(int)(CLAMP(0.f, event.ctouchpad.y, 1.f) * (height - 1)));
+					M_Mousemove((int)(CLAMP(0.f, event.gtouchpad.x, 1.f) * (width - 1)),
+						(int)(CLAMP(0.f, event.gtouchpad.y, 1.f) * (height - 1)));
 					lastactivetype = KD_GAMEPAD;
 				}
 			}
 			break;
-		case SDL_CONTROLLERTOUCHPADUP:
+		case SDL_EVENT_GAMEPAD_TOUCHPAD_UP:
 			break;
-		case SDL_CONTROLLERSENSORUPDATE:
-			if (event.csensor.sensor == SDL_SENSOR_GYRO && event.csensor.which == joy_active_instanceid)
+		case SDL_EVENT_GAMEPAD_SENSOR_UPDATE:
+			if (event.gsensor.sensor == SDL_SENSOR_GYRO && event.gsensor.which == joy_active_instanceid)
 			{
 				float prev_yaw = gyro_yaw;
 				float prev_pitch = gyro_pitch;
 
-				if (IN_UpdateGyroCalibration(event.csensor.data))
+				if (IN_UpdateGyroCalibration(event.gsensor.data))
 					break;
 
 				if (!gyro_turning_axis.value)
-					gyro_yaw = event.csensor.data[1] - gyro_calibration_y.value;
+					gyro_yaw = event.gsensor.data[1] - gyro_calibration_y.value;
 				else
-					gyro_yaw = -(event.csensor.data[2] - gyro_calibration_z.value);
-				gyro_pitch = event.csensor.data[0] - gyro_calibration_x.value;
+					gyro_yaw = -(event.gsensor.data[2] - gyro_calibration_z.value);
+				gyro_pitch = event.gsensor.data[0] - gyro_calibration_x.value;
 				gyro_raw_mag = RAD2DEG(sqrt(gyro_yaw * gyro_yaw + gyro_pitch * gyro_pitch));
 				gyro_yaw = IN_FilterGyroSample(prev_yaw, gyro_yaw);
 				gyro_pitch = IN_FilterGyroSample(prev_pitch, gyro_pitch);
 			}
 			break;
-#endif
-#if SDL_VERSION_ATLEAST(2, 24, 0)
-		case SDL_JOYBATTERYUPDATED:
+		case SDL_EVENT_JOYSTICK_BATTERY_UPDATED:
 			if (event.jbattery.which == joy_active_instanceid)
-				IN_UpdateGamepadPower(event.jbattery.level, joy_enable.value != 0.f);
+				IN_UpdateGamepadPower(event.jbattery.state, event.jbattery.percent, joy_enable.value != 0.f);
 			break;
-#endif
-		case SDL_CONTROLLERDEVICEADDED:
+		case SDL_EVENT_GAMEPAD_ADDED:
 			if (!IN_RemapJoystick() && (int)joy_device.value >= 0)
 				IN_SetupJoystick();
 			break;
-		case SDL_CONTROLLERDEVICEREMOVED:
+		case SDL_EVENT_GAMEPAD_REMOVED:
 			if (!IN_RemapJoystick())
 				IN_SetupJoystick();
 			break;
-		case SDL_CONTROLLERDEVICEREMAPPED:
+		case SDL_EVENT_GAMEPAD_REMAPPED:
 			if (!IN_RemapJoystick())
 				IN_SetupJoystick();
-			else if (event.cdevice.which == joy_active_instanceid)
+			else if (event.gdevice.which == joy_active_instanceid)
 				IN_RefreshActiveControllerInfo();
 			break;
-#if SDL_VERSION_ATLEAST(2, 30, 0)
-		case SDL_CONTROLLERSTEAMHANDLEUPDATED:
-			if (event.cdevice.which == joy_active_instanceid)
+		case SDL_EVENT_GAMEPAD_STEAM_HANDLE_UPDATED:
+			if (event.gdevice.which == joy_active_instanceid)
 				IN_RefreshActiveControllerInfo();
 			break;
-#endif
-#if SDL_VERSION_ATLEAST(2, 0, 5)
-		case SDL_DROPBEGIN:
+		case SDL_EVENT_AUDIO_DEVICE_ADDED:
+		case SDL_EVENT_AUDIO_DEVICE_REMOVED:
+		case SDL_EVENT_AUDIO_DEVICE_FORMAT_CHANGED:
+			// The default-output stream migrates by itself; only refresh its layout and name.
+			if (!event.adevice.recording)
+				SNDDMA_DeviceChanged ();
+			break;
+
+		case SDL_EVENT_DROP_BEGIN:
 			IN_ClearDropBatch();
 			in_drop_batch.active = true;
 			break;
-		case SDL_DROPCOMPLETE:
+		case SDL_EVENT_DROP_COMPLETE:
 			if (in_drop_batch.active)
 				IN_FinishDropBatch();
 			else
 				IN_ClearDropBatch();
 			break;
-#endif
-		case SDL_DROPFILE:
+		case SDL_EVENT_DROP_FILE:
 		{
-			char	*dropped_file;
+			// SDL owns the path until the next event poll
+			const char	*dropped_file = event.drop.data;
 
-			dropped_file = event.drop.file;
 			if (dropped_file)
 			{
-#if SDL_VERSION_ATLEAST(2, 0, 5)
 				if (in_drop_batch.active)
 				{
 					IN_AddDropBatchFile(dropped_file);
 				}
 				else
-#endif
 				{
 					char *single_drop[1];
 
-					single_drop[0] = dropped_file;
-					IN_ProcessDroppedFiles(single_drop, 1);
+					// the import path may rewrite it, so hand it a copy it owns
+					single_drop[0] = SDL_strdup(dropped_file);
+					if (single_drop[0])
+					{
+						IN_ProcessDroppedFiles(single_drop, 1);
+						SDL_free(single_drop[0]);
+					}
 				}
-				SDL_free(dropped_file);
-				event.drop.file = NULL;
 			}
 		}
 		break;
-#endif
 
-		case SDL_QUIT:
-			Con_DPrintf("SDL_QUIT event received\n");
+		case SDL_EVENT_QUIT:
+			Con_DPrintf("SDL_EVENT_QUIT event received\n");
 			Host_Quit_f ();
 			break;
 
@@ -6191,11 +5970,11 @@ void IN_SendKeyEvents (void)
 
 	if (key_dest == key_game && CL_IsActiveObserver()) // woods -- observer cursor auto-hide #eyemouse
 	{
-		Uint32 now = SDL_GetTicks();
+		Uint64 now = SDL_GetTicks();
 		if (!obs_cursor_hidden && now - obs_cursor_last_move >= OBS_CURSOR_IDLE_MS)
 		{
 			IN_UpdateGrabs(); // Refresh grabs to ensure the mouse stays in free-mode
-			SDL_ShowCursor(SDL_DISABLE);
+			SDL_HideCursor();
 			obs_cursor_hidden = true;
 			
 			
@@ -6205,7 +5984,7 @@ void IN_SendKeyEvents (void)
 	{
 		// If we leave observer mode while cursor is hidden, reset state
 		IN_UpdateGrabs();
-		SDL_ShowCursor(SDL_ENABLE);
+		SDL_ShowCursor();
 		obs_cursor_hidden = false;
 		
 	}

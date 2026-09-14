@@ -1,6 +1,6 @@
 # UTF-8 input with classic Quake text
 
-SDL2 text entry and clipboard paste into console, chat, and native menu fields
+SDL3 text entry and clipboard paste into console, chat, and native menu fields
 approximate common Unicode characters using the existing Quake font. Accented
 Latin, Cyrillic and Greek letters are transliterated, punctuation, currency and
 maths symbols are spelled out, regional-indicator pairs become their country

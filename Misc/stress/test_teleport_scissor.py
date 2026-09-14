@@ -2,7 +2,7 @@
 """Check that teleporter scissoring contains every shader texture sample.
 
 Compiles the production projection, coplanar collection, and scissor helpers.
-Requires a C compiler and SDL2 headers; no GPU or game data needed.
+Requires a C compiler and SDL3 headers; no GPU or game data needed.
 """
 
 from pathlib import Path
@@ -270,8 +270,8 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix='qssm-tele-scissor-') as directory:
     work = Path(directory)
     (work / 'test.c').write_text(source)
-    cflags = shlex.split(subprocess.check_output(['sdl2-config', '--cflags'], text=True))
-    subprocess.run(['cc', '-std=gnu11', '-O2', '-DUSE_SDL2', *cflags,
+    cflags = shlex.split(subprocess.check_output(['pkg-config', '--cflags', 'sdl3'], text=True))
+    subprocess.run(['cc', '-std=gnu11', '-O2', *cflags,
                     '-I', str(ROOT / 'Quake'), str(work / 'test.c'), '-lm',
                     '-o', str(work / 'test')], check=True)
     subprocess.run([str(work / 'test')], check=True)

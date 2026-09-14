@@ -45,7 +45,7 @@ frame profiling:
 
 ```powershell
 python Misc/stress/live_client_probe.py `
-  --bin Windows/VisualStudio/.codex-build/prof-out/quakespasm-sdl2.exe `
+  --bin Windows/VisualStudio/.codex-build/prof-out/quakespasm.exe `
   --basedir "$env:USERPROFILE/Desktop/qssm" `
   --output Misc/stress/tmp/ad-tears-live
 ```
@@ -75,7 +75,7 @@ performance guarantees. Run the primary regression set with:
 
 ```powershell
 python Misc/stress/demo_alias_probe.py `
-  --bin path/to/stress-enabled/quakespasm-sdl2.exe `
+  --bin path/to/stress-enabled/quakespasm.exe `
   --basedir "$env:USERPROFILE/Desktop/qssm" `
   --output Misc/stress/tmp/alias-best-data
 ```
@@ -335,8 +335,8 @@ same `--results` path exits before launching an engine.
 
 After creating a dedicated stress-enabled target as described above, point
 `--bin` at the executable inside its app bundle.  An Xcode intermediate binary
-does not carry the app's embedded SDL2 framework and will fail at boot with a
-`dyld` `Library not loaded: @rpath/SDL2.framework` error.
+does not carry the app's embedded SDL3 framework and will fail at boot with a
+`dyld` `Library not loaded: @rpath/SDL3.framework` error.
 
 ## Usage
 

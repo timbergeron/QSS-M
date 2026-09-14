@@ -142,14 +142,6 @@ typedef struct
 	void (*Shutdown) (void *ctx);	/*destroy everything*/
 } snd_capture_driver_t;
 
-#if defined(USE_SDL2) && SDL_VERSION_ATLEAST(2,0,5)
-	#define USE_SDL_CAPTURE
-#elif defined(_WIN32)
-	#define USE_DSOUND_CAPTURE
-#else
-	//user is screwed. linux has too many competing apis that probably won't work.
-	#pragma message("No VOIP audio capture supported")
-#endif
 
 #ifdef USE_DSOUND_CAPTURE
 #include <mmsystem.h>
@@ -319,66 +311,80 @@ static snd_capture_driver_t DSOUND_Capture =
 	DSOUND_Capture_Shutdown
 };
 #endif
-#ifdef USE_SDL_CAPTURE
-//Requires SDL 2.0.5+ supposedly.
-//Bugging out for me on windows, with really low audio levels. looks like there's been some float->int conversion without a multiplier. asking for float audio gives stupidly low values too.
 typedef struct
 {
-	SDL_AudioDeviceID dev;
+	SDL_AudioStream *stream;
 } sdlcapture_t;
 
 static void SDL_Capture_Start(void *ctx)
 {
-	sdlcapture_t *d = ctx;
-	SDL_PauseAudioDevice(d->dev, SDL_FALSE);
+	sdlcapture_t *c = ctx;
+	/* old speech must not be transmitted when capture restarts */
+	SDL_ClearAudioStream(c->stream);
+	SDL_ResumeAudioStreamDevice(c->stream);
 }
 
 static void SDL_Capture_Stop(void *ctx)
 {
-	sdlcapture_t *d = ctx;
-	SDL_PauseAudioDevice(d->dev, SDL_TRUE);
+	sdlcapture_t *c = ctx;
+	SDL_PauseAudioStreamDevice(c->stream);
+	/* Let S_Voip_Transmit drain queued speech, including the resampler tail. */
+	SDL_FlushAudioStream(c->stream);
 }
 
 static void SDL_Capture_Shutdown(void *ctx)
 {
-	sdlcapture_t *d = ctx;
-	SDL_CloseAudioDevice(d->dev);
-	Z_Free(d);
+	sdlcapture_t *c = ctx;
+	SDL_DestroyAudioStream(c->stream);
+	Z_Free(c);
+	SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
 static void *SDL_Capture_Init (int rate)
 {
-	SDL_AudioSpec want, have;
-	sdlcapture_t c, *r;
+	SDL_AudioSpec spec;
+	sdlcapture_t *c;
 
-	SDL_memset(&want, 0, sizeof(want)); /* or SDL_zero(want) */
-	want.freq = rate;
-	want.format = AUDIO_S16;
-	want.channels = 1;
-	want.samples = 256;	//this seems to be chunk sizes rather than total buffer size, so lets keep it reasonably small for lower latencies
-	want.callback = NULL;
-
-	c.dev = SDL_OpenAudioDevice(NULL, true, &want, &have, 0);
-	if (!c.dev)	//failed?
+	if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
 		return NULL;
 
-	r = Z_Malloc(sizeof(*r));
-	*r = c;
-	return r;
+	/* mono signed 16-bit at the codec's rate; the stream converts the microphone to it */
+	spec.format = SDL_AUDIO_S16LE;
+	spec.channels = 1;
+	spec.freq = rate;
+
+	c = Z_Malloc(sizeof(*c));
+	/* a short device period keeps capture latency low */
+	c->stream = SND_OpenAudioStream(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, &spec, NULL, NULL, 256);
+	if (!c->stream)
+	{
+		Con_DPrintf("Couldn't open SDL audio capture: %s\n", SDL_GetError());
+		Z_Free(c);
+		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		return NULL;
+	}
+	return c;
 }
 
 /*minbytes is a hint to not bother wasting time*/
 static unsigned int SDL_Capture_Update(void *ctx, unsigned char *buffer, unsigned int minbytes, unsigned int maxbytes)
 {
 	sdlcapture_t *c = ctx;
-	unsigned int queuedsize = SDL_GetQueuedAudioSize(c->dev);
-	if (queuedsize < minbytes)
-		return 0;
-	if (queuedsize > maxbytes)
-		queuedsize = maxbytes;
+	int available = SDL_GetAudioStreamAvailable(c->stream);
+	int got;
 
-	queuedsize = SDL_DequeueAudio(c->dev, buffer, queuedsize);
-	return queuedsize;
+	if (available <= 0 || (unsigned int)available < minbytes)
+		return 0;	/* a negative count is a failure, not a huge size */
+	if ((unsigned int)available > maxbytes)
+		available = (int)maxbytes;
+	available &= ~1;	/* whole 16-bit samples */
+	if (!available)
+		return 0;
+
+	got = SDL_GetAudioStreamData(c->stream, buffer, available);
+	if (got <= 0)
+		return 0;
+	return (unsigned int)got & ~1u;
 }
 static snd_capture_driver_t SDL_Capture =
 {
@@ -388,7 +394,6 @@ static snd_capture_driver_t SDL_Capture =
 	SDL_Capture_Stop,
 	SDL_Capture_Shutdown
 };
-#endif
 
 /*****************************************************************************************************************************/
 
@@ -2092,10 +2097,8 @@ void S_Voip_Transmit(unsigned char clc, sizebuf_t *buf)
 		if (!s_voip.cdriver || !s_voip.cdriver->Init)
 			s_voip.cdriver = &DSOUND_Capture;
 #endif
-#ifdef USE_SDL_CAPTURE
 		if (!s_voip.cdriver || !s_voip.cdriver->Init)
 			s_voip.cdriver = &SDL_Capture;
-#endif
 
 		/*no way to capture audio, give up*/
 		if (!s_voip.cdriver || !s_voip.cdriver->Init)

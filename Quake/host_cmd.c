@@ -1496,12 +1496,19 @@ typedef struct modvote_choice_s
 
 static modvote_choice_t *sv_modvote_choices;
 static modvote_choice_t *sv_modvote_client_choices[MAX_SCOREBOARD];
-static Uint32 sv_modvote_last_vote_time[MAX_SCOREBOARD];
+static Uint64 sv_modvote_last_vote_time[MAX_SCOREBOARD];
 
 #define MODVOTE_COOLDOWN_MS 1000U
 #define MODVOTE_TAG "^m[vote]^m "
 #define MODVOTE_MOTD_MIN_SECONDS 10.0
 #define MODVOTE_MOTD_LEGACY_REFRESH_SECONDS 1.0
+
+/* Plain 64-bit comparison: SDL_TICKS_PASSED's signed 32-bit difference
+   misjudged a vote older than ~24.8 days on a long-running server. */
+static qboolean Host_Modvote_CooldownActive (Uint64 now, Uint64 last_vote)
+{
+	return now < last_vote + MODVOTE_COOLDOWN_MS;
+}
 
 static void Host_Modvote_Core(client_t *voter, const char *modname, qboolean is_chat);
 static void Host_Modvote_Apply(const char *modname);
@@ -2087,7 +2094,7 @@ static void Host_Modvote_Core(client_t *voter, const char *modname_arg, qboolean
 	int eligible;
 	int needed;
 	size_t i;
-	Uint32 current_time;
+	Uint64 current_time;
 	qboolean is_change;
 	char old_name[MAX_QPATH];
 
@@ -2163,7 +2170,7 @@ static void Host_Modvote_Core(client_t *voter, const char *modname_arg, qboolean
 		return;
 
 	current_time = SDL_GetTicks();
-	if (!SDL_TICKS_PASSED(current_time, sv_modvote_last_vote_time[client_index] + MODVOTE_COOLDOWN_MS))
+	if (Host_Modvote_CooldownActive(current_time, sv_modvote_last_vote_time[client_index]))
 	{
 		Host_Modvote_ClientReply(voter, MODVOTE_TAG "Please wait a moment before changing your vote.\n");
 		return;
@@ -7575,11 +7582,11 @@ static void Host_Resurrect_f (void)
 
 /* Raised before shutdown joins, so UDP browser workers stop together instead
  * of waiting for a silent server's full reply deadline. Terminal, never reset. */
-static SDL_atomic_t server_queries_abort;
+static SDL_AtomicInt server_queries_abort;
 
 void NET_CancelServerQueries(void)
 {
-	SDL_AtomicSet(&server_queries_abort, 1);
+	SDL_SetAtomicInt(&server_queries_abort, 1);
 }
 
 /*
@@ -7715,7 +7722,7 @@ static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, 
 
 	if (resolved && resolvedsize)
 		resolved[0] = '\0';
-	if (SDL_AtomicGet(&server_queries_abort))
+	if (SDL_GetAtomicInt(&server_queries_abort))
 		return -1;
 
 	memset(&hints, 0, sizeof(hints));
@@ -7738,7 +7745,7 @@ static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, 
 		return -1;
 	}
 
-	for (rp = res; rp && !SDL_AtomicGet(&server_queries_abort); rp = rp->ai_next)
+	for (rp = res; rp && !SDL_GetAtomicInt(&server_queries_abort); rp = rp->ai_next)
 	{
 		sys_socket_t sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (resolved && resolvedsize && !resolved[0])
@@ -7792,7 +7799,7 @@ static int Socket_Ping_HostResolved(const char* host, int port, char* resolved, 
 			{
 				double deadline = start_time + max_wait_time; // allow a little longer for servers to answer
 
-				while (ping_result < 0 && !SDL_AtomicGet(&server_queries_abort))
+				while (ping_result < 0 && !SDL_GetAtomicInt(&server_queries_abort))
 				{
 					double now = Sys_DoubleTime();
 					double remaining = deadline - now;
@@ -7942,7 +7949,7 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 
 	if (!host || !*host || maxslots <= 0)
 		return NULL;
-	if (SDL_AtomicGet(&server_queries_abort))
+	if (SDL_GetAtomicInt(&server_queries_abort))
 		return NULL;
 	if (maxslots > MAX_SCOREBOARD)
 		maxslots = MAX_SCOREBOARD;
@@ -7960,7 +7967,7 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 	if (ret != 0)
 		return NULL;
 
-	for (rp = res; rp && !SDL_AtomicGet(&server_queries_abort); rp = rp->ai_next)
+	for (rp = res; rp && !SDL_GetAtomicInt(&server_queries_abort); rp = rp->ai_next)
 	{
 		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (sock != INVALID_SOCKET)
@@ -7976,7 +7983,7 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 	{
 		unsigned char pkt[8];
 		int i;
-		for (i = 0; i < maxslots && !SDL_AtomicGet(&server_queries_abort); i++)
+		for (i = 0; i < maxslots && !SDL_GetAtomicInt(&server_queries_abort); i++)
 		{
 			unsigned int hdr;
 			int behdr;
@@ -7998,7 +8005,7 @@ char *UDP_QueryPlayers(const char *host, int maxslots)
 		double idle_deadline = Sys_DoubleTime() + 0.3; /* give up if no response within 300ms */
 		int received_count = 0;
 
-		while (received_count < maxslots && !SDL_AtomicGet(&server_queries_abort))
+		while (received_count < maxslots && !SDL_GetAtomicInt(&server_queries_abort))
 		{
 			double now = Sys_DoubleTime();
 			double wait_until = (idle_deadline < deadline) ? idle_deadline : deadline;
@@ -9030,7 +9037,7 @@ static void Host_Connect_f (void)
 			{
 				probe_status = NET_PortPingProbe_GetStatus();
 				if (probe_status != PORTPINGPROBE_PROBING && probe_status != PORTPINGPROBE_ABORT)
-					mpservertime = SDL_GetTicks64(); // woods #servertime
+					mpservertime = SDL_GetTicks(); // woods #servertime
 			}
 		}
 		else
@@ -9055,9 +9062,9 @@ LOAD / SAVE GAME
 static savedata_t		save_data;
 static qboolean			save_pending;
 static SDL_Thread		*save_thread;
-static SDL_mutex		*save_mutex;
-static SDL_cond			*save_finished_condition;
-static SDL_cond			*save_pending_condition;
+static SDL_Mutex		*save_mutex;
+static SDL_Condition	*save_finished_condition;
+static SDL_Condition	*save_pending_condition;
 static qboolean			save_report_done;
 
 /*
@@ -9107,7 +9114,7 @@ static void Host_InvalidateSave(const char* relname) // woods #autoload (iw)
 
 static void Host_CheckSaveResult (void)
 {
-	int abort = SDL_AtomicGet (&save_data.abort);
+	int abort = SDL_GetAtomicInt (&save_data.abort);
 
 	if (abort)
 	{
@@ -9128,7 +9135,7 @@ static void Host_CheckSaveResult (void)
 
 static void Host_AbortSave (void)
 {
-	SDL_AtomicCAS (&save_data.abort, 0, 1);
+	SDL_CompareAndSwapAtomicInt (&save_data.abort, 0, 1);
 	save_report_done = false;
 }
 
@@ -9139,19 +9146,19 @@ void Host_ShutdownSave (void)
 
 	SDL_LockMutex (save_mutex);
 	while (save_pending)
-		SDL_CondWait (save_finished_condition, save_mutex);
+		SDL_WaitCondition (save_finished_condition, save_mutex);
 	save_pending = true;
 	save_data.file = NULL;
-	SDL_CondSignal (save_pending_condition);
+	SDL_SignalCondition (save_pending_condition);
 	SDL_UnlockMutex (save_mutex);
 
 	SDL_WaitThread (save_thread, NULL);
 	save_thread = NULL;
 
-	SDL_DestroyCond (save_finished_condition);
+	SDL_DestroyCondition (save_finished_condition);
 	save_finished_condition = NULL;
 
-	SDL_DestroyCond (save_pending_condition);
+	SDL_DestroyCondition (save_pending_condition);
 	save_pending_condition = NULL;
 
 	SDL_DestroyMutex (save_mutex);
@@ -9167,7 +9174,7 @@ void Host_WaitForSaveThread (void)
 
 	SDL_LockMutex (save_mutex);
 	while (save_pending)
-		SDL_CondWait (save_finished_condition, save_mutex);
+		SDL_WaitCondition (save_finished_condition, save_mutex);
 	SDL_UnlockMutex (save_mutex);
 
 	Host_CheckSaveResult ();
@@ -9242,7 +9249,7 @@ static int Host_BackgroundSave (void *param)
 
 		SDL_LockMutex (save_mutex);
 		while (!save_pending)
-			SDL_CondWait (save_pending_condition, save_mutex);
+			SDL_WaitCondition (save_pending_condition, save_mutex);
 		SDL_UnlockMutex (save_mutex);
 
 		if (!save->file)
@@ -9250,12 +9257,12 @@ static int Host_BackgroundSave (void *param)
 
 		PR_SwitchQCVM (&sv.qcvm);
 		SaveData_WriteHeader (save);
-		if (SDL_AtomicGet (&save->abort))
+		if (SDL_GetAtomicInt (&save->abort))
 			abort = true;
 		for (i = 0, ed = save->edicts; !abort && i < save->num_edicts; i++, ed = NEXT_EDICT (ed))
 		{
 			ED_WriteSave (save, ed);
-			if (SDL_AtomicGet (&save->abort))
+			if (SDL_GetAtomicInt (&save->abort))
 				abort = true;
 		}
 		if (!abort)
@@ -9264,7 +9271,7 @@ static int Host_BackgroundSave (void *param)
 			Host_WriteSavegameExtendedData (save);
 			if (fflush (save->file))
 			{
-				SDL_AtomicCAS (&save->abort, 0, -1);
+				SDL_CompareAndSwapAtomicInt (&save->abort, 0, -1);
 				abort = true;
 			}
 		}
@@ -9272,7 +9279,7 @@ static int Host_BackgroundSave (void *param)
 
 		if (fclose (save->file) && !abort)
 		{
-			SDL_AtomicCAS (&save->abort, 0, -1);
+			SDL_CompareAndSwapAtomicInt (&save->abort, 0, -1);
 			abort = true;
 		}
 		save->file = NULL;
@@ -9281,7 +9288,7 @@ static int Host_BackgroundSave (void *param)
 
 		SDL_LockMutex (save_mutex);
 		save_pending = false;
-		SDL_CondSignal (save_finished_condition);
+		SDL_SignalCondition (save_finished_condition);
 		SDL_UnlockMutex (save_mutex);
 	}
 
@@ -9291,8 +9298,8 @@ static int Host_BackgroundSave (void *param)
 static void Host_InitSaveThread (void)
 {
 	save_mutex = SDL_CreateMutex ();
-	save_finished_condition = SDL_CreateCond ();
-	save_pending_condition = SDL_CreateCond ();
+	save_finished_condition = SDL_CreateCondition ();
+	save_pending_condition = SDL_CreateCondition ();
 	if (!save_mutex || !save_finished_condition || !save_pending_condition)
 		Sys_Error ("Host_InitSaveThread: %s", SDL_GetError ());
 	SaveData_Init (&save_data);
@@ -9468,7 +9475,7 @@ static void Host_Savegame_f (void)
 		Host_AbortSave ();
 		SDL_LockMutex (save_mutex);
 		while (save_pending)
-			SDL_CondWait (save_finished_condition, save_mutex);
+			SDL_WaitCondition (save_finished_condition, save_mutex);
 		SDL_UnlockMutex (save_mutex);
 	}
 
@@ -9488,10 +9495,10 @@ static void Host_Savegame_f (void)
 	SDL_LockMutex (save_mutex);
 	q_strlcpy (save_data.path, name, sizeof (save_data.path));
 	save_data.file = f;
-	SDL_AtomicSet (&save_data.abort, 0);
+	SDL_SetAtomicInt (&save_data.abort, 0);
 	save_report_done = !skipnotify[0];
 	save_pending = true;
-	SDL_CondSignal (save_pending_condition);
+	SDL_SignalCondition (save_pending_condition);
 	SDL_UnlockMutex (save_mutex);
 
 	SCR_ShowSaving ();
@@ -10187,14 +10194,14 @@ static void Host_Say_Team_f2(void) // woods chat shortcuts
 	Cmd_ExecuteString(text, src_command);
 }
 
-static Uint32 lastLikeTime = 0; // stores the last time nothing was available to #like
+static Uint64 lastLikeTime = 0; // stores the last time nothing was available to #like
 
 static void Host_Like_f (void) // woods #like
 {
 	if (cl.maxclients <= 1 || cls.demoplayback) // mp or coop only
 		return;
 	
-	Uint32 currentTime = SDL_GetTicks(); // get the current time in milliseconds
+	Uint64 currentTime = SDL_GetTicks(); // get the current time in milliseconds
 
 	if (currentTime - lastLikeTime < 1000) // 1 second has passed, avoid spamming
 		return;

@@ -23,7 +23,7 @@ export QSS_LDFLAGS="-Wl,--allow-multiple-definition"
 make -f Makefile.w32 clean
 
 # shellcheck disable=SC2086
-./build_cross_win32-sdl2.sh $MAKEARGS
+./build_cross_win32.sh $MAKEARGS
 
 if [ ! -f quakespasm.exe ]; then
 	echo "ERROR: quakespasm.exe was not produced."
@@ -46,6 +46,8 @@ do
 	done
 done
 
+# Recreate the archive so removed runtimes do not survive a rebuild.
+rm -f QSS-M-w32.zip
 # shellcheck disable=SC2086
-zip -9j QSS-M-w32.zip ../Windows/codecs/x86/*.dll ../Windows/curl/lib/x86/libcurl.dll ../Windows/zlib/x86/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak gamecontrollerdb.txt ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL2/lib/SDL2.dll ../QSS-M-Revision.txt QSS-M-w32.exe $GNUTLS_DLLS
+zip -9j QSS-M-w32.zip ../Windows/codecs/x86/*.dll ../Windows/curl/lib/x86/libcurl.dll ../Windows/zlib/x86/zlib1.dll ../LICENSE.txt ../Quakespasm.html quakespasm.pak qssm.pak gamecontrollerdb.txt ../Quakespasm.txt ../Quakespasm-Spiked.txt ../Quakespasm-Music.txt ../Windows/SDL3/lib/x86/SDL3.dll ../QSS-M-Revision.txt QSS-M-w32.exe $GNUTLS_DLLS
 make -f Makefile.w32 clean

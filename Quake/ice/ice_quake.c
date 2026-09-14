@@ -187,7 +187,7 @@ static void QICE_SendBrokerFrame(qice_connection_t *b, const char *msg)
 struct heartbeatctx_s
 {	//thread context used to avoid stalls on dns lookups.
 	struct heartbeatctx_s *next;
-	SDL_atomic_t working;
+	SDL_AtomicInt working;
 	void *thread;
 
 	int nummasters;
@@ -208,7 +208,7 @@ struct heartbeatctx_s
 struct brokerlookupctx_s
 {
 	struct brokerlookupctx_s *next;
-	SDL_atomic_t working;
+	SDL_AtomicInt working;
 	qboolean okay;
 	void *thread;
 	char brokername[64];
@@ -249,7 +249,7 @@ static int DNSLookupThread(void *vctx)
 		}
 	}
 
-	SDL_AtomicSet(&ctx->working, false);	//done.
+	SDL_SetAtomicInt(&ctx->working, false);	//done.
 	return true;
 }
 
@@ -258,7 +258,7 @@ static int BrokerLookupThread(void *vctx)
 	struct brokerlookupctx_s *ctx = vctx;
 
 	ctx->okay = NET_StringToAdr(ctx->brokername, ctx->brokerport, &ctx->addr, 1) > 0;
-	SDL_AtomicSet(&ctx->working, false);
+	SDL_SetAtomicInt(&ctx->working, false);
 	return true;
 }
 
@@ -269,7 +269,7 @@ static void QICE_CleanupBrokerLookups(qboolean wait)
 
 	while ((ctx = *link))
 	{
-		if (!wait && SDL_AtomicGet(&ctx->working))
+		if (!wait && SDL_GetAtomicInt(&ctx->working))
 		{
 			link = &ctx->next;
 			continue;
@@ -288,7 +288,7 @@ static void QICE_CleanupHeartbeatLookups(qboolean wait)
 
 	while ((ctx = *link))
 	{
-		if (!wait && SDL_AtomicGet(&ctx->working))
+		if (!wait && SDL_GetAtomicInt(&ctx->working))
 		{
 			link = &ctx->next;
 			continue;
@@ -316,7 +316,7 @@ static void QICE_FreeBrokerLookup(qice_connection_t *b)
 	b->brokerctx = NULL;
 	if (ctx->thread)
 	{
-		if (SDL_AtomicGet(&ctx->working))
+		if (SDL_GetAtomicInt(&ctx->working))
 		{
 			ctx->next = orphanedbrokerlookups;
 			orphanedbrokerlookups = ctx;
@@ -337,7 +337,7 @@ static void QICE_FreeHeartbeatLookup(qice_connection_t *b)
 	b->heartbeatctx = NULL;
 	if (ctx->thread)
 	{
-		if (SDL_AtomicGet(&ctx->working))
+		if (SDL_GetAtomicInt(&ctx->working))
 		{
 			ctx->next = orphanedheartbeatlookups;
 			orphanedheartbeatlookups = ctx;
@@ -360,7 +360,7 @@ static void QICE_Heartbeat(qice_connection_t *b)
 	if (!b->isserver)
 		return;	//don't ever heartbeat as a client.
 
-	if (ctx && !SDL_AtomicGet(&ctx->working))
+	if (ctx && !SDL_GetAtomicInt(&ctx->working))
 	{	//dns resolution finished.
 		//only needs to do master stuff now
 
@@ -421,10 +421,10 @@ static void QICE_Heartbeat(qice_connection_t *b)
 				ctx->nummasters++;
 			}
 		}
-		SDL_AtomicSet(&ctx->working, true);
+		SDL_SetAtomicInt(&ctx->working, true);
 		ctx->thread = SDL_CreateThread(DNSLookupThread, "heartbeatdns", ctx);
 		if (!ctx->thread)	//bum...
-			SDL_AtomicSet(&ctx->working, false);	//just clean it up later.
+			SDL_SetAtomicInt(&ctx->working, false);	//just clean it up later.
 	}
 }
 
@@ -690,7 +690,7 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 					QICE_Heartbeat(b);
 				return false;
 			}
-			if (SDL_AtomicGet(&brokerctx->working))
+			if (SDL_GetAtomicInt(&brokerctx->working))
 			{
 				if (b->isserver)
 					QICE_Heartbeat(b);
@@ -718,7 +718,7 @@ static qboolean QICE_UpdateBroker(qice_connection_t *b)
 			brokerctx = Z_Malloc(sizeof(*brokerctx));
 			q_strlcpy(brokerctx->brokername, b->brokername, sizeof(brokerctx->brokername));
 			brokerctx->brokerport = b->brokerport;
-			SDL_AtomicSet(&brokerctx->working, true);
+			SDL_SetAtomicInt(&brokerctx->working, true);
 			brokerctx->thread = SDL_CreateThread(BrokerLookupThread, "brokerdns", brokerctx);
 			if (!brokerctx->thread)
 			{

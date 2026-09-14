@@ -31,8 +31,13 @@ void IN_Shutdown (void);
 void IN_Commands (void);
 // oportunity for devices to stick commands on the script buffer
 
-// mouse moved by dx and dy pixels
-void IN_MouseMotion(int dx, int dy, int wx, int wy);
+// joy_device keeps SDL2's index into the connected joystick list
+int IN_GetJoystickCount (void);
+qboolean IN_IsGamepadAt (int index);
+const char *IN_GetGamepadNameAt (int index);
+
+// mouse moved by dx and dy pixels; fractional deltas accumulate
+void IN_MouseMotion(float dx, float dy, float wx, float wy);
 
 typedef enum gyromode_t
 {

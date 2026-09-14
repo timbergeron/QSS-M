@@ -4878,26 +4878,26 @@ void SV_SpawnServer (const char *server)
 
 // Global variables for timer state
 static SDL_TimerID sv_timer_id = 0;
-static SDL_atomic_t sv_timer_count = {0};
+static SDL_AtomicInt sv_timer_count = {0};
 static char sv_timer_command[1024] = "";  // Increased buffer size
 static cmd_source_t sv_timer_source = src_command;
-static SDL_atomic_t sv_timer_execute_pending = {0};
+static SDL_AtomicInt sv_timer_execute_pending = {0};
 
 /*
 ================
 SV_TimerCallback
 
-SDL2 timer callback - runs in separate thread, so we just set a flag
+SDL timer callback - runs in separate thread, so we just set a flag
 ================
 */
-static Uint32 SV_TimerCallback(Uint32 interval, void* param)
+static Uint32 SDLCALL SV_TimerCallback(void *userdata, SDL_TimerID timer_id, Uint32 interval)
 {
 	// Don't execute commands directly from timer thread - not thread safe
 	// Just set a flag to execute from main thread
-	SDL_AtomicSet(&sv_timer_execute_pending, 1);
+	SDL_SetAtomicInt(&sv_timer_execute_pending, 1);
 	
 	// For finite timers, atomically decrement and find the new value
-	int old_count = SDL_AtomicAdd(&sv_timer_count, -1);  // Returns *previous* value
+	int old_count = SDL_AddAtomicInt(&sv_timer_count, -1);  // Returns *previous* value
 	int new_count = old_count - 1;                       // Value *after* decrement
 	
 	if (new_count == 0)             // We just executed the last repetition
@@ -4916,7 +4916,7 @@ static Uint32 SV_TimerCallback(Uint32 interval, void* param)
 ================
 SV_SetTimer_f
 
-Sets up a repeating timer using SDL2
+Sets up a repeating timer using SDL
 ================
 */
 static void SV_SetTimer_f(void)
@@ -4948,8 +4948,8 @@ static void SV_SetTimer_f(void)
 			SDL_RemoveTimer(sv_timer_id);
 			sv_timer_id = 0;
 		}
-		SDL_AtomicSet(&sv_timer_count, 0);   // Ensure non-positive to prevent dangling decrements
-		SDL_AtomicSet(&sv_timer_execute_pending, 0);
+		SDL_SetAtomicInt(&sv_timer_count, 0);   // Ensure non-positive to prevent dangling decrements
+		SDL_SetAtomicInt(&sv_timer_execute_pending, 0);
 		Con_Printf("Timer disabled\n");
 		return;
 	}
@@ -5004,9 +5004,9 @@ static void SV_SetTimer_f(void)
 		return;
 	}
 
-	SDL_AtomicSet(&sv_timer_count, count);
+	SDL_SetAtomicInt(&sv_timer_count, count);
 	sv_timer_source = cmd_source;
-	SDL_AtomicSet(&sv_timer_execute_pending, 0);
+	SDL_SetAtomicInt(&sv_timer_execute_pending, 0);
 	
 	// Convert to milliseconds with safer rounding
 	interval_ms = (Uint32)SDL_max(1, (int)SDL_roundf(interval * 1000.0f));
@@ -5044,14 +5044,14 @@ Timer lifecycle:
 void SV_ProcessTimerExecution(void)
 {
 	// Use atomic CAS to check and clear the flag atomically
-	if (SDL_AtomicCAS(&sv_timer_execute_pending, 1, 0) && sv_timer_command[0])
+	if (SDL_CompareAndSwapAtomicInt(&sv_timer_execute_pending, 1, 0) && sv_timer_command[0])
 	{
 		Cbuf_AddText(sv_timer_command);
 		Cbuf_AddText("\n");
 		
 		// If this was the final execution (count reached 0), clear the timer ID
 		// since SDL has already auto-removed the expired timer
-		if (SDL_AtomicGet(&sv_timer_count) == 0)
+		if (SDL_GetAtomicInt(&sv_timer_count) == 0)
 		{
 			sv_timer_id = 0;
 		}
@@ -5072,5 +5072,5 @@ void SV_CleanupTimer(void)
 		SDL_RemoveTimer(sv_timer_id);
 		sv_timer_id = 0;
 	}
-	SDL_AtomicSet(&sv_timer_execute_pending, 0);
+	SDL_SetAtomicInt(&sv_timer_execute_pending, 0);
 }

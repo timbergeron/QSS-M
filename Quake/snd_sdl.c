@@ -24,28 +24,26 @@
 
 #include "quakedef.h"
 
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#include <SDL2/SDL.h>
-#else
-#include <SDL/SDL.h>
-#endif
-#else
-#include "SDL.h"
-#endif
+#include <SDL3/SDL.h>
 
 static int	buffersize;
 
 #define SND_MIX_CHANNELS 2
 
-/* The engine always mixes in stereo. When the SDL callback exposes more
+/* The engine's ring holds this many device periods of interleaved stereo. */
+#define SND_RING_PERIODS 10
+
+/* The engine always mixes in stereo. When the output device has more
  * speakers (e.g. 4.0/5.1/7.1), we up-mix stereo to that layout in the
- * callback so every speaker is driven. */
+ * stream callback so every speaker is driven. */
 static int	device_channels = 2;
 
-#if defined(USE_SDL2)
-static SDL_AudioDeviceID	sdl_audiodevice;
-#endif
+static SDL_AudioStream	*sdl_stream;
+static Uint8		*sdl_scratch;		/* one callback chunk of device frames */
+static int			sdl_scratch_bytes;
+static SDL_AtomicInt	sdl_stream_failed;	/* set by the callback, reported by the main thread */
+static int			snd_playback_frames;	/* the playback period request, restored after other opens */
+static char			sdl_devicename[128];
 
 static int SND_Scaled16 (int sample, int scale)
 {
@@ -107,34 +105,6 @@ static void SND_CopyScaled (Uint8 *dst, const Uint8 *src, int len)
 			out[i] = (signed char)SND_ScaledS8 (in[i], scale);
 	}
 }
-
-#if defined(USE_SDL2)
-static int SND_GetPreferredOutputChannels (void)
-{
-	SDL_AudioSpec spec;
-	int	channels = SND_MIX_CHANNELS;
-
-	SDL_zero(spec);
-#if SDL_VERSION_ATLEAST(2, 24, 0)
-	if (SDL_GetDefaultAudioInfo(NULL, &spec, SDL_FALSE) == 0 &&
-		spec.channels > channels)
-	{
-		channels = spec.channels;
-	}
-#endif
-#if SDL_VERSION_ATLEAST(2, 0, 16)
-	SDL_zero(spec);
-	if (SDL_GetNumAudioDevices(SDL_FALSE) > 0 &&
-		SDL_GetAudioDeviceSpec(0, SDL_FALSE, &spec) == 0 &&
-		spec.channels > channels)
-	{
-		channels = spec.channels;
-	}
-#endif
-
-	return channels;
-}
-#endif
 
 /* Expand one stereo frame (l,r) into a device frame and advance the output
  * pointer. Channel order matches SDL's default layouts:
@@ -319,139 +289,238 @@ static void SDLCALL paint_audio (void *unused, Uint8 *stream, int len)
 	}
 }
 
+/*
+================
+SND_StreamCallback
+
+SDL asks for arbitrary byte counts, which may exceed the ring. Paint whole
+device frames in chunks no larger than the preallocated scratch buffer, which
+never holds more than one ring's worth of frames, so paint_audio's two-copy
+path cannot run past the ring. SDL holds the stream lock during the callback.
+================
+*/
+static void SDLCALL SND_StreamCallback (void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount)
+{
+	int	frame_bytes;
+
+	(void)userdata;
+	(void)total_amount;
+
+	if (!shm || !sdl_scratch || device_channels <= 0)
+		return;
+
+	frame_bytes = device_channels * (shm->samplebits / 8);
+	while (additional_amount > 0)
+	{
+		/* sdl_scratch_bytes is a whole number of frames, so rounding up fits */
+		int	chunk = q_min (additional_amount, sdl_scratch_bytes);
+
+		chunk = (chunk + frame_bytes - 1) / frame_bytes * frame_bytes;
+		paint_audio (NULL, sdl_scratch, chunk);
+		if (!SDL_PutAudioStreamData (stream, sdl_scratch, chunk))
+		{
+			SDL_CompareAndSwapAtomicInt (&sdl_stream_failed, 0, 1);
+			return;
+		}
+		additional_amount -= chunk;
+	}
+}
+
+/*
+================
+SND_PeriodFrames
+
+Engine-owned device period for a mix rate, independent of what the device
+reports back.
+================
+*/
+static int SND_PeriodFrames (int rate)
+{
+	if (rate <= 11025)
+		return 256;
+	if (rate <= 22050)
+		return 512;
+	if (rate <= 44100)
+		return 1024;
+	if (rate <= 56000)
+		return 2048; /* for 48 kHz */
+	return 4096; /* for 96 kHz */
+}
+
+/*
+================
+SND_RingSamples
+
+Interleaved stereo samples in the engine ring: SND_RING_PERIODS periods,
+rounded up to a power of two.
+================
+*/
+static int SND_RingSamples (int period_frames)
+{
+	int	samples = period_frames * SND_MIX_CHANNELS * SND_RING_PERIODS;
+	int	val = 1;
+
+	while (val < samples)
+		val <<= 1;
+	return val;
+}
+
+/*
+================
+SND_OpenAudioStream
+
+Open an audio stream while requesting a device period of sample_frames.
+SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES is best effort, and a value from the
+environment still wins over this default-priority request. The playback
+request is restored afterwards, so opening a capture stream never changes
+later playback opens. Main thread only.
+================
+*/
+SDL_AudioStream *SND_OpenAudioStream (SDL_AudioDeviceID device, const SDL_AudioSpec *spec,
+	SDL_AudioStreamCallback callback, void *userdata, int sample_frames)
+{
+	SDL_AudioStream	*stream;
+	char	frames[16];
+
+	q_snprintf (frames, sizeof(frames), "%d", sample_frames);
+	SDL_SetHintWithPriority (SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, frames, SDL_HINT_DEFAULT);
+	stream = SDL_OpenAudioDeviceStream (device, spec, callback, userdata);
+
+	if (snd_playback_frames > 0)
+	{
+		q_snprintf (frames, sizeof(frames), "%d", snd_playback_frames);
+		SDL_SetHintWithPriority (SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, frames, SDL_HINT_DEFAULT);
+	}
+	else
+	{
+		SDL_ResetHint (SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES);
+	}
+	return stream;
+}
+
+/* The stream plays on the default output; name the physical device behind it. */
+static void SND_UpdateDeviceName (void)
+{
+	const char	*name = sdl_stream ? SDL_GetAudioDeviceName (SDL_GetAudioStreamDevice (sdl_stream)) : NULL;
+
+	q_strlcpy (sdl_devicename, (name && *name) ? name : "System default", sizeof(sdl_devicename));
+}
+
+static int SND_GetPreferredOutputChannels (SDL_AudioDeviceID device)
+{
+	SDL_AudioSpec	spec;
+	int	frames;
+
+	if (SDL_GetAudioDeviceFormat (device, &spec, &frames) && spec.channels > SND_MIX_CHANNELS)
+		return spec.channels;
+	return SND_MIX_CHANNELS;
+}
+
+static void SND_FreeBuffers (void)
+{
+	if (shm)
+	{
+		free (shm->buffer);
+		shm->buffer = NULL;
+	}
+	free (sdl_scratch);
+	sdl_scratch = NULL;
+	sdl_scratch_bytes = 0;
+}
+
 qboolean SNDDMA_Init (dma_t *dma)
 {
-	SDL_AudioSpec desired;
-	int		tmp, val;
+	SDL_AudioSpec	spec;
+	SDL_AudioSpec	device_spec;
+	int		period_frames, device_frames;
 	char	drivername[128];
 	const char	*surround_status;
-#if defined(USE_SDL2)
-	SDL_AudioSpec obtained;
-	int		allowed_changes;
-#endif
 
-	if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0)
+	if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
 	{
 		Con_Printf("Couldn't init SDL audio: %s\n", SDL_GetError());
 		return false;
 	}
 
-	/* Set up the desired format */
-	desired.freq = snd_mixspeed.value;
-	desired.format = (loadas8bit.value) ? AUDIO_U8 : AUDIO_S16SYS;
-	desired.channels = SND_MIX_CHANNELS;
-#if defined(USE_SDL2)
+	/* The stream's input format is what the callback produces: the engine's
+	 * sample format and rate, with the device's channel count when surround
+	 * is enabled. SDL converts it to whatever the device actually uses. */
+	spec.freq = snd_mixspeed.value;
+	spec.format = (loadas8bit.value) ? SDL_AUDIO_U8 : SDL_AUDIO_S16;
+	spec.channels = SND_MIX_CHANNELS;
 	if (snd_surround.value > 0)
-		desired.channels = SND_GetPreferredOutputChannels();
-#endif
-	if (desired.freq <= 11025)
-		desired.samples = 256;
-	else if (desired.freq <= 22050)
-		desired.samples = 512;
-	else if (desired.freq <= 44100)
-		desired.samples = 1024;
-	else if (desired.freq <= 56000)
-		desired.samples = 2048; /* for 48 kHz */
-	else
-		desired.samples = 4096; /* for 96 kHz */
-	desired.callback = paint_audio;
-	desired.userdata = NULL;
-
-#if defined(USE_SDL2)
-	/* Keep the engine mix buffer stereo. If snd_surround is enabled, request
-	 * the default output's preferred channel count and up-mix to SDL's
-	 * callback layout. Set snd_surround 0 and snd_restart to force stereo. */
-	allowed_changes = SDL_AUDIO_ALLOW_FREQUENCY_CHANGE |
-		SDL_AUDIO_ALLOW_SAMPLES_CHANGE;
-	if (snd_surround.value > 0)
-		allowed_changes |= SDL_AUDIO_ALLOW_CHANNELS_CHANGE;
-	sdl_audiodevice = SDL_OpenAudioDevice(NULL, 0, &desired, &obtained,
-		allowed_changes);
-	if (sdl_audiodevice == 0)
-	{
-		Con_Printf("Couldn't open SDL audio: %s\n", SDL_GetError());
-		SDL_QuitSubSystem(SDL_INIT_AUDIO);
-		return false;
-	}
-	desired.freq = obtained.freq;
-	desired.samples = obtained.samples;
-	device_channels = obtained.channels;
-	if (snd_surround.value <= 0 || device_channels < 1)
-		device_channels = SND_MIX_CHANNELS;
+		spec.channels = SND_GetPreferredOutputChannels (SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+	device_channels = spec.channels;
 	surround_status = (snd_surround.value > 0) ? "on" : "off";
-#else
-	/* Open the audio device. SDL 1.2 guarantees the requested stereo format
-	 * (it converts internally), so no up-mixing is performed here. */
-	if (SDL_OpenAudio(&desired, NULL) == -1)
-	{
-		Con_Printf("Couldn't open SDL audio: %s\n", SDL_GetError());
-		SDL_QuitSubSystem(SDL_INIT_AUDIO);
-		return false;
-	}
-	device_channels = desired.channels;
-	surround_status = "unsupported";
-#endif
+	period_frames = SND_PeriodFrames (spec.freq);
 
 	memset ((void *) dma, 0, sizeof(dma_t));
 	shm = dma;
 
 	/* Fill the audio DMA information block. The engine always mixes in
 	 * stereo; the callback up-mixes to device_channels when they differ. */
-	shm->samplebits = (desired.format & 0xFF); /* first byte of format is bits */
-	shm->signed8 = (desired.format == AUDIO_S8);
-	shm->speed = desired.freq;
+	shm->samplebits = SDL_AUDIO_BITSIZE (spec.format);
+	shm->signed8 = (spec.format == SDL_AUDIO_S8);
+	shm->speed = spec.freq;
 	shm->channels = SND_MIX_CHANNELS;
-	tmp = (desired.samples * shm->channels) * 10;
-	if (tmp & (tmp - 1))
-	{	/* make it a power of two */
-		val = 1;
-		while (val < tmp)
-			val <<= 1;
-
-		tmp = val;
-	}
-	shm->samples = tmp;
+	shm->samples = SND_RingSamples (period_frames);
 	shm->samplepos = 0;
 	shm->submission_chunk = 1;
 
+	/* Set up the ring and scratch storage before the stream can call back. */
+	buffersize = shm->samples * (shm->samplebits / 8);
+	shm->buffer = (unsigned char *) malloc (buffersize);
+	sdl_scratch_bytes = q_min (period_frames, shm->samples / SND_MIX_CHANNELS) *
+		device_channels * (shm->samplebits / 8);
+	sdl_scratch = (Uint8 *) malloc (sdl_scratch_bytes);
+	if (!shm->buffer || !sdl_scratch)
+	{
+		SND_FreeBuffers ();
+		shm = NULL;
+		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		Con_Printf ("Failed allocating memory for SDL audio\n");
+		return false;
+	}
+	memset (shm->buffer, SDL_GetSilenceValueForFormat (spec.format), buffersize);
+
+	SDL_SetAtomicInt (&sdl_stream_failed, 0);
+	snd_playback_frames = period_frames;
+	sdl_stream = SND_OpenAudioStream (SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, SND_StreamCallback, NULL, period_frames);
+	if (!sdl_stream)
+	{
+		Con_Printf("Couldn't open SDL audio: %s\n", SDL_GetError());
+		snd_playback_frames = 0;
+		SDL_ResetHint (SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES);
+		SND_FreeBuffers ();
+		shm = NULL;
+		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		return false;
+	}
+	SND_UpdateDeviceName ();
+
 	Con_Printf ("SDL audio spec  : %d Hz, %d samples, %d mix channels (callback: %d ch, surround: %s)\n",
-			desired.freq, desired.samples, shm->channels, device_channels,
+			shm->speed, period_frames, shm->channels, device_channels,
 			surround_status);
-#if defined(USE_SDL2)
+	/* Diagnostics only: the ring and rate never follow what the device reports. */
+	if (SDL_GetAudioDeviceFormat (SDL_GetAudioStreamDevice (sdl_stream), &device_spec, &device_frames))
+		Con_Printf ("SDL audio device: %d Hz, %d ch, %s, %d sample frames\n",
+				device_spec.freq, device_spec.channels,
+				SDL_GetAudioFormatName (device_spec.format), device_frames);
 	{
 		const char *driver = SDL_GetCurrentAudioDriver();
-		const char *device = SDL_GetAudioDeviceName(0, SDL_FALSE);
+		const char *device = SNDDMA_GetDeviceName();
 		q_snprintf(drivername, sizeof(drivername), "%s - %s",
 			driver != NULL ? driver : "(UNKNOWN)",
 			device != NULL ? device : "(UNKNOWN)");
 	}
-#else
-	if (SDL_AudioDriverName(drivername, sizeof(drivername)) == NULL)
-		strcpy(drivername, "(UNKNOWN)");
-#endif
-	buffersize = shm->samples * (shm->samplebits / 8);
 	Con_Printf ("SDL audio driver: %s, %d bytes buffer\n", drivername, buffersize);
 
-	shm->buffer = (unsigned char *) calloc (1, buffersize);
-	if (!shm->buffer)
+	if (!SDL_ResumeAudioStreamDevice (sdl_stream))
 	{
-#if defined(USE_SDL2)
-		SDL_CloseAudioDevice(sdl_audiodevice);
-		sdl_audiodevice = 0;
-#else
-		SDL_CloseAudio();
-#endif
-		SDL_QuitSubSystem(SDL_INIT_AUDIO);
-		shm = NULL;
-		Con_Printf ("Failed allocating memory for SDL audio\n");
+		Con_Printf ("Couldn't start SDL audio: %s\n", SDL_GetError());
+		SNDDMA_Shutdown ();
 		return false;
 	}
-
-#if defined(USE_SDL2)
-	SDL_PauseAudioDevice(sdl_audiodevice, 0);
-#else
-	SDL_PauseAudio(0);
-#endif
 
 	return true;
 }
@@ -466,53 +535,99 @@ void SNDDMA_Shutdown (void)
 	if (shm)
 	{
 		Con_Printf ("Shutting down SDL sound\n");
-#if defined(USE_SDL2)
-		SDL_CloseAudioDevice(sdl_audiodevice);
-		sdl_audiodevice = 0;
-#else
-		SDL_CloseAudio();
-#endif
+		/* Destroying the stream stops its callback; free what it reads afterwards. */
+		SDL_DestroyAudioStream (sdl_stream);
+		sdl_stream = NULL;
+		snd_playback_frames = 0;
+		SDL_ResetHint (SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES);
+		sdl_devicename[0] = 0;
 		SDL_QuitSubSystem(SDL_INIT_AUDIO);
-		if (shm->buffer)
-			free (shm->buffer);
-		shm->buffer = NULL;
+		SND_FreeBuffers ();
 		shm = NULL;
 	}
 }
 
 void SNDDMA_LockBuffer (void)
 {
-#if defined(USE_SDL2)
-	SDL_LockAudioDevice (sdl_audiodevice);
-#else
-	SDL_LockAudio ();
-#endif
+	SDL_LockAudioStream (sdl_stream);
 }
 
 void SNDDMA_Submit (void)
 {
-#if defined(USE_SDL2)
-	SDL_UnlockAudioDevice (sdl_audiodevice);
-#else
-	SDL_UnlockAudio ();
-#endif
+	SDL_UnlockAudioStream (sdl_stream);
+	/* The callback cannot print; report its first failure here, once. */
+	if (SDL_CompareAndSwapAtomicInt (&sdl_stream_failed, 1, 2))
+		Con_Warning ("SDL audio stream rejected mixed audio; sound may drop out\n");
 }
 
 void SNDDMA_BlockSound (void)
 {
-#if defined(USE_SDL2)
-	SDL_PauseAudioDevice (sdl_audiodevice, 1);
-#else
-	SDL_PauseAudio (1);
-#endif
+	SDL_PauseAudioStreamDevice (sdl_stream);
 }
 
 void SNDDMA_UnblockSound (void)
 {
-#if defined(USE_SDL2)
-	SDL_PauseAudioDevice (sdl_audiodevice, 0);
-#else
-	SDL_PauseAudio (0);
-#endif
+	if (!SDL_ResumeAudioStreamDevice (sdl_stream))
+		Con_Warning ("Couldn't resume SDL audio: %s\n", SDL_GetError());
+}
+
+/*
+================
+SNDDMA_DeviceChanged
+
+The default-output stream follows device changes on its own, converting our
+frames for whatever device is current, so nothing is reopened here. With
+surround on, refresh the up-mix layout to the current device's channel count;
+the scratch buffer is resized outside the stream lock. Main thread only.
+================
+*/
+void SNDDMA_DeviceChanged (void)
+{
+	SDL_AudioSpec	spec;
+	Uint8	*scratch;
+	int	bps, frames, channels, bytes;
+
+	if (!shm || !sdl_stream)
+		return;
+	SND_UpdateDeviceName ();
+	if (snd_surround.value <= 0)
+		return;
+
+	channels = SND_GetPreferredOutputChannels (SDL_GetAudioStreamDevice (sdl_stream));
+	if (channels == device_channels)
+		return;
+
+	bps = shm->samplebits / 8;
+	frames = sdl_scratch_bytes / (device_channels * bps);
+	bytes = frames * channels * bps;
+	scratch = (Uint8 *) malloc (bytes);
+	if (!scratch)
+		return;
+
+	spec.format = (shm->samplebits == 8) ? (shm->signed8 ? SDL_AUDIO_S8 : SDL_AUDIO_U8) : SDL_AUDIO_S16;
+	spec.channels = channels;
+	spec.freq = shm->speed;
+
+	SDL_LockAudioStream (sdl_stream);
+	if (SDL_SetAudioStreamFormat (sdl_stream, &spec, NULL))
+	{
+		Uint8 *old = sdl_scratch;
+
+		sdl_scratch = scratch;
+		sdl_scratch_bytes = bytes;
+		device_channels = channels;
+		scratch = old;
+	}
+	SDL_UnlockAudioStream (sdl_stream);
+	free (scratch);
+
+	Con_DPrintf ("SDL audio: up-mixing to %d channels for %s\n", device_channels, sdl_devicename);
+}
+
+const char *SNDDMA_GetDeviceName (void)
+{
+	if (sdl_stream)
+		SND_UpdateDeviceName ();
+	return sdl_devicename[0] ? sdl_devicename : "System default";
 }
 

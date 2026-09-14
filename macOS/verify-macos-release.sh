@@ -83,14 +83,14 @@ verify_app()
 	local app=$1
 	local plist="$app/Contents/Info.plist"
 	local executable="$app/Contents/MacOS/QSS-M"
-	local framework="$app/Contents/Frameworks/SDL2.framework/Versions/A/SDL2"
+	local framework="$app/Contents/Frameworks/SDL3.framework/Versions/A/SDL3"
 	local bad_dependency
 	local entitlements
 
 	[ -d "$app" ] || fail "application bundle not found at $app"
 	[ -f "$plist" ] || fail "bundle Info.plist not found at $plist"
 	[ -f "$executable" ] || fail "bundle executable not found at $executable"
-	[ -f "$framework" ] || fail "embedded SDL2 framework not found at $framework"
+	[ -f "$framework" ] || fail "embedded SDL3 framework not found at $framework"
 
 	plutil -lint "$plist" >/dev/null
 	require_equal CFBundleIdentifier "$(plist_value "$plist" CFBundleIdentifier)" "$EXPECTED_BUNDLE_ID"
@@ -111,8 +111,8 @@ verify_app()
 	bad_dependency=$(otool -L "$executable" | awk 'NR > 1 { print $1 }' |
 		grep -E '^(/opt/homebrew|/usr/local|.*/vcpkg/)' || true)
 	[ -z "$bad_dependency" ] || fail "bundle has non-system build-host dependencies: $bad_dependency"
-	otool -L "$executable" | grep -F '@rpath/SDL2.framework/Versions/A/SDL2' >/dev/null ||
-		fail "QSS-M does not link its embedded SDL2 framework through @rpath"
+	otool -L "$executable" | grep -F '@rpath/SDL3.framework/Versions/A/SDL3' >/dev/null ||
+		fail "QSS-M does not link its embedded SDL3 framework through @rpath"
 
 	codesign --verify --deep --strict --verbose=2 "$app"
 	entitlements=$(codesign -d --entitlements - "$app" 2>/dev/null || true)

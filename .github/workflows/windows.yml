@@ -61,14 +61,14 @@ jobs:
           build-essential git wget curl xz-utils pkg-config \
           autoconf automake autopoint libtool libtool-bin gettext texinfo gperf bison flex \
           mingw-w64 gcc-mingw-w64 g++-mingw-w64 \
-          libsdl2-dev libmad0-dev libopus-dev libvorbis-dev zlib1g-dev libvorbisfile3 \
+          libmad0-dev libopus-dev libvorbis-dev zlib1g-dev libvorbisfile3 \
           libopusfile-dev libz-mingw-w64 libz-mingw-w64-dev libcurl4-openssl-dev zip
         echo "===== apt search: mingw + gnutls ====="
         apt-cache search gnutls | grep -i mingw || true
         echo "===== apt search: pkg-config mingw ====="
         apt-cache search pkg-config-mingw-w64 || true
         echo "===== dpkg snapshot ====="
-        dpkg -l | grep -E 'mingw|gnutls|pkg-config|sdl2|curl|zlib|autoconf|automake|libtool' || true
+        dpkg -l | grep -E 'mingw|gnutls|pkg-config|curl|zlib|autoconf|automake|libtool' || true
       continue-on-error: false
 
     - name: Build Or Reuse Cross GNUTLS

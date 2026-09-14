@@ -24,15 +24,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "update.h"
 #include "quake_data_import.h"
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#include <SDL2/SDL.h>
-#else
-#include <SDL/SDL.h>
+#include <SDL3/SDL.h>
+#if defined(__APPLE__)
+// The Cocoa launcher owns main() and enters QSSM_Main itself.
+#define SDL_MAIN_HANDLED
 #endif
-#else
-#include "SDL.h"
-#endif
+// On Windows this renames main() to SDL_main and supplies the WinMain entry point.
+#include <SDL3/SDL_main.h>
 #include <stdio.h>
 #if defined(__linux__) || defined(__APPLE__) // woods #idlesleep
 #include <sys/select.h>
@@ -43,7 +41,7 @@ extern cvar_t sv_idlesleep; // woods #idlespeep
 
 void Host_Reconnect_Con_f (void);
 
-static Uint32 lastTime = 0; // woods #idle
+static Uint64 lastTime = 0; // woods #idle
 
 static void Sys_AtExit (void)
 {
@@ -52,17 +50,17 @@ static void Sys_AtExit (void)
 
 static void Sys_InitSDL (void)
 {
-#if defined(USE_SDL2)
-	SDL_version v;
-	SDL_version *sdl_version = &v;
-	SDL_GetVersion(&v);
-#else
-	const SDL_version *sdl_version = SDL_Linked_Version();
+	const int sdl_version = SDL_GetVersion();
+
+	Sys_Printf("Found SDL version %i.%i.%i\n", SDL_VERSIONNUM_MAJOR(sdl_version),
+		SDL_VERSIONNUM_MINOR(sdl_version), SDL_VERSIONNUM_MICRO(sdl_version));
+
+#if defined(__APPLE__)
+	// The Cocoa launcher enters QSSM_Main directly instead of through SDL_main.
+	SDL_SetMainReady();
 #endif
 
-	Sys_Printf("Found SDL version %i.%i.%i\n",sdl_version->major,sdl_version->minor,sdl_version->patch);
-
-	if (SDL_Init(0) < 0) {
+	if (!SDL_Init(0)) {
 		Sys_Error("Couldn't init SDL: %s", SDL_GetError());
 	}
 	atexit(Sys_AtExit);
@@ -72,13 +70,9 @@ static void Sys_InitSDL (void)
 
 static quakeparms_t	parms;
 
-// On OS X we call SDL_main from the launcher, but SDL2 doesn't redefine main
-// as SDL_main on OS X anymore, so we do it ourselves.
-#if defined(USE_SDL2) && defined(__APPLE__)
-#define main SDL_main
-#endif
-
-int main(int argc, char *argv[])
+// The engine entry point. macOS enters it from the Cocoa launcher (SDLMain.m
+// and AppController.m); other platforms enter it from main() below.
+int QSSM_Main(int argc, char *argv[])
 {
 	int		t;
 	double		time, oldtime, newtime;
@@ -223,7 +217,7 @@ int main(int argc, char *argv[])
 
 		if (cl_idle.value > 0 && cls.state == ca_disconnected) // woods #idle
 		{
-			Uint32 currentTime = SDL_GetTicks();
+			Uint64 currentTime = SDL_GetTicks();
 			int clampedValue = CLAMP(1, cl_idle.value, 60); // don't spam servers
 			Uint32 idleInterval = 60000 * clampedValue; // 60000 ms = 1 minute
 
@@ -260,3 +254,10 @@ int main(int argc, char *argv[])
 
 	return 0;
 }
+
+#if !defined(__APPLE__)
+int main(int argc, char *argv[])
+{
+	return QSSM_Main(argc, argv);
+}
+#endif

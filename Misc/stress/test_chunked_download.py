@@ -1,6 +1,6 @@
 """Exercise the real chunk scheduler, parser and server file reads with a fake wire.
 
-Run with python3 Misc/stress/test_chunked_download.py (requires cc and SDL2).
+Run with python3 Misc/stress/test_chunked_download.py (requires cc and SDL3).
 The deterministic transfer timings model 72 Hz peers, delay and packet loss;
 they are not measurements of a live connection. --baseline DIR can compare
 saved before-cl_main.c, before-host_cmd.c and before-sv_main.c sources.
@@ -573,11 +573,11 @@ def run(directory, baseline=False):
         source += function(client, "static void CL_Download_Sequence_f(")
     source += "int Host_ChunkDownloadAllowance(client_t *client) {(void)client; return 32 * DL_CHUNK_PACKET_SIZE;}\n" if baseline else function(host, "int Host_ChunkDownloadAllowance(")
     source += CHECKS
-    flags = shlex.split(subprocess.check_output(["sdl2-config", "--cflags"], text=True))
+    flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "sdl3"], text=True))
     with tempfile.TemporaryDirectory(prefix="qssm-chunk-test-") as tmp:
         path = Path(tmp)
         (path / "test.c").write_text(source)
-        subprocess.run([os.environ.get("CC", "cc"), "-O1", "-g", "-std=gnu11", "-DUSE_SDL2",
+        subprocess.run([os.environ.get("CC", "cc"), "-O1", "-g", "-std=gnu11",
                         "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
                         "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                         "-I", str(ROOT / "Quake"), str(path / "test.c"),

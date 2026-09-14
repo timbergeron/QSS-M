@@ -1,6 +1,6 @@
 """Check indexed cvar lookup and static sound combining against linear references.
 
-Run with python3 Misc/stress/test_hotpath_lookups.py (requires cc and SDL2).
+Run with python3 Misc/stress/test_hotpath_lookups.py (requires cc and SDL3).
 Timings measure these routines only, not whole-engine FPS.
 """
 
@@ -252,8 +252,8 @@ with tempfile.TemporaryDirectory(prefix="qssm-hotpath-") as tmp:
     source = path / "test.c"
     binary = path / "test"
     source.write_text(SOURCE)
-    flags = shlex.split(subprocess.check_output(["sdl2-config", "--cflags", "--libs"], text=True))
-    subprocess.run([os.environ.get("CC", "cc"), "-O2", "-std=gnu11", "-DUSE_SDL2",
+    flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "--libs", "sdl3"], text=True))
+    subprocess.run([os.environ.get("CC", "cc"), "-O2", "-std=gnu11",
                     "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-I", str(ROOT / "Quake"),
                     str(source), "-o", str(binary), *flags, "-lm"], check=True)
     subprocess.run([str(binary)], check=True, timeout=30)

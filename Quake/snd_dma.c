@@ -408,30 +408,18 @@ static	cvar_t	_snd_mixahead = {"_snd_mixahead", "0.1", CVAR_ARCHIVE};
 
 extern char mute[2]; // woods #usermute #mute
 
-#if defined(USE_SDL2)
-static SDL_atomic_t snd_mastervolume_scale = {256};
-#else
-static volatile int snd_mastervolume_scale = 256;
-#endif
+static SDL_AtomicInt snd_mastervolume_scale = {256};
 
 int S_GetMasterVolumeScale (void)
 {
-#if defined(USE_SDL2)
-	return SDL_AtomicGet (&snd_mastervolume_scale);
-#else
-	return snd_mastervolume_scale;
-#endif
+	return SDL_GetAtomicInt (&snd_mastervolume_scale);
 }
 
 void S_SetMasterVolumeScale (float scale)
 {
 	int value = (int)(CLAMP (0.0f, scale, 1.0f) * 256.0f);
 
-#if defined(USE_SDL2)
-	SDL_AtomicSet (&snd_mastervolume_scale, value);
-#else
-	snd_mastervolume_scale = value;
-#endif
+	SDL_SetAtomicInt (&snd_mastervolume_scale, value);
 }
 
 static void S_SoundInfo_f (void)
@@ -530,13 +518,8 @@ static void SND_Callback_snd_surround (cvar_t *var)
 {
 	(void) var;
 
-#if defined(USE_SDL2)
 	if (sound_started)
 		Con_Printf ("snd_surround will take effect after snd_restart\n");
-#else
-	if (sound_started)
-		Con_Printf ("snd_surround requires SDL2\n");
-#endif
 }
 
 /*

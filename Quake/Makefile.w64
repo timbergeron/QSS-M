@@ -1,11 +1,8 @@
 # GNU Makefile for compiling Win64 quakespasm.exe using MinGW-w64.
 # Usage: "make -f Makefile.w64"
-# To cross-compile on Linux hosts, see the build_cross_win32*.sh scripts.
+# To cross-compile on Linux hosts, see build_cross_win64.sh.
 # "make DEBUG=1" to build a debug client.
-# "make SDL_CONFIG=/path/to/sdl2-config" to override the locally included SDL2.
-
-### Windows builds use SDL2
-USE_SDL2=1
+# "make SDL_CFLAGS=... SDL_LIBS=..." to override the locally included SDL3.
 
 ### Enable/disable codecs for streaming music support
 USE_CODEC_WAVE=1
@@ -112,15 +109,10 @@ define do_strip
 endef
 endif
 
-ifneq ($(USE_SDL2),1)
-$(error Windows builds require USE_SDL2=1)
-endif
-CFLAGS += -DUSE_SDL2
-
-# default to our local SDL2 for build
-SDL_CONFIG ?=../Windows/SDL2/bin/sdl2-config --prefix=../Windows/SDL2 --lib-suffix=64
-SDL_CFLAGS := $(shell $(SDL_CONFIG) --cflags)
-SDL_LIBS   := $(shell $(SDL_CONFIG) --libs)
+# default to our local SDL3 for build; SDL_main.h supplies WinMain, so no SDLmain library
+SDL3_ROOT  ?= ../Windows/SDL3
+SDL_CFLAGS ?= -I$(SDL3_ROOT)/include
+SDL_LIBS   ?= -L$(SDL3_ROOT)/lib/x64 -lSDL3
 
 DEFWINSOCK :=-D_USE_WINSOCK2
 LIBWINSOCK := -lws2_32
@@ -253,7 +245,7 @@ MUSIC_OBJS:= bgmusic.o \
 	snd_umx.o
 COMOBJ_SND := snd_voip.o snd_dma.o snd_mix.o snd_mem.o $(MUSIC_OBJS)
 SYSOBJ_SND := snd_sdl.o
-SYSOBJ_CDA := cd_sdl.o
+SYSOBJ_CDA := cd_null.o
 SYSOBJ_INPUT := in_sdl.o
 SYSOBJ_GL_VID:= gl_vidsdl.o
 SYSOBJ_NET := net_win.o net_wins.o

@@ -6,9 +6,10 @@ shared public headers.
 
 All DLLs are **MSVCRT-based** MinGW builds (they import `msvcrt.dll`, not the
 UCRT `api-ms-win-crt-*` DLLs). Keep it that way: every other bundled DLL —
-SDL2, curl, zlib, the whole codec set, and the main `QSS-M-w*.exe` (built by
+curl, zlib, the whole codec set, and the main `QSS-M-w*.exe` (built by
 `MSYS2.yml` / `build-w*.sh` on the MINGW toolchain) — is MSVCRT, and MSVCRT is
-present on all supported Windows versions. A UCRT DLL would be the odd one out
+present on all supported Windows versions. The official `SDL3.dll` imports no C
+runtime DLL at all. A UCRT DLL would be the odd one out
 and would need Windows 10+ (or the UCRT redistributable on 7/8.1).
 
 ## libFLAC dependency trap (read before bumping FLAC)

@@ -1,6 +1,6 @@
 """Run a production Linux client against a local NQ UDP peer.
 
-Requires an SDL2/OpenGL build, software GL, and a Quake pak0.pak containing
+Requires an SDL3/OpenGL build, software GL, and a Quake pak0.pak containing
 maps/e1m1.bsp. No stress hooks, registered assets, or external server needed.
 Checks exact file contents and cleanup under response/request loss, reordering,
 duplication, cancel/file changes and reconnects. The peer emulates the wire;
@@ -170,7 +170,7 @@ def run(binary, pak, root, mode):
     (game / 'config.cfg').write_text(config)
     (game / 'autoexec.cfg').write_text(config + f'connect 127.0.0.1:{peer.sock.getsockname()[1]}\n')
     logfile = root / mode / 'client.log'
-    env = {**os.environ, 'SDL_VIDEODRIVER': 'offscreen', 'LIBGL_ALWAYS_SOFTWARE': '1'}
+    env = {**os.environ, 'SDL_VIDEO_DRIVER': 'offscreen', 'LIBGL_ALWAYS_SOFTWARE': '1'}
     started = time.monotonic()
     with logfile.open('w') as log:
         proc = subprocess.Popen([str(binary), '-basedir', str(game.parent), '-nohome', '-window', '-width', '320', '-height', '240', '-nosound', '-nojoy', '-nomouse', '-noipx'], cwd=game.parent, env=env, stdout=log, stderr=subprocess.STDOUT)

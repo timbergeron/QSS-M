@@ -36,8 +36,8 @@ source = r'''
 #include <string.h>
 #define countof(a) (sizeof(a) / sizeof((a)[0]))
 typedef enum { false, true } qboolean;
-#define USE_SDL2 1
 #define MAX_CLIPBOARDTXT 256
+#define SDL_strlen strlen
 '''
 source += re.search(r"^#define UTF8_QUAKE_BUFSIZE .*", header, re.MULTILINE).group(0) + "\n"
 source += common[start:end]
@@ -72,7 +72,7 @@ int SDL_SetClipboardText(const char *text) {
     assert(strlen(text) < sizeof(clipboard_written));
     strcpy(clipboard_written, text);
     clipboard = clipboard_written;
-    return 0;
+    return 1; /* SDL3 reports success as true */
 }
 void Char_Event(int ch) {
     assert(ch > 0 && ch < 128 && typed_len + 1 < sizeof(typed));
@@ -87,14 +87,13 @@ for platform in ("linux", "win"):
     )
 
 input_source = (ROOT / "Quake/in_sdl.c").read_text()
-start = input_source.index("\t\tcase SDL_TEXTINPUT:")
+start = input_source.index("\t\tcase SDL_EVENT_TEXT_INPUT:")
 start = input_source.index("\t\t\t{", start)
 end = input_source.index("\n\t\t\t}", start) + len("\n\t\t\t}")
 source += r'''
 static void type_text(const char *input) {
-    struct { struct { char text[32]; } text; } event;
-    assert(strlen(input) < sizeof(event.text.text));
-    strcpy(event.text.text, input);
+    struct { struct { const char *text; } text; } event;
+    event.text.text = input;
     typed_len = 0;
     typed[0] = 0;
 '''

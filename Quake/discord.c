@@ -1124,7 +1124,7 @@ static int64_t DiscordPresence_MapStartTimestamp(discord_presence_kind_t kind)
 	if (discord_presence.timestamp_maptime != maptime ||
 		discord_presence.timestamp_kind != kind || !discord_presence.timestamp_start)
 	{
-		Uint64 now_ticks = SDL_GetTicks64();
+		Uint64 now_ticks = SDL_GetTicks();
 		uint64_t elapsed = (maptime && now_ticks >= maptime) ?
 			(uint64_t)((now_ticks - maptime) / 1000) : 0;
 		int64_t wall_time = (int64_t)time(NULL);
@@ -1774,16 +1774,16 @@ static discord_alert_t discord_alert_queue[DISCORD_ALERT_QUEUE_MAX];
 static int discord_alert_queue_count;
 static discord_followup_context_t discord_followup_context;
 
-static SDL_atomic_t discord_test_status;
-static SDL_atomic_t discord_test_http_code;
-static SDL_atomic_t discord_community_status;
-static SDL_atomic_t discord_community_online_count;
-static SDL_atomic_t discord_community_completed_ticks;
-static SDL_atomic_t discord_workers_active;
-static SDL_atomic_t discord_notify_workers_active;
-static SDL_atomic_t discord_notify_failure_status;
-static SDL_atomic_t discord_notify_failure_http_code;
-static SDL_atomic_t discord_shutting_down;
+static SDL_AtomicInt discord_test_status;
+static SDL_AtomicInt discord_test_http_code;
+static SDL_AtomicInt discord_community_status;
+static SDL_AtomicInt discord_community_online_count;
+static SDL_AtomicInt discord_community_completed_ticks;
+static SDL_AtomicInt discord_workers_active;
+static SDL_AtomicInt discord_notify_workers_active;
+static SDL_AtomicInt discord_notify_failure_status;
+static SDL_AtomicInt discord_notify_failure_http_code;
+static SDL_AtomicInt discord_shutting_down;
 static qboolean discord_initialized;
 static discord_test_status_t discord_notify_last_warning_status;
 static int discord_notify_last_warning_http_code;
@@ -1798,15 +1798,15 @@ static void DiscordAlert_ResetFollowup(void);
 
 static void DiscordTest_SetResult(discord_test_status_t status, long http_code)
 {
-	SDL_AtomicSet(&discord_test_http_code, (int)http_code);
-	SDL_AtomicSet(&discord_test_status, status);
+	SDL_SetAtomicInt(&discord_test_http_code, (int)http_code);
+	SDL_SetAtomicInt(&discord_test_status, status);
 }
 
 static void DiscordNotify_SetFailure(discord_test_status_t status,
 	long http_code)
 {
-	SDL_AtomicSet(&discord_notify_failure_http_code, (int)http_code);
-	SDL_AtomicSet(&discord_notify_failure_status, status);
+	SDL_SetAtomicInt(&discord_notify_failure_http_code, (int)http_code);
+	SDL_SetAtomicInt(&discord_notify_failure_status, status);
 }
 
 static size_t Discord_WriteResponse(void *contents, size_t size,
@@ -1895,28 +1895,28 @@ static qboolean Discord_WaitForRetry(double seconds)
 		seconds > DISCORD_ALERT_RETRY_MAX_SECONDS)
 		return false;
 	delay_ms = (Uint64)ceil(seconds * 1000.0) + 1;
-	now = SDL_GetTicks64();
+	now = SDL_GetTicks();
 	deadline = now + delay_ms;
 	while (now < deadline)
 	{
 		Uint64 remaining = deadline - now;
 
-		if (SDL_AtomicGet(&discord_shutting_down))
+		if (SDL_GetAtomicInt(&discord_shutting_down))
 			return false;
 		SDL_Delay((Uint32)q_min(remaining, (Uint64)50));
-		now = SDL_GetTicks64();
+		now = SDL_GetTicks();
 	}
-	return !SDL_AtomicGet(&discord_shutting_down);
+	return !SDL_GetAtomicInt(&discord_shutting_down);
 }
 
 static qboolean DiscordWorker_Begin(void)
 {
-	if (SDL_AtomicGet(&discord_shutting_down))
+	if (SDL_GetAtomicInt(&discord_shutting_down))
 		return false;
-	SDL_AtomicAdd(&discord_workers_active, 1);
-	if (SDL_AtomicGet(&discord_shutting_down))
+	SDL_AddAtomicInt(&discord_workers_active, 1);
+	if (SDL_GetAtomicInt(&discord_shutting_down))
 	{
-		SDL_AtomicAdd(&discord_workers_active, -1);
+		SDL_AddAtomicInt(&discord_workers_active, -1);
 		return false;
 	}
 	return true;
@@ -1924,7 +1924,7 @@ static qboolean DiscordWorker_Begin(void)
 
 static void DiscordWorker_End(void)
 {
-	SDL_AtomicAdd(&discord_workers_active, -1);
+	SDL_AddAtomicInt(&discord_workers_active, -1);
 }
 
 static qboolean DiscordNotifyWorker_Begin(void)
@@ -1933,14 +1933,14 @@ static qboolean DiscordNotifyWorker_Begin(void)
 
 	do
 	{
-		active = SDL_AtomicGet(&discord_notify_workers_active);
+		active = SDL_GetAtomicInt(&discord_notify_workers_active);
 		if (active >= DISCORD_NOTIFY_MAX_WORKERS)
 			return false;
-	} while (!SDL_AtomicCAS(&discord_notify_workers_active, active, active + 1));
+	} while (!SDL_CompareAndSwapAtomicInt(&discord_notify_workers_active, active, active + 1));
 
 	if (!DiscordWorker_Begin())
 	{
-		SDL_AtomicAdd(&discord_notify_workers_active, -1);
+		SDL_AddAtomicInt(&discord_notify_workers_active, -1);
 		return false;
 	}
 	return true;
@@ -1948,15 +1948,15 @@ static qboolean DiscordNotifyWorker_Begin(void)
 
 static void DiscordNotifyWorker_End(void)
 {
-	SDL_AtomicAdd(&discord_notify_workers_active, -1);
+	SDL_AddAtomicInt(&discord_notify_workers_active, -1);
 	DiscordWorker_End();
 }
 
 static void DiscordWorkers_Shutdown(void)
 {
-	SDL_AtomicSet(&discord_shutting_down, 1);
+	SDL_SetAtomicInt(&discord_shutting_down, 1);
 	discord_alert_queue_count = 0;
-	while (SDL_AtomicGet(&discord_workers_active) > 0)
+	while (SDL_GetAtomicInt(&discord_workers_active) > 0)
 		SDL_Delay(1);
 }
 
@@ -2597,9 +2597,9 @@ static discord_alert_send_result_t DiscordAlert_StartJob(
 	SDL_Thread *thread;
 	int url_length;
 
-	if (SDL_AtomicGet(&discord_shutting_down))
+	if (SDL_GetAtomicInt(&discord_shutting_down))
 		return DISCORD_ALERT_SEND_DROPPED;
-	if (SDL_AtomicGet(&discord_notify_workers_active) >= DISCORD_NOTIFY_MAX_WORKERS)
+	if (SDL_GetAtomicInt(&discord_notify_workers_active) >= DISCORD_NOTIFY_MAX_WORKERS)
 		return DISCORD_ALERT_SEND_RETRY;
 
 	job = (discord_job_t *)malloc(sizeof(*job));
@@ -2626,7 +2626,7 @@ static discord_alert_send_result_t DiscordAlert_StartJob(
 	if (!DiscordNotifyWorker_Begin())
 	{
 		free(job);
-		return SDL_AtomicGet(&discord_shutting_down) ?
+		return SDL_GetAtomicInt(&discord_shutting_down) ?
 			DISCORD_ALERT_SEND_DROPPED : DISCORD_ALERT_SEND_RETRY;
 	}
 	thread = SDL_CreateThread(DiscordNotifyThread, "discord-notify", job);
@@ -2690,14 +2690,14 @@ static qboolean DiscordAlert_Enqueue(const discord_alert_t *alert)
 static void DiscordNotify_ReportFailure(void)
 {
 	discord_test_status_t status =
-		(discord_test_status_t)SDL_AtomicGet(&discord_notify_failure_status);
+		(discord_test_status_t)SDL_GetAtomicInt(&discord_notify_failure_status);
 	int http_code;
 
 	if (status == DISCORD_TEST_IDLE ||
-		!SDL_AtomicCAS(&discord_notify_failure_status, status,
+		!SDL_CompareAndSwapAtomicInt(&discord_notify_failure_status, status,
 			DISCORD_TEST_IDLE))
 		return;
-	http_code = SDL_AtomicGet(&discord_notify_failure_http_code);
+	http_code = SDL_GetAtomicInt(&discord_notify_failure_http_code);
 	if (status == discord_notify_last_warning_status &&
 		http_code == discord_notify_last_warning_http_code &&
 		realtime < discord_notify_next_warning)
@@ -2780,7 +2780,7 @@ void Discord_NotifyDirectMessage(const char *raw_message)
 
 discord_test_status_t Discord_NotifyTest(void)
 {
-	if (SDL_AtomicGet(&discord_test_status) == DISCORD_TEST_SENDING)
+	if (SDL_GetAtomicInt(&discord_test_status) == DISCORD_TEST_SENDING)
 		return DISCORD_TEST_SENDING;
 
 	if (!con_notifydiscord.string[0] || !IsDiscordWebhookURL(con_notifydiscord.string))
@@ -2799,10 +2799,10 @@ discord_test_status_t Discord_NotifyTest(void)
 discord_test_status_t Discord_NotifyTestStatus(int *http_code)
 {
 	discord_test_status_t status =
-		(discord_test_status_t)SDL_AtomicGet(&discord_test_status);
+		(discord_test_status_t)SDL_GetAtomicInt(&discord_test_status);
 
 	if (http_code)
-		*http_code = SDL_AtomicGet(&discord_test_http_code);
+		*http_code = SDL_GetAtomicInt(&discord_test_http_code);
 	return status;
 }
 
@@ -2980,9 +2980,12 @@ static qboolean DiscordCommunity_FetchOnlineCount(const char *invite_code,
 static void DiscordCommunity_SetResult(discord_community_status_t status,
 	int online_count)
 {
-	SDL_AtomicSet(&discord_community_online_count, online_count);
-	SDL_AtomicSet(&discord_community_completed_ticks, (int)SDL_GetTicks());
-	SDL_AtomicSet(&discord_community_status, status);
+	SDL_SetAtomicInt(&discord_community_online_count, online_count);
+	/* SDL atomics are int-sized, so this stores the low 32 bits of the tick
+	   count. Discord_CommunityRefresh compares with unsigned 32-bit
+	   subtraction, which stays correct when the counter wraps. */
+	SDL_SetAtomicInt(&discord_community_completed_ticks, (int)(Uint32)SDL_GetTicks());
+	SDL_SetAtomicInt(&discord_community_status, status);
 }
 
 static int DiscordCommunityThread(void *unused)
@@ -3003,14 +3006,14 @@ static int DiscordCommunityThread(void *unused)
 void Discord_CommunityRefresh(void)
 {
 	discord_community_status_t status =
-		(discord_community_status_t)SDL_AtomicGet(&discord_community_status);
-	Uint32 now = SDL_GetTicks();
-	Uint32 completed = (Uint32)SDL_AtomicGet(&discord_community_completed_ticks);
+		(discord_community_status_t)SDL_GetAtomicInt(&discord_community_status);
+	Uint32 now = (Uint32)SDL_GetTicks();
+	Uint32 completed = (Uint32)SDL_GetAtomicInt(&discord_community_completed_ticks);
 	Uint32 cache_ms = status == DISCORD_COMMUNITY_READY ?
 		DISCORD_COMMUNITY_READY_CACHE_MS : DISCORD_COMMUNITY_ERROR_CACHE_MS;
 	SDL_Thread *thread;
 
-	if (SDL_AtomicGet(&discord_shutting_down))
+	if (SDL_GetAtomicInt(&discord_shutting_down))
 		return;
 	if (status == DISCORD_COMMUNITY_LOADING)
 		return;
@@ -3020,7 +3023,7 @@ void Discord_CommunityRefresh(void)
 
 	if (!DiscordWorker_Begin())
 		return;
-	SDL_AtomicSet(&discord_community_status, DISCORD_COMMUNITY_LOADING);
+	SDL_SetAtomicInt(&discord_community_status, DISCORD_COMMUNITY_LOADING);
 	thread = SDL_CreateThread(DiscordCommunityThread, "discord-community", NULL);
 	if (thread)
 		SDL_DetachThread(thread);
@@ -3034,10 +3037,10 @@ void Discord_CommunityRefresh(void)
 discord_community_status_t Discord_CommunityStatus(int *online_count)
 {
 	discord_community_status_t status =
-		(discord_community_status_t)SDL_AtomicGet(&discord_community_status);
+		(discord_community_status_t)SDL_GetAtomicInt(&discord_community_status);
 
 	if (online_count)
-		*online_count = SDL_AtomicGet(&discord_community_online_count);
+		*online_count = SDL_GetAtomicInt(&discord_community_online_count);
 	return status;
 }
 
@@ -3054,16 +3057,16 @@ void Discord_Init(void)
 	if (discord_initialized)
 		return;
 
-	SDL_AtomicSet(&discord_shutting_down, 0);
-	SDL_AtomicSet(&discord_workers_active, 0);
-	SDL_AtomicSet(&discord_notify_workers_active, 0);
-	SDL_AtomicSet(&discord_test_status, DISCORD_TEST_IDLE);
-	SDL_AtomicSet(&discord_test_http_code, 0);
-	SDL_AtomicSet(&discord_community_status, DISCORD_COMMUNITY_IDLE);
-	SDL_AtomicSet(&discord_community_online_count, 0);
-	SDL_AtomicSet(&discord_community_completed_ticks, 0);
-	SDL_AtomicSet(&discord_notify_failure_status, DISCORD_TEST_IDLE);
-	SDL_AtomicSet(&discord_notify_failure_http_code, 0);
+	SDL_SetAtomicInt(&discord_shutting_down, 0);
+	SDL_SetAtomicInt(&discord_workers_active, 0);
+	SDL_SetAtomicInt(&discord_notify_workers_active, 0);
+	SDL_SetAtomicInt(&discord_test_status, DISCORD_TEST_IDLE);
+	SDL_SetAtomicInt(&discord_test_http_code, 0);
+	SDL_SetAtomicInt(&discord_community_status, DISCORD_COMMUNITY_IDLE);
+	SDL_SetAtomicInt(&discord_community_online_count, 0);
+	SDL_SetAtomicInt(&discord_community_completed_ticks, 0);
+	SDL_SetAtomicInt(&discord_notify_failure_status, DISCORD_TEST_IDLE);
+	SDL_SetAtomicInt(&discord_notify_failure_http_code, 0);
 	discord_alert_queue_count = 0;
 	discord_notify_last_warning_status = DISCORD_TEST_IDLE;
 	discord_notify_last_warning_http_code = 0;

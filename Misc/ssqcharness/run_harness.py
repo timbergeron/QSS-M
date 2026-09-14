@@ -124,7 +124,7 @@ def run_case(binary, basedir, mod_dir, case, mode, progs):
     timed_out = False
     try:
         process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 timeout=30, env={**os.environ, "SDL_AUDIODRIVER": "dummy"})
+                                 timeout=30, env={**os.environ, "SDL_AUDIO_DRIVER": "dummy"})
         returncode = process.returncode
         output = clean_output(process.stdout.decode("utf-8", "replace"))
     except subprocess.TimeoutExpired as error:

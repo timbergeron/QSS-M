@@ -53,8 +53,8 @@ The maintained macOS build consists of:
   ZIP packaging, and release validation.
 - `verify-macos-release.sh`: validates the app and packaged ZIP metadata,
   architectures, deployment targets, dependencies, and code-signature integrity.
-- `SDL2.framework`: the one separately bundled third-party binary. SDL2 is not
-  currently built by the vcpkg setup.
+- `SDL3.framework`: the one separately bundled third-party binary. SDL3 is not
+  built by the vcpkg setup.
 
 The following directories are generated locally and ignored by Git:
 
@@ -70,7 +70,7 @@ macOS dependency handling is intentionally hybrid:
 |---|---|
 | GnuTLS, libtasn1, Nettle | Explicit versions and source hashes in `setup-vcpkg.sh`: GnuTLS 3.8.13, libtasn1 4.21.0, and Nettle 3.10.2. |
 | FLAC, Ogg, Opus, Opusfile, Vorbis, libmad, libxmp, zlib | Built from the ports supplied by the pinned vcpkg registry baseline. Their versions are not overridden locally. |
-| SDL2 | Checked-in universal `SDL2.framework` 2.32.10, linked and embedded by Xcode. |
+| SDL3 | Checked-in universal `SDL3.framework` 3.4.16, copied unchanged from the official release DMG and linked and embedded by Xcode. |
 | curl, libiconv, Apple frameworks | Supplied by the macOS SDK or operating system. |
 
 This differs from the Windows build, which vendors its codec DLLs and matching

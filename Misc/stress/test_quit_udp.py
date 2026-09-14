@@ -1,6 +1,6 @@
 """Exercise real browser UDP queries against delayed and silent local servers.
 
-Run with python3 Misc/stress/test_quit_udp.py (requires cc and SDL2).
+Run with python3 Misc/stress/test_quit_udp.py (requires cc and SDL3).
 Checks normal deadlines, delayed replies, and cancellation of concurrent queries.
 """
 
@@ -16,7 +16,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 host = (ROOT / "Quake/host_cmd.c").read_text()
-start = host.index("static SDL_atomic_t server_queries_abort;")
+start = host.index("static SDL_AtomicInt server_queries_abort;")
 end = host.index("\n}\n", host.index("char *UDP_QueryPlayers(", start)) + 3
 
 SOURCE = r'''
@@ -41,14 +41,14 @@ int (*BigLong)(int) = network_order;
 typedef struct {
     const char *address;
     qboolean players;
-    SDL_atomic_t started;
+    SDL_AtomicInt started;
     int ping;
     char *names;
 } query_t;
 
 static int query_worker(void *data) {
     query_t *query = data;
-    SDL_AtomicSet(&query->started, 1);
+    SDL_SetAtomicInt(&query->started, 1);
     if (query->players) query->names = UDP_QueryPlayers(query->address, 16);
     else query->ping = UDP_Ping_Host(query->address);
     return 0;
@@ -56,7 +56,7 @@ static int query_worker(void *data) {
 
 int main(int argc, char **argv) {
     assert(argc == 4);
-    assert(SDL_Init(0) == 0);
+    assert(SDL_Init(0));
     double start = Sys_DoubleTime();
     assert(UDP_Ping_Host(argv[1]) == -1);
     double ping_deadline = Sys_DoubleTime() - start;
@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
     }
     start = Sys_DoubleTime();
     for (int i = 0; i < WORKERS; ++i) {
-        while (!SDL_AtomicGet(&queries[i].started)) {
+        while (!SDL_GetAtomicInt(&queries[i].started)) {
             assert(Sys_DoubleTime() - start < 2);
             SDL_Delay(1);
         }
@@ -140,12 +140,12 @@ class Handler(socketserver.BaseRequestHandler):
 
 
 def main():
-    flags = shlex.split(subprocess.check_output(["sdl2-config", "--cflags", "--libs"], text=True))
+    flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "--libs", "sdl3"], text=True))
     with tempfile.TemporaryDirectory(prefix="qssm-quit-udp-test-") as tmp:
         path = Path(tmp)
         source, binary = path / "test.c", path / "test"
         source.write_text(SOURCE)
-        subprocess.run([os.environ.get("CC", "cc"), "-O2", "-std=gnu11", "-DUSE_SDL2",
+        subprocess.run([os.environ.get("CC", "cc"), "-O2", "-std=gnu11",
                         "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
                         "-ffunction-sections", "-Wl,--gc-sections", "-I", str(ROOT / "Quake"),
                         str(source), str(ROOT / "Quake/net_address.c"),

@@ -42,22 +42,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <io.h>
 #include <direct.h>
 
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#include <SDL2/SDL.h>
-#else
-#include <SDL/SDL.h>
-#endif
-#else
-#include "SDL.h"
-#endif
-#if defined(USE_SDL2)
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#include <SDL2/SDL_syswm.h>
-#else
-#include "SDL_syswm.h"
-#endif
-#endif
+#include <SDL3/SDL.h>
 
 
 qboolean		isDedicated;
@@ -67,7 +52,6 @@ cvar_t		sys_throttle = {"sys_throttle", "0.02", CVAR_ARCHIVE};
 static HANDLE		hinput, houtput;
 static qboolean		use_vtp = false; // ANSI virtual terminal processing available
 
-#if defined(USE_SDL2)
 typedef enum {
 	QSS_TBPF_NOPROGRESS = 0,
 	QSS_TBPF_INDETERMINATE = 0x1,
@@ -129,7 +113,6 @@ static qss_tbpflag_t taskbar_progress_state;
 static ULONGLONG taskbar_progress_completed;
 
 static void Sys_ShutdownTaskbarShell(void);
-#endif
 
 static size_t	sys_handles_max;	/* spike -- removed limit, was 32 (johnfitz -- was 10) */
 static FILE		**sys_handles;
@@ -780,7 +763,7 @@ qboolean Sys_Explore (const char *path)
 
 	if (!Sys_BuildFileURL(dir, url, sizeof(url)))
 		return false;
-	return SDL_OpenURL (url) == 0;
+	return SDL_OpenURL (url);
 }
 
 static char	cwd[1024];
@@ -913,10 +896,13 @@ LRESULT CALLBACK KeyFilter(int nCode, WPARAM wParam, LPARAM lParam)
 					pending_mask |= (1 << key);
 				else
 					pending_mask &= ~(1 << key);
-				memset(&ev, 0, sizeof(ev));
-				ev.type = down ? SDL_KEYDOWN : SDL_KEYUP;
-				ev.key.state = down ? SDL_PRESSED : SDL_RELEASED;
-				ev.key.keysym.scancode = hk_sdl_scancodes[key];
+				memset(&ev, 0, sizeof(ev));	// a zero timestamp is filled in by SDL_PushEvent
+				ev.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+				ev.key.windowID = SDL_GetWindowID((SDL_Window *)VID_GetWindow());
+				ev.key.down = down;
+				ev.key.scancode = hk_sdl_scancodes[key];
+				ev.key.mod = SDL_GetModState();
+				ev.key.key = SDL_GetKeyFromScancode(ev.key.scancode, ev.key.mod, true);
 				SDL_PushEvent(&ev);
 				return 1;
 			}
@@ -1060,10 +1046,8 @@ void Sys_Error (const char *error, ...)
 
 	Con_Redirect(NULL);
 
-#if defined(USE_SDL2)
 	taskbar_shutdown = true;
 	Sys_ShutdownTaskbarShell();
-#endif
 
 	if (isDedicated)
 		WriteFile (houtput, errortxt1, strlen(errortxt1), &dummy, NULL);
@@ -1730,10 +1714,8 @@ void Sys_Printf (const char *fmt, ...)
 
 void Sys_Quit (void)
 {
-#if defined(USE_SDL2)
 	taskbar_shutdown = true;
 	Sys_ShutdownTaskbarShell();
-#endif
 
 	Host_Shutdown();
 
@@ -2081,7 +2063,6 @@ void Sys_SendKeyEvents (void)
 	IN_SendKeyEvents();
 }
 
-#if defined(USE_SDL2)
 static void Sys_UnloadTaskbarOle32(void)
 {
 	taskbar_CoUninitialize = NULL;
@@ -2096,7 +2077,6 @@ static void Sys_UnloadTaskbarOle32(void)
 static HWND Sys_TaskbarWindow(void)
 {
 	SDL_Window *window;
-	SDL_SysWMinfo wmInfo;
 
 	if (isDedicated)
 		return NULL;
@@ -2105,11 +2085,8 @@ static HWND Sys_TaskbarWindow(void)
 	if (!window)
 		return NULL;
 
-	SDL_VERSION(&wmInfo.version);
-	if (!SDL_GetWindowWMInfo(window, &wmInfo))
-		return NULL;
-
-	return wmInfo.info.win.window;
+	return (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+		SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
 }
 
 static UINT Sys_TaskbarWindowDpi(HWND hwnd)
@@ -2404,29 +2381,28 @@ static void Sys_ApplyTaskbarProgress(HWND hwnd)
 	taskbar_progress_hwnd = hwnd;
 }
 
-static void SDLCALL Sys_TaskbarMessageHook(void *userdata, void *window,
-	unsigned int message, Uint64 wparam, Sint64 lparam)
+static bool SDLCALL Sys_TaskbarMessageHook(void *userdata, MSG *msg)
 {
 	(void)userdata;
-	(void)lparam;
 
-	if (message == taskbar_button_created_message)
+	if (msg->message == taskbar_button_created_message)
 	{
 		/* Explorer discards overlays and progress when it restarts.
 		   TaskbarButtonCreated means this window's replacement taskbar button
 		   is ready for the saved count and progress state to be reapplied. */
 		taskbar_notification_hwnd = NULL;
 		taskbar_progress_hwnd = NULL;
-		Sys_ApplyTaskbarNotificationBadge((HWND)window, 0);
-		Sys_ApplyTaskbarProgress((HWND)window);
+		Sys_ApplyTaskbarNotificationBadge(msg->hwnd, 0);
+		Sys_ApplyTaskbarProgress(msg->hwnd);
 	}
-	else if (message == WM_DPICHANGED && taskbar_notification_count)
+	else if (msg->message == WM_DPICHANGED && taskbar_notification_count)
 	{
 		/* Moving between differently scaled monitors changes the ideal HICON
 		   dimensions. Re-render instead of asking Windows to stretch it. */
 		taskbar_notification_hwnd = NULL;
-		Sys_ApplyTaskbarNotificationBadge((HWND)window, LOWORD(wparam));
+		Sys_ApplyTaskbarNotificationBadge(msg->hwnd, LOWORD(msg->wParam));
 	}
+	return true;	/* only observing: SDL still handles every message */
 }
 
 static qboolean Sys_InitTaskbarShell(void)
@@ -2526,13 +2502,11 @@ static void Sys_ShutdownTaskbarShell(void)
 
 	Sys_UnloadTaskbarOle32();
 }
-#endif
 
 void Sys_SetDockProgress (float fraction, int port_probe)
 {
 	(void)port_probe;
 
-#if defined(USE_SDL2)
 	HWND hwnd;
 	ULONGLONG completed;
 	const ULONGLONG total = taskbar_progress_total;
@@ -2580,14 +2554,10 @@ void Sys_SetDockProgress (float fraction, int port_probe)
 	taskbar_list->lpVtbl->SetProgressValue(taskbar_list, hwnd, completed, total);
 	taskbar_progress_state = QSS_TBPF_NORMAL;
 	taskbar_progress_completed = completed;
-#else
-	(void)fraction;
-#endif
 }
 
 void Sys_IncrementDockNotificationBadge (void)
 {
-#if defined(USE_SDL2)
 	HWND hwnd;
 
 	if (isDedicated)
@@ -2607,12 +2577,10 @@ void Sys_IncrementDockNotificationBadge (void)
 		return;
 
 	Sys_ApplyTaskbarNotificationBadge(hwnd, 0);
-#endif
 }
 
 void Sys_ClearDockNotificationBadge (void)
 {
-#if defined(USE_SDL2)
 	HWND hwnd;
 
 	taskbar_notification_count = 0;
@@ -2628,7 +2596,6 @@ void Sys_ClearDockNotificationBadge (void)
 	if (hwnd)
 		taskbar_list->lpVtbl->SetOverlayIcon(taskbar_list, hwnd, NULL, NULL);
 	taskbar_notification_hwnd = NULL;
-#endif
 }
 
 #if defined(_WIN32) // woods #disablecaps via ironwail

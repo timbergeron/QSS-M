@@ -189,7 +189,6 @@ static float Pong_MouseYInFramebuffer(int y)
 {
 	float framebuffer_y = (float)y;
 
-#if defined(USE_SDL2)
 	SDL_Window* window = (SDL_Window*)VID_GetWindow();
 	int window_width, window_height;
 
@@ -199,7 +198,6 @@ static float Pong_MouseYInFramebuffer(int y)
 		if (window_height > 0)
 			framebuffer_y *= (float)vid.height / window_height;
 	}
-#endif
 
 	return framebuffer_y;
 }
@@ -214,7 +212,7 @@ static void Pong_Reset(qboolean new_session)
 	pong.ball.size = PONG_BALL_SIZE;
 
 	if (new_session) {
-		int mx, my; SDL_GetMouseState(&mx, &my);
+		float mx, my; SDL_GetMouseState(&mx, &my);
 		pong.player.y = Pong_Clamp(Pong_MouseYInFramebuffer(my) / sc - pong.player.h * 0.5f,
 			0.0f, (pong.screen_height / sc) - pong.player.h);
 		pong.player_score = pong.ai_score = 0;

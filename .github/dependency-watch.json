@@ -1,11 +1,10 @@
 [
   {
-    "name": "SDL2",
-    "vendored": "2.32.10",
-    "dlls": ["Windows/SDL2/lib/SDL2.dll", "Windows/SDL2/lib64/SDL2.dll"],
+    "name": "SDL3",
+    "vendored": "3.4.16",
+    "dlls": ["Windows/SDL3/lib/x86/SDL3.dll", "Windows/SDL3/lib/x64/SDL3.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-SDL2", "baseline": "2.32.10-1" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-SDL2", "baseline": "2.32.10-1" }
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-sdl3", "baseline": "3.4.16-1" }
     ]
   },
   {

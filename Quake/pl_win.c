@@ -27,18 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #if !defined(__WATCOMC__)
 #include <shobjidl.h>
 #endif
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_syswm.h>
-#else
-#include <SDL/SDL.h>
-#include <SDL/SDL_syswm.h>
-#endif
-#else
-#include "SDL.h"
-#include "SDL_syswm.h"
-#endif
+#include <SDL3/SDL.h>
 
 static HICON icon;
 
@@ -64,20 +53,10 @@ static DWORD pl_quit_hold_started;
 
 static HWND PL_GetNativeWindow (void)
 {
-	SDL_SysWMinfo wminfo;
-
-	SDL_VERSION(&wminfo.version);
-#if defined(USE_SDL2)
 	if (!VID_GetWindow())
 		return NULL;
-	if (SDL_GetWindowWMInfo((SDL_Window *)VID_GetWindow(), &wminfo) != SDL_TRUE)
-		return NULL;
-	return wminfo.info.win.window;
-#else
-	if (SDL_GetWMInfo(&wminfo) != 1)
-		return NULL;
-	return wminfo.window;
-#endif
+	return (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties((SDL_Window *)VID_GetWindow()),
+		SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
 }
 
 static UINT PL_GetWindowDPI (HWND hwnd)
@@ -581,7 +560,6 @@ void PL_VID_Shutdown (void)
 char *PL_GetClipboardData (void)
 {
 	char *data = NULL;
-#if defined(USE_SDL2)
 	char *cliptext = SDL_GetClipboardText();
 	if (cliptext != NULL)
 	{
@@ -589,32 +567,6 @@ char *PL_GetClipboardData (void)
 		UTF8_ToQuake(data, MAX_CLIPBOARDTXT, cliptext);
 		SDL_free(cliptext);
 	}
-#else
-	char *cliptext;
-
-	if (OpenClipboard(NULL) != 0)
-	{
-		HANDLE hClipboardData;
-
-		if ((hClipboardData = GetClipboardData(CF_TEXT)) != NULL)
-		{
-			cliptext = (char *) GlobalLock(hClipboardData);
-			if (cliptext != NULL)
-			{
-				size_t size = GlobalSize(hClipboardData) + 1;
-			/* this is intended for simple small text copies
-			 * such as an ip address, etc:  do chop the size
-			 * here, otherwise we may experience Z_Malloc()
-			 * failures and all other not-oh-so-fun stuff. */
-				size = q_min((size_t)(MAX_CLIPBOARDTXT), size);
-				data = (char *) Z_Malloc((int)size);
-				q_strlcpy (data, cliptext, size);
-				GlobalUnlock (hClipboardData);
-			}
-		}
-		CloseClipboard ();
-	}
-#endif
 	return data;
 }
 
@@ -2117,7 +2069,7 @@ static int PL_SDLMessageDialog(const char *title, const char *message,
 		sdl_buttons[i].flags =
 			(buttons[i].id == default_button ? SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT : 0) |
 			(buttons[i].id == cancel_button ? SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT : 0);
-		sdl_buttons[i].buttonid = buttons[i].id;
+		sdl_buttons[i].buttonID = buttons[i].id;
 		sdl_buttons[i].text = buttons[i].text;
 	}
 	memset(&data, 0, sizeof(data));
@@ -2126,7 +2078,7 @@ static int PL_SDLMessageDialog(const char *title, const char *message,
 	data.message = message;
 	data.numbuttons = num_buttons;
 	data.buttons = sdl_buttons;
-	if (SDL_ShowMessageBox(&data, &selected) < 0)
+	if (!SDL_ShowMessageBox(&data, &selected))
 		selected = cancel_button;
 	free(sdl_buttons);
 	return selected;

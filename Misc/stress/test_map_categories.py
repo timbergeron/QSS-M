@@ -1,6 +1,6 @@
 """Exercise the real map discovery, grouping, filtering and navigation code.
 
-Run with python3 Misc/stress/test_map_categories.py (requires cc and SDL2 headers).
+Run with python3 Misc/stress/test_map_categories.py (requires cc and SDL3 headers).
 Rendering and description I/O are stubbed; discovery and lookup use temporary
 loose maps and in-memory package directories, including overridden map names.
 """
@@ -392,9 +392,9 @@ with tempfile.TemporaryDirectory(prefix="qssm-map-categories-") as temp:
             (temp / gamedir / "maps" / f"{name}.bsp").touch()
     test_c = temp / "test.c"
     test_c.write_text(source)
-    sdl_flags = shlex.split(subprocess.check_output(["sdl2-config", "--cflags"], text=True))
+    sdl_flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "sdl3"], text=True))
     subprocess.run(shlex.split(os.environ.get("CC", "cc")) + [
-        "-std=gnu11", "-DUSE_SDL2", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
+        "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
         "-fsanitize=undefined", "-fno-sanitize-recover=all", "-I", str(ROOT / "Quake"),
         *sdl_flags, str(test_c), str(ROOT / "Quake/strlcpy.c"), "-o", str(temp / "test"),
     ], check=True)

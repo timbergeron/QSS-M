@@ -1984,9 +1984,9 @@ void M_PrintHighlightScroll(int x, int y, int maxwidth, const char* str, const c
 
 void M_ForceMousemove(void)
 {
-	int x, y;
+	float x, y;
 	SDL_GetMouseState(&x, &y);
-	M_Mousemove(x, y);
+	M_Mousemove((int)x, (int)y);
 }
 
 void M_UpdateCursor(int mousey, int starty, int itemheight, int numitems, int* cursor)
@@ -13458,16 +13458,15 @@ static const char *M_Controller_GetDeviceLabel(void)
 	const char *name = NULL;
 	int device = (int)joy_device.value;
 
-#if defined(USE_SDL2)
 	if (device < 0)
 		return "Disabled";
 
-	if (device < SDL_NumJoysticks())
+	if (device < IN_GetJoystickCount())
 	{
-		if (!SDL_IsGameController(device))
+		if (!IN_IsGamepadAt(device))
 			return "Unsupported";
 
-		name = SDL_GameControllerNameForIndex(device);
+		name = IN_GetGamepadNameAt(device);
 	}
 	else
 	{
@@ -13475,11 +13474,6 @@ static const char *M_Controller_GetDeviceLabel(void)
 		if (!name)
 			return "Not connected";
 	}
-#else
-	name = IN_GetGamepadName();
-	if (!name)
-		return "Unavailable";
-#endif
 
 	if (!name || !*name)
 		name = "[Unknown gamepad]";
@@ -13510,18 +13504,17 @@ static const char *M_Controller_GetGyroAxisLabel(void)
 
 static void M_Controller_CycleDevice(int dir)
 {
-#if defined(USE_SDL2)
 	int i, count, current, effective_current, first, last, next, prev, target;
 
-	count = SDL_NumJoysticks();
+	count = IN_GetJoystickCount();
 	current = (int)joy_device.value;
-	effective_current = (current >= 0 && current < count && SDL_IsGameController(current)) ? current : -1;
+	effective_current = (current >= 0 && current < count && IN_IsGamepadAt(current)) ? current : -1;
 	first = last = next = prev = -1;
 	target = current;
 
 	for (i = 0; i < count; i++)
 	{
-		if (!SDL_IsGameController(i))
+		if (!IN_IsGamepadAt(i))
 			continue;
 
 		if (first == -1)
@@ -13546,9 +13539,6 @@ static void M_Controller_CycleDevice(int dir)
 
 	if (target != current)
 		Cvar_SetValueQuick(&joy_device, target);
-#else
-	(void)dir;
-#endif
 }
 
 static void M_Controller_AdjustSliders(int dir)
@@ -26739,7 +26729,7 @@ static void M_Discord_Activate(void)
 		}
 		break;
 	case DISCORD_JOIN:
-		if (SDL_OpenURL(DISCORD_COMMUNITY_URL) == 0)
+		if (SDL_OpenURL(DISCORD_COMMUNITY_URL))
 			SCR_ModalMessage("The NQ Discord has been opened\nin your ^mweb browser^m.", 2.5f);
 		else
 		{
@@ -27381,7 +27371,7 @@ static void M_Shortcuts_CopyToClipboard(void)
 		q_strlcat(copy, "\n", total);
 	}
 
-	if (SDL_SetClipboardText(copy) < 0)
+	if (!SDL_SetClipboardText(copy))
 		q_strlcpy(shortcutmenu.status_message, "Clipboard copy failed", sizeof(shortcutmenu.status_message));
 	else
 	{
@@ -28570,7 +28560,7 @@ typedef struct
 
 static struct
 {
-	SDL_mutex	*mutex;
+	SDL_Mutex	*mutex;
 	versionremoteinfo_t release;
 	versionremoteinfo_t commit;
 } versiongithub;
@@ -28815,7 +28805,7 @@ void M_Version_GetGitHubInfo(versionremoteinfo_t* release, versionremoteinfo_t* 
 
 qboolean M_Version_WaitForGitHubInfo(versionremoteinfo_t* release, versionremoteinfo_t* commit, Uint32 timeout_ms)
 {
-	Uint32 deadline;
+	Uint64 deadline;
 
 	M_Version_StartGitHubFetch();
 	deadline = SDL_GetTicks() + timeout_ms;
@@ -28830,7 +28820,7 @@ qboolean M_Version_WaitForGitHubInfo(versionremoteinfo_t* release, versionremote
 			return true;
 		}
 
-		if (!timeout_ms || SDL_TICKS_PASSED(SDL_GetTicks(), deadline))
+		if (!timeout_ms || SDL_GetTicks() >= deadline)
 			return false;
 
 		SDL_Delay(10);
@@ -28986,13 +28976,11 @@ const char* M_Version_SectionName(versionsection_t section)
 
 void M_Version_EnumerateLocal(versionlocalcallback_t callback, void* userdata)
 {
-    SDL_version sdl_linked;
+    const int sdl_linked = SDL_GetVersion();
     char value[160];
 
     if (!callback)
         return;
-
-    SDL_GetVersion(&sdl_linked);
 
     q_snprintf(value, sizeof(value), "%1.2f", VERSION);
     callback(VERSIONSECTION_APPLICATION, "Quake", value, userdata);
@@ -29019,7 +29007,7 @@ void M_Version_EnumerateLocal(versionlocalcallback_t callback, void* userdata)
     callback(VERSIONSECTION_RENDERER, "Version", M_Version_GetGLString(GL_VERSION), userdata);
 
     callback(VERSIONSECTION_LIBRARIES, "SDL compiled", Q_SDL_COMPILED_VERSION_STRING, userdata);
-    q_snprintf(value, sizeof(value), "%d.%d.%d", sdl_linked.major, sdl_linked.minor, sdl_linked.patch);
+    q_snprintf(value, sizeof(value), "%d.%d.%d", SDL_VERSIONNUM_MAJOR(sdl_linked), SDL_VERSIONNUM_MINOR(sdl_linked), SDL_VERSIONNUM_MICRO(sdl_linked));
     callback(VERSIONSECTION_LIBRARIES, "SDL linked", value, userdata);
     callback(VERSIONSECTION_LIBRARIES, "zlib", zlibVersion(), userdata);
 #ifdef LIBCURL_VERSION
@@ -29137,7 +29125,7 @@ static void M_Version_CopyToClipboard(void)
 		q_strlcat(copy, "\n", total);
 	}
 
-	if (SDL_SetClipboardText(copy) < 0)
+	if (!SDL_SetClipboardText(copy))
 		q_strlcpy(versionmenu.status_message, "Clipboard copy failed", sizeof(versionmenu.status_message));
 	else
 	{
@@ -33387,7 +33375,7 @@ enum {
 //=============================================================================
 
 static volatile qboolean pingThreadsShouldExit = false;
-SDL_mutex* pingMutex = NULL;
+SDL_Mutex* pingMutex = NULL;
 
 static qboolean ServerList_SnapshotItem(int actualIndex, servertitem_snapshot_t *snapshot)
 {
@@ -33442,7 +33430,7 @@ typedef enum
 
 static struct
 {
-	SDL_mutex* mutex;
+	SDL_Mutex* mutex;
 	SDL_Thread* thread;
 	serverlistapistate_t state;
 	servertitem_t* items;
@@ -34095,7 +34083,7 @@ static void ServerList_ApiReapThread(qboolean wait)
 
 void M_ServerList_ShutdownApiFetch(void)
 {
-	SDL_mutex* mutex;
+	SDL_Mutex* mutex;
 
 	ServerList_ApiReapThread(true);
 
@@ -36299,7 +36287,7 @@ static void M_ServerList_CopySelectedAddress(void)
 	if (actualIndex < 0 || !ServerList_SnapshotItem(actualIndex, &server) || !server.ip[0])
 		return;
 
-	if (SDL_SetClipboardText(server.ip) < 0)
+	if (!SDL_SetClipboardText(server.ip))
 	{
 		Con_Printf("Clipboard copy failed: %s\n", SDL_GetError());
 		return;
@@ -37146,7 +37134,7 @@ static struct
 static struct
 {
 	SDL_Thread			*thread;
-	SDL_mutex			*mutex;
+	SDL_Mutex			*mutex;
 	qboolean			active;		/* a fetch has been started */
 	qboolean			done;		/* worker finished, result not yet consumed */
 	qboolean			success;
@@ -37638,9 +37626,9 @@ static struct
 	char						joined_name[MAX_QPATH];
 	char						status[96];
 	double						last_progress_print;
-	SDL_mutex					*mutex;
-	SDL_atomic_t				abort_requested;
-	SDL_atomic_t				size_exceeded;
+	SDL_Mutex					*mutex;
+	SDL_AtomicInt				abort_requested;
+	SDL_AtomicInt				size_exceeded;
 	downloadmodtransfer_t		transfer;
 } downloadmodinstall;
 
@@ -37924,7 +37912,7 @@ static int M_DownloadMods_ProgressCallback(void *clientp, curl_off_t dltotal,
 	(void)ultotal;
 	(void)ulnow;
 
-	if (stop_curl_download || SDL_AtomicGet(&downloadmodinstall.abort_requested))
+	if (stop_curl_download || SDL_GetAtomicInt(&downloadmodinstall.abort_requested))
 		return 1;
 
 	if (downloadmodinstall.mutex)
@@ -37939,7 +37927,7 @@ static int M_DownloadMods_ProgressCallback(void *clientp, curl_off_t dltotal,
 	if (max_bytes > 0 &&
 		((dltotal > 0 && dltotal > max_bytes) || dlnow > max_bytes))
 	{
-		SDL_AtomicSet(&downloadmodinstall.size_exceeded, 1);
+		SDL_SetAtomicInt(&downloadmodinstall.size_exceeded, 1);
 		return 1;
 	}
 
@@ -37948,7 +37936,7 @@ static int M_DownloadMods_ProgressCallback(void *clientp, curl_off_t dltotal,
 
 static qboolean M_DownloadMods_CancelRequested(void)
 {
-	return stop_curl_download || SDL_AtomicGet(&downloadmodinstall.abort_requested);
+	return stop_curl_download || SDL_GetAtomicInt(&downloadmodinstall.abort_requested);
 }
 
 static void M_DownloadMods_BeginSharedDownloadProgress(const char *display_name);
@@ -37992,7 +37980,7 @@ static qboolean M_DownloadMods_RunTransfer(const char *url, const char *temp_pat
 	q_strlcpy(downloadmodinstall.transfer.display_name, display_name,
 		sizeof(downloadmodinstall.transfer.display_name));
 	downloadmodinstall.transfer.error[0] = '\0';
-	SDL_AtomicSet(&downloadmodinstall.size_exceeded, 0);
+	SDL_SetAtomicInt(&downloadmodinstall.size_exceeded, 0);
 	SDL_UnlockMutex(downloadmodinstall.mutex);
 
 	/* cls.download (read by the renderer) is owned by the main thread; the
@@ -38040,7 +38028,7 @@ static qboolean M_DownloadMods_RunTransfer(const char *url, const char *temp_pat
 	if (write_failed && result == CURLE_OK)
 		result = CURLE_WRITE_ERROR;
 
-	if (SDL_AtomicGet(&downloadmodinstall.size_exceeded) ||
+	if (SDL_GetAtomicInt(&downloadmodinstall.size_exceeded) ||
 		result == CURLE_FILESIZE_EXCEEDED)
 	{
 		char sizeStr[32];
@@ -38163,8 +38151,8 @@ static qboolean M_DownloadMods_StartWorker(void)
 	SDL_LockMutex(downloadmodinstall.mutex);
 	memset(&downloadmodinstall.transfer, 0, sizeof(downloadmodinstall.transfer));
 	downloadmodinstall.transfer.active = true;
-	SDL_AtomicSet(&downloadmodinstall.abort_requested, 0);
-	SDL_AtomicSet(&downloadmodinstall.size_exceeded, 0);
+	SDL_SetAtomicInt(&downloadmodinstall.abort_requested, 0);
+	SDL_SetAtomicInt(&downloadmodinstall.size_exceeded, 0);
 	SDL_UnlockMutex(downloadmodinstall.mutex);
 
 	stop_curl_download = false;
@@ -39382,7 +39370,7 @@ void M_DownloadMods_Frame(void)
 
 void M_DownloadMods_Shutdown(void)
 {
-	SDL_mutex *mutex = downloadmodinstall.mutex;
+	SDL_Mutex *mutex = downloadmodinstall.mutex;
 	SDL_Thread *thread = NULL;
 	qboolean active;
 
@@ -39396,7 +39384,7 @@ void M_DownloadMods_Shutdown(void)
 	active = downloadmodinstall.active || downloadmodinstall.transfer.active;
 	if (active)
 	{
-		SDL_AtomicSet(&downloadmodinstall.abort_requested, 1);
+		SDL_SetAtomicInt(&downloadmodinstall.abort_requested, 1);
 		thread = downloadmodinstall.transfer.thread;
 		downloadmodinstall.transfer.thread = NULL;
 	}
@@ -39476,7 +39464,7 @@ static const char *M_DownloadMods_InstallDetail(const downloadmoditem_t *item,
 
 static qboolean M_DownloadMods_StartInstall(downloadmoditem_t *item)
 {
-	SDL_mutex *mutex;
+	SDL_Mutex *mutex;
 	downloadmodpart_t *parts;
 	downloadmodpart_t part;
 	char target[MAX_OSPATH];
@@ -39704,7 +39692,7 @@ static void M_DownloadMods_RequestCancel(void)
 	if (!downloadmodinstall.active)
 		return;
 
-	SDL_AtomicSet(&downloadmodinstall.abort_requested, 1);
+	SDL_SetAtomicInt(&downloadmodinstall.abort_requested, 1);
 	stop_curl_download = true;
 	M_DownloadMods_SetInstallStatus("cancel");
 }
@@ -40644,7 +40632,7 @@ static void M_DownloadMods_PollFetch(void)
 
 static void M_DownloadMods_ShutdownFetch(void)
 {
-	SDL_mutex *mutex = downloadmodsfetch.mutex;
+	SDL_Mutex *mutex = downloadmodsfetch.mutex;
 	SDL_Thread *thread = NULL;
 	char *json = NULL;
 
@@ -45829,7 +45817,7 @@ static void M_Audio_Copy(void)
 	}
 	q_snprintf(command, sizeof(command), "%s \"%s\"",
 		audiomenu.kind == AUDIO_CATALOG_SOUNDS ? "play" : "music", item->path);
-	if (SDL_SetClipboardText(command) < 0)
+	if (!SDL_SetClipboardText(command))
 		q_strlcpy(audiomenu.status, "Clipboard copy failed", sizeof(audiomenu.status));
 	else
 		q_snprintf(audiomenu.status, sizeof(audiomenu.status), "Copied: %s", command);

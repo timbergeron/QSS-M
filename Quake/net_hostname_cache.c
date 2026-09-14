@@ -38,7 +38,7 @@ static hostname_cache_entry_t hostname_cache_entries[HOSTNAME_CACHE_MAX_ENTRIES]
 static size_t hostname_cache_count;
 static qboolean hostname_cache_initialized;
 static qboolean hostname_cache_dirty;
-static SDL_threadID hostname_cache_owner_thread;
+static SDL_ThreadID hostname_cache_owner_thread;
 static unsigned int hostname_cache_generation;
 static double hostname_cache_next_freshness_change;
 static time_t hostname_cache_last_clock_check;
@@ -51,7 +51,7 @@ static void NET_HostnameCache_AssertOwner(void)
 {
 #ifndef NDEBUG
 	if (hostname_cache_initialized)
-		SDL_assert(SDL_ThreadID() == hostname_cache_owner_thread);
+		SDL_assert(SDL_GetCurrentThreadID() == hostname_cache_owner_thread);
 #endif
 }
 
@@ -673,7 +673,7 @@ void NET_HostnameCache_Init(void)
 
 	if (hostname_cache_initialized)
 		return;
-	hostname_cache_owner_thread = SDL_ThreadID();
+	hostname_cache_owner_thread = SDL_GetCurrentThreadID();
 	hostname_cache_initialized = true;
 	hostname_cache_count = 0;
 	hostname_cache_dirty = false;

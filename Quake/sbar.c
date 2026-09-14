@@ -1436,7 +1436,7 @@ void Sbar_SoloScoreboard (void)
 	else // woods add various times + PL
 	{
 
-		ticks = SDL_GetTicks64();
+		ticks = SDL_GetTicks();
 		pl = cl.pltotal;
 		
 		min = (int)((ticks - maptime) / 60000); // map connected time
@@ -3171,7 +3171,7 @@ void Sbar_IntermissionNumber (int x, int y, int num, int digits, int color)
 
 qboolean flash () // woods #smartstatus
 {
-	Uint64 ticks = SDL_GetTicks64();
+	Uint64 ticks = SDL_GetTicks();
 	Uint64 half_seconds = ticks / 750;
 	return half_seconds % 2 == 0;
 }
@@ -3322,7 +3322,7 @@ void Sbar_DeathmatchOverlay (void)
 	//charshortname[16]; // woods for dynamic scoreboard during match, don't show ready
 	scoreboard_t	*s;
 	scoreboard_layout_t layout;
-	int ct = (int)((SDL_GetTicks64() - maptime) / 1000); // woods connected map time #maptime
+	int ct = (int)((SDL_GetTicks() - maptime) / 1000); // woods connected map time #maptime
 	qboolean notready = false; // woods #smartstatus
 	int unready_count = 0; // woods #smartstatus - count of unready team players
 

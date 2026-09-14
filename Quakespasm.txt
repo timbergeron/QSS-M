@@ -14,9 +14,7 @@
   sound driver, some graphical niceities, and numerous bug-fixes and
   other improvements.
 
-  Quakespasm utilizes SDL-1.2 or SDL2 frameworks, choose one which works
-  best for you. SDL2 has nicer features, smoother mouse input and better
-  support for newer operating systems, but no CD-ROM support.
+  Quakespasm utilizes the SDL3 framework, which has no CD-ROM support.
 
 
   2. Downloads
@@ -55,27 +53,31 @@
      disables this startup helper. "-quakeimportselftest" runs its developer
      diagnostics and exits without starting the game.
 
+  -  When upgrading from an SDL2 build on Windows or Linux, quit QSS-M
+     and manually extract the complete SDL3 release into your QSS-M
+     directory. The old in-game updater cannot install the new SDL3
+     runtime correctly. Keep the supplied SDL3.dll (Windows) or
+     libSDL3.so.0 (Linux) beside the executable. Subsequent SDL3 builds
+     support normal in-game updates. macOS updates replace the whole app
+     bundle and do not require this manual upgrade.
+
   -  For different sound backend drivers use :
-     "SDL_AUDIODRIVER=DRIVER ./quakespasm"
-     where DRIVER may be alsa, dsp, pulse, esd ...
+     "SDL_AUDIO_DRIVER=DRIVER ./quakespasm"
+     where DRIVER may be pipewire, pulseaudio, alsa ...
 
   -  Shift+Escape draws the Console.
 
   -  From the console, use UP to browse the command line history and TAB
      to autocomplete command and map names.
 
-  -  There is currently no CD Music volume support and SDL2 doesn't
-     support CD audio. cd_sdl.c needs replacing with cd_linux.c,
-     cd_bsd.c etc..
-
-  -  In windows, alternative CD drives are accessible by
-     "quakespasm -cddev F" (for example)
+  -  There is currently no CD Music volume support and SDL3 doesn't
+     support CD audio; use file-based music (see Quakespasm-Music.txt).
 
   -  Quakespasm allows loading new games (mods) on the fly with
      "game GAMENAME {-quoth/hipnotic/rogue}"
 
   -  Use "quakespasm -condebug" to save console log to "qconsole.log".
-     SDL2 builds no longer generate stdout.txt/stderr.txt.
+     Quakespasm no longer generates stdout.txt/stderr.txt.
 
 
   Music Playback:
@@ -99,8 +101,7 @@
 
   Controller Support:
 
-  The SDL2 variant of Quakespasm supports Xbox 360 style game
-  controllers.
+  Quakespasm supports Xbox 360 style game controllers.
 
   The default configuration uses the left analog stick for movement and
   the right for looking.
@@ -108,7 +109,7 @@
   If your controller doesn't work you can try placing this file
   https://raw.githubusercontent.com/gabomdq/SDL_GameControllerDB/master/gamecontrollerdb.txt
   in your Quake directory, it is a community-maintained database that
-  adds support for more controllers to SDL2.
+  adds support for more controllers to SDL3.
 
   Controller Support - Cvars:
 
@@ -184,8 +185,7 @@
   4. Compiling and Installation
 
   See the Downloads section to get the sourcecode, then below for
-  platform specific instructions.  Quakespasm can also be built with the
-  cross-platform Codeblocks.
+  platform specific instructions.
   Quakespasm's (optional) custom data is now stored in the file
   quakespasm.pak. This file should be placed alongside your quakespasm
   binary and id1 directory.
@@ -206,9 +206,8 @@
 
   -  make DEBUG=1 for debugging
 
-  -  make SDL_CONFIG=/PATH/TO/sdl-config for unusual SDL installations
-
-  -  make USE_SDL2=1 to compile against SDL2 instead of SDL-1.2
+  -  PKG_CONFIG_PATH=/PATH/TO/sdl3/lib/pkgconfig make for unusual SDL
+     installations (SDL 3.2.12 or newer in the SDL3 series)
 
   Compiling for Windows:
 

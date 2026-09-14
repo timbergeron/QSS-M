@@ -368,14 +368,18 @@
       <div class="panel" id="deb" role="tabpanel" aria-labelledby="tab-deb">
         <div class="step-label"><span class="n">1</span>Install dependencies</div>
         <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> apt-get update
-<span class="p">sudo</span> apt-get install -y build-essential pkg-config libsdl2-dev \
+<span class="p">sudo</span> apt-get install -y build-essential pkg-config libsdl3-dev \
   libgnutls28-dev libmad0-dev libopus-dev libopusfile-dev \
   libvorbis-dev zlib1g-dev libcurl4-openssl-dev zip</pre></div>
+        <p><span class="c" style="color:var(--muted)"># libsdl3-dev needs Debian 13 or Ubuntu 25.04 or newer. On older releases, build SDL 3.2.12<br>
+# or newer from source &mdash; CI uses <code>.github/scripts/build-sdl3-linux.sh</code> &mdash; then run<br>
+# <code>PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig SDL3_RUNTIME=$PREFIX/lib/libSDL3.so.0 ./build-linux.sh</code><br>
+# so the zip carries <code>libSDL3.so.0</code> beside the executable.</span></p>
       </div>
 
       <div class="panel" id="fed" role="tabpanel" aria-labelledby="tab-fed" hidden>
         <div class="step-label"><span class="n">1</span>Install dependencies</div>
-        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> dnf install -y gcc make pkgconf-pkg-config SDL2-devel gnutls-devel \
+        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> dnf install -y gcc make pkgconf-pkg-config SDL3-devel gnutls-devel \
   libmad-devel opus-devel opusfile-devel libvorbis-devel zlib-devel \
   libcurl-devel zip</pre></div>
         <p><span class="c" style="color:var(--muted)"># If dnf can't find libmad/opusfile, enable RPM Fusion (free) first:</span></p>
@@ -385,25 +389,27 @@
 
       <div class="panel" id="arch" role="tabpanel" aria-labelledby="tab-arch" hidden>
         <div class="step-label"><span class="n">1</span>Install dependencies</div>
-        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> pacman -S --needed base-devel sdl2 gnutls libmad \
+        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> pacman -S --needed base-devel sdl3 gnutls libmad \
   opus opusfile libvorbis zlib curl zip</pre></div>
       </div>
 
       <div class="panel" id="suse" role="tabpanel" aria-labelledby="tab-suse" hidden>
         <div class="step-label"><span class="n">1</span>Install dependencies</div>
-        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> zypper install -y gcc make pkgconf-pkg-config libSDL2-devel \
+        <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">sudo</span> zypper install -y gcc make pkgconf-pkg-config SDL3-devel \
   gnutls-devel libmad-devel libopus-devel opusfile-devel \
   libvorbis-devel zlib-devel libcurl-devel zip</pre></div>
       </div>
 
       <div class="step-label"><span class="n">2</span>Build &amp; package</div>
       <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">./build-linux.sh</span></pre></div>
+      <p><span class="c" style="color:var(--muted)"># QSS-M needs SDL 3.2.12 or newer in the SDL3 series; releases bundle SDL 3.4.16. It asks SDL<br>
+# for X11 first and falls back to Wayland; run <code>SDL_VIDEO_DRIVER=wayland ./QSS-M-l64</code> to use Wayland.</span></p>
       <p class="result"><b>Done.</b> You get the <code>QSS-M-l64</code> binary and a ready-to-ship <code>Quake/QSS-M-l64.zip</code>. Drop your <code>id1</code> folder beside the binary and run it.</p>
 
       <div class="step-label">Prefer to drive make yourself?</div>
       <p>Skip the script and compile directly &mdash; handy for quick dev iteration. The <code>QSS_LDFLAGS</code> below is required on GCC&nbsp;10+ (Ubuntu&nbsp;22.04+, current Fedora/Arch); without it the link fails with &ldquo;multiple definition&rdquo; errors:</p>
       <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">cd</span> Quake
-<span class="p">make</span> USE_SDL2=1 QSS_LDFLAGS="-Wl,--allow-multiple-definition" -j8</pre></div>
+<span class="p">make</span> QSS_LDFLAGS="-Wl,--allow-multiple-definition" -j8</pre></div>
     </div></div>
   </section>
 
@@ -454,14 +460,14 @@
       <div class="step-label"><span class="n">2</span>Install the toolchain &amp; libraries</div>
       <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">pacman</span> -S --needed git make zip \
   mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gnutls \
-  mingw-w64-x86_64-SDL2 mingw-w64-x86_64-opus mingw-w64-x86_64-libvorbis \
+  mingw-w64-x86_64-opus mingw-w64-x86_64-libvorbis \
   mingw-w64-x86_64-zlib mingw-w64-x86_64-curl</pre></div>
 
       <div class="step-label"><span class="n">3</span>Clone &amp; build (64-bit)</div>
       <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">git</span> clone https://github.com/timbergeron/QSS-M.git
 <span class="p">cd</span> QSS-M/Quake
-<span class="p">make</span> -f Makefile.w64 USE_SDL2=1 SDL_CONFIG=sdl2-config -j8</pre></div>
-      <p class="result"><b>Done.</b> Out comes <code>Quake/quakespasm.exe</code>. Keep the SDL2/codec DLLs from the <code>Windows/</code> folder beside it (the CI build scripts do this for you when packaging).</p>
+<span class="p">make</span> -f Makefile.w64 -j8</pre></div>
+      <p class="result"><b>Done.</b> Out comes <code>Quake/quakespasm.exe</code>. Keep <code>SDL3.dll</code> and the codec DLLs from the <code>Windows/</code> folder beside it (the CI build scripts do this for you when packaging).</p>
 
       <div class="step-label">Want a 32-bit build?</div>
       <p>Open the <strong>MSYS2 MINGW32</strong> shell instead, install the matching <code>mingw-w64-i686-*</code> packages, and build with <code>Makefile.w32</code>.</p>
@@ -469,7 +475,7 @@
       <hr style="border:none;border-top:1px solid var(--line);margin:26px 0">
 
       <h3 class="step-label" style="color:var(--teal)" id="cross">Alternative · Cross-compile from Linux (MinGW-w64)</h3>
-      <p>No Windows machine needed &mdash; these commands use the same cross-build scripts and targets as the <code>windows.yml</code> workflow. SDL2, curl, zlib and the audio codec import libraries are already vendored in the repo's <code>Windows/</code> folder, so a normal local build only needs the cross toolchain and basic build utilities. CI additionally bootstraps GnuTLS for TLS-enabled artifacts.</p>
+      <p>No Windows machine needed &mdash; these commands use the same cross-build scripts and targets as the <code>windows.yml</code> workflow. SDL3, curl, zlib and the audio codec import libraries are already vendored in the repo's <code>Windows/</code> folder, so a normal local build only needs the cross toolchain and basic build utilities. CI additionally bootstraps GnuTLS for TLS-enabled artifacts.</p>
 
       <div class="step-label"><span class="n">1</span>Install the MinGW-w64 cross toolchain</div>
       <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="c"># Debian / Ubuntu / Mint &mdash; one package covers both 64- and 32-bit targets</span>
@@ -491,7 +497,7 @@
 
       <div class="step-label" style="color:var(--gold)">Alternative · Visual Studio 2022</div>
       <p>Open <code>Windows/VisualStudio/quakespasm.sln</code>, select <strong>Release / x64</strong>, and hit Build. Or from a Developer prompt:</p>
-      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">msbuild</span> Windows\VisualStudio\quakespasm-sdl2.vcxproj ^
+      <div class="code"><button class="copy" type="button" aria-label="Copy to clipboard"><svg class="ic" aria-hidden="true"><use href="#ic-copy"/></svg></button><pre><span class="p">msbuild</span> Windows\VisualStudio\quakespasm.vcxproj ^
   -p:Configuration=Release -p:Platform=x64</pre></div>
     </div></div>
   </section>

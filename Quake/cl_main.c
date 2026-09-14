@@ -964,7 +964,7 @@ void CL_SignonReply (void)
 		}
 		if (VID_HasMouseOrInputFocus())
 			key_dest = key_game; // woods exit console on server connect
-		maptime = SDL_GetTicks64(); // woods connected map time #maptime
+		maptime = SDL_GetTicks(); // woods connected map time #maptime
 
 		if (registered.value == 0) // woods #pak0only
 			Con_Printf("\n^mWarning:^m emulating shareware mode, install pak1.pak assets to enable all client features\n\n");
@@ -2821,7 +2821,7 @@ typedef struct
 	qboolean success;
 	qboolean aborted;
 	SDL_Thread *thread;
-	SDL_atomic_t abort_requested;
+	SDL_AtomicInt abort_requested;
 	int url_count;
 	int current_url;
 	char filename[MAX_OSPATH];
@@ -2842,7 +2842,7 @@ typedef struct
 } async_download_t;
 
 static async_download_t async_download;
-static SDL_mutex *async_download_mutex = NULL;
+static SDL_Mutex *async_download_mutex = NULL;
 static double async_download_last_progress_print = 0.0;
 static char async_download_auto_failed[MAX_OSPATH]; // last signon file whose web mirrors failed; CL_CheckDownload skips the mirrors for it and uses the in-protocol path instead
 
@@ -3363,12 +3363,12 @@ static qboolean CL_WebDownloadShouldCheckAtStartup(const char *url,
 }
 
 
-static SDL_atomic_t webcheck_abort; // set at shutdown so quit doesn't block on in-flight HEAD requests (up to CURLOPT_TIMEOUT)
+static SDL_AtomicInt webcheck_abort; // set at shutdown so quit doesn't block on in-flight HEAD requests (up to CURLOPT_TIMEOUT)
 
 static int WebCheck_AbortCallback (void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
 {
 	(void)clientp; (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
-	return SDL_AtomicGet(&webcheck_abort) ? 1 : 0;
+	return SDL_GetAtomicInt(&webcheck_abort) ? 1 : 0;
 }
 
 int checkWebsite (void* ptr)  // ping the potential websites in advance
@@ -3495,7 +3495,7 @@ SDL_Thread* webDownloadCheck (const char* url, int webId)
 
 	// Re-arm the abort flag: it is only ever raised at shutdown, so a fresh probe
 	// must clear it in case a future (non-terminal) teardown ever leaves it set.
-	SDL_AtomicSet(&webcheck_abort, 0);
+	SDL_SetAtomicInt(&webcheck_abort, 0);
 
 	thread = SDL_CreateThread(checkWebsite, "CheckWebsiteThread", (void*)data);
 	if (thread == NULL) 
@@ -3559,7 +3559,7 @@ static void QWMapListWebCheckReset(void)
 
 void CL_WebDownloadChecks_Abort(void)
 {
-	SDL_AtomicSet(&webcheck_abort, 1);
+	SDL_SetAtomicInt(&webcheck_abort, 1);
 }
 
 static void CL_WebDownloadChecks_Shutdown(void)
@@ -4971,7 +4971,7 @@ static int CL_AsyncDownload_ProgressCallback(void* clientp, curl_off_t dltotal, 
 	(void)ultotal;
 	(void)ulnow;
 
-	if (SDL_AtomicGet(&async_download.abort_requested))
+	if (SDL_GetAtomicInt(&async_download.abort_requested))
 		return 1;
 
 	SDL_LockMutex(async_download_mutex);
@@ -5018,7 +5018,7 @@ static int CL_AsyncDownload_Thread(void *unused)
 		CURL *curl;
 		qboolean write_failed;
 
-		if (SDL_AtomicGet(&async_download.abort_requested))
+		if (SDL_GetAtomicInt(&async_download.abort_requested))
 		{
 			aborted = true;
 			q_strlcpy(error, "Download cancelled", sizeof(error));
@@ -5086,7 +5086,7 @@ static int CL_AsyncDownload_Thread(void *unused)
 		if (write_failed && curl_result == CURLE_OK)
 			curl_result = CURLE_WRITE_ERROR;
 
-		if (SDL_AtomicGet(&async_download.abort_requested) || curl_result == CURLE_ABORTED_BY_CALLBACK)
+		if (SDL_GetAtomicInt(&async_download.abort_requested) || curl_result == CURLE_ABORTED_BY_CALLBACK)
 		{
 			aborted = true;
 			q_strlcpy(error, "Download cancelled", sizeof(error));
@@ -5214,7 +5214,7 @@ static qboolean CL_AsyncDownload_Start(const char *filename, const char **urls, 
 		q_strlcpy(async_download.full_urls[i], full_urls[i], sizeof(async_download.full_urls[i]));
 		q_strlcpy(async_download.source_urls[i], source_urls[i], sizeof(async_download.source_urls[i]));
 	}
-	SDL_AtomicSet(&async_download.abort_requested, 0);
+	SDL_SetAtomicInt(&async_download.abort_requested, 0);
 	SDL_UnlockMutex(async_download_mutex);
 
 	async_download_last_progress_print = 0.0;
@@ -5292,7 +5292,7 @@ static qboolean CL_AsyncDownload_RequestStop(void)
 	active = async_download.active;
 	done = async_download.done;
 	if (active && !done)
-		SDL_AtomicSet(&async_download.abort_requested, 1);
+		SDL_SetAtomicInt(&async_download.abort_requested, 1);
 	SDL_UnlockMutex(async_download_mutex);
 
 	if (!active)
@@ -5462,7 +5462,7 @@ static void CL_AsyncDownload_Stop(qboolean destroy_mutex)
 	active = async_download.active;
 	if (active)
 	{
-		SDL_AtomicSet(&async_download.abort_requested, 1);
+		SDL_SetAtomicInt(&async_download.abort_requested, 1);
 		thread = async_download.thread;
 		async_download.thread = NULL;
 		q_strlcpy(tmp_path, async_download.tmp_path, sizeof(tmp_path));
@@ -6880,7 +6880,7 @@ void CL_Viewpos_f (void)
 	Con_SafePrintf ("Player pos: %s\n", buf);
 
 	if (Cmd_Argc () >= 2 && !q_strcasecmp (Cmd_Argv (1), "copy"))
-		if (SDL_SetClipboardText (buf) < 0)
+		if (!SDL_SetClipboardText (buf))
 			Con_SafePrintf ("Clipboard copy failed: %s\n", SDL_GetError ());
 
 	if (SCR_GetLaserPoint (laserpoint))

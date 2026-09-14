@@ -22,15 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#include <SDL2/SDL.h>
-#else
-#include <SDL/SDL.h>
-#endif
-#else
-#include "SDL.h"
-#endif
+#include <SDL3/SDL.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
@@ -44,27 +36,21 @@ static const Uint8 bmp_bytes[] =
 
 void PL_SetWindowIcon (void)
 {
-	SDL_RWops	*rwop;
+	SDL_IOStream	*rwop;
 	SDL_Surface	*icon;
 	Uint32		colorkey;
 
-	/* SDL_RWFromConstMem() requires SDL >= 1.2.7 */
-	rwop = SDL_RWFromConstMem(bmp_bytes, sizeof(bmp_bytes));
+	rwop = SDL_IOFromConstMem(bmp_bytes, sizeof(bmp_bytes));
 	if (rwop == NULL)
 		return;
-	icon = SDL_LoadBMP_RW(rwop, 1);
+	icon = SDL_LoadBMP_IO(rwop, 1);
 	if (icon == NULL)
 		return;
 	/* make pure magenta (#ff00ff) tranparent */
-	colorkey = SDL_MapRGB(icon->format, 255, 0, 255);
-#if defined(USE_SDL2)
-	SDL_SetColorKey(icon, SDL_TRUE, colorkey);
+	colorkey = SDL_MapSurfaceRGB(icon, 255, 0, 255);
+	SDL_SetSurfaceColorKey(icon, true, colorkey);
 	SDL_SetWindowIcon((SDL_Window*) VID_GetWindow(), icon);
-#else
-	SDL_SetColorKey(icon, SDL_SRCCOLORKEY, colorkey);
-	SDL_WM_SetIcon(icon, NULL);
-#endif
-	SDL_FreeSurface(icon);
+	SDL_DestroySurface(icon);
 }
 
 void PL_VID_Shutdown (void)
@@ -75,7 +61,6 @@ void PL_VID_Shutdown (void)
 char *PL_GetClipboardData (void)
 {
 	char *data = NULL;
-#if defined(USE_SDL2)
 	char *cliptext = SDL_GetClipboardText();
 
 	if (cliptext != NULL)
@@ -85,12 +70,10 @@ char *PL_GetClipboardData (void)
 		UTF8_ToQuake(data, MAX_CLIPBOARDTXT, cliptext);
 		SDL_free(cliptext);
 	}
-#endif
 
 	return data;
 }
 
-#if defined(USE_SDL2)
 static int PL_HexValue(int c)
 {
 	if (c >= '0' && c <= '9')
@@ -188,13 +171,11 @@ static char **PL_GetFileURIsFromClipboardText(char *cliptext, int *count)
 
 	return paths;
 }
-#endif
 
 char **PL_GetClipboardFilePaths (int *count)
 {
 	char **paths = NULL;
 	int local_count = 0;
-#if defined(USE_SDL2)
 	char *cliptext = SDL_GetClipboardText();
 
 	if (cliptext != NULL)
@@ -202,7 +183,6 @@ char **PL_GetClipboardFilePaths (int *count)
 		paths = PL_GetFileURIsFromClipboardText(cliptext, &local_count);
 		SDL_free(cliptext);
 	}
-#endif
 
 	if (count)
 		*count = local_count;
@@ -241,16 +221,13 @@ char *PL_GetClipboardFilePath (void)
 
 void PL_ErrorDialog (const char *errorMsg)
 {
-#if defined(USE_SDL2)
 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Quake Error", errorMsg, NULL);
-#endif
 }
 
 int PL_MessageDialog(const char *title, const char *message,
 	const pl_dialog_button_t *buttons, int num_buttons,
 	int default_button, int cancel_button)
 {
-#if defined(USE_SDL2)
 	SDL_MessageBoxButtonData *sdl_buttons;
 	SDL_MessageBoxData data;
 	int i, selected = cancel_button;
@@ -266,7 +243,7 @@ int PL_MessageDialog(const char *title, const char *message,
 		sdl_buttons[i].flags =
 			(buttons[i].id == default_button ? SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT : 0) |
 			(buttons[i].id == cancel_button ? SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT : 0);
-		sdl_buttons[i].buttonid = buttons[i].id;
+		sdl_buttons[i].buttonID = buttons[i].id;
 		sdl_buttons[i].text = buttons[i].text;
 	}
 	memset(&data, 0, sizeof(data));
@@ -275,15 +252,10 @@ int PL_MessageDialog(const char *title, const char *message,
 	data.message = message;
 	data.numbuttons = num_buttons;
 	data.buttons = sdl_buttons;
-	if (SDL_ShowMessageBox(&data, &selected) < 0)
+	if (!SDL_ShowMessageBox(&data, &selected))
 		selected = cancel_button;
 	free(sdl_buttons);
 	return selected;
-#else
-	(void)title; (void)message; (void)buttons; (void)num_buttons;
-	(void)default_button;
-	return cancel_button;
-#endif
 }
 
 qboolean PL_ConfirmDialog(const char *title, const char *text)

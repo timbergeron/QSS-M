@@ -45,7 +45,7 @@ static SDL_Cursor *con_cursor_ibeam = NULL; // woods #conselection
 static SDL_Cursor *con_cursor_hand  = NULL; // woods #conselection
 static SDL_Cursor *con_cursor_current = NULL; // woods #conselection
 static SDL_Cursor *con_cursor_saved = NULL; // woods #conselection
-static int         con_cursor_saved_visible = SDL_DISABLE; // woods #conselection
+static bool        con_cursor_saved_visible = false; // woods #conselection
 
 typedef struct
 {
@@ -202,7 +202,7 @@ extern int chat_setinfo_defer; // woods #chatinfo
 
 #define BIRTHDAY_DURATION 30000 // 30 seconds in ms -- woods #qbday
 extern qboolean pak0; // pak0 present  -- woods #qbday
-static Uint32 birthday_start_time = 0; // woods #qbday
+static Uint64 birthday_start_time = 0; // woods #qbday
 static int console_msg_since_lastchat = 0; // woods #like
 extern qboolean WordFilter_Check(const char* text, char* dest_buffer, size_t buffer_size); // woods #contentfilter
 
@@ -433,8 +433,7 @@ void Con_Copy_f(void)
 			char* f = (char*)COM_LoadHunkFile("condump.txt", NULL);
 			if (f)
 			{
-				// SDL returns 0 on success
-				if (SDL_SetClipboardText(f) == 0)
+				if (SDL_SetClipboardText(f))
 					copied = true;
 			}
 		}
@@ -467,7 +466,6 @@ static void Con_ScreenToCanvas (int x, int y, int *outx, int *outy)
     float fx = (float)x, fy = (float)y;
     float px, py;
 
-#if defined(USE_SDL2)
     {
         /* High-DPI backends report mouse events in window points while the
            console canvas maps GL drawable pixels (see Draw_WindowToCanvas) */
@@ -477,7 +475,7 @@ static void Con_ScreenToCanvas (int x, int y, int *outx, int *outy)
         if (window)
         {
             SDL_GetWindowSize(window, &window_w, &window_h);
-            SDL_GL_GetDrawableSize(window, &drawable_w, &drawable_h);
+            SDL_GetWindowSizeInPixels(window, &drawable_w, &drawable_h);
         }
         if (window_w > 0 && window_h > 0 && drawable_w > 0 && drawable_h > 0 &&
             (window_w != drawable_w || window_h != drawable_h))
@@ -486,7 +484,6 @@ static void Con_ScreenToCanvas (int x, int y, int *outx, int *outy)
             fy = fy * (float)drawable_h / (float)window_h;
         }
     }
-#endif
 
     px = (fx - glx) * (float)vid.conwidth / glwidth;
     py = (fy - gly) * (float)vid.conheight / glheight + lines;
@@ -664,7 +661,8 @@ static qboolean Con_ChatMouseToCursorPos (int canvas_x, int canvas_y, qboolean n
 
 static qboolean Con_ChatMousePosition (qboolean nearest, int *pos)
 {
-	int window_x, window_y, canvas_x, canvas_y;
+	float window_x, window_y;
+	int canvas_x, canvas_y;
 
 	SDL_GetMouseState (&window_x, &window_y);
 	Con_ScreenToCanvas (window_x, window_y, &canvas_x, &canvas_y);
@@ -673,7 +671,8 @@ static qboolean Con_ChatMousePosition (qboolean nearest, int *pos)
 
 static qboolean Con_ChatMouseDragPosition (int *pos)
 {
-	int window_x, window_y, canvas_x, canvas_y;
+	float window_x, window_y;
+	int canvas_x, canvas_y;
 	int right, len;
 
 	if (!pos || !chat_mouse_area.valid || chat_mouse_area.width_chars <= 0)
@@ -790,11 +789,8 @@ static void Con_EnterCursorMode(void)
 {
     /* remember host cursor & visibility, then make console cursor visible */
     con_cursor_saved = SDL_GetCursor();
-    {
-        int vis = SDL_ShowCursor(SDL_QUERY);
-        con_cursor_saved_visible = (vis == SDL_ENABLE) ? SDL_ENABLE : SDL_DISABLE;
-    }
-    SDL_ShowCursor(SDL_ENABLE);
+    con_cursor_saved_visible = SDL_CursorVisible();
+    SDL_ShowCursor();
     /* actual shape is set by Con_Mousemove (ibeam/hand/arrow) */
 }
 
@@ -803,11 +799,14 @@ static void Con_LeaveCursorMode(void)
     /* If leaving to menu, force a stable visible arrow.
        If leaving to game, restore what the host had. */
     if (key_dest == key_menu) {
-        SDL_ShowCursor(SDL_ENABLE);
+        SDL_ShowCursor();
         if (con_cursor_arrow) VID_SetCursorHandle(con_cursor_arrow);
     } else {
         if (con_cursor_saved) VID_SetCursorHandle(con_cursor_saved);
-        SDL_ShowCursor(con_cursor_saved_visible);
+        if (con_cursor_saved_visible)
+            SDL_ShowCursor();
+        else
+            SDL_HideCursor();
     }
     con_cursor_current = NULL;
     con_cursor_saved = NULL;
@@ -964,7 +963,7 @@ static void Con_SetMouseState (conmouse_t state)
     if (con_mousestate == state) return;
     switch (state) {
     case CMS_PRESSED:
-        SDL_GetMouseState(&x,&y);
+        { float fx, fy; SDL_GetMouseState(&fx,&fy); x = (int)fx; y = (int)fy; }
         Con_ScreenToCanvas(x,y,&con_clickx,&con_clicky);
         Con_CanvasToOffset(con_clickx,con_clicky,&pos,CT_NEAREST);
         if (con_mouseclicks == 0 || con_mouseclickdelay >= DOUBLECLICK_TIME
@@ -1045,7 +1044,7 @@ static void Con_Mousemove (int x, int y)
 
 void Con_ForceMouseMove (void)
 {
-    int x,y; SDL_GetMouseState(&x,&y); Con_Mousemove(x,y);
+    float x,y; SDL_GetMouseState(&x,&y); Con_Mousemove((int)x,(int)y);
 }
 
 void Con_Scroll(int lines)
@@ -1068,7 +1067,7 @@ static void Con_UpdateMouseState (void)
         if (active) {
             Uint32 btns = SDL_GetMouseState(NULL, NULL);
             /* Ignore a held menu click until release when the loading console takes focus. */
-            con_blockselectionuntilrelease = (btns & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+            con_blockselectionuntilrelease = (btns & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) != 0;
         } else {
             con_blockselectionuntilrelease = false;
         }
@@ -1082,7 +1081,7 @@ static void Con_UpdateMouseState (void)
         Con_SetCursor(NULL); /* leave shape alone when returning to game/menu */
         return;
     }
-    SDL_ShowCursor(SDL_ENABLE);  /* console owns the OS cursor while open */
+    SDL_ShowCursor();  /* console owns the OS cursor while open */
 
     /* Clicks cannot leak into the game: presses are swallowed in Key_Event
        while the console is up, and held buttons are released through
@@ -1092,7 +1091,7 @@ static void Con_UpdateMouseState (void)
     /* use actual SDL button state, not the global keydown[] */
     {
         Uint32 btns = SDL_GetMouseState(NULL, NULL);
-        qboolean left_down = (btns & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+        qboolean left_down = (btns & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) != 0;
         if (con_blockselectionuntilrelease) {
             if (left_down)
                 return;
@@ -1431,12 +1430,12 @@ void Con_Init (void)
 	con_initialized = true;
 
 	// woods #conselection
-    con_cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
+    con_cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
     con_cursor_ibeam = LoadCustomIBeamCursor();
     con_cursor_hand  = LoadCustomLinkCursor();
     con_cursor_current = NULL;
 	// woods #conselection - start hidden; Con_UpdateMouseState/EnterCursorMode enables when console is open
-    SDL_ShowCursor(SDL_DISABLE);
+    SDL_HideCursor();
 }
 
 
@@ -1460,14 +1459,14 @@ void Con_ReloadIBeamCursor (void)
         Con_SetCursor(con_cursor_hand);
 
     if (old_ibeam)
-        SDL_FreeCursor(old_ibeam);
+        SDL_DestroyCursor(old_ibeam);
     if (old_hand)
-        SDL_FreeCursor(old_hand);
+        SDL_DestroyCursor(old_hand);
 
     /* the Con_Init attempts run before SDL video init and fail, leaving these
        NULL all session; (re)create them here now that video is up */
     if (!con_cursor_arrow)
-        con_cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
+        con_cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
 }
 
 
@@ -2086,7 +2085,7 @@ static void Con_Print (const char *txt)
 
 						snprintf(notifylist, sizeof(notifylist), "%s", con_notifylist.string);
 
-						token = SDL_strtokr(notifylist, " ", &saveptr);
+						token = SDL_strtok_r(notifylist, " ", &saveptr);
 						while (token != NULL)
 						{
 							char* found = Q_strcasestr(chat_body, token);
@@ -2096,7 +2095,7 @@ static void Con_Print (const char *txt)
 								should_notify = true;
 								break;
 							}
-							token = SDL_strtokr(NULL, " ", &saveptr);
+							token = SDL_strtok_r(NULL, " ", &saveptr);
 						}
 					}
 
@@ -2379,7 +2378,7 @@ static log_off_t log_size = 0; // current cached size of log file
 static qboolean log_roll_pending = false; // deferred roll flag
 #define LOG_CAP_MAX_MIB   2048  /* clamp to avoid overflow: 2 GiB max */
 #define LOG_CAP_MIN_MIB   1
-static SDL_mutex *log_mutex = NULL; /* serialize log I/O */
+static SDL_Mutex *log_mutex = NULL; /* serialize log I/O */
 static const char rollover_banner[] =
     "--- log rolled (size cap reached) ---\n";
 static const char startup_banner[] =
@@ -4340,10 +4339,10 @@ static char qw_maplist_path[MAX_OSPATH];
 static qboolean qw_maplist_warned;
 static qboolean qw_maplist_cache_warned;
 static qboolean qw_maplist_temp_swept;
-static SDL_atomic_t qw_maplist_refresh_running;
-static SDL_atomic_t qw_maplist_refresh_ready;
-static SDL_atomic_t qw_maplist_refresh_checked;
-static SDL_atomic_t qw_maplist_refresh_last_result;
+static SDL_AtomicInt qw_maplist_refresh_running;
+static SDL_AtomicInt qw_maplist_refresh_ready;
+static SDL_AtomicInt qw_maplist_refresh_checked;
+static SDL_AtomicInt qw_maplist_refresh_last_result;
 static time_t qw_maplist_last_refresh_attempt;
 
 typedef struct
@@ -4554,7 +4553,7 @@ static void QWMapList_SweepTempCache(void)
 {
 	char path[MAX_OSPATH];
 
-	if (qw_maplist_temp_swept || SDL_AtomicGet(&qw_maplist_refresh_running))
+	if (qw_maplist_temp_swept || SDL_GetAtomicInt(&qw_maplist_refresh_running))
 		return;
 
 	qw_maplist_temp_swept = true;
@@ -5031,20 +5030,20 @@ cleanup_curl:
 done:
 	if (success)
 	{
-		SDL_AtomicSet(&qw_maplist_refresh_last_result, QW_MAPLIST_REFRESH_SUCCESS);
-		SDL_AtomicSet(&qw_maplist_refresh_ready, 1);
+		SDL_SetAtomicInt(&qw_maplist_refresh_last_result, QW_MAPLIST_REFRESH_SUCCESS);
+		SDL_SetAtomicInt(&qw_maplist_refresh_ready, 1);
 	}
 	else
 	{
-		SDL_AtomicSet(&qw_maplist_refresh_checked, 0);
-		SDL_AtomicSet(&qw_maplist_refresh_last_result, QW_MAPLIST_REFRESH_FAILED);
+		SDL_SetAtomicInt(&qw_maplist_refresh_checked, 0);
+		SDL_SetAtomicInt(&qw_maplist_refresh_last_result, QW_MAPLIST_REFRESH_FAILED);
 	}
 
 	free(text);
 	if (names)
 		QWMapList_FreeRemoteNames(names, count);
 	free(download.data);
-	SDL_AtomicSet(&qw_maplist_refresh_running, 0);
+	SDL_SetAtomicInt(&qw_maplist_refresh_running, 0);
 	return 0;
 }
 
@@ -5055,7 +5054,7 @@ static qboolean QWMapList_StartRefresh(qboolean force)
 
 	now = time(NULL);
 	if (!force && now != (time_t)-1 && qw_maplist_last_refresh_attempt &&
-		SDL_AtomicGet(&qw_maplist_refresh_last_result) == QW_MAPLIST_REFRESH_FAILED &&
+		SDL_GetAtomicInt(&qw_maplist_refresh_last_result) == QW_MAPLIST_REFRESH_FAILED &&
 		now - qw_maplist_last_refresh_attempt < QW_MAPLIST_RETRY_SECONDS)
 	{
 		return false;
@@ -5063,51 +5062,51 @@ static qboolean QWMapList_StartRefresh(qboolean force)
 
 	if (!force && !QWMapList_CacheIsStale())
 	{
-		SDL_AtomicSet(&qw_maplist_refresh_checked, 1);
+		SDL_SetAtomicInt(&qw_maplist_refresh_checked, 1);
 		return false;
 	}
 
-	if (!SDL_AtomicCAS(&qw_maplist_refresh_running, 0, 1))
+	if (!SDL_CompareAndSwapAtomicInt(&qw_maplist_refresh_running, 0, 1))
 	{
-		SDL_AtomicSet(&qw_maplist_refresh_checked, 1);
+		SDL_SetAtomicInt(&qw_maplist_refresh_checked, 1);
 		return false;
 	}
 
-	SDL_AtomicSet(&qw_maplist_refresh_last_result, QW_MAPLIST_REFRESH_NONE);
+	SDL_SetAtomicInt(&qw_maplist_refresh_last_result, QW_MAPLIST_REFRESH_NONE);
 	thread = SDL_CreateThread(QWMapList_RefreshThread, "qwmaplist", NULL);
 	if (!thread)
 	{
-		SDL_AtomicSet(&qw_maplist_refresh_running, 0);
-		SDL_AtomicSet(&qw_maplist_refresh_checked, 0);
-		SDL_AtomicSet(&qw_maplist_refresh_last_result, QW_MAPLIST_REFRESH_FAILED);
+		SDL_SetAtomicInt(&qw_maplist_refresh_running, 0);
+		SDL_SetAtomicInt(&qw_maplist_refresh_checked, 0);
+		SDL_SetAtomicInt(&qw_maplist_refresh_last_result, QW_MAPLIST_REFRESH_FAILED);
 		Con_DPrintf("qwmaplist: failed to create refresh thread: %s\n", SDL_GetError());
 		return false;
 	}
 
 	if (now != (time_t)-1)
 		qw_maplist_last_refresh_attempt = now;
-	SDL_AtomicSet(&qw_maplist_refresh_checked, 1);
+	SDL_SetAtomicInt(&qw_maplist_refresh_checked, 1);
 	SDL_DetachThread(thread);
 	return true;
 }
 
 static void QWMapList_ConsumeRefresh(void)
 {
-	if (!SDL_AtomicCAS(&qw_maplist_refresh_ready, 1, 0))
+	if (!SDL_CompareAndSwapAtomicInt(&qw_maplist_refresh_ready, 1, 0))
 		return;
 
 	QWMapList_FreeCache();
 	qw_maplist_state = QW_MAPLIST_UNLOADED;
 	qw_maplist_warned = false;
 	qw_maplist_cache_warned = false;
-	SDL_AtomicSet(&qw_maplist_refresh_checked, 0);
+	SDL_SetAtomicInt(&qw_maplist_refresh_checked, 0);
 }
 
 qboolean QWMapList_LoadOnce(void)
 {
 	QWMapList_SweepTempCache();
 	QWMapList_ConsumeRefresh();
-	if (!SDL_AtomicGet(&qw_maplist_refresh_checked))
+	if (!SDL_GetAtomicInt(&qw_maplist_refresh_checked))
 		QWMapList_StartRefresh(false);
 
 	if (qw_maplist_state == QW_MAPLIST_LOADED)
@@ -5127,7 +5126,7 @@ void QWMapList_Reload(void)
 	qw_maplist_state = QW_MAPLIST_UNLOADED;
 	qw_maplist_warned = false;
 	qw_maplist_cache_warned = false;
-	SDL_AtomicSet(&qw_maplist_refresh_checked, 0);
+	SDL_SetAtomicInt(&qw_maplist_refresh_checked, 0);
 	QWMapList_StartRefresh(true);
 	CL_QWMapListDownloadsRetry();
 }
@@ -5139,7 +5138,7 @@ qw_maplist_state_t QWMapList_State(void)
 
 qboolean QWMapList_IsRefreshing(void)
 {
-	return SDL_AtomicGet(&qw_maplist_refresh_running) != 0;
+	return SDL_GetAtomicInt(&qw_maplist_refresh_running) != 0;
 }
 
 const char *QWMapList_StateName(void)
@@ -5205,7 +5204,7 @@ static int QWMapList_LowerBoundPrefix(const char *partial, size_t partial_len)
 
 static const char *QWMapList_RefreshResultName(void)
 {
-	switch (SDL_AtomicGet(&qw_maplist_refresh_last_result))
+	switch (SDL_GetAtomicInt(&qw_maplist_refresh_last_result))
 	{
 	case QW_MAPLIST_REFRESH_SUCCESS:
 		return "success";
@@ -5255,8 +5254,8 @@ static void QWMapList_PrintInfo(void)
 	Con_Printf("qwmaplist cache mtime: %s\n", cache_mtime);
 	Con_Printf("qwmaplist remote: %s\n", QW_MAPLIST_REMOTE_URL);
 	Con_Printf("qwmaplist refresh: %s\n",
-		SDL_AtomicGet(&qw_maplist_refresh_running) ? "running" :
-		(SDL_AtomicGet(&qw_maplist_refresh_ready) ? "ready" : "idle"));
+		SDL_GetAtomicInt(&qw_maplist_refresh_running) ? "running" :
+		(SDL_GetAtomicInt(&qw_maplist_refresh_ready) ? "ready" : "idle"));
 	Con_Printf("qwmaplist last refresh attempt: %s\n", last_attempt);
 	Con_Printf("qwmaplist last refresh result: %s\n", QWMapList_RefreshResultName());
 	Con_Printf("qwmaplist downloads: %s\n", CL_QWMapListDownloadsAvailable() ? "available" : "unavailable");
@@ -6551,7 +6550,7 @@ static void Con_DrawBirthdayMessage (void)
 	if (COM_FileExists(backup_path, NULL)) // skip if not first run of the day
 		return;
 
-	Uint32 current_time = SDL_GetTicks();
+	Uint64 current_time = SDL_GetTicks();
 
 	if (birthday_start_time == 0) {
 		birthday_start_time = current_time;

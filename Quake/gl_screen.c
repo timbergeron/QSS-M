@@ -1760,7 +1760,7 @@ void SCR_ShowPing(void)
 	if (scr_viewsize.value >= 130)
 		return;
 
-	ct = (int)((SDL_GetTicks64() - maptime) / 1000); // woods connected map time #maptime
+	ct = (int)((SDL_GetTicks() - maptime) / 1000); // woods connected map time #maptime
 
 	if (cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected) {
 
@@ -1829,7 +1829,7 @@ SCR_ShowPL -- added by woods #scrpl
 void SCR_ShowPL(void)
 {
 	static int lastPL = 0;
-	static Uint32 lastPLTime = 0;
+	static Uint64 lastPLTime = 0;
 	char			num[12];
 
 	int clampedSbar = CLAMP(1, (int)scr_sbar.value, 3);
@@ -1840,7 +1840,7 @@ void SCR_ShowPL(void)
 	if (!scr_ping.value)
 		return;
 
-	ct = (int)((SDL_GetTicks64() - maptime) / 1000); // woods connected map time #maptime
+	ct = (int)((SDL_GetTicks() - maptime) / 1000); // woods connected map time #maptime
 
 	if (cl.gametype == GAME_DEATHMATCH && cls.state == ca_connected)
 	{
@@ -1854,7 +1854,7 @@ void SCR_ShowPL(void)
 		}
 
 		// Determine if the stored value should be displayed
-		Uint32 elapsedTime = SDL_GetTicks() - lastPLTime;
+		Uint64 elapsedTime = SDL_GetTicks() - lastPLTime;
 		if (elapsedTime < 3000) { // Show for 1 second
 
 			int	x, y;
@@ -3474,8 +3474,8 @@ void SCR_ShowFlagStatus(void)
 
 	static char cached_redflag[10] = "";
 	static char cached_blueflag[10] = "";
-	static Uint32 last_cache_time = 0;
-	Uint32 current_time = SDL_GetTicks();
+	static Uint64 last_cache_time = 0;
+	Uint64 current_time = SDL_GetTicks();
 
 	// Cache the values for 100 milliseconds to prevent blinking
 
@@ -6504,8 +6504,8 @@ typedef struct scr_screenshot_job_s
 } scr_screenshot_job_t;
 
 static SDL_Thread *scr_screenshot_thread;
-static SDL_mutex *scr_screenshot_mutex;
-static SDL_cond *scr_screenshot_condition;
+static SDL_Mutex *scr_screenshot_mutex;
+static SDL_Condition *scr_screenshot_condition;
 static scr_screenshot_job_t *scr_screenshot_pending_head;
 static scr_screenshot_job_t *scr_screenshot_pending_tail;
 static scr_screenshot_job_t *scr_screenshot_completed_head;
@@ -6543,7 +6543,7 @@ static int SCR_ScreenshotWorker (void *unused)
 
 		SDL_LockMutex (scr_screenshot_mutex);
 		while (!scr_screenshot_pending_head && !scr_screenshot_shutdown)
-			SDL_CondWait (scr_screenshot_condition, scr_screenshot_mutex);
+			SDL_WaitCondition (scr_screenshot_condition, scr_screenshot_mutex);
 		if (!scr_screenshot_pending_head && scr_screenshot_shutdown)
 		{
 			SDL_UnlockMutex (scr_screenshot_mutex);
@@ -6579,7 +6579,7 @@ static void SCR_ScreenshotInit (void)
 		return;
 
 	scr_screenshot_mutex = SDL_CreateMutex ();
-	scr_screenshot_condition = SDL_CreateCond ();
+	scr_screenshot_condition = SDL_CreateCondition ();
 	if (!scr_screenshot_mutex || !scr_screenshot_condition)
 		goto fail;
 
@@ -6593,7 +6593,7 @@ static void SCR_ScreenshotInit (void)
 fail:
 	Con_DPrintf ("Unable to start screenshot worker: %s\n", SDL_GetError ());
 	if (scr_screenshot_condition)
-		SDL_DestroyCond (scr_screenshot_condition);
+		SDL_DestroyCondition (scr_screenshot_condition);
 	if (scr_screenshot_mutex)
 		SDL_DestroyMutex (scr_screenshot_mutex);
 	scr_screenshot_condition = NULL;
@@ -6681,7 +6681,7 @@ static qboolean SCR_ScreenshotQueue (scr_screenshot_job_t *job)
 		scr_screenshot_pending_head = job;
 	scr_screenshot_pending_tail = job;
 	scr_screenshot_outstanding++;
-	SDL_CondSignal (scr_screenshot_condition);
+	SDL_SignalCondition (scr_screenshot_condition);
 	SDL_UnlockMutex (scr_screenshot_mutex);
 	return true;
 }
@@ -6693,7 +6693,7 @@ void SCR_Shutdown (void)
 
 	SDL_LockMutex (scr_screenshot_mutex);
 	scr_screenshot_shutdown = true;
-	SDL_CondSignal (scr_screenshot_condition);
+	SDL_SignalCondition (scr_screenshot_condition);
 	SDL_UnlockMutex (scr_screenshot_mutex);
 
 	if (scr_screenshot_thread)
@@ -6701,7 +6701,7 @@ void SCR_Shutdown (void)
 	scr_screenshot_thread = NULL;
 	SCR_ScreenshotConsumeCompleted ();
 
-	SDL_DestroyCond (scr_screenshot_condition);
+	SDL_DestroyCondition (scr_screenshot_condition);
 	SDL_DestroyMutex (scr_screenshot_mutex);
 	scr_screenshot_condition = NULL;
 	scr_screenshot_mutex = NULL;
@@ -6826,7 +6826,7 @@ void SCR_ScreenShot_f (void)
 	if (local_time)
 		strftime(str, sizeof(str), "%m-%d-%Y-%H%M%S", local_time);
 	else
-		q_snprintf(str, sizeof(str), "unknown-%u", (unsigned int)SDL_GetTicks());
+		q_snprintf(str, sizeof(str), "unknown-%llu", (unsigned long long)SDL_GetTicks());
 
 	path_length = q_snprintf(checkname, sizeof(checkname), "%s/screenshots",
 		com_gamedir); // woods #screenshots

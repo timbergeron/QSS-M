@@ -23,15 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #import <IOKit/hid/IOHIDLib.h>
 #import <IOKit/hid/IOHIDUsageTables.h>
 #import <IOKit/hidsystem/IOHIDLib.h>
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#import <SDL2/SDL.h>
-#else
-#import <SDL/SDL.h>
-#endif
-#else
-#import "SDL.h"
-#endif
+#import <SDL3/SDL.h>
 #import "SDLMain.h"
 
 NSString *FQPrefCommandLineKey = @"CommandLine";
@@ -3999,7 +3991,7 @@ doCommandBySelector:(SEL)commandSelector
                                         keyEquivalent:@""] autorelease];
     [launcherItem setTarget:self];
     /* The launcher only chooses arguments for a not-yet-started game, so it
-       has nothing to offer once SDL_main has taken over this process. */
+       has nothing to offer once QSSM_Main has taken over this process. */
     [launcherItem setEnabled:(SDL_WasInit(0) == 0)];
     [menu addItem:launcherItem];
 
@@ -4189,7 +4181,7 @@ doCommandBySelector:(SEL)commandSelector
         if (launcherWindow)
             [launcherWindow close];
 
-        int status = SDL_main(argc, argv);
+        int status = QSSM_Main(argc, argv);
         [launchArguments release];
         exit(status);
     }
@@ -4209,8 +4201,8 @@ doCommandBySelector:(SEL)commandSelector
     /* Once SDL is running, let the engine perform its normal quit sequence. */
     if (SDL_WasInit(0) != 0) {
         SDL_Event event = {0};
-        event.type = SDL_QUIT;
-        if (SDL_PushEvent(&event) == 1)
+        event.type = SDL_EVENT_QUIT;
+        if (SDL_PushEvent(&event))
             return;
     }
 
@@ -4240,18 +4232,18 @@ doCommandBySelector:(SEL)commandSelector
         const SDL_Keycode keycodes[] = {
             SDLK_LGUI, SDLK_COMMA, SDLK_COMMA, SDLK_LGUI
         };
-        const Uint8 states[] = {
-            SDL_PRESSED, SDL_PRESSED, SDL_RELEASED, SDL_RELEASED
-        };
+        const bool downs[] = { true, true, false, false };
+        SDL_Window *focus = SDL_GetKeyboardFocus();
         size_t i;
 
         for (i = 0; i < sizeof(scancodes) / sizeof(scancodes[0]); ++i) {
-            SDL_Event event = {0};
-            event.type = (states[i] == SDL_PRESSED) ? SDL_KEYDOWN : SDL_KEYUP;
-            event.key.state = states[i];
-            event.key.keysym.scancode = scancodes[i];
-            event.key.keysym.sym = keycodes[i];
-            event.key.keysym.mod = (i == 0 || i == 3) ? KMOD_NONE : KMOD_GUI;
+            SDL_Event event = {0};  /* a zero timestamp is filled in by SDL_PushEvent */
+            event.type = downs[i] ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+            event.key.windowID = focus ? SDL_GetWindowID(focus) : 0;
+            event.key.down = downs[i];
+            event.key.scancode = scancodes[i];
+            event.key.key = keycodes[i];
+            event.key.mod = (i == 0 || i == 3) ? SDL_KMOD_NONE : SDL_KMOD_GUI;
             SDL_PushEvent(&event);
         }
         return;

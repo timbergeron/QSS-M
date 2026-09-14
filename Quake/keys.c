@@ -1859,7 +1859,7 @@ static qboolean Chat_CopySelectionToClipboard (void)
 	for (i = 0; i < len; i++)
 		copy[i] = dequake[(unsigned char)chat_buffer[start + i]];
 	copy[len] = 0;
-	return SDL_SetClipboardText(copy) == 0;
+	return SDL_SetClipboardText(copy);
 }
 
 static qboolean Chat_InsertText (const char *text, int len)
@@ -3212,16 +3212,12 @@ static int Key_MenuChar (int key, int keycode)
 {
 	qboolean shift = keydown[K_SHIFT];
 	int mods = SDL_GetModState();
-	qboolean caps = (mods & KMOD_CAPS) != 0;
+	qboolean caps = (mods & SDL_KMOD_CAPS) != 0;
 	const char *unshifted = "1234567890-=[]\\;'`,./";
 	const char *shifted = "!@#$%^&*()_+{}|:\"~<>?";
 	const char *p;
 
-#if defined(USE_SDL2)
-	if (SDL_IsTextInputActive())
-#else
-	if (SDL_EnableUNICODE(-1))
-#endif
+	if (SDL_TextInputActive((SDL_Window *)VID_GetWindow()))
 		return 0;
 	if (Key_IsShortcutModifierDown() || keydown[K_ALT])
 		return 0;
@@ -3240,7 +3236,7 @@ static int Key_MenuChar (int key, int keycode)
 	}
 	// macOS has a Clear key rather than Num Lock; its keypad always types.
 #if !defined(PLATFORM_OSX) && !defined(PLATFORM_MAC)
-	if ((mods & KMOD_NUM) && !shift)
+	if ((mods & SDL_KMOD_NUM) && !shift)
 #endif
 	{
 		switch (key)

@@ -107,7 +107,7 @@ test("findChanges fails closed when a monitored package disappears", () => {
 test("validateManifest requires complete, one-to-one DLL coverage", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qssm-dependency-test-"));
   try {
-    for (const directory of ["SDL2", "codecs", "curl", "zlib"])
+    for (const directory of ["SDL3", "codecs", "curl", "zlib"])
       fs.mkdirSync(path.join(root, "Windows", directory), { recursive: true });
     fs.writeFileSync(path.join(root, "Windows", "codecs", "example.dll"), "fixture");
     const manifest = [{

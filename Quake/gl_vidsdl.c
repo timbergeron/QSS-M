@@ -27,18 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "cfgfile.h"
 #include "bgmusic.h"
 #include "resource.h"
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_syswm.h>
-#else
-#include <SDL/SDL.h>
-#include "SDL_syswm.h"
-#endif
-#else
-#include "SDL.h"
-#include "SDL_syswm.h"
-#endif
+#include <SDL3/SDL.h>
 
 //ericw -- for putting the driver into multithreaded mode
 #ifdef __APPLE__
@@ -90,12 +79,8 @@ static SDL_Cursor	*vid_cursor;
 static SDL_Cursor	*custom_cursor; // woods #customcursor
 static SDL_Cursor	*menu_text_cursor;
 static qboolean		menu_text_cursor_custom = false;
-#if defined(USE_SDL2)
 static SDL_Window	*draw_context;
 static SDL_GLContext	gl_context;
-#else
-static SDL_Surface	*draw_context;
-#endif
 
 static qboolean	vid_locked = false; //johnfitz
 static qboolean	vid_changed = false;
@@ -113,7 +98,7 @@ static void GL_SetupState (void); //johnfitz
 void FXAA_Init(void); // woods #fxaa
 void FXAA_Shutdown(void); // woods #fxaa
 
-#if defined(USE_SDL2) && defined(_WIN32)
+#if defined(_WIN32)
 static void EnableDarkModeForSDLWindow(SDL_Window *window); // woods #darkmode
 #endif
 
@@ -246,9 +231,9 @@ static unsigned short vid_gamma_red[256];
 static unsigned short vid_gamma_green[256];
 static unsigned short vid_gamma_blue[256];
 
-static unsigned short vid_sysgamma_red[256];
-static unsigned short vid_sysgamma_green[256];
-static unsigned short vid_sysgamma_blue[256];
+static qboolean VID_Gamma_ProbeNative (void);
+static qboolean VID_Gamma_SetNative (void);
+static void VID_Gamma_RestoreNative (void);
 #endif
 
 static qboolean	gammaworks = false;	// whether hw-gamma works
@@ -292,35 +277,14 @@ static void VID_Gamma_SetGamma (void)
 
 	if (draw_context && gammaworks)
 	{
-#if !USE_GAMMA_RAMPS
-		float	value;
-
-		if (vid_gamma.value > (1.0f / GAMMA_MAX))
-			value = 1.0f / vid_gamma.value;
-		else
-			value = GAMMA_MAX;
-
-		if (value < GAMMA_MIN) // woods #gammaclamp
-			value = GAMMA_MIN;
-#endif
-
-#if defined(USE_SDL2)
 # if USE_GAMMA_RAMPS
-		if (SDL_SetWindowGammaRamp(draw_context, vid_gamma_red, vid_gamma_green, vid_gamma_blue) != 0)
-			Con_Printf ("VID_Gamma_SetGamma: failed on SDL_SetWindowGammaRamp\n");
-# else
-		if (SDL_SetWindowBrightness(draw_context, value) != 0)
-			Con_Printf ("VID_Gamma_SetGamma: failed on SDL_SetWindowBrightness\n");
+		// As SDL2 did, only the focused window owns the display's ramp;
+		// VID_Gamma_Reapply sets it again when focus returns.
+		if (!(SDL_GetWindowFlags (draw_context) & SDL_WINDOW_INPUT_FOCUS))
+			return;
+		if (!VID_Gamma_SetNative ())
+			Con_Printf ("VID_Gamma_SetGamma: could not set the display transfer table\n");
 # endif
-#else /* USE_SDL2 */
-# if USE_GAMMA_RAMPS
-		if (SDL_SetGammaRamp(vid_gamma_red, vid_gamma_green, vid_gamma_blue) == -1)
-			Con_Printf ("VID_Gamma_SetGamma: failed on SDL_SetGammaRamp\n");
-# else
-		if (SDL_SetGamma(value,value,value) == -1)
-			Con_Printf ("VID_Gamma_SetGamma: failed on SDL_SetGamma\n");
-# endif
-#endif /* USE_SDL2 */
 	}
 }
 
@@ -331,26 +295,10 @@ VID_Gamma_Restore -- restore system gamma
 */
 static void VID_Gamma_Restore (void)
 {
-	if (draw_context && gammaworks)
-	{
-#if defined(USE_SDL2)
 # if USE_GAMMA_RAMPS
-		if (SDL_SetWindowGammaRamp(draw_context, vid_sysgamma_red, vid_sysgamma_green, vid_sysgamma_blue) != 0)
-			Con_Printf ("VID_Gamma_Restore: failed on SDL_SetWindowGammaRamp\n");
-# else
-		if (SDL_SetWindowBrightness(draw_context, 1) != 0)
-			Con_Printf ("VID_Gamma_Restore: failed on SDL_SetWindowBrightness\n");
+	// needs no window: the saved table belongs to a display
+	VID_Gamma_RestoreNative ();
 # endif
-#else /* USE_SDL2 */
-# if USE_GAMMA_RAMPS
-		if (SDL_SetGammaRamp(vid_sysgamma_red, vid_sysgamma_green, vid_sysgamma_blue) == -1)
-			Con_Printf ("VID_Gamma_Restore: failed on SDL_SetGammaRamp\n");
-# else
-		if (SDL_SetGamma(1, 1, 1) == -1)
-			Con_Printf ("VID_Gamma_Restore: failed on SDL_SetGamma\n");
-# endif
-#endif /* USE_SDL2 */
-	}
 }
 
 /*
@@ -390,12 +338,12 @@ static void VID_Gamma_f (cvar_t *var)
 static double vid_gamma_burst_deadline;	// monitor rapidly until this time
 static double vid_gamma_burst_next;
 
-#if defined(__APPLE__) && USE_GAMMA_RAMPS && defined(USE_SDL2)
+#if defined(__APPLE__) && USE_GAMMA_RAMPS
 #define VID_GAMMA_BURST_INTERVAL	0.05
 #define VID_GAMMA_IDLE_INTERVAL		0.25
 
 static CGDirectDisplayID vid_gamma_display = kCGNullDirectDisplay;
-static int vid_gamma_display_index = -1;
+static SDL_DisplayID vid_gamma_display_id = 0;
 static int vid_gamma_mismatch_streak;
 static double vid_gamma_last_mismatch;
 
@@ -414,9 +362,9 @@ static qboolean VID_Gamma_DisplayBoundsMatch (CGDirectDisplayID display, const S
 ================
 VID_Gamma_GetDisplay
 
-SDL caches the last ramp passed to SDL_SetWindowGammaRamp, so
-SDL_GetWindowGammaRamp cannot tell us when macOS has replaced the actual
-display transfer table.  Resolve SDL's display by its CoreGraphics bounds so
+Gamma ramps go straight to the CoreGraphics transfer table of the window's
+display, which is also where macOS can replace them behind our back.  Resolve
+SDL's display by its CoreGraphics bounds so
 the lookup does not depend on the ordering or filtering of either display
 list.  The cached ID is revalidated to handle window moves and hot-plugging.
 ================
@@ -428,7 +376,7 @@ static qboolean VID_Gamma_GetDisplay (CGDirectDisplayID *display)
 	CGError error;
 	SDL_Rect bounds;
 	const char *driver;
-	int display_index;
+	SDL_DisplayID display_id;
 
 	if (!display || !draw_context)
 		return false;
@@ -437,11 +385,11 @@ static qboolean VID_Gamma_GetDisplay (CGDirectDisplayID *display)
 	if (!driver || strcmp (driver, "cocoa"))
 		return false;
 
-	display_index = SDL_GetWindowDisplayIndex (draw_context);
-	if (display_index < 0 || SDL_GetDisplayBounds (display_index, &bounds) != 0)
+	display_id = SDL_GetDisplayForWindow (draw_context);
+	if (!display_id || !SDL_GetDisplayBounds (display_id, &bounds))
 		return false;
 
-	if (display_index == vid_gamma_display_index &&
+	if (display_id == vid_gamma_display_id &&
 		vid_gamma_display != kCGNullDirectDisplay &&
 		CGDisplayIsOnline (vid_gamma_display) &&
 		VID_Gamma_DisplayBoundsMatch (vid_gamma_display, &bounds))
@@ -451,7 +399,7 @@ static qboolean VID_Gamma_GetDisplay (CGDirectDisplayID *display)
 	}
 
 	vid_gamma_display = kCGNullDirectDisplay;
-	vid_gamma_display_index = -1;
+	vid_gamma_display_id = 0;
 
 	error = CGGetOnlineDisplayList (0, NULL, &count);
 	if (error != kCGErrorSuccess || !count)
@@ -472,7 +420,7 @@ static qboolean VID_Gamma_GetDisplay (CGDirectDisplayID *display)
 			if (VID_Gamma_DisplayBoundsMatch (displays[i], &bounds))
 			{
 				vid_gamma_display = displays[i];
-				vid_gamma_display_index = display_index;
+				vid_gamma_display_id = display_id;
 				*display = displays[i];
 				break;
 			}
@@ -527,6 +475,91 @@ static qboolean VID_Gamma_RampMatches (void)
 	}
 	return true;
 }
+
+/*
+================
+VID_Gamma_SetNative / VID_Gamma_RestoreNative
+
+The table found on a display before our first ramp is kept so focus loss, a
+move to another display, vid_restart and shutdown hand back exactly what was
+there.  Only one display carries our ramp at a time: moving restores the old
+one first.  Quartz also restores every display when the process exits.
+================
+*/
+#define VID_GAMMA_TABLE_SIZE	1024
+
+static struct
+{
+	CGDirectDisplayID	display;
+	uint32_t			count;
+	CGGammaValue		red[VID_GAMMA_TABLE_SIZE];
+	CGGammaValue		green[VID_GAMMA_TABLE_SIZE];
+	CGGammaValue		blue[VID_GAMMA_TABLE_SIZE];
+} vid_gamma_original = { kCGNullDirectDisplay };
+
+static void VID_Gamma_RestoreNative (void)
+{
+	CGDirectDisplayID display = vid_gamma_original.display;
+
+	if (display == kCGNullDirectDisplay)
+		return;
+	vid_gamma_original.display = kCGNullDirectDisplay;
+	// an unplugged display has nothing left to restore
+	if (CGDisplayIsOnline (display) &&
+		CGSetDisplayTransferByTable (display, vid_gamma_original.count, vid_gamma_original.red,
+			vid_gamma_original.green, vid_gamma_original.blue) != kCGErrorSuccess)
+		Con_Printf ("VID_Gamma_Restore: failed on CGSetDisplayTransferByTable\n");
+}
+
+static qboolean VID_Gamma_SaveOriginal (CGDirectDisplayID display)
+{
+	uint32_t capacity = CGDisplayGammaTableCapacity (display);
+
+	if (capacity > VID_GAMMA_TABLE_SIZE)
+		capacity = VID_GAMMA_TABLE_SIZE;
+	if (!capacity ||
+		CGGetDisplayTransferByTable (display, capacity, vid_gamma_original.red, vid_gamma_original.green,
+			vid_gamma_original.blue, &vid_gamma_original.count) != kCGErrorSuccess ||
+		!vid_gamma_original.count)
+		return false;
+	vid_gamma_original.display = display;
+	return true;
+}
+
+static qboolean VID_Gamma_ProbeNative (void)
+{
+	CGDirectDisplayID display;
+
+	return VID_Gamma_GetDisplay (&display) && CGDisplayGammaTableCapacity (display) > 0;
+}
+
+static qboolean VID_Gamma_SetNative (void)
+{
+	CGGammaValue red[256], green[256], blue[256];
+	CGDirectDisplayID display;
+	int i;
+
+	if (!VID_Gamma_GetDisplay (&display))
+	{
+		VID_Gamma_RestoreNative ();
+		return false;
+	}
+	if (vid_gamma_original.display != display)
+	{
+		VID_Gamma_RestoreNative ();
+		if (!VID_Gamma_SaveOriginal (display))
+			return false;
+	}
+
+	// the same 256-entry conversion SDL2's Cocoa backend used
+	for (i = 0; i < 256; i++)
+	{
+		red[i] = vid_gamma_red[i] / 65535.0f;
+		green[i] = vid_gamma_green[i] / 65535.0f;
+		blue[i] = vid_gamma_blue[i] / 65535.0f;
+	}
+	return CGSetDisplayTransferByTable (display, 256, red, green, blue) == kCGErrorSuccess;
+}
 #endif
 
 void VID_Gamma_Reapply (void)
@@ -539,11 +572,19 @@ void VID_Gamma_Reapply (void)
 	// animation finishes after the SDL event), which can clobber the ramp we
 	// just set -- monitor it closely for a short time via VID_Gamma_Frame.
 	vid_gamma_burst_deadline = realtime + 3.0;
-#if defined(__APPLE__) && USE_GAMMA_RAMPS && defined(USE_SDL2)
+#if defined(__APPLE__) && USE_GAMMA_RAMPS
 	vid_gamma_mismatch_streak = 0;	// a real transition deserves a fresh burst
 	vid_gamma_burst_next = realtime + VID_GAMMA_BURST_INTERVAL;
 #else
 	vid_gamma_burst_next = realtime + 0.25;
+#endif
+}
+
+void VID_Gamma_FocusLost (void)
+{
+#if USE_GAMMA_RAMPS
+	// SDL2 handed its own ramp back on focus loss; the native table is ours
+	VID_Gamma_RestoreNative ();
 #endif
 }
 
@@ -552,7 +593,7 @@ void VID_Gamma_Frame (void)
 	if (!vid_initialized)
 		return;
 
-#if defined(__APPLE__) && USE_GAMMA_RAMPS && defined(USE_SDL2)
+#if defined(__APPLE__) && USE_GAMMA_RAMPS
 	if (!draw_context || !gammaworks || gl_glsl_gamma_able ||
 		!(SDL_GetWindowFlags (draw_context) & SDL_WINDOW_INPUT_FOCUS))
 		return;
@@ -635,23 +676,12 @@ static void VID_Gamma_Apply (void)
 	if (gl_glsl_gamma_able)
 		return;
 
-#if defined(USE_SDL2)
 # if USE_GAMMA_RAMPS
-	gammaworks	= (SDL_GetWindowGammaRamp(draw_context, vid_sysgamma_red, vid_sysgamma_green, vid_sysgamma_blue) == 0);
-	if (gammaworks)
-	    gammaworks	= (SDL_SetWindowGammaRamp(draw_context, vid_sysgamma_red, vid_sysgamma_green, vid_sysgamma_blue) == 0);
+	gammaworks	= VID_Gamma_ProbeNative ();
 # else
-	gammaworks	= (SDL_SetWindowBrightness(draw_context, 1) == 0);
+	// SDL3 has no window gamma API; elsewhere gamma is adjusted with GLSL
+	gammaworks	= false;
 # endif
-#else /* USE_SDL2 */
-# if USE_GAMMA_RAMPS
-	gammaworks	= (SDL_GetGammaRamp(vid_sysgamma_red, vid_sysgamma_green, vid_sysgamma_blue) == 0);
-	if (gammaworks)
-	    gammaworks	= (SDL_SetGammaRamp(vid_sysgamma_red, vid_sysgamma_green, vid_sysgamma_blue) == 0);
-# else
-	gammaworks	= (SDL_SetGamma(1, 1, 1) == 0);
-# endif
-#endif /* USE_SDL2 */
 
 	if (!gammaworks)
 	{
@@ -690,13 +720,9 @@ VID_GetCurrentWidth
 */
 static int VID_GetCurrentWidth (void)
 {
-#if defined(USE_SDL2)
 	int w = 0, h = 0;
 	SDL_GetWindowSize(draw_context, &w, &h);
 	return w;
-#else
-	return draw_context->w;
-#endif
 }
 
 /*
@@ -706,13 +732,15 @@ VID_GetCurrentHeight
 */
 static int VID_GetCurrentHeight (void)
 {
-#if defined(USE_SDL2)
 	int w = 0, h = 0;
 	SDL_GetWindowSize(draw_context, &w, &h);
 	return h;
-#else
-	return draw_context->h;
-#endif
+}
+
+/* SDL3 reports fractional refresh rates; the vid_refreshrate cvar holds whole Hz. */
+static int VID_RefreshRateHz (const SDL_DisplayMode *mode)
+{
+	return (int)(mode->refresh_rate + 0.5f);
 }
 
 /*
@@ -722,20 +750,12 @@ VID_GetCurrentRefreshRate
 */
 static int VID_GetCurrentRefreshRate (void)
 {
-#if defined(USE_SDL2)
-	SDL_DisplayMode mode;
-	int current_display;
+	const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(draw_context));
 
-	current_display = SDL_GetWindowDisplayIndex(draw_context);
-
-	if (0 != SDL_GetCurrentDisplayMode(current_display, &mode))
+	if (!mode)
 		return DEFAULT_REFRESHRATE;
 
-	return mode.refresh_rate;
-#else
-	// SDL1.2 doesn't support refresh rates
-	return DEFAULT_REFRESHRATE;
-#endif
+	return VID_RefreshRateHz(mode);
 }
 
 
@@ -746,26 +766,23 @@ VID_GetCurrentBPP
 */
 static int VID_GetCurrentBPP (void)
 {
-#if defined(USE_SDL2)
 	const Uint32 pixelFormat = SDL_GetWindowPixelFormat(draw_context);
 	return SDL_BITSPERPIXEL(pixelFormat);
-#else
-	return draw_context->format->BitsPerPixel;
-#endif
 }
 
 /*
 ====================
-VID_GetCurrentDPI -- woods #q_sysinfo
+VID_GetCurrentDisplayScale -- woods #q_sysinfo
+
+The content scale of the window's display (2 on a Retina panel), not its
+physical pixel density.
 ====================
 */
-int VID_GetCurrentDPI(void)
+float VID_GetCurrentDisplayScale (void)
 {
-	float dpicount = 0.0f;
-	int current_display;
-	current_display = SDL_GetWindowDisplayIndex(draw_context);
-	SDL_GetDisplayDPI(current_display, NULL, NULL, &dpicount);
-	return (dpicount);
+	float scale = draw_context ? SDL_GetWindowDisplayScale(draw_context) : 0.0f;
+
+	return scale > 0.0f ? scale : 1.0f;
 }
 
 /*
@@ -777,11 +794,7 @@ returns true if we are in regular fullscreen or "desktop fullscren"
 */
 static qboolean VID_GetFullscreen (void)
 {
-#if defined(USE_SDL2)
 	return (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_FULLSCREEN) != 0;
-#else
-	return (draw_context->flags & SDL_FULLSCREEN) != 0;
-#endif
 }
 
 /*
@@ -793,11 +806,8 @@ returns true if we are specifically in "desktop fullscreen" mode
 */
 static qboolean VID_GetDesktopFullscreen (void)
 {
-#if defined(USE_SDL2)
-	return (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN_DESKTOP;
-#else
-	return false;
-#endif
+	// SDL3 fullscreen without an exclusive display mode is desktop fullscreen
+	return VID_GetFullscreen() && !SDL_GetWindowFullscreenMode(draw_context);
 }
 
 /*
@@ -807,14 +817,9 @@ VID_GetVSync
 */
 static qboolean VID_GetVSync (void)
 {
-#if defined(USE_SDL2)
-	return SDL_GL_GetSwapInterval() == 1;
-#else
-	int swap_control;
-	if (SDL_GL_GetAttribute(SDL_GL_SWAP_CONTROL, &swap_control) == 0)
-		return swap_control > 0;
-	return false;
-#endif
+	int interval = 0;
+
+	return SDL_GL_GetSwapInterval(&interval) && interval == 1;
 }
 
 /*
@@ -826,11 +831,7 @@ used by pl_win.c
 */
 void *VID_GetWindow (void)
 {
-#if defined(USE_SDL2)
 	return draw_context;
-#else
-	return NULL;
-#endif
 }
 
 /*
@@ -850,11 +851,7 @@ VID_HasMouseOrInputFocus
 */
 qboolean VID_HasMouseOrInputFocus (void)
 {
-#if defined(USE_SDL2)
 	return (SDL_GetWindowFlags(draw_context) & (SDL_WINDOW_MOUSE_FOCUS | SDL_WINDOW_INPUT_FOCUS)) != 0;
-#else
-	return (SDL_GetAppState() & (SDL_APPMOUSEFOCUS | SDL_APPINPUTFOCUS)) != 0;
-#endif
 }
 
 /*
@@ -868,11 +865,7 @@ the cursor still hovering over it correctly reads as unfocused.
 */
 qboolean VID_HasInputFocus (void)
 {
-#if defined(USE_SDL2)
 	return (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_INPUT_FOCUS) != 0;
-#else
-	return (SDL_GetAppState() & SDL_APPINPUTFOCUS) != 0;
-#endif
 }
 
 /*
@@ -882,53 +875,48 @@ VID_IsMinimized
 */
 qboolean VID_IsMinimized (void)
 {
-#if defined(USE_SDL2)
-	return !(SDL_GetWindowFlags(draw_context) & SDL_WINDOW_SHOWN);
-#else
-	/* SDL_APPACTIVE in SDL 1.x means "not minimized" */
-	return !(SDL_GetAppState() & SDL_APPACTIVE);
-#endif
+	return (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_HIDDEN) != 0;
 }
 
-#if defined(USE_SDL2)
 /*
 ================
-VID_SDL2_GetDisplayModeForDisplay
+VID_GetDisplayModeForDisplay
 
 Returns a pointer to a statically allocated SDL_DisplayMode structure
 if there is one with the requested params on the selected display.
 Otherwise returns NULL.
 
-This is passed to SDL_SetWindowDisplayMode to specify a pixel format
+This is passed to SDL_SetWindowFullscreenMode to specify a pixel format
 with the requested bpp. If we didn't care about bpp we could just pass NULL.
 ================
 */
-static SDL_DisplayMode *VID_SDL2_GetDisplayModeForDisplay(int display, int width, int height, int refreshrate, int bpp)
+static SDL_DisplayMode *VID_GetDisplayModeForDisplay(SDL_DisplayID display, int width, int height, int refreshrate, int bpp)
 {
 	static SDL_DisplayMode mode;
-	const int sdlmodes = SDL_GetNumDisplayModes(display);
-	int i;
+	SDL_DisplayMode **modes;
+	qboolean found = false;
+	int i, count = 0;
 
-	for (i = 0; i < sdlmodes; i++)
+	modes = SDL_GetFullscreenDisplayModes(display, &count);
+	for (i = 0; modes && i < count; i++)
 	{
-		if (SDL_GetDisplayMode(display, i, &mode) != 0)
-			continue;
-
-		if (mode.w == width && mode.h == height
-			&& SDL_BITSPERPIXEL(mode.format) == bpp
-			&& mode.refresh_rate == refreshrate)
+		if (modes[i]->w == width && modes[i]->h == height
+			&& SDL_BITSPERPIXEL(modes[i]->format) == bpp
+			&& VID_RefreshRateHz(modes[i]) == refreshrate)
 		{
-			return &mode;
+			mode = *modes[i];	// copied: SDL frees the list below
+			found = true;
+			break;
 		}
 	}
-	return NULL;
+	SDL_free(modes);
+	return found ? &mode : NULL;
 }
 
-static SDL_DisplayMode *VID_SDL2_GetDisplayMode(int width, int height, int refreshrate, int bpp)
+static SDL_DisplayMode *VID_GetDisplayMode(int width, int height, int refreshrate, int bpp)
 {
-	return VID_SDL2_GetDisplayModeForDisplay(0, width, height, refreshrate, bpp);
+	return VID_GetDisplayModeForDisplay(SDL_GetPrimaryDisplay(), width, height, refreshrate, bpp);
 }
-#endif /* USE_SDL2 */
 
 /*
 ================
@@ -947,18 +935,8 @@ static qboolean VID_ValidMode (int width, int height, int refreshrate, int bpp, 
 	if (height < 200)
 		return false;
 
-#if defined(USE_SDL2)
-	if (fullscreen && VID_SDL2_GetDisplayMode(width, height, refreshrate, bpp) == NULL)
+	if (fullscreen && VID_GetDisplayMode(width, height, refreshrate, bpp) == NULL)
 		bpp = 0;
-#else
-	{
-		Uint32 flags = DEFAULT_SDL_FLAGS;
-		if (fullscreen)
-			flags |= SDL_FULLSCREEN;
-
-		bpp = SDL_VideoModeOK(width, height, bpp, flags);
-	}
-#endif
 
 	switch (bpp)
 	{
@@ -973,7 +951,6 @@ static qboolean VID_ValidMode (int width, int height, int refreshrate, int bpp, 
 	return true;
 }
 
-#if defined(USE_SDL2)
 static int VID_ModeAbsDiff (int a, int b)
 {
 	return (a > b) ? (a - b) : (b - a);
@@ -1046,38 +1023,33 @@ static qboolean VID_UseClosestFullscreenMode (int *width, int *height, int *refr
 
 	return true;
 }
-#endif /* USE_SDL2 */
 
-#if defined(USE_SDL2)
 /*
 ================
 VID_TryFullscreenMode
 
-Try one fullscreen style and confirm SDL's resulting window state. When there
-is no exact exclusive mode, passing NULL asks SDL to select the closest mode
-using the window dimensions and the desktop format and refresh rate.
+Try one fullscreen style and confirm SDL's resulting window state. Desktop
+fullscreen passes no display mode; exclusive fullscreen needs one.
 ================
 */
-static qboolean VID_TryFullscreenMode (Uint32 flag, const char *name, SDL_DisplayMode *mode)
+static qboolean VID_TryFullscreenMode (qboolean desktop, const char *name, const SDL_DisplayMode *mode)
 {
 	char error[256];
 
-	if (flag == SDL_WINDOW_FULLSCREEN)
+	if (!SDL_SetWindowFullscreenMode (draw_context, desktop ? NULL : mode))
 	{
-		if (SDL_SetWindowDisplayMode (draw_context, mode) != 0)
-		{
-			q_strlcpy (error, SDL_GetError(), sizeof(error));
-			Con_Warning ("Couldn't prepare %s fullscreen: %s\n", name, error);
-			return false;
-		}
+		q_strlcpy (error, SDL_GetError(), sizeof(error));
+		Con_Warning ("Couldn't prepare %s fullscreen: %s\n", name, error);
+		return false;
 	}
 
-	if (SDL_SetWindowFullscreen (draw_context, flag) != 0)
+	if (!SDL_SetWindowFullscreen (draw_context, true))
 	{
 		q_strlcpy (error, SDL_GetError(), sizeof(error));
 		Con_Warning ("Couldn't enter %s fullscreen: %s\n", name, error);
 
 		/* Some backends can report an error after changing the window state. */
+		SDL_SyncWindow (draw_context);
 		if (VID_GetFullscreen())
 		{
 			Con_Warning ("SDL reported failure, but the window is fullscreen; keeping it\n");
@@ -1086,12 +1058,15 @@ static qboolean VID_TryFullscreenMode (Uint32 flag, const char *name, SDL_Displa
 		return false;
 	}
 
+	/* SDL3 applies window state asynchronously; let this change settle. */
+	SDL_SyncWindow (draw_context);
+
 	if (!VID_GetFullscreen())
 	{
 		Con_Warning ("SDL reported success entering %s fullscreen, but the window remained windowed\n", name);
 		return false;
 	}
-	if ((flag == SDL_WINDOW_FULLSCREEN_DESKTOP) != VID_GetDesktopFullscreen())
+	if (desktop != VID_GetDesktopFullscreen())
 		Con_Warning ("SDL entered a different fullscreen style than requested; keeping it\n");
 
 	return true;
@@ -1103,36 +1078,40 @@ VID_TryEnterFullscreen
 
 Failure to take over the display should not make an otherwise usable window
 fatal. Try the requested fullscreen style, then the other style, and finally
-leave the window in windowed mode.
+leave the window in windowed mode. Without an exact exclusive mode, use the
+closest one SDL offers for the requested size.
 ================
 */
 static qboolean VID_TryEnterFullscreen (int width, int height, int refreshrate, int bpp)
 {
-	const Uint32 requested = vid_desktopfullscreen.value ?
-		SDL_WINDOW_FULLSCREEN_DESKTOP : SDL_WINDOW_FULLSCREEN;
-	const Uint32 alternate = vid_desktopfullscreen.value ?
-		SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
-	const char *requested_name = vid_desktopfullscreen.value ? "desktop" : "exclusive";
-	const char *alternate_name = vid_desktopfullscreen.value ? "exclusive" : "desktop";
+	const qboolean desktop = vid_desktopfullscreen.value != 0;
+	const char *requested_name = desktop ? "desktop" : "exclusive";
+	const char *alternate_name = desktop ? "exclusive" : "desktop";
+	SDL_DisplayMode closest;
 	SDL_DisplayMode *exclusive_mode;
-	int display;
+	SDL_DisplayID display;
 	char error[256];
 
-	display = SDL_GetWindowDisplayIndex(draw_context);
-	if (display < 0)
+	display = SDL_GetDisplayForWindow(draw_context);
+	if (!display)
 	{
 		q_strlcpy (error, SDL_GetError(), sizeof(error));
-		Con_Warning ("Couldn't determine the window's display: %s; using display 0\n", error);
-		display = 0;
+		Con_Warning ("Couldn't determine the window's display: %s; using the primary display\n", error);
+		display = SDL_GetPrimaryDisplay();
 	}
-	exclusive_mode = VID_SDL2_GetDisplayModeForDisplay(display, width, height, refreshrate, bpp);
+	exclusive_mode = VID_GetDisplayModeForDisplay(display, width, height, refreshrate, bpp);
+	if (!exclusive_mode &&
+		SDL_GetClosestFullscreenDisplayMode(display, width, height, (float)refreshrate, false, &closest))
+		exclusive_mode = &closest;
+	if (!exclusive_mode)
+		Con_Warning ("No exclusive fullscreen mode is available near %dx%d\n", width, height);
 
-	if (VID_TryFullscreenMode(requested, requested_name,
-		requested == SDL_WINDOW_FULLSCREEN ? exclusive_mode : NULL))
+	if ((desktop || exclusive_mode) &&
+		VID_TryFullscreenMode(desktop, requested_name, exclusive_mode))
 		return true;
 
-	if (VID_TryFullscreenMode(alternate, alternate_name,
-		alternate == SDL_WINDOW_FULLSCREEN ? exclusive_mode : NULL))
+	if ((!desktop || exclusive_mode) &&
+		VID_TryFullscreenMode(!desktop, alternate_name, exclusive_mode))
 	{
 		Con_Printf ("Falling back to %s fullscreen\n", alternate_name);
 		return true;
@@ -1153,20 +1132,26 @@ emergency window to the target display's usable work area.
 static void VID_RestoreWindowedFallback (int width, int height)
 {
 	SDL_Rect usable = {0, 0, 0, 0};
-	int display, actual_width, actual_height;
-	const qboolean maximized = (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_MAXIMIZED) != 0;
+	SDL_DisplayID display;
+	int actual_width, actual_height;
+	qboolean maximized;
 
-	display = SDL_GetWindowDisplayIndex(draw_context);
-	if (display < 0)
-		display = 0;
+	/* Drop any fullscreen request SDL still holds from the rejected transition. */
+	SDL_SetWindowFullscreen (draw_context, false);
+	SDL_SyncWindow (draw_context);
+	maximized = (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_MAXIMIZED) != 0;
 
-	/* Resizing or repositioning an already maximized window triggers SDL2
+	display = SDL_GetDisplayForWindow(draw_context);
+	if (!display)
+		display = SDL_GetPrimaryDisplay();
+
+	/* Resizing or repositioning an already maximized window triggered SDL2
 	 * backend bugs. Preserve its geometry and only restore its chrome. */
 	if (!maximized)
 	{
 		width = q_max(width, 320);
 		height = q_max(height, 200);
-		if (SDL_GetDisplayUsableBounds(display, &usable) != 0)
+		if (!SDL_GetDisplayUsableBounds(display, &usable))
 			SDL_GetDisplayBounds(display, &usable);
 		if (usable.w > 0 && usable.h > 0)
 		{
@@ -1180,13 +1165,12 @@ static void VID_RestoreWindowedFallback (int width, int height)
 			SDL_WINDOWPOS_CENTERED_DISPLAY(display));
 	}
 
-	SDL_SetWindowBordered (draw_context, vid_borderless.value ? SDL_FALSE : SDL_TRUE);
-	SDL_SetWindowResizable (draw_context, vid_borderless.value ? SDL_FALSE : SDL_TRUE);
+	SDL_SetWindowBordered (draw_context, vid_borderless.value ? false : true);
+	SDL_SetWindowResizable (draw_context, vid_borderless.value ? false : true);
 
 	SDL_GetWindowSize (draw_context, &actual_width, &actual_height);
 	Con_Printf ("Falling back to %dx%d windowed mode\n", actual_width, actual_height);
 }
-#endif /* USE_SDL2 */
 
 /*
 ================
@@ -1196,12 +1180,10 @@ VID_SetMode
 static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qboolean fullscreen)
 {
 	int		temp;
-	Uint32	flags;
+	SDL_WindowFlags	flags;
 	char		caption[50];
 	int		depthbits, stencilbits;
-#if defined(USE_SDL2)
-	int		previous_display;
-#endif
+	SDL_DisplayID	previous_display;
 
 	// so Con_Printfs don't mess us up by forcing vid and snd updates
 	temp = scr_disabled_for_loading;
@@ -1230,7 +1212,6 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 
 	q_snprintf(caption, sizeof(caption), ENGINE_NAME_AND_VER);
 
-#if defined(USE_SDL2)
 	/* Create the window if needed, hidden */
 	if (!draw_context)
 	{
@@ -1241,38 +1222,43 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 		else if (!fullscreen)
 			flags |= SDL_WINDOW_RESIZABLE;
 
-		draw_context = SDL_CreateWindow (caption, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
+		draw_context = SDL_CreateWindow (caption, width, height, flags);
 		if (!draw_context) { // scale back fsaa
 			SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
 			SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
-			draw_context = SDL_CreateWindow (caption, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
+			draw_context = SDL_CreateWindow (caption, width, height, flags);
 		}
 		if (!draw_context) { // scale back SDL_GL_DEPTH_SIZE
 			SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
-			draw_context = SDL_CreateWindow (caption, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
+			draw_context = SDL_CreateWindow (caption, width, height, flags);
 		}
 		if (!draw_context) { // scale back SDL_GL_STENCIL_SIZE
 			SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
-			draw_context = SDL_CreateWindow (caption, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
+			draw_context = SDL_CreateWindow (caption, width, height, flags);
 		}
 		if (!draw_context)
 			Sys_Error ("Couldn't create window: %s", SDL_GetError());
 
-		previous_display = -1;
+		previous_display = 0;
 	}
 	else
 	{
-		previous_display = SDL_GetWindowDisplayIndex(draw_context);
+		previous_display = SDL_GetDisplayForWindow(draw_context);
 	}
 
 	/* Ensure the window is not fullscreen */
 	if (VID_GetFullscreen ())
 	{
-		if (SDL_SetWindowFullscreen (draw_context, 0) != 0)
-		{
-			char error[256];
+		char error[256] = "";
+		const qboolean left = SDL_SetWindowFullscreen (draw_context, false);
 
+		if (!left)
 			q_strlcpy (error, SDL_GetError(), sizeof(error));
+		/* SDL3 leaves fullscreen asynchronously and reports the old state until it settles. */
+		SDL_SyncWindow (draw_context);
+
+		if (!left)
+		{
 			if (!VID_GetFullscreen())
 			{
 				Con_Warning ("SDL reported failure leaving fullscreen: %s; the window is windowed, continuing\n", error);
@@ -1300,23 +1286,23 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 	{
 		/* Set window size and display mode */
 		SDL_SetWindowSize (draw_context, width, height);
-		if (previous_display >= 0)
+		if (previous_display)
 			SDL_SetWindowPosition (draw_context, SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display), SDL_WINDOWPOS_CENTERED_DISPLAY(previous_display));
 		else
 			SDL_SetWindowPosition(draw_context, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 	}
-	SDL_SetWindowBordered (draw_context, vid_borderless.value ? SDL_FALSE : SDL_TRUE);
+	SDL_SetWindowBordered (draw_context, vid_borderless.value ? false : true);
 	SDL_SetWindowResizable (draw_context,
-		(!fullscreen && !vid_borderless.value) ? SDL_TRUE : SDL_FALSE);
+		(!fullscreen && !vid_borderless.value) ? true : false);
 
-	/* Make window fullscreen if needed, and show the window. SDL2 defers the
-	 * backend transition for hidden windows until SDL_ShowWindow(), which cannot
-	 * report failure. Show a hidden fullscreen window first so the guarded
-	 * transition below receives the real backend result. */
+	/* Make window fullscreen if needed, and show the window. SDL accepts a hidden
+	 * window's fullscreen request and reports the window as fullscreen, but only
+	 * applies it when the window is shown. Show a hidden fullscreen window first so
+	 * the guarded transition below receives the real backend result. */
 
 	if (fullscreen)
 	{
-		if (!(SDL_GetWindowFlags(draw_context) & SDL_WINDOW_SHOWN))
+		if (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_HIDDEN)
 			SDL_ShowWindow (draw_context);
 		if (!VID_TryEnterFullscreen (width, height, refreshrate, bpp))
 			VID_RestoreWindowedFallback (width, height);
@@ -1325,8 +1311,10 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, int bpp, qb
 fullscreen_result:
 	SDL_ShowWindow (draw_context);
 	SDL_RaiseWindow (draw_context);
+	/* Let size, position and visibility changes settle before reading the drawable size. */
+	SDL_SyncWindow (draw_context);
 
-#if defined(USE_SDL2) && defined(_WIN32)
+#if defined(_WIN32)
 EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode to window titlebar on Windows 10/11
 #endif
 
@@ -1338,46 +1326,10 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	}
 
 	gl_swap_control = true;
-	if (SDL_GL_SetSwapInterval ((vid_vsync.value) ? 1 : 0) == -1)
+	if (!SDL_GL_SetSwapInterval ((vid_vsync.value) ? 1 : 0))
 		gl_swap_control = false;
 
-	SDL_GL_GetDrawableSize(draw_context, &vid.width, &vid.height);
-#else /* !defined(USE_SDL2) */
-
-	flags = DEFAULT_SDL_FLAGS;
-	if (fullscreen)
-		flags |= SDL_FULLSCREEN;
-	if (vid_borderless.value)
-		flags |= SDL_NOFRAME;
-
-	gl_swap_control = true;
-	if (SDL_GL_SetAttribute(SDL_GL_SWAP_CONTROL, (vid_vsync.value) ? 1 : 0) == -1)
-		gl_swap_control = false;
-
-	bpp = SDL_VideoModeOK(width, height, bpp, flags);
-
-	draw_context = SDL_SetVideoMode(width, height, bpp, flags);
-	if (!draw_context) { // scale back fsaa
-		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
-		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
-		draw_context = SDL_SetVideoMode(width, height, bpp, flags);
-	}
-	if (!draw_context) { // scale back SDL_GL_DEPTH_SIZE
-		SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
-		draw_context = SDL_SetVideoMode(width, height, bpp, flags);
-	}
-	if (!draw_context) { // scale back SDL_GL_STENCIL_SIZE
-		SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
-		draw_context = SDL_SetVideoMode(width, height, bpp, flags);
-		if (!draw_context)
-			Sys_Error ("Couldn't set video mode: %s", SDL_GetError());
-	}
-
-	SDL_WM_SetCaption(caption, caption);
-
-	vid.width = VID_GetCurrentWidth();
-	vid.height = VID_GetCurrentHeight();
-#endif /* !defined(USE_SDL2) */
+	SDL_GetWindowSizeInPixels(draw_context, &vid.width, &vid.height);
 
 	vid.refreshrate = VID_GetCurrentRefreshRate();
 	vid.conwidth = vid.width & 0xFFFFFFF8;
@@ -1385,15 +1337,15 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	vid.numpages = 2;
 
 // read the obtained z-buffer depth
-	if (SDL_GL_GetAttribute(SDL_GL_DEPTH_SIZE, &depthbits) == -1)
+	if (!SDL_GL_GetAttribute(SDL_GL_DEPTH_SIZE, &depthbits))
 		depthbits = 0;
 
 // read obtained fsaa samples
-	if (SDL_GL_GetAttribute(SDL_GL_MULTISAMPLESAMPLES, &fsaa_obtained) == -1)
+	if (!SDL_GL_GetAttribute(SDL_GL_MULTISAMPLESAMPLES, &fsaa_obtained))
 		fsaa_obtained = 0;
 
 // read stencil bits
-	if (SDL_GL_GetAttribute(SDL_GL_STENCIL_SIZE, &gl_stencilbits) == -1)
+	if (!SDL_GL_GetAttribute(SDL_GL_STENCIL_SIZE, &gl_stencilbits))
 		gl_stencilbits = 0;
 
 	modestate = VID_GetFullscreen() ? MS_FULLSCREEN : MS_WINDOWED;
@@ -1406,12 +1358,12 @@ EnableDarkModeForSDLWindow(draw_context); // woods #darkmode - apply dark mode t
 	ClearAllStates ();
 
 	if (cls.state == ca_disconnected) // woods #supressvidmsgs
-		Con_SafePrintf ("Video mode %dx%dx%d %dHz %d ppi (%d-bit z-buffer, %dx FSAA) initialized\n",
+		Con_SafePrintf ("Video mode %dx%dx%d %dHz %gx scale (%d-bit z-buffer, %dx FSAA) initialized\n",
 				VID_GetCurrentWidth(),
 				VID_GetCurrentHeight(),
 				VID_GetCurrentBPP(),
 				VID_GetCurrentRefreshRate(),
-				VID_GetCurrentDPI(), // woods add pixels per inch
+				VID_GetCurrentDisplayScale(), // woods add display scale
 				depthbits,
 				fsaa_obtained);
 
@@ -1449,7 +1401,7 @@ static void VID_Changed_f (cvar_t *var)
 ===================
 VID_OnResize -- github.com/andrei-drexler/ironwail (Enable resizing)
 
-Called from the SDL_WINDOWEVENT_SIZE_CHANGED handler. Keep this path light:
+Called from the SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED handler. Keep this path light:
 update the current drawable size and mark the resize for deferred handling in
 GL_BeginRendering, where we can safely persist cvars and refresh console size
 without fighting Cocoa live-resize.
@@ -1487,11 +1439,9 @@ static void VID_Restart (void)
 // validate new mode
 //
 	validmode = VID_ValidMode (width, height, refreshrate, bpp, fullscreen);
-#if defined(USE_SDL2)
 	if (!validmode && fullscreen && !vid_desktopfullscreen.value)
 		validmode = VID_UseClosestFullscreenMode(&width, &height, &refreshrate, &bpp) &&
 			VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
-#endif
 
 	if (!validmode)
 	{
@@ -1840,24 +1790,12 @@ static void GL_CheckExtensions (void)
 	//
 	if (!gl_swap_control)
 	{
-#if defined(USE_SDL2)
 		Con_Warning ("vertical sync not supported (SDL_GL_SetSwapInterval failed)\n");
-#else
-		Con_Warning ("vertical sync not supported (SDL_GL_SetAttribute failed)\n");
-#endif
 	}
-#if defined(USE_SDL2)
-	else if ((swap_control = SDL_GL_GetSwapInterval()) == -1)
-#else
-	else if (SDL_GL_GetAttribute(SDL_GL_SWAP_CONTROL, &swap_control) == -1)
-#endif
+	else if (!SDL_GL_GetSwapInterval(&swap_control))
 	{
 		gl_swap_control = false;
-#if defined(USE_SDL2)
 		Con_Warning ("vertical sync not supported (SDL_GL_GetSwapInterval failed)\n");
-#else
-		Con_Warning ("vertical sync not supported (SDL_GL_GetAttribute failed)\n");
-#endif
 	}
 	else if ((vid_vsync.value && swap_control != 1) || (!vid_vsync.value && swap_control != 0))
 	{
@@ -1866,12 +1804,8 @@ static void GL_CheckExtensions (void)
 	}
 	else
 	{
-#if defined(USE_SDL2)
 		if (cls.state == ca_disconnected) // woods #supressvidmsgs
 			Con_Printf("FOUND: SDL_GL_SetSwapInterval\n");
-#else
-		Con_Printf("FOUND: SDL_GL_SWAP_CONTROL\n");
-#endif
 	}
 
 	// anisotropic filtering
@@ -2364,11 +2298,7 @@ void GL_EndRendering (void)
 {
 	if (!scr_skipupdate)
 	{
-#if defined(USE_SDL2)
 		SDL_GL_SwapWindow(draw_context);
-#else
-		SDL_GL_SwapBuffers();
-#endif
 	}
 }
 
@@ -2386,20 +2316,18 @@ void	VID_Shutdown (void)
 		if (custom_cursor)
 		{
 			VID_SetCursorHandle(NULL); // restore default before freeing
-			SDL_FreeCursor(custom_cursor);
+			SDL_DestroyCursor(custom_cursor);
 			custom_cursor = NULL;
 		}
 		if (menu_text_cursor)
 		{
-			SDL_FreeCursor(menu_text_cursor);
+			SDL_DestroyCursor(menu_text_cursor);
 			menu_text_cursor = NULL;
 		}
 		menu_text_cursor_custom = false;
-#if defined(USE_SDL2)
-		SDL_GL_DeleteContext(gl_context);
+		SDL_GL_DestroyContext(gl_context);
 		gl_context = NULL;
 		SDL_DestroyWindow(draw_context);
-#endif
 		SDL_QuitSubSystem(SDL_INIT_VIDEO);
 		draw_context = NULL;
 		PL_VID_Shutdown();
@@ -2408,11 +2336,7 @@ void	VID_Shutdown (void)
 
 void	VID_SetWindowCaption(const char *newcaption)
 {
-#if defined(USE_SDL2)
 	SDL_SetWindowTitle(draw_context, newcaption);
-#else
-	SDL_WM_SetCaption(newcaption, newcaption);
-#endif
 }
 
 /*
@@ -2595,80 +2519,27 @@ VID_InitModelist
 */
 static void VID_InitModelist (void)
 {
-#if defined(USE_SDL2)
-	const int sdlmodes = SDL_GetNumDisplayModes(0);
-	int i;
+	int i, count = 0;
+	SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(SDL_GetPrimaryDisplay(), &count);
 
 	nummodes = 0;
-	for (i = 0; i < sdlmodes; i++)
+	for (i = 0; modes && i < count && nummodes < MAX_MODE_LIST; i++)
 	{
-		SDL_DisplayMode mode;
+		const int refreshrate = VID_RefreshRateHz(modes[i]);
+		const int bpp = SDL_BITSPERPIXEL(modes[i]->format);
 
-		if (nummodes >= MAX_MODE_LIST)
-			break;
-		if (SDL_GetDisplayMode(0, i, &mode) == 0)
-		{
-			modelist[nummodes].width = mode.w;
-			modelist[nummodes].height = mode.h;
-			modelist[nummodes].bpp = SDL_BITSPERPIXEL(mode.format);
-			modelist[nummodes].refreshrate = mode.refresh_rate;
-			nummodes++;
-		}
-	}
-#else /* !defined(USE_SDL2) */
-	SDL_PixelFormat	format;
-	SDL_Rect	**modes;
-	Uint32		flags;
-	int		i, j, k, originalnummodes, existingmode;
-	int		bpps[] = {16, 24, 32}; // enumerate >8 bpp modes
-
-	originalnummodes = nummodes = 0;
-	memset(&format, 0, sizeof(format));
-
-	// enumerate fullscreen modes
-	flags = DEFAULT_SDL_FLAGS | SDL_FULLSCREEN;
-	for (i = 0; i < (int)Q_COUNTOF(bpps); i++)
-	{
-		if (nummodes >= MAX_MODE_LIST)
-			break;
-
-		format.BitsPerPixel = bpps[i];
-		modes = SDL_ListModes(&format, flags);
-
-		if (modes == (SDL_Rect **)0 || modes == (SDL_Rect **)-1)
+		// SDL3 lists a size once per pixel density; keep one entry per size
+		if (nummodes > 0 && modelist[nummodes - 1].width == modes[i]->w &&
+			modelist[nummodes - 1].height == modes[i]->h &&
+			modelist[nummodes - 1].bpp == bpp && modelist[nummodes - 1].refreshrate == refreshrate)
 			continue;
-
-		for (j = 0; modes[j]; j++)
-		{
-			if (modes[j]->w > MAXWIDTH || modes[j]->h > MAXHEIGHT || nummodes >= MAX_MODE_LIST)
-				continue;
-
-			modelist[nummodes].width = modes[j]->w;
-			modelist[nummodes].height = modes[j]->h;
-			modelist[nummodes].bpp = bpps[i];
-			modelist[nummodes].refreshrate = DEFAULT_REFRESHRATE;
-
-			for (k=originalnummodes, existingmode = 0 ; k < nummodes ; k++)
-			{
-				if ((modelist[nummodes].width == modelist[k].width)   &&
-				    (modelist[nummodes].height == modelist[k].height) &&
-				    (modelist[nummodes].bpp == modelist[k].bpp))
-				{
-					existingmode = 1;
-					break;
-				}
-			}
-
-			if (!existingmode)
-			{
-				nummodes++;
-			}
-		}
+		modelist[nummodes].width = modes[i]->w;
+		modelist[nummodes].height = modes[i]->h;
+		modelist[nummodes].bpp = bpp;
+		modelist[nummodes].refreshrate = refreshrate;
+		nummodes++;
 	}
-
-	if (nummodes == originalnummodes)
-		Con_SafePrintf ("No fullscreen DIB modes found\n");
-#endif /* !defined(USE_SDL2) */
+	SDL_free(modes);
 }
 
 /*
@@ -2678,7 +2549,6 @@ VID_Init
 */
 void	VID_Init (void)
 {
-	static char vid_center[] = "SDL_VIDEO_CENTERED=center";
 	int		p, width, height, refreshrate, bpp;
 	int		display_width, display_height, display_refreshrate, display_bpp;
 	qboolean	fullscreen, validmode;
@@ -2739,31 +2609,26 @@ void	VID_Init (void)
 	Cmd_AddCommand ("vid_describecurrentmode", VID_DescribeCurrentMode_f);
 	Cmd_AddCommand ("vid_describemodes", VID_DescribeModes_f);
 
-	putenv (vid_center);	/* SDL_putenv is problematic in versions <= 1.2.9 */
+#if defined(__linux__)
+	/* Keep X11 first for the SDL3 cutover, with Wayland as the fallback.
+	   Default priority lets an explicit SDL_VIDEO_DRIVER still choose. */
+	SDL_SetHintWithPriority (SDL_HINT_VIDEO_DRIVER, "x11,wayland", SDL_HINT_DEFAULT);
+#endif
 
-	if (SDL_InitSubSystem(SDL_INIT_VIDEO) < 0)
+	if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
 		Sys_Error("Couldn't init SDL video: %s", SDL_GetError());
+	Con_DPrintf ("SDL video driver: %s\n", SDL_GetCurrentVideoDriver());
 
-#if defined(USE_SDL2)
 	{
-		SDL_DisplayMode mode;
-		if (SDL_GetDesktopDisplayMode(0, &mode) != 0)
+		const SDL_DisplayMode *mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+		if (!mode)
 			Sys_Error("Could not get desktop display mode: %s\n", SDL_GetError());
 
-		display_width = mode.w;
-		display_height = mode.h;
-		display_refreshrate = mode.refresh_rate;
-		display_bpp = SDL_BITSPERPIXEL(mode.format);
+		display_width = mode->w;
+		display_height = mode->h;
+		display_refreshrate = VID_RefreshRateHz(mode);
+		display_bpp = SDL_BITSPERPIXEL(mode->format);
 	}
-#else
-	{
-		const SDL_VideoInfo *info = SDL_GetVideoInfo();
-		display_width = info->current_w;
-		display_height = info->current_h;
-		display_refreshrate = DEFAULT_REFRESHRATE;
-		display_bpp = info->vfmt->BitsPerPixel;
-	}
-#endif
 
 	Cvar_SetValueQuick (&vid_width, (float)display_width);
 	Cvar_SetValueQuick (&vid_height, (float)display_height);
@@ -2833,11 +2698,9 @@ void	VID_Init (void)
 		fsaa = atoi(com_argv[p+1]);
 
 	validmode = VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
-#if defined(USE_SDL2)
 	if (!validmode && fullscreen && !vid_desktopfullscreen.value)
 		validmode = VID_UseClosestFullscreenMode(&width, &height, &refreshrate, &bpp) &&
 			VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
-#endif
 
 	if (!validmode)
 	{
@@ -2849,11 +2712,9 @@ void	VID_Init (void)
 	}
 
 	validmode = VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
-#if defined(USE_SDL2)
 	if (!validmode && fullscreen && !vid_desktopfullscreen.value)
 		validmode = VID_UseClosestFullscreenMode(&width, &height, &refreshrate, &bpp) &&
 			VID_ValidMode(width, height, refreshrate, bpp, fullscreen);
-#endif
 
 	if (!validmode)
 	{
@@ -2871,17 +2732,11 @@ void	VID_Init (void)
 	vid.colormap = host_colormap;
 	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));
 
-#if !defined(USE_SDL2)
-	// set window icon
-	PL_SetWindowIcon();
-#endif
 
 	VID_SetMode (width, height, refreshrate, bpp, fullscreen);
 
-#if defined(USE_SDL2)
 	// set window icon
 	PL_SetWindowIcon();
-#endif
 
 	GL_Init ();
 	GL_SetupState ();
@@ -2913,9 +2768,6 @@ void	VID_Toggle (void)
 	// keep all the mode changing code in one place.
 	static qboolean vid_toggle_works = false;
 	qboolean toggleWorked;
-#if defined(USE_SDL2)
-	Uint32 flags = 0;
-#endif
 
 	S_ClearBuffer ();
 
@@ -2933,15 +2785,10 @@ void	VID_Toggle (void)
 		goto vrestart;
 	}
 
-#if defined(USE_SDL2)
-	if (!VID_GetFullscreen()) {
-		flags = vid_desktopfullscreen.value ? SDL_WINDOW_FULLSCREEN_DESKTOP : SDL_WINDOW_FULLSCREEN;
-	}
+	if (!VID_GetFullscreen() && vid_desktopfullscreen.value)
+		SDL_SetWindowFullscreenMode(draw_context, NULL);
 
-	toggleWorked = SDL_SetWindowFullscreen(draw_context, flags) == 0;
-#else
-	toggleWorked = SDL_WM_ToggleFullScreen(draw_context) == 1;
-#endif
+	toggleWorked = SDL_SetWindowFullscreen(draw_context, !VID_GetFullscreen());
 
 	if (toggleWorked)
 	{
@@ -2956,7 +2803,7 @@ void	VID_Toggle (void)
 	else
 	{
 		vid_toggle_works = false;
-		Con_DPrintf ("SDL_WM_ToggleFullScreen failed, attempting VID_Restart\n");
+		Con_DPrintf ("SDL_SetWindowFullscreen failed, attempting VID_Restart\n");
 	vrestart:
 		Cvar_SetQuick (&vid_fullscreen, VID_GetFullscreen() ? "0" : "1");
 		Cbuf_AddText ("vid_restart\n");
@@ -3013,7 +2860,7 @@ static SDL_Cursor *VID_GetMenuTextCursor(void)
 		{
 			if (vid_cursor == menu_text_cursor)
 				VID_SetCursorHandle(NULL);
-			SDL_FreeCursor(menu_text_cursor);
+			SDL_DestroyCursor(menu_text_cursor);
 			menu_text_cursor = NULL;
 		}
 
@@ -4236,14 +4083,14 @@ void VID_SetCursor(qcvm_t *vm, const char *cursorname, float hotspot[2], float c
 		imagedata = Image_LoadImage(npath, &width, &height, &fmt, &malloced);
 		if (imagedata && fmt == SRC_RGBA)
 		{	//simple 32bit RGBA byte-ordered data.
-			surf = SDL_CreateRGBSurfaceFrom(imagedata, width, height, 32, width*4, 0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000);
+			surf = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32, imagedata, width*4);
 			if (cursorscale != 1 && surf)
 			{	//rescale image by cursorscale
 				int nwidth = q_max(1,width*cursorscale);
 				int nheight = q_max(1,height*cursorscale);
-				SDL_Surface *scaled = SDL_CreateRGBSurface(0, nwidth, nheight, 32, 0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000);
-				SDL_BlitScaled(surf, NULL, scaled, NULL);
-				SDL_FreeSurface(surf);
+				SDL_Surface *scaled = SDL_CreateSurface(nwidth, nheight, SDL_PIXELFORMAT_RGBA32);
+				SDL_BlitSurfaceScaled(surf, NULL, scaled, NULL, SDL_SCALEMODE_NEAREST);
+				SDL_DestroySurface(surf);
 				surf = scaled;
 			}
 		}
@@ -4253,7 +4100,7 @@ void VID_SetCursor(qcvm_t *vm, const char *cursorname, float hotspot[2], float c
 	if (surf)
 	{
 		vm->cursorhandle = SDL_CreateColorCursor(surf, hotspot[0], hotspot[1]);
-		SDL_FreeSurface(surf);
+		SDL_DestroySurface(surf);
 	}
 	else
 		vm->cursorhandle = NULL;
@@ -4264,7 +4111,7 @@ void VID_SetCursor(qcvm_t *vm, const char *cursorname, float hotspot[2], float c
 
 	VID_UpdateCursor();
 	if (oldcursor)
-		SDL_FreeCursor(oldcursor);
+		SDL_DestroyCursor(oldcursor);
 }
 
 /*
@@ -4281,7 +4128,7 @@ void LoadCustomCursorImage (void)
 	if (custom_cursor)
 	{
 		VID_SetCursorHandle(NULL); // switch away before freeing
-		SDL_FreeCursor(custom_cursor);
+		SDL_DestroyCursor(custom_cursor);
 		custom_cursor = NULL;
 	}
 
@@ -4312,8 +4159,8 @@ void LoadCustomCursorImage (void)
 	targetWidth = SDL_clamp(targetWidth, 16, 128);
 	targetHeight = SDL_clamp(targetHeight, 16, 128);
 
-	SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(
-		cursorData, width, height, 32, width * 4, SDL_PIXELFORMAT_RGBA32
+	SDL_Surface* surface = SDL_CreateSurfaceFrom(
+		width, height, SDL_PIXELFORMAT_RGBA32, cursorData, width * 4
 	);
 
 	if (!surface)
@@ -4325,16 +4172,16 @@ void LoadCustomCursorImage (void)
 
 	if (width != targetWidth || height != targetHeight)
 	{
-		SDL_Surface* scaledSurface = SDL_CreateRGBSurfaceWithFormat(0, targetWidth, targetHeight, 32, SDL_PIXELFORMAT_RGBA32);
-		if (SDL_BlitScaled(surface, NULL, scaledSurface, NULL) < 0)
+		SDL_Surface* scaledSurface = SDL_CreateSurface(targetWidth, targetHeight, SDL_PIXELFORMAT_RGBA32);
+		if (!SDL_BlitSurfaceScaled(surface, NULL, scaledSurface, NULL, SDL_SCALEMODE_NEAREST))
 		{
 			Con_DPrintf("Failed to scale surface: %s\n", SDL_GetError());
-			SDL_FreeSurface(surface);
-			SDL_FreeSurface(scaledSurface);
+			SDL_DestroySurface(surface);
+			SDL_DestroySurface(scaledSurface);
 			if (malloced) free(cursorData);
 			return;
 		}
-		SDL_FreeSurface(surface);
+		SDL_DestroySurface(surface);
 		surface = scaledSurface;
 	}
 
@@ -4354,7 +4201,7 @@ void LoadCustomCursorImage (void)
 		Con_DPrintf("Failed to create custom cursor: %s\n", SDL_GetError());
 	}
 
-	SDL_FreeSurface(surface);
+	SDL_DestroySurface(surface);
 	if (malloced) free(cursorData);
 }
 
@@ -4394,8 +4241,8 @@ static SDL_Cursor *LoadCustomSystemCursor (const char *asset, const char *label,
 	targetWidth = SDL_clamp(targetWidth, 16, 128);
 	targetHeight = SDL_clamp(targetHeight, 16, 128);
 
-	SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(
-		cursorData, width, height, 32, width * 4, SDL_PIXELFORMAT_RGBA32
+	SDL_Surface* surface = SDL_CreateSurfaceFrom(
+		width, height, SDL_PIXELFORMAT_RGBA32, cursorData, width * 4
 	);
 
 	if (!surface)
@@ -4407,16 +4254,16 @@ static SDL_Cursor *LoadCustomSystemCursor (const char *asset, const char *label,
 
 	if (width != targetWidth || height != targetHeight)
 	{
-		SDL_Surface* scaledSurface = SDL_CreateRGBSurfaceWithFormat(0, targetWidth, targetHeight, 32, SDL_PIXELFORMAT_RGBA32);
-		if (SDL_BlitScaled(surface, NULL, scaledSurface, NULL) < 0)
+		SDL_Surface* scaledSurface = SDL_CreateSurface(targetWidth, targetHeight, SDL_PIXELFORMAT_RGBA32);
+		if (!SDL_BlitSurfaceScaled(surface, NULL, scaledSurface, NULL, SDL_SCALEMODE_NEAREST))
 		{
 			Con_DPrintf("Failed to scale %s cursor: %s\n", label, SDL_GetError());
-			SDL_FreeSurface(surface);
-			SDL_FreeSurface(scaledSurface);
+			SDL_DestroySurface(surface);
+			SDL_DestroySurface(scaledSurface);
 			if (malloced) free(cursorData);
 			return SDL_CreateSystemCursor(fallback);
 		}
-		SDL_FreeSurface(surface);
+		SDL_DestroySurface(surface);
 		surface = scaledSurface;
 	}
 
@@ -4444,7 +4291,7 @@ static SDL_Cursor *LoadCustomSystemCursor (const char *asset, const char *label,
 		cursor = SDL_CreateSystemCursor(fallback);
 	}
 
-	SDL_FreeSurface(surface);
+	SDL_DestroySurface(surface);
 	if (malloced) free(cursorData);
 
 	return cursor;
@@ -4458,7 +4305,7 @@ Returns a custom I-beam cursor for console selection, or a system fallback.
 */
 SDL_Cursor *LoadCustomIBeamCursor (void)
 {
-	return LoadCustomSystemCursor("gfx/qssmicursor", "I-beam", SDL_SYSTEM_CURSOR_IBEAM, -1, -1);
+	return LoadCustomSystemCursor("gfx/qssmicursor", "I-beam", SDL_SYSTEM_CURSOR_TEXT, -1, -1);
 }
 
 /*
@@ -4469,7 +4316,7 @@ Returns a custom hand cursor for console links, or a system fallback.
 */
 SDL_Cursor *LoadCustomLinkCursor (void)
 {
-	return LoadCustomSystemCursor("gfx/qssmlinkcursor", "link", SDL_SYSTEM_CURSOR_HAND, 64, 2);
+	return LoadCustomSystemCursor("gfx/qssmlinkcursor", "link", SDL_SYSTEM_CURSOR_POINTER, 64, 2);
 }
 
 void VID_Minimize (void) // woods for mac command-tab
@@ -4477,7 +4324,7 @@ void VID_Minimize (void) // woods for mac command-tab
 	SDL_MinimizeWindow(draw_context);
 }
 
-#if defined(USE_SDL2) && defined(_WIN32)
+#if defined(_WIN32)
 /*
 ====================
 EnableDarkModeForSDLWindow -- woods #darkmode
@@ -4488,17 +4335,9 @@ static void EnableDarkModeForSDLWindow(SDL_Window* window)
 	if (!window)
 		return;
 
-	HWND hwnd = NULL;
-
 	// Get the native window handle
-	struct SDL_SysWMinfo wmInfo;
-	SDL_VERSION(&wmInfo.version);
-	if (!SDL_GetWindowWMInfo(window, &wmInfo)) {
-		// Failed to get window info
-		return;
-	}
-
-	hwnd = wmInfo.info.win.window;
+	HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+		SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
 	if (!hwnd) {
 		// Invalid window handle
 		return;

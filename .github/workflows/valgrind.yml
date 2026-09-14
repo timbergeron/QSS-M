@@ -8,7 +8,10 @@ permissions:
 jobs:
   valgrind:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+    env:
+      SDL3_VERSION: "3.4.16"
+      SDL3_COMMIT: "fa2c02bb6e21974a89ea9824bc53c9932abe5f9c"
     steps:
     - uses: actions/checkout@v6
 
@@ -18,7 +21,13 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
-          libsdl2-dev \
+          cmake \
+          ninja-build \
+          libasound2-dev libpulse-dev libpipewire-0.3-dev libaudio-dev libjack-dev libsndio-dev \
+          libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
+          libxkbcommon-dev libwayland-dev libdecor-0-dev libdrm-dev libgbm-dev \
+          libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+          libdbus-1-dev libibus-1.0-dev libudev-dev libusb-1.0-0-dev libfribidi-dev libthai-dev liburing-dev \
           libmad0-dev \
           libmpg123-dev \
           libopus-dev \
@@ -35,6 +44,23 @@ jobs:
           valgrind \
           wget \
           unzip
+
+    # Ubuntu 24.04 has no SDL3 package, so build the pinned release from source.
+    - name: Resolve SDL3 prefix
+      run: |
+        set -eux
+        . /etc/os-release
+        echo "SDL3_PREFIX=${RUNNER_TEMP}/sdl3-${SDL3_VERSION}" >> "$GITHUB_ENV"
+        echo "SDL3_CACHE_KEY=sdl3-${SDL3_VERSION}-${SDL3_COMMIT}-${ID}-${VERSION_ID}-gcc$(gcc -dumpversion)-shared-v1" >> "$GITHUB_ENV"
+
+    - name: Cache SDL3
+      uses: actions/cache@v5
+      with:
+        path: ${{ runner.temp }}/sdl3-${{ env.SDL3_VERSION }}
+        key: ${{ env.SDL3_CACHE_KEY }}
+
+    - name: Build SDL3
+      run: sh .github/scripts/build-sdl3-linux.sh "$SDL3_VERSION" "$SDL3_COMMIT" "$SDL3_PREFIX"
 
     - name: Build CRMod7 progs.dat
       run: |
@@ -74,11 +100,14 @@ jobs:
     - name: Build debug binary for valgrind
       run: |
         set -eux
+        export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+        test "$(pkg-config --modversion sdl3)" = "$SDL3_VERSION"
         chmod +x Misc/valgrind/build-linux-valgrind.sh
         ./Misc/valgrind/build-linux-valgrind.sh
 
     - name: Run valgrind
       run: |
+        export LD_LIBRARY_PATH="$SDL3_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         set -eux
         chmod +x Misc/valgrind/run-valgrind.sh
         ./Misc/valgrind/run-valgrind.sh

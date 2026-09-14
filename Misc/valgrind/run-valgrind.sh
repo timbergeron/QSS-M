@@ -61,7 +61,7 @@ is_timeout_status() {
 }
 
 # Use headless drivers to avoid needing a display/audio device on CI.
-export SDL_AUDIODRIVER=dummy
+export SDL_AUDIO_DRIVER=dummy
 export QSS_NOSTDIN=1
 
 cd "$repo_root/Quake"
