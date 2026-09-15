@@ -113,6 +113,7 @@ jobs:
         python3 Misc/stress/test_sdl3_audio.py
         python3 Misc/stress/test_sdl3_playback_device.py
         python3 Misc/stress/test_frame_pacing.py
+        python3 Misc/stress/test_sdl3_video.py --sanitize
         python3 Misc/stress/test_sdl3_capture_lifecycle.py
         python3 Misc/stress/test_gamepad_labels.py
         python3 Misc/stress/test_hid_start_wait.py

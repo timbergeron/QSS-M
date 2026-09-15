@@ -41,7 +41,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define MAX_MODE_LIST	600 //johnfitz -- was 30
 #define MAX_BPPS_LIST	5
-#define MAX_RATES_LIST	20
+#define MAX_RATES_LIST	MAX_MODE_LIST // retain every refresh rate in modelist
 #define WARP_WIDTH		320
 #define WARP_HEIGHT		200
 #define MAXWIDTH		10000
@@ -743,6 +743,14 @@ static int VID_RefreshRateHz (const SDL_DisplayMode *mode)
 	return (int)(mode->refresh_rate + 0.5f);
 }
 
+/* Use the window's monitor once it exists, including for fullscreen validation. */
+static SDL_DisplayID VID_GetDisplay (void)
+{
+	SDL_DisplayID display = draw_context ? SDL_GetDisplayForWindow(draw_context) : 0;
+
+	return display ? display : SDL_GetPrimaryDisplay();
+}
+
 /*
 ====================
 VID_GetCurrentRefreshRate
@@ -750,9 +758,9 @@ VID_GetCurrentRefreshRate
 */
 static int VID_GetCurrentRefreshRate (void)
 {
-	const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(draw_context));
+	const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(VID_GetDisplay());
 
-	if (!mode)
+	if (!mode || mode->refresh_rate <= 0)
 		return DEFAULT_REFRESHRATE;
 
 	return VID_RefreshRateHz(mode);
@@ -875,7 +883,7 @@ VID_IsMinimized
 */
 qboolean VID_IsMinimized (void)
 {
-	return (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_HIDDEN) != 0;
+	return (SDL_GetWindowFlags(draw_context) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN)) != 0;
 }
 
 /*
@@ -915,7 +923,7 @@ static SDL_DisplayMode *VID_GetDisplayModeForDisplay(SDL_DisplayID display, int 
 
 static SDL_DisplayMode *VID_GetDisplayMode(int width, int height, int refreshrate, int bpp)
 {
-	return VID_GetDisplayModeForDisplay(SDL_GetPrimaryDisplay(), width, height, refreshrate, bpp);
+	return VID_GetDisplayModeForDisplay(VID_GetDisplay(), width, height, refreshrate, bpp);
 }
 
 /*
@@ -1089,21 +1097,12 @@ static qboolean VID_TryEnterFullscreen (int width, int height, int refreshrate, 
 	const char *alternate_name = desktop ? "exclusive" : "desktop";
 	SDL_DisplayMode closest;
 	SDL_DisplayMode *exclusive_mode;
-	SDL_DisplayID display;
-	char error[256];
-
-	display = SDL_GetDisplayForWindow(draw_context);
-	if (!display)
-	{
-		q_strlcpy (error, SDL_GetError(), sizeof(error));
-		Con_Warning ("Couldn't determine the window's display: %s; using the primary display\n", error);
-		display = SDL_GetPrimaryDisplay();
-	}
+	SDL_DisplayID display = VID_GetDisplay();
 	exclusive_mode = VID_GetDisplayModeForDisplay(display, width, height, refreshrate, bpp);
 	if (!exclusive_mode &&
 		SDL_GetClosestFullscreenDisplayMode(display, width, height, (float)refreshrate, false, &closest))
 		exclusive_mode = &closest;
-	if (!exclusive_mode)
+	if (!exclusive_mode && !desktop)
 		Con_Warning ("No exclusive fullscreen mode is available near %dx%d\n", width, height);
 
 	if ((desktop || exclusive_mode) &&
@@ -1141,9 +1140,7 @@ static void VID_RestoreWindowedFallback (int width, int height)
 	SDL_SyncWindow (draw_context);
 	maximized = (SDL_GetWindowFlags(draw_context) & SDL_WINDOW_MAXIMIZED) != 0;
 
-	display = SDL_GetDisplayForWindow(draw_context);
-	if (!display)
-		display = SDL_GetPrimaryDisplay();
+	display = VID_GetDisplay();
 
 	/* Resizing or repositioning an already maximized window triggered SDL2
 	 * backend bugs. Preserve its geometry and only restore its chrome. */
@@ -1438,6 +1435,8 @@ static void VID_Restart (void)
 //
 // validate new mode
 //
+	// Refresh before using the closest-mode list, even if a display event is pending.
+	VID_OnDisplayChange ();
 	validmode = VID_ValidMode (width, height, refreshrate, bpp, fullscreen);
 	if (!validmode && fullscreen && !vid_desktopfullscreen.value)
 		validmode = VID_UseClosestFullscreenMode(&width, &height, &refreshrate, &bpp) &&
@@ -2520,7 +2519,7 @@ VID_InitModelist
 static void VID_InitModelist (void)
 {
 	int i, count = 0;
-	SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(SDL_GetPrimaryDisplay(), &count);
+	SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(VID_GetDisplay(), &count);
 
 	nummodes = 0;
 	for (i = 0; modes && i < count && nummodes < MAX_MODE_LIST; i++)
@@ -2750,7 +2749,7 @@ void	VID_Init (void)
 	vid_menumousefn = VID_MenuMouse; // woods #mousemenu
 
 	VID_Gamma_Init(); //johnfitz
-	VID_Menu_Init(); //johnfitz
+	VID_OnDisplayChange();
 
 	//QuakeSpasm: current vid settings should override config file settings.
 	//so we have to lock the vid mode from now until after all config files are read.
@@ -3029,6 +3028,7 @@ static void VID_Menu_Init (void)
 {
 	int i, j, h, w;
 
+	vid_menu_nummodes = 0;
 	for (i = 0; i < nummodes; i++)
 	{
 		w = modelist[i].width;
@@ -3054,10 +3054,11 @@ static void VID_Menu_Init (void)
 ================
 VID_Menu_RebuildBppList
 
-regenerates bpp list based on current vid_width and vid_height
+Regenerates bpp list based on current vid_width and vid_height. Display events
+rebuild the choices without changing pending video settings.
 ================
 */
-static void VID_Menu_RebuildBppList (void)
+static void VID_Menu_RebuildBppList (qboolean update_cvars)
 {
 	int i, j, b;
 
@@ -3088,6 +3089,9 @@ static void VID_Menu_RebuildBppList (void)
 		}
 	}
 
+	if (!update_cvars || !nummodes)
+		return;
+
 	//if there are no valid fullscreen bpps for this width/height, just pick one
 	if (vid_menu_numbpps == 0)
 	{
@@ -3111,7 +3115,7 @@ VID_Menu_RebuildRateList
 regenerates rate list based on current vid_width, vid_height and vid_bpp
 ================
 */
-static void VID_Menu_RebuildRateList (void)
+static void VID_Menu_RebuildRateList (qboolean update_cvars)
 {
 	int i, j, r;
 
@@ -3119,6 +3123,9 @@ static void VID_Menu_RebuildRateList (void)
 
 	for (i = 0; i < nummodes; i++)
 	{
+		if (vid_menu_numrates >= MAX_RATES_LIST)
+			break;
+
 		//rate list is limited to rates available with current width/height/bpp
 		if (modelist[i].width != vid_width.value ||
 		    modelist[i].height != vid_height.value ||
@@ -3140,6 +3147,9 @@ static void VID_Menu_RebuildRateList (void)
 		}
 	}
 
+	if (!update_cvars || !nummodes)
+		return;
+
 	//if there are no valid fullscreen refreshrates for this width/height, just pick one
 	if (vid_menu_numrates == 0)
 	{
@@ -3154,6 +3164,20 @@ static void VID_Menu_RebuildRateList (void)
 
 	if (i == vid_menu_numrates)
 		Cvar_SetValue ("vid_refreshrate",(float)vid_menu_rates[0]);
+}
+
+/* Refresh pacing and menu choices after monitor/mode changes without applying
+ * or discarding the user's pending settings. Called once per SDL event batch. */
+void VID_OnDisplayChange (void)
+{
+	if (!draw_context)
+		return;
+
+	vid.refreshrate = VID_GetCurrentRefreshRate();
+	VID_InitModelist ();
+	VID_Menu_Init ();
+	VID_Menu_RebuildBppList (false);
+	VID_Menu_RebuildRateList (false);
 }
 
 /*
@@ -3192,8 +3216,8 @@ static void VID_Menu_ChooseNextMode (int dir)
 
 		Cvar_SetValueQuick (&vid_width, (float)vid_menu_modes[i].width);
 		Cvar_SetValueQuick (&vid_height, (float)vid_menu_modes[i].height);
-		VID_Menu_RebuildBppList ();
-		VID_Menu_RebuildRateList ();
+		VID_Menu_RebuildBppList (true);
+		VID_Menu_RebuildRateList (true);
 	}
 }
 
@@ -3201,13 +3225,15 @@ static void VID_Menu_ChooseNextMode (int dir)
 ================
 VID_Menu_ChooseNextBpp
 
-chooses next bpp in order, then updates vid_bpp cvar
+chooses next bpp in order, then updates vid_bpp and the refresh-rate choices
 ================
 */
 static void VID_Menu_ChooseNextBpp (int dir)
 {
 	int i;
 
+	// A window resize or console edit can change the selection since the last event.
+	VID_Menu_RebuildBppList (false);
 	if (vid_menu_numbpps)
 	{
 		for (i = 0; i < vid_menu_numbpps; i++)
@@ -3230,6 +3256,7 @@ static void VID_Menu_ChooseNextBpp (int dir)
 		}
 
 		Cvar_SetValueQuick (&vid_bpp, (float)vid_menu_bpps[i]);
+		VID_Menu_RebuildRateList (true);
 	}
 }
 
@@ -3243,6 +3270,10 @@ chooses next refresh rate in order, then updates vid_refreshrate cvar
 static void VID_Menu_ChooseNextRate (int dir)
 {
 	int i;
+
+	VID_Menu_RebuildRateList (false);
+	if (!vid_menu_numrates)
+		return;
 
 	for (i = 0; i < vid_menu_numrates; i++)
 	{
@@ -3986,8 +4017,8 @@ static void VID_Menu_f (void)
 	VID_SyncCvars ();
 
 	//set up bpp and rate lists based on current cvars
-	VID_Menu_RebuildBppList ();
-	VID_Menu_RebuildRateList ();
+	VID_Menu_RebuildBppList (true);
+	VID_Menu_RebuildRateList (true);
 }
 
 qboolean VID_MenuSearch_OpenItem(int index)

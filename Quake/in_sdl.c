@@ -5505,6 +5505,7 @@ void IN_SendKeyEvents (void)
 	SDL_Event event;
 	int key;
 	qboolean down;
+	qboolean display_changed = false;
 
 	char afktype[4];
 	sprintf(afktype, "%s", "AFK");
@@ -5534,6 +5535,16 @@ void IN_SendKeyEvents (void)
 	{
 		switch (event.type)
 		{
+		case SDL_EVENT_DISPLAY_ADDED:
+		case SDL_EVENT_DISPLAY_REMOVED:
+		case SDL_EVENT_DISPLAY_MOVED:
+		case SDL_EVENT_DISPLAY_ORIENTATION:
+		case SDL_EVENT_DISPLAY_DESKTOP_MODE_CHANGED:
+		case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+		case SDL_EVENT_DISPLAY_CONTENT_SCALE_CHANGED:
+			display_changed = true;
+			break;
+
 		case SDL_EVENT_WINDOW_FOCUS_GAINED:
 		case SDL_EVENT_WINDOW_FOCUS_LOST:
 		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
@@ -5666,9 +5677,13 @@ void IN_SendKeyEvents (void)
 			{
 				VID_OnResize (event.window.data1, event.window.data2); // github.com/andrei-drexler/ironwail (Enable resizing)
 			}
+			else if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED)
+			{
+				display_changed = true;
+				VID_Gamma_Reapply(); // ramp was applied to the old display
+			}
 			else if (event.type == SDL_EVENT_WINDOW_RESTORED ||
 				event.type == SDL_EVENT_WINDOW_SHOWN ||
-				event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED || // ramp was applied to the old display
 				event.type == SDL_EVENT_WINDOW_EXPOSED)
 			{
 				VID_Gamma_Reapply();
@@ -5965,6 +5980,9 @@ void IN_SendKeyEvents (void)
 			break;
 		}
 	}
+
+	if (display_changed)
+		VID_OnDisplayChange ();
 
 	IN_DemoScrubRefreshCursor();
 

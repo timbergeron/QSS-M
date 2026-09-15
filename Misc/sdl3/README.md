@@ -741,3 +741,46 @@ Validation on Linux with the supported minimum SDL 3.2.12:
   `/tmp/qssm-sdl3-deps` on the test host.
 
 Physical audio dropouts and sound-onset latency still need hardware testing.
+
+## Post-migration window and monitor handling
+
+- `VID_IsMinimized` recognizes both `SDL_WINDOW_MINIMIZED` and `SDL_WINDOW_HIDDEN`,
+  so minimized windows reach the existing rendering-skip and extra-sleep paths.
+  SDL documents these as [separate window flags](https://wiki.libsdl.org/SDL3/SDL_WindowFlags).
+- Fullscreen validation, closest-mode fallback and available modes use the
+  window's monitor, with the primary display as the startup/query-failure fallback.
+- Window monitor changes and SDL display events refresh `vid.refreshrate` and
+  rebuild the video menu once after each event batch. This updates disconnected
+  pacing after monitor moves or refresh-rate changes while preserving pending
+  video settings. Restart validation also refreshes the list before choosing a
+  fallback mode.
+- Rebuilding the resolution menu discards the previous monitor's entries.
+  The refresh-rate array holds every rate in the accepted mode list (up to 600),
+  so a valid selected rate cannot be lost to a separate 20-rate limit. Empty
+  lists preserve settings and make rate cycling a no-op.
+- Color-depth changes rebuild the refresh-rate choices. Both selectors refresh
+  their choices before cycling, covering window resizes and console edits since
+  the last display event.
+- Successful desktop fullscreen no longer warns about missing exclusive modes;
+  desktop fullscreen does not require one.
+
+Validation with SDL 3.2.12 on Linux:
+
+- Full engine build succeeds with no warnings in the changed source files.
+- `python3 Misc/stress/test_sdl3_video.py --sanitize` passes address, leak and
+  undefined-behavior checks. It exercises minimized/hidden flags, a secondary
+  144 Hz monitor, repeated monitor moves, refresh changes, unavailable queries,
+  pending settings, depth changes, resizes and empty/oversized mode lists,
+  including the 600-mode boundary. Sanitizer errors fail immediately. Linux CI
+  runs this test; it also passes locally against the bundled SDL 3.4.16 headers.
+- Existing frame-pacing, mouse-motion and gamepad-label tests pass.
+- A client smoke test with Mesa llvmpipe and SDL offscreen video injects all eight
+  handled display/window-monitor event types into the real event loop and
+  verifies each refreshes both the current rate and the available modes. The
+  client also completes window resizing, desktop-fullscreen entry/exit and map
+  startup before quitting cleanly.
+- Win32 and Win64 syntax checks of both changed C files pass against the bundled
+  SDL3 headers; the existing `common.h` case-comparison macro warnings remain.
+
+Physical monitor moves, hotplug and fullscreen focus transitions still need
+hardware testing on Windows/macOS/Linux.
