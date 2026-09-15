@@ -111,6 +111,7 @@ jobs:
         export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
         export LD_LIBRARY_PATH="$SDL3_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         python3 Misc/stress/test_sdl3_audio.py
+        python3 Misc/stress/test_sdl3_playback_device.py
         python3 Misc/stress/test_frame_pacing.py
         python3 Misc/stress/test_sdl3_capture_lifecycle.py
         python3 Misc/stress/test_gamepad_labels.py

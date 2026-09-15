@@ -340,10 +340,11 @@ static int SND_PeriodFrames (int rate)
 		return 256;
 	if (rate <= 22050)
 		return 512;
-	if (rate <= 44100)
+	/* Keep the common 44.1/48 kHz rates near the same 21-23 ms period. */
+	if (rate <= 48000)
 		return 1024;
 	if (rate <= 56000)
-		return 2048; /* for 48 kHz */
+		return 2048;
 	return 4096; /* for 96 kHz */
 }
 
@@ -401,7 +402,10 @@ SDL_AudioStream *SND_OpenAudioStream (SDL_AudioDeviceID device, const SDL_AudioS
 /* The stream plays on the default output; name the physical device behind it. */
 static void SND_UpdateDeviceName (void)
 {
-	const char	*name = sdl_stream ? SDL_GetAudioDeviceName (SDL_GetAudioStreamDevice (sdl_stream)) : NULL;
+	/* SDL before 3.2.14 misinterprets logical device IDs here and can crash.
+	 * Check the loaded runtime, since Linux supports SDL 3.2.12. */
+	const char	*name = (sdl_stream && SDL_GetVersion () >= SDL_VERSIONNUM (3, 2, 14)) ?
+		SDL_GetAudioDeviceName (SDL_GetAudioStreamDevice (sdl_stream)) : NULL;
 
 	q_strlcpy (sdl_devicename, (name && *name) ? name : "System default", sizeof(sdl_devicename));
 }

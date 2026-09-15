@@ -155,7 +155,11 @@ int main(void)
 
     /* Engine-owned period and ring policy; 44.1 kHz matches SDL2's 65536-byte ring. */
     CHECK(SND_PeriodFrames(11025) == 256 && SND_PeriodFrames(22050) == 512);
-    CHECK(SND_PeriodFrames(44100) == 1024 && SND_PeriodFrames(48000) == 2048 && SND_PeriodFrames(96000) == 4096);
+    CHECK(SND_PeriodFrames(44100) == 1024 && SND_PeriodFrames(48000) == 1024 && SND_PeriodFrames(96000) == 4096);
+    /* 48 kHz should have a comparable period to 44.1 kHz, and still hold
+     * the default 100 ms mix-ahead in the ring after the period reduction. */
+    CHECK((double)SND_PeriodFrames(48000) / 48000 <= (double)SND_PeriodFrames(44100) / 44100);
+    CHECK(SND_RingSamples(SND_PeriodFrames(48000)) / SND_MIX_CHANNELS >= 4800);
     CHECK(SND_RingSamples(256) == 8192 && SND_RingSamples(1024) == 32768);
     CHECK(SND_RingSamples(2048) == 65536 && SND_RingSamples(4096) == 131072);
     CHECK(SND_RingSamples(1024) * 2 == 65536);

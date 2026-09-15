@@ -715,3 +715,29 @@ simulated render work per frame. One local run (two seconds per case):
 
 This timer benchmark does not measure GPU rendering or input-to-display latency.
 Precise waiting can spend more CPU to meet the requested deadline. Windows/macOS frame pacing still needs hardware testing.
+
+## Post-migration audio buffering
+
+- At 48 kHz, playback requests 1024 frames (21.3 ms), down from 2048 (42.7 ms).
+  The 16-bit stereo ring is now 65536 bytes and still holds the default 100 ms
+  mix-ahead. The 44.1 kHz default, `_snd_mixahead`, capture policy and environment
+  override are unchanged. Device requests remain best effort; these are buffer
+  durations, not measured sound-onset latency.
+- A real playback check exposed SDL 3.2.12 crashing when naming a logical audio
+  device. The name query now checks the loaded runtime and uses "System default"
+  before 3.2.14, which contains
+  [SDL's fix](https://github.com/libsdl-org/SDL/commit/01ef4c46a1731400bb9760434c4e09329540b9b7).
+  Newer SDL runtimes continue to report the device name.
+
+Validation on Linux with the supported minimum SDL 3.2.12:
+
+- Full engine build succeeds. The existing audio adapter sanitizer checks pass.
+- `test_sdl3_playback_device.py` opens real dummy playback at 44.1/48/44.1 kHz,
+  checks the obtained periods, consumes queued samples, and checks the name query.
+  The new playback test runs in Linux CI alongside the existing SDL3 regressions.
+- The built engine passes a headless smoke test with Mesa llvmpipe, SDL offscreen
+  video and dummy audio: map startup, 48/44.1 kHz sound restarts, advancing DMA
+  cursors at both rates, and a clean exit. Logs and timer results are in
+  `/tmp/qssm-sdl3-deps` on the test host.
+
+Physical audio dropouts and sound-onset latency still need hardware testing.
