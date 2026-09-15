@@ -687,3 +687,31 @@ platform and hardware coverage gaps still apply.
   MinGW-w64. The ZIPs contain both PAKs, the controller database and SDL3 runtime, contain no SDL2 runtime,
   and the executables import SDL3 with the Windows GUI subsystem. These local cross builds use
   `MAKEARGS='-j8 USE_GNUTLS=0'`; the hosted Windows jobs separately require GNUTLS.
+
+## Post-migration frame pacing
+
+- The client FPS limiter shares its interval calculation with the frame filter and
+  uses `SDL_DelayPrecise` for the remaining interval. It accounts for rendering,
+  vsync and time accumulated by rejected frames. The filter now retains the main
+  loop's double precision. Existing `sys_throttle` opt-outs, uncapped throttling,
+  timedemo behavior and dedicated-server scheduling are preserved. Synthetic lag
+  limits waits to 1 ms so queued moves still get frequent service.
+
+Validation on Linux with the supported minimum SDL 3.2.12:
+
+- Full engine build succeeds. The new frame-pacing test runs in Linux CI.
+- `test_frame_pacing.py` covers capped/uncapped play, menu refresh rates, throttle
+  opt-outs, timedemos, overruns, partial intervals, synthetic lag and sustained
+  cadence at 60/120/144/250/500/1000 FPS.
+
+`test_frame_pacing.py --benchmark` compares real SDL timers with 0.3 ms of
+simulated render work per frame. One local run (two seconds per case):
+
+| FPS cap | Mean interval, old / precise (ms) | 99th percentile, old / precise (ms) | CPU, old / precise (% of one core) |
+|---|---|---|---|
+| 144 | 7.895 / 6.958 | 8.022 / 7.021 | 2.21 / 2.99 |
+| 250 | 4.684 / 4.017 | 5.010 / 4.080 | 2.27 / 3.26 |
+| 500 | 2.534 / 2.016 | 2.741 / 2.087 | 2.70 / 4.29 |
+
+This timer benchmark does not measure GPU rendering or input-to-display latency.
+Precise waiting can spend more CPU to meet the requested deadline. Windows/macOS frame pacing still needs hardware testing.

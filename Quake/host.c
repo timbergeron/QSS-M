@@ -1553,18 +1553,15 @@ void Host_ClearMemory (void)
 
 /*
 ===================
-Host_FilterTime
+Host_FrameInterval
 
-Returns false if the time is too short to run a frame
+Share the FPS cap between the frame filter and the client wait.
 ===================
 */
 
 
-qboolean Host_FilterTime (float time)
+static double Host_FrameInterval (void)
 {
-	realtime += time;
-
-	//johnfitz -- max fps cvar
 	if ((host_maxfps.value>0 || cls.state == ca_disconnected) && !cls.timedemo)
 	{
 		float maxfps;
@@ -1580,10 +1577,39 @@ qboolean Host_FilterTime (float time)
 			maxfps = CLAMP (10.f, host_maxfps.value, 5000.0); // woods higher max
 		}
 
-		if (realtime - oldrealtime < 1.0/maxfps)
-			return false; // framerate is too high
+		return 1.0 / maxfps;
 	}
-	//johnfitz
+	return 0;
+}
+
+/* elapsed is wall time since the main loop sampled the current realtime.
+ * Include time accumulated by rejected frames, plus work done this iteration,
+ * so rendering/vsync and scheduler oversleeps don't add another full interval. */
+void Host_Throttle (double elapsed)
+{
+	double interval = Host_FrameInterval ();
+	double remaining;
+
+	if (interval <= 0)
+	{
+		SDL_Delay (1); // retain the uncapped client's sys_throttle behavior
+		return;
+	}
+
+	remaining = interval - (realtime - oldrealtime + elapsed);
+	// Rejected frames also send queued moves when synthetic lag is enabled.
+	if (pq_lag.value)
+		remaining = q_min (remaining, 0.001);
+	if (remaining > 0)
+		SDL_DelayPrecise ((Uint64)ceil (remaining * 1000000000.0));
+}
+
+/* Returns false if the time is too short to run a frame. */
+qboolean Host_FilterTime (double time)
+{
+	realtime += time;
+	if (realtime - oldrealtime < Host_FrameInterval ())
+		return false;
 
 	host_frametime = realtime - oldrealtime;
 	oldrealtime = realtime;

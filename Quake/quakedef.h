@@ -442,6 +442,7 @@ FUNC_NORETURN void Host_EndGame (const char *message, ...) FUNC_PRINTF(1,2);
 #pragma aux Host_EndGame aborts;
 #endif
 void Host_Frame (double time);
+void Host_Throttle (double elapsed);
 int  QSSM_Main (int argc, char **argv);
 int  Host_DeferCall (double delay_seconds, void (*fn)(void *), void *param);	// run fn(param) on the main thread after a delay (replaces unsafe SDL_AddTimer callbacks)
 void Host_CancelDeferredCall (int handle);

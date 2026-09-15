@@ -247,7 +247,7 @@ int QSSM_Main(int argc, char *argv[])
 		Host_Frame (time);
 
 		if (time < sys_throttle.value && !cls.timedemo)
-			SDL_Delay(1);
+			Host_Throttle (Sys_DoubleTime () - newtime);
 
 		oldtime = newtime;
 	}
