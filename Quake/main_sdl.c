@@ -60,6 +60,11 @@ static void Sys_InitSDL (void)
 	SDL_SetMainReady();
 #endif
 
+	// Must precede SDL_Init; used for audio mixer names and desktop window grouping.
+	// The identifier matches the macOS bundle id (Shared.xcconfig).
+	SDL_SetAppMetadata("QSS-M", QSSM_VER_STRING, "com.quakeone.qssm");
+	SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_TYPE_STRING, "game");
+
 	if (!SDL_Init(0)) {
 		Sys_Error("Couldn't init SDL: %s", SDL_GetError());
 	}
