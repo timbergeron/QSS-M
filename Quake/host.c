@@ -2811,6 +2811,7 @@ void Host_Shutdown(void)
 	Discord_Shutdown(); // joins curl workers before NET_Shutdown cleans up libcurl
 	Mapshot_Shutdown();
 	SCR_Shutdown();
+	Clipboard_Shutdown(); // after screenshot jobs drain, before video goes away
 	CL_Demo_Shutdown();
 
 	QWatch_Shutdown();

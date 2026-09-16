@@ -113,34 +113,6 @@ char **PL_GetClipboardFilePaths (int *count)
     return paths;
 }
 
-void PL_FreeClipboardFilePaths (char **paths, int count)
-{
-    int i;
-
-    if (!paths)
-        return;
-    for (i = 0; i < count; ++i) {
-        if (paths[i])
-            Z_Free(paths[i]);
-    }
-    Z_Free(paths);
-}
-
-char *PL_GetClipboardFilePath (void)
-{
-    char **paths;
-    char *data = NULL;
-    int count = 0;
-
-    paths = PL_GetClipboardFilePaths(&count);
-    if (paths && count > 0) {
-        data = paths[0];
-        paths[0] = NULL;
-    }
-    PL_FreeClipboardFilePaths(paths, count);
-    return data;
-}
-
 #ifndef MAC_OS_X_VERSION_10_12
 #define NSAlertStyleCritical NSCriticalAlertStyle
 #endif

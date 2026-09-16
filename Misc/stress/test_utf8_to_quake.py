@@ -74,6 +74,8 @@ int SDL_SetClipboardText(const char *text) {
     clipboard = clipboard_written;
     return 1; /* SDL3 reports success as true */
 }
+/* clipboard_sdl.c's wrapper; ordering is covered by test_sdl3_clipboard.py */
+qboolean Clipboard_SetText(const char *text) { return SDL_SetClipboardText(text); }
 void Char_Event(int ch) {
     assert(ch > 0 && ch < 128 && typed_len + 1 < sizeof(typed));
     typed[typed_len++] = (char)ch;

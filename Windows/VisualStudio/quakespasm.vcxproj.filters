@@ -51,6 +51,9 @@
     <ClCompile Include="..\..\Quake\cl_tent.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Quake\clipboard_sdl.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\Quake\cmd.c">
       <Filter>Source Files</Filter>
     </ClCompile>

@@ -784,3 +784,111 @@ Validation with SDL 3.2.12 on Linux:
 
 Physical monitor moves, hotplug and fullscreen focus transitions still need
 hardware testing on Windows/macOS/Linux.
+
+## Post-migration clipboard layer
+
+`Quake/clipboard_sdl.c` replaces the native image clipboard code with one SDL3
+implementation and brings image copying and file-manager paste to Linux.
+
+| Action | Result |
+|---|---|
+| Screenshot | Saves the PNG/JPG/TGA file and copies a lossless image, now including Linux |
+| Ctrl/Cmd+Shift+C on a texture | Copies the texture image, now including Linux |
+| Ctrl+V after copying files in a Linux file manager | Imports them through `IN_ProcessExternalFiles` |
+| Text copies (console, chat, menus, texture names, addresses) | Unchanged, but routed through `Clipboard_SetText` |
+| Clipboard failure | Reported; the screenshot file is still saved |
+
+### Design
+
+- **Formats.** `image/png` on Linux and macOS; `image/bmp` on Windows, which SDL 3.2.12
+  and 3.4.16 map to `CF_DIB`. PNG screenshots share one encoding between the file and
+  the clipboard; JPG/TGA screenshots and textures get a separate lossless encoding.
+  Exports are opaque 24-bit images, matching the removed native paths.
+- **Threads.** Capture and gamma stay on the main thread. The existing screenshot worker
+  saves and encodes, and the main thread publishes, as `SDL_SetClipboardData` requires.
+  Texture copies are clipboard-only jobs in the same two-job queue, and their message
+  and sound follow publication. Jobs still queued at quit skip clipboard encoding.
+  The queue also bounds queued pixels to 256 MiB, one image's source pixels to 256 MiB,
+  and a texture copy checks for room before it allocates and reads back the texture; a
+  single job of any size may still queue on its own, so large screenshots are never
+  refused.
+- **Ownership.** SDL receives a serial number as userdata, and published bytes are
+  looked up by serial. SDL 3.2.12 keeps callback state when a backend fails, and
+  Cocoa's pasteboard provider holds userdata past SDL's cleanup, so stale callbacks
+  find nothing rather than freed memory. Each image is released exactly once, by
+  SDL's cleanup, a failed publication, supersession or shutdown.
+- **Ordering.** A request takes a token from SDL's `SDL_GetTicksNS` clock, which is the
+  clock SDL stamps every event with, so a clipboard change that was already queued when
+  the request was made is older than it and leaves it alone. Engine text copies, newer
+  image requests and later external changes supersede it. Pending clipboard events are
+  pumped before publishing, and a superseded job still keeps its screenshot file.
+- **Wayland self-echo.** SDL 3.4 marks its own Wayland offers and filters them out; older
+  SDL reports our own selection back as an external change. That workaround is therefore
+  limited to Wayland with SDL below 3.4.0, and applies only while SDL still holds our
+  image: another client taking the selection cancels our data source first, which runs
+  our cleanup. It accepts one update per copy, offering exactly our image type. An engine
+  text copy's echo is not filtered, so an image requested within that round trip on old
+  Wayland is skipped, leaving the text on the clipboard.
+- **BMP rows.** `SDL_SaveBMP_IO` writes `biSizeImage` as height × surface pitch, and the
+  Windows backend copies exactly that many pixel bytes. The encoder therefore fills an
+  `SDL_CreateSurface` surface, whose pitch is padded to whole 4-byte rows.
+- **Linux file lists.** `text/uri-list` first, then `x-special/gnome-copied-files`, then
+  `file:` lines in clipboard text; the first representation with usable files wins.
+  Paths keep their filesystem bytes. Remote hosts and schemes, malformed or NUL escapes,
+  controls, queries and fragments are refused. Payloads are limited to 1 MiB, paths to
+  `MAX_OSPATH`, and lists to 1024 files and 256 KiB of decoded paths: paths come from the
+  4 MB zone, where an allocation failure is fatal. Cut selections import copies.
+- **Backend settling.** SDL's Cocoa backend only promises the data, and the promise dies
+  with the process. Each publication therefore reads the image back once, so AppKit
+  stores it on the pasteboard immediately, as the old native export did. Windows copies
+  the image into `CF_DIB` inside `SDL_SetClipboardData`, so our bytes are released at once
+  rather than kept as a second copy. X11 and Wayland keep serving the retained bytes.
+- **Texture rows.** Textures are uploaded top row first, so `glGetTexImage` rows are
+  top-down. The removed native code flipped them, so texture copies pasted upside down.
+- **Removed.** `Sys_Image_BGRA_To_Clipboard` (Windows `CF_BITMAP`, macOS CoreGraphics
+  TIFF), the platform guards around screenshot and texture copies, and the duplicated
+  file-list helpers. Explorer and Finder file-list readers are unchanged.
+
+### Verification
+
+- `python3 Misc/stress/test_sdl3_clipboard.py` (added to Linux CI, which runs it against
+  SDL 3.2.12 and 3.4.16) passes locally against SDL 3.4.12 with ASan/UBSan.
+  - A fake core reproducing 3.2.12's `SDL_SetClipboardData` covers replacement,
+    failed publication with retained userdata, synchronous Windows-style reads, stale
+    provider callbacks, supersession by text and newer images, external changes queued
+    before and after a request, the Wayland echo rules by driver, SDL version and
+    ownership, the Windows release and Cocoa read-back, missing video and shutdown.
+    Both binaries run with `detect_stack_use_after_return=1`.
+  - Against real SDL with the dummy video driver, PNG and BMP exports of an asymmetric
+    fixture decode pixel-exact across odd widths, both pixel layouts and both row orders.
+    BMP headers are also rebuilt through the Windows `CF_DIB` conversion. The production
+    `gl_screen.c` job steps show that save and clipboard failures stay independent and
+    that superseded or shutdown jobs release their data. `pl_linux.c`'s reader is checked
+    for format preference and single-batch imports.
+- `test_utf8_to_quake.py` passes with a `Clipboard_SetText` stub. GCC 15 (MinGW) compiles
+  the harness C and `clipboard_sdl.c` cleanly with `-Wall -Wextra -Werror`.
+- macOS Debug (Xcode) and MinGW Win64 builds succeed; Win32 syntax checks of
+  `clipboard_sdl.c`, `pl_win.c` and `image.c` pass.
+- macOS runtime, read by a separate Swift process through `NSPasteboard`:
+  - A PNG screenshot offers `public.png` byte-identical to the saved file, as an opaque
+    1294×816 `NSImage`.
+  - A JPG screenshot taken after another process set text replaces it with a lossless PNG.
+  - The image is still pasteable after a clean `quit` and after `kill -9`. Before the
+    publication read-back, `kill -9` left `public.png` listed with no data.
+  - Cmd+Shift+C was posted to the engine's pid with `CGEventPostToPid`, with the texture
+    pointer on the `start` map's floor, and copied `cop3_4`. Compared with the texture
+    decoded from `maps/start.bsp`, the old row order matched only when flipped: 100% of
+    rows identical flipped, 0% as copied. With the fix, 100% of rows are identical as
+    copied.
+
+### Not covered
+
+- Linux X11 and Wayland desktops, GNOME Files and KDE Dolphin, paste into image editors
+  and browsers, and clipboard-manager persistence after exit.
+- Windows runtime: paste into Paint or a browser, and Explorer imports.
+- Wayland large pastes: SDL writes pipes with a 14 ms readiness timeout in both versions,
+  so slow readers may receive truncated images.
+- Wayland focus: the selection is set with the latest input serial after encoding
+  finishes, and a compositor may refuse it if focus has moved in the meantime.
+- Capture, encode and main-thread publication timings (including the macOS read-back and
+  the Windows `CF_DIB` copy) and peak memory at 1080p and 4K.

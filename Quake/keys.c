@@ -1859,7 +1859,7 @@ static qboolean Chat_CopySelectionToClipboard (void)
 	for (i = 0; i < len; i++)
 		copy[i] = dequake[(unsigned char)chat_buffer[start + i]];
 	copy[len] = 0;
-	return SDL_SetClipboardText(copy);
+	return Clipboard_SetText(copy);
 }
 
 static qboolean Chat_InsertText (const char *text, int len)

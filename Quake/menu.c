@@ -2372,7 +2372,7 @@ static qboolean M_TextField_CopySelection(menu_textfield_t *tf)
 	for (i = 0; i < copy_len; i++)
 		copy[i] = dequake[(unsigned char)tf->text[sel_begin + i]];
 	copy[copy_len] = 0;
-	SDL_SetClipboardText(copy);
+	Clipboard_SetText(copy);
 	SDL_free(copy);
 
 	M_TextField_PlayCopySound();
@@ -9237,9 +9237,9 @@ forward:
 		if (M_TextField_HasShortcutModifier())
 		{
 			if (lastColorSelected[0] != '\0')
-				SDL_SetClipboardText (lastColorSelected);
+				Clipboard_SetText (lastColorSelected);
 			else
-				SDL_SetClipboardText (CL_PLColours_ToString (setup_bottom));
+				Clipboard_SetText (CL_PLColours_ToString (setup_bottom));
 			M_TextField_PlayCopySound();
 		}
 		break;
@@ -21565,7 +21565,7 @@ void M_Crosshair_Key(int k)
 			if (Key_IsShortcutModifierDown())
 			{
 				if (last_crosshair_color[0] != '\0')
-					SDL_SetClipboardText(last_crosshair_color);
+					Clipboard_SetText(last_crosshair_color);
 				S_NotificationSound_Copy();
 			}
 			break;
@@ -25466,7 +25466,7 @@ static void Tools_CopyHexToClipboard(void)
 	hsvtorgb(toolsmenu.hue, toolsmenu.saturation, toolsmenu.value, rgb);
 	char hex_line[16];
 	q_snprintf(hex_line, sizeof(hex_line), "#%02X%02X%02X", rgb[0], rgb[1], rgb[2]);
-	SDL_SetClipboardText(hex_line);
+	Clipboard_SetText(hex_line);
 	toolsmenu_hex_flash_until = realtime + 1.0;
 	S_NotificationSound_Copy();
 }
@@ -25477,7 +25477,7 @@ static void Tools_CopyRgbToClipboard(void)
 	hsvtorgb(toolsmenu.hue, toolsmenu.saturation, toolsmenu.value, rgb);
 	char buf[32];
 	q_snprintf(buf, sizeof(buf), "%d,%d,%d", rgb[0], rgb[1], rgb[2]);
-	SDL_SetClipboardText(buf);
+	Clipboard_SetText(buf);
 	toolsmenu_rgb_flash_until = realtime + 1.0;
 	S_NotificationSound_Copy();
 }
@@ -27371,7 +27371,7 @@ static void M_Shortcuts_CopyToClipboard(void)
 		q_strlcat(copy, "\n", total);
 	}
 
-	if (!SDL_SetClipboardText(copy))
+	if (!Clipboard_SetText(copy))
 		q_strlcpy(shortcutmenu.status_message, "Clipboard copy failed", sizeof(shortcutmenu.status_message));
 	else
 	{
@@ -29125,7 +29125,7 @@ static void M_Version_CopyToClipboard(void)
 		q_strlcat(copy, "\n", total);
 	}
 
-	if (!SDL_SetClipboardText(copy))
+	if (!Clipboard_SetText(copy))
 		q_strlcpy(versionmenu.status_message, "Clipboard copy failed", sizeof(versionmenu.status_message));
 	else
 	{
@@ -30751,7 +30751,7 @@ void M_LanConfig_Key (int key)
 					}
 					else 
 					{
-				SDL_SetClipboardText(ip_clickables[i].text);
+				Clipboard_SetText(ip_clickables[i].text);
 				strcpy(last_copied_ip, ip_clickables[i].text);
 				copy_message_time = realtime + 1.0;
 				S_NotificationSound_Copy();
@@ -30759,7 +30759,7 @@ void M_LanConfig_Key (int key)
 				}
 				else 
 				{
-					SDL_SetClipboardText(ip_clickables[i].text);
+					Clipboard_SetText(ip_clickables[i].text);
 					strcpy(last_copied_ip, ip_clickables[i].text);
 					copy_message_time = realtime + 1.0;
 					S_NotificationSound_Copy();
@@ -36287,7 +36287,7 @@ static void M_ServerList_CopySelectedAddress(void)
 	if (actualIndex < 0 || !ServerList_SnapshotItem(actualIndex, &server) || !server.ip[0])
 		return;
 
-	if (!SDL_SetClipboardText(server.ip))
+	if (!Clipboard_SetText(server.ip))
 	{
 		Con_Printf("Clipboard copy failed: %s\n", SDL_GetError());
 		return;
@@ -45817,7 +45817,7 @@ static void M_Audio_Copy(void)
 	}
 	q_snprintf(command, sizeof(command), "%s \"%s\"",
 		audiomenu.kind == AUDIO_CATALOG_SOUNDS ? "play" : "music", item->path);
-	if (!SDL_SetClipboardText(command))
+	if (!Clipboard_SetText(command))
 		q_strlcpy(audiomenu.status, "Clipboard copy failed", sizeof(audiomenu.status));
 	else
 		q_snprintf(audiomenu.status, sizeof(audiomenu.status), "Copied: %s", command);

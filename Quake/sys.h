@@ -107,9 +107,5 @@ void Sys_ClearDockNotificationBadge (void);
 void Sys_ActivateKeyFilter (qboolean active);
 #endif
 
-#if defined(_WIN32) || defined(__APPLE__)
-void Sys_Image_BGRA_To_Clipboard(byte* bmbits, int width, int height, int size); // woods
-#endif
-
 #endif	/* _QUAKE_SYS_H */
 

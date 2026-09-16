@@ -1761,27 +1761,6 @@ static void Dedicated_RedrawInputLine(const char* text, int textlen, int cursor_
 		WriteFile(houtput, text, (DWORD)cursor_pos, &dummy, NULL);
 }
 
-#if defined(_WIN32)
-void Sys_Image_BGRA_To_Clipboard(byte* bmbits, int width, int height, int size) // woods #screenshotcopy
-{
-
-	HBITMAP hBitmap = CreateBitmap(width, height, 1, 32 /* bits per pixel is 32 */, bmbits);
-
-	OpenClipboard(NULL);
-
-	if (!EmptyClipboard())
-	{
-		CloseClipboard();
-		return;
-	}
-
-	if ((SetClipboardData(CF_BITMAP, hBitmap)) == NULL)
-		Sys_Error("SetClipboardData failed");
-
-	CloseClipboard();
-}
-#endif
-
 static void Sys_RewriteInputLine(const char* newline, char* con_text, size_t con_text_size, int* textlen, int* cursor_pos, DWORD* dummy) // woods #serverhistory
 {
 	int oldlen = *textlen;

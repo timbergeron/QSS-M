@@ -433,7 +433,7 @@ void Con_Copy_f(void)
 			char* f = (char*)COM_LoadHunkFile("condump.txt", NULL);
 			if (f)
 			{
-				if (SDL_SetClipboardText(f))
+				if (Clipboard_SetText(f))
 					copied = true;
 			}
 		}
@@ -1229,7 +1229,7 @@ qboolean Con_CopySelectionToClipboard(void)
 			if (!crlf) {
 				Con_Warning("Out of memory normalizing CRLF (%lu bytes).\n",
 					(unsigned long)(i + extra + 1));
-				SDL_SetClipboardText(utf8); /* fall back with \n */
+				Clipboard_SetText(utf8); /* fall back with \n */
 			}
 			else {
 				size_t w = 0;
@@ -1239,16 +1239,16 @@ qboolean Con_CopySelectionToClipboard(void)
 					crlf[w++] = utf8[r];
 				}
 				crlf[w] = 0;
-				SDL_SetClipboardText(crlf);
+				Clipboard_SetText(crlf);
 				free(crlf);
 			}
 		}
 		else {
-			SDL_SetClipboardText(utf8);
+			Clipboard_SetText(utf8);
 		}
 	}
 #else
-	SDL_SetClipboardText(utf8);
+	Clipboard_SetText(utf8);
 #endif
 	free(utf8);
 	free(qtext);

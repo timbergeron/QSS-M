@@ -119,6 +119,8 @@ jobs:
         python3 Misc/stress/test_hid_start_wait.py
         python3 Misc/stress/test_mouse_motion.py
         python3 Misc/stress/test_tick_deadlines.py
+        python3 Misc/stress/test_sdl3_clipboard.py
+        python3 Misc/stress/test_utf8_to_quake.py
         python3 Misc/stress/test_release_archives.py
 
     - name: Prepare Linux debug logs

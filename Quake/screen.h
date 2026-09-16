@@ -31,6 +31,11 @@ void SCR_LoadPics (void);
 
 void SCR_UpdateScreen (void);
 qboolean SCR_GetLaserPoint (vec3_t point);
+// Takes ownership of malloc'ed pixels; copies them once the image worker has encoded them.
+qboolean SCR_CopyImageToClipboard (byte *pixels, int width, int height,
+	clipboard_pixels_t layout, qboolean bottom_up, const char *label);
+// Check before allocating and reading back a large image.
+qboolean SCR_ImageQueueHasRoom (size_t pixel_bytes);
 
 void SCR_UpdateZoom(void); // woods #zoom (ironwail)
 

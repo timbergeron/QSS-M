@@ -6880,7 +6880,7 @@ void CL_Viewpos_f (void)
 	Con_SafePrintf ("Player pos: %s\n", buf);
 
 	if (Cmd_Argc () >= 2 && !q_strcasecmp (Cmd_Argv (1), "copy"))
-		if (!SDL_SetClipboardText (buf))
+		if (!Clipboard_SetText (buf))
 			Con_SafePrintf ("Clipboard copy failed: %s\n", SDL_GetError ());
 
 	if (SCR_GetLaserPoint (laserpoint))

@@ -1372,17 +1372,89 @@ qboolean Image_WritePNG (const char *name, byte *data, int width, int height, in
 qboolean Image_WritePNG_OSPath (const char *path, byte *data, int width, int height,
 	int bpp, qboolean upsidedown, char *error_text, size_t error_text_size)
 {
-	unsigned error;
-	byte	*flipped;
-	unsigned char	*filters;
-	unsigned char	*png = NULL;
-	size_t		pngsize;
-	LodePNGState	state;
-	qboolean	saved = false;
+	byte	*png;
+	size_t	pngsize;
+	qboolean	saved;
 
 	if (error_text && error_text_size)
 		error_text[0] = '\0';
-	if (!path || !data || width <= 0 || height <= 0 ||
+	if (!path)
+	{
+		Image_SetWriteError (error_text, error_text_size,
+			"invalid image parameters");
+		return false;
+	}
+	if (!Image_EncodePNGMemory (data, width, height, bpp, upsidedown, &png,
+		&pngsize, error_text, error_text_size))
+		return false;
+
+	saved = Image_WriteEncoded_OSPath (path, png, pngsize, error_text,
+		error_text_size);
+	Image_FreePNGMemory (png);
+	return saved;
+}
+
+qboolean Image_WriteEncoded_OSPath (const char *path, const byte *data, size_t size,
+	char *error_text, size_t error_text_size)
+{
+	FILE	*file;
+	qboolean	saved;
+
+	if (!path || !data || !size)
+	{
+		Image_SetWriteError (error_text, error_text_size,
+			"invalid image parameters");
+		return false;
+	}
+
+	file = fopen (path, "wb");
+	if (!file)
+	{
+		Image_SetWriteError (error_text, error_text_size, "file write failed");
+		return false;
+	}
+	saved = fwrite (data, 1, size, file) == size;
+	if (fclose (file) != 0)
+		saved = false;
+	if (!saved)
+	{
+		remove (path);
+		Image_SetWriteError (error_text, error_text_size, "file write failed");
+	}
+	return saved;
+}
+
+void Image_FreePNGMemory (void *png)
+{
+	lodepng_free (png); /* png was allocated by lodepng */
+}
+
+/*
+============
+Image_EncodePNGMemory
+
+Encodes with the fast screenshot settings. On success *png must be released
+with Image_FreePNGMemory. Safe to call from worker threads.
+============
+*/
+qboolean Image_EncodePNGMemory (const byte *data, int width, int height, int bpp,
+	qboolean upsidedown, byte **png, size_t *pngsize, char *error_text,
+	size_t error_text_size)
+{
+	unsigned error;
+	byte	*flipped;
+	unsigned char	*filters;
+	unsigned char	*encoded = NULL;
+	size_t		encodedsize = 0;
+	LodePNGState	state;
+
+	if (error_text && error_text_size)
+		error_text[0] = '\0';
+	if (png)
+		*png = NULL;
+	if (pngsize)
+		*pngsize = 0;
+	if (!data || !png || !pngsize || width <= 0 || height <= 0 ||
 		!(bpp == 32 || bpp == 24))
 	{
 		Image_SetWriteError (error_text, error_text_size,
@@ -1390,7 +1462,7 @@ qboolean Image_WritePNG_OSPath (const char *path, byte *data, int width, int hei
 		return false;
 	}
 
-	flipped = (!upsidedown)? CopyFlipped (data, width, height, bpp) : data;
+	flipped = (!upsidedown)? CopyFlipped (data, width, height, bpp) : (byte *)data;
 	filters = (unsigned char *) malloc (height);
 	if (!filters || !flipped)
 	{
@@ -1420,33 +1492,24 @@ qboolean Image_WritePNG_OSPath (const char *path, byte *data, int width, int hei
 		state.info_png.color.colortype = LCT_RGBA;
 	}
 
-	error = lodepng_encode (&png, &pngsize, flipped, width, height, &state);
+	error = lodepng_encode (&encoded, &encodedsize, flipped, width, height, &state);
 	if (error == 0)
 	{
-		FILE *file = fopen (path, "wb");
-
-		if (file)
-		{
-			saved = fwrite (png, 1, pngsize, file) == pngsize;
-			if (fclose (file) != 0)
-				saved = false;
-			if (!saved)
-				remove (path);
-		}
-		if (!saved)
-			Image_SetWriteError (error_text, error_text_size,
-				"file write failed");
+		*png = encoded;
+		*pngsize = encodedsize;
 	}
 	else
+	{
+		lodepng_free (encoded);
 		Image_SetWriteError (error_text, error_text_size,
 			lodepng_error_text (error));
+	}
 
 	lodepng_state_cleanup (&state);
-	lodepng_free (png); /* png was allocated by lodepng */
 	free (filters);
 	if (!upsidedown) {
 	  free (flipped);
 	}
 
-	return error == 0 && saved;
+	return error == 0;
 }

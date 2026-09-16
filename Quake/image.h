@@ -41,6 +41,10 @@ qboolean Image_WriteJPG (const char *name, byte *data, int width, int height, in
 qboolean Image_WriteTGA_OSPath (const char *path, byte *data, int width, int height, int bpp, qboolean upsidedown);
 qboolean Image_WritePNG_OSPath (const char *path, byte *data, int width, int height, int bpp, qboolean upsidedown, char *error_text, size_t error_text_size);
 qboolean Image_WriteJPG_OSPath (const char *path, byte *data, int width, int height, int bpp, int quality, qboolean upsidedown);
+//upsidedown means data is already top-down. Release *png with Image_FreePNGMemory.
+qboolean Image_EncodePNGMemory (const byte *data, int width, int height, int bpp, qboolean upsidedown, byte **png, size_t *pngsize, char *error_text, size_t error_text_size);
+void Image_FreePNGMemory (void *png);
+qboolean Image_WriteEncoded_OSPath (const char *path, const byte *data, size_t size, char *error_text, size_t error_text_size);
 qboolean Image_WriteLMP (const char *name, byte *data, int width, int height);
 
 #endif	/* GL_IMAGE_H */

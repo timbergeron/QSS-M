@@ -74,149 +74,77 @@ char *PL_GetClipboardData (void)
 	return data;
 }
 
-static int PL_HexValue(int c)
+static qboolean PL_ClipboardMayOffer (char **mime_types, size_t num_mime_types, const char *mime_type)
 {
-	if (c >= '0' && c <= '9')
-		return c - '0';
-	if (c >= 'a' && c <= 'f')
-		return c - 'a' + 10;
-	if (c >= 'A' && c <= 'F')
-		return c - 'A' + 10;
-	return -1;
-}
+	size_t i;
 
-static char *PL_DecodeFileURI(const char *uri, size_t uri_len)
-{
-	const char	*src;
-	const char	*end;
-	char		*data;
-	char		*dst;
-
-	if (uri_len < 7 || strncmp(uri, "file://", 7) != 0)
-		return NULL;
-
-	src = uri + 7;
-	uri_len -= 7;
-	if (uri_len >= 9 && strncmp(src, "localhost", 9) == 0)
+	/* An unknown offer (for example, copied before launch) must be asked. */
+	if (!mime_types || num_mime_types == 0)
+		return true;
+	for (i = 0; i < num_mime_types; ++i)
 	{
-		src += 9;
-		uri_len -= 9;
+		if (mime_types[i] && !strcmp(mime_types[i], mime_type))
+			return true;
 	}
-	else if (uri_len == 0 || src[0] != '/')
-		return NULL;
-
-	if (uri_len == 0 || src[0] != '/')
-		return NULL;
-
-	if (uri_len >= (size_t)Q_MAXINT)
-		return NULL;
-
-	data = (char *) Z_Malloc((int)uri_len + 1);
-	dst = data;
-	end = src + uri_len;
-	while (src < end)
-	{
-		if (*src == '%' && src + 2 < end)
-		{
-			int hi = PL_HexValue((unsigned char)src[1]);
-			int lo = PL_HexValue((unsigned char)src[2]);
-			if (hi >= 0 && lo >= 0)
-			{
-				*dst++ = (char)((hi << 4) | lo);
-				src += 3;
-				continue;
-			}
-		}
-		*dst++ = *src++;
-	}
-	*dst = '\0';
-	return data;
-}
-
-static char **PL_GetFileURIsFromClipboardText(char *cliptext, int *count)
-{
-	char	**paths = NULL;
-	char *line;
-	int capacity = 0;
-
-	*count = 0;
-	for (line = cliptext; line && *line; )
-	{
-		char	*end = line;
-		size_t	line_len;
-
-		while (*end && *end != '\r' && *end != '\n')
-			end++;
-
-		line_len = (size_t)(end - line);
-		if (line_len > 0 && line[0] == '#')
-		{
-			while (*end == '\r' || *end == '\n')
-				end++;
-			line = end;
-			continue;
-		}
-
-		if (line_len >= 7 && strncmp(line, "file://", 7) == 0)
-		{
-			char *path = PL_DecodeFileURI(line, line_len);
-			if (path)
-				PL_AddClipboardFilePath(&paths, count, &capacity, path);
-		}
-
-		while (*end == '\r' || *end == '\n')
-			end++;
-		line = end;
-	}
-
-	return paths;
+	return false;
 }
 
 char **PL_GetClipboardFilePaths (int *count)
 {
-	char **paths = NULL;
-	int local_count = 0;
-	char *cliptext = SDL_GetClipboardText();
-
-	if (cliptext != NULL)
+	/* Preference order.  Only the first representation that yields files is
+	 * used, so a file manager offering several never imports twice. */
+	static const struct
 	{
-		paths = PL_GetFileURIsFromClipboardText(cliptext, &local_count);
-		SDL_free(cliptext);
+		const char		*mime_type;
+		clipboard_uri_format_t	format;
+	} formats[] =
+	{
+		{ "text/uri-list", CLIPBOARD_URI_LIST },
+		{ "x-special/gnome-copied-files", CLIPBOARD_GNOME_COPIED_FILES },
+	};
+	char		**paths = NULL;
+	char		**mime_types;
+	size_t		num_mime_types = 0;
+	size_t		i;
+	int		local_count = 0;
+	qboolean	too_many = false;
+
+	mime_types = SDL_GetClipboardMimeTypes(&num_mime_types);
+	for (i = 0; i < sizeof(formats) / sizeof(formats[0]) && !paths && !too_many; ++i)
+	{
+		size_t	size = 0;
+		void	*data;
+
+		if (!PL_ClipboardMayOffer(mime_types, num_mime_types, formats[i].mime_type))
+			continue;
+		data = SDL_GetClipboardData(formats[i].mime_type, &size);
+		if (data)
+		{
+			paths = Clipboard_ParseFileURIs((const char *)data, size, formats[i].format,
+				&local_count, &too_many);
+			SDL_free(data);
+		}
+	}
+	SDL_free(mime_types);
+
+	if (!paths && !too_many)
+	{
+		char *cliptext = SDL_GetClipboardText();
+
+		if (cliptext != NULL)
+		{
+			paths = Clipboard_ParseFileURIs(cliptext, strlen(cliptext), CLIPBOARD_URI_TEXT,
+				&local_count, &too_many);
+			SDL_free(cliptext);
+		}
 	}
 
+	if (too_many)
+		Con_Printf("Clipboard file list is too large (over %d files or %d KB of paths); nothing was imported.\n",
+			CLIPBOARD_MAX_FILES, CLIPBOARD_MAX_PATH_BYTES / 1024);
 	if (count)
 		*count = local_count;
 	return paths;
-}
-
-void PL_FreeClipboardFilePaths (char **paths, int count)
-{
-	int i;
-
-	if (!paths)
-		return;
-	for (i = 0; i < count; ++i)
-	{
-		if (paths[i])
-			Z_Free(paths[i]);
-	}
-	Z_Free(paths);
-}
-
-char *PL_GetClipboardFilePath (void)
-{
-	char **paths;
-	char *data = NULL;
-	int count = 0;
-
-	paths = PL_GetClipboardFilePaths(&count);
-	if (paths && count > 0)
-	{
-		data = paths[0];
-		paths[0] = NULL;
-	}
-	PL_FreeClipboardFilePaths(paths, count);
-	return data;
 }
 
 void PL_ErrorDialog (const char *errorMsg)

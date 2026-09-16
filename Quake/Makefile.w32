@@ -316,6 +316,7 @@ OBJS := strlcat.o \
 	sbar.o \
 	view.o \
 	wad.o \
+	clipboard_sdl.o \
 	cmd.o \
 	common.o \
 	quake_data_import.o \

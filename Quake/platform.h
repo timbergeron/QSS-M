@@ -40,10 +40,88 @@ char *PL_GetClipboardData (void);
 /* retrieve a file path from the clipboard (returns Z_Malloc()'ed data) */
 char *PL_GetClipboardFilePath (void);
 
-/* retrieve file paths from the clipboard (returns Z_Malloc()'ed array/data) */
+/* retrieve file paths from the clipboard (returns Z_Malloc()'ed array/data).
+ * PL_GetClipboardFilePaths is per platform; the helpers live in clipboard_sdl.c. */
 qboolean PL_AddClipboardFilePath (char ***paths, int *count, int *capacity, char *path);
 char **PL_GetClipboardFilePaths (int *count);
 void PL_FreeClipboardFilePaths (char **paths, int count);
+
+/*
+ * Shared SDL clipboard layer (clipboard_sdl.c).
+ *
+ * Clipboard_EncodeImage and Clipboard_ReleaseImage may run on any thread.
+ * Everything else must run on the main thread, which SDL requires for
+ * clipboard publication.
+ */
+typedef enum
+{
+	CLIPBOARD_PIXELS_RGB24,
+	CLIPBOARD_PIXELS_BGRA32	/* alpha is ignored: clipboard images are opaque */
+} clipboard_pixels_t;
+
+typedef enum
+{
+	CLIPBOARD_IMAGE_PNG,
+	CLIPBOARD_IMAGE_BMP
+} clipboard_image_format_t;
+
+typedef struct
+{
+	clipboard_image_format_t format;
+	byte	*data;
+	size_t	size;
+	void	(*release) (void *data);	/* frees data */
+} clipboard_image_t;
+
+typedef enum
+{
+	CLIPBOARD_PUBLISHED,
+	CLIPBOARD_SUPERSEDED,	/* a newer copy replaced this request */
+	CLIPBOARD_FAILED
+} clipboard_publish_t;
+
+#define CLIPBOARD_MAX_IMAGE_SIDE	16384
+/* source pixels for one image; conversion and encoding add to this again */
+#define CLIPBOARD_MAX_IMAGE_BYTES	((size_t)256 * 1024 * 1024)
+
+/* the format this platform's SDL backend exchanges with other applications */
+clipboard_image_format_t Clipboard_NativeImageFormat (void);
+const char *Clipboard_ImageMimeType (clipboard_image_format_t format);
+/* Converts pixels to a top-down, opaque image and encodes it. */
+qboolean Clipboard_EncodeImage (const byte *pixels, int width, int height,
+	clipboard_pixels_t layout, qboolean bottom_up, clipboard_image_format_t format,
+	clipboard_image_t *image, char *error, size_t error_size);
+void Clipboard_ReleaseImage (clipboard_image_t *image);
+
+/* Image copies finish after encoding.  A request is only published while no
+ * newer image request, engine text copy or external clipboard change exists. */
+uint64_t Clipboard_BeginImageRequest (void);
+/* Takes ownership of image->data whatever the result. */
+clipboard_publish_t Clipboard_PublishImage (uint64_t request, clipboard_image_t *image,
+	char *error, size_t error_size);
+/* All engine text copies go through this, so they supersede pending images. */
+qboolean Clipboard_SetText (const char *text);
+union SDL_Event;
+void Clipboard_HandleEvent (const union SDL_Event *event);
+void Clipboard_Shutdown (void);
+
+typedef enum
+{
+	CLIPBOARD_URI_LIST,		/* text/uri-list */
+	CLIPBOARD_GNOME_COPIED_FILES,	/* x-special/gnome-copied-files */
+	CLIPBOARD_URI_TEXT		/* plain text holding file: URI lines */
+} clipboard_uri_format_t;
+
+#define CLIPBOARD_MAX_URI_BYTES		(1024 * 1024)
+#define CLIPBOARD_MAX_FILES		1024
+/* decoded paths live in the zone, which is only a few megabytes */
+#define CLIPBOARD_MAX_PATH_BYTES	(256 * 1024)
+
+/* Parses local file URIs into Z_Malloc()'ed filesystem paths.  Returns NULL
+ * when nothing usable is found; *too_many is set when the list was refused for
+ * exceeding CLIPBOARD_MAX_FILES files or CLIPBOARD_MAX_PATH_BYTES of paths. */
+char **Clipboard_ParseFileURIs (const char *data, size_t size, clipboard_uri_format_t format,
+	int *count, qboolean *too_many);
 
 /* show an error dialog */
 void PL_ErrorDialog(const char *text);

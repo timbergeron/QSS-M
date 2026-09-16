@@ -5971,6 +5971,10 @@ void IN_SendKeyEvents (void)
 		}
 		break;
 
+		case SDL_EVENT_CLIPBOARD_UPDATE:
+			Clipboard_HandleEvent (&event);
+			break;
+
 		case SDL_EVENT_QUIT:
 			Con_DPrintf("SDL_EVENT_QUIT event received\n");
 			Host_Quit_f ();

@@ -6427,49 +6427,6 @@ SCREEN SHOTS
 ==============================================================================
 */
 
-//======================================================
-// woods #screenshotcopy from fitzquake markvr9
-//======================================================
-
-#if defined(_WIN32) || defined(__APPLE__)
-static void SCR_ScreenShot_Clipboard_RGB (const byte *rgb, int width, int height)
-{
-	byte *bgra;
-	size_t buffersize;
-	int x, y;
-
-	if (!rgb || width <= 0 || height <= 0 ||
-		(size_t)width > (size_t)-1 / (size_t)height / 4)
-		return;
-	buffersize = (size_t)width * (size_t)height * 4;
-	if (buffersize > (size_t)INT_MAX)
-		return;
-
-	bgra = (byte *)malloc (buffersize);
-	if (!bgra)
-		return;
-
-	/* GL_RGB is bottom-up. Convert and flip it into the clipboard's BGRA layout
-	   in one pass instead of reading the framebuffer a second time. */
-	for (y = 0; y < height; y++)
-	{
-		const byte *src = rgb + (size_t)(height - 1 - y) * (size_t)width * 3;
-		byte *dst = bgra + (size_t)y * (size_t)width * 4;
-
-		for (x = 0; x < width; x++, src += 3, dst += 4)
-		{
-			dst[0] = src[2];
-			dst[1] = src[1];
-			dst[2] = src[0];
-			dst[3] = 255;
-		}
-	}
-
-	Sys_Image_BGRA_To_Clipboard (bgra, width, height, (int)buffersize);
-	free (bgra);
-}
-#endif
-
 static void SCR_ScreenShot_Usage (void)
 {
 	Con_Printf ("usage: screenshot <format> <quality>\n");
@@ -6479,6 +6436,8 @@ static void SCR_ScreenShot_Usage (void)
 }
 
 #define SCR_SCREENSHOT_MAX_OUTSTANDING 2
+/* queued pixel buffers, which their encoded output is then built from */
+#define SCR_IMAGE_QUEUE_MAX_BYTES ((size_t)256 * 1024 * 1024)
 
 typedef enum
 {
@@ -6487,6 +6446,9 @@ typedef enum
 	SCR_SCREENSHOT_JPG
 } scr_screenshot_format_t;
 
+/* Screenshots and clipboard-only image copies (woods #screenshotcopy) share
+   one bounded worker queue.  The worker saves and encodes; publication to the
+   clipboard happens back on the main thread. */
 typedef struct scr_screenshot_job_s
 {
 	struct scr_screenshot_job_s *next;
@@ -6495,8 +6457,16 @@ typedef struct scr_screenshot_job_s
 	int height;
 	int quality;
 	scr_screenshot_format_t format;
+	clipboard_pixels_t layout;
+	size_t pixel_bytes;
+	qboolean bottom_up;
+	qboolean save;			/* false for clipboard-only jobs */
 	qboolean ok;
 	qboolean filtered;
+	uint64_t clipboard_request;	/* 0 when no clipboard copy is wanted */
+	clipboard_image_t clipboard;
+	char clipboard_error[128];
+	char label[MAX_QPATH + 32];	/* clipboard-only success message */
 	char error[128];
 	char name[MAX_OSPATH];
 	char path[MAX_OSPATH];
@@ -6511,17 +6481,38 @@ static scr_screenshot_job_t *scr_screenshot_pending_tail;
 static scr_screenshot_job_t *scr_screenshot_completed_head;
 static scr_screenshot_job_t *scr_screenshot_completed_tail;
 static int scr_screenshot_outstanding;
+static size_t scr_screenshot_outstanding_bytes;
 static qboolean scr_screenshot_shutdown;
 static char scr_screenshot_last_stamp[24];
 static unsigned int scr_screenshot_stamp_sequence;
 
 static qboolean SCR_ScreenshotWrite (scr_screenshot_job_t *job)
 {
+	byte	*png;
+	size_t	png_size;
+
 	switch (job->format)
 	{
 	case SCR_SCREENSHOT_PNG:
-		return Image_WritePNG_OSPath (job->path, job->pixels, job->width,
-			job->height, 24, false, job->error, sizeof(job->error));
+		if (!job->clipboard_request ||
+			Clipboard_NativeImageFormat () != CLIPBOARD_IMAGE_PNG)
+			return Image_WritePNG_OSPath (job->path, job->pixels, job->width,
+				job->height, 24, false, job->error, sizeof(job->error));
+
+		/* the file and the clipboard share one encoding */
+		if (!Image_EncodePNGMemory (job->pixels, job->width, job->height, 24,
+			false, &png, &png_size, job->error, sizeof(job->error)))
+		{
+			q_strlcpy (job->clipboard_error, job->error,
+				sizeof(job->clipboard_error));
+			return false;
+		}
+		job->clipboard.format = CLIPBOARD_IMAGE_PNG;
+		job->clipboard.data = png;
+		job->clipboard.size = png_size;
+		job->clipboard.release = Image_FreePNGMemory;
+		return Image_WriteEncoded_OSPath (job->path, png, png_size, job->error,
+			sizeof(job->error));
 	case SCR_SCREENSHOT_TGA:
 		return Image_WriteTGA_OSPath (job->path, job->pixels, job->width,
 			job->height, 24, false);
@@ -6531,6 +6522,20 @@ static qboolean SCR_ScreenshotWrite (scr_screenshot_job_t *job)
 	default:
 		return false;
 	}
+}
+
+/* Worker side: save the file and prepare clipboard bytes.  The two outcomes
+   are independent, and nothing here touches SDL video or the clipboard. */
+static void SCR_ImageJobProcess (scr_screenshot_job_t *job)
+{
+	if (job->save)
+		job->ok = SCR_ScreenshotWrite (job);
+	if (job->clipboard_request && !job->clipboard.data && !job->clipboard_error[0])
+		Clipboard_EncodeImage (job->pixels, job->width, job->height, job->layout,
+			job->bottom_up, Clipboard_NativeImageFormat (), &job->clipboard,
+			job->clipboard_error, sizeof(job->clipboard_error));
+	free (job->pixels);
+	job->pixels = NULL;
 }
 
 static int SCR_ScreenshotWorker (void *unused)
@@ -6555,11 +6560,11 @@ static int SCR_ScreenshotWorker (void *unused)
 		if (!scr_screenshot_pending_head)
 			scr_screenshot_pending_tail = NULL;
 		job->next = NULL;
+		if (scr_screenshot_shutdown)
+			job->clipboard_request = 0;	/* nothing is published while quitting */
 		SDL_UnlockMutex (scr_screenshot_mutex);
 
-		job->ok = SCR_ScreenshotWrite (job);
-		free (job->pixels);
-		job->pixels = NULL;
+		SCR_ImageJobProcess (job);
 
 		SDL_LockMutex (scr_screenshot_mutex);
 		if (scr_screenshot_completed_tail)
@@ -6620,6 +6625,45 @@ static void SCR_ScreenshotSound (void)
 	S_NotificationSound_Copy ();
 }
 
+/* Main thread: report the file, then publish or release the clipboard copy. */
+static void SCR_ImageJobFinish (scr_screenshot_job_t *job, qboolean publish)
+{
+	clipboard_publish_t result = CLIPBOARD_FAILED;
+
+	if (job->save)
+		SCR_ScreenshotReport (job);
+	if (!job->clipboard_request)
+		return;
+	if (!publish)
+	{
+		Clipboard_ReleaseImage (&job->clipboard);
+		return;
+	}
+
+	if (job->clipboard.data)
+		result = Clipboard_PublishImage (job->clipboard_request, &job->clipboard,
+			job->clipboard_error, sizeof(job->clipboard_error));
+
+	if (result == CLIPBOARD_PUBLISHED)
+	{
+		if (job->label[0])
+		{
+			S_NotificationSound_Copy ();
+			Con_SafePrintf ("copied %s\n", job->label);
+		}
+	}
+	else if (result == CLIPBOARD_SUPERSEDED)
+	{
+		/* Con_DPrintf could force a nested SCR_UpdateScreen from here */
+		if (developer.value)
+			Con_SafePrintf ("Image copy skipped: the clipboard changed after it was requested\n");
+	}
+	else
+		Con_SafePrintf ("%s clipboard copy failed%s%s\n",
+			job->save ? "Screenshot" : "Image",
+			job->clipboard_error[0] ? ": " : "", job->clipboard_error);
+}
+
 static void SCR_ScreenshotConsumeCompleted (void)
 {
 	scr_screenshot_job_t *jobs;
@@ -6634,7 +6678,10 @@ static void SCR_ScreenshotConsumeCompleted (void)
 	scr_screenshot_completed_head = NULL;
 	scr_screenshot_completed_tail = NULL;
 	for (job = jobs; job; job = job->next)
+	{
 		completed++;
+		scr_screenshot_outstanding_bytes -= job->pixel_bytes;
+	}
 	scr_screenshot_outstanding -= completed;
 	SDL_UnlockMutex (scr_screenshot_mutex);
 
@@ -6642,12 +6689,22 @@ static void SCR_ScreenshotConsumeCompleted (void)
 	{
 		job = jobs;
 		jobs = jobs->next;
-		SCR_ScreenshotReport (job);
+		SCR_ImageJobFinish (job, !scr_screenshot_shutdown);
 		free (job);
 	}
 }
 
-static qboolean SCR_ScreenshotCanQueue (void)
+/* Room is bounded by jobs and by queued pixel bytes, but one job of any size
+   may always queue on its own, so a large screenshot is never refused. */
+static qboolean SCR_ScreenshotRoom (size_t pixel_bytes)
+{
+	return !scr_screenshot_shutdown &&
+		scr_screenshot_outstanding < SCR_SCREENSHOT_MAX_OUTSTANDING &&
+		(!scr_screenshot_outstanding_bytes ||
+			scr_screenshot_outstanding_bytes + pixel_bytes <= SCR_IMAGE_QUEUE_MAX_BYTES);
+}
+
+static qboolean SCR_ScreenshotCanQueue (size_t pixel_bytes)
 {
 	qboolean can_queue;
 
@@ -6655,10 +6712,15 @@ static qboolean SCR_ScreenshotCanQueue (void)
 		return true;
 
 	SDL_LockMutex (scr_screenshot_mutex);
-	can_queue = !scr_screenshot_shutdown &&
-		scr_screenshot_outstanding < SCR_SCREENSHOT_MAX_OUTSTANDING;
+	can_queue = SCR_ScreenshotRoom (pixel_bytes);
 	SDL_UnlockMutex (scr_screenshot_mutex);
 	return can_queue;
+}
+
+qboolean SCR_ImageQueueHasRoom (size_t pixel_bytes)
+{
+	return pixel_bytes <= CLIPBOARD_MAX_IMAGE_BYTES &&
+		SCR_ScreenshotCanQueue (pixel_bytes);
 }
 
 static qboolean SCR_ScreenshotQueue (scr_screenshot_job_t *job)
@@ -6667,12 +6729,12 @@ static qboolean SCR_ScreenshotQueue (scr_screenshot_job_t *job)
 		return false;
 
 	SDL_LockMutex (scr_screenshot_mutex);
-	if (scr_screenshot_shutdown ||
-		scr_screenshot_outstanding >= SCR_SCREENSHOT_MAX_OUTSTANDING)
+	if (!SCR_ScreenshotRoom (job->pixel_bytes))
 	{
 		SDL_UnlockMutex (scr_screenshot_mutex);
 		return false;
 	}
+	scr_screenshot_outstanding_bytes += job->pixel_bytes;
 
 	job->next = NULL;
 	if (scr_screenshot_pending_tail)
@@ -6710,6 +6772,7 @@ void SCR_Shutdown (void)
 	scr_screenshot_completed_head = NULL;
 	scr_screenshot_completed_tail = NULL;
 	scr_screenshot_outstanding = 0;
+	scr_screenshot_outstanding_bytes = 0;
 	scr_screenshot_last_stamp[0] = '\0';
 	scr_screenshot_stamp_sequence = 0;
 }
@@ -6817,7 +6880,7 @@ void SCR_ScreenShot_f (void)
 		return;
 	}
 
-	if (!SCR_ScreenshotCanQueue ())
+	if (!SCR_ScreenshotCanQueue ((size_t)glwidth * (size_t)glheight * 3))
 	{
 		Con_Printf ("Screenshot queue is busy; try again shortly.\n");
 		return;
@@ -6864,6 +6927,7 @@ void SCR_ScreenShot_f (void)
 	}
 	job->width = glwidth;
 	job->height = glheight;
+	job->pixel_bytes = buffer_size;
 	job->quality = quality;
 	job->filtered = cl_contentfilter.value != 0;
 	if (!q_strcasecmp (ext, "png"))
@@ -6889,10 +6953,10 @@ void SCR_ScreenShot_f (void)
 	glReadPixels (glx, gly, glwidth, glheight, GL_RGB, GL_UNSIGNED_BYTE,
 		job->pixels);
 	VID_Gamma_ApplyToBuffer(job->pixels, (size_t)glwidth * (size_t)glheight, 3);
-
-#if defined(_WIN32) || defined(__APPLE__)
-	SCR_ScreenShot_Clipboard_RGB (job->pixels, job->width, job->height);
-#endif
+	job->layout = CLIPBOARD_PIXELS_RGB24;
+	job->bottom_up = true;
+	job->save = true;
+	job->clipboard_request = Clipboard_BeginImageRequest ();
 
 	if (blocked_sound)
 		S_UnblockSound ();
@@ -6902,11 +6966,59 @@ void SCR_ScreenShot_f (void)
 		return;
 
 	/* Preserve screenshots if SDL threading is unavailable. */
-	job->ok = SCR_ScreenshotWrite (job);
-	free (job->pixels);
-	job->pixels = NULL;
-	SCR_ScreenshotReport (job);
+	SCR_ImageJobProcess (job);
+	SCR_ImageJobFinish (job, true);
 	free (job);
+}
+
+/*
+==================
+SCR_CopyImageToClipboard
+
+Takes ownership of malloc'ed pixels.  They are encoded on the image worker and
+published once ready; label names the image in the success message.
+==================
+*/
+qboolean SCR_CopyImageToClipboard (byte *pixels, int width, int height,
+	clipboard_pixels_t layout, qboolean bottom_up, const char *label)
+{
+	scr_screenshot_job_t *job;
+
+	size_t pixel_bytes = (size_t)width * (size_t)height *
+		(layout == CLIPBOARD_PIXELS_BGRA32 ? 4 : 3);
+
+	/* Reached from key handling inside the SDL event loop, so completed jobs
+	   are left for SCR_UpdateScreen; publishing here would pump events. */
+	if (!SCR_ImageQueueHasRoom (pixel_bytes))
+	{
+		free (pixels);
+		Con_Printf ("Image queue is busy; try again shortly.\n");
+		return false;
+	}
+
+	job = (scr_screenshot_job_t *)calloc (1, sizeof(*job));
+	if (!job)
+	{
+		free (pixels);
+		Con_Printf ("Image clipboard copy failed: out of memory\n");
+		return false;
+	}
+	job->pixels = pixels;
+	job->width = width;
+	job->height = height;
+	job->pixel_bytes = pixel_bytes;
+	job->layout = layout;
+	job->bottom_up = bottom_up;
+	q_strlcpy (job->label, label ? label : "image", sizeof(job->label));
+	job->clipboard_request = Clipboard_BeginImageRequest ();
+
+	if (SCR_ScreenshotQueue (job))
+		return true;
+
+	SCR_ImageJobProcess (job);
+	SCR_ImageJobFinish (job, true);
+	free (job);
+	return true;
 }
 
 

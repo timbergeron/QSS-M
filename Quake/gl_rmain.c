@@ -2325,35 +2325,12 @@ static void TexturePointer_CopyName (char *out, size_t outsize)
 		q_strlcpy(out, texturepointer.texturename, outsize);
 }
 
-#if defined(_WIN32) || defined(__APPLE__)
-static void TexturePointer_FlipImage (byte *buffer, int width, int height)
-{
-	int		rowbytes = width * 4;
-	byte	*temp;
-	int		i;
-
-	temp = (byte *) malloc(rowbytes);
-	if (!temp)
-		return;
-
-	for (i = 0; i < height / 2; i++)
-	{
-		byte *top = buffer + i * rowbytes;
-		byte *bottom = buffer + (height - 1 - i) * rowbytes;
-
-		memcpy(temp, top, rowbytes);
-		memcpy(top, bottom, rowbytes);
-		memcpy(bottom, temp, rowbytes);
-	}
-
-	free(temp);
-}
-
 static qboolean TexturePointer_CopyImage (const char *copyname)
 {
 	gltexture_t	*glt = texturepointer.glt;
 	byte		*buffer;
 	size_t		buffersize;
+	char		label[MAX_QPATH + 32];
 
 	if (!glt || !glt->width || !glt->height)
 	{
@@ -2361,17 +2338,18 @@ static qboolean TexturePointer_CopyImage (const char *copyname)
 		return true;
 	}
 
-	if (glt->width > (unsigned int)INT_MAX || glt->height > (unsigned int)INT_MAX ||
-		(size_t)glt->width > (SIZE_MAX / (size_t)glt->height) / 4)
+	buffersize = (size_t)glt->width * (size_t)glt->height * 4;
+	if (glt->width > CLIPBOARD_MAX_IMAGE_SIDE || glt->height > CLIPBOARD_MAX_IMAGE_SIDE ||
+		buffersize > CLIPBOARD_MAX_IMAGE_BYTES)
 	{
 		Con_Printf("texture image is too large to copy\n");
 		return true;
 	}
 
-	buffersize = (size_t)glt->width * (size_t)glt->height * 4;
-	if (buffersize > (size_t)INT_MAX)
+	/* check for room before allocating and reading back the texture */
+	if (!SCR_ImageQueueHasRoom(buffersize))
 	{
-		Con_Printf("texture image is too large to copy\n");
+		Con_Printf("Image queue is busy; try again shortly.\n");
 		return true;
 	}
 
@@ -2385,15 +2363,15 @@ static qboolean TexturePointer_CopyImage (const char *copyname)
 	GL_Bind(glt);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, buffer);
-	TexturePointer_FlipImage(buffer, (int)glt->width, (int)glt->height);
-	Sys_Image_BGRA_To_Clipboard(buffer, (int)glt->width, (int)glt->height, (int)buffersize);
-	free(buffer);
 
-	TexturePointer_CopySound();
-	Con_Printf("copied texture image: ^m%s^m (%ux%u)\n", copyname, glt->width, glt->height);
+	/* The worker encodes it; the sound and message follow publication.
+	   Textures are uploaded top row first, so glGetTexImage rows are top-down
+	   (the old native exports flipped them and pasted upside down). */
+	q_snprintf(label, sizeof(label), "texture image: ^m%s^m (%ux%u)", copyname, glt->width, glt->height);
+	SCR_CopyImageToClipboard(buffer, (int)glt->width, (int)glt->height,
+		CLIPBOARD_PIXELS_BGRA32, false, label);
 	return true;
 }
-#endif
 
 qboolean TexturePointer_Copy (qboolean copy_image)
 {
@@ -2405,16 +2383,9 @@ qboolean TexturePointer_Copy (qboolean copy_image)
 	TexturePointer_CopyName(copyname, sizeof(copyname));
 
 	if (copy_image)
-	{
-#if defined(_WIN32) || defined(__APPLE__)
 		return TexturePointer_CopyImage(copyname);
-#else
-		Con_Printf("texture image clipboard is not available in this build\n");
-		return true;
-#endif
-	}
 
-	if (!SDL_SetClipboardText(copyname))
+	if (!Clipboard_SetText(copyname))
 	{
 		Con_Printf("Clipboard copy failed: %s\n", SDL_GetError());
 		return true;

@@ -1509,7 +1509,7 @@ void IP_f (void) // woods #extip
 
 		if (!q_strcasecmp(arg, "ext"))
 		{
-			if (!SDL_SetClipboardText(public_ip))
+			if (!Clipboard_SetText(public_ip))
 				Con_Printf("\nclipboard copy failed: %s\n\n", SDL_GetError());
 			else
 				Con_Printf("\nexternal IP copied to clipboard: ^m%s^m\n\n", public_ip);
@@ -1523,7 +1523,7 @@ void IP_f (void) // woods #extip
 				strncpy(buf, addresses[0], sizeof(buf) - 1);
 				buf[sizeof(buf) - 1] = '\0';
 
-				if (!SDL_SetClipboardText(buf))
+				if (!Clipboard_SetText(buf))
 					Con_Printf("\nclipboard copy failed: %s\n\n", SDL_GetError());
 				else
 					Con_Printf("\nlocal IP copied to clipboard: ^m%s^m\n\n", buf);
