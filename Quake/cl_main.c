@@ -260,6 +260,8 @@ CL_ClearState
 */
 void CL_ClearState (void)
 {
+	SCR_ResetTitle ();
+
 	if (cl.qcvm.extfuncs.CSQC_Shutdown)
 	{
 		PR_SwitchQCVM(&cl.qcvm);

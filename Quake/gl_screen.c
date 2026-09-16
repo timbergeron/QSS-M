@@ -132,6 +132,9 @@ cvar_t		scr_crosshairoutline = { "scr_crosshairoutline", "1", CVAR_ARCHIVE }; //
 cvar_t		scr_crosshair_x = {"scr_crosshair_x", "0", CVAR_ARCHIVE}; // woods #crosshair
 cvar_t		scr_crosshair_y = {"scr_crosshair_y", "0", CVAR_ARCHIVE}; // woods #crosshair
 cvar_t		scr_showfps = {"scr_showfps", "0", CVAR_ARCHIVE};
+static cvar_t scr_showtitle = {"scr_showtitle", "0"};
+static qboolean scr_title_pending = true;
+static double scr_title_start;
 cvar_t		scr_clock = {"scr_clock", "0", CVAR_ARCHIVE};
 cvar_t		scr_showgrenadecounter = {"scr_showgrenadecounter", "0", CVAR_ARCHIVE}; // woods #nadecount
 cvar_t		scr_ping = {"scr_ping", "1", CVAR_ARCHIVE};  // woods #scrping
@@ -1202,6 +1205,7 @@ void SCR_Init (void)
 	Cvar_RegisterVariable (&scr_crosshair_x); // woods #crosshair
 	Cvar_RegisterVariable (&scr_crosshair_y); // woods #crosshair
 	Cvar_RegisterVariable (&scr_showfps);
+	Cvar_RegisterVariable (&scr_showtitle);
 	Cvar_SetCompletion (&scr_clock, &Clock_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&scr_clock);
 	Cvar_RegisterVariable (&scr_showgrenadecounter); // woods #nadecount
@@ -8351,6 +8355,48 @@ static void SCR_DrawVolumeSlider (void)
 	GL_SetCanvas (CANVAS_DEFAULT);
 }
 
+void SCR_ResetTitle (void)
+{
+	scr_title_pending = true;
+}
+
+static void SCR_DrawMapName (void)
+{
+	const char *title = cl.levelname[0] ? cl.levelname : cl.mapname;
+	double elapsed;
+	float scale, alpha;
+	int len, x, y;
+
+	if (cls.state != ca_connected || cls.signon != SIGNONS || !cl.worldmodel || !title[0])
+		return;
+
+	// Start at the first playable frame, including same-map restarts and saves.
+	// Real time avoids stale server timestamps and demo time rewinds.
+	if (scr_title_pending)
+	{
+		scr_title_start = realtime;
+		scr_title_pending = false;
+	}
+	elapsed = realtime - scr_title_start;
+	if (!scr_showtitle.value || elapsed < 0.0 || elapsed >= 3.0)
+		return;
+
+	alpha = elapsed <= 2.0 ? 1.0f : (float)(3.0 - elapsed);
+	len = strlen (title);
+	scale = CLAMP (1.0f, scr_sbarscale.value, (float)glwidth / 320.0f);
+	// Leave one character of margin on each side, even for very long titles.
+	scale = q_min (scale, (float)scr_vrect.width / ((len + 2) * 8));
+	if (scale <= 0.0f)
+		return;
+	x = (scr_vrect.x + scr_vrect.width * 0.5f) / scale - len * 4;
+	y = (scr_vrect.y + scr_vrect.height * 0.1f) / scale;
+	GL_SetCanvas (CANVAS_DEFAULT);
+	glPushMatrix ();
+	glScalef (scale, scale, 1.0f);
+	Draw_StringRGBA (x, y, title, CL_PLColours_Parse ("0xffffff"), alpha);
+	glPopMatrix ();
+}
+
 /*
 ==================
 SCR_UpdateScreen
@@ -8528,6 +8574,7 @@ void SCR_UpdateScreen (void)
 		SCR_DrawSpeed (); // woods #speed
 		SCR_DrawMovementKeys (); // woods #movementkeys
 		SCR_DrawGrenadeTimer(); // woods #nadecount
+		SCR_DrawMapName ();
 		TP_DrawClosestLocText (); // woods #locext
 		SCR_DrawObsTimers (); // woods #obstimers
 		SCR_Mute (); // woods #usermute
