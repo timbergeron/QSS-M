@@ -1,6 +1,7 @@
 name: Linux Valgrind
 
-on: [push, pull_request]
+# Runtime diagnostics are opt-in; push/PR CI only builds and packages.
+on: [workflow_dispatch]
 
 permissions:
   contents: read

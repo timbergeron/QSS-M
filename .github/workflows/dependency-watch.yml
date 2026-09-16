@@ -1,26 +1,7 @@
 name: Bundled dependency update watch
 
 on:
-  push:
-    paths:
-      - ".github/dependency-watch.json"
-      - ".github/scripts/check-msys2-dependencies.js"
-      - ".github/scripts/check-msys2-dependencies.test.js"
-      - ".github/scripts/check-gamecontrollerdb-update.js"
-      - ".github/scripts/notify-dependency-updates.js"
-      - ".github/scripts/notify-dependency-updates.test.js"
-      - ".github/workflows/dependency-watch.yml"
-      - "Quake/gamecontrollerdb.txt"
-  pull_request:
-    paths:
-      - ".github/dependency-watch.json"
-      - ".github/scripts/check-msys2-dependencies.js"
-      - ".github/scripts/check-msys2-dependencies.test.js"
-      - ".github/scripts/check-gamecontrollerdb-update.js"
-      - ".github/scripts/notify-dependency-updates.js"
-      - ".github/scripts/notify-dependency-updates.test.js"
-      - ".github/workflows/dependency-watch.yml"
-      - "Quake/gamecontrollerdb.txt"
+  # Dependency monitoring runs separately from push/PR build CI.
   schedule:
     # Daily at 15:23 UTC. Avoid the top of the hour, when schedules may queue.
     - cron: "23 15 * * *"

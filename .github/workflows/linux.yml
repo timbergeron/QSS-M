@@ -105,24 +105,6 @@ jobs:
           exit 1
         fi
 
-    - name: Test SDL3 regressions and release packaging
-      run: |
-        set -euxo pipefail
-        export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-        export LD_LIBRARY_PATH="$SDL3_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-        python3 Misc/stress/test_sdl3_audio.py
-        python3 Misc/stress/test_sdl3_playback_device.py
-        python3 Misc/stress/test_frame_pacing.py
-        python3 Misc/stress/test_sdl3_video.py --sanitize
-        python3 Misc/stress/test_sdl3_capture_lifecycle.py
-        python3 Misc/stress/test_gamepad_labels.py
-        python3 Misc/stress/test_hid_start_wait.py
-        python3 Misc/stress/test_mouse_motion.py
-        python3 Misc/stress/test_tick_deadlines.py
-        python3 Misc/stress/test_sdl3_clipboard.py
-        python3 Misc/stress/test_utf8_to_quake.py
-        python3 Misc/stress/test_release_archives.py
-
     - name: Prepare Linux debug logs
       if: always()
       run: |

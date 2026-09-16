@@ -1128,8 +1128,9 @@ def main():
         fake = build("fake", [("fake.c", strict), ("clipboard_sdl.c", strict)], [])
         subprocess.run([str(fake)], check=True, env=sanitizer_env)
 
+        # stb_image uses pow(); Linux requires an explicit math library link.
         real = build("real", [("real.c", strict), ("clipboard_sdl.c", strict),
-                              ("image_tu.c", ["-w"]), ("stb_tu.c", ["-w"])], sdl_libs)
+                              ("image_tu.c", ["-w"]), ("stb_tu.c", ["-w"])], sdl_libs + ["-lm"])
         env = dict(sanitizer_env, SDL_VIDEO_DRIVER="dummy")
         # SDL's own teardown is outside this test; ownership is checked by counters
         env["ASAN_OPTIONS"] = "detect_leaks=0:" + env["ASAN_OPTIONS"]
