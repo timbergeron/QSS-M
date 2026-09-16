@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.action-games</string>
+	<key>LSSupportsGameMode</key>
+	<true/>
 	<key>NSMainNibFile</key>
 	<string>Launcher</string>
 	<key>NSInputMonitoringUsageDescription</key>

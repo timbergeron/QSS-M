@@ -44,6 +44,12 @@ static CFRunLoopRef hid_runloop = NULL;
 static int hid_mouse_x = 0;
 static int hid_mouse_y = 0;
 static qboolean hid_mouse_active = false;
+static qboolean hid_mouse_init_failed = false;
+static int hid_absolute_values = 0; /* guarded by hid_mouse_mutex */
+/* Why HID did not start, for in_mouseinfo. Written by the HID thread while
+ * HID_MouseInit waits on hid_start_cond. */
+static const char *hid_init_stage = NULL;
+static IOReturn hid_open_result = kIOReturnSuccess;
 
 static void HID_InputCallback(void *unused, IOReturn result, void *sender, IOHIDValueRef value)
 {
@@ -56,22 +62,18 @@ static void HID_InputCallback(void *unused, IOReturn result, void *sender, IOHID
 	uint32_t usage = IOHIDElementGetUsage(elem);
 	int32_t val = (int32_t)IOHIDValueGetIntegerValue(value);
 
-	if (page == kHIDPage_GenericDesktop) {
-		switch (usage) {
-			case kHIDUsage_GD_X:
-				SDL_LockMutex(hid_mouse_mutex);
-				hid_mouse_x += val;
-				SDL_UnlockMutex(hid_mouse_mutex);
-				break;
-			case kHIDUsage_GD_Y:
-				SDL_LockMutex(hid_mouse_mutex);
-				hid_mouse_y += val;
-				SDL_UnlockMutex(hid_mouse_mutex);
-				break;
-			default:
-				break;
-		}
-	}
+	if (page != kHIDPage_GenericDesktop || (usage != kHIDUsage_GD_X && usage != kHIDUsage_GD_Y))
+		return;
+	SDL_LockMutex(hid_mouse_mutex);
+	/* Tablets and some virtual pointers report absolute positions. Summing
+	 * those as deltas throws the view; use ordinary input for these devices. */
+	if (!IOHIDElementIsRelative(elem))
+		hid_absolute_values++;
+	else if (usage == kHIDUsage_GD_X)
+		hid_mouse_x += val;
+	else
+		hid_mouse_y += val;
+	SDL_UnlockMutex(hid_mouse_mutex);
 }
 
 static int HID_MouseThread(void *inarg)
@@ -94,6 +96,7 @@ static int HID_MouseThread(void *inarg)
 
 	hid_manager = IOHIDManagerCreate(kCFAllocatorSystemDefault, kIOHIDOptionsTypeNone);
 	if (!hid_manager) {
+		hid_init_stage = "IOHIDManagerCreate";
 		goto cleanup_and_signal;
 	}
 
@@ -135,6 +138,8 @@ static int HID_MouseThread(void *inarg)
 	// This may fail if the process running does not have 'Input Monitoring' permissions granted.
 	IOReturn ret = IOHIDManagerOpen(hid_manager, kIOHIDOptionsTypeNone);
 	if (ret != kIOReturnSuccess) {
+		hid_init_stage = "IOHIDManagerOpen";
+		hid_open_result = ret;
 		IOHIDManagerUnscheduleFromRunLoop(hid_manager, runloop, kCFRunLoopDefaultMode);
 		if (ret == kIOReturnNotPermitted) {
 			// Immediate signal for permission denial - no need to wait
@@ -162,6 +167,8 @@ static int HID_MouseThread(void *inarg)
 	return 0;
 
 cleanup_and_signal:
+	if (!hid_init_stage)
+		hid_init_stage = "HID setup";
 	// Cleanup resources
 	if (pageRef) CFRelease(pageRef);
 	if (usageRef) CFRelease(usageRef);
@@ -244,6 +251,8 @@ static qboolean HID_MouseInit(void)
 		// the thread exits after reporting failure, or at startup once abandoned
 		SDL_WaitThread(hid_thread, NULL);
 		hid_thread = NULL;
+		if (!hid_init_stage)
+			hid_init_stage = "HID thread start";
 	}
 
 	// only HID_MouseThread's startup uses these, and that has finished
@@ -564,6 +573,114 @@ void IN_GyroActionDown(void);
 void IN_GyroActionUp(void);
 
 static qboolean	no_mouse = false;
+#ifdef __APPLE__
+extern cvar_t in_disablemacosxmouseaccel;
+static cvar_t in_mousesources = {"in_mousesources", "0", CVAR_NONE};
+
+typedef enum
+{
+	MOUSE_SOURCE_NONE,
+	MOUSE_SOURCE_HID,
+	MOUSE_SOURCE_SDL_DISCARDED	/* SDL motion suppressed while raw input is selected */
+} mousesource_t;
+
+/* Keep one backend selected even across idle periods. SDL and HID have no
+ * shared event identity: timing cannot distinguish a duplicate from another
+ * device. Devices absent from HID must use ordinary input explicitly. */
+#define MOUSE_STROKE_GAP	0.15
+
+static float sdl_shadow_dx, sdl_shadow_dy;
+static unsigned int mouse_source_samples[3];
+
+typedef struct
+{
+	double	start, last;
+	int		samples;
+	int		hid[2];
+	double	sdl[2];
+} mousestroke_t;
+static mousestroke_t mousestroke;
+
+/* Ready means initialization succeeded, not that a device delivered motion. */
+const char *IN_GetMacRawMouseStatus(void)
+{
+	if (in_disablemacosxmouseaccel.value != 2)
+		return "Off";
+	return hid_mouse_active && !no_mouse ? "Ready" : "Unavailable";
+}
+
+static qboolean IN_UseHIDMouse(void)
+{
+	return hid_mouse_active && in_disablemacosxmouseaccel.value == 2 && !no_mouse && windowhasfocus &&
+		cls.state == ca_connected && cls.signon == SIGNONS && !cls.demoplayback &&
+		key_dest == key_game && !cl.qcvm.cursorforced && !cl.paused && cl.match_pause_time <= 0 &&
+		!(cl.modtype == 1 && cl.eyecam);
+}
+
+static mousesource_t IN_SelectMouseSource(int hid_dx, int hid_dy, float sdl_dx, float sdl_dy, int *dx, int *dy)
+{
+	*dx = *dy = 0;
+	if (hid_dx || hid_dy)
+	{
+		*dx = hid_dx;
+		*dy = hid_dy;
+		return MOUSE_SOURCE_HID;
+	}
+	if (!sdl_dx && !sdl_dy)
+		return MOUSE_SOURCE_NONE;
+	return MOUSE_SOURCE_SDL_DISCARDED;
+}
+
+/* in_mousesources 1: compare what HID and SDL each reported for one stroke.
+ * Compare net displacement across separate event streams, not event timing. */
+static void IN_MouseSourcesFinishStroke(void)
+{
+	mousestroke_t *s = &mousestroke;
+	double hid, sdl, duration;
+
+	if (!s->samples)
+		return;
+	hid = sqrt((double)s->hid[0] * s->hid[0] + (double)s->hid[1] * s->hid[1]);
+	sdl = sqrt((double)s->sdl[0] * s->sdl[0] + (double)s->sdl[1] * s->sdl[1]);
+	duration = s->last - s->start;
+
+	if (in_mousesources.value && hid + sdl >= 20)
+	{
+		char ratio[16] = "n/a", speed[32] = "";
+		if (hid > 0)
+			q_snprintf(ratio, sizeof(ratio), "%.3f", sdl / hid);
+		if (duration > 0)
+			q_snprintf(speed, sizeof(speed), ", ~%.0f hid counts/s", hid / duration);
+		Con_Printf("mouse stroke: hid %d,%d sdl %g,%g sdl/hid %s (%.2fs%s)\n",
+			s->hid[0], s->hid[1], s->sdl[0], s->sdl[1], ratio, duration, speed);
+	}
+	memset(s, 0, sizeof(*s));
+}
+
+static void IN_MouseSourcesSample(int hid_dx, int hid_dy, float sdl_dx, float sdl_dy, mousesource_t source)
+{
+	mousestroke_t *s = &mousestroke;
+
+	mouse_source_samples[source]++;
+	if (!in_mousesources.value)
+		return;
+	if (!hid_dx && !hid_dy && !sdl_dx && !sdl_dy)
+	{
+		if (s->samples && realtime - s->last > MOUSE_STROKE_GAP)
+			IN_MouseSourcesFinishStroke();
+		return;
+	}
+	if (!s->samples)
+		s->start = realtime;
+	s->samples++;
+	s->last = realtime;
+	s->hid[0] += hid_dx;
+	s->hid[1] += hid_dy;
+	s->sdl[0] += sdl_dx;
+	s->sdl[1] += sdl_dy;
+}
+#endif /* HID mouse routing */
+
 static qboolean	wheel_block_mouse2 = false;
 static qboolean demoscrub_hover = false;
 static double demoscrub_hover_until = 0.0;
@@ -1199,6 +1316,8 @@ static void IN_MouseInfo_f(void)
 		Con_Printf("  Relative Mode Path: XI2 raw (X11)\n");
 	else if (!strcmp(drv, "wayland"))
 		Con_Printf("  Relative Mode Path: Wayland zwp_relative_pointer (raw)\n");
+	else if (!strcmp(drv, "cocoa"))
+		Con_Printf("  Relative Mode Path: Cocoa motion events (see gameplay backend below)\n");
 	else
 		Con_Printf("  Relative Mode Path: backend default (raw)\n");
 
@@ -1219,16 +1338,34 @@ static void IN_MouseInfo_f(void)
 	
 	// Platform-specific information
 #ifdef __APPLE__
-	Con_Printf("  HID Raw Input: %s\n", hid_mouse_active ? "Active" : "Inactive");
-	Con_Printf("  Mouse Acceleration: %s\n", (in_disablemacosxmouseaccel.value == 1 && !hid_mouse_active) ? "Disabled" : "System Default");
-	
+	qboolean hid_selected = hid_mouse_active && in_disablemacosxmouseaccel.value == 2 && !no_mouse;
+	Con_Printf("  Raw Input: %s (requested: %s)\n", IN_GetMacRawMouseStatus(),
+		in_disablemacosxmouseaccel.value == 2 ? "Yes" : "No");
+	Con_Printf("  HID Manager: %s\n", hid_mouse_active ? "Running" : "Not running");
+	if (!hid_mouse_active && hid_init_stage)
+		Con_Printf("  HID Init Failed: %s (0x%08x)%s\n", hid_init_stage, (unsigned)hid_open_result,
+			hid_open_result == kIOReturnNotPermitted ? " - optional: allow QSS-M in Privacy & Security > Input Monitoring, then restart" : "");
+	IOHIDAccessType input_access = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent);
+	Con_Printf("  Input Monitoring: %s\n", input_access == kIOHIDAccessTypeGranted ? "Granted" :
+		input_access == kIOHIDAccessTypeDenied ? "Denied" : "Not determined");
+	Con_Printf("  Gameplay Backend: %s\n", no_mouse ? "Disabled" : hid_selected ? "HID relative motion" : "SDL");
+	Con_Printf("  Mouse Acceleration: %s\n", hid_selected ? "Bypassed for HID aim" :
+		in_disablemacosxmouseaccel.value == 1 ? "Legacy disable requested (not measured)" : "System settings (not measured)");
 	if (hid_mouse_active) {
-		Con_Printf("  Input Method: HID Direct (True Raw Input)\n");
-	} else if (in_disablemacosxmouseaccel.value == 1) {
-		Con_Printf("  Input Method: SDL with Acceleration Disabled\n");
-	} else {
-		Con_Printf("  Input Method: SDL with System Acceleration\n");
+		int absolute = 0;
+		SDL_LockMutex(hid_mouse_mutex);
+		absolute = hid_absolute_values;
+		SDL_UnlockMutex(hid_mouse_mutex);
+		Con_Printf("  HID Aim Batches: %u, SDL-only batches suppressed in raw mode: %u\n",
+			mouse_source_samples[MOUSE_SOURCE_HID], mouse_source_samples[MOUSE_SOURCE_SDL_DISCARDED]);
+		Con_Printf("  HID Absolute Values Ignored: %d\n", absolute);
+		if (hid_selected && !mouse_source_samples[MOUSE_SOURCE_HID])
+			Con_Printf("  No relative HID aim motion observed. Ready does not verify your device.\n");
 	}
+	if (hid_selected)
+		Con_Printf("  If a trackpad or mouse does not move the view, turn Raw Input off in Mouse Options.\n");
+	else if (in_disablemacosxmouseaccel.value == 2)
+		Con_Printf("  Raw input unavailable; SDL uses your system pointer settings.\n");
 #elif defined(_WIN32)
 	Con_Printf("  Input Method: SDL with System Settings\n");
 	Con_Printf("  Key Filter: %s\n", "Active"); // Windows key filtering is active
@@ -1512,6 +1649,30 @@ static float IN_FilterGyroSample (float prev, float cur)
 	return cur;
 }
 
+#ifdef __APPLE__
+static void IN_MouseAccel_Changed (cvar_t *var)
+{
+	/* Do not replay a batch collected under the previous selection. */
+	int dx, dy;
+	total_dx = total_dy = sdl_shadow_dx = sdl_shadow_dy = 0;
+	if (hid_mouse_active)
+		HID_MouseGetMovement(&dx, &dy);
+	IN_MouseSourcesFinishStroke();
+
+	/* IN_Init starts HID before config.cfg is read. Start it here when the
+	 * player selects raw input later; try once so a failure can't stall again. */
+	if (var->value != 2 || hid_mouse_active || hid_mouse_init_failed || no_mouse)
+		return;
+	if (HID_MouseInit())
+		Con_DPrintf("HID Raw Mouse: Enabled\n");
+	else
+	{
+		hid_mouse_init_failed = true;
+		Con_DPrintf("HID Raw Mouse: Failed to initialize - using SDL mouse\n");
+	}
+}
+#endif
+
 void IN_Init (void)
 {
 	textmode = Key_TextEntry();
@@ -1532,6 +1693,8 @@ void IN_Init (void)
 
 #ifdef MACOS_X_ACCELERATION_HACK
 	Cvar_RegisterVariable(&in_disablemacosxmouseaccel);
+	Cvar_SetCallback(&in_disablemacosxmouseaccel, IN_MouseAccel_Changed);
+	Cvar_RegisterVariable(&in_mousesources);
 #endif
 	Cvar_RegisterVariable(&in_debugkeys);
 	Cvar_RegisterVariable(&joy_sensitivity_yaw);
@@ -1585,10 +1748,11 @@ void IN_Init (void)
 	// HID Raw Mouse Input
 	if (in_disablemacosxmouseaccel.value == 2 && !no_mouse) {
 		if (HID_MouseInit()) {
-			Con_DPrintf("HID Raw Mouse: Enabled (use 'in_disablemacosxmouseaccel 1' to disable)\n");
+			Con_DPrintf("HID Raw Mouse: Enabled (use 'in_disablemacosxmouseaccel 0' for ordinary input)\n");
 		} else {
+			hid_mouse_init_failed = true;
 			Con_DPrintf("HID Raw Mouse: Failed to initialize - using SDL mouse\n");
-}
+		}
 	}
 #endif
 }
@@ -1628,7 +1792,7 @@ static float IN_RecenterEasing (float frac)
 	return frac * frac;
 }
 
-void IN_MouseMotion(float dx, float dy, float wx, float wy)
+static void IN_ApplyMouseMotion(float dx, float dy, float wx, float wy)
 {
 	if (!windowhasfocus)
 		dx = dy = 0;	//don't change view angles etc while unfocused.
@@ -1706,6 +1870,24 @@ void IN_MouseMotion(float dx, float dy, float wx, float wy)
 	}
 	total_dx += dx;
 	total_dy += dy;
+}
+
+void IN_MouseMotion(float dx, float dy, float wx, float wy)
+{
+#ifdef __APPLE__
+	/* SDL still supplies cursor positions, buttons and wheel events. During
+	 * raw aiming its relative motion is held back for IN_MouseMove, which
+	 * records it for diagnostics without adding it to raw aim. */
+	if (IN_UseHIDMouse())
+	{
+		sdl_shadow_dx += dx;
+		sdl_shadow_dy += dy;
+		vid.cursorpos[0] = wx;
+		vid.cursorpos[1] = wy;
+		return;
+	}
+#endif
+	IN_ApplyMouseMotion(dx, dy, wx, wy);
 }
 
 typedef struct joyaxis_s
@@ -2974,12 +3156,20 @@ void IN_MouseMove(usercmd_t *cmd)
 		(cl.paused || cl.match_pause_time); // woods #pong
 
 #ifdef __APPLE__
-	// Add HID raw mouse movement if available
+	// Drain even when inactive so menu/desktop movement cannot build up.
 	if (hid_mouse_active) {
-		int hid_dx, hid_dy;
+		int hid_dx, hid_dy, dx, dy;
+		float sdl_dx = sdl_shadow_dx, sdl_dy = sdl_shadow_dy;
+		sdl_shadow_dx = sdl_shadow_dy = 0;
 		HID_MouseGetMovement(&hid_dx, &hid_dy);
-		total_dx += hid_dx;
-		total_dy += hid_dy;
+		if (IN_UseHIDMouse()) {
+			mousesource_t source = IN_SelectMouseSource(hid_dx, hid_dy, sdl_dx, sdl_dy, &dx, &dy);
+			IN_MouseSourcesSample(hid_dx, hid_dy, sdl_dx, sdl_dy, source);
+			if (dx || dy)
+				IN_ApplyMouseMotion(dx, dy, vid.cursorpos[0], vid.cursorpos[1]);
+		}
+		else
+			IN_MouseSourcesFinishStroke();
 	}
 #endif
 
@@ -5530,6 +5720,17 @@ void IN_SendKeyEvents (void)
 	}
 
 	IN_UpdateGrabs();
+
+#ifdef __APPLE__
+	/* IN_Move is not called while disconnected. Discard raw movement there
+	 * too, before queued focus/menu events can return us to gameplay. */
+	if (hid_mouse_active && !IN_UseHIDMouse())
+	{
+		int hid_dx, hid_dy;
+		HID_MouseGetMovement(&hid_dx, &hid_dy);
+		sdl_shadow_dx = sdl_shadow_dy = 0;
+	}
+#endif
 
 	while (SDL_PollEvent(&event))
 	{

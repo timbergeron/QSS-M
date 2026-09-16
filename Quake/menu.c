@@ -12630,7 +12630,7 @@ static const char* M_Mouse_GetItemText(int index)
 		return "Custom Cursor";
 #ifdef MACOS_X_ACCELERATION_HACK
 	case MOUSE_ACCELERATION:
-		return "Acceleration";
+		return "Raw Input";
 #endif
 	default:
 		q_snprintf(buffer, sizeof(buffer), "Unknown Item %d", index);
@@ -12736,7 +12736,7 @@ static void M_Mouse_AdjustSliders(int dir)
 		break;
 #ifdef MACOS_X_ACCELERATION_HACK
 	case MOUSE_ACCELERATION:
-		Cvar_SetValue("in_disablemacosxmouseaccel", !in_disablemacosxmouseaccel.value);
+		Cvar_SetValue("in_disablemacosxmouseaccel", in_disablemacosxmouseaccel.value == 2 ? 0 : 2); // 2 = HID raw, the default
 		break;
 #endif
 	default:
@@ -12805,9 +12805,8 @@ void M_Mouse_Draw(void)
 			break;
 #ifdef MACOS_X_ACCELERATION_HACK
 		case MOUSE_ACCELERATION:
-			text = "    Acceleration";
-			if (!show_hint)
-				M_DrawCheckbox(MENU_VALUE_X, y, !in_disablemacosxmouseaccel.value);
+			text = "       Raw Input";
+			value = IN_GetMacRawMouseStatus();
 			break;
 #endif
 		default:
@@ -22954,7 +22953,7 @@ static const char * const menusearch_setup_labels[] = {
 static const char * const menusearch_mouse_labels[] = {
 	"Mouse Speed", "Invert Mouse", "Mouse Look", "Pitch Mode", "Custom Cursor",
 #ifdef MACOS_X_ACCELERATION_HACK
-	"Acceleration",
+	"Raw Input",
 #endif
 };
 static const char * const menusearch_controller_labels[] = {

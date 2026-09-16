@@ -57,7 +57,8 @@ struct { float basefov; } r_refdef;
 struct { float value; } sensitivity, scr_fov, scr_menuscale, scr_sbarscale,
     m_side, m_yaw, m_pitch, m_forward, lookstrafe, cl_maxpitch, cl_minpitch;
 struct { int state; } in_strafe, in_mlook;
-qboolean windowhasfocus, hid_mouse_active, noclip_anglehack, consume;
+qboolean windowhasfocus, hid_mouse_active, noclip_anglehack, consume, no_mouse;
+struct { float value; } in_disablemacosxmouseaccel;
 int glwidth = 640, glheight = 480, qc_calls, pong_x, pong_y, hid_dx_pending, hid_dy_pending;
 float globals[5], vectors[5][3];
 qcvm_t *qcvm;
@@ -86,6 +87,20 @@ void HID_MouseGetMovement(int *x, int *y) {
 }
 '''
 source += accumulators + "\n"
+# Routing and accumulation run together; diagnostic formatting is covered by
+# test_mouse_sources.py. Include the real source selection in this math test.
+start = production.index("typedef enum\n{\n\tMOUSE_SOURCE_NONE")
+end = production.index("} mousesource_t;", start) + len("} mousesource_t;")
+source += production[start:end] + "\n"
+source += re.search(r"^static \w+ sdl_shadow_dx, sdl_shadow_dy;$",
+                    production, re.M).group(0) + "\n"
+source += function("static qboolean IN_UseHIDMouse(")
+source += function("static mousesource_t IN_SelectMouseSource(")
+source += r'''
+void IN_MouseSourcesSample(int hx, int hy, float sx, float sy, mousesource_t source) {}
+void IN_MouseSourcesFinishStroke(void) {}
+'''
+source += function("static void IN_ApplyMouseMotion(")
 source += function("void IN_MouseMotion(")
 source += function("void IN_MouseMove(usercmd_t *cmd)")
 source += r'''
@@ -94,7 +109,9 @@ static void reset(void) {
     memset(&vid, 0, sizeof(vid)); memset(globals, 0, sizeof(globals));
     cls.state = ca_connected; cls.signon = SIGNONS;
     key_dest = key_game; windowhasfocus = true;
-    hid_mouse_active = consume = false;
+    hid_mouse_active = consume = no_mouse = false;
+    in_disablemacosxmouseaccel.value = 2;
+    sdl_shadow_dx = sdl_shadow_dy = 0;
     total_dx = total_dy = 0; qc_calls = pong_x = pong_y = 0;
     hid_dx_pending = hid_dy_pending = 0;
     sensitivity.value = m_yaw.value = m_pitch.value = 1.0f;
