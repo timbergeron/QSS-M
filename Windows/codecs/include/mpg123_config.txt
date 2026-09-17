@@ -1,5 +1,7 @@
-mpg123-1.22.4, configured using:
---disable-modules --disable-debug --disable-fifo --disable-ipv6 --disable-network --disable-messages --disable-lfs-alias --with-audio=dummy
-edited src/libmpg123/mpg123lib_intern.h and changed macros
-NOQUIET, VERBOSE* and PVERB() to be 0, in order to disable
-some debug messages from the library.
+mpg123 1.33.7, MSYS2 mingw-w64-{i686,x86_64}-mpg123-1.33.7-1 packages.
+
+The decoder DLL and shared mpg123.h/fmt123.h headers are from those packages.
+Header trailing whitespace is removed to match the existing vendored style.
+These are upstream builds; no local decoder or logging patches are applied.
+Only libmpg123-0.dll is bundled. Output drivers and the command-line player
+are unused. The existing import libraries remain compatible.

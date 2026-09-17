@@ -516,10 +516,10 @@ typedef uLong FAR uLongf;
 #endif
 
 #ifndef z_off_t
-#  define z_off_t long long
+#  define z_off_t long
 #endif
 
-#if !defined(_WIN32) && defined(Z_LARGE64)
+#if (defined(_WIN32) && defined(__GNUC__) && defined(_LARGEFILE64_SOURCE)) || defined(Z_LARGE64)
 #  define z_off64_t off64_t
 #elif defined(__MINGW32__)
 #  define z_off64_t long long

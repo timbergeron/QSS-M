@@ -1,2 +1,22 @@
-libmikmod-3.3.12. only the "nosound" driver (drv_nos) is included:
-we only need/register/use drv_nos here and nothing else.
+libmikmod 3.3.14
+
+x64: mingw-w64-x86_64-libmikmod-3.3.14-1-any.pkg.tar.zst from MSYS2.
+x86: cross-compiled upstream source; MSYS2 no longer publishes this package
+for mingw32. Both DLLs include DirectSound, WinMM and WASAPI drivers, but
+QSS-M only registers drv_nos and decodes through VC_WriteBytes.
+
+Source: https://downloads.sourceforge.net/mikmod/libmikmod-3.3.14.tar.gz
+SHA-256: dffd82b8f254c3489c32098da831f33eac7136843d1e7ccb802f1254ad5b4219
+The same archive is included in MSYS2's mingw-w64-libmikmod-3.3.14-1.src.tar.zst.
+
+From a separate build directory, with MinGW-w64 GCC 13 (win32 threads):
+
+../libmikmod-3.3.14/configure --host=i686-w64-mingw32 \
+  --enable-shared --disable-static --disable-sdl --disable-xaudio2 \
+  --disable-openal 'LDFLAGS=-static-libgcc -Wl,--no-insert-timestamp'
+make -j4
+i686-w64-mingw32-strip --strip-unneeded .libs/libmikmod-3.dll
+
+Copy .libs/libmikmod-3.dll into Windows/codecs/x86/. The public mikmod.h
+header matches the MSYS2 x64 package. All old exports are retained, so the
+existing import libraries remain usable.

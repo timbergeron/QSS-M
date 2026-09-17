@@ -9,11 +9,11 @@
   },
   {
     "name": "libcurl",
-    "vendored": "8.21.0",
+    "vendored": "8.22.0",
     "dlls": ["Windows/curl/lib/x86/libcurl.dll", "Windows/curl/lib/x64/libcurl.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-curl", "baseline": "8.21.0-2" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-curl", "baseline": "8.21.0-2" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-curl", "baseline": "8.22.0-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-curl", "baseline": "8.22.0-1" }
     ]
   },
   {
@@ -30,8 +30,8 @@
     "vendored": "1.5.0",
     "dlls": ["Windows/codecs/x86/libFLAC.dll", "Windows/codecs/x64/libFLAC.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-flac", "baseline": "1.5.0-1" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-flac", "baseline": "1.5.0-1" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-flac", "baseline": "1.5.0-2" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-flac", "baseline": "1.5.0-2" }
     ]
   },
   {
@@ -44,19 +44,19 @@
   },
   {
     "name": "libmikmod",
-    "vendored": "3.3.13",
+    "vendored": "3.3.14",
     "dlls": ["Windows/codecs/x86/libmikmod-3.dll", "Windows/codecs/x64/libmikmod-3.dll"],
     "packages": [
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-libmikmod", "baseline": "3.3.13-1" }
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libmikmod", "baseline": "3.3.14-1" }
     ]
   },
   {
     "name": "libmpg123",
-    "vendored": "1.33.5",
+    "vendored": "1.33.7",
     "dlls": ["Windows/codecs/x86/libmpg123-0.dll", "Windows/codecs/x64/libmpg123-0.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-mpg123", "baseline": "1.33.5-1" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-mpg123", "baseline": "1.33.5-1" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-mpg123", "baseline": "1.33.7-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-mpg123", "baseline": "1.33.7-1" }
     ]
   },
   {
@@ -96,35 +96,35 @@
       "Windows/codecs/x64/libvorbisfile-3.dll"
     ],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-libvorbis", "baseline": "1.3.7-2" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-libvorbis", "baseline": "1.3.7-2" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-libvorbis", "baseline": "1.3.7-3" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libvorbis", "baseline": "1.3.7-3" }
     ]
   },
   {
     "name": "libxmp",
-    "vendored": "4.7.1",
+    "vendored": "4.7.3",
     "dlls": ["Windows/codecs/x86/libxmp.dll", "Windows/codecs/x64/libxmp.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-libxmp", "baseline": "4.7.1-1" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-libxmp", "baseline": "4.7.1-1" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-libxmp", "baseline": "4.7.3-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-libxmp", "baseline": "4.7.3-1" }
     ]
   },
   {
     "name": "winpthreads",
-    "vendored": "12.0.0.r747",
+    "vendored": "14.0.0.r375.g9c1abbbf5",
     "cadence": "monthly",
     "dlls": ["Windows/codecs/x86/libwinpthread-1.dll", "Windows/codecs/x64/libwinpthread-1.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-winpthreads", "baseline": "14.0.0.r179.g24aaa6147-1" },
-      { "repository": "mingw64", "name": "mingw-w64-x86_64-winpthreads", "baseline": "14.0.0.r179.g24aaa6147-1" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-winpthreads", "baseline": "14.0.0.r375.g9c1abbbf5-1" },
+      { "repository": "mingw64", "name": "mingw-w64-x86_64-winpthreads", "baseline": "14.0.0.r375.g9c1abbbf5-1" }
     ]
   },
   {
     "name": "libgcc",
-    "vendored": "16.1.0",
+    "vendored": "16.2.0",
     "dlls": ["Windows/codecs/x86/libgcc_s_dw2-1.dll"],
     "packages": [
-      { "repository": "mingw32", "name": "mingw-w64-i686-gcc-libs", "baseline": "16.1.0-5" }
+      { "repository": "mingw32", "name": "mingw-w64-i686-gcc-libs", "baseline": "16.2.0-3" }
     ]
   }
 ]

@@ -46,36 +46,44 @@ i686-w64-mingw32-objdump   -p x86/libFLAC.dll | grep 'DLL Name'
 
 | Library            | Version        | Source (MSYS2 package)                     |
 |--------------------|----------------|--------------------------------------------|
-| libFLAC            | 1.5.0          | `mingw-w64-{x86_64,i686}-flac-1.5.0`       |
+| libFLAC            | 1.5.0-2        | `mingw-w64-{x86_64,i686}-flac`             |
 | libopus            | 1.6.1          | `mingw-w64-{x86_64,i686}-opus-1.6.1`       |
 | libopusfile        | 0.12           | `mingw-w64-{x86_64,i686}-opusfile-0.12`    |
-| libvorbis          | 1.3.7          | `mingw-w64-{x86_64,i686}-libvorbis-1.3.7`  |
-| libxmp             | 4.7.1          | `mingw-w64-{x86_64,i686}-libxmp-4.7.1`     |
-| libmikmod          | 3.3.13         | `mingw-w64-{x86_64,i686}-libmikmod-3.3.13` |
-| libmpg123          | 1.33.5         | `mingw-w64-{x86_64,i686}-mpg123-1.33.5`    |
+| libvorbis          | 1.3.7-3        | `mingw-w64-{x86_64,i686}-libvorbis`        |
+| libxmp             | 4.7.3-1        | `mingw-w64-{x86_64,i686}-libxmp`           |
+| libmikmod          | 3.3.14         | MSYS2 x64 `3.3.14-1`; upstream source for x86 |
+| libmpg123          | 1.33.7-1       | `mingw-w64-{x86_64,i686}-mpg123`           |
 | libogg             | 1.3.6          | `mingw-w64-{x86_64,i686}-libogg-1.3.6`     |
-| libwinpthread      | 12.0.0.r747    | `mingw-w64-{x86_64,i686}-libwinpthread-git`|
-| libgcc (x86 only)  | gcc 16.1.0     | `mingw-w64-i686-gcc-libs`                  |
+| libwinpthread      | 14.0.0.r375.g9c1abbbf5-1 | `mingw-w64-{x86_64,i686}-libwinpthread` |
+| libgcc (x86 only)  | gcc 16.2.0-3   | `mingw-w64-i686-gcc-libs`                  |
+
+Package revisions are included above for the September 2026 refresh. Downloads
+were verified against the SHA-256 hashes in the MSYS2 repository indexes.
+The matching `winpthreads` package is the development package; the runtime DLL
+comes from `libwinpthread`. The monitor tracks their common source version.
 
 Note: modern libopus/libopusfile also import `libgcc_s_dw2-1.dll` on x86 — the
 same DLL FLAC needs, so no additional runtime file. `libopusfile.dll` needs
 `libogg-0.dll` + `libopus-0.dll`; it does **not** need `libopusurl-0.dll` (HTTP
 streaming is unused, so that DLL is intentionally not vendored).
 
-Note: libxmp 4.7.x also picked up the x86 `libgcc_s_dw2-1.dll` dependency (4.6.x
-was self-contained), again already covered by the FLAC vendoring. Unlike opus,
+Note: the libxmp 4.7.3 packages import only Windows system libraries, including
+on x86. Earlier 4.7.x builds also imported `libgcc_s_dw2-1.dll`. Unlike opus,
 libxmp's version is reported from the `XMP_VERSION` macro in `include/xmp.h`, so
 that header **must** be refreshed alongside the DLL (host.c/menu.c pick it up
 automatically). macOS also uses libxmp, built from its vcpkg baseline with the
 matching vcpkg header rather than a separate platform-specific copy.
 
 Note: libmikmod is disabled in the MinGW and macOS builds, where libxmp handles
-module playback. It remains enabled in the MSVC project. The Windows 3.3.13 DLL
-is built with DirectSound/WinMM output drivers, so
-it imports `dsound.dll` / `user32.dll` / `winmm.dll` (all system DLLs) — these
+module playback. It remains enabled in the MSVC project. The Windows 3.3.14 DLL
+is built with DirectSound/WinMM/WASAPI output drivers, so
+it imports `dsound.dll` / `user32.dll` / `winmm.dll` / `ole32.dll` (system DLLs) — these
 are inert here: `snd_mikmod.c` registers only `drv_nos` and decodes via
 `VC_WriteBytes`. Version is header-driven (`LIBMIKMOD_VERSION_*` in
-`include/mikmod.h`); on x86 it needs the shared `libgcc_s_dw2-1.dll`.
+`include/mikmod.h`). MSYS2 no longer publishes this package for x86, so that
+DLL is cross-compiled from the same upstream release with static libgcc; see
+[`include/mikmod_config.txt`](include/mikmod_config.txt) for the source checksum
+and build commands. Neither architecture needs a new runtime DLL.
 
 Note: libmpg123 is **not linked by default** — MP3 decoding uses libmad
 (`MP3LIB=mad` in the makefiles, `libmad` in the MSVC project); libmpg123 is only
@@ -92,8 +100,9 @@ The DLL imports `SHLWAPI.dll` (system) and, on x86, the shared
 The Windows import libraries (`libFLAC.dll.a` for MinGW, `libFLAC.lib` for MSVC)
 target `libFLAC.dll` and were generated with `dlltool` from the shipped DLL.
 Import libraries can be kept when the DLL name and required exported symbols
-remain ABI-compatible. That was verified for this opus/opusfile update, so the
-existing import libraries were retained. The hand-patched opus headers, which
+remain ABI-compatible. Every updated DLL in the September 2026 refresh retains
+all previously exported names, so the existing import libraries were retained.
+The hand-patched opus headers, which
 use `<opus/...>` include paths to match the `-Iinclude` build flag, were also
 kept as-is.
 
