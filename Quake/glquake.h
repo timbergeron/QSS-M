@@ -585,6 +585,7 @@ void R_HullDebug_Draw (void);
 void SCR_HullDebug_DrawInfo (void);
 void R_HullDebug_Cleanup (qmodel_t *model);
 
+void R_InitShowTris (void);
 void R_DrawWorld_ShowTris (void);
 void R_DrawBrushModel_ShowTris (entity_t *e);
 void R_DrawAliasModel_ShowTris (entity_t *e);

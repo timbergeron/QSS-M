@@ -42,7 +42,6 @@ extern cvar_t r_model_light_desat_list; // woods #dedat
 extern cvar_t r_waterwarp;
 extern cvar_t r_oldskyleaf;
 extern cvar_t r_drawworld;
-extern cvar_t r_showtris;
 extern cvar_t r_showbboxes;
 extern cvar_t r_showfields;
 extern cvar_t r_showlocs; // woods #locext
@@ -615,7 +614,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_flatlightstyles);
 	Cvar_RegisterVariable (&r_oldskyleaf);
 	Cvar_RegisterVariable (&r_drawworld);
-	Cvar_RegisterVariable (&r_showtris);
+	R_InitShowTris ();
 	Cvar_RegisterVariable (&r_showbboxes);
 	Cvar_RegisterVariable (&r_showfields);
 	Cvar_RegisterVariable (&r_showlocs); // woods #locext

@@ -2165,6 +2165,79 @@ void R_ShowBoundingBoxes (void)
 	Sbar_Changed (); //so we don't get dots collecting on the statusbar
 }
 
+// -1 draws the full overlay; -2 suppresses an invalid entity selection.
+static int r_showtris_entity = -1;
+
+static void R_ShowTris_Changed (cvar_t *var)
+{
+	const char *arg = strchr(var->string, ',');
+	char *end;
+	long entnum;
+	qboolean valid;
+
+	r_showtris_entity = -1;
+	if (!arg)
+		return;
+
+	entnum = strtol(arg + 1, &end, 10);
+	valid = end != arg + 1 && entnum >= 0 && entnum < MAX_EDICTS;
+	while (*end == ' ' || *end == '\t')
+		end++;
+	if (!valid || *end)
+	{
+		r_showtris_entity = -2;
+		Con_Warning("r_showtris: expected <mode>,<entity number 0..%d>\n", MAX_EDICTS - 1);
+		return;
+	}
+	r_showtris_entity = (int)entnum;
+}
+
+static void R_ShowTris_Help (cvar_t *var)
+{
+	(void)var;
+	Con_Printf("  r_showtris 0       off\n");
+	Con_Printf("  r_showtris 1       all triangles, through walls\n");
+	Con_Printf("  r_showtris 2       all triangles, depth tested\n");
+	Con_Printf("  r_showtris 1,12    only network entity 12 (also works with 2,12)\n");
+	Con_Printf("  r_showtris 1,0     only the world\n");
+	Con_Printf("Omit the entity number to clear the filter. Single-player only.\n");
+}
+
+static void R_ShowTris_Completion (cvar_t *var, const char *partial)
+{
+	int i;
+	char value[32];
+	char mode = partial[0];
+
+	(void)var;
+	Con_AddToTabList("0", partial, "off", NULL);
+	Con_AddToTabList("1", partial, "all triangles, through walls", NULL);
+	Con_AddToTabList("2", partial, "all triangles, depth tested", NULL);
+	if ((mode != '1' && mode != '2') || partial[1] != ',')
+		return;
+
+	q_snprintf(value, sizeof(value), "%c,0", mode);
+	Con_AddToTabList(value, partial, "world", NULL);
+	if (!cl.entities)
+		return;
+	for (i = 1; i < cl.num_entities; i++)
+	{
+		if (!cl.entities[i].model)
+			continue;
+		q_snprintf(value, sizeof(value), "%c,%d", mode, i);
+		Con_AddToTabList(value, partial, cl.entities[i].model->name, NULL);
+	}
+}
+
+void R_InitShowTris (void)
+{
+	Cvar_RegisterVariable (&r_showtris);
+	Cvar_SetCallback (&r_showtris, R_ShowTris_Changed);
+	Cvar_SetHelp (&r_showtris, R_ShowTris_Help);
+	Cvar_SetCompletion (&r_showtris, R_ShowTris_Completion);
+	R_ShowTris_Changed (&r_showtris);
+}
+
 /*
 ================
 R_ShowTris -- johnfitz
@@ -2173,10 +2246,17 @@ R_ShowTris -- johnfitz
 void R_ShowTris (void)
 {
 	extern cvar_t r_particles;
+	entity_t *selected = NULL;
 	int i;
 
-	if (r_showtris.value < 1 || r_showtris.value > 2 || cl.maxclients > 1)
+	if (r_showtris.value < 1 || r_showtris.value > 2 || cl.maxclients > 1 || r_showtris_entity == -2)
 		return;
+	if (r_showtris_entity >= 0)
+	{
+		if (!cl.entities || r_showtris_entity >= cl.num_entities)
+			return;
+		selected = &cl.entities[r_showtris_entity];
+	}
 
 	if (r_showtris.value == 1)
 		glDisable (GL_DEPTH_TEST);
@@ -2187,7 +2267,7 @@ void R_ShowTris (void)
 //	glEnable (GL_BLEND);
 //	glBlendFunc (GL_ONE, GL_ONE);
 
-	if (r_drawworld.value)
+	if (r_drawworld.value && r_showtris_entity <= 0)
 	{
 		R_DrawWorld_ShowTris ();
 	}
@@ -2197,6 +2277,8 @@ void R_ShowTris (void)
 		for (i=0 ; i<cl_numvisedicts ; i++)
 		{
 			currententity = cl_visedicts[i];
+			if (selected && currententity != selected)
+				continue;
 
 			if (currententity == &cl.entities[cl.viewentity]) // chasecam
 				currententity->angles[0] *= 0.3;
@@ -2219,7 +2301,7 @@ void R_ShowTris (void)
 
 		// viewmodel
 		currententity = &cl.viewent;
-		if (r_drawviewmodel.value
+		if (!selected && r_drawviewmodel.value
 			&& !chase_active.value
 			&& cl.stats[STAT_HEALTH] > 0
 			&& !(cl.items & IT_INVISIBILITY)
@@ -2232,7 +2314,7 @@ void R_ShowTris (void)
 		}
 	}
 
-	if (r_particles.value)
+	if (!selected && r_particles.value)
 	{
 		R_DrawParticles_ShowTris ();
 	}
