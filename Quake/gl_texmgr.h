@@ -71,6 +71,8 @@ typedef struct gltexture_s {
 	plcolour_t			pants;
 //used for rendering
 	int			visframe; //matches r_framecount if texture was bound this frame
+	qboolean		itemcolor_valid;
+	vec3_t			itemcolor; // a representative texel, cached until the texture is uploaded again
 } gltexture_t;
 
 /*
@@ -143,6 +145,7 @@ struct gltexture_s *TexMgr_ColormapTexture(struct gltexture_s *basetex, plcolour
 void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants);
 void TexMgr_ReloadImages (void);
 void TexMgr_ReloadNobrightImages (void);
+qboolean TexMgr_GetItemColor (gltexture_t *texture, vec3_t color);
 
 int TexMgr_Pad(int s);
 int TexMgr_SafeTextureSize (int s);

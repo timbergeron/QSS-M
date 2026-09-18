@@ -210,6 +210,14 @@ void R_TeleportCreateShaders (void);
 void R_TeleportStyleChanged (cvar_t *var);
 void R_TeleportAbort (void);
 void R_RenderScene (void);
+void R_ItemTimersShutdownGL (void);
+void R_ClearItemTimerDecal (struct itemtimer_s *timer);
+void R_ItemTimersNewMap (void);
+#ifdef PSET_SCRIPT
+void Mod_ClipDecal(qmodel_t *mod, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2,
+	float size, unsigned int surfflagmask, unsigned int surfflagmatch,
+	void (*callback)(void *ctx, vec3_t *points, size_t numtris), void *ctx);
+#endif
 void R_SetupGL (void);
 void R_SetFrustum (float fovx, float fovy);
 extern	cvar_t	r_slimealpha;

@@ -505,14 +505,19 @@ typedef struct
 
 	struct itemtimer_s // woods #obstimers (FTE)
 	{
-		float end;
+		double end;
 		int entnum;
 		char *timername;
-		float start;
+		double start;
 		float duration;
 		vec3_t origin;
 		vec3_t rgb;
 		float radius;
+		int modelindex, skinnum; // item skin retained while the pickup is hidden
+		qboolean model_resolved;
+		struct itemtimer_decal_s *decal;
+		double last_update;
+		qboolean was_paused;
 		struct itemtimer_s* next;
 	} *itemtimers;
 

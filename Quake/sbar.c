@@ -2462,9 +2462,7 @@ static void Draw_PowerupSegments(int x, int y, double start_time, float alpha,
 static void Draw_PowerupOverlays(int x, int y)
 	{
 	
-	extern cvar_t scr_obsitems;
-
-	if (!scr_obsitems.value)
+	if (!((int)scr_obsitems.value & OBSITEMS_HUD))
 		return;
 	
 	float ring_alpha = 0.25;

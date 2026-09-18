@@ -5406,7 +5406,7 @@ static void PScript_AddDecals(void *vctx, vec3_t *points, size_t numtris)
 
 
 typedef struct fragmentdecal_s fragmentdecal_t;
-static void Mod_ClipDecal(qmodel_t *mod, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2, float size, unsigned int surfflagmask, unsigned int surfflagmatch, void (*callback)(void *ctx, vec3_t *points, size_t numpoints), void *ctx);
+void Mod_ClipDecal(qmodel_t *mod, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2, float size, unsigned int surfflagmask, unsigned int surfflagmatch, void (*callback)(void *ctx, vec3_t *points, size_t numpoints), void *ctx);
 
 //clipped decals actually work by defining the area of the decal with some planes, and then chopping away the entirety of the world based upon those planes (hurrah for bsp to trivially reject most of it)
 //the decal is then textured according to some texture projection.
@@ -5643,7 +5643,7 @@ static void Q1BSP_ClipDecalToNodes (qmodel_t *mod, fragmentdecal_t *dec, mnode_t
 }
 
 
-static void Mod_ClipDecal(qmodel_t *mod, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2, float size, unsigned int surfflagmask, unsigned int surfflagmatch, void (*callback)(void *ctx, vec3_t *points, size_t numpoints), void *ctx)
+void Mod_ClipDecal(qmodel_t *mod, vec3_t center, vec3_t normal, vec3_t tangent1, vec3_t tangent2, float size, unsigned int surfflagmask, unsigned int surfflagmatch, void (*callback)(void *ctx, vec3_t *points, size_t numpoints), void *ctx)
 {	//quad marks a full, independant quad
 	int p;
 	float r;

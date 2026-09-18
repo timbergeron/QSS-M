@@ -150,7 +150,7 @@ cvar_t		scr_matchclockscale = {"scr_matchclockscale", "1",CVAR_ARCHIVE}; // wood
 cvar_t		scr_showscores = {"scr_showscores", "0",CVAR_ARCHIVE}; // woods #observerhud
 cvar_t		scr_shownet = {"scr_shownet", "0",CVAR_ARCHIVE}; // woods #shownet scr_obscenterprint
 cvar_t		scr_obscenterprint = {"scr_obscenterprint", "0",CVAR_ARCHIVE}; // woods
-cvar_t		scr_obsitems = {"scr_obsitems", "1",CVAR_ARCHIVE}; // woods
+cvar_t		scr_obsitems = {"scr_obsitems", "3",CVAR_ARCHIVE}; // 0 off, 1 HUD, 2 rings, 3 both
 cvar_t		scr_hints = {"scr_hints", "1",CVAR_ARCHIVE}; // woods #qssmhints
 cvar_t		scr_customcursor = {"scr_customcursor", "1", CVAR_ARCHIVE}; // woods #customcursor
 cvar_t		scr_fade = {"scr_fade", "0.15", CVAR_ARCHIVE}; // woods #fade -- +startup, -startup/quit; magnitude is seconds
@@ -3074,7 +3074,7 @@ void SCR_ShowObsFrags(void)
 		return;
 	}
 
-	if ((!cl.notobserver && scr_obsitems.value) || (cls.demoplayback && scr_obsitems.value))
+	if ((!cl.notobserver || cls.demoplayback) && ((int)scr_obsitems.value & OBSITEMS_HUD))
 	{
 		if (COM_FileExists("gfx/ibar2.lmp", NULL))
 			weapon_icons = Draw_CachePic("gfx/ibar2.lmp");
@@ -3178,7 +3178,7 @@ void SCR_ShowObsFrags(void)
 
 				M_PrintWhite(x + 50, y, shortname);
 
-				if ((!cl.notobserver && scr_obsitems.value) || (cls.demoplayback && scr_obsitems.value))
+				if ((!cl.notobserver || cls.demoplayback) && ((int)scr_obsitems.value & OBSITEMS_HUD))
 				{
 					// Calculate name width for icon placement
 					int nameWidth = strlen(shortname) * 8;
@@ -6146,9 +6146,6 @@ void SCR_DrawStatusIndicators (void)
 	}
 }
 
-float last_pause_time = 0.0f; // woods #obstimers - Store pause start time
-float pause_offset = 0.0f; // woods #obstimers - Accumulated pause offset
-
 static qboolean SCR_ObsTimerIsWordBoundaryChar(int c)
 {
 	return c == '\0' || !q_isalnum((unsigned char)c);
@@ -6300,12 +6297,12 @@ void SCR_DrawObsTimers (void)
 	playmode_val = Info_GetKey(cl.serverinfo, "playmode", playmode_buf, sizeof(playmode_buf));
 	is_playmode_match = (strcmp(playmode_val, "match") == 0);
 	
-	if (!scr_obsitems.value || !cl.itemtimers ||
+	if (!((int)scr_obsitems.value & OBSITEMS_HUD) || !cl.itemtimers ||
 		cl.intermission ||
 		qeintermission ||
 		crxintermission ||
 		scr_viewsize.value >= 130 ||
-		(is_playmode_match && !cl.matchinp))
+		(is_playmode_match && !cl.matchinp && cl.match_pause_time <= 0))
 		return;
 
 #define MAX_VISIBLE_TIMERS 32
@@ -6337,19 +6334,6 @@ void SCR_DrawObsTimers (void)
 			base_y -= 23;
 	}
 
-	if (cl.match_pause_time > 0) 
-	{
-		// During pause: calculate current pause duration
-		float pause_duration = cl.time - cl.match_pause_time;
-		last_pause_time = cl.match_pause_time;
-		pause_offset = pause_duration;
-	}
-	else if (last_pause_time > 0) 
-	{
-		// Pause just ended: keep the final offset
-		last_pause_time = 0;
-	}
-
 	// Timer collection structure
 	typedef struct {
 		struct itemtimer_s* timer;
@@ -6362,12 +6346,6 @@ void SCR_DrawObsTimers (void)
 	for (struct itemtimer_s* timer = cl.itemtimers; timer; timer = timer->next)
 	{
 		float time_left = timer->end - cl.time;
-
-		// Add pause offset to time_left if we're paused or have a stored offset
-		if (cl.match_pause_time > 0 || pause_offset > 0)
-		{
-			time_left += pause_offset;
-		}
 
 		if (time_left <= COUNTDOWN_TIME && time_left > -1.0 &&
 			num_visible < MAX_VISIBLE_TIMERS) {

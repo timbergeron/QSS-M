@@ -243,6 +243,14 @@ void CL_ClearTrailStates(void)
 void CL_FreeState(void)
 {
 	int i;
+	while (cl.itemtimers)
+	{
+		struct itemtimer_s *timer = cl.itemtimers;
+		cl.itemtimers = timer->next;
+		R_ClearItemTimerDecal(timer);
+		Z_Free(timer->timername);
+		Z_Free(timer);
+	}
 	for (i = 0; i < MAX_CL_STATS; i++)
 		free(cl.statss[i]);
 	CL_ClearTrailStates();
@@ -6634,6 +6642,25 @@ void CL_ManualDownload_f (const char* filename)
 		CL_ManualMapCompanions_Clear();
 }
 
+/* Keep the item clock independent of which HUD/renderer passes are enabled. */
+static void CL_UpdateItemTimers (void)
+{
+	struct itemtimer_s *timer;
+	for (timer = cl.itemtimers; timer; timer = timer->next)
+	{
+		double delta = cl.time - timer->last_update;
+		/* The elapsed interval belongs to the previous frame's pause state.
+		 * Counting the new state too adds an extra interval on every pause. */
+		if (delta > 0 && timer->was_paused)
+		{
+			timer->start += delta;
+			timer->end += delta;
+		}
+		timer->last_update = cl.time;
+		timer->was_paused = cl.paused || cl.match_pause_time > 0;
+	}
+}
+
 /*
 ===============
 CL_ReadFromServer
@@ -6685,6 +6712,7 @@ int CL_ReadFromServer (void)
 
 	PR_SwitchQCVM(&cl.qcvm);
 	CL_RelinkEntities ();
+	CL_UpdateItemTimers ();
 	CL_CalcCrouch ();
 	CL_UpdateTEnts ();
 	PR_SwitchQCVM(NULL);
@@ -7179,7 +7207,7 @@ static void CL_ServerExtension_ItemTimer_f (void) // woods #obstimers (FTE)
 	int deathmatch_mode = val ? atoi(val) : 0;
 
 	float timeout;
-	float start = cl.time;
+	double start = cl.time;
 	const char* e;
 	timeout = strtod(Cmd_Argv(1), (char**)&e);
 	if (*e == '/') 
@@ -7200,7 +7228,11 @@ static void CL_ServerExtension_ItemTimer_f (void) // woods #obstimers (FTE)
 	const char* tint = Cmd_Argv(6);
 	unsigned int rgb = strtoul(tint, NULL, 16);  // Convert tint string to RGB
 	const char* timername = (Cmd_Argc() > 7) ? Cmd_Argv(7) : "";
-	unsigned int entnum = (Cmd_Argc() > 8) ? strtoul(Cmd_Argv(8), NULL, 0) : 0;
+	unsigned long entnum = (Cmd_Argc() > 8) ? strtoul(Cmd_Argv(8), NULL, 0) : 0;
+	if (!isfinite(timeout) || !isfinite(start) || timeout < 0 ||
+		!isfinite(org[0]) || !isfinite(org[1]) || !isfinite(org[2]) ||
+		!isfinite(radius) || radius < 0 || entnum >= (unsigned int)cl.max_edicts)
+		return;
 
 	// Skip weapon timers in deathmatch 3
 	if (deathmatch_mode == 3 &&
@@ -7215,8 +7247,10 @@ static void CL_ServerExtension_ItemTimer_f (void) // woods #obstimers (FTE)
 
 	// Find existing timer or create new one
 	struct itemtimer_s* timer;
+	int timer_count = 0;
 	for (timer = cl.itemtimers; timer; timer = timer->next)
 	{
+		timer_count++;
 		if (entnum)
 		{
 			if (timer->entnum == entnum)
@@ -7227,21 +7261,36 @@ static void CL_ServerExtension_ItemTimer_f (void) // woods #obstimers (FTE)
 	}
 	if (!timer)
 	{   //didn't find it.
+		if (timer_count >= 256)
+			return;
 		timer = Z_Malloc(sizeof(*timer));
 		timer->next = cl.itemtimers;
 		cl.itemtimers = timer;
 	}
 
-	extern cvar_t scr_obsitems;
-	if (scr_obsitems.value)
+	if ((int)scr_obsitems.value & OBSITEMS_HUD)
 	PScript_RunParticleEffectTypeString(org, NULL, 1, "EF_ITEMTIMER");
 
 	// Update timer properties
+	if (!VectorCompare(org, timer->origin) || timer->radius != radius)
+		R_ClearItemTimerDecal(timer);
 	VectorCopy(org, timer->origin);
 	timer->start = start;
 	timer->duration = timeout;
 	timer->radius = radius;
 	timer->entnum = entnum;
+	timer->last_update = cl.time;
+	timer->was_paused = cl.paused || cl.match_pause_time > 0;
+	timer->modelindex = 0;
+	timer->skinnum = 0;
+	timer->model_resolved = false;
+	if (entnum > 0 && entnum < (unsigned int)cl.num_entities)
+	{
+		const entity_t *ent = &cl.entities[entnum];
+		/* A pickup message may follow the update that hides its model. */
+		timer->modelindex = ent->netstate.modelindex ? ent->netstate.modelindex : ent->baseline.modelindex;
+		timer->skinnum = ent->netstate.modelindex ? ent->netstate.skin : ent->baseline.skin;
+	}
 	timer->end = start + timer->duration;
 	timer->rgb[0] = ((rgb >> 16) & 0xff) / 255.0;
 	timer->rgb[1] = ((rgb >> 8) & 0xff) / 255.0;

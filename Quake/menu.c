@@ -20343,7 +20343,10 @@ static void M_HUD_AdjustSliders(int dir)
 		break;
 
 	case HUD_OBSITEMS:
-		Cvar_SetValue("scr_obsitems", !scr_obsitems.value);
+		value = scr_obsitems.value + dir;
+		if (value > 3) value = 0;
+		if (value < 0) value = 3;
+		Cvar_SetValue("scr_obsitems", value);
 		break;
 
 	case HUD_SCOREBOARD_SORT:
@@ -20514,8 +20517,14 @@ void M_HUD_Draw(void)
 
 		case HUD_OBSITEMS:
 			text = "    Observer Items";
-			if (!show_cvar_hint)
-				M_DrawCheckbox(MENU_VALUE_X, y, scr_obsitems.value);
+			switch ((int)scr_obsitems.value)
+			{
+			case 0: value = "off"; break;
+			case 1: value = "HUD"; break;
+			case 2: value = "rings"; break;
+			case 3: value = "HUD + rings"; break;
+			default: value = "unknown"; break;
+			}
 			break;
 
 		case HUD_SCOREBOARD_SORT:
@@ -20758,7 +20767,7 @@ void M_HUD_Key(int k)
 			break;
 		}
 		case HUD_OBSITEMS:
-			Cvar_SetValue("scr_obsitems", !scr_obsitems.value);
+			M_HUD_AdjustSliders(1);
 			break;
 		case HUD_SHOWSCORES:
 			M_LivePreview_WantAndKick (M_HUD_LivePreviewId (), 48 + hud_cursor * 8);
@@ -20836,7 +20845,7 @@ void M_HUD_Key(int k)
 			}
 			else if (hud_cursor == HUD_OBSITEMS)
 			{
-				Cvar_SetValue("scr_obsitems", !scr_obsitems.value);
+				M_HUD_AdjustSliders(1);
 			}
 			else if (hud_cursor == HUD_SCOREBOARD_SORT)
 			{
@@ -23301,7 +23310,7 @@ static const char *MenuSearch_HUDKeywords(int index)
 	case HUD_AUTOID: return "player names id identification labels teammates enemies";
 	case HUD_MOVEKEYS: return "keystrokes input wasd movement display";
 	case HUD_CONSOLEFONT: return "text font size console ui";
-	case HUD_OBSITEMS: return "spectator observer pickups items inventory";
+	case HUD_OBSITEMS: return "spectator observer pickups items inventory timers respawn rings";
 	case HUD_SCOREBOARD_SORT: return "scores teams ordering ranking scoreboard";
 	default: return NULL;
 	}

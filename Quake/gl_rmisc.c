@@ -828,6 +828,7 @@ void R_NewMap (void)
 		cl.worldmodel->leafs[i].efrags = NULL;
 
 	r_viewleaf = NULL;
+	R_ItemTimersNewMap ();
 	R_ClearParticles ();
 	RNEWMAP_MARK("classic particles");
 #ifdef PSET_SCRIPT
@@ -1088,6 +1089,7 @@ Deletes any GLSL programs that have been created.
 void R_DeleteShaders (void)
 {
 	int i;
+	R_ItemTimersShutdownGL ();
 
 	PolyBlend_DeleteVignetteTexture (); // vignette polyblend cleanup -- woods #polylblend2
 	if (!gl_glsl_able)

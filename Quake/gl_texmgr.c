@@ -1136,6 +1136,108 @@ gltexture_t *TexMgr_FindTexture (qmodel_t *owner, const char *name)
 	return NULL;
 }
 
+/* Group shades of the same hue together, so a shaded colored item wins over
+ * its black background and white highlights. Gray replacements remain gray.
+ * The mean only selects a representative: the returned RGB is an actual
+ * opaque texel, never an averaged or hardcoded item color. */
+static int TexMgr_ItemColorBucket (const byte *p)
+{
+	int hi = q_max(p[0], q_max(p[1], p[2]));
+	int lo = q_min(p[0], q_min(p[1], p[2]));
+	float hue;
+	if (p[3] < 128 || hi < 24)
+		return -1;
+	if (hi - lo < 16)
+		return 24;
+	if (hi == p[0])
+		hue = (float)(p[1] - p[2]) / (hi - lo);
+	else if (hi == p[1])
+		hue = 2 + (float)(p[2] - p[0]) / (hi - lo);
+	else
+		hue = 4 + (float)(p[0] - p[1]) / (hi - lo);
+	if (hue < 0)
+		hue += 6;
+	return (int)(hue * 4 + 0.5f) % 24;
+}
+
+/* A grid avoids repeatedly sampling the same few columns of a wide skin. */
+static size_t TexMgr_ItemColorIndex (size_t sample, size_t width, size_t height)
+{
+	size_t columns = q_min(width, (size_t)64), rows = q_min(height, (size_t)64);
+	size_t x = ((sample % columns) * 2 + 1) * width / (columns * 2);
+	size_t y = ((sample / columns) * 2 + 1) * height / (rows * 2);
+	return y * width + x;
+}
+
+static qboolean TexMgr_SampleItemColor (const byte *pixels, size_t width, size_t height, vec3_t color)
+{
+	double weights[25] = {0}, sums[25][3] = {{0}};
+	double best_distance = DBL_MAX;
+	int best = -1, bucket, c;
+	size_t i, selected = 0;
+	/* Bound upload-time sampling even for large replacement skins. */
+	size_t count = q_min(width, (size_t)64) * q_min(height, (size_t)64);
+	for (i = 0; i < count; i++)
+	{
+		size_t index = TexMgr_ItemColorIndex(i, width, height);
+		const byte *p = pixels + index * 4;
+		int hi = q_max(p[0], q_max(p[1], p[2]));
+		int lo = q_min(p[0], q_min(p[1], p[2]));
+		double weight;
+		bucket = TexMgr_ItemColorBucket(p);
+		if (bucket < 0)
+			continue;
+		weight = (hi - lo + 1) * (double)hi;
+		weights[bucket] += weight;
+		for (c = 0; c < 3; c++)
+			sums[bucket][c] += p[c] * weight;
+	}
+	for (bucket = 0; bucket < 25; bucket++)
+		if (weights[bucket] > 0 && (best < 0 || weights[bucket] > weights[best]))
+			best = bucket;
+	if (best < 0)
+		return false;
+	for (c = 0; c < 3; c++)
+		sums[best][c] /= weights[best];
+	for (i = 0; i < count; i++)
+	{
+		size_t index = TexMgr_ItemColorIndex(i, width, height);
+		const byte *p = pixels + index * 4;
+		double distance = 0;
+		if (TexMgr_ItemColorBucket(p) != best)
+			continue;
+		for (c = 0; c < 3; c++)
+		{
+			double d = p[c] - sums[best][c];
+			distance += d * d;
+		}
+		if (distance < best_distance)
+		{
+			best_distance = distance;
+			selected = index;
+		}
+	}
+	for (c = 0; c < 3; c++)
+		color[c] = pixels[selected * 4 + c] / 255.0f;
+	return true;
+}
+
+/* Sample while RGBA pixels are on the CPU, including prepared batch uploads.
+ * Native compressed sources have no CPU RGBA image; use the timer's tint. */
+static void TexMgr_CacheItemColor (gltexture_t *texture, const byte *pixels)
+{
+	texture->itemcolor_valid = texture->owner && TexMgr_SampleItemColor(pixels,
+		texture->width, texture->height, texture->itemcolor);
+}
+
+qboolean TexMgr_GetItemColor (gltexture_t *texture, vec3_t color)
+{
+	if (!texture || texture == notexture || texture == nulltexture || !texture->itemcolor_valid)
+		return false;
+	VectorCopy(texture->itemcolor, color);
+	return true;
+}
+
 /*
 ================
 TexMgr_NewTexture
@@ -1158,6 +1260,7 @@ gltexture_t *TexMgr_NewTexture (void)
 
 	glt = free_gltextures;
 	free_gltextures = glt->next;
+	glt->itemcolor_valid = false;
 	glt->next = active_gltextures;
 	active_gltextures = glt;
 
@@ -2210,6 +2313,7 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 {
 	int	internalformat,	miplevel, mipwidth, mipheight, picmip;
 	char mapname[MAX_QPATH]; // woods #gl_max_size
+	glt->itemcolor_valid = false;
 
 	/* Upload processing downsizes in place. Keep retained RGBA sources intact
 	 * so a later reload starts from the same full-resolution pixels. */
@@ -2292,6 +2396,8 @@ static void TexMgr_LoadImage32 (gltexture_t *glt, unsigned *data)
 			TexMgr_AlphaEdgeFix ((byte *)data, glt->width, glt->height);
 	}
 
+	// Cache the final base level before mip generation modifies it.
+	TexMgr_CacheItemColor(glt, (const byte *)data);
 	// upload
 	GL_Bind (glt);
 	internalformat = (glt->flags & TEXPREF_ALPHA) ? gl_alpha_format : gl_solid_format;
@@ -2422,6 +2528,7 @@ static void TexMgr_LoadImageCompressed (gltexture_t *glt, byte *data)
 	int	internalformat,	format, type, miplevel, mipwidth, mipheight, picmip;
 	size_t mipbytes, blockbytes;
 	unsigned int blockwidth, blockheight;
+	glt->itemcolor_valid = false;
 
 	internalformat = compressedformats[glt->source_format].internalformat;
 	format         = compressedformats[glt->source_format].format;
@@ -3118,6 +3225,7 @@ static gltexture_t *TexPrep_Commit (const texprep_jobstate_t *state)
 	glt->width = result->width;
 	glt->height = result->height;
 	glt->flags = result->effective_flags;
+	TexMgr_CacheItemColor(glt, result->pixels + result->levels[0].offset);
 
 	GL_Bind (glt);
 	internalformat = (glt->flags & TEXPREF_ALPHA) ? gl_alpha_format : gl_solid_format;

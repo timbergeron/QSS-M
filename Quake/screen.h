@@ -75,6 +75,11 @@ extern	qboolean	scr_skipupdate;
 
 extern	cvar_t		scr_viewsize;
 
+// scr_obsitems combines the existing observer HUD with world respawn rings.
+#define OBSITEMS_HUD 1
+#define OBSITEMS_RINGS 2
+extern cvar_t scr_obsitems;
+
 extern	cvar_t		scr_sbaralpha; //johnfitz
 extern	cvar_t		scr_sbaralphaqwammo; // woods #sbarstyles
 extern	cvar_t		scr_sbarshowqeammo; // woods #sbarstyles

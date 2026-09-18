@@ -3186,6 +3186,330 @@ static void R_DrawLightningBeamsPolygons(void)
 	glColor3f(1, 1, 1);
 }
 
+/* Item respawn decals use FTE's circular fill convention. Timer data comes
+ * from the server's //it messages; colors come from the loaded pickup skin. */
+static GLuint itemtimer_program;
+static qboolean itemtimer_shader_failed;
+static GLint itemtimer_fogmode, itemtimer_opacity;
+
+typedef struct
+{
+	vec3_t position;
+	float texcoord[2];
+} itemtimer_vertex_t;
+
+typedef struct itemtimer_decal_s
+{
+	vec3_t origin, offset, mins, maxs;
+	vec3_t brush_origin, brush_angles;
+	qmodel_t *brush_model;
+	int entnum;
+	float scale;
+	size_t numverts, capacity;
+	itemtimer_vertex_t *verts;
+} itemtimer_decal_t;
+
+void R_ClearItemTimerDecal (struct itemtimer_s *timer)
+{
+	if (!timer->decal)
+		return;
+	free(timer->decal->verts);
+	free(timer->decal);
+	timer->decal = NULL;
+}
+
+void R_ItemTimersNewMap (void)
+{
+	struct itemtimer_s *timer;
+	for (timer = cl.itemtimers; timer; timer = timer->next)
+	{
+		R_ClearItemTimerDecal(timer);
+		timer->model_resolved = false;
+	}
+}
+
+void R_ItemTimersShutdownGL (void)
+{
+	GL_DeleteProgramTracked(&itemtimer_program);
+	itemtimer_shader_failed = false;
+}
+
+#ifdef PSET_SCRIPT
+static qboolean R_ItemTimerCreateShader (void)
+{
+	const GLchar *vs =
+		"#version 110\n"
+		"varying vec2 tc; varying vec4 color; varying float depth;\n"
+		"void main() {\n"
+		" tc = gl_MultiTexCoord0.xy; color = gl_Color;\n"
+		" gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n"
+		" depth = gl_Position.w;\n"
+		"}\n";
+	const GLchar *fs =
+		"#version 110\n"
+		"uniform int FogMode; uniform float Opacity;\n"
+		"varying vec2 tc; varying vec4 color; varying float depth;\n"
+		"void main() {\n"
+		" float dist = length(tc);\n"
+		" float edge = clamp(fwidth(dist), 0.005, 0.05);\n"
+		" float ring = smoothstep(0.70-edge, 0.70+edge, dist) * (1.0 - smoothstep(1.0-edge, 1.0+edge, dist));\n"
+		" float angle = (atan(-tc.y, tc.x) + 3.14159265) / 6.28318530;\n"
+		" float arcEdge = clamp(fwidth(angle), 0.001, 0.02);\n"
+		" float fill = 1.0 - smoothstep(color.a-arcEdge, color.a+arcEdge, angle);\n"
+		" if (color.a <= 0.0) fill = 0.0;\n"
+		" if (color.a >= 1.0) fill = 1.0;\n"
+		" if (ring <= 0.0) discard;\n"
+		" float alpha = ring * mix(0.225, 0.9, fill) * Opacity;\n"
+		" float fog = 1.0;\n"
+		" if (FogMode == 2) fog = (gl_Fog.end - depth) / (gl_Fog.end - gl_Fog.start);\n"
+		" else if (FogMode == 3) fog = exp(-gl_Fog.density * depth);\n"
+		" else if (FogMode == 1) fog = exp(-gl_Fog.density * gl_Fog.density * depth * depth);\n"
+		" gl_FragColor = vec4(color.rgb, alpha * clamp(fog, 0.0, 1.0));\n"
+		"}\n";
+	if (itemtimer_program)
+		return true;
+	if (itemtimer_shader_failed || !gl_glsl_able)
+		return false;
+	itemtimer_program = GL_CreateProgram(vs, fs, 0, NULL);
+	if (itemtimer_program)
+	{
+		itemtimer_fogmode = GL_GetUniformLocationFunc(itemtimer_program, "FogMode");
+		itemtimer_opacity = GL_GetUniformLocationFunc(itemtimer_program, "Opacity");
+		if (itemtimer_fogmode >= 0 && itemtimer_opacity >= 0)
+			return true;
+	}
+	GL_DeleteProgramTracked(&itemtimer_program);
+	itemtimer_shader_failed = true;
+	return false;
+}
+
+static void R_ItemTimerColor (struct itemtimer_s *timer, vec3_t color)
+{
+	const char *name = timer->timername ? timer->timername : "";
+	const char *modelname;
+	qmodel_t *model = NULL;
+	aliashdr_t *hdr;
+	int skin = timer->skinnum, fallback_skin = 0, anim = (int)(cl.time * 10) & 3;
+	int i;
+
+	color[0] = color[1] = color[2] = 1;
+	if (!q_strcasecmp(name, "ga") || !q_strcasecmp(name, "ya") || !q_strcasecmp(name, "ra"))
+	{
+		modelname = "progs/armor.mdl";
+		fallback_skin = !q_strcasecmp(name, "ra") ? 2 : !q_strcasecmp(name, "ya") ? 1 : 0;
+	}
+	else if (!q_strcasecmp(name, "quad"))
+		modelname = "progs/quaddama.mdl";
+	else if (!q_strcasecmp(name, "pent"))
+		modelname = "progs/invulner.mdl";
+	else if (!q_strcasecmp(name, "ring") || !q_strcasecmp(name, "eyes"))
+		modelname = "progs/invisibl.mdl";
+	else
+		return; // Weapons (and other pickups) always have white rings.
+
+	/* Keep weapons white; use the supplied tint when a colored skin cannot
+	 * be sampled (for example, a native compressed replacement). */
+	VectorCopy(timer->rgb, color);
+	if (timer->modelindex > 0 && timer->modelindex < MAX_MODELS)
+		model = cl.model_precache[timer->modelindex];
+	if (!timer->model_resolved && (!model || model->type != mod_alias))
+	{
+		/* Older servers can omit the owning entity. Use only models already
+		 * precached for this map, including their external skin replacements. */
+		model = NULL;
+		for (i = 1; i < MAX_MODELS; i++)
+			if (cl.model_precache[i] && !strcmp(cl.model_precache[i]->name, modelname))
+			{
+				model = cl.model_precache[i];
+				timer->modelindex = i;
+				break;
+			}
+		skin = timer->skinnum = fallback_skin;
+	}
+	timer->model_resolved = true;
+	if (!model || model->type != mod_alias)
+		return;
+	if (!strcmp(model->name, "progs/armor.mdl"))
+		skin = fallback_skin;
+	/* Never reload an evicted model during a render pass: that may flush
+	 * the alias cache while another renderer still holds pointers into it. */
+	hdr = Cache_Check(&model->cache);
+	if (!hdr)
+		return;
+	for (;;)
+	{
+		int skinnum = skin >= 0 && skin < hdr->numskins ? skin : 0;
+		if (hdr->numskins > 0 &&
+			(TexMgr_GetItemColor(hdr->textures[skinnum][anim].base, color) ||
+			 TexMgr_GetItemColor(hdr->textures[skinnum][anim].luma, color)))
+			return;
+		if (!hdr->nextsurface)
+			break;
+		hdr = (aliashdr_t *)((byte *)hdr + hdr->nextsurface);
+	}
+}
+
+/* Cache the clipped triangles. Moving brush supports invalidate the cache;
+ * ordinary world floors require no further traces or BSP clipping. */
+static void R_ItemTimerDecal (void *context, vec3_t *points, size_t numtris)
+{
+	itemtimer_decal_t *decal = context;
+	size_t i;
+	for (i = 0; i < numtris; i++, points += 3)
+	{
+		vec3_t a, b, normal;
+		int v, c;
+		VectorSubtract(points[1], points[0], a);
+		VectorSubtract(points[2], points[0], b);
+		CrossProduct(a, b, normal);
+		if (normal[2] * normal[2] < 0.25f * DotProduct(normal, normal))
+			continue;
+		/* Bound memory for unusually fragmented map geometry. */
+		if (decal->numverts + 3 > 4095)
+			return;
+		if (decal->numverts + 3 > decal->capacity)
+		{
+			size_t capacity = q_min((size_t)4095, q_max((size_t)96, decal->capacity * 2));
+			itemtimer_vertex_t *verts = realloc(decal->verts, capacity * sizeof(*verts));
+			if (!verts)
+				return;
+			decal->verts = verts;
+			decal->capacity = capacity;
+		}
+		for (v = 0; v < 3; v++)
+		{
+			itemtimer_vertex_t *vert = &decal->verts[decal->numverts++];
+			VectorAdd(points[v], decal->offset, vert->position);
+			for (c = 0; c < 2; c++)
+				vert->texcoord[c] = (vert->position[c] - decal->origin[c]) * decal->scale;
+			for (c = 0; c < 3; c++)
+			{
+				decal->mins[c] = q_min(decal->mins[c], vert->position[c]);
+				decal->maxs[c] = q_max(decal->maxs[c], vert->position[c]);
+			}
+		}
+	}
+}
+
+static itemtimer_decal_t *R_ItemTimerGeometry (struct itemtimer_s *timer)
+{
+	itemtimer_decal_t *decal = timer->decal;
+	vec3_t start, end, impact, normal, center;
+	vec3_t down = {0, 0, -1}, right = {1, 0, 0}, up = {0, 1, 0};
+	qmodel_t *model = cl.worldmodel;
+	float diameter;
+
+	if (decal && decal->entnum)
+	{
+		entity_t *ent = &cl.entities[decal->entnum];
+		if (decal->entnum >= cl.num_entities || ent->model != decal->brush_model ||
+			!VectorCompare(ent->origin, decal->brush_origin) || !VectorCompare(ent->angles, decal->brush_angles))
+		{
+			R_ClearItemTimerDecal(timer);
+			decal = NULL;
+		}
+	}
+	if (decal)
+		return decal;
+	decal = calloc(1, sizeof(*decal));
+	if (!decal)
+		return NULL;
+	timer->decal = decal;
+	/* FTE's wire field is named radius, but its projection and clipper
+	 * both consume the full diameter. Preserve that protocol convention. */
+	diameter = CLAMP(8.0f, timer->radius, 128.0f);
+	VectorCopy(timer->origin, start);
+	VectorCopy(timer->origin, end);
+	start[2] += 8;
+	end[2] -= 256;
+	if (CL_TraceLine(start, end, impact, normal, &decal->entnum) >= 1 || normal[2] < 0.5f)
+		return decal;
+	VectorCopy(impact, decal->origin);
+	VectorCopy(impact, decal->mins);
+	VectorCopy(impact, decal->maxs);
+	VectorCopy(impact, center);
+	decal->scale = 2 / diameter;
+	if (decal->entnum)
+	{
+		entity_t *ent = &cl.entities[decal->entnum];
+		model = decal->brush_model = ent->model;
+		VectorCopy(ent->origin, decal->brush_origin);
+		VectorCopy(ent->angles, decal->brush_angles);
+		/* CL_TraceLine does not support rotated brush collision. */
+		if (!VectorCompare(ent->angles, vec3_origin))
+			return decal;
+		VectorCopy(ent->origin, decal->offset);
+		VectorSubtract(impact, ent->origin, center);
+	}
+	/* Leave room for the shader's outer antialiasing feather. */
+	Mod_ClipDecal(model, center, down, right, up, diameter * 1.1f,
+		SURF_DRAWSKY | SURF_DRAWTURB, 0, R_ItemTimerDecal, decal);
+	return decal;
+}
+
+static void R_DrawItemTimers (void)
+{
+	struct itemtimer_s *timer;
+	qboolean drawing = false;
+	char mode[32];
+	extern qboolean qeintermission, crxintermission;
+	if (!((int)scr_obsitems.value & OBSITEMS_RINGS) || !cl.itemtimers || !cl.worldmodel || skyroom_drawing ||
+		(!cls.demoplayback && cl.notobserver) || cl.intermission || qeintermission || crxintermission ||
+		(!strcmp(Info_GetKey(cl.serverinfo, "playmode", mode, sizeof(mode)), "match") && !cl.matchinp && cl.match_pause_time <= 0))
+		return;
+
+	for (timer = cl.itemtimers; timer; timer = timer->next)
+	{
+		vec3_t color;
+		itemtimer_decal_t *decal;
+		float percent, opacity;
+		size_t v;
+		if (timer->duration <= 0 || timer->duration == FLT_MAX ||
+			cl.time < timer->start || cl.time >= timer->end)
+			continue;
+		decal = R_ItemTimerGeometry(timer);
+		if (!decal || !decal->numverts || R_CullBox(decal->mins, decal->maxs))
+			continue;
+		if (!R_ItemTimerCreateShader())
+			break;
+		R_ItemTimerColor(timer, color);
+		if (!drawing)
+		{
+			GL_DisableMultitexture();
+			GL_UseProgramFunc(itemtimer_program);
+			GL_Uniform1iFunc(itemtimer_fogmode, Fog_GetDensity() > 0 ? Fog_GetMode() + 1 : 0);
+			glEnable(GL_BLEND);
+			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+			glDepthMask(GL_FALSE);
+			glDisable(GL_CULL_FACE);
+			GL_PolygonOffset(OFFSET_DECAL);
+			drawing = true;
+		}
+		percent = CLAMP(0.0, (cl.time - timer->start) / timer->duration, 1.0);
+		opacity = CLAMP(0.0, (cl.time - timer->start) / 0.12, 1.0) *
+			CLAMP(0.0, (timer->end - cl.time) / 0.10, 1.0);
+		GL_Uniform1fFunc(itemtimer_opacity, opacity);
+		glColor4f(color[0], color[1], color[2], percent);
+		glBegin(GL_TRIANGLES);
+		for (v = 0; v < decal->numverts; v++)
+		{
+			glTexCoord2fv(decal->verts[v].texcoord);
+			glVertex3fv(decal->verts[v].position);
+		}
+		glEnd();
+	}
+	if (drawing)
+	{
+		GL_PolygonOffset(OFFSET_NONE);
+		GL_UseProgramFunc(0);
+		glEnable(GL_CULL_FACE);
+		glDepthMask(GL_TRUE);
+		glDisable(GL_BLEND);
+		glColor4f(1, 1, 1, 1);
+	}
+}
+#endif
+
 /*
 ================
 R_RenderScene
@@ -3213,6 +3537,11 @@ void R_RenderScene (void)
 		R_DrawShadows (); //johnfitz -- render entity shadows
 
 	R_DrawEntitiesOnList (false); //johnfitz -- false means this is the pass for nonalpha entities
+
+#ifdef PSET_SCRIPT
+	if (r_refdef.drawworld)
+		R_DrawItemTimers ();
+#endif
 
 	R_DrawWorld_Water (); //johnfitz -- drawn here since they might have transparency
 
