@@ -1074,15 +1074,15 @@ void CL_SignonReply (void)
 			qboolean has_quick = Info_GetKey(cl.serverinfo, "*mapcrc_quick", crc_quick_str, sizeof(crc_quick_str)) && *crc_quick_str;
 			qboolean has_full = Info_GetKey(cl.serverinfo, "*mapcrc_full", crc_full_str, sizeof(crc_full_str)) && *crc_full_str;
 			
-			if (has_quick && has_full)
+			if (has_quick && has_full &&
+				MapCRC_Parse (crc_quick_str, &cls.map_crc_quick_server) &&
+				MapCRC_Parse (crc_full_str, &cls.map_crc_full_server))
 			{
-				cls.map_crc_quick_server = strtoul(crc_quick_str, NULL, 10);
-				cls.map_crc_full_server = strtoul(crc_full_str, NULL, 10);
 				Con_DPrintf("Server Quick CRC: %u, Full CRC: %u\n", cls.map_crc_quick_server, cls.map_crc_full_server);
 				Con_DPrintf("Validating map: %s\n", cl.model_name[1]);
 				
 				// Validate map CRC - allow connection but track mismatch
-				if (!CL_MapCRC_Validate(cl.model_name[1], cls.map_crc_quick_server, cls.map_crc_full_server))
+				if (!CL_MapCRC_Validate(cl.worldmodel, cls.map_crc_quick_server, cls.map_crc_full_server))
 				{
 					// Set userinfo flag to indicate map mismatch
 					Info_SetKey(cls.userinfo, sizeof(cls.userinfo), "*mapmismatch", "1");

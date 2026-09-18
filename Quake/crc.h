@@ -34,7 +34,9 @@ unsigned Com_BlockChecksum (const void *buffer, size_t length);
 void Com_BlockFullChecksum (const void *buffer, size_t len, unsigned char *outbuf);
 
 // Map CRC validation functions
-qboolean CL_MapCRC_Validate(const char *bsp, unsigned server_crc_quick, unsigned server_crc_full); // woods #mapcrc
+struct qmodel_s;
+qboolean MapCRC_Parse (const char *value, unsigned int *checksum);
+qboolean CL_MapCRC_Validate(const struct qmodel_s *model, unsigned server_crc_quick, unsigned server_crc_full); // woods #mapcrc
 
 #endif	/* _QUAKE_CRC_H */
 

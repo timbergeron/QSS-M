@@ -4710,54 +4710,18 @@ void SV_SpawnServer (const char *server)
 
 	if (sv_mapcrc.value) // woods #mapcrc
 	{
-		Con_DPrintf("sv_mapcrc: Starting two-stage map CRC calculation for %s\n", sv.modelname);
-
-		unsigned path_id;
-		byte* map = COM_LoadMallocFile(sv.modelname, &path_id);
-		if (map)
-		{
-			double start_time = Sys_DoubleTime();
-
-			// Quick CRC: first 4KB only
-			int quick_size = (com_filesize > 4096) ? 4096 : com_filesize;
-			sv.map_crc_quick = Com_BlockChecksum(map, quick_size);
-			double quick_time = Sys_DoubleTime();
-
-			// Full CRC: entire file
-			sv.map_crc_full = Com_BlockChecksum(map, com_filesize);
-			double full_time = Sys_DoubleTime();
-
-			// Free the allocated memory
-			free(map);
-
-			// Publish both CRCs in serverinfo
-			Info_SetKey(svs.serverinfo, sizeof(svs.serverinfo),
-				"*mapcrc_quick", va("%u", sv.map_crc_quick));
-			Info_SetKey(svs.serverinfo, sizeof(svs.serverinfo),
-				"*mapcrc_full", va("%u", sv.map_crc_full));
-
-			Con_DPrintf("=== SERVER MAP CRC CALCULATION ===\n");
-			Con_DPrintf("Map: %s (path_id: %u)\n", sv.modelname, path_id);
-			Con_DPrintf("File size: %d bytes\n", (int)com_filesize);
-			Con_DPrintf("Quick CRC (%d bytes): %u (0x%08x) [%.1fms]\n",
-				quick_size, sv.map_crc_quick, sv.map_crc_quick,
-				(quick_time - start_time) * 1000.0);
-			Con_DPrintf("Full CRC (%d bytes):  %u (0x%08x) [%.1fms]\n",
-				(int)com_filesize, sv.map_crc_full, sv.map_crc_full,
-				(full_time - quick_time) * 1000.0);
-			Con_DPrintf("Total CRC time: %.1fms\n", (full_time - start_time) * 1000.0);
-			Con_DPrintf("==================================\n");
-		}
-		else
-		{
-			sv.map_crc_quick = 0;
-			sv.map_crc_full = 0;
-			Info_SetKey(svs.serverinfo, sizeof(svs.serverinfo),
-				"*mapcrc_quick", "");
-			Info_SetKey(svs.serverinfo, sizeof(svs.serverinfo),
-				"*mapcrc_full", "");
-			Con_DPrintf("Failed to load map file for CRC: %s\n", sv.modelname);
-		}
+		// Use checksums of the BSP bytes actually loaded.
+		sv.map_crc_quick = qcvm->worldmodel->bsp_checksum_quick;
+		sv.map_crc_full = qcvm->worldmodel->bsp_checksum;
+		Con_DPrintf ("sv_mapcrc: quick %u, full %u\n", sv.map_crc_quick, sv.map_crc_full);
+		Info_SetKey (svs.serverinfo, sizeof(svs.serverinfo), "*mapcrc_quick", va("%u", sv.map_crc_quick));
+		Info_SetKey (svs.serverinfo, sizeof(svs.serverinfo), "*mapcrc_full", va("%u", sv.map_crc_full));
+	}
+	else
+	{
+		sv.map_crc_quick = sv.map_crc_full = 0;
+		Info_SetKey (svs.serverinfo, sizeof(svs.serverinfo), "*mapcrc_quick", "");
+		Info_SetKey (svs.serverinfo, sizeof(svs.serverinfo), "*mapcrc_full", "");
 	}
 
 //

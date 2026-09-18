@@ -563,6 +563,14 @@ typedef struct qmodel_s
 	byte		*lightdata;
 	size_t		lightdatasamples;
 	char		*entities;
+	unsigned int bsp_checksum; // Com_BlockChecksum of the entire original BSP file
+	unsigned int bsp_checksum_quick; // same checksum over the first 4 KB
+	size_t bsp_filesize;
+	char *bsp_source; // loaded file, or the archive containing it
+	char *bsp_source_display; // mount-relative name, independent of basedir/userdir
+	char *entities_file; // NULL when using embedded entities
+	char *entities_source;
+	char *entities_source_display;
 
 	qboolean	viswarn; // for Mod_DecompressVis()
 

@@ -2413,9 +2413,38 @@ qboolean Mod_FindExternalEntFile (const char *bspname, unsigned int entcrc, char
 
 /*
 =================
-Mod_LoadEntities
+Mod_FileSource
 =================
 */
+static char *Mod_FileSource (const char *name, char **display)
+{
+	char out[MAX_OSPATH];
+	char relative[MAX_OSPATH];
+	qofs_t saved_filesize = com_filesize;
+	int saved_from_pak = file_from_pak;
+	const searchpath_t *source = COM_FileSearchPath (name);
+
+	out[0] = '\0';
+	*display = NULL;
+	if (source)
+	{
+		if (source->pack)
+		{
+			q_strlcpy (out, source->pack->filename, sizeof(out));
+			q_strlcpy (relative, source->purename, sizeof(relative));
+		}
+		else
+		{
+			q_snprintf (out, sizeof(out), "%s/%s", source->filename, name);
+			q_snprintf (relative, sizeof(relative), "%s/%s", source->purename, name);
+		}
+		*display = Hunk_Strdup (relative, loadname);
+	}
+	com_filesize = saved_filesize;
+	file_from_pak = saved_from_pak;
+	return out[0] ? Hunk_Strdup (out, loadname) : NULL;
+}
+
 static void Mod_LoadEntities (lump_t *l)
 {
 	char	entfilename[MAX_QPATH];
@@ -2423,6 +2452,10 @@ static void Mod_LoadEntities (lump_t *l)
 	int		mark;
 	unsigned int	path_id;
 	unsigned int	crc = 0;
+
+	loadmodel->entities_file = NULL;
+	loadmodel->entities_source = NULL;
+	loadmodel->entities_source_display = NULL;
 
 	if (! external_ents.value)
 		goto _load_embedded;
@@ -2447,6 +2480,8 @@ static void Mod_LoadEntities (lump_t *l)
 		else
 		{
 			loadmodel->entities = ents;
+			loadmodel->entities_file = Hunk_Strdup (entfilename, loadname);
+			loadmodel->entities_source = Mod_FileSource (entfilename, &loadmodel->entities_source_display);
 			Con_DPrintf("Loaded external entity file %s\n", entfilename);
 			return;
 		}
@@ -4563,6 +4598,12 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 		Con_Warning ("Mod_LoadBrushModel: %s has unsupported version number (%i should be %i)\n", mod->name, mod->bspversion, BSPVERSION);
 		return;
 	}
+
+	// Hash the original file before byte-swapping or loading external lump overrides.
+	mod->bsp_checksum = Com_BlockChecksum (buffer, filesize);
+	mod->bsp_checksum_quick = filesize <= 4096 ? mod->bsp_checksum : Com_BlockChecksum (buffer, 4096);
+	mod->bsp_filesize = filesize;
+	mod->bsp_source = Mod_FileSource (diskname, &mod->bsp_source_display);
 
 // swap all the lumps
 	mod_base = (byte *)header;

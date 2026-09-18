@@ -8493,38 +8493,59 @@ map <servername>
 command from the console.  Active clients are kicked off.
 ======================
 */
-static const char *Host_MapFileLinkPath (const char *mapname, char *path, size_t path_size)
+static void Host_MapSource (const char *label, const char *path, const char *display)
 {
-	char map_path[MAX_QPATH];
-	searchpath_t *search;
+	Con_Printf ("%s: ", label);
+	if (path && *path && display && *display)
+		Con_LinkPrintf (path, "%s", display);
+	else
+		Con_Printf ("unavailable");
+	Con_Printf ("\n");
+}
 
-	if ((size_t)q_snprintf(map_path, sizeof(map_path), "maps/%s.bsp", mapname) >= sizeof(map_path))
-		return NULL;
+static void Host_MapEntities (const qmodel_t *model, const char *label)
+{
+	if (!model)
+		return;
+	Con_Printf ("%s external entities: ", label);
+	if (model->entities_file && model->entities_source)
+		Con_LinkPrintf (model->entities_source, "%s", model->entities_file);
+	else
+		Con_Printf ("%s", model->entities_file ? model->entities_file : "none (embedded)");
+	Con_Printf ("\n");
+	if (model->entities_file)
+		Host_MapSource ("Entity source", model->entities_source, model->entities_source_display);
+}
 
-	for (search = com_searchpaths; search; search = search->next)
+static void Host_MapDetails (const qmodel_t *model, qboolean client)
+{
+	unsigned int server_checksum;
+	char value[64];
+	qboolean local_server = client && sv.active && !cls.demoplayback;
+
+	if (!model)
 	{
-		if (search->pack)
-		{
-			int i;
-
-			for (i = 0; i < search->pack->numfiles; i++)
-			{
-				if (!q_strcasecmp(search->pack->files[i].name, map_path))
-				{
-					q_strlcpy(path, search->pack->filename, path_size);
-					return path;
-				}
-			}
-		}
-		else
-		{
-			q_snprintf(path, path_size, "%s/%s", search->filename, map_path);
-			if (Sys_FileType(path) & FS_ENT_FILE)
-				return path;
-		}
+		Con_Printf ("%s checksum: unavailable\n", client ? "Local" : "Server");
+		return;
 	}
-
-	return NULL;
+	Con_Printf ("%s checksum: %u (0x%08x)\n", client ? "Local" : "Server",
+		model->bsp_checksum, model->bsp_checksum);
+	if (local_server)
+		Con_Printf ("Server checksum: (local server)\n");
+	else if (client)
+	{
+		Info_GetKey (cl.serverinfo, "*mapcrc_full", value, sizeof(value));
+		if (MapCRC_Parse (value, &server_checksum))
+			Con_Printf ("Server checksum: %u (0x%08x) - %s\n", server_checksum, server_checksum,
+				server_checksum == model->bsp_checksum ? "matches" : "^mdiffers from server^m");
+		else
+			Con_Printf ("Server checksum: unavailable\n");
+	}
+	Con_Printf ("BSP size: %.1f MB\n", (double)model->bsp_filesize / (1024.0 * 1024.0));
+	Host_MapSource ("Map source", model->bsp_source, model->bsp_source_display);
+	Host_MapEntities (model, client ? "Local" : "Server");
+	if (local_server && sv.qcvm.worldmodel != model)
+		Host_MapEntities (sv.qcvm.worldmodel, "Server");
 }
 
 static void Host_Map_f (void)
@@ -8537,23 +8558,16 @@ static void Host_Map_f (void)
 		if (cls.state == ca_dedicated)
 		{
 			if (sv.active)
+			{
 				Con_Printf ("Current map: %s\n", sv.name);
+				Host_MapDetails (sv.qcvm.worldmodel, false);
+			}
 			else
 				Con_Printf ("Server not active\n");
 		}
 		else if (cls.state == ca_connected)
 		{
-			char   mapPath[MAX_OSPATH];
-			char   mapLinkPath[MAX_OSPATH];
-			const char *mapLink;
-			int    h;
-			qofs_t fsize = -1;
-
-			q_snprintf(mapPath, sizeof(mapPath), "maps/%s.bsp", cl.mapname);
-			mapLink = Host_MapFileLinkPath(cl.mapname, mapLinkPath, sizeof(mapLinkPath));
-			fsize = COM_OpenFile(mapPath, &h, NULL);
-			if (h != -1)
-				COM_CloseFile(h);
+			const char *mapLink = cl.worldmodel && cl.worldmodel->bsp_source ? cl.worldmodel->bsp_source : NULL;
 
 			Con_Printf("Current map: %s ( ", cl.levelname);
 			if (mapLink)
@@ -8561,10 +8575,8 @@ static void Host_Map_f (void)
 			else
 				Con_Printf("%s", cl.mapname);
 
-			if (fsize > 0)
-				Con_Printf(" ) - ^m%.1f MB^m\n", (float)fsize / (1024.0f * 1024.0f));
-			else
-				Con_Printf(" )\n");
+			Con_Printf(" )\n");
+			Host_MapDetails (cl.worldmodel, true);
 		}
 		else
 		{
