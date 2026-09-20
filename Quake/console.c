@@ -6195,6 +6195,11 @@ void Con_TabComplete (tabcomplete_t mode)
 		// only show completion hint when the cursor is at the end of the line
 		if ((size_t)key_linepos >= sizeof(key_lines[edit_line]) || key_lines[edit_line][key_linepos])
 			return;
+
+		// An opening quote has no prefix yet; a closing quote finishes the value.
+		// Keep Enter from appending a hint to an explicit literal such as "".
+		if (key_linepos > 1 && key_lines[edit_line][key_linepos - 1] == '"')
+			return;
 	}
 
 	// if editline is empty, return

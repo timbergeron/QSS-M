@@ -196,6 +196,35 @@ int main(void) {
             Key_Console(submit_keys[i]); assert(!strcmp(submitted, "sensitivity\n"));
         }
     }
+    // Quotes must clear a stale color hint and preserve the literal on submit.
+    cl_chatmode.value = 0;
+    const char *quoted[] = {"gl_teamcolor \"", "gl_teamcolor \"\"",
+        "gl_enemycolor \"\"", "gl_teamcolor \"0x66ff00\""};
+    const int submit_keys[] = {K_ENTER, K_KP_ENTER, K_ABUTTON};
+    for (size_t i = 0; i < sizeof(quoted)/sizeof(*quoted); ++i) {
+        for (size_t j = 0; j < sizeof(submit_keys)/sizeof(*submit_keys); ++j) {
+            char expected[MAXCMDLINE];
+            snprintf(expected, sizeof(expected), "%s\n", quoted[i]);
+            line(quoted[i]); strcpy(key_tabhint, "0x00");
+            before = command_completions;
+            Con_TabComplete(TABCOMPLETE_AUTOHINT);
+            assert(command_completions == before);
+            assert(!*key_tabhint);
+            submitted[0] = 0;
+            Key_Console(submit_keys[j]);
+            assert(!strcmp(submitted, expected));
+        }
+        // Explicit Tab completion is still available after an opening quote.
+        line(quoted[i]); before = command_completions;
+        Key_Console(K_TAB); assert(command_completions == before + 1);
+    }
+    const char *color_prefixes[] = {"gl_teamcolor ", "gl_teamcolor 0x",
+        "gl_teamcolor \"0x"};
+    for (size_t i = 0; i < sizeof(color_prefixes)/sizeof(*color_prefixes); ++i) {
+        line(color_prefixes[i]); before = command_completions;
+        Con_TabComplete(TABCOMPLETE_AUTOHINT);
+        assert(command_completions == before + 1);
+    }
     cl_chatmode.value = 1;
     line(" con"); assert(*Key_GetConsoleAutocompleteSuffix());
     con_autohint.value = 0; assert(!*Key_GetConsoleAutocompleteSuffix());
@@ -203,7 +232,7 @@ int main(void) {
     cl_chat_autocomplete.value = 0; assert(!*Key_GetConsoleAutocompleteSuffix());
     cl_chat_autocomplete.value = 1; assert(*Key_GetConsoleAutocompleteSuffix());
     cls.state = ca_disconnected; assert(!*Key_GetConsoleAutocompleteSuffix());
-    puts("Console completion: prefix ownership, dictionary cache, Tab and all submit keys passed");
+    puts("Console completion: prefix ownership, dictionary cache, quoted literals, Tab and all submit keys passed");
 }
 '''
 
