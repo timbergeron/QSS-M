@@ -122,6 +122,7 @@ qboolean gl_glsl_gamma_able = false; //ericw
 qboolean gl_glsl_alias_able = false; //ericw
 qboolean gl_glsl_water_able = false; //Spoike
 qboolean gl_bmodel_instancing_able = false;
+qboolean gl_occlusion_able = false; // teleporter views skip hidden planes
 qboolean gl_fbo_able = false; // woods #fxaa FXAA framebuffer support
 int gl_stencilbits;
 GLint gl_hardware_maxsize;
@@ -167,6 +168,11 @@ QS_PFNGLUNIFORM4FPROC GL_Uniform4fFunc = NULL; //ericw
 QS_PFNGLUNIFORM4FVPROC GL_Uniform4fvFunc = NULL; //spike (for iqms)
 QS_PFNGLUNIFORM1IVPROC GL_Uniform1ivFunc = NULL; // woods #caustics
 QS_PFNGLDRAWELEMENTSINSTANCEDPROC GL_DrawElementsInstancedFunc = NULL; // brush instancing
+QS_PFNGLGENQUERIESPROC GL_GenQueriesFunc = NULL; // occlusion queries
+QS_PFNGLDELETEQUERIESPROC GL_DeleteQueriesFunc = NULL;
+QS_PFNGLBEGINQUERYPROC GL_BeginQueryFunc = NULL;
+QS_PFNGLENDQUERYPROC GL_EndQueryFunc = NULL;
+QS_PFNGLGETQUERYOBJECTUIVPROC GL_GetQueryObjectuivFunc = NULL;
 
 // woods #fxaa Framebuffer functions for FXAA
 PFNGLGENFRAMEBUFFERSPROC GL_GenFramebuffersFunc = NULL;
@@ -1984,6 +1990,33 @@ static void GL_CheckExtensions (void)
 	{
 		Con_Warning ("brush model instancing not supported\n");
 	}
+	// Occlusion queries: GL 1.5 core, or ARB_occlusion_query
+	//
+	gl_occlusion_able = false;
+	GL_GenQueriesFunc = NULL;
+	GL_DeleteQueriesFunc = NULL;
+	GL_BeginQueryFunc = NULL;
+	GL_EndQueryFunc = NULL;
+	GL_GetQueryObjectuivFunc = NULL;
+	if (gl_version_major > 1 || (gl_version_major == 1 && gl_version_minor >= 5))
+	{
+		GL_GenQueriesFunc = (QS_PFNGLGENQUERIESPROC) SDL_GL_GetProcAddress("glGenQueries");
+		GL_DeleteQueriesFunc = (QS_PFNGLDELETEQUERIESPROC) SDL_GL_GetProcAddress("glDeleteQueries");
+		GL_BeginQueryFunc = (QS_PFNGLBEGINQUERYPROC) SDL_GL_GetProcAddress("glBeginQuery");
+		GL_EndQueryFunc = (QS_PFNGLENDQUERYPROC) SDL_GL_GetProcAddress("glEndQuery");
+		GL_GetQueryObjectuivFunc = (QS_PFNGLGETQUERYOBJECTUIVPROC) SDL_GL_GetProcAddress("glGetQueryObjectuiv");
+	}
+	else if (GL_ParseExtensionList(gl_extensions, "GL_ARB_occlusion_query"))
+	{
+		GL_GenQueriesFunc = (QS_PFNGLGENQUERIESPROC) SDL_GL_GetProcAddress("glGenQueriesARB");
+		GL_DeleteQueriesFunc = (QS_PFNGLDELETEQUERIESPROC) SDL_GL_GetProcAddress("glDeleteQueriesARB");
+		GL_BeginQueryFunc = (QS_PFNGLBEGINQUERYPROC) SDL_GL_GetProcAddress("glBeginQueryARB");
+		GL_EndQueryFunc = (QS_PFNGLENDQUERYPROC) SDL_GL_GetProcAddress("glEndQueryARB");
+		GL_GetQueryObjectuivFunc = (QS_PFNGLGETQUERYOBJECTUIVPROC) SDL_GL_GetProcAddress("glGetQueryObjectuivARB");
+	}
+	if (GL_GenQueriesFunc && GL_DeleteQueriesFunc && GL_BeginQueryFunc && GL_EndQueryFunc && GL_GetQueryObjectuivFunc)
+		gl_occlusion_able = true;
+
 	// GLSL alias model rendering
 	//
 

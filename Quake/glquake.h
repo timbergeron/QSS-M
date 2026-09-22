@@ -195,6 +195,7 @@ extern	cvar_t	r_wateralpha;
 extern	cvar_t	r_lavaalpha;
 extern	cvar_t	r_telealpha;
 extern cvar_t r_telestyle;
+extern cvar_t r_teleocclude;
 extern qboolean r_teleport_view, r_teleport_reflection;
 extern byte *r_teleport_pvs;
 extern unsigned int r_teleport_visframe;
@@ -328,6 +329,20 @@ typedef void (APIENTRYP QS_PFNGLUNIFORM4FPROC) (GLint location, GLfloat v0, GLfl
 typedef void (APIENTRYP QS_PFNGLUNIFORM4FVPROC) (GLint location, GLsizei count, const GLfloat *value);
 typedef void (APIENTRYP QS_PFNGLUNIFORM1IVPROC) (GLint location, GLsizei count, const GLint* value); // woods #caustics
 typedef void (APIENTRYP QS_PFNGLDRAWELEMENTSINSTANCEDPROC) (GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei instancecount);
+typedef void (APIENTRYP QS_PFNGLGENQUERIESPROC) (GLsizei n, GLuint *ids);
+typedef void (APIENTRYP QS_PFNGLDELETEQUERIESPROC) (GLsizei n, const GLuint *ids);
+typedef void (APIENTRYP QS_PFNGLBEGINQUERYPROC) (GLenum target, GLuint id);
+typedef void (APIENTRYP QS_PFNGLENDQUERYPROC) (GLenum target);
+typedef void (APIENTRYP QS_PFNGLGETQUERYOBJECTUIVPROC) (GLuint id, GLenum pname, GLuint *params);
+#ifndef GL_SAMPLES_PASSED
+#define GL_SAMPLES_PASSED 0x8914
+#endif
+#ifndef GL_QUERY_RESULT
+#define GL_QUERY_RESULT 0x8866
+#endif
+#ifndef GL_QUERY_RESULT_AVAILABLE
+#define GL_QUERY_RESULT_AVAILABLE 0x8867
+#endif
 typedef void (APIENTRYP QS_PFNGENERATEMIPMAP) (GLenum type);
 
 extern QS_PFNGLCREATESHADERPROC GL_CreateShaderFunc;
@@ -358,6 +373,11 @@ extern QS_PFNGLUNIFORM4FPROC GL_Uniform4fFunc;
 extern QS_PFNGLUNIFORM4FVPROC GL_Uniform4fvFunc;
 extern QS_PFNGLUNIFORM1IVPROC GL_Uniform1ivFunc; // woods #caustics
 extern QS_PFNGLDRAWELEMENTSINSTANCEDPROC GL_DrawElementsInstancedFunc;
+extern QS_PFNGLGENQUERIESPROC GL_GenQueriesFunc;
+extern QS_PFNGLDELETEQUERIESPROC GL_DeleteQueriesFunc;
+extern QS_PFNGLBEGINQUERYPROC GL_BeginQueryFunc;
+extern QS_PFNGLENDQUERYPROC GL_EndQueryFunc;
+extern QS_PFNGLGETQUERYOBJECTUIVPROC GL_GetQueryObjectuivFunc;
 
 // woods -- Ffamebuffer function pointers for #fxaa
 extern PFNGLGENFRAMEBUFFERSPROC GL_GenFramebuffersFunc;
@@ -378,6 +398,7 @@ extern	qboolean	gl_glsl_gamma_able;
 extern	qboolean	gl_glsl_alias_able;
 extern	qboolean	gl_glsl_water_able;
 extern	qboolean	gl_bmodel_instancing_able;
+extern	qboolean	gl_occlusion_able;
 extern	qboolean	gl_fbo_able; // woods #fxaa
 // ericw --
 

@@ -684,6 +684,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_telealpha);
 	Cvar_RegisterVariable (&r_telestyle);
 	Cvar_SetCallback (&r_telestyle, R_TeleportStyleChanged);
+	Cvar_RegisterVariable (&r_teleocclude);
 	Cvar_RegisterVariable (&r_slimealpha);
 	Cvar_RegisterVariable (&r_scale);
 	Cvar_RegisterVariable (&r_softemu);
