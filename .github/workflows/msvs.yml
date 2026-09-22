@@ -16,6 +16,10 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
+    - name: Build qssm.pak
+      shell: bash
+      run: bash Misc/qssm_pak/build.sh
+
     - name: Set environment variables
       shell: pwsh
       env:

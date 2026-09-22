@@ -26,6 +26,9 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
+    - name: Build qssm.pak
+      run: bash Misc/qssm_pak/build.sh
+
     - name: Compute vcpkg cache key inputs
       id: vcpkg-cache
       shell: bash

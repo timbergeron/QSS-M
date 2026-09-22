@@ -22,7 +22,7 @@ jobs:
     
     steps:
     - uses: actions/checkout@v6
-    
+
     - name: Set up MSYS2
       uses: msys2/setup-msys2@v2
       with:
@@ -41,6 +41,10 @@ jobs:
           zip
           git
           dos2unix
+
+    - name: Build qssm.pak
+      shell: msys2 {0}
+      run: bash Misc/qssm_pak/build.sh
 
     - name: Generate QSS-M Revision Info
       shell: bash

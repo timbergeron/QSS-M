@@ -24,6 +24,9 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
+    - name: Build qssm.pak
+      run: bash Misc/qssm_pak/build.sh
+
     - name: Resolve Target
       run: |
         set -euxo pipefail
