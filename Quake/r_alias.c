@@ -54,6 +54,12 @@ static qboolean r_alias_outline_collecting;
 static entity_t *r_deferred_alias_outlines[MAX_EDICTS];
 static int r_num_deferred_alias_outlines;
 static qboolean r_alias_outline_order_changed;
+// Stencil value/bits the replay's mask and ring passes use. The legacy replay
+// masks with 1 in bit 0x01 and scrubs it back to 0 after every model; with
+// enough stencil bits each model gets its own value instead, so the ring pass
+// ("not my value") needs no scrub draw and one clear ends the replay.
+static GLuint r_alias_outline_ref = 1, r_alias_outline_refmask = 0x01;
+static qboolean r_alias_outline_unique;
 
 static qboolean R_QueueDeferredAliasOutline(entity_t *e)
 {
@@ -1523,8 +1529,10 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	int xrayRenderMode = XRAY_RENDER_FILL;
 	qboolean is_xray = R_IsAliasOutlineXray(e, xrayColor, &xrayAlpha, &xrayAlphaFade, &xrayRenderMode);
 	GLuint outline_stencil_mask = r_alias_outline_phase == ALIAS_OUTLINE_PHASE_RING
-		? 0x01u
+		? r_alias_outline_refmask
 		: ((gl_laserpoint.value && GL_VIEWMODEL_STENCIL_BIT()) ? 0x01u : 0xFFu);
+	GLint outline_stencil_ref = r_alias_outline_phase == ALIAS_OUTLINE_PHASE_RING
+		? (GLint)r_alias_outline_ref : 1;
 
 	if (!is_xray && !(r_outline.value > 0 &&
 		!(cl.viewent.model == e->model) &&
@@ -1658,7 +1666,7 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	else
 	{
 		// Configure stencil to only draw where stencil is not set by the model
-		glStencilFunc(GL_NOTEQUAL, 1, (GLint)outline_stencil_mask); // Pass test where stencil is not set by the model
+		glStencilFunc(GL_NOTEQUAL, outline_stencil_ref, (GLint)outline_stencil_mask); // Pass test where stencil is not set by the model
 		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // Keep the stencil buffer unchanged
 		glStencilMask(0x00); // Disable writing to the stencil buffer
 	}
@@ -2385,13 +2393,13 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 
 		// A single surface has no cross-surface stencil dependencies. Keep its
 		// textures, uniforms, pose attributes and entity transform bound across
-		// all three passes instead of preparing the entire model three times.
+		// all passes instead of preparing the entire model once per pass.
 		if (saved_phase == ALIAS_OUTLINE_PHASE_SINGLE_SURFACE)
 		{
 			first_phase = ALIAS_OUTLINE_PHASE_MASK;
-			last_phase = ALIAS_OUTLINE_PHASE_SCRUB;
-			rs_aliaspolys += 2 * paliashdr->numtris;
-			rs_aliaspasses += 2 * paliashdr->numtris;
+			last_phase = r_alias_outline_unique ? ALIAS_OUTLINE_PHASE_RING : ALIAS_OUTLINE_PHASE_SCRUB;
+			rs_aliaspolys += (last_phase - first_phase) * paliashdr->numtris;
+			rs_aliaspasses += (last_phase - first_phase) * paliashdr->numtris;
 		}
 
 		for (r_alias_outline_phase = first_phase;
@@ -2416,9 +2424,10 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 				GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
 				glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 				glStencilFunc(GL_ALWAYS,
-					r_alias_outline_phase == ALIAS_OUTLINE_PHASE_MASK ? 1 : 0, 0x01);
+					r_alias_outline_phase == ALIAS_OUTLINE_PHASE_MASK ? (GLint)r_alias_outline_ref : 0,
+					(GLint)r_alias_outline_refmask);
 				glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-				glStencilMask(0x01);
+				glStencilMask(r_alias_outline_refmask);
 				glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
 					currententity->model->meshindexesvboptr + paliashdr->eboofs);
 			}
@@ -4252,28 +4261,45 @@ Replay each opaque alias as one multi-surface stencil unit after all opaque
 fills: mask every surface, draw every surface's ring, then scrub every surface.
 =============
 */
+static void R_ClearAliasOutlineStencil(GLuint mask)
+{
+	glPushAttrib(GL_ENABLE_BIT | GL_STENCIL_BUFFER_BIT);
+	glDisable(GL_SCISSOR_TEST);
+	glClearStencil(0);
+	glStencilMask(mask);
+	glClear(GL_STENCIL_BUFFER_BIT);
+	glPopAttrib();
+}
+
 void R_DrawDeferredAliasOutlines(void)
 {
 	int i;
+	GLuint uniquemask = 0;
 
 	r_alias_outline_collecting = false;
+
+	// Every stencil bit below the viewmodel/laser bit can hold a per-model value.
+	// Nothing else is live in them here: shadows and normal alias fills only
+	// leave 0x01 behind, and xray clears its own bit.
+	if (gl_stencilbits >= 5)
+	{
+		uniquemask = (gl_stencilbits < 32 ? (1u << gl_stencilbits) - 1u : ~0u) & 0xFFu;
+		uniquemask &= ~GL_VIEWMODEL_STENCIL_BIT();
+	}
 
 	// Normal alias fills stamped 0x01 while their immediate powerup/xray work
 	// ran. Remove that now-stale shared mask without touching the viewmodel bit,
 	// even when no normal outline was queued, so it cannot leak into the later
 	// translucent entity pass.
 	if (gl_stencilbits)
-	{
-		glPushAttrib(GL_ENABLE_BIT | GL_STENCIL_BUFFER_BIT);
-		glDisable(GL_SCISSOR_TEST);
-		glClearStencil(0);
-		glStencilMask(0x01);
-		glClear(GL_STENCIL_BUFFER_BIT);
-		glPopAttrib();
-	}
+		R_ClearAliasOutlineStencil(uniquemask && r_num_deferred_alias_outlines ? uniquemask : 0x01);
 
 	if (!r_num_deferred_alias_outlines)
 		return;
+
+	r_alias_outline_unique = uniquemask != 0;
+	r_alias_outline_ref = 1;
+	r_alias_outline_refmask = r_alias_outline_unique ? uniquemask : 0x01;
 
 	// Batched fills finish after individual fills. Keep overlapping colored
 	// outlines in visible-list order without inserting into a large queue.
@@ -4287,6 +4313,19 @@ void R_DrawDeferredAliasOutlines(void)
 
 		currententity = r_deferred_alias_outlines[i];
 		paliashdr = (aliashdr_t *)Mod_Extradata(currententity->model);
+
+		// Each model masks with a value no earlier model left behind, so a
+		// later ring still passes over an earlier body exactly as after a
+		// scrub. Out of values: clear and start over.
+		if (r_alias_outline_unique && i)
+		{
+			if (++r_alias_outline_ref > r_alias_outline_refmask)
+			{
+				R_ClearAliasOutlineStencil(r_alias_outline_refmask);
+				r_alias_outline_ref = 1;
+			}
+		}
+
 		if (!paliashdr->nextsurface)
 		{
 			r_alias_outline_phase = ALIAS_OUTLINE_PHASE_SINGLE_SURFACE;
@@ -4300,11 +4339,22 @@ void R_DrawDeferredAliasOutlines(void)
 		r_alias_outline_phase = ALIAS_OUTLINE_PHASE_RING;
 		R_DrawAliasModel(currententity);
 
-		r_alias_outline_phase = ALIAS_OUTLINE_PHASE_SCRUB;
-		R_DrawAliasModel(currententity);
+		if (!r_alias_outline_unique)
+		{
+			r_alias_outline_phase = ALIAS_OUTLINE_PHASE_SCRUB;
+			R_DrawAliasModel(currententity);
+		}
 	}
 
+	// Leave the stencil as zero as the scrubbed replay did, for the translucent
+	// pass's own outlines.
+	if (r_alias_outline_unique)
+		R_ClearAliasOutlineStencil(r_alias_outline_refmask);
+
 	r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
+	r_alias_outline_unique = false;
+	r_alias_outline_ref = 1;
+	r_alias_outline_refmask = 0x01;
 	r_num_deferred_alias_outlines = 0;
 }
 
