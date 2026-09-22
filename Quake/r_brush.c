@@ -2131,7 +2131,7 @@ calls a frame for 43 entities.
 This deliberately does NOT reuse R_BModelDrawCache.  The two paths agree on
 rejecting entalpha < 1, but the cache additionally requires gl_cull, no
 ent->effects at all (the shadow path only rejects EF_NOSHADOW), a live world
-program, non-cheat-safe modes and submodelof == cl.worldmodel -- so borrowing it
+program, non-cheat-safe modes and supported lightmapped surfaces -- so borrowing it
 would silently drop shadows this path draws.  Every surface the immediate path
 would have drawn goes in the index buffer, in the same fan order.
 

@@ -1247,7 +1247,10 @@ qboolean R_DrawBModelDrawCache (qmodel_t *model, entity_t *ent)
 	texture_t *t, *animt;
 	gltexture_t *fullbright = NULL;
 
-	if (!r_bmodelcache.value || !ent || !model || model->submodelof != cl.worldmodel)
+	// External BSP models share the brush VBO and lightmap atlas too. Wait for
+	// late model uploads before caching indices into those shared buffers.
+	if (!r_bmodelcache.value || !ent || !model || model->type != mod_brush ||
+		model->needload || lightmaps_latecached)
 		return false;
 	if (!gl_vbo_able || !GL_GenBuffersFunc || !GL_BufferDataFunc || !GL_DeleteBuffersFunc || !gl_bmodel_vbo)
 		return false;
@@ -1447,15 +1450,17 @@ static qboolean R_CanInstanceBrushEntity (entity_t *ent, bmodel_drawcache_t **ca
 		*cache_out = NULL;
 	if (!gl_bmodel_instancing_able || !gl_bmodel_instancing.value || !r_world_instanced_program)
 		return false;
-	if (!r_bmodelcache.value || !gl_bmodel_vbo)
+	if (!r_bmodelcache.value || !gl_bmodel_vbo || lightmaps_latecached)
 		return false;
 	if (!gl_cull.value || r_drawflat_cheatsafe || r_fullbright_cheatsafe || r_lightmap_cheatsafe)
 		return false;
 	if (!ent || !(model = ent->model) || model->type != mod_brush || model->needload)
 		return false;
-	if (model->submodelof != cl.worldmodel || model->nummodelsurfaces <= 0)
+	if (model->nummodelsurfaces <= 0)
 		return false;
-	if (skipsubmodels && (skipsubmodels[model->submodelidx >> 3] & (1u << (model->submodelidx & 7))))
+	// Scene-cache skip bits only describe inline models of the current world.
+	if (model->submodelof == cl.worldmodel && skipsubmodels &&
+		(skipsubmodels[model->submodelidx >> 3] & (1u << (model->submodelidx & 7))))
 		return false;
 	if (ENTALPHA_DECODE(ent->alpha) < 1.0f || ent->effects)
 		return false;
