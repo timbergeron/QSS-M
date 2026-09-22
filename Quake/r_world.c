@@ -1791,6 +1791,14 @@ void R_DrawBrushModelsInstanced (entity_t **ents, int count)
 		for (group_end = group_start + 1; group_end < count && ents[group_end]->model == ent->model && ents[group_end]->frame == ent->frame; group_end++)
 			;
 
+		// A singleton cannot be instanced; let its normal draw handle culling
+		// and cache eligibility once.
+		if (group_end == group_start + 1)
+		{
+			R_DrawBrushModel(ent);
+			continue;
+		}
+
 		batchcount = 0;
 		for (i = group_start; i < group_end; i++)
 		{
