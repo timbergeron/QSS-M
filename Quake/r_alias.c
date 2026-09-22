@@ -45,13 +45,15 @@ typedef enum alias_outline_phase_e
 	ALIAS_OUTLINE_PHASE_NORMAL,
 	ALIAS_OUTLINE_PHASE_MASK,
 	ALIAS_OUTLINE_PHASE_RING,
-	ALIAS_OUTLINE_PHASE_SCRUB
+	ALIAS_OUTLINE_PHASE_SCRUB,
+	ALIAS_OUTLINE_PHASE_SINGLE_SURFACE
 } alias_outline_phase_t;
 
 static alias_outline_phase_t r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
 static qboolean r_alias_outline_collecting;
 static entity_t *r_deferred_alias_outlines[MAX_EDICTS];
 static int r_num_deferred_alias_outlines;
+static qboolean r_alias_outline_order_changed;
 
 static qboolean R_QueueDeferredAliasOutline(entity_t *e)
 {
@@ -63,6 +65,9 @@ static qboolean R_QueueDeferredAliasOutline(entity_t *e)
 
 	if (r_num_deferred_alias_outlines < countof(r_deferred_alias_outlines))
 	{
+		if (r_num_deferred_alias_outlines &&
+			r_deferred_alias_outlines[r_num_deferred_alias_outlines - 1]->alias_outline_order > e->alias_outline_order)
+			r_alias_outline_order_changed = true;
 		r_deferred_alias_outlines[r_num_deferred_alias_outlines++] = e;
 		return true;
 	}
@@ -2375,33 +2380,52 @@ static void GL_DrawAliasFrame_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, le
 	}
 	else
 	{
-		glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
-			GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
-		glEnable(GL_DEPTH_TEST);
-		glEnable(GL_STENCIL_TEST);
-		glDepthFunc(GL_LEQUAL);
-		glDepthMask(GL_FALSE);
+		alias_outline_phase_t saved_phase = r_alias_outline_phase;
+		alias_outline_phase_t first_phase = saved_phase, last_phase = saved_phase;
 
-		if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_RING)
+		// A single surface has no cross-surface stencil dependencies. Keep its
+		// textures, uniforms, pose attributes and entity transform bound across
+		// all three passes instead of preparing the entire model three times.
+		if (saved_phase == ALIAS_OUTLINE_PHASE_SINGLE_SURFACE)
 		{
-			R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e);
-		}
-		else
-		{
-			GL_Uniform1fFunc(glsl->outlineWidthLoc, 0.0f);
-			GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
-			GL_Uniform1iFunc(glsl->shellModeLoc, 0);
-			GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
-			glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-			glStencilFunc(GL_ALWAYS,
-				r_alias_outline_phase == ALIAS_OUTLINE_PHASE_MASK ? 1 : 0, 0x01);
-			glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-			glStencilMask(0x01);
-			glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
-				currententity->model->meshindexesvboptr + paliashdr->eboofs);
+			first_phase = ALIAS_OUTLINE_PHASE_MASK;
+			last_phase = ALIAS_OUTLINE_PHASE_SCRUB;
+			rs_aliaspolys += 2 * paliashdr->numtris;
+			rs_aliaspasses += 2 * paliashdr->numtris;
 		}
 
-		glPopAttrib();
+		for (r_alias_outline_phase = first_phase;
+			r_alias_outline_phase <= last_phase; ++r_alias_outline_phase)
+		{
+			glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+				GL_STENCIL_BUFFER_BIT | GL_POLYGON_BIT);
+			glEnable(GL_DEPTH_TEST);
+			glEnable(GL_STENCIL_TEST);
+			glDepthFunc(GL_LEQUAL);
+			glDepthMask(GL_FALSE);
+
+			if (r_alias_outline_phase == ALIAS_OUTLINE_PHASE_RING)
+			{
+				R_DrawAliasModelOutline(glsl, paliashdr, &lerpdata, e);
+			}
+			else
+			{
+				GL_Uniform1fFunc(glsl->outlineWidthLoc, 0.0f);
+				GL_Uniform1iFunc(glsl->isOutlinePassLoc, 0);
+				GL_Uniform1iFunc(glsl->shellModeLoc, 0);
+				GL_Uniform1iFunc(glsl->useShellTexLoc, 0);
+				glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+				glStencilFunc(GL_ALWAYS,
+					r_alias_outline_phase == ALIAS_OUTLINE_PHASE_MASK ? 1 : 0, 0x01);
+				glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+				glStencilMask(0x01);
+				glDrawElements(GL_TRIANGLES, paliashdr->numindexes, GL_UNSIGNED_SHORT,
+					currententity->model->meshindexesvboptr + paliashdr->eboofs);
+			}
+
+			glPopAttrib();
+		}
+		r_alias_outline_phase = saved_phase;
 	}
 
 // clean up
@@ -3357,7 +3381,9 @@ qboolean R_AliasInst_Eligible (entity_t *e)
 	{
 		eligible = false;
 	}
-	else if (r_outline.value > 0.0f)
+	else if (r_outline.value > 0.0f &&
+		(!r_alias_outline_collecting || !gl_stencilbits ||
+		 r_alias_outline_phase != ALIAS_OUTLINE_PHASE_NORMAL))
 	{
 		eligible = false;
 	}
@@ -3438,6 +3464,12 @@ static int R_AliasInst_Prepare (entity_t *e, alias_inst_rec_t *rec)
 	int anim = (int)(cl.time * 10) & 3;
 	int skin;
 
+	// The outline helper must only collect here: a full queue would otherwise
+	// make it draw immediately without this instance's model matrix bound.
+	if (r_outline.value > 0.0f &&
+		r_num_deferred_alias_outlines >= countof(r_deferred_alias_outlines))
+		return ALIAS_INST_PREP_FALLBACK;
+
 	if (!hdr || hdr->poseverttype != PV_QUAKE1 || hdr->nextsurface ||
 		hdr->numbones || hdr->numindexes <= 0 || hdr->numverts_vbo <= 0)
 	{
@@ -3470,6 +3502,15 @@ static int R_AliasInst_Prepare (entity_t *e, alias_inst_rec_t *rec)
 	if (rec->tex.lower || rec->tex.upper)
 	{
 		return ALIAS_INST_PREP_FALLBACK;
+	}
+
+	if (r_outline.value > 0.0f)
+	{
+		// Eligibility guarantees opaque, non-xray models during collection.
+		// Keep the same size/proximity fades as ordinary fills;
+		// only the fill is instanced, the deferred stencil passes stay intact.
+		entalpha = 1.0f;
+		R_DrawAliasModelOutline(&r_alias_glsl[ALIAS_GLSL_BASIC], hdr, &rec->lerp, e);
 	}
 
 	return ALIAS_INST_PREP_OK;
@@ -4181,11 +4222,26 @@ Collect opaque normal alias outlines during the entity fill pass. Xray and
 translucent outlines are intentionally never queued.
 =============
 */
+static int R_CompareDeferredAliasOutlines(const void *lhs, const void *rhs)
+{
+	const entity_t *a = *(entity_t *const *)lhs;
+	const entity_t *b = *(entity_t *const *)rhs;
+
+	return (a->alias_outline_order > b->alias_outline_order) -
+		(a->alias_outline_order < b->alias_outline_order);
+}
+
 void R_BeginDeferredAliasOutlines(void)
 {
+	int i;
+
 	r_alias_outline_phase = ALIAS_OUTLINE_PHASE_NORMAL;
 	r_num_deferred_alias_outlines = 0;
 	r_alias_outline_collecting = true;
+	r_alias_outline_order_changed = false;
+	// Reverse traversal preserves the first occurrence if the list repeats an entity.
+	for (i = cl_numvisedicts - 1; i >= 0; --i)
+		cl_visedicts[i]->alias_outline_order = i;
 }
 
 /*
@@ -4219,9 +4275,24 @@ void R_DrawDeferredAliasOutlines(void)
 	if (!r_num_deferred_alias_outlines)
 		return;
 
+	// Batched fills finish after individual fills. Keep overlapping colored
+	// outlines in visible-list order without inserting into a large queue.
+	if (r_alias_outline_order_changed)
+		qsort(r_deferred_alias_outlines, r_num_deferred_alias_outlines,
+			sizeof(r_deferred_alias_outlines[0]), R_CompareDeferredAliasOutlines);
+
 	for (i = 0; i < r_num_deferred_alias_outlines; ++i)
 	{
+		aliashdr_t *paliashdr;
+
 		currententity = r_deferred_alias_outlines[i];
+		paliashdr = (aliashdr_t *)Mod_Extradata(currententity->model);
+		if (!paliashdr->nextsurface)
+		{
+			r_alias_outline_phase = ALIAS_OUTLINE_PHASE_SINGLE_SURFACE;
+			R_DrawAliasModel(currententity);
+			continue;
+		}
 
 		r_alias_outline_phase = ALIAS_OUTLINE_PHASE_MASK;
 		R_DrawAliasModel(currententity);

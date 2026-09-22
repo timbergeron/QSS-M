@@ -101,6 +101,7 @@ typedef struct entity_s
 	int						skinnum;		// for Alias models
 	int						visframe;		// last frame this entity was
 											//  found in an active leaf
+	int						alias_outline_order; // visible-list order for deferred outline blending
 
 	int						dlightframe;	// dynamic lighting
 	unsigned int			teleportvisframe; // independent stamp for each teleporter subview
