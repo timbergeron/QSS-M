@@ -62,6 +62,7 @@ typedef struct aliaslight_sample_s
     int                        ds, dt;
     double                    dsfrac, dtfrac;
     vec3_t                    lightspot;
+    qboolean                spotset;    // the trace wrote lightspot (a miss may not)
 } aliaslight_sample_t;
 
 typedef struct aliaslight_cache_s

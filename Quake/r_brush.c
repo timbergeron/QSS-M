@@ -2311,7 +2311,7 @@ qboolean GL_PrepareBrushShadow (entity_t *e, brushshadow_rec_t *rec)
 	}
 
 	// Determine lighting at entity origin
-	R_LightPoint(e->origin);
+	R_LightPointCachedAlias(e, e->origin, 0);
 	shade = ((lightcolor[0] + lightcolor[1] + lightcolor[2]) / 3) / 128.0f;
 	rec->e = e;
 	rec->lheight = e->origin[2] - lightspot[2];

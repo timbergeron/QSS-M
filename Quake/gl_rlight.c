@@ -984,8 +984,20 @@ static int R_LightPointTraceSample (vec3_t p, aliaslight_sample_t *sample)
         end[1] = p[1];
         end[2] = p[2] - maxdist;
 
+        float spot0 = lightspot[0];
+
+        // A trace that never crosses a plane leaves lightspot as the previous
+        // caller set it; flag that so such a miss is never replayed from cache.
+        lightspot[0] = FLT_MAX;
         R_LightPointSetAmbient (lightcolor);
         RecursiveLightPointSample (lightcolor, cl.worldmodel->nodes, p, p, end, &maxdist, sample);
+        if (lightspot[0] == FLT_MAX)
+            lightspot[0] = spot0;
+        else if (sample)
+        {
+            sample->spotset = true;
+            VectorCopy (lightspot, sample->lightspot);
+        }
     }
     return R_LightPointAverage ();
 }
@@ -993,10 +1005,12 @@ static int R_LightPointTraceSample (vec3_t p, aliaslight_sample_t *sample)
 static int R_LightPointEvaluateCachedSample (const aliaslight_sample_t *sample)
 {
     R_LightPointSetAmbient (lightcolor);
-    if (sample && sample->valid)
+    if (sample)
     {
-        VectorCopy (sample->lightspot, lightspot);
-        R_LightPointEvaluateSample (sample, lightcolor);
+        if (sample->spotset)
+            VectorCopy (sample->lightspot, lightspot);
+        if (sample->valid)
+            R_LightPointEvaluateSample (sample, lightcolor);
     }
     return R_LightPointAverage ();
 }
@@ -1020,9 +1034,10 @@ static qboolean R_LightPointCacheEligible (entity_t *e, vec3_t p)
 {
     if (!r_aliaslightcache.value || !e || !e->model)
         return false;
-    if (!e->baseline.modelindex)
-        return false;
-    if (e->model->type != mod_alias)
+    // Keyed on world, model and exact origin below, so an entity need not sit at
+    // its baseline: items and monsters that settle after the baseline was taken
+    // (droptofloor, delayed monster starts) stay put and would re-trace each frame.
+    if (e->model->type != mod_alias && e->model->type != mod_brush)
         return false;
     if (e->effects & (EF_BRIGHTLIGHT|EF_DIMLIGHT|EF_CANDLELIGHT|EF_RED|EF_BLUE|EF_GREEN))
         return false;
@@ -1032,7 +1047,7 @@ static qboolean R_LightPointCacheEligible (entity_t *e, vec3_t p)
         return false;
     if (cl.worldmodel->lightgrid && mod_lightgrid.value)
         return false;
-    if (!VectorCompare (p, e->origin) || !VectorCompare (e->origin, e->baseline.origin))
+    if (!VectorCompare (p, e->origin))
         return false;
     return true;
 }
@@ -1060,8 +1075,12 @@ int R_LightPointCachedAlias (entity_t *e, vec3_t p, float raise)
         cache->worldlightdata = cl.worldmodel->lightdata;
         cache->model = e->model;
         VectorCopy (p, cache->origin);
+        // A miss (no lit surface below) is cached as ambient-only, like the
+        // raised sample already was, instead of being traced twice per frame --
+        // unless it left no lightspot of its own, which only a fresh trace
+        // reproduces (the stale spot differs per caller).
         R_LightPointTraceSample (p, &cache->base);
-        if (!cache->base.valid)
+        if (!cache->base.valid && !cache->base.spotset)
         {
             cache->valid = false;
             return R_LightPointWithRaise (p, raise);
