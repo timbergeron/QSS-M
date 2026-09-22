@@ -3525,37 +3525,32 @@ static int R_AliasInst_Prepare (entity_t *e, alias_inst_rec_t *rec)
 	return ALIAS_INST_PREP_OK;
 }
 
-static void R_AliasInst_DrawRun (const alias_inst_rec_t *rec, int first,
-	int count)
+// Bind one run's mesh poses plus its slice of the most recently uploaded
+// instance buffer. Shared by the instanced fill and the instanced shadow pass.
+static void R_AliasInst_BindAttribs (qmodel_t *model, aliashdr_t *hdr,
+	const lerpdata_t *lerp, int first)
 {
-	const aliasglsl_t *glsl = &r_alias_inst_glsl;
-	aliashdr_t *hdr = (aliashdr_t *)Mod_Extradata (rec->model);
-	GLfloat tints[3][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {1, 1, 1, 1}};
 	size_t base = (size_t)first * sizeof(alias_inst_data_t);
 	int attrib;
 
-	if (!hdr)
-		return;
-
-	currententity = rec->ent;
 	GL_DisableMultitexture ();
-	GL_BindBuffer (GL_ARRAY_BUFFER, rec->model->meshvbo);
-	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, rec->model->meshindexesvbo);
+	GL_BindBuffer (GL_ARRAY_BUFFER, model->meshvbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, model->meshindexesvbo);
 	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose1VertexAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose2VertexAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose1NormalAttrIndex);
 	GL_EnableVertexAttribArrayFunc (pose2NormalAttrIndex);
 	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, 0,
-		rec->model->meshvboptr + hdr->vbostofs);
+		model->meshvboptr + hdr->vbostofs);
 	GL_VertexAttribPointerFunc (pose1VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE,
-		sizeof(meshxyz_mdl_t), GLARB_GetXYZOffset_MDL(hdr, rec->lerp.pose1));
+		sizeof(meshxyz_mdl_t), GLARB_GetXYZOffset_MDL(hdr, lerp->pose1));
 	GL_VertexAttribPointerFunc (pose2VertexAttrIndex, 4, GL_UNSIGNED_BYTE, GL_FALSE,
-		sizeof(meshxyz_mdl_t), GLARB_GetXYZOffset_MDL(hdr, rec->lerp.pose2));
+		sizeof(meshxyz_mdl_t), GLARB_GetXYZOffset_MDL(hdr, lerp->pose2));
 	GL_VertexAttribPointerFunc (pose1NormalAttrIndex, 4, GL_BYTE, GL_TRUE,
-		sizeof(meshxyz_mdl_t), GLARB_GetNormalOffset_MDL(hdr, rec->lerp.pose1));
+		sizeof(meshxyz_mdl_t), GLARB_GetNormalOffset_MDL(hdr, lerp->pose1));
 	GL_VertexAttribPointerFunc (pose2NormalAttrIndex, 4, GL_BYTE, GL_TRUE,
-		sizeof(meshxyz_mdl_t), GLARB_GetNormalOffset_MDL(hdr, rec->lerp.pose2));
+		sizeof(meshxyz_mdl_t), GLARB_GetNormalOffset_MDL(hdr, lerp->pose2));
 
 	GL_BindBuffer (GL_ARRAY_BUFFER, r_alias_inst_vbos[(r_alias_inst_ring - 1) % countof(r_alias_inst_vbos)]);
 	for (attrib = aliasInstMat0AttrIndex; attrib <= aliasInstMat3AttrIndex; ++attrib)
@@ -3574,6 +3569,65 @@ static void R_AliasInst_DrawRun (const alias_inst_rec_t *rec, int first,
 	GL_VertexAttribPointerFunc (aliasInstShadeBlendAttrIndex, 4, GL_FLOAT, GL_FALSE,
 		sizeof(alias_inst_data_t), (void *)(base + offsetof(alias_inst_data_t, shade_blend)));
 	GL_VertexAttribDivisorFunc (aliasInstShadeBlendAttrIndex, 1);
+}
+
+// Upload ndata instance records into the next ring buffer; 0 if unavailable.
+static GLuint R_AliasInst_Upload (int ndata)
+{
+	GLuint uploadvbo;
+	int i;
+
+	if (!r_alias_inst_vbos[0])
+	{
+		GL_GenBuffersFunc (countof(r_alias_inst_vbos), r_alias_inst_vbos);
+		for (i = 0; i < countof(r_alias_inst_vbos); ++i)
+		{
+			GL_BindBuffer (GL_ARRAY_BUFFER, r_alias_inst_vbos[i]);
+			GL_BufferDataFunc (GL_ARRAY_BUFFER,
+				(GLsizeiptr)(MAX_ALIAS_INSTANCES * sizeof(alias_inst_data_t)),
+				NULL, GL_STREAM_DRAW);
+		}
+		GL_ClearBufferBindings ();
+	}
+	uploadvbo = r_alias_inst_vbos[r_alias_inst_ring % countof(r_alias_inst_vbos)];
+	r_alias_inst_ring++;
+	if (!uploadvbo)
+		return 0;
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, uploadvbo);
+	GL_BufferSubDataFunc (GL_ARRAY_BUFFER, 0,
+		(GLsizeiptr)((size_t)ndata * sizeof(alias_inst_data_t)),
+		r_alias_inst_data);
+	return uploadvbo;
+}
+
+// Undo the instance divisors/arrays and program the instanced passes leave bound.
+static void R_AliasInst_Unbind (void)
+{
+	int i;
+
+	for (i = aliasInstMat0AttrIndex; i <= aliasInstShadeBlendAttrIndex; ++i)
+		GL_VertexAttribDivisorFunc (i, 0);
+	for (i = pose1VertexAttrIndex; i <= aliasInstShadeBlendAttrIndex; ++i)
+		GL_DisableVertexAttribArrayFunc (i);
+	GL_UseProgramFunc (0);
+	GL_SelectTexture (GL_TEXTURE0);
+	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+static void R_AliasInst_DrawRun (const alias_inst_rec_t *rec, int first,
+	int count)
+{
+	const aliasglsl_t *glsl = &r_alias_inst_glsl;
+	aliashdr_t *hdr = (aliashdr_t *)Mod_Extradata (rec->model);
+	GLfloat tints[3][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {1, 1, 1, 1}};
+
+	if (!hdr)
+		return;
+
+	currententity = rec->ent;
+	R_AliasInst_BindAttribs (rec->model, hdr, &rec->lerp, first);
 
 	GL_SelectTexture (GL_TEXTURE0);
 	GL_Bind (rec->tex.base);
@@ -3684,20 +3738,7 @@ void R_DrawAliasModelsInstanced (entity_t **ents, int count)
 		currententity = saved;
 		return;
 	}
-	if (!r_alias_inst_vbos[0])
-	{
-		GL_GenBuffersFunc (countof(r_alias_inst_vbos), r_alias_inst_vbos);
-		for (i = 0; i < countof(r_alias_inst_vbos); ++i)
-		{
-			GL_BindBuffer (GL_ARRAY_BUFFER, r_alias_inst_vbos[i]);
-			GL_BufferDataFunc (GL_ARRAY_BUFFER,
-				(GLsizeiptr)(MAX_ALIAS_INSTANCES * sizeof(alias_inst_data_t)),
-				NULL, GL_STREAM_DRAW);
-		}
-		GL_ClearBufferBindings ();
-	}
-	uploadvbo = r_alias_inst_vbos[r_alias_inst_ring % countof(r_alias_inst_vbos)];
-	r_alias_inst_ring++;
+	uploadvbo = R_AliasInst_Upload (ndata);
 	if (!uploadvbo)
 	{
 		for (i = 0; i < ndata; ++i)
@@ -3709,10 +3750,6 @@ void R_DrawAliasModelsInstanced (entity_t **ents, int count)
 		return;
 	}
 
-	GL_BindBuffer (GL_ARRAY_BUFFER, uploadvbo);
-	GL_BufferSubDataFunc (GL_ARRAY_BUFFER, 0,
-		(GLsizeiptr)((size_t)ndata * sizeof(alias_inst_data_t)),
-		r_alias_inst_data);
 	GL_UseProgramFunc (r_alias_inst_glsl.program);
 	glDepthMask (GL_TRUE);
 	glDisable (GL_BLEND);
@@ -3724,14 +3761,7 @@ void R_DrawAliasModelsInstanced (entity_t **ents, int count)
 			r_alias_inst_runs[i].first, r_alias_inst_runs[i].count);
 	glShadeModel (GL_FLAT);
 
-	for (i = aliasInstMat0AttrIndex; i <= aliasInstShadeBlendAttrIndex; ++i)
-		GL_VertexAttribDivisorFunc (i, 0);
-	for (i = pose1VertexAttrIndex; i <= aliasInstShadeBlendAttrIndex; ++i)
-		GL_DisableVertexAttribArrayFunc (i);
-	GL_UseProgramFunc (0);
-	GL_SelectTexture (GL_TEXTURE0);
-	GL_BindBuffer (GL_ARRAY_BUFFER, 0);
-	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+	R_AliasInst_Unbind ();
 	glColor3f (1, 1, 1);
 	currententity = saved;
 }
@@ -4532,26 +4562,66 @@ static void GL_DrawAliasShadow_GLSL (aliasglsl_t *glsl, aliashdr_t *paliashdr, l
 GL_DrawAliasShadow -- johnfitz -- rewritten
 
 TODO: orient shadow onto "lightplane" (a global mplane_t*)
+
+tb: between R_BeginShadowQueue and R_EndShadowQueue every alias and brush
+shadow is queued in draw order. Each shadow is otherwise a full draw with its
+own program, attribute and uniform setup, and at ~80 shadows a frame (ad_tears)
+that per-draw driver cost, not the GPU, is what the shadow pass spends its time
+on. The stencil lets the first shadow drawn over a pixel win, so draw order
+decides overlaps. Each shadow's screen footprint is bounded by a view cone and
+the queue is split into waves such that any two shadows that may overlap are
+drawn in queue order in successive waves; inside a wave nothing overlaps, so it
+is batched freely (brush shadows under one fixed-function state, identical
+plain MDL shadows instanced). The image matches drawing them one by one.
 =============
 */
-void GL_DrawAliasShadow (entity_t *e)
+typedef struct
 {
-	float	shadowmatrix[16] = {1,				0,				0,				0,
-								0,				1,				0,				0,
-								SHADOW_SKEW_X,	SHADOW_SKEW_Y,	SHADOW_VSCALE,	0,
-								0,				0,				SHADOW_HEIGHT,	1};
+	entity_t	*ent;
+	aliashdr_t	*hdr;
+	lerpdata_t	lerp;
+	gltexture_t	*skin;		// queued shadows only: the real skin for MF_HOLEY, else notexture
 	float		lheight;
-	aliashdr_t	*paliashdr;
-	lerpdata_t	lerpdata;
+	float		alpha;
+	int			order;
+} alias_shadow_rec_t;
+
+static const float r_alias_shadowmatrix[16] = {
+	1,				0,				0,				0,
+	0,				1,				0,				0,
+	SHADOW_SKEW_X,	SHADOW_SKEW_Y,	SHADOW_VSCALE,	0,
+	0,				0,				SHADOW_HEIGHT,	1};
+
+enum { SHADOWQ_ALIAS, SHADOWQ_ALIAS_INST, SHADOWQ_BRUSH };
+
+typedef struct
+{
+	int			kind;
+	int			index;		// into r_alias_shadow_recs or r_brush_shadow_recs
+	vec3_t		dir;		// unit view direction to the footprint's bounding sphere
+	float		angle;		// its angular radius as seen from the eye (padded)
+	int			level;		// draw wave; overlapping shadows land in increasing waves in queue order
+} shadowq_entry_t;
+
+#define MAX_SHADOWQ	MAX_ALIAS_INSTANCES
+static alias_shadow_rec_t r_alias_shadow_recs[MAX_SHADOWQ];
+static brushshadow_rec_t r_brush_shadow_recs[MAX_SHADOWQ];
+static shadowq_entry_t r_shadowq[MAX_SHADOWQ];
+static int r_shadowq_sorted[MAX_SHADOWQ];
+static int r_num_shadowq, r_num_alias_shadows, r_num_brush_shadows;
+static qboolean r_shadowq_collecting, r_shadowq_instancing;
+
+// Everything but the draw: early-outs, frame and transform, culling, and the
+// light sample that sets the shadow's height and alpha. False if nothing draws.
+static qboolean GL_PrepareAliasShadow (entity_t *e, alias_shadow_rec_t *rec)
+{
 	float shade; // woods (R00k) : fade light based on ambientlight
-	aliasglsl_t	*glsl; // woods #shadowglsl
-	float		shadowalpha; // woods #shadowglsl
 
 	if (e == &cl.viewent || e->effects & EF_NOSHADOW || e->model->flags & MOD_NOSHADOW)
-		return;
+		return false;
 
 	entalpha = ENTALPHA_DECODE(e->alpha);
-	if (entalpha < 1) return; // woods no shadows on transparent entities
+	if (entalpha < 1) return false; // woods no shadows on transparent entities
 
 	if (r_shadows_groundcheck.value && e->model->flags & EF_ROTATE) // woods #shadow
 	{
@@ -4559,28 +4629,37 @@ void GL_DrawAliasShadow (entity_t *e)
 			GL_DrawAliasShadowCheck(e);
 
 		if (!(e->shadow_state & SHADOW_VALID))
-			return;
+			return false;
 	}
 
-	paliashdr = (aliashdr_t *)Mod_Extradata (e->model);
-	R_SetupAliasFrame (paliashdr, e, &lerpdata);
-	R_SetupEntityTransform (e, &lerpdata);
-	if (R_CullModelForEntityTransform(e, lerpdata.origin, lerpdata.angles))
-		return;
+	rec->ent = e;
+	rec->hdr = (aliashdr_t *)Mod_Extradata (e->model);
+	R_SetupAliasFrame (rec->hdr, e, &rec->lerp);
+	R_SetupEntityTransform (e, &rec->lerp);
+	if (R_CullModelForEntityTransform(e, rec->lerp.origin, rec->lerp.angles))
+		return false;
 
 	R_LightPointCachedAlias (e, e->origin, 0); // woods #shadowglsl -- reuse the static-entity light cache instead of re-tracing
 	shade = (((lightcolor[0] + lightcolor[1] + lightcolor[2]) / 3) / 128); // woods (R00k) : fade light based on ambientlight
-	lheight = currententity->origin[2] - lightspot[2];
+	rec->lheight = currententity->origin[2] - lightspot[2];
+	rec->alpha = CLAMP (0.0f, entalpha * shade * r_shadows.value, 1.0f); // woods (R00k) : fade light based on ambientlight
+	return true;
+}
+
+static void GL_DrawAliasShadowPrepared (alias_shadow_rec_t *rec)
+{
+	aliashdr_t	*paliashdr = rec->hdr;
+	aliasglsl_t	*glsl; // woods #shadowglsl
 
 // set up matrix
 	glPushMatrix ();
-	glTranslatef (lerpdata.origin[0],  lerpdata.origin[1],  lerpdata.origin[2]);
-	glTranslatef (0,0,-lheight);
-	glMultMatrixf (shadowmatrix);
-	glTranslatef (0,0,lheight);
-	glRotatef (lerpdata.angles[1],  0, 0, 1);
-	glRotatef (-lerpdata.angles[0],  0, 1, 0);
-	glRotatef (lerpdata.angles[2],  1, 0, 0);
+	glTranslatef (rec->lerp.origin[0],  rec->lerp.origin[1],  rec->lerp.origin[2]);
+	glTranslatef (0,0,-rec->lheight);
+	glMultMatrixf (r_alias_shadowmatrix);
+	glTranslatef (0,0,rec->lheight);
+	glRotatef (rec->lerp.angles[1],  0, 0, 1);
+	glRotatef (-rec->lerp.angles[0],  0, 1, 0);
+	glRotatef (rec->lerp.angles[2],  1, 0, 0);
 	glTranslatef (paliashdr->scale_origin[0], paliashdr->scale_origin[1], paliashdr->scale_origin[2]);
 	glScalef (paliashdr->scale[0], paliashdr->scale[1], paliashdr->scale[2]);
 
@@ -4588,18 +4667,17 @@ void GL_DrawAliasShadow (entity_t *e)
 	glDepthMask(GL_FALSE);
 	glEnable (GL_BLEND);
 	GL_DisableMultitexture ();
-	shadowalpha = CLAMP (0.0f, entalpha * shade * r_shadows.value, 1.0f); // woods (R00k) : fade light based on ambientlight
-	glsl = &r_alias_glsl[(paliashdr->poseverttype==PV_IQM&&lerpdata.bonestate)?ALIAS_GLSL_SKELETAL:ALIAS_GLSL_BASIC]; // woods #shadowglsl
-	if (glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones || !lerpdata.bonestate))
+	glsl = &r_alias_glsl[(paliashdr->poseverttype==PV_IQM&&rec->lerp.bonestate)?ALIAS_GLSL_SKELETAL:ALIAS_GLSL_BASIC]; // woods #shadowglsl
+	if (glsl->program != 0 && (paliashdr->numbones <= glsl->maxbones || !rec->lerp.bonestate))
 	{
-		GL_DrawAliasShadow_GLSL (glsl, paliashdr, lerpdata, e, shadowalpha);
+		GL_DrawAliasShadow_GLSL (glsl, paliashdr, rec->lerp, rec->ent, rec->alpha);
 	}
 	else
 	{
 		glDisable (GL_TEXTURE_2D);
 		shading = false;
-		glColor4f(0,0,0,shadowalpha);
-		GL_DrawAliasFrame (paliashdr, lerpdata);
+		glColor4f(0,0,0,rec->alpha);
+		GL_DrawAliasFrame (paliashdr, rec->lerp);
 		glEnable (GL_TEXTURE_2D);
 	}
 	glDisable (GL_BLEND);
@@ -4607,6 +4685,475 @@ void GL_DrawAliasShadow (entity_t *e)
 
 //clean up
 	glPopMatrix ();
+}
+
+// Same mesh restrictions as the instanced fill (R_AliasInst_Prepare).
+static qboolean GL_AliasShadowInstanceable (const alias_shadow_rec_t *rec)
+{
+	const aliashdr_t *hdr = rec->hdr;
+
+	if (!hdr || hdr->poseverttype != PV_QUAKE1 || hdr->nextsurface ||
+		hdr->numbones || hdr->numindexes <= 0 || hdr->numverts_vbo <= 0)
+		return false;
+	if (rec->lerp.pose1 < 0 || rec->lerp.pose2 < 0 ||
+		rec->lerp.pose1 >= hdr->nummorphposes || rec->lerp.pose2 >= hdr->nummorphposes)
+		return false;
+	return rec->ent->model->meshvbo != 0;
+}
+
+// Matches GL_DrawAliasShadow_GLSL's texture choice.
+static gltexture_t *GL_AliasShadowSkin (const alias_shadow_rec_t *rec)
+{
+	const aliashdr_t *hdr = rec->hdr;
+	int skinnum;
+
+	if (!(rec->ent->model->flags & MF_HOLEY) || hdr->numskins <= 0)
+		return notexture;
+	skinnum = rec->ent->skinnum;
+	if (skinnum >= hdr->numskins || skinnum < 0)
+		skinnum = 0;
+	return hdr->textures[skinnum][(int)(cl.time*10) & 3].base;
+}
+
+static qboolean GL_AliasShadowSameBatch (const alias_shadow_rec_t *a, const alias_shadow_rec_t *b)
+{
+	return a->ent->model == b->ent->model && a->skin == b->skin &&
+		a->lerp.pose1 == b->lerp.pose1 && a->lerp.pose2 == b->lerp.pose2;
+}
+
+static int R_CompareAliasShadows (const void *lhs, const void *rhs)
+{
+	const alias_shadow_rec_t *a = &r_alias_shadow_recs[r_shadowq[*(const int *)lhs].index];
+	const alias_shadow_rec_t *b = &r_alias_shadow_recs[r_shadowq[*(const int *)rhs].index];
+#define CMPPTR(field) do { uintptr_t av = (uintptr_t)(a->field); uintptr_t bv = (uintptr_t)(b->field); if (av != bv) return av < bv ? -1 : 1; } while (0)
+	CMPPTR(ent->model);
+	CMPPTR(skin);
+#undef CMPPTR
+	if (a->lerp.pose1 != b->lerp.pose1)
+		return a->lerp.pose1 < b->lerp.pose1 ? -1 : 1;
+	if (a->lerp.pose2 != b->lerp.pose2)
+		return a->lerp.pose2 < b->lerp.pose2 ? -1 : 1;
+	return a->order - b->order;
+}
+
+// Radius of a sphere around the entity origin that holds the model in any
+// orientation. rmins/rmaxs are rotation-safe for brush and most alias models;
+// the unrotated bounds are folded in for formats that copy them instead.
+static float R_ShadowModelRadius (const qmodel_t *m)
+{
+	float r2 = 0.0f;
+	int i;
+
+	for (i = 0; i < 3; ++i)
+	{
+		float v = q_max (fabs (m->rmins[i]), fabs (m->rmaxs[i]));
+		v = q_max (v, q_max (fabs (m->mins[i]), fabs (m->maxs[i])));
+		r2 += v * v;
+	}
+	return sqrt (r2);
+}
+
+/*
+Conservative view cones around a shadow's footprint. Two sets whose view cones
+from the eye are disjoint can never share a pixel, whatever the projection,
+field of view or subview, because every pixel is a ray from the eye.
+*/
+static void R_ShadowConeFromSphere (shadowq_entry_t *q, const vec3_t c, float rs)
+{
+	const float pad = 0.004f;	// ~8 pixels at 4K / fov 105; covers rounding and rasterization
+	vec3_t d;
+	float dist;
+
+	VectorSubtract (c, r_refdef.vieworg, d);
+	dist = VectorLength (d);
+	if (!(dist > rs * 1.001f) || !isfinite (dist))
+	{	// eye inside or on the sphere: it can cover any pixel
+		q->dir[0] = q->dir[1] = 0.0f; q->dir[2] = 1.0f;
+		q->angle = M_PI;
+		return;
+	}
+	VectorScale (d, 1.0f / dist, q->dir);
+	q->angle = asin (rs / dist) + pad;
+}
+
+// Shadow of every point p in [bmin,bmax] when the squash happens in world
+// axes about the plane z = zref: T(0,0,zref) shadowmatrix T(0,0,-zref) maps
+// p to (p.x + skx*(p.z - zref), p.y + sky*(p.z - zref), zref + height).
+static void R_ShadowConeFromBox (shadowq_entry_t *q, const vec3_t bmin, const vec3_t bmax, float zref)
+{
+	const float skx = SHADOW_SKEW_X, sky = SHADOW_SKEW_Y;
+	float zlo = bmin[2] - zref, zhi = bmax[2] - zref;
+	float x0 = bmin[0] + q_min (skx * zlo, skx * zhi), x1 = bmax[0] + q_max (skx * zlo, skx * zhi);
+	float y0 = bmin[1] + q_min (sky * zlo, sky * zhi), y1 = bmax[1] + q_max (sky * zlo, sky * zhi);
+	vec3_t c;
+	float hx = 0.5f * (x1 - x0), hy = 0.5f * (y1 - y0);
+
+	c[0] = 0.5f * (x0 + x1);
+	c[1] = 0.5f * (y0 + y1);
+	c[2] = zref + SHADOW_HEIGHT;
+	R_ShadowConeFromSphere (q, c, sqrt (hx * hx + hy * hy) + 1.0f);
+}
+
+// Wave per shadow: 1 + the highest wave of any earlier shadow it may overlap.
+// Overlapping pairs therefore draw in queue order across waves, and nothing
+// inside one wave overlaps, so a wave can be drawn and batched in any order.
+static int R_ShadowAssignLevels (shadowq_entry_t *q, int n)
+{
+	int i, j, maxlevel = 0;
+
+	for (i = 0; i < n; ++i)
+	{
+		q[i].level = 0;
+		for (j = 0; j < i; ++j)
+		{
+			float sum = q[i].angle + q[j].angle;
+
+			if (q[j].level >= q[i].level &&
+				(sum >= (float)M_PI || DotProduct (q[i].dir, q[j].dir) > cos (sum)))
+				q[i].level = q[j].level + 1;
+		}
+		if (q[i].level > maxlevel)
+			maxlevel = q[i].level;
+	}
+	return maxlevel;
+}
+
+// Footprint cone for a queued alias shadow. T(o) T(0,0,-lh) S T(0,0,lh) R v
+// squashes after rotating, in world axes, so bound the turned model box. The
+// model bounds span every pose, so any frame of the animation fits.
+static void R_AliasShadowCone (shadowq_entry_t *q, const alias_shadow_rec_t *rec)
+{
+	const qmodel_t *m = rec->ent->model;
+	const float *o = rec->lerp.origin, *a = rec->lerp.angles;
+	vec3_t bmin, bmax;
+	int k;
+
+	if (!a[0] && !a[2])
+	{	// yaw only: glRotatef (yaw, 0, 0, 1) turns the box about z
+		float yaw = DEG2RAD (a[1]), c = cos (yaw), s = sin (yaw);
+		float cx = 0.5f * (m->mins[0] + m->maxs[0]), cy = 0.5f * (m->mins[1] + m->maxs[1]);
+		float hx = 0.5f * (m->maxs[0] - m->mins[0]), hy = 0.5f * (m->maxs[1] - m->mins[1]);
+		float wx = o[0] + c * cx - s * cy, wy = o[1] + s * cx + c * cy;
+		float ex = fabs (c) * hx + fabs (s) * hy, ey = fabs (s) * hx + fabs (c) * hy;
+
+		bmin[0] = wx - ex; bmax[0] = wx + ex;
+		bmin[1] = wy - ey; bmax[1] = wy + ey;
+		bmin[2] = o[2] + m->mins[2]; bmax[2] = o[2] + m->maxs[2];
+	}
+	else
+	{
+		float r = R_ShadowModelRadius (m);
+
+		for (k = 0; k < 3; ++k)
+		{
+			bmin[k] = o[k] - r;
+			bmax[k] = o[k] + r;
+		}
+	}
+	R_ShadowConeFromBox (q, bmin, bmax, o[2] - rec->lheight);
+}
+
+// Footprint cone for a queued brush shadow (see R_ShadowConeFromSphere).
+static void R_BrushShadowCone (shadowq_entry_t *q, const brushshadow_rec_t *rec)
+{
+	const entity_t *e = rec->e;
+
+	if (e->netstate.scale != ENTSCALE_DEFAULT)
+	{	// R_RotateForEntity rescales and shifts it; just keep it in order
+		q->dir[0] = q->dir[1] = 0.0f; q->dir[2] = 1.0f;
+		q->angle = M_PI;
+	}
+	else if (!e->angles[0] && !e->angles[2])
+	{	// T(o) Rz(yaw) T(0,0,-lh) S T(0,0,lh): squash the model-space bounds
+		// about z = -lh, then turn the flat footprint by yaw
+		const float skx = SHADOW_SKEW_X, sky = SHADOW_SKEW_Y;
+		const float *mn = e->model->mins, *mx = e->model->maxs;
+		float zlo = mn[2] + rec->lheight, zhi = mx[2] + rec->lheight;
+		float x0 = mn[0] + q_min (skx * zlo, skx * zhi), x1 = mx[0] + q_max (skx * zlo, skx * zhi);
+		float y0 = mn[1] + q_min (sky * zlo, sky * zhi), y1 = mx[1] + q_max (sky * zlo, sky * zhi);
+		float yaw = DEG2RAD (e->angles[1]), c = cos (yaw), s = sin (yaw);
+		float cx = 0.5f * (x0 + x1), cy = 0.5f * (y0 + y1), hx = 0.5f * (x1 - x0), hy = 0.5f * (y1 - y0);
+		vec3_t wc;
+
+		wc[0] = e->origin[0] + c * cx - s * cy;
+		wc[1] = e->origin[1] + s * cx + c * cy;
+		wc[2] = e->origin[2] - rec->lheight + SHADOW_HEIGHT;
+		R_ShadowConeFromSphere (q, wc, sqrt (hx * hx + hy * hy) + 1.0f);
+	}
+	else
+	{	// rotated: T(o) R T(0,0,-lh) S T(0,0,lh) squashes inside the rotated
+		// frame, so bound the squashed model by a sphere around the origin
+		float r = R_ShadowModelRadius (e->model), lh = fabs (rec->lheight);
+		float hx = r * (1.0f + fabs (SHADOW_SKEW_X)) + fabs (SHADOW_SKEW_X) * lh;
+		float hy = r * (1.0f + fabs (SHADOW_SKEW_Y)) + fabs (SHADOW_SKEW_Y) * lh;
+		float hz = lh + SHADOW_HEIGHT;
+
+		R_ShadowConeFromSphere (q, e->origin, sqrt (hx * hx + hy * hy + hz * hz) + 1.0f);
+	}
+}
+
+static void R_FlushShadowQueue (void);
+
+// A full queue draws everything queued so far first, so order is preserved.
+static void R_ShadowQueueMakeRoom (void)
+{
+	if (r_num_shadowq >= MAX_SHADOWQ || r_num_alias_shadows >= MAX_SHADOWQ ||
+		r_num_brush_shadows >= MAX_SHADOWQ)
+		R_FlushShadowQueue ();
+}
+
+void GL_DrawAliasShadow (entity_t *e)
+{
+	alias_shadow_rec_t local, *rec = &local;
+	shadowq_entry_t *q;
+
+	if (!r_shadowq_collecting)
+	{
+		if (GL_PrepareAliasShadow (e, rec))
+			GL_DrawAliasShadowPrepared (rec);
+		return;
+	}
+
+	R_ShadowQueueMakeRoom ();
+	rec = &r_alias_shadow_recs[r_num_alias_shadows];
+	if (!GL_PrepareAliasShadow (e, rec))
+		return;
+	q = &r_shadowq[r_num_shadowq];
+	q->index = r_num_alias_shadows++;
+	q->kind = SHADOWQ_ALIAS;
+	if (r_shadowq_instancing && GL_AliasShadowInstanceable (rec))
+	{
+		q->kind = SHADOWQ_ALIAS_INST;
+		rec->skin = GL_AliasShadowSkin (rec);
+	}
+	rec->order = r_num_shadowq++;
+	R_AliasShadowCone (q, rec);
+}
+
+qboolean R_QueueBrushShadow (const brushshadow_rec_t *rec)
+{
+	shadowq_entry_t *q;
+	entity_t *e = rec->e;
+
+	if (!r_shadowq_collecting)
+		return false;
+	R_ShadowQueueMakeRoom ();
+	r_brush_shadow_recs[r_num_brush_shadows] = *rec;
+	q = &r_shadowq[r_num_shadowq++];
+	q->kind = SHADOWQ_BRUSH;
+	q->index = r_num_brush_shadows++;
+	R_BrushShadowCone (q, rec);
+	return true;
+}
+
+void R_BeginShadowQueue (void)
+{
+	r_num_shadowq = r_num_alias_shadows = r_num_brush_shadows = 0;
+	r_shadowq_collecting = true;
+	r_shadowq_instancing = gl_alias_instancing.value && r_alias_inst_glsl.program &&
+		gl_bmodel_instancing_able;
+}
+
+// Instance matrix for one shadow: the fill matrix squashed by the same
+// T(origin) T(0,0,-lheight) shadowmatrix T(0,0,lheight) chain as the immediate path.
+static void GL_AliasShadowInstanceMatrix (const alias_shadow_rec_t *rec, float *out)
+{
+	alias_inst_rec_t fill;
+	float model[16], proj[16], col3[4];
+	const float *s = r_alias_shadowmatrix;
+	const float *o = rec->lerp.origin;
+	float a[3], b[3];
+	int c, r;
+
+	fill.lerp = rec->lerp;
+	VectorCopy (rec->hdr->scale, fill.scale);
+	VectorCopy (rec->hdr->scale_origin, fill.scale_origin);
+	R_AliasInst_BuildMatrix (&fill, model);
+
+	// proj = T(a) * S * T(b), a = origin - lheight*z, b = lheight*z - origin
+	a[0] = o[0]; a[1] = o[1]; a[2] = o[2] - rec->lheight;
+	b[0] = -o[0]; b[1] = -o[1]; b[2] = rec->lheight - o[2];
+	for (r = 0; r < 4; ++r)
+		col3[r] = s[0*4+r]*b[0] + s[1*4+r]*b[1] + s[2*4+r]*b[2] + s[3*4+r];
+	for (c = 0; c < 4; ++c)
+	{
+		const float *sc = (c == 3) ? col3 : &s[c*4];
+		for (r = 0; r < 3; ++r)
+			proj[c*4+r] = sc[r] + a[r] * sc[3];
+		proj[c*4+3] = sc[3];
+	}
+
+	for (c = 0; c < 4; ++c)
+		for (r = 0; r < 4; ++r)
+			out[c*4+r] = proj[0*4+r]*model[c*4+0] + proj[1*4+r]*model[c*4+1] +
+				proj[2*4+r]*model[c*4+2] + proj[3*4+r]*model[c*4+3];
+}
+
+static void R_DrawShadowQueueEntry (const shadowq_entry_t *q, qboolean *brushstate)
+{
+	if (q->kind == SHADOWQ_BRUSH)
+	{
+		if (!*brushstate)
+			GL_BrushShadowBeginState ();
+		*brushstate = true;
+		currententity = r_brush_shadow_recs[q->index].e;
+		GL_DrawBrushShadowPrepared (&r_brush_shadow_recs[q->index]);
+		return;
+	}
+	if (*brushstate)
+		GL_BrushShadowEndState ();
+	*brushstate = false;
+	currententity = r_alias_shadow_recs[q->index].ent;
+	GL_DrawAliasShadowPrepared (&r_alias_shadow_recs[q->index]);
+}
+
+typedef struct
+{
+	int level, first, count, entry;	// entry: shadowq index of the run's first shadow
+} shadowq_run_t;
+
+static shadowq_run_t r_shadowq_runs[MAX_SHADOWQ];
+static qboolean r_shadowq_batched[MAX_SHADOWQ];
+
+// Group each wave's plain MDL shadows into runs and pack their instance data,
+// in the order the draw loop will consume it. Returns the number of runs.
+static int R_PackShadowQueueRuns (int n, int maxlevel, int *ndata_out)
+{
+	int level, i, j, k, m, nruns = 0, ndata = 0;
+
+	for (level = 0; level <= maxlevel; ++level)
+	{
+		for (i = 0, m = 0; i < n; ++i)
+			if (r_shadowq[i].level == level && r_shadowq[i].kind == SHADOWQ_ALIAS_INST)
+				r_shadowq_sorted[m++] = i;
+		if (m < 2)
+			continue;
+		qsort (r_shadowq_sorted, m, sizeof(r_shadowq_sorted[0]), R_CompareAliasShadows);
+		for (i = 0; i < m; i = j)
+		{
+			alias_shadow_rec_t *first = &r_alias_shadow_recs[r_shadowq[r_shadowq_sorted[i]].index];
+			shadowq_run_t *run;
+
+			for (j = i + 1; j < m && GL_AliasShadowSameBatch (first, &r_alias_shadow_recs[r_shadowq[r_shadowq_sorted[j]].index]); ++j)
+				;
+			if (j - i < 2)
+				continue;
+			run = &r_shadowq_runs[nruns++];
+			run->level = level;
+			run->first = ndata;
+			run->count = j - i;
+			run->entry = r_shadowq_sorted[i];
+			for (k = i; k < j; ++k)
+			{
+				alias_shadow_rec_t *rec = &r_alias_shadow_recs[r_shadowq[r_shadowq_sorted[k]].index];
+				alias_inst_data_t *data = &r_alias_inst_data[ndata++];
+
+				r_shadowq_batched[r_shadowq_sorted[k]] = true;
+				GL_AliasShadowInstanceMatrix (rec, data->matrix);
+				// the fragment shader applies the colour alpha twice; see GL_DrawAliasShadow_GLSL
+				data->light[0] = data->light[1] = data->light[2] = 0.0f;
+				data->light[3] = sqrt (rec->alpha);
+				data->shade_blend[0] = data->shade_blend[1] = data->shade_blend[2] = 0.0f;
+				data->shade_blend[3] = rec->lerp.pose1 == rec->lerp.pose2 ? 0.0f : rec->lerp.blend;
+			}
+		}
+	}
+	*ndata_out = ndata;
+	return nruns;
+}
+
+static void R_DrawShadowQueueRuns (int level, int nruns)
+{
+	static const GLfloat zerotints[3][4] = {{0,0,0,0},{0,0,0,0},{0,0,0,0}};
+	const aliasglsl_t *glsl = &r_alias_inst_glsl;
+	qboolean bound = false;
+	int i;
+
+	for (i = 0; i < nruns; ++i)
+	{
+		const shadowq_run_t *run = &r_shadowq_runs[i];
+		const alias_shadow_rec_t *first;
+
+		if (run->level != level)
+			continue;
+		if (!bound)
+		{
+			GL_UseProgramFunc (glsl->program);
+			glDepthMask (GL_FALSE);
+			glEnable (GL_BLEND);
+			GL_Uniform1iFunc (glsl->useFullbrightTexLoc, 0);
+			GL_Uniform1fFunc (glsl->useOverbrightLoc, 0.0f);
+			GL_Uniform4fvFunc (glsl->colorTintLoc, 3, zerotints[0]);
+			GL_Uniform1iFunc (glsl->fogModeLoc, Fog_GetMode());
+			GL_Uniform1fFunc (glsl->outlineWidthLoc, 0.0f);
+			GL_Uniform1iFunc (glsl->isOutlinePassLoc, 0);
+			GL_Uniform1iFunc (glsl->shellModeLoc, 0);
+			GL_Uniform1iFunc (glsl->useShellTexLoc, 0);
+			bound = true;
+		}
+		first = &r_alias_shadow_recs[r_shadowq[run->entry].index];
+		R_AliasInst_BindAttribs (first->ent->model, first->hdr, &first->lerp, run->first);
+		GL_SelectTexture (GL_TEXTURE0);
+		GL_Bind (first->skin);
+		GL_Uniform1iFunc (glsl->useAlphaTestLoc, (first->ent->model->flags & MF_HOLEY) ? 1 : 0);
+		GL_DrawElementsInstancedFunc (GL_TRIANGLES, first->hdr->numindexes, GL_UNSIGNED_SHORT,
+			first->ent->model->meshindexesvboptr + first->hdr->eboofs, run->count);
+		rs_aliaspasses += first->hdr->numtris * run->count;
+	}
+	if (bound)
+	{
+		R_AliasInst_Unbind ();
+		glDisable (GL_BLEND);
+		glDepthMask (GL_TRUE);
+	}
+}
+
+static void R_FlushShadowQueue (void)
+{
+	entity_t *saved = currententity;
+	qboolean brushstate = false;
+	int i, level, maxlevel, nruns = 0, ndata = 0, n = r_num_shadowq;
+
+	if (!n)
+		return;
+	maxlevel = R_ShadowAssignLevels (r_shadowq, n);
+	for (i = 0; i < n; ++i)
+		r_shadowq_batched[i] = false;
+	if (r_shadowq_instancing)
+	{
+		nruns = R_PackShadowQueueRuns (n, maxlevel, &ndata);
+		if (nruns && !R_AliasInst_Upload (ndata))
+		{	// no instance buffer: every shadow takes the immediate path
+			nruns = 0;
+			for (i = 0; i < n; ++i)
+				r_shadowq_batched[i] = false;
+		}
+	}
+
+	// Wave by wave; inside a wave nothing overlaps, so brush shadows share one
+	// state, the rest go one by one, and identical plain MDL shadows instance.
+	for (level = 0; level <= maxlevel; ++level)
+	{
+		for (i = 0; i < n; ++i)
+			if (r_shadowq[i].level == level && r_shadowq[i].kind == SHADOWQ_BRUSH)
+				R_DrawShadowQueueEntry (&r_shadowq[i], &brushstate);
+		for (i = 0; i < n; ++i)
+			if (r_shadowq[i].level == level && r_shadowq[i].kind != SHADOWQ_BRUSH && !r_shadowq_batched[i])
+				R_DrawShadowQueueEntry (&r_shadowq[i], &brushstate);
+		if (brushstate)
+			GL_BrushShadowEndState ();
+		brushstate = false;
+		R_DrawShadowQueueRuns (level, nruns);
+	}
+
+	r_num_shadowq = r_num_alias_shadows = r_num_brush_shadows = 0;
+	currententity = saved;
+}
+
+void R_EndShadowQueue (void)
+{
+	R_FlushShadowQueue ();
+	r_shadowq_collecting = false;
 }
 
 /*

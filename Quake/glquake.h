@@ -611,6 +611,21 @@ extern qboolean gl_alias_shaders_compiled_disconnected;
 extern qboolean gl_alias_shaders_compiling_disconnected_restart;
 void GL_DrawAliasShadow (entity_t *e);
 void GL_DrawBrushShadow (entity_t* e); // woods #shadow
+typedef struct
+{
+	entity_t	*e;
+	float		lheight;
+	float		alpha;
+} brushshadow_rec_t;
+qboolean GL_PrepareBrushShadow (entity_t *e, brushshadow_rec_t *rec);
+void GL_BrushShadowBeginState (void);
+void GL_BrushShadowEndState (void);
+void GL_DrawBrushShadowPrepared (const brushshadow_rec_t *rec);
+// Shadow queue (r_alias.c): overlapping shadows keep their draw order,
+// isolated ones are batched.
+void R_BeginShadowQueue (void);
+void R_EndShadowQueue (void);
+qboolean R_QueueBrushShadow (const brushshadow_rec_t *rec);
 void DrawGLTriangleFan (glpoly_t *p);
 void DrawGLPoly (glpoly_t *p);
 void DrawWaterPoly (glpoly_t *p);

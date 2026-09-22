@@ -2837,6 +2837,7 @@ void R_DrawShadows (void)
 		glEnable(GL_STENCIL_TEST);
 	}
 
+	R_BeginShadowQueue ();
 	for (i=0 ; i<cl_numvisedicts ; i++)
 	{
 		currententity = cl_visedicts[i];
@@ -2860,6 +2861,7 @@ void R_DrawShadows (void)
 			continue;
 		}
 	}
+	R_EndShadowQueue ();
 
 	if (gl_stencilbits)
 	{

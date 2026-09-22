@@ -2257,26 +2257,34 @@ static bshadowcache_t *GL_BrushShadowCache_Get (qmodel_t *model)
 	return c->numindexes ? c : NULL;
 }
 
-void GL_DrawBrushShadow (entity_t* e) // woods #shadow
+/*
+GL_DrawBrushShadow -- woods #shadow
+
+tb: split into prepare / state / draw so the shadow queue (R_QueueBrushShadow in
+r_alias.c) can draw brush shadows that overlap no other shadow with the
+fixed-function state set once, instead of a dozen enable/disable and buffer
+calls around every entity's single draw.
+*/
+static const float r_brush_shadowmatrix[16] = {
+	1,              0,              0,              0,
+	0,              1,              0,              0,
+	SHADOW_SKEW_X,  SHADOW_SKEW_Y,  SHADOW_VSCALE,  0,
+	0,              0,              SHADOW_HEIGHT,  1
+};
+
+qboolean GL_PrepareBrushShadow (entity_t *e, brushshadow_rec_t *rec)
 {
-    qmodel_t* clmodel;
-    float     entalpha;
-    float     shade, lheight;
-    float     shadowmatrix[16] = {
-        1,              0,              0,              0,
-        0,              1,              0,              0,
-        SHADOW_SKEW_X,  SHADOW_SKEW_Y,  SHADOW_VSCALE,  0,
-        0,              0,              SHADOW_HEIGHT,   1
-    };
+	qmodel_t	*clmodel;
+	float		entalpha, shade;
 
 	if (!r_shadows_bmodels.value)
-		return;
+		return false;
 
 	clmodel = e->model;
 
 	if (R_CullModelForEntity(e))
 	{
-		return;
+		return false;
 	}
 
 	if (e == &cl.viewent ||
@@ -2285,13 +2293,13 @@ void GL_DrawBrushShadow (entity_t* e) // woods #shadow
 		clmodel == cl.worldmodel ||
 		!clmodel->nummodelsurfaces) 
 	{
-		return;
+		return false;
 	}
 
 	entalpha = ENTALPHA_DECODE(e->alpha);
 
 	if (entalpha < 1) {
-		return;
+		return false;
 	}
 
 	if (r_shadows_groundcheck.value && e->model->type == mod_brush) {
@@ -2299,86 +2307,120 @@ void GL_DrawBrushShadow (entity_t* e) // woods #shadow
 			GL_DrawAliasShadowCheck(e);
 
 		if (!(e->shadow_state & SHADOW_VALID))
-			return;
+			return false;
 	}
 
-    // Determine lighting at entity origin
-    R_LightPoint(e->origin);
-    shade = ((lightcolor[0] + lightcolor[1] + lightcolor[2]) / 3) / 128.0f;
-    lheight = e->origin[2] - lightspot[2];
+	// Determine lighting at entity origin
+	R_LightPoint(e->origin);
+	shade = ((lightcolor[0] + lightcolor[1] + lightcolor[2]) / 3) / 128.0f;
+	rec->e = e;
+	rec->lheight = e->origin[2] - lightspot[2];
+	// Draw fully black, but alpha scaled by shade and the r_shadows cvar
+	rec->alpha = entalpha * shade * r_shadows.value;
+	return true;
+}
 
-    clmodel = e->model;
+void GL_BrushShadowBeginState (void)
+{
+	glDepthMask(GL_FALSE);
+	glEnable(GL_BLEND);
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_CULL_FACE);
 
-    glPushMatrix();
+	// Enable polygon offset to prevent z-fighting
+	glEnable(GL_POLYGON_OFFSET_FILL);
+	glPolygonOffset(-1, -2);
 
-    // Apply entity transformations
-    R_RotateForEntity(e->origin, e->angles, e);
+	if (r_shadows_buffered.value && gl_vbo_able && gl_bmodel_vbo)
+	{
+		GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+		glEnableClientState (GL_VERTEX_ARRAY);
+		glVertexPointer (3, GL_FLOAT, VERTEXSIZE * sizeof(float), (void *)0);
+	}
+}
 
-    // Move down to floor, apply shadow projection, then move back
-    glTranslatef(0, 0, -lheight);
-    glMultMatrixf(shadowmatrix);
-    glTranslatef(0, 0, lheight);
+void GL_BrushShadowEndState (void)
+{
+	if (r_shadows_buffered.value && gl_vbo_able && gl_bmodel_vbo)
+	{
+		glDisableClientState (GL_VERTEX_ARRAY);
+		GL_BindBuffer (GL_ARRAY_BUFFER, 0);
+		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+	}
 
-    // Set up rendering states for shadow
-    glDepthMask(GL_FALSE);
-    glEnable(GL_BLEND);
-    glDisable(GL_TEXTURE_2D);
-    glDisable(GL_CULL_FACE);
-    
-    // Enable polygon offset to prevent z-fighting
-    glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(-1, -2);
+	// Restore states
+	glEnable(GL_TEXTURE_2D);
+	glDisable(GL_BLEND);
+	glDepthMask(GL_TRUE);
+	glEnable(GL_CULL_FACE);
+	glDisable(GL_POLYGON_OFFSET_FILL);
+}
 
-    // Draw fully black, but alpha scaled by shade and the r_shadows cvar
-    glColor4f(0, 0, 0, entalpha * shade * r_shadows.value);
+void GL_DrawBrushShadowPrepared (const brushshadow_rec_t *rec)
+{
+	entity_t	*e = rec->e;
+	qmodel_t	*clmodel = e->model;
 
-    // Draw the model geometry as a flat polygon silhouette
-    {
-        msurface_t* surf = &clmodel->surfaces[clmodel->firstmodelsurface];
-        int i;
+	glPushMatrix();
 
-        bshadowcache_t *shcache = r_shadows_buffered.value ?
-                                  GL_BrushShadowCache_Get (clmodel) : NULL;
+	// Apply entity transformations
+	R_RotateForEntity(e->origin, e->angles, e);
 
-        if (shcache)
-        {   //one indexed draw from the shared bmodel VBO
-            GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
-            GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, shcache->ebo);
-            glEnableClientState (GL_VERTEX_ARRAY);
-            glVertexPointer (3, GL_FLOAT, VERTEXSIZE * sizeof(float), (void *)0);
-            glDrawElements (GL_TRIANGLES, shcache->numindexes,
-                            GL_UNSIGNED_INT, (void *)0);
-            glDisableClientState (GL_VERTEX_ARRAY);
-            GL_BindBuffer (GL_ARRAY_BUFFER, 0);
-            GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
-        }
-        else
-        for (i = 0; i < clmodel->nummodelsurfaces; i++, surf++)
-        {
-            glpoly_t* p = surf->polys;
-            int k, nv = R_SurfaceVertCount (surf);
-            float* v;
+	// Move down to floor, apply shadow projection, then move back
+	glTranslatef(0, 0, -rec->lheight);
+	glMultMatrixf(r_brush_shadowmatrix);
+	glTranslatef(0, 0, rec->lheight);
 
-            if (!p || nv < 3)
-                continue;
-            v = p->verts[0];
-            glBegin(GL_POLYGON);
-            for (k = 0; k < nv; k++, v += VERTEXSIZE)
-            {
-                glVertex3fv(v);
-            }
-            glEnd();
-        }
-    }
+	glColor4f(0, 0, 0, rec->alpha);
 
-    // Restore states
-    glEnable(GL_TEXTURE_2D);
-    glDisable(GL_BLEND);
-    glDepthMask(GL_TRUE);
-    glEnable(GL_CULL_FACE);
-    glDisable(GL_POLYGON_OFFSET_FILL);
+	// Draw the model geometry as a flat polygon silhouette
+	{
+		msurface_t* surf = &clmodel->surfaces[clmodel->firstmodelsurface];
+		int i;
 
-    glPopMatrix();
+		// BeginState bound the shared bmodel VBO and vertex array when this is usable
+		bshadowcache_t *shcache = (r_shadows_buffered.value && gl_vbo_able && gl_bmodel_vbo) ?
+		                          GL_BrushShadowCache_Get (clmodel) : NULL;
+
+		if (shcache)
+		{   //one indexed draw from the shared bmodel VBO
+			GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, shcache->ebo);
+			glDrawElements (GL_TRIANGLES, shcache->numindexes,
+			                GL_UNSIGNED_INT, (void *)0);
+		}
+		else
+		for (i = 0; i < clmodel->nummodelsurfaces; i++, surf++)
+		{
+			glpoly_t* p = surf->polys;
+			int k, nv = R_SurfaceVertCount (surf);
+			float* v;
+
+			if (!p || nv < 3)
+				continue;
+			v = p->verts[0];
+			glBegin(GL_POLYGON);
+			for (k = 0; k < nv; k++, v += VERTEXSIZE)
+			{
+				glVertex3fv(v);
+			}
+			glEnd();
+		}
+	}
+
+	glPopMatrix();
+}
+
+void GL_DrawBrushShadow (entity_t* e) // woods #shadow
+{
+	brushshadow_rec_t rec;
+
+	if (!GL_PrepareBrushShadow (e, &rec))
+		return;
+	if (R_QueueBrushShadow (&rec))
+		return;
+	GL_BrushShadowBeginState ();
+	GL_DrawBrushShadowPrepared (&rec);
+	GL_BrushShadowEndState ();
 }
 
 static float    r_ambient_prev = FLT_MAX; // woods #rambient
