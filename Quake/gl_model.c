@@ -251,12 +251,14 @@ static byte *Mod_DecompressVis (byte *in, qmodel_t *model)
 	int		row;
 
 	row = (model->numleafs+7)>>3;
-	if (mod_decompressed == NULL || row > mod_decompressed_capacity)
+	// pad to whole 32-bit words like Mod_NoVisPVS: SV_AddToFatPVS ORs rows a word at a time
+	if (mod_decompressed == NULL || ((row+3)&~3) > mod_decompressed_capacity)
 	{
-		mod_decompressed_capacity = row;
+		mod_decompressed_capacity = (row+3)&~3;
 		mod_decompressed = (byte *) realloc (mod_decompressed, mod_decompressed_capacity);
 		if (!mod_decompressed)
 			Sys_Error ("Mod_DecompressVis: realloc() failed on %d bytes", mod_decompressed_capacity);
+		memset (mod_decompressed, 0, mod_decompressed_capacity);
 	}
 	out = mod_decompressed;
 	outend = mod_decompressed + row;
@@ -4554,6 +4556,98 @@ done:
 Mod_LoadBrushModel
 =================
 */
+/*
+=================
+Mod_BSPIndicesInvalid
+
+Lumps are already range-checked against the file and byte-swapped in the
+header, but their contents are still raw. Returns a description of the first
+out-of-range cross-lump index, or NULL when the map is safe to load.
+=================
+*/
+static const char *Mod_BSPIndicesInvalid (const dheader_t *header, int bsp2)
+{
+	const lump_t *l = header->lumps;
+	const size_t edgesize = bsp2 ? sizeof(dledge_t) : sizeof(dsedge_t);
+	const size_t facesize = bsp2 ? sizeof(dlface_t) : sizeof(dsface_t);
+	const size_t nodesize = bsp2 == 2 ? sizeof(dl2node_t) : bsp2 ? sizeof(dl1node_t) : sizeof(dsnode_t);
+	const byte *base = (const byte *)header;
+	int numvertexes, numedges, numsurfedges, numplanes, numtexinfo, i;
+
+	if (l[LUMP_VERTEXES].filelen % sizeof(dvertex_t) || l[LUMP_EDGES].filelen % edgesize ||
+		l[LUMP_SURFEDGES].filelen % sizeof(int) || l[LUMP_PLANES].filelen % sizeof(dplane_t) ||
+		l[LUMP_TEXINFO].filelen % sizeof(texinfo_t) || l[LUMP_FACES].filelen % facesize ||
+		l[LUMP_NODES].filelen % nodesize)
+		return "a funny lump size";
+	numvertexes = l[LUMP_VERTEXES].filelen / sizeof(dvertex_t);
+	numedges = l[LUMP_EDGES].filelen / edgesize;
+	numsurfedges = l[LUMP_SURFEDGES].filelen / sizeof(int);
+	numplanes = l[LUMP_PLANES].filelen / sizeof(dplane_t);
+	numtexinfo = l[LUMP_TEXINFO].filelen / sizeof(texinfo_t);
+
+	// Only what faces reference: shipping maps (ctf3m8, several RA maps) carry
+	// unreferenced edges with garbage vertex numbers and still load fine.
+	for (i = 0; i < (int)(l[LUMP_FACES].filelen / facesize); i++)
+	{
+		int planenum, firstedge, numfaceedges, texinfo, j;
+		if (bsp2)
+		{
+			const dlface_t *f = (const dlface_t *)(base + l[LUMP_FACES].fileofs) + i;
+			planenum = LittleLong (f->planenum);
+			firstedge = LittleLong (f->firstedge);
+			numfaceedges = LittleLong (f->numedges);
+			texinfo = LittleLong (f->texinfo);
+		}
+		else
+		{
+			const dsface_t *f = (const dsface_t *)(base + l[LUMP_FACES].fileofs) + i;
+			planenum = LittleShort (f->planenum);
+			firstedge = LittleLong (f->firstedge);
+			numfaceedges = LittleShort (f->numedges);
+			texinfo = LittleShort (f->texinfo);
+		}
+		if (planenum < 0 || planenum >= numplanes)
+			return "a face with an out of range plane";
+		if (texinfo < 0 || texinfo >= numtexinfo)
+			return "a face with an out of range texinfo";
+		if (firstedge < 0 || numfaceedges < 0 || firstedge > numsurfedges || numfaceedges > numsurfedges - firstedge)
+			return "a face with out of range edges";
+		for (j = 0; j < numfaceedges; j++)
+		{
+			int e = LittleLong (((const int *)(base + l[LUMP_SURFEDGES].fileofs))[firstedge + j]);
+			unsigned int v0, v1;
+			if (e <= -numedges || e >= numedges)
+				return "a surfedge with an out of range edge";
+			if (e < 0)
+				e = -e;
+			if (bsp2)
+			{
+				const dledge_t *edge = (const dledge_t *)(base + l[LUMP_EDGES].fileofs) + e;
+				v0 = (unsigned int)LittleLong (edge->v[0]);
+				v1 = (unsigned int)LittleLong (edge->v[1]);
+			}
+			else
+			{
+				const dsedge_t *edge = (const dsedge_t *)(base + l[LUMP_EDGES].fileofs) + e;
+				v0 = (unsigned short)LittleShort (edge->v[0]);
+				v1 = (unsigned short)LittleShort (edge->v[1]);
+			}
+			if (v0 >= (unsigned int)numvertexes || v1 >= (unsigned int)numvertexes)
+				return "an edge with an out of range vertex";
+		}
+	}
+
+	// planenum leads every node format
+	for (i = 0; i < (int)(l[LUMP_NODES].filelen / nodesize); i++)
+	{
+		int planenum = LittleLong (*(const int *)(base + l[LUMP_NODES].fileofs + (size_t)i * nodesize));
+		if (planenum < 0 || planenum >= numplanes)
+			return "a node with an out of range plane";
+	}
+
+	return NULL;
+}
+
 static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 {
 	int			i, j;
@@ -4636,6 +4730,18 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 				Con_Warning ("Mod_LoadBrushModel: %s has empty bsp lump %i\n", mod->name, reqlumps[i]);
 				return;
 			}
+		}
+	}
+
+	// woods #bsppreflight -- the loaders index vertexes, edges, surfedges and planes straight from
+	// other lumps; reject a map whose cross-lump indices run off the end before any of that happens
+	{
+		const char *reason = Mod_BSPIndicesInvalid (header, bsp2);
+		if (reason)
+		{
+			loadmodel->type = mod_ext_invalid;
+			Con_Warning ("Mod_LoadBrushModel: %s has %s\n", mod->name, reason);
+			return;
 		}
 	}
 

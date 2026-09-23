@@ -3276,16 +3276,17 @@ qboolean CL_ParseProQuakeString(const char* string) // #pqteam
 	const char* mode = "null";
 	const char* spectator = "null"; // woods #autovote
 	const char* star_observer = "null"; // woods #autovote
+	// the info keys above point into these, and are read after the block below
+	char buf[10];
+	char buf2[32];
+	char buf3[10];
+	char buf4[10];
+	char buf5[10];
 
 	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
 	{// am I colored up?
 		const char *userinfo = CL_GetSafeRealViewEntityUserinfo();
 
-		char buf[10];
-		char buf2[32];
-		char buf3[10];
-		char buf4[10];
-		char buf5[10];
 		observer = Info_GetKey(userinfo, "observer", buf, sizeof(buf)); // userinfo
 		star_observer = Info_GetKey(userinfo, "*observer", buf5, sizeof(buf5));  // userinfo
 		observing = Info_GetKey(userinfo, "observing", buf2, sizeof(buf2)); // userinfo

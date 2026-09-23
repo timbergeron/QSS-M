@@ -1307,6 +1307,10 @@ void R_TeleportPrepare (void)
 				if (j == cl_numvisedicts)
 					cl_numvisedicts++;
 			}
+			/* World lightmaps are built against currententity (the world entity
+			 * R_RenderScene set before calling us). The previous subview's
+			 * R_RenderScene leaves it NULL or stale. */
+			currententity = teleport_restore.savedentity;
 			R_MarkSurfaces();
 			R_RenderScene();
 		}
