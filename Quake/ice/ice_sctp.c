@@ -424,14 +424,25 @@ static void SCTP_DecodeDCEP(sctp_t *sctp, qbyte *resp)
 		uint16_t protocollen;
 	} *dcep = (void*)sctp->i.r.buf;
 
+	if (sctp->i.r.size < sizeof(*dcep))
+		return;	//runt
 	if (dcep->type == 3)
 	{
-		char *label = (char*)(dcep+1);
-		char *prot = label + strlen(label)+1;
+		//label and protocol are length-prefixed, not NUL-terminated (RFC 8832)
+		const char *label = (const char*)(dcep+1);
+		size_t avail = sctp->i.r.size - sizeof(*dcep);
+		size_t labellen = (uint16_t)BigShort(dcep->labellen);
+		size_t protlen = (uint16_t)BigShort(dcep->protocollen);
+
+		if (labellen > avail)
+			labellen = avail;
+		if (protlen > avail - labellen)
+			protlen = avail - labellen;
 
 		sctp->qstreamid = sctp->i.r.sid;
 		if (sctp->modeflags & ICEF_VERBOSE)
-			Con_Printf(S_COLOR_GRAY"[%s]: New SCTP Channel: \"%s\" (%s)\n", sctp->friendlyname, label, prot);
+			Con_Printf(S_COLOR_GRAY"[%s]: New SCTP Channel: \"%.*s\" (%.*s)\n", sctp->friendlyname,
+				(int)labellen, label, (int)protlen, label + labellen);
 
 		h->dstport = sctp->peerport;
 		h->srcport = sctp->myport;
@@ -471,8 +482,8 @@ static void SCTP_ErrorChunk(sctp_t *sctp, const char *errortype, const struct sc
 			return;	//that's an error in its own right
 		cc = BigShort(s->cause);
 		cl = BigShort(s->length);
-		if (totallen < cl)
-			return;	//err..
+		if (cl < sizeof(*s) || totallen < cl)
+			return;	//err.. (a zero length would never advance)
 
 		if (sctp->modeflags & ICEF_VERBOSE) switch(cc)
 		{
@@ -488,7 +499,7 @@ static void SCTP_ErrorChunk(sctp_t *sctp, const char *errortype, const struct sc
         case 10:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Cookie Received While Shutting Down\n",			sctp->friendlyname, errortype);	break;
         case 11:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Restart of an Association with New Addresses\n",	sctp->friendlyname, errortype);	break;
         case 12:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: User Initiated Abort\n",			sctp->friendlyname, errortype);	break;
-        case 13:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Protocol Violation [%s]\n",		sctp->friendlyname, errortype, (const char*)(s+1));	break;
+        case 13:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Protocol Violation [%.*s]\n",	sctp->friendlyname, errortype, (int)(cl - sizeof(*s)), (const char*)(s+1));	break;
         default:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Unknown Reason\n",				sctp->friendlyname, errortype);	break;
 		}
 
