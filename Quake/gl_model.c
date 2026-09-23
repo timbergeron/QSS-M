@@ -251,12 +251,14 @@ static byte *Mod_DecompressVis (byte *in, qmodel_t *model)
 	int		row;
 
 	row = (model->numleafs+7)>>3;
-	if (mod_decompressed == NULL || row > mod_decompressed_capacity)
+	// pad to whole 32-bit words like Mod_NoVisPVS: SV_AddToFatPVS ORs rows a word at a time
+	if (mod_decompressed == NULL || ((row+3)&~3) > mod_decompressed_capacity)
 	{
-		mod_decompressed_capacity = row;
+		mod_decompressed_capacity = (row+3)&~3;
 		mod_decompressed = (byte *) realloc (mod_decompressed, mod_decompressed_capacity);
 		if (!mod_decompressed)
 			Sys_Error ("Mod_DecompressVis: realloc() failed on %d bytes", mod_decompressed_capacity);
+		memset (mod_decompressed, 0, mod_decompressed_capacity);
 	}
 	out = mod_decompressed;
 	outend = mod_decompressed + row;
