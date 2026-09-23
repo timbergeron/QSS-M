@@ -2811,6 +2811,8 @@ void R_DrawShadows (void)
 
 	if (!r_shadows.value || !r_drawentities.value || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
 		return;
+	if (r_teleport_view && r_telestyle_detail.value < 2)
+		return; /* r_telestyle_detail: no entity shadows in teleporter views */
 
 	// Use stencil buffer to prevent self-intersecting shadows, from Baker (MarkV)
 	if (gl_stencilbits)
@@ -3555,7 +3557,7 @@ void R_RenderScene (void)
 		R_RenderDlights (); //triangle fan dlights -- johnfitz -- moved after water
 
 		// Render particles after alpha entities for correct depth sorting -- woods #alphasort
-		if (r_refdef.drawworld)
+		if (r_refdef.drawworld && !(r_teleport_view && r_telestyle_detail.value < 1))
 		{
 			R_DrawParticles ();
 #ifdef PSET_SCRIPT
@@ -3570,7 +3572,7 @@ void R_RenderScene (void)
 
 		R_RenderDlights (); //triangle fan dlights -- johnfitz -- moved after water
 
-		if (r_refdef.drawworld)
+		if (r_refdef.drawworld && !(r_teleport_view && r_telestyle_detail.value < 1))
 		{
 			R_DrawParticles ();
 #ifdef PSET_SCRIPT

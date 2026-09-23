@@ -1534,6 +1534,8 @@ void R_DrawAliasModelOutline(aliasglsl_t* glsl, aliashdr_t* paliashdr, lerpdata_
 	GLint outline_stencil_ref = r_alias_outline_phase == ALIAS_OUTLINE_PHASE_RING
 		? (GLint)r_alias_outline_ref : 1;
 
+	if (r_teleport_view && r_telestyle_detail.value < 2)
+		return; /* r_telestyle_detail: no outlines in teleporter views */
 	if (!is_xray && !(r_outline.value > 0 &&
 		!(cl.viewent.model == e->model) &&
 		!(e->model->flags & MOD_NOOUTLINE)))

@@ -221,7 +221,7 @@ unsigned int r_teleport_visframe;
 #define TELEPORT_REFLECT_STRENGTH 1.0f
 #define TELEPORT_REFRACT_STRENGTH 1.0f
 #define TELEPORT_TARGET_SCALE 0.5f
-/* r_teleocclude: the main view wraps each teleporter face it draws in an
+/* Hidden teleporters: the main view wraps each teleporter face it draws in an
  * occlusion query. A plane whose newest finished query saw no pixels skips its
  * subviews and shows its last image, but is still re-rendered every
  * TELEPORT_HIDDEN_REFRESH views so that image is at most that old if the plane
@@ -229,6 +229,14 @@ unsigned int r_teleport_visframe;
 #define TELEPORT_QUERY_RING 3
 #define TELEPORT_FACE_QUERIES 4
 #define TELEPORT_HIDDEN_REFRESH 4
+/* Shared refraction: a teleporter is a thin slab, so both of its faces point at
+ * the eye, one just behind the other, and the farther is only seen through the
+ * nearer (r_telealpha) or past its edge. Up to this far apart, the farther
+ * face reuses the nearer face's refraction, rendered once over both faces'
+ * screen area and visibility: both look through the same eye and differ only
+ * by what lies inside the slab. Reflections mirror about each face's own
+ * plane, so a face always renders its own. */
+#define TELEPORT_SHARE_DEPTH 32.0f
 typedef struct
 {
 	vec3_t normal, center;
@@ -239,19 +247,21 @@ typedef struct
 	qboolean ready;
 	/* Slots persist across views so a plane keeps its images and queries. */
 	unsigned int seenframe; /* view that last collected it; only those are drawn */
-	unsigned int renderframe; /* view that last rendered its images, 0 = never */
-	int renderstyle; /* r_telestyle those images were rendered for */
+	unsigned int imageframe[2]; /* view that last rendered each image, 0 = never */
 	unsigned int visibleframe, resolvedframe; /* newest query view with pixels / resolved at all */
 	GLuint query[TELEPORT_QUERY_RING][TELEPORT_FACE_QUERIES];
 	unsigned int queryframe[TELEPORT_QUERY_RING];
 	int numqueries[TELEPORT_QUERY_RING];
 	qboolean queryoverflow[TELEPORT_QUERY_RING], queryresolved[TELEPORT_QUERY_RING];
+	int shareof; /* this view: plane whose images this one reuses, or -1 */
 } teleport_plane_t;
 
 static teleport_plane_t teleport_planes[MAX_TELEPORT_PLANES];
 static int teleport_numplanes, teleport_width, teleport_height;
 static unsigned int teleport_frame = 1, teleport_screenframe; /* main views; view of teleport_screenmatrix */
-cvar_t r_teleocclude = {"r_teleocclude", "1", CVAR_ARCHIVE};
+/* 2: teleporter views draw everything; 1: no model outlines or entity shadows
+ * in them; 0: no particles either. They are half-resolution and distorted. */
+cvar_t r_telestyle_detail = {"r_telestyle_detail", "1", CVAR_ARCHIVE};
 static GLuint teleport_fbo, teleport_depth, teleport_program;
 static qboolean teleport_failed;
 static mat4_t teleport_viewmatrix, teleport_projection;
@@ -476,6 +486,7 @@ void R_TeleportStyleChanged (cvar_t *var)
 		{
 			glDeleteTextures(1, &teleport_planes[i].image[1]);
 			teleport_planes[i].image[1] = 0;
+			teleport_planes[i].imageframe[1] = 0;
 		}
 		GL_ClearBindings();
 	}
@@ -692,26 +703,34 @@ static void R_TeleportResolveQueries (void)
 	}
 }
 
-/* Skip a plane's subviews only while its newest finished query found no
- * pixels, it has recent images for this style to show, and it is not due for
- * its periodic refresh. Anything unknown renders. */
-static qboolean R_TeleportPlaneHidden (const teleport_plane_t *plane, int style)
+/* The newest finished query of this plane's faces found no pixels, recently. */
+static qboolean R_TeleportQueryHidden (const teleport_plane_t *plane)
 {
-	if (!r_teleocclude.value || !gl_occlusion_able)
-		return false;
-	if (!plane->renderframe || plane->renderstyle != style)
-		return false;
-	if (teleport_frame - plane->renderframe >= TELEPORT_HIDDEN_REFRESH)
+	if (!gl_occlusion_able)
 		return false;
 	return plane->resolvedframe > plane->visibleframe &&
 		teleport_frame - plane->resolvedframe <= TELEPORT_QUERY_RING + 1;
+}
+
+/* Skip rendering images first..last of a plane only while it is hidden and
+ * each of them is recent, so none is older than its periodic refresh.
+ * Anything unknown renders. */
+static qboolean R_TeleportPlaneHidden (const teleport_plane_t *plane, int first, int last)
+{
+	int image;
+	if (!gl_occlusion_able)
+		return false;
+	for (image = first; image <= last; image++)
+		if (!plane->imageframe[image] || teleport_frame - plane->imageframe[image] >= TELEPORT_HIDDEN_REFRESH)
+			return false;
+	return R_TeleportQueryHidden(plane);
 }
 
 /* Next query object for a face of this plane drawn in this view, or 0. */
 static GLuint R_TeleportFaceQuery (teleport_plane_t *plane)
 {
 	int ring = teleport_frame % TELEPORT_QUERY_RING, n;
-	if (!r_teleocclude.value || !gl_occlusion_able)
+	if (!gl_occlusion_able)
 		return 0;
 	if (plane->queryframe[ring] != teleport_frame)
 	{
@@ -735,6 +754,83 @@ static GLuint R_TeleportFaceQuery (teleport_plane_t *plane)
 	}
 	plane->numqueries[ring]++;
 	return plane->query[ring][n];
+}
+
+static qboolean R_TeleportRectsOverlap (const teleport_plane_t *a, const teleport_plane_t *b)
+{
+	return a->screenmins[0] <= b->screenmaxs[0] && b->screenmins[0] <= a->screenmaxs[0] &&
+		a->screenmins[1] <= b->screenmaxs[1] && b->screenmins[1] <= a->screenmaxs[1];
+}
+
+/* Pair each collected face plane with the nearest parallel plane in front of
+ * it within TELEPORT_SHARE_DEPTH whose screen area it overlaps, then widen
+ * that plane's screen area and visibility to cover every plane sharing it. */
+static void R_TeleportSharePlanes (void)
+{
+	int i, j, pass, k;
+	for (i = 0; i < teleport_numplanes; i++)
+		teleport_planes[i].shareof = -1;
+	for (i = 0; i < teleport_numplanes; i++)
+	{
+		teleport_plane_t *back = &teleport_planes[i];
+		float backdist, bestdist = 0;
+		if (back->seenframe != teleport_frame)
+			continue;
+		backdist = DotProduct(r_refdef.vieworg, back->normal) - back->dist;
+		for (j = 0; j < teleport_numplanes; j++)
+		{
+			teleport_plane_t *front = &teleport_planes[j];
+			float frontdist;
+			if (j == i || front->seenframe != teleport_frame ||
+				DotProduct(front->normal, back->normal) < 0.99999f)
+				continue;
+			frontdist = DotProduct(r_refdef.vieworg, front->normal) - front->dist;
+			if (frontdist <= 0 || frontdist >= backdist || backdist - frontdist > TELEPORT_SHARE_DEPTH ||
+				!R_TeleportRectsOverlap(front, back))
+				continue;
+			if (back->shareof < 0 || frontdist < bestdist)
+			{
+				back->shareof = j;
+				bestdist = frontdist;
+			}
+		}
+	}
+	for (i = 0; i < teleport_numplanes; i++)
+	{
+		teleport_plane_t *plane = &teleport_planes[i], *root;
+		int guard = MAX_TELEPORT_PLANES;
+		if (plane->seenframe != teleport_frame || plane->shareof < 0)
+			continue;
+		while (teleport_planes[plane->shareof].shareof >= 0 && guard--)
+			plane->shareof = teleport_planes[plane->shareof].shareof;
+		root = &teleport_planes[plane->shareof];
+		for (k = 0; k < 2; k++)
+		{
+			root->screenmins[k] = q_min(root->screenmins[k], plane->screenmins[k]);
+			root->screenmaxs[k] = q_max(root->screenmaxs[k], plane->screenmaxs[k]);
+		}
+		for (pass = 0; pass < 2; pass++)
+		{
+			byte *src = teleport_vis + (i * 2 + pass) * (size_t)teleport_pvsbytes;
+			byte *dst = teleport_vis + (plane->shareof * 2 + pass) * (size_t)teleport_pvsbytes;
+			for (k = 0; k < teleport_pvsbytes; k++)
+				dst[k] |= src[k];
+		}
+	}
+}
+
+/* A plane rendering refraction for others may only skip while all of them
+ * are hidden; they show its refraction, so only its images need to be recent. */
+static qboolean R_TeleportGroupHidden (int index, int style)
+{
+	int i;
+	if (!R_TeleportPlaneHidden(&teleport_planes[index], 0, style == 3 ? 1 : 0))
+		return false;
+	for (i = 0; i < teleport_numplanes; i++)
+		if (teleport_planes[i].seenframe == teleport_frame && teleport_planes[i].shareof == index &&
+			!R_TeleportQueryHidden(&teleport_planes[i]))
+			return false;
+	return true;
 }
 
 static void R_TeleportCollect (msurface_t *surf, const float *matrix)
@@ -1102,6 +1198,7 @@ void R_TeleportPrepare (void)
 			seen++;
 	if (!seen || !R_TeleportCreateShader())
 		return;
+	R_TeleportSharePlanes();
 
 	savedents = teleport_savedents;
 	memcpy(savedents, cl_visedicts, teleport_restore.savedcount * sizeof(*savedents));
@@ -1132,14 +1229,21 @@ void R_TeleportPrepare (void)
 	for (i = 0; i < teleport_numplanes && !teleport_failed; i++)
 	{
 		teleport_plane_t *plane = &teleport_planes[i];
+		int firstpass = 0, lastpass = style == 3 ? 1 : 0;
 		if (plane->seenframe != teleport_frame)
 			continue;
-		if (R_TeleportPlaneHidden(plane, style))
+		if (plane->shareof >= 0)
+		{	/* refraction comes from the plane in front; only a reflection is its own */
+			if (style != 3)
+				continue;
+			firstpass = 1;
+		}
+		if (plane->shareof >= 0 ? R_TeleportPlaneHidden(plane, 1, 1) : R_TeleportGroupHidden(i, style))
 		{	/* hidden in the views just drawn: show its last images */
 			plane->ready = true;
 			continue;
 		}
-		for (pass = 0; pass < (style == 3 ? 2 : 1); pass++)
+		for (pass = firstpass; pass <= lastpass; pass++)
 		{
 			vec3_t clipnormal, pvsorigin;
 			float clipdist;
@@ -1208,10 +1312,17 @@ void R_TeleportPrepare (void)
 		}
 		plane->ready = !teleport_failed;
 		if (plane->ready)
-		{
-			plane->renderframe = teleport_frame;
-			plane->renderstyle = style;
-		}
+			for (pass = firstpass; pass <= lastpass; pass++)
+				plane->imageframe[pass] = teleport_frame;
+	}
+	for (i = 0; i < teleport_numplanes; i++)
+	{
+		teleport_plane_t *plane = &teleport_planes[i];
+		if (plane->seenframe != teleport_frame || plane->shareof < 0)
+			continue;
+		if (style != 3)
+			plane->ready = true; /* nothing of its own to render */
+		plane->ready = plane->ready && teleport_planes[plane->shareof].ready;
 	}
 
 	R_TeleportRestoreView();
@@ -1285,15 +1396,17 @@ qboolean R_TeleportDrawChain (msurface_t *chain, entity_t *ent)
 	GL_Bind(chain->texinfo->texture->gltexture);
 	for (s = chain; s; s = s->texturechain)
 	{
+		const teleport_plane_t *refraction;
 		GLuint query;
 		R_TeleportPlane(s, matrix, normal, &dist, center);
 		index = R_TeleportFindPlane(normal, dist, true);
 		if (index < 0 || !teleport_planes[index].ready)
 			continue; /* off screen, see above */
+		refraction = teleport_planes[index].shareof >= 0 ? &teleport_planes[teleport_planes[index].shareof] : &teleport_planes[index];
 		GL_SelectTexture(GL_TEXTURE1);
-		glBindTexture(GL_TEXTURE_2D, teleport_planes[index].image[(int)r_telestyle.value == 3 ? 1 : 0]);
+		glBindTexture(GL_TEXTURE_2D, (int)r_telestyle.value == 3 ? teleport_planes[index].image[1] : refraction->image[0]);
 		GL_SelectTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, teleport_planes[index].image[0]);
+		glBindTexture(GL_TEXTURE_2D, refraction->image[0]);
 		/* FTE's vertex normal and Eye are both in model space here. */
 		VectorScale(s->plane->normal, (s->flags & SURF_PLANEBACK) ? -1.0f : 1.0f, normal);
 		GL_Uniform3fFunc(teleport_normal, normal[0], normal[1], normal[2]);

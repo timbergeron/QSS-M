@@ -459,6 +459,35 @@ static void R_Lightmap_Format_Completion_f (cvar_t* cvar, const char* partial)
 
 /*
 ===============
+R_TeleStyle_Completion_f
+===============
+*/
+static void R_TeleStyle_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "classic surface", NULL);
+	Con_AddToTabList("1", partial, "classic surface", NULL);
+	Con_AddToTabList("2", partial, "fte refraction", NULL);
+	Con_AddToTabList("3", partial, "fte refraction + reflection", NULL);
+}
+
+/*
+===============
+R_TeleStyleDetail_Completion_f
+===============
+*/
+static void R_TeleStyleDetail_Completion_f (cvar_t* cvar, const char* partial)
+{
+	(void)cvar;
+
+	Con_AddToTabList("0", partial, "no outlines, shadows or particles in teleporter views", NULL);
+	Con_AddToTabList("1", partial, "no outlines or shadows in teleporter views", NULL);
+	Con_AddToTabList("2", partial, "full detail in teleporter views", NULL);
+}
+
+/*
+===============
 R_SoftEmu_Completion_f -- woods #iwtabcomplete
 ===============
 */
@@ -684,7 +713,9 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_telealpha);
 	Cvar_RegisterVariable (&r_telestyle);
 	Cvar_SetCallback (&r_telestyle, R_TeleportStyleChanged);
-	Cvar_RegisterVariable (&r_teleocclude);
+	Cvar_SetCompletion (&r_telestyle, R_TeleStyle_Completion_f);
+	Cvar_RegisterVariable (&r_telestyle_detail);
+	Cvar_SetCompletion (&r_telestyle_detail, R_TeleStyleDetail_Completion_f);
 	Cvar_RegisterVariable (&r_slimealpha);
 	Cvar_RegisterVariable (&r_scale);
 	Cvar_RegisterVariable (&r_softemu);

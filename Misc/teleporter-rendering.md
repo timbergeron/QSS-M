@@ -3,7 +3,43 @@
 `r_telestyle 0` and `1` use the classic surface. Style `2` uses FTE's
 refraction shader; style `3` adds its reflection pass. Distortion strengths
 remain fixed at `1.0`, and targets remain half the viewport's width and height.
-No additional cvars were introduced.
+`r_telestyle_detail` controls what the extra views draw (see below).
+
+## Cheaper extra views (September 2026)
+
+Each teleporter plane costs a full scene render per pass. Measured at 4K on
+aerowalk, style 3 cost ~0.66 ms per frame with one teleporter in view and
+style 2 about half that; four planes rendered even when no teleporter was on
+screen, because every face in the visible leaves that faced the eye was kept.
+
+- Faces entirely behind the eye or projected off screen are no longer
+  collected, and the draw path skips them instead of sending the whole chain
+  through the classic fallback.
+- Plane slots persist across views (matched by normal and distance, least
+  recently seen evicted) so each keeps its images. Every teleporter face the
+  main view draws is wrapped in a samples-passed occlusion query. A plane
+  whose newest finished query found no pixels skips its extra views and shows
+  its last images; it is still re-rendered every fourth view, so an image is at
+  most three views old when the plane comes into sight. Results are read only
+  once available and unknown planes always render.
+- A teleporter is a thin slab, so both faces point at the eye. The farther
+  face reuses the nearer face's refraction, which looks through the same eye
+  and differs only by what lies inside the slab; the nearer face renders over
+  both faces' screen area and visibility. Reflections mirror about each face's
+  own plane and stay per face (sharing them changed oblique views visibly).
+- `r_telestyle_detail 1` (default) omits model outlines and entity shadows from
+  the half-resolution, distorted extra views, `0` also omits particles, and `2`
+  draws everything.
+
+| aerowalk view | Style 1 | Style 2 before → after | Style 3 before → after |
+| --- | ---: | ---: | ---: |
+| teleporter in plain view | 1,804 | 1,137 → 1,519 | 818 → 1,186 |
+| mixed, some hidden | 2,204 | 1,465 → 1,877 | 1,114 → 1,406 |
+| mostly hidden | 2,202 | 2,076 → 2,159 | 1,838 → 1,980 |
+| hidden behind walls (occlusion alone) | 2,007 | 959 → 1,575 | 548 → 1,198 |
+
+`Misc/stress/test_teleport_occlusion.py` covers the screen-bounds rejection,
+query read-back, skip decisions, face queries, slot reuse and face sharing.
 
 ## Changes from the September 11 review
 

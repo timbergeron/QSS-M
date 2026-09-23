@@ -9,9 +9,13 @@ checks that:
   crossing the eye plane keep the whole target, visible faces keep their rect;
 * a plane is only skipped when its newest finished query saw no pixels, it has
   recent images for the current style, and its periodic refresh is not due;
-  unknown, in-flight, overflowing, stale or disabled cases always render;
+  unknown, in-flight, overflowing, stale or unsupported cases always render;
 * per-face queries reset per view, overflow conservatively, and slots are
-  reused by plane with least-recently-seen eviction.
+  reused by plane with least-recently-seen eviction;
+* refraction sharing pairs a slab's back face with the nearest parallel face in
+  front of it (not too far, overlapping on screen, in front of the eye),
+  widens that face's screen area and visibility to cover it, and a group only
+  skips while every face in it is hidden.
 
 Compile with CC, or run from a Visual Studio developer shell on Windows.
 """
@@ -70,7 +74,11 @@ static void GL_GetQueryObjectuivFunc(GLuint id, GLenum pname, GLuint *out) {
     *out = pname == GL_QUERY_RESULT_AVAILABLE ? (GLuint)avail_of[id] : (GLuint)samples_of[id];
 }
 static qboolean gl_occlusion_able = true;
-static struct { float value; } r_teleocclude = {1};
+typedef unsigned char byte;
+#define DotProduct(a,b) ((a)[0]*(b)[0]+(a)[1]*(b)[1]+(a)[2]*(b)[2])
+static struct { vec3_t vieworg; } r_refdef;
+static byte teleport_vis[64 * 2 * 4];
+static int teleport_pvsbytes = 4;
 '''
 source += defines + "\n" + plane_type + r'''
 static teleport_plane_t teleport_planes[MAX_TELEPORT_PLANES];
@@ -82,8 +90,12 @@ for decl in ("static qboolean R_TeleportScreenBounds (",
              "static void R_TeleportResetPlane (",
              "static int R_TeleportAllocPlane (",
              "static void R_TeleportResolveQueries (",
+             "static qboolean R_TeleportQueryHidden (",
              "static qboolean R_TeleportPlaneHidden (",
-             "static GLuint R_TeleportFaceQuery ("):
+             "static GLuint R_TeleportFaceQuery (",
+             "static qboolean R_TeleportRectsOverlap (",
+             "static void R_TeleportSharePlanes (",
+             "static qboolean R_TeleportGroupHidden ("):
     source += function(decl) + "\n"
 source += r'''
 /* perspective looking down +x from the origin: clip = (y, z, -, x) */
@@ -135,56 +147,54 @@ static void hidden_decisions(void) {
     int style = 2;
     /* never rendered: must render */
     p = fresh_plane(); teleport_frame = 10;
-    CHECK(!R_TeleportPlaneHidden(p, style), "a plane without images must render");
+    CHECK(!R_TeleportPlaneHidden(p, 0, style == 3), "a plane without images must render");
     /* rendered at 10, drawn at 10 with zero pixels, resolved at 11 -> hidden */
-    p->renderframe = 10; p->renderstyle = style;
+    p->imageframe[0] = 10;
     issue(p, 2, 0, 1);
     teleport_frame = 11; R_TeleportResolveQueries();
     CHECK(p->resolvedframe == 10 && p->visibleframe < 10, "zero-pixel query must resolve as hidden");
-    CHECK(R_TeleportPlaneHidden(p, style), "hidden plane with fresh images must skip");
-    CHECK(!R_TeleportPlaneHidden(p, 3), "images for another style must not be reused");
-    r_teleocclude.value = 0;
-    CHECK(!R_TeleportPlaneHidden(p, style), "r_teleocclude 0 must always render"); r_teleocclude.value = 1;
+    CHECK(R_TeleportPlaneHidden(p, 0, style == 3), "hidden plane with fresh images must skip");
+    CHECK(!R_TeleportPlaneHidden(p, 0, 1), "a missing reflection image must render");
     gl_occlusion_able = false;
-    CHECK(!R_TeleportPlaneHidden(p, style), "no query support must always render"); gl_occlusion_able = true;
+    CHECK(!R_TeleportPlaneHidden(p, 0, style == 3), "no query support must always render"); gl_occlusion_able = true;
     teleport_frame = 10 + TELEPORT_HIDDEN_REFRESH;
-    CHECK(!R_TeleportPlaneHidden(p, style), "periodic refresh must re-render hidden planes");
+    CHECK(!R_TeleportPlaneHidden(p, 0, style == 3), "periodic refresh must re-render hidden planes");
     /* a resolved query that saw pixels makes it visible again */
     teleport_frame = 12; issue(p, 1, 5, 1);
     teleport_frame = 13; R_TeleportResolveQueries();
-    CHECK(p->visibleframe == 12 && !R_TeleportPlaneHidden(p, style), "visible query must render");
+    CHECK(p->visibleframe == 12 && !R_TeleportPlaneHidden(p, 0, style == 3), "visible query must render");
     /* in-flight results are not trusted */
-    p = fresh_plane(); teleport_frame = 20; p->renderframe = 20; p->renderstyle = style;
+    p = fresh_plane(); teleport_frame = 20; p->imageframe[0] = 20;
     issue(p, 1, 0, 0);
     teleport_frame = 21; R_TeleportResolveQueries();
-    CHECK(!p->resolvedframe && !R_TeleportPlaneHidden(p, style), "unavailable query must not skip");
+    CHECK(!p->resolvedframe && !R_TeleportPlaneHidden(p, 0, style == 3), "unavailable query must not skip");
     /* one of several faces unavailable: wait for all */
-    p = fresh_plane(); teleport_frame = 30; p->renderframe = 30; p->renderstyle = style;
+    p = fresh_plane(); teleport_frame = 30; p->imageframe[0] = 30;
     issue(p, 1, 0, 1); issue(p, 1, 0, 0);
     teleport_frame = 31; R_TeleportResolveQueries();
     CHECK(!p->resolvedframe, "partially available frame must stay unresolved");
     /* any face with pixels: visible */
-    p = fresh_plane(); teleport_frame = 40; p->renderframe = 40; p->renderstyle = style;
+    p = fresh_plane(); teleport_frame = 40; p->imageframe[0] = 40;
     issue(p, 1, 0, 1); issue(p, 1, 7, 1);
     teleport_frame = 41; R_TeleportResolveQueries();
-    CHECK(p->visibleframe == 40 && !R_TeleportPlaneHidden(p, style), "a visible face makes the plane visible");
+    CHECK(p->visibleframe == 40 && !R_TeleportPlaneHidden(p, 0, style == 3), "a visible face makes the plane visible");
     /* too many faces: the unqueried ones count as visible */
-    p = fresh_plane(); teleport_frame = 50; p->renderframe = 50; p->renderstyle = style;
+    p = fresh_plane(); teleport_frame = 50; p->imageframe[0] = 50;
     issue(p, TELEPORT_FACE_QUERIES + 1, 0, 1);
     CHECK(p->queryoverflow[50 % TELEPORT_QUERY_RING], "extra faces must mark overflow");
     teleport_frame = 51; R_TeleportResolveQueries();
-    CHECK(p->visibleframe == 50 && !R_TeleportPlaneHidden(p, style), "overflow must count as visible");
+    CHECK(p->visibleframe == 50 && !R_TeleportPlaneHidden(p, 0, style == 3), "overflow must count as visible");
     /* query objects that cannot be created count as visible */
-    p = fresh_plane(); teleport_frame = 60; p->renderframe = 60; p->renderstyle = style;
+    p = fresh_plane(); teleport_frame = 60; p->imageframe[0] = 60;
     gen_fail = 1; issue(p, 1, 0, 1); gen_fail = 0;
     teleport_frame = 61; R_TeleportResolveQueries();
-    CHECK(!R_TeleportPlaneHidden(p, style), "failed query creation must not skip");
+    CHECK(!R_TeleportPlaneHidden(p, 0, style == 3), "failed query creation must not skip");
     /* old zero result is not trusted */
-    p = fresh_plane(); teleport_frame = 70; p->renderframe = 70; p->renderstyle = style;
+    p = fresh_plane(); teleport_frame = 70; p->imageframe[0] = 70;
     issue(p, 1, 0, 1); teleport_frame = 71; R_TeleportResolveQueries();
-    p->renderframe = 70 + TELEPORT_QUERY_RING + 1;
+    p->imageframe[0] = 70 + TELEPORT_QUERY_RING + 1;
     teleport_frame = 70 + TELEPORT_QUERY_RING + 2;
-    CHECK(!R_TeleportPlaneHidden(p, style), "a stale zero result must not skip");
+    CHECK(!R_TeleportPlaneHidden(p, 0, style == 3), "a stale zero result must not skip");
     /* current-view queries are never read back early */
     p = fresh_plane(); teleport_frame = 80; issue(p, 1, 0, 1); R_TeleportResolveQueries();
     CHECK(!p->resolvedframe, "the current view's queries must not be read");
@@ -201,17 +211,64 @@ static void slots(void) {
     CHECK(idx == 5, "full table must evict the least recently seen plane");
     for (i = 0; i < MAX_TELEPORT_PLANES; ++i) teleport_planes[i].seenframe = teleport_frame;
     CHECK(R_TeleportAllocPlane() < 0, "planes collected this view must never be evicted");
-    teleport_planes[3].renderframe = 7; teleport_planes[3].query[1][2] = 55;
+    teleport_planes[3].imageframe[0] = 7; teleport_planes[3].query[1][2] = 55;
     R_TeleportResetPlane(&teleport_planes[3]);
     CHECK(teleport_planes[3].image[0] == 1003 && teleport_planes[3].query[1][2] == 55 &&
-          !teleport_planes[3].renderframe && !teleport_planes[3].seenframe,
+          !teleport_planes[3].imageframe[0] && !teleport_planes[3].seenframe,
           "reset must forget the plane but keep its GL objects");
+}
+static teleport_plane_t *face(int i, float ny, float dist, float x0, float x1) {
+    teleport_plane_t *p = &teleport_planes[i];
+    p->normal[0] = 0; p->normal[1] = ny; p->normal[2] = 0; p->dist = dist;
+    p->screenmins[0] = x0; p->screenmaxs[0] = x1; p->screenmins[1] = 0.4f; p->screenmaxs[1] = 0.6f;
+    p->seenframe = teleport_frame;
+    return p;
+}
+static void sharing(void) {
+    int k;
+    memset(teleport_planes, 0, sizeof(teleport_planes)); memset(teleport_vis, 0, sizeof(teleport_vis));
+    teleport_frame = 200; teleport_numplanes = 6;
+    r_refdef.vieworg[0] = r_refdef.vieworg[1] = r_refdef.vieworg[2] = 0;
+    /* eye at y=0 looking at faces with normal -y: in front when dist <= -y */
+    face(0, -1, -384, 0.40f, 0.50f);   /* back face, 384 away */
+    face(1, -1, -370, 0.42f, 0.52f);   /* front face, 370 away, overlapping */
+    face(2, -1, -300, 0.70f, 0.80f);   /* parallel, nearer, but elsewhere on screen */
+    face(3, -1, -330, 0.41f, 0.49f);   /* parallel, overlapping, but 54 in front: too far */
+    face(4, 1, 380, 0.40f, 0.50f);     /* facing away from the eye */
+    face(5, -1, -500, 0.45f, 0.46f);   /* another back face 130 behind face 1: too far */
+    for (k = 0; k < teleport_pvsbytes; ++k) teleport_vis[(0 * 2 + 1) * teleport_pvsbytes + k] = (byte)(1 << k);
+    R_TeleportSharePlanes();
+    CHECK(teleport_planes[0].shareof == 1, "back face must share the nearest overlapping front face");
+    CHECK(teleport_planes[1].shareof == -1 && teleport_planes[2].shareof == -1 && teleport_planes[3].shareof == -1,
+          "front, distant or offset faces must render their own images");
+    CHECK(teleport_planes[4].shareof == -1, "faces pointing away never share");
+    CHECK(teleport_planes[5].shareof == -1, "faces more than TELEPORT_SHARE_DEPTH apart never share");
+    CHECK(teleport_planes[1].screenmins[0] <= 0.40f && teleport_planes[1].screenmaxs[0] >= 0.52f,
+          "the shared face's target must cover both faces");
+    for (k = 0; k < teleport_pvsbytes; ++k)
+        CHECK(teleport_vis[(1 * 2 + 1) * teleport_pvsbytes + k] & (1 << k), "the shared face must see what the back face sees");
+    /* the group only skips while every member is hidden */
+    teleport_planes[1].imageframe[0] = teleport_planes[0].imageframe[0] = 200;
+    teleport_planes[1].resolvedframe = teleport_planes[0].resolvedframe = 199;
+    teleport_planes[1].visibleframe = 0; teleport_planes[0].visibleframe = 199;
+    CHECK(!R_TeleportGroupHidden(1, 2), "a visible back face keeps its shared front face rendering");
+    teleport_planes[0].visibleframe = 0;
+    CHECK(R_TeleportGroupHidden(1, 2), "a fully hidden group may skip");
+    teleport_planes[0].imageframe[0] = 0;   /* sharers never render their own refraction */
+    CHECK(R_TeleportGroupHidden(1, 2), "a hidden sharer without its own images must not block skipping");
+    teleport_planes[1].imageframe[0] = 0;
+    CHECK(!R_TeleportGroupHidden(1, 2), "the rendering face still needs recent images to skip");
+    teleport_planes[1].imageframe[0] = 200;
+    CHECK(!R_TeleportGroupHidden(1, 3), "style 3 also needs the rendering face's reflection");
+    teleport_planes[1].imageframe[1] = 200;
+    CHECK(R_TeleportGroupHidden(1, 3), "with both images recent a hidden style 3 group may skip");
 }
 int main(void) {
     bounds();
+    sharing();
     hidden_decisions();
     slots();
-    puts("PASS: teleporter screen bounds, query read-back, skip decisions, face queries and slot reuse");
+    puts("PASS: teleporter screen bounds, query read-back, skip decisions, face queries, slot reuse and face sharing");
     return 0;
 }
 '''

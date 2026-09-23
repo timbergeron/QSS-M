@@ -195,7 +195,7 @@ extern	cvar_t	r_wateralpha;
 extern	cvar_t	r_lavaalpha;
 extern	cvar_t	r_telealpha;
 extern cvar_t r_telestyle;
-extern cvar_t r_teleocclude;
+extern cvar_t r_telestyle_detail;
 extern qboolean r_teleport_view, r_teleport_reflection;
 extern byte *r_teleport_pvs;
 extern unsigned int r_teleport_visframe;

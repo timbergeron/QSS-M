@@ -70,7 +70,7 @@ JPG, r00k, Spoike for QSS and FTEQW, Ozkan Sezer & Eric Wasylishen (Quakespasm),
 
 - Centerprint background styles (`scr_centerprintbg`)
 - Classic screen-space underwater warp (`r_waterwarp 1`), with the GLQuake fov-wobble retained as an option (`r_waterwarp 2`)
-- Teleporter rendering (`r_telestyle`): `0`/`1` use the classic surface, `2` adds FTE refraction, and `3` adds FTE reflection. Extra views use half width and height, with fixed distortion strength `1.0`; coplanar faces share targets. The main view retains scene caching.
+- Teleporter rendering (`r_telestyle`): `0`/`1` use the classic surface, `2` adds FTE refraction, and `3` adds FTE reflection. Extra views use half width and height, with fixed distortion strength `1.0`; coplanar faces share targets. The main view retains scene caching. Teleporters hidden behind walls or off screen skip their extra views (occlusion queries), the back face of each teleporter slab reuses the front face's refraction, and `r_telestyle_detail` (`2` full, `1` default: no outlines or shadows, `0`: also no particles) trims what those views draw.
 - Sky wind support (`r_skywind`)
 - `r_showbboxes` model-type coloring and filtering
 - PVS-aware entity checks for more accurate bounding-box debug overlays
