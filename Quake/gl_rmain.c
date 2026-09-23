@@ -1306,6 +1306,38 @@ void R_SetupScene (void)
 
 /*
 ===============
+R_EntityPointInLeaf
+
+Mod_PointInLeaf in the entity's model for a point in its frame, as R_SetupView
+asks every frame for every brush entity. The last answer holds while the point
+stays nearer than every plane that decided it, less slack for float rounding
+on big coordinates and not-quite-unit normals.
+===============
+*/
+#define R_POINTINLEAF_SLACK	0.125f
+
+static mleaf_t *R_EntityPointInLeaf (entity_t *ent, vec3_t p)
+{
+	float	margin;
+	vec3_t	delta;
+
+	if (ent->contentsmodel == ent->model && ent->contentsgeneration == mod_generation)
+	{
+		VectorSubtract (p, ent->contentspos, delta);
+		if (DotProduct (delta, delta) < ent->contentsradius * ent->contentsradius)
+			return ent->contentsleaf;
+	}
+
+	ent->contentsleaf = Mod_PointInLeafMargin (p, ent->model, &margin);
+	ent->contentsmodel = ent->model;
+	ent->contentsgeneration = mod_generation;
+	VectorCopy (p, ent->contentspos);
+	ent->contentsradius = q_max (0.0f, margin * 0.999f - R_POINTINLEAF_SLACK);
+	return ent->contentsleaf;
+}
+
+/*
+===============
 R_SetupView -- johnfitz -- this is the stuff that needs to be done once per frame, even in stereo mode
 ===============
 */
@@ -1349,7 +1381,7 @@ void R_SetupView (void)
 					relpos[0] = -DotProduct(t, axis[1]);
 					relpos[0] = DotProduct(t, axis[2]);
 				}
-				subleaf = Mod_PointInLeaf (relpos, cl.entities[i].model);
+				subleaf = R_EntityPointInLeaf (&cl.entities[i], relpos);
 				if ((char)cl.entities[i].skinnum < 0)
 					viewcontents = ((subleaf->contents == CONTENTS_SOLID)?(char)cl.entities[i].skinnum:CONTENTS_EMPTY);
 				else

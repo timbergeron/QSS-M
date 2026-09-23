@@ -1958,7 +1958,9 @@ static qboolean CL_CTFPugIsGoldKeyModel (qmodel_t *model)
 
 static qmodel_t *CL_CTFPugTranslateModelAndSkin (qmodel_t *model, int *skinnum)
 {
-	if (!model || !model->name[0])
+	// every swap below needs cl_ctf_pub_modelswap (via CL_CTFPugPrecacheModel);
+	// test it before the name compares, which run per entity per frame
+	if (!model || !model->name[0] || !cl_ctf_pub_modelswap.value)
 		return model;
 
 	if (!strcmp(model->name, "progs/v_spike.mdl"))

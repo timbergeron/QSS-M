@@ -618,6 +618,7 @@ typedef struct map_surface_areas_s
 void	Mod_Init (void);
 void	Mod_ClearAll (void);
 void	Mod_ResetAll (void); // for gamedir changes (Host_Game_f)
+extern int	mod_generation;	// bumped whenever model data may be freed or replaced
 qmodel_t *Mod_ForName (const char *name, qboolean crash);
 void	Mod_ForEachModel(void(*callback)(qmodel_t *mod));
 void	*Mod_Extradata (qmodel_t *mod);	// handles caching
@@ -626,6 +627,7 @@ qboolean Mod_CalcBSPFileSurfaceAreas (const char *path, map_surface_areas_t *are
 qboolean Mod_FindExternalEntFile (const char *bspname, unsigned int entcrc, char *out, size_t outsize, unsigned int *path_id);
 
 mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model);
+mleaf_t *Mod_PointInLeafMargin (vec3_t p, qmodel_t *model, float *margin);
 byte	*Mod_LeafPVS (mleaf_t *leaf, qmodel_t *model);
 byte	*Mod_NoVisPVS (qmodel_t *model);
 

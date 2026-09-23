@@ -161,6 +161,14 @@ typedef struct entity_s
 	struct trailstate_s		*trailstate;	//spike -- managed by the particle system, so we don't loose our position and spawn the wrong number of particles, and we can track beams etc
 	struct trailstate_s		*emitstate;		//spike -- for effects which are not so static.
 	int						shadow_state;    // woods -- #shadow -- flag to indicate if the shadow is valid
+
+	// R_SetupView's view-contents test: the leaf of this entity's model last
+	// found for contentspos, which stays right within contentsradius
+	struct qmodel_s			*contentsmodel;
+	int						contentsgeneration;
+	vec3_t					contentspos;
+	float					contentsradius;
+	struct mleaf_s			*contentsleaf;
 } entity_t;
 
 // !!! if this is changed, it must be changed in asm_draw.h too !!!

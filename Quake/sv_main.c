@@ -3082,6 +3082,19 @@ void SV_SetupSkyRoom(char *value)
 }
 
 
+/*
+SV_FatPVS remembers which leafs its buffer holds. The client asks for the view's
+fat PVS every frame and the server once a tick for nearly the same point, and on
+big BSP2 maps decompressing and merging each leaf's row costs more than finding
+the leafs, so when the same leafs come back the buffer is returned as it is.
+*/
+#define FATPVS_MAX_KEY_LEAFS 64
+static mleaf_t	*fatpvs_keyleafs[FATPVS_MAX_KEY_LEAFS];
+static int		fatpvs_numkeyleafs;
+static qmodel_t	*fatpvs_keymodel;
+static int		fatpvs_keygeneration;
+static qboolean	fatpvs_keyvalid;
+
 static void SV_AddToFatPVS (vec3_t org, mnode_t *node, qmodel_t *worldmodel) //johnfitz -- added worldmodel as a parameter
 {
 	int		i;
@@ -3089,6 +3102,7 @@ static void SV_AddToFatPVS (vec3_t org, mnode_t *node, qmodel_t *worldmodel) //j
 	mplane_t	*plane;
 	float	d;
 
+	fatpvs_keyvalid = false;	// the buffer no longer matches its key
 	while (1)
 	{
 	// if this is a leaf, accumulate the pvs bits
@@ -3123,6 +3137,51 @@ static void SV_AddToFatPVS (vec3_t org, mnode_t *node, qmodel_t *worldmodel) //j
 
 /*
 =============
+SV_FindFatPVSLeafs
+
+The non-solid leafs SV_AddToFatPVS would merge, in its order. Returns -1 if
+there are more than fit in the key.
+=============
+*/
+static int SV_FindFatPVSLeafs (vec3_t org, mnode_t *node, mleaf_t **leafs, int count)
+{
+	mplane_t	*plane;
+	float	d;
+
+	while (1)
+	{
+		if (node->contents < 0)
+		{
+			if (node->contents != CONTENTS_SOLID)
+			{
+				if (count < 0 || count == FATPVS_MAX_KEY_LEAFS)
+					return -1;
+				leafs[count++] = (mleaf_t *)node;
+			}
+			return count;
+		}
+
+		plane = node->plane;
+		if (plane->type < 3)
+			d = org[plane->type] - plane->dist;
+		else
+			d = DotProduct (org, plane->normal) - plane->dist;
+		if (d > 8)
+			node = node->children[0];
+		else if (d < -8)
+			node = node->children[1];
+		else
+		{	// go down both
+			count = SV_FindFatPVSLeafs (org, node->children[0], leafs, count);
+			if (count < 0)
+				return -1;
+			node = node->children[1];
+		}
+	}
+}
+
+/*
+=============
 SV_FatPVS
 
 Calculates a PVS that is the inclusive or of all leafs within 8 pixels of the
@@ -3131,6 +3190,9 @@ given point.
 */
 byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel) //johnfitz -- added worldmodel as a parameter
 {
+	mleaf_t	*leafs[FATPVS_MAX_KEY_LEAFS];
+	int		i, numleafs;
+
 	fatbytes = (worldmodel->numleafs + 31) / 8;
 	if (fatpvs == NULL || fatbytes > fatpvs_capacity)
 	{
@@ -3138,13 +3200,41 @@ byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel) //johnfitz -- added worldmode
 		fatpvs = (byte *) realloc (fatpvs, fatpvs_capacity);
 		if (!fatpvs)
 			Sys_Error ("SV_FatPVS: realloc() failed on %d bytes", fatpvs_capacity);
+		fatpvs_keyvalid = false;
 	}
-	
+
+	numleafs = SV_FindFatPVSLeafs (org, worldmodel->nodes, leafs, 0);
+	if (fatpvs_keyvalid && numleafs >= 0 && numleafs == fatpvs_numkeyleafs &&
+		worldmodel == fatpvs_keymodel && mod_generation == fatpvs_keygeneration &&
+		!memcmp (leafs, fatpvs_keyleafs, numleafs * sizeof(leafs[0])))
+		return fatpvs;
+
 	Q_memset (fatpvs, 0, fatbytes);
 	fatpvs_any = false;
-	SV_AddToFatPVS (org, worldmodel->nodes, worldmodel); //johnfitz -- worldmodel as a parameter
+	if (numleafs >= 0)
+	{
+		for (i = 0; i < numleafs; i++)
+		{
+			byte *pvs = Mod_LeafPVS (leafs[i], worldmodel);
+			int j;
+			for (j = 0; j < fatbytes - 3; j += 4)
+				*(uint32_t*)&fatpvs[j] |= *(uint32_t*)&pvs[j];
+		}
+		fatpvs_any = numleafs > 0;
+	}
+	else
+		SV_AddToFatPVS (org, worldmodel->nodes, worldmodel); //johnfitz -- worldmodel as a parameter
 	if (fatpvs_any == false)
 		memset(fatpvs, 0xff, fatbytes);
+
+	fatpvs_keyvalid = numleafs >= 0;
+	if (fatpvs_keyvalid)
+	{
+		memcpy (fatpvs_keyleafs, leafs, numleafs * sizeof(leafs[0]));
+		fatpvs_numkeyleafs = numleafs;
+		fatpvs_keymodel = worldmodel;
+		fatpvs_keygeneration = mod_generation;
+	}
 	return fatpvs;
 }
 

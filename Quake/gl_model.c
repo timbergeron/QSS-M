@@ -62,6 +62,7 @@ cvar_t	scr_conback = {"scr_conback", "", CVAR_ARCHIVE}; // woods #conback
 
 extern cvar_t	r_fastturb; // woods #fastturb
 
+int		mod_generation;
 static byte	*mod_novis;
 static int	mod_novis_capacity;
 
@@ -193,6 +194,21 @@ Mod_PointInLeaf
 */
 mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model)
 {
+	return Mod_PointInLeafMargin (p, model, NULL);
+}
+
+/*
+===============
+Mod_PointInLeafMargin
+
+Mod_PointInLeaf that also reports, in *margin, the smallest distance from p to
+a plane it tested. Every point nearer to p than that takes the same branches
+and lands in the same leaf (before float rounding; callers leave some slack).
+0 when that cannot be promised.
+===============
+*/
+mleaf_t *Mod_PointInLeafMargin (vec3_t p, qmodel_t *model, float *margin)
+{
 	mnode_t		*node;
 	float		d;
 	mplane_t	*plane;
@@ -203,6 +219,8 @@ mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model)
 		model->hulls[0].firstclipnode >= model->numnodes)
 		Sys_Error ("Mod_PointInLeaf: bad model");
 
+	if (margin)
+		*margin = FLT_MAX;
 	node = model->nodes + model->hulls[0].firstclipnode;
 	remaining = model->numnodes + 1;
 	while (node && remaining-- > 0)
@@ -216,12 +234,16 @@ mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model)
 			d = p[plane->type] - plane->dist;
 		else
 			d = DotProduct (p,plane->normal) - plane->dist;
+		if (margin && fabs (d) < *margin)
+			*margin = fabs (d);
 		if (d > 0)
 			node = node->children[0];
 		else
 			node = node->children[1];
 	}
 
+	if (margin)
+		*margin = 0;
 	if (model->leafs)
 		return model->leafs;	// malformed tree: use the solid leaf
 	Sys_Error ("Mod_PointInLeaf: bad node tree");
@@ -396,6 +418,7 @@ void Mod_ClearAll (void)
 		}
 	}
 
+	mod_generation++;
 	InvalidateTraceLineCache();
 }
 
@@ -422,6 +445,7 @@ void Mod_ResetAll (void)
 	}
 	mod_numknown = 0;
 
+	mod_generation++;
 	InvalidateTraceLineCache();
 }
 
@@ -519,6 +543,7 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 			return mod;		// not cached at all
 	}
 
+	mod_generation++;
 	InvalidateTraceLineCache();
 
 	profile = developer.value != 0;

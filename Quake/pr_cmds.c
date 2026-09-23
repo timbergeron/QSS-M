@@ -1137,6 +1137,8 @@ static void PF_Remove (void)
 
 
 // entity (entity start, .string field, string match) find = #5;
+#define PF_FIND_PREFETCH	8
+
 static void PF_Find (void)
 {
 	int		e;
@@ -1153,6 +1155,12 @@ static void PF_Find (void)
 	for (e++ ; e < qcvm->num_edicts ; e++)
 	{
 		ed = EDICT_NUM(e);
+		if (e + PF_FIND_PREFETCH < qcvm->num_edicts)
+		{	//a scan walks every edict, a cache miss or two apiece on big maps
+			edict_t *ahead = EDICT_NUM(e + PF_FIND_PREFETCH);
+			Q_PREFETCH (&ahead->free);
+			Q_PREFETCH ((int *)&ahead->v + f);
+		}
 		if (ed->free)
 			continue;
 		t = E_STRING(ed,f);

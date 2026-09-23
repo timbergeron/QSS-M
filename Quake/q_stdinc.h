@@ -267,6 +267,16 @@ typedef ptrdiff_t	ssize_t;
 #define FUNC_ALWAYSINLINE	inline
 #endif
 
+/* read-prefetch hint; only changes memory timing, never results */
+#if defined(__GNUC__)
+#define Q_PREFETCH(p)	__builtin_prefetch ((const void *)(p))
+#elif defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
+#include <xmmintrin.h>
+#define Q_PREFETCH(p)	_mm_prefetch ((const char *)(p), _MM_HINT_T0)
+#else
+#define Q_PREFETCH(p)	((void)0)
+#endif
+
 #if defined(__GNUC__) && ((__GNUC__ > 4) || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5))
 #define FUNC_NOCLONE	__attribute__((__noclone__))
 #else

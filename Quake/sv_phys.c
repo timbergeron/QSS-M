@@ -733,6 +733,18 @@ static FUNC_NOINLINE int SV_PushIter_Verify (int shadow_pos, edict_t *check, int
 	return -1;				//one report per scan
 }
 
+#define SV_PUSH_PREFETCH	8
+
+//the fields SV_PushMove tests on every candidate
+static FUNC_ALWAYSINLINE void SV_PushIter_Prefetch (const edict_t *check)
+{
+	Q_PREFETCH (&check->free);
+	Q_PREFETCH (&check->v.absmin);
+	Q_PREFETCH (&check->v.absmax);
+	Q_PREFETCH (&check->v.groundentity);
+	Q_PREFETCH (&check->v.flags);
+}
+
 /*
 ============
 SV_PushIter_Next
@@ -756,6 +768,10 @@ static FUNC_ALWAYSINLINE edict_t *SV_PushIter_Next (pushiter_t *it, int *out_e)
 		{
 			it->e = qcvm->pushcache[it->listpos++];
 			check = (edict_t *)(it->base + (size_t)it->e * it->size);
+			//candidates are an edict apart and SV_PushMove reads four cache lines
+			//of each, so fetch a few ahead
+			if (it->listpos + SV_PUSH_PREFETCH < qcvm->pushcache_count)
+				SV_PushIter_Prefetch ((const edict_t *)(it->base + (size_t)qcvm->pushcache[it->listpos + SV_PUSH_PREFETCH] * it->size));
 		}
 		//else: still valid, so num_edicts has not grown and the list covered everything
 	}
