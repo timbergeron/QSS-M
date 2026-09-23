@@ -183,12 +183,18 @@ static qboolean R_IsStaticEntity (const entity_t *e)
 R_DrawBrushModel
 =================
 */
-void R_DrawBrushModel (entity_t *e)
+/*
+=================
+R_BeginBrushModel
+
+Scene-cache skip, culling, dynamic light marking and the entity transform,
+shared by R_DrawBrushModel and liquid runs. False if nothing is drawn;
+otherwise the entity matrix is pushed and modelorg is set.
+=================
+*/
+static qboolean R_BeginBrushModel (entity_t *e)
 {
-	int			i, k;
-	msurface_t	*psurf;
-	float		dot;
-	mplane_t	*pplane;
+	int			k;
 	qmodel_t	*clmodel;
 	vec3_t		lightorg;
 	qboolean	zfix;
@@ -197,10 +203,10 @@ void R_DrawBrushModel (entity_t *e)
 	if (e->model->submodelof == cl.worldmodel &&
 		skipsubmodels &&
 		skipsubmodels[e->model->submodelidx>>3]&(1u<<(e->model->submodelidx&7)))
-		return;	//its in the scenecache that we're drawing. don't draw it twice (and certainly not the slow way).
+		return false;	//its in the scenecache that we're drawing. don't draw it twice (and certainly not the slow way).
 
 	if (R_CullModelForEntity(e))
-		return;
+		return false;
 
 	currententity = e;
 	clmodel = e->model;
@@ -218,8 +224,6 @@ void R_DrawBrushModel (entity_t *e)
 		modelorg[1] = -DotProduct (temp, right);
 		modelorg[2] = DotProduct (temp, up);
 	}
-
-	psurf = &clmodel->surfaces[clmodel->firstmodelsurface];
 
 // calculate dynamic lighting for bmodel if it's not an
 // instanced model
@@ -255,13 +259,24 @@ void R_DrawBrushModel (entity_t *e)
 		e->origin[2] += DIST_EPSILON;
 	}
 	e->angles[0] = -e->angles[0];	// stupid quake bug
+	return true;
+}
 
-	if (R_DrawBModelDrawCache (clmodel, e))
-	{
-		glPopMatrix ();
-		return;
-	}
-	R_ClearTextureChains (clmodel, chain_model);
+/*
+=================
+R_ChainBrushModel
+
+Chain the surfaces facing modelorg; true if any of them is not liquid.
+=================
+*/
+static qboolean R_ChainVisibleSurfaces (qmodel_t *clmodel)
+{
+	int			i;
+	msurface_t	*psurf = &clmodel->surfaces[clmodel->firstmodelsurface];
+	mplane_t	*pplane;
+	float		dot;
+	qboolean	chainedsolid = false;
+
 	for (i=0 ; i<clmodel->nummodelsurfaces ; i++, psurf++)
 	{
 		pplane = psurf->plane;
@@ -272,13 +287,175 @@ void R_DrawBrushModel (entity_t *e)
 			R_ChainSurface (psurf, chain_model);
 			R_RenderDynamicLightmaps(clmodel, psurf);
 			rs_brushpolys++;
+			if (!(psurf->flags & SURF_DRAWTURB))
+				chainedsolid = true;
 		}
 	}
+	return chainedsolid;
+}
 
-	R_DrawTextureChains (clmodel, e, chain_model);
+static qboolean R_ChainBrushModel (qmodel_t *clmodel)
+{
+	R_ClearTextureChains (clmodel, chain_model);
+	return R_ChainVisibleSurfaces (clmodel);
+}
+
+void R_DrawBrushModel (entity_t *e)
+{
+	qmodel_t	*clmodel;
+
+	if (!R_BeginBrushModel (e))
+		return;
+	clmodel = e->model;
+
+	if (R_DrawBModelDrawCache (clmodel, e))
+	{
+		glPopMatrix ();
+		return;
+	}
+	if (R_ChainBrushModel (clmodel) || !R_DrawTextureChains_LiquidOnly (e))
+		R_DrawTextureChains (clmodel, e, chain_model);
 	R_DrawTextureChains_Water (clmodel, e, chain_model);
 
 	glPopMatrix ();
+}
+
+/*
+=================
+Liquid brush runs
+
+Maps can hold hundreds of translucent liquid brush entities (immortal.bsp has
+~900 graded-alpha func_walls). Drawn one at a time, each sets up and tears down
+the liquid program, buffers and attributes. In the alpha pass, consecutive
+entities whose every surface is plain liquid are queued and drawn as a run in
+the same order, each with its own transform, alpha and lightmap updates; any
+other entity flushes the queue first, so the back-to-front order is kept.
+=================
+*/
+#define MAX_LIQUID_RUN 1024
+#define MAX_LIQUID_TEXTURES 32
+static entity_t *r_liquid_queue[MAX_LIQUID_RUN];
+static int r_num_liquid_queue;
+static qboolean r_liquid_collecting;
+
+static qboolean R_LiquidOnlyModel (qmodel_t *m)
+{
+	int i;
+	msurface_t *s = &m->surfaces[m->firstmodelsurface];
+
+	if (m->nummodelsurfaces <= 0)
+		return false;
+	for (i = 0; i < m->nummodelsurfaces; i++, s++)
+		if (!(s->flags & SURF_DRAWTURB) || (s->flags & (SURF_DRAWTELE | SURF_DRAWSKY)))
+			return false;
+	return true;
+}
+
+/*
+The ascending texture indices a model's surfaces use, or -1 if there are too
+many. Inline models share the world's texture array (hundreds of entries), so a
+run clears and walks just these instead of every world texture per entity.
+*/
+static int R_LiquidModelTextures (qmodel_t *m, int *idx)
+{
+	int i, j, n = 0;
+	msurface_t *s = &m->surfaces[m->firstmodelsurface];
+
+	for (i = 0; i < m->nummodelsurfaces; i++, s++)
+	{
+		int k = s->texinfo->materialidx;
+
+		if (k < 0 || k >= m->numtextures || m->textures[k] != s->texinfo->texture)
+			return -1;
+		for (j = n; j > 0 && idx[j-1] > k; j--)
+			;
+		if (j > 0 && idx[j-1] == k)
+			continue;
+		if (n == MAX_LIQUID_TEXTURES)
+			return -1;
+		memmove(&idx[j+1], &idx[j], (n - j) * sizeof(idx[0]));
+		idx[j] = k;
+		n++;
+	}
+	return n;
+}
+
+/*
+Chain like R_ChainBrushModel, clearing only the chains the run then walks
+(these textures) and the lightmap poly lists these surfaces append to. Other
+chain_model chains may keep stale entries; every full walk clears them first.
+*/
+static void R_ChainLiquidModel (qmodel_t *m, const int *idx, int n)
+{
+	int i;
+	msurface_t *s = &m->surfaces[m->firstmodelsurface];
+
+	for (i = 0; i < n; i++)
+		m->textures[idx[i]]->texturechains[chain_model] = NULL;
+	for (i = 0; i < m->nummodelsurfaces; i++, s++)
+		if (s->lightmaptexturenum >= 0 && s->lightmaptexturenum < lightmap_count)
+			lightmaps[s->lightmaptexturenum].polys = NULL;
+	R_ChainVisibleSurfaces (m);
+}
+
+void R_BeginLiquidBrushes (void)
+{
+	r_num_liquid_queue = 0;
+	r_liquid_collecting = true;
+}
+
+void R_FlushLiquidBrushes (void)
+{
+	int i, n = r_num_liquid_queue;
+	qboolean started = false;
+
+	r_num_liquid_queue = 0;
+	if (n == 1)
+	{
+		R_DrawBrushModel (r_liquid_queue[0]);
+		return;
+	}
+	for (i = 0; i < n; i++)
+	{
+		entity_t *e = r_liquid_queue[i];
+		int textures[MAX_LIQUID_TEXTURES], numtextures;
+
+		if (!R_BeginBrushModel (e))
+			continue;
+		numtextures = R_LiquidModelTextures (e->model, textures);
+		if (numtextures >= 0)
+			R_ChainLiquidModel (e->model, textures, numtextures);
+		else
+			R_ChainBrushModel (e->model);
+		if (!started)
+		{
+			R_LiquidRunBegin (ENTALPHA_DECODE(e->alpha));
+			started = true;
+		}
+		GL_SelectTexture (GL_TEXTURE0);
+		R_UploadLightmaps ();
+		R_LiquidRunDrawModel (e->model, e, chain_model, numtextures >= 0 ? textures : NULL, numtextures);
+		glPopMatrix ();
+	}
+	if (started)
+		R_LiquidRunEnd ();
+}
+
+qboolean R_QueueLiquidBrush (entity_t *e)
+{
+	if (!r_liquid_collecting || e->model->type != mod_brush || e->effects ||
+		ENTALPHA_DECODE(e->alpha) >= 1.0f || !R_LiquidRunAvailable () || !R_LiquidOnlyModel (e->model))
+		return false;
+	if (r_num_liquid_queue == MAX_LIQUID_RUN)
+		R_FlushLiquidBrushes ();
+	r_liquid_queue[r_num_liquid_queue++] = e;
+	return true;
+}
+
+void R_EndLiquidBrushes (void)
+{
+	R_FlushLiquidBrushes ();
+	r_liquid_collecting = false;
 }
 
 /*

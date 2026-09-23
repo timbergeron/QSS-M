@@ -1528,6 +1528,9 @@ Reduces code duplication between alpha and non-alpha rendering paths.
 */
 static void R_DrawEntityModel(entity_t *ent)
 {
+	if (ent->model->type == mod_brush && R_QueueLiquidBrush (ent))
+		return;
+	R_FlushLiquidBrushes ();	// keep the translucent pass in order
 	switch (ent->model->type)
 	{
 	case mod_alias:
@@ -1640,6 +1643,8 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 	{
 		R_BeginDeferredAliasOutlines();
 	}
+	else
+		R_BeginLiquidBrushes ();
 
 	//johnfitz -- sprites are not a special case
 	
@@ -1795,6 +1800,8 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 			R_DrawAliasModelsInstanced(alias_ents, num_alias);
 	}
 
+	if (alphapass)
+		R_EndLiquidBrushes ();
 	if (!alphapass)
 	{
 		R_DrawDeferredAliasOutlines();

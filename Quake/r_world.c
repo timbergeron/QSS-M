@@ -5209,6 +5209,159 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 }
 
 /*
+=============
+Liquid runs
+
+The GLSL branch of R_DrawTextureChains_Water split into begin / model / end,
+tracking the program, uniforms, lightmap attributes and blend state it sets
+per texture, so a run of translucent liquid-only brush entities drawn back to
+front sets up the buffers, attributes and programs once instead of per
+entity. Every surface is drawn in the same order with the same program,
+textures, uniforms and blend state as R_DrawTextureChains_Water would use.
+=============
+*/
+static struct
+{
+	int		mode;			// r_water program bound, -1 none
+	int		lastlightmap;	// -2 none
+	int		blend;			// 1 translucent (no depth writes), 0 opaque, -1 unknown
+	float	alpha[2];		// alpha_scale set on each r_water program this run, -1 unset
+	qboolean	constants[2];	// per-run uniforms set on each program
+} r_liquidrun;
+
+qboolean R_LiquidRunAvailable (void)
+{
+	return gl_glsl_water_able && r_world_program && !r_drawflat_cheatsafe &&
+		!r_lightmap_cheatsafe && !r_fullbright_cheatsafe;
+}
+
+void R_LiquidRunBegin (float entalpha)
+{
+	// Same lasting effects as R_DrawTextureChains_LiquidOnly's transparency pair.
+	R_BeginTransparentDrawing (entalpha);
+	R_EndTransparentDrawing (entalpha);
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0); // indices come from client memory!
+	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
+	GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+
+	r_liquidrun.mode = -1;
+	r_liquidrun.lastlightmap = -2;
+	r_liquidrun.blend = -1;
+	r_liquidrun.alpha[0] = r_liquidrun.alpha[1] = -1.0f;
+	r_liquidrun.constants[0] = r_liquidrun.constants[1] = false;
+}
+
+static void R_LiquidRunBlend (qboolean translucent)
+{
+	if (r_liquidrun.blend == (translucent ? 1 : 0))
+		return;
+	if (translucent)
+	{
+		glDepthMask (GL_FALSE);
+		glEnable (GL_BLEND);
+	}
+	else if (r_liquidrun.blend == 1)
+	{	// what R_DrawTextureChains_Water leaves after a translucent texture
+		glDepthMask (GL_TRUE);
+		glDisable (GL_BLEND);
+	}
+	r_liquidrun.blend = translucent ? 1 : 0;
+}
+
+// textures: the ascending texture indices the model's surfaces use, or NULL for all
+void R_LiquidRunDrawModel (qmodel_t *model, entity_t *ent, texchain_t chain, const int *textures, int numtextures)
+{
+	const int overbright = !!gl_overbright.value;
+	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+	const float lightmapscale = (overbright?2:1) * (wide10bits?4:1);
+	int i, count = textures ? numtextures : model->numtextures;
+	msurface_t *s;
+	texture_t *t;
+
+	for (i=0 ; i<count ; i++)
+	{
+		float entalpha;
+
+		t = model->textures[textures ? textures[i] : i];
+		if (!t || !t->texturechains[chain] || !(t->texturechains[chain]->flags & SURF_DRAWTURB))
+			continue;
+		s = t->texturechains[chain];
+
+		R_FlushBatch (IS_WATER);
+		entalpha = GL_WaterAlphaForEntitySurface (ent, s);
+		R_LiquidRunBlend (entalpha < 1.0f);
+
+		GL_SelectTexture (GL_TEXTURE0);
+		GL_Bind (t->gltexture);
+		GL_SelectTexture (GL_TEXTURE1);
+		r_liquidrun.lastlightmap = -2;
+		for (; s; s = s->texturechain)
+		{
+			if (s->lightmaptexturenum != r_liquidrun.lastlightmap)
+			{
+				int mode;
+
+				R_FlushBatch (IS_WATER);
+				mode = s->lightmaptexturenum>=0 && !r_fullbright_cheatsafe;
+				if (mode)
+				{	//lit
+					GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+					R_EnableLightmapBoundsAttrib (true);
+					GL_Bind (lightmaps[s->lightmaptexturenum].texture);
+				}
+				else	//unlit
+				{
+					GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+					R_EnableLightmapBoundsAttrib (false);
+				}
+				if (r_liquidrun.mode != mode)
+				{
+					GL_UseProgramFunc (r_water[mode].program);
+					r_liquidrun.mode = mode;
+				}
+				if (!r_liquidrun.constants[mode])
+				{
+					GL_Uniform1fFunc (r_water[mode].time, cl.time);
+					GL_Uniform1iFunc (r_water[mode].fogmode, Fog_GetMode());
+					if (r_water[mode].light_scale != -1)
+						GL_Uniform1fFunc (r_water[mode].light_scale, lightmapscale);
+					R_SetLightmapExtra4Uniforms (r_water[mode].use_extra4, r_water[mode].texel_size);
+					r_liquidrun.constants[mode] = true;
+				}
+				if (r_liquidrun.alpha[mode] != entalpha)
+				{
+					GL_Uniform1fFunc (r_water[mode].alpha_scale, entalpha);
+					r_liquidrun.alpha[mode] = entalpha;
+				}
+				r_liquidrun.lastlightmap = s->lightmaptexturenum;
+			}
+			R_BatchSurface (s, IS_WATER); // woods #caustics
+
+			rs_brushpasses++;
+		}
+	}
+	R_FlushBatch (IS_WATER); // before the caller changes the entity matrix
+}
+
+void R_LiquidRunEnd (void)
+{
+	R_FlushBatch (IS_WATER);
+	GL_UseProgramFunc (0);
+	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	GL_SelectTexture (GL_TEXTURE0);
+	R_LiquidRunBlend (false);
+}
+
+/*
 ================
 R_DrawTextureChains_White -- johnfitz -- draw sky and water as white polys when r_lightmap is 1
 ================
@@ -5912,6 +6065,32 @@ void R_DrawLightmapChains_GLSL(qmodel_t* model, entity_t* ent, texchain_t chain)
 
 	GL_UseProgramFunc(0);
 	GL_SelectTexture(GL_TEXTURE0);
+}
+
+/*
+=============
+R_DrawTextureChains_LiquidOnly
+
+A brush entity whose visible surfaces are all liquid gives R_DrawTextureChains
+nothing to draw, yet in the normal GLSL path it still sets up and tears down the
+world program, attributes and uniforms for every such entity (maps with
+hundreds of translucent liquid brushes pay that per frame). Keep only its
+lasting effects -- the lightmap upload the liquid pass relies on, and the
+transparency blend function -- and return false where it may draw more.
+=============
+*/
+qboolean R_DrawTextureChains_LiquidOnly (entity_t *ent)
+{
+	float entalpha = ENTALPHA_DECODE(ent->alpha);
+
+	if (r_drawflat_cheatsafe || r_fullbright_cheatsafe || r_lightmap_cheatsafe || !r_world_program)
+		return false;
+	if (ent->effects & EF_ADDITIVE)
+		return false;
+	R_UploadLightmaps ();
+	R_BeginTransparentDrawing (entalpha);
+	R_EndTransparentDrawing (entalpha);
+	return true;
 }
 
 /*

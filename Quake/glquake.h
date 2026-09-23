@@ -632,6 +632,15 @@ extern qboolean gl_alias_shaders_compiled_disconnected;
 extern qboolean gl_alias_shaders_compiling_disconnected_restart;
 void GL_DrawAliasShadow (entity_t *e);
 void GL_DrawBrushShadow (entity_t* e); // woods #shadow
+qboolean R_DrawTextureChains_LiquidOnly (entity_t *ent);
+qboolean R_LiquidRunAvailable (void);
+void R_LiquidRunBegin (float entalpha);
+void R_LiquidRunDrawModel (qmodel_t *model, entity_t *ent, texchain_t chain, const int *textures, int numtextures);
+void R_LiquidRunEnd (void);
+void R_BeginLiquidBrushes (void);
+qboolean R_QueueLiquidBrush (entity_t *e);
+void R_FlushLiquidBrushes (void);
+void R_EndLiquidBrushes (void);
 typedef struct
 {
 	entity_t	*e;
