@@ -47,6 +47,8 @@ source = r'''
 #define VectorSubtract(a,b,c) ((c)[0]=(a)[0]-(b)[0],(c)[1]=(a)[1]-(b)[1],(c)[2]=(a)[2]-(b)[2])
 #define VectorScale(a,s,c) ((c)[0]=(a)[0]*(s),(c)[1]=(a)[1]*(s),(c)[2]=(a)[2]*(s))
 #define VectorLength(a) sqrt(DotProduct(a,a))
+#define VectorMA(a,s,b,c) ((c)[0]=(a)[0]+(s)*(b)[0],(c)[1]=(a)[1]+(s)*(b)[1],(c)[2]=(a)[2]+(s)*(b)[2])
+#define CrossProduct(v1,v2,c) ((c)[0]=(v1)[1]*(v2)[2]-(v1)[2]*(v2)[1],(c)[1]=(v1)[2]*(v2)[0]-(v1)[0]*(v2)[2],(c)[2]=(v1)[0]*(v2)[1]-(v1)[1]*(v2)[0])
 #define q_min(a,b) ((a) < (b) ? (a) : (b))
 #define q_max(a,b) ((a) > (b) ? (a) : (b))
 #define CHECK(cond, message) do { if (!(cond)) { printf("FAIL: %s (line %d)\n", message, __LINE__); exit(1); } } while (0)
@@ -205,6 +207,38 @@ static void waves(void) {
                 if (overlap(&r_shadowq[i], &r_shadowq[j]))
                     CHECK(r_shadowq[i].level < r_shadowq[j].level, "overlapping shadows must keep queue order across waves");
     }
+    /* the same waves as the original test, which called cos for every pair,
+       including pairs placed right on the overlap boundary */
+    for (t = 0; t < 500; ++t) {
+        int ref[MAX_SHADOWQ];
+        n = 2 + rand() % (MAX_SHADOWQ - 2);
+        for (i = 0; i < n; ++i) {
+            random_entry(&r_shadowq[i]);
+            if (i && (rand() & 3) == 0) {
+                /* rotate the previous direction by exactly the summed angle, give or take an ulp */
+                const shadowq_entry_t *p = &r_shadowq[i - 1];
+                float sum = p->angle + r_shadowq[i].angle, c, s;
+                vec3_t axis = {0, 0, 1}, perp;
+                if (sum >= (float)M_PI) sum = 0.5f;
+                c = (float)cos(sum) * (1.0f + (float)((rand() % 3) - 1) * 1e-7f); s = sqrtf(fmaxf(0.0f, 1.0f - c * c));
+                CrossProduct(p->dir, axis, perp);
+                if (VectorLength(perp) < 1e-3) { axis[0] = 1; axis[2] = 0; CrossProduct(p->dir, axis, perp); }
+                VectorScale(perp, 1.0f / (float)VectorLength(perp), perp);
+                VectorScale(p->dir, c, r_shadowq[i].dir); VectorMA(r_shadowq[i].dir, s, perp, r_shadowq[i].dir);
+            }
+        }
+        for (i = 0; i < n; ++i) {
+            ref[i] = 0;
+            for (j = 0; j < i; ++j) {
+                float sum = r_shadowq[i].angle + r_shadowq[j].angle;
+                if (ref[j] >= ref[i] && (sum >= (float)M_PI || DotProduct(r_shadowq[i].dir, r_shadowq[j].dir) > cos(sum)))
+                    ref[i] = ref[j] + 1;
+            }
+        }
+        R_ShadowAssignLevels(r_shadowq, n);
+        for (i = 0; i < n; ++i)
+            CHECK(r_shadowq[i].level == ref[i], "wave assignment must match the cos-per-pair original exactly");
+    }
     /* one giant shadow only splits the queue into before and after */
     n = 5;
     for (i = 0; i < n; ++i) { r_shadowq[i].dir[0] = (float)cos(i); r_shadowq[i].dir[1] = (float)sin(i); r_shadowq[i].dir[2] = 0; r_shadowq[i].angle = 0.01f; }
@@ -257,7 +291,7 @@ int main(void) {
     r_num_shadowq = 2; r_num_alias_shadows = 1; r_num_brush_shadows = 1; nlog = 0; R_ShadowQueueMakeRoom();
     CHECK(nlog == 0 && r_num_shadowq == 2, "a queue with room must not flush");
     (void)R_FlushShadowQueue_count;
-    puts("PASS: shadow footprint cones contain every shadow point, waves keep overlapping pairs ordered, flush order/batching/state, full-queue flush");
+    puts("PASS: shadow footprint cones contain every shadow point, waves keep overlapping pairs ordered and match the cos-per-pair original, flush order/batching/state, full-queue flush");
     return 0;
 }
 '''

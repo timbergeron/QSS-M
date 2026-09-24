@@ -4808,11 +4808,20 @@ static int R_ShadowAssignLevels (shadowq_entry_t *q, int n)
 		q[i].level = 0;
 		for (j = 0; j < i; ++j)
 		{
-			float sum = q[i].angle + q[j].angle;
+			float sum, dot;
 
-			if (q[j].level >= q[i].level &&
-				(sum >= (float)M_PI || DotProduct (q[i].dir, q[j].dir) > cos (sum)))
-				q[i].level = q[j].level + 1;
+			if (q[j].level < q[i].level)
+				continue;
+			sum = q[i].angle + q[j].angle;
+			if (!(sum >= (float)M_PI))
+			{
+				dot = DotProduct (q[i].dir, q[j].dir);
+				// cos (sum) >= 1 - sum^2/2, so a dot safely below that fails the
+				// test below without calling cos; the margin dwarfs its rounding
+				if ((double)dot <= 1.0 - 0.5 * (double)sum * (double)sum - 1e-9 || !(dot > cos (sum)))
+					continue;
+			}
+			q[i].level = q[j].level + 1;
 		}
 		if (q[i].level > maxlevel)
 			maxlevel = q[i].level;
