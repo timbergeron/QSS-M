@@ -1293,34 +1293,40 @@ void SCR_DrawFPS (void)
 {
 	static double	oldtime = 0;
 	static double	lastfps = 0;
-	static int	oldframecount = 0;
+	static double	lastdrawtime = 0; // woods -- detect gaps in drawing (map loads, etc)
+	static int	frames = 0; // woods -- count drawn frames, not host frames
+	static qmodel_t	*oldworld = NULL; // woods -- detect map changes
 	double	elapsed_time;
-	int	frames;
 	int clampedSbar = CLAMP(1, (int)scr_sbar.value, 3); // woods
-
-	elapsed_time = realtime - oldtime;
-	frames = host_framecount - oldframecount;
 
 	if (scr_viewsize.value >= 130)
 		return;
 
-	if (elapsed_time < 0 || frames < 0)
+	// woods -- restart sampling after a map change or a stall in drawing, so frames that
+	// ticked during loading (host frames with no rendering) don't produce a bogus spike
+	if (cl.worldmodel != oldworld || realtime < lastdrawtime || realtime - lastdrawtime > 0.25)
 	{
+		oldworld = cl.worldmodel;
 		oldtime = realtime;
-		oldframecount = host_framecount;
-		return;
+		frames = 0;
+		lastfps = 0;
 	}
+	lastdrawtime = realtime;
+	frames++;
+
+	elapsed_time = realtime - oldtime;
+
 	// update value every 3/4 second
 	if (elapsed_time > 0.75)
 	{
 		lastfps = frames / elapsed_time;
 		oldtime = realtime;
-		oldframecount = host_framecount;
+		frames = 0;
 	}
 
 	cl.fps = (int)lastfps; // woods #f_config
 
-	if (scr_showfps.value)
+	if (scr_showfps.value && lastfps > 0) // woods -- hide until first valid sample
 	{
 		char	st[12];
 		int	x, y;
