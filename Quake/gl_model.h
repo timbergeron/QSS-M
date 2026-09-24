@@ -472,6 +472,8 @@ typedef enum {mod_brush, mod_sprite, mod_alias, mod_ext_invalid} modtype_t;
 #define MOD_DESATLISTED	(1u<<15)	//model is on r_models_light_desat_list
 #define MOD_NOOUTLINE	(1u<<16)	//model is on r_nooutline_list
 
+#define MAX_MODEL_CHAIN_TEXTURES	64
+
 typedef struct qmodel_s
 {
 	char		name[MAX_QPATH];
@@ -598,6 +600,12 @@ typedef struct qmodel_s
 //
 	void		*bmodel_drawcache;	//tb -- cached static index buffer for fast bmodel-entity drawing (see r_world.c)
 	void		*hull_debug_cache;	// exact collision-hull debug geometry (see r_hulldebug.c)
+
+	// brush model: the ascending texture indices its surfaces use, for chain
+	// walks that skip the rest (see R_BrushModelTextures)
+	int			chaintextures_modgen;	// mod_generation + 1 they were built for, 0 = never
+	int			chainnumtextures;		// -1: more than fit
+	unsigned short	chaintextures[MAX_MODEL_CHAIN_TEXTURES];
 
 	cache_user_t	cache;		// only access through Mod_Extradata
 

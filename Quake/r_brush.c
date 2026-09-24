@@ -48,6 +48,11 @@ int LMBLOCK_WIDTH, LMBLOCK_HEIGHT;
 // turns the update into a GPU-side blit instead.
 static GLuint lm_scratchpbo; // reset by GL_BuildLightmaps on map load / video restart
 static SDL_Mutex *lm_dirty_mutex; // woods #lmrect -- guards modified/rectchange/dirtyrects between the scenecache worker and the main thread's uploads
+// Bumped each time a lightmap is flagged modified. R_UploadLightmaps runs once per
+// brush entity drawn, so on maps with hundreds of them it skips its scan of every
+// lightmap when nothing was flagged since the last one.
+static SDL_AtomicInt lm_dirty_serial;
+static int lm_uploaded_serial = -1;
 
 static void R_TexSubImageLightmap (int x, int t, int w, int h, const GLvoid *src);
 
@@ -185,19 +190,19 @@ R_DrawBrushModel
 */
 /*
 =================
-R_BeginBrushModel
+R_SetupBrushModel / R_BeginBrushModel
 
 Scene-cache skip, culling, dynamic light marking and the entity transform,
-shared by R_DrawBrushModel and liquid runs. False if nothing is drawn;
-otherwise the entity matrix is pushed and modelorg is set.
+shared by R_DrawBrushModel and the translucent runs. False if nothing is
+drawn; otherwise modelorg is set, and R_BeginBrushModel has also pushed the
+entity matrix (R_PushBrushModelMatrix).
 =================
 */
-static qboolean R_BeginBrushModel (entity_t *e)
+static qboolean R_SetupBrushModel (entity_t *e)
 {
 	int			k;
 	qmodel_t	*clmodel;
 	vec3_t		lightorg;
-	qboolean	zfix;
 	extern byte *skipsubmodels;
 
 	if (e->model->submodelof == cl.worldmodel &&
@@ -210,7 +215,6 @@ static qboolean R_BeginBrushModel (entity_t *e)
 
 	currententity = e;
 	clmodel = e->model;
-	zfix = gl_zfix.value && !R_IsStaticEntity (e);
 
 	VectorSubtract (r_refdef.vieworg, e->origin, modelorg);
 	if (e->angles[0] || e->angles[1] || e->angles[2])
@@ -243,6 +247,18 @@ static qboolean R_BeginBrushModel (entity_t *e)
 		}
 	}
 
+	return true;
+}
+
+static qboolean R_BrushModelZFix (entity_t *e)
+{
+	return gl_zfix.value && !R_IsStaticEntity (e);
+}
+
+static void R_PushBrushModelMatrix (entity_t *e)
+{
+	qboolean zfix = R_BrushModelZFix (e);
+
 	glPushMatrix ();
 	e->angles[0] = -e->angles[0];	// stupid quake bug
 	if (zfix)
@@ -259,6 +275,21 @@ static qboolean R_BeginBrushModel (entity_t *e)
 		e->origin[2] += DIST_EPSILON;
 	}
 	e->angles[0] = -e->angles[0];	// stupid quake bug
+}
+
+// true when R_PushBrushModelMatrix would build the same matrix for both
+static qboolean R_BrushModelSameMatrix (entity_t *a, entity_t *b)
+{
+	return VectorCompare (a->origin, b->origin) && VectorCompare (a->angles, b->angles) &&
+		a->netstate.scale == ENTSCALE_DEFAULT && b->netstate.scale == ENTSCALE_DEFAULT &&
+		R_BrushModelZFix (a) == R_BrushModelZFix (b);
+}
+
+static qboolean R_BeginBrushModel (entity_t *e)
+{
+	if (!R_SetupBrushModel (e))
+		return false;
+	R_PushBrushModelMatrix (e);
 	return true;
 }
 
@@ -267,9 +298,11 @@ static qboolean R_BeginBrushModel (entity_t *e)
 R_ChainBrushModel
 
 Chain the surfaces facing modelorg; true if any of them is not liquid.
+lightmapchains also links each surface's poly into its lightmap's list, which
+only the r_lightmap debug view draws.
 =================
 */
-static qboolean R_ChainVisibleSurfaces (qmodel_t *clmodel)
+static qboolean R_ChainVisibleSurfaces (qmodel_t *clmodel, qboolean lightmapchains)
 {
 	int			i;
 	msurface_t	*psurf = &clmodel->surfaces[clmodel->firstmodelsurface];
@@ -285,7 +318,10 @@ static qboolean R_ChainVisibleSurfaces (qmodel_t *clmodel)
 			(!(psurf->flags & SURF_PLANEBACK) && (dot > BACKFACE_EPSILON)))
 		{
 			R_ChainSurface (psurf, chain_model);
-			R_RenderDynamicLightmaps(clmodel, psurf);
+			if (lightmapchains)
+				R_RenderDynamicLightmaps(clmodel, psurf);
+			else
+				R_UpdateDynamicLightmap(clmodel, psurf);
 			rs_brushpolys++;
 			if (!(psurf->flags & SURF_DRAWTURB))
 				chainedsolid = true;
@@ -297,12 +333,77 @@ static qboolean R_ChainVisibleSurfaces (qmodel_t *clmodel)
 static qboolean R_ChainBrushModel (qmodel_t *clmodel)
 {
 	R_ClearTextureChains (clmodel, chain_model);
-	return R_ChainVisibleSurfaces (clmodel);
+	return R_ChainVisibleSurfaces (clmodel, true);
+}
+
+/*
+=================
+R_BrushModelTextures
+
+The ascending texture indices a model's surfaces use, or -1 if there are more
+than fit. Inline models share the world's texture array (hundreds of entries),
+so their draws clear and walk just these instead of every world texture.
+Built once per model load.
+=================
+*/
+static int R_BrushModelTextures (qmodel_t *m, const unsigned short **idx)
+{
+	int i, j, n;
+	msurface_t *s;
+
+	*idx = m->chaintextures;
+	if (m->chaintextures_modgen == mod_generation + 1)
+		return m->chainnumtextures;
+
+	for (i = 0, n = 0, s = &m->surfaces[m->firstmodelsurface]; i < m->nummodelsurfaces; i++, s++)
+	{
+		int k = s->texinfo->materialidx;
+
+		if (k < 0 || k >= m->numtextures || k > 0xffff || m->textures[k] != s->texinfo->texture)
+		{
+			n = -1;
+			break;
+		}
+		for (j = n; j > 0 && m->chaintextures[j-1] > k; j--)
+			;
+		if (j > 0 && m->chaintextures[j-1] == k)
+			continue;
+		if (n == MAX_MODEL_CHAIN_TEXTURES)
+		{
+			n = -1;
+			break;
+		}
+		memmove(&m->chaintextures[j+1], &m->chaintextures[j], (n - j) * sizeof(m->chaintextures[0]));
+		m->chaintextures[j] = (unsigned short)k;
+		n++;
+	}
+	m->chainnumtextures = n;
+	m->chaintextures_modgen = mod_generation + 1;
+	return n;
+}
+
+/*
+Chain like R_ChainBrushModel, clearing only the chains the draw then walks
+(these textures). Other chain_model chains may keep stale entries; every full
+walk clears them first. Lightmap poly lists are left alone: the texture-list
+path never runs in the r_lightmap debug view, the only one that draws them,
+and R_MarkSurfaces resets them every frame.
+*/
+static qboolean R_ChainModelTextures (qmodel_t *m, const unsigned short *idx, int n)
+{
+	int i;
+
+	for (i = 0; i < n; i++)
+		m->textures[idx[i]]->texturechains[chain_model] = NULL;
+	return R_ChainVisibleSurfaces (m, false);
 }
 
 void R_DrawBrushModel (entity_t *e)
 {
 	qmodel_t	*clmodel;
+	const unsigned short	*textures = NULL;
+	int			numtextures = -1;
+	qboolean	chainedsolid;
 
 	if (!R_BeginBrushModel (e))
 		return;
@@ -313,9 +414,20 @@ void R_DrawBrushModel (entity_t *e)
 		glPopMatrix ();
 		return;
 	}
-	if (R_ChainBrushModel (clmodel) || !R_DrawTextureChains_LiquidOnly (e))
+	// debug views draw the lightmap poly lists, which a partial clear leaves stale
+	if (!r_drawflat_cheatsafe && !r_fullbright_cheatsafe && !r_lightmap_cheatsafe)
+		numtextures = R_BrushModelTextures (clmodel, &textures);
+	if (numtextures >= 0)
+	{
+		chainedsolid = R_ChainModelTextures (clmodel, textures, numtextures);
+		R_SetChainTextures (clmodel, textures, numtextures);
+	}
+	else
+		chainedsolid = R_ChainBrushModel (clmodel);
+	if (chainedsolid || !R_DrawTextureChains_LiquidOnly (e))
 		R_DrawTextureChains (clmodel, e, chain_model);
 	R_DrawTextureChains_Water (clmodel, e, chain_model);
+	R_SetChainTextures (NULL, NULL, 0);
 
 	glPopMatrix ();
 }
@@ -330,12 +442,17 @@ the liquid program, buffers and attributes. In the alpha pass, consecutive
 entities whose every surface is plain liquid are queued and drawn as a run in
 the same order, each with its own transform, alpha and lightmap updates; any
 other entity flushes the queue first, so the back-to-front order is kept.
+
+Translucent entities whose surfaces are all plain lightmapped textures (Peril's
+start.bsp has ~570 see-through func_walls) queue the same way as solid runs; a
+queue holds one kind at a time.
 =================
 */
 #define MAX_LIQUID_RUN 1024
-#define MAX_LIQUID_TEXTURES 32
+enum { RUN_LIQUID, RUN_SOLID };
 static entity_t *r_liquid_queue[MAX_LIQUID_RUN];
 static int r_num_liquid_queue;
+static int r_liquid_kind;
 static qboolean r_liquid_collecting;
 
 static qboolean R_LiquidOnlyModel (qmodel_t *m)
@@ -349,53 +466,6 @@ static qboolean R_LiquidOnlyModel (qmodel_t *m)
 		if (!(s->flags & SURF_DRAWTURB) || (s->flags & (SURF_DRAWTELE | SURF_DRAWSKY)))
 			return false;
 	return true;
-}
-
-/*
-The ascending texture indices a model's surfaces use, or -1 if there are too
-many. Inline models share the world's texture array (hundreds of entries), so a
-run clears and walks just these instead of every world texture per entity.
-*/
-static int R_LiquidModelTextures (qmodel_t *m, int *idx)
-{
-	int i, j, n = 0;
-	msurface_t *s = &m->surfaces[m->firstmodelsurface];
-
-	for (i = 0; i < m->nummodelsurfaces; i++, s++)
-	{
-		int k = s->texinfo->materialidx;
-
-		if (k < 0 || k >= m->numtextures || m->textures[k] != s->texinfo->texture)
-			return -1;
-		for (j = n; j > 0 && idx[j-1] > k; j--)
-			;
-		if (j > 0 && idx[j-1] == k)
-			continue;
-		if (n == MAX_LIQUID_TEXTURES)
-			return -1;
-		memmove(&idx[j+1], &idx[j], (n - j) * sizeof(idx[0]));
-		idx[j] = k;
-		n++;
-	}
-	return n;
-}
-
-/*
-Chain like R_ChainBrushModel, clearing only the chains the run then walks
-(these textures) and the lightmap poly lists these surfaces append to. Other
-chain_model chains may keep stale entries; every full walk clears them first.
-*/
-static void R_ChainLiquidModel (qmodel_t *m, const int *idx, int n)
-{
-	int i;
-	msurface_t *s = &m->surfaces[m->firstmodelsurface];
-
-	for (i = 0; i < n; i++)
-		m->textures[idx[i]]->texturechains[chain_model] = NULL;
-	for (i = 0; i < m->nummodelsurfaces; i++, s++)
-		if (s->lightmaptexturenum >= 0 && s->lightmaptexturenum < lightmap_count)
-			lightmaps[s->lightmaptexturenum].polys = NULL;
-	R_ChainVisibleSurfaces (m);
 }
 
 void R_BeginLiquidBrushes (void)
@@ -415,16 +485,68 @@ void R_FlushLiquidBrushes (void)
 		R_DrawBrushModel (r_liquid_queue[0]);
 		return;
 	}
+	// a late model rebuilds every lightmap and the brush vertex buffer, which a
+	// run binds once up front; do it before any run starts
+	if (lightmaps_latecached)
+		R_UploadLightmaps ();
+	if (r_liquid_kind == RUN_SOLID)
+	{	// consecutive entities with the same transform share one pushed matrix,
+		// so the run can carry a batch from one to the next
+		entity_t *pushed = NULL;
+
+		for (i = 0; i < n; i++)
+		{
+			entity_t *e = r_liquid_queue[i];
+			const unsigned short *textures;
+			int numtextures;
+
+			if (!R_SetupBrushModel (e))
+				continue;
+			if (!pushed || !R_BrushModelSameMatrix (pushed, e))
+			{
+				if (pushed)
+				{
+					R_SolidRunFlush ();
+					glPopMatrix ();
+				}
+				R_PushBrushModelMatrix (e);
+				pushed = e;
+			}
+			numtextures = R_BrushModelTextures (e->model, &textures);
+			if (numtextures >= 0)
+				R_ChainModelTextures (e->model, textures, numtextures);
+			else
+				R_ChainBrushModel (e->model);
+			if (!started)
+			{
+				R_SolidRunBegin (ENTALPHA_DECODE(e->alpha));
+				started = true;
+			}
+			if (numtextures >= 0)
+				R_SetChainTextures (e->model, textures, numtextures);
+			R_SolidRunDrawModel (e->model, e, chain_model);
+			R_SetChainTextures (NULL, NULL, 0);
+		}
+		if (pushed)
+		{
+			R_SolidRunFlush ();
+			glPopMatrix ();
+		}
+		if (started)
+			R_SolidRunEnd ();
+		return;
+	}
 	for (i = 0; i < n; i++)
 	{
 		entity_t *e = r_liquid_queue[i];
-		int textures[MAX_LIQUID_TEXTURES], numtextures;
+		const unsigned short *textures;
+		int numtextures;
 
 		if (!R_BeginBrushModel (e))
 			continue;
-		numtextures = R_LiquidModelTextures (e->model, textures);
+		numtextures = R_BrushModelTextures (e->model, &textures);
 		if (numtextures >= 0)
-			R_ChainLiquidModel (e->model, textures, numtextures);
+			R_ChainModelTextures (e->model, textures, numtextures);
 		else
 			R_ChainBrushModel (e->model);
 		if (!started)
@@ -443,11 +565,20 @@ void R_FlushLiquidBrushes (void)
 
 qboolean R_QueueLiquidBrush (entity_t *e)
 {
+	int kind;
+
 	if (!r_liquid_collecting || e->model->type != mod_brush || e->effects ||
-		ENTALPHA_DECODE(e->alpha) >= 1.0f || !R_LiquidRunAvailable () || !R_LiquidOnlyModel (e->model))
+		ENTALPHA_DECODE(e->alpha) >= 1.0f)
 		return false;
-	if (r_num_liquid_queue == MAX_LIQUID_RUN)
+	if (R_LiquidRunAvailable () && R_LiquidOnlyModel (e->model))
+		kind = RUN_LIQUID;
+	else if (R_SolidRunModel (e))
+		kind = RUN_SOLID;
+	else
+		return false;
+	if (r_num_liquid_queue && (r_liquid_kind != kind || r_num_liquid_queue == MAX_LIQUID_RUN))
 		R_FlushLiquidBrushes ();
+	r_liquid_kind = kind;
 	r_liquid_queue[r_num_liquid_queue++] = e;
 	return true;
 }
@@ -553,6 +684,7 @@ void R_LightmapMarkDirtyRect (struct lightmap_s *lm, int light_s, int light_t, i
 	SDL_LockMutex (lm_dirty_mutex);
 
 	lm->modified = true;
+	SDL_AddAtomicInt (&lm_dirty_serial, 1);	// after the flag: an uploader that sees the new serial sees the flag
 	theRect = &lm->rectchange;
 	if (t < theRect->t) {
 		if (theRect->h)
@@ -610,16 +742,32 @@ called during rendering
 */
 void R_RenderDynamicLightmaps (qmodel_t *model, msurface_t *fa)
 {
-	byte		*base;
-	int			maps;
-	int smax, tmax;
-
 	if (fa->flags & SURF_DRAWTILED) //johnfitz -- not a lightmapped surface
 		return;
 
 	// add to lightmap chain
 	fa->polys->chain = lightmaps[fa->lightmaptexturenum].polys;
 	lightmaps[fa->lightmaptexturenum].polys = fa->polys;
+
+	R_UpdateDynamicLightmap (model, fa);
+}
+
+/*
+================
+R_UpdateDynamicLightmap
+
+R_RenderDynamicLightmaps without linking the surface into its lightmap's poly
+list: rebuilds the lightmap if its styles or dynamic lights changed.
+================
+*/
+void R_UpdateDynamicLightmap (qmodel_t *model, msurface_t *fa)
+{
+	byte		*base;
+	int			maps;
+	int smax, tmax;
+
+	if (fa->flags & SURF_DRAWTILED) //johnfitz -- not a lightmapped surface
+		return;
 
 	// check for lightmap modification
 	for (maps=0; maps < MAXLIGHTMAPS && fa->styles[maps] != INVALID_LIGHTSTYLE; maps++)
@@ -788,6 +936,7 @@ int AllocBlock (int w, int h, int *x, int *y)
 			LM_ResetSkyline ();
 
 			lightmaps[texnum].modified = true;
+			SDL_AddAtomicInt (&lm_dirty_serial, 1);
 			lightmaps[texnum].rectchange.l = 0;
 			lightmaps[texnum].rectchange.t = 0;
 			lightmaps[texnum].rectchange.h = LMBLOCK_HEIGHT;
@@ -2142,9 +2291,17 @@ static void R_UploadLightmap(int lmap)
 	rs_dynamiclightmaps++;
 }
 
+// true if R_UploadLightmaps would change a lightmap texture now
+qboolean R_LightmapUploadPending (void)
+{
+	if (lightmaps_latecached)
+		return true;
+	return !lightmaps_skipupdates && SDL_GetAtomicInt (&lm_dirty_serial) != lm_uploaded_serial;
+}
+
 void R_UploadLightmaps (void)
 {
-	int lmap;
+	int lmap, serial;
 
 	if (lightmaps_latecached)
 	{
@@ -2155,6 +2312,12 @@ void R_UploadLightmaps (void)
 
 	if (lightmaps_skipupdates)
 		return;
+
+	// read before the scan: a lightmap flagged during it bumps the serial again
+	serial = SDL_GetAtomicInt (&lm_dirty_serial);
+	if (serial == lm_uploaded_serial)
+		return;
+	lm_uploaded_serial = serial;
 
 	for (lmap = 0; lmap < lightmap_count; lmap++)
 	{

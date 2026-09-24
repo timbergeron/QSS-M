@@ -96,6 +96,34 @@ typedef enum {
  GLuint useCausticsTexLoc;
 
 /*
+When R_SetChainTextures names a model, the chain walks below visit only the
+ascending texture indices it gives: the ones that model's surfaces use. Inline
+models share the world's texture array, so a translucent func_wall would
+otherwise walk hundreds of empty chains several times over. Textures outside
+the list may hold stale chain_model entries meanwhile; the walks never look.
+*/
+static qmodel_t		*r_chaintexturemodel;
+static const unsigned short	*r_chaintextures;
+static int			r_numchaintextures;
+
+void R_SetChainTextures (qmodel_t *model, const unsigned short *textures, int numtextures)
+{
+	r_chaintexturemodel = model;
+	r_chaintextures = textures;
+	r_numchaintextures = numtextures;
+}
+
+static FUNC_ALWAYSINLINE int R_ChainTextureCount (const qmodel_t *model)
+{
+	return model == r_chaintexturemodel ? r_numchaintextures : model->numtextures;
+}
+
+static FUNC_ALWAYSINLINE texture_t *R_ChainTexture (const qmodel_t *model, int i)
+{
+	return model->textures[model == r_chaintexturemodel ? r_chaintextures[i] : i];
+}
+
+/*
 ================
 R_ClearTextureChains -- ericw 
 
@@ -344,9 +372,9 @@ void R_DrawTextureChains_ShowTris (qmodel_t *model, texchain_t chain)
 	texture_t	*t;
 	glpoly_t	*p;
 
-	for (i=0 ; i<model->numtextures ; i++)
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 	{
-		t = model->textures[i];
+		t = R_ChainTexture (model, i);
 		if (!t)
 			continue;
 
@@ -380,9 +408,9 @@ void R_DrawTextureChains_Drawflat (qmodel_t *model, texchain_t chain)
 	texture_t	*t;
 	glpoly_t	*p;
 
-	for (i=0 ; i<model->numtextures ; i++)
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 	{
-		t = model->textures[i];
+		t = R_ChainTexture (model, i);
 		if (!t)
 			continue;
 
@@ -425,9 +453,9 @@ void R_DrawTextureChains_Glow (qmodel_t *model, entity_t *ent, texchain_t chain)
 	gltexture_t	*glt;
 	qboolean	bound;
 
-	for (i=0 ; i<model->numtextures ; i++)
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 	{
-		t = model->textures[i];
+		t = R_ChainTexture (model, i);
 
 		if (!t || !t->texturechains[chain] || !(glt = R_TextureAnimation(t, ent != NULL ? ent->frame : 0)->fullbright))
 			continue;
@@ -553,9 +581,9 @@ void R_DrawTextureChains_Multitexture (qmodel_t *model, entity_t *ent, texchain_
 	float		*v;
 	qboolean	bound;
 
-	for (i=0 ; i<model->numtextures ; i++)
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 	{
-		t = model->textures[i];
+		t = R_ChainTexture (model, i);
 
 		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE))
 			continue;
@@ -606,9 +634,9 @@ void R_DrawTextureChains_NoTexture (qmodel_t *model, texchain_t chain)
 	texture_t	*t;
 	qboolean	bound;
 
-	for (i=0 ; i<model->numtextures ; i++)
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 	{
-		t = model->textures[i];
+		t = R_ChainTexture (model, i);
 
 		if (!t || !t->texturechains[chain] || !(t->texturechains[chain]->flags & SURF_NOTEXTURE))
 			continue;
@@ -640,9 +668,9 @@ void R_DrawTextureChains_TextureOnly (qmodel_t *model, entity_t *ent, texchain_t
 	texture_t	*t;
 	qboolean	bound;
 
-	for (i=0 ; i<model->numtextures ; i++)
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 	{
-		t = model->textures[i];
+		t = R_ChainTexture (model, i);
 
 		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTURB | SURF_DRAWSKY))
 			continue;
@@ -5097,9 +5125,9 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 		const int overbright = !!gl_overbright.value;
 		const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
 		float lightmapscale = (overbright?2:1) * (wide10bits?4:1);
-		for (i=0 ; i<model->numtextures ; i++)
+		for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 		{
-			t = model->textures[i];
+			t = R_ChainTexture (model, i);
 			if (!t || !t->texturechains[chain] || !(t->texturechains[chain]->flags & SURF_DRAWTURB))
 				continue;
 			s = t->texturechains[chain];
@@ -5181,9 +5209,9 @@ void R_DrawTextureChains_Water (qmodel_t *model, entity_t *ent, texchain_t chain
 	else
 	{
 		// legacy water for people with such old gpus that they can't even use glsl.
-		for (i=0 ; i<model->numtextures ; i++)
+		for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 		{
-			t = model->textures[i];
+			t = R_ChainTexture (model, i);
 			if (!t || !t->texturechains[chain] || !(t->texturechains[chain]->flags & SURF_DRAWTURB))
 				continue;
 			bound = false;
@@ -5275,7 +5303,7 @@ static void R_LiquidRunBlend (qboolean translucent)
 }
 
 // textures: the ascending texture indices the model's surfaces use, or NULL for all
-void R_LiquidRunDrawModel (qmodel_t *model, entity_t *ent, texchain_t chain, const int *textures, int numtextures)
+void R_LiquidRunDrawModel (qmodel_t *model, entity_t *ent, texchain_t chain, const unsigned short *textures, int numtextures)
 {
 	const int overbright = !!gl_overbright.value;
 	const int wide10bits = (gl_lightmap_format == GL_RGB10_A2);
@@ -5362,6 +5390,240 @@ void R_LiquidRunEnd (void)
 }
 
 /*
+=============
+Solid runs
+
+R_DrawTextureChains' GLSL path split the same way, for runs of translucent
+brush entities whose surfaces are all plain lightmapped textures (maps such as
+Peril's start.bsp hold hundreds of see-through func_walls). The program,
+buffers, attributes and per-frame uniforms are set up once per run; each
+entity then uploads any pending lightmaps and draws every texture with the
+same binds, uniforms and alpha R_DrawTextureChains_GLSL would, in the same
+order. Its NoTexture and water passes find nothing to draw for these models,
+and grass-bearing entities are left to the ordinary path.
+
+The run carries one batch across surfaces and entities while everything that
+reaches the draw is the same, and flushes it before any of that changes (a
+different texture, fullbright, grass, alpha test, lightmap, water side or
+alpha), before a lightmap upload, and before the entity matrix changes
+(R_SolidRunFlush, called by the run's owner). Every surface still goes to the
+GPU in the same order under the same state, in fewer draws. Uniforms are
+tracked because the per-texture sets are skipped when nothing changed.
+=============
+*/
+static struct
+{
+	qboolean	open;			// the batch holds surfaces for the state below
+	gltexture_t	*tex;
+	gltexture_t	*fbtex;			// NULL: fullbright off
+	texture_t	*grasstex;		// NULL: grass off
+	int			alphatest, lightmap, underwater;
+	float		batchalpha;
+
+	// uniforms as set on r_world_program
+	float		alpha;			// -1 unset
+	int			fullbright;		// useFullbrightTexLoc, -1 unset
+	int			grassuniform;	// useGrassLoc
+	texture_t	*grass;			// whose grass colours are set
+	int			alphatestuniform;
+} r_solidrun;
+
+qboolean R_SolidRunModel (entity_t *ent)
+{
+	qmodel_t *m = ent->model;
+	msurface_t *s;
+	int i;
+
+	if (!r_world_program || r_drawflat_cheatsafe || r_lightmap_cheatsafe || r_fullbright_cheatsafe)
+		return false;
+	if (R_GrassBladesActive () && R_GrassEntityAllowsGrass (ent))
+		return false;
+	if (m->nummodelsurfaces <= 0)
+		return false;
+	for (i = 0, s = &m->surfaces[m->firstmodelsurface]; i < m->nummodelsurfaces; i++, s++)
+		if (s->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE | SURF_DRAWSKY))
+			return false;
+	return true;
+}
+
+void R_SolidRunBegin (float entalpha)
+{
+	const int	overbright = !!gl_overbright.value;
+	const int	wide10bits = (gl_lightmap_format == GL_RGB10_A2);
+
+	// Same lasting effects as R_DrawTextureChains' transparency pair.
+	R_BeginTransparentDrawing (entalpha);
+	R_EndTransparentDrawing (entalpha);
+
+	glDepthMask (GL_FALSE);
+	glEnable (GL_BLEND);
+	GL_UseProgramFunc (r_world_program);
+
+	GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0); // indices come from client memory!
+	GL_EnableVertexAttribArrayFunc (vertAttrIndex);
+	GL_EnableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_EnableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_VertexAttribPointerFunc (vertAttrIndex,      3, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0));
+	GL_VertexAttribPointerFunc (texCoordsAttrIndex, 2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 3);
+	GL_VertexAttribPointerFunc (LMCoordsAttrIndex,  2, GL_FLOAT, GL_FALSE, VERTEXSIZE * sizeof(float), ((float *)0) + 5);
+	R_SetupLightmapBoundsAttrib ();
+
+	GL_Uniform1iFunc (texLoc, 0);
+	GL_Uniform1iFunc (LMTexLoc, 1);
+	GL_Uniform1iFunc (fullbrightTexLoc, 2);
+	GL_Uniform1iFunc (causticsTexLoc, 3);
+	GL_Uniform1iFunc (useFullbrightTexLoc, 0);
+	GL_Uniform1iFunc (useOverbrightLoc, overbright);
+	GL_Uniform1iFunc (useCausticsTexLoc, 0);
+	GL_Uniform1iFunc (useGrassLoc, 0);
+	GL_Uniform1iFunc (useAlphaTestLoc, 0);
+	GL_Uniform1iFunc (useLightmapWideLoc, wide10bits);
+	GL_Uniform1iFunc (useLightmapOnlyLoc, 0);
+	R_SetLightmapExtra4Uniforms (useLightmapExtra4Loc, lightmapTexelSizeLoc);
+	R_SetTexturelessDitherUniform (useTexturelessDitherLoc);
+	GL_Uniform1fFunc (clTimeLoc, cl.time);
+	GL_Uniform1fFunc (causticsOpacityLoc, gl_caustics.value);
+	GL_Uniform1fFunc (grassAmountLoc, R_GrassAmount());
+	GL_Uniform1fFunc (grassTimeLoc, R_GrassAnimTime());
+	GL_Uniform1fFunc (grassMovementLoc, R_GrassMovement());
+	GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale());
+	GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
+	// what the sets above leave on the program
+	r_solidrun.alpha = -1.0f;
+	r_solidrun.fullbright = 0;
+	r_solidrun.grass = NULL;
+	r_solidrun.grassuniform = 0;
+	r_solidrun.alphatestuniform = 0;
+	r_solidrun.open = false;
+}
+
+void R_SolidRunFlush (void)
+{
+	if (r_solidrun.open)
+		R_FlushBatch (r_solidrun.underwater ? UNDER_WATER : ABOVE_WATER);
+	r_solidrun.open = false;
+}
+
+// draws the chains R_SolidRunModel accepted; the caller has chained them and
+// named the model's textures with R_SetChainTextures
+void R_SolidRunDrawModel (qmodel_t *model, entity_t *ent, texchain_t chain)
+{
+	const float	entalpha = ENTALPHA_DECODE(ent->alpha);
+	int			i, underwater;
+	msurface_t	*s;
+	texture_t	*t, *animt, *grasstex;
+	gltexture_t	*fbtex;
+	int			alphatest;
+
+	if (R_LightmapUploadPending ())
+	{	// the batch must draw with the lightmaps as they were
+		R_SolidRunFlush ();
+		GL_SelectTexture (GL_TEXTURE0);
+		R_UploadLightmaps ();
+	}
+
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
+	{
+		t = R_ChainTexture (model, i);
+
+		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE))
+			continue;
+
+		animt = R_TextureAnimation(t, ent->frame);
+		fbtex = gl_fullbrights.value ? animt->fullbright : NULL;
+		grasstex = (R_TextureUsesSurfaceGrass(t) && R_GrassEntityAllowsGrass(ent)) ? animt : NULL;
+		alphatest = (t->texturechains[chain]->flags & SURF_DRAWFENCE) ? 1 : 0;
+
+		for (underwater = 0; underwater < 2; underwater++)
+		{
+			for (s = t->texturechains[chain]; s; s = s->texturechain)
+			{
+				if ((!underwater && !(s->flags & SURF_UNDERWATER)) || (underwater && (s->flags & SURF_UNDERWATER)))
+				{
+					if (!r_solidrun.open || r_solidrun.tex != animt->gltexture || r_solidrun.fbtex != fbtex ||
+						r_solidrun.grasstex != grasstex || r_solidrun.alphatest != alphatest ||
+						r_solidrun.lightmap != s->lightmaptexturenum || r_solidrun.underwater != underwater ||
+						r_solidrun.batchalpha != entalpha)
+					{
+						R_SolidRunFlush ();
+
+						if (fbtex)
+						{
+							GL_SelectTexture (GL_TEXTURE2);
+							GL_Bind (fbtex);
+						}
+						if (r_solidrun.fullbright != (fbtex ? 1 : 0))
+						{
+							r_solidrun.fullbright = fbtex ? 1 : 0;
+							GL_Uniform1iFunc (useFullbrightTexLoc, r_solidrun.fullbright);
+						}
+						GL_SelectTexture (GL_TEXTURE0);
+						GL_Bind (animt->gltexture);
+						if (grasstex)
+						{
+							if (!r_solidrun.grassuniform)
+								GL_Uniform1iFunc (useGrassLoc, 1);
+							if (r_solidrun.grass != grasstex)
+								R_SetGrassColorUniforms(grasstex);
+							r_solidrun.grassuniform = 1;
+							r_solidrun.grass = grasstex;
+						}
+						else if (r_solidrun.grassuniform)
+						{
+							GL_Uniform1iFunc (useGrassLoc, 0);
+							r_solidrun.grassuniform = 0;
+						}
+						if (r_solidrun.alphatestuniform != alphatest)
+						{
+							GL_Uniform1iFunc (useAlphaTestLoc, alphatest);
+							r_solidrun.alphatestuniform = alphatest;
+						}
+						if (r_solidrun.alpha != entalpha)
+						{
+							GL_Uniform1fFunc (alphaLoc, entalpha);
+							r_solidrun.alpha = entalpha;
+						}
+						GL_SelectTexture (GL_TEXTURE1);
+						GL_Bind (lightmaps[s->lightmaptexturenum].texture);
+
+						r_solidrun.open = true;
+						r_solidrun.tex = animt->gltexture;
+						r_solidrun.fbtex = fbtex;
+						r_solidrun.grasstex = grasstex;
+						r_solidrun.alphatest = alphatest;
+						r_solidrun.lightmap = s->lightmaptexturenum;
+						r_solidrun.underwater = underwater;
+						r_solidrun.batchalpha = entalpha;
+					}
+					R_BatchSurface(s, underwater ? UNDER_WATER : ABOVE_WATER);
+
+					rs_brushpasses++;
+				}
+			}
+		}
+	}
+}
+
+void R_SolidRunEnd (void)
+{
+	R_SolidRunFlush ();
+	if (r_solidrun.alphatestuniform)
+	{
+		GL_Uniform1iFunc (useAlphaTestLoc, 0);	// as R_DrawTextureChains_GLSL leaves it
+		r_solidrun.alphatestuniform = 0;
+	}
+	GL_DisableVertexAttribArrayFunc (vertAttrIndex);
+	GL_DisableVertexAttribArrayFunc (texCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMCoordsAttrIndex);
+	GL_DisableVertexAttribArrayFunc (LMBoundsAttrIndex);
+	GL_UseProgramFunc (0);
+	GL_SelectTexture (GL_TEXTURE0);
+	glDepthMask (GL_TRUE);
+	glDisable (GL_BLEND);
+}
+
+/*
 ================
 R_DrawTextureChains_White -- johnfitz -- draw sky and water as white polys when r_lightmap is 1
 ================
@@ -5373,9 +5635,9 @@ void R_DrawTextureChains_White (qmodel_t *model, texchain_t chain)
 	texture_t	*t;
 
 	glDisable (GL_TEXTURE_2D);
-	for (i=0 ; i<model->numtextures ; i++)
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 	{
-		t = model->textures[i];
+		t = R_ChainTexture (model, i);
 
 		if (!t || !t->texturechains[chain] || !(t->texturechains[chain]->flags & SURF_DRAWTILED))
 			continue;
@@ -5888,9 +6150,9 @@ void R_DrawTextureChains_GLSL (qmodel_t *model, entity_t *ent, texchain_t chain)
 	GL_Uniform1fFunc (grassGustScaleLoc, R_GrassGustScale()); // woods #grass
 	GL_Uniform1iFunc (fogModeLoc, Fog_GetMode());
 
-	for (i=0 ; i<model->numtextures ; i++)
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 	{
-		t = model->textures[i];
+		t = R_ChainTexture (model, i);
 
 		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTURB | SURF_DRAWTILED | SURF_NOTEXTURE))
 			continue;
@@ -6026,9 +6288,9 @@ void R_DrawLightmapChains_GLSL(qmodel_t* model, entity_t* ent, texchain_t chain)
 	R_ClearBatch();
 	lastlightmap = -1;
 
-	for (i = 0; i < model->numtextures; i++)
+	for (i=0 ; i<R_ChainTextureCount (model) ; i++)
 	{
-		t = model->textures[i];
+		t = R_ChainTexture (model, i);
 
 		if (!t || !t->texturechains[chain] || t->texturechains[chain]->flags & (SURF_DRAWTILED | SURF_NOTEXTURE))
 			continue;
