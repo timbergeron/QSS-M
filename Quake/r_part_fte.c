@@ -471,6 +471,7 @@ static qboolean pscript_loaded_mapcfg;	// current state includes a per-map confi
 static qboolean pscript_extra_configs;	// configs were added outside the desc parse (e.g. dp effectinfo), so state is map/server specific
 static qboolean pscript_in_desc_parse;	// inside R_ParticleDesc_Callback's parse
 static cvar_t r_part_rain_quantity = {"r_part_rain_quantity", "1"};
+static cvar_t r_part_rain_prewarm = {"r_part_rain_prewarm", "1"};	//replay missed sky emission when a sky leaf comes into view
 static cvar_t r_particle_tracelimit = {"r_particle_tracelimit", "0x7fffffff"};
 static cvar_t r_part_sparks = {"r_part_sparks", "1"};
 static cvar_t r_part_sparks_trifan = {"r_part_sparks_trifan", "1"};
@@ -491,6 +492,8 @@ static cvar_t r_lightflicker = {"r_lightflicker", "1"};
 extern cvar_t r_particles; // woods (vk)
 
 static float particletime;
+static float pscript_preage_min;	// spawned particles start pscript_preage_min + frandom()*pscript_preage_range seconds old
+static float pscript_preage_range;	// (sky reveal backfill; both 0 normally)
 static qboolean pscript_mapdecal_spawn;
 static qboolean pscript_mapdecal_surfaces_ready;
 static vec3_t pscript_mapdecal_tangent1;
@@ -3642,6 +3645,7 @@ void PScript_InitParticles (void)
 	Cvar_RegisterVariable(&r_particledesc);
 	Cvar_SetCompletion (&r_particledesc, &Particles_Completion_f); // woods #particlelist
 	Cvar_RegisterVariable(&r_part_rain_quantity);
+	Cvar_RegisterVariable(&r_part_rain_prewarm);
 	Cvar_RegisterVariable(&r_particle_tracelimit);
 	Cvar_RegisterVariable(&r_part_sparks);
 	Cvar_RegisterVariable(&r_part_sparks_trifan);
@@ -3663,8 +3667,10 @@ void PScript_InitParticles (void)
 //#endif
 }
 
+static void P_RainVis_Forget(qmodel_t *mod);
 void PScript_ClearSurfaceParticles(qmodel_t *mod)
 {
+	P_RainVis_Forget(mod);
 	mod->skytime = 0;
 	mod->skytris = NULL;
 	while(mod->skytrimem)
@@ -4693,21 +4699,426 @@ static void R_ParticleDesc_Callback(struct cvar_s *var)
 		PScript_SpawnMapDecals();
 }
 
+/*
+sky emitters only spawn into leafs in the scene pvs, so a room that was out of
+view has no snow/rain in it when it's revealed, and a slow fall takes many
+seconds to fill it. track when each sky leaf was last seen, and when one comes
+back into view replay the emission it missed with pre-aged particles.
+
+the world's sky tris are clipped through the bsp once, so each leaf knows
+exactly which bits of sky emit into it. a reveal queues one job per leaf for
+the span it missed; jobs are disjoint in time, so nothing is replayed twice.
+*/
+typedef struct
+{
+	vec3_t	org, x, y;	//world-space tri, already nudged off the sky face
+	vec3_t	norm;
+	vec3_t	center;
+	float	radius;
+	float	area;
+	int		ptype;
+} rainfrag_t;
+
+typedef struct
+{
+	int		leafnum;
+	double	missedend;	//skytime the leaf came back into view
+	float	missed;		//seconds of emission it missed before that
+	int		frag;		//next frag of the leaf to replay
+	float	count;		//spawn attempts left on that frag, <0 = not started
+} rainjob_t;
+
+#define RAIN_MAXJOBS 4096
+
+static struct
+{
+	qmodel_t	*model;
+	int			numleafs;
+	double		*lastseen;	//skytime each leaf was last in scenevis
+	int			*firstfrag;	//per leaf, into frags
+	int			*numfrags;
+	rainfrag_t	*frags;
+	int			fragcount, fragmax;
+	int			*skyleafs;	//leafs with any frags
+	int			numskyleafs;
+	rainjob_t	*jobs;
+	int			numjobs, maxjobs;
+} rainvis;
+
+static void P_RainVis_Free(void)
+{
+	free(rainvis.lastseen);
+	free(rainvis.firstfrag);
+	free(rainvis.numfrags);
+	free(rainvis.frags);
+	free(rainvis.skyleafs);
+	free(rainvis.jobs);
+	memset(&rainvis, 0, sizeof(rainvis));
+}
+
+static void P_RainVis_Forget(qmodel_t *mod)
+{
+	if (mod == rainvis.model)
+		P_RainVis_Free();
+}
+
+//picks a random point on the tri, in world space, nudged off the face. false if culled.
+static qboolean P_RainTriPoint(skytris_t *st, vec3_t axis[3], vec3_t eorg, vec3_t worg, vec3_t wnorm)
+{
+	float x, y;
+	vec3_t org, vdist;
+
+	x = frandom()*frandom();
+	y = frandom() * (1-x);
+	VectorMA(st->org, x, st->x, org);
+	VectorMA(org, y, st->y, org);
+
+	worg[0] = DotProduct(org, axis[0]) + eorg[0];
+	worg[1] = -DotProduct(org, axis[1]) + eorg[1];
+	worg[2] = DotProduct(org, axis[2]) + eorg[2];
+
+	//ignore it if its too far away
+	VectorSubtract(worg, r_refdef.vieworg, vdist);
+	if (VectorLength(vdist) > (1024+512)*frandom())
+		return false;
+
+	if (st->face->flags & SURF_PLANEBACK)
+		VectorScale(st->face->plane->normal, -1, vdist);
+	else
+		VectorCopy(st->face->plane->normal, vdist);
+
+	wnorm[0] = DotProduct(vdist, axis[0]);
+	wnorm[1] = -DotProduct(vdist, axis[1]);
+	wnorm[2] = DotProduct(vdist, axis[2]);
+
+	VectorMA(worg, 0.5, wnorm, worg);
+
+	return !(CL_PointContentsMask(worg) & FTECONTENTS_SOLID);
+}
+
+#define RAIN_MAXCLIPVERTS 32
+
+//the leafnum is stashed in 'area' until the frags are sorted by leaf
+static void P_RainAddFrag(int leafnum, vec3_t v0, vec3_t v1, vec3_t v2, const vec3_t norm, int ptype)
+{
+	rainfrag_t *f;
+	vec3_t c;
+
+	if (rainvis.fragcount == rainvis.fragmax)
+	{
+		rainfrag_t *n;
+		int max = rainvis.fragmax ? rainvis.fragmax*2 : 1024;
+		n = (rainfrag_t *)realloc(rainvis.frags, sizeof(*n)*max);
+		if (!n)
+			return;
+		rainvis.frags = n;
+		rainvis.fragmax = max;
+	}
+	f = &rainvis.frags[rainvis.fragcount];
+	VectorCopy(v0, f->org);
+	VectorSubtract(v1, v0, f->x);
+	VectorSubtract(v2, v0, f->y);
+	CrossProduct(f->x, f->y, c);
+	if (VectorLength(c)*0.5f < 0.01f)
+		return;	//sliver
+	VectorCopy(norm, f->norm);
+	f->ptype = ptype;
+	f->area = leafnum;
+	rainvis.fragcount++;
+}
+
+//splits a convex polygon down the bsp, adding a frag fan for every non-solid leaf it touches
+static void P_RainClipPoly(mnode_t *node, vec3_t *verts, int numverts, const vec3_t norm, int ptype)
+{
+	vec3_t front[RAIN_MAXCLIPVERTS], back[RAIN_MAXCLIPVERTS];
+	float dists[RAIN_MAXCLIPVERTS+1];
+	int sides[RAIN_MAXCLIPVERTS+1];
+	int i, j, nf, nb, counts[3];
+	float *p1, *p2, frac;
+	mleaf_t *leaf;
+
+	while (node->contents >= 0)
+	{
+		counts[0] = counts[1] = counts[2] = 0;
+		for (i = 0; i < numverts; i++)
+		{
+			dists[i] = DotProduct(verts[i], node->plane->normal) - node->plane->dist;
+			sides[i] = (dists[i] > ON_EPSILON) ? 0 : (dists[i] < -ON_EPSILON) ? 1 : 2;
+			counts[sides[i]]++;
+		}
+		if (!counts[1])
+		{
+			node = node->children[0];
+			continue;
+		}
+		if (!counts[0])
+		{
+			node = node->children[1];
+			continue;
+		}
+
+		dists[i] = dists[0];
+		sides[i] = sides[0];
+		nf = nb = 0;
+		for (i = 0; i < numverts; i++)
+		{
+			p1 = verts[i];
+			if (nf >= RAIN_MAXCLIPVERTS-1 || nb >= RAIN_MAXCLIPVERTS-1)
+				return;	//absurd polygon, give up on it
+			if (sides[i] != 1)
+				{ VectorCopy(p1, front[nf]); nf++; }
+			if (sides[i] != 0)
+				{ VectorCopy(p1, back[nb]); nb++; }
+			if (sides[i] == 2 || sides[i+1] == 2 || sides[i+1] == sides[i])
+				continue;
+			p2 = verts[(i+1)%numverts];
+			frac = dists[i] / (dists[i]-dists[i+1]);
+			for (j = 0; j < 3; j++)
+				front[nf][j] = back[nb][j] = p1[j] + frac*(p2[j]-p1[j]);
+			nf++;
+			nb++;
+		}
+		P_RainClipPoly(node->children[1], back, nb, norm, ptype);
+		P_RainClipPoly(node->children[0], front, nf, norm, ptype);
+		return;
+	}
+
+	leaf = (mleaf_t *)node;
+	if (leaf->contents == CONTENTS_SOLID)
+		return;
+	for (i = 2; i < numverts; i++)
+		P_RainAddFrag((int)(leaf - rainvis.model->leafs), verts[0], verts[i-1], verts[i], norm, ptype);
+}
+
+static void P_RainVis_Build(qmodel_t *mod)
+{
+	skytris_t *st;
+	rainfrag_t *sorted;
+	vec3_t verts[3], norm;
+	int i, leafnum, *fill;
+
+	P_RainVis_Free();
+	rainvis.model = mod;
+	rainvis.numleafs = mod->numleafs;
+
+	//world sky tris are already in world space
+	for (st = mod->skytris; st; st = st->next)
+	{
+		if (st->face->flags & SURF_PLANEBACK)
+			VectorScale(st->face->plane->normal, -1, norm);
+		else
+			VectorCopy(st->face->plane->normal, norm);
+		VectorMA(st->org, 0.5, norm, verts[0]);
+		VectorAdd(verts[0], st->x, verts[1]);
+		VectorAdd(verts[0], st->y, verts[2]);
+		P_RainClipPoly(mod->nodes, verts, 3, norm, st->ptype);
+	}
+
+	rainvis.lastseen = (double *)malloc(sizeof(double) * (mod->numleafs+1));
+	rainvis.firstfrag = (int *)calloc(mod->numleafs+1, sizeof(int));
+	rainvis.numfrags = (int *)calloc(mod->numleafs+1, sizeof(int));
+	rainvis.skyleafs = (int *)malloc(sizeof(int) * (mod->numleafs+1));
+	sorted = (rainfrag_t *)malloc(sizeof(rainfrag_t) * q_max(rainvis.fragcount, 1));
+	fill = (int *)calloc(mod->numleafs+1, sizeof(int));
+	if (!rainvis.lastseen || !rainvis.firstfrag || !rainvis.numfrags || !rainvis.skyleafs || !sorted || !fill)
+	{
+		free(sorted);
+		free(fill);
+		P_RainVis_Free();
+		rainvis.model = mod;	//don't retry every frame
+		return;
+	}
+
+	//bucket the frags by leaf
+	for (i = 0; i < rainvis.fragcount; i++)
+		rainvis.numfrags[(int)rainvis.frags[i].area]++;
+	for (i = 1; i <= mod->numleafs; i++)
+	{
+		rainvis.firstfrag[i] = rainvis.firstfrag[i-1] + rainvis.numfrags[i-1];
+		if (rainvis.numfrags[i])
+			rainvis.skyleafs[rainvis.numskyleafs++] = i;
+	}
+	for (i = 0; i < rainvis.fragcount; i++)
+	{
+		leafnum = (int)rainvis.frags[i].area;
+		sorted[rainvis.firstfrag[leafnum] + fill[leafnum]++] = rainvis.frags[i];
+	}
+	free(fill);
+	free(rainvis.frags);
+	rainvis.frags = sorted;
+	for (i = 0; i < rainvis.fragcount; i++)
+	{
+		rainfrag_t *f = &rainvis.frags[i];
+		vec3_t c;
+		CrossProduct(f->x, f->y, c);
+		f->area = VectorLength(c)*0.5f;
+		VectorAdd(f->x, f->y, c);
+		VectorMA(f->org, 1/3.f, c, f->center);
+		VectorSubtract(f->org, f->center, c);
+		f->radius = VectorLength(c);
+		VectorAdd(f->org, f->x, c);
+		VectorSubtract(c, f->center, c);
+		f->radius = q_max(f->radius, VectorLength(c));
+		VectorAdd(f->org, f->y, c);
+		VectorSubtract(c, f->center, c);
+		f->radius = q_max(f->radius, VectorLength(c));
+	}
+
+	for (i = 0; i <= mod->numleafs; i++)
+		rainvis.lastseen[i] = -1e9;	//never seen: first sight prewarms fully
+}
+
+//longest life of an effect and everything it spawns alongside
+static float P_RainMaxLife(int ptype)
+{
+	float life = 0;
+	int n;
+
+	for (n = 0; ptype >= 0 && ptype < numparticletypes && n < 16; n++, ptype = part_type[ptype].assoc)
+	{
+		if (part_type[ptype].die > life)
+			life = part_type[ptype].die;
+	}
+	return life;
+}
+
+static void P_RainQueueJob(int leafnum, float missed, double now)
+{
+	rainjob_t *job;
+
+	if (rainvis.numjobs == rainvis.maxjobs)
+	{
+		rainjob_t *n;
+		int max = rainvis.maxjobs ? rainvis.maxjobs*2 : 64;
+		if (max > RAIN_MAXJOBS)
+			return;
+		n = (rainjob_t *)realloc(rainvis.jobs, sizeof(*n)*max);
+		if (!n)
+			return;
+		rainvis.jobs = n;
+		rainvis.maxjobs = max;
+	}
+	job = &rainvis.jobs[rainvis.numjobs++];
+	job->leafnum = leafnum;
+	job->missedend = now;
+	job->missed = missed;
+	job->frag = rainvis.firstfrag[leafnum];
+	job->count = -1;
+}
+
+/*
+spawns queued jobs as pre-aged particles, within a rough per-frame time budget:
+a big reveal is thousands of flakes, and spreading them over a few frames avoids
+a hitch. a flake that was missed at age a before the reveal is spawned 'late'
+seconds after it at age a+late, so work left over by a full particle pool can
+resume later and expires by itself once everything it would spawn is dead.
+*/
+static void P_RainRunJobs(double now)
+{
+	double deadline = Sys_DoubleTime() + 0.001;
+	rainjob_t *job;
+	rainfrag_t *f;
+	part_type_t *type;
+	vec3_t worg, vdist;
+	float late, span;
+	int j, keep, attempts = 0, lastfrag;
+	qboolean stop = false;
+
+	for (j = 0, keep = 0; j < rainvis.numjobs; j++)
+	{
+		job = &rainvis.jobs[j];
+		lastfrag = rainvis.firstfrag[job->leafnum] + rainvis.numfrags[job->leafnum];
+		late = now - job->missedend;
+
+		for (; !stop && job->frag < lastfrag; job->frag++, job->count = -1)
+		{
+			f = &rainvis.frags[job->frag];
+			if ((unsigned int)f->ptype >= (unsigned int)numparticletypes)
+				continue;
+			type = &part_type[f->ptype];
+			if (!type->loaded)
+				continue;
+			span = q_min(job->missed, P_RainMaxLife(f->ptype) - late);
+			if (span <= 0)
+				continue;	//all dead by now
+			VectorSubtract(f->center, r_refdef.vieworg, vdist);
+			if (VectorLength(vdist) - f->radius >= 1024+512)
+				continue;	//the distance cull would reject every point
+			if (job->count < 0)	//same rate as the steady emitter, over the missed span
+				job->count = f->area*r_part_rain_quantity.value*type->rainfrequency*span/10000.0 + frandom();
+
+			for (; job->count >= 1; job->count--)
+			{
+				if (!free_particles || (!(++attempts & 7) && Sys_DoubleTime() > deadline))
+				{
+					stop = true;	//rest next frame
+					break;
+				}
+
+				//same point pick and culls as P_RainTriPoint
+				{
+					float x = frandom()*frandom(), y = frandom()*(1-x);
+					VectorMA(f->org, x, f->x, worg);
+					VectorMA(worg, y, f->y, worg);
+				}
+				VectorSubtract(worg, r_refdef.vieworg, vdist);
+				if (VectorLength(vdist) > (1024+512)*frandom())
+					continue;
+				if (CL_PointContentsMask(worg) & FTECONTENTS_SOLID)
+					continue;
+
+				pscript_preage_min = late;
+				pscript_preage_range = span;
+				PScript_RunParticleEffectState(worg, f->norm, 1, f->ptype, NULL);
+			}
+			if (stop)
+				break;
+		}
+
+		if (job->frag < lastfrag)
+			rainvis.jobs[keep++] = *job;
+	}
+	rainvis.numjobs = keep;
+	pscript_preage_min = pscript_preage_range = 0;
+}
+
 static void P_AddRainParticles(qmodel_t *mod, vec3_t axis[3], vec3_t eorg, byte *scenevis, float contribution)
 {
-	float x;
-	float y;
 	part_type_t *type;
 
-	vec3_t org, vdist, worg, wnorm;
+	vec3_t worg, wnorm;
 	mleaf_t *leaf;
-	int cluster;
+	int cluster, i, leafnum;
+	float gap;
 
 	skytris_t *st;
 	if (!r_part_rain_quantity.value)
 		return;
 
 	mod->skytime += contribution;
+
+	if (scenevis && mod == cl.worldmodel && mod->skytris)
+	{
+		if (rainvis.model != mod)
+			P_RainVis_Build(mod);
+		if (!r_part_rain_prewarm.value)
+			rainvis.numjobs = 0;
+
+		for (i = 0; i < rainvis.numskyleafs; i++)
+		{
+			leafnum = rainvis.skyleafs[i];
+			cluster = leafnum - 1;
+			if (!(scenevis[cluster>>3] & (1 << (cluster&7))))
+				continue;
+			gap = mod->skytime - rainvis.lastseen[leafnum];
+			rainvis.lastseen[leafnum] = mod->skytime;
+			if (gap > 0.5f && r_part_rain_prewarm.value)	//ignore pvs flicker; what's already falling covers it
+				P_RainQueueJob(leafnum, gap, mod->skytime);
+		}
+
+		if (rainvis.numjobs)
+			P_RainRunJobs(mod->skytime);
+	}
 
 	for (st = mod->skytris; st; st = st->next)
 	{
@@ -4724,32 +5135,7 @@ static void P_AddRainParticles(qmodel_t *mod, vec3_t axis[3], vec3_t eorg, byte 
 
 			st->nexttime += 10000.0/(st->area*r_part_rain_quantity.value*type->rainfrequency);
 
-			x = frandom()*frandom();
-			y = frandom() * (1-x);
-			VectorMA(st->org, x, st->x, org);
-			VectorMA(org, y, st->y, org);
-
-			worg[0] = DotProduct(org, axis[0]) + eorg[0];
-			worg[1] = -DotProduct(org, axis[1]) + eorg[1];
-			worg[2] = DotProduct(org, axis[2]) + eorg[2];
-
-			//ignore it if its too far away
-			VectorSubtract(worg, r_refdef.vieworg, vdist);
-			if (VectorLength(vdist) > (1024+512)*frandom())
-				continue;
-
-			if (st->face->flags & SURF_PLANEBACK)
-				VectorScale(st->face->plane->normal, -1, vdist);
-			else
-				VectorCopy(st->face->plane->normal, vdist);
-
-			wnorm[0] = DotProduct(vdist, axis[0]);
-			wnorm[1] = -DotProduct(vdist, axis[1]);
-			wnorm[2] = DotProduct(vdist, axis[2]);
-
-			VectorMA(worg, 0.5, wnorm, worg);
-
-			if (CL_PointContentsMask(worg) & FTECONTENTS_SOLID)
+			if (!P_RainTriPoint(st, axis, eorg, worg, wnorm))
 				continue;
 
 			if (scenevis && cl.worldmodel)
@@ -5690,6 +6076,44 @@ static void PScript_PlaceholderWarning(part_type_t *ptype)
 	Con_Printf(CON_WARNING "Particle effect %s.%s is marked as a placeholder\n", ptype->config, ptype->name);
 }
 
+/*
+fast-forwards a freshly spawned particle by 'age' seconds, as though it had
+been emitted earlier. p->die still holds the life already used (including age).
+integrates gravity+friction exactly; flurry is ignored. a particle that would
+have hit something on the way is killed rather than placed.
+*/
+static void PScript_PreageParticle(particle_t *p, part_type_t *ptype, float age)
+{
+	vec3_t start, impact, normal;
+	float accel, f, e, vinf;
+	int i;
+
+	if (p->die >= ptype->die || !(ptype->flags & PT_VELOCITY))
+		return;
+
+	VectorCopy(p->org, start);
+	for (i = 0; i < 3; i++)
+	{
+		accel = (i == 2) ? -ptype->gravity : 0;
+		f = (ptype->flags & PT_FRICTION) ? ptype->friction[i] : 0;
+		if (f)
+		{
+			vinf = accel / f;
+			e = exp(-f*age);
+			p->org[i] += vinf*age + (p->vel[i] - vinf)*(1 - e)/f;
+			p->vel[i] = vinf + (p->vel[i] - vinf)*e;
+		}
+		else
+		{
+			p->org[i] += p->vel[i]*age + 0.5f*accel*age*age;
+			p->vel[i] += accel*age;
+		}
+	}
+
+	if (ptype->cliptype >= 0 && r_bouncysparks.value && CL_TraceLine(start, p->org, impact, normal, NULL) < 1)
+		p->die = ptype->die + 1;	//it would have landed (and melted) already
+}
+
 int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typenum, trailstate_t **tsk)
 {
 	part_type_t *ptype;
@@ -5700,7 +6124,7 @@ int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typ
 	beamseg_t *b, *bfirst;
 	vec3_t ofsvec, arsvec; // offsetspread vec, areaspread vec
 
-	float orgadd, veladd;
+	float orgadd, veladd, preage;
 	trailstate_t *ts;
 	byte *palrgba = (byte *)d_8to24table;
 
@@ -6064,8 +6488,12 @@ int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typ
 				ptype->particles = p;
 
 				p->die = ptype->randdie*frandom();
+				preage = pscript_preage_min + pscript_preage_range*frandom();
+				p->die += preage;
 				p->spawn = particletime;
 				p->scale = ptype->scale+ptype->scalerand*frandom();
+				if (ptype->rampmode == RAMP_NONE)
+					p->scale += ptype->scaledelta*preage;
 				if (ptype->die)
 					p->rgba[3] = ptype->alpha+p->die*ptype->alphachange;
 				else
@@ -6078,7 +6506,7 @@ int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typ
 					p->state.nextemit = particletime + ptype->emitstart - p->die;
 
 				p->rotationspeed = ptype->rotationmin + frandom()*ptype->rotationrand;
-				p->angle = ptype->rotationstartmin + frandom()*ptype->rotationstartrand;
+				p->angle = ptype->rotationstartmin + frandom()*ptype->rotationstartrand + p->rotationspeed*preage;
 				p->s1 = ptype->s1;
 				p->t1 = ptype->t1;
 				p->s2 = ptype->s2;
@@ -6328,6 +6756,9 @@ int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, int typ
 				}
 				VectorAdd(p->org, ptype->orgbias, p->org);
 #endif
+
+				if (preage > 0)
+					PScript_PreageParticle(p, ptype, preage);
 
 				p->die = particletime + ptype->die - p->die;
 
