@@ -2994,7 +2994,7 @@ static void TexPrep_PrepareOne (texprep_jobstate_t *state)
 	double started = state->profile ? Sys_DoubleTime () : 0;
 
 	result->status = TEXPREP_OK;
-	state->source_crc = CRC_Block (job->data, state->source_size);
+	state->source_crc = 0;	// prepared jobs never carry TEXPREF_OVERWRITE/CONCHARS, see TexMgr_LoadImage_impl
 	if (!TexPrep_CheckedBytes (width, height, 4, &work_bytes))
 	{
 		result->status = TEXPREP_OVERFLOW;
@@ -3406,8 +3406,9 @@ static gltexture_t *TexMgr_LoadImage_impl (qmodel_t *owner, const char *name, in
 	if (isDedicated)
 		return NULL;
 
-	// cache check
-	if (format == SRC_EXTERNAL || format == SRC_LIGHTMAP)
+	// cache check. source_crc is only read by TEXPREF_OVERWRITE lookups and the
+	// conchars colour cache, so skip hashing large model/world textures.
+	if (format == SRC_EXTERNAL || format == SRC_LIGHTMAP || !(flags & (TEXPREF_OVERWRITE | TEXPREF_CONCHARS)))
 		crc = 0;
 	else
 		crc = CRC_Block(data, TexMgr_ImageSize(width, height, format));
