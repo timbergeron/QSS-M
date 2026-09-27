@@ -4344,6 +4344,19 @@ static SDL_AtomicInt qw_maplist_refresh_ready;
 static SDL_AtomicInt qw_maplist_refresh_checked;
 static SDL_AtomicInt qw_maplist_refresh_last_result;
 static time_t qw_maplist_last_refresh_attempt;
+static unsigned int qw_maplist_generation;
+static double qw_maplist_snapshot_time;
+
+#define QW_MAPTITLES_PATH "misc/qw_map_titles.json"
+#define QW_MAPTITLES_MAX_BYTES (8 * 1024 * 1024)
+typedef struct
+{
+	const char *name, *title;
+} qw_maptitle_t;
+static json_t *qw_maptitles_json;
+static qw_maptitle_t *qw_maptitles;
+static int qw_maptitles_count;
+static qboolean qw_maptitles_attempted;
 
 typedef struct
 {
@@ -4357,12 +4370,14 @@ static qboolean QWMapList_StartRefresh(qboolean force);
 
 static void QWMapList_FreeCache(void)
 {
+	++qw_maplist_generation;
 	free(qw_maplist_buffer);
 	free(qw_maplist_names);
 	qw_maplist_buffer = NULL;
 	qw_maplist_names = NULL;
 	qw_maplist_count = 0;
 	qw_maplist_path[0] = '\0';
+	qw_maplist_snapshot_time = 0;
 }
 
 static void QWMapList_Fail(const char *message)
@@ -4382,7 +4397,8 @@ static qboolean QWMapList_NameIsValid(const char *name)
 	size_t len;
 	const unsigned char *p;
 
-	if (!name || !*name)
+	/* Leading whitespace/comments cannot round-trip through qw_maps.txt. */
+	if (!name || !*name || *name == ' ' || *name == '#')
 		return false;
 
 	len = strlen(name);
@@ -4412,6 +4428,140 @@ static qboolean QWMapList_NameIsValid(const char *name)
 	}
 
 	return true;
+}
+
+void QWMapTitles_Invalidate(void)
+{
+	JSON_Free(qw_maptitles_json);
+	free(qw_maptitles);
+	qw_maptitles_json = NULL;
+	qw_maptitles = NULL;
+	qw_maptitles_count = 0;
+	qw_maptitles_attempted = false;
+	++qw_maplist_generation;
+}
+
+static qboolean QWMapTitles_Parse(const char *text)
+{
+	json_t *json = JSON_Parse(text);
+	const jsonentry_t *array, *entry;
+	const double *schema;
+	const char *source;
+	qw_maptitle_t *rows = NULL;
+	int count = 0, i = 0;
+
+	if (!json || !json->root || json->root->type != JSON_OBJECT)
+		goto fail;
+	schema = JSON_FindNumber(json->root, "schema");
+	source = JSON_FindString(json->root, "source");
+	array = JSON_Find(json->root, "maps", JSON_ARRAY);
+	if (!schema || *schema != 1 || !source || strcmp(source, QW_MAPLIST_REMOTE_URL) || !array)
+		goto fail;
+	for (entry = array->firstchild; entry; entry = entry->next)
+		if (++count > 100000)
+			goto fail;
+	if (count && !(rows = (qw_maptitle_t *)calloc(count, sizeof(*rows))))
+		goto fail;
+	for (entry = array->firstchild; entry; entry = entry->next, ++i)
+	{
+		const unsigned char *ch;
+		if (entry->type != JSON_OBJECT)
+			goto fail;
+		rows[i].name = JSON_FindString(entry, "name");
+		rows[i].title = JSON_FindString(entry, "title");
+		if (!QWMapList_NameIsValid(rows[i].name) || !rows[i].title || strlen(rows[i].title) >= QW_MAPTITLE_SIZE ||
+			(i && q_strcasecmp(rows[i - 1].name, rows[i].name) >= 0))
+			goto fail;
+		for (ch = (const unsigned char *)rows[i].title; *ch; ++ch)
+			if (*ch < 32 || *ch > 126)
+				goto fail;
+	}
+	qw_maptitles_json = json;
+	qw_maptitles = rows;
+	qw_maptitles_count = count;
+	return true;
+fail:
+	free(rows);
+	JSON_Free(json);
+	return false;
+}
+
+void QWMapTitles_LoadOnce(void)
+{
+	FILE *file = NULL;
+	int length;
+	char *text;
+	qboolean valid = false;
+
+	if (qw_maptitles_attempted)
+		return;
+	qw_maptitles_attempted = true;
+	length = COM_FOpenFile(QW_MAPTITLES_PATH, &file, NULL);
+	if (length < 0 || !file)
+		return;
+	if (length <= 0 || length > QW_MAPTITLES_MAX_BYTES)
+	{
+		fclose(file);
+		goto failed;
+	}
+	text = (char *)malloc((size_t)length + 1);
+	if (text)
+	{
+		if (fread(text, 1, length, file) == (size_t)length && !memchr(text, 0, length))
+		{
+			text[length] = 0;
+			valid = QWMapTitles_Parse(text);
+		}
+		free(text);
+	}
+	fclose(file);
+failed:
+	if (!valid)
+		Con_Warning("qwmaplist: ignoring invalid " QW_MAPTITLES_PATH "\n");
+}
+
+const char *QWMapTitles_TitleForName(const char *name)
+{
+	int low = 0, high = qw_maptitles_count;
+	if (!name)
+		return "";
+	while (low < high)
+	{
+		int mid = low + (high - low) / 2;
+		int cmp = q_strcasecmp(qw_maptitles[mid].name, name);
+		if (!cmp)
+			return qw_maptitles[mid].title;
+		if (cmp < 0)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+	return "";
+}
+
+unsigned int QWMapList_Generation(void)
+{
+	return qw_maplist_generation;
+}
+
+static double QWMapList_SnapshotTime(const char *text, double fallback)
+{
+	const char *line;
+	time_t now = time(NULL);
+	double stamp = fallback;
+	for (line = text; line && *line; line = strchr(line, '\n'))
+	{
+		if (*line == '\n') ++line;
+		if (!strncmp(line, "# refreshed=", 12))
+		{
+			char *end;
+			double parsed = strtod(line + 12, &end);
+			if (end != line + 12 && (*end == '\r' || *end == '\n' || !*end) && parsed > 0)
+				stamp = parsed;
+			break;
+		}
+	}
+	return now != (time_t)-1 && stamp > 0 && stamp <= (double)now + 86400 ? stamp : 0;
 }
 
 static qboolean QWMapList_PackContains(const pack_t *pack)
@@ -4568,11 +4718,14 @@ static qboolean QWMapList_LoadCache(void)
 	const char **names = NULL;
 	int count = 0;
 	char *buffer;
+	struct stat st;
+	double stamp;
 
 	QWMapList_CachePath(path, sizeof(path), QW_MAPLIST_CACHE_FILE);
 	buffer = (char *)COM_LoadMallocFile_TextMode_OSPath(path, NULL);
 	if (!buffer)
 		return false;
+	stamp = QWMapList_SnapshotTime(buffer, stat(path, &st) == 0 ? (double)st.st_mtime : 0);
 
 	error[0] = '\0';
 	if (!QWMapList_Parse(buffer, &names, &count, error, sizeof(error)) || count <= 0)
@@ -4595,6 +4748,7 @@ static qboolean QWMapList_LoadCache(void)
 	qw_maplist_count = count;
 	q_strlcpy(qw_maplist_path, path, sizeof(qw_maplist_path));
 	qw_maplist_state = QW_MAPLIST_LOADED;
+	qw_maplist_snapshot_time = stamp;
 	return true;
 }
 
@@ -4605,21 +4759,34 @@ static qboolean QWMapList_LoadPackaged(void)
 	const char **names = NULL;
 	int count = 0;
 	char *buffer;
+	double stamp;
 
 	buffer = (char *)COM_LoadMallocFile(QW_MAPLIST_PATH, &path_id);
 	if (!buffer)
 	{
+		if (qw_maplist_state == QW_MAPLIST_LOADED)
+			return true;
 		QWMapList_Fail("unable to load " QW_MAPLIST_PATH);
 		return false;
 	}
+	stamp = QWMapList_SnapshotTime(buffer, 0);
 
 	error[0] = '\0';
 	if (!QWMapList_Parse(buffer, &names, &count, error, sizeof(error)) || count <= 0)
 	{
 		free(names);
 		free(buffer);
+		if (qw_maplist_state == QW_MAPLIST_LOADED)
+			return true;
 		QWMapList_Fail(error[0] ? error : "malformed " QW_MAPLIST_PATH);
 		return false;
+	}
+	if (qw_maplist_state == QW_MAPLIST_LOADED &&
+		(!stamp || !qw_maplist_snapshot_time || stamp <= qw_maplist_snapshot_time))
+	{
+		free(names);
+		free(buffer);
+		return true;
 	}
 
 	QWMapList_FreeCache();
@@ -4628,6 +4795,7 @@ static qboolean QWMapList_LoadPackaged(void)
 	qw_maplist_count = count;
 	QWMapList_SetSourcePath(path_id);
 	qw_maplist_state = QW_MAPLIST_LOADED;
+	qw_maplist_snapshot_time = stamp;
 	return true;
 }
 
@@ -4744,8 +4912,10 @@ static int QWMapList_RemoteNameCompare(const void *a, const void *b)
 {
 	const char * const *name_a = (const char * const *)a;
 	const char * const *name_b = (const char * const *)b;
+	int cmp = q_strcasecmp(*name_a, *name_b);
 
-	return q_strcasecmp(*name_a, *name_b);
+	/* Match the catalog generator's deterministic choice for case aliases. */
+	return cmp ? cmp : strcmp(*name_a, *name_b);
 }
 
 static qboolean QWMapList_HrefToName(const char *href, size_t href_len, char *name, size_t name_size)
@@ -4753,6 +4923,7 @@ static qboolean QWMapList_HrefToName(const char *href, size_t href_len, char *na
 	char scratch[MAX_OSPATH];
 	const char *base;
 	char *cut;
+	char *read, *write;
 
 	if (!href_len || href_len >= sizeof(scratch))
 		return false;
@@ -4763,6 +4934,33 @@ static qboolean QWMapList_HrefToName(const char *href, size_t href_len, char *na
 	cut = strpbrk(scratch, "?#");
 	if (cut)
 		*cut = '\0';
+	/* The directory escapes punctuation such as '+' and '!'. Store real file
+	 * names; URL construction will escape them once when requesting a map. */
+	for (read = write = scratch; *read; ++read)
+	{
+		if (*read == '%')
+		{
+			const char *hex = "0123456789abcdef";
+			const char *hi, *lo;
+			int value;
+			if (!read[1] || !read[2] ||
+				!(hi = strchr(hex, q_tolower(read[1]))) || !(lo = strchr(hex, q_tolower(read[2]))))
+				return false;
+			value = (int)(hi - hex) * 16 + (int)(lo - hex);
+			if (value < 32 || value > 126)
+				return false;
+			*write++ = (char)value;
+			read += 2;
+		}
+		else if (!strncmp(read, "&amp;", 5))
+		{
+			*write++ = '&';
+			read += 4;
+		}
+		else
+			*write++ = *read;
+	}
+	*write = 0;
 
 	if (strchr(scratch, '/') || strchr(scratch, '\\'))
 		return false;
@@ -5114,14 +5312,13 @@ qboolean QWMapList_LoadOnce(void)
 	if (qw_maplist_state == QW_MAPLIST_FAILED)
 		return false;
 
-	if (QWMapList_LoadCache())
-		return true;
-
+	QWMapList_LoadCache();
 	return QWMapList_LoadPackaged();
 }
 
 void QWMapList_Reload(void)
 {
+	QWMapTitles_Invalidate();
 	QWMapList_FreeCache();
 	qw_maplist_state = QW_MAPLIST_UNLOADED;
 	qw_maplist_warned = false;
@@ -5239,6 +5436,12 @@ static void QWMapList_PrintInfo(void)
 	char cache_mtime[64];
 	char last_attempt[64];
 	struct stat st;
+	int i, matched = 0;
+
+	QWMapTitles_LoadOnce();
+	for (i = 0; i < qw_maplist_count; ++i)
+		if (*QWMapTitles_TitleForName(qw_maplist_names[i]))
+			++matched;
 
 	QWMapList_CachePath(cache_path, sizeof(cache_path), QW_MAPLIST_CACHE_FILE);
 	if (stat(cache_path, &st) == 0)
@@ -5261,6 +5464,8 @@ static void QWMapList_PrintInfo(void)
 	Con_Printf("qwmaplist downloads: %s\n", CL_QWMapListDownloadsAvailable() ? "available" : "unavailable");
 	Con_Printf("qwmaplist minchars: %d\n", QW_MAPLIST_MIN_CHARS);
 	Con_Printf("qwmaplist completion cap: %d\n", QW_MAPLIST_COMPLETION_CAP);
+	Con_Printf("qwmaplist titles: %s (%d records, %d current maps with titles)\n",
+		qw_maptitles_json ? QW_MAPTITLES_PATH : "unavailable", qw_maptitles_count, matched);
 }
 
 static void QWMapList_f(void)

@@ -5586,6 +5586,7 @@ static void COM_Game_f (void)
 		if (!isDedicated)
 			Draw_ReloadTextures(true);
 		ExtraMaps_NewGame ();
+		QWMapTitles_Invalidate ();
 		BGM_Stop ();
 		Host_Resetdemos ();
 		DemoList_Rebuild ();

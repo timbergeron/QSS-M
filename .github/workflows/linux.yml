@@ -65,6 +65,12 @@ jobs:
     - name: Build SDL3
       run: sh .github/scripts/build-sdl3-linux.sh "${{ matrix.sdl.version }}" "${{ matrix.sdl.commit }}" "$SDL3_PREFIX"
 
+    - name: Test download map titles and map menu
+      run: |
+        export PKG_CONFIG_PATH="$SDL3_PREFIX/lib/pkgconfig"
+        python3 Misc/stress/test_download_map_titles.py
+        python3 Misc/stress/test_map_categories.py
+
     - name: Verify gnutls
       run: |
         set -eux

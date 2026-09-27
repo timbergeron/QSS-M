@@ -7465,6 +7465,12 @@ typedef struct
 	char name[MAX_QPATH];
 } downloadmaps_recent_t;
 
+typedef struct
+{
+	char name[MAX_QPATH];
+	char title[QW_MAPTITLE_SIZE];
+} downloadmaps_item_t;
+
 static struct
 {
 	menulist_t			list;
@@ -7478,6 +7484,8 @@ static struct
 	double				message_time;
 	char				pending_download[MAX_QPATH];
 	downloadmaps_recent_t *recent_downloads;
+	downloadmaps_item_t *items;
+	unsigned int generation;
 	int*				filtered_indices;
 } downloadmapsmenu;
 
@@ -7572,12 +7580,16 @@ static void M_DownloadMaps_UpdateCompletionState(void)
 static void M_DownloadMaps_Refilter(void)
 {
 	int i;
+	int selected = downloadmapsmenu.list.cursor >= 0 &&
+		downloadmapsmenu.list.cursor < (int)VEC_SIZE(downloadmapsmenu.filtered_indices) ?
+		downloadmapsmenu.filtered_indices[downloadmapsmenu.list.cursor] : -1;
 
 	VEC_CLEAR(downloadmapsmenu.filtered_indices);
+	downloadmapsmenu.list.cursor = -1;
 
 	for (i = 0; i < downloadmapsmenu.mapcount; i++)
 	{
-		const char *name = QWMapList_NameAt(i);
+		const char *name = downloadmapsmenu.items[i].name;
 		char display_name[MAX_QPATH];
 
 		if (!name)
@@ -7586,8 +7598,11 @@ static void M_DownloadMaps_Refilter(void)
 		M_DownloadMaps_DisplayName(name, display_name, sizeof(display_name));
 
 		if (downloadmapsmenu.list.search.len == 0 ||
-			q_strcasestr(display_name, downloadmapsmenu.list.search.text))
+			q_strcasestr(display_name, downloadmapsmenu.list.search.text) ||
+			q_strcasestr(downloadmapsmenu.items[i].title, downloadmapsmenu.list.search.text))
 		{
+			if (i == selected)
+				downloadmapsmenu.list.cursor = (int)VEC_SIZE(downloadmapsmenu.filtered_indices);
 			VEC_PUSH(downloadmapsmenu.filtered_indices, i);
 		}
 	}
@@ -7599,7 +7614,43 @@ static void M_DownloadMaps_Refilter(void)
 
 	if (downloadmapsmenu.list.cursor < 0 && downloadmapsmenu.list.numitems > 0)
 		downloadmapsmenu.list.cursor = 0;
+	if (downloadmapsmenu.list.cursor < 0 ||
+		downloadmapsmenu.filtered_indices[downloadmapsmenu.list.cursor] != selected)
+		downloadmapsmenu.prev_cursor = -2;
 
+	M_List_CenterCursor(&downloadmapsmenu.list);
+}
+
+static void M_DownloadMaps_Rebuild(void)
+{
+	char selected[MAX_QPATH];
+	const char *name = M_DownloadMaps_SelectedName();
+	int i;
+
+	q_strlcpy(selected, name ? name : "", sizeof(selected));
+	VEC_CLEAR(downloadmapsmenu.items);
+	VEC_CLEAR(downloadmapsmenu.filtered_indices);
+	QWMapTitles_LoadOnce();
+	for (i = 0; i < QWMapList_Count(); ++i)
+	{
+		downloadmaps_item_t item;
+		name = QWMapList_NameAt(i);
+		if (!name)
+			continue;
+		q_strlcpy(item.name, name, sizeof(item.name));
+		q_strlcpy(item.title, QWMapTitles_TitleForName(name), sizeof(item.title));
+		VEC_PUSH(downloadmapsmenu.items, item);
+	}
+	downloadmapsmenu.mapcount = (int)VEC_SIZE(downloadmapsmenu.items);
+	downloadmapsmenu.generation = QWMapList_Generation();
+	M_DownloadMaps_Refilter();
+	for (i = 0; i < downloadmapsmenu.list.numitems; ++i)
+		if (!q_strcasecmp(downloadmapsmenu.items[downloadmapsmenu.filtered_indices[i]].name, selected))
+		{
+			downloadmapsmenu.list.cursor = i;
+			break;
+		}
+	downloadmapsmenu.prev_cursor = -2;
 	M_List_CenterCursor(&downloadmapsmenu.list);
 }
 
@@ -7617,16 +7668,15 @@ static void M_DownloadMaps_Init(void)
 	downloadmapsmenu.pending_download[0] = '\0';
 	VEC_CLEAR(downloadmapsmenu.recent_downloads);
 	VEC_CLEAR(downloadmapsmenu.filtered_indices);
+	VEC_CLEAR(downloadmapsmenu.items);
 
 	memset(&downloadmapsmenu.list.search, 0, sizeof(downloadmapsmenu.list.search));
 	downloadmapsmenu.list.search.maxlen = 32;
 
 	M_Ticker_Init(&downloadmapsmenu.ticker);
 
-	if (QWMapList_LoadOnce())
-		downloadmapsmenu.mapcount = QWMapList_Count();
-
-	M_DownloadMaps_Refilter();
+	QWMapList_LoadOnce();
+	M_DownloadMaps_Rebuild();
 
 	if (downloadmapsmenu.list.cursor == -1)
 		downloadmapsmenu.list.cursor = 0;
@@ -7647,6 +7697,54 @@ void M_Menu_DownloadMaps_f(void)
 	m_state = m_downloadmaps;
 	m_entersound = true;
 	M_DownloadMaps_Init();
+}
+
+/* Explicit spacing keeps the remote catalog independent of installed-map widths.
+ * This row owns no catalog pointers and cannot change the download's filename. */
+static void M_DownloadMaps_DrawTitle(int x, int y, int maxwidth, const char *name,
+	const char *title, const char *search, double time, qboolean installed)
+{
+	char combined[MAX_QPATH + QW_MAPTITLE_SIZE + 16];
+	char visible_name[MAX_QPATH];
+	const char *match;
+	int name_len, title_start, length, pixel_offset, total, pass, pos;
+	int name_match = -1, title_match = -1, search_len = (int)strlen(search);
+	float frac;
+	plcolour_t white = CL_PLColours_Parse("0xffffff");
+
+	q_strlcpy(visible_name, name, sizeof(visible_name));
+	if (time == 0.0 && strlen(visible_name) > 12)
+		visible_name[12] = 0;
+	name_len = (int)strlen(visible_name);
+	title_start = q_max(13, name_len + 1);
+	q_snprintf(combined, sizeof(combined), "%-*s%s", title_start, visible_name, title);
+	length = (int)strlen(combined);
+	if (search_len)
+	{
+		if ((match = q_strcasestr(visible_name, search)) != NULL)
+			name_match = (int)(match - visible_name);
+		if ((match = q_strcasestr(title, search)) != NULL)
+			title_match = title_start + (int)(match - title);
+	}
+	total = length + MENU_SCROLL_SEPARATOR_LEN;
+	frac = M_ScrollPixelOffset(length * 8 > maxwidth ? time : 0.0, 30, total * 8, &pixel_offset);
+	glPushMatrix();
+	glTranslatef(-frac, 0, 0);
+	for (pass = 0; pass < (length * 8 > maxwidth ? 2 : 1); ++pass)
+		for (pos = 0; pos < (length * 8 > maxwidth ? total : length); ++pos)
+		{
+			int cx = x - pixel_offset + (pass * total + pos) * 8;
+			int ch = pos < length ? (unsigned char)combined[pos] : M_ScrollSeparatorChar(pos - length, 0);
+			qboolean highlighted = (name_match >= 0 && pos >= name_match && pos < name_match + search_len) ||
+				(title_match >= 0 && pos >= title_match && pos < title_match + search_len);
+			if (cx + 8 <= x || cx >= x + maxwidth)
+				continue;
+			if (installed)
+				M_DrawCharacterRGBA(cx, y, ch, white, highlighted ? 1.0f : 0.5f);
+			else
+				M_DrawCharacter(cx, y, ch | ((pos < name_len ? !highlighted : highlighted) ? 128 : 0));
+		}
+	glPopMatrix();
 }
 
 void M_DownloadMaps_Draw(void)
@@ -7674,18 +7772,9 @@ void M_DownloadMaps_Draw(void)
 	if (!keydown[K_MOUSE1])
 		downloadmapsmenu.scrollbar_grab = false;
 
-	if (downloadmapsmenu.mapcount <= 0 && QWMapList_LoadOnce())
-	{
-		int count = QWMapList_Count();
-		if (count > 0)
-		{
-			downloadmapsmenu.mapcount = count;
-			M_DownloadMaps_Refilter();
-			if (downloadmapsmenu.list.cursor < 0)
-				downloadmapsmenu.list.cursor = 0;
-			M_List_CenterCursor(&downloadmapsmenu.list);
-		}
-	}
+	QWMapList_LoadOnce();
+	if (downloadmapsmenu.generation != QWMapList_Generation())
+		M_DownloadMaps_Rebuild();
 
 	M_DownloadMaps_UpdateCompletionState();
 	selected_name = M_DownloadMaps_SelectedName();
@@ -7730,7 +7819,8 @@ void M_DownloadMaps_Draw(void)
 	{
 		int idx = i + firstvis;
 		int map_idx = downloadmapsmenu.filtered_indices[idx];
-		const char *name = QWMapList_NameAt(map_idx);
+		const char *name = downloadmapsmenu.items[map_idx].name;
+		const char *title = downloadmapsmenu.items[map_idx].title;
 		char display_name[MAX_QPATH];
 		qboolean selected = (idx == downloadmapsmenu.list.cursor);
 		qboolean already_have;
@@ -7744,6 +7834,12 @@ void M_DownloadMaps_Draw(void)
 		if (M_DownloadMaps_NameIsActive(name))
 		{
 			M_DownloadMaps_DrawActiveDownload(x, y + i * 8, (cols - 2) * 8, display_name);
+		}
+		else if (*title)
+		{
+			M_DownloadMaps_DrawTitle(x, y + i * 8, (cols - 2) * 8,
+				display_name, title, downloadmapsmenu.list.search.text,
+				selected ? downloadmapsmenu.ticker.scroll_time : 0.0, already_have);
 		}
 		else if (already_have)
 		{
@@ -7814,7 +7910,7 @@ void M_DownloadMaps_Draw(void)
 qboolean M_DownloadMaps_Match(int index, char initial)
 {
 	int map_idx = downloadmapsmenu.filtered_indices[index];
-	const char *name = QWMapList_NameAt(map_idx);
+	const char *name = downloadmapsmenu.items[map_idx].name;
 	char display_name[MAX_QPATH];
 
 	if (!name)
@@ -7831,7 +7927,7 @@ static const char *M_DownloadMaps_SelectedName(void)
 		downloadmapsmenu.list.cursor >= downloadmapsmenu.list.numitems)
 		return NULL;
 
-	return QWMapList_NameAt(downloadmapsmenu.filtered_indices[downloadmapsmenu.list.cursor]);
+	return downloadmapsmenu.items[downloadmapsmenu.filtered_indices[downloadmapsmenu.list.cursor]].name;
 }
 
 void M_DownloadMaps_Key(int key)

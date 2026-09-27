@@ -9,6 +9,11 @@ on:
     # upstream to be worth a daily notification.
     - cron: "23 16 1 * *"
   workflow_dispatch:
+    inputs:
+      reextract_maps:
+        description: Rebuild all map titles instead of reusing unchanged BSP metadata
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -30,6 +35,9 @@ jobs:
 
       - name: Run unit tests
         run: node --test .github/scripts/*.test.js
+
+      - name: Validate bundled map catalog
+        run: node .github/scripts/update-map-catalog.js --validate
 
       - name: Validate controller database snapshot
         shell: bash
@@ -198,3 +206,80 @@ jobs:
               updates,
               notifyUser: process.env.NOTIFY_USER,
             });
+
+  map-catalog:
+    name: Prepare map title catalog update
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 16 1 * *'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    concurrency:
+      group: map-catalog-scan
+      cancel-in-progress: false
+    outputs:
+      changed: ${{ steps.generate.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+      - name: Scan in ten-map batches, retaining JSON only
+        id: generate
+        env:
+          REEXTRACT_MAPS: ${{ inputs.reextract_maps || false }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "$REEXTRACT_MAPS" = "true" ]; then
+            args+=(--reextract-all)
+          fi
+          node .github/scripts/update-map-catalog.js \
+            --output "$RUNNER_TEMP/map-catalog" --max-minutes 135 "${args[@]}"
+          node - <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const updates = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, "map-catalog/updates.json")));
+          console.log(`changed=${updates.length > 0}`);
+          NODE
+      - name: Upload candidate, report and resumable checkpoint
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: map-catalog-candidate
+          path: ${{ runner.temp }}/map-catalog/
+          include-hidden-files: true
+          retention-days: 90
+          if-no-files-found: warn
+
+  map-catalog-notify:
+    name: Notify map catalog changes
+    needs: map-catalog
+    if: needs.map-catalog.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    concurrency:
+      group: dependency-update-watch
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: map-catalog-candidate
+          path: ${{ runner.temp }}/map-catalog/
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          NOTIFY_USER: ${{ vars.DEPENDENCY_NOTIFY_USER || github.repository_owner }}
+        with:
+          retries: 3
+          script: |
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const notify = require("./.github/scripts/notify-dependency-updates.js");
+            const updates = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, "map-catalog/updates.json")));
+            await notify({ github, context, core, updates, notifyUser: process.env.NOTIFY_USER });

@@ -4776,6 +4776,32 @@ static void DL_RecordChunkRTT(unsigned int offset)
 	}
 }
 
+static qboolean CL_EncodeDownloadPath(const char *path, char *encoded, size_t size)
+{
+	const unsigned char *p;
+	size_t length = 0;
+	const char *hex = "0123456789ABCDEF";
+	for (p = (const unsigned char *)path; *p; ++p)
+	{
+		qboolean plain = (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+			(*p >= '0' && *p <= '9') || strchr("-._~/", *p);
+		if (length + (plain ? 1 : 3) >= size)
+			return false;
+		if (plain)
+			encoded[length++] = *p;
+		else
+		{
+			encoded[length++] = '%';
+			encoded[length++] = hex[*p >> 4];
+			encoded[length++] = hex[*p & 15];
+		}
+	}
+	if (length >= size)
+		return false;
+	encoded[length] = 0;
+	return true;
+}
+
 static qboolean CL_BuildDownloadUrl(const char* url, const char* filename, qboolean is_skybox, char* full_url, size_t full_url_size)
 {
 	int full_url_len = -1;
@@ -4850,10 +4876,14 @@ static qboolean CL_BuildDownloadUrl(const char* url, const char* filename, qbool
 	}
 	else if (strstr(url, "maps.quakeworld.nu"))
 	{
+		char encoded[MAX_URLPATH];
+		if (!CL_EncodeDownloadPath(!q_strcasecmp(COM_FileGetExtension(filename), "loc") ? filename : skipped_path,
+			encoded, sizeof(encoded)))
+			return false;
 		if (!q_strcasecmp(COM_FileGetExtension(filename), "loc"))
-			full_url_len = q_snprintf(full_url, full_url_size, "https://%s/%s", "maps.quakeworld.nu", filename);
+			full_url_len = q_snprintf(full_url, full_url_size, "https://%s/%s", "maps.quakeworld.nu", encoded);
 		else
-			full_url_len = q_snprintf(full_url, full_url_size, "https://%s/%s", "maps.quakeworld.nu/all", skipped_path);
+			full_url_len = q_snprintf(full_url, full_url_size, "https://%s/%s", "maps.quakeworld.nu/all", encoded);
 	}
 	else if (strstr(url, "://"))
 		full_url_len = q_snprintf(full_url, full_url_size, "%s%s%s",

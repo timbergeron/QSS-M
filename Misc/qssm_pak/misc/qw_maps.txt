@@ -1,6 +1,7 @@
-# qssm-qw-maplist
+# qssm-qw-maplist-v1
 # source=https://maps.quakeworld.nu/all/
-# count=6620
+# refreshed=1790476016
+# count=6644
 07.bsp
 08.bsp
 1-none.bsp
@@ -2666,6 +2667,7 @@ go_die3.bsp
 goddamn.bsp
 godsjt.bsp
 goldtowr.bsp
+golem.bsp
 gomdm2.bsp
 gomdm2v2.bsp
 gomdm3.bsp
@@ -4478,6 +4480,29 @@ q1tm2_remnent.bsp
 q1tm3_lev.bsp
 q1tm_speedy.bsp
 q2dm1.bsp
+q30__start.bsp
+q30_abattoir.bsp
+q30_anfipit.bsp
+q30_bloodcat.bsp
+q30_boombox.bsp
+q30_chew.bsp
+q30_citadel.bsp
+q30_colossus.bsp
+q30_defer.bsp
+q30_emeto.bsp
+q30_end.bsp
+q30_garde1.bsp
+q30_garde2.bsp
+q30_golem.bsp
+q30_junction.bsp
+q30_magenta.bsp
+q30_malignant.bsp
+q30_overflow.bsp
+q30_quetzalli.bsp
+q30_rebound.bsp
+q30_torment.bsp
+q30_violacea.bsp
+q30_ward.bsp
 q3_tim1.bsp
 q3dm6ish.bsp
 q3dm6qw.bsp

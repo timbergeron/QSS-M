@@ -93,6 +93,11 @@ const char *QWMapList_StateName (void);
 const char *QWMapList_Path (void);
 const char *QWMapList_NameAt (int index);
 int QWMapList_Count (void);
+unsigned int QWMapList_Generation (void);
+#define QW_MAPTITLE_SIZE 128
+void QWMapTitles_LoadOnce (void);
+void QWMapTitles_Invalidate (void);
+const char *QWMapTitles_TitleForName (const char *name);
 int QWMapList_MinChars (void);
 int QWMapList_CompletionCap (void);
 
