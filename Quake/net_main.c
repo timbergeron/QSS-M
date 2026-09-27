@@ -1422,74 +1422,78 @@ qboolean NET_CanSendMessage (qsocket_t *sock)
 }
 
 
+// Return the number of undelivered messages, including connections lost during the wait.
 int NET_SendToAll (sizebuf_t *data, double blocktime)
 {
-	double		start;
-	int			i;
-	int			count = 0;
-	qboolean	msg_init[MAX_SCOREBOARD];	/* did we write the message to the client's connection	*/
-	qboolean	msg_sent[MAX_SCOREBOARD];	/* did the msg arrive its destination (canSend state).	*/
+	double start;
+	int i, count = 0, failed = 0;
+	qboolean msg_init[MAX_SCOREBOARD];
+	qboolean msg_sent[MAX_SCOREBOARD];
+	qsocket_t *connections[MAX_SCOREBOARD];
 
 	for (i = 0, host_client = svs.clients; i < svs.maxclients; i++, host_client++)
 	{
-		/*
-		if (!host_client->netconnection)
+		connections[i] = host_client->netconnection;
+		msg_init[i] = msg_sent[i] = true;
+		if (!connections[i] || !host_client->active)
 			continue;
-		if (host_client->active)
-		*/
-		if (host_client->netconnection && host_client->active)
+		if (IS_LOOP_DRIVER(connections[i]->driver))
 		{
-			if (IS_LOOP_DRIVER(host_client->netconnection->driver))
-			{
-				NET_SendMessage(host_client->netconnection, data);
-				msg_init[i] = true;
-				msg_sent[i] = true;
-				continue;
-			}
-			count++;
-			msg_init[i] = false;
-			msg_sent[i] = false;
+			if (NET_SendMessage (connections[i], data) < 0)
+				failed++;
+			continue;
 		}
-		else
-		{
-			msg_init[i] = true;
-			msg_sent[i] = true;
-		}
+		count++;
+		msg_init[i] = msg_sent[i] = false;
 	}
 
-	start = Sys_DoubleTime();
+	start = Sys_DoubleTime ();
 	while (count)
 	{
+		double remaining;
 		count = 0;
-		NET_GetServerMessages(NULL);	//process acks at least so we can send our reliable... FIXME: don't accept reliables.
+		SetNetTime ();
+		// Progress transport ACKs/retransmits (including ICE), without parsing gameplay messages.
+		NET_GetServerMessages (NULL);
 
 		for (i = 0, host_client = svs.clients; i < svs.maxclients; i++, host_client++)
 		{
-			if (! msg_init[i])
+			if (msg_sent[i])
+				continue;
+			// The receive pump can drop a timed-out client. Do not wait five
+			// seconds on its cleared socket, or send to a replacement connection.
+			if (!host_client->active || host_client->netconnection != connections[i] ||
+				connections[i]->disconnected)
 			{
-				if (NET_CanSendMessage (host_client->netconnection))
+				msg_sent[i] = true;
+				failed++;
+				continue;
+			}
+			if (!msg_init[i])
+			{
+				if (NET_CanSendMessage (connections[i]))
 				{
+					if (NET_SendMessage (connections[i], data) < 0)
+					{
+						msg_sent[i] = true;
+						failed++;
+						continue;
+					}
 					msg_init[i] = true;
-					NET_SendMessage(host_client->netconnection, data);
 				}
-				count++;
-				continue;
 			}
-
-			if (! msg_sent[i])
-			{
-				if (NET_CanSendMessage (host_client->netconnection))
-				{
-					msg_sent[i] = true;
-				}
+			else if (NET_CanSendMessage (connections[i]))
+				msg_sent[i] = true;
+			if (!msg_sent[i])
 				count++;
-				continue;
-			}
 		}
-		if ((Sys_DoubleTime() - start) > blocktime)
+		remaining = blocktime - (Sys_DoubleTime () - start);
+		if (!count || remaining <= 0)
 			break;
+		// Yield between ACK polls, bounded by the original delivery deadline.
+		SDL_DelayNS ((Uint64)ceil (q_min (remaining, 0.001) * 1000000000.0));
 	}
-	return count;
+	return count + failed;
 }
 
 void IP_f (void) // woods #extip

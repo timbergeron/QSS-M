@@ -7,8 +7,7 @@ Quake/gl_rmain.c against random BSP trees, and checks that:
 
 * SV_FatPVS always equals a from-scratch merge of every non-solid leaf within
   8 units (all bits set when there are none), skips the merge when the same
-  leafs come back, recomputes after a caller merges more leafs into the buffer
-  (skyroom), after the model generation changes (map reload into the same
+  leafs come back, keeps cached bases intact while merging skyroom visibility into scratch, after the model generation changes (map reload into the same
   memory), for a different model, and when too many leafs are near to key;
 * Mod_PointInLeafMargin lands where Mod_PointInLeaf does and reports the
   nearest tested plane, and R_EntityPointInLeaf returns exactly that leaf on
@@ -36,10 +35,7 @@ def function(text, declaration, after=0):
 
 
 key = sv_main.index("#define FATPVS_MAX_KEY_LEAFS")
-fatpvs = sv_main[key:sv_main.index("static void SV_AddToFatPVS", key)]
-fatpvs += function(sv_main, "static void SV_AddToFatPVS (", key)
-fatpvs += "\n" + function(sv_main, "static int SV_FindFatPVSLeafs (", key)
-fatpvs += "\n" + function(sv_main, "byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel) //", key)
+fatpvs = sv_main[key:sv_main.index("/*\n=============\nSV_EdictInPVS", key)]
 margin = function(gl_model, "mleaf_t *Mod_PointInLeafMargin (")
 slack = next(l for l in gl_rmain.splitlines() if l.startswith("#define R_POINTINLEAF_SLACK"))
 entleaf = function(gl_rmain, "static mleaf_t *R_EntityPointInLeaf (")
@@ -72,16 +68,20 @@ typedef struct qmodel_s { mnode_t *nodes; int numnodes; struct { int firstclipno
 typedef struct entity_s { qmodel_t *model; qmodel_t *contentsmodel; int contentsgeneration; vec3_t contentspos; float contentsradius; mleaf_t *contentsleaf; } entity_t;
 static void Sys_Error (const char *e, ...) { printf("FAIL: Sys_Error %s\n", e); exit(1); }
 int mod_generation;
-static int	fatbytes;
-static byte	*fatpvs;
-static int	fatpvs_capacity;
-static qboolean fatpvs_any;
+#define MAX_SCOREBOARD 16
+#define VectorMA(a,s,b,c) do{for(int k=0;k<3;k++) (c)[k]=(a)[k]+(s)*(b)[k];}while(0)
+typedef struct { int unused; } client_t;
+static client_t clients[MAX_SCOREBOARD];
+static struct { client_t *clients; } svs = {clients};
+static struct { int skyroom_pos_known; float skyroom_pos[4]; } sv;
+#define fatbytes fatpvs_cache.bytes
 /* vis rows: one random row per leaf id, per "map load" */
 #define MAXLEAFS 1024
 static byte rows[MAXLEAFS][MAXLEAFS / 8 + 8];
 static int leafpvs_calls;
 static byte *Mod_LeafPVS (mleaf_t *leaf, qmodel_t *model) { (void)model; leafpvs_calls++; return rows[leaf->id]; }
 '''
+source += "\n#define CLIENT_PVS(slot,org,model) SV_ClientFatPVS(&clients[slot],org,model)\n"
 source += fatpvs + "\n" + margin + "\n" + slack + "\n" + entleaf + "\n"
 source += r'''
 static unsigned rng = 12345;
@@ -230,8 +230,15 @@ int main (void)
 		if (t % 997 == 0)
 		{	/* a caller merges the skyroom's leafs into the buffer */
 			float sky[3] = {frand(-2500, 2500), frand(-2500, 2500), frand(-2500, 2500)};
-			SV_AddToFatPVS(sky, world.nodes, &world);
-			CHECK(fat_matches(org, &world), "a merged buffer must not be reused");
+			byte scratch[MAXLEAFS/8+8], base[MAXLEAFS/8+8];
+			memcpy(base, SV_FatPVS(org,&world), fatbytes);
+			memcpy(scratch,base,fatbytes);
+			SV_AddToFatPVS(sky, world.nodes, &world, scratch, fatbytes);
+			ref_fatpvs(org,&world); ref_add(sky,world.nodes);
+			CHECK(!memcmp(scratch,ref,fatbytes), "skyroom scratch must equal base union sky");
+			before=leafpvs_calls;
+			CHECK(!memcmp(SV_FatPVS(org,&world),base,fatbytes), "skyroom must not mutate base");
+			CHECK(leafpvs_calls==before,"skyroom union must preserve base cache");
 		}
 		if (t % 1999 == 0)
 		{	/* map reload into the same memory: same pointers, new vis data */
@@ -273,6 +280,42 @@ int main (void)
 		i = leafpvs_calls;
 		CHECK(fat_matches(org, &fan), "an overflowing leaf set must still be exact");
 		CHECK(leafpvs_calls > i, "an overflowing leaf set is never reused");
+	}
+
+	/* Two stationary clients must retain their own leaf-set results while the
+	   renderer/QC uses the public cache. Reusing one global entry misses here. */
+	{
+		qmodel_t split;
+		mplane_t plane = {{1,0,0},0,0};
+		mnode_t left = {CONTENTS_EMPTY,NULL,{NULL,NULL},1};
+		mnode_t right = {CONTENTS_EMPTY,NULL,{NULL,NULL},2};
+		mnode_t root = {0,&plane,{&left,&right},0};
+		vec3_t views[2] = {{32,0,0},{-32,0,0}}, render = {0,0,0};
+		memset(&split,0,sizeof(split)); split.nodes=&root; split.numleafs=32;
+		mod_generation++; leafpvs_calls=0;
+		for (i=0;i<100;i++) {
+			CHECK(!memcmp(CLIENT_PVS(0,views[0],&split),ref_fatpvs(views[0],&split),4),"client A visibility");
+			CHECK(!memcmp(CLIENT_PVS(1,views[1],&split),ref_fatpvs(views[1],&split),4),"client B visibility");
+			SV_FatPVS(render,&split);
+		}
+		CHECK(leafpvs_calls==4,"alternating clients and renderer must each retain a cache");
+		/* Exercise the actual snapshot helper with moving skyroom and QC queries. */
+		sv.skyroom_pos_known=1; sv.skyroom_pos[0]=-32;
+		for (i=0;i<10;i++) {
+			byte *got=CLIENT_PVS(0,views[0],&split);
+			ref_fatpvs(views[0],&split);ref_add(views[1],split.nodes);
+			CHECK(!memcmp(got,ref,4),"snapshot skyroom union");
+			SV_FatPVS(render,&split);
+			CHECK(!memcmp(got,ref,4),"QC visibility query must not corrupt snapshot");
+		}
+		sv.skyroom_pos_known=0;i=leafpvs_calls;
+		CHECK(!memcmp(CLIENT_PVS(0,views[0],&split),ref_fatpvs(views[0],&split),4),"skyroom never contaminates base");
+		CHECK(i==leafpvs_calls,"removing skyroom preserves base hit");
+		memset(clients,0,sizeof(clients));
+		CHECK(!memcmp(CLIENT_PVS(0,views[1],&split),ref_fatpvs(views[1],&split),4),"reused client slot changes view");
+		fill_rows();mod_generation++;
+		CHECK(!memcmp(CLIENT_PVS(1,views[1],&split),ref_fatpvs(views[1],&split),4),"client cache reload");
+
 	}
 
 	/* ---- view-contents leafs ---- */
@@ -339,6 +382,6 @@ with tempfile.TemporaryDirectory(prefix="qssm-viewcache-") as tmp:
     if Path(cc[0]).stem.lower() == "cl":
         command = [*cc, "/nologo", "/W3", "/O2", "test.c", f"/Fe:{binary}"]
     else:
-        command = [*cc, "-std=c99", "-Wall", "-Wextra", "-O2", "test.c", "-o", str(binary), "-lm"]
+        command = [*cc, "-std=c99", "-Wall", "-Wextra", "-O2", "-fsanitize=address,undefined", "test.c", "-o", str(binary), "-lm"]
     subprocess.run(command, cwd=work, check=True)
     subprocess.run([str(binary)], check=True)

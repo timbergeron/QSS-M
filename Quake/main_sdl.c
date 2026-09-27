@@ -32,12 +32,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // On Windows this renames main() to SDL_main and supplies the WinMain entry point.
 #include <SDL3/SDL_main.h>
 #include <stdio.h>
-#if defined(__linux__) || defined(__APPLE__) // woods #idlesleep
-#include <sys/select.h>
-#include <sys/time.h>
-#endif
-
-extern cvar_t sv_idlesleep; // woods #idlespeep
 
 void Host_Reconnect_Con_f (void);
 
@@ -150,41 +144,15 @@ int QSSM_Main(int argc, char *argv[])
 				if (Sys_HasDedicatedQuitRequest ())
 					Sys_Quit ();
 
-				int i;
-				qboolean hasClients = false;
-#if defined(__linux__) || defined(__APPLE__)
-				struct timeval timeout = { 0, 0 };
-#endif
+				double remaining = q_min (sys_ticrate.value - time, 0.05);
 
-				if (sv.active) // woods #idlesleep -- sleep longer if server is empty
-				{
-					for (i = 0; i < svs.maxclients; i++)
-					{
-						if (svs.clients[i].active ||
-							(svs.clients[i].netconnection != NULL) ||  // Has an active network connection
-							svs.clients[i].sendsignon != PRESPAWN_DONE)  // Is in the process of connecting
-						{
-							hasClients = true;
-							break;
-						}
-					}
-
-					if (!hasClients && sv_idlesleep.value > 0)
-					{
-#ifdef _WIN32
-						SDL_Delay(CLAMP(1, (int)sv_idlesleep.value, 50));
-#else
-						int delay_ms = CLAMP(1, (int)sv_idlesleep.value, 50);
-						timeout.tv_sec = 0;
-						timeout.tv_usec = delay_ms * 1000;
-						select(0, NULL, NULL, NULL, &timeout);
-#endif
-					}
-					else
-						SDL_Delay(1);
-				}
+				// Sleep most of the interval at once; leave a short precise tail
+				// for scheduler slop instead of polling every millisecond throughout.
+				// Long ticks still check shutdown between chunks of at most 50 ms.
+				if (remaining > 0.002)
+					SDL_DelayNS ((Uint64)ceil ((remaining - 0.001) * 1000000000.0));
 				else
-					SDL_Delay(1);
+					SDL_DelayPrecise ((Uint64)ceil (remaining * 1000000000.0));
 
 				if (Sys_HasDedicatedQuitRequest ())
 					Sys_Quit ();

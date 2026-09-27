@@ -107,7 +107,6 @@ static char	localmodels[MAX_MODELS][8];	// inline model names for precache
 static qboolean sv_reclaiming_names;	// woods #dupnames - recursion guard
 
 cvar_t	sv_defaultmap = {"sv_defaultmap","start", CVAR_ARCHIVE}; // woods #mapchangeprotect (R00k) 
-cvar_t  sv_idlesleep = {"sv_idlesleep", "8", CVAR_ARCHIVE}; // woods #idlesleep (ezquake)
 cvar_t	sv_mapcrc = {"sv_mapcrc", "0", CVAR_ARCHIVE|CVAR_SERVERINFO}; // woods #mapcrc
 cvar_t	sv_nopunchangle = {"sv_nopunchangle", "0"};
 
@@ -1507,7 +1506,7 @@ void SV_BuildEntityState(client_t *client, edict_t *ent, entity_state_t *state)
 }
 
 byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
-static void SV_AddToFatPVS (vec3_t org, mnode_t *node, qmodel_t *worldmodel);
+static byte *SV_ClientFatPVS (client_t *client, vec3_t org, qmodel_t *worldmodel);
 static void SVFTE_BuildSnapshotForClient (client_t *client)
 {
 	unsigned int	e, i;
@@ -1529,12 +1528,7 @@ static void SVFTE_BuildSnapshotForClient (client_t *client)
 
 // find the client's PVS
 	VectorAdd (clent->v.origin, clent->v.view_ofs, org);
-	pvs = SV_FatPVS (org, qcvm->worldmodel);
-	if (sv.skyroom_pos_known)
-	{
-		VectorMA(sv.skyroom_pos, sv.skyroom_pos[3], org, org);
-		SV_AddToFatPVS (org, qcvm->worldmodel->nodes, qcvm->worldmodel); //spike -- allow _skyroom term to punch a hole through the server's pvs. FIXME: no paralax considered here.
-	}
+	pvs = SV_ClientFatPVS (client, org, qcvm->worldmodel);
 
 	if (maxentities > (unsigned int)qcvm->num_edicts)
 		maxentities = (unsigned int)qcvm->num_edicts;
@@ -1973,7 +1967,6 @@ void SV_Init (void)
 	Cvar_RegisterVariable (&sv_map_rotation); // woods #maprotation
 	Cvar_RegisterVariable (&sv_defaultmap); // woods #mapchangeprotect
 	Cvar_SetCompletion (&sv_defaultmap, &Extralevels_Completion_f); // woods #iwtabcomplete
-	Cvar_RegisterVariable (&sv_idlesleep); // woods #idlesleep
 	Cvar_RegisterVariable (&sv_mapcrc); // Map CRC handshake feature
 	Cvar_RegisterVariable (&sv_nopunchangle);
 
@@ -3060,12 +3053,6 @@ crosses a waterline.
 =============================================================================
 */
 
-static int	fatbytes;
-static byte	*fatpvs;
-static int	fatpvs_capacity;
-static qboolean fatpvs_any;
-
-
 void SV_SetupSkyRoom(char *value)
 {
 	sv.skyroom_pos_known = true;
@@ -3082,54 +3069,54 @@ void SV_SetupSkyRoom(char *value)
 }
 
 
-/*
-SV_FatPVS remembers which leafs its buffer holds. The client asks for the view's
-fat PVS every frame and the server once a tick for nearly the same point, and on
-big BSP2 maps decompressing and merging each leaf's row costs more than finding
-the leafs, so when the same leafs come back the buffer is returned as it is.
-*/
+// Slot-owned storage survives client_t resets without leaking allocations.
+// Model generation and leaf membership determine validity, including slot reuse.
 #define FATPVS_MAX_KEY_LEAFS 64
-static mleaf_t	*fatpvs_keyleafs[FATPVS_MAX_KEY_LEAFS];
-static int		fatpvs_numkeyleafs;
-static qmodel_t	*fatpvs_keymodel;
-static int		fatpvs_keygeneration;
-static qboolean	fatpvs_keyvalid;
-
-static void SV_AddToFatPVS (vec3_t org, mnode_t *node, qmodel_t *worldmodel) //johnfitz -- added worldmodel as a parameter
+typedef struct
 {
-	int		i;
-	byte	*pvs;
-	mplane_t	*plane;
-	float	d;
+	byte *pvs;
+	int capacity;
+	int bytes;
+	mleaf_t *keyleafs[FATPVS_MAX_KEY_LEAFS];
+	int numkeyleafs;
+	qmodel_t *keymodel;
+	int keygeneration;
+	qboolean keyvalid;
+} fatpvs_cache_t;
 
-	fatpvs_keyvalid = false;	// the buffer no longer matches its key
+static fatpvs_cache_t fatpvs_cache; // renderer and general QC visibility queries
+static fatpvs_cache_t client_fatpvs[MAX_SCOREBOARD];
+static byte *snapshot_pvs;
+static int snapshot_pvs_capacity;
+
+static qboolean SV_AddToFatPVS (vec3_t org, mnode_t *node, qmodel_t *worldmodel, byte *out, int bytes)
+{
+	qboolean any = false;
 	while (1)
 	{
-	// if this is a leaf, accumulate the pvs bits
+		mplane_t *plane;
+		float d;
 		if (node->contents < 0)
 		{
 			if (node->contents != CONTENTS_SOLID)
 			{
-				fatpvs_any = true;
-				pvs = Mod_LeafPVS ( (mleaf_t *)node, worldmodel); //johnfitz -- worldmodel as a parameter
-				for (i = 0; i < fatbytes - 3; i += 4)
-					*(uint32_t*)&fatpvs[i] |= *(uint32_t*)&pvs[i];
+				int i;
+				byte *pvs = Mod_LeafPVS ((mleaf_t *)node, worldmodel);
+				for (i = 0; i < bytes - 3; i += 4)
+					*(uint32_t *)&out[i] |= *(uint32_t *)&pvs[i];
+				any = true;
 			}
-			return;
+			return any;
 		}
-
 		plane = node->plane;
-		if (plane->type < 3)
-			d = org[plane->type] - plane->dist;
-		else
-			d = DotProduct (org, plane->normal) - plane->dist;
+		d = plane->type < 3 ? org[plane->type] - plane->dist : DotProduct (org, plane->normal) - plane->dist;
 		if (d > 8)
 			node = node->children[0];
 		else if (d < -8)
 			node = node->children[1];
 		else
-		{	// go down both
-			SV_AddToFatPVS (org, node->children[0], worldmodel); //johnfitz -- worldmodel as a parameter
+		{
+			any |= SV_AddToFatPVS (org, node->children[0], worldmodel, out, bytes);
 			node = node->children[1];
 		}
 	}
@@ -3188,54 +3175,83 @@ Calculates a PVS that is the inclusive or of all leafs within 8 pixels of the
 given point.
 =============
 */
-byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel) //johnfitz -- added worldmodel as a parameter
+static byte *SV_FatPVSForCache (fatpvs_cache_t *cache, vec3_t org, qmodel_t *worldmodel)
 {
-	mleaf_t	*leafs[FATPVS_MAX_KEY_LEAFS];
-	int		i, numleafs;
+	mleaf_t *leafs[FATPVS_MAX_KEY_LEAFS];
+	int i, numleafs;
+	qboolean any;
 
-	fatbytes = (worldmodel->numleafs + 31) / 8;
-	if (fatpvs == NULL || fatbytes > fatpvs_capacity)
+	cache->bytes = (worldmodel->numleafs + 31) / 8;
+	if (!cache->pvs || cache->bytes > cache->capacity)
 	{
-		fatpvs_capacity = fatbytes;
-		fatpvs = (byte *) realloc (fatpvs, fatpvs_capacity);
-		if (!fatpvs)
-			Sys_Error ("SV_FatPVS: realloc() failed on %d bytes", fatpvs_capacity);
-		fatpvs_keyvalid = false;
+		cache->capacity = cache->bytes;
+		cache->pvs = (byte *) realloc (cache->pvs, cache->capacity);
+		if (!cache->pvs)
+			Sys_Error ("SV_FatPVS: realloc() failed on %d bytes", cache->capacity);
+		cache->keyvalid = false;
 	}
 
 	numleafs = SV_FindFatPVSLeafs (org, worldmodel->nodes, leafs, 0);
-	if (fatpvs_keyvalid && numleafs >= 0 && numleafs == fatpvs_numkeyleafs &&
-		worldmodel == fatpvs_keymodel && mod_generation == fatpvs_keygeneration &&
-		!memcmp (leafs, fatpvs_keyleafs, numleafs * sizeof(leafs[0])))
-		return fatpvs;
+	if (cache->keyvalid && numleafs >= 0 && numleafs == cache->numkeyleafs &&
+		worldmodel == cache->keymodel && mod_generation == cache->keygeneration &&
+		!memcmp (leafs, cache->keyleafs, numleafs * sizeof(leafs[0])))
+		return cache->pvs;
 
-	Q_memset (fatpvs, 0, fatbytes);
-	fatpvs_any = false;
+	memset (cache->pvs, 0, cache->bytes);
 	if (numleafs >= 0)
 	{
 		for (i = 0; i < numleafs; i++)
 		{
 			byte *pvs = Mod_LeafPVS (leafs[i], worldmodel);
 			int j;
-			for (j = 0; j < fatbytes - 3; j += 4)
-				*(uint32_t*)&fatpvs[j] |= *(uint32_t*)&pvs[j];
+			for (j = 0; j < cache->bytes - 3; j += 4)
+				*(uint32_t *)&cache->pvs[j] |= *(uint32_t *)&pvs[j];
 		}
-		fatpvs_any = numleafs > 0;
+		any = numleafs > 0;
 	}
 	else
-		SV_AddToFatPVS (org, worldmodel->nodes, worldmodel); //johnfitz -- worldmodel as a parameter
-	if (fatpvs_any == false)
-		memset(fatpvs, 0xff, fatbytes);
+		any = SV_AddToFatPVS (org, worldmodel->nodes, worldmodel, cache->pvs, cache->bytes);
+	if (!any)
+		memset (cache->pvs, 0xff, cache->bytes);
 
-	fatpvs_keyvalid = numleafs >= 0;
-	if (fatpvs_keyvalid)
+	cache->keyvalid = numleafs >= 0;
+	if (cache->keyvalid)
 	{
-		memcpy (fatpvs_keyleafs, leafs, numleafs * sizeof(leafs[0]));
-		fatpvs_numkeyleafs = numleafs;
-		fatpvs_keymodel = worldmodel;
-		fatpvs_keygeneration = mod_generation;
+		memcpy (cache->keyleafs, leafs, numleafs * sizeof(leafs[0]));
+		cache->numkeyleafs = numleafs;
+		cache->keymodel = worldmodel;
+		cache->keygeneration = mod_generation;
 	}
-	return fatpvs;
+	return cache->pvs;
+}
+
+byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel)
+{
+	return SV_FatPVSForCache (&fatpvs_cache, org, worldmodel);
+}
+
+static byte *SV_ClientFatPVS (client_t *client, vec3_t org, qmodel_t *worldmodel)
+{
+	fatpvs_cache_t *cache = &client_fatpvs[client - svs.clients];
+	byte *pvs = SV_FatPVSForCache (cache, org, worldmodel);
+	vec3_t skyorg;
+
+	if (!sv.skyroom_pos_known)
+		return pvs;
+
+	// The union must not change the cached base, or a previous skyroom view
+	// can leak into subsequent snapshots. QC uses the separate public cache.
+	if (snapshot_pvs_capacity < cache->bytes)
+	{
+		snapshot_pvs_capacity = cache->bytes;
+		snapshot_pvs = (byte *) realloc (snapshot_pvs, snapshot_pvs_capacity);
+		if (!snapshot_pvs)
+			Sys_Error ("SV_ClientFatPVS: realloc() failed on %d bytes", snapshot_pvs_capacity);
+	}
+	memcpy (snapshot_pvs, pvs, cache->bytes);
+	VectorMA (sv.skyroom_pos, sv.skyroom_pos[3], org, skyorg);
+	SV_AddToFatPVS (skyorg, worldmodel->nodes, worldmodel, snapshot_pvs, cache->bytes);
+	return snapshot_pvs;
 }
 
 /*
@@ -3303,12 +3319,7 @@ void SV_WriteEntitiesToClient (client_t *client, sizebuf_t *msg)
 
 // find the client's PVS
 	VectorAdd (clent->v.origin, clent->v.view_ofs, org);
-	pvs = SV_FatPVS (org, qcvm->worldmodel);
-	if (sv.skyroom_pos_known)
-	{
-		VectorMA(sv.skyroom_pos, sv.skyroom_pos[3], org, org);
-		SV_AddToFatPVS (org, qcvm->worldmodel->nodes, qcvm->worldmodel); //spike -- allow _skyroom term to punch a hole through the server's pvs. FIXME: no paralax considered here.
-	}
+	pvs = SV_ClientFatPVS (client, org, qcvm->worldmodel);
 
 // send over all entities (excpet the client) that touch the pvs
 	ent = NEXT_EDICT(qcvm->edicts);

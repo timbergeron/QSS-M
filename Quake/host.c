@@ -1483,7 +1483,7 @@ void Host_ShutdownServer(qboolean crash)
 	MSG_WriteByte(&buf, svc_disconnect);
 	count = NET_SendToAll(&buf, 5.0);
 	if (count)
-		Con_Printf("Host_ShutdownServer: NET_SendToAll failed for %u clients\n", count);
+		Con_Printf("Host_ShutdownServer: disconnect message undelivered to %u clients\n", count);
 
 	PR_SwitchQCVM(&sv.qcvm);
 	for (i = 0, host_client = svs.clients; i < svs.maxclients; i++, host_client++)
@@ -2555,7 +2555,7 @@ void _Host_Frame (double time)
 	// the pump can use the full host frame for parsing instead of yielding ~10ms
 	// to SCR_UpdateScreen per iteration. Last rendered frame stays on screen
 	// until the seek completes, then the next host frame draws the result.
-	if (!CL_DemoSeekActive ())
+	if (!isDedicated && !CL_DemoSeekActive ())
 	{
 		SCR_UpdateScreen ();
 		CL_RunParticles (); //johnfitz -- seperated from rendering
@@ -2566,23 +2566,26 @@ void _Host_Frame (double time)
 		time2 = Sys_DoubleTime ();
 
 // update audio
-	BGM_Update();	// adds music raw samples and/or advances midi driver
-	if (cl.listener_defined)
+	if (!isDedicated)
 	{
-		cl.listener_defined = false;
-		S_Update (cl.listener_origin, cl.listener_axis[0], cl.listener_axis[1], cl.listener_axis[2]);
-	}
-	else if (cls.signon == SIGNONS)
-		S_Update (r_origin, vpn, vright, vup);
-	else
-		S_Update (vec3_origin, vec3_origin, vec3_origin, vec3_origin);
-	CL_DecayLights ();
+		BGM_Update();	// adds music raw samples and/or advances midi driver
+		if (cl.listener_defined)
+		{
+			cl.listener_defined = false;
+			S_Update (cl.listener_origin, cl.listener_axis[0], cl.listener_axis[1], cl.listener_axis[2]);
+		}
+		else if (cls.signon == SIGNONS)
+			S_Update (r_origin, vpn, vright, vup);
+		else
+			S_Update (vec3_origin, vec3_origin, vec3_origin, vec3_origin);
+		CL_DecayLights ();
 
-	CDAudio_Update();
-	UpdateWindowTitle(); // github.com/andrei-drexler/ironwail (Show game summary in window title)
-	Host_UpdateDockBadge(); // woods -- show download progress in the platform shell UI
-	Mapshot_Frame();		// completes lookups before presence reads the result
-	Discord_Frame();		// dispatch alerts and update presence after mapshot results
+		CDAudio_Update();
+		UpdateWindowTitle(); // github.com/andrei-drexler/ironwail (Show game summary in window title)
+		Host_UpdateDockBadge(); // woods -- show download progress in the platform shell UI
+		Mapshot_Frame();		// completes lookups before presence reads the result
+		Discord_Frame();		// dispatch alerts and update presence after mapshot results
+	}
 
 	if (host_speeds.value)
 	{
