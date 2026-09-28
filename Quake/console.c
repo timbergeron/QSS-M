@@ -278,6 +278,8 @@ void Con_ToggleConsole_f (void)
 
 	if ((key_linepos == 1) && (cl_chatmode.value == 2 || cl_chatmode.value == 3)) // woods #ezsay add leading space for mode 2
 		Char_Console2(32);
+	if (con_clear_input_on_toggle.value)
+		Key_ConsoleUndoReset ();
 
 	if (cl_chatmode.value) // woods #chatinfo
 	{

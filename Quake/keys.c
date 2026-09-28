@@ -834,7 +834,7 @@ void Char_Console2(int key) // woods #ezsay add leading space for mode 2
 	char* workline = key_lines[edit_line];
 	int max;
 
-	max = Key_ConsoleInputLimit (); // woods #chatlimit
+	max = q_min (Key_ConsoleInputLimit (), MAXCMDLINE - 1); // woods #chatlimit
 	if (key_linepos < max) // woods limit chat to 45 server limit  #chatlimit
 	{
 		qboolean endpos = !workline[key_linepos];
@@ -925,6 +925,103 @@ Interactive line editing and console scrollback
 extern	char *con_text, key_tabpartial[MAXCMDLINE];
 extern	int con_current, con_linewidth, con_vislines;
 
+/* Console undo/redo inspired by Mark V (Baker). Keep a bounded set of line
+ * snapshots, including the current state, independently of command history. */
+#define CONSOLE_UNDO_STATES 64
+#define CONSOLE_UNDO_GROUP_TIME 1.0
+
+typedef enum
+{
+	CONSOLE_EDIT_ATOMIC,
+	CONSOLE_EDIT_TYPING,
+	CONSOLE_EDIT_BACKSPACE,
+	CONSOLE_EDIT_DELETE
+} console_edit_t;
+
+typedef struct
+{
+	char text[MAXCMDLINE];
+	size_t cursor;
+} console_undo_state_t;
+
+static console_undo_state_t console_undo[CONSOLE_UNDO_STATES];
+static int console_undo_count, console_undo_pos, console_undo_line;
+static console_edit_t console_undo_group;
+static double console_undo_time;
+
+static void Key_ConsoleUndoCapture (void)
+{
+	console_undo_state_t *state = &console_undo[console_undo_pos];
+	q_strlcpy (state->text, key_lines[edit_line], sizeof(state->text));
+	state->cursor = key_linepos;
+}
+
+void Key_ConsoleUndoReset (void)
+{
+	console_undo_count = 1;
+	console_undo_pos = 0;
+	console_undo_line = edit_line;
+	console_undo_group = CONSOLE_EDIT_ATOMIC;
+	Key_ConsoleUndoCapture ();
+}
+
+static void Key_ConsoleUndoBegin (console_edit_t action)
+{
+	console_undo_state_t *state;
+
+	// Commands and menus can replace the input outside the console editor.
+	if (!console_undo_count || console_undo_line != edit_line ||
+		strcmp (console_undo[console_undo_pos].text, key_lines[edit_line]))
+		Key_ConsoleUndoReset ();
+
+	state = &console_undo[console_undo_pos];
+	if (action != console_undo_group || state->cursor != key_linepos ||
+		realtime - console_undo_time > CONSOLE_UNDO_GROUP_TIME || realtime < console_undo_time)
+		console_undo_group = CONSOLE_EDIT_ATOMIC;
+	state->cursor = key_linepos;
+}
+
+static void Key_ConsoleUndoEnd (console_edit_t action)
+{
+	// Failed pastes, exhausted history, and other no-ops keep the redo branch.
+	if (!strcmp (console_undo[console_undo_pos].text, key_lines[edit_line]))
+		return;
+
+	if (console_undo_group == CONSOLE_EDIT_ATOMIC)
+	{
+		console_undo_count = console_undo_pos + 1;
+		if (console_undo_count == CONSOLE_UNDO_STATES)
+		{
+			memmove (console_undo, console_undo + 1,
+				(CONSOLE_UNDO_STATES - 1) * sizeof(console_undo[0]));
+			console_undo_count--;
+		}
+		console_undo_pos = console_undo_count++;
+	}
+	Key_ConsoleUndoCapture ();
+	console_undo_group = action;
+	console_undo_time = realtime;
+}
+
+static void Key_ConsoleUndoWalk (qboolean redo)
+{
+	console_undo_state_t *state;
+	int pos = console_undo_pos + (redo ? 1 : -1);
+
+	if (pos < 0 || pos >= console_undo_count)
+		return;
+
+	console_undo_pos = pos;
+	state = &console_undo[pos];
+	q_strlcpy (key_lines[edit_line], state->text, sizeof(key_lines[edit_line]));
+	key_linepos = state->cursor;
+	// A restored line becomes the draft for subsequent history browsing.
+	history_line = edit_line;
+	key_blinktime = realtime;
+	key_tabpartial[0] = key_tabhint[0] = '\0';
+	Con_TabComplete (TABCOMPLETE_AUTOHINT);
+}
+
 /*
 ====================
 Key_ConsoleQuitMistype -- woods #smartquit
@@ -985,7 +1082,7 @@ static void Key_ConsoleCommitTabHint (char *workline)
 	key_tabpartial[0] = '\0';
 }
 
-void Key_Console (int key)
+static void Key_ConsoleKey (int key)
 {
 	static	char current[MAXCMDLINE] = "";
 	int	history_line_last;
@@ -1033,6 +1130,7 @@ void Key_Console (int key)
 			SCR_UpdateScreen (); // force an update, because the command may take some time
 		if (cl_chatmode.value == 2 || cl_chatmode.value == 3) // woods #ezsay add leading space for mode 2
 			Char_Console2(32);
+		Key_ConsoleUndoReset ();
 		return;
 
 	case K_TAB:
@@ -1284,6 +1382,46 @@ void Key_Console (int key)
 	}
 }
 
+void Key_Console (int key)
+{
+	console_edit_t action = CONSOLE_EDIT_ATOMIC;
+
+	switch (key)
+	{
+	case K_BACKSPACE:
+		if (!Key_IsShortcutModifierDown())
+			action = CONSOLE_EDIT_BACKSPACE;
+		break;
+	case K_DEL:
+		if (!Key_IsShortcutModifierDown())
+			action = CONSOLE_EDIT_DELETE;
+		break;
+	case K_ENTER: case K_KP_ENTER: case K_ABUTTON:
+	case K_TAB: case K_INS: case K_HOME: case K_END:
+	case K_LEFTARROW: case K_RIGHTARROW: case K_UPARROW: case K_DOWNARROW:
+	case K_DPAD_LEFT: case K_DPAD_RIGHT: case K_DPAD_UP: case K_DPAD_DOWN:
+		break;
+	default:
+		// Printable keydowns precede Char_Console; modifiers and scrollback
+		// keys do not end a run of typing or deletion.
+		if (key < 32 || key > 126 || !Key_IsShortcutModifierDown())
+		{
+			Key_ConsoleKey (key);
+			return;
+		}
+		break;
+	}
+
+	Key_ConsoleUndoBegin (action);
+	if ((key == 'z' || key == 'Z') && Key_IsShortcutModifierDown())
+	{
+		Key_ConsoleUndoWalk (keydown[K_SHIFT]);
+		return;
+	}
+	Key_ConsoleKey (key);
+	Key_ConsoleUndoEnd (action);
+}
+
 /*
 ====================
 woods #chatinfo -- deletct chat typing and set userinfo chat key, with a 3 second delay to set it back to 0
@@ -1323,11 +1461,12 @@ void Char_Console(int key) // woods -- added detection for when typing in consol
 			SetChatInfo(CIF_CHAT);
 	}
 
-	max = Key_ConsoleInputLimit (); // woods #chatlimit
+	max = q_min (Key_ConsoleInputLimit (), MAXCMDLINE - 1); // woods #chatlimit
 	if (key_linepos < max) // woods limit chat to 45 server limit  #chatlimit
 	{
 		qboolean endpos = !workline[key_linepos];
 
+		Key_ConsoleUndoBegin (CONSOLE_EDIT_TYPING);
 		key_tabpartial[0] = 0; //johnfitz
 		// if inserting, move the text to the right
 		if (key_insert && !endpos)
@@ -1357,6 +1496,7 @@ void Char_Console(int key) // woods -- added detection for when typing in consol
 		key_linepos++;
 
 		Con_TabComplete (TABCOMPLETE_AUTOHINT);
+		Key_ConsoleUndoEnd (CONSOLE_EDIT_TYPING);
 	}
 
 	if (cl_chatmode.value) // woods #chatinfo -- delay before setting chat to 0
@@ -2765,6 +2905,7 @@ static void History_ClearMemory (void)
 	history_line = 0;
 	key_linepos = 1;
 	history_saved_current[0] = 0; // woods #serverhistory
+	Key_ConsoleUndoReset ();
 }
 
 static void History_RemoveFile (void)

@@ -80,6 +80,7 @@ static void Cbuf_AddText(const char *text) { strcat(submitted, text); }
 static void Con_Printf(const char *fmt, ...) {}
 static qboolean History_SaveHistoryEnabled(void) { return false; }
 static qboolean Key_ConsoleQuitMistype(const char *text) { return false; }
+static void Key_ConsoleUndoReset(void) {}
 static void SCR_UpdateScreen(void) {}
 static void Char_Console2(int ch) {
     key_lines[edit_line][key_linepos++] = ch;
@@ -109,7 +110,8 @@ source += gate[:gate.index("\n\t// if editline is empty")]
 source += "++command_completions;\n}\n"
 
 # Keep the actual submit/Tab switch branches, stubbing history and output above.
-dispatch = function(keys, "void Key_Console (int key)")
+dispatch = function(keys, "static void Key_ConsoleKey (int key)").replace(
+    "static void Key_ConsoleKey", "void Key_Console", 1)
 source += dispatch[:dispatch.index("\n\tcase K_BACKSPACE:")] + "\n\t}\n}\n"
 source += r'''
 static void line(const char *text) {
