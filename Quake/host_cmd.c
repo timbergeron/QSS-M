@@ -9110,10 +9110,10 @@ void Host_SavegameComment (char text[SAVEGAME_COMMENT_LENGTH + 1])
 	q_snprintf (kills, sizeof(kills), "kills:%3i/%3i", cl.stats[STAT_MONSTERS], cl.stats[STAT_TOTALMONSTERS]);
 	memcpy (text+22, kills, q_min(strlen(kills), SAVEGAME_COMMENT_LENGTH - 22));
 
-// convert space to _ to make stdio happy
+// Convert spaces and the Windows text-mode EOF marker to _ (Mark V / Aguirre).
 	for (i = 0; i < SAVEGAME_COMMENT_LENGTH; i++)
 	{
-		if (text[i] == ' ')
+		if (text[i] == ' ' || text[i] == '\x1a')
 			text[i] = '_';
 	}
 }
