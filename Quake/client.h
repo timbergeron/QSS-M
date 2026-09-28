@@ -625,6 +625,7 @@ void CL_Disconnect_f (void);
 void CL_NextDemo (void);
 void CL_PlayDemo (const char *name, qboolean demoreelplayback);
 
+void SV_SanitizeNameChars(char *name);
 void SV_UpdateInfo(int edict, const char *keyname, const char *value);
 
 //

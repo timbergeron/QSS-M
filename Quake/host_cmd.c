@@ -9897,13 +9897,7 @@ static void Host_Name_f (void)
 	newName[15] = 0;	// client_t structure actually says name[32].
 
 	// JPG 3.02 - remove bad characters // woods for #iplog
-	for (a = 0; newName[a]; a++)
-	{
-		if (newName[a] == 10)
-			newName[a] = ' ';
-		else if (newName[a] == 13)
-			newName[a] += 128;
-	}
+	SV_SanitizeNameChars(newName);
 
 	if (cmd_source != src_client)
 	{

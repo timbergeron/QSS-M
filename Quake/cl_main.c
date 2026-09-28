@@ -7501,9 +7501,22 @@ static void SV_DecodeUserInfo(client_t *client)
 		SV_CheckDuplicateNames(client); // woods #dupnames
 	}
 }
+void SV_SanitizeNameChars(char *name)
+{
+	// Preserve Quake glyphs while keeping names on one console line.
+	for (; *name; name++)
+	{
+		if (*name == '\n')
+			*name = ' ';
+		else if (*name == '\r')
+			*name = (char)141;
+	}
+}
+
 void SV_UpdateInfo(int edict, const char *keyname, const char *value)
 {
 	char oldvalue[1024];
+	char sanitized_name[sizeof(svs.clients[0].userinfo)];
 
 	char *info;
 	size_t infosize;
@@ -7535,6 +7548,15 @@ void SV_UpdateInfo(int edict, const char *keyname, const char *value)
 	}
 	else
 		return;
+
+	// Normalize before comparison, storage and broadcast. Leave oversized
+	// values to Info_SetKey's existing rejection instead of truncating them.
+	if (infoplayer && !strcmp(keyname, "name") && strlen(value) < sizeof(sanitized_name))
+	{
+		q_strlcpy(sanitized_name, value, sizeof(sanitized_name));
+		SV_SanitizeNameChars(sanitized_name);
+		value = sanitized_name;
+	}
 
 	Info_GetKey(info, keyname, oldvalue, sizeof(oldvalue));
 	if (strcmp(value, oldvalue))
