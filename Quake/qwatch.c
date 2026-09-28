@@ -67,6 +67,7 @@ typedef struct
 static sys_socket_t qwatch_listener = INVALID_SOCKET;
 static int qwatch_bound_port = 0;
 static qwatch_client_t qwatch_clients[QWATCH_MAX_CLIENTS];
+static qboolean qwatch_initialized = false;
 static char qwatch_token[QWATCH_TOKEN_HEX + 1];
 static int qwatch_last_aura = -1;
 static qboolean qwatch_token_loaded = false;
@@ -794,7 +795,8 @@ static void QWatch_Status_f(void)
 		q_strlcpy(path, "qwatch.token", sizeof(path));
 	Con_Printf("qwatch_aura %s, port %d, %s\n", qwatch_aura.value ? "on" : "off",
 		qwatch_bound_port, qwatch_bound_port ? "listening" : "not listening");
-	Con_Printf("qwatch token: configured (stored on disk)\n");
+	Con_Printf("qwatch token: %s\n", qwatch_token_loaded ? "loaded" :
+		"not loaded (enable Aura or run qwatch_pair)");
 	Con_Printf("qwatch token file: %s\n", path);
 	if (qwatch_pair_code[0] && !qwatch_pair_used &&
 		Sys_DoubleTime() <= qwatch_pair_expires)
@@ -827,6 +829,10 @@ static void QWatch_Pair_f(void)
 void QWatch_InitLocal(void)
 {
 	int i;
+	// Host_FindMaxClients has not set cls.state yet at this point in startup.
+	if (isDedicated)
+		return;
+
 	for (i = 0; i < QWATCH_MAX_CLIENTS; ++i)
 		qwatch_clients[i].socket = INVALID_SOCKET;
 	qwatch_next_poll = 0;
@@ -835,9 +841,11 @@ void QWatch_InitLocal(void)
 	qwatch_pair_expires = 0;
 	qwatch_pair_used = false;
 	qwatch_pair_attempts = 0;
-	QWatch_LoadToken();
+	Cvar_RegisterVariable(&qwatch_aura);
+	Cvar_RegisterVariable(&qwatch_port);
 	Cmd_AddCommand("qwatch_status", QWatch_Status_f);
 	Cmd_AddCommand("qwatch_pair", QWatch_Pair_f);
+	qwatch_initialized = true;
 }
 
 void QWatch_Frame(qboolean valid, unsigned int items)
@@ -847,6 +855,9 @@ void QWatch_Frame(qboolean valid, unsigned int items)
 	int aura = valid ? (((items & IT_INVULNERABILITY) ? QWATCH_AURA_PENT : 0) |
 		((items & IT_QUAD) ? QWATCH_AURA_QUAD : 0)) : 0;
 
+	if (!qwatch_initialized)
+		return;
+
 	if (!qwatch_aura.value)
 	{
 		if (qwatch_listener != INVALID_SOCKET)
@@ -854,8 +865,6 @@ void QWatch_Frame(qboolean valid, unsigned int items)
 		qwatch_last_aura = -1;
 		return;
 	}
-	if (!qwatch_token_loaded)
-		return;
 	now = Sys_DoubleTime();
 	if (qwatch_listener == INVALID_SOCKET || qwatch_bound_port != QWatch_GetPort())
 	{
@@ -863,7 +872,9 @@ void QWatch_Frame(qboolean valid, unsigned int items)
 			QWatch_CloseListener();
 		if (now < qwatch_listener_retry)
 			return;
-		if (!QWatch_OpenListener())
+		if (!qwatch_token_loaded)
+			QWatch_LoadToken();
+		if (!qwatch_token_loaded || !QWatch_OpenListener())
 		{
 			qwatch_listener_retry = now + QWATCH_LISTENER_RETRY;
 			return;
@@ -892,5 +903,8 @@ void QWatch_Frame(qboolean valid, unsigned int items)
 
 void QWatch_Shutdown(void)
 {
+	if (!qwatch_initialized)
+		return;
 	QWatch_CloseListener();
+	qwatch_initialized = false;
 }

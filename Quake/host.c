@@ -1041,8 +1041,6 @@ void Host_InitLocal (void)
 	Cvar_RegisterVariable (&pausable);
 
 	Cvar_RegisterVariable (&temp1);
-	Cvar_RegisterVariable (&qwatch_aura);
-	Cvar_RegisterVariable (&qwatch_port);
 	QWatch_InitLocal();
 
 	Host_FindMaxClients ();
