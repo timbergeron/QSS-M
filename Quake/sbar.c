@@ -3474,7 +3474,7 @@ void Sbar_DeathmatchOverlay (void)
 		}
 #endif
 
-		sprintf (num, "%4i", CLAMP(0, s->ping, 9999));
+		sprintf (num, "%4i", CLAMP(1, s->ping, 9999)); // a real connection never reads 0ms
 		if (ct > 5) // woods don't print 0 print on connect
 			Draw_String ((x-8*4)-22, y, num); // woods centered ping #scoreboard
 
