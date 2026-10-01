@@ -1016,6 +1016,11 @@ void S_RawAudio(int sourceid, byte *data, unsigned int speed, unsigned int sampl
 	sfxcache_t * currentcache;
 	streaming_t * s;
 
+	// no mixer (-nosound, or the audio device failed to open): nothing can play, and the resampling
+	// below reads shm->speed.
+	if (!shm)
+		return;
+
 	// search for free slot or re-use previous one with the same sourceid.
 	s = S_RawGetFreeStream(sourceid);
 
@@ -1618,6 +1623,11 @@ void S_Voip_Decode(unsigned int sender, unsigned int codec, unsigned int gen, un
 	int r;
 
 	if (sender >= MAX_SCOREBOARD)
+		return;
+
+	// without a mixer there is nowhere to play the audio, and the opus setup below sizes its output
+	// from shm->speed.  both local loopback (cl_voip_test) and a server's voicechat messages arrive here.
+	if (!shm)
 		return;
 
 	decodesamps = 0;
@@ -2481,7 +2491,9 @@ void S_Voip_Transmit(unsigned char clc, sizebuf_t *buf)
 			}
 		}
 
-		if (localplayeridx < MAX_SCOREBOARD)
+		// viewentity is 0 until the first svc_setview, which makes the index -1: it passes a signed
+		// < MAX_SCOREBOARD and lastspoke[-1] is a write off the front of the array.
+		if (localplayeridx >= 0 && localplayeridx < MAX_SCOREBOARD)
 		{
 			if (cl_voip_test.value)
 				S_Voip_Decode(localplayeridx, s_voip.enccodec, s_voip.generation & 0x0f, initseq, outpos, outbuf);
