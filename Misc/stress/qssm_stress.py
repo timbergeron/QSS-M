@@ -3163,6 +3163,10 @@ class Runner:
             self.record(finding, eng)
         elif cause:
             print(f"    (unclassified: {cause})", flush=True)
+        elif not getattr(self.cfg, "keep", False):
+            # Each sandbox carries ~68MB of pak copies; a clean run has nothing
+            # worth keeping and a long campaign otherwise fills the disk.
+            shutil.rmtree(eng.work, ignore_errors=True)
         return finding
 
     def record(self, finding, eng):
