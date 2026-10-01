@@ -3919,7 +3919,7 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		kb = Key_GetEffectiveBinding(key);
 		if (kb && kb[0] == '+')
 		{
-			sprintf (cmd, "-%s %i\n", kb+1, key);
+			q_snprintf (cmd, sizeof(cmd), "-%s %i\n", kb+1, key);
 			Cbuf_AddText (cmd);
 		}
 		return;
@@ -3945,7 +3945,7 @@ void Key_EventWithKeycode (int key, qboolean down, int keycode)
 		{
 			if (kb[0] == '+')
 			{	// button commands add keynum as a parm
-				sprintf (cmd, "%s %i\n", kb, key);
+				q_snprintf (cmd, sizeof(cmd), "%s %i\n", kb, key);
 				Cbuf_AddText (cmd);
 			}
 			else

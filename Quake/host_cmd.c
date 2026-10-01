@@ -10182,7 +10182,7 @@ static void Host_Say_f2(void) // woods chat shortcuts
 	const char* p;
 	p = Cmd_Args();
 	char text[MAXCMDLINE];
-	sprintf(text, "say %s", p);
+	q_snprintf(text, sizeof(text), "say %s", p);	// MAXCMDLINE is 256: an unbounded sprintf overflows on any long message
 	Cmd_ExecuteString(text, src_command);
 }
 
@@ -10196,7 +10196,7 @@ static void Host_Say_Team_f2(void) // woods chat shortcuts
 	const char* p;
 	p = Cmd_Args();
 	char text[MAXCMDLINE];
-	sprintf(text, "say_team %s", p);
+	q_snprintf(text, sizeof(text), "say_team %s", p);
 	Cmd_ExecuteString(text, src_command);
 }
 
@@ -10356,7 +10356,7 @@ static void Host_Color_f(void)
 	const char *top, *bottom;
 	char xt[4];
 	char xb[4];
-	char combined[14];
+	char combined[128];	// holds "color <top> <bottom>" with user-supplied arguments
 	int t = rand() % 13 + 1; // woods for random colors
 	int b = rand() % 13 + 1; // woods for random colors
 
@@ -10437,7 +10437,7 @@ static void Host_Color_f(void)
 		{
 			if (cls.state == ca_connected)
 			{
-				sprintf(combined, "color %s %s", top, bottom);
+				q_snprintf(combined, sizeof(combined), "color %s %s", top, bottom);
 				Cmd_ExecuteString(combined, src_command);
 			}
 		}
