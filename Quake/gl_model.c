@@ -1777,7 +1777,7 @@ static size_t *Mod_LoadMiptexBounds (const byte *data, size_t length, int *count
 
 static void Mod_LoadTextures (lump_t *l)
 {
-	int		i, j, num, maxanim, altmax;
+	int		i, j, k, num, maxanim, altmax;
 	miptex_t	*mt;
 	texture_t	*tx, *tx2;
 	texture_t	*anims[10];
@@ -2122,7 +2122,10 @@ static void Mod_LoadTextures (lump_t *l)
 			altmax++;
 		}
 		else
-			Sys_Error ("Bad animating texture %s", tx->name);
+		{	// a map file naming a texture "+<junk>": leave it static rather than killing the process
+			Con_DWarning ("Bad animating texture %s in %s\n", tx->name, loadmodel->name);
+			continue;
+		}
 
 		for (j=i+1 ; j<nummiptex ; j++)
 		{
@@ -2150,19 +2153,32 @@ static void Mod_LoadTextures (lump_t *l)
 					altmax = num+1;
 			}
 			else
-				Sys_Error ("Bad animating texture %s", tx->name);
+			{
+				Con_DWarning ("Bad animating texture %s in %s\n", tx2->name, loadmodel->name);
+				continue;
+			}
 		}
 
 		if (loadmodel->bspversion == BSPVERSION_QUAKE64 && !Mod_CheckAnimTextureArrayQ64(anims, maxanim))
 			continue; // Just pretend this is a normal texture
 
 #define	ANIM_CYCLE	2
+	// every frame has to be present before anything is linked: the map file decides which of these
+	// exist, and half-linking a chain (or a NULL anim_next) is worse than leaving it static.
+		for (j=0 ; j<maxanim && anims[j] ; j++)
+			;
+		for (k=0 ; k<altmax && altanims[k] ; k++)
+			;
+		if (j < maxanim || k < altmax)
+		{
+			Con_DWarning ("Missing frame %i of %s in %s\n", j < maxanim ? j : k, tx->name, loadmodel->name);
+			continue;	// treat as normal textures
+		}
+
 	// link them all together
 		for (j=0 ; j<maxanim ; j++)
 		{
 			tx2 = anims[j];
-			if (!tx2)
-				Sys_Error ("Missing frame %i of %s",j, tx->name);
 			tx2->anim_total = maxanim * ANIM_CYCLE;
 			tx2->anim_min = j * ANIM_CYCLE;
 			tx2->anim_max = (j+1) * ANIM_CYCLE;
@@ -2173,8 +2189,6 @@ static void Mod_LoadTextures (lump_t *l)
 		for (j=0 ; j<altmax ; j++)
 		{
 			tx2 = altanims[j];
-			if (!tx2)
-				Sys_Error ("Missing frame %i of %s",j, tx->name);
 			tx2->anim_total = altmax * ANIM_CYCLE;
 			tx2->anim_min = j * ANIM_CYCLE;
 			tx2->anim_max = (j+1) * ANIM_CYCLE;
@@ -4583,6 +4597,234 @@ Mod_LoadBrushModel
 */
 /*
 =================
+Mod_BSPNodeChild
+
+Decodes node child j to a node index, or -1 for a leaf, exactly as the
+Mod_LoadNodes_* loaders do (an out of range index there becomes the solid leaf).
+=================
+*/
+static int Mod_BSPNodeChild (const byte *in, int bsp2, int j, int numnodes)
+{
+	int p;
+	if (bsp2)
+		p = LittleLong (((const int *)(in + 4))[j]);
+	else
+		p = (unsigned short)LittleShort (((const short *)(in + 4))[j]);
+	return (p >= 0 && p < numnodes) ? p : -1;
+}
+
+/*
+=================
+Mod_BSPNodesCyclic
+
+The tree walkers (R_RecursiveWorldNode, SV_FindTouchedLeafs, Mod_SetParent...)
+recurse down node children with no depth guard, so a child that points back at
+itself or an ancestor is a stack overflow.  Iterative three-colour DFS; shared
+subtrees are fine, only a back edge is rejected.
+=================
+*/
+static qboolean Mod_BSPNodesCyclic (const byte *nodes, size_t nodesize, int bsp2, int numnodes)
+{
+	byte *color = (byte *) calloc ((size_t)numnodes, 1);	// 0 unseen, 1 on the stack, 2 done
+	int *stack = (int *) malloc ((size_t)numnodes * 2 * sizeof(int));	// node, next child
+	qboolean cyclic = false;
+	int root;
+
+	if (!color || !stack)
+	{
+		free (color);
+		free (stack);
+		return false;	// cannot check; the other guards still apply
+	}
+	for (root = 0; root < numnodes && !cyclic; root++)
+	{
+		int sp = 0;
+		if (color[root])
+			continue;
+		stack[0] = root;
+		stack[1] = 0;
+		color[root] = 1;
+		sp = 1;
+		while (sp)
+		{
+			int node = stack[(sp - 1) * 2];
+			int j = stack[(sp - 1) * 2 + 1];
+			if (j == 2)
+			{
+				color[node] = 2;
+				sp--;
+				continue;
+			}
+			stack[(sp - 1) * 2 + 1] = j + 1;
+			{
+				int child = Mod_BSPNodeChild (nodes + (size_t)node * nodesize, bsp2, j, numnodes);
+				if (child < 0 || color[child] == 2)
+					continue;
+				if (color[child] == 1)
+				{
+					cyclic = true;
+					break;
+				}
+				color[child] = 1;
+				stack[sp * 2] = child;
+				stack[sp * 2 + 1] = 0;
+				sp++;
+			}
+		}
+	}
+	free (color);
+	free (stack);
+	return cyclic;
+}
+
+/*
+=================
+Mod_BSPTreeInvalid
+
+The part of the preflight that covers the tree structure: leafs, marksurfaces,
+node face ranges, clipnodes and submodels.  The engine tells leafs from nodes
+by contents < 0 and walks child pointers and face/marksurface ranges without
+re-checking them, so each of these is a segfault when a map lies about it.
+=================
+*/
+static const char *Mod_BSPTreeInvalid (const dheader_t *header, int bsp2)
+{
+	const lump_t *l = header->lumps;
+	const byte *base = (const byte *)header;
+	const size_t leafsize = bsp2 == 2 ? sizeof(dl2leaf_t) : bsp2 ? sizeof(dl1leaf_t) : sizeof(dsleaf_t);
+	const size_t nodesize = bsp2 == 2 ? sizeof(dl2node_t) : bsp2 ? sizeof(dl1node_t) : sizeof(dsnode_t);
+	const size_t clipsize = bsp2 ? sizeof(dlclipnode_t) : sizeof(dsclipnode_t);
+	const size_t marksize = bsp2 ? sizeof(unsigned int) : sizeof(short);
+	const size_t facesize = bsp2 ? sizeof(dlface_t) : sizeof(dsface_t);
+	unsigned int numleafs, numnodes, numclipnodes, nummarksurfaces, numfaces, i;
+	unsigned int modelstride, nummodels;
+	qboolean hexen2;
+	const dmodelq1_t *q1models = (const dmodelq1_t *)(base + l[LUMP_MODELS].fileofs);
+
+	if (l[LUMP_LEAFS].filelen % leafsize || l[LUMP_CLIPNODES].filelen % clipsize ||
+		l[LUMP_MARKSURFACES].filelen % marksize)
+		return "a funny lump size";
+	numleafs = l[LUMP_LEAFS].filelen / leafsize;
+	numnodes = l[LUMP_NODES].filelen / nodesize;
+	numclipnodes = l[LUMP_CLIPNODES].filelen / clipsize;
+	nummarksurfaces = l[LUMP_MARKSURFACES].filelen / marksize;
+	numfaces = l[LUMP_FACES].filelen / facesize;
+
+	for (i = 0; i < nummarksurfaces; i++)
+	{
+		unsigned int face = bsp2 ?
+			(unsigned int)LittleLong (((const unsigned int *)(base + l[LUMP_MARKSURFACES].fileofs))[i]) :
+			(unsigned short)LittleShort (((const short *)(base + l[LUMP_MARKSURFACES].fileofs))[i]);
+		if (face >= numfaces)
+			return "a marksurface with an out of range face";
+	}
+
+	for (i = 0; i < numleafs; i++)
+	{
+		const byte *in = base + l[LUMP_LEAFS].fileofs + (size_t)i * leafsize;
+		int contents = LittleLong (*(const int *)in);	// contents leads every leaf format
+		unsigned int first, num;
+		if (bsp2)
+		{
+			// firstmarksurface/nummarksurfaces sit after the mins/maxs (3 shorts each for L1, 3 floats each for L2)
+			const unsigned int *p = (const unsigned int *)(in + 8 + (bsp2 == 2 ? 24 : 12));
+			first = (unsigned int)LittleLong (p[0]);
+			num = (unsigned int)LittleLong (p[1]);
+		}
+		else
+		{
+			const dsleaf_t *sl = (const dsleaf_t *)in;
+			first = (unsigned short)LittleShort (sl->firstmarksurface);
+			num = (unsigned short)LittleShort (sl->nummarksurfaces);
+		}
+		// Mod_CheckWaterVis shifts by -contents, so anything outside -31..-1 is undefined as well as bogus
+		if (contents >= 0 || contents < -31)
+			return "a leaf with invalid contents";
+		if (first > nummarksurfaces || num > nummarksurfaces - first)
+			return "a leaf with out of range marksurfaces";
+	}
+
+	for (i = 0; i < numnodes; i++)
+	{
+		const byte *in = base + l[LUMP_NODES].fileofs + (size_t)i * nodesize;
+		unsigned int first, num;
+		if (bsp2)
+		{
+			// planenum(4) children(8) mins/maxs (3 shorts each for L1, 3 floats each for L2)
+			const unsigned int *p = (const unsigned int *)(in + 12 + (bsp2 == 2 ? 24 : 12));
+			first = (unsigned int)LittleLong (p[0]);
+			num = (unsigned int)LittleLong (p[1]);
+		}
+		else
+		{
+			const dsnode_t *sn = (const dsnode_t *)in;
+			first = (unsigned short)LittleShort (sn->firstface);
+			num = (unsigned short)LittleShort (sn->numfaces);
+		}
+		if (first > numfaces || num > numfaces - first)
+			return "a node with out of range faces";
+	}
+
+	if (Mod_BSPNodesCyclic (base + l[LUMP_NODES].fileofs, nodesize, bsp2, (int)numnodes))
+		return "a node tree that loops back on itself";
+
+	for (i = 0; i < numclipnodes; i++)
+	{
+		const byte *in = base + l[LUMP_CLIPNODES].fileofs + (size_t)i * clipsize;
+		int planenum = LittleLong (*(const int *)in);	// range of planenum is checked by Mod_LoadClipnodes
+		int j;
+		Q_UNUSED (planenum);
+		for (j = 0; j < 2; j++)
+		{
+			int child;
+			if (bsp2)
+				child = LittleLong (((const dlclipnode_t *)in)->children[j]);
+			else
+			{
+				// the same >32k unwrapping as Mod_LoadClipnodes
+				child = (unsigned short)LittleShort (((const dsclipnode_t *)in)->children[j]);
+				if (child >= (int)numclipnodes)
+					child -= 65536;
+			}
+			if (child >= (int)numclipnodes)
+				return "a clipnode with an out of range child";
+		}
+	}
+
+	// the same hexen2 8-hull detection as Mod_LoadSubmodels
+	hexen2 = (size_t)l[LUMP_MODELS].filelen >= sizeof(dmodelh2_t) && !(l[LUMP_MODELS].filelen % sizeof(dmodelh2_t)) &&
+		!q1models->numfaces && ((const dmodelq1_t *)(base + l[LUMP_MODELS].fileofs))[1].firstface;
+	modelstride = hexen2 ? sizeof(dmodelh2_t) : sizeof(dmodelq1_t);
+	if (l[LUMP_MODELS].filelen % modelstride)
+		return "a funny lump size";
+	nummodels = l[LUMP_MODELS].filelen / modelstride;
+	for (i = 0; i < nummodels; i++)
+	{
+		const byte *in = base + l[LUMP_MODELS].fileofs + (size_t)i * modelstride;
+		// mins/maxs/origin = 9 floats, then headnode[], visleafs, firstface, numfaces
+		const int *hn = (const int *)(in + 36);
+		const int nheads = hexen2 ? 8 : 4;
+		int firstface = LittleLong (hn[nheads + 1]), nfaces = LittleLong (hn[nheads + 2]);
+		int head0 = LittleLong (hn[0]), j;
+		if (head0 < 0 || head0 >= (int)numnodes)
+			return "a submodel with an out of range headnode";
+		// only hulls 1 and 2 are ever traced against: several compilers leave garbage in the unused hull 3
+		// headnode of otherwise fine maps (swk, jrdm1, dmfdm1..3, ...), so rejecting on it would break real maps
+		for (j = 1; j < nheads && j <= 2; j++)
+		{
+			int head = LittleLong (hn[j]);
+			if (head >= (int)numclipnodes && numclipnodes)	// negative is a contents value, valid
+				return "a submodel with an out of range clip headnode";
+		}
+		if (firstface < 0 || nfaces < 0 || (unsigned int)firstface > numfaces || (unsigned int)nfaces > numfaces - (unsigned int)firstface)
+			return "a submodel with out of range faces";
+	}
+
+	return NULL;
+}
+
+/*
+=================
 Mod_BSPIndicesInvalid
 
 Lumps are already range-checked against the file and byte-swapped in the
@@ -4670,7 +4912,7 @@ static const char *Mod_BSPIndicesInvalid (const dheader_t *header, int bsp2)
 			return "a node with an out of range plane";
 	}
 
-	return NULL;
+	return Mod_BSPTreeInvalid (header, bsp2);
 }
 
 static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
@@ -5181,6 +5423,23 @@ static int			posenum;
 
 /*
 =================
+Mod_AliasBadFile
+
+Frame and skin counts come straight from the model file and are only discovered mid-load, too deep
+to unwind to a plain "reject this model" return.  Host_Error longjmps out, and Mod_LoadModel has
+already cleared needload, so mark the model invalid first: a later Mod_ForName must get the same
+inert placeholder a missing model gets, not a half-built alias model.
+=================
+*/
+static void Mod_AliasBadFile (const char *what)
+{
+	loadmodel->type = mod_ext_invalid;
+	loadmodel->needload = false;
+	Host_Error ("%s: %s", loadmodel->name, what);
+}
+
+/*
+=================
 Mod_LoadAliasFrame
 =================
 */
@@ -5191,7 +5450,7 @@ static void *Mod_LoadAliasFrame (void * pin, maliasframedesc_t *frame, int pvtyp
 	daliasframe_t	*pdaliasframe;
 
 	if (posenum >= MAXALIASFRAMES)
-		Sys_Error ("posenum >= MAXALIASFRAMES");
+		Mod_AliasBadFile ("too many frames (posenum >= MAXALIASFRAMES)");
 
 	pdaliasframe = (daliasframe_t *)pin;
 
@@ -5254,7 +5513,7 @@ static void *Mod_LoadAliasGroup (void * pin,  maliasframedesc_t *frame, int pvty
 
 	for (i=0 ; i<numframes ; i++)
 	{
-		if (posenum >= MAXALIASFRAMES) Sys_Error ("posenum >= MAXALIASFRAMES");
+		if (posenum >= MAXALIASFRAMES) Mod_AliasBadFile ("too many frames (posenum >= MAXALIASFRAMES)");
 
 		poseverts_mdl[posenum] = (trivertx_t *)((daliasframe_t *)ptemp + 1);
 		posenum++;
@@ -5282,7 +5541,7 @@ static void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
 	unsigned int		texflags = TEXPREF_PAD;
 
 	if (numskins < 1 || numskins > MAX_SKINS)
-		Sys_Error ("Mod_LoadAliasModel: Invalid # of skins: %d", numskins);
+		Mod_AliasBadFile (va("invalid number of skins (%d)", numskins));
 
 	size = pheader->skinwidth * pheader->skinheight;
 
@@ -5683,13 +5942,22 @@ static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer, int pvtype)
 	mod_base = (byte *)buffer; //johnfitz
 
 	version = LittleLong (pinmodel->version);
+	// these all describe a bad file, not a broken engine: reject the model the way the vertex/triangle
+	// limits below do instead of taking the whole process down with Sys_Error
 	if (version != ALIAS_VERSION)
-		Sys_Error ("%s has wrong version number (%i should be %i)",
-				 mod->name, version, ALIAS_VERSION);
+	{
+		Con_Warning ("%s has wrong version number (%i should be %i)\n", mod->name, version, ALIAS_VERSION);
+		mod->type = mod_ext_invalid;
+		return;
+	}
 
 	numframes = LittleLong (pinmodel->numframes);
 	if (numframes < 1)
-		Sys_Error ("Mod_LoadAliasModel: Invalid # of frames: %d", numframes);
+	{
+		Con_Warning ("model %s has an invalid number of frames (%d)\n", mod->name, numframes);
+		mod->type = mod_ext_invalid;
+		return;
+	}
 	if (numframes > MAXALIASFRAMES)
 	{
 		Con_Warning("model %s has too many frames (%i > %i)\n", mod->name, numframes, MAXALIASFRAMES);
@@ -5723,7 +5991,12 @@ static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer, int pvtype)
 	pheader->numverts = LittleLong (pinmodel->numverts);
 
 	if (pheader->numverts <= 0)
-		Sys_Error ("model %s has no vertices", mod->name);
+	{
+		Con_Warning ("model %s has no vertices\n", mod->name);
+		mod->type = mod_ext_invalid;
+		Hunk_FreeToLowMark (start);
+		return;
+	}
 	if (pheader->numverts > MAXALIASVERTS)
 	{	//Spike -- made this more tollerant. its still an error of course.
 		Con_Warning("model %s has too many vertices (%i > %i)\n", mod->name, pheader->numverts, MAXALIASVERTS);
@@ -5737,7 +6010,12 @@ static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer, int pvtype)
 	pheader->numtris = LittleLong (pinmodel->numtris);
 
 	if (pheader->numtris <= 0)
-		Sys_Error ("model %s has no triangles", mod->name);
+	{
+		Con_Warning ("model %s has no triangles\n", mod->name);
+		mod->type = mod_ext_invalid;
+		Hunk_FreeToLowMark (start);
+		return;
+	}
 	if ((size_t)pheader->numtris > (size_t)INT_MAX / 3)
 	{
 		Con_Warning("model %s has too many triangles (%i)\n", mod->name, pheader->numtris);
