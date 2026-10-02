@@ -677,6 +677,7 @@ class Engine:
         self._seq = 0
         self.throttle_events = 0
         self.dialogs_answered = 0
+        self._modal_waits_answered = 0   # STRESS_MODAL_WAIT lines already acted on
         self._cmdseq = 0
         self.last_acked = 0
         self.last_exec = 0
@@ -922,6 +923,7 @@ class Engine:
         except OSError:
             pass
         self.dialogs_answered += 1
+        self._modal_waits_answered = self._logbuf.count("STRESS_MODAL_WAIT")
 
     def barrier(self, cond, note=None):
         """Hold the rest of the journal until the engine reaches a state.
@@ -1030,6 +1032,48 @@ class Engine:
             time.sleep(0.05)
         return None
 
+    def _answer_probe(self, response="n"):
+        """The answer a quiet status probe gets.
+
+        Old binaries cannot say a modal is open, so they get an answer on every
+        quiet probe.  With modal_wait the engine announces its modals, and an
+        unconditional answer would only be a stray keypress in a slow frame.
+        """
+        if self.capabilities.get("modal_wait") == "1":
+            self._answer_if_modal(response)
+        else:
+            self.answer_dialog(response)
+
+    def _answer_if_modal(self, response="n"):
+        """Answer only when the engine says a modal is blocking right now.
+
+        The engine prints STRESS_MODAL_WAIT from inside SCR_ModalMessage.  An
+        answer written when no modal is open is not harmless: Host_StressPoll
+        drains the answer file during ordinary frames too, so it lands as a
+        stray character and Escape in whatever the run is doing.
+        """
+        self.read_log()
+        if self._logbuf.count("STRESS_MODAL_WAIT") > self._modal_waits_answered:
+            self.answer_dialog(response)
+
+    def _await_status_answering(self, seq, timeout):
+        """_await_status that keeps answering while a modal reports it is waiting.
+
+        An answer only dismisses the dialog open when the engine consumes it.
+        The fuzzers queue keys that re-open one (Enter on a confirm row), so a
+        single answer per probe window leaves the next dialog waiting for the
+        rest of the window, and a few of those in a row read as a hang.
+        """
+        deadline = now() + timeout
+        while True:
+            left = deadline - now()
+            if left <= 0:
+                return None
+            st = self._await_status(seq, min(1.0, left))
+            if st is not None:
+                return st
+            self._answer_if_modal()
+
     def status(self, timeout=None):
         """Liveness probe.  Retries before crying hang: a backgrounded window
         can be throttled hard by the OS, which is indistinguishable from a
@@ -1044,18 +1088,18 @@ class Engine:
         st = self._await_status(seq, min(0.5, timeout))
         if st is not None:
             return st
-        self.answer_dialog()
-        st = self._await_status(seq, max(0.0, timeout - 0.5))
+        self._answer_probe()
+        st = self._await_status_answering(seq, max(0.0, timeout - 0.5))
         if st is not None:
             return st
 
         cpu0 = self.cpu_seconds()
         for attempt in range(self.cfg.hang_retries):
-            self.answer_dialog()
+            self._answer_probe()
             self._seq += 1
             seq = self._seq
             self.send(f"_stress_status {seq}")
-            st = self._await_status(seq, timeout)
+            st = self._await_status_answering(seq, timeout)
             if st is not None:
                 self.throttle_events += 1
                 return st
@@ -1223,14 +1267,17 @@ class Engine:
                 return
             time.sleep(0.2)
         # The quit menu may have eaten it.  Use the priority channel because a
-        # normal script key would sit behind the modal's blocking loop.
+        # normal script key would sit behind the modal's blocking loop.  Then
+        # keep answering modals that report they are waiting: keys still queued
+        # from the run can open further dialogs, and 'quit' is behind them.
         try:
             self.answer_dialog("y")
         except Dead:
             return
         deadline = now() + 10
         while now() < deadline and self.alive():
-            time.sleep(0.2)
+            time.sleep(1.0)
+            self._answer_if_modal("y")
 
 
 def sandbox_escapes(work):
@@ -3119,6 +3166,7 @@ class Runner:
         print(f"[run {self.run_index:04d}] {name} seed={seed} port={eng.port}", flush=True)
         finding = None
         cause = None
+        helper_found = []	# helper engines that produced a finding: their sandbox is evidence
         try:
             eng.start()
             eng.wait_ready(timeout=self.cfg.boot_timeout)
@@ -3148,6 +3196,7 @@ class Runner:
                                    cause or "clean")
                 if hf is not None:
                     self.record(hf, helper)
+                    helper_found.append(helper)
                 helper.kill()
             if cause is not None or self.cfg.always_check:
                 finding = classify_exit(eng, self.crashwatch, name, seed, cause or "clean")
@@ -3167,6 +3216,12 @@ class Runner:
             # Each sandbox carries ~68MB of pak copies; a clean run has nothing
             # worth keeping and a long campaign otherwise fills the disk.
             shutil.rmtree(eng.work, ignore_errors=True)
+            # Helper engines (the "server" of the wire / netchurn / protocol lanes)
+            # each hold their own sandbox: three or four per run, and they were the
+            # bulk of a 12GB campaign.
+            for helper in eng.helpers:
+                if helper not in helper_found:
+                    shutil.rmtree(helper.work, ignore_errors=True)
         return finding
 
     def record(self, finding, eng):
