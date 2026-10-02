@@ -4549,6 +4549,7 @@ typedef struct
 	qboolean honey_main, honey_saint, honey_hub1;
 	qboolean pun_map1, pun_map3, pun_map5;
 	qboolean rrp_locust, rrp_mfxsp19, rrp_telefragged;
+	qboolean qrt_adornesibley, qrt_radiatoryang, qrt_whark;
 	qboolean libre_start, libre_end;
 	qboolean hip_demo1, hip_demo2, hip_demo3, hip_demo4;
 	qboolean rogue_end1, rogue_end2;
@@ -4861,6 +4862,14 @@ static void COM_DetectGameSignaturesInPak(const char *pak_path,
 			signatures->rrp_mfxsp19 = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/telefragged.bsp"))
 			signatures->rrp_telefragged = true;
+		else if (COM_PackEntryNameEquals(entry.name,
+			"maps/qrt_adornesibley.bsp"))
+			signatures->qrt_adornesibley = true;
+		else if (COM_PackEntryNameEquals(entry.name,
+			"maps/qrt_radiatoryang.bsp"))
+			signatures->qrt_radiatoryang = true;
+		else if (COM_PackEntryNameEquals(entry.name, "maps/qrt_whark.bsp"))
+			signatures->qrt_whark = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/lq_e0m1.bsp"))
 			signatures->libre_start = true;
 		else if (COM_PackEntryNameEquals(entry.name, "maps/lq_end.bsp"))
@@ -4987,6 +4996,12 @@ qboolean COM_DetectGameDescription(const char *game, char *description,
 	signatures.rrp_mfxsp19 |= COM_GamePathIsFile(game_path, "maps/mfxsp19.bsp");
 	signatures.rrp_telefragged |=
 		COM_GamePathIsFile(game_path, "maps/telefragged.bsp");
+	/* Rooftops Jam ships its maps loose rather than in a PAK. */
+	signatures.qrt_adornesibley |=
+		COM_GamePathIsFile(game_path, "maps/qrt_adornesibley.bsp");
+	signatures.qrt_radiatoryang |=
+		COM_GamePathIsFile(game_path, "maps/qrt_radiatoryang.bsp");
+	signatures.qrt_whark |= COM_GamePathIsFile(game_path, "maps/qrt_whark.bsp");
 	/* DMD ships its maps loose rather than in a PAK. */
 	signatures.dmd_map1 |= COM_GamePathIsFile(game_path, "maps/dmd1.bsp");
 	signatures.dmd_map6 |= COM_GamePathIsFile(game_path, "maps/dmd6.bsp");
@@ -5048,6 +5063,9 @@ qboolean COM_DetectGameDescription(const char *game, char *description,
 	else if (signatures.rrp_locust && signatures.rrp_mfxsp19 &&
 		signatures.rrp_telefragged)
 		q_strlcpy(description, "Rubicon Rumble Pack", description_size);
+	else if (signatures.qrt_adornesibley && signatures.qrt_radiatoryang &&
+		signatures.qrt_whark)
+		q_strlcpy(description, "Rooftops Jam", description_size);
 	/* Tremor reuses id1's map names (e1m1..e4m8), so its readme is the only
 	 * thing that distinguishes it from Quake itself or another replacement. */
 	else if ((size_t)q_snprintf(path, sizeof(path), "%s/tremor.txt",
