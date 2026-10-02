@@ -4464,8 +4464,19 @@ int SV_ModelIndex (const char *name)
 	for (i=0 ; i<MAX_MODELS && sv.model_precache[i] ; i++)
 		if (!strcmp(sv.model_precache[i], name))
 			return i;
+	// QC names these (weapon models, entity baselines).  A mod, or a map without a worldspawn so that
+	// its QC never ran its precaches, must not take the whole process down: no model, like a missing
+	// sound.  The weapon model is looked up per frame per client, so say it once per name.
 	if (i==MAX_MODELS || !sv.model_precache[i])
-		Sys_Error ("SV_ModelIndex: model %s not precached", name);
+	{
+		static char warned[MAX_QPATH];
+		if (strcmp (warned, name))
+		{
+			q_strlcpy (warned, name, sizeof(warned));
+			Con_Warning ("SV_ModelIndex: model %s not precached\n", name);
+		}
+		return 0;
+	}
 	return i;
 }
 

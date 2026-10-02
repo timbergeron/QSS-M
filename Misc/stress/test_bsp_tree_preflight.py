@@ -41,7 +41,17 @@ def mutations(orig):
         "submodel headnode0": (poke("<i", LUMP_MODELS, 36, 0x7ffffff), "out of range headnode"),
         "submodel clip headnode": (poke("<i", LUMP_MODELS, 40, 0x7ffffff), "out of range clip headnode"),
         "submodel faces": (poke("<i", LUMP_MODELS, 36 + 16 + 8, 0x7ffffff), "out of range faces"),
+        # not a preflight rejection: the map loads but has no worldspawn, so the QC never precaches
+        # anything and the spawning player's weapon model used to Sys_Error in SV_ModelIndex
+        "empty entity lump (must load)": (lambda b: struct.pack_into("<I", b, 8, 0), None),
     }
+
+
+# must-load cases (want None) that must also log a specific line, proving the
+# fixed path actually ran rather than the map quietly failing some other way
+MUST_LOAD_LOG = {
+    "empty entity lump (must load)": "SV_ModelIndex: model",
+}
 
 
 def main():
@@ -76,19 +86,29 @@ def main():
         eng.send("map zz_mut")
         time.sleep(3.0)
         alive = True
+        st = None
         try:
-            eng.status(timeout=15)
+            # a must-load case has to reach a spawned client, not merely survive
+            deadline = time.time() + 20
+            while True:
+                st = eng.status(timeout=15)
+                if want is not None or st.get("signon") == "4" or time.time() > deadline:
+                    break
+                time.sleep(1.0)
         except Exception:
             alive = False
+        signon = st.get("signon") if st else None
         eng.read_log()
         log = open(eng.work / "console.log", errors="replace").read()
         warned = want is not None and want in log and "zz_mut.bsp has" in log
         rc = eng.returncode()
         if want is None:
-            ok = alive and "zz_mut.bsp has" not in log
+            expect = MUST_LOAD_LOG.get(name)
+            ok = (alive and signon == "4" and "zz_mut.bsp has" not in log
+                  and (expect is None or expect in log))
         else:
             ok = alive and warned
-        print(f"{'ok  ' if ok else 'FAIL'} {name:26s} alive={alive} rc={rc} warned={warned}")
+        print(f"{'ok  ' if ok else 'FAIL'} {name:30s} alive={alive} rc={rc} signon={signon} warned={warned}")
         if not ok:
             failures.append(name)
         eng.kill()
