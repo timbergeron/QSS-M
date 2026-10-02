@@ -34,6 +34,7 @@ typedef struct
 	size_t answerqueuelen;
 	int seq_acked;
 	int seq_exec;
+	double modalnote;
 	int parse_overreads;
 	unsigned int coverage_total;
 } host_stress_state_t;
@@ -78,6 +79,7 @@ static void Host_StressChar_f (void);
 static void Host_StressStatus_f (void);
 static void Host_StressCapabilities_f (void);
 static void Host_StressInject_f (void);
+static void Host_StressNetState_f (void);
 static void Host_StressFrameProf_f (void);
 
 static void Host_StressReadAppend (const char *path, long *offset,
@@ -236,6 +238,7 @@ void Host_StressInit (void)
 	Cmd_AddCommand ("_stress_status", Host_StressStatus_f);
 	Cmd_AddCommand ("_stress_capabilities", Host_StressCapabilities_f);
 	Cmd_AddCommand ("_stress_inject", Host_StressInject_f);
+	Cmd_AddCommand ("_stress_netstate", Host_StressNetState_f);
 	Cmd_AddCommand ("_stress_frameprof", Host_StressFrameProf_f);
 
 	Con_Printf ("STRESS_READY %s\n", stress.scriptpath);
@@ -465,8 +468,21 @@ void Host_StressPoll (void)
 
 void Host_StressPumpModal (void)
 {
-	if (stress.active)
-		Host_StressDrainAnswer ();
+	double t;
+
+	if (!stress.active)
+		return;
+	/* Tell the harness a modal is really blocking, so it can answer only then:
+	 * Host_StressPoll also drains answers during ordinary frames, where an
+	 * answer is a stray 'n' + Escape into whatever the run is doing. */
+	t = Sys_DoubleTime ();
+	if (t - stress.modalnote >= 0.5)
+	{
+		stress.modalnote = t;
+		Con_Printf ("STRESS_MODAL_WAIT\n");
+		fflush (stdout);
+	}
+	Host_StressDrainAnswer ();
 }
 
 void Host_StressNoteParse (int readcount, int cursize)
@@ -521,18 +537,97 @@ static void Host_StressStatus_f (void)
 
 static void Host_StressCapabilities_f (void)
 {
-	/* The lifecycle/input boundary is real.  Parser and datagram entry points
-	 * remain explicitly unavailable until their owning modules are wired. */
-	Con_Printf ("STRESS_CAPS qssm_stress=1 basic=1 wire_inject=0 "
+	/* The lifecycle/input boundary is real, and wire_inject feeds the hostile-
+	 * server lanes (wirefuzz, servercmdfuzz).  modal_wait: SCR_ModalMessage
+	 * announces itself, so the harness answers only real dialogs.  The exact
+	 * parser entry points and the raw datagram replay remain unavailable. */
+	Con_Printf ("STRESS_CAPS qssm_stress=1 basic=1 modal_wait=1 wire_inject=1 "
 			"exact_servermsg=0 exact_clientmsg=0 raw_datagram=0\n");
 }
 
+static int Host_StressHexNibble (int c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+/* _stress_netstate: what the server negotiated, for the protocolmatrix lane.
+ * recvseq/unreliableseq, which clientwirefuzz also reads, live in the net layer
+ * and are not exposed here, so that lane stays unavailable. */
+static void Host_StressNetState_f (void)
+{
+	if (!sv.active)
+	{
+		Con_Printf ("STRESS_NETSTATE state=no-client\n");
+		return;
+	}
+	Con_Printf ("STRESS_NETSTATE state=ok protocol=%u protocolflags=%u\n",
+			sv.protocol, sv.protocolflags);
+}
+
+/* _stress_inject reliable|datagram <hex>
+ *
+ * Server side of the hostile-server lanes: appends the bytes to the reliable or
+ * the unreliable stream of every spawned client, so the client parses them off
+ * the real wire (real netchan, real message framing) instead of through a
+ * test-only entry point.  Run it on a dedicated server a real client is
+ * connected to.
+ *
+ * The script line is STRESS_LINE_SIZE and the token com_token[1024], and both
+ * truncate silently, so a payload tops out around 500 bytes; an odd trailing
+ * nibble is dropped.  Svc records are far smaller than that. */
 static void Host_StressInject_f (void)
 {
-	/* Keep the command registered so old journals fail explicitly and safely.
-	 * The parser-specific lanes are skipped by capability checks until a real
-	 * network adapter is added beside net_dgrm.c. */
-	Con_Printf ("STRESS_UNSUPPORTED _stress_inject\n");
+	byte payload[STRESS_LINE_SIZE / 2];
+	const char *chan, *hex;
+	size_t len = 0;
+	qboolean reliable;
+	int i, hi, lo, sent = 0;
+	client_t *c;
+
+	if (Cmd_Argc () < 3 || !sv.active)
+	{
+		Con_Printf ("STRESS_UNSUPPORTED _stress_inject (needs a running server: "
+				"_stress_inject reliable|datagram <hex>)\n");
+		return;
+	}
+	chan = Cmd_Argv (1);
+	if (!strcmp (chan, "reliable"))
+		reliable = true;
+	else if (!strcmp (chan, "datagram"))
+		reliable = false;
+	else
+	{
+		Con_Printf ("STRESS_UNSUPPORTED _stress_inject channel %s\n", chan);
+		return;
+	}
+
+	hex = Cmd_Argv (2);
+	while (len < sizeof(payload) && (hi = Host_StressHexNibble (hex[0])) >= 0 &&
+		   (lo = Host_StressHexNibble (hex[1])) >= 0)
+	{
+		payload[len++] = (byte)(hi << 4 | lo);
+		hex += 2;
+	}
+
+	for (i = 0, c = svs.clients; i < svs.maxclients; i++, c++)
+	{
+		sizebuf_t *buf;
+
+		if (!c->active || !c->spawned)
+			continue;
+		buf = reliable ? &c->message : &c->datagram;
+		if (buf->cursize + (int)len > buf->maxsize)
+			continue;	/* SZ_Write would overflow-error the server, which is not the target */
+		SZ_Write (buf, payload, (int)len);
+		sent++;
+	}
+	Con_Printf ("STRESS_INJECTED chan=%s bytes=%d clients=%d\n", chan, (int)len, sent);
 }
 
 #else
