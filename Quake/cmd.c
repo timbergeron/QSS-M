@@ -1817,6 +1817,23 @@ void Cmd_ForwardToServer (void)
 		}
 	}
 
+	// Refuse a command that cannot fit instead of letting SZ_GetSpace Host_Error the connection:
+	// a server can stufftext one, and binds, aliases and configs are not held to the 256-character
+	// console line.  Checked before anything is written, so a refusal leaves no dangling opcode.
+	// Budget by path: say formats into buff (expanding % macros, possibly as say_team), the cmd
+	// protocols/pext replies are short fixed strings, everything else is name + args.
+	{
+		qboolean saypath = (!q_strcasecmp(Cmd_Argv(0), "say") || !q_strcasecmp(Cmd_Argv(0), "say_team")) && Cmd_Argc() > 1;
+		size_t argslen = Cmd_Argc() > 1 ? strlen(Cmd_Args()) : 1;
+		size_t needed = 1 + strlen(Cmd_Argv(0)) + 1 + 16 + (saypath ? sizeof(buff) : q_max(argslen, (size_t)64));
+
+		if (cls.message.cursize < 0 || (size_t)cls.message.cursize + needed > (size_t)cls.message.maxsize)
+		{
+			Con_Printf ("\"%s\" is too long to send to the server\n", Cmd_Argv(0));
+			return;
+		}
+	}
+
 	MSG_WriteByte (&cls.message, clc_stringcmd);
 
 	//----------------------------------------------------------------------

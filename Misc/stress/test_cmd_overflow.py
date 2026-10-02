@@ -3,7 +3,8 @@
 MAXCMDLINE is 256, so unbounded sprintf() of a command argument into a
 MAXCMDLINE (or smaller) stack buffer overflows on any long line.  Found by the
 cmdfuzz lane as SIGTRAP in Host_Say_f2 (fortified sprintf); the same shape
-existed in the `st` shortcut and in `color x <long>` (a 14-byte buffer).
+existed in the `st` shortcut and in `color x <long>` (a 14-byte buffer).  A
+long forwarded command (`kill <long>`) overflowed cls.message instead.
 
 Each case is replayed through the harness against QSSM_BIN / --bin; pass means
 the replay does not reproduce a crash.  Usage:
@@ -17,6 +18,9 @@ CASES = {
     "s":     f"s {LONG}",
     "st":    f"st {LONG}",
     "color": f"color x {LONG}",   # needs a connected client to reach the sprintf
+    # forwarded to the server: name + args overflow the 1024-byte cls.message,
+    # which was a Host_Error (disconnect).  1018 is the longest a script line allows.
+    "kill":  "kill " + "A" * 1018,
 }
 
 def main():
