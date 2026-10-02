@@ -12157,8 +12157,12 @@ static void PrintFrameName (qmodel_t *m, int frame)
 	aliashdr_t 			*hdr;
 	maliasframedesc_t	*pframedesc;
 
+	// type first: Mod_Extradata is Sys_Error for anything without cached data, which is every brush
+	// model and every placeholder left by a missing file (viewmodel <typo> / viewmodel maps/x.bsp)
+	if (m->type != mod_alias)
+		return;
 	hdr = (aliashdr_t *)Mod_Extradata (m);
-	if (!hdr || m->type != mod_alias)
+	if (!hdr)
 		return;
 	pframedesc = &hdr->frames[frame];
 
