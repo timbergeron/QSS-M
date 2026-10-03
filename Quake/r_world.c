@@ -1478,7 +1478,7 @@ static qboolean R_CanInstanceBrushEntity (entity_t *ent, bmodel_drawcache_t **ca
 		*cache_out = NULL;
 	if (!gl_bmodel_instancing_able || !gl_bmodel_instancing.value || !r_world_instanced_program)
 		return false;
-	if (!r_bmodelcache.value || !gl_bmodel_vbo || lightmaps_latecached)
+	if (!r_bmodelcache.value || !gl_vbo_able || !gl_bmodel_vbo || lightmaps_latecached)
 		return false;
 	if (!gl_cull.value || r_drawflat_cheatsafe || r_fullbright_cheatsafe || r_lightmap_cheatsafe)
 		return false;
@@ -6554,7 +6554,8 @@ void R_DrawWorld (void)
 
 	R_DrawTextureChains (cl.worldmodel, NULL, chain_world);
 #ifndef SDL_THREADS_DISABLED
-	RSceneCache_Draw(false);
+	if (gl_vbo_able && gl_bmodel_vbo)
+		RSceneCache_Draw(false);
 #endif
 	R_DrawGrassBlades(cl.worldmodel, NULL, chain_world);
 }
@@ -6571,7 +6572,8 @@ void R_DrawWorld_Water (void)
 
 	R_DrawTextureChains_Water (cl.worldmodel, NULL, chain_world);
 #ifndef SDL_THREADS_DISABLED
-	RSceneCache_Draw(true);
+	if (gl_vbo_able && gl_bmodel_vbo)
+		RSceneCache_Draw(true);
 #endif
 }
 
@@ -7503,7 +7505,6 @@ void RSceneCache_AbortTeleport(void)
 
 static qboolean RSceneCache_Queue(byte *vis)
 {
-	extern GLuint gl_bmodel_vbo;
 //	int type = 0;
 	struct rscenecache_s *cache, *best = NULL, *building;
 	float bdist=FLT_MAX, d;	//bdist should match fatpvs size, so we don't have invisible walls.
@@ -7519,12 +7520,22 @@ static qboolean RSceneCache_Queue(byte *vis)
 	static int old_lightstylevalue[countof(d_lightstylevalue)];
 	byte *bakesubmodels;
 
+	skipsubmodels = NULL;
+	// Cached indices address the shared brush VBO, never client-side vertices.
+	if (!gl_vbo_able || !gl_bmodel_vbo)
+	{
+		if (rscenecache.thread)
+			RSceneCache_Shutdown();
+		rscenecache.drawing = NULL;
+		rscenecache.teleportmain = NULL;
+		return false;
+	}
+
 	if (cl.worldmodel->numsubmodels < 0 || cl.worldmodel->numsurfaces < 0)
 		return false;
 	submodelbytes = ((size_t)cl.worldmodel->numsubmodels + 7) >> 3;
 	surfacebytes = ((size_t)cl.worldmodel->numsurfaces + 7) >> 3;
 
-	skipsubmodels = NULL;
 	if (r_teleport_view)
 	{
 		if (rscenecache.drawing)
@@ -8049,6 +8060,9 @@ static void RSceneCache_Finish(struct rscenecache_s *cache)
 #ifdef USEMAPBUFFER
 	byte *ebomem = NULL;
 #endif
+	if (!gl_vbo_able || !gl_bmodel_vbo)
+		return;
+
 	if (SDL_SetAtomicInt(&rscenecache_worker_warning, false))
 		Con_DWarning("RSceneCache: worker skipped invalid or oversized surface data\n");
 
@@ -8155,7 +8169,7 @@ static void RSceneCache_MarkTeleportSurfaces(void)
 {
 	struct rscenecache_s *cache = rscenecache.drawing;
 	size_t i;
-	if (!cache)
+	if (!cache || !gl_vbo_able || !gl_bmodel_vbo)
 		return;
 	cache->teleportchains = false;
 	if (!R_TeleportActive() || skyroom_drawing || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
@@ -8179,7 +8193,6 @@ static void RSceneCache_MarkTeleportSurfaces(void)
 
 static void RSceneCache_Draw(qboolean water)
 {
-	extern GLuint gl_bmodel_vbo;
 	struct rscenecache_s *cache = rscenecache.drawing;
 	unsigned int i, j, ti;
 	texture_t *tex;
@@ -8192,7 +8205,7 @@ static void RSceneCache_Draw(qboolean water)
 	const float lightmapscale = (overbright ? 2.0f : 1.0f) * (wide10bits ? 4.0f : 1.0f);
 	const byte wantedtexture = water ? RSCENECACHE_TEX_WATER : RSCENECACHE_TEX_WORLD;
 
-	if (!cache)
+	if (!cache || !gl_vbo_able || !gl_bmodel_vbo)
 	{
 		skipsubmodels = NULL;
 		return;
@@ -8511,12 +8524,11 @@ qboolean RSceneCache_DrawSkySurfDepth(void)
 	//if we draw anything here then its JUST depth values. we don't need glsl nor even textures for this.
 	struct rscenecache_s *cache = rscenecache.drawing;
 
-	extern GLuint gl_bmodel_vbo;
 	unsigned int i, j, ti;
 	texture_t *tex;
 	qboolean ret = false;
 
-	if (!cache)
+	if (!cache || !gl_vbo_able || !gl_bmodel_vbo)
 		return false;
 	rscenecache.doingskybox = true;
 

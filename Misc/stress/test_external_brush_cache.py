@@ -65,6 +65,11 @@ int main(void){
  inline_model=external;inline_model.submodelof=&world;e.model=&external;e.alpha=1;
  CHECK(R_CanInstanceBrushEntity(&e,&out)&&out==&cache,"opaque external BSP must be eligible for batching");
  CHECK(R_DrawBModelDrawCache(&external,&e),"opaque external BSP must use cached individual drawing");
+ gl_vbo_able=0;
+ CHECK(!R_CanInstanceBrushEntity(&e,&out)&&out==NULL&&!R_DrawBModelDrawCache(&external,&e),"disabled VBO support must fall back even with a stale brush VBO");gl_vbo_able=1;
+ gl_bmodel_vbo=0;
+ CHECK(!R_CanInstanceBrushEntity(&e,&out)&&out==NULL&&!R_DrawBModelDrawCache(&external,&e),"missing brush VBO must fall back");gl_bmodel_vbo=1;
+ CHECK(builds==0&&cleans==0,"VBO fallbacks must not build or invalidate index buffers");
  skipbits[0]=1;
  CHECK(R_CanInstanceBrushEntity(&e,&out),"world scene-cache skip bits must not hide external BSPs");
  e.model=&inline_model;CHECK(!R_CanInstanceBrushEntity(&e,&out)&&out==NULL,"inline scene-cache skip must remain active");
