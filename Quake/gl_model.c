@@ -46,6 +46,7 @@ static cvar_t	external_ents = {"external_ents", "1", CVAR_ARCHIVE};
 static cvar_t	external_ents_dir = {"external_ents_dir", "", CVAR_ARCHIVE};
 static cvar_t   external_lits_dir = {"external_lits_dir", "", CVAR_ARCHIVE}; // woods #litdir
 cvar_t	gl_load24bit = {"gl_load24bit", "1", CVAR_ARCHIVE};
+static cvar_t	mod_retain_textures = {"mod_retain_textures", "1", CVAR_NONE};	// tb -- keep item model textures across maps
 static cvar_t	mod_ignorelmscale = {"mod_ignorelmscale", "0"};
 static cvar_t	mod_lightscale_broken = {"mod_lightscale_broken", "1"};	//match vanilla's brokenness bug with dlights and scaled textures. decoupled_lm bypasses this obviously buggy setting because zomgletmefixstuffffs
 cvar_t	mod_lightgrid = {"mod_lightgrid", "1"};	//mostly for debugging, I dunno. just leave it set to 1.
@@ -137,6 +138,7 @@ void Mod_Init (void)
 	Cvar_RegisterVariable (&external_ents_dir);
 	Cvar_RegisterVariable (&external_lits_dir); // woods #litdir
 	Cvar_RegisterVariable (&gl_load24bit);
+	Cvar_RegisterVariable (&mod_retain_textures);
 	Cvar_RegisterVariable (&r_replacemodels);
 	Cvar_SetCompletion (&r_replacemodels, &R_ReplaceModels_Completion_f); // woods #iwtabcomplete
 	Cvar_RegisterVariable (&mod_ignorelmscale);
@@ -396,6 +398,56 @@ static byte *Mod_LeafVisData (int visofs)
 
 /*
 ===================
+Mod_RetainTextures -- tb
+
+The small external brush models (ammo boxes, health, ...) load the same
+textures into every map, and decoding and uploading them again added up to a
+good part of a level change.  This keeps their gl textures when the model is
+unloaded; Mod_LoadTextures claims what the next load needs from them and frees
+the rest.  Returns true if the model's textures were kept.
+===================
+*/
+#define MOD_MAX_RETAINED_TEXTURES	32
+
+static int Mod_RetainSignature (void)
+{
+	return (int)gl_load24bit.value;		// what decides where Mod_LoadTextures looks for textures
+}
+
+static qboolean Mod_RetainTextures (qmodel_t *mod)
+{
+	int i;
+
+	if (isDedicated || !mod_retain_textures.value || mod->type != mod_brush || q_strncasecmp (mod->name, "maps/b_", 7))
+		return false;
+	if (mod->textures_retained)	// kept from an earlier map and not wanted since
+		return true;
+	if (mod->needload)
+		return false;
+	if (TexMgr_RetainTexturesForOwner (mod) > MOD_MAX_RETAINED_TEXTURES)
+	{	// not an item model after all
+		TexMgr_FreeTexturesForOwner (mod);
+		return false;
+	}
+	for (i = 0; i < mod->numtextures; i++)
+	{	// the grass analysis reads the decoded pixels, so it has to travel with the texture
+		texture_t *tx = mod->textures ? mod->textures[i] : NULL;
+		gltexture_t *glt = tx ? tx->gltexture : NULL;
+
+		if (glt && glt->owner == mod)
+		{
+			glt->grass_stored = true;
+			glt->grass_detected = tx->grass_detected;
+			glt->grass_color_valid = tx->grass_color_valid;
+			VectorCopy (tx->grass_color, glt->grass_color);
+		}
+	}
+	mod->textures_retained = true;	// retain_signature was recorded when they were made
+	return true;
+}
+
+/*
+===================
 Mod_ClearAll
 ===================
 */
@@ -408,8 +460,10 @@ void Mod_ClearAll (void)
 	{
 		if (mod->type != mod_alias)
 		{
+			qboolean retained = Mod_RetainTextures (mod);
 			mod->needload = true;
-			TexMgr_FreeTexturesForOwner (mod); //johnfitz
+			if (!retained)
+				TexMgr_FreeTexturesForOwner (mod); //johnfitz
 			PScript_ClearSurfaceParticles(mod);
 			RSceneCache_Cleanup(mod);
 			R_BModelDrawCache_Cleanup(mod);
@@ -432,9 +486,9 @@ void Mod_ResetAll (void)
 
 	for (i=0 , mod=mod_known ; i<mod_numknown ; i++, mod++)
 	{
-		if (!mod->needload) //otherwise Mod_ClearAll() did it already
+		TexMgr_FreeTexturesForOwner (mod); //includes any Mod_ClearAll() kept for a later load
+		if (!mod->needload) //otherwise Mod_ClearAll() did the rest already
 		{
-			TexMgr_FreeTexturesForOwner (mod);
 			PScript_ClearSurfaceParticles(mod);
 			RSceneCache_Cleanup(mod);
 			R_BModelDrawCache_Cleanup(mod);
@@ -1775,6 +1829,97 @@ static size_t *Mod_LoadMiptexBounds (const byte *data, size_t length, int *count
 	return mipends;
 }
 
+/*
+=================
+Mod_PrefetchTextureImages -- tb
+
+Queues the external images Mod_LoadTextures is about to look for so they can
+be decoded in parallel, and returns whether it began a prefetch for the caller
+to end.  This must follow the lookups below: primary name, fallback if it's
+missing.  Only gl_load24bit 1 is mirrored; other modes load serially as before.
+=================
+*/
+static qboolean Mod_PrefetchTextureImages (const dmiptexlump_t *m, const size_t *mipends, int nummiptex, size_t entryheadersize)
+{
+	char mapname[MAX_OSPATH], primary[MAX_OSPATH], fallback[MAX_OSPATH];
+	char name[17];
+	int i;
+
+	if (isDedicated || gl_load24bit.value != 1 || TexMgr_ParallelWorkers () <= 1 || !Image_PrefetchBegin ())
+		return false;
+
+	COM_StripExtension (loadmodel->name + 5, mapname, sizeof(mapname));
+	for (i = nummiptex; i --> 0; )
+	{
+		int dataofs;
+		size_t entrylen, k;
+
+		if (!mipends[i])
+			continue;
+		dataofs = Mod_ReadLittleLong ((const byte *)m + sizeof(m->nummiptex) + (size_t)i * sizeof(m->dataofs[0]));
+		entrylen = mipends[i] - (size_t)dataofs;
+		if (entryheadersize > entrylen)
+			continue;
+		memcpy (name, (const byte *)m + dataofs, 16);
+		name[16] = 0;
+		if (!name[0])
+			q_snprintf (name, sizeof(name), "unnamed%d", i);
+		if (name[0] == '*' || !q_strncasecmp (name, "sky", 3))
+			continue;	// warp and sky textures look elsewhere
+		for (k = 1; name[k]; k++)
+			if (name[k] == '*')
+				name[k] = '#';
+		q_snprintf (primary, sizeof(primary), "textures/%s/%s", mapname, name);
+		q_snprintf (fallback, sizeof(fallback), "textures/#%s", name + 1);
+		Image_PrefetchTexture (primary, fallback);
+	}
+	return true;
+}
+
+/*
+=================
+Mod_ClaimRetainedTextures -- tb
+
+Reuses the textures this model kept from its last load in place of finding and
+decoding the same files again.  Mirrors the lookups of the regular texture path
+below (gl_load24bit 1), and restores the grass analysis made from the pixels.
+=================
+*/
+static qboolean Mod_ClaimRetainedTextures (texture_t *tx)
+{
+	char mapname[MAX_OSPATH], name[MAX_OSPATH], extra[MAX_OSPATH];
+	gltexture_t *base;
+
+	COM_StripExtension (loadmodel->name + 5, mapname, sizeof(mapname));
+	q_snprintf (name, sizeof(name), "textures/%s/%s", mapname, tx->name);
+	base = TexMgr_ClaimRetainedTexture (loadmodel, name);
+	if (!base)
+	{
+		q_snprintf (name, sizeof(name), "textures/#%s", tx->name + 1);
+		base = TexMgr_ClaimRetainedTexture (loadmodel, name);
+	}
+	if (!base)
+		return false;
+	if (!base->grass_stored)
+	{	// can't reproduce the analysis, so load it the ordinary way
+		base->retained = true;
+		return false;
+	}
+	tx->gltexture = base;
+	tx->grass_detected = base->grass_detected;
+	tx->grass_color_valid = base->grass_color_valid;
+	VectorCopy (base->grass_color, tx->grass_color);
+
+	q_snprintf (extra, sizeof(extra), "%s_glow", name);
+	tx->fullbright = TexMgr_ClaimRetainedTexture (loadmodel, extra);
+	if (!tx->fullbright)
+	{
+		q_snprintf (extra, sizeof(extra), "%s_luma", name);
+		tx->fullbright = TexMgr_ClaimRetainedTexture (loadmodel, extra);
+	}
+	return true;
+}
+
 static void Mod_LoadTextures (lump_t *l)
 {
 	int		i, j, k, num, maxanim, altmax;
@@ -1798,12 +1943,29 @@ static void Mod_LoadTextures (lump_t *l)
 	size_t *mipends;
 	int dataofs;
 	mod_texture_batch_t texture_batch;
+	qboolean retain_active = false, prefetching = false;
 
 	memset (&texture_batch, 0, sizeof(texture_batch));
+
+	if (loadmodel->textures_retained)
+	{
+		if (loadmodel->retain_signature == Mod_RetainSignature () && gl_load24bit.value == 1)
+			retain_active = true;
+		else
+		{
+			TexMgr_FreeTexturesForOwner (loadmodel);
+			loadmodel->textures_retained = false;
+		}
+	}
+
+	loadmodel->retain_signature = Mod_RetainSignature ();	// what the textures made below depend on
 
 	m = (dmiptexlump_t *)(mod_base + l->fileofs);
 	mipends = Mod_LoadMiptexBounds ((const byte *)m, (size_t)l->filelen, &nummiptex);
 	entryheadersize = loadmodel->bspversion == BSPVERSION_QUAKE64 ? sizeof(miptex64_t) : sizeof(miptex_t);
+
+	if (!retain_active)	// a model reusing its kept textures finds few images to decode
+		prefetching = Mod_PrefetchTextureImages (m, mipends, nummiptex, entryheadersize);
 
 	loadmodel->numtextures = nummiptex + 2; //johnfitz -- need 2 dummy texture chains for missing textures
 	loadmodel->textures = (texture_t **) Hunk_AllocName (loadmodel->numtextures * sizeof(*loadmodel->textures) , loadname);
@@ -1933,6 +2095,9 @@ static void Mod_LoadTextures (lump_t *l)
 				if (tx->name[0] == '{')
 					extraflags |= TEXPREF_ALPHA;
 				// ericw
+
+				if (retain_active && Mod_ClaimRetainedTextures (tx))
+					continue;
 
 				//external textures -- first look in "textures/mapname/" then look in "textures/"
 				mark = Hunk_LowMark ();
@@ -2082,6 +2247,13 @@ static void Mod_LoadTextures (lump_t *l)
 		//johnfitz
 	}
 	Mod_FlushTextureBatch (&texture_batch);
+	if (prefetching)
+		Image_PrefetchEnd ();
+	if (loadmodel->textures_retained)
+	{	// whatever this load didn't claim isn't coming back
+		TexMgr_FreeRetainedTexturesForOwner (loadmodel);
+		loadmodel->textures_retained = false;
+	}
 	free(mipends);
 
 	//johnfitz -- last 2 slots in array should be filled with dummy textures
@@ -5017,11 +5189,11 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 // load into heap
 
 	{
-	extern double com_findfile_time, texmgr_load_time;
-	extern unsigned int com_findfile_calls, texmgr_load_calls;
+	extern double com_findfile_time, texmgr_load_time, image_load_time;
+	extern unsigned int com_findfile_calls, texmgr_load_calls, image_load_calls;
 	qboolean profile = developer.value != 0;
-	double ff0 = 0, tm0 = 0;
-	unsigned int ffc0 = 0, tmc0 = 0;
+	double ff0 = 0, tm0 = 0, il0 = 0;
+	unsigned int ffc0 = 0, tmc0 = 0, ilc0 = 0;
 	double t0 = 0, t_geom = 0, t_tex = 0, t_light = 0, t_faces = 0;
 	texmgr_prepstats_t tp0, tp1;
 
@@ -5038,8 +5210,10 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 		t_geom = Sys_DoubleTime ();
 		ff0 = com_findfile_time;
 		tm0 = texmgr_load_time;
+		il0 = image_load_time;
 		ffc0 = com_findfile_calls;
 		tmc0 = texmgr_load_calls;
+		ilc0 = image_load_calls;
 		TexMgr_GetPrepStats (&tp0);
 	}
 	mod->hasteletextures = false;
@@ -5047,8 +5221,9 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 	if (profile)
 	{
 		t_tex = Sys_DoubleTime ();
-		Con_DPrintf ("Mod_LoadTextures %s: findfile %.1fms (%u calls) texmgr %.1fms (%u calls)\n", mod->name,
-			(com_findfile_time-ff0)*1000.0, com_findfile_calls-ffc0, (texmgr_load_time-tm0)*1000.0, texmgr_load_calls-tmc0);
+		Con_DPrintf ("Mod_LoadTextures %s: findfile %.1fms (%u calls) texmgr %.1fms (%u calls) imageload %.1fms (%u calls)\n", mod->name,
+			(com_findfile_time-ff0)*1000.0, com_findfile_calls-ffc0, (texmgr_load_time-tm0)*1000.0, texmgr_load_calls-tmc0,
+			(image_load_time-il0)*1000.0, image_load_calls-ilc0);
 		TexMgr_GetPrepStats (&tp1);
 		if (tp1.jobs != tp0.jobs)
 			Con_DPrintf ("TexMgr prepare %s: wall %.1fms cpu %.1fms commit %.1fms, %u jobs/%u batches (%u parallel), %.1f/%.1f MiB source/prepared\n",

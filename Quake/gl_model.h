@@ -480,6 +480,8 @@ typedef struct qmodel_s
 	unsigned int	path_id;		// path id of the game directory
 							// that this model came from
 	qboolean	needload;		// bmodels and sprites don't cache normally
+	qboolean	textures_retained;	// tb -- gl textures were kept across the map change, see Mod_ClearAll
+	int		retain_signature;	// tb -- load settings those textures were made under
 
 	modtype_t	type;
 	int			numframes;

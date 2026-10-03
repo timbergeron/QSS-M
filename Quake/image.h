@@ -35,6 +35,15 @@ byte *Image_LoadLMP (FILE *f, int *width, int *height, enum srcformat *fmt);
 //the caller must release the result with free().
 byte *Image_LoadImage (const char *name, int *width, int *height, enum srcformat *fmt, qboolean *malloced);
 
+//Decodes the named replacement textures in parallel ahead of the Image_LoadImage calls that follow.
+//Queue each texture in the order it will be requested: its primary name, then the fallback tried
+//if the primary is missing. End the prefetch when the batch of requests is done.
+//Begin returns false if a prefetch is already under way, which its owner will end.
+qboolean Image_PrefetchBegin (void);
+void Image_PrefetchTexture (const char *primary, const char *fallback);
+void Image_PrefetchImage (const char *name);	//a single image, with no fallback or glow variants
+void Image_PrefetchEnd (void);
+
 qboolean Image_WriteTGA (const char *name, byte *data, int width, int height, int bpp, qboolean upsidedown);
 qboolean Image_WritePNG (const char *name, byte *data, int width, int height, int bpp, qboolean upsidedown);
 qboolean Image_WriteJPG (const char *name, byte *data, int width, int height, int bpp, int quality, qboolean upsidedown);

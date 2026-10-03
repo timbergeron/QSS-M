@@ -4661,6 +4661,8 @@ void SV_SpawnServer (const char *server)
 	edict_t		*ent;
 	int			i, signonsize;
 	qcvm_t *vm = qcvm;
+	double		sp_t0 = Sys_DoubleTime(), sp_prev = sp_t0;
+#define SPAWN_MARK(name) do { if (developer.value) { double tnow = Sys_DoubleTime(); Con_DPrintf("SV_SpawnServer %s: %.1fms\n", name, (tnow-sp_prev)*1000.0); sp_prev = tnow; } } while (0)
 
 	// let's not have any servers with no name
 	if (hostname.string[0] == 0)
@@ -4699,9 +4701,12 @@ void SV_SpawnServer (const char *server)
 // set up the new server
 //
 	//memset (&sv, 0, sizeof(sv));
+	SPAWN_MARK("pre-clear");
 	Host_ClearMemory ();
+	SPAWN_MARK("clear memory");
 	if(!isDedicated)
 		Draw_ReloadTextures(false);
+	SPAWN_MARK("draw reload");
 
 	q_strlcpy (sv.name, server, sizeof(sv.name));
 
@@ -4750,6 +4755,7 @@ void SV_SpawnServer (const char *server)
 	PR_SwitchQCVM(vm);
 // load progs to get entity field count
 	PR_LoadProgs ("progs.dat", true, PROGHEADER_CRC, pr_ssqcbuiltins, pr_ssqcnumbuiltins);
+	SPAWN_MARK("load progs");
 
 // allocate server memory
 	/* Host_ClearMemory() called above already cleared the whole sv structure */
@@ -4791,6 +4797,7 @@ void SV_SpawnServer (const char *server)
 	q_strlcpy (sv.name, server, sizeof(sv.name));
 	q_snprintf (sv.modelname, sizeof(sv.modelname), "maps/%s.bsp", server);
 	qcvm->worldmodel = Mod_ForName (sv.modelname, false);
+	SPAWN_MARK("world model");
 	if (!qcvm->worldmodel || qcvm->worldmodel->type != mod_brush) // woods -- (manquake/proquake 3.99b: R00k) #mapchangeprotect
 	{
 		if (sv_defaultmap.string[0] != '\0')
@@ -4910,6 +4917,7 @@ void SV_SpawnServer (const char *server)
 	else
 		ED_LoadFromFile (qcvm->worldmodel->entities);
 
+	SPAWN_MARK("entities");
 	SV_EnsureSinglePlayerStart(); // woods #spawn
 
 	sv.active = true;
@@ -4924,9 +4932,11 @@ void SV_SpawnServer (const char *server)
 	host_frametime = 0.1;
 	SV_Physics (host_frametime);
 	SV_Physics (host_frametime);
+	SPAWN_MARK("settle physics");
 
 // create a baseline for more efficient communications
 	SV_CreateBaseline ();
+	SPAWN_MARK("baselines");
 
 	//johnfitz -- warn if signon buffer larger than standard server can handle
 	for (i = 0, signonsize = 0; i < sv.num_signon_buffers; i++)
@@ -4946,6 +4956,9 @@ void SV_SpawnServer (const char *server)
 	}
 
 	Con_DPrintf ("Server spawned.\n");
+	if (developer.value)
+		Con_DPrintf ("SV_SpawnServer total: %.1fms\n", (Sys_DoubleTime()-sp_t0)*1000.0);
+#undef SPAWN_MARK
 }
 
 //================

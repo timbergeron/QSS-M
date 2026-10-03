@@ -282,6 +282,16 @@ static void TexWork_Run (texwork_fn_t function, void *context, unsigned int coun
 #endif
 }
 
+void TexMgr_ParallelFor (void (*function) (void *context, unsigned int index), void *context, unsigned int count)
+{
+	TexWork_Run (function, context, count, TexWork_ConfiguredParticipants ());
+}
+
+int TexMgr_ParallelWorkers (void)
+{
+	return TexWork_ConfiguredParticipants ();
+}
+
 void TexMgr_Shutdown (void)
 {
 #ifndef SDL_THREADS_DISABLED
@@ -1261,6 +1271,8 @@ gltexture_t *TexMgr_NewTexture (void)
 	glt = free_gltextures;
 	free_gltextures = glt->next;
 	glt->itemcolor_valid = false;
+	glt->retained = false;
+	glt->grass_stored = false;
 	glt->next = active_gltextures;
 	active_gltextures = glt;
 
@@ -1372,6 +1384,69 @@ void TexMgr_FreeTexturesForOwner (qmodel_t *owner)
 	{
 		next = glt->next;
 		if (glt && glt->owner == owner)
+			TexMgr_FreeTexture (glt);
+	}
+}
+
+/*
+================
+TexMgr_RetainTexturesForOwner -- tb
+
+Marks the owner's textures as kept for its next load and returns how many,
+or INT_MAX (marking nothing) if any of them is made from memory rather than a
+file: that memory belongs to the model and goes away with it, but a reload of a
+kept texture would read it.
+================
+*/
+int TexMgr_RetainTexturesForOwner (qmodel_t *owner)
+{
+	gltexture_t *glt;
+	int count = 0;
+
+	for (glt = active_gltextures; glt; glt = glt->next)
+		if (glt->owner == owner && !glt->source_file[0])
+			return INT_MAX;
+	for (glt = active_gltextures; glt; glt = glt->next)
+	{
+		if (glt->owner == owner)
+		{
+			glt->retained = true;
+			count++;
+		}
+	}
+	return count;
+}
+
+/*
+================
+TexMgr_ClaimRetainedTexture -- tb
+
+Hands back a retained texture of the owner by name, which the caller now owns as if it had loaded it.
+================
+*/
+gltexture_t *TexMgr_ClaimRetainedTexture (qmodel_t *owner, const char *name)
+{
+	gltexture_t *glt;
+
+	for (glt = active_gltextures; glt; glt = glt->next)
+	{
+		if (glt->retained && glt->owner == owner && !strcmp (glt->name, name))
+		{
+			glt->retained = false;
+			return glt;
+		}
+	}
+	return NULL;
+}
+
+void TexMgr_FreeRetainedTexturesForOwner (qmodel_t *owner)
+{
+	gltexture_t *glt, *next;
+
+	for (glt = active_gltextures; glt; glt = next)
+	{
+		next = glt->next;
+		if (glt->retained && glt->owner == owner)
 			TexMgr_FreeTexture (glt);
 	}
 }

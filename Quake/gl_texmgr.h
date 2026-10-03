@@ -73,6 +73,11 @@ typedef struct gltexture_s {
 	int			visframe; //matches r_framecount if texture was bound this frame
 	qboolean		itemcolor_valid;
 	vec3_t			itemcolor; // a representative texel, cached until the texture is uploaded again
+	qboolean		retained; // kept past its model's unload, waiting for the model to claim or free it
+	qboolean		grass_stored; // the model's grass analysis of this texture, kept with it while retained
+	qboolean		grass_detected;
+	qboolean		grass_color_valid;
+	vec3_t			grass_color;
 } gltexture_t;
 
 /*
@@ -140,6 +145,15 @@ void TexMgr_BlockSize (enum srcformat format, int *bytes, int *width, int *heigh
 gltexture_t *TexMgr_LoadImage (qmodel_t *owner, const char *name, int width, int height, enum srcformat format,
 			       byte *data, const char *source_file, src_offset_t source_offset, unsigned flags);
 void TexMgr_LoadImageBatch (texmgr_loadjob_t *jobs, size_t count);
+
+/* Lets an unloaded model keep its textures for its next load: retain, then claim what the reload reuses, then free the rest. */
+int TexMgr_RetainTexturesForOwner (qmodel_t *owner);
+gltexture_t *TexMgr_ClaimRetainedTexture (qmodel_t *owner, const char *name);
+void TexMgr_FreeRetainedTexturesForOwner (qmodel_t *owner);
+
+/* Runs function(context, 0..count-1) across the texture workers; serial if they're disabled. */
+void TexMgr_ParallelFor (void (*function) (void *context, unsigned int index), void *context, unsigned int count);
+int TexMgr_ParallelWorkers (void);
 void TexMgr_GetPrepStats (texmgr_prepstats_t *stats);
 struct gltexture_s *TexMgr_ColormapTexture(struct gltexture_s *basetex, plcolour_t lower, plcolour_t upper);
 void TexMgr_ReloadImage (gltexture_t *glt, plcolour_t shirt, plcolour_t pants);

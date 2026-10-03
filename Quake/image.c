@@ -113,6 +113,7 @@ static qboolean Buf_ReadByte(stdio_buffer_t *buf, byte *out)
 ** only use jpeg+png formats, because tbh there's not much need for the others.
 ** */
 #define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_FAILURE_STRINGS	// no shared error state; the prefetch decodes off-thread
 #define STBI_ONLY_JPEG
 #ifdef LODEPNG_NO_COMPILE_DECODER
 	#define STBI_ONLY_PNG
@@ -584,16 +585,43 @@ compressed mip chain.
 TODO: search order: tga png jpg pcx lmp
 ============
 */
+double image_load_time;	//tb -- load profiling
+unsigned int image_load_calls;
+
+static byte *Image_LoadImage_impl (const char *name, int *width, int *height, enum srcformat *fmt, qboolean *malloced);
+
 byte *Image_LoadImage (const char *name, int *width, int *height, enum srcformat *fmt, qboolean *malloced)
+{
+	double t;
+	byte *ret;
+
+	if (!developer.value)
+		return Image_LoadImage_impl (name, width, height, fmt, malloced);
+
+	t = Sys_DoubleTime ();
+	ret = Image_LoadImage_impl (name, width, height, fmt, malloced);
+	image_load_time += Sys_DoubleTime () - t;
+	image_load_calls++;
+	return ret;
+}
+
+enum imgkind { IMG_NONE, IMG_DDS, IMG_TGA, IMG_PNG, IMG_JPEG, IMG_PCX, IMG_LMP };
+
+/*
+============
+Image_Locate -- tb
+
+Finds the first image file Image_LoadImage would load for this name and
+returns its format with the file open.  loadfilename is left set to the hit.
+============
+*/
+static enum imgkind Image_Locate (const char *name, FILE **out)
 {
 	FILE	*f;
 	char *prefixes[3] = {"", "textures/", "textures/"};
 	int i;
 
 	const char *origname = name;
-
-	*malloced = false;
-	*fmt = SRC_RGBA;
 
 	for (i = 0; i < sizeof(prefixes)/sizeof(prefixes[0]); i++)
 	{
@@ -610,41 +638,378 @@ byte *Image_LoadImage (const char *name, int *width, int *height, enum srcformat
 		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.dds", prefixes[i], name);
 		COM_FOpenFile (loadfilename, &f, NULL);
 		if (f)
-			return Image_LoadDDS (f, width, height, fmt);
+		{
+			*out = f;
+			return IMG_DDS;
+		}
 
 		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.tga", prefixes[i], name);
 		COM_FOpenFile (loadfilename, &f, NULL);
 		if (f)
-			return Image_LoadTGA (f, width, height);
+		{
+			*out = f;
+			return IMG_TGA;
+		}
 
 		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.png", prefixes[i], name);
 		COM_FOpenFile (loadfilename, &f, NULL);
 		if (f)
-			return Image_LoadPNG (f, width, height, malloced);
+		{
+			*out = f;
+			return IMG_PNG;
+		}
 
 		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.jpeg", prefixes[i], name);
 		COM_FOpenFile (loadfilename, &f, NULL);
 		if (f)
-			return Image_LoadSTBI (f, width, height, malloced);
+		{
+			*out = f;
+			return IMG_JPEG;
+		}
 
 		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.jpg", prefixes[i], name);
 		COM_FOpenFile (loadfilename, &f, NULL);
 		if (f)
-			return Image_LoadSTBI (f, width, height, malloced);
+		{
+			*out = f;
+			return IMG_JPEG;
+		}
 
 		q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.pcx", prefixes[i], name);
 		COM_FOpenFile (loadfilename, &f, NULL);
 		if (f)
-			return Image_LoadPCX (f, width, height);
+		{
+			*out = f;
+			return IMG_PCX;
+		}
 	}
 
 	name = origname;
 	q_snprintf (loadfilename, sizeof(loadfilename), "%s%s.lmp", "", name);
 	COM_FOpenFile (loadfilename, &f, NULL);
 	if (f)
-		return Image_LoadLMP (f, width, height, fmt);
+	{
+		*out = f;
+		return IMG_LMP;
+	}
 
-	return NULL;
+	*out = NULL;
+	return IMG_NONE;
+}
+
+static qboolean Image_PrefetchTake (const char *name, byte **data, int *width, int *height, qboolean *malloced);
+
+static byte *Image_LoadImage_impl (const char *name, int *width, int *height, enum srcformat *fmt, qboolean *malloced)
+{
+	FILE	*f;
+	byte	*prefetched;
+
+	*malloced = false;
+	*fmt = SRC_RGBA;
+
+	if (Image_PrefetchTake (name, &prefetched, width, height, malloced))
+		return prefetched;
+
+	switch (Image_Locate (name, &f))
+	{
+	case IMG_DDS:	return Image_LoadDDS (f, width, height, fmt);
+	case IMG_TGA:	return Image_LoadTGA (f, width, height);
+	case IMG_PNG:	return Image_LoadPNG (f, width, height, malloced);
+	case IMG_JPEG:	return Image_LoadSTBI (f, width, height, malloced);
+	case IMG_PCX:	return Image_LoadPCX (f, width, height);
+	case IMG_LMP:	return Image_LoadLMP (f, width, height, fmt);
+	default:	return NULL;
+	}
+}
+
+/*
+==============================================================================
+
+PARALLEL PNG/JPEG DECODE -- tb
+
+Mod_LoadTextures asks for each replacement texture in turn, and decoding
+dominated the load of maps with large retextures.  A map queues the names it is
+about to request (Image_PrefetchTexture), mirroring the order of lookups in
+Mod_LoadTextures: primary, then the fallback if that misses, then the glow
+image and, failing that, the luma image of whichever was found.  The first
+request for a name that hasn't been scanned yet locates and reads a window of
+files serially, because the filesystem layer isn't thread safe, then decodes
+that window across the texture workers.  Requests are answered from the
+resulting table.  Other formats and names that weren't queued take the
+ordinary path, so the results are the same as without any of this.
+
+==============================================================================
+*/
+#define IMGPF_MAX_GROUPS	24		// textures scanned per window
+#define IMGPF_MAX_BYTES		(48u * 1024u * 1024u)	// decoded bytes held per window
+
+typedef enum { IMGPF_UNUSABLE, IMGPF_READY, IMGPF_MISS } imgpf_state_t;
+
+typedef struct
+{
+	char		*name;
+	imgpf_state_t	state;
+	byte		*raw;		// file contents, until decoded
+	size_t		rawsize;
+	byte		*pixels;	// decoded RGBA, owned until taken
+	int		width, height;
+} imgpf_entry_t;
+
+typedef struct
+{
+	char		*primary;
+	char		*fallback;	// tried if primary is missing
+	qboolean	plain;		// no glow or luma image to go with it
+} imgpf_group_t;
+
+static struct
+{
+	qboolean	active;
+	imgpf_group_t	*groups;
+	int		numgroups, maxgroups;
+	int		scanned;	// groups below this index have entries
+	imgpf_entry_t	*entries;
+	int		numentries, maxentries;
+} imgpf;
+
+void Image_PrefetchEnd (void)
+{
+	int i;
+
+	for (i = 0; i < imgpf.numentries; i++)
+	{
+		free (imgpf.entries[i].name);
+		free (imgpf.entries[i].raw);
+		free (imgpf.entries[i].pixels);
+	}
+	for (i = 0; i < imgpf.numgroups; i++)
+	{
+		free (imgpf.groups[i].primary);
+		free (imgpf.groups[i].fallback);
+	}
+	free (imgpf.entries);
+	free (imgpf.groups);
+	memset (&imgpf, 0, sizeof(imgpf));
+}
+
+qboolean Image_PrefetchBegin (void)
+{
+	if (imgpf.active)	// one at a time; the caller that began it ends it
+		return false;
+	imgpf.active = true;
+	return true;
+}
+
+void Image_PrefetchTexture (const char *primary, const char *fallback)
+{
+	imgpf_group_t *group;
+
+	if (!imgpf.active || imgpf.entries)	// the table is sized when the first window is scanned
+		return;
+	if (imgpf.numgroups == imgpf.maxgroups)
+	{
+		int newmax = imgpf.maxgroups ? imgpf.maxgroups * 2 : 64;
+		imgpf_group_t *grown = (imgpf_group_t *) realloc (imgpf.groups, newmax * sizeof(*grown));
+		if (!grown)
+			return;
+		imgpf.groups = grown;
+		imgpf.maxgroups = newmax;
+	}
+	group = &imgpf.groups[imgpf.numgroups++];
+	group->primary = strdup (primary);
+	group->fallback = fallback ? strdup (fallback) : NULL;
+	group->plain = false;
+}
+
+void Image_PrefetchImage (const char *name)
+{
+	Image_PrefetchTexture (name, NULL);
+	if (imgpf.active && imgpf.numgroups && !imgpf.entries)
+		imgpf.groups[imgpf.numgroups - 1].plain = true;
+}
+
+static imgpf_entry_t *Image_PrefetchNewEntry (const char *name)
+{
+	imgpf_entry_t *e = &imgpf.entries[imgpf.numentries++];
+
+	memset (e, 0, sizeof(*e));
+	e->name = strdup (name);
+	e->state = IMGPF_UNUSABLE;
+	return e;
+}
+
+// returns whether any file exists for the name
+static qboolean Image_PrefetchLocate (const char *name)
+{
+	imgpf_entry_t *e = Image_PrefetchNewEntry (name);
+	enum imgkind kind;
+	FILE *f;
+
+	kind = Image_Locate (name, &f);
+	if (kind == IMG_NONE)
+	{
+		e->state = IMGPF_MISS;
+		return false;
+	}
+	if ((kind == IMG_PNG || kind == IMG_JPEG) && com_filesize > 0 && com_filesize < INT_MAX)
+	{
+		byte *raw = (byte *) malloc (com_filesize);
+
+		if (raw && fread (raw, 1, com_filesize, f) == (size_t)com_filesize)
+		{
+			e->raw = raw;
+			e->rawsize = com_filesize;
+		}
+		else
+			free (raw);
+	}
+	fclose (f);	// anything else is left to the ordinary loader
+	return true;
+}
+
+static void Image_PrefetchScanGroup (const imgpf_group_t *group)
+{
+	const char *chosen = NULL;
+	char name[MAX_OSPATH];
+
+	if (Image_PrefetchLocate (group->primary))
+		chosen = group->primary;
+	else if (group->fallback && Image_PrefetchLocate (group->fallback))
+		chosen = group->fallback;
+	if (!chosen || group->plain)
+		return;
+
+	q_snprintf (name, sizeof(name), "%s_glow", chosen);
+	if (!Image_PrefetchLocate (name))
+	{
+		q_snprintf (name, sizeof(name), "%s_luma", chosen);
+		Image_PrefetchLocate (name);
+	}
+}
+
+static void Image_PrefetchDecode (void *context, unsigned int index)
+{
+	imgpf_entry_t *e = ((imgpf_entry_t **)context)[index];
+	int w = 0, h = 0, comp;
+	byte *pixels;
+
+	pixels = stbi_load_from_memory (e->raw, (int)e->rawsize, &w, &h, &comp, 4);
+	if (pixels && (w <= 0 || h <= 0 || (size_t)w > (size_t)INT_MAX / (size_t)h / 4))
+	{	// same sanity check as Image_LoadSTBI
+		free (pixels);
+		pixels = NULL;
+	}
+	free (e->raw);
+	e->raw = NULL;
+	e->pixels = pixels;
+	e->width = w;
+	e->height = h;
+	e->state = IMGPF_READY;
+}
+
+// scans and decodes the next window of queued textures
+static void Image_PrefetchFill (void)
+{
+	imgpf_entry_t **jobs;
+	size_t bytes = 0;
+	int count = 0, njobs = 0, first, i;
+
+	if (!imgpf.entries)
+	{
+		imgpf.maxentries = imgpf.numgroups * 4;
+		imgpf.entries = (imgpf_entry_t *) calloc (imgpf.maxentries ? imgpf.maxentries : 1, sizeof(*imgpf.entries));
+		if (!imgpf.entries)
+		{
+			imgpf.active = false;
+			return;
+		}
+	}
+
+	first = imgpf.numentries;
+	while (imgpf.scanned < imgpf.numgroups && count < IMGPF_MAX_GROUPS && bytes < IMGPF_MAX_BYTES)
+	{
+		int before = imgpf.numentries;
+
+		Image_PrefetchScanGroup (&imgpf.groups[imgpf.scanned++]);
+		count++;
+		for (i = before; i < imgpf.numentries; i++)
+		{
+			imgpf_entry_t *e = &imgpf.entries[i];
+			int w, h, comp;
+
+			size_t decoded;
+
+			if (!e->raw)
+				continue;
+			// an image that wouldn't fit the window's budget is left to the ordinary loader
+			if (!stbi_info_from_memory (e->raw, (int)e->rawsize, &w, &h, &comp) || w <= 0 || h <= 0 ||
+				(size_t)w > IMGPF_MAX_BYTES / 4 / (size_t)h ||
+				(decoded = (size_t)w * (size_t)h * 4) > IMGPF_MAX_BYTES - bytes)
+			{
+				free (e->raw);
+				e->raw = NULL;
+				continue;
+			}
+			bytes += decoded;
+		}
+	}
+
+	jobs = (imgpf_entry_t **) malloc ((imgpf.numentries - first + 1) * sizeof(*jobs));
+	if (!jobs)
+	{
+		imgpf.active = false;
+		return;
+	}
+	for (i = first; i < imgpf.numentries; i++)
+		if (imgpf.entries[i].raw)
+			jobs[njobs++] = &imgpf.entries[i];
+	if (njobs > 1 && !stbi__zdefault_distance[31])
+		stbi__init_zdefaults ();	// stb fills its fixed huffman lengths on first use; don't let workers race to
+	TexMgr_ParallelFor (Image_PrefetchDecode, jobs, (unsigned int)njobs);
+	free (jobs);
+}
+
+static qboolean Image_PrefetchTake (const char *name, byte **data, int *width, int *height, qboolean *malloced)
+{
+	int pass, i;
+
+	if (!imgpf.active)
+		return false;
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		for (i = 0; i < imgpf.numentries; i++)
+		{
+			imgpf_entry_t *e = &imgpf.entries[i];
+
+			if (e->state == IMGPF_UNUSABLE || strcmp (e->name, name))
+				continue;
+			if (e->state == IMGPF_READY && e->pixels)
+			{
+				*data = e->pixels;
+				*width = e->width;
+				*height = e->height;
+				*malloced = true;
+				e->pixels = NULL;
+			}
+			else
+				*data = NULL;
+			e->state = IMGPF_UNUSABLE;	// taken: a repeat request goes the ordinary way
+			return true;
+		}
+
+		if (pass)
+			break;
+		for (i = imgpf.scanned; i < imgpf.numgroups; i++)
+			if (!strcmp (imgpf.groups[i].primary, name))
+				break;
+		if (i == imgpf.numgroups)
+			break;
+		Image_PrefetchFill ();
+		if (!imgpf.active)
+			break;
+	}
+	return false;
 }
 
 //==============================================================================

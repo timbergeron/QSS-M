@@ -2028,6 +2028,7 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 	int		samesize, numloaded;
 	char	filename[MAX_OSPATH];
 	qboolean nonefound = true;
+	qboolean prefetching = false;
 
 	if (strcmp(skybox_name, name) == 0 && skybox_complete)
 	{	//no change. the textures survive map changes (NULL texmgr owner), so a
@@ -2058,6 +2059,15 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 
 	//load textures
 	mark = Hunk_LowMark ();
+	if (TexMgr_ParallelWorkers () > 1 && Image_PrefetchBegin ())
+	{	// decode the faces side by side rather than one after another
+		prefetching = true;
+		for (i = 0; i < 6; i++)
+		{
+			q_snprintf (filename, sizeof(filename), "gfx/env/%s%s", name, suf[i]);
+			Image_PrefetchImage (filename);
+		}
+	}
 	for (i = 0, numloaded = 0, samesize = 0; i < 6; i++)
 	{
 		q_snprintf (filename, sizeof(filename), "gfx/env/%s%s", name, suf[i]);
@@ -2078,6 +2088,8 @@ static void Sky_LoadSkyBoxInternal (const char *name, qboolean quiet) // woods #
 			malloced[i] = false;
 		}
 	}
+	if (prefetching)
+		Image_PrefetchEnd ();
 
 	if (numloaded > 0 && samesize > 0)
 	{
