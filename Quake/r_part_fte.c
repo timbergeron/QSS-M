@@ -786,7 +786,8 @@ float CL_TraceLine (vec3_t start, vec3_t end, vec3_t impact, vec3_t normal, int 
 		for (i = 0; i < cl.num_entities; i++)
 		{
 			ent = &cl.entities[i];
-			if (!ent->model || ent->model->needload || ent->model->type != mod_brush)
+			// Collision-only brushes should not catch particles or visual effects.
+			if (!ent->model || ent->model->needload || ent->model->type != mod_brush || ent->model->nummodelsurfaces == 0)
 				continue;
 			trace_line_ents[num_trace_line_ents++] = i;
 		}
