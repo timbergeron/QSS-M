@@ -242,6 +242,19 @@ static void *GLARB_GetNormalOffset_MD3 (aliashdr_t *hdr, int pose)
 GLAlias_CreateShaders
 =============
 */
+void GLAlias_DeleteShaders (void)
+{
+	int i;
+
+	for (i = 0; i < ALIAS_GLSL_MODES; i++)
+	{
+		GL_DeleteProgramTracked (&r_alias_glsl[i].program);
+		memset (&r_alias_glsl[i], 0, sizeof(r_alias_glsl[i]));
+	}
+	GL_DeleteProgramTracked (&r_alias_inst_glsl.program);
+	memset (&r_alias_inst_glsl, 0, sizeof(r_alias_inst_glsl));
+}
+
 void GLAlias_CreateShaders (void)
 {
 	int i;
@@ -531,13 +544,7 @@ void GLAlias_CreateShaders (void)
 			"	gl_FragColor = result;\n"
 			"}\n";
 
-	for (i = 0; i < ALIAS_GLSL_MODES; i++)
-	{
-		GL_DeleteProgramTracked (&r_alias_glsl[i].program);
-		memset (&r_alias_glsl[i], 0, sizeof(r_alias_glsl[i]));
-	}
-	GL_DeleteProgramTracked (&r_alias_inst_glsl.program);
-	memset (&r_alias_inst_glsl, 0, sizeof(r_alias_inst_glsl));
+	GLAlias_DeleteShaders ();
 
 	if (!gl_glsl_alias_able)
 		return;

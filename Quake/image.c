@@ -698,6 +698,7 @@ static enum imgkind Image_Locate (const char *name, FILE **out)
 }
 
 static qboolean Image_PrefetchTake (const char *name, byte **data, int *width, int *height, qboolean *malloced);
+static qboolean Image_PreloadTake (const char *name, byte **data, int *width, int *height, qboolean *malloced);
 
 static byte *Image_LoadImage_impl (const char *name, int *width, int *height, enum srcformat *fmt, qboolean *malloced)
 {
@@ -707,6 +708,8 @@ static byte *Image_LoadImage_impl (const char *name, int *width, int *height, en
 	*malloced = false;
 	*fmt = SRC_RGBA;
 
+	if (Image_PreloadTake (name, &prefetched, width, height, malloced))
+		return prefetched;
 	if (Image_PrefetchTake (name, &prefetched, width, height, malloced))
 		return prefetched;
 
@@ -794,6 +797,7 @@ void Image_PrefetchEnd (void)
 
 qboolean Image_PrefetchBegin (void)
 {
+	Image_PreloadRelease ();	// a map is loading; the startup images weren't wanted
 	if (imgpf.active)	// one at a time; the caller that began it ends it
 		return false;
 	imgpf.active = true;
@@ -1010,6 +1014,198 @@ static qboolean Image_PrefetchTake (const char *name, byte **data, int *width, i
 			break;
 	}
 	return false;
+}
+
+/*
+==============================================================================
+
+STARTUP PRELOAD -- tb
+
+The console background and main menu are drawn on the first frame, and their
+replacement images take ~80 ms to decode.  Image_PreloadStart reads them (the
+filesystem layer isn't thread safe) and decodes them on a thread while the
+window and GL context are created.  A request is answered from the preload
+only if the same file would still be loaded, so a game directory change in
+between falls back to the ordinary path.
+
+==============================================================================
+*/
+#define IMGPL_MAX	16
+#define IMGPL_MAX_BYTES	(48u * 1024u * 1024u)
+
+typedef struct
+{
+	char		name[MAX_QPATH];
+	char		file[MAX_OSPATH];	// what Image_Locate found
+	qofs_t		filesize;
+	int		from_pak;
+	byte		*raw;
+	size_t		rawsize;
+	byte		*pixels;
+	int		width, height;
+	qboolean	taken;
+} imgpl_entry_t;
+
+static struct
+{
+	imgpl_entry_t	entries[IMGPL_MAX];
+	int		count;
+	int		untaken;
+	SDL_Thread	*thread;
+} imgpl;
+
+static int SDLCALL Image_PreloadThread (void *unused)
+{
+	int i, comp;
+
+	(void)unused;
+	for (i = 0; i < imgpl.count; i++)
+	{
+		imgpl_entry_t *e = &imgpl.entries[i];
+		int w = 0, h = 0;
+
+		e->pixels = stbi_load_from_memory (e->raw, (int)e->rawsize, &w, &h, &comp, 4);
+		if (e->pixels && (w <= 0 || h <= 0 || (size_t)w > (size_t)INT_MAX / (size_t)h / 4))
+		{	// same sanity check as Image_LoadSTBI
+			free (e->pixels);
+			e->pixels = NULL;
+		}
+		free (e->raw);
+		e->raw = NULL;
+		e->width = w;
+		e->height = h;
+	}
+	return 0;
+}
+
+static void Image_PreloadWait (void)
+{
+	if (imgpl.thread)
+	{
+		SDL_WaitThread (imgpl.thread, NULL);
+		imgpl.thread = NULL;
+	}
+}
+
+void Image_PreloadStart (const char **names, int count)
+{
+	int i;
+	size_t bytes = 0;
+
+	Image_PreloadRelease ();
+	for (i = 0; i < count && imgpl.count < IMGPL_MAX; i++)
+	{
+		imgpl_entry_t *e = &imgpl.entries[imgpl.count];
+		enum imgkind kind;
+		FILE *f;
+
+		kind = Image_Locate (names[i], &f);
+		if (kind == IMG_NONE)
+			continue;
+		if ((kind == IMG_PNG || kind == IMG_JPEG) && com_filesize > 0 &&
+			com_filesize < (qofs_t)(IMGPL_MAX_BYTES - bytes))
+		{
+			memset (e, 0, sizeof(*e));
+			e->raw = (byte *) malloc (com_filesize);
+			if (e->raw && fread (e->raw, 1, com_filesize, f) == (size_t)com_filesize)
+			{
+				int w, h, comp;
+				size_t decoded;
+
+				/* Speculative preloading must not reserve unbounded memory for
+				 * custom menu replacements. Larger images use the ordinary path. */
+				if (!stbi_info_from_memory (e->raw, (int)com_filesize, &w, &h, &comp) ||
+					w <= 0 || h <= 0 || (size_t)w > IMGPL_MAX_BYTES / 4 / (size_t)h ||
+					(decoded = (size_t)w * (size_t)h * 4) > IMGPL_MAX_BYTES - bytes - (size_t)com_filesize)
+				{
+					free (e->raw);
+					e->raw = NULL;
+					fclose (f);
+					continue;
+				}
+				q_strlcpy (e->name, names[i], sizeof(e->name));
+				q_strlcpy (e->file, loadfilename, sizeof(e->file));
+				e->filesize = com_filesize;
+				e->from_pak = file_from_pak;
+				e->rawsize = (size_t)com_filesize;
+				bytes += e->rawsize + decoded;
+				imgpl.count++;
+			}
+			else
+			{
+				free (e->raw);
+				e->raw = NULL;
+			}
+		}
+		fclose (f);	// anything else is left to the ordinary loader
+	}
+
+	imgpl.untaken = imgpl.count;
+	if (!imgpl.count)
+		return;
+	if (!stbi__zdefault_distance[31])
+		stbi__init_zdefaults ();	// filled on first use; don't race the main thread to it
+	imgpl.thread = SDL_CreateThread (Image_PreloadThread, "ImagePreload", NULL);
+	if (!imgpl.thread)
+		Image_PreloadThread (NULL);
+}
+
+void Image_PreloadRelease (void)
+{
+	int i;
+
+	if (!imgpl.count && !imgpl.thread)
+		return;
+	Image_PreloadWait ();
+	for (i = 0; i < imgpl.count; i++)
+	{
+		free (imgpl.entries[i].raw);
+		free (imgpl.entries[i].pixels);
+	}
+	memset (&imgpl, 0, sizeof(imgpl));
+}
+
+static qboolean Image_PreloadTake (const char *name, byte **data, int *width, int *height, qboolean *malloced)
+{
+	imgpl_entry_t *e = NULL;
+	enum imgkind kind;
+	qboolean same;
+	FILE *f;
+	int i;
+
+	if (!imgpl.untaken)
+		return false;
+	for (i = 0; i < imgpl.count; i++)
+	{
+		if (!imgpl.entries[i].taken && !strcmp (imgpl.entries[i].name, name))
+		{
+			e = &imgpl.entries[i];
+			break;
+		}
+	}
+	if (!e)
+		return false;
+
+	e->taken = true;
+	imgpl.untaken--;
+	kind = Image_Locate (name, &f);
+	same = (kind == IMG_PNG || kind == IMG_JPEG) && com_filesize == e->filesize &&
+		file_from_pak == e->from_pak && !strcmp (loadfilename, e->file);
+	if (f)
+		fclose (f);
+
+	Image_PreloadWait ();
+	if (same && e->pixels)
+	{
+		*data = e->pixels;
+		*width = e->width;
+		*height = e->height;
+		*malloced = true;
+		e->pixels = NULL;
+	}
+	if (!imgpl.untaken)
+		Image_PreloadRelease ();
+	return same && *malloced;
 }
 
 //==============================================================================

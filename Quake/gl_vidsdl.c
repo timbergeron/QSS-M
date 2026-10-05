@@ -84,8 +84,10 @@ static SDL_GLContext	gl_context;
 
 static qboolean	vid_locked = false; //johnfitz
 static qboolean	vid_changed = false;
+static qboolean	game_shaders_pending;
 
 static void VID_Menu_Init (void); //johnfitz
+static void VID_EnsureModelist (void);
 static void VID_Menu_f (void); //johnfitz
 static void VID_MenuDraw (void);
 static void VID_MenuKey (int key);
@@ -95,7 +97,6 @@ static void ClearAllStates (void);
 static void GL_Init (void);
 static void GL_SetupState (void); //johnfitz
 
-void FXAA_Init(void); // woods #fxaa
 void FXAA_Shutdown(void); // woods #fxaa
 
 #if defined(_WIN32)
@@ -977,6 +978,7 @@ static qboolean VID_FindClosestFullscreenMode (int width, int height, int refres
 	unsigned int best_bppdelta = 0;
 	unsigned int best_ratedelta = 0;
 
+	VID_EnsureModelist ();
 	for (i = 0; i < nummodes; i++)
 	{
 		long long dw, dh;
@@ -1506,7 +1508,6 @@ static void VID_Restart (void)
 	GLMesh_LoadVertexBuffers ();
 	GL_SetupState ();
 	Fog_SetupState ();
-	FXAA_Init (); // woods #fxaa
 	R_TeleportCreateShaders (); // connected restart: R_NewMap is not called here
 
 	//conwidth and conheight need to be recalculated
@@ -2229,9 +2230,19 @@ static void GL_SetupState (void)
 
 /*
 ===============
-GL_Init
+GL_EnsureGameShaders
 ===============
 */
+void GL_EnsureGameShaders (void)
+{
+	if (!game_shaders_pending)
+		return;
+	game_shaders_pending = false;
+	GLAlias_CreateShaders ();
+	GLWorld_CreateShaders ();
+}
+
+/* Initialize capabilities now; gameplay shaders wait for their first consumer. */
 static void GL_Init (void)
 {
 	gl_vendor = (const char *) glGetString (GL_VENDOR);
@@ -2279,12 +2290,13 @@ static void GL_Init (void)
 	LMBLOCK_WIDTH = q_min(gl_hardware_maxsize, 512);	//keeping this small potentially allows for more efficient texsubimage calls.
 	LMBLOCK_HEIGHT = q_min(gl_hardware_maxsize, 16384);
 
-	GLAlias_CreateShaders ();
-	GLWorld_CreateShaders ();
+	/* The menu uses fixed-function drawing. Compile gameplay programs during
+	 * map loading, or immediately when a connected video restart needs them. */
+	game_shaders_pending = true;
+	if (cls.state == ca_connected)
+		GL_EnsureGameShaders ();
 	GL_ClearBufferBindings ();
 	
-	if (gl_fbo_able && gl_glsl_able) // woods #fxaa
-		FXAA_Init();
 }
 
 /*
@@ -2334,6 +2346,12 @@ void GL_EndRendering (void)
 	}
 }
 
+
+void VID_BeginShutdown (void)
+{
+	if (draw_context)
+		SDL_HideWindow (draw_context);
+}
 
 void	VID_Shutdown (void)
 {
@@ -2425,6 +2443,7 @@ static void VID_DescribeModes_f (void)
 
 	lastwidth = lastheight = lastbpp = count = 0;
 
+	VID_EnsureModelist ();
 	for (i = 0; i < nummodes; i++)
 	{
 		if (lastwidth != modelist[i].width || lastheight != modelist[i].height || lastbpp != modelist[i].bpp)
@@ -2470,6 +2489,7 @@ static void VID_CompleteModeField (cvar_t* cvar, const char* partial, size_t ofs
 
 #define GET_FIELD_FOR_MODE(idx)		*(int*)((uintptr_t)&modelist[idx] + ofs)
 
+	VID_EnsureModelist ();
 	for (i = 0; i < nummodes; i++)
 	{
 		char buf[64];
@@ -2674,7 +2694,10 @@ void	VID_Init (void)
 	}
 	CFG_ReadCvarOverrides(read_vars, num_readvars);
 
-	VID_InitModelist();
+	// The HUD cvars are known now; decode the first frame's images while the window is created.
+	Draw_PreloadStartupPics ();
+
+	// The mode list is built on first use (VID_EnsureModelist).
 
 	width = (int)vid_width.value;
 	height = (int)vid_height.value;
@@ -3095,6 +3118,7 @@ static void VID_Menu_RebuildBppList (qboolean update_cvars)
 {
 	int i, j, b;
 
+	VID_EnsureModelist ();
 	vid_menu_numbpps = 0;
 
 	for (i = 0; i < nummodes; i++)
@@ -3152,6 +3176,7 @@ static void VID_Menu_RebuildRateList (qboolean update_cvars)
 {
 	int i, j, r;
 
+	VID_EnsureModelist ();
 	vid_menu_numrates = 0;
 
 	for (i = 0; i < nummodes; i++)
@@ -3199,6 +3224,22 @@ static void VID_Menu_RebuildRateList (qboolean update_cvars)
 		Cvar_SetValue ("vid_refreshrate",(float)vid_menu_rates[0]);
 }
 
+/* Enumerating fullscreen modes can take a few hundred milliseconds, and a
+ * windowed startup never needs them, so the list is built on first use. */
+static qboolean modelist_stale = true;
+
+static void VID_EnsureModelist (void)
+{
+	if (!modelist_stale)
+		return;
+	modelist_stale = false;
+
+	VID_InitModelist ();
+	VID_Menu_Init ();
+	VID_Menu_RebuildBppList (false);
+	VID_Menu_RebuildRateList (false);
+}
+
 /* Refresh pacing and menu choices after monitor/mode changes without applying
  * or discarding the user's pending settings. Called once per SDL event batch. */
 void VID_OnDisplayChange (void)
@@ -3207,10 +3248,7 @@ void VID_OnDisplayChange (void)
 		return;
 
 	vid.refreshrate = VID_GetCurrentRefreshRate();
-	VID_InitModelist ();
-	VID_Menu_Init ();
-	VID_Menu_RebuildBppList (false);
-	VID_Menu_RebuildRateList (false);
+	modelist_stale = true;
 }
 
 /*
@@ -3225,6 +3263,7 @@ static void VID_Menu_ChooseNextMode (int dir)
 {
 	int i;
 
+	VID_EnsureModelist ();
 	if (vid_menu_nummodes)
 	{
 		for (i = 0; i < vid_menu_nummodes; i++)

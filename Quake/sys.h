@@ -105,6 +105,15 @@ void Sys_ClearDockNotificationBadge (void);
 
 #if defined(_WIN32) // woods #disablecaps via ironwail
 void Sys_ActivateKeyFilter (qboolean active);
+
+// Scans DirectInput game controllers on a worker thread, again after HID
+// devices arrive, until stopped. Sys_DirectInputControllers copies the
+// MAKELONG(vendor, product) ids of the last scan and returns their count,
+// or -1 before the first scan finishes, -2 if SDL must enumerate instead.
+// *generation changes with each scan.
+void Sys_StartDirectInputWatch (void);
+void Sys_StopDirectInputWatch (void);
+int Sys_DirectInputControllers (unsigned int *ids, int maxids, unsigned int *generation);
 #endif
 
 #endif	/* _QUAKE_SYS_H */

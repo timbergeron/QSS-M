@@ -8632,6 +8632,7 @@ typedef struct {
     
     int width, height;
     qboolean initialized;
+    qboolean init_attempted;
     fxaa_quality_t current; // Current quality preset
 } fxaa_t;
 
@@ -8948,10 +8949,12 @@ FXAA_Init
 */
 void FXAA_Init(void)
 {
-    if (!gl_fbo_able || !gl_glsl_able || fxaa.initialized)
+    if (vid_fxaa.value <= 0 || !gl_fbo_able || !gl_glsl_able || fxaa.init_attempted)
         return;
         
     memset(&fxaa, 0, sizeof(fxaa));
+    fxaa.init_attempted = true;
+    fxaa.current = fxaa_presets[(int)CLAMP(0, vid_fxaa.value, 3)];
     
     fxaa.program_simple = FXAA_CreateShader_Simple();
     if (!fxaa.program_simple) {
@@ -8962,6 +8965,8 @@ void FXAA_Init(void)
     fxaa.program_fte = FXAA_CreateShader_FTE();
     if (!fxaa.program_fte) {
         Con_Printf("FXAA: Failed to create FTE shader\n");
+        GL_DeleteProgramFunc(fxaa.program_simple);
+        fxaa.program_simple = 0;
         return;
     }
     
@@ -8994,9 +8999,6 @@ FXAA_Shutdown
 */
 void FXAA_Shutdown(void)
 {
-    if (!fxaa.initialized)
-        return;
-        
     FXAA_DeleteFramebuffer();
     
     if (fxaa.program_simple) {
@@ -9010,6 +9012,7 @@ void FXAA_Shutdown(void)
     }
     
     fxaa.initialized = false;
+    fxaa.init_attempted = false;
 }
 
 /*
@@ -9145,6 +9148,8 @@ FXAA_BeginFrame
 */
 void FXAA_BeginFrame(void)
 {
+    if (!fxaa.initialized && vid_fxaa.value > 0)
+        FXAA_Init();
     if (!fxaa.initialized || vid_fxaa.value <= 0 || !gl_fbo_able || !gl_glsl_able)
         return;
         

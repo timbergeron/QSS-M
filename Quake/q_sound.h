@@ -121,8 +121,10 @@ typedef struct
 } wavinfo_t;
 
 void S_Init (void);
+void S_FinishStartup (void);
 void S_Startup (void);
 void S_Shutdown (void);
+void S_BeginShutdown (void);
 void S_StartSound (int entnum, int entchannel, sfx_t *sfx, vec3_t origin, float fvol, float attenuation);
 void S_StaticSound (sfx_t *sfx, vec3_t origin, float vol, float attenuation);
 void S_StopSound (int entnum, int entchannel);
@@ -169,12 +171,15 @@ void S_RawSamples(int samples, int rate, int width, int channels, byte * data, f
 
 /* initializes cycling through a DMA buffer and returns information on it */
 qboolean SNDDMA_Init(dma_t *dma);
+qboolean SNDDMA_BeginInit (dma_t *dma);
+qboolean SNDDMA_FinishInit (void);
 
 /* gets the current DMA position */
 int SNDDMA_GetDMAPos(void);
 
 /* shutdown the DMA xfer. */
 void SNDDMA_Shutdown(void);
+void SNDDMA_BeginShutdown (void);
 
 /* validates & locks the dma buffer */
 void SNDDMA_LockBuffer(void);

@@ -96,6 +96,7 @@ void Draw_InvalidateLevelshots (void);
 // photo is not washed out by a gamma chosen to lift Quake's dark art.
 void Draw_Levelshot (int x, int y, int w, int h, qpic_t *pic);
 void Draw_NewGame (void);
+void Draw_PreloadStartupPics (void);
 qboolean Draw_GetCanvasTransform(canvastype canvas, vrect_t *bounds, vrect_t *viewport);
 qboolean Draw_WindowToCanvas(canvastype canvas, int win_x, int win_y, int *canvas_x, int *canvas_y);
 void Draw_GetMenuTransform(vrect_t* bounds, vrect_t* viewport); // woods #mousemenu (iw)

@@ -2556,6 +2556,7 @@ void _Host_Frame (double time)
 	if (!isDedicated && !CL_DemoSeekActive ())
 	{
 		SCR_UpdateScreen ();
+		Image_PreloadRelease (); /* startup images no longer needed after the first draw */
 		CL_RunParticles (); //johnfitz -- seperated from rendering
 		Sbar_PreloadFrame (); // spread 24-bit HUD decoding across post-launch/menu/connection frames
 	}
@@ -2710,6 +2711,7 @@ void Host_Init (void)
 
 		V_Init ();
 		Chase_Init ();
+		S_Init ();
 		// Filesystem-backed content lists are built lazily by their first consumer.
 		VID_Init ();
 		IN_Init ();
@@ -2717,7 +2719,7 @@ void Host_Init (void)
 		Draw_Init ();
 		SCR_Init ();
 		R_Init ();
-		S_Init ();
+		S_FinishStartup ();
 		CDAudio_Init ();
 		BGM_Init();
 		Sbar_Init ();
@@ -2807,6 +2809,14 @@ void Host_Shutdown(void)
 
 // keep Con_Printf from trying to update the screen
 	scr_disabled_for_loading = true;
+	if (cls.state != ca_dedicated)
+	{
+		VID_BeginShutdown ();
+		BGM_Shutdown ();
+		CDAudio_Shutdown ();
+		S_BeginShutdown ();
+	}
+	Image_PreloadRelease ();
 	NET_CancelWebRequests(); // also covers Sys_Error and quit paths that skip Host_Quit_f
 	NET_CancelServerQueries();
 	Discord_Shutdown(); // joins curl workers before NET_Shutdown cleans up libcurl
@@ -2843,8 +2853,6 @@ void Host_Shutdown(void)
 		TexMgr_Shutdown();
 		if (con_initialized)
 			History_Shutdown ();
-		BGM_Shutdown();
-		CDAudio_Shutdown ();
 		S_Shutdown ();
 		Cache_Shutdown ();
 		IN_Shutdown ();

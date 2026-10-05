@@ -629,7 +629,10 @@ void R_DeleteShaders (void);
 void PolyBlend_DeleteVignetteTexture (void); // woods #polylblend2
 
 void GLWorld_CreateShaders (void);
+void GL_EnsureGameShaders (void);
 void GLAlias_CreateShaders (void);
+void GLAlias_DeleteShaders (void);
+void GLWorld_DeleteShaders (void);
 extern qboolean gl_alias_shaders_compiled_disconnected;
 extern qboolean gl_alias_shaders_compiling_disconnected_restart;
 void GL_DrawAliasShadow (entity_t *e);

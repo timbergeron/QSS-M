@@ -3912,6 +3912,8 @@ void R_RenderView (void)
 	if (r_refdef.drawworld && !cl.worldmodel)
 		Sys_Error ("R_RenderView: NULL worldmodel");
 
+	GL_EnsureGameShaders (); /* also covers CSQC scenes without a world */
+
 	time1 = 0; /* avoid compiler warning */
 	if (r_speeds.value)
 	{

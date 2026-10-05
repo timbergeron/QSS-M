@@ -1942,6 +1942,11 @@ static void GLWorld_DeleteShaderPrograms (void)
 	}
 }
 
+void GLWorld_DeleteShaders (void)
+{
+	GLWorld_DeleteShaderPrograms ();
+}
+
 #define GRASS_BLADE_MODE_CPU 1
 #define GRASS_BLADE_MODE_SHADER 2
 #define GRASS_DENSITY_MAX 500.0f
@@ -7503,6 +7508,14 @@ void RSceneCache_AbortTeleport(void)
 	skipsubmodels = NULL;
 }
 
+static qboolean RSceneCache_CanDraw(void)
+{
+	// Cached batches use shader vertex attributes for both world and water.
+	// Fall back before replacing ordinary texture chains if either path failed.
+	return gl_vbo_able && gl_bmodel_vbo && gl_glsl_able &&
+		r_world_program && gl_glsl_water_able;
+}
+
 static qboolean RSceneCache_Queue(byte *vis)
 {
 //	int type = 0;
@@ -7521,8 +7534,8 @@ static qboolean RSceneCache_Queue(byte *vis)
 	byte *bakesubmodels;
 
 	skipsubmodels = NULL;
-	// Cached indices address the shared brush VBO, never client-side vertices.
-	if (!gl_vbo_able || !gl_bmodel_vbo)
+	// Cached indices address the shared brush VBO and require the shader paths.
+	if (!RSceneCache_CanDraw())
 	{
 		if (rscenecache.thread)
 			RSceneCache_Shutdown();
@@ -8205,7 +8218,7 @@ static void RSceneCache_Draw(qboolean water)
 	const float lightmapscale = (overbright ? 2.0f : 1.0f) * (wide10bits ? 4.0f : 1.0f);
 	const byte wantedtexture = water ? RSCENECACHE_TEX_WATER : RSCENECACHE_TEX_WORLD;
 
-	if (!cache || !gl_vbo_able || !gl_bmodel_vbo)
+	if (!cache || !RSceneCache_CanDraw())
 	{
 		skipsubmodels = NULL;
 		return;

@@ -94,7 +94,7 @@ static void Cvar_SetValue(const char *name, float value)
 }
 '''
 
-production = "\n".join(function(declaration) for declaration in (
+production = "static qboolean modelist_stale = true;\nstatic void VID_EnsureModelist (void);\n" + "\n".join(function(declaration) for declaration in (
     "static int VID_RefreshRateHz (const SDL_DisplayMode *mode)",
     "static SDL_DisplayID VID_GetDisplay (void)",
     "static int VID_GetCurrentRefreshRate (void)",
@@ -108,6 +108,7 @@ production = "\n".join(function(declaration) for declaration in (
     "static void VID_Menu_Init (void)",
     "static void VID_Menu_RebuildBppList (qboolean update_cvars)",
     "static void VID_Menu_RebuildRateList (qboolean update_cvars)",
+    "static void VID_EnsureModelist (void)",
     "void VID_OnDisplayChange (void)",
     "static void VID_Menu_ChooseNextMode (int dir)",
     "static void VID_Menu_ChooseNextBpp (int dir)",
@@ -168,8 +169,15 @@ int main(void)
     assert(VID_ValidMode(800, 600, 60, 32, true));
     vid_desktopfullscreen.value = 0;
 
-    /* Refresh live pacing and choices while preserving pending settings. */
+    /* Refresh pacing immediately; enumerate modes only when choices are needed. */
+    int before = queries;
     VID_OnDisplayChange();
+    assert(vid.refreshrate == 144 && modelist_stale && queries == before);
+    VID_EnsureModelist();
+    assert(!modelist_stale && queries > before);
+    before = queries;
+    VID_EnsureModelist();
+    assert(queries == before);
     assert(vid.refreshrate == 144 && nummodes == 2);
     assert(vid_menu_nummodes == 1 && vid_menu_modes[0].width == 2560);
     assert(vid_menu_numbpps == 1 && vid_menu_numrates == 2);
@@ -179,6 +187,7 @@ int main(void)
     vid_changed = true;
     secondary_modes[0].refresh_rate = 165;
     VID_OnDisplayChange();
+    VID_EnsureModelist();
     assert(vid.refreshrate == 165 && vid_changed && cvar_writes == 0);
     assert(vid_refreshrate.value == 144 && vid_menu_rates[0] == 165);
 
@@ -187,6 +196,7 @@ int main(void)
     {
         window_display = 11;
         VID_OnDisplayChange();
+        VID_EnsureModelist();
         assert(vid.refreshrate == 60 && vid_menu_nummodes == 2);
         assert(vid_menu_modes[0].width == 1920);
         assert(vid_menu_numbpps == 0 && vid_menu_numrates == 0);
@@ -194,6 +204,7 @@ int main(void)
         assert(closest.width == 1920 && closest.refreshrate == 60);
         window_display = 73;
         VID_OnDisplayChange();
+        VID_EnsureModelist();
         assert(vid_menu_nummodes == 1 && vid_menu_modes[0].width == 2560);
     }
     assert(cvar_writes == 0);
@@ -201,6 +212,7 @@ int main(void)
     /* Unplug the secondary; unknown or unavailable rates keep safe pacing. */
     window_display = 0;
     VID_OnDisplayChange();
+    VID_EnsureModelist();
     assert(vid.refreshrate == 60 && queried_display == 11);
     current_mode_failure = 1;
     assert(VID_GetCurrentRefreshRate() == 60);
@@ -215,6 +227,7 @@ int main(void)
         secondary_count = 0;
         enumeration_failure = fail;
         VID_OnDisplayChange();
+        VID_EnsureModelist();
         assert(!nummodes && !vid_menu_nummodes && !vid_menu_numrates && !vid_menu_numbpps);
         assert(!VID_FindClosestFullscreenMode(800, 600, 60, 32, &closest));
         VID_Menu_RebuildBppList(true);
@@ -233,6 +246,7 @@ int main(void)
     secondary_modes[1] = mode(73, 2560, 1440, 120);
     secondary_modes[1].format = SDL_PIXELFORMAT_XRGB8888;
     VID_OnDisplayChange();
+    VID_EnsureModelist();
     assert(vid_bpp.value == 32 && vid_menu_numrates == 0);
     VID_Menu_ChooseNextBpp(1);
     assert(vid_bpp.value == 24 && vid_menu_numrates == 2);
@@ -243,6 +257,7 @@ int main(void)
     secondary_count = 3;
     secondary_modes[2] = mode(73, 1920, 1080, 60);
     VID_OnDisplayChange();
+    VID_EnsureModelist();
     vid_width.value = 1920;
     vid_height.value = 1080;
     VID_Menu_ChooseNextBpp(1);
@@ -262,6 +277,7 @@ int main(void)
         secondary_modes[i] = mode(73, 2560, 1440, 240 - i);
     vid_refreshrate.value = 240 - (secondary_count - 1);
     VID_OnDisplayChange();
+    VID_EnsureModelist();
     assert(vid_menu_numrates == secondary_count && cvar_writes == 0);
     VID_Menu_RebuildRateList(true);
     assert(cvar_writes == 0); /* Opening the menu must not silently change it. */
@@ -275,6 +291,7 @@ int main(void)
     for (int i = 0; i < secondary_count; i++)
         secondary_modes[i] = mode(73, 1024 + i, 768, 144);
     VID_OnDisplayChange();
+    VID_EnsureModelist();
     assert(nummodes == MAX_MODE_LIST && vid_menu_nummodes == MAX_MODE_LIST);
     vid_width.value = 1024;
     vid_height.value = 768;
@@ -286,6 +303,7 @@ int main(void)
     for (int i = 0; i < secondary_count; i++)
         secondary_modes[i] = mode(73, 1024, 768, 1000 - i);
     VID_OnDisplayChange();
+    VID_EnsureModelist();
     assert(nummodes == MAX_MODE_LIST && vid_menu_numrates == MAX_MODE_LIST);
     vid_refreshrate.value = 1000;
     VID_Menu_ChooseNextRate(-1);

@@ -906,6 +906,34 @@ qpic_t *Draw_MakePic (const char *name, int width, int height, byte *data)
 
 /*
 ===============
+Draw_PreloadStartupPics -- tb
+
+Starts decoding the replacement images the first frame draws (console font
+and background, main menu) while VID_Init creates the window.
+===============
+*/
+void Draw_PreloadStartupPics (void)
+{
+	static const char *menu_pics[] = {
+		"gfx/conchars", "gfx/qplaque", "gfx/ttl_main", "gfx/mainmenu", "gfx/menumods", "gfx/menudemos",
+		"gfx/menudot1", "gfx/menudot2", "gfx/menudot3", "gfx/menudot4", "gfx/menudot5", "gfx/menudot6",
+	};
+	const char *names[Q_COUNTOF(menu_pics) + 1];
+	int count = 0;
+	size_t i;
+	extern cvar_t gl_load24bit;
+
+	if (!(gl_load24bit.value > 0 && gl_load24bit_hud.value))
+		return;
+	if (!scr_conback.string[0])
+		names[count++] = "gfx/conback";
+	for (i = 0; i < Q_COUNTOF(menu_pics); i++)
+		names[count++] = menu_pics[i];
+	Image_PreloadStart (names, count);
+}
+
+/*
+===============
 Draw_LoadPics -- johnfitz
 ===============
 */
@@ -972,6 +1000,8 @@ void Draw_NewGame (void)
 {
 	cachepic_t	*pic;
 	int			i;
+
+	Image_PreloadRelease (); /* a new search path can contain same-sized images */
 
 	// empty scrap and reallocate gltextures
 	memset(scrap_allocated, 0, sizeof(scrap_allocated));

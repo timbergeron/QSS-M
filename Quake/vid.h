@@ -80,6 +80,7 @@ extern void (*vid_menumousefn)(int cx, int cy); // woods #mousemenu (iw)
 void	VID_Init (void); //johnfitz -- removed palette from argument list
 
 void	VID_Shutdown (void);
+void VID_BeginShutdown (void);
 // Called at shutdown
 
 void	VID_Update (vrect_t *rects);

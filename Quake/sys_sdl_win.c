@@ -827,6 +827,44 @@ static void Sys_SetTimerResolution(void)
 	timeBeginPeriod (1);
 }
 
+/* Loading the OpenGL driver happens inside the first pixel-format query and
+   takes 100-200 ms. Describing a pixel format on the screen DC from a worker
+   loads it while the main thread initializes everything before VID_Init, so
+   SDL_CreateWindow finds the driver already resident. */
+static DWORD WINAPI Sys_PrewarmOpenGLThread (LPVOID unused)
+{
+	PIXELFORMATDESCRIPTOR pfd;
+	HDC dc;
+	int format;
+
+	(void)unused;
+	dc = GetDC (NULL);
+	if (!dc)
+		return 0;
+	memset (&pfd, 0, sizeof(pfd));
+	pfd.nSize = sizeof(pfd);
+	pfd.nVersion = 1;
+	pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+	pfd.iPixelType = PFD_TYPE_RGBA;
+	pfd.cColorBits = 32;
+	format = ChoosePixelFormat (dc, &pfd);
+	if (format)
+		DescribePixelFormat (dc, format, sizeof(pfd), &pfd);
+	ReleaseDC (NULL, dc);
+	return 0;
+}
+
+static void Sys_PrewarmOpenGL (void)
+{
+	HANDLE thread;
+
+	if (COM_CheckParm ("-noglprewarm"))
+		return;
+	thread = CreateThread (NULL, 0, Sys_PrewarmOpenGLThread, NULL, 0, NULL);
+	if (thread)
+		CloseHandle (thread);
+}
+
 // woods -- https://github.com/andrei-drexler/ironwail/issues/104 disable CAPSLOCK #disablecaps
 
 #if defined(_WIN32) // woods #disablecaps via ironwail
@@ -1012,6 +1050,7 @@ void Sys_Init (void)
 
 	else
 	{
+		Sys_PrewarmOpenGL ();
 		key_hook = SetWindowsHookExW(WH_KEYBOARD_LL, KeyFilter, GetModuleHandleW(NULL), 0);
 		if (!key_hook)
 			Sys_Printf("Warning: SetWindowsHookExW failed (%ld)\n", GetLastError());
@@ -2596,3 +2635,250 @@ void Sys_ActivateKeyFilter (qboolean active)
 	}
 }
 #endif
+
+/*
+==============================================================================
+
+DIRECTINPUT CONTROLLER WATCH
+
+SDL's DirectInput backend enumerates devices when the gamepad subsystem
+starts, and DirectInput probes every HID collection to do it: a gaming mouse
+and keyboard alone take ~300 ms. Only controllers that no other backend
+handles need it, so the engine starts SDL without DirectInput and this
+thread runs the same enumeration in the background (and again whenever a HID
+device arrives). IN_CheckDirectInputControllers turns the backend on if it
+finds a controller SDL doesn't list.
+
+==============================================================================
+*/
+
+#define DIRECTINPUT_VERSION 0x0800
+#include <dinput.h>
+#include <dbt.h>
+
+#define DIWATCH_MAX_IDS		16
+#define DIWATCH_RESCAN_TIMER	1
+#define DIWATCH_RESCAN_DELAY	250	// ms; one device arrives as several HID interfaces
+
+typedef HRESULT (WINAPI *directinput8create_t) (HINSTANCE, DWORD, REFIID, LPVOID *, LPUNKNOWN);
+
+static const GUID diwatch_iid_directinput8w = { 0xbf798031, 0x483a, 0x4da2, { 0xaa, 0x99, 0x5d, 0x64, 0xed, 0x36, 0x97, 0x00 } };
+static const GUID diwatch_guid_hid = { 0x4d1e55b2, 0xf16f, 0x11cf, { 0x88, 0xcb, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30 } };
+
+static struct
+{
+	CRITICAL_SECTION	lock;
+	qboolean		lock_ready;
+	DWORD			threadid;
+	HANDLE			thread;
+	volatile LONG		stop;
+	unsigned int		generation;	// 0 until the first scan finishes
+	int			count;
+	unsigned int		ids[DIWATCH_MAX_IDS];
+} diwatch;
+
+typedef struct
+{
+	int		count;
+	unsigned int	ids[DIWATCH_MAX_IDS];
+} diwatch_scan_t;
+
+static IDirectInput8W *diwatch_di;	// owned by the watch thread
+
+static qboolean Sys_DIWatchIgnoredName (const wchar_t *name)
+{
+	static const wchar_t *const words[] = {
+		L"Synaptics ", L"Trackpad", L"Clickpad", L" Keyboard", L" Laptop ", L" LED ", L" Thelio "
+	};
+	size_t len = wcslen (name);
+	int i;
+
+	/* Match SDL 3.4.16's Windows gamepad name filters, including Ipega's exception. */
+	if (!wcsncmp (name, L"uinput-", 7) || !wcsncmp (name, L"Mouse ", 6) ||
+		(len >= 4 && !wcscmp (name + len - 4, L" Pen")) ||
+		(len >= 7 && !wcscmp (name + len - 7, L" Finger")))
+		return true;
+	if (wcsncmp (name, L"PG-", 3))
+		for (i = 0; i < (int)countof(words); i++)
+			if (wcsstr (name, words[i]))
+				return true;
+	return false;
+}
+
+static BOOL CALLBACK Sys_DIWatchEnum (LPCDIDEVICEINSTANCEW instance, LPVOID context)
+{
+	diwatch_scan_t *scan = (diwatch_scan_t *)context;
+
+	if (!(instance->dwDevType & DIDEVTYPE_HID) || Sys_DIWatchIgnoredName (instance->tszProductName))
+		return DIENUM_CONTINUE;
+	if (scan->count == DIWATCH_MAX_IDS)
+	{
+		scan->count = -2; // truncated inventory cannot prove all controllers are covered
+		return DIENUM_STOP;
+	}
+	scan->ids[scan->count++] = (unsigned int)instance->guidProduct.Data1;
+	return DIENUM_CONTINUE;
+}
+
+static void Sys_DIWatchFailed (void)
+{
+	EnterCriticalSection (&diwatch.lock);
+	diwatch.count = -2;
+	if (++diwatch.generation == 0)
+		diwatch.generation = 1;
+	LeaveCriticalSection (&diwatch.lock);
+}
+
+static void Sys_DIWatchScan (void)
+{
+	diwatch_scan_t scan;
+
+	memset (&scan, 0, sizeof(scan));
+	if (FAILED (IDirectInput8_EnumDevices (diwatch_di, DI8DEVCLASS_GAMECTRL, Sys_DIWatchEnum, &scan, DIEDFL_ATTACHEDONLY)))
+		scan.count = -2; /* let SDL fall back to its own enumeration */
+
+	EnterCriticalSection (&diwatch.lock);
+	diwatch.count = scan.count;
+	memcpy (diwatch.ids, scan.ids, sizeof(diwatch.ids));
+	if (++diwatch.generation == 0)
+		diwatch.generation = 1;
+	LeaveCriticalSection (&diwatch.lock);
+}
+
+static LRESULT CALLBACK Sys_DIWatchWndProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+{
+	if (msg == WM_DEVICECHANGE && wparam == DBT_DEVICEARRIVAL)
+	{
+		if (!SetTimer (hwnd, DIWATCH_RESCAN_TIMER, DIWATCH_RESCAN_DELAY, NULL))
+			Sys_DIWatchFailed ();
+		return TRUE;
+	}
+	if (msg == WM_TIMER && wparam == DIWATCH_RESCAN_TIMER)
+	{
+		KillTimer (hwnd, DIWATCH_RESCAN_TIMER);
+		Sys_DIWatchScan ();
+		return 0;
+	}
+	return DefWindowProcW (hwnd, msg, wparam, lparam);
+}
+
+static DWORD WINAPI Sys_DIWatchThread (LPVOID unused)
+{
+	DEV_BROADCAST_DEVICEINTERFACE_W filter;
+	directinput8create_t create;
+	HDEVNOTIFY notify = NULL;
+	HINSTANCE instance = GetModuleHandleW (NULL);
+	HMODULE dinput;
+	WNDCLASSW wc;
+	HWND hwnd;
+	MSG msg;
+	BOOL message_result;
+
+	(void)unused;
+	dinput = LoadLibraryW (L"dinput8.dll");
+	create = dinput ? (directinput8create_t)(void *)GetProcAddress (dinput, "DirectInput8Create") : NULL;
+	if (!create || FAILED (create (instance, DIRECTINPUT_VERSION, &diwatch_iid_directinput8w, (void **)&diwatch_di, NULL)))
+	{
+		Sys_DIWatchFailed ();
+		if (dinput)
+			FreeLibrary (dinput);
+		return 0;
+	}
+
+	// A message-only window is enough to receive device arrivals.
+	memset (&wc, 0, sizeof(wc));
+	wc.lpfnWndProc = Sys_DIWatchWndProc;
+	wc.hInstance = instance;
+	wc.lpszClassName = L"QSSM_DirectInputWatch";
+	RegisterClassW (&wc);
+	hwnd = CreateWindowExW (0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, instance, NULL);
+	if (hwnd)
+	{
+		memset (&filter, 0, sizeof(filter));
+		filter.dbcc_size = sizeof(filter);
+		filter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+		filter.dbcc_classguid = diwatch_guid_hid;
+		notify = RegisterDeviceNotificationW (hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
+	}
+
+	// Scan after registering so an arrival during the first scan isn't missed.
+	Sys_DIWatchScan ();
+	if (!hwnd || !notify)
+		Sys_DIWatchFailed ();
+
+	// A stop posted before this thread had a message queue was lost.
+	while (hwnd && !InterlockedCompareExchange (&diwatch.stop, 0, 0))
+	{
+		message_result = GetMessageW (&msg, NULL, 0, 0);
+		if (message_result <= 0)
+		{
+			if (message_result < 0)
+				Sys_DIWatchFailed ();
+			break;
+		}
+		DispatchMessageW (&msg);
+	}
+
+	if (notify)
+		UnregisterDeviceNotification (notify);
+	if (hwnd)
+		DestroyWindow (hwnd);
+	UnregisterClassW (wc.lpszClassName, instance);
+	IDirectInput8_Release (diwatch_di);
+	diwatch_di = NULL;
+	FreeLibrary (dinput);
+	return 0;
+}
+
+void Sys_StartDirectInputWatch (void)
+{
+	if (diwatch.thread)
+	{
+		/* A stopped scanner may still be probing HID devices. Never reset its
+		 * stop flag or launch another worker against the same state. */
+		if (WaitForSingleObject (diwatch.thread, 0) != WAIT_OBJECT_0)
+			return;
+		CloseHandle (diwatch.thread);
+		diwatch.thread = NULL;
+	}
+	if (!diwatch.lock_ready)
+	{
+		InitializeCriticalSection (&diwatch.lock);
+		diwatch.lock_ready = true;
+	}
+	diwatch.stop = 0;
+	diwatch.generation = 0;
+	diwatch.count = 0;
+	diwatch.thread = CreateThread (NULL, 0, Sys_DIWatchThread, NULL, 0, &diwatch.threadid);
+	if (!diwatch.thread)
+	{
+		diwatch.threadid = 0;
+		diwatch.count = -2;
+		diwatch.generation = 1;
+	}
+}
+
+// Doesn't wait: a scan in progress would hold up quitting, and the thread
+// cleans up after itself (or ends with the process).
+void Sys_StopDirectInputWatch (void)
+{
+	if (!diwatch.thread)
+		return;
+	InterlockedExchange (&diwatch.stop, 1);
+	PostThreadMessageW (diwatch.threadid, WM_QUIT, 0, 0);
+}
+
+int Sys_DirectInputControllers (unsigned int *ids, int maxids, unsigned int *generation)
+{
+	int count;
+
+	if (!diwatch.lock_ready)
+		return -1;
+	EnterCriticalSection (&diwatch.lock);
+	*generation = diwatch.generation;
+	count = diwatch.generation ? q_min (diwatch.count, maxids) : -1;
+	if (count > 0)
+		memcpy (ids, diwatch.ids, count * sizeof(*ids));
+	LeaveCriticalSection (&diwatch.lock);
+	return count;
+}

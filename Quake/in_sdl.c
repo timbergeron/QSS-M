@@ -561,6 +561,14 @@ static gamepadpower_t joy_power = GAMEPAD_POWER_UNKNOWN;
 static qboolean joy_warned_low_power = false;
 static qboolean joy_warned_empty_power = false;
 
+#if defined(_WIN32)
+static qboolean joy_directinput = false;	// SDL's DirectInput backend is on
+static qboolean joy_directinput_pending;	// preserve saved selection until the first scan
+static unsigned int joy_directinput_scan;	// generation of the last watch scan compared
+static Uint64 joy_directinput_since;		// when the gamepad subsystem started without it
+#endif
+
+static void IN_CloseActiveController(qboolean announce);
 static void IN_LoadControllerMappings(void);
 static qboolean IN_UseController(int device_index);
 static void IN_SetupJoystick(void);
@@ -1387,10 +1395,58 @@ static void IN_MouseInfo_f(void)
 	Con_Printf("  Extended Buttons: Mouse4, Mouse5 supported\n");
 }
 
-void IN_StartupJoystick (void)
+#if defined(_WIN32)
+/* Vendor/product exclusions from SDL 3.4.16's SDL_joystick.c:
+ * https://github.com/libsdl-org/SDL/blob/release-3.4.16/src/joystick/SDL_joystick.c
+ * Keep this data aligned with the bundled SDL when updating it. Custom filter
+ * hints use SDL's ordinary enumeration so its parser and overrides still apply. */
+static qboolean IN_DirectInputIgnored (unsigned int id)
+{
+	static const unsigned int ignored[] = {
+		0x009d045eu, 0x00b0045eu, 0x00b4045eu, 0x0730045eu, 0x0745045eu,
+		0x0748045eu, 0x0750045eu, 0x0768045eu, 0x0773045eu, 0x07a5045eu,
+		0x07b2045eu, 0x0800045eu, 0xc30a046du, 0xa0df04d9u, 0x0010056au,
+		0x0011056au, 0x0012056au, 0x0013056au, 0x0014056au, 0x0015056au,
+		0x0016056au, 0x0017056au, 0x0018056au, 0x0019056au, 0x00d1056au,
+		0x030e056au, 0x054f09dau, 0x141009dau, 0x304309dau, 0x31b509dau,
+		0x399709dau, 0x3f8b09dau, 0x51f409dau, 0x558909dau, 0x7b2209dau,
+		0x7f2d09dau, 0x809009dau, 0x903309dau, 0x906609dau, 0x909009dau,
+		0x90c009dau, 0xf01209dau, 0xf32a09dau, 0xf61309dau, 0xf62409dau,
+		0x1b3c1b1cu, 0xad031d57u, 0x2e4a1e7du, 0x422d20a0u, 0x001f2516u,
+		0x00282516u, 0x800804d9u, 0x800904d9u, 0xa29204d9u, 0xa29304d9u,
+		0xa13c04f2u, 0x018a0e6fu, 0x02661532u, 0x02821532u, 0x000220d6u,
+		0x006d256cu, 0x006e256cu, 0x01a226ceu, 0x19693297u, 0x01213434u,
+		0x02113434u, 0x02a03434u, 0x03533434u, 0xd0303434u,
+	};
+	static const unsigned int rog_mice[] = {
+		0x18e30b05u, 0x18e50b05u, 0x19060b05u, 0x19580b05u, 0x1a180b05u, 0x1a1a0b05u, 0x1a1c0b05u
+	};
+	size_t i;
+
+	for (i = 0; i < countof(ignored); i++)
+		if (id == ignored[i])
+			return true;
+	if (!SDL_GetHintBoolean(SDL_HINT_JOYSTICK_ROG_CHAKRAM, false))
+		for (i = 0; i < countof(rog_mice); i++)
+			if (id == rog_mice[i])
+				return true;
+	return false;
+}
+
+static qboolean IN_DirectInputCustomFilters (void)
+{
+	return SDL_GetHint(SDL_HINT_JOYSTICK_BLACKLIST_DEVICES) ||
+		SDL_GetHint(SDL_HINT_JOYSTICK_BLACKLIST_DEVICES_EXCLUDED) ||
+		SDL_GetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES) ||
+		SDL_GetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT) ||
+		SDL_GetHint(SDL_HINT_ROG_GAMEPAD_MICE) || SDL_GetHint(SDL_HINT_ROG_GAMEPAD_MICE_EXCLUDED);
+}
+#endif
+
+static qboolean IN_StartJoystick (qboolean select_controller)
 {
 	if (COM_CheckParm("-nojoy"))
-		return;
+		return false;
 
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE, "1");
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5, "1");
@@ -1403,22 +1459,196 @@ void IN_StartupJoystick (void)
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_WII, "1");
 	SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
 	SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT_CORRELATE_XINPUT, "1");
+#if defined(_WIN32)
+	// DirectInput is turned on once a controller needs it (Sys_StartDirectInputWatch).
+	// An SDL_JOYSTICK_DIRECTINPUT environment variable still decides.
+	SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_DIRECTINPUT,
+		(joy_directinput || IN_DirectInputCustomFilters()) ? "1" : "0", SDL_HINT_DEFAULT);
+	joy_directinput = SDL_GetHintBoolean(SDL_HINT_JOYSTICK_DIRECTINPUT, true);
+	joy_directinput_pending = !joy_directinput && !SDL_getenv(SDL_HINT_JOYSTICK_DIRECTINPUT);
+#endif
 
 	if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD))
 	{
+#if defined(_WIN32)
+		joy_directinput_pending = false;
+#endif
 		Con_Warning("could not initialize SDL Game Controller\n");
-		return;
+		return false;
 	}
 
 	IN_LoadControllerMappings();
-	IN_SetupJoystick();
+	if (select_controller)
+		IN_SetupJoystick();
+#if defined(_WIN32)
+	if (!joy_directinput && !SDL_getenv(SDL_HINT_JOYSTICK_DIRECTINPUT))
+	{
+		joy_directinput_scan = 0;
+		joy_directinput_since = SDL_GetTicks();
+		Sys_StartDirectInputWatch();
+	}
+#endif
+	return true;
+}
+
+void IN_StartupJoystick (void)
+{
+	IN_StartJoystick (true);
 }
 
 void IN_ShutdownJoystick (void)
 {
+#if defined(_WIN32)
+	Sys_StopDirectInputWatch();
+	joy_directinput_pending = false;
+#endif
 	IN_UseController(-1);
 	SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
 }
+
+#if defined(_WIN32)
+static SDL_GUID IN_DirectInputIdentity (SDL_GUID guid)
+{
+	// WGI adds a backend/type signature to the hardware GUID; DirectInput does not.
+	if (guid.data[14] == 'w')
+		guid.data[14] = guid.data[15] = 0;
+	return guid;
+}
+
+/*
+================
+IN_CheckDirectInputControllers
+
+Restarts the gamepad subsystem with DirectInput when the background scan
+finds a controller that none of SDL's equivalent gamepad backends handles.
+================
+*/
+static void IN_CheckDirectInputControllers(void)
+{
+	unsigned int ids[16], generation;
+	SDL_JoystickID *joysticks;
+	int i, j, count, numjoysticks = 0;
+	qboolean missing = false;
+	char selected_path[MAX_OSPATH] = "";
+	SDL_GUID selected_guid = {{0}};
+	Uint16 selected_vendor = 0, selected_product = 0;
+	qboolean had_controller, pending_selection;
+
+	if (joy_directinput || SDL_getenv(SDL_HINT_JOYSTICK_DIRECTINPUT) || !SDL_WasInit(SDL_INIT_GAMEPAD))
+		return;
+	count = Sys_DirectInputControllers(ids, countof(ids), &generation);
+	if (count == -1 || generation == joy_directinput_scan)
+		return;
+	// Give SDL's own backends time to report their devices first.
+	if (SDL_GetTicks() - joy_directinput_since < 500)
+		return;
+	joy_directinput_scan = generation;
+	if (count < -1)
+		missing = true; /* unavailable watcher: preserve the ordinary SDL backend */
+
+	joysticks = SDL_GetJoysticks(&numjoysticks);
+	for (i = 0; i < count && !missing; i++)
+	{
+		const Uint16 vendor = (Uint16)(ids[i] & 0xffff);
+		const Uint16 product = (Uint16)(ids[i] >> 16);
+		int needed = 1, found = 0;
+
+		if (IN_DirectInputIgnored(ids[i]))
+			continue;
+
+		for (j = 0; j < i; j++)
+			if (ids[j] == ids[i])
+				needed++;
+		for (j = 0; j < numjoysticks; j++)
+		{
+			SDL_GUID guid = SDL_GetJoystickGUIDForID(joysticks[j]);
+
+			// WGI can expose an unmapped raw device or a different mapping from
+			// the user's DirectInput mapping. It must not suppress that backend.
+			if (guid.data[14] != 'w' && SDL_IsGamepad(joysticks[j]) &&
+				SDL_GetJoystickVendorForID(joysticks[j]) == vendor &&
+				SDL_GetJoystickProductForID(joysticks[j]) == product)
+				found++;
+		}
+		missing = (found < needed);
+	}
+	SDL_free(joysticks);
+	if (!missing || !SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_DIRECTINPUT, "1", SDL_HINT_DEFAULT) ||
+		!SDL_GetHintBoolean(SDL_HINT_JOYSTICK_DIRECTINPUT, false))
+	{
+		if (joy_directinput_pending)
+		{
+			joy_directinput_pending = false;
+			IN_SetupJoystick();
+		}
+		return;
+	}
+
+	Con_DPrintf("Enabling DirectInput for a controller no other backend handles\n");
+	// During startup the visible pad may be a temporary substitute for the
+	// configured index. Apply that saved index to the complete inventory.
+	pending_selection = joy_directinput_pending;
+	had_controller = joy_active_controller != NULL && !pending_selection;
+	joy_directinput_pending = false;
+	if (had_controller)
+	{
+		const char *path = SDL_GetJoystickPathForID(joy_active_instanceid);
+
+		q_strlcpy(selected_path, path ? path : "", sizeof(selected_path));
+		selected_guid = IN_DirectInputIdentity(SDL_GetJoystickGUIDForID(joy_active_instanceid));
+		selected_vendor = SDL_GetJoystickVendorForID(joy_active_instanceid);
+		selected_product = SDL_GetJoystickProductForID(joy_active_instanceid);
+	}
+	joy_directinput = true;
+	IN_CloseActiveController(false);	// the same pad comes back after the restart
+	// Keep the watcher alive until the transition succeeds, so a failed
+	// DirectInput init can restore the working backend and retry on hotplug.
+	SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+	if (!IN_StartJoystick(false))
+	{
+		joy_directinput = false;
+		if (!IN_StartJoystick(false))
+			return;
+		joy_directinput_pending = pending_selection;
+		joy_directinput_scan = generation; // retry only after a new native scan
+	}
+	else
+		Sys_StopDirectInputWatch();
+	if (had_controller)
+	{
+		int best = -1, bestscore = 0;
+
+		joysticks = SDL_GetJoysticks(&numjoysticks);
+		for (j = 0; joysticks && j < numjoysticks; j++)
+		{
+			const char *path = SDL_GetJoystickPathForID(joysticks[j]);
+			SDL_GUID guid = IN_DirectInputIdentity(SDL_GetJoystickGUIDForID(joysticks[j]));
+			int score;
+
+			if (!SDL_IsGamepad(joysticks[j]))
+				continue;
+			score = selected_path[0] && path && !q_strcasecmp(selected_path, path) ? 3 :
+				(!memcmp(&guid, &selected_guid, sizeof(guid)) ? 2 : 0);
+			// WGI and DirectInput can also disagree on the GUID's bus and
+			// display-name CRC. Hardware IDs are a weaker fallback in that case.
+			if (!score && selected_vendor && selected_product &&
+				SDL_GetJoystickVendorForID(joysticks[j]) == selected_vendor &&
+				SDL_GetJoystickProductForID(joysticks[j]) == selected_product)
+				score = 1;
+
+			if (score > bestscore || (score && score == bestscore && j == (int)joy_device.value))
+			{
+				best = j;
+				bestscore = score;
+			}
+		}
+		SDL_free(joysticks);
+		if (best >= 0)
+			Cvar_SetValueQuick(&joy_device, best);
+	}
+	IN_SetupJoystick();
+}
+#endif
 
 qboolean IN_HasGamepad (void)
 {
@@ -2585,7 +2815,11 @@ static qboolean IN_UseController(int device_index)
 		SDL_GamepadConnected(joy_active_controller) &&
 		IN_JoystickIDAt(device_index) == joy_active_instanceid)
 	{
-		if ((int)joy_device.value != device_index)
+		if ((int)joy_device.value != device_index
+#if defined(_WIN32)
+			&& !joy_directinput_pending
+#endif
+		)
 			Cvar_SetValueQuick(&joy_device, device_index);
 		return true;
 	}
@@ -2620,6 +2854,9 @@ static qboolean IN_UseController(int device_index)
 	joy_active_controller = gamecontroller;
 	joy_active_instanceid = SDL_GetJoystickID(SDL_GetGamepadJoystick(gamecontroller));
 	joy_active_device = device_index;
+#if defined(_WIN32)
+	if (!joy_directinput_pending)
+#endif
 	Cvar_SetValueQuick(&joy_device, device_index);
 	IN_RefreshActiveControllerInfo();
 	Con_Printf("Using gamepad: %s\n", joy_active_name);
@@ -2688,7 +2925,11 @@ static qboolean IN_RemapJoystick(void)
 		return false;
 
 	joy_active_device = index;
-	if ((int)joy_device.value == old_device)
+	if ((int)joy_device.value == old_device
+#if defined(_WIN32)
+		&& !joy_directinput_pending
+#endif
+	)
 		Cvar_SetValueQuick(&joy_device, index);
 	return true;
 }
@@ -5699,6 +5940,10 @@ void IN_SendKeyEvents (void)
 
 	char afktype[4];
 	sprintf(afktype, "%s", "AFK");
+
+#if defined(_WIN32)
+	IN_CheckDirectInputControllers();
+#endif
 
 	if (is_long_pressing && !long_press_triggered && cl.modtype == 1 && cl.eyecam) // woods #eyemouse
 	{

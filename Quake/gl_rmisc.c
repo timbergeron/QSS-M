@@ -850,6 +850,8 @@ void R_NewMap (void)
 	qboolean profile = developer.value != 0;
 #define RNEWMAP_MARK(name) do { if (profile) { double tnow = Sys_DoubleTime(); Con_DPrintf("R_NewMap %s: %.1fms\n", name, (tnow-tprev)*1000.0); tprev = tnow; } } while (0)
 	t0 = tprev = Sys_DoubleTime();
+	GL_EnsureGameShaders ();
+	RNEWMAP_MARK("gameplay shaders");
 
 	for (i=0 ; i<256 ; i++)
 		d_lightstylevalue[i] = 264;		// normal light value
@@ -1121,6 +1123,9 @@ Deletes any GLSL programs that have been created.
 void R_DeleteShaders (void)
 {
 	int i;
+	/* Clear owner handles before lazy programs can reuse deleted GL IDs. */
+	GLAlias_DeleteShaders ();
+	GLWorld_DeleteShaders ();
 	R_ItemTimersShutdownGL ();
 
 	PolyBlend_DeleteVignetteTexture (); // vignette polyblend cleanup -- woods #polylblend2

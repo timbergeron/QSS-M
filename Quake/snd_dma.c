@@ -524,16 +524,11 @@ static void SND_Callback_snd_surround (cvar_t *var)
 
 /*
 ================
-S_Startup
+S_BackendStarted
 ================
 */
-void S_Startup (void)
+static void S_BackendStarted (void)
 {
-	if (!snd_initialized)
-		return;
-
-	sound_started = SNDDMA_Init(&sn);
-
 	if (!sound_started)
 	{
 		Con_Printf("Failed initializing sound\n");
@@ -547,6 +542,14 @@ void S_Startup (void)
 		SNDDMA_Submit ();
 	}
 	paintedtime = soundtime;
+}
+
+void S_Startup (void)
+{
+	if (!snd_initialized)
+		return;
+	sound_started = SNDDMA_Init (&sn);
+	S_BackendStarted ();
 }
 
 /*
@@ -720,14 +723,15 @@ void S_Init (void)
 
 	snd_initialized = true;
 
-	S_Startup ();
-	if (sound_started == 0)
+	SNDDMA_BeginInit (&sn);
+}
+
+void S_FinishStartup (void)
+{
+	if (!snd_initialized)
 		return;
-
-// provides a tick sound until washed clean
-//	if (shm->buffer)
-//		shm->buffer[4] = shm->buffer[5] = 0x7f;	// force a pop for debugging
-
+	sound_started = SNDDMA_FinishInit ();
+	S_BackendStarted ();
 	S_CompleteStartup ();
 }
 
@@ -735,22 +739,24 @@ void S_Init (void)
 // =======================================================================
 // Shutdown sound engine
 // =======================================================================
-void S_Shutdown (void)
+void S_BeginShutdown (void)
 {
-	qboolean shutdown_backend;
-
-	if (!sound_started && !S_CodecIsInitialized ())
+	if (!sound_started && !shm && !S_CodecIsInitialized ())
 		return;
 	S_SoundPreview_Release();
 
-	shutdown_backend = sound_started;
 	sound_started = 0;
 	snd_blocked = 0;
 
 	S_CodecShutdown();
 
-	if (shutdown_backend)
-		SNDDMA_Shutdown();
+	SNDDMA_BeginShutdown ();
+}
+
+void S_Shutdown (void)
+{
+	S_BeginShutdown ();
+	SNDDMA_Shutdown ();
 	shm = NULL;
 }
 

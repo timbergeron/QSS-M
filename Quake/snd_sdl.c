@@ -44,6 +44,11 @@ static int			sdl_scratch_bytes;
 static SDL_AtomicInt	sdl_stream_failed;	/* set by the callback, reported by the main thread */
 static int			snd_playback_frames;	/* the playback period request, restored after other opens */
 static char			sdl_devicename[128];
+static SDL_Thread	*sdl_startup_thread;
+static SDL_Thread	*sdl_shutdown_thread;
+static SDL_AudioSpec	sdl_startup_spec;
+static qboolean		sdl_startup_pending;
+static char			sdl_startup_error[256];
 
 static int SND_Scaled16 (int sample, int scale)
 {
@@ -374,7 +379,8 @@ Open an audio stream while requesting a device period of sample_frames.
 SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES is best effort, and a value from the
 environment still wins over this default-priority request. The playback
 request is restored afterwards, so opening a capture stream never changes
-later playback opens. Main thread only.
+later playback opens. Main thread only except for the startup playback open;
+startup is joined before capture streams or other playback opens can begin.
 ================
 */
 SDL_AudioStream *SND_OpenAudioStream (SDL_AudioDeviceID device, const SDL_AudioSpec *spec,
@@ -432,13 +438,10 @@ static void SND_FreeBuffers (void)
 	sdl_scratch_bytes = 0;
 }
 
-qboolean SNDDMA_Init (dma_t *dma)
+static qboolean SND_PrepareInit (dma_t *dma)
 {
 	SDL_AudioSpec	spec;
-	SDL_AudioSpec	device_spec;
-	int		period_frames, device_frames;
-	char	drivername[128];
-	const char	*surround_status;
+	int		period_frames;
 
 	if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
 	{
@@ -455,7 +458,6 @@ qboolean SNDDMA_Init (dma_t *dma)
 	if (snd_surround.value > 0)
 		spec.channels = SND_GetPreferredOutputChannels (SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
 	device_channels = spec.channels;
-	surround_status = (snd_surround.value > 0) ? "on" : "off";
 	period_frames = SND_PeriodFrames (spec.freq);
 
 	memset ((void *) dma, 0, sizeof(dma_t));
@@ -489,22 +491,64 @@ qboolean SNDDMA_Init (dma_t *dma)
 
 	SDL_SetAtomicInt (&sdl_stream_failed, 0);
 	snd_playback_frames = period_frames;
-	sdl_stream = SND_OpenAudioStream (SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, SND_StreamCallback, NULL, period_frames);
+	sdl_startup_spec = spec;
+	sdl_startup_error[0] = 0;
+	sdl_startup_pending = true;
+	return true;
+}
+
+/* Only the device open runs on the worker. SDL subsystem changes, engine
+ * state, diagnostics and starting playback stay on the main thread. */
+static int SDLCALL SND_OpenStartupStream (void *unused)
+{
+	(void)unused;
+	sdl_stream = SND_OpenAudioStream (SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
+		&sdl_startup_spec, SND_StreamCallback, NULL, snd_playback_frames);
+	if (!sdl_stream)
+		SDL_strlcpy (sdl_startup_error, SDL_GetError (), sizeof(sdl_startup_error));
+	return 0;
+}
+
+static void SND_WaitStartup (void)
+{
+	if (sdl_startup_thread)
+	{
+		SDL_WaitThread (sdl_startup_thread, NULL);
+		sdl_startup_thread = NULL;
+	}
+}
+
+qboolean SNDDMA_BeginInit (dma_t *dma)
+{
+	if (!SND_PrepareInit (dma))
+		return false;
+	sdl_startup_thread = SDL_CreateThread (SND_OpenStartupStream, "AudioStartup", NULL);
+	if (!sdl_startup_thread)
+		SND_OpenStartupStream (NULL);
+	return true;
+}
+
+qboolean SNDDMA_FinishInit (void)
+{
+	SDL_AudioSpec device_spec;
+	int device_frames;
+	char drivername[128];
+
+	if (!sdl_startup_pending)
+		return sdl_stream != NULL;
+	SND_WaitStartup ();
+	sdl_startup_pending = false;
 	if (!sdl_stream)
 	{
-		Con_Printf("Couldn't open SDL audio: %s\n", SDL_GetError());
-		snd_playback_frames = 0;
-		SDL_ResetHint (SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES);
-		SND_FreeBuffers ();
-		shm = NULL;
-		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		Con_Printf("Couldn't open SDL audio: %s\n", sdl_startup_error);
+		SNDDMA_Shutdown ();
 		return false;
 	}
 	SND_UpdateDeviceName ();
 
 	Con_Printf ("SDL audio spec  : %d Hz, %d samples, %d mix channels (callback: %d ch, surround: %s)\n",
-			shm->speed, period_frames, shm->channels, device_channels,
-			surround_status);
+			shm->speed, snd_playback_frames, shm->channels, device_channels,
+			(snd_surround.value > 0) ? "on" : "off");
 	/* Diagnostics only: the ring and rate never follow what the device reports. */
 	if (SDL_GetAudioDeviceFormat (SDL_GetAudioStreamDevice (sdl_stream), &device_spec, &device_frames))
 		Con_Printf ("SDL audio device: %d Hz, %d ch, %s, %d sample frames\n",
@@ -529,19 +573,56 @@ qboolean SNDDMA_Init (dma_t *dma)
 	return true;
 }
 
+qboolean SNDDMA_Init (dma_t *dma)
+{
+	if (!SND_PrepareInit (dma))
+		return false;
+	SND_OpenStartupStream (NULL); /* snd_restart remains synchronous */
+	return SNDDMA_FinishInit ();
+}
+
 int SNDDMA_GetDMAPos (void)
 {
 	return shm->samplepos;
 }
 
+static int SDLCALL SND_CloseStream (void *stream)
+{
+	SDL_DestroyAudioStream ((SDL_AudioStream *)stream);
+	return 0;
+}
+
+/* The engine has stopped mixing before this call. Keep the callback's
+ * buffers alive while device closure overlaps the remaining shutdown work. */
+void SNDDMA_BeginShutdown (void)
+{
+	/* Also handles a fatal startup error before FinishInit: join without
+	 * resuming playback, then free the storage the stream could reference. */
+	SND_WaitStartup ();
+	sdl_startup_pending = false;
+	if (sdl_stream)
+	{
+		SDL_AudioStream *stream = sdl_stream;
+
+		sdl_stream = NULL;
+		sdl_shutdown_thread = SDL_CreateThread (SND_CloseStream, "AudioShutdown", stream);
+		if (!sdl_shutdown_thread)
+			SND_CloseStream (stream);
+	}
+}
+
 void SNDDMA_Shutdown (void)
 {
+	SNDDMA_BeginShutdown ();
+	if (sdl_shutdown_thread)
+	{
+		SDL_WaitThread (sdl_shutdown_thread, NULL);
+		sdl_shutdown_thread = NULL;
+	}
 	if (shm)
 	{
 		Con_Printf ("Shutting down SDL sound\n");
-		/* Destroying the stream stops its callback; free what it reads afterwards. */
-		SDL_DestroyAudioStream (sdl_stream);
-		sdl_stream = NULL;
+		/* The stream's callback has stopped; its storage is now safe to free. */
 		snd_playback_frames = 0;
 		SDL_ResetHint (SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES);
 		sdl_devicename[0] = 0;

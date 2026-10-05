@@ -44,6 +44,11 @@ void Image_PrefetchTexture (const char *primary, const char *fallback);
 void Image_PrefetchImage (const char *name);	//a single image, with no fallback or glow variants
 void Image_PrefetchEnd (void);
 
+//Decodes images a later Image_LoadImage will ask for on a thread, starting now. Each one
+//is used only if the same file would still be loaded; the rest are freed by Release.
+void Image_PreloadStart (const char **names, int count);
+void Image_PreloadRelease (void);
+
 qboolean Image_WriteTGA (const char *name, byte *data, int width, int height, int bpp, qboolean upsidedown);
 qboolean Image_WritePNG (const char *name, byte *data, int width, int height, int bpp, qboolean upsidedown);
 qboolean Image_WriteJPG (const char *name, byte *data, int width, int height, int bpp, int quality, qboolean upsidedown);
