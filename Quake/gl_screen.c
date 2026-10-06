@@ -197,6 +197,7 @@ qboolean	scr_initialized;		// ready to draw
 
 qpic_t		*scr_net;
 qpic_t		*scr_turtle;
+static qboolean scr_obsitems_pics_loaded;
 
 void Sbar_DrawPicAlpha(int x, int y, qpic_t* pic, float alpha); // woods for loading #flagstatus alpha
 
@@ -995,6 +996,7 @@ void SCR_LoadPics (void)
 	// Drop old WAD pointers on game/HUD changes; decode each icon on first use.
 	scr_net = NULL;
 	scr_turtle = NULL;
+	scr_obsitems_pics_loaded = false;
 }
 
 /*
@@ -3080,10 +3082,11 @@ void SCR_ShowObsFrags(void)
 		return;
 	}
 
-	if ((!cl.notobserver || cls.demoplayback) && ((int)scr_obsitems.value & OBSITEMS_HUD))
+	if ((!cl.notobserver || cls.demoplayback) && ((int)scr_obsitems.value & OBSITEMS_HUD) &&
+		!scr_obsitems_pics_loaded)
 	{
-		if (COM_FileExists("gfx/ibar2.lmp", NULL))
-			weapon_icons = Draw_CachePic("gfx/ibar2.lmp");
+		// Cache missing optional icons too; SCR_LoadPics invalidates on game/HUD changes.
+		weapon_icons = Draw_TryCachePic("gfx/ibar2.lmp", TEXPREF_ALPHA | TEXPREF_PAD | TEXPREF_NOPICMIP);
 
 		sb_quad = Draw_PicFromWad("sb_quad");
 		sb_pent = Draw_PicFromWad("sb_invuln");
@@ -3095,6 +3098,7 @@ void SCR_ShowObsFrags(void)
 		sb_sigil[1] = Draw_PicFromWad("sb_sigil2");
 		sb_sigil[2] = Draw_PicFromWad("sb_sigil3");
 		sb_sigil[3] = Draw_PicFromWad("sb_sigil4");
+		scr_obsitems_pics_loaded = true;
 	}
 
 	if ((cl.gametype == GAME_DEATHMATCH) && (cls.state == ca_connected))
