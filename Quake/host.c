@@ -1560,8 +1560,42 @@ Share the FPS cap between the frame filter and the client wait.
 */
 
 
+/* Message-only signon steps send replies outside the normal tick, so allow
+ * them only while no other client is in game to receive extra updates. */
+static qboolean Host_SignonStepsAllowed (void)
+{
+	int i;
+	client_t *c;
+
+	for (i = 0, c = svs.clients; i < svs.maxclients; i++, c++)
+		if (c->active && c->spawned)
+			return false;
+	return true;
+}
+
+/* A local client signing on only waits on its own server, so its first two
+ * seconds run without the FPS cap or sleeps and with the screen held (see
+ * SCR_UpdateScreen). A signon that takes longer, e.g. waiting on a download,
+ * goes back to normal frames instead of spinning. */
+#define HOST_LOCAL_SIGNON_WINDOW	2.0
+static double host_local_signon_start;
+
+qboolean Host_LocalSignon (void)
+{
+	if (!sv.active || cls.state != ca_connected || cls.signon >= SIGNONS || cls.demoplayback)
+	{
+		host_local_signon_start = 0;
+		return false;
+	}
+	if (!host_local_signon_start)
+		host_local_signon_start = realtime;
+	return realtime - host_local_signon_start < HOST_LOCAL_SIGNON_WINDOW;
+}
+
 static double Host_FrameInterval (void)
 {
+	if (Host_LocalSignon ())
+		return 0;
 	if ((host_maxfps.value>0 || cls.state == ca_disconnected) && !cls.timedemo)
 	{
 		float maxfps;
@@ -1590,6 +1624,8 @@ void Host_Throttle (double elapsed)
 	double interval = Host_FrameInterval ();
 	double remaining;
 
+	if (Host_LocalSignon ())
+		return;
 	if (interval <= 0)
 	{
 		SDL_Delay (1); // retain the uncapped client's sys_throttle behavior
@@ -2413,6 +2449,7 @@ void _Host_Frame (double time)
 	static double		time2 = 0;
 	static double		time3 = 0;
 	int			pass1, pass2, pass3;
+	qboolean	signon_steps;
 
 	if (Host_Setjmp (host_abortserver) )
 		return;			// something bad happened, or the server disconnected
@@ -2483,8 +2520,21 @@ void _Host_Frame (double time)
 
 	CL_AccumulateCmd ();
 
+	/* A local client signing on would wait for the next tick at every round
+	 * trip. Between ticks, exchange its messages only (no physics, QuakeC
+	 * frame or time advance) so the simulation keeps its normal tick budget. */
+	signon_steps = Host_LocalSignon () && Host_SignonStepsAllowed ();
+
 	//Run the server+networking (client->server->client), at a different rate from everything else
-	if (accumtime >= host_netinterval)
+	if (accumtime < host_netinterval && signon_steps)
+	{
+		CL_SendCmd ();
+		PR_SwitchQCVM(&sv.qcvm);
+		SV_RunClientMessages ();
+		SV_SendClientMessages ();
+		PR_SwitchQCVM(NULL);
+	}
+	else if (accumtime >= host_netinterval)
 	{
 		float realframetime = host_frametime;
 		if (host_netinterval)

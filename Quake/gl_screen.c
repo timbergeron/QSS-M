@@ -8402,6 +8402,12 @@ void SCR_UpdateScreen (void)
 	Sbar_ScoreboardFrame ();
 	vid.numpages = (gl_triplebuffer.value) ? 3 : 2;
 
+	/* A local server's client signs on within a few frames, and drawing them
+	 * only waits on the GL driver; hold the last frame as the loading plaque
+	 * does. Host_LocalSignon stops holding after two seconds. */
+	if (Host_LocalSignon ())
+		return;
+
 	if (scr_disabled_for_loading)
 	{
 		extern qboolean curl_download_active;	// cl_main.c #webdl

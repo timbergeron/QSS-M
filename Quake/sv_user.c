@@ -969,6 +969,13 @@ static void NET_GotServerMessage(struct qsocket_s *sock)
 SV_RunClients
 ==================
 */
+/* Read and act on pending client packets without the per-frame movement
+ * work, for message-only steps between server ticks. */
+void SV_RunClientMessages (void)
+{
+	NET_GetServerMessages(NET_GotServerMessage);
+}
+
 void SV_RunClients (void)
 {
 	int				i;

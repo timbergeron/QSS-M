@@ -461,6 +461,7 @@ void SV_MoveToGoal (void);
 void SV_ConnectClient (int clientnum);	//called from the netcode to add new clients. also called from pr_ext to spawn new botclients.
 void SV_CheckForNewClients (void);
 void SV_RunClients (void);
+void SV_RunClientMessages (void);
 void SV_SaveSpawnparms ();
 void SV_SpawnServer (const char *server);
 

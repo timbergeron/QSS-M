@@ -425,6 +425,7 @@ void ExtraMaps_ParseDescriptions (void); // woods #mapdescriptions
 extern int max_word_length; // woods #mapdescriptions
 
 void Host_ClearMemory (void);
+qboolean Host_LocalSignon (void);
 void Host_ServerFrame (void);
 void Host_InitCommands (void);
 void Host_Init (void);
