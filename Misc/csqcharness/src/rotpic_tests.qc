@@ -56,6 +56,11 @@ var float autocvar_hq_expect_connected = 0;
 // registered until a map loads, which is far too late to switch a mode on.
 var float autocvar_hq_pic_stress = 0;
 var float autocvar_hq_pic_recovery = 0;
+var float autocvar_hq_model_recovery = 0;
+var float autocvar_hq_model_stress = 0;
+var float autocvar_hq_vm_restart = 0;
+var float autocvar_hq_restart_stage = 0;
+var float autocvar_hq_foreignbuf = 0;
 
 float rp_frames;
 

@@ -86,6 +86,9 @@ void() cq_surfaces =
 void() cq_selftest =
 {
 	st_roundedrect();
+	st_bufstr_find();
+	cq_parity_models();
+	cq_parity_tokens();
 	cq_surfaces();
 	cq_builtin_find();
 	cq_mousetarget();
@@ -140,10 +143,27 @@ void(vector virtsize, float showscores) CSQC_DrawHud =
 				cq_finish();
 		}
 	}
+	else if (autocvar_hq_model_stress)
+	{
+		if (cq_frames == 60)
+		{
+			cq_model_stress();
+			cq_finish();
+		}
+	}
+	else if (autocvar_hq_model_recovery)
+	{
+		if (cq_frames >= 60)
+		{
+			cq_model_recovery();
+			if (cq_model_done) cq_finish();
+		}
+	}
 	else if (autocvar_hq_csqc_selftest && cq_frames == 60)
 		cq_selftest();
 
 	RotPic_DrawTests(virtsize);
+	Parity_DrawTests('360 72 0');
 };
 
 void(float apilevel, string enginename, float engineversion) CSQC_Init =

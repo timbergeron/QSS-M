@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build csprogs.dat + menu.dat for the rotpic sample.
+# Build HUD CSQC, MenuQC and full CSQC for the builtin harness.
 #
 #   ./build.sh /path/to/fteqcc
 #
@@ -19,3 +19,4 @@ FTEQCC=${1:-fteqcc}
 
 "$FTEQCC" -srcfile csprogs.src
 "$FTEQCC" -srcfile menu.src
+"$FTEQCC" -srcfile csfull.src

@@ -1,7 +1,6 @@
-../csprogs.dat
+../csfull.dat
 qscsextensions.qc
 selftest.qc
 rotpic_tests.qc
 parity_tests.qc
-pic_tests.qc
-csqc.qc
+full.qc
