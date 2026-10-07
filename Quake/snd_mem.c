@@ -168,10 +168,13 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 	double	stepscale;
 	sfxcache_t	*sc;
 
-// see if still in memory
+// see if still in memory, resampled for the current output rate
 	sc = (sfxcache_t *) Cache_Check (&s->cache);
-	if (sc)
+	if (sc && (!shm || sc->speed == shm->speed))
 		return sc;
+	if (sc)
+		Cache_Free (&s->cache);
+	s->source = NULL;
 
 //	Con_Printf ("S_LoadSound: %x\n", (int)stackbuf);
 
@@ -245,7 +248,11 @@ sfxcache_t *S_LoadSound (sfx_t *s)
 	sound_filelen = 0;
 	data = COM_LoadMallocFile(namebuffer, NULL);
 	if (data)
+	{
 		sound_filelen = com_filesize;
+		if (file_from_pak)
+			s->source = COM_FileSearchPath (namebuffer);	// lets S_FindName reuse it on later maps
+	}
 	if (!data)
 	{
 		data = COM_LoadMallocFile(s->name, NULL);

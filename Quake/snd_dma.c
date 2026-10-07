@@ -107,9 +107,12 @@ static int SND_DeterministicSkip (int maxskip, int entnum, int entchannel,
 	return 1 + (int)(hash % (unsigned int)(maxskip - 1));
 }
 
-#define	MAX_SFX		MAX_SOUNDS
+// Sounds are kept across maps (see S_ClearPrecache), so leave room for one
+// full map's precaches on top of the ones kept from earlier maps.
+#define	MAX_SFX		(MAX_SOUNDS * 2 + 256)
 static sfx_t	*known_sfx = NULL;	// hunk allocated [MAX_SFX]
 static int	num_sfx;
+static unsigned int	sfx_generation;	// bumped per map; marks entries kept from earlier maps
 
 static sfx_t	*ambient_sfx[NUM_AMBIENTS];
 
@@ -784,10 +787,16 @@ static sfx_t *S_FindName (const char *name)
 // see if already loaded
 	for (i = 0; i < num_sfx; i++)
 	{
-		if (!strcmp(known_sfx[i].name, name))
-		{
-			return &known_sfx[i];
-		}
+		sfx = &known_sfx[i];
+		if (strcmp(sfx->name, name))
+			continue;
+		// samples kept from an earlier map are only trusted while the same
+		// PACK still provides the file; anything else reloads from disk
+		if (sfx->generation != sfx_generation && sfx->cache.data &&
+			(!sfx->source || COM_FileSearchPath (va ("sound/%s", name)) != sfx->source))
+			Cache_Free (&sfx->cache);
+		sfx->generation = sfx_generation;
+		return sfx;
 	}
 
 	if (num_sfx == MAX_SFX)
@@ -795,6 +804,7 @@ static sfx_t *S_FindName (const char *name)
 
 	sfx = &known_sfx[i];
 	q_strlcpy (sfx->name, name, sizeof(sfx->name));
+	sfx->generation = sfx_generation;
 
 	num_sfx++;
 
@@ -1724,6 +1734,13 @@ void S_NotificationSound_Copy (void)
 }
 
 
+/*
+Keep known sounds and their cached samples across maps, like alias models.
+Cache_Flush (game change, memory pressure) drops the samples and S_LoadSound
+reloads them. Entries are never reused for another name while kept, so long-
+lived sfx_t pointers stay valid; once more than a map's worth accumulates,
+start over as the original code did on every map.
+*/
 void S_ClearPrecache (void)
 {
 	int		i;
@@ -1735,15 +1752,18 @@ void S_ClearPrecache (void)
 
 	S_StopAllSounds (true, false);
 
+	sfx_generation++;
+	memset (ambient_sfx, 0, sizeof(ambient_sfx));
+
+	if (num_sfx <= MAX_SOUNDS)
+		return;
 	for (sfx = known_sfx, i = 0; i < num_sfx; i++, sfx++)
 	{
 		if (sfx->cache.data)
 			Cache_Free (&sfx->cache);
 	}
-
 	memset (known_sfx, 0, MAX_SFX * sizeof(*known_sfx));
 	num_sfx = 0;
-	memset (ambient_sfx, 0, sizeof(ambient_sfx));
 }
 
 

@@ -36,6 +36,8 @@ typedef struct sfx_s
 {
 	char	name[MAX_QPATH];
 	cache_user_t	cache;
+	unsigned int	generation;	// map that last looked this sound up
+	const void		*source;	// PACK search path the samples came from, or NULL
 } sfx_t;
 
 /* !!! if this is changed, it must be changed in asm_i386.h too !!! */
